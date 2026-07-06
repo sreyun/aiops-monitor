@@ -271,9 +271,9 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 }
 
 .card:hover{
-  border-color:var(--accent);
-  transform:translateY(-3px);
-  box-shadow:var(--shadow-lg), var(--glow);
+  border-color:#33405a;
+  transform:translateY(-2px);
+  box-shadow:var(--shadow);
 }
 
 .card:hover::before{ opacity:1; }
@@ -311,7 +311,7 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 }
 
 .row-item:hover{
-  transform:translateX(4px);
+  border-color:var(--line2);
   box-shadow:var(--shadow-sm);
 }
 
@@ -382,9 +382,9 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 }
 
 .host:hover{
-  transform:translateY(-4px);
-  box-shadow:var(--shadow-lg), var(--glow);
-  border-color:var(--accent);
+  transform:translateY(-2px);
+  box-shadow:var(--shadow-lg);
+  border-color:#33405a;
 }
 
 .host:hover::before{ opacity:1; }
@@ -435,16 +435,7 @@ section{scroll-margin-top:80px; margin-bottom:26px}
   position:relative;
 }
 
-.fill::after{
-  content:'';
-  position:absolute;
-  top:0;
-  left:0;
-  right:0;
-  bottom:0;
-  background:linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-  animation:shimmer 2s infinite;
-}
+/* 进度条不做无限 shimmer 动画：多主机时白白重绘、且视觉噪音大 */
 
 .loadline{display:flex; gap:8px; margin:13px 0 4px}
 .load-cell{flex:1; background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:7px 8px; text-align:center}
@@ -644,6 +635,9 @@ svg.sparkline{width:100%; height:46px; display:block}
 .host.offline{opacity:.72; filter:saturate(.75)}
 .host.offline:hover{opacity:1; filter:none}
 .offline-tag{color:#ffb0b4; font-weight:600}
+.stale-tag{color:var(--warn); font-weight:600}          /* 在线但数据卡顿 */
+.pulse.paused{background:var(--warn); box-shadow:0 0 8px var(--warn); animation:none}
+.hamburger.active{background:var(--warn-soft); border-color:rgba(247,178,59,.4); color:var(--warn)}
 
 /* ---------- 版本标签 ---------- */
 .ver{color:var(--muted2); font-size:11px}

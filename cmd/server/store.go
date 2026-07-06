@@ -13,6 +13,7 @@ const (
 	eventsPerAPI      = 100  // cap returned by the events endpoint
 	deleteSuppressSec = 60   // ignore a host's re-reports for this long after a manual delete
 	maxActivity       = 1000 // ring of recent activity-log entries (persisted)
+	eventCooldownSec  = 300  // min gap between identical plugin events (noise suppression)
 
 	// History storage constants (multi-tier downsampling)
 	histRawMax     = 1200 // raw samples: ~1.5h at 5s interval
@@ -70,12 +71,13 @@ type Store struct {
 	hosts    map[string]*Host
 	events   []storedEvent
 	activity []LogEntry
-	deleted  map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
-	dirty    bool             // set on every mutation; consumed by the embedded DB's autosave
+	deleted   map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
+	lastEvent map[string]int64 // dedup key -> last unix time (plugin-event noise suppression)
+	dirty     bool             // set on every mutation; consumed by the embedded DB's autosave
 }
 
 func NewStore() *Store {
-	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64)}
+	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64), lastEvent: make(map[string]int64)}
 }
 
 // Upsert applies a report: base metrics -> sample history, custom gauges ->
@@ -151,6 +153,21 @@ func (s *Store) Upsert(r shared.Report) *Host {
 		if e.Timestamp == 0 {
 			e.Timestamp = now
 		}
+		// Noise suppression: an agent running a misconfigured probe (e.g. the old
+		// example_service_check hitting 127.0.0.1:8080) would otherwise flood the
+		// log every cycle. Record an identical event at most once per cooldown.
+		key := h.ID + "|" + e.Source + "|" + e.Level + "|" + e.Message
+		if last, ok := s.lastEvent[key]; ok && now-last < eventCooldownSec {
+			continue
+		}
+		if len(s.lastEvent) > 2000 { // bound the dedup map (values-with-numbers make unique keys)
+			for k, v := range s.lastEvent {
+				if now-v >= eventCooldownSec {
+					delete(s.lastEvent, k)
+				}
+			}
+		}
+		s.lastEvent[key] = now
 		s.events = append(s.events, storedEvent{Event: e, HostID: h.ID, Hostname: h.Hostname})
 		s.appendLog(LogEntry{Timestamp: e.Timestamp, Kind: "插件", Level: e.Level, Actor: e.Source, Host: h.Hostname, Message: e.Message})
 	}

@@ -46,6 +46,7 @@ let LAST_CHECKS = []; // 最近一次自定义监控数据
 let HOST_META = [];   // 主机元数据（id + hostname）用于进程监控
 let DEFAULT_EMPTY = null;
 let APP_STARTED = false;
+let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
@@ -80,6 +81,11 @@ const fmtDur = sec => {
   if (s < 3600) return `${Math.floor(s / 60)}分钟`;
   if (s < 86400) return `${Math.floor(s / 3600)}小时${Math.floor(s % 3600 / 60)}分`;
   return `${Math.floor(s / 86400)}天${Math.floor(s % 86400 / 3600)}小时`;
+};
+// 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）
+const isSystemMount = p => {
+  p = String(p || "");
+  return p === "/boot" || p.startsWith("/boot/") || p === "/System" || p.startsWith("/System/");
 };
 
 function toast(msg, kind) {
@@ -218,8 +224,9 @@ function hostCard(h) {
   const swap = (m.swap_total || 0) > 0
     ? bar("SWAP", m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + "G")
     : "";
-  const disksHtml = (Array.isArray(m.disks) && m.disks.length)
-    ? m.disks.map(d => bar("磁盘 " + esc(d.path), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
+  const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
+  const disksHtml = disks.length
+    ? disks.map(d => bar("磁盘 " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
     : bar("磁盘", m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
   let chips = "";
   if (h.custom && Object.keys(h.custom).length) {
@@ -231,9 +238,12 @@ function hostCard(h) {
   }
   const cat = h.category ? esc(h.category) : "未分类";
   const loadTitle = "系统负载 1 / 5 / 15 分钟" + (h.os === "windows" ? "（Windows 为近似值）" : "");
-  const lastCell = h.online
-    ? `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`
-    : `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`;
+  const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
+  const lastCell = !h.online
+    ? `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
+    : staleSec > 15
+      ? `<span class="g stale-tag" title="数据可能卡顿，最后上报 ${fmtDateTime(h.last_seen)}">⚠ 数据 ${ago(h.last_seen)}</span>`
+      : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
   return `<div class="host ${h.online ? "" : "offline"}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
@@ -289,7 +299,7 @@ function renderHosts(hosts) {
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
     if (HOST_SEARCH) {
-      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.category || "")).toLowerCase();
+      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.kernel || "") + " " + (h.category || "")).toLowerCase();
       if (!hay.includes(HOST_SEARCH.toLowerCase())) return false;
     }
     return true;
@@ -409,7 +419,7 @@ async function loadAndRenderCharts() {
 
     // Render charts
     renderLineChart('chartCPU', samples, [
-      { key: 'cpu_percent', label: 'CPU 使用率 (%)', color: '#3b82f6' },
+      { key: 'cpu_percent', label: 'CPU 使用率 (%)', color: '#4c8dff' },
     ], 0, 100);
 
     renderLineChart('chartMem', samples, [
@@ -421,7 +431,7 @@ async function loadAndRenderCharts() {
     const diskSeries = diskKeys.map((path, idx) => ({
       key: `disk_${idx}`,
       label: `磁盘 ${path}`,
-      color: ['#f59e0b', '#10b981', '#ef4444', '#06b6d4'][idx % 4],
+      color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0'][idx % 4],
       transform: (s) => {
         const disk = s.disks && s.disks[idx] ? s.disks[idx] : null;
         return disk ? disk.percent : null;
@@ -432,13 +442,13 @@ async function loadAndRenderCharts() {
     } else {
       // Fallback to root disk
       renderLineChart('chartDisk', samples, [
-        { key: 'disk_percent', label: '根分区使用率 (%)', color: '#f59e0b' },
+        { key: 'disk_percent', label: '根分区使用率 (%)', color: '#f7b23b' },
       ], 0, 100);
     }
 
     renderLineChart('chartNet', samples, [
-      { key: 'net_recv_rate', label: '网络接收', color: '#10b981', fmt: fmtRate },
-      { key: 'net_sent_rate', label: '网络发送', color: '#06b6d4', fmt: fmtRate },
+      { key: 'net_recv_rate', label: '网络接收', color: '#2fd07a', fmt: fmtRate },
+      { key: 'net_sent_rate', label: '网络发送', color: '#43b6f0', fmt: fmtRate },
     ]);
 
   } catch (e) {
@@ -858,7 +868,8 @@ async function logout() {
 }
 
 /* ---------- 主循环 ---------- */
-async function refresh() {
+async function refresh(force) {
+  if (PAUSED && !force) return;
   try {
     const rs = await fetch(`${API}/summary`);
     if (rs.status === 401) { $("loginView").classList.add("show"); return; }
@@ -907,6 +918,29 @@ function sortHosts(value) {
   HOST_SORT = value;
   HOST_PAGE = 1;
   renderHosts(LAST_HOSTS);
+}
+
+// 暂停 / 恢复自动刷新
+function togglePause() {
+  PAUSED = !PAUSED;
+  const btn = $("pauseBtn");
+  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? "已暂停自动刷新，点击继续" : "暂停自动刷新"; }
+  $("pulse").className = PAUSED ? "pulse paused" : "pulse";
+  toast(PAUSED ? "已暂停自动刷新" : "已恢复自动刷新", "ok");
+  if (!PAUSED) refresh(true);
+}
+
+// 一键清理所有离线主机
+async function purgeOffline() {
+  const off = LAST_HOSTS.filter(h => !h.online);
+  if (!off.length) { toast("当前没有离线主机", "ok"); return; }
+  if (!confirm(`确认清理 ${off.length} 台离线主机？\n若其 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
+  let ok = 0;
+  for (const h of off) {
+    try { const r = await fetch(`${API}/hosts/${encodeURIComponent(h.id)}`, { method: "DELETE" }); if (r.ok) ok++; } catch (e) { /* skip */ }
+  }
+  toast(`已清理 ${ok} 台离线主机`, "ok");
+  refresh(true);
 }
 
 // Helper function to safely add event listeners
@@ -1054,6 +1088,9 @@ safeAddEventListener("topPanels", "click", e => {
 });
 // 日志导出
 safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
+// 暂停自动刷新 + 批量清理离线
+safeAddEventListener("pauseBtn", "click", togglePause);
+safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
 // 个人信息
 safeAddEventListener("profileBtn", "click", openProfile);
 safeAddEventListener("pfSaveBtn", "click", saveProfile);

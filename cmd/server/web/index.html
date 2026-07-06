@@ -69,6 +69,9 @@
       </button>
       <div class="page-title" id="pageTitle">概览</div>
       <div class="spacer"></div>
+      <button class="hamburger" id="pauseBtn" title="暂停自动刷新" aria-label="暂停/继续自动刷新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      </button>
       <div class="select-wrap">
         <select id="catFilter" title="按分类筛选"><option value="">全部分类</option></select>
       </div>
@@ -95,23 +98,7 @@
 
         <!-- 资源 TOP5：值班一眼看到最热的机器，点击直达趋势 -->
         <div class="top-grid" id="topPanels"></div>
-        
-        <!-- 快速操作区 -->
-        <div style="margin-top:24px; display:flex; gap:12px; flex-wrap:wrap;">
-          <button class="btn primary icon" onclick="openInstall()" title="安装新 Agent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-            <span>安装 Agent</span>
-          </button>
-          <button class="btn icon" onclick="openSettings()" title="配置告警规则">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span>告警设置</span>
-          </button>
-          <button class="btn ghost icon" onclick="refresh()" title="刷新数据">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-            <span>刷新数据</span>
-          </button>
-        </div>
-        
+
         <div class="cols" style="margin-top:28px;">
           <div>
             <div class="section-title">最近告警<span class="count-pill" id="ovAlertsCount">0</span></div>
@@ -143,6 +130,7 @@
               <option value="recent">最近活跃</option>
             </select>
           </div>
+          <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" title="删除所有离线主机">清理离线</button>
         </div>
         <div id="groups"></div>
         <div class="pager" id="pager"></div>
