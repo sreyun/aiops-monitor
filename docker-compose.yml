@@ -1,0 +1,45 @@
+services:
+  aiops-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server
+    container_name: aiops-server
+    ports:
+      - "8080:8080"
+    volumes:
+      - server-data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+  # 取消注释即可启用本机 Agent
+  # aiops-agent:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     target: agent
+  #   container_name: aiops-agent
+  #   depends_on:
+  #     - aiops-server
+  #   environment:
+  #     - TZ=Asia/Shanghai
+  #   restart: unless-stopped
+
+volumes:
+  server-data:
+services:
+  aiops-server:
+    build: .
+    image: aiops-monitor:latest
+    container_name: aiops-monitor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"          # 面板 + Agent 上报 + 一键安装下载
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - aiops-data:/app/data # 持久化 server_config.json（账户/告警/自定义监控）
+
+volumes:
+  aiops-data:

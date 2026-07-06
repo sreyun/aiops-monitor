@@ -18,5 +18,15 @@
     "disk_crit": 95,
     "offline_after_sec": 30
   },
-  "categories": {}
+  "categories": {},
+  "install_token": "",
+  "require_token": false,
+  "account": {
+    "username": "admin",
+    "display_name": "管理员",
+    "email": "",
+    "salt": "",
+    "hash": ""
+  },
+  "checks": []
 }

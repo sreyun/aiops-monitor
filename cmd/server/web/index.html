@@ -32,6 +32,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
         <span>告警</span><span class="nav-count" id="navAlerts">0</span>
       </a>
+      <a class="nav-item" data-view="checks" title="自定义监控（网站/端口拨测）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>监控</span><span class="nav-count" id="navChecks">0</span>
+      </a>
       <a class="nav-item" data-view="log" title="操作与介入日志">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
         <span>日志</span><span class="nav-count" id="navLog">0</span>
@@ -46,6 +50,11 @@
       <button class="btn block icon" id="settingsBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>告警设置</span>
+      </button>
+      <button class="side-user" id="profileBtn" title="个人信息 / 修改密码">
+        <span class="avatar" id="userAvatar">A</span>
+        <span class="uname" id="userName">未登录</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
       </button>
       <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span></div>
     </div>
@@ -83,8 +92,11 @@
 
       <!-- 主机 -->
       <section class="view" id="view-hosts">
-        <div class="section-title">主机列表<span class="count-pill" id="hostsCount">0</span></div>
+        <div class="section-title">主机列表<span class="count-pill" id="hostsCount">0</span>
+          <input type="text" id="hostSearch" class="search" placeholder="搜索主机名 / IP / 系统 / 分类…">
+        </div>
         <div id="groups"></div>
+        <div class="pager" id="pager"></div>
         <div class="empty" id="empty">
           暂无主机上报。点左侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
           <code>aiops-agent --server http://&lt;本机IP&gt;:8080 --category 生产</code>
@@ -107,6 +119,17 @@
           <button class="chip-btn" data-kind="插件">插件</button>
         </div>
         <div class="stack" id="log"></div>
+      </section>
+
+      <!-- 自定义监控 -->
+      <section class="view" id="view-checks">
+        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP 拨测</span>
+          <button class="btn primary" id="addCheckBtn" style="margin-left:auto">+ 添加检查</button>
+        </div>
+        <div class="checks-grid" id="checksGrid"></div>
+        <div class="empty" id="checksEmpty">
+          还没有自定义监控。点「添加检查」监控一个网站（HTTP）或服务端口（TCP），异常时自动产生告警并推送飞书 / 钉钉。
+        </div>
       </section>
     </div>
   </main>
@@ -215,6 +238,77 @@
     </div>
     <div class="modal-body" id="detailBody"></div>
   </div>
+</div>
+
+<!-- ===== 个人信息弹窗 ===== -->
+<div class="mask" id="profileMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>个人信息</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>用户名</label><input type="text" id="pfUsername" class="mono" readonly></div>
+      <div class="field"><label>显示名称</label><input type="text" id="pfDisplay" placeholder="如 运维小王"></div>
+      <div class="field"><label>邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
+      <div class="subhead">修改密码</div>
+      <div class="field"><label>原密码</label><input type="password" id="pfOld"></div>
+      <div class="field"><label>新密码（至少 4 位）</label><input type="password" id="pfNew"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger" id="logoutBtn">退出登录</button>
+      <div style="flex:1"></div>
+      <button class="btn" id="pfPwdBtn">修改密码</button>
+      <button class="btn primary" id="pfSaveBtn">保存资料</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 自定义监控编辑弹窗 ===== -->
+<div class="mask" id="checkMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="checkModalTitle">添加检查</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="ckId">
+      <div class="field"><label>名称</label><input type="text" id="ckName" placeholder="如 官网首页 / MySQL 端口"></div>
+      <div class="field"><label>类型</label>
+        <div class="select-wrap"><select id="ckType">
+          <option value="http">HTTP 网站探测</option>
+          <option value="tcp">TCP 端口探测</option>
+        </select></div>
+      </div>
+      <div class="field"><label id="ckTargetLabel">URL 地址</label><input type="text" id="ckTarget" placeholder="https://example.com"></div>
+      <div class="grid2">
+        <div class="field"><label>检测间隔（秒）</label><input type="text" id="ckInterval" class="mono" value="30"></div>
+        <div class="field"><label>告警级别</label>
+          <div class="select-wrap"><select id="ckLevel"><option value="critical">严重</option><option value="warning">警告</option></select></div>
+        </div>
+      </div>
+      <label class="switch"><input type="checkbox" id="ckEnabled" checked> 启用该检查</label>
+      <div class="hint">异常（HTTP ≥400/超时，或 TCP 无法连接）时自动产生告警并按「告警设置」推送。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="ckSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 登录页 ===== -->
+<div class="login-mask" id="loginView">
+  <form class="login-card" id="loginForm">
+    <div class="login-brand">
+      <div class="logo">AI</div>
+      <div><h1>AIOps Monitor</h1><div class="sub">主机监控运维平台</div></div>
+    </div>
+    <div class="field"><label>用户名</label><input type="text" id="loginUser" autocomplete="username" value="admin"></div>
+    <div class="field"><label>密码</label><input type="password" id="loginPass" autocomplete="current-password"></div>
+    <div class="login-err" id="loginErr"></div>
+    <button class="btn primary block" type="submit">登 录</button>
+    <div class="hint">默认账号 admin / admin，登录后请在左下角「个人信息」修改密码。</div>
+  </form>
 </div>
 
 <div class="toast" id="toast"></div>

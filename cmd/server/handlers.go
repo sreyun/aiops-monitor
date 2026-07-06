@@ -23,11 +23,17 @@ type Server struct {
 	store    *Store
 	cfg      *ConfigStore
 	notifier *Notifier
+	auth     *Auth
+	checks   *checkRunner
 	distDir  string // directory of downloadable agent binaries + plugins.zip
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string) *Server {
-	return &Server{store: store, cfg: cfg, notifier: notifier, distDir: distDir}
+	return &Server{
+		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
+		auth:   NewAuth(cfg),
+		checks: newCheckRunner(cfg, store, notifier),
+	}
 }
 
 // Routes builds the HTTP handler using Go 1.22 method+path patterns.
@@ -46,6 +52,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config", s.handleSetConfig)
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
+	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/v1/me", s.handleMe)
+	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)
+	mux.HandleFunc("POST /api/v1/password", s.handleSetPassword)
+	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
+	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
+	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
@@ -176,6 +190,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
+	alerts = append(alerts, s.checks.DownAlerts()...)
 	if alerts == nil {
 		alerts = []Alert{}
 	}
@@ -200,6 +215,61 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// ---- custom checks ----
+
+func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
+	checks := s.cfg.Checks()
+	st := s.checks.snapshot()
+	out := make([]map[string]any, 0, len(checks))
+	for _, c := range checks {
+		m := map[string]any{
+			"id": c.ID, "name": c.Name, "type": c.Type, "target": c.Target,
+			"interval_sec": c.IntervalSec, "level": c.Level, "enabled": c.Enabled,
+			"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
+		}
+		if s2, ok := st[c.ID]; ok {
+			m["ok"], m["message"], m["checked_at"], m["latency_ms"] = s2.OK, s2.Message, s2.CheckedAt, s2.LatencyMs
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
+	var c CustomCheck
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	c.Name = strings.TrimSpace(c.Name)
+	c.Target = strings.TrimSpace(c.Target)
+	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "名称 / 目标 / 类型不合法"})
+		return
+	}
+	if c.IntervalSec < 5 {
+		c.IntervalSec = 30
+	}
+	if c.Level != "warning" && c.Level != "critical" {
+		c.Level = "critical"
+	}
+	saved, err := s.cfg.UpsertCheck(c)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.checks.runNow(saved.ID)
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "保存自定义监控：" + saved.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
+}
+
+func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_ = s.cfg.DeleteCheck(id)
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "删除自定义监控 " + id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	hosts := s.store.ListHosts()
 	now := time.Now().Unix()
@@ -213,7 +283,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	crit, warn := 0, 0
-	for _, a := range Evaluate(hosts, th) {
+	for _, a := range append(Evaluate(hosts, th), s.checks.DownAlerts()...) {
 		if a.Level == "critical" {
 			crit++
 		} else {

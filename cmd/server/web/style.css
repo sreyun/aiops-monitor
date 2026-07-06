@@ -234,9 +234,9 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 .modal-foot{display:flex; gap:10px; justify-content:flex-end; padding:16px 20px; border-top:1px solid var(--line)}
 .field{margin-bottom:15px}
 .field > label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px; font-weight:600}
-.field input[type=text]{width:100%; font-family:inherit; font-size:13px; color:var(--txt);
+.field input[type=text], .field input[type=password]{width:100%; font-family:inherit; font-size:13px; color:var(--txt);
   background:var(--bg2); border:1px solid var(--line2); border-radius:9px; padding:9px 11px}
-.field input[type=text]:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(76,141,255,.15)}
+.field input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(76,141,255,.15)}
 .switch{display:flex; align-items:center; gap:9px; cursor:pointer; font-size:13px; user-select:none}
 .switch.mb{margin-bottom:12px}
 .switch input{width:16px; height:16px; accent-color:var(--accent)}
@@ -299,6 +299,67 @@ svg.sparkline{width:100%; height:46px; display:block}
 .app.collapsed .nav-item{justify-content:center; padding:11px 0}
 .app.collapsed .btn.block{justify-content:center; padding:11px 0}
 .app.collapsed .side-status{justify-content:center}
+
+/* ---------- 侧栏用户区 ---------- */
+.side-user{display:flex; align-items:center; gap:10px; width:100%; background:var(--panel2);
+  border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px; cursor:pointer; color:var(--txt); font-family:inherit; transition:.15s}
+.side-user:hover{border-color:#3d4a63; background:var(--panel3)}
+.side-user .avatar{width:28px; height:28px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-weight:700; font-size:13px; text-transform:uppercase}
+.side-user .uname{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.side-user svg{width:15px; height:15px; margin-left:auto; color:var(--muted); flex:none}
+.app.collapsed .side-user{justify-content:center; padding:8px 0}
+.app.collapsed .side-user .uname, .app.collapsed .side-user svg{display:none}
+
+/* ---------- KPI 可点击 ---------- */
+.card{cursor:pointer}
+
+/* ---------- 搜索 / 分页 ---------- */
+.search{margin-left:auto; font-family:inherit; font-size:13px; color:var(--txt); background:var(--panel2);
+  border:1px solid var(--line2); border-radius:999px; padding:8px 15px; width:280px; max-width:45vw; transition:.15s}
+.search::placeholder{color:var(--muted2)}
+.search:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(76,141,255,.13)}
+.pager{display:flex; align-items:center; justify-content:center; gap:8px; margin-top:22px; flex-wrap:wrap}
+.pager button{background:var(--panel2); border:1px solid var(--line2); color:var(--txt); font-family:inherit;
+  font-size:13px; min-width:34px; height:34px; padding:0 10px; border-radius:9px; cursor:pointer; transition:.15s}
+.pager button:hover:not(:disabled){border-color:#3d4a63; background:var(--panel3)}
+.pager button.active{background:var(--accent-soft); border-color:rgba(76,141,255,.35); color:#cfe0ff; font-weight:700}
+.pager button:disabled{opacity:.4; cursor:default}
+.pager .pinfo{color:var(--muted); font-size:12px; margin:0 6px}
+
+/* ---------- 自定义监控 ---------- */
+.checks-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px}
+.check-card{background:linear-gradient(180deg,var(--panel),var(--bg2)); border:1px solid var(--line); border-radius:var(--r); padding:15px 16px}
+.check-card .ch-head{display:flex; align-items:center; gap:9px; margin-bottom:8px}
+.check-card .ch-name{font-weight:700; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.check-card .ch-actions{margin-left:auto; display:flex; gap:6px; flex:none}
+.st-dot{width:9px; height:9px; border-radius:50%; flex:none}
+.st-dot.up{background:var(--ok); box-shadow:0 0 6px var(--ok)}
+.st-dot.down{background:var(--crit); box-shadow:0 0 6px var(--crit)}
+.st-dot.unknown{background:#556}
+.check-card .ch-target{font-size:12px; color:var(--muted); font-family:ui-monospace,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.check-card .ch-meta{font-size:11px; color:var(--muted2); margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.type-badge{font-size:10px; font-weight:700; padding:2px 7px; border-radius:6px; background:var(--panel3); color:var(--muted); flex:none}
+.mini-btn{width:26px; height:26px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2);
+  color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; font-size:12px}
+.mini-btn:hover{background:var(--panel3); color:var(--txt)}
+.mini-btn.del:hover{background:rgba(242,84,91,.16); color:#ffb0b4; border-color:#5b2b2f}
+.btn.danger{color:#ffb0b4; border-color:#5b2b2f; background:rgba(242,84,91,.08)}
+.btn.danger:hover{background:rgba(242,84,91,.16)}
+
+/* ---------- 登录页 ---------- */
+.login-mask{position:fixed; inset:0; z-index:300; display:none; align-items:center; justify-content:center; padding:20px;
+  background:
+    radial-gradient(1000px 500px at 80% -10%, rgba(76,141,255,.14), transparent 55%),
+    radial-gradient(760px 420px at 5% 110%, rgba(139,92,246,.12), transparent 50%),
+    var(--bg)}
+.login-mask.show{display:flex}
+.login-card{background:var(--panel); border:1px solid var(--line2); border-radius:18px; width:100%; max-width:380px;
+  padding:28px 26px; box-shadow:var(--shadow); animation:pop .2s ease}
+.login-brand{display:flex; align-items:center; gap:13px; margin-bottom:22px}
+.login-brand h1{margin:0; font-size:19px; font-weight:700}
+.login-brand .sub{font-size:12px; color:var(--muted); margin-top:2px}
+.login-err{color:#ffb0b4; font-size:12.5px; min-height:18px; margin-bottom:8px}
 
 /* ---------- 响应式：侧边栏抽屉 ---------- */
 .backdrop{display:none}

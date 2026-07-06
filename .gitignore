@@ -1,11 +1,6 @@
-# Compiled binaries (large files, not for git)
-bin/aiops-agent
-bin/aiops-agent.exe
-bin/aiops-agent-mac
-bin/aiops-server
-bin/aiops-server.exe
-cmd/server/server.exe
-cmd/agent/agent.exe
+# Compiled binaries
+bin/
+*.exe
 
 # Distribution directory (agent binaries + plugins.zip for one-line install)
 dist/

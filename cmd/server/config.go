@@ -45,6 +45,39 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 	}
 }
 
+// AccountConfig is the dashboard login account + profile. The password is
+// stored salted+hashed (never plaintext).
+type AccountConfig struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	Salt        string `json:"salt"`
+	Hash        string `json:"hash"`
+}
+
+func defaultAccount() AccountConfig {
+	salt := genToken()[:16]
+	return AccountConfig{
+		Username:    "admin",
+		DisplayName: "管理员",
+		Salt:        salt,
+		Hash:        hashPassword("admin", salt),
+	}
+}
+
+// CustomCheck is an operator-defined synthetic monitor run by the server:
+// an HTTP(S) URL probe or a TCP host:port probe. A failing check raises an
+// alert and pushes a notification.
+type CustomCheck struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`   // http | tcp
+	Target      string `json:"target"` // URL for http, host:port for tcp
+	IntervalSec int    `json:"interval_sec"`
+	Level       string `json:"level"` // warning | critical
+	Enabled     bool   `json:"enabled"`
+}
+
 // ServerConfig is the operator-editable server configuration persisted to disk.
 // Categories holds manual per-host category overrides (host id -> category).
 type ServerConfig struct {
@@ -55,6 +88,8 @@ type ServerConfig struct {
 	Categories    map[string]string `json:"categories"`
 	InstallToken  string            `json:"install_token"`
 	RequireToken  bool              `json:"require_token"`
+	Account       AccountConfig     `json:"account"`
+	Checks        []CustomCheck     `json:"checks"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -83,8 +118,16 @@ func NewConfigStore(path string) *ConfigStore {
 			cs.cfg = c
 		}
 	}
+	dirty := false
 	if cs.cfg.InstallToken == "" {
 		cs.cfg.InstallToken = genToken()
+		dirty = true
+	}
+	if cs.cfg.Account.Username == "" {
+		cs.cfg.Account = defaultAccount()
+		dirty = true
+	}
+	if dirty {
 		_ = cs.save()
 	}
 	return cs
@@ -132,12 +175,85 @@ func (cs *ConfigStore) ResetToken() string {
 	return tok
 }
 
+// ---- account ----
+
+func (cs *ConfigStore) Account() AccountConfig {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.Account
+}
+
+func (cs *ConfigStore) SetProfile(display, email string) error {
+	cs.mu.Lock()
+	cs.cfg.Account.DisplayName = display
+	cs.cfg.Account.Email = email
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+func (cs *ConfigStore) SetPassword(newPass string) error {
+	cs.mu.Lock()
+	salt := genToken()[:16]
+	cs.cfg.Account.Salt = salt
+	cs.cfg.Account.Hash = hashPassword(newPass, salt)
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// ---- custom checks ----
+
+func (cs *ConfigStore) Checks() []CustomCheck {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]CustomCheck, len(cs.cfg.Checks))
+	copy(out, cs.cfg.Checks)
+	return out
+}
+
+// UpsertCheck adds a new check (assigning an id) or replaces one by id.
+func (cs *ConfigStore) UpsertCheck(c CustomCheck) (CustomCheck, error) {
+	cs.mu.Lock()
+	if c.ID == "" {
+		c.ID = genToken()[:8]
+		cs.cfg.Checks = append(cs.cfg.Checks, c)
+	} else {
+		found := false
+		for i := range cs.cfg.Checks {
+			if cs.cfg.Checks[i].ID == c.ID {
+				cs.cfg.Checks[i] = c
+				found = true
+				break
+			}
+		}
+		if !found {
+			cs.cfg.Checks = append(cs.cfg.Checks, c)
+		}
+	}
+	cs.mu.Unlock()
+	return c, cs.save()
+}
+
+func (cs *ConfigStore) DeleteCheck(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.Checks[:0]
+	for _, c := range cs.cfg.Checks {
+		if c.ID != id {
+			kept = append(kept, c)
+		}
+	}
+	cs.cfg.Checks = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
 // Set replaces the alert/threshold config, preserving category overrides, and
 // persists to disk.
 func (cs *ConfigStore) Set(c ServerConfig) error {
 	cs.mu.Lock()
 	c.Categories = cs.cfg.Categories     // categories managed via SetCategory
 	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
+	c.Account = cs.cfg.Account           // account managed via auth endpoints
+	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()

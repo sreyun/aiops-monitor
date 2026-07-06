@@ -70,6 +70,8 @@ aiops-monitor/
 │   │   ├── handlers.go             # API 处理器
 │   │   ├── store.go                # 内存存储
 │   │   ├── alerts.go               # 阈值告警引擎
+│   │   ├── auth.go                 # 登录认证 + session
+│   │   ├── check.go                # 自定义监控（HTTP/TCP 拨测）
 │   │   ├── notify.go               # 飞书/钉钉推送（去重 + 状态转换）
 │   │   ├── config.go               # 配置持久化
 │   │   ├── install.go              # 一键安装脚本生成
@@ -99,7 +101,9 @@ aiops-monitor/
 ├── bin/                            # 预编译产物
 ├── config.example.json             # Agent 配置示例
 ├── server_config.example.json      # 服务端配置示例
-└── INSTALL.md                      # 详细安装部署指南
+├── INSTALL.md                      # 详细安装部署指南
+├── Dockerfile                      # 多阶段构建（服务端 + Agent）
+└── docker-compose.yml              # Docker Compose 一键部署
 ```
 
 ---
@@ -250,25 +254,57 @@ p.emit()                                   # 输出 JSON
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| **Agent 通信** | | |
 | POST | `/api/v1/agent/register` | Agent 注册 |
 | POST | `/api/v1/agent/report` | 上报（base + custom + events） |
+| **主机管理** | | |
 | GET | `/api/v1/hosts` | 主机列表（含最新指标、在线状态） |
 | GET | `/api/v1/hosts/{id}/metrics` | 单主机基础指标历史序列 |
 | POST | `/api/v1/hosts/{id}/category` | 设置主机分类覆盖 |
 | DELETE | `/api/v1/hosts/{id}` | 删除主机 |
-| GET | `/api/v1/alerts` | 阈值告警 |
+| **告警与事件** | | |
+| GET | `/api/v1/alerts` | 阈值告警 + 自定义监控告警 |
 | GET | `/api/v1/events` | 插件事件 |
 | GET | `/api/v1/activity` | 操作与系统日志 |
 | GET | `/api/v1/summary` | 汇总统计 |
+| **自定义监控** | | |
+| GET | `/api/v1/checks` | 获取自定义监控列表 |
+| POST | `/api/v1/checks` | 添加/更新自定义监控 |
+| DELETE | `/api/v1/checks/{id}` | 删除自定义监控 |
+| **配置管理** | | |
 | GET | `/api/v1/config` | 获取告警配置（脱敏） |
 | POST | `/api/v1/config` | 更新告警配置 |
 | POST | `/api/v1/config/test` | 发送告警测试消息 |
+| **认证与账户** | | |
+| POST | `/api/v1/login` | 登录（获取 session cookie） |
+| POST | `/api/v1/logout` | 退出登录 |
+| GET | `/api/v1/me` | 当前用户信息 |
+| POST | `/api/v1/profile` | 更新个人资料 |
+| POST | `/api/v1/password` | 修改密码 |
+| **安装分发** | | |
 | GET | `/api/v1/install/info` | 一键安装信息（URL + Token） |
 | POST | `/api/v1/install/reset-token` | 重置安装 Token |
 | GET | `/install.sh` / `/install.ps1` | 一键安装脚本 |
 | GET | `/uninstall.sh` / `/uninstall.ps1` | 一键卸载脚本 |
+| **面板与资源** | | |
 | GET | `/` | Web 面板 |
 | GET | `/dl/*` | Agent 二进制下载 |
+
+---
+
+## Docker 部署
+
+```bash
+# 一键启动服务端
+docker compose up -d aiops-server
+
+# 启动服务端 + 本机 Agent
+docker compose up -d
+
+# 浏览器打开 http://localhost:8080
+```
+
+服务端数据通过 volume 持久化，配置文件挂载在 `./server_config.json`。Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用。
 
 ---
 
@@ -319,6 +355,8 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - [x] 插件运行器：子进程 + JSON 契约、并发执行、超时隔离、崩溃跳过
 - [x] Python 插件层 + SDK + 示例（服务探活 / CPU 异常检测 / 进程监控 / psutil 兜底）
 - [x] Go 服务端：内存存储、阈值告警、自定义指标与插件事件入库
+- [x] 自定义监控：HTTP 网站探测 / TCP 端口拨测，异常自动告警并推送
+- [x] 登录认证：用户名 + 密码 + session cookie，默认 admin/admin
 - [x] 实时面板：概览卡片 + 主机分类分组 + 阈值告警 + 插件事件 + 操作日志 + 趋势弹窗
 - [x] 告警推送：飞书 / 钉钉 Webhook，去重 + 状态转换推送
 - [x] 一键安装：Token 模式、面板生成命令、自动下载安装、开机自启
@@ -353,242 +391,4 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 ## License
 
 MIT
-# HC-AIOps Monitor
 
-> 主机监控 / 运维管理平台的**可运行核心**,采用**混合架构**
-> Go 高性能采集核心(高频、贴系统) + Python 插件层(自定义采集 / AI / 自动化) + 实时面板 + 阈值告警
-
----
-
-## 这是什么(请先读这段)
-
-完整的、朝 AIOPS 演进的主机监控运维平台量级在 **48–72 人月**,不可能一次交付。
-
-**这个仓库是那套系统真正的地基**——一个已经**端到端跑通、可直接运行**的核心,并且按照混合架构落地:
-
-- **Go Agent 核心**负责高频、贴近系统的基础指标采集(Linux 用纯标准库读 `/proc` + `syscall`,零依赖、footprint 小、可高频轮询),同时负责注册、上报、插件调度这些"苦活"。**它和后端共享 `shared/` 里的类型定义**,采集端与服务端的数据契约永不漂移。
-- **Python 插件层**负责自定义采集、业务/中间件探活、异常检测等 AI/自动化逻辑。插件以**子进程 + JSON**的方式被 Go 核心调用,天然解耦:插件崩溃/超时只会被记录跳过,绝不影响核心。
-
-三条数据链路(基础指标 / 自定义指标 / 插件事件)均已实测打通。文末有对照人月拆解的\[演进路线]。
-
----
-
-## 目录结构
-
-```
-hc-aiops-monitor/
-├── go.mod                       # 单一 Go module: hc-aiops-monitor
-├── shared/
-│   └── wire.go                  # ★ 共享类型(Metrics/Sample/Event/Report)—— server 与 agent 都 import
-├── cmd/
-│   ├── server/                  # Go 管理后台(纯标准库,单二进制,内置面板)
-│   │   ├── main.go store.go handlers.go alerts.go
-│   │   └── web/index.html       # 可视化面板(编译时内嵌)
-│   └── agent/                   # ★ Go Agent 核心
-│       ├── main.go              # 配置/flag/信号
-│       ├── collector.go         # Collector 接口
-│       ├── collector_linux.go   # Linux 原生采集(/proc + syscall,纯标准库)
-│       ├── collector_other.go   # 非 Linux 桩(交给 core 插件 / 待接 gopsutil)
-│       ├── plugins.go           # 插件运行器(子进程 + JSON,并发+超时)
-│       ├── identity.go          # 稳定 host_id / 主机身份
-│       └── reporter.go          # 双心跳循环 + 注册 + 上报
-├── plugins/                     # ★ Python 插件层
-│   ├── plugin_sdk.py            # 极简插件 SDK
-│   ├── core_metrics.py          # 基础指标兜底(psutil,非 Linux 用)
-│   ├── example_service_check.py # 示例:服务探活(自定义指标 + 事件)
-│   ├── example_ai_anomaly.py    # 示例:CPU 异常检测(AI/AIOPS 层)
-│   └── requirements.txt         # psutil(可选)
-├── bin/                         # 预编译产物(linux/amd64): hc-monitor-server, hc-agent
-└── config.example.json          # Agent 配置示例
-```
-
----
-
-## 混合架构
-
-```
-                    ┌──────────────── Go Agent 核心(高性能 / 高频) ───────────────┐
-                    │  Collector(linux: /proc + syscall 原生采集)→ 基础指标         │
-   Report           │  PluginRunner → 并发调度 Python 插件、按 JSON 契约合并结果      │
-  (base+custom      │  Reporter(双心跳)→ 基础指标高频上报 + 插件低频执行             │
-   +events) ─HTTP─► │  与后端共享 shared/ 类型                                       │
-                    └───────────────────────────────┬───────────────────────────────┘
-                                                     │ 子进程 + JSON(低频)
-                          ┌──────────────────────────┼──────────────────────────┐
-                    ┌─────┴───────┐          ┌────────┴────────┐         ┌────────┴────────┐
-                    │ 自定义采集   │          │  AI / 异常检测   │         │ 核心指标兜底     │
-                    │ service_check│          │  ai_anomaly     │         │ core_metrics    │
-                    │  (.py)      │          │  (.py)          │         │ (psutil,非Linux)│
-                    └─────────────┘          └─────────────────┘         └─────────────────┘
-```
-
-**为什么这样分工**:高频、通用、对性能敏感的基础采集用 Go(单二进制、无依赖、可密集轮询);多变、需要生态和快速迭代的自定义/AI 逻辑用 Python。两者用进程边界隔离,各自演进、互不拖累。
-
----
-
-## 快速开始
-
-已附 **linux/amd64 预编译二进制**,可直接跑。
-
-### 1. 启动服务端
-
-```bash
-./bin/hc-monitor-server                 # 默认监听 :8080
-# 或: ./bin/hc-monitor-server -addr 0.0.0.0:9000
-```
-
-浏览器打开 `http://localhost:8080` 看面板。
-
-### 2. 启动 Agent 核心
-
-**从仓库根目录运行**(这样能找到 `plugins/` 目录):
-
-```bash
-# 插件用到 psutil(Linux 上基础指标由 Go 原生采集,可不装;非 Linux 建议装)
-pip install -r plugins/requirements.txt
-
-./bin/hc-agent --server http://<服务端IP>:8080
-```
-
-几秒后刷新面板,即可看到:基础指标(CPU/内存/磁盘/网络/负载…)、自定义指标(来自 `example_service_check` 的 `svc.*`)、以及插件事件面板。
-
-常用参数:
-
-```bash
-./bin/hc-agent \
-  --server http://10.0.0.5:8080 \
-  --interval 5 \            # 基础指标上报间隔(高频)
-  --plugin-interval 15 \    # 插件执行周期(低频)
-  --plugins-dir plugins \
-  --python python3 \
-  --disk-path /data
-# 也可用配置文件: cp config.example.json config.json 改好后 ./bin/hc-agent
-```
-
-### 自行编译(需 Go 1.22+)
-
-```bash
-go build -o bin/hc-monitor-server ./cmd/server
-go build -o bin/hc-agent         ./cmd/agent
-# 交叉编译 Agent(核心可交叉编译;Windows/macOS 原生采集见下节):
-GOOS=windows GOARCH=amd64 go build -o bin/hc-agent.exe ./cmd/agent
-GOOS=darwin  GOARCH=arm64 go build -o bin/hc-agent-mac ./cmd/agent
-```
-
----
-
-## 写一个插件
-
-插件 = 一个可执行脚本,向 **stdout 打印一个 JSON 对象**。用 SDK 只需几行:
-
-```python
-# plugins/my_check.py
-from plugin_sdk import Plugin
-
-p = Plugin()
-p.metric("mysql.connections", 42)          # 自定义指标(gauge)
-p.metric("mysql.qps", 1350.5)
-p.event("warning", "主从延迟 8s")           # 事件(info|warning|critical)
-p.emit()                                   # 输出 JSON
-```
-
-放进 `plugins/` 目录即被自动发现并按 `--plugin-interval` 周期执行。JSON 契约:
-
-```json
-{
-  "metrics": { "自定义指标名": 数值, ... },              // 可选:自定义采集
-  "events":  [ {"level":"warning","message":"..."} ],   // 可选:发现/告警
-  "base":    { "cpu_percent": ..., ... }                // 可选:基础指标(仅非 Linux 兜底)
-}
-```
-
-- `metrics` 的 key 建议自带命名空间(`mysql.`、`nginx.`)避免冲突;
-- `events` 的 `source` 不填会自动补成插件名;
-- 插件应快速返回;崩溃/超时/坏 JSON 都只会被记录跳过,不影响核心;
-- 可执行文件(非 `.py`)也能作为插件直接运行,即插件可用任意语言编写。
-
-**AI / 自动化逻辑就放在这一层**:`example_ai_anomaly.py` 用 z-score 做了个 CPU 异常检测,真实场景可替换为 Prophet / sklearn,或直接调用你已有的 **RAGFlow + Dify + 本地 vLLM** 模型服务做智能分析与处置建议。
-
----
-
-## 跨平台采集说明(重要)
-
-| 平台 | 基础指标来源 | 状态 |
-|---|---|---|
-| **Linux** | Go 核心原生(`/proc` + `syscall`) | ✅ 已实现并实测 |
-| **Windows / macOS** | 方案一:接 `gopsutil`(推荐,填到 `Collector` 接口即可,其余代码不用动)<br>方案二:先用 `plugins/core_metrics.py`(psutil)兜底 | ⏳ 接口就绪,原生采集待补 |
-
-设计上,基础采集被抽象成 `Collector` 接口:Linux 已提供原生实现;其它平台返回"未支持"桩,此时 Go 核心会自动采用 `core_metrics.py` 提供的基础指标。要在 Windows/macOS 上做到和 Linux 一样的原生零依赖采集,只需实现一个基于 gopsutil 的 `Collector` 并从 `newCollector` 返回——**这是本仓库唯一无法在离线环境内验证的部分(gopsutil 需联网拉取),已把接口和落点留好。**
-
-### 打包与部署 Agent
-
-Go 核心本身就是单二进制,把 `hc-agent` + `plugins/` 目录一起分发即可。注册为服务(开机自启):
-
-**Linux (systemd)** — `/etc/systemd/system/hc-agent.service`:
-```ini
-[Unit]
-Description=HC-AIOps Monitor Agent
-After=network.target
-[Service]
-WorkingDirectory=/opt/hc-agent
-ExecStart=/opt/hc-agent/hc-agent --server http://<服务端IP>:8080
-Restart=always
-[Install]
-WantedBy=multi-user.target
-```
-`WorkingDirectory` 指向包含 `plugins/` 的目录。`systemctl enable --now hc-agent`。
-
-**Windows** — 用 [NSSM](https://nssm.cc/):`nssm install HC-Agent "C:\hc-agent\hc-agent.exe" "--server http://<IP>:8080"`,并把工作目录设为含 `plugins\` 的目录。
-
-**macOS (launchd)** — `~/Library/LaunchAgents/com.hc.agent.plist` 配置 `ProgramArguments` 与 `WorkingDirectory`。
-
----
-
-## API 参考
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/v1/agent/register` | Agent 注册 |
-| POST | `/api/v1/agent/report` | 上报(base + custom + events) |
-| GET | `/api/v1/hosts` | 主机列表(含最新指标、自定义指标、在线状态) |
-| GET | `/api/v1/hosts/{id}/metrics` | 单主机基础指标历史序列 |
-| GET | `/api/v1/alerts` | 阈值告警(基础指标越限) |
-| GET | `/api/v1/events` | **插件事件(Python/AI 层的发现)** |
-| GET | `/api/v1/summary` | 汇总统计 |
-| GET | `/` | Web 面板 |
-
-阈值默认(`cmd/server/alerts.go`):CPU/内存 80% 警告、90% 严重;磁盘 85%/95%;失联 30s 判离线。插件事件与阈值告警**分开呈现**——前者是 Python/AI 层的发现,后者是基础指标越限。
-
----
-
-## 已实现 vs. 演进路线
-
-**已实现(混合架构核心,均已实测)**
-- [x] 单 Go module + `shared/` 共享类型(采集端与服务端契约统一)
-- [x] Go Agent 核心:Linux 原生采集(/proc+syscall)、稳定身份、注册、双心跳上报、断连事件重排队
-- [x] 插件运行器:子进程 + JSON 契约、并发执行、超时隔离、崩溃跳过
-- [x] Python 插件层 + SDK + 三个示例(服务探活 / CPU 异常检测 / psutil 兜底)
-- [x] Go 后端:基础指标存储、阈值告警、自定义指标与插件事件入库
-- [x] 实时面板:汇总卡片 + 阈值告警 + 插件事件面板 + 自定义指标 chips
-
-**下一步(生产化)**
-- [ ] **Windows/macOS 原生采集**:实现 gopsutil 版 `Collector`(接口已就绪)
-- [ ] **持久化**:内存 `Store` → 时序库(推荐 VictoriaMetrics)+ 元数据入 PostgreSQL
-- [ ] **鉴权多租户**:Agent Token、后台 RBAC
-- [ ] **告警进阶**:持续 N 分钟才触发、静默/升级、多渠道通知(钉钉/企微/邮件/Webhook)
-- [ ] **历史趋势图**:面板接 `/hosts/{id}/metrics` 画曲线(接口已就绪)
-- [ ] **自动化运维**:Agent 侧安全命令通道 + 剧本编排 + 批量执行
-- [ ] **插件增强**:每插件独立周期、插件级配置、指标类型(counter/histogram)
-
-**AIOPS 演进层(大多可作为 Python 插件接入)**
-- [ ] 时序异常检测(Prophet / statsmodels 快速见效)、告警降噪/关联、根因分析、容量预测
-- [ ] 智能运维助手 —— **直接复用你已有的 RAGFlow + Dify + 本地 vLLM 知识库栈**
-
----
-
-## 关键设计说明
-
-- **共享代码**:`shared/wire.go` 被 server 与 agent 同时 import,这正是"和后端共享一部分代码"的收益——改一处,两端同步,契约不会漂移。
-- **双心跳**:基础指标(Go 原生,便宜)高频上报;插件(可能较重)按更低频率执行,结果缓存后随基础上报一并发送。事件采用"缓冲队列 + 每次上报清空"语义,发送失败会重新排队,避免丢事件。
-- **进程级隔离**:插件跑在子进程里,`context` 超时可强杀;一个坏插件不会拖垮采集核心。
-- **内存存储的边界**:当前重启后历史清零,适合演示与单机验证;上生产第一件事就是把 `Store` 换成时序库。

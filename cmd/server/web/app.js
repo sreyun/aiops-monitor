@@ -9,6 +9,13 @@ let CUR_CAT = "";     // 当前分类筛选
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LAST_LOG = [];    // 最近一次日志数据
+let HOST_SEARCH = ""; // 主机搜索关键词
+let HOST_FILTER = "all"; // 主机状态筛选 all|online|offline
+let HOST_PAGE = 1;    // 主机分页当前页
+const HOST_PAGE_SIZE = 9;
+let LAST_CHECKS = []; // 最近一次自定义监控数据
+let DEFAULT_EMPTY = null;
+let APP_STARTED = false;
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
@@ -56,15 +63,15 @@ function bar(label, percent, detail) {
 
 /* ---------- 渲染：KPI ---------- */
 function renderCards(s) {
-  const card = (cls, ic, v, k, vcls) =>
-    `<div class="card ${cls}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
+  const card = (cls, ic, v, k, vcls, goto) =>
+    `<div class="card ${cls}" data-goto="${goto}" title="点击查看"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
   $("cards").innerHTML =
-    card("info", "host", s.total_hosts, "主机总数") +
-    card("ok", "on", s.online_hosts, "在线", "ok") +
-    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, "离线", s.offline_hosts > 0 ? "crit" : "") +
-    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok") +
-    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, "警告", s.warning_alerts > 0 ? "warn" : "ok") +
-    card("info", "event", s.plugin_events || 0, "插件发现", s.plugin_events > 0 ? "info" : "");
+    card("info", "host", s.total_hosts, "主机总数", "", "hosts:all") +
+    card("ok", "on", s.online_hosts, "在线", "ok", "hosts:online") +
+    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, "离线", s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
+    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
+    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, "警告", s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
+    card("info", "event", s.plugin_events || 0, "插件发现", s.plugin_events > 0 ? "info" : "", "log:");
 }
 
 /* ---------- 渲染：告警 / 事件 ---------- */
@@ -148,6 +155,7 @@ function hostCard(h) {
 
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
+  if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
   $("hostsCount").textContent = hosts.length;
   $("navHosts").textContent = hosts.length;
 
@@ -158,19 +166,56 @@ function renderHosts(hosts) {
   sel.value = cats.includes(cur) ? cur : "";
   CUR_CAT = sel.value;
 
-  const groupsEl = $("groups"), empty = $("empty");
-  if (!hosts.length) { groupsEl.innerHTML = ""; empty.style.display = "block"; return; }
+  const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
+  // 过滤：分类 + 在线状态 + 搜索
+  const q = HOST_SEARCH.trim().toLowerCase();
+  const shown = hosts.filter(h => {
+    if (CUR_CAT && (h.category || "未分类") !== CUR_CAT) return false;
+    if (HOST_FILTER === "online" && !h.online) return false;
+    if (HOST_FILTER === "offline" && h.online) return false;
+    if (q) {
+      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.category || "")).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!hosts.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY; return; }
+  if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
   empty.style.display = "none";
 
-  const shown = hosts.filter(h => !CUR_CAT || (h.category || "未分类") === CUR_CAT);
+  // 分页
+  const total = shown.length, pages = Math.ceil(total / HOST_PAGE_SIZE);
+  if (HOST_PAGE > pages) HOST_PAGE = pages;
+  if (HOST_PAGE < 1) HOST_PAGE = 1;
+  const pageHosts = shown.slice((HOST_PAGE - 1) * HOST_PAGE_SIZE, HOST_PAGE * HOST_PAGE_SIZE);
+
+  // 当前页按分类分组
   const byCat = {};
-  shown.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
+  pageHosts.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
   groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => `
     <div class="group">
       <div class="group-head"><span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
         <span class="count-pill">${byCat[cat].length}</span><span class="line"></span></div>
       <div class="grid">${byCat[cat].map(hostCard).join("")}</div>
     </div>`).join("");
+  renderPager(pages, total);
+}
+
+function renderPager(pages, total) {
+  const pager = $("pager");
+  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} 台</span>`; return; }
+  let btns = `<button ${HOST_PAGE === 1 ? "disabled" : ""} data-pg="prev">‹</button>`;
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - HOST_PAGE) <= 1) {
+      btns += `<button class="${i === HOST_PAGE ? "active" : ""}" data-pg="${i}">${i}</button>`;
+    } else if (Math.abs(i - HOST_PAGE) === 2) {
+      btns += `<span class="pinfo">…</span>`;
+    }
+  }
+  btns += `<button ${HOST_PAGE === pages ? "disabled" : ""} data-pg="next">›</button>`;
+  btns += `<span class="pinfo">共 ${total} 台 · ${HOST_PAGE}/${pages} 页</span>`;
+  pager.innerHTML = btns;
 }
 
 /* ---------- 主机操作 ---------- */
@@ -324,11 +369,146 @@ async function resetToken() {
   } catch (e) { toast("重置失败: " + e, "err"); }
 }
 
+/* ---------- 自定义监控 ---------- */
+function renderChecks(checks) {
+  LAST_CHECKS = checks;
+  $("navChecks").textContent = checks.length;
+  const grid = $("checksGrid"), empty = $("checksEmpty");
+  if (!checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
+  empty.style.display = "none";
+  grid.innerHTML = checks.map(c => {
+    const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
+    const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
+    const lat = c.checked_at ? ` · ${Math.round(c.latency_ms)}ms` : "";
+    return `<div class="check-card" data-id="${esc(c.id)}">
+      <div class="ch-head">
+        <span class="st-dot ${st}"></span>
+        <span class="ch-name" title="${esc(c.name)}">${esc(c.name)}</span>
+        <span class="ch-actions">
+          <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
+          <button class="mini-btn del" data-cact="del" title="删除">✕</button>
+        </span>
+      </div>
+      <div class="ch-target" title="${esc(c.target)}">${esc(c.target)}</div>
+      <div class="ch-meta">
+        <span class="type-badge">${c.type === "http" ? "HTTP" : "TCP"}</span>
+        <span>${stText}${lat}</span>
+        <span>每 ${c.interval_sec}s</span>
+        <span>${c.level === "critical" ? "严重" : "警告"}</span>
+        ${c.checked_at ? `<span>${ago(c.checked_at)}</span>` : ""}
+      </div>
+      ${(!c.ok && c.checked_at) ? `<div class="ch-meta" style="color:#ffb0b4">${esc(c.message)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+async function loadChecks() {
+  try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
+}
+function updateCkTargetLabel() {
+  const http = $("ckType").value === "http";
+  $("ckTargetLabel").textContent = http ? "URL 地址" : "主机:端口";
+  $("ckTarget").placeholder = http ? "https://example.com" : "127.0.0.1:3306";
+}
+function openCheckModal(check) {
+  $("checkModalTitle").textContent = check ? "编辑检查" : "添加检查";
+  $("ckId").value = check ? check.id : "";
+  $("ckName").value = check ? check.name : "";
+  $("ckType").value = check ? check.type : "http";
+  $("ckTarget").value = check ? check.target : "";
+  $("ckInterval").value = check ? check.interval_sec : 30;
+  $("ckLevel").value = check ? check.level : "critical";
+  $("ckEnabled").checked = check ? check.enabled : true;
+  updateCkTargetLabel();
+  $("checkMask").classList.add("show");
+}
+async function saveCheck() {
+  const body = {
+    id: $("ckId").value,
+    name: $("ckName").value.trim(),
+    type: $("ckType").value,
+    target: $("ckTarget").value.trim(),
+    interval_sec: Math.max(5, parseInt($("ckInterval").value) || 30),
+    level: $("ckLevel").value,
+    enabled: $("ckEnabled").checked
+  };
+  if (!body.name || !body.target) { toast("请填写名称和目标", "err"); return; }
+  try {
+    const r = await fetch(`${API}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.ok) { toast("已保存", "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
+    else { const j = await r.json(); toast("保存失败: " + (j.error || ""), "err"); }
+  } catch (e) { toast("保存失败: " + e, "err"); }
+}
+async function delCheck(id) {
+  if (!confirm("确认删除该监控检查？")) return;
+  try {
+    const r = await fetch(`${API}/checks/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (r.ok) { toast("已删除", "ok"); loadChecks(); } else { toast("删除失败", "err"); }
+  } catch (e) { toast("删除失败: " + e, "err"); }
+}
+
+/* ---------- 账户 / 个人信息 ---------- */
+function setUser(me) {
+  const name = me.display_name || me.username || "用户";
+  $("userName").textContent = name;
+  $("userAvatar").textContent = (name[0] || "A");
+}
+async function initAuth() {
+  try {
+    const r = await fetch(`${API}/me`);
+    if (r.ok) { setUser(await r.json()); $("loginView").classList.remove("show"); startApp(); }
+    else { $("loginView").classList.add("show"); }
+  } catch (e) { $("loginView").classList.add("show"); }
+}
+function startApp() {
+  if (APP_STARTED) return;
+  APP_STARTED = true;
+  refresh(); loadChecks();
+  setInterval(() => { refresh(); loadChecks(); }, 3000);
+}
+async function openProfile() {
+  try {
+    const me = await fetch(`${API}/me`).then(r => r.json());
+    $("pfUsername").value = me.username || "";
+    $("pfDisplay").value = me.display_name || "";
+    $("pfEmail").value = me.email || "";
+    $("pfOld").value = ""; $("pfNew").value = "";
+    $("profileMask").classList.add("show");
+  } catch (e) { toast("读取失败: " + e, "err"); }
+}
+async function saveProfile() {
+  try {
+    const r = await fetch(`${API}/profile`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: $("pfDisplay").value.trim(), email: $("pfEmail").value.trim() })
+    });
+    if (r.ok) { toast("资料已保存", "ok"); setUser({ display_name: $("pfDisplay").value.trim(), username: $("pfUsername").value }); }
+    else toast("保存失败", "err");
+  } catch (e) { toast("保存失败: " + e, "err"); }
+}
+async function changePassword() {
+  if (!$("pfOld").value || !$("pfNew").value) { toast("请填写原密码和新密码", "err"); return; }
+  try {
+    const r = await fetch(`${API}/password`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old: $("pfOld").value, new: $("pfNew").value })
+    });
+    const j = await r.json();
+    if (r.ok) { toast("密码已修改", "ok"); $("pfOld").value = ""; $("pfNew").value = ""; }
+    else toast(j.error || "修改失败", "err");
+  } catch (e) { toast("修改失败: " + e, "err"); }
+}
+async function logout() {
+  try { await fetch(`${API}/logout`, { method: "POST" }); } catch (e) {}
+  location.reload();
+}
+
 /* ---------- 主循环 ---------- */
 async function refresh() {
   try {
-    const [s, hosts, alerts, activity] = await Promise.all([
-      fetch(`${API}/summary`).then(r => r.json()),
+    const rs = await fetch(`${API}/summary`);
+    if (rs.status === 401) { $("loginView").classList.add("show"); return; }
+    const s = await rs.json();
+    const [hosts, alerts, activity] = await Promise.all([
       fetch(`${API}/hosts`).then(r => r.json()),
       fetch(`${API}/alerts`).then(r => r.json()),
       fetch(`${API}/activity`).then(r => r.json())
@@ -351,7 +531,7 @@ $("groups").addEventListener("click", e => {
   else if (act.dataset.act === "cat") editCategory(id, cat);
   else if (act.dataset.act === "del") delHost(id, name);
 });
-$("catFilter").addEventListener("change", e => { CUR_CAT = e.target.value; renderHosts(LAST_HOSTS); });
+$("catFilter").addEventListener("change", e => { CUR_CAT = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
 $("settingsBtn").addEventListener("click", openSettings);
 $("saveBtn").addEventListener("click", saveSettings);
 $("testBtn").addEventListener("click", testSettings);
@@ -415,5 +595,51 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
 });
 
-refresh();
-setInterval(refresh, 3000);
+// KPI 卡片点击 → 跳转对应视图（并按需过滤主机）
+$("cards").addEventListener("click", e => {
+  const c = e.target.closest(".card"); if (!c) return;
+  const [view, filter] = (c.dataset.goto || "").split(":");
+  if (view === "hosts") { HOST_FILTER = filter || "all"; HOST_PAGE = 1; renderHosts(LAST_HOSTS); }
+  if (view) switchView(view);
+});
+// 主机搜索 + 分页
+$("hostSearch").addEventListener("input", e => { HOST_SEARCH = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+$("pager").addEventListener("click", e => {
+  const b = e.target.closest("button[data-pg]"); if (!b) return;
+  const pg = b.dataset.pg;
+  if (pg === "prev") HOST_PAGE--;
+  else if (pg === "next") HOST_PAGE++;
+  else HOST_PAGE = parseInt(pg);
+  renderHosts(LAST_HOSTS);
+});
+// 自定义监控
+$("addCheckBtn").addEventListener("click", () => openCheckModal(null));
+$("ckType").addEventListener("change", updateCkTargetLabel);
+$("ckSaveBtn").addEventListener("click", saveCheck);
+$("checksGrid").addEventListener("click", e => {
+  const card = e.target.closest(".check-card"); if (!card) return;
+  const act = e.target.closest("[data-cact]"); if (!act) return;
+  const id = card.dataset.id, check = LAST_CHECKS.find(c => c.id === id);
+  if (act.dataset.cact === "edit") openCheckModal(check);
+  else if (act.dataset.cact === "del") delCheck(id);
+});
+// 个人信息
+$("profileBtn").addEventListener("click", openProfile);
+$("pfSaveBtn").addEventListener("click", saveProfile);
+$("pfPwdBtn").addEventListener("click", changePassword);
+$("logoutBtn").addEventListener("click", logout);
+// 登录
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("loginErr").textContent = "";
+  try {
+    const r = await fetch(`${API}/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("loginUser").value.trim(), password: $("loginPass").value })
+    });
+    if (r.ok) { setUser(await fetch(`${API}/me`).then(x => x.json())); $("loginView").classList.remove("show"); startApp(); }
+    else { const j = await r.json(); $("loginErr").textContent = j.error || "登录失败"; }
+  } catch (err) { $("loginErr").textContent = "登录失败: " + err; }
+});
+
+initAuth();

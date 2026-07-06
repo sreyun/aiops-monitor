@@ -106,7 +106,7 @@ $cfg = @{
 } | ConvertTo-Json
 [System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
 
-# 用户级开机自启（无需管理员）：HKCU Run + 隐藏窗口的 VBS 启动器
+# User-level autostart (no admin required): HKCU Run + hidden VBS launcher
 $exe  = "$Dir\aiops-agent.exe"
 $conf = "$Dir\config.json"
 $vbs  = "$Dir\start-agent.vbs"

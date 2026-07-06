@@ -97,15 +97,19 @@ func (n *Notifier) tick() {
 }
 
 func (n *Notifier) dispatch(cfg ServerConfig, a Alert, firing bool) {
-	text := formatAlert(a, firing)
-
 	// activity log: the machine-detected threshold transition (intervention)
 	verb, tlvl := "告警触发", a.Level
 	if !firing {
 		verb, tlvl = "告警恢复", "info"
 	}
 	n.store.AddLog(LogEntry{Kind: "系统", Level: tlvl, Actor: "告警引擎", Host: a.Hostname, Message: verb + "：" + a.Message})
+	n.pushChannels(cfg, a, firing)
+}
 
+// pushChannels sends the alert text to every enabled bot channel and logs the
+// push result. Shared by threshold alerts and custom-check alerts.
+func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
+	text := formatAlert(a, firing)
 	var sent []string
 	if cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, text); err != nil {

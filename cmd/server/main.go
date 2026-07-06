@@ -72,9 +72,10 @@ func main() {
 	cfg := NewConfigStore(*cfgPath)
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist)
-	go notifier.Run(10 * time.Second) // periodic alert evaluation + dedup push
+	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
+	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 
-	handler := corsMiddleware(server.Routes())
+	handler := corsMiddleware(server.authMiddleware(server.Routes()))
 	srv := &http.Server{
 		Addr:         *addr,
 		Handler:      handler,
