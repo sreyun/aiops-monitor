@@ -78,7 +78,24 @@
       <!-- 概览 -->
       <section class="view active" id="view-overview">
         <div class="cards" id="cards"></div>
-        <div class="cols">
+        
+        <!-- 快速操作区 -->
+        <div style="margin-top:24px; display:flex; gap:12px; flex-wrap:wrap;">
+          <button class="btn primary icon" onclick="openInstall()" title="安装新 Agent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+            <span>安装 Agent</span>
+          </button>
+          <button class="btn icon" onclick="openSettings()" title="配置告警规则">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>告警设置</span>
+          </button>
+          <button class="btn ghost icon" onclick="refresh()" title="刷新数据">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            <span>刷新数据</span>
+          </button>
+        </div>
+        
+        <div class="cols" style="margin-top:28px;">
           <div>
             <div class="section-title">最近告警<span class="count-pill" id="ovAlertsCount">0</span></div>
             <div class="stack" id="ovAlerts"></div>
@@ -94,6 +111,21 @@
       <section class="view" id="view-hosts">
         <div class="section-title">主机列表<span class="count-pill" id="hostsCount">0</span>
           <input type="text" id="hostSearch" class="search" placeholder="搜索主机名 / IP / 系统 / 分类…">
+          <div class="select-wrap" style="margin-left:12px;">
+            <select id="hostFilter" onchange="filterHosts(this.value)" title="按状态筛选">
+              <option value="all">全部主机</option>
+              <option value="online">在线</option>
+              <option value="offline">离线</option>
+            </select>
+          </div>
+          <div class="select-wrap" style="margin-left:12px;">
+            <select id="hostSort" onchange="sortHosts(this.value)" title="排序方式">
+              <option value="name">按名称</option>
+              <option value="cpu">按 CPU</option>
+              <option value="mem">按内存</option>
+              <option value="recent">最近活跃</option>
+            </select>
+          </div>
         </div>
         <div id="groups"></div>
         <div class="pager" id="pager"></div>
@@ -111,7 +143,26 @@
 
       <!-- 操作与介入日志 -->
       <section class="view" id="view-log">
-        <div class="section-title">操作与介入日志<span class="tag">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span></div>
+        <div class="section-title">操作与介入日志<span class="tag">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <div class="select-wrap">
+              <select id="logLevelFilter" onchange="filterLogsByLevel(this.value)" title="按级别筛选">
+                <option value="all">全部级别</option>
+                <option value="critical">严重</option>
+                <option value="warning">警告</option>
+                <option value="info">信息</option>
+              </select>
+            </div>
+            <div class="select-wrap">
+              <select id="logTimeRange" onchange="filterLogsByTime(this.value)" title="时间范围">
+                <option value="all">全部时间</option>
+                <option value="1h">最近1小时</option>
+                <option value="6h">最近6小时</option>
+                <option value="24h">最近24小时</option>
+              </select>
+            </div>
+          </div>
+        </div>
         <div class="log-filter" id="logFilter">
           <button class="chip-btn active" data-kind="">全部</button>
           <button class="chip-btn" data-kind="操作">操作</button>
@@ -123,8 +174,18 @@
 
       <!-- 自定义监控 -->
       <section class="view" id="view-checks">
-        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP 拨测</span>
-          <button class="btn primary" id="addCheckBtn" style="margin-left:auto">+ 添加检查</button>
+        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP / 进程存活</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <div class="select-wrap">
+              <select id="checkFilter" onchange="filterChecks(this.value)" title="按类型筛选">
+                <option value="all">全部类型</option>
+                <option value="http">HTTP</option>
+                <option value="tcp">TCP</option>
+                <option value="process">进程</option>
+              </select>
+            </div>
+            <button class="btn primary" id="addCheckBtn">+ 添加检查</button>
+          </div>
         </div>
         <div class="checks-grid" id="checksGrid"></div>
         <div class="empty" id="checksEmpty">

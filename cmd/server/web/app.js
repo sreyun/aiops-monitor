@@ -33,6 +33,10 @@ function copyWithFeedback(btn, text, okMsg) {
 let CUR_CAT = "";     // 当前分类筛选
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
+let LOG_LEVEL = "";   // 日志级别筛选
+let LOG_TIME_RANGE = "all"; // 日志时间范围
+let CHECK_TYPE = "all"; // 监控类型筛选
+let HOST_SORT = "name"; // 主机排序方式
 let LAST_LOG = [];    // 最近一次日志数据
 let HOST_SEARCH = ""; // 主机搜索关键词
 let HOST_FILTER = "all"; // 主机状态筛选 all|online|offline
@@ -132,7 +136,17 @@ function renderLog(items) {
     <span class="msg">${esc(e.message)}</span>
     <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
     <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
-  const filtered = LOG_KIND ? items.filter(e => e.kind === LOG_KIND) : items;
+  
+  // 应用筛选
+  let filtered = items;
+  if (LOG_KIND) filtered = filtered.filter(e => e.kind === LOG_KIND);
+  if (LOG_LEVEL && LOG_LEVEL !== "all") filtered = filtered.filter(e => e.level === LOG_LEVEL);
+  if (LOG_TIME_RANGE && LOG_TIME_RANGE !== "all") {
+    const now = Math.floor(Date.now() / 1000);
+    const hours = parseInt(LOG_TIME_RANGE);
+    filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
+  }
+  
   $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
   $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
 }
@@ -204,18 +218,29 @@ function renderHosts(hosts) {
   CUR_CAT = sel.value;
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
+  
   // 过滤：分类 + 在线状态 + 搜索
-  const q = HOST_SEARCH.trim().toLowerCase();
-  const shown = hosts.filter(h => {
+  let shown = hosts.filter(h => {
     if (CUR_CAT && (h.category || "未分类") !== CUR_CAT) return false;
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
-    if (q) {
+    if (HOST_SEARCH) {
       const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.category || "")).toLowerCase();
-      if (!hay.includes(q)) return false;
+      if (!hay.includes(HOST_SEARCH.toLowerCase())) return false;
     }
     return true;
   });
+  
+  // 排序
+  if (HOST_SORT === "cpu") {
+    shown.sort((a, b) => (b.latest?.cpu_percent || 0) - (a.latest?.cpu_percent || 0));
+  } else if (HOST_SORT === "mem") {
+    shown.sort((a, b) => (b.latest?.mem_percent || 0) - (a.latest?.mem_percent || 0));
+  } else if (HOST_SORT === "recent") {
+    shown.sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+  } else {
+    shown.sort((a, b) => (a.hostname || a.id).localeCompare(b.hostname || b.id));
+  }
 
   if (!hosts.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY; return; }
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
@@ -599,7 +624,14 @@ function renderChecks(checks) {
   const grid = $("checksGrid"), empty = $("checksEmpty");
   if (!userChecks.length && !checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
-  grid.innerHTML = checks.map(c => {
+  
+  // 应用类型筛选
+  let shown = checks;
+  if (CHECK_TYPE && CHECK_TYPE !== "all") {
+    shown = shown.filter(c => c.type === CHECK_TYPE);
+  }
+  
+  grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
     const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
     const lat = c.checked_at ? ` · ${Math.round(c.latency_ms)}ms` : "";
@@ -786,6 +818,19 @@ $("groups").addEventListener("click", e => {
   else if (act.dataset.act === "del") delHost(id, name);
 });
 $("catFilter").addEventListener("change", e => { CUR_CAT = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+
+// 主机筛选和排序
+function filterHosts(value) {
+  HOST_FILTER = value;
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
+
+function sortHosts(value) {
+  HOST_SORT = value;
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
 $("settingsBtn").addEventListener("click", openSettings);
 $("saveBtn").addEventListener("click", saveSettings);
 $("testBtn").addEventListener("click", testSettings);
@@ -843,6 +888,23 @@ $("logFilter").addEventListener("click", e => {
   document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
   renderLog(LAST_LOG);
 });
+
+// 日志级别和时间范围筛选
+function filterLogsByLevel(level) {
+  LOG_LEVEL = level;
+  renderLog(LAST_LOG);
+}
+
+function filterLogsByTime(range) {
+  LOG_TIME_RANGE = range;
+  renderLog(LAST_LOG);
+}
+
+// 监控类型筛选
+function filterChecks(type) {
+  CHECK_TYPE = type;
+  renderChecks(LAST_CHECKS);
+}
 // 弹窗关闭：点遮罩空白处 或 右上角 ✕
 document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
   if (e.target === mk || e.target.closest("[data-close-btn]")) mk.classList.remove("show");
