@@ -13,6 +13,12 @@ server_config.json
 config.json
 *.state.json
 
+# Embedded lightweight database (persisted monitoring state)
+aiops.db
+aiops.db.tmp
+agent.log
+*.log
+
 # IDE
 .idea/
 .vscode/

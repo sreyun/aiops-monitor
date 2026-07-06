@@ -1,0 +1,186 @@
+package main
+
+import (
+	"compress/gzip"
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+
+	"aiops-monitor/shared"
+)
+
+// ============================================================================
+// Embedded lightweight database
+//
+// A zero-dependency snapshot store in the spirit of Redis' RDB: the whole
+// monitoring state (hosts + tiered time-series history, plugin events, the
+// activity log, delete-suppressions and login sessions) is serialized as
+// gzip-compressed JSON and written atomically (tmp + rename) to one file,
+// aiops.db, next to the server config. An autosave loop persists only when
+// the state is dirty, and a signal handler flushes on shutdown — so history
+// finally survives restarts, closing the old "in-memory only" gap.
+// ============================================================================
+
+const dbVersion = 1
+
+// dbHost mirrors Host with the unexported history tiers exported for JSON.
+type dbHost struct {
+	Host     Host            `json:"host"`
+	HistRaw  []shared.Sample `json:"hist_raw,omitempty"`
+	Hist1m   []shared.Sample `json:"hist_1m,omitempty"`
+	Hist5m   []shared.Sample `json:"hist_5m,omitempty"`
+	Last1mTs int64           `json:"last_1m_ts"`
+	Last5mTs int64           `json:"last_5m_ts"`
+}
+
+type dbSession struct {
+	User    string `json:"user"`
+	Expires int64  `json:"expires"`
+}
+
+type dbSnapshot struct {
+	Version  int                  `json:"version"`
+	SavedAt  int64                `json:"saved_at"`
+	Hosts    []dbHost             `json:"hosts"`
+	Events   []storedEvent        `json:"events"`
+	Activity []LogEntry           `json:"activity"`
+	Deleted  map[string]int64     `json:"deleted"`
+	Sessions map[string]dbSession `json:"sessions"`
+}
+
+// DB binds the snapshot file to the live Store and Auth state.
+type DB struct {
+	path  string
+	store *Store
+	auth  *Auth
+}
+
+func NewDB(path string, store *Store, auth *Auth) *DB {
+	return &DB{path: path, store: store, auth: auth}
+}
+
+// dbPathFor places the database next to the server config file.
+func dbPathFor(cfgPath string) string {
+	dir := filepath.Dir(cfgPath)
+	return filepath.Join(dir, "aiops.db")
+}
+
+// Load restores a snapshot if one exists. Corrupt or missing files are not
+// fatal — the server just starts empty, exactly like before persistence.
+func (d *DB) Load() {
+	f, err := os.Open(d.path)
+	if err != nil {
+		return // first run
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		log.Printf("数据库读取失败(已忽略,将以空状态启动): %v", err)
+		return
+	}
+	defer gz.Close()
+	var snap dbSnapshot
+	if err := json.NewDecoder(gz).Decode(&snap); err != nil {
+		log.Printf("数据库解析失败(已忽略,将以空状态启动): %v", err)
+		return
+	}
+
+	s := d.store
+	s.mu.Lock()
+	for i := range snap.Hosts {
+		hh := snap.Hosts[i]
+		h := hh.Host // copy
+		h.histRaw = hh.HistRaw
+		h.hist1m = hh.Hist1m
+		h.hist5m = hh.Hist5m
+		h.last1mTs = hh.Last1mTs
+		h.last5mTs = hh.Last5mTs
+		s.hosts[h.ID] = &h
+	}
+	s.events = snap.Events
+	s.activity = snap.Activity
+	if snap.Deleted != nil {
+		s.deleted = snap.Deleted
+	}
+	s.mu.Unlock()
+
+	d.auth.importSessions(snap.Sessions)
+	log.Printf("已从数据库恢复: 主机 %d 台, 事件 %d 条, 日志 %d 条, 会话 %d 个 (%s)",
+		len(snap.Hosts), len(snap.Events), len(snap.Activity), len(snap.Sessions), d.path)
+}
+
+// Save serializes the current state and writes it atomically.
+func (d *DB) Save() error {
+	snap := d.export()
+	tmp := d.path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	gz, _ := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	enc := json.NewEncoder(gz)
+	if err := enc.Encode(snap); err != nil {
+		gz.Close()
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, d.path)
+}
+
+func (d *DB) export() dbSnapshot {
+	s := d.store
+	s.mu.RLock()
+	snap := dbSnapshot{
+		Version: dbVersion,
+		SavedAt: time.Now().Unix(),
+		Deleted: make(map[string]int64, len(s.deleted)),
+	}
+	for _, h := range s.hosts {
+		snap.Hosts = append(snap.Hosts, dbHost{
+			Host: *h, HistRaw: h.histRaw, Hist1m: h.hist1m, Hist5m: h.hist5m,
+			Last1mTs: h.last1mTs, Last5mTs: h.last5mTs,
+		})
+	}
+	snap.Events = append(snap.Events, s.events...)
+	snap.Activity = append(snap.Activity, s.activity...)
+	for k, v := range s.deleted {
+		snap.Deleted[k] = v
+	}
+	s.mu.RUnlock()
+	snap.Sessions = d.auth.exportSessions()
+	return snap
+}
+
+// AutoSave persists periodically whenever the state changed since last save.
+func (d *DB) AutoSave(interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		if d.consumeDirty() {
+			if err := d.Save(); err != nil {
+				log.Printf("数据库落盘失败: %v", err)
+			}
+		}
+	}
+}
+
+func (d *DB) consumeDirty() bool {
+	s := d.store
+	s.mu.Lock()
+	dirty := s.dirty
+	s.dirty = false
+	s.mu.Unlock()
+	return dirty || d.auth.consumeDirty()
+}

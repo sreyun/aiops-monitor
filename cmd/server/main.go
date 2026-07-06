@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -76,6 +78,23 @@ func main() {
 	cfg := NewConfigStore(*cfgPath)
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
+
+	// embedded lightweight DB: restore state, then autosave + flush on exit
+	db := NewDB(dbPathFor(*cfgPath), store, server.auth)
+	db.Load()
+	go db.AutoSave(15 * time.Second)
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		if err := db.Save(); err != nil {
+			log.Printf("退出前落盘失败: %v", err)
+		} else {
+			log.Printf("状态已落盘,服务端退出。")
+		}
+		os.Exit(0)
+	}()
+
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 
@@ -91,6 +110,7 @@ func main() {
 	log.Printf("  监控面板: http://localhost%s", *addr)
 	log.Printf("  API 前缀: http://localhost%s/api/v1/", *addr)
 	log.Printf("  配置文件: %s", *cfgPath)
+	log.Printf("  数据库:   %s（内嵌轻量库,历史/日志/会话重启不丢）", dbPathFor(*cfgPath))
 	if hasAgentBinary(dist) {
 		log.Printf("  下载目录: %s（一键安装可用）", dist)
 	} else {

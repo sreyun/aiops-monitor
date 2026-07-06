@@ -8,18 +8,18 @@ import (
 )
 
 const (
-	maxSamples        = 240 // ~20 min of base-metric history at 5s interval
-	maxEvents         = 200 // global ring of recent plugin events
-	eventsPerAPI      = 100 // cap returned by the events endpoint
-	deleteSuppressSec = 60  // ignore a host's re-reports for this long after a manual delete
-	maxActivity       = 300 // ring of recent activity-log entries
+	maxSamples        = 240  // cap for the legacy /metrics endpoint (tail of raw history)
+	maxEvents         = 300  // global ring of recent plugin events
+	eventsPerAPI      = 100  // cap returned by the events endpoint
+	deleteSuppressSec = 60   // ignore a host's re-reports for this long after a manual delete
+	maxActivity       = 1000 // ring of recent activity-log entries (persisted)
 
 	// History storage constants (multi-tier downsampling)
-	histRawMax        = 1200   // raw samples: 1h at 3s interval (1200 points)
-	hist1mMax         = 2880   // 1-min aggregates: 48h (2880 points)
-	hist5mMax         = 2016   // 5-min aggregates: 7 days (2016 points)
-	hist1mInterval    = 60     // aggregate to 1-min every 60s
-	hist5mInterval    = 300    // aggregate to 5-min every 300s
+	histRawMax     = 1200 // raw samples: ~1.5h at 5s interval
+	hist1mMax      = 2880 // 1-min aggregates: 48h (2880 points)
+	hist5mMax      = 2016 // 5-min aggregates: 7 days (2016 points)
+	hist1mInterval = 60   // aggregate to 1-min every 60s
+	hist5mInterval = 300  // aggregate to 5-min every 300s
 )
 
 // Host is the aggregate record the server keeps per agent.
@@ -36,14 +36,13 @@ type Host struct {
 	LastSeen  int64              `json:"last_seen"`
 	Latest    *shared.Sample     `json:"latest"`
 	Custom    map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
-	Samples   []shared.Sample    `json:"-"`
 
-	// Time-series history (multi-tier downsampling)
-	histRaw    []shared.Sample // raw samples (~3s interval, last 1h)
-	hist1m     []shared.Sample // 1-min aggregates (last 48h)
-	hist5m     []shared.Sample // 5-min aggregates (last 7 days)
-	last1mTs   int64           // timestamp of last 1-min aggregation
-	last5mTs   int64           // timestamp of last 5-min aggregation
+	// Time-series history (multi-tier downsampling; persisted via the embedded DB)
+	histRaw  []shared.Sample // raw samples (5s interval, ~1.5h)
+	hist1m   []shared.Sample // 1-min aggregates (last 48h)
+	hist5m   []shared.Sample // 5-min aggregates (last 7 days)
+	last1mTs int64           // timestamp of last 1-min aggregation
+	last5mTs int64           // timestamp of last 5-min aggregation
 }
 
 // storedEvent decorates a plugin event with the host it came from.
@@ -72,6 +71,7 @@ type Store struct {
 	events   []storedEvent
 	activity []LogEntry
 	deleted  map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
+	dirty    bool             // set on every mutation; consumed by the embedded DB's autosave
 }
 
 func NewStore() *Store {
@@ -107,13 +107,10 @@ func (s *Store) Upsert(r shared.Report) *Host {
 	h.LastSeen = now
 
 	sample := shared.Sample{Timestamp: now, Metrics: r.Metrics}
-	h.Samples = append(h.Samples, sample)
-	if len(h.Samples) > maxSamples {
-		h.Samples = h.Samples[len(h.Samples)-maxSamples:]
-	}
+	sample.ProcessNames = nil // history never stores process lists (only Latest keeps them)
 
 	// ---- Time-series history (multi-tier downsampling) ----
-	// Tier 1: Raw samples (~3s interval, last 1h)
+	// Tier 1: Raw samples (5s interval, ~1.5h)
 	h.histRaw = append(h.histRaw, sample)
 	if len(h.histRaw) > histRawMax {
 		h.histRaw = h.histRaw[len(h.histRaw)-histRawMax:]
@@ -144,6 +141,7 @@ func (s *Store) Upsert(r shared.Report) *Host {
 	}
 
 	latest := sample
+	latest.ProcessNames = r.Metrics.ProcessNames // Latest alone carries the process list
 	h.Latest = &latest
 	if len(r.Custom) > 0 {
 		h.Custom = r.Custom
@@ -159,12 +157,20 @@ func (s *Store) Upsert(r shared.Report) *Host {
 	if len(s.events) > maxEvents {
 		s.events = s.events[len(s.events)-maxEvents:]
 	}
+	s.dirty = true
 	return h
 }
 
+// hostMeta returns a shallow copy suitable for list APIs: the Latest sample is
+// copied with its (potentially huge) process list stripped, so /hosts stays
+// lean. Process names are served on demand via GetProcessNames.
 func hostMeta(h *Host) *Host {
 	cp := *h
-	cp.Samples = nil
+	if h.Latest != nil {
+		l := *h.Latest
+		l.ProcessNames = nil
+		cp.Latest = &l
+	}
 	return &cp
 }
 
@@ -327,7 +333,8 @@ func (s *Store) ListHosts() []*Host {
 	return out
 }
 
-// GetSamples returns a copy of the base-metric history for one host.
+// GetSamples returns the tail of the raw history for one host (legacy
+// /metrics endpoint; the /history endpoint serves the tiered archive).
 func (s *Store) GetSamples(id string) ([]shared.Sample, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -335,9 +342,24 @@ func (s *Store) GetSamples(id string) ([]shared.Sample, bool) {
 	if !ok {
 		return nil, false
 	}
-	cp := make([]shared.Sample, len(h.Samples))
-	copy(cp, h.Samples)
+	src := h.histRaw
+	if len(src) > maxSamples {
+		src = src[len(src)-maxSamples:]
+	}
+	cp := make([]shared.Sample, len(src))
+	copy(cp, src)
 	return cp, true
+}
+
+// GetProcessNames returns the latest reported process list for one host.
+func (s *Store) GetProcessNames(id string) ([]string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.hosts[id]
+	if !ok || h.Latest == nil {
+		return nil, false
+	}
+	return h.Latest.ProcessNames, true
 }
 
 // GetHistory returns time-series data for a host within [from, to] range.
@@ -408,6 +430,7 @@ func (s *Store) DeleteHost(id string) bool {
 		}
 	}
 	s.events = kept
+	s.dirty = true
 	return true
 }
 
@@ -420,6 +443,7 @@ func (s *Store) appendLog(e LogEntry) {
 	if len(s.activity) > maxActivity {
 		s.activity = s.activity[len(s.activity)-maxActivity:]
 	}
+	s.dirty = true
 }
 
 // AddLog records an activity-log entry (locks internally).

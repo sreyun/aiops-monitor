@@ -29,11 +29,14 @@ type session struct {
 	expires time.Time
 }
 
-// Auth manages login sessions (in memory) against the account in ConfigStore.
+// Auth manages login sessions against the account in ConfigStore. Sessions
+// are persisted through the embedded DB so a server restart keeps everyone
+// logged in.
 type Auth struct {
 	cfg      *ConfigStore
 	mu       sync.Mutex
 	sessions map[string]session
+	dirty    bool
 }
 
 func NewAuth(cfg *ConfigStore) *Auth {
@@ -58,6 +61,7 @@ func (a *Auth) Login(user, pass string) (string, bool) {
 	tok := newSessionToken()
 	a.mu.Lock()
 	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL)}
+	a.dirty = true
 	a.mu.Unlock()
 	return tok, true
 }
@@ -89,7 +93,46 @@ func (a *Auth) ValidateRequest(r *http.Request) bool {
 func (a *Auth) Logout(tok string) {
 	a.mu.Lock()
 	delete(a.sessions, tok)
+	a.dirty = true
 	a.mu.Unlock()
+}
+
+// exportSessions / importSessions bridge the in-memory session table to the
+// embedded DB snapshot (expired entries are skipped both ways).
+func (a *Auth) exportSessions() map[string]dbSession {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make(map[string]dbSession, len(a.sessions))
+	now := time.Now()
+	for tok, s := range a.sessions {
+		if s.expires.After(now) {
+			out[tok] = dbSession{User: s.user, Expires: s.expires.Unix()}
+		}
+	}
+	return out
+}
+
+func (a *Auth) importSessions(in map[string]dbSession) {
+	if len(in) == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	for tok, s := range in {
+		exp := time.Unix(s.Expires, 0)
+		if exp.After(now) {
+			a.sessions[tok] = session{user: s.User, expires: exp}
+		}
+	}
+}
+
+func (a *Auth) consumeDirty() bool {
+	a.mu.Lock()
+	d := a.dirty
+	a.dirty = false
+	a.mu.Unlock()
+	return d
 }
 
 // isPublicPath reports whether a request may proceed without a session:

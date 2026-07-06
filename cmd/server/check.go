@@ -247,30 +247,17 @@ func (cr *checkRunner) probeProcess(target string) (bool, string) {
 	hostID := target[:idx]
 	procName := target[idx+1:]
 
-	hosts := cr.store.ListHosts()
-	var found bool
-	var procNames []string
-	for _, h := range hosts {
-		if h.ID == hostID && h.Latest != nil {
-			procNames = h.Latest.ProcessNames
-			for _, p := range procNames {
-				if strings.EqualFold(p, procName) {
-					found = true
-					break
-				}
-			}
-			break
+	procNames, ok := cr.store.GetProcessNames(hostID)
+	if !ok || len(procNames) == 0 {
+		return false, fmt.Sprintf("主机 %s 无进程数据或已离线", shortID(hostID))
+	}
+	for _, p := range procNames {
+		// substring match, case-insensitive: "nginx" matches "nginx.exe"
+		if strings.Contains(strings.ToLower(p), strings.ToLower(procName)) {
+			return true, fmt.Sprintf("进程 %q 运行中（匹配 %s）", procName, p)
 		}
 	}
-	if !found {
-		if len(procNames) > 0 {
-			return false, fmt.Sprintf("进程 %q 未运行（共 %d 个进程）", procName, len(procNames))
-		}
-		hid := hostID
-		if len(hid) > 8 { hid = hid[:8] }
-		return false, fmt.Sprintf("主机 %s 无进程数据或已离线", hid)
-	}
-	return true, fmt.Sprintf("进程 %q 运行中", procName)
+	return false, fmt.Sprintf("进程 %q 未运行（共上报 %d 个进程）", procName, len(procNames))
 }
 
 func (cr *checkRunner) snapshot() map[string]CheckStatus {

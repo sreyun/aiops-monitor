@@ -431,8 +431,8 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
   if (yMax === null) dataMax = dataMax * 1.1;
   const yRange = dataMax - dataMin || 1;
 
-  // Draw grid lines
-  ctx.strokeStyle = '#e5e7eb';
+  // Draw grid lines (dark-theme palette)
+  ctx.strokeStyle = 'rgba(43,53,71,.7)';
   ctx.lineWidth = 0.5;
   for (let i = 0; i <= 4; i++) {
     const y = padding.top + (chartH / 4) * i;
@@ -443,7 +443,7 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
 
     // Y-axis labels
     const val = dataMax - (yRange / 4) * i;
-    ctx.fillStyle = '#6b7280';
+    ctx.fillStyle = '#8a95a8';
     ctx.font = '11px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), padding.left - 8, y + 4);
@@ -459,7 +459,7 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
     const ts = firstTs + (timeSpan / 4) * i;
     const d = new Date(ts * 1000);
     const label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    ctx.fillStyle = '#6b7280';
+    ctx.fillStyle = '#8a95a8';
     ctx.fillText(label, x, h - 8);
   }
 
@@ -502,7 +502,7 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
     const legendY = padding.top + sIdx * 18;
     ctx.fillStyle = s.color;
     ctx.fillRect(w - padding.right + 8, legendY, 12, 12);
-    ctx.fillStyle = '#374151';
+    ctx.fillStyle = '#e8eef6';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(s.label, w - padding.right + 24, legendY + 11);
@@ -596,8 +596,8 @@ function renderInstallCmd() {
   let cmd, label, hint;
   if (CUR_OS === "windows") {
     cmd = `irm "${server}/install.ps1?${q}" | iex`;
-    label = "PowerShell（管理员）一条命令安装";
-    hint = "以管理员身份运行 PowerShell；自动下载到 C:\\aiops-agent 并注册开机自启任务。";
+    label = "PowerShell 一条命令安装（无需管理员）";
+    hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\aiops-agent 并注册用户级开机自启。";
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
     label = "终端一条命令安装";
