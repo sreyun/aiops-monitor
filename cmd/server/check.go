@@ -96,9 +96,10 @@ func (cr *checkRunner) runSelfCheck() {
 	cr.mu.Unlock()
 
 	if !ok && !wasDown {
-		cr.store.AddLog(LogEntry{Kind: "系统", Level: "critical", Actor: "自监控", Host: "服务端", Message: "服务端健康检查失败: " + msg})
+		// Self health-check failures should not clutter the activity log
+		// They are still tracked in alerts and visible in the checks view
 	} else if ok && wasDown {
-		cr.store.AddLog(LogEntry{Kind: "系统", Level: "info", Actor: "自监控", Host: "服务端", Message: "服务端健康检查恢复"})
+		// Recovery also doesn't need an activity log entry for internal checks
 	}
 }
 

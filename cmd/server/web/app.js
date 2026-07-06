@@ -147,6 +147,13 @@ function renderLog(items) {
     filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
   }
   
+  // 过滤内部健康检查日志（避免显示 127.0.0.1:8080 相关的自监控条目）
+  filtered = filtered.filter(e => {
+    // 排除自监控的健康检查日志
+    if (e.actor === "自监控" && e.host === "服务端") return false;
+    return true;
+  });
+  
   $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
   $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
 }
