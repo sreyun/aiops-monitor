@@ -323,11 +323,14 @@ func enumLinuxDisks() []shared.DiskInfo {
 			continue
 		}
 		dev, mount, fstype := fields[0], fields[1], fields[2]
-		if !strings.HasPrefix(dev, "/dev/") || seen[dev] {
+		if !strings.HasPrefix(dev, "/dev/") {
 			continue
 		}
-		// Skip /boot and its sub-mounts
+		// Skip /boot and its sub-mounts early
 		if strings.HasPrefix(mount, "/boot") {
+			continue
+		}
+		if seen[dev] {
 			continue
 		}
 		switch fstype {

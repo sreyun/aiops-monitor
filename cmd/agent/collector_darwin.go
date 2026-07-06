@@ -320,6 +320,10 @@ func darwinDisks() []shared.DiskInfo {
 		if strings.HasPrefix(mountPoint, "/boot") {
 			continue
 		}
+		// Skip /System and its sub-mounts (macOS system volume)
+		if strings.HasPrefix(mountPoint, "/System") {
+			continue
+		}
 		total, _ := strconv.ParseUint(f[1], 10, 64)
 		used, _ := strconv.ParseUint(f[2], 10, 64)
 		if total == 0 {
