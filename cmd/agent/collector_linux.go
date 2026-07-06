@@ -326,6 +326,10 @@ func enumLinuxDisks() []shared.DiskInfo {
 		if !strings.HasPrefix(dev, "/dev/") || seen[dev] {
 			continue
 		}
+		// Skip /boot and its sub-mounts
+		if strings.HasPrefix(mount, "/boot") {
+			continue
+		}
 		switch fstype {
 		case "proc", "sysfs", "tmpfs", "devtmpfs", "cgroup", "cgroup2",
 			"overlay", "squashfs", "autofs", "mqueue", "debugfs", "tracefs", "devpts":

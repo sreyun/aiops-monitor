@@ -315,6 +315,11 @@ func darwinDisks() []shared.DiskInfo {
 		if len(f) < 6 || !strings.HasPrefix(f[0], "/dev/") || seen[f[0]] {
 			continue
 		}
+		mountPoint := strings.Join(f[5:], " ")
+		// Skip /boot and its sub-mounts
+		if strings.HasPrefix(mountPoint, "/boot") {
+			continue
+		}
 		total, _ := strconv.ParseUint(f[1], 10, 64)
 		used, _ := strconv.ParseUint(f[2], 10, 64)
 		if total == 0 {

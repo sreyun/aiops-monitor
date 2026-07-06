@@ -157,6 +157,7 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 .badge.warning{background:rgba(247,178,59,.16); color:#ffd88a}
 .badge.info{background:rgba(67,182,240,.16); color:#a9e0fb}
 .src{font-size:11px; color:var(--muted2); margin-left:auto; flex:none; white-space:nowrap}
+.log-time{font-size:11px; color:var(--muted2); flex:none; white-space:nowrap; margin-left:8px}
 .empty-line{color:var(--muted2); font-size:13px; padding:18px; text-align:center;
   border:1px dashed var(--line2); border-radius:var(--r-sm)}
 
@@ -172,6 +173,7 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 .host{
   background:linear-gradient(180deg,var(--panel),var(--bg2)); border:1px solid var(--line);
   border-radius:var(--r); padding:18px; transition:.2s; position:relative;
+  max-height:520px; overflow:hidden; display:flex; flex-direction:column;
 }
 .host:hover{border-color:#33405a; box-shadow:var(--shadow); transform:translateY(-2px)}
 .host-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:15px}
@@ -213,7 +215,7 @@ section{scroll-margin-top:80px; margin-bottom:26px}
 .chip-label{font-size:10px; color:var(--muted2); width:100%; margin-top:2px}
 
 .foot{display:flex; justify-content:space-between; gap:10px; font-size:11px; color:var(--muted);
-  margin-top:13px; padding-top:12px; border-top:1px solid var(--line); flex-wrap:wrap}
+  margin-top:auto; padding-top:12px; border-top:1px solid var(--line); flex-wrap:wrap}
 .foot .g{display:flex; align-items:center; gap:5px}
 
 .empty{text-align:center; padding:64px 20px; color:var(--muted); border:1px dashed var(--line2); border-radius:var(--r)}

@@ -55,6 +55,16 @@ const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分钟`;
 };
+const fmtDateTime = ts => {
+  const d = new Date(ts * 1000);
+  const Y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, '0');
+  const D = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+};
 const usageColor = p => p >= 90 ? "var(--crit)" : p >= 80 ? "var(--warn)" : p >= 60 ? "var(--info)" : "var(--ok)";
 const ago = ts => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -120,7 +130,8 @@ function renderLog(items) {
   const row = e => `<div class="row-item ${esc(e.level)}">
     <span class="kind ${kcls(e.kind)}">${esc(e.kind)}</span>
     <span class="msg">${esc(e.message)}</span>
-    <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""} · ${ago(e.timestamp)}</span></div>`;
+    <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
+    <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
   const filtered = LOG_KIND ? items.filter(e => e.kind === LOG_KIND) : items;
   $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
   $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
