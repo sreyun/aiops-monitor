@@ -300,11 +300,11 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 			"id": c.ID, "name": c.Name, "type": c.Type, "target": c.Target,
 			"interval_sec": c.IntervalSec, "level": c.Level, "enabled": c.Enabled,
 			"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
-			"status_code": 0, "cert_days": -1,
+			"status_code": 0, "cert_days": -1, "loss_pct": -1.0,
 		}
 		if s2, ok := st[c.ID]; ok {
 			m["ok"], m["message"], m["checked_at"], m["latency_ms"] = s2.OK, s2.Message, s2.CheckedAt, s2.LatencyMs
-			m["status_code"], m["cert_days"] = s2.StatusCode, s2.CertDays
+			m["status_code"], m["cert_days"], m["loss_pct"] = s2.StatusCode, s2.CertDays, s2.LossPct
 		}
 		out = append(out, m)
 	}
@@ -319,7 +319,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	c.Target = strings.TrimSpace(c.Target)
-	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "process") {
+	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "process") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "名称 / 目标 / 类型不合法"})
 		return
 	}

@@ -879,7 +879,7 @@ function renderChecks(checks) {
   grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
     const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
-    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : "进程";
+    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : "进程";
     const builtin = c.builtin ? ' data-builtin="1"' : "";
     const actions = c.builtin ? "" : `<span class="ch-actions">
           <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
@@ -909,6 +909,14 @@ function renderChecks(checks) {
       detail.push(cdItem("端口", hp.port || "—", ""));
       detail.push(cdItem("连通状态", stText, stCls));
       detail.push(cdItem("连接延时", lat, latCls));
+    } else if (c.type === "ping") {
+      detail.push(cdItem("监控地址", c.target, "muted"));
+      detail.push(cdItem("运行状态", stText, stCls));
+      const loss = (typeof c.loss_pct === "number" && c.loss_pct >= 0) ? c.loss_pct : null;
+      detail.push(cdItem("丢包率", loss === null ? "—" : Math.round(loss) + "%",
+        loss === null ? "muted" : loss === 0 ? "ok" : loss >= 100 ? "crit" : "warn"));
+      const hasRtt = c.checked_at && c.latency_ms > 0;
+      detail.push(cdItem("平均延时", hasRtt ? Math.round(c.latency_ms) + " ms" : "—", hasRtt ? "" : "muted"));
     } else if (c.type === "process") {
       const pr = splitProcessTarget(c);
       detail.push(cdItem("进程名", pr.proc, ""));
@@ -956,10 +964,18 @@ function updateCkTargetLabel() {
     $("ckHostField").style.display = "block";
     $("ckTargetLabel").textContent = "进程名称";
     $("ckTarget").placeholder = "如 nginx, mysql, aiops-agent";
+    return;
+  }
+  $("ckHostField").style.display = "none";
+  if (t === "http") {
+    $("ckTargetLabel").textContent = "URL 地址";
+    $("ckTarget").placeholder = "https://example.com";
+  } else if (t === "ping") {
+    $("ckTargetLabel").textContent = "主机地址 / IP";
+    $("ckTarget").placeholder = "如 8.8.8.8 或 example.com";
   } else {
-    $("ckHostField").style.display = "none";
-    $("ckTargetLabel").textContent = t === "http" ? "URL 地址" : "主机:端口";
-    $("ckTarget").placeholder = t === "http" ? "https://example.com" : "127.0.0.1:3306";
+    $("ckTargetLabel").textContent = "主机:端口";
+    $("ckTarget").placeholder = "127.0.0.1:3306";
   }
 }
 function openCheckModal(check) {
@@ -1191,7 +1207,7 @@ const PAGE_META = {
   overview: { title: "概览", sub: "集群资源、告警与活动总览" },
   hosts:    { title: "主机", sub: "所有上报主机的实时指标" },
   alerts:   { title: "告警", sub: "阈值与自定义监控告警" },
-  checks:   { title: "监控", sub: "网站 HTTP / 端口 TCP / 进程存活 拨测" },
+  checks:   { title: "监控", sub: "网站 HTTP / 端口 TCP / 主机 Ping / 进程存活 拨测" },
   log:      { title: "日志", sub: "操作、系统与插件事件流水" },
 };
 function switchView(view) {

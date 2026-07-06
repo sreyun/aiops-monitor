@@ -195,7 +195,7 @@
 
       <!-- 自定义监控 -->
       <section class="view" id="view-checks">
-        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP / 进程存活</span>
+        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP / 主机 Ping / 进程存活</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="view-toggle" id="checkViewToggle" title="切换列表 / 胶囊视图">
               <button class="vt-btn active" data-cview="list" title="列表视图">
@@ -210,6 +210,7 @@
                 <option value="all">全部类型</option>
                 <option value="http">HTTP</option>
                 <option value="tcp">TCP</option>
+                <option value="ping">Ping</option>
                 <option value="process">进程</option>
               </select>
             </div>
@@ -382,6 +383,7 @@
         <div class="select-wrap"><select id="ckType">
           <option value="http">HTTP 网站探测</option>
           <option value="tcp">TCP 端口探测</option>
+          <option value="ping">Ping 主机存活</option>
           <option value="process">进程存活监控</option>
         </select></div>
       </div>
@@ -396,7 +398,7 @@
         </div>
       </div>
       <label class="switch"><input type="checkbox" id="ckEnabled" checked> 启用该检查</label>
-      <div class="hint">异常（HTTP ≥400/超时，或 TCP 无法连接）时自动产生告警并按「告警设置」推送。</div>
+      <div class="hint">异常（HTTP ≥400/超时、TCP 无法连接、Ping 不可达，或进程不存在）时自动产生告警并按「告警设置」推送。</div>
     </div>
     <div class="modal-foot">
       <button class="btn primary" id="ckSaveBtn">保存</button>

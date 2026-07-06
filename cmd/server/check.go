@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,11 +17,12 @@ import (
 type CheckStatus struct {
 	OK        bool
 	Message   string
-	LatencyMs float64
+	LatencyMs float64 // response/connect time; for ping this is the average round-trip time
 	CheckedAt int64
-	// HTTP-specific detail (0 / -1 when not applicable):
-	StatusCode int // last HTTP status code
-	CertDays   int // days until the TLS certificate expires (-1 = not HTTPS / unknown)
+	// Type-specific detail (0 / -1 when not applicable):
+	StatusCode int     // HTTP: last status code
+	CertDays   int     // HTTP: days until the TLS certificate expires (-1 = not HTTPS / unknown)
+	LossPct    float64 // ping: packet-loss percentage (-1 = not a ping check)
 }
 
 const selfCheckID = "__self_health__"
@@ -175,19 +180,29 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	var ok bool
 	var msg string
 	code, certDays := 0, -1
+	lossPct, pingRTT := -1.0, -1.0
 	switch c.Type {
 	case "http":
 		ok, msg, code, certDays = cr.probeHTTP(c.Target)
 	case "tcp":
 		ok, msg = cr.probeTCP(c.Target)
+	case "ping":
+		ok, msg, pingRTT, lossPct = cr.probePing(c.Target)
 	case "process":
 		ok, msg = cr.probeProcess(c.Target)
 	default:
 		ok, msg = false, "未知检查类型: "+c.Type
 	}
 	lat := float64(time.Since(start).Milliseconds())
+	if c.Type == "ping" { // ping "latency" is the ICMP round-trip time, not the command duration
+		if pingRTT >= 0 {
+			lat = pingRTT
+		} else {
+			lat = 0
+		}
+	}
 	cr.mu.Lock()
-	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix(), StatusCode: code, CertDays: certDays}
+	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix(), StatusCode: code, CertDays: certDays, LossPct: lossPct}
 	wasDown := cr.down[c.ID]
 	cr.down[c.ID] = !ok
 	cr.markDown(c.ID, !ok)
@@ -265,6 +280,74 @@ func (cr *checkRunner) probeTCP(target string) (bool, string) {
 	}
 	conn.Close()
 	return true, "连接正常"
+}
+
+// probePing runs the system `ping` (zero-dependency, no raw-socket privilege
+// needed) against target and returns (ok, message, avgRTTms, lossPct). ICMP is
+// unreachable/blocked → 100% loss → not ok. Reachable (any reply) → ok, with the
+// loss percentage surfaced separately.
+func (cr *checkRunner) probePing(target string) (bool, string, float64, float64) {
+	target = strings.TrimSpace(target)
+	// Guard against argument injection: target is passed as an argv element (no
+	// shell), but a leading '-' or embedded whitespace could still be read as a
+	// ping flag, so reject those outright.
+	if target == "" || strings.HasPrefix(target, "-") || strings.ContainsAny(target, " \t\r\n") {
+		return false, "无效的主机地址", -1, -1
+	}
+	const sent = 3
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.CommandContext(ctx, "ping", "-n", strconv.Itoa(sent), "-w", "2000", target)
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "ping", "-c", strconv.Itoa(sent), "-t", "6", target)
+	default: // linux and other unix
+		cmd = exec.CommandContext(ctx, "ping", "-c", strconv.Itoa(sent), "-W", "2", "-w", "6", target)
+	}
+	out, _ := cmd.CombinedOutput() // ping exits non-zero on 100% loss; parse output regardless
+	received, avg := parsePingOutput(string(out))
+	if received > sent {
+		received = sent
+	}
+	loss := float64(sent-received) / float64(sent) * 100
+	if received == 0 {
+		return false, "不可达（100% 丢包）", -1, 100
+	}
+	return true, fmt.Sprintf("可达 · 平均 %.1f ms · 丢包 %.0f%%", avg, loss), avg, loss
+}
+
+// parsePingOutput counts successful replies and averages their round-trip times.
+// It keys off the per-reply time marker, which every platform and locale prints:
+// "time=" (Linux/macOS/EN-Windows), "time<" (Windows sub-1ms, e.g. "time<1ms"),
+// and the Chinese-Windows "时间=" / "时间<". Keying off replies rather than the
+// OS-specific summary line keeps the parser format-independent.
+func parsePingOutput(out string) (received int, avgRTTms float64) {
+	var sum float64
+	for _, marker := range []string{"time=", "time<", "时间=", "时间<"} {
+		idx := 0
+		for {
+			i := strings.Index(out[idx:], marker)
+			if i < 0 {
+				break
+			}
+			p := idx + i + len(marker)
+			j := p
+			for j < len(out) && (out[j] == '.' || (out[j] >= '0' && out[j] <= '9')) {
+				j++
+			}
+			if v, err := strconv.ParseFloat(out[p:j], 64); err == nil {
+				received++
+				sum += v
+			}
+			idx = j + 1
+		}
+	}
+	if received > 0 {
+		avgRTTms = sum / float64(received)
+	}
+	return received, avgRTTms
 }
 
 // probeProcess checks whether a given process name is running on the target host.
