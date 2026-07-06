@@ -13,6 +13,13 @@ const (
 	eventsPerAPI      = 100 // cap returned by the events endpoint
 	deleteSuppressSec = 60  // ignore a host's re-reports for this long after a manual delete
 	maxActivity       = 300 // ring of recent activity-log entries
+
+	// History storage constants (multi-tier downsampling)
+	histRawMax        = 1200   // raw samples: 1h at 3s interval (1200 points)
+	hist1mMax         = 2880   // 1-min aggregates: 48h (2880 points)
+	hist5mMax         = 2016   // 5-min aggregates: 7 days (2016 points)
+	hist1mInterval    = 60     // aggregate to 1-min every 60s
+	hist5mInterval    = 300    // aggregate to 5-min every 300s
 )
 
 // Host is the aggregate record the server keeps per agent.
@@ -30,6 +37,13 @@ type Host struct {
 	Latest    *shared.Sample     `json:"latest"`
 	Custom    map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
 	Samples   []shared.Sample    `json:"-"`
+
+	// Time-series history (multi-tier downsampling)
+	histRaw    []shared.Sample // raw samples (~3s interval, last 1h)
+	hist1m     []shared.Sample // 1-min aggregates (last 48h)
+	hist5m     []shared.Sample // 5-min aggregates (last 7 days)
+	last1mTs   int64           // timestamp of last 1-min aggregation
+	last5mTs   int64           // timestamp of last 5-min aggregation
 }
 
 // storedEvent decorates a plugin event with the host it came from.
@@ -97,6 +111,38 @@ func (s *Store) Upsert(r shared.Report) *Host {
 	if len(h.Samples) > maxSamples {
 		h.Samples = h.Samples[len(h.Samples)-maxSamples:]
 	}
+
+	// ---- Time-series history (multi-tier downsampling) ----
+	// Tier 1: Raw samples (~3s interval, last 1h)
+	h.histRaw = append(h.histRaw, sample)
+	if len(h.histRaw) > histRawMax {
+		h.histRaw = h.histRaw[len(h.histRaw)-histRawMax:]
+	}
+
+	// Tier 2: 1-min aggregates (last 48h)
+	if now-h.last1mTs >= hist1mInterval {
+		agg := h.aggregateSamples(h.histRaw, h.last1mTs, now, hist1mInterval)
+		if agg != nil {
+			h.hist1m = append(h.hist1m, *agg)
+			if len(h.hist1m) > hist1mMax {
+				h.hist1m = h.hist1m[len(h.hist1m)-hist1mMax:]
+			}
+			h.last1mTs = now
+		}
+	}
+
+	// Tier 3: 5-min aggregates (last 7 days)
+	if now-h.last5mTs >= hist5mInterval {
+		agg := h.aggregateSamples(h.hist1m, h.last5mTs, now, hist5mInterval)
+		if agg != nil {
+			h.hist5m = append(h.hist5m, *agg)
+			if len(h.hist5m) > hist5mMax {
+				h.hist5m = h.hist5m[len(h.hist5m)-hist5mMax:]
+			}
+			h.last5mTs = now
+		}
+	}
+
 	latest := sample
 	h.Latest = &latest
 	if len(r.Custom) > 0 {
@@ -122,6 +168,154 @@ func hostMeta(h *Host) *Host {
 	return &cp
 }
 
+// aggregateSamples aggregates samples within [from, to] into a single sample.
+// It computes the average of numeric metrics and takes the last value for counters.
+func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int64) *shared.Sample {
+	if len(samples) == 0 {
+		return nil
+	}
+
+	// Find samples in the aggregation window
+	var window []shared.Sample
+	for _, s := range samples {
+		if s.Timestamp >= from && s.Timestamp < to {
+			window = append(window, s)
+		}
+	}
+	if len(window) == 0 {
+		return nil
+	}
+
+	// Compute averages
+	var agg shared.Sample
+	agg.Timestamp = to
+	n := float64(len(window))
+
+	// CPU
+	var cpuSum float64
+	for _, s := range window {
+		cpuSum += s.CPUPercent
+	}
+	agg.CPUPercent = cpuSum / n
+	agg.CPUCores = window[len(window)-1].CPUCores // take last
+
+	// Memory
+	var memUsedSum, memTotalSum float64
+	for _, s := range window {
+		memUsedSum += float64(s.MemUsed)
+		memTotalSum += float64(s.MemTotal)
+	}
+	avgMemUsed := uint64(memUsedSum / n)
+	avgMemTotal := uint64(memTotalSum / n)
+	agg.MemUsed = avgMemUsed
+	agg.MemTotal = avgMemTotal
+	if avgMemTotal > 0 {
+		agg.MemPercent = float64(avgMemUsed) / float64(avgMemTotal) * 100
+	}
+
+	// Swap
+	var swapUsedSum, swapTotalSum float64
+	for _, s := range window {
+		swapUsedSum += float64(s.SwapUsed)
+		swapTotalSum += float64(s.SwapTotal)
+	}
+	avgSwapUsed := uint64(swapUsedSum / n)
+	avgSwapTotal := uint64(swapTotalSum / n)
+	agg.SwapUsed = avgSwapUsed
+	agg.SwapTotal = avgSwapTotal
+	if avgSwapTotal > 0 {
+		agg.SwapPercent = float64(avgSwapUsed) / float64(avgSwapTotal) * 100
+	}
+
+	// Disk (root filesystem)
+	var diskUsedSum, diskTotalSum float64
+	for _, s := range window {
+		diskUsedSum += float64(s.DiskUsed)
+		diskTotalSum += float64(s.DiskTotal)
+	}
+	avgDiskUsed := uint64(diskUsedSum / n)
+	avgDiskTotal := uint64(diskTotalSum / n)
+	agg.DiskUsed = avgDiskUsed
+	agg.DiskTotal = avgDiskTotal
+	if avgDiskTotal > 0 {
+		agg.DiskPercent = float64(avgDiskUsed) / float64(avgDiskTotal) * 100
+	}
+
+	// Per-disk info: aggregate each mount point
+	if len(window) > 0 && len(window[0].Disks) > 0 {
+		diskMap := make(map[string][]shared.DiskInfo)
+		for _, s := range window {
+			for _, d := range s.Disks {
+				diskMap[d.Path] = append(diskMap[d.Path], d)
+			}
+		}
+		for path, infos := range diskMap {
+			var totalSum, usedSum float64
+			for _, d := range infos {
+				totalSum += float64(d.Total)
+				usedSum += float64(d.Used)
+			}
+			avgTotal := uint64(totalSum / float64(len(infos)))
+			avgUsed := uint64(usedSum / float64(len(infos)))
+			percent := 0.0
+			if avgTotal > 0 {
+				percent = float64(avgUsed) / float64(avgTotal) * 100
+			}
+			agg.Disks = append(agg.Disks, shared.DiskInfo{
+				Path:    path,
+				Total:   avgTotal,
+				Used:    avgUsed,
+				Percent: percent,
+			})
+		}
+	}
+
+	// Network rates (average)
+	var netSentSum, netRecvSum float64
+	for _, s := range window {
+		netSentSum += s.NetSentRate
+		netRecvSum += s.NetRecvRate
+	}
+	agg.NetSentRate = netSentSum / n
+	agg.NetRecvRate = netRecvSum / n
+
+	// Connections (average)
+	var connsSum float64
+	for _, s := range window {
+		connsSum += float64(s.NetConns)
+	}
+	agg.NetConns = int(connsSum / n)
+
+	// Load averages
+	var l1Sum, l5Sum, l15Sum float64
+	for _, s := range window {
+		l1Sum += s.Load1
+		l5Sum += s.Load5
+		l15Sum += s.Load15
+	}
+	agg.Load1 = l1Sum / n
+	agg.Load5 = l5Sum / n
+	agg.Load15 = l15Sum / n
+
+	// Process count (average)
+	var procSum float64
+	for _, s := range window {
+		procSum += float64(s.ProcCount)
+	}
+	agg.ProcCount = int(procSum / n)
+
+	// Uptime (take max, as it only increases)
+	var maxUptime uint64
+	for _, s := range window {
+		if s.Uptime > maxUptime {
+			maxUptime = s.Uptime
+		}
+	}
+	agg.Uptime = maxUptime
+
+	return &agg
+}
+
 // ListHosts returns metadata + latest sample + custom gauges for every host.
 func (s *Store) ListHosts() []*Host {
 	s.mu.RLock()
@@ -144,6 +338,41 @@ func (s *Store) GetSamples(id string) ([]shared.Sample, bool) {
 	cp := make([]shared.Sample, len(h.Samples))
 	copy(cp, h.Samples)
 	return cp, true
+}
+
+// GetHistory returns time-series data for a host within [from, to] range.
+// It automatically selects the appropriate tier based on the time span:
+// - < 2h: raw samples (~3s interval)
+// - < 48h: 1-min aggregates
+// - >= 48h: 5-min aggregates
+func (s *Store) GetHistory(id string, from, to int64) ([]shared.Sample, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.hosts[id]
+	if !ok {
+		return nil, false
+	}
+
+	span := to - from
+	var src []shared.Sample
+
+	// Select tier based on time span
+	if span < 7200 { // < 2h: use raw
+		src = h.histRaw
+	} else if span < 172800 { // < 48h: use 1-min
+		src = h.hist1m
+	} else { // >= 48h: use 5-min
+		src = h.hist5m
+	}
+
+	// Filter by time range
+	result := make([]shared.Sample, 0, len(src))
+	for _, sample := range src {
+		if sample.Timestamp >= from && sample.Timestamp <= to {
+			result = append(result, sample)
+		}
+	}
+	return result, true
 }
 
 // RecentEvents returns the most recent plugin events, newest first.

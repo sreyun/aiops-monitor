@@ -276,20 +276,205 @@ async function editCategory(id, cur) {
 }
 
 /* ---------- 主机趋势弹窗 ---------- */
+let DETAIL_HOST_ID = '';
+let DETAIL_TIME_RANGE = 24; // hours: 24, 48, 72
 async function openDetail(id, name) {
+  DETAIL_HOST_ID = id;
+  DETAIL_TIME_RANGE = 24;
   $("detailTitle").textContent = name + " · 近期趋势";
   const body = $("detailBody");
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
   $("detailMask").classList.add("show");
+  await loadAndRenderCharts();
+}
+
+async function loadAndRenderCharts() {
+  const body = $("detailBody");
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - DETAIL_TIME_RANGE * 3600;
+
   try {
-    const samples = await fetch(`${API}/hosts/${encodeURIComponent(id)}/metrics`).then(r => r.json());
-    if (!Array.isArray(samples) || !samples.length) { body.innerHTML = `<div class="empty-line">暂无历史数据</div>`; return; }
-    body.innerHTML =
-      sparkBlock("CPU 使用率 (%)", samples.map(s => s.cpu_percent), "var(--info)") +
-      sparkBlock("内存使用率 (%)", samples.map(s => s.mem_percent), "var(--accent2)") +
-      sparkBlock("磁盘使用率 (%)", samples.map(s => s.disk_percent), "var(--warn)") +
-      `<div class="hint">采样点 ${samples.length} 个（内存态，约 5 秒/点）。</div>`;
-  } catch (e) { body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`; }
+    const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${now}`).then(r => r.json());
+    if (!Array.isArray(samples) || !samples.length) {
+      body.innerHTML = `<div class="empty-line">暂无历史数据（Agent 需运行至少几分钟才会积累数据）</div>`;
+      return;
+    }
+
+    // Build UI with time range selector and charts
+    let html = `
+      <div class="chart-controls">
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">24小时</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 48 ? 'active' : ''}" data-range="48">48小时</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 72 ? 'active' : ''}" data-range="72">72小时</button>
+      </div>
+      <div class="chart-container">
+        <canvas id="chartCPU" width="600" height="180"></canvas>
+        <canvas id="chartMem" width="600" height="180"></canvas>
+        <canvas id="chartDisk" width="600" height="180"></canvas>
+        <canvas id="chartNet" width="600" height="180"></canvas>
+      </div>
+      <div class="hint">采样点 ${samples.length} 个（自动选择最佳粒度：${DETAIL_TIME_RANGE <= 2 ? '原始精度 (~3s)' : DETAIL_TIME_RANGE <= 48 ? '1分钟聚合' : '5分钟聚合'}）。</div>
+    `;
+    body.innerHTML = html;
+
+    // Render charts
+    renderLineChart('chartCPU', samples, [
+      { key: 'cpu_percent', label: 'CPU 使用率 (%)', color: '#3b82f6' },
+    ], 0, 100);
+
+    renderLineChart('chartMem', samples, [
+      { key: 'mem_percent', label: '内存使用率 (%)', color: '#8b5cf6' },
+    ], 0, 100);
+
+    // Disk chart: show all disks
+    const diskKeys = samples.length > 0 && samples[0].disks ? samples[0].disks.map(d => d.path) : [];
+    const diskSeries = diskKeys.map((path, idx) => ({
+      key: `disk_${idx}`,
+      label: `磁盘 ${path}`,
+      color: ['#f59e0b', '#10b981', '#ef4444', '#06b6d4'][idx % 4],
+      transform: (s) => {
+        const disk = s.disks && s.disks[idx] ? s.disks[idx] : null;
+        return disk ? disk.percent : null;
+      }
+    }));
+    if (diskSeries.length > 0) {
+      renderLineChart('chartDisk', samples, diskSeries, 0, 100);
+    } else {
+      // Fallback to root disk
+      renderLineChart('chartDisk', samples, [
+        { key: 'disk_percent', label: '根分区使用率 (%)', color: '#f59e0b' },
+      ], 0, 100);
+    }
+
+    renderLineChart('chartNet', samples, [
+      { key: 'net_recv_rate', label: '网络接收', color: '#10b981', fmt: fmtRate },
+      { key: 'net_sent_rate', label: '网络发送', color: '#06b6d4', fmt: fmtRate },
+    ]);
+
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
+  }
+}
+
+// Time range selector event delegation
+$("detailBody").addEventListener("click", e => {
+  const btn = e.target.closest(".chip-btn[data-range]");
+  if (!btn) return;
+  DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
+  document.querySelectorAll("#detailBody .chip-btn").forEach(b => b.classList.toggle("active", b === btn));
+  loadAndRenderCharts();
+});
+
+/* ---------- Canvas Chart Rendering ---------- */
+function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
+  const canvas = $(canvasId);
+  if (!canvas || !samples.length) return;
+
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const padding = { top: 20, right: 60, bottom: 30, left: 50 };
+  const chartW = w - padding.left - padding.right;
+  const chartH = h - padding.top - padding.bottom;
+
+  // Clear canvas
+  ctx.clearRect(0, 0, w, h);
+
+  // Calculate Y range
+  let dataMin = yMin !== null ? yMin : Infinity;
+  let dataMax = yMax !== null ? yMax : -Infinity;
+  series.forEach(s => {
+    samples.forEach(sample => {
+      let val = s.transform ? s.transform(sample) : sample[s.key];
+      if (val !== null && val !== undefined) {
+        dataMin = Math.min(dataMin, val);
+        dataMax = Math.max(dataMax, val);
+      }
+    });
+  });
+
+  if (dataMin === Infinity) dataMin = 0;
+  if (dataMax === -Infinity) dataMax = 100;
+  if (yMin === null) dataMin = Math.max(0, dataMin * 0.9);
+  if (yMax === null) dataMax = dataMax * 1.1;
+  const yRange = dataMax - dataMin || 1;
+
+  // Draw grid lines
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = padding.top + (chartH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(w - padding.right, y);
+    ctx.stroke();
+
+    // Y-axis labels
+    const val = dataMax - (yRange / 4) * i;
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), padding.left - 8, y + 4);
+  }
+
+  // X-axis time labels
+  const firstTs = samples[0].timestamp;
+  const lastTs = samples[samples.length - 1].timestamp;
+  const timeSpan = lastTs - firstTs;
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const x = padding.left + (chartW / 4) * i;
+    const ts = firstTs + (timeSpan / 4) * i;
+    const d = new Date(ts * 1000);
+    const label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    ctx.fillStyle = '#6b7280';
+    ctx.fillText(label, x, h - 8);
+  }
+
+  // Draw series
+  series.forEach((s, sIdx) => {
+    const points = [];
+    samples.forEach((sample, idx) => {
+      let val = s.transform ? s.transform(sample) : sample[s.key];
+      if (val === null || val === undefined) return;
+      const x = padding.left + (idx / (samples.length - 1)) * chartW;
+      const y = padding.top + chartH - ((val - dataMin) / yRange) * chartH;
+      points.push({ x, y, val });
+    });
+
+    if (points.length < 2) return;
+
+    // Draw line
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+
+    // Draw area fill
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, padding.top + chartH);
+    points.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    // Legend
+    const legendY = padding.top + sIdx * 18;
+    ctx.fillStyle = s.color;
+    ctx.fillRect(w - padding.right + 8, legendY, 12, 12);
+    ctx.fillStyle = '#374151';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(s.label, w - padding.right + 24, legendY + 11);
+  });
 }
 function sparkBlock(title, series, color) {
   const last = series.length ? series[series.length - 1] : 0;

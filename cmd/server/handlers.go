@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/report", s.handleReport)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.handleHostMetrics)
+	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
 	mux.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleDeleteHost)
 	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
@@ -155,6 +157,54 @@ func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
 		return
 	}
+	writeJSON(w, http.StatusOK, samples)
+}
+
+// handleHostHistory returns time-series data for a host within [from, to] range.
+// Query params: from (unix timestamp), to (unix timestamp).
+// Defaults: from = now - 24h, to = now.
+func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	now := time.Now().Unix()
+
+	// Parse query parameters
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	var from, to int64
+	if toStr != "" {
+		var err error
+		to, err = strconv.ParseInt(toStr, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'to' parameter"})
+			return
+		}
+	} else {
+		to = now
+	}
+
+	if fromStr != "" {
+		var err error
+		from, err = strconv.ParseInt(fromStr, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'from' parameter"})
+			return
+		}
+	} else {
+		from = now - 86400 // default: last 24 hours
+	}
+
+	if from >= to {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "'from' must be less than 'to'"})
+		return
+	}
+
+	samples, ok := s.store.GetHistory(id, from, to)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, samples)
 }
 
