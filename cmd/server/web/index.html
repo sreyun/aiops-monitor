@@ -67,10 +67,16 @@
       <button class="hamburger" id="menuBtn" aria-label="菜单">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
-      <div class="page-title" id="pageTitle">概览</div>
+      <div class="page-head">
+        <div class="page-title" id="pageTitle">概览</div>
+        <div class="page-sub" id="pageSub">集群资源、告警与活动总览</div>
+      </div>
       <div class="spacer"></div>
       <button class="hamburger" id="pauseBtn" title="暂停自动刷新" aria-label="暂停/继续自动刷新">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      </button>
+      <button class="hamburger" id="widthBtn" title="切换标准 / 宽屏布局" aria-label="切换布局宽度">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
       </button>
       <div class="select-wrap">
         <select id="catFilter" title="按分类筛选"><option value="">全部分类</option></select>
@@ -166,6 +172,14 @@
                 <option value="24h">最近24小时</option>
               </select>
             </div>
+            <div class="select-wrap">
+              <select id="logPageSize" onchange="setLogPageSize(this.value)" title="每页条数">
+                <option value="10">10 条/页</option>
+                <option value="30">30 条/页</option>
+                <option value="50" selected>50 条/页</option>
+                <option value="100">100 条/页</option>
+              </select>
+            </div>
             <button class="btn" id="exportLogBtn" title="导出当前筛选结果为 CSV">导出 CSV</button>
           </div>
         </div>
@@ -176,12 +190,21 @@
           <button class="chip-btn" data-kind="插件">插件</button>
         </div>
         <div class="stack" id="log"></div>
+        <div class="pager" id="logPager"></div>
       </section>
 
       <!-- 自定义监控 -->
       <section class="view" id="view-checks">
         <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP / 进程存活</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <div class="view-toggle" id="checkViewToggle" title="切换列表 / 胶囊视图">
+              <button class="vt-btn active" data-cview="list" title="列表视图">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              </button>
+              <button class="vt-btn" data-cview="pill" title="胶囊视图">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+              </button>
+            </div>
             <div class="select-wrap">
               <select id="checkFilter" onchange="filterChecks(this.value)" title="按类型筛选">
                 <option value="all">全部类型</option>
@@ -193,7 +216,7 @@
             <button class="btn primary" id="addCheckBtn">+ 添加检查</button>
           </div>
         </div>
-        <div class="checks-grid" id="checksGrid"></div>
+        <div class="checks-list" id="checksGrid"></div>
         <div class="empty" id="checksEmpty">
           还没有自定义监控。点「添加检查」监控一个网站（HTTP）或服务端口（TCP），异常时自动产生告警并推送飞书 / 钉钉。
         </div>
@@ -298,12 +321,26 @@
 
 <!-- ===== 主机趋势弹窗 ===== -->
 <div class="mask" id="detailMask" data-close>
-  <div class="modal">
+  <div class="modal modal-wide">
     <div class="modal-head">
       <h3 id="detailTitle">主机详情</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="detailBody"></div>
+  </div>
+</div>
+
+<!-- ===== 趋势图放大预览弹窗 ===== -->
+<div class="mask" id="chartZoomMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3 id="chartZoomTitle">趋势放大</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="zoom-hint">拖动框选可放大区间 · 双击还原 · 悬停查看数值</div>
+      <div class="chart-wrap"><canvas id="chartZoomCanvas" width="1040" height="360"></canvas></div>
+    </div>
   </div>
 </div>
 

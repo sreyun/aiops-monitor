@@ -37,10 +37,50 @@ type Auth struct {
 	mu       sync.Mutex
 	sessions map[string]session
 	dirty    bool
+
+	limMu    sync.Mutex
+	loginHit map[string][]int64 // client ip -> recent FAILED attempt unix times
 }
 
+const (
+	loginWindowSec   = 300 // sliding window for brute-force throttling
+	loginMaxFailures = 8   // max failed attempts per IP per window
+)
+
 func NewAuth(cfg *ConfigStore) *Auth {
-	return &Auth{cfg: cfg, sessions: map[string]session{}}
+	return &Auth{cfg: cfg, sessions: map[string]session{}, loginHit: map[string][]int64{}}
+}
+
+// loginAllowed reports whether ip is under the failed-attempt threshold. It also
+// prunes stale entries so the map stays bounded.
+func (a *Auth) loginAllowed(ip string) bool {
+	now := time.Now().Unix()
+	cutoff := now - loginWindowSec
+	a.limMu.Lock()
+	defer a.limMu.Unlock()
+	if len(a.loginHit) > 4096 { // safety valve against unbounded growth
+		a.loginHit = map[string][]int64{}
+	}
+	kept := a.loginHit[ip][:0]
+	for _, t := range a.loginHit[ip] {
+		if t >= cutoff {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == 0 {
+		delete(a.loginHit, ip)
+	} else {
+		a.loginHit[ip] = kept
+	}
+	return len(kept) < loginMaxFailures
+}
+
+// loginFailed records one failed attempt for ip.
+func (a *Auth) loginFailed(ip string) {
+	now := time.Now().Unix()
+	a.limMu.Lock()
+	a.loginHit[ip] = append(a.loginHit[ip], now)
+	a.limMu.Unlock()
 }
 
 func newSessionToken() string {
@@ -168,17 +208,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
+	ip := clientIP(r)
+	if !s.auth.loginAllowed(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录尝试过于频繁，请 5 分钟后再试"})
+		return
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
 	tok, ok := s.auth.Login(req.Username, req.Password)
 	if !ok {
+		s.auth.loginFailed(ip)
+		s.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: ip, Message: "登录失败：" + req.Username})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
+		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "登录成功：" + req.Username})

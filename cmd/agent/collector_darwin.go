@@ -83,9 +83,60 @@ func (c *darwinCollector) Collect() (shared.Metrics, error) {
 	m.ProcCount = darwinProcCount()
 	m.ProcessNames = darwinProcNames()
 	m.Uptime = darwinUptime()
+	m.GPUs = cachedGPUs(darwinGPUs)
 
 	c.primed = true
 	return m, nil
+}
+
+// darwinGPUs reads GPU utilization from IOKit's IOAccelerator objects via
+// `ioreg`. Apple Silicon and discrete GPUs expose a "Device Utilization %"
+// counter inside PerformanceStatistics. VRAM/temperature aren't reliably
+// available without elevated tools, so only utilization + model are reported.
+func darwinGPUs() []shared.GPUInfo {
+	out := run("ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator")
+	if out == "" {
+		return nil
+	}
+	const mark = `"Device Utilization %"=`
+	var gpus []shared.GPUInfo
+	idx := 0
+	for {
+		i := strings.Index(out[idx:], mark)
+		if i < 0 {
+			break
+		}
+		p := idx + i + len(mark)
+		j := p
+		for j < len(out) && out[j] >= '0' && out[j] <= '9' {
+			j++
+		}
+		util, _ := strconv.ParseFloat(out[p:j], 64)
+		gpus = append(gpus, shared.GPUInfo{
+			Name:        darwinGPUModel(out[:idx+i]),
+			UtilPercent: round1(util),
+		})
+		idx = j
+	}
+	return gpus
+}
+
+// darwinGPUModel finds the nearest preceding `"model"=<"NAME">` (or
+// `"model" = "NAME"`) in the ioreg text, which names the accelerator.
+func darwinGPUModel(seg string) string {
+	k := strings.LastIndex(seg, `"model"`)
+	if k < 0 {
+		return "GPU"
+	}
+	rest := seg[k:]
+	if a := strings.Index(rest, `<"`); a >= 0 {
+		if b := strings.IndexByte(rest[a+2:], '"'); b >= 0 {
+			if name := strings.TrimSpace(rest[a+2 : a+2+b]); name != "" {
+				return name
+			}
+		}
+	}
+	return "GPU"
 }
 
 // ---- helpers (shell out to always-present macOS tools) ----

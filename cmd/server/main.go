@@ -70,6 +70,21 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// maxBodyBytes caps request bodies to blunt memory-exhaustion via oversized
+// JSON. Reports (metrics + up to 256 process names + disks + GPUs) fit easily.
+const maxBodyBytes = 2 << 20 // 2 MiB
+
+// bodyLimitMiddleware wraps every request body in a MaxBytesReader so a
+// malicious or buggy client can't stream an unbounded payload into memory.
+func bodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	addr := flag.String("addr", ":8080", "监听地址，如 :8080 或 0.0.0.0:8080")
 	cfgPath := flag.String("config", "server_config.json", "服务端配置文件路径（告警/阈值/分类）")
@@ -101,7 +116,7 @@ func main() {
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 
-	handler := corsMiddleware(server.authMiddleware(server.Routes()))
+	handler := corsMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))
 	srv := &http.Server{
 		Addr:         *addr,
 		Handler:      handler,

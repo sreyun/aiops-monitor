@@ -15,6 +15,9 @@ type CheckStatus struct {
 	Message   string
 	LatencyMs float64
 	CheckedAt int64
+	// HTTP-specific detail (0 / -1 when not applicable):
+	StatusCode int // last HTTP status code
+	CertDays   int // days until the TLS certificate expires (-1 = not HTTPS / unknown)
 }
 
 const selfCheckID = "__self_health__"
@@ -171,9 +174,10 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	start := time.Now()
 	var ok bool
 	var msg string
+	code, certDays := 0, -1
 	switch c.Type {
 	case "http":
-		ok, msg = cr.probeHTTP(c.Target)
+		ok, msg, code, certDays = cr.probeHTTP(c.Target)
 	case "tcp":
 		ok, msg = cr.probeTCP(c.Target)
 	case "process":
@@ -183,7 +187,7 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	}
 	lat := float64(time.Since(start).Milliseconds())
 	cr.mu.Lock()
-	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix()}
+	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix(), StatusCode: code, CertDays: certDays}
 	wasDown := cr.down[c.ID]
 	cr.down[c.ID] = !ok
 	cr.markDown(c.ID, !ok)
@@ -214,7 +218,10 @@ func (cr *checkRunner) transition(c CustomCheck, up bool, msg string) {
 	}
 }
 
-func (cr *checkRunner) probeHTTP(target string) (bool, string) {
+// probeHTTP returns (ok, message, statusCode, certDaysRemaining). certDays is -1
+// for plain HTTP or when the certificate can't be read; for HTTPS it is the whole
+// number of days until the leaf certificate's NotAfter.
+func (cr *checkRunner) probeHTTP(target string) (bool, string, int, int) {
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = "http://" + target
 	}
@@ -224,18 +231,31 @@ func (cr *checkRunner) probeHTTP(target string) (bool, string) {
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err := cr.httpc.Get(target)
 		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return false, "HTTP " + resp.Status
+			certDays := certDaysRemaining(resp)
+			code := resp.StatusCode
+			resp.Body.Close()
+			if code >= 400 {
+				return false, "HTTP " + resp.Status, code, certDays
 			}
-			return true, "HTTP " + resp.Status
+			return true, "HTTP " + resp.Status, code, certDays
 		}
 		lastErr = err
 		if attempt == 0 {
 			time.Sleep(500 * time.Millisecond) // brief pause before retry
 		}
 	}
-	return false, "请求失败: " + lastErr.Error()
+	return false, "请求失败: " + lastErr.Error(), 0, -1
+}
+
+// certDaysRemaining returns whole days until the served leaf TLS certificate
+// expires, or -1 for non-HTTPS responses or when no peer certificate is present.
+func certDaysRemaining(resp *http.Response) int {
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return -1
+	}
+	notAfter := resp.TLS.PeerCertificates[0].NotAfter
+	d := time.Until(notAfter).Hours() / 24
+	return int(d)
 }
 
 func (cr *checkRunner) probeTCP(target string) (bool, string) {

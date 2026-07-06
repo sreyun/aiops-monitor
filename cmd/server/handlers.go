@@ -300,9 +300,11 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 			"id": c.ID, "name": c.Name, "type": c.Type, "target": c.Target,
 			"interval_sec": c.IntervalSec, "level": c.Level, "enabled": c.Enabled,
 			"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
+			"status_code": 0, "cert_days": -1,
 		}
 		if s2, ok := st[c.ID]; ok {
 			m["ok"], m["message"], m["checked_at"], m["latency_ms"] = s2.OK, s2.Message, s2.CheckedAt, s2.LatencyMs
+			m["status_code"], m["cert_days"] = s2.StatusCode, s2.CertDays
 		}
 		out = append(out, m)
 	}
@@ -501,6 +503,12 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// isHTTPS reports whether the request reached us over TLS, honoring the common
+// reverse-proxy header. Used to set the Secure flag on the session cookie.
+func isHTTPS(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 // serverURL reconstructs the externally-reachable base URL from the request,

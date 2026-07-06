@@ -30,7 +30,20 @@ type Metrics struct {
 	Load15      float64 `json:"load15"`
 	ProcCount   int     `json:"proc_count"`
 	Uptime      uint64  `json:"uptime"`
+	GPUs        []GPUInfo `json:"gpus,omitempty"` // per-GPU utilization / VRAM (best-effort, cross-platform)
 	ProcessNames []string `json:"process_names,omitempty"` // top process names for process-monitor checks
+}
+
+// GPUInfo is per-GPU usage. Collection is best-effort and vendor-dependent:
+// NVIDIA via nvidia-smi (Linux/Windows), AMD via sysfs (Linux), Apple/other via
+// ioreg (macOS). Fields that a platform cannot supply are left zero.
+type GPUInfo struct {
+	Name        string  `json:"name"`
+	UtilPercent float64 `json:"util_percent"`
+	MemUsed     uint64  `json:"mem_used,omitempty"`
+	MemTotal    uint64  `json:"mem_total,omitempty"`
+	MemPercent  float64 `json:"mem_percent,omitempty"`
+	Temp        float64 `json:"temp,omitempty"` // °C, 0 if unknown
 }
 
 // DiskInfo is per-volume disk usage. The agent enumerates every local disk:

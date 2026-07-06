@@ -293,6 +293,47 @@ func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int6
 		}
 	}
 
+	// Per-GPU info: aggregate each GPU by name (average util / VRAM)
+	if len(window) > 0 && len(window[0].GPUs) > 0 {
+		type gacc struct {
+			util, memUsed, memTotal, temp, n float64
+		}
+		order := []string{}
+		gmap := map[string]*gacc{}
+		for _, s := range window {
+			for _, g := range s.GPUs {
+				a := gmap[g.Name]
+				if a == nil {
+					a = &gacc{}
+					gmap[g.Name] = a
+					order = append(order, g.Name)
+				}
+				a.util += g.UtilPercent
+				a.memUsed += float64(g.MemUsed)
+				a.memTotal += float64(g.MemTotal)
+				a.temp += g.Temp
+				a.n++
+			}
+		}
+		for _, name := range order {
+			a := gmap[name]
+			if a.n == 0 {
+				continue
+			}
+			gi := shared.GPUInfo{
+				Name:        name,
+				UtilPercent: a.util / a.n,
+				MemUsed:     uint64(a.memUsed / a.n),
+				MemTotal:    uint64(a.memTotal / a.n),
+				Temp:        a.temp / a.n,
+			}
+			if gi.MemTotal > 0 {
+				gi.MemPercent = float64(gi.MemUsed) / float64(gi.MemTotal) * 100
+			}
+			agg.GPUs = append(agg.GPUs, gi)
+		}
+	}
+
 	// Network rates (average)
 	var netSentSum, netRecvSum float64
 	for _, s := range window {

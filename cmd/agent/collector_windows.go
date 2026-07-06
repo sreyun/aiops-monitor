@@ -168,6 +168,9 @@ func (c *windowsCollector) Collect() (shared.Metrics, error) {
 	m.ProcCount = countProcs()
 	m.ProcessNames = listProcessNames()
 
+	// ---- GPU (NVIDIA via nvidia-smi; best-effort, cached) ----
+	m.GPUs = cachedGPUs(nvidiaSmiGPUs)
+
 	// ---- Uptime: GetTickCount64 (ms) ----
 	if r, _, _ := procGetTickCount64.Call(); r != 0 {
 		m.Uptime = uint64(r) / 1000

@@ -47,6 +47,9 @@ let HOST_META = [];   // 主机元数据（id + hostname）用于进程监控
 let DEFAULT_EMPTY = null;
 let APP_STARTED = false;
 let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
+let LOG_PAGE = 1;     // 日志分页当前页
+let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
+let CHECK_VIEW = "list"; // 自定义监控视图：list | pill
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
@@ -149,14 +152,14 @@ function renderAlerts(alerts) {
   $("ovAlerts").innerHTML = n ? alerts.slice(0, 6).map(row).join("") : empty;
 }
 
-/* ---------- 概览：资源 TOP5 ---------- */
+/* ---------- 概览：资源 TOP10 ---------- */
 function renderTop(hosts) {
   const el = $("topPanels");
   if (!el) return;
   const live = hosts.filter(h => h.latest && h.online);
   if (!live.length) { el.innerHTML = ""; return; }
   const by = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, v: f(h) || 0 }))
-    .sort((a, b) => b.v - a.v).slice(0, 5);
+    .sort((a, b) => b.v - a.v).slice(0, 10);
   const panel = (title, items) => `<div class="top-panel"><div class="tp-title">${title}</div>` +
     (items.length ? items.map(it => `
       <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title="点击查看趋势">
@@ -164,13 +167,18 @@ function renderTop(hosts) {
         <div class="ti-bar"><div class="ti-fill" style="width:${Math.min(it.v, 100)}%;background:${usageColor(it.v)}"></div></div>
         <span class="ti-val mono">${it.v.toFixed(1)}%</span>
       </div>`).join("") : `<div class="empty-line">暂无数据</div>`) + `</div>`;
+  const gpuTop = by(h => {
+    const gs = h.latest.gpus || [];
+    return gs.length ? Math.max(...gs.map(g => g.util_percent || 0)) : 0;
+  }).filter(it => it.v > 0);
   el.innerHTML =
-    panel("CPU 占用 TOP5", by(h => h.latest.cpu_percent)) +
-    panel("内存占用 TOP5", by(h => h.latest.mem_percent)) +
-    panel("磁盘占用 TOP5（最高分区）", by(h => {
+    panel("CPU 占用 TOP10", by(h => h.latest.cpu_percent)) +
+    panel("内存占用 TOP10", by(h => h.latest.mem_percent)) +
+    panel("磁盘占用 TOP10（最高分区）", by(h => {
       const ds = h.latest.disks || [];
       return ds.length ? Math.max(...ds.map(d => d.percent)) : (h.latest.disk_percent || 0);
-    }));
+    })) +
+    (gpuTop.length ? panel("GPU 占用 TOP10（最高显卡）", gpuTop) : "");
 }
 
 // applyLogFilters mirrors the log view's filter chain (类型/级别/时间/内部自检)，
@@ -214,8 +222,39 @@ function renderLog(items) {
     <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
   
   const filtered = applyLogFilters(items);
-  $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / LOG_PAGE_SIZE));
+  if (LOG_PAGE > pages) LOG_PAGE = pages;
+  if (LOG_PAGE < 1) LOG_PAGE = 1;
+  const pageItems = filtered.slice((LOG_PAGE - 1) * LOG_PAGE_SIZE, LOG_PAGE * LOG_PAGE_SIZE);
+  $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
+  renderLogPager(pages, total);
   $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
+}
+
+function renderLogPager(pages, total) {
+  const pager = $("logPager");
+  if (!pager) return;
+  if (total === 0) { pager.innerHTML = ""; return; }
+  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} 条</span>`; return; }
+  let btns = `<button ${LOG_PAGE === 1 ? "disabled" : ""} data-lpg="prev">‹</button>`;
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - LOG_PAGE) <= 1) {
+      btns += `<button class="${i === LOG_PAGE ? "active" : ""}" data-lpg="${i}">${i}</button>`;
+    } else if (Math.abs(i - LOG_PAGE) === 2) {
+      btns += `<span class="pinfo">…</span>`;
+    }
+  }
+  btns += `<button ${LOG_PAGE === pages ? "disabled" : ""} data-lpg="next">›</button>`;
+  btns += `<span class="pinfo">共 ${total} 条 · ${LOG_PAGE}/${pages} 页</span>`;
+  pager.innerHTML = btns;
+}
+
+// 每页条数切换（10/30/50/100）
+function setLogPageSize(v) {
+  LOG_PAGE_SIZE = parseInt(v) || 50;
+  LOG_PAGE = 1;
+  renderLog(LAST_LOG);
 }
 
 /* ---------- 渲染：主机卡片 ---------- */
@@ -228,6 +267,16 @@ function hostCard(h) {
   const disksHtml = disks.length
     ? disks.map(d => bar("磁盘 " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
     : bar("磁盘", m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
+  const gpus = Array.isArray(m.gpus) ? m.gpus : [];
+  const gpusHtml = gpus.map(g => {
+    const util = Math.max(0, Math.min(g.util_percent || 0, 100));
+    const memTxt = (g.mem_total || 0) > 0 ? " · 显存 " + fmtGB(g.mem_used || 0) + "/" + fmtGB(g.mem_total || 0) + "G" : "";
+    const tempTxt = (g.temp || 0) > 0 ? " · " + Math.round(g.temp) + "℃" : "";
+    const name = esc((g.name || "GPU").slice(0, 22));
+    return `<div class="metric gpu"><div class="row"><span class="label">GPU ${name}</span>
+      <span class="val mono">${(g.util_percent || 0).toFixed(0)}%${memTxt}${tempTxt}</span></div>
+      <div class="bar"><div class="fill" style="width:${util}%;background:${usageColor(g.util_percent || 0)}"></div></div></div>`;
+  }).join("");
   let chips = "";
   if (h.custom && Object.keys(h.custom).length) {
     chips = `<div class="chips">` + Object.entries(h.custom).sort().map(([k, v]) => {
@@ -249,8 +298,11 @@ function hostCard(h) {
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
         <div style="min-width:0">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
-          <div class="os">${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}</div>
-          <div class="meta">${h.ip ? "IP " + esc(h.ip) : ""}${h.kernel ? (h.ip ? " · " : "") + "内核 " + esc(h.kernel) : ""}</div>
+          <div class="host-info">
+            <div class="hi-row"><span class="hi-k">IP 地址</span><span class="hi-v mono">${h.ip ? esc(h.ip) : "—"}</span></div>
+            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}">${esc(h.platform || "—")}${h.arch ? " · " + esc(h.arch) : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">内核版本</span><span class="hi-v mono" title="${esc(h.kernel || "")}">${h.kernel ? esc(h.kernel) : "—"}</span></div>
+          </div>
         </div>
       </div>
       <div class="host-tags">
@@ -263,6 +315,7 @@ function hostCard(h) {
     ${bar("内存", m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
     ${swap}
     ${disksHtml}
+    ${gpusHtml}
     <div class="loadline" title="${loadTitle}">
       <div class="load-cell"><div class="lv mono">${(m.load1 || 0).toFixed(2)}</div><div class="lk">1 min</div></div>
       <div class="load-cell"><div class="lv mono">${(m.load5 || 0).toFixed(2)}</div><div class="lk">5 min</div></div>
@@ -280,6 +333,8 @@ function hostCard(h) {
 
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
+  // 进程监控下拉所需的主机元数据直接从主机列表派生，省掉一条 /hosts/meta 轮询请求
+  HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
   if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
   $("hostsCount").textContent = hosts.length;
   $("navHosts").textContent = hosts.length;
@@ -399,8 +454,14 @@ async function loadAndRenderCharts() {
       return;
     }
 
-    // Build UI with time range selector and charts
-    let html = `
+    // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮
+    DETAIL_CHARTS = {};
+    const gran = DETAIL_TIME_RANGE <= 2 ? '原始精度 (≈5s)' : DETAIL_TIME_RANGE <= 48 ? '1 分钟聚合' : '5 分钟聚合';
+    const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
+    const pct = v => v.toFixed(1) + '%';
+    const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="230"></canvas>` +
+      `<button class="chart-enlarge" data-chart="${id}" title="放大预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+    body.innerHTML = `
       <div class="chart-controls">
         <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">1小时</button>
         <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">24小时</button>
@@ -408,56 +469,55 @@ async function loadAndRenderCharts() {
         <button class="chip-btn ${DETAIL_TIME_RANGE === 168 ? 'active' : ''}" data-range="168">7天</button>
       </div>
       <div class="chart-container">
-        <canvas id="chartCPU" width="600" height="180"></canvas>
-        <canvas id="chartMem" width="600" height="180"></canvas>
-        <canvas id="chartDisk" width="600" height="180"></canvas>
-        <canvas id="chartNet" width="600" height="180"></canvas>
+        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
       </div>
-      <div class="hint">采样点 ${samples.length} 个（自动选择最佳粒度：${DETAIL_TIME_RANGE <= 2 ? '原始精度 (5s)' : DETAIL_TIME_RANGE <= 48 ? '1 分钟聚合' : '5 分钟聚合'}）· 历史已持久化，重启不丢。</div>
+      <div class="hint">采样点 ${samples.length} 个（粒度：${gran}）· 悬停查看数值 · 拖动框选放大区间 · 双击还原 · 点击图表或右上角按钮放大预览。历史已持久化，重启不丢。</div>
     `;
-    body.innerHTML = html;
 
-    // Render charts
-    renderLineChart('chartCPU', samples, [
-      { key: 'cpu_percent', label: 'CPU 使用率 (%)', color: '#4c8dff' },
-    ], 0, 100);
+    DETAIL_CHARTS.chartCPU = createChart('chartCPU', samples,
+      [{ key: 'cpu_percent', label: 'CPU 使用率', color: '#4c8dff', fmt: pct }], 0, 100, { title: 'CPU 使用率' });
+    DETAIL_CHARTS.chartMem = createChart('chartMem', samples,
+      [{ key: 'mem_percent', label: '内存使用率', color: '#8b5cf6', fmt: pct }], 0, 100, { title: '内存使用率' });
 
-    renderLineChart('chartMem', samples, [
-      { key: 'mem_percent', label: '内存使用率 (%)', color: '#8b5cf6' },
-    ], 0, 100);
-
-    // Disk chart: show all disks
-    const diskKeys = samples.length > 0 && samples[0].disks ? samples[0].disks.map(d => d.path) : [];
+    // 磁盘：每个分区一条线。以「磁盘数最多」的样本为准，避免首个样本缺盘时丢失分区曲线
+    let diskProto = [];
+    samples.forEach(s => { if (Array.isArray(s.disks) && s.disks.length > diskProto.length) diskProto = s.disks; });
+    const diskKeys = diskProto.map(d => d.path);
     const diskSeries = diskKeys.map((path, idx) => ({
-      key: `disk_${idx}`,
-      label: `磁盘 ${path}`,
-      color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0'][idx % 4],
-      transform: (s) => {
-        const disk = s.disks && s.disks[idx] ? s.disks[idx] : null;
-        return disk ? disk.percent : null;
-      }
+      key: `disk_${idx}`, label: '磁盘 ' + path,
+      color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0'][idx % 4], fmt: pct,
+      transform: (s) => { const d = s.disks && s.disks[idx] ? s.disks[idx] : null; return d ? d.percent : null; }
     }));
-    if (diskSeries.length > 0) {
-      renderLineChart('chartDisk', samples, diskSeries, 0, 100);
-    } else {
-      // Fallback to root disk
-      renderLineChart('chartDisk', samples, [
-        { key: 'disk_percent', label: '根分区使用率 (%)', color: '#f7b23b' },
-      ], 0, 100);
+    DETAIL_CHARTS.chartDisk = createChart('chartDisk', samples,
+      diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: '根分区', color: '#f7b23b', fmt: pct }],
+      0, 100, { title: '磁盘使用率' });
+
+    // GPU：每块显卡一条线（存在时才有该图）
+    if (hasGPU) {
+      const gpuNames = [];
+      samples.forEach(s => (s.gpus || []).forEach((g, i) => { if (!gpuNames[i]) gpuNames[i] = g.name || ('GPU' + i); }));
+      const gpuSeries = gpuNames.map((nm, idx) => ({
+        key: `gpu_${idx}`, label: 'GPU ' + nm,
+        color: ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b'][idx % 4], fmt: v => v.toFixed(0) + '%',
+        transform: (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g.util_percent || 0) : null; }
+      }));
+      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuSeries, 0, 100, { title: 'GPU 使用率' });
     }
 
-    renderLineChart('chartNet', samples, [
+    DETAIL_CHARTS.chartNet = createChart('chartNet', samples, [
       { key: 'net_recv_rate', label: '网络接收', color: '#2fd07a', fmt: fmtRate },
       { key: 'net_sent_rate', label: '网络发送', color: '#43b6f0', fmt: fmtRate },
-    ]);
+    ], null, null, { title: '网络吞吐' });
 
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
 
-// Time range selector event delegation
+// 详情弹窗事件委托：放大按钮 + 时间范围切换
 safeAddEventListener("detailBody", "click", e => {
+  const en = e.target.closest(".chart-enlarge");
+  if (en) { const ch = DETAIL_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch); return; }
   const btn = e.target.closest(".chip-btn[data-range]");
   if (!btn) return;
   DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
@@ -465,120 +525,193 @@ safeAddEventListener("detailBody", "click", e => {
   loadAndRenderCharts();
 });
 
-/* ---------- Canvas Chart Rendering ---------- */
-function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
+/* ---------- Canvas 折线图（交互：悬停十字线 + 数值气泡 / 框选放大 / 双击还原 / 点击放大预览） ---------- */
+let DETAIL_CHARTS = {};
+
+function chartTipEl() {
+  let t = $("chartTip");
+  if (!t) { t = document.createElement("div"); t.id = "chartTip"; t.className = "chart-tip"; document.body.appendChild(t); }
+  return t;
+}
+function hideChartTip() { const t = $("chartTip"); if (t) t.style.display = "none"; }
+
+function seriesVal(s, sample) {
+  const v = s.transform ? s.transform(sample) : sample[s.key];
+  return (v === null || v === undefined || isNaN(v)) ? null : v;
+}
+
+// createChart builds an interactive line chart on a canvas and returns its
+// state. The state (samples/series/visible-window) lives on canvas._chart so a
+// single set of event listeners always drives the current chart.
+function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opts = {}) {
   const canvas = $(canvasId);
-  if (!canvas || !samples.length) return;
+  if (!canvas || !allSamples || !allSamples.length) return null;
+  const state = {
+    canvas, ctx: canvas.getContext("2d"),
+    all: allSamples, series, yMin, yMax,
+    title: opts.title || "", isZoom: !!opts.isZoom,
+    i0: 0, i1: allSamples.length - 1,
+    hover: -1, drag: false, downX: null, curX: null, moved: false,
+    pad: { top: 22, right: 18, bottom: 28, left: 56 },
+  };
+  canvas._chart = state;
+  drawChart(state);
+  attachChartEvents(canvas);
+  return state;
+}
 
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-  const padding = { top: 20, right: 16, bottom: 30, left: 50 };
-  const chartW = w - padding.left - padding.right;
-  const chartH = h - padding.top - padding.bottom;
-
-  // Clear canvas
+function drawChart(state) {
+  const { ctx, canvas, series, pad } = state;
+  const w = canvas.width, h = canvas.height;
+  const cw = w - pad.left - pad.right, ch = h - pad.top - pad.bottom;
+  const vis = state.all.slice(state.i0, state.i1 + 1);
+  const n = vis.length;
   ctx.clearRect(0, 0, w, h);
 
-  // Calculate Y range
-  let dataMin = yMin !== null ? yMin : Infinity;
-  let dataMax = yMax !== null ? yMax : -Infinity;
-  series.forEach(s => {
-    samples.forEach(sample => {
-      let val = s.transform ? s.transform(sample) : sample[s.key];
-      if (val !== null && val !== undefined) {
-        dataMin = Math.min(dataMin, val);
-        dataMax = Math.max(dataMax, val);
-      }
-    });
-  });
+  // Y range (fixed when yMin/yMax given, else padded auto-range)
+  let dMin = state.yMin !== null ? state.yMin : Infinity;
+  let dMax = state.yMax !== null ? state.yMax : -Infinity;
+  series.forEach(s => vis.forEach(sm => {
+    const v = seriesVal(s, sm);
+    if (v !== null) { dMin = Math.min(dMin, v); dMax = Math.max(dMax, v); }
+  }));
+  if (dMin === Infinity) dMin = 0;
+  if (dMax === -Infinity) dMax = state.yMax !== null ? state.yMax : 100;
+  if (state.yMin === null) dMin = Math.max(0, dMin * 0.9);
+  if (state.yMax === null) dMax = dMax * 1.1 || 1;
+  if (dMax <= dMin) dMax = dMin + 1;
+  const yRange = dMax - dMin;
+  state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
 
-  if (dataMin === Infinity) dataMin = 0;
-  if (dataMax === -Infinity) dataMax = 100;
-  if (yMin === null) dataMin = Math.max(0, dataMin * 0.9);
-  if (yMax === null) dataMax = dataMax * 1.1;
-  const yRange = dataMax - dataMin || 1;
+  const xAt = i => pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
+  const yAt = v => pad.top + ch - ((v - dMin) / yRange) * ch;
 
-  // Draw grid lines (dark-theme palette)
-  ctx.strokeStyle = 'rgba(43,53,71,.7)';
-  ctx.lineWidth = 0.5;
+  // grid + y labels
+  ctx.strokeStyle = "rgba(43,53,71,.7)"; ctx.lineWidth = 0.5;
+  ctx.font = "11px monospace"; ctx.textAlign = "right";
   for (let i = 0; i <= 4; i++) {
-    const y = padding.top + (chartH / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(w - padding.right, y);
-    ctx.stroke();
-
-    // Y-axis labels
-    const val = dataMax - (yRange / 4) * i;
-    ctx.fillStyle = '#8a95a8';
-    ctx.font = '11px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), padding.left - 8, y + 4);
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    const val = dMax - (yRange / 4) * i;
+    ctx.fillStyle = "#8a95a8";
+    ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), pad.left - 8, y + 4);
   }
-
-  // X-axis time labels
-  const firstTs = samples[0].timestamp;
-  const lastTs = samples[samples.length - 1].timestamp;
-  const timeSpan = lastTs - firstTs;
-  ctx.textAlign = 'center';
-  for (let i = 0; i <= 4; i++) {
-    const x = padding.left + (chartW / 4) * i;
-    const ts = firstTs + (timeSpan / 4) * i;
-    const d = new Date(ts * 1000);
-    const label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    ctx.fillStyle = '#8a95a8';
-    ctx.fillText(label, x, h - 8);
+  // x time labels
+  if (n >= 1) {
+    const firstTs = vis[0].timestamp, span = vis[n - 1].timestamp - firstTs;
+    ctx.textAlign = "center"; ctx.fillStyle = "#8a95a8";
+    for (let i = 0; i <= 4; i++) {
+      const x = pad.left + (cw / 4) * i;
+      const d = new Date((firstTs + (span / 4) * i) * 1000);
+      const lab = span > 172800
+        ? `${d.getMonth() + 1}/${d.getDate()}`
+        : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      ctx.fillText(lab, x, h - 9);
+    }
   }
-
-  // Draw series
+  // series lines + area + legend
   series.forEach((s, sIdx) => {
-    const points = [];
-    samples.forEach((sample, idx) => {
-      let val = s.transform ? s.transform(sample) : sample[s.key];
-      if (val === null || val === undefined) return;
-      const x = padding.left + (idx / (samples.length - 1)) * chartW;
-      const y = padding.top + chartH - ((val - dataMin) / yRange) * chartH;
-      points.push({ x, y, val });
-    });
-
-    if (points.length < 2) return;
-
-    // Draw line
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    points.forEach((p, i) => {
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    });
-    ctx.stroke();
-
-    // Draw area fill
-    ctx.globalAlpha = 0.1;
-    ctx.fillStyle = s.color;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, padding.top + chartH);
-    points.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha = 1.0;
-
-    // Legend inside the chart area (top-left), with current / peak stats —
-    // the old right-side legend was clipped off the canvas edge.
-    const vals = points.map(p => p.val);
-    const cur = vals[vals.length - 1], peak = Math.max(...vals);
+    const pts = [];
+    vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
+    if (pts.length >= 2) {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+      ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+      ctx.globalAlpha = 0.1; ctx.fillStyle = s.color;
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pad.top + ch);
+      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(pts[pts.length - 1].x, pad.top + ch); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    const vals = pts.map(p => p.val);
+    const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
     const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
-    const legendY = padding.top + 8 + sIdx * 17;
-    ctx.fillStyle = s.color;
-    ctx.fillRect(padding.left + 8, legendY, 10, 10);
-    ctx.fillStyle = '#e8eef6';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`, padding.left + 24, legendY + 9);
+    const ly = pad.top + 6 + sIdx * 17;
+    ctx.fillStyle = s.color; ctx.fillRect(pad.left + 8, ly, 10, 10);
+    ctx.fillStyle = "#e8eef6"; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText(`${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`, pad.left + 24, ly + 9);
   });
+
+  // selection rectangle (during box-select drag)
+  if (state.drag && state.moved && state.downX !== null && state.curX !== null) {
+    const x0 = Math.min(state.downX, state.curX), x1 = Math.max(state.downX, state.curX);
+    ctx.fillStyle = "rgba(76,141,255,.16)"; ctx.fillRect(x0, pad.top, x1 - x0, ch);
+    ctx.strokeStyle = "rgba(76,141,255,.6)"; ctx.lineWidth = 1; ctx.strokeRect(x0, pad.top, x1 - x0, ch);
+  }
+  // crosshair + hover markers
+  if (state.hover >= state.i0 && state.hover <= state.i1 && !state.drag) {
+    const li = state.hover - state.i0, x = xAt(li);
+    ctx.strokeStyle = "rgba(200,210,230,.35)"; ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
+    series.forEach(s => {
+      const v = seriesVal(s, vis[li]); if (v === null) return;
+      ctx.fillStyle = s.color; ctx.strokeStyle = "#0b0f17"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, yAt(v), 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    });
+  }
+}
+
+// attachChartEvents wires pointer interaction once per canvas element; handlers
+// read the live state from canvas._chart so a persistent canvas (the zoom modal)
+// never accumulates duplicate listeners.
+function attachChartEvents(canvas) {
+  if (canvas._evt) return;
+  canvas._evt = true;
+  const toX = e => { const r = canvas.getBoundingClientRect(); return (e.clientX - r.left) * (canvas.width / r.width); };
+  const localIdx = (st, x) => {
+    const n = st._n; if (n <= 1) return 0;
+    return Math.max(0, Math.min(n - 1, Math.round((x - st.pad.left) / st._cw * (n - 1))));
+  };
+  canvas.addEventListener("mousemove", e => {
+    const st = canvas._chart; if (!st) return;
+    const x = toX(e);
+    if (st.drag) { st.curX = x; if (Math.abs(x - st.downX) > 4) st.moved = true; }
+    const li = localIdx(st, x); st.hover = st.i0 + li;
+    drawChart(st); showChartTip(st, e, li);
+  });
+  canvas.addEventListener("mousedown", e => { const st = canvas._chart; if (!st) return; st.drag = true; st.downX = toX(e); st.curX = st.downX; st.moved = false; });
+  canvas.addEventListener("mouseup", e => {
+    const st = canvas._chart; if (!st) return;
+    if (st.drag && st.moved) {
+      const a = localIdx(st, st.downX), b = localIdx(st, toX(e));
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      if (hi - lo >= 1) { const base = st.i0; st.i1 = base + hi; st.i0 = base + lo; }
+    } else if (st.drag && !st.moved && !st.isZoom) { openChartZoom(st); }
+    st.drag = false; st.downX = st.curX = null; st.moved = false; drawChart(st);
+  });
+  canvas.addEventListener("mouseleave", () => { const st = canvas._chart; if (!st) return; st.hover = -1; st.drag = false; st.moved = false; hideChartTip(); drawChart(st); });
+  canvas.addEventListener("dblclick", () => { const st = canvas._chart; if (!st) return; st.i0 = 0; st.i1 = st.all.length - 1; st.hover = -1; hideChartTip(); drawChart(st); });
+}
+
+function showChartTip(state, e, li) {
+  const vis = state.all.slice(state.i0, state.i1 + 1);
+  const sm = vis[li]; if (!sm) { hideChartTip(); return; }
+  const d = new Date(sm.timestamp * 1000);
+  const time = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  let rows = "";
+  state.series.forEach(s => {
+    const v = seriesVal(s, sm);
+    const txt = v === null ? "—" : (s.fmt ? s.fmt(v) : v.toFixed(1));
+    rows += `<div class="tip-r"><span class="tip-dot" style="background:${s.color}"></span><span>${esc(s.label)}</span><span class="tip-v">${esc(txt)}</span></div>`;
+  });
+  const t = chartTipEl();
+  t.innerHTML = `<div class="tip-t">${time}</div>${rows}`;
+  t.style.display = "block";
+  let px = e.clientX + 14, py = e.clientY + 14;
+  if (px + t.offsetWidth > window.innerWidth - 8) px = e.clientX - t.offsetWidth - 14;
+  if (py + t.offsetHeight > window.innerHeight - 8) py = e.clientY - t.offsetHeight - 14;
+  t.style.left = px + "px"; t.style.top = py + "px";
+}
+
+// openChartZoom opens the enlarge modal, re-rendering the source chart on a
+// larger canvas that keeps the source's current visible window and stays fully
+// interactive (hover / box-zoom / dbl-click reset).
+function openChartZoom(src) {
+  hideChartTip();
+  $("chartZoomTitle").textContent = (src.title || "趋势") + " · 放大预览";
+  $("chartZoomMask").classList.add("show");
+  const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, { title: src.title, isZoom: true });
+  if (z) { z.i0 = src.i0; z.i1 = src.i1; drawChart(z); }
+  DETAIL_CHARTS.__zoom = z;
 }
 function sparkBlock(title, series, color) {
   const last = series.length ? series[series.length - 1] : 0;
@@ -696,49 +829,120 @@ async function resetToken() {
 }
 
 /* ---------- 自定义监控 ---------- */
+// 进程类目标形如 hostID/进程名，展示为「进程 @ 主机名」更友好。
+function checkTargetDisplay(c) {
+  if (c.type === "process") {
+    const i = c.target.indexOf("/");
+    if (i > 0) {
+      const hid = c.target.slice(0, i), pname = c.target.slice(i + 1);
+      const meta = HOST_META.find(h => h.id === hid);
+      return pname + " @ " + (meta ? meta.hostname || hid.slice(0, 8) : hid.slice(0, 8));
+    }
+  }
+  return c.target;
+}
+// TCP 目标拆分为 主机 / 端口（末个冒号分隔）
+function splitHostPort(t) {
+  t = String(t || "");
+  const i = t.lastIndexOf(":");
+  if (i > 0) return { host: t.slice(0, i), port: t.slice(i + 1) };
+  return { host: t, port: "" };
+}
+// 进程目标 hostID/进程名 拆分，并把 hostID 解析为主机名
+function splitProcessTarget(c) {
+  const t = String(c.target || "");
+  const i = t.indexOf("/");
+  if (i > 0) {
+    const hid = t.slice(0, i), proc = t.slice(i + 1);
+    const meta = HOST_META.find(h => h.id === hid);
+    return { proc, hostName: meta ? (meta.hostname || hid.slice(0, 8)) : hid.slice(0, 8) };
+  }
+  return { proc: t, hostName: "—" };
+}
+// 详情项：键 + 值 + 值配色
+function cdItem(k, v, cls) {
+  return `<div class="cd-item"><div class="cd-k">${k}</div><div class="cd-v ${cls || ""}" title="${esc(v)}">${esc(v)}</div></div>`;
+}
 function renderChecks(checks) {
   LAST_CHECKS = checks;
   const userChecks = checks.filter(c => !c.builtin);
   $("navChecks").textContent = userChecks.filter(c => !c.ok && c.checked_at).length || userChecks.length;
   const grid = $("checksGrid"), empty = $("checksEmpty");
+  grid.className = "checks-list" + (CHECK_VIEW === "pill" ? " pill" : "");
   if (!userChecks.length && !checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
-  
+
   // 应用类型筛选
   let shown = checks;
-  if (CHECK_TYPE && CHECK_TYPE !== "all") {
-    shown = shown.filter(c => c.type === CHECK_TYPE);
-  }
-  
+  if (CHECK_TYPE && CHECK_TYPE !== "all") shown = shown.filter(c => c.type === CHECK_TYPE);
+
   grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
     const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
-    const lat = c.checked_at ? ` · ${Math.round(c.latency_ms)}ms` : "";
+    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : "进程";
     const builtin = c.builtin ? ' data-builtin="1"' : "";
-    const actions = c.builtin ? '' : `<span class="ch-actions">
+    const actions = c.builtin ? "" : `<span class="ch-actions">
           <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
           <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
           <button class="mini-btn del" data-cact="del" title="删除">✕</button>
         </span>`;
     const builtinTag = c.builtin ? `<span class="type-badge" style="background:#1a3a2a;color:#5efa9e">内置</span>` : "";
+
+    // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
+    const stCls = st === "up" ? "ok" : st === "down" ? "crit" : "muted";
+    const lat = c.checked_at ? Math.round(c.latency_ms) + " ms" : "—";
+    const latCls = c.checked_at ? "" : "muted";
+    const detail = [];
+    if (c.type === "http") {
+      detail.push(cdItem("监控地址", checkTargetDisplay(c), "muted"));
+      detail.push(cdItem("运行状态", stText, stCls));
+      const code = c.status_code || 0;
+      detail.push(cdItem("状态码", code ? String(code) : "—", code === 0 ? "muted" : code >= 400 ? "crit" : "ok"));
+      detail.push(cdItem("响应延时", lat, latCls));
+      if (typeof c.cert_days === "number" && c.cert_days >= 0) {
+        const d = c.cert_days;
+        detail.push(cdItem("证书剩余", d + " 天", d <= 7 ? "crit" : d <= 30 ? "warn" : "ok"));
+      }
+    } else if (c.type === "tcp") {
+      const hp = splitHostPort(c.target);
+      detail.push(cdItem("目标主机", hp.host || c.target, "muted"));
+      detail.push(cdItem("端口", hp.port || "—", ""));
+      detail.push(cdItem("连通状态", stText, stCls));
+      detail.push(cdItem("连接延时", lat, latCls));
+    } else if (c.type === "process") {
+      const pr = splitProcessTarget(c);
+      detail.push(cdItem("进程名", pr.proc, ""));
+      detail.push(cdItem("所在主机", pr.hostName, "muted"));
+      detail.push(cdItem("运行状态", stText, stCls));
+      detail.push(cdItem("检测耗时", lat, latCls));
+    } else {
+      detail.push(cdItem("监控地址", checkTargetDisplay(c), "muted"));
+      detail.push(cdItem("运行状态", stText, stCls));
+      detail.push(cdItem("延时", lat, latCls));
+    }
+    detail.push(cdItem("检测周期", "每 " + c.interval_sec + "s", "muted"));
+    detail.push(cdItem("最近检测", c.checked_at ? ago(c.checked_at) : "尚未检测", "muted"));
+
     return `<div class="check-card" data-id="${esc(c.id)}"${builtin}>
-      <div class="ch-head">
+      <div class="check-row-top">
         <span class="st-dot ${st}"></span>
         <span class="ch-name" title="${esc(c.name)}">${esc(c.name)}</span>
+        <span class="type-badge">${typeText}</span>
+        ${builtinTag}
+        <span class="st-pill ${st}">${stText}</span>
         ${actions}
       </div>
-      <div class="ch-target" title="${esc(c.target)}">${esc(c.target)}</div>
-      <div class="ch-meta">
-        <span class="type-badge">${c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : "进程"}</span>
-        ${builtinTag}
-        <span>${stText}${lat}</span>
-        <span>每 ${c.interval_sec}s</span>
-        <span>${c.level === "critical" ? "严重" : "警告"}</span>
-        ${c.checked_at ? `<span>${ago(c.checked_at)}</span>` : ""}
-      </div>
-      ${(!c.ok && c.checked_at) ? `<div class="ch-meta" style="color:#ffb0b4">${esc(c.message)}</div>` : ""}
+      <div class="check-detail">${detail.join("")}</div>
+      ${(!c.ok && c.checked_at) ? `<div class="check-err">${esc(c.message)}</div>` : ""}
     </div>`;
   }).join("");
+}
+// 列表 / 胶囊视图切换
+function setCheckView(v) {
+  CHECK_VIEW = v === "pill" ? "pill" : "list";
+  try { localStorage.setItem("aiops_check_view", CHECK_VIEW); } catch (e) {}
+  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
+  renderChecks(LAST_CHECKS);
 }
 async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
@@ -827,7 +1031,7 @@ async function initAuth() {
 function startApp() {
   if (APP_STARTED) return;
   APP_STARTED = true;
-  refresh(); loadChecks(); loadHostsMeta();
+  refresh(); loadChecks();
   setInterval(() => { refresh(); loadChecks(); }, 3000);
 }
 async function openProfile() {
@@ -882,7 +1086,6 @@ async function refresh(force) {
     renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(hosts);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
-    loadHostsMeta(); // keep host meta fresh for process-check UI
   } catch (e) {
     $("clock").textContent = "连接失败";
     $("pulse").className = "pulse off";
@@ -982,19 +1185,24 @@ safeAddEventListener("copyUninstallBtn", "click", function() {
 
 /* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
 const navItems = document.querySelectorAll(".nav-item");
+// 页面头元信息：标题 + 副标题。副标题让顶栏页面头承载“页面语义”，
+// 而非机械回显侧栏导航名，从根上消除“两个概览”的重复观感。
+const PAGE_META = {
+  overview: { title: "概览", sub: "集群资源、告警与活动总览" },
+  hosts:    { title: "主机", sub: "所有上报主机的实时指标" },
+  alerts:   { title: "告警", sub: "阈值与自定义监控告警" },
+  checks:   { title: "监控", sub: "网站 HTTP / 端口 TCP / 进程存活 拨测" },
+  log:      { title: "日志", sub: "操作、系统与插件事件流水" },
+};
 function switchView(view) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
-  navItems.forEach(n => {
-    const on = n.dataset.view === view;
-    n.classList.toggle("active", on);
-    if (on) {
-      const pageTitleEl = $("pageTitle");
-      const spanEl = n.querySelector("span");
-      if (pageTitleEl && spanEl) {
-        pageTitleEl.textContent = spanEl.textContent;
-      }
-    }
-  });
+  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === view));
+  const meta = PAGE_META[view];
+  if (meta) {
+    const t = $("pageTitle"), s = $("pageSub");
+    if (t) t.textContent = meta.title;
+    if (s) s.textContent = meta.sub;
+  }
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
@@ -1019,6 +1227,7 @@ safeAddEventListener("backdrop", "click", () => {
 safeAddEventListener("logFilter", "click", e => {
   const b = e.target.closest(".chip-btn"); if (!b) return;
   LOG_KIND = b.dataset.kind;
+  LOG_PAGE = 1;
   document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
   renderLog(LAST_LOG);
 });
@@ -1026,13 +1235,25 @@ safeAddEventListener("logFilter", "click", e => {
 // 日志级别和时间范围筛选
 function filterLogsByLevel(level) {
   LOG_LEVEL = level;
+  LOG_PAGE = 1;
   renderLog(LAST_LOG);
 }
 
 function filterLogsByTime(range) {
   LOG_TIME_RANGE = range;
+  LOG_PAGE = 1;
   renderLog(LAST_LOG);
 }
+
+// 日志分页点击
+safeAddEventListener("logPager", "click", e => {
+  const b = e.target.closest("button[data-lpg]"); if (!b) return;
+  const pg = b.dataset.lpg;
+  if (pg === "prev") LOG_PAGE--;
+  else if (pg === "next") LOG_PAGE++;
+  else LOG_PAGE = parseInt(pg);
+  renderLog(LAST_LOG);
+});
 
 // 监控类型筛选
 function filterChecks(type) {
@@ -1041,10 +1262,10 @@ function filterChecks(type) {
 }
 // 弹窗关闭：点遮罩空白处 或 右上角 ✕
 document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
-  if (e.target === mk || e.target.closest("[data-close-btn]")) mk.classList.remove("show");
+  if (e.target === mk || e.target.closest("[data-close-btn]")) { mk.classList.remove("show"); hideChartTip(); }
 }));
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
+  if (e.key === "Escape") { document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show")); hideChartTip(); }
 });
 
 // KPI 卡片点击 → 跳转对应视图（并按需过滤主机）
@@ -1121,4 +1342,33 @@ safeAddEventListener("loginForm", "submit", async e => {
   }
 });
 
+/* ---------- 布局宽度：标准（默认）/ 宽屏，记忆到 localStorage ---------- */
+function widePref() { try { return localStorage.getItem("aiops_wide") === "1"; } catch (e) { return false; } }
+function applyWidthMode() {
+  const wide = widePref();
+  const app = $("app"); if (app) app.classList.toggle("wide", wide);
+  const btn = $("widthBtn");
+  if (btn) { btn.classList.toggle("active", wide); btn.title = wide ? "当前：宽屏，点击切换标准" : "当前：标准，点击切换宽屏"; }
+}
+safeAddEventListener("widthBtn", "click", () => {
+  const wide = widePref();
+  try { localStorage.setItem("aiops_wide", wide ? "0" : "1"); } catch (e) {}
+  applyWidthMode();
+  toast(wide ? "已切换为标准布局" : "已切换为宽屏布局", "ok");
+});
+
+/* ---------- 自定义监控视图切换（列表 / 胶囊） ---------- */
+safeAddEventListener("checkViewToggle", "click", e => {
+  const b = e.target.closest(".vt-btn"); if (!b) return;
+  setCheckView(b.dataset.cview);
+});
+
+// 读取本地偏好并应用（视图 / 布局宽度）
+function initPrefs() {
+  try { const cv = localStorage.getItem("aiops_check_view"); if (cv === "pill" || cv === "list") CHECK_VIEW = cv; } catch (e) {}
+  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
+  applyWidthMode();
+}
+
+initPrefs();
 initAuth();

@@ -104,9 +104,46 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	if up, err := readUptime(); err == nil {
 		m.Uptime = up
 	}
+	m.GPUs = cachedGPUs(linuxGPUs)
 
 	c.primed = true
 	return m, nil
+}
+
+// linuxGPUs prefers nvidia-smi (NVIDIA), then falls back to the amdgpu sysfs
+// interface. Returns nil when neither is available.
+func linuxGPUs() []shared.GPUInfo {
+	if g := nvidiaSmiGPUs(); len(g) > 0 {
+		return g
+	}
+	return amdSysfsGPUs()
+}
+
+// amdSysfsGPUs reads utilization and VRAM from /sys/class/drm/card*/device,
+// exposed by the amdgpu kernel driver. No third-party dependency.
+func amdSysfsGPUs() []shared.GPUInfo {
+	var gpus []shared.GPUInfo
+	for i := 0; i < 8; i++ {
+		base := "/sys/class/drm/card" + strconv.Itoa(i) + "/device"
+		busy, err := os.ReadFile(base + "/gpu_busy_percent")
+		if err != nil {
+			continue
+		}
+		util, _ := strconv.ParseFloat(strings.TrimSpace(string(busy)), 64)
+		g := shared.GPUInfo{Name: "GPU card" + strconv.Itoa(i), UtilPercent: round1(util)}
+		if ub, err := os.ReadFile(base + "/mem_info_vram_used"); err == nil {
+			if tb, err := os.ReadFile(base + "/mem_info_vram_total"); err == nil {
+				used, _ := strconv.ParseUint(strings.TrimSpace(string(ub)), 10, 64)
+				total, _ := strconv.ParseUint(strings.TrimSpace(string(tb)), 10, 64)
+				g.MemUsed, g.MemTotal = used, total
+				if total > 0 {
+					g.MemPercent = round1(float64(used) / float64(total) * 100)
+				}
+			}
+		}
+		gpus = append(gpus, g)
+	}
+	return gpus
 }
 
 // ---- procfs helpers ----
