@@ -98,7 +98,7 @@ func (a *Auth) Logout(tok string) {
 func isPublicPath(r *http.Request) bool {
 	p := r.URL.Path
 	switch p {
-	case "/", "/style.css", "/app.js",
+	case "/", "/healthz", "/style.css", "/app.js",
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/api/v1/login", "/api/v1/me",
 		"/api/v1/agent/register", "/api/v1/agent/report":

@@ -16,6 +16,8 @@ type CheckStatus struct {
 	CheckedAt int64
 }
 
+const selfCheckID = "__self_health__"
+
 // checkRunner executes operator-defined synthetic checks (HTTP / TCP) on their
 // intervals and raises alerts + notifications on failure and recovery.
 type checkRunner struct {
@@ -23,6 +25,7 @@ type checkRunner struct {
 	store    *Store
 	notifier *Notifier
 	httpc    *http.Client
+	selfAddr string // e.g. "127.0.0.1:8080" — used for the built-in self health-check
 
 	mu      sync.Mutex
 	status  map[string]CheckStatus
@@ -30,9 +33,9 @@ type checkRunner struct {
 	lastRun map[string]time.Time
 }
 
-func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier) *checkRunner {
+func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
 	return &checkRunner{
-		cfg: cfg, store: store, notifier: notifier,
+		cfg: cfg, store: store, notifier: notifier, selfAddr: selfAddr,
 		httpc: &http.Client{
 			Timeout:       8 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -47,9 +50,63 @@ func (cr *checkRunner) Run(tick time.Duration) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	cr.sweep()
-	for range t.C {
-		cr.sweep()
+	selfTick := time.NewTicker(10 * time.Second)
+	defer selfTick.Stop()
+	if cr.selfAddr != "" {
+		go cr.runSelfCheck() // run once immediately
 	}
+	for {
+		select {
+		case <-t.C:
+			cr.sweep()
+		case <-selfTick.C:
+			if cr.selfAddr != "" {
+				go cr.runSelfCheck()
+			}
+		}
+	}
+}
+
+// runSelfCheck performs a lightweight HTTP check against the server's own
+// /healthz endpoint. This replaces the old user-configured 127.0.0.1 check
+// which fails inside Docker because 127.0.0.1 may not route correctly.
+func (cr *checkRunner) runSelfCheck() {
+	target := "http://127.0.0.1:" + portFromAddr(cr.selfAddr) + "/healthz"
+	start := time.Now()
+	resp, err := cr.httpc.Get(target)
+	lat := float64(time.Since(start).Milliseconds())
+	ok := false
+	msg := ""
+	if err != nil {
+		msg = "请求失败: " + err.Error()
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode < 400 {
+			ok = true
+			msg = "HTTP " + resp.Status
+		} else {
+			msg = "HTTP " + resp.Status
+		}
+	}
+	cr.mu.Lock()
+	cr.status[selfCheckID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix()}
+	wasDown := cr.down[selfCheckID]
+	cr.down[selfCheckID] = !ok
+	cr.mu.Unlock()
+
+	if !ok && !wasDown {
+		cr.store.AddLog(LogEntry{Kind: "系统", Level: "critical", Actor: "自监控", Host: "服务端", Message: "服务端健康检查失败: " + msg})
+	} else if ok && wasDown {
+		cr.store.AddLog(LogEntry{Kind: "系统", Level: "info", Actor: "自监控", Host: "服务端", Message: "服务端健康检查恢复"})
+	}
+}
+
+// portFromAddr extracts the port portion from an addr like ":8080" or "0.0.0.0:8080".
+func portFromAddr(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[i+1:]
+	}
+	return "8080"
 }
 
 func (cr *checkRunner) sweep() {
@@ -171,12 +228,28 @@ func (cr *checkRunner) snapshot() map[string]CheckStatus {
 	return out
 }
 
+// SelfCheckName is the display name for the built-in self health-check.
+const SelfCheckName = "服务端健康检查"
+
 // DownAlerts returns the currently-failing checks as alerts for the /alerts view.
 func (cr *checkRunner) DownAlerts() []Alert {
+	var out []Alert
+
+	// Self health-check
+	cr.mu.Lock()
+	if cr.down[selfCheckID] {
+		st := cr.status[selfCheckID]
+		lvl := "critical"
+		out = append(out, Alert{
+			Level: lvl, Type: "check", Scope: selfCheckID, Hostname: SelfCheckName,
+			Message: "服务端健康检查异常（" + st.Message + "）", Timestamp: st.CheckedAt,
+		})
+	}
+	cr.mu.Unlock()
+
 	checks := cr.cfg.Checks()
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
-	var out []Alert
 	for _, c := range checks {
 		if !c.Enabled || !cr.down[c.ID] {
 			continue

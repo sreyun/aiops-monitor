@@ -71,7 +71,7 @@ func main() {
 	store := NewStore()
 	cfg := NewConfigStore(*cfgPath)
 	notifier := NewNotifier(store, cfg)
-	server := NewServer(store, cfg, notifier, dist)
+	server := NewServer(store, cfg, notifier, dist, *addr)
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 

@@ -24,6 +24,7 @@ COPY plugins/ /tmp/plugins/
 RUN cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
 
 EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 VOLUME ["/app/data"]
 
 ENTRYPOINT ["/app/aiops-server"]

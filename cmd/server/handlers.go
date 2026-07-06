@@ -28,11 +28,11 @@ type Server struct {
 	distDir  string // directory of downloadable agent binaries + plugins.zip
 }
 
-func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string) *Server {
+func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
 	return &Server{
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
 		auth:   NewAuth(cfg),
-		checks: newCheckRunner(cfg, store, notifier),
+		checks: newCheckRunner(cfg, store, notifier, selfAddr),
 	}
 }
 
@@ -66,6 +66,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript)
 	mux.HandleFunc("GET /uninstall.sh", s.handleUninstallScript)
 	mux.HandleFunc("GET /uninstall.ps1", s.handleUninstallScript)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /", s.handleDashboard)
 	// static assets (split css/js) served straight from the embedded web/ dir
 	if sub, err := fs.Sub(webFS, "web"); err == nil {
@@ -220,7 +221,21 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 	checks := s.cfg.Checks()
 	st := s.checks.snapshot()
-	out := make([]map[string]any, 0, len(checks))
+	out := make([]map[string]any, 0, len(checks)+1)
+
+	// Built-in self health-check is always first
+	selfEntry := map[string]any{
+		"id": selfCheckID, "name": SelfCheckName, "type": "http",
+		"target": "http://127.0.0.1:" + portFromAddr(s.checks.selfAddr) + "/healthz",
+		"interval_sec": 10, "level": "critical", "enabled": true,
+		"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
+		"builtin": true,
+	}
+	if s2, ok := st[selfCheckID]; ok {
+		selfEntry["ok"], selfEntry["message"], selfEntry["checked_at"], selfEntry["latency_ms"] = s2.OK, s2.Message, s2.CheckedAt, s2.LatencyMs
+	}
+	out = append(out, selfEntry)
+
 	for _, c := range checks {
 		m := map[string]any{
 			"id": c.ID, "name": c.Name, "type": c.Type, "target": c.Target,
@@ -423,6 +438,14 @@ func serverURL(r *http.Request) string {
 		host = h
 	}
 	return scheme + "://" + host
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok", "time_unix": time.Now().Unix(),
+	})
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {

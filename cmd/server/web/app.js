@@ -372,26 +372,31 @@ async function resetToken() {
 /* ---------- 自定义监控 ---------- */
 function renderChecks(checks) {
   LAST_CHECKS = checks;
-  $("navChecks").textContent = checks.length;
+  const userChecks = checks.filter(c => !c.builtin);
+  $("navChecks").textContent = userChecks.filter(c => !c.ok && c.checked_at).length || userChecks.length;
   const grid = $("checksGrid"), empty = $("checksEmpty");
-  if (!checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
+  if (!userChecks.length && !checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
   grid.innerHTML = checks.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
     const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
     const lat = c.checked_at ? ` · ${Math.round(c.latency_ms)}ms` : "";
-    return `<div class="check-card" data-id="${esc(c.id)}">
+    const builtin = c.builtin ? ' data-builtin="1"' : "";
+    const actions = c.builtin ? '' : `<span class="ch-actions">
+          <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
+          <button class="mini-btn del" data-cact="del" title="删除">✕</button>
+        </span>`;
+    const builtinTag = c.builtin ? `<span class="type-badge" style="background:#1a3a2a;color:#5efa9e">内置</span>` : "";
+    return `<div class="check-card" data-id="${esc(c.id)}"${builtin}>
       <div class="ch-head">
         <span class="st-dot ${st}"></span>
         <span class="ch-name" title="${esc(c.name)}">${esc(c.name)}</span>
-        <span class="ch-actions">
-          <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
-          <button class="mini-btn del" data-cact="del" title="删除">✕</button>
-        </span>
+        ${actions}
       </div>
       <div class="ch-target" title="${esc(c.target)}">${esc(c.target)}</div>
       <div class="ch-meta">
         <span class="type-badge">${c.type === "http" ? "HTTP" : "TCP"}</span>
+        ${builtinTag}
         <span>${stText}${lat}</span>
         <span>每 ${c.interval_sec}s</span>
         <span>${c.level === "critical" ? "严重" : "警告"}</span>
@@ -618,6 +623,7 @@ $("ckType").addEventListener("change", updateCkTargetLabel);
 $("ckSaveBtn").addEventListener("click", saveCheck);
 $("checksGrid").addEventListener("click", e => {
   const card = e.target.closest(".check-card"); if (!card) return;
+  if (card.dataset.builtin) return; // built-in check, no actions
   const act = e.target.closest("[data-cact]"); if (!act) return;
   const id = card.dataset.id, check = LAST_CHECKS.find(c => c.id === id);
   if (act.dataset.cact === "edit") openCheckModal(check);
