@@ -158,33 +158,61 @@ func darwinMemUsed() uint64 {
 	return (get("Pages active:") + get("Pages wired down:") + get("Pages occupied by compressor:")) * pageSize
 }
 
+// darwinSwap reads swap usage from `sysctl -n vm.swapusage`, whose output is:
+//
+//	total = 2048.00M  used = 1234.50M  free = 813.50M  (encrypted)
+//
+// The value may attach the unit ("2048.00M") or separate it ("2048.00 M")
+// depending on the macOS version, so we scan for the "total ="/"used =" markers
+// and parse tolerantly rather than relying on fixed token positions.
 func darwinSwap() (total, used uint64) {
-	f := strings.Fields(run("sysctl", "-n", "vm.swapusage"))
-	parseSize := func(tok string) uint64 {
-		mult := 1.0
-		switch {
-		case strings.HasSuffix(tok, "G"):
-			mult, tok = 1<<30, strings.TrimSuffix(tok, "G")
-		case strings.HasSuffix(tok, "M"):
-			mult, tok = 1<<20, strings.TrimSuffix(tok, "M")
-		case strings.HasSuffix(tok, "K"):
-			mult, tok = 1<<10, strings.TrimSuffix(tok, "K")
-		}
-		v, _ := strconv.ParseFloat(tok, 64)
-		return uint64(v * mult)
+	out := run("sysctl", "-n", "vm.swapusage")
+	return swapAmount(out, "total"), swapAmount(out, "used")
+}
+
+// swapAmount returns the byte size that follows "<key> =" in the swapusage line.
+func swapAmount(s, key string) uint64 {
+	i := strings.Index(s, key)
+	if i < 0 {
+		return 0
 	}
-	for i := 0; i+2 < len(f); i++ {
-		if f[i+1] != "=" {
-			continue
-		}
-		switch f[i] {
-		case "total":
-			total = parseSize(f[i+2])
-		case "used":
-			used = parseSize(f[i+2])
+	rest := s[i+len(key):]
+	if j := strings.IndexByte(rest, '='); j >= 0 {
+		rest = rest[j+1:]
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0
+	}
+	num, unit := fields[0], ""
+	if n := len(num); n > 0 {
+		switch num[n-1] {
+		case 'K', 'k', 'M', 'm', 'G', 'g', 'T', 't', 'B', 'b':
+			unit = strings.ToUpper(num[n-1 : n])
+			num = num[:n-1]
 		}
 	}
-	return total, used
+	if unit == "" && len(fields) > 1 { // unit split off as its own token: "2048.00 M"
+		if u := strings.ToUpper(fields[1]); u != "" {
+			unit = u[:1]
+		}
+	}
+	v, err := strconv.ParseFloat(num, 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	switch unit {
+	case "T":
+		return uint64(v * (1 << 40))
+	case "G":
+		return uint64(v * (1 << 30))
+	case "M":
+		return uint64(v * (1 << 20))
+	case "K":
+		return uint64(v * (1 << 10))
+	default:
+		return uint64(v) // already bytes
+	}
 }
 
 // darwinNet sums Ibytes/Obytes per non-loopback interface (first row each).
