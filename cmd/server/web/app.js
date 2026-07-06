@@ -1,0 +1,419 @@
+/* ============================================================
+   AIOps Monitor · 前端逻辑
+   数据源：/api/v1/{summary,hosts,alerts,events,config}
+   3 秒轮询；事件委托绑定，避免内联 onclick 的转义隐患。
+   ============================================================ */
+"use strict";
+const API = "/api/v1";
+let CUR_CAT = "";     // 当前分类筛选
+let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
+let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
+let LAST_LOG = [];    // 最近一次日志数据
+
+/* ---------- 工具函数 ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtRate = b => b < 1024 ? b.toFixed(0) + " B/s"
+  : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
+  : (b / 1048576).toFixed(2) + " MB/s";
+const fmtGB = b => (b / 1073741824).toFixed(1);
+const fmtUptime = s => {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分钟`;
+};
+const usageColor = p => p >= 90 ? "var(--crit)" : p >= 80 ? "var(--warn)" : p >= 60 ? "var(--info)" : "var(--ok)";
+const ago = ts => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  return s < 60 ? `${s}秒前` : s < 3600 ? `${Math.floor(s / 60)}分钟前` : `${Math.floor(s / 3600)}小时前`;
+};
+
+function toast(msg, kind) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show " + (kind || "");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => (t.className = "toast"), 2800);
+}
+
+function icon(name) {
+  const p = {
+    host: '<path d="M4 4h16v10H4z"/><path d="M2 20h20M8 14v6M16 14v6"/>',
+    on:   '<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>',
+    off:  '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
+    crit: '<path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/>',
+    warn: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16v.4"/>',
+    event:'<path d="M4 5h16v14H4z"/><path d="M4 9h16M9 13h6"/>'
+  }[name] || "";
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+
+function bar(label, percent, detail) {
+  const p = Math.max(0, Math.min(percent || 0, 100));
+  return `<div class="metric"><div class="row"><span class="label">${label}</span><span class="val mono">${detail}</span></div>
+    <div class="bar"><div class="fill" style="width:${p}%;background:${usageColor(percent)}"></div></div></div>`;
+}
+
+/* ---------- 渲染：KPI ---------- */
+function renderCards(s) {
+  const card = (cls, ic, v, k, vcls) =>
+    `<div class="card ${cls}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
+  $("cards").innerHTML =
+    card("info", "host", s.total_hosts, "主机总数") +
+    card("ok", "on", s.online_hosts, "在线", "ok") +
+    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, "离线", s.offline_hosts > 0 ? "crit" : "") +
+    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok") +
+    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, "警告", s.warning_alerts > 0 ? "warn" : "ok") +
+    card("info", "event", s.plugin_events || 0, "插件发现", s.plugin_events > 0 ? "info" : "");
+}
+
+/* ---------- 渲染：告警 / 事件 ---------- */
+function renderAlerts(alerts) {
+  const n = alerts.length;
+  $("alertsCount").textContent = n; $("navAlerts").textContent = n; $("ovAlertsCount").textContent = n;
+  const row = a => `<div class="row-item ${esc(a.level)}">
+    <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : "警告"}</span>
+    <strong>${esc(a.hostname)}</strong><span class="msg">${esc(a.message)}</span></div>`;
+  const empty = `<div class="empty-line">✅ 暂无阈值告警</div>`;
+  $("alerts").innerHTML = n ? alerts.map(row).join("") : empty;
+  $("ovAlerts").innerHTML = n ? alerts.slice(0, 6).map(row).join("") : empty;
+}
+
+function renderLog(items) {
+  LAST_LOG = items;
+  const n = items.length;
+  $("logCount").textContent = n; $("navLog").textContent = n; $("ovLogCount").textContent = n;
+  const kcls = k => k === "操作" ? "op" : k === "系统" ? "sys" : "plg";
+  const row = e => `<div class="row-item ${esc(e.level)}">
+    <span class="kind ${kcls(e.kind)}">${esc(e.kind)}</span>
+    <span class="msg">${esc(e.message)}</span>
+    <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""} · ${ago(e.timestamp)}</span></div>`;
+  const filtered = LOG_KIND ? items.filter(e => e.kind === LOG_KIND) : items;
+  $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
+  $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
+}
+
+/* ---------- 渲染：主机卡片 ---------- */
+function hostCard(h) {
+  const m = h.latest || {};
+  const swap = (m.swap_total || 0) > 0
+    ? bar("SWAP", m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + "G")
+    : "";
+  const disksHtml = (Array.isArray(m.disks) && m.disks.length)
+    ? m.disks.map(d => bar("磁盘 " + esc(d.path), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
+    : bar("磁盘", m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
+  let chips = "";
+  if (h.custom && Object.keys(h.custom).length) {
+    chips = `<div class="chips">` + Object.entries(h.custom).sort().map(([k, v]) => {
+      const isDown = /\.up$/.test(k) && v === 0;
+      const num = Number.isInteger(v) ? v : v.toFixed(1);
+      return `<span class="chip ${isDown ? "crit" : ""}">${esc(k)} <b>${num}</b></span>`;
+    }).join("") + `<span class="chip-label">自定义指标（来自插件）</span></div>`;
+  }
+  const cat = h.category ? esc(h.category) : "未分类";
+  const loadTitle = "系统负载 1 / 5 / 15 分钟" + (h.os === "windows" ? "（Windows 为近似值）" : "");
+  return `<div class="host" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+    <div class="host-head">
+      <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
+        <div style="min-width:0">
+          <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
+          <div class="os">${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}</div>
+          <div class="meta">${h.ip ? "IP " + esc(h.ip) : ""}${h.kernel ? (h.ip ? " · " : "") + "内核 " + esc(h.kernel) : ""}</div>
+        </div>
+      </div>
+      <div class="host-tags">
+        <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
+        <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
+        <button class="x-btn" data-act="del" title="删除主机">✕</button>
+      </div>
+    </div>
+    ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + "核")}
+    ${bar("内存", m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
+    ${swap}
+    ${disksHtml}
+    <div class="loadline" title="${loadTitle}">
+      <div class="load-cell"><div class="lv mono">${(m.load1 || 0).toFixed(2)}</div><div class="lk">1 min</div></div>
+      <div class="load-cell"><div class="lv mono">${(m.load5 || 0).toFixed(2)}</div><div class="lk">5 min</div></div>
+      <div class="load-cell"><div class="lv mono">${(m.load15 || 0).toFixed(2)}</div><div class="lk">15 min</div></div>
+    </div>
+    ${chips}
+    <div class="foot">
+      <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
+      <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
+      <span class="g">进程 <span class="mono">${m.proc_count || 0}</span></span>
+      <span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>
+    </div>
+  </div>`;
+}
+
+function renderHosts(hosts) {
+  LAST_HOSTS = hosts;
+  $("hostsCount").textContent = hosts.length;
+  $("navHosts").textContent = hosts.length;
+
+  // 刷新分类下拉（保留当前选择）
+  const cats = [...new Set(hosts.map(h => h.category || "未分类"))].sort();
+  const sel = $("catFilter"), cur = sel.value;
+  sel.innerHTML = `<option value="">全部分类</option>` + cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = cats.includes(cur) ? cur : "";
+  CUR_CAT = sel.value;
+
+  const groupsEl = $("groups"), empty = $("empty");
+  if (!hosts.length) { groupsEl.innerHTML = ""; empty.style.display = "block"; return; }
+  empty.style.display = "none";
+
+  const shown = hosts.filter(h => !CUR_CAT || (h.category || "未分类") === CUR_CAT);
+  const byCat = {};
+  shown.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
+  groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => `
+    <div class="group">
+      <div class="group-head"><span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
+        <span class="count-pill">${byCat[cat].length}</span><span class="line"></span></div>
+      <div class="grid">${byCat[cat].map(hostCard).join("")}</div>
+    </div>`).join("");
+}
+
+/* ---------- 主机操作 ---------- */
+async function delHost(id, name) {
+  if (!confirm(`确认删除主机「${name}」？\n若该主机 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
+  try {
+    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (r.ok) { toast("已删除主机", "ok"); refresh(); } else { toast("删除失败", "err"); }
+  } catch (e) { toast("删除失败: " + e, "err"); }
+}
+async function editCategory(id, cur) {
+  const cat = prompt("设置主机分类（留空清除；服务端覆盖优先于 Agent 上报）：", cur || "");
+  if (cat === null) return;
+  try {
+    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: cat.trim() })
+    });
+    if (r.ok) { toast("已更新分类", "ok"); refresh(); } else { toast("更新失败", "err"); }
+  } catch (e) { toast("更新失败: " + e, "err"); }
+}
+
+/* ---------- 主机趋势弹窗 ---------- */
+async function openDetail(id, name) {
+  $("detailTitle").textContent = name + " · 近期趋势";
+  const body = $("detailBody");
+  body.innerHTML = `<div class="empty-line">加载中…</div>`;
+  $("detailMask").classList.add("show");
+  try {
+    const samples = await fetch(`${API}/hosts/${encodeURIComponent(id)}/metrics`).then(r => r.json());
+    if (!Array.isArray(samples) || !samples.length) { body.innerHTML = `<div class="empty-line">暂无历史数据</div>`; return; }
+    body.innerHTML =
+      sparkBlock("CPU 使用率 (%)", samples.map(s => s.cpu_percent), "var(--info)") +
+      sparkBlock("内存使用率 (%)", samples.map(s => s.mem_percent), "var(--accent2)") +
+      sparkBlock("磁盘使用率 (%)", samples.map(s => s.disk_percent), "var(--warn)") +
+      `<div class="hint">采样点 ${samples.length} 个（内存态，约 5 秒/点）。</div>`;
+  } catch (e) { body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`; }
+}
+function sparkBlock(title, series, color) {
+  const last = series.length ? series[series.length - 1] : 0;
+  return `<div class="field"><label>${title} · 当前 ${(last || 0).toFixed(1)}</label>
+    <div class="spark">${sparkline(series, color)}</div></div>`;
+}
+function sparkline(series, color) {
+  const w = 500, h = 46, n = series.length, max = 100;
+  if (n < 2) return `<svg class="sparkline" viewBox="0 0 ${w} ${h}"></svg>`;
+  const pts = series.map((v, i) => {
+    const x = i / (n - 1) * w;
+    const y = h - 2 - (Math.max(0, Math.min(v || 0, max)) / max) * (h - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const gid = "g" + Math.random().toString(36).slice(2, 7);
+  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <polygon points="0,${h} ${pts} ${w},${h}" fill="url(#${gid})"/>
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
+}
+
+/* ---------- 告警设置 ---------- */
+async function openSettings() {
+  try {
+    const c = await fetch(`${API}/config`).then(r => r.json());
+    const t = c.thresholds || {};
+    $("alertsEnabled").checked = !!c.alerts_enabled;
+    $("feishuEnabled").checked = !!(c.feishu && c.feishu.enabled);
+    $("feishuWebhook").value = (c.feishu && c.feishu.webhook) || "";
+    $("dingEnabled").checked = !!(c.dingtalk && c.dingtalk.enabled);
+    $("dingWebhook").value = (c.dingtalk && c.dingtalk.webhook) || "";
+    $("dingSecret").value = (c.dingtalk && c.dingtalk.secret) || "";
+    $("cpuWarn").value = t.cpu_warn; $("cpuCrit").value = t.cpu_crit;
+    $("memWarn").value = t.mem_warn; $("memCrit").value = t.mem_crit;
+    $("diskWarn").value = t.disk_warn; $("diskCrit").value = t.disk_crit;
+    $("offlineSec").value = t.offline_after_sec;
+    $("settingsMask").classList.add("show");
+  } catch (e) { toast("读取配置失败: " + e, "err"); }
+}
+function collectSettings() {
+  const num = id => parseFloat($(id).value) || 0;
+  return {
+    alerts_enabled: $("alertsEnabled").checked,
+    feishu: { enabled: $("feishuEnabled").checked, webhook: $("feishuWebhook").value.trim() },
+    dingtalk: { enabled: $("dingEnabled").checked, webhook: $("dingWebhook").value.trim(), secret: $("dingSecret").value.trim() },
+    thresholds: {
+      cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
+      mem_warn: num("memWarn"), mem_crit: num("memCrit"),
+      disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
+      offline_after_sec: Math.round(num("offlineSec"))
+    }
+  };
+}
+async function saveSettings() {
+  try {
+    const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+    if (r.ok) { toast("配置已保存", "ok"); $("settingsMask").classList.remove("show"); } else { toast("保存失败", "err"); }
+  } catch (e) { toast("保存失败: " + e, "err"); }
+}
+async function testSettings() {
+  try {
+    const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+    const j = await r.json();
+    if (j.ok) toast("测试消息已发送 ✅", "ok");
+    else toast("测试失败: " + (j.errors || []).join("; "), "err");
+  } catch (e) { toast("测试失败: " + e, "err"); }
+}
+
+/* ---------- 安装 Agent ---------- */
+let INSTALL = { server_url: "", token: "" };
+let CUR_OS = "linux";
+async function openInstall() {
+  try {
+    INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
+    $("installToken").value = INSTALL.token || "";
+    renderInstallCmd();
+    $("installMask").classList.add("show");
+  } catch (e) { toast("读取安装信息失败: " + e, "err"); }
+}
+function renderInstallCmd() {
+  const server = INSTALL.server_url || location.origin;
+  const token = INSTALL.token || "";
+  const cat = $("installCategory").value.trim();
+  const q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  let cmd, label, hint;
+  if (CUR_OS === "windows") {
+    cmd = `irm "${server}/install.ps1?${q}" | iex`;
+    label = "PowerShell（管理员）一条命令安装";
+    hint = "以管理员身份运行 PowerShell；自动下载到 C:\\aiops-agent 并注册开机自启任务。";
+  } else if (CUR_OS === "macos") {
+    cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
+    label = "终端一条命令安装";
+    hint = "下载到 /opt/aiops-agent 并后台启动（系统级守护可加 sudo）。";
+  } else {
+    cmd = `curl -fsSL "${server}/install.sh?${q}" | sudo sh`;
+    label = "一条命令安装（root / sudo）";
+    hint = "自动下载、注册 systemd 服务并开机自启。";
+  }
+  $("installCmd").textContent = cmd;
+  $("cmdLabel").textContent = label;
+  $("cmdHint").textContent = hint;
+  $("uninstallCmd").textContent = (CUR_OS === "windows")
+    ? `irm "${server}/uninstall.ps1" | iex`
+    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+}
+async function resetToken() {
+  if (!confirm("重置 Token 后，之前分发的安装命令将失效。确定重置？")) return;
+  try {
+    const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
+    INSTALL.token = j.token; $("installToken").value = j.token; renderInstallCmd();
+    toast("Token 已重置", "ok");
+  } catch (e) { toast("重置失败: " + e, "err"); }
+}
+
+/* ---------- 主循环 ---------- */
+async function refresh() {
+  try {
+    const [s, hosts, alerts, activity] = await Promise.all([
+      fetch(`${API}/summary`).then(r => r.json()),
+      fetch(`${API}/hosts`).then(r => r.json()),
+      fetch(`${API}/alerts`).then(r => r.json()),
+      fetch(`${API}/activity`).then(r => r.json())
+    ]);
+    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts);
+    $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
+    $("pulse").className = "pulse";
+  } catch (e) {
+    $("clock").textContent = "连接失败";
+    $("pulse").className = "pulse off";
+  }
+}
+
+/* ---------- 事件绑定（委托） ---------- */
+$("groups").addEventListener("click", e => {
+  const host = e.target.closest(".host"); if (!host) return;
+  const act = e.target.closest("[data-act]"); if (!act) return;
+  const { id, name, cat } = host.dataset;
+  if (act.dataset.act === "detail") openDetail(id, name);
+  else if (act.dataset.act === "cat") editCategory(id, cat);
+  else if (act.dataset.act === "del") delHost(id, name);
+});
+$("catFilter").addEventListener("change", e => { CUR_CAT = e.target.value; renderHosts(LAST_HOSTS); });
+$("settingsBtn").addEventListener("click", openSettings);
+$("saveBtn").addEventListener("click", saveSettings);
+$("testBtn").addEventListener("click", testSettings);
+$("installBtn").addEventListener("click", openInstall);
+$("resetTokenBtn").addEventListener("click", resetToken);
+$("copyCmdBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("installCmd").textContent).then(
+    () => toast("已复制命令", "ok"),
+    () => toast("复制失败，请手动选择", "err")
+  );
+});
+$("installCategory").addEventListener("input", renderInstallCmd);
+$("osTabs").addEventListener("click", e => {
+  const t = e.target.closest(".tab"); if (!t) return;
+  CUR_OS = t.dataset.os;
+  document.querySelectorAll("#osTabs .tab").forEach(x => x.classList.toggle("active", x === t));
+  renderInstallCmd();
+});
+$("copyUninstallBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("uninstallCmd").textContent).then(
+    () => toast("已复制卸载命令", "ok"),
+    () => toast("复制失败，请手动选择", "err")
+  );
+});
+
+/* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
+const navItems = document.querySelectorAll(".nav-item");
+function switchView(view) {
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
+  navItems.forEach(n => {
+    const on = n.dataset.view === view;
+    n.classList.toggle("active", on);
+    if (on) $("pageTitle").textContent = n.querySelector("span").textContent;
+  });
+  window.scrollTo(0, 0);
+}
+navItems.forEach(n => n.addEventListener("click", () => {
+  switchView(n.dataset.view);
+  $("app").classList.remove("nav-open");
+}));
+
+// 汉堡：桌面收起/展开侧栏；移动端打开/关闭抽屉
+$("menuBtn").addEventListener("click", () => {
+  if (window.innerWidth <= 900) $("app").classList.toggle("nav-open");
+  else $("app").classList.toggle("collapsed");
+});
+$("backdrop").addEventListener("click", () => $("app").classList.remove("nav-open"));
+
+// 日志类型筛选
+$("logFilter").addEventListener("click", e => {
+  const b = e.target.closest(".chip-btn"); if (!b) return;
+  LOG_KIND = b.dataset.kind;
+  document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
+  renderLog(LAST_LOG);
+});
+// 弹窗关闭：点遮罩空白处 或 右上角 ✕
+document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
+  if (e.target === mk || e.target.closest("[data-close-btn]")) mk.classList.remove("show");
+}));
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
+});
+
+refresh();
+setInterval(refresh, 3000);

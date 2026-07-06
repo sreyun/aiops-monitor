@@ -1,0 +1,3 @@
+# 插件层可选依赖。核心指标兜底(core_metrics.py)与异常检测(example_ai_anomaly.py)会用到 psutil。
+# Linux 上基础指标由 Go 核心原生采集，可不装 psutil；非 Linux 平台建议安装。
+psutil>=5.9

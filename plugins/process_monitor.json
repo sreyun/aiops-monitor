@@ -1,0 +1,5 @@
+{
+  "_comment": "在 processes 中填写要监控的进程名（子串匹配、不区分大小写）。进程数为 0 时会产生 critical 事件。默认留空以免误报，按需填写。",
+  "_examples": ["nginx", "mysqld", "redis-server", "sshd", "java", "python"],
+  "processes": []
+}

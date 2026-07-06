@@ -1,0 +1,10 @@
+{
+  "server": "http://localhost:8080",
+  "report_interval": 5,
+  "plugin_interval": 15,
+  "disk_path": "/",
+  "plugins_dir": "plugins",
+  "python": "python3",
+  "state_file": "agent_state.json",
+  "category": ""
+}

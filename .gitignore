@@ -1,0 +1,41 @@
+# Compiled binaries (large files, not for git)
+bin/aiops-agent
+bin/aiops-agent.exe
+bin/aiops-agent-mac
+bin/aiops-server
+bin/aiops-server.exe
+cmd/server/server.exe
+cmd/agent/agent.exe
+
+# Distribution directory (agent binaries + plugins.zip for one-line install)
+dist/
+
+# Runtime state files
+agent_state.json
+cmd/agent/agent_state.json
+plugins/.anomaly_state.json
+server_config.json
+config.json
+*.state.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Claude
+.claude/

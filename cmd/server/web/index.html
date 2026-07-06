@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIOps Monitor · 主机监控运维平台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ===== 左侧导航 ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">AI</div>
+      <div class="brand-txt">
+        <h1>AIOps Monitor</h1>
+        <div class="sub">主机监控运维平台</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a class="nav-item active" data-view="overview" title="概览">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        <span>概览</span>
+      </a>
+      <a class="nav-item" data-view="hosts" title="主机">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><path d="M6 6h.01M6 18h.01"/></svg>
+        <span>主机</span><span class="nav-count" id="navHosts">0</span>
+      </a>
+      <a class="nav-item" data-view="alerts" title="告警">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
+        <span>告警</span><span class="nav-count" id="navAlerts">0</span>
+      </a>
+      <a class="nav-item" data-view="log" title="操作与介入日志">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        <span>日志</span><span class="nav-count" id="navLog">0</span>
+      </a>
+    </nav>
+
+    <div class="side-actions">
+      <button class="btn primary block icon" id="installBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+        <span>安装 Agent</span>
+      </button>
+      <button class="btn block icon" id="settingsBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>告警设置</span>
+      </button>
+      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span></div>
+    </div>
+  </aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <!-- ===== 主内容 ===== -->
+  <main class="main">
+    <header class="topbar">
+      <button class="hamburger" id="menuBtn" aria-label="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="page-title" id="pageTitle">概览</div>
+      <div class="spacer"></div>
+      <div class="select-wrap">
+        <select id="catFilter" title="按分类筛选"><option value="">全部分类</option></select>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- 概览 -->
+      <section class="view active" id="view-overview">
+        <div class="cards" id="cards"></div>
+        <div class="cols">
+          <div>
+            <div class="section-title">最近告警<span class="count-pill" id="ovAlertsCount">0</span></div>
+            <div class="stack" id="ovAlerts"></div>
+          </div>
+          <div>
+            <div class="section-title">最近活动<span class="count-pill" id="ovLogCount">0</span></div>
+            <div class="stack" id="ovLog"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 主机 -->
+      <section class="view" id="view-hosts">
+        <div class="section-title">主机列表<span class="count-pill" id="hostsCount">0</span></div>
+        <div id="groups"></div>
+        <div class="empty" id="empty">
+          暂无主机上报。点左侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
+          <code>aiops-agent --server http://&lt;本机IP&gt;:8080 --category 生产</code>
+        </div>
+      </section>
+
+      <!-- 告警 -->
+      <section class="view" id="view-alerts">
+        <div class="section-title">阈值告警<span class="tag">基础指标</span><span class="count-pill" id="alertsCount">0</span></div>
+        <div class="stack" id="alerts"></div>
+      </section>
+
+      <!-- 操作与介入日志 -->
+      <section class="view" id="view-log">
+        <div class="section-title">操作与介入日志<span class="tag">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span></div>
+        <div class="log-filter" id="logFilter">
+          <button class="chip-btn active" data-kind="">全部</button>
+          <button class="chip-btn" data-kind="操作">操作</button>
+          <button class="chip-btn" data-kind="系统">系统</button>
+          <button class="chip-btn" data-kind="插件">插件</button>
+        </div>
+        <div class="stack" id="log"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- ===== 安装 Agent 弹窗 ===== -->
+<div class="mask" id="installMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>安装 Agent（被监控端）</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>安装 Token</label>
+        <div class="token-row">
+          <input type="text" id="installToken" class="mono" readonly>
+          <button class="btn" id="resetTokenBtn">重置</button>
+        </div>
+        <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。</div>
+      </div>
+      <div class="field">
+        <label>主机分类（可选，安装后自动归入该分组）</label>
+        <input type="text" id="installCategory" placeholder="如 生产 / DB / 办公终端">
+      </div>
+      <div class="tabs" id="osTabs">
+        <button class="tab active" data-os="linux">Linux</button>
+        <button class="tab" data-os="windows">Windows</button>
+        <button class="tab" data-os="macos">macOS</button>
+      </div>
+      <div class="field">
+        <label id="cmdLabel">一条命令安装</label>
+        <div class="cmd-row">
+          <pre id="installCmd" class="cmd"></pre>
+          <button class="btn" id="copyCmdBtn">复制</button>
+        </div>
+        <div class="hint" id="cmdHint"></div>
+      </div>
+      <div class="field">
+        <label>一条命令卸载</label>
+        <div class="cmd-row">
+          <pre id="uninstallCmd" class="cmd cmd-warn"></pre>
+          <button class="btn" id="copyUninstallBtn">复制</button>
+        </div>
+        <div class="hint">在被监控主机执行即可停止服务并移除 Agent。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 告警设置弹窗 ===== -->
+<div class="mask" id="settingsMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>告警设置</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="switch"><input type="checkbox" id="alertsEnabled"> 启用告警推送</label>
+      <div class="hint">仅在告警「新触发」或「恢复」时各推一次，不会刷屏。</div>
+
+      <div class="subhead">飞书机器人</div>
+      <label class="switch mb"><input type="checkbox" id="feishuEnabled"> 启用飞书推送</label>
+      <div class="field">
+        <label>Webhook 地址</label>
+        <input type="text" id="feishuWebhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx">
+      </div>
+
+      <div class="subhead">钉钉机器人</div>
+      <label class="switch mb"><input type="checkbox" id="dingEnabled"> 启用钉钉推送</label>
+      <div class="field">
+        <label>Webhook 地址</label>
+        <input type="text" id="dingWebhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx">
+      </div>
+      <div class="field">
+        <label>加签 Secret（可选，安全设置选「加签」时填写）</label>
+        <input type="text" id="dingSecret" placeholder="SECxxxx">
+      </div>
+
+      <div class="subhead">告警阈值（%）</div>
+      <div class="grid2">
+        <div class="field"><label>CPU 警告 / 严重</label>
+          <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
+        <div class="field"><label>内存 警告 / 严重</label>
+          <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
+        <div class="field"><label>磁盘 警告 / 严重</label>
+          <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
+        <div class="field"><label>失联判定（秒）</label>
+          <input type="text" id="offlineSec" class="mono"></div>
+      </div>
+      <div class="hint">留空的 Webhook / Secret 表示保持原值不变（回显为脱敏）。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="testBtn">发送测试</button>
+      <button class="btn primary" id="saveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 主机趋势弹窗 ===== -->
+<div class="mask" id="detailMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="detailTitle">主机详情</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="detailBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/app.js" defer></script>
+</body>
+</html>

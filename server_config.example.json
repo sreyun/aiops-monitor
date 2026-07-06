@@ -1,0 +1,22 @@
+{
+  "alerts_enabled": true,
+  "feishu": {
+    "enabled": false,
+    "webhook": ""
+  },
+  "dingtalk": {
+    "enabled": false,
+    "webhook": "",
+    "secret": ""
+  },
+  "thresholds": {
+    "cpu_warn": 80,
+    "cpu_crit": 90,
+    "mem_warn": 80,
+    "mem_crit": 90,
+    "disk_warn": 85,
+    "disk_crit": 95,
+    "offline_after_sec": 30
+  },
+  "categories": {}
+}
