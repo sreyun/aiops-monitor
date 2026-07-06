@@ -2,7 +2,9 @@
 
 > **轻量级主机监控运维平台** —— Go 原生采集核心 + Python 插件层 + 实时面板 + 阈值告警 + 飞书/钉钉推送
 >
-> 单二进制服务端、零依赖 Agent、三平台原生采集、一条命令安装、开箱即用。
+> 单二进制服务端、零依赖 Agent、三平台原生采集（含 **GPU**）、一条命令安装、开箱即用。
+>
+> 面板内置：**交互式趋势图**（悬停十字线 / 框选放大 / 放大预览）、**自定义拨测**（HTTP / TCP / **Ping** / 进程，含历史曲线回看）、**内嵌轻量库持久化**（历史/日志/会话重启不丢）、**gzip 响应压缩**、登录鉴权与安全加固。
 
 ---
 
@@ -24,13 +26,16 @@ Agent 与服务端共享 `shared/` 中的类型定义，采集端与服务端的
 |---|---|
 | **三平台原生采集** | Linux（`/proc` + `syscall`）、Windows（Win32 API）、macOS（`sysctl` + 系统命令），均零第三方依赖 |
 | **全面指标** | CPU / 内存 / SWAP / 多磁盘 / 网络收发速率 / TCP 连接数 / 负载 1·5·15 / 进程数 / 运行时长 |
+| **GPU 显卡监控** | 使用率 / 显存 / 温度；NVIDIA（`nvidia-smi`，Linux/Windows）、AMD（Linux sysfs）、Apple/其他（macOS `ioreg`），best-effort 且带缓存 |
+| **交互式趋势图** | 纯 Canvas 绘制，悬停十字线 + 数值气泡、拖拽框选放大区间、双击还原、点击放大预览；CPU/内存/磁盘/GPU/网络多图 |
+| **自定义拨测** | HTTP 网站（状态码 / 延时 / **TLS 证书剩余天数**）、TCP 端口、**Ping 主机存活（丢包率 / RTT）**、进程存活；**列表 / 胶囊双视图**，每项支持**历史曲线回看** |
 | **Python 插件层** | 子进程 + JSON 契约、并发执行、超时隔离、崩溃跳过；可自定义采集 / 服务探活 / AI 异常检测 |
-| **实时 Web 面板** | 概览卡片 + 主机列表（分类分组/筛选）+ 阈值告警 + 插件事件 + 操作日志 + 主机趋势弹窗 |
+| **实时 Web 面板** | 概览卡片 + 资源 TOP10（CPU/内存/磁盘/GPU）+ 主机列表（分类分组/搜索/筛选/分页）+ 阈值告警 + 操作日志（可选分页 10/30/50/100）+ 标准/宽屏切换 |
 | **阈值告警** | CPU / 内存 / 磁盘越限 + 主机失联检测，支持自定义阈值，面板可视化配置 |
 | **告警推送** | 飞书 / 钉钉机器人 Webhook，仅在触发/恢复时各推一次，不刷屏 |
-| **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册开机自启 |
-| **主机分类** | Agent 上报分类标签，面板按分组展示，支持面板手动覆盖 |
-| **操作日志** | 操作 / 系统 / 插件三类日志统一呈现，方便审计与排查 |
+| **持久化** | 内嵌轻量库（gzip+JSON 落盘 `aiops.db`）—— 历史 / 日志 / 会话重启不丢，无需外部数据库 |
+| **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
+| **安全与性能** | 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 请求体大小限制 + 密钥脱敏；**gzip 响应压缩**大幅降低多主机轮询带宽 |
 | **共享类型** | `shared/wire.go` 被 server 与 agent 同时 import，契约统一不会漂移 |
 
 ---
@@ -66,12 +71,13 @@ aiops-monitor/
 │   └── wire.go                     # ★ 共享类型（Metrics/Sample/Event/Report）
 ├── cmd/
 │   ├── server/                     # Go 服务端（纯标准库，单二进制，内置面板）
-│   │   ├── main.go                 # 入口、路由、CORS
+│   │   ├── main.go                 # 入口、路由、CORS、gzip / 请求体限制中间件
 │   │   ├── handlers.go             # API 处理器
-│   │   ├── store.go                # 内存存储
+│   │   ├── store.go                # 内存存储 + 多级降采样历史
+│   │   ├── db.go                   # 内嵌轻量库（gzip+JSON 落盘，自动保存/退出落盘）
 │   │   ├── alerts.go               # 阈值告警引擎
-│   │   ├── auth.go                 # 登录认证 + session
-│   │   ├── check.go                # 自定义监控（HTTP/TCP 拨测）
+│   │   ├── auth.go                 # 登录认证 + session + 登录限流
+│   │   ├── check.go                # 自定义监控（HTTP / TCP / Ping / 进程 + 历史序列）
 │   │   ├── notify.go               # 飞书/钉钉推送（去重 + 状态转换）
 │   │   ├── config.go               # 配置持久化
 │   │   ├── install.go              # 一键安装脚本生成
@@ -86,6 +92,7 @@ aiops-monitor/
 │       ├── collector_windows.go    # Windows 原生采集（Win32 API）
 │       ├── collector_darwin.go     # macOS 原生采集（sysctl + 系统命令）
 │       ├── collector_other.go      # 其他平台桩
+│       ├── gpu.go                  # GPU 采集（nvidia-smi 解析 + 缓存，三平台共用）
 │       ├── plugins.go              # 插件运行器（子进程 + JSON，并发+超时）
 │       ├── identity.go             # 稳定 host_id / 主机身份
 │       └── reporter.go             # 双心跳循环 + 注册 + 上报
@@ -211,8 +218,11 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/aiops-agent-mac ./cmd/agent
 | 负载 1/5/15 | `/proc/loadavg` | EWMA 近似 | `sysctl vm.loadavg` |
 | 进程数 | `/proc` 枚举 | `EnumProcesses` | `ps -A` |
 | 运行时长 | `/proc/uptime` | `GetTickCount64` | `sysctl kern.boottime` |
+| **GPU 使用率/显存/温度** | `nvidia-smi` / amdgpu sysfs | `nvidia-smi` | `ioreg`（IOAccelerator） |
 
 **三平台均零第三方依赖**——Go 核心通过 syscall / 系统命令直接采集，不需要安装 Python 或任何 agent 框架。
+
+> GPU 为 best-effort：有对应厂商工具（NVIDIA 的 `nvidia-smi`）或 OS 接口时上报，结果缓存约 12s 避免每个上报周期都拉起进程；无 GPU/无工具时该主机不显示 GPU，不影响其它指标。
 
 ---
 
@@ -275,7 +285,9 @@ p.emit()                                   # 输出 JSON
 | POST | `/api/v1/agent/report` | 上报（base + custom + events） |
 | **主机管理** | | |
 | GET | `/api/v1/hosts` | 主机列表（含最新指标、在线状态） |
-| GET | `/api/v1/hosts/{id}/metrics` | 单主机基础指标历史序列 |
+| GET | `/api/v1/hosts/meta` | 主机精简元数据（id + 主机名，供进程监控选择） |
+| GET | `/api/v1/hosts/{id}/metrics` | 单主机基础指标历史序列（近期原始） |
+| GET | `/api/v1/hosts/{id}/history?from=&to=` | 单主机时序历史（按跨度自动选原始/1 分钟/5 分钟聚合层） |
 | POST | `/api/v1/hosts/{id}/category` | 设置主机分类覆盖 |
 | DELETE | `/api/v1/hosts/{id}` | 删除主机 |
 | **告警与事件** | | |
@@ -284,8 +296,10 @@ p.emit()                                   # 输出 JSON
 | GET | `/api/v1/activity` | 操作与系统日志 |
 | GET | `/api/v1/summary` | 汇总统计 |
 | **自定义监控** | | |
-| GET | `/api/v1/checks` | 获取自定义监控列表 |
-| POST | `/api/v1/checks` | 添加/更新自定义监控 |
+| GET | `/api/v1/checks` | 获取自定义监控列表（含状态码/延时/证书天数/丢包等运行态） |
+| POST | `/api/v1/checks` | 添加/更新自定义监控（type: http / tcp / ping / process） |
+| POST | `/api/v1/checks/{id}/run` | 立即触发一次检测 |
+| GET | `/api/v1/checks/{id}/history` | 该检查的历史时序（延时/状态/状态码/丢包，用于曲线回看） |
 | DELETE | `/api/v1/checks/{id}` | 删除自定义监控 |
 | **配置管理** | | |
 | GET | `/api/v1/config` | 获取告警配置（脱敏） |
@@ -304,6 +318,7 @@ p.emit()                                   # 输出 JSON
 | GET | `/uninstall.sh` / `/uninstall.ps1` | 一键卸载脚本 |
 | **面板与资源** | | |
 | GET | `/` | Web 面板 |
+| GET | `/healthz` | 健康检查（服务端内置自监控也用它） |
 | GET | `/dl/*` | Agent 二进制下载 |
 
 ---
@@ -343,7 +358,35 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - **双心跳上报**：基础指标（Go 原生，便宜）高频上报；插件（可能较重）按更低频率执行，结果缓存后随基础上报一并发送。事件采用"缓冲队列 + 每次上报清空"语义，发送失败会重新排队。
 - **进程级隔离**：插件跑在子进程里，`context` 超时可强杀；一个坏插件不会拖垮采集核心。
 - **告警去重**：Notifier 追踪告警状态转换，仅在"新触发"和"恢复"时各推一次，持久告警不刷屏。配置变更后自动重置状态，确保新通道能收到当前告警。
-- **内存存储的边界**：当前重启后历史清零，适合演示与中小规模验证；上生产可把 `Store` 换成时序库。
+- **多级降采样历史**：每台主机保留原始（≈1.5h）/ 1 分钟聚合（48h）/ 5 分钟聚合（7 天）三层；`/history` 按查询跨度自动选层，兼顾细粒度与内存。
+- **内嵌轻量库持久化**：`db.go` 将主机历史、日志、会话以 gzip+JSON 原子落盘 `aiops.db`（与配置同目录），定时自动保存、退出前 flush——**重启后历史/日志/登录态都不丢**，无需外部数据库。
+- **gzip 响应压缩**：API/静态资源按 `Accept-Encoding` 自动 gzip，多主机轮询下 JSON 通常可压 ~8–10 倍，是大规模部署的首要带宽优化；WebSocket 升级请求自动跳过。
+
+---
+
+## 性能与规模
+
+面向多主机的优化与容量建议：
+
+- **带宽**：服务端对所有 JSON/静态响应做 gzip 压缩（约 8–10 倍）。3000 台、面板每 3s 轮询 `/hosts` 的场景下，这是最关键的一项——压缩后单面板下行通常从 MB/s 级降到百 KB/s 级。
+- **上报吞吐**：3000 台 × 每 5s 上报 ≈ 600 次/s 写入，`Upsert` 仅短暂持写锁；1/5 分钟聚合按主机周期性执行，均为常数级开销，采集侧不是瓶颈。
+- **内存**：历史保留在内存（并持久化落盘）。每台三层历史合计数千个采样点，粗估每台 ~1–2 MB，**3000 台约需 4–7 GB 内存**，主要由历史层决定。大规模可按需下调 `store.go` 的保留常量（`histRawMax`/`hist1mMax`/`hist5mMax`）换取更低内存，或将历史外接时序库。
+- **渲染**：主机列表默认分页（每页 9），DOM 只渲染当前页；概览 TOP、趋势图按需计算，前端在数千主机下仍流畅。
+- **调优**：主机很多时可增大 Agent `--interval`（如 10–15s）降低上报/带宽；面板右上角可暂停自动刷新便于排查。
+
+> 结论：**gzip + 分页 + 多级降采样 + 持久化**使单实例可稳定支撑约 3000 台的采集与展示；再往上（万级）建议历史外接 VictoriaMetrics 等时序库，并对 `/hosts` 增加服务端分页/增量下发。
+
+---
+
+## 安全
+
+- **登录鉴权**：用户名 + 密码（加盐 SHA-256）+ 会话 Cookie；默认 `admin/admin`，首次登录请在「个人信息」改密。
+- **登录限流**：按客户端 IP 滑动窗口限制失败次数（默认 5 分钟 8 次），失败写系统日志，抵御暴力破解。
+- **Cookie 安全**：`HttpOnly` + `SameSite=Lax`；经 HTTPS（含反代 `X-Forwarded-Proto`）时自动加 `Secure`。
+- **请求体上限**：全局 `MaxBytesReader`（2 MiB），防超大 JSON 内存耗尽。
+- **密钥脱敏**：配置读取接口对 Webhook / 加签 Secret 掩码回显；提交空值或掩码值则保持原值不变。
+- **Agent 接入**：`register` / `report` / 安装脚本 / 下载为公开端点（便于 Agent 与安装器工作）；可开启 `require_token` 强制校验安装 Token。
+- **面向公网请置于反向代理之后并启用 HTTPS。**
 
 ---
 
@@ -352,22 +395,25 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 **已实现（均已实测）**
 - [x] 单 Go module + `shared/` 共享类型
 - [x] Go Agent 核心：三平台原生采集（Linux/Windows/macOS）、稳定身份、注册、双心跳上报、断连事件重排队
+- [x] **GPU 显卡监控**：使用率 / 显存 / 温度（NVIDIA / AMD / Apple，best-effort + 缓存）
 - [x] 插件运行器：子进程 + JSON 契约、并发执行、超时隔离、崩溃跳过
 - [x] Python 插件层 + SDK + 示例（服务探活 / CPU 异常检测 / 进程监控 / psutil 兜底）
-- [x] Go 服务端：内存存储、阈值告警、自定义指标与插件事件入库
-- [x] 自定义监控：HTTP 网站探测 / TCP 端口拨测，异常自动告警并推送
-- [x] 登录认证：用户名 + 密码 + session cookie，默认 admin/admin
-- [x] 实时面板：概览卡片 + 主机分类分组 + 阈值告警 + 插件事件 + 操作日志 + 趋势弹窗
+- [x] Go 服务端：内存存储 + **多级降采样历史** + **内嵌轻量库持久化**（重启不丢）
+- [x] **自定义监控**：HTTP（状态码/延时/证书天数）/ TCP / **Ping（丢包率/RTT）**/ 进程存活；列表·胶囊双视图；**每项历史曲线回看**
+- [x] **交互式趋势图**：悬停十字线 + 数值气泡、框选放大、双击还原、放大预览（CPU/内存/磁盘/GPU/网络）
+- [x] 登录认证与安全加固：加盐口令 + 会话 Cookie（HttpOnly/SameSite/Secure）、**登录限流**、请求体上限、密钥脱敏
+- [x] 实时面板：概览卡片 + 资源 TOP10（含 GPU）+ 主机分类分组/搜索/分页 + 阈值告警 + 操作日志分页 + 标准/宽屏切换
 - [x] 告警推送：飞书 / 钉钉 Webhook，去重 + 状态转换推送
+- [x] **gzip 响应压缩**：多主机轮询带宽 ~8–10 倍压缩
 - [x] 一键安装：Token 模式、面板生成命令、自动下载安装、开机自启
 - [x] 主机管理：分类标签、面板手动覆盖、主机删除
 
-**下一步（生产化）**
-- [ ] **持久化**：内存 `Store` → 时序库（推荐 VictoriaMetrics）+ 元数据入 PostgreSQL
-- [ ] **鉴权多租户**：Agent Token 强制校验、后台 RBAC
-- [ ] **告警进阶**：持续 N 分钟才触发、静默/升级、多渠道通知（邮件/Webhook）
-- [ ] **历史趋势图**：面板接 `/hosts/{id}/metrics` 画曲线（接口已就绪）
-- [ ] **自动化运维**：Agent 侧安全命令通道 + 剧本编排 + 批量执行
+**进行中 / 下一步**
+- [ ] **远程终端（进行中）**：经 Agent 反向连接（免开入站端口）+ 服务端中转的浏览器终端，目标完整交互式 TTY（Linux/macOS 伪终端、Windows ConPTY），登录 + Token 鉴权 + 全程审计
+- [ ] **超大规模（万级）**：历史外接时序库（VictoriaMetrics）、`/hosts` 服务端分页/增量、历史保留期可配置化
+- [ ] **鉴权多租户**：后台 RBAC、多用户
+- [ ] **告警进阶**：持续 N 分钟才触发、静默/升级、多渠道（邮件/Webhook）
+- [ ] **自动化运维**：剧本编排 + 批量执行
 - [ ] **插件增强**：每插件独立周期、插件级配置、指标类型（counter/histogram）
 
 **AIOps 演进层（可作为 Python 插件接入）**

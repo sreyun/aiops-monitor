@@ -1,12 +1,15 @@
 package main
 
 import (
+	"compress/gzip"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -85,6 +88,63 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// gzipWriterPool reuses gzip.Writer instances across requests to avoid per-
+// request allocation under the many-host polling load.
+var gzipWriterPool = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
+
+// gzipResponseWriter transparently compresses the response body. It strips any
+// Content-Length (now wrong post-compression) and advertises gzip on the first
+// write.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz    *gzip.Writer
+	wrote bool
+}
+
+func (w *gzipResponseWriter) ensureHeader() {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	h := w.Header()
+	h.Del("Content-Length")
+	h.Set("Content-Encoding", "gzip")
+	h.Add("Vary", "Accept-Encoding")
+}
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	// 101/204/304 carry no compressible body — pass through untouched.
+	if code == http.StatusSwitchingProtocols || code == http.StatusNoContent || code == http.StatusNotModified {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	w.ensureHeader()
+	w.ResponseWriter.WriteHeader(code)
+}
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.gz.Write(b)
+}
+
+// gzipMiddleware compresses text/JSON responses for clients that accept gzip.
+// At many-host scale the /hosts + /activity JSON polled every few seconds is the
+// dominant bandwidth cost, and it compresses ~8-10x. WebSocket upgrades (the
+// remote terminal) are skipped so hijacking still works.
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz := gzipWriterPool.Get().(*gzip.Writer)
+		gz.Reset(w)
+		defer func() { gz.Close(); gzipWriterPool.Put(gz) }()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+	})
+}
+
 func main() {
 	addr := flag.String("addr", ":8080", "监听地址，如 :8080 或 0.0.0.0:8080")
 	cfgPath := flag.String("config", "server_config.json", "服务端配置文件路径（告警/阈值/分类）")
@@ -116,7 +176,7 @@ func main() {
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 
-	handler := corsMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))
+	handler := corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes()))))
 	srv := &http.Server{
 		Addr:         *addr,
 		Handler:      handler,

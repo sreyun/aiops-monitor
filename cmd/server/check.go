@@ -27,6 +27,19 @@ type CheckStatus struct {
 
 const selfCheckID = "__self_health__"
 
+// checkHistMax bounds the per-check time-series ring kept for the "history
+// curve" view (≈8h at the default 30s interval; longer at bigger intervals).
+const checkHistMax = 1000
+
+// CheckPoint is one sampled result kept for a check's trend chart.
+type CheckPoint struct {
+	Ts         int64   `json:"timestamp"`
+	OK         bool    `json:"ok"`
+	LatencyMs  float64 `json:"latency_ms"`
+	StatusCode int     `json:"status_code,omitempty"`
+	LossPct    float64 `json:"loss_pct,omitempty"`
+}
+
 // checkRunner executes operator-defined synthetic checks (HTTP / TCP) on their
 // intervals and raises alerts + notifications on failure and recovery.
 type checkRunner struct {
@@ -39,8 +52,9 @@ type checkRunner struct {
 	mu        sync.Mutex
 	status    map[string]CheckStatus
 	down      map[string]bool
-	downSince map[string]int64 // check id -> unix time it first went down
+	downSince map[string]int64        // check id -> unix time it first went down
 	lastRun   map[string]time.Time
+	history   map[string][]CheckPoint // check id -> bounded time-series for the trend view
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
@@ -54,7 +68,30 @@ func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr
 		down:      map[string]bool{},
 		downSince: map[string]int64{},
 		lastRun:   map[string]time.Time{},
+		history:   map[string][]CheckPoint{},
 	}
+}
+
+// recordHistory appends a bounded time-series point; the caller must hold cr.mu.
+func (cr *checkRunner) recordHistory(id string, p CheckPoint) {
+	h := append(cr.history[id], p)
+	if len(h) > checkHistMax {
+		h = h[len(h)-checkHistMax:]
+	}
+	cr.history[id] = h
+}
+
+// HistoryOf returns a copy of a check's trend series (nil if none yet).
+func (cr *checkRunner) HistoryOf(id string) []CheckPoint {
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+	src := cr.history[id]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]CheckPoint, len(src))
+	copy(out, src)
+	return out
 }
 
 // markDown records the down/up transition time; caller holds cr.mu.
@@ -99,19 +136,19 @@ func (cr *checkRunner) runSelfCheck() {
 	lat := float64(time.Since(start).Milliseconds())
 	ok := false
 	msg := ""
+	code := 0
 	if err != nil {
 		msg = "请求失败: " + err.Error()
 	} else {
+		code = resp.StatusCode
 		resp.Body.Close()
-		if resp.StatusCode < 400 {
-			ok = true
-			msg = "HTTP " + resp.Status
-		} else {
-			msg = "HTTP " + resp.Status
-		}
+		msg = "HTTP " + resp.Status
+		ok = resp.StatusCode < 400
 	}
+	nowUnix := time.Now().Unix()
 	cr.mu.Lock()
-	cr.status[selfCheckID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix()}
+	cr.status[selfCheckID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: nowUnix, StatusCode: code, CertDays: -1}
+	cr.recordHistory(selfCheckID, CheckPoint{Ts: nowUnix, OK: ok, LatencyMs: lat, StatusCode: code})
 	wasDown := cr.down[selfCheckID]
 	cr.down[selfCheckID] = !ok
 	cr.markDown(selfCheckID, !ok)
@@ -170,6 +207,7 @@ func (cr *checkRunner) gc() {
 			delete(cr.down, id)
 			delete(cr.downSince, id)
 			delete(cr.lastRun, id)
+			delete(cr.history, id)
 		}
 	}
 	cr.mu.Unlock()
@@ -201,8 +239,10 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 			lat = 0
 		}
 	}
+	nowUnix := time.Now().Unix()
 	cr.mu.Lock()
-	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix(), StatusCode: code, CertDays: certDays, LossPct: lossPct}
+	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: nowUnix, StatusCode: code, CertDays: certDays, LossPct: lossPct}
+	cr.recordHistory(c.ID, CheckPoint{Ts: nowUnix, OK: ok, LatencyMs: lat, StatusCode: code, LossPct: lossPct})
 	wasDown := cr.down[c.ID]
 	cr.down[c.ID] = !ok
 	cr.markDown(c.ID, !ok)

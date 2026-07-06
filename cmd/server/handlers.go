@@ -62,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
+	mux.HandleFunc("GET /api/v1/checks/{id}/history", s.handleCheckHistory)
 	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
@@ -343,6 +344,16 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 	s.checks.runNow(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleCheckHistory returns a check's recorded trend series (latency / status /
+// loss over time) for the history-curve view.
+func (s *Server) handleCheckHistory(w http.ResponseWriter, r *http.Request) {
+	pts := s.checks.HistoryOf(r.PathValue("id"))
+	if pts == nil {
+		pts = []CheckPoint{}
+	}
+	writeJSON(w, http.StatusOK, pts)
 }
 
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {

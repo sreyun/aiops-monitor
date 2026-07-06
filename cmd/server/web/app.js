@@ -881,11 +881,11 @@ function renderChecks(checks) {
     const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
     const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : "进程";
     const builtin = c.builtin ? ' data-builtin="1"' : "";
-    const actions = c.builtin ? "" : `<span class="ch-actions">
+    const histBtn = `<button class="mini-btn" data-cact="hist" title="历史曲线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
+    const actions = `<span class="ch-actions">${histBtn}${c.builtin ? "" : `
           <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
           <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
-          <button class="mini-btn del" data-cact="del" title="删除">✕</button>
-        </span>`;
+          <button class="mini-btn del" data-cact="del" title="删除">✕</button>`}</span>`;
     const builtinTag = c.builtin ? `<span class="type-badge" style="background:#1a3a2a;color:#5efa9e">内置</span>` : "";
 
     // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
@@ -955,6 +955,47 @@ function setCheckView(v) {
 async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
 }
+
+let CHK_CHARTS = {};
+// 自定义监控·历史曲线：复用交互式图表引擎（悬停十字线 / 框选放大 / 双击还原 / 放大预览）
+async function openCheckHistory(id, name, type) {
+  const body = $("checkHistBody");
+  $("checkHistTitle").textContent = name + " · 监控历史";
+  body.innerHTML = `<div class="empty-line">加载中…</div>`;
+  $("checkHistMask").classList.add("show");
+  try {
+    const pts = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
+    if (!Array.isArray(pts) || !pts.length) {
+      body.innerHTML = `<div class="empty-line">暂无历史数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
+      return;
+    }
+    const samples = pts.map(p => ({ timestamp: p.timestamp, latency_ms: p.latency_ms, loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null), ok: p.ok }));
+    const isPing = type === "ping";
+    const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
+    const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
+    const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : "刚开始";
+    const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="230"></canvas>` +
+      `<button class="chart-enlarge" data-chart="${cid}" title="放大预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+    body.innerHTML = `<div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
+      <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ms · 悬停查看数值，拖动框选放大，双击还原。</div>`;
+    CHK_CHARTS = {};
+    CHK_CHARTS.chkLat = createChart("chkLat", samples, [
+      { key: "latency_ms", label: isPing ? "平均延时" : "延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
+    ], 0, null, { title: name + " · 延时(ms)" });
+    if (isPing) {
+      CHK_CHARTS.chkLoss = createChart("chkLoss", samples, [
+        { key: "loss_pct", label: "丢包率", color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
+      ], 0, 100, { title: name + " · 丢包率(%)" });
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
+  }
+}
+// 历史弹窗内图表放大委托
+safeAddEventListener("checkHistBody", "click", e => {
+  const en = e.target.closest(".chart-enlarge"); if (!en) return;
+  const ch = CHK_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
+});
 async function loadHostsMeta() {
   try { HOST_META = await fetch(`${API}/hosts/meta`).then(r => r.json()); } catch (e) { /* ignore */ }
 }
@@ -1307,12 +1348,14 @@ safeAddEventListener("ckType", "change", updateCkTargetLabel);
 safeAddEventListener("ckSaveBtn", "click", saveCheck);
 safeAddEventListener("checksGrid", "click", e => {
   const card = e.target.closest(".check-card"); if (!card) return;
-  if (card.dataset.builtin) return; // built-in check, no actions
   const act = e.target.closest("[data-cact]"); if (!act) return;
   const id = card.dataset.id, check = LAST_CHECKS.find(c => c.id === id);
-  if (act.dataset.cact === "edit") openCheckModal(check);
-  else if (act.dataset.cact === "del") delCheck(id);
-  else if (act.dataset.cact === "run") {
+  const cact = act.dataset.cact;
+  if (cact === "hist") { if (check) openCheckHistory(id, check.name, check.type); return; } // 历史对内置检查也开放
+  if (card.dataset.builtin) return; // 内置检查仅可查看历史，无编辑/删除
+  if (cact === "edit") openCheckModal(check);
+  else if (cact === "del") delCheck(id);
+  else if (cact === "run") {
     fetch(`${API}/checks/${encodeURIComponent(id)}/run`, { method: "POST" })
       .then(() => { toast("已触发检测，结果稍后刷新", "ok"); setTimeout(loadChecks, 1500); })
       .catch(e => toast("触发失败: " + e, "err"));
