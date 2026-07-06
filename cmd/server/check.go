@@ -38,7 +38,7 @@ func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr
 	return &checkRunner{
 		cfg: cfg, store: store, notifier: notifier, selfAddr: selfAddr,
 		httpc: &http.Client{
-			Timeout:       8 * time.Second,
+			Timeout:       5 * time.Second, // reduced from 8s; retry logic provides resilience
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		status:  map[string]CheckStatus{},
@@ -51,7 +51,7 @@ func (cr *checkRunner) Run(tick time.Duration) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	cr.sweep()
-	selfTick := time.NewTicker(10 * time.Second)
+	selfTick := time.NewTicker(30 * time.Second) // reduced from 10s to avoid excessive probing
 	defer selfTick.Stop()
 	if cr.selfAddr != "" {
 		go cr.runSelfCheck() // run once immediately
@@ -201,15 +201,24 @@ func (cr *checkRunner) probeHTTP(target string) (bool, string) {
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = "http://" + target
 	}
-	resp, err := cr.httpc.Get(target)
-	if err != nil {
-		return false, "请求失败: " + err.Error()
+
+	// Retry once on failure to avoid transient errors
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := cr.httpc.Get(target)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode >= 400 {
+				return false, "HTTP " + resp.Status
+			}
+			return true, "HTTP " + resp.Status
+		}
+		lastErr = err
+		if attempt == 0 {
+			time.Sleep(500 * time.Millisecond) // brief pause before retry
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return false, "HTTP " + resp.Status
-	}
-	return true, "HTTP " + resp.Status
+	return false, "请求失败: " + lastErr.Error()
 }
 
 func (cr *checkRunner) probeTCP(target string) (bool, string) {

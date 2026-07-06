@@ -278,7 +278,7 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 	selfEntry := map[string]any{
 		"id": selfCheckID, "name": SelfCheckName, "type": "http",
 		"target": "http://127.0.0.1:" + portFromAddr(s.checks.selfAddr) + "/healthz",
-		"interval_sec": 10, "level": "critical", "enabled": true,
+		"interval_sec": 30, "level": "critical", "enabled": true,
 		"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
 		"builtin": true,
 	}
