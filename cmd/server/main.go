@@ -38,7 +38,11 @@ func hasAgentBinary(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	for _, n := range []string{"aiops-agent.exe", "aiops-agent-linux-amd64", "aiops-agent-darwin-arm64"} {
+	for _, n := range []string{
+		"aiops-agent.exe",
+		"aiops-agent-linux-amd64", "aiops-agent-linux-arm64",
+		"aiops-agent-darwin-arm64", "aiops-agent-darwin-amd64",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
 			return true
 		}

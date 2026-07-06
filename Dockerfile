@@ -9,8 +9,10 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/aiops-server ./cmd/server
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/aiops-agent  ./cmd/agent
 
 # Cross-compile agents for distribution (one-click install)
-RUN GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/aiops-agent.exe          ./cmd/agent && \
-    GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/aiops-agent-darwin-arm64 ./cmd/agent && \
+RUN GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/aiops-agent.exe           ./cmd/agent && \
+    GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/aiops-agent-darwin-arm64  ./cmd/agent && \
+    GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/aiops-agent-darwin-amd64  ./cmd/agent && \
+    GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/aiops-agent-linux-arm64   ./cmd/agent && \
     cp /out/aiops-agent /out/dist/aiops-agent-linux-amd64
 
 # ---- Server image ----

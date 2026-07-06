@@ -24,9 +24,22 @@ CATEGORY="__CATEGORY__"
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 
 OS=$(uname -s)
+ARCH=$(uname -m)
 case "$OS" in
-  Linux)  BIN="aiops-agent-linux-amd64" ;;
-  Darwin) BIN="aiops-agent-darwin-arm64" ;;
+  Linux)
+    case "$ARCH" in
+      x86_64|amd64)   BIN="aiops-agent-linux-amd64" ;;
+      aarch64|arm64)   BIN="aiops-agent-linux-arm64" ;;
+      *)               BIN="aiops-agent-linux-amd64" ;;
+    esac
+    ;;
+  Darwin)
+    case "$ARCH" in
+      arm64)           BIN="aiops-agent-darwin-arm64" ;;
+      x86_64)          BIN="aiops-agent-darwin-amd64" ;;
+      *)               BIN="aiops-agent-darwin-amd64" ;;
+    esac
+    ;;
   *) echo "unsupported OS: $OS"; exit 1 ;;
 esac
 
