@@ -56,7 +56,7 @@
         <span class="uname" id="userName">未登录</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
       </button>
-      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span></div>
+      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span><span class="ver" id="verLabel"></span></div>
     </div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
@@ -77,7 +77,24 @@
     <div class="content">
       <!-- 概览 -->
       <section class="view active" id="view-overview">
+        <!-- 空态引导：还没有任何主机时展示三步上手 -->
+        <div class="onboard" id="onboarding" style="display:none">
+          <div class="ob-title">👋 欢迎使用 AIOps Monitor，三步开始监控</div>
+          <div class="ob-steps">
+            <div class="ob-step"><span class="ob-num">1</span><div><b>安装 Agent</b><div class="hint">点下方按钮，复制一条命令到被监控主机执行</div></div></div>
+            <div class="ob-step"><span class="ob-num">2</span><div><b>查看主机</b><div class="hint">几秒后主机卡片自动出现在「主机」页</div></div></div>
+            <div class="ob-step"><span class="ob-num">3</span><div><b>配置告警</b><div class="hint">在「告警设置」里接入飞书 / 钉钉机器人</div></div></div>
+          </div>
+          <button class="btn primary icon" onclick="openInstall()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+            <span>立即安装第一台 Agent</span>
+          </button>
+        </div>
+
         <div class="cards" id="cards"></div>
+
+        <!-- 资源 TOP5：值班一眼看到最热的机器，点击直达趋势 -->
+        <div class="top-grid" id="topPanels"></div>
         
         <!-- 快速操作区 -->
         <div style="margin-top:24px; display:flex; gap:12px; flex-wrap:wrap;">
@@ -161,6 +178,7 @@
                 <option value="24h">最近24小时</option>
               </select>
             </div>
+            <button class="btn" id="exportLogBtn" title="导出当前筛选结果为 CSV">导出 CSV</button>
           </div>
         </div>
         <div class="log-filter" id="logFilter">

@@ -614,6 +614,40 @@ svg.sparkline{width:100%; height:46px; display:block}
 .btn.danger{color:#ffb0b4; border-color:#5b2b2f; background:rgba(242,84,91,.08)}
 .btn.danger:hover{background:rgba(242,84,91,.16)}
 
+/* ---------- 概览：资源 TOP5 ---------- */
+.top-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin-top:18px}
+.top-panel{background:linear-gradient(180deg,var(--panel),var(--bg2)); border:1px solid var(--line);
+  border-radius:var(--r); padding:14px 16px}
+.tp-title{font-size:12px; color:var(--muted); font-weight:700; text-transform:uppercase;
+  letter-spacing:.08em; margin-bottom:10px}
+.top-item{display:flex; align-items:center; gap:10px; padding:6px 4px; border-radius:8px;
+  cursor:pointer; transition:background var(--transition-fast)}
+.top-item:hover{background:var(--accent-soft)}
+.ti-name{width:96px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px}
+.ti-bar{flex:1; height:6px; background:var(--panel3); border-radius:4px; overflow:hidden}
+.ti-fill{height:100%; border-radius:4px; transition:width var(--transition)}
+.ti-val{width:52px; flex:none; text-align:right; font-size:12px; font-weight:600}
+
+/* ---------- 空态引导 ---------- */
+.onboard{background:linear-gradient(135deg,var(--accent-soft),transparent 60%),
+  linear-gradient(180deg,var(--panel),var(--bg2));
+  border:1px solid var(--line2); border-radius:var(--r-lg); padding:22px 24px; margin-bottom:20px}
+.ob-title{font-size:16px; font-weight:700; margin-bottom:16px}
+.ob-steps{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:18px}
+.ob-step{display:flex; gap:12px; align-items:flex-start; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--r-sm); padding:13px 15px}
+.ob-num{width:26px; height:26px; flex:none; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-weight:700; font-size:13px}
+.ob-step b{font-size:13px}
+
+/* ---------- 离线主机 ---------- */
+.host.offline{opacity:.72; filter:saturate(.75)}
+.host.offline:hover{opacity:1; filter:none}
+.offline-tag{color:#ffb0b4; font-weight:600}
+
+/* ---------- 版本标签 ---------- */
+.ver{color:var(--muted2); font-size:11px}
+
 /* ---------- 登录页 ---------- */
 .login-mask{position:fixed; inset:0; z-index:300; display:none; align-items:center; justify-content:center; padding:20px;
   background:

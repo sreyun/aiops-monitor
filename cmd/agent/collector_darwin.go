@@ -316,12 +316,10 @@ func darwinDisks() []shared.DiskInfo {
 			continue
 		}
 		mountPoint := strings.Join(f[5:], " ")
-		// Skip /boot and its sub-mounts
-		if strings.HasPrefix(mountPoint, "/boot") {
-			continue
-		}
-		// Skip /System and its sub-mounts (macOS system volume)
-		if strings.HasPrefix(mountPoint, "/System") {
+		// Skip /boot and macOS /System volumes (and their sub-mounts). Exact
+		// directory match so a data disk like /bootstrap or /Systemx isn't excluded.
+		if mountPoint == "/boot" || strings.HasPrefix(mountPoint, "/boot/") ||
+			mountPoint == "/System" || strings.HasPrefix(mountPoint, "/System/") {
 			continue
 		}
 		total, _ := strconv.ParseUint(f[1], 10, 64)
@@ -331,7 +329,7 @@ func darwinDisks() []shared.DiskInfo {
 		}
 		seen[f[0]] = true
 		res = append(res, shared.DiskInfo{
-			Path:    strings.Join(f[5:], " "), // columns 6..n are the mount point
+			Path:    mountPoint, // columns 6..n are the mount point
 			Total:   total * 1024,
 			Used:    used * 1024,
 			Percent: round1(float64(used) / float64(total) * 100),

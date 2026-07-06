@@ -72,7 +72,14 @@ const fmtDateTime = ts => {
 const usageColor = p => p >= 90 ? "var(--crit)" : p >= 80 ? "var(--warn)" : p >= 60 ? "var(--info)" : "var(--ok)";
 const ago = ts => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  return s < 60 ? `${s}秒前` : s < 3600 ? `${Math.floor(s / 60)}分钟前` : `${Math.floor(s / 3600)}小时前`;
+  return s < 60 ? `${s}秒前` : s < 3600 ? `${Math.floor(s / 60)}分钟前` : s < 86400 ? `${Math.floor(s / 3600)}小时前` : `${Math.floor(s / 86400)}天前`;
+};
+const fmtDur = sec => {
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}秒`;
+  if (s < 3600) return `${Math.floor(s / 60)}分钟`;
+  if (s < 86400) return `${Math.floor(s / 3600)}小时${Math.floor(s % 3600 / 60)}分`;
+  return `${Math.floor(s / 86400)}天${Math.floor(s % 86400 / 3600)}小时`;
 };
 
 function toast(msg, kind) {
@@ -112,18 +119,81 @@ function renderCards(s) {
     card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
     card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, "警告", s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
     card("info", "event", s.plugin_events || 0, "插件发现", s.plugin_events > 0 ? "info" : "", "log:");
+  // 空态引导 & 版本号
+  const ob = $("onboarding");
+  if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
+  const ver = $("verLabel");
+  if (ver && s.version) ver.textContent = "v" + s.version;
 }
 
 /* ---------- 渲染：告警 / 事件 ---------- */
 function renderAlerts(alerts) {
   const n = alerts.length;
   $("alertsCount").textContent = n; $("navAlerts").textContent = n; $("ovAlertsCount").textContent = n;
-  const row = a => `<div class="row-item ${esc(a.level)}">
+  const now = Math.floor(Date.now() / 1000);
+  const row = a => {
+    const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
+    return `<div class="row-item ${esc(a.level)}">
     <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : "警告"}</span>
-    <strong>${esc(a.hostname)}</strong><span class="msg">${esc(a.message)}</span></div>`;
-  const empty = `<div class="empty-line">✅ 暂无阈值告警</div>`;
+    <strong>${esc(a.hostname)}</strong><span class="msg">${esc(a.message)}</span>
+    ${dur ? `<span class="src" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>` : ""}</div>`;
+  };
+  const empty = `<div class="empty-line">✅ 暂无告警，一切正常</div>`;
   $("alerts").innerHTML = n ? alerts.map(row).join("") : empty;
   $("ovAlerts").innerHTML = n ? alerts.slice(0, 6).map(row).join("") : empty;
+}
+
+/* ---------- 概览：资源 TOP5 ---------- */
+function renderTop(hosts) {
+  const el = $("topPanels");
+  if (!el) return;
+  const live = hosts.filter(h => h.latest && h.online);
+  if (!live.length) { el.innerHTML = ""; return; }
+  const by = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, v: f(h) || 0 }))
+    .sort((a, b) => b.v - a.v).slice(0, 5);
+  const panel = (title, items) => `<div class="top-panel"><div class="tp-title">${title}</div>` +
+    (items.length ? items.map(it => `
+      <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title="点击查看趋势">
+        <span class="ti-name">${esc(it.name)}</span>
+        <div class="ti-bar"><div class="ti-fill" style="width:${Math.min(it.v, 100)}%;background:${usageColor(it.v)}"></div></div>
+        <span class="ti-val mono">${it.v.toFixed(1)}%</span>
+      </div>`).join("") : `<div class="empty-line">暂无数据</div>`) + `</div>`;
+  el.innerHTML =
+    panel("CPU 占用 TOP5", by(h => h.latest.cpu_percent)) +
+    panel("内存占用 TOP5", by(h => h.latest.mem_percent)) +
+    panel("磁盘占用 TOP5（最高分区）", by(h => {
+      const ds = h.latest.disks || [];
+      return ds.length ? Math.max(...ds.map(d => d.percent)) : (h.latest.disk_percent || 0);
+    }));
+}
+
+// applyLogFilters mirrors the log view's filter chain (类型/级别/时间/内部自检)，
+// 供渲染与 CSV 导出共用，保证导出内容与所见一致。
+function applyLogFilters(items) {
+  let filtered = items;
+  if (LOG_KIND) filtered = filtered.filter(e => e.kind === LOG_KIND);
+  if (LOG_LEVEL && LOG_LEVEL !== "all") filtered = filtered.filter(e => e.level === LOG_LEVEL);
+  if (LOG_TIME_RANGE && LOG_TIME_RANGE !== "all") {
+    const now = Math.floor(Date.now() / 1000);
+    const hours = parseInt(LOG_TIME_RANGE);
+    filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
+  }
+  return filtered.filter(e => !(e.actor === "自监控" && e.host === "服务端"));
+}
+
+function exportLogsCSV() {
+  const rows = applyLogFilters(LAST_LOG);
+  if (!rows.length) { toast("当前筛选下没有日志可导出", "err"); return; }
+  const escCsv = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const lines = ["时间,类型,级别,来源,主机,内容"];
+  rows.forEach(e => lines.push([fmtDateTime(e.timestamp), e.kind, e.level, e.actor || "", e.host || "", e.message].map(escCsv).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `aiops-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`已导出 ${rows.length} 条日志`, "ok");
 }
 
 function renderLog(items) {
@@ -137,23 +207,7 @@ function renderLog(items) {
     <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
     <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
   
-  // 应用筛选
-  let filtered = items;
-  if (LOG_KIND) filtered = filtered.filter(e => e.kind === LOG_KIND);
-  if (LOG_LEVEL && LOG_LEVEL !== "all") filtered = filtered.filter(e => e.level === LOG_LEVEL);
-  if (LOG_TIME_RANGE && LOG_TIME_RANGE !== "all") {
-    const now = Math.floor(Date.now() / 1000);
-    const hours = parseInt(LOG_TIME_RANGE);
-    filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
-  }
-  
-  // 过滤内部健康检查日志（避免显示 127.0.0.1:8080 相关的自监控条目）
-  filtered = filtered.filter(e => {
-    // 排除自监控的健康检查日志
-    if (e.actor === "自监控" && e.host === "服务端") return false;
-    return true;
-  });
-  
+  const filtered = applyLogFilters(items);
   $("log").innerHTML = filtered.length ? filtered.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
   $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
 }
@@ -177,7 +231,10 @@ function hostCard(h) {
   }
   const cat = h.category ? esc(h.category) : "未分类";
   const loadTitle = "系统负载 1 / 5 / 15 分钟" + (h.os === "windows" ? "（Windows 为近似值）" : "");
-  return `<div class="host" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+  const lastCell = h.online
+    ? `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`
+    : `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`;
+  return `<div class="host ${h.online ? "" : "offline"}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
         <div style="min-width:0">
@@ -206,7 +263,7 @@ function hostCard(h) {
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
       <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
       <span class="g">进程 <span class="mono">${m.proc_count || 0}</span></span>
-      <span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>
+      ${lastCell}
     </div>
   </div>`;
 }
@@ -335,9 +392,10 @@ async function loadAndRenderCharts() {
     // Build UI with time range selector and charts
     let html = `
       <div class="chart-controls">
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">1小时</button>
         <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">24小时</button>
         <button class="chip-btn ${DETAIL_TIME_RANGE === 48 ? 'active' : ''}" data-range="48">48小时</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 72 ? 'active' : ''}" data-range="72">72小时</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 168 ? 'active' : ''}" data-range="168">7天</button>
       </div>
       <div class="chart-container">
         <canvas id="chartCPU" width="600" height="180"></canvas>
@@ -345,7 +403,7 @@ async function loadAndRenderCharts() {
         <canvas id="chartDisk" width="600" height="180"></canvas>
         <canvas id="chartNet" width="600" height="180"></canvas>
       </div>
-      <div class="hint">采样点 ${samples.length} 个（自动选择最佳粒度：${DETAIL_TIME_RANGE <= 2 ? '原始精度 (~3s)' : DETAIL_TIME_RANGE <= 48 ? '1分钟聚合' : '5分钟聚合'}）。</div>
+      <div class="hint">采样点 ${samples.length} 个（自动选择最佳粒度：${DETAIL_TIME_RANGE <= 2 ? '原始精度 (5s)' : DETAIL_TIME_RANGE <= 48 ? '1 分钟聚合' : '5 分钟聚合'}）· 历史已持久化，重启不丢。</div>
     `;
     body.innerHTML = html;
 
@@ -405,7 +463,7 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const h = canvas.height;
-  const padding = { top: 20, right: 60, bottom: 30, left: 50 };
+  const padding = { top: 20, right: 16, bottom: 30, left: 50 };
   const chartW = w - padding.left - padding.right;
   const chartH = h - padding.top - padding.bottom;
 
@@ -498,14 +556,18 @@ function renderLineChart(canvasId, samples, series, yMin = null, yMax = null) {
     ctx.fill();
     ctx.globalAlpha = 1.0;
 
-    // Legend
-    const legendY = padding.top + sIdx * 18;
+    // Legend inside the chart area (top-left), with current / peak stats —
+    // the old right-side legend was clipped off the canvas edge.
+    const vals = points.map(p => p.val);
+    const cur = vals[vals.length - 1], peak = Math.max(...vals);
+    const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
+    const legendY = padding.top + 8 + sIdx * 17;
     ctx.fillStyle = s.color;
-    ctx.fillRect(w - padding.right + 8, legendY, 12, 12);
+    ctx.fillRect(padding.left + 8, legendY, 10, 10);
     ctx.fillStyle = '#e8eef6';
-    ctx.font = '12px sans-serif';
+    ctx.font = '11px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(s.label, w - padding.right + 24, legendY + 11);
+    ctx.fillText(`${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`, padding.left + 24, legendY + 9);
   });
 }
 function sparkBlock(title, series, color) {
@@ -644,6 +706,7 @@ function renderChecks(checks) {
     const lat = c.checked_at ? ` · ${Math.round(c.latency_ms)}ms` : "";
     const builtin = c.builtin ? ' data-builtin="1"' : "";
     const actions = c.builtin ? '' : `<span class="ch-actions">
+          <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
           <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
           <button class="mini-btn del" data-cact="del" title="删除">✕</button>
         </span>`;
@@ -805,7 +868,7 @@ async function refresh() {
       fetch(`${API}/alerts`).then(r => r.json()),
       fetch(`${API}/activity`).then(r => r.json())
     ]);
-    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts);
+    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(hosts);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
     loadHostsMeta(); // keep host meta fresh for process-check UI
@@ -978,7 +1041,19 @@ safeAddEventListener("checksGrid", "click", e => {
   const id = card.dataset.id, check = LAST_CHECKS.find(c => c.id === id);
   if (act.dataset.cact === "edit") openCheckModal(check);
   else if (act.dataset.cact === "del") delCheck(id);
+  else if (act.dataset.cact === "run") {
+    fetch(`${API}/checks/${encodeURIComponent(id)}/run`, { method: "POST" })
+      .then(() => { toast("已触发检测，结果稍后刷新", "ok"); setTimeout(loadChecks, 1500); })
+      .catch(e => toast("触发失败: " + e, "err"));
+  }
 });
+// 概览 TOP5 点击 → 直达该主机趋势
+safeAddEventListener("topPanels", "click", e => {
+  const it = e.target.closest(".top-item"); if (!it) return;
+  openDetail(it.dataset.id, it.dataset.name);
+});
+// 日志导出
+safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
 // 个人信息
 safeAddEventListener("profileBtn", "click", openProfile);
 safeAddEventListener("pfSaveBtn", "click", saveProfile);

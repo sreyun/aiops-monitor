@@ -326,8 +326,9 @@ func enumLinuxDisks() []shared.DiskInfo {
 		if !strings.HasPrefix(dev, "/dev/") {
 			continue
 		}
-		// Skip /boot and its sub-mounts early
-		if strings.HasPrefix(mount, "/boot") {
+		// Skip the /boot mount and its sub-mounts (kernel / EFI partitions).
+		// Exact directory match so a data disk like /bootstrap isn't excluded.
+		if mount == "/boot" || strings.HasPrefix(mount, "/boot/") {
 			continue
 		}
 		if seen[dev] {
