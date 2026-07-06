@@ -259,7 +259,8 @@ svg.sparkline{width:100%; height:46px; display:block}
 .cmd-row .btn{flex:none}
 .cmd{flex:1; margin:0; background:#070a10; border:1px solid var(--line2); border-radius:9px;
   padding:11px 13px; color:#8be3a3; font-family:ui-monospace,Menlo,Consolas,monospace;
-  font-size:12.5px; line-height:1.5; white-space:pre-wrap; word-break:break-all; overflow-x:auto}
+  font-size:12.5px; line-height:1.5; white-space:pre-wrap; word-break:break-all; overflow-x:auto;
+  cursor:pointer; user-select:all; -webkit-user-select:all}
 .cmd.cmd-warn{color:#ffc48a}
 
 /* ---------- Toast ---------- */

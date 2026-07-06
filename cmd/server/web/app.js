@@ -5,6 +5,31 @@
    ============================================================ */
 "use strict";
 const API = "/api/v1";
+
+/* 复制到剪贴板（兼容 HTTP 环境） */
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback: textarea + execCommand
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy") ? resolve() : reject(new Error("execCommand failed"));
+    } catch (e) { reject(e); }
+    finally { document.body.removeChild(ta); }
+  });
+}
+function copyWithFeedback(btn, text, okMsg) {
+  copyToClipboard(text).then(
+    () => { const old = btn.textContent; btn.textContent = "✓"; toast(okMsg, "ok"); setTimeout(() => btn.textContent = old, 1200); },
+    () => toast("复制失败，请手动选择复制", "err")
+  );
+}
 let CUR_CAT = "";     // 当前分类筛选
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
@@ -542,11 +567,16 @@ $("saveBtn").addEventListener("click", saveSettings);
 $("testBtn").addEventListener("click", testSettings);
 $("installBtn").addEventListener("click", openInstall);
 $("resetTokenBtn").addEventListener("click", resetToken);
-$("copyCmdBtn").addEventListener("click", () => {
-  navigator.clipboard.writeText($("installCmd").textContent).then(
-    () => toast("已复制命令", "ok"),
-    () => toast("复制失败，请手动选择", "err")
-  );
+$("copyCmdBtn").addEventListener("click", function() {
+  copyWithFeedback(this, $("installCmd").textContent, "已复制安装命令");
+});
+// 点击命令区域本身也可复制
+$("installCmd").addEventListener("click", function() {
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(this);
+  sel.addRange(range);
 });
 $("installCategory").addEventListener("input", renderInstallCmd);
 $("osTabs").addEventListener("click", e => {
@@ -555,11 +585,8 @@ $("osTabs").addEventListener("click", e => {
   document.querySelectorAll("#osTabs .tab").forEach(x => x.classList.toggle("active", x === t));
   renderInstallCmd();
 });
-$("copyUninstallBtn").addEventListener("click", () => {
-  navigator.clipboard.writeText($("uninstallCmd").textContent).then(
-    () => toast("已复制卸载命令", "ok"),
-    () => toast("复制失败，请手动选择", "err")
-  );
+$("copyUninstallBtn").addEventListener("click", function() {
+  copyWithFeedback(this, $("uninstallCmd").textContent, "已复制卸载命令");
 });
 
 /* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
