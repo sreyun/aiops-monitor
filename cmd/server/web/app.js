@@ -39,6 +39,7 @@ let HOST_FILTER = "all"; // 主机状态筛选 all|online|offline
 let HOST_PAGE = 1;    // 主机分页当前页
 const HOST_PAGE_SIZE = 9;
 let LAST_CHECKS = []; // 最近一次自定义监控数据
+let HOST_META = [];   // 主机元数据（id + hostname）用于进程监控
 let DEFAULT_EMPTY = null;
 let APP_STARTED = false;
 
@@ -420,7 +421,7 @@ function renderChecks(checks) {
       </div>
       <div class="ch-target" title="${esc(c.target)}">${esc(c.target)}</div>
       <div class="ch-meta">
-        <span class="type-badge">${c.type === "http" ? "HTTP" : "TCP"}</span>
+        <span class="type-badge">${c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : "进程"}</span>
         ${builtinTag}
         <span>${stText}${lat}</span>
         <span>每 ${c.interval_sec}s</span>
@@ -434,10 +435,20 @@ function renderChecks(checks) {
 async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
 }
+async function loadHostsMeta() {
+  try { HOST_META = await fetch(`${API}/hosts/meta`).then(r => r.json()); } catch (e) { /* ignore */ }
+}
 function updateCkTargetLabel() {
-  const http = $("ckType").value === "http";
-  $("ckTargetLabel").textContent = http ? "URL 地址" : "主机:端口";
-  $("ckTarget").placeholder = http ? "https://example.com" : "127.0.0.1:3306";
+  const t = $("ckType").value;
+  if (t === "process") {
+    $("ckHostField").style.display = "block";
+    $("ckTargetLabel").textContent = "进程名称";
+    $("ckTarget").placeholder = "如 nginx, mysql, aiops-agent";
+  } else {
+    $("ckHostField").style.display = "none";
+    $("ckTargetLabel").textContent = t === "http" ? "URL 地址" : "主机:端口";
+    $("ckTarget").placeholder = t === "http" ? "https://example.com" : "127.0.0.1:3306";
+  }
 }
 function openCheckModal(check) {
   $("checkModalTitle").textContent = check ? "编辑检查" : "添加检查";
@@ -448,15 +459,31 @@ function openCheckModal(check) {
   $("ckInterval").value = check ? check.interval_sec : 30;
   $("ckLevel").value = check ? check.level : "critical";
   $("ckEnabled").checked = check ? check.enabled : true;
+  // Populate host select for process type
+  populateHostSelect(check);
   updateCkTargetLabel();
   $("checkMask").classList.add("show");
 }
+function populateHostSelect(check) {
+  const sel = $("ckHost");
+  sel.innerHTML = `<option value="">-- 选择主机 --</option>` + HOST_META.map(h =>
+    `<option value="${esc(h.id)}" ${check && check.target.startsWith(h.id + "/") ? "selected" : ""}>${esc(h.hostname || h.id)}</option>`
+  ).join("");
+}
 async function saveCheck() {
+  let target = $("ckTarget").value.trim();
+  const type = $("ckType").value;
+  if (type === "process") {
+    const hostId = $("ckHost").value;
+    if (!hostId) { toast("请选择目标主机", "err"); return; }
+    if (!target) { toast("请填写进程名称", "err"); return; }
+    target = hostId + "/" + target;
+  }
   const body = {
     id: $("ckId").value,
     name: $("ckName").value.trim(),
-    type: $("ckType").value,
-    target: $("ckTarget").value.trim(),
+    type: type,
+    target: target,
     interval_sec: Math.max(5, parseInt($("ckInterval").value) || 30),
     level: $("ckLevel").value,
     enabled: $("ckEnabled").checked
@@ -492,7 +519,7 @@ async function initAuth() {
 function startApp() {
   if (APP_STARTED) return;
   APP_STARTED = true;
-  refresh(); loadChecks();
+  refresh(); loadChecks(); loadHostsMeta();
   setInterval(() => { refresh(); loadChecks(); }, 3000);
 }
 async function openProfile() {
@@ -546,6 +573,7 @@ async function refresh() {
     renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
+    loadHostsMeta(); // keep host meta fresh for process-check UI
   } catch (e) {
     $("clock").textContent = "连接失败";
     $("pulse").className = "pulse off";

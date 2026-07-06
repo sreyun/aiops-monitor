@@ -278,7 +278,11 @@
         <div class="select-wrap"><select id="ckType">
           <option value="http">HTTP 网站探测</option>
           <option value="tcp">TCP 端口探测</option>
+          <option value="process">进程存活监控</option>
         </select></div>
+      </div>
+      <div class="field" id="ckHostField" style="display:none"><label>目标主机</label>
+        <div class="select-wrap"><select id="ckHost"></select></div>
       </div>
       <div class="field"><label id="ckTargetLabel">URL 地址</label><input type="text" id="ckTarget" placeholder="https://example.com"></div>
       <div class="grid2">

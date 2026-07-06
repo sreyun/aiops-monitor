@@ -66,13 +66,13 @@ func defaultAccount() AccountConfig {
 }
 
 // CustomCheck is an operator-defined synthetic monitor run by the server:
-// an HTTP(S) URL probe or a TCP host:port probe. A failing check raises an
-// alert and pushes a notification.
+// an HTTP(S) URL probe, a TCP host:port probe, or a process-existence check.
+// A failing check raises an alert and pushes a notification.
 type CustomCheck struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Type        string `json:"type"`   // http | tcp
-	Target      string `json:"target"` // URL for http, host:port for tcp
+	Type        string `json:"type"`   // http | tcp | process
+	Target      string `json:"target"` // URL for http, host:port for tcp, hostID/procName for process
 	IntervalSec int    `json:"interval_sec"`
 	Level       string `json:"level"` // warning | critical
 	Enabled     bool   `json:"enabled"`

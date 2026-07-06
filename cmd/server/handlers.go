@@ -60,6 +60,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
 	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
+	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
@@ -258,7 +259,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	c.Target = strings.TrimSpace(c.Target)
-	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp") {
+	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "process") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "名称 / 目标 / 类型不合法"})
 		return
 	}
@@ -283,6 +284,20 @@ func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	_ = s.cfg.DeleteCheck(id)
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "删除自定义监控 " + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleHostsMeta returns minimal host info (id + hostname) for the process-check UI.
+func (s *Server) handleHostsMeta(w http.ResponseWriter, r *http.Request) {
+	hosts := s.store.ListHosts()
+	type hostMeta struct {
+		ID       string `json:"id"`
+		Hostname string `json:"hostname"`
+	}
+	out := make([]hostMeta, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, hostMeta{ID: h.ID, Hostname: h.Hostname})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {

@@ -100,6 +100,7 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	}
 
 	m.ProcCount = countProcs()
+	m.ProcessNames = listProcNames()
 	if up, err := readUptime(); err == nil {
 		m.Uptime = up
 	}
@@ -276,6 +277,33 @@ func countProcs() int {
 		}
 	}
 	return n
+}
+
+// listProcNames returns unique process base names from /proc/*/comm,
+// capped at 256 entries to keep the report payload small.
+func listProcNames() []string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() { continue }
+		allDigit := true
+		for _, r := range e.Name() {
+			if r < '0' || r > '9' { allDigit = false; break }
+		}
+		if !allDigit { continue }
+		b, err := os.ReadFile("/proc/" + e.Name() + "/comm")
+		if err != nil || len(b) == 0 { continue }
+		name := strings.TrimSpace(string(b))
+		if name == "" || seen[name] { continue }
+		seen[name] = true
+		out = append(out, name)
+		if len(out) >= 256 { break }
+	}
+	return out
 }
 
 // enumLinuxDisks returns usage for every real filesystem mount, de-duplicated

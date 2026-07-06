@@ -81,6 +81,7 @@ func (c *darwinCollector) Collect() (shared.Metrics, error) {
 	m.NetConns = darwinTCPConns()
 	m.Load1, m.Load5, m.Load15 = darwinLoad()
 	m.ProcCount = darwinProcCount()
+	m.ProcessNames = darwinProcNames()
 	m.Uptime = darwinUptime()
 
 	c.primed = true
@@ -252,6 +253,29 @@ func darwinProcCount() int {
 		}
 	}
 	return n
+}
+
+// darwinProcNames returns unique process command names via ps, capped at 256.
+func darwinProcNames() []string {
+	out := run("ps", "-A", "-o", "comm=")
+	if out == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, ln := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(ln)
+		if name == "" || seen[name] { continue }
+		// ps comm may include full path; take basename
+		if idx := strings.LastIndex(name, "/"); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if name == "" || seen[name] { continue }
+		seen[name] = true
+		names = append(names, name)
+		if len(names) >= 256 { break }
+	}
+	return names
 }
 
 func darwinUptime() uint64 {

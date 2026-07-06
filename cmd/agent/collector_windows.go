@@ -33,6 +33,11 @@ var (
 	procGetIfTable           = modiphlpapi.NewProc("GetIfTable")
 	procGetTcpTable          = modiphlpapi.NewProc("GetTcpTable")
 	procRtlGetVersion        = syscall.NewLazyDLL("ntdll.dll").NewProc("RtlGetVersion")
+
+	modkernel32x = syscall.NewLazyDLL("kernel32.dll")
+	procCreateToolhelp32Snapshot = modkernel32x.NewProc("CreateToolhelp32Snapshot")
+	procProcess32First          = modkernel32x.NewProc("Process32FirstW")
+	procProcess32Next           = modkernel32x.NewProc("Process32NextW")
 )
 
 type filetime struct {
@@ -161,6 +166,7 @@ func (c *windowsCollector) Collect() (shared.Metrics, error) {
 
 	// ---- Process count ----
 	m.ProcCount = countProcs()
+	m.ProcessNames = listProcessNames()
 
 	// ---- Uptime: GetTickCount64 (ms) ----
 	if r, _, _ := procGetTickCount64.Call(); r != 0 {
@@ -374,4 +380,55 @@ func osVersion() string {
 func kernelVersion() string {
 	maj, min, build := winVersion()
 	return fmt.Sprintf("%d.%d.%d", maj, min, build)
+}
+
+// processEntry32 mirrors Win32 PROCESSENTRY32W (568 bytes on 64-bit).
+type processEntry32 struct {
+	size            uint32
+	cntUsage        uint32
+	th32ProcessID   uint32
+	th32DefaultHeap uintptr
+	th32ModuleID    uint32
+	cntThreads      uint32
+	th32ParentPocID uint32
+	pcPriClassBase  int32
+	peFlags         uint32
+	szExeFile       [260]uint16 // MAX_PATH
+}
+
+// listProcessNames returns unique process base names via CreateToolhelp32Snapshot.
+func listProcessNames() []string {
+	const snapProcess = 0x00000002
+	r, _, _ := procCreateToolhelp32Snapshot.Call(uintptr(snapProcess), 0)
+	if r == ^uintptr(0) { // INVALID_HANDLE_VALUE
+		return nil
+	}
+	snap := r
+	defer syscall.CloseHandle(syscall.Handle(snap))
+
+	seen := map[string]bool{}
+	var names []string
+	var pe processEntry32
+	pe.size = uint32(unsafe.Sizeof(pe))
+
+	r, _, _ = procProcess32First.Call(snap, uintptr(unsafe.Pointer(&pe)))
+	if r == 0 {
+		return nil
+	}
+	for {
+		name := syscall.UTF16ToString(pe.szExeFile[:])
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+			if len(names) >= 256 {
+				break
+			}
+		}
+		pe.size = uint32(unsafe.Sizeof(pe))
+		r, _, _ = procProcess32Next.Call(snap, uintptr(unsafe.Pointer(&pe)))
+		if r == 0 {
+			break
+		}
+	}
+	return names
 }

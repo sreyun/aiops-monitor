@@ -30,6 +30,7 @@ type Metrics struct {
 	Load15      float64 `json:"load15"`
 	ProcCount   int     `json:"proc_count"`
 	Uptime      uint64  `json:"uptime"`
+	ProcessNames []string `json:"process_names,omitempty"` // top process names for process-monitor checks
 }
 
 // DiskInfo is per-volume disk usage. The agent enumerates every local disk:
