@@ -61,6 +61,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/password", s.handleSetPassword)
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
+	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
 	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
@@ -242,6 +243,13 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
+	// stamp threshold alerts with their first-fired time (check alerts carry it already)
+	since := s.notifier.ActiveSince()
+	for i := range alerts {
+		if t, ok := since[alertKey(alerts[i])]; ok {
+			alerts[i].Since = t
+		}
+	}
 	alerts = append(alerts, s.checks.DownAlerts()...)
 	if alerts == nil {
 		alerts = []Alert{}
@@ -329,6 +337,12 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
+// handleRunCheck triggers one immediate probe of a check (fire-and-forget).
+func (s *Server) handleRunCheck(w http.ResponseWriter, r *http.Request) {
+	s.checks.runNow(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteCheck(id)
@@ -378,6 +392,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"warning_alerts":   warn,
 		"plugin_events":    len(s.store.RecentEvents()),
 		"server_time_unix": now,
+		"version":          appVersion,
 	})
 }
 

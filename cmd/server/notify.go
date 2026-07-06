@@ -26,6 +26,7 @@ type Notifier struct {
 	httpc  *http.Client
 	mu     sync.Mutex
 	active map[string]Alert // alertKey -> alert currently firing
+	since  map[string]int64 // alertKey -> unix time the alert first fired
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -34,6 +35,7 @@ func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
 		cfg:    cfg,
 		httpc:  &http.Client{Timeout: 8 * time.Second},
 		active: map[string]Alert{},
+		since:  map[string]int64{},
 	}
 }
 
@@ -62,6 +64,18 @@ func (n *Notifier) ResetState() {
 // Trigger runs one evaluation immediately (used right after a config save).
 func (n *Notifier) Trigger() { n.tick() }
 
+// ActiveSince returns a copy of the first-fired times keyed by alertKey,
+// letting the alerts API show "已持续 X 分钟".
+func (n *Notifier) ActiveSince() map[string]int64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make(map[string]int64, len(n.since))
+	for k, v := range n.since {
+		out[k] = v
+	}
+	return out
+}
+
 func (n *Notifier) tick() {
 	cfg := n.cfg.Get()
 	alerts := Evaluate(n.store.ListHosts(), n.cfg.Thresholds())
@@ -75,6 +89,7 @@ func (n *Notifier) tick() {
 		firing bool
 	}
 	var todo []transition
+	now := time.Now().Unix()
 	n.mu.Lock()
 	if cfg.AlertsEnabled {
 		for k, a := range cur { // newly fired
@@ -86,6 +101,18 @@ func (n *Notifier) tick() {
 			if _, ok := cur[k]; !ok {
 				todo = append(todo, transition{a, false})
 			}
+		}
+	}
+	// first-fired bookkeeping (kept across ResetState so durations survive
+	// config saves; only set when absent, cleared when the alert resolves)
+	for k := range cur {
+		if _, ok := n.since[k]; !ok {
+			n.since[k] = now
+		}
+	}
+	for k := range n.since {
+		if _, ok := cur[k]; !ok {
+			delete(n.since, k)
 		}
 	}
 	n.active = cur // track state even while disabled, so re-enabling won't replay

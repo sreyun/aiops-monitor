@@ -28,10 +28,11 @@ type checkRunner struct {
 	httpc    *http.Client
 	selfAddr string // e.g. "127.0.0.1:8080" — used for the built-in self health-check
 
-	mu      sync.Mutex
-	status  map[string]CheckStatus
-	down    map[string]bool
-	lastRun map[string]time.Time
+	mu        sync.Mutex
+	status    map[string]CheckStatus
+	down      map[string]bool
+	downSince map[string]int64 // check id -> unix time it first went down
+	lastRun   map[string]time.Time
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
@@ -41,9 +42,21 @@ func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr
 			Timeout:       5 * time.Second, // reduced from 8s; retry logic provides resilience
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		status:  map[string]CheckStatus{},
-		down:    map[string]bool{},
-		lastRun: map[string]time.Time{},
+		status:    map[string]CheckStatus{},
+		down:      map[string]bool{},
+		downSince: map[string]int64{},
+		lastRun:   map[string]time.Time{},
+	}
+}
+
+// markDown records the down/up transition time; caller holds cr.mu.
+func (cr *checkRunner) markDown(id string, down bool) {
+	if down {
+		if _, ok := cr.downSince[id]; !ok {
+			cr.downSince[id] = time.Now().Unix()
+		}
+	} else {
+		delete(cr.downSince, id)
 	}
 }
 
@@ -93,6 +106,7 @@ func (cr *checkRunner) runSelfCheck() {
 	cr.status[selfCheckID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix()}
 	wasDown := cr.down[selfCheckID]
 	cr.down[selfCheckID] = !ok
+	cr.markDown(selfCheckID, !ok)
 	cr.mu.Unlock()
 
 	if !ok && !wasDown {
@@ -143,9 +157,10 @@ func (cr *checkRunner) gc() {
 	}
 	cr.mu.Lock()
 	for id := range cr.status {
-		if !live[id] {
+		if id != selfCheckID && !live[id] {
 			delete(cr.status, id)
 			delete(cr.down, id)
+			delete(cr.downSince, id)
 			delete(cr.lastRun, id)
 		}
 	}
@@ -171,6 +186,7 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: time.Now().Unix()}
 	wasDown := cr.down[c.ID]
 	cr.down[c.ID] = !ok
+	cr.markDown(c.ID, !ok)
 	cr.mu.Unlock()
 
 	if !ok && !wasDown {
@@ -281,9 +297,9 @@ func (cr *checkRunner) DownAlerts() []Alert {
 	cr.mu.Lock()
 	if cr.down[selfCheckID] {
 		st := cr.status[selfCheckID]
-		lvl := "critical"
 		out = append(out, Alert{
-			Level: lvl, Type: "check", Scope: selfCheckID, Hostname: SelfCheckName,
+			Level: "critical", Type: "check", Scope: selfCheckID, Hostname: SelfCheckName,
+			Since: cr.downSince[selfCheckID],
 			Message: "服务端健康检查异常（" + st.Message + "）", Timestamp: st.CheckedAt,
 		})
 	}
@@ -303,6 +319,7 @@ func (cr *checkRunner) DownAlerts() []Alert {
 		st := cr.status[c.ID]
 		out = append(out, Alert{
 			Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name,
+			Since: cr.downSince[c.ID],
 			Message: "自定义监控异常：" + c.Name + "（" + st.Message + "）", Timestamp: st.CheckedAt,
 		})
 	}

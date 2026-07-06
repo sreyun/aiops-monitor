@@ -31,8 +31,9 @@ type Alert struct {
 	HostID    string  `json:"host_id"`
 	Hostname  string  `json:"hostname"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | offline
+	Type      string  `json:"type"`            // cpu | memory | disk | offline | check
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
+	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
 	Value     float64 `json:"value"`
 	Timestamp int64   `json:"timestamp"`

@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// appVersion is shown in the dashboard sidebar and the summary API.
+const appVersion = "1.1.0"
+
 // resolveDist finds the directory that holds the downloadable agent binaries
 // (+ plugins.zip). It tries the -dist flag, ./dist, then the server executable's
 // own dir and its dist/ subdir — so the one-line install works whether the
