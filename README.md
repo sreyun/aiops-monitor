@@ -108,6 +108,22 @@ aiops-monitor/
 
 ---
 
+## Docker 部署（推荐）
+
+```bash
+# 克隆仓库
+git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
+
+# 一键启动服务端
+docker compose up -d aiops-server
+
+# 浏览器打开 http://localhost:8080
+```
+
+服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./server_config.json`。Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用本机 Agent。
+
+---
+
 ## 快速开始
 
 ### 1. 启动服务端
@@ -289,22 +305,6 @@ p.emit()                                   # 输出 JSON
 | **面板与资源** | | |
 | GET | `/` | Web 面板 |
 | GET | `/dl/*` | Agent 二进制下载 |
-
----
-
-## Docker 部署
-
-```bash
-# 一键启动服务端
-docker compose up -d aiops-server
-
-# 启动服务端 + 本机 Agent
-docker compose up -d
-
-# 浏览器打开 http://localhost:8080
-```
-
-服务端数据通过 volume 持久化，配置文件挂载在 `./server_config.json`。Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用。
 
 ---
 
