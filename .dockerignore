@@ -10,12 +10,3 @@ __pycache__/
 *.pyc
 .git/
 .github/
-.git
-.claude
-bin/
-dist/
-*.log
-server_config.json
-cmd/agent/agent_state.json
-**/__pycache__/
-plugins/.anomaly_state.json

@@ -28,18 +28,3 @@ services:
 
 volumes:
   server-data:
-services:
-  aiops-server:
-    build: .
-    image: aiops-monitor:latest
-    container_name: aiops-monitor
-    restart: unless-stopped
-    ports:
-      - "8080:8080"          # 面板 + Agent 上报 + 一键安装下载
-    environment:
-      - TZ=Asia/Shanghai
-    volumes:
-      - aiops-data:/app/data # 持久化 server_config.json（账户/告警/自定义监控）
-
-volumes:
-  aiops-data:
