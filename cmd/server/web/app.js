@@ -389,7 +389,7 @@ async function loadAndRenderCharts() {
 }
 
 // Time range selector event delegation
-$("detailBody").addEventListener("click", e => {
+safeAddEventListener("detailBody", "click", e => {
   const btn = e.target.closest(".chip-btn[data-range]");
   if (!btn) return;
   DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
@@ -816,15 +816,22 @@ async function refresh() {
 }
 
 /* ---------- 事件绑定（委托） ---------- */
-$("groups").addEventListener("click", e => {
-  const host = e.target.closest(".host"); if (!host) return;
-  const act = e.target.closest("[data-act]"); if (!act) return;
-  const { id, name, cat } = host.dataset;
-  if (act.dataset.act === "detail") openDetail(id, name);
-  else if (act.dataset.act === "cat") editCategory(id, cat);
-  else if (act.dataset.act === "del") delHost(id, name);
-});
-$("catFilter").addEventListener("change", e => { CUR_CAT = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+const groupsEl = $("groups");
+if (groupsEl) {
+  groupsEl.addEventListener("click", e => {
+    const host = e.target.closest(".host"); if (!host) return;
+    const act = e.target.closest("[data-act]"); if (!act) return;
+    const { id, name, cat } = host.dataset;
+    if (act.dataset.act === "detail") openDetail(id, name);
+    else if (act.dataset.act === "cat") editCategory(id, cat);
+    else if (act.dataset.act === "del") delHost(id, name);
+  });
+}
+
+const catFilterEl = $("catFilter");
+if (catFilterEl) {
+  catFilterEl.addEventListener("change", e => { CUR_CAT = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+}
 
 // 主机筛选和排序
 function filterHosts(value) {
@@ -838,30 +845,41 @@ function sortHosts(value) {
   HOST_PAGE = 1;
   renderHosts(LAST_HOSTS);
 }
-$("settingsBtn").addEventListener("click", openSettings);
-$("saveBtn").addEventListener("click", saveSettings);
-$("testBtn").addEventListener("click", testSettings);
-$("installBtn").addEventListener("click", openInstall);
-$("resetTokenBtn").addEventListener("click", resetToken);
-$("copyCmdBtn").addEventListener("click", function() {
+
+// Helper function to safely add event listeners
+function safeAddEventListener(id, event, handler) {
+  const el = $(id);
+  if (el) {
+    el.addEventListener(event, handler);
+  } else {
+    console.warn(`Element with id "${id}" not found`);
+  }
+}
+
+safeAddEventListener("settingsBtn", "click", openSettings);
+safeAddEventListener("saveBtn", "click", saveSettings);
+safeAddEventListener("testBtn", "click", testSettings);
+safeAddEventListener("installBtn", "click", openInstall);
+safeAddEventListener("resetTokenBtn", "click", resetToken);
+safeAddEventListener("copyCmdBtn", "click", function() {
   copyWithFeedback(this, $("installCmd").textContent, "已复制安装命令");
 });
 // 点击命令区域本身也可复制
-$("installCmd").addEventListener("click", function() {
+safeAddEventListener("installCmd", "click", function() {
   const sel = window.getSelection();
   sel.removeAllRanges();
   const range = document.createRange();
   range.selectNodeContents(this);
   sel.addRange(range);
 });
-$("installCategory").addEventListener("input", renderInstallCmd);
-$("osTabs").addEventListener("click", e => {
+safeAddEventListener("installCategory", "input", renderInstallCmd);
+safeAddEventListener("osTabs", "click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
   CUR_OS = t.dataset.os;
   document.querySelectorAll("#osTabs .tab").forEach(x => x.classList.toggle("active", x === t));
   renderInstallCmd();
 });
-$("copyUninstallBtn").addEventListener("click", function() {
+safeAddEventListener("copyUninstallBtn", "click", function() {
   copyWithFeedback(this, $("uninstallCmd").textContent, "已复制卸载命令");
 });
 
@@ -872,24 +890,36 @@ function switchView(view) {
   navItems.forEach(n => {
     const on = n.dataset.view === view;
     n.classList.toggle("active", on);
-    if (on) $("pageTitle").textContent = n.querySelector("span").textContent;
+    if (on) {
+      const pageTitleEl = $("pageTitle");
+      const spanEl = n.querySelector("span");
+      if (pageTitleEl && spanEl) {
+        pageTitleEl.textContent = spanEl.textContent;
+      }
+    }
   });
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
   switchView(n.dataset.view);
-  $("app").classList.remove("nav-open");
+  const appEl = $("app");
+  if (appEl) appEl.classList.remove("nav-open");
 }));
 
 // 汉堡：桌面收起/展开侧栏；移动端打开/关闭抽屉
-$("menuBtn").addEventListener("click", () => {
-  if (window.innerWidth <= 900) $("app").classList.toggle("nav-open");
-  else $("app").classList.toggle("collapsed");
+safeAddEventListener("menuBtn", "click", () => {
+  const appEl = $("app");
+  if (!appEl) return;
+  if (window.innerWidth <= 900) appEl.classList.toggle("nav-open");
+  else appEl.classList.toggle("collapsed");
 });
-$("backdrop").addEventListener("click", () => $("app").classList.remove("nav-open"));
+safeAddEventListener("backdrop", "click", () => {
+  const appEl = $("app");
+  if (appEl) appEl.classList.remove("nav-open");
+});
 
 // 日志类型筛选
-$("logFilter").addEventListener("click", e => {
+safeAddEventListener("logFilter", "click", e => {
   const b = e.target.closest(".chip-btn"); if (!b) return;
   LOG_KIND = b.dataset.kind;
   document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
@@ -921,15 +951,15 @@ document.addEventListener("keydown", e => {
 });
 
 // KPI 卡片点击 → 跳转对应视图（并按需过滤主机）
-$("cards").addEventListener("click", e => {
+safeAddEventListener("cards", "click", e => {
   const c = e.target.closest(".card"); if (!c) return;
   const [view, filter] = (c.dataset.goto || "").split(":");
   if (view === "hosts") { HOST_FILTER = filter || "all"; HOST_PAGE = 1; renderHosts(LAST_HOSTS); }
   if (view) switchView(view);
 });
 // 主机搜索 + 分页
-$("hostSearch").addEventListener("input", e => { HOST_SEARCH = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
-$("pager").addEventListener("click", e => {
+safeAddEventListener("hostSearch", "input", e => { HOST_SEARCH = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+safeAddEventListener("pager", "click", e => {
   const b = e.target.closest("button[data-pg]"); if (!b) return;
   const pg = b.dataset.pg;
   if (pg === "prev") HOST_PAGE--;
@@ -938,10 +968,10 @@ $("pager").addEventListener("click", e => {
   renderHosts(LAST_HOSTS);
 });
 // 自定义监控
-$("addCheckBtn").addEventListener("click", () => openCheckModal(null));
-$("ckType").addEventListener("change", updateCkTargetLabel);
-$("ckSaveBtn").addEventListener("click", saveCheck);
-$("checksGrid").addEventListener("click", e => {
+safeAddEventListener("addCheckBtn", "click", () => openCheckModal(null));
+safeAddEventListener("ckType", "change", updateCkTargetLabel);
+safeAddEventListener("ckSaveBtn", "click", saveCheck);
+safeAddEventListener("checksGrid", "click", e => {
   const card = e.target.closest(".check-card"); if (!card) return;
   if (card.dataset.builtin) return; // built-in check, no actions
   const act = e.target.closest("[data-cact]"); if (!act) return;
@@ -950,22 +980,33 @@ $("checksGrid").addEventListener("click", e => {
   else if (act.dataset.cact === "del") delCheck(id);
 });
 // 个人信息
-$("profileBtn").addEventListener("click", openProfile);
-$("pfSaveBtn").addEventListener("click", saveProfile);
-$("pfPwdBtn").addEventListener("click", changePassword);
-$("logoutBtn").addEventListener("click", logout);
+safeAddEventListener("profileBtn", "click", openProfile);
+safeAddEventListener("pfSaveBtn", "click", saveProfile);
+safeAddEventListener("pfPwdBtn", "click", changePassword);
+safeAddEventListener("logoutBtn", "click", logout);
 // 登录
-$("loginForm").addEventListener("submit", async e => {
+safeAddEventListener("loginForm", "submit", async e => {
   e.preventDefault();
-  $("loginErr").textContent = "";
+  const loginErrEl = $("loginErr");
+  if (loginErrEl) loginErrEl.textContent = "";
   try {
     const r = await fetch(`${API}/login`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: $("loginUser").value.trim(), password: $("loginPass").value })
     });
-    if (r.ok) { setUser(await fetch(`${API}/me`).then(x => x.json())); $("loginView").classList.remove("show"); startApp(); }
-    else { const j = await r.json(); $("loginErr").textContent = j.error || "登录失败"; }
-  } catch (err) { $("loginErr").textContent = "登录失败: " + err; }
+    if (r.ok) { 
+      setUser(await fetch(`${API}/me`).then(x => x.json())); 
+      const loginViewEl = $("loginView");
+      if (loginViewEl) loginViewEl.classList.remove("show"); 
+      startApp(); 
+    }
+    else { 
+      const j = await r.json(); 
+      if (loginErrEl) loginErrEl.textContent = j.error || "登录失败"; 
+    }
+  } catch (err) { 
+    if (loginErrEl) loginErrEl.textContent = "登录失败: " + err; 
+  }
 });
 
 initAuth();

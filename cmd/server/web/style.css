@@ -477,7 +477,6 @@ section{scroll-margin-top:80px; margin-bottom:26px}
   from { opacity: 0; }
   to { opacity: 1; }
 }
-.mask.show{display:flex}
 .modal{
   background:var(--panel); 
   border:1px solid var(--line2); 
