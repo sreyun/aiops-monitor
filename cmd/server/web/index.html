@@ -345,7 +345,14 @@
     <div class="modal-head">
       <h3 id="termTitle">远程终端</h3>
       <span class="term-status" id="termStatus">连接中…</span>
-      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+      <div class="term-ctls">
+        <button class="term-ctl" id="termMaxBtn" title="放大窗口" aria-label="放大 / 还原窗口">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </button>
+        <button class="term-ctl close" data-close-btn title="关闭窗口" aria-label="关闭窗口">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
     </div>
     <div class="modal-body term-body">
       <pre class="term-screen" id="termScreen" tabindex="0" spellcheck="false"></pre>

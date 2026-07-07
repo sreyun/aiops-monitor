@@ -146,6 +146,7 @@ func (a *Agent) register() {
 	body, _ := json.Marshal(map[string]string{
 		"host_id":  a.identity.HostID,
 		"hostname": a.identity.Hostname,
+		"token":    a.identity.Token,
 	})
 	resp, err := a.httpc.Post(a.server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
 	if err != nil {

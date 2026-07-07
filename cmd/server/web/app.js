@@ -829,7 +829,10 @@ function openTerminal(id, name) {
   const vt = makeVT(screen);
   screen._vt = vt;
   setTermStatus("连接中…", "");
-  $("termMask").classList.add("show");
+  const mask = $("termMask");
+  mask.classList.remove("maximized"); // 每次打开默认大小
+  const mb = $("termMaxBtn"); if (mb) mb.title = "放大窗口";
+  mask.classList.add("show");
   closeTerminalWS(); // 关掉可能残留的上一个会话
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/terminal`);
@@ -862,6 +865,18 @@ function termResizeSend(ws, cols, rows) {
   framed.set(body, 1);
   ws.send(framed);
 }
+// 重新测量终端并把新尺寸告知 PTY（放大/还原/窗口变化后调用）
+function termRefit() {
+  const screen = $("termScreen"), vt = screen && screen._vt;
+  if (vt && TERM_WS) { const s = vt.fit(); if (s && TERM_WS.readyState === 1) termResizeSend(TERM_WS, s.cols, s.rows); }
+}
+// 放大 / 还原 终端窗口
+safeAddEventListener("termMaxBtn", "click", () => {
+  const mask = $("termMask"); if (!mask) return;
+  const max = mask.classList.toggle("maximized");
+  const btn = $("termMaxBtn"); if (btn) btn.title = max ? "还原默认大小" : "放大窗口";
+  requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
+});
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
 }

@@ -36,7 +36,8 @@ Agent 与服务端共享 `shared/` 中的类型定义，采集端与服务端的
 | **持久化** | 内嵌轻量库（gzip+JSON 落盘 `aiops.db`）—— 历史 / 日志 / 会话重启不丢，无需外部数据库 |
 | **远程终端** | 主机卡片一键打开浏览器**全 TTY 终端**；**Agent 反向连接，免在被控端开放 22/入站端口**；Windows ConPTY、Linux/macOS openpty；服务端中转 + 登录/Token 双鉴权 + 审计 + 可一键全局禁用 |
 | **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
-| **安全与性能** | 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 请求体大小限制 + 密钥脱敏；**gzip 响应压缩**大幅降低多主机轮询带宽 |
+| **远程终端** | 主机卡片一键打开浏览器终端，经 Agent **反向连接**（免在被控端开放 22/入站端口）；完整交互式 TTY（Windows ConPTY、Linux/macOS openpty），支持颜色 / vim·top / 窗口放大·还原·关闭；登录 + Token 双鉴权 + 审计 |
+| **安全与性能** | **强制 Agent Token 接入**（默认，常数时间比较）+ 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 安全响应头 + 请求体大小限制 + 密钥脱敏 + 主机身份防克隆；**gzip 响应压缩**大幅降低多主机轮询带宽 |
 | **共享类型** | `shared/wire.go` 被 server 与 agent 同时 import，契约统一不会漂移 |
 
 ---
@@ -396,8 +397,11 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - **登录限流**：按客户端 IP 滑动窗口限制失败次数（默认 5 分钟 8 次），失败写系统日志，抵御暴力破解。
 - **Cookie 安全**：`HttpOnly` + `SameSite=Lax`；经 HTTPS（含反代 `X-Forwarded-Proto`）时自动加 `Secure`。
 - **请求体上限**：全局 `MaxBytesReader`（2 MiB），防超大 JSON 内存耗尽。
+- **安全响应头**：全站 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`（防点击劫持）、`Referrer-Policy: no-referrer`。
 - **密钥脱敏**：配置读取接口对 Webhook / 加签 Secret 掩码回显；提交空值或掩码值则保持原值不变。
-- **Agent 接入**：`register` / `report` / 安装脚本 / 下载为公开端点（便于 Agent 与安装器工作）；可开启 `require_token` 强制校验安装 Token。
+- **强制 Agent Token（默认开启）**：`register` 与 `report` **必须携带有效安装 Token 才能接入**（**常数时间比较**），无 Token / 错 Token 一律 `403`。仅在明确设置 `allow_anonymous_agents: true` 时才允许匿名接入（不推荐）。
+- **Token 不外泄**：`/install.sh`、`/install.ps1` 为公开端点，但**不再在缺省 token 参数时回填真实 Token**——面板生成的一键命令已带 Token（来自需登录的 `/install/info`），故合法安装照常，而直接 `curl /install.sh` 无法读到 Token。
+- **主机身份防克隆**：Agent 身份绑定机器指纹（machine-id + MAC）；克隆母盘/镜像导致 `agent_state.json` 被复制时会被检测并重生 `host_id`，避免不同机器撞同一 ID 造成监控互抢掉线。
 - **远程终端**：本质是对被控端的远程命令执行，采用**双重鉴权**——操作侧浏览器 WebSocket 需有效登录会话，Agent 反向通道需安装 Token（常数时间比较）；每次开/关终端写入审计日志；可在服务端配置 `terminal_disabled: true` 一键全局禁用。**强烈建议仅在可信网络启用，并置于 HTTPS 反代之后。**
 - **面向公网请置于反向代理之后并启用 HTTPS。**
 
@@ -414,11 +418,11 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - [x] Go 服务端：内存存储 + **多级降采样历史** + **内嵌轻量库持久化**（重启不丢）
 - [x] **自定义监控**：HTTP（状态码/延时/证书天数）/ TCP / **Ping（丢包率/RTT）**/ 进程存活；列表·胶囊双视图；**每项历史曲线回看**
 - [x] **交互式趋势图**：悬停十字线 + 数值气泡、框选放大、双击还原、放大预览（CPU/内存/磁盘/GPU/网络）
-- [x] 登录认证与安全加固：加盐口令 + 会话 Cookie（HttpOnly/SameSite/Secure）、**登录限流**、请求体上限、密钥脱敏
-- [x] 实时面板：概览卡片 + 资源 TOP10（含 GPU）+ 主机分类分组/搜索/分页 + 阈值告警 + 操作日志分页 + 标准/宽屏切换
+- [x] 登录认证与安全加固：加盐口令 + 会话 Cookie（HttpOnly/SameSite/Secure）、**登录限流**、**强制 Agent Token 接入（默认，常数时间比较）**、安全响应头、请求体上限、密钥脱敏、**主机身份防克隆**
+- [x] 实时面板：概览卡片 + 资源 TOP10（CPU/内存/磁盘/GPU + **HTTP/TCP/Ping/进程**）+ 主机分类分组/搜索/分页 + **卡片·列表双视图** + 阈值告警 + 操作日志分页 + 标准/宽屏切换
 - [x] 告警推送：飞书 / 钉钉 Webhook，去重 + 状态转换推送
 - [x] **gzip 响应压缩**：多主机轮询带宽 ~8–10 倍压缩
-- [x] **远程终端**：主机卡片一键打开浏览器终端，经 Agent 反向连接（**免在被控端开放 22/入站端口**）+ 服务端中转；**完整交互式 TTY**（Windows ConPTY、Linux/macOS openpty），支持颜色/行编辑/vim·top 等全屏程序、窗口自适应；登录会话 + 安装 Token 双鉴权 + 开关闭/审计
+- [x] **远程终端**：主机卡片一键打开浏览器终端，经 Agent 反向连接（**免在被控端开放 22/入站端口**）+ 服务端中转；**完整交互式 TTY**（Windows ConPTY、Linux/macOS openpty），支持颜色/行编辑/vim·top 等全屏程序、**窗口放大·还原·关闭**与尺寸自适应；登录会话 + 安装 Token 双鉴权 + 开关闭/审计
 - [x] 一键安装：Token 模式、面板生成命令、自动下载安装、开机自启
 - [x] 主机管理：分类标签、面板手动覆盖、主机删除
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"io"
@@ -14,6 +15,12 @@ import (
 
 	"aiops-monitor/shared"
 )
+
+// validAgentToken constant-time compares an agent-presented token against the
+// install token (never matches an empty configured token).
+func validAgentToken(got, want string) bool {
+	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
 
 //go:embed web
 var webFS embed.FS
@@ -103,9 +110,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HostID   string `json:"host_id"`
 		Hostname string `json:"hostname"`
+		Token    string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if s.cfg.AgentTokenRequired() && !validAgentToken(req.Token, s.cfg.InstallToken()) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "无效或缺失的接入 Token"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -126,8 +138,8 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
 		return
 	}
-	if s.cfg.RequireToken() && rep.Token != s.cfg.InstallToken() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid token"})
+	if s.cfg.AgentTokenRequired() && !validAgentToken(rep.Token, s.cfg.InstallToken()) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "无效或缺失的接入 Token"})
 		return
 	}
 	h := s.store.Upsert(rep)
@@ -467,7 +479,7 @@ func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"server_url":    serverURL(r),
 		"token":         s.cfg.InstallToken(),
-		"require_token": s.cfg.RequireToken(),
+		"require_token": s.cfg.AgentTokenRequired(),
 	})
 }
 
@@ -480,10 +492,11 @@ func (s *Server) handleResetToken(w http.ResponseWriter, r *http.Request) {
 // handleInstallScript serves the platform install script (install.sh /
 // install.ps1) with the server URL, token and category injected.
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
+	// Do NOT fall back to the real install token when the query param is absent —
+	// /install.sh is public, so injecting it would leak the token to anyone who
+	// can reach the server. The dashboard always generates the command WITH the
+	// token (from the authenticated /install/info), so legitimate installs carry it.
 	token := r.URL.Query().Get("token")
-	if token == "" {
-		token = s.cfg.InstallToken()
-	}
 	category := r.URL.Query().Get("category")
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {

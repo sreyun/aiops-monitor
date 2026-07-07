@@ -79,6 +79,18 @@ const maxBodyBytes = 2 << 20 // 2 MiB
 
 // bodyLimitMiddleware wraps every request body in a MaxBytesReader so a
 // malicious or buggy client can't stream an unbounded payload into memory.
+// securityHeadersMiddleware adds conservative hardening headers to every
+// response (no MIME sniffing, no framing/clickjacking, no referrer leakage).
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
@@ -177,7 +189,7 @@ func main() {
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 
-	handler := corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes()))))
+	handler := securityHeadersMiddleware(corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,

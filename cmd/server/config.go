@@ -93,6 +93,10 @@ type ServerConfig struct {
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
+	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
+	// every agent MUST present a valid install token to register/report. Set true
+	// only to permit token-less agents (not recommended).
+	AllowAnonymousAgents bool `json:"allow_anonymous_agents"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -166,6 +170,15 @@ func (cs *ConfigStore) RequireToken() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.RequireToken
+}
+
+// AgentTokenRequired reports whether agents must present a valid install token.
+// Enforced by default; only the explicit allow_anonymous_agents escape hatch
+// disables it.
+func (cs *ConfigStore) AgentTokenRequired() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return !cs.cfg.AllowAnonymousAgents
 }
 
 // TerminalEnabled reports whether the remote terminal feature is available
@@ -265,6 +278,11 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
 	c.Account = cs.cfg.Account           // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
+	// Operational security flags are managed via the config file, not the alert
+	// settings form — preserve them so a settings save can't silently flip them.
+	c.RequireToken = cs.cfg.RequireToken
+	c.TerminalDisabled = cs.cfg.TerminalDisabled
+	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()
