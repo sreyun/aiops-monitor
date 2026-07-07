@@ -115,6 +115,9 @@ func (pm *playbookManager) Delete(id string) error {
 }
 
 // ResolveTargets expands a target selector into a list of host IDs.
+// Supported prefixes: "all" = every host; "category:xxx" = hosts in category xxx;
+// "system:xxx" = hosts whose platform matches xxx (linux/windows/darwin);
+// "host:ID" = a single host by ID.
 func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host {
 	target = strings.TrimSpace(target)
 	var result []*Host
@@ -126,7 +129,15 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	case strings.HasPrefix(target, "category:"):
 		cat := target[len("category:"):]
 		for _, h := range hosts {
-			if h.Category == cat {
+			if h.Category == cat || (h.Category == "" && cat == "未分类") {
+				result = append(result, h)
+			}
+		}
+	case strings.HasPrefix(target, "system:"):
+		sys := strings.ToLower(target[len("system:"):])
+		for _, h := range hosts {
+			if strings.ToLower(h.Platform) == sys ||
+				(sys == "macos" && strings.ToLower(h.Platform) == "darwin") {
 				result = append(result, h)
 			}
 		}

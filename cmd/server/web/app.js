@@ -2442,15 +2442,20 @@ function filterAlertsByType(type) {
 let LAST_ALERTS = [];
 
 /* ===================== 自动化运维：剧本编排 + 批量执行 ===================== */
-let PB_HOSTS = []; // cached host list for target selection
+let PB_HOSTS = []; // cached full host list for target selection
+let PB_CATS = []; // cached unique categories
+let PB_SYSTEMS = []; // cached unique platform types
 
 async function loadPlaybooks() {
   try {
     const [pbs, hosts] = await Promise.all([
       fetch(`${API}/playbooks`).then(r => r.json()),
-      fetch(`${API}/hosts/meta`).then(r => r.json())
+      fetch(`${API}/hosts`).then(r => r.json())
     ]);
     PB_HOSTS = hosts || [];
+    // Extract unique categories and platforms for target dropdown
+    PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || "未分类"))].sort();
+    PB_SYSTEMS = [...new Set(PB_HOSTS.map(h => (h.platform || "").toLowerCase()).filter(p => p))].sort();
     renderPlaybooks(pbs || []);
   } catch (e) { console.warn("load playbooks:", e); }
 }
@@ -2496,15 +2501,13 @@ function openPlaybookModal(pb) {
 function renderPbSteps(steps) {
   const c = $("pbSteps");
   c.innerHTML = steps.map((s, i) => {
-    const tgtOpts = [
-      `<option value="all" ${s.target==="all"?"selected":""}>全部主机</option>`,
-      ...PB_HOSTS.map(h => `<option value="host:${h.id}" ${s.target==="host:"+h.id?"selected":""}>${esc(h.hostname)}</option>`),
-    ].join("");
+    const tgtOpts = buildTargetOptions(s.target);
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
         <div class="field"><label>步骤名称</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="如 检查磁盘空间"></div>
-        <div class="field"><label>目标主机</label><div class="select-wrap"><select class="pb-step-target">${tgtOpts}</select></div></div>
+        <div class="field"><label>目标主机</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
       </div>
+      <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
       <div class="field"><label>命令</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder="如 df -h" style="font-family:monospace"></div>
       <div class="grid2">
         <div class="field"><label>超时（秒）</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
@@ -2516,6 +2519,65 @@ function renderPbSteps(steps) {
   c.querySelectorAll(".pb-step-del").forEach(btn => {
     btn.onclick = () => { btn.closest(".pb-step").remove(); };
   });
+  // Initialize previews
+  c.querySelectorAll(".pb-step-target").forEach(sel => pbTargetPreview(sel));
+}
+
+// Build <option> list for target select: all / by category / by system / per host
+function buildTargetOptions(selectedTarget) {
+  const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>全部主机</option>`];
+  // By category
+  if (PB_CATS.length > 0) {
+    opts.push('<optgroup label="按分类">');
+    PB_CATS.forEach(cat => {
+      const val = `category:${cat}`;
+      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(cat)}</option>`);
+    });
+    opts.push('</optgroup>');
+  }
+  // By system type
+  if (PB_SYSTEMS.length > 0) {
+    opts.push('<optgroup label="按系统类型">');
+    PB_SYSTEMS.forEach(sys => {
+      const val = `system:${sys}`;
+      const label = sys === "linux" ? "Linux" : sys === "windows" ? "Windows" : sys === "darwin" || sys === "macos" ? "macOS" : esc(sys);
+      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${label}</option>`);
+    });
+    opts.push('</optgroup>');
+  }
+  // Per host
+  if (PB_HOSTS.length > 0) {
+    opts.push('<optgroup label="指定主机">');
+    PB_HOSTS.forEach(h => {
+      const val = `host:${h.id}`;
+      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(h.hostname)}</option>`);
+    });
+    opts.push('</optgroup>');
+  }
+  return opts.join("");
+}
+
+// Preview matched host count when target changes
+function pbTargetPreview(sel) {
+  const step = sel.closest(".pb-step");
+  if (!step) return;
+  const preview = step.querySelector(".pb-target-preview");
+  if (!preview) return;
+  const target = sel.value;
+  let count = 0;
+  if (target === "all" || target === "") {
+    count = PB_HOSTS.length;
+  } else if (target.startsWith("category:")) {
+    const cat = target.slice("category:".length);
+    count = PB_HOSTS.filter(h => (h.category || "未分类") === cat).length;
+  } else if (target.startsWith("system:")) {
+    const sys = target.slice("system:".length);
+    count = PB_HOSTS.filter(h => (h.platform || "").toLowerCase() === sys).length;
+  } else if (target.startsWith("host:")) {
+    count = 1;
+  }
+  preview.textContent = count > 0 ? `已匹配 ${count} 台主机` : "无匹配主机";
+  preview.style.color = count > 0 ? "var(--ok, #31c46b)" : "var(--crit, #ff5b6e)";
 }
 
 function collectPlaybook() {

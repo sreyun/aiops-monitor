@@ -28,6 +28,10 @@ func sendEmail(cfg SMTPConfig, to, subject, htmlBody string) error {
 	if !cfg.Enabled || cfg.Host == "" || cfg.Username == "" {
 		return fmt.Errorf("邮件服务未配置或未启用")
 	}
+	// Reject CR/LF in header-bound fields to prevent SMTP header injection.
+	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") || strings.ContainsAny(cfg.FromName, "\r\n") {
+		return fmt.Errorf("非法的收件人 / 主题 / 发件人名称")
+	}
 	if cfg.Port == 0 {
 		cfg.Port = 465
 	}
@@ -101,11 +105,11 @@ func base64Str(s string) string {
 // -----------------------------------------------------------------------
 
 type emailCode struct {
-	code      string
-	expires   time.Time
-	consumed  bool
-	purpose   string // "mfa_unbind" | "reset_password" | "recover_username"
-	email     string
+	code     string
+	expires  time.Time
+	purpose  string // "mfa_unbind" | "reset_password" | "recover_username"
+	email    string
+	attempts int // wrong-guess counter; the code is voided after too many tries
 }
 
 type passwordResetToken struct {
@@ -199,19 +203,27 @@ func (em *emailManager) verifyCode(email, purpose, code string) bool {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 	entry, ok := em.codes[email]
-	if !ok || entry.consumed || entry.purpose != purpose {
+	if !ok || entry.purpose != purpose {
 		return false
 	}
 	if time.Now().After(entry.expires) {
 		delete(em.codes, email)
 		return false
 	}
-	if !constantTimeEq(entry.code, code) {
+	// Brute-force guard: a 6-digit code is only 1e6 possibilities, so without a
+	// hard attempt cap it could be enumerated within the 10-min TTL (the reset /
+	// MFA-unbind endpoints are reachable without a session). Void the code after 5
+	// wrong tries — the user must request a new one, which is itself 60s-limited.
+	if entry.attempts >= 5 {
+		delete(em.codes, email)
 		return false
 	}
-	entry.consumed = true
-	em.codes[email] = entry
-	delete(em.codes, email) // single-use: remove immediately
+	if !constantTimeEq(entry.code, code) {
+		entry.attempts++
+		em.codes[email] = entry
+		return false
+	}
+	delete(em.codes, email) // correct: single-use, consume immediately
 	return true
 }
 
