@@ -433,6 +433,43 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 
 ---
 
+## 跨网络部署与远程终端
+
+Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--server`。若被监控主机与服务端**不在同一内网**（走外网/域名接入），必须让 Agent 用**公网可达的域名或 IP**——否则内网 IP 只能内网连通，远程终端也就只在内网可用（这正是"终端只有局域网能连"的根因）。
+
+**安装时指定外网地址**：面板「安装 Agent」弹窗新增「**服务端地址（可选 · 跨外网 / 域名接入时填写）**」。填入 `https://monitor.example.com`（或公网 `http://IP:端口`），一键命令即用该地址下载脚本、并把 Agent 的 `--server` 固化为它（服务端对该参数做严格白名单校验，防脚本注入）。留空＝按当前访问地址自动推导。
+
+**反向代理（nginx / Caddy 等）**：远程终端走 WebSocket + 长连接流式中转，反代必须放行 WebSocket 升级并**关闭缓冲**，否则终端连不上或无输出。nginx 示例：
+
+```nginx
+location /api/v1/hosts/ {            # 浏览器 WebSocket
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;
+}
+location /api/v1/agent/terminal/ {   # Agent 反向流（必须关闭缓冲）
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+location / {                         # 其余 API / 面板
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+}
+```
+
+> 若直接以公网 `IP:端口` 暴露服务端（无反代），Agent 用该地址即可，无需上述配置。升级已装 Agent：在被控端重新执行一次带新地址的安装命令即可覆盖。
+
+---
+
 ## 已实现 vs. 演进路线
 
 **已实现（均已实测）**

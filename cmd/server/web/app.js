@@ -1227,15 +1227,21 @@ async function openInstall() {
   try {
     INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
     $("installToken").value = INSTALL.token || "";
+    const srv = $("installServer");
+    if (srv) srv.placeholder = "留空＝当前地址 " + (INSTALL.server_url || location.origin) + " ；跨网络填 http(s)://域名或公网IP:端口";
     renderInstallCmd();
     $("installMask").classList.add("show");
   } catch (e) { toast("读取安装信息失败: " + e, "err"); }
 }
 function renderInstallCmd() {
-  const server = INSTALL.server_url || location.origin;
+  const auto = INSTALL.server_url || location.origin;
+  const custom = (($("installServer") || {}).value || "").trim().replace(/\/+$/, "");
+  const server = custom || auto; // 命令里下载脚本的主机
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
-  const q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  // 填了完整 http(s) 地址时，把它显式传给脚本 → Agent 的 --server 固化为该外网地址（跨网络终端可用）
+  if (/^https?:\/\//i.test(custom)) q += "&server=" + encodeURIComponent(custom);
   let cmd, label, hint;
   if (CUR_OS === "windows") {
     cmd = `irm "${server}/install.ps1?${q}" | iex`;
@@ -1691,6 +1697,7 @@ safeAddEventListener("installCmd", "click", function() {
   sel.addRange(range);
 });
 safeAddEventListener("installCategory", "input", renderInstallCmd);
+safeAddEventListener("installServer", "input", renderInstallCmd);
 safeAddEventListener("osTabs", "click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
   CUR_OS = t.dataset.os;

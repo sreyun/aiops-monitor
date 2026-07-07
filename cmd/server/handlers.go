@@ -498,14 +498,45 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// token (from the authenticated /install/info), so legitimate installs carry it.
 	token := r.URL.Query().Get("token")
 	category := r.URL.Query().Get("category")
+	// Explicit ?server= override lets operators bake an external domain / public
+	// address into the agent's --server (so agents reach the server — and the
+	// reverse terminal channel — across networks, not only over the LAN IP that
+	// Host-header detection would pick). Strictly validated to avoid script
+	// injection; falls back to the auto-detected URL.
+	serverBase := serverURL(r)
+	if ov := sanitizeServerURL(r.URL.Query().Get("server")); ov != "" {
+		serverBase = ov
+	}
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(installPs1Template, serverURL(r), token, category)
+		body = renderScript(installPs1Template, serverBase, token, category)
 	} else {
-		body = renderScript(installShTemplate, serverURL(r), token, category)
+		body = renderScript(installShTemplate, serverBase, token, category)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)
+}
+
+// sanitizeServerURL validates an operator-supplied base URL for the install
+// command. It must be http(s):// and contain only safe URL characters, so it can
+// be injected into the shell / PowerShell install script without risk. Returns
+// "" (→ use auto-detected) when invalid.
+func sanitizeServerURL(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" || len(u) > 256 {
+		return ""
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return ""
+	}
+	for _, c := range u {
+		ok := c == '.' || c == '-' || c == ':' || c == '/' || c == '_' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !ok {
+			return ""
+		}
+	}
+	return strings.TrimRight(u, "/")
 }
 
 // handleUninstallScript serves the platform uninstall script (uninstall.sh /
