@@ -154,6 +154,19 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 			sent = append(sent, "钉钉")
 		}
 	}
+	// Email alert notification — sent to the operator's bound email if SMTP is configured
+	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
+		acc := n.cfg.Account()
+		if acc.Email != "" {
+			html := alertEmailHTML(a, firing)
+			if err := sendEmail(cfg.SMTP, acc.Email, "AIOps 告警："+a.Hostname, html); err != nil {
+				log.Printf("邮件推送失败: %v", err)
+				n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "邮件推送失败：" + err.Error()})
+			} else {
+				sent = append(sent, "邮件")
+			}
+		}
+	}
 	if len(sent) > 0 {
 		n.store.AddLog(LogEntry{Kind: "系统", Level: "info", Actor: "通知", Host: a.Hostname, Message: "已推送 " + strings.Join(sent, "/") + "：" + a.Message})
 	}
@@ -199,10 +212,65 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 			errs = append(errs, "钉钉: "+err.Error())
 		}
 	}
-	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled {
+	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
+		acc := n.cfg.Account()
+		if acc.Email != "" {
+			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>测试消息：邮件告警通道连通正常 ✅</p><p>时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
+			if err := sendEmail(cfg.SMTP, acc.Email, "AIOps 测试邮件", html); err != nil {
+				errs = append(errs, "邮件: "+err.Error())
+			}
+		} else {
+			errs = append(errs, "邮件: 账户未绑定邮箱")
+		}
+	}
+	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled {
 		errs = append(errs, "未启用任何告警通道")
 	}
 	return errs
+}
+
+// alertEmailHTML renders an alert notification as an HTML email body.
+func alertEmailHTML(a Alert, firing bool) string {
+	status := "🔴 告警触发"
+	headColor := "#e74c3c"
+	lvlColor := "#f39c12"
+	if a.Level == "critical" {
+		lvlColor = "#e74c3c"
+	}
+	if !firing {
+		status = "✅ 告警恢复"
+		headColor = "#27ae60"
+		lvlColor = "#27ae60"
+	}
+	lv := "警告"
+	if a.Level == "critical" {
+		lv = "严重"
+	}
+	typeMap := map[string]string{
+		"cpu": "CPU", "memory": "内存", "disk": "磁盘", "offline": "主机失联",
+		"load": "系统负载", "gpu": "GPU", "check": "自定义监控",
+	}
+	typeLabel := typeMap[a.Type]
+	if typeLabel == "" {
+		typeLabel = a.Type
+	}
+	ipLine := ""
+	if a.IP != "" {
+		ipLine = `<tr><td style="color:#888;padding:4px 0">IP</td><td style="padding:4px 0">` + a.IP + `</td></tr>`
+	}
+	return fmt.Sprintf(`<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+  <h2 style="color:%s">%s</h2>
+  <table style="width:100%%;border-collapse:collapse">
+    <tr><td style="color:#888;padding:4px 0;width:80px">主机</td><td style="padding:4px 0;font-weight:bold">%s</td></tr>
+    %s
+    <tr><td style="color:#888;padding:4px 0">级别</td><td style="padding:4px 0;color:%s">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">类型</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">详情</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">时间</td><td style="padding:4px 0">%s</td></tr>
+  </table>
+</div>`,
+		headColor, status, a.Hostname, ipLine, lvlColor, lv,
+		typeLabel, a.Message, time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
 }
 
 func (n *Notifier) sendFeishu(c WebhookConfig, text string) error {

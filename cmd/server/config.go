@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +15,19 @@ type WebhookConfig struct {
 	Enabled bool   `json:"enabled"`
 	Webhook string `json:"webhook"`
 	Secret  string `json:"secret,omitempty"` // DingTalk optional HMAC-SHA256 sign secret
+}
+
+// SMTPConfig holds the email (SMTP) notification channel. The password is
+// stored in plaintext on disk (like the DingTalk secret) but masked when
+// echoed to the browser via handleGetConfig.
+type SMTPConfig struct {
+	Enabled  bool   `json:"smtp_enabled"`
+	Host     string `json:"smtp_host"`     // e.g. smtp.gmail.com
+	Port     int    `json:"smtp_port"`     // 465 (implicit TLS) or 587 (STARTTLS)
+	Username string `json:"smtp_username"` // sender email account
+	Password string `json:"smtp_password,omitempty"`
+	FromName string `json:"smtp_from_name"` // display name, default "AIOps Monitor"
+	UseTLS   bool   `json:"smtp_use_tls"`  // true = implicit TLS (465), false = STARTTLS/plain
 }
 
 // ThresholdConfig is the JSON-friendly, operator-editable alert threshold set.
@@ -88,6 +102,7 @@ type ServerConfig struct {
 	AlertsEnabled bool              `json:"alerts_enabled"`
 	Feishu        WebhookConfig     `json:"feishu"`
 	Dingtalk      WebhookConfig     `json:"dingtalk"`
+	SMTP          SMTPConfig        `json:"smtp"`
 	Thresholds    ThresholdConfig   `json:"thresholds"`
 	Categories    map[string]string `json:"categories"`
 	InstallToken  string            `json:"install_token"`
@@ -114,6 +129,9 @@ func defaultServerConfig() ServerConfig {
 		AlertsEnabled: true,
 		Thresholds:    defaultThresholdConfig(),
 		Categories:    map[string]string{},
+		SMTP: SMTPConfig{
+			FromName: "AIOps Monitor",
+		},
 	}
 }
 
@@ -319,6 +337,14 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
 	c.Account = cs.cfg.Account           // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
+	// Preserve SMTP password when the incoming value is blank or masked (same
+	// strategy as webhook secrets — the browser may submit without re-typing it).
+	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
+		c.SMTP.Password = cs.cfg.SMTP.Password
+	}
+	if c.SMTP.FromName == "" {
+		c.SMTP.FromName = cs.cfg.SMTP.FromName
+	}
 	// Operational security flags are managed via the config file, not the alert
 	// settings form — preserve them so a settings save can't silently flip them.
 	c.RequireToken = cs.cfg.RequireToken

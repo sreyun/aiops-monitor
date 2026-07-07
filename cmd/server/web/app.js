@@ -1245,6 +1245,15 @@ async function openSettings() {
     $("dingEnabled").checked = !!(c.dingtalk && c.dingtalk.enabled);
     $("dingWebhook").value = (c.dingtalk && c.dingtalk.webhook) || "";
     $("dingSecret").value = (c.dingtalk && c.dingtalk.secret) || "";
+    // SMTP email config
+    const s = c.smtp || {};
+    $("smtpEnabled").checked = !!s.smtp_enabled;
+    $("smtpHost").value = s.smtp_host || "";
+    $("smtpPort").value = s.smtp_port || "";
+    $("smtpUsername").value = s.smtp_username || "";
+    $("smtpPassword").value = s.smtp_password || "";
+    $("smtpFromName").value = s.smtp_from_name || "";
+    $("smtpTLS").checked = !!s.smtp_use_tls;
     $("cpuWarn").value = t.cpu_warn; $("cpuCrit").value = t.cpu_crit;
     $("memWarn").value = t.mem_warn; $("memCrit").value = t.mem_crit;
     $("diskWarn").value = t.disk_warn; $("diskCrit").value = t.disk_crit;
@@ -1258,6 +1267,15 @@ function collectSettings() {
     alerts_enabled: $("alertsEnabled").checked,
     feishu: { enabled: $("feishuEnabled").checked, webhook: $("feishuWebhook").value.trim() },
     dingtalk: { enabled: $("dingEnabled").checked, webhook: $("dingWebhook").value.trim(), secret: $("dingSecret").value.trim() },
+    smtp: {
+      smtp_enabled: $("smtpEnabled").checked,
+      smtp_host: $("smtpHost").value.trim(),
+      smtp_port: parseInt($("smtpPort").value) || 0,
+      smtp_username: $("smtpUsername").value.trim(),
+      smtp_password: $("smtpPassword").value,
+      smtp_from_name: $("smtpFromName").value.trim(),
+      smtp_use_tls: $("smtpTLS").checked
+    },
     thresholds: {
       cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
       mem_warn: num("memWarn"), mem_crit: num("memCrit"),
@@ -1701,10 +1719,13 @@ function openMfaDisable() {
   const body = $("mfaBody");
   $("mfaTitle").textContent = "关闭两步验证";
   body.innerHTML = `
-    <div class="mfa-desc" style="margin-bottom:14px">关闭后，登录将不再需要动态口令。请输入当前登录密码确认。</div>
+    <div class="mfa-desc" style="margin-bottom:14px">关闭后，登录将不再需要动态口令。请选择验证方式：</div>
     <div class="field"><label>登录密码</label><input type="password" id="mfaPass" autocomplete="current-password"></div>
     <div class="login-err" id="mfaErr"></div>
-    <div class="mfa-foot"><button class="btn danger" id="mfaConfirmOff" type="button">确认关闭</button></div>`;
+    <div class="mfa-foot">
+      <button class="btn danger" id="mfaConfirmOff" type="button">用密码关闭</button>
+      <button class="btn" id="mfaEmailUnbind" type="button">通过邮箱解除</button>
+    </div>`;
   $("mfaMask").classList.add("show");
   $("mfaConfirmOff").onclick = async () => {
     const errEl = $("mfaErr"); errEl.textContent = "";
@@ -1713,7 +1734,129 @@ function openMfaDisable() {
     if (r.ok) { toast("两步验证已关闭", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
     else errEl.textContent = j.error || "关闭失败";
   };
+  $("mfaEmailUnbind").onclick = () => openMfaEmailUnbind();
   setTimeout(() => { const el = $("mfaPass"); if (el) el.focus(); }, 60);
+}
+
+/* ---------- 通过邮箱验证码解除 MFA ---------- */
+function openMfaEmailUnbind() {
+  const body = $("mfaBody");
+  $("mfaTitle").textContent = "通过邮箱解除 MFA";
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">系统将向已绑定邮箱发送 6 位验证码，验证通过后关闭两步验证。</div>
+    <div class="login-err" id="mfaErr"></div>
+    <div class="mfa-foot">
+      <button class="btn primary" id="mfaSendCode" type="button">发送验证码</button>
+      <span style="flex:1"></span>
+    </div>
+    <div class="field" id="mfaCodeRow" style="display:none">
+      <label>邮箱验证码</label>
+      <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+    </div>
+    <div class="mfa-foot" id="mfaVerifyRow" style="display:none">
+      <button class="btn danger" id="mfaConfirmEmailUnbind" type="button">确认解除</button>
+    </div>`;
+  $("mfaMask").classList.add("show");
+  $("mfaSendCode").onclick = async () => {
+    const errEl = $("mfaErr"); errEl.textContent = "";
+    const r = await fetch(`${API}/mfa/unbind-via-email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_code" }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      toast("验证码已发送", "ok");
+      $("mfaSendCode").textContent = "重新发送";
+      $("mfaSendCode").disabled = true;
+      setTimeout(() => { const b = $("mfaSendCode"); if (b) { b.disabled = false; } }, 60000);
+      $("mfaCodeRow").style.display = "";
+      $("mfaVerifyRow").style.display = "";
+      setTimeout(() => { const el = $("mfaEmailCode"); if (el) el.focus(); }, 60);
+    } else {
+      errEl.textContent = j.error || "发送失败";
+    }
+  };
+  $("mfaConfirmEmailUnbind").onclick = async () => {
+    const errEl = $("mfaErr"); errEl.textContent = "";
+    const code = $("mfaEmailCode").value.trim();
+    if (code.length !== 6) { errEl.textContent = "请输入 6 位验证码"; return; }
+    const r = await fetch(`${API}/mfa/unbind-via-email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "verify", code }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { toast("两步验证已通过邮箱解除", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
+    else errEl.textContent = j.error || "解除失败";
+  };
+}
+
+/* ---------- 账户找回：用户名 / 密码 ---------- */
+function openRecoverUser() {
+  const body = $("recoverBody");
+  $("recoverTitle").textContent = "找回用户名";
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">输入已绑定的邮箱地址，系统将向该邮箱发送用户名。</div>
+    <div class="field"><label>邮箱地址</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
+    <div class="login-err" id="rcErr"></div>
+    <div class="mfa-foot"><button class="btn primary" id="rcSubmit" type="button">发送</button></div>`;
+  $("recoverMask").classList.add("show");
+  $("rcSubmit").onclick = async () => {
+    const errEl = $("rcErr"); errEl.textContent = "";
+    const email = $("rcEmail").value.trim();
+    if (!email) { errEl.textContent = "请输入邮箱"; return; }
+    try {
+      const r = await fetch(`${API}/account/recover-username`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) { toast(j.message || "如该邮箱已绑定，用户名已发送", "ok"); $("recoverMask").classList.remove("show"); }
+      else errEl.textContent = j.error || "发送失败";
+    } catch (e) { errEl.textContent = "发送失败: " + e; }
+  };
+  setTimeout(() => { const el = $("rcEmail"); if (el) el.focus(); }, 60);
+}
+
+function openRecoverPass() {
+  const body = $("recoverBody");
+  $("recoverTitle").textContent = "重置密码";
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">输入用户名，系统将向绑定邮箱发送验证码。</div>
+    <div class="field"><label>用户名</label><input type="text" id="rcUser" placeholder="登录账号"></div>
+    <div class="login-err" id="rcErr"></div>
+    <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">发送验证码</button></div>
+    <div class="field" id="rcCodeRow" style="display:none"><label>邮箱验证码</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code"></div>
+    <div class="field" id="rcNewPassRow" style="display:none"><label>新密码（至少 4 位）</label><input type="password" id="rcNewPass" placeholder="新密码"></div>
+    <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">重置密码</button></div>`;
+  $("recoverMask").classList.add("show");
+  let rcEmail = ""; // stored from server response (not returned for security)
+  $("rcSendCode").onclick = async () => {
+    const errEl = $("rcErr"); errEl.textContent = "";
+    const username = $("rcUser").value.trim();
+    if (!username) { errEl.textContent = "请输入用户名"; return; }
+    try {
+      const r = await fetch(`${API}/account/send-reset-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        toast(j.message || "如用户名存在且绑定邮箱，验证码已发送", "ok");
+        $("rcSendCode").textContent = "重新发送";
+        $("rcSendCode").disabled = true;
+        setTimeout(() => { const b = $("rcSendCode"); if (b) b.disabled = false; }, 60000);
+        $("rcCodeRow").style.display = "";
+        $("rcNewPassRow").style.display = "";
+        $("rcResetRow").style.display = "";
+        setTimeout(() => { const el = $("rcCode"); if (el) el.focus(); }, 60);
+      } else {
+        errEl.textContent = j.error || "发送失败";
+      }
+    } catch (e) { errEl.textContent = "发送失败: " + e; }
+  };
+  $("rcReset").onclick = async () => {
+    const errEl = $("rcErr"); errEl.textContent = "";
+    const username = $("rcUser").value.trim();
+    const code = $("rcCode").value.trim();
+    const newPass = $("rcNewPass").value;
+    if (code.length !== 6) { errEl.textContent = "请输入 6 位验证码"; return; }
+    if (newPass.length < 4) { errEl.textContent = "新密码至少 4 位"; return; }
+    try {
+      const r = await fetch(`${API}/account/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, email: "", code, new_password: newPass }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) { toast(j.message || "密码已重置", "ok"); $("recoverMask").classList.remove("show"); }
+      else errEl.textContent = j.error || "重置失败";
+    } catch (e) { errEl.textContent = "重置失败: " + e; }
+  };
+  setTimeout(() => { const el = $("rcUser"); if (el) el.focus(); }, 60);
 }
 
 /* ===== 零依赖 QR 生成器（byte 模式 · 纠错级 M · 版本 1–10 · canvas 绘制） =====
@@ -2198,6 +2341,10 @@ safeAddEventListener("pfSaveBtn", "click", saveProfile);
 safeAddEventListener("pfPwdBtn", "click", changePassword);
 safeAddEventListener("mfaToggleBtn", "click", () => { MFA_ENABLED ? openMfaDisable() : openMfaSetup(); });
 safeAddEventListener("logoutBtn", "click", logout);
+// 登录页找回入口
+safeAddEventListener("forgotUserLink", "click", openRecoverUser);
+safeAddEventListener("forgotPassLink", "click", openRecoverPass);
+
 // 登录
 safeAddEventListener("loginForm", "submit", async e => {
   e.preventDefault();
