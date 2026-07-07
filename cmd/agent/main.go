@@ -30,7 +30,7 @@ func defaultConfig() config {
 	}
 	return config{
 		Server:         "http://localhost:8080",
-		ReportInterval: 5,
+		ReportInterval: 10,
 		PluginInterval: 15,
 		DiskPath:       defaultDiskPath(),
 		PluginsDir:     "plugins",

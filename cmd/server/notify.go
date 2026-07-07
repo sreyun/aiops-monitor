@@ -168,8 +168,20 @@ func formatAlert(a Alert, firing bool) string {
 	if a.Level == "critical" {
 		lv = "严重"
 	}
-	return fmt.Sprintf("【AIOps Monitor】%s\n主机: %s\n级别: %s\n类型: %s\n详情: %s\n时间: %s",
-		status, a.Hostname, lv, a.Type, a.Message, time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
+	typeMap := map[string]string{
+		"cpu": "CPU", "memory": "内存", "disk": "磁盘", "offline": "主机失联",
+		"load": "系统负载", "gpu": "GPU", "check": "自定义监控",
+	}
+	typeLabel := typeMap[a.Type]
+	if typeLabel == "" {
+		typeLabel = a.Type
+	}
+	ipLine := ""
+	if a.IP != "" {
+		ipLine = fmt.Sprintf("\nIP: %s", a.IP)
+	}
+	return fmt.Sprintf("【AIOps Monitor】%s\n主机: %s%s\n级别: %s\n类型: %s\n详情: %s\n时间: %s",
+		status, a.Hostname, ipLine, lv, typeLabel, a.Message, time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
 }
 
 // SendTest pushes a one-off test message on the enabled channels of the given

@@ -30,7 +30,7 @@ function copyWithFeedback(btn, text, okMsg) {
     () => toast("复制失败，请手动选择复制", "err")
   );
 }
-let CUR_CAT = "";     // 当前分类筛选
+let CUR_CATS = [];    // 当前分类多选筛选（空数组=全部）
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LOG_LEVEL = "";   // 日志级别筛选
@@ -146,10 +146,13 @@ function renderAlerts(alerts) {
   const now = Math.floor(Date.now() / 1000);
   const row = a => {
     const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
+    const ipStr = a.ip ? `<span class="alert-ip mono">${esc(a.ip)}</span>` : "";
+    const timeStr = a.timestamp ? `<span class="alert-time mono">${fmtDateTime(a.timestamp)}</span>` : "";
     return `<div class="row-item ${esc(a.level)}">
-    <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : "警告"}</span>
-    <strong>${esc(a.hostname)}</strong><span class="msg">${esc(a.message)}</span>
-    ${dur ? `<span class="src" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>` : ""}</div>`;
+    <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : a.level === "info" ? "恢复" : "警告"}</span>
+    <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
+    ${dur ? `<span class="src" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>` : ""}
+    ${timeStr}</div>`;
   };
   const empty = `<div class="empty-line">✅ 暂无告警，一切正常</div>`;
   $("alerts").innerHTML = n ? alerts.map(row).join("") : empty;
@@ -366,9 +369,8 @@ function hostCard(h) {
         <div style="min-width:0">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
-            <div class="hi-row"><span class="hi-k">IP 地址</span><span class="hi-v mono">${h.ip ? esc(h.ip) : "—"}</span></div>
-            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}">${esc(h.platform || "—")}${h.arch ? " · " + esc(h.arch) : ""}</span></div>
-            <div class="hi-row"><span class="hi-k">内核版本</span><span class="hi-v mono" title="${esc(h.kernel || "")}">${h.kernel ? esc(h.kernel) : "—"}</span></div>
+            <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v"><span class="hi-hostname">${esc(h.hostname || h.id)}</span>${h.ip ? ` <span class="mono" style="color:var(--muted)">${esc(h.ip)}</span>` : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}">${esc(h.platform || "—")}${h.arch ? " · " + esc(h.arch) : ""}${h.kernel ? " · " + esc(h.kernel) : ""}</span></div>
           </div>
         </div>
       </div>
@@ -436,24 +438,20 @@ function hostRow(h) {
 
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
-  // 进程监控下拉所需的主机元数据直接从主机列表派生，省掉一条 /hosts/meta 轮询请求
   HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
   if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
   $("hostsCount").textContent = hosts.length;
   $("navHosts").textContent = hosts.length;
 
-  // 刷新分类下拉（保留当前选择）
+  // Refresh multi-select category dropdown (preserve current selection)
   const cats = [...new Set(hosts.map(h => h.category || "未分类"))].sort();
-  const sel = $("catFilter"), cur = sel.value;
-  sel.innerHTML = `<option value="">全部分类</option>` + cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  sel.value = cats.includes(cur) ? cur : "";
-  CUR_CAT = sel.value;
+  renderCatDropdown(cats);
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
   
-  // 过滤：分类 + 在线状态 + 搜索
+  // Filter: multi-category + online status + search
   let shown = hosts.filter(h => {
-    if (CUR_CAT && (h.category || "未分类") !== CUR_CAT) return false;
+    if (CUR_CATS.length > 0 && !CUR_CATS.includes(h.category || "未分类")) return false;
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
     if (HOST_SEARCH) {
@@ -463,7 +461,7 @@ function renderHosts(hosts) {
     return true;
   });
   
-  // 排序
+  // Sort
   if (HOST_SORT === "cpu") {
     shown.sort((a, b) => (b.latest?.cpu_percent || 0) - (a.latest?.cpu_percent || 0));
   } else if (HOST_SORT === "mem") {
@@ -478,7 +476,7 @@ function renderHosts(hosts) {
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
   empty.style.display = "none";
 
-  // 分页（列表视图一页容纳更多）
+  // Pagination by host count
   const isList = HOST_VIEW === "list";
   const pageSize = isList ? 20 : HOST_PAGE_SIZE;
   const total = shown.length, pages = Math.ceil(total / pageSize);
@@ -486,17 +484,22 @@ function renderHosts(hosts) {
   if (HOST_PAGE < 1) HOST_PAGE = 1;
   const pageHosts = shown.slice((HOST_PAGE - 1) * pageSize, HOST_PAGE * pageSize);
 
-  // 当前页按分类分组
+  // Group by category on current page
   const byCat = {};
   pageHosts.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
-  groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => `
-    <div class="group">
-      <div class="group-head"><span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
-        <span class="count-pill">${byCat[cat].length}</span><span class="line"></span></div>
-      <div class="${wrapCls}">${byCat[cat].map(render).join("")}</div>
-    </div>`).join("");
+  groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => {
+    const collapsed = catCollapsed(cat);
+    return `<div class="group">
+      <div class="group-head${collapsed ? " collapsed" : ""}" data-cat="${esc(cat)}">
+        <span class="cat-toggle">${collapsed ? "▶" : "▼"}</span>
+        <span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
+        <span class="count-pill">${byCat[cat].length}</span><span class="line"></span>
+      </div>
+      <div class="${wrapCls}${collapsed ? " group-collapsed" : ""}">${byCat[cat].map(render).join("")}</div>
+    </div>`;
+  }).join("");
   renderPager(pages, total);
 }
 
@@ -1490,7 +1493,13 @@ function openCheckModal(check) {
   $("ckId").value = check ? check.id : "";
   $("ckName").value = check ? check.name : "";
   $("ckType").value = check ? check.type : "http";
-  $("ckTarget").value = check ? check.target : "";
+  // For process type, extract process name only (not "hostID/procName")
+  if (check && check.type === "process") {
+    const idx = check.target.indexOf("/");
+    $("ckTarget").value = idx > 0 ? check.target.slice(idx + 1) : check.target;
+  } else {
+    $("ckTarget").value = check ? check.target : "";
+  }
   $("ckInterval").value = check ? check.interval_sec : 30;
   $("ckLevel").value = check ? check.level : "critical";
   $("ckEnabled").checked = check ? check.enabled : true;
@@ -1606,7 +1615,22 @@ async function refresh(force) {
       fetch(`${API}/alerts`).then(r => r.json()),
       fetch(`${API}/activity`).then(r => r.json())
     ]);
-    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(hosts);
+    // Filter hosts by category for overview
+    const filteredHosts = CUR_CATS.length > 0
+      ? hosts.filter(h => CUR_CATS.includes(h.category || "未分类"))
+      : hosts;
+    // Compute overview stats from filtered hosts
+    if (CUR_CATS.length > 0) {
+      let online = 0;
+      filteredHosts.forEach(h => { if (h.online) online++; });
+      const filteredAlerts = alerts.filter(a => !a.host_id || filteredHosts.some(h => h.id === a.host_id));
+      s.total_hosts = filteredHosts.length;
+      s.online_hosts = online;
+      s.offline_hosts = filteredHosts.length - online;
+      s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
+      s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
+    }
+    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(filteredHosts);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
   } catch (e) {
@@ -1617,8 +1641,16 @@ async function refresh(force) {
 
 /* ---------- 事件绑定（委托） ---------- */
 const groupsEl = $("groups");
+// Group collapse toggle
 if (groupsEl) {
   groupsEl.addEventListener("click", e => {
+    const head = e.target.closest(".group-head");
+    if (head && (e.target.closest(".cat-toggle") || e.target === head)) {
+      const cat = head.dataset.cat;
+      toggleCatCollapse(cat);
+      renderHosts(LAST_HOSTS);
+      return;
+    }
     const host = e.target.closest(".host"); if (!host) return;
     const act = e.target.closest("[data-act]"); if (!act) return;
     const { id, name, cat } = host.dataset;
@@ -1629,12 +1661,87 @@ if (groupsEl) {
   });
 }
 
-const catFilterEl = $("catFilter");
-if (catFilterEl) {
-  catFilterEl.addEventListener("change", e => { CUR_CAT = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+/* ---------- Multi-select category dropdown ---------- */
+function getSelectedCats() {
+  try { const s = localStorage.getItem("aiops_cats"); if (s) return JSON.parse(s); } catch (e) {}
+  return [];
+}
+function setSelectedCats(arr) {
+  CUR_CATS = arr;
+  try { localStorage.setItem("aiops_cats", JSON.stringify(arr)); } catch (e) {}
+}
+function catCollapsed(cat) {
+  try { const s = localStorage.getItem("aiops_collapsed"); if (s) { const arr = JSON.parse(s); return arr.includes(cat); } } catch (e) {}
+  return false;
+}
+function toggleCatCollapse(cat) {
+  let arr = [];
+  try { const s = localStorage.getItem("aiops_collapsed"); if (s) arr = JSON.parse(s); } catch (e) {}
+  const i = arr.indexOf(cat);
+  if (i >= 0) arr.splice(i, 1); else arr.push(cat);
+  try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
+}
+function renderCatDropdown(cats) {
+  const wrap = document.querySelector("#catFilter").parentElement;
+  if (wrap.querySelector(".cat-dropdown")) {
+    // Update options in existing dropdown
+    updateCatDropdownOptions(cats);
+    return;
+  }
+  // Remove native select
+  const oldSel = $("catFilter");
+  if (oldSel) oldSel.remove();
+  wrap.innerHTML = `<div class="cat-dropdown" id="catDropdownWrap">
+    <button class="cat-dd-btn" id="catDropdownBtn"><span id="catDropdownLabel">全部分类</span> <span class="dd-arrow">▾</span></button>
+    <div class="cat-dd-menu" id="catDropdownMenu"></div>
+  </div>`;
+  updateCatDropdownOptions(cats);
+  // Toggle menu
+  $("catDropdownBtn").addEventListener("click", e => {
+    e.stopPropagation();
+    $("catDropdownMenu").classList.toggle("show");
+  });
+  document.addEventListener("click", e => {
+    const menu = $("catDropdownMenu");
+    if (menu && !e.target.closest(".cat-dropdown")) menu.classList.remove("show");
+  });
+}
+function updateCatDropdownOptions(cats) {
+  const menu = $("catDropdownMenu");
+  if (!menu) return;
+  // Clean stale selections
+  CUR_CATS = CUR_CATS.filter(c => cats.includes(c));
+  menu.innerHTML = `<label class="cat-dd-opt"><input type="checkbox" value="" ${CUR_CATS.length === 0 ? "checked" : ""}> 全部分类</label>` +
+    cats.map(c => `<label class="cat-dd-opt"><input type="checkbox" value="${esc(c)}" ${CUR_CATS.includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("");
+  menu.querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("change", () => {
+      if (inp.value === "") {
+        // "All" toggled
+        if (inp.checked) {
+          menu.querySelectorAll("input").forEach(x => { if (x !== inp) x.checked = false; });
+          setSelectedCats([]);
+        }
+      } else {
+        menu.querySelector('input[value=""]').checked = false;
+        const selected = [...menu.querySelectorAll('input:checked')].map(x => x.value).filter(v => v !== "");
+        setSelectedCats(selected);
+      }
+      HOST_PAGE = 1;
+      updateCatDropdownLabel();
+      renderHosts(LAST_HOSTS);
+    });
+  });
+  updateCatDropdownLabel();
+}
+function updateCatDropdownLabel() {
+  const label = $("catDropdownLabel");
+  if (!label) return;
+  if (CUR_CATS.length === 0) label.textContent = "全部分类";
+  else if (CUR_CATS.length <= 2) label.textContent = CUR_CATS.join(", ");
+  else label.textContent = CUR_CATS.length + " 个分类";
 }
 
-// 主机筛选和排序
+/* ---------- Host filters ---------- */
 function filterHosts(value) {
   HOST_FILTER = value;
   HOST_PAGE = 1;
@@ -1913,4 +2020,5 @@ function initPrefs() {
 }
 
 initPrefs();
+CUR_CATS = getSelectedCats();
 initAuth();

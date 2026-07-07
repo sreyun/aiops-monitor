@@ -190,7 +190,6 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 
 /* ---------- 双栏（告警 / 活动） ---------- */
 .cols{display:grid; grid-template-columns:1fr 1fr; gap:16px}
-@media(max-width:1000px){.cols{grid-template-columns:1fr}}
 .section-title{
   font-size:13px; color:var(--txt); letter-spacing:.01em;
   margin:0 0 12px; font-weight:600; display:flex; align-items:center; gap:9px;
@@ -229,11 +228,12 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .group-head .cat{font-size:13px; font-weight:650}
 .group-head .line{flex:1; height:1px; background:var(--line)}
 
-.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px}
+.grid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px}
 .host{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
   padding:18px; transition:border-color var(--transition-fast), background var(--transition-fast);
   position:relative; cursor:default; display:flex; flex-direction:column;
+  min-height:280px;
 }
 .host:hover{ border-color:var(--line2); background:var(--panel2) }
 .host-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:14px}
@@ -476,15 +476,44 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 概览：资源 TOP ---------- */
 .top-grid{display:flex; flex-direction:column; gap:12px; margin-top:16px}
 .top-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px}
-.top-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px}
-.tp-title{font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.02em; margin-bottom:8px}
-.top-item{display:flex; align-items:center; gap:10px; padding:5px 6px; border-radius:6px;
-  cursor:pointer; transition:background var(--transition-fast)}
-.top-item:hover{background:var(--panel2)}
-.ti-name{width:92px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--txt2)}
-.ti-bar{flex:1; height:6px; background:var(--panel3); border-radius:3px; overflow:hidden}
-.ti-fill{height:100%; border-radius:3px; transition:width var(--transition)}
-.ti-val{width:52px; flex:none; text-align:right; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums}
+/* ---------- Group collapse ---------- */
+.group-head{cursor:pointer; user-select:none}
+.group-head .cat-toggle{font-size:10px; color:var(--muted); flex:none; width:14px; text-align:center; transition:transform var(--transition-fast)}
+.group-head.collapsed .cat-toggle{transform:none}
+.group-collapsed{display:none}
+
+/* ---------- Multi-select category dropdown ---------- */
+.cat-dropdown{position:relative; min-width:130px}
+.cat-dd-btn{
+  font-family:inherit; font-size:13px; color:var(--txt2); background:var(--panel2);
+  border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 28px 8px 12px;
+  cursor:pointer; transition:border-color var(--transition-fast); display:flex; align-items:center; gap:6px;
+  width:100%; text-align:left; position:relative;
+}
+.cat-dd-btn:hover{border-color:#39424f}
+.cat-dd-btn .dd-arrow{position:absolute; right:11px; color:var(--muted); font-size:10px}
+.cat-dd-menu{
+  display:none; position:absolute; top:100%; left:0; right:0; z-index:50;
+  background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm);
+  box-shadow:var(--shadow-lg); margin-top:4px; max-height:260px; overflow:auto;
+  padding:4px 0;
+}
+.cat-dd-menu.show{display:block}
+.cat-dd-opt{
+  display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:pointer;
+  font-size:13px; color:var(--txt2); transition:background var(--transition-fast);
+}
+.cat-dd-opt:hover{background:var(--panel2)}
+.cat-dd-opt input{width:14px; height:14px; accent-color:var(--accent); cursor:pointer; flex:none}
+
+/* ---------- Alert IP/time styles ---------- */
+.alert-ip{font-size:11px; color:var(--muted); margin-left:4px; flex:none}
+.alert-time{font-size:11px; color:var(--muted2); flex:none; white-space:nowrap; margin-left:8px; font-variant-numeric:tabular-nums}
+
+/* ---------- TOP10 panel fixes ---------- */
+.top-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px; min-height:210px; overflow:hidden}
+.ti-bar{flex:1; height:6px; background:var(--panel3); border-radius:3px; overflow:hidden; min-width:40px}
+.ti-val{width:60px; flex:none; text-align:right; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap}
 
 /* ---------- 空态引导 ---------- */
 .onboard{background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-lg); padding:20px 22px; margin-bottom:18px}
@@ -512,6 +541,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .host-info .hi-row{display:flex; align-items:baseline; gap:8px; font-size:11px; line-height:1.5}
 .host-info .hi-k{color:var(--muted2); flex:none; width:52px}
 .host-info .hi-v{color:var(--txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums}
+.host-info .hi-hostname{font-weight:600; color:var(--txt)}
 .metric.gpu .row .label{color:var(--accent2-txt)}
 
 /* ---------- 趋势图交互 ---------- */
@@ -613,13 +643,18 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 表面细节：极细顶部高光（"上方光源"质感，克制非炫光） ---------- */
 .card, .top-panel, .check-card, .host:not(.hrow){ box-shadow:inset 0 1px 0 rgba(255,255,255,.04) }
 
+.tp-title{font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.02em; margin-bottom:8px}
+.top-item{display:flex; align-items:center; gap:10px; padding:5px 6px; border-radius:6px;
+  cursor:pointer; transition:background var(--transition-fast)}
+.top-item:hover{background:var(--panel2)}
+.ti-name{width:92px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--txt2)}
+.ti-fill{height:100%; border-radius:3px; transition:width var(--transition)}
+
 /* ---------- 响应式 ---------- */
 .backdrop{display:none}
 
 @media(max-width:1200px){
   .grid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
-  /* 中屏 6 张 KPI 固定 3 列（3+3），避免出现 5+1 的孤卡 */
-  .cards{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 @media(max-width:900px){
   .app{grid-template-columns:1fr}
@@ -630,6 +665,10 @@ svg.sparkline{width:100%; height:46px; display:block}
   .content{padding:18px 16px 40px}
   .topbar{padding:11px 16px}
   .search{width:200px; max-width:40vw}
+}
+@media(max-width:1000px){.cols{grid-template-columns:1fr}}
+@media(max-width:700px){
+  .grid{grid-template-columns:1fr}
 }
 @media(max-width:600px){
   .cards{grid-template-columns:1fr 1fr; gap:10px}

@@ -30,8 +30,9 @@ func DefaultThresholds() Thresholds {
 type Alert struct {
 	HostID    string  `json:"host_id"`
 	Hostname  string  `json:"hostname"`
+	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | offline | check
+	Type      string  `json:"type"`            // cpu | memory | disk | offline | check | load | gpu
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -61,9 +62,10 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			alerts = append(alerts, Alert{
 				HostID:    h.ID,
 				Hostname:  h.Hostname,
+				IP:        h.IP,
 				Level:     "critical",
 				Type:      "offline",
-				Message:   fmt.Sprintf("主机 %s 已失联 %d 秒", h.Hostname, now-h.LastSeen),
+				Message:   fmt.Sprintf("主机 %s（%s）已失联 %d 秒", h.Hostname, h.IP, now-h.LastSeen),
 				Value:     float64(now - h.LastSeen),
 				Timestamp: now,
 			})
@@ -75,14 +77,14 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 		m := h.Latest
 		if lv := classify(m.CPUPercent, t.CPUWarn, t.CPUCrit); lv != "" {
 			alerts = append(alerts, Alert{
-				HostID: h.ID, Hostname: h.Hostname, Level: lv, Type: "cpu",
+				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "cpu",
 				Message:   fmt.Sprintf("CPU 使用率 %.1f%%（空闲 %.1f%%）", m.CPUPercent, 100-m.CPUPercent),
 				Value:     m.CPUPercent, Timestamp: now,
 			})
 		}
 		if lv := classify(m.MemPercent, t.MemWarn, t.MemCrit); lv != "" {
 			alerts = append(alerts, Alert{
-				HostID: h.ID, Hostname: h.Hostname, Level: lv, Type: "memory",
+				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "memory",
 				Message:   fmt.Sprintf("内存使用率 %.1f%%（剩余 %s）", m.MemPercent, fmtBytes(m.MemTotal-m.MemUsed)),
 				Value:     m.MemPercent, Timestamp: now,
 			})
@@ -91,7 +93,7 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			for _, d := range m.Disks {
 				if lv := classify(d.Percent, t.DiskWarn, t.DiskCrit); lv != "" {
 					alerts = append(alerts, Alert{
-						HostID: h.ID, Hostname: h.Hostname, Level: lv, Type: "disk", Scope: d.Path,
+						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "disk", Scope: d.Path,
 						Message:   fmt.Sprintf("磁盘 %s 使用率 %.1f%%（剩余 %s）", d.Path, d.Percent, fmtBytes(d.Total-d.Used)),
 						Value:     d.Percent, Timestamp: now,
 					})
@@ -99,10 +101,40 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			}
 		} else if lv := classify(m.DiskPercent, t.DiskWarn, t.DiskCrit); lv != "" {
 			alerts = append(alerts, Alert{
-				HostID: h.ID, Hostname: h.Hostname, Level: lv, Type: "disk",
+				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "disk",
 				Message:   fmt.Sprintf("磁盘使用率 %.1f%%（剩余 %s）", m.DiskPercent, fmtBytes(m.DiskTotal-m.DiskUsed)),
 				Value:     m.DiskPercent, Timestamp: now,
 			})
+		}
+		// System load alert (5-min load exceeding core count × 2)
+		if m.CPUCores > 0 {
+			loadMax := float64(m.CPUCores) * 2.0
+			if m.Load5 >= loadMax {
+				lv := "warning"
+				if m.Load5 >= loadMax*1.5 {
+					lv = "critical"
+				}
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "load",
+					Message:   fmt.Sprintf("系统负载过高 5min=%.2f（%d 核，阈值 %.2f）", m.Load5, m.CPUCores, loadMax),
+					Value:     m.Load5, Timestamp: now,
+				})
+			}
+		}
+		// GPU alert (>80% warning, >90% critical)
+		for _, g := range m.GPUs {
+			util := g.UtilPercent
+			if lv := classify(util, 80, 90); lv != "" {
+				tempStr := ""
+				if g.Temp > 0 {
+					tempStr = fmt.Sprintf(" · 温度 %d°C", int(g.Temp))
+				}
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "gpu", Scope: g.Name,
+					Message:   fmt.Sprintf("GPU %s 使用率 %.1f%%%s", g.Name, util, tempStr),
+					Value:     util, Timestamp: now,
+				})
+			}
 		}
 	}
 

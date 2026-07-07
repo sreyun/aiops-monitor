@@ -31,12 +31,13 @@ Agent 与服务端共享 `shared/` 中的类型定义，采集端与服务端的
 | **自定义拨测** | HTTP 网站（状态码 / 延时 / **TLS 证书剩余天数**）、TCP 端口、**Ping 主机存活（丢包率 / RTT）**、进程存活；**列表 / 胶囊双视图**，每项支持**历史曲线回看** |
 | **Python 插件层** | 子进程 + JSON 契约、并发执行、超时隔离、崩溃跳过；可自定义采集 / 服务探活 / AI 异常检测 |
 | **实时 Web 面板** | 概览卡片 + 资源 TOP10（CPU/内存/磁盘/GPU）+ 主机列表（分类分组/搜索/筛选/分页）+ 阈值告警 + 操作日志（可选分页 10/30/50/100）+ 标准/宽屏切换 |
-| **阈值告警** | CPU / 内存 / 磁盘越限 + 主机失联检测，支持自定义阈值，面板可视化配置 |
-| **告警推送** | 飞书 / 钉钉机器人 Webhook，仅在触发/恢复时各推一次，不刷屏 |
+| **阈值告警** | CPU / 内存 / 磁盘越限 + 主机失联 + **GPU 过载** + **系统负载过高** 检测，支持自定义阈值，面板可视化配置 |
+| **告警推送** | 飞书 / 钉钉机器人 Webhook，仅在触发/恢复时各推一次，不刷屏；推送内容含**主机名 / IP / 详细异常 / 时间** |
 | **持久化** | 内嵌轻量库（gzip+JSON 落盘 `aiops.db`）—— 历史 / 日志 / 会话重启不丢，无需外部数据库 |
-| **远程终端** | 主机卡片一键打开浏览器**全 TTY 终端**；**Agent 反向连接，免在被控端开放 22/入站端口**；Windows ConPTY、Linux/macOS openpty；服务端中转 + 登录/Token 双鉴权 + 审计 + 可一键全局禁用 |
-| **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
 | **远程终端** | 主机卡片一键打开浏览器终端，经 Agent **反向连接**（免在被控端开放 22/入站端口）；完整交互式 TTY（Windows ConPTY、Linux/macOS openpty），支持颜色 / vim·top / 窗口放大·还原·关闭；登录 + Token 双鉴权 + 审计 |
+| **分类多选筛选** | 右上角分类下拉支持**多选**，可同时选择多个分类查看；概览页 KPI 卡片、资源 TOP10、告警等**自动联动**筛选 |
+| **分类折叠** | 主机列表按分类分组，每组支持**点击收起/展开**，快速聚焦关注分组 |
+| **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
 | **安全与性能** | **强制 Agent Token 接入**（默认，常数时间比较）+ 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 安全响应头 + 请求体大小限制 + 密钥脱敏 + 主机身份防克隆；**gzip 响应压缩**大幅降低多主机轮询带宽 |
 | **共享类型** | `shared/wire.go` 被 server 与 agent 同时 import，契约统一不会漂移 |
 
@@ -191,7 +192,7 @@ curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sh
 |---|---|---|
 | `--server` | 服务端地址 | `http://localhost:8080` |
 | `--category` | 主机分类（面板按此分组） | 空 |
-| `--interval` | 基础指标上报间隔（秒） | `5` |
+| `--interval` | 基础指标上报间隔（秒） | `10` |
 | `--plugin-interval` | 插件执行周期（秒） | `15` |
 | `--plugins-dir` | 插件目录（可用绝对路径） | `plugins` |
 | `--python` | 运行 `.py` 插件的解释器 | `python3`（Win 为 `python`） |
@@ -303,7 +304,21 @@ p.emit()                                   # 输出 JSON
 3. 点 **发送测试** 确认通道连通
 4. 点 **保存** —— 保存后会立即把当前未恢复的告警补推一次
 
-默认阈值：CPU/内存 80% 警告、90% 严重；磁盘 85%/95%；失联 30s 判离线。所有阈值可在面板中调整。
+默认阈值：CPU/内存 80% 警告、90% 严重；磁盘 85%/95%；失联 30s 判离线；GPU 80%/90%；系统负载（5分钟均值 ≥ 核数×2）警告。所有阈值可在面板中调整。
+
+告警类型覆盖范围：
+| 告警类型 | 触发条件 | 级别 |
+|---|---|---|
+| CPU 使用率 | 超过设定阈值 | 警告 / 严重 |
+| 内存使用率 | 超过设定阈值 | 警告 / 严重 |
+| 磁盘使用率 | 超过设定阈值（支持多分区） | 警告 / 严重 |
+| 主机失联 | 超过设定失联时长未上报 | 严重 |
+| GPU 使用率 | ≥ 80% 警告，≥ 90% 严重 | 警告 / 严重 |
+| 系统负载 | 5min 负载 ≥ 核数×2 | 警告 / 严重 |
+| HTTP 拨测 | 状态码 ≥ 400、超时、请求失败 | 自定义 |
+| TCP 拨测 | 无法建立连接 | 自定义 |
+| Ping 拨测 | 100% 丢包（不可达） | 自定义 |
+| 进程存活 | 目标进程未在主机上运行 | 自定义 |
 
 > - 飞书自定义机器人关键词请设为 `AIOps` 或 `告警`
 > - 钉钉建议用"加签"安全设置，把 Secret 填进面板即可自动签名
@@ -359,6 +374,62 @@ p.emit()                                   # 输出 JSON
 | GET | `/` | Web 面板 |
 | GET | `/healthz` | 健康检查（服务端内置自监控也用它） |
 | GET | `/dl/*` | Agent 二进制下载 |
+
+---
+
+## 服务端配置参数
+
+服务端配置文件 `server_config.json`（与服务端同目录自动生成）支持以下参数：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `alerts_enabled` | bool | `true` | 是否启用告警推送 |
+| `feishu.enabled` | bool | `false` | 飞书推送开关 |
+| `feishu.webhook` | string | `""` | 飞书机器人 Webhook 地址 |
+| `dingtalk.enabled` | bool | `false` | 钉钉推送开关 |
+| `dingtalk.webhook` | string | `""` | 钉钉机器人 Webhook 地址 |
+| `dingtalk.secret` | string | `""` | 钉钉加签 Secret |
+| `thresholds.cpu_warn` | float | `80` | CPU 警告阈值（%） |
+| `thresholds.cpu_crit` | float | `90` | CPU 严重阈值（%） |
+| `thresholds.mem_warn` | float | `80` | 内存警告阈值（%） |
+| `thresholds.mem_crit` | float | `90` | 内存严重阈值（%） |
+| `thresholds.disk_warn` | float | `85` | 磁盘警告阈值（%） |
+| `thresholds.disk_crit` | float | `95` | 磁盘严重阈值（%） |
+| `thresholds.offline_after_sec` | int | `30` | 主机失联判定秒数 |
+| `require_token` | bool | `false` | 是否强制 Agent Token |
+| `allow_anonymous_agents` | bool | `false` | 允许无 Token Agent 接入 |
+| `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
+| `install_token` | string | 自动生成 | Agent 安装 Token |
+
+---
+
+## 常见问题
+
+### Agent 上报失败
+- 检查 `--server` 地址是否正确，确保服务端已启动
+- 检查防火墙/安全组是否放行了服务端端口
+- 查看 Agent 日志中的错误信息（`上报失败: ...`）
+
+### 远程终端连不上
+- **Nginx 反代时**：必须配置 WebSocket 升级头和关闭缓冲（见上方“反向代理”章节）
+- **跨网络时**：安装 Agent 时务必填写公网可达的服务端地址
+- 确认服务端未设置 `terminal_disabled: true`
+
+### 面板显示连接失败
+- 检查服务端是否正常运行：`curl http://localhost:8080/healthz`
+- 检查浏览器控制台是否有 CORS 或认证错误
+- 尝试清除浏览器缓存或强制刷新（Ctrl+Shift+R）
+
+### 主机显示离线
+- 默认 30 秒未上报即判离线，可在告警设置中调整 `offline_after_sec`
+- 检查 Agent 进程是否存活：`ps aux | grep aiops-agent`
+- 检查 Agent 到服务端的网络连通性
+
+### GPU 信息不显示
+- NVIDIA GPU 需要安装 `nvidia-smi` 工具
+- AMD GPU（Linux）需要 sysfs 权限
+- macOS 仅支持 Apple Silicon 的 GPU 监控
+- GPU 信息为 best-effort，无对应工具时不显示，不影响其他指标
 
 ---
 
