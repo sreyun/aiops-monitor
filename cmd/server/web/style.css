@@ -21,6 +21,10 @@
   --crit:#ef4d5a; --crit-soft:rgba(239,77,90,.12);
   --info:#3fb5ef; --info-soft:rgba(63,181,239,.12);
 
+  /* 语义文本色：在对应 soft/深底上可读的浅变体，统一各处散乱硬编码，保证同类色一致 */
+  --accent-txt:#9bc0ff; --accent2-txt:#c1b2ff;
+  --ok-txt:#7fe0a0; --warn-txt:#f2c078; --crit-txt:#ff9ba2; --info-txt:#9bd8f6;
+
   /* 阴影（克制、层次分明，避免大面积重投影） */
   --shadow-sm:0 1px 2px rgba(0,0,0,.35);
   --shadow:0 4px 14px rgba(0,0,0,.30);
@@ -118,7 +122,7 @@ body{
 .btn.primary:active{ background:#3f79e6 }
 
 .btn.danger{ background:var(--crit-soft); border-color:rgba(239,77,90,.35); color:#ff9ba2; font-weight:600 }
-.btn.danger:hover{ background:rgba(239,77,90,.2); border-color:var(--crit); color:#ffb0b4 }
+.btn.danger:hover{ background:rgba(239,77,90,.2); border-color:var(--crit); color:var(--crit-txt) }
 
 .btn.ghost{ background:transparent; border-color:transparent; color:var(--muted); font-size:15px; padding:6px 9px }
 .btn.ghost:hover{ background:var(--panel2); color:var(--txt); border-color:transparent }
@@ -243,14 +247,14 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .host-name .meta{font-size:11px; color:var(--muted2); margin-top:2px}
 .host-tags{display:flex; align-items:center; gap:6px; flex:none}
 .os-badge{font-size:10px; padding:2px 7px; border-radius:5px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em}
-.cat-badge{font-size:10px; padding:2px 8px; border-radius:5px; background:var(--accent-soft); color:#93bcff;
+.cat-badge{font-size:10px; padding:2px 8px; border-radius:5px; background:var(--accent-soft); color:var(--accent-txt);
   font-weight:600; cursor:pointer; border:1px solid transparent}
 .cat-badge:hover{border-color:rgba(76,141,255,.4)}
 .x-btn{width:24px; height:24px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center;
   padding:0; flex:none; opacity:0; transition:opacity var(--transition-fast), background var(--transition-fast); font-size:12px}
 .host:hover .x-btn{opacity:1}
-.x-btn:hover{background:var(--crit-soft); color:#ffb0b4; border-color:rgba(239,77,90,.4)}
+.x-btn:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:rgba(239,77,90,.4)}
 
 /* 指标：扁平行（标签 + 数值 + 细进度条），去掉逐条描边盒子的视觉噪音 */
 .metric{ margin:11px 0 }
@@ -269,7 +273,7 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px}
 .chip{font-size:11px; padding:3px 9px; border-radius:6px; background:var(--panel2); color:var(--txt2); border:1px solid var(--line)}
 .chip b{color:#9bd8f6; font-weight:700}
-.chip.crit b{color:#ffb0b4}
+.chip.crit b{color:var(--crit-txt)}
 .chip.crit{border-color:rgba(239,77,90,.28)}
 .chip-label{font-size:10px; color:var(--muted2); width:100%; margin-top:2px}
 
@@ -354,9 +358,9 @@ svg.sparkline{width:100%; height:46px; display:block}
   font-family:inherit; font-size:12.5px; padding:6px 13px; border-radius:var(--r-sm); cursor:pointer;
   transition:color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast)}
 .chip-btn:hover{color:var(--txt); border-color:#39424f}
-.chip-btn.active{background:var(--accent-soft); color:#bcd6ff; border-color:rgba(76,141,255,.35)}
+.chip-btn.active{background:var(--accent-soft); color:var(--accent-txt); border-color:rgba(76,141,255,.35)}
 .kind{font-size:11px; font-weight:600; padding:2px 8px; border-radius:5px; flex:none}
-.kind.op{background:var(--accent2-soft); color:#b8adff}
+.kind.op{background:var(--accent2-soft); color:var(--accent2-txt)}
 .kind.sys{background:var(--info-soft); color:#9bd8f6}
 .kind.plg{background:var(--ok-soft); color:#7fe0a0}
 
@@ -406,6 +410,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 .check-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px;
   transition:border-color var(--transition-fast), background var(--transition-fast)}
 .check-card:hover{border-color:var(--line2); background:var(--panel2)}
+/* 状态色左强调条（一眼扫描健康），叠加顶部高光；悬停只变边框/底色，强调条保持 */
+.check-card.st-up{box-shadow:inset 3px 0 0 var(--ok), inset 0 1px 0 rgba(255,255,255,.04)}
+.check-card.st-down{box-shadow:inset 3px 0 0 var(--crit), inset 0 1px 0 rgba(255,255,255,.04)}
+.check-card.st-unknown{box-shadow:inset 3px 0 0 var(--line2), inset 0 1px 0 rgba(255,255,255,.04)}
+.check-card.st-down{background:linear-gradient(90deg,var(--crit-soft),transparent 60%)}
 .check-card .ch-head{display:flex; align-items:center; gap:9px; margin-bottom:8px}
 .check-card .ch-name{font-weight:650; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .check-card .ch-actions{margin-left:auto; display:flex; gap:6px; flex:none}
@@ -416,12 +425,14 @@ svg.sparkline{width:100%; height:46px; display:block}
 .check-card .ch-target{font-size:12px; color:var(--muted); font-family:ui-monospace,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .check-card .ch-meta{font-size:11px; color:var(--muted2); margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center}
 .type-badge{font-size:10px; font-weight:600; padding:2px 7px; border-radius:5px; background:var(--panel3); color:var(--muted); flex:none; letter-spacing:.02em}
+/* 类型微着色，便于快速区分探测类型 */
+.type-badge.t-http{color:var(--accent-txt)} .type-badge.t-tcp{color:var(--accent2-txt)} .type-badge.t-ping{color:var(--info-txt)} .type-badge.t-process{color:var(--ok-txt)}
 .mini-btn{width:26px; height:26px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; font-size:12px;
   transition:background var(--transition-fast), color var(--transition-fast)}
 .mini-btn:hover{background:var(--panel3); color:var(--txt)}
 .mini-btn svg{width:14px; height:14px}
-.mini-btn.del:hover{background:var(--crit-soft); color:#ffb0b4; border-color:rgba(239,77,90,.4)}
+.mini-btn.del:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:rgba(239,77,90,.4)}
 
 /* 监控：视图切换按钮 */
 .view-toggle{display:inline-flex; background:var(--panel2); border:1px solid var(--line2); border-radius:var(--r-sm); padding:2px; gap:2px}
@@ -429,7 +440,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   display:flex; align-items:center; justify-content:center; transition:color var(--transition-fast), background var(--transition-fast)}
 .vt-btn svg{width:16px; height:16px}
 .vt-btn:hover{color:var(--txt)}
-.vt-btn.active{background:var(--accent-soft); color:#bcd6ff}
+.vt-btn.active{background:var(--accent-soft); color:var(--accent-txt)}
 
 /* 监控：列表视图（默认） */
 .checks-list{display:flex; flex-direction:column; gap:10px}
@@ -451,11 +462,16 @@ svg.sparkline{width:100%; height:46px; display:block}
 .check-err{font-size:11.5px; color:#ff9ba2; margin-top:10px; background:var(--crit-soft);
   border:1px solid rgba(239,77,90,.22); border-radius:var(--r-sm); padding:7px 10px}
 
-/* 监控：胶囊视图 */
-.checks-list.pill{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; align-items:start}
-.checks-list.pill .check-row-top{flex-wrap:wrap}
-.checks-list.pill .check-row-top .ch-target{flex-basis:100%; order:5}
-.checks-list.pill .check-detail{gap:8px 14px}
+/* 监控：卡片视图（默认） */
+.checks-list.pill{display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; align-items:start}
+.checks-list.pill .check-card{position:relative; padding:14px 16px 15px}
+.checks-list.pill .check-row-top{flex-wrap:nowrap; gap:8px}
+.checks-list.pill .check-row-top .ch-name{flex:1 1 auto; min-width:0; max-width:none}
+.checks-list.pill .check-row-top .st-pill{margin-left:auto}
+.checks-list.pill .ch-actions{position:absolute; right:12px; bottom:11px; gap:5px; padding:4px 6px; border-radius:8px;
+  background:var(--panel2); border:1px solid var(--line); box-shadow:var(--shadow); opacity:0; transition:opacity var(--transition-fast)}
+.checks-list.pill .check-card:hover .ch-actions{opacity:1}
+.checks-list.pill .check-detail{gap:9px 16px}
 
 /* ---------- 概览：资源 TOP ---------- */
 .top-grid{display:flex; flex-direction:column; gap:12px; margin-top:16px}
@@ -496,7 +512,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .host-info .hi-row{display:flex; align-items:baseline; gap:8px; font-size:11px; line-height:1.5}
 .host-info .hi-k{color:var(--muted2); flex:none; width:52px}
 .host-info .hi-v{color:var(--txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums}
-.metric.gpu .row .label{color:#a99cf5}
+.metric.gpu .row .label{color:var(--accent2-txt)}
 
 /* ---------- 趋势图交互 ---------- */
 .chart-controls{display:flex; gap:7px; margin-bottom:16px; padding:0 2px}
@@ -548,7 +564,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; flex:none;
   transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
 .term-btn svg{width:14px; height:14px}
-.term-btn:hover{background:var(--accent-soft); color:#bcd6ff; border-color:rgba(76,141,255,.4)}
+.term-btn:hover{background:var(--accent-soft); color:var(--accent-txt); border-color:rgba(76,141,255,.4)}
 /* 终端窗口控制条：放大/还原、关闭 */
 .term-ctls{display:flex; gap:5px; margin-left:8px}
 .term-ctl{width:30px; height:28px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2);
@@ -556,7 +572,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
 .term-ctl svg{width:15px; height:15px}
 .term-ctl:hover{background:var(--panel3); color:var(--txt); border-color:#39424f}
-.term-ctl.close:hover{background:var(--crit-soft); color:#ffb0b4; border-color:rgba(239,77,90,.4)}
+.term-ctl.close:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:rgba(239,77,90,.4)}
 /* 放大态：终端近全屏，头部/提示固定，屏幕区弹性填充 */
 #termMask.maximized{padding:14px; align-items:center}
 #termMask.maximized .term-modal{max-width:none; width:100%; height:calc(100vh - 28px); display:flex; flex-direction:column}

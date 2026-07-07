@@ -49,7 +49,7 @@ let APP_STARTED = false;
 let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
 let LOG_PAGE = 1;     // 日志分页当前页
 let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
-let CHECK_VIEW = "list"; // 自定义监控视图：list | pill
+let CHECK_VIEW = "pill"; // 自定义监控视图：pill(卡片,默认) | list(列表)
 let HOST_VIEW = "card";  // 主机视图：card | list
 let TERMINAL_ENABLED = true; // 服务端是否开启远程终端
 let TERM_WS = null;   // 当前终端 WebSocket
@@ -1324,7 +1324,7 @@ function renderChecks(checks) {
           <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
           <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
           <button class="mini-btn del" data-cact="del" title="删除">✕</button>`}</span>`;
-    const builtinTag = c.builtin ? `<span class="type-badge" style="background:#1a3a2a;color:#5efa9e">内置</span>` : "";
+    const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">内置</span>` : "";
 
     // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
     const stCls = st === "up" ? "ok" : st === "down" ? "crit" : "muted";
@@ -1369,11 +1369,11 @@ function renderChecks(checks) {
     detail.push(cdItem("检测周期", "每 " + c.interval_sec + "s", "muted"));
     detail.push(cdItem("最近检测", c.checked_at ? ago(c.checked_at) : "尚未检测", "muted"));
 
-    return `<div class="check-card" data-id="${esc(c.id)}"${builtin}>
+    return `<div class="check-card st-${st}" data-id="${esc(c.id)}"${builtin}>
       <div class="check-row-top">
         <span class="st-dot ${st}"></span>
         <span class="ch-name" title="${esc(c.name)}">${esc(c.name)}</span>
-        <span class="type-badge">${typeText}</span>
+        <span class="type-badge t-${esc(c.type)}">${typeText}</span>
         ${builtinTag}
         <span class="st-pill ${st}">${stText}</span>
         ${actions}
