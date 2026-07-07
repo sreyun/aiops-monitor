@@ -1215,8 +1215,12 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	}
 	sess := s.term.create(h.ID, h.Hostname, "playbook-exec")
 	defer s.term.remove(sess.id)
+	// Critical: close the session when done so the agent's shell exits and the
+	// agent returns to waiting for the next command. Without this the agent stays
+	// stuck on this session and every subsequent step/execution fails to connect.
+	defer sess.close()
 	if !s.term.notifyAgent(h.ID, sess.id) {
-		return "", fmt.Errorf("无法连接到主机 %s 的 Agent", h.Hostname)
+		return "", fmt.Errorf("无法连接到主机 %s 的 Agent（可能有其它终端/剧本正在占用，或 Agent 版本过旧）", h.Hostname)
 	}
 	select {
 	case <-sess.agentUp:

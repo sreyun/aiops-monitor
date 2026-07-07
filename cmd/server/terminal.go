@@ -45,11 +45,26 @@ func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
 func (s *termSession) close() {
 	s.doneOnce.Do(func() {
 		close(s.done)
-		// close all observers
+		s.recMu.Lock()
 		for obs := range s.observers {
 			close(obs.done)
 		}
+		s.recMu.Unlock()
 	})
+}
+
+// fanOut delivers a copy of output to all observers under recMu, so it can't race
+// with add/removeObserver (which also hold recMu). Best-effort: drops on a slow
+// observer rather than blocking the live session.
+func (s *termSession) fanOut(b []byte) {
+	s.recMu.Lock()
+	for obs := range s.observers {
+		select {
+		case obs.ch <- b:
+		default:
+		}
+	}
+	s.recMu.Unlock()
 }
 
 // termRecordFrame is one timestamped frame in the session recording.
@@ -83,6 +98,14 @@ type termManager struct {
 	mu       sync.Mutex
 	sessions map[string]*termSession
 	waiters  map[string]chan string // hostID -> a waiting agent poll
+	archived []termArchive          // recordings of recently-ended sessions (for replay)
+}
+
+// termArchive keeps an ended session's recording so it can still be replayed
+// after the live session has been removed.
+type termArchive struct {
+	info      termSessionInfo
+	recording []termRecordFrame
 }
 
 func newTermManager() *termManager {
@@ -126,9 +149,31 @@ func (m *termManager) get(id string) *termSession {
 	defer m.mu.Unlock()
 	return m.sessions[id]
 }
+// remove deletes a session, first archiving its recording so an ended interactive
+// session can still be replayed. Internal playbook-exec sessions are not archived.
 func (m *termManager) remove(id string) {
 	m.mu.Lock()
+	s, ok := m.sessions[id]
 	delete(m.sessions, id)
+	if ok && s.operator != "playbook-exec" {
+		s.recMu.Lock()
+		if len(s.recording) > 0 {
+			rec := make([]termRecordFrame, len(s.recording))
+			copy(rec, s.recording)
+			m.archived = append(m.archived, termArchive{
+				info: termSessionInfo{
+					ID: s.id, HostID: s.hostID, Hostname: s.hostname,
+					Operator: s.operator, CreatedAt: s.createdAt,
+					Active: false, Frames: len(rec),
+				},
+				recording: rec,
+			})
+			if len(m.archived) > 20 { // keep only the most recent sessions
+				m.archived = m.archived[len(m.archived)-20:]
+			}
+		}
+		s.recMu.Unlock()
+	}
 	m.mu.Unlock()
 }
 
@@ -266,13 +311,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			select {
 			case b := <-sess.toBrowser:
 				sess.recordFrame("output", b)
-				// fan out to observers
-				for obs := range sess.observers {
-					select {
-					case obs.ch <- b:
-					default: // drop if observer is slow
-					}
-				}
+				sess.fanOut(b) // deliver to observers under lock (avoids the map race → panic)
 				if err := ws.WriteBinary(b); err != nil {
 					return
 				}
@@ -396,8 +435,11 @@ type termSessionInfo struct {
 func (m *termManager) listSessions() []termSessionInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]termSessionInfo, 0, len(m.sessions))
+	out := make([]termSessionInfo, 0, len(m.sessions)+len(m.archived))
 	for _, s := range m.sessions {
+		if s.operator == "playbook-exec" {
+			continue // hide internal playbook sessions from the session list
+		}
 		s.recMu.Lock()
 		out = append(out, termSessionInfo{
 			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
@@ -407,22 +449,32 @@ func (m *termManager) listSessions() []termSessionInfo {
 		})
 		s.recMu.Unlock()
 	}
+	// Archived (ended) sessions, newest first.
+	for i := len(m.archived) - 1; i >= 0; i-- {
+		out = append(out, m.archived[i].info)
+	}
 	return out
 }
 
 // getRecording returns the recorded frames for a session (for replay).
 func (m *termManager) getRecording(sessionID string) []termRecordFrame {
 	m.mu.Lock()
-	s, ok := m.sessions[sessionID]
-	m.mu.Unlock()
-	if !ok {
-		return nil
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sessionID]; ok {
+		s.recMu.Lock()
+		out := make([]termRecordFrame, len(s.recording))
+		copy(out, s.recording)
+		s.recMu.Unlock()
+		return out
 	}
-	s.recMu.Lock()
-	defer s.recMu.Unlock()
-	out := make([]termRecordFrame, len(s.recording))
-	copy(out, s.recording)
-	return out
+	for _, a := range m.archived {
+		if a.info.ID == sessionID {
+			out := make([]termRecordFrame, len(a.recording))
+			copy(out, a.recording)
+			return out
+		}
+	}
+	return nil
 }
 
 // addObserver attaches a read-only observer to a session.
@@ -485,19 +537,11 @@ func (s *termSession) processCommandAudit(payload []byte) string {
 
 // getDecodedRecording returns the decoded output frames for replay/observe.
 func (m *termManager) getDecodedRecording(sessionID string) [][]byte {
-	m.mu.Lock()
-	s, ok := m.sessions[sessionID]
-	m.mu.Unlock()
-	if !ok {
-		return nil
-	}
-	s.recMu.Lock()
-	defer s.recMu.Unlock()
-	out := make([][]byte, 0, len(s.recording))
-	for _, f := range s.recording {
+	frames := m.getRecording(sessionID) // covers both live and archived sessions
+	out := make([][]byte, 0, len(frames))
+	for _, f := range frames {
 		if f.Type == "output" {
-			data, err := base64.StdEncoding.DecodeString(f.Data)
-			if err == nil {
+			if data, err := base64.StdEncoding.DecodeString(f.Data); err == nil {
 				out = append(out, data)
 			}
 		}
