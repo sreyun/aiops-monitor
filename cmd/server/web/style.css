@@ -746,13 +746,18 @@ svg.sparkline{width:100%; height:46px; display:block}
   .hrow-net, .hrow-load{display:none}
   .hrow-last{width:auto; flex:1}
   .hrow-actions{opacity:1; margin-left:auto}
-  /* 触摸优化：最小 44px */
+  /* 触摸优化：最小 40px */
   .btn, .hamburger, .chip-btn{min-height:40px; padding:10px 16px}
   .vt-btn{width:36px; height:36px}
   .mini-btn{width:32px; height:32px}
   .term-btn{width:32px; height:32px}
   /* 列表项触摸增大 */
-  .row-item{padding:14px 16px}
+  .row-item{padding:14px 16px; flex-wrap:wrap; row-gap:4px}
+  .row-item .msg{min-width:0; flex:1 1 100%; order:99}
+  .alert-ip{display:none}
+  .alert-time{font-size:10px; margin-left:auto}
+  .src{display:none}
+  .log-time{font-size:10px}
   .host{padding:14px}
   /* 终端手机端默认全屏 */
   #termMask{padding:0; align-items:stretch}
@@ -761,6 +766,17 @@ svg.sparkline{width:100%; height:46px; display:block}
   /* section-title 工具栏换行 */
   .section-title{row-gap:8px}
   .section-title .search{margin-left:0}
+  .section-title > div{flex-wrap:wrap; gap:6px}
+  /* TOP10 面板紧凑 */
+  .top-panel{min-height:auto; padding:10px 12px}
+  .top-row{grid-template-columns:1fr; gap:8px}
+  .ti-name{width:70px; font-size:11px}
+  .ti-val{width:48px; font-size:11px}
+  /* 日志筛选控件换行 */
+  .log-filter{gap:5px}
+  /* 空态引导 */
+  .ob-steps{grid-template-columns:1fr}
+  .onboard{padding:16px}
 }
 /* 安全区域适配（iPhone 刘海/底部横条） */
 @supports(padding:env(safe-area-inset-top)){
@@ -777,3 +793,20 @@ svg.sparkline{width:100%; height:46px; display:block}
   .ch-actions{opacity:1 !important}
   .chart-enlarge{opacity:1}
 }
+
+/* ===== 两步验证（TOTP / MFA） ===== */
+.mfa-row{display:flex; align-items:center; gap:14px; justify-content:space-between}
+.mfa-info{min-width:0}
+.mfa-state{font-size:13px; font-weight:600; padding:2px 10px; border-radius:999px; display:inline-block}
+.mfa-state.on{color:var(--ok-txt,#7fe0a0); background:rgba(80,200,120,.12)}
+.mfa-state.off{color:var(--warn-txt,#f2c078); background:rgba(240,180,90,.12)}
+.mfa-desc{font-size:12px; color:var(--muted,#8a93a3); margin-top:6px; line-height:1.5}
+.mfa-steps{margin:0 0 14px; padding-left:20px; font-size:13px; color:var(--txt,#c8d0dc); line-height:1.75}
+.mfa-steps b{color:var(--accent-txt,#9bc0ff)}
+.mfa-qr{display:flex; justify-content:center; margin:6px 0 14px; min-height:40px}
+.qr-canvas{border-radius:8px; box-shadow:0 0 0 6px #fff; background:#fff; image-rendering:pixelated}
+.mfa-secret{display:flex; align-items:center; gap:10px; justify-content:center; font-size:13px; color:var(--muted,#8a93a3); margin-bottom:14px; flex-wrap:wrap}
+.mfa-secret code{font-size:14px; letter-spacing:1px; color:var(--txt,#c8d0dc); background:rgba(255,255,255,.05); padding:4px 10px; border-radius:6px}
+.mfa-foot{display:flex; justify-content:flex-end; margin-top:12px}
+.btn.sm{padding:5px 12px; font-size:13px}
+.btn.ghost.sm{padding:3px 10px; font-size:12px}

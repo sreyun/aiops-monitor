@@ -417,12 +417,20 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="field"><label>用户名</label><input type="text" id="pfUsername" class="mono" readonly></div>
+      <div class="field"><label>用户名</label><input type="text" id="pfUsername" autocomplete="username" placeholder="登录账号"></div>
       <div class="field"><label>显示名称</label><input type="text" id="pfDisplay" placeholder="如 运维小王"></div>
       <div class="field"><label>邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
       <div class="subhead">修改密码</div>
       <div class="field"><label>原密码</label><input type="password" id="pfOld"></div>
       <div class="field"><label>新密码（至少 4 位）</label><input type="password" id="pfNew"></div>
+      <div class="subhead">两步验证（Google Authenticator）</div>
+      <div class="mfa-row">
+        <div class="mfa-info">
+          <span id="mfaState" class="mfa-state">加载中…</span>
+          <div class="mfa-desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
+        </div>
+        <button class="btn" type="button" id="mfaToggleBtn">—</button>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn danger" id="logoutBtn">退出登录</button>
@@ -430,6 +438,17 @@
       <button class="btn" id="pfPwdBtn">修改密码</button>
       <button class="btn primary" id="pfSaveBtn">保存资料</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== 两步验证设置弹窗 ===== -->
+<div class="mask" id="mfaMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="mfaTitle">启用两步验证</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="mfaBody"></div>
   </div>
 </div>
 
@@ -477,11 +496,12 @@
       <div class="logo">AI</div>
       <div><h1>AIOps Monitor</h1><div class="sub">主机监控运维平台</div></div>
     </div>
-    <div class="field"><label>用户名</label><input type="text" id="loginUser" autocomplete="username" value="admin"></div>
-    <div class="field"><label>密码</label><input type="password" id="loginPass" autocomplete="current-password"></div>
+    <div class="field"><label>用户名</label><input type="text" id="loginUser" autocomplete="username" placeholder="管理员账号"></div>
+    <div class="field"><label>密码</label><input type="password" id="loginPass" autocomplete="current-password" placeholder="登录密码"></div>
+    <div class="field" id="loginCodeField" style="display:none"><label>动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Authenticator 6 位口令"></div>
     <div class="login-err" id="loginErr"></div>
     <button class="btn primary block" type="submit">登 录</button>
-    <div class="hint">默认账号 admin / admin，登录后请在左下角「个人信息」修改密码。</div>
+    <div class="hint" id="loginHint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。</div>
   </form>
 </div>
 

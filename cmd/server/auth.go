@@ -91,19 +91,14 @@ func newSessionToken() string {
 	return hex.EncodeToString(b)
 }
 
-// Login verifies credentials and returns a fresh session token.
-func (a *Auth) Login(user, pass string) (string, bool) {
+// CheckPassword reports whether user+pass match the configured account
+// (constant-time on both fields). It does NOT issue a session — a second factor
+// (TOTP) may still be required; the caller issues the session via issueSession.
+func (a *Auth) CheckPassword(user, pass string) bool {
 	acc := a.cfg.Account()
-	if user != acc.Username ||
-		subtle.ConstantTimeCompare([]byte(hashPassword(pass, acc.Salt)), []byte(acc.Hash)) != 1 {
-		return "", false
-	}
-	tok := newSessionToken()
-	a.mu.Lock()
-	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL)}
-	a.dirty = true
-	a.mu.Unlock()
-	return tok, true
+	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(acc.Username)) == 1
+	passOK := subtle.ConstantTimeCompare([]byte(hashPassword(pass, acc.Salt)), []byte(acc.Hash)) == 1
+	return userOK && passOK
 }
 
 func (a *Auth) validate(tok string) bool {
@@ -230,6 +225,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Code     string `json:"code"` // TOTP second factor (only when MFA is enabled)
 	}
 	ip := s.clientIP(r)
 	if !s.auth.loginAllowed(ip) {
@@ -240,19 +236,35 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	tok, ok := s.auth.Login(req.Username, req.Password)
-	if !ok {
+	if !s.auth.CheckPassword(req.Username, req.Password) {
 		s.auth.loginFailed(ip)
 		s.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: ip, Message: "登录失败：" + req.Username})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
 		return
 	}
+	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
+	// The requirement is revealed only AFTER the password checks out, so an
+	// unauthenticated prober can't learn whether the account has MFA enabled.
+	acc := s.cfg.Account()
+	if acc.MFAEnabled {
+		if strings.TrimSpace(req.Code) == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true})
+			return
+		}
+		if !totpVerify(acc.MFASecret, req.Code) {
+			s.auth.loginFailed(ip)
+			s.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: ip, Message: "动态验证码错误：" + req.Username})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "动态验证码错误"})
+			return
+		}
+	}
+	tok := s.auth.issueSession(acc.Username)
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "登录成功：" + req.Username})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: ip, Message: "登录成功：" + req.Username})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -274,11 +286,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	a := s.cfg.Account()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username": a.Username, "display_name": a.DisplayName, "email": a.Email,
+		"mfa_enabled": a.MFAEnabled,
 	})
 }
 
 func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Username    string `json:"username"`
 		DisplayName string `json:"display_name"`
 		Email       string `json:"email"`
 	}
@@ -286,9 +300,19 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
+	// Username is optional in the payload; when present it must be valid. Changing
+	// it doesn't disturb the active session (sessions key off the token, not name).
+	if strings.TrimSpace(req.Username) != "" {
+		uname := sanitizeUsername(req.Username)
+		if uname == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名仅限字母/数字/-_.，长度 2–32 位"})
+			return
+		}
+		_ = s.cfg.SetUsername(uname)
+	}
 	_ = s.cfg.SetProfile(strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email))
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "更新个人信息"})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": s.cfg.Account().Username})
 }
 
 func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
@@ -320,5 +344,62 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改登录密码"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- MFA (TOTP two-factor) ----
+
+// handleMFASetup issues a fresh TOTP secret + provisioning URL for enrollment. It
+// does NOT enable MFA — the client must prove one valid code via handleMFAEnable,
+// so a mis-scanned secret can never lock the operator out.
+func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
+	secret := genTOTPSecret()
+	if secret == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成密钥失败"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"secret":      secret,
+		"otpauth_url": otpauthURL(s.cfg.Account().Username, secret),
+	})
+}
+
+// handleMFAEnable turns MFA on after verifying the user can produce a current code
+// for the freshly-issued secret (proves the authenticator app is set up).
+func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Secret string `json:"secret"`
+		Code   string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if !totpVerify(req.Secret, req.Code) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "验证码不正确，请确认手机时间已同步后重试"})
+		return
+	}
+	_ = s.cfg.SetMFA(true, strings.TrimSpace(req.Secret))
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "启用两步验证（TOTP）"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleMFADisable turns MFA off after re-verifying the account password, so a
+// hijacked-but-unlocked session alone can't strip the second factor.
+func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	acc := s.cfg.Account()
+	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Password, acc.Salt)), []byte(acc.Hash)) != 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码不正确"})
+		return
+	}
+	_ = s.cfg.SetMFA(false, "")
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "关闭两步验证（TOTP）"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

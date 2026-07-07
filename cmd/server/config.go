@@ -53,6 +53,10 @@ type AccountConfig struct {
 	Email       string `json:"email"`
 	Salt        string `json:"salt"`
 	Hash        string `json:"hash"`
+	// Optional TOTP (Google Authenticator) second factor. MFASecret is the base32
+	// shared secret; it is never returned to the browser once enrollment completes.
+	MFAEnabled bool   `json:"mfa_enabled"`
+	MFASecret  string `json:"mfa_secret,omitempty"`
 }
 
 func defaultAccount() AccountConfig {
@@ -226,6 +230,28 @@ func (cs *ConfigStore) SetProfile(display, email string) error {
 	cs.mu.Lock()
 	cs.cfg.Account.DisplayName = display
 	cs.cfg.Account.Email = email
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetUsername changes the login username (the account identifier).
+func (cs *ConfigStore) SetUsername(name string) error {
+	cs.mu.Lock()
+	cs.cfg.Account.Username = name
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetMFA enables or disables the TOTP second factor. Disabling clears the secret
+// so a stale secret can never linger in the config.
+func (cs *ConfigStore) SetMFA(enabled bool, secret string) error {
+	cs.mu.Lock()
+	cs.cfg.Account.MFAEnabled = enabled
+	if enabled {
+		cs.cfg.Account.MFASecret = secret
+	} else {
+		cs.cfg.Account.MFASecret = ""
+	}
 	cs.mu.Unlock()
 	return cs.save()
 }

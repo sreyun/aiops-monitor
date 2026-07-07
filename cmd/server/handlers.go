@@ -74,6 +74,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)
 	mux.HandleFunc("POST /api/v1/password", s.handleSetPassword)
+	mux.HandleFunc("POST /api/v1/mfa/setup", s.handleMFASetup)
+	mux.HandleFunc("POST /api/v1/mfa/enable", s.handleMFAEnable)
+	mux.HandleFunc("POST /api/v1/mfa/disable", s.handleMFADisable)
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
@@ -451,6 +454,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.Feishu.Webhook = maskSecret(c.Feishu.Webhook)
 	c.Dingtalk.Webhook = maskSecret(c.Dingtalk.Webhook)
 	c.Dingtalk.Secret = maskSecret(c.Dingtalk.Secret)
+	// Never expose the password hash/salt or the MFA secret to the browser.
+	c.Account.Salt, c.Account.Hash, c.Account.MFASecret = "", "", ""
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -701,4 +706,21 @@ func sanitizeServerURL(u string) string {
 			return -1
 		}
 	}, u)
+}
+
+// sanitizeUsername validates the login username: 2–32 chars of ASCII letters,
+// digits, dot, dash or underscore. Returns "" when invalid.
+func sanitizeUsername(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || len(s) > 32 {
+		return ""
+	}
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_'
+		if !ok {
+			return ""
+		}
+	}
+	return s
 }
