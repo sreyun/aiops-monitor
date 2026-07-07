@@ -1228,8 +1228,21 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	// agent returns to waiting for the next command. Without this the agent stays
 	// stuck on this session and every subsequent step/execution fails to connect.
 	defer sess.close()
-	if !s.term.notifyAgent(h.ID, sess.id) {
-		return "", fmt.Errorf("无法连接到主机 %s 的 Agent（可能有其它终端/剧本正在占用，或 Agent 版本过旧）", h.Hostname)
+	// The agent re-registers its long-poll waiter in the brief gap between
+	// sessions; a back-to-back step (or a busy multi-host run over higher-latency
+	// links) can momentarily miss it. Retry for up to ~3s so a transient gap
+	// doesn't fail the step — this is the main cause of "part of the Linux hosts
+	// fail to connect" during multi-host playbook runs.
+	notified := false
+	for i := 0; i < 30; i++ {
+		if s.term.notifyAgent(h.ID, sess.id) {
+			notified = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !notified {
+		return "", fmt.Errorf("无法连接到主机 %s 的 Agent（可能离线、Agent 版本过旧，或有其它终端/剧本长时间占用）", h.Hostname)
 	}
 	select {
 	case <-sess.agentUp:

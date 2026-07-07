@@ -1037,7 +1037,10 @@ function openTerminalReplay(sessionId, hostname) {
   fetch(`${API}/terminal/sessions/${encodeURIComponent(sessionId)}/replay`)
     .then(r => r.json())
     .then(data => {
-      const frames = data.frames || [];
+      // Replay only OUTPUT frames: the shell output already contains the command
+      // echo, so feeding INPUT frames too would render every keystroke a second
+      // time and garble the command lines.
+      const frames = (data.frames || []).filter(f => f.type === "output");
       if (frames.length === 0) { toast("该会话无录制数据", "err"); return; }
       $("termReplayTitle").textContent = hostname + " · 会话回放";
       const screen = $("termReplayScreen");
