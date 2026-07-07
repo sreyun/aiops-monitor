@@ -389,7 +389,7 @@ function hostCard(h) {
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
             <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
-            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}${h.kernel ? " · " + esc(h.kernel) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}${h.kernel ? " <span class=\"hi-sep\">·</span> <span class=\"mono\">" + esc(h.kernel) + "</span>" : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}</span></div>
           </div>
         </div>
       </div>
@@ -454,7 +454,7 @@ function hostRow(h) {
     <span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
       <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
-      <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}${h.kernel ? ` ${esc(h.kernel)}` : ""}` : ""}</div>
+      <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
     <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
@@ -508,13 +508,21 @@ function renderHosts(hosts) {
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
   empty.style.display = "none";
 
-  // Pagination by host count
+  // Pagination: only paginate when exceeding threshold (30 for card, 50 for list)
   const isList = HOST_VIEW === "list";
-  const pageSize = isList ? 20 : HOST_PAGE_SIZE;
-  const total = shown.length, pages = Math.ceil(total / pageSize);
-  if (HOST_PAGE > pages) HOST_PAGE = pages;
-  if (HOST_PAGE < 1) HOST_PAGE = 1;
-  const pageHosts = shown.slice((HOST_PAGE - 1) * pageSize, HOST_PAGE * pageSize);
+  const PAGINATION_THRESHOLD = isList ? 50 : 30;
+  const pageSize = isList ? 50 : HOST_PAGE_SIZE;
+  const shouldPaginate = shown.length > PAGINATION_THRESHOLD;
+  let pageHosts, pages;
+  if (shouldPaginate) {
+    pages = Math.ceil(shown.length / pageSize);
+    if (HOST_PAGE > pages) HOST_PAGE = pages;
+    if (HOST_PAGE < 1) HOST_PAGE = 1;
+    pageHosts = shown.slice((HOST_PAGE - 1) * pageSize, HOST_PAGE * pageSize);
+  } else {
+    HOST_PAGE = 1; pages = 1;
+    pageHosts = shown;
+  }
 
   // Group by category on current page
   const byCat = {};
@@ -532,7 +540,7 @@ function renderHosts(hosts) {
       <div class="${wrapCls}${collapsed ? " group-collapsed" : ""}">${byCat[cat].map(render).join("")}</div>
     </div>`;
   }).join("");
-  renderPager(pages, total);
+  renderPager(pages, shown.length);
 }
 
 function renderPager(pages, total) {
