@@ -622,4 +622,6 @@ svg.sparkline{width:100%; height:46px; display:block}
   .grid2{grid-template-columns:1fr}
   .search{width:150px; max-width:35vw}
   .page-sub{display:none}
+  #installBtn .ib-label{display:none}
+  #installBtn{padding:8px 11px}
 }
