@@ -63,7 +63,8 @@ func (a *Agent) Run() {
 	}
 
 	a.register()
-	go a.pluginLoop() // Python layer, lower frequency
+	go a.pluginLoop()          // Python layer, lower frequency
+	go a.runTerminalChannel()  // remote terminal reverse channel (免开入站端口)
 
 	// base-metric report loop, higher frequency
 	ticker := time.NewTicker(a.reportInterval)

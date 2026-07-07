@@ -331,6 +331,21 @@
   </div>
 </div>
 
+<!-- ===== 远程终端弹窗 ===== -->
+<div class="mask" id="termMask" data-close>
+  <div class="modal modal-wide term-modal">
+    <div class="modal-head">
+      <h3 id="termTitle">远程终端</h3>
+      <span class="term-status" id="termStatus">连接中…</span>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body term-body">
+      <pre class="term-screen" id="termScreen" tabindex="0" spellcheck="false"></pre>
+      <div class="term-hint">经 Agent 反向通道连接，无需在被控端开放 22/入站端口 · 点击窗口后即可输入 · 支持 Ctrl+C / Tab / 方向键 · 关闭窗口结束会话</div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 自定义监控·历史曲线弹窗 ===== -->
 <div class="mask" id="checkHistMask" data-close>
   <div class="modal modal-wide">

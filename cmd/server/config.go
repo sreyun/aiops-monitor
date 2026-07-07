@@ -90,6 +90,9 @@ type ServerConfig struct {
 	RequireToken  bool              `json:"require_token"`
 	Account       AccountConfig     `json:"account"`
 	Checks        []CustomCheck     `json:"checks"`
+	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
+	// existing configs (zero value = enabled); set true to globally disable it.
+	TerminalDisabled bool `json:"terminal_disabled"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -163,6 +166,14 @@ func (cs *ConfigStore) RequireToken() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.RequireToken
+}
+
+// TerminalEnabled reports whether the remote terminal feature is available
+// (default true; disabled only when terminal_disabled is set in config).
+func (cs *ConfigStore) TerminalEnabled() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return !cs.cfg.TerminalDisabled
 }
 
 // ResetToken regenerates the install token and returns the new value.

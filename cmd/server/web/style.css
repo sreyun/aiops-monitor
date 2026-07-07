@@ -520,6 +520,28 @@ svg.sparkline{width:100%; height:46px; display:block}
 .zoom-hint{font-size:11px; color:var(--muted2); margin-bottom:12px}
 #chartZoomCanvas{width:100%; height:auto; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm)}
 
+/* ---------- 远程终端 ---------- */
+.term-status{margin-left:auto; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px}
+.term-status::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--muted2)}
+.term-status.on{color:#7fe0a0}
+.term-status.on::before{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
+.term-status.off{color:#ff9ba2}
+.term-status.off::before{background:var(--crit)}
+.term-modal .modal-head{gap:12px}
+.term-body{padding:0 !important}
+.term-screen{margin:0; background:#05070b; color:#d6dde8; border:none; border-radius:0 0 var(--r-lg) var(--r-lg);
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.42;
+  padding:14px 16px; height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-word; outline:none; cursor:text;
+  font-variant-ligatures:none}
+.term-screen:focus{box-shadow:inset 0 0 0 1px var(--accent-soft)}
+.term-hint{font-size:11px; color:var(--muted2); padding:8px 16px; border-top:1px solid var(--line); background:var(--panel)}
+/* 主机卡片·终端按钮 */
+.term-btn{width:24px; height:24px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);
+  color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; flex:none;
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
+.term-btn svg{width:14px; height:14px}
+.term-btn:hover{background:var(--accent-soft); color:#bcd6ff; border-color:rgba(76,141,255,.4)}
+
 /* ---------- 登录页 ---------- */
 .login-mask{position:fixed; inset:0; z-index:300; display:none; align-items:center; justify-content:center; padding:20px; background:var(--bg)}
 .login-mask.show{display:flex}

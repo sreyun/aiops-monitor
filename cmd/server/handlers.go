@@ -26,7 +26,8 @@ type Server struct {
 	notifier *Notifier
 	auth     *Auth
 	checks   *checkRunner
-	distDir  string // directory of downloadable agent binaries + plugins.zip
+	term     *termManager // remote terminal relay
+	distDir  string       // directory of downloadable agent binaries + plugins.zip
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
@@ -34,6 +35,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
 		auth:   NewAuth(cfg),
 		checks: newCheckRunner(cfg, store, notifier, selfAddr),
+		term:   newTermManager(),
 	}
 }
 
@@ -42,6 +44,11 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/agent/register", s.handleRegister)
 	mux.HandleFunc("POST /api/v1/agent/report", s.handleReport)
+	// remote terminal: browser WebSocket (auth) + agent reverse streams (token)
+	mux.HandleFunc("GET /api/v1/hosts/{id}/terminal", s.handleTerminal)
+	mux.HandleFunc("GET /api/v1/agent/terminal/wait", s.handleAgentTermWait)
+	mux.HandleFunc("GET /api/v1/agent/terminal/rx", s.handleAgentTermRx)
+	mux.HandleFunc("POST /api/v1/agent/terminal/tx", s.handleAgentTermTx)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.handleHostMetrics)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
@@ -406,6 +413,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"plugin_events":    len(s.store.RecentEvents()),
 		"server_time_unix": now,
 		"version":          appVersion,
+		"terminal_enabled": s.cfg.TerminalEnabled(),
 	})
 }
 

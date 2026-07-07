@@ -50,6 +50,8 @@ let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
 let LOG_PAGE = 1;     // 日志分页当前页
 let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
 let CHECK_VIEW = "list"; // 自定义监控视图：list | pill
+let TERMINAL_ENABLED = true; // 服务端是否开启远程终端
+let TERM_WS = null;   // 当前终端 WebSocket
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
@@ -133,6 +135,7 @@ function renderCards(s) {
   if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
   const ver = $("verLabel");
   if (ver && s.version) ver.textContent = "v" + s.version;
+  TERMINAL_ENABLED = s.terminal_enabled !== false;
 }
 
 /* ---------- 渲染：告警 / 事件 ---------- */
@@ -308,6 +311,7 @@ function hostCard(h) {
       <div class="host-tags">
         <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
+        ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="远程终端（经 Agent 反向连接，免开端口）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
         <button class="x-btn" data-act="del" title="删除主机">✕</button>
       </div>
     </div>
@@ -735,6 +739,100 @@ function sparkline(series, color) {
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
 }
 
+/* ---------- 远程终端（经 Agent 反向通道，免开入站端口） ---------- */
+function openTerminal(id, name) {
+  $("termTitle").textContent = name + " · 远程终端";
+  const screen = $("termScreen");
+  const term = { lines: [], cur: "", col: 0, dec: new TextDecoder("utf-8"), screen };
+  screen._term = term;
+  screen.textContent = "";
+  setTermStatus("连接中…", "");
+  $("termMask").classList.add("show");
+  closeTerminalWS(); // 关掉可能残留的上一个会话
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/terminal`);
+  ws.binaryType = "arraybuffer";
+  TERM_WS = ws;
+  ws.onopen = () => { setTermStatus("已连接", "on"); screen.focus(); };
+  ws.onmessage = ev => {
+    const text = (typeof ev.data === "string") ? ev.data : term.dec.decode(new Uint8Array(ev.data), { stream: true });
+    termFeed(term, text);
+    renderTerm(term);
+  };
+  ws.onclose = () => { setTermStatus("已断开", "off"); if (TERM_WS === ws) TERM_WS = null; };
+  ws.onerror = () => setTermStatus("连接错误", "off");
+  screen.onkeydown = e => termKeyDown(e, ws);
+  screen.onpaste = e => {
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData).getData("text");
+    if (t) termSend(ws, t);
+  };
+}
+function setTermStatus(txt, cls) {
+  const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
+}
+function closeTerminalWS() { if (TERM_WS) { try { TERM_WS.close(); } catch (e) {} TERM_WS = null; } }
+// 发送输入（帧首字节 'i' 标识 input）
+function termSend(ws, str) {
+  if (!ws || ws.readyState !== 1) return;
+  const body = new TextEncoder().encode(str);
+  const framed = new Uint8Array(body.length + 1);
+  framed[0] = 0x69; // 'i'
+  framed.set(body, 1);
+  ws.send(framed);
+}
+function termKeyDown(e, ws) {
+  e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
+  const k = e.key;
+  let seq = null;
+  if (k === "Enter") seq = "\r";
+  else if (k === "Backspace") seq = "\x7f";
+  else if (k === "Tab") seq = "\t";
+  else if (k === "Escape") seq = "\x1b";
+  else if (k === "ArrowUp") seq = "\x1b[A";
+  else if (k === "ArrowDown") seq = "\x1b[B";
+  else if (k === "ArrowRight") seq = "\x1b[C";
+  else if (k === "ArrowLeft") seq = "\x1b[D";
+  else if (k === "Home") seq = "\x1b[H";
+  else if (k === "End") seq = "\x1b[F";
+  else if (k === "Delete") seq = "\x1b[3~";
+  else if (k === "PageUp") seq = "\x1b[5~";
+  else if (k === "PageDown") seq = "\x1b[6~";
+  else if (e.ctrlKey && k.length === 1) {
+    const c = k.toLowerCase().charCodeAt(0);
+    if (c >= 97 && c <= 122) seq = String.fromCharCode(c - 96); // Ctrl+A..Z → 0x01..0x1A
+  } else if (k.length === 1 && !e.metaKey) seq = k; // 可打印字符
+  if (seq !== null) { e.preventDefault(); termSend(ws, seq); }
+}
+// 输出：阶段1 去除 ANSI 转义、保留可读文本 + 基本控制符（\r \n \b \t）；全 TTY 仿真为下阶段
+function termFeed(term, text) {
+  text = stripAnsi(text);
+  for (const ch of text) {
+    if (ch === "\r") term.col = 0;
+    else if (ch === "\n") { term.lines.push(term.cur); term.cur = ""; term.col = 0; if (term.lines.length > 3000) term.lines.shift(); }
+    else if (ch === "\b") { if (term.col > 0) term.col--; }
+    else if (ch === "\t") { const n = 8 - (term.col % 8); for (let i = 0; i < n; i++) termPut(term, " "); }
+    else if (ch >= " " || ch.charCodeAt(0) > 127) termPut(term, ch);
+  }
+}
+function termPut(term, ch) {
+  if (term.col >= term.cur.length) term.cur += ch;
+  else term.cur = term.cur.slice(0, term.col) + ch + term.cur.slice(term.col + 1);
+  term.col++;
+}
+function stripAnsi(s) {
+  return s
+    .replace(/\x1b\[[0-9;?=<>]*[ -\/]*[@-~]/g, "")  // CSI
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")  // OSC … BEL/ST
+    .replace(/\x1b[()][0-9A-Za-z]/g, "")            // 字符集选择
+    .replace(/\x1b[=>78MDEHc]/g, "");               // 其它单字节 ESC
+}
+function renderTerm(term) {
+  const s = term.screen;
+  s.textContent = (term.lines.length ? term.lines.join("\n") + "\n" : "") + term.cur;
+  s.scrollTop = s.scrollHeight;
+}
+
 /* ---------- 告警设置 ---------- */
 async function openSettings() {
   try {
@@ -1159,6 +1257,7 @@ if (groupsEl) {
     if (act.dataset.act === "detail") openDetail(id, name);
     else if (act.dataset.act === "cat") editCategory(id, cat);
     else if (act.dataset.act === "del") delHost(id, name);
+    else if (act.dataset.act === "term") openTerminal(id, name);
   });
 }
 
@@ -1319,10 +1418,18 @@ function filterChecks(type) {
 }
 // 弹窗关闭：点遮罩空白处 或 右上角 ✕
 document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
-  if (e.target === mk || e.target.closest("[data-close-btn]")) { mk.classList.remove("show"); hideChartTip(); }
+  if (e.target === mk || e.target.closest("[data-close-btn]")) {
+    mk.classList.remove("show"); hideChartTip();
+    if (mk.id === "termMask") closeTerminalWS();
+  }
 }));
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show")); hideChartTip(); }
+  if (e.key === "Escape") {
+    const hadTerm = $("termMask") && $("termMask").classList.contains("show");
+    document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
+    hideChartTip();
+    if (hadTerm) closeTerminalWS();
+  }
 });
 
 // KPI 卡片点击 → 跳转对应视图（并按需过滤主机）

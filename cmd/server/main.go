@@ -134,7 +134,8 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
-			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
+			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") ||
+			strings.Contains(r.URL.Path, "/terminal") { // WS upgrade + streaming relays must not be buffered
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -178,10 +179,13 @@ func main() {
 
 	handler := corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes()))))
 	srv := &http.Server{
-		Addr:         *addr,
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:    *addr,
+		Handler: handler,
+		// ReadHeaderTimeout guards slow-header attacks while leaving request/
+		// response bodies unbounded — the terminal relay streams for minutes and
+		// the WebSocket is hijacked, so a fixed Read/WriteTimeout can't apply.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("AIOps Monitor 服务端已启动")

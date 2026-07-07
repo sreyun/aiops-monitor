@@ -187,6 +187,10 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/agent/register", "/api/v1/agent/report":
 		return true
 	}
+	// Agent-facing terminal reverse channels are token-gated, not session-gated.
+	if strings.HasPrefix(p, "/api/v1/agent/terminal/") {
+		return true
+	}
 	return strings.HasPrefix(p, "/dl/")
 }
 
