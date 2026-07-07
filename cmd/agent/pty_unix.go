@@ -54,13 +54,11 @@ func newPTY(cols, rows int) termShell {
 	}
 	setWinsize(master.Fd(), cols, rows)
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
-	}
-	cmd := exec.Command(shell, "-i")
+	// Build a proper shell environment — systemd/minimal contexts often lack
+	// HOME/USER/SHELL, which causes "cd: HOME not set" and broken ~ expansion.
+	cmd := exec.Command(shellPath(), "-l", "-i") // -l: login shell (sources /etc/profile)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = buildShellEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true} // new session, slave becomes the controlling tty
 	if err := cmd.Start(); err != nil {
 		master.Close()

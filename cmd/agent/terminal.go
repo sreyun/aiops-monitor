@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strconv"
 	"strings"
@@ -159,6 +160,58 @@ func parseSize(s string) (cols, rows int, ok bool) {
 	return c, rw, true
 }
 
+// shellPath returns the user's preferred shell, falling back to /bin/bash then /bin/sh.
+func shellPath() string {
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	for _, s := range []string{"/bin/bash", "/bin/zsh", "/bin/sh"} {
+		if _, err := os.Stat(s); err == nil {
+			return s
+		}
+	}
+	return "/bin/sh"
+}
+
+// buildShellEnv returns a full environment for the spawned shell, filling in
+// HOME/USER/PATH/SHELL when the parent process (e.g. systemd) lacks them.
+// Without HOME, bash prints "cd: HOME not set" and can't resolve ~ paths.
+func buildShellEnv() []string {
+	env := os.Environ()
+	has := func(key string) bool {
+		for _, e := range env {
+			if len(e) > len(key)+1 && e[:len(key)+1] == key+"=" {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("HOME") {
+		if u, err := user.Current(); err == nil && u.HomeDir != "" {
+			env = append(env, "HOME="+u.HomeDir)
+		} else if os.Getuid() == 0 {
+			env = append(env, "HOME=/root")
+		} else {
+			env = append(env, "HOME=/tmp")
+		}
+	}
+	if !has("USER") {
+		if u, err := user.Current(); err == nil && u.Username != "" {
+			env = append(env, "USER="+u.Username, "LOGNAME="+u.Username)
+		} else if os.Getuid() == 0 {
+			env = append(env, "USER=root", "LOGNAME=root")
+		}
+	}
+	if !has("SHELL") {
+		env = append(env, "SHELL="+shellPath())
+	}
+	if !has("PATH") {
+		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	env = append(env, "TERM=xterm-256color")
+	return env
+}
+
 // startShell returns a native PTY shell if the platform supports one, else a
 // piped-stdio fallback.
 func startShell(cols, rows int) termShell {
@@ -179,6 +232,7 @@ type pipeShell struct {
 func newPipeShell() termShell {
 	name, args := shellCommand()
 	cmd := exec.Command(name, args...)
+	cmd.Env = buildShellEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil
@@ -230,8 +284,5 @@ func shellCommand() (string, []string) {
 		}
 		return "cmd.exe", nil
 	}
-	if sh := os.Getenv("SHELL"); sh != "" {
-		return sh, []string{"-i"}
-	}
-	return "/bin/sh", []string{"-i"}
+	return shellPath(), []string{"-l", "-i"} // -l: login shell
 }
