@@ -530,10 +530,13 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-modal .modal-head{gap:12px}
 .term-body{padding:0 !important}
 .term-screen{margin:0; background:#05070b; color:#d6dde8; border:none; border-radius:0 0 var(--r-lg) var(--r-lg);
-  font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.42;
-  padding:14px 16px; height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-word; outline:none; cursor:text;
-  font-variant-ligatures:none}
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.25;
+  padding:12px 14px; height:62vh; overflow:auto; white-space:normal; outline:none; cursor:text;
+  font-variant-ligatures:none; font-feature-settings:"liga" 0}
 .term-screen:focus{box-shadow:inset 0 0 0 1px var(--accent-soft)}
+.term-row{white-space:pre; min-height:1em}
+.term-cursor{background:#d6dde8; color:#05070b; border-radius:1px}
+.term-screen:not(:focus) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px #d6dde8}
 .term-hint{font-size:11px; color:var(--muted2); padding:8px 16px; border-top:1px solid var(--line); background:var(--panel)}
 /* 主机卡片·终端按钮 */
 .term-btn{width:24px; height:24px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);

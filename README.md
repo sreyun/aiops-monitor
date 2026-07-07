@@ -4,7 +4,7 @@
 >
 > 单二进制服务端、零依赖 Agent、三平台原生采集（含 **GPU**）、一条命令安装、开箱即用。
 >
-> 面板内置：**交互式趋势图**（悬停十字线 / 框选放大 / 放大预览）、**自定义拨测**（HTTP / TCP / **Ping** / 进程，含历史曲线回看）、**内嵌轻量库持久化**（历史/日志/会话重启不丢）、**gzip 响应压缩**、登录鉴权与安全加固。
+> 面板内置：**交互式趋势图**（悬停十字线 / 框选放大 / 放大预览）、**自定义拨测**（HTTP / TCP / **Ping** / 进程，含历史曲线回看）、**远程终端**（经 Agent 反连的浏览器全 TTY，免开端口）、**内嵌轻量库持久化**（历史/日志/会话重启不丢）、**gzip 响应压缩**、登录鉴权与安全加固。
 
 ---
 
@@ -34,6 +34,7 @@ Agent 与服务端共享 `shared/` 中的类型定义，采集端与服务端的
 | **阈值告警** | CPU / 内存 / 磁盘越限 + 主机失联检测，支持自定义阈值，面板可视化配置 |
 | **告警推送** | 飞书 / 钉钉机器人 Webhook，仅在触发/恢复时各推一次，不刷屏 |
 | **持久化** | 内嵌轻量库（gzip+JSON 落盘 `aiops.db`）—— 历史 / 日志 / 会话重启不丢，无需外部数据库 |
+| **远程终端** | 主机卡片一键打开浏览器**全 TTY 终端**；**Agent 反向连接，免在被控端开放 22/入站端口**；Windows ConPTY、Linux/macOS openpty；服务端中转 + 登录/Token 双鉴权 + 审计 + 可一键全局禁用 |
 | **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
 | **安全与性能** | 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 请求体大小限制 + 密钥脱敏；**gzip 响应压缩**大幅降低多主机轮询带宽 |
 | **共享类型** | `shared/wire.go` 被 server 与 agent 同时 import，契约统一不会漂移 |
@@ -78,6 +79,8 @@ aiops-monitor/
 │   │   ├── alerts.go               # 阈值告警引擎
 │   │   ├── auth.go                 # 登录认证 + session + 登录限流
 │   │   ├── check.go                # 自定义监控（HTTP / TCP / Ping / 进程 + 历史序列）
+│   │   ├── ws.go                   # 手写 WebSocket（远程终端浏览器侧，零依赖）
+│   │   ├── terminal.go             # 远程终端中转（Agent 反向通道 + 会话管理）
 │   │   ├── notify.go               # 飞书/钉钉推送（去重 + 状态转换）
 │   │   ├── config.go               # 配置持久化
 │   │   ├── install.go              # 一键安装脚本生成
@@ -93,6 +96,10 @@ aiops-monitor/
 │       ├── collector_darwin.go     # macOS 原生采集（sysctl + 系统命令）
 │       ├── collector_other.go      # 其他平台桩
 │       ├── gpu.go                  # GPU 采集（nvidia-smi 解析 + 缓存，三平台共用）
+│       ├── terminal.go             # 远程终端 Agent 侧（反连通道 + 帧化 rx + shell）
+│       ├── pty_windows.go          # Windows 伪终端（ConPTY）
+│       ├── pty_unix.go             # Linux/macOS 伪终端（openpty，公共部分）
+│       ├── pty_linux.go / pty_darwin.go # 各自 ioctl 打开 pts
 │       ├── plugins.go              # 插件运行器（子进程 + JSON，并发+超时）
 │       ├── identity.go             # 稳定 host_id / 主机身份
 │       └── reporter.go             # 双心跳循环 + 注册 + 上报
@@ -301,6 +308,11 @@ p.emit()                                   # 输出 JSON
 | POST | `/api/v1/checks/{id}/run` | 立即触发一次检测 |
 | GET | `/api/v1/checks/{id}/history` | 该检查的历史时序（延时/状态/状态码/丢包，用于曲线回看） |
 | DELETE | `/api/v1/checks/{id}` | 删除自定义监控 |
+| **远程终端** | | |
+| GET | `/api/v1/hosts/{id}/terminal` | 浏览器 WebSocket 终端（需登录会话） |
+| GET | `/api/v1/agent/terminal/wait` | Agent 长轮询等待会话（Token 鉴权） |
+| GET | `/api/v1/agent/terminal/rx` | 服务端 → Agent 键入/尺寸帧流（Token） |
+| POST | `/api/v1/agent/terminal/tx` | Agent → 服务端 shell 输出流（Token） |
 | **配置管理** | | |
 | GET | `/api/v1/config` | 获取告警配置（脱敏） |
 | POST | `/api/v1/config` | 更新告警配置 |
@@ -386,6 +398,7 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - **请求体上限**：全局 `MaxBytesReader`（2 MiB），防超大 JSON 内存耗尽。
 - **密钥脱敏**：配置读取接口对 Webhook / 加签 Secret 掩码回显；提交空值或掩码值则保持原值不变。
 - **Agent 接入**：`register` / `report` / 安装脚本 / 下载为公开端点（便于 Agent 与安装器工作）；可开启 `require_token` 强制校验安装 Token。
+- **远程终端**：本质是对被控端的远程命令执行，采用**双重鉴权**——操作侧浏览器 WebSocket 需有效登录会话，Agent 反向通道需安装 Token（常数时间比较）；每次开/关终端写入审计日志；可在服务端配置 `terminal_disabled: true` 一键全局禁用。**强烈建议仅在可信网络启用，并置于 HTTPS 反代之后。**
 - **面向公网请置于反向代理之后并启用 HTTPS。**
 
 ---
@@ -405,12 +418,13 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 - [x] 实时面板：概览卡片 + 资源 TOP10（含 GPU）+ 主机分类分组/搜索/分页 + 阈值告警 + 操作日志分页 + 标准/宽屏切换
 - [x] 告警推送：飞书 / 钉钉 Webhook，去重 + 状态转换推送
 - [x] **gzip 响应压缩**：多主机轮询带宽 ~8–10 倍压缩
+- [x] **远程终端**：主机卡片一键打开浏览器终端，经 Agent 反向连接（**免在被控端开放 22/入站端口**）+ 服务端中转；**完整交互式 TTY**（Windows ConPTY、Linux/macOS openpty），支持颜色/行编辑/vim·top 等全屏程序、窗口自适应；登录会话 + 安装 Token 双鉴权 + 开关闭/审计
 - [x] 一键安装：Token 模式、面板生成命令、自动下载安装、开机自启
 - [x] 主机管理：分类标签、面板手动覆盖、主机删除
 
 **进行中 / 下一步**
-- [ ] **远程终端（进行中）**：经 Agent 反向连接（免开入站端口）+ 服务端中转的浏览器终端，目标完整交互式 TTY（Linux/macOS 伪终端、Windows ConPTY），登录 + Token 鉴权 + 全程审计
 - [ ] **超大规模（万级）**：历史外接时序库（VictoriaMetrics）、`/hosts` 服务端分页/增量、历史保留期可配置化
+- [ ] **终端增强**：会话录制/回放、多标签、命令级审计、只读旁观
 - [ ] **鉴权多租户**：后台 RBAC、多用户
 - [ ] **告警进阶**：持续 N 分钟才触发、静默/升级、多渠道（邮件/Webhook）
 - [ ] **自动化运维**：剧本编排 + 批量执行

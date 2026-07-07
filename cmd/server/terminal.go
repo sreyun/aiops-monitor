@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"net/http"
 	"sync"
@@ -45,6 +46,19 @@ func termID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// termFrame encodes one rx message as [type:1][len:2 BE][payload] so the agent
+// can parse input vs resize from the raw stream.
+func termFrame(typ byte, payload []byte) []byte {
+	if len(payload) > 0xffff {
+		payload = payload[:0xffff]
+	}
+	b := make([]byte, 3+len(payload))
+	b[0] = typ
+	binary.BigEndian.PutUint16(b[1:], uint16(len(payload)))
+	copy(b[3:], payload)
+	return b
 }
 
 func (m *termManager) create(hostID string) *termSession {
@@ -145,7 +159,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// browser → agent (keystrokes). Frame byte 0: 'i' input, 'r' resize.
+	// browser → agent. The browser tags each WS message: byte 0 'i' = input,
+	// 'r' = resize ("colsxrows"). We re-encode it as a self-delimiting frame
+	// ([type:1][len:2 BE][payload]) so the agent can demultiplex input vs resize
+	// off the raw rx byte stream regardless of HTTP chunk boundaries.
 	go func() {
 		defer sess.close()
 		for {
@@ -156,23 +173,18 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if len(data) == 0 {
 				continue
 			}
-			// Frame byte 0 tags the message: 'i' input, 'r' resize. The rx stream
-			// to the agent is a raw byte stream (no message boundaries), so it
-			// carries only raw input bytes; resize is applied in the PTY stage.
-			var payload []byte
+			typ, payload := byte('i'), data
 			switch data[0] {
 			case 'r':
-				continue
+				typ, payload = 'r', data[1:]
 			case 'i':
-				payload = data[1:]
-			default:
-				payload = data
+				typ, payload = 'i', data[1:]
 			}
 			if len(payload) == 0 {
 				continue
 			}
 			select {
-			case sess.toAgent <- payload:
+			case sess.toAgent <- termFrame(typ, payload):
 			case <-sess.done:
 				return
 			}

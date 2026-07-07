@@ -740,12 +740,12 @@ function sparkline(series, color) {
 }
 
 /* ---------- 远程终端（经 Agent 反向通道，免开入站端口） ---------- */
+let TERM_RESIZE = null;   // 窗口 resize 监听器引用
 function openTerminal(id, name) {
   $("termTitle").textContent = name + " · 远程终端";
   const screen = $("termScreen");
-  const term = { lines: [], cur: "", col: 0, dec: new TextDecoder("utf-8"), screen };
-  screen._term = term;
-  screen.textContent = "";
+  const vt = makeVT(screen);
+  screen._vt = vt;
   setTermStatus("连接中…", "");
   $("termMask").classList.add("show");
   closeTerminalWS(); // 关掉可能残留的上一个会话
@@ -753,11 +753,11 @@ function openTerminal(id, name) {
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/terminal`);
   ws.binaryType = "arraybuffer";
   TERM_WS = ws;
-  ws.onopen = () => { setTermStatus("已连接", "on"); screen.focus(); };
+  const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
+  ws.onopen = () => { setTermStatus("已连接", "on"); screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
-    const text = (typeof ev.data === "string") ? ev.data : term.dec.decode(new Uint8Array(ev.data), { stream: true });
-    termFeed(term, text);
-    renderTerm(term);
+    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
+    vt.feed(text);
   };
   ws.onclose = () => { setTermStatus("已断开", "off"); if (TERM_WS === ws) TERM_WS = null; };
   ws.onerror = () => setTermStatus("连接错误", "off");
@@ -767,6 +767,18 @@ function openTerminal(id, name) {
     const t = (e.clipboardData || window.clipboardData).getData("text");
     if (t) termSend(ws, t);
   };
+  if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
+  TERM_RESIZE = () => doResize();
+  window.addEventListener("resize", TERM_RESIZE);
+}
+// 发送窗口尺寸（帧首字节 'r'，负载 "colsxrows"）→ 服务端 → Agent → PTY
+function termResizeSend(ws, cols, rows) {
+  if (!ws || ws.readyState !== 1) return;
+  const body = new TextEncoder().encode(cols + "x" + rows);
+  const framed = new Uint8Array(body.length + 1);
+  framed[0] = 0x72; // 'r'
+  framed.set(body, 1);
+  ws.send(framed);
 }
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
@@ -784,15 +796,16 @@ function termSend(ws, str) {
 function termKeyDown(e, ws) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
   const k = e.key;
+  const ac = (($("termScreen")._vt || {}).appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
   let seq = null;
   if (k === "Enter") seq = "\r";
   else if (k === "Backspace") seq = "\x7f";
   else if (k === "Tab") seq = "\t";
   else if (k === "Escape") seq = "\x1b";
-  else if (k === "ArrowUp") seq = "\x1b[A";
-  else if (k === "ArrowDown") seq = "\x1b[B";
-  else if (k === "ArrowRight") seq = "\x1b[C";
-  else if (k === "ArrowLeft") seq = "\x1b[D";
+  else if (k === "ArrowUp") seq = ac + "A";
+  else if (k === "ArrowDown") seq = ac + "B";
+  else if (k === "ArrowRight") seq = ac + "C";
+  else if (k === "ArrowLeft") seq = ac + "D";
   else if (k === "Home") seq = "\x1b[H";
   else if (k === "End") seq = "\x1b[F";
   else if (k === "Delete") seq = "\x1b[3~";
@@ -804,33 +817,242 @@ function termKeyDown(e, ws) {
   } else if (k.length === 1 && !e.metaKey) seq = k; // 可打印字符
   if (seq !== null) { e.preventDefault(); termSend(ws, seq); }
 }
-// 输出：阶段1 去除 ANSI 转义、保留可读文本 + 基本控制符（\r \n \b \t）；全 TTY 仿真为下阶段
-function termFeed(term, text) {
-  text = stripAnsi(text);
-  for (const ch of text) {
-    if (ch === "\r") term.col = 0;
-    else if (ch === "\n") { term.lines.push(term.cur); term.cur = ""; term.col = 0; if (term.lines.length > 3000) term.lines.shift(); }
-    else if (ch === "\b") { if (term.col > 0) term.col--; }
-    else if (ch === "\t") { const n = 8 - (term.col % 8); for (let i = 0; i < n; i++) termPut(term, " "); }
-    else if (ch >= " " || ch.charCodeAt(0) > 127) termPut(term, ch);
+/* ---------- 阶段2：VT100 / xterm 子集终端仿真器 ----------
+   支持屏幕缓冲 + 光标寻址(CUP/CUU…)、擦除(ED/EL)、SGR 颜色(16/256/RGB、粗体/下划线/反显)、
+   滚动区(DECSTBM)、插入/删除行列、备用屏(?1049)、回滚缓冲，可跑 vim/top 等全屏程序。 */
+const VT_PAL = [
+  "#2b303b", "#ff6b72", "#4fd483", "#e8b84b", "#5b9bff", "#c88bf0", "#4fc3f0", "#c8ced8",
+  "#5a6473", "#ff8f95", "#7ee6a5", "#ffd071", "#82b4ff", "#d9b3f7", "#8fd7f7", "#ffffff"
+];
+function vt256(n) {
+  n = n | 0;
+  if (n < 16) return VT_PAL[n] || null;
+  if (n < 232) { n -= 16; const r = Math.floor(n / 36), g = Math.floor((n % 36) / 6), b = n % 6; const c = v => v ? 55 + v * 40 : 0; return `rgb(${c(r)},${c(g)},${c(b)})`; }
+  const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`;
+}
+const vtEsc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function makeVT(screen) {
+  const vt = {
+    screen, dec: new TextDecoder("utf-8"),
+    cols: 80, rows: 24, cx: 0, cy: 0,
+    fg: null, bg: null, flags: 0,          // flags: 1 粗体 2 反显 4 下划线 8 弱化
+    sCx: 0, sCy: 0, sFg: null, sBg: null, sFlags: 0,
+    top: 0, bot: 23, wrapNext: false,
+    grid: null, SB_MAX: 2000,
+    altActive: false, savedGrid: null, savedPos: null,
+    st: 0, parm: "", coll: "",             // 解析状态 0 ground 1 esc 2 csi 3 osc 4 charset 5 osc-st
+    cursorVis: true, appCursor: false, raf: 0,
+  };
+  const clampX = x => Math.max(0, Math.min(vt.cols - 1, x));
+  const clampY = y => Math.max(0, Math.min(vt.rows - 1, y));
+  const blank = () => ({ c: " ", f: null, b: null, a: 0 });
+  const newRow = () => { const r = new Array(vt.cols); for (let i = 0; i < vt.cols; i++) r[i] = blank(); return r; };
+  function alloc() { vt.grid = []; for (let y = 0; y < vt.rows; y++) vt.grid.push(newRow()); }
+
+  screen.innerHTML = "";
+  const sb = document.createElement("div"); sb.className = "term-sb";
+  const lv = document.createElement("div"); lv.className = "term-lv";
+  screen.appendChild(sb); screen.appendChild(lv);
+  alloc();
+
+  function clearCell(cell) { cell.c = " "; cell.f = null; cell.b = vt.bg; cell.a = 0; }
+  function scrollUp(n) {
+    for (let i = 0; i < n; i++) {
+      const removed = vt.grid.splice(vt.top, 1)[0];
+      if (!vt.altActive && vt.top === 0) {
+        const div = document.createElement("div"); div.className = "term-row"; div.innerHTML = renderRow(removed, -1);
+        sb.appendChild(div);
+        while (sb.childElementCount > vt.SB_MAX) sb.removeChild(sb.firstChild);
+      }
+      vt.grid.splice(vt.bot, 0, newRow());
+    }
   }
-}
-function termPut(term, ch) {
-  if (term.col >= term.cur.length) term.cur += ch;
-  else term.cur = term.cur.slice(0, term.col) + ch + term.cur.slice(term.col + 1);
-  term.col++;
-}
-function stripAnsi(s) {
-  return s
-    .replace(/\x1b\[[0-9;?=<>]*[ -\/]*[@-~]/g, "")  // CSI
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")  // OSC … BEL/ST
-    .replace(/\x1b[()][0-9A-Za-z]/g, "")            // 字符集选择
-    .replace(/\x1b[=>78MDEHc]/g, "");               // 其它单字节 ESC
-}
-function renderTerm(term) {
-  const s = term.screen;
-  s.textContent = (term.lines.length ? term.lines.join("\n") + "\n" : "") + term.cur;
-  s.scrollTop = s.scrollHeight;
+  function scrollDown(n) { for (let i = 0; i < n; i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.top, 0, newRow()); } }
+  function lineFeed() { if (vt.cy === vt.bot) scrollUp(1); else if (vt.cy < vt.rows - 1) vt.cy++; }
+  function revIndex() { if (vt.cy === vt.top) scrollDown(1); else if (vt.cy > 0) vt.cy--; }
+  function putChar(ch) {
+    if (vt.wrapNext) { vt.cx = 0; lineFeed(); vt.wrapNext = false; }
+    const cell = vt.grid[vt.cy][vt.cx];
+    cell.c = ch; cell.f = vt.fg; cell.b = vt.bg; cell.a = vt.flags;
+    if (vt.cx + 1 >= vt.cols) vt.wrapNext = true; else vt.cx++;
+  }
+  function eraseInLine(m) {
+    const row = vt.grid[vt.cy];
+    if (m === 1) { for (let x = 0; x <= vt.cx; x++) clearCell(row[x]); }
+    else if (m === 2) { for (let x = 0; x < vt.cols; x++) clearCell(row[x]); }
+    else { for (let x = vt.cx; x < vt.cols; x++) clearCell(row[x]); }
+  }
+  function eraseDisplay(m) {
+    if (m === 1) { for (let y = 0; y < vt.cy; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); eraseInLine(1); }
+    else if (m === 2 || m === 3) { for (let y = 0; y < vt.rows; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); if (m === 3) sb.innerHTML = ""; }
+    else { eraseInLine(0); for (let y = vt.cy + 1; y < vt.rows; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); }
+  }
+  function saveCursor() { vt.sCx = vt.cx; vt.sCy = vt.cy; vt.sFg = vt.fg; vt.sBg = vt.bg; vt.sFlags = vt.flags; }
+  function restoreCursor() { vt.cx = clampX(vt.sCx); vt.cy = clampY(vt.sCy); vt.fg = vt.sFg; vt.bg = vt.sBg; vt.flags = vt.sFlags; }
+  function enterAlt() { if (vt.altActive) return; vt.altActive = true; vt.savedGrid = vt.grid; vt.savedPos = { x: vt.cx, y: vt.cy }; alloc(); vt.cx = 0; vt.cy = 0; sb.style.display = "none"; }
+  function exitAlt() { if (!vt.altActive) return; vt.altActive = false; vt.grid = vt.savedGrid; if (vt.savedPos) { vt.cx = clampX(vt.savedPos.x); vt.cy = clampY(vt.savedPos.y); } vt.top = 0; vt.bot = vt.rows - 1; sb.style.display = ""; }
+  function fullReset() { vt.fg = vt.bg = null; vt.flags = 0; vt.top = 0; vt.bot = vt.rows - 1; if (vt.altActive) exitAlt(); alloc(); vt.cx = vt.cy = 0; vt.wrapNext = false; }
+
+  function sgrExt(ps, i, isFg) {
+    const mode = ps[i + 1]; let color = null, used = i;
+    if (mode === 5) { color = vt256(ps[i + 2] || 0); used = i + 2; }
+    else if (mode === 2) { color = `rgb(${ps[i + 2] || 0},${ps[i + 3] || 0},${ps[i + 4] || 0})`; used = i + 4; }
+    if (color !== null) { if (isFg) vt.fg = color; else vt.bg = color; }
+    return used;
+  }
+  function sgr(ps) {
+    if (!ps.length) ps = [0];
+    for (let i = 0; i < ps.length; i++) {
+      const n = ps[i];
+      if (n === 0) { vt.fg = vt.bg = null; vt.flags = 0; }
+      else if (n === 1) vt.flags |= 1; else if (n === 2) vt.flags |= 8;
+      else if (n === 4) vt.flags |= 4; else if (n === 7) vt.flags |= 2;
+      else if (n === 22) vt.flags &= ~9; else if (n === 24) vt.flags &= ~4; else if (n === 27) vt.flags &= ~2;
+      else if (n >= 30 && n <= 37) vt.fg = VT_PAL[n - 30];
+      else if (n === 38) i = sgrExt(ps, i, true);
+      else if (n === 39) vt.fg = null;
+      else if (n >= 40 && n <= 47) vt.bg = VT_PAL[n - 40];
+      else if (n === 48) i = sgrExt(ps, i, false);
+      else if (n === 49) vt.bg = null;
+      else if (n >= 90 && n <= 97) vt.fg = VT_PAL[8 + n - 90];
+      else if (n >= 100 && n <= 107) vt.bg = VT_PAL[8 + n - 100];
+    }
+  }
+  function setMode(ps, priv, on) {
+    if (!priv) return;
+    for (const n of ps) {
+      if (n === 25) vt.cursorVis = on;
+      else if (n === 1) vt.appCursor = on;
+      else if (n === 47 || n === 1047 || n === 1049) { on ? enterAlt() : exitAlt(); }
+    }
+  }
+  function csi(f) {
+    const priv = vt.coll.indexOf("?") >= 0;
+    const ps = vt.parm.split(";").map(x => x === "" ? 0 : parseInt(x, 10) || 0);
+    const p0 = ps[0] || 0, row = () => vt.grid[vt.cy];
+    switch (f) {
+      case "A": vt.cy = Math.max(vt.top, vt.cy - Math.max(1, p0)); break;
+      case "B": vt.cy = Math.min(vt.bot, vt.cy + Math.max(1, p0)); break;
+      case "C": vt.cx = Math.min(vt.cols - 1, vt.cx + Math.max(1, p0)); vt.wrapNext = false; break;
+      case "D": vt.cx = Math.max(0, vt.cx - Math.max(1, p0)); vt.wrapNext = false; break;
+      case "E": vt.cx = 0; vt.cy = Math.min(vt.bot, vt.cy + Math.max(1, p0)); break;
+      case "F": vt.cx = 0; vt.cy = Math.max(vt.top, vt.cy - Math.max(1, p0)); break;
+      case "G": case "`": vt.cx = clampX((p0 || 1) - 1); vt.wrapNext = false; break;
+      case "d": vt.cy = clampY((p0 || 1) - 1); break;
+      case "H": case "f": vt.cy = clampY((ps[0] || 1) - 1); vt.cx = clampX((ps[1] || 1) - 1); vt.wrapNext = false; break;
+      case "J": eraseDisplay(p0); break;
+      case "K": eraseInLine(p0); break;
+      case "m": sgr(ps); break;
+      case "r": { const t = (ps[0] || 1) - 1, b = (ps[1] || vt.rows) - 1; if (t < b) { vt.top = clampY(t); vt.bot = clampY(b); vt.cx = 0; vt.cy = vt.top; } break; }
+      case "s": saveCursor(); break;
+      case "u": restoreCursor(); break;
+      case "L": if (vt.cy >= vt.top && vt.cy <= vt.bot) for (let i = 0; i < Math.max(1, p0); i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.cy, 0, newRow()); } break;
+      case "M": if (vt.cy >= vt.top && vt.cy <= vt.bot) for (let i = 0; i < Math.max(1, p0); i++) { vt.grid.splice(vt.cy, 1); vt.grid.splice(vt.bot, 0, newRow()); } break;
+      case "P": { const r = row(); for (let i = 0; i < Math.max(1, p0); i++) { r.splice(vt.cx, 1); r.push(blank()); } break; }
+      case "@": { const r = row(); for (let i = 0; i < Math.max(1, p0); i++) { r.splice(vt.cx, 0, blank()); r.pop(); } break; }
+      case "X": { const r = row(); for (let x = vt.cx; x < Math.min(vt.cols, vt.cx + Math.max(1, p0)); x++) clearCell(r[x]); break; }
+      case "S": scrollUp(Math.max(1, p0)); break;
+      case "T": scrollDown(Math.max(1, p0)); break;
+      case "h": setMode(ps, priv, true); break;
+      case "l": setMode(ps, priv, false); break;
+    }
+  }
+  vt.feed = function (text) {
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i], code = text.charCodeAt(i);
+      if (vt.st === 0) {
+        if (code === 0x1b) { vt.st = 1; vt.parm = ""; vt.coll = ""; }
+        else if (ch === "\r") { vt.cx = 0; vt.wrapNext = false; }
+        else if (code === 10 || code === 11 || code === 12) lineFeed();
+        else if (code === 8) { vt.cx = Math.max(0, vt.cx - 1); vt.wrapNext = false; }
+        else if (code === 9) vt.cx = Math.min(vt.cols - 1, vt.cx - (vt.cx % 8) + 8);
+        else if (code === 7) { /* BEL */ }
+        else if (code >= 32) putChar(ch);
+      } else if (vt.st === 1) {
+        if (ch === "[") { vt.st = 2; vt.parm = ""; vt.coll = ""; }
+        else if (ch === "]") { vt.st = 3; }
+        else if (ch === "(" || ch === ")" || ch === "*" || ch === "+") vt.st = 4;
+        else { if (ch === "M") revIndex(); else if (ch === "D") lineFeed(); else if (ch === "E") { vt.cx = 0; lineFeed(); } else if (ch === "7") saveCursor(); else if (ch === "8") restoreCursor(); else if (ch === "c") fullReset(); vt.st = 0; }
+      } else if (vt.st === 2) {
+        if (code >= 0x40 && code <= 0x7e) { csi(ch); vt.st = 0; }
+        else if (ch === "?" || ch === ">" || ch === "=" || ch === "!") vt.coll += ch;
+        else vt.parm += ch;
+      } else if (vt.st === 3) { if (code === 7) vt.st = 0; else if (code === 0x1b) vt.st = 5; }
+      else if (vt.st === 4) vt.st = 0;
+      else if (vt.st === 5) vt.st = 0;
+    }
+    scheduleRender();
+  };
+
+  function cellStyle(cell) {
+    let f = cell.f, b = cell.b; const a = cell.a;
+    if (a & 2) { const t = f; f = b || "#05070b"; b = t || "#d6dde8"; }
+    let s = "";
+    if (f) s += "color:" + f + ";";
+    if (b) s += "background:" + b + ";";
+    if (a & 1) s += "font-weight:600;";
+    if (a & 8) s += "opacity:.7;";
+    if (a & 4) s += "text-decoration:underline;";
+    return s;
+  }
+  function renderRow(rowCells, cursorX) {
+    let end = -1;
+    for (let x = rowCells.length - 1; x >= 0; x--) { const c = rowCells[x]; if (c.c !== " " || c.f || c.b || c.a) { end = x; break; } }
+    if (cursorX >= 0 && cursorX > end) end = cursorX;
+    let html = "", run = "", style = null;
+    const flush = () => { if (run !== "") { html += style ? `<span style="${style}">${vtEsc(run)}</span>` : vtEsc(run); run = ""; } };
+    for (let x = 0; x <= end; x++) {
+      const cell = rowCells[x];
+      if (x === cursorX) { flush(); style = null; html += `<span class="term-cursor">${vtEsc(cell.c === " " ? " " : cell.c)}</span>`; continue; }
+      const st = cellStyle(cell);
+      if (st !== style) { flush(); style = st; }
+      run += cell.c;
+    }
+    flush();
+    return html;
+  }
+  function render() {
+    const focused = document.activeElement === screen;
+    let html = "";
+    for (let y = 0; y < vt.rows; y++) {
+      const cx = (vt.cursorVis && focused && y === vt.cy) ? vt.cx : -1;
+      html += `<div class="term-row">${renderRow(vt.grid[y], cx)}</div>`;
+    }
+    lv.innerHTML = html;
+    screen.scrollTop = screen.scrollHeight;
+  }
+  function scheduleRender() {
+    if (vt.pending) return;
+    vt.pending = true;
+    const run = () => { if (!vt.pending) return; vt.pending = false; render(); };
+    requestAnimationFrame(run);       // 可见标签页：随帧渲染，流畅
+    setTimeout(run, 120);             // 兜底：后台标签页 rAF 被暂停时仍能渲染
+  }
+
+  vt.fit = function () {
+    const probe = document.createElement("span");
+    probe.textContent = "MMMMMMMMMMMMMMMMMMMM";
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;left:-9999px";
+    lv.appendChild(probe);
+    const rect = probe.getBoundingClientRect();
+    const cw = rect.width / 20, chh = rect.height;
+    lv.removeChild(probe);
+    if (!cw || !chh) return null;
+    const cs = getComputedStyle(screen);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const cols = Math.max(20, Math.floor((screen.clientWidth - padX) / cw));
+    const rows = Math.max(6, Math.floor((screen.clientHeight - padY) / chh));
+    if (cols !== vt.cols || rows !== vt.rows) {
+      const old = vt.grid; vt.cols = cols; vt.rows = rows; vt.grid = [];
+      for (let y = 0; y < rows; y++) { const r = newRow(); if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x]; vt.grid.push(r); }
+      vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false;
+      scheduleRender();
+    }
+    return { cols, rows };
+  };
+  return vt;
 }
 
 /* ---------- 告警设置 ---------- */
