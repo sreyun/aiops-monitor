@@ -5,6 +5,7 @@ package main
 import (
 	"log"
 	"os"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 	"unsafe"
@@ -66,6 +67,9 @@ type conptyShell struct {
 	outFile *os.File // read shell output here ← ConPTY output
 	attrBuf []byte   // keeps the attribute list memory alive
 	convBuf []byte   // leftover bytes from UTF-8 conversion (may exceed read buffer)
+
+	termOnce sync.Once // guards shell termination (Close)
+	reapOnce sync.Once // guards process/thread handle close — only after Wait sees the exit
 }
 
 // newPTY starts the shell attached to a fresh pseudo console. Returns nil on any
@@ -212,23 +216,40 @@ func (c *conptyShell) Resize(cols, rows int) error {
 	return nil
 }
 func (c *conptyShell) Wait() error {
-	procWaitForSingleObjectT.Call(uintptr(c.hProc), infinite)
+	if c.hProc != 0 {
+		procWaitForSingleObjectT.Call(uintptr(c.hProc), infinite)
+	}
+	c.reap() // process has exited — now it's safe to close the handles
 	return nil
 }
+
+// Close terminates the shell and closes the pipes, but does NOT close the
+// process/thread handles. Handle close happens in reap(), only after Wait()
+// observes the exit — otherwise CloseHandle(hProc) would race the concurrent
+// WaitForSingleObject(hProc) and, with handle-value reuse across rapid
+// back-to-back sessions, crash the agent.
 func (c *conptyShell) Close() error {
-	procClosePseudoConsole.Call(c.hpc) // signals the shell to exit and closes the pipes
-	if c.hProc != 0 {
-		procTerminateProcessT.Call(uintptr(c.hProc), 0)
-	}
-	_ = c.outFile.Close()
-	_ = c.inFile.Close()
-	if c.hThread != 0 {
-		procCloseHandleT.Call(uintptr(c.hThread))
-	}
-	if c.hProc != 0 {
-		procCloseHandleT.Call(uintptr(c.hProc))
-	}
+	c.termOnce.Do(func() {
+		procClosePseudoConsole.Call(c.hpc) // signals the shell to exit and closes the pipes
+		if c.hProc != 0 {
+			procTerminateProcessT.Call(uintptr(c.hProc), 0)
+		}
+		_ = c.outFile.Close()
+		_ = c.inFile.Close()
+	})
 	return nil
+}
+
+// reap closes the process + thread handles exactly once.
+func (c *conptyShell) reap() {
+	c.reapOnce.Do(func() {
+		if c.hThread != 0 {
+			procCloseHandleT.Call(uintptr(c.hThread))
+		}
+		if c.hProc != 0 {
+			procCloseHandleT.Call(uintptr(c.hProc))
+		}
+	})
 }
 
 // convertToUTF8 converts bytes from the system ANSI code page (e.g., GBK on

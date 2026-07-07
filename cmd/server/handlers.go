@@ -1128,7 +1128,16 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "剧本不存在"})
 		return
 	}
-	hosts := s.store.ListHosts()
+	// Only online hosts can run commands — an offline host has no agent to reach,
+	// so including it would always fail the whole execution. Filter them out.
+	offlineSec := int64(s.cfg.Thresholds().OfflineAfter.Seconds())
+	nowUnix := time.Now().Unix()
+	hosts := make([]*Host, 0)
+	for _, h := range s.store.ListHosts() {
+		if nowUnix-h.LastSeen <= offlineSec {
+			hosts = append(hosts, h)
+		}
+	}
 	// Resolve all unique target hosts across all steps
 	targetSet := map[string]*Host{}
 	for _, step := range pb.Steps {
@@ -1137,7 +1146,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(targetSet) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "剧本目标主机为空，请检查步骤的目标选择"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "目标主机为空或均已离线——请检查步骤的目标选择与主机在线状态"})
 		return
 	}
 	targetList := make([]*Host, 0, len(targetSet))

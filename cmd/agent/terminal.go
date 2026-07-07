@@ -87,6 +87,13 @@ func (a *Agent) termWait() (sessionID string, ok bool) {
 }
 
 func (a *Agent) runTerminalSession(sid string) {
+	// A terminal/playbook session must never crash the whole agent: recover any
+	// panic so metrics reporting and future sessions keep working.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("终端会话 %s 异常已恢复（不影响 Agent 运行）: %v", sid, r)
+		}
+	}()
 	sh := startShell(120, 30)
 	if sh == nil {
 		return
