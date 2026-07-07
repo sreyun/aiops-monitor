@@ -156,15 +156,18 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	}
 	// Email alert notification — sent to the operator's bound email if SMTP is configured
 	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
-		acc := n.cfg.Account()
-		if acc.Email != "" {
-			html := alertEmailHTML(a, firing)
-			if err := sendEmail(cfg.SMTP, acc.Email, "AIOps 告警："+a.Hostname, html); err != nil {
+		html := alertEmailHTML(a, firing)
+		okAny := false
+		for _, to := range n.cfg.AlertEmails() {
+			if err := sendEmail(cfg.SMTP, to, "AIOps 告警："+a.Hostname, html); err != nil {
 				log.Printf("邮件推送失败: %v", err)
 				n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "邮件推送失败：" + err.Error()})
 			} else {
-				sent = append(sent, "邮件")
+				okAny = true
 			}
+		}
+		if okAny {
+			sent = append(sent, "邮件")
 		}
 	}
 	if len(sent) > 0 {
@@ -213,14 +216,17 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 		}
 	}
 	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
-		acc := n.cfg.Account()
-		if acc.Email != "" {
-			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>测试消息：邮件告警通道连通正常 ✅</p><p>时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
-			if err := sendEmail(cfg.SMTP, acc.Email, "AIOps 测试邮件", html); err != nil {
-				errs = append(errs, "邮件: "+err.Error())
-			}
+		emails := n.cfg.AlertEmails()
+		if len(emails) == 0 {
+			errs = append(errs, "邮件: 没有用户绑定邮箱")
 		} else {
-			errs = append(errs, "邮件: 账户未绑定邮箱")
+			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>测试消息：邮件告警通道连通正常 ✅</p><p>时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
+			for _, to := range emails {
+				if err := sendEmail(cfg.SMTP, to, "AIOps 测试邮件", html); err != nil {
+					errs = append(errs, "邮件: "+err.Error())
+					break
+				}
+			}
 		}
 	}
 	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled {

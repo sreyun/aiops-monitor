@@ -538,6 +538,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn danger" id="logoutBtn">退出登录</button>
+      <button class="btn admin-only" id="usersBtn">用户管理</button>
       <div style="flex:1"></div>
       <button class="btn" id="pfPwdBtn">修改密码</button>
       <button class="btn primary" id="pfSaveBtn">保存资料</button>
@@ -553,6 +554,34 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="mfaBody"></div>
+  </div>
+</div>
+
+<!-- ===== 用户管理弹窗 ===== -->
+<div class="mask" id="usersMask" data-close>
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3>用户管理</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="users-toolbar">
+        <span class="mfa-desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
+        <button class="btn primary sm" id="userAddBtn" type="button">+ 新建用户</button>
+      </div>
+      <div id="usersList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 用户编辑子弹窗 ===== -->
+<div class="mask" id="userEditMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="userEditTitle">新建用户</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="userEditBody"></div>
   </div>
 </div>
 

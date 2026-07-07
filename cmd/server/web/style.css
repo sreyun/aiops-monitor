@@ -848,6 +848,28 @@ svg.sparkline{width:100%; height:46px; display:block}
 .btn.sm{padding:5px 12px; font-size:13px}
 .btn.ghost.sm{padding:3px 10px; font-size:12px}
 
+/* ===== 多用户 / RBAC ===== */
+.admin-only{display:none}
+body[data-role="admin"] .admin-only{display:inline-flex}
+/* 只读角色：隐藏最明显的写操作入口（后端 routeAllowed 才是真正的安全边界）*/
+body[data-role="viewer"] .x-btn,
+body[data-role="viewer"] .term-btn,
+body[data-role="viewer"] #installBtn{display:none !important}
+.modal.wide{max-width:640px; width:92%}
+.users-toolbar{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap}
+.user-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-sm); margin-bottom:8px; background:var(--panel2)}
+.user-info{min-width:0}
+.user-main{display:flex; align-items:center; gap:8px}
+.user-name{font-weight:600; font-size:14px; color:var(--txt)}
+.role-badge{font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px}
+.role-badge.role-admin{color:var(--crit-txt); background:rgba(239,77,90,.12)}
+.role-badge.role-operator{color:var(--accent-txt); background:var(--accent-soft)}
+.role-badge.role-viewer{color:var(--muted); background:rgba(140,150,165,.12)}
+.user-mfa{font-size:10px; font-weight:700; color:var(--ok-txt); background:rgba(80,200,120,.12); padding:1px 6px; border-radius:4px; letter-spacing:.03em}
+.user-sub{font-size:12px; color:var(--muted); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.user-acts{display:flex; gap:4px; flex:none; flex-wrap:wrap; justify-content:flex-end}
+.ubtn-del{color:var(--crit-txt)}
+
 /* ---------- 自动化运维 ---------- */
 .pb-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:14px 16px; display:flex; flex-direction:column; gap:8px}
 .pb-card:hover{border-color:var(--line2)}

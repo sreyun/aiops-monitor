@@ -261,3 +261,20 @@ func (cs *ConfigStore) DeleteUser(username string) error {
 	cs.mu.Unlock()
 	return cs.save()
 }
+
+// AlertEmails returns the deduplicated non-empty emails of all users — the
+// recipients for alert / test notifications.
+func (cs *ConfigStore) AlertEmails() []string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	var out []string
+	seen := map[string]bool{}
+	for _, u := range cs.cfg.Users {
+		e := strings.TrimSpace(u.Email)
+		if e != "" && !seen[strings.ToLower(e)] {
+			seen[strings.ToLower(e)] = true
+			out = append(out, e)
+		}
+	}
+	return out
+}

@@ -89,6 +89,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/account/recover-username", s.handleRecoverUsername)
 	mux.HandleFunc("POST /api/v1/account/send-reset-code", s.handleSendResetCode)
 	mux.HandleFunc("POST /api/v1/account/reset-password", s.handleResetPassword)
+	// user management (RBAC; admin-only, enforced by routeAllowed)
+	mux.HandleFunc("GET /api/v1/users", s.handleListUsers)
+	mux.HandleFunc("POST /api/v1/users", s.handleCreateUser)
+	mux.HandleFunc("POST /api/v1/users/{username}", s.handleUpdateUser)
+	mux.HandleFunc("DELETE /api/v1/users/{username}", s.handleDeleteUser)
+	mux.HandleFunc("POST /api/v1/users/{username}/reset-password", s.handleResetUserPassword)
+	mux.HandleFunc("POST /api/v1/users/{username}/reset-mfa", s.handleResetUserMFA)
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
@@ -480,7 +487,140 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.SMTP.Password = maskSecret(c.SMTP.Password)
 	// Never expose the password hash/salt or the MFA secret to the browser.
 	c.Account.Salt, c.Account.Hash, c.Account.MFASecret = "", "", ""
+	c.Users = nil // the user list (with hashes) is served via /api/v1/users, not here
 	writeJSON(w, http.StatusOK, c)
+}
+
+// ---- user management (admin-only; enforced by routeAllowed) ----
+
+// userView is the browser-safe projection of an account (no salt/hash/secret).
+func userView(u AccountConfig) map[string]any {
+	return map[string]any{
+		"username": u.Username, "display_name": u.DisplayName,
+		"email": u.Email, "role": u.Role, "mfa_enabled": u.MFAEnabled,
+	}
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users := s.cfg.UsersList()
+	out := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		out = append(out, userView(u))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	uname := sanitizeUsername(req.Username)
+	if uname == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名仅限字母/数字/-_.，长度 2–32 位"})
+		return
+	}
+	if len(strings.TrimSpace(req.Password)) < 4 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码至少 4 位"})
+		return
+	}
+	if !validRole(req.Role) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "角色不合法"})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	if email != "" && !validEmail(email) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "邮箱格式不合法"})
+		return
+	}
+	if err := s.cfg.CreateUser(uname, req.Password, strings.TrimSpace(req.DisplayName), email, req.Role); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "创建用户：" + uname + "（" + req.Role + "）"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	var req struct {
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if !validRole(req.Role) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "角色不合法"})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	if email != "" && !validEmail(email) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "邮箱格式不合法"})
+		return
+	}
+	if err := s.cfg.UpdateUserMeta(username, strings.TrimSpace(req.DisplayName), email, req.Role); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改用户：" + username + " → " + req.Role})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	if cur, ok := s.currentUser(r); ok && cur.Username == username {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不能删除当前登录的账户"})
+		return
+	}
+	if err := s.cfg.DeleteUser(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.auth.clearUserSessions(username) // kick the removed user out
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除用户：" + username})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(strings.TrimSpace(req.Password)) < 4 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码至少 4 位"})
+		return
+	}
+	if err := s.cfg.SetUserPassword(username, req.Password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.auth.clearUserSessions(username) // force re-login with the new password
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "重置用户密码：" + username})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleResetUserMFA(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	if err := s.cfg.SetUserMFA(username, false, ""); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "管理员解除用户两步验证：" + username})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
@@ -774,10 +914,9 @@ func (s *Server) handleRecoverUsername(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "邮箱格式不合法"})
 		return
 	}
-	acc := s.cfg.Account()
-	// Do NOT reveal whether the email matches — return the same success response.
-	// Only send the email when the address matches the bound account.
-	if strings.EqualFold(acc.Email, req.Email) && acc.Email != "" {
+	// Do NOT reveal whether the email matches — always return the same response.
+	// Only actually send when the address matches some user's bound email.
+	if user, found := s.cfg.UserByEmail(req.Email); found {
 		cfg := s.cfg.Get()
 		if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
 			html := fmt.Sprintf(`<div style="font-family:sans-serif;padding:20px;max-width:500px;margin:0 auto">
@@ -785,7 +924,7 @@ func (s *Server) handleRecoverUsername(w http.ResponseWriter, r *http.Request) {
   <p>您的登录用户名为：<b style="font-size:18px">%s</b></p>
   <p style="color:#888;font-size:13px">如非本人操作请忽略此邮件。</p>
   <p style="color:#888;font-size:13px">时间：%s</p>
-</div>`, acc.Username, time.Now().Format("2006-01-02 15:04:05"))
+</div>`, user.Username, time.Now().Format("2006-01-02 15:04:05"))
 			if err := sendEmail(cfg.SMTP, req.Email, "AIOps Monitor — 用户名找回", html); err != nil {
 				s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "用户名找回邮件发送失败：" + err.Error()})
 				writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "邮件发送失败，请稍后重试"})
@@ -813,10 +952,10 @@ func (s *Server) handleSendResetCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请输入用户名"})
 		return
 	}
-	acc := s.cfg.Account()
-	// Constant-time comparison so the response time doesn't leak whether the
-	// username exists.
-	if subtle.ConstantTimeCompare([]byte(req.Username), []byte(acc.Username)) != 1 || acc.Email == "" {
+	user, found := s.cfg.UserByName(req.Username)
+	// Uniform response regardless of whether the user exists / has an email, to
+	// avoid username enumeration.
+	if !found || user.Email == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "如该用户名存在且已绑定邮箱，验证码已发送"})
 		return
 	}
@@ -825,7 +964,7 @@ func (s *Server) handleSendResetCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "系统未配置邮件服务，请联系管理员"})
 		return
 	}
-	code, err := s.emailMgr.issueCode(acc.Email, "reset_password")
+	code, err := s.emailMgr.issueCode(user.Email, "reset_password")
 	if err != nil {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
 		return
@@ -837,7 +976,7 @@ func (s *Server) handleSendResetCode(w http.ResponseWriter, r *http.Request) {
   <p style="color:#888;font-size:13px">如非本人操作请忽略此邮件并建议修改密码。</p>
   <p style="color:#888;font-size:13px">时间：%s</p>
 </div>`, code, time.Now().Format("2006-01-02 15:04:05"))
-	if err := sendEmail(cfg.SMTP, acc.Email, "AIOps Monitor — 密码重置验证码", html); err != nil {
+	if err := sendEmail(cfg.SMTP, user.Email, "AIOps Monitor — 密码重置验证码", html); err != nil {
 		s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "密码重置验证码发送失败：" + err.Error()})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "邮件发送失败，请稍后重试"})
 		return
@@ -869,19 +1008,18 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "新密码至少 4 位"})
 		return
 	}
-	acc := s.cfg.Account()
-	if subtle.ConstantTimeCompare([]byte(req.Username), []byte(acc.Username)) != 1 ||
-		!strings.EqualFold(req.Email, acc.Email) || acc.Email == "" {
+	user, found := s.cfg.UserByName(req.Username)
+	if !found || !strings.EqualFold(req.Email, user.Email) || user.Email == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名或邮箱不匹配"})
 		return
 	}
-	if !s.emailMgr.verifyCode(req.Email, "reset_password", req.Code) {
+	if !s.emailMgr.verifyCode(user.Email, "reset_password", req.Code) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "验证码错误或已过期"})
 		return
 	}
-	_ = s.cfg.SetPassword(req.NewPass)
-	s.auth.ClearSessions() // invalidate all old sessions
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "通过邮箱验证码重置密码"})
+	_ = s.cfg.SetUserPassword(user.Username, req.NewPass)
+	s.auth.clearUserSessions(user.Username) // invalidate that user's old sessions
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "通过邮箱验证码重置密码：" + user.Username})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "密码已重置，请使用新密码登录"})
 }
 
@@ -897,7 +1035,11 @@ func (s *Server) handleMFAUnbindViaEmail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	req.Action = strings.TrimSpace(req.Action)
-	acc := s.cfg.Account()
+	acc, ok := s.currentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 	if acc.Email == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "账户未绑定邮箱，无法通过邮箱解除 MFA"})
 		return
@@ -941,8 +1083,8 @@ func (s *Server) handleMFAUnbindViaEmail(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "验证码错误或已过期"})
 			return
 		}
-		_ = s.cfg.SetMFA(false, "")
-		s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "通过邮箱验证码解除两步验证"})
+		_ = s.cfg.SetUserMFA(acc.Username, false, "")
+		s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "通过邮箱验证码解除两步验证：" + acc.Username})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "两步验证已关闭"})
 		return
 	}

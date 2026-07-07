@@ -1847,10 +1847,18 @@ async function delCheck(id) {
 }
 
 /* ---------- 账户 / 个人信息 ---------- */
+let CUR_ROLE = "";
+const roleLabel = r => ({ admin: "管理员", operator: "运维", viewer: "只读" }[r] || r || "");
+const canWrite = () => CUR_ROLE === "operator" || CUR_ROLE === "admin";
+const isAdmin = () => CUR_ROLE === "admin";
 function setUser(me) {
   const name = me.display_name || me.username || "用户";
   $("userName").textContent = name;
   $("userAvatar").textContent = (name[0] || "A");
+  if (me.role) {
+    CUR_ROLE = me.role;
+    document.body.dataset.role = me.role;
+  }
 }
 async function initAuth() {
   try {
@@ -2011,6 +2019,84 @@ function openMfaEmailUnbind() {
     if (r.ok) { toast("两步验证已通过邮箱解除", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
     else errEl.textContent = j.error || "解除失败";
   };
+}
+
+/* ---------- 用户管理（管理员）---------- */
+async function openUsers() {
+  $("usersMask").classList.add("show");
+  await loadUsers();
+}
+async function loadUsers() {
+  const list = $("usersList");
+  list.innerHTML = `<div class="empty-line">加载中…</div>`;
+  let users;
+  try { users = await fetch(`${API}/users`).then(r => r.json()); }
+  catch (e) { list.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`; return; }
+  if (!Array.isArray(users) || !users.length) { list.innerHTML = `<div class="empty-line">暂无用户</div>`; return; }
+  list.innerHTML = users.map(u => `
+    <div class="user-row" data-name="${esc(u.username)}">
+      <div class="user-info">
+        <div class="user-main"><span class="user-name">${esc(u.username)}</span>
+          <span class="role-badge role-${esc(u.role)}">${roleLabel(u.role)}</span>
+          ${u.mfa_enabled ? `<span class="user-mfa" title="已启用两步验证">MFA</span>` : ""}</div>
+        <div class="user-sub">${esc(u.display_name || "—")}${u.email ? " · " + esc(u.email) : ""}</div>
+      </div>
+      <div class="user-acts">
+        <button class="btn ghost sm" data-act="edit">编辑</button>
+        <button class="btn ghost sm" data-act="pwd">重置密码</button>
+        ${u.mfa_enabled ? `<button class="btn ghost sm" data-act="mfa">解绑MFA</button>` : ""}
+        <button class="btn ghost sm ubtn-del" data-act="del">删除</button>
+      </div>
+    </div>`).join("");
+}
+function openUserEdit(user) {
+  const isNew = !user;
+  $("userEditTitle").textContent = isNew ? "新建用户" : "编辑用户：" + user.username;
+  const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}（${r}）</option>`).join("");
+  $("userEditBody").innerHTML = `
+    ${isNew ? `<div class="field"><label>用户名</label><input type="text" id="ueName" placeholder="字母/数字/-_.，2–32 位"></div>
+    <div class="field"><label>初始密码（至少 4 位）</label><input type="password" id="uePass"></div>` : ""}
+    <div class="field"><label>显示名称</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder="如 运维小王"></div>
+    <div class="field"><label>邮箱（选填，用于告警接收 / 找回）</label><input type="text" id="ueEmail" value="${user ? esc(user.email || "") : ""}" placeholder="name@example.com"></div>
+    <div class="field"><label>角色</label><div class="select-wrap"><select id="ueRole">${roleOpts}</select></div></div>
+    <div class="login-err" id="ueErr"></div>
+    <div class="mfa-foot"><button class="btn primary" id="ueSave" type="button">${isNew ? "创建用户" : "保存"}</button></div>`;
+  $("userEditMask").classList.add("show");
+  $("ueSave").onclick = async () => {
+    const errEl = $("ueErr"); errEl.textContent = "";
+    const body = { display_name: $("ueDisplay").value.trim(), email: $("ueEmail").value.trim(), role: $("ueRole").value };
+    let r;
+    if (isNew) {
+      body.username = $("ueName").value.trim();
+      body.password = $("uePass").value;
+      r = await fetch(`${API}/users`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } else {
+      r = await fetch(`${API}/users/${encodeURIComponent(user.username)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    }
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { toast(isNew ? "用户已创建" : "已保存", "ok"); $("userEditMask").classList.remove("show"); loadUsers(); }
+    else errEl.textContent = j.error || "操作失败";
+  };
+}
+async function usersAction(name, act) {
+  if (act === "del") {
+    if (!confirm(`确定删除用户「${name}」？该操作不可撤销。`)) return;
+    const r = await fetch(`${API}/users/${encodeURIComponent(name)}`, { method: "DELETE" });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { toast("用户已删除", "ok"); loadUsers(); } else toast(j.error || "删除失败", "err");
+  } else if (act === "pwd") {
+    const pass = prompt(`为「${name}」设置新密码（至少 4 位）：`);
+    if (pass == null) return;
+    if (pass.trim().length < 4) { toast("密码至少 4 位", "err"); return; }
+    const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pass }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast("密码已重置", "ok"); else toast(j.error || "重置失败", "err");
+  } else if (act === "mfa") {
+    if (!confirm(`确定解除「${name}」的两步验证绑定？`)) return;
+    const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-mfa`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { toast("已解除两步验证", "ok"); loadUsers(); } else toast(j.error || "操作失败", "err");
+  }
 }
 
 /* ---------- 账户找回：用户名 / 密码 ---------- */
@@ -2578,6 +2664,18 @@ safeAddEventListener("pauseBtn", "click", togglePause);
 safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
 // 个人信息
 safeAddEventListener("profileBtn", "click", openProfile);
+safeAddEventListener("usersBtn", "click", openUsers);
+safeAddEventListener("userAddBtn", "click", () => openUserEdit(null));
+safeAddEventListener("usersList", "click", async e => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const row = e.target.closest(".user-row"); if (!row) return;
+  const name = row.dataset.name, act = btn.dataset.act;
+  if (act === "edit") {
+    const users = await fetch(`${API}/users`).then(r => r.json()).catch(() => []);
+    const u = Array.isArray(users) && users.find(x => x.username === name);
+    if (u) openUserEdit(u);
+  } else { usersAction(name, act); }
+});
 safeAddEventListener("pfSaveBtn", "click", saveProfile);
 safeAddEventListener("pfPwdBtn", "click", changePassword);
 safeAddEventListener("mfaToggleBtn", "click", () => { MFA_ENABLED ? openMfaDisable() : openMfaSetup(); });
