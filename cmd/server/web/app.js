@@ -887,56 +887,283 @@ function sparkline(series, color) {
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
 }
 
-/* ---------- 远程终端（经 Agent 反向通道，免开入站端口） ---------- */
-let TERM_RESIZE = null;   // 窗口 resize 监听器引用
-let TERM_RETRY = 0;       // 重连次数
-let TERM_HOST = null;     // 当前终端目标主机 {id, name}
+/* ---------- 远程终端（经 Agent 反向通道）· 多标签 ---------- */
+let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
+let TERM_ACTIVE = -1;    // active tab index
+let TERM_RESIZE = null;  // window resize listener
+
 function openTerminal(id, name) {
-  TERM_HOST = { id, name };
-  TERM_RETRY = 0;
-  doOpenTerminal(id, name);
+  let idx = TERM_TABS.findIndex(t => t.id === id);
+  if (idx >= 0) { switchTermTab(idx); $("termMask").classList.add("show"); return; }
+  createTermTab(id, name);
 }
-function doOpenTerminal(id, name) {
-  $("termTitle").textContent = name + " · 远程终端";
-  const screen = $("termScreen");
+
+function createTermTab(id, name) {
+  const screens = $("termScreens"), tabbar = $("termTabbar");
+  const screen = document.createElement("pre");
+  screen.className = "term-screen"; screen.tabIndex = 0; screen.spellcheck = false;
+  screens.appendChild(screen);
+  const tab = document.createElement("button");
+  tab.className = "term-tab";
+  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title="关闭标签">×</span>`;
+  tabbar.appendChild(tab);
   const vt = makeVT(screen);
   screen._vt = vt;
-  setTermStatus(TERM_RETRY > 0 ? `重连中…(${TERM_RETRY}/3)` : "连接中…", "");
-  const mask = $("termMask");
-  mask.classList.remove("maximized");
+  const tabObj = {id, name, ws: null, vt, screenEl: screen, tabEl: tab, retry: 0};
+  TERM_TABS.push(tabObj);
+  const idx = TERM_TABS.length - 1;
+  tab.onclick = (e) => {
+    if (e.target.classList.contains("term-tab-close")) { e.stopPropagation(); closeTermTab(TERM_TABS.indexOf(tabObj)); }
+    else switchTermTab(TERM_TABS.indexOf(tabObj));
+  };
+  screen.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj.ws); };
+  screen.onpaste = ev => {
+    ev.preventDefault();
+    const t = (ev.clipboardData || window.clipboardData).getData("text");
+    if (t && tabObj.ws) termSend(tabObj.ws, t);
+  };
+  switchTermTab(idx);
+  $("termMask").classList.remove("maximized");
   const mb = $("termMaxBtn"); if (mb) mb.title = "放大窗口";
-  mask.classList.add("show");
-  closeTerminalWS();
+  $("termMask").classList.add("show");
+  connectTermWS(tabObj);
+}
+
+function connectTermWS(tab) {
+  const screen = tab.screenEl, vt = tab.vt;
+  setTermStatus(tab.retry > 0 ? `重连中…(${tab.retry}/3)` : "连接中…", "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/terminal`);
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
   ws.binaryType = "arraybuffer";
-  TERM_WS = ws;
+  tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
-  ws.onopen = () => { TERM_RETRY = 0; setTermStatus("已连接", "on"); screen.focus(); requestAnimationFrame(doResize); };
+  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on"); screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
     const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
     vt.feed(text);
   };
   ws.onclose = () => {
     setTermStatus("已断开", "off");
-    if (TERM_WS === ws) TERM_WS = null;
-    // P1-#6: Auto-retry 3 times with 2s interval
-    if (TERM_HOST && TERM_RETRY < 3 && mask.classList.contains("show")) {
-      TERM_RETRY++;
-      setTermStatus(`重连中…(${TERM_RETRY}/3)`, "");
-      setTimeout(() => { if (TERM_HOST && mask.classList.contains("show")) doOpenTerminal(TERM_HOST.id, TERM_HOST.name); }, 2000);
+    if (tab.ws === ws) tab.ws = null;
+    const mask = $("termMask");
+    if (mask.classList.contains("show") && tab.retry < 3) {
+      tab.retry++;
+      setTermStatus(`重连中…(${tab.retry}/3)`, "");
+      setTimeout(() => { if (mask.classList.contains("show")) connectTermWS(tab); }, 2000);
     }
   };
   ws.onerror = () => setTermStatus("连接错误", "off");
-  screen.onkeydown = e => termKeyDown(e, ws);
-  screen.onpaste = e => {
-    e.preventDefault();
-    const t = (e.clipboardData || window.clipboardData).getData("text");
-    if (t) termSend(ws, t);
-  };
+}
+
+function switchTermTab(idx) {
+  if (idx < 0 || idx >= TERM_TABS.length) return;
+  TERM_ACTIVE = idx;
+  TERM_TABS.forEach((t, i) => { t.tabEl.classList.toggle("active", i === idx); t.screenEl.classList.toggle("active", i === idx); });
+  $("termTitle").textContent = TERM_TABS[idx].name + " · 远程终端";
+  requestAnimationFrame(() => TERM_TABS[idx].screenEl.focus());
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
-  TERM_RESIZE = () => doResize();
+  TERM_RESIZE = () => termRefit();
   window.addEventListener("resize", TERM_RESIZE);
+}
+
+function closeTermTab(idx) {
+  if (idx < 0 || idx >= TERM_TABS.length) return;
+  const tab = TERM_TABS[idx];
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
+  tab.screenEl.remove(); tab.tabEl.remove();
+  TERM_TABS.splice(idx, 1);
+  if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
+  if (TERM_ACTIVE >= 0) switchTermTab(TERM_ACTIVE);
+  else { $("termMask").classList.remove("show"); if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; } }
+}
+
+function closeAllTermTabs() {
+  TERM_TABS.forEach(t => { if (t.ws) { try { t.ws.close(); } catch(e) {} } });
+  TERM_TABS = []; TERM_ACTIVE = -1;
+  const sc = $("termScreens"); if (sc) sc.innerHTML = "";
+  const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
+  if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+}
+
+/* ---------- 终端会话管理（列表 / 回放 / 旁观） ---------- */
+let TERM_SESSIONS_TIMER = null;
+
+function openTerminalSessions() {
+  $("termSessionsMask").classList.add("show");
+  loadTerminalSessions();
+  if (TERM_SESSIONS_TIMER) clearInterval(TERM_SESSIONS_TIMER);
+  TERM_SESSIONS_TIMER = setInterval(loadTerminalSessions, 3000);
+}
+
+function loadTerminalSessions() {
+  const mask = $("termSessionsMask");
+  if (!mask || !mask.classList.contains("show")) {
+    if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+    return;
+  }
+  fetch(`${API}/terminal/sessions`).then(r => r.json()).then(sessions => {
+    renderTerminalSessions(sessions || []);
+  }).catch(e => console.warn("load sessions:", e));
+}
+
+function renderTerminalSessions(sessions) {
+  const c = $("termSessionsList");
+  if (!c) return;
+  if (sessions.length === 0) {
+    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">当前没有活跃的终端会话</div>`;
+    return;
+  }
+  c.innerHTML = sessions.map(s => {
+    const t = new Date(s.created_at * 1000);
+    const time = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+    return `<div class="term-session-item">
+      <div class="term-session-info">
+        <div class="term-session-host">${esc(s.hostname)}</div>
+        <div class="term-session-meta">操作者 ${esc(s.operator)} · 开始 ${time} · ${s.frames} 帧录制</div>
+      </div>
+      ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} 旁观</span>` : `<span class="term-session-badge">活跃</span>`}
+      <div class="term-session-actions">
+        <button class="btn sm" onclick="openTerminalObserve('${s.id}','${esc(s.hostname)}')">旁观</button>
+        <button class="btn sm" onclick="openTerminalReplay('${s.id}','${esc(s.hostname)}')">回放</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- 终端回放 ---------- */
+let REPLAY = null; // {frames, idx, vt, timer, playing, speed}
+
+function openTerminalReplay(sessionId, hostname) {
+  fetch(`${API}/terminal/sessions/${encodeURIComponent(sessionId)}/replay`)
+    .then(r => r.json())
+    .then(data => {
+      const frames = data.frames || [];
+      if (frames.length === 0) { toast("该会话无录制数据", "err"); return; }
+      $("termReplayTitle").textContent = hostname + " · 会话回放";
+      const screen = $("termReplayScreen");
+      const vt = makeVT(screen);
+      screen._vt = vt;
+      REPLAY = {frames, idx: 0, vt, timer: null, playing: false, speed: 2};
+      $("termReplayMask").classList.add("show");
+      $("termSessionsMask").classList.remove("show");
+      if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+      document.querySelectorAll(".replay-speed-btn").forEach(b => {
+        b.classList.toggle("active", parseFloat(b.dataset.speed) === 2);
+      });
+      updateReplayProgress();
+      playReplay();
+    })
+    .catch(e => toast("加载回放失败: " + e, "err"));
+}
+
+function playReplay() {
+  if (!REPLAY || REPLAY.playing) return;
+  REPLAY.playing = true;
+  const btn = $("replayPlayBtn"); if (btn) btn.textContent = "⏸";
+  const st = $("replayStatus"); if (st) { st.textContent = "播放中"; st.className = "term-status on"; }
+  scheduleNextFrame();
+}
+
+function pauseReplay() {
+  if (!REPLAY) return;
+  REPLAY.playing = false;
+  if (REPLAY.timer) { clearTimeout(REPLAY.timer); REPLAY.timer = null; }
+  const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
+  const st = $("replayStatus"); if (st) { st.textContent = "已暂停"; st.className = "term-status"; }
+}
+
+function scheduleNextFrame() {
+  if (!REPLAY || !REPLAY.playing) return;
+  if (REPLAY.idx >= REPLAY.frames.length) {
+    REPLAY.playing = false;
+    const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
+    const st = $("replayStatus"); if (st) { st.textContent = "播放完毕"; st.className = "term-status"; }
+    updateReplayProgress();
+    return;
+  }
+  const frame = REPLAY.frames[REPLAY.idx];
+  const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
+  const text = REPLAY.vt.dec.decode(bytes, { stream: true });
+  REPLAY.vt.feed(text);
+  REPLAY.idx++;
+  updateReplayProgress();
+  let delay = 0;
+  if (REPLAY.idx < REPLAY.frames.length) {
+    const next = REPLAY.frames[REPLAY.idx];
+    delay = (next.ts - frame.ts) / REPLAY.speed;
+    delay = Math.min(Math.max(delay, 1), 3000 / REPLAY.speed);
+  }
+  REPLAY.timer = setTimeout(scheduleNextFrame, delay);
+}
+
+function setReplaySpeed(speed) {
+  if (!REPLAY) return;
+  REPLAY.speed = speed;
+  document.querySelectorAll(".replay-speed-btn").forEach(b => {
+    b.classList.toggle("active", parseFloat(b.dataset.speed) === speed);
+  });
+}
+
+function seekReplay(progress) {
+  if (!REPLAY) return;
+  pauseReplay();
+  const targetIdx = Math.floor(progress * REPLAY.frames.length);
+  const screen = $("termReplayScreen");
+  const vt = makeVT(screen);
+  screen._vt = vt;
+  REPLAY.vt = vt;
+  REPLAY.idx = 0;
+  for (let i = 0; i < targetIdx; i++) {
+    const frame = REPLAY.frames[i];
+    const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
+    const text = vt.dec.decode(bytes, { stream: true });
+    vt.feed(text);
+  }
+  REPLAY.idx = targetIdx;
+  updateReplayProgress();
+}
+
+function updateReplayProgress() {
+  if (!REPLAY) return;
+  const pct = REPLAY.frames.length > 0 ? (REPLAY.idx / REPLAY.frames.length) * 100 : 0;
+  const bar = $("replayProgress"); if (bar) bar.style.width = pct + "%";
+  const time = $("replayTime"); if (time) time.textContent = `${REPLAY.idx} / ${REPLAY.frames.length} 帧`;
+}
+
+function closeReplay() { pauseReplay(); REPLAY = null; }
+
+/* ---------- 终端只读旁观 ---------- */
+let OBSERVE_WS = null;
+
+function openTerminalObserve(sessionId, hostname) {
+  const screen = $("termObserveScreen");
+  const vt = makeVT(screen);
+  screen._vt = vt;
+  $("termObserveTitle").textContent = hostname + " · 只读旁观";
+  setObserveStatus("连接中…", "");
+  $("termObserveMask").classList.add("show");
+  $("termSessionsMask").classList.remove("show");
+  if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+  closeObserveWS();
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}/observe`);
+  ws.binaryType = "arraybuffer";
+  OBSERVE_WS = ws;
+  ws.onopen = () => setObserveStatus("旁观中", "on");
+  ws.onmessage = ev => {
+    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
+    vt.feed(text);
+  };
+  ws.onclose = () => setObserveStatus("会话已结束", "off");
+  ws.onerror = () => setObserveStatus("连接错误", "off");
+}
+
+function closeObserveWS() {
+  if (OBSERVE_WS) { try { OBSERVE_WS.close(); } catch(e) {} OBSERVE_WS = null; }
+}
+
+function setObserveStatus(txt, cls) {
+  const s = $("observeStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
 }
 // 发送窗口尺寸（帧首字节 'r'，负载 "colsxrows"）→ 服务端 → Agent → PTY
 function termResizeSend(ws, cols, rows) {
@@ -949,8 +1176,9 @@ function termResizeSend(ws, cols, rows) {
 }
 // 重新测量终端并把新尺寸告知 PTY（放大/还原/窗口变化后调用）
 function termRefit() {
-  const screen = $("termScreen"), vt = screen && screen._vt;
-  if (vt && TERM_WS) { const s = vt.fit(); if (s && TERM_WS.readyState === 1) termResizeSend(TERM_WS, s.cols, s.rows); }
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (tab.vt && tab.ws) { const s = tab.vt.fit(); if (s && tab.ws.readyState === 1) termResizeSend(tab.ws, s.cols, s.rows); }
 }
 // 放大 / 还原 终端窗口
 safeAddEventListener("termMaxBtn", "click", () => {
@@ -962,7 +1190,7 @@ safeAddEventListener("termMaxBtn", "click", () => {
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
 }
-function closeTerminalWS() { if (TERM_WS) { try { TERM_WS.close(); } catch (e) {} TERM_WS = null; } }
+function closeTerminalWS() { closeAllTermTabs(); }
 // 发送输入（帧首字节 'i' 标识 input）
 function termSend(ws, str) {
   if (!ws || ws.readyState !== 1) return;
@@ -2279,15 +2507,24 @@ function filterChecks(type) {
 document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
   if (e.target === mk || e.target.closest("[data-close-btn]")) {
     mk.classList.remove("show"); hideChartTip();
-    if (mk.id === "termMask") { closeTerminalWS(); TERM_HOST = null; }
+    if (mk.id === "termMask") { closeTerminalWS(); }
+    if (mk.id === "termReplayMask") { closeReplay(); }
+    if (mk.id === "termObserveMask") { closeObserveWS(); }
+    if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
   }
 }));
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     const hadTerm = $("termMask") && $("termMask").classList.contains("show");
+    const hadReplay = $("termReplayMask") && $("termReplayMask").classList.contains("show");
+    const hadObserve = $("termObserveMask") && $("termObserveMask").classList.contains("show");
+    const hadSessions = $("termSessionsMask") && $("termSessionsMask").classList.contains("show");
     document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
     hideChartTip();
     if (hadTerm) closeTerminalWS();
+    if (hadReplay) closeReplay();
+    if (hadObserve) closeObserveWS();
+    if (hadSessions && TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
   }
 });
 
@@ -2700,6 +2937,18 @@ safeAddEventListener("playbookList", "click", e => {
     if (!confirm("确认删除此剧本？")) return;
     fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast("已删除","ok");loadPlaybooks();});
   }
+});
+
+// 终端会话管理 + 回放 + 旁观
+safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
+safeAddEventListener("replayPlayBtn", "click", () => { if (REPLAY && REPLAY.playing) pauseReplay(); else playReplay(); });
+safeAddEventListener("replayProgressBg", "click", e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const progress = (e.clientX - rect.left) / rect.width;
+  seekReplay(Math.max(0, Math.min(1, progress)));
+});
+document.querySelectorAll(".replay-speed-btn").forEach(btn => {
+  btn.addEventListener("click", () => setReplaySpeed(parseFloat(btn.dataset.speed)));
 });
 
 /* ---------- PWA: SW registration + Install prompt + Hash routing ---------- */

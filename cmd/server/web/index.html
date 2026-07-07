@@ -88,6 +88,10 @@
       <div class="select-wrap">
         <select id="catFilter" title="按分类筛选"><option value="">全部分类</option></select>
       </div>
+      <button class="btn icon" id="termSessionsBtn" title="终端会话管理（回放/旁观）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span class="ib-label">终端会话</span>
+      </button>
       <button class="btn primary icon" id="installBtn" title="安装被监控端 Agent">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
         <span class="ib-label">安装 Agent</span>
@@ -419,8 +423,67 @@
       </div>
     </div>
     <div class="modal-body term-body">
-      <pre class="term-screen" id="termScreen" tabindex="0" spellcheck="false"></pre>
-      <div class="term-hint">经 Agent 反向通道连接，无需在被控端开放 22/入站端口 · 点击窗口后即可输入 · 支持 Ctrl+C / Tab / 方向键 · 关闭窗口结束会话</div>
+      <div class="term-tabbar" id="termTabbar"></div>
+      <div class="term-screens" id="termScreens"></div>
+      <div class="term-hint">经 Agent 反向通道连接 · 点击窗口后即可输入 · 支持 Ctrl+C / Tab / 方向键 · 多标签可同时连接多台主机 · 关闭窗口结束所有会话</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端会话管理弹窗 ===== -->
+<div class="mask" id="termSessionsMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>终端会话</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:12px">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
+      <div id="termSessionsList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端回放弹窗 ===== -->
+<div class="mask" id="termReplayMask" data-close>
+  <div class="modal modal-wide term-modal">
+    <div class="modal-head">
+      <h3 id="termReplayTitle">会话回放</h3>
+      <span class="term-status" id="replayStatus">播放中</span>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body term-body">
+      <pre class="term-screen" id="termReplayScreen" tabindex="0" spellcheck="false"></pre>
+      <div class="replay-controls">
+        <button class="btn sm" id="replayPlayBtn" title="播放/暂停">⏸</button>
+        <div class="replay-progress-wrap">
+          <div class="replay-progress-bg" id="replayProgressBg">
+            <div class="replay-progress-fill" id="replayProgress"></div>
+          </div>
+        </div>
+        <span class="replay-time" id="replayTime">0 / 0 帧</span>
+        <div class="replay-speeds">
+          <button class="replay-speed-btn" data-speed="1">1×</button>
+          <button class="replay-speed-btn active" data-speed="2">2×</button>
+          <button class="replay-speed-btn" data-speed="4">4×</button>
+          <button class="replay-speed-btn" data-speed="8">8×</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端旁观弹窗 ===== -->
+<div class="mask" id="termObserveMask" data-close>
+  <div class="modal modal-wide term-modal">
+    <div class="modal-head">
+      <h3 id="termObserveTitle">只读旁观</h3>
+      <span class="term-status" id="observeStatus">连接中…</span>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body term-body">
+      <pre class="term-screen" id="termObserveScreen" tabindex="0" spellcheck="false"></pre>
+      <div class="term-hint">只读模式 · 仅观看操作，无法输入 · 会话结束后自动断开</div>
     </div>
   </div>
 </div>

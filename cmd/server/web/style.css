@@ -618,6 +618,38 @@ svg.sparkline{width:100%; height:46px; display:block}
 #termMask.maximized .term-modal .modal-body{flex:1; display:flex; flex-direction:column; min-height:0}
 #termMask.maximized .term-modal .term-screen{height:auto; flex:1; min-height:0; border-radius:0}
 
+/* ---------- 终端多标签 ---------- */
+.term-tabbar{display:flex; gap:4px; padding:6px 8px 0; background:var(--bg2); border-bottom:1px solid var(--line); overflow-x:auto; flex-wrap:nowrap}
+.term-tab{display:flex; align-items:center; gap:6px; padding:5px 12px; border-radius:7px 7px 0 0; border:1px solid transparent; background:transparent; color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; transition:all var(--transition-fast)}
+.term-tab:hover{background:var(--panel2); color:var(--txt)}
+.term-tab.active{background:var(--panel); color:var(--txt); border-color:var(--line); border-bottom-color:var(--panel)}
+.term-tab-close{font-size:14px; line-height:1; opacity:.5; border:none; background:none; color:inherit; cursor:pointer; padding:0 0 0 2px}
+.term-tab-close:hover{opacity:1; color:var(--crit-txt)}
+.term-screens{position:relative}
+.term-screens .term-screen{display:none}
+.term-screens .term-screen.active{display:block}
+
+/* ---------- 终端会话列表 ---------- */
+.term-session-item{display:flex; align-items:center; gap:10px; padding:10px 14px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel); margin-bottom:8px; transition:border-color var(--transition-fast)}
+.term-session-item:hover{border-color:var(--line2)}
+.term-session-info{flex:1; min-width:0}
+.term-session-host{font-weight:600; font-size:13px}
+.term-session-meta{font-size:11px; color:var(--muted2); margin-top:2px}
+.term-session-actions{display:flex; gap:6px; flex:none}
+.term-session-badge{display:inline-flex; align-items:center; gap:4px; font-size:10px; padding:2px 7px; border-radius:10px; background:var(--ok-soft); color:var(--ok-txt); font-weight:600}
+.term-session-badge.observers{background:var(--accent-soft); color:var(--accent-txt)}
+
+/* ---------- 回放控件 ---------- */
+.replay-controls{display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line); background:var(--panel)}
+.replay-progress-wrap{flex:1; min-width:0}
+.replay-progress-bg{height:6px; background:var(--bg2); border-radius:3px; cursor:pointer; position:relative; overflow:hidden}
+.replay-progress-fill{height:100%; background:var(--accent); border-radius:3px; width:0; transition:width .1s linear}
+.replay-time{font-size:11px; color:var(--muted2); white-space:nowrap; font-variant-numeric:tabular-nums}
+.replay-speeds{display:flex; gap:3px}
+.replay-speed-btn{font-size:11px; padding:3px 7px; border-radius:5px; border:1px solid var(--line); background:var(--panel2); color:var(--muted); cursor:pointer; transition:all var(--transition-fast)}
+.replay-speed-btn:hover{color:var(--txt)}
+.replay-speed-btn.active{background:var(--accent-soft); color:var(--accent-txt); border-color:rgba(76,141,255,.4)}
+
 /* ---------- 登录页 ---------- */
 .login-mask{position:fixed; inset:0; z-index:300; display:none; align-items:center; justify-content:center; padding:20px; background:var(--bg)}
 .login-mask.show{display:flex}

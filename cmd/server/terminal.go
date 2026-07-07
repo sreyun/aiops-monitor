@@ -245,10 +245,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if len(payload) == 0 {
 				continue
 			}
-			// Record input for audit + replay
+			// Record input for audit + replay; log completed commands
 			if typ == 'i' {
 				sess.recordFrame("input", payload)
-				sess.processCommandAudit(payload)
+				if cmd := sess.processCommandAudit(payload); cmd != "" {
+					s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "终端命令 [" + hostname + "]: " + cmd})
+				}
 			}
 			select {
 			case sess.toAgent <- termFrame(typ, payload):
@@ -455,22 +457,20 @@ func (m *termManager) removeObserver(sessionID string, obs *termObserver) {
 }
 
 // processCommandAudit extracts commands from the input stream by detecting
-// Enter (CR/LF) and logging the accumulated line to the activity log.
+// Enter (CR/LF) and returning the accumulated line for audit logging.
 // This is best-effort — control characters, escape sequences, and multi-line
 // commands may cause imperfect extraction, but it captures the common case.
-func (s *termSession) processCommandAudit(payload []byte) {
+// Returns the completed command string (empty if no command was completed).
+func (s *termSession) processCommandAudit(payload []byte) string {
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
 	for _, b := range payload {
 		if b == '\r' || b == '\n' {
 			cmd := strings.TrimSpace(s.cmdBuffer)
-			if cmd != "" {
-				s.cmdBuffer = ""
-				if len(cmd) > 0 && cmd[0] != 0x1b && cmd[0] != 0x03 {
-					s.lastCommand = cmd
-				}
-			} else {
-				s.cmdBuffer = ""
+			s.cmdBuffer = ""
+			if cmd != "" && cmd[0] != 0x1b && cmd[0] != 0x03 {
+				s.lastCommand = cmd
+				return cmd
 			}
 		} else if b >= 0x20 && b < 0x7f {
 			s.cmdBuffer += string(b)
@@ -480,4 +480,27 @@ func (s *termSession) processCommandAudit(payload []byte) {
 			}
 		}
 	}
+	return ""
+}
+
+// getDecodedRecording returns the decoded output frames for replay/observe.
+func (m *termManager) getDecodedRecording(sessionID string) [][]byte {
+	m.mu.Lock()
+	s, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	out := make([][]byte, 0, len(s.recording))
+	for _, f := range s.recording {
+		if f.Type == "output" {
+			data, err := base64.StdEncoding.DecodeString(f.Data)
+			if err == nil {
+				out = append(out, data)
+			}
+		}
+	}
+	return out
 }

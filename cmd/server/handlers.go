@@ -1171,6 +1171,13 @@ func (s *Server) handleTerminalObserve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "旁观终端会话 " + sid[:8]})
+	// Send recorded history first so the observer sees the full context
+	for _, data := range s.term.getDecodedRecording(sid) {
+		if err := ws.WriteBinary(data); err != nil {
+			return
+		}
+	}
+	// Then stream live output
 	for {
 		select {
 		case b := <-obs.ch:
