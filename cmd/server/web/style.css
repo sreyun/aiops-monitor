@@ -633,6 +633,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .host.hrow{
   flex-direction:row; align-items:center; gap:12px; padding:8px 12px; cursor:default;
   border-left:3px solid var(--line2); border-radius:var(--r-xs);
+  min-height:unset;
 }
 .host.hrow.online{border-left-color:var(--ok)}
 .host.hrow.offline{border-left-color:var(--crit); opacity:.65}
