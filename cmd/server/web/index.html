@@ -43,6 +43,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
         <span>告警</span><span class="nav-count" id="navAlerts">0</span>
       </a>
+      <a class="nav-item" data-view="automation" title="剧本编排 + 批量执行">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>自动化</span>
+      </a>
       <a class="nav-item" data-view="log" title="操作与介入日志">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
         <span>日志</span><span class="nav-count" id="navLog">0</span>
@@ -251,6 +255,20 @@
         <div class="checks-list" id="checksGrid"></div>
         <div class="empty" id="checksEmpty">
           还没有自定义监控。点「添加检查」监控一个网站（HTTP）或服务端口（TCP），异常时自动产生告警并推送飞书 / 钉钉。
+        </div>
+      </section>
+
+      <!-- 自动化运维 -->
+      <section class="view" id="view-automation">
+        <div class="section-title">剧本编排<span class="tag">批量执行 · 自动化运维</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <button class="btn" id="pbHistoryBtn" title="查看执行历史">执行历史</button>
+            <button class="btn primary" id="addPlaybookBtn">+ 新建剧本</button>
+          </div>
+        </div>
+        <div id="playbookList" style="display:flex; flex-direction:column; gap:10px"></div>
+        <div class="empty" id="playbookEmpty">
+          还没有自动化剧本。点「新建剧本」创建一个批量执行流程——选择目标主机、编写命令步骤、一键并行执行。
         </div>
       </section>
     </div>
@@ -509,6 +527,50 @@
     <div class="modal-foot">
       <button class="btn primary" id="ckSaveBtn">保存</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== 剧本编辑弹窗 ===== -->
+<div class="mask" id="playbookMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="playbookModalTitle">新建剧本</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="pbId">
+      <div class="field"><label>剧本名称</label><input type="text" id="pbName" placeholder="如 重启 Nginx 服务"></div>
+      <div class="field"><label>描述（可选）</label><input type="text" id="pbDesc" placeholder="剧本用途说明"></div>
+      <div class="subhead">步骤列表</div>
+      <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
+      <button class="btn" id="pbAddStep" type="button" style="margin-top:8px">+ 添加步骤</button>
+      <div class="hint">每个步骤在选定的目标主机上并行执行。目标可选：全部主机 / 按分类 / 指定主机。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="pbSaveBtn">保存剧本</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 执行历史弹窗 ===== -->
+<div class="mask" id="execHistMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>执行历史</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="execHistBody"></div>
+  </div>
+</div>
+
+<!-- ===== 执行结果弹窗 ===== -->
+<div class="mask" id="execResultMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3 id="execResultTitle">执行结果</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="execResultBody"></div>
   </div>
 </div>
 

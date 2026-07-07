@@ -1915,8 +1915,9 @@ function qrCanvas(text, sizePx) {
     // 左上：竖列 (0..5,8),(7,8) 与 横行 (8,7),(8,5..0)  ；含 (8,8)
     let k = 0;
     for (let i = 0; i <= 5; i++) g[8][i] = a[k++]; g[8][7] = a[k++]; g[8][8] = a[k++]; g[7][8] = a[k++]; for (let i = 5; i >= 0; i--) g[i][8] = a[k++];
-    // 右上 & 左下（第二份）
-    k = 0; for (let i = 0; i <= 7; i++) g[N - 1 - i][8] = a[k++]; for (let i = 0; i <= 6; i++) g[8][N - 7 + i] = a[k++];
+    // 第二份：左下竖列 (N-1..N-7,8)=bit14..8（须跳过 dark module (N-8,8)，不能覆盖）+ 右上横行 (8,N-8..N-1)=bit7..0
+    for (let i = 0; i < 7; i++) g[N - 1 - i][8] = a[i];
+    for (let i = 0; i < 8; i++) g[8][N - 8 + i] = a[7 + i];
     return g;
   }
   function penalty(g) { let p = 0; for (let r = 0; r < N; r++) { let cnt = 1; for (let c = 1; c <= N; c++) { if (c < N && g[r][c] === g[r][c - 1]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } } for (let c = 0; c < N; c++) { let cnt = 1; for (let r = 1; r <= N; r++) { if (r < N && g[r][c] === g[r - 1][c]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } } return p; }
@@ -2196,6 +2197,7 @@ const PAGE_META = {
   hosts:    { title: "主机", sub: "所有上报主机的实时指标" },
   alerts:   { title: "告警", sub: "阈值与自定义监控告警" },
   checks:   { title: "监控", sub: "网站 HTTP / 端口 TCP / 主机 Ping / 进程存活 拨测" },
+  automation: { title: "自动化", sub: "剧本编排 + 批量执行" },
   log:      { title: "日志", sub: "操作、系统与插件事件流水" },
 };
 function switchView(view) {
@@ -2207,6 +2209,7 @@ function switchView(view) {
     if (t) t.textContent = meta.title;
     if (s) s.textContent = meta.sub;
   }
+  if (view === "automation") loadPlaybooks();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
@@ -2422,7 +2425,7 @@ CUR_CATS = getSelectedCats();
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const views = ["overview", "hosts", "checks", "alerts", "log"];
+  const views = ["overview", "hosts", "checks", "alerts", "automation", "log"];
   const idx = parseInt(e.key) - 1;
   if (idx >= 0 && idx < views.length) {
     e.preventDefault();
@@ -2437,6 +2440,205 @@ function filterAlertsByType(type) {
   renderAlerts(LAST_ALERTS);
 }
 let LAST_ALERTS = [];
+
+/* ===================== 自动化运维：剧本编排 + 批量执行 ===================== */
+let PB_HOSTS = []; // cached host list for target selection
+
+async function loadPlaybooks() {
+  try {
+    const [pbs, hosts] = await Promise.all([
+      fetch(`${API}/playbooks`).then(r => r.json()),
+      fetch(`${API}/hosts/meta`).then(r => r.json())
+    ]);
+    PB_HOSTS = hosts || [];
+    renderPlaybooks(pbs || []);
+  } catch (e) { console.warn("load playbooks:", e); }
+}
+
+function renderPlaybooks(pbs) {
+  const list = $("playbookList"), empty = $("playbookEmpty");
+  if (!list) return;
+  if (empty) empty.style.display = pbs.length === 0 ? "" : "none";
+  list.innerHTML = pbs.map(pb => {
+    const stepCount = (pb.steps || []).length;
+    const targets = [...new Set((pb.steps || []).map(s => s.target))];
+    return `<div class="pb-card" data-id="${esc(pb.id)}">
+      <div class="pb-head">
+        <div>
+          <strong>${esc(pb.name)}</strong>
+          ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : ""}
+        </div>
+        <div class="pb-actions">
+          <button class="btn primary sm" data-pbact="exec">执行</button>
+          <button class="btn sm" data-pbact="edit">编辑</button>
+          <button class="btn danger sm" data-pbact="del">删除</button>
+        </div>
+      </div>
+      <div class="pb-meta">
+        <span class="tag">${stepCount} 步</span>
+        <span class="tag">${targets.length} 目标</span>
+        <span class="mono" style="color:var(--muted)">${esc(pb.id)}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function openPlaybookModal(pb) {
+  $("playbookModalTitle").textContent = pb ? "编辑剧本" : "新建剧本";
+  $("pbId").value = pb ? pb.id : "";
+  $("pbName").value = pb ? pb.name : "";
+  $("pbDesc").value = pb ? (pb.description || "") : "";
+  const steps = pb ? pb.steps : [];
+  renderPbSteps(steps.length > 0 ? steps : [{name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false}]);
+  $("playbookMask").classList.add("show");
+}
+
+function renderPbSteps(steps) {
+  const c = $("pbSteps");
+  c.innerHTML = steps.map((s, i) => {
+    const tgtOpts = [
+      `<option value="all" ${s.target==="all"?"selected":""}>全部主机</option>`,
+      ...PB_HOSTS.map(h => `<option value="host:${h.id}" ${s.target==="host:"+h.id?"selected":""}>${esc(h.hostname)}</option>`),
+    ].join("");
+    return `<div class="pb-step" data-idx="${i}">
+      <div class="grid2">
+        <div class="field"><label>步骤名称</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="如 检查磁盘空间"></div>
+        <div class="field"><label>目标主机</label><div class="select-wrap"><select class="pb-step-target">${tgtOpts}</select></div></div>
+      </div>
+      <div class="field"><label>命令</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder="如 df -h" style="font-family:monospace"></div>
+      <div class="grid2">
+        <div class="field"><label>超时（秒）</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
+        <div class="field"><label>失败时继续</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
+      </div>
+      <button class="btn danger sm pb-step-del" type="button">删除步骤</button>
+    </div>`;
+  }).join("");
+  c.querySelectorAll(".pb-step-del").forEach(btn => {
+    btn.onclick = () => { btn.closest(".pb-step").remove(); };
+  });
+}
+
+function collectPlaybook() {
+  const steps = [];
+  document.querySelectorAll("#pbSteps .pb-step").forEach(el => {
+    steps.push({
+      name: el.querySelector(".pb-step-name").value.trim(),
+      command: el.querySelector(".pb-step-cmd").value.trim(),
+      target: el.querySelector(".pb-step-target").value,
+      timeout_sec: parseInt(el.querySelector(".pb-step-timeout").value) || 30,
+      continue_on_error: el.querySelector(".pb-step-cont").checked
+    });
+  });
+  return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps };
+}
+
+async function savePlaybook() {
+  const pb = collectPlaybook();
+  if (!pb.name) { toast("请填写剧本名称", "err"); return; }
+  if (pb.steps.length === 0) { toast("至少需要一个步骤", "err"); return; }
+  try {
+    const r = await fetch(`${API}/playbooks`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(pb) });
+    const j = await r.json().catch(()=>({}));
+    if (r.ok) { toast("剧本已保存", "ok"); $("playbookMask").classList.remove("show"); loadPlaybooks(); }
+    else toast(j.error || "保存失败", "err");
+  } catch (e) { toast("保存失败: " + e, "err"); }
+}
+
+async function executePlaybook(id) {
+  try {
+    const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/execute`, { method: "POST" });
+    const j = await r.json().catch(()=>({}));
+    if (r.ok) {
+      toast("剧本执行已启动", "ok");
+      // Poll for result
+      const execId = j.execution_id;
+      pollExecution(execId, id);
+    } else toast(j.error || "执行失败", "err");
+  } catch (e) { toast("执行失败: " + e, "err"); }
+}
+
+async function pollExecution(execId, pbId) {
+  $("execResultTitle").textContent = "执行中…";
+  $("execResultBody").innerHTML = `<div class="empty-line">正在执行，请稍候…</div>`;
+  $("execResultMask").classList.add("show");
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const exec = await fetch(`${API}/playbooks/executions/${execId}`).then(r => r.json());
+      renderExecResult(exec);
+      if (exec.status !== "running") break;
+    } catch (e) {}
+  }
+}
+
+function renderExecResult(exec) {
+  $("execResultTitle").textContent = `执行${exec.status === "completed" ? "完成 ✅" : exec.status === "failed" ? "失败 ❌" : "执行中…"}`;
+  const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
+    const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
+    const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${s.status}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
+    return `<div class="exec-row">
+      <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${r.status}</span></div>
+      <div class="exec-steps">${steps}</div>
+    </div>`;
+  }).join("");
+  $("execResultBody").innerHTML = `<div class="exec-meta">操作者: ${esc(exec.operator)} · 开始: ${fmtDateTime(exec.start_time)}${exec.end_time?" · 结束: "+fmtDateTime(exec.end_time):""} · 状态: ${exec.status}</div>${rows}`;
+}
+
+async function loadExecHistory() {
+  try {
+    const list = await fetch(`${API}/playbooks/executions`).then(r => r.json());
+    const rows = (list || []).map(e => {
+      const success = Object.values(e.host_results || {}).filter(r => r.status === "success").length;
+      const total = Object.keys(e.host_results || {}).length;
+      return `<div class="exec-hist-row" data-exec-id="${e.id}">
+        <strong>${esc(e.playbook_name)}</strong>
+        <span class="badge ${e.status === "completed" ? "ok" : e.status === "failed" ? "crit" : "warn"}">${e.status}</span>
+        <span class="mono" style="color:var(--muted)">${success}/${total} 成功</span>
+        <span class="mono" style="color:var(--muted)">${fmtDateTime(e.start_time)}</span>
+        <span class="mono" style="color:var(--muted)">${esc(e.operator)}</span>
+      </div>`;
+    }).join("");
+    $("execHistBody").innerHTML = rows || `<div class="empty-line">暂无执行历史</div>`;
+    $("execHistBody").querySelectorAll("[data-exec-id]").forEach(el => {
+      el.onclick = async () => {
+        const exec = await fetch(`${API}/playbooks/executions/${el.dataset.execId}`).then(r => r.json());
+        renderExecResult(exec);
+        $("execHistMask").classList.remove("show");
+        $("execResultMask").classList.add("show");
+      };
+    });
+    $("execHistMask").classList.add("show");
+  } catch (e) { toast("加载历史失败: " + e, "err"); }
+}
+
+// Playbook event listeners
+safeAddEventListener("addPlaybookBtn", "click", () => openPlaybookModal(null));
+safeAddEventListener("pbAddStep", "click", () => {
+  const c = $("pbSteps");
+  const existing = Array.from(c.querySelectorAll(".pb-step")).map(el => ({
+    name: el.querySelector(".pb-step-name").value, command: el.querySelector(".pb-step-cmd").value,
+    target: el.querySelector(".pb-step-target").value, timeout_sec: parseInt(el.querySelector(".pb-step-timeout").value)||30,
+    continue_on_error: el.querySelector(".pb-step-cont").checked
+  }));
+  existing.push({name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false});
+  renderPbSteps(existing);
+});
+safeAddEventListener("pbSaveBtn", "click", savePlaybook);
+safeAddEventListener("pbHistoryBtn", "click", loadExecHistory);
+safeAddEventListener("playbookList", "click", e => {
+  const card = e.target.closest(".pb-card"); if (!card) return;
+  const act = e.target.closest("[data-pbact]"); if (!act) return;
+  const id = card.dataset.id;
+  if (act.dataset.pbact === "exec") executePlaybook(id);
+  else if (act.dataset.pbact === "edit") {
+    fetch(`${API}/playbooks`).then(r=>r.json()).then(pbs => {
+      const pb = pbs.find(p=>p.id===id); if (pb) openPlaybookModal(pb);
+    });
+  } else if (act.dataset.pbact === "del") {
+    if (!confirm("确认删除此剧本？")) return;
+    fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast("已删除","ok");loadPlaybooks();});
+  }
+});
 
 /* ---------- PWA: SW registration + Install prompt + Hash routing ---------- */
 if ("serviceWorker" in navigator) {
@@ -2456,7 +2658,7 @@ window.addEventListener("beforeinstallprompt", e => {
 });
 window.addEventListener("hashchange", () => {
   const h = location.hash.slice(1);
-  if (h && ["overview", "hosts", "checks", "alerts", "log"].includes(h)) {
+  if (h && ["overview", "hosts", "checks", "alerts", "automation", "log"].includes(h)) {
     switchView(h);
   }
 });

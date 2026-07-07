@@ -42,6 +42,8 @@ Agent 与服务端共享 `shared/` 中的类型定义，采集端与服务端的
 | **PWA 可安装** | 面板支持 **PWA**——可安装到桌面/主屏幕、独立窗口运行、Service Worker 离线缓存；长按图标快速访问主机/告警/监控 |
 | **键盘快捷键** | 数字键 **1–5** 快速切换视图（概览/主机/监控/告警/日志） |
 | **一键安装** | 面板生成带 Token 的安装命令，Agent 二进制 + 插件自动下载，注册用户级/系统级开机自启 |
+| **自动化运维** | 剧本编排（多步骤 + 目标选择）→ 批量并行执行 → 实时状态 + 输出展示 → 执行历史与报告；经 Agent 反向通道，免开端口 |
+| **终端增强** | 会话录制与回放、多标签终端、只读旁观模式、命令级审计 |
 | **安全与性能** | **强制 Agent Token 接入**（默认，常数时间比较）+ 登录限流 + 会话 Cookie（HttpOnly/SameSite/HTTPS 下 Secure）+ 安全响应头 + 请求体大小限制 + 密钥脱敏 + 主机身份防克隆 + **MFA 两步验证（TOTP）** + **账户找回（邮箱验证码）** + **通过邮箱解除 MFA**；**gzip 响应压缩**大幅降低多主机轮询带宽 |
 | **共享类型** | `shared/wire.go` 被 server 与 agent 同时 import，契约统一不会漂移 |
 
@@ -89,6 +91,7 @@ aiops-monitor/
 │   │   ├── terminal.go             # 远程终端中转（Agent 反向通道 + 会话管理）
 │   │   ├── notify.go               # 飞书/钉钉/邮件推送（去重 + 状态转换）
 │   │   ├── email.go                # SMTP 邮件发送 + 验证码/重置 Token 管理
+│   │   ├── playbook.go             # 自动化剧本 + 批量执行引擎
 │   │   ├── totp.go                 # TOTP (RFC 6238) 两步验证
 │   │   ├── config.go               # 配置持久化
 │   │   ├── install.go              # 一键安装脚本生成
@@ -366,6 +369,17 @@ p.emit()                                   # 输出 JSON
 | POST | `/api/v1/checks/{id}/run` | 立即触发一次检测 |
 | GET | `/api/v1/checks/{id}/history` | 该检查的历史时序（延时/状态/状态码/丢包，用于曲线回看） |
 | DELETE | `/api/v1/checks/{id}` | 删除自定义监控 |
+| **自动化运维** | | |
+| GET | `/api/v1/playbooks` | 剧本列表 |
+| POST | `/api/v1/playbooks` | 创建/更新剧本 |
+| DELETE | `/api/v1/playbooks/{id}` | 删除剧本 |
+| POST | `/api/v1/playbooks/{id}/execute` | 执行剧本（批量并行） |
+| GET | `/api/v1/playbooks/executions` | 执行历史列表 |
+| GET | `/api/v1/playbooks/executions/{id}` | 单次执行详情（含各主机结果） |
+| **终端增强** | | |
+| GET | `/api/v1/terminal/sessions` | 活跃终端会话列表 |
+| GET | `/api/v1/terminal/sessions/{id}/replay` | 会话录制回放数据（时间戳帧） |
+| GET | `/api/v1/terminal/sessions/{id}/observe` | 只读旁观活跃会话（WebSocket） |
 | **远程终端** | | |
 | GET | `/api/v1/hosts/{id}/terminal` | 浏览器 WebSocket 终端（需登录会话） |
 | GET | `/api/v1/agent/terminal/wait` | Agent 长轮询等待会话（Token 鉴权） |
@@ -660,14 +674,14 @@ location / {                         # 其余 API / 面板
 - [x] **分类多选筛选 + 折叠**：多选下拉、概览联动、分类收起/展开
 - [x] **键盘快捷键**：数字键 1–5 切换视图
 - [x] **远程终端**：主机卡片一键打开浏览器终端，经 Agent 反向连接（**免在被控端开放 22/入站端口**）+ 服务端中转；**完整交互式 TTY**（Windows ConPTY、Linux/macOS openpty），支持颜色/行编辑/vim·top 等全屏程序、**窗口放大·还原·关闭**与尺寸自适应；登录会话 + 安装 Token 双鉴权 + 开关闭/审计
+- [x] **终端增强**：会话录制与回放（时间戳帧录制、进度条拖拽、倍速播放）、多标签终端（同一主机多会话）、只读旁观模式（其他用户可观看活跃会话）、命令级审计（提取命令写入操作日志）
+- [x] **自动化运维**：剧本编排（多步骤、按分类/主机选择目标）、批量并行执行（实时状态 + 输出展示、超时控制、失败继续选项）、执行历史与报告
 - [x] 一键安装：Token 模式、面板生成命令、自动下载安装、开机自启
 - [x] 主机管理：分类标签、面板手动覆盖、主机删除
 
 **进行中 / 下一步**
 - [ ] **超大规模（万级）**：历史外接时序库（VictoriaMetrics）、`/hosts` 服务端分页/增量、历史保留期可配置化
-- [ ] **终端增强**：会话录制/回放、多标签、命令级审计、只读旁观
 - [ ] **鉴权多租户**：后台 RBAC、多用户
-- [ ] **自动化运维**：剧本编排 + 批量执行
 - [ ] **插件增强**：每插件独立周期、插件级配置、指标类型（counter/histogram）
 
 **AIOps 演进层（可作为 Python 插件接入）**

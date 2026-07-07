@@ -109,6 +109,7 @@ type ServerConfig struct {
 	RequireToken  bool              `json:"require_token"`
 	Account       AccountConfig     `json:"account"`
 	Checks        []CustomCheck     `json:"checks"`
+	Playbooks     []Playbook        `json:"playbooks,omitempty"`
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
@@ -337,6 +338,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
 	c.Account = cs.cfg.Account           // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
+	c.Playbooks = cs.cfg.Playbooks       // playbooks managed via playbook endpoints
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -386,4 +388,48 @@ func (cs *ConfigStore) save() error {
 		return err
 	}
 	return os.WriteFile(cs.path, b, 0o644)
+}
+
+// ---- playbooks ----
+
+func (cs *ConfigStore) Playbooks() []Playbook {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]Playbook, len(cs.cfg.Playbooks))
+	copy(out, cs.cfg.Playbooks)
+	return out
+}
+
+func (cs *ConfigStore) UpsertPlaybook(p Playbook) (Playbook, error) {
+	cs.mu.Lock()
+	if p.ID == "" {
+		cs.cfg.Playbooks = append(cs.cfg.Playbooks, p)
+	} else {
+		found := false
+		for i := range cs.cfg.Playbooks {
+			if cs.cfg.Playbooks[i].ID == p.ID {
+				cs.cfg.Playbooks[i] = p
+				found = true
+				break
+			}
+		}
+		if !found {
+			cs.cfg.Playbooks = append(cs.cfg.Playbooks, p)
+		}
+	}
+	cs.mu.Unlock()
+	return p, cs.save()
+}
+
+func (cs *ConfigStore) DeletePlaybook(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.Playbooks[:0]
+	for _, p := range cs.cfg.Playbooks {
+		if p.ID != id {
+			kept = append(kept, p)
+		}
+	}
+	cs.cfg.Playbooks = kept
+	cs.mu.Unlock()
+	return cs.save()
 }

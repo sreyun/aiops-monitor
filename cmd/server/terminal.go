@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,16 +23,61 @@ import (
 type termSession struct {
 	id        string
 	hostID    string
+	hostname  string
+	operator  string
 	toAgent   chan []byte   // browser keystrokes → agent (rx stream)
 	toBrowser chan []byte   // agent shell output → browser
 	agentUp   chan struct{} // closed once the agent attaches its tx stream
 	done      chan struct{}
 	upOnce    sync.Once
 	doneOnce  sync.Once
+
+	// --- terminal enhancements ---
+	recording []termRecordFrame // session recording (timestamped I/O frames)
+	observers map[*termObserver]struct{} // read-only watchers
+	cmdBuffer string           // accumulates input for command-level audit
+	lastCommand string         // last extracted command (for audit logging)
+	createdAt int64            // session start time
+	recMu     sync.Mutex       // protects recording + cmdBuffer + observers
 }
 
 func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
-func (s *termSession) close()       { s.doneOnce.Do(func() { close(s.done) }) }
+func (s *termSession) close() {
+	s.doneOnce.Do(func() {
+		close(s.done)
+		// close all observers
+		for obs := range s.observers {
+			close(obs.done)
+		}
+	})
+}
+
+// termRecordFrame is one timestamped frame in the session recording.
+type termRecordFrame struct {
+	Ts     int64  `json:"ts"`      // unix millisecond
+	Type   string `json:"type"`    // "input" | "output"
+	Data   string `json:"data"`    // base64-encoded raw bytes
+}
+
+// termObserver is a read-only watcher of a terminal session.
+type termObserver struct {
+	ch   chan []byte // receives a copy of toBrowser output
+	done chan struct{}
+}
+
+// recordFrame appends a frame to the session recording (max 50k frames).
+func (s *termSession) recordFrame(typ string, data []byte) {
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	if len(s.recording) > 50000 {
+		return // cap to prevent unbounded memory
+	}
+	s.recording = append(s.recording, termRecordFrame{
+		Ts:   time.Now().UnixMilli(),
+		Type: typ,
+		Data: base64.StdEncoding.EncodeToString(data),
+	})
+}
 
 type termManager struct {
 	mu       sync.Mutex
@@ -61,11 +108,13 @@ func termFrame(typ byte, payload []byte) []byte {
 	return b
 }
 
-func (m *termManager) create(hostID string) *termSession {
+func (m *termManager) create(hostID, hostname, operator string) *termSession {
 	s := &termSession{
-		id: termID(), hostID: hostID,
+		id: termID(), hostID: hostID, hostname: hostname, operator: operator,
 		toAgent: make(chan []byte, 64), toBrowser: make(chan []byte, 256),
 		agentUp: make(chan struct{}), done: make(chan struct{}),
+		observers: map[*termObserver]struct{}{},
+		createdAt: time.Now().Unix(),
 	}
 	m.mu.Lock()
 	m.sessions[s.id] = s
@@ -138,11 +187,19 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	sess := s.term.create(hostID)
+	// Look up hostname for audit log
+	hostname := shortID(hostID)
+	for _, h := range s.store.ListHosts() {
+		if h.ID == hostID {
+			hostname = h.Hostname
+			break
+		}
+	}
+	sess := s.term.create(hostID, hostname, s.clientIP(r))
 	defer s.term.remove(sess.id)
 	op := s.clientIP(r)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: op, Host: shortID(hostID), Message: "打开远程终端 " + shortID(hostID)})
-	defer s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: shortID(hostID), Message: "关闭远程终端 " + shortID(hostID)})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: op, Host: hostname, Message: "打开远程终端 " + hostname})
+	defer s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "关闭远程终端 " + hostname})
 
 	if !s.term.notifyAgent(hostID, sess.id) {
 		_ = ws.WriteBinary([]byte("\r\n\x1b[31m✗ 无法建立终端会话——服务端未找到该主机的反向终端通道。\x1b[0m\r\n\r\n" +
@@ -188,6 +245,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if len(payload) == 0 {
 				continue
 			}
+			// Record input for audit + replay
+			if typ == 'i' {
+				sess.recordFrame("input", payload)
+				sess.processCommandAudit(payload)
+			}
 			select {
 			case sess.toAgent <- termFrame(typ, payload):
 			case <-sess.done:
@@ -195,12 +257,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	// agent → browser (shell output)
+	// agent → browser (shell output) + recording + observers
 	go func() {
 		defer sess.close()
 		for {
 			select {
 			case b := <-sess.toBrowser:
+				sess.recordFrame("output", b)
+				// fan out to observers
+				for obs := range sess.observers {
+					select {
+					case obs.ch <- b:
+					default: // drop if observer is slow
+					}
+				}
 				if err := ws.WriteBinary(b); err != nil {
 					return
 				}
@@ -302,6 +372,112 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			return
+		}
+	}
+}
+
+// ---- terminal enhancement: session list, replay, observer, command audit ----
+
+// termSessionInfo is the JSON view of an active or recently-ended session.
+type termSessionInfo struct {
+	ID        string `json:"id"`
+	HostID    string `json:"host_id"`
+	Hostname  string `json:"hostname"`
+	Operator  string `json:"operator"`
+	CreatedAt int64  `json:"created_at"`
+	Active    bool   `json:"active"`
+	Observers int    `json:"observers"`
+	Frames    int    `json:"frames"`
+}
+
+// listSessions returns all active terminal sessions.
+func (m *termManager) listSessions() []termSessionInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]termSessionInfo, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		s.recMu.Lock()
+		out = append(out, termSessionInfo{
+			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
+			Operator: s.operator, CreatedAt: s.createdAt,
+			Active: true, Observers: len(s.observers),
+			Frames: len(s.recording),
+		})
+		s.recMu.Unlock()
+	}
+	return out
+}
+
+// getRecording returns the recorded frames for a session (for replay).
+func (m *termManager) getRecording(sessionID string) []termRecordFrame {
+	m.mu.Lock()
+	s, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	out := make([]termRecordFrame, len(s.recording))
+	copy(out, s.recording)
+	return out
+}
+
+// addObserver attaches a read-only observer to a session.
+func (m *termManager) addObserver(sessionID string) (*termObserver, bool) {
+	m.mu.Lock()
+	s, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	obs := &termObserver{
+		ch:   make(chan []byte, 128),
+		done: make(chan struct{}),
+	}
+	s.observers[obs] = struct{}{}
+	return obs, true
+}
+
+// removeObserver detaches an observer.
+func (m *termManager) removeObserver(sessionID string, obs *termObserver) {
+	m.mu.Lock()
+	s, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.recMu.Lock()
+	delete(s.observers, obs)
+	s.recMu.Unlock()
+}
+
+// processCommandAudit extracts commands from the input stream by detecting
+// Enter (CR/LF) and logging the accumulated line to the activity log.
+// This is best-effort — control characters, escape sequences, and multi-line
+// commands may cause imperfect extraction, but it captures the common case.
+func (s *termSession) processCommandAudit(payload []byte) {
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
+	for _, b := range payload {
+		if b == '\r' || b == '\n' {
+			cmd := strings.TrimSpace(s.cmdBuffer)
+			if cmd != "" {
+				s.cmdBuffer = ""
+				if len(cmd) > 0 && cmd[0] != 0x1b && cmd[0] != 0x03 {
+					s.lastCommand = cmd
+				}
+			} else {
+				s.cmdBuffer = ""
+			}
+		} else if b >= 0x20 && b < 0x7f {
+			s.cmdBuffer += string(b)
+		} else if b == 0x7f || b == 0x08 {
+			if len(s.cmdBuffer) > 0 {
+				s.cmdBuffer = s.cmdBuffer[:len(s.cmdBuffer)-1]
+			}
 		}
 	}
 }

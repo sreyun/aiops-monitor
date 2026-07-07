@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -30,23 +31,25 @@ var webFS embed.FS
 // Server wires the store, the operator-editable config and the notifier to
 // HTTP handlers.
 type Server struct {
-	store    *Store
-	cfg      *ConfigStore
-	notifier *Notifier
-	auth     *Auth
-	checks   *checkRunner
-	term     *termManager  // remote terminal relay
-	emailMgr *emailManager // verification codes + reset tokens
-	distDir  string        // directory of downloadable agent binaries + plugins.zip
+	store     *Store
+	cfg       *ConfigStore
+	notifier  *Notifier
+	auth      *Auth
+	checks    *checkRunner
+	term      *termManager  // remote terminal relay
+	emailMgr  *emailManager // verification codes + reset tokens
+	playbooks *playbookManager // automation playbooks + execution history
+	distDir   string        // directory of downloadable agent binaries + plugins.zip
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
 	return &Server{
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
-		auth:    NewAuth(cfg),
-		checks:  newCheckRunner(cfg, store, notifier, selfAddr),
-		term:    newTermManager(),
+		auth:     NewAuth(cfg),
+		checks:   newCheckRunner(cfg, store, notifier, selfAddr),
+		term:     newTermManager(),
 		emailMgr: newEmailManager(),
+		playbooks: newPlaybookManager(cfg),
 	}
 }
 
@@ -90,6 +93,17 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
 	mux.HandleFunc("GET /api/v1/checks/{id}/history", s.handleCheckHistory)
 	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
+	// Playbooks (automation)
+	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
+	mux.HandleFunc("POST /api/v1/playbooks", s.handleUpsertPlaybook)
+	mux.HandleFunc("DELETE /api/v1/playbooks/{id}", s.handleDeletePlaybook)
+	mux.HandleFunc("POST /api/v1/playbooks/{id}/execute", s.handleExecutePlaybook)
+	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
+	mux.HandleFunc("GET /api/v1/playbooks/executions/{id}", s.handleGetExecution)
+	// Terminal enhancements
+	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
+	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)
+	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/observe", s.handleTerminalObserve)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
@@ -932,4 +946,239 @@ func (s *Server) handleMFAUnbindViaEmail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知操作类型"})
+}
+
+// -----------------------------------------------------------------------
+// Playbook (automation) handlers
+// -----------------------------------------------------------------------
+
+func (s *Server) handleListPlaybooks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.playbooks.List())
+}
+
+func (s *Server) handleUpsertPlaybook(w http.ResponseWriter, r *http.Request) {
+	var p Playbook
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	saved, err := s.playbooks.Upsert(p)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "保存剧本：" + saved.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
+}
+
+func (s *Server) handleDeletePlaybook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_ = s.playbooks.Delete(id)
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除剧本 " + id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	pb, ok := s.playbooks.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "剧本不存在"})
+		return
+	}
+	hosts := s.store.ListHosts()
+	// Resolve all unique target hosts across all steps
+	targetSet := map[string]*Host{}
+	for _, step := range pb.Steps {
+		for _, h := range s.playbooks.ResolveTargets(step.Target, hosts) {
+			targetSet[h.ID] = h
+		}
+	}
+	if len(targetSet) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "剧本目标主机为空，请检查步骤的目标选择"})
+		return
+	}
+	targetList := make([]*Host, 0, len(targetSet))
+	for _, h := range targetSet {
+		targetList = append(targetList, h)
+	}
+	exec := s.playbooks.StartExecution(pb, s.clientIP(r), targetList)
+	// Run each step on each host sequentially via the agent reverse terminal channel
+	go s.runPlaybookExecution(pb, exec, targetList)
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: fmt.Sprintf("执行剧本「%s」于 %d 台主机", pb.Name, len(targetList))})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": exec.ID})
+}
+
+// runPlaybookExecution runs playbook steps on all target hosts in parallel.
+// Each host gets a one-shot terminal session: send command, capture output, close.
+func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, hosts []*Host) {
+	var wg sync.WaitGroup
+	for _, h := range hosts {
+		wg.Add(1)
+		go func(h *Host) {
+			defer wg.Done()
+			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
+			for _, step := range pb.Steps {
+				sr := StepResult{Name: step.Name, Status: "running"}
+				start := time.Now()
+				output, err := s.execCommandOnHost(h, step.Command, step.TimeoutSec)
+				sr.Duration = time.Since(start).Milliseconds()
+				if err != nil {
+					sr.Status = "failed"
+				sr.Output = output + "\n[error] " + err.Error()
+					result.Status = "failed"
+					result.Output += sr.Output + "\n"
+					result.Steps = append(result.Steps, sr)
+					if !step.ContinueErr {
+						break
+				}
+				} else {
+					sr.Status = "success"
+					sr.Output = output
+					result.Output += output + "\n"
+					result.Steps = append(result.Steps, sr)
+				}
+			}
+			if result.Status != "failed" {
+				result.Status = "success"
+			}
+			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
+		}(h)
+	}
+	wg.Wait()
+	// Determine overall status
+	allSuccess := true
+	for _, r := range exec.HostResults {
+		if r.Status != "success" {
+			allSuccess = false
+			break
+		}
+	}
+	status := "completed"
+	if !allSuccess {
+		status = "failed"
+	}
+	s.playbooks.FinishExecution(exec.ID, status)
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: exec.Operator, Message: fmt.Sprintf("剧本「%s」执行完成： %s", pb.Name, status)})
+}
+
+// execCommandOnHost runs a single command on a host via the Agent reverse terminal
+// channel. It creates a terminal session, sends the command, waits for output,
+// then closes the session.
+func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (string, error) {
+	if timeoutSec < 5 {
+		timeoutSec = 30
+	}
+	// Create a terminal session for this host
+	sess := s.term.create(h.ID, h.Hostname, "playbook-exec")
+	defer s.term.remove(sess.id)
+	if !s.term.notifyAgent(h.ID, sess.id) {
+		return "", fmt.Errorf("无法连接到主机 %s 的 Agent", h.Hostname)
+	}
+	// Wait for agent to attach
+	select {
+	case <-sess.agentUp:
+	case <-time.After(10 * time.Second):
+		return "", fmt.Errorf("Agent 接入超时")
+	case <-sess.done:
+		return "", fmt.Errorf("会话已断开")
+	}
+	// Send the command followed by Enter
+	cmdBytes := append([]byte(command), '\r')
+	select {
+	case sess.toAgent <- termFrame('i', cmdBytes):
+	case <-time.After(5 * time.Second):
+		return "", fmt.Errorf("命令发送超时")
+	}
+	// Collect output until timeout
+	var output []byte
+	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case b := <-sess.toBrowser:
+			output = append(output, b...)
+			if len(output) > 64*1024 {
+				output = output[len(output)-64*1024:] // keep last 64KB
+			}
+		case <-timer.C:
+			// Send Ctrl+C to interrupt if still running
+			select {
+			case sess.toAgent <- termFrame('i', []byte{0x03}):
+			default:
+			}
+			return string(output), fmt.Errorf("执行超时（%ds）", timeoutSec)
+		case <-sess.done:
+			return string(output), nil
+		}
+	}
+}
+
+func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.playbooks.ExecutionHistory())
+}
+
+func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	exec, ok := s.playbooks.GetExecution(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在"})
+		return
+	}
+	writeJSON(w, http.StatusOK, exec)
+}
+
+// -----------------------------------------------------------------------
+// Terminal enhancement handlers
+// -----------------------------------------------------------------------
+
+func (s *Server) handleListTerminalSessions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.term.listSessions())
+}
+
+func (s *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("id")
+	frames := s.term.getRecording(sid)
+	if frames == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在或已结束"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"frames": frames, "count": len(frames)})
+}
+
+// handleTerminalObserve allows a second logged-in user to watch a live terminal
+// session in read-only mode via WebSocket.
+func (s *Server) handleTerminalObserve(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("id")
+	if !s.cfg.TerminalEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "远程终端已被管理员禁用"})
+		return
+	}
+	obs, ok := s.term.addObserver(sid)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
+		return
+	}
+	defer s.term.removeObserver(sid, obs)
+	ws, err := wsAccept(w, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 WebSocket 升级"})
+		return
+	}
+	defer ws.Close()
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "旁观终端会话 " + sid[:8]})
+	for {
+		select {
+		case b := <-obs.ch:
+			if err := ws.WriteBinary(b); err != nil {
+				return
+			}
+		case <-obs.done:
+			return
+		}
+	}
 }
