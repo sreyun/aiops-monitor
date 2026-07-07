@@ -50,6 +50,7 @@ let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
 let LOG_PAGE = 1;     // 日志分页当前页
 let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
 let CHECK_VIEW = "list"; // 自定义监控视图：list | pill
+let HOST_VIEW = "card";  // 主机视图：card | list
 let TERMINAL_ENABLED = true; // 服务端是否开启远程终端
 let TERM_WS = null;   // 当前终端 WebSocket
 
@@ -160,7 +161,7 @@ function renderTop(hosts) {
   const el = $("topPanels");
   if (!el) return;
   const live = hosts.filter(h => h.latest && h.online);
-  if (!live.length) { el.innerHTML = ""; return; }
+  if (!live.length) { el.innerHTML = checkTopPanels(); return; } // 无在线主机时仍显示监控 TOP
   const by = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, v: f(h) || 0 }))
     .sort((a, b) => b.v - a.v).slice(0, 10);
   const panel = (title, items) => `<div class="top-panel"><div class="tp-title">${title}</div>` +
@@ -181,7 +182,49 @@ function renderTop(hosts) {
       const ds = h.latest.disks || [];
       return ds.length ? Math.max(...ds.map(d => d.percent)) : (h.latest.disk_percent || 0);
     })) +
-    (gpuTop.length ? panel("GPU 占用 TOP10（最高显卡）", gpuTop) : "");
+    (gpuTop.length ? panel("GPU 占用 TOP10（最高显卡）", gpuTop) : "") +
+    checkTopPanels();
+}
+
+// 概览：自定义监控 TOP10（HTTP/TCP/Ping/进程），异常优先 + 延时降序；点击看历史曲线
+function checkTopPanels() {
+  const checks = (Array.isArray(LAST_CHECKS) ? LAST_CHECKS : []).filter(c => !c.builtin);
+  if (!checks.length) return "";
+  const byType = t => checks.filter(c => c.type === t);
+  return checkTopPanel("HTTP 探测 TOP10（响应延时）", byType("http"), false)
+    + checkTopPanel("TCP 探测 TOP10（连接延时）", byType("tcp"), false)
+    + checkTopPanel("Ping TOP10（RTT）", byType("ping"), false)
+    + checkTopPanel("进程存活 TOP10", byType("process"), true);
+}
+function checkTopPanel(title, list, isProc) {
+  if (!list.length) return "";
+  const sorted = list.slice().sort((a, b) => {
+    const ad = (!a.ok && a.checked_at) ? 1 : 0, bd = (!b.ok && b.checked_at) ? 1 : 0;
+    if (ad !== bd) return bd - ad;                       // 异常优先
+    return (b.latency_ms || 0) - (a.latency_ms || 0);    // 再按延时降序
+  }).slice(0, 10);
+  const maxLat = Math.max(1, ...sorted.map(c => c.latency_ms || 0));
+  const items = sorted.map(c => {
+    const down = !c.ok && c.checked_at, unknown = !c.checked_at;
+    let val, color, width;
+    if (isProc) {
+      val = down ? "异常" : unknown ? "待检测" : "正常";
+      color = down ? "var(--crit)" : unknown ? "var(--muted2)" : "var(--ok)";
+      width = unknown ? 0 : 100;
+    } else if (down) { val = "异常"; color = "var(--crit)"; width = 100; }
+    else if (unknown) { val = "待检测"; color = "var(--muted2)"; width = 0; }
+    else {
+      const lat = Math.round(c.latency_ms || 0);
+      val = lat + " ms"; color = lat >= 1000 ? "var(--crit)" : lat >= 300 ? "var(--warn)" : "var(--ok)";
+      width = Math.min(100, (c.latency_ms || 0) / maxLat * 100);
+    }
+    return `<div class="top-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title="点击查看历史曲线">
+      <span class="ti-name">${esc(c.name)}</span>
+      <div class="ti-bar"><div class="ti-fill" style="width:${width}%;background:${color}"></div></div>
+      <span class="ti-val mono" style="color:${color}">${val}</span>
+    </div>`;
+  }).join("");
+  return `<div class="top-panel"><div class="tp-title">${title}</div>${items}</div>`;
 }
 
 // applyLogFilters mirrors the log view's filter chain (类型/级别/时间/内部自检)，
@@ -335,6 +378,41 @@ function hostCard(h) {
   </div>`;
 }
 
+/* ---------- 渲染：主机列表行（列表视图） ---------- */
+function hostRow(h) {
+  const m = h.latest || {};
+  const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
+  const diskMax = disks.length ? Math.max(...disks.map(d => d.percent)) : (m.disk_percent || 0);
+  const gpus = Array.isArray(m.gpus) ? m.gpus : [];
+  const gpuMax = gpus.length ? Math.max(...gpus.map(g => g.util_percent || 0)) : null;
+  const chip = (label, v) => `<span class="hrow-m"><span class="hm-k">${label}</span><span class="hm-v mono" style="color:${usageColor(v || 0)}">${(v || 0).toFixed(0)}%</span></span>`;
+  const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
+  const last = !h.online
+    ? `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
+    : staleSec > 15
+      ? `<span class="g stale-tag" title="数据可能卡顿">⚠ ${ago(h.last_seen)}</span>`
+      : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
+  const cat = h.category ? esc(h.category) : "未分类";
+  const termBtn = (h.online && TERMINAL_ENABLED)
+    ? `<button class="term-btn" data-act="term" title="远程终端（经 Agent 反向连接，免开端口）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
+    : "";
+  return `<div class="host hrow ${h.online ? "" : "offline"}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+    <span class="dot ${h.online ? "on" : "off"}"></span>
+    <div class="hrow-id">
+      <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
+      <div class="hrow-sub mono">${h.ip ? esc(h.ip) : ""}${h.platform ? (h.ip ? " · " : "") + esc(h.platform) : ""}</div>
+    </div>
+    <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
+    <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
+    <div class="hrow-metrics">
+      ${chip("CPU", m.cpu_percent)}${chip("内存", m.mem_percent)}${chip("磁盘", diskMax)}${gpuMax !== null ? chip("GPU", gpuMax) : ""}
+    </div>
+    <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
+    <span class="hrow-last">${last}</span>
+    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="删除主机">✕</button></span>
+  </div>`;
+}
+
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
   // 进程监控下拉所需的主机元数据直接从主机列表派生，省掉一条 /hosts/meta 轮询请求
@@ -379,20 +457,24 @@ function renderHosts(hosts) {
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
   empty.style.display = "none";
 
-  // 分页
-  const total = shown.length, pages = Math.ceil(total / HOST_PAGE_SIZE);
+  // 分页（列表视图一页容纳更多）
+  const isList = HOST_VIEW === "list";
+  const pageSize = isList ? 20 : HOST_PAGE_SIZE;
+  const total = shown.length, pages = Math.ceil(total / pageSize);
   if (HOST_PAGE > pages) HOST_PAGE = pages;
   if (HOST_PAGE < 1) HOST_PAGE = 1;
-  const pageHosts = shown.slice((HOST_PAGE - 1) * HOST_PAGE_SIZE, HOST_PAGE * HOST_PAGE_SIZE);
+  const pageHosts = shown.slice((HOST_PAGE - 1) * pageSize, HOST_PAGE * pageSize);
 
   // 当前页按分类分组
   const byCat = {};
   pageHosts.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
+  const render = isList ? hostRow : hostCard;
+  const wrapCls = isList ? "host-list" : "grid";
   groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => `
     <div class="group">
       <div class="group-head"><span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
         <span class="count-pill">${byCat[cat].length}</span><span class="line"></span></div>
-      <div class="grid">${byCat[cat].map(hostCard).join("")}</div>
+      <div class="${wrapCls}">${byCat[cat].map(render).join("")}</div>
     </div>`).join("");
   renderPager(pages, total);
 }
@@ -1272,21 +1354,40 @@ function setCheckView(v) {
   document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
   renderChecks(LAST_CHECKS);
 }
+// 主机 卡片 / 列表 视图切换
+function setHostView(v) {
+  HOST_VIEW = v === "list" ? "list" : "card";
+  try { localStorage.setItem("aiops_host_view", HOST_VIEW); } catch (e) {}
+  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
 async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
 }
 
 let CHK_CHARTS = {};
-// 自定义监控·历史曲线：复用交互式图表引擎（悬停十字线 / 框选放大 / 双击还原 / 放大预览）
-async function openCheckHistory(id, name, type) {
-  const body = $("checkHistBody");
+let CHK_HIST = { id: "", name: "", type: "", range: 0 }; // range=小时数，0 表示全部
+// 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选（与主机趋势图一致）
+function openCheckHistory(id, name, type) {
+  CHK_HIST = { id, name, type, range: 0 };
   $("checkHistTitle").textContent = name + " · 监控历史";
-  body.innerHTML = `<div class="empty-line">加载中…</div>`;
   $("checkHistMask").classList.add("show");
+  loadCheckHistory();
+}
+async function loadCheckHistory() {
+  const { id, name, type, range } = CHK_HIST;
+  const body = $("checkHistBody");
+  body.innerHTML = `<div class="empty-line">加载中…</div>`;
+  const ctrl = [[1, "1小时"], [6, "6小时"], [24, "24小时"], [0, "全部"]].map(([h, lab]) =>
+    `<button class="chip-btn ${range === h ? "active" : ""}" data-crange="${h}">${lab}</button>`).join("");
   try {
-    const pts = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
-    if (!Array.isArray(pts) || !pts.length) {
-      body.innerHTML = `<div class="empty-line">暂无历史数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
+    const all = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
+    const now = Math.floor(Date.now() / 1000);
+    const from = range > 0 ? now - range * 3600 : 0;
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);
+    if (!pts.length) {
+      body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
       return;
     }
     const samples = pts.map(p => ({ timestamp: p.timestamp, latency_ms: p.latency_ms, loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null), ok: p.ok }));
@@ -1296,7 +1397,8 @@ async function openCheckHistory(id, name, type) {
     const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : "刚开始";
     const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="230"></canvas>` +
       `<button class="chart-enlarge" data-chart="${cid}" title="放大预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
-    body.innerHTML = `<div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
+    body.innerHTML = `<div class="chart-controls">${ctrl}</div>
+      <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ms · 悬停查看数值，拖动框选放大，双击还原。</div>`;
     CHK_CHARTS = {};
     CHK_CHARTS.chkLat = createChart("chkLat", samples, [
@@ -1311,8 +1413,10 @@ async function openCheckHistory(id, name, type) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
-// 历史弹窗内图表放大委托
+// 历史弹窗：时间范围切换 + 图表放大委托
 safeAddEventListener("checkHistBody", "click", e => {
+  const rb = e.target.closest(".chip-btn[data-crange]");
+  if (rb) { CHK_HIST.range = parseInt(rb.dataset.crange); loadCheckHistory(); return; }
   const en = e.target.closest(".chart-enlarge"); if (!en) return;
   const ch = CHK_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });
@@ -1693,6 +1797,7 @@ safeAddEventListener("checksGrid", "click", e => {
 // 概览 TOP5 点击 → 直达该主机趋势
 safeAddEventListener("topPanels", "click", e => {
   const it = e.target.closest(".top-item"); if (!it) return;
+  if (it.dataset.checkId) { openCheckHistory(it.dataset.checkId, it.dataset.checkName, it.dataset.checkType); return; }
   openDetail(it.dataset.id, it.dataset.name);
 });
 // 日志导出
@@ -1750,11 +1855,17 @@ safeAddEventListener("checkViewToggle", "click", e => {
   const b = e.target.closest(".vt-btn"); if (!b) return;
   setCheckView(b.dataset.cview);
 });
+safeAddEventListener("hostViewToggle", "click", e => {
+  const b = e.target.closest(".vt-btn"); if (!b) return;
+  setHostView(b.dataset.hview);
+});
 
 // 读取本地偏好并应用（视图 / 布局宽度）
 function initPrefs() {
   try { const cv = localStorage.getItem("aiops_check_view"); if (cv === "pill" || cv === "list") CHECK_VIEW = cv; } catch (e) {}
+  try { const hv = localStorage.getItem("aiops_host_view"); if (hv === "list" || hv === "card") HOST_VIEW = hv; } catch (e) {}
   document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
+  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
   applyWidthMode();
 }
 

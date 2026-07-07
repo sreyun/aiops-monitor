@@ -28,8 +28,8 @@ type CheckStatus struct {
 const selfCheckID = "__self_health__"
 
 // checkHistMax bounds the per-check time-series ring kept for the "history
-// curve" view (≈8h at the default 30s interval; longer at bigger intervals).
-const checkHistMax = 1000
+// curve" view (≈24h at the default 30s interval; longer at bigger intervals).
+const checkHistMax = 2880
 
 // CheckPoint is one sampled result kept for a check's trend chart.
 type CheckPoint struct {

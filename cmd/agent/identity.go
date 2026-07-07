@@ -2,29 +2,115 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 )
 
-// loadOrCreateHostID returns a stable per-host id, persisting a freshly
+// loadOrCreateHostID returns a stable per-machine id, persisting a freshly
 // generated one so the agent keeps the same identity across restarts.
+//
+// Anti-clone: the state file also stores a machine fingerprint (OS machine-id +
+// primary MAC). If a golden image / VM template bakes in agent_state.json, every
+// clone would otherwise share one host_id and fight over a single host record on
+// the server (data + online status flapping between the two machines). When the
+// stored fingerprint no longer matches the current machine we detect the clone
+// and regenerate the id, so different machines never collide — even with the same
+// hostname and IP. Old state files without a fingerprint are honored unchanged.
 func loadOrCreateHostID(path string) string {
+	fp := machineFingerprint()
 	if b, err := os.ReadFile(path); err == nil {
 		var s struct {
 			HostID string `json:"host_id"`
+			FP     string `json:"fp"`
 		}
 		if json.Unmarshal(b, &s) == nil && s.HostID != "" {
-			return s.HostID
+			// Keep the id unless we can prove the file was cloned onto a different
+			// machine (both fingerprints known and different).
+			if fp == "" || s.FP == "" || s.FP == fp {
+				return s.HostID
+			}
 		}
 	}
 	id := randomID()
-	if b, err := json.Marshal(map[string]string{"host_id": id}); err == nil {
+	if b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp}); err == nil {
 		_ = os.WriteFile(path, b, 0o644)
 	}
 	return id
+}
+
+// machineFingerprint returns a stable, machine-unique fingerprint derived from
+// the OS machine id and the primary MAC address, hashed. Returns "" when nothing
+// machine-unique can be read (then clone detection is skipped, never a false
+// positive). Zero third-party dependency.
+func machineFingerprint() string {
+	parts := []string{machineID(), primaryMAC()}
+	joined := strings.TrimSpace(strings.Trim(strings.Join(parts, "|"), "|"))
+	if joined == "" || joined == "|" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(joined))
+	return hex.EncodeToString(sum[:12])
+}
+
+// machineID reads the OS-provided stable machine identifier.
+func machineID() string {
+	switch runtime.GOOS {
+	case "linux":
+		for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+			if b, err := os.ReadFile(p); err == nil {
+				if s := strings.TrimSpace(string(b)); s != "" {
+					return s
+				}
+			}
+		}
+	case "windows":
+		out, _ := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid").Output()
+		for _, ln := range strings.Split(string(out), "\n") {
+			if strings.Contains(ln, "MachineGuid") {
+				if f := strings.Fields(ln); len(f) >= 3 {
+					return f[len(f)-1]
+				}
+			}
+		}
+	case "darwin":
+		out, _ := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
+		for _, ln := range strings.Split(string(out), "\n") {
+			if strings.Contains(ln, "IOPlatformUUID") {
+				if i := strings.Index(ln, `= "`); i >= 0 {
+					rest := ln[i+3:]
+					if j := strings.IndexByte(rest, '"'); j >= 0 {
+						return rest[:j]
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// primaryMAC returns the hardware address of the first up, non-loopback
+// interface — differs across machines (and most VM clones) even when hostname/IP
+// coincide.
+func primaryMAC() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if mac := ifc.HardwareAddr.String(); mac != "" {
+			return mac
+		}
+	}
+	return ""
 }
 
 func randomID() string {

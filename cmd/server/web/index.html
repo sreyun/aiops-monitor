@@ -136,6 +136,14 @@
               <option value="recent">最近活跃</option>
             </select>
           </div>
+          <div class="view-toggle" id="hostViewToggle" title="切换卡片 / 列表视图" style="margin-left:12px">
+            <button class="vt-btn active" data-hview="card" title="卡片视图">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+            </button>
+            <button class="vt-btn" data-hview="list" title="列表视图">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+          </div>
           <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" title="删除所有离线主机">清理离线</button>
         </div>
         <div id="groups"></div>
