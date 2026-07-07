@@ -139,6 +139,17 @@ func (d *DB) Save() error {
 	return os.Rename(tmp, d.path)
 }
 
+// cloneSamples copies a history tier so the DB snapshot doesn't share the live
+// slice's backing array with concurrent Upsert appends.
+func cloneSamples(s []shared.Sample) []shared.Sample {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]shared.Sample, len(s))
+	copy(out, s)
+	return out
+}
+
 func (d *DB) export() dbSnapshot {
 	s := d.store
 	s.mu.RLock()
@@ -148,8 +159,14 @@ func (d *DB) export() dbSnapshot {
 		Deleted: make(map[string]int64, len(s.deleted)),
 	}
 	for _, h := range s.hosts {
+		// Clone the history tiers: the snapshot is JSON-encoded after RUnlock, so it
+		// must not share the live slices' backing arrays with concurrent Upsert
+		// appends (a data race even when the read window doesn't overlap the write).
 		snap.Hosts = append(snap.Hosts, dbHost{
-			Host: *h, HistRaw: h.histRaw, Hist1m: h.hist1m, Hist5m: h.hist5m,
+			Host:     *h,
+			HistRaw:  cloneSamples(h.histRaw),
+			Hist1m:   cloneSamples(h.hist1m),
+			Hist5m:   cloneSamples(h.hist5m),
 			Last1mTs: h.last1mTs, Last5mTs: h.last5mTs,
 		})
 	}

@@ -140,7 +140,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 	sess := s.term.create(hostID)
 	defer s.term.remove(sess.id)
-	op := clientIP(r)
+	op := s.clientIP(r)
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: op, Host: shortID(hostID), Message: "打开远程终端 " + shortID(hostID)})
 	defer s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: shortID(hostID), Message: "关闭远程终端 " + shortID(hostID)})
 

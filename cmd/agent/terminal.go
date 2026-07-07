@@ -42,7 +42,13 @@ type termShell interface {
 // available, so startShell falls back to piped stdio.
 // (see pty_windows.go / pty_linux.go / pty_darwin.go / pty_other.go)
 
-var termHTTP = &http.Client{} // no timeout — terminal streams are long-lived
+var (
+	termHTTP = &http.Client{} // no timeout — rx/tx streams are long-lived
+	// termWaitHTTP bounds the long-poll wait so a half-open network can't wedge
+	// the poller forever (which would silently kill the terminal channel while
+	// metrics keep reporting). Slightly above the server's 25s poll timeout.
+	termWaitHTTP = &http.Client{Timeout: 35 * time.Second}
+)
 
 func (a *Agent) runTerminalChannel() {
 	if a.identity.Token == "" {
@@ -65,7 +71,7 @@ func (a *Agent) runTerminalChannel() {
 
 func (a *Agent) termWait() (sessionID string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}, "token": {a.identity.Token}}
-	resp, err := termHTTP.Get(a.server + "/api/v1/agent/terminal/wait?" + q.Encode())
+	resp, err := termWaitHTTP.Get(a.server + "/api/v1/agent/terminal/wait?" + q.Encode())
 	if err != nil {
 		return "", false
 	}

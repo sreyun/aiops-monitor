@@ -97,6 +97,12 @@ type ServerConfig struct {
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
 	AllowAnonymousAgents bool `json:"allow_anonymous_agents"`
+	// TrustProxy tells the server it sits behind a trusted reverse proxy, so it
+	// may believe the X-Real-IP / X-Forwarded-For headers for the real client
+	// address (used by login rate-limiting and audit logs). Default false: when
+	// the server is directly exposed these headers are attacker-forgeable, so
+	// they are ignored and the raw connection address is used instead.
+	TrustProxy bool `json:"trust_proxy"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -187,6 +193,15 @@ func (cs *ConfigStore) TerminalEnabled() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return !cs.cfg.TerminalDisabled
+}
+
+// TrustProxy reports whether to honor reverse-proxy client-IP headers
+// (X-Real-IP / X-Forwarded-For). Off by default so a directly-exposed server
+// can't be fooled by forged headers into miscounting login attempts.
+func (cs *ConfigStore) TrustProxy() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.TrustProxy
 }
 
 // ResetToken regenerates the install token and returns the new value.
@@ -283,6 +298,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.RequireToken = cs.cfg.RequireToken
 	c.TerminalDisabled = cs.cfg.TerminalDisabled
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
+	c.TrustProxy = cs.cfg.TrustProxy
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()

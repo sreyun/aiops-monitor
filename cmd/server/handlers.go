@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"aiops-monitor/shared"
 )
@@ -92,6 +93,20 @@ func (s *Server) Routes() http.Handler {
 		fsrv := http.FileServer(http.FS(sub))
 		mux.Handle("GET /style.css", fsrv)
 		mux.Handle("GET /app.js", fsrv)
+		mux.Handle("GET /manifest.json", fsrv)
+		mux.Handle("GET /icon.svg", fsrv)
+		// Service Worker: needs Service-Worker-Allowed header for root scope control
+		mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.Header().Set("Service-Worker-Allowed", "/")
+			w.Header().Set("Cache-Control", "no-cache")
+			data, err := webFS.ReadFile("web/sw.js")
+			if err != nil {
+				http.Error(w, "not found", 404)
+				return
+			}
+			w.Write(data)
+		})
 	}
 	// agent binaries + plugins.zip for the one-line install command
 	if s.distDir != "" {
@@ -245,7 +260,7 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	if cat == "" {
 		msg = "清除主机分类：" + shortID(id)
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: msg})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": id, "category": cat})
 }
 
@@ -257,7 +272,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "删除主机 " + shortID(id)})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除主机 " + shortID(id)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "host_id": id})
 }
 
@@ -355,7 +370,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.checks.runNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "保存自定义监控：" + saved.Name})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "保存自定义监控：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
@@ -378,7 +393,7 @@ func (s *Server) handleCheckHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteCheck(id)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "删除自定义监控 " + id})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除自定义监控 " + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -454,7 +469,7 @@ func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	// immediately receives the currently-outstanding alerts.
 	s.notifier.ResetState()
 	go s.notifier.Trigger()
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "更新告警配置"})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "更新告警配置"})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -465,7 +480,7 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mergeSecrets(&in, s.cfg.Get())
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "发送告警测试消息"})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "发送告警测试消息"})
 	if errs := s.notifier.SendTest(in); len(errs) > 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "errors": errs})
 		return
@@ -485,7 +500,7 @@ func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResetToken(w http.ResponseWriter, r *http.Request) {
 	tok := s.cfg.ResetToken()
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "重置安装 Token"})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "重置安装 Token"})
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
@@ -496,13 +511,17 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// /install.sh is public, so injecting it would leak the token to anyone who
 	// can reach the server. The dashboard always generates the command WITH the
 	// token (from the authenticated /install/info), so legitimate installs carry it.
-	token := r.URL.Query().Get("token")
-	category := r.URL.Query().Get("category")
+	token := sanitizeToken(r.URL.Query().Get("token"))
+	// category & server are echoed into the shell/PowerShell install script inside
+	// double quotes; sanitize so a crafted ?category= (or a forged X-Forwarded-Host
+	// feeding serverURL) can't inject commands into the script a victim pipes to sh.
+	category := sanitizeCategory(r.URL.Query().Get("category"))
+	server := sanitizeServerURL(serverURL(r))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(installPs1Template, serverURL(r), token, category)
+		body = renderScript(installPs1Template, server, token, category)
 	} else {
-		body = renderScript(installShTemplate, serverURL(r), token, category)
+		body = renderScript(installShTemplate, server, token, category)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)
@@ -520,9 +539,25 @@ func (s *Server) handleUninstallScript(w http.ResponseWriter, r *http.Request) {
 }
 
 // clientIP extracts the operator's IP for the activity log.
-func clientIP(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		return strings.TrimSpace(strings.Split(f, ",")[0])
+// clientIP returns the request's client address for audit logs and login
+// rate-limiting. Reverse-proxy headers (X-Real-IP / X-Forwarded-For) are honored
+// ONLY when trust_proxy is enabled — otherwise they are attacker-forgeable and a
+// directly-exposed server would let anyone reset their rate-limit bucket (and
+// forge audit-log origins) by spoofing a header, so we use the raw connection
+// address instead.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.cfg.TrustProxy() {
+		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+			return xr
+		}
+		if f := r.Header.Get("X-Forwarded-For"); f != "" {
+			// Last hop is the address our trusted proxy actually saw (nginx appends
+			// $remote_addr); the client-controlled prefix is not trusted.
+			parts := strings.Split(f, ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+				return ip
+			}
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
@@ -608,4 +643,62 @@ func keepIfBlank(newv, oldv string) string {
 		return oldv
 	}
 	return newv
+}
+
+// ---- install-script parameter sanitizers ----
+// /install.sh and /install.ps1 are public and echo these query params into a
+// shell/PowerShell script that a machine pipes straight to sh/iex. Any of them
+// could otherwise carry quotes/`$`/backticks/`;` that break out of the quoted
+// assignment and inject commands, so each is reduced to a safe charset. Real
+// values (hex token, a URL, a category name) are unaffected.
+
+func sanitizeToken(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 128 {
+		s = s[:128]
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return -1
+		}
+	}, s)
+}
+
+func sanitizeCategory(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '-', r == '_', r == '.', r == ' ':
+			return r
+		case unicode.Is(unicode.Han, r):
+			return r
+		default:
+			return -1
+		}
+	}, strings.TrimSpace(s))
+	if rs := []rune(s); len(rs) > 48 {
+		s = string(rs[:48])
+	}
+	return s
+}
+
+func sanitizeServerURL(u string) string {
+	u = strings.TrimSpace(u)
+	if len(u) > 256 {
+		u = u[:256]
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case strings.ContainsRune(":/._-", r):
+			return r
+		default:
+			return -1
+		}
+	}, u)
 }

@@ -212,7 +212,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if !s.auth.loginAllowed(ip) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录尝试过于频繁，请 5 分钟后再试"})
 		return
@@ -233,7 +233,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "登录成功：" + req.Username})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "登录成功：" + req.Username})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -268,7 +268,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetProfile(strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email))
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: clientIP(r), Message: "更新个人信息"})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "更新个人信息"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -291,6 +291,6 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetPassword(req.New)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: clientIP(r), Message: "修改登录密码"})
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改登录密码"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
