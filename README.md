@@ -391,6 +391,41 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 
 ---
 
+## 反向代理 / 域名接入（Nginx）
+
+用域名 + HTTPS 对外时通常走 Nginx 反代。**普通监控（指标上报、面板）走普通 HTTP，Nginx 默认就能转发**；但 **远程终端**用到 **WebSocket 升级 + 长连接实时流**，Nginx 默认**不转发 `Upgrade` 头、且会缓冲**，于是会出现「**指标正常、终端连不上**」。
+
+这不是本项目特有——所有 WebSocket 应用（Grafana / Jupyter / code-server 等）在 Nginx 后都要加这几行。服务端已对下行流自动发送 `X-Accel-Buffering: no`（Nginx 见此会对该流关缓冲），所以你要加的很少：
+
+```nginx
+# http {} 层，全局一次
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;         # 让安装命令自动用域名
+
+    # —— 远程终端必需（缺一不可）——
+    proxy_set_header Upgrade    $http_upgrade;         # 转发 WebSocket 升级
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering         off;                       # 关缓冲，实时收发
+    proxy_request_buffering off;
+    proxy_read_timeout  3600s;                          # 长连接不被切断
+    proxy_send_timeout  3600s;
+}
+```
+
+> 完整可用示例见 **[deploy/nginx-aiops.conf](deploy/nginx-aiops.conf)**。改完 `nginx -t && nginx -s reload`，终端即可跨外网使用。
+>
+> **说明**：Agent 的 `--server` 地址在安装时由服务端按请求 Host 自动识别（配了 `X-Forwarded-Host` 就是你的域名），**无需手填**——指标能正常上报即代表 Agent 已能通过域名连到服务端，终端连不上纯粹是上面 WebSocket/缓冲的 Nginx 配置问题。
+>
+> 云负载均衡（ALB/CLB/K8s Ingress）同理：需开启 WebSocket 支持、关闭响应缓冲、把空闲超时调到 ≥1h。
+
+---
+
 ## 关键设计说明
 
 - **共享代码**：`shared/wire.go` 被 server 与 agent 同时 import——改一处，两端同步，契约不会漂移。

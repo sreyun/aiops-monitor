@@ -248,6 +248,10 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "application/octet-stream")
+	// Tell nginx (and other X-Accel-aware proxies) NOT to buffer this response —
+	// keystrokes must reach the agent in real time. Saves the operator from having
+	// to set `proxy_buffering off` for this stream.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	if flusher != nil {
 		flusher.Flush()
