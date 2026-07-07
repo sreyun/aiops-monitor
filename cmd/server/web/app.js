@@ -156,44 +156,65 @@ function renderAlerts(alerts) {
   $("ovAlerts").innerHTML = n ? alerts.slice(0, 6).map(row).join("") : empty;
 }
 
-/* ---------- 概览：资源 TOP10 ---------- */
+/* ---------- 概览：资源 TOP10（两行：① 主机资源 ② 负载与监控探测） ---------- */
 function renderTop(hosts) {
   const el = $("topPanels");
   if (!el) return;
   const live = hosts.filter(h => h.latest && h.online);
-  if (!live.length) { el.innerHTML = checkTopPanels(); return; } // 无在线主机时仍显示监控 TOP
-  const by = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, v: f(h) || 0 }))
+  if (!live.length) { // 无在线主机：仅显示监控 TOP（有则显示）
+    const cp = checkTopPanels();
+    el.innerHTML = cp ? `<div class="top-row">${cp}</div>` : "";
+    return;
+  }
+  const top = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, h, v: f(h.latest, h) || 0 }))
     .sort((a, b) => b.v - a.v).slice(0, 10);
-  const panel = (title, items) => `<div class="top-panel"><div class="tp-title">${title}</div>` +
+  const panelHTML = (title, items) => `<div class="top-panel"><div class="tp-title">${esc(title)}</div>` +
     (items.length ? items.map(it => `
       <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title="点击查看趋势">
         <span class="ti-name">${esc(it.name)}</span>
-        <div class="ti-bar"><div class="ti-fill" style="width:${Math.min(it.v, 100)}%;background:${usageColor(it.v)}"></div></div>
-        <span class="ti-val mono">${it.v.toFixed(1)}%</span>
+        <div class="ti-bar"><div class="ti-fill" style="width:${it.width}%;background:${it.bar}"></div></div>
+        <span class="ti-val mono">${esc(it.disp)}</span>
       </div>`).join("") : `<div class="empty-line">暂无数据</div>`) + `</div>`;
-  const gpuTop = by(h => {
-    const gs = h.latest.gpus || [];
-    return gs.length ? Math.max(...gs.map(g => g.util_percent || 0)) : 0;
-  }).filter(it => it.v > 0);
-  el.innerHTML =
-    panel("CPU 占用 TOP10", by(h => h.latest.cpu_percent)) +
-    panel("内存占用 TOP10", by(h => h.latest.mem_percent)) +
-    panel("磁盘占用 TOP10（最高分区）", by(h => {
-      const ds = h.latest.disks || [];
-      return ds.length ? Math.max(...ds.map(d => d.percent)) : (h.latest.disk_percent || 0);
-    })) +
-    (gpuTop.length ? panel("GPU 占用 TOP10（最高显卡）", gpuTop) : "") +
-    checkTopPanels();
+  // 百分比型：值不着色，进度条按占用配色
+  const pct = (title, f) => panelHTML(title, top(f).map(it => ({
+    id: it.id, name: it.name, disp: it.v.toFixed(1) + "%", width: Math.min(it.v, 100), bar: usageColor(it.v)
+  })));
+  // 数值型（网络/负载）：进度条按相对最大值缩放
+  const val = (title, f, fmt, barFn) => {
+    const items = top(f);
+    const max = Math.max(1, ...items.map(x => x.v));
+    return panelHTML(title, items.map(it => ({
+      id: it.id, name: it.name, disp: fmt(it.v, it.h), width: Math.min(100, it.v / max * 100), bar: barFn(it)
+    })));
+  };
+
+  const hasGPU = live.some(h => (h.latest.gpus || []).length);
+  const diskMax = m => { const d = m.disks || []; return d.length ? Math.max(...d.map(x => x.percent)) : (m.disk_percent || 0); };
+  const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
+
+  // 第一行：CPU、GPU(有则显示)、内存、硬盘、网络
+  let row1 = pct("CPU 占用 TOP10", m => m.cpu_percent);
+  if (hasGPU) row1 += pct("GPU 占用 TOP10", gpuMax);
+  row1 += pct("内存占用 TOP10", m => m.mem_percent);
+  row1 += pct("磁盘占用 TOP10", diskMax);
+  row1 += val("网络吞吐 TOP10", m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0), v => fmtRate(v), () => "var(--info)");
+
+  // 第二行：负载(5分钟)、Ping、TCP、HTTP、进程（无监控项则不显示）
+  let row2 = val("负载 TOP10（5 分钟）", m => m.load5, v => v.toFixed(2),
+    it => usageColor(it.v / (it.h.latest.cpu_cores || 1) * 100));
+  row2 += checkTopPanels();
+
+  el.innerHTML = `<div class="top-row">${row1}</div><div class="top-row">${row2}</div>`;
 }
 
-// 概览：自定义监控 TOP10（HTTP/TCP/Ping/进程），异常优先 + 延时降序；点击看历史曲线
+// 监控 TOP10，顺序 Ping → TCP → HTTP → 进程；无该类型监控则该面板不显示
 function checkTopPanels() {
   const checks = (Array.isArray(LAST_CHECKS) ? LAST_CHECKS : []).filter(c => !c.builtin);
   if (!checks.length) return "";
   const byType = t => checks.filter(c => c.type === t);
-  return checkTopPanel("HTTP 探测 TOP10（响应延时）", byType("http"), false)
+  return checkTopPanel("Ping TOP10（RTT）", byType("ping"), false)
     + checkTopPanel("TCP 探测 TOP10（连接延时）", byType("tcp"), false)
-    + checkTopPanel("Ping TOP10（RTT）", byType("ping"), false)
+    + checkTopPanel("HTTP 探测 TOP10（响应延时）", byType("http"), false)
     + checkTopPanel("进程存活 TOP10", byType("process"), true);
 }
 function checkTopPanel(title, list, isProc) {
