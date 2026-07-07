@@ -229,56 +229,56 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .group-head .line{flex:1; height:1px; background:var(--line)}
 
 /* 响应式网格：auto-fill + minmax 自适应，卡片自然流动 */
-.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px}
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px}
 .host{
-  background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
-  padding:20px; transition:border-color var(--transition-fast), background var(--transition-fast);
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:14px 16px; transition:border-color var(--transition-fast), background var(--transition-fast);
   position:relative; cursor:default; display:flex; flex-direction:column;
-  min-height:280px;
+  min-height:240px;
 }
-.host:hover{ border-color:var(--line2); background:var(--panel2) }
-.host-head{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; min-width:0}
-.host-name{display:flex; align-items:flex-start; gap:10px; min-width:0; flex:1; overflow:hidden}
-.dot{width:8px; height:8px; border-radius:50%; flex:none; margin-top:7px}
+.host:hover{ border-color:var(--accent); background:var(--panel2) }
+.host-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid var(--line); min-width:0}
+.host-name{display:flex; align-items:flex-start; gap:8px; min-width:0; flex:1; overflow:hidden}
+.dot{width:7px; height:7px; border-radius:50%; flex:none; margin-top:6px}
 .dot.on{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
 .dot.off{background:#49525f}
-.hn{font-weight:650; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
+.hn{font-weight:650; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
 .hn:hover{color:var(--accent)}
-.host-tags{display:flex; align-items:center; gap:6px; flex:none}
-.os-badge{font-size:10px; padding:2px 8px; border-radius:5px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em}
-.cat-badge{font-size:10px; padding:2px 8px; border-radius:5px; background:var(--accent-soft); color:var(--accent-txt);
+.host-tags{display:flex; align-items:center; gap:5px; flex:none}
+.os-badge{font-size:9.5px; padding:2px 6px; border-radius:4px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em}
+.cat-badge{font-size:9.5px; padding:2px 7px; border-radius:4px; background:var(--accent-soft); color:var(--accent-txt);
   font-weight:600; cursor:pointer; border:1px solid transparent}
 .cat-badge:hover{border-color:rgba(76,141,255,.4)}
-.x-btn{width:24px; height:24px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);
+.x-btn{width:22px; height:22px; border-radius:5px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center;
-  padding:0; flex:none; opacity:0; transition:opacity var(--transition-fast), background var(--transition-fast); font-size:12px}
+  padding:0; flex:none; opacity:0; transition:opacity var(--transition-fast), background var(--transition-fast); font-size:11px}
 .host:hover .x-btn{opacity:1}
 .x-btn:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:rgba(239,77,90,.4)}
 
-/* 指标：统一 12px 间距栅格，进度条高度 6px，数值右对齐 */
-.metric{ margin:10px 0 }
-.metric .row{display:flex; justify-content:space-between; align-items:baseline; font-size:12px; margin-bottom:5px; gap:8px}
+/* 指标：紧凑行，4px 进度条 */
+.metric{ margin:6px 0 }
+.metric .row{display:flex; justify-content:space-between; align-items:baseline; font-size:11.5px; margin-bottom:3px; gap:8px}
 .metric .row .label{color:var(--muted); font-weight:500; flex:none}
 .metric .row .val{color:var(--txt2); font-weight:600; font-variant-numeric:tabular-nums; text-align:right;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; min-width:0}
-.bar{ height:5px; background:var(--panel3); border-radius:3px; overflow:hidden; position:relative }
-.fill{ height:100%; border-radius:3px; transition:width var(--transition-slow), background var(--transition) }
+.bar{ height:4px; background:var(--panel3); border-radius:2px; overflow:hidden; position:relative }
+.fill{ height:100%; border-radius:2px; transition:width var(--transition-slow), background var(--transition) }
 
-.loadline{display:flex; gap:8px; margin:12px 0 4px}
-.load-cell{flex:1; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:8px; text-align:center}
-.load-cell .lv{font-size:15px; font-weight:650; font-variant-numeric:tabular-nums}
-.load-cell .lk{font-size:10px; color:var(--muted2); margin-top:1px}
+.loadline{display:flex; gap:6px; margin:8px 0 4px; padding-top:8px; border-top:1px solid var(--line)}
+.load-cell{flex:1; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-xs); padding:5px 6px; text-align:center}
+.load-cell .lv{font-size:13px; font-weight:650; font-variant-numeric:tabular-nums}
+.load-cell .lk{font-size:9px; color:var(--muted2); margin-top:1px}
 
-.chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px}
-.chip{font-size:11px; padding:3px 9px; border-radius:6px; background:var(--panel2); color:var(--txt2); border:1px solid var(--line)}
+.chips{display:flex; flex-wrap:wrap; gap:5px; margin-top:8px}
+.chip{font-size:10px; padding:2px 7px; border-radius:5px; background:var(--panel2); color:var(--txt2); border:1px solid var(--line)}
 .chip b{color:#9bd8f6; font-weight:700}
 .chip.crit b{color:var(--crit-txt)}
 .chip.crit{border-color:rgba(239,77,90,.28)}
-.chip-label{font-size:10px; color:var(--muted2); width:100%; margin-top:2px}
+.chip-label{font-size:9px; color:var(--muted2); width:100%; margin-top:2px}
 
-.foot{display:flex; justify-content:space-between; gap:10px; font-size:11px; color:var(--muted);
-  margin-top:auto; padding-top:12px; border-top:1px solid var(--line); flex-wrap:wrap}
-.foot .g{display:flex; align-items:center; gap:5px}
+.foot{display:flex; justify-content:space-between; gap:8px; font-size:10px; color:var(--muted);
+  margin-top:auto; padding-top:8px; border-top:1px solid var(--line); flex-wrap:wrap}
+.foot .g{display:flex; align-items:center; gap:4px}
 
 .empty{text-align:center; padding:56px 20px; color:var(--muted); border:1px dashed var(--line2); border-radius:var(--r)}
 .empty code{background:var(--panel2); padding:3px 9px; border-radius:6px; color:var(--txt);
@@ -544,11 +544,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 版本标签 ---------- */
 .ver{color:var(--muted2); font-size:11px}
 
-/* 主机信息：允许换行避免长 OS/内核被截断不可读 */
-.host-info{display:flex; flex-direction:column; gap:3px; margin-top:7px; min-width:0}
-.host-info .hi-row{display:flex; align-items:baseline; gap:8px; font-size:11px; line-height:1.5}
-.host-info .hi-k{color:var(--muted2); flex:none; width:52px}
-.host-info .hi-v{color:var(--txt2); min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.45}
+/* 主机信息 */
+.host-info{display:flex; flex-direction:column; gap:2px; margin-top:4px; min-width:0}
+.host-info .hi-row{display:flex; align-items:baseline; gap:6px; font-size:10.5px; line-height:1.4}
+.host-info .hi-k{color:var(--muted2); flex:none; width:48px}
+.host-info .hi-v{color:var(--txt2); min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4}
 .host-info .hi-v.mono, .host-info .hi-v .mono{font-variant-numeric:tabular-nums}
 .hi-sep{color:var(--muted2); margin:0 1px}
 .metric.gpu .row .label{color:var(--accent2-txt)}
@@ -629,50 +629,50 @@ svg.sparkline{width:100%; height:46px; display:block}
 .login-err{color:#ff9ba2; font-size:12.5px; min-height:18px; margin-bottom:8px}
 
 /* ---------- 主机列表视图 ---------- */
-.host-list{display:flex; flex-direction:column; gap:6px}
+.host-list{display:flex; flex-direction:column; gap:4px}
 .host.hrow{
-  flex-direction:row; align-items:center; gap:14px; padding:12px 16px; cursor:default;
-  border-left:3px solid var(--line2); border-radius:var(--r-sm);
+  flex-direction:row; align-items:center; gap:12px; padding:8px 12px; cursor:default;
+  border-left:3px solid var(--line2); border-radius:var(--r-xs);
 }
 .host.hrow.online{border-left-color:var(--ok)}
 .host.hrow.offline{border-left-color:var(--crit); opacity:.65}
 .host.hrow.stale{border-left-color:var(--warn)}
-.host.hrow:hover{background:var(--panel2)}
-.host.hrow.offline:hover{opacity:1}
+.host.hrow:hover{background:var(--panel2); border-color:var(--accent)}
+.host.hrow.online:hover{border-left-color:var(--ok)}
 
-.hrow-dot{width:8px; height:8px; border-radius:50%; flex:none}
+.hrow-dot{width:7px; height:7px; border-radius:50%; flex:none}
 .hrow-dot.on{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
 .hrow-dot.off{background:#49525f}
 
-.hrow-id{min-width:0; flex:1 1 180px; display:flex; flex-direction:column; gap:2px}
-.hrow-name{font-weight:650; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
+.hrow-id{min-width:0; flex:1 1 160px; display:flex; flex-direction:column; gap:1px}
+.hrow-name{font-weight:650; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
 .hrow-name:hover{color:var(--accent)}
-.hrow-sub{font-size:11px; color:var(--muted2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:5px}
+.hrow-sub{font-size:10px; color:var(--muted2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:4px}
 .hrow-sep{color:var(--muted2); margin:0 2px}
 
 .host.hrow .os-badge, .host.hrow .cat-badge{flex:none}
 
 /* Mini metric bars for list view */
-.hrow-metrics{display:flex; gap:16px; flex:none; flex-wrap:wrap; align-items:center}
-.hrow-mbar{display:flex; align-items:center; gap:6px; font-size:12px}
-.hrow-mbar .hm-k{color:var(--muted2); font-size:10px; flex:none; width:28px}
-.hrow-mbar .hm-track{width:44px; height:4px; background:var(--panel3); border-radius:2px; overflow:hidden}
+.hrow-metrics{display:flex; gap:12px; flex:none; flex-wrap:wrap; align-items:center}
+.hrow-mbar{display:flex; align-items:center; gap:5px; font-size:11px}
+.hrow-mbar .hm-k{color:var(--muted2); font-size:9px; flex:none; width:24px}
+.hrow-mbar .hm-track{width:36px; height:3px; background:var(--panel3); border-radius:2px; overflow:hidden}
 .hrow-mbar .hm-fill{height:100%; border-radius:2px; transition:width var(--transition)}
-.hrow-mbar .hm-v{font-weight:650; min-width:28px; text-align:right; font-size:11px}
+.hrow-mbar .hm-v{font-weight:650; min-width:24px; text-align:right; font-size:10px}
 
-.hrow-net{font-size:11px; color:var(--muted); flex:none; white-space:nowrap; display:flex; align-items:center; gap:3px}
-.hrow-load{font-size:11px; color:var(--muted2); flex:none; white-space:nowrap}
-.hrow-last{font-size:11px; flex:none; white-space:nowrap; min-width:90px; text-align:right}
-.hrow-status{display:inline-flex; align-items:center; gap:4px; border-radius:5px; padding:2px 8px; font-size:11px; font-weight:600}
+.hrow-net{font-size:10px; color:var(--muted); flex:none; white-space:nowrap; display:flex; align-items:center; gap:3px}
+.hrow-load{font-size:10px; color:var(--muted2); flex:none; white-space:nowrap}
+.hrow-last{font-size:10px; flex:none; white-space:nowrap; min-width:80px; text-align:right}
+.hrow-status{display:inline-flex; align-items:center; gap:3px; border-radius:4px; padding:1px 7px; font-size:10px; font-weight:600}
 .hrow-status.online{color:var(--ok-txt); background:var(--ok-soft)}
 .hrow-status.offline{color:var(--crit-txt); background:var(--crit-soft)}
 .hrow-status.stale{color:var(--warn-txt); background:var(--warn-soft)}
 
-.hrow-actions{margin-left:0; opacity:0; transition:opacity var(--transition-fast); display:flex; gap:5px; flex:none}
+.hrow-actions{margin-left:0; opacity:0; transition:opacity var(--transition-fast); display:flex; gap:4px; flex:none}
 .host.hrow:hover .hrow-actions{opacity:1}
 .host.hrow .term-btn{opacity:1}
 @media(max-width:1100px){ .hrow-net, .hrow-load{display:none} }
-@media(max-width:820px){ .host.hrow{flex-wrap:wrap} .hrow-metrics{gap:8px} .hrow-last{min-width:auto} }
+@media(max-width:820px){ .host.hrow{flex-wrap:wrap} .hrow-metrics{gap:6px} .hrow-last{min-width:auto} }
 
 /* ---------- 表面细节：极细顶部高光（"上方光源"质感，克制非炫光） ---------- */
 .card, .top-panel, .check-card, .host:not(.hrow){ box-shadow:inset 0 1px 0 rgba(255,255,255,.04) }
