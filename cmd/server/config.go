@@ -67,11 +67,12 @@ type AccountConfig struct {
 	Email       string `json:"email"`
 	Salt        string `json:"salt"`
 	Hash        string `json:"hash"`
-	Role        string `json:"role"` // admin | operator | viewer
 	// Optional TOTP (Google Authenticator) second factor. MFASecret is the base32
 	// shared secret; it is never returned to the browser once enrollment completes.
 	MFAEnabled bool   `json:"mfa_enabled"`
 	MFASecret  string `json:"mfa_secret,omitempty"`
+	// Role is the RBAC role: admin | operator | viewer.
+	Role string `json:"role,omitempty"`
 }
 
 func defaultAccount() AccountConfig {
@@ -81,6 +82,7 @@ func defaultAccount() AccountConfig {
 		DisplayName: "管理员",
 		Salt:        salt,
 		Hash:        hashPassword("admin", salt),
+		Role:        RoleAdmin,
 	}
 }
 
@@ -109,7 +111,6 @@ type ServerConfig struct {
 	InstallToken  string            `json:"install_token"`
 	RequireToken  bool              `json:"require_token"`
 	Account       AccountConfig     `json:"account"`
-	Users         []AccountConfig   `json:"users,omitempty"`
 	Checks        []CustomCheck     `json:"checks"`
 	Playbooks     []Playbook        `json:"playbooks,omitempty"`
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
@@ -125,6 +126,9 @@ type ServerConfig struct {
 	// the server is directly exposed these headers are attacker-forgeable, so
 	// they are ignored and the raw connection address is used instead.
 	TrustProxy bool `json:"trust_proxy"`
+	// Users is the multi-account list (RBAC). The legacy single Account above is
+	// migrated into this list on load and then cleared.
+	Users []AccountConfig `json:"users"`
 }
 
 func defaultServerConfig() ServerConfig {
@@ -161,8 +165,9 @@ func NewConfigStore(path string) *ConfigStore {
 		cs.cfg.InstallToken = genToken()
 		dirty = true
 	}
-	if cs.cfg.Account.Username == "" {
-		cs.cfg.Account = defaultAccount()
+	// Migrate the legacy single Account into the multi-user Users list and ensure
+	// at least one admin exists (creates the default admin/admin on first run).
+	if migrateUsers(&cs.cfg) {
 		dirty = true
 	}
 	if dirty {

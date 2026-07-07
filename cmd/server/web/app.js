@@ -916,7 +916,7 @@ function createTermTab(id, name) {
     if (e.target.classList.contains("term-tab-close")) { e.stopPropagation(); closeTermTab(TERM_TABS.indexOf(tabObj)); }
     else switchTermTab(TERM_TABS.indexOf(tabObj));
   };
-  screen.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj.ws); };
+  screen.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj); };
   screen.onpaste = ev => {
     ev.preventDefault();
     const t = (ev.clipboardData || window.clipboardData).getData("text");
@@ -1200,10 +1200,11 @@ function termSend(ws, str) {
   framed.set(body, 1);
   ws.send(framed);
 }
-function termKeyDown(e, ws) {
+function termKeyDown(e, tab) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
+  const ws = tab ? tab.ws : null;
   const k = e.key;
-  const ac = (($("termScreen")._vt || {}).appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
+  const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
   let seq = null;
   if (k === "Enter") seq = "\r";
   else if (k === "Backspace") seq = "\x7f";
