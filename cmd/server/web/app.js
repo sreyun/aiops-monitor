@@ -369,7 +369,7 @@ function hostCard(h) {
         <div style="min-width:0">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
-            <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v"><span class="hi-hostname">${esc(h.hostname || h.id)}</span>${h.ip ? ` <span class="mono" style="color:var(--muted)">${esc(h.ip)}</span>` : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
             <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}">${esc(h.platform || "—")}${h.arch ? " · " + esc(h.arch) : ""}${h.kernel ? " · " + esc(h.kernel) : ""}</span></div>
           </div>
         </div>
@@ -1630,7 +1630,7 @@ async function refresh(force) {
       s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
       s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
     }
-    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(filteredHosts);
+    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
   } catch (e) {
@@ -1682,7 +1682,8 @@ function toggleCatCollapse(cat) {
   try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
 }
 function renderCatDropdown(cats) {
-  const wrap = document.querySelector("#catFilter").parentElement;
+  const wrap = $("catDropdownWrap") ? $("catDropdownWrap").parentElement : (document.querySelector("#catFilter") ? document.querySelector("#catFilter").parentElement : null);
+  if (!wrap) { console.warn("catFilter parent not found"); return; }
   if (wrap.querySelector(".cat-dropdown")) {
     // Update options in existing dropdown
     updateCatDropdownOptions(cats);
