@@ -145,6 +145,8 @@ docker compose up -d aiops-server
 # 浏览器打开 http://localhost:8080
 ```
 
+> **默认登录凭据**：用户名 `admin` / 密码 `admin`。首次登录后请立即在「个人信息」中修改用户名与密码，并建议启用两步验证（MFA）。
+
 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./server_config.json`。Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用本机 Agent。
 
 ---
@@ -166,6 +168,8 @@ go build -o bin/aiops-server ./cmd/server
 ```
 
 浏览器打开 `http://localhost:8080` 即可看到监控面板。
+
+> **首次登录**：默认账号 **`admin / admin`**。登录后请立即在左下角「个人信息」**修改用户名与密码**，并按需启用**两步验证（TOTP）**。出于防探测考虑，登录框不会预填该默认账号。
 
 ### 2. 启动 Agent
 

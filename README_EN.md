@@ -145,6 +145,8 @@ docker compose up -d aiops-server
 # Open http://localhost:8080 in your browser
 ```
 
+> **Default login credentials**: Username `admin` / Password `admin`. After first login, immediately change your username and password in「Profile」, and consider enabling two-factor auth (MFA).
+
 Server data persists via volume (`/app/data`), config file at `./server_config.json`. Agent container is not started by default — uncomment the `aiops-agent` section in `docker-compose.yml` to enable the local Agent.
 
 ---
