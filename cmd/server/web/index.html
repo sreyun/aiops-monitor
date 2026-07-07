@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AIOps Monitor · 主机监控运维平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230a0d13'/><text x='8' y='11' font-size='9' font-weight='bold' fill='%234c8dff' text-anchor='middle'>AI</text></svg>">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -149,14 +150,30 @@
         <div id="groups"></div>
         <div class="pager" id="pager"></div>
         <div class="empty" id="empty">
-          暂无主机上报。点左侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
-          <code>aiops-agent --server http://&lt;本机IP&gt;:8080 --category 生产</code>
+          暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
+          <code>aiops-agent --server http://&lt;本机IP&gt;:8080 --category 生产</code><br><br>
+          <button class="btn primary icon" onclick="openInstall()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+            <span>安装 Agent</span>
+          </button>
         </div>
       </section>
 
       <!-- 告警 -->
       <section class="view" id="view-alerts">
-        <div class="section-title">阈值告警<span class="tag">基础指标</span><span class="count-pill" id="alertsCount">0</span></div>
+        <div class="section-title">阈值告警<span class="tag">基础指标</span><span class="count-pill" id="alertsCount">0</span>
+          <input type="text" id="alertSearch" class="search" style="margin-left:auto; width:200px; max-width:35vw" placeholder="搜索主机名 / IP / 内容…">
+        </div>
+        <div class="log-filter" id="alertFilter">
+          <button class="chip-btn active" data-atype="">全部</button>
+          <button class="chip-btn" data-atype="cpu">CPU</button>
+          <button class="chip-btn" data-atype="memory">内存</button>
+          <button class="chip-btn" data-atype="disk">磁盘</button>
+          <button class="chip-btn" data-atype="gpu">GPU</button>
+          <button class="chip-btn" data-atype="load">负载</button>
+          <button class="chip-btn" data-atype="offline">失联</button>
+          <button class="chip-btn" data-atype="check">拨测</button>
+        </div>
         <div class="stack" id="alerts"></div>
       </section>
 

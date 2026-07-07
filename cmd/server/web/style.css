@@ -493,6 +493,9 @@ svg.sparkline{width:100%; height:46px; display:block}
 }
 .cat-dd-btn:hover{border-color:#39424f}
 .cat-dd-btn .dd-arrow{position:absolute; right:11px; color:var(--muted); font-size:10px}
+/* P1-#4: Filtered badge on category button */
+.cat-dd-btn.filtered{border-color:var(--accent); background:var(--accent-soft); color:var(--accent-txt)}
+.cat-dd-btn.filtered::after{content:""; position:absolute; top:4px; right:26px; width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--panel2)}
 .cat-dd-menu{
   display:none; position:absolute; top:100%; left:0; right:0; z-index:50;
   background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm);
@@ -533,6 +536,12 @@ svg.sparkline{width:100%; height:46px; display:block}
 .stale-tag{color:var(--warn); font-weight:600}
 .pulse.paused{background:var(--warn); box-shadow:0 0 0 3px var(--warn-soft); animation:none}
 .hamburger.active{background:var(--warn-soft); border-color:rgba(232,161,60,.4); color:var(--warn)}
+
+/* P1-#8: Keyboard focus-visible */
+.host:focus-visible, .row-item:focus-visible, .check-card:focus-visible, .top-item:focus-visible {
+  outline:2px solid var(--accent); outline-offset:-2px;
+}
+.host:focus-visible{border-color:var(--accent)}
 
 /* ---------- 版本标签 ---------- */
 .ver{color:var(--muted2); font-size:11px}
