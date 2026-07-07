@@ -548,7 +548,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .host-info{display:flex; flex-direction:column; gap:3px; margin-top:7px; min-width:0}
 .host-info .hi-row{display:flex; align-items:baseline; gap:8px; font-size:11px; line-height:1.5}
 .host-info .hi-k{color:var(--muted2); flex:none; width:52px}
-.host-info .hi-v{color:var(--txt2); min-width:0; word-break:break-all; line-height:1.45}
+.host-info .hi-v{color:var(--txt2); min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.45}
 .host-info .hi-v.mono, .host-info .hi-v .mono{font-variant-numeric:tabular-nums}
 .hi-sep{color:var(--muted2); margin:0 1px}
 .metric.gpu .row .label{color:var(--accent2-txt)}
