@@ -188,7 +188,7 @@ function renderTop(hosts) {
     el.innerHTML = cp ? `<div class="top-row">${cp}</div>` : "";
     return;
   }
-  const top = f => live.map(h => ({ id: h.id, name: h.hostname || h.id, h, v: f(h.latest, h) || 0 }))
+  const top = (f, pool) => (pool || live).map(h => ({ id: h.id, name: h.hostname || h.id, h, v: f(h.latest, h) || 0 }))
     .sort((a, b) => b.v - a.v).slice(0, 10);
   const panelHTML = (title, items) => `<div class="top-panel"><div class="tp-title">${esc(title)}</div>` +
     (items.length ? items.map(it => `
@@ -198,7 +198,7 @@ function renderTop(hosts) {
         <span class="ti-val mono">${esc(it.disp)}</span>
       </div>`).join("") : `<div class="empty-line">暂无数据</div>`) + `</div>`;
   // 百分比型：值不着色，进度条按占用配色
-  const pct = (title, f) => panelHTML(title, top(f).map(it => ({
+  const pct = (title, f, pool) => panelHTML(title, top(f, pool).map(it => ({
     id: it.id, name: it.name, disp: it.v.toFixed(1) + "%", width: Math.min(it.v, 100), bar: usageColor(it.v)
   })));
   // 数值型（网络/负载）：进度条按相对最大值缩放
@@ -215,8 +215,9 @@ function renderTop(hosts) {
   const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
 
   // 第一行：CPU、GPU(有则显示)、内存、硬盘、网络
+  const gpuLive = live.filter(h => (h.latest.gpus || []).length > 0);
   let row1 = pct("CPU 占用 TOP10", m => m.cpu_percent);
-  if (hasGPU) row1 += pct("GPU 占用 TOP10", gpuMax);
+  if (hasGPU) row1 += pct("GPU 占用 TOP10", gpuMax, gpuLive);
   row1 += pct("内存占用 TOP10", m => m.mem_percent);
   row1 += pct("磁盘占用 TOP10", diskMax);
   row1 += val("网络吞吐 TOP10", m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0), v => fmtRate(v), () => "var(--info)");
