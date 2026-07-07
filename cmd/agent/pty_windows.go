@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"syscall"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -28,6 +29,13 @@ var (
 	procWaitForSingleObjectT              = modkernel32c.NewProc("WaitForSingleObject")
 	procTerminateProcessT                 = modkernel32c.NewProc("TerminateProcess")
 	procCloseHandleT                      = modkernel32c.NewProc("CloseHandle")
+	procMultiByteToWideChar               = modkernel32c.NewProc("MultiByteToWideChar")
+	procWideCharToMultiByte               = modkernel32c.NewProc("WideCharToMultiByte")
+)
+
+const (
+	cpACP  = 0    // system default ANSI code page (GBK on Chinese Windows)
+	cpUTF8 = 65001
 )
 
 const (
@@ -57,6 +65,7 @@ type conptyShell struct {
 	inFile  *os.File // write keystrokes here → ConPTY input
 	outFile *os.File // read shell output here ← ConPTY output
 	attrBuf []byte   // keeps the attribute list memory alive
+	convBuf []byte   // leftover bytes from UTF-8 conversion (may exceed read buffer)
 }
 
 // newPTY starts the shell attached to a fresh pseudo console. Returns nil on any
@@ -167,15 +176,36 @@ func closeConPTY(hpc uintptr, inW, outR syscall.Handle) {
 	procCloseHandleT.Call(uintptr(outR))
 }
 
-// shellExe returns the shell to launch (COMSPEC or cmd.exe).
+// shellExe returns the shell to launch (COMSPEC or cmd.exe) with UTF-8 code page.
+// The /K flag runs chcp 65001 before entering interactive mode, ensuring all
+// output is UTF-8 on Chinese Windows (where the default OEM code page is GBK).
 func shellExe() string {
 	if c := os.Getenv("COMSPEC"); c != "" {
-		return c
+		return c + " /K chcp 65001 >nul"
 	}
-	return "cmd.exe"
+	return "cmd.exe /K chcp 65001 >nul"
 }
 
-func (c *conptyShell) Read(b []byte) (int, error)  { return c.outFile.Read(b) }
+func (c *conptyShell) Read(b []byte) (int, error) {
+	// Return leftover converted data from a previous read first.
+	if len(c.convBuf) > 0 {
+		n := copy(b, c.convBuf)
+		c.convBuf = c.convBuf[n:]
+		return n, nil
+	}
+	n, err := c.outFile.Read(b)
+	if n > 0 {
+		converted := convertToUTF8(b[:n])
+		if len(converted) <= len(b) {
+			n = copy(b, converted)
+		} else {
+			// UTF-8 output can be larger than GBK input; buffer the excess.
+			n = copy(b, converted)
+			c.convBuf = append(c.convBuf, converted[n:]...)
+		}
+	}
+	return n, err
+}
 func (c *conptyShell) Write(b []byte) (int, error) { return c.inFile.Write(b) }
 func (c *conptyShell) Resize(cols, rows int) error {
 	procResizePseudoConsole.Call(c.hpc, coordVal(cols, rows))
@@ -199,4 +229,56 @@ func (c *conptyShell) Close() error {
 		procCloseHandleT.Call(uintptr(c.hProc))
 	}
 	return nil
+}
+
+// convertToUTF8 converts bytes from the system ANSI code page (e.g., GBK on
+// Chinese Windows) to UTF-8. If the data is already valid UTF-8, it is returned
+// as-is. This handles ConPTY output that was emitted before chcp 65001 took
+// effect, or programs that bypass the console code page.
+func convertToUTF8(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	// Fast path: already valid UTF-8 (common after chcp 65001).
+	if utf8.Valid(data) {
+		return data
+	}
+	// Step 1: MultiByte (system ACP) → UTF-16
+	n, _, _ := procMultiByteToWideChar.Call(
+		cpACP, 0,
+		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)),
+		0, 0, // pass nil to get required length
+	)
+	if n == 0 {
+		return data // conversion failed; return raw bytes
+	}
+	utf16Buf := make([]byte, int(n)*2)
+	n, _, _ = procMultiByteToWideChar.Call(
+		cpACP, 0,
+		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)),
+		uintptr(unsafe.Pointer(&utf16Buf[0])), n,
+	)
+	if n == 0 {
+		return data
+	}
+	// Step 2: UTF-16 → UTF-8
+	m, _, _ := procWideCharToMultiByte.Call(
+		cpUTF8, 0,
+		uintptr(unsafe.Pointer(&utf16Buf[0])), n,
+		0, 0, 0, 0, // pass nil to get required length
+	)
+	if m == 0 {
+		return data
+	}
+	utf8Buf := make([]byte, int(m))
+	m, _, _ = procWideCharToMultiByte.Call(
+		cpUTF8, 0,
+		uintptr(unsafe.Pointer(&utf16Buf[0])), n,
+		uintptr(unsafe.Pointer(&utf8Buf[0])), m,
+		0, 0,
+	)
+	if m == 0 {
+		return data
+	}
+	return utf8Buf[:m]
 }

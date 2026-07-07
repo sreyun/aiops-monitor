@@ -67,6 +67,7 @@ type AccountConfig struct {
 	Email       string `json:"email"`
 	Salt        string `json:"salt"`
 	Hash        string `json:"hash"`
+	Role        string `json:"role"` // admin | operator | viewer
 	// Optional TOTP (Google Authenticator) second factor. MFASecret is the base32
 	// shared secret; it is never returned to the browser once enrollment completes.
 	MFAEnabled bool   `json:"mfa_enabled"`
@@ -108,6 +109,7 @@ type ServerConfig struct {
 	InstallToken  string            `json:"install_token"`
 	RequireToken  bool              `json:"require_token"`
 	Account       AccountConfig     `json:"account"`
+	Users         []AccountConfig   `json:"users,omitempty"`
 	Checks        []CustomCheck     `json:"checks"`
 	Playbooks     []Playbook        `json:"playbooks,omitempty"`
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for

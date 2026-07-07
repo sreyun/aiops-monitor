@@ -215,6 +215,11 @@ func buildShellEnv() []string {
 		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	}
 	env = append(env, "TERM=xterm-256color")
+	// Ensure UTF-8 locale on Linux/macOS so command output (including Chinese)
+	// is encoded as UTF-8 rather than the legacy C locale.
+	if runtime.GOOS != "windows" {
+		env = append(env, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	}
 	return env
 }
 
@@ -283,12 +288,13 @@ func (p *pipeShell) Close() error {
 }
 
 // shellCommand picks the interactive shell per OS (used by the piped fallback).
+// On Windows, /K chcp 65001 forces UTF-8 output so Chinese text is not garbled.
 func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
 		if c := os.Getenv("COMSPEC"); c != "" {
-			return c, nil
+			return c, []string{"/K", "chcp 65001 >nul"}
 		}
-		return "cmd.exe", nil
+		return "cmd.exe", []string{"/K", "chcp 65001 >nul"}
 	}
 	return shellPath(), []string{"-l", "-i"} // -l: login shell
 }

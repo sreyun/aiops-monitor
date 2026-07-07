@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
@@ -1062,19 +1063,19 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 }
 
 // execCommandOnHost runs a single command on a host via the Agent reverse terminal
-// channel. It creates a terminal session, sends the command, waits for output,
-// then closes the session.
+// channel. It creates a terminal session, sends the command followed by a unique
+// sentinel echo, and waits for the sentinel to appear in the output — which means
+// the command has finished. The output is then cleaned of ANSI escapes, command
+// echoes, and shell prompts before being returned.
 func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (string, error) {
 	if timeoutSec < 5 {
 		timeoutSec = 30
 	}
-	// Create a terminal session for this host
 	sess := s.term.create(h.ID, h.Hostname, "playbook-exec")
 	defer s.term.remove(sess.id)
 	if !s.term.notifyAgent(h.ID, sess.id) {
 		return "", fmt.Errorf("无法连接到主机 %s 的 Agent", h.Hostname)
 	}
-	// Wait for agent to attach
 	select {
 	case <-sess.agentUp:
 	case <-time.After(10 * time.Second):
@@ -1082,14 +1083,20 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	case <-sess.done:
 		return "", fmt.Errorf("会话已断开")
 	}
-	// Send the command followed by Enter
-	cmdBytes := append([]byte(command), '\r')
+	// Unique sentinel: after the command finishes, the shell runs "echo SENTINEL"
+	// and the sentinel appears on its own line in the output. Detecting it means
+	// the command is done. Using UnixNano ensures uniqueness across hosts/steps.
+	sentinel := fmt.Sprintf("AIOPS_EXEC_DONE_%d", time.Now().UnixNano())
+	// Send the command + Enter, then the sentinel echo + Enter. The shell
+	// processes them sequentially, so the sentinel only appears after the
+	// command completes.
+	fullCmd := command + "\r" + "echo " + sentinel + "\r"
 	select {
-	case sess.toAgent <- termFrame('i', cmdBytes):
+	case sess.toAgent <- termFrame('i', []byte(fullCmd)):
 	case <-time.After(5 * time.Second):
 		return "", fmt.Errorf("命令发送超时")
 	}
-	// Collect output until timeout
+	// Collect output until the sentinel appears as a standalone line or timeout.
 	var output []byte
 	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
 	defer timer.Stop()
@@ -1097,20 +1104,134 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 		select {
 		case b := <-sess.toBrowser:
 			output = append(output, b...)
-			if len(output) > 64*1024 {
-				output = output[len(output)-64*1024:] // keep last 64KB
+			if len(output) > 256*1024 {
+				output = output[len(output)-256*1024:]
+			}
+			// Search for the sentinel at the beginning of a line (the echo
+			// output), not inside the "echo SENTINEL" command echo.
+			for _, sep := range []string{"\r\n" + sentinel, "\n" + sentinel} {
+				if idx := bytes.Index(output, []byte(sep)); idx >= 0 {
+					result := output[:idx]
+					return cleanTerminalOutput(string(result)), nil
+				}
 			}
 		case <-timer.C:
-			// Send Ctrl+C to interrupt if still running
 			select {
 			case sess.toAgent <- termFrame('i', []byte{0x03}):
 			default:
 			}
-			return string(output), fmt.Errorf("执行超时（%ds）", timeoutSec)
+			return cleanTerminalOutput(string(output)), fmt.Errorf("执行超时（%ds）", timeoutSec)
 		case <-sess.done:
-			return string(output), nil
+			return cleanTerminalOutput(string(output)), nil
 		}
 	}
+}
+
+// cleanTerminalOutput strips ANSI escape sequences, shell prompts, command
+// echoes, and the sentinel echo from raw terminal output, returning clean
+// text suitable for playbook execution results.
+func cleanTerminalOutput(raw string) string {
+	// 1. Strip ANSI escape sequences (CSI, OSC, and other ESC sequences)
+	cleaned := stripANSIEscapes(raw)
+	// 2. Normalize line endings
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
+	// 3. Split into lines and filter
+	lines := strings.Split(cleaned, "\n")
+	var result []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip empty lines at the beginning
+		if len(result) == 0 && trimmed == "" {
+			continue
+		}
+		// Skip shell prompts (Windows: "C:\...>", Linux: "user@host:~$")
+		if isShellPrompt(trimmed) {
+			continue
+		}
+		// Skip the sentinel echo command line
+		if strings.HasPrefix(trimmed, "echo AIOPS_EXEC_DONE") {
+			continue
+		}
+		result = append(result, line)
+	}
+	// 4. Trim trailing empty lines
+	for len(result) > 0 && strings.TrimSpace(result[len(result)-1]) == "" {
+		result = result[:len(result)-1]
+	}
+	return strings.Join(result, "\n")
+}
+
+// stripANSIEscapes removes ANSI/VT100 escape sequences from a string.
+// Handles CSI (\x1b[...final), OSC (\x1b]...\x07 or \x1b\\), and bare ESC chars.
+func stripANSIEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] == 0x1b && i+1 < len(s) {
+			switch s[i+1] {
+			case '[': // CSI: ESC [ params... final(0x40-0x7e)
+				i += 2
+				for i < len(s) && s[i] >= 0x20 && s[i] <= 0x3f {
+					i++ // parameter bytes
+				}
+				for i < len(s) && s[i] >= 0x20 && s[i] <= 0x2f {
+					i++ // intermediate bytes
+				}
+				if i < len(s) && s[i] >= 0x40 && s[i] <= 0x7e {
+					i++ // final byte
+				}
+			case ']': // OSC: ESC ] ... BEL or ST (ESC \)
+				i += 2
+				for i < len(s) {
+					if s[i] == 0x07 { // BEL terminator
+						i++
+						break
+					}
+					if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' { // ST terminator
+						i += 2
+						break
+					}
+					i++
+				}
+			default: // Other ESC sequences (skip 2 bytes)
+				i += 2
+			}
+			continue
+		}
+		// Skip non-printable control chars except \n, \r, \t
+		if s[i] < 0x20 && s[i] != '\n' && s[i] != '\r' && s[i] != '\t' {
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// isShellPrompt returns true if the line looks like a shell prompt.
+// Windows cmd.exe: "C:\Users\admin>"  |  PowerShell: "PS C:\...>"
+// Linux/macOS: "user@host:~$"  |  root: "#"  |  sh: "$"
+func isShellPrompt(line string) bool {
+	// Windows cmd.exe prompt: drive letter + path + ">"
+	if strings.HasSuffix(line, ">") && (strings.Contains(line, ":\\") || strings.Contains(line, ":/")) {
+		return true
+	}
+	// PowerShell: "PS ...>"
+	if strings.HasPrefix(line, "PS ") && strings.HasSuffix(line, ">") {
+		return true
+	}
+	// Linux/macOS: "user@host:...$" or "user@host:...#"
+	if (strings.HasSuffix(line, "$") || strings.HasSuffix(line, "#")) && strings.Contains(line, "@") {
+		return true
+	}
+	// Bare root/sh prompt
+	if line == "#" || line == "$" {
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
