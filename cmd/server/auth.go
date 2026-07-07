@@ -137,6 +137,25 @@ func (a *Auth) Logout(tok string) {
 	a.mu.Unlock()
 }
 
+// ClearSessions invalidates every active login session — used after a password
+// change so any previously-issued (or stolen) cookie immediately stops working.
+func (a *Auth) ClearSessions() {
+	a.mu.Lock()
+	a.sessions = map[string]session{}
+	a.dirty = true
+	a.mu.Unlock()
+}
+
+// issueSession creates and stores a fresh session token for user.
+func (a *Auth) issueSession(user string) string {
+	tok := newSessionToken()
+	a.mu.Lock()
+	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL)}
+	a.dirty = true
+	a.mu.Unlock()
+	return tok
+}
+
 // exportSessions / importSessions bridge the in-memory session table to the
 // embedded DB snapshot (expired entries are skipped both ways).
 func (a *Auth) exportSessions() map[string]dbSession {
@@ -291,6 +310,15 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetPassword(req.New)
+	// Invalidate all existing sessions so any old/stolen cookie dies with the old
+	// password, then re-issue one for the current operator so they stay logged in.
+	s.auth.ClearSessions()
+	tok := s.auth.issueSession(acc.Username)
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
+	})
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改登录密码"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

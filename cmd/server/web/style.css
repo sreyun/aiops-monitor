@@ -690,34 +690,90 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 响应式 ---------- */
 .backdrop{display:none}
 
+/* 平板横屏 / 小桌面 (≤1200px) */
 @media(max-width:1200px){
   .grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
 }
+/* 平板竖屏 (≤900px)：侧栏变抽屉 */
 @media(max-width:900px){
   .app{grid-template-columns:1fr}
   .sidebar{position:fixed; left:0; top:0; width:var(--sidew); transform:translateX(-100%); transition:transform .22s ease}
   .app.nav-open .sidebar{transform:none; box-shadow:var(--shadow-xl)}
   .app.nav-open .backdrop{display:block; position:fixed; inset:0; background:rgba(4,6,10,.6); z-index:55; backdrop-filter:var(--blur-sm)}
   .hamburger{display:flex}
-  .content{padding:18px 16px 40px}
-  .topbar{padding:11px 16px}
+  .content{padding:16px 16px 40px}
+  .topbar{padding:10px 16px}
   .search{width:200px; max-width:40vw}
 }
 @media(max-width:1000px){.cols{grid-template-columns:1fr}}
+/* 手机横屏 / 大手机 (≤700px) */
 @media(max-width:700px){
   .grid{grid-template-columns:1fr}
+  .topbar{flex-wrap:wrap; gap:8px}
+  .page-head{flex:1 1 100%; order:-1}
+  .search{width:100%; max-width:none; margin-left:0}
+  /* topbar 工具栏折叠 */
+  #pauseBtn, #widthBtn{display:none}
+  .select-wrap{min-width:0}
 }
-@media(max-width:600px){
-  .cards{grid-template-columns:1fr 1fr; gap:10px}
-  .card{padding:14px 15px}
-  .card .v{font-size:21px}
-  .grid{grid-template-columns:1fr; gap:12px}
-  .host{padding:15px}
+/* 手机竖屏 (≤480px) */
+@media(max-width:480px){
+  :root{--sidew:260px}
+  body{font-size:14px}
+  .cards{grid-template-columns:1fr 1fr; gap:8px}
+  .card{padding:12px; gap:10px}
+  .card .ic{width:32px; height:32px; border-radius:7px}
+  .card .ic svg{width:16px; height:16px}
+  .card .v{font-size:19px}
+  .card .k{font-size:11px}
+  .grid{grid-template-columns:1fr; gap:10px}
+  .host{padding:14px; min-height:unset}
+  .host-head{flex-wrap:wrap; gap:8px}
+  .host-tags{flex-wrap:wrap}
   .cols{grid-template-columns:1fr}
-  .modal{max-width:95vw}
+  .modal{max-width:100vw; border-radius:0}
+  .modal-wide{max-width:100vw !important}
+  .modal-body{padding:14px 16px; max-height:80vh}
   .grid2{grid-template-columns:1fr}
-  .search{width:150px; max-width:35vw}
+  .search{width:100%; max-width:none; margin-left:0; padding:10px 14px}
   .page-sub{display:none}
   #installBtn .ib-label{display:none}
   #installBtn{padding:8px 11px}
+  /* 列表视图：窄屏换行布局 */
+  .host.hrow{flex-wrap:wrap; gap:8px; padding:10px 14px}
+  .hrow-id{width:100%; flex:1 1 100%}
+  .hrow-metrics{width:100%; gap:8px}
+  .hrow-net, .hrow-load{display:none}
+  .hrow-last{width:auto; flex:1}
+  .hrow-actions{opacity:1; margin-left:auto}
+  /* 触摸优化：最小 44px */
+  .btn, .hamburger, .chip-btn{min-height:40px; padding:10px 16px}
+  .vt-btn{width:36px; height:36px}
+  .mini-btn{width:32px; height:32px}
+  .term-btn{width:32px; height:32px}
+  /* 列表项触摸增大 */
+  .row-item{padding:14px 16px}
+  .host{padding:14px}
+  /* 终端手机端默认全屏 */
+  #termMask{padding:0; align-items:stretch}
+  #termMask .term-modal{max-width:none; width:100%; height:100vh; height:100dvh}
+  #termMask .term-screen{height:auto; flex:1; font-size:11px}
+  /* section-title 工具栏换行 */
+  .section-title{row-gap:8px}
+  .section-title .search{margin-left:0}
+}
+/* 安全区域适配（iPhone 刘海/底部横条） */
+@supports(padding:env(safe-area-inset-top)){
+  .topbar{padding-top:max(12px, env(safe-area-inset-top)); padding-left:max(24px, env(safe-area-inset-left)); padding-right:max(24px, env(safe-area-inset-right))}
+  .content{padding-bottom:max(48px, env(safe-area-inset-bottom))}
+  .sidebar{padding-top:max(18px, env(safe-area-inset-top))}
+  .modal-body{padding-bottom:max(20px, env(safe-area-inset-bottom))}
+  .term-hint{padding-bottom:max(9px, env(safe-area-inset-bottom))}
+}
+/* 触摸设备：悬停效果改为常显 */
+@media(hover:none){
+  .x-btn{opacity:1}
+  .hrow-actions{opacity:1}
+  .ch-actions{opacity:1 !important}
+  .chart-enlarge{opacity:1}
 }

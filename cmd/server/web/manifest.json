@@ -14,5 +14,25 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "主机列表",
+      "short_name": "主机",
+      "url": "/#hosts",
+      "description": "查看所有监控主机"
+    },
+    {
+      "name": "告警",
+      "short_name": "告警",
+      "url": "/#alerts",
+      "description": "查看当前告警"
+    },
+    {
+      "name": "自定义监控",
+      "short_name": "监控",
+      "url": "/#checks",
+      "description": "HTTP/TCP/Ping/进程拨测"
+    }
   ]
 }

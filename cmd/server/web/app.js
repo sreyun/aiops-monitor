@@ -509,9 +509,10 @@ function renderHosts(hosts) {
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
   empty.style.display = "none";
 
-  // Pagination: only paginate when exceeding threshold (30 for card, 50 for list)
+  // Pagination: lower threshold on mobile to reduce DOM nodes
   const isList = HOST_VIEW === "list";
-  const PAGINATION_THRESHOLD = isList ? 50 : 30;
+  const isMobile = window.innerWidth <= 480;
+  const PAGINATION_THRESHOLD = isMobile ? (isList ? 20 : 10) : (isList ? 50 : 30);
   const pageSize = isList ? 50 : HOST_PAGE_SIZE;
   const shouldPaginate = shown.length > PAGINATION_THRESHOLD;
   let pageHosts, pages;
@@ -2144,11 +2145,27 @@ function filterAlertsByType(type) {
 }
 let LAST_ALERTS = [];
 
-/* ---------- PWA Service Worker registration ---------- */
+/* ---------- PWA: SW registration + Install prompt + Hash routing ---------- */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
   });
 }
+let DEFERRED_PROMPT = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  DEFERRED_PROMPT = e;
+  setTimeout(() => {
+    if (DEFERRED_PROMPT && !window.matchMedia("(display-mode: standalone)").matches) {
+      toast("💡 可安装到桌面，离线可用", "ok");
+    }
+  }, 3000);
+});
+window.addEventListener("hashchange", () => {
+  const h = location.hash.slice(1);
+  if (h && ["overview", "hosts", "checks", "alerts", "log"].includes(h)) {
+    switchView(h);
+  }
+});
 
 initAuth();

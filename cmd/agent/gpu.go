@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -36,9 +37,15 @@ func cachedGPUs(probe func() []shared.GPUInfo) []shared.GPUInfo {
 }
 
 // runCmd executes a command and returns stdout, or "" on any error. Used by the
-// Linux/Windows GPU probes (macOS reuses collector_darwin's run()).
+// Linux/Windows GPU probes (macOS reuses collector_darwin's run()). A hard 4s
+// timeout is essential: nvidia-smi is known to hang for tens of seconds (or
+// indefinitely) when the driver/GPU is wedged, and cachedGPUs runs the probe
+// while holding gpuCache.mu — without the timeout that would stall the whole
+// report loop and make an otherwise-healthy host flap offline.
 func runCmd(name string, args ...string) string {
-	out, err := exec.Command(name, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil {
 		return ""
 	}

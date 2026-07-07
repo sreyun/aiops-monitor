@@ -400,6 +400,7 @@ p.emit()                                   # 输出 JSON
 | `allow_anonymous_agents` | bool | `false` | 允许无 Token Agent 接入 |
 | `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
 | `install_token` | string | 自动生成 | Agent 安装 Token |
+| `trust_proxy` | bool | `false` | 置于可信反代(Nginx)后设为 `true`：据 `X-Real-IP`/`X-Forwarded-For` 记录真实客户端 IP 并据此做登录限流；直连公网时保持 `false`（这些头可被伪造） |
 
 ---
 
@@ -478,6 +479,7 @@ location / {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host  $host;         # 让安装命令自动用域名
+    proxy_set_header X-Real-IP         $remote_addr;  # 真实客户端 IP（配合 trust_proxy）
 
     # —— 远程终端必需（缺一不可）——
     proxy_set_header Upgrade    $http_upgrade;         # 转发 WebSocket 升级
@@ -494,6 +496,8 @@ location / {
 > **说明**：Agent 的 `--server` 地址在安装时由服务端按请求 Host 自动识别（配了 `X-Forwarded-Host` 就是你的域名），**无需手填**——指标能正常上报即代表 Agent 已能通过域名连到服务端，终端连不上纯粹是上面 WebSocket/缓冲的 Nginx 配置问题。
 >
 > 云负载均衡（ALB/CLB/K8s Ingress）同理：需开启 WebSocket 支持、关闭响应缓冲、把空闲超时调到 ≥1h。
+>
+> **真实来源 IP**：反代后请在 `server_config.json` 设 `"trust_proxy": true`，服务端才会采信 `X-Real-IP`/`X-Forwarded-For` 记录真实客户端 IP 并据此做登录限流；直连公网时保持默认 `false`（否则这些头可被伪造以绕过限流）。
 
 ---
 

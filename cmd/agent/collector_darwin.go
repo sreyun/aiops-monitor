@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -142,7 +143,12 @@ func darwinGPUModel(seg string) string {
 // ---- helpers (shell out to always-present macOS tools) ----
 
 func run(name string, args ...string) string {
-	out, err := exec.Command(name, args...).Output()
+	// Bounded timeout so a wedged system tool (e.g. a hung `top`/`ioreg`) can't
+	// stall the report loop. 8s comfortably covers `top -l 2`, which samples twice
+	// with a ~1s gap.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil {
 		return ""
 	}

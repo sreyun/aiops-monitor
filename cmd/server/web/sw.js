@@ -1,18 +1,16 @@
 // AIOps Monitor Service Worker
-// Cache strategy: app shell (HTML/CSS/JS) cached on install, stale-while-revalidate;
-// API calls always go to network (real-time data); non-GET requests bypass cache.
+// Cache: app shell on install, stale-while-revalidate for static, network-only for API.
+// Offline: cached shell + navigation fallback to "/" so the UI shows even offline.
 
-const CACHE = "aiops-v2.3.4";
+const CACHE = "aiops-v2.4.1";
 const SHELL = ["/", "/style.css", "/app.js", "/manifest.json", "/icon.svg"];
 
-// Install: pre-cache the app shell
 self.addEventListener("install", e => {
   e.waitUntil(
     caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())
   );
 });
 
-// Activate: clean old caches
 self.addEventListener("activate", e => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -21,14 +19,20 @@ self.addEventListener("activate", e => {
   );
 });
 
-// Fetch: stale-while-revalidate for static assets, network-first for API
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // API and WebSocket upgrade requests always hit network
   if (url.pathname.startsWith("/api/")) return;
+
+  // Navigation requests: network-first, fallback to cached "/" for offline
+  if (req.mode === "navigate") {
+    e.respondWith(
+      fetch(req).catch(() => caches.match("/"))
+    );
+    return;
+  }
 
   // Static assets: stale-while-revalidate
   e.respondWith(
@@ -37,7 +41,7 @@ self.addEventListener("fetch", e => {
       const fetchPromise = fetch(req).then(res => {
         if (res && res.status === 200) cache.put(req, res.clone());
         return res;
-      }).catch(() => cached); // offline fallback
+      }).catch(() => cached);
       return cached || fetchPromise;
     })
   );
