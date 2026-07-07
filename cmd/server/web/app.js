@@ -366,11 +366,11 @@ function hostCard(h) {
   return `<div class="host ${h.online ? "" : "offline"}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
-        <div style="min-width:0">
+        <div style="min-width:0; flex:1; overflow:hidden">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
             <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
-            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}">${esc(h.platform || "—")}${h.arch ? " · " + esc(h.arch) : ""}${h.kernel ? " · " + esc(h.kernel) : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}${h.kernel ? " · " + esc(h.kernel) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}${h.kernel ? " <span class=\"hi-sep\">·</span> <span class=\"mono\">" + esc(h.kernel) + "</span>" : ""}</span></div>
           </div>
         </div>
       </div>
@@ -408,29 +408,42 @@ function hostRow(h) {
   const diskMax = disks.length ? Math.max(...disks.map(d => d.percent)) : (m.disk_percent || 0);
   const gpus = Array.isArray(m.gpus) ? m.gpus : [];
   const gpuMax = gpus.length ? Math.max(...gpus.map(g => g.util_percent || 0)) : null;
-  const chip = (label, v) => `<span class="hrow-m"><span class="hm-k">${label}</span><span class="hm-v mono" style="color:${usageColor(v || 0)}">${(v || 0).toFixed(0)}%</span></span>`;
+  // Mini metric bar: label + progress bar + value
+  const miniBar = (label, v) => {
+    const pct = Math.max(0, Math.min(v || 0, 100));
+    const color = usageColor(v || 0);
+    return `<div class="hrow-mbar" title="${label} ${pct.toFixed(1)}%">
+      <span class="hm-k">${label}</span>
+      <div class="hm-track"><div class="hm-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="hm-v mono" style="color:${color}">${pct.toFixed(0)}%</span>
+    </div>`;
+  };
   const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
+  const isStale = h.online && staleSec > 15;
+  const statusCls = !h.online ? "offline" : isStale ? "stale" : "online";
   const last = !h.online
-    ? `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
-    : staleSec > 15
-      ? `<span class="g stale-tag" title="数据可能卡顿">⚠ ${ago(h.last_seen)}</span>`
-      : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
+    ? `<span class="hrow-status offline" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
+    : isStale
+      ? `<span class="hrow-status stale" title="数据可能卡顿">⚠ ${ago(h.last_seen)}</span>`
+      : `<span class="hrow-status online">运行 ${fmtUptime(m.uptime || 0)}</span>`;
   const cat = h.category ? esc(h.category) : "未分类";
   const termBtn = (h.online && TERMINAL_ENABLED)
-    ? `<button class="term-btn" data-act="term" title="远程终端（经 Agent 反向连接，免开端口）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
+    ? `<button class="term-btn" data-act="term" title="远程终端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
-  return `<div class="host hrow ${h.online ? "" : "offline"}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
-    <span class="dot ${h.online ? "on" : "off"}"></span>
+  const loadStr = m.load1 !== undefined ? `负载 ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
+  return `<div class="host hrow ${statusCls}" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+    <span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
       <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
-      <div class="hrow-sub mono">${h.ip ? esc(h.ip) : ""}${h.platform ? (h.ip ? " · " : "") + esc(h.platform) : ""}</div>
+      <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}${h.kernel ? ` ${esc(h.kernel)}` : ""}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
     <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
     <div class="hrow-metrics">
-      ${chip("CPU", m.cpu_percent)}${chip("内存", m.mem_percent)}${chip("磁盘", diskMax)}${gpuMax !== null ? chip("GPU", gpuMax) : ""}
+      ${miniBar("CPU", m.cpu_percent)}${miniBar("内存", m.mem_percent)}${miniBar("磁盘", diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
     <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
+    ${loadStr ? `<span class="hrow-load mono">${loadStr}</span>` : ""}
     <span class="hrow-last">${last}</span>
     <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="删除主机">✕</button></span>
   </div>`;
