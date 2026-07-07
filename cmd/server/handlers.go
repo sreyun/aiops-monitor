@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
@@ -1222,17 +1221,12 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	if timeoutSec < 5 {
 		timeoutSec = 30
 	}
-	sess := s.term.create(h.ID, h.Hostname, "playbook-exec")
+	sess := s.term.createExec(h.ID, h.Hostname, command)
 	defer s.term.remove(sess.id)
-	// Critical: close the session when done so the agent's shell exits and the
-	// agent returns to waiting for the next command. Without this the agent stays
-	// stuck on this session and every subsequent step/execution fails to connect.
 	defer sess.close()
-	// The agent re-registers its long-poll waiter in the brief gap between
-	// sessions; a back-to-back step (or a busy multi-host run over higher-latency
-	// links) can momentarily miss it. Retry for up to ~3s so a transient gap
-	// doesn't fail the step — this is the main cause of "part of the Linux hosts
-	// fail to connect" during multi-host playbook runs.
+	// Summon the agent, retrying across the brief gap where it re-registers its
+	// long-poll waiter between sessions — the main cause of "part of the hosts fail
+	// to connect" on multi-host runs over higher-latency links. Up to ~3s.
 	notified := false
 	for i := 0; i < 30; i++ {
 		if s.term.notifyAgent(h.ID, sess.id) {
@@ -1244,27 +1238,11 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	if !notified {
 		return "", fmt.Errorf("无法连接到主机 %s 的 Agent（可能离线、Agent 版本过旧，或有其它终端/剧本长时间占用）", h.Hostname)
 	}
-	select {
-	case <-sess.agentUp:
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("Agent 接入超时")
-	case <-sess.done:
-		return "", fmt.Errorf("会话已断开")
-	}
-	// Unique sentinel: after the command finishes, the shell runs "echo SENTINEL"
-	// and the sentinel appears on its own line in the output. Detecting it means
-	// the command is done. Using UnixNano ensures uniqueness across hosts/steps.
-	sentinel := fmt.Sprintf("AIOPS_EXEC_DONE_%d", time.Now().UnixNano())
-	// Send the command + Enter, then the sentinel echo + Enter. The shell
-	// processes them sequentially, so the sentinel only appears after the
-	// command completes.
-	fullCmd := command + "\r" + "echo " + sentinel + "\r"
-	select {
-	case sess.toAgent <- termFrame('i', []byte(fullCmd)):
-	case <-time.After(5 * time.Second):
-		return "", fmt.Errorf("命令发送超时")
-	}
-	// Collect output until the sentinel appears as a standalone line or timeout.
+	// The agent runs the command as a ONE-SHOT process (sh -c / cmd /c, no PTY) and
+	// streams the combined output up the tx channel, ending it when the process
+	// exits — so session `done` (tx EOF) means the command finished. This is far
+	// more reliable than the old interactive-PTY + sentinel scheme, especially on
+	// Linux. The exit code arrives as a trailing "[AIOPS_EXIT]<code>" marker.
 	var output []byte
 	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
 	defer timer.Stop()
@@ -1272,134 +1250,44 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 		select {
 		case b := <-sess.toBrowser:
 			output = append(output, b...)
-			if len(output) > 256*1024 {
-				output = output[len(output)-256*1024:]
-			}
-			// Search for the sentinel at the beginning of a line (the echo
-			// output), not inside the "echo SENTINEL" command echo.
-			for _, sep := range []string{"\r\n" + sentinel, "\n" + sentinel} {
-				if idx := bytes.Index(output, []byte(sep)); idx >= 0 {
-					result := output[:idx]
-					return cleanTerminalOutput(string(result)), nil
-				}
+			if len(output) > 512*1024 {
+				output = output[len(output)-512*1024:]
 			}
 		case <-timer.C:
-			select {
-			case sess.toAgent <- termFrame('i', []byte{0x03}):
-			default:
-			}
-			return cleanTerminalOutput(string(output)), fmt.Errorf("执行超时（%ds）", timeoutSec)
+			return parseExecOutput(output, true)
 		case <-sess.done:
-			return cleanTerminalOutput(string(output)), nil
-		}
-	}
-}
-
-// cleanTerminalOutput strips ANSI escape sequences, shell prompts, command
-// echoes, and the sentinel echo from raw terminal output, returning clean
-// text suitable for playbook execution results.
-func cleanTerminalOutput(raw string) string {
-	// 1. Strip ANSI escape sequences (CSI, OSC, and other ESC sequences)
-	cleaned := stripANSIEscapes(raw)
-	// 2. Normalize line endings
-	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
-	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
-	// 3. Split into lines and filter
-	lines := strings.Split(cleaned, "\n")
-	var result []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Skip empty lines at the beginning
-		if len(result) == 0 && trimmed == "" {
-			continue
-		}
-		// Skip shell prompts (Windows: "C:\...>", Linux: "user@host:~$")
-		if isShellPrompt(trimmed) {
-			continue
-		}
-		// Skip the sentinel echo command line
-		if strings.HasPrefix(trimmed, "echo AIOPS_EXEC_DONE") {
-			continue
-		}
-		result = append(result, line)
-	}
-	// 4. Trim trailing empty lines
-	for len(result) > 0 && strings.TrimSpace(result[len(result)-1]) == "" {
-		result = result[:len(result)-1]
-	}
-	return strings.Join(result, "\n")
-}
-
-// stripANSIEscapes removes ANSI/VT100 escape sequences from a string.
-// Handles CSI (\x1b[...final), OSC (\x1b]...\x07 or \x1b\\), and bare ESC chars.
-func stripANSIEscapes(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	i := 0
-	for i < len(s) {
-		if s[i] == 0x1b && i+1 < len(s) {
-			switch s[i+1] {
-			case '[': // CSI: ESC [ params... final(0x40-0x7e)
-				i += 2
-				for i < len(s) && s[i] >= 0x20 && s[i] <= 0x3f {
-					i++ // parameter bytes
+			draining := true
+			for draining {
+				select {
+				case b := <-sess.toBrowser:
+					output = append(output, b...)
+				default:
+					draining = false
 				}
-				for i < len(s) && s[i] >= 0x20 && s[i] <= 0x2f {
-					i++ // intermediate bytes
-				}
-				if i < len(s) && s[i] >= 0x40 && s[i] <= 0x7e {
-					i++ // final byte
-				}
-			case ']': // OSC: ESC ] ... BEL or ST (ESC \)
-				i += 2
-				for i < len(s) {
-					if s[i] == 0x07 { // BEL terminator
-						i++
-						break
-					}
-					if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' { // ST terminator
-						i += 2
-						break
-					}
-					i++
-				}
-			default: // Other ESC sequences (skip 2 bytes)
-				i += 2
 			}
-			continue
+			return parseExecOutput(output, false)
 		}
-		// Skip non-printable control chars except \n, \r, \t
-		if s[i] < 0x20 && s[i] != '\n' && s[i] != '\r' && s[i] != '\t' {
-			i++
-			continue
-		}
-		b.WriteByte(s[i])
-		i++
 	}
-	return b.String()
 }
 
-// isShellPrompt returns true if the line looks like a shell prompt.
-// Windows cmd.exe: "C:\Users\admin>"  |  PowerShell: "PS C:\...>"
-// Linux/macOS: "user@host:~$"  |  root: "#"  |  sh: "$"
-func isShellPrompt(line string) bool {
-	// Windows cmd.exe prompt: drive letter + path + ">"
-	if strings.HasSuffix(line, ">") && (strings.Contains(line, ":\\") || strings.Contains(line, ":/")) {
-		return true
+// parseExecOutput splits the agent's exec result into clean output text and an
+// error derived from the trailing "[AIOPS_EXIT]<code>" marker.
+func parseExecOutput(output []byte, timedOut bool) (string, error) {
+	s := string(output)
+	if idx := strings.LastIndex(s, "[AIOPS_EXIT]"); idx >= 0 {
+		code := 0
+		fmt.Sscanf(strings.TrimSpace(s[idx+len("[AIOPS_EXIT]"):]), "%d", &code)
+		body := strings.TrimRight(s[:idx], "\r\n")
+		if code != 0 {
+			return body, fmt.Errorf("命令退出码 %d", code)
+		}
+		return body, nil
 	}
-	// PowerShell: "PS ...>"
-	if strings.HasPrefix(line, "PS ") && strings.HasSuffix(line, ">") {
-		return true
+	body := strings.TrimRight(s, "\r\n")
+	if timedOut {
+		return body, fmt.Errorf("执行超时")
 	}
-	// Linux/macOS: "user@host:...$" or "user@host:...#"
-	if (strings.HasSuffix(line, "$") || strings.HasSuffix(line, "#")) && strings.Contains(line, "@") {
-		return true
-	}
-	// Bare root/sh prompt
-	if line == "#" || line == "$" {
-		return true
-	}
-	return false
+	return body, fmt.Errorf("命令未正常结束（Agent 中断或版本过旧）")
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {

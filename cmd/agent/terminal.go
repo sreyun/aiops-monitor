@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -57,7 +60,7 @@ func (a *Agent) runTerminalChannel() {
 	}
 	log.Printf("远程终端通道已就绪，等待服务端呼叫…")
 	for {
-		sid, ok := a.termWait()
+		sid, mode, command, ok := a.termWait()
 		if !ok {
 			time.Sleep(3 * time.Second)
 			continue
@@ -65,25 +68,79 @@ func (a *Agent) runTerminalChannel() {
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}
-		go a.runTerminalSession(sid)
+		if mode == "exec" {
+			go a.runExecSession(sid, command) // one-shot playbook command (no PTY)
+		} else {
+			go a.runTerminalSession(sid) // interactive terminal
+		}
 	}
 }
 
-func (a *Agent) termWait() (sessionID string, ok bool) {
+func (a *Agent) termWait() (sessionID, mode, command string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}, "token": {a.identity.Token}}
 	resp, err := termWaitHTTP.Get(a.server + "/api/v1/agent/terminal/wait?" + q.Encode())
 	if err != nil {
-		return "", false
+		return "", "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", false
+		return "", "", "", false
 	}
 	var out struct {
 		Session string `json:"session"`
+		Mode    string `json:"mode"`
+		Command string `json:"command"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out.Session, true
+	return out.Session, out.Mode, out.Command, true
+}
+
+// runExecSession runs a single playbook command via a one-shot child process
+// (NOT an interactive PTY): far more reliable than the terminal + sentinel hack,
+// especially on Linux bash where readline / prompts / login banners broke sentinel
+// detection. It captures combined stdout+stderr, reports the exit code, streams
+// the result up the tx channel, and ends — the agent returns to waiting at once.
+func (a *Agent) runExecSession(sid, command string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("剧本命令会话 %s 异常已恢复: %v", sid, r)
+		}
+	}()
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	}
+	// cmd.Env stays nil → inherit the agent's environment (PATH/HOME/…).
+	out, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exit = ee.ExitCode()
+		} else {
+			exit = -1
+			out = append(out, []byte("\n"+err.Error())...)
+		}
+	}
+	// The server detects completion by the tx body ending; the exit code is
+	// appended on its own line so success/failure can be surfaced precisely.
+	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
+	req, err := http.NewRequest("POST",
+		a.server+"/api/v1/agent/terminal/tx?session="+sid+"&token="+url.QueryEscape(a.identity.Token),
+		bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if resp, err := termHTTP.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 func (a *Agent) runTerminalSession(sid string) {

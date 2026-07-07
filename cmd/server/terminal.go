@@ -25,6 +25,8 @@ type termSession struct {
 	hostID    string
 	hostname  string
 	operator  string
+	mode      string // "" = interactive terminal, "exec" = one-shot playbook command
+	command   string // the command to run when mode == "exec"
 	toAgent   chan []byte   // browser keystrokes → agent (rx stream)
 	toBrowser chan []byte   // agent shell output → browser
 	agentUp   chan struct{} // closed once the agent attaches its tx stream
@@ -132,8 +134,20 @@ func termFrame(typ byte, payload []byte) []byte {
 }
 
 func (m *termManager) create(hostID, hostname, operator string) *termSession {
+	return m.createFull(hostID, hostname, operator, "", "")
+}
+
+// createExec makes a one-shot session that runs a single command via the agent's
+// dedicated exec path (no interactive PTY, no sentinel) — reliable across shells
+// and OSes, which the interactive-terminal approach was not (esp. Linux bash).
+func (m *termManager) createExec(hostID, hostname, command string) *termSession {
+	return m.createFull(hostID, hostname, "playbook-exec", "exec", command)
+}
+
+func (m *termManager) createFull(hostID, hostname, operator, mode, command string) *termSession {
 	s := &termSession{
 		id: termID(), hostID: hostID, hostname: hostname, operator: operator,
+		mode: mode, command: command,
 		toAgent: make(chan []byte, 64), toBrowser: make(chan []byte, 256),
 		agentUp: make(chan struct{}), done: make(chan struct{}),
 		observers: map[*termObserver]struct{}{},
@@ -339,7 +353,12 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	defer s.term.unregisterWaiter(host, ch)
 	select {
 	case sid := <-ch:
-		writeJSON(w, http.StatusOK, map[string]string{"session": sid})
+		out := map[string]string{"session": sid}
+		if sess := s.term.get(sid); sess != nil && sess.mode == "exec" {
+			out["mode"] = "exec"
+			out["command"] = sess.command
+		}
+		writeJSON(w, http.StatusOK, out)
 	case <-time.After(25 * time.Second):
 		writeJSON(w, http.StatusOK, map[string]string{})
 	case <-r.Context().Done():
