@@ -3,7 +3,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"syscall"
@@ -76,7 +76,7 @@ type conptyShell struct {
 // failure so the caller falls back to piped stdio.
 func newPTY(cols, rows int) termShell {
 	if err := procCreatePseudoConsole.Find(); err != nil { // ConPTY unavailable (< Win10 1809)
-		log.Printf("ConPTY 不可用(将回退管道): %v", err)
+		slog.Warn("ConPTY 不可用(将回退管道)", "err", err)
 		return nil
 	}
 	if cols <= 0 {
@@ -104,7 +104,7 @@ func newPTY(cols, rows int) termShell {
 	procCloseHandleT.Call(uintptr(inR))
 	procCloseHandleT.Call(uintptr(outW))
 	if hr != 0 || hpc == 0 {
-		log.Printf("ConPTY CreatePseudoConsole 失败 hr=0x%x hpc=%d", hr, hpc)
+		slog.Error("ConPTY CreatePseudoConsole 失败", "hr", hr, "hpc", hpc)
 		procCloseHandleT.Call(uintptr(inW))
 		procCloseHandleT.Call(uintptr(outR))
 		return nil
@@ -114,19 +114,19 @@ func newPTY(cols, rows int) termShell {
 	var listSize uintptr
 	procInitializeProcThreadAttributeList.Call(0, 1, 0, uintptr(unsafe.Pointer(&listSize)))
 	if listSize == 0 {
-		log.Printf("ConPTY InitializeProcThreadAttributeList(size) 返回 0")
+		slog.Warn("ConPTY InitializeProcThreadAttributeList(size) 返回 0")
 		closeConPTY(hpc, inW, outR)
 		return nil
 	}
 	attrBuf := make([]byte, listSize)
 	attrList := uintptr(unsafe.Pointer(&attrBuf[0]))
 	if r, _, e := procInitializeProcThreadAttributeList.Call(attrList, 1, 0, uintptr(unsafe.Pointer(&listSize))); r == 0 {
-		log.Printf("ConPTY InitializeProcThreadAttributeList 失败: %v", e)
+		slog.Error("ConPTY InitializeProcThreadAttributeList 失败", "err", e)
 		closeConPTY(hpc, inW, outR)
 		return nil
 	}
 	if r, _, e := procUpdateProcThreadAttribute.Call(attrList, 0, procThreadAttrPseudoConsole, hpc, unsafe.Sizeof(hpc), 0, 0); r == 0 {
-		log.Printf("ConPTY UpdateProcThreadAttribute 失败: %v", e)
+		slog.Error("ConPTY UpdateProcThreadAttribute 失败", "err", e)
 		procDeleteProcThreadAttributeList.Call(attrList)
 		closeConPTY(hpc, inW, outR)
 		return nil
@@ -160,12 +160,12 @@ func newPTY(cols, rows int) termShell {
 	)
 	procDeleteProcThreadAttributeList.Call(attrList)
 	if r == 0 {
-		log.Printf("ConPTY CreateProcess 失败")
+		slog.Error("ConPTY CreateProcess 失败")
 		closeConPTY(hpc, inW, outR)
 		return nil
 	}
 
-	log.Printf("ConPTY 已启动 %dx%d (pid=%d)", cols, rows, pi.ProcessId)
+	slog.Info("ConPTY 已启动", "cols", cols, "rows", rows, "pid", pi.ProcessId)
 	return &conptyShell{
 		hpc: hpc, hProc: pi.Process, hThread: pi.Thread,
 		inFile:  os.NewFile(uintptr(inW), "conpty-in"),

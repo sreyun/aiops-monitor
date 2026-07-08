@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
@@ -65,6 +66,8 @@ func defaultDiskPath() string {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	cfg := defaultConfig()
 
 	// resolve config file path (manual scan so we can load before flag defaults)
@@ -76,7 +79,7 @@ func main() {
 	}
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		_ = json.Unmarshal(b, &cfg)
-		log.Printf("已加载配置文件: %s", cfgPath)
+		slog.Info("已加载配置文件", "path", cfgPath)
 	}
 
 	// flags override file/defaults
@@ -131,7 +134,7 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		log.Printf("收到退出信号，Agent 停止。")
+		slog.Info("收到退出信号，Agent 停止。")
 		os.Exit(0)
 	}()
 

@@ -40,3 +40,24 @@ venv/
 
 # Claude
 .claude/
+
+# WorkBuddy (IDE internal)
+.workbuddy/
+
+# Docker 环境变量（含敏感信息，不提交）
+docker/.env
+
+# 自动生成的检测/测试/日志文件（保留目录结构，忽略内容）
+generated/reports/*
+!generated/reports/.gitkeep
+generated/logs/*
+!generated/logs/.gitkeep
+generated/test-output/*
+!generated/test-output/.gitkeep
+
+# Node.js 依赖（未来前端框架迁移）
+node_modules/
+
+# 评估报告和临时文档
+evaluation-report.html
+fix-summary.html

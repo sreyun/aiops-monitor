@@ -3,7 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -77,13 +77,13 @@ func (d *DB) Load() {
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		log.Printf("数据库读取失败(已忽略,将以空状态启动): %v", err)
+		slog.Warn("数据库读取失败(已忽略,将以空状态启动)", "err", err)
 		return
 	}
 	defer gz.Close()
 	var snap dbSnapshot
 	if err := json.NewDecoder(gz).Decode(&snap); err != nil {
-		log.Printf("数据库解析失败(已忽略,将以空状态启动): %v", err)
+		slog.Warn("数据库解析失败(已忽略,将以空状态启动)", "err", err)
 		return
 	}
 
@@ -107,8 +107,12 @@ func (d *DB) Load() {
 	s.mu.Unlock()
 
 	d.auth.importSessions(snap.Sessions)
-	log.Printf("已从数据库恢复: 主机 %d 台, 事件 %d 条, 日志 %d 条, 会话 %d 个 (%s)",
-		len(snap.Hosts), len(snap.Events), len(snap.Activity), len(snap.Sessions), d.path)
+	slog.Info("已从数据库恢复",
+		"hosts", len(snap.Hosts),
+		"events", len(snap.Events),
+		"activity", len(snap.Activity),
+		"sessions", len(snap.Sessions),
+		"path", d.path)
 }
 
 // Save serializes the current state and writes it atomically.
@@ -187,7 +191,7 @@ func (d *DB) AutoSave(interval time.Duration) {
 	for range t.C {
 		if d.consumeDirty() {
 			if err := d.Save(); err != nil {
-				log.Printf("数据库落盘失败: %v", err)
+				slog.Error("数据库落盘失败", "err", err)
 			}
 		}
 	}

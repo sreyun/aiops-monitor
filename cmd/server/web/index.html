@@ -54,6 +54,10 @@
     </nav>
 
     <div class="side-actions">
+      <button class="theme-toggle" id="themeToggle" title="切换深色/浅色主题" aria-label="切换主题">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <span>主题</span>
+      </button>
       <button class="btn block icon" id="settingsBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>告警设置</span>
@@ -63,7 +67,7 @@
         <span class="uname" id="userName">未登录</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
       </button>
-      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span><span class="ver" id="verLabel"></span></div>
+      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span><span class="push-indicator" id="pushIndicator" title="实时推送状态"><span class="push-dot"></span></span><span class="ver" id="verLabel"></span></div>
     </div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
@@ -497,6 +501,12 @@
     </div>
     <div class="modal-body">
       <div class="hint" style="margin-bottom:12px">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
+      <div class="term-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+        <input type="text" id="termSessionSearch" placeholder="搜索：用户名 / 主机名 / IP 地址" 
+          style="flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 12px;color:var(--txt);font-size:13px;font-family:inherit"
+          aria-label="搜索终端会话" />
+        <span style="font-size:12px;color:var(--muted)" id="termSessionCount"></span>
+      </div>
       <div id="termSessionsList"></div>
     </div>
   </div>

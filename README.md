@@ -39,9 +39,11 @@
 
 ```bash
 git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
-docker compose up -d aiops-server
+docker compose up -d
 # 浏览器打开 http://localhost:8529
 ```
+
+> 单容器模式：Go 二进制内嵌前端（`//go:embed`），开箱即用。
 
 > **默认凭据**：`admin / admin`。首次登录后请立即修改用户名与密码，并建议启用 MFA。
 
@@ -573,6 +575,48 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 - macOS 仅支持 Apple Silicon 的 GPU 监控
 - GPU 为 best-effort，无工具时不显示，不影响其他指标
 </details>
+
+---
+
+## 项目目录结构
+
+```
+aiops-monitor/
+├── cmd/                    # Go 源代码
+│   ├── server/            #   服务端（API + WebSocket + 告警 + 终端）
+│   │   └── web/           #     前端静态资源（//go:embed 嵌入）
+│   ├── agent/             #   Agent（采集器 + 上报 + 终端 + 插件）
+│   └── ...
+├── shared/                # 共享类型定义（通信协议层）
+├── vendor/                # Go 依赖（go-qrcode）
+├── plugins/               # Python 插件（进程监控/服务探活/AI 异常检测）
+├── docker/                # Docker 配置
+│   ├── Dockerfile         #   多阶段构建（server + agent）
+│   └── nginx/             #   nginx 反代配置参考（未来分离时可用）
+│       └── nginx-frontend.conf
+├── deploy/                # 部署示例
+│   └── nginx-aiops.conf   #   Nginx 反向代理示例（SSL/HTTPS）
+├── generated/             # 自动生成的文件（.gitignore 忽略内容）
+│   ├── reports/           #   检测报告、覆盖率报告
+│   ├── logs/              #   运行日志
+│   └── test-output/      #   测试输出
+├── bin/                   # 预编译二进制（.gitignore 忽略）
+├── dist/                  # 交叉编译分发产物（.gitignore 忽略）
+├── docker-compose.yml     # 根级 Docker Compose 编排
+├── .env.example           # 环境变量模板
+├── .dockerignore           # Docker 构建上下文排除项
+├── .gitignore
+├── go.mod / go.sum
+├── Dockerfile             # （已迁移至 docker/）
+├── README.md / README_EN.md
+├── INSTALL.md
+└── config.example.json    # Agent 配置模板
+```
+
+> **目录说明**：
+> - `docker/` — 所有 Docker 相关配置统一存放，支持独立构建部署
+> - `generated/` — 检测报告、日志、测试输出集中管理，已加入 `.gitignore`
+> - `cmd/server/web/` — 前端 SPA 源码（原生 JS，未来可迁移至 React/Vue）
 
 ---
 

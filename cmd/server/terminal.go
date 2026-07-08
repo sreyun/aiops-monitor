@@ -26,6 +26,7 @@ type termSession struct {
 	hostID    string
 	hostname  string
 	operator  string
+	ip        string // client IP of the operator (for audit + display)
 	mode      string // "" = interactive terminal, "exec" = one-shot playbook command
 	command   string // the command to run when mode == "exec"
 	toAgent   chan []byte   // browser keystrokes → agent (rx stream)
@@ -178,7 +179,7 @@ func (m *termManager) remove(id string) {
 			m.archived = append(m.archived, termArchive{
 				info: termSessionInfo{
 					ID: s.id, HostID: s.hostID, Hostname: s.hostname,
-					Operator: s.operator, CreatedAt: s.createdAt,
+					Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 					Active: false, Frames: len(rec),
 				},
 				recording: rec,
@@ -268,9 +269,17 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	sess := s.term.create(hostID, hostname, s.clientIP(r))
+	// 使用实际登录用户名作为操作者，IP 仅用于审计记录
+	clientIP := s.clientIP(r)
+	user, ok := s.currentUser(r)
+	operator := clientIP // fallback: IP 地址
+	if ok && user.Username != "" {
+		operator = user.Username
+	}
+	sess := s.term.create(hostID, hostname, operator)
+	sess.ip = clientIP
 	defer s.term.remove(sess.id)
-	op := s.clientIP(r)
+	op := operator
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: op, Host: hostname, Message: "打开远程终端 " + hostname})
 	defer s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "关闭远程终端 " + hostname})
 
@@ -458,6 +467,7 @@ type termSessionInfo struct {
 	HostID    string `json:"host_id"`
 	Hostname  string `json:"hostname"`
 	Operator  string `json:"operator"`
+	IP        string `json:"ip"`
 	CreatedAt int64  `json:"created_at"`
 	Active    bool   `json:"active"`
 	Observers int    `json:"observers"`
@@ -476,7 +486,7 @@ func (m *termManager) listSessions() []termSessionInfo {
 		s.recMu.Lock()
 		out = append(out, termSessionInfo{
 			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
-			Operator: s.operator, CreatedAt: s.createdAt,
+			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 			Active: true, Observers: len(s.observers),
 			Frames: len(s.recording),
 		})

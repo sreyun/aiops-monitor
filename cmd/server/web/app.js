@@ -1,7 +1,17 @@
 /* ============================================================
    AIOps Monitor · 前端逻辑
    数据源：/api/v1/{summary,hosts,alerts,events,config}
-   3 秒轮询；事件委托绑定，避免内联 onclick 的转义隐患。
+   3 秒轮询（P1-2: 已改为差异化轮询频率）；事件委托绑定，避免内联 onclick 的转义隐患。
+
+   P2-1 模块拆分说明：
+   本文件可按功能域拆分为多个模块（服务端已支持 /js/ 路由）：
+   - js/app-core.js    : 全局变量、工具函数、路由、轮询、主题、通知
+   - js/app-render.js  : renderCards, renderHosts, renderAlerts, renderLog, renderTop
+   - js/app-chart.js   : createChart, drawChart, attachChartEvents（Canvas 图表引擎）
+   - js/app-terminal.js: VT100 仿真器、远程终端、会话回放
+   - js/app-auth.js    : initAuth, login, MFA, 用户管理
+   - js/app-automation.js: 剧本编排、批量执行
+   在 index.html 中按依赖顺序加载多个 <script> 标签即可。
    ============================================================ */
 "use strict";
 const API = "/api/v1";
@@ -56,6 +66,7 @@ let TERM_WS = null;   // 当前终端 WebSocket
 let CONN_STATE = "connecting"; // connecting | connected | disconnected
 let FIRST_LOAD = true;
 let LAST_CATS_KEY = ""; // 用于检测分类列表是否变化
+let LAST_RENDER_KEY = ""; // P0-3: 用于差量更新检测
 let ALERT_TYPE = "";   // 告警类型筛选
 let ALERT_SEARCH = ""; // 告警主机搜索
 
@@ -98,6 +109,169 @@ const isSystemMount = p => {
   p = String(p || "");
   return p === "/boot" || p.startsWith("/boot/") || p === "/System" || p.startsWith("/System/");
 };
+
+/* ============================================================
+   P1-1: 主题切换
+   ============================================================ */
+function initTheme() {
+  const saved = localStorage.getItem("aiops_theme") || "dark";
+  document.documentElement.setAttribute("data-theme", saved);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("aiops_theme", next);
+  // 更新按钮图标
+  const btn = $("themeToggle");
+  if (btn) {
+    btn.innerHTML = next === "light"
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  }
+}
+
+/* ============================================================
+   P0-4: 桌面通知 + 声音告警
+   ============================================================ */
+let NOTIF_PERMITTED = false;
+let LAST_CRIT_COUNT = 0;
+let NOTIF_SOUND_ENABLED = false;
+function initNotifications() {
+  if (!("Notification" in window)) return;
+  NOTIF_SOUND_ENABLED = localStorage.getItem("aiops_sound") === "1";
+  if (Notification.permission === "granted") {
+    NOTIF_PERMITTED = true;
+  }
+}
+function requestNotificationPermission() {
+  if (!("Notification" in window)) { toast("当前浏览器不支持桌面通知", "err"); return; }
+  Notification.requestPermission().then(p => {
+    if (p === "granted") { NOTIF_PERMITTED = true; toast("桌面通知已开启", "ok"); }
+    else { toast("已拒绝桌面通知权限", "err"); }
+  });
+}
+function notifyCriticalAlerts(critCount) {
+  if (!NOTIF_PERMITTED || critCount <= LAST_CRIT_COUNT) { LAST_CRIT_COUNT = critCount; return; }
+  const newAlerts = critCount - LAST_CRIT_COUNT;
+  LAST_CRIT_COUNT = critCount;
+  try {
+    new Notification("AIOps Monitor - 严重告警", {
+      body: newAlerts + " 条新的严重告警需要处理（总计 " + critCount + " 条）",
+      icon: "/icon.svg",
+      tag: "critical-alerts",
+      renotify: true
+    });
+  } catch(e) {}
+  // 可选声音提醒
+  if (NOTIF_SOUND_ENABLED) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880; osc.type = "sine";
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.start(); osc.stop(ctx.currentTime + 0.5);
+    } catch(e) {}
+  }
+}
+
+/* ============================================================
+   P1-4: 模态弹窗可访问性 — 焦点陷阱
+   ============================================================ */
+let FOCUS_TRAP = null;
+function trapFocus(mask) {
+  const focusable = mask.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+  if (focusable.length === 0) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  first.focus();
+  FOCUS_TRAP = function(e) {
+    if (e.key === "Escape") { closeMask(mask); return; }
+    if (e.key !== "Tab") return;
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  mask.addEventListener("keydown", FOCUS_TRAP);
+}
+function releaseFocus(mask) {
+  if (FOCUS_TRAP) { mask.removeEventListener("keydown", FOCUS_TRAP); FOCUS_TRAP = null; }
+}
+function closeMask(mask) {
+  mask.classList.remove("show");
+  releaseFocus(mask);
+}
+// P1-4: 统一模态弹窗打开函数（带焦点陷阱）
+function openMask(mask) {
+  if (typeof mask === "string") mask = $(mask);
+  if (!mask) return;
+  mask.classList.add("show");
+  setTimeout(() => trapFocus(mask), 50);
+}
+
+/* ============================================================
+   P2-4: 骨架屏
+   ============================================================ */
+function showSkeleton() {
+  const cardsEl = $("cards");
+  if (cardsEl) {
+    cardsEl.innerHTML = Array(6).fill(0).map(() =>
+      '<div class="skeleton skeleton-card"><div class="sk-icon skeleton"></div><div class="sk-lines"><div class="sk-line skeleton w60"></div><div class="sk-line skeleton w40"></div></div></div>'
+    ).join("");
+  }
+  const groupsEl = $("groups");
+  if (groupsEl) {
+    groupsEl.innerHTML = '<div class="skeleton-grid">' + Array(6).fill(0).map(() =>
+      '<div class="skeleton skeleton-host"></div>'
+    ).join("") + '</div>';
+  }
+}
+
+/* ============================================================
+   P0-3: 渲染性能优化 — 差量更新
+   ============================================================ */
+let HOST_DOM_CACHE = {}; // hostID -> { element, data }
+function updateHostCard(h) {
+  const existing = HOST_DOM_CACHE[h.id];
+  if (!existing) return false; // 新主机，需全量重建
+  const el = existing.element;
+  // 更新状态灯
+  const dot = el.querySelector(".dot");
+  if (dot) dot.className = "dot " + (h.online ? "" : "off");
+  // 更新指标数值
+  const m = h.latest || {};
+  if (m.cpu_percent !== undefined) {
+    const cpuEl = el.querySelector("[data-metric=cpu]");
+    if (cpuEl) cpuEl.textContent = (m.cpu_percent || 0).toFixed(1) + "%";
+    const cpuBar = el.querySelector("[data-bar=cpu]");
+    if (cpuBar) { cpuBar.style.width = (m.cpu_percent || 0) + "%"; cpuBar.style.background = usageColor(m.cpu_percent); }
+  }
+  if (m.mem_percent !== undefined) {
+    const memEl = el.querySelector("[data-metric=mem]");
+    if (memEl) memEl.textContent = (m.mem_percent || 0).toFixed(1) + "%";
+    const memBar = el.querySelector("[data-bar=mem]");
+    if (memBar) { memBar.style.width = (m.mem_percent || 0) + "%"; memBar.style.background = usageColor(m.mem_percent); }
+  }
+  if (m.disk_percent !== undefined) {
+    const diskEl = el.querySelector("[data-metric=disk]");
+    if (diskEl) diskEl.textContent = (m.disk_percent || 0).toFixed(1) + "%";
+    const diskBar = el.querySelector("[data-bar=disk]");
+    if (diskBar) { diskBar.style.width = (m.disk_percent || 0) + "%"; diskBar.style.background = usageColor(m.disk_percent); }
+  }
+  existing.data = h;
+  return true;
+}
+function buildHostCache() {
+  HOST_DOM_CACHE = {};
+  document.querySelectorAll(".host").forEach(el => {
+    const id = el.dataset.id;
+    if (id) HOST_DOM_CACHE[id] = { element: el, data: null };
+  });
+}
 
 function toast(msg, kind) {
   const t = $("toast");
@@ -531,6 +705,16 @@ function renderHosts(hosts) {
   pageHosts.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
+
+  // P0-3: 差量更新 — 如果主机集合未变，仅更新卡片数据而非重建 DOM
+  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + Object.keys(byCat).sort().join(",");
+  if (LAST_RENDER_KEY === newKey && Object.keys(HOST_DOM_CACHE).length > 0) {
+    pageHosts.forEach(h => updateHostCard(h));
+    renderPager(pages, shown.length);
+    return;
+  }
+  LAST_RENDER_KEY = newKey;
+
   groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => {
     const collapsed = catCollapsed(cat);
     return `<div class="group">
@@ -542,6 +726,7 @@ function renderHosts(hosts) {
       <div class="${wrapCls}${collapsed ? " group-collapsed" : ""}">${byCat[cat].map(render).join("")}</div>
     </div>`;
   }).join("");
+  buildHostCache();
   renderPager(pages, shown.length);
 }
 
@@ -720,6 +905,13 @@ function drawChart(state) {
   const n = vis.length;
   ctx.clearRect(0, 0, w, h);
 
+  // P2-3: 使用 CSS 变量适配深色/浅色主题
+  const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const gridColor = cssVar("--line2") || "rgba(43,53,71,.7)";
+  const labelColor = cssVar("--muted") || "#8a95a8";
+  const txtColor = cssVar("--txt") || "#e8eef6";
+  const bgColor = cssVar("--bg") || "#0a0d13";
+
   // Y range (fixed when yMin/yMax given, else padded auto-range)
   let dMin = state.yMin !== null ? state.yMin : Infinity;
   let dMax = state.yMax !== null ? state.yMax : -Infinity;
@@ -739,19 +931,19 @@ function drawChart(state) {
   const yAt = v => pad.top + ch - ((v - dMin) / yRange) * ch;
 
   // grid + y labels
-  ctx.strokeStyle = "rgba(43,53,71,.7)"; ctx.lineWidth = 0.5;
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
   ctx.font = "11px monospace"; ctx.textAlign = "right";
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + (ch / 4) * i;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
     const val = dMax - (yRange / 4) * i;
-    ctx.fillStyle = "#8a95a8";
+    ctx.fillStyle = labelColor;
     ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), pad.left - 8, y + 4);
   }
   // x time labels
   if (n >= 1) {
     const firstTs = vis[0].timestamp, span = vis[n - 1].timestamp - firstTs;
-    ctx.textAlign = "center"; ctx.fillStyle = "#8a95a8";
+    ctx.textAlign = "center"; ctx.fillStyle = labelColor;
     for (let i = 0; i <= 4; i++) {
       const x = pad.left + (cw / 4) * i;
       const d = new Date((firstTs + (span / 4) * i) * 1000);
@@ -768,18 +960,21 @@ function drawChart(state) {
     if (pts.length >= 2) {
       ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round";
       ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
-      ctx.globalAlpha = 0.1; ctx.fillStyle = s.color;
+      // P2-3: 渐变填充替代固定透明度
+      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+      grad.addColorStop(0, s.color + "22");
+      grad.addColorStop(1, s.color + "05");
+      ctx.fillStyle = grad;
       ctx.beginPath(); ctx.moveTo(pts[0].x, pad.top + ch);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
       ctx.lineTo(pts[pts.length - 1].x, pad.top + ch); ctx.closePath(); ctx.fill();
-      ctx.globalAlpha = 1;
     }
     const vals = pts.map(p => p.val);
     const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
     const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
     const ly = pad.top + 6 + sIdx * 17;
     ctx.fillStyle = s.color; ctx.fillRect(pad.left + 8, ly, 10, 10);
-    ctx.fillStyle = "#e8eef6"; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
+    ctx.fillStyle = txtColor; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
     ctx.fillText(`${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`, pad.left + 24, ly + 9);
   });
 
@@ -796,7 +991,7 @@ function drawChart(state) {
     ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
     series.forEach(s => {
       const v = seriesVal(s, vis[li]); if (v === null) return;
-      ctx.fillStyle = s.color; ctx.strokeStyle = "#0b0f17"; ctx.lineWidth = 2;
+      ctx.fillStyle = s.color; ctx.strokeStyle = bgColor; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, yAt(v), 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     });
   }
@@ -1045,6 +1240,9 @@ function openTerminalSessions() {
   TERM_SESSIONS_TIMER = setInterval(loadTerminalSessions, 3000);
 }
 
+let LAST_TERM_SESSIONS = [];
+let TERM_SEARCH = "";
+
 function loadTerminalSessions() {
   const mask = $("termSessionsMask");
   if (!mask || !mask.classList.contains("show")) {
@@ -1052,24 +1250,38 @@ function loadTerminalSessions() {
     return;
   }
   fetch(`${API}/terminal/sessions`).then(r => r.json()).then(sessions => {
-    renderTerminalSessions(sessions || []);
+    LAST_TERM_SESSIONS = sessions || [];
+    renderTerminalSessions(LAST_TERM_SESSIONS);
   }).catch(e => console.warn("load sessions:", e));
 }
 
 function renderTerminalSessions(sessions) {
   const c = $("termSessionsList");
   if (!c) return;
-  if (sessions.length === 0) {
-    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">当前没有活跃的终端会话</div>`;
+  // 按搜索关键词过滤
+  const q = TERM_SEARCH.trim().toLowerCase();
+  const filtered = q ? sessions.filter(s => {
+    return (s.operator || "").toLowerCase().includes(q) ||
+           (s.hostname || "").toLowerCase().includes(q) ||
+           (s.ip || "").toLowerCase().includes(q);
+  }) : sessions;
+  // 更新计数
+  const cnt = $("termSessionCount");
+  if (cnt) {
+    cnt.textContent = q ? `${filtered.length}/${sessions.length} 条` : `${sessions.length} 条`;
+  }
+  if (filtered.length === 0) {
+    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">${q ? "没有匹配的终端会话" : "当前没有活跃的终端会话"}</div>`;
     return;
   }
-  c.innerHTML = sessions.map(s => {
+  c.innerHTML = filtered.map(s => {
     const t = new Date(s.created_at * 1000);
     const time = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+    const ipStr = s.ip ? ` · IP ${esc(s.ip)}` : "";
     return `<div class="term-session-item">
       <div class="term-session-info">
         <div class="term-session-host">${esc(s.hostname)}</div>
-        <div class="term-session-meta">操作者 ${esc(s.operator)} · 开始 ${time} · ${s.frames} 帧录制</div>
+        <div class="term-session-meta">操作者 <strong style="color:var(--accent-txt)">${esc(s.operator)}</strong>${ipStr} · 开始 ${time} · ${s.frames} 帧录制</div>
       </div>
       ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} 旁观</span>` : `<span class="term-session-badge">活跃</span>`}
       <div class="term-session-actions">
@@ -2005,8 +2217,25 @@ async function initAuth() {
 function startApp() {
   if (APP_STARTED) return;
   APP_STARTED = true;
+  initTheme();
+  initNotifications();
+  showSkeleton();
   refresh(); loadChecks();
-  setInterval(() => { refresh(); loadChecks(); }, 3000);
+  // P1-2: 差异化轮询频率 — 按当前视图调整刷新间隔
+  const POLL_BASE = 3000;
+  let pollTimer = null;
+  function schedulePoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
+    const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, log: 10000 };
+    const interval = intervals[view] || POLL_BASE;
+    pollTimer = setTimeout(() => { refresh(); loadChecks(); schedulePoll(); }, interval);
+  }
+  schedulePoll();
+  // 视图切换时立即调整轮询频率
+  document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => setTimeout(schedulePoll, 100)));
+  // P3-1: 初始化 WebSocket 推送（带降级到轮询）
+  initPushWS();
 }
 async function openProfile() {
   try {
@@ -2380,6 +2609,7 @@ async function refresh(force) {
     }
     renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
     updateFavicon(s.critical_alerts || 0);
+    notifyCriticalAlerts(s.critical_alerts || 0);
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
   } catch (e) {
@@ -2559,6 +2789,7 @@ function safeAddEventListener(id, event, handler) {
 }
 
 safeAddEventListener("settingsBtn", "click", openSettings);
+safeAddEventListener("themeToggle", "click", toggleTheme);
 safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
@@ -3179,6 +3410,11 @@ safeAddEventListener("playbookList", "click", e => {
 
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
+// 终端会话搜索
+safeAddEventListener("termSessionSearch", "input", e => {
+  TERM_SEARCH = e.target.value;
+  renderTerminalSessions(LAST_TERM_SESSIONS);
+});
 safeAddEventListener("replayPlayBtn", "click", () => { if (REPLAY && REPLAY.playing) pauseReplay(); else playReplay(); });
 safeAddEventListener("replayProgressBg", "click", e => {
   const rect = e.currentTarget.getBoundingClientRect();
@@ -3190,6 +3426,17 @@ document.querySelectorAll(".replay-speed-btn").forEach(btn => {
 });
 
 /* ---------- PWA: SW registration + Install prompt + Hash routing ---------- */
+// P1-4: 全局 Escape 键关闭模态弹窗
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    const masks = document.querySelectorAll(".mask.show");
+    if (masks.length > 0) {
+      // 只关闭最上层的弹窗
+      const top = masks[masks.length - 1];
+      closeMask(top);
+    }
+  }
+});
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
@@ -3213,3 +3460,61 @@ window.addEventListener("hashchange", () => {
 });
 
 initAuth();
+
+/* ============================================================
+   P3-1: WebSocket 推送（替代轮询，带降级）
+   ============================================================ */
+let PUSH_WS = null;
+let PUSH_CONNECTED = false;
+let PUSH_RETRY = 0;
+
+function initPushWS() {
+  // 仅在 HTTPS 或 localhost 下尝试 WebSocket
+  if (!window.WebSocket || (!window.isSecureContext && location.hostname !== "localhost")) return;
+  try {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    PUSH_WS = new WebSocket(proto + "//" + location.host + "/ws/push");
+    PUSH_WS.onopen = () => {
+      PUSH_CONNECTED = true;
+      PUSH_RETRY = 0;
+      const ind = $("pushIndicator");
+      if (ind) { ind.classList.add("live"); ind.title = "实时推送已连接"; }
+    };
+    PUSH_WS.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "summary" && msg.data) {
+          renderCards(msg.data);
+          updateFavicon(msg.data.critical_alerts || 0);
+          notifyCriticalAlerts(msg.data.critical_alerts || 0);
+        } else if (msg.type === "alerts" && msg.data) {
+          renderAlerts(msg.data);
+        } else if (msg.type === "hosts" && msg.data) {
+          renderHosts(msg.data);
+        }
+      } catch(err) {}
+    };
+    PUSH_WS.onclose = () => {
+      PUSH_CONNECTED = false;
+      const ind = $("pushIndicator");
+      if (ind) { ind.classList.remove("live"); ind.title = "实时推送已断开，使用轮询"; }
+      // 指数退避重连
+      PUSH_RETRY++;
+      if (PUSH_RETRY <= 10) {
+        setTimeout(() => initPushWS(), Math.min(30000, 1000 * Math.pow(2, PUSH_RETRY)));
+      }
+    };
+    PUSH_WS.onerror = () => { try { PUSH_WS.close(); } catch(e) {} };
+  } catch(e) {}
+}
+
+/* ============================================================
+   离线检测
+   ============================================================ */
+window.addEventListener("online", () => {
+  toast("网络已恢复", "ok");
+  refresh(true);
+});
+window.addEventListener("offline", () => {
+  toast("网络已断开，数据可能过期", "err");
+});

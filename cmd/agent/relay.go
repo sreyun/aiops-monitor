@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -47,10 +48,10 @@ func runRelay(listenAddr, upstream string) {
 		proxy.ServeHTTP(w, r)
 	})
 
-	log.Printf("╔══════════════════════════════════════════════════════╗")
-	log.Printf("║  AIOps Agent — 网关中继模式 (Relay)                    ║")
-	log.Printf("║  监听: %-16s  上游: %-26s║", listenAddr, upstream)
-	log.Printf("╚══════════════════════════════════════════════════════╝")
+	slog.Info("╔══════════════════════════════════════════════════════╗")
+	slog.Info("║  AIOps Agent — 网关中继模式 (Relay)                    ║")
+	slog.Info("║  监听: " + listenAddr + "  上游: " + upstream + "  ║")
+	slog.Info("╚══════════════════════════════════════════════════════╝")
 	// Extract port for the install command hint: listenAddr may be ":8529",
 	// "0.0.0.0:8529", or "127.0.0.1:8529" — the hint should always show :<port>.
 	relayPort := listenAddr
@@ -59,13 +60,13 @@ func runRelay(listenAddr, upstream string) {
 	} else if !strings.HasPrefix(listenAddr, ":") {
 		relayPort = ":" + listenAddr
 	}
-	log.Printf("内网机器安装命令: curl -fsSL http://<本机IP>%s/install.sh | sh", relayPort)
+	slog.Info("内网机器安装命令", "cmd", "curl -fsSL http://<本机IP>"+relayPort+"/install.sh | sh")
 
 	// Warn when binding to all interfaces — the relay is reachable by anyone
 	// on the network. For internet-exposed gateways, bind to the internal IP.
 	if listenAddr == "" || strings.HasPrefix(listenAddr, ":") ||
 		strings.HasPrefix(listenAddr, "0.0.0.0:") {
-		log.Printf("⚠ 监听地址绑定到所有网卡——如不需外部访问，建议用 --listen 192.168.x.x:8529 绑定到内网IP")
+		slog.Warn("⚠ 监听地址绑定到所有网卡——如不需外部访问，建议用 --listen 192.168.x.x:8529 绑定到内网IP")
 	}
 
 	srv := &http.Server{

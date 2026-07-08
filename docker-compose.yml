@@ -1,8 +1,20 @@
+# ============================================================
+# AIOps Monitor · Docker Compose（单容器模式）
+# ------------------------------------------------------------
+# Go 二进制内嵌前端（//go:embed），单容器即可运行
+#
+# 使用方式：
+#   docker compose up -d                # 启动
+#   docker compose up -d --build        # 重新构建并启动
+#   docker compose logs -f              # 查看日志
+#   docker compose down                 # 停止
+# ============================================================
+
 services:
   aiops-server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
       target: server
     container_name: aiops-server
     ports:
@@ -17,7 +29,7 @@ services:
   # aiops-agent:
   #   build:
   #     context: .
-  #     dockerfile: Dockerfile
+  #     dockerfile: docker/Dockerfile
   #     target: agent
   #   container_name: aiops-agent
   #   depends_on:

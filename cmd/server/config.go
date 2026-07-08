@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -152,14 +153,47 @@ func defaultServerConfig() ServerConfig {
 	}
 }
 
-// ConfigStore wraps ServerConfig with disk persistence and thread safety.
-type ConfigStore struct {
-	mu   sync.RWMutex
-	path string
-	cfg  ServerConfig
+// Validate checks the server config for obvious misconfiguration before it is
+// applied or persisted. Returns nil when the config is sound.
+func (c ServerConfig) Validate() error {
+	t := c.Thresholds
+	// Threshold percentages must be in [0, 100].
+	for name, v := range map[string]float64{
+		"cpu_warn": t.CPUWarn, "cpu_crit": t.CPUCrit,
+		"mem_warn": t.MemWarn, "mem_crit": t.MemCrit,
+		"disk_warn": t.DiskWarn, "disk_crit": t.DiskCrit,
+	} {
+		if v < 0 || v > 100 {
+			return fmt.Errorf("阈值 %s 必须在 0-100 之间（当前 %.1f）", name, v)
+		}
+	}
+	// OfflineAfter must be positive.
+	if t.OfflineAfterSec <= 0 {
+		return fmt.Errorf("离线判定时间必须大于 0（当前 %d 秒）", t.OfflineAfterSec)
+	}
+	// SMTP port must be valid when SMTP is enabled.
+	if c.SMTP.Enabled {
+		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {
+			return fmt.Errorf("SMTP 端口必须在 1-65535 之间（当前 %d）", c.SMTP.Port)
+		}
+		// SMTP password (if set) must be at least 4 characters.
+		if c.SMTP.Password != "" && len(c.SMTP.Password) < 4 {
+			return fmt.Errorf("SMTP 密码至少 4 位")
+		}
+	}
+	return nil
 }
 
-func NewConfigStore(path string) *ConfigStore {
+// ConfigStore wraps ServerConfig with disk persistence and thread safety.
+type ConfigStore struct {
+	mu      sync.RWMutex
+	path    string
+	cfg     ServerConfig
+	prev    ServerConfig // snapshot before the last Set(), for Revert()
+	hasPrev bool         // whether prev holds a valid snapshot
+}
+
+func NewConfigStore(path string) (*ConfigStore, error) {
 	cs := &ConfigStore{path: path, cfg: defaultServerConfig()}
 	if b, err := os.ReadFile(path); err == nil {
 		var c ServerConfig
@@ -180,10 +214,14 @@ func NewConfigStore(path string) *ConfigStore {
 	if migrateUsers(&cs.cfg) {
 		dirty = true
 	}
+	// Validate the loaded config — refuse to start with an obviously broken one.
+	if err := cs.cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if dirty {
 		_ = cs.save()
 	}
-	return cs
+	return cs, nil
 }
 
 func genToken() string {
@@ -403,9 +441,15 @@ func (cs *ConfigStore) DeleteCheck(id string) error {
 }
 
 // Set replaces the alert/threshold config, preserving category overrides, and
-// persists to disk.
+// persists to disk. The current config is snapshotted first so a bad change can
+// be rolled back via Revert().
 func (cs *ConfigStore) Set(c ServerConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
 	cs.mu.Lock()
+	cs.prev = cs.cfg // snapshot for potential rollback
+	cs.hasPrev = true
 	c.Categories = cs.cfg.Categories     // categories managed via SetCategory
 	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
 	c.Account = cs.cfg.Account           // account managed via auth endpoints
@@ -427,6 +471,22 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
 	cs.cfg = c
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// Revert restores the config that was active before the most recent successful
+// Set(), undoing a bad configuration change. Returns an error when there is no
+// previous snapshot to revert to.
+func (cs *ConfigStore) Revert() error {
+	cs.mu.Lock()
+	if !cs.hasPrev {
+		cs.mu.Unlock()
+		return fmt.Errorf("没有可回滚的上一版本配置")
+	}
+	cs.cfg = cs.prev
+	cs.prev = ServerConfig{}
+	cs.hasPrev = false
 	cs.mu.Unlock()
 	return cs.save()
 }

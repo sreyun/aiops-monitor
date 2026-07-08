@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -164,9 +165,14 @@ func main() {
 	distDir := flag.String("dist", "", "Agent 下载目录（含各平台二进制与 plugins.zip）；留空自动探测 ./dist 或程序所在目录")
 	flag.Parse()
 
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	dist := resolveDist(*distDir)
 	store := NewStore()
-	cfg := NewConfigStore(*cfgPath)
+	cfg, err := NewConfigStore(*cfgPath)
+	if err != nil {
+		log.Fatal(err)
+	}
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
 
@@ -179,9 +185,9 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		if err := db.Save(); err != nil {
-			log.Printf("退出前落盘失败: %v", err)
+			slog.Error("退出前落盘失败", "err", err)
 		} else {
-			log.Printf("状态已落盘,服务端退出。")
+			slog.Info("状态已落盘,服务端退出。")
 		}
 		os.Exit(0)
 	}()
@@ -200,15 +206,15 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("AIOps Monitor 服务端已启动")
-	log.Printf("  监控面板: http://localhost%s", *addr)
-	log.Printf("  API 前缀: http://localhost%s/api/v1/", *addr)
-	log.Printf("  配置文件: %s", *cfgPath)
-	log.Printf("  数据库:   %s（内嵌轻量库,历史/日志/会话重启不丢）", dbPathFor(*cfgPath))
+	slog.Info("AIOps Monitor 服务端已启动")
+	slog.Info("监控面板", "url", "http://localhost"+*addr)
+	slog.Info("API 前缀", "url", "http://localhost"+*addr+"/api/v1/")
+	slog.Info("配置文件", "path", *cfgPath)
+	slog.Info("数据库", "path", dbPathFor(*cfgPath), "note", "内嵌轻量库,历史/日志/会话重启不丢")
 	if hasAgentBinary(dist) {
-		log.Printf("  下载目录: %s（一键安装可用）", dist)
+		slog.Info("下载目录", "path", dist, "note", "一键安装可用")
 	} else {
-		log.Printf("  警告: 未找到 Agent 下载文件，一键安装不可用；请用 -dist 指定含 aiops-agent* 与 plugins.zip 的目录")
+		slog.Warn("未找到 Agent 下载文件，一键安装不可用；请用 -dist 指定含 aiops-agent* 与 plugins.zip 的目录")
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

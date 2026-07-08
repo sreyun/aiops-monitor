@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -60,10 +60,10 @@ var (
 // same for all targets; each server independently verifies it.
 func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 	if a.identity.Fingerprint == "" {
-		log.Printf("[%s] 远程终端通道未启用：未采集到机器指纹", t.server)
+		slog.Warn("远程终端通道未启用：未采集到机器指纹", "server", t.server)
 		return
 	}
-	log.Printf("[%s] 远程终端通道已就绪，等待服务端呼叫…", t.server)
+	slog.Info("远程终端通道已就绪，等待服务端呼叫…", "server", t.server)
 	for {
 		sid, mode, command, ok := a.termWait(t.server)
 		if !ok {
@@ -108,7 +108,7 @@ func (a *Agent) termWait(server string) (sessionID, mode, command string, ok boo
 func (a *Agent) runExecSession(server, sid, command string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("剧本命令会话 %s 异常已恢复: %v", sid, r)
+			slog.Warn("剧本命令会话异常已恢复", "session", sid, "panic", r)
 		}
 	}()
 	if strings.TrimSpace(command) == "" {
@@ -163,14 +163,14 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	// panic so metrics reporting and future sessions keep working.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("终端会话 %s 异常已恢复（不影响 Agent 运行）: %v", sid, r)
+			slog.Warn("终端会话异常已恢复（不影响 Agent 运行）", "session", sid, "panic", r)
 		}
 	}()
 	sh := startShell(120, 30)
 	if sh == nil {
 		return
 	}
-	log.Printf("远程终端会话开始: %s", sid)
+	slog.Info("远程终端会话开始", "session", sid)
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
 	fp := url.QueryEscape(a.identity.Fingerprint)
@@ -201,7 +201,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 
 	_ = sh.Wait()
 	closeAll()
-	log.Printf("远程终端会话结束: %s", sid)
+	slog.Info("远程终端会话结束", "session", sid)
 }
 
 // readTermFrames parses the rx stream: each frame is [type:1][len:2 BE][payload].

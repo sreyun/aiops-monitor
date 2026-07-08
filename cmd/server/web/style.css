@@ -62,6 +62,42 @@
   /* 触摸目标最小尺寸（Apple HIG 推荐 44px） */
   --touch-min:44px;
 }
+
+/* ---------- 浅色主题 ---------- */
+[data-theme="light"]{
+  --bg:#f5f7fa; --bg2:#ffffff; --bg3:#eef1f6;
+  --side:#ffffff;
+  --panel:#ffffff; --panel2:#f5f7fa; --panel3:#e8edf3;
+  --line:#e0e4eb; --line2:#d1d7e0;
+  --hover-border:#b8c0cc;
+  --gray-off:#b0b8c4; --gray-txt:#8a93a3;
+
+  --txt:#1a2332; --txt2:#4a5568; --muted:#6b7588; --muted2:#9ca5b5;
+
+  --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:rgba(37,99,235,.10);
+  --accent2:#7c3aed; --accent2-soft:rgba(124,58,237,.10);
+  --ok:#16a34a; --ok-soft:rgba(22,163,74,.10);
+  --warn:#d97706; --warn-soft:rgba(217,119,6,.10);
+  --crit:#dc2626; --crit-soft:rgba(220,38,38,.10);
+  --info:#0284c7; --info-soft:rgba(2,132,199,.10);
+
+  --accent-txt:#1e40af; --accent2-txt:#6d28d9;
+  --ok-txt:#15803d; --warn-txt:#b45309; --crit-txt:#b91c1c; --info-txt:#0369a1;
+
+  --accent-border:rgba(37,99,235,.25);
+  --ok-border:rgba(22,163,74,.25);
+  --warn-border:rgba(217,119,6,.25);
+  --crit-border:rgba(220,38,38,.25);
+  --info-border:rgba(2,132,199,.25);
+
+  --cmd-bg:#f0f2f5; --cmd-text:#15803d; --cmd-warn-text:#b45309;
+  --term-bg:#1a1b1e; --term-text:#e4e7eb;
+
+  --shadow-sm:0 1px 2px rgba(0,0,0,.06);
+  --shadow:0 4px 14px rgba(0,0,0,.08);
+  --shadow-lg:0 12px 32px rgba(0,0,0,.10);
+  --shadow-xl:0 20px 56px rgba(0,0,0,.12);
+}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
@@ -921,6 +957,124 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
 .mfa-switch input:focus-visible + .mfa-track{box-shadow:0 0 0 3px var(--accent-soft)}
 
 .btn.sm{padding:5px 12px; font-size:13px}
+
+/* ============================================================
+   P1-1: 主题切换按钮
+   ============================================================ */
+.theme-toggle{
+  display:flex; align-items:center; gap:6px; cursor:pointer;
+  background:var(--panel2); border:1px solid var(--line2);
+  border-radius:var(--r-sm); padding:6px 10px;
+  font-size:12px; color:var(--muted); transition:all var(--transition-fast);
+}
+.theme-toggle:hover{border-color:var(--hover-border); color:var(--txt2)}
+.theme-toggle svg{width:14px; height:14px}
+
+/* ============================================================
+   P0-3: 骨架屏（Skeleton Loading）
+   ============================================================ */
+.skeleton{
+  background:linear-gradient(90deg, var(--panel2) 25%, var(--panel3) 50%, var(--panel2) 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.4s ease-in-out infinite;
+  border-radius:var(--r-sm);
+}
+@keyframes shimmer{
+  0%{background-position:200% 0}
+  100%{background-position:-200% 0}
+}
+.skeleton-card{
+  height:80px; border-radius:var(--r); margin-bottom:12px;
+  display:flex; align-items:center; gap:14px; padding:16px;
+}
+.skeleton-card .sk-icon{width:36px; height:36px; border-radius:var(--r-sm); flex-shrink:0}
+.skeleton-card .sk-lines{flex:1}
+.skeleton-card .sk-line{height:14px; border-radius:4px; margin-bottom:8px}
+.skeleton-card .sk-line.w60{width:60%}
+.skeleton-card .sk-line.w40{width:40%}
+.skeleton-host{
+  height:120px; border-radius:var(--r);
+  border:1px solid var(--line);
+}
+.skeleton-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px}
+
+/* ============================================================
+   P2-4: 空状态设计
+   ============================================================ */
+.empty-state{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:48px 24px; text-align:center;
+}
+.empty-state .empty-icon{
+  width:64px; height:64px; margin-bottom:16px;
+  opacity:.4; color:var(--muted);
+}
+.empty-state .empty-icon svg{width:100%; height:100%}
+.empty-state h4{font-size:15px; font-weight:600; color:var(--txt2); margin-bottom:6px}
+.empty-state p{font-size:13px; color:var(--muted); margin-bottom:16px}
+.empty-state .btn{margin-top:4px}
+
+/* ============================================================
+   P2-2: 增强模态弹窗动画
+   ============================================================ */
+.mask{
+  opacity:0;
+  transition:opacity var(--transition);
+}
+.mask.show{
+  opacity:1;
+}
+.modal{
+  transform:scale(.96) translateY(8px);
+  opacity:0;
+  transition:transform var(--transition), opacity var(--transition);
+}
+.mask.show .modal{
+  transform:scale(1) translateY(0);
+  opacity:1;
+}
+
+/* ============================================================
+   P0-4: Toast 堆叠管理
+   ============================================================ */
+#toast{
+  transition:opacity var(--transition), transform var(--transition);
+}
+
+/* ============================================================
+   P2-3: 图表网格线/图例增强（浅色主题适配）
+   ============================================================ */
+[data-theme="light"] .mask{background:rgba(0,0,0,.30)}
+[data-theme="light"] ::-webkit-scrollbar-thumb{background:#cdd4de}
+
+/* ============================================================
+   P3-1: WebSocket 推送状态指示
+   ============================================================ */
+.push-indicator{
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:11px; color:var(--muted);
+  padding:2px 8px; border-radius:999px;
+  background:var(--panel2); border:1px solid var(--line2);
+}
+.push-indicator.live{color:var(--ok-txt); border-color:var(--ok-border)}
+.push-indicator.live .push-dot{
+  width:6px; height:6px; border-radius:50%; background:var(--ok);
+  animation:pushPulse 2s ease-in-out infinite;
+}
+.push-indicator .push-dot{width:6px; height:6px; border-radius:50%; background:var(--muted)}
+@keyframes pushPulse{
+  0%,100%{opacity:1; transform:scale(1)}
+  50%{opacity:.5; transform:scale(1.3)}
+}
+
+/* ============================================================
+   P2-1: 前端模块化拆分后的兼容样式
+   ============================================================ */
+/* 分页器响应式 */
+@media(max-width:480px){
+  .pager{flex-wrap:wrap; gap:4px}
+  .pager button{min-width:32px; padding:4px 6px}
+}
 .btn.ghost.sm{padding:3px 10px; font-size:12px}
 
 /* ===== 多用户 / RBAC ===== */

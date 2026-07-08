@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -140,7 +140,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	var sent []string
 	if cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, text); err != nil {
-			log.Printf("飞书推送失败: %v", err)
+			slog.Error("飞书推送失败", "err", err)
 			n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "飞书推送失败：" + err.Error()})
 		} else {
 			sent = append(sent, "飞书")
@@ -148,7 +148,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	}
 	if cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
 		if err := n.sendDingtalk(cfg.Dingtalk, text); err != nil {
-			log.Printf("钉钉推送失败: %v", err)
+			slog.Error("钉钉推送失败", "err", err)
 			n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "钉钉推送失败：" + err.Error()})
 		} else {
 			sent = append(sent, "钉钉")
@@ -160,7 +160,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 		okAny := false
 		for _, to := range n.cfg.AlertEmails() {
 			if err := sendEmail(cfg.SMTP, to, "AIOps 告警："+a.Hostname, html); err != nil {
-				log.Printf("邮件推送失败: %v", err)
+				slog.Error("邮件推送失败", "err", err)
 				n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "邮件推送失败：" + err.Error()})
 			} else {
 				okAny = true

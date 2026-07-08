@@ -1,13 +1,33 @@
+# Docker 构建上下文排除项 — 减小构建上下文体积
+.git
+.workbuddy
+.github
+.claude
+node_modules
+
+# 预编译二进制（Docker 内自行编译）
 bin/
 dist/
-.claude/
 *.exe
-*.json
-!go.mod
-!go.sum
-!config.example.json
-!server_config.example.json
-__pycache__/
-*.pyc
-.git/
-.github/
+*.zip
+
+# 运行时数据
+aiops.db
+agent_state.json
+server_config.json
+
+# 自动生成的文件
+generated/
+
+# 评估报告和文档
+evaluation-report.html
+fix-summary.html
+INSTALL.md
+README.md
+README_EN.md
+
+# 开发工具配置
+.vscode
+.idea
+*.swp
+*.swo

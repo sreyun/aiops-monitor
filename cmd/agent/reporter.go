@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"sync"
@@ -43,18 +43,18 @@ func (t *serverTarget) register(base shared.Report) bool {
 	})
 	resp, err := t.httpc.Post(t.server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[%s] 注册失败(将继续上报): %v", t.server, err)
+		slog.Error("注册失败(将继续上报)", "server", t.server, "err", err)
 		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		log.Printf("[%s] 注册被拒(状态码 %d)，可能 Token 已失效或指纹无效", t.server, resp.StatusCode)
+		slog.Warn("注册被拒，可能 Token 已失效或指纹无效", "server", t.server, "status", resp.StatusCode)
 		return false
 	}
 	t.regMu.Lock()
 	t.registered = true
 	t.regMu.Unlock()
-	log.Printf("[%s] 已向服务端注册", t.server)
+	slog.Info("已向服务端注册", "server", t.server)
 	return true
 }
 
@@ -140,16 +140,20 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 }
 
 func (a *Agent) Run() {
-	log.Printf("Agent 核心启动 | host=%s | os=%s | 采集器=%s | id=%s | 服务端数=%d",
-		a.identity.Hostname, a.identity.OS, a.collector.Name(), short(a.identity.HostID), len(a.targets))
+	slog.Info("Agent 核心启动",
+		"host", a.identity.Hostname,
+		"os", a.identity.OS,
+		"collector", a.collector.Name(),
+		"id", short(a.identity.HostID),
+		"servers", len(a.targets))
 	for i, t := range a.targets {
-		log.Printf("  服务端[%d] %s", i+1, t.server)
+		slog.Info("服务端", "index", i+1, "url", t.server)
 	}
 	if a.identity.Fingerprint != "" {
-		log.Printf("机器指纹=%s", short(a.identity.Fingerprint))
+		slog.Info("机器指纹", "fingerprint", short(a.identity.Fingerprint))
 	}
 	if !a.collector.Supported() {
-		log.Printf("提示: 当前平台无原生采集器，基础指标依赖 core 插件(plugins/core_metrics.py)")
+		slog.Info("提示: 当前平台无原生采集器，基础指标依赖 core 插件(plugins/core_metrics.py)")
 	}
 
 	// Register to all targets (best-effort, non-blocking on failures)
@@ -184,7 +188,9 @@ func (a *Agent) pluginLoop() {
 }
 
 func (a *Agent) runPlugins() {
-	res := a.plugins.RunAll(log.Printf)
+	res := a.plugins.RunAll(func(format string, args ...any) {
+		slog.Info(fmt.Sprintf(format, args...))
+	})
 	a.mu.Lock()
 	if len(res.custom) > 0 {
 		a.latestCustom = res.custom
@@ -194,7 +200,7 @@ func (a *Agent) runPlugins() {
 	}
 	if len(res.events) > 0 {
 		a.pendingEvents = append(a.pendingEvents, res.events...)
-		log.Printf("插件产生 %d 条事件", len(res.events))
+		slog.Info("插件产生事件", "count", len(res.events))
 	}
 	a.mu.Unlock()
 }
@@ -209,7 +215,7 @@ func (a *Agent) reportOnce() {
 	if a.collector.Supported() {
 		m, err := a.collector.Collect()
 		if err != nil {
-			log.Printf("原生采集失败: %v", err)
+			slog.Error("原生采集失败", "err", err)
 		}
 		base = m
 	}
@@ -245,7 +251,7 @@ func (a *Agent) reportOnce() {
 			defer wg.Done()
 			err := tgt.send(rep)
 			if err == errForbidden {
-				log.Printf("[%s] 上报被拒(指纹未绑定)，重新注册后重试", tgt.server)
+				slog.Warn("上报被拒(指纹未绑定)，重新注册后重试", "server", tgt.server)
 				if tgt.register(a.identity) {
 					err = tgt.send(rep)
 				} else {
@@ -253,13 +259,18 @@ func (a *Agent) reportOnce() {
 				}
 			}
 			if err != nil {
-				log.Printf("[%s] 上报失败: %v", tgt.server, err)
+				slog.Error("上报失败", "server", tgt.server, "err", err)
 				results[idx] = false
 				return
 			}
 			results[idx] = true
-			log.Printf("[%s] 上报成功  CPU %.1f%%  内存 %.1f%%  磁盘 %.1f%%  自定义 %d  事件 %d",
-				tgt.server, base.CPUPercent, base.MemPercent, base.DiskPercent, len(custom), len(events))
+			slog.Info("上报成功",
+				"server", tgt.server,
+				"cpu", base.CPUPercent,
+				"mem", base.MemPercent,
+				"disk", base.DiskPercent,
+				"custom", len(custom),
+				"events", len(events))
 		}(i, t)
 	}
 	wg.Wait()
