@@ -628,6 +628,18 @@
   "ui.frames_recorded": "帧录制",
   "time.page_suffix": " 页",
   "notify.alert_engine": "告警引擎",
+  /* --- 告警类型标签 --- */
+  "notify.type_cpu": "CPU",
+  "notify.type_memory": "内存",
+  "notify.type_disk": "磁盘",
+  "notify.type_load": "负载",
+  "notify.type_gpu": "GPU",
+  "notify.type_offline": "失联",
+  "notify.type_check": "拨测",
+  /* --- 速率单位 --- */
+  "unit.bps": "B/s",
+  "unit.kbps": "KB/s",
+  "unit.mbps": "MB/s",
   /* --- 剧本执行状态 --- */
   "exec.status.running": "执行中",
   "exec.status.completed": "已完成",

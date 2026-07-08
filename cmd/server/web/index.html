@@ -196,11 +196,11 @@
         </div>
         <div class="log-filter" id="alertFilter">
           <button class="chip-btn active" data-atype="" data-i18n="filter.all_alert_types">全部</button>
-          <button class="chip-btn" data-atype="cpu">CPU</button>
-          <button class="chip-btn" data-atype="memory">内存</button>
-          <button class="chip-btn" data-atype="disk">磁盘</button>
-          <button class="chip-btn" data-atype="gpu">GPU</button>
-          <button class="chip-btn" data-atype="load">负载</button>
+          <button class="chip-btn" data-atype="cpu" data-i18n="notify.type_cpu">CPU</button>
+          <button class="chip-btn" data-atype="memory" data-i18n="notify.type_memory">内存</button>
+          <button class="chip-btn" data-atype="disk" data-i18n="notify.type_disk">磁盘</button>
+          <button class="chip-btn" data-atype="gpu" data-i18n="notify.type_gpu">GPU</button>
+          <button class="chip-btn" data-atype="load" data-i18n="notify.type_load">负载</button>
           <button class="chip-btn" data-atype="offline" data-i18n="filter.offline_type">失联</button>
           <button class="chip-btn" data-atype="check" data-i18n="filter.check_type">拨测</button>
         </div>
@@ -263,10 +263,10 @@
             <div class="select-wrap">
               <select id="checkFilter" onchange="filterChecks(this.value)" title="按类型筛选">
                 <option value="all" data-i18n="filter.all_check_types">全部类型</option>
-                <option value="http">HTTP</option>
-                <option value="tcp">TCP</option>
-                <option value="ping">Ping</option>
-                <option value="process">进程</option>
+                <option value="http" data-i18n="check.type_http">HTTP</option>
+                <option value="tcp" data-i18n="check.type_tcp">TCP</option>
+                <option value="ping" data-i18n="check.type_ping">Ping</option>
+                <option value="process" data-i18n="check.type_process">进程</option>
               </select>
             </div>
             <button class="btn primary" id="addCheckBtn">+ 添加检查</button>

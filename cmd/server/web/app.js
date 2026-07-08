@@ -95,9 +95,9 @@ function withLoading(btnId, fn) {
     _loadingBtns.delete(btn);
   });
 }
-const fmtRate = b => b < 1024 ? b.toFixed(0) + " B/s"
-  : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
-  : (b / 1048576).toFixed(2) + " MB/s";
+const fmtRate = b => b < 1024 ? b.toFixed(0) + " " + I18N.t("unit.bps")
+  : b < 1048576 ? (b / 1024).toFixed(1) + " " + I18N.t("unit.kbps")
+  : (b / 1048576).toFixed(2) + " " + I18N.t("unit.mbps");
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -129,7 +129,7 @@ const fmtDur = sec => {
 const translateLogKind = k => {
   if (k === "operation") return I18N.t("ui.operation");
   if (k === "system") return I18N.t("ui.system");
-  if (k === "plugin") return I18N.t("ui.process");
+  if (k === "plugin") return I18N.t("section.op_sys_plugin_plugin");
   return k;
 };
 // Translate log level from English enum to display text
@@ -2909,7 +2909,7 @@ async function loadUsers() {
       <div class="user-info">
         <div class="user-main"><span class="user-name">${esc(u.username)}</span>
           <span class="role-badge role-${esc(u.role)}">${roleLabel(u.role)}</span>
-          ${u.mfa_enabled ? `<span class="user-mfa" title="${I18N.t('mfa.enabled_badge')}">MFA</span>` : ""}</div>
+          ${u.mfa_enabled ? `<span class="user-mfa" title="${I18N.t('mfa.enabled_badge')}">${I18N.t('mfa.enabled_badge')}</span>` : ""}</div>
         <div class="user-sub">${esc(u.display_name || "—")}${u.email ? " · " + esc(u.email) : ""}</div>
       </div>
       <div class="user-acts">
@@ -2923,7 +2923,7 @@ async function loadUsers() {
 function openUserEdit(user) {
   const isNew = !user;
   $("userEditTitle").textContent = isNew ? I18N.t("ui.new_user") : I18N.t("ui.edit_user") + user.username;
-  const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}（${r}）</option>`).join("");
+  const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}</option>`).join("");
   $("userEditBody").innerHTML = `
     ${isNew ? `<div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="ueName" placeholder="${I18N.t('form.username_format')}"></div>
     <div class="field"><label>${I18N.t("form.initial_password")}</label><input type="password" id="uePass"></div>` : ""}
