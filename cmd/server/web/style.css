@@ -872,6 +872,10 @@ body[data-role="viewer"] .term-btn,
 body[data-role="viewer"] #installBtn{display:none !important}
 .modal.wide{max-width:640px; width:92%}
 .users-toolbar{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap}
+.global-mfa-row{display:flex; align-items:center; gap:14px; justify-content:space-between; padding:12px 14px; border:1px solid var(--line); border-radius:var(--r-sm); margin-bottom:14px; background:var(--panel2)}
+.global-mfa-info{min-width:0}
+.global-mfa-title{font-size:14px; font-weight:600; color:var(--txt); display:block; margin-bottom:4px}
+.global-mfa-info .mfa-desc{margin-top:0}
 .user-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-sm); margin-bottom:8px; background:var(--panel2)}
 .user-info{min-width:0}
 .user-main{display:flex; align-items:center; gap:8px}

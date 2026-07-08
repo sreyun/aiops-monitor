@@ -621,6 +621,16 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
+      <div class="global-mfa-row">
+        <div class="global-mfa-info">
+          <span class="global-mfa-title">全局 MFA 强制策略</span>
+          <span class="mfa-desc">开启后，所有未启用两步验证的用户下次登录时必须完成 MFA 绑定后才能进入系统。</span>
+        </div>
+        <label class="mfa-switch" title="开启/关闭全局 MFA 强制">
+          <input type="checkbox" id="globalMfaChk">
+          <span class="mfa-track"><span class="mfa-thumb"></span></span>
+        </label>
+      </div>
       <div class="users-toolbar">
         <span class="mfa-desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
         <button class="btn primary sm" id="userAddBtn" type="button">+ 新建用户</button>

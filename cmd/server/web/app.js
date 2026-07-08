@@ -1982,9 +1982,9 @@ function renderMfaState(enabled) {
   if (st) { st.textContent = enabled ? "已启用" : "未启用"; st.className = "mfa-state " + (enabled ? "on" : "off"); }
   if (chk) { chk.checked = enabled; }
 }
-async function openMfaSetup() {
+async function openMfaSetup(forced) {
   const body = $("mfaBody");
-  $("mfaTitle").textContent = "启用两步验证";
+  $("mfaTitle").textContent = forced ? "请完成两步验证绑定" : "启用两步验证";
   body.innerHTML = `<div class="empty-line">正在生成密钥…</div>`;
   $("mfaMask").classList.add("show");
   let data;
@@ -1993,6 +1993,7 @@ async function openMfaSetup() {
   const secret = data.secret || "", qrURI = data.qr_datauri || "";
   const grp = secret.replace(/(.{4})/g, "$1 ").trim();
   body.innerHTML = `
+    ${forced ? `<div class="mfa-desc" style="margin-bottom:10px;color:var(--warn-txt,#f2c078)">管理员已启用全局两步验证策略，请完成绑定后登录。</div>` : ""}
     <ol class="mfa-steps">
       <li>打开 <b>Google Authenticator</b>（或任意 TOTP 应用），扫描二维码；无法扫码时可手动输入下方密钥。</li>
       <li>输入应用当前显示的 6 位动态口令，点「确认启用」。</li>
@@ -2011,7 +2012,16 @@ async function openMfaSetup() {
     if (code.length !== 6) { errEl.textContent = "请输入 6 位动态口令"; return; }
     const r = await fetch(`${API}/mfa/enable`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ secret, code }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("两步验证已启用", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(true); }
+    if (r.ok) {
+      toast("两步验证已启用", "ok");
+      $("mfaMask").classList.remove("show");
+      if (forced) {
+        // Global MFA enforcement: complete login after enrollment.
+        setUser(await fetch(`${API}/me`).then(x => x.json()));
+        const lv = $("loginView"); if (lv) lv.classList.remove("show");
+        startApp();
+      } else { renderMfaState(true); }
+    }
     else errEl.textContent = j.error || "启用失败";
   };
   setTimeout(() => { const el = $("mfaCode"); if (el) el.focus(); }, 60);
@@ -2091,6 +2101,12 @@ async function openUsers() {
   await loadUsers();
 }
 async function loadUsers() {
+  // Fetch global MFA policy status
+  try {
+    const gm = await fetch(`${API}/mfa/global`).then(r => r.json());
+    const chk = $("globalMfaChk");
+    if (chk) { chk.checked = !!gm.mfa_required; chk.disabled = false; }
+  } catch (_) { /* non-admin or error — switch stays disabled */ }
   const list = $("usersList");
   list.innerHTML = `<div class="empty-line">加载中…</div>`;
   let users;
@@ -2689,6 +2705,19 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
 safeAddEventListener("profileBtn", "click", openProfile);
 safeAddEventListener("usersBtn", "click", openUsers);
 safeAddEventListener("userAddBtn", "click", () => openUserEdit(null));
+safeAddEventListener("globalMfaChk", "change", async () => {
+  const chk = $("globalMfaChk");
+  if (!chk) return;
+  const required = chk.checked;
+  chk.disabled = true;
+  try {
+    const r = await fetch(`${API}/mfa/global`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ required }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast(required ? "全局 MFA 强制已开启" : "全局 MFA 强制已关闭", "ok");
+    else { toast(j.error || "操作失败", "err"); chk.checked = !required; }
+  } catch (e) { toast("网络错误", "err"); chk.checked = !required; }
+  chk.disabled = false;
+});
 safeAddEventListener("usersList", "click", async e => {
   const btn = e.target.closest("[data-act]"); if (!btn) return;
   const row = e.target.closest(".user-row"); if (!row) return;
@@ -2732,6 +2761,10 @@ safeAddEventListener("loginForm", "submit", async e => {
       const f = $("loginCodeField"); if (f) f.style.display = "";
       if (codeEl) codeEl.focus();
       if (loginErrEl) loginErrEl.textContent = "请输入 Authenticator 动态验证码完成登录";
+    }
+    else if (r.ok && j.require_mfa_setup) {
+      // 全局 MFA 策略：密码正确但用户未绑定 MFA，强制进入绑定流程
+      openMfaSetup(true);
     }
     else if (r.ok) {
       setUser(await fetch(`${API}/me`).then(x => x.json()));

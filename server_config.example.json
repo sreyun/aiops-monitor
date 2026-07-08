@@ -21,6 +21,7 @@
   "categories": {},
   "install_token": "",
   "require_token": false,
+  "mfa_required": false,
   "account": {
     "username": "admin",
     "display_name": "管理员",

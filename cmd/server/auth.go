@@ -25,8 +25,9 @@ func hashPassword(pass, salt string) string {
 }
 
 type session struct {
-	user    string
-	expires time.Time
+	user       string
+	expires    time.Time
+	restricted bool // true = only MFA setup/enable/logout endpoints allowed (global MFA enforcement)
 }
 
 // Auth manages login sessions against the account in ConfigStore. Sessions
@@ -157,6 +158,48 @@ func (a *Auth) issueSession(user string) string {
 	return tok
 }
 
+// issueRestrictedSession creates a session that can only access MFA enrollment
+// endpoints (/api/v1/mfa/setup, /api/v1/mfa/enable) and logout. Used when the
+// global MFA policy forces a user to bind TOTP before they can use the system.
+func (a *Auth) issueRestrictedSession(user string) string {
+	tok := newSessionToken()
+	a.mu.Lock()
+	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL), restricted: true}
+	a.dirty = true
+	a.mu.Unlock()
+	return tok
+}
+
+// isRestricted reports whether the current session is a restricted (MFA-enrollment-only) session.
+func (a *Auth) isRestricted(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[c.Value]
+	if !ok || time.Now().After(s.expires) {
+		return false
+	}
+	return s.restricted
+}
+
+// upgradeSession lifts a restricted session to a full session (called after MFA enrollment).
+func (a *Auth) upgradeSession(r *http.Request) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if s, ok := a.sessions[c.Value]; ok {
+		s.restricted = false
+		a.sessions[c.Value] = s
+		a.dirty = true
+	}
+}
+
 // userForRequest returns the username bound to a valid (unexpired) session
 // cookie, or "" if there is none.
 func (a *Auth) userForRequest(r *http.Request) string {
@@ -284,7 +327,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		"/api/v1/mfa/unbind-via-email":
 		return true
 	}
-	if strings.HasPrefix(p, "/api/v1/users") { // user management: admin only
+	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" { // user management + global MFA: admin only
 		return rank >= roleRank(RoleAdmin)
 	}
 	if strings.Contains(p, "/terminal") { // remote shell: operator+
@@ -308,6 +351,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if name == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
+		}
+		// Restricted sessions (global MFA enforcement) can only touch MFA endpoints.
+		if s.auth.isRestricted(r) {
+			p := r.URL.Path
+			if p != "/api/v1/mfa/setup" && p != "/api/v1/mfa/enable" && p != "/api/v1/logout" {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "请先完成两步验证绑定"})
+				return
+			}
 		}
 		if !s.routeAllowed(r, s.cfg.RoleOf(name)) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "权限不足，该操作需要更高权限"})
@@ -355,6 +406,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "动态验证码错误"})
 			return
 		}
+	}
+	// Global MFA policy: if admin has enabled MFARequired and this user hasn't
+	// set up MFA yet, issue a restricted session and direct them to enroll.
+	if s.cfg.MFARequired() && !acc.MFAEnabled {
+		tok := s.auth.issueRestrictedSession(acc.Username)
+		http.SetCookie(w, &http.Cookie{
+			Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
+			Secure:   isHTTPS(r),
+			SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"require_mfa_setup": true,
+			"message":           "管理员已启用全局两步验证策略，请完成绑定后登录",
+		})
+		return
 	}
 	tok := s.auth.issueSession(acc.Username)
 	http.SetCookie(w, &http.Cookie{
@@ -510,7 +576,39 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.SetUserMFA(acc.Username, true, strings.TrimSpace(req.Secret))
 	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "启用两步验证：" + acc.Username})
+	// Upgrade a restricted session (global MFA enforcement) to a full session.
+	s.auth.upgradeSession(r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- Global MFA policy ----
+
+// handleMFAGlobalGet returns the current global MFA enforcement state.
+func (s *Server) handleMFAGlobalGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mfa_required": s.cfg.MFARequired(),
+	})
+}
+
+// handleMFAGlobalSet toggles the global MFA enforcement policy (admin only).
+func (s *Server) handleMFAGlobalSet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Required bool `json:"required"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := s.cfg.SetMFARequired(req.Required); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存失败"})
+		return
+	}
+	action := "关闭"
+	if req.Required {
+		action = "开启"
+	}
+	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "全局MFA强制策略已" + action})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mfa_required": req.Required})
 }
 
 // handleMFADisable turns the current user's MFA off after re-verifying their

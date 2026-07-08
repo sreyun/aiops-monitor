@@ -77,6 +77,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/mfa/enable", s.handleMFAEnable)
 	mux.HandleFunc("POST /api/v1/mfa/disable", s.handleMFADisable)
 	mux.HandleFunc("POST /api/v1/mfa/unbind-via-email", s.handleMFAUnbindViaEmail)
+	mux.HandleFunc("GET /api/v1/mfa/global", s.handleMFAGlobalGet)
+	mux.HandleFunc("POST /api/v1/mfa/global", s.handleMFAGlobalSet)
 	// Account recovery: public endpoints (no session required)
 	mux.HandleFunc("POST /api/v1/account/recover-username", s.handleRecoverUsername)
 	mux.HandleFunc("POST /api/v1/account/send-reset-code", s.handleSendResetCode)

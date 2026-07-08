@@ -132,6 +132,10 @@ type ServerConfig struct {
 	// the server is directly exposed these headers are attacker-forgeable, so
 	// they are ignored and the raw connection address is used instead.
 	TrustProxy bool `json:"trust_proxy"`
+	// MFARequired is the global MFA enforcement policy: when true, every user
+	// without MFA enabled will be forced to enroll on their next login before
+	// they can access the dashboard. Managed by admin via /api/v1/mfa/global.
+	MFARequired bool `json:"mfa_required"`
 	// Users is the multi-account list (RBAC). The legacy single Account above is
 	// migrated into this list on load and then cleared.
 	Users []AccountConfig `json:"users"`
@@ -238,6 +242,21 @@ func (cs *ConfigStore) TrustProxy() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.TrustProxy
+}
+
+// MFARequired reports whether the global MFA enforcement policy is active.
+func (cs *ConfigStore) MFARequired() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.MFARequired
+}
+
+// SetMFARequired toggles the global MFA enforcement policy and persists it.
+func (cs *ConfigStore) SetMFARequired(v bool) error {
+	cs.mu.Lock()
+	cs.cfg.MFARequired = v
+	cs.mu.Unlock()
+	return cs.save()
 }
 
 // tokenGracePeriod is how long a rotated-out token stays valid, so agents keep
@@ -406,6 +425,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.TerminalDisabled = cs.cfg.TerminalDisabled
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
+	c.MFARequired = cs.cfg.MFARequired
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()
