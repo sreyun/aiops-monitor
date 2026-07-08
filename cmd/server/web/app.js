@@ -352,7 +352,7 @@ function bar(label, percent, detail) {
 /* ---------- 渲染：KPI ---------- */
 function renderCards(s) {
   const card = (cls, ic, v, k, vcls, goto) =>
-    `<div class="card ${cls}" data-goto="${goto}" title=I18N.t("section.click_view")><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
+    `<div class="card ${cls}" data-goto="${goto}" title="${I18N.t('section.click_view')}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
   $("cards").innerHTML =
     card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
     card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
@@ -495,7 +495,7 @@ function renderAlerts(alerts) {
       ? `<span class="src alert-dur" data-since="${a.since}" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>`
       : "";
     return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
-    <span class="badge ${esc(a.level)}">${a.level === "critical" ? I18N.t("ui.critical") : a.level === "info" ? "恢复" : I18N.t("ui.warning")}</span>
+    <span class="badge ${esc(a.level)}">${a.level === "critical" ? I18N.t("ui.critical") : a.level === "info" ? I18N.t("toast.recovered") : I18N.t("ui.warning")}</span>
     <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
     ${durSpan}
     ${timeStr}</div>`;
@@ -530,7 +530,7 @@ function renderTop(hosts) {
     .sort((a, b) => b.v - a.v).slice(0, 10);
   const panelHTML = (title, items) => `<div class="top-panel"><div class="tp-title">${esc(title)}</div>` +
     (items.length ? items.map(it => `
-      <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title=I18N.t("section.click_trend")>
+      <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title="${I18N.t('section.click_trend')}">
         <span class="ti-name">${esc(it.name)}</span>
         <div class="ti-bar"><div class="ti-fill" style="width:${it.width}%;background:${it.bar}"></div></div>
         <span class="ti-val mono">${esc(it.disp)}</span>
@@ -600,7 +600,7 @@ function checkTopPanel(title, list, isProc) {
       val = lat + " ms"; color = lat >= 1000 ? "var(--crit)" : lat >= 300 ? "var(--warn)" : "var(--ok)";
       width = Math.min(100, (c.latency_ms || 0) / maxLat * 100);
     }
-    return `<div class="top-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title=I18N.t("section.click_history")>
+    return `<div class="top-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title="${I18N.t('section.click_history')}">
       <span class="ti-name">${esc(c.name)}</span>
       <div class="ti-bar"><div class="ti-fill" style="width:${width}%;background:${color}"></div></div>
       <span class="ti-val mono" style="color:${color}">${val}</span>
@@ -735,10 +735,10 @@ function hostCard(h) {
         </div>
       </div>
       <div class="host-tags">
-        <span class="cat-badge" data-act="cat" title=I18N.t("section.click_set_category")>${cat}</span>
+        <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_category')}">${cat}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-        ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title=I18N.t("section.terminal_desc")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
-        <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}主机">✕</button>
+        ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="${I18N.t('section.terminal_desc')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
+        <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
       </div>
     </div>
     ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + "核")}
@@ -784,11 +784,11 @@ function hostRow(h) {
   const last = !h.online
     ? `<span class="hrow-status offline" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : isStale
-      ? `<span class="hrow-status stale" title=I18N.t("section.data_stale")>⚠ ${ago(h.last_seen)}</span>`
+      ? `<span class="hrow-status stale" title="${I18N.t('section.data_stale')}">⚠ ${ago(h.last_seen)}</span>`
       : `<span class="hrow-status online">运行 ${fmtUptime(m.uptime || 0)}</span>`;
   const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
   const termBtn = (h.online && TERMINAL_ENABLED)
-    ? `<button class="term-btn" data-act="term" title=I18N.t("ui.remote_terminal")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
+    ? `<button class="term-btn" data-act="term" title="${I18N.t('ui.remote_terminal')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
   const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
   return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
@@ -798,14 +798,14 @@ function hostRow(h) {
       <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-    <span class="cat-badge" data-act="cat" title=I18N.t("section.click_set_category")>${cat}</span>
+    <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_category')}">${cat}</span>
     <div class="hrow-metrics">
       ${miniBar("CPU", m.cpu_percent)}${miniBar(I18N.t("ui.memory"), m.mem_percent)}${miniBar(I18N.t("ui.disk"), diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
     <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
     ${loadStr ? `<span class="hrow-load mono">${loadStr}</span>` : ""}
     <span class="hrow-last">${last}</span>
-    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}主机">✕</button></span>
+    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}">✕</button></span>
   </div>`;
 }
 
@@ -929,7 +929,7 @@ function renderPager(pages, total) {
 
 /* ---------- 主机操作 ---------- */
 async function delHost(id, name) {
-  if (!confirm(`确认${I18N.t("ui.delete")}主机「${name}」？\n若该主机 Agent 仍在运行，约 60 ${I18N.t("time.sec")}后会重新出现。`)) return;
+  if (!confirm(`${I18N.t("valid.confirm_delete_host_prefix")}${I18N.t("ui.delete")}「${name}」？\n若该主机 Agent 仍在运行，约 60 ${I18N.t("time.sec")}后会重新出现。`)) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (r.ok) { toast(I18N.t("toast.host_deleted"), "ok"); refresh(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
@@ -978,7 +978,7 @@ async function loadAndRenderCharts() {
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
     const pct = v => v.toFixed(1) + '%';
     const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="230"></canvas>` +
-      `<button class="chart-enlarge" data-chart="${id}" title=I18N.t("ui.zoom_preview")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+      `<button class="chart-enlarge" data-chart="${id}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `
       <div class="chart-controls">
         <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">${I18N.t("time.1h")}</button>
@@ -989,7 +989,7 @@ async function loadAndRenderCharts() {
       <div class="chart-container">
         ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
       </div>
-      <div class="hint">采样点 ${samples.length} 个（粒度：${gran}）· 悬停查看数值 · 拖动框选放大区间 · 双击还原 · 点击图表或右上角按钮${I18N.t("ui.zoom_preview")}。历史已持久化，重启不丢。</div>
+      <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
 
     DETAIL_CHARTS.chartCPU = createChart('chartCPU', samples,
@@ -1235,7 +1235,7 @@ function showChartTip(state, e, li) {
 // interactive (hover / box-zoom / dbl-click reset).
 function openChartZoom(src) {
   hideChartTip();
-  $("chartZoomTitle").textContent = (src.title || I18N.t("ui.trend")) + " · 放大预览";
+  $("chartZoomTitle").textContent = (src.title || I18N.t("ui.trend")) + " · " + I18N.t("ui.zoom_preview");
   $("chartZoomMask").classList.add("show");
   const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, { title: src.title, isZoom: true });
   if (z) { z.i0 = src.i0; z.i1 = src.i1; drawChart(z); }
@@ -1293,7 +1293,7 @@ function createTermTab(id, name) {
   screens.appendChild(screen);
   const tab = document.createElement("button");
   tab.className = "term-tab";
-  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title=I18N.t("ui.close_tab")>×</span>`;
+  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title="${I18N.t('ui.close_tab')}">×</span>`;
   tabbar.appendChild(tab);
   const vt = makeVT(screen);
   screen._vt = vt;
@@ -1393,7 +1393,7 @@ function createTermTab(id, name) {
 
 function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
-  setTermStatus(tab.retry > 0 ? `重连中…(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
+  setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
   ws.binaryType = "arraybuffer";
@@ -1417,7 +1417,7 @@ function connectTermWS(tab) {
     const mask = $("termMask");
     if (mask.classList.contains("show") && tab.retry < 3) {
       tab.retry++;
-      setTermStatus(`重连中…(${tab.retry}/3)`, "");
+      setTermStatus(`${I18N.t("misc.reconnecting")}(${tab.retry}/3)`, "");
       setTimeout(() => { if (mask.classList.contains("show")) connectTermWS(tab); }, 2000);
     }
   };
@@ -1505,10 +1505,10 @@ function updateTermDock() {
       item.innerHTML = `
         <span class="dock-dot"></span>
         <span class="dock-name"></span>
-        <button class="dock-btn" title=I18N.t("ui.expand_window") aria-label=I18N.t("ui.expand_window")>
+        <button class="dock-btn" title="${I18N.t('ui.expand_window')}" aria-label="${I18N.t('ui.expand_window')}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V13a1 1 0 0 1 1-1h12"/><path d="M12 5l-5 7 5-7"/></svg>
         </button>
-        <button class="dock-btn close" title=I18N.t("ui.close_session") aria-label=I18N.t("ui.close_session")>
+        <button class="dock-btn close" title="${I18N.t('ui.close_session')}" aria-label="${I18N.t('ui.close_session')}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>`;
       // 点击卡片主体（非按钮）也展开
@@ -2409,11 +2409,11 @@ function renderChecks(checks) {
     const stText = !c.enabled ? I18N.t("ui.disabled_status") : (c.checked_at ? (c.ok ? I18N.t("ui.normal") : I18N.t("ui.abnormal")) : I18N.t("ui.pending"));
     const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : I18N.t("ui.process");
     const builtin = c.builtin ? ' data-builtin="1"' : "";
-    const histBtn = `<button class="mini-btn" data-cact="hist" title=I18N.t("ui.history_chart")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
+    const histBtn = `<button class="mini-btn" data-cact="hist" title="${I18N.t('ui.history_chart')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
     const actions = `<span class="ch-actions">${histBtn}${c.builtin ? "" : `
-          <button class="mini-btn" data-cact="run" title=I18N.t("ui.check_now")>▶</button>
-          <button class="mini-btn" data-cact="edit" title=I18N.t("ui.edit")>✎</button>
-          <button class="mini-btn del" data-cact="del" title=I18N.t("ui.delete")>✕</button>`}</span>`;
+          <button class="mini-btn" data-cact="run" title="${I18N.t('ui.check_now')}">▶</button>
+          <button class="mini-btn" data-cact="edit" title="${I18N.t('ui.edit')}">✎</button>
+          <button class="mini-btn del" data-cact="del" title="${I18N.t('ui.delete')}">✕</button>`}</span>`;
     const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">内置</span>` : "";
 
     // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
@@ -2522,7 +2522,7 @@ async function loadCheckHistory() {
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
     const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now");
     const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="230"></canvas>` +
-      `<button class="chart-enlarge" data-chart="${cid}" title=I18N.t("ui.zoom_preview")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+      `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
       <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ms · 悬停查看数值，拖动框选放大，双击还原。</div>`;
@@ -2742,7 +2742,7 @@ async function openMfaSetup(forced) {
     </ol>
     <div class="mfa-qr" id="mfaQr"></div>
     <div class="mfa-secret">密钥　<code class="mono" id="mfaSecret">${esc(grp)}</code><button class="btn ghost sm" id="mfaCopy" type="button">复制</button></div>
-    <div class="field"><label>动态验证码</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6") autocomplete="one-time-code"></div>
+    <div class="field"><label>${I18N.t("form.totp_code")}</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6')}" autocomplete="one-time-code"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">确认启用</button></div>`;
   if (qrURI) $("mfaQr").innerHTML = `<img src="${esc(qrURI)}" alt="MFA QR Code" class="qr-img">`;
@@ -2773,7 +2773,7 @@ function openMfaDisable() {
   $("mfaTitle").textContent = I18N.t("ui.disable_mfa");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">关闭后，登录将不再需要动态口令。请选择验证方式：</div>
-    <div class="field"><label>登录密码</label><input type="password" id="mfaPass" autocomplete="current-password"></div>
+    <div class="field"><label>${I18N.t("form.password")}</label><input type="password" id="mfaPass" autocomplete="current-password"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot">
       <button class="btn danger" id="mfaConfirmOff" type="button">用密码关闭</button>
@@ -2803,8 +2803,8 @@ function openMfaEmailUnbind() {
       <span style="flex:1"></span>
     </div>
     <div class="field" id="mfaCodeRow" style="display:none">
-      <label>邮箱验证码</label>
-      <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6_v2") autocomplete="one-time-code">
+      <label>${I18N.t("form.email_code")}</label>
+      <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6_v2')}" autocomplete="one-time-code">
     </div>
     <div class="mfa-foot" id="mfaVerifyRow" style="display:none">
       <button class="btn danger" id="mfaConfirmEmailUnbind" type="button">确认解除</button>
@@ -2860,7 +2860,7 @@ async function loadUsers() {
       <div class="user-info">
         <div class="user-main"><span class="user-name">${esc(u.username)}</span>
           <span class="role-badge role-${esc(u.role)}">${roleLabel(u.role)}</span>
-          ${u.mfa_enabled ? `<span class="user-mfa" title=I18N.t("mfa.enabled_badge")>MFA</span>` : ""}</div>
+          ${u.mfa_enabled ? `<span class="user-mfa" title="${I18N.t('mfa.enabled_badge')}">MFA</span>` : ""}</div>
         <div class="user-sub">${esc(u.display_name || "—")}${u.email ? " · " + esc(u.email) : ""}</div>
       </div>
       <div class="user-acts">
@@ -2876,11 +2876,11 @@ function openUserEdit(user) {
   $("userEditTitle").textContent = isNew ? I18N.t("ui.new_user") : I18N.t("ui.edit_user") + user.username;
   const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}（${r}）</option>`).join("");
   $("userEditBody").innerHTML = `
-    ${isNew ? `<div class="field"><label>用户名</label><input type="text" id="ueName" placeholder=I18N.t("form.username_format")></div>
-    <div class="field"><label>初始密码（至少 4 位）</label><input type="password" id="uePass"></div>` : ""}
-    <div class="field"><label>显示名称</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder=I18N.t("form.hint_display_name")></div>
-    <div class="field"><label>邮箱（选填，用于告警接收 / 找回）</label><input type="text" id="ueEmail" value="${user ? esc(user.email || "") : ""}" placeholder="name@example.com"></div>
-    <div class="field"><label>角色</label><div class="select-wrap"><select id="ueRole">${roleOpts}</select></div></div>
+    ${isNew ? `<div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="ueName" placeholder="${I18N.t('form.username_format')}"></div>
+    <div class="field"><label>${I18N.t("form.initial_password")}</label><input type="password" id="uePass"></div>` : ""}
+    <div class="field"><label>${I18N.t("form.display_name")}</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder="${I18N.t('form.hint_display_name')}"></div>
+    <div class="field"><label>${I18N.t("form.email_optional")}</label><input type="text" id="ueEmail" value="${user ? esc(user.email || "") : ""}" placeholder="name@example.com"></div>
+    <div class="field"><label>${I18N.t("form.role")}</label><div class="select-wrap"><select id="ueRole">${roleOpts}</select></div></div>
     <div class="login-err" id="ueErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="ueSave" type="button">${isNew ? I18N.t("ui.create_user") : I18N.t("ui.save")}</button></div>`;
   $("userEditMask").classList.add("show");
@@ -2928,7 +2928,7 @@ function openRecoverUser() {
   $("recoverTitle").textContent = I18N.t("ui.recover_username");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">输入已绑定的邮箱地址，系统将向该邮箱发送用户名。</div>
-    <div class="field"><label>邮箱地址</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
+    <div class="field"><label>${I18N.t("form.email")}</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
     <div class="login-err" id="rcErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="rcSubmit" type="button">发送</button></div>`;
   $("recoverMask").classList.add("show");
@@ -2951,11 +2951,11 @@ function openRecoverPass() {
   $("recoverTitle").textContent = I18N.t("ui.reset_password");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">输入用户名，系统将向绑定邮箱发送验证码。</div>
-    <div class="field"><label>用户名</label><input type="text" id="rcUser" placeholder=I18N.t("form.login_account")></div>
+    <div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="rcUser" placeholder="${I18N.t('form.login_account')}"></div>
     <div class="login-err" id="rcErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">发送验证码</button></div>
-    <div class="field" id="rcCodeRow" style="display:none"><label>邮箱验证码</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6_v2") autocomplete="one-time-code"></div>
-    <div class="field" id="rcNewPassRow" style="display:none"><label>新密码（至少 4 位）</label><input type="password" id="rcNewPass" placeholder=I18N.t("form.new_password")></div>
+    <div class="field" id="rcCodeRow" style="display:none"><label>${I18N.t("form.email_code")}</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6_v2')}" autocomplete="one-time-code"></div>
+    <div class="field" id="rcNewPassRow" style="display:none"><label>${I18N.t("form.new_password_min4")}</label><input type="password" id="rcNewPass" placeholder="${I18N.t('form.new_password')}"></div>
     <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">重置密码</button></div>`;
   $("recoverMask").classList.add("show");
   let rcEmail = ""; // stored from server response (not returned for security)
@@ -3297,7 +3297,7 @@ const navItems = document.querySelectorAll(".nav-item");
 // 而非机械回显侧栏导航名，从根上消除“两个概览”的重复观感。
 const PAGE_META = {
   overview: { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") },
-  hosts:    { title: "主机", sub: I18N.t("section.hosts_desc") },
+  hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
   alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
   checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
   automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
@@ -3655,14 +3655,14 @@ function renderPbSteps(steps) {
     const tgtOpts = buildTargetOptions(s.target);
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
-        <div class="field"><label>步骤名称</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder=I18N.t("form.hint_step_name")></div>
-        <div class="field"><label>目标主机</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
+        <div class="field"><label>${I18N.t("form.step_name")}</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="${I18N.t('form.hint_step_name')}"></div>
+        <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
-      <div class="field"><label>命令</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder=I18N.t("form.hint_command") style="font-family:monospace"></div>
+      <div class="field"><label>${I18N.t("form.command")}</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder="${I18N.t('form.hint_command')}" style="font-family:monospace"></div>
       <div class="grid2">
-        <div class="field"><label>超时（秒）</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
-        <div class="field"><label>失败时继续</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
+        <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
+        <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
       </div>
       <button class="btn danger sm pb-step-del" type="button">删除步骤</button>
     </div>`;
@@ -3679,7 +3679,7 @@ function buildTargetOptions(selectedTarget) {
   const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>全部主机</option>`];
   // By category
   if (PB_CATS.length > 0) {
-    opts.push('<optgroup label=I18N.t("section.by_category")>');
+    opts.push(`<optgroup label="${I18N.t("section.by_category")}">`);
     PB_CATS.forEach(cat => {
       const val = `category:${cat}`;
       opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(cat)}</option>`);
@@ -3688,14 +3688,14 @@ function buildTargetOptions(selectedTarget) {
   }
   // By system type — hardcoded to Linux/macOS/Windows (not dynamic from host
   // data, because h.platform is a version string, not an OS type).
-  opts.push('<optgroup label=I18N.t("section.by_system")>');
+  opts.push(`<optgroup label="${I18N.t("section.by_system")}">`);
   [{val:"linux",label:"Linux"},{val:"macos",label:"macOS"},{val:"windows",label:"Windows"}].forEach(s => {
     opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
   });
   opts.push('</optgroup>');
   // Per host
   if (PB_HOSTS.length > 0) {
-    opts.push('<optgroup label=I18N.t("section.target_host")>');
+    opts.push(`<optgroup label="${I18N.t("section.target_host")}">`);
     PB_HOSTS.forEach(h => {
       const val = `host:${h.id}`;
       opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(h.hostname)}</option>`);
@@ -3729,7 +3729,7 @@ function pbTargetPreview(sel) {
   } else if (target.startsWith("host:")) {
     count = 1;
   }
-  preview.textContent = count > 0 ? `已匹配 ${count} 台主机` : I18N.t("empty.no_host_match2");
+  preview.textContent = count > 0 ? `${I18N.t("ui.matched")} ${count} ${I18N.t("ui.hosts_matched")}` : I18N.t("empty.no_host_match2");
   preview.style.color = count > 0 ? "var(--ok, #31c46b)" : "var(--crit, #ff5b6e)";
 }
 
@@ -3789,7 +3789,7 @@ async function pollExecution(execId, pbId) {
 }
 
 function renderExecResult(exec) {
-  $("execResultTitle").textContent = `执行${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
+  $("execResultTitle").textContent = `${I18N.t("ui.execute")}${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
   const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
     const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
     const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${s.status}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
@@ -3998,8 +3998,8 @@ function renderForwards() {
         <div class="hint" style="margin-top:2px;">本地监听 <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} 个活跃连接</div>
       </div>
       <div style="display:flex; gap:8px; align-items:center;">
-        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title=I18N.t("ui.copy_addr")>${I18N.t("ui.copy_addr")}</button>
-        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title=I18N.t("ui.close_forward")>${I18N.t("ui.close_forward")}</button>
+        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title="${I18N.t('ui.copy_addr')}">${I18N.t("ui.copy_addr")}</button>
+        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title="${I18N.t('ui.close_forward')}">${I18N.t("ui.close_forward")}</button>
       </div>
     </div>
   `).join("");
