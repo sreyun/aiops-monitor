@@ -771,17 +771,20 @@ function renderHosts(hosts) {
   const cats = [...new Set(hosts.map(h => h.category || "未分类"))].sort();
   renderCatDropdown(cats);
 
-  // 安全网：如果 localStorage 中所有分类都被折叠，清空折叠状态，
-  // 避免主机全部隐藏导致用户以为功能损坏
-  try {
-    const s = localStorage.getItem("aiops_collapsed");
-    if (s) {
-      const arr = JSON.parse(s);
-      if (Array.isArray(arr) && arr.length > 0 && cats.length > 0 && cats.every(c => arr.includes(c))) {
-        localStorage.removeItem("aiops_collapsed");
+  // 安全网：仅在首次渲染时检查（LAST_RENDER_KEY 未设置），
+  // 防止 localStorage 残留导致页面打开即全隐藏。
+  // 用户交互时的折叠操作不受此限制。
+  if (!LAST_RENDER_KEY) {
+    try {
+      const s = localStorage.getItem("aiops_collapsed");
+      if (s) {
+        const arr = JSON.parse(s);
+        if (Array.isArray(arr) && arr.length > 0 && cats.length > 0 && cats.every(c => arr.includes(c))) {
+          localStorage.removeItem("aiops_collapsed");
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
   
@@ -2803,11 +2806,6 @@ function toggleCatCollapse(cat) {
   try { const s = localStorage.getItem("aiops_collapsed"); if (s) arr = JSON.parse(s); } catch (e) {}
   const i = arr.indexOf(cat);
   if (i >= 0) arr.splice(i, 1); else arr.push(cat);
-  // 安全网：如果所有分类都被折叠（会导致主机全部隐藏），清空折叠状态
-  if (arr.length > 0) {
-    const allCats = [...new Set((LAST_HOSTS || []).map(h => h.category || "未分类"))];
-    if (allCats.length > 0 && allCats.every(c => arr.includes(c))) arr = [];
-  }
   try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
 }
 function renderCatDropdown(cats) {
