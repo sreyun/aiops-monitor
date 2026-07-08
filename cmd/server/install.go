@@ -1,16 +1,56 @@
 package main
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
-// renderScript injects the server URL / token / category into an install
-// template. Placeholders are used (not fmt) so the shell/PowerShell '%' and
-// '$' characters pass through untouched.
-func renderScript(tmpl, server, token, category string) string {
+// renderScript injects the server URL / token / category / serversJSON into an
+// install template. Placeholders are used (not fmt) so the shell/PowerShell '%'
+// and '$' characters pass through untouched. serversJSON is a pre-validated JSON
+// array string (e.g. [{"server":"...","token":"..."}]); when empty the template
+// falls back to the single server+token config.
+func renderScript(tmpl, server, token, category, serversJSON string) string {
 	return strings.NewReplacer(
 		"__SERVER__", server,
 		"__TOKEN__", token,
 		"__CATEGORY__", category,
+		"__SERVERS_JSON__", serversJSON,
 	).Replace(tmpl)
+}
+
+// sanitizeServersJSON parses a JSON array of {server,token} objects, sanitizes
+// each URL, and re-serializes as compact JSON. Returns "" if input is empty or
+// invalid — the install template then falls back to single-server config.
+func sanitizeServersJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var entries []struct {
+		Server string `json:"server"`
+		Token  string `json:"token"`
+	}
+	if json.Unmarshal([]byte(raw), &entries) != nil || len(entries) == 0 {
+		return ""
+	}
+	type clean struct {
+		Server string `json:"server"`
+		Token  string `json:"token,omitempty"`
+	}
+	out := make([]clean, 0, len(entries))
+	for _, e := range entries {
+		s := sanitizeServerURL(e.Server)
+		if s == "" {
+			continue
+		}
+		out = append(out, clean{Server: s, Token: sanitizeToken(e.Token)})
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
 }
 
 // installShTemplate installs the agent on Linux / macOS. It works without root:
@@ -52,7 +92,20 @@ if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
-cat > config.json <<EOF
+SERVERS_JSON='__SERVERS_JSON__'
+if [ -n "$SERVERS_JSON" ]; then
+  cat > config.json <<EOF
+{
+  "servers": $SERVERS_JSON,
+  "category": "$CATEGORY",
+  "report_interval": 10,
+  "plugin_interval": 15,
+  "plugins_dir": "$DIR/plugins",
+  "state_file": "$DIR/agent_state.json"
+}
+EOF
+else
+  cat > config.json <<EOF
 {
   "server": "$SERVER",
   "token": "$TOKEN",
@@ -63,6 +116,7 @@ cat > config.json <<EOF
   "state_file": "$DIR/agent_state.json"
 }
 EOF
+fi
 
 if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
@@ -108,15 +162,27 @@ try {
   Remove-Item "$Dir\plugins.zip" -Force
 } catch { Write-Host "[AIOps] plugins skipped" }
 
-$cfg = @{
-  server = $Server
-  token = $Token
-  category = $Category
-  report_interval = 10
-  plugin_interval = 15
-  plugins_dir = "$Dir\plugins"
-  state_file = "$Dir\agent_state.json"
-} | ConvertTo-Json
+$ServersJson = '__SERVERS_JSON__'
+if ($ServersJson -ne "") {
+  $cfg = @{
+    servers = ($ServersJson | ConvertFrom-Json)
+    category = $Category
+    report_interval = 10
+    plugin_interval = 15
+    plugins_dir = "$Dir\plugins"
+    state_file = "$Dir\agent_state.json"
+  } | ConvertTo-Json -Depth 3
+} else {
+  $cfg = @{
+    server = $Server
+    token = $Token
+    category = $Category
+    report_interval = 10
+    plugin_interval = 15
+    plugins_dir = "$Dir\plugins"
+    state_file = "$Dir\agent_state.json"
+  } | ConvertTo-Json
+}
 [System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
 
 # User-level autostart (no admin required): HKCU Run + hidden VBS launcher

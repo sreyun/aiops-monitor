@@ -12,18 +12,27 @@ import (
 	"time"
 )
 
+// ServerConfig represents one backend server target for multi-server push.
+// Each entry has its own URL and optional install token; the agent reports
+// to all configured servers concurrently (collect once, broadcast all).
+type ServerConfig struct {
+	Server string `json:"server"`
+	Token  string `json:"token,omitempty"`
+}
+
 type config struct {
-	Server         string `json:"server"`
-	ReportInterval int    `json:"report_interval"`
-	PluginInterval int    `json:"plugin_interval"`
-	DiskPath       string `json:"disk_path"`
-	PluginsDir     string `json:"plugins_dir"`
-	Python         string `json:"python"`
-	StateFile      string `json:"state_file"`
-	Category       string `json:"category"`
-	Token          string `json:"token"`
-	Relay          bool   `json:"relay"`           // gateway relay mode: proxy all requests to --server
-	Listen         string `json:"listen,omitempty"` // relay listen address (e.g. ":8080")
+	Server         string         `json:"server"`               // legacy single-server field
+	Servers        []ServerConfig `json:"servers,omitempty"`     // multi-server: when non-empty, takes precedence over Server+Token
+	ReportInterval int            `json:"report_interval"`
+	PluginInterval int            `json:"plugin_interval"`
+	DiskPath       string         `json:"disk_path"`
+	PluginsDir     string         `json:"plugins_dir"`
+	Python         string         `json:"python"`
+	StateFile      string         `json:"state_file"`
+	Category       string         `json:"category"`
+	Token          string         `json:"token"`               // legacy single-server token
+	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
+	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8080")
 }
 
 func defaultConfig() config {
@@ -101,11 +110,21 @@ func main() {
 	hostID := loadOrCreateHostID(cfg.StateFile)
 	collector := newCollector(cfg.DiskPath)
 	runner := NewPluginRunner(cfg.PluginsDir, cfg.Python, 15*time.Second)
+
+	// Resolve the effective server list: if "servers" is configured it takes
+	// precedence; otherwise fall back to the legacy single "server" + "token".
+	servers := cfg.Servers
+	if len(servers) == 0 && cfg.Server != "" {
+		servers = []ServerConfig{{Server: cfg.Server, Token: cfg.Token}}
+	}
+	if len(servers) == 0 {
+		log.Fatal("未配置任何服务端地址（--server 或 servers 字段）")
+	}
 	agent := NewAgent(
-		cfg.Server,
+		servers,
 		time.Duration(cfg.ReportInterval)*time.Second,
 		time.Duration(cfg.PluginInterval)*time.Second,
-		collector, runner, hostID, cfg.Category, cfg.Token,
+		collector, runner, hostID, cfg.Category,
 	)
 
 	go func() {

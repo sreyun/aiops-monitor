@@ -693,11 +693,15 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// feeding serverURL) can't inject commands into the script a victim pipes to sh.
 	category := sanitizeCategory(r.URL.Query().Get("category"))
 	server := sanitizeServerURL(serverURL(r))
+	// Multi-server: the dashboard may pass a JSON array of {server,token} objects
+	// so one agent pushes to multiple backends. Sanitized+re-serialized here so
+	// a crafted payload can't inject shell/PowerShell metacharacters.
+	serversJSON := sanitizeServersJSON(r.URL.Query().Get("servers_json"))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(installPs1Template, server, token, category)
+		body = renderScript(installPs1Template, server, token, category, serversJSON)
 	} else {
-		body = renderScript(installShTemplate, server, token, category)
+		body = renderScript(installShTemplate, server, token, category, serversJSON)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)
@@ -713,9 +717,9 @@ func (s *Server) handleRelayInstallScript(w http.ResponseWriter, r *http.Request
 	server := sanitizeServerURL(serverURL(r))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(relayInstallPs1Template, server, token, category)
+		body = renderScript(relayInstallPs1Template, server, token, category, "")
 	} else {
-		body = renderScript(relayInstallShTemplate, server, token, category)
+		body = renderScript(relayInstallShTemplate, server, token, category, "")
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)

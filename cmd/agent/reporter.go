@@ -18,16 +18,88 @@ import (
 // registered or fingerprint not bound). reportOnce reacts by re-registering.
 var errForbidden = errors.New("forbidden")
 
+// serverTarget is the runtime state for one backend server connection.
+// Each target has its own HTTP client (connection pool isolation), its own
+// token, and its own registration state — so one server being down or
+// rejecting reports never affects the others.
+type serverTarget struct {
+	server string
+	token  string
+	httpc  *http.Client // isolated connection pool + 8s timeout
+
+	regMu      sync.Mutex
+	registered bool
+}
+
+// register sends the agent's identity (with this target's token) to the server.
+// On success the target is marked registered; 403 or network errors return false
+// but don't crash — the agent keeps retrying on subsequent report cycles.
+func (t *serverTarget) register(base shared.Report) bool {
+	body, _ := json.Marshal(map[string]string{
+		"host_id":     base.HostID,
+		"hostname":    base.Hostname,
+		"token":       t.token,
+		"fingerprint": base.Fingerprint,
+	})
+	resp, err := t.httpc.Post(t.server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[%s] 注册失败(将继续上报): %v", t.server, err)
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("[%s] 注册被拒(状态码 %d)，可能 Token 已失效或指纹无效", t.server, resp.StatusCode)
+		return false
+	}
+	t.regMu.Lock()
+	t.registered = true
+	t.regMu.Unlock()
+	log.Printf("[%s] 已向服务端注册", t.server)
+	return true
+}
+
+// isRegistered returns whether this target was successfully registered.
+func (t *serverTarget) isRegistered() bool {
+	t.regMu.Lock()
+	defer t.regMu.Unlock()
+	return t.registered
+}
+
+// send posts one report payload to this server. The report's Token field is
+// set to this target's token before marshalling. Returns errForbidden on 403
+// so the caller can re-register and retry.
+func (t *serverTarget) send(rep shared.Report) error {
+	rep.Token = t.token
+	body, err := json.Marshal(rep)
+	if err != nil {
+		return err
+	}
+	resp, err := t.httpc.Post(t.server+"/api/v1/agent/report", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return errForbidden
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("服务端返回状态码 %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // Agent ties together the native collector (fast base metrics) and the plugin
-// runner (slower custom/AI layer), then reports both to the backend.
+// runner (slower custom/AI layer), then reports both to all configured backends.
+// Metrics are collected exactly once per cycle and broadcast to every target —
+// no duplicate collection regardless of how many servers are configured.
 type Agent struct {
-	server         string
+	targets        []*serverTarget
 	reportInterval time.Duration
 	pluginInterval time.Duration
 	collector      Collector
 	plugins        *PluginRunner
-	identity       shared.Report // template with host fields pre-filled
-	httpc          *http.Client
+	identity       shared.Report // template with host fields pre-filled (Token is per-target)
+	httpc          *http.Client  // used for non-report HTTP (e.g. plugin downloads)
 
 	mu            sync.Mutex
 	latestCustom  map[string]float64
@@ -35,10 +107,18 @@ type Agent struct {
 	latestBase    *shared.Metrics // from a core plugin, used when native unsupported
 }
 
-func NewAgent(server string, reportInterval, pluginInterval time.Duration,
-	collector Collector, plugins *PluginRunner, hostID, category, token string) *Agent {
+func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Duration,
+	collector Collector, plugins *PluginRunner, hostID, category string) *Agent {
+	targets := make([]*serverTarget, len(servers))
+	for i, s := range servers {
+		targets[i] = &serverTarget{
+			server: s.Server,
+			token:  s.Token,
+			httpc:  &http.Client{Timeout: 8 * time.Second},
+		}
+	}
 	return &Agent{
-		server:         server,
+		targets:        targets,
 		reportInterval: reportInterval,
 		pluginInterval: pluginInterval,
 		collector:      collector,
@@ -54,23 +134,36 @@ func NewAgent(server string, reportInterval, pluginInterval time.Duration,
 			IP:          primaryIP(),
 			Kernel:      kernelVersion(),
 			Category:    category,
-			Token:       token,
 			Fingerprint: machineFingerprint(),
 		},
 	}
 }
 
 func (a *Agent) Run() {
-	log.Printf("Agent 核心启动 | host=%s | os=%s | 采集器=%s | id=%s",
-		a.identity.Hostname, a.identity.OS, a.collector.Name(), short(a.identity.HostID))
-	log.Printf("服务端=%s | 基础上报=%s | 插件周期=%s", a.server, a.reportInterval, a.pluginInterval)
+	log.Printf("Agent 核心启动 | host=%s | os=%s | 采集器=%s | id=%s | 服务端数=%d",
+		a.identity.Hostname, a.identity.OS, a.collector.Name(), short(a.identity.HostID), len(a.targets))
+	for i, t := range a.targets {
+		log.Printf("  服务端[%d] %s", i+1, t.server)
+	}
+	if a.identity.Fingerprint != "" {
+		log.Printf("机器指纹=%s", short(a.identity.Fingerprint))
+	}
 	if !a.collector.Supported() {
 		log.Printf("提示: 当前平台无原生采集器，基础指标依赖 core 插件(plugins/core_metrics.py)")
 	}
 
-	a.register()
-	go a.pluginLoop()          // Python layer, lower frequency
-	go a.runTerminalChannel()  // remote terminal reverse channel (免开入站端口)
+	// Register to all targets (best-effort, non-blocking on failures)
+	for _, t := range a.targets {
+		t.register(a.identity)
+	}
+
+	go a.pluginLoop() // Python layer, lower frequency
+
+	// Start one terminal channel per target — each server independently
+	// long-polls for pending terminal sessions.
+	for _, t := range a.targets {
+		go a.runTerminalChannelFor(t)
+	}
 
 	// base-metric report loop, higher frequency
 	ticker := time.NewTicker(a.reportInterval)
@@ -106,6 +199,11 @@ func (a *Agent) runPlugins() {
 	a.mu.Unlock()
 }
 
+// reportOnce collects metrics exactly once, then broadcasts the report to all
+// configured server targets concurrently. Each target independently handles
+// 403 (re-register + retry) and network errors — one server being down never
+// blocks or affects the others. Events are re-queued only if ALL targets
+// failed (at least one success means events were delivered).
 func (a *Agent) reportOnce() {
 	var base shared.Metrics
 	if a.collector.Supported() {
@@ -128,6 +226,7 @@ func (a *Agent) reportOnce() {
 	a.pendingEvents = nil
 	a.mu.Unlock()
 
+	// Build the base report (Token is set per-target inside send()).
 	rep := a.identity
 	rep.Metrics = base
 	if len(custom) > 0 {
@@ -135,69 +234,51 @@ func (a *Agent) reportOnce() {
 	}
 	rep.Events = events
 
-	err := a.send(rep)
-	if err == errForbidden {
-		// Server rejected the report — host unregistered or fingerprint not bound
-		// (e.g. first run after a server-side reset, or the host record predates
-		// fingerprint binding). Re-register to bind the fingerprint, then retry.
-		log.Printf("上报被拒(指纹未绑定)，重新注册后重试")
-		if a.register() {
-			err = a.send(rep)
-		} else {
-			err = fmt.Errorf("注册失败，跳过本次上报重试")
+	// Broadcast to all targets concurrently — each gets its own goroutine so
+	// a slow/unreachable server can't block the others (8s timeout isolation).
+	var wg sync.WaitGroup
+	results := make([]bool, len(a.targets)) // results[i] = true if target i succeeded
+
+	for i, t := range a.targets {
+		wg.Add(1)
+		go func(idx int, tgt *serverTarget) {
+			defer wg.Done()
+			err := tgt.send(rep)
+			if err == errForbidden {
+				log.Printf("[%s] 上报被拒(指纹未绑定)，重新注册后重试", tgt.server)
+				if tgt.register(a.identity) {
+					err = tgt.send(rep)
+				} else {
+					err = fmt.Errorf("注册失败，跳过本次上报重试")
+				}
+			}
+			if err != nil {
+				log.Printf("[%s] 上报失败: %v", tgt.server, err)
+				results[idx] = false
+				return
+			}
+			results[idx] = true
+			log.Printf("[%s] 上报成功  CPU %.1f%%  内存 %.1f%%  磁盘 %.1f%%  自定义 %d  事件 %d",
+				tgt.server, base.CPUPercent, base.MemPercent, base.DiskPercent, len(custom), len(events))
+		}(i, t)
+	}
+	wg.Wait()
+
+	// Re-queue events only if ALL targets failed — at least one success means
+	// the events were delivered (duplicates across servers are acceptable;
+	// duplicates to the SAME server from re-queueing are not).
+	allFailed := true
+	for _, ok := range results {
+		if ok {
+			allFailed = false
+			break
 		}
 	}
-	if err != nil {
-		log.Printf("上报失败: %v", err)
-		if len(events) > 0 { // re-queue drained events so they aren't lost
-			a.mu.Lock()
-			a.pendingEvents = append(events, a.pendingEvents...)
-			a.mu.Unlock()
-		}
-		return
+	if allFailed && len(events) > 0 {
+		a.mu.Lock()
+		a.pendingEvents = append(events, a.pendingEvents...)
+		a.mu.Unlock()
 	}
-	log.Printf("上报成功  CPU %.1f%%  内存 %.1f%%  磁盘 %.1f%%  自定义指标 %d  事件 %d",
-		base.CPUPercent, base.MemPercent, base.DiskPercent, len(custom), len(events))
-}
-
-func (a *Agent) register() bool {
-	body, _ := json.Marshal(map[string]string{
-		"host_id":     a.identity.HostID,
-		"hostname":    a.identity.Hostname,
-		"token":       a.identity.Token,
-		"fingerprint": a.identity.Fingerprint,
-	})
-	resp, err := a.httpc.Post(a.server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("注册失败(将继续上报): %v", err)
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		log.Printf("注册被拒(状态码 %d)，可能 Token 已失效或指纹无效", resp.StatusCode)
-		return false
-	}
-	log.Printf("已向服务端注册")
-	return true
-}
-
-func (a *Agent) send(rep shared.Report) error {
-	body, err := json.Marshal(rep)
-	if err != nil {
-		return err
-	}
-	resp, err := a.httpc.Post(a.server+"/api/v1/agent/report", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden {
-		return errForbidden
-	}
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("服务端返回状态码 %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func short(s string) string {

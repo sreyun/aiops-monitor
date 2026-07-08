@@ -1,10 +1,15 @@
 {
   "server": "http://localhost:8080",
-  "report_interval": 5,
+  "report_interval": 10,
   "plugin_interval": 15,
   "disk_path": "/",
   "plugins_dir": "plugins",
   "python": "python3",
   "state_file": "agent_state.json",
-  "category": ""
+  "category": "",
+  "token": "",
+  "servers": [
+    {"server": "https://monitor-a:8080", "token": "token-a"},
+    {"server": "https://monitor-b:8080", "token": "token-b"}
+  ]
 }

@@ -54,14 +54,18 @@ var (
 	termWaitHTTP = &http.Client{Timeout: 35 * time.Second}
 )
 
-func (a *Agent) runTerminalChannel() {
+// runTerminalChannelFor runs a persistent reverse terminal channel for one
+// server target. Each target gets its own goroutine so terminal sessions from
+// different servers don't interfere. The fingerprint (machine-bound) is the
+// same for all targets; each server independently verifies it.
+func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 	if a.identity.Fingerprint == "" {
-		log.Printf("远程终端通道未启用：未采集到机器指纹")
+		log.Printf("[%s] 远程终端通道未启用：未采集到机器指纹", t.server)
 		return
 	}
-	log.Printf("远程终端通道已就绪，等待服务端呼叫…")
+	log.Printf("[%s] 远程终端通道已就绪，等待服务端呼叫…", t.server)
 	for {
-		sid, mode, command, ok := a.termWait()
+		sid, mode, command, ok := a.termWait(t.server)
 		if !ok {
 			time.Sleep(3 * time.Second)
 			continue
@@ -70,16 +74,16 @@ func (a *Agent) runTerminalChannel() {
 			continue // long-poll timeout, re-poll immediately
 		}
 		if mode == "exec" {
-			go a.runExecSession(sid, command) // one-shot playbook command (no PTY)
+			go a.runExecSession(t.server, sid, command) // one-shot playbook command (no PTY)
 		} else {
-			go a.runTerminalSession(sid) // interactive terminal
+			go a.runTerminalSession(t.server, sid) // interactive terminal
 		}
 	}
 }
 
-func (a *Agent) termWait() (sessionID, mode, command string, ok bool) {
+func (a *Agent) termWait(server string) (sessionID, mode, command string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}, "fp": {a.identity.Fingerprint}}
-	resp, err := termWaitHTTP.Get(a.server + "/api/v1/agent/terminal/wait?" + q.Encode())
+	resp, err := termWaitHTTP.Get(server + "/api/v1/agent/terminal/wait?" + q.Encode())
 	if err != nil {
 		return "", "", "", false
 	}
@@ -101,7 +105,7 @@ func (a *Agent) termWait() (sessionID, mode, command string, ok bool) {
 // especially on Linux bash where readline / prompts / login banners broke sentinel
 // detection. It captures combined stdout+stderr, reports the exit code, streams
 // the result up the tx channel, and ends — the agent returns to waiting at once.
-func (a *Agent) runExecSession(sid, command string) {
+func (a *Agent) runExecSession(server, sid, command string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("剧本命令会话 %s 异常已恢复: %v", sid, r)
@@ -143,7 +147,7 @@ func (a *Agent) runExecSession(sid, command string) {
 	// appended on its own line so success/failure can be surfaced precisely.
 	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
 	req, err := http.NewRequest("POST",
-		a.server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+url.QueryEscape(a.identity.Fingerprint),
+		server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+url.QueryEscape(a.identity.Fingerprint),
 		bytes.NewReader(body))
 	if err != nil {
 		return
@@ -154,7 +158,7 @@ func (a *Agent) runExecSession(sid, command string) {
 	}
 }
 
-func (a *Agent) runTerminalSession(sid string) {
+func (a *Agent) runTerminalSession(server, sid string) {
 	// A terminal/playbook session must never crash the whole agent: recover any
 	// panic so metrics reporting and future sessions keep working.
 	defer func() {
@@ -174,7 +178,7 @@ func (a *Agent) runTerminalSession(sid string) {
 	// tx: stream shell output up (body ends when the shell exits)
 	go func() {
 		defer closeAll()
-		req, err := http.NewRequest("POST", a.server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, sh)
+		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, sh)
 		if err != nil {
 			return
 		}
@@ -187,7 +191,7 @@ func (a *Agent) runTerminalSession(sid string) {
 	// rx: framed keystrokes / resize from the server → the shell
 	go func() {
 		defer closeAll()
-		resp, err := termHTTP.Get(a.server + "/api/v1/agent/terminal/rx?session=" + sid + "&fp=" + fp)
+		resp, err := termHTTP.Get(server + "/api/v1/agent/terminal/rx?session=" + sid + "&fp=" + fp)
 		if err != nil {
 			return
 		}

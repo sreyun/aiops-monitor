@@ -1535,17 +1535,35 @@ async function testSettings() {
 let INSTALL = { server_url: "", token: "" };
 let CUR_OS = "linux";
 let RELAY_MODE = false;
+let MULTI_SERVER_MODE = false;
 async function openInstall() {
   try {
     INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
     $("installToken").value = INSTALL.token || "";
     RELAY_MODE = false;
+    MULTI_SERVER_MODE = false;
     const cb = $("relayMode"); if (cb) cb.checked = false;
+    const ms = $("multiServerMode"); if (ms) ms.checked = false;
     renderInstallCmd();
     $("installMask").classList.add("show");
   } catch (e) { toast("读取安装信息失败: " + e, "err"); }
 }
+function parseMultiServerList() {
+  const text = ($("multiServerList") || {}).value || "";
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l);
+  const servers = [];
+  for (const line of lines) {
+    const parts = line.split(/\s+/);
+    const server = parts[0];
+    const token = parts.slice(1).join(" ") || "";
+    if (server) servers.push({ server, token });
+  }
+  return servers.length > 0 ? JSON.stringify(servers) : "";
+}
 function renderInstallCmd() {
+  // Multi-server section visibility
+  const msSection = $("multiServerSection");
+  if (msSection) msSection.style.display = (MULTI_SERVER_MODE && !RELAY_MODE) ? "" : "none";
   // Relay mode: show gateway + internal commands, hide normal install
   if (RELAY_MODE) {
     $("normalInstallSection").style.display = "none";
@@ -1559,7 +1577,15 @@ function renderInstallCmd() {
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
   let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  // Multi-server: append servers_json so the generated config.json uses a
+  // servers array instead of a single server+token.
   let cmd, label, hint;
+  if (MULTI_SERVER_MODE) {
+    const sj = parseMultiServerList();
+    if (sj) q += "&servers_json=" + encodeURIComponent(sj);
+    label = "多服务端推送安装";
+    hint = "Agent 将同时向列表中的所有服务端推送数据和建立终端通道。";
+  }
   if (CUR_OS === "windows") {
     cmd = `irm "${server}/install.ps1?${q}" | iex`;
     label = "PowerShell 一条命令安装（无需管理员）";
@@ -2544,8 +2570,24 @@ safeAddEventListener("copyUninstallBtn", "click", function() {
 // 网关中继模式
 safeAddEventListener("relayMode", "change", function() {
   RELAY_MODE = this.checked;
+  // 互斥：开启中继模式时关闭多服务端模式
+  if (RELAY_MODE && MULTI_SERVER_MODE) {
+    MULTI_SERVER_MODE = false;
+    const ms = $("multiServerMode"); if (ms) ms.checked = false;
+  }
   renderInstallCmd();
 });
+// 多服务端推送模式
+safeAddEventListener("multiServerMode", "change", function() {
+  MULTI_SERVER_MODE = this.checked;
+  // 互斥：开启多服务端时关闭中继模式
+  if (MULTI_SERVER_MODE && RELAY_MODE) {
+    RELAY_MODE = false;
+    const rb = $("relayMode"); if (rb) rb.checked = false;
+  }
+  renderInstallCmd();
+});
+safeAddEventListener("multiServerList", "input", renderInstallCmd);
 safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
 safeAddEventListener("copyRelayGatewayBtn", "click", function() {
   copyWithFeedback(this, $("relayGatewayCmd").textContent, "已复制网关安装命令");

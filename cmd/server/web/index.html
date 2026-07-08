@@ -311,6 +311,24 @@
           <span class="hint" style="font-weight:normal">仅一台机器能联网时使用</span>
         </label>
       </div>
+      <div class="field">
+        <label class="relay-toggle">
+          <input type="checkbox" id="multiServerMode">
+          <span>多服务端推送</span>
+          <span class="hint" style="font-weight:normal">单 Agent 同时向多个服务端推送</span>
+        </label>
+      </div>
+      <div id="multiServerSection" style="display:none">
+        <div class="relay-info">
+          <strong>适用场景</strong>：一台机器上的 Agent 同时向多个监控服务端推送数据与建立终端通道。<br>
+          <strong>原理</strong>：采集只执行一次，结果广播到所有服务端；各服务端独立鉴权、独立重试，互不影响。
+        </div>
+        <div class="field">
+          <label>服务端列表（每行一个，格式：URL [Token]）</label>
+          <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-a:8080 token-a&#10;https://server-b:8080 token-b"></textarea>
+          <div class="hint">每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。</div>
+        </div>
+      </div>
       <div id="normalInstallSection" class="field">
         <label id="cmdLabel">一条命令安装</label>
         <div class="cmd-row">
