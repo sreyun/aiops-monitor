@@ -157,6 +157,7 @@
 
   "agent.invalid_token": "Invalid or missing access token",
   "agent.fingerprint_failed": "Fingerprint authentication failed: not registered or fingerprint mismatch",
+  "agent.fingerprint_required": "Fingerprint required",
 
   "email.not_configured": "Email service is not configured or enabled",
   "email.invalid_header": "Invalid recipient / subject / sender name",
@@ -238,12 +239,14 @@
   "log.kind.system": "System",
   "log.kind.plugin": "Plugin",
 
-  "common.invalid_json": "invalid json",
-  "common.host_not_found": "host not found",
-  "common.invalid_id": "invalid id",
-  "common.host_required": "host required",
-  "common.session_gone": "session gone",
-  "common.host_required": "host required",
+  "common.invalid_json": "Invalid JSON",
+  "common.host_not_found": "Host not found",
+  "common.invalid_id": "Invalid ID",
+  "common.host_required": "Host required",
+  "common.session_gone": "Session gone",
+  "common.invalid_to_param": "Invalid 'to' parameter",
+  "common.invalid_from_param": "Invalid 'from' parameter",
+  "common.from_less_than_to": "'from' must be less than 'to'",
 
   "forward.disabled": "Port forwarding has been disabled by the administrator",
   "forward.invalid_port": "Invalid port number",

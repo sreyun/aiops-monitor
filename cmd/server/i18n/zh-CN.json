@@ -157,6 +157,7 @@
 
   "agent.invalid_token": "无效或缺失的接入 Token",
   "agent.fingerprint_failed": "指纹鉴权失败：未注册或指纹不匹配",
+  "agent.fingerprint_required": "指纹信息必填",
 
   "email.not_configured": "邮件服务未配置或未启用",
   "email.invalid_header": "非法的收件人 / 主题 / 发件人名称",
@@ -238,12 +239,14 @@
   "log.kind.system": "系统",
   "log.kind.plugin": "插件",
 
-  "common.invalid_json": "invalid json",
-  "common.host_not_found": "host not found",
-  "common.invalid_id": "invalid id",
-  "common.host_required": "host required",
-  "common.session_gone": "session gone",
-  "common.host_required": "host required",
+  "common.invalid_json": "JSON 格式不合法",
+  "common.host_not_found": "主机不存在",
+  "common.invalid_id": "ID 不合法",
+  "common.host_required": "主机必填",
+  "common.session_gone": "会话已过期",
+  "common.invalid_to_param": "无效的 'to' 参数",
+  "common.invalid_from_param": "无效的 'from' 参数",
+  "common.from_less_than_to": "'from' 必须小于 'to'",
 
   "forward.disabled": "端口转发已被管理员禁用",
   "forward.invalid_port": "无效的端口号",

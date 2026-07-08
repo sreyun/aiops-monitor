@@ -30,7 +30,7 @@ func newPushHub() *pushHub {
 func (s *Server) handlePushWS(w http.ResponseWriter, r *http.Request) {
 	// Require authentication (same session cookie as the REST API)
 	if _, ok := s.currentUser(r); !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(w, Tr(r, "auth.unauthorized"), http.StatusUnauthorized)
 		return
 	}
 	ws, err := wsAccept(w, r)

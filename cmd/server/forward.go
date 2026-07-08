@@ -907,7 +907,7 @@ func schemeOf(r *http.Request) string {
 // port when a user opens a forward connection for this host, or {} on timeout.
 func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) {
 	if !s.forwardFingerprintOK(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	host := r.URL.Query().Get("host")
@@ -938,7 +938,7 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	flusher, _ := w.(http.Flusher)
@@ -975,7 +975,7 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	sess.markAgentUp()

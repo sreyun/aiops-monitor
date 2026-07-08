@@ -45,7 +45,7 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	var c CustomCheck
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	c.Name = strings.TrimSpace(c.Name)

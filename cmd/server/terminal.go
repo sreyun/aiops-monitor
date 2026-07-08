@@ -363,12 +363,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 // operator opens a terminal for this host, or {} on timeout (agent re-polls).
 func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	if !s.termFingerprintOK(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	host := r.URL.Query().Get("host")
 	if host == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.host_required")})
 		return
 	}
 	ch := s.term.registerWaiter(host)
@@ -391,11 +391,11 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
 	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	flusher, _ := w.(http.Flusher)
@@ -431,11 +431,11 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
 	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	sess.markAgentUp()

@@ -38,7 +38,7 @@ func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	samples, ok := s.store.GetSamples(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
 	}
 	writeJSON(w, http.StatusOK, samples)
@@ -60,7 +60,7 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 		var err error
 		to, err = strconv.ParseInt(toStr, 10, 64)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'to' parameter"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_to_param")})
 			return
 		}
 	} else {
@@ -71,7 +71,7 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 		var err error
 		from, err = strconv.ParseInt(fromStr, 10, 64)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid 'from' parameter"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_from_param")})
 			return
 		}
 	} else {
@@ -79,13 +79,13 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if from >= to {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "'from' must be less than 'to'"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.from_less_than_to")})
 		return
 	}
 
 	samples, ok := s.store.GetHistory(id, from, to)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
 	}
 
@@ -99,7 +99,7 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 		Category string `json:"category"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	cat := strings.TrimSpace(req.Category)
@@ -117,7 +117,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	ok := s.store.DeleteHost(id)
 	_ = s.cfg.SetCategory(id, "") // drop any override for the removed host
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})

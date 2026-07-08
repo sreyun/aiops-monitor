@@ -21,7 +21,7 @@ func (s *Server) handleListPlaybooks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpsertPlaybook(w http.ResponseWriter, r *http.Request) {
 	var p Playbook
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	saved, err := s.playbooks.Upsert(p)
@@ -218,7 +218,7 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
 	exec, ok := s.playbooks.GetExecution(id)

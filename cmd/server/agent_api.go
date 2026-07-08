@@ -16,7 +16,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Fingerprint string `json:"fingerprint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	// Admission: a valid install token is required to register a new agent.
@@ -27,7 +27,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Fingerprint == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "fingerprint required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "agent.fingerprint_required")})
 		return
 	}
 	s.store.RegisterHost(req.HostID, req.Hostname, req.Fingerprint)
@@ -46,11 +46,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	var rep shared.Report
 	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if rep.HostID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.host_required")})
 		return
 	}
 	h, ok := s.store.UpsertAuthenticated(rep, rep.Fingerprint)

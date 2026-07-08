@@ -25,7 +25,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	var in ServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	mergeSecrets(&in, s.cfg.Get())
@@ -44,7 +44,7 @@ func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	var in ServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	mergeSecrets(&in, s.cfg.Get())

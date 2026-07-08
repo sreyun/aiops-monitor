@@ -354,7 +354,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		name := s.auth.userForRequest(r)
 		if name == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 			return
 		}
 		// Restricted sessions (global MFA enforcement) can only touch MFA endpoints.
@@ -387,7 +387,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	acc, ok := s.auth.CheckPassword(req.Username, req.Password)
@@ -450,7 +450,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -462,7 +462,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	var req struct {
@@ -471,7 +471,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		Email       string `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	name := acc.Username
@@ -498,7 +498,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	var req struct {
@@ -506,7 +506,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		New string `json:"new"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Old, acc.Salt)), []byte(acc.Hash)) != 1 {
@@ -538,7 +538,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	secret := genTOTPSecret()
@@ -564,7 +564,7 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	var req struct {
@@ -572,7 +572,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		Code   string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if !totpVerify(req.Secret, req.Code) {
@@ -601,7 +601,7 @@ func (s *Server) handleMFAGlobalSet(w http.ResponseWriter, r *http.Request) {
 		Required bool `json:"required"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if err := s.cfg.SetMFARequired(req.Required); err != nil {
@@ -621,14 +621,14 @@ func (s *Server) handleMFAGlobalSet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.currentUser(r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
 	var req struct {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Password, acc.Salt)), []byte(acc.Hash)) != 1 {

@@ -152,10 +152,10 @@ func fmtBytes(b uint64) string {
 	const gb, mb = 1 << 30, 1 << 20
 	switch {
 	case b >= gb:
-		return fmt.Sprintf("%.1f GB", float64(b)/gb)
+		return fmt.Sprintf("%.1fG", float64(b)/gb)
 	case b >= mb:
-		return fmt.Sprintf("%.0f MB", float64(b)/mb)
+		return fmt.Sprintf("%.0fM", float64(b)/mb)
 	default:
-		return fmt.Sprintf("%d KB", b/1024)
+		return fmt.Sprintf("%dK", b/1024)
 	}
 }
