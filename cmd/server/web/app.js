@@ -2873,7 +2873,6 @@ let LAST_ALERTS = [];
 /* ===================== 自动化运维：剧本编排 + 批量执行 ===================== */
 let PB_HOSTS = []; // cached full host list for target selection
 let PB_CATS = []; // cached unique categories
-let PB_SYSTEMS = []; // cached unique platform types
 
 async function loadPlaybooks() {
   try {
@@ -2882,9 +2881,11 @@ async function loadPlaybooks() {
       fetch(`${API}/hosts`).then(r => r.json())
     ]);
     PB_HOSTS = hosts || [];
-    // Extract unique categories and platforms for target dropdown
+    // Extract unique categories for target dropdown
     PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || "未分类"))].sort();
-    PB_SYSTEMS = [...new Set(PB_HOSTS.map(h => (h.platform || "").toLowerCase()).filter(p => p))].sort();
+    // System types are hardcoded (linux/macos/windows) — do NOT extract from
+    // h.platform (which is a version string like "Ubuntu 22.04"), use h.os
+    // (runtime.GOOS: "linux"/"windows"/"darwin") for matching.
     renderPlaybooks(pbs || []);
   } catch (e) { console.warn("load playbooks:", e); }
 }
@@ -2964,16 +2965,13 @@ function buildTargetOptions(selectedTarget) {
     });
     opts.push('</optgroup>');
   }
-  // By system type
-  if (PB_SYSTEMS.length > 0) {
-    opts.push('<optgroup label="按系统类型">');
-    PB_SYSTEMS.forEach(sys => {
-      const val = `system:${sys}`;
-      const label = sys === "linux" ? "Linux" : sys === "windows" ? "Windows" : sys === "darwin" || sys === "macos" ? "macOS" : esc(sys);
-      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${label}</option>`);
-    });
-    opts.push('</optgroup>');
-  }
+  // By system type — hardcoded to Linux/macOS/Windows (not dynamic from host
+  // data, because h.platform is a version string, not an OS type).
+  opts.push('<optgroup label="按系统类型">');
+  [{val:"linux",label:"Linux"},{val:"macos",label:"macOS"},{val:"windows",label:"Windows"}].forEach(s => {
+    opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
+  });
+  opts.push('</optgroup>');
   // Per host
   if (PB_HOSTS.length > 0) {
     opts.push('<optgroup label="指定主机">');
@@ -3001,7 +2999,12 @@ function pbTargetPreview(sel) {
     count = PB_HOSTS.filter(h => (h.category || "未分类") === cat).length;
   } else if (target.startsWith("system:")) {
     const sys = target.slice("system:".length);
-    count = PB_HOSTS.filter(h => (h.platform || "").toLowerCase() === sys).length;
+    // Match by h.os (runtime.GOOS: "linux"/"windows"/"darwin"), not h.platform
+    // (which is a version string). macOS hosts have h.os="darwin".
+    count = PB_HOSTS.filter(h => {
+      const os = (h.os || "").toLowerCase();
+      return os === sys || (sys === "macos" && os === "darwin");
+    }).length;
   } else if (target.startsWith("host:")) {
     count = 1;
   }
