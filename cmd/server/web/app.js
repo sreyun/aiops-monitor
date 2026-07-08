@@ -331,50 +331,67 @@ const ALERT_TYPES = [
  * 避免每 3 秒轮询全量 innerHTML 重建 DOM 导致的闪烁和布局跳动。
  * 策略：
  *   1. 生成新数据的签名摘要，若与上次完全一致则跳过更新（最常见路径）
- *   2. 签名不同时，按 key 逐行比对：保留匹配行、插入新行、移除多余行
+ *   2. 签名不同时，按 key 逐行比对：保留匹配行、插入新行、标记多余行为 leaving
  *   3. 空列表 / 首次渲染走 innerHTML 快速路径
+ *   4. 延迟移除机制：即将消失的行不立即删除，而是标记 .row-leaving 并设置
+ *      5 秒宽限期。若同一 key 在下一次轮询中重新出现，则取消移除并复用节点。
+ *      这解决了服务端 Evaluate() 无状态评估导致指标在阈值边界波动时
+ *      同一告警时有时无、DOM 节点反复增删的闪烁问题。
  * 注意：匹配行不做 innerHTML 替换——时间相关的动态文本
  * （如“已持续 3 分钟”）由 refreshAlertRowTimes() 单独更新 textContent
  */
+const DIFF_GRACE_MS = 5000; // 延迟移除宽限期：5 秒（覆盖 2 个 3 秒轮询周期）
 function diffUpdateList(container, items, rowFn, keyFn, emptyHTML) {
   if (!container) return;
-  // 快速路径：空列表
+  const now = Date.now();
+  // 1. 清理已过期的 leaving 行
+  container.querySelectorAll(".row-leaving").forEach(el => {
+    if (parseInt(el.dataset.leavingAt || "0") <= now) el.remove();
+  });
+  // 2. 快速路径：空列表
   if (!items.length) {
-    if (container.dataset.sig !== "empty") {
-      container.innerHTML = emptyHTML;
-      container.dataset.sig = "empty";
+    // 若仍有 leaving 行在宽限期内，暂不显示“空”消息
+    const leavingCount = container.querySelectorAll(".row-leaving").length;
+    if (!leavingCount) {
+      if (container.dataset.sig !== "empty") {
+        container.innerHTML = emptyHTML;
+        container.dataset.sig = "empty";
+      }
     }
     return;
   }
-  // 签名检查：数据未变则完全跳过 DOM 操作
+  // 3. 签名检查：数据未变则完全跳过 DOM 操作
   const sig = items.map(keyFn).join("\n");
   if (container.dataset.sig === sig) return;
   container.dataset.sig = sig;
-  // 首次渲染或容器为空：直接 innerHTML
+  // 4. 首次渲染或容器为空（无 data-key 行且无 leaving 行）
   const existing = container.querySelectorAll("[data-key]");
   if (!existing.length) {
     container.innerHTML = items.map(rowFn).join("");
     return;
   }
-  // 差量更新：按 key 匹配复用 DOM 节点
+  // 5. 差量更新：按 key 匹配复用 DOM 节点
   const oldMap = {};
   existing.forEach(el => { oldMap[el.dataset.key] = el; });
   const newKeys = items.map(keyFn);
   const newKeySet = {};
   newKeys.forEach(k => { newKeySet[k] = true; });
-  // 移除不再存在的旧行
+  // 5a. 标记不再存在的行为 leaving（不立即删除）
   existing.forEach(el => {
-    if (!newKeySet[el.dataset.key]) el.remove();
+    if (!newKeySet[el.dataset.key] && !el.classList.contains("row-leaving")) {
+      el.classList.add("row-leaving");
+      el.dataset.leavingAt = String(now + DIFF_GRACE_MS);
+    }
   });
-  // 插入/更新新行
+  // 5b. 插入/更新新行
   let refNode = null;
   for (let i = items.length - 1; i >= 0; i--) {
     const key = newKeys[i];
     let el = oldMap[key];
     if (el) {
-      // 匹配行：不做 innerHTML 替换，避免时间文本变化导致的闪烁
-      // 仅移除入场动画 class（避免重放）
-      el.classList.remove("row-enter");
+      // 匹配行：取消任何待移除状态，不做 innerHTML 替换
+      el.classList.remove("row-leaving", "row-enter");
+      delete el.dataset.leavingAt;
     } else {
       // 新行：创建并插入到正确位置
       el = document.createElement("div");

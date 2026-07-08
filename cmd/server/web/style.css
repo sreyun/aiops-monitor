@@ -266,6 +266,8 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 /* 新行入场动画（差量更新插入时触发） */
 .row-item.row-enter{animation:rowEnter .35s ease-out}
 @keyframes rowEnter{from{opacity:0; transform:translateY(-6px)}to{opacity:1; transform:translateY(0)}}
+/* 行延迟移除淡出动画（宽限期内数据恢复则取消） */
+.row-item.row-leaving{opacity:0; pointer-events:none; transition:opacity .3s ease-out}
 .row-item:hover{ border-color:var(--line2); background:var(--panel2) }
 .row-item.critical{ border-left-color:var(--crit) }
 .row-item.warning{ border-left-color:var(--warn) }
