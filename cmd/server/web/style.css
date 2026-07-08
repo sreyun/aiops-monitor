@@ -717,7 +717,12 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* 放大态：终端近全屏，头部/提示固定，屏幕区弹性填充 */
 #termMask.maximized{padding:14px; align-items:center}
 #termMask.maximized .term-modal{max-width:none; width:100%; height:calc(100vh - 28px); display:flex; flex-direction:column}
-#termMask.maximized .term-modal .modal-body{flex:1; display:flex; flex-direction:column; min-height:0}
+/* 覆盖基础 .modal-body 的 max-height:74vh 和 overflow:auto，
+   否则 flex:1 被 max-height 截断，高度无法填满整个窗口 */
+#termMask.maximized .term-modal .modal-body{flex:1; display:flex; flex-direction:column; min-height:0; max-height:none; overflow:hidden}
+/* .term-screens 必须是 flex 容器才能将高度传递给 .term-screen。
+   基础规则仅 position:relative，子元素 flex:1 无效，回退为内容高度。 */
+#termMask.maximized .term-screens{flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden}
 #termMask.maximized .term-modal .term-screen{height:auto; flex:1; min-height:0; border-radius:0}
 
 /* ---------- 终端多标签 ---------- */
