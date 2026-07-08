@@ -680,18 +680,23 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// Capture raw data for better error diagnostics
 	pr, pw := io.Pipe()
 	var rawResponseBuf bytes.Buffer
-	const maxDiagBytes = 1024 // capture first 1KB for diagnostics
+	var rawResponseMu sync.Mutex
+	const maxDiagBytes = 2048 // capture first 2KB for diagnostics
 	go func() {
 		defer pw.Close()
 		for {
 			select {
 			case b := <-sess.toUser:
 				sess.touch()
-				pw.Write(b)
-				// Capture for diagnostics (best effort, don't block)
+				if _, err := pw.Write(b); err != nil {
+					return
+				}
+				// Capture for diagnostics (best effort, thread-safe)
+				rawResponseMu.Lock()
 				if rawResponseBuf.Len() < maxDiagBytes {
 					rawResponseBuf.Write(b)
 				}
+				rawResponseMu.Unlock()
 			case <-sess.done:
 				return
 			}
@@ -721,9 +726,11 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		s.forward.stats.incError()
+		rawResponseMu.Lock()
 		rawPreview := rawResponseBuf.String()
-		if len(rawPreview) > 200 {
-			rawPreview = rawPreview[:200] + "..."
+		rawResponseMu.Unlock()
+		if len(rawPreview) > 300 {
+			rawPreview = rawPreview[:300] + "..."
 		}
 		// Check if response is empty (Agent connection failed?)
 		if rawResponseBuf.Len() == 0 {
