@@ -239,9 +239,11 @@ function updateHostCard(h) {
   const existing = HOST_DOM_CACHE[h.id];
   if (!existing) return false; // 新主机，需全量重建
   const el = existing.element;
-  // 更新状态灯
+  // 更新在线状态 class（卡片 + 状态灯）
+  el.classList.toggle("online", !!h.online);
+  el.classList.toggle("offline", !h.online);
   const dot = el.querySelector(".dot");
-  if (dot) dot.className = "dot " + (h.online ? "" : "off");
+  if (dot) dot.className = "dot " + (h.online ? "on" : "off");
   // 更新指标数值
   const m = h.latest || {};
   if (m.cpu_percent !== undefined) {
@@ -557,7 +559,7 @@ function hostCard(h) {
     : staleSec > 15
       ? `<span class="g stale-tag" title="数据可能卡顿，最后上报 ${fmtDateTime(h.last_seen)}">⚠ 数据 ${ago(h.last_seen)}</span>`
       : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
-  return `<div class="host ${h.online ? "" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+  return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
         <div style="min-width:0; flex:1; overflow:hidden">
