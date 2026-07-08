@@ -205,7 +205,7 @@ Write-Host "[AIOps] installed and started (user-level autostart). Check the dash
 const relayInstallShTemplate = `#!/bin/sh
 set -e
 SERVER="__SERVER__"
-LISTEN="${RELAY_LISTEN:-:8080}"
+LISTEN="${RELAY_LISTEN:-:8529}"
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 
 OS=$(uname -s)
@@ -274,7 +274,7 @@ echo "  curl -fsSL http://<this-host-ip>:${RELAY_PORT}/install.sh | sh"
 // relayInstallPs1Template installs the agent in GATEWAY RELAY mode on Windows.
 const relayInstallPs1Template = `$ErrorActionPreference = "Stop"
 $Server = "__SERVER__"
-$Listen = if ($env:RELAY_LISTEN) { $env:RELAY_LISTEN } else { ":8080" }
+$Listen = if ($env:RELAY_LISTEN) { $env:RELAY_LISTEN } else { ":8529" }
 $Dir    = Join-Path $env:LOCALAPPDATA "aiops-agent"
 
 Write-Host "[AIOps] installing relay to $Dir (upstream $Server)"

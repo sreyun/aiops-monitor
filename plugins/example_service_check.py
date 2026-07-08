@@ -13,7 +13,7 @@ import time
 from plugin_sdk import Plugin
 
 # 待检查的服务：(host, port, 名称)。
-# 注意：不要探测本机监控 API（127.0.0.1:8080），该端点已由服务端内置自监控负责。
+# 注意：不要探测本机监控 API（127.0.0.1:8529），该端点已由服务端内置自监控负责。
 # 此插件应用于监控外部依赖服务（如数据库、缓存、第三方 API）。
 TARGETS = [
     # ("db.example.com", 3306, "mysql"),

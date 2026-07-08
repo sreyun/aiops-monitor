@@ -211,7 +211,7 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 			e.Timestamp = now
 		}
 		// Noise suppression: an agent running a misconfigured probe (e.g. the old
-		// example_service_check hitting 127.0.0.1:8080) would otherwise flood the
+		// example_service_check hitting 127.0.0.1:8529) would otherwise flood the
 		// log every cycle. Record an identical event at most once per cooldown.
 		key := h.ID + "|" + e.Source + "|" + e.Level + "|" + e.Message
 		if last, ok := s.lastEvent[key]; ok && now-last < eventCooldownSec {

@@ -159,7 +159,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
-	addr := flag.String("addr", ":8080", "监听地址，如 :8080 或 0.0.0.0:8080")
+	addr := flag.String("addr", ":8529", "监听地址，如 :8529 或 0.0.0.0:8529")
 	cfgPath := flag.String("config", "server_config.json", "服务端配置文件路径（告警/阈值/分类）")
 	distDir := flag.String("dist", "", "Agent 下载目录（含各平台二进制与 plugins.zip）；留空自动探测 ./dist 或程序所在目录")
 	flag.Parse()

@@ -1612,7 +1612,7 @@ function renderRelayCmd() {
   const cat = $("installCategory").value.trim();
   let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
   const gwIP = $("relayGatewayIP").value.trim() || "<网关IP>";
-  const relay = `http://${gwIP}:8080`;
+  const relay = `http://${gwIP}:8529`;
   let gatewayCmd, internalCmd;
   if (CUR_OS === "windows") {
     gatewayCmd = `irm "${server}/install-relay.ps1?${q}" | iex`;

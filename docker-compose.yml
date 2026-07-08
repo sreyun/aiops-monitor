@@ -6,7 +6,7 @@ services:
       target: server
     container_name: aiops-server
     ports:
-      - "8080:8080"
+      - "8529:8529"
     volumes:
       - server-data:/app/data
     environment:

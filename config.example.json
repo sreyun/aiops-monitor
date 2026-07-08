@@ -1,5 +1,5 @@
 {
-  "server": "http://localhost:8080",
+  "server": "http://localhost:8529",
   "report_interval": 10,
   "plugin_interval": 15,
   "disk_path": "/",
@@ -9,7 +9,7 @@
   "category": "",
   "token": "",
   "servers": [
-    {"server": "https://monitor-a:8080", "token": "token-a"},
-    {"server": "https://monitor-b:8080", "token": "token-b"}
+    {"server": "https://monitor-a:8529", "token": "token-a"},
+    {"server": "https://monitor-b:8529", "token": "token-b"}
   ]
 }

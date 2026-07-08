@@ -32,7 +32,7 @@ type config struct {
 	Category       string         `json:"category"`
 	Token          string         `json:"token"`               // legacy single-server token
 	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
-	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8080")
+	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
 }
 
 func defaultConfig() config {
@@ -41,7 +41,7 @@ func defaultConfig() config {
 		py = "python"
 	}
 	return config{
-		Server:         "http://localhost:8080",
+		Server:         "http://localhost:8529",
 		ReportInterval: 10,
 		PluginInterval: 15,
 		DiskPath:       defaultDiskPath(),
@@ -50,7 +50,7 @@ func defaultConfig() config {
 		StateFile:      "agent_state.json",
 		Category:       "",
 		Token:          "",
-		Listen:         ":8080",
+		Listen:         ":8529",
 	}
 }
 
@@ -81,7 +81,7 @@ func main() {
 
 	// flags override file/defaults
 	var cfgFlag string
-	flag.StringVar(&cfg.Server, "server", cfg.Server, "服务端地址，如 http://192.168.1.10:8080")
+	flag.StringVar(&cfg.Server, "server", cfg.Server, "服务端地址，如 http://192.168.1.10:8529")
 	flag.IntVar(&cfg.ReportInterval, "interval", cfg.ReportInterval, "基础指标上报间隔(秒)")
 	flag.IntVar(&cfg.PluginInterval, "plugin-interval", cfg.PluginInterval, "插件执行周期(秒)")
 	flag.StringVar(&cfg.DiskPath, "disk-path", cfg.DiskPath, "监控的磁盘路径")
@@ -90,7 +90,7 @@ func main() {
 	flag.StringVar(&cfg.Category, "category", cfg.Category, "主机分类标签，如 生产/测试/DB/办公终端")
 	flag.StringVar(&cfg.Token, "token", cfg.Token, "安装 Token（由服务端安装命令注入，可选）")
 	flag.BoolVar(&cfg.Relay, "relay", cfg.Relay, "网关中继模式：监听本地端口，转发所有请求到 --server 指定的云监控中心")
-	flag.StringVar(&cfg.Listen, "listen", cfg.Listen, "Relay 监听地址，如 :8080")
+	flag.StringVar(&cfg.Listen, "listen", cfg.Listen, "Relay 监听地址，如 :8529")
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
 	flag.Parse()
 	_ = cfgFlag
@@ -101,7 +101,7 @@ func main() {
 	if cfg.Relay {
 		listen := cfg.Listen
 		if listen == "" {
-			listen = ":8080"
+			listen = ":8529"
 		}
 		runRelay(listen, strings.TrimRight(cfg.Server, "/"))
 		return

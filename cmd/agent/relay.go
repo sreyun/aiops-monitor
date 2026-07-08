@@ -51,8 +51,8 @@ func runRelay(listenAddr, upstream string) {
 	log.Printf("║  AIOps Agent — 网关中继模式 (Relay)                    ║")
 	log.Printf("║  监听: %-16s  上游: %-26s║", listenAddr, upstream)
 	log.Printf("╚══════════════════════════════════════════════════════╝")
-	// Extract port for the install command hint: listenAddr may be ":8080",
-	// "0.0.0.0:8080", or "127.0.0.1:8080" — the hint should always show :<port>.
+	// Extract port for the install command hint: listenAddr may be ":8529",
+	// "0.0.0.0:8529", or "127.0.0.1:8529" — the hint should always show :<port>.
 	relayPort := listenAddr
 	if _, port, err := net.SplitHostPort(listenAddr); err == nil && port != "" {
 		relayPort = ":" + port
@@ -65,7 +65,7 @@ func runRelay(listenAddr, upstream string) {
 	// on the network. For internet-exposed gateways, bind to the internal IP.
 	if listenAddr == "" || strings.HasPrefix(listenAddr, ":") ||
 		strings.HasPrefix(listenAddr, "0.0.0.0:") {
-		log.Printf("⚠ 监听地址绑定到所有网卡——如不需外部访问，建议用 --listen 192.168.x.x:8080 绑定到内网IP")
+		log.Printf("⚠ 监听地址绑定到所有网卡——如不需外部访问，建议用 --listen 192.168.x.x:8529 绑定到内网IP")
 	}
 
 	srv := &http.Server{

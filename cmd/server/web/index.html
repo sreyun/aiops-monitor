@@ -165,7 +165,7 @@
         <div class="pager" id="pager"></div>
         <div class="empty" id="empty">
           暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
-          <code>aiops-agent --server http://&lt;本机IP&gt;:8080 --category 生产</code><br><br>
+          <code>aiops-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
           <button class="btn primary icon" onclick="openInstall()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
             <span>安装 Agent</span>
@@ -325,7 +325,7 @@
         </div>
         <div class="field">
           <label>服务端列表（每行一个，格式：URL [Token]）</label>
-          <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-a:8080 token-a&#10;https://server-b:8080 token-b"></textarea>
+          <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-a:8529 token-a&#10;https://server-b:8529 token-b"></textarea>
           <div class="hint">每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。</div>
         </div>
       </div>
@@ -350,7 +350,7 @@
             <pre id="relayGatewayCmd" class="cmd"></pre>
             <button class="btn" id="copyRelayGatewayBtn">复制</button>
           </div>
-          <div class="hint">安装后自动启动中继服务，监听 8080 端口，转发所有请求到云监控中心。</div>
+          <div class="hint">安装后自动启动中继服务，监听 8529 端口，转发所有请求到云监控中心。</div>
         </div>
         <div class="field">
           <label>网关内网 IP（供内网机器连接）</label>

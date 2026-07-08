@@ -142,7 +142,7 @@ git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
 # Start the server
 docker compose up -d aiops-server
 
-# Open http://localhost:8080 in your browser
+# Open http://localhost:8529 in your browser
 ```
 
 > **Default login credentials**: Username `admin` / Password `admin`. After first login, immediately change your username and password in「Profile」, and consider enabling two-factor auth (MFA).
@@ -157,7 +157,7 @@ Server data persists via volume (`/app/data`), config file at `./server_config.j
 
 ```bash
 # Use pre-compiled binary
-./bin/aiops-server                     # Default listen :8080
+./bin/aiops-server                     # Default listen :8529
 
 # Or build from source (requires Go 1.22+)
 go build -o bin/aiops-server ./cmd/server
@@ -167,7 +167,7 @@ go build -o bin/aiops-server ./cmd/server
 ./bin/aiops-server -addr 0.0.0.0:9000
 ```
 
-Open `http://localhost:8080` in your browser to see the monitoring dashboard.
+Open `http://localhost:8529` in your browser to see the monitoring dashboard.
 
 ### 2. Start the Agent
 
@@ -177,7 +177,7 @@ Open `http://localhost:8080` in your browser to see the monitoring dashboard.
 # Plugins use psutil (optional, base metrics don't need it)
 pip install -r plugins/requirements.txt
 
-./bin/aiops-agent --server http://<server-IP>:8080 --category Production
+./bin/aiops-agent --server http://<server-IP>:8529 --category Production
 ```
 
 Refresh the dashboard after a few seconds to see the host card and metrics.
@@ -188,20 +188,20 @@ Click **「Install Agent」** in the top-right of the dashboard → select targe
 
 ```bash
 # Linux (root/sudo)
-curl -fsSL "http://<server>:8080/install.sh?token=<TOKEN>" | sudo sh
+curl -fsSL "http://<server>:8529/install.sh?token=<TOKEN>" | sudo sh
 
 # Windows (admin PowerShell)
-irm "http://<server>:8080/install.ps1?token=<TOKEN>" | iex
+irm "http://<server>:8529/install.ps1?token=<TOKEN>" | iex
 
 # macOS
-curl -fsSL "http://<server>:8080/install.sh?token=<TOKEN>" | sh
+curl -fsSL "http://<server>:8529/install.sh?token=<TOKEN>" | sh
 ```
 
 ### Common Parameters
 
 | Parameter | Description | Default |
 |---|---|---|
-| `--server` | Server address | `http://localhost:8080` |
+| `--server` | Server address | `http://localhost:8529` |
 | `--category` | Host category (dashboard groups by this) | empty |
 | `--interval` | Base metric report interval (seconds) | `10` |
 | `--plugin-interval` | Plugin execution cycle (seconds) | `15` |
@@ -446,7 +446,7 @@ Server config file `server_config.json` (auto-generated in the server's director
 - Confirm server doesn't have `terminal_disabled: true`
 
 ### Dashboard shows connection failed
-- Check server is running: `curl http://localhost:8080/healthz`
+- Check server is running: `curl http://localhost:8529/healthz`
 - Check browser console for CORS or auth errors
 - Try clearing browser cache or hard refresh (Ctrl+Shift+R)
 
@@ -475,7 +475,7 @@ systemctl daemon-reload && systemctl enable --now aiops-agent
 
 **Windows (NSSM)**:
 ```powershell
-nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<IP>:8080 --category Production"
+nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<IP>:8529 --category Production"
 nssm set AIOps-Agent AppDirectory C:\aiops-agent
 nssm start AIOps-Agent
 ```
@@ -503,7 +503,7 @@ This is not unique to this project — all WebSocket apps (Grafana / Jupyter / c
 map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 
 location / {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -577,7 +577,7 @@ Agent uses **active reverse connection**: the server address is固化 to `--serv
 
 ```nginx
 location /api/v1/hosts/ {            # Browser WebSocket
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -585,7 +585,7 @@ location /api/v1/hosts/ {            # Browser WebSocket
     proxy_read_timeout 3600s;
 }
 location /api/v1/agent/terminal/ {   # Agent reverse stream (must disable buffering)
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_request_buffering off;
@@ -593,7 +593,7 @@ location /api/v1/agent/terminal/ {   # Agent reverse stream (must disable buffer
     proxy_send_timeout 3600s;
 }
 location / {                         # Other API / dashboard
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;

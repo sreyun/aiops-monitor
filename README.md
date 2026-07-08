@@ -155,7 +155,7 @@ git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
 # 一键启动服务端
 docker compose up -d aiops-server
 
-# 浏览器打开 http://localhost:8080
+# 浏览器打开 http://localhost:8529
 ```
 
 > **默认登录凭据**：用户名 `admin` / 密码 `admin`。首次登录后请立即在「个人信息」中修改用户名与密码，并建议启用两步验证（MFA）。
@@ -170,7 +170,7 @@ docker compose up -d aiops-server
 
 ```bash
 # 使用预编译二进制
-./bin/aiops-server                     # 默认监听 :8080
+./bin/aiops-server                     # 默认监听 :8529
 
 # 或自行编译（需 Go 1.22+）
 go build -o bin/aiops-server ./cmd/server
@@ -180,7 +180,7 @@ go build -o bin/aiops-server ./cmd/server
 ./bin/aiops-server -addr 0.0.0.0:9000
 ```
 
-浏览器打开 `http://localhost:8080` 即可看到监控面板。
+浏览器打开 `http://localhost:8529` 即可看到监控面板。
 
 > **首次登录**：默认账号 **`admin / admin`**。登录后请立即在左下角「个人信息」**修改用户名与密码**，并按需启用**两步验证（TOTP）**。出于防探测考虑，登录框不会预填该默认账号。
 
@@ -192,7 +192,7 @@ go build -o bin/aiops-server ./cmd/server
 # 插件用到 psutil（可选，基础指标不需要）
 pip install -r plugins/requirements.txt
 
-./bin/aiops-agent --server http://<服务端IP>:8080 --category 生产
+./bin/aiops-agent --server http://<服务端IP>:8529 --category 生产
 ```
 
 几秒后刷新面板，即可看到主机卡片及各项指标。
@@ -203,13 +203,13 @@ pip install -r plugins/requirements.txt
 
 ```bash
 # Linux（root/sudo）
-curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sudo sh
+curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sudo sh
 
 # Windows（管理员 PowerShell）
-irm "http://<服务端>:8080/install.ps1?token=<TOKEN>" | iex
+irm "http://<服务端>:8529/install.ps1?token=<TOKEN>" | iex
 
 # macOS
-curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sh
+curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sh
 ```
 
 ### 多服务端推送（单 Agent → 多服务端）
@@ -225,8 +225,8 @@ curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sh
 ```json
 {
   "servers": [
-    {"server": "https://monitor-a:8080", "token": "token-a"},
-    {"server": "https://monitor-b:8080", "token": "token-b"}
+    {"server": "https://monitor-a:8529", "token": "token-a"},
+    {"server": "https://monitor-b:8529", "token": "token-b"}
   ],
   "report_interval": 10,
   "plugin_interval": 15,
@@ -262,7 +262,7 @@ curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sh
 curl -fsSL "https://cloud-server/install-relay.sh?token=TOKEN" | sudo sh
 
 # ② 内网机器（经网关间接上报）
-curl -fsSL "http://<网关IP>:8080/install.sh?token=TOKEN" | sudo sh
+curl -fsSL "http://<网关IP>:8529/install.sh?token=TOKEN" | sudo sh
 ```
 
 > Relay 模式与多服务端推送互斥：Relay 是「一台机器代理所有请求到单一上游」，多服务端是「一台机器主动推送到多个上游」。
@@ -271,7 +271,7 @@ curl -fsSL "http://<网关IP>:8080/install.sh?token=TOKEN" | sudo sh
 
 | 参数 | 说明 | 默认值 |
 |---|---|---|
-| `--server` | 服务端地址 | `http://localhost:8080` |
+| `--server` | 服务端地址 | `http://localhost:8529` |
 | `servers` (配置文件) | 多服务端列表，每项含 `server` + `token` | 空（回退到 `server`） |
 | `--category` | 主机分类（面板按此分组） | 空 |
 | `--interval` | 基础指标上报间隔（秒） | `10` |
@@ -571,7 +571,7 @@ p.emit()                                   # 输出 JSON
 - 确认服务端未设置 `terminal_disabled: true`
 
 ### 面板显示连接失败
-- 检查服务端是否正常运行：`curl http://localhost:8080/healthz`
+- 检查服务端是否正常运行：`curl http://localhost:8529/healthz`
 - 检查浏览器控制台是否有 CORS 或认证错误
 - 尝试清除浏览器缓存或强制刷新（Ctrl+Shift+R）
 
@@ -600,7 +600,7 @@ systemctl daemon-reload && systemctl enable --now aiops-agent
 
 **Windows（NSSM）**：
 ```powershell
-nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<IP>:8080 --category 生产"
+nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<IP>:8529 --category 生产"
 nssm set AIOps-Agent AppDirectory C:\aiops-agent
 nssm start AIOps-Agent
 ```
@@ -628,7 +628,7 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 map $http_upgrade $connection_upgrade { default upgrade; '' close; }
 
 location / {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -755,7 +755,7 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 
 ```nginx
 location /api/v1/hosts/ {            # 浏览器 WebSocket
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -763,7 +763,7 @@ location /api/v1/hosts/ {            # 浏览器 WebSocket
     proxy_read_timeout 3600s;
 }
 location /api/v1/agent/terminal/ {   # Agent 反向流（必须关闭缓冲）
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_request_buffering off;
@@ -771,7 +771,7 @@ location /api/v1/agent/terminal/ {   # Agent 反向流（必须关闭缓冲）
     proxy_send_timeout 3600s;
 }
 location / {                         # 其余 API / 面板
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8529;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;

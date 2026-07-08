@@ -47,7 +47,7 @@ type checkRunner struct {
 	store    *Store
 	notifier *Notifier
 	httpc    *http.Client
-	selfAddr string // e.g. "127.0.0.1:8080" — used for the built-in self health-check
+	selfAddr string // e.g. "127.0.0.1:8529" — used for the built-in self health-check
 
 	mu        sync.Mutex
 	status    map[string]CheckStatus
@@ -162,12 +162,12 @@ func (cr *checkRunner) runSelfCheck() {
 	}
 }
 
-// portFromAddr extracts the port portion from an addr like ":8080" or "0.0.0.0:8080".
+// portFromAddr extracts the port portion from an addr like ":8529" or "0.0.0.0:8529".
 func portFromAddr(addr string) string {
 	if i := strings.LastIndex(addr, ":"); i >= 0 {
 		return addr[i+1:]
 	}
-	return "8080"
+	return "8529"
 }
 
 func (cr *checkRunner) sweep() {

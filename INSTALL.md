@@ -2,7 +2,7 @@
 
 本指南覆盖**服务端**与**不同平台客户端(Agent)**的安装、开机自启与验证。
 
-- **服务端**:1 台,收集数据 + 展示面板 + 发告警,监听 `:8080`。
+- **服务端**:1 台,收集数据 + 展示面板 + 发告警,监听 `:8529`。
 - **客户端 Agent**:装在每台**被监控主机**上,支持 **Windows / Linux / macOS**。
 
 > **依赖说明**:基础指标(CPU/内存/SWAP/多磁盘/网络/负载/进程数/TCP 连接)由 Go 核心**原生采集,零依赖**,任何平台都不需要装 Python。
@@ -32,26 +32,26 @@
 ```bash
 mkdir -p /opt/aiops-server && cd /opt/aiops-server
 cp /path/to/bin/aiops-server .            # 或 go build -o aiops-server ./cmd/server
-./aiops-server                             # 默认监听 :8080
-# 指定地址/端口: ./aiops-server -addr 0.0.0.0:8080
+./aiops-server                             # 默认监听 :8529
+# 指定地址/端口: ./aiops-server -addr 0.0.0.0:8529
 ```
 
 **Windows 服务器**
 ```powershell
-.\bin\aiops-server.exe                     # 默认 :8080
+.\bin\aiops-server.exe                     # 默认 :8529
 # .\bin\aiops-server.exe -addr 0.0.0.0:9000
 ```
 
 **放行端口**(否则客户端连不上、浏览器打不开面板):
 ```bash
 # Linux firewalld
-firewall-cmd --add-port=8080/tcp --permanent && firewall-cmd --reload
+firewall-cmd --add-port=8529/tcp --permanent && firewall-cmd --reload
 # Linux ufw
-ufw allow 8080/tcp
+ufw allow 8529/tcp
 ```
 ```powershell
 # Windows 防火墙
-New-NetFirewallRule -DisplayName "AIOps Monitor" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
+New-NetFirewallRule -DisplayName "AIOps Monitor" -Direction Inbound -Protocol TCP -LocalPort 8529 -Action Allow
 ```
 
 **开机自启(Linux systemd)**:用 [`deploy/aiops-server.service`](deploy/aiops-server.service),改好路径后:
@@ -60,7 +60,7 @@ cp deploy/aiops-server.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now aiops-server
 ```
 
-浏览器打开 `http://<服务端IP>:8080` 即为面板。服务端配置(告警 webhook / 阈值 / 分类覆盖)持久化在其工作目录的 `server_config.json`。
+浏览器打开 `http://<服务端IP>:8529` 即为面板。服务端配置(告警 webhook / 阈值 / 分类覆盖)持久化在其工作目录的 `server_config.json`。
 
 ---
 
@@ -70,9 +70,9 @@ systemctl daemon-reload && systemctl enable --now aiops-server
 >
 > 打开监控面板右上角 **「安装 Agent」** → 选择目标系统 → 复制其中一条命令到被监控主机执行即可。命令已内置**服务端地址**与 **Token**，会自动下载 Agent + 插件、写好配置、注册开机自启并上线：
 >
-> - **Linux**（root/sudo）：`curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sudo sh`
-> - **macOS**：`curl -fsSL "http://<服务端>:8080/install.sh?token=<TOKEN>" | sh`
-> - **Windows**（管理员 PowerShell）：`irm "http://<服务端>:8080/install.ps1?token=<TOKEN>" | iex`
+> - **Linux**（root/sudo）：`curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sudo sh`
+> - **macOS**：`curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sh`
+> - **Windows**（管理员 PowerShell）：`irm "http://<服务端>:8529/install.ps1?token=<TOKEN>" | iex`
 >
 > 弹窗里填「主机分类」可让新机自动归入对应分组；点「重置」可轮换 Token（旧命令随即失效）。
 > 服务端用 `-dist ./dist`（默认值）指向存放各平台 Agent 二进制与 `plugins.zip` 的目录，仓库 `dist/` 已备好。
@@ -93,7 +93,7 @@ plugins/                     # 插件目录(整个拷过去)
 
 | 参数 | 说明 | 默认 |
 |---|---|---|
-| `--server` | 服务端地址,如 `http://10.0.0.5:8080` | `http://localhost:8080` |
+| `--server` | 服务端地址,如 `http://10.0.0.5:8529` | `http://localhost:8529` |
 | `--category` | **主机分类**,面板按此分组/筛选,如 `生产`、`DB`、`办公终端` | 空(未分类) |
 | `--interval` | 基础指标上报间隔(秒) | `5` |
 | `--plugin-interval` | 插件执行周期(秒) | `15` |
@@ -124,14 +124,14 @@ pip install -r plugins/requirements.txt      # 即 psutil
 **① 手动前台运行(先验证连通)**
 ```powershell
 cd C:\aiops-agent
-.\aiops-agent.exe --server http://<服务端IP>:8080 --category 生产
+.\aiops-agent.exe --server http://<服务端IP>:8529 --category 生产
 ```
 
 **② 开机自启 —— 方式 A:NSSM(推荐,带自动重启)**
 
 下载 [NSSM](https://nssm.cc/),然后:
 ```powershell
-nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<服务端IP>:8080 --category 生产"
+nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<服务端IP>:8529 --category 生产"
 nssm set AIOps-Agent AppDirectory C:\aiops-agent     # 关键:设工作目录,才能找到 plugins\
 nssm start AIOps-Agent
 ```
@@ -157,7 +157,7 @@ schtasks /Run /TN "AIOps-Agent"                      # 立即启动一次
 ```bash
 cd /opt/aiops-agent
 chmod +x aiops-agent
-./aiops-agent --server http://<服务端IP>:8080 --category 生产
+./aiops-agent --server http://<服务端IP>:8529 --category 生产
 ```
 
 **② 开机自启(systemd,推荐)**
@@ -184,7 +184,7 @@ journalctl -u aiops-agent -f          # 跟踪日志
 ```bash
 cd /usr/local/aiops-agent
 chmod +x aiops-agent-mac
-./aiops-agent-mac --server http://<服务端IP>:8080 --category 办公终端
+./aiops-agent-mac --server http://<服务端IP>:8529 --category 办公终端
 ```
 > 若提示"无法验证开发者",在 `系统设置 → 隐私与安全性` 里点"仍要打开",或执行 `xattr -d com.apple.quarantine ./aiops-agent-mac`。
 
@@ -204,14 +204,14 @@ launchctl start com.aiops.agent
 
 ## 六、验证
 
-1. 浏览器打开 `http://<服务端IP>:8080`,几秒后应看到该主机卡片出现在对应**分类分组**下。
+1. 浏览器打开 `http://<服务端IP>:8529`,几秒后应看到该主机卡片出现在对应**分类分组**下。
 2. 卡片上应有真实的 CPU / 内存 / SWAP / **每个磁盘一条** / 负载 1·5·15 / 网络收发 / TCP 连接数 / 进程数。
 3. 点主机名可看**趋势弹窗**(CPU/内存/磁盘 sparkline)。
 4. 装了 psutil 的话,底部会出现 `svc.*`、`proc.*`、`cpu.anomaly_zscore` 等自定义指标 chips。
 
 命令行快速自检(在服务端上):
 ```bash
-curl http://localhost:8080/api/v1/hosts | python3 -m json.tool
+curl http://localhost:8529/api/v1/hosts | python3 -m json.tool
 ```
 
 ---
@@ -256,8 +256,8 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 
 **面板上看不到主机?**
 - 检查 Agent 日志有没有"上报成功";没有多半是连不上服务端。
-- 服务端 `8080` 端口是否放行;`--server` 地址(IP/端口/http 前缀)是否正确。
-- 服务端与客户端网络是否互通:`curl http://<服务端IP>:8080/api/v1/summary`。
+- 服务端 `8529` 端口是否放行;`--server` 地址(IP/端口/http 前缀)是否正确。
+- 服务端与客户端网络是否互通:`curl http://<服务端IP>:8529/api/v1/summary`。
 
 **主机出现了,但基础指标是 0?**
 - 正常情况下不该发生(三平台均原生采集)。若某平台异常,把 Agent 日志贴出来。
