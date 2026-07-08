@@ -1479,7 +1479,9 @@ function makeVT(screen) {
     return html;
   }
   function render() {
-    const focused = document.activeElement === screen;
+    // screen.contains 涵盖两种焦点来源：<pre> 自身聚焦（桌面直接 Tab）
+    // 和隐藏 <textarea> 子元素聚焦（移动端虚拟键盘 / 桌面端统一输入入口）
+    const focused = screen.contains(document.activeElement);
     let html = "";
     for (let y = 0; y < vt.rows; y++) {
       const cx = (vt.cursorVis && focused && y === vt.cy) ? vt.cx : -1;

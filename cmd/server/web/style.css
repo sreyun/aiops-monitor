@@ -625,8 +625,10 @@ svg.sparkline{width:100%; height:46px; display:block}
   font-variant-ligatures:none; font-feature-settings:"liga" 0}
 .term-screen:focus, .term-screen:focus-within{box-shadow:inset 0 0 0 1px var(--accent-soft)}
 .term-row{white-space:pre; min-height:1em}
-.term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px}
-.term-screen:not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text)}
+.term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.5em; display:inline-block; text-align:center}
+.term-screen:focus-within .term-cursor{animation:termCursorBlink 1.2s steps(2,start) infinite}
+.term-screen:not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text); animation:none}
+@keyframes termCursorBlink{0%,49%{opacity:1}50%,100%{opacity:.25}}
 /* 隐藏 textarea：移动端虚拟键盘捕获器（不可见但可聚焦） */
 .term-input{
   position:absolute; top:0; left:0; width:1px; height:1px;
