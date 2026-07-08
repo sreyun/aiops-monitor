@@ -679,21 +679,29 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-screen{margin:0; background:var(--term-bg); color:var(--term-text); border:none; border-radius:0 0 var(--r-lg) var(--r-lg);
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.25;
   padding:12px 14px; height:62vh; overflow:auto; white-space:normal; outline:none; cursor:text;
-  font-variant-ligatures:none; font-feature-settings:"liga" 0}
-.term-screen:focus, .term-screen:focus-within{box-shadow:inset 0 0 0 1px var(--accent-soft)}
+  font-variant-ligatures:none; font-feature-settings:"liga" 0;
+  transition:box-shadow var(--transition-fast);}
+.term-screen:focus, .term-screen:focus-within, .term-screen.term-focused{
+  box-shadow:inset 0 0 0 1px var(--accent-soft), inset 0 0 20px rgba(76,141,255,.04);
+}
 .term-row{white-space:pre; min-height:1em}
 .term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.5em; display:inline-block; text-align:center}
-.term-screen:focus-within .term-cursor{animation:termCursorBlink 1.2s steps(2,start) infinite}
-.term-screen:not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text); animation:none}
+/* focus-within 规则已移至 .term-input 定义之后统一处理 */
 @keyframes termCursorBlink{0%,49%{opacity:1}50%,100%{opacity:.25}}
 /* 隐藏 textarea：移动端虚拟键盘捕获器（不可见但可聚焦） */
 .term-input{
   position:absolute; top:0; left:0; width:1px; height:1px;
-  opacity:0; border:none; outline:none; padding:0; margin:0;
+  opacity:0.01; border:none; outline:none; padding:0; margin:0;
   background:transparent; color:transparent; caret-color:transparent;
   resize:none; font-size:16px; z-index:0; overflow:hidden;
   white-space:nowrap; -webkit-appearance:none;
+  /* clip-path 确保完全不可见但保持可聚焦（iOS 兼容） */
+  clip-path:inset(50%); -webkit-clip-path:inset(50%);
 }
+/* JS fallback：当 :focus-within 不可靠时，通过 JS 添加 .term-focused 类 */
+.term-screen.term-focused .term-cursor,
+.term-screen:focus-within .term-cursor{animation:termCursorBlink 1.2s steps(2,start) infinite}
+.term-screen:not(.term-focused):not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text); animation:none}
 .term-hint{font-size:11px; color:var(--muted2); padding:9px 16px; border-top:1px solid var(--line);
   background:var(--panel); border-radius:0 0 var(--r-lg) var(--r-lg); letter-spacing:.01em}
 #termMask.maximized .term-hint{border-radius:0}
@@ -707,11 +715,12 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-btn:hover{background:var(--accent-soft); color:var(--accent-txt); border-color:var(--accent-border)}
 /* 终端窗口控制条：放大/还原、关闭 */
 .term-ctls{display:flex; gap:5px; margin-left:8px}
-.term-ctl{width:30px; height:28px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2);
+.term-ctl{width:32px; height:30px; border-radius:8px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;
-  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), transform .08s}
 .term-ctl svg{width:15px; height:15px}
 .term-ctl:hover{background:var(--panel3); color:var(--txt); border-color:var(--hover-border)}
+.term-ctl:active{transform:scale(.92)}
 .term-ctl.close:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:var(--crit-border)}
 /* 放大态：终端近全屏，头部/提示固定，屏幕区弹性填充 */
 #termMask.maximized{padding:14px; align-items:center}
@@ -725,49 +734,119 @@ svg.sparkline{width:100%; height:46px; display:block}
 #termMask.maximized .term-modal .term-screen{height:auto; flex:1; min-height:0; border-radius:0}
 
 /* ---------- 终端多标签 ---------- */
-.term-tabbar{display:flex; gap:4px; padding:6px 8px 0; background:var(--bg2); border-bottom:1px solid var(--line); overflow-x:auto; flex-wrap:nowrap}
-.term-tab{display:flex; align-items:center; gap:6px; padding:5px 12px; border-radius:7px 7px 0 0; border:1px solid transparent; background:transparent; color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; transition:all var(--transition-fast)}
+.term-tabbar{
+  display:flex; gap:4px; padding:6px 8px 0;
+  background:var(--bg2); border-bottom:1px solid var(--line);
+  overflow-x:auto; flex-wrap:nowrap;
+  scrollbar-width:thin; scrollbar-color:var(--line2) transparent;
+}
+/* 隐藏 tabbar 滚动条但保持可滚动 */
+.term-tabbar::-webkit-scrollbar{height:3px}
+.term-tabbar::-webkit-scrollbar-track{background:transparent}
+.term-tabbar::-webkit-scrollbar-thumb{background:var(--line2); border-radius:3px}
+.term-tab{
+  display:flex; align-items:center; gap:6px;
+  max-width:180px; padding:5px 10px 5px 12px;
+  border-radius:7px 7px 0 0;
+  border:1px solid transparent; border-bottom:none;
+  background:transparent; color:var(--muted);
+  cursor:pointer; font-size:12px; font-weight:500;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  position:relative;
+}
+.term-tab span:first-child{
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px;
+}
 .term-tab:hover{background:var(--panel2); color:var(--txt)}
-.term-tab.active{background:var(--panel); color:var(--txt); border-color:var(--line); border-bottom-color:var(--panel)}
-.term-tab-close{font-size:14px; line-height:1; opacity:.5; border:none; background:none; color:inherit; cursor:pointer; padding:0 0 0 2px}
-.term-tab-close:hover{opacity:1; color:var(--crit-txt)}
+.term-tab.active{
+  background:var(--panel); color:var(--txt);
+  border-color:var(--line); border-bottom-color:var(--panel);
+  font-weight:600;
+}
+.term-tab.active::after{
+  content:''; position:absolute; bottom:-1px; left:0; right:0;
+  height:1px; background:var(--panel);
+}
+.term-tab-close{
+  display:flex; align-items:center; justify-content:center;
+  width:16px; height:16px; border-radius:4px;
+  font-size:12px; line-height:1; opacity:.4;
+  border:none; background:none; color:inherit;
+  cursor:pointer; padding:0; flex:none;
+  transition:opacity var(--transition-fast), background var(--transition-fast);
+}
+.term-tab-close:hover{opacity:1; background:var(--crit-soft); color:var(--crit-txt)}
 .term-screens{position:relative}
 .term-screens .term-screen{display:none}
-.term-screens .term-screen.active{display:block}
+.term-screens .term-screen.active{display:block; animation:termScreenIn .15s ease both}
+@keyframes termScreenIn{from{opacity:.6}to{opacity:1}}
 
 /* ---------- 终端收起悬浮卡片 ---------- */
 .term-dock{
   position:fixed; bottom:max(16px, env(safe-area-inset-bottom)); right:max(16px, env(safe-area-inset-right));
   z-index:200; display:flex; flex-direction:column-reverse; gap:8px;
-  pointer-events:none; /* 容器不拦截事件，子卡片自行接收 */
+  pointer-events:none;
 }
 .term-dock-item{
   pointer-events:auto;
-  display:flex; align-items:center; gap:8px;
-  min-width:200px; max-width:280px; height:40px;
+  display:flex; align-items:center; gap:10px;
+  min-width:220px; max-width:300px; height:44px;
   padding:0 8px 0 14px;
-  border:1px solid var(--line2); border-radius:10px;
-  background:var(--panel); box-shadow:0 4px 16px rgba(0,0,0,.18);
+  border:1px solid var(--line2); border-radius:12px;
+  background:var(--panel);
+  box-shadow:0 4px 16px rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.08);
   cursor:pointer; user-select:none;
-  transition:transform .2s ease, opacity .2s ease, box-shadow var(--transition-fast);
-  animation:termDockIn .25s ease both;
+  transition:transform .22s cubic-bezier(.4,0,.2,1), opacity .22s ease,
+             box-shadow .22s ease, border-color .22s ease;
+  animation:termDockIn .28s cubic-bezier(.34,1.56,.64,1) both;
+  -webkit-tap-highlight-color:transparent;
 }
-.term-dock-item:hover{box-shadow:0 6px 20px rgba(0,0,0,.25); transform:translateY(-1px)}
-.term-dock-item .dock-dot{width:7px; height:7px; border-radius:50%; background:var(--muted2); flex:none; transition:background var(--transition-fast)}
-.term-dock-item .dock-dot.on{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
-.term-dock-item .dock-dot.off{background:var(--crit)}
-.term-dock-item .dock-name{font-size:12px; font-weight:600; color:var(--txt);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0}
+.term-dock-item:hover{
+  box-shadow:0 8px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.10);
+  transform:translateY(-2px);
+  border-color:var(--hover-border);
+}
+.term-dock-item:active{
+  transform:translateY(0) scale(.98);
+  transition-duration:.08s;
+}
+.term-dock-item .dock-dot{
+  width:8px; height:8px; border-radius:50%;
+  background:var(--muted2); flex:none;
+  transition:background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.term-dock-item .dock-dot.on{
+  background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft);
+  animation:dockPulse 2s ease-in-out infinite;
+}
+.term-dock-item .dock-dot.off{background:var(--crit); box-shadow:0 0 0 3px var(--crit-soft)}
+@keyframes dockPulse{0%,100%{box-shadow:0 0 0 3px var(--ok-soft)}50%{box-shadow:0 0 0 5px var(--ok-soft)}}
+.term-dock-item .dock-name{
+  font-size:12.5px; font-weight:600; color:var(--txt);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  flex:1; min-width:0; letter-spacing:.01em;
+}
 .term-dock-item .dock-btn{
-  width:24px; height:24px; border-radius:6px; border:none; background:transparent;
-  color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center;
-  padding:0; flex:none; transition:background var(--transition-fast), color var(--transition-fast)
+  width:28px; height:28px; border-radius:7px; border:none;
+  background:transparent; color:var(--muted);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  padding:0; flex:none;
+  transition:background var(--transition-fast), color var(--transition-fast);
 }
 .term-dock-item .dock-btn:hover{background:var(--panel3); color:var(--txt)}
 .term-dock-item .dock-btn.close:hover{background:var(--crit-soft); color:var(--crit-txt)}
-.term-dock-item .dock-btn svg{width:14px; height:14px}
-@keyframes termDockIn{from{transform:translateY(20px) scale(.9); opacity:0}to{transform:translateY(0) scale(1); opacity:1}}
-.term-dock-item.removing{transform:translateY(20px) scale(.9); opacity:0; pointer-events:none}
+.term-dock-item .dock-btn svg{width:15px; height:15px}
+@keyframes termDockIn{
+  from{transform:translateY(24px) scale(.92); opacity:0}
+  to{transform:translateY(0) scale(1); opacity:1}
+}
+.term-dock-item.removing{
+  transform:translateY(20px) scale(.9); opacity:0; pointer-events:none;
+  transition:transform .2s ease, opacity .2s ease;
+}
+/* 多个 dock 卡片时添加分隔阴影 */
+.term-dock-item + .term-dock-item{box-shadow:0 2px 10px rgba(0,0,0,.12)}
 
 /* ---------- 终端会话列表 ---------- */
 .term-session-item{display:flex; align-items:center; gap:10px; padding:10px 14px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel); margin-bottom:8px; transition:border-color var(--transition-fast)}
@@ -942,6 +1021,10 @@ svg.sparkline{width:100%; height:46px; display:block}
   #termMask{padding:0; align-items:stretch}
   #termMask .term-modal{max-width:none; width:100%; height:100vh; height:100dvh}
   #termMask .term-screen{height:auto; flex:1; font-size:11px}
+  /* 移动端键盘弹出时使用 dvh 适配可视区域 */
+  #termMask .term-modal{height:100dvh}
+  /* 确保 textarea 在移动端可聚焦（最小触控区域） */
+  .term-input{font-size:16px !important; min-width:1px; min-height:1px}
   /* 收起悬浮卡片：移动端底部全宽条形 */
   .term-dock{left:0; right:0; bottom:0; gap:4px}
   .term-dock-item{min-width:0; max-width:none; width:100%; border-radius:8px 8px 0 0}
@@ -1032,7 +1115,64 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
   font-size:12px; color:var(--muted); transition:all var(--transition-fast);
 }
 .theme-toggle:hover{border-color:var(--hover-border); color:var(--txt2)}
+.theme-toggle:active{transform:scale(.94); background:var(--panel3)}
 .theme-toggle svg{width:14px; height:14px}
+
+/* ---- 移动端顶栏主题切换按钮 ---- */
+.topbar-theme-btn{
+  display:none; /* 桌面隐藏，移动端显示 */
+}
+/* 平板及手机（≤900px）：侧栏变抽屉，顶栏显示主题按钮 */
+@media(max-width:900px){
+  .topbar-theme-btn{
+    display:flex; align-items:center; justify-content:center;
+    width:var(--touch-min); height:var(--touch-min);
+    background:var(--panel2); border:1px solid var(--line2);
+    border-radius:var(--r-sm); cursor:pointer;
+    color:var(--muted); flex:none;
+    transition:all var(--transition-fast);
+    -webkit-tap-highlight-color:transparent;
+  }
+  .topbar-theme-btn:active{
+    transform:scale(.9); background:var(--panel3);
+    border-color:var(--accent);
+  }
+  .topbar-theme-btn svg{width:20px; height:20px}
+  /* 侧栏内的主题按钮在移动端隐藏（避免重复） */
+  .sidebar .theme-toggle{display:none}
+}
+/* 手机竖屏（≤480px）：确保触控热区 */
+@media(max-width:480px){
+  .topbar-theme-btn{
+    width:var(--touch-min); height:var(--touch-min);
+    min-width:var(--touch-min); min-height:var(--touch-min);
+  }
+  /* 语言切换器避开顶栏区域 */
+  #lang-switcher{
+    top:auto !important; bottom:max(12px, env(safe-area-inset-bottom)) !important;
+    right:max(12px, env(safe-area-inset-right)) !important;
+  }
+}
+/* 折叠屏：内屏宽度时顶栏按钮保持可用 */
+@media(max-width:480px) and (orientation:portrait){
+  .topbar-theme-btn{margin-right:4px}
+}
+/* 主题切换全局过渡（颜色平滑变化，避免闪屏） */
+:root{
+  color-scheme:dark;
+}
+[data-theme="light"]{
+  color-scheme:light;
+}
+*{
+  transition-property:background-color, border-color, color;
+  transition-duration:.2s;
+  transition-timing-function:ease;
+}
+/* 排除不应过渡的元素（终端、图表等需要即时响应） */
+.term-screen, .term-screen *, canvas, .skeleton, .skeleton *{
+  transition-property:none;
+}
 
 /* ============================================================
    P0-3: 骨架屏（Skeleton Loading）

@@ -116,18 +116,45 @@ const isSystemMount = p => {
 function initTheme() {
   const saved = localStorage.getItem("aiops_theme") || "dark";
   document.documentElement.setAttribute("data-theme", saved);
+  // Sync topbar mobile button icon state
+  const topbarBtn = $("topbarThemeBtn");
+  if (topbarBtn) {
+    const darkIcon = topbarBtn.querySelector(".icon-dark");
+    const lightIcon = topbarBtn.querySelector(".icon-light");
+    if (darkIcon && lightIcon) {
+      darkIcon.style.display = saved === "dark" ? "" : "none";
+      lightIcon.style.display = saved === "light" ? "" : "none";
+    }
+  }
+  // Sync sidebar toggle button icon
+  const btn = $("themeToggle");
+  if (btn) {
+    btn.innerHTML = saved === "light"
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  }
 }
 function toggleTheme() {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("aiops_theme", next);
-  // 更新按钮图标
+  // Update sidebar toggle button icon
   const btn = $("themeToggle");
   if (btn) {
     btn.innerHTML = next === "light"
       ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  }
+  // Update topbar mobile theme button icon visibility
+  const topbarBtn = $("topbarThemeBtn");
+  if (topbarBtn) {
+    const darkIcon = topbarBtn.querySelector(".icon-dark");
+    const lightIcon = topbarBtn.querySelector(".icon-light");
+    if (darkIcon && lightIcon) {
+      darkIcon.style.display = next === "dark" ? "" : "none";
+      lightIcon.style.display = next === "light" ? "" : "none";
+    }
   }
 }
 
@@ -1312,6 +1339,30 @@ function createTermTab(id, name) {
   screen.addEventListener("focus", function() {
     if (input && document.activeElement !== input) input.focus({ preventScroll: true });
   });
+  // JS fallback for :focus-within — toggle .term-focused class on screen
+  // This ensures cursor blink animation works on iOS Safari where :focus-within
+  // may not trigger for opacity:0 elements
+  input.addEventListener("focus", function() {
+    screen.classList.add("term-focused");
+  });
+  input.addEventListener("blur", function() {
+    screen.classList.remove("term-focused");
+  });
+  // Mobile keyboard viewport adaptation: when virtual keyboard appears,
+  // adjust terminal height to keep cursor visible
+  if (window.visualViewport) {
+    const vpHandler = function() {
+      const mask = $("termMask");
+      if (mask && mask.classList.contains("show")) {
+        const modal = mask.querySelector(".term-modal");
+        if (modal) {
+          modal.style.height = window.visualViewport.height + "px";
+        }
+      }
+    };
+    window.visualViewport.addEventListener("resize", vpHandler);
+    window.visualViewport.addEventListener("scroll", vpHandler);
+  }
   switchTermTab(idx);
   $("termMask").classList.remove("maximized");
   const mb = $("termMaxBtn"); if (mb) mb.title = I18N.t("ui.maximize_window");
@@ -1393,12 +1444,26 @@ let TERM_DOCK_IDS = new Set();  // 收起的 tab id 集合
 
 function minimizeTerminal() {
   if (TERM_TABS.length === 0) return;
-  // 将所有当前标签页加入 dock
   TERM_TABS.forEach(t => TERM_DOCK_IDS.add(t.id));
-  // 隐藏模态弹窗（不关闭 ws）
-  $("termMask").classList.remove("show", "maximized");
+  const mask = $("termMask");
+  if (mask) {
+    const modal = mask.querySelector(".term-modal");
+    if (modal) {
+      modal.style.transition = "transform .2s ease, opacity .2s ease";
+      modal.style.transform = "scale(.92) translateY(20px)";
+      modal.style.opacity = "0";
+      setTimeout(() => {
+        mask.classList.remove("show", "maximized");
+        modal.style.transition = "";
+        modal.style.transform = "";
+        modal.style.opacity = "";
+      }, 200);
+    } else {
+      mask.classList.remove("show", "maximized");
+    }
+  }
   if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
-  updateTermDock();
+  setTimeout(updateTermDock, 200);
 }
 
 function updateTermDock() {
@@ -1441,9 +1506,12 @@ function updateTermDock() {
       });
       dock.appendChild(item);
     }
-    // 更新主机名
+    // 更新主机名 + tooltip
     const nameEl = item.querySelector(".dock-name");
-    if (nameEl) nameEl.textContent = tab.name;
+    if (nameEl) {
+      nameEl.textContent = tab.name;
+      item.title = tab.name + " · " + I18N.t("ui.remote_terminal");
+    }
     // 更新连接状态
     const dot = item.querySelector(".dock-dot");
     if (dot) {
@@ -1459,8 +1527,27 @@ function expandTermFromDock(tabId) {
   if (idx < 0) return;
   TERM_DOCK_IDS.delete(tabId);
   switchTermTab(idx);
-  $("termMask").classList.add("show");
-  // 等布局稳定后重新测量终端尺寸
+  const mask = $("termMask");
+  const modal = mask.querySelector(".term-modal");
+  if (modal) {
+    modal.style.transition = "transform .22s cubic-bezier(.34,1.56,.64,1), opacity .22s ease";
+    modal.style.transform = "scale(.94)";
+    modal.style.opacity = "0";
+    mask.classList.add("show");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        modal.style.transform = "scale(1)";
+        modal.style.opacity = "1";
+        setTimeout(() => {
+          modal.style.transition = "";
+          modal.style.transform = "";
+          modal.style.opacity = "";
+        }, 250);
+      });
+    });
+  } else {
+    mask.classList.add("show");
+  }
   requestAnimationFrame(() => requestAnimationFrame(termRefit));
   updateTermDock();
 }
@@ -3117,6 +3204,7 @@ function safeAddEventListener(id, event, handler) {
 
 safeAddEventListener("settingsBtn", "click", openSettings);
 safeAddEventListener("themeToggle", "click", toggleTheme);
+safeAddEventListener("topbarThemeBtn", "click", toggleTheme);
 safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
