@@ -714,7 +714,7 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		s.forward.stats.incError()
-		slog.Warn("HTTP 代理响应解析失败", "host", hostname, "port", port, "path", path, "err", err)
+		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err)
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
 			Message: Tz("log.forward_parse_failed", port, path, err.Error())})
 		http.Error(w, Tr(r, "forward.parse_response_failed", err.Error()), http.StatusBadGateway)

@@ -266,6 +266,7 @@
   "log.forward_tcp_closed": "TCP forward %s:%d closed (%s)",
   "log.forward_http": "HTTP proxy %s:%d %s %s → %d",
   "log.forward_parse_failed": "HTTP proxy response parse failed (port %d path %s): %s",
+  "log.forward_parse_failed_short": "HTTP proxy response parse failed",
   "log.forward_idle_timeout": "Forwarding session idle timeout, auto-closed",
   "log.forward_reason_eof": "connection closed normally",
   "log.forward_reason_timeout": "idle timeout",

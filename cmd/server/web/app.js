@@ -2463,7 +2463,7 @@ function renderChecks(checks) {
           <button class="mini-btn" data-cact="run" title="${I18N.t('ui.check_now')}">▶</button>
           <button class="mini-btn" data-cact="edit" title="${I18N.t('ui.edit')}">✎</button>
           <button class="mini-btn del" data-cact="del" title="${I18N.t('ui.delete')}">✕</button>`}</span>`;
-    const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">内置</span>` : "";
+    const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">${I18N.t("ui.builtin")}</span>` : "";
 
     // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
     const stCls = st === "up" ? "ok" : st === "down" ? "crit" : "muted";
@@ -2790,10 +2790,10 @@ async function openMfaSetup(forced) {
       <li>输入应用当前显示的 6 位动态口令，点「确认启用」。</li>
     </ol>
     <div class="mfa-qr" id="mfaQr"></div>
-    <div class="mfa-secret">密钥　<code class="mono" id="mfaSecret">${esc(grp)}</code><button class="btn ghost sm" id="mfaCopy" type="button">复制</button></div>
+    <div class="mfa-secret">${I18N.t("mfa.secret_label")}　<code class="mono" id="mfaSecret">${esc(grp)}</code><button class="btn ghost sm" id="mfaCopy" type="button">${I18N.t("mfa.copy_btn")}</button></div>
     <div class="field"><label>${I18N.t("form.totp_code")}</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6')}" autocomplete="one-time-code"></div>
     <div class="login-err" id="mfaErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">确认启用</button></div>`;
+    <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">${I18N.t("mfa.confirm_enable")}</button></div>`;
   if (qrURI) $("mfaQr").innerHTML = `<img src="${esc(qrURI)}" alt="MFA QR Code" class="qr-img">`;
   else $("mfaQr").innerHTML = `<div class="mfa-desc">二维码不可用，请在应用中手动输入上方密钥。</div>`;
   $("mfaCopy").onclick = () => { try { navigator.clipboard.writeText(secret); toast(I18N.t("toast.secret_copied"), "ok"); } catch (_) { } };
@@ -2825,8 +2825,8 @@ function openMfaDisable() {
     <div class="field"><label>${I18N.t("form.password")}</label><input type="password" id="mfaPass" autocomplete="current-password"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot">
-      <button class="btn danger" id="mfaConfirmOff" type="button">用密码关闭</button>
-      <button class="btn" id="mfaEmailUnbind" type="button">通过邮箱解除</button>
+      <button class="btn danger" id="mfaConfirmOff" type="button">${I18N.t("mfa.disable_pwd")}</button>
+      <button class="btn" id="mfaEmailUnbind" type="button">${I18N.t("mfa.email_unbind_btn")}</button>
     </div>`;
   $("mfaMask").classList.add("show");
   $("mfaConfirmOff").onclick = async () => {
@@ -2848,7 +2848,7 @@ function openMfaEmailUnbind() {
     <div class="mfa-desc" style="margin-bottom:14px">系统将向已绑定邮箱发送 6 位验证码，验证通过后关闭两步验证。</div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot">
-      <button class="btn primary" id="mfaSendCode" type="button">发送验证码</button>
+      <button class="btn primary" id="mfaSendCode" type="button">${I18N.t("mfa.send_code_btn")}</button>
       <span style="flex:1"></span>
     </div>
     <div class="field" id="mfaCodeRow" style="display:none">
@@ -2856,7 +2856,7 @@ function openMfaEmailUnbind() {
       <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6_v2')}" autocomplete="one-time-code">
     </div>
     <div class="mfa-foot" id="mfaVerifyRow" style="display:none">
-      <button class="btn danger" id="mfaConfirmEmailUnbind" type="button">确认解除</button>
+      <button class="btn danger" id="mfaConfirmEmailUnbind" type="button">${I18N.t("mfa.confirm_unbind")}</button>
     </div>`;
   $("mfaMask").classList.add("show");
   $("mfaSendCode").onclick = async () => {
@@ -2903,7 +2903,7 @@ async function loadUsers() {
   let users;
   try { users = await fetch(`${API}/users`).then(r => r.json()); }
   catch (e) { list.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`; return; }
-  if (!Array.isArray(users) || !users.length) { list.innerHTML = `<div class="empty-line">暂无用户</div>`; return; }
+  if (!Array.isArray(users) || !users.length) { list.innerHTML = `<div class="empty-line">${I18N.t("empty.no_users")}</div>`; return; }
   list.innerHTML = users.map(u => `
     <div class="user-row" data-name="${esc(u.username)}">
       <div class="user-info">
@@ -2913,10 +2913,10 @@ async function loadUsers() {
         <div class="user-sub">${esc(u.display_name || "—")}${u.email ? " · " + esc(u.email) : ""}</div>
       </div>
       <div class="user-acts">
-        <button class="btn ghost sm" data-act="edit">编辑</button>
-        <button class="btn ghost sm" data-act="pwd">重置密码</button>
-        ${u.mfa_enabled ? `<button class="btn ghost sm" data-act="mfa">解绑MFA</button>` : ""}
-        <button class="btn ghost sm ubtn-del" data-act="del">删除</button>
+        <button class="btn ghost sm" data-act="edit">${I18N.t("ui.edit")}</button>
+        <button class="btn ghost sm" data-act="pwd">${I18N.t("ui.reset_password")}</button>
+        ${u.mfa_enabled ? `<button class="btn ghost sm" data-act="mfa">${I18N.t("ui.unbind_mfa")}</button>` : ""}
+        <button class="btn ghost sm ubtn-del" data-act="del">${I18N.t("ui.delete")}</button>
       </div>
     </div>`).join("");
 }
@@ -2979,7 +2979,7 @@ function openRecoverUser() {
     <div class="mfa-desc" style="margin-bottom:14px">输入已绑定的邮箱地址，系统将向该邮箱发送用户名。</div>
     <div class="field"><label>${I18N.t("form.email")}</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
     <div class="login-err" id="rcErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="rcSubmit" type="button">发送</button></div>`;
+    <div class="mfa-foot"><button class="btn primary" id="rcSubmit" type="button">${I18N.t("mfa.send_btn")}</button></div>`;
   $("recoverMask").classList.add("show");
   $("rcSubmit").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
@@ -3002,10 +3002,10 @@ function openRecoverPass() {
     <div class="mfa-desc" style="margin-bottom:14px">输入用户名，系统将向绑定邮箱发送验证码。</div>
     <div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="rcUser" placeholder="${I18N.t('form.login_account')}"></div>
     <div class="login-err" id="rcErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">发送验证码</button></div>
+    <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">${I18N.t("mfa.send_code_btn")}</button></div>
     <div class="field" id="rcCodeRow" style="display:none"><label>${I18N.t("form.email_code")}</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6_v2')}" autocomplete="one-time-code"></div>
     <div class="field" id="rcNewPassRow" style="display:none"><label>${I18N.t("form.new_password_min4")}</label><input type="password" id="rcNewPass" placeholder="${I18N.t('form.new_password')}"></div>
-    <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">重置密码</button></div>`;
+    <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">${I18N.t("ui.reset_password")}</button></div>`;
   $("recoverMask").classList.add("show");
   let rcEmail = ""; // stored from server response (not returned for security)
   $("rcSendCode").onclick = async () => {
@@ -3166,7 +3166,7 @@ function renderCatDropdown(cats) {
   const oldSel = $("catFilter");
   if (oldSel) oldSel.remove();
   wrap.innerHTML = `<div class="cat-dropdown" id="catDropdownWrap">
-    <button class="cat-dd-btn" id="catDropdownBtn"><span id="catDropdownLabel">全部分类</span> <span class="dd-arrow">▾</span></button>
+    <button class="cat-dd-btn" id="catDropdownBtn"><span id="catDropdownLabel">${I18N.t("ui.all_categories")}</span> <span class="dd-arrow">▾</span></button>
     <div class="cat-dd-menu" id="catDropdownMenu"></div>
   </div>`;
   updateCatDropdownOptions(cats);
@@ -3674,9 +3674,9 @@ function renderPlaybooks(pbs) {
           ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : ""}
         </div>
         <div class="pb-actions">
-          <button class="btn primary sm" data-pbact="exec">执行</button>
-          <button class="btn sm" data-pbact="edit">编辑</button>
-          <button class="btn danger sm" data-pbact="del">删除</button>
+          <button class="btn primary sm" data-pbact="exec">${I18N.t("ui.execute")}</button>
+          <button class="btn sm" data-pbact="edit">${I18N.t("ui.edit")}</button>
+          <button class="btn danger sm" data-pbact="del">${I18N.t("ui.delete")}</button>
         </div>
       </div>
       <div class="pb-meta">
@@ -3713,7 +3713,7 @@ function renderPbSteps(steps) {
         <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
         <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
       </div>
-      <button class="btn danger sm pb-step-del" type="button">删除步骤</button>
+      <button class="btn danger sm pb-step-del" type="button">${I18N.t("ui.delete_step")}</button>
     </div>`;
   }).join("");
   c.querySelectorAll(".pb-step-del").forEach(btn => {
@@ -3725,7 +3725,7 @@ function renderPbSteps(steps) {
 
 // Build <option> list for target select: all / by category / by system / per host
 function buildTargetOptions(selectedTarget) {
-  const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>全部主机</option>`];
+  const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>${I18N.t("ui.all_hosts")}</option>`];
   // By category
   if (PB_CATS.length > 0) {
     opts.push(`<optgroup label="${I18N.t("section.by_category")}">`);
