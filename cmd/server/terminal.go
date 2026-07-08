@@ -278,7 +278,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		_ = ws.WriteBinary([]byte("\r\n\x1b[31m✗ 无法建立终端会话——服务端未找到该主机的反向终端通道。\x1b[0m\r\n\r\n" +
 			"常见原因与处理：\r\n" +
 			"  1) \x1b[33mAgent 版本过旧\x1b[0m（旧版无反向终端通道）——请在该主机\x1b[36m重新执行安装命令升级到最新 Agent\x1b[0m；\r\n" +
-			"  2) Agent 启动时\x1b[33m未携带正确的 --token\x1b[0m（现已强制校验）；\r\n" +
+			"  2) Agent 启动时\x1b[33m未采集到机器指纹\x1b[0m（指纹用于终端通道鉴权，检查 machine-id / MAC 是否可读）；\r\n" +
 			"  3) 主机刚离线或 Agent 未运行。\r\n\r\n" +
 			"升级后重新打开终端即可。\r\n"))
 		return

@@ -199,9 +199,10 @@ else
   nohup "$DIR/aiops-agent" --config "$DIR/config.json" > "$DIR/relay.log" 2>&1 &
   echo "[AIOps] relay started in background (log: $DIR/relay.log)"
 fi
+RELAY_PORT="${LISTEN##*:}"
 echo ""
 echo "[AIOps] Relay ready! Internal machines install with:"
-echo "  curl -fsSL http://<this-host-ip>$LISTEN/install.sh | sh"
+echo "  curl -fsSL http://<this-host-ip>:${RELAY_PORT}/install.sh | sh"
 `
 
 // relayInstallPs1Template installs the agent in GATEWAY RELAY mode on Windows.
@@ -230,8 +231,9 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Na
 
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
+$Port = $Listen -replace '.*:', ''
 Write-Host "[AIOps] relay installed and started (listen $Listen)"
-Write-Host "[AIOps] internal machines use: http://<this-host-ip>$Listen"
+Write-Host "[AIOps] internal machines use: http://<this-host-ip>:$Port"
 `
 
 // uninstallShTemplate stops + removes the agent on Linux / macOS.
