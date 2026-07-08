@@ -131,7 +131,7 @@ type ServerConfig struct {
 	// Set to "127.0.0.1" to restrict access to the local machine only.
 	ForwardListen string `json:"forward_listen,omitempty"`
 	// ForwardPortRange is the port range for TCP port forwarding ("min-max").
-	// Default "10000-20000" for Docker deployments to expose a predictable range.
+	// Default "10000-10099" for Docker deployments to expose a predictable range.
 	// Set to "" or "0-0" to let the OS assign any available port.
 	ForwardPortRange string `json:"forward_port_range,omitempty"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
@@ -306,22 +306,22 @@ func (cs *ConfigStore) ForwardListenAddr() string {
 }
 
 // ForwardPortRangeBounds returns the min and max port for TCP forwarding.
-// Defaults to 10000-20000 for predictable Docker port exposure.
+// Defaults to 10000-10099 for predictable Docker port exposure.
 // Returns (0, 0) to let the OS assign any port if not configured or "0-0".
 func (cs *ConfigStore) ForwardPortRangeBounds() (minPort, maxPort int) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	if cs.cfg.ForwardPortRange == "" {
-		return 10000, 20000 // default range for Docker
+		return 10000, 10099 // default range for Docker (100 ports)
 	}
 	parts := strings.Split(cs.cfg.ForwardPortRange, "-")
 	if len(parts) != 2 {
-		return 10000, 20000
+		return 10000, 10099
 	}
 	minPort = parseIntSafe(parts[0], 10000)
-	maxPort = parseIntSafe(parts[1], 20000)
+	maxPort = parseIntSafe(parts[1], 10099)
 	if minPort <= 0 || maxPort <= 0 || minPort > maxPort {
-		return 10000, 20000
+		return 10000, 10099
 	}
 	return minPort, maxPort
 }
