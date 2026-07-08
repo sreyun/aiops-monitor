@@ -384,12 +384,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		// HTTP proxy token auth: allows window.open in new tab without relying on
 		// the session cookie (which may not be sent cross-context in some browsers).
+		// Priority: cookie (set by handleProxyToken) > query param (fallback).
 		if strings.HasPrefix(r.URL.Path, "/proxy/") {
-			if tok := r.URL.Query().Get("pt"); tok != "" {
-				if s.auth.validateProxyToken(tok) != "" {
-					next.ServeHTTP(w, r)
-					return
-				}
+			var tok string
+			if c, err := r.Cookie("proxy_token"); err == nil && c.Value != "" {
+				tok = c.Value
+			} else if pt := r.URL.Query().Get("pt"); pt != "" {
+				tok = pt
+			}
+			if tok != "" && s.auth.validateProxyToken(tok) != "" {
+				next.ServeHTTP(w, r)
+				return
 			}
 		}
 		name := s.auth.userForRequest(r)

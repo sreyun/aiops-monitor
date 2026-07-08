@@ -170,46 +170,46 @@ const isSystemMount = p => {
 function initTheme() {
   const saved = localStorage.getItem("aiops_theme") || "dark";
   document.documentElement.setAttribute("data-theme", saved);
-  // Sync topbar mobile button icon state
-  const topbarBtn = $("topbarThemeBtn");
-  if (topbarBtn) {
-    const darkIcon = topbarBtn.querySelector(".icon-dark");
-    const lightIcon = topbarBtn.querySelector(".icon-light");
-    if (darkIcon && lightIcon) {
-      darkIcon.style.display = saved === "dark" ? "" : "none";
-      lightIcon.style.display = saved === "light" ? "" : "none";
-    }
-  }
-  // Sync sidebar toggle button icon
-  const btn = $("themeToggle");
-  if (btn) {
-    btn.innerHTML = saved === "light"
-      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
-  }
+  syncThemeIcons(saved);
 }
 function toggleTheme() {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("aiops_theme", next);
-  // Update sidebar toggle button icon
-  const btn = $("themeToggle");
-  if (btn) {
-    btn.innerHTML = next === "light"
-      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  syncThemeIcons(next);
+}
+/* 同步所有主题图标（下拉菜单 + 旧按钮兜底） */
+function syncThemeIcons(theme) {
+  // 下拉菜单中的主题图标
+  const ddDark = document.querySelector(".user-dropdown .icon-theme-dark");
+  const ddLight = document.querySelector(".user-dropdown .icon-theme-light");
+  if (ddDark && ddLight) {
+    ddDark.style.display = theme === "dark" ? "" : "none";
+    ddLight.style.display = theme === "light" ? "" : "none";
   }
-  // Update topbar mobile theme button icon visibility
+  // 旧按钮兜底（兼容已移除的元素）
   const topbarBtn = $("topbarThemeBtn");
   if (topbarBtn) {
-    const darkIcon = topbarBtn.querySelector(".icon-dark");
-    const lightIcon = topbarBtn.querySelector(".icon-light");
-    if (darkIcon && lightIcon) {
-      darkIcon.style.display = next === "dark" ? "" : "none";
-      lightIcon.style.display = next === "light" ? "" : "none";
-    }
+    const di = topbarBtn.querySelector(".icon-dark"), li = topbarBtn.querySelector(".icon-light");
+    if (di && li) { di.style.display = theme === "dark" ? "" : "none"; li.style.display = theme === "light" ? "" : "none"; }
   }
+  updateDropdownThemeLabel();
+}
+/* 更新下拉菜单主题标签文字 */
+function updateDropdownThemeLabel() {
+  const label = $("ddThemeLabel");
+  if (!label) return;
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  label.textContent = cur === "dark" ? "切换为浅色主题" : "切换为深色主题";
+}
+/* 高亮当前语言选项 */
+function updateDropdownLangActive() {
+  var curLang = "zh-CN";
+  try { curLang = (typeof I18N !== "undefined" && I18N.getLang) ? I18N.getLang() : (localStorage.getItem("aiops_lang") || "zh-CN"); } catch(e) {}
+  document.querySelectorAll(".user-dropdown-item[data-lang]").forEach(function(el) {
+    el.classList.toggle("active-lang", el.dataset.lang === curLang);
+  });
 }
 
 /* ============================================================
@@ -2686,8 +2686,15 @@ const canWrite = () => CUR_ROLE === "operator" || CUR_ROLE === "admin";
 const isAdmin = () => CUR_ROLE === "admin";
 function setUser(me) {
   const name = me.display_name || me.username || I18N.t("ui.user");
-  $("userName").textContent = name;
-  $("userAvatar").textContent = (name[0] || "A");
+  const initial = (name[0] || "A");
+  const roleLabels = { admin: "管理员", operator: "操作员", viewer: "查看者" };
+  // 顶栏按钮
+  var el = $("userName"); if (el) el.textContent = name;
+  el = $("userAvatar"); if (el) el.textContent = initial;
+  // 下拉菜单大图
+  el = $("userNameLg"); if (el) el.textContent = name;
+  el = $("userAvatarLg"); if (el) el.textContent = initial;
+  el = $("userRoleLg"); if (el) el.textContent = roleLabels[me.role] || me.role || "—";
   if (me.role) {
     CUR_ROLE = me.role;
     document.body.dataset.role = me.role;
@@ -3501,8 +3508,42 @@ safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
 // 暂停自动刷新 + 批量清理离线
 safeAddEventListener("pauseBtn", "click", togglePause);
 safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
-// 个人信息
-safeAddEventListener("profileBtn", "click", openProfile);
+// ===== 顶栏用户菜单 =====
+(function initUserDropdown() {
+  const wrap = $("topbarUserWrap");
+  const btn = $("profileBtn");
+  if (!wrap || !btn) return;
+  // 点击头像切换下拉
+  btn.addEventListener("click", function(e) {
+    e.stopPropagation();
+    wrap.classList.toggle("open");
+  });
+  // 点击外部关闭
+  document.addEventListener("click", function(e) {
+    if (!wrap.contains(e.target)) wrap.classList.remove("open");
+  });
+  // ESC 关闭
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") wrap.classList.remove("open");
+  });
+  // 主题切换
+  safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
+  // 语言切换
+  safeAddEventListener("ddLangZh", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("zh-CN"); } wrap.classList.remove("open"); });
+  safeAddEventListener("ddLangTw", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("zh-TW"); } wrap.classList.remove("open"); });
+  safeAddEventListener("ddLangEn", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("en"); } wrap.classList.remove("open"); });
+  // 告警设置
+  safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
+  // 个人信息
+  safeAddEventListener("ddProfile", "click", function() { openProfile(); wrap.classList.remove("open"); });
+  // 退出登录
+  safeAddEventListener("ddLogout", "click", function() { logout(); wrap.classList.remove("open"); });
+  // 初始化主题标签
+  updateDropdownThemeLabel();
+  // 高亮当前语言
+  updateDropdownLangActive();
+})();
+// 旧的 profileBtn 直接打开个人信息 — 已被上面的下拉菜单替代
 safeAddEventListener("usersBtn", "click", openUsers);
 safeAddEventListener("userAddBtn", "click", () => openUserEdit(null));
 safeAddEventListener("globalMfaChk", "change", async () => {
@@ -4140,13 +4181,15 @@ function openHttpProxy(hostID, targetPort) {
   closeForwardModal();
 }
 
-// openProxyUrl fetches a single-use proxy auth token, appends it to the
-// URL, and opens the result in a new tab. This avoids the "unauthorized"
-// error when the browser does not send the session cookie cross-context.
+// openProxyUrl fetches a single-use proxy auth token (which the server
+// also sets as a cookie), then opens the proxy URL in a new tab. The
+// cookie is automatically carried by the new tab request, avoiding the
+// "unauthorized" error that occurs when the session cookie is not sent.
 async function openProxyUrl(baseUrl) {
   try {
     const res = await fetch("/api/v1/proxy-token", { credentials: "include" });
     if (!res.ok) { toast(I18N.t("toast.network_error2"), "err"); return; }
+    // Token cookie is now set; open the URL — backend reads cookie or pt param.
     const data = await res.json();
     const sep = baseUrl.includes("?") ? "&" : "?";
     window.open(baseUrl + sep + "pt=" + encodeURIComponent(data.token), "_blank");

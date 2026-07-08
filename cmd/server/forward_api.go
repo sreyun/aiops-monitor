@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 )
@@ -153,10 +154,21 @@ func (s *Server) handleHTTPProxyCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleProxyToken generates a short-lived, single-use token for
 // authenticating HTTP proxy requests opened via window.open().
+// The token is returned as JSON AND set as a SameSite=Lax cookie so the
+// new tab automatically carries it — no query-param gymnastics needed.
 // GET /api/v1/proxy-token
 func (s *Server) handleProxyToken(w http.ResponseWriter, r *http.Request) {
-	user, _ := s.currentUser(r)
+	user, ok := s.currentUser(r)
+	if !ok || user.Username == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
+		return
+	}
 	tok := s.auth.generateProxyToken(user.Username)
+	// Set as a short-lived SameSite=Lax cookie so the subsequent window.open
+	// automatically carries it. Using raw header write to avoid any potential
+	// interaction with gzip-wrapped ResponseWriter.
+	ck := fmt.Sprintf("proxy_token=%s; Path=/; Max-Age=%d; SameSite=Lax", tok, int(proxyTokenTTL.Seconds()))
+	w.Header().Add("Set-Cookie", ck)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
