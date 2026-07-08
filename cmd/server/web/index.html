@@ -305,12 +305,47 @@
         <button class="tab" data-os="macos">macOS</button>
       </div>
       <div class="field">
+        <label class="relay-toggle">
+          <input type="checkbox" id="relayMode">
+          <span>网关中继模式</span>
+          <span class="hint" style="font-weight:normal">仅一台机器能联网时使用</span>
+        </label>
+      </div>
+      <div id="normalInstallSection" class="field">
         <label id="cmdLabel">一条命令安装</label>
         <div class="cmd-row">
           <pre id="installCmd" class="cmd"></pre>
           <button class="btn" id="copyCmdBtn">复制</button>
         </div>
         <div class="hint" id="cmdHint"></div>
+      </div>
+      <div id="relaySection" style="display:none">
+        <div class="relay-info">
+          <strong>适用场景</strong>：内网环境仅一台机器可访问公网（云监控中心）。
+          在该机器上执行<strong>①</strong>命令启动中继服务，其余内网机器执行<strong>②</strong>命令通过网关间接上报。
+          <br><strong>原理</strong>：中继服务监听本地端口，将内网 Agent 的所有请求反向代理到云监控中心——
+          二进制下载、指标上报、终端通道均自动穿透，内网机器无需任何额外配置。
+        </div>
+        <div class="field">
+          <label>① 网关机器安装命令（在能联网的机器上执行）</label>
+          <div class="cmd-row">
+            <pre id="relayGatewayCmd" class="cmd"></pre>
+            <button class="btn" id="copyRelayGatewayBtn">复制</button>
+          </div>
+          <div class="hint">安装后自动启动中继服务，监听 8080 端口，转发所有请求到云监控中心。</div>
+        </div>
+        <div class="field">
+          <label>网关内网 IP（供内网机器连接）</label>
+          <input type="text" id="relayGatewayIP" placeholder="如 192.168.1.10">
+        </div>
+        <div class="field">
+          <label>② 内网机器安装命令（在无法联网的机器上执行）</label>
+          <div class="cmd-row">
+            <pre id="relayInternalCmd" class="cmd"></pre>
+            <button class="btn" id="copyRelayInternalBtn">复制</button>
+          </div>
+          <div class="hint">内网机器通过网关中继连接云监控中心，无需直连公网。</div>
+        </div>
       </div>
       <div class="field">
         <label>一条命令卸载</label>

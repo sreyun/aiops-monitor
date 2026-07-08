@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,10 @@ import (
 
 	"aiops-monitor/shared"
 )
+
+// errForbidden signals that the server rejected a report with 403 (host not
+// registered or fingerprint not bound). reportOnce reacts by re-registering.
+var errForbidden = errors.New("forbidden")
 
 // Agent ties together the native collector (fast base metrics) and the plugin
 // runner (slower custom/AI layer), then reports both to the backend.
@@ -41,15 +46,16 @@ func NewAgent(server string, reportInterval, pluginInterval time.Duration,
 		httpc:          &http.Client{Timeout: 8 * time.Second},
 		latestCustom:   map[string]float64{},
 		identity: shared.Report{
-			HostID:   hostID,
-			Hostname: hostname(),
-			OS:       runtime.GOOS,
-			Platform: osVersion(),
-			Arch:     runtime.GOARCH,
-			IP:       primaryIP(),
-			Kernel:   kernelVersion(),
-			Category: category,
-			Token:    token,
+			HostID:      hostID,
+			Hostname:    hostname(),
+			OS:          runtime.GOOS,
+			Platform:    osVersion(),
+			Arch:        runtime.GOARCH,
+			IP:          primaryIP(),
+			Kernel:      kernelVersion(),
+			Category:    category,
+			Token:       token,
+			Fingerprint: machineFingerprint(),
 		},
 	}
 }
@@ -129,7 +135,19 @@ func (a *Agent) reportOnce() {
 	}
 	rep.Events = events
 
-	if err := a.send(rep); err != nil {
+	err := a.send(rep)
+	if err == errForbidden {
+		// Server rejected the report — host unregistered or fingerprint not bound
+		// (e.g. first run after a server-side reset, or the host record predates
+		// fingerprint binding). Re-register to bind the fingerprint, then retry.
+		log.Printf("上报被拒(指纹未绑定)，重新注册后重试")
+		if a.register() {
+			err = a.send(rep)
+		} else {
+			err = fmt.Errorf("注册失败，跳过本次上报重试")
+		}
+	}
+	if err != nil {
 		log.Printf("上报失败: %v", err)
 		if len(events) > 0 { // re-queue drained events so they aren't lost
 			a.mu.Lock()
@@ -142,19 +160,25 @@ func (a *Agent) reportOnce() {
 		base.CPUPercent, base.MemPercent, base.DiskPercent, len(custom), len(events))
 }
 
-func (a *Agent) register() {
+func (a *Agent) register() bool {
 	body, _ := json.Marshal(map[string]string{
-		"host_id":  a.identity.HostID,
-		"hostname": a.identity.Hostname,
-		"token":    a.identity.Token,
+		"host_id":     a.identity.HostID,
+		"hostname":    a.identity.Hostname,
+		"token":       a.identity.Token,
+		"fingerprint": a.identity.Fingerprint,
 	})
 	resp, err := a.httpc.Post(a.server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("注册失败(将继续上报): %v", err)
-		return
+		return false
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("注册被拒(状态码 %d)，可能 Token 已失效或指纹无效", resp.StatusCode)
+		return false
+	}
 	log.Printf("已向服务端注册")
+	return true
 }
 
 func (a *Agent) send(rep shared.Report) error {
@@ -167,6 +191,9 @@ func (a *Agent) send(rep shared.Report) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return errForbidden
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("服务端返回状态码 %d", resp.StatusCode)
 	}

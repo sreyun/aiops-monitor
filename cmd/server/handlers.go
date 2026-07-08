@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -18,12 +17,6 @@ import (
 
 	"aiops-monitor/shared"
 )
-
-// validAgentToken constant-time compares an agent-presented token against the
-// install token (never matches an empty configured token).
-func validAgentToken(got, want string) bool {
-	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-}
 
 //go:embed web
 var webFS embed.FS
@@ -116,6 +109,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript)
+	mux.HandleFunc("GET /install-relay.sh", s.handleRelayInstallScript)
+	mux.HandleFunc("GET /install-relay.ps1", s.handleRelayInstallScript)
 	mux.HandleFunc("GET /uninstall.sh", s.handleUninstallScript)
 	mux.HandleFunc("GET /uninstall.ps1", s.handleUninstallScript)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -155,18 +150,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		HostID   string `json:"host_id"`
-		Hostname string `json:"hostname"`
-		Token    string `json:"token"`
+		HostID      string `json:"host_id"`
+		Hostname    string `json:"hostname"`
+		Token       string `json:"token"`
+		Fingerprint string `json:"fingerprint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if s.cfg.AgentTokenRequired() && !validAgentToken(req.Token, s.cfg.InstallToken()) {
+	// Admission: a valid install token is required to register a new agent.
+	// Once registered, the agent authenticates subsequent reports by fingerprint,
+	// so rotating this token never disturbs already-installed agents.
+	if s.cfg.AgentTokenRequired() && !s.cfg.ValidInstallToken(req.Token) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "无效或缺失的接入 Token"})
 		return
 	}
+	if req.Fingerprint == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "fingerprint required"})
+		return
+	}
+	s.store.RegisterHost(req.HostID, req.Hostname, req.Fingerprint)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":           "ok",
 		"host_id":          req.HostID,
@@ -175,6 +179,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReport ingests a metrics report (base + custom + events) from an agent.
+// Authentication is by machine fingerprint (bound at registration), NOT by the
+// install token — so rotating the token never breaks already-installed agents.
+// Verification + upsert happen atomically inside Store.UpsertAuthenticated to
+// avoid a TOCTOU window and double-lock overhead on the hot report path.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	var rep shared.Report
 	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
@@ -185,11 +193,11 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
 		return
 	}
-	if s.cfg.AgentTokenRequired() && !validAgentToken(rep.Token, s.cfg.InstallToken()) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "无效或缺失的接入 Token"})
+	h, ok := s.store.UpsertAuthenticated(rep, rep.Fingerprint)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "指纹鉴权失败：未注册或指纹不匹配"})
 		return
 	}
-	h := s.store.Upsert(rep)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": h.ID})
 }
 
@@ -690,6 +698,24 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		body = renderScript(installPs1Template, server, token, category)
 	} else {
 		body = renderScript(installShTemplate, server, token, category)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, body)
+}
+
+// handleRelayInstallScript serves the gateway relay install script
+// (install-relay.sh / install-relay.ps1) — same token/category sanitization as
+// the regular install script, but uses the relay templates that configure the
+// agent in --relay mode.
+func (s *Server) handleRelayInstallScript(w http.ResponseWriter, r *http.Request) {
+	token := sanitizeToken(r.URL.Query().Get("token"))
+	category := sanitizeCategory(r.URL.Query().Get("category"))
+	server := sanitizeServerURL(serverURL(r))
+	var body string
+	if strings.HasSuffix(r.URL.Path, ".ps1") {
+		body = renderScript(relayInstallPs1Template, server, token, category)
+	} else {
+		body = renderScript(relayInstallShTemplate, server, token, category)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)

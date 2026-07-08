@@ -26,7 +26,8 @@ import (
 // the server whether an operator opened a terminal; when one is, the agent opens
 // two plain-HTTP streams — rx (framed keystrokes/resize down) and tx (shell
 // output up) — and bridges them to a locally-spawned shell. All terminal
-// requests carry the install token.
+// requests carry the machine fingerprint (bound at registration), NOT the
+// install token — so rotating the token never breaks already-installed agents.
 //
 // The shell is a real pseudo-terminal where available (Windows ConPTY, Linux/
 // macOS openpty) so interactive TTY features work; it falls back to piped stdio
@@ -54,8 +55,8 @@ var (
 )
 
 func (a *Agent) runTerminalChannel() {
-	if a.identity.Token == "" {
-		log.Printf("远程终端通道未启用：未提供安装 Token（--token）")
+	if a.identity.Fingerprint == "" {
+		log.Printf("远程终端通道未启用：未采集到机器指纹")
 		return
 	}
 	log.Printf("远程终端通道已就绪，等待服务端呼叫…")
@@ -77,7 +78,7 @@ func (a *Agent) runTerminalChannel() {
 }
 
 func (a *Agent) termWait() (sessionID, mode, command string, ok bool) {
-	q := url.Values{"host": {a.identity.HostID}, "token": {a.identity.Token}}
+	q := url.Values{"host": {a.identity.HostID}, "fp": {a.identity.Fingerprint}}
 	resp, err := termWaitHTTP.Get(a.server + "/api/v1/agent/terminal/wait?" + q.Encode())
 	if err != nil {
 		return "", "", "", false
@@ -132,7 +133,7 @@ func (a *Agent) runExecSession(sid, command string) {
 	// appended on its own line so success/failure can be surfaced precisely.
 	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
 	req, err := http.NewRequest("POST",
-		a.server+"/api/v1/agent/terminal/tx?session="+sid+"&token="+url.QueryEscape(a.identity.Token),
+		a.server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+url.QueryEscape(a.identity.Fingerprint),
 		bytes.NewReader(body))
 	if err != nil {
 		return
@@ -158,12 +159,12 @@ func (a *Agent) runTerminalSession(sid string) {
 	log.Printf("远程终端会话开始: %s", sid)
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
-	tok := url.QueryEscape(a.identity.Token)
+	fp := url.QueryEscape(a.identity.Fingerprint)
 
 	// tx: stream shell output up (body ends when the shell exits)
 	go func() {
 		defer closeAll()
-		req, err := http.NewRequest("POST", a.server+"/api/v1/agent/terminal/tx?session="+sid+"&token="+tok, sh)
+		req, err := http.NewRequest("POST", a.server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, sh)
 		if err != nil {
 			return
 		}
@@ -176,7 +177,7 @@ func (a *Agent) runTerminalSession(sid string) {
 	// rx: framed keystrokes / resize from the server → the shell
 	go func() {
 		defer closeAll()
-		resp, err := termHTTP.Get(a.server + "/api/v1/agent/terminal/rx?session=" + sid + "&token=" + tok)
+		resp, err := termHTTP.Get(a.server + "/api/v1/agent/terminal/rx?session=" + sid + "&fp=" + fp)
 		if err != nil {
 			return
 		}

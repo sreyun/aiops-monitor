@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -21,6 +22,8 @@ type config struct {
 	StateFile      string `json:"state_file"`
 	Category       string `json:"category"`
 	Token          string `json:"token"`
+	Relay          bool   `json:"relay"`           // gateway relay mode: proxy all requests to --server
+	Listen         string `json:"listen,omitempty"` // relay listen address (e.g. ":8080")
 }
 
 func defaultConfig() config {
@@ -38,6 +41,7 @@ func defaultConfig() config {
 		StateFile:      "agent_state.json",
 		Category:       "",
 		Token:          "",
+		Listen:         ":8080",
 	}
 }
 
@@ -76,9 +80,23 @@ func main() {
 	flag.StringVar(&cfg.Python, "python", cfg.Python, "运行 .py 插件的解释器")
 	flag.StringVar(&cfg.Category, "category", cfg.Category, "主机分类标签，如 生产/测试/DB/办公终端")
 	flag.StringVar(&cfg.Token, "token", cfg.Token, "安装 Token（由服务端安装命令注入，可选）")
+	flag.BoolVar(&cfg.Relay, "relay", cfg.Relay, "网关中继模式：监听本地端口，转发所有请求到 --server 指定的云监控中心")
+	flag.StringVar(&cfg.Listen, "listen", cfg.Listen, "Relay 监听地址，如 :8080")
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
 	flag.Parse()
 	_ = cfgFlag
+
+	// Relay mode: act as a gateway for internal machines that can't reach the
+	// internet. The agent listens on a local port and reverse-proxies to the
+	// cloud server — only this one machine needs internet access.
+	if cfg.Relay {
+		listen := cfg.Listen
+		if listen == "" {
+			listen = ":8080"
+		}
+		runRelay(listen, strings.TrimRight(cfg.Server, "/"))
+		return
+	}
 
 	hostID := loadOrCreateHostID(cfg.StateFile)
 	collector := newCollector(cfg.DiskPath)

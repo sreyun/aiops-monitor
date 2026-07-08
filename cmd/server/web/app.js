@@ -1534,15 +1534,27 @@ async function testSettings() {
 /* ---------- 安装 Agent ---------- */
 let INSTALL = { server_url: "", token: "" };
 let CUR_OS = "linux";
+let RELAY_MODE = false;
 async function openInstall() {
   try {
     INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
     $("installToken").value = INSTALL.token || "";
+    RELAY_MODE = false;
+    const cb = $("relayMode"); if (cb) cb.checked = false;
     renderInstallCmd();
     $("installMask").classList.add("show");
   } catch (e) { toast("读取安装信息失败: " + e, "err"); }
 }
 function renderInstallCmd() {
+  // Relay mode: show gateway + internal commands, hide normal install
+  if (RELAY_MODE) {
+    $("normalInstallSection").style.display = "none";
+    $("relaySection").style.display = "";
+    renderRelayCmd();
+    return;
+  }
+  $("normalInstallSection").style.display = "";
+  $("relaySection").style.display = "none";
   const server = INSTALL.server_url || location.origin;
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
@@ -1568,12 +1580,36 @@ function renderInstallCmd() {
     ? `irm "${server}/uninstall.ps1" | iex`
     : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
 }
+function renderRelayCmd() {
+  const server = INSTALL.server_url || location.origin;
+  const token = INSTALL.token || "";
+  const cat = $("installCategory").value.trim();
+  let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  const gwIP = $("relayGatewayIP").value.trim() || "<网关IP>";
+  const relay = `http://${gwIP}:8080`;
+  let gatewayCmd, internalCmd;
+  if (CUR_OS === "windows") {
+    gatewayCmd = `irm "${server}/install-relay.ps1?${q}" | iex`;
+    internalCmd = `irm "${relay}/install.ps1?${q}" | iex`;
+  } else if (CUR_OS === "macos") {
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sh`;
+    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
+  } else {
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sudo sh`;
+    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sudo sh`;
+  }
+  $("relayGatewayCmd").textContent = gatewayCmd;
+  $("relayInternalCmd").textContent = internalCmd;
+  $("uninstallCmd").textContent = (CUR_OS === "windows")
+    ? `irm "${server}/uninstall.ps1" | iex`
+    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+}
 async function resetToken() {
-  if (!confirm("重置 Token 后，之前分发的安装命令将失效。确定重置？")) return;
+  if (!confirm("重置 Token 后，旧安装命令将失效（仅影响新 Agent 注册；已装 Agent 靠机器指纹鉴权，不受影响）。确定重置？")) return;
   try {
     const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
     INSTALL.token = j.token; $("installToken").value = j.token; renderInstallCmd();
-    toast("Token 已重置", "ok");
+    toast("Token 已重置（已装 Agent 不受影响）", "ok");
   } catch (e) { toast("重置失败: " + e, "err"); }
 }
 
@@ -2504,6 +2540,18 @@ safeAddEventListener("osTabs", "click", e => {
 });
 safeAddEventListener("copyUninstallBtn", "click", function() {
   copyWithFeedback(this, $("uninstallCmd").textContent, "已复制卸载命令");
+});
+// 网关中继模式
+safeAddEventListener("relayMode", "change", function() {
+  RELAY_MODE = this.checked;
+  renderInstallCmd();
+});
+safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
+safeAddEventListener("copyRelayGatewayBtn", "click", function() {
+  copyWithFeedback(this, $("relayGatewayCmd").textContent, "已复制网关安装命令");
+});
+safeAddEventListener("copyRelayInternalBtn", "click", function() {
+  copyWithFeedback(this, $("relayInternalCmd").textContent, "已复制内网安装命令");
 });
 
 /* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */

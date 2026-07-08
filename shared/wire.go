@@ -85,7 +85,8 @@ type Report struct {
 	IP       string             `json:"ip,omitempty"`
 	Kernel   string             `json:"kernel,omitempty"`
 	Category string             `json:"category,omitempty"`
-	Token    string             `json:"token,omitempty"` // install token (optional auth)
+	Token    string             `json:"token,omitempty"`        // install token (registration only)
+	Fingerprint string          `json:"fingerprint,omitempty"`  // machine fingerprint (machine-id+MAC), authenticates reports
 	Metrics  Metrics            `json:"metrics"`
 	Custom   map[string]float64 `json:"custom,omitempty"`
 	Events   []Event            `json:"events,omitempty"`

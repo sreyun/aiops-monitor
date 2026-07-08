@@ -57,7 +57,7 @@ cat > config.json <<EOF
   "server": "$SERVER",
   "token": "$TOKEN",
   "category": "$CATEGORY",
-  "report_interval": 5,
+  "report_interval": 10,
   "plugin_interval": 15,
   "plugins_dir": "$DIR/plugins",
   "state_file": "$DIR/agent_state.json"
@@ -112,7 +112,7 @@ $cfg = @{
   server = $Server
   token = $Token
   category = $Category
-  report_interval = 5
+  report_interval = 10
   plugin_interval = 15
   plugins_dir = "$Dir\plugins"
   state_file = "$Dir\agent_state.json"
@@ -130,6 +130,108 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Na
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
 Write-Host "[AIOps] installed and started (user-level autostart). Check the dashboard."
+`
+
+// relayInstallShTemplate installs the agent in GATEWAY RELAY mode on Linux /
+// macOS. The relay listens on a local port and reverse-proxies all requests to
+// the cloud server — internal machines that can't reach the internet point their
+// agents at this relay instead. Only the gateway machine needs internet access.
+const relayInstallShTemplate = `#!/bin/sh
+set -e
+SERVER="__SERVER__"
+LISTEN="${RELAY_LISTEN:-:8080}"
+if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+case "$OS" in
+  Linux)
+    case "$ARCH" in
+      x86_64|amd64)   BIN="aiops-agent-linux-amd64" ;;
+      aarch64|arm64)   BIN="aiops-agent-linux-arm64" ;;
+      *)               BIN="aiops-agent-linux-amd64" ;;
+    esac
+    ;;
+  Darwin)
+    case "$ARCH" in
+      arm64)           BIN="aiops-agent-darwin-arm64" ;;
+      x86_64)          BIN="aiops-agent-darwin-amd64" ;;
+      *)               BIN="aiops-agent-darwin-amd64" ;;
+    esac
+    ;;
+  *) echo "unsupported OS: $OS"; exit 1 ;;
+esac
+
+echo "[AIOps] installing relay to $DIR (upstream $SERVER)"
+mkdir -p "$DIR"
+cd "$DIR"
+curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
+chmod +x aiops-agent
+
+cat > config.json <<EOF
+{
+  "relay": true,
+  "listen": "$LISTEN",
+  "server": "$SERVER"
+}
+EOF
+
+if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+  cat > /etc/systemd/system/aiops-relay.service <<UNIT
+[Unit]
+Description=AIOps Monitor Relay
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$DIR
+ExecStart=$DIR/aiops-agent --config $DIR/config.json
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now aiops-relay
+  echo "[AIOps] relay systemd service started: aiops-relay (listen $LISTEN)"
+else
+  pkill -f "$DIR/aiops-agent.*relay" 2>/dev/null || true
+  nohup "$DIR/aiops-agent" --config "$DIR/config.json" > "$DIR/relay.log" 2>&1 &
+  echo "[AIOps] relay started in background (log: $DIR/relay.log)"
+fi
+echo ""
+echo "[AIOps] Relay ready! Internal machines install with:"
+echo "  curl -fsSL http://<this-host-ip>$LISTEN/install.sh | sh"
+`
+
+// relayInstallPs1Template installs the agent in GATEWAY RELAY mode on Windows.
+const relayInstallPs1Template = `$ErrorActionPreference = "Stop"
+$Server = "__SERVER__"
+$Listen = if ($env:RELAY_LISTEN) { $env:RELAY_LISTEN } else { ":8080" }
+$Dir    = Join-Path $env:LOCALAPPDATA "aiops-agent"
+
+Write-Host "[AIOps] installing relay to $Dir (upstream $Server)"
+New-Item -ItemType Directory -Force $Dir | Out-Null
+Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
+
+$cfg = @{
+  relay  = $true
+  listen = $Listen
+  server = $Server
+} | ConvertTo-Json
+[System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
+
+$exe  = "$Dir\aiops-agent.exe"
+$conf = "$Dir\config.json"
+$vbs  = "$Dir\start-relay.vbs"
+$line = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $conf + '""", 0, False'
+[System.IO.File]::WriteAllText($vbs, $line, (New-Object System.Text.ASCIIEncoding))
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
+
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
+Write-Host "[AIOps] relay installed and started (listen $Listen)"
+Write-Host "[AIOps] internal machines use: http://<this-host-ip>$Listen"
 `
 
 // uninstallShTemplate stops + removes the agent on Linux / macOS.

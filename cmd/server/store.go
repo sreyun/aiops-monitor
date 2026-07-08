@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"sync"
 	"time"
 
@@ -25,18 +26,19 @@ const (
 
 // Host is the aggregate record the server keeps per agent.
 type Host struct {
-	ID        string             `json:"id"`
-	Hostname  string             `json:"hostname"`
-	OS        string             `json:"os"`
-	Platform  string             `json:"platform"`
-	Arch      string             `json:"arch"`
-	IP        string             `json:"ip"`
-	Kernel    string             `json:"kernel"`
-	Category  string             `json:"category"`
-	FirstSeen int64              `json:"first_seen"`
-	LastSeen  int64              `json:"last_seen"`
-	Latest    *shared.Sample     `json:"latest"`
-	Custom    map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
+	ID          string             `json:"id"`
+	Hostname    string             `json:"hostname"`
+	OS          string             `json:"os"`
+	Platform    string             `json:"platform"`
+	Arch        string             `json:"arch"`
+	IP          string             `json:"ip"`
+	Kernel      string             `json:"kernel"`
+	Category    string             `json:"category"`
+	Fingerprint string             `json:"fingerprint,omitempty"` // machine fingerprint (machine-id+MAC), bound at registration
+	FirstSeen   int64              `json:"first_seen"`
+	LastSeen    int64              `json:"last_seen"`
+	Latest      *shared.Sample     `json:"latest"`
+	Custom      map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
 
 	// Time-series history (multi-tier downsampling; persisted via the embedded DB)
 	histRaw  []shared.Sample // raw samples (5s interval, ~1.5h)
@@ -80,24 +82,79 @@ func NewStore() *Store {
 	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64), lastEvent: make(map[string]int64)}
 }
 
-// Upsert applies a report: base metrics -> sample history, custom gauges ->
-// latest snapshot, and any plugin events -> the global ring.
-func (s *Store) Upsert(r shared.Report) *Host {
+// GetHost returns a shallow copy of one host by id (for fingerprint verification).
+func (s *Store) GetHost(id string) (*Host, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.hosts[id]
+	if !ok {
+		return nil, false
+	}
+	cp := *h
+	return &cp, true
+}
+
+// RegisterHost binds a machine fingerprint to a host record at registration time.
+// It creates the host if absent, fills in a missing fingerprint, or updates the
+// fingerprint when the machine hardware changed but the agent state file (and thus
+// host_id) persisted. Token-based admission is checked by the caller beforehand.
+func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
+	now := time.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dt, ok := s.deleted[hostID]; ok {
+		if now-dt < deleteSuppressSec {
+			return &Host{ID: hostID} // recently deleted; suppress re-registration briefly
+		}
+		delete(s.deleted, hostID)
+	}
+	h, ok := s.hosts[hostID]
+	if !ok {
+		h = &Host{ID: hostID, Hostname: hostname, Fingerprint: fingerprint, FirstSeen: now, LastSeen: now}
+		s.hosts[hostID] = h
+		s.dirty = true
+		return h
+	}
+	// Existing record: fill in or update the fingerprint.
+	if h.Fingerprint != fingerprint {
+		h.Fingerprint = fingerprint
+		s.dirty = true
+	}
+	if hostname != "" {
+		h.Hostname = hostname
+	}
+	s.dirty = true
+	return h
+}
+
+// UpsertAuthenticated applies a report after verifying the agent's fingerprint
+// against the one bound at registration. Returns (nil, false) when the host is
+// unregistered, its fingerprint is not yet bound, or the fingerprint does not
+// match — the caller must reject the report with 403. Verification and update
+// happen under a single lock to avoid a TOCTOU window (host deleted between
+// check and upsert) and the double-lock overhead of GetHost + Upsert on the hot
+// report path.
+func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host, bool) {
 	now := time.Now().Unix()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if dt, ok := s.deleted[r.HostID]; ok {
 		if now-dt < deleteSuppressSec {
-			return &Host{ID: r.HostID} // recently deleted by an operator; ignore re-report
+			return nil, false // recently deleted by an operator; ignore re-report
 		}
 		delete(s.deleted, r.HostID) // suppression window elapsed
 	}
 
 	h, ok := s.hosts[r.HostID]
 	if !ok {
-		h = &Host{ID: r.HostID, FirstSeen: now}
-		s.hosts[r.HostID] = h
+		return nil, false // not registered
+	}
+	if h.Fingerprint == "" {
+		return nil, false // fingerprint not bound (agent hasn't registered yet)
+	}
+	if subtle.ConstantTimeCompare([]byte(fingerprint), []byte(h.Fingerprint)) != 1 {
+		return nil, false // fingerprint mismatch
 	}
 	h.Hostname = r.Hostname
 	h.OS = r.OS
@@ -175,7 +232,7 @@ func (s *Store) Upsert(r shared.Report) *Host {
 		s.events = s.events[len(s.events)-maxEvents:]
 	}
 	s.dirty = true
-	return h
+	return h, true
 }
 
 // hostMeta returns a shallow copy suitable for list APIs: the Latest sample is

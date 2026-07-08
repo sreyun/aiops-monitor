@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -109,7 +110,12 @@ type ServerConfig struct {
 	Thresholds    ThresholdConfig   `json:"thresholds"`
 	Categories    map[string]string `json:"categories"`
 	InstallToken  string            `json:"install_token"`
-	RequireToken  bool              `json:"require_token"`
+	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
+	// grace period, so existing agents don't drop offline the instant the token is
+	// rotated. Managed by ResetToken (rotate).
+	PrevInstallToken   string `json:"prev_install_token,omitempty"`
+	PrevTokenExpiresAt int64  `json:"prev_token_expires_at,omitempty"`
+	RequireToken       bool   `json:"require_token"`
 	Account       AccountConfig     `json:"account"`
 	Checks        []CustomCheck     `json:"checks"`
 	Playbooks     []Playbook        `json:"playbooks,omitempty"`
@@ -234,14 +240,54 @@ func (cs *ConfigStore) TrustProxy() bool {
 	return cs.cfg.TrustProxy
 }
 
-// ResetToken regenerates the install token and returns the new value.
+// tokenGracePeriod is how long a rotated-out token stays valid, so agents keep
+// reporting after a rotation until their install command is updated.
+const tokenGracePeriod = 7 * 24 * time.Hour
+
+// ResetToken ROTATES the install token: the current token becomes the previous
+// token (valid for tokenGracePeriod), then a fresh token is generated and
+// returned. Existing agents keep working during the grace window — a rotation is
+// no longer an instant "all agents offline" event.
 func (cs *ConfigStore) ResetToken() string {
 	cs.mu.Lock()
+	if cs.cfg.InstallToken != "" {
+		cs.cfg.PrevInstallToken = cs.cfg.InstallToken
+		cs.cfg.PrevTokenExpiresAt = time.Now().Add(tokenGracePeriod).Unix()
+	}
 	cs.cfg.InstallToken = genToken()
 	tok := cs.cfg.InstallToken
 	cs.mu.Unlock()
 	_ = cs.save()
 	return tok
+}
+
+// PrevTokenValidUntil returns the unix expiry of the grace-period token, or 0 if
+// none is active (used by the UI to show "old token valid until …").
+func (cs *ConfigStore) PrevTokenValidUntil() int64 {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.cfg.PrevInstallToken == "" || time.Now().Unix() >= cs.cfg.PrevTokenExpiresAt {
+		return 0
+	}
+	return cs.cfg.PrevTokenExpiresAt
+}
+
+// ValidInstallToken reports whether got matches the current token, or the
+// previous token during its grace period. Constant-time.
+func (cs *ConfigStore) ValidInstallToken(got string) bool {
+	cs.mu.RLock()
+	cur := cs.cfg.InstallToken
+	prev := cs.cfg.PrevInstallToken
+	prevExp := cs.cfg.PrevTokenExpiresAt
+	cs.mu.RUnlock()
+	if cur != "" && subtle.ConstantTimeCompare([]byte(got), []byte(cur)) == 1 {
+		return true
+	}
+	if prev != "" && time.Now().Unix() < prevExp &&
+		subtle.ConstantTimeCompare([]byte(got), []byte(prev)) == 1 {
+		return true
+	}
+	return false
 }
 
 // ---- account ----

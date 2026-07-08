@@ -18,7 +18,8 @@ import (
 // session, then opens two plain-HTTP streams — `rx` (server→agent keystrokes)
 // and `tx` (agent→server shell output). The operator's browser speaks WebSocket
 // to the server; the server relays bytes between the browser socket and the two
-// agent streams. Agent terminal endpoints are gated by the install token.
+// agent streams. Agent terminal endpoints are gated by the machine fingerprint
+// (bound at registration), not the install token.
 
 type termSession struct {
 	id        string
@@ -223,12 +224,25 @@ func (m *termManager) unregisterWaiter(hostID string, ch chan string) {
 	m.mu.Unlock()
 }
 
-// termTokenOK gates the agent-facing terminal endpoints on the install token
-// (constant-time compare), independent of the optional require_token setting.
-func (s *Server) termTokenOK(r *http.Request) bool {
-	want := s.cfg.InstallToken()
-	got := r.URL.Query().Get("token")
-	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+// termFingerprintOKByHost verifies the agent-presented fingerprint against the
+// fingerprint bound to hostID at registration (constant-time). The terminal
+// reverse channel authenticates by fingerprint, not the install token, so
+// rotating the token never breaks already-installed agents' terminals.
+func (s *Server) termFingerprintOKByHost(hostID, fp string) bool {
+	if hostID == "" || fp == "" {
+		return false
+	}
+	host, ok := s.store.GetHost(hostID)
+	if !ok || host.Fingerprint == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(fp), []byte(host.Fingerprint)) == 1
+}
+
+// termFingerprintOK is the request-flavored wrapper for handleAgentTermWait,
+// which carries host + fp as query params.
+func (s *Server) termFingerprintOK(r *http.Request) bool {
+	return s.termFingerprintOKByHost(r.URL.Query().Get("host"), r.URL.Query().Get("fp"))
 }
 
 // handleTerminal (browser side) upgrades to WebSocket and relays a shell session.
@@ -340,8 +354,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 // handleAgentTermWait: agent long-polls here; returns a session id when the
 // operator opens a terminal for this host, or {} on timeout (agent re-polls).
 func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
-	if !s.termTokenOK(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid token"})
+	if !s.termFingerprintOK(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	host := r.URL.Query().Get("host")
@@ -367,13 +381,13 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentTermRx streams operator keystrokes down to the agent (chunked).
 func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
-	if !s.termTokenOK(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid token"})
-		return
-	}
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		return
+	}
+	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	flusher, _ := w.(http.Flusher)
@@ -407,13 +421,13 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 // handleAgentTermTx receives the shell's output stream from the agent (chunked
 // request body) and fans it to the browser.
 func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
-	if !s.termTokenOK(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid token"})
-		return
-	}
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		return
+	}
+	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	sess.markAgentUp()
