@@ -289,12 +289,14 @@
     <div class="modal-body">
       <div class="field">
         <label>安装 Token</label>
-        <div class="token-row sensitive-field">
-          <input type="text" id="installToken" class="mono sensitive-mask" readonly>
-          <button class="btn sensitive-toggle" id="tokenToggleBtn" type="button" title="显示/隐藏 Token">
+        <div class="token-row">
+          <input type="text" id="installToken" class="mono" readonly>
+          <button class="token-action-btn" id="tokenToggleBtn" type="button" title="显示/隐藏 Token" aria-label="显示/隐藏 Token">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-          <button class="btn" id="resetTokenBtn">重置</button>
+          <button class="token-action-btn" id="resetTokenBtn" type="button" title="重置 Token" aria-label="重置 Token">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+          </button>
         </div>
         <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
       </div>

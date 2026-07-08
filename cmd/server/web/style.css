@@ -339,8 +339,19 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 svg.sparkline{width:100%; height:46px; display:block}
 
 /* 安装弹窗 */
-.token-row{display:flex; gap:8px}
-.token-row input{flex:1}
+.token-row{display:flex; gap:6px; align-items:stretch}
+.token-row input{flex:1; min-width:0}
+/* Token 行操作按钮：眼睛(显示/隐藏) + 重置，统一图标风格 */
+.token-action-btn{
+  flex:none; width:36px; display:flex; align-items:center; justify-content:center;
+  background:var(--panel2); border:1px solid var(--line2); border-radius:var(--r-sm);
+  color:var(--muted); cursor:pointer; padding:0;
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)
+}
+.token-action-btn:hover{color:var(--txt); border-color:var(--hover-border); background:var(--panel3)}
+.token-action-btn:active{transform:translateY(1px)}
+.token-action-btn svg{width:16px; height:16px}
+.token-action-btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 .tabs{display:flex; gap:2px; margin:4px 0 16px; border-bottom:1px solid var(--line)}
 .tab{background:none; border:none; color:var(--muted); font-family:inherit; font-size:13px;
   padding:9px 14px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
@@ -820,6 +831,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .mini-btn{width:var(--touch-min); height:var(--touch-min)}
   .term-btn{width:var(--touch-min); height:var(--touch-min)}
   .x-btn{width:var(--touch-min); height:var(--touch-min)}
+  .token-action-btn{width:var(--touch-min); height:var(--touch-min)}
   /* 列表项触摸增大 */
   .row-item{padding:14px 16px; flex-wrap:wrap; row-gap:4px}
   .row-item .msg{min-width:0; flex:1 1 100%; order:99}
@@ -877,14 +889,6 @@ svg.sparkline{width:100%; height:46px; display:block}
 select:focus-visible, input:focus-visible, .pager button:focus-visible{
   outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-sm)
 }
-/* 敏感信息脱敏展示 */
-.sensitive-field{position:relative}
-.sensitive-mask{font-family:ui-monospace,Menlo,Consolas,monospace; letter-spacing:1px; color:var(--muted); cursor:pointer; user-select:none}
-.sensitive-toggle{position:absolute; right:8px; top:50%; transform:translateY(-50%); background:var(--panel3); border:1px solid var(--line2);
-  border-radius:var(--r-xs); color:var(--muted); cursor:pointer; padding:3px 7px; font-size:11px; display:flex; align-items:center; gap:4px;
-  transition:color var(--transition-fast), border-color var(--transition-fast)}
-.sensitive-toggle:hover{color:var(--txt); border-color:var(--hover-border)}
-.sensitive-toggle svg{width:14px; height:14px}
 /* 敏感操作确认强化 */
 .btn.danger.confirm-pulse{animation:dangerPulse 1.5s ease-in-out infinite}
 @keyframes dangerPulse{0%,100%{box-shadow:0 0 0 0 var(--crit-soft)}50%{box-shadow:0 0 0 4px var(--crit-soft)}}
