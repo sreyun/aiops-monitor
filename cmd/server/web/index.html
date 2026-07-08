@@ -289,11 +289,14 @@
     <div class="modal-body">
       <div class="field">
         <label>安装 Token</label>
-        <div class="token-row">
-          <input type="text" id="installToken" class="mono" readonly>
+        <div class="token-row sensitive-field">
+          <input type="text" id="installToken" class="mono sensitive-mask" readonly>
+          <button class="btn sensitive-toggle" id="tokenToggleBtn" type="button" title="显示/隐藏 Token">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
           <button class="btn" id="resetTokenBtn">重置</button>
         </div>
-        <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。</div>
+        <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
       </div>
       <div class="field">
         <label>主机分类（可选，安装后自动归入该分组）</label>

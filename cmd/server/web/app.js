@@ -1536,10 +1536,23 @@ let INSTALL = { server_url: "", token: "" };
 let CUR_OS = "linux";
 let RELAY_MODE = false;
 let MULTI_SERVER_MODE = false;
+let TOKEN_REVEALED = false; // Token 脱敏状态
+function maskToken(t) {
+  if (!t) return "";
+  if (TOKEN_REVEALED) return t;
+  if (t.length <= 8) return "••••••••";
+  return t.slice(0, 4) + "••••••••" + t.slice(-4);
+}
+function updateTokenDisplay() {
+  const el = $("installToken"); if (!el) return;
+  el.value = maskToken(INSTALL.token || "");
+  el.dataset.revealed = TOKEN_REVEALED ? "1" : "0";
+}
 async function openInstall() {
   try {
     INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
-    $("installToken").value = INSTALL.token || "";
+    TOKEN_REVEALED = false;
+    updateTokenDisplay();
     RELAY_MODE = false;
     MULTI_SERVER_MODE = false;
     const cb = $("relayMode"); if (cb) cb.checked = false;
@@ -1634,7 +1647,7 @@ async function resetToken() {
   if (!confirm("重置 Token 后，旧安装命令将失效（仅影响新 Agent 注册；已装 Agent 靠机器指纹鉴权，不受影响）。确定重置？")) return;
   try {
     const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
-    INSTALL.token = j.token; $("installToken").value = j.token; renderInstallCmd();
+    INSTALL.token = j.token; TOKEN_REVEALED = false; updateTokenDisplay(); renderInstallCmd();
     toast("Token 已重置（已装 Agent 不受影响）", "ok");
   } catch (e) { toast("重置失败: " + e, "err"); }
 }
@@ -2160,7 +2173,8 @@ function openUserEdit(user) {
 }
 async function usersAction(name, act) {
   if (act === "del") {
-    if (!confirm(`确定删除用户「${name}」？该操作不可撤销。`)) return;
+    // 两步确认：防止误删敏感操作
+    if (!confirm(`⚠ 确定删除用户「${name}」？\n\n该操作不可撤销，该用户的所有会话将立即失效。\n如需继续，请点击「确定」。`)) return;
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}`, { method: "DELETE" });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { toast("用户已删除", "ok"); loadUsers(); } else toast(j.error || "删除失败", "err");
@@ -2492,6 +2506,11 @@ safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
 safeAddEventListener("resetTokenBtn", "click", resetToken);
+safeAddEventListener("tokenToggleBtn", "click", function() {
+  TOKEN_REVEALED = !TOKEN_REVEALED;
+  updateTokenDisplay();
+  this.title = TOKEN_REVEALED ? "隐藏 Token" : "显示 Token";
+});
 safeAddEventListener("copyCmdBtn", "click", function() {
   copyWithFeedback(this, $("installCmd").textContent, "已复制安装命令");
 });
