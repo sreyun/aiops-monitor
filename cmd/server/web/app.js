@@ -2771,12 +2771,17 @@ if (groupsEl) {
       return;
     }
     const host = e.target.closest(".host"); if (!host) return;
-    const act = e.target.closest("[data-act]"); if (!act) return;
+    const act = e.target.closest("[data-act]");
     const { id, name, cat } = host.dataset;
-    if (act.dataset.act === "detail") openDetail(id, name);
-    else if (act.dataset.act === "cat") editCategory(id, cat);
-    else if (act.dataset.act === "del") delHost(id, name);
-    else if (act.dataset.act === "term") openTerminal(id, name);
+    if (act) {
+      if (act.dataset.act === "detail") openDetail(id, name);
+      else if (act.dataset.act === "cat") editCategory(id, cat);
+      else if (act.dataset.act === "del") delHost(id, name);
+      else if (act.dataset.act === "term") openTerminal(id, name);
+    } else {
+      // 点击主机卡片/行内任意非操作按钮区域（进度条、负载、底部等）→ 打开详情
+      openDetail(id, name);
+    }
   });
 }
 
