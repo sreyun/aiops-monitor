@@ -4010,7 +4010,7 @@ function renderForwards() {
     <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
       <div style="flex:1; min-width:200px;">
         <div style="font-weight:600;">${esc(f.hostname)} → :${f.target_port}</div>
-        <div class="hint" style="margin-top:2px;">本地监听 <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} 个活跃连接</div>
+        <div class="hint" style="margin-top:2px;">${I18N.t("section.local_listen")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("section.active_connections")}</div>
       </div>
       <div style="display:flex; gap:8px; align-items:center;">
         <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title="${I18N.t('ui.copy_addr')}">${I18N.t("ui.copy_addr")}</button>
