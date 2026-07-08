@@ -16,7 +16,8 @@ import (
 )
 
 // appVersion is shown in the dashboard sidebar and the summary API.
-const appVersion = "1.1.0"
+// Override at build time:  go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server
+var appVersion = "3.8.7"
 
 // resolveDist finds the directory that holds the downloadable agent binaries
 // (+ plugins.zip). It tries the -dist flag, ./dist, then the server executable's
