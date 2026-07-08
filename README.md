@@ -176,6 +176,18 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/aiops-agent-darwin-arm64  ./cmd/agent
 GOOS=windows GOARCH=amd64 go build -o bin/aiops-agent.exe           ./cmd/agent
 ```
 
+**Windows 一键构建**（自动注入 Git tag 版本号）：
+
+```powershell
+# 自动获取 git describe --tags 并通过 ldflags 注入版本号
+powershell -File build.ps1
+
+# 含交叉编译 Linux/macOS 产物
+powershell -File build.ps1 -CrossCompile
+```
+
+> 也可手动注入版本号：`go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent`
+
 ### 开机自启
 
 <details>
@@ -362,7 +374,8 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 ## 远程终端
 
 - **多标签**：主机卡片一键打开，可同时开多台主机/多个终端
-- **会话录制与回放**：自动录制（带时间戳帧），支持进度条拖拽、倍速播放
+- **收起悬浮卡片**：点击「收起」按钮将终端最小化到右下角悬浮卡片，WebSocket 保持连接；支持多窗口并行收起、垂直堆叠；点击卡片即可展开恢复，不影响会话
+- **会话录制与回放**：自动录制（带时间戳帧 + 终端尺寸变化），支持进度条拖拽、倍速播放；回放时自动还原录制时的终端尺寸，避免排版错乱
 - **只读旁观**：多名管理员可同时旁观活跃会话，用于协作排障
 - **命令级审计**：执行的命令自动提取写入操作日志
 - **跨平台 TTY**：Windows ConPTY（chcp 65001 + GBK→UTF-8）、Linux/macOS openpty
@@ -839,10 +852,10 @@ aiops-monitor/
 - [x] MFA 两步验证（TOTP）+ 账户找回（邮箱验证码）+ 邮箱解除 MFA
 - [x] 邮件告警推送（SMTP）
 - [x] 实时面板：概览 + TOP10 + 分类分组/搜索/分页 + 卡片·列表双视图 + 宽屏切换
-- [x] 告警推送：飞书 / 钉钉 + 邮件，去重 + 状态转换
-- [x] gzip 压缩 + PWA 安装 + 移动端响应式
+- [x] 告警推送：飞书 / 钉钉 + 邮件，去重 + 状态转换 + 服务端防抖（连续 2 次才切换状态）
+- [x] gzip 压缩 + PWA 安装 + 移动端响应式 + 版本号自动注入（Git tag → ldflags）
 - [x] 分类多选筛选 + 折叠 + 键盘快捷键
-- [x] 远程终端：反向连接 + 全 TTY + 多标签 + 录制回放 + 只读旁观 + 命令审计
+- [x] 远程终端：反向连接 + 全 TTY + 多标签 + 收起悬浮卡片 + 录制回放（含终端尺寸还原） + 只读旁观 + 命令审计
 - [x] 自动化剧本：多步骤编排 + 批量并行 + 专用执行通道 + 中文乱码三层修复
 - [x] 多用户 RBAC：三角色 + 用户管理界面 + 路由级拦截
 - [x] 多服务端推送：采集一次广播所有 + 独立鉴权/重试/连接池
