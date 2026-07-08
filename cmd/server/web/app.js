@@ -101,7 +101,7 @@ const fmtRate = b => b < 1024 ? b.toFixed(0) + " B/s"
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分钟`;
+  return d > 0 ? `${d}${I18N.t("time.day")}${h}${I18N.t("time.hour")}` : h > 0 ? `${h}${I18N.t("time.hour")}${m}${I18N.t("time.min")}` : `${m}${I18N.t("time.minute")}`;
 };
 const fmtDateTime = ts => {
   const d = new Date(ts * 1000);
@@ -116,14 +116,14 @@ const fmtDateTime = ts => {
 const usageColor = p => p >= 90 ? "var(--crit)" : p >= 80 ? "var(--warn)" : p >= 60 ? "var(--info)" : "var(--ok)";
 const ago = ts => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  return s < 60 ? `${s}秒前` : s < 3600 ? `${Math.floor(s / 60)}分钟前` : s < 86400 ? `${Math.floor(s / 3600)}小时前` : `${Math.floor(s / 86400)}天前`;
+  return s < 60 ? `${s}${I18N.t("time.ago_sec")}` : s < 3600 ? `${Math.floor(s / 60)}${I18N.t("time.ago_min")}` : s < 86400 ? `${Math.floor(s / 3600)}${I18N.t("time.ago_hour")}` : `${Math.floor(s / 86400)}${I18N.t("time.ago_day")}`;
 };
 const fmtDur = sec => {
   const s = Math.max(0, Math.floor(sec));
-  if (s < 60) return `${s}秒`;
-  if (s < 3600) return `${Math.floor(s / 60)}分钟`;
-  if (s < 86400) return `${Math.floor(s / 3600)}小时${Math.floor(s % 3600 / 60)}分`;
-  return `${Math.floor(s / 86400)}天${Math.floor(s % 86400 / 3600)}小时`;
+  if (s < 60) return `${s}${I18N.t("time.sec")}`;
+  if (s < 3600) return `${Math.floor(s / 60)}${I18N.t("time.minute")}`;
+  if (s < 86400) return `${Math.floor(s / 3600)}${I18N.t("time.hour")}${Math.floor(s % 3600 / 60)}${I18N.t("time.min")}`;
+  return `${Math.floor(s / 86400)}${I18N.t("time.day")}${Math.floor(s % 86400 / 3600)}${I18N.t("time.hour")}`;
 };
 // 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）
 const isSystemMount = p => {
@@ -205,7 +205,7 @@ function notifyCriticalAlerts(critCount) {
   LAST_CRIT_COUNT = critCount;
   try {
     new Notification(I18N.t("misc.critical_alert_title"), {
-      body: newAlerts + " 条新的严重告警需要处理（总计 " + critCount + " 条）",
+      body: newAlerts + " " + I18N.t("misc.new_alerts_count") + " " + critCount + " " + I18N.t("misc.count_end"),
       icon: "/icon.svg",
       tag: "critical-alerts",
       renotify: true
@@ -357,7 +357,7 @@ function renderCards(s) {
     card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
     card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
     card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, I18N.t("ui.offline"), s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
-    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
+    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, I18N.t("ui.critical_alerts"), s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
     card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, I18N.t("ui.warning"), s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
     card("info", "event", s.plugin_events || 0, I18N.t("ui.plugin_events"), s.plugin_events > 0 ? "info" : "", "log:");
   // 空态引导 & 版本号
@@ -487,12 +487,12 @@ function renderAlerts(alerts) {
     return `${a.hostname}|${a.message}|${a.level}`;
   };
   const row = a => {
-    const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
+    const dur = a.since ? I18N.t("section.duration") + " " + fmtDur(now - a.since) : "";
     const ipStr = a.ip ? `<span class="alert-ip mono">${esc(a.ip)}</span>` : "";
     const timeStr = a.timestamp ? `<span class="alert-time mono">${fmtDateTime(a.timestamp)}</span>` : "";
     // dur 包装在 .alert-dur[data-since] 中，供 refreshAlertRowTimes 轻量更新
     const durSpan = a.since
-      ? `<span class="src alert-dur" data-since="${a.since}" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>`
+      ? `<span class="src alert-dur" data-since="${a.since}" title="${I18N.t("section.first_fired")} ${fmtDateTime(a.since)}">${dur}</span>`
       : "";
     return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
     <span class="badge ${esc(a.level)}">${a.level === "critical" ? I18N.t("ui.critical") : a.level === "info" ? I18N.t("toast.recovered") : I18N.t("ui.warning")}</span>
@@ -507,8 +507,8 @@ function renderAlerts(alerts) {
     const hay = ((a.hostname || "") + " " + (a.ip || "") + " " + (a.message || "")).toLowerCase();
     return hay.includes(ALERT_SEARCH.toLowerCase());
   });
-  const empty = `<div class="empty-line">✅ 暂无告警，一切正常</div>`;
-  const filterEmpty = `<div class="empty-line">当前筛选下无告警</div>`;
+  const empty = `<div class="empty-line">✅ ${I18N.t("empty.no_alerts")}</div>`;
+  const filterEmpty = `<div class="empty-line">${I18N.t("empty.no_alerts_filtered")}</div>`;
   $("alerts").innerHTML = filtered.length ? filtered.map(row).join("") : (n ? filterEmpty : empty);
   // 概览页告警列表：差量更新，避免全量 innerHTML 重建导致闪烁
   diffUpdateList($("ovAlerts"), alerts.slice(0, 6), row, alertKey, empty);
@@ -534,7 +534,7 @@ function renderTop(hosts) {
         <span class="ti-name">${esc(it.name)}</span>
         <div class="ti-bar"><div class="ti-fill" style="width:${it.width}%;background:${it.bar}"></div></div>
         <span class="ti-val mono">${esc(it.disp)}</span>
-      </div>`).join("") : `<div class="empty-line">暂无数据</div>`) + `</div>`;
+      </div>`).join("") : `<div class="empty-line">${I18N.t("empty.no_data")}</div>`) + `</div>`;
   // 百分比型：值不着色，进度条按占用配色
   const pct = (title, f, pool) => panelHTML(title, top(f, pool).map(it => ({
     id: it.id, name: it.name, disp: it.v.toFixed(1) + "%", width: Math.min(it.v, 100), bar: usageColor(it.v)
@@ -666,7 +666,7 @@ function renderLogPager(pages, total) {
   const pager = $("logPager");
   if (!pager) return;
   if (total === 0) { pager.innerHTML = ""; return; }
-  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} ${I18N.t("time.records")}</span>`; return; }
+  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">${I18N.t("ui.matched")}${total} ${I18N.t("time.records")}</span>`; return; }
   let btns = `<button ${LOG_PAGE === 1 ? "disabled" : ""} data-lpg="prev">‹</button>`;
   for (let i = 1; i <= pages; i++) {
     if (i === 1 || i === pages || Math.abs(i - LOG_PAGE) <= 1) {
@@ -676,7 +676,7 @@ function renderLogPager(pages, total) {
     }
   }
   btns += `<button ${LOG_PAGE === pages ? "disabled" : ""} data-lpg="next">›</button>`;
-  btns += `<span class="pinfo">共 ${total} ${I18N.t("time.records")} · ${LOG_PAGE}/${pages} 页</span>`;
+  btns += `<span class="pinfo">${I18N.t("ui.matched")}${total} ${I18N.t("time.records")} · ${LOG_PAGE}/${pages}${I18N.t("time.page_suffix")}</span>`;
   pager.innerHTML = btns;
 }
 
@@ -695,12 +695,12 @@ function hostCard(h) {
     : "";
   const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
   const disksHtml = disks.length
-    ? disks.map(d => bar("磁盘 " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
+    ? disks.map(d => bar(I18N.t("ui.disk_label") + " " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
     : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
   const gpus = Array.isArray(m.gpus) ? m.gpus : [];
   const gpusHtml = gpus.map(g => {
     const util = Math.max(0, Math.min(g.util_percent || 0, 100));
-    const memTxt = (g.mem_total || 0) > 0 ? " · 显存 " + fmtGB(g.mem_used || 0) + "/" + fmtGB(g.mem_total || 0) + "G" : "";
+    const memTxt = (g.mem_total || 0) > 0 ? " · " + I18N.t("ui.gpu_mem_short") + " " + fmtGB(g.mem_used || 0) + "/" + fmtGB(g.mem_total || 0) + "G" : "";
     const tempTxt = (g.temp || 0) > 0 ? " · " + Math.round(g.temp) + "℃" : "";
     const name = esc((g.name || "GPU").slice(0, 22));
     return `<div class="metric gpu"><div class="row"><span class="label">GPU ${name}</span>
@@ -721,8 +721,8 @@ function hostCard(h) {
   const lastCell = !h.online
     ? `<span class="g offline-tag" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : staleSec > 15
-      ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ 数据 ${ago(h.last_seen)}</span>`
-      : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
+      ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.data")} ${ago(h.last_seen)}</span>`
+      : `<span class="g">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
   return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
@@ -741,7 +741,7 @@ function hostCard(h) {
         <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
       </div>
     </div>
-    ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + "核")}
+    ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + I18N.t("ui.cores"))}
     ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
     ${swap}
     ${disksHtml}
@@ -953,7 +953,7 @@ let DETAIL_TIME_RANGE = 24; // hours: 24, 48, 72
 async function openDetail(id, name) {
   DETAIL_HOST_ID = id;
   DETAIL_TIME_RANGE = 24;
-  $("detailTitle").textContent = name + " · 近期趋势";
+  $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
   const body = $("detailBody");
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading")}</div>`;
   $("detailMask").classList.add("show");
@@ -1428,7 +1428,7 @@ function switchTermTab(idx) {
   if (idx < 0 || idx >= TERM_TABS.length) return;
   TERM_ACTIVE = idx;
   TERM_TABS.forEach((t, i) => { t.tabEl.classList.toggle("active", i === idx); t.screenEl.classList.toggle("active", i === idx); });
-  $("termTitle").textContent = TERM_TABS[idx].name + " · 远程终端";
+  $("termTitle").textContent = TERM_TABS[idx].name + " " + I18N.t("term.title");
   requestAnimationFrame(() => { const t = TERM_TABS[idx]; if (t && t.inputEl) t.inputEl.focus({ preventScroll: true }); else if (t) t.screenEl.focus(); });
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
   TERM_RESIZE = () => termRefit();
@@ -1659,12 +1659,12 @@ function renderTerminalSessions(sessions) {
     return `<div class="term-session-item">
       <div class="term-session-info">
         <div class="term-session-host">${esc(s.hostname)}</div>
-        <div class="term-session-meta">操作者 <strong style="color:var(--accent-txt)">${esc(s.operator)}</strong>${ipStr} · 开始 ${time} · ${s.frames} 帧录制</div>
+        <div class="term-session-meta">${I18N.t("section.operator")} <strong style="color:var(--accent-txt)">${esc(s.operator)}</strong>${ipStr}${I18N.t("section.start_label")}${time} · ${s.frames} ${I18N.t("ui.frames_recorded")}</div>
       </div>
-      ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} 旁观</span>` : `<span class="term-session-badge">活跃</span>`}
+      ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} ${I18N.t("ui.observe")}</span>` : `<span class="term-session-badge">${I18N.t("ui.active")}</span>`}
       <div class="term-session-actions">
-        <button class="btn sm" onclick="openTerminalObserve('${s.id}','${esc(s.hostname)}')">旁观</button>
-        <button class="btn sm" onclick="openTerminalReplay('${s.id}','${esc(s.hostname)}')">回放</button>
+        <button class="btn sm" onclick="openTerminalObserve('${s.id}','${esc(s.hostname)}')">${I18N.t("ui.observe")}</button>
+        <button class="btn sm" onclick="openTerminalReplay('${s.id}','${esc(s.hostname)}')">${I18N.t("ui.replay")}</button>
       </div>
     </div>`;
   }).join("");
@@ -1693,7 +1693,7 @@ function openTerminalReplay(sessionId, hostname) {
           break;
         }
       }
-      $("termReplayTitle").textContent = hostname + " · 会话回放";
+      $("termReplayTitle").textContent = hostname + " " + I18N.t("term.replay_title");
       const screen = $("termReplayScreen");
       const vt = makeVT(screen);
       // 用录制时的终端尺寸初始化 VT，避免 80x24 默认值导致换行错位
@@ -1823,7 +1823,7 @@ function openTerminalObserve(sessionId, hostname) {
   const screen = $("termObserveScreen");
   const vt = makeVT(screen);
   screen._vt = vt;
-  $("termObserveTitle").textContent = hostname + " · 只读旁观";
+  $("termObserveTitle").textContent = hostname + " " + I18N.t("term.observe_title");
   setObserveStatus(I18N.t("ui.connecting"), "");
   $("termObserveMask").classList.add("show");
   $("termSessionsMask").classList.remove("show");

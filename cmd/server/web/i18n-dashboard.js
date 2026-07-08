@@ -603,7 +603,17 @@
   "ui.purge_offline_title": "删除所有离线主机",
   "ui.exec_history_title": "查看执行历史",
   "ui.export_csv_title": "导出当前筛选结果为 CSV",
-  "ui.install_agent_title": "安装被监控端 Agent"
+  "ui.install_agent_title": "安装被监控端 Agent",
+  /* --- 第二轮深度 i18n 补充 --- */
+  "ui.critical_alerts": "严重告警",
+  "ui.disk_label": "磁盘",
+  "ui.gpu_mem_short": "显存",
+  "ui.data": "数据",
+  "ui.running": "运行",
+  "ui.cores": "核",
+  "ui.replay": "回放",
+  "ui.frames_recorded": "帧录制",
+  "time.page_suffix": " 页"
 };
 
   function t(key, fallback) {

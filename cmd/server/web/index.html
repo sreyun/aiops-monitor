@@ -376,8 +376,8 @@
         <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
       </div>
       <div class="field">
-        <label>主机分类（可选，安装后自动归入该分组）</label>
-        <input type="text" id="installCategory" placeholder="如 生产 / DB / 办公终端">
+        <label data-i18n="install.category_label">主机分类（可选，安装后自动归入该分组）</label>
+        <input type="text" id="installCategory" data-i18n-placeholder="install.category_placeholder" placeholder="如 生产 / DB / 办公终端">
       </div>
       <div class="tabs" id="osTabs">
         <button class="tab active" data-os="linux">Linux</button>
@@ -387,15 +387,15 @@
       <div class="field">
         <label class="relay-toggle">
           <input type="checkbox" id="relayMode">
-          <span>网关中继模式</span>
-          <span class="hint" style="font-weight:normal">仅一台机器能联网时使用</span>
+          <span data-i18n="install.relay_mode">网关中继模式</span>
+          <span class="hint" style="font-weight:normal" data-i18n="install.relay_hint">仅一台机器能联网时使用</span>
         </label>
       </div>
       <div class="field">
         <label class="relay-toggle">
           <input type="checkbox" id="multiServerMode">
-          <span>多服务端推送</span>
-          <span class="hint" style="font-weight:normal">单 Agent 同时向多个服务端推送</span>
+          <span data-i18n="install.multi_server">多服务端推送</span>
+          <span class="hint" style="font-weight:normal" data-i18n="install.multi_server_hint">单 Agent 同时向多个服务端推送</span>
         </label>
       </div>
       <div id="multiServerSection" style="display:none">
@@ -404,9 +404,9 @@
           <strong>原理</strong>：采集只执行一次，结果广播到所有服务端；各服务端独立鉴权、独立重试，互不影响。
         </div>
         <div class="field">
-          <label>服务端列表（每行一个，格式：URL [Token]）</label>
+          <label data-i18n="install.server_list_label">服务端列表（每行一个，格式：URL [Token]）</label>
           <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-a:8529 token-a&#10;https://server-b:8529 token-b"></textarea>
-          <div class="hint">每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。</div>
+          <div class="hint" data-i18n="install.server_list_hint">每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。</div>
         </div>
       </div>
       <div id="normalInstallSection" class="field">
@@ -433,8 +433,8 @@
           <div class="hint">安装后自动启动中继服务，监听 8529 端口，转发所有请求到云监控中心。</div>
         </div>
         <div class="field">
-          <label>网关内网 IP（供内网机器连接）</label>
-          <input type="text" id="relayGatewayIP" placeholder="如 192.168.1.10">
+          <label data-i18n="install.gateway_ip_label">网关内网 IP（供内网机器连接）</label>
+          <input type="text" id="relayGatewayIP" data-i18n-placeholder="install.gateway_ip_placeholder" placeholder="如 192.168.1.10">
         </div>
         <div class="field">
           <label>② 内网机器安装命令（在无法联网的机器上执行）</label>
@@ -501,30 +501,30 @@
         <input type="text" id="smtpUsername" placeholder="alert@example.com">
       </div>
       <div class="field">
-        <label>SMTP 授权码 / 密码</label>
-        <input type="password" id="smtpPassword" placeholder="留空保持原值不变">
+        <label data-i18n="settings.smtp_password">SMTP 授权码 / 密码</label>
+        <input type="password" id="smtpPassword" data-i18n-placeholder="settings.smtp_password_placeholder" placeholder="留空保持原值不变">
       </div>
       <div class="field">
-        <label>发件人显示名称</label>
+        <label data-i18n="settings.smtp_from_name">发件人显示名称</label>
         <input type="text" id="smtpFromName" placeholder="AIOps Monitor">
       </div>
 
-      <div class="subhead">告警阈值（%）</div>
+      <div class="subhead" data-i18n="settings.thresholds">告警阈值（%）</div>
       <div class="grid2">
-        <div class="field"><label>CPU 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重</label>
           <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
-        <div class="field"><label>内存 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重</label>
           <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
-        <div class="field"><label>磁盘 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重</label>
           <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
-        <div class="field"><label>失联判定（秒）</label>
+        <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
           <input type="text" id="offlineSec" class="mono"></div>
       </div>
-      <div class="hint">留空的 Webhook / Secret 表示保持原值不变（回显为脱敏）。</div>
+      <div class="hint" data-i18n="settings.keep_original">留空的 Webhook / Secret 表示保持原值不变（回显为脱敏）。</div>
     </div>
     <div class="modal-foot">
-      <button class="btn" id="testBtn">发送测试</button>
-      <button class="btn primary" id="saveBtn">保存</button>
+      <button class="btn" id="testBtn" data-i18n="settings.send_test">发送测试</button>
+      <button class="btn primary" id="saveBtn" data-i18n="settings.save">保存</button>
     </div>
   </div>
 </div>
@@ -570,13 +570,13 @@
 <div class="mask" id="termSessionsMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3>终端会话</h3>
+      <h3 data-i18n="term.sessions_title">终端会话</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="hint" style="margin-bottom:12px">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
+      <div class="hint" style="margin-bottom:12px" data-i18n="term.sessions_hint">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
       <div class="term-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-        <input type="text" id="termSessionSearch" placeholder="搜索：用户名 / 主机名 / IP 地址" 
+        <input type="text" id="termSessionSearch" data-i18n-placeholder="term.sessions_search" placeholder="搜索：用户名 / 主机名 / IP 地址" 
           style="flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 12px;color:var(--txt);font-size:13px;font-family:inherit"
           aria-label="搜索终端会话" />
         <span style="font-size:12px;color:var(--muted)" id="termSessionCount"></span>
@@ -659,21 +659,21 @@
 <div class="mask" id="profileMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3>个人信息</h3>
+      <h3 data-i18n="profile.title">个人信息</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="field"><label>用户名</label><input type="text" id="pfUsername" autocomplete="username" placeholder="登录账号"></div>
-      <div class="field"><label>显示名称</label><input type="text" id="pfDisplay" placeholder="如 运维小王"></div>
-      <div class="field"><label>邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
-      <div class="subhead">修改密码</div>
-      <div class="field"><label>原密码</label><input type="password" id="pfOld"></div>
-      <div class="field"><label>新密码（至少 4 位）</label><input type="password" id="pfNew"></div>
-      <div class="subhead">两步验证（Google Authenticator）</div>
+      <div class="field"><label data-i18n="profile.username">用户名</label><input type="text" id="pfUsername" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号"></div>
+      <div class="field"><label data-i18n="profile.display_name">显示名称</label><input type="text" id="pfDisplay" data-i18n-placeholder="form.hint_display_name" placeholder="如 运维小王"></div>
+      <div class="field"><label data-i18n="profile.email">邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
+      <div class="subhead" data-i18n="profile.change_password">修改密码</div>
+      <div class="field"><label data-i18n="profile.old_password">原密码</label><input type="password" id="pfOld"></div>
+      <div class="field"><label data-i18n="profile.new_password">新密码（至少 4 位）</label><input type="password" id="pfNew"></div>
+      <div class="subhead" data-i18n="profile.mfa">两步验证（Google Authenticator）</div>
       <div class="mfa-row">
         <div class="mfa-info">
           <span id="mfaState" class="mfa-state">加载中…</span>
-          <div class="mfa-desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
+          <div class="mfa-desc" data-i18n="profile.mfa_desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
         </div>
         <label class="mfa-switch" title="启用/关闭两步验证">
           <input type="checkbox" id="mfaToggleChk">
@@ -682,11 +682,11 @@
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn danger" id="logoutBtn">退出登录</button>
-      <button class="btn admin-only" id="usersBtn">用户管理</button>
+      <button class="btn danger" id="logoutBtn" data-i18n="profile.logout">退出登录</button>
+      <button class="btn admin-only" id="usersBtn" data-i18n="profile.user_mgmt">用户管理</button>
       <div style="flex:1"></div>
-      <button class="btn" id="pfPwdBtn">修改密码</button>
-      <button class="btn primary" id="pfSaveBtn">保存资料</button>
+      <button class="btn" id="pfPwdBtn" data-i18n="profile.change_password">修改密码</button>
+      <button class="btn primary" id="pfSaveBtn" data-i18n="profile.save_profile">保存资料</button>
     </div>
   </div>
 </div>
@@ -706,14 +706,14 @@
 <div class="mask" id="usersMask" data-close>
   <div class="modal wide">
     <div class="modal-head">
-      <h3>用户管理</h3>
+      <h3 data-i18n="users.title">用户管理</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
       <div class="global-mfa-row">
         <div class="global-mfa-info">
-          <span class="global-mfa-title">全局 MFA 强制策略</span>
-          <span class="mfa-desc">开启后，所有未启用两步验证的用户下次登录时必须完成 MFA 绑定后才能进入系统。</span>
+          <span class="global-mfa-title" data-i18n="users.global_mfa">全局 MFA 强制策略</span>
+          <span class="mfa-desc" data-i18n="users.global_mfa_desc">开启后，所有未启用两步验证的用户下次登录时必须完成 MFA 绑定后才能进入系统。</span>
         </div>
         <label class="mfa-switch" title="开启/关闭全局 MFA 强制">
           <input type="checkbox" id="globalMfaChk">
@@ -721,8 +721,8 @@
         </label>
       </div>
       <div class="users-toolbar">
-        <span class="mfa-desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
-        <button class="btn primary sm" id="userAddBtn" type="button">+ 新建用户</button>
+        <span class="mfa-desc" data-i18n="users.role_desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
+        <button class="btn primary sm" id="userAddBtn" type="button" data-i18n="ui.new_user">+ 新建用户</button>
       </div>
       <div id="usersList"></div>
     </div>
@@ -733,7 +733,7 @@
 <div class="mask" id="userEditMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3 id="userEditTitle">新建用户</h3>
+      <h3 id="userEditTitle" data-i18n="ui.new_user">新建用户</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="userEditBody"></div>
@@ -744,35 +744,35 @@
 <div class="mask" id="checkMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3 id="checkModalTitle">添加检查</h3>
+      <h3 id="checkModalTitle" data-i18n="check.add">添加检查</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="ckId">
-      <div class="field"><label>名称</label><input type="text" id="ckName" placeholder="如 官网首页 / MySQL 端口"></div>
-      <div class="field"><label>类型</label>
+      <div class="field"><label data-i18n="check.name">名称</label><input type="text" id="ckName" data-i18n-placeholder="check.name_placeholder" placeholder="如 官网首页 / MySQL 端口"></div>
+      <div class="field"><label data-i18n="check.type">类型</label>
         <div class="select-wrap"><select id="ckType">
-          <option value="http">HTTP 网站探测</option>
-          <option value="tcp">TCP 端口探测</option>
-          <option value="ping">Ping 主机存活</option>
-          <option value="process">进程存活监控</option>
+          <option value="http" data-i18n="check.type_http">HTTP 网站探测</option>
+          <option value="tcp" data-i18n="check.type_tcp">TCP 端口探测</option>
+          <option value="ping" data-i18n="check.type_ping">Ping 主机存活</option>
+          <option value="process" data-i18n="check.type_process">进程存活监控</option>
         </select></div>
       </div>
-      <div class="field" id="ckHostField" style="display:none"><label>目标主机</label>
+      <div class="field" id="ckHostField" style="display:none"><label data-i18n="check.target_host">目标主机</label>
         <div class="select-wrap"><select id="ckHost"></select></div>
       </div>
-      <div class="field"><label id="ckTargetLabel">URL 地址</label><input type="text" id="ckTarget" placeholder="https://example.com"></div>
+      <div class="field"><label id="ckTargetLabel" data-i18n="form.url">URL 地址</label><input type="text" id="ckTarget" placeholder="https://example.com"></div>
       <div class="grid2">
-        <div class="field"><label>检测间隔（秒）</label><input type="text" id="ckInterval" class="mono" value="30"></div>
-        <div class="field"><label>告警级别</label>
-          <div class="select-wrap"><select id="ckLevel"><option value="critical">严重</option><option value="warning">警告</option></select></div>
+        <div class="field"><label data-i18n="check.interval">检测间隔（秒）</label><input type="text" id="ckInterval" class="mono" value="30"></div>
+        <div class="field"><label data-i18n="check.alert_level">告警级别</label>
+          <div class="select-wrap"><select id="ckLevel"><option value="critical" data-i18n="ui.critical">严重</option><option value="warning" data-i18n="ui.warning">警告</option></select></div>
         </div>
       </div>
-      <label class="switch"><input type="checkbox" id="ckEnabled" checked> 启用该检查</label>
-      <div class="hint">异常（HTTP ≥400/超时、TCP 无法连接、Ping 不可达，或进程不存在）时自动产生告警并按「告警设置」推送。</div>
+      <label class="switch"><input type="checkbox" id="ckEnabled" checked> <span data-i18n="check.enable">启用该检查</span></label>
+      <div class="hint" data-i18n="check.hint">异常（HTTP ≥400/超时、TCP 无法连接、Ping 不可达，或进程不存在）时自动产生告警并按「告警设置」推送。</div>
     </div>
     <div class="modal-foot">
-      <button class="btn primary" id="ckSaveBtn">保存</button>
+      <button class="btn primary" id="ckSaveBtn" data-i18n="ui.save">保存</button>
     </div>
   </div>
 </div>
@@ -781,20 +781,20 @@
 <div class="mask" id="playbookMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3 id="playbookModalTitle">新建剧本</h3>
+      <h3 id="playbookModalTitle" data-i18n="playbook.new">新建剧本</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="pbId">
-      <div class="field"><label>剧本名称</label><input type="text" id="pbName" placeholder="如 重启 Nginx 服务"></div>
-      <div class="field"><label>描述（可选）</label><input type="text" id="pbDesc" placeholder="剧本用途说明"></div>
-      <div class="subhead">步骤列表</div>
+      <div class="field"><label data-i18n="playbook.name">剧本名称</label><input type="text" id="pbName" data-i18n-placeholder="playbook.name_placeholder" placeholder="如 重启 Nginx 服务"></div>
+      <div class="field"><label data-i18n="playbook.desc">描述（可选）</label><input type="text" id="pbDesc" data-i18n-placeholder="playbook.desc_placeholder" placeholder="剧本用途说明"></div>
+      <div class="subhead" data-i18n="playbook.steps">步骤列表</div>
       <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
-      <button class="btn" id="pbAddStep" type="button" style="margin-top:8px">+ 添加步骤</button>
-      <div class="hint">每个步骤在选定的目标主机上并行执行。目标可选：全部主机 / 按分类 / 指定主机。</div>
+      <button class="btn" id="pbAddStep" type="button" style="margin-top:8px" data-i18n="playbook.add_step">+ 添加步骤</button>
+      <div class="hint" data-i18n="playbook.hint">每个步骤在选定的目标主机上并行执行。目标可选：全部主机 / 按分类 / 指定主机。</div>
     </div>
     <div class="modal-foot">
-      <button class="btn primary" id="pbSaveBtn">保存剧本</button>
+      <button class="btn primary" id="pbSaveBtn" data-i18n="playbook.save">保存剧本</button>
     </div>
   </div>
 </div>
