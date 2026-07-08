@@ -623,6 +623,35 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// *** CRITICAL: Start the response pipe reader IMMEDIATELY after agentUp,
+	// BEFORE sending request frames. If the Agent failed to connect to the
+	// target, it already sent error data via the tx POST. The pipe reader must
+	// be running to capture that data before handleAgentForwardTx's defer
+	// sess.close() fires and closes sess.done. ***
+	pr, pw := io.Pipe()
+	var rawResponseBuf bytes.Buffer
+	var rawResponseMu sync.Mutex
+	const maxDiagBytes = 2048 // capture first 2KB for diagnostics
+	go func() {
+		defer pw.Close()
+		for {
+			select {
+			case b := <-sess.toUser:
+				sess.touch()
+				if _, err := pw.Write(b); err != nil {
+					return
+				}
+				rawResponseMu.Lock()
+				if rawResponseBuf.Len() < maxDiagBytes {
+					rawResponseBuf.Write(b)
+				}
+				rawResponseMu.Unlock()
+			case <-sess.done:
+				return
+			}
+		}
+	}()
+
 	// construct raw HTTP request bytes
 	path := "/" + r.PathValue("path")
 	if r.URL.RawQuery != "" {
@@ -653,7 +682,10 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		s.forward.stats.addBytes(n)
 	}
 
-	// send the request through the tunnel in chunks
+	// send the request through the tunnel in chunks.
+	// If the Agent closed the session (e.g. because it failed to connect to the
+	// target and already sent error data), jump to response reading instead of
+	// returning — the pipe reader already has the Agent's error response.
 	data := reqBuf.Bytes()
 	for len(data) > 0 {
 		chunk := data
@@ -664,9 +696,9 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		select {
 		case sess.toAgent <- forwardFrame('d', chunk):
 		case <-sess.done:
-			s.forward.stats.incError()
-			http.Error(w, Tr(r, "forward.session_disconnected"), http.StatusBadGateway)
-			return
+			// Agent disconnected before we could send the full request.
+			// Don't return — the pipe reader may already have error data.
+			goto readResponse
 		}
 		data = data[len(chunk):]
 	}
@@ -674,35 +706,10 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	select {
 	case sess.toAgent <- forwardFrame('c', nil):
 	case <-sess.done:
+		// Agent disconnected; proceed to read whatever is available
 	}
 
-	// read response from the agent via a pipe
-	// Capture raw data for better error diagnostics
-	pr, pw := io.Pipe()
-	var rawResponseBuf bytes.Buffer
-	var rawResponseMu sync.Mutex
-	const maxDiagBytes = 2048 // capture first 2KB for diagnostics
-	go func() {
-		defer pw.Close()
-		for {
-			select {
-			case b := <-sess.toUser:
-				sess.touch()
-				if _, err := pw.Write(b); err != nil {
-					return
-				}
-				// Capture for diagnostics (best effort, thread-safe)
-				rawResponseMu.Lock()
-				if rawResponseBuf.Len() < maxDiagBytes {
-					rawResponseBuf.Write(b)
-				}
-				rawResponseMu.Unlock()
-			case <-sess.done:
-				return
-			}
-		}
-	}()
-
+readResponse:
 	// P1: add timeout for reading upstream response
 	type readResult struct {
 		resp *http.Response
@@ -732,7 +739,6 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		if len(rawPreview) > 300 {
 			rawPreview = rawPreview[:300] + "..."
 		}
-		// Check if response is empty (Agent connection failed?)
 		if rawResponseBuf.Len() == 0 {
 			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err, "note", "empty response - agent may have failed to connect to target")
 		} else {

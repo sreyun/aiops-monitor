@@ -30,6 +30,12 @@ import (
 // poller. Slightly above the server's 25s poll timeout, matching termWaitHTTP.
 var forwardWaitHTTP = &http.Client{Timeout: 35 * time.Second}
 
+// forwardRxGracePeriod is how long the Agent waits after receiving the 'c'
+// (close) frame before closing the TCP connection to the target. For HTTP mode,
+// the target needs time to process the request and send its response. Closing
+// immediately would truncate the response.
+const forwardRxGracePeriod = 15 * time.Second
+
 // runForwardChannelFor runs a persistent reverse forward channel for one
 // server target. Each target gets its own goroutine so forward sessions from
 // different servers don't interfere.
@@ -40,7 +46,7 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 	}
 	slog.Info("端口转发通道已就绪，等待服务端呼叫…", "server", t.server)
 	for {
-		sid, targetPort, ok := a.forwardWait(t.server)
+		sid, targetPort, mode, ok := a.forwardWait(t.server)
 		if !ok {
 			time.Sleep(3 * time.Second)
 			continue
@@ -48,33 +54,34 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}
-		go a.runForwardSession(t.server, sid, targetPort)
+		go a.runForwardSession(t.server, sid, targetPort, mode)
 	}
 }
 
 // forwardWait long-polls the server for a pending forward session.
-func (a *Agent) forwardWait(server string) (sessionID string, targetPort int, ok bool) {
+func (a *Agent) forwardWait(server string) (sessionID string, targetPort int, mode string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}, "fp": {a.identity.Fingerprint}}
 	resp, err := forwardWaitHTTP.Get(server + "/api/v1/agent/forward/wait?" + q.Encode())
 	if err != nil {
-		return "", 0, false
+		return "", 0, "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, false
+		return "", 0, "", false
 	}
 	var out struct {
 		Session    string `json:"session"`
 		TargetPort int    `json:"target_port"`
+		Mode       string `json:"mode"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out.Session, out.TargetPort, true
+	return out.Session, out.TargetPort, out.Mode, true
 }
 
 // runForwardSession dials localhost:targetPort and relays data between the TCP
 // connection and the server's rx/tx streams. A panic in this goroutine must
 // never crash the whole agent.
-func (a *Agent) runForwardSession(server, sid string, targetPort int) {
+func (a *Agent) runForwardSession(server, sid string, targetPort int, mode string) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Warn("转发会话异常已恢复（不影响 Agent 运行）", "session", sid, "panic", r)
@@ -126,7 +133,18 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int) {
 	// rx: framed user data from the server → the TCP connection
 	go func() {
 		defer wg.Done()
-		defer closeAll()
+		// For HTTP mode: the 'c' frame means the request is fully sent, but the
+		// target still needs time to respond. Closing conn immediately would
+		// truncate the response. Wait a grace period before closing.
+		// For TCP mode: close immediately — the client already disconnected.
+		if mode == "http" {
+			defer func() {
+				time.Sleep(forwardRxGracePeriod)
+				closeAll()
+			}()
+		} else {
+			defer closeAll()
+		}
 		resp, err := termHTTP.Get(server + "/api/v1/agent/forward/rx?session=" + sid + "&fp=" + fp)
 		if err != nil {
 			return
