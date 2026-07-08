@@ -909,19 +909,69 @@ function createTermTab(id, name) {
   tabbar.appendChild(tab);
   const vt = makeVT(screen);
   screen._vt = vt;
-  const tabObj = {id, name, ws: null, vt, screenEl: screen, tabEl: tab, retry: 0};
+  /* 移动端虚拟键盘支持：在终端屏幕内注入隐藏 textarea 捕获输入。
+     必须在 makeVT() 之后创建——makeVT 会 screen.innerHTML="" 清空子节点。
+     <pre> 元素在移动端无法唤起虚拟键盘，<textarea> 可以。 */
+  const input = document.createElement("textarea");
+  input.className = "term-input";
+  input.setAttribute("autocapitalize", "off");
+  input.setAttribute("autocorrect", "off");
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("spellcheck", "false");
+  input.setAttribute("aria-label", "终端输入");
+  input.setAttribute("enterkeyhint", "enter");
+  input.setAttribute("rows", "1");
+  input.setAttribute("wrap", "off");
+  input.readOnly = false;
+  screen.appendChild(input);
+  const tabObj = {id, name, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false};
   TERM_TABS.push(tabObj);
   const idx = TERM_TABS.length - 1;
   tab.onclick = (e) => {
     if (e.target.classList.contains("term-tab-close")) { e.stopPropagation(); closeTermTab(TERM_TABS.indexOf(tabObj)); }
     else switchTermTab(TERM_TABS.indexOf(tabObj));
   };
-  screen.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj); };
-  screen.onpaste = ev => {
+  // 键盘事件绑定到隐藏 textarea（桌面+移动端统一入口）
+  input.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj); };
+  // 粘贴
+  input.onpaste = ev => {
     ev.preventDefault();
     const t = (ev.clipboardData || window.clipboardData).getData("text");
     if (t && tabObj.ws) termSend(tabObj.ws, t);
   };
+  // input 事件：移动端虚拟键盘字符输入 + 桌面端可打印字符（termKeyDown 不再处理可打印字符）
+  input.addEventListener("input", ev => {
+    if (tabObj.composing || ev.isComposing) return; // IME 组合中，等 compositionend
+    const text = input.value;
+    if (text && tabObj.ws) termSend(tabObj.ws, text);
+    input.value = "";
+  });
+  // IME 组合输入（中文/日文等输入法）
+  input.addEventListener("compositionstart", () => { tabObj.composing = true; });
+  input.addEventListener("compositionend", ev => {
+    tabObj.composing = false;
+    if (ev.data && tabObj.ws) termSend(tabObj.ws, ev.data);
+    input.value = "";
+  });
+  // beforeinput 兜底：部分移动浏览器 keydown 不触发 Backspace，用 beforeinput 捕获
+  input.addEventListener("beforeinput", ev => {
+    if (tabObj.composing) return;
+    if (ev.inputType === "deleteContentBackward") {
+      ev.preventDefault();
+      if (tabObj.ws) termSend(tabObj.ws, "\x7f");
+    }
+  });
+  // 点击终端区域 → 聚焦隐藏 textarea（触发移动端虚拟键盘）
+  // 有选区时不抢焦点，允许用户复制终端文本
+  screen.addEventListener("click", function() {
+    if (!window.getSelection().toString()) {
+      input.focus({ preventScroll: true });
+    }
+  });
+  // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
+  screen.addEventListener("focus", function() {
+    if (input && document.activeElement !== input) input.focus({ preventScroll: true });
+  });
   switchTermTab(idx);
   $("termMask").classList.remove("maximized");
   const mb = $("termMaxBtn"); if (mb) mb.title = "放大窗口";
@@ -937,7 +987,7 @@ function connectTermWS(tab) {
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
-  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on"); screen.focus(); requestAnimationFrame(doResize); };
+  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on"); if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
     const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
     vt.feed(text);
@@ -960,7 +1010,7 @@ function switchTermTab(idx) {
   TERM_ACTIVE = idx;
   TERM_TABS.forEach((t, i) => { t.tabEl.classList.toggle("active", i === idx); t.screenEl.classList.toggle("active", i === idx); });
   $("termTitle").textContent = TERM_TABS[idx].name + " · 远程终端";
-  requestAnimationFrame(() => TERM_TABS[idx].screenEl.focus());
+  requestAnimationFrame(() => { const t = TERM_TABS[idx]; if (t && t.inputEl) t.inputEl.focus({ preventScroll: true }); else if (t) t.screenEl.focus(); });
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
   TERM_RESIZE = () => termRefit();
   window.addEventListener("resize", TERM_RESIZE);
@@ -1225,7 +1275,12 @@ function termKeyDown(e, tab) {
   else if (e.ctrlKey && k.length === 1) {
     const c = k.toLowerCase().charCodeAt(0);
     if (c >= 97 && c <= 122) seq = String.fromCharCode(c - 96); // Ctrl+A..Z → 0x01..0x1A
-  } else if (k.length === 1 && !e.metaKey) seq = k; // 可打印字符
+  }
+  // 可打印字符不再由 keydown 处理——改由隐藏 textarea 的 input 事件统一处理。
+  // 原因：移动端虚拟键盘的 keydown e.key 常为 "Unidentified"，不可靠；
+  //       input 事件在所有平台都能正确获取实际输入文本。
+  // 桌面端：keydown 不 preventDefault → 字符进入 textarea → input 事件发送 → 清空 textarea
+  // 移动端：keydown 可能不识别 → 同样由 input 事件兜底发送
   if (seq !== null) { e.preventDefault(); termSend(ws, seq); }
 }
 /* ---------- 阶段2：VT100 / xterm 子集终端仿真器 ----------

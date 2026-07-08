@@ -612,10 +612,18 @@ svg.sparkline{width:100%; height:46px; display:block}
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.25;
   padding:12px 14px; height:62vh; overflow:auto; white-space:normal; outline:none; cursor:text;
   font-variant-ligatures:none; font-feature-settings:"liga" 0}
-.term-screen:focus{box-shadow:inset 0 0 0 1px var(--accent-soft)}
+.term-screen:focus, .term-screen:focus-within{box-shadow:inset 0 0 0 1px var(--accent-soft)}
 .term-row{white-space:pre; min-height:1em}
 .term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px}
-.term-screen:not(:focus) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text)}
+.term-screen:not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text)}
+/* 隐藏 textarea：移动端虚拟键盘捕获器（不可见但可聚焦） */
+.term-input{
+  position:absolute; top:0; left:0; width:1px; height:1px;
+  opacity:0; border:none; outline:none; padding:0; margin:0;
+  background:transparent; color:transparent; caret-color:transparent;
+  resize:none; font-size:16px; z-index:0; overflow:hidden;
+  white-space:nowrap; -webkit-appearance:none;
+}
 .term-hint{font-size:11px; color:var(--muted2); padding:9px 16px; border-top:1px solid var(--line);
   background:var(--panel); border-radius:0 0 var(--r-lg) var(--r-lg); letter-spacing:.01em}
 #termMask.maximized .term-hint{border-radius:0}
