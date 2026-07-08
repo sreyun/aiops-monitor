@@ -334,6 +334,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 					s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "终端命令 [" + hostname + "]: " + cmd})
 				}
 			}
+			// Record resize frames so replay can restore the original terminal dimensions
+			if typ == 'r' {
+				sess.recordFrame("resize", payload)
+			}
 			select {
 			case sess.toAgent <- termFrame(typ, payload):
 			case <-sess.done:

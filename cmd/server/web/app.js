@@ -1431,14 +1431,29 @@ function openTerminalReplay(sessionId, hostname) {
   fetch(`${API}/terminal/sessions/${encodeURIComponent(sessionId)}/replay`)
     .then(r => r.json())
     .then(data => {
-      // Replay only OUTPUT frames: the shell output already contains the command
-      // echo, so feeding INPUT frames too would render every keystroke a second
-      // time and garble the command lines.
-      const frames = (data.frames || []).filter(f => f.type === "output");
+      // Replay OUTPUT frames (shell output) + RESIZE frames (terminal dimension changes).
+      // INPUT frames are excluded: the shell output already contains the command echo.
+      const frames = (data.frames || []).filter(f => f.type === "output" || f.type === "resize");
       if (frames.length === 0) { toast("该会话无录制数据", "err"); return; }
+      // 从第一个 resize 帧获取录制时的初始终端尺寸
+      let initCols = 80, initRows = 24;
+      for (const f of frames) {
+        if (f.type === "resize") {
+          try {
+            const parts = atob(f.data).split("x");
+            const c = parseInt(parts[0]), r = parseInt(parts[1]);
+            if (c >= 20 && r >= 6) { initCols = c; initRows = r; }
+          } catch (e) {}
+          break;
+        }
+      }
       $("termReplayTitle").textContent = hostname + " · 会话回放";
       const screen = $("termReplayScreen");
       const vt = makeVT(screen);
+      // 用录制时的终端尺寸初始化 VT，避免 80x24 默认值导致换行错位
+      if (initCols !== 80 || initRows !== 24) {
+        vt.resizeTo(initCols, initRows);
+      }
       screen._vt = vt;
       REPLAY = {frames, idx: 0, vt, timer: null, playing: false, speed: 2};
       $("termReplayMask").classList.add("show");
@@ -1480,8 +1495,15 @@ function scheduleNextFrame() {
   }
   const frame = REPLAY.frames[REPLAY.idx];
   const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
-  const text = REPLAY.vt.dec.decode(bytes, { stream: true });
-  REPLAY.vt.feed(text);
+  if (frame.type === "resize") {
+    // resize 帧：解析 cols/rows 并调整 VT 网格，不 feed 文本
+    const parts = new TextDecoder().decode(bytes).split("x");
+    const c = parseInt(parts[0]), r = parseInt(parts[1]);
+    if (c >= 20 && r >= 6) REPLAY.vt.resizeTo(c, r);
+  } else {
+    const text = REPLAY.vt.dec.decode(bytes, { stream: true });
+    REPLAY.vt.feed(text);
+  }
   REPLAY.idx++;
   updateReplayProgress();
   let delay = 0;
@@ -1505,16 +1527,35 @@ function seekReplay(progress) {
   if (!REPLAY) return;
   pauseReplay();
   const targetIdx = Math.floor(progress * REPLAY.frames.length);
+  // 从头回放：先用第一个 resize 帧确定初始尺寸
+  let initCols = 80, initRows = 24;
+  for (const f of REPLAY.frames) {
+    if (f.type === "resize") {
+      try {
+        const parts = atob(f.data).split("x");
+        const c = parseInt(parts[0]), r = parseInt(parts[1]);
+        if (c >= 20 && r >= 6) { initCols = c; initRows = r; }
+      } catch (e) {}
+      break;
+    }
+  }
   const screen = $("termReplayScreen");
   const vt = makeVT(screen);
+  if (initCols !== 80 || initRows !== 24) vt.resizeTo(initCols, initRows);
   screen._vt = vt;
   REPLAY.vt = vt;
   REPLAY.idx = 0;
   for (let i = 0; i < targetIdx; i++) {
     const frame = REPLAY.frames[i];
     const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
-    const text = vt.dec.decode(bytes, { stream: true });
-    vt.feed(text);
+    if (frame.type === "resize") {
+      const parts = new TextDecoder().decode(bytes).split("x");
+      const c = parseInt(parts[0]), r = parseInt(parts[1]);
+      if (c >= 20 && r >= 6) vt.resizeTo(c, r);
+    } else {
+      const text = vt.dec.decode(bytes, { stream: true });
+      vt.feed(text);
+    }
   }
   REPLAY.idx = targetIdx;
   updateReplayProgress();
@@ -1842,6 +1883,21 @@ function makeVT(screen) {
     setTimeout(run, 120);             // 兜底：后台标签页 rAF 被暂停时仍能渲染
   }
 
+  // resizeTo — 重新分配网格到指定 cols/rows，保留已有内容
+  vt.resizeTo = function(cols, rows) {
+    cols = Math.max(20, cols); rows = Math.max(6, rows);
+    if (cols === vt.cols && rows === vt.rows) return;
+    const old = vt.grid;
+    vt.cols = cols; vt.rows = rows; vt.grid = [];
+    for (let y = 0; y < rows; y++) {
+      const r = newRow();
+      if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x];
+      vt.grid.push(r);
+    }
+    vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false;
+    scheduleRender();
+  };
+
   vt.fit = function () {
     const probe = document.createElement("span");
     probe.textContent = "MMMMMMMMMMMMMMMMMMMM";
@@ -1856,13 +1912,8 @@ function makeVT(screen) {
     const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     const cols = Math.max(20, Math.floor((screen.clientWidth - padX) / cw));
     const rows = Math.max(6, Math.floor((screen.clientHeight - padY) / chh));
-    if (cols !== vt.cols || rows !== vt.rows) {
-      const old = vt.grid; vt.cols = cols; vt.rows = rows; vt.grid = [];
-      for (let y = 0; y < rows; y++) { const r = newRow(); if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x]; vt.grid.push(r); }
-      vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false;
-      scheduleRender();
-    }
-    return { cols, rows };
+    vt.resizeTo(cols, rows);
+    return { cols: vt.cols, rows: vt.rows };
   };
   return vt;
 }
