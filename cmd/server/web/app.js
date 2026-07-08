@@ -4117,8 +4117,10 @@ function openHttpProxy(hostID, targetPort) {
 }
 
 function closeForwardModal() {
-  $("forwardMask").classList.remove("show");
-  $("backdrop").style.display = "none";
+  const forwardMask = $("forwardMask");
+  const backdrop = $("backdrop");
+  if (forwardMask) forwardMask.classList.remove("show");
+  if (backdrop) backdrop.style.display = "none";
 }
 
 async function deleteForward(id) {
@@ -4143,11 +4145,16 @@ async function deleteForward(id) {
 safeAddEventListener("addForwardBtn", "click", () => {
   populateForwardHosts();
   switchFwdMode("tcp");
-  $("fwdTargetPort").value = "";
-  $("fwdLocalPort").value = "";
-  $("fwdHttpPath").value = "";
-  $("forwardMask").classList.add("show");
-  $("backdrop").style.display = "";
+  const targetPort = $("fwdTargetPort");
+  const localPort = $("fwdLocalPort");
+  const httpPath = $("fwdHttpPath");
+  const forwardMask = $("forwardMask");
+  const backdrop = $("backdrop");
+  if (targetPort) targetPort.value = "";
+  if (localPort) localPort.value = "";
+  if (httpPath) httpPath.value = "";
+  if (forwardMask) forwardMask.classList.add("show");
+  if (backdrop) backdrop.style.display = "";
 });
 safeAddEventListener("fwdSubmitBtn", "click", submitForward);
 // Mode tab clicks
