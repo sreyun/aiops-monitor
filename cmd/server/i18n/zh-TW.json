@@ -275,4 +275,9 @@
   "log.forward_reason_timeout": "空閒逾時",
   "log.forward_reason_agent_down": "Agent 斷開",
   "log.forward_reason_error": "傳輸錯誤",
+
+  "forward.reason_host_unknown": "主機未註冊或從未上報",
+  "forward.reason_agent_down": "Agent 已離線 %s 分鐘",
+  "forward.reason_no_fingerprint": "Agent 未採集到機器指紋（無法建立轉發通道）",
+  "forward.reason_channel_not_ready": "轉發通道未就緒，請稍後重試"
 }

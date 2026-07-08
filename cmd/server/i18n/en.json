@@ -275,4 +275,9 @@
   "log.forward_reason_timeout": "idle timeout",
   "log.forward_reason_agent_down": "agent disconnected",
   "log.forward_reason_error": "transfer error",
+
+  "forward.reason_host_unknown": "Host not registered or never reported",
+  "forward.reason_agent_down": "Agent offline for %s min",
+  "forward.reason_no_fingerprint": "Agent has no machine fingerprint (forwarding channel cannot be established)",
+  "forward.reason_channel_not_ready": "Forwarding channel not ready, please retry"
 }

@@ -257,6 +257,27 @@ func (m *forwardManager) notifyAgent(hostID string, info forwardWaitInfo) bool {
 	}
 }
 
+// agentOfflineReason diagnoses why no agent forward waiter exists for hostID,
+// returning a human-readable reason in the current language to help the user
+// understand whether the host is truly offline, has never registered, or may
+// have a fingerprint mismatch.
+func agentOfflineReason(store *Store, hostID string) string {
+	host, ok := store.GetHost(hostID)
+	if !ok {
+		return Tz("forward.reason_host_unknown")
+	}
+	now := time.Now().Unix()
+	offlineSec := now - host.LastSeen
+	if offlineSec > 120 {
+		ago := fmt.Sprintf("%d", offlineSec/60)
+		return Tz("forward.reason_agent_down", ago)
+	}
+	if host.Fingerprint == "" {
+		return Tz("forward.reason_no_fingerprint")
+	}
+	return Tz("forward.reason_channel_not_ready")
+}
+
 func (m *forwardManager) registerWaiter(hostID string) chan forwardWaitInfo {
 	ch := make(chan forwardWaitInfo, 1)
 	m.mu.Lock()
@@ -607,7 +628,9 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// notify agent
 	if !s.forward.notifyAgent(hostID, forwardWaitInfo{sessionID: sess.id, targetPort: port, mode: "http"}) {
 		s.forward.stats.incError()
-		http.Error(w, Tr(r, "forward.agent_offline"), http.StatusBadGateway)
+		msg := agentOfflineReason(s.store, hostID)
+		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "hostID", hostID, "port", port, "path", r.URL.Path, "reason", msg)
+		http.Error(w, Tr(r, "forward.agent_offline")+": "+msg, http.StatusBadGateway)
 		return
 	}
 	// wait for agent to attach
@@ -781,7 +804,9 @@ func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request, hostID, h
 
 	if !s.forward.notifyAgent(hostID, forwardWaitInfo{sessionID: sess.id, targetPort: port, mode: "tcp"}) {
 		s.forward.stats.incError()
-		http.Error(w, Tr(r, "forward.agent_offline"), http.StatusBadGateway)
+		msg := agentOfflineReason(s.store, hostID)
+		slog.Warn("TCP转发 Agent未在线", "host", hostname, "hostID", hostID, "port", port, "reason", msg)
+		http.Error(w, Tr(r, "forward.agent_offline")+": "+msg, http.StatusBadGateway)
 		return
 	}
 	select {

@@ -275,4 +275,9 @@
   "log.forward_reason_timeout": "空闲超时",
   "log.forward_reason_agent_down": "Agent 断开",
   "log.forward_reason_error": "传输错误",
+
+  "forward.reason_host_unknown": "主机未注册或从未上报",
+  "forward.reason_agent_down": "Agent 已离线 %s 分钟",
+  "forward.reason_no_fingerprint": "Agent 未采集到机器指纹（无法建立转发通道）",
+  "forward.reason_channel_not_ready": "转发通道未就绪，请稍后重试"
 }
