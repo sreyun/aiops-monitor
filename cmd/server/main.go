@@ -16,8 +16,13 @@ import (
 )
 
 // appVersion is shown in the dashboard sidebar and the summary API.
-// Override at build time:  go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server
-var appVersion = "3.8.7"
+// The default "dev" is a fallback for development builds; production builds
+// inject the real Git tag at build time via ldflags:
+//
+//   go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent
+//
+// or use the build script:  powershell -File build.ps1
+var appVersion = "dev"
 
 // resolveDist finds the directory that holds the downloadable agent binaries
 // (+ plugins.zip). It tries the -dist flag, ./dist, then the server executable's
