@@ -39,15 +39,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><path d="M6 6h.01M6 18h.01"/></svg>
         <span data-i18n="nav.hosts">主机</span><span class="nav-count" id="navHosts">0</span>
       </a>
-      <a class="nav-item" data-view="checks" title="自定义监控（网站/端口拨测）">
+      <a class="nav-item" data-view="checks" data-i18n-title="nav.checks" title="自定义监控（网站/端口拨测）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
       </a>
-      <a class="nav-item" data-view="alerts" title="告警">
+      <a class="nav-item" data-view="alerts" data-i18n-title="nav.alerts" title="告警">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
         <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
       </a>
-      <a class="nav-item" data-view="automation" title="剧本编排 + 批量执行">
+      <a class="nav-item" data-view="automation" data-i18n-title="nav.automation" title="剧本编排 + 批量执行">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
         <span data-i18n="nav.automation">自动化</span>
       </a>
@@ -55,7 +55,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M2 12h3M19 12h3M9 12h6"/></svg>
         <span data-i18n="nav.forward">转发</span>
       </a>
-      <a class="nav-item" data-view="log" title="操作与介入日志">
+      <a class="nav-item" data-view="log" data-i18n-title="nav.log" title="操作与介入日志">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
         <span data-i18n="nav.log">日志</span><span class="nav-count" id="navLog">0</span>
       </a>
@@ -64,7 +64,7 @@
     <div class="side-actions">
       <button class="theme-toggle" id="themeToggle" title="切换深色/浅色主题" aria-label="切换主题">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-        <span>主题</span>
+        <span data-i18n="ui.theme">主题</span>
       </button>
       <button class="btn block icon" id="settingsBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -102,15 +102,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
       </button>
       <div class="select-wrap">
-        <select id="catFilter" title="按分类筛选"><option value="">全部分类</option></select>
+        <select id="catFilter" data-i18n-title="filter.by_category" title="按分类筛选"><option value="" data-i18n="section.all_categories">全部分类</option></select>
       </div>
-      <button class="btn icon" id="termSessionsBtn" title="终端会话管理（回放/旁观）">
+      <button class="btn icon" id="termSessionsBtn" data-i18n-title="ui.term_sessions_title" title="终端会话管理（回放/旁观）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        <span class="ib-label">终端会话</span>
+        <span class="ib-label" data-i18n="ui.term_sessions">终端会话</span>
       </button>
-      <button class="btn primary icon" id="installBtn" title="安装被监控端 Agent">
+      <button class="btn primary icon" id="installBtn" data-i18n-title="ui.install_agent_title" title="安装被监控端 Agent">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-        <span class="ib-label">安装 Agent</span>
+        <span class="ib-label" data-i18n="ui.install_agent_btn">安装 Agent</span>
       </button>
     </header>
 
@@ -119,15 +119,15 @@
       <section class="view active" id="view-overview">
         <!-- 空态引导：还没有任何主机时展示三步上手 -->
         <div class="onboard" id="onboarding" style="display:none">
-          <div class="ob-title">👋 欢迎使用 AIOps Monitor，三步开始监控</div>
+          <div class="ob-title" data-i18n="onboard.welcome">👋 欢迎使用 AIOps Monitor，三步开始监控</div>
           <div class="ob-steps">
-            <div class="ob-step"><span class="ob-num">1</span><div><b>安装 Agent</b><div class="hint">点下方按钮，复制一条命令到被监控主机执行</div></div></div>
-            <div class="ob-step"><span class="ob-num">2</span><div><b>查看主机</b><div class="hint">几秒后主机卡片自动出现在「主机」页</div></div></div>
-            <div class="ob-step"><span class="ob-num">3</span><div><b>配置告警</b><div class="hint">在「告警设置」里接入飞书 / 钉钉机器人</div></div></div>
+            <div class="ob-step"><span class="ob-num">1</span><div><b data-i18n="onboard.step1_title">安装 Agent</b><div class="hint" data-i18n="onboard.step1_hint">点下方按钮，复制一条命令到被监控主机执行</div></div></div>
+            <div class="ob-step"><span class="ob-num">2</span><div><b data-i18n="onboard.step2_title">查看主机</b><div class="hint" data-i18n="onboard.step2_hint">几秒后主机卡片自动出现在「主机」页</div></div></div>
+            <div class="ob-step"><span class="ob-num">3</span><div><b data-i18n="onboard.step3_title">配置告警</b><div class="hint" data-i18n="onboard.step3_hint">在「告警设置」里接入飞书 / 钉钉机器人</div></div></div>
           </div>
           <button class="btn primary icon" onclick="openInstall()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-            <span>立即安装第一台 Agent</span>
+            <span data-i18n="onboard.install_now">立即安装第一台 Agent</span>
           </button>
         </div>
 
@@ -138,11 +138,11 @@
 
         <div class="cols" style="margin-top:28px;">
           <div>
-            <div class="section-title">最近告警<span class="count-pill" id="ovAlertsCount">0</span></div>
+            <div class="section-title"><span data-i18n="section.recent_alerts">最近告警</span><span class="count-pill" id="ovAlertsCount">0</span></div>
             <div class="stack" id="ovAlerts"></div>
           </div>
           <div>
-            <div class="section-title">最近活动<span class="count-pill" id="ovLogCount">0</span></div>
+            <div class="section-title"><span data-i18n="section.recent_activity">最近活动</span><span class="count-pill" id="ovLogCount">0</span></div>
             <div class="stack" id="ovLog"></div>
           </div>
         </div>
@@ -150,21 +150,21 @@
 
       <!-- 主机 -->
       <section class="view" id="view-hosts">
-        <div class="section-title">主机列表<span class="count-pill" id="hostsCount">0</span>
-          <input type="text" id="hostSearch" class="search" placeholder="搜索主机名 / IP / 系统 / 分类…">
+        <div class="section-title"><span data-i18n="section.host_list">主机列表</span><span class="count-pill" id="hostsCount">0</span>
+          <input type="text" id="hostSearch" class="search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / 系统 / 分类…">
           <div class="select-wrap" style="margin-left:12px;">
-            <select id="hostFilter" onchange="filterHosts(this.value)" title="按状态筛选">
-              <option value="all">全部主机</option>
-              <option value="online">在线</option>
-              <option value="offline">离线</option>
+            <select id="hostFilter" onchange="filterHosts(this.value)" data-i18n-title="filter.by_status" title="按状态筛选">
+              <option value="all" data-i18n="filter.all_hosts">全部主机</option>
+              <option value="online" data-i18n="ui.online">在线</option>
+              <option value="offline" data-i18n="ui.offline">离线</option>
             </select>
           </div>
           <div class="select-wrap" style="margin-left:12px;">
             <select id="hostSort" onchange="sortHosts(this.value)" title="排序方式">
-              <option value="name">按名称</option>
-              <option value="cpu">按 CPU</option>
-              <option value="mem">按内存</option>
-              <option value="recent">最近活跃</option>
+              <option value="name" data-i18n="sort.by_name">按名称</option>
+              <option value="cpu" data-i18n="sort.by_cpu">按 CPU</option>
+              <option value="mem" data-i18n="sort.by_mem">按内存</option>
+              <option value="recent" data-i18n="sort.by_recent">最近活跃</option>
             </select>
           </div>
           <div class="view-toggle" id="hostViewToggle" title="切换卡片 / 列表视图" style="margin-left:12px">
@@ -175,7 +175,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
             </button>
           </div>
-          <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" title="删除所有离线主机">清理离线</button>
+          <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" data-i18n-title="ui.purge_offline_title" data-i18n="ui.purge_offline" title="删除所有离线主机">清理离线</button>
         </div>
         <div id="groups"></div>
         <div class="pager" id="pager"></div>
@@ -191,58 +191,58 @@
 
       <!-- 告警 -->
       <section class="view" id="view-alerts">
-        <div class="section-title">阈值告警<span class="tag">基础指标</span><span class="count-pill" id="alertsCount">0</span>
-          <input type="text" id="alertSearch" class="search" style="margin-left:auto; width:200px; max-width:35vw" placeholder="搜索主机名 / IP / 内容…">
+        <div class="section-title"><span data-i18n="section.threshold_alerts">阈值告警</span><span class="tag" data-i18n="section.basic_metrics">基础指标</span><span class="count-pill" id="alertsCount">0</span>
+          <input type="text" id="alertSearch" class="search" style="margin-left:auto; width:200px; max-width:35vw" data-i18n-placeholder="form.search_alert" placeholder="搜索主机名 / IP / 内容…">
         </div>
         <div class="log-filter" id="alertFilter">
-          <button class="chip-btn active" data-atype="">全部</button>
+          <button class="chip-btn active" data-atype="" data-i18n="filter.all_alert_types">全部</button>
           <button class="chip-btn" data-atype="cpu">CPU</button>
           <button class="chip-btn" data-atype="memory">内存</button>
           <button class="chip-btn" data-atype="disk">磁盘</button>
           <button class="chip-btn" data-atype="gpu">GPU</button>
           <button class="chip-btn" data-atype="load">负载</button>
-          <button class="chip-btn" data-atype="offline">失联</button>
-          <button class="chip-btn" data-atype="check">拨测</button>
+          <button class="chip-btn" data-atype="offline" data-i18n="filter.offline_type">失联</button>
+          <button class="chip-btn" data-atype="check" data-i18n="filter.check_type">拨测</button>
         </div>
         <div class="stack" id="alerts"></div>
       </section>
 
       <!-- 操作与介入日志 -->
       <section class="view" id="view-log">
-        <div class="section-title">操作与介入日志<span class="tag">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span>
+        <div class="section-title"><span data-i18n="section.op_log">操作与介入日志</span><span class="tag" data-i18n="section.op_sys_plugin">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="select-wrap">
-              <select id="logLevelFilter" onchange="filterLogsByLevel(this.value)" title="按级别筛选">
-                <option value="all">全部级别</option>
-                <option value="critical">严重</option>
-                <option value="warning">警告</option>
-                <option value="info">信息</option>
+              <select id="logLevelFilter" onchange="filterLogsByLevel(this.value)" data-i18n-title="filter.by_level" title="按级别筛选">
+                <option value="all" data-i18n="filter.all_levels">全部级别</option>
+                <option value="critical" data-i18n="ui.critical">严重</option>
+                <option value="warning" data-i18n="ui.warning">警告</option>
+                <option value="info" data-i18n="filter.info_level">信息</option>
               </select>
             </div>
             <div class="select-wrap">
-              <select id="logTimeRange" onchange="filterLogsByTime(this.value)" title="时间范围">
-                <option value="all">全部时间</option>
-                <option value="1h">最近1小时</option>
-                <option value="6h">最近6小时</option>
-                <option value="24h">最近24小时</option>
+              <select id="logTimeRange" onchange="filterLogsByTime(this.value)" data-i18n-title="filter.time_range" title="时间范围">
+                <option value="all" data-i18n="filter.all_time">全部时间</option>
+                <option value="1h" data-i18n="filter.last_1h">最近1小时</option>
+                <option value="6h" data-i18n="filter.last_6h">最近6小时</option>
+                <option value="24h" data-i18n="filter.last_24h">最近24小时</option>
               </select>
             </div>
             <div class="select-wrap">
-              <select id="logPageSize" onchange="setLogPageSize(this.value)" title="每页条数">
+              <select id="logPageSize" onchange="setLogPageSize(this.value)" data-i18n-title="filter.page_size" title="每页条数">
                 <option value="10">10 条/页</option>
                 <option value="30">30 条/页</option>
                 <option value="50" selected>50 条/页</option>
                 <option value="100">100 条/页</option>
               </select>
             </div>
-            <button class="btn" id="exportLogBtn" title="导出当前筛选结果为 CSV">导出 CSV</button>
+            <button class="btn" id="exportLogBtn" data-i18n-title="ui.export_csv_title" data-i18n="ui.export_csv" title="导出当前筛选结果为 CSV">导出 CSV</button>
           </div>
         </div>
         <div class="log-filter" id="logFilter">
-          <button class="chip-btn active" data-kind="">全部</button>
-          <button class="chip-btn" data-kind="操作">操作</button>
-          <button class="chip-btn" data-kind="系统">系统</button>
-          <button class="chip-btn" data-kind="插件">插件</button>
+          <button class="chip-btn active" data-kind="" data-i18n="filter.all_alert_types">全部</button>
+          <button class="chip-btn" data-kind="操作" data-i18n="section.op_sys_plugin_op">操作</button>
+          <button class="chip-btn" data-kind="系统" data-i18n="ui.system">系统</button>
+          <button class="chip-btn" data-kind="插件" data-i18n="section.op_sys_plugin_plugin">插件</button>
         </div>
         <div class="stack" id="log"></div>
         <div class="pager" id="logPager"></div>
@@ -250,7 +250,7 @@
 
       <!-- 自定义监控 -->
       <section class="view" id="view-checks">
-        <div class="section-title">自定义监控<span class="tag">网站 HTTP / 端口 TCP / 主机 Ping / 进程存活</span>
+        <div class="section-title"><span data-i18n="section.custom_checks">自定义监控</span><span class="tag" data-i18n="section.check_types">网站 HTTP / 端口 TCP / 主机 Ping / 进程存活</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="view-toggle" id="checkViewToggle" title="切换卡片 / 列表视图">
               <button class="vt-btn active" data-cview="pill" title="卡片视图">
@@ -262,7 +262,7 @@
             </div>
             <div class="select-wrap">
               <select id="checkFilter" onchange="filterChecks(this.value)" title="按类型筛选">
-                <option value="all">全部类型</option>
+                <option value="all" data-i18n="filter.all_check_types">全部类型</option>
                 <option value="http">HTTP</option>
                 <option value="tcp">TCP</option>
                 <option value="ping">Ping</option>
@@ -280,9 +280,9 @@
 
       <!-- 自动化运维 -->
       <section class="view" id="view-automation">
-        <div class="section-title">剧本编排<span class="tag">批量执行 · 自动化运维</span>
+        <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            <button class="btn" id="pbHistoryBtn" title="查看执行历史">执行历史</button>
+            <button class="btn" id="pbHistoryBtn" data-i18n-title="ui.exec_history_title" data-i18n="ui.exec_history" title="查看执行历史">执行历史</button>
             <button class="btn primary" id="addPlaybookBtn">+ 新建剧本</button>
           </div>
         </div>

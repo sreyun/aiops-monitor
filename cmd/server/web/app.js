@@ -464,7 +464,7 @@ function refreshAlertRowTimes(container, now) {
   if (!container) return;
   container.querySelectorAll(".alert-dur[data-since]").forEach(el => {
     const since = parseInt(el.dataset.since);
-    if (since) el.textContent = "已持续 " + fmtDur(now - since);
+    if (since) el.textContent = I18N.t("section.duration") + " " + fmtDur(now - since);
   });
 }
 function renderAlerts(alerts) {
@@ -933,7 +933,7 @@ async function delHost(id, name) {
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (r.ok) { toast(I18N.t("toast.host_deleted"), "ok"); refresh(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
-  } catch (e) { toast("删除失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
 }
 async function editCategory(id, cur) {
   const cat = prompt(I18N.t("section.set_category_desc"), cur || "");
@@ -944,7 +944,7 @@ async function editCategory(id, cur) {
       body: JSON.stringify({ category: cat.trim() })
     });
     if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); refresh(); } else { toast(I18N.t("toast.update_failed2"), "err"); }
-  } catch (e) { toast("更新失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
 }
 
 /* ---------- 主机趋势弹窗 ---------- */
@@ -2642,7 +2642,7 @@ async function delCheck(id) {
   try {
     const r = await fetch(`${API}/checks/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (r.ok) { toast(I18N.t("toast.deleted"), "ok"); loadChecks(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
-  } catch (e) { toast("删除失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
 }
 
 /* ---------- 账户 / 个人信息 ---------- */
@@ -3230,7 +3230,7 @@ async function purgeOffline() {
   for (const h of off) {
     try { const r = await fetch(`${API}/hosts/${encodeURIComponent(h.id)}`, { method: "DELETE" }); if (r.ok) ok++; } catch (e) { /* skip */ }
   }
-  toast(`已清理 ${ok} 台离线主机`, "ok");
+  toast(I18N.t("toast.cleaned") + ok + I18N.t("toast.hosts_cleaned"), "ok");
   refresh(true);
 }
 
