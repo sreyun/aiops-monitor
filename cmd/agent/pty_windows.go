@@ -190,6 +190,13 @@ func shellExe() string {
 	return "cmd.exe /K chcp 65001 >nul"
 }
 
+// ensureUTF8 converts possible non-UTF-8 bytes (GBK on Chinese Windows) to
+// UTF-8. Used by the playbook exec session to fix output from programs that
+// don't respect chcp 65001. Delegates to convertToUTF8 (Windows API).
+func ensureUTF8(b []byte) []byte {
+	return convertToUTF8(b)
+}
+
 func (c *conptyShell) Read(b []byte) (int, error) {
 	// Return leftover converted data from a previous read first.
 	if len(c.convBuf) > 0 {

@@ -69,6 +69,10 @@ func newPTY(cols, rows int) termShell {
 	return &unixPTY{master: master, cmd: cmd}
 }
 
+// ensureUTF8 is a no-op on Linux/macOS: the terminal already uses UTF-8 by
+// default (or the exec session sets LANG=en_US.UTF-8). No conversion needed.
+func ensureUTF8(b []byte) []byte { return b }
+
 func (u *unixPTY) Read(b []byte) (int, error)  { return u.master.Read(b) }
 func (u *unixPTY) Write(b []byte) (int, error) { return u.master.Write(b) }
 func (u *unixPTY) Resize(cols, rows int) error { setWinsize(u.master.Fd(), cols, rows); return nil }

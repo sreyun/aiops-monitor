@@ -114,11 +114,17 @@ func (a *Agent) runExecSession(sid, command string) {
 	defer cancel()
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
+		// Prefix with chcp 65001 so cmd.exe and its built-in commands emit UTF-8
+		// instead of the system ANSI code page (GBK on Chinese Windows). Without
+		// this, any Chinese text in the command output is garbled.
+		cmd = exec.CommandContext(ctx, "cmd", "/c", "chcp 65001 >nul && "+command)
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	}
-	// cmd.Env stays nil → inherit the agent's environment (PATH/HOME/…).
+	// Set a UTF-8 locale so command output (including Chinese) is encoded as
+	// UTF-8 on all platforms. On Windows, chcp 65001 handles the console code
+	// page; PYTHONIOENCODING helps Python programs that read the env.
+	cmd.Env = execEnv()
 	out, err := cmd.CombinedOutput()
 	exit := 0
 	if err != nil {
@@ -129,6 +135,10 @@ func (a *Agent) runExecSession(sid, command string) {
 			out = append(out, []byte("\n"+err.Error())...)
 		}
 	}
+	// Fallback: some programs bypass chcp and emit bytes in the system ANSI
+	// code page (e.g., a C program using printf with GBK literals). Convert any
+	// non-UTF-8 bytes to UTF-8 via the Windows API (no-op on Linux/macOS).
+	out = ensureUTF8(out)
 	// The server detects completion by the tx body ending; the exit code is
 	// appended on its own line so success/failure can be surfaced precisely.
 	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
@@ -284,6 +294,23 @@ func buildShellEnv() []string {
 	// is encoded as UTF-8 rather than the legacy C locale.
 	if runtime.GOOS != "windows" {
 		env = append(env, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	}
+	return env
+}
+
+// execEnv returns the environment for playbook exec sessions. It inherits
+// the agent's environment (PATH/HOME/…) and forces UTF-8 locale on all
+// platforms so command output (including Chinese) is always UTF-8.
+func execEnv() []string {
+	env := os.Environ()
+	if runtime.GOOS != "windows" {
+		// Ensure UTF-8 locale on Linux/macOS: some minimal containers default to
+		// the C locale which mangles non-ASCII output.
+		env = append(env, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	} else {
+		// Windows: chcp 65001 sets the console code page, but Python and other
+		// runtimes also check these env vars for UTF-8 I/O.
+		env = append(env, "PYTHONIOENCODING=utf-8")
 	}
 	return env
 }

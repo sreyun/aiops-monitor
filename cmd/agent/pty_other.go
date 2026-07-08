@@ -6,3 +6,6 @@ package main
 // terminal falls back to piped stdio. Windows (ConPTY), Linux and macOS
 // (openpty) each provide their own newPTY.
 func newPTY(cols, rows int) termShell { return nil }
+
+// ensureUTF8 is a no-op on unsupported platforms.
+func ensureUTF8(b []byte) []byte { return b }
