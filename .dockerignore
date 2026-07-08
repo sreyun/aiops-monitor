@@ -4,6 +4,7 @@ dist/
 *.exe
 *.json
 !go.mod
+!go.sum
 !config.example.json
 !server_config.example.json
 __pycache__/
