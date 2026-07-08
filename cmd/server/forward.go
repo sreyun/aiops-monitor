@@ -677,7 +677,10 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// read response from the agent via a pipe
+	// Capture raw data for better error diagnostics
 	pr, pw := io.Pipe()
+	var rawResponseBuf bytes.Buffer
+	const maxDiagBytes = 1024 // capture first 1KB for diagnostics
 	go func() {
 		defer pw.Close()
 		for {
@@ -685,6 +688,10 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 			case b := <-sess.toUser:
 				sess.touch()
 				pw.Write(b)
+				// Capture for diagnostics (best effort, don't block)
+				if rawResponseBuf.Len() < maxDiagBytes {
+					rawResponseBuf.Write(b)
+				}
 			case <-sess.done:
 				return
 			}
@@ -714,7 +721,16 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		s.forward.stats.incError()
-		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err)
+		rawPreview := rawResponseBuf.String()
+		if len(rawPreview) > 200 {
+			rawPreview = rawPreview[:200] + "..."
+		}
+		// Check if response is empty (Agent connection failed?)
+		if rawResponseBuf.Len() == 0 {
+			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err, "note", "empty response - agent may have failed to connect to target")
+		} else {
+			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err, "raw_preview", rawPreview)
+		}
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
 			Message: Tz("log.forward_parse_failed", port, path, err.Error())})
 		http.Error(w, Tr(r, "forward.parse_response_failed", err.Error()), http.StatusBadGateway)

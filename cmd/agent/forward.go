@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -82,10 +84,14 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int) {
 	conn, err := net.Dial("tcp", target)
 	if err != nil {
 		slog.Warn("转发目标连接失败", "session", sid, "target", target, "err", err)
-		// Notify the server by closing the tx stream immediately (empty body).
+		// Send an error frame to the server so it knows the target is unreachable
 		fp := url.QueryEscape(a.identity.Fingerprint)
+		var errBuf bytes.Buffer
+		// Send a simple HTTP-like error response as raw bytes
+		errMsg := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAgent failed to connect to localhost:%d: %s", targetPort, err.Error())
+		errBuf.WriteString(errMsg)
 		req, _ := http.NewRequest("POST",
-			server+"/api/v1/agent/forward/tx?session="+sid+"&fp="+fp, nil)
+			server+"/api/v1/agent/forward/tx?session="+sid+"&fp="+fp, &errBuf)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		if resp, err := termHTTP.Do(req); err == nil {
 			resp.Body.Close()
