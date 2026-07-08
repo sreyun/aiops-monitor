@@ -81,7 +81,7 @@ func defaultAccount() AccountConfig {
 	salt := genToken()[:16]
 	return AccountConfig{
 		Username:    "admin",
-		DisplayName: "管理员",
+		DisplayName: Tz("user.default_display"),
 		Salt:        salt,
 		Hash:        hashPassword("admin", salt),
 		Role:        RoleAdmin,
@@ -123,6 +123,9 @@ type ServerConfig struct {
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
+	// ForwardDisabled is an inverted flag so port forwarding defaults ON for
+	// existing configs (zero value = enabled); set true to globally disable it.
+	ForwardDisabled bool `json:"forward_disabled"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
@@ -164,21 +167,21 @@ func (c ServerConfig) Validate() error {
 		"disk_warn": t.DiskWarn, "disk_crit": t.DiskCrit,
 	} {
 		if v < 0 || v > 100 {
-			return fmt.Errorf("阈值 %s 必须在 0-100 之间（当前 %.1f）", name, v)
+			return fmt.Errorf("%s", Tz("config.threshold_range", name, v))
 		}
 	}
 	// OfflineAfter must be positive.
 	if t.OfflineAfterSec <= 0 {
-		return fmt.Errorf("离线判定时间必须大于 0（当前 %d 秒）", t.OfflineAfterSec)
+		return fmt.Errorf("%s", Tz("config.offline_positive", t.OfflineAfterSec))
 	}
 	// SMTP port must be valid when SMTP is enabled.
 	if c.SMTP.Enabled {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {
-			return fmt.Errorf("SMTP 端口必须在 1-65535 之间（当前 %d）", c.SMTP.Port)
+			return fmt.Errorf("%s", Tz("config.smtp_port_range", c.SMTP.Port))
 		}
 		// SMTP password (if set) must be at least 4 characters.
 		if c.SMTP.Password != "" && len(c.SMTP.Password) < 4 {
-			return fmt.Errorf("SMTP 密码至少 4 位")
+			return fmt.Errorf("%s", Tz("config.smtp_password_short"))
 		}
 	}
 	return nil
@@ -271,6 +274,14 @@ func (cs *ConfigStore) TerminalEnabled() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return !cs.cfg.TerminalDisabled
+}
+
+// ForwardEnabled reports whether the port forwarding feature is available
+// (default true; disabled only when forward_disabled is set in config).
+func (cs *ConfigStore) ForwardEnabled() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return !cs.cfg.ForwardDisabled
 }
 
 // TrustProxy reports whether to honor reverse-proxy client-IP headers
@@ -467,6 +478,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	// settings form — preserve them so a settings save can't silently flip them.
 	c.RequireToken = cs.cfg.RequireToken
 	c.TerminalDisabled = cs.cfg.TerminalDisabled
+	c.ForwardDisabled = cs.cfg.ForwardDisabled
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
@@ -482,7 +494,7 @@ func (cs *ConfigStore) Revert() error {
 	cs.mu.Lock()
 	if !cs.hasPrev {
 		cs.mu.Unlock()
-		return fmt.Errorf("没有可回滚的上一版本配置")
+		return fmt.Errorf("%s", Tz("config.no_revert"))
 	}
 	cs.cfg = cs.prev
 	cs.prev = ServerConfig{}

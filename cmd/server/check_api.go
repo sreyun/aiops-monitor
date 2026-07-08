@@ -15,7 +15,7 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 
 	// Built-in self health-check is always first
 	selfEntry := map[string]any{
-		"id": selfCheckID, "name": SelfCheckName, "type": "http",
+		"id": selfCheckID, "name": SelfCheckName(), "type": "http",
 		"target": "http://127.0.0.1:" + portFromAddr(s.checks.selfAddr) + "/healthz",
 		"interval_sec": 30, "level": "critical", "enabled": true,
 		"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
@@ -51,7 +51,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	c.Name = strings.TrimSpace(c.Name)
 	c.Target = strings.TrimSpace(c.Target)
 	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "process") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "名称 / 目标 / 类型不合法"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "check_api.invalid_params")})
 		return
 	}
 	if c.IntervalSec < 5 {
@@ -66,7 +66,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.checks.runNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "保存自定义监控：" + saved.Name})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.save_check", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
@@ -89,6 +89,6 @@ func (s *Server) handleCheckHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteCheck(id)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除自定义监控 " + id})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_check", id)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

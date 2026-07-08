@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title data-i18n="page.title">AIOps Monitor — 轻量级主机监控运维平台</title>
+<meta name="description" data-i18n="page.desc" content="轻量级主机监控运维平台 — Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo">
+      <span class="logo-icon">AI</span>
+      <span>AIOps Monitor</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html" class="active" data-i18n="nav.home">首页</a>
+      <a href="features.html" data-i18n="nav.features">功能详情</a>
+      <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
+      <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+    </div>
+    <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="nav-cta" data-i18n="nav.cta">免费部署</a>
+    <button class="nav-toggle">☰</button>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="hero-inner">
+    <div class="hero-badge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      <span data-i18n="hero.badge">开源免费 · 单二进制 · 3 分钟完成部署</span>
+    </div>
+    <h1 data-i18n-html="hero.title">
+      别再让运维团队<br>
+      被<span class="gradient-text">告警疲劳和手工排查</span>拖垮
+    </h1>
+    <p data-i18n="hero.desc">
+      轻量级主机监控运维平台 —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。
+      单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。
+    </p>
+    <div class="hero-actions">
+      <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="btn-primary" data-i18n="nav.deploy">立即部署 →</a>
+      <a href="#pain-points" class="btn-secondary" data-i18n="nav.seePain">了解痛点</a>
+    </div>
+    <div style="margin-top:16px;font-size:13px;color:var(--muted)" data-i18n-html="hero.creds">
+      默认凭据 <code style="background:var(--surface2);padding:2px 8px;border-radius:4px;color:var(--accent2)">admin / admin</code> · 首次登录后请立即修改并启用 MFA
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="num" data-count="3" data-suffix=" min" data-i18n="hero.stat1.num">3 min</div>
+        <div class="label" data-i18n="hero.stat1.label">完成部署</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num" data-count="0" data-i18n="hero.stat2.num">0</div>
+        <div class="label" data-i18n="hero.stat2.label">外部依赖</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num" data-count="3" data-suffix=" 平台" data-i18n="hero.stat3.num">3 平台</div>
+        <div class="label" data-i18n="hero.stat3.label">Linux/Win/macOS</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num" data-count="100" data-suffix="%" data-i18n="hero.stat4.num">100%</div>
+        <div class="label" data-i18n="hero.stat4.label">开源免费</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 痛点 -->
+<section class="section" id="pain-points" style="background:var(--bg2)">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag" data-i18n="pain.tag">痛点聚焦</div>
+      <h2 data-i18n="pain.title">中小企业运维的四大难题</h2>
+      <p class="section-desc" data-i18n="pain.desc">人力有限、工具分散、告警轰炸、排查靠人肉 —— 这些问题正在吞噬你团队的效率</p>
+    </div>
+    <div class="pain-grid">
+      <div class="pain-card reveal">
+        <div class="pain-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <h3 data-i18n="pain1.title">人力严重不足</h3>
+        <p data-i18n="pain1.desc">1-2 个运维管几十台到上百台机器，日常巡检、故障处理、安全补丁全靠人堆，加班成常态。</p>
+        <div class="pain-solution">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span data-i18n="pain1.sol">一条命令自动部署 Agent，批量纳管，运维人力立省 70%</span>
+        </div>
+      </div>
+      <div class="pain-card reveal">
+        <div class="pain-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <h3 data-i18n="pain2.title">告警疲劳轰炸</h3>
+        <p data-i18n="pain2.desc">每台机器一堆监控项，告警铺天盖地却分不清轻重缓急，真正的严重故障被淹没在噪音里。</p>
+        <div class="pain-solution">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span data-i18n="pain2.sol">分级告警（严重/警告）+ 去重冷却 + 桌面通知，只推真正需要处理的</span>
+        </div>
+      </div>
+      <div class="pain-card reveal">
+        <div class="pain-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <h3 data-i18n="pain3.title">故障排查耗时</h3>
+        <p data-i18n="pain3.desc">出问题先 SSH 上去敲命令查日志，定位全靠经验。多人协作时谁做了什么完全没记录。</p>
+        <div class="pain-solution">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span data-i18n="pain3.sol">远程终端免开端口 + 会话回放 + 操作审计，故障 5 分钟定位</span>
+        </div>
+      </div>
+      <div class="pain-card reveal">
+        <div class="pain-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="9" height="9"/><rect x="13" y="2" width="9" height="9"/><rect x="2" y="13" width="9" height="9"/><rect x="13" y="13" width="9" height="9"/></svg>
+        </div>
+        <h3 data-i18n="pain4.title">监控工具碎片化</h3>
+        <p data-i18n="pain4.desc">Prometheus 管指标、Grafana 看图、Alertmanager 告警、Jira 工单 —— 五六个工具拼起来，部署和维护成本高昂。</p>
+        <div class="pain-solution">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span data-i18n="pain4.sol">一个二进制搞定监控+告警+终端+自动化，替代 5+ 工具栈</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 核心功能预览 -->
+<section class="section">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag" data-i18n="feat.tag">核心能力</div>
+      <h2 data-i18n="feat.title">一个平台，覆盖运维全链路</h2>
+      <p class="section-desc" data-i18n="feat.desc">从采集到告警，从终端到自动化，不需要拼接多个工具</p>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <h3 data-i18n="feat1.title">实时监控</h3>
+        <p class="desc">CPU / 内存 / SWAP / 多磁盘 / 网络收发 / TCP 连接数 / 负载 / 进程数 / 运行时长 —— 5 秒级采集，多级降采样保留 7 天历史趋势。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          运维人员无需逐台 SSH 查看状态
+        </div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </div>
+        <h3 data-i18n="feat2.title">智能告警</h3>
+        <p class="desc">分级告警（严重/警告）+ 去重冷却 + 飞书/钉钉/邮件推送 + 桌面通知。告警噪音降低 80%。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          告警疲劳问题彻底解决
+        </div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </div>
+        <h3 data-i18n="feat3.title">远程终端</h3>
+        <p class="desc">浏览器直连主机终端，Agent 反向连接免开端口。会话全程录制，支持回放追溯和实时旁观。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          故障排查从 30 分钟缩短到 5 分钟
+        </div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        </div>
+        <h3 data-i18n="feat4.title">自动化运维</h3>
+        <p class="desc">可视化剧本编排，批量执行命令到多台主机。执行结果实时回传，历史可追溯。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          100 台主机的补丁更新，10 分钟搞定
+        </div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3 data-i18n="feat5.title">安全与合规</h3>
+        <p class="desc">多用户 RBAC（管理员/操作员/观察员）+ MFA 两步验证 + 会话审计 + 操作日志全记录。支持账户找回（邮箱验证码）和邮箱解除 MFA。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          满足等保审计要求
+        </div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        </div>
+        <h3 data-i18n="feat6.title">跨平台原生采集</h3>
+        <p class="desc">Linux（/proc + syscall）、Windows（Win32 API）、macOS（sysctl）三平台原生采集，AMD64 + ARM64 全覆盖。支持 NVIDIA、AMD、Apple GPU 监控。</p>
+        <div class="value">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          混合环境一套工具统管
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="cta-box reveal">
+    <h2 data-i18n="cta.title">三分钟，让运维变得简单</h2>
+    <p data-i18n="cta.desc">一条命令部署服务端，一条命令安装 Agent。无需数据库，无需消息队列，无需任何外部依赖。</p>
+    <div style="background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:16px 20px;margin:20px auto;max-width:520px;font-family:monospace;font-size:13px;text-align:left;color:var(--ok)" data-i18n-html="cta.cmd">
+      <span style="color:var(--muted)"># 启动服务端</span><br>
+      git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor<br>
+      docker compose up -d<br>
+      <span style="color:var(--muted)"># 浏览器打开 http://localhost:8529</span>
+    </div>
+    <div class="hero-actions" style="justify-content:center">
+      <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="btn-primary" data-i18n="nav.deploy">免费部署 →</a>
+      <a href="features.html" class="btn-secondary" data-i18n="cta.btn2">查看功能详情</a>
+    </div>
+  </div>
+</section>
+
+<!-- 页脚 -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="index.html" class="nav-logo">
+        <span class="logo-icon">AI</span>
+        <span>AIOps Monitor</span>
+      </a>
+      <p data-i18n="footer.desc">轻量级主机监控运维平台，为中小企业设计。开源免费，零依赖，开箱即用。</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-col">
+        <h4 data-i18n="footer.product">产品</h4>
+        <a href="features.html" data-i18n="nav.features">功能详情</a>
+        <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
+        <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+      </div>
+      <div class="footer-col">
+        <h4 data-i18n="footer.resources">资源</h4>
+        <a href="https://github.com/sreyun/aiops-monitor" target="_blank" data-i18n="footer.github">GitHub 仓库</a>
+        <a href="https://github.com/sreyun/aiops-monitor#readme" target="_blank" data-i18n="footer.docs">使用文档</a>
+        <a href="https://github.com/sreyun/aiops-monitor/blob/main/INSTALL.md" target="_blank" data-i18n="footer.install">安装指南</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bottom" data-i18n="footer.copy">© 2026 AIOps Monitor · MIT License · Built with Go</div>
+</footer>
+
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

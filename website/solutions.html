@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>解决方案 — AIOps Monitor</title>
+<meta name="description" content="单机监控快速部署、多机房集中监控、团队协作运维、等保合规审计 — 四大场景解决方案">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+    <div class="nav-links">
+      <a href="index.html" data-i18n="nav.home">首页</a>
+      <a href="features.html" data-i18n="nav.features">功能详情</a>
+      <a href="solutions.html" class="active" data-i18n="nav.solutions">解决方案</a>
+      <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+    </div>
+    <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="nav-cta" data-i18n="nav.cta">免费部署</a>
+    <button class="nav-toggle">☰</button>
+  </div>
+</nav>
+
+<section class="section" style="padding-top:120px">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag">解决方案</div>
+      <h2>真实场景，真实价值</h2>
+      <p class="section-desc">从单机到多机房，从个人到团队，从日常运维到合规审计</p>
+    </div>
+
+    <div class="scenario-list">
+      <!-- 场景 1 -->
+      <div class="scenario reveal">
+        <div>
+          <div class="scenario-num">场景 01</div>
+          <h3>单机监控快速部署</h3>
+          <p>一台服务器跑业务，一个人管运维。没有专业监控团队，也没有预算买商业 APM。</p>
+          <ul>
+            <li>一条 docker compose 命令启动监控服务端</li>
+            <li>一条 curl 命令在目标主机安装 Agent</li>
+            <li>3 分钟内完成全部部署，浏览器打开即用</li>
+            <li>无需 MySQL / Redis / Kafka，零外部依赖</li>
+            <li>飞书/钉钉 Webhook 配置后即收告警</li>
+          </ul>
+        </div>
+        <div class="scenario-visual">
+          <div class="mockup">
+            <span style="color:var(--muted)"># 1. 启动服务端</span><br>
+            git clone https://github.com/sreyun/aiops-monitor.git<br>
+            cd aiops-monitor && docker compose up -d<br><br>
+            <span style="color:var(--muted)"># 2. 在目标主机安装 Agent</span><br>
+            <span style="color:var(--muted)"># Linux（自动检测 amd64/arm64）</span><br>
+            curl -fsSL "http://server:8529/install.sh?token=XXX" | sudo sh<br><br>
+            <span style="color:var(--ok)">✓ 浏览器打开 http://localhost:8529</span><br>
+            <span style="color:var(--muted)">默认凭据 admin / admin</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 场景 2 -->
+      <div class="scenario reveal">
+        <div class="scenario-visual">
+          <div class="mockup">
+            <span style="color:var(--accent2)">[概览]</span> 15 台主机 · 14 在线 · 1 离线<br>
+            <span style="color:var(--ok)">●</span> web-01    CPU 23%  MEM 45%<br>
+            <span style="color:var(--ok)">●</span> web-02    CPU 18%  MEM 52%<br>
+            <span style="color:var(--ok)">●</span> db-master  CPU 67%  MEM 81%<br>
+            <span style="color:var(--crit)">●</span> db-slave   CPU  0%  MEM  0%<br>
+            <span style="color:var(--warn)">⚠</span> 告警: db-slave 已失联 120s<br>
+            <span style="color:var(--accent2)">[终端]</span> 点击 db-slave → 远程排查
+          </div>
+        </div>
+        <div>
+          <div class="scenario-num">场景 02</div>
+          <h3>多机房集中监控</h3>
+          <p>多个机房、几十上百台机器，分散管理看不到全局。某台机器挂了半天才发现。</p>
+          <ul>
+            <li>所有主机统一纳管到单一面板，按分类分组展示</li>
+            <li>Agent 支持多服务端广播，双活容灾不丢数据</li>
+            <li>网关中继模式：跨网段/防火墙后主机也能纳管</li>
+            <li>离线告警：主机 30 秒无上报即触发严重告警</li>
+            <li>概览页 KPI 卡片：在线/离线/严重告警/警告一目了然</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 场景 3 -->
+      <div class="scenario reveal">
+        <div>
+          <div class="scenario-num">场景 03</div>
+          <h3>团队协作运维</h3>
+          <p>多人运维但没有堡垒机，谁登了哪台机器、做了什么操作，完全没有记录。出了问题互相甩锅。</p>
+          <ul>
+            <li>三级 RBAC：管理员 / 操作员 / 观察员权限隔离</li>
+            <li>远程终端全程录制，支持倍速回放追溯</li>
+            <li>操作日志：谁在什么时候对哪台主机做了什么</li>
+            <li>实时旁观：多人同时查看同一终端会话</li>
+            <li>MFA 两步验证 + 暴力破解防护</li>
+          </ul>
+        </div>
+        <div class="scenario-visual">
+          <div class="mockup">
+            <span style="color:var(--accent2)">[终端会话]</span><br>
+            操作者: <span style="color:var(--ok)">zhangsan</span><br>
+            主机: db-master (10.0.1.5)<br>
+            时间: 14:23:08<br>
+            <span style="color:var(--muted)">─ 命令审计 ─</span><br>
+            $ top<br>
+            $ systemctl restart nginx<br>
+            $ tail -f /var/log/error.log<br>
+            <span style="color:var(--ok)">✓ 会话已录制 · 可回放</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 场景 4 -->
+      <div class="scenario reveal">
+        <div class="scenario-visual">
+          <div class="mockup">
+            <span style="color:var(--accent2)">[操作日志]</span><br>
+            14:23  操作  zhangsan  打开远程终端<br>
+            14:25  操作  zhangsan  终端命令: systemctl restart<br>
+            14:30  系统  告警引擎  CPU 恢复正常<br>
+            14:31  系统  通知引擎  飞书推送: 告警恢复<br>
+            15:00  操作  lisi      执行剧本: 批量更新补丁<br>
+            15:05  操作  lisi      剧本完成: 12/12 成功<br>
+            <span style="color:var(--muted)">─ 可导出 CSV ─</span>
+          </div>
+        </div>
+        <div>
+          <div class="scenario-num">场景 04</div>
+          <h3>等保合规审计</h3>
+          <p>等保测评要求操作可追溯、权限可管控、告警有记录。传统方式靠手动整理日志，费时费力。</p>
+          <ul>
+            <li>全量操作日志：操作/系统/插件三类，支持筛选和 CSV 导出</li>
+            <li>终端会话录制 + 回放，满足操作可追溯要求</li>
+            <li>MFA + RBAC，满足访问控制要求</li>
+            <li>告警推送记录可查（飞书/钉钉/邮件）</li>
+            <li>内嵌持久化：重启不丢历史数据</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="cta-box reveal">
+    <h2>无论你的运维场景是什么</h2>
+    <p>单机也好，多机房也罢，团队协作或合规审计 —— AIOps Monitor 都能 3 分钟搞定</p>
+    <div class="hero-actions" style="justify-content:center">
+      <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="btn-primary">免费部署 →</a>
+      <a href="comparison.html" class="btn-secondary">查看产品对比</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+      <p>轻量级主机监控运维平台，为中小企业设计。开源免费，零依赖，开箱即用。</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-col"><h4>产品</h4><a href="features.html" data-i18n="nav.features">功能详情</a><a href="solutions.html" data-i18n="nav.solutions">解决方案</a><a href="comparison.html" data-i18n="nav.comparison">产品对比</a></div>
+      <div class="footer-col"><h4>资源</h4><a href="https://github.com/sreyun/aiops-monitor" target="_blank">GitHub 仓库</a><a href="https://github.com/sreyun/aiops-monitor#readme" target="_blank">使用文档</a><a href="https://github.com/sreyun/aiops-monitor/blob/main/INSTALL.md" target="_blank">安装指南</a></div>
+    </div>
+  </div>
+  <div class="footer-bottom">© 2026 AIOps Monitor · MIT License · Built with Go</div>
+</footer>
+
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

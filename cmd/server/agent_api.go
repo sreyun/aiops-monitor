@@ -23,7 +23,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Once registered, the agent authenticates subsequent reports by fingerprint,
 	// so rotating this token never disturbs already-installed agents.
 	if s.cfg.AgentTokenRequired() && !s.cfg.ValidInstallToken(req.Token) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "无效或缺失的接入 Token"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.invalid_token")})
 		return
 	}
 	if req.Fingerprint == "" {
@@ -55,7 +55,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	h, ok := s.store.UpsertAuthenticated(rep, rep.Fingerprint)
 	if !ok {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "指纹鉴权失败：未注册或指纹不匹配"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.fingerprint_failed")})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": h.ID})

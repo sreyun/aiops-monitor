@@ -157,7 +157,9 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
 			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") ||
-			strings.Contains(r.URL.Path, "/terminal") { // WS upgrade + streaming relays must not be buffered
+			strings.Contains(r.URL.Path, "/terminal") || // WS upgrade + streaming relays must not be buffered
+			strings.Contains(r.URL.Path, "/forward") || // port forwarding streams must not be buffered
+			strings.HasPrefix(r.URL.Path, "/proxy/") { // HTTP proxy tunnels must not be buffered
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -169,9 +171,9 @@ func gzipMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
-	addr := flag.String("addr", ":8529", "监听地址，如 :8529 或 0.0.0.0:8529")
-	cfgPath := flag.String("config", "server_config.json", "服务端配置文件路径（告警/阈值/分类）")
-	distDir := flag.String("dist", "", "Agent 下载目录（含各平台二进制与 plugins.zip）；留空自动探测 ./dist 或程序所在目录")
+	addr := flag.String("addr", ":8529", Tz("server.flag_addr"))
+	cfgPath := flag.String("config", "server_config.json", Tz("server.flag_config"))
+	distDir := flag.String("dist", "", Tz("server.flag_dist"))
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -194,9 +196,9 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		if err := db.Save(); err != nil {
-			slog.Error("退出前落盘失败", "err", err)
+			slog.Error(Tz("server.save_failed"), "err", err)
 		} else {
-			slog.Info("状态已落盘,服务端退出。")
+			slog.Info(Tz("server.saved_exit"))
 		}
 		os.Exit(0)
 	}()
@@ -215,15 +217,15 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	slog.Info("AIOps Monitor 服务端已启动")
-	slog.Info("监控面板", "url", "http://localhost"+*addr)
-	slog.Info("API 前缀", "url", "http://localhost"+*addr+"/api/v1/")
-	slog.Info("配置文件", "path", *cfgPath)
-	slog.Info("数据库", "path", dbPathFor(*cfgPath), "note", "内嵌轻量库,历史/日志/会话重启不丢")
+	slog.Info(Tz("server.started"))
+	slog.Info(Tz("server.dashboard_url"), "url", "http://localhost"+*addr)
+	slog.Info(Tz("server.api_url"), "url", "http://localhost"+*addr+"/api/v1/")
+	slog.Info(Tz("server.config_file"), "path", *cfgPath)
+	slog.Info(Tz("server.db_path"), "path", dbPathFor(*cfgPath), "note", Tz("server.db_note"))
 	if hasAgentBinary(dist) {
-		slog.Info("下载目录", "path", dist, "note", "一键安装可用")
+		slog.Info(Tz("server.dist_dir"), "path", dist, "note", Tz("server.dist_ok"))
 	} else {
-		slog.Warn("未找到 Agent 下载文件，一键安装不可用；请用 -dist 指定含 aiops-agent* 与 plugins.zip 的目录")
+		slog.Warn(Tz("server.dist_missing"))
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

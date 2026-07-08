@@ -26,11 +26,11 @@ import (
 // is safe to surface to the operator.
 func sendEmail(cfg SMTPConfig, to, subject, htmlBody string) error {
 	if !cfg.Enabled || cfg.Host == "" || cfg.Username == "" {
-		return fmt.Errorf("邮件服务未配置或未启用")
+		return fmt.Errorf("%s", Tz("email.not_configured"))
 	}
 	// Reject CR/LF in header-bound fields to prevent SMTP header injection.
 	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") || strings.ContainsAny(cfg.FromName, "\r\n") {
-		return fmt.Errorf("非法的收件人 / 主题 / 发件人名称")
+		return fmt.Errorf("%s", Tz("email.invalid_header"))
 	}
 	if cfg.Port == 0 {
 		cfg.Port = 465
@@ -52,32 +52,32 @@ func sendEmail(cfg SMTPConfig, to, subject, htmlBody string) error {
 		tlsCfg := &tls.Config{ServerName: cfg.Host}
 		conn, err := tls.Dial("tcp", addr, tlsCfg)
 		if err != nil {
-			return fmt.Errorf("TLS 连接失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.tls_failed", err))
 		}
 		defer conn.Close()
 		c, err := smtp.NewClient(conn, cfg.Host)
 		if err != nil {
-			return fmt.Errorf("SMTP 握手失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.smtp_handshake_failed", err))
 		}
 		defer c.Close()
 		if err = c.Auth(auth); err != nil {
-			return fmt.Errorf("SMTP 认证失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.smtp_auth_failed", err))
 		}
 		if err = c.Mail(from); err != nil {
-			return fmt.Errorf("发件人错误: %v", err)
+			return fmt.Errorf("%s", Tz("email.sender_error", err))
 		}
 		if err = c.Rcpt(to); err != nil {
-			return fmt.Errorf("收件人错误: %v", err)
+			return fmt.Errorf("%s", Tz("email.recipient_error", err))
 		}
 		w, err := c.Data()
 		if err != nil {
-			return fmt.Errorf("数据写入失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.data_error", err))
 		}
 		if _, err = w.Write(msg); err != nil {
-			return fmt.Errorf("邮件写入失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.write_error", err))
 		}
 		if err = w.Close(); err != nil {
-			return fmt.Errorf("邮件发送失败: %v", err)
+			return fmt.Errorf("%s", Tz("email.send_error", err))
 		}
 		return nil
 	}
@@ -181,7 +181,7 @@ func (em *emailManager) markSent(email string) {
 func (em *emailManager) issueCode(email, purpose string) (string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if !em.canSend(email) {
-		return "", fmt.Errorf("发送过于频繁，请 60 秒后再试")
+		return "", fmt.Errorf("%s", Tz("recovery.rate_limited"))
 	}
 	code := genCode()
 	em.mu.Lock()

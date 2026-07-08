@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"os/exec"
@@ -142,7 +141,7 @@ func (cr *checkRunner) runSelfCheck() {
 	msg := ""
 	code := 0
 	if err != nil {
-		msg = "请求失败: " + err.Error()
+		msg = Tz("check.request_failed", err.Error())
 	} else {
 		code = resp.StatusCode
 		resp.Body.Close()
@@ -253,7 +252,7 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	case "process":
 		ok, msg = cr.probeProcess(c.Target)
 	default:
-		ok, msg = false, "未知检查类型: "+c.Type
+		ok, msg = false, Tz("check.unknown_type", c.Type)
 	}
 	lat := float64(time.Since(start).Milliseconds())
 	if c.Type == "ping" { // ping "latency" is the ICMP round-trip time, not the command duration
@@ -309,11 +308,11 @@ func (cr *checkRunner) transition(c CustomCheck, up bool, msg string) {
 	a := Alert{Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name, Timestamp: time.Now().Unix()}
 	if up {
 		a.Level = "info"
-		a.Message = "自定义监控恢复：" + c.Name
+		a.Message = Tz("check.custom_recovered", c.Name)
 	} else {
-		a.Message = "自定义监控异常：" + c.Name + "（" + msg + "）"
+		a.Message = Tz("check.custom_failed", c.Name, msg)
 	}
-	cr.store.AddLog(LogEntry{Kind: "系统", Level: a.Level, Actor: "自定义监控", Host: c.Name, Message: a.Message})
+	cr.store.AddLog(LogEntry{Kind: KindSystem, Level: a.Level, Actor: Tz("check.custom_monitor"), Host: c.Name, Message: a.Message})
 	if cfg := cr.cfg.Get(); cfg.AlertsEnabled {
 		cr.notifier.pushChannels(cfg, a, !up)
 	}
@@ -345,7 +344,7 @@ func (cr *checkRunner) probeHTTP(target string) (bool, string, int, int) {
 			time.Sleep(500 * time.Millisecond) // brief pause before retry
 		}
 	}
-	return false, "请求失败: " + lastErr.Error(), 0, -1
+	return false, Tz("check.request_failed", lastErr.Error()), 0, -1
 }
 
 // certDaysRemaining returns whole days until the served leaf TLS certificate
@@ -362,10 +361,10 @@ func certDaysRemaining(resp *http.Response) int {
 func (cr *checkRunner) probeTCP(target string) (bool, string) {
 	conn, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
-		return false, "连接失败: " + err.Error()
+		return false, Tz("check.connect_failed", err.Error())
 	}
 	conn.Close()
-	return true, "连接正常"
+	return true, Tz("check.connect_ok")
 }
 
 // probePing runs the system `ping` (zero-dependency, no raw-socket privilege
@@ -378,7 +377,7 @@ func (cr *checkRunner) probePing(target string) (bool, string, float64, float64)
 	// shell), but a leading '-' or embedded whitespace could still be read as a
 	// ping flag, so reject those outright.
 	if target == "" || strings.HasPrefix(target, "-") || strings.ContainsAny(target, " \t\r\n") {
-		return false, "无效的主机地址", -1, -1
+		return false, Tz("check.invalid_host"), -1, -1
 	}
 	const sent = 3
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -399,9 +398,9 @@ func (cr *checkRunner) probePing(target string) (bool, string, float64, float64)
 	}
 	loss := float64(sent-received) / float64(sent) * 100
 	if received == 0 {
-		return false, "不可达（100% 丢包）", -1, 100
+		return false, Tz("check.unreachable"), -1, 100
 	}
-	return true, fmt.Sprintf("可达 · 平均 %.1f ms · 丢包 %.0f%%", avg, loss), avg, loss
+	return true, Tz("check.reachable", avg, loss), avg, loss
 }
 
 // parsePingOutput counts successful replies and averages their round-trip times.
@@ -447,22 +446,22 @@ func (cr *checkRunner) probeProcess(target string) (bool, string) {
 		}
 	}
 	if idx <= 0 || idx >= len(target)-1 {
-		return false, "目标格式错误，应为 hostID/进程名"
+		return false, Tz("check.bad_format")
 	}
 	hostID := target[:idx]
 	procName := target[idx+1:]
 
 	procNames, ok := cr.store.GetProcessNames(hostID)
 	if !ok || len(procNames) == 0 {
-		return false, fmt.Sprintf("主机 %s 无进程数据或已离线", shortID(hostID))
+		return false, Tz("check.no_process_data", shortID(hostID))
 	}
 	for _, p := range procNames {
 		// substring match, case-insensitive: "nginx" matches "nginx.exe"
 		if strings.Contains(strings.ToLower(p), strings.ToLower(procName)) {
-			return true, fmt.Sprintf("进程 %q 运行中（匹配 %s）", procName, p)
+			return true, Tz("check.process_running", procName, p)
 		}
 	}
-	return false, fmt.Sprintf("进程 %q 未运行（共上报 %d 个进程）", procName, len(procNames))
+	return false, Tz("check.process_not_running", procName, len(procNames))
 }
 
 func (cr *checkRunner) snapshot() map[string]CheckStatus {
@@ -476,7 +475,7 @@ func (cr *checkRunner) snapshot() map[string]CheckStatus {
 }
 
 // SelfCheckName is the display name for the built-in self health-check.
-const SelfCheckName = "服务端健康检查"
+func SelfCheckName() string { return Tz("check.self_name") }
 
 // DownAlerts returns the currently-failing checks as alerts for the /alerts view.
 func (cr *checkRunner) DownAlerts() []Alert {
@@ -487,9 +486,9 @@ func (cr *checkRunner) DownAlerts() []Alert {
 	if cr.down[selfCheckID] {
 		st := cr.status[selfCheckID]
 		out = append(out, Alert{
-			Level: "critical", Type: "check", Scope: selfCheckID, Hostname: SelfCheckName,
+			Level: "critical", Type: "check", Scope: selfCheckID, Hostname: SelfCheckName(),
 			Since: cr.downSince[selfCheckID],
-			Message: "服务端健康检查异常（" + st.Message + "）", Timestamp: st.CheckedAt,
+			Message: Tz("check.self_failed", st.Message), Timestamp: st.CheckedAt,
 		})
 	}
 	cr.mu.Unlock()
@@ -509,7 +508,7 @@ func (cr *checkRunner) DownAlerts() []Alert {
 		out = append(out, Alert{
 			Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name,
 			Since: cr.downSince[c.ID],
-			Message: "自定义监控异常：" + c.Name + "（" + st.Message + "）", Timestamp: st.CheckedAt,
+			Message: Tz("check.custom_failed", c.Name, st.Message), Timestamp: st.CheckedAt,
 		})
 	}
 	return out

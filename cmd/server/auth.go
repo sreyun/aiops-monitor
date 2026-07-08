@@ -287,7 +287,7 @@ func (a *Auth) consumeDirty() bool {
 func isPublicPath(r *http.Request) bool {
 	p := r.URL.Path
 	switch p {
-	case "/", "/healthz", "/style.css", "/app.js",
+	case "/", "/healthz", "/style.css", "/app.js", "/i18n-dashboard.js",
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/api/v1/login", "/api/v1/me",
 		"/api/v1/account/recover-username",
@@ -298,6 +298,10 @@ func isPublicPath(r *http.Request) bool {
 	}
 	// Agent-facing terminal reverse channels are token-gated, not session-gated.
 	if strings.HasPrefix(p, "/api/v1/agent/terminal/") {
+		return true
+	}
+	// Agent-facing port forwarding reverse channels are fingerprint-gated.
+	if strings.HasPrefix(p, "/api/v1/agent/forward/") {
 		return true
 	}
 	return strings.HasPrefix(p, "/dl/")
@@ -330,7 +334,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" { // user management + global MFA: admin only
 		return rank >= roleRank(RoleAdmin)
 	}
-	if strings.Contains(p, "/terminal") { // remote shell: operator+
+	if strings.Contains(p, "/terminal") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") { // remote shell + port forwarding: operator+
 		return rank >= roleRank(RoleOperator)
 	}
 	if r.Method == http.MethodGet { // reads: viewer+
@@ -356,12 +360,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if s.auth.isRestricted(r) {
 			p := r.URL.Path
 			if p != "/api/v1/mfa/setup" && p != "/api/v1/mfa/enable" && p != "/api/v1/logout" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "请先完成两步验证绑定"})
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.mfa_required_first")})
 				return
 			}
 		}
 		if !s.routeAllowed(r, s.cfg.RoleOf(name)) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "权限不足，该操作需要更高权限"})
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.insufficient_permission")})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -378,7 +382,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := s.clientIP(r)
 	if !s.auth.loginAllowed(ip) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "登录尝试过于频繁，请 5 分钟后再试"})
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -388,8 +392,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	acc, ok := s.auth.CheckPassword(req.Username, req.Password)
 	if !ok {
 		s.auth.loginFailed(ip)
-		s.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: ip, Message: "登录失败：" + req.Username})
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
+		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", req.Username)})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return
 	}
 	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
@@ -402,8 +406,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		if !totpVerify(acc.MFASecret, req.Code) {
 			s.auth.loginFailed(ip)
-			s.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: ip, Message: "动态验证码错误：" + req.Username})
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "动态验证码错误"})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.totp_failed", req.Username)})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 			return
 		}
 	}
@@ -418,7 +422,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"require_mfa_setup": true,
-			"message":           "管理员已启用全局两步验证策略，请完成绑定后登录",
+			"message":           Tr(r, "auth.global_mfa_required"),
 		})
 		return
 	}
@@ -428,7 +432,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: ip, Message: "登录成功：" + req.Username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, Message: Tz("log.login_success", req.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -475,7 +479,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Username) != "" && req.Username != acc.Username {
 		uname := sanitizeUsername(req.Username)
 		if uname == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名仅限字母/数字/-_.，长度 2–32 位"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.invalid_username_format")})
 			return
 		}
 		if err := s.cfg.RenameUser(acc.Username, uname); err != nil {
@@ -486,7 +490,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		name = uname
 	}
 	_ = s.cfg.SetUserProfile(name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email))
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "更新个人信息：" + name})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.update_profile", name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
 }
 
@@ -505,11 +509,11 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Old, acc.Salt)), []byte(acc.Hash)) != 1 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "原密码错误"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.wrong_old_password")})
 		return
 	}
 	if len(strings.TrimSpace(req.New)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "新密码至少 4 位"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_too_short")})
 		return
 	}
 	_ = s.cfg.SetUserPassword(acc.Username, req.New)
@@ -521,7 +525,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改登录密码：" + acc.Username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -538,13 +542,13 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 	}
 	secret := genTOTPSecret()
 	if secret == "" {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成密钥失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": Tr(r, "auth.gen_secret_failed")})
 		return
 	}
 	uri := otpauthURL(acc.Username, secret)
 	qr, err := genQRDataURI(uri)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成二维码失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": Tr(r, "auth.gen_qr_failed")})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -571,11 +575,11 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !totpVerify(req.Secret, req.Code) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "验证码不正确，请确认手机时间已同步后重试"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.totp_verify_failed")})
 		return
 	}
 	_ = s.cfg.SetUserMFA(acc.Username, true, strings.TrimSpace(req.Secret))
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "启用两步验证：" + acc.Username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.enable_mfa", acc.Username)})
 	// Upgrade a restricted session (global MFA enforcement) to a full session.
 	s.auth.upgradeSession(r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -600,14 +604,14 @@ func (s *Server) handleMFAGlobalSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.SetMFARequired(req.Required); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": Tr(r, "auth.save_failed")})
 		return
 	}
-	action := "关闭"
+	action := Tz("log.global_mfa_off")
 	if req.Required {
-		action = "开启"
+		action = Tz("log.global_mfa_on")
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "全局MFA强制策略已" + action})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: action})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mfa_required": req.Required})
 }
 
@@ -627,10 +631,10 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Password, acc.Salt)), []byte(acc.Hash)) != 1 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码不正确"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.wrong_password")})
 		return
 	}
 	_ = s.cfg.SetUserMFA(acc.Username, false, "")
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "关闭两步验证：" + acc.Username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.disable_mfa", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -19,6 +19,7 @@ type Server struct {
 	auth      *Auth
 	checks    *checkRunner
 	term      *termManager        // remote terminal relay
+	forward   *forwardManager     // port forwarding relay (TCP + HTTP proxy)
 	emailMgr  *emailManager       // verification codes + reset tokens
 	playbooks *playbookManager    // automation playbooks + execution history
 	push      *pushHub            // P3-1: WebSocket push hub for real-time updates
@@ -31,6 +32,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		auth:      NewAuth(cfg),
 		checks:    newCheckRunner(cfg, store, notifier, selfAddr),
 		term:      newTermManager(),
+		forward:   newForwardManager(),
 		emailMgr:  newEmailManager(),
 		playbooks: newPlaybookManager(cfg),
 		push:      newPushHub(),
@@ -97,6 +99,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/observe", s.handleTerminalObserve)
+	// Port forwarding (TCP mapping + HTTP reverse proxy)
+	mux.HandleFunc("GET /api/v1/forward", s.handleForwardList)
+	mux.HandleFunc("POST /api/v1/forward", s.handleForwardCreate)
+	mux.HandleFunc("DELETE /api/v1/forward/{id}", s.handleForwardDelete)
+	mux.HandleFunc("GET /proxy/{hostID}/{port}/{path...}", s.handleHTTPProxy)
+	// Port forwarding: agent reverse channel (fingerprint-gated, not session-gated)
+	mux.HandleFunc("GET /api/v1/agent/forward/wait", s.handleAgentForwardWait)
+	mux.HandleFunc("GET /api/v1/agent/forward/rx", s.handleAgentForwardRx)
+	mux.HandleFunc("POST /api/v1/agent/forward/tx", s.handleAgentForwardTx)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
@@ -115,6 +126,7 @@ func (s *Server) Routes() http.Handler {
 		fsrv := http.FileServer(http.FS(sub))
 		mux.Handle("GET /style.css", fsrv)
 		mux.Handle("GET /app.js", fsrv)
+		mux.Handle("GET /i18n-dashboard.js", fsrv)
 		// P2-1: support split CSS/JS modules
 		mux.Handle("GET /css/", http.StripPrefix("/css/", http.FileServer(http.FS(sub))))
 		mux.Handle("GET /js/", http.StripPrefix("/js/", http.FileServer(http.FS(sub))))

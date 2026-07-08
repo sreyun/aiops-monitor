@@ -39,27 +39,27 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	uname := sanitizeUsername(req.Username)
 	if uname == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "用户名仅限字母/数字/-_.，长度 2–32 位"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_username_format")})
 		return
 	}
 	if len(strings.TrimSpace(req.Password)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码至少 4 位"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.password_too_short")})
 		return
 	}
 	if !validRole(req.Role) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "角色不合法"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_role")})
 		return
 	}
 	email := strings.TrimSpace(req.Email)
 	if email != "" && !validEmail(email) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "邮箱格式不合法"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_email")})
 		return
 	}
 	if err := s.cfg.CreateUser(uname, req.Password, strings.TrimSpace(req.DisplayName), email, req.Role); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "创建用户：" + uname + "（" + req.Role + "）"})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.create_user", uname, req.Role)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -75,26 +75,26 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validRole(req.Role) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "角色不合法"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_role")})
 		return
 	}
 	email := strings.TrimSpace(req.Email)
 	if email != "" && !validEmail(email) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "邮箱格式不合法"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_email")})
 		return
 	}
 	if err := s.cfg.UpdateUserMeta(username, strings.TrimSpace(req.DisplayName), email, req.Role); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "修改用户：" + username + " → " + req.Role})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.update_user", username, req.Role)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	if cur, ok := s.currentUser(r); ok && cur.Username == username {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不能删除当前登录的账户"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.cannot_delete_self")})
 		return
 	}
 	if err := s.cfg.DeleteUser(username); err != nil {
@@ -102,7 +102,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.clearUserSessions(username) // kick the removed user out
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除用户：" + username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_user", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -116,7 +116,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(strings.TrimSpace(req.Password)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "密码至少 4 位"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.password_too_short")})
 		return
 	}
 	if err := s.cfg.SetUserPassword(username, req.Password); err != nil {
@@ -124,7 +124,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auth.clearUserSessions(username) // force re-login with the new password
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "重置用户密码：" + username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.reset_user_password", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -134,6 +134,6 @@ func (s *Server) handleResetUserMFA(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "管理员解除用户两步验证：" + username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.admin_reset_mfa", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

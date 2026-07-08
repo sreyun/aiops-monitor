@@ -1199,3 +1199,6 @@ body[data-role="viewer"] #installBtn{display:none !important}
 
 /* ---------- 空行占位 ---------- */
 .empty-line{text-align:center; color:var(--muted2); padding:24px; font-size:13px}
+
+/* ---------- 端口转发 ---------- */
+code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace); font-size:12px; background:var(--panel2); padding:1px 5px; border-radius:3px}

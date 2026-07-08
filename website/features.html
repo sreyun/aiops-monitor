@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>功能详情 — AIOps Monitor</title>
+<meta name="description" content="三平台原生采集、全面指标、GPU 监控、交互式趋势图、自定义拨测、远程终端、自动化剧本、告警推送、多用户 RBAC、MFA、账户找回、多服务端推送、网关中继、机器指纹鉴权、PWA 安装 — 全功能详解">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+    <div class="nav-links">
+      <a href="index.html" data-i18n="nav.home">首页</a>
+      <a href="features.html" class="active" data-i18n="nav.features">功能详情</a>
+      <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
+      <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+    </div>
+    <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="nav-cta" data-i18n="nav.cta">免费部署</a>
+    <button class="nav-toggle">☰</button>
+  </div>
+</nav>
+
+<section class="section" style="padding-top:120px">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag">功能详情</div>
+      <h2>每个功能都为运维效率而生</h2>
+      <p class="section-desc">不是技术特性的罗列，而是解决实际运维问题的业务能力</p>
+    </div>
+
+    <div class="feature-grid">
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+        <h3>实时指标监控</h3>
+        <p class="desc">CPU 使用率、内存/SWAP、多磁盘、网络收发速率、系统负载、进程数、TCP 连接数、运行时间 —— 5 秒级采集，全面覆盖。</p>
+        <p class="desc">GPU 监控：NVIDIA（nvidia-smi）、AMD（Linux sysfs）、Apple（macOS ioreg），best-effort + 缓存。多级降采样保留 7 天历史趋势。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>告别逐台 SSH top/free/df 查看指标</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+        <h3>自定义拨测监控</h3>
+        <p class="desc">HTTP 状态码检测、TCP 端口连通性、Ping 延迟、关键进程存活 —— 四种拨测类型覆盖所有服务可用性场景。</p>
+        <p class="desc">内置历史曲线图，支持框选放大和全屏预览。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>服务不可达第一时间发现</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
+        <h3>多渠道智能告警</h3>
+        <p class="desc">CPU/内存/磁盘/负载/GPU/离线 六类阈值告警，分级严重/警告。飞书 Webhook、钉钉 Webhook（HMAC 签名）、SMTP 邮件三渠道推送。</p>
+        <p class="desc">事件去重冷却（5 分钟内相同事件不重复推送），桌面通知 + 声音提醒。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>告警噪音降低 80%，只看需要处理的</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
+        <h3>远程终端（免开端口）</h3>
+        <p class="desc">浏览器直接打开主机终端，Agent 反向连接服务端，无需在主机上开放任何入站端口。支持多标签页、窗口大小自适应。</p>
+        <p class="desc">完整 VT100 仿真器，支持 vim/top 等全屏程序。移动端虚拟键盘支持。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>故障排查不用 VPN + SSH，浏览器直达</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+        <h3>自动化剧本编排</h3>
+        <p class="desc">可视化定义命令序列，一键批量执行到多台主机。执行结果实时回传，支持成功/失败状态统计和步骤级输出查看。</p>
+        <p class="desc">执行历史完整保留，操作者、时间、结果全部可追溯。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>100 台主机批量打补丁，10 分钟完成</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg></div>
+        <h3>多用户 RBAC + MFA</h3>
+        <p class="desc">三级角色权限控制：管理员（全部操作）、操作员（终端+告警）、观察员（只读查看）。路由级权限拦截，用户管理界面。</p>
+        <p class="desc">TOTP 两步验证（RFC 6238，Google Authenticator 兼容）。支持账户找回：忘记用户名/忘记密码（邮箱验证码）/ 邮箱解除 MFA，防枚举。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>团队协作安全合规，满足等保要求</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>
+        <h3>终端会话回放</h3>
+        <p class="desc">所有远程终端会话全程录制（时间戳帧），支持 1x/2x/4x/8x 倍速回放。实时旁观功能让多人同时查看活跃会话。</p>
+        <p class="desc">会话列表支持按操作者用户名、主机名、IP 地址三维搜索。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>谁做了什么，什么时候做的，完整可追溯</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7L12 2z"/><polyline points="2 7 12 12 22 7"/><line x1="12" y1="22" x2="12" y2="12"/></svg></div>
+        <h3>Python 插件扩展</h3>
+        <p class="desc">内置插件 SDK，几行代码即可采集自定义指标（MySQL 连接数、Nginx 请求量、Redis 内存等）。</p>
+        <p class="desc">内置示例：进程监控、服务端口探活、轻量 AI 异常检测（z-score）。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>监控什么你说了算，不限于内置指标</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+        <h3>PWA 离线访问</h3>
+        <p class="desc">支持安装到桌面（PWA），独立窗口运行。App Shell 离线缓存，断网时仍可查看最后已知状态。</p>
+        <p class="desc">WebSocket 实时推送 + 轮询降级，网络恢复自动重连。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>手机也能装，随时随地查看监控</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg></div>
+        <h3>多服务端推送</h3>
+        <p class="desc">单个 Agent 同时向多个服务端推送数据，采集一次广播所有。各服务端独立鉴权/重试，适合容灾或多团队共享监控。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>一套 Agent，多套监控面板</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v5"/><path d="M3 12h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8z"/><path d="M9 16h6"/></svg></div>
+        <h3>网关中继模式</h3>
+        <p class="desc">内网仅一台联网机器代理所有请求到云端，二进制/上报/终端自动穿透。适合跨网段或防火墙后的主机纳管。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>无需每台机器都开外网</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 0 0 8 11a4 4 0 1 1 8 0c0 2.5-.5 4-1 5"/><path d="M4 13c0 4.5 2.5 8.5 6.5 10.5"/></svg></div>
+        <h3>机器指纹鉴权</h3>
+        <p class="desc">machine-id + MAC 哈希指纹绑定，Agent 终端通道按指纹鉴权（非 Token）。Token 轮换不影响已装 Agent，7 天宽限期。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Token 轮换不中断已部署 Agent</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="cta-box reveal">
+    <h2>这些功能，一个二进制全部包含</h2>
+    <p>不需要 Prometheus + Grafana + Alertmanager + 堡垒机 + 工单系统 —— AIOps Monitor 一个搞定</p>
+    <div class="hero-actions" style="justify-content:center">
+      <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="btn-primary">免费部署 →</a>
+      <a href="solutions.html" class="btn-secondary">查看解决方案</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+      <p>轻量级主机监控运维平台，为中小企业设计。开源免费，零依赖，开箱即用。</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-col"><h4>产品</h4><a href="features.html" data-i18n="nav.features">功能详情</a><a href="solutions.html" data-i18n="nav.solutions">解决方案</a><a href="comparison.html" data-i18n="nav.comparison">产品对比</a></div>
+      <div class="footer-col"><h4>资源</h4><a href="https://github.com/sreyun/aiops-monitor" target="_blank">GitHub 仓库</a><a href="https://github.com/sreyun/aiops-monitor#readme" target="_blank">使用文档</a><a href="https://github.com/sreyun/aiops-monitor/blob/main/INSTALL.md" target="_blank">安装指南</a></div>
+    </div>
+  </div>
+  <div class="footer-bottom">© 2026 AIOps Monitor · MIT License · Built with Go</div>
+</footer>
+
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

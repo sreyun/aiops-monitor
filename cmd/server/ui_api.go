@@ -104,11 +104,11 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	cat := strings.TrimSpace(req.Category)
 	_ = s.cfg.SetCategory(id, cat)
-	msg := "设置主机分类：" + shortID(id) + " → " + cat
+	msg := Tz("log.set_category", shortID(id), cat)
 	if cat == "" {
-		msg = "清除主机分类：" + shortID(id)
+		msg = Tz("log.clear_category", shortID(id))
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: msg})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": id, "category": cat})
 }
 
@@ -120,7 +120,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "host not found"})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除主机 " + shortID(id)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "host_id": id})
 }
 

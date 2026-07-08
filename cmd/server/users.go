@@ -146,7 +146,7 @@ func (cs *ConfigStore) CreateUser(username, password, displayName, email, role s
 	cs.mu.Lock()
 	if cs.findLocked(username) >= 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户名已存在")
+		return fmt.Errorf("%s", Tz("user.username_exists"))
 	}
 	salt := genToken()[:16]
 	cs.cfg.Users = append(cs.cfg.Users, AccountConfig{
@@ -164,11 +164,11 @@ func (cs *ConfigStore) UpdateUserMeta(username, displayName, email, role string)
 	i := cs.findLocked(username)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	if cs.cfg.Users[i].Role == RoleAdmin && role != RoleAdmin && cs.adminCountLocked() <= 1 {
 		cs.mu.Unlock()
-		return fmt.Errorf("至少保留一名管理员")
+		return fmt.Errorf("%s", Tz("user.keep_one_admin"))
 	}
 	cs.cfg.Users[i].DisplayName = displayName
 	cs.cfg.Users[i].Email = email
@@ -183,7 +183,7 @@ func (cs *ConfigStore) SetUserPassword(username, password string) error {
 	i := cs.findLocked(username)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	salt := genToken()[:16]
 	cs.cfg.Users[i].Salt = salt
@@ -198,7 +198,7 @@ func (cs *ConfigStore) SetUserProfile(username, displayName, email string) error
 	i := cs.findLocked(username)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	cs.cfg.Users[i].DisplayName = displayName
 	cs.cfg.Users[i].Email = email
@@ -211,12 +211,12 @@ func (cs *ConfigStore) RenameUser(oldName, newName string) error {
 	cs.mu.Lock()
 	if oldName != newName && cs.findLocked(newName) >= 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户名已存在")
+		return fmt.Errorf("%s", Tz("user.username_exists"))
 	}
 	i := cs.findLocked(oldName)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	cs.cfg.Users[i].Username = newName
 	cs.mu.Unlock()
@@ -229,7 +229,7 @@ func (cs *ConfigStore) SetUserMFA(username string, enabled bool, secret string) 
 	i := cs.findLocked(username)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	cs.cfg.Users[i].MFAEnabled = enabled
 	if enabled {
@@ -247,15 +247,15 @@ func (cs *ConfigStore) DeleteUser(username string) error {
 	i := cs.findLocked(username)
 	if i < 0 {
 		cs.mu.Unlock()
-		return fmt.Errorf("用户不存在")
+		return fmt.Errorf("%s", Tz("user.not_found"))
 	}
 	if len(cs.cfg.Users) <= 1 {
 		cs.mu.Unlock()
-		return fmt.Errorf("至少保留一名用户")
+		return fmt.Errorf("%s", Tz("user.keep_one_user"))
 	}
 	if cs.cfg.Users[i].Role == RoleAdmin && cs.adminCountLocked() <= 1 {
 		cs.mu.Unlock()
-		return fmt.Errorf("至少保留一名管理员")
+		return fmt.Errorf("%s", Tz("user.keep_one_admin"))
 	}
 	cs.cfg.Users = append(cs.cfg.Users[:i], cs.cfg.Users[i+1:]...)
 	cs.mu.Unlock()

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>产品对比 — AIOps Monitor</title>
+<meta name="description" content="与 Zabbix/Prometheus+Grafana/商业APM 全面对比 — 轻量级、零依赖、一键部署的差异化优势">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+    <div class="nav-links">
+      <a href="index.html" data-i18n="nav.home">首页</a>
+      <a href="features.html" data-i18n="nav.features">功能详情</a>
+      <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
+      <a href="comparison.html" class="active" data-i18n="nav.comparison">产品对比</a>
+    </div>
+    <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="nav-cta" data-i18n="nav.cta">免费部署</a>
+    <button class="nav-toggle">☰</button>
+  </div>
+</nav>
+
+<section class="section" style="padding-top:120px">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag">产品对比</div>
+      <h2>为什么选择 AIOps Monitor？</h2>
+      <p class="section-desc">同样是监控运维，但部署成本、学习曲线和维护负担天差地别</p>
+    </div>
+
+    <div class="compare-table-wrap reveal">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>能力维度</th>
+            <th class="col-highlight">AIOps Monitor</th>
+            <th>Zabbix</th>
+            <th>Prometheus + Grafana</th>
+            <th>商业 APM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="feat-name">部署方式</td>
+            <td class="col-highlight"><span class="yes">单二进制 + 一条命令</span></td>
+            <td>Server + DB + Agent 多组件</td>
+            <td>Prometheus + Grafana + AlertManager</td>
+            <td>Agent + SaaS 账号</td>
+          </tr>
+          <tr>
+            <td class="feat-name">外部依赖</td>
+            <td class="col-highlight"><span class="yes">零（仅 go-qrcode）</span></td>
+            <td>MySQL / PostgreSQL</td>
+            <td>时序数据库（TSDB）</td>
+            <td>无（云端托管）</td>
+          </tr>
+          <tr>
+            <td class="feat-name">部署时间</td>
+            <td class="col-highlight"><span class="yes">3 分钟</span></td>
+            <td>30-60 分钟</td>
+            <td>1-2 小时（含配置）</td>
+            <td>10-30 分钟</td>
+          </tr>
+          <tr>
+            <td class="feat-name">学习曲线</td>
+            <td class="col-highlight"><span class="yes">低（开箱即用）</span></td>
+            <td>中高（模板/触发器/Low-level discovery）</td>
+            <td>高（PromQL/YAML/Grafana 面板）</td>
+            <td>低-中</td>
+          </tr>
+          <tr>
+            <td class="feat-name">远程终端</td>
+            <td class="col-highlight"><span class="yes">内置（免开端口 + 会话录制回放 + 命令审计）</span></td>
+            <td class="no">需额外部署堡垒机</td>
+            <td class="no">无</td>
+            <td class="no">无</td>
+          </tr>
+          <tr>
+            <td class="feat-name">自动化运维</td>
+            <td class="col-highlight"><span class="yes">内置剧本编排</span></td>
+            <td class="no">无（需 Ansible 等配合）</td>
+            <td class="no">无</td>
+            <td class="no">无</td>
+          </tr>
+          <tr>
+            <td class="feat-name">告警推送</td>
+            <td class="col-highlight"><span class="yes">飞书/钉钉/邮件 + 桌面通知</span></td>
+            <td>邮件/Webhook（需配置）</td>
+            <td>AlertManager（需单独部署）</td>
+            <td>邮件/Slack/Webhook</td>
+          </tr>
+          <tr>
+            <td class="feat-name">用户权限</td>
+            <td class="col-highlight"><span class="yes">RBAC + MFA（内置）</span></td>
+            <td>用户组（无 MFA）</td>
+            <td class="no">无原生（需 Grafana 企业版）</td>
+            <td>有</td>
+          </tr>
+          <tr>
+            <td class="feat-name">操作审计</td>
+            <td class="col-highlight"><span class="yes">终端录制 + 回放 + 命令审计</span></td>
+            <td class="no">无终端审计</td>
+            <td class="no">无</td>
+            <td class="no">无终端审计</td>
+          </tr>
+          <tr>
+            <td class="feat-name">GPU 监控</td>
+            <td class="col-highlight"><span class="yes">NVIDIA + AMD + Apple</span></td>
+            <td>需自定义模板</td>
+            <td>需 DCGM Exporter</td>
+            <td>部分支持</td>
+          </tr>
+          <tr>
+            <td class="feat-name">跨平台 Agent</td>
+            <td class="col-highlight"><span class="yes">Linux/Win/macOS + ARM64</span></td>
+            <td>Linux/Win/macOS</td>
+            <td>Linux/Win（macOS 社区）</td>
+            <td>Linux/Win</td>
+          </tr>
+          <tr>
+            <td class="feat-name">PWA 移动端</td>
+            <td class="col-highlight"><span class="yes">支持（可安装到手机桌面）</span></td>
+            <td class="no">仅 Web</td>
+            <td class="no">仅 Web</td>
+            <td>有 App</td>
+          </tr>
+          <tr>
+            <td class="feat-name">多服务端推送</td>
+            <td class="col-highlight"><span class="yes">单 Agent 多服务端广播</span></td>
+            <td class="no">不支持</td>
+            <td>需 Remote Write</td>
+            <td class="no">不支持</td>
+          </tr>
+          <tr>
+            <td class="feat-name">网关中继模式</td>
+            <td class="col-highlight"><span class="yes">内置（跨网段穿透）</span></td>
+            <td>需 Proxy/Agent 主动</td>
+            <td>需 Pushgateway</td>
+            <td class="no">不支持</td>
+          </tr>
+          <tr>
+            <td class="feat-name">机器指纹鉴权</td>
+            <td class="col-highlight"><span class="yes">machine-id + MAC 绑定</span></td>
+            <td class="no">PSK/Token</td>
+            <td class="no">mTLS</td>
+            <td class="no">Agent Key</td>
+          </tr>
+          <tr>
+            <td class="feat-name">gzip 压缩</td>
+            <td class="col-highlight"><span class="yes">内置（8-10 倍压缩）</span></td>
+            <td>需 Nginx 配置</td>
+            <td>需 Nginx 配置</td>
+            <td>有</td>
+          </tr>
+          <tr>
+            <td class="feat-name">数据持久化</td>
+            <td class="col-highlight"><span class="yes">内嵌 gzip+JSON（无 DB）</span></td>
+            <td>MySQL / PostgreSQL</td>
+            <td>本地磁盘 TSDB</td>
+            <td>云端托管</td>
+          </tr>
+          <tr>
+            <td class="feat-name">价格</td>
+            <td class="col-highlight"><span class="yes">免费开源（MIT）</span></td>
+            <td>免费开源（GPL）</td>
+            <td>免费开源（Apache）</td>
+            <td class="no">按主机数收费</td>
+          </tr>
+          <tr>
+            <td class="feat-name">适合规模</td>
+            <td class="col-highlight"><span class="yes">1-5000 台主机</span></td>
+            <td>50-5000+ 台</td>
+            <td>100-10000+ 台</td>
+            <td>任意（按需付费）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 三大优势 -->
+<section class="section" style="background:var(--bg2)">
+  <div class="section-inner">
+    <div class="section-head reveal">
+      <div class="section-tag">核心优势</div>
+      <h2>中小企业选择 AIOps Monitor 的三个理由</h2>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon" style="background:var(--ok-soft);border-color:rgba(16,185,129,.2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--ok)"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <h3>轻量到极致</h3>
+        <p class="desc">服务端单个 Go 二进制（~15MB），Agent 更小。不需要 MySQL、Redis、Kafka、时序数据库 —— 内存即存储，gzip+JSON 快照持久化。</p>
+        <p class="desc">Go 原生编译，启动即就绪。1 核 1G 的云服务器就能跑。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>运维成本从"买服务器跑监控"变成"一台小机器全搞定"</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon" style="background:var(--accent-soft);border-color:rgba(59,130,246,.2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--accent)"><path d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <h3>部署零门槛</h3>
+        <p class="desc">一条 docker compose up 启动服务端，一条 curl | bash 安装 Agent。自动检测 CPU 架构（AMD64/ARM64），自动下载对应二进制。</p>
+        <p class="desc">不支持 Docker？直接下载二进制运行也行。Windows 用 NSSM 或任务计划自启，Linux 用 systemd，macOS 用 launchd。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>不需要 DevOps 工程师，运维小白也能部署</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="glow"></div>
+        <div class="feature-icon" style="background:var(--purple-soft);border-color:rgba(139,92,246,.2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--purple)"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        </div>
+        <h3>免费且开源</h3>
+        <p class="desc">MIT 开源协议，无商业限制。代码托管在 GitHub，透明可信。无主机数限制、无功能阉割、无"企业版"套路。</p>
+        <p class="desc">Python 插件 SDK 自由扩展，几行代码接入自定义指标。社区贡献持续迭代。</p>
+        <div class="value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>零授权费、零主机数限制、零功能锁定</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="cta-box reveal">
+    <h2>别再为监控工具的部署和维护买单了</h2>
+    <p>把省下来的时间和预算，用在真正创造业务价值的事情上</p>
+    <div class="hero-actions" style="justify-content:center">
+      <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="btn-primary">免费部署 →</a>
+      <a href="index.html" class="btn-secondary">返回首页</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="index.html" class="nav-logo"><span class="logo-icon">AI</span><span>AIOps Monitor</span></a>
+      <p>轻量级主机监控运维平台，为中小企业设计。开源免费，零依赖，开箱即用。</p>
+    </div>
+    <div class="footer-links">
+      <div class="footer-col"><h4>产品</h4><a href="features.html" data-i18n="nav.features">功能详情</a><a href="solutions.html" data-i18n="nav.solutions">解决方案</a><a href="comparison.html" data-i18n="nav.comparison">产品对比</a></div>
+      <div class="footer-col"><h4>资源</h4><a href="https://github.com/sreyun/aiops-monitor" target="_blank">GitHub 仓库</a><a href="https://github.com/sreyun/aiops-monitor#readme" target="_blank">使用文档</a><a href="https://github.com/sreyun/aiops-monitor/blob/main/INSTALL.md" target="_blank">安装指南</a></div>
+    </div>
+  </div>
+  <div class="footer-bottom">© 2026 AIOps Monitor · MIT License · Built with Go</div>
+</footer>
+
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

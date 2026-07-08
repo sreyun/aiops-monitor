@@ -88,7 +88,7 @@ func (pm *playbookManager) Get(id string) (Playbook, bool) {
 func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" {
-		return Playbook{}, fmt.Errorf("剧本名称不能为空")
+		return Playbook{}, fmt.Errorf("%s", Tz("playbook.name_required"))
 	}
 	for i := range p.Steps {
 		p.Steps[i].Name = strings.TrimSpace(p.Steps[i].Name)
@@ -98,7 +98,7 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 		}
 	}
 	if len(p.Steps) == 0 {
-		return Playbook{}, fmt.Errorf("至少需要一个步骤")
+		return Playbook{}, fmt.Errorf("%s", Tz("playbook.step_required"))
 	}
 	now := time.Now().Unix()
 	p.UpdatedAt = now
@@ -130,7 +130,7 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	case strings.HasPrefix(target, "category:"):
 		cat := target[len("category:"):]
 		for _, h := range hosts {
-			if h.Category == cat || (h.Category == "" && cat == "未分类") {
+			if h.Category == cat || (h.Category == "" && cat == Tz("playbook.uncategorized")) {
 				result = append(result, h)
 			}
 		}

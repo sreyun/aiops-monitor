@@ -37,7 +37,7 @@ function copyToClipboard(text) {
 function copyWithFeedback(btn, text, okMsg) {
   copyToClipboard(text).then(
     () => { const old = btn.textContent; btn.textContent = "✓"; toast(okMsg, "ok"); setTimeout(() => btn.textContent = old, 1200); },
-    () => toast("复制失败，请手动选择复制", "err")
+    () => toast(I18N.t("toast.copy_failed"), "err")
   );
 }
 let CUR_CATS = [];    // 当前分类多选筛选（空数组=全部）
@@ -145,10 +145,10 @@ function initNotifications() {
   }
 }
 function requestNotificationPermission() {
-  if (!("Notification" in window)) { toast("当前浏览器不支持桌面通知", "err"); return; }
+  if (!("Notification" in window)) { toast(I18N.t("toast.no_notif_support"), "err"); return; }
   Notification.requestPermission().then(p => {
-    if (p === "granted") { NOTIF_PERMITTED = true; toast("桌面通知已开启", "ok"); }
-    else { toast("已拒绝桌面通知权限", "err"); }
+    if (p === "granted") { NOTIF_PERMITTED = true; toast(I18N.t("toast.desktop_notif_on"), "ok"); }
+    else { toast(I18N.t("toast.desktop_notif_denied"), "err"); }
   });
 }
 function notifyCriticalAlerts(critCount) {
@@ -156,7 +156,7 @@ function notifyCriticalAlerts(critCount) {
   const newAlerts = critCount - LAST_CRIT_COUNT;
   LAST_CRIT_COUNT = critCount;
   try {
-    new Notification("AIOps Monitor - 严重告警", {
+    new Notification(I18N.t("misc.critical_alert_title"), {
       body: newAlerts + " 条新的严重告警需要处理（总计 " + critCount + " 条）",
       icon: "/icon.svg",
       tag: "critical-alerts",
@@ -304,14 +304,14 @@ function bar(label, percent, detail) {
 /* ---------- 渲染：KPI ---------- */
 function renderCards(s) {
   const card = (cls, ic, v, k, vcls, goto) =>
-    `<div class="card ${cls}" data-goto="${goto}" title="点击查看"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
+    `<div class="card ${cls}" data-goto="${goto}" title=I18N.t("section.click_view")><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
   $("cards").innerHTML =
-    card("info", "host", s.total_hosts, "主机总数", "", "hosts:all") +
-    card("ok", "on", s.online_hosts, "在线", "ok", "hosts:online") +
-    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, "离线", s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
+    card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
+    card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
+    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, I18N.t("ui.offline"), s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
     card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, "严重告警", s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
-    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, "警告", s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
-    card("info", "event", s.plugin_events || 0, "插件发现", s.plugin_events > 0 ? "info" : "", "log:");
+    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, I18N.t("ui.warning"), s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
+    card("info", "event", s.plugin_events || 0, I18N.t("ui.plugin_events"), s.plugin_events > 0 ? "info" : "", "log:");
   // 空态引导 & 版本号
   const ob = $("onboarding");
   if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
@@ -323,9 +323,9 @@ function renderCards(s) {
 
 /* ---------- 渲染：告警 / 事件 ---------- */
 const ALERT_TYPES = [
-  {key:"", label:"全部"}, {key:"cpu", label:"CPU"}, {key:"memory", label:"内存"},
-  {key:"disk", label:"磁盘"}, {key:"gpu", label:"GPU"}, {key:"load", label:"负载"},
-  {key:"offline", label:"失联"}, {key:"check", label:"拨测"}
+  {key:"", label:I18N.t("ui.all")}, {key:"cpu", label:"CPU"}, {key:"memory", label:I18N.t("ui.memory")},
+  {key:"disk", label:I18N.t("ui.disk")}, {key:"gpu", label:"GPU"}, {key:"load", label:I18N.t("ui.load")},
+  {key:"offline", label:I18N.t("ui.offline_status")}, {key:"check", label:I18N.t("ui.probe")}
 ];
 /*
  * diffUpdateList — 概览列表差量更新引擎
@@ -447,7 +447,7 @@ function renderAlerts(alerts) {
       ? `<span class="src alert-dur" data-since="${a.since}" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>`
       : "";
     return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
-    <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : a.level === "info" ? "恢复" : "警告"}</span>
+    <span class="badge ${esc(a.level)}">${a.level === "critical" ? I18N.t("ui.critical") : a.level === "info" ? "恢复" : I18N.t("ui.warning")}</span>
     <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
     ${durSpan}
     ${timeStr}</div>`;
@@ -482,7 +482,7 @@ function renderTop(hosts) {
     .sort((a, b) => b.v - a.v).slice(0, 10);
   const panelHTML = (title, items) => `<div class="top-panel"><div class="tp-title">${esc(title)}</div>` +
     (items.length ? items.map(it => `
-      <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title="点击查看趋势">
+      <div class="top-item" data-id="${esc(it.id)}" data-name="${esc(it.name)}" title=I18N.t("section.click_trend")>
         <span class="ti-name">${esc(it.name)}</span>
         <div class="ti-bar"><div class="ti-fill" style="width:${it.width}%;background:${it.bar}"></div></div>
         <span class="ti-val mono">${esc(it.disp)}</span>
@@ -506,14 +506,14 @@ function renderTop(hosts) {
 
   // 第一行：CPU、GPU(有则显示)、内存、硬盘、网络
   const gpuLive = live.filter(h => (h.latest.gpus || []).length > 0);
-  let row1 = pct("CPU 占用 TOP10", m => m.cpu_percent);
-  if (hasGPU) row1 += pct("GPU 占用 TOP10", gpuMax, gpuLive);
-  row1 += pct("内存占用 TOP10", m => m.mem_percent);
-  row1 += pct("磁盘占用 TOP10", diskMax);
-  row1 += val("网络吞吐 TOP10", m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0), v => fmtRate(v), () => "var(--info)");
+  let row1 = pct(I18N.t("section.cpu_top10"), m => m.cpu_percent);
+  if (hasGPU) row1 += pct(I18N.t("section.gpu_top10"), gpuMax, gpuLive);
+  row1 += pct(I18N.t("section.mem_top10"), m => m.mem_percent);
+  row1 += pct(I18N.t("section.disk_top10"), diskMax);
+  row1 += val(I18N.t("section.net_top10"), m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0), v => fmtRate(v), () => "var(--info)");
 
   // 第二行：负载(5分钟)、Ping、TCP、HTTP、进程（无监控项则不显示）
-  let row2 = val("负载 TOP10（5 分钟）", m => m.load5, v => v.toFixed(2),
+  let row2 = val(I18N.t("section.load_top10"), m => m.load5, v => v.toFixed(2),
     it => usageColor(it.v / (it.h.latest.cpu_cores || 1) * 100));
   row2 += checkTopPanels();
 
@@ -526,9 +526,9 @@ function checkTopPanels() {
   if (!checks.length) return "";
   const byType = t => checks.filter(c => c.type === t);
   return checkTopPanel("Ping TOP10（RTT）", byType("ping"), false)
-    + checkTopPanel("TCP 探测 TOP10（连接延时）", byType("tcp"), false)
-    + checkTopPanel("HTTP 探测 TOP10（响应延时）", byType("http"), false)
-    + checkTopPanel("进程存活 TOP10", byType("process"), true);
+    + checkTopPanel(I18N.t("section.tcp_top10"), byType("tcp"), false)
+    + checkTopPanel(I18N.t("section.http_top10"), byType("http"), false)
+    + checkTopPanel(I18N.t("section.process_top10"), byType("process"), true);
 }
 function checkTopPanel(title, list, isProc) {
   if (!list.length) return "";
@@ -542,17 +542,17 @@ function checkTopPanel(title, list, isProc) {
     const down = !c.ok && c.checked_at, unknown = !c.checked_at;
     let val, color, width;
     if (isProc) {
-      val = down ? "异常" : unknown ? "待检测" : "正常";
+      val = down ? I18N.t("ui.abnormal") : unknown ? I18N.t("ui.pending") : I18N.t("ui.normal");
       color = down ? "var(--crit)" : unknown ? "var(--muted2)" : "var(--ok)";
       width = unknown ? 0 : 100;
-    } else if (down) { val = "异常"; color = "var(--crit)"; width = 100; }
-    else if (unknown) { val = "待检测"; color = "var(--muted2)"; width = 0; }
+    } else if (down) { val = I18N.t("ui.abnormal"); color = "var(--crit)"; width = 100; }
+    else if (unknown) { val = I18N.t("ui.pending"); color = "var(--muted2)"; width = 0; }
     else {
       const lat = Math.round(c.latency_ms || 0);
       val = lat + " ms"; color = lat >= 1000 ? "var(--crit)" : lat >= 300 ? "var(--warn)" : "var(--ok)";
       width = Math.min(100, (c.latency_ms || 0) / maxLat * 100);
     }
-    return `<div class="top-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title="点击查看历史曲线">
+    return `<div class="top-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title=I18N.t("section.click_history")>
       <span class="ti-name">${esc(c.name)}</span>
       <div class="ti-bar"><div class="ti-fill" style="width:${width}%;background:${color}"></div></div>
       <span class="ti-val mono" style="color:${color}">${val}</span>
@@ -572,14 +572,14 @@ function applyLogFilters(items) {
     const hours = parseInt(LOG_TIME_RANGE);
     filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
   }
-  return filtered.filter(e => !(e.actor === "自监控" && e.host === "服务端"));
+  return filtered.filter(e => !(e.actor === I18N.t("ui.self_check") && e.host === I18N.t("ui.server")));
 }
 
 function exportLogsCSV() {
   const rows = applyLogFilters(LAST_LOG);
-  if (!rows.length) { toast("当前筛选下没有日志可导出", "err"); return; }
+  if (!rows.length) { toast(I18N.t("empty.no_log_export"), "err"); return; }
   const escCsv = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-  const lines = ["时间,类型,级别,来源,主机,内容"];
+  const lines = [I18N.t("section.csv_header")];
   rows.forEach(e => lines.push([fmtDateTime(e.timestamp), e.kind, e.level, e.actor || "", e.host || "", e.message].map(escCsv).join(",")));
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
@@ -587,14 +587,14 @@ function exportLogsCSV() {
   a.download = `aiops-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
-  toast(`已导出 ${rows.length} 条日志`, "ok");
+  toast(`${I18N.t("toast.exported")} ${rows.length} ${I18N.t("time.records")}${I18N.t("ui.log")}`, "ok");
 }
 
 function renderLog(items) {
   LAST_LOG = items;
   const n = items.length;
   $("logCount").textContent = n; $("navLog").textContent = n; $("ovLogCount").textContent = n;
-  const kcls = k => k === "操作" ? "op" : k === "系统" ? "sys" : "plg";
+  const kcls = k => k === I18N.t("ui.operation") ? "op" : k === I18N.t("ui.system") ? "sys" : "plg";
   const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
   const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
     <span class="kind ${kcls(e.kind)}">${esc(e.kind)}</span>
@@ -608,17 +608,17 @@ function renderLog(items) {
   if (LOG_PAGE > pages) LOG_PAGE = pages;
   if (LOG_PAGE < 1) LOG_PAGE = 1;
   const pageItems = filtered.slice((LOG_PAGE - 1) * LOG_PAGE_SIZE, LOG_PAGE * LOG_PAGE_SIZE);
-  $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
+  $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">${I18N.t("empty.no_logs")}</div>`;
   renderLogPager(pages, total);
   // 概览页活动列表：差量更新，避免全量 innerHTML 重建导致闪烁
-  diffUpdateList($("ovLog"), items.slice(0, 6), row, logKey, `<div class="empty-line">暂无活动</div>`);
+  diffUpdateList($("ovLog"), items.slice(0, 6), row, logKey, `<div class="empty-line">${I18N.t("empty.no_activity")}</div>`);
 }
 
 function renderLogPager(pages, total) {
   const pager = $("logPager");
   if (!pager) return;
   if (total === 0) { pager.innerHTML = ""; return; }
-  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} 条</span>`; return; }
+  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} ${I18N.t("time.records")}</span>`; return; }
   let btns = `<button ${LOG_PAGE === 1 ? "disabled" : ""} data-lpg="prev">‹</button>`;
   for (let i = 1; i <= pages; i++) {
     if (i === 1 || i === pages || Math.abs(i - LOG_PAGE) <= 1) {
@@ -628,7 +628,7 @@ function renderLogPager(pages, total) {
     }
   }
   btns += `<button ${LOG_PAGE === pages ? "disabled" : ""} data-lpg="next">›</button>`;
-  btns += `<span class="pinfo">共 ${total} 条 · ${LOG_PAGE}/${pages} 页</span>`;
+  btns += `<span class="pinfo">共 ${total} ${I18N.t("time.records")} · ${LOG_PAGE}/${pages} 页</span>`;
   pager.innerHTML = btns;
 }
 
@@ -648,7 +648,7 @@ function hostCard(h) {
   const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
   const disksHtml = disks.length
     ? disks.map(d => bar("磁盘 " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
-    : bar("磁盘", m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
+    : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
   const gpus = Array.isArray(m.gpus) ? m.gpus : [];
   const gpusHtml = gpus.map(g => {
     const util = Math.max(0, Math.min(g.util_percent || 0, 100));
@@ -665,15 +665,15 @@ function hostCard(h) {
       const isDown = /\.up$/.test(k) && v === 0;
       const num = Number.isInteger(v) ? v : v.toFixed(1);
       return `<span class="chip ${isDown ? "crit" : ""}">${esc(k)} <b>${num}</b></span>`;
-    }).join("") + `<span class="chip-label">自定义指标（来自插件）</span></div>`;
+    }).join("") + `<span class="chip-label">${I18N.t("section.custom_metrics")}</span></div>`;
   }
-  const cat = h.category ? esc(h.category) : "未分类";
-  const loadTitle = "系统负载 1 / 5 / 15 分钟" + (h.os === "windows" ? "（Windows 为近似值）" : "");
+  const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
+  const loadTitle = I18N.t("section.load_avg") + (h.os === "windows" ? I18N.t("misc.windows_approx") : "");
   const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
   const lastCell = !h.online
-    ? `<span class="g offline-tag" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
+    ? `<span class="g offline-tag" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : staleSec > 15
-      ? `<span class="g stale-tag" title="数据可能卡顿，最后上报 ${fmtDateTime(h.last_seen)}">⚠ 数据 ${ago(h.last_seen)}</span>`
+      ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ 数据 ${ago(h.last_seen)}</span>`
       : `<span class="g">运行 ${fmtUptime(m.uptime || 0)}</span>`;
   return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <div class="host-head">
@@ -681,20 +681,20 @@ function hostCard(h) {
         <div style="min-width:0; flex:1; overflow:hidden">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
-            <div class="hi-row"><span class="hi-k">主机信息</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
-            <div class="hi-row"><span class="hi-k">操作系统</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}</span></div>
+            <div class="hi-row"><span class="hi-k">${I18N.t("section.host_info")}</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
+            <div class="hi-row"><span class="hi-k">${I18N.t("section.os")}</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}</span></div>
           </div>
         </div>
       </div>
       <div class="host-tags">
-        <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
+        <span class="cat-badge" data-act="cat" title=I18N.t("section.click_set_category")>${cat}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-        ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="远程终端（经 Agent 反向连接，免开端口）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
-        <button class="x-btn" data-act="del" title="删除主机">✕</button>
+        ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title=I18N.t("section.terminal_desc")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
+        <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}主机">✕</button>
       </div>
     </div>
     ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + "核")}
-    ${bar("内存", m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
+    ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
     ${swap}
     ${disksHtml}
     ${gpusHtml}
@@ -707,7 +707,7 @@ function hostCard(h) {
     <div class="foot">
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
       <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
-      <span class="g">进程 <span class="mono">${m.proc_count || 0}</span></span>
+      <span class="g">${I18N.t("ui.process")} <span class="mono">${m.proc_count || 0}</span></span>
       ${lastCell}
     </div>
   </div>`;
@@ -734,15 +734,15 @@ function hostRow(h) {
   const isStale = h.online && staleSec > 15;
   const statusCls = !h.online ? "offline" : isStale ? "stale" : "online";
   const last = !h.online
-    ? `<span class="hrow-status offline" title="最后上报 ${fmtDateTime(h.last_seen)}">⚠ 失联 ${ago(h.last_seen)}</span>`
+    ? `<span class="hrow-status offline" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : isStale
-      ? `<span class="hrow-status stale" title="数据可能卡顿">⚠ ${ago(h.last_seen)}</span>`
+      ? `<span class="hrow-status stale" title=I18N.t("section.data_stale")>⚠ ${ago(h.last_seen)}</span>`
       : `<span class="hrow-status online">运行 ${fmtUptime(m.uptime || 0)}</span>`;
-  const cat = h.category ? esc(h.category) : "未分类";
+  const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
   const termBtn = (h.online && TERMINAL_ENABLED)
-    ? `<button class="term-btn" data-act="term" title="远程终端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
+    ? `<button class="term-btn" data-act="term" title=I18N.t("ui.remote_terminal")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
-  const loadStr = m.load1 !== undefined ? `负载 ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
+  const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
   return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
     <span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
@@ -750,14 +750,14 @@ function hostRow(h) {
       <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-    <span class="cat-badge" data-act="cat" title="点击修改分类">${cat}</span>
+    <span class="cat-badge" data-act="cat" title=I18N.t("section.click_set_category")>${cat}</span>
     <div class="hrow-metrics">
-      ${miniBar("CPU", m.cpu_percent)}${miniBar("内存", m.mem_percent)}${miniBar("磁盘", diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
+      ${miniBar("CPU", m.cpu_percent)}${miniBar(I18N.t("ui.memory"), m.mem_percent)}${miniBar(I18N.t("ui.disk"), diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
     <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
     ${loadStr ? `<span class="hrow-load mono">${loadStr}</span>` : ""}
     <span class="hrow-last">${last}</span>
-    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="删除主机">✕</button></span>
+    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}主机">✕</button></span>
   </div>`;
 }
 
@@ -769,7 +769,7 @@ function renderHosts(hosts) {
   $("navHosts").textContent = hosts.length;
 
   // Refresh multi-select category dropdown (preserve current selection)
-  const cats = [...new Set(hosts.map(h => h.category || "未分类"))].sort();
+  const cats = [...new Set(hosts.map(h => h.category || I18N.t("section.uncategorized")))].sort();
   renderCatDropdown(cats);
 
   // 安全网：仅在首次渲染时检查（LAST_RENDER_KEY 未设置），
@@ -791,7 +791,7 @@ function renderHosts(hosts) {
   
   // Filter: multi-category + online status + search
   let shown = hosts.filter(h => {
-    if (CUR_CATS.length > 0 && !CUR_CATS.includes(h.category || "未分类")) return false;
+    if (CUR_CATS.length > 0 && !CUR_CATS.includes(h.category || I18N.t("section.uncategorized"))) return false;
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
     if (HOST_SEARCH) {
@@ -813,7 +813,7 @@ function renderHosts(hosts) {
   }
 
   if (!hosts.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY; return; }
-  if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = "没有匹配的主机。"; return; }
+  if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = I18N.t("empty.no_host_match"); return; }
   empty.style.display = "none";
 
   // Pagination: lower threshold on mobile to reduce DOM nodes
@@ -835,7 +835,7 @@ function renderHosts(hosts) {
 
   // Group by category on current page
   const byCat = {};
-  pageHosts.forEach(h => { const c = h.category || "未分类"; (byCat[c] = byCat[c] || []).push(h); });
+  pageHosts.forEach(h => { const c = h.category || I18N.t("section.uncategorized"); (byCat[c] = byCat[c] || []).push(h); });
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
 
@@ -881,21 +881,21 @@ function renderPager(pages, total) {
 
 /* ---------- 主机操作 ---------- */
 async function delHost(id, name) {
-  if (!confirm(`确认删除主机「${name}」？\n若该主机 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
+  if (!confirm(`确认${I18N.t("ui.delete")}主机「${name}」？\n若该主机 Agent 仍在运行，约 60 ${I18N.t("time.sec")}后会重新出现。`)) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (r.ok) { toast("已删除主机", "ok"); refresh(); } else { toast("删除失败", "err"); }
+    if (r.ok) { toast(I18N.t("toast.host_deleted"), "ok"); refresh(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
   } catch (e) { toast("删除失败: " + e, "err"); }
 }
 async function editCategory(id, cur) {
-  const cat = prompt("设置主机分类（留空清除；服务端覆盖优先于 Agent 上报）：", cur || "");
+  const cat = prompt(I18N.t("section.set_category_desc"), cur || "");
   if (cat === null) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category: cat.trim() })
     });
-    if (r.ok) { toast("已更新分类", "ok"); refresh(); } else { toast("更新失败", "err"); }
+    if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); refresh(); } else { toast(I18N.t("toast.update_failed2"), "err"); }
   } catch (e) { toast("更新失败: " + e, "err"); }
 }
 
@@ -907,7 +907,7 @@ async function openDetail(id, name) {
   DETAIL_TIME_RANGE = 24;
   $("detailTitle").textContent = name + " · 近期趋势";
   const body = $("detailBody");
-  body.innerHTML = `<div class="empty-line">加载中…</div>`;
+  body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading")}</div>`;
   $("detailMask").classList.add("show");
   await loadAndRenderCharts();
 }
@@ -920,34 +920,34 @@ async function loadAndRenderCharts() {
   try {
     const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${now}`).then(r => r.json());
     if (!Array.isArray(samples) || !samples.length) {
-      body.innerHTML = `<div class="empty-line">暂无历史数据（Agent 需运行至少几分钟才会积累数据）</div>`;
+      body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
       return;
     }
 
     // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮
     DETAIL_CHARTS = {};
-    const gran = DETAIL_TIME_RANGE <= 2 ? '原始精度 (≈5s)' : DETAIL_TIME_RANGE <= 48 ? '1 分钟聚合' : '5 分钟聚合';
+    const gran = DETAIL_TIME_RANGE <= 2 ? I18N.t("time.raw") : DETAIL_TIME_RANGE <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
     const pct = v => v.toFixed(1) + '%';
     const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="230"></canvas>` +
-      `<button class="chart-enlarge" data-chart="${id}" title="放大预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+      `<button class="chart-enlarge" data-chart="${id}" title=I18N.t("ui.zoom_preview")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `
       <div class="chart-controls">
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">1小时</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">24小时</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 48 ? 'active' : ''}" data-range="48">48小时</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 168 ? 'active' : ''}" data-range="168">7天</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">${I18N.t("time.1h")}</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">${I18N.t("time.24h")}</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 48 ? 'active' : ''}" data-range="48">48${I18N.t("time.hour")}</button>
+        <button class="chip-btn ${DETAIL_TIME_RANGE === 168 ? 'active' : ''}" data-range="168">7${I18N.t("time.day")}</button>
       </div>
       <div class="chart-container">
         ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
       </div>
-      <div class="hint">采样点 ${samples.length} 个（粒度：${gran}）· 悬停查看数值 · 拖动框选放大区间 · 双击还原 · 点击图表或右上角按钮放大预览。历史已持久化，重启不丢。</div>
+      <div class="hint">采样点 ${samples.length} 个（粒度：${gran}）· 悬停查看数值 · 拖动框选放大区间 · 双击还原 · 点击图表或右上角按钮${I18N.t("ui.zoom_preview")}。历史已持久化，重启不丢。</div>
     `;
 
     DETAIL_CHARTS.chartCPU = createChart('chartCPU', samples,
-      [{ key: 'cpu_percent', label: 'CPU 使用率', color: '#4c8dff', fmt: pct }], 0, 100, { title: 'CPU 使用率' });
+      [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, { title: I18N.t("section.cpu_usage") });
     DETAIL_CHARTS.chartMem = createChart('chartMem', samples,
-      [{ key: 'mem_percent', label: '内存使用率', color: '#8b5cf6', fmt: pct }], 0, 100, { title: '内存使用率' });
+      [{ key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct }], 0, 100, { title: I18N.t("section.mem_usage") });
 
     // 磁盘：每个分区一条线。以「磁盘数最多」的样本为准，避免首个样本缺盘时丢失分区曲线
     let diskProto = [];
@@ -959,8 +959,8 @@ async function loadAndRenderCharts() {
       transform: (s) => { const d = s.disks && s.disks[idx] ? s.disks[idx] : null; return d ? d.percent : null; }
     }));
     DETAIL_CHARTS.chartDisk = createChart('chartDisk', samples,
-      diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: '根分区', color: '#f7b23b', fmt: pct }],
-      0, 100, { title: '磁盘使用率' });
+      diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: I18N.t("section.root_partition"), color: '#f7b23b', fmt: pct }],
+      0, 100, { title: I18N.t("section.disk_usage") });
 
     // GPU：每块显卡一条线（存在时才有该图）
     if (hasGPU) {
@@ -971,13 +971,13 @@ async function loadAndRenderCharts() {
         color: ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b'][idx % 4], fmt: v => v.toFixed(0) + '%',
         transform: (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g.util_percent || 0) : null; }
       }));
-      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuSeries, 0, 100, { title: 'GPU 使用率' });
+      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuSeries, 0, 100, { title: I18N.t("section.gpu_usage") });
     }
 
     DETAIL_CHARTS.chartNet = createChart('chartNet', samples, [
-      { key: 'net_recv_rate', label: '网络接收', color: '#2fd07a', fmt: fmtRate },
-      { key: 'net_sent_rate', label: '网络发送', color: '#43b6f0', fmt: fmtRate },
-    ], null, null, { title: '网络吞吐' });
+      { key: 'net_recv_rate', label: I18N.t("section.net_recv"), color: '#2fd07a', fmt: fmtRate },
+      { key: 'net_sent_rate', label: I18N.t("section.net_send"), color: '#43b6f0', fmt: fmtRate },
+    ], null, null, { title: I18N.t("section.net_throughput") });
 
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
@@ -1187,7 +1187,7 @@ function showChartTip(state, e, li) {
 // interactive (hover / box-zoom / dbl-click reset).
 function openChartZoom(src) {
   hideChartTip();
-  $("chartZoomTitle").textContent = (src.title || "趋势") + " · 放大预览";
+  $("chartZoomTitle").textContent = (src.title || I18N.t("ui.trend")) + " · 放大预览";
   $("chartZoomMask").classList.add("show");
   const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, { title: src.title, isZoom: true });
   if (z) { z.i0 = src.i0; z.i1 = src.i1; drawChart(z); }
@@ -1245,7 +1245,7 @@ function createTermTab(id, name) {
   screens.appendChild(screen);
   const tab = document.createElement("button");
   tab.className = "term-tab";
-  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title="关闭标签">×</span>`;
+  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title=I18N.t("ui.close_tab")>×</span>`;
   tabbar.appendChild(tab);
   const vt = makeVT(screen);
   screen._vt = vt;
@@ -1258,7 +1258,7 @@ function createTermTab(id, name) {
   input.setAttribute("autocorrect", "off");
   input.setAttribute("autocomplete", "off");
   input.setAttribute("spellcheck", "false");
-  input.setAttribute("aria-label", "终端输入");
+  input.setAttribute("aria-label", I18N.t("misc.terminal_input"));
   input.setAttribute("enterkeyhint", "enter");
   input.setAttribute("rows", "1");
   input.setAttribute("wrap", "off");
@@ -1314,20 +1314,20 @@ function createTermTab(id, name) {
   });
   switchTermTab(idx);
   $("termMask").classList.remove("maximized");
-  const mb = $("termMaxBtn"); if (mb) mb.title = "放大窗口";
+  const mb = $("termMaxBtn"); if (mb) mb.title = I18N.t("ui.maximize_window");
   $("termMask").classList.add("show");
   connectTermWS(tabObj);
 }
 
 function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
-  setTermStatus(tab.retry > 0 ? `重连中…(${tab.retry}/3)` : "连接中…", "");
+  setTermStatus(tab.retry > 0 ? `重连中…(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
-  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on");
+  ws.onopen = () => { tab.retry = 0; setTermStatus(I18N.t("ui.connected"), "on");
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot on"; } }
@@ -1337,7 +1337,7 @@ function connectTermWS(tab) {
     vt.feed(text);
   };
   ws.onclose = () => {
-    setTermStatus("已断开", "off");
+    setTermStatus(I18N.t("ui.disconnected"), "off");
     if (tab.ws === ws) tab.ws = null;
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
@@ -1349,7 +1349,7 @@ function connectTermWS(tab) {
       setTimeout(() => { if (mask.classList.contains("show")) connectTermWS(tab); }, 2000);
     }
   };
-  ws.onerror = () => setTermStatus("连接错误", "off");
+  ws.onerror = () => setTermStatus(I18N.t("ui.connect_error"), "off");
 }
 
 function switchTermTab(idx) {
@@ -1419,10 +1419,10 @@ function updateTermDock() {
       item.innerHTML = `
         <span class="dock-dot"></span>
         <span class="dock-name"></span>
-        <button class="dock-btn" title="展开窗口" aria-label="展开窗口">
+        <button class="dock-btn" title=I18N.t("ui.expand_window") aria-label=I18N.t("ui.expand_window")>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V13a1 1 0 0 1 1-1h12"/><path d="M12 5l-5 7 5-7"/></svg>
         </button>
-        <button class="dock-btn close" title="关闭会话" aria-label="关闭会话">
+        <button class="dock-btn close" title=I18N.t("ui.close_session") aria-label=I18N.t("ui.close_session")>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>`;
       // 点击卡片主体（非按钮）也展开
@@ -1526,7 +1526,7 @@ function renderTerminalSessions(sessions) {
     cnt.textContent = q ? `${filtered.length}/${sessions.length} 条` : `${sessions.length} 条`;
   }
   if (filtered.length === 0) {
-    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">${q ? "没有匹配的终端会话" : "当前没有活跃的终端会话"}</div>`;
+    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">${q ? I18N.t("empty.no_terminal_match") : I18N.t("empty.no_active_sessions")}</div>`;
     return;
   }
   c.innerHTML = filtered.map(s => {
@@ -1557,7 +1557,7 @@ function openTerminalReplay(sessionId, hostname) {
       // Replay OUTPUT frames (shell output) + RESIZE frames (terminal dimension changes).
       // INPUT frames are excluded: the shell output already contains the command echo.
       const frames = (data.frames || []).filter(f => f.type === "output" || f.type === "resize");
-      if (frames.length === 0) { toast("该会话无录制数据", "err"); return; }
+      if (frames.length === 0) { toast(I18N.t("empty.no_recording"), "err"); return; }
       // 从第一个 resize 帧获取录制时的初始终端尺寸
       let initCols = 80, initRows = 24;
       for (const f of frames) {
@@ -1588,14 +1588,14 @@ function openTerminalReplay(sessionId, hostname) {
       updateReplayProgress();
       playReplay();
     })
-    .catch(e => toast("加载回放失败: " + e, "err"));
+    .catch(e => toast(I18N.t("toast.load_replay_failed") + e, "err"));
 }
 
 function playReplay() {
   if (!REPLAY || REPLAY.playing) return;
   REPLAY.playing = true;
   const btn = $("replayPlayBtn"); if (btn) btn.textContent = "⏸";
-  const st = $("replayStatus"); if (st) { st.textContent = "播放中"; st.className = "term-status on"; }
+  const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.playing"); st.className = "term-status on"; }
   scheduleNextFrame();
 }
 
@@ -1604,7 +1604,7 @@ function pauseReplay() {
   REPLAY.playing = false;
   if (REPLAY.timer) { clearTimeout(REPLAY.timer); REPLAY.timer = null; }
   const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
-  const st = $("replayStatus"); if (st) { st.textContent = "已暂停"; st.className = "term-status"; }
+  const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.paused"); st.className = "term-status"; }
 }
 
 function scheduleNextFrame() {
@@ -1612,7 +1612,7 @@ function scheduleNextFrame() {
   if (REPLAY.idx >= REPLAY.frames.length) {
     REPLAY.playing = false;
     const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
-    const st = $("replayStatus"); if (st) { st.textContent = "播放完毕"; st.className = "term-status"; }
+    const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.playback_done"); st.className = "term-status"; }
     updateReplayProgress();
     return;
   }
@@ -1701,7 +1701,7 @@ function openTerminalObserve(sessionId, hostname) {
   const vt = makeVT(screen);
   screen._vt = vt;
   $("termObserveTitle").textContent = hostname + " · 只读旁观";
-  setObserveStatus("连接中…", "");
+  setObserveStatus(I18N.t("ui.connecting"), "");
   $("termObserveMask").classList.add("show");
   $("termSessionsMask").classList.remove("show");
   if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
@@ -1710,13 +1710,13 @@ function openTerminalObserve(sessionId, hostname) {
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}/observe`);
   ws.binaryType = "arraybuffer";
   OBSERVE_WS = ws;
-  ws.onopen = () => setObserveStatus("旁观中", "on");
+  ws.onopen = () => setObserveStatus(I18N.t("ui.observing"), "on");
   ws.onmessage = ev => {
     const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
     vt.feed(text);
   };
-  ws.onclose = () => setObserveStatus("会话已结束", "off");
-  ws.onerror = () => setObserveStatus("连接错误", "off");
+  ws.onclose = () => setObserveStatus(I18N.t("ui.session_ended"), "off");
+  ws.onerror = () => setObserveStatus(I18N.t("ui.connect_error"), "off");
 }
 
 function closeObserveWS() {
@@ -1745,7 +1745,7 @@ function termRefit() {
 safeAddEventListener("termMaxBtn", "click", () => {
   const mask = $("termMask"); if (!mask) return;
   const max = mask.classList.toggle("maximized");
-  const btn = $("termMaxBtn"); if (btn) btn.title = max ? "还原默认大小" : "放大窗口";
+  const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
   requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
 });
 // 收起到右下角
@@ -2083,7 +2083,7 @@ async function openSettings() {
     $("diskWarn").value = t.disk_warn; $("diskCrit").value = t.disk_crit;
     $("offlineSec").value = t.offline_after_sec;
     $("settingsMask").classList.add("show");
-  } catch (e) { toast("读取配置失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 function collectSettings() {
   const num = id => parseFloat($(id).value) || 0;
@@ -2111,16 +2111,16 @@ function collectSettings() {
 async function saveSettings() {
   try {
     const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
-    if (r.ok) { toast("配置已保存", "ok"); $("settingsMask").classList.remove("show"); } else { toast("保存失败", "err"); }
-  } catch (e) { toast("保存失败: " + e, "err"); }
+    if (r.ok) { toast(I18N.t("toast.config_saved"), "ok"); $("settingsMask").classList.remove("show"); } else { toast(I18N.t("toast.save_failed"), "err"); }
+  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
 }
 async function testSettings() {
   try {
     const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
     const j = await r.json();
-    if (j.ok) toast("测试消息已发送 ✅", "ok");
-    else toast("测试失败: " + (j.errors || []).join("; "), "err");
-  } catch (e) { toast("测试失败: " + e, "err"); }
+    if (j.ok) toast(I18N.t("toast.test_sent"), "ok");
+    else toast(I18N.t("toast.test_failed2") + (j.errors || []).join("; "), "err");
+  } catch (e) { toast(I18N.t("toast.test_failed2") + e, "err"); }
 }
 
 /* ---------- 安装 Agent ---------- */
@@ -2151,7 +2151,7 @@ async function openInstall() {
     const ms = $("multiServerMode"); if (ms) ms.checked = false;
     renderInstallCmd();
     $("installMask").classList.add("show");
-  } catch (e) { toast("读取安装信息失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
 }
 function parseMultiServerList() {
   const text = ($("multiServerList") || {}).value || "";
@@ -2188,21 +2188,21 @@ function renderInstallCmd() {
   if (MULTI_SERVER_MODE) {
     const sj = parseMultiServerList();
     if (sj) q += "&servers_json=" + encodeURIComponent(sj);
-    label = "多服务端推送安装";
-    hint = "Agent 将同时向列表中的所有服务端推送数据和建立终端通道。";
+    label = I18N.t("install.multi_server");
+    hint = I18N.t("install.multi_desc");
   }
   if (CUR_OS === "windows") {
     cmd = `irm "${server}/install.ps1?${q}" | iex`;
-    label = "PowerShell 一条命令安装（无需管理员）";
+    label = I18N.t("install.powershell_cmd");
     hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\aiops-agent 并注册用户级开机自启。";
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
-    label = "终端一条命令安装";
-    hint = "下载到 /opt/aiops-agent 并后台启动（系统级守护可加 sudo）。";
+    label = I18N.t("install.terminal_one_line");
+    hint = I18N.t("install.linux_detail");
   } else {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sudo sh`;
-    label = "一条命令安装（root / sudo）";
-    hint = "自动下载、注册 systemd 服务并开机自启。";
+    label = I18N.t("install.linux_cmd");
+    hint = I18N.t("install.linux_desc");
   }
   $("installCmd").textContent = cmd;
   $("cmdLabel").textContent = label;
@@ -2216,7 +2216,7 @@ function renderRelayCmd() {
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
   let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
-  const gwIP = $("relayGatewayIP").value.trim() || "<网关IP>";
+  const gwIP = $("relayGatewayIP").value.trim() || I18N.t("install.gateway_ip");
   const relay = `http://${gwIP}:8529`;
   let gatewayCmd, internalCmd;
   if (CUR_OS === "windows") {
@@ -2236,12 +2236,12 @@ function renderRelayCmd() {
     : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
 }
 async function resetToken() {
-  if (!confirm("重置 Token 后，旧安装命令将失效（仅影响新 Agent 注册；已装 Agent 靠机器指纹鉴权，不受影响）。确定重置？")) return;
+  if (!confirm(I18N.t("install.reset_warning"))) return;
   try {
     const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
     INSTALL.token = j.token; TOKEN_REVEALED = false; updateTokenDisplay(); renderInstallCmd();
-    toast("Token 已重置（已装 Agent 不受影响）", "ok");
-  } catch (e) { toast("重置失败: " + e, "err"); }
+    toast(I18N.t("toast.token_reset"), "ok");
+  } catch (e) { toast(I18N.t("toast.reset_failed2") + e, "err"); }
 }
 
 /* ---------- 自定义监控 ---------- */
@@ -2294,14 +2294,14 @@ function renderChecks(checks) {
 
   grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
-    const stText = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "待检测");
-    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : "进程";
+    const stText = !c.enabled ? I18N.t("ui.disabled_status") : (c.checked_at ? (c.ok ? I18N.t("ui.normal") : I18N.t("ui.abnormal")) : I18N.t("ui.pending"));
+    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : I18N.t("ui.process");
     const builtin = c.builtin ? ' data-builtin="1"' : "";
-    const histBtn = `<button class="mini-btn" data-cact="hist" title="历史曲线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
+    const histBtn = `<button class="mini-btn" data-cact="hist" title=I18N.t("ui.history_chart")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
     const actions = `<span class="ch-actions">${histBtn}${c.builtin ? "" : `
-          <button class="mini-btn" data-cact="run" title="立即检测">▶</button>
-          <button class="mini-btn" data-cact="edit" title="编辑">✎</button>
-          <button class="mini-btn del" data-cact="del" title="删除">✕</button>`}</span>`;
+          <button class="mini-btn" data-cact="run" title=I18N.t("ui.check_now")>▶</button>
+          <button class="mini-btn" data-cact="edit" title=I18N.t("ui.edit")>✎</button>
+          <button class="mini-btn del" data-cact="del" title=I18N.t("ui.delete")>✕</button>`}</span>`;
     const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">内置</span>` : "";
 
     // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
@@ -2310,42 +2310,42 @@ function renderChecks(checks) {
     const latCls = c.checked_at ? "" : "muted";
     const detail = [];
     if (c.type === "http") {
-      detail.push(cdItem("监控地址", checkTargetDisplay(c), "muted"));
-      detail.push(cdItem("运行状态", stText, stCls));
+      detail.push(cdItem(I18N.t("form.check_url"), checkTargetDisplay(c), "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
       const code = c.status_code || 0;
-      detail.push(cdItem("状态码", code ? String(code) : "—", code === 0 ? "muted" : code >= 400 ? "crit" : "ok"));
-      detail.push(cdItem("响应延时", lat, latCls));
+      detail.push(cdItem(I18N.t("form.status_code"), code ? String(code) : "—", code === 0 ? "muted" : code >= 400 ? "crit" : "ok"));
+      detail.push(cdItem(I18N.t("form.response_latency"), lat, latCls));
       if (typeof c.cert_days === "number" && c.cert_days >= 0) {
         const d = c.cert_days;
-        detail.push(cdItem("证书剩余", d + " 天", d <= 7 ? "crit" : d <= 30 ? "warn" : "ok"));
+        detail.push(cdItem(I18N.t("form.cert_remaining"), d + I18N.t("time.days"), d <= 7 ? "crit" : d <= 30 ? "warn" : "ok"));
       }
     } else if (c.type === "tcp") {
       const hp = splitHostPort(c.target);
-      detail.push(cdItem("目标主机", hp.host || c.target, "muted"));
-      detail.push(cdItem("端口", hp.port || "—", ""));
-      detail.push(cdItem("连通状态", stText, stCls));
-      detail.push(cdItem("连接延时", lat, latCls));
+      detail.push(cdItem(I18N.t("form.target"), hp.host || c.target, "muted"));
+      detail.push(cdItem(I18N.t("form.port"), hp.port || "—", ""));
+      detail.push(cdItem(I18N.t("form.connect_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.connect_latency"), lat, latCls));
     } else if (c.type === "ping") {
-      detail.push(cdItem("监控地址", c.target, "muted"));
-      detail.push(cdItem("运行状态", stText, stCls));
+      detail.push(cdItem(I18N.t("form.check_url"), c.target, "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
       const loss = (typeof c.loss_pct === "number" && c.loss_pct >= 0) ? c.loss_pct : null;
-      detail.push(cdItem("丢包率", loss === null ? "—" : Math.round(loss) + "%",
+      detail.push(cdItem(I18N.t("form.loss_rate"), loss === null ? "—" : Math.round(loss) + "%",
         loss === null ? "muted" : loss === 0 ? "ok" : loss >= 100 ? "crit" : "warn"));
       const hasRtt = c.checked_at && c.latency_ms > 0;
-      detail.push(cdItem("平均延时", hasRtt ? Math.round(c.latency_ms) + " ms" : "—", hasRtt ? "" : "muted"));
+      detail.push(cdItem(I18N.t("form.avg_latency"), hasRtt ? Math.round(c.latency_ms) + " ms" : "—", hasRtt ? "" : "muted"));
     } else if (c.type === "process") {
       const pr = splitProcessTarget(c);
-      detail.push(cdItem("进程名", pr.proc, ""));
-      detail.push(cdItem("所在主机", pr.hostName, "muted"));
-      detail.push(cdItem("运行状态", stText, stCls));
-      detail.push(cdItem("检测耗时", lat, latCls));
+      detail.push(cdItem(I18N.t("form.process_name2"), pr.proc, ""));
+      detail.push(cdItem(I18N.t("form.target_host2"), pr.hostName, "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.check_duration"), lat, latCls));
     } else {
-      detail.push(cdItem("监控地址", checkTargetDisplay(c), "muted"));
-      detail.push(cdItem("运行状态", stText, stCls));
-      detail.push(cdItem("延时", lat, latCls));
+      detail.push(cdItem(I18N.t("form.check_url"), checkTargetDisplay(c), "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.latency"), lat, latCls));
     }
-    detail.push(cdItem("检测周期", "每 " + c.interval_sec + "s", "muted"));
-    detail.push(cdItem("最近检测", c.checked_at ? ago(c.checked_at) : "尚未检测", "muted"));
+    detail.push(cdItem(I18N.t("form.check_interval"), I18N.t("section.every") + c.interval_sec + "s", "muted"));
+    detail.push(cdItem(I18N.t("form.last_check"), c.checked_at ? ago(c.checked_at) : I18N.t("ui.not_checked"), "muted"));
 
     return `<div class="check-card st-${st}" data-id="${esc(c.id)}"${builtin}>
       <div class="check-row-top">
@@ -2393,7 +2393,7 @@ async function loadCheckHistory() {
   const { id, name, type, range } = CHK_HIST;
   const body = $("checkHistBody");
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
-  const ctrl = [[1, "1小时"], [6, "6小时"], [24, "24小时"], [0, "全部"]].map(([h, lab]) =>
+  const ctrl = [[1, I18N.t("time.1h")], [6, I18N.t("time.6h")], [24, I18N.t("time.24h")], [0, I18N.t("ui.all")]].map(([h, lab]) =>
     `<button class="chip-btn ${range === h ? "active" : ""}" data-crange="${h}">${lab}</button>`).join("");
   try {
     const all = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
@@ -2408,19 +2408,19 @@ async function loadCheckHistory() {
     const isPing = type === "ping";
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
-    const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : "刚开始";
+    const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now");
     const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="230"></canvas>` +
-      `<button class="chart-enlarge" data-chart="${cid}" title="放大预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+      `<button class="chart-enlarge" data-chart="${cid}" title=I18N.t("ui.zoom_preview")><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
       <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ms · 悬停查看数值，拖动框选放大，双击还原。</div>`;
     CHK_CHARTS = {};
     CHK_CHARTS.chkLat = createChart("chkLat", samples, [
-      { key: "latency_ms", label: isPing ? "平均延时" : "延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
+      { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
     ], 0, null, { title: name + " · 延时(ms)" });
     if (isPing) {
       CHK_CHARTS.chkLoss = createChart("chkLoss", samples, [
-        { key: "loss_pct", label: "丢包率", color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
+        { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
       ], 0, 100, { title: name + " · 丢包率(%)" });
     }
   } catch (e) {
@@ -2441,24 +2441,24 @@ function updateCkTargetLabel() {
   const t = $("ckType").value;
   if (t === "process") {
     $("ckHostField").style.display = "block";
-    $("ckTargetLabel").textContent = "进程名称";
-    $("ckTarget").placeholder = "如 nginx, mysql, aiops-agent";
+    $("ckTargetLabel").textContent = I18N.t("form.process_name");
+    $("ckTarget").placeholder = I18N.t("form.hint_process");
     return;
   }
   $("ckHostField").style.display = "none";
   if (t === "http") {
-    $("ckTargetLabel").textContent = "URL 地址";
+    $("ckTargetLabel").textContent = I18N.t("form.url");
     $("ckTarget").placeholder = "https://example.com";
   } else if (t === "ping") {
-    $("ckTargetLabel").textContent = "主机地址 / IP";
-    $("ckTarget").placeholder = "如 8.8.8.8 或 example.com";
+    $("ckTargetLabel").textContent = I18N.t("form.host_addr");
+    $("ckTarget").placeholder = I18N.t("form.hint_url");
   } else {
-    $("ckTargetLabel").textContent = "主机:端口";
+    $("ckTargetLabel").textContent = I18N.t("form.host_port");
     $("ckTarget").placeholder = "127.0.0.1:3306";
   }
 }
 function openCheckModal(check) {
-  $("checkModalTitle").textContent = check ? "编辑检查" : "添加检查";
+  $("checkModalTitle").textContent = check ? I18N.t("ui.edit_check") : I18N.t("ui.add_check");
   $("ckId").value = check ? check.id : "";
   $("ckName").value = check ? check.name : "";
   $("ckType").value = check ? check.type : "http";
@@ -2488,8 +2488,8 @@ async function saveCheck() {
   const type = $("ckType").value;
   if (type === "process") {
     const hostId = $("ckHost").value;
-    if (!hostId) { toast("请选择目标主机", "err"); return; }
-    if (!target) { toast("请填写进程名称", "err"); return; }
+    if (!hostId) { toast(I18N.t("valid.select_host"), "err"); return; }
+    if (!target) { toast(I18N.t("valid.fill_process"), "err"); return; }
     target = hostId + "/" + target;
   }
   const body = {
@@ -2501,28 +2501,28 @@ async function saveCheck() {
     level: $("ckLevel").value,
     enabled: $("ckEnabled").checked
   };
-  if (!body.name || !body.target) { toast("请填写名称和目标", "err"); return; }
+  if (!body.name || !body.target) { toast(I18N.t("valid.fill_name_target"), "err"); return; }
   try {
     const r = await fetch(`${API}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) { toast("已保存", "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
-    else { const j = await r.json(); toast("保存失败: " + (j.error || ""), "err"); }
-  } catch (e) { toast("保存失败: " + e, "err"); }
+    if (r.ok) { toast(I18N.t("toast.saved"), "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
+    else { const j = await r.json(); toast(I18N.t("toast.save_failed2") + (j.error || ""), "err"); }
+  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
 }
 async function delCheck(id) {
-  if (!confirm("确认删除该监控检查？")) return;
+  if (!confirm(I18N.t("valid.confirm_delete_check"))) return;
   try {
     const r = await fetch(`${API}/checks/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (r.ok) { toast("已删除", "ok"); loadChecks(); } else { toast("删除失败", "err"); }
+    if (r.ok) { toast(I18N.t("toast.deleted"), "ok"); loadChecks(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
   } catch (e) { toast("删除失败: " + e, "err"); }
 }
 
 /* ---------- 账户 / 个人信息 ---------- */
 let CUR_ROLE = "";
-const roleLabel = r => ({ admin: "管理员", operator: "运维", viewer: "只读" }[r] || r || "");
+const roleLabel = r => ({ admin: I18N.t("ui.admin"), operator: I18N.t("ui.operator"), viewer: I18N.t("ui.readonly") }[r] || r || "");
 const canWrite = () => CUR_ROLE === "operator" || CUR_ROLE === "admin";
 const isAdmin = () => CUR_ROLE === "admin";
 function setUser(me) {
-  const name = me.display_name || me.username || "用户";
+  const name = me.display_name || me.username || I18N.t("ui.user");
   $("userName").textContent = name;
   $("userAvatar").textContent = (name[0] || "A");
   if (me.role) {
@@ -2550,11 +2550,11 @@ function startApp() {
   function schedulePoll() {
     if (pollTimer) clearTimeout(pollTimer);
     const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
-    const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, log: 10000 };
+    const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, forward: 15000, log: 10000 };
     let interval = intervals[view] || POLL_BASE;
     // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
     if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);
-    pollTimer = setTimeout(() => { refresh(); loadChecks(); schedulePoll(); }, interval);
+    pollTimer = setTimeout(() => { refresh(); loadChecks(); if (document.querySelector("#view-forward.active")) loadForwards(); schedulePoll(); }, interval);
   }
   schedulePoll();
   // 视图切换时立即调整轮询频率
@@ -2575,7 +2575,7 @@ async function openProfile() {
     $("pfOld").value = ""; $("pfNew").value = "";
     renderMfaState(!!me.mfa_enabled);
     $("profileMask").classList.add("show");
-  } catch (e) { toast("读取失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.read_failed2") + e, "err"); }
 }
 async function saveProfile() {
   try {
@@ -2585,21 +2585,21 @@ async function saveProfile() {
       body: JSON.stringify({ username: uname, display_name: $("pfDisplay").value.trim(), email: $("pfEmail").value.trim() })
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("资料已保存", "ok"); setUser({ display_name: $("pfDisplay").value.trim(), username: j.username || uname }); }
-    else toast(j.error || "保存失败", "err");
-  } catch (e) { toast("保存失败: " + e, "err"); }
+    if (r.ok) { toast(I18N.t("toast.profile_saved"), "ok"); setUser({ display_name: $("pfDisplay").value.trim(), username: j.username || uname }); }
+    else toast(j.error || I18N.t("toast.save_failed"), "err");
+  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
 }
 async function changePassword() {
-  if (!$("pfOld").value || !$("pfNew").value) { toast("请填写原密码和新密码", "err"); return; }
+  if (!$("pfOld").value || !$("pfNew").value) { toast(I18N.t("valid.fill_passwords"), "err"); return; }
   try {
     const r = await fetch(`${API}/password`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ old: $("pfOld").value, new: $("pfNew").value })
     });
     const j = await r.json();
-    if (r.ok) { toast("密码已修改", "ok"); $("pfOld").value = ""; $("pfNew").value = ""; }
-    else toast(j.error || "修改失败", "err");
-  } catch (e) { toast("修改失败: " + e, "err"); }
+    if (r.ok) { toast(I18N.t("toast.password_changed"), "ok"); $("pfOld").value = ""; $("pfNew").value = ""; }
+    else toast(j.error || I18N.t("toast.update_failed"), "err");
+  } catch (e) { toast(I18N.t("toast.update_failed2") + e, "err"); }
 }
 
 /* ===================== 两步验证（TOTP / Google Authenticator） ===================== */
@@ -2607,12 +2607,12 @@ let MFA_ENABLED = false;
 function renderMfaState(enabled) {
   MFA_ENABLED = enabled;
   const st = $("mfaState"), chk = $("mfaToggleChk");
-  if (st) { st.textContent = enabled ? "已启用" : "未启用"; st.className = "mfa-state " + (enabled ? "on" : "off"); }
+  if (st) { st.textContent = enabled ? I18N.t("toast.enabled") : I18N.t("toast.disabled"); st.className = "mfa-state " + (enabled ? "on" : "off"); }
   if (chk) { chk.checked = enabled; }
 }
 async function openMfaSetup(forced) {
   const body = $("mfaBody");
-  $("mfaTitle").textContent = forced ? "请完成两步验证绑定" : "启用两步验证";
+  $("mfaTitle").textContent = forced ? I18N.t("ui.mfa_required") : I18N.t("ui.enable_mfa");
   body.innerHTML = `<div class="empty-line">正在生成密钥…</div>`;
   $("mfaMask").classList.add("show");
   let data;
@@ -2628,20 +2628,20 @@ async function openMfaSetup(forced) {
     </ol>
     <div class="mfa-qr" id="mfaQr"></div>
     <div class="mfa-secret">密钥　<code class="mono" id="mfaSecret">${esc(grp)}</code><button class="btn ghost sm" id="mfaCopy" type="button">复制</button></div>
-    <div class="field"><label>动态验证码</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder="6 位口令" autocomplete="one-time-code"></div>
+    <div class="field"><label>动态验证码</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6") autocomplete="one-time-code"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">确认启用</button></div>`;
   if (qrURI) $("mfaQr").innerHTML = `<img src="${esc(qrURI)}" alt="MFA QR Code" class="qr-img">`;
   else $("mfaQr").innerHTML = `<div class="mfa-desc">二维码不可用，请在应用中手动输入上方密钥。</div>`;
-  $("mfaCopy").onclick = () => { try { navigator.clipboard.writeText(secret); toast("密钥已复制", "ok"); } catch (_) { } };
+  $("mfaCopy").onclick = () => { try { navigator.clipboard.writeText(secret); toast(I18N.t("toast.secret_copied"), "ok"); } catch (_) { } };
   $("mfaConfirm").onclick = async () => {
     const errEl = $("mfaErr"); errEl.textContent = "";
     const code = $("mfaCode").value.trim();
-    if (code.length !== 6) { errEl.textContent = "请输入 6 位动态口令"; return; }
+    if (code.length !== 6) { errEl.textContent = I18N.t("valid.enter_totp"); return; }
     const r = await fetch(`${API}/mfa/enable`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ secret, code }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      toast("两步验证已启用", "ok");
+      toast(I18N.t("toast.mfa_enabled"), "ok");
       $("mfaMask").classList.remove("show");
       if (forced) {
         // Global MFA enforcement: complete login after enrollment.
@@ -2650,13 +2650,13 @@ async function openMfaSetup(forced) {
         startApp();
       } else { renderMfaState(true); }
     }
-    else errEl.textContent = j.error || "启用失败";
+    else errEl.textContent = j.error || I18N.t("toast.enable_failed");
   };
   setTimeout(() => { const el = $("mfaCode"); if (el) el.focus(); }, 60);
 }
 function openMfaDisable() {
   const body = $("mfaBody");
-  $("mfaTitle").textContent = "关闭两步验证";
+  $("mfaTitle").textContent = I18N.t("ui.disable_mfa");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">关闭后，登录将不再需要动态口令。请选择验证方式：</div>
     <div class="field"><label>登录密码</label><input type="password" id="mfaPass" autocomplete="current-password"></div>
@@ -2670,8 +2670,8 @@ function openMfaDisable() {
     const errEl = $("mfaErr"); errEl.textContent = "";
     const r = await fetch(`${API}/mfa/disable`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("mfaPass").value }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("两步验证已关闭", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
-    else errEl.textContent = j.error || "关闭失败";
+    if (r.ok) { toast(I18N.t("toast.mfa_disabled"), "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
+    else errEl.textContent = j.error || I18N.t("toast.disable_failed");
   };
   $("mfaEmailUnbind").onclick = () => openMfaEmailUnbind();
   setTimeout(() => { const el = $("mfaPass"); if (el) el.focus(); }, 60);
@@ -2680,7 +2680,7 @@ function openMfaDisable() {
 /* ---------- 通过邮箱验证码解除 MFA ---------- */
 function openMfaEmailUnbind() {
   const body = $("mfaBody");
-  $("mfaTitle").textContent = "通过邮箱解除 MFA";
+  $("mfaTitle").textContent = I18N.t("ui.unbind_mfa_email");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">系统将向已绑定邮箱发送 6 位验证码，验证通过后关闭两步验证。</div>
     <div class="login-err" id="mfaErr"></div>
@@ -2690,7 +2690,7 @@ function openMfaEmailUnbind() {
     </div>
     <div class="field" id="mfaCodeRow" style="display:none">
       <label>邮箱验证码</label>
-      <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+      <input type="text" id="mfaEmailCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6_v2") autocomplete="one-time-code">
     </div>
     <div class="mfa-foot" id="mfaVerifyRow" style="display:none">
       <button class="btn danger" id="mfaConfirmEmailUnbind" type="button">确认解除</button>
@@ -2701,25 +2701,25 @@ function openMfaEmailUnbind() {
     const r = await fetch(`${API}/mfa/unbind-via-email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_code" }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      toast("验证码已发送", "ok");
-      $("mfaSendCode").textContent = "重新发送";
+      toast(I18N.t("toast.code_sent"), "ok");
+      $("mfaSendCode").textContent = I18N.t("ui.resend");
       $("mfaSendCode").disabled = true;
       setTimeout(() => { const b = $("mfaSendCode"); if (b) { b.disabled = false; } }, 60000);
       $("mfaCodeRow").style.display = "";
       $("mfaVerifyRow").style.display = "";
       setTimeout(() => { const el = $("mfaEmailCode"); if (el) el.focus(); }, 60);
     } else {
-      errEl.textContent = j.error || "发送失败";
+      errEl.textContent = j.error || I18N.t("toast.send_failed");
     }
   };
   $("mfaConfirmEmailUnbind").onclick = async () => {
     const errEl = $("mfaErr"); errEl.textContent = "";
     const code = $("mfaEmailCode").value.trim();
-    if (code.length !== 6) { errEl.textContent = "请输入 6 位验证码"; return; }
+    if (code.length !== 6) { errEl.textContent = I18N.t("valid.enter_code"); return; }
     const r = await fetch(`${API}/mfa/unbind-via-email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "verify", code }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("两步验证已通过邮箱解除", "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
-    else errEl.textContent = j.error || "解除失败";
+    if (r.ok) { toast(I18N.t("toast.mfa_unbind_email"), "ok"); $("mfaMask").classList.remove("show"); renderMfaState(false); }
+    else errEl.textContent = j.error || I18N.t("toast.unbind_failed");
   };
 }
 
@@ -2746,7 +2746,7 @@ async function loadUsers() {
       <div class="user-info">
         <div class="user-main"><span class="user-name">${esc(u.username)}</span>
           <span class="role-badge role-${esc(u.role)}">${roleLabel(u.role)}</span>
-          ${u.mfa_enabled ? `<span class="user-mfa" title="已启用两步验证">MFA</span>` : ""}</div>
+          ${u.mfa_enabled ? `<span class="user-mfa" title=I18N.t("mfa.enabled_badge")>MFA</span>` : ""}</div>
         <div class="user-sub">${esc(u.display_name || "—")}${u.email ? " · " + esc(u.email) : ""}</div>
       </div>
       <div class="user-acts">
@@ -2759,16 +2759,16 @@ async function loadUsers() {
 }
 function openUserEdit(user) {
   const isNew = !user;
-  $("userEditTitle").textContent = isNew ? "新建用户" : "编辑用户：" + user.username;
+  $("userEditTitle").textContent = isNew ? I18N.t("ui.new_user") : I18N.t("ui.edit_user") + user.username;
   const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}（${r}）</option>`).join("");
   $("userEditBody").innerHTML = `
-    ${isNew ? `<div class="field"><label>用户名</label><input type="text" id="ueName" placeholder="字母/数字/-_.，2–32 位"></div>
+    ${isNew ? `<div class="field"><label>用户名</label><input type="text" id="ueName" placeholder=I18N.t("form.username_format")></div>
     <div class="field"><label>初始密码（至少 4 位）</label><input type="password" id="uePass"></div>` : ""}
-    <div class="field"><label>显示名称</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder="如 运维小王"></div>
+    <div class="field"><label>显示名称</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder=I18N.t("form.hint_display_name")></div>
     <div class="field"><label>邮箱（选填，用于告警接收 / 找回）</label><input type="text" id="ueEmail" value="${user ? esc(user.email || "") : ""}" placeholder="name@example.com"></div>
     <div class="field"><label>角色</label><div class="select-wrap"><select id="ueRole">${roleOpts}</select></div></div>
     <div class="login-err" id="ueErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="ueSave" type="button">${isNew ? "创建用户" : "保存"}</button></div>`;
+    <div class="mfa-foot"><button class="btn primary" id="ueSave" type="button">${isNew ? I18N.t("ui.create_user") : I18N.t("ui.save")}</button></div>`;
   $("userEditMask").classList.add("show");
   $("ueSave").onclick = async () => {
     const errEl = $("ueErr"); errEl.textContent = "";
@@ -2782,8 +2782,8 @@ function openUserEdit(user) {
       r = await fetch(`${API}/users/${encodeURIComponent(user.username)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     }
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast(isNew ? "用户已创建" : "已保存", "ok"); $("userEditMask").classList.remove("show"); loadUsers(); }
-    else errEl.textContent = j.error || "操作失败";
+    if (r.ok) { toast(isNew ? I18N.t("toast.user_created") : I18N.t("toast.saved"), "ok"); $("userEditMask").classList.remove("show"); loadUsers(); }
+    else errEl.textContent = j.error || I18N.t("toast.operation_failed");
   };
 }
 async function usersAction(name, act) {
@@ -2792,26 +2792,26 @@ async function usersAction(name, act) {
     if (!confirm(`⚠ 确定删除用户「${name}」？\n\n该操作不可撤销，该用户的所有会话将立即失效。\n如需继续，请点击「确定」。`)) return;
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}`, { method: "DELETE" });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("用户已删除", "ok"); loadUsers(); } else toast(j.error || "删除失败", "err");
+    if (r.ok) { toast(I18N.t("toast.user_deleted"), "ok"); loadUsers(); } else toast(j.error || I18N.t("toast.delete_failed"), "err");
   } else if (act === "pwd") {
     const pass = prompt(`为「${name}」设置新密码（至少 4 位）：`);
     if (pass == null) return;
-    if (pass.trim().length < 4) { toast("密码至少 4 位", "err"); return; }
+    if (pass.trim().length < 4) { toast(I18N.t("toast.password_too_short"), "err"); return; }
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pass }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) toast("密码已重置", "ok"); else toast(j.error || "重置失败", "err");
+    if (r.ok) toast(I18N.t("toast.password_reset"), "ok"); else toast(j.error || I18N.t("toast.reset_failed"), "err");
   } else if (act === "mfa") {
     if (!confirm(`确定解除「${name}」的两步验证绑定？`)) return;
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-mfa`, { method: "POST" });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) { toast("已解除两步验证", "ok"); loadUsers(); } else toast(j.error || "操作失败", "err");
+    if (r.ok) { toast(I18N.t("toast.mfa_unbound"), "ok"); loadUsers(); } else toast(j.error || I18N.t("toast.operation_failed"), "err");
   }
 }
 
 /* ---------- 账户找回：用户名 / 密码 ---------- */
 function openRecoverUser() {
   const body = $("recoverBody");
-  $("recoverTitle").textContent = "找回用户名";
+  $("recoverTitle").textContent = I18N.t("ui.recover_username");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">输入已绑定的邮箱地址，系统将向该邮箱发送用户名。</div>
     <div class="field"><label>邮箱地址</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
@@ -2821,40 +2821,40 @@ function openRecoverUser() {
   $("rcSubmit").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
     const email = $("rcEmail").value.trim();
-    if (!email) { errEl.textContent = "请输入邮箱"; return; }
+    if (!email) { errEl.textContent = I18N.t("valid.enter_email"); return; }
     try {
       const r = await fetch(`${API}/account/recover-username`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) { toast(j.message || "如该邮箱已绑定，用户名已发送", "ok"); $("recoverMask").classList.remove("show"); }
-      else errEl.textContent = j.error || "发送失败";
-    } catch (e) { errEl.textContent = "发送失败: " + e; }
+      if (r.ok) { toast(j.message || I18N.t("toast.username_sent"), "ok"); $("recoverMask").classList.remove("show"); }
+      else errEl.textContent = j.error || I18N.t("toast.send_failed");
+    } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
   };
   setTimeout(() => { const el = $("rcEmail"); if (el) el.focus(); }, 60);
 }
 
 function openRecoverPass() {
   const body = $("recoverBody");
-  $("recoverTitle").textContent = "重置密码";
+  $("recoverTitle").textContent = I18N.t("ui.reset_password");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">输入用户名，系统将向绑定邮箱发送验证码。</div>
-    <div class="field"><label>用户名</label><input type="text" id="rcUser" placeholder="登录账号"></div>
+    <div class="field"><label>用户名</label><input type="text" id="rcUser" placeholder=I18N.t("form.login_account")></div>
     <div class="login-err" id="rcErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">发送验证码</button></div>
-    <div class="field" id="rcCodeRow" style="display:none"><label>邮箱验证码</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code"></div>
-    <div class="field" id="rcNewPassRow" style="display:none"><label>新密码（至少 4 位）</label><input type="password" id="rcNewPass" placeholder="新密码"></div>
+    <div class="field" id="rcCodeRow" style="display:none"><label>邮箱验证码</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder=I18N.t("mfa.code_6_v2") autocomplete="one-time-code"></div>
+    <div class="field" id="rcNewPassRow" style="display:none"><label>新密码（至少 4 位）</label><input type="password" id="rcNewPass" placeholder=I18N.t("form.new_password")></div>
     <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">重置密码</button></div>`;
   $("recoverMask").classList.add("show");
   let rcEmail = ""; // stored from server response (not returned for security)
   $("rcSendCode").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
     const username = $("rcUser").value.trim();
-    if (!username) { errEl.textContent = "请输入用户名"; return; }
+    if (!username) { errEl.textContent = I18N.t("valid.enter_username"); return; }
     try {
       const r = await fetch(`${API}/account/send-reset-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username }) });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
-        toast(j.message || "如用户名存在且绑定邮箱，验证码已发送", "ok");
-        $("rcSendCode").textContent = "重新发送";
+        toast(j.message || I18N.t("toast.reset_code_sent"), "ok");
+        $("rcSendCode").textContent = I18N.t("ui.resend");
         $("rcSendCode").disabled = true;
         setTimeout(() => { const b = $("rcSendCode"); if (b) b.disabled = false; }, 60000);
         $("rcCodeRow").style.display = "";
@@ -2862,23 +2862,23 @@ function openRecoverPass() {
         $("rcResetRow").style.display = "";
         setTimeout(() => { const el = $("rcCode"); if (el) el.focus(); }, 60);
       } else {
-        errEl.textContent = j.error || "发送失败";
+        errEl.textContent = j.error || I18N.t("toast.send_failed");
       }
-    } catch (e) { errEl.textContent = "发送失败: " + e; }
+    } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
   };
   $("rcReset").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
     const username = $("rcUser").value.trim();
     const code = $("rcCode").value.trim();
     const newPass = $("rcNewPass").value;
-    if (code.length !== 6) { errEl.textContent = "请输入 6 位验证码"; return; }
-    if (newPass.length < 4) { errEl.textContent = "新密码至少 4 位"; return; }
+    if (code.length !== 6) { errEl.textContent = I18N.t("valid.enter_code"); return; }
+    if (newPass.length < 4) { errEl.textContent = I18N.t("toast.password_too_short2"); return; }
     try {
       const r = await fetch(`${API}/account/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, email: "", code, new_password: newPass }) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) { toast(j.message || "密码已重置", "ok"); $("recoverMask").classList.remove("show"); }
-      else errEl.textContent = j.error || "重置失败";
-    } catch (e) { errEl.textContent = "重置失败: " + e; }
+      if (r.ok) { toast(j.message || I18N.t("toast.password_reset"), "ok"); $("recoverMask").classList.remove("show"); }
+      else errEl.textContent = j.error || I18N.t("toast.reset_failed");
+    } catch (e) { errEl.textContent = I18N.t("toast.reset_failed2") + e; }
   };
   setTimeout(() => { const el = $("rcUser"); if (el) el.focus(); }, 60);
 }
@@ -2918,12 +2918,12 @@ async function refresh(force) {
     // P0-#2: Connection state feedback
     if (FIRST_LOAD) { FIRST_LOAD = false; }
     if (CONN_STATE !== "connected") {
-      if (CONN_STATE === "disconnected") toast("已恢复连接", "ok");
+      if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
       CONN_STATE = "connected";
     }
     // Filter hosts by category for overview
     const filteredHosts = CUR_CATS.length > 0
-      ? hosts.filter(h => CUR_CATS.includes(h.category || "未分类"))
+      ? hosts.filter(h => CUR_CATS.includes(h.category || I18N.t("section.uncategorized")))
       : hosts;
     // Compute overview stats from filtered hosts
     if (CUR_CATS.length > 0) {
@@ -2942,11 +2942,11 @@ async function refresh(force) {
     $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
     $("pulse").className = "pulse";
   } catch (e) {
-    $("clock").textContent = "连接失败";
+    $("clock").textContent = I18N.t("ui.connect_failed");
     $("pulse").className = "pulse off";
     if (CONN_STATE === "connected") {
       CONN_STATE = "disconnected";
-      toast("连接中断，正在重试…", "err");
+      toast(I18N.t("ui.reconnecting"), "err");
     }
   }
 }
@@ -3060,7 +3060,7 @@ function updateCatDropdownLabel() {
   if (!label) return;
   const btn = $("catDropdownBtn");
   if (CUR_CATS.length === 0) {
-    label.textContent = "全部分类";
+    label.textContent = I18N.t("section.all_categories");
     if (btn) btn.classList.remove("filtered");
   } else {
     if (CUR_CATS.length <= 2) label.textContent = CUR_CATS.join(", ");
@@ -3086,16 +3086,16 @@ function sortHosts(value) {
 function togglePause() {
   PAUSED = !PAUSED;
   const btn = $("pauseBtn");
-  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? "已暂停自动刷新，点击继续" : "暂停自动刷新"; }
+  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? I18N.t("toast.paused_click") : I18N.t("ui.pause_refresh"); }
   $("pulse").className = PAUSED ? "pulse paused" : "pulse";
-  toast(PAUSED ? "已暂停自动刷新" : "已恢复自动刷新", "ok");
+  toast(PAUSED ? I18N.t("toast.paused") : I18N.t("toast.resumed"), "ok");
   if (!PAUSED) refresh(true);
 }
 
 // 一键清理所有离线主机
 async function purgeOffline() {
   const off = LAST_HOSTS.filter(h => !h.online);
-  if (!off.length) { toast("当前没有离线主机", "ok"); return; }
+  if (!off.length) { toast(I18N.t("empty.no_offline_hosts"), "ok"); return; }
   if (!confirm(`确认清理 ${off.length} 台离线主机？\n若其 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
   let ok = 0;
   for (const h of off) {
@@ -3124,10 +3124,10 @@ safeAddEventListener("resetTokenBtn", "click", resetToken);
 safeAddEventListener("tokenToggleBtn", "click", function() {
   TOKEN_REVEALED = !TOKEN_REVEALED;
   updateTokenDisplay();
-  this.title = TOKEN_REVEALED ? "隐藏 Token" : "显示 Token";
+  this.title = TOKEN_REVEALED ? I18N.t("ui.hide_token") : I18N.t("ui.show_token");
 });
 safeAddEventListener("copyCmdBtn", "click", function() {
-  copyWithFeedback(this, $("installCmd").textContent, "已复制安装命令");
+  copyWithFeedback(this, $("installCmd").textContent, I18N.t("toast.copy_install"));
 });
 // 点击命令区域本身也可复制
 safeAddEventListener("installCmd", "click", function() {
@@ -3145,7 +3145,7 @@ safeAddEventListener("osTabs", "click", e => {
   renderInstallCmd();
 });
 safeAddEventListener("copyUninstallBtn", "click", function() {
-  copyWithFeedback(this, $("uninstallCmd").textContent, "已复制卸载命令");
+  copyWithFeedback(this, $("uninstallCmd").textContent, I18N.t("toast.copy_uninstall"));
 });
 // 网关中继模式
 safeAddEventListener("relayMode", "change", function() {
@@ -3170,10 +3170,10 @@ safeAddEventListener("multiServerMode", "change", function() {
 safeAddEventListener("multiServerList", "input", renderInstallCmd);
 safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
 safeAddEventListener("copyRelayGatewayBtn", "click", function() {
-  copyWithFeedback(this, $("relayGatewayCmd").textContent, "已复制网关安装命令");
+  copyWithFeedback(this, $("relayGatewayCmd").textContent, I18N.t("toast.copy_relay_install"));
 });
 safeAddEventListener("copyRelayInternalBtn", "click", function() {
-  copyWithFeedback(this, $("relayInternalCmd").textContent, "已复制内网安装命令");
+  copyWithFeedback(this, $("relayInternalCmd").textContent, I18N.t("toast.copy_intranet_install"));
 });
 
 /* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
@@ -3181,12 +3181,13 @@ const navItems = document.querySelectorAll(".nav-item");
 // 页面头元信息：标题 + 副标题。副标题让顶栏页面头承载“页面语义”，
 // 而非机械回显侧栏导航名，从根上消除“两个概览”的重复观感。
 const PAGE_META = {
-  overview: { title: "概览", sub: "集群资源、告警与活动总览" },
-  hosts:    { title: "主机", sub: "所有上报主机的实时指标" },
-  alerts:   { title: "告警", sub: "阈值与自定义监控告警" },
-  checks:   { title: "监控", sub: "网站 HTTP / 端口 TCP / 主机 Ping / 进程存活 拨测" },
-  automation: { title: "自动化", sub: "剧本编排 + 批量执行" },
-  log:      { title: "日志", sub: "操作、系统与插件事件流水" },
+  overview: { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") },
+  hosts:    { title: "主机", sub: I18N.t("section.hosts_desc") },
+  alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
+  checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
+  automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
+  forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
+  log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
 };
 function switchView(view) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
@@ -3198,6 +3199,7 @@ function switchView(view) {
     if (s) s.textContent = meta.sub;
   }
   if (view === "automation") loadPlaybooks();
+  if (view === "forward") loadForwards();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
@@ -3320,8 +3322,8 @@ safeAddEventListener("checksGrid", "click", e => {
   else if (cact === "del") delCheck(id);
   else if (cact === "run") {
     fetch(`${API}/checks/${encodeURIComponent(id)}/run`, { method: "POST" })
-      .then(() => { toast("已触发检测，结果稍后刷新", "ok"); setTimeout(loadChecks, 1500); })
-      .catch(e => toast("触发失败: " + e, "err"));
+      .then(() => { toast(I18N.t("toast.check_triggered"), "ok"); setTimeout(loadChecks, 1500); })
+      .catch(e => toast(I18N.t("toast.trigger_failed2") + e, "err"));
   }
 });
 // 概览 TOP5 点击 → 直达该主机趋势
@@ -3347,9 +3349,9 @@ safeAddEventListener("globalMfaChk", "change", async () => {
   try {
     const r = await fetch(`${API}/mfa/global`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ required }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) toast(required ? "全局 MFA 强制已开启" : "全局 MFA 强制已关闭", "ok");
-    else { toast(j.error || "操作失败", "err"); chk.checked = !required; }
-  } catch (e) { toast("网络错误", "err"); chk.checked = !required; }
+    if (r.ok) toast(required ? I18N.t("toast.global_mfa_on") : I18N.t("toast.global_mfa_off"), "ok");
+    else { toast(j.error || I18N.t("toast.operation_failed"), "err"); chk.checked = !required; }
+  } catch (e) { toast(I18N.t("toast.network_error"), "err"); chk.checked = !required; }
   chk.disabled = false;
 });
 safeAddEventListener("usersList", "click", async e => {
@@ -3394,7 +3396,7 @@ safeAddEventListener("loginForm", "submit", async e => {
       // 密码正确，账户已启用两步验证：展开动态码输入框，等待第二因子
       const f = $("loginCodeField"); if (f) f.style.display = "";
       if (codeEl) codeEl.focus();
-      if (loginErrEl) loginErrEl.textContent = "请输入 Authenticator 动态验证码完成登录";
+      if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
     }
     else if (r.ok && j.require_mfa_setup) {
       // 全局 MFA 策略：密码正确但用户未绑定 MFA，强制进入绑定流程
@@ -3407,10 +3409,10 @@ safeAddEventListener("loginForm", "submit", async e => {
       startApp();
     }
     else {
-      if (loginErrEl) loginErrEl.textContent = j.error || "登录失败";
+      if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
     }
   } catch (err) { 
-    if (loginErrEl) loginErrEl.textContent = "登录失败: " + err; 
+    if (loginErrEl) loginErrEl.textContent = I18N.t("toast.login_failed2") + err; 
   }
 });
 
@@ -3420,13 +3422,13 @@ function applyWidthMode() {
   const wide = widePref();
   const app = $("app"); if (app) app.classList.toggle("wide", wide);
   const btn = $("widthBtn");
-  if (btn) { btn.classList.toggle("active", wide); btn.title = wide ? "当前：宽屏，点击切换标准" : "当前：标准，点击切换宽屏"; }
+  if (btn) { btn.classList.toggle("active", wide); btn.title = wide ? I18N.t("misc.layout_wide") : I18N.t("misc.layout_standard"); }
 }
 safeAddEventListener("widthBtn", "click", () => {
   const wide = widePref();
   try { localStorage.setItem("aiops_wide", wide ? "0" : "1"); } catch (e) {}
   applyWidthMode();
-  toast(wide ? "已切换为标准布局" : "已切换为宽屏布局", "ok");
+  toast(wide ? I18N.t("toast.standard_layout") : I18N.t("toast.wide_layout"), "ok");
 });
 
 /* ---------- 自定义监控视图切换（列表 / 胶囊） ---------- */
@@ -3485,7 +3487,7 @@ async function loadPlaybooks() {
     ]);
     PB_HOSTS = hosts || [];
     // Extract unique categories for target dropdown
-    PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || "未分类"))].sort();
+    PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || I18N.t("section.uncategorized")))].sort();
     // System types are hardcoded (linux/macos/windows) — do NOT extract from
     // h.platform (which is a version string like "Ubuntu 22.04"), use h.os
     // (runtime.GOOS: "linux"/"windows"/"darwin") for matching.
@@ -3522,7 +3524,7 @@ function renderPlaybooks(pbs) {
 }
 
 function openPlaybookModal(pb) {
-  $("playbookModalTitle").textContent = pb ? "编辑剧本" : "新建剧本";
+  $("playbookModalTitle").textContent = pb ? I18N.t("ui.edit_playbook") : I18N.t("ui.new_playbook");
   $("pbId").value = pb ? pb.id : "";
   $("pbName").value = pb ? pb.name : "";
   $("pbDesc").value = pb ? (pb.description || "") : "";
@@ -3537,11 +3539,11 @@ function renderPbSteps(steps) {
     const tgtOpts = buildTargetOptions(s.target);
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
-        <div class="field"><label>步骤名称</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="如 检查磁盘空间"></div>
+        <div class="field"><label>步骤名称</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder=I18N.t("form.hint_step_name")></div>
         <div class="field"><label>目标主机</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
-      <div class="field"><label>命令</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder="如 df -h" style="font-family:monospace"></div>
+      <div class="field"><label>命令</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder=I18N.t("form.hint_command") style="font-family:monospace"></div>
       <div class="grid2">
         <div class="field"><label>超时（秒）</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
         <div class="field"><label>失败时继续</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
@@ -3561,7 +3563,7 @@ function buildTargetOptions(selectedTarget) {
   const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>全部主机</option>`];
   // By category
   if (PB_CATS.length > 0) {
-    opts.push('<optgroup label="按分类">');
+    opts.push('<optgroup label=I18N.t("section.by_category")>');
     PB_CATS.forEach(cat => {
       const val = `category:${cat}`;
       opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(cat)}</option>`);
@@ -3570,14 +3572,14 @@ function buildTargetOptions(selectedTarget) {
   }
   // By system type — hardcoded to Linux/macOS/Windows (not dynamic from host
   // data, because h.platform is a version string, not an OS type).
-  opts.push('<optgroup label="按系统类型">');
+  opts.push('<optgroup label=I18N.t("section.by_system")>');
   [{val:"linux",label:"Linux"},{val:"macos",label:"macOS"},{val:"windows",label:"Windows"}].forEach(s => {
     opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
   });
   opts.push('</optgroup>');
   // Per host
   if (PB_HOSTS.length > 0) {
-    opts.push('<optgroup label="指定主机">');
+    opts.push('<optgroup label=I18N.t("section.target_host")>');
     PB_HOSTS.forEach(h => {
       const val = `host:${h.id}`;
       opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(h.hostname)}</option>`);
@@ -3599,7 +3601,7 @@ function pbTargetPreview(sel) {
     count = PB_HOSTS.length;
   } else if (target.startsWith("category:")) {
     const cat = target.slice("category:".length);
-    count = PB_HOSTS.filter(h => (h.category || "未分类") === cat).length;
+    count = PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
   } else if (target.startsWith("system:")) {
     const sys = target.slice("system:".length);
     // Match by h.os (runtime.GOOS: "linux"/"windows"/"darwin"), not h.platform
@@ -3611,7 +3613,7 @@ function pbTargetPreview(sel) {
   } else if (target.startsWith("host:")) {
     count = 1;
   }
-  preview.textContent = count > 0 ? `已匹配 ${count} 台主机` : "无匹配主机";
+  preview.textContent = count > 0 ? `已匹配 ${count} 台主机` : I18N.t("empty.no_host_match2");
   preview.style.color = count > 0 ? "var(--ok, #31c46b)" : "var(--crit, #ff5b6e)";
 }
 
@@ -3631,14 +3633,14 @@ function collectPlaybook() {
 
 async function savePlaybook() {
   const pb = collectPlaybook();
-  if (!pb.name) { toast("请填写剧本名称", "err"); return; }
-  if (pb.steps.length === 0) { toast("至少需要一个步骤", "err"); return; }
+  if (!pb.name) { toast(I18N.t("valid.fill_playbook_name"), "err"); return; }
+  if (pb.steps.length === 0) { toast(I18N.t("valid.need_step"), "err"); return; }
   try {
     const r = await fetch(`${API}/playbooks`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(pb) });
     const j = await r.json().catch(()=>({}));
-    if (r.ok) { toast("剧本已保存", "ok"); $("playbookMask").classList.remove("show"); loadPlaybooks(); }
-    else toast(j.error || "保存失败", "err");
-  } catch (e) { toast("保存失败: " + e, "err"); }
+    if (r.ok) { toast(I18N.t("toast.playbook_saved"), "ok"); $("playbookMask").classList.remove("show"); loadPlaybooks(); }
+    else toast(j.error || I18N.t("toast.save_failed"), "err");
+  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
 }
 
 async function executePlaybook(id) {
@@ -3646,16 +3648,16 @@ async function executePlaybook(id) {
     const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/execute`, { method: "POST" });
     const j = await r.json().catch(()=>({}));
     if (r.ok) {
-      toast("剧本执行已启动", "ok");
+      toast(I18N.t("toast.playbook_started"), "ok");
       // Poll for result
       const execId = j.execution_id;
       pollExecution(execId, id);
-    } else toast(j.error || "执行失败", "err");
-  } catch (e) { toast("执行失败: " + e, "err"); }
+    } else toast(j.error || I18N.t("toast.execute_failed"), "err");
+  } catch (e) { toast(I18N.t("toast.execute_failed2") + e, "err"); }
 }
 
 async function pollExecution(execId, pbId) {
-  $("execResultTitle").textContent = "执行中…";
+  $("execResultTitle").textContent = I18N.t("ui.running");
   $("execResultBody").innerHTML = `<div class="empty-line">正在执行，请稍候…</div>`;
   $("execResultMask").classList.add("show");
   for (let i = 0; i < 60; i++) {
@@ -3669,7 +3671,7 @@ async function pollExecution(execId, pbId) {
 }
 
 function renderExecResult(exec) {
-  $("execResultTitle").textContent = `执行${exec.status === "completed" ? "完成 ✅" : exec.status === "failed" ? "失败 ❌" : "执行中…"}`;
+  $("execResultTitle").textContent = `执行${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
   const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
     const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
     const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${s.status}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
@@ -3705,7 +3707,7 @@ async function loadExecHistory() {
       };
     });
     $("execHistMask").classList.add("show");
-  } catch (e) { toast("加载历史失败: " + e, "err"); }
+  } catch (e) { toast(I18N.t("toast.load_history_failed") + e, "err"); }
 }
 
 // Playbook event listeners
@@ -3732,8 +3734,8 @@ safeAddEventListener("playbookList", "click", e => {
       const pb = pbs.find(p=>p.id===id); if (pb) openPlaybookModal(pb);
     });
   } else if (act.dataset.pbact === "del") {
-    if (!confirm("确认删除此剧本？")) return;
-    fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast("已删除","ok");loadPlaybooks();});
+    if (!confirm(I18N.t("valid.confirm_delete_playbook"))) return;
+    fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast(I18N.t("toast.deleted"),"ok");loadPlaybooks();});
   }
 });
 
@@ -3777,7 +3779,7 @@ window.addEventListener("beforeinstallprompt", e => {
   DEFERRED_PROMPT = e;
   setTimeout(() => {
     if (DEFERRED_PROMPT && !window.matchMedia("(display-mode: standalone)").matches) {
-      toast("💡 可安装到桌面，离线可用", "ok");
+      toast(I18N.t("install.pwa_hint"), "ok");
     }
   }, 3000);
 });
@@ -3807,7 +3809,7 @@ function initPushWS() {
       PUSH_CONNECTED = true;
       PUSH_RETRY = 0;
       const ind = $("pushIndicator");
-      if (ind) { ind.classList.add("live"); ind.title = "实时推送已连接"; }
+      if (ind) { ind.classList.add("live"); ind.title = I18N.t("toast.push_connected"); }
     };
     PUSH_WS.onmessage = (e) => {
       try {
@@ -3826,7 +3828,7 @@ function initPushWS() {
     PUSH_WS.onclose = () => {
       PUSH_CONNECTED = false;
       const ind = $("pushIndicator");
-      if (ind) { ind.classList.remove("live"); ind.title = "实时推送已断开，使用轮询"; }
+      if (ind) { ind.classList.remove("live"); ind.title = I18N.t("toast.push_disconnected"); }
       // 指数退避重连
       PUSH_RETRY++;
       if (PUSH_RETRY <= 10) {
@@ -3838,12 +3840,135 @@ function initPushWS() {
 }
 
 /* ============================================================
+   端口转发
+   ============================================================ */
+let LAST_FORWARDS = [];
+
+// 填充主机下拉选择框
+function populateForwardHosts() {
+  const opts = LAST_HOSTS.map(h => `<option value="${h.id}">${esc(h.hostname)} (${short(h.id)})</option>`).join("");
+  const fh = $("forwardHost"), ph = $("proxyHost");
+  if (fh) fh.innerHTML = opts;
+  if (ph) ph.innerHTML = opts;
+}
+
+function short(id) { return id && id.length > 8 ? id.slice(0, 8) : id; }
+
+async function loadForwards() {
+  try {
+    const res = await fetch("/api/v1/forward", { credentials: "include" });
+    if (!res.ok) return;
+    LAST_FORWARDS = await res.json();
+    renderForwards();
+  } catch(e) {}
+}
+
+function renderForwards() {
+  const list = $("forwardList");
+  const empty = $("forwardEmpty");
+  if (!list || !empty) return;
+  if (!LAST_FORWARDS || LAST_FORWARDS.length === 0) {
+    list.innerHTML = "";
+    empty.style.display = "";
+    return;
+  }
+  empty.style.display = "none";
+  list.innerHTML = LAST_FORWARDS.map(f => `
+    <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;">
+        <div style="font-weight:600;">${esc(f.hostname)} → :${f.target_port}</div>
+        <div class="hint" style="margin-top:2px;">本地监听 <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} 个活跃连接</div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title=I18N.t("ui.copy_addr")>复制</button>
+        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title=I18N.t("ui.close_forward")>关闭</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function createForward() {
+  const hostID = $("forwardHost")?.value;
+  const targetPort = parseInt($("forwardTargetPort")?.value || "0");
+  const localPort = parseInt($("forwardLocalPort")?.value || "0");
+  if (!hostID || targetPort < 1 || targetPort > 65535) {
+    toast(I18N.t("valid.fill_target_port"), "err");
+    return;
+  }
+  try {
+    const res = await fetch("/api/v1/forward", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast(err.error || I18N.t("toast.create_failed"), "err");
+      return;
+    }
+    const result = await res.json();
+    toast(`转发已创建：${result.listen_addr}`, "ok");
+    $("forwardForm").style.display = "none";
+    $("forwardTargetPort").value = "";
+    $("forwardLocalPort").value = "";
+    loadForwards();
+  } catch(e) {
+    toast(I18N.t("toast.network_error2"), "err");
+  }
+}
+
+async function deleteForward(id) {
+  if (!confirm(I18N.t("valid.confirm_close_forward"))) return;
+  try {
+    const res = await fetch("/api/v1/forward/" + id, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    if (!res.ok) {
+      toast(I18N.t("toast.close_failed"), "err");
+      return;
+    }
+    toast(I18N.t("toast.forward_closed"), "ok");
+    loadForwards();
+  } catch(e) {
+    toast(I18N.t("toast.network_error2"), "err");
+  }
+}
+
+function openProxyLink() {
+  const hostID = $("proxyHost")?.value;
+  const port = $("proxyPort")?.value;
+  const path = $("proxyPath")?.value || "";
+  if (!hostID || !port) {
+    toast(I18N.t("valid.select_host_port"), "err");
+    return;
+  }
+  const url = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(port)}/${path.replace(/^\//, "")}`;
+  window.open(url, "_blank");
+}
+
+// 绑定事件
+safeAddEventListener("addForwardBtn", "click", () => {
+  populateForwardHosts();
+  $("forwardForm").style.display = $("forwardForm").style.display === "none" ? "" : "none";
+});
+safeAddEventListener("createForwardBtn", "click", createForward);
+safeAddEventListener("cancelForwardBtn", "click", () => { $("forwardForm").style.display = "none"; });
+safeAddEventListener("openProxyBtn", "click", openProxyLink);
+
+// 复制文本到剪贴板
+function copyText(text) {
+  navigator.clipboard?.writeText(text).then(() => toast(I18N.t("toast.copied_detail") + text, "ok"));
+}
+
+/* ============================================================
    离线检测
    ============================================================ */
 window.addEventListener("online", () => {
-  toast("网络已恢复", "ok");
+  toast(I18N.t("toast.network_recovered"), "ok");
   refresh(true);
 });
 window.addEventListener("offline", () => {
-  toast("网络已断开，数据可能过期", "err");
+  toast(I18N.t("toast.network_disconnected"), "err");
 });

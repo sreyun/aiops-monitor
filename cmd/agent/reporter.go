@@ -169,6 +169,12 @@ func (a *Agent) Run() {
 		go a.runTerminalChannelFor(t)
 	}
 
+	// Start one forward channel per target — each server independently
+	// long-polls for pending port forwarding sessions.
+	for _, t := range a.targets {
+		go a.runForwardChannelFor(t)
+	}
+
 	// base-metric report loop, higher frequency
 	ticker := time.NewTicker(a.reportInterval)
 	defer ticker.Stop()

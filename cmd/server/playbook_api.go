@@ -29,14 +29,14 @@ func (s *Server) handleUpsertPlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: s.clientIP(r), Message: "保存剧本：" + saved.Name})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.save_playbook", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeletePlaybook(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.playbooks.Delete(id)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: "删除剧本 " + id})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_playbook", id)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -44,7 +44,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	pb, ok := s.playbooks.Get(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "剧本不存在"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.not_found")})
 		return
 	}
 	// Only online hosts can run commands — an offline host has no agent to reach,
@@ -65,7 +65,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(targetSet) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "目标主机为空或均已离线——请检查步骤的目标选择与主机在线状态"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
 		return
 	}
 	targetList := make([]*Host, 0, len(targetSet))
@@ -75,7 +75,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 	exec := s.playbooks.StartExecution(pb, s.clientIP(r), targetList)
 	// Run each step on each host sequentially via the agent reverse terminal channel
 	go s.runPlaybookExecution(pb, exec, targetList)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: s.clientIP(r), Message: fmt.Sprintf("执行剧本「%s」于 %d 台主机", pb.Name, len(targetList))})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.execute_playbook", pb.Name, len(targetList))})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": exec.ID})
 }
 
@@ -129,7 +129,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		status = "failed"
 	}
 	s.playbooks.FinishExecution(exec.ID, status)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: exec.Operator, Message: fmt.Sprintf("剧本「%s」执行完成： %s", pb.Name, status)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, status)})
 }
 
 // execCommandOnHost runs a single command on a host via the Agent reverse terminal
@@ -156,7 +156,7 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !notified {
-		return "", fmt.Errorf("无法连接到主机 %s 的 Agent（可能离线、Agent 版本过旧，或有其它终端/剧本长时间占用）", h.Hostname)
+		return "", fmt.Errorf("%s", Tz("playbook.connect_failed", h.Hostname))
 	}
 	// The agent runs the command as a ONE-SHOT process (sh -c / cmd /c, no PTY) and
 	// streams the combined output up the tx channel, ending it when the process
@@ -199,15 +199,15 @@ func parseExecOutput(output []byte, timedOut bool) (string, error) {
 		fmt.Sscanf(strings.TrimSpace(s[idx+len("[AIOPS_EXIT]"):]), "%d", &code)
 		body := strings.TrimRight(s[:idx], "\r\n")
 		if code != 0 {
-			return body, fmt.Errorf("命令退出码 %d", code)
+			return body, fmt.Errorf("%s", Tz("playbook.exit_code", code))
 		}
 		return body, nil
 	}
 	body := strings.TrimRight(s, "\r\n")
 	if timedOut {
-		return body, fmt.Errorf("执行超时")
+		return body, fmt.Errorf("%s", Tz("playbook.timeout"))
 	}
-	return body, fmt.Errorf("命令未正常结束（Agent 中断或版本过旧）")
+	return body, fmt.Errorf("%s", Tz("playbook.abnormal"))
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +223,7 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	exec, ok := s.playbooks.GetExecution(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.exec_not_found")})
 		return
 	}
 	writeJSON(w, http.StatusOK, exec)

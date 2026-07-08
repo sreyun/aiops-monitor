@@ -65,7 +65,7 @@ func (n *Notifier) ResetState() {
 func (n *Notifier) Trigger() { n.tick() }
 
 // ActiveSince returns a copy of the first-fired times keyed by alertKey,
-// letting the alerts API show "已持续 X 分钟".
+// letting the alerts API show "elapsed X minutes".
 func (n *Notifier) ActiveSince() map[string]int64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -125,11 +125,11 @@ func (n *Notifier) tick() {
 
 func (n *Notifier) dispatch(cfg ServerConfig, a Alert, firing bool) {
 	// activity log: the machine-detected threshold transition (intervention)
-	verb, tlvl := "告警触发", a.Level
+	verb, tlvl := Tz("notify.alert_fired"), a.Level
 	if !firing {
-		verb, tlvl = "告警恢复", "info"
+		verb, tlvl = Tz("notify.alert_recovered"), "info"
 	}
-	n.store.AddLog(LogEntry{Kind: "系统", Level: tlvl, Actor: "告警引擎", Host: a.Hostname, Message: verb + "：" + a.Message})
+	n.store.AddLog(LogEntry{Kind: KindSystem, Level: tlvl, Actor: Tz("notify.alert_engine"), Host: a.Hostname, Message: verb + "：" + a.Message})
 	n.pushChannels(cfg, a, firing)
 }
 
@@ -140,18 +140,18 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	var sent []string
 	if cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, text); err != nil {
-			slog.Error("飞书推送失败", "err", err)
-			n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "飞书推送失败：" + err.Error()})
+			slog.Error(Tz("notify.feishu_failed"), "err", err)
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.feishu_failed", err.Error())})
 		} else {
-			sent = append(sent, "飞书")
+			sent = append(sent, Tz("notify.feishu"))
 		}
 	}
 	if cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
 		if err := n.sendDingtalk(cfg.Dingtalk, text); err != nil {
-			slog.Error("钉钉推送失败", "err", err)
-			n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "钉钉推送失败：" + err.Error()})
+			slog.Error(Tz("notify.dingtalk_failed"), "err", err)
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.dingtalk_failed", err.Error())})
 		} else {
-			sent = append(sent, "钉钉")
+			sent = append(sent, Tz("notify.dingtalk"))
 		}
 	}
 	// Email alert notification — sent to the operator's bound email if SMTP is configured
@@ -159,34 +159,34 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 		html := alertEmailHTML(a, firing)
 		okAny := false
 		for _, to := range n.cfg.AlertEmails() {
-			if err := sendEmail(cfg.SMTP, to, "AIOps 告警："+a.Hostname, html); err != nil {
-				slog.Error("邮件推送失败", "err", err)
-				n.store.AddLog(LogEntry{Kind: "系统", Level: "warning", Actor: "通知", Host: a.Hostname, Message: "邮件推送失败：" + err.Error()})
+			if err := sendEmail(cfg.SMTP, to, Tz("notify.alert_subject", a.Hostname), html); err != nil {
+				slog.Error(Tz("notify.email_failed"), "err", err)
+				n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.email_failed", err.Error())})
 			} else {
 				okAny = true
 			}
 		}
 		if okAny {
-			sent = append(sent, "邮件")
+			sent = append(sent, Tz("notify.email"))
 		}
 	}
 	if len(sent) > 0 {
-		n.store.AddLog(LogEntry{Kind: "系统", Level: "info", Actor: "通知", Host: a.Hostname, Message: "已推送 " + strings.Join(sent, "/") + "：" + a.Message})
+		n.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.pushed", strings.Join(sent, "/"), a.Message)})
 	}
 }
 
 func formatAlert(a Alert, firing bool) string {
-	status := "🔴 触发"
+	status := Tz("notify.fire")
 	if !firing {
-		status = "✅ 恢复"
+		status = Tz("notify.recover")
 	}
-	lv := "警告"
+	lv := Tz("notify.warn")
 	if a.Level == "critical" {
-		lv = "严重"
+		lv = Tz("notify.critical")
 	}
 	typeMap := map[string]string{
-		"cpu": "CPU", "memory": "内存", "disk": "磁盘", "offline": "主机失联",
-		"load": "系统负载", "gpu": "GPU", "check": "自定义监控",
+		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
+		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -196,65 +196,67 @@ func formatAlert(a Alert, firing bool) string {
 	if a.IP != "" {
 		ipLine = fmt.Sprintf("\nIP: %s", a.IP)
 	}
-	return fmt.Sprintf("【AIOps Monitor】%s\n主机: %s%s\n级别: %s\n类型: %s\n详情: %s\n时间: %s",
-		status, a.Hostname, ipLine, lv, typeLabel, a.Message, time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
+	return fmt.Sprintf("%s\n%s: %s%s\n%s: %s\n%s: %s\n%s: %s\n%s: %s",
+		Tz("notify.title", status), Tz("notify.host"), a.Hostname, ipLine,
+		Tz("notify.level"), lv, Tz("notify.type"), typeLabel,
+		Tz("notify.detail"), a.Message, Tz("notify.time"), time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
 }
 
 // SendTest pushes a one-off test message on the enabled channels of the given
 // config and returns human-readable errors (empty on full success).
 func (n *Notifier) SendTest(cfg ServerConfig) []string {
-	msg := "【AIOps Monitor】测试消息：告警通道连通正常 ✅\n时间: " + time.Now().Format("2006-01-02 15:04:05")
+	msg := Tz("notify.test_msg", time.Now().Format("2006-01-02 15:04:05"))
 	var errs []string
 	if cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, msg); err != nil {
-			errs = append(errs, "飞书: "+err.Error())
+			errs = append(errs, Tz("notify.feishu")+": "+err.Error())
 		}
 	}
 	if cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
 		if err := n.sendDingtalk(cfg.Dingtalk, msg); err != nil {
-			errs = append(errs, "钉钉: "+err.Error())
+			errs = append(errs, Tz("notify.dingtalk")+": "+err.Error())
 		}
 	}
 	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
 		emails := n.cfg.AlertEmails()
 		if len(emails) == 0 {
-			errs = append(errs, "邮件: 没有用户绑定邮箱")
+			errs = append(errs, Tz("notify.email")+": "+Tz("notify.no_email"))
 		} else {
-			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>测试消息：邮件告警通道连通正常 ✅</p><p>时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
+			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>` + Tz("notify.test_email_body") + `</p><p>` + Tz("notify.time") + ": " + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
 			for _, to := range emails {
-				if err := sendEmail(cfg.SMTP, to, "AIOps 测试邮件", html); err != nil {
-					errs = append(errs, "邮件: "+err.Error())
+				if err := sendEmail(cfg.SMTP, to, Tz("notify.test_email_subject"), html); err != nil {
+					errs = append(errs, Tz("notify.email")+": "+err.Error())
 					break
 				}
 			}
 		}
 	}
 	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled {
-		errs = append(errs, "未启用任何告警通道")
+		errs = append(errs, Tz("notify.no_channel"))
 	}
 	return errs
 }
 
 // alertEmailHTML renders an alert notification as an HTML email body.
 func alertEmailHTML(a Alert, firing bool) string {
-	status := "🔴 告警触发"
+	status := Tz("notify.email_alert_fired")
 	headColor := "#e74c3c"
 	lvlColor := "#f39c12"
 	if a.Level == "critical" {
 		lvlColor = "#e74c3c"
 	}
 	if !firing {
-		status = "✅ 告警恢复"
+		status = Tz("notify.email_alert_recovered")
 		headColor = "#27ae60"
 		lvlColor = "#27ae60"
 	}
-	lv := "警告"
+	lv := Tz("notify.warn")
 	if a.Level == "critical" {
-		lv = "严重"
+		lv = Tz("notify.critical")
 	}
 	typeMap := map[string]string{
-		"cpu": "CPU", "memory": "内存", "disk": "磁盘", "offline": "主机失联",
-		"load": "系统负载", "gpu": "GPU", "check": "自定义监控",
+		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
+		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -262,21 +264,24 @@ func alertEmailHTML(a Alert, firing bool) string {
 	}
 	ipLine := ""
 	if a.IP != "" {
-		ipLine = `<tr><td style="color:#888;padding:4px 0">IP</td><td style="padding:4px 0">` + a.IP + `</td></tr>`
+		ipLine = `<tr><td style="color:#888;padding:4px 0">` + Tz("notify.ip") + `</td><td style="padding:4px 0">` + a.IP + `</td></tr>`
 	}
 	return fmt.Sprintf(`<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
   <h2 style="color:%s">%s</h2>
   <table style="width:100%%;border-collapse:collapse">
-    <tr><td style="color:#888;padding:4px 0;width:80px">主机</td><td style="padding:4px 0;font-weight:bold">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0;width:80px">%s</td><td style="padding:4px 0;font-weight:bold">%s</td></tr>
     %s
-    <tr><td style="color:#888;padding:4px 0">级别</td><td style="padding:4px 0;color:%s">%s</td></tr>
-    <tr><td style="color:#888;padding:4px 0">类型</td><td style="padding:4px 0">%s</td></tr>
-    <tr><td style="color:#888;padding:4px 0">详情</td><td style="padding:4px 0">%s</td></tr>
-    <tr><td style="color:#888;padding:4px 0">时间</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0;color:%s">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
   </table>
 </div>`,
-		headColor, status, a.Hostname, ipLine, lvlColor, lv,
-		typeLabel, a.Message, time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
+		headColor, status, Tz("notify.host"), a.Hostname, ipLine,
+		Tz("notify.level"), lvlColor, lv,
+		Tz("notify.type"), typeLabel,
+		Tz("notify.detail"), a.Message,
+		Tz("notify.time"), time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
 }
 
 func (n *Notifier) sendFeishu(c WebhookConfig, text string) error {
@@ -335,7 +340,7 @@ func (n *Notifier) post(webhook string, body []byte) error {
 		if code == 0 {
 			code, msg = r.Errcode, r.Errmsg
 		}
-		return fmt.Errorf("接口返回 code=%d %s", code, msg)
+		return fmt.Errorf("API returned code=%d %s", code, msg)
 	}
 	return nil
 }

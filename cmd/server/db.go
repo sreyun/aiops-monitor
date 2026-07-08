@@ -77,13 +77,13 @@ func (d *DB) Load() {
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		slog.Warn("数据库读取失败(已忽略,将以空状态启动)", "err", err)
+		slog.Warn(Tz("db.read_failed"), "err", err)
 		return
 	}
 	defer gz.Close()
 	var snap dbSnapshot
 	if err := json.NewDecoder(gz).Decode(&snap); err != nil {
-		slog.Warn("数据库解析失败(已忽略,将以空状态启动)", "err", err)
+		slog.Warn(Tz("db.parse_failed"), "err", err)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (d *DB) Load() {
 	s.mu.Unlock()
 
 	d.auth.importSessions(snap.Sessions)
-	slog.Info("已从数据库恢复",
+	slog.Info(Tz("db.restored"),
 		"hosts", len(snap.Hosts),
 		"events", len(snap.Events),
 		"activity", len(snap.Activity),
@@ -191,7 +191,7 @@ func (d *DB) AutoSave(interval time.Duration) {
 	for range t.C {
 		if d.consumeDirty() {
 			if err := d.Save(); err != nil {
-				slog.Error("数据库落盘失败", "err", err)
+				slog.Error(Tz("db.save_failed"), "err", err)
 			}
 		}
 	}

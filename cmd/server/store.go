@@ -55,12 +55,12 @@ type storedEvent struct {
 	Hostname string `json:"hostname"`
 }
 
-// LogEntry is one line in the activity log. It unifies operator actions (操作),
-// machine/system actions such as alert transitions and notifications (系统),
-// and plugin findings (插件).
+// LogEntry is one line in the activity log. It unifies operator actions (operation),
+// machine/system actions such as alert transitions and notifications (system),
+// and plugin findings (plugin).
 type LogEntry struct {
 	Timestamp int64  `json:"timestamp"`
-	Kind      string `json:"kind"`  // 操作 | 系统 | 插件
+	Kind      string `json:"kind"`  // operation | system | plugin
 	Level     string `json:"level"` // info | warning | critical
 	Actor     string `json:"actor"`
 	Host      string `json:"host,omitempty"`
@@ -226,7 +226,7 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 		}
 		s.lastEvent[key] = now
 		s.events = append(s.events, storedEvent{Event: e, HostID: h.ID, Hostname: h.Hostname})
-		s.appendLog(LogEntry{Timestamp: e.Timestamp, Kind: "插件", Level: e.Level, Actor: e.Source, Host: h.Hostname, Message: e.Message})
+		s.appendLog(LogEntry{Timestamp: e.Timestamp, Kind: KindPlugin, Level: e.Level, Actor: e.Source, Host: h.Hostname, Message: e.Message})
 	}
 	if len(s.events) > maxEvents {
 		s.events = s.events[len(s.events)-maxEvents:]

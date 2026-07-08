@@ -251,12 +251,12 @@ func (s *Server) termFingerprintOK(r *http.Request) bool {
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("id")
 	if !s.cfg.TerminalEnabled() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "远程终端已被管理员禁用"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal.disabled")})
 		return
 	}
 	ws, err := wsAccept(w, r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 WebSocket 升级"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "terminal.ws_required")})
 		return
 	}
 	defer ws.Close()
@@ -280,16 +280,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	sess.ip = clientIP
 	defer s.term.remove(sess.id)
 	op := operator
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: op, Host: hostname, Message: "打开远程终端 " + hostname})
-	defer s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "关闭远程终端 " + hostname})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, Host: hostname, Message: Tz("log.open_terminal", hostname)})
+	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.close_terminal", hostname)})
 
 	if !s.term.notifyAgent(hostID, sess.id) {
-		_ = ws.WriteBinary([]byte("\r\n\x1b[31m✗ 无法建立终端会话——服务端未找到该主机的反向终端通道。\x1b[0m\r\n\r\n" +
-			"常见原因与处理：\r\n" +
-			"  1) \x1b[33mAgent 版本过旧\x1b[0m（旧版无反向终端通道）——请在该主机\x1b[36m重新执行安装命令升级到最新 Agent\x1b[0m；\r\n" +
-			"  2) Agent 启动时\x1b[33m未采集到机器指纹\x1b[0m（指纹用于终端通道鉴权，检查 machine-id / MAC 是否可读）；\r\n" +
-			"  3) 主机刚离线或 Agent 未运行。\r\n\r\n" +
-			"升级后重新打开终端即可。\r\n"))
+		_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.no_channel") + "\x1b[0m\r\n\r\n" + Tz("terminal.no_channel_hint_1") + "\r\n" + Tz("terminal.no_channel_hint_2") + "\r\n" + Tz("terminal.no_channel_hint_3") + "\r\n\r\n" + Tz("terminal.no_channel_hint_4") + "\r\n"))
 		return
 	}
 	// Watchdog: if the agent never attaches, don't hang the operator forever.
@@ -297,7 +292,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-sess.agentUp:
 		case <-time.After(10 * time.Second):
-			_ = ws.WriteBinary([]byte("\r\n\x1b[31mAgent 未在预期时间内接入终端通道，已断开。\x1b[0m\r\n"))
+			_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.timeout") + "\x1b[0m\r\n"))
 			sess.close()
 		case <-sess.done:
 		}
@@ -331,7 +326,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if typ == 'i' {
 				sess.recordFrame("input", payload)
 				if cmd := sess.processCommandAudit(payload); cmd != "" {
-					s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: op, Host: hostname, Message: "终端命令 [" + hostname + "]: " + cmd})
+					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.terminal_cmd", hostname, cmd)})
 				}
 			}
 			// Record resize frames so replay can restore the original terminal dimensions
