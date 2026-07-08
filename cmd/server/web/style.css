@@ -562,10 +562,9 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 概览：资源 TOP ---------- */
 .top-grid{display:flex; flex-direction:column; gap:12px; margin-top:16px}
 .top-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px}
-/* ---------- Group collapse ---------- */
-.group-head{cursor:pointer; user-select:none; transition:background var(--transition-fast)}
-.group-head:hover{background:var(--panel2); border-radius:var(--r-sm)}
-.group-head .cat-toggle{font-size:10px; color:var(--muted); flex:none; width:14px; text-align:center; transition:transform var(--transition-fast)}
+/* ---------- Group collapse (disabled — rules retained for future restore) ---------- */
+.group-head{cursor:default; user-select:none}
+.group-head .cat-toggle{display:none; font-size:10px; color:var(--muted); flex:none; width:14px; text-align:center; transition:transform var(--transition-fast)}
 .group-head.collapsed .cat-toggle{transform:none}
 .group-head.collapsed{opacity:.7}
 .group-collapsed{display:none}

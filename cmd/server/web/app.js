@@ -847,15 +847,15 @@ function renderHosts(hosts) {
   }
   LAST_RENDER_KEY = newKey;
 
+  // 折叠功能已临时停用：所有分组始终展开渲染
   groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => {
-    const collapsed = catCollapsed(cat);
     return `<div class="group">
-      <div class="group-head${collapsed ? " collapsed" : ""}" data-cat="${esc(cat)}">
-        <span class="cat-toggle">${collapsed ? "▶" : "▼"}</span>
+      <div class="group-head" data-cat="${esc(cat)}">
+        <span class="cat-toggle">▼</span>
         <span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
         <span class="count-pill">${byCat[cat].length}</span><span class="line"></span>
       </div>
-      <div class="${wrapCls}${collapsed ? " group-collapsed" : ""}">${byCat[cat].map(render).join("")}</div>
+      <div class="${wrapCls}">${byCat[cat].map(render).join("")}</div>
     </div>`;
   }).join("");
   buildHostCache();
@@ -2813,17 +2813,9 @@ async function refresh(force) {
 
 /* ---------- 事件绑定（委托） ---------- */
 const groupsEl = $("groups");
-// Group collapse toggle
-// Group collapse toggle — 点击 group-head 任意位置均可切换折叠/展开
+// 折叠功能已临时停用：移除 group-head 点击事件委托中的 toggleCatCollapse 逻辑
 if (groupsEl) {
   groupsEl.addEventListener("click", e => {
-    const head = e.target.closest(".group-head");
-    if (head && !e.target.closest("[data-act]")) {
-      const cat = head.dataset.cat;
-      toggleCatCollapse(cat);
-      renderHosts(LAST_HOSTS);
-      return;
-    }
     const host = e.target.closest(".host"); if (!host) return;
     const act = e.target.closest("[data-act]");
     const { id, name, cat } = host.dataset;
@@ -3311,6 +3303,8 @@ safeAddEventListener("hostViewToggle", "click", e => {
 function initPrefs() {
   try { const cv = localStorage.getItem("aiops_check_view"); if (cv === "pill" || cv === "list") CHECK_VIEW = cv; } catch (e) {}
   try { const hv = localStorage.getItem("aiops_host_view"); if (hv === "list" || hv === "card") HOST_VIEW = hv; } catch (e) {}
+  // 默认卡片视图：即使 localStorage 无值也确保 HOST_VIEW 为 "card"
+  if (HOST_VIEW !== "list" && HOST_VIEW !== "card") HOST_VIEW = "card";
   document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
   document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
   applyWidthMode();
