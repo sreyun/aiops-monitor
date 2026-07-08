@@ -326,16 +326,83 @@ const ALERT_TYPES = [
   {key:"disk", label:"磁盘"}, {key:"gpu", label:"GPU"}, {key:"load", label:"负载"},
   {key:"offline", label:"失联"}, {key:"check", label:"拨测"}
 ];
+/*
+ * diffUpdateList — 概览列表差量更新引擎
+ * 避免每 3 秒轮询全量 innerHTML 重建 DOM 导致的闪烁和布局跳动。
+ * 策略：
+ *   1. 生成新数据的签名摘要，若与上次完全一致则跳过更新（最常见路径）
+ *   2. 签名不同时，按 key 逐行比对：保留匹配行、更新变化行、插入新行、移除多余行
+ *   3. 空列表 / 首次渲染走 innerHTML 快速路径
+ */
+function diffUpdateList(container, items, rowFn, keyFn, emptyHTML) {
+  if (!container) return;
+  // 快速路径：空列表
+  if (!items.length) {
+    if (container.dataset.sig !== "empty") {
+      container.innerHTML = emptyHTML;
+      container.dataset.sig = "empty";
+    }
+    return;
+  }
+  // 签名检查：数据未变则完全跳过 DOM 操作
+  const sig = items.map(keyFn).join("\n");
+  if (container.dataset.sig === sig) return;
+  container.dataset.sig = sig;
+  // 首次渲染或容器为空：直接 innerHTML
+  const existing = container.querySelectorAll("[data-key]");
+  if (!existing.length) {
+    container.innerHTML = items.map(rowFn).join("");
+    return;
+  }
+  // 差量更新：按 key 匹配复用 DOM 节点
+  const oldMap = {};
+  existing.forEach(el => { oldMap[el.dataset.key] = el; });
+  const newKeys = items.map(keyFn);
+  const newKeySet = {};
+  newKeys.forEach(k => { newKeySet[k] = true; });
+  // 移除不再存在的旧行
+  existing.forEach(el => {
+    if (!newKeySet[el.dataset.key]) el.remove();
+  });
+  // 插入/更新新行
+  let refNode = null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const key = newKeys[i];
+    let el = oldMap[key];
+    if (el) {
+      // 复用已有节点：仅更新 class（级别可能变化）和内容
+      const fresh = document.createElement("div");
+      fresh.innerHTML = rowFn(items[i]).trim();
+      const newEl = fresh.firstChild;
+      if (el.className !== newEl.className) el.className = newEl.className;
+      if (el.innerHTML !== newEl.innerHTML) el.innerHTML = newEl.innerHTML;
+    } else {
+      // 新行：创建并插入到正确位置
+      el = document.createElement("div");
+      el.innerHTML = rowFn(items[i]).trim();
+      el = el.firstChild;
+      el.classList.add("row-enter");
+    }
+    // 确保 DOM 顺序与数据顺序一致
+    if (refNode && el.nextSibling !== refNode) {
+      container.insertBefore(el, refNode);
+    } else if (!refNode && el !== container.firstChild) {
+      container.insertBefore(el, container.firstChild);
+    }
+    refNode = el;
+  }
+}
 function renderAlerts(alerts) {
   LAST_ALERTS = alerts;
   const n = alerts.length;
   $("alertsCount").textContent = n; $("navAlerts").textContent = n; $("ovAlertsCount").textContent = n;
   const now = Math.floor(Date.now() / 1000);
+  const alertKey = a => `${a.hostname}|${a.message}|${a.level}|${a.timestamp||0}|${a.since||0}|${a.ip||""}`;
   const row = a => {
     const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
     const ipStr = a.ip ? `<span class="alert-ip mono">${esc(a.ip)}</span>` : "";
     const timeStr = a.timestamp ? `<span class="alert-time mono">${fmtDateTime(a.timestamp)}</span>` : "";
-    return `<div class="row-item ${esc(a.level)}" tabindex="0">
+    return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
     <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : a.level === "info" ? "恢复" : "警告"}</span>
     <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
     ${dur ? `<span class="src" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>` : ""}
@@ -351,7 +418,8 @@ function renderAlerts(alerts) {
   const empty = `<div class="empty-line">✅ 暂无告警，一切正常</div>`;
   const filterEmpty = `<div class="empty-line">当前筛选下无告警</div>`;
   $("alerts").innerHTML = filtered.length ? filtered.map(row).join("") : (n ? filterEmpty : empty);
-  $("ovAlerts").innerHTML = n ? alerts.slice(0, 6).map(row).join("") : empty;
+  // 概览页告警列表：差量更新，避免全量 innerHTML 重建导致闪烁
+  diffUpdateList($("ovAlerts"), alerts.slice(0, 6), row, alertKey, empty);
 }
 
 /* ---------- 概览：资源 TOP10（两行：① 主机资源 ② 负载与监控探测） ---------- */
@@ -481,7 +549,8 @@ function renderLog(items) {
   const n = items.length;
   $("logCount").textContent = n; $("navLog").textContent = n; $("ovLogCount").textContent = n;
   const kcls = k => k === "操作" ? "op" : k === "系统" ? "sys" : "plg";
-  const row = e => `<div class="row-item ${esc(e.level)}">
+  const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
+  const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
     <span class="kind ${kcls(e.kind)}">${esc(e.kind)}</span>
     <span class="msg">${esc(e.message)}</span>
     <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
@@ -495,7 +564,8 @@ function renderLog(items) {
   const pageItems = filtered.slice((LOG_PAGE - 1) * LOG_PAGE_SIZE, LOG_PAGE * LOG_PAGE_SIZE);
   $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">暂无日志</div>`;
   renderLogPager(pages, total);
-  $("ovLog").innerHTML = n ? items.slice(0, 6).map(row).join("") : `<div class="empty-line">暂无活动</div>`;
+  // 概览页活动列表：差量更新，避免全量 innerHTML 重建导致闪烁
+  diffUpdateList($("ovLog"), items.slice(0, 6), row, logKey, `<div class="empty-line">暂无活动</div>`);
 }
 
 function renderLogPager(pages, total) {
@@ -2223,19 +2293,25 @@ function startApp() {
   initNotifications();
   showSkeleton();
   refresh(); loadChecks();
-  // P1-2: 差异化轮询频率 — 按当前视图调整刷新间隔
+  // P1-2: 差异化轮询频率 — 按当前视图 + 标签页可见性调整刷新间隔
   const POLL_BASE = 3000;
   let pollTimer = null;
   function schedulePoll() {
     if (pollTimer) clearTimeout(pollTimer);
     const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
     const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, log: 10000 };
-    const interval = intervals[view] || POLL_BASE;
+    let interval = intervals[view] || POLL_BASE;
+    // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
+    if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);
     pollTimer = setTimeout(() => { refresh(); loadChecks(); schedulePoll(); }, interval);
   }
   schedulePoll();
   // 视图切换时立即调整轮询频率
   document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => setTimeout(schedulePoll, 100)));
+  // 标签页可见性变化时重排轮询
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { refresh(true); schedulePoll(); }
+  });
   // P3-1: 初始化 WebSocket 推送（带降级到轮询）
   initPushWS();
 }

@@ -257,12 +257,15 @@ section{scroll-margin-top:80px; margin-bottom:24px}
   color:var(--muted); background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 7px}
 .count-pill{background:var(--panel2); color:var(--muted); border:1px solid var(--line);
   border-radius:999px; font-size:11px; padding:1px 9px; font-weight:600; margin-left:auto}
-.stack{display:flex; flex-direction:column; gap:7px}
+.stack{display:flex; flex-direction:column; gap:7px; contain:content}
 .row-item{
   display:flex; align-items:center; gap:11px; padding:12px 14px; border-radius:var(--r-sm);
   border:1px solid var(--line); border-left:3px solid var(--line2); background:var(--panel);
-  font-size:13px; transition:border-color var(--transition-fast), background var(--transition-fast);
+  font-size:13px; min-height:42px; transition:border-color var(--transition-fast), background var(--transition-fast);
 }
+/* 新行入场动画（差量更新插入时触发） */
+.row-item.row-enter{animation:rowEnter .35s ease-out}
+@keyframes rowEnter{from{opacity:0; transform:translateY(-6px)}to{opacity:1; transform:translateY(0)}}
 .row-item:hover{ border-color:var(--line2); background:var(--panel2) }
 .row-item.critical{ border-left-color:var(--crit) }
 .row-item.warning{ border-left-color:var(--warn) }
