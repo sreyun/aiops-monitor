@@ -614,7 +614,25 @@
   "ui.replay": "回放",
   "ui.frames_recorded": "帧录制",
   "time.page_suffix": " 页",
-  "notify.alert_engine": "告警引擎"
+  "notify.alert_engine": "告警引擎",
+  /* --- 剧本执行状态 --- */
+  "exec.status.running": "执行中",
+  "exec.status.completed": "已完成",
+  "exec.status.failed": "失败",
+  "exec.status.success": "成功",
+  "exec.status.timeout": "超时",
+  "exec.status.pending": "等待中",
+  "exec.step.running": "执行中",
+  "exec.step.completed": "完成",
+  "exec.step.failed": "失败",
+  "exec.step.timeout": "超时",
+  "exec.step.pending": "等待",
+  "exec.operator": "操作者",
+  "exec.start_time": "开始",
+  "exec.end_time": "结束",
+  "exec.status_label": "状态",
+  "exec.success_count": "成功",
+  "empty.no_executions": "暂无执行历史"
 };
 
   function t(key, fallback) {

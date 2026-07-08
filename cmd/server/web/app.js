@@ -139,6 +139,25 @@ const translateLogLevel = lvl => {
   if (lvl === "critical") return I18N.t("ui.critical");
   return lvl;
 };
+// Translate execution status from English enum to display text
+const translateExecStatus = s => {
+  if (s === "running") return I18N.t("exec.status.running");
+  if (s === "completed") return I18N.t("exec.status.completed");
+  if (s === "failed") return I18N.t("exec.status.failed");
+  if (s === "success") return I18N.t("exec.status.success");
+  if (s === "timeout") return I18N.t("exec.status.timeout");
+  if (s === "pending") return I18N.t("exec.status.pending");
+  return s;
+};
+// Translate step status from English enum to display text
+const translateStepStatus = s => {
+  if (s === "running") return I18N.t("exec.step.running");
+  if (s === "completed") return I18N.t("exec.step.completed");
+  if (s === "failed") return I18N.t("exec.step.failed");
+  if (s === "timeout") return I18N.t("exec.step.timeout");
+  if (s === "pending") return I18N.t("exec.step.pending");
+  return s;
+};
 // 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）
 const isSystemMount = p => {
   p = String(p || "");
@@ -3822,13 +3841,13 @@ function renderExecResult(exec) {
   $("execResultTitle").textContent = `${I18N.t("ui.execute")}${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
   const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
     const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
-    const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${s.status}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
+    const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${translateStepStatus(s.status)}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
     return `<div class="exec-row">
-      <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${r.status}</span></div>
+      <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${translateExecStatus(r.status)}</span></div>
       <div class="exec-steps">${steps}</div>
     </div>`;
   }).join("");
-  $("execResultBody").innerHTML = `<div class="exec-meta">操作者: ${esc(exec.operator)} · 开始: ${fmtDateTime(exec.start_time)}${exec.end_time?" · 结束: "+fmtDateTime(exec.end_time):""} · 状态: ${exec.status}</div>${rows}`;
+  $("execResultBody").innerHTML = `<div class="exec-meta">${I18N.t("exec.operator")}: ${esc(exec.operator)} · ${I18N.t("exec.start_time")}: ${fmtDateTime(exec.start_time)}${exec.end_time?" · "+I18N.t("exec.end_time")+": "+fmtDateTime(exec.end_time):""} · ${I18N.t("exec.status_label")}: ${translateExecStatus(exec.status)}</div>${rows}`;
 }
 
 async function loadExecHistory() {
@@ -3839,13 +3858,13 @@ async function loadExecHistory() {
       const total = Object.keys(e.host_results || {}).length;
       return `<div class="exec-hist-row" data-exec-id="${e.id}">
         <strong>${esc(e.playbook_name)}</strong>
-        <span class="badge ${e.status === "completed" ? "ok" : e.status === "failed" ? "crit" : "warn"}">${e.status}</span>
-        <span class="mono" style="color:var(--muted)">${success}/${total} 成功</span>
+        <span class="badge ${e.status === "completed" ? "ok" : e.status === "failed" ? "crit" : "warn"}">${translateExecStatus(e.status)}</span>
+        <span class="mono" style="color:var(--muted)">${success}/${total} ${I18N.t("exec.success_count")}</span>
         <span class="mono" style="color:var(--muted)">${fmtDateTime(e.start_time)}</span>
         <span class="mono" style="color:var(--muted)">${esc(e.operator)}</span>
       </div>`;
     }).join("");
-    $("execHistBody").innerHTML = rows || `<div class="empty-line">暂无执行历史</div>`;
+    $("execHistBody").innerHTML = rows || `<div class="empty-line">${I18N.t("empty.no_executions")}</div>`;
     $("execHistBody").querySelectorAll("[data-exec-id]").forEach(el => {
       el.onclick = async () => {
         const exec = await fetch(`${API}/playbooks/executions/${el.dataset.execId}`).then(r => r.json());
