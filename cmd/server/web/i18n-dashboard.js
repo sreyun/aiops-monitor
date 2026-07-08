@@ -613,7 +613,8 @@
   "ui.cores": "核",
   "ui.replay": "回放",
   "ui.frames_recorded": "帧录制",
-  "time.page_suffix": " 页"
+  "time.page_suffix": " 页",
+  "notify.alert_engine": "告警引擎"
 };
 
   function t(key, fallback) {

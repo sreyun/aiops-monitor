@@ -125,6 +125,20 @@ const fmtDur = sec => {
   if (s < 86400) return `${Math.floor(s / 3600)}${I18N.t("time.hour")}${Math.floor(s % 3600 / 60)}${I18N.t("time.min")}`;
   return `${Math.floor(s / 86400)}${I18N.t("time.day")}${Math.floor(s % 86400 / 3600)}${I18N.t("time.hour")}`;
 };
+// Translate log kind from English enum to display text
+const translateLogKind = k => {
+  if (k === "operation") return I18N.t("ui.operation");
+  if (k === "system") return I18N.t("ui.system");
+  if (k === "plugin") return I18N.t("ui.process");
+  return k;
+};
+// Translate log level from English enum to display text
+const translateLogLevel = lvl => {
+  if (lvl === "info") return I18N.t("filter.info_level");
+  if (lvl === "warning") return I18N.t("ui.warning");
+  if (lvl === "critical") return I18N.t("ui.critical");
+  return lvl;
+};
 // 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）
 const isSystemMount = p => {
   p = String(p || "");
@@ -620,7 +634,8 @@ function applyLogFilters(items) {
     const hours = parseInt(LOG_TIME_RANGE);
     filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
   }
-  return filtered.filter(e => !(e.actor === I18N.t("ui.self_check") && e.host === I18N.t("ui.server")));
+  // Filter out internal alert engine logs (actor="告警引擎" from backend)
+  return filtered.filter(e => e.actor !== I18N.t("notify.alert_engine"));
 }
 
 function exportLogsCSV() {
@@ -628,7 +643,7 @@ function exportLogsCSV() {
   if (!rows.length) { toast(I18N.t("empty.no_log_export"), "err"); return; }
   const escCsv = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
   const lines = [I18N.t("section.csv_header")];
-  rows.forEach(e => lines.push([fmtDateTime(e.timestamp), e.kind, e.level, e.actor || "", e.host || "", e.message].map(escCsv).join(",")));
+  rows.forEach(e => lines.push([fmtDateTime(e.timestamp), translateLogKind(e.kind), translateLogLevel(e.level), e.actor || "", e.host || "", e.message].map(escCsv).join(",")));
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -642,10 +657,10 @@ function renderLog(items) {
   LAST_LOG = items;
   const n = items.length;
   $("logCount").textContent = n; $("navLog").textContent = n; $("ovLogCount").textContent = n;
-  const kcls = k => k === I18N.t("ui.operation") ? "op" : k === I18N.t("ui.system") ? "sys" : "plg";
+  const kcls = k => k === "operation" ? "op" : k === "system" ? "sys" : "plg";
   const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
   const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
-    <span class="kind ${kcls(e.kind)}">${esc(e.kind)}</span>
+    <span class="kind ${kcls(e.kind)}">${esc(translateLogKind(e.kind))}</span>
     <span class="msg">${esc(e.message)}</span>
     <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
     <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
