@@ -675,10 +675,39 @@
   function t(key, fallback) {
     return DICT[key] || fallback || key;
   }
-  function applyTranslations() {}
+
+  // applyTranslations scans the DOM for data-i18n, data-i18n-placeholder and
+  // data-i18n-title attributes and replaces their content with DICT values.
+  function applyTranslations(root) {
+    root = root || document;
+    // 1. data-i18n → textContent (element inner text)
+    root.querySelectorAll("[data-i18n]").forEach(function(el) {
+      var key = el.getAttribute("data-i18n");
+      if (key && DICT[key]) el.textContent = DICT[key];
+    });
+    // 2. data-i18n-placeholder → placeholder attribute
+    root.querySelectorAll("[data-i18n-placeholder]").forEach(function(el) {
+      var key = el.getAttribute("data-i18n-placeholder");
+      if (key && DICT[key]) el.placeholder = DICT[key];
+    });
+    // 3. data-i18n-title → title attribute
+    root.querySelectorAll("[data-i18n-title]").forEach(function(el) {
+      var key = el.getAttribute("data-i18n-title");
+      if (key && DICT[key]) el.title = DICT[key];
+    });
+  }
+
   function setLang() {}
   function getLang() { return "zh-CN"; }
+  function init() { applyTranslations(); }
+
+  // Auto-run when DOM is ready (i18n-dashboard.js is sync-loaded before DOM).
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 
   window.I18N = { t: t, applyTranslations: applyTranslations, setLang: setLang, getLang: getLang,
-    supported: ["zh-CN"], init: function() {} };
+    supported: ["zh-CN"], init: init };
 })();
