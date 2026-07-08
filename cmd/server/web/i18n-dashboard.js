@@ -1236,12 +1236,37 @@
     });
   }
 
+  // Re-entrancy guard + debounce: prevent infinite loop where applyTranslations
+  // modifies DOM → triggers MutationObserver → calls applyTranslations again.
+  var _applying = false;
+  var _debounceTimer = null;
+  function debouncedApply() {
+    if (_applying) return;          // re-entrancy guard
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(function() {
+      _debounceTimer = null;
+      _applying = true;
+      try { applyTranslations(); } finally { _applying = false; }
+      updateSwitcherActive();
+    }, 150); // 150ms debounce — coalesce rapid DOM mutations into one pass
+  }
+
   window.I18N = { t, applyTranslations, setLang, getLang, supported: SUPPORTED_LANGS,
     init() {
       injectLangSwitcher();
       applyTranslations();
-      const observer = new MutationObserver(() => { applyTranslations(); updateSwitcherActive(); });
-      observer.observe(document.body, { childList: true, subtree: true });
+      // Only watch childList (added/removed nodes), NOT characterData or attributes.
+      // This prevents the infinite loop: applyTranslations sets textContent →
+      // triggers observer → calls applyTranslations → sets textContent → ...
+      const observer = new MutationObserver(function(mutations) {
+        // Only react to added nodes (skip text content changes from our own applyTranslations)
+        var hasAddedNodes = false;
+        for (var i = 0; i < mutations.length; i++) {
+          if (mutations[i].addedNodes.length > 0) { hasAddedNodes = true; break; }
+        }
+        if (hasAddedNodes) debouncedApply();
+      });
+      observer.observe(document.body, { childList: true, subtree: true, attributes: false, characterData: false });
     }
   };
 

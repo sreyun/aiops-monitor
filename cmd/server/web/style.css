@@ -1164,7 +1164,8 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
 [data-theme="light"]{
   color-scheme:light;
 }
-*{
+/* Theme transition: only on container-level elements, NOT * (performance) */
+.app, .sidebar, .topbar, .btn, .card, .nav-item, .modal, .toast, .term-screen{
   transition-property:background-color, border-color, color;
   transition-duration:.2s;
   transition-timing-function:ease;
