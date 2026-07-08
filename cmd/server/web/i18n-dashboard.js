@@ -48,6 +48,7 @@
   "toast.code_sent": "验证码已发送",
   "toast.mfa_enabled": "两步验证已启用",
   "toast.mfa_disabled": "两步验证已关闭",
+  "toast.recovered": "已恢复",
   "toast.enabled": "已启用",
   "toast.disabled": "未启用",
   "toast.mfa_unbind_email": "两步验证已通过邮箱解除",

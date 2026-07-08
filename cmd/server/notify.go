@@ -194,7 +194,7 @@ func formatAlert(a Alert, firing bool) string {
 	}
 	ipLine := ""
 	if a.IP != "" {
-		ipLine = fmt.Sprintf("\nIP: %s", a.IP)
+		ipLine = fmt.Sprintf("\n%s: %s", Tz("notify.ip"), a.IP)
 	}
 	return fmt.Sprintf("%s\n%s: %s%s\n%s: %s\n%s: %s\n%s: %s\n%s: %s",
 		Tz("notify.title", status), Tz("notify.host"), a.Hostname, ipLine,
