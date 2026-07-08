@@ -1990,7 +1990,7 @@ async function openMfaSetup() {
   let data;
   try { data = await fetch(`${API}/mfa/setup`, { method: "POST" }).then(r => r.json()); }
   catch (e) { body.innerHTML = `<div class="empty-line">生成失败：${esc(e)}</div>`; return; }
-  const secret = data.secret || "", uri = data.otpauth_url || "";
+  const secret = data.secret || "", qrURI = data.qr_datauri || "";
   const grp = secret.replace(/(.{4})/g, "$1 ").trim();
   body.innerHTML = `
     <ol class="mfa-steps">
@@ -2002,8 +2002,7 @@ async function openMfaSetup() {
     <div class="field"><label>动态验证码</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder="6 位口令" autocomplete="one-time-code"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">确认启用</button></div>`;
-  const cv = drawQR(uri, 240);
-  if (cv) $("mfaQr").appendChild(cv);
+  if (qrURI) $("mfaQr").innerHTML = `<img src="${esc(qrURI)}" alt="MFA QR Code" class="qr-img">`;
   else $("mfaQr").innerHTML = `<div class="mfa-desc">二维码不可用，请在应用中手动输入上方密钥。</div>`;
   $("mfaCopy").onclick = () => { try { navigator.clipboard.writeText(secret); toast("密钥已复制", "ok"); } catch (_) { } };
   $("mfaConfirm").onclick = async () => {
@@ -2239,96 +2238,6 @@ function openRecoverPass() {
   setTimeout(() => { const el = $("rcUser"); if (el) el.focus(); }, 60);
 }
 
-/* ===== 零依赖 QR 生成器（byte 模式 · 纠错级 M · 版本 1–10 · canvas 绘制） =====
-   仅用于把 otpauth:// URI 编码成可扫二维码。任何异常都返回 null，UI 回退到手动密钥。 */
-function drawQR(text, sizePx) { try { return qrCanvas(text, sizePx); } catch (e) { console.warn("QR 生成失败:", e); return null; } }
-function qrCanvas(text, sizePx) {
-  const EXP = new Array(512), LOG = new Array(256);
-  for (let i = 0, x = 1; i < 255; i++) { EXP[i] = x; LOG[x] = i; x = (x << 1) ^ (x & 0x80 ? 0x11d : 0); }
-  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
-  const gmul = (a, b) => (a && b) ? EXP[LOG[a] + LOG[b]] : 0;
-  function rsCompute(data, ecLen) {
-    let gen = [1];
-    for (let i = 0; i < ecLen; i++) { const ng = new Array(gen.length + 1).fill(0); for (let j = 0; j < gen.length; j++) { ng[j] ^= gmul(gen[j], EXP[i]); ng[j + 1] ^= gen[j]; } gen = ng; }
-    const res = new Array(ecLen).fill(0);
-    for (const d of data) { const f = d ^ res[0]; res.shift(); res.push(0); if (f) for (let i = 0; i < ecLen; i++) res[i] ^= gmul(gen[i], f); }
-    return res;
-  }
-  const SPEC = { 1: [10, [[1, 16]]], 2: [16, [[1, 28]]], 3: [26, [[1, 44]]], 4: [18, [[2, 32]]], 5: [24, [[2, 43]]], 6: [16, [[4, 27]]], 7: [18, [[4, 31]]], 8: [22, [[2, 38], [2, 39]]], 9: [22, [[3, 36], [2, 37]]], 10: [26, [[4, 43], [1, 44]]] };
-  const ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
-  const utf8 = unescape(encodeURIComponent(text)); const bytes = []; for (let i = 0; i < utf8.length; i++) bytes.push(utf8.charCodeAt(i));
-  let ver = 0, totalData = 0;
-  for (let v = 1; v <= 10; v++) { let d = 0; for (const [b, dp] of SPEC[v][1]) d += b * dp; if (bytes.length + 2 <= d) { ver = v; totalData = d; break; } }
-  if (!ver) throw new Error("数据过长");
-  const [ecLen, groups] = SPEC[ver];
-  let bits = []; const push = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >> i) & 1); };
-  push(4, 4); push(bytes.length, 8); for (const b of bytes) push(b, 8);
-  for (let i = 0; i < 4 && bits.length < totalData * 8; i++) bits.push(0);
-  while (bits.length % 8) bits.push(0);
-  const dcodes = []; for (let i = 0; i < bits.length; i += 8) { let v = 0; for (let j = 0; j < 8; j++) v = (v << 1) | bits[i + j]; dcodes.push(v); }
-  const pads = [0xEC, 0x11]; for (let k = 0; dcodes.length < totalData; k++) dcodes.push(pads[k & 1]);
-  const dataBlocks = [], ecBlocks = []; let off = 0;
-  for (const [b, dp] of groups) for (let i = 0; i < b; i++) { const blk = dcodes.slice(off, off + dp); off += dp; dataBlocks.push(blk); ecBlocks.push(rsCompute(blk, ecLen)); }
-  const maxD = Math.max(...dataBlocks.map(b => b.length)); const finalCodes = [];
-  for (let i = 0; i < maxD; i++) for (const blk of dataBlocks) if (i < blk.length) finalCodes.push(blk[i]);
-  for (let i = 0; i < ecLen; i++) for (const blk of ecBlocks) finalCodes.push(blk[i]);
-  const N = 17 + ver * 4;
-  const mod = Array.from({ length: N }, () => new Array(N).fill(0));
-  const res = Array.from({ length: N }, () => new Array(N).fill(false));
-  const setF = (r, c) => { for (let dr = -1; dr <= 7; dr++) for (let dc = -1; dc <= 7; dc++) { const rr = r + dr, cc = c + dc; if (rr < 0 || rr >= N || cc < 0 || cc >= N) continue; const ring = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)); const core = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4; mod[rr][cc] = (ring || core) ? 1 : 0; res[rr][cc] = true; } };
-  setF(0, 0); setF(0, N - 7); setF(N - 7, 0);
-  for (let i = 8; i < N - 8; i++) { const b = i % 2 === 0 ? 1 : 0; mod[6][i] = b; res[6][i] = true; mod[i][6] = b; res[i][6] = true; }
-  mod[N - 8][8] = 1; res[N - 8][8] = true;
-  const ac = ALIGN[ver];
-  for (const r of ac) for (const c of ac) { if (res[r][c]) continue; let skip = false; for (let dr = -2; dr <= 2 && !skip; dr++) for (let dc = -2; dc <= 2; dc++) if (res[r + dr] && res[r + dr][c + dc]) { skip = true; break; } if (skip) continue; for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) { mod[r + dr][c + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; res[r + dr][c + dc] = true; } }
-  for (let i = 0; i < 9; i++) { res[8][i] = true; res[i][8] = true; }
-  for (let i = 0; i < 8; i++) { res[8][N - 1 - i] = true; res[N - 1 - i][8] = true; }
-  const allBits = []; for (const cw of finalCodes) for (let i = 7; i >= 0; i--) allBits.push((cw >> i) & 1);
-  let bi = 0, up = true;
-  for (let col = N - 1; col > 0; col -= 2) { if (col === 6) col = 5; for (let i = 0; i < N; i++) { const row = up ? N - 1 - i : i; for (let s = 0; s < 2; s++) { const cc = col - s; if (res[row][cc]) continue; mod[row][cc] = bi < allBits.length ? allBits[bi] : 0; bi++; } } up = !up; }
-  const maskFns = [(r, c) => (r + c) % 2 === 0, (r, c) => r % 2 === 0, (r, c) => c % 3 === 0, (r, c) => (r + c) % 3 === 0, (r, c) => (((r >> 1) + Math.floor(c / 3)) % 2) === 0, (r, c) => ((r * c) % 2 + (r * c) % 3) === 0, (r, c) => (((r * c) % 2 + (r * c) % 3) % 2) === 0, (r, c) => (((r + c) % 2 + (r * c) % 3) % 2) === 0];
-  const fmt = (m) => { let d = m; let v = d << 10; for (let i = 14; i >= 10; i--) if ((v >> i) & 1) v ^= 0x537 << (i - 10); return (((d << 10) | v) ^ 0x5412) & 0x7fff; };
-  function render(m) {
-    const g = mod.map(r => r.slice());
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (!res[r][c] && maskFns[m](r, c)) g[r][c] ^= 1;
-    const f = fmt(m), a = []; for (let i = 14; i >= 0; i--) a.push((f >> i) & 1);
-    // 左上：竖列 (0..5,8),(7,8) 与 横行 (8,7),(8,5..0)  ；含 (8,8)
-    let k = 0;
-    for (let i = 0; i <= 5; i++) g[8][i] = a[k++]; g[8][7] = a[k++]; g[8][8] = a[k++]; g[7][8] = a[k++]; for (let i = 5; i >= 0; i--) g[i][8] = a[k++];
-    // 第二份格式信息：左下竖列 (N-1..N-7,8) = bit0..6（从下往上递增）
-    //                 + 右上横行 (8,N-8..N-1) = bit7..14（从左往右递增）
-    // 注意：bit 序方向与第一份不同——第一份从 MSB(bit14) 开始，第二份从 LSB(bit0) 开始。
-    // 须跳过 dark module (N-8,8)，不能覆盖。
-    for (let i = 0; i < 7; i++) g[N - 1 - i][8] = a[14 - i]; // a[14]=bit0 → (N-1,8), ..., a[8]=bit6 → (N-7,8)
-    for (let i = 0; i < 8; i++) g[8][N - 8 + i] = a[7 - i];  // a[7]=bit7 → (8,N-8), ..., a[0]=bit14 → (8,N-1)
-    return g;
-  }
-  function penalty(g) {
-    let p = 0;
-    // N1: runs of 5+ same-color modules in a row/column
-    for (let r = 0; r < N; r++) { let cnt = 1; for (let c = 1; c <= N; c++) { if (c < N && g[r][c] === g[r][c - 1]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } }
-    for (let c = 0; c < N; c++) { let cnt = 1; for (let r = 1; r <= N; r++) { if (r < N && g[r][c] === g[r - 1][c]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } }
-    // N2: 2×2 blocks of same color → 3 points each
-    for (let r = 0; r < N - 1; r++) for (let c = 0; c < N - 1; c++) {
-      if (g[r][c] === g[r][c+1] && g[r][c] === g[r+1][c] && g[r][c] === g[r+1][c+1]) p += 3;
-    }
-    // N3: finder-like patterns (1011101 with 4+ light on either side) → 40 points each
-    const fp = [1,0,1,1,1,0,1,0]; const fp2 = [0,1,0,1,1,1,0,1]; // 0001011101 / 1011101000 per ISO/IEC 18004 §8.8.2
-    const match = (line, pat) => { let m = 0; for (let i = 0; i + pat.length <= line.length; i++) { let ok = true; for (let j = 0; j < pat.length; j++) if (line[i+j] !== pat[j]) { ok = false; break; } if (ok) m++; } return m; };
-    for (let r = 0; r < N; r++) { const row = g[r]; p += match(row, fp) * 40; p += match(row, fp2) * 40; }
-    for (let c = 0; c < N; c++) { const col = []; for (let r = 0; r < N; r++) col.push(g[r][c]); p += match(col, fp) * 40; p += match(col, fp2) * 40; }
-    // N4: dark/light ratio → 10 * floor(|dark% - 50| / 5)
-    let dark = 0; for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (g[r][c]) dark++;
-    const ratio = dark * 100 / (N * N); p += 10 * Math.floor(Math.abs(ratio - 50) / 5);
-    return p;
-  }
-  let best = null, bp = Infinity; for (let m = 0; m < 8; m++) { const g = render(m); const p = penalty(g); if (p < bp) { bp = p; best = g; } }
-  const quiet = 4, scale = Math.max(2, Math.floor(sizePx / (N + quiet * 2))), dim = (N + quiet * 2) * scale;
-  const cv = document.createElement("canvas"); cv.width = dim; cv.height = dim; cv.style.width = cv.style.height = dim + "px"; cv.className = "qr-canvas";
-  const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dim, dim); ctx.fillStyle = "#000";
-  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (best[r][c]) ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
-  return cv;
-}
 async function logout() {
   try { await fetch(`${API}/logout`, { method: "POST" }); } catch (e) {}
   location.reload();

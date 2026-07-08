@@ -475,9 +475,16 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成密钥失败"})
 		return
 	}
+	uri := otpauthURL(acc.Username, secret)
+	qr, err := genQRDataURI(uri)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成二维码失败"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"secret":      secret,
-		"otpauth_url": otpauthURL(acc.Username, secret),
+		"otpauth_url": uri,
+		"qr_datauri":  qr,
 	})
 }
 

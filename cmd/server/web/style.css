@@ -847,7 +847,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .mfa-steps{margin:0 0 14px; padding-left:20px; font-size:13px; color:var(--txt,#c8d0dc); line-height:1.75}
 .mfa-steps b{color:var(--accent-txt,#9bc0ff)}
 .mfa-qr{display:flex; justify-content:center; margin:6px 0 14px; min-height:40px}
-.qr-canvas{border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,.18), 0 0 0 8px #fff; background:#fff; image-rendering:pixelated; image-rendering:crisp-edges}
+.qr-img{border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,.18), 0 0 0 8px #fff; background:#fff; width:240px; height:240px; display:block}
 .mfa-secret{display:flex; align-items:center; gap:10px; justify-content:center; font-size:13px; color:var(--muted,#8a93a3); margin-bottom:14px; flex-wrap:wrap}
 .mfa-secret code{font-size:14px; letter-spacing:1px; color:var(--txt,#c8d0dc); background:rgba(255,255,255,.05); padding:4px 10px; border-radius:6px}
 
