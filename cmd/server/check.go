@@ -55,6 +55,8 @@ type checkRunner struct {
 	downSince map[string]int64        // check id -> unix time it first went down
 	lastRun   map[string]time.Time
 	history   map[string][]CheckPoint // check id -> bounded time-series for the trend view
+	failCount map[string]int           // consecutive failures (debounce: require 2 before marking down)
+	okCount   map[string]int           // consecutive successes (debounce: require 2 before marking up)
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
@@ -69,6 +71,8 @@ func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr
 		downSince: map[string]int64{},
 		lastRun:   map[string]time.Time{},
 		history:   map[string][]CheckPoint{},
+		failCount: map[string]int{},
+		okCount:   map[string]int{},
 	}
 }
 
@@ -150,14 +154,32 @@ func (cr *checkRunner) runSelfCheck() {
 	cr.status[selfCheckID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: nowUnix, StatusCode: code, CertDays: -1}
 	cr.recordHistory(selfCheckID, CheckPoint{Ts: nowUnix, OK: ok, LatencyMs: lat, StatusCode: code})
 	wasDown := cr.down[selfCheckID]
-	cr.down[selfCheckID] = !ok
-	cr.markDown(selfCheckID, !ok)
+	nowDown := wasDown
+	// Same debounce as runCheck: require 2 consecutive results before toggling state
+	const debounceThreshold = 2
+	if !ok {
+		cr.failCount[selfCheckID]++
+		cr.okCount[selfCheckID] = 0
+		if cr.failCount[selfCheckID] >= debounceThreshold && !wasDown {
+			nowDown = true
+			cr.down[selfCheckID] = true
+			cr.markDown(selfCheckID, true)
+		}
+	} else {
+		cr.okCount[selfCheckID]++
+		cr.failCount[selfCheckID] = 0
+		if cr.okCount[selfCheckID] >= debounceThreshold && wasDown {
+			nowDown = false
+			cr.down[selfCheckID] = false
+			cr.markDown(selfCheckID, false)
+		}
+	}
 	cr.mu.Unlock()
 
-	if !ok && !wasDown {
+	if nowDown && !wasDown {
 		// Self health-check failures should not clutter the activity log
 		// They are still tracked in alerts and visible in the checks view
-	} else if ok && wasDown {
+	} else if !nowDown && wasDown {
 		// Recovery also doesn't need an activity log entry for internal checks
 	}
 }
@@ -208,6 +230,8 @@ func (cr *checkRunner) gc() {
 			delete(cr.downSince, id)
 			delete(cr.lastRun, id)
 			delete(cr.history, id)
+			delete(cr.failCount, id)
+			delete(cr.okCount, id)
 		}
 	}
 	cr.mu.Unlock()
@@ -244,13 +268,35 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	cr.status[c.ID] = CheckStatus{OK: ok, Message: msg, LatencyMs: lat, CheckedAt: nowUnix, StatusCode: code, CertDays: certDays, LossPct: lossPct}
 	cr.recordHistory(c.ID, CheckPoint{Ts: nowUnix, OK: ok, LatencyMs: lat, StatusCode: code, LossPct: lossPct})
 	wasDown := cr.down[c.ID]
-	cr.down[c.ID] = !ok
-	cr.markDown(c.ID, !ok)
+	nowDown := wasDown
+	// Debounce: require 2 consecutive failures before marking down,
+	// and 2 consecutive successes before marking up. This prevents
+	// transient flaps (e.g. HTTP timeout at the boundary) from causing
+	// the alert to intermittently appear/disappear in the UI.
+	const debounceThreshold = 2
+	if !ok {
+		cr.failCount[c.ID]++
+		cr.okCount[c.ID] = 0
+		if cr.failCount[c.ID] >= debounceThreshold && !wasDown {
+			nowDown = true
+			cr.down[c.ID] = true
+			cr.markDown(c.ID, true)
+		}
+	} else {
+		cr.okCount[c.ID]++
+		cr.failCount[c.ID] = 0
+		if cr.okCount[c.ID] >= debounceThreshold && wasDown {
+			nowDown = false
+			cr.down[c.ID] = false
+			cr.markDown(c.ID, false)
+		}
+	}
 	cr.mu.Unlock()
 
-	if !ok && !wasDown {
+	// Only fire transition notifications when the debounced down state actually changes
+	if nowDown && !wasDown {
 		cr.transition(c, false, msg)
-	} else if ok && wasDown {
+	} else if !nowDown && wasDown {
 		cr.transition(c, true, msg)
 	}
 }

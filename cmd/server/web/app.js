@@ -423,9 +423,20 @@ function renderAlerts(alerts) {
   const n = alerts.length;
   $("alertsCount").textContent = n; $("navAlerts").textContent = n; $("ovAlertsCount").textContent = n;
   const now = Math.floor(Date.now() / 1000);
-  // alertKey 排除 timestamp（可能为“最后触发”时间，每次轮询可能变化）
-  // 仅用稳定身份字段：hostname + message + level + since + ip
-  const alertKey = a => `${a.hostname}|${a.message}|${a.level}|${a.since||0}|${a.ip||""}`;
+  // alertKey 使用稳定身份字段：type + scope + hostname + host_id
+  // 这些字段在告警的生命周期内不会变化，不受 message 文本变化
+  // （如拨测错误详情不同）或 since 重置（告警闪烁后重新计时）影响。
+  // 这确保 diffUpdateList 能正确复用 DOM 节点，避免不必要的增删。
+  const alertKey = a => {
+    const type = a.type || "";
+    const scope = a.scope || "";
+    const id = a.host_id || "";
+    if (type || scope || id) {
+      return `${type}|${scope}|${a.hostname}|${id}`;
+    }
+    // Fallback: 仅当 type/scope/host_id 均缺失时使用 message（不应发生）
+    return `${a.hostname}|${a.message}|${a.level}`;
+  };
   const row = a => {
     const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
     const ipStr = a.ip ? `<span class="alert-ip mono">${esc(a.ip)}</span>` : "";
