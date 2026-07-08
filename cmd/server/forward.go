@@ -12,16 +12,13 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // Port forwarding relay — server side.
-//
-// This module is completely independent from terminal.go. It reuses the same
-// architectural pattern (agent reverse channel + bidirectional HTTP streams +
-// [type:1][len:2 BE][payload] framing) but with its own session manager, API
-// endpoints, and handlers. The two modules share zero code paths.
 //
 // Two modes:
 //   - TCP port mapping: the server opens a local TCP listener (127.0.0.1:port)
@@ -29,6 +26,43 @@ import (
 //     on the monitored host.
 //   - HTTP reverse proxy: the server handles HTTP requests at /proxy/{hostID}/{port}/...
 //     and tunnels them through the agent to the target's HTTP service.
+
+// ---- Constants (P0: security limits) ----
+
+const (
+	maxForwardSessions  = 300           // P0: maximum concurrent forwarding sessions
+	maxForwardBodySize  = 100 << 20     // P0: maximum HTTP request body (100MB) to prevent OOM
+	forwardReadBufSize  = 32 << 10      // P1: 32KB read buffer (was 16KB)
+	forwardReadTimeout  = 30 * time.Second // P1: HTTP response read timeout
+	forwardTCPKeepAlive = 60 * time.Second // P1: TCP keepalive interval
+)
+
+// hopByHopHeaders are per-connection headers that must not be forwarded (RFC 7230 §6.1).
+// P2: replaced whitelist approach with blacklist (more complete, fewer missed headers).
+var hopByHopHeaders = map[string]bool{
+	"Connection":          true,
+	"Proxy-Connection":    true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
+// forwardStats tracks aggregate forwarding metrics (P3: observability).
+type forwardStats struct {
+	ActiveSessions int64
+	TotalSessions  int64
+	TotalBytes     int64
+	Errors         int64
+}
+
+func (fs *forwardStats) incActive() { atomic.AddInt64(&fs.ActiveSessions, 1); atomic.AddInt64(&fs.TotalSessions, 1) }
+func (fs *forwardStats) decActive() { atomic.AddInt64(&fs.ActiveSessions, -1) }
+func (fs *forwardStats) addBytes(n int64) { atomic.AddInt64(&fs.TotalBytes, n) }
+func (fs *forwardStats) incError() { atomic.AddInt64(&fs.Errors, 1) }
 
 // forwardSession is one tunneled connection (TCP or HTTP).
 type forwardSession struct {
@@ -45,6 +79,7 @@ type forwardSession struct {
 	done       chan struct{}
 	upOnce     sync.Once
 	doneOnce   sync.Once
+	closeReason string // P3: reason the session ended
 	mu         sync.Mutex
 	lastActive int64 // unix seconds of last data transfer (for idle timeout)
 }
@@ -53,10 +88,26 @@ func (s *forwardSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }
 func (s *forwardSession) close() {
 	s.doneOnce.Do(func() { close(s.done) })
 }
+func (s *forwardSession) closeWith(reason string) {
+	s.mu.Lock()
+	if s.closeReason == "" {
+		s.closeReason = reason
+	}
+	s.mu.Unlock()
+	s.close()
+}
 func (s *forwardSession) touch() {
 	s.mu.Lock()
 	s.lastActive = time.Now().Unix()
 	s.mu.Unlock()
+}
+func (s *forwardSession) getCloseReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closeReason != "" {
+		return s.closeReason
+	}
+	return Tz("log.forward_reason_eof")
 }
 
 // forwardRule is a persistent TCP forwarding rule with its own listener.
@@ -98,6 +149,7 @@ type forwardManager struct {
 	rules    map[string]*forwardRule
 	sessions map[string]*forwardSession
 	waiters  map[string]chan forwardWaitInfo // hostID -> a waiting agent poll
+	stats    forwardStats                     // P3: aggregate metrics
 }
 
 func newForwardManager() *forwardManager {
@@ -122,8 +174,8 @@ func (m *forwardManager) idleChecker() {
 			idle := now - sess.lastActive
 			sess.mu.Unlock()
 			if idle > int64(forwardIdleTimeout.Seconds()) {
-				slog.Info("转发会话空闲超时，自动关闭", "session", id, "idle_sec", idle)
-				sess.close()
+				slog.Info(Tz("log.forward_idle_timeout"), "session", id, "idle_sec", idle)
+				sess.closeWith(Tz("log.forward_reason_timeout"))
 			}
 		}
 		m.mu.Unlock()
@@ -147,7 +199,14 @@ func forwardFrame(typ byte, payload []byte) []byte {
 
 // ---- session lifecycle ----
 
-func (m *forwardManager) createSession(ruleID, hostID, hostname string, targetPort int, mode, operator string) *forwardSession {
+func (m *forwardManager) createSession(ruleID, hostID, hostname string, targetPort int, mode, operator string) (*forwardSession, error) {
+	m.mu.Lock()
+	// P0: enforce maximum session count
+	if len(m.sessions) >= maxForwardSessions {
+		m.mu.Unlock()
+		m.stats.incError()
+		return nil, fmt.Errorf("%s", Tz("forward.too_many_sessions"))
+	}
 	s := &forwardSession{
 		id: termID(), ruleID: ruleID, hostID: hostID, hostname: hostname,
 		targetPort: targetPort, mode: mode, operator: operator,
@@ -155,10 +214,10 @@ func (m *forwardManager) createSession(ruleID, hostID, hostname string, targetPo
 		agentUp: make(chan struct{}), done: make(chan struct{}),
 		lastActive: time.Now().Unix(),
 	}
-	m.mu.Lock()
 	m.sessions[s.id] = s
+	m.stats.incActive()
 	m.mu.Unlock()
-	return s
+	return s, nil
 }
 
 func (m *forwardManager) getSession(id string) *forwardSession {
@@ -169,8 +228,13 @@ func (m *forwardManager) getSession(id string) *forwardSession {
 
 func (m *forwardManager) removeSession(id string) {
 	m.mu.Lock()
-	delete(m.sessions, id)
+	sess, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+		m.stats.decActive()
+	}
 	m.mu.Unlock()
+	_ = sess
 }
 
 // notifyAgent hands a new forward session to the agent currently long-polling
@@ -216,7 +280,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		// fallback: auto-allocate
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			return nil, fmt.Errorf("无法监听端口: %w", err)
+			return nil, fmt.Errorf("%s", Tz("forward.listen_failed", err))
 		}
 	}
 	localPort = ln.Addr().(*net.TCPAddr).Port
@@ -249,8 +313,9 @@ func (m *forwardManager) removeRule(id string) bool {
 	// close all sessions belonging to this rule
 	for sid, sess := range m.sessions {
 		if sess.ruleID == id {
-			sess.close()
+			sess.closeWith(Tz("log.forward_reason_eof"))
 			delete(m.sessions, sid)
+			m.stats.decActive()
 		}
 	}
 	m.mu.Unlock()
@@ -287,7 +352,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 // handleForwardCreate creates a TCP port forwarding rule.
 func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.ForwardEnabled() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "端口转发已被管理员禁用"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "forward.disabled")})
 		return
 	}
 	var req struct {
@@ -296,11 +361,11 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		LocalPort  int    `json:"local_port"` // 0 = auto-allocate
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
 	if req.HostID == "" || req.TargetPort < 1 || req.TargetPort > 65535 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id 和 target_port 必填"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
 		return
 	}
 	// look up hostname
@@ -323,8 +388,8 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// start accepting connections in the background
 	go s.serveForwardListener(rule)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "warning", Actor: operator, Host: hostname,
-		Message: fmt.Sprintf("创建端口转发 %s → %s:%d (本地 %s)", hostname, hostname, req.TargetPort, rule.listenAddr)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
+		Message: Tz("log.forward_create", hostname, hostname, req.TargetPort, rule.listenAddr)})
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 		TargetPort: rule.targetPort, LocalPort: rule.localPort,
@@ -338,7 +403,7 @@ func (s *Server) handleForwardDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rule := s.forward.getRule(id)
 	if rule == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "转发规则不存在"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
 		return
 	}
 	user, _ := s.currentUser(r)
@@ -347,8 +412,8 @@ func (s *Server) handleForwardDelete(w http.ResponseWriter, r *http.Request) {
 		operator = user.Username
 	}
 	s.forward.removeRule(id)
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: operator, Host: rule.hostname,
-		Message: fmt.Sprintf("关闭端口转发 %s → :%d", rule.hostname, rule.targetPort)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: rule.hostname,
+		Message: Tz("log.forward_close", rule.hostname, rule.targetPort)})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -365,6 +430,11 @@ func (s *Server) serveForwardListener(rule *forwardRule) {
 		if err != nil {
 			return // listener closed
 		}
+		// P1: set TCP keepalive on accepted connections
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(forwardTCPKeepAlive)
+		}
 		go s.handleForwardTCPConn(rule, conn)
 	}
 }
@@ -372,34 +442,46 @@ func (s *Server) serveForwardListener(rule *forwardRule) {
 // handleForwardTCPConn relays one user TCP connection through the agent.
 func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 	defer conn.Close()
-	sess := s.forward.createSession(rule.id, rule.hostID, rule.hostname, rule.targetPort, "tcp", rule.operator)
+	sess, err := s.forward.createSession(rule.id, rule.hostID, rule.hostname, rule.targetPort, "tcp", rule.operator)
+	if err != nil {
+		// P3: error feedback to user instead of silent drop
+		return
+	}
 	defer s.forward.removeSession(sess.id)
 	defer sess.close()
 
+	// P3: TCP forward audit log
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: rule.operator, Host: rule.hostname,
+		Message: Tz("log.forward_tcp", rule.hostname, rule.targetPort)})
+
 	// notify agent
 	if !s.forward.notifyAgent(rule.hostID, forwardWaitInfo{sessionID: sess.id, targetPort: rule.targetPort, mode: "tcp"}) {
-		return // agent not polling; connection dropped silently
+		sess.closeWith(Tz("log.forward_reason_agent_down"))
+		return // agent not polling
 	}
 	// watchdog: if agent never attaches, don't hang
 	go func() {
 		select {
 		case <-sess.agentUp:
 		case <-time.After(10 * time.Second):
-			sess.close()
+			sess.closeWith(Tz("log.forward_reason_timeout"))
 		case <-sess.done:
 		}
 	}()
 
+	var bytesTransferred int64
+
 	// user → agent (read from TCP, send to toAgent channel as data frames)
 	go func() {
 		defer sess.close()
-		buf := make([]byte, 16<<10)
+		buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
 				sess.touch()
 				b := make([]byte, n)
 				copy(b, buf[:n])
+				atomic.AddInt64(&bytesTransferred, int64(n))
 				select {
 				case sess.toAgent <- forwardFrame('d', b):
 				case <-sess.done:
@@ -411,6 +493,9 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 				select {
 				case sess.toAgent <- forwardFrame('c', nil):
 				case <-sess.done:
+				}
+				if err != io.EOF {
+					sess.closeWith(Tz("log.forward_reason_error"))
 				}
 				return
 			}
@@ -424,7 +509,9 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 			select {
 			case b := <-sess.toUser:
 				sess.touch()
+				atomic.AddInt64(&bytesTransferred, int64(len(b)))
 				if _, err := conn.Write(b); err != nil {
+					sess.closeWith(Tz("log.forward_reason_error"))
 					return
 				}
 			case <-sess.done:
@@ -434,6 +521,11 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 	}()
 
 	<-sess.done
+
+	// P3: log close reason + bytes transferred
+	s.forward.stats.addBytes(bytesTransferred)
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: rule.operator, Host: rule.hostname,
+		Message: Tz("log.forward_tcp_closed", rule.hostname, rule.targetPort, sess.getCloseReason())})
 }
 
 // ---- HTTP reverse proxy ----
@@ -442,14 +534,14 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 // HTTP service. The URL pattern is /proxy/{hostID}/{port}/{path...}.
 func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.ForwardEnabled() {
-		http.Error(w, "端口转发已被管理员禁用", http.StatusForbidden)
+		http.Error(w, Tr(r, "forward.disabled"), http.StatusForbidden)
 		return
 	}
 	hostID := r.PathValue("hostID")
 	portStr := r.PathValue("port")
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
-		http.Error(w, "无效的端口号", http.StatusBadRequest)
+		http.Error(w, Tr(r, "forward.invalid_port"), http.StatusBadRequest)
 		return
 	}
 	// look up hostname
@@ -466,23 +558,36 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		operator = user.Username
 	}
 
-	sess := s.forward.createSession("", hostID, hostname, port, "http", operator)
+	// P2: WebSocket upgrade detection — tunnel as raw TCP instead of HTTP
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		s.handleWSProxy(w, r, hostID, hostname, port, operator)
+		return
+	}
+
+	sess, err := s.forward.createSession("", hostID, hostname, port, "http", operator)
+	if err != nil {
+		http.Error(w, Tr(r, "forward.too_many_sessions"), http.StatusServiceUnavailable)
+		return
+	}
 	defer s.forward.removeSession(sess.id)
 	defer sess.close()
 
 	// notify agent
 	if !s.forward.notifyAgent(hostID, forwardWaitInfo{sessionID: sess.id, targetPort: port, mode: "http"}) {
-		http.Error(w, "Agent 未在线或未启用转发通道", http.StatusBadGateway)
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.agent_offline"), http.StatusBadGateway)
 		return
 	}
 	// wait for agent to attach
 	select {
 	case <-sess.agentUp:
 	case <-time.After(10 * time.Second):
-		http.Error(w, "Agent 接入超时", http.StatusGatewayTimeout)
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.agent_timeout"), http.StatusGatewayTimeout)
 		return
 	case <-sess.done:
-		http.Error(w, "转发会话已关闭", http.StatusBadGateway)
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.session_closed"), http.StatusBadGateway)
 		return
 	}
 
@@ -495,10 +600,13 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, path)
 	// set Host header to the target
 	fmt.Fprintf(&reqBuf, "Host: localhost:%d\r\n", port)
-	// copy selected headers
-	for _, h := range []string{"Content-Type", "Content-Length", "Accept", "Accept-Encoding", "Authorization", "Cookie", "User-Agent"} {
-		if v := r.Header.Get(h); v != "" {
-			fmt.Fprintf(&reqBuf, "%s: %s\r\n", h, v)
+	// P2: copy all headers EXCEPT hop-by-hop (blacklist approach, more complete than whitelist)
+	for k, vs := range r.Header {
+		if hopByHopHeaders[k] {
+			continue
+		}
+		for _, v := range vs {
+			fmt.Fprintf(&reqBuf, "%s: %s\r\n", k, v)
 		}
 	}
 	// add forwarding headers
@@ -506,9 +614,11 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&reqBuf, "X-Forwarded-Proto: %s\r\n", schemeOf(r))
 	fmt.Fprintf(&reqBuf, "X-Real-IP: %s\r\n", s.clientIP(r))
 	reqBuf.WriteString("\r\n")
-	// copy request body
+	// P0: copy request body with size limit (prevent OOM)
 	if r.Body != nil {
-		io.Copy(&reqBuf, r.Body)
+		limitedBody := io.LimitReader(r.Body, maxForwardBodySize)
+		n, _ := io.Copy(&reqBuf, limitedBody)
+		s.forward.stats.addBytes(n)
 	}
 
 	// send the request through the tunnel in chunks
@@ -522,7 +632,8 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		select {
 		case sess.toAgent <- forwardFrame('d', chunk):
 		case <-sess.done:
-			http.Error(w, "转发会话已断开", http.StatusBadGateway)
+			s.forward.stats.incError()
+			http.Error(w, Tr(r, "forward.session_disconnected"), http.StatusBadGateway)
 			return
 		}
 		data = data[len(chunk):]
@@ -548,24 +659,180 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	resp, err := http.ReadResponse(bufio.NewReader(pr), nil)
+	// P1: add timeout for reading upstream response
+	type readResult struct {
+		resp *http.Response
+		err  error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		resp, err := http.ReadResponse(bufio.NewReader(pr), nil)
+		resultCh <- readResult{resp, err}
+	}()
+
+	var resp *http.Response
+	select {
+	case res := <-resultCh:
+		resp, err = res.resp, res.err
+	case <-time.After(forwardReadTimeout):
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.agent_timeout"), http.StatusGatewayTimeout)
+		return
+	}
+
 	if err != nil {
-		http.Error(w, "无法解析上游响应: "+err.Error(), http.StatusBadGateway)
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.parse_response_failed", err.Error()), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	// copy response headers and body to the browser
 	for k, vs := range resp.Header {
+		if hopByHopHeaders[k] {
+			continue // P2: strip hop-by-hop from response too
+		}
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	n, _ := io.Copy(w, resp.Body)
+	s.forward.stats.addBytes(n)
 
-	s.store.AddLog(LogEntry{Kind: "操作", Level: "info", Actor: operator, Host: hostname,
-		Message: fmt.Sprintf("HTTP 代理 %s:%d %s %s → %d", hostname, port, r.Method, path, resp.StatusCode)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+		Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
+}
+
+// handleWSProxy tunnels a WebSocket upgrade request through the agent.
+// P2: WebSocket passthrough support.
+func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request, hostID, hostname string, port int, operator string) {
+	sess, err := s.forward.createSession("", hostID, hostname, port, "tcp", operator)
+	if err != nil {
+		http.Error(w, Tr(r, "forward.too_many_sessions"), http.StatusServiceUnavailable)
+		return
+	}
+	defer s.forward.removeSession(sess.id)
+	defer sess.close()
+
+	if !s.forward.notifyAgent(hostID, forwardWaitInfo{sessionID: sess.id, targetPort: port, mode: "tcp"}) {
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.agent_offline"), http.StatusBadGateway)
+		return
+	}
+	select {
+	case <-sess.agentUp:
+	case <-time.After(10 * time.Second):
+		s.forward.stats.incError()
+		http.Error(w, Tr(r, "forward.agent_timeout"), http.StatusGatewayTimeout)
+		return
+	case <-sess.done:
+		http.Error(w, Tr(r, "forward.session_closed"), http.StatusBadGateway)
+		return
+	}
+
+	// Construct the WebSocket upgrade request as raw HTTP
+	var reqBuf bytes.Buffer
+	path := "/" + r.PathValue("path")
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, path)
+	fmt.Fprintf(&reqBuf, "Host: localhost:%d\r\n", port)
+	for k, vs := range r.Header {
+		// Forward all headers including Upgrade, Connection, Sec-WebSocket-*
+		for _, v := range vs {
+			fmt.Fprintf(&reqBuf, "%s: %s\r\n", k, v)
+		}
+	}
+	reqBuf.WriteString("\r\n")
+
+	// Send the upgrade request through the tunnel
+	data := reqBuf.Bytes()
+	for len(data) > 0 {
+		chunk := data
+		if len(chunk) > 0xffff {
+			chunk = chunk[:0xffff]
+		}
+		sess.touch()
+		select {
+		case sess.toAgent <- forwardFrame('d', chunk):
+		case <-sess.done:
+			return
+		}
+		data = data[len(chunk):]
+	}
+
+	// Hijack the HTTP connection to get a raw bidirectional stream
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "WebSocket hijack not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, clientBuf, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer clientConn.Close()
+	if clientBuf != nil {
+		// flush any buffered data
+		if clientBuf.Reader.Buffered() > 0 {
+			extra := make([]byte, clientBuf.Reader.Buffered())
+			clientBuf.Read(extra)
+			select {
+			case sess.toAgent <- forwardFrame('d', extra):
+			case <-sess.done:
+			}
+		}
+	}
+
+	// Bidirectional relay: client → agent and agent → client
+	done := make(chan struct{}, 2)
+
+	// client → agent
+	go func() {
+		defer func() { done <- struct{}{} }()
+		buf := make([]byte, forwardReadBufSize)
+		for {
+			n, err := clientConn.Read(buf)
+			if n > 0 {
+				sess.touch()
+				b := make([]byte, n)
+				copy(b, buf[:n])
+				select {
+				case sess.toAgent <- forwardFrame('d', b):
+				case <-sess.done:
+					return
+				}
+			}
+			if err != nil {
+				select {
+				case sess.toAgent <- forwardFrame('c', nil):
+				case <-sess.done:
+				}
+				return
+			}
+		}
+	}()
+
+	// agent → client
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			select {
+			case b := <-sess.toUser:
+				sess.touch()
+				if _, err := clientConn.Write(b); err != nil {
+					return
+				}
+			case <-sess.done:
+				return
+			}
+		}
+	}()
+
+	<-done
+	sess.close()
 }
 
 // schemeOf returns the request scheme (http or https).
@@ -587,7 +854,7 @@ func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) 
 	}
 	host := r.URL.Query().Get("host")
 	if host == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.host_required")})
 		return
 	}
 	ch := s.forward.registerWaiter(host)
@@ -609,7 +876,7 @@ func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 	sess := s.forward.getSession(r.URL.Query().Get("session"))
 	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
 	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
@@ -635,7 +902,7 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 		case <-sess.done:
 			return
 		case <-r.Context().Done():
-			sess.close()
+			sess.closeWith(Tz("log.forward_reason_agent_down"))
 			return
 		}
 	}
@@ -646,7 +913,7 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 	sess := s.forward.getSession(r.URL.Query().Get("session"))
 	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session gone"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
 	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
@@ -655,12 +922,13 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.markAgentUp()
 	defer sess.close()
-	buf := make([]byte, 16<<10)
+	buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 	for {
 		n, err := r.Body.Read(buf)
 		if n > 0 {
 			b := make([]byte, n)
 			copy(b, buf[:n])
+			s.forward.stats.addBytes(int64(n))
 			select {
 			case sess.toUser <- b:
 			case <-sess.done:

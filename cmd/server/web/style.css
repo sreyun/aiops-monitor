@@ -1270,6 +1270,11 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
   0%,100%{opacity:1; transform:scale(1)}
   50%{opacity:.5; transform:scale(1.3)}
 }
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.spin{display:inline-block; vertical-align:middle}
+/* 按钮提交中状态 */
+.btn[disabled], .hamburger[disabled]{opacity:.55; pointer-events:none; cursor:wait}
+.btn[disabled] .spin{margin-right:4px}
 
 /* ============================================================
    P2-1: 前端模块化拆分后的兼容样式

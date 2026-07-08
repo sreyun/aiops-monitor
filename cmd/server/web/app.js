@@ -74,6 +74,27 @@ let ALERT_SEARCH = ""; // 告警主机搜索
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// withLoading: disable button + show spinner during async operation, prevent duplicate submits
+const _loadingBtns = new WeakSet();
+function withLoading(btnId, fn) {
+  const btn = typeof btnId === "string" ? $(btnId) : btnId;
+  if (!btn) return fn();
+  if (_loadingBtns.has(btn)) return Promise.resolve(); // already loading, skip
+  _loadingBtns.add(btn);
+  const orig = btn.innerHTML;
+  const origDisabled = btn.disabled;
+  btn.disabled = true;
+  btn.style.opacity = "0.6";
+  btn.style.pointerEvents = "none";
+  btn.innerHTML = '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;animation:spin .6s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+  return Promise.resolve(fn()).finally(() => {
+    btn.innerHTML = orig;
+    btn.disabled = origDisabled;
+    btn.style.opacity = "";
+    btn.style.pointerEvents = "";
+    _loadingBtns.delete(btn);
+  });
+}
 const fmtRate = b => b < 1024 ? b.toFixed(0) + " B/s"
   : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
   : (b / 1048576).toFixed(2) + " MB/s";
@@ -2196,18 +2217,22 @@ function collectSettings() {
   };
 }
 async function saveSettings() {
-  try {
-    const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
-    if (r.ok) { toast(I18N.t("toast.config_saved"), "ok"); $("settingsMask").classList.remove("show"); } else { toast(I18N.t("toast.save_failed"), "err"); }
-  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  await withLoading("saveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+      if (r.ok) { toast(I18N.t("toast.config_saved"), "ok"); $("settingsMask").classList.remove("show"); } else { toast(I18N.t("toast.save_failed"), "err"); }
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
 }
 async function testSettings() {
-  try {
-    const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
-    const j = await r.json();
-    if (j.ok) toast(I18N.t("toast.test_sent"), "ok");
-    else toast(I18N.t("toast.test_failed2") + (j.errors || []).join("; "), "err");
-  } catch (e) { toast(I18N.t("toast.test_failed2") + e, "err"); }
+  await withLoading("testBtn", async () => {
+    try {
+      const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+      const j = await r.json();
+      if (j.ok) toast(I18N.t("toast.test_sent"), "ok");
+      else toast(I18N.t("toast.test_failed2") + (j.errors || []).join("; "), "err");
+    } catch (e) { toast(I18N.t("toast.test_failed2") + e, "err"); }
+  });
 }
 
 /* ---------- 安装 Agent ---------- */
@@ -2589,11 +2614,13 @@ async function saveCheck() {
     enabled: $("ckEnabled").checked
   };
   if (!body.name || !body.target) { toast(I18N.t("valid.fill_name_target"), "err"); return; }
-  try {
-    const r = await fetch(`${API}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) { toast(I18N.t("toast.saved"), "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
-    else { const j = await r.json(); toast(I18N.t("toast.save_failed2") + (j.error || ""), "err"); }
-  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  await withLoading("ckSaveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) { toast(I18N.t("toast.saved"), "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
+      else { const j = await r.json(); toast(I18N.t("toast.save_failed2") + (j.error || ""), "err"); }
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
 }
 async function delCheck(id) {
   if (!confirm(I18N.t("valid.confirm_delete_check"))) return;
@@ -3469,39 +3496,40 @@ safeAddEventListener("loginForm", "submit", async e => {
   e.preventDefault();
   const loginErrEl = $("loginErr");
   if (loginErrEl) loginErrEl.textContent = "";
-  try {
-    const codeEl = $("loginCode");
-    const r = await fetch(`${API}/login`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: $("loginUser").value.trim(),
-        password: $("loginPass").value,
-        code: codeEl ? codeEl.value.trim() : ""
-      })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.mfa_required) {
-      // 密码正确，账户已启用两步验证：展开动态码输入框，等待第二因子
-      const f = $("loginCodeField"); if (f) f.style.display = "";
-      if (codeEl) codeEl.focus();
-      if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  await withLoading(submitBtn, async () => {
+    try {
+      const codeEl = $("loginCode");
+      const r = await fetch(`${API}/login`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: $("loginUser").value.trim(),
+          password: $("loginPass").value,
+          code: codeEl ? codeEl.value.trim() : ""
+        })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.mfa_required) {
+        const f = $("loginCodeField"); if (f) f.style.display = "";
+        if (codeEl) codeEl.focus();
+        if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
+      }
+      else if (r.ok && j.require_mfa_setup) {
+        openMfaSetup(true);
+      }
+      else if (r.ok) {
+        setUser(await fetch(`${API}/me`).then(x => x.json()));
+        const loginViewEl = $("loginView");
+        if (loginViewEl) loginViewEl.classList.remove("show");
+        startApp();
+      }
+      else {
+        if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
+      }
+    } catch (err) {
+      if (loginErrEl) loginErrEl.textContent = I18N.t("toast.login_failed2") + err;
     }
-    else if (r.ok && j.require_mfa_setup) {
-      // 全局 MFA 策略：密码正确但用户未绑定 MFA，强制进入绑定流程
-      openMfaSetup(true);
-    }
-    else if (r.ok) {
-      setUser(await fetch(`${API}/me`).then(x => x.json()));
-      const loginViewEl = $("loginView");
-      if (loginViewEl) loginViewEl.classList.remove("show");
-      startApp();
-    }
-    else {
-      if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
-    }
-  } catch (err) { 
-    if (loginErrEl) loginErrEl.textContent = I18N.t("toast.login_failed2") + err; 
-  }
+  });
 });
 
 /* ---------- 布局宽度：标准（默认）/ 宽屏，记忆到 localStorage ---------- */
@@ -3723,12 +3751,14 @@ async function savePlaybook() {
   const pb = collectPlaybook();
   if (!pb.name) { toast(I18N.t("valid.fill_playbook_name"), "err"); return; }
   if (pb.steps.length === 0) { toast(I18N.t("valid.need_step"), "err"); return; }
-  try {
-    const r = await fetch(`${API}/playbooks`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(pb) });
-    const j = await r.json().catch(()=>({}));
-    if (r.ok) { toast(I18N.t("toast.playbook_saved"), "ok"); $("playbookMask").classList.remove("show"); loadPlaybooks(); }
-    else toast(j.error || I18N.t("toast.save_failed"), "err");
-  } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  await withLoading("pbSaveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/playbooks`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(pb) });
+      const j = await r.json().catch(()=>({}));
+      if (r.ok) { toast(I18N.t("toast.playbook_saved"), "ok"); $("playbookMask").classList.remove("show"); loadPlaybooks(); }
+      else toast(j.error || I18N.t("toast.save_failed"), "err");
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
 }
 
 async function executePlaybook(id) {
@@ -3746,7 +3776,7 @@ async function executePlaybook(id) {
 
 async function pollExecution(execId, pbId) {
   $("execResultTitle").textContent = I18N.t("ui.running");
-  $("execResultBody").innerHTML = `<div class="empty-line">正在执行，请稍候…</div>`;
+  $("execResultBody").innerHTML = `<div class="empty-line">${I18N.t("ui.executing")}</div>`;
   $("execResultMask").classList.add("show");
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2000));
@@ -3968,8 +3998,8 @@ function renderForwards() {
         <div class="hint" style="margin-top:2px;">本地监听 <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} 个活跃连接</div>
       </div>
       <div style="display:flex; gap:8px; align-items:center;">
-        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title=I18N.t("ui.copy_addr")>复制</button>
-        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title=I18N.t("ui.close_forward")>关闭</button>
+        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title=I18N.t("ui.copy_addr")>${I18N.t("ui.copy_addr")}</button>
+        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title=I18N.t("ui.close_forward")>${I18N.t("ui.close_forward")}</button>
       </div>
     </div>
   `).join("");
@@ -3983,27 +4013,29 @@ async function createForward() {
     toast(I18N.t("valid.fill_target_port"), "err");
     return;
   }
-  try {
-    const res = await fetch("/api/v1/forward", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast(err.error || I18N.t("toast.create_failed"), "err");
-      return;
+  await withLoading("createForwardBtn", async () => {
+    try {
+      const res = await fetch("/api/v1/forward", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || I18N.t("toast.create_failed"), "err");
+        return;
+      }
+      const result = await res.json();
+      toast(I18N.t("toast.forward_created") + result.listen_addr, "ok");
+      $("forwardForm").style.display = "none";
+      $("forwardTargetPort").value = "";
+      $("forwardLocalPort").value = "";
+      loadForwards();
+    } catch(e) {
+      toast(I18N.t("toast.network_error2"), "err");
     }
-    const result = await res.json();
-    toast(`转发已创建：${result.listen_addr}`, "ok");
-    $("forwardForm").style.display = "none";
-    $("forwardTargetPort").value = "";
-    $("forwardLocalPort").value = "";
-    loadForwards();
-  } catch(e) {
-    toast(I18N.t("toast.network_error2"), "err");
-  }
+  });
 }
 
 async function deleteForward(id) {

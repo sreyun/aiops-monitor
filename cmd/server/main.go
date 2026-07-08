@@ -85,7 +85,8 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 // maxBodyBytes caps request bodies to blunt memory-exhaustion via oversized
 // JSON. Reports (metrics + up to 256 process names + disks + GPUs) fit easily.
-const maxBodyBytes = 2 << 20 // 2 MiB
+// Forwarding proxy requests need a larger limit (up to 100MB for file uploads).
+const maxBodyBytes = 100 << 20 // 100 MiB
 
 // bodyLimitMiddleware wraps every request body in a MaxBytesReader so a
 // malicious or buggy client can't stream an unbounded payload into memory.
