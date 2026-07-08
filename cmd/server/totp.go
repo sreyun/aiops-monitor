@@ -73,13 +73,18 @@ func totpVerify(secret, code string) bool {
 
 // otpauthURL builds the provisioning URI ("otpauth://totp/…") that the enrollment
 // QR encodes and that authenticator apps import.
+//
+// The label is "issuer:account" with each part percent-encoded separately so the
+// colon delimiter stays literal (some authenticator apps don't decode %3A).
+// Spaces in query parameters are encoded as %20 (not "+") for maximum
+// compatibility — older Google Authenticator builds don't decode "+" as space.
 func otpauthURL(account, secret string) string {
-	label := url.PathEscape(totpIssuer + ":" + account)
+	label := url.PathEscape(totpIssuer) + ":" + url.PathEscape(account)
 	q := url.Values{}
 	q.Set("secret", secret)
 	q.Set("issuer", totpIssuer)
 	q.Set("algorithm", "SHA1")
 	q.Set("digits", fmt.Sprintf("%d", totpDigits))
 	q.Set("period", fmt.Sprintf("%d", totpPeriod))
-	return "otpauth://totp/" + label + "?" + q.Encode()
+	return strings.ReplaceAll("otpauth://totp/"+label+"?"+q.Encode(), "+", "%20")
 }

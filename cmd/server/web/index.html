@@ -586,7 +586,10 @@
           <span id="mfaState" class="mfa-state">加载中…</span>
           <div class="mfa-desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
         </div>
-        <button class="btn" type="button" id="mfaToggleBtn">—</button>
+        <label class="mfa-switch" title="启用/关闭两步验证">
+          <input type="checkbox" id="mfaToggleChk">
+          <span class="mfa-track"><span class="mfa-thumb"></span></span>
+        </label>
       </div>
     </div>
     <div class="modal-foot">

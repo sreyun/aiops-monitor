@@ -1978,9 +1978,9 @@ async function changePassword() {
 let MFA_ENABLED = false;
 function renderMfaState(enabled) {
   MFA_ENABLED = enabled;
-  const st = $("mfaState"), btn = $("mfaToggleBtn");
+  const st = $("mfaState"), chk = $("mfaToggleChk");
   if (st) { st.textContent = enabled ? "已启用" : "未启用"; st.className = "mfa-state " + (enabled ? "on" : "off"); }
-  if (btn) { btn.textContent = enabled ? "关闭" : "启用"; btn.className = "btn sm " + (enabled ? "danger" : "primary"); }
+  if (chk) { chk.checked = enabled; }
 }
 async function openMfaSetup() {
   const body = $("mfaBody");
@@ -2002,7 +2002,7 @@ async function openMfaSetup() {
     <div class="field"><label>动态验证码</label><input type="text" id="mfaCode" inputmode="numeric" maxlength="6" placeholder="6 位口令" autocomplete="one-time-code"></div>
     <div class="login-err" id="mfaErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="mfaConfirm" type="button">确认启用</button></div>`;
-  const cv = drawQR(uri, 176);
+  const cv = drawQR(uri, 240);
   if (cv) $("mfaQr").appendChild(cv);
   else $("mfaQr").innerHTML = `<div class="mfa-desc">二维码不可用，请在应用中手动输入上方密钥。</div>`;
   $("mfaCopy").onclick = () => { try { navigator.clipboard.writeText(secret); toast("密钥已复制", "ok"); } catch (_) { } };
@@ -2295,12 +2295,33 @@ function qrCanvas(text, sizePx) {
     // 左上：竖列 (0..5,8),(7,8) 与 横行 (8,7),(8,5..0)  ；含 (8,8)
     let k = 0;
     for (let i = 0; i <= 5; i++) g[8][i] = a[k++]; g[8][7] = a[k++]; g[8][8] = a[k++]; g[7][8] = a[k++]; for (let i = 5; i >= 0; i--) g[i][8] = a[k++];
-    // 第二份：左下竖列 (N-1..N-7,8)=bit14..8（须跳过 dark module (N-8,8)，不能覆盖）+ 右上横行 (8,N-8..N-1)=bit7..0
-    for (let i = 0; i < 7; i++) g[N - 1 - i][8] = a[i];
-    for (let i = 0; i < 8; i++) g[8][N - 8 + i] = a[7 + i];
+    // 第二份格式信息：左下竖列 (N-1..N-7,8) = bit0..6（从下往上递增）
+    //                 + 右上横行 (8,N-8..N-1) = bit7..14（从左往右递增）
+    // 注意：bit 序方向与第一份不同——第一份从 MSB(bit14) 开始，第二份从 LSB(bit0) 开始。
+    // 须跳过 dark module (N-8,8)，不能覆盖。
+    for (let i = 0; i < 7; i++) g[N - 1 - i][8] = a[14 - i]; // a[14]=bit0 → (N-1,8), ..., a[8]=bit6 → (N-7,8)
+    for (let i = 0; i < 8; i++) g[8][N - 8 + i] = a[7 - i];  // a[7]=bit7 → (8,N-8), ..., a[0]=bit14 → (8,N-1)
     return g;
   }
-  function penalty(g) { let p = 0; for (let r = 0; r < N; r++) { let cnt = 1; for (let c = 1; c <= N; c++) { if (c < N && g[r][c] === g[r][c - 1]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } } for (let c = 0; c < N; c++) { let cnt = 1; for (let r = 1; r <= N; r++) { if (r < N && g[r][c] === g[r - 1][c]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } } return p; }
+  function penalty(g) {
+    let p = 0;
+    // N1: runs of 5+ same-color modules in a row/column
+    for (let r = 0; r < N; r++) { let cnt = 1; for (let c = 1; c <= N; c++) { if (c < N && g[r][c] === g[r][c - 1]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } }
+    for (let c = 0; c < N; c++) { let cnt = 1; for (let r = 1; r <= N; r++) { if (r < N && g[r][c] === g[r - 1][c]) cnt++; else { if (cnt >= 5) p += 3 + (cnt - 5); cnt = 1; } } }
+    // N2: 2×2 blocks of same color → 3 points each
+    for (let r = 0; r < N - 1; r++) for (let c = 0; c < N - 1; c++) {
+      if (g[r][c] === g[r][c+1] && g[r][c] === g[r+1][c] && g[r][c] === g[r+1][c+1]) p += 3;
+    }
+    // N3: finder-like patterns (1011101 with 4+ light on either side) → 40 points each
+    const fp = [1,0,1,1,1,0,1,0]; const fp2 = [0,1,0,1,1,1,0,1]; // 0001011101 / 1011101000 per ISO/IEC 18004 §8.8.2
+    const match = (line, pat) => { let m = 0; for (let i = 0; i + pat.length <= line.length; i++) { let ok = true; for (let j = 0; j < pat.length; j++) if (line[i+j] !== pat[j]) { ok = false; break; } if (ok) m++; } return m; };
+    for (let r = 0; r < N; r++) { const row = g[r]; p += match(row, fp) * 40; p += match(row, fp2) * 40; }
+    for (let c = 0; c < N; c++) { const col = []; for (let r = 0; r < N; r++) col.push(g[r][c]); p += match(col, fp) * 40; p += match(col, fp2) * 40; }
+    // N4: dark/light ratio → 10 * floor(|dark% - 50| / 5)
+    let dark = 0; for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (g[r][c]) dark++;
+    const ratio = dark * 100 / (N * N); p += 10 * Math.floor(Math.abs(ratio - 50) / 5);
+    return p;
+  }
   let best = null, bp = Infinity; for (let m = 0; m < 8; m++) { const g = render(m); const p = penalty(g); if (p < bp) { bp = p; best = g; } }
   const quiet = 4, scale = Math.max(2, Math.floor(sizePx / (N + quiet * 2))), dim = (N + quiet * 2) * scale;
   const cv = document.createElement("canvas"); cv.width = dim; cv.height = dim; cv.style.width = cv.style.height = dim + "px"; cv.className = "qr-canvas";
@@ -2771,7 +2792,11 @@ safeAddEventListener("usersList", "click", async e => {
 });
 safeAddEventListener("pfSaveBtn", "click", saveProfile);
 safeAddEventListener("pfPwdBtn", "click", changePassword);
-safeAddEventListener("mfaToggleBtn", "click", () => { MFA_ENABLED ? openMfaDisable() : openMfaSetup(); });
+safeAddEventListener("mfaToggleChk", "change", () => {
+  const chk = $("mfaToggleChk");
+  if (chk) chk.checked = MFA_ENABLED; // revert immediately; renderMfaState will update on success
+  MFA_ENABLED ? openMfaDisable() : openMfaSetup();
+});
 safeAddEventListener("logoutBtn", "click", logout);
 // 登录页找回入口
 safeAddEventListener("forgotUserLink", "click", openRecoverUser);
