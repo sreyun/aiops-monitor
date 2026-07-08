@@ -184,7 +184,6 @@ body{
 
 .btn.ghost{ background:transparent; border-color:transparent; color:var(--muted); font-size:15px; padding:6px 9px }
 .btn.ghost:hover{ background:var(--panel2); color:var(--txt); border-color:transparent }
-.btn.icon{ padding:8px 14px }
 
 .pulse{width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft); animation:pulse 2.4s ease-in-out infinite}
 .pulse.off{background:var(--crit); box-shadow:0 0 0 3px var(--crit-soft)}
@@ -193,19 +192,50 @@ body{
 /* ---------- 主内容 ---------- */
 .main{min-width:0; display:flex; flex-direction:column}
 .topbar{
-  position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-  padding:12px 24px; min-height:60px; border-bottom:1px solid var(--line);
+  position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:10px 20px; min-height:52px; border-bottom:1px solid var(--line);
   background:var(--topbar-bg,rgba(10,13,19,.85)); backdrop-filter:var(--blur);
 }
-.hamburger{display:flex; background:transparent; border:1px solid var(--line2); border-radius:var(--r-sm);
-  width:34px; height:34px; align-items:center; justify-content:center; cursor:pointer; color:var(--muted);
-  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
-.hamburger:hover{border-color:var(--hover-border); background:var(--panel2); color:var(--txt)}
-.hamburger svg{width:18px; height:18px}
-/* 页面头：标题 + 副标题（区别于侧栏导航项，避免“标题回显导航”的重复感） */
-.page-head{display:flex; flex-direction:column; gap:1px; min-width:0}
-.page-title{font-size:16px; font-weight:650; letter-spacing:.2px; line-height:1.25}
-.page-sub{font-size:11.5px; color:var(--muted); line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+/* 顶栏图标按钮 — 32×32 紧凑无边框，悬停浅底 */
+.tb-icon{
+  display:flex; align-items:center; justify-content:center;
+  width:32px; height:32px; flex:none;
+  background:transparent; border:none; border-radius:var(--r-sm);
+  cursor:pointer; color:var(--muted); padding:0;
+  transition:background .15s ease, color .15s ease;
+}
+.tb-icon:hover{background:var(--panel2); color:var(--txt)}
+.tb-icon:active{background:var(--panel3)}
+.tb-icon.active{background:var(--warn-soft); color:var(--warn)}
+.tb-icon svg{width:18px; height:18px}
+/* 顶栏操作按钮 — 图标+文字紧凑样式 */
+.tb-action{
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--accent); border:none; border-radius:var(--r-sm);
+  color:#fff; padding:6px 14px; cursor:pointer;
+  font-size:13px; font-weight:500; font-family:inherit; white-space:nowrap;
+  transition:background .15s ease;
+}
+.tb-action:hover{background:var(--accent-hover)}
+.tb-action:active{background:#3f79e6}
+.tb-action svg{width:15px; height:15px}
+/* 顶栏头像按钮 */
+.tb-avatar{
+  display:flex; align-items:center; justify-content:center;
+  background:transparent; border:none; cursor:pointer; padding:0; flex:none;
+}
+.tb-avatar .avatar{
+  width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-weight:700; font-size:12px; text-transform:uppercase;
+  transition:box-shadow .15s ease;
+}
+.tb-avatar:hover .avatar{box-shadow:0 0 0 2px var(--accent-soft)}
+/* 顶栏右侧工具组 */
+.tb-right{display:flex; align-items:center; gap:6px; flex:none}
+/* 页面头 */
+.page-head{display:flex; flex-direction:column; gap:1px; min-width:0; margin-right:4px}
+.page-title{font-size:15px; font-weight:600; letter-spacing:.2px; line-height:1.25}
+.page-sub{font-size:11px; color:var(--muted); line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .spacer{flex:1}
 .select-wrap{position:relative}
 select{
@@ -472,17 +502,44 @@ svg.sparkline{width:100%; height:46px; display:block}
 .app.collapsed .btn.block{justify-content:center; padding:10px 0}
 .app.collapsed .side-status{justify-content:center}
 
-/* ---------- 侧栏用户区 ---------- */
-.side-user{display:flex; align-items:center; gap:10px; width:100%; background:var(--panel2);
-  border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px; cursor:pointer; color:var(--txt);
-  font-family:inherit; transition:border-color var(--transition-fast), background var(--transition-fast)}
-.side-user:hover{border-color:var(--hover-border); background:var(--panel3)}
-.side-user .avatar{width:26px; height:26px; border-radius:7px; flex:none; display:flex; align-items:center; justify-content:center;
-  background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-weight:700; font-size:12px; text-transform:uppercase}
-.side-user .uname{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.side-user svg{width:15px; height:15px; margin-left:auto; color:var(--muted); flex:none}
-.app.collapsed .side-user{justify-content:center; padding:8px 0}
-.app.collapsed .side-user .uname, .app.collapsed .side-user svg{display:none}
+/* ---------- 顶栏用户菜单 ---------- */
+.topbar-user-wrap{position:relative; flex:none}
+
+/* 下拉面板 */
+.user-dropdown{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:200;
+  width:260px; background:var(--panel); border:1px solid var(--line2);
+  border-radius:var(--r); box-shadow:0 8px 32px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.10);
+  opacity:0; visibility:hidden; transform:translateY(-8px) scale(.97);
+  transition:opacity .18s ease, transform .18s ease, visibility .18s ease;
+  padding:6px;
+}
+.topbar-user-wrap.open .user-dropdown{opacity:1; visibility:visible; transform:translateY(0) scale(1)}
+
+.user-dropdown-header{display:flex; align-items:center; gap:10px; padding:10px 8px; border-bottom:1px solid var(--line); margin-bottom:4px}
+.user-dropdown-info{display:flex; flex-direction:column; gap:1px; min-width:0}
+.user-dropdown-name{font-size:14px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.user-dropdown-role{font-size:11px; color:var(--muted)}
+
+.user-dropdown-item{
+  display:flex; align-items:center; gap:10px; width:100%; padding:9px 10px;
+  background:none; border:none; border-radius:var(--r-sm); cursor:pointer;
+  color:var(--txt); font-family:inherit; font-size:13px; text-align:left;
+  transition:background var(--transition-fast), color var(--transition-fast);
+}
+.user-dropdown-item:hover{background:var(--panel2); color:var(--txt)}
+.user-dropdown-item svg{width:16px; height:16px; color:var(--muted); flex:none}
+.user-dropdown-item.danger{color:var(--crit-txt)}
+.user-dropdown-item.danger svg{color:var(--crit-txt)}
+.user-dropdown-item.danger:hover{background:var(--crit-soft)}
+.user-dropdown-item.active-lang{color:var(--accent-txt); font-weight:600}
+.user-dropdown-item.active-lang svg{color:var(--accent)}
+
+.user-dropdown-sep{height:1px; background:var(--line); margin:4px 0}
+
+@media(max-width:600px){
+  .user-dropdown{width:220px}
+}
 
 /* ---------- 搜索 / 分页 ---------- */
 .search{margin-left:auto; font-family:inherit; font-size:13px; color:var(--txt); background:var(--panel2);
@@ -632,7 +689,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .offline-tag{color:var(--crit-txt); font-weight:600}
 .stale-tag{color:var(--warn); font-weight:600}
 .pulse.paused{background:var(--warn); box-shadow:0 0 0 3px var(--warn-soft); animation:none}
-.hamburger.active{background:var(--warn-soft); border-color:rgba(232,161,60,.4); color:var(--warn)}
+.tb-icon.active{background:var(--warn-soft); color:var(--warn)}
 
 /* P1-#8: Keyboard focus-visible */
 .host:focus-visible, .row-item:focus-visible, .check-card:focus-visible, .top-item:focus-visible {
@@ -714,7 +771,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   background:var(--panel); border-radius:0 0 var(--r-lg) var(--r-lg); letter-spacing:.01em}
 #termMask.maximized .term-hint{border-radius:0}
 /* 图标按钮统一的按压反馈，提升一致的触感 */
-.hamburger:active, .term-ctl:active, .vt-btn:active, .mini-btn:active, .chart-enlarge:active{transform:translateY(1px)}
+.tb-icon:active, .tb-action:active, .term-ctl:active, .vt-btn:active, .mini-btn:active, .chart-enlarge:active{transform:translateY(1px)}
 /* 主机卡片·终端按钮 */
 .term-btn{width:24px; height:24px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; flex:none;
@@ -965,7 +1022,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .sidebar{position:fixed; left:0; top:0; width:var(--sidew); transform:translateX(-100%); transition:transform .22s ease}
   .app.nav-open .sidebar{transform:none; box-shadow:var(--shadow-xl)}
   .app.nav-open .backdrop{display:block; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:55; backdrop-filter:var(--blur-sm)}
-  .hamburger{display:flex}
+  .tb-icon{display:flex}
   .content{padding:16px 16px 40px}
   .topbar{padding:10px 16px}
   .search{width:200px; max-width:40vw}
@@ -1002,8 +1059,6 @@ svg.sparkline{width:100%; height:46px; display:block}
   .grid2{grid-template-columns:1fr}
   .search{width:100%; max-width:none; margin-left:0; padding:10px 14px}
   .page-sub{display:none}
-  #installBtn .ib-label{display:none}
-  #installBtn{padding:8px 11px}
   /* 列表视图：窄屏换行布局 */
   .host.hrow{flex-wrap:wrap; gap:8px; padding:10px 14px}
   .hrow-id{width:100%; flex:1 1 100%}
@@ -1012,7 +1067,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .hrow-last{width:auto; flex:1}
   .hrow-actions{opacity:1; margin-left:auto}
   /* 触摸优化：最小 44px（Apple HIG） */
-  .btn, .hamburger, .chip-btn{min-height:var(--touch-min); padding:10px 16px}
+  .btn, .tb-icon, .tb-action, .chip-btn{min-height:var(--touch-min); padding:10px 16px}
   .vt-btn{width:40px; height:40px}
   .mini-btn{width:var(--touch-min); height:var(--touch-min)}
   .term-btn{width:var(--touch-min); height:var(--touch-min)}
@@ -1115,58 +1170,8 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
 .btn.sm{padding:5px 12px; font-size:13px}
 
 /* ============================================================
-   P1-1: 主题切换按钮
+   P1-1: 主题切换全局过渡（颜色平滑变化，避免闪屏）
    ============================================================ */
-.theme-toggle{
-  display:flex; align-items:center; gap:6px; cursor:pointer;
-  background:var(--panel2); border:1px solid var(--line2);
-  border-radius:var(--r-sm); padding:6px 10px;
-  font-size:12px; color:var(--muted); transition:all var(--transition-fast);
-}
-.theme-toggle:hover{border-color:var(--hover-border); color:var(--txt2)}
-.theme-toggle:active{transform:scale(.94); background:var(--panel3)}
-.theme-toggle svg{width:14px; height:14px}
-
-/* ---- 移动端顶栏主题切换按钮 ---- */
-.topbar-theme-btn{
-  display:none; /* 桌面隐藏，移动端显示 */
-}
-/* 平板及手机（≤900px）：侧栏变抽屉，顶栏显示主题按钮 */
-@media(max-width:900px){
-  .topbar-theme-btn{
-    display:flex; align-items:center; justify-content:center;
-    width:var(--touch-min); height:var(--touch-min);
-    background:var(--panel2); border:1px solid var(--line2);
-    border-radius:var(--r-sm); cursor:pointer;
-    color:var(--muted); flex:none;
-    transition:all var(--transition-fast);
-    -webkit-tap-highlight-color:transparent;
-  }
-  .topbar-theme-btn:active{
-    transform:scale(.9); background:var(--panel3);
-    border-color:var(--accent);
-  }
-  .topbar-theme-btn svg{width:20px; height:20px}
-  /* 侧栏内的主题按钮在移动端隐藏（避免重复） */
-  .sidebar .theme-toggle{display:none}
-}
-/* 手机竖屏（≤480px）：确保触控热区 */
-@media(max-width:480px){
-  .topbar-theme-btn{
-    width:var(--touch-min); height:var(--touch-min);
-    min-width:var(--touch-min); min-height:var(--touch-min);
-  }
-  /* 语言切换器避开顶栏区域 */
-  #lang-switcher{
-    top:auto !important; bottom:max(12px, env(safe-area-inset-bottom)) !important;
-    right:max(12px, env(safe-area-inset-right)) !important;
-  }
-}
-/* 折叠屏：内屏宽度时顶栏按钮保持可用 */
-@media(max-width:480px) and (orientation:portrait){
-  .topbar-theme-btn{margin-right:4px}
-}
-/* 主题切换全局过渡（颜色平滑变化，避免闪屏） */
 :root{
   color-scheme:dark;
 }
@@ -1283,7 +1288,7 @@ select:focus-visible, input:focus-visible, .pager button:focus-visible{
 @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 .spin{display:inline-block; vertical-align:middle}
 /* 按钮提交中状态 */
-.btn[disabled], .hamburger[disabled]{opacity:.55; pointer-events:none; cursor:wait}
+.btn[disabled], .tb-icon[disabled], .tb-action[disabled]{opacity:.55; pointer-events:none; cursor:wait}
 .btn[disabled] .spin{margin-right:4px}
 
 /* ============================================================

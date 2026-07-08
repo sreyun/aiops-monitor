@@ -179,37 +179,14 @@ function toggleTheme() {
   localStorage.setItem("aiops_theme", next);
   syncThemeIcons(next);
 }
-/* 同步所有主题图标（下拉菜单 + 旧按钮兜底） */
+/* 同步当前主题图标 */
 function syncThemeIcons(theme) {
-  // 下拉菜单中的主题图标
   const ddDark = document.querySelector(".user-dropdown .icon-theme-dark");
   const ddLight = document.querySelector(".user-dropdown .icon-theme-light");
   if (ddDark && ddLight) {
     ddDark.style.display = theme === "dark" ? "" : "none";
     ddLight.style.display = theme === "light" ? "" : "none";
   }
-  // 旧按钮兜底（兼容已移除的元素）
-  const topbarBtn = $("topbarThemeBtn");
-  if (topbarBtn) {
-    const di = topbarBtn.querySelector(".icon-dark"), li = topbarBtn.querySelector(".icon-light");
-    if (di && li) { di.style.display = theme === "dark" ? "" : "none"; li.style.display = theme === "light" ? "" : "none"; }
-  }
-  updateDropdownThemeLabel();
-}
-/* 更新下拉菜单主题标签文字 */
-function updateDropdownThemeLabel() {
-  const label = $("ddThemeLabel");
-  if (!label) return;
-  const cur = document.documentElement.getAttribute("data-theme") || "dark";
-  label.textContent = cur === "dark" ? "切换为浅色主题" : "切换为深色主题";
-}
-/* 高亮当前语言选项 */
-function updateDropdownLangActive() {
-  var curLang = "zh-CN";
-  try { curLang = (typeof I18N !== "undefined" && I18N.getLang) ? I18N.getLang() : (localStorage.getItem("aiops_lang") || "zh-CN"); } catch(e) {}
-  document.querySelectorAll(".user-dropdown-item[data-lang]").forEach(function(el) {
-    el.classList.toggle("active-lang", el.dataset.lang === curLang);
-  });
 }
 
 /* ============================================================
@@ -3162,8 +3139,8 @@ function toggleCatCollapse(cat) {
   try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
 }
 function renderCatDropdown(cats) {
-  const wrap = $("catDropdownWrap") ? $("catDropdownWrap").parentElement : (document.querySelector("#catFilter") ? document.querySelector("#catFilter").parentElement : null);
-  if (!wrap) { console.warn("catFilter parent not found"); return; }
+  const wrap = $("catDropdownWrap") ? $("catDropdownWrap").parentElement : null;
+  if (!wrap) return; // 分类筛选已移除
   if (wrap.querySelector(".cat-dropdown")) {
     // Update options in existing dropdown
     updateCatDropdownOptions(cats);
@@ -3285,9 +3262,8 @@ function safeAddEventListener(id, event, handler) {
   }
 }
 
-safeAddEventListener("settingsBtn", "click", openSettings);
-safeAddEventListener("themeToggle", "click", toggleTheme);
-safeAddEventListener("topbarThemeBtn", "click", toggleTheme);
+// 注：settingsBtn / themeToggle / topbarThemeBtn 已移入右上角用户下拉菜单
+// 侧栏菜单
 safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
@@ -3528,10 +3504,6 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   });
   // 主题切换
   safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
-  // 语言切换
-  safeAddEventListener("ddLangZh", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("zh-CN"); } wrap.classList.remove("open"); });
-  safeAddEventListener("ddLangTw", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("zh-TW"); } wrap.classList.remove("open"); });
-  safeAddEventListener("ddLangEn", "click", function() { if (typeof I18N !== "undefined" && I18N.setLang) { I18N.setLang("en"); } wrap.classList.remove("open"); });
   // 告警设置
   safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
   // 个人信息
@@ -3539,9 +3511,6 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   // 退出登录
   safeAddEventListener("ddLogout", "click", function() { logout(); wrap.classList.remove("open"); });
   // 初始化主题标签
-  updateDropdownThemeLabel();
-  // 高亮当前语言
-  updateDropdownLangActive();
 })();
 // 旧的 profileBtn 直接打开个人信息 — 已被上面的下拉菜单替代
 safeAddEventListener("usersBtn", "click", openUsers);
@@ -3622,20 +3591,7 @@ safeAddEventListener("loginForm", "submit", async e => {
   });
 });
 
-/* ---------- 布局宽度：标准（默认）/ 宽屏，记忆到 localStorage ---------- */
-function widePref() { try { return localStorage.getItem("aiops_wide") === "1"; } catch (e) { return false; } }
-function applyWidthMode() {
-  const wide = widePref();
-  const app = $("app"); if (app) app.classList.toggle("wide", wide);
-  const btn = $("widthBtn");
-  if (btn) { btn.classList.toggle("active", wide); btn.title = wide ? I18N.t("misc.layout_wide") : I18N.t("misc.layout_standard"); }
-}
-safeAddEventListener("widthBtn", "click", () => {
-  const wide = widePref();
-  try { localStorage.setItem("aiops_wide", wide ? "0" : "1"); } catch (e) {}
-  applyWidthMode();
-  toast(wide ? I18N.t("toast.standard_layout") : I18N.t("toast.wide_layout"), "ok");
-});
+/* ---------- 布局宽度切换（已移除，由默认值控制） ---------- */
 
 /* ---------- 自定义监控视图切换（列表 / 胶囊） ---------- */
 safeAddEventListener("checkViewToggle", "click", e => {
