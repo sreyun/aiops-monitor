@@ -109,6 +109,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/http-proxy", s.handleHTTPProxyList)
 	mux.HandleFunc("POST /api/v1/http-proxy", s.handleHTTPProxyCreate)
 	mux.HandleFunc("DELETE /api/v1/http-proxy/{id}", s.handleHTTPProxyDelete)
+	// HTTP proxy auth token for window.open() scenarios
+	mux.HandleFunc("GET /api/v1/proxy-token", s.handleProxyToken)
 	// HTTP proxy: support all methods (GET/POST/PUT/DELETE/PATCH)
 	mux.HandleFunc("GET /proxy/{hostID}/{port}/{path...}", s.handleHTTPProxy)
 	mux.HandleFunc("POST /proxy/{hostID}/{port}/{path...}", s.handleHTTPProxy)

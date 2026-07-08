@@ -151,6 +151,15 @@ func (s *Server) handleHTTPProxyCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
+// handleProxyToken generates a short-lived, single-use token for
+// authenticating HTTP proxy requests opened via window.open().
+// GET /api/v1/proxy-token
+func (s *Server) handleProxyToken(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	tok := s.auth.generateProxyToken(user.Username)
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
 // handleHTTPProxyDelete deletes an HTTP proxy shortcut.
 // DELETE /api/v1/http-proxy/{id}
 func (s *Server) handleHTTPProxyDelete(w http.ResponseWriter, r *http.Request) {

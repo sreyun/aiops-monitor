@@ -39,6 +39,9 @@ type Auth struct {
 	sessions map[string]session
 	dirty    bool
 
+	proxyTokens   map[string]proxyToken // ephemeral tokens for HTTP proxy auth
+	proxyTokenMu  sync.Mutex
+
 	limMu    sync.Mutex
 	loginHit map[string][]int64 // client ip -> recent FAILED attempt unix times
 }
@@ -46,10 +49,37 @@ type Auth struct {
 const (
 	loginWindowSec   = 300 // sliding window for brute-force throttling
 	loginMaxFailures = 8   // max failed attempts per IP per window
+	proxyTokenTTL    = 60 * time.Second // HTTP proxy token lifetime
 )
 
+type proxyToken struct {
+	user    string
+	expires time.Time
+}
+
+// generateProxyToken creates a short-lived token for HTTP proxy URL auth.
+func (a *Auth) generateProxyToken(user string) string {
+	tok := newSessionToken()
+	a.proxyTokenMu.Lock()
+	a.proxyTokens[tok] = proxyToken{user: user, expires: time.Now().Add(proxyTokenTTL)}
+	a.proxyTokenMu.Unlock()
+	return tok
+}
+
+// validateProxyToken returns the username if the token is valid, or empty string.
+func (a *Auth) validateProxyToken(tok string) string {
+	a.proxyTokenMu.Lock()
+	pt, ok := a.proxyTokens[tok]
+	delete(a.proxyTokens, tok) // single-use
+	a.proxyTokenMu.Unlock()
+	if !ok || time.Now().After(pt.expires) {
+		return ""
+	}
+	return pt.user
+}
+
 func NewAuth(cfg *ConfigStore) *Auth {
-	return &Auth{cfg: cfg, sessions: map[string]session{}, loginHit: map[string][]int64{}}
+	return &Auth{cfg: cfg, sessions: map[string]session{}, proxyTokens: map[string]proxyToken{}, loginHit: map[string][]int64{}}
 }
 
 // loginAllowed reports whether ip is under the failed-attempt threshold. It also
@@ -351,6 +381,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if isPublicPath(r) {
 			next.ServeHTTP(w, r)
 			return
+		}
+		// HTTP proxy token auth: allows window.open in new tab without relying on
+		// the session cookie (which may not be sent cross-context in some browsers).
+		if strings.HasPrefix(r.URL.Path, "/proxy/") {
+			if tok := r.URL.Query().Get("pt"); tok != "" {
+				if s.auth.validateProxyToken(tok) != "" {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
 		}
 		name := s.auth.userForRequest(r)
 		if name == "" {

@@ -4068,7 +4068,7 @@ function renderForwards() {
           <div class="hint" style="margin-top:2px;">${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn primary" onclick="window.open('${proxyUrl}', '_blank')">${I18N.t("ui.open")}</button>
+          <button class="btn primary" onclick="openProxyUrl('${proxyUrl}')">${I18N.t("ui.open")}</button>
           <button class="btn ghost" onclick="deleteHttpProxy('${esc(p.id)}')">${I18N.t("ui.delete")}</button>
         </div>
       </div>
@@ -4135,9 +4135,24 @@ async function createTcpForward(hostID, targetPort) {
 
 function openHttpProxy(hostID, targetPort) {
   const path = $("fwdHttpPath")?.value || "";
-  const url = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(targetPort)}/${path.replace(/^\//, "")}`;
-  window.open(url, "_blank");
+  const baseUrl = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(targetPort)}/${path.replace(/^\//, "")}`;
+  openProxyUrl(baseUrl);
   closeForwardModal();
+}
+
+// openProxyUrl fetches a single-use proxy auth token, appends it to the
+// URL, and opens the result in a new tab. This avoids the "unauthorized"
+// error when the browser does not send the session cookie cross-context.
+async function openProxyUrl(baseUrl) {
+  try {
+    const res = await fetch("/api/v1/proxy-token", { credentials: "include" });
+    if (!res.ok) { toast(I18N.t("toast.network_error2"), "err"); return; }
+    const data = await res.json();
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    window.open(baseUrl + sep + "pt=" + encodeURIComponent(data.token), "_blank");
+  } catch(e) {
+    toast(I18N.t("toast.network_error2"), "err");
+  }
 }
 
 async function saveHttpProxy() {
