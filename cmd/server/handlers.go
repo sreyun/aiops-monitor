@@ -103,6 +103,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/forward", s.handleForwardList)
 	mux.HandleFunc("POST /api/v1/forward", s.handleForwardCreate)
 	mux.HandleFunc("DELETE /api/v1/forward/{id}", s.handleForwardDelete)
+	mux.HandleFunc("GET /api/v1/forward/stats", s.handleForwardStats)
+	mux.HandleFunc("GET /api/v1/forward/health", s.handleForwardHealth)
 	mux.HandleFunc("GET /proxy/{hostID}/{port}/{path...}", s.handleHTTPProxy)
 	// Port forwarding: agent reverse channel (fingerprint-gated, not session-gated)
 	mux.HandleFunc("GET /api/v1/agent/forward/wait", s.handleAgentForwardWait)

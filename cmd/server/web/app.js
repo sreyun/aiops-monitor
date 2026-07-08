@@ -1576,15 +1576,30 @@ function expandTermFromDock(tabId) {
 function closeTermFromDock(tabId) {
   const idx = TERM_TABS.findIndex(t => t.id === tabId);
   if (idx < 0) return;
-  const item = $("termDock").querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
+  const tab = TERM_TABS[idx];
+  // Close WS without triggering switchTermTab (modal is hidden — minimized state)
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
+  tab.screenEl.remove();
+  tab.tabEl.remove();
+  TERM_DOCK_IDS.delete(tabId);
+  // Animate dock card removal
+  const item = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   if (item) {
     item.classList.add("removing");
-    setTimeout(() => item.remove(), 200);
+    setTimeout(() => { item.remove(); updateTermDock(); }, 200);
   }
-  TERM_DOCK_IDS.delete(tabId);
-  closeTermTab(idx);
-  // closeTermTab 可能改变数组索引，延迟更新 dock
-  setTimeout(updateTermDock, 210);
+  // Remove from array — but DON'T call switchTermTab (modal is hidden)
+  TERM_TABS.splice(idx, 1);
+  if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
+  // If no tabs left, clean up fully
+  if (TERM_TABS.length === 0) {
+    TERM_ACTIVE = -1;
+    const mask = $("termMask");
+    if (mask) mask.classList.remove("show", "maximized");
+    if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  }
+  // Immediate dock update (the animated removal happens in 200ms)
+  updateTermDock();
 }
 
 function clearTermDock() {

@@ -290,6 +290,7 @@ func isPublicPath(r *http.Request) bool {
 	case "/", "/healthz", "/style.css", "/app.js", "/i18n-dashboard.js",
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/api/v1/login", "/api/v1/me",
+		"/api/v1/forward/health",
 		"/api/v1/account/recover-username",
 		"/api/v1/account/send-reset-code",
 		"/api/v1/account/reset-password",
