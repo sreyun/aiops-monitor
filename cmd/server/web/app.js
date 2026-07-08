@@ -331,8 +331,10 @@ const ALERT_TYPES = [
  * 避免每 3 秒轮询全量 innerHTML 重建 DOM 导致的闪烁和布局跳动。
  * 策略：
  *   1. 生成新数据的签名摘要，若与上次完全一致则跳过更新（最常见路径）
- *   2. 签名不同时，按 key 逐行比对：保留匹配行、更新变化行、插入新行、移除多余行
+ *   2. 签名不同时，按 key 逐行比对：保留匹配行、插入新行、移除多余行
  *   3. 空列表 / 首次渲染走 innerHTML 快速路径
+ * 注意：匹配行不做 innerHTML 替换——时间相关的动态文本
+ * （如“已持续 3 分钟”）由 refreshAlertRowTimes() 单独更新 textContent
  */
 function diffUpdateList(container, items, rowFn, keyFn, emptyHTML) {
   if (!container) return;
@@ -370,12 +372,9 @@ function diffUpdateList(container, items, rowFn, keyFn, emptyHTML) {
     const key = newKeys[i];
     let el = oldMap[key];
     if (el) {
-      // 复用已有节点：仅更新 class（级别可能变化）和内容
-      const fresh = document.createElement("div");
-      fresh.innerHTML = rowFn(items[i]).trim();
-      const newEl = fresh.firstChild;
-      if (el.className !== newEl.className) el.className = newEl.className;
-      if (el.innerHTML !== newEl.innerHTML) el.innerHTML = newEl.innerHTML;
+      // 匹配行：不做 innerHTML 替换，避免时间文本变化导致的闪烁
+      // 仅移除入场动画 class（避免重放）
+      el.classList.remove("row-enter");
     } else {
       // 新行：创建并插入到正确位置
       el = document.createElement("div");
@@ -392,20 +391,36 @@ function diffUpdateList(container, items, rowFn, keyFn, emptyHTML) {
     refNode = el;
   }
 }
+/* refreshAlertRowTimes — 轻量级更新告警行的时间相关文本
+ * 仅通过 textContent 更新“已持续 X 分”和绝对时间显示，
+ * 不触及 innerHTML，不触发 DOM 重建和重排。 */
+function refreshAlertRowTimes(container, now) {
+  if (!container) return;
+  container.querySelectorAll(".alert-dur[data-since]").forEach(el => {
+    const since = parseInt(el.dataset.since);
+    if (since) el.textContent = "已持续 " + fmtDur(now - since);
+  });
+}
 function renderAlerts(alerts) {
   LAST_ALERTS = alerts;
   const n = alerts.length;
   $("alertsCount").textContent = n; $("navAlerts").textContent = n; $("ovAlertsCount").textContent = n;
   const now = Math.floor(Date.now() / 1000);
-  const alertKey = a => `${a.hostname}|${a.message}|${a.level}|${a.timestamp||0}|${a.since||0}|${a.ip||""}`;
+  // alertKey 排除 timestamp（可能为“最后触发”时间，每次轮询可能变化）
+  // 仅用稳定身份字段：hostname + message + level + since + ip
+  const alertKey = a => `${a.hostname}|${a.message}|${a.level}|${a.since||0}|${a.ip||""}`;
   const row = a => {
     const dur = a.since ? `已持续 ${fmtDur(now - a.since)}` : "";
     const ipStr = a.ip ? `<span class="alert-ip mono">${esc(a.ip)}</span>` : "";
     const timeStr = a.timestamp ? `<span class="alert-time mono">${fmtDateTime(a.timestamp)}</span>` : "";
+    // dur 包装在 .alert-dur[data-since] 中，供 refreshAlertRowTimes 轻量更新
+    const durSpan = a.since
+      ? `<span class="src alert-dur" data-since="${a.since}" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>`
+      : "";
     return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
     <span class="badge ${esc(a.level)}">${a.level === "critical" ? "严重" : a.level === "info" ? "恢复" : "警告"}</span>
     <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
-    ${dur ? `<span class="src" title="首次触发 ${fmtDateTime(a.since)}">${dur}</span>` : ""}
+    ${durSpan}
     ${timeStr}</div>`;
   };
   // Apply filters
@@ -420,6 +435,8 @@ function renderAlerts(alerts) {
   $("alerts").innerHTML = filtered.length ? filtered.map(row).join("") : (n ? filterEmpty : empty);
   // 概览页告警列表：差量更新，避免全量 innerHTML 重建导致闪烁
   diffUpdateList($("ovAlerts"), alerts.slice(0, 6), row, alertKey, empty);
+  // 轻量级更新“已持续”相对时间文本（仅 textContent，不重建 DOM）
+  refreshAlertRowTimes($("ovAlerts"), now);
 }
 
 /* ---------- 概览：资源 TOP10（两行：① 主机资源 ② 负载与监控探测） ---------- */
