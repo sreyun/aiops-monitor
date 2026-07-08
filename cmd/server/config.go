@@ -101,6 +101,18 @@ type CustomCheck struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+// HTTPProxyConfig is a saved HTTP proxy shortcut for quick access.
+type HTTPProxyConfig struct {
+	ID          string `json:"id"`           // Unique ID
+	Name        string `json:"name"`         // Display name (e.g. "内部API服务")
+	HostID      string `json:"host_id"`      // Target host ID
+	Hostname    string `json:"hostname"`     // Target hostname (cached for display)
+	TargetPort  int    `json:"target_port"`  // Target port
+	DefaultPath string `json:"default_path"` // Default path prefix (e.g. "/api/v1")
+	Operator    string `json:"operator"`     // Who created this
+	CreatedAt   int64  `json:"created_at"`   // Creation timestamp
+}
+
 // ServerConfig is the operator-editable server configuration persisted to disk.
 // Categories holds manual per-host category overrides (host id -> category).
 type ServerConfig struct {
@@ -134,6 +146,9 @@ type ServerConfig struct {
 	// Default "10000-10099" for Docker deployments to expose a predictable range.
 	// Set to "" or "0-0" to let the OS assign any available port.
 	ForwardPortRange string `json:"forward_port_range,omitempty"`
+	// HTTPProxies is the list of saved HTTP proxy shortcuts.
+	// Each entry stores a target host+port+path for quick access.
+	HTTPProxies []HTTPProxyConfig `json:"http_proxies,omitempty"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
@@ -635,6 +650,43 @@ func (cs *ConfigStore) DeletePlaybook(id string) error {
 		}
 	}
 	cs.cfg.Playbooks = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// --- HTTP Proxy Config Management ---
+
+// ListHTTPProxies returns all saved HTTP proxy configurations.
+func (cs *ConfigStore) ListHTTPProxies() []HTTPProxyConfig {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return append([]HTTPProxyConfig{}, cs.cfg.HTTPProxies...)
+}
+
+// AddHTTPProxy adds a new HTTP proxy configuration.
+func (cs *ConfigStore) AddHTTPProxy(proxy HTTPProxyConfig) error {
+	cs.mu.Lock()
+	if proxy.ID == "" {
+		proxy.ID = termID()[:8]
+	}
+	if proxy.CreatedAt == 0 {
+		proxy.CreatedAt = time.Now().Unix()
+	}
+	cs.cfg.HTTPProxies = append(cs.cfg.HTTPProxies, proxy)
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// DeleteHTTPProxy removes an HTTP proxy configuration by ID.
+func (cs *ConfigStore) DeleteHTTPProxy(id string) error {
+	cs.mu.Lock()
+	var kept []HTTPProxyConfig
+	for _, p := range cs.cfg.HTTPProxies {
+		if p.ID != id {
+			kept = append(kept, p)
+		}
+	}
+	cs.cfg.HTTPProxies = kept
 	cs.mu.Unlock()
 	return cs.save()
 }

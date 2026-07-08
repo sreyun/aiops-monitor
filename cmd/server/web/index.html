@@ -808,14 +808,22 @@
       <!-- HTTP mode fields -->
       <div id="fwdHttpFields" style="display:none">
         <div class="field">
+          <label data-i18n="form.proxy_name">名称（可选）</label>
+          <input type="text" id="fwdHttpName" data-i18n-placeholder="form.proxy_name_placeholder" placeholder="如 内部API服务" style="width:100%">
+        </div>
+        <div class="field">
           <label data-i18n="form.access_path_optional">访问路径（可选）</label>
           <input type="text" id="fwdHttpPath" data-i18n-placeholder="form.hint_path_users" placeholder="如 /api/users" style="width:100%">
         </div>
         <div class="hint" data-i18n="forward.http_hint">在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。</div>
       </div>
     </div>
-    <div class="modal-foot">
+    <div class="modal-foot" id="fwdTcpFoot">
       <button class="btn primary" id="fwdSubmitBtn" data-i18n="forward.submit_tcp">创建转发</button>
+    </div>
+    <div class="modal-foot" id="fwdHttpFoot" style="display:none">
+      <button class="btn" id="fwdHttpSaveBtn" data-i18n="forward.save_http">保存配置</button>
+      <button class="btn primary" id="fwdHttpOpenBtn" data-i18n="forward.open_http">打开链接</button>
     </div>
   </div>
 </div>

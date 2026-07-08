@@ -4010,6 +4010,7 @@ function initPushWS() {
    端口转发
    ============================================================ */
 let LAST_FORWARDS = [];
+let LAST_HTTP_PROXIES = [];
 let FWD_MODE = "tcp"; // "tcp" | "http"
 
 // 填充主机下拉选择框
@@ -4026,6 +4027,11 @@ async function loadForwards() {
     const res = await fetch("/api/v1/forward", { credentials: "include" });
     if (!res.ok) return;
     LAST_FORWARDS = await res.json();
+    // Also load HTTP proxies
+    try {
+      const httpRes = await fetch("/api/v1/http-proxy", { credentials: "include" });
+      if (httpRes.ok) LAST_HTTP_PROXIES = await httpRes.json();
+    } catch(e) {}
     renderForwards();
   } catch(e) {}
 }
@@ -4034,13 +4040,9 @@ function renderForwards() {
   const list = $("forwardList");
   const empty = $("forwardEmpty");
   if (!list || !empty) return;
-  if (!LAST_FORWARDS || LAST_FORWARDS.length === 0) {
-    list.innerHTML = "";
-    empty.style.display = "";
-    return;
-  }
-  empty.style.display = "none";
-  list.innerHTML = LAST_FORWARDS.map(f => `
+  
+  // TCP 转发卡片
+  const tcpCards = (LAST_FORWARDS || []).map(f => `
     <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
       <span class="badge op" style="font-size:11px; padding:2px 8px;">TCP</span>
       <div style="flex:1; min-width:200px;">
@@ -4053,6 +4055,28 @@ function renderForwards() {
       </div>
     </div>
   `).join("");
+  
+  // HTTP 代理卡片
+  const httpCards = (LAST_HTTP_PROXIES || []).map(p => {
+    const proxyUrl = `/proxy/${encodeURIComponent(p.host_id)}/${p.target_port}/${(p.default_path || "").replace(/^\//, "")}`;
+    const displayName = p.name || `${p.hostname}:${p.target_port}`;
+    return `
+      <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span class="badge sys" style="font-size:11px; padding:2px 8px;">HTTP</span>
+        <div style="flex:1; min-width:200px;">
+          <div style="font-weight:600;">${esc(displayName)}</div>
+          <div class="hint" style="margin-top:2px;">${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn primary" onclick="window.open('${proxyUrl}', '_blank')">${I18N.t("ui.open")}</button>
+          <button class="btn ghost" onclick="deleteHttpProxy('${esc(p.id)}')">${I18N.t("ui.delete")}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  
+  list.innerHTML = tcpCards + httpCards;
+  empty.style.display = (tcpCards || httpCards) ? "none" : "";
 }
 
 function switchFwdMode(mode) {
@@ -4060,14 +4084,14 @@ function switchFwdMode(mode) {
   document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.fwdmode === mode);
   });
-  $("fwdTcpFields").style.display = mode === "tcp" ? "" : "none";
-  $("fwdHttpFields").style.display = mode === "http" ? "" : "none";
-  const submitBtn = $("fwdSubmitBtn");
-  if (mode === "tcp") {
-    submitBtn.textContent = I18N.t("forward.submit_tcp");
-  } else {
-    submitBtn.textContent = I18N.t("forward.submit_http");
-  }
+  const tcpFields = $("fwdTcpFields");
+  const httpFields = $("fwdHttpFields");
+  const tcpFoot = $("fwdTcpFoot");
+  const httpFoot = $("fwdHttpFoot");
+  if (tcpFields) tcpFields.style.display = mode === "tcp" ? "" : "none";
+  if (httpFields) httpFields.style.display = mode === "http" ? "" : "none";
+  if (tcpFoot) tcpFoot.style.display = mode === "tcp" ? "" : "none";
+  if (httpFoot) httpFoot.style.display = mode === "http" ? "" : "none";
 }
 
 function submitForward() {
@@ -4116,6 +4140,64 @@ function openHttpProxy(hostID, targetPort) {
   closeForwardModal();
 }
 
+async function saveHttpProxy() {
+  const hostID = $("fwdHost")?.value;
+  const targetPort = parseInt($("fwdTargetPort")?.value || "0");
+  const name = $("fwdHttpName")?.value || "";
+  const defaultPath = $("fwdHttpPath")?.value || "";
+  if (!hostID || targetPort < 1 || targetPort > 65535) {
+    toast(I18N.t("valid.fill_target_port"), "err");
+    return;
+  }
+  await withLoading("fwdHttpSaveBtn", async () => {
+    try {
+      const res = await fetch("/api/v1/http-proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || I18N.t("toast.save_failed"), "err");
+        return;
+      }
+      toast(I18N.t("toast.saved"), "ok");
+      closeForwardModal();
+      loadHttpProxies();
+    } catch(e) {
+      toast(I18N.t("toast.network_error2"), "err");
+    }
+  });
+}
+
+async function loadHttpProxies() {
+  try {
+    const res = await fetch("/api/v1/http-proxy", { credentials: "include" });
+    if (!res.ok) return;
+    LAST_HTTP_PROXIES = await res.json();
+    renderForwards();
+  } catch(e) {}
+}
+
+async function deleteHttpProxy(id) {
+  if (!confirm(I18N.t("valid.confirm_delete"))) return;
+  try {
+    const res = await fetch("/api/v1/http-proxy/" + id, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    if (res.ok) {
+      toast(I18N.t("toast.deleted"), "ok");
+      loadHttpProxies();
+    } else {
+      toast(I18N.t("toast.delete_failed"), "err");
+    }
+  } catch(e) {
+    toast(I18N.t("toast.network_error2"), "err");
+  }
+}
+
 function closeForwardModal() {
   const forwardMask = $("forwardMask");
   const backdrop = $("backdrop");
@@ -4157,6 +4239,12 @@ safeAddEventListener("addForwardBtn", "click", () => {
   if (backdrop) backdrop.style.display = "";
 });
 safeAddEventListener("fwdSubmitBtn", "click", submitForward);
+safeAddEventListener("fwdHttpSaveBtn", "click", saveHttpProxy);
+safeAddEventListener("fwdHttpOpenBtn", "click", () => {
+  const hostID = $("fwdHost")?.value;
+  const targetPort = parseInt($("fwdTargetPort")?.value || "0");
+  if (hostID && targetPort > 0) openHttpProxy(hostID, targetPort);
+});
 // Mode tab clicks
 document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
   btn.addEventListener("click", () => switchFwdMode(btn.dataset.fwdmode));

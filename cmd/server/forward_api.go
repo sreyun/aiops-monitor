@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync/atomic"
 )
@@ -100,4 +101,67 @@ func (s *Server) handleForwardHealth(w http.ResponseWriter, r *http.Request) {
 		"max_body":    maxForwardBodySize,
 		"max_session": maxForwardSessions,
 	})
+}
+
+// --- HTTP Proxy Shortcuts API ---
+
+// handleHTTPProxyList returns all saved HTTP proxy configurations.
+// GET /api/v1/http-proxy
+func (s *Server) handleHTTPProxyList(w http.ResponseWriter, r *http.Request) {
+	proxies := s.cfg.ListHTTPProxies()
+	writeJSON(w, http.StatusOK, proxies)
+}
+
+// handleHTTPProxyCreate creates a new HTTP proxy shortcut.
+// POST /api/v1/http-proxy
+func (s *Server) handleHTTPProxyCreate(w http.ResponseWriter, r *http.Request) {
+	var req HTTPProxyConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.HostID == "" || req.TargetPort < 1 || req.TargetPort > 65535 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
+		return
+	}
+	// Lookup hostname
+	for _, h := range s.store.ListHosts() {
+		if h.ID == req.HostID {
+			req.Hostname = h.Hostname
+			break
+		}
+	}
+	user, _ := s.currentUser(r)
+	req.Operator = user.Username
+	if req.Operator == "" {
+		req.Operator = s.clientIP(r)
+	}
+	if err := s.cfg.AddHTTPProxy(req); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// Return the created proxy with ID
+	proxies := s.cfg.ListHTTPProxies()
+	for _, p := range proxies {
+		if p.HostID == req.HostID && p.TargetPort == req.TargetPort {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, req)
+}
+
+// handleHTTPProxyDelete deletes an HTTP proxy shortcut.
+// DELETE /api/v1/http-proxy/{id}
+func (s *Server) handleHTTPProxyDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	if err := s.cfg.DeleteHTTPProxy(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }

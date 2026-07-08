@@ -117,6 +117,7 @@
   "ui.log": "日志",
   "ui.edit": "编辑",
   "ui.delete": "删除",
+  "ui.open": "打开",
   "ui.save": "保存",
   "ui.create_user": "创建用户",
   "ui.new_playbook": "新建剧本",
@@ -640,8 +641,12 @@
   "forward.mode_http": "HTTP 反向代理",
   "forward.submit_tcp": "创建转发",
   "forward.submit_http": "打开链接",
-  "forward.tcp_hint": "创建 TCP 转发后，通过 监听地址:端口 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）。",
-  "forward.http_hint": "在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。"
+  "forward.save_http": "保存配置",
+  "forward.open_http": "打开链接",
+  "forward.tcp_hint": "创建 TCP 转发后，通过 监听地址:端口 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）.",
+  "forward.http_hint": "在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。",
+  "form.proxy_name": "名称（可选）",
+  "form.proxy_name_placeholder": "如 内部API服务"
 };
 
   function t(key, fallback) {
