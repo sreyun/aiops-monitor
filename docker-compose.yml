@@ -8,6 +8,10 @@
 #   docker compose up -d --build        # 重新构建并启动
 #   docker compose logs -f              # 查看日志
 #   docker compose down                 # 停止
+#
+# 端口说明：
+#   - 8529: Web UI 和 API 端口
+#   - 10000-20000: TCP 端口转发监听范围（可根据需要调整）
 # ============================================================
 
 services:
@@ -19,6 +23,9 @@ services:
     container_name: aiops-server
     ports:
       - "8529:8529"
+      # TCP 端口转发监听范围（默认 10000-20000）
+      # 如需调整，请同步修改 server_config.json 中的 forward_port_range
+      - "10000-20000:10000-20000"
     volumes:
       - server-data:/app/data
     environment:

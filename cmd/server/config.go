@@ -130,6 +130,10 @@ type ServerConfig struct {
 	// Default "0.0.0.0" binds all interfaces (reachable from other machines).
 	// Set to "127.0.0.1" to restrict access to the local machine only.
 	ForwardListen string `json:"forward_listen,omitempty"`
+	// ForwardPortRange is the port range for TCP port forwarding ("min-max").
+	// Default "10000-20000" for Docker deployments to expose a predictable range.
+	// Set to "" or "0-0" to let the OS assign any available port.
+	ForwardPortRange string `json:"forward_port_range,omitempty"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
@@ -299,6 +303,43 @@ func (cs *ConfigStore) ForwardListenAddr() string {
 		return "0.0.0.0"
 	}
 	return cs.cfg.ForwardListen
+}
+
+// ForwardPortRangeBounds returns the min and max port for TCP forwarding.
+// Defaults to 10000-20000 for predictable Docker port exposure.
+// Returns (0, 0) to let the OS assign any port if not configured or "0-0".
+func (cs *ConfigStore) ForwardPortRangeBounds() (minPort, maxPort int) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.cfg.ForwardPortRange == "" {
+		return 10000, 20000 // default range for Docker
+	}
+	parts := strings.Split(cs.cfg.ForwardPortRange, "-")
+	if len(parts) != 2 {
+		return 10000, 20000
+	}
+	minPort = parseIntSafe(parts[0], 10000)
+	maxPort = parseIntSafe(parts[1], 20000)
+	if minPort <= 0 || maxPort <= 0 || minPort > maxPort {
+		return 10000, 20000
+	}
+	return minPort, maxPort
+}
+
+func parseIntSafe(s string, def int) int {
+	s = strings.TrimSpace(s)
+	v := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			v = v*10 + int(c-'0')
+		} else {
+			return def
+		}
+	}
+	if v == 0 {
+		return def
+	}
+	return v
 }
 
 // TrustProxy reports whether to honor reverse-proxy client-IP headers
@@ -497,6 +538,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.TerminalDisabled = cs.cfg.TerminalDisabled
 	c.ForwardDisabled = cs.cfg.ForwardDisabled
 	c.ForwardListen = cs.cfg.ForwardListen
+	c.ForwardPortRange = cs.cfg.ForwardPortRange
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired

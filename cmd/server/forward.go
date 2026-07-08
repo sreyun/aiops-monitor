@@ -150,13 +150,15 @@ type forwardManager struct {
 	sessions map[string]*forwardSession
 	waiters  map[string]chan forwardWaitInfo // hostID -> a waiting agent poll
 	stats    forwardStats                     // P3: aggregate metrics
+	cfg      *ConfigStore                     // config reference for port range
 }
 
-func newForwardManager() *forwardManager {
+func newForwardManager(cfg *ConfigStore) *forwardManager {
 	fm := &forwardManager{
 		rules:    map[string]*forwardRule{},
 		sessions: map[string]*forwardSession{},
 		waiters:  map[string]chan forwardWaitInfo{},
+		cfg:      cfg,
 	}
 	go fm.idleChecker()
 	return fm
@@ -274,20 +276,48 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 // ---- rule management ----
 
 func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, operator string) (*forwardRule, error) {
-	addr := listenHost + ":" + strconv.Itoa(localPort)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		// fallback: auto-allocate
-		ln, err = net.Listen("tcp", listenHost+":0")
+	// If localPort is 0 or requested port is unavailable, try ports in the configured range
+	minPort, maxPort := m.cfg.ForwardPortRangeBounds()
+	var ln net.Listener
+	var err error
+	actualPort := localPort
+
+	if localPort > 0 {
+		// Try the user-specified port first
+		addr := listenHost + ":" + strconv.Itoa(localPort)
+		ln, err = net.Listen("tcp", addr)
 		if err != nil {
-			return nil, fmt.Errorf("%s", Tz("forward.listen_failed", err))
+			// User asked for a specific port but it failed, try the range
+			actualPort = 0
 		}
 	}
-	localPort = ln.Addr().(*net.TCPAddr).Port
-	actualAddr := listenHost + ":" + strconv.Itoa(localPort)
+
+	// If no listener yet, try ports in the configured range
+	if ln == nil {
+		// Try random ports in the range until one succeeds
+		for attempt := 0; attempt < 100; attempt++ {
+			candidate := minPort + attempt%((maxPort-minPort)+1)
+			addr := listenHost + ":" + strconv.Itoa(candidate)
+			ln, err = net.Listen("tcp", addr)
+			if err == nil {
+				actualPort = candidate
+				break
+			}
+		}
+		// If still no listener, fall back to OS-assigned port
+		if ln == nil {
+			ln, err = net.Listen("tcp", listenHost+":0")
+			if err != nil {
+				return nil, fmt.Errorf("%s", Tz("forward.listen_failed", err))
+			}
+		}
+	}
+
+	actualPort = ln.Addr().(*net.TCPAddr).Port
+	actualAddr := listenHost + ":" + strconv.Itoa(actualPort)
 	r := &forwardRule{
 		id: termID()[:8], hostID: hostID, hostname: hostname,
-		targetPort: targetPort, localPort: localPort,
+		targetPort: targetPort, localPort: actualPort,
 		listenAddr: actualAddr,
 		listener: ln, operator: operator, createdAt: time.Now().Unix(),
 	}

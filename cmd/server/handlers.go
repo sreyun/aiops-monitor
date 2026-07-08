@@ -32,7 +32,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		auth:      NewAuth(cfg),
 		checks:    newCheckRunner(cfg, store, notifier, selfAddr),
 		term:      newTermManager(),
-		forward:   newForwardManager(),
+		forward:   newForwardManager(cfg),
 		emailMgr:  newEmailManager(),
 		playbooks: newPlaybookManager(cfg),
 		push:      newPushHub(),
