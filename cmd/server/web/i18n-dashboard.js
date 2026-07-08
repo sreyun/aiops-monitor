@@ -632,7 +632,15 @@
   "exec.end_time": "结束",
   "exec.status_label": "状态",
   "exec.success_count": "成功",
-  "empty.no_executions": "暂无执行历史"
+  "empty.no_executions": "暂无执行历史",
+  /* --- 统一转发 UI --- */
+  "ui.new_forward": "+ 新建转发",
+  "forward.mode_tcp": "TCP 端口转发",
+  "forward.mode_http": "HTTP 反向代理",
+  "forward.submit_tcp": "创建转发",
+  "forward.submit_http": "打开链接",
+  "forward.tcp_hint": "创建 TCP 转发后，通过 监听地址:端口 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）。",
+  "forward.http_hint": "在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。"
 };
 
   function t(key, fallback) {

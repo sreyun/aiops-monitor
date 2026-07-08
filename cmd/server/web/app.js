@@ -4010,13 +4010,13 @@ function initPushWS() {
    端口转发
    ============================================================ */
 let LAST_FORWARDS = [];
+let FWD_MODE = "tcp"; // "tcp" | "http"
 
 // 填充主机下拉选择框
 function populateForwardHosts() {
   const opts = LAST_HOSTS.map(h => `<option value="${h.id}">${esc(h.hostname)} (${short(h.id)})</option>`).join("");
-  const fh = $("forwardHost"), ph = $("proxyHost");
+  const fh = $("fwdHost");
   if (fh) fh.innerHTML = opts;
-  if (ph) ph.innerHTML = opts;
 }
 
 function short(id) { return id && id.length > 8 ? id.slice(0, 8) : id; }
@@ -4042,6 +4042,7 @@ function renderForwards() {
   empty.style.display = "none";
   list.innerHTML = LAST_FORWARDS.map(f => `
     <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span class="badge op" style="font-size:11px; padding:2px 8px;">TCP</span>
       <div style="flex:1; min-width:200px;">
         <div style="font-weight:600;">${esc(f.hostname)} → :${f.target_port}</div>
         <div class="hint" style="margin-top:2px;">${I18N.t("section.local_listen")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("section.active_connections")}</div>
@@ -4054,15 +4055,38 @@ function renderForwards() {
   `).join("");
 }
 
-async function createForward() {
-  const hostID = $("forwardHost")?.value;
-  const targetPort = parseInt($("forwardTargetPort")?.value || "0");
-  const localPort = parseInt($("forwardLocalPort")?.value || "0");
+function switchFwdMode(mode) {
+  FWD_MODE = mode;
+  document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.fwdmode === mode);
+  });
+  $("fwdTcpFields").style.display = mode === "tcp" ? "" : "none";
+  $("fwdHttpFields").style.display = mode === "http" ? "" : "none";
+  const submitBtn = $("fwdSubmitBtn");
+  if (mode === "tcp") {
+    submitBtn.textContent = I18N.t("forward.submit_tcp");
+  } else {
+    submitBtn.textContent = I18N.t("forward.submit_http");
+  }
+}
+
+function submitForward() {
+  const hostID = $("fwdHost")?.value;
+  const targetPort = parseInt($("fwdTargetPort")?.value || "0");
   if (!hostID || targetPort < 1 || targetPort > 65535) {
     toast(I18N.t("valid.fill_target_port"), "err");
     return;
   }
-  await withLoading("createForwardBtn", async () => {
+  if (FWD_MODE === "tcp") {
+    createTcpForward(hostID, targetPort);
+  } else {
+    openHttpProxy(hostID, targetPort);
+  }
+}
+
+async function createTcpForward(hostID, targetPort) {
+  const localPort = parseInt($("fwdLocalPort")?.value || "0");
+  await withLoading("fwdSubmitBtn", async () => {
     try {
       const res = await fetch("/api/v1/forward", {
         method: "POST",
@@ -4077,14 +4101,24 @@ async function createForward() {
       }
       const result = await res.json();
       toast(I18N.t("toast.forward_created") + result.listen_addr, "ok");
-      $("forwardForm").style.display = "none";
-      $("forwardTargetPort").value = "";
-      $("forwardLocalPort").value = "";
+      closeForwardModal();
       loadForwards();
     } catch(e) {
       toast(I18N.t("toast.network_error2"), "err");
     }
   });
+}
+
+function openHttpProxy(hostID, targetPort) {
+  const path = $("fwdHttpPath")?.value || "";
+  const url = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(targetPort)}/${path.replace(/^\//, "")}`;
+  window.open(url, "_blank");
+  closeForwardModal();
+}
+
+function closeForwardModal() {
+  $("forwardMask").classList.remove("show");
+  $("backdrop").style.display = "none";
 }
 
 async function deleteForward(id) {
@@ -4105,26 +4139,21 @@ async function deleteForward(id) {
   }
 }
 
-function openProxyLink() {
-  const hostID = $("proxyHost")?.value;
-  const port = $("proxyPort")?.value;
-  const path = $("proxyPath")?.value || "";
-  if (!hostID || !port) {
-    toast(I18N.t("valid.select_host_port"), "err");
-    return;
-  }
-  const url = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(port)}/${path.replace(/^\//, "")}`;
-  window.open(url, "_blank");
-}
-
 // 绑定事件
 safeAddEventListener("addForwardBtn", "click", () => {
   populateForwardHosts();
-  $("forwardForm").style.display = $("forwardForm").style.display === "none" ? "" : "none";
+  switchFwdMode("tcp");
+  $("fwdTargetPort").value = "";
+  $("fwdLocalPort").value = "";
+  $("fwdHttpPath").value = "";
+  $("forwardMask").classList.add("show");
+  $("backdrop").style.display = "";
 });
-safeAddEventListener("createForwardBtn", "click", createForward);
-safeAddEventListener("cancelForwardBtn", "click", () => { $("forwardForm").style.display = "none"; });
-safeAddEventListener("openProxyBtn", "click", openProxyLink);
+safeAddEventListener("fwdSubmitBtn", "click", submitForward);
+// Mode tab clicks
+document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
+  btn.addEventListener("click", () => switchFwdMode(btn.dataset.fwdmode));
+});
 
 // 复制文本到剪贴板
 function copyText(text) {

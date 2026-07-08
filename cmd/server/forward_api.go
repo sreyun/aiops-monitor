@@ -24,9 +24,9 @@ import (
 //     -H "Cookie: aiops_session=<your-session>" \
 //     -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
 //
-// This opens 127.0.0.1:13306 on the server, relaying all
-// TCP traffic through the agent to localhost:3306 on the
-// target host. Use any MySQL client to connect:
+// This opens 0.0.0.0:13306 on the server (configurable via forward_listen),
+// relaying all TCP traffic through the agent to localhost:3306 on the target host.
+// Use any MySQL client to connect:
 //   mysql -h 127.0.0.1 -P 13306 -u root -p
 type TCPForwardRequest struct {
 	HostID     string `json:"host_id"`               // Required: monitored host ID
@@ -41,7 +41,7 @@ type TCPForwardResponse struct {
 	Hostname   string `json:"hostname"`
 	TargetPort int    `json:"target_port"`
 	LocalPort  int    `json:"local_port"`
-	ListenAddr string `json:"listen_addr"`  // e.g. "127.0.0.1:13306"
+	ListenAddr string `json:"listen_addr"`  // e.g. "0.0.0.0:13306"
 	Status     string `json:"status"`       // always "active"
 	CreatedAt  int64  `json:"created_at"`
 	Operator   string `json:"operator"`

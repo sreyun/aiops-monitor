@@ -126,6 +126,10 @@ type ServerConfig struct {
 	// ForwardDisabled is an inverted flag so port forwarding defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	ForwardDisabled bool `json:"forward_disabled"`
+	// ForwardListen is the bind address for TCP port forwarding listeners.
+	// Default "0.0.0.0" binds all interfaces (reachable from other machines).
+	// Set to "127.0.0.1" to restrict access to the local machine only.
+	ForwardListen string `json:"forward_listen,omitempty"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
@@ -282,6 +286,19 @@ func (cs *ConfigStore) ForwardEnabled() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return !cs.cfg.ForwardDisabled
+}
+
+// ForwardListenAddr returns the configured bind address for TCP forwarding
+// listeners. Defaults to "0.0.0.0" (all interfaces) so forwarded ports are
+// reachable from other machines — essential for Docker deployments where
+// 127.0.0.1 would only be reachable inside the container.
+func (cs *ConfigStore) ForwardListenAddr() string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.cfg.ForwardListen == "" {
+		return "0.0.0.0"
+	}
+	return cs.cfg.ForwardListen
 }
 
 // TrustProxy reports whether to honor reverse-proxy client-IP headers
@@ -479,6 +496,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.RequireToken = cs.cfg.RequireToken
 	c.TerminalDisabled = cs.cfg.TerminalDisabled
 	c.ForwardDisabled = cs.cfg.ForwardDisabled
+	c.ForwardListen = cs.cfg.ForwardListen
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired

@@ -21,7 +21,7 @@ import (
 // Port forwarding relay — server side.
 //
 // Two modes:
-//   - TCP port mapping: the server opens a local TCP listener (127.0.0.1:port)
+//   - TCP port mapping: the server opens a local TCP listener (0.0.0.0:port by default)
 //     and relays each accepted connection through the agent to localhost:targetPort
 //     on the monitored host.
 //   - HTTP reverse proxy: the server handles HTTP requests at /proxy/{hostID}/{port}/...
@@ -273,21 +273,22 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 
 // ---- rule management ----
 
-func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, operator string) (*forwardRule, error) {
-	addr := "127.0.0.1:" + strconv.Itoa(localPort)
+func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, operator string) (*forwardRule, error) {
+	addr := listenHost + ":" + strconv.Itoa(localPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		// fallback: auto-allocate
-		ln, err = net.Listen("tcp", "127.0.0.1:0")
+		ln, err = net.Listen("tcp", listenHost+":0")
 		if err != nil {
 			return nil, fmt.Errorf("%s", Tz("forward.listen_failed", err))
 		}
 	}
 	localPort = ln.Addr().(*net.TCPAddr).Port
+	actualAddr := listenHost + ":" + strconv.Itoa(localPort)
 	r := &forwardRule{
 		id: termID()[:8], hostID: hostID, hostname: hostname,
 		targetPort: targetPort, localPort: localPort,
-		listenAddr: "127.0.0.1:" + strconv.Itoa(localPort),
+		listenAddr: actualAddr,
 		listener: ln, operator: operator, createdAt: time.Now().Unix(),
 	}
 	m.mu.Lock()
@@ -381,7 +382,8 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 	if user.Username != "" {
 		operator = user.Username
 	}
-	rule, err := s.forward.createRule(req.HostID, hostname, req.TargetPort, req.LocalPort, operator)
+	listenHost := s.cfg.ForwardListenAddr()
+	rule, err := s.forward.createRule(req.HostID, hostname, req.TargetPort, req.LocalPort, listenHost, operator)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -296,58 +296,14 @@
       <section class="view" id="view-forward">
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_tcp_forward">+ 新建 TCP 转发</button>
+            <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_forward">+ 新建转发</button>
           </div>
-        </div>
-
-        <!-- TCP 转发创建表单 -->
-        <div class="card" id="forwardForm" style="display:none; margin-bottom:16px; padding:16px; border:1px solid var(--line2); border-radius:12px; background:var(--panel);">
-          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-            <div class="field" style="flex:1; min-width:180px; margin:0;">
-              <label data-i18n="form.target_host">目标主机</label>
-              <select id="forwardHost" style="width:100%"></select>
-            </div>
-            <div class="field" style="width:120px; margin:0;">
-              <label data-i18n="form.target_port">目标端口</label>
-              <input type="number" id="forwardTargetPort" data-i18n-placeholder="form.hint_port_3306" placeholder="如 3306" min="1" max="65535" style="width:100%">
-            </div>
-            <div class="field" style="width:120px; margin:0;">
-              <label data-i18n="form.local_port_optional">本地端口（可选）</label>
-              <input type="number" id="forwardLocalPort" data-i18n-placeholder="form.auto_assign" placeholder="自动分配" min="0" max="65535" style="width:100%">
-            </div>
-            <div style="display:flex; gap:8px;">
-              <button class="btn primary" id="createForwardBtn" data-i18n="ui.create">创建</button>
-              <button class="btn ghost" id="cancelForwardBtn" data-i18n="ui.cancel">取消</button>
-            </div>
-          </div>
-          <div class="hint" style="margin-top:8px;" data-i18n="section.forward_hint">创建后可在本机通过 <code>localhost:端口</code> 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）。</div>
-        </div>
-
-        <!-- HTTP 反向代理快速访问 -->
-        <div class="card" style="margin-bottom:16px; padding:16px; border:1px solid var(--line2); border-radius:12px; background:var(--panel);">
-          <div style="font-weight:600; margin-bottom:8px;" data-i18n="section.http_reverse_proxy">HTTP 反向代理</div>
-          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-            <div class="field" style="flex:1; min-width:180px; margin:0;">
-              <label data-i18n="form.target_host">目标主机</label>
-              <select id="proxyHost" style="width:100%"></select>
-            </div>
-            <div class="field" style="width:120px; margin:0;">
-              <label data-i18n="form.target_port">目标端口</label>
-              <input type="number" id="proxyPort" data-i18n-placeholder="form.hint_port_8080" placeholder="如 8080" min="1" max="65535" style="width:100%">
-            </div>
-            <div class="field" style="flex:1; min-width:200px; margin:0;">
-              <label data-i18n="form.access_path_optional">访问路径（可选）</label>
-              <input type="text" id="proxyPath" data-i18n-placeholder="form.hint_path_users" placeholder="如 /api/users" style="width:100%">
-            </div>
-            <button class="btn primary" id="openProxyBtn" data-i18n="ui.open_link">打开链接</button>
-          </div>
-          <div class="hint" style="margin-top:8px;" data-i18n="section.proxy_hint">点击「打开链接」在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。</div>
         </div>
 
         <!-- 活跃转发列表 -->
         <div id="forwardList" style="display:flex; flex-direction:column; gap:10px"></div>
         <div class="empty" id="forwardEmpty" data-i18n="empty.no_forwards">
-          还没有端口转发规则。点「新建 TCP 转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
+          还没有端口转发规则。点「新建转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
         </div>
       </section>
     </div>
@@ -818,6 +774,49 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="execResultBody"></div>
+  </div>
+</div>
+
+<!-- ===== 新建转发弹窗 ===== -->
+<div class="mask" id="forwardMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="ui.new_forward">新建转发</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="fwd-mode-tabs" id="fwdModeTabs">
+        <button class="fwd-mode-tab active" data-fwdmode="tcp" data-i18n="forward.mode_tcp">TCP 端口转发</button>
+        <button class="fwd-mode-tab" data-fwdmode="http" data-i18n="forward.mode_http">HTTP 反向代理</button>
+      </div>
+      <div class="field">
+        <label data-i18n="form.target_host">目标主机</label>
+        <select id="fwdHost" style="width:100%"></select>
+      </div>
+      <div class="field">
+        <label data-i18n="form.target_port">目标端口</label>
+        <input type="number" id="fwdTargetPort" data-i18n-placeholder="form.hint_port_3306" placeholder="如 3306" min="1" max="65535" style="width:100%">
+      </div>
+      <!-- TCP mode fields -->
+      <div id="fwdTcpFields">
+        <div class="field">
+          <label data-i18n="form.local_port_optional">本地端口（可选）</label>
+          <input type="number" id="fwdLocalPort" data-i18n-placeholder="form.auto_assign" placeholder="自动分配" min="0" max="65535" style="width:100%">
+        </div>
+        <div class="hint" data-i18n="forward.tcp_hint">创建 TCP 转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）。</div>
+      </div>
+      <!-- HTTP mode fields -->
+      <div id="fwdHttpFields" style="display:none">
+        <div class="field">
+          <label data-i18n="form.access_path_optional">访问路径（可选）</label>
+          <input type="text" id="fwdHttpPath" data-i18n-placeholder="form.hint_path_users" placeholder="如 /api/users" style="width:100%">
+        </div>
+        <div class="hint" data-i18n="forward.http_hint">在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="fwdSubmitBtn" data-i18n="forward.submit_tcp">创建转发</button>
+    </div>
   </div>
 </div>
 
