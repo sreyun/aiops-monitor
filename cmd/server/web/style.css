@@ -785,15 +785,16 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 终端收起悬浮卡片 ---------- */
 .term-dock{
   position:fixed; bottom:max(16px, env(safe-area-inset-bottom)); right:max(16px, env(safe-area-inset-right));
-  z-index:200; display:flex; flex-direction:column-reverse; gap:8px;
-  pointer-events:none;
+  z-index:200; display:flex; flex-direction:row; flex-wrap:wrap-reverse; gap:8px;
+  justify-content:flex-end; align-items:flex-end;
+  max-width:calc(100vw - 32px); pointer-events:none;
 }
 .term-dock-item{
   pointer-events:auto;
-  display:flex; align-items:center; gap:10px;
-  min-width:220px; max-width:300px; height:44px;
-  padding:0 8px 0 14px;
-  border:1px solid var(--line2); border-radius:12px;
+  display:flex; align-items:center; gap:8px;
+  min-width:160px; max-width:260px; height:40px;
+  padding:0 6px 0 12px;
+  border:1px solid var(--line2); border-radius:10px;
   background:var(--panel);
   box-shadow:0 4px 16px rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.08);
   cursor:pointer; user-select:none;
@@ -1026,8 +1027,8 @@ svg.sparkline{width:100%; height:46px; display:block}
   /* 确保 textarea 在移动端可聚焦（最小触控区域） */
   .term-input{font-size:16px !important; min-width:1px; min-height:1px}
   /* 收起悬浮卡片：移动端底部全宽条形 */
-  .term-dock{left:0; right:0; bottom:0; gap:4px}
-  .term-dock-item{min-width:0; max-width:none; width:100%; border-radius:8px 8px 0 0}
+  .term-dock{left:0; right:0; bottom:0; gap:4px; max-width:none; flex-direction:row; justify-content:center}
+  .term-dock-item{min-width:0; max-width:none; flex:1; border-radius:8px 8px 0 0}
   /* section-title 工具栏换行 */
   .section-title{row-gap:8px}
   .section-title .search{margin-left:0}
@@ -1052,7 +1053,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .term-hint{padding-bottom:max(9px, env(safe-area-inset-bottom))}
   .modal-foot{padding-bottom:max(14px, env(safe-area-inset-bottom))}
   .replay-controls{padding-bottom:max(10px, env(safe-area-inset-bottom))}
-  .term-dock{left:max(8px, env(safe-area-inset-left)); right:max(8px, env(safe-area-inset-right)); bottom:max(8px, env(safe-area-inset-bottom))}
+  .term-dock{right:max(8px, env(safe-area-inset-right)); bottom:max(8px, env(safe-area-inset-bottom))}
   .toast{bottom:max(24px, env(safe-area-inset-bottom))}
   .term-ctls{margin-right:max(4px, env(safe-area-inset-right))}
 }
