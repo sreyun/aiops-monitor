@@ -316,7 +316,8 @@ function renderCards(s) {
   const ob = $("onboarding");
   if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
   const ver = $("verLabel");
-  if (ver && s.version) ver.textContent = "v" + s.version;
+  // 版本号直接显示，git tag 本身已带 v 前缀（如 v3.9.4），回退值为 "aiops"
+  if (ver && s.version) ver.textContent = s.version;
   TERMINAL_ENABLED = s.terminal_enabled !== false;
 }
 
