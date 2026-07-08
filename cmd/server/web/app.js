@@ -1221,7 +1221,19 @@ let TERM_RESIZE = null;  // window resize listener
 
 function openTerminal(id, name) {
   let idx = TERM_TABS.findIndex(t => t.id === id);
-  if (idx >= 0) { switchTermTab(idx); $("termMask").classList.add("show"); return; }
+  if (idx >= 0) {
+    // 如果该标签页已收起到 dock，从 dock 恢复
+    if (TERM_DOCK_IDS.has(id)) {
+      TERM_DOCK_IDS.delete(id);
+      const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+      if (dockItem) dockItem.remove();
+      updateTermDock();
+    }
+    switchTermTab(idx);
+    $("termMask").classList.add("show");
+    requestAnimationFrame(() => requestAnimationFrame(termRefit));
+    return;
+  }
   createTermTab(id, name);
 }
 
@@ -1314,7 +1326,11 @@ function connectTermWS(tab) {
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
-  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on"); if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
+  ws.onopen = () => { tab.retry = 0; setTermStatus("已连接", "on");
+    // 更新 dock 卡片状态
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot on"; } }
+    if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
     const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
     vt.feed(text);
@@ -1322,6 +1338,9 @@ function connectTermWS(tab) {
   ws.onclose = () => {
     setTermStatus("已断开", "off");
     if (tab.ws === ws) tab.ws = null;
+    // 更新 dock 卡片状态
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot off"; } }
     const mask = $("termMask");
     if (mask.classList.contains("show") && tab.retry < 3) {
       tab.retry++;
@@ -1348,10 +1367,15 @@ function closeTermTab(idx) {
   const tab = TERM_TABS[idx];
   if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
   tab.screenEl.remove(); tab.tabEl.remove();
+  // 清理对应的 dock 卡片
+  TERM_DOCK_IDS.delete(tab.id);
+  const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+  if (dockItem) dockItem.remove();
   TERM_TABS.splice(idx, 1);
   if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
   if (TERM_ACTIVE >= 0) switchTermTab(TERM_ACTIVE);
   else { $("termMask").classList.remove("show"); if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; } }
+  updateTermDock();
 }
 
 function closeAllTermTabs() {
@@ -1360,6 +1384,104 @@ function closeAllTermTabs() {
   const sc = $("termScreens"); if (sc) sc.innerHTML = "";
   const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
   if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  clearTermDock();
+}
+
+/* ---------- 终端收起到右下角 ---------- */
+let TERM_DOCK_IDS = new Set();  // 收起的 tab id 集合
+
+function minimizeTerminal() {
+  if (TERM_TABS.length === 0) return;
+  // 将所有当前标签页加入 dock
+  TERM_TABS.forEach(t => TERM_DOCK_IDS.add(t.id));
+  // 隐藏模态弹窗（不关闭 ws）
+  $("termMask").classList.remove("show", "maximized");
+  if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  updateTermDock();
+}
+
+function updateTermDock() {
+  const dock = $("termDock"); if (!dock) return;
+  // 移除已不存在的 tab 对应的卡片
+  dock.querySelectorAll(".term-dock-item").forEach(el => {
+    if (!TERM_TABS.find(t => t.id === el.dataset.tabId)) el.remove();
+  });
+  // 为每个收起的 tab 创建/更新卡片
+  const docked = TERM_TABS.filter(t => TERM_DOCK_IDS.has(t.id));
+  dock.style.display = docked.length > 0 ? "flex" : "none";
+  docked.forEach(tab => {
+    let item = dock.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (!item) {
+      item = document.createElement("div");
+      item.className = "term-dock-item";
+      item.dataset.tabId = tab.id;
+      item.innerHTML = `
+        <span class="dock-dot"></span>
+        <span class="dock-name"></span>
+        <button class="dock-btn" title="展开窗口" aria-label="展开窗口">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V13a1 1 0 0 1 1-1h12"/><path d="M12 5l-5 7 5-7"/></svg>
+        </button>
+        <button class="dock-btn close" title="关闭会话" aria-label="关闭会话">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>`;
+      // 点击卡片主体（非按钮）也展开
+      item.addEventListener("click", e => {
+        if (e.target.closest(".dock-btn")) return;
+        expandTermFromDock(tab.id);
+      });
+      item.addEventListener("dblclick", () => expandTermFromDock(tab.id));
+      // 展开按钮
+      item.querySelector(".dock-btn:not(.close)").addEventListener("click", e => {
+        e.stopPropagation(); expandTermFromDock(tab.id);
+      });
+      // 关闭按钮
+      item.querySelector(".dock-btn.close").addEventListener("click", e => {
+        e.stopPropagation(); closeTermFromDock(tab.id);
+      });
+      dock.appendChild(item);
+    }
+    // 更新主机名
+    const nameEl = item.querySelector(".dock-name");
+    if (nameEl) nameEl.textContent = tab.name;
+    // 更新连接状态
+    const dot = item.querySelector(".dock-dot");
+    if (dot) {
+      dot.className = "dock-dot";
+      if (tab.ws && tab.ws.readyState === 1) dot.classList.add("on");
+      else if (tab.ws && tab.ws.readyState === 3) dot.classList.add("off");
+    }
+  });
+}
+
+function expandTermFromDock(tabId) {
+  const idx = TERM_TABS.findIndex(t => t.id === tabId);
+  if (idx < 0) return;
+  TERM_DOCK_IDS.delete(tabId);
+  switchTermTab(idx);
+  $("termMask").classList.add("show");
+  // 等布局稳定后重新测量终端尺寸
+  requestAnimationFrame(() => requestAnimationFrame(termRefit));
+  updateTermDock();
+}
+
+function closeTermFromDock(tabId) {
+  const idx = TERM_TABS.findIndex(t => t.id === tabId);
+  if (idx < 0) return;
+  const item = $("termDock").querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
+  if (item) {
+    item.classList.add("removing");
+    setTimeout(() => item.remove(), 200);
+  }
+  TERM_DOCK_IDS.delete(tabId);
+  closeTermTab(idx);
+  // closeTermTab 可能改变数组索引，延迟更新 dock
+  setTimeout(updateTermDock, 210);
+}
+
+function clearTermDock() {
+  TERM_DOCK_IDS.clear();
+  const dock = $("termDock");
+  if (dock) { dock.innerHTML = ""; dock.style.display = "none"; }
 }
 
 /* ---------- 终端会话管理（列表 / 回放 / 旁观） ---------- */
@@ -1625,8 +1747,25 @@ safeAddEventListener("termMaxBtn", "click", () => {
   const btn = $("termMaxBtn"); if (btn) btn.title = max ? "还原默认大小" : "放大窗口";
   requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
 });
+// 收起到右下角
+safeAddEventListener("termMinBtn", "click", () => {
+  minimizeTerminal();
+});
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
+  // 同步更新当前活动 tab 的 dock 卡片状态
+  if (TERM_ACTIVE >= 0 && TERM_TABS[TERM_ACTIVE]) {
+    const tab = TERM_TABS[TERM_ACTIVE];
+    const item = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (item) {
+      const dot = item.querySelector(".dock-dot");
+      if (dot) {
+        dot.className = "dock-dot";
+        if (cls === "on") dot.classList.add("on");
+        else if (cls === "off") dot.classList.add("off");
+      }
+    }
+  }
 }
 function closeTerminalWS() { closeAllTermTabs(); }
 // 发送输入（帧首字节 'i' 标识 input）

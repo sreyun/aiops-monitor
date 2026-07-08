@@ -476,6 +476,9 @@
       <h3 id="termTitle">远程终端</h3>
       <span class="term-status" id="termStatus">连接中…</span>
       <div class="term-ctls">
+        <button class="term-ctl" id="termMinBtn" title="收起到右下角" aria-label="收起窗口">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5v6a1 1 0 0 1-1 1H6"/><path d="M12 19l5-7-5 7"/></svg>
+        </button>
         <button class="term-ctl" id="termMaxBtn" title="放大窗口" aria-label="放大 / 还原窗口">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
         </button>
@@ -780,6 +783,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="term-dock" id="termDock" style="display:none"></div>
 
 <script src="/app.js" defer></script>
 </body>

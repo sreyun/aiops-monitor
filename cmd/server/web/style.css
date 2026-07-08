@@ -735,6 +735,40 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-screens .term-screen{display:none}
 .term-screens .term-screen.active{display:block}
 
+/* ---------- 终端收起悬浮卡片 ---------- */
+.term-dock{
+  position:fixed; bottom:max(16px, env(safe-area-inset-bottom)); right:max(16px, env(safe-area-inset-right));
+  z-index:200; display:flex; flex-direction:column-reverse; gap:8px;
+  pointer-events:none; /* 容器不拦截事件，子卡片自行接收 */
+}
+.term-dock-item{
+  pointer-events:auto;
+  display:flex; align-items:center; gap:8px;
+  min-width:200px; max-width:280px; height:40px;
+  padding:0 8px 0 14px;
+  border:1px solid var(--line2); border-radius:10px;
+  background:var(--panel); box-shadow:0 4px 16px rgba(0,0,0,.18);
+  cursor:pointer; user-select:none;
+  transition:transform .2s ease, opacity .2s ease, box-shadow var(--transition-fast);
+  animation:termDockIn .25s ease both;
+}
+.term-dock-item:hover{box-shadow:0 6px 20px rgba(0,0,0,.25); transform:translateY(-1px)}
+.term-dock-item .dock-dot{width:7px; height:7px; border-radius:50%; background:var(--muted2); flex:none; transition:background var(--transition-fast)}
+.term-dock-item .dock-dot.on{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
+.term-dock-item .dock-dot.off{background:var(--crit)}
+.term-dock-item .dock-name{font-size:12px; font-weight:600; color:var(--txt);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0}
+.term-dock-item .dock-btn{
+  width:24px; height:24px; border-radius:6px; border:none; background:transparent;
+  color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center;
+  padding:0; flex:none; transition:background var(--transition-fast), color var(--transition-fast)
+}
+.term-dock-item .dock-btn:hover{background:var(--panel3); color:var(--txt)}
+.term-dock-item .dock-btn.close:hover{background:var(--crit-soft); color:var(--crit-txt)}
+.term-dock-item .dock-btn svg{width:14px; height:14px}
+@keyframes termDockIn{from{transform:translateY(20px) scale(.9); opacity:0}to{transform:translateY(0) scale(1); opacity:1}}
+.term-dock-item.removing{transform:translateY(20px) scale(.9); opacity:0; pointer-events:none}
+
 /* ---------- 终端会话列表 ---------- */
 .term-session-item{display:flex; align-items:center; gap:10px; padding:10px 14px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel); margin-bottom:8px; transition:border-color var(--transition-fast)}
 .term-session-item:hover{border-color:var(--line2)}
@@ -908,6 +942,9 @@ svg.sparkline{width:100%; height:46px; display:block}
   #termMask{padding:0; align-items:stretch}
   #termMask .term-modal{max-width:none; width:100%; height:100vh; height:100dvh}
   #termMask .term-screen{height:auto; flex:1; font-size:11px}
+  /* 收起悬浮卡片：移动端底部全宽条形 */
+  .term-dock{left:0; right:0; bottom:0; gap:4px}
+  .term-dock-item{min-width:0; max-width:none; width:100%; border-radius:8px 8px 0 0}
   /* section-title 工具栏换行 */
   .section-title{row-gap:8px}
   .section-title .search{margin-left:0}
@@ -932,6 +969,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .term-hint{padding-bottom:max(9px, env(safe-area-inset-bottom))}
   .modal-foot{padding-bottom:max(14px, env(safe-area-inset-bottom))}
   .replay-controls{padding-bottom:max(10px, env(safe-area-inset-bottom))}
+  .term-dock{left:max(8px, env(safe-area-inset-left)); right:max(8px, env(safe-area-inset-right)); bottom:max(8px, env(safe-area-inset-bottom))}
   .toast{bottom:max(24px, env(safe-area-inset-bottom))}
   .term-ctls{margin-right:max(4px, env(safe-area-inset-right))}
 }
