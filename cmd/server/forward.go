@@ -240,9 +240,21 @@ type rawForwardReader struct {
 	diag     *bytes.Buffer
 	diagMu   *sync.Mutex
 	diagLeft int
+	remain   []byte // 上次 Read 未消费完的剩余数据（防止 io.ReadAll 分批读取时截断）
 }
 
 func (x *rawForwardReader) Read(p []byte) (int, error) {
+	// 优先返回上次 Read 未消费完的剩余数据
+	if len(x.remain) > 0 {
+		n := copy(p, x.remain)
+		if n < len(x.remain) {
+			x.remain = x.remain[n:]
+		} else {
+			x.remain = nil
+		}
+		return n, nil
+	}
+
 	for {
 		// P0: 优先非阻塞地消费通道中已到达的数据。这是竞态修复的第一层：
 		// 在进入阻塞等待之前，先排空通道缓冲中的所有就绪帧。
@@ -291,6 +303,8 @@ func (x *rawForwardReader) Read(p []byte) (int, error) {
 }
 
 // emit 写入诊断镜像并返回拷贝到 p 的字节数。
+// 当 p 不足容纳整个 b 时，将未消费部分保存到 x.remain 供下次 Read 使用，
+// 防止 io.ReadAll 分批增长缓冲区时数据截断丢失。
 func (x *rawForwardReader) emit(p, b []byte) int {
 	if x.diag != nil && x.diagLeft > 0 {
 		x.diagMu.Lock()
@@ -304,7 +318,13 @@ func (x *rawForwardReader) emit(p, b []byte) int {
 		}
 		x.diagMu.Unlock()
 	}
-	return copy(p, b)
+	n := copy(p, b)
+	if n < len(b) {
+		// p 太小装不下整个 b，把剩余部分保存起来
+		x.remain = make([]byte, len(b)-n)
+		copy(x.remain, b[n:])
+	}
+	return n
 }
 
 // truncateStr 截取 s 为前 max 个字符（中文按 rune 处理），超出时追加 "…"。
@@ -859,6 +879,11 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, path)
 	// set Host header to the target
 	fmt.Fprintf(&reqBuf, "Host: localhost:%d\r\n", port)
+	// Add Connection: close to force the target to close the connection after
+	// responding. Without this, HTTP/1.1 keep-alive would keep the TCP connection
+	// open, causing the agent's tx goroutine (which reads from the conn as a POST
+	// body) to hang indefinitely waiting for EOF.
+	fmt.Fprintf(&reqBuf, "Connection: close\r\n")
 	// P2: copy all headers EXCEPT hop-by-hop (blacklist approach, more complete than whitelist)
 	for k, vs := range r.Header {
 		if hopByHopHeaders[k] {

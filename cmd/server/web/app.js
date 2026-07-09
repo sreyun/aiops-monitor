@@ -1835,10 +1835,12 @@ function startTermFileUpload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
   if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
-  // 先弹出目标路径输入
-  const targetPath = prompt("请输入远程目标路径（如 /tmp/upload.dat）：", "/tmp/");
-  if (!targetPath || !targetPath.trim()) return;
-  // 弹出文件选择器（不要设置 display:none，否则某些浏览器会阻止 click()）
+  // 先弹出目标目录输入（默认 /tmp/），文件名将在选择文件后自动拼接
+  const targetDir = prompt("请输入远程目标目录（如 /tmp/ 或 /home/user/）：", "/tmp/");
+  if (!targetDir || !targetDir.trim()) return;
+  // 确保目录以 / 结尾
+  const dir = targetDir.trim().replace(/\/+$/, "") + "/";
+  // 弹出文件选择器
   const input = document.createElement("input");
   input.type = "file";
   input.style.position = "fixed";
@@ -1853,10 +1855,12 @@ function startTermFileUpload() {
       toast("文件超过 100MB 限制，请使用其他方式传输", "err");
       return;
     }
-    toast(`正在上传: ${file.name} (${formatZmSize(file.size)})`, "info");
+    // 自动拼接目标目录 + 文件名
+    const targetPath = dir + file.name;
+    toast(`正在上传: ${file.name} → ${targetPath} (${formatZmSize(file.size)})`, "info");
     try {
       // 发送上传元数据 'f' 帧
-      const meta = JSON.stringify({ filename: file.name, size: file.size, target_path: targetPath.trim() });
+      const meta = JSON.stringify({ filename: file.name, size: file.size, target_path: targetPath });
       const metaBytes = new TextEncoder().encode(meta);
       const metaFrame = new Uint8Array(metaBytes.length + 1);
       metaFrame[0] = 0x66; // 'f'
@@ -1868,21 +1872,26 @@ function startTermFileUpload() {
       const buf = await file.arrayBuffer();
       const data = new Uint8Array(buf);
       const chunkSize = 32 * 1024;
+      let bytesSent = 0;
       for (let offset = 0; offset < data.length; offset += chunkSize) {
         const end = Math.min(offset + chunkSize, data.length);
         termSendUpload(tab.ws, data.slice(offset, end));
-        // 给 WebSocket 缓冲一点时间，避免背压过大
-        if (offset % (chunkSize * 4) === 0) {
+        bytesSent = end;
+        // 每 128KB 让出主线程，避免阻塞 WebSocket 发送缓冲区
+        if (offset % (chunkSize * 4) === 0 && offset > 0) {
           await new Promise(r => setTimeout(r, 0));
         }
       }
+      // 等待最后一帧被 WebSocket 发送完毕
+      await new Promise(r => setTimeout(r, 50));
       termSendEnd(tab.ws);
+      tab._uploadTarget = targetPath;
     } catch (err) {
       toast(`上传失败: ${err.message}`, "err");
     }
   };
   // 使用 setTimeout 确保 prompt 关闭后浏览器恢复用户手势上下文
-  setTimeout(() => input.click(), 100);
+  setTimeout(() => input.click(), 150);
 }
 
 function startTermFileDownload() {

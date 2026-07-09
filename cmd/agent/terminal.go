@@ -181,7 +181,9 @@ func (a *Agent) runTerminalSession(server, sid string) {
 
 	// fileTxChan carries file operation frames (upload ACK, download data)
 	// from the rx goroutine to the tx goroutine for writing to the browser.
-	fileTxChan := make(chan []byte, 32)
+	// Buffer increased to 512 to handle large file downloads without blocking
+	// the rx goroutine (which processes the terminal input stream).
+	fileTxChan := make(chan []byte, 512)
 
 	// tx: stream shell output up with ZMODEM detection + framing
 	// Frame format: [type:1][len:4 BE][payload]
@@ -246,7 +248,8 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 	}
 	var upload *fileUploadState
 
-	// Helper: send a framed file-info message to the browser via fileTxChan
+	// Helper: send a framed file-info message to the browser via fileTxChan.
+	// Uses blocking send (with timeout) so ACKs are never silently dropped.
 	sendFileInfo := func(typ string, meta map[string]interface{}) {
 		meta["type"] = typ
 		js, _ := json.Marshal(meta)
@@ -254,9 +257,12 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 		frame[0] = 'F'
 		binary.BigEndian.PutUint32(frame[1:], uint32(len(js)))
 		copy(frame[5:], js)
+		// Blocking send with 5s timeout — prevents silent ACK loss when
+		// fileTxChan is congested (e.g. during a large download).
 		select {
 		case fileTxChan <- frame:
-		default:
+		case <-time.After(5 * time.Second):
+			slog.Warn("文件信息帧发送超时（5s），丢弃", "type", typ)
 		}
 	}
 
@@ -385,7 +391,7 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 		}
 	}()
 
-	// Helper: send a framed file-info message
+	// Helper: send a framed file-info message (blocking with timeout).
 	sendFileInfo := func(typ string, meta map[string]interface{}) {
 		meta["type"] = typ
 		js, _ := json.Marshal(meta)
@@ -393,9 +399,11 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 		frame[0] = 'F'
 		binary.BigEndian.PutUint32(frame[1:], uint32(len(js)))
 		copy(frame[5:], js)
+		// Blocking send with 5s timeout — prevents silent ACK/data loss.
 		select {
 		case fileTxChan <- frame:
-		default:
+		case <-time.After(5 * time.Second):
+			slog.Warn("文件下载帧发送超时（5s），丢弃", "type", typ)
 		}
 	}
 
@@ -444,14 +452,16 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			// Send 'D' frame
+			// Send 'D' frame — blocking with timeout to prevent data loss.
 			frame := make([]byte, 5+n)
 			frame[0] = 'D'
 			binary.BigEndian.PutUint32(frame[1:], uint32(n))
 			copy(frame[5:], chunk)
 			select {
 			case fileTxChan <- frame:
-			default:
+			case <-time.After(10 * time.Second):
+				slog.Warn("文件下载数据块发送超时，取消下载", "path", remotePath)
+				return
 			}
 		}
 		if err != nil {
@@ -459,12 +469,13 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 		}
 	}
 
-	// Send 'E' frame (transfer complete)
+	// Send 'E' frame (transfer complete) — blocking with timeout.
 	endFrame := make([]byte, 5)
 	endFrame[0] = 'E'
 	select {
 	case fileTxChan <- endFrame:
-	default:
+	case <-time.After(5 * time.Second):
+		slog.Warn("文件下载结束帧发送超时", "path", remotePath)
 	}
 	slog.Info("文件下载完成", "path", remotePath, "size", info.Size())
 }
