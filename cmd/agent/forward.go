@@ -30,12 +30,6 @@ import (
 // poller. Slightly above the server's 25s poll timeout, matching termWaitHTTP.
 var forwardWaitHTTP = &http.Client{Timeout: 35 * time.Second}
 
-// forwardRxGracePeriod is how long the Agent waits after receiving the 'c'
-// (close) frame before closing the TCP connection to the target. For HTTP mode,
-// the target needs time to process the request and send its response. Closing
-// immediately would truncate the response.
-const forwardRxGracePeriod = 15 * time.Second
-
 // runForwardChannelFor runs a persistent reverse forward channel for one
 // server target. Each target gets its own goroutine so forward sessions from
 // different servers don't interfere.
@@ -121,9 +115,9 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// tx: stream target service output up (POST body ends when conn closes)
-	// P1: 不要在 tx 中关闭连接，让 rx goroutine 管理连接生命周期
-	// 这样可以避免 tx 读取到 EOF 后立即关闭连接，导致 rx 写入失败
+	// tx: stream target service output up (POST body ends when target closes conn)
+	// 用 conn 作为 POST body：Go 的 http 客户端会一直从 conn 读取直到目标关闭
+	// 连接（EOF），再把 POST body 收尾。因此「目标响应发完」这一刻，tx 自然结束。
 	go func() {
 		defer wg.Done()
 		req, err := http.NewRequest("POST",
@@ -135,26 +129,14 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 		if resp, err := termHTTP.Do(req); err == nil {
 			resp.Body.Close()
 		}
-		// 通知 rx goroutine：目标服务已关闭响应连接
-		// 但不立即关闭 conn，等待 rx 完成写入
 	}()
 
 	// rx: framed user data from the server → the TCP connection
+	// 收到 'c' 帧（请求已完整下达）即返回；不要在 rx 里关闭 conn。
+	// conn 的最终关闭由下方 wg.Wait() 之后统一执行——届时 rx（请求写完）
+	// 与 tx（响应读完）都已完成，可安全关闭，避免提前关闭导致响应被截断。
 	go func() {
 		defer wg.Done()
-		// rx goroutine 负责管理连接生命周期
-		// For HTTP mode: the 'c' frame means the request is fully sent, but the
-		// target still needs time to respond. Closing conn immediately would
-		// truncate the response. Wait a grace period before closing.
-		// For TCP mode: close immediately — the client already disconnected.
-		if mode == "http" {
-			defer func() {
-				time.Sleep(forwardRxGracePeriod)
-				closeAll()
-			}()
-		} else {
-			defer closeAll()
-		}
 		resp, err := termHTTP.Get(server + "/api/v1/agent/forward/rx?session=" + sid + "&fp=" + fp)
 		if err != nil {
 			return
@@ -164,6 +146,7 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	}()
 
 	wg.Wait()
+	// rx 已把请求写完整、tx 已把响应读完整后再关闭连接。
 	slog.Info("转发会话结束", "session", sid, "target", target)
 }
 

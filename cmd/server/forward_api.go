@@ -209,13 +209,15 @@ func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	// Get sessions count
+	// Count sessions belonging to this rule (under lock)
 	sessions := 0
+	s.forward.mu.Lock()
 	for _, sess := range s.forward.sessions {
 		if sess.ruleID == id {
 			sessions++
 		}
 	}
+	s.forward.mu.Unlock()
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 		TargetPort: rule.targetPort, LocalPort: rule.localPort,
@@ -250,13 +252,15 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	// Get sessions count
+	// Count sessions belonging to this rule (under lock)
 	sessions := 0
+	s.forward.mu.Lock()
 	for _, sess := range s.forward.sessions {
 		if sess.ruleID == id {
 			sessions++
 		}
 	}
+	s.forward.mu.Unlock()
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 		TargetPort: rule.targetPort, LocalPort: rule.localPort,
@@ -281,13 +285,15 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	// Start the listener for the new rule
 	go s.serveForwardListener(newRule)
-	// Get sessions count
+	// Count sessions for the new rule (under lock)
 	sessions := 0
+	s.forward.mu.Lock()
 	for _, sess := range s.forward.sessions {
 		if sess.ruleID == newRule.id {
 			sessions++
 		}
 	}
+	s.forward.mu.Unlock()
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: newRule.id, HostID: newRule.hostID, Hostname: newRule.hostname,
 		TargetPort: newRule.targetPort, LocalPort: newRule.localPort,

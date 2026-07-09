@@ -167,22 +167,35 @@ func newForwardManager(cfg *ConfigStore) *forwardManager {
 }
 
 // idleChecker closes sessions that have had no data for forwardIdleTimeout.
+// P1: Fixed lock ordering — collects session references under m.mu, then
+// operates on each without holding m.mu to avoid deadlock with other paths
+// that may hold sess.mu → m.mu.
 func (m *forwardManager) idleChecker() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		// Collect idle session IDs under the manager lock
 		m.mu.Lock()
+		type idleEntry struct {
+			sess *forwardSession
+			idle int64
+		}
+		var idles []idleEntry
 		now := time.Now().Unix()
-		for id, sess := range m.sessions {
+		for _, sess := range m.sessions {
 			sess.mu.Lock()
 			idle := now - sess.lastActive
 			sess.mu.Unlock()
 			if idle > int64(forwardIdleTimeout.Seconds()) {
-				slog.Info(Tz("log.forward_idle_timeout"), "session", id, "idle_sec", idle)
-				sess.closeWith(Tz("log.forward_reason_timeout"))
+				idles = append(idles, idleEntry{sess, idle})
 			}
 		}
 		m.mu.Unlock()
+		// Close idle sessions outside the manager lock
+		for _, entry := range idles {
+			slog.Info(Tz("log.forward_idle_timeout"), "session", entry.sess.id, "idle_sec", entry.idle)
+			entry.sess.closeWith(Tz("log.forward_reason_timeout"))
+		}
 	}
 }
 
@@ -199,6 +212,62 @@ func forwardFrame(typ byte, payload []byte) []byte {
 	binary.BigEndian.PutUint16(b[1:], uint16(len(payload)))
 	copy(b[3:], payload)
 	return b
+}
+
+// rawForwardReader 把 agent 经 tx POST 回传的响应字节（来自 sess.toUser 通道）
+// 暴露为一个连续的 io.Reader，供 io.ReadAll 一次性完整读取。
+//
+// 设计要点（修复 502 unexpected EOF 的核心）：
+//   - 不依赖 io.Pipe：pipe 的写端关闭时机若与 http.ReadResponse 的读取错开，
+//     解析器会读到提前的 EOF → "unexpected EOF"。
+//   - 直接消费通道：agent 关闭 tx POST（= 目标服务关闭连接）后 toUser 不再有数据，
+//     ReadAll 自然结束；会话被 sess.done 关闭时，这里也立即返回 EOF。
+//   - 可选地把前 diagLeft 字节镜像到诊断缓冲区，用于超时/错误时的日志预览。
+type rawForwardReader struct {
+	ch       chan []byte
+	done     <-chan struct{}
+	diag     *bytes.Buffer
+	diagMu   *sync.Mutex
+	diagLeft int
+}
+
+func (x *rawForwardReader) Read(p []byte) (int, error) {
+	for {
+		select {
+		case b, ok := <-x.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			if len(b) == 0 {
+				continue // 跳过空帧
+			}
+			if x.diag != nil && x.diagLeft > 0 {
+				x.diagMu.Lock()
+				if x.diagLeft > 0 {
+					n := len(b)
+					if n > x.diagLeft {
+						n = x.diagLeft
+					}
+					x.diag.Write(b[:n])
+					x.diagLeft -= n
+				}
+				x.diagMu.Unlock()
+			}
+			n := copy(p, b)
+			return n, nil
+		case <-x.done:
+			return 0, io.EOF
+		}
+	}
+}
+
+// truncateStr 截取 s 为前 max 个字符（中文按 rune 处理），超出时追加 "…"。
+func truncateStr(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // ---- session lifecycle ----
@@ -317,9 +386,11 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 
 	// If no listener yet, try ports in the configured range
 	if ln == nil {
-		// Try random ports in the range until one succeeds
+		// P1: Random port selection within range for better load distribution.
+		// Uses a simple hash-based offset seeded by time to avoid import overhead.
+		rng := int(time.Now().UnixNano() % int64((maxPort - minPort) + 1))
 		for attempt := 0; attempt < 100; attempt++ {
-			candidate := minPort + attempt%((maxPort-minPort)+1)
+			candidate := minPort + ((rng + attempt) % ((maxPort - minPort) + 1))
 			addr := listenHost + ":" + strconv.Itoa(candidate)
 			ln, err = net.Listen("tcp", addr)
 			if err == nil {
@@ -505,7 +576,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 	// start accepting connections in the background
 	go s.serveForwardListener(rule)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
-		Message: Tz("log.forward_create", hostname, hostname, req.TargetPort, rule.listenAddr)})
+		Message: Tz("log.forward_create", rule.id, hostname, req.TargetPort, rule.listenAddr)})
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 		TargetPort: rule.targetPort, LocalPort: rule.localPort,
@@ -709,34 +780,23 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// *** CRITICAL: Start the response pipe reader IMMEDIATELY after agentUp,
+	// *** CRITICAL: Start the response reader IMMEDIATELY after agentUp,
 	// BEFORE sending request frames. If the Agent failed to connect to the
-	// target, it already sent error data via the tx POST. The pipe reader must
-	// be running to capture that data before handleAgentForwardTx's defer
-	// sess.close() fires and closes sess.done. ***
-	pr, pw := io.Pipe()
+	// target, it already sent error data via the tx POST. The reader must
+	// be running to capture that data before the session ends. ***
+	// 不再使用 io.Pipe（关闭时机易与 http.ReadResponse 产生竞态导致
+	// unexpected EOF），改为由一个 reader 直接从 sess.toUser 通道读取
+	// agent 回传的全部响应字节，并同步镜像前 maxDiagBytes 用于诊断日志。
 	var rawResponseBuf bytes.Buffer
 	var rawResponseMu sync.Mutex
-	const maxDiagBytes = 2048 // capture first 2KB for diagnostics
-	go func() {
-		defer pw.Close()
-		for {
-			select {
-			case b := <-sess.toUser:
-				sess.touch()
-				if _, err := pw.Write(b); err != nil {
-					return
-				}
-				rawResponseMu.Lock()
-				if rawResponseBuf.Len() < maxDiagBytes {
-					rawResponseBuf.Write(b)
-				}
-				rawResponseMu.Unlock()
-			case <-sess.done:
-				return
-			}
-		}
-	}()
+	const maxDiagBytes = 2048 // 仅记录前 2KB 用于诊断
+	respReader := &rawForwardReader{
+		ch:       sess.toUser,
+		done:     sess.done,
+		diag:     &rawResponseBuf,
+		diagMu:   &rawResponseMu,
+		diagLeft: maxDiagBytes,
+	}
 
 	// construct raw HTTP request bytes
 	path := "/" + r.PathValue("path")
@@ -796,30 +856,36 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 readResponse:
-	// P1: add timeout for reading upstream response with better error handling
+	// 彻底修复：不再使用 bufio.NewReader(pr) + http.ReadResponse，
+	// 那样在 io.Pipe 关闭时极易抛出 "unexpected EOF"（被包装为 502）。
+	// 改为：先把 agent 回传的全部响应字节完整读出来（带上限），
+	// 再用 http.ReadResponse(bytes.NewReader(raw), r) 解析。
+	// 关键改进：
+	//   1) 传入原始请求 r，让 ReadResponse 正确判断 HEAD/CONNECT 等无 body 场景；
+	//   2) 先 io.ReadAll 再解析，避免 pipe/缓冲竞态造成的半截响应；
+	//   3) 解析失败时把原始字节作为兜底响应返回，而不是返回笼统的 502。
 	type readResult struct {
-		resp *http.Response
-		err  error
+		raw []byte
+		err error
 	}
 	resultCh := make(chan readResult, 1)
 	go func() {
-		resp, err := http.ReadResponse(bufio.NewReader(pr), nil)
-		resultCh <- readResult{resp, err}
+		// P0: 防止恶意超大响应撑爆内存（50MB 上限）
+		const maxRespBytes = 50 << 20
+		limited := io.LimitReader(respReader, maxRespBytes)
+		raw, e := io.ReadAll(limited)
+		resultCh <- readResult{raw, e}
 	}()
 
-	var resp *http.Response
+	var rawResp []byte
 	select {
 	case res := <-resultCh:
-		resp, err = res.resp, res.err
+		rawResp, err = res.raw, res.err
 	case <-time.After(forwardReadTimeout):
 		s.forward.stats.incError()
-		// P1: 提供更详细的超时错误信息
 		rawResponseMu.Lock()
-		rawPreview := rawResponseBuf.String()
+		rawPreview := truncateStr(rawResponseBuf.String(), 300)
 		rawResponseMu.Unlock()
-		if len(rawPreview) > 300 {
-			rawPreview = rawPreview[:300] + "..."
-		}
 		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
 			"err", "read timeout", "raw_preview", rawPreview, "timeout", forwardReadTimeout)
 		http.Error(w, Tr(r, "forward.agent_timeout"), http.StatusGatewayTimeout)
@@ -828,49 +894,68 @@ readResponse:
 
 	if err != nil {
 		s.forward.stats.incError()
-		rawResponseMu.Lock()
-		rawPreview := rawResponseBuf.String()
-		rawResponseMu.Unlock()
-		if len(rawPreview) > 300 {
-			rawPreview = rawPreview[:300] + "..."
-		}
-		// P1: 提供更友好的错误信息
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "unexpected EOF") {
-			errMsg = "上游服务连接异常断开（可能是服务超时或崩溃）"
-		} else if strings.Contains(errMsg, "connection reset by peer") {
-			errMsg = "上游服务拒绝连接"
-		} else if strings.Contains(errMsg, "EOF") {
-			errMsg = "上游服务未返回响应"
-		}
-		
-		if len(rawPreview) == 0 {
-			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", errMsg, "note", "empty response - agent may have failed to connect to target")
-		} else {
-			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", errMsg, "raw_preview", rawPreview)
-		}
-		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
-			Message: Tz("log.forward_parse_failed", port, path, errMsg)})
-		http.Error(w, Tr(r, "forward.parse_response_failed", errMsg), http.StatusBadGateway)
+		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err.Error())
+		http.Error(w, Tr(r, "forward.parse_response_failed", "读取上游响应失败: "+err.Error()), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 
-	// copy response headers and body to the browser
-	for k, vs := range resp.Header {
-		if hopByHopHeaders[k] {
-			continue // P2: strip hop-by-hop from response too
+	// 尝试按 HTTP 响应解析
+	resp, parseErr := http.ReadResponse(bufio.NewReader(bytes.NewReader(rawResp)), r)
+	if parseErr == nil {
+		defer resp.Body.Close()
+		for k, vs := range resp.Header {
+			if hopByHopHeaders[k] {
+				continue // P2: strip hop-by-hop from response too
+			}
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
 		}
-		for _, v := range vs {
-			w.Header().Add(k, v)
+		w.WriteHeader(resp.StatusCode)
+		n, _ := io.Copy(w, resp.Body)
+		s.forward.stats.addBytes(n)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+			Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
+		return
+	}
+
+	// 解析失败兜底：把 agent 回传的原始字节原样返回给浏览器。
+	// 这样当目标是非 HTTP 服务（如返回纯文本错误、或 TLS 握手失败）时，
+	// 用户至少能看到真实内容，而不是笼统的 502。
+	s.forward.stats.incError()
+	slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
+		"err", parseErr.Error(), "raw_len", len(rawResp))
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
+		Message: Tz("log.forward_parse_failed", port, path, parseErr.Error())})
+	if len(rawResp) == 0 {
+		http.Error(w, Tr(r, "forward.parse_response_failed", parseErr.Error()), http.StatusBadGateway)
+		return
+	}
+	// 原始内容可能是 agent 自己生成的 HTTP 502 错误页（目标不可达），
+	// 尝试识别并返回对应状态码。
+	statusCode := http.StatusOK
+	contentType := "text/plain; charset=utf-8"
+	if bytes.HasPrefix(rawResp, []byte("HTTP/")) {
+		if idx := bytes.Index(rawResp, []byte("\r\n")); idx > 0 {
+			parts := strings.Fields(string(rawResp[:idx]))
+			if len(parts) >= 2 {
+				if sc, e := strconv.Atoi(parts[1]); e == nil {
+					statusCode = sc
+				}
+			}
+		}
+		// Try to extract Content-Type from raw HTTP response
+		if ctIdx := bytes.Index(rawResp, []byte("Content-Type:")); ctIdx >= 0 {
+			lineEnd := bytes.Index(rawResp[ctIdx:], []byte("\r\n"))
+			if lineEnd > 0 {
+				contentType = strings.TrimSpace(string(rawResp[ctIdx+13 : ctIdx+lineEnd]))
+			}
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	n, _ := io.Copy(w, resp.Body)
-	s.forward.stats.addBytes(n)
-
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
-		Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Del("Content-Length")
+	w.WriteHeader(statusCode)
+	_, _ = w.Write(rawResp)
 }
 
 // handleWSProxy tunnels a WebSocket upgrade request through the agent.
@@ -887,7 +972,7 @@ func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request, hostID, h
 	if !s.forward.notifyAgent(hostID, forwardWaitInfo{sessionID: sess.id, targetPort: port, mode: "tcp"}) {
 		s.forward.stats.incError()
 		msg := agentOfflineReason(s.store, hostID)
-		slog.Warn("TCP转发 Agent未在线", "host", hostname, "hostID", hostID, "port", port, "reason", msg)
+		slog.Warn(Tz("log.forward_agent_offline"), "host", hostname, "hostID", hostID, "port", port, "reason", msg)
 		http.Error(w, Tr(r, "forward.agent_offline")+": "+msg, http.StatusBadGateway)
 		return
 	}

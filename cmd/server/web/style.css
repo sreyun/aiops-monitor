@@ -624,6 +624,39 @@ svg.sparkline{width:100%; height:46px; display:block}
 .checks-list.pill .check-card:hover .ch-actions{opacity:1}
 .checks-list.pill .check-detail{gap:9px 16px}
 
+/* ---------- 端口转发：列表 / 卡片双视图 ---------- */
+/* 列表视图（默认） */
+.fwd-list{display:flex; flex-direction:column; gap:10px}
+.fwd-list.fwd-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; align-items:start}
+.fwd-row{display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--r); transition:border-color var(--transition-fast), background var(--transition-fast)}
+.fwd-row:hover{border-color:var(--hover-border); background:var(--panel2)}
+.fwd-off{opacity:.55}
+.fwd-off:hover{opacity:.8}
+.fwd-main{flex:1; min-width:0}
+.fwd-title{font-weight:650; font-size:14px; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.fwd-sub{color:var(--muted); font-size:12.5px; font-family:ui-monospace,Menlo,Consolas,monospace;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px}
+.fwd-actions{display:flex; gap:6px; flex:none; margin-left:auto}
+/* 卡片视图 */
+.fwd-card{position:relative; padding:14px 16px 15px; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--r); transition:border-color var(--transition-fast), background var(--transition-fast)}
+.fwd-card:hover{border-color:var(--hover-border); background:var(--panel2)}
+.fwd-card-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px}
+.fwd-status{font-size:11px; font-weight:600; padding:2px 10px; border-radius:999px; flex:none}
+.fwd-status.on{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
+.fwd-status.off{background:var(--panel3); color:var(--muted); border:1px solid var(--line2)}
+.fwd-card .fwd-title{margin-top:2px}
+.fwd-card .fwd-actions{margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
+/* 操作图标按钮（统一描边 SVG，跟随文字色） */
+.icon-btn{width:30px; height:30px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2);
+  color:var(--muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0;
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast)}
+.icon-btn svg{width:15px; height:15px}
+.icon-btn:hover{background:var(--panel3); color:var(--txt); border-color:var(--hover-border)}
+.icon-btn.danger:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:var(--crit-border)}
+.icon-btn:disabled{opacity:.4; cursor:not-allowed}
+
 /* ---------- 概览：资源 TOP ---------- */
 .top-grid{display:flex; flex-direction:column; gap:12px; margin-top:16px}
 .top-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px}
@@ -1362,3 +1395,76 @@ body[data-role="viewer"] #installBtn{display:none !important}
 
 /* ---------- 端口转发 ---------- */
 code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace); font-size:12px; background:var(--panel2); padding:1px 5px; border-radius:3px}
+
+/* 转发列表容器 */
+.fwd-list{display:flex; flex-direction:column; gap:6px}
+/* 卡片网格视图 */
+.fwd-list.fwd-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; align-items:start}
+
+/* 转发行（列表视图） */
+.fwd-row{
+  display:flex; align-items:center; gap:12px;
+  padding:11px 14px; border-radius:var(--r-sm);
+  border:1px solid var(--line); background:var(--panel);
+  transition:border-color var(--transition-fast), background var(--transition-fast);
+}
+.fwd-row:hover{border-color:var(--line2); background:var(--panel2)}
+.fwd-row.fwd-off{opacity:.55; filter:grayscale(.35)}
+.fwd-row.fwd-off:hover{opacity:.8}
+
+/* 转发卡片（卡片视图） */
+.fwd-card{
+  display:flex; flex-direction:column; gap:10px;
+  padding:14px 16px; border-radius:var(--r);
+  border:1px solid var(--line); background:var(--panel);
+  transition:border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+}
+.fwd-card:hover{border-color:var(--line2); background:var(--panel2); box-shadow:var(--shadow-sm)}
+.fwd-card.fwd-off{opacity:.5; filter:grayscale(.35)}
+.fwd-card.fwd-off:hover{opacity:.75}
+
+/* 卡片头部：类型徽章 + 状态 */
+.fwd-card-head{display:flex; align-items:center; gap:8px}
+.fwd-status{font-size:10px; font-weight:600; padding:2px 8px; border-radius:999px; flex:none}
+.fwd-status.on{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
+.fwd-status.off{background:var(--panel3); color:var(--muted); border:1px solid var(--line2)}
+
+/* 转发标题 */
+.fwd-title{font-size:13px; font-weight:650; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+/* 转发副标题 */
+.fwd-sub{font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.4}
+.fwd-sub code{font-size:11px; padding:1px 4px}
+
+/* 转发主内容区域（列表视图） */
+.fwd-main{flex:1; min-width:0; display:flex; flex-direction:column; gap:3px}
+
+/* 转发操作按钮组 */
+.fwd-actions{display:flex; gap:4px; flex:none; margin-left:auto}
+.fwd-card .fwd-actions{justify-content:flex-end; margin-top:2px}
+
+/* 图标按钮（转发操作栏专用） */
+.icon-btn{
+  display:flex; align-items:center; justify-content:center;
+  width:30px; height:30px; padding:0; flex:none;
+  background:transparent; border:1px solid transparent; border-radius:var(--r-xs);
+  color:var(--muted); cursor:pointer;
+  transition:background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.icon-btn svg{width:15px; height:15px}
+.icon-btn:hover{background:var(--panel3); color:var(--txt); border-color:var(--line2)}
+.icon-btn:active{transform:translateY(1px)}
+.icon-btn.danger:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:var(--crit-border)}
+
+/* TCP/HTTP 类型徽章配色（复用 .badge 基类） */
+.badge.op{background:var(--accent2-soft); color:var(--accent2-txt)}
+.badge.sys{background:var(--info-soft); color:var(--info-txt)}
+
+/* 转发模块响应式 */
+@media(max-width:700px){
+  .fwd-list.fwd-grid{grid-template-columns:1fr}
+  .fwd-row{flex-wrap:wrap; gap:8px; padding:12px 14px}
+  .fwd-main{flex:1 1 100%; order:2}
+  .fwd-actions{flex:1 1 100%; order:3; justify-content:flex-start}
+  .fwd-row .badge{order:1}
+}

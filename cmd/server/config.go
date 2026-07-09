@@ -711,6 +711,9 @@ func (cs *ConfigStore) ToggleHTTPProxy(id string, enabled bool) error {
 }
 
 // UpdateHTTPProxy updates an existing HTTP proxy configuration.
+// P1: Fixed — always honour the caller's Enabled field instead of silently
+// keeping the old value when updated.Enabled is false. Callers that don't
+// want to change Enabled should set it to the current value explicitly.
 func (cs *ConfigStore) UpdateHTTPProxy(id string, updated HTTPProxyConfig) error {
 	cs.mu.Lock()
 	found := false
@@ -719,10 +722,6 @@ func (cs *ConfigStore) UpdateHTTPProxy(id string, updated HTTPProxyConfig) error
 			// Preserve ID and CreatedAt
 			updated.ID = p.ID
 			updated.CreatedAt = p.CreatedAt
-			// Preserve Enabled if not explicitly set
-			if !updated.Enabled {
-				updated.Enabled = p.Enabled
-			}
 			cs.cfg.HTTPProxies[i] = updated
 			found = true
 			break
