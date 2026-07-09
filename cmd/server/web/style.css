@@ -69,14 +69,6 @@
   --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.06);
   --ov-card-lift:-3px;
   --ov-section-gap:24px;
-  /* ---- 资源热力图矩阵 tokens ---- */
-  --rh-host-w:140px;   /* 主机名列宽 */
-  --rh-col-w:120px;    /* 指标列宽 */
-  --rh-row-h:38px;     /* 数据行高 */
-  --rh-bar-h:7px;      /* 进度条高度 */
-  --rh-bar-min:3;      /* 进度条最小百分比 */
-  --rh-gap:2px;        /* 行间距 */
-  --rh-radius:6px;     /* 行圆角 */
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -699,60 +691,71 @@ svg.sparkline{width:100%; height:46px; display:block}
 .icon-btn.danger:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:var(--crit-border)}
 .icon-btn:disabled{opacity:.4; cursor:not-allowed}
 
-/* ---------- 概览：资源热力图矩阵 ---------- */
-.resource-heatmap{overflow-x:auto; margin-top:4px; -webkit-overflow-scrolling:touch}
-.rh-table{display:table; width:100%; min-width:680px; border-collapse:separate; border-spacing:0 var(--rh-gap)}
+/* ---------- 概览：资源 TOP10 排行榜（多面板横向条形图） ---------- */
+/* 3 列网格布局，每行最多 3 个面板 */
+.top-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:4px}
 
-/* 表头行 */
-.rh-hdr{display:table-row}
-.rh-hdr-cell{display:table-cell; padding:6px 8px 10px; font-size:11px; font-weight:650; color:var(--muted);
-  letter-spacing:.02em; white-space:nowrap; vertical-align:bottom; cursor:pointer; user-select:none;
-  transition:color var(--transition-fast); text-align:right}
-.rh-hdr-cell:first-child{text-align:left; cursor:default}
-.rh-hdr-cell.sortable:hover{color:var(--txt)}
-.rh-hdr-cell.sort-active{color:var(--accent-txt)}
-.rh-hdr-cell .rh-sort-arrow{display:inline-block; margin-left:3px; font-size:9px; opacity:0; transition:opacity var(--transition-fast)}
-.rh-hdr-cell.sort-active .rh-sort-arrow{opacity:1}
-.rh-hdr-cell .rh-unit{display:block; font-size:10px; font-weight:400; color:var(--muted2); margin-top:1px}
+/* 单个面板 = 指标卡片 */
+.top-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+  padding:12px 14px; box-shadow:0 1px 2px rgba(0,0,0,.08);
+  transition:border-color var(--transition), box-shadow var(--transition)}
+.top-panel:hover{border-color:var(--hover-border)}
 
-/* 数据行 */
-.rh-row{display:table-row; transition:background var(--transition-fast);
-  border-radius:var(--rh-radius); position:relative}
-.rh-row:hover{background:var(--panel2)}
-.rh-row:focus-visible{outline:2px solid var(--accent); outline-offset:-2px; border-radius:var(--rh-radius)}
+/* 面板标题 */
+.top-title{font-size:11.5px; font-weight:650; color:var(--muted); letter-spacing:.02em;
+  margin-bottom:10px; display:flex; align-items:center; gap:6px}
+.top-title .top-unit{font-size:10px; font-weight:400; color:var(--muted2)}
 
-/* 主机名列 */
-.rh-host{display:table-cell; padding:0 10px; max-width:var(--rh-host-w);
-  font-size:12px; font-weight:500; color:var(--txt); vertical-align:middle;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  cursor:pointer; border-radius:var(--rh-radius) 0 0 var(--rh-radius)}
-.rh-host:hover{color:var(--accent); text-decoration:underline}
+/* 排行条目行 */
+.top-item{display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:6px;
+  cursor:pointer; transition:background var(--transition-fast);
+  border-left:3px solid transparent}
+.top-item:hover{background:var(--panel2); border-left-color:var(--accent)}
+.top-item:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
 
-/* 指标单元格 */
-.rh-cell{display:table-cell; padding:4px 8px; vertical-align:middle; text-align:right;
-  border-radius:0 var(--rh-radius) var(--rh-radius) 0}
-.rh-cell-inner{display:flex; align-items:center; gap:7px; justify-content:flex-end}
+/* 主机名 */
+.top-name{flex:none; width:86px; font-size:12px; font-weight:500; color:var(--txt);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.top-name:hover{color:var(--accent); text-decoration:underline}
 
 /* 进度条 */
-.rh-bar{flex:1; height:var(--rh-bar-h); min-width:20px; background:var(--panel3);
-  border-radius:4px; overflow:hidden; max-width:90px}
-.rh-bar-fill{height:100%; border-radius:4px; min-width:3px;
-  transition:width .45s ease, background .45s ease}
+.top-bar{flex:1; min-width:30px; height:7px; background:var(--panel3);
+  border-radius:4px; overflow:hidden}
+.top-bar-fill{height:100%; border-radius:4px; min-width:3px;
+  transition:width .4s ease, background .4s ease}
 
 /* 数值 */
-.rh-val{width:48px; flex:none; text-align:right; font-size:12px; font-weight:600;
+.top-val{width:54px; flex:none; text-align:right; font-size:12px; font-weight:600;
   font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--txt)}
 
 /* 空状态 */
-.rh-empty{display:flex; flex-direction:column; align-items:center; justify-content:center;
+.top-empty{display:flex; flex-direction:column; align-items:center; justify-content:center;
   padding:48px 20px; color:var(--muted2); text-align:center;
-  border:1px dashed var(--line2); border-radius:var(--r); background:var(--bg2)}
-.rh-empty svg{width:48px; height:48px; opacity:.3; margin-bottom:10px; color:var(--muted2)}
-.rh-empty span{font-size:13px; line-height:1.5}
+  border:1px dashed var(--line2); border-radius:var(--r); background:var(--bg2);
+  grid-column:1/-1}
+.top-empty svg{width:48px; height:48px; opacity:.3; margin-bottom:10px; color:var(--muted2)}
+.top-empty span{font-size:13px; line-height:1.5}
 
-/* 监控探针独立面板（保留） */
-.rh-checks-panel{margin-top:16px}
-.rh-checks-title{font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.02em; margin-bottom:10px}
+/* 监控探针面板 */
+.top-checks-panel{margin-top:16px; grid-column:1/-1}
+.top-checks-title{font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.02em; margin-bottom:10px}
+/* 监控探针独立面板 */
+.checks-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px;
+  box-shadow:0 1px 2px rgba(0,0,0,.08); transition:border-color var(--transition), box-shadow var(--transition)}
+.checks-item{display:flex; align-items:center; gap:10px; padding:5px 6px; border-radius:6px;
+  cursor:pointer; transition:background var(--transition-fast); border-left:3px solid transparent}
+.checks-item:hover{background:var(--panel2); border-left-color:var(--accent)}
+.checks-item:focus-visible,.top-item:focus-visible{outline:2px solid var(--accent); outline-offset:-2px; border-radius:var(--r-xs)}
+.checks-name{flex:none; width:86px; font-size:12px; font-weight:500; color:var(--txt);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.checks-bar{flex:1; min-width:30px; height:7px; background:var(--panel3);
+  border-radius:4px; overflow:hidden}
+.checks-bar-fill{height:100%; border-radius:4px; min-width:3px;
+  transition:width .4s ease, background .4s ease}
+.checks-val{width:54px; flex:none; text-align:right; font-size:12px; font-weight:600;
+  font-variant-numeric:tabular-nums; white-space:nowrap}
+.checks-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-top:16px}
+
 /* ---------- Group collapse (disabled — rules retained for future restore) ---------- */
 .group-head{cursor:default; user-select:none}
 .group-head .cat-toggle{display:none; font-size:10px; color:var(--muted); flex:none; width:14px; text-align:center; transition:transform var(--transition-fast)}
@@ -812,7 +815,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .tb-icon.active{background:var(--warn-soft); color:var(--warn)}
 
 /* P1-#8: Keyboard focus-visible */
-.host:focus-visible, .row-item:focus-visible, .check-card:focus-visible, .checks-item:focus-visible, .rh-row:focus-visible {
+.host:focus-visible, .row-item:focus-visible, .check-card:focus-visible, .checks-item:focus-visible, .top-item:focus-visible {
   outline:2px solid var(--accent); outline-offset:-2px;
 }
 .host:focus-visible{border-color:var(--accent)}
@@ -1177,6 +1180,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* 平板横屏 / 小桌面 (≤1200px) */
 @media(max-width:1200px){
   .grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  .top-grid{grid-template-columns:repeat(2,1fr)}
 }
 /* 平板竖屏 (≤900px)：侧栏变抽屉 */
 @media(max-width:900px){
@@ -1193,6 +1197,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* 手机横屏 / 大手机 (≤700px) */
 @media(max-width:700px){
   .grid{grid-template-columns:1fr}
+  .top-grid{grid-template-columns:1fr}
   .topbar{flex-wrap:wrap; gap:8px}
   .page-head{flex:1 1 100%; order:-1}
   .search{width:100%; max-width:none; margin-left:0}

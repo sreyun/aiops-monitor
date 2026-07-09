@@ -40,6 +40,8 @@ type ThresholdConfig struct {
 	MemCrit         float64 `json:"mem_crit"`
 	DiskWarn        float64 `json:"disk_warn"`
 	DiskCrit        float64 `json:"disk_crit"`
+	DiskIOWarn      float64 `json:"diskio_warn"`
+	DiskIOCrit      float64 `json:"diskio_crit"`
 	OfflineAfterSec int     `json:"offline_after_sec"`
 }
 
@@ -48,6 +50,7 @@ func defaultThresholdConfig() ThresholdConfig {
 		CPUWarn: 80, CPUCrit: 90,
 		MemWarn: 80, MemCrit: 90,
 		DiskWarn: 85, DiskCrit: 95,
+		DiskIOWarn: 80, DiskIOCrit: 90,
 		OfflineAfterSec: 30,
 	}
 }
@@ -57,6 +60,7 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		CPUWarn: t.CPUWarn, CPUCrit: t.CPUCrit,
 		MemWarn: t.MemWarn, MemCrit: t.MemCrit,
 		DiskWarn: t.DiskWarn, DiskCrit: t.DiskCrit,
+		DiskIOWarn: t.DiskIOWarn, DiskIOCrit: t.DiskIOCrit,
 		OfflineAfter: time.Duration(t.OfflineAfterSec) * time.Second,
 	}
 }

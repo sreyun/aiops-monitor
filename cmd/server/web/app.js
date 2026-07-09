@@ -114,6 +114,10 @@ function withLoading(btnId, fn) {
 const fmtRate = b => b < 1024 ? b.toFixed(0) + " " + I18N.t("unit.bps")
   : b < 1048576 ? (b / 1024).toFixed(1) + " " + I18N.t("unit.kbps")
   : (b / 1048576).toFixed(2) + " " + I18N.t("unit.mbps");
+const fmtIORate = b => b < 1024 ? b.toFixed(0) + " B/s"
+  : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
+  : b < 1073741824 ? (b / 1048576).toFixed(1) + " MB/s"
+  : (b / 1073741824).toFixed(2) + " GB/s";
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -584,19 +588,14 @@ function renderAlerts(alerts) {
   refreshAlertRowTimes($("ovAlerts"), now);
 }
 
-/* ---------- 概览：资源热力图矩阵 + 监控探针面板 ---------- */
-let RENDER_TOP_SORT = null; // { key, asc }
+/* ---------- 概览：资源 TOP10 排行榜（多面板横向条形图） ---------- */
 function renderTop(hosts) {
-  const tableEl = $("rhTable");
-  const checksEl = $("rhChecks");
-  if (!tableEl || !checksEl) return;
+  const el = $("topPanels");
+  if (!el) return;
   const live = hosts.filter(h => h.latest && h.online);
 
-  // 监控探针面板始终渲染
-  checksEl.innerHTML = checkTopPanels();
-
   if (!live.length) {
-    tableEl.innerHTML = `<div class="rh-empty">
+    el.innerHTML = `<div class="top-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
       <span>${I18N.t("empty.no_online_hosts")}</span>
     </div>`;
@@ -606,74 +605,58 @@ function renderTop(hosts) {
   const hasGPU = live.some(h => (h.latest.gpus || []).length);
   const diskMax = m => { const d = m.disks || []; return d.length ? Math.max(...d.map(x => x.percent)) : (m.disk_percent || 0); };
   const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
+  const netTotal = m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0);
 
-  // 列定义
-  const cols = [
-    { key: "cpu", label: "CPU", unit: "%", fn: m => m.cpu_percent || 0, isPct: true },
-    ...(hasGPU ? [{ key: "gpu", label: "GPU", unit: "%", fn: gpuMax, isPct: true }] : []),
-    { key: "mem", label: I18N.t("section.mem"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
-    { key: "disk", label: I18N.t("section.disk"), unit: "%", fn: diskMax, isPct: true },
-    { key: "net", label: I18N.t("section.net"), unit: I18N.t("unit.mbps"), fn: m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0), isPct: false },
-    { key: "load", label: I18N.t("section.load"), unit: "", fn: m => m.load5 || 0, isPct: false },
+  // 面板定义：[key, title, unit, valueFn, isPct, displayFn]
+  const panels = [
+    { key: "cpu", title: "CPU " + I18N.t("notify.type_cpu"), unit: "%", fn: m => m.cpu_percent || 0, isPct: true },
+    ...(hasGPU ? [{ key: "gpu", title: "GPU", unit: "%", fn: gpuMax, isPct: true }] : []),
+    { key: "mem", title: I18N.t("section.mem"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
+    { key: "disk", title: I18N.t("section.disk"), unit: "%", fn: diskMax, isPct: true },
+    { key: "diskio", title: "磁盘 IO", unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
+    { key: "net", title: I18N.t("section.net"), unit: I18N.t("unit.mbps"), fn: netTotal, isPct: false },
+    { key: "load", title: I18N.t("section.load"), unit: "", fn: m => m.load5 || 0, isPct: false },
   ];
 
-  // 构建行数据
-  let rows = live.map(h => ({
-    id: h.id,
-    name: h.hostname || h.id,
-    vals: cols.map(c => c.fn(h.latest, h)),
-  }));
+  const topN = (arr, fn, n) => arr.slice().sort((a, b) => fn(b.latest) - fn(a.latest)).slice(0, n);
 
-  // 排序
-  if (RENDER_TOP_SORT) {
-    const { key, asc } = RENDER_TOP_SORT;
-    const idx = cols.findIndex(c => c.key === key);
-    if (idx >= 0) {
-      rows = rows.slice().sort((a, b) => asc ? a.vals[idx] - b.vals[idx] : b.vals[idx] - a.vals[idx]);
-    }
+  function renderPanel(panel) {
+    const sorted = topN(live, panel.fn, 10);
+    const maxVal = Math.max(1, ...sorted.map(h => panel.fn(h.latest)));
+    const items = sorted.map((h, idx) => {
+      const v = panel.fn(h.latest);
+      const pct = panel.isPct ? v : Math.min(100, v / maxVal * 100);
+      const width = Math.max(3, pct);
+      const color = panel.key === "net" ? "var(--info)" : usageColor(panel.isPct ? v : pct);
+      let disp;
+      if (panel.isPct) disp = v.toFixed(1) + "%";
+      else if (panel.key === "net") disp = fmtRate(v);
+      else if (panel.key === "load") disp = v.toFixed(2);
+      else disp = v.toFixed(1);
+      return `<div class="top-item" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" title="${esc(h.hostname || h.id)} · ${esc(disp)}">
+        <span class="top-name">${esc(h.hostname || h.id)}</span>
+        <div class="top-bar"><div class="top-bar-fill" style="width:${width}%;background:${color}"></div></div>
+        <span class="top-val mono">${esc(disp)}</span>
+      </div>`;
+    }).join("");
+    return `<div class="top-panel">
+      <div class="top-title">${esc(panel.title)}<span class="top-unit">${esc(panel.unit)}</span></div>
+      ${items}
+    </div>`;
   }
 
-  // 计算每列最大值（用于非百分比型列的进度条缩放）
-  const maxVals = cols.map((_, i) => Math.max(1, ...rows.map(r => r.vals[i])));
+  let html = panels.map(renderPanel).join("");
 
-  // 渲染表头
-  let html = `<div class="rh-hdr">`;
-  html += `<div class="rh-hdr-cell">${I18N.t("section.hostname")}</div>`;
-  cols.forEach((c, i) => {
-    const active = RENDER_TOP_SORT && RENDER_TOP_SORT.key === c.key;
-    const arrow = active ? (RENDER_TOP_SORT.asc ? "▲" : "▼") : "▲";
-    html += `<div class="rh-hdr-cell sortable${active ? " sort-active" : ""}" data-sort="${c.key}">
-      ${esc(c.label)}<span class="rh-unit">${esc(c.unit)}</span>
-      <span class="rh-sort-arrow">${arrow}</span>
+  // 监控探针面板
+  const checksHtml = checkTopPanels();
+  if (checksHtml) {
+    html += `<div class="top-checks-panel">
+      <div class="top-checks-title">${I18N.t("section.custom_monitor")}</div>
+      ${checksHtml}
     </div>`;
-  });
-  html += `</div>`;
+  }
 
-  // 渲染数据行
-  rows.forEach(row => {
-    html += `<div class="rh-row" tabindex="0" data-id="${esc(row.id)}" data-name="${esc(row.name)}">`;
-    html += `<div class="rh-host" title="${esc(row.name)}">${esc(row.name)}</div>`;
-    row.vals.forEach((v, i) => {
-      const col = cols[i];
-      const max = maxVals[i];
-      const pct = col.isPct ? v : Math.min(100, v / max * 100);
-      const width = Math.max(3, pct);
-      const color = col.key === "net" ? "var(--info)" : usageColor(col.isPct ? v : (v / max * 100));
-      let disp;
-      if (col.isPct) disp = v.toFixed(1) + "%";
-      else if (col.key === "net") disp = fmtRate(v);
-      else disp = v.toFixed(2);
-      html += `<div class="rh-cell" title="${esc(col.label)}: ${esc(disp)}">
-        <div class="rh-cell-inner">
-          <div class="rh-bar"><div class="rh-bar-fill" style="width:${width}%;background:${color}"></div></div>
-          <span class="rh-val">${esc(disp)}</span>
-        </div>
-      </div>`;
-    });
-    html += `</div>`;
-  });
-
-  tableEl.innerHTML = html;
+  el.innerHTML = html;
 }
 
 // 监控 TOP10，顺序 Ping → TCP → HTTP → 进程；无该类型监控则该面板不显示
@@ -864,6 +847,7 @@ function hostCard(h) {
     ${chips}
     <div class="foot">
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
+      <span class="g">💾<span class="mono">R ${fmtIORate(m.disk_read_rate || 0)}</span> <span class="mono">W ${fmtIORate(m.disk_write_rate || 0)}</span></span>
       <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
       <span class="g">${I18N.t("ui.process")} <span class="mono">${m.proc_count || 0}</span></span>
       ${lastCell}
@@ -1109,7 +1093,7 @@ async function loadAndRenderCharts() {
         ${renderChartControls(DETAIL_TIME_RANGE, "range")}
       </div>
       <div class="chart-container">
-        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
+        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}${wrap('chartDiskIO')}
       </div>
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
@@ -1155,6 +1139,11 @@ async function loadAndRenderCharts() {
       { key: 'net_recv_rate', label: I18N.t("section.net_recv"), color: '#2fd07a', fmt: fmtRate },
       { key: 'net_sent_rate', label: I18N.t("section.net_send"), color: '#43b6f0', fmt: fmtRate },
     ], null, null, { title: I18N.t("section.net_throughput") });
+
+    DETAIL_CHARTS.chartDiskIO = createChart('chartDiskIO', samples, [
+      { key: 'disk_read_rate', label: I18N.t("ui.disk_read") || '磁盘读', color: '#2fd07a', fmt: fmtIORate },
+      { key: 'disk_write_rate', label: I18N.t("ui.disk_write") || '磁盘写', color: '#f7b23b', fmt: fmtIORate },
+    ], null, null, { title: I18N.t("ui.disk_io") || '磁盘 IO 吞吐' });
 
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
@@ -4299,22 +4288,10 @@ safeAddEventListener("checksGrid", "click", e => {
       .catch(e => toast(I18N.t("toast.trigger_failed2") + e, "err"));
   }
 });
-// 概览 资源热力图 点击：排序 / 主机详情 / 监控历史
+// 概览 资源 TOP10 点击：主机详情 / 监控历史
 safeAddEventListener("topPanels", "click", e => {
-  // 表头排序
-  const hdr = e.target.closest(".rh-hdr-cell.sortable");
-  if (hdr) {
-    const key = hdr.dataset.sort;
-    if (RENDER_TOP_SORT && RENDER_TOP_SORT.key === key) {
-      RENDER_TOP_SORT.asc = !RENDER_TOP_SORT.asc;
-    } else {
-      RENDER_TOP_SORT = { key, asc: false };
-    }
-    refresh();
-    return;
-  }
   // 行点击 → 主机详情
-  const row = e.target.closest(".rh-row");
+  const row = e.target.closest(".top-item");
   if (row) { openDetail(row.dataset.id, row.dataset.name); return; }
   // 监控探针点击
   const chk = e.target.closest(".checks-item");

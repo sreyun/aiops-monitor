@@ -28,8 +28,12 @@ type linuxCollector struct {
 	prevCPU  cpuTimes
 	prevNet  netTotals
 	prevNetT time.Time
+	prevDiskIO diskIOTotals
+	prevDiskIOT time.Time
 	primed   bool
 }
+
+type diskIOTotals struct{ readBytes, writeBytes uint64 }
 
 func newCollector(diskPath string) Collector {
 	if diskPath == "" {
@@ -94,6 +98,22 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	}
 
 	m.NetConns = countTCPConns()
+
+	// Disk IO: read/write rates from /proc/diskstats
+	if dio, err := readDiskIO(); err == nil {
+		if c.primed && !c.prevDiskIOT.IsZero() {
+			if elapsed := now.Sub(c.prevDiskIOT).Seconds(); elapsed > 0 {
+				m.DiskReadRate = round1(rate(dio.readBytes, c.prevDiskIO.readBytes, elapsed))
+				m.DiskWriteRate = round1(rate(dio.writeBytes, c.prevDiskIO.writeBytes, elapsed))
+				// IO util: rough estimate based on total bytes throughput vs typical disk bandwidth
+				totalRate := m.DiskReadRate + m.DiskWriteRate
+				m.DiskIOUtilPercent = round1(totalRate / 200e6 * 100) // 200 MB/s as reference max
+				if m.DiskIOUtilPercent > 100 { m.DiskIOUtilPercent = 100 }
+			}
+		}
+		c.prevDiskIO = dio
+		c.prevDiskIOT = now
+	}
 
 	if l1, l5, l15, err := readLoadAvg(); err == nil {
 		m.Load1, m.Load5, m.Load15 = l1, l5, l15
@@ -416,4 +436,35 @@ func kernelVersion() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// readDiskIO reads cumulative read/write bytes from /proc/diskstats for all
+// non-loop, non-ram physical/virtual disks.
+func readDiskIO() (diskIOTotals, error) {
+	f, err := os.Open("/proc/diskstats")
+	if err != nil {
+		return diskIOTotals{}, err
+	}
+	defer f.Close()
+	var dio diskIOTotals
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 14 {
+			continue
+		}
+		dev := fields[2]
+		// Skip loopback, ram, and dm (device-mapper) devices that are
+		// typically virtual or already counted under their parent disk.
+		if strings.HasPrefix(dev, "loop") || strings.HasPrefix(dev, "ram") || strings.HasPrefix(dev, "dm-") {
+			continue
+		}
+		// Field indices (Linux kernel Documentation/iostats.txt):
+		//   5 = sectors read, 9 = sectors written
+		rdSec, _ := strconv.ParseUint(fields[5], 10, 64)
+		wrSec, _ := strconv.ParseUint(fields[9], 10, 64)
+		dio.readBytes += rdSec * 512
+		dio.writeBytes += wrSec * 512
+	}
+	return dio, nil
 }

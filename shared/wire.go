@@ -32,6 +32,10 @@ type Metrics struct {
 	Uptime      uint64  `json:"uptime"`
 	GPUs        []GPUInfo `json:"gpus,omitempty"` // per-GPU utilization / VRAM (best-effort, cross-platform)
 	ProcessNames []string `json:"process_names,omitempty"` // top process names for process-monitor checks
+	// Disk IO: read/write rates (bytes/sec) and IO utilization percentage
+	DiskReadRate     float64 `json:"disk_read_rate"`
+	DiskWriteRate    float64 `json:"disk_write_rate"`
+	DiskIOUtilPercent float64 `json:"disk_io_util_percent"`
 }
 
 // GPUInfo is per-GPU usage. Collection is best-effort and vendor-dependent:

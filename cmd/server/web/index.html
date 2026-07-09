@@ -149,16 +149,13 @@
 
         <div class="cards" id="cards"></div>
 
-        <!-- 资源热力图：CPU/内存/磁盘/网络/负载 TOP10 迷你排行榜 -->
+        <!-- 资源 TOP10 排行榜：多面板横向条形图 -->
         <div class="ov-section" id="ovResourceHeatmap">
           <div class="ov-section-header">
-            <h3 data-i18n="section.resource_heatmap">资源热力图</h3>
+            <h3 data-i18n="section.resource_heatmap">资源 TOP10 排行榜</h3>
             <span class="ov-section-badge" data-i18n="section.realtime_top10">实时 TOP10</span>
           </div>
-          <div class="resource-heatmap" id="topPanels">
-            <div class="rh-table" id="rhTable"></div>
-            <div class="rh-checks-panel" id="rhChecks"></div>
-          </div>
+          <div class="top-grid" id="topPanels"></div>
         </div>
 
         <!-- 双栏：最近告警 + 最近活动 -->
@@ -225,6 +222,7 @@
           <button class="chip-btn" data-atype="cpu" data-i18n="notify.type_cpu">CPU</button>
           <button class="chip-btn" data-atype="memory" data-i18n="notify.type_memory">内存</button>
           <button class="chip-btn" data-atype="disk" data-i18n="notify.type_disk">磁盘</button>
+          <button class="chip-btn" data-atype="diskio">磁盘 IO</button>
           <button class="chip-btn" data-atype="gpu" data-i18n="notify.type_gpu">GPU</button>
           <button class="chip-btn" data-atype="load" data-i18n="notify.type_load">负载</button>
           <button class="chip-btn" data-atype="offline" data-i18n="filter.offline_type">失联</button>

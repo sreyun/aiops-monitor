@@ -14,6 +14,7 @@ type Thresholds struct {
 	CPUWarn, CPUCrit   float64
 	MemWarn, MemCrit   float64
 	DiskWarn, DiskCrit float64
+	DiskIOWarn, DiskIOCrit float64
 	OfflineAfter       time.Duration
 }
 
@@ -22,6 +23,7 @@ func DefaultThresholds() Thresholds {
 		CPUWarn: 80, CPUCrit: 90,
 		MemWarn: 80, MemCrit: 90,
 		DiskWarn: 85, DiskCrit: 95,
+		DiskIOWarn: 80, DiskIOCrit: 90,
 		OfflineAfter: 30 * time.Second,
 	}
 }
@@ -32,7 +34,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | offline | check | load | gpu
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | offline | check | load | gpu
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -136,6 +138,17 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				})
 			}
 		}
+		// Disk IO alert (>80% warning, >90% critical)
+		if m.DiskIOUtilPercent > 0 {
+			if lv := classify(m.DiskIOUtilPercent, t.DiskIOWarn, t.DiskIOCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "diskio",
+					Message: Tz("alert.diskio_high", m.DiskIOUtilPercent,
+						fmtRateBytes(m.DiskReadRate), fmtRateBytes(m.DiskWriteRate)),
+					Value:     m.DiskIOUtilPercent, Timestamp: now,
+				})
+			}
+		}
 	}
 
 	sort.SliceStable(alerts, func(i, j int) bool {
@@ -157,5 +170,19 @@ func fmtBytes(b uint64) string {
 		return fmt.Sprintf("%.0fM", float64(b)/mb)
 	default:
 		return fmt.Sprintf("%dK", b/1024)
+	}
+}
+
+// fmtRateBytes renders a bytes/sec rate as human-readable (e.g. "12.3 MB/s").
+func fmtRateBytes(bps float64) string {
+	switch {
+	case bps >= 1e9:
+		return fmt.Sprintf("%.1f GB/s", bps/1e9)
+	case bps >= 1e6:
+		return fmt.Sprintf("%.1f MB/s", bps/1e6)
+	case bps >= 1e3:
+		return fmt.Sprintf("%.0f KB/s", bps/1e3)
+	default:
+		return fmt.Sprintf("%.0f B/s", bps)
 	}
 }

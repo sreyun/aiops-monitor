@@ -23,6 +23,7 @@
   "alert.load_high": "系统负载过高 5min=%.2f（%d 核，阈值 %.2f）",
   "alert.gpu_high": "GPU %s 使用率 %.1f%%%s",
   "alert.gpu_temp": " · 温度 %d°C",
+  "alert.diskio_high": "磁盘 IO 负载过高 %.1f%%（读 %s/s，写 %s/s）",
 
   "notify.title": "【AIOps Monitor】%s",
   "notify.host": "主机",

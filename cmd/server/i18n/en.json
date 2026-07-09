@@ -23,6 +23,7 @@
   "alert.load_high": "System load too high 5min=%.2f (%d cores, threshold %.2f)",
   "alert.gpu_high": "GPU %s usage %.1f%%%s",
   "alert.gpu_temp": " · Temp %d°C",
+  "alert.diskio_high": "Disk IO load too high %.1f%% (read %s/s, write %s/s)",
 
   "notify.title": "[AIOps Monitor] %s",
   "notify.host": "Host",
