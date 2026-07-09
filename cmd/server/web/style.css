@@ -231,7 +231,16 @@ body{
 }
 .tb-avatar:hover .avatar{box-shadow:0 0 0 2px var(--accent-soft)}
 /* 顶栏右侧工具组 */
-.tb-right{display:flex; align-items:center; gap:6px; flex:none}
+.tb-right{display:flex; align-items:center; gap:8px; flex:none}
+/* 安装 Agent 按钮左侧分隔线 */
+#installBtn{margin-left:4px; position:relative}
+#installBtn::before{content:""; position:absolute; left:-6px; top:50%; transform:translateY(-50%); width:1px; height:18px; background:var(--line); border-radius:1px}
+/* 窄屏时隐藏安装按钮文字，仅保留图标 */
+@media(max-width:900px){
+  #installBtn span{display:none}
+  #installBtn{padding:6px 10px; margin-left:0}
+  #installBtn::before{display:none}
+}
 /* 页面头 */
 .page-head{display:flex; flex-direction:column; gap:1px; min-width:0; margin-right:4px}
 .page-title{font-size:15px; font-weight:600; letter-spacing:.2px; line-height:1.25}
