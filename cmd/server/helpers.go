@@ -82,6 +82,7 @@ func mergeSecrets(in *ServerConfig, old ServerConfig) {
 	in.Feishu.Webhook = keepIfBlank(in.Feishu.Webhook, old.Feishu.Webhook)
 	in.Dingtalk.Webhook = keepIfBlank(in.Dingtalk.Webhook, old.Dingtalk.Webhook)
 	in.Dingtalk.Secret = keepIfBlank(in.Dingtalk.Secret, old.Dingtalk.Secret)
+	in.CustomWebhook.URL = keepIfBlank(in.CustomWebhook.URL, old.CustomWebhook.URL)
 	in.SMTP.Password = keepIfBlank(in.SMTP.Password, old.SMTP.Password)
 	if in.SMTP.FromName == "" {
 		in.SMTP.FromName = old.SMTP.FromName

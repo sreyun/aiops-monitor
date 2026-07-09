@@ -489,6 +489,8 @@ svg.sparkline{width:100%; height:46px; display:block}
   transition:color var(--transition-fast)}
 .tab:hover{color:var(--txt)}
 .tab.active{color:var(--accent); border-bottom-color:var(--accent); font-weight:600}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
 /* Forward modal mode tabs */
 .fwd-mode-tabs{display:flex; gap:0; margin:0 0 18px; border:1px solid var(--line2); border-radius:var(--r-sm); overflow:hidden}
 .fwd-mode-tab{flex:1; background:var(--bg2); border:none; color:var(--muted); font-family:inherit; font-size:13px;

@@ -644,16 +644,22 @@ function renderTop(hosts) {
     return;
   }
 
-  const hasGPU = live.some(h => (h.latest.gpus || []).length);
+  const hasGPU = live.some(h => { const gs = (h.latest.gpus || []); return gs.length && gs.some(g => (g.util_percent || 0) > 0); });
   const diskMax = m => { const d = m.disks || []; return d.length ? Math.max(...d.map(x => x.percent)) : (m.disk_percent || 0); };
   const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
   const netTotal = m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0);
   const iopsTotal = m => (m.disk_read_iops || 0) + (m.disk_write_iops || 0);
 
+  // GPU 有效主机过滤：仅纳入安装了 GPU 且至少有一个 GPU 使用率 > 0 的主机
+  const gpuLive = live.filter(h => {
+    const gs = (h.latest.gpus || []);
+    return gs.length && gs.some(g => (g.util_percent || 0) > 0);
+  });
+
   // 面板定义：[key, title, unit, valueFn, isPct, displayFn]
   const panels = [
     { key: "cpu", title: I18N.t("section.cpu_top10"), unit: "%", fn: m => m.cpu_percent || 0, isPct: true },
-    ...(hasGPU ? [{ key: "gpu", title: I18N.t("section.gpu_top10"), unit: "%", fn: gpuMax, isPct: true }] : []),
+    ...(hasGPU ? [{ key: "gpu", title: I18N.t("section.gpu_top10"), unit: "%", fn: gpuMax, isPct: true, dataSource: gpuLive }] : []),
     { key: "mem", title: I18N.t("section.mem_top10"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
     { key: "disk", title: I18N.t("section.disk_top10"), unit: "%", fn: diskMax, isPct: true },
     { key: "diskio", title: I18N.t("section.diskio_top10"), unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
@@ -666,7 +672,14 @@ function renderTop(hosts) {
   const topN = (arr, fn, n) => arr.slice().sort((a, b) => fn(b.latest) - fn(a.latest)).slice(0, n);
 
   function renderPanel(panel) {
-    const sorted = topN(live, panel.fn, 10);
+    const source = panel.dataSource || live;
+    const sorted = topN(source, panel.fn, 10);
+    if (!sorted.length) {
+      return `<div class="top-panel">
+        <div class="top-title">${esc(panel.title)}<span class="top-unit">${esc(panel.unit)}</span></div>
+        <div class="top-empty">${I18N.t("empty.no_data")}</div>
+      </div>`;
+    }
     const maxVal = Math.max(1, ...sorted.map(h => panel.fn(h.latest)));
     const items = sorted.map((h, idx) => {
       const v = panel.fn(h.latest);
@@ -3004,6 +3017,14 @@ async function openSettings() {
     $("dingEnabled").checked = !!(c.dingtalk && c.dingtalk.enabled);
     $("dingWebhook").value = (c.dingtalk && c.dingtalk.webhook) || "";
     $("dingSecret").value = (c.dingtalk && c.dingtalk.secret) || "";
+    // Custom webhook
+    const cw = c.custom_webhook || {};
+    $("customWebhookEnabled").checked = !!cw.enabled;
+    $("customWebhookURL").value = cw.url || "";
+    $("customWebhookMethod").value = cw.method || "POST";
+    $("customWebhookContentType").value = cw.content_type || "application/json";
+    $("customWebhookHeaders").value = cw.headers || "";
+    $("customWebhookBodyTemplate").value = cw.body_template || "";
     // SMTP email config
     const s = c.smtp || {};
     $("smtpEnabled").checked = !!s.smtp_enabled;
@@ -3016,16 +3037,40 @@ async function openSettings() {
     $("cpuWarn").value = t.cpu_warn; $("cpuCrit").value = t.cpu_crit;
     $("memWarn").value = t.mem_warn; $("memCrit").value = t.mem_crit;
     $("diskWarn").value = t.disk_warn; $("diskCrit").value = t.disk_crit;
+    $("diskioWarn").value = t.diskio_warn != null ? t.diskio_warn : 80; $("diskioCrit").value = t.diskio_crit != null ? t.diskio_crit : 90;
+    $("iopsWarn").value = t.iops_warn != null ? t.iops_warn : 10000; $("iopsCrit").value = t.iops_crit != null ? t.iops_crit : 20000;
+    $("gpuWarn").value = t.gpu_warn != null ? t.gpu_warn : 80; $("gpuCrit").value = t.gpu_crit != null ? t.gpu_crit : 90;
+    $("loadWarn").value = t.load_warn != null ? t.load_warn : 2.0; $("loadCrit").value = t.load_crit != null ? t.load_crit : 3.0;
+    $("procWarn").value = t.proc_warn != null ? t.proc_warn : 0.5;
     $("offlineSec").value = t.offline_after_sec;
+
+    // Reset to first tab
+    switchNotifyTab("tab-feishu");
+
     $("settingsMask").classList.add("show");
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
+
+// Tab switching for notification channels
+function switchNotifyTab(tabId) {
+  document.querySelectorAll("#notifyTabs .tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tabId));
+  document.querySelectorAll("#settingsMask .tab-panel").forEach(p => p.classList.toggle("active", p.id === tabId));
+}
+
 function collectSettings() {
   const num = id => parseFloat($(id).value) || 0;
   return {
     alerts_enabled: $("alertsEnabled").checked,
     feishu: { enabled: $("feishuEnabled").checked, webhook: $("feishuWebhook").value.trim() },
     dingtalk: { enabled: $("dingEnabled").checked, webhook: $("dingWebhook").value.trim(), secret: $("dingSecret").value.trim() },
+    custom_webhook: {
+      enabled: $("customWebhookEnabled").checked,
+      url: $("customWebhookURL").value.trim(),
+      method: $("customWebhookMethod").value,
+      content_type: $("customWebhookContentType").value.trim(),
+      headers: $("customWebhookHeaders").value.trim(),
+      body_template: $("customWebhookBodyTemplate").value.trim()
+    },
     smtp: {
       smtp_enabled: $("smtpEnabled").checked,
       smtp_host: $("smtpHost").value.trim(),
@@ -3039,6 +3084,11 @@ function collectSettings() {
       cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
       mem_warn: num("memWarn"), mem_crit: num("memCrit"),
       disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
+      diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
+      iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
+      gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
+      load_warn: num("loadWarn"), load_crit: num("loadCrit"),
+      proc_warn: num("procWarn"),
       offline_after_sec: Math.round(num("offlineSec"))
     }
   };
@@ -4404,6 +4454,11 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
   // 告警设置
   safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
+  // 告警设置弹窗内 Tab 切换
+  safeAddEventListener("notifyTabs", "click", function(e) {
+    const tab = e.target.closest(".tab");
+    if (tab && tab.dataset.tab) switchNotifyTab(tab.dataset.tab);
+  });
   // 个人信息
   safeAddEventListener("ddProfile", "click", function() { openProfile(); wrap.classList.remove("open"); });
   // 退出登录

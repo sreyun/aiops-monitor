@@ -456,62 +456,115 @@
 <div class="mask" id="settingsMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3>告警设置</h3>
+      <h3 data-i18n="settings.title">告警设置</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <label class="switch"><input type="checkbox" id="alertsEnabled"> 启用告警推送</label>
-      <div class="hint">仅在告警「新触发」或「恢复」时各推一次，不会刷屏。</div>
+      <label class="switch"><input type="checkbox" id="alertsEnabled" data-i18n-label="settings.enable_push"> 启用告警推送</label>
+      <div class="hint" data-i18n="settings.push_hint">仅在告警「新触发」或「恢复」时各推一次，不会刷屏。</div>
 
-      <div class="subhead">飞书机器人</div>
-      <label class="switch mb"><input type="checkbox" id="feishuEnabled"> 启用飞书推送</label>
-      <div class="field">
-        <label>Webhook 地址</label>
-        <input type="text" id="feishuWebhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx">
-      </div>
-
-      <div class="subhead">钉钉机器人</div>
-      <label class="switch mb"><input type="checkbox" id="dingEnabled"> 启用钉钉推送</label>
-      <div class="field">
-        <label>Webhook 地址</label>
-        <input type="text" id="dingWebhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx">
-      </div>
-      <div class="field">
-        <label>加签 Secret（可选，安全设置选「加签」时填写）</label>
-        <input type="text" id="dingSecret" placeholder="SECxxxx">
+      <!-- ===== 通知渠道 Tab 切换 ===== -->
+      <div class="tabs" id="notifyTabs">
+        <button class="tab active" data-tab="tab-feishu" data-i18n="settings.feishu">飞书机器人</button>
+        <button class="tab" data-tab="tab-dingtalk" data-i18n="settings.dingtalk">钉钉机器人</button>
+        <button class="tab" data-tab="tab-webhook" data-i18n="settings.custom_webhook">自定义 Webhook</button>
+        <button class="tab" data-tab="tab-smtp" data-i18n="settings.smtp">邮件服务（SMTP）</button>
       </div>
 
-      <div class="subhead">邮件服务（SMTP）</div>
-      <label class="switch mb"><input type="checkbox" id="smtpEnabled"> 启用邮件推送</label>
-      <div class="field">
-        <label>SMTP 服务器地址</label>
-        <input type="text" id="smtpHost" placeholder="smtp.gmail.com">
+      <!-- 飞书面板 -->
+      <div class="tab-panel active" id="tab-feishu">
+        <label class="switch mb"><input type="checkbox" id="feishuEnabled" data-i18n-label="settings.enable_feishu"> 启用飞书推送</label>
+        <div class="field">
+          <label data-i18n="settings.webhook_addr">Webhook 地址</label>
+          <input type="text" id="feishuWebhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx">
+        </div>
       </div>
+
+      <!-- 钉钉面板 -->
+      <div class="tab-panel" id="tab-dingtalk">
+        <label class="switch mb"><input type="checkbox" id="dingEnabled" data-i18n-label="settings.enable_dingtalk"> 启用钉钉推送</label>
+        <div class="field">
+          <label data-i18n="settings.webhook_addr">Webhook 地址</label>
+          <input type="text" id="dingWebhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.sign_secret">加签 Secret（可选，安全设置选「加签」时填写）</label>
+          <input type="text" id="dingSecret" placeholder="SECxxxx">
+        </div>
+      </div>
+
+      <!-- 自定义 Webhook 面板 -->
+      <div class="tab-panel" id="tab-webhook">
+        <label class="switch mb"><input type="checkbox" id="customWebhookEnabled" data-i18n-label="settings.enable_custom_webhook"> 启用自定义 Webhook</label>
+        <div class="field">
+          <label data-i18n="settings.webhook_url">Webhook URL</label>
+          <input type="text" id="customWebhookURL" placeholder="https://your-api.example.com/alert">
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="settings.webhook_method">请求方法</label>
+            <select id="customWebhookMethod"><option value="POST">POST</option><option value="GET">GET</option></select>
+          </div>
+          <div class="field">
+            <label data-i18n="settings.webhook_content_type">Content-Type</label>
+            <input type="text" id="customWebhookContentType" placeholder="application/json">
+          </div>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.webhook_headers">自定义 Header（JSON 键值对，可选）</label>
+          <input type="text" id="customWebhookHeaders" placeholder='{"X-Token":"abc123"}'>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.webhook_body_template">请求体模板（可选，支持 Go template 占位符）</label>
+          <textarea id="customWebhookBodyTemplate" rows="4" placeholder='{"level":"{{.Level}}","message":"{{.Message}}","host":"{{.Hostname}}"}'></textarea>
+        </div>
+        <div class="hint" data-i18n="settings.webhook_template_hint">可用占位符：{{.Level}}, {{.Type}}, {{.Hostname}}, {{.HostID}}, {{.IP}}, {{.Message}}, {{.Value}}, {{.Timestamp}}, {{.Firing}}, {{.Text}}</div>
+      </div>
+
+      <!-- SMTP 面板 -->
+      <div class="tab-panel" id="tab-smtp">
+        <label class="switch mb"><input type="checkbox" id="smtpEnabled" data-i18n-label="settings.enable_smtp"> 启用邮件推送</label>
+        <div class="field">
+          <label data-i18n="settings.smtp_host">SMTP 服务器地址</label>
+          <input type="text" id="smtpHost" placeholder="smtp.gmail.com">
+        </div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="settings.smtp_port">端口</label><input type="text" id="smtpPort" class="mono" placeholder="465"></div>
+          <div class="field"><label data-i18n="settings.smtp_tls">TLS/SSL</label><label class="switch"><input type="checkbox" id="smtpTLS"> 启用隐式 TLS（465 端口）</label></div>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.smtp_username">发件邮箱账号</label>
+          <input type="text" id="smtpUsername" placeholder="alert@example.com">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.smtp_password">SMTP 授权码 / 密码</label>
+          <input type="password" id="smtpPassword" data-i18n-placeholder="settings.smtp_password_placeholder" placeholder="留空保持原值不变">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.smtp_from_name">发件人显示名称</label>
+          <input type="text" id="smtpFromName" placeholder="AIOps Monitor">
+        </div>
+      </div>
+
+      <!-- ===== 告警阈值 ===== -->
+      <div class="subhead" data-i18n="settings.thresholds">告警阈值</div>
       <div class="grid2">
-        <div class="field"><label>端口</label><input type="text" id="smtpPort" class="mono" placeholder="465"></div>
-        <div class="field"><label>TLS/SSL</label><label class="switch"><input type="checkbox" id="smtpTLS"> 启用隐式 TLS（465 端口）</label></div>
-      </div>
-      <div class="field">
-        <label>发件邮箱账号</label>
-        <input type="text" id="smtpUsername" placeholder="alert@example.com">
-      </div>
-      <div class="field">
-        <label data-i18n="settings.smtp_password">SMTP 授权码 / 密码</label>
-        <input type="password" id="smtpPassword" data-i18n-placeholder="settings.smtp_password_placeholder" placeholder="留空保持原值不变">
-      </div>
-      <div class="field">
-        <label data-i18n="settings.smtp_from_name">发件人显示名称</label>
-        <input type="text" id="smtpFromName" placeholder="AIOps Monitor">
-      </div>
-
-      <div class="subhead" data-i18n="settings.thresholds">告警阈值（%）</div>
-      <div class="grid2">
-        <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
           <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重（%）</label>
           <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重</label>
+        <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重（%）</label>
           <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
+        <div class="field"><label data-i18n="settings.diskio_thresh">磁盘 IO 占用 警告 / 严重（%）</label>
+          <div class="grid2"><input type="text" id="diskioWarn" class="mono"><input type="text" id="diskioCrit" class="mono"></div></div>
+        <div class="field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
+          <div class="grid2"><input type="text" id="iopsWarn" class="mono"><input type="text" id="iopsCrit" class="mono"></div></div>
+        <div class="field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
+          <div class="grid2"><input type="text" id="gpuWarn" class="mono"><input type="text" id="gpuCrit" class="mono"></div></div>
+        <div class="field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（×核心数）</label>
+          <div class="grid2"><input type="text" id="loadWarn" class="mono"><input type="text" id="loadCrit" class="mono"></div></div>
+        <div class="field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
+          <input type="text" id="procWarn" class="mono"></div>
         <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
           <input type="text" id="offlineSec" class="mono"></div>
       </div>

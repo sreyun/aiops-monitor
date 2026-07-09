@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 )
 
@@ -170,6 +171,15 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 			sent = append(sent, Tz("notify.email"))
 		}
 	}
+	// Custom webhook
+	if cfg.CustomWebhook.Enabled && cfg.CustomWebhook.URL != "" {
+		if err := sendCustomWebhook(cfg.CustomWebhook, text, a, firing); err != nil {
+			slog.Error(Tz("notify.custom_webhook_failed"), "err", err)
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.custom_webhook_failed", err.Error())})
+		} else {
+			sent = append(sent, Tz("notify.custom_webhook"))
+		}
+	}
 	if len(sent) > 0 {
 		n.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.pushed", strings.Join(sent, "/"), a.Message)})
 	}
@@ -231,7 +241,12 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 			}
 		}
 	}
-	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled {
+	if cfg.CustomWebhook.Enabled && cfg.CustomWebhook.URL != "" {
+		if err := sendCustomWebhook(cfg.CustomWebhook, msg, Alert{}, false); err != nil {
+			errs = append(errs, Tz("notify.custom_webhook")+": "+err.Error())
+		}
+	}
+	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled && !cfg.CustomWebhook.Enabled {
 		errs = append(errs, Tz("notify.no_channel"))
 	}
 	return errs
@@ -341,6 +356,89 @@ func (n *Notifier) post(webhook string, body []byte) error {
 			code, msg = r.Errcode, r.Errmsg
 		}
 		return fmt.Errorf("API returned code=%d %s", code, msg)
+	}
+	return nil
+}
+
+// sendCustomWebhook sends an alert to a user-defined HTTP(S) endpoint.
+func sendCustomWebhook(cfg CustomWebhookConfig, text string, a Alert, firing bool) error {
+	method := cfg.Method
+	if method == "" {
+		method = "POST"
+	}
+	contentType := cfg.ContentType
+	if contentType == "" {
+		contentType = "application/json"
+	}
+
+	// Build body: use template if provided, otherwise default JSON
+	var body []byte
+	if cfg.BodyTemplate != "" {
+		tmpl, err := template.New("webhook").Parse(cfg.BodyTemplate)
+		if err != nil {
+			return fmt.Errorf("template parse error: %w", err)
+		}
+		data := map[string]any{
+			"Level":     a.Level,
+			"Type":      a.Type,
+			"Hostname":  a.Hostname,
+			"HostID":    a.HostID,
+			"IP":        a.IP,
+			"Message":   a.Message,
+			"Value":     a.Value,
+			"Timestamp": a.Timestamp,
+			"Firing":    firing,
+			"Text":      text,
+		}
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, data); err != nil {
+			return fmt.Errorf("template exec error: %w", err)
+		}
+		body = buf.Bytes()
+	} else {
+		body, _ = json.Marshal(map[string]any{
+			"text":      text,
+			"level":     a.Level,
+			"type":      a.Type,
+			"hostname":  a.Hostname,
+			"message":   a.Message,
+			"value":     a.Value,
+			"timestamp": a.Timestamp,
+			"firing":    firing,
+		})
+	}
+
+	var req *http.Request
+	var err error
+	if method == "GET" {
+		req, err = http.NewRequest("GET", cfg.URL, nil)
+	} else {
+		req, err = http.NewRequest(method, cfg.URL, bytes.NewReader(body))
+	}
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	// Parse optional custom headers (JSON key-value)
+	if cfg.Headers != "" {
+		var hdrs map[string]string
+		if json.Unmarshal([]byte(cfg.Headers), &hdrs) == nil {
+			for k, v := range hdrs {
+				req.Header.Set(k, v)
+			}
+		}
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
 	return nil
 }

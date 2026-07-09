@@ -17,6 +17,8 @@ type Thresholds struct {
 	DiskWarn, DiskCrit float64
 	DiskIOWarn, DiskIOCrit float64
 	IOPSWarn, IOPSCrit float64
+	GPUWarn, GPUCrit   float64
+	LoadWarn, LoadCrit float64 // 按 CPU 核心数倍率
 	ProcWarn           float64 // 进程数突增/突降比例阈值
 	OfflineAfter       time.Duration
 }
@@ -28,6 +30,8 @@ func DefaultThresholds() Thresholds {
 		DiskWarn: 85, DiskCrit: 95,
 		DiskIOWarn: 80, DiskIOCrit: 90,
 		IOPSWarn: 10000, IOPSCrit: 20000,
+		GPUWarn: 80, GPUCrit: 90,
+		LoadWarn: 2.0, LoadCrit: 3.0,
 		ProcWarn: 0.5,
 		OfflineAfter: 30 * time.Second,
 	}
@@ -114,25 +118,26 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				Value:     m.DiskPercent, Timestamp: now,
 			})
 		}
-		// System load alert (5-min load exceeding core count × 2)
+		// System load alert (5-min load exceeding core count × threshold)
 		if m.CPUCores > 0 {
-			loadMax := float64(m.CPUCores) * 2.0
-			if m.Load5 >= loadMax {
+			loadWarn := float64(m.CPUCores) * t.LoadWarn
+			loadCrit := float64(m.CPUCores) * t.LoadCrit
+			if m.Load5 >= loadWarn {
 				lv := "warning"
-				if m.Load5 >= loadMax*1.5 {
+				if m.Load5 >= loadCrit {
 					lv = "critical"
 				}
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "load",
-					Message:   Tz("alert.load_high", m.Load5, m.CPUCores, loadMax),
+					Message:   Tz("alert.load_high", m.Load5, m.CPUCores, loadWarn),
 					Value:     m.Load5, Timestamp: now,
 				})
 			}
 		}
-		// GPU alert (>80% warning, >90% critical)
+		// GPU alert (configurable thresholds)
 		for _, g := range m.GPUs {
 			util := g.UtilPercent
-			if lv := classify(util, 80, 90); lv != "" {
+			if lv := classify(util, t.GPUWarn, t.GPUCrit); lv != "" {
 				tempStr := ""
 				if g.Temp > 0 {
 					tempStr = Tz("alert.gpu_temp", int(g.Temp))

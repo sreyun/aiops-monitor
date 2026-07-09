@@ -32,6 +32,17 @@ type SMTPConfig struct {
 	UseTLS   bool   `json:"smtp_use_tls"`  // true = implicit TLS (465), false = STARTTLS/plain
 }
 
+// CustomWebhookConfig holds a user-defined generic HTTP(S) webhook channel.
+// The body template supports placeholders like {{.Level}}, {{.Message}}, etc.
+type CustomWebhookConfig struct {
+	Enabled      bool   `json:"enabled"`
+	URL          string `json:"url"`
+	Method       string `json:"method"`       // POST (default) | GET
+	ContentType  string `json:"content_type"` // application/json (default) | text/plain
+	Headers      string `json:"headers"`      // optional JSON key-value map, e.g. {"X-Token":"abc"}
+	BodyTemplate string `json:"body_template"` // Go template; empty = default Markdown-like text
+}
+
 // ThresholdConfig is the JSON-friendly, operator-editable alert threshold set.
 type ThresholdConfig struct {
 	CPUWarn         float64 `json:"cpu_warn"`
@@ -44,6 +55,10 @@ type ThresholdConfig struct {
 	DiskIOCrit      float64 `json:"diskio_crit"`
 	IOPSWarn        float64 `json:"iops_warn"`
 	IOPSCrit        float64 `json:"iops_crit"`
+	GPUWarn         float64 `json:"gpu_warn"`
+	GPUCrit         float64 `json:"gpu_crit"`
+	LoadWarn        float64 `json:"load_warn"` // 按 CPU 核心数倍率，如 2.0 = 核心数×2
+	LoadCrit        float64 `json:"load_crit"`
 	ProcWarn        float64 `json:"proc_warn"` // 进程数突增/突降比例（如 0.5 = 50%）
 	OfflineAfterSec int     `json:"offline_after_sec"`
 }
@@ -55,6 +70,8 @@ func defaultThresholdConfig() ThresholdConfig {
 		DiskWarn: 85, DiskCrit: 95,
 		DiskIOWarn: 80, DiskIOCrit: 90,
 		IOPSWarn: 10000, IOPSCrit: 20000,
+		GPUWarn: 80, GPUCrit: 90,
+		LoadWarn: 2.0, LoadCrit: 3.0,
 		ProcWarn: 0.5,
 		OfflineAfterSec: 30,
 	}
@@ -67,6 +84,8 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		DiskWarn: t.DiskWarn, DiskCrit: t.DiskCrit,
 		DiskIOWarn: t.DiskIOWarn, DiskIOCrit: t.DiskIOCrit,
 		IOPSWarn: t.IOPSWarn, IOPSCrit: t.IOPSCrit,
+		GPUWarn: t.GPUWarn, GPUCrit: t.GPUCrit,
+		LoadWarn: t.LoadWarn, LoadCrit: t.LoadCrit,
 		ProcWarn: t.ProcWarn,
 		OfflineAfter: time.Duration(t.OfflineAfterSec) * time.Second,
 	}
@@ -129,10 +148,11 @@ type HTTPProxyConfig struct {
 // Categories holds manual per-host category overrides (host id -> category).
 type ServerConfig struct {
 	AlertsEnabled bool              `json:"alerts_enabled"`
-	Feishu        WebhookConfig     `json:"feishu"`
-	Dingtalk      WebhookConfig     `json:"dingtalk"`
-	SMTP          SMTPConfig        `json:"smtp"`
-	Thresholds    ThresholdConfig   `json:"thresholds"`
+	Feishu          WebhookConfig       `json:"feishu"`
+	Dingtalk        WebhookConfig       `json:"dingtalk"`
+	CustomWebhook   CustomWebhookConfig `json:"custom_webhook"`
+	SMTP            SMTPConfig          `json:"smtp"`
+	Thresholds      ThresholdConfig     `json:"thresholds"`
 	Categories    map[string]string `json:"categories"`
 	InstallToken  string            `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
