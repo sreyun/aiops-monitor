@@ -1029,7 +1029,12 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.markAgentUp()
-	defer sess.close()
+	// P1: 不要在 Agent tx 结束后立即关闭 session！
+	// 原因：Agent 读取完 HTTP 响应后会关闭 TCP 连接，导致 r.Body.Read() 返回 EOF。
+	// 如果这里 defer sess.close()，会立即关闭 session，导致 pipe reader goroutine 退出，
+	// 但此时 http.ReadResponse 可能还在读取数据，导致 "unexpected EOF"。
+	// 解决方案：让 HTTP proxy handler 控制 session 的生命周期。
+	// defer sess.close()  // 移除这行
 	buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 	for {
 		n, err := r.Body.Read(buf)

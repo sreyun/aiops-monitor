@@ -108,15 +108,9 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 		}
 		return
 	}
-	// P1: 为 TCP 连接添加读写超时，防止慢速服务导致连接挂起
-	// 使用 deadline 而非 timeout，每次读写都会更新
-	if mode == "http" {
-		// HTTP 模式：设置较长的超时（60秒），因为上游可能需要时间处理
-		conn.SetDeadline(time.Now().Add(60 * time.Second))
-	} else {
-		// TCP 模式：设置较短的超时（30秒）
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-	}
+	// P1: 注意 - 不要在这里设置 SetDeadline，因为它会同时影响读写操作
+	// HTTP 代理的响应可能是流式的、长时间的，设置全局 deadline 会导致连接被意外关闭
+	// 如果需要超时控制，应该在具体的读写操作中单独设置
 	slog.Info("转发会话开始", "session", sid, "target", target)
 	fp := url.QueryEscape(a.identity.Fingerprint)
 
@@ -128,9 +122,10 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	wg.Add(2)
 
 	// tx: stream target service output up (POST body ends when conn closes)
+	// P1: 不要在 tx 中关闭连接，让 rx goroutine 管理连接生命周期
+	// 这样可以避免 tx 读取到 EOF 后立即关闭连接，导致 rx 写入失败
 	go func() {
 		defer wg.Done()
-		defer closeAll()
 		req, err := http.NewRequest("POST",
 			server+"/api/v1/agent/forward/tx?session="+sid+"&fp="+fp, conn)
 		if err != nil {
@@ -140,11 +135,14 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 		if resp, err := termHTTP.Do(req); err == nil {
 			resp.Body.Close()
 		}
+		// 通知 rx goroutine：目标服务已关闭响应连接
+		// 但不立即关闭 conn，等待 rx 完成写入
 	}()
 
 	// rx: framed user data from the server → the TCP connection
 	go func() {
 		defer wg.Done()
+		// rx goroutine 负责管理连接生命周期
 		// For HTTP mode: the 'c' frame means the request is fully sent, but the
 		// target still needs time to respond. Closing conn immediately would
 		// truncate the response. Wait a grace period before closing.
