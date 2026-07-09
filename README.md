@@ -4,6 +4,7 @@
 
 **轻量级主机监控运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本
 
+[![Version](https://img.shields.io/badge/Version-v5.2.7-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
@@ -26,6 +27,7 @@
 - [监控指标](#监控指标)
 - [自定义监控（拨测）](#自定义监控拨测)
 - [自动化剧本（Playbook）](#自动化剧本playbook)
+- [端口转发与 HTTP 代理](#端口转发与-http-代理)
 - [远程终端](#远程终端)
 - [插件开发](#插件开发)
 - [告警配置](#告警配置)
@@ -117,6 +119,8 @@ docker compose up -d
 | **PWA 安装** | 可安装到桌面、Service Worker 离线缓存、独立窗口运行 |
 | **侧栏实时时钟** | 左侧导航栏底部显示当前日期与精确到秒的实时时间（`YYYY-MM-DD HH:mm:ss`），适配浅色/深色主题，侧栏折叠时竖排保持可见 |
 | **gzip 压缩** | API/静态资源自动 gzip，多主机轮询带宽 ~8-10 倍压缩 |
+| **端口转发（TCP）** | 经 Agent 隧道将远端主机的 TCP 端口映射到服务端本地端口，支持持久规则 + 启停/编辑/复制 |
+| **HTTP 反向代理** | 无状态代理：`/proxy/{hostID}/{port}/{path}` 直通目标主机 Web 服务，支持 WebSocket 升级 |
 | **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
 
 ---
@@ -340,6 +344,9 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
 | `install_token` | string | 自动生成 | Agent 安装 Token |
 | `trust_proxy` | bool | `false` | 反代后设 `true`：采信 `X-Real-IP` 做限流 |
+| `forward_disabled` | bool | `false` | 全局禁用端口转发与 HTTP 代理 |
+| `forward_listen` | string | `0.0.0.0` | TCP 转发监听地址（`127.0.0.1` 仅限本机） |
+| `forward_port_range` | string | `10000-10099` | TCP 转发端口范围（Docker 部署用） |
 | `smtp.smtp_enabled` | bool | `false` | 邮件推送开关 |
 | `smtp.smtp_host` | string | `""` | SMTP 服务器地址 |
 | `smtp.smtp_port` | int | `0` | SMTP 端口（465 隐式 TLS / 587 STARTTLS） |
@@ -403,6 +410,49 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 **执行原理**：命令经 Agent 反向通道下发，以一次性子进程执行、回传输出与退出码。所有匹配在线主机并行执行，每台按步骤顺序运行。执行历史保留最近 100 次。
 
 > 命令为非交互式，不要用 `vim`/`top`/`ssh` 等需交互的程序。每步是独立进程，`cd`/`export` 不跨步骤保留——连续操作写同一步内用 `&&` 串联。
+
+---
+
+## 端口转发与 HTTP 代理
+
+通过 Agent 反向隧道，无需目标主机开放端口即可访问其内部服务。两种模式：
+
+### TCP 端口映射
+
+将远端主机的 TCP 端口持久映射到服务端本地端口，适合数据库、SSH 等长连接协议：
+
+```bash
+# 例：将 Agent 所在主机的 MySQL 3306 映射到服务端 13306 端口
+# 面板「转发」页创建规则，或 API：
+curl -X POST http://<服务端>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
+
+# 然后用本地客户端直连
+mysql -h 127.0.0.1 -P 13306 -u root -p
+```
+
+- 支持自动分配端口（`local_port: 0`）或指定端口
+- 规则可启用/禁用/编辑/复制/删除
+- 监听地址可配置（`forward_listen`），Docker 部署可设端口范围（`forward_port_range`）
+
+### HTTP 反向代理
+
+无状态代理，无需创建规则，直接通过 URL 访问目标主机的 Web 服务：
+
+```bash
+# 访问 Agent 主机 abc123 上 8080 端口的 /api/health
+curl http://<服务端>:8529/proxy/abc123/8080/api/health
+
+# 支持所有 HTTP 方法 + WebSocket 升级
+ws://<服务端>:8529/proxy/abc123/8080/ws
+```
+
+- 支持 GET/POST/PUT/DELETE/PATCH 全方法
+- 支持 WebSocket 升级（需 Nginx 配置 Upgrade 头）
+- 面板可保存常用代理为快捷入口
+- `window.open()` 场景使用一次性 proxy_token 鉴权
+
+> 端口转发默认开启，可在告警设置中通过 `forward_disabled: true` 全局关闭。
 
 ---
 
@@ -819,8 +869,11 @@ aiops-monitor/
 | GET | `/api/v1/hosts/{id}/history` | 单主机时序历史（自动选层） |
 | POST | `/api/v1/hosts/{id}/category` | 设置主机分类 |
 | DELETE | `/api/v1/hosts/{id}` | 删除主机 |
-| **告警与事件** | | |
+| **告警管理** | | |
 | GET | `/api/v1/alerts` | 阈值告警 + 自定义监控告警 |
+| POST | `/api/v1/alerts/ack` | 确认告警 |
+| POST | `/api/v1/alerts/silence` | 静默告警 |
+| POST | `/api/v1/alerts/clear` | 清除告警 |
 | GET | `/api/v1/events` | 插件事件 |
 | GET | `/api/v1/activity` | 操作与系统日志 |
 | GET | `/api/v1/summary` | 汇总统计 |
@@ -878,6 +931,30 @@ aiops-monitor/
 | POST | `/api/v1/install/reset-token` | 重置 Token |
 | GET | `/install.sh` / `/install.ps1` | 安装脚本 |
 | GET | `/uninstall.sh` / `/uninstall.ps1` | 卸载脚本 |
+| **端口转发** | | |
+| GET | `/api/v1/forward` | 转发规则列表 |
+| POST | `/api/v1/forward` | 创建 TCP 转发规则 |
+| DELETE | `/api/v1/forward/{id}` | 删除转发规则 |
+| PUT | `/api/v1/forward/{id}` | 编辑转发规则 |
+| PUT | `/api/v1/forward/{id}/toggle` | 启用/禁用规则 |
+| POST | `/api/v1/forward/{id}/copy` | 复制转发规则 |
+| GET | `/api/v1/forward/stats` | 转发统计 |
+| GET | `/api/v1/forward/health` | 转发健康检查 |
+| **HTTP 代理** | | |
+| GET | `/api/v1/http-proxy` | 代理快捷入口列表 |
+| POST | `/api/v1/http-proxy` | 创建代理快捷入口 |
+| DELETE | `/api/v1/http-proxy/{id}` | 删除代理快捷入口 |
+| PUT | `/api/v1/http-proxy/{id}` | 编辑代理快捷入口 |
+| PUT | `/api/v1/http-proxy/{id}/toggle` | 启用/禁用代理 |
+| POST | `/api/v1/http-proxy/{id}/copy` | 复制代理快捷入口 |
+| GET | `/api/v1/proxy-token` | 获取一次性代理鉴权 Token |
+| GET/POST/PUT/DELETE/PATCH | `/proxy/{hostID}/{port}/{path...}` | HTTP 反向代理（透传到目标主机） |
+| **Agent 转发通道** | | |
+| GET | `/api/v1/agent/forward/wait` | Agent 长轮询等待转发任务 |
+| GET | `/api/v1/agent/forward/rx` | Server → Agent 转发数据流 |
+| POST | `/api/v1/agent/forward/tx` | Agent → Server 转发数据流 |
+| **实时推送** | | |
+| GET | `/ws/push` | WebSocket 实时推送（主机状态/告警） |
 | **其他** | | |
 | GET | `/` | Web 面板 |
 | GET | `/healthz` | 健康检查 |
@@ -912,6 +989,11 @@ aiops-monitor/
 - [x] 机器指纹鉴权：Token 轮换不影响已装 Agent
 - [x] 一键安装：自动检测架构 + 下载 + 配置 + 开机自启
 - [x] 侧栏实时时钟：YYYY-MM-DD HH:mm:ss，每秒更新，适配浅色/深色主题
+- [x] 端口转发（TCP 映射）+ HTTP 反向代理：经 Agent 隧道免开端口访问远端服务
+- [x] 告警确认/静默/清除 + WebSocket 实时推送
+- [x] 全局强制 MFA 策略 + 浅色主题
+- [x] 终端文件传输（ZMODEM/lrzsz）+ 终端悬浮卡片最小化
+- [x] 资源热力图仪表盘 + 全链路 i18n 国际化（中/英/繁中）
 
 ### 进行中 / 计划中
 
@@ -919,6 +1001,187 @@ aiops-monitor/
 - [ ] 插件增强：每插件独立周期、插件级配置、指标类型（counter/histogram）
 - [ ] AIOps 演进层：时序异常检测（Prophet / statsmodels）、告警降噪/关联、根因分析、容量预测
 - [ ] 智能运维助手：对接 RAGFlow + Dify + 本地 vLLM
+
+---
+
+## 更新日志
+
+<details>
+<summary>v5.2.7 — Windows Agent 卸载修复</summary>
+
+- 修复卸载脚本未终止 `wscript.exe` VBS 启动器导致文件删除失败
+- 清理 Relay 模式注册表残留（`AIOpsRelay`）
+- 文件删除增加重试机制（递增延迟），避免句柄未释放导致静默失败
+</details>
+
+<details>
+<summary>v5.2.6 — Agent 服务端重启后自动重连</summary>
+
+- 允许已知指纹主机免 Install Token 重注册（服务端 DB 恢复场景）
+- 禁用 HTTP/2 避免单连接死亡导致全部请求失败
+- 断路器打开时重置注册状态，半开时自动重注册
+</details>
+
+<details>
+<summary>v5.2.5 — HTTP 代理竞态修复</summary>
+
+- 新增 `pendingSessions` 队列解决 Agent 在 poll 间隙时通知丢失
+- 修复 `handleAgentForwardTx/Rx` select 竞态导致最后一帧丢失
+- 修复 HTTP 请求 Host 头重复 + 缺少 Content-Length
+</details>
+
+<details>
+<summary>v5.2.4 — 移动端登录修复</summary>
+
+- 修复移动端登录网络错误 + 表单红框 UI 问题
+</details>
+
+<details>
+<summary>v5.2.3 — 批量执行与 GPU 面板修复</summary>
+
+- 修复批量剧本执行不稳定问题
+- 修复 GPU 面板显示闪烁
+</details>
+
+<details>
+<summary>v5.2.2 — 外网 Agent 离线修复</summary>
+
+- 修复外网环境下 Agent 频繁离线问题
+</details>
+
+<details>
+<summary>v5.2.0 — GPU TOP10 + 告警设置重构</summary>
+
+- GPU TOP10 过滤（仅显示有 GPU 硬件的主机）
+- 告警设置重构：Tab 切换、自定义 Webhook、阈值扩展、i18n
+</details>
+
+<details>
+<summary>v5.1.0 — 深度性能/可靠性优化</summary>
+
+- Agent 深度性能优化、可靠性增强、网络优化、安全加固
+- 登录红框与 Ping 面板 i18n 修复
+</details>
+
+<details>
+<summary>v5.0.0 — 主题/图表/统计面板/告警/国际化</summary>
+
+- P0：主题系统 + 图表重绘（Canvas 渐变/十字线/框选放大）
+- P1：统计面板（KPI 卡片 + TOP10 横向条形图）
+- P2：告警确认/静默 + 告警去重防抖
+- P3：TOP10 i18n 中文化 + 视觉优化
+</details>
+
+<details>
+<summary>v3.10.x — 端口转发/i18n/终端增强</summary>
+
+- TCP 端口映射 + HTTP 反向代理（经 Agent 隧道免开端口）
+- 全链路 i18n 国际化（中/英/繁中）
+- 终端 ZMODEM 文件传输、悬浮卡片最小化、右键菜单
+- 资源热力图仪表盘、全局强制 MFA、浅色主题
+- 可配置 TCP 转发监听地址与端口范围
+</details>
+
+<details>
+<summary>v3.9.x — 终端回放/版本注入/终端 UX</summary>
+
+- 终端录制回放（含终端尺寸还原）
+- 版本号自动注入（Git tag → ldflags）
+- 终端悬浮卡片最小化 + 主题切换顶栏
+</details>
+
+<details>
+<summary>v3.8.x — 浅色主题/推送/骨架屏/防闪烁</summary>
+
+- 浅色主题 + 模块拆分 + WebSocket 推送
+- 骨架屏加载 + 空状态 + 差分更新防闪烁
+- 告警延迟移除宽限期 + 淡出动画
+</details>
+
+<details>
+<summary>v3.7.x — 全局 MFA / 移动端终端 / UI 打磨</summary>
+
+- 全局强制 MFA 策略（管理员一键开关）
+- 移动端终端输入修复 + 深度 UI 审查打磨
+</details>
+
+<details>
+<summary>v3.6.x — MFA 二维码修复 / Docker 离线化</summary>
+
+- MFA 二维码服务端生成（QR 码格式修复）
+- Docker 构建离线化（go mod vendor）
+</details>
+
+<details>
+<summary>v3.5.x — 全局 MFA / 默认端口变更</summary>
+
+- 全局默认端口 8080 → 8529
+- MFA 二维码格式修复 + UI 优化
+</details>
+
+<details>
+<summary>v3.4.x — 剧本系统类型筛选</summary>
+
+- 剧本目标主机系统类型筛选（Linux/macOS/Windows）
+</details>
+
+<details>
+<summary>v3.3.x — 网关中继 / 剧本执行通道 / 中文编码</summary>
+
+- Agent 网关中继模式 + 机器指纹鉴权
+- 自动化剧本专用一次性执行通道
+- 剧本执行中文乱码三层编码修复
+</details>
+
+<details>
+<summary>v3.2.x — 单进程多服务端推送</summary>
+
+- 单 Agent 同时向多服务端推送，采集一次广播所有
+- 独立鉴权/重试/连接池隔离
+</details>
+
+<details>
+<summary>v3.1.x — 多用户 RBAC / 终端增强</summary>
+
+- 多用户账户与角色权限管理（admin/operator/viewer）
+- 远程终端：会话录制回放、多标签、只读旁观、命令审计
+- 自动化剧本编排 + 批量并行执行
+</details>
+
+<details>
+<summary>v3.0.x — 终端增强 / 自动化运维</summary>
+
+- 远程终端增强（录制回放 + 多标签 + 旁观模式）
+- 自动化剧本编排（多步骤 + 批量并行 + 执行历史）
+</details>
+
+<details>
+<summary>v2.x — PWA / 邮件 / 账户找回 / 移动端</summary>
+
+- PWA 安装 + Service Worker 离线缓存
+- 邮件 SMTP 推送 + 账户找回双重验证
+- MFA 两步验证（TOTP）+ 邮箱解除 MFA
+- 深度移动端响应式适配
+</details>
+
+<details>
+<summary>v1.x — 自定义监控 / 远程终端 / GPU</summary>
+
+- 自定义监控（HTTP/TCP/Ping/进程存活）
+- 远程终端（WebSocket + 全 TTY + 跨平台 PTY）
+- GPU 监控（NVIDIA/AMD/Apple）
+- 多平台采集器增强
+</details>
+
+<details>
+<summary>v0.x — 初始版本 → 主机监控平台</summary>
+
+- 基础指标采集（CPU/内存/磁盘/网络/负载）
+- 阈值告警 + 飞书/钉钉推送
+- 内存存储 + 多级降采样 + 内嵌持久化
+- 交互式趋势图 + 概览面板
+- Docker 部署 + 一键安装脚本
+</details>
 
 ---
 
