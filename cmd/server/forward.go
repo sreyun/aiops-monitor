@@ -733,7 +733,7 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 readResponse:
-	// P1: add timeout for reading upstream response
+	// P1: add timeout for reading upstream response with better error handling
 	type readResult struct {
 		resp *http.Response
 		err  error
@@ -750,6 +750,15 @@ readResponse:
 		resp, err = res.resp, res.err
 	case <-time.After(forwardReadTimeout):
 		s.forward.stats.incError()
+		// P1: 提供更详细的超时错误信息
+		rawResponseMu.Lock()
+		rawPreview := rawResponseBuf.String()
+		rawResponseMu.Unlock()
+		if len(rawPreview) > 300 {
+			rawPreview = rawPreview[:300] + "..."
+		}
+		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
+			"err", "read timeout", "raw_preview", rawPreview, "timeout", forwardReadTimeout)
 		http.Error(w, Tr(r, "forward.agent_timeout"), http.StatusGatewayTimeout)
 		return
 	}
@@ -762,14 +771,24 @@ readResponse:
 		if len(rawPreview) > 300 {
 			rawPreview = rawPreview[:300] + "..."
 		}
-		if rawResponseBuf.Len() == 0 {
-			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err, "note", "empty response - agent may have failed to connect to target")
+		// P1: 提供更友好的错误信息
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "unexpected EOF") {
+			errMsg = "上游服务连接异常断开（可能是服务超时或崩溃）"
+		} else if strings.Contains(errMsg, "connection reset by peer") {
+			errMsg = "上游服务拒绝连接"
+		} else if strings.Contains(errMsg, "EOF") {
+			errMsg = "上游服务未返回响应"
+		}
+		
+		if len(rawPreview) == 0 {
+			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", errMsg, "note", "empty response - agent may have failed to connect to target")
 		} else {
-			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err, "raw_preview", rawPreview)
+			slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", errMsg, "raw_preview", rawPreview)
 		}
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
-			Message: Tz("log.forward_parse_failed", port, path, err.Error())})
-		http.Error(w, Tr(r, "forward.parse_response_failed", err.Error()), http.StatusBadGateway)
+			Message: Tz("log.forward_parse_failed", port, path, errMsg)})
+		http.Error(w, Tr(r, "forward.parse_response_failed", errMsg), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()

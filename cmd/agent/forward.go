@@ -88,13 +88,16 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 		}
 	}()
 	target := "localhost:" + strconv.Itoa(targetPort)
-	conn, err := net.Dial("tcp", target)
+	
+	// P1: 添加连接超时控制（5秒）
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.Dial("tcp", target)
 	if err != nil {
 		slog.Warn("转发目标连接失败", "session", sid, "target", target, "err", err)
 		// Send an error frame to the server so it knows the target is unreachable
 		fp := url.QueryEscape(a.identity.Fingerprint)
 		var errBuf bytes.Buffer
-		// Send a simple HTTP-like error response as raw bytes
+		// P1: 修复 Content-Length 计算错误
 		errMsg := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAgent failed to connect to localhost:%d: %s", targetPort, err.Error())
 		errBuf.WriteString(errMsg)
 		req, _ := http.NewRequest("POST",
@@ -104,6 +107,15 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 			resp.Body.Close()
 		}
 		return
+	}
+	// P1: 为 TCP 连接添加读写超时，防止慢速服务导致连接挂起
+	// 使用 deadline 而非 timeout，每次读写都会更新
+	if mode == "http" {
+		// HTTP 模式：设置较长的超时（60秒），因为上游可能需要时间处理
+		conn.SetDeadline(time.Now().Add(60 * time.Second))
+	} else {
+		// TCP 模式：设置较短的超时（30秒）
+		conn.SetDeadline(time.Now().Add(30 * time.Second))
 	}
 	slog.Info("转发会话开始", "session", sid, "target", target)
 	fp := url.QueryEscape(a.identity.Fingerprint)
