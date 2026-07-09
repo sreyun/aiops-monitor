@@ -1951,25 +1951,63 @@ function termSend(ws, str) {
   framed.set(body, 1);
   ws.send(framed);
 }
+// getSelectedTermText 获取当前终端屏幕内的选中文本。
+// 聚焦在隐藏 textarea 时 window.getSelection() 可能返回空字符串，
+// 因为浏览器为表单元素维护独立的选区上下文。这里通过遍历选区 range
+// 检查是否落在 term-screen 内，作为 window.getSelection 的补充。
+function getSelectedTermText(tab) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return "";
+  // 方法1：直接取全局选区文本（大多数情况足够）
+  const text = sel.toString();
+  if (text) return text;
+  // 方法2：检查 range 是否落在当前 tab 的 screen 内
+  if (!tab || !tab.screenEl) return "";
+  for (let i = 0; i < sel.rangeCount; i++) {
+    const rng = sel.getRangeAt(i);
+    if (tab.screenEl.contains(rng.commonAncestorContainer)) {
+      return rng.toString();
+    }
+  }
+  return "";
+}
 function termKeyDown(e, tab) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
   const ws = tab ? tab.ws : null;
   const k = e.key;
-  // P0: Ctrl+C / Cmd+C 复制选中终端文本（有选区时复制，无选区时发送 SIGINT）
-  // 同时支持 Ctrl+Shift+C 强制复制（符合主流终端习惯）
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && (k === "c" || k === "C")) {
-    const sel = window.getSelection().toString();
-    const shiftCopy = e.shiftKey && (k === "c" || k === "C");
+
+  // ====== P0: 剪贴板双向交互 ======
+
+  // Ctrl+V / Cmd+V / Shift+Insert → 粘贴剪贴板内容
+  // 关键：不调用 preventDefault()，让浏览器原生 paste 事件正常触发，
+  // 由 input.onpaste / screen paste 兜底处理器捕获文本并发送。
+  if ((mod && (k === "v" || k === "V")) || (e.shiftKey && k === "Insert")) {
+    return; // 放行浏览器 paste，不发送 \x16
+  }
+
+  // Ctrl+C / Cmd+C → 有选区时复制，无选区时发送 SIGINT
+  // Ctrl+Shift+C / Cmd+Shift+C / Ctrl+Insert → 强制复制（主流终端习惯）
+  if ((mod && (k === "c" || k === "C")) || (mod && k === "Insert")) {
+    // 从 document 全局选区获取，而非仅限当前聚焦元素
+    const sel = getSelectedTermText(tab);
+    const shiftCopy = e.shiftKey;
     if (shiftCopy || sel) {
       e.preventDefault();
-      if (sel) copyToClipboard(sel).then(
-        () => { /* silent success */ },
-        () => toast(I18N.t("toast.copy_failed"), "err")
-      );
-      return; // 不发送 SIGINT
+      if (sel) {
+        copyToClipboard(sel).then(
+          () => { /* silent */ },
+          () => toast(I18N.t("toast.copy_failed"), "err")
+        );
+      } else if (shiftCopy) {
+        // 无选区但 Shift 按下：仍阻止默认行为（避免发送 SIGINT），
+        // 但没有内容可复制，静默忽略
+      }
+      return;
     }
+    // 无选区 → 继续执行，发送 SIGINT (\x03)
   }
+
   const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
   let seq = null;
   if (k === "Enter") seq = "\r";
