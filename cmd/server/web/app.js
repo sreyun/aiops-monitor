@@ -1315,6 +1315,109 @@ function openTerminal(id, name) {
   createTermTab(id, name, tabName);
 }
 
+/* ---------- 终端右键菜单 ---------- */
+let TERM_CMENU_EL = null;
+function initTermContextMenu() {
+  if (TERM_CMENU_EL) return;
+  TERM_CMENU_EL = document.createElement("div");
+  TERM_CMENU_EL.className = "term-cmenu";
+  TERM_CMENU_EL.innerHTML = `
+    <div class="term-cmenu-item" data-action="copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span>复制</span><span class="cmenu-key">Ctrl+C</span>
+    </div>
+    <div class="term-cmenu-item" data-action="paste">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+      <span>粘贴</span><span class="cmenu-key">Ctrl+V</span>
+    </div>
+    <div class="term-cmenu-sep"></div>
+    <div class="term-cmenu-item" data-action="reconnect">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+      <span>重新连接</span>
+    </div>
+    <div class="term-cmenu-sep"></div>
+    <div class="term-cmenu-item" data-action="clear">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <span>清屏</span>
+    </div>
+  `;
+  document.body.appendChild(TERM_CMENU_EL);
+  // 点击菜单外部关闭
+  document.addEventListener("click", (e) => {
+    if (TERM_CMENU_EL && !TERM_CMENU_EL.contains(e.target)) {
+      TERM_CMENU_EL.classList.remove("show");
+    }
+  });
+  // Esc 关闭
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && TERM_CMENU_EL) {
+      TERM_CMENU_EL.classList.remove("show");
+    }
+  });
+  // 菜单项点击处理
+  TERM_CMENU_EL.addEventListener("click", (e) => {
+    const item = e.target.closest(".term-cmenu-item");
+    if (!item || item.classList.contains("disabled")) return;
+    const action = item.dataset.action;
+    const tab = TERM_CMENU_EL._termTab;
+    TERM_CMENU_EL.classList.remove("show");
+    if (!tab) return;
+    switch (action) {
+      case "copy": {
+        const sel = getSelectedTermText(tab);
+        if (sel) copyToClipboard(sel).then(() => toast("已复制", "ok"), () => toast("复制失败", "err"));
+        break;
+      }
+      case "paste": {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(t => {
+            if (t && tab.ws && tab.ws.readyState === 1) termSend(tab.ws, t);
+          }).catch(() => {});
+        }
+        // 聚焦输入框让用户手动粘贴
+        if (tab.inputEl) tab.inputEl.focus({ preventScroll: true });
+        break;
+      }
+      case "reconnect":
+        if (tab.ws && tab.ws.readyState === 1) { toast("终端已连接", "info"); return; }
+        reconnectTermTab();
+        break;
+      case "clear":
+        if (tab.vt && tab.vt.fullReset) {
+          tab.vt.fullReset();
+          tab.vt.render();
+        }
+        break;
+    }
+  });
+}
+function showTermContextMenu(tab, e) {
+  initTermContextMenu();
+  if (!TERM_CMENU_EL) return;
+  e.preventDefault();
+  e.stopPropagation();
+  TERM_CMENU_EL._termTab = tab;
+  // 更新菜单项状态
+  const copyItem = TERM_CMENU_EL.querySelector('[data-action="copy"]');
+  const reconnectItem = TERM_CMENU_EL.querySelector('[data-action="reconnect"]');
+  const hasSelection = getSelectedTermText(tab).length > 0;
+  if (copyItem) copyItem.classList.toggle("disabled", !hasSelection);
+  const disconnected = !tab.ws || tab.ws.readyState !== 1;
+  if (reconnectItem) reconnectItem.classList.toggle("disabled", !disconnected);
+  // 定位
+  TERM_CMENU_EL.style.display = "block";
+  let x = e.clientX, y = e.clientY;
+  const mw = TERM_CMENU_EL.offsetWidth || 160;
+  const mh = TERM_CMENU_EL.offsetHeight || 150;
+  if (x + mw > window.innerWidth) x = window.innerWidth - mw - 4;
+  if (y + mh > window.innerHeight) y = window.innerHeight - mh - 4;
+  if (x < 0) x = 4;
+  if (y < 0) y = 4;
+  TERM_CMENU_EL.style.left = x + "px";
+  TERM_CMENU_EL.style.top = y + "px";
+  TERM_CMENU_EL.classList.add("show");
+}
+
 function createTermTab(id, name, tabName) {
   tabName = tabName || name;
   const screens = $("termScreens"), tabbar = $("termTabbar");
@@ -1421,6 +1524,10 @@ function createTermTab(id, name, tabName) {
   screen.addEventListener("focus", function() {
     if (input && document.activeElement !== input) input.focus({ preventScroll: true });
   });
+  // 右键菜单
+  screen.addEventListener("contextmenu", function(ev) {
+    showTermContextMenu(tabObj, ev);
+  });
   // JS fallback for :focus-within — toggle .term-focused class on screen
   // This ensures cursor blink animation works on iOS Safari where :focus-within
   // may not trigger for opacity:0 elements
@@ -1454,9 +1561,6 @@ function createTermTab(id, name, tabName) {
 
 function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
-  // 隐藏断开遮罩，显示重连按钮
-  const overlay = $("termDisconnectOverlay"); if (overlay) overlay.style.display = "none";
-  const reconnBtn = $("termReconnBtn"); if (reconnBtn) reconnBtn.style.display = "none";
   setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
@@ -1485,14 +1589,7 @@ function connectTermWS(tab) {
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot off"; } }
-    const mask = $("termMask");
-    if (mask && mask.classList.contains("show")) {
-      // 显示断开遮罩和重连按钮
-      const overlay = $("termDisconnectOverlay");
-      if (overlay) overlay.style.display = "flex";
-      const reconnBtn = $("termReconnBtn");
-      if (reconnBtn) reconnBtn.style.display = "flex";
-    }
+
   };
   ws.onerror = () => setTermStatus(I18N.t("ui.connect_error"), "off");
 }
@@ -2022,9 +2119,6 @@ safeAddEventListener("termMaxBtn", "click", () => {
 safeAddEventListener("termMinBtn", "click", () => {
   minimizeTerminal();
 });
-// 重新连接
-safeAddEventListener("termReconnBtn", "click", () => reconnectTermTab());
-safeAddEventListener("termReconnOverlayBtn", "click", () => reconnectTermTab());
 // 文件上传
 safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
 // 文件下载
@@ -2599,6 +2693,8 @@ function makeVT(screen) {
     vt.resizeTo(cols, rows);
     return { cols: vt.cols, rows: vt.rows };
   };
+  vt.fullReset = fullReset;
+  vt.render = render;
   return vt;
 }
 
