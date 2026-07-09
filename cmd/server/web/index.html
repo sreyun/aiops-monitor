@@ -149,13 +149,20 @@
 
         <div class="cards" id="cards"></div>
 
-        <!-- 资源 TOP5：值班一眼看到最热的机器，点击直达趋势 -->
-        <div class="top-grid" id="topPanels"></div>
+        <!-- 资源热力图：CPU/内存/磁盘/网络/负载 TOP10 迷你排行榜 -->
+        <div class="ov-section" id="ovResourceHeatmap">
+          <div class="ov-section-header">
+            <h3 data-i18n="section.resource_heatmap">资源热力图</h3>
+            <span class="ov-section-badge" data-i18n="section.realtime_top10">实时 TOP10</span>
+          </div>
+          <div class="top-grid" id="topPanels"></div>
+        </div>
 
-        <div class="cols" style="margin-top:28px;">
+        <!-- 双栏：最近告警 + 最近活动 -->
+        <div class="ov-section cols" id="ovBottom">
           <div>
             <div class="section-title"><span data-i18n="section.recent_alerts">最近告警</span><span class="count-pill" id="ovAlertsCount">0</span></div>
-            <div class="stack" id="ovAlerts"></div>
+            <div class="stack ov-alerts" id="ovAlerts"></div>
           </div>
           <div>
             <div class="section-title"><span data-i18n="section.recent_activity">最近活动</span><span class="count-pill" id="ovLogCount">0</span></div>

@@ -375,17 +375,57 @@ function bar(label, percent, detail) {
     <div class="bar"><div class="fill" style="width:${p}%;background:${usageColor(percent)}"></div></div></div>`;
 }
 
+/* ---------- 数字滚动动画 ---------- */
+function animateValue(el, from, to, duration = 400) {
+  if (from === to) return;
+  const start = performance.now();
+  const step = (now) => {
+    const p = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - p, 3); // ease-out cubic
+    el.textContent = Math.round(from + (to - from) * eased);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 /* ---------- 渲染：KPI ---------- */
 function renderCards(s) {
+  const cardsEl = $("cards");
+  // 从现有 DOM 读取上一次数值（用于动画起始值）
+  const prevVals = {};
+  cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
+    const k = el.closest(".card")?.getAttribute("data-goto");
+    if (k) prevVals[k] = parseInt(el.dataset.val) || 0;
+  });
+
   const card = (cls, ic, v, k, vcls, goto) =>
-    `<div class="card ${cls}" data-goto="${goto}" title="${I18N.t('section.click_view')}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}">${v}</div><div class="k">${k}</div></div></div>`;
-  $("cards").innerHTML =
+    `<div class="card ${cls}" data-goto="${goto}" title="${I18N.t('section.click_view')}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}" data-val="${v}">${v}</div><div class="k">${k}</div></div></div>`;
+  cardsEl.innerHTML =
     card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
     card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
     card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, I18N.t("ui.offline"), s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
     card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, I18N.t("ui.critical_alerts"), s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
     card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, I18N.t("ui.warning"), s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
     card("info", "event", s.plugin_events || 0, I18N.t("ui.plugin_events"), s.plugin_events > 0 ? "info" : "", "log:");
+
+  // 数值变化动画
+  cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
+    const goto = el.closest(".card")?.getAttribute("data-goto");
+    const newVal = parseInt(el.dataset.val) || 0;
+    const oldVal = prevVals[goto] !== undefined ? prevVals[goto] : newVal;
+    if (oldVal !== newVal) animateValue(el, oldVal, newVal, 400);
+  });
+
+  // 告警数量增加时触发脉冲动画
+  const prevCrit = prevVals["alerts:"] !== undefined ? prevVals["alerts:"] : 0;
+  if (s.critical_alerts > prevCrit) {
+    const critCard = cardsEl.querySelector(".card.crit[data-goto='alerts:']");
+    if (critCard) {
+      critCard.classList.add("card-pulse");
+      setTimeout(() => critCard.classList.remove("card-pulse"), 600);
+    }
+  }
+
   // 空态引导 & 版本号
   const ob = $("onboarding");
   if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
@@ -1106,12 +1146,53 @@ function seriesVal(s, sample) {
   return (v === null || v === undefined || isNaN(v)) ? null : v;
 }
 
+// smoothPath — 将折线数据点绘制为平滑的二次贝塞尔曲线
+function smoothPath(ctx, pts) {
+  if (pts.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length - 1; i++) {
+    const cx = (pts[i].x + pts[i + 1].x) / 2;
+    const cy = (pts[i].y + pts[i + 1].y) / 2;
+    ctx.quadraticCurveTo(pts[i].x, pts[i].y, cx, cy);
+  }
+  ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+}
+
+// drawChartEmpty — 在 Canvas 上绘制空状态插画
+function drawChartEmpty(ctx, w, h, message) {
+  ctx.clearRect(0, 0, w, h);
+  const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const txtColor = cssVar("--muted") || "#8a95a8";
+  const lineColor = cssVar("--line2") || "#2c3442";
+  const cx = w / 2, cy = h / 2;
+
+  // 淡色折线图标轮廓
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 1.2; ctx.setLineDash([3, 4]); ctx.lineCap = "round";
+  const iconPts = [{x: cx - 50, y: cy + 10}, {x: cx - 18, y: cy - 14}, {x: cx + 14, y: cy + 6}, {x: cx + 46, y: cy - 20}];
+  ctx.beginPath(); ctx.moveTo(iconPts[0].x, iconPts[0].y);
+  for (let i = 1; i < iconPts.length; i++) ctx.lineTo(iconPts[i].x, iconPts[i].y);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // 数据点
+  iconPts.forEach(p => { ctx.fillStyle = lineColor; ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2); ctx.fill(); });
+
+  // 居中提示文字
+  ctx.fillStyle = txtColor; ctx.font = "13px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "center";
+  ctx.fillText(message, cx, cy + 40);
+}
+
 // createChart builds an interactive line chart on a canvas and returns its
 // state. The state (samples/series/visible-window) lives on canvas._chart so a
 // single set of event listeners always drives the current chart.
 function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opts = {}) {
   const canvas = $(canvasId);
-  if (!canvas || !allSamples || !allSamples.length) return null;
+  if (!canvas) return null;
+  if (!allSamples || !allSamples.length) {
+    const ctx = canvas.getContext("2d");
+    drawChartEmpty(ctx, canvas.width, canvas.height, I18N.t("empty.no_trend_data") || "暂无趋势数据");
+    return null;
+  }
   const state = {
     canvas, ctx: canvas.getContext("2d"),
     all: allSamples, series, yMin, yMax,
@@ -1121,7 +1202,17 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
     pad: { top: 22, right: 18, bottom: 28, left: 56 },
   };
   canvas._chart = state;
+
+  // 入场动画：首帧绘制后启动渐进揭示
   drawChart(state);
+  state._entranceStart = performance.now();
+  state._entranceDur = 400;
+  requestAnimationFrame(function entranceStep(now) {
+    state._entranceP = Math.min(1, (now - state._entranceStart) / state._entranceDur);
+    drawChart(state);
+    if (state._entranceP < 1) requestAnimationFrame(entranceStep);
+  });
+
   attachChartEvents(canvas);
   return state;
 }
@@ -1160,8 +1251,8 @@ function drawChart(state) {
   const xAt = i => pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
   const yAt = v => pad.top + ch - ((v - dMin) / yRange) * ch;
 
-  // 网格 + Y 轴标签（5 条水平线）
-  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
+  // 网格 + Y 轴标签（5 条水平线，虚线样式）
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5; ctx.setLineDash([2, 4]);
   ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"; ctx.textAlign = "right";
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + (ch / 4) * i;
@@ -1173,6 +1264,7 @@ function drawChart(state) {
     const label = fmt ? fmt(val) : val.toFixed(1);
     ctx.fillText(label, pad.left - 8, y + 4);
   }
+  ctx.setLineDash([]);
 
   // X 轴时间标签
   if (n >= 1) {
@@ -1193,17 +1285,19 @@ function drawChart(state) {
     const pts = [];
     vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
     if (pts.length >= 2) {
-      // 折线路径
+      // 折线路径（数据点 > 12 时使用平滑贝塞尔曲线）
       ctx.save();
       ctx.strokeStyle = s.color; ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
-      ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+      if (pts.length > 12) { smoothPath(ctx, pts); } else { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); }
+      ctx.stroke();
       ctx.restore();
 
-      // 半透明渐变填充区域（提升视觉层次）
+      // 半透明渐变填充区域（4 层渐变停止点，层次更丰富）
       const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-      grad.addColorStop(0, s.color + "28");
-      grad.addColorStop(0.6, s.color + "0A");
-      grad.addColorStop(1, s.color + "02");
+      grad.addColorStop(0, s.color + "35");
+      grad.addColorStop(0.4, s.color + "15");
+      grad.addColorStop(0.7, s.color + "06");
+      grad.addColorStop(1, s.color + "01");
       ctx.fillStyle = grad;
       ctx.beginPath(); ctx.moveTo(pts[0].x, pad.top + ch);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
@@ -1211,33 +1305,65 @@ function drawChart(state) {
     }
   });
 
-  // 图例：水平排列在图表右上角区域，允许换行
+  // 图例：水平排列在图表右上角区域，带半透明背景
   const legendY = pad.top + 4;
   let legendX = pad.left + 8;
-  const legendSpacing = 14; // 条目间距
   const legendItemWidth = 160; // 每个图例条目预估宽度
+
+  // 图例分组半透明背景
+  let legendBgW = 0, legendBgX0 = legendX;
+  const legendLines = [];
+  let curLine = { x: legendX, items: [] };
   series.forEach((s, sIdx) => {
     const pts = [];
     vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
     const vals = pts.map(p => p.val);
     const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
     const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
-
-    // 换行检查：如果当前行放不下，换到下一行
-    if (legendX + legendItemWidth > w - pad.right && sIdx > 0) {
-      legendX = pad.left + 8;
-    }
-
-    ctx.fillStyle = s.color; ctx.fillRect(legendX, legendY, 9, 9);
-    ctx.fillStyle = txtColor; ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "left";
     const labelText = `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
-    ctx.fillText(labelText, legendX + 13, legendY + 9);
-    legendX += ctx.measureText(labelText).width + 28;
 
-    // 下一行图例 Y 偏移
-    if (legendX + legendItemWidth > w - pad.right) {
-      legendX = pad.left + 8;
+    if (curLine.x + legendItemWidth > w - pad.right && sIdx > 0) {
+      legendLines.push(curLine);
+      curLine = { x: pad.left + 8, items: [] };
     }
+    curLine.items.push({ color: s.color, labelText, x: curLine.x });
+    ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
+    curLine.x += ctx.measureText(labelText).width + 28;
+    if (curLine.x + legendItemWidth > w - pad.right) {
+      legendLines.push(curLine);
+      curLine = { x: pad.left + 8, items: [] };
+    }
+  });
+  if (curLine.items.length) legendLines.push(curLine);
+
+  // 计算背景矩形宽度
+  legendLines.forEach(line => {
+    legendBgW = Math.max(legendBgW, line.x - legendBgX0);
+  });
+
+  // 绘制图例背景
+  if (legendLines.length) {
+    const bgH = legendLines.length * 18 + 8;
+    ctx.fillStyle = cssVar("--panel") + "99" || "rgba(17,22,33,.6)";
+    const bgR = 6;
+    ctx.beginPath(); ctx.roundRect(legendBgX0 - 4, legendY - 2, legendBgW + 20, bgH, bgR); ctx.fill();
+  }
+
+  // 逐行绘制图例条目
+  let ly = legendY;
+  legendLines.forEach(line => {
+    let lx = line.x_start || legendBgX0;
+    // reset lx to where this line started
+    lx = line.items.length ? line.items[0].x : lx;
+    line.items.forEach(item => {
+      lx = item.x;
+      // 10×10 圆角色块
+      ctx.fillStyle = item.color;
+      ctx.beginPath(); ctx.roundRect(lx, ly, 10, 10, 3); ctx.fill();
+      ctx.fillStyle = txtColor; ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(item.labelText, lx + 14, ly + 9);
+    });
+    ly += 18;
   });
 
   // 框选矩形
@@ -1252,15 +1378,17 @@ function drawChart(state) {
     const li = state.hover - state.i0, x = xAt(li);
     ctx.strokeStyle = "rgba(200,210,230,.22)"; ctx.lineWidth = 0.8;
     ctx.setLineDash([3, 5]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
-    // 悬停数据点（小圆点，带背景光晕）
+    // 悬停数据点（双层光晕 + 白色高光边缘）
     series.forEach(s => {
       const v = seriesVal(s, vis[li]); if (v === null) return;
       const py = yAt(v);
-      // 外圈光晕
-      ctx.fillStyle = s.color + "30"; ctx.beginPath(); ctx.arc(x, py, 6, 0, Math.PI * 2); ctx.fill();
-      // 实心圆点
-      ctx.fillStyle = s.color; ctx.strokeStyle = bgColor; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(x, py, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // 外层光晕（增大半径至 8px）
+      ctx.fillStyle = s.color + "25"; ctx.beginPath(); ctx.arc(x, py, 8, 0, Math.PI * 2); ctx.fill();
+      // 内层光点
+      ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(x, py, 3.5, 0, Math.PI * 2); ctx.fill();
+      // 白色高光边缘
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, py, 3.5, 0, Math.PI * 2); ctx.stroke();
     });
   }
 }

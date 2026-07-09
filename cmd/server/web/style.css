@@ -63,6 +63,12 @@
   --touch-min:44px;
   /* 顶部导航栏背景（半透明 + 模糊） */
   --topbar-bg:rgba(10,13,19,.85);
+
+  /* ---- 概览页专属设计 tokens（ov- 前缀，避免与全局变量冲突） ---- */
+  --ov-card-shadow:0 1px 2px rgba(0,0,0,.22), 0 0 0 1px rgba(255,255,255,.03);
+  --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.06);
+  --ov-card-lift:-3px;
+  --ov-section-gap:24px;
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -101,6 +107,10 @@
   --shadow-xl:0 20px 56px rgba(0,0,0,.12);
   /* 顶部导航栏背景（浅色模式：白色半透明 + 模糊） */
   --topbar-bg:rgba(255,255,255,.88);
+
+  /* 概览页浅色主题覆盖 */
+  --ov-card-shadow:0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.04);
+  --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06);
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -270,13 +280,18 @@ select:focus{outline:none; border-color:var(--accent)}
 section{scroll-margin-top:80px; margin-bottom:24px}
 
 /* ---------- KPI 卡片 ---------- */
-.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px}
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px}
 .card{
-  background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg);
   padding:16px 18px; display:flex; align-items:center; gap:14px; cursor:pointer;
-  transition:border-color var(--transition-fast), background var(--transition-fast);
+  box-shadow:var(--ov-card-shadow);
+  transition:transform var(--transition), border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
-.card:hover{ border-color:var(--line2); background:var(--panel2) }
+.card:hover{
+  border-color:var(--accent-border); background:var(--panel2);
+  transform:translateY(var(--ov-card-lift));
+  box-shadow:var(--ov-card-shadow-hover);
+}
 .card .ic{
   width:38px; height:38px; border-radius:9px; flex:none; display:flex; align-items:center; justify-content:center;
   background:var(--accent-soft); color:var(--accent);
@@ -289,6 +304,11 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .card .txt{min-width:0}
 .card .v{font-size:23px; font-weight:700; line-height:1.1; letter-spacing:-.5px}
 .card .k{font-size:12px; color:var(--muted); margin-top:2px}
+/* KPI 卡片脉冲动画（告警数量增加时触发） */
+.card.card-pulse{animation:cardPulse .6s ease-out}
+@keyframes cardPulse{0%{box-shadow:0 0 0 0 var(--crit-soft), var(--ov-card-shadow)}50%{box-shadow:0 0 0 8px var(--crit-soft), 0 0 16px 2px var(--crit-soft)}100%{box-shadow:var(--ov-card-shadow)}}
+.card.card-pulse-ok{animation:cardPulseOk .6s ease-out}
+@keyframes cardPulseOk{0%{box-shadow:0 0 0 0 var(--ok-soft), var(--ov-card-shadow)}50%{box-shadow:0 0 0 8px var(--ok-soft), 0 0 16px 2px var(--ok-soft)}100%{box-shadow:var(--ov-card-shadow)}}
 .v.ok{color:var(--ok)} .v.warn{color:var(--warn)} .v.crit{color:var(--crit)} .v.info{color:var(--info)}
 
 /* ---------- 双栏（告警 / 活动） ---------- */
@@ -672,8 +692,8 @@ svg.sparkline{width:100%; height:46px; display:block}
 .icon-btn:disabled{opacity:.4; cursor:not-allowed}
 
 /* ---------- 概览：资源 TOP ---------- */
-.top-grid{display:flex; flex-direction:column; gap:12px; margin-top:16px}
-.top-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px}
+.top-grid{display:flex; flex-direction:column; gap:14px; margin-top:4px}
+.top-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px}
 /* ---------- Group collapse (disabled — rules retained for future restore) ---------- */
 .group-head{cursor:default; user-select:none}
 .group-head .cat-toggle{display:none; font-size:10px; color:var(--muted); flex:none; width:14px; text-align:center; transition:transform var(--transition-fast)}
@@ -713,8 +733,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 .alert-time{font-size:11px; color:var(--muted2); flex:none; white-space:nowrap; margin-left:8px; font-variant-numeric:tabular-nums}
 
 /* ---------- TOP10 panel fixes ---------- */
-.top-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px; min-height:210px; overflow:hidden}
-.ti-bar{flex:1; height:6px; background:var(--panel3); border-radius:3px; overflow:hidden; min-width:40px}
+.top-panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:16px 18px; min-height:210px; overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.08); transition:border-color var(--transition), box-shadow var(--transition)}
+.top-panel:hover{border-color:var(--line2)}
+.ti-bar{flex:1; height:7px; background:var(--panel3); border-radius:4px; overflow:hidden; min-width:40px}
+.ti-fill{height:100%; border-radius:4px; transition:width var(--transition), background var(--transition)}
 .ti-val{width:60px; flex:none; text-align:right; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap}
 
 /* ---------- 空态引导 ---------- */
@@ -768,11 +791,33 @@ svg.sparkline{width:100%; height:46px; display:block}
 .chart-enlarge svg{width:15px; height:15px}
 .chart-tip{position:fixed; z-index:210; pointer-events:none; background:var(--panel);
   border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px; font-size:11.5px; color:var(--txt);
-  box-shadow:var(--shadow-lg); display:none; min-width:132px; backdrop-filter:var(--blur-sm)}
+  box-shadow:var(--shadow-lg); display:none; min-width:132px; backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px); background:rgba(17,22,33,.8)}
+[data-theme="light"] .chart-tip{background:rgba(255,255,255,.85)}
 .chart-tip .tip-t{color:var(--muted); font-size:10.5px; margin-bottom:5px; letter-spacing:.02em}
 .chart-tip .tip-r{display:flex; align-items:center; gap:6px; margin-top:3px; white-space:nowrap}
 .chart-tip .tip-dot{width:8px; height:8px; border-radius:3px; flex:none}
 .chart-tip .tip-v{margin-left:auto; font-weight:700; font-variant-numeric:tabular-nums}
+
+/* ---------- 概览页分区标题 ---------- */
+.ov-section{margin-bottom:var(--ov-section-gap)}
+.ov-section-header{display:flex; align-items:center; gap:10px; margin-bottom:14px}
+.ov-section-header h3{font-size:14px; font-weight:650; margin:0; letter-spacing:.01em; color:var(--txt)}
+.ov-section-badge{font-size:10px; padding:2px 8px; border-radius:999px;
+  background:var(--accent-soft); color:var(--accent-txt);
+  font-weight:600; letter-spacing:.02em; border:1px solid var(--accent-border)}
+
+/* ---------- 图表空状态 ---------- */
+.chart-empty{display:flex; flex-direction:column; align-items:center; justify-content:center;
+  width:100%; padding:40px 20px; color:var(--muted2); text-align:center;
+  border:1px dashed var(--line2); border-radius:var(--r); background:var(--bg2)}
+.chart-empty svg{width:48px; height:48px; opacity:.35; margin-bottom:10px; color:var(--muted2)}
+.chart-empty span{font-size:13px; line-height:1.5}
+
+/* ---------- 告警条目呼吸闪烁（严重级别） ---------- */
+@keyframes alertBorderGlow{0%,100%{border-color:var(--line)}50%{border-color:var(--crit-border); box-shadow:0 0 8px 0 var(--crit-soft)}}
+.ov-alerts .row-item.critical{animation:alertBorderGlow 2.5s ease-in-out infinite}
+
 .modal.modal-wide{max-width:1120px}
 .zoom-hint{font-size:11px; color:var(--muted2); margin-bottom:12px}
 #chartZoomCanvas{width:100%; height:auto; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r)}
@@ -1063,10 +1108,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 
 .tp-title{font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.02em; margin-bottom:8px}
 .top-item{display:flex; align-items:center; gap:10px; padding:5px 6px; border-radius:6px;
-  cursor:pointer; transition:background var(--transition-fast)}
-.top-item:hover{background:var(--panel2)}
+  cursor:pointer; transition:background var(--transition-fast), border-color var(--transition-fast);
+  border-left:3px solid transparent}
+.top-item:hover{background:var(--panel2); border-left-color:var(--accent)}
 .ti-name{width:92px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--txt2)}
-.ti-fill{height:100%; border-radius:3px; transition:width var(--transition)}
+.ti-fill{height:100%; border-radius:4px; transition:width var(--transition), background var(--transition)}
 
 /* ---------- 响应式 ---------- */
 .backdrop{display:none}
@@ -1085,6 +1131,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .content{padding:16px 16px 40px}
   .topbar{padding:10px 16px}
   .search{width:200px; max-width:40vw}
+  .top-row{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 }
 @media(max-width:1000px){.cols{grid-template-columns:1fr}}
 /* 手机横屏 / 大手机 (≤700px) */
