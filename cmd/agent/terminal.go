@@ -498,13 +498,21 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 		<-zmDetectTimer.C
 	}
 
+	// zmAccum accumulates partial ZMODEM frame data across PTY read chunks.
+	// When parseZmFrame returns nil (incomplete frame), the remaining bytes
+	// are saved here and prepended to the next chunk.
+	var zmAccum []byte
+
 	// processZmFrames parses and handles ZMODEM frames from a byte slice.
 	// It also detects sz (ZFILE arriving while zmNeedDetect is true).
 	processZmFrames := func(chunk []byte) {
-		zmBuf := append([]byte(nil), chunk...)
+		zmBuf := append(zmAccum, chunk...)
+		zmAccum = nil
 		for len(zmBuf) > 0 {
 			frame, consumed, _ := parseZmFrame(zmBuf)
 			if frame == nil {
+				// Partial frame — save remaining bytes for next chunk
+				zmAccum = append(zmAccum, zmBuf...)
 				break
 			}
 			zmBuf = zmBuf[consumed:]
@@ -570,6 +578,7 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 
 				inZmodem = false
 				zmSession = nil
+				zmAccum = nil
 				uploadBuf = nil
 				uploadReady = false
 				break

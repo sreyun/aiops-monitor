@@ -2116,29 +2116,24 @@ function termKeyDown(e, tab) {
   if ((mod && (k === "c" || k === "C")) || (mod && k === "Insert")) {
     const shiftCopy = e.shiftKey;
 
-    // 临时 blur textarea 让 document 选区可见，再用 execCommand('copy')
-    // 触发浏览器原生 copy 事件（由 screen 上的 copy 监听器兜底写入剪贴板）
+    // 临时 blur textarea 让 document 选区可见
     const ae = document.activeElement;
     const hasTermInput = ae && ae.classList.contains("term-input");
     if (hasTermInput) { ae.blur(); }
 
-    let sel = "";
-    try {
-      sel = getSelectedTermText(tab);
-    } finally {
-      // 暂不 re-focus — 等 copy 完成后再聚焦
-    }
+    const sel = getSelectedTermText(tab);
 
     if (shiftCopy || sel) {
       e.preventDefault();
       if (sel) {
-        try {
-          // execCommand 触发 copy 事件 → screen 的 copy 监听器捕获并写入剪贴板
-          document.execCommand("copy");
-        } catch (_) {
-          // 兜底：异步 clipboard API
-          copyToClipboard(sel).catch(() => {});
-        }
+        // 创建临时 textarea 确保 execCommand('copy') 有有效选区
+        const ta = document.createElement("textarea");
+        ta.value = sel;
+        ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        try { document.execCommand("copy"); } catch (_) {}
+        document.body.removeChild(ta);
       }
       if (hasTermInput && ae) { ae.focus({ preventScroll: true }); }
       return;
