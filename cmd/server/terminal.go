@@ -104,6 +104,15 @@ type termManager struct {
 	sessions map[string]*termSession
 	waiters  map[string]chan string // hostID -> a waiting agent poll
 	archived []termArchive          // recordings of recently-ended sessions (for replay)
+	// pendingSessions stores session IDs that were created for a host but the
+	// agent wasn't in a long-poll wait at the time of notification. This fixes
+	// a race condition in batch playbook execution: when multiple hosts are
+	// executed in parallel, some agents may be between poll cycles (just finished
+	// one long-poll, starting the next) — notifyAgent would send to the old
+	// waiter channel that nobody reads, and the session would be lost. With
+	// pendingSessions, the session ID persists until the agent's next poll picks
+	// it up immediately (no long-poll wait needed).
+	pendingSessions map[string][]string // hostID -> queued session IDs
 }
 
 // termArchive keeps an ended session's recording so it can still be replayed
@@ -114,7 +123,11 @@ type termArchive struct {
 }
 
 func newTermManager() *termManager {
-	return &termManager{sessions: map[string]*termSession{}, waiters: map[string]chan string{}}
+	return &termManager{
+		sessions:        map[string]*termSession{},
+		waiters:         map[string]chan string{},
+		pendingSessions: map[string][]string{},
+	}
 }
 
 func termID() string {
@@ -196,19 +209,33 @@ func (m *termManager) remove(id string) {
 
 // notifyAgent hands a new sessionID to the agent currently long-polling for
 // hostID; returns false if none is waiting.
+// If no waiter is active, the sessionID is queued in pendingSessions so the
+// agent picks it up on its NEXT poll cycle — this prevents batch-execution
+// race conditions where agents between polls miss the notification window.
 func (m *termManager) notifyAgent(hostID, sessionID string) bool {
 	m.mu.Lock()
 	w := m.waiters[hostID]
 	delete(m.waiters, hostID)
-	m.mu.Unlock()
 	if w == nil {
-		return false
+		// No active waiter — queue for the agent's next poll.
+		// This is the key fix for batch execution instability: agents on
+		// external networks may have gaps between long-poll cycles, and
+		// the old code would silently lose the session in that gap.
+		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
+		m.mu.Unlock()
+		return true // queued successfully
 	}
+	m.mu.Unlock()
 	select {
 	case w <- sessionID:
 		return true
 	default:
-		return false
+		// Channel full (shouldn't happen with buffer=1, but be safe) —
+		// queue it instead of losing it.
+		m.mu.Lock()
+		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
+		m.mu.Unlock()
+		return true
 	}
 }
 func (m *termManager) registerWaiter(hostID string) chan string {
@@ -289,10 +316,13 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Watchdog: if the agent never attaches, don't hang the operator forever.
+	// Timeout raised from 10s to 35s because notifyAgent now queues the session
+	// when the agent is between polls — the agent picks it up on its next cycle
+	// (up to 25s long-poll timeout + a few seconds for HTTP round-trip).
 	go func() {
 		select {
 		case <-sess.agentUp:
-		case <-time.After(10 * time.Second):
+		case <-time.After(35 * time.Second):
 			_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.timeout") + "\x1b[0m\r\n"))
 			sess.close()
 		case <-sess.done:
@@ -371,6 +401,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentTermWait: agent long-polls here; returns a session id when the
 // operator opens a terminal for this host, or {} on timeout (agent re-polls).
+// Before entering the long-poll, it checks pendingSessions — if a batch exec
+// notification arrived while the agent was between polls, it's delivered here
+// immediately without waiting.
 func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	if !s.termFingerprintOK(r) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
@@ -381,6 +414,28 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.host_required")})
 		return
 	}
+	// Check for pending sessions FIRST — this is the batch-execution race fix.
+	// If notifyAgent queued a session while no waiter was active, deliver it
+	// immediately without entering the long-poll.
+	s.term.mu.Lock()
+	if pending := s.term.pendingSessions[host]; len(pending) > 0 {
+		sid := pending[0]
+		if len(pending) == 1 {
+			delete(s.term.pendingSessions, host)
+		} else {
+			s.term.pendingSessions[host] = pending[1:]
+		}
+		s.term.mu.Unlock()
+		out := map[string]string{"session": sid}
+		if sess := s.term.get(sid); sess != nil && sess.mode == "exec" {
+			out["mode"] = "exec"
+			out["command"] = sess.command
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	s.term.mu.Unlock()
+	// No pending session — enter long-poll as usual.
 	ch := s.term.registerWaiter(host)
 	defer s.term.unregisterWaiter(host, ch)
 	select {

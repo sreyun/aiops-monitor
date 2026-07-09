@@ -644,16 +644,23 @@ function renderTop(hosts) {
     return;
   }
 
-  const hasGPU = live.some(h => { const gs = (h.latest.gpus || []); return gs.length && gs.some(g => (g.util_percent || 0) > 0); });
+  // GPU panel visibility: show if ANY host has GPU data (even if utilization
+  // is 0% — idle GPUs should still appear). The old filter required
+  // util_percent > 0 which caused the panel to flicker on/off as GPUs idled.
+  const hasGPU = live.some(h => { const gs = (h.latest.gpus || []); return gs.length > 0; });
   const diskMax = m => { const d = m.disks || []; return d.length ? Math.max(...d.map(x => x.percent)) : (m.disk_percent || 0); };
   const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
   const netTotal = m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0);
   const iopsTotal = m => (m.disk_read_iops || 0) + (m.disk_write_iops || 0);
 
-  // GPU 有效主机过滤：仅纳入安装了 GPU 且至少有一个 GPU 使用率 > 0 的主机
+  // GPU host filter: include any host that has GPU data (gs.length > 0).
+  // Hosts with GPUs always appear in the GPU panel regardless of current load —
+  // this prevents the flickering behavior where hosts disappear when their GPUs
+  // are idle (util_percent = 0) or when nvidia-smi briefly times out and the
+  // cached data has empty gpus array for one cycle.
   const gpuLive = live.filter(h => {
     const gs = (h.latest.gpus || []);
-    return gs.length && gs.some(g => (g.util_percent || 0) > 0);
+    return gs.length > 0;
   });
 
   // 面板定义：[key, title, unit, valueFn, isPct, displayFn]

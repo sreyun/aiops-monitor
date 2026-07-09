@@ -144,27 +144,22 @@ func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (str
 	sess := s.term.createExec(h.ID, h.Hostname, command)
 	defer s.term.remove(sess.id)
 	defer sess.close()
-	// Summon the agent, retrying across the brief gap where it re-registers its
-	// long-poll waiter between sessions — the main cause of "part of the hosts fail
-	// to connect" on multi-host runs over higher-latency links. Up to ~3s.
-	notified := false
-	for i := 0; i < 30; i++ {
-		if s.term.notifyAgent(h.ID, sess.id) {
-			notified = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !notified {
-		return "", fmt.Errorf("%s", Tz("playbook.connect_failed", h.Hostname))
-	}
+	// Summon the agent. notifyAgent now queues the session if the agent is
+	// between polls (no active waiter), so it always succeeds immediately.
+	// The agent will pick it up on its next long-poll cycle (up to 25s).
+	s.term.notifyAgent(h.ID, sess.id)
 	// The agent runs the command as a ONE-SHOT process (sh -c / cmd /c, no PTY) and
 	// streams the combined output up the tx channel, ending it when the process
 	// exits — so session `done` (tx EOF) means the command finished. This is far
 	// more reliable than the old interactive-PTY + sentinel scheme, especially on
 	// Linux. The exit code arrives as a trailing "[AIOPS_EXIT]<code>" marker.
+	//
+	// Timer includes a 30s buffer for agent poll latency (the agent may be in the
+	// middle of a 25s long-poll cycle when the session is queued). Without this
+	// buffer, commands on external-network agents would time out before the agent
+	// even picks up the session.
 	var output []byte
-	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+	timer := time.NewTimer(time.Duration(timeoutSec+30) * time.Second)
 	defer timer.Stop()
 	for {
 		select {
