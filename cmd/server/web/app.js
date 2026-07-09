@@ -3532,78 +3532,152 @@ async function usersAction(name, act) {
 }
 
 /* ---------- 账户找回：用户名 / 密码 ---------- */
-function openRecoverUser() {
+// New dual-verification flow (email code + optional MFA TOTP)
+function openRecoverUser() { showRecoverFlow('recover_username'); }
+function openRecoverPass() { showRecoverFlow('recover_password'); }
+
+function showRecoverFlow(purpose) {
   const body = $("recoverBody");
-  $("recoverTitle").textContent = I18N.t("ui.recover_username");
+  $("recoverTitle").textContent = I18N.t("recover.title");
+  const label = purpose === 'recover_username' ? I18N.t("login.forgot_user") : I18N.t("login.forgot_pass");
   body.innerHTML = `
-    <div class="mfa-desc" style="margin-bottom:14px">输入已绑定的邮箱地址，系统将向该邮箱发送用户名。</div>
-    <div class="field"><label>${I18N.t("form.email")}</label><input type="text" id="rcEmail" placeholder="name@example.com"></div>
+    <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.enter_email_desc")}</div>
+    <div class="field"><label>${I18N.t("form.email")}</label><input type="text" id="rcEmail" placeholder="name@example.com" autocomplete="email"></div>
     <div class="login-err" id="rcErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="rcSubmit" type="button">${I18N.t("mfa.send_btn")}</button></div>`;
+    <div class="mfa-foot"><button class="btn primary" id="rcAction" type="button">${I18N.t("mfa.send_code_btn")}</button></div>`;
   $("recoverMask").classList.add("show");
-  $("rcSubmit").onclick = async () => {
+
+  $("rcAction").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
     const email = $("rcEmail").value.trim();
     if (!email) { errEl.textContent = I18N.t("valid.enter_email"); return; }
     try {
-      const r = await fetch(`${API}/account/recover-username`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) { toast(j.message || I18N.t("toast.username_sent"), "ok"); $("recoverMask").classList.remove("show"); }
-      else errEl.textContent = j.error || I18N.t("toast.send_failed");
-    } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
-  };
-  setTimeout(() => { const el = $("rcEmail"); if (el) el.focus(); }, 60);
-}
-
-function openRecoverPass() {
-  const body = $("recoverBody");
-  $("recoverTitle").textContent = I18N.t("ui.reset_password");
-  body.innerHTML = `
-    <div class="mfa-desc" style="margin-bottom:14px">输入用户名，系统将向绑定邮箱发送验证码。</div>
-    <div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="rcUser" placeholder="${I18N.t('form.login_account')}"></div>
-    <div class="login-err" id="rcErr"></div>
-    <div class="mfa-foot"><button class="btn primary" id="rcSendCode" type="button">${I18N.t("mfa.send_code_btn")}</button></div>
-    <div class="field" id="rcCodeRow" style="display:none"><label>${I18N.t("form.email_code")}</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6_v2')}" autocomplete="one-time-code"></div>
-    <div class="field" id="rcNewPassRow" style="display:none"><label>${I18N.t("form.new_password_min4")}</label><input type="password" id="rcNewPass" placeholder="${I18N.t('form.new_password')}"></div>
-    <div class="mfa-foot" id="rcResetRow" style="display:none"><button class="btn danger" id="rcReset" type="button">${I18N.t("ui.reset_password")}</button></div>`;
-  $("recoverMask").classList.add("show");
-  let rcEmail = ""; // stored from server response (not returned for security)
-  $("rcSendCode").onclick = async () => {
-    const errEl = $("rcErr"); errEl.textContent = "";
-    const username = $("rcUser").value.trim();
-    if (!username) { errEl.textContent = I18N.t("valid.enter_username"); return; }
-    try {
-      const r = await fetch(`${API}/account/send-reset-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username }) });
+      const r = await fetch(`${API}/account/recover-send-code`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, purpose })
+      });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
-        toast(j.message || I18N.t("toast.reset_code_sent"), "ok");
-        $("rcSendCode").textContent = I18N.t("ui.resend");
-        $("rcSendCode").disabled = true;
-        setTimeout(() => { const b = $("rcSendCode"); if (b) b.disabled = false; }, 60000);
-        $("rcCodeRow").style.display = "";
-        $("rcNewPassRow").style.display = "";
-        $("rcResetRow").style.display = "";
-        setTimeout(() => { const el = $("rcCode"); if (el) el.focus(); }, 60);
+        toast(j.message || I18N.t("toast.code_sent"), "ok");
+        showRecoverStep2(purpose, email);
       } else {
         errEl.textContent = j.error || I18N.t("toast.send_failed");
       }
     } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
   };
+  setTimeout(() => { const el = $("rcEmail"); if (el) el.focus(); }, 60);
+}
+
+function showRecoverStep2(purpose, email) {
+  const body = $("recoverBody");
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.enter_code_desc")}</div>
+    <div class="field" style="margin-bottom:8px"><label style="font-size:11px;color:var(--muted2)">${I18N.t("form.email")}：${esc(email)}</label></div>
+    <div class="field"><label>${I18N.t("form.email_code")}</label><input type="text" id="rcCode" inputmode="numeric" maxlength="6" placeholder="${I18N.t('mfa.code_6')}" autocomplete="one-time-code"></div>
+    <div class="login-err" id="rcErr"></div>
+    <div class="mfa-foot" style="justify-content:space-between">
+      <button class="btn" id="rcResend" type="button">${I18N.t("recover.resend_code")}</button>
+      <button class="btn primary" id="rcAction" type="button">${I18N.t("recover.verify_code_btn")}</button>
+    </div>`;
+
+  $("rcResend").onclick = () => showRecoverFlow(purpose);
+  $("rcAction").onclick = async () => {
+    const errEl = $("rcErr"); errEl.textContent = "";
+    const code = $("rcCode").value.trim();
+    if (code.length !== 6) { errEl.textContent = I18N.t("valid.enter_code"); return; }
+    try {
+      const r = await fetch(`${API}/account/recover-verify`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code, purpose })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { errEl.textContent = j.error || I18N.t("toast.verify_failed"); return; }
+      if (j.mfa_required) {
+        showRecoverStepMFA(purpose, email, code);
+      } else {
+        showRecoverResult(purpose, j);
+      }
+    } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
+  };
+  setTimeout(() => { const el = $("rcCode"); if (el) el.focus(); }, 60);
+}
+
+function showRecoverStepMFA(purpose, email, code) {
+  const body = $("recoverBody");
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.enter_totp_desc")}</div>
+    <div class="field"><label>${I18N.t("recover.totp_code")}</label><input type="text" id="rcTOTP" inputmode="numeric" maxlength="6" placeholder="${I18N.t('recover.totp_placeholder')}" autocomplete="one-time-code"></div>
+    <div class="login-err" id="rcErr"></div>
+    <div class="mfa-foot" style="justify-content:space-between">
+      <button class="btn" id="rcBack" type="button">${I18N.t("ui.back")}</button>
+      <button class="btn primary" id="rcAction" type="button">${I18N.t("recover.verify_totp_btn")}</button>
+    </div>`;
+
+  $("rcBack").onclick = () => showRecoverStep2(purpose, email);
+  $("rcAction").onclick = async () => {
+    const errEl = $("rcErr"); errEl.textContent = "";
+    const totp = $("rcTOTP").value.trim();
+    if (totp.length !== 6) { errEl.textContent = I18N.t("valid.enter_totp"); return; }
+    try {
+      const r = await fetch(`${API}/account/recover-verify-mfa`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code, totp_code: totp, purpose })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { errEl.textContent = j.error || I18N.t("toast.verify_failed"); return; }
+      showRecoverResult(purpose, j);
+    } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
+  };
+  setTimeout(() => { const el = $("rcTOTP"); if (el) el.focus(); }, 60);
+}
+
+function showRecoverResult(purpose, result) {
+  const body = $("recoverBody");
+  if (purpose === 'recover_username') {
+    toast(I18N.t("toast.username_recovered"), "ok");
+    body.innerHTML = `
+      <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.username_recovered")}</div>
+      <div class="field"><input type="text" value="${esc(result.username)}" readonly style="font-weight:700;font-size:16px;text-align:center;cursor:pointer" onclick="navigator.clipboard.writeText(this.value);toast(I18N.t('toast.copied'),'ok')" title="${I18N.t('toast.copied')}"></div>
+      <div class="mfa-foot"><button class="btn primary" id="rcClose" type="button">${I18N.t("recover.back_to_login")}</button></div>`;
+    $("rcClose").onclick = () => $("recoverMask").classList.remove("show");
+  } else {
+    showSetNewPassword(result.reset_token);
+  }
+}
+
+function showSetNewPassword(token) {
+  const body = $("recoverBody");
+  body.innerHTML = `
+    <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.enter_new_password")}</div>
+    <div class="field"><label>${I18N.t("form.new_password_min4")}</label><input type="password" id="rcNewPass" placeholder="${I18N.t('form.new_password')}"></div>
+    <div class="field"><label>${I18N.t('profile.confirm_password') || I18N.t('form.new_password')}</label><input type="password" id="rcNewPass2" placeholder="${I18N.t('form.new_password')}"></div>
+    <div class="login-err" id="rcErr"></div>
+    <div class="mfa-foot"><button class="btn danger" id="rcReset" type="button">${I18N.t("recover.reset_password_btn")}</button></div>`;
+
   $("rcReset").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
-    const username = $("rcUser").value.trim();
-    const code = $("rcCode").value.trim();
-    const newPass = $("rcNewPass").value;
-    if (code.length !== 6) { errEl.textContent = I18N.t("valid.enter_code"); return; }
-    if (newPass.length < 4) { errEl.textContent = I18N.t("toast.password_too_short2"); return; }
+    const p1 = $("rcNewPass").value;
+    const p2 = $("rcNewPass2").value;
+    if (p1.length < 4) { errEl.textContent = I18N.t("toast.password_too_short2"); return; }
+    if (p1 !== p2) { errEl.textContent = I18N.t("auth.password_mismatch"); return; }
     try {
-      const r = await fetch(`${API}/account/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, email: "", code, new_password: newPass }) });
+      const r = await fetch(`${API}/account/reset-password`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset_token: token, new_password: p1 })
+      });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) { toast(j.message || I18N.t("toast.password_reset"), "ok"); $("recoverMask").classList.remove("show"); }
-      else errEl.textContent = j.error || I18N.t("toast.reset_failed");
+      if (r.ok) {
+        body.innerHTML = `
+          <div class="mfa-desc" style="margin-bottom:14px;color:var(--ok);font-weight:600">✓ ${j.message || I18N.t("toast.password_reset2")}</div>
+          <div class="mfa-foot"><button class="btn primary" id="rcClose" type="button">${I18N.t("recover.back_to_login")}</button></div>`;
+        $("rcClose").onclick = () => $("recoverMask").classList.remove("show");
+        toast(j.message || I18N.t("toast.password_reset2"), "ok");
+      } else {
+        errEl.textContent = j.error || I18N.t("toast.reset_failed");
+      }
     } catch (e) { errEl.textContent = I18N.t("toast.reset_failed2") + e; }
   };
-  setTimeout(() => { const el = $("rcUser"); if (el) el.focus(); }, 60);
+  setTimeout(() => { const el = $("rcNewPass"); if (el) el.focus(); }, 60);
 }
 
 async function logout() {
@@ -5005,3 +5079,16 @@ window.addEventListener("online", () => {
 window.addEventListener("offline", () => {
   toast(I18N.t("toast.network_disconnected"), "err");
 });
+
+/* ============================================================
+   侧栏实时时钟
+   ============================================================ */
+function updateSideClock() {
+  const el = $("sideClock");
+  if (!el) return;
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  el.textContent = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+updateSideClock();
+setInterval(updateSideClock, 1000);

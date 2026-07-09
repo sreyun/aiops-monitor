@@ -117,6 +117,12 @@
   "recovery.email_send_error": "Email sending failed: %s",
   "recovery.rate_limited": "Sending too frequently, please wait 60 seconds",
 
+  "recovery.invalid_purpose": "Invalid recovery type",
+  "recovery.token_invalid": "Reset token is invalid or expired",
+  "recovery.mfa_not_configured": "MFA is not properly configured",
+  "recovery.email_username_code_subject": "AIOps Monitor — Account Recovery Code",
+  "recovery.email_username_code_body": "Your verification code is: <b style=\"font-size:24px;letter-spacing:4px;color:#4c8dff\">%s</b>",
+
   "recovery.email_username_subject": "AIOps Monitor — Account Username",
   "recovery.email_username_body": "Your login username is: <b style=\"font-size:18px\">%s</b>",
   "recovery.email_disclaimer": "If you did not request this, please ignore this email.",
@@ -233,6 +239,10 @@
   "log.reset_code_failed": "Password reset code failed: %s",
   "log.reset_password": "Password reset via email code: %s",
   "log.mfa_unbind": "MFA unbound via email code: %s",
+  "log.totp_recovery_failed": "Recovery TOTP verification failed: %s",
+  "log.totp_recovery_success": "Recovery TOTP verification succeeded: %s",
+  "log.username_recovered": "Username recovered: %s",
+  "log.reset_token_issued": "Password reset token issued: %s",
   "log.observe_terminal": "Observed terminal session %s",
 
   "log.kind.operation": "Operation",

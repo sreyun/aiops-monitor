@@ -117,6 +117,12 @@
   "recovery.email_send_error": "邮件发送失败：%s",
   "recovery.rate_limited": "发送过于频繁，请 60 秒后再试",
 
+  "recovery.invalid_purpose": "无效的找回类型",
+  "recovery.token_invalid": "重置令牌无效或已过期",
+  "recovery.mfa_not_configured": "MFA 未正确配置",
+  "recovery.email_username_code_subject": "AIOps Monitor — 账户找回验证码",
+  "recovery.email_username_code_body": "您的验证码是：<b style=\"font-size:24px;letter-spacing:4px;color:#4c8dff\">%s</b>",
+
   "recovery.email_username_subject": "AIOps Monitor — 账户用户名",
   "recovery.email_username_body": "您的登录用户名为：<b style=\"font-size:18px\">%s</b>",
   "recovery.email_disclaimer": "如非本人操作请忽略此邮件。",
@@ -233,6 +239,10 @@
   "log.reset_code_failed": "密码重置验证码发送失败：%s",
   "log.reset_password": "通过邮箱验证码重置密码：%s",
   "log.mfa_unbind": "通过邮箱验证码解除两步验证：%s",
+  "log.totp_recovery_failed": "找回流程 TOTP 验证失败：%s",
+  "log.totp_recovery_success": "找回流程 TOTP 验证通过：%s",
+  "log.username_recovered": "用户名找回成功：%s",
+  "log.reset_token_issued": "密码重置令牌已签发：%s",
   "log.observe_terminal": "旁观终端会话 %s",
 
   "log.kind.operation": "操作",

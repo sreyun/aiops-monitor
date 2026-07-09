@@ -73,6 +73,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/mfa/global", s.handleMFAGlobalGet)
 	mux.HandleFunc("POST /api/v1/mfa/global", s.handleMFAGlobalSet)
 	// Account recovery: public endpoints (no session required)
+	// New dual-verification flow (email code + optional MFA TOTP)
+	mux.HandleFunc("POST /api/v1/account/recover-send-code", s.handleRecoverSendCode)
+	mux.HandleFunc("POST /api/v1/account/recover-verify", s.handleRecoverVerify)
+	mux.HandleFunc("POST /api/v1/account/recover-verify-mfa", s.handleRecoverVerifyMFA)
+	// Legacy/backward-compat endpoints
 	mux.HandleFunc("POST /api/v1/account/recover-username", s.handleRecoverUsername)
 	mux.HandleFunc("POST /api/v1/account/send-reset-code", s.handleSendResetCode)
 	mux.HandleFunc("POST /api/v1/account/reset-password", s.handleResetPassword)

@@ -117,6 +117,12 @@
   "recovery.email_send_error": "信箱發送失敗：%s",
   "recovery.rate_limited": "發送過於頻繁，請 60 秒後再試",
 
+  "recovery.invalid_purpose": "無效的找回類型",
+  "recovery.token_invalid": "重置令牌無效或已過期",
+  "recovery.mfa_not_configured": "MFA 未正確配置",
+  "recovery.email_username_code_subject": "AIOps Monitor — 帳戶找回驗證碼",
+  "recovery.email_username_code_body": "您的驗證碼是：<b style=\"font-size:24px;letter-spacing:4px;color:#4c8dff\">%s</b>",
+
   "recovery.email_username_subject": "AIOps Monitor — 帳號使用者名稱",
   "recovery.email_username_body": "您的登入使用者名稱為：<b style=\"font-size:18px\">%s</b>",
   "recovery.email_disclaimer": "如非本人操作請忽略此信箱。",
@@ -233,6 +239,10 @@
   "log.reset_code_failed": "密碼重設驗證碼發送失敗：%s",
   "log.reset_password": "通過信箱驗證碼重設密碼：%s",
   "log.mfa_unbind": "通過信箱驗證碼解除兩步驗證：%s",
+  "log.totp_recovery_failed": "找回流程 TOTP 驗證失敗：%s",
+  "log.totp_recovery_success": "找回流程 TOTP 驗證通過：%s",
+  "log.username_recovered": "用戶名找回成功：%s",
+  "log.reset_token_issued": "密碼重置令牌已簽發：%s",
   "log.observe_terminal": "旁觀終端會話 %s",
 
   "log.kind.operation": "操作",

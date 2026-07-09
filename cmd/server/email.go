@@ -105,11 +105,12 @@ func base64Str(s string) string {
 // -----------------------------------------------------------------------
 
 type emailCode struct {
-	code     string
-	expires  time.Time
-	purpose  string // "mfa_unbind" | "reset_password" | "recover_username"
-	email    string
-	attempts int // wrong-guess counter; the code is voided after too many tries
+	code          string
+	expires       time.Time
+	purpose       string // "mfa_unbind" | "reset_password" | "recover_username" | "recover_password"
+	email         string
+	attempts      int  // wrong-guess counter; the code is voided after too many tries
+	emailVerified bool // true = email code was verified but MFA (TOTP) step is still pending
 }
 
 type passwordResetToken struct {
@@ -225,6 +226,64 @@ func (em *emailManager) verifyCode(email, purpose, code string) bool {
 	}
 	delete(em.codes, email) // correct: single-use, consume immediately
 	return true
+}
+
+// markCodeVerified validates the code but does NOT consume it; instead it marks
+// the entry as "email-verified" so the front-end can proceed to the MFA (TOTP)
+// second-factor step. Returns the matched email address if valid.
+func (em *emailManager) markCodeVerified(email, purpose, code string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	entry, ok := em.codes[email]
+	if !ok || entry.purpose != purpose {
+		return ""
+	}
+	if time.Now().After(entry.expires) {
+		delete(em.codes, email)
+		return ""
+	}
+	if entry.attempts >= 5 {
+		delete(em.codes, email)
+		return ""
+	}
+	if !constantTimeEq(entry.code, code) {
+		entry.attempts++
+		em.codes[email] = entry
+		return ""
+	}
+	entry.emailVerified = true
+	entry.attempts = 0 // reset attempts counter for the MFA step
+	em.codes[email] = entry
+	return entry.email
+}
+
+// consumeVerifiedCode consumes a code that was previously marked as verified
+// via markCodeVerified. Returns the matched email address if valid.
+func (em *emailManager) consumeVerifiedCode(email, purpose, code string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	entry, ok := em.codes[email]
+	if !ok || entry.purpose != purpose || !entry.emailVerified {
+		return ""
+	}
+	if time.Now().After(entry.expires) {
+		delete(em.codes, email)
+		return ""
+	}
+	// Re-verify the code (the client may have sent a different one)
+	if !constantTimeEq(entry.code, code) {
+		entry.attempts++
+		if entry.attempts >= 3 {
+			delete(em.codes, email)
+		} else {
+			em.codes[email] = entry
+		}
+		return ""
+	}
+	delete(em.codes, email)
+	return entry.email
 }
 
 // issueResetToken creates a one-time password-reset token for username+email.

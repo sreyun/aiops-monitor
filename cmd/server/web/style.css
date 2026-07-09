@@ -159,7 +159,11 @@ body{
 
 .side-actions{margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:14px}
 .btn.block{width:100%; justify-content:center}
-.side-status{display:flex; align-items:center; justify-content:center; padding-top:12px; border-top:1px solid var(--line); margin-top:6px}
+.side-status{display:flex; flex-direction:column; align-items:center; gap:8px; padding-top:12px; border-top:1px solid var(--line); margin-top:6px}
+
+/* 侧栏实时时钟 */
+.side-clock{font-size:10px; color:var(--muted2); font-variant-numeric:tabular-nums; letter-spacing:.03em; font-family:ui-monospace,Menlo,Consolas,monospace; white-space:nowrap; line-height:1.4; text-align:center}
+.app.collapsed .side-clock{font-size:8px; writing-mode:vertical-rl; text-orientation:mixed; letter-spacing:.06em}
 
 /* ---------- 通用按钮 ---------- */
 .btn{
