@@ -1394,10 +1394,14 @@ function createTermTab(id, name) {
   // copy 事件：当用户通过右键菜单或 Ctrl+C 触发复制时，
   // 确保选中的终端文本被写入系统剪贴板。
   // 注意：隐藏 textarea 聚焦时 window.getSelection().rangeCount==0，需临时 blur。
-  screen.addEventListener("copy", ev => {
+  // 监听器挂在 document 上（而非 screen），因为 execCommand('copy') 触发
+  // 的 copy 事件 target 是 document，不会经过 screen 元素。
+  document.addEventListener("copy", ev => {
+    // 只处理当前活跃 tab 的复制（避免全局快捷键干扰其他页面元素）
+    const activeTab = TERM_ACTIVE >= 0 ? TERM_TABS[TERM_ACTIVE] : null;
+    if (!activeTab || !activeTab.screenEl) return;
     let sel = window.getSelection().toString();
     if (!sel) {
-      // textarea 聚焦导致选区不可见，临时 blur 再检查
       const ae = document.activeElement;
       if (ae && ae.classList.contains("term-input")) {
         ae.blur();
@@ -2110,23 +2114,38 @@ function termKeyDown(e, tab) {
   // Ctrl+C / Cmd+C → 有选区时复制，无选区时发送 SIGINT
   // Ctrl+Shift+C / Cmd+Shift+C / Ctrl+Insert → 强制复制（主流终端习惯）
   if ((mod && (k === "c" || k === "C")) || (mod && k === "Insert")) {
-    // 从 document 全局选区获取，而非仅限当前聚焦元素
-    const sel = getSelectedTermText(tab);
     const shiftCopy = e.shiftKey;
+
+    // 临时 blur textarea 让 document 选区可见，再用 execCommand('copy')
+    // 触发浏览器原生 copy 事件（由 screen 上的 copy 监听器兜底写入剪贴板）
+    const ae = document.activeElement;
+    const hasTermInput = ae && ae.classList.contains("term-input");
+    if (hasTermInput) { ae.blur(); }
+
+    let sel = "";
+    try {
+      sel = getSelectedTermText(tab);
+    } finally {
+      // 暂不 re-focus — 等 copy 完成后再聚焦
+    }
+
     if (shiftCopy || sel) {
       e.preventDefault();
       if (sel) {
-        copyToClipboard(sel).then(
-          () => { /* silent */ },
-          () => toast(I18N.t("toast.copy_failed"), "err")
-        );
-      } else if (shiftCopy) {
-        // 无选区但 Shift 按下：仍阻止默认行为（避免发送 SIGINT），
-        // 但没有内容可复制，静默忽略
+        try {
+          // execCommand 触发 copy 事件 → screen 的 copy 监听器捕获并写入剪贴板
+          document.execCommand("copy");
+        } catch (_) {
+          // 兜底：异步 clipboard API
+          copyToClipboard(sel).catch(() => {});
+        }
       }
+      if (hasTermInput && ae) { ae.focus({ preventScroll: true }); }
       return;
     }
-    // 无选区 → 继续执行，发送 SIGINT (\x03)
+
+    // 无选区 → re-focus 并继续执行，发送 SIGINT (\x03)
+    if (hasTermInput && ae) { ae.focus({ preventScroll: true }); }
   }
 
   const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)

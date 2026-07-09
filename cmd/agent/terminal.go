@@ -457,16 +457,125 @@ func writeFrame(w io.Writer, typ byte, payload []byte) error {
 // framed data to w. Normal PTY output is written as 'O' frames. When ZMODEM
 // is detected, the function runs the ZMODEM protocol and writes 'Z'/'D'/'E'
 // frames. Upload data is received via zmChan.
+//
+// Uses a goroutine for PTY reading so the main loop can multiplex PTY data,
+// upload data (zmChan), and a rz/sz detection timer via select.
 func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
-	buf := make([]byte, 32<<10)
+	// PTY reader goroutine → channel (avoids blocking main loop when
+	// remote rz is waiting for ZFILE and no PTY output is coming).
+	type ptyData struct {
+		data []byte
+		err  error
+	}
+	ptyCh := make(chan ptyData, 1)
+	go func() {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := ptyReader.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				ptyCh <- ptyData{data, nil}
+			}
+			if err != nil {
+				ptyCh <- ptyData{nil, err}
+				return
+			}
+		}
+	}()
 
-	// Track whether we're in ZMODEM mode
+	// State
 	inZmodem := false
 	var zmSession *ZmSession
-
-	// Upload state: accumulate file data from browser
 	var uploadBuf []byte
 	uploadReady := false
+
+	// rz/sz detection: after ZRQINIT+ZRINIT, wait 2s for ZFILE from remote.
+	// If ZFILE arrives → sz (download). If timer fires → rz (upload).
+	zmNeedDetect := false
+	zmDetectTimer := time.NewTimer(0)
+	if !zmDetectTimer.Stop() {
+		<-zmDetectTimer.C
+	}
+
+	// processZmFrames parses and handles ZMODEM frames from a byte slice.
+	// It also detects sz (ZFILE arriving while zmNeedDetect is true).
+	processZmFrames := func(chunk []byte) {
+		zmBuf := append([]byte(nil), chunk...)
+		for len(zmBuf) > 0 {
+			frame, consumed, _ := parseZmFrame(zmBuf)
+			if frame == nil {
+				break
+			}
+			zmBuf = zmBuf[consumed:]
+
+			// sz detection: ZFILE arrived while we're waiting to distinguish sz vs rz
+			if zmNeedDetect && frame.Type == ZFILE {
+				if !zmDetectTimer.Stop() {
+					select {
+					case <-zmDetectTimer.C:
+					default:
+					}
+				}
+				zmNeedDetect = false
+				info := parseZFileInfo(frame.Data)
+				fname := "download.dat"
+				fsize := int64(0)
+				if info != nil {
+					if info.Name != "" {
+						fname = info.Name
+					}
+					if info.Size > 0 {
+						fsize = info.Size
+					}
+				}
+				zmJSON := fmt.Sprintf(`{"type":"sz","filename":"%s","size":%d}`, fname, fsize)
+				writeFrame(w, 'Z', []byte(zmJSON))
+				slog.Info("ZMODEM检测为sz(下载)", "filename", fname, "size", fsize)
+			}
+
+			// Skip ZRQINIT — we already sent ZRINIT in the detection block
+			if frame.Type == ZRQINIT {
+				continue
+			}
+
+			responses := zmSession.HandleFrame(frame)
+			for _, resp := range responses {
+				if w2, ok := ptyReader.(io.Writer); ok {
+					w2.Write(resp)
+				}
+			}
+
+			// Check if download is complete
+			if zmSession.State == zmIdle && zmSession.DataBuf.Len() > 0 {
+				fname := "download.dat"
+				fsize := int64(zmSession.DataBuf.Len())
+				if zmSession.File != nil && zmSession.File.Name != "" {
+					fname = zmSession.File.Name
+				}
+				slog.Info("ZMODEM下载完成", "filename", fname, "size", fsize)
+
+				// 'Z' frame (type "sz") already sent at ZFILE detection time.
+				// Now send the file data and completion marker.
+				data := zmSession.DataBuf.Bytes()
+				chunkSz := 32 << 10
+				for offset := 0; offset < len(data); offset += chunkSz {
+					end := offset + chunkSz
+					if end > len(data) {
+						end = len(data)
+					}
+					writeFrame(w, 'D', data[offset:end])
+				}
+				writeFrame(w, 'E', nil)
+
+				inZmodem = false
+				zmSession = nil
+				uploadBuf = nil
+				uploadReady = false
+				break
+			}
+		}
+	}
 
 	for {
 		// Drain zmChan: accumulate upload data
@@ -475,7 +584,6 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 			select {
 			case chunk := <-zmChan:
 				if chunk == nil {
-					// End of upload — all data received
 					uploadReady = true
 				} else {
 					uploadBuf = append(uploadBuf, chunk...)
@@ -485,81 +593,37 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 			}
 		}
 
-		// If upload data is ready and we're in ZMODEM mode waiting for upload,
-		// start the upload protocol by sending ZRINIT to the remote rz.
+		// If upload data is ready and we're in ZMODEM mode (rz), send ZFILE to remote.
 		if uploadReady && len(uploadBuf) > 0 && inZmodem && zmSession != nil && zmSession.State == zmInit {
 			slog.Info("ZMODEM上传数据已就绪，开始上传协议", "size", len(uploadBuf))
 			zmSession.UploadData = uploadBuf
 			zmSession.File = &ZFileInfo{Name: "upload.dat", Size: int64(len(uploadBuf))}
-			// Send ZRINIT to acknowledge the remote rz
+			zmSession.State = zmFile
 			if w2, ok := ptyReader.(io.Writer); ok {
-				w2.Write(buildZrinitFrame())
+				w2.Write(buildZfileFrame(zmSession.File.Name, zmSession.File.Size))
 			}
 			uploadBuf = nil
 			uploadReady = false
 		}
 
-		n, readErr := ptyReader.Read(buf)
-		if n > 0 {
-			chunk := buf[:n]
+		// Wait for PTY data, upload data, or detection timer
+		select {
+		case pd := <-ptyCh:
+			if pd.err != nil {
+				if pd.err != io.EOF {
+					slog.Warn("PTY读取错误", "err", pd.err)
+				}
+				return
+			}
+			chunk := pd.data
 
 			if inZmodem {
-				// Feed chunk to ZMODEM session (accumulate + parse frames)
-				zmBuf := append([]byte(nil), chunk...)
-				for len(zmBuf) > 0 {
-					frame, consumed, _ := parseZmFrame(zmBuf)
-					if frame == nil {
-						break
-					}
-					zmBuf = zmBuf[consumed:]
-
-					responses := zmSession.HandleFrame(frame)
-					for _, resp := range responses {
-						if w2, ok := ptyReader.(io.Writer); ok {
-							w2.Write(resp)
-						}
-					}
-
-					// Check if download is complete
-					if zmSession.State == zmIdle && zmSession.DataBuf.Len() > 0 {
-						// File download complete — send to server
-						fname := "download.dat"
-						fsize := int64(zmSession.DataBuf.Len())
-						if zmSession.File != nil && zmSession.File.Name != "" {
-							fname = zmSession.File.Name
-						}
-						slog.Info("ZMODEM下载完成", "filename", fname, "size", fsize)
-
-						// Send ZMODEM signal frame
-						zmJSON := fmt.Sprintf(`{"type":"sz","filename":"%s","size":%d}`, fname, fsize)
-						writeFrame(w, 'Z', []byte(zmJSON))
-						// Send file data in chunks
-						data := zmSession.DataBuf.Bytes()
-						chunkSz := 32 << 10 // 32KB chunks
-						for offset := 0; offset < len(data); offset += chunkSz {
-							end := offset + chunkSz
-							if end > len(data) {
-								end = len(data)
-							}
-							writeFrame(w, 'D', data[offset:end])
-						}
-						// Send complete frame
-						writeFrame(w, 'E', nil)
-
-						// Reset ZMODEM state
-						inZmodem = false
-						zmSession = nil
-						uploadBuf = nil
-						uploadReady = false
-						break
-					}
-				}
+				processZmFrames(chunk)
 			} else {
 				// Check for ZMODEM header
 				if HasZmodemHeader(chunk) {
 					idx := IndexZmodemHeader(chunk)
 					if idx > 0 {
-						// Flush data before the header as normal output
 						writeFrame(w, 'O', chunk[:idx])
 					}
 					zmChunk := chunk[idx:]
@@ -571,70 +635,46 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 					zmSession.State = zmInit
 
 					if frame != nil && frame.Type == ZRQINIT {
-						// Remote side sent ZRQINIT — this could be sz (send) or rz (receive).
-						// We can't distinguish yet. For sz, the remote will send ZFILE next.
-						// For rz, the remote is waiting for us to send a file.
-						// Send a 'Z' signal to the browser so it can prepare for either case.
-						zmJSON := fmt.Sprintf(`{"type":"rz"}`)
-						writeFrame(w, 'Z', []byte(zmJSON))
-						slog.Info("ZMODEM握手检测到(ZRQINIT)，等待文件传输")
-						// Do NOT send ZRINIT yet — for rz, we need to wait for the browser
-						// to provide the file. For sz, the remote will send ZFILE and we
-						// handle it normally.
-					} else {
-						slog.Info("ZMODEM握手检测到，开始文件传输")
-						// For non-ZRQINIT frames, process normally
-						if frame != nil {
-							responses := zmSession.HandleFrame(frame)
-							for _, resp := range responses {
-								if w2, ok := ptyReader.(io.Writer); ok {
-									w2.Write(resp)
-								}
-							}
+						// Always send ZRINIT immediately — both sz and rz need it.
+						// Without ZRINIT, the remote side will timeout.
+						if w2, ok := ptyReader.(io.Writer); ok {
+							w2.Write(buildZrinitFrame())
 						}
-					}
+						slog.Info("ZMODEM握手检测到(ZRQINIT)，已发送ZRINIT，等待检测sz/rz")
 
-					// Process remaining frames in the chunk (skip the first one we already handled)
-					remaining := zmChunk
-					if frame != nil {
-						for i := 0; i < len(zmChunk); i++ {
-							frame2, consumed2, _ := parseZmFrame(zmChunk[i:])
-							if frame2 != nil && consumed2 > 0 {
-								remaining = zmChunk[i+consumed2:]
-								break
-							}
-						}
-					}
-					zmBuf := remaining
-					for len(zmBuf) > 0 {
-						frame2, consumed2, _ := parseZmFrame(zmBuf)
-						if frame2 == nil {
-							break
-						}
-						zmBuf = zmBuf[consumed2:]
-						// Skip ZRQINIT processing (already handled)
-						if frame2.Type == ZRQINIT {
-							continue
-						}
-						responses := zmSession.HandleFrame(frame2)
-						for _, resp := range responses {
-							if w2, ok := ptyReader.(io.Writer); ok {
-								w2.Write(resp)
-							}
-						}
+						// Start 2-second timer to detect sz vs rz.
+						// If ZFILE arrives within 2s → sz (download).
+						// If timer fires → rz (upload).
+						zmNeedDetect = true
+						zmDetectTimer.Reset(2 * time.Second)
+
+						// Process all frames in the chunk (including ZFILE if it's sz)
+						processZmFrames(zmChunk)
+					} else {
+						slog.Info("ZMODEM握手检测到(非ZRQINIT)，开始文件传输")
+						processZmFrames(zmChunk)
 					}
 				} else {
 					// Normal output
 					writeFrame(w, 'O', chunk)
 				}
 			}
-		}
 
-		if readErr != nil {
-			if readErr != io.EOF {
-				slog.Warn("PTY读取错误", "err", readErr)
+		case <-zmDetectTimer.C:
+			// Timer fired — no ZFILE within 2s → it's rz (upload)
+			if zmNeedDetect {
+				zmJSON := `{"type":"rz"}`
+				writeFrame(w, 'Z', []byte(zmJSON))
+				zmNeedDetect = false
+				slog.Info("ZMODEM检测为rz(上传)，等待文件选择")
 			}
-			return
+
+		case chunk := <-zmChan:
+			if chunk == nil {
+				uploadReady = true
+			} else {
+				uploadBuf = append(uploadBuf, chunk...)
+			}
 		}
 	}
 }
