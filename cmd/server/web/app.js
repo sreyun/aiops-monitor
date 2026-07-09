@@ -1354,6 +1354,14 @@ function createTermTab(id, name) {
     const t = (ev.clipboardData || window.clipboardData).getData("text");
     if (t && tabObj.ws) termSend(tabObj.ws, t);
   };
+  // screen 级粘贴兜底：textarea 未聚焦时也能接收粘贴
+  screen.addEventListener("paste", ev => {
+    if (document.activeElement === input) return;
+    ev.preventDefault();
+    input.focus({ preventScroll: true });
+    const t = (ev.clipboardData || window.clipboardData).getData("text");
+    if (t && tabObj.ws) termSend(tabObj.ws, t);
+  });
   // input 事件：移动端虚拟键盘字符输入 + 桌面端可打印字符（termKeyDown 不再处理可打印字符）
   input.addEventListener("input", ev => {
     if (tabObj.composing || ev.isComposing) return; // IME 组合中，等 compositionend
@@ -1376,11 +1384,26 @@ function createTermTab(id, name) {
       if (tabObj.ws) termSend(tabObj.ws, "\x7f");
     }
   });
-  // 点击终端区域 → 聚焦隐藏 textarea（触发移动端虚拟键盘）
-  // 有选区时不抢焦点，允许用户复制终端文本
+  // 点击终端区域 → 聚焦隐藏 textarea（触发虚拟键盘 / 接收键盘输入）
+  // 注意：focus() 不会清除选区，用户可以继续用鼠标选中终端文本
   screen.addEventListener("click", function() {
-    if (!window.getSelection().toString()) {
+    if (document.activeElement !== input) {
       input.focus({ preventScroll: true });
+    }
+  });
+  // copy 事件：当用户通过右键菜单或 Ctrl+C（textarea 未聚焦时）触发复制，
+  // 确保选中的终端文本被写入系统剪贴板
+  screen.addEventListener("copy", ev => {
+    const sel = window.getSelection().toString();
+    if (!sel) return;
+    ev.preventDefault();
+    // 优先 navigator.clipboard，兜底 execCommand
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(sel).catch(() => {
+        ev.clipboardData.setData("text/plain", sel);
+      });
+    } else {
+      ev.clipboardData.setData("text/plain", sel);
     }
   });
   // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
@@ -1932,6 +1955,21 @@ function termKeyDown(e, tab) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
   const ws = tab ? tab.ws : null;
   const k = e.key;
+  // P0: Ctrl+C / Cmd+C 复制选中终端文本（有选区时复制，无选区时发送 SIGINT）
+  // 同时支持 Ctrl+Shift+C 强制复制（符合主流终端习惯）
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && (k === "c" || k === "C")) {
+    const sel = window.getSelection().toString();
+    const shiftCopy = e.shiftKey && (k === "c" || k === "C");
+    if (shiftCopy || sel) {
+      e.preventDefault();
+      if (sel) copyToClipboard(sel).then(
+        () => { /* silent success */ },
+        () => toast(I18N.t("toast.copy_failed"), "err")
+      );
+      return; // 不发送 SIGINT
+    }
+  }
   const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
   let seq = null;
   if (k === "Enter") seq = "\r";

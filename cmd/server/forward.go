@@ -217,11 +217,22 @@ func forwardFrame(typ byte, payload []byte) []byte {
 // rawForwardReader 把 agent 经 tx POST 回传的响应字节（来自 sess.toUser 通道）
 // 暴露为一个连续的 io.Reader，供 io.ReadAll 一次性完整读取。
 //
-// 设计要点（修复 502 unexpected EOF 的核心）：
+// ====== 竞态修复（彻底消除 unexpected EOF） ======
+// 问题：handleAgentForwardTx 先向 toUser 发送最后一帧，再 close(sess.done)，
+// 两个操作在同一个 goroutine 中纳秒级连续执行。rawForwardReader 的双 select
+// 在阻塞等待时，若 toUser 和 done 同时就绪，Go 的 select 会随机选择 → 50%
+// 概率选中 done 而丢弃通道缓冲中已到达的最后一帧 → http.ReadResponse 读到
+// 截断的数据 → "unexpected EOF"。
+//
+// 修复：done 关闭后，必须再做一次非阻塞排空确认通道无残留数据。因为写端
+// 保证「写通道」在「关 done」之前，所以当 done 被关闭时，若有数据则一定
+// 已在通道缓冲中，非阻塞读取必定能拿到。
+//
+// 设计要点：
 //   - 不依赖 io.Pipe：pipe 的写端关闭时机若与 http.ReadResponse 的读取错开，
 //     解析器会读到提前的 EOF → "unexpected EOF"。
 //   - 直接消费通道：agent 关闭 tx POST（= 目标服务关闭连接）后 toUser 不再有数据，
-//     ReadAll 自然结束；会话被 sess.done 关闭时，这里也立即返回 EOF。
+//     ReadAll 自然结束。
 //   - 可选地把前 diagLeft 字节镜像到诊断缓冲区，用于超时/错误时的日志预览。
 type rawForwardReader struct {
 	ch       chan []byte
@@ -233,8 +244,8 @@ type rawForwardReader struct {
 
 func (x *rawForwardReader) Read(p []byte) (int, error) {
 	for {
-		// 优先非阻塞地消费通道中已到达的数据：避免「sess.done 已关闭、
-		// 但 toUser 缓冲里仍有最后一帧」时 select 随机选中 done 而丢字节。
+		// P0: 优先非阻塞地消费通道中已到达的数据。这是竞态修复的第一层：
+		// 在进入阻塞等待之前，先排空通道缓冲中的所有就绪帧。
 		select {
 		case b, ok := <-x.ch:
 			if !ok {
@@ -245,8 +256,9 @@ func (x *rawForwardReader) Read(p []byte) (int, error) {
 			}
 			return x.emit(p, b), nil
 		default:
-			// 通道暂空，进入阻塞等待：数据到达或会话结束
 		}
+
+		// 阻塞等待：数据到达 或 会话结束（done 关闭）
 		select {
 		case b, ok := <-x.ch:
 			if !ok {
@@ -257,7 +269,23 @@ func (x *rawForwardReader) Read(p []byte) (int, error) {
 			}
 			return x.emit(p, b), nil
 		case <-x.done:
-			return 0, io.EOF
+			// P0: 竞态修复关键 — done 关闭后必须再做一次非阻塞排空。
+			// handleAgentForwardTx 保证「向 toUser 写最后一帧」发生在
+			// 「close(sess.done)」之前；当 select 因调度随机选中 done
+			// 时，toUser 缓冲中的最后一帧尚未被消费，必须在此抢先取出。
+			// 只有当 toUser 中也确实无数据时，才是真正的流结束。
+			select {
+			case b, ok := <-x.ch:
+				if !ok {
+					return 0, io.EOF
+				}
+				if len(b) == 0 {
+					continue
+				}
+				return x.emit(p, b), nil
+			default:
+				return 0, io.EOF
+			}
 		}
 	}
 }
@@ -918,7 +946,11 @@ readResponse:
 
 	if err != nil {
 		s.forward.stats.incError()
-		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path, "err", err.Error())
+		rawResponseMu.Lock()
+		rawPreview := truncateStr(rawResponseBuf.String(), 300)
+		rawResponseMu.Unlock()
+		slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
+			"err", err.Error(), "raw_len", len(rawResp), "raw_preview", rawPreview)
 		http.Error(w, Tr(r, "forward.parse_response_failed", "读取上游响应失败: "+err.Error()), http.StatusBadGateway)
 		return
 	}
@@ -947,8 +979,10 @@ readResponse:
 	// 这样当目标是非 HTTP 服务（如返回纯文本错误、或 TLS 握手失败）时，
 	// 用户至少能看到真实内容，而不是笼统的 502。
 	s.forward.stats.incError()
+	// 诊断：输出 rawResp 前 500 字符用于定位 unexpected EOF 等解析失败原因
+	rawPreview := truncateStr(string(rawResp), 500)
 	slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
-		"err", parseErr.Error(), "raw_len", len(rawResp))
+		"err", parseErr.Error(), "raw_len", len(rawResp), "raw_preview", rawPreview)
 	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
 		Message: Tz("log.forward_parse_failed", port, path, parseErr.Error())})
 	if len(rawResp) == 0 {

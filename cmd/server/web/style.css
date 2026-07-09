@@ -778,11 +778,13 @@ svg.sparkline{width:100%; height:46px; display:block}
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.25;
   padding:12px 14px; height:62vh; overflow:auto; white-space:normal; outline:none; cursor:text;
   font-variant-ligatures:none; font-feature-settings:"liga" 0;
+  /* 允许文本选中（复制到剪贴板），移动端长按选中也依赖此属性 */
+  user-select:text; -webkit-user-select:text;
   transition:box-shadow var(--transition-fast);}
 .term-screen:focus, .term-screen:focus-within, .term-screen.term-focused{
   box-shadow:inset 0 0 0 1px var(--accent-soft), inset 0 0 20px rgba(76,141,255,.04);
 }
-.term-row{white-space:pre; min-height:1em}
+.term-row{white-space:pre; min-height:1em; user-select:text; -webkit-user-select:text}
 .term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.5em; display:inline-block; text-align:center}
 /* focus-within 规则已移至 .term-input 定义之后统一处理 */
 @keyframes termCursorBlink{0%,49%{opacity:1}50%,100%{opacity:.25}}
