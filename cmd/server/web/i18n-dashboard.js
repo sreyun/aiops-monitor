@@ -236,6 +236,8 @@
   "valid.need_step": "至少需要一个步骤",
   "valid.confirm_delete_check": "确认删除该监控检查？",
   "valid.confirm_delete_playbook": "确认删除此剧本？",
+  "valid.confirm_delete": "确认删除？",
+  "valid.confirm_delete_host_prefix": "确认删除主机 ",
   "section.overview_desc": "集群资源、告警与活动总览",
   "section.hosts_desc": "所有上报主机的实时指标",
   "section.alerts_desc": "阈值与自定义监控告警",

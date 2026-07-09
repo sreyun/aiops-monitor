@@ -14,6 +14,22 @@
    在 index.html 中按依赖顺序加载多个 <script> 标签即可。
    ============================================================ */
 "use strict";
+
+// 防御性初始化：若 i18n-dashboard.js 加载失败，注入最小可用 I18N 对象，
+// 避免 app.js 中大量顶层 I18N.t() 调用抛出 ReferenceError 导致整个脚本崩溃，
+// 进而阻止 initAuth() 执行、登录界面无法显示。
+if (typeof window.I18N === "undefined" || typeof window.I18N.t !== "function") {
+  console.warn("[AIOps] I18N not loaded, installing fallback translator");
+  window.I18N = {
+    t: function(key, fallback) { return fallback || key; },
+    applyTranslations: function() {},
+    setLang: function() {},
+    getLang: function() { return "zh-CN"; },
+    supported: ["zh-CN"],
+    init: function() {}
+  };
+}
+
 const API = "/api/v1";
 
 /* 复制到剪贴板（兼容 HTTP 环境） */
@@ -3611,7 +3627,6 @@ function initPrefs() {
   if (HOST_VIEW !== "list" && HOST_VIEW !== "card") HOST_VIEW = "card";
   document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
   document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
-  applyWidthMode();
 }
 
 initPrefs();
