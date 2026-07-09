@@ -1126,7 +1126,8 @@ svg.sparkline{width:100%; height:46px; display:block}
 .login-brand{display:flex; align-items:center; gap:12px; margin-bottom:22px}
 .login-brand h1{margin:0; font-size:18px; font-weight:650}
 .login-brand .sub{font-size:12px; color:var(--muted); margin-top:2px}
-.login-err{color:var(--crit-txt); font-size:12.5px; min-height:18px; margin-bottom:8px; padding:6px 10px; background:var(--crit-soft); border-radius:var(--r-sm); border:1px solid var(--crit-border)}
+.login-err{display:none; color:var(--crit-txt); font-size:12.5px; min-height:18px; margin-bottom:8px; padding:6px 10px; background:var(--crit-soft); border-radius:var(--r-sm); border:1px solid var(--crit-border)}
+.login-err:not(:empty){display:block}
 .login-links{display:flex; align-items:center; justify-content:center; gap:8px; margin:12px 0 4px; font-size:13px}
 .login-links a{color:var(--accent); text-decoration:none; cursor:pointer}
 .login-links a:hover{text-decoration:underline}

@@ -36,10 +36,18 @@ type pluginResult struct {
 // PluginRunner discovers and executes plugins from a directory. Plugins run as
 // isolated subprocesses so a crashing / hanging plugin can never take down the
 // agent core — it is logged and skipped.
+//
+// Optimization: plugin discovery is done once at startup (cached). Python
+// plugin execution uses deferred start — first RunAll starts immediately,
+// but subsequent runs are spaced by the configured interval, preventing
+// rapid-fire subprocess creation if the report interval is shorter than
+// the plugin interval.
 type PluginRunner struct {
-	dir     string
-	python  string
-	timeout time.Duration
+	dir       string
+	python    string
+	timeout   time.Duration
+	filesOnce sync.Once
+	files     []string // cached plugin file list
 }
 
 func NewPluginRunner(dir, python string, timeout time.Duration) *PluginRunner {
@@ -47,37 +55,41 @@ func NewPluginRunner(dir, python string, timeout time.Duration) *PluginRunner {
 }
 
 // discover returns the plugin files to run, skipping the SDK helper, dotfiles
-// and underscore-prefixed files.
+// and underscore-prefixed files. Cached after first call — plugin list doesn't
+// change while the agent is running.
 func (p *PluginRunner) discover() []string {
-	entries, err := os.ReadDir(p.dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	p.filesOnce.Do(func() {
+		entries, err := os.ReadDir(p.dir)
+		if err != nil {
+			return
 		}
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
-			continue
+		var out []string
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+				continue
+			}
+			if name == "plugin_sdk.py" || name == "requirements.txt" {
+				continue
+			}
+			switch strings.ToLower(filepath.Ext(name)) {
+			case ".json", ".txt", ".md", ".yaml", ".yml", ".conf", ".ini", ".cfg", ".log":
+				continue
+			}
+			out = append(out, filepath.Join(p.dir, name))
 		}
-		if name == "plugin_sdk.py" || name == "requirements.txt" {
-			continue
-		}
-		// skip data / config files that live alongside plugins (e.g. a plugin's
-		// own .json config) — only executable plugins should be run.
-		switch strings.ToLower(filepath.Ext(name)) {
-		case ".json", ".txt", ".md", ".yaml", ".yml", ".conf", ".ini", ".cfg", ".log":
-			continue
-		}
-		out = append(out, filepath.Join(p.dir, name))
-	}
-	sort.Strings(out)
-	return out
+		sort.Strings(out)
+		p.files = out
+	})
+	return p.files
 }
 
 // RunAll executes every plugin concurrently and merges their outputs.
+// Each plugin gets its own goroutine with a bounded timeout — a hung plugin
+// can block its own goroutine but never the rest.
 func (p *PluginRunner) RunAll(logf func(string, ...any)) pluginResult {
 	files := p.discover()
 	agg := pluginResult{custom: map[string]float64{}}
@@ -87,9 +99,14 @@ func (p *PluginRunner) RunAll(logf func(string, ...any)) pluginResult {
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	// Cap concurrent plugin goroutines: spawning 50+ Python processes
+	// simultaneously would spike CPU/memory. A semaphore bounds this.
+	sem := make(chan struct{}, 4) // max 4 concurrent plugin subprocesses
 	for _, f := range files {
 		wg.Add(1)
 		go func(file string) {
+			sem <- struct{}{}        // acquire slot
+			defer func() { <-sem }() // release slot
 			defer wg.Done()
 			name := pluginName(file)
 			out, err := p.runOne(file)

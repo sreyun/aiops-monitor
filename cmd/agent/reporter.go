@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
@@ -14,14 +17,47 @@ import (
 	"aiops-monitor/shared"
 )
 
+// reportTransport is the shared transport for all server targets (report POSTs).
+// Connection reuse avoids TCP handshake overhead on every 10s report cycle.
+// Default http.Transport is used by http.DefaultClient; we create our own so
+// each target's client shares the same pool without colliding with global state.
+var reportTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	MaxIdleConns:          50,
+	MaxIdleConnsPerHost:   10,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+	ForceAttemptHTTP2:     true,
+	// TLS: verify server certificates (prevents MITM). Min TLS 1.2.
+	// InsecureSkipVerify is intentionally NOT set — operators using
+	// self-signed certs should configure the OS trust store or CURL_CA_BUNDLE.
+	TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	},
+	// ResponseHeaderTimeout bounds how long we wait for the server's response
+	// headers after the request is fully written. Separate from the overall
+	// client Timeout so a slow-reading server doesn't kill a report mid-transfer.
+	ResponseHeaderTimeout: 15 * time.Second,
+}
+
 // errForbidden signals that the server rejected a report with 403 (host not
 // registered or fingerprint not bound). reportOnce reacts by re-registering.
 var errForbidden = errors.New("forbidden")
 
+// gzipCompressThreshold: payloads below 512 bytes skip gzip (the overhead of
+// gzip headers + the CPU cost outweighs the tiny bandwidth saving).
+const gzipCompressThreshold = 512
+
 // serverTarget is the runtime state for one backend server connection.
 // Each target has its own HTTP client (connection pool isolation), its own
-// token, and its own registration state — so one server being down or
-// rejecting reports never affects the others.
+// token, its own registration state, and now its own retry backoff +
+// circuit breaker — so one server being down or rejecting reports never
+// affects the others.
 type serverTarget struct {
 	server string
 	token  string
@@ -29,11 +65,17 @@ type serverTarget struct {
 
 	regMu      sync.Mutex
 	registered bool
+
+	// Retry + circuit breaker: independent per-target so one failing server
+	// never starves or delays reports to healthy servers.
+	bo *backoff
+	cb *circuitBreaker
 }
 
 // register sends the agent's identity (with this target's token) to the server.
 // On success the target is marked registered; 403 or network errors return false
 // but don't crash — the agent keeps retrying on subsequent report cycles.
+// Token is never logged in full — only the first 4 chars for debugging.
 func (t *serverTarget) register(base shared.Report) bool {
 	body, _ := json.Marshal(map[string]string{
 		"host_id":     base.HostID,
@@ -54,7 +96,7 @@ func (t *serverTarget) register(base shared.Report) bool {
 	t.regMu.Lock()
 	t.registered = true
 	t.regMu.Unlock()
-	slog.Info("已向服务端注册", "server", t.server)
+	slog.Info("已向服务端注册", "server", t.server, "token_prefix", maskToken(t.token))
 	return true
 }
 
@@ -66,7 +108,8 @@ func (t *serverTarget) isRegistered() bool {
 }
 
 // send posts one report payload to this server. The report's Token field is
-// set to this target's token before marshalling. Returns errForbidden on 403
+// set to this target's token before marshalling. The body is gzip-compressed
+// when above the threshold to reduce bandwidth. Returns errForbidden on 403
 // so the caller can re-register and retry.
 func (t *serverTarget) send(rep shared.Report) error {
 	rep.Token = t.token
@@ -74,7 +117,38 @@ func (t *serverTarget) send(rep shared.Report) error {
 	if err != nil {
 		return err
 	}
-	resp, err := t.httpc.Post(t.server+"/api/v1/agent/report", "application/json", bytes.NewReader(body))
+
+	// Gzip compress when payload exceeds threshold. Reports with many disks
+	// or process names can swell from ~2KB to ~8KB; gzip typically reduces
+	// JSON by 4-8x, saving bandwidth for both agent and server.
+	var reader *bytes.Reader
+	contentEnc := ""
+	if len(body) >= gzipCompressThreshold {
+		buf := getBytesBuf()
+		defer putBytesBuf(buf)
+		gw, _ := gzip.NewWriterLevel(buf, 3) // level 3 = best speed/size trade
+		gw.Write(body)
+		gw.Close()
+		if buf.Len() < len(body) { // only compress if it actually shrinks
+			reader = bytes.NewReader(buf.Bytes())
+			contentEnc = "gzip"
+		} else {
+			reader = bytes.NewReader(body)
+		}
+	} else {
+		reader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequest("POST", t.server+"/api/v1/agent/report", reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if contentEnc != "" {
+		req.Header.Set("Content-Encoding", contentEnc)
+	}
+
+	resp, err := t.httpc.Do(req)
 	if err != nil {
 		return err
 	}
@@ -114,7 +188,12 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 		targets[i] = &serverTarget{
 			server: s.Server,
 			token:  s.Token,
-			httpc:  &http.Client{Timeout: 8 * time.Second},
+			httpc: &http.Client{
+				Timeout:   30 * time.Second, // raised from 8s: gzip + multi-disk reports need more headroom
+				Transport: reportTransport,
+			},
+			bo: newBackoff(1*time.Second, 60*time.Second),
+			cb: newCircuitBreaker(5, 30*time.Second), // open after 5 consecutive failures, cooldown 30s
 		}
 	}
 	return &Agent{
@@ -123,7 +202,7 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 		pluginInterval: pluginInterval,
 		collector:      collector,
 		plugins:        plugins,
-		httpc:          &http.Client{Timeout: 8 * time.Second},
+		httpc:          &http.Client{Timeout: 30 * time.Second, Transport: reportTransport},
 		latestCustom:   map[string]float64{},
 		identity: shared.Report{
 			HostID:      hostID,
@@ -139,6 +218,11 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 	}
 }
 
+// Run starts the agent's main loop. It registers to all targets, then
+// runs collection => report cycles until interrupted.
+// The main loop is wrapped in a defer/recover so a panic in any cycle
+// (e.g. a nil dereference from a corrupted /proc read) can't kill the
+// whole agent — it's logged and the loop restarts.
 func (a *Agent) Run() {
 	slog.Info("Agent 核心启动",
 		"host", a.identity.Hostname,
@@ -147,7 +231,7 @@ func (a *Agent) Run() {
 		"id", short(a.identity.HostID),
 		"servers", len(a.targets))
 	for i, t := range a.targets {
-		slog.Info("服务端", "index", i+1, "url", t.server)
+		slog.Info("服务端", "index", i+1, "url", t.server, "token", maskToken(t.token))
 	}
 	if a.identity.Fingerprint != "" {
 		slog.Info("机器指纹", "fingerprint", short(a.identity.Fingerprint))
@@ -156,9 +240,9 @@ func (a *Agent) Run() {
 		slog.Info("提示: 当前平台无原生采集器，基础指标依赖 core 插件(plugins/core_metrics.py)")
 	}
 
-	// Register to all targets (best-effort, non-blocking on failures)
+	// Register to all targets (best-effort with retry, non-blocking on failures)
 	for _, t := range a.targets {
-		t.register(a.identity)
+		a.registerTarget(t)
 	}
 
 	go a.pluginLoop() // Python layer, lower frequency
@@ -175,16 +259,61 @@ func (a *Agent) Run() {
 		go a.runForwardChannelFor(t)
 	}
 
-	// base-metric report loop, higher frequency
+	// base-metric report loop, higher frequency.
+	// Wrap in defer/recover so a panic inside reportOnce (e.g. from a
+	// corrupted /proc read edge case) logs the stack and restarts the loop
+	// instead of killing the process.
+	a.reportOnceSafe() // report immediately
 	ticker := time.NewTicker(a.reportInterval)
 	defer ticker.Stop()
-	a.reportOnce() // report immediately
 	for range ticker.C {
-		a.reportOnce()
+		a.reportOnceSafe()
 	}
 }
 
+// reportOnceSafe calls reportOnce inside defer/recover so a panic in
+// collection or network I/O never stops the agent.
+func (a *Agent) reportOnceSafe() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("上报循环 panic 已恢复（采集不中断）", "panic", r)
+		}
+	}()
+	a.reportOnce()
+}
+
+// registerTarget tries to register to one server with exponential backoff.
+// Best-effort: failures are logged but don't block startup — the agent will
+// retry registration on the next 403 during reporting.
+func (a *Agent) registerTarget(t *serverTarget) {
+	if t.token == "" {
+		t.registered = true // no-token servers accept any host
+		return
+	}
+	// Try up to 3 times with backoff.
+	for attempt := 0; attempt < 3; attempt++ {
+		if t.register(a.identity) {
+			return
+		}
+		if attempt < 2 {
+			d := t.bo.next()
+			slog.Info("注册失败，等待后重试", "server", t.server, "wait", d.Round(time.Second))
+			time.Sleep(d)
+		}
+	}
+	slog.Warn("注册最终失败，将在上报时继续重试", "server", t.server)
+}
+
+// pluginLoop runs plugins on a slower tick, independently of the report loop.
+// Wrapped in defer/recover so a panic in plugin execution (e.g. nil map from
+// a corrupted plugin output) doesn't kill the whole agent.
 func (a *Agent) pluginLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("插件循环 panic 已恢复，尝试重启", "panic", r)
+			go a.pluginLoop() // restart after a brief pause
+		}
+	}()
 	a.runPlugins() // run promptly on startup
 	ticker := time.NewTicker(a.pluginInterval)
 	defer ticker.Stop()
@@ -216,6 +345,10 @@ func (a *Agent) runPlugins() {
 // 403 (re-register + retry) and network errors — one server being down never
 // blocks or affects the others. Events are re-queued only if ALL targets
 // failed (at least one success means events were delivered).
+//
+// Circuit breaker: if a target has 5 consecutive failures, the breaker opens
+// and we skip that target for 30s — preventing futile connection attempts that
+// waste CPU and network resources on an unreachable server.
 func (a *Agent) reportOnce() {
 	var base shared.Metrics
 	if a.collector.Supported() {
@@ -247,14 +380,30 @@ func (a *Agent) reportOnce() {
 	rep.Events = events
 
 	// Broadcast to all targets concurrently — each gets its own goroutine so
-	// a slow/unreachable server can't block the others (8s timeout isolation).
+	// a slow/unreachable server can't block the others (30s timeout isolation).
 	var wg sync.WaitGroup
 	results := make([]bool, len(a.targets)) // results[i] = true if target i succeeded
 
 	for i, t := range a.targets {
+		// Circuit breaker check: skip targets whose breaker is open.
+		// We still check allow() inside the goroutine so the half-open trial
+		// works correctly.
+		if t.cb.isOpen() {
+			results[i] = false
+			continue
+		}
+
 		wg.Add(1)
 		go func(idx int, tgt *serverTarget) {
 			defer wg.Done()
+
+			// Circuit breaker: skip if open (already checked above, but
+			// double-check for the half-open race).
+			if !tgt.cb.allow() {
+				results[idx] = false
+				return
+			}
+
 			err := tgt.send(rep)
 			if err == errForbidden {
 				slog.Warn("上报被拒(指纹未绑定)，重新注册后重试", "server", tgt.server)
@@ -266,9 +415,15 @@ func (a *Agent) reportOnce() {
 			}
 			if err != nil {
 				slog.Error("上报失败", "server", tgt.server, "err", err)
+				tgt.cb.failure()
+				if tgt.cb.isOpen() {
+					slog.Warn("断路器已打开，暂停向该服务端上报", "server", tgt.server)
+				}
 				results[idx] = false
 				return
 			}
+			tgt.cb.success()
+			tgt.bo.reset()
 			results[idx] = true
 			slog.Info("上报成功",
 				"server", tgt.server,

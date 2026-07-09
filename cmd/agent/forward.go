@@ -30,6 +30,11 @@ import (
 // poller. Slightly above the server's 25s poll timeout, matching termWaitHTTP.
 var forwardWaitHTTP = &http.Client{Timeout: 35 * time.Second}
 
+// forwardSessionTimeout bounds how long a single forward session can run
+// before being forcibly closed. Prevents forgotten sessions from leaking
+// TCP connections and goroutines.
+const forwardSessionTimeout = 15 * time.Minute
+
 // runForwardChannelFor runs a persistent reverse forward channel for one
 // server target. Each target gets its own goroutine so forward sessions from
 // different servers don't interfere.
@@ -111,6 +116,14 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = conn.Close() }) }
 	defer closeAll()
+
+	// Session timeout: cap each forward session duration so a forgotten
+	// connection doesn't leak TCP descriptors and goroutines indefinitely.
+	timeoutTimer := time.AfterFunc(forwardSessionTimeout, func() {
+		slog.Warn("转发会话超时，强制关闭", "session", sid, "target", target)
+		closeAll()
+	})
+	defer timeoutTimer.Stop()
 
 	var wg sync.WaitGroup
 	wg.Add(2)

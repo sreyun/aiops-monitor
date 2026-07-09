@@ -496,6 +496,7 @@
   "ui.export_csv": "导出 CSV",
   /* --- 监控 --- */
   "section.custom_checks": "自定义监控",
+  "section.custom_monitor": "自定义监控",
   "section.check_types": "网站 HTTP / 端口 TCP / 主机 Ping / 进程存活",
   "filter.all_check_types": "全部类型",
   "empty.no_checks": "还没有自定义监控。点「添加检查」监控一个网站（HTTP）或服务端口（TCP），异常时自动产生告警并推送飞书 / 钉钉。",

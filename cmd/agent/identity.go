@@ -22,6 +22,11 @@ import (
 // stored fingerprint no longer matches the current machine we detect the clone
 // and regenerate the id, so different machines never collide — even with the same
 // hostname and IP. Old state files without a fingerprint are honored unchanged.
+//
+// Atomicity: writes go to a temp file first, then os.Rename (atomic on
+// Linux/macOS). On Windows, Rename is not atomic for existing targets, so
+// we tolerate best-effort — the state file is tiny and corruption is
+// recoverable by simply regenerating the ID.
 func loadOrCreateHostID(path string) string {
 	fp := machineFingerprint()
 	if b, err := os.ReadFile(path); err == nil {
@@ -38,8 +43,15 @@ func loadOrCreateHostID(path string) string {
 		}
 	}
 	id := randomID()
-	if b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp}); err == nil {
-		_ = os.WriteFile(path, b, 0o644)
+	// Atomic write: temp file + rename to prevent partial writes on crash.
+	b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp})
+	if err == nil {
+		tmp := path + ".tmp"
+		if e := os.WriteFile(tmp, b, 0o644); e == nil {
+			_ = os.Rename(tmp, path)
+		} else {
+			_ = os.WriteFile(path, b, 0o644) // fallback: direct write
+		}
 	}
 	return id
 }

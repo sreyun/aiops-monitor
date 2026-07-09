@@ -215,10 +215,16 @@ func ewma(prev, x, dt, tau float64) float64 {
 func readIfTable() (rx, tx uint64, ok bool) {
 	var size uint32
 	procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0) // size probe
-	if size == 0 {
+	if size == 0 || size > 1<<20 { // sanity cap: ifTable >1MB is impossible
 		return 0, 0, false
 	}
-	buf := make([]byte, size)
+	// Reuse pooled buffer for the MIB_IFTABLE to avoid large alloc per cycle.
+	buf := getBuf32K()
+	defer putBuf32K(buf)
+	if uint32(len(buf)) < size {
+		// Rare case: >32KB ifTable, fall back to a one-off alloc.
+		buf = make([]byte, size)
+	}
 	if r, _, _ := procGetIfTable.Call(
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&size)),
@@ -253,10 +259,14 @@ func readIfTable() (rx, tx uint64, ok bool) {
 func countTCPConns() int {
 	var size uint32
 	procGetTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
-	if size == 0 {
+	if size == 0 || size > 1<<20 { // sanity cap
 		return 0
 	}
-	buf := make([]byte, size)
+	buf := getBuf32K()
+	defer putBuf32K(buf)
+	if uint32(len(buf)) < size {
+		buf = make([]byte, size)
+	}
 	if r, _, _ := procGetTcpTable.Call(
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&size)),

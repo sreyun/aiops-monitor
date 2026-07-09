@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,10 @@ type netTotals struct{ rx, tx uint64 }
 // linuxCollector reads base metrics straight from procfs and syscalls.
 // This is the "high-frequency, close-to-the-system" core the hybrid design
 // keeps in Go: no external dependency, tiny footprint, safe to poll often.
+//
+// Optimization: disk enumeration (which calls syscall.Statfs per mount) and
+// process listing (which reads /proc/*/comm for every PID) are cached with
+// per-cycle throttling — they change slowly and don't need 10s granularity.
 type linuxCollector struct {
 	diskPath string
 	prevCPU  cpuTimes
@@ -31,9 +36,27 @@ type linuxCollector struct {
 	prevDiskIO diskIOTotals
 	prevDiskIOT time.Time
 	primed   bool
+
+	// Cached results — refreshed once per multi-cycle cache window.
+	diskCache     []shared.DiskInfo
+	diskCacheAt   time.Time
+	procCache     procInfo
+	procCacheAt   time.Time
+	procCacheMu   sync.Mutex
+}
+
+type procInfo struct {
+	count int
+	names []string
 }
 
 type diskIOTotals struct{ readBytes, writeBytes, readIOs, writeIOs uint64 }
+
+// diskCacheTTL: disk usage changes slowly; 60s refresh is sufficient.
+const diskCacheTTL = 60 * time.Second
+
+// procCacheTTL: process count/names change faster but not every 10s.
+const procCacheTTL = 20 * time.Second
 
 func newCollector(diskPath string) Collector {
 	if diskPath == "" {
@@ -84,8 +107,15 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 		m.DiskPercent = round1(float64(used) / float64(total) * 100)
 	}
 
-	m.Disks = enumLinuxDisks()
+	// Cached disk enumeration: syscall.Statfs per mount is expensive and disk
+	// usage doesn't change meaningfully in <60s. Cache until TTL expires.
+	if c.diskCacheAt.IsZero() || time.Since(c.diskCacheAt) > diskCacheTTL {
+		c.diskCache = enumLinuxDisks()
+		c.diskCacheAt = now
+	}
+	m.Disks = c.diskCache
 
+	// Disk: syscall.Statfs on the primary disk path (fast, always refreshed)
 	if nt, err := readNet(); err == nil {
 		if c.primed && !c.prevNetT.IsZero() {
 			if elapsed := now.Sub(c.prevNetT).Seconds(); elapsed > 0 {
@@ -122,8 +152,17 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 		m.Load1, m.Load5, m.Load15 = l1, l5, l15
 	}
 
-	m.ProcCount = countProcs()
-	m.ProcessNames = listProcNames()
+	// Process count + names: cached to avoid reading /proc twice (countProcs
+	// and listProcNames each call ReadDir + open comm files independently).
+	c.procCacheMu.Lock()
+	if c.procCacheAt.IsZero() || time.Since(c.procCacheAt) > procCacheTTL {
+		c.procCache = readProcInfo()
+		c.procCacheAt = now
+	}
+	pi := c.procCache
+	c.procCacheMu.Unlock()
+	m.ProcCount = pi.count
+	m.ProcessNames = pi.names
 	if up, err := readUptime(); err == nil {
 		m.Uptime = up
 	}
@@ -315,12 +354,17 @@ func readUptime() (uint64, error) {
 	return 0, errParse
 }
 
-func countProcs() int {
+// readProcInfo returns the process count and unique process names from /proc,
+// merging what was previously two independent scans (countProcs + listProcNames)
+// into a single ReadDir pass — halving /proc directory reads.
+func readProcInfo() procInfo {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return 0
+		return procInfo{}
 	}
-	n := 0
+	seen := map[string]bool{}
+	var names []string
+	count := 0
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -332,38 +376,23 @@ func countProcs() int {
 				break
 			}
 		}
-		if allDigit {
-			n++
+		if !allDigit {
+			continue
+		}
+		count++
+		if len(names) < 256 {
+			b, err := os.ReadFile("/proc/" + e.Name() + "/comm")
+			if err != nil || len(b) == 0 {
+				continue
+			}
+			name := strings.TrimSpace(string(b))
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
 		}
 	}
-	return n
-}
-
-// listProcNames returns unique process base names from /proc/*/comm,
-// capped at 256 entries to keep the report payload small.
-func listProcNames() []string {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, e := range entries {
-		if !e.IsDir() { continue }
-		allDigit := true
-		for _, r := range e.Name() {
-			if r < '0' || r > '9' { allDigit = false; break }
-		}
-		if !allDigit { continue }
-		b, err := os.ReadFile("/proc/" + e.Name() + "/comm")
-		if err != nil || len(b) == 0 { continue }
-		name := strings.TrimSpace(string(b))
-		if name == "" || seen[name] { continue }
-		seen[name] = true
-		out = append(out, name)
-		if len(out) >= 256 { break }
-	}
-	return out
+	return procInfo{count: count, names: names}
 }
 
 // enumLinuxDisks returns usage for every real filesystem mount, de-duplicated

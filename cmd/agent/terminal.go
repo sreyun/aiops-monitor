@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,11 +48,25 @@ type termShell interface {
 // (see pty_windows.go / pty_linux.go / pty_darwin.go / pty_other.go)
 
 var (
-	termHTTP = &http.Client{} // no timeout — rx/tx streams are long-lived
+	termHTTP = &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
+		},
+	} // rx/tx streams are long-lived — no client-level timeout
 	// termWaitHTTP bounds the long-poll wait so a half-open network can't wedge
 	// the poller forever (which would silently kill the terminal channel while
 	// metrics keep reporting). Slightly above the server's 25s poll timeout.
 	termWaitHTTP = &http.Client{Timeout: 35 * time.Second}
+	// termSessionTimeout is the maximum duration of a single terminal session.
+	// After this duration, the shell is killed and resources released —
+	// prevents forgotten sessions from leaking PTY descriptors and memory.
+	termSessionTimeout = 30 * time.Minute
 )
 
 // runTerminalChannelFor runs a persistent reverse terminal channel for one
@@ -173,6 +188,15 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	slog.Info("远程终端会话开始", "session", sid)
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
+
+	// Session timeout: forcibly close after termSessionTimeout to prevent
+	// abandoned sessions from leaking resources. The operator can reconnect.
+	timeoutTimer := time.AfterFunc(termSessionTimeout, func() {
+		slog.Warn("终端会话超时，强制关闭", "session", sid, "timeout", termSessionTimeout)
+		closeAll()
+	})
+	defer timeoutTimer.Stop()
+
 	fp := url.QueryEscape(a.identity.Fingerprint)
 
 	// zmChan carries upload data received from the browser (via rx stream)
