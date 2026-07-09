@@ -322,12 +322,58 @@ echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 `
 
 // uninstallPs1Template stops + removes the agent on Windows (user-level).
+// v5.2.6: Comprehensive rewrite to fix multiple uninstall failures:
+//   1. Kill wscript.exe (VBS launcher) in addition to aiops-agent.exe
+//   2. Remove BOTH HKCU Run entries (AIOpsAgent + AIOpsRelay)
+//   3. Remove scheduled task (legacy cleanup)
+//   4. Retry file deletion with increasing delays (handle lock release)
+//   5. Explicitly delete individual files before directory removal
 const uninstallPs1Template = `$Dir = Join-Path $env:LOCALAPPDATA "aiops-agent"
 Write-Host "[AIOps] uninstalling from $Dir"
+
+# Step 1: Remove ALL autostart entries (normal + relay modes)
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -ErrorAction SilentlyContinue
+
+# Step 2: Remove legacy scheduled task (if any)
 schtasks /Delete /TN "AIOps-Agent" /F 2>$null | Out-Null
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 500
-Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue
-Write-Host "[AIOps] uninstalled. You may delete the host card in the dashboard."
+
+# Step 3: Kill ALL related processes — agent + VBS launcher
+# wscript.exe is the hidden launcher created by the VBS script; it must be
+# killed to release file handles on the install directory.
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Kill wscript.exe instances that are running our VBS scripts via WMI query
+try {
+    Get-CimInstance Win32_Process -Filter "Name='wscript.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "start-agent\.vbs|start-relay\.vbs|aiops-agent" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} catch {}
+
+# Step 4: Wait for process handles to release (increased from 500ms)
+Start-Sleep -Seconds 2
+
+# Step 5: Delete files with retry logic (handles stubborn file locks)
+# First try: delete individual known files to release specific locks
+$files = @("aiops-agent.exe", "config.json", "agent_state.json", "start-agent.vbs", "start-relay.vbs", "agent.log")
+foreach ($f in $files) {
+    $path = Join-Path $Dir $f
+    if (Test-Path $path) {
+        Remove-Item $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Second try: delete entire directory with retries
+for ($i = 1; $i -le 3; $i++) {
+    if (Test-Path $Dir) {
+        Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path $Dir)) { break }
+    Start-Sleep -Seconds $i
+}
+
+if (Test-Path $Dir) {
+    Write-Host "[AIOps] warning: some files could not be deleted (may be in use). Please reboot and manually delete: $Dir"
+} else {
+    Write-Host "[AIOps] uninstalled. You may delete the host card in the dashboard."
+}
 `
