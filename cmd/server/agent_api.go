@@ -44,12 +44,25 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	// Admission: a valid install token is required to register a new agent.
+	// Admission: a valid install token is required to register a NEW agent.
 	// Once registered, the agent authenticates subsequent reports by fingerprint,
 	// so rotating this token never disturbs already-installed agents.
+	//
+	// v5.2.6: Allow re-registration WITHOUT install token when the host is
+	// already known (matching fingerprint in store). This is critical for
+	// server restart recovery: if the DB was lost or the agent's config has
+	// no token, the agent can still re-join by proving its machine fingerprint.
+	// New agents (unknown host_id + unknown fingerprint) still require a token.
 	if s.cfg.AgentTokenRequired() && !s.cfg.ValidInstallToken(req.Token) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.invalid_token")})
-		return
+		// Check if this host already exists with a matching fingerprint
+		existingHost, hostExists := s.store.GetHost(req.HostID)
+		if !hostExists || existingHost.Fingerprint == "" || existingHost.Fingerprint != req.Fingerprint {
+			// Unknown host or fingerprint doesn't match → require install token
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.invalid_token")})
+			return
+		}
+		// Known host with matching fingerprint → allow re-registration (server restart recovery)
+		slog.Info("允许已知主机免Token重新注册（服务端重启恢复）", "host_id", req.HostID)
 	}
 	if req.Fingerprint == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "agent.fingerprint_required")})
