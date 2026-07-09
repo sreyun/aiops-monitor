@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
    AIOps Monitor · 主机监控运维平台
    设计语言：克制、扁平、专业的深色后台（参考 TDesign 暗色 / Linear）
    —— 单层中性色阶 · 统一 4px 间距栅格 · 克制的状态反馈 · 零外链
@@ -280,7 +280,7 @@ select:focus{outline:none; border-color:var(--accent)}
 section{scroll-margin-top:80px; margin-bottom:24px}
 
 /* ---------- KPI 卡片 ---------- */
-.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px;
+.cards{display:grid; grid-template-columns:repeat(6,1fr); gap:14px;
   margin-bottom:var(--ov-section-gap)}
 .card{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg);
@@ -1208,6 +1208,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
   .top-grid{grid-template-columns:repeat(2,1fr)}
   .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .cards{grid-template-columns:repeat(3,1fr)} /* 6卡→2行×3列，行长对齐.cols */
 }
 /* 平板竖屏 (≤900px)：侧栏变抽屉 */
 @media(max-width:900px){
