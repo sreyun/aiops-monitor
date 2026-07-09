@@ -1384,35 +1384,35 @@ function createTermTab(id, name) {
       if (tabObj.ws) termSend(tabObj.ws, "\x7f");
     }
   });
-  // mousedown 聚焦隐藏 textarea（在选区开始前就聚焦，避免选区上下文丢失）
-  // 注意：focus() 不会清除选区，用户可以继续用鼠标选中终端文本
-  screen.addEventListener("mousedown", function() {
+  // mouseup 聚焦隐藏 textarea：在鼠标松开后聚焦，不干扰用户拖拽选区。
+  // （mousedown 时 focus() 会让浏览器把 textarea 作为选区上下文，
+  //  导致 window.getSelection().rangeCount 变为 0，选区不可见。）
+  screen.addEventListener("mouseup", function(ev) {
+    // 如果用户刚完成了一次拖拽选区（选中了文本），不要立即聚焦 textarea，
+    // 否则会清除选区。仅当用户单纯点击（无选区变化）时聚焦。
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
     if (document.activeElement !== input) {
       input.focus({ preventScroll: true });
     }
   });
-  // copy 事件：当用户通过右键菜单或 Ctrl+C 触发复制时，
-  // 确保选中的终端文本被写入系统剪贴板。
-  // 注意：隐藏 textarea 聚焦时 window.getSelection().rangeCount==0，需临时 blur。
-  // 监听器挂在 document 上（而非 screen），因为 execCommand('copy') 触发
-  // 的 copy 事件 target 是 document，不会经过 screen 元素。
-  document.addEventListener("copy", ev => {
-    // 只处理当前活跃 tab 的复制（避免全局快捷键干扰其他页面元素）
-    const activeTab = TERM_ACTIVE >= 0 ? TERM_TABS[TERM_ACTIVE] : null;
-    if (!activeTab || !activeTab.screenEl) return;
-    let sel = window.getSelection().toString();
-    if (!sel) {
-      const ae = document.activeElement;
-      if (ae && ae.classList.contains("term-input")) {
-        ae.blur();
-        try { sel = window.getSelection().toString(); } finally {
-          ae.focus({ preventScroll: true });
-        }
-      }
+  // 键盘事件委托：当 screen(pre) 被聚焦但 textarea 未聚焦时（例如用户
+  // 点击终端后未选中文本），将 keydown 重定向到 textarea，确保 termKeyDown
+  // 能够正确处理所有键盘输入。
+  screen.addEventListener("keydown", function(ev) {
+    if (document.activeElement !== input) {
+      input.focus({ preventScroll: true });
+      // 重新构造并分发事件到 textarea，让 input.onkeydown 处理
+      const newEv = new KeyboardEvent("keydown", {
+        key: ev.key, code: ev.code, keyCode: ev.keyCode, which: ev.which,
+        ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey,
+        altKey: ev.altKey, metaKey: ev.metaKey,
+        repeat: ev.repeat, bubbles: true, cancelable: true
+      });
+      ev.preventDefault();
+      ev.stopPropagation();
+      input.dispatchEvent(newEv);
     }
-    if (!sel) return;
-    ev.preventDefault();
-    ev.clipboardData.setData("text/plain", sel);
   });
   // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
   screen.addEventListener("focus", function() {
@@ -2096,6 +2096,36 @@ function getSelectedTermText(tab) {
   }
   return "";
 }
+// ---- 全局 copy 事件处理（终端文本复制）----
+// 仅注册一次，避免 createTermTab 重复注册导致多个 handler 互相干扰。
+// 当用户选中终端文本后按 Ctrl+C 或右键菜单复制时，浏览器触发 copy 事件。
+// 此时隐藏 textarea 已通过 termKeyDown 中的 blur 临时失焦，
+// window.getSelection() 可以正确返回终端 pre 元素中的选区文本。
+(function() {
+  document.addEventListener("copy", function(ev) {
+    // 只处理当前活跃 tab 的复制
+    const activeTab = TERM_ACTIVE >= 0 ? TERM_TABS[TERM_ACTIVE] : null;
+    if (!activeTab || !activeTab.screenEl) return;
+    // 如果终端面板未显示，不拦截
+    const mask = document.getElementById("termMask");
+    if (!mask || !mask.classList.contains("show")) return;
+    let sel = window.getSelection().toString();
+    if (!sel) {
+      // textarea 可能仍聚焦 → 临时 blur 读取选区
+      const ae = document.activeElement;
+      if (ae && ae.classList.contains("term-input")) {
+        ae.blur();
+        try { sel = window.getSelection().toString(); } finally {
+          ae.focus({ preventScroll: true });
+        }
+      }
+    }
+    if (!sel) return;
+    ev.preventDefault();
+    ev.clipboardData.setData("text/plain", sel);
+  });
+})();
+
 function termKeyDown(e, tab) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
   const ws = tab ? tab.ws : null;

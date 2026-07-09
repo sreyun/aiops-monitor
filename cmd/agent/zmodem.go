@@ -175,6 +175,9 @@ func parseHexFrame(data []byte) (*ZmFrame, int, error) {
 // parseBinFrame parses a binary ZMODEM header.
 // Format: *\x18A [type][flags:4] [payload...] [crc:2]  (bin-16)
 //         *\x18C [type][flags:4] [payload...] [crc:4]  (bin-32)
+//
+// For ZDATA frames, also extracts subpacket data from the bytes following
+// the binary header. ZDATA subpackets are: ZDLE [subType] [data] [CRC16:2].
 func parseBinFrame(data []byte, is32 bool) (*ZmFrame, int, error) {
 	headerLen := 3 // *\x18 + type byte
 	if len(data) < headerLen+4 {
@@ -228,7 +231,68 @@ func parseBinFrame(data []byte, is32 bool) (*ZmFrame, int, error) {
 		copy(f.Data, payload)
 	}
 
+	// For ZDATA frames, extract subpacket data from the bytes following the
+	// binary header. The subpackets are: ZDLE [subType] [fileData] [CRC16:2].
+	// Without this, sz downloads silently produce zero-byte files.
+	if typ == ZDATA {
+		subData, subConsumed := extractSubpacketsFromStream(data[consumed:])
+		if len(subData) > 0 {
+			f.Data = append(f.Data, subData...)
+		}
+		consumed += subConsumed
+	}
+
 	return f, consumed, nil
+}
+
+// extractSubpacketsFromStream extracts file data from ZDATA subpackets in a
+// raw byte stream. Each subpacket is: ZDLE [subType] [data] [CRC16:2].
+// Returns extracted file data and total bytes consumed.
+func extractSubpacketsFromStream(data []byte) (fileData []byte, consumed int) {
+	pos := 0
+	for pos < len(data) {
+		// Find ZDLE
+		zdleIdx := bytes.IndexByte(data[pos:], ZDLE)
+		if zdleIdx < 0 {
+			break
+		}
+		pos += zdleIdx
+		if pos+1 >= len(data) {
+			break
+		}
+		subType := data[pos+1]
+		// Check if it's a valid subpacket type
+		if subType != ZCRCE && subType != ZCRCG && subType != ZCRCQ && subType != ZCRCW {
+			// Not a valid subpacket — might be start of next frame
+			break
+		}
+		// Data starts at pos+2, ends at next ZDLE (minus CRC16) or end of data (minus CRC16)
+		dataStart := pos + 2
+		if dataStart+2 > len(data) {
+			break // not enough data for CRC16
+		}
+		// Find the next ZDLE to determine the end of this subpacket
+		nextZdle := bytes.IndexByte(data[dataStart:], ZDLE)
+		var dataEnd int
+		if nextZdle < 0 {
+			// Last subpacket — data extends to end-2 (CRC16)
+			dataEnd = len(data) - 2
+		} else {
+			// Data extends to the next ZDLE position minus 2 (CRC16)
+			dataEnd = dataStart + nextZdle - 2
+		}
+		if dataEnd > dataStart {
+			fileData = append(fileData, data[dataStart:dataEnd]...)
+		}
+		// Move past this subpacket
+		if nextZdle < 0 {
+			consumed = len(data)
+			break
+		}
+		pos = dataStart + nextZdle
+		consumed = pos
+	}
+	return fileData, consumed
 }
 
 // ---- Frame building ----
@@ -370,9 +434,10 @@ type ZmSession struct {
 	DataBuf bytes.Buffer
 
 	// For upload: data to send, split into chunks
-	UploadData    []byte
-	UploadChunkSz int
-	UploadOffset  int
+	UploadData       []byte
+	UploadChunkSz    int
+	UploadOffset     int
+	UploadFirstChunk bool // true when binary header needs to be sent before first subpacket
 
 	// CRC-32 for file integrity check
 	CRC32 uint32
@@ -423,9 +488,15 @@ func (s *ZmSession) HandleFrame(f *ZmFrame) [][]byte {
 		responses = append(responses, buildHexFrame(ZRPOS, [4]byte{}, nil))
 
 	case ZDATA:
-		// File data — extract from subpackets
+		// File data — may be raw (from binary frame with subpackets already
+		// extracted) or subpacket-wrapped (from hex frame).
 		s.State = zmData
 		data := extractZdataPayload(f.Data)
+		if len(data) == 0 {
+			// No subpacket structure found — use raw data directly
+			// (binary ZDATA frames already have subpackets extracted by parseBinFrame)
+			data = f.Data
+		}
 		if len(data) > 0 {
 			s.DataBuf.Write(data)
 			s.CRC32 = crc32.Update(s.CRC32, crc32.IEEETable, data)
@@ -490,6 +561,8 @@ func (s *ZmSession) HandleFrame(f *ZmFrame) [][]byte {
 }
 
 // nextUploadChunk returns the next ZDATA chunk for upload, or nil if done.
+// The first call includes the binary header (**\x18A ZDATA flags CRC16) before
+// the subpacket; subsequent calls return only the subpacket.
 func (s *ZmSession) nextUploadChunk() []byte {
 	if s.UploadOffset >= len(s.UploadData) {
 		return nil
@@ -507,7 +580,22 @@ func (s *ZmSession) nextUploadChunk() []byte {
 		subType = ZCRCE // last chunk
 	}
 
-	return buildZdataPacket(subType, chunk)
+	subpacket := buildZdataPacket(subType, chunk)
+
+	// Include binary header for the first chunk so the remote ZMODEM
+	// implementation knows this is a ZDATA frame.
+	if s.UploadFirstChunk {
+		s.UploadFirstChunk = false
+		var flags [4]byte
+		header := buildBin16Header(ZDATA, flags)
+		// CRC-16 over type+flags
+		crc := crc16Xmodem(header[3:])
+		crcBytes := make([]byte, 2)
+		binary.BigEndian.PutUint16(crcBytes, crc)
+		return append(append(header, crcBytes...), subpacket...)
+	}
+
+	return subpacket
 }
 
 // ---- Helpers ----

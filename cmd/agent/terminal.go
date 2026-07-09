@@ -606,6 +606,7 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 		if uploadReady && len(uploadBuf) > 0 && inZmodem && zmSession != nil && zmSession.State == zmInit {
 			slog.Info("ZMODEM上传数据已就绪，开始上传协议", "size", len(uploadBuf))
 			zmSession.UploadData = uploadBuf
+			zmSession.UploadFirstChunk = true
 			zmSession.File = &ZFileInfo{Name: "upload.dat", Size: int64(len(uploadBuf))}
 			zmSession.State = zmFile
 			if w2, ok := ptyReader.(io.Writer); ok {
