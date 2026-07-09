@@ -1,10 +1,43 @@
+<div align="center">
+
 # AIOps Monitor
 
-[中文](README.md) | [English](README_EN.md)
+**Lightweight Host Monitoring & Ops Platform** — Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks
 
-> **Lightweight Host Monitoring & Ops Platform** — Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks
+[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
+[![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
-Single-binary server, zero-dependency agent, tri-platform native collection (incl. GPU), one-command install, ready out of the box. Built-in interactive trend charts, custom probes, remote terminal (no port opening), automation playbooks, multi-user RBAC, MFA two-factor, embedded persistence, PWA installable.
+[中文](README.md) · [English](README_EN.md)
+
+</div>
+
+> Single-binary server, zero-dependency agent, tri-platform native collection (incl. GPU), one-command install, ready out of the box. Built-in interactive trend charts, custom probes, remote terminal (no port opening), automation playbooks, multi-user RBAC, MFA two-factor, embedded persistence, PWA installable.
+
+## Table of Contents
+
+- [Platform & Architecture Support](#platform--architecture-support)
+- [Quick Start](#quick-start)
+- [Core Features](#core-features)
+- [Installation & Deployment](#installation--deployment)
+- [Configuration Reference](#configuration-reference)
+- [Monitoring Metrics](#monitoring-metrics)
+- [Custom Monitoring (Probes)](#custom-monitoring-probes)
+- [Automation Playbook](#automation-playbook)
+- [Remote Terminal](#remote-terminal)
+- [Plugin Development](#plugin-development)
+- [Alert Configuration](#alert-configuration)
+- [Advanced Features](#advanced-features)
+- [Security Mechanisms](#security-mechanisms)
+- [Cross-Network Deployment](#cross-network-deployment)
+- [FAQ / Troubleshooting](#faq--troubleshooting)
+- [Tech Stack & Architecture](#tech-stack--architecture)
+- [Performance & Scale](#performance--scale)
+- [API Reference](#api-reference)
+- [Roadmap](#roadmap)
+- [License](#license)
 
 ---
 

@@ -3532,12 +3532,26 @@ function setUser(me) {
     document.body.dataset.role = me.role;
   }
 }
+// fetchWithTimeout wraps fetch with an AbortController timeout so mobile
+// browsers on slow/unstable networks don't hang indefinitely. Returns the
+// Response or throws an AbortError / network error.
+function fetchWithTimeout(url, opts, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+  return fetch(url, Object.assign({}, opts, { signal: ctrl.signal })).finally(() => clearTimeout(timer));
+}
 async function initAuth() {
   try {
-    const r = await fetch(`${API}/me`);
+    const r = await fetchWithTimeout(`${API}/me`, {}, 10000);
     if (r.ok) { setUser(await r.json()); $("loginView").classList.remove("show"); startApp(); }
     else { $("loginView").classList.add("show"); }
-  } catch (e) { $("loginView").classList.add("show"); }
+  } catch (e) {
+    // Network error on initial auth check — show login with a friendly hint
+    // instead of a raw "Failed to fetch" that confuses mobile users.
+    $("loginView").classList.add("show");
+    const loginErrEl = $("loginErr");
+    if (loginErrEl) loginErrEl.textContent = I18N.t("toast.network_check_failed");
+  }
 }
 function startApp() {
   if (APP_STARTED) return;
@@ -4517,14 +4531,14 @@ safeAddEventListener("loginForm", "submit", async e => {
   await withLoading(submitBtn, async () => {
     try {
       const codeEl = $("loginCode");
-      const r = await fetch(`${API}/login`, {
+      const r = await fetchWithTimeout(`${API}/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: $("loginUser").value.trim(),
           password: $("loginPass").value,
           code: codeEl ? codeEl.value.trim() : ""
         })
-      });
+      }, 15000);
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.mfa_required) {
         const f = $("loginCodeField"); if (f) f.style.display = "";
@@ -4535,7 +4549,19 @@ safeAddEventListener("loginForm", "submit", async e => {
         openMfaSetup(true);
       }
       else if (r.ok) {
-        setUser(await fetch(`${API}/me`).then(x => x.json()));
+        // Post-login /me fetch: wrap in try/catch so a transient network
+        // hiccup doesn't leave the user stuck on the login page after
+        // successful authentication.
+        let user;
+        try {
+          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
+        } catch (_) {
+          // Login succeeded but /me failed — proceed anyway, the next poll
+          // will populate user info. Better than showing an error after
+          // the user already typed their credentials correctly.
+          user = { username: $("loginUser").value.trim(), display_name: "" };
+        }
+        setUser(user);
         const loginViewEl = $("loginView");
         if (loginViewEl) loginViewEl.classList.remove("show");
         startApp();
@@ -4544,7 +4570,12 @@ safeAddEventListener("loginForm", "submit", async e => {
         if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
       }
     } catch (err) {
-      if (loginErrEl) loginErrEl.textContent = I18N.t("toast.login_failed2") + err;
+      // Distinguish AbortError (timeout) from generic network errors so
+      // mobile users see a helpful message instead of "TypeError: Failed to fetch".
+      const msg = err.name === "AbortError"
+        ? I18N.t("toast.login_timeout")
+        : I18N.t("toast.login_network_error");
+      if (loginErrEl) loginErrEl.textContent = msg;
     }
   });
 });

@@ -113,6 +113,19 @@
   --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06);
 }
 *{box-sizing:border-box}
+/* 全局表单元素重置：移除 iOS Safari / Android Chrome 默认的橙色/红色 outline、
+   box-shadow 和 -webkit-appearance，防止 :focus / :invalid 状态出现“红框” */
+input,button,select,textarea{
+  -webkit-appearance:none; -moz-appearance:none; appearance:none;
+  outline:none !important;
+  box-shadow:none !important;
+}
+/* 恢复项目自定义 focus 样式（覆盖上面的全局重置） */
+.field input:focus{box-shadow:0 0 0 3px var(--accent-soft) !important}
+select:focus{box-shadow:0 0 0 3px var(--accent-soft) !important}
+.search:focus{box-shadow:0 0 0 3px var(--accent-soft) !important}
+/* 按钮保留 焦点环用于键盘导航 */
+.btn:focus-visible{outline:2px solid var(--accent) !important; outline-offset:2px; box-shadow:none !important}
 html,body{margin:0;padding:0}
 body{
   background:var(--bg);
@@ -1305,6 +1318,29 @@ svg.sparkline{width:100%; height:46px; display:block}
   /* 空态引导 */
   .ob-steps{grid-template-columns:1fr}
   .onboard{padding:16px}
+  /* 登录页移动端适配：增大触控区域、防止 iOS 自动缩放 */
+  .login-mask{padding:16px}
+  .login-card{max-width:100%; padding:24px 20px}
+  .login-card .field input{
+    font-size:16px !important; /* 防止 iOS 自动放大 */
+    padding:12px 14px; /* 增大输入高度 */
+    min-height:var(--touch-min);
+  }
+  .login-card .btn{
+    min-height:var(--touch-min); /* 登录按钮触控区域 */
+    font-size:16px;
+    padding:12px 20px;
+  }
+  .login-err{
+    word-wrap:break-word; /* 错误文本换行 */
+    white-space:normal;
+    font-size:13px;
+    padding:8px 12px;
+  }
+  .login-brand h1{font-size:16px}
+  .login-brand .sub{font-size:11px}
+  .login-links{font-size:14px}
+  .login-links a{min-height:var(--touch-min); display:inline-flex; align-items:center}
 }
 /* 安全区域适配（iPhone 刘海/底部横条） */
 @supports(padding:env(safe-area-inset-top)){
@@ -1318,6 +1354,8 @@ svg.sparkline{width:100%; height:46px; display:block}
   .term-dock{right:max(8px, env(safe-area-inset-right)); bottom:max(8px, env(safe-area-inset-bottom))}
   .toast{bottom:max(24px, env(safe-area-inset-bottom))}
   .term-ctls{margin-right:max(4px, env(safe-area-inset-right))}
+  /* 登录页安全区域适配 */
+  .login-mask{padding-top:max(20px, env(safe-area-inset-top)); padding-bottom:max(20px, env(safe-area-inset-bottom))}
 }
 /* 触摸设备：悬停效果改为常显 */
 @media(hover:none){
@@ -1331,12 +1369,14 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* 性能优化：动画元素启用 GPU 加速 */
 .modal, .toast, .pulse, .mfa-thumb, .fill, .term-cursor{will-change:transform, opacity}
 .chart-wrap canvas{will-change:transform}
-/* 全局 focus-visible 可达性 */
+/* 全局 focus-visible 可达性（排除表单元素，它们使用项目自定义样式） */
 :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 .btn:focus-visible, .nav-item:focus-visible, .tab:focus-visible, .chip-btn:focus-visible,
-select:focus-visible, input:focus-visible, .pager button:focus-visible{
+.pager button:focus-visible{
   outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-sm)
 }
+/* 表单元素 focus-visible 不显示浏览器默认 outline */
+select:focus-visible, input:focus-visible{outline:none !important}
 /* 敏感操作确认强化 */
 .btn.danger.confirm-pulse{animation:dangerPulse 1.5s ease-in-out infinite}
 @keyframes dangerPulse{0%,100%{box-shadow:0 0 0 0 var(--crit-soft)}50%{box-shadow:0 0 0 4px var(--crit-soft)}}

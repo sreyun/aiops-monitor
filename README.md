@@ -1,10 +1,44 @@
+<div align="center">
+
 # AIOps Monitor
 
-[中文](README.md) | [English](README_EN.md)
+**轻量级主机监控运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本
 
-> **轻量级主机监控运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本
+[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
+[![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
-单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。内置交互式趋势图、自定义拨测、远程终端（免开端口）、自动化剧本编排、多用户 RBAC、MFA 两步验证、内嵌持久化、PWA 安装。
+[中文](README.md) · [English](README_EN.md)
+
+</div>
+
+> 单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。内置交互式趋势图、自定义拨测、远程终端（免开端口）、自动化剧本编排、多用户 RBAC、MFA 两步验证、内嵌持久化、PWA 安装。
+
+## 目录
+
+- [平台与架构支持](#平台与架构支持)
+- [快速开始](#快速开始)
+- [核心特性](#核心特性)
+- [安装部署指南](#安装部署指南)
+- [配置参考](#配置参考)
+- [监控指标](#监控指标)
+- [自定义监控（拨测）](#自定义监控拨测)
+- [自动化剧本（Playbook）](#自动化剧本playbook)
+- [远程终端](#远程终端)
+- [插件开发](#插件开发)
+- [告警配置](#告警配置)
+- [高级功能](#高级功能)
+- [安全机制](#安全机制)
+- [跨网络部署](#跨网络部署)
+- [FAQ / 故障排查](#faq--故障排查)
+- [项目目录结构](#项目目录结构)
+- [技术栈与架构](#技术栈与架构)
+- [性能与规模](#性能与规模)
+- [API 参考](#api-参考)
+- [路线图](#路线图)
+- [License](#license)
 
 ---
 
