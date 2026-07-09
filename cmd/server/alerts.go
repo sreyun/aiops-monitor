@@ -45,6 +45,7 @@ type Alert struct {
 	Message   string  `json:"message"`
 	Value     float64 `json:"value"`
 	Timestamp int64   `json:"timestamp"`
+	Status    string  `json:"status,omitempty"` // acknowledged | silenced | "" (active)
 }
 
 func classify(v, warn, crit float64) string {

@@ -69,17 +69,18 @@ type LogEntry struct {
 
 // Store holds all host state and a ring of recent plugin events.
 type Store struct {
-	mu       sync.RWMutex
-	hosts    map[string]*Host
-	events   []storedEvent
-	activity []LogEntry
-	deleted   map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
-	lastEvent map[string]int64 // dedup key -> last unix time (plugin-event noise suppression)
-	dirty     bool             // set on every mutation; consumed by the embedded DB's autosave
+	mu          sync.RWMutex
+	hosts       map[string]*Host
+	events      []storedEvent
+	activity    []LogEntry
+	deleted      map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
+	lastEvent    map[string]int64 // dedup key -> last unix time (plugin-event noise suppression)
+	alertStates  map[string]string // alert key -> "acknowledged" | "silenced" (persisted)
+	dirty        bool             // set on every mutation; consumed by the embedded DB's autosave
 }
 
 func NewStore() *Store {
-	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64), lastEvent: make(map[string]int64)}
+	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64), lastEvent: make(map[string]int64), alertStates: make(map[string]string)}
 }
 
 // GetHost returns a shallow copy of one host by id (for fingerprint verification).
@@ -577,4 +578,40 @@ func (s *Store) RecentActivity() []LogEntry {
 		out = append(out, s.activity[i])
 	}
 	return out
+}
+
+// ---------- 告警状态管理 (确认 / 静默) ----------
+
+// SetAlertState sets the state for an alert key ("acknowledged" or "silenced").
+func (s *Store) SetAlertState(key, state string) {
+	s.mu.Lock()
+	s.alertStates[key] = state
+	s.dirty = true
+	s.mu.Unlock()
+}
+
+// ClearAlertState removes the state for an alert key (e.g. un-ack / un-silence).
+func (s *Store) ClearAlertState(key string) {
+	s.mu.Lock()
+	delete(s.alertStates, key)
+	s.dirty = true
+	s.mu.Unlock()
+}
+
+// GetAlertState returns the state of an alert key, or "" if untouched.
+func (s *Store) GetAlertState(key string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.alertStates[key]
+}
+
+// AlertStates returns a snapshot copy of all alert states.
+func (s *Store) AlertStates() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp := make(map[string]string, len(s.alertStates))
+	for k, v := range s.alertStates {
+		cp[k] = v
+	}
+	return cp
 }

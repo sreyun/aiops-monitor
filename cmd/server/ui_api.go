@@ -128,12 +128,22 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
 	// stamp threshold alerts with their first-fired time (check alerts carry it already)
 	since := s.notifier.ActiveSince()
+	states := s.store.AlertStates()
 	for i := range alerts {
 		if t, ok := since[alertKey(alerts[i])]; ok {
 			alerts[i].Since = t
 		}
+		alerts[i].Status = states[alertKey(alerts[i])]
 	}
 	alerts = append(alerts, s.checks.DownAlerts()...)
+	// also attach status for check alerts
+	for i := range alerts {
+		if alerts[i].Status == "" {
+			if st, ok := states[alertKey(alerts[i])]; ok {
+				alerts[i].Status = st
+			}
+		}
+	}
 	if alerts == nil {
 		alerts = []Alert{}
 	}
@@ -203,4 +213,55 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"version":          appVersion,
 		"terminal_enabled": s.cfg.TerminalEnabled(),
 	})
+}
+
+// alertAckSilenceReq is the JSON body for ack/silence operations.
+type alertAckSilenceReq struct {
+	HostID string `json:"host_id"`
+	Type   string `json:"type"`
+	Scope  string `json:"scope"`
+}
+
+func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
+	var req alertAckSilenceReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	key := req.HostID + "/" + req.Type + "/" + req.Scope
+	s.store.SetAlertState(key, "acknowledged")
+	msg := Tz("log.alert_ack", shortID(req.HostID), req.Type)
+	if req.Scope != "" {
+		msg = Tz("log.alert_ack_scope", shortID(req.HostID), req.Type, req.Scope)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "acknowledged"})
+}
+
+func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
+	var req alertAckSilenceReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	key := req.HostID + "/" + req.Type + "/" + req.Scope
+	s.store.SetAlertState(key, "silenced")
+	msg := Tz("log.alert_silence", shortID(req.HostID), req.Type)
+	if req.Scope != "" {
+		msg = Tz("log.alert_silence_scope", shortID(req.HostID), req.Type, req.Scope)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "silenced"})
+}
+
+func (s *Server) handleAlertClear(w http.ResponseWriter, r *http.Request) {
+	var req alertAckSilenceReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	key := req.HostID + "/" + req.Type + "/" + req.Scope
+	s.store.ClearAlertState(key)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.alert_clear", shortID(req.HostID), req.Type)})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": ""})
 }

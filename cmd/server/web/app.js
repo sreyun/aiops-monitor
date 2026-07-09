@@ -118,7 +118,7 @@ const fmtIORate = b => b < 1024 ? b.toFixed(0) + " " + I18N.t("unit.bps")
   : b < 1048576 ? (b / 1024).toFixed(1) + " " + I18N.t("unit.kbps")
   : b < 1073741824 ? (b / 1048576).toFixed(1) + " " + I18N.t("unit.mbps")
   : (b / 1073741824).toFixed(2) + " " + I18N.t("unit.gbs");
-const fmtIOPS = v => v < 1000 ? v.toFixed(0) : v < 10000 ? (v / 1000).toFixed(1) + "K" : (v / 1000).toFixed(0) + "K";
+const fmtIOPS = v => v < 1000 ? v.toFixed(0) : v < 10000 ? (v / 1000).toFixed(1) + I18N.t("unit.kilo") : (v / 1000).toFixed(0) + I18N.t("unit.kilo");
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -199,6 +199,9 @@ function toggleTheme() {
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("aiops_theme", next);
   syncThemeIcons(next);
+  // 重绘所有已存在的 Canvas 图表，使其使用新的 CSS 变量颜色
+  for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
+  for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
 }
 /* 同步当前主题图标 */
 function syncThemeIcons(theme) {
@@ -442,6 +445,27 @@ function renderCards(s) {
   TERMINAL_ENABLED = s.terminal_enabled !== false;
 }
 
+/* ---------- 渲染：统计与健康小结 ---------- */
+function renderStatsHealth(s) {
+  const grid = $("statsGrid");
+  if (!grid) return;
+  const total = s.total_hosts || 0;
+  const online = s.online_hosts || 0;
+  const rate = total > 0 ? Math.round(online / total * 100) : 0;
+  const allAlerts = (s.critical_alerts || 0) + (s.warning_alerts || 0);
+  const healthy = (s.critical_alerts || 0) === 0;
+  const sc = (cls, val, key, hint) =>
+    `<div class="stat-card"><div class="sv ${cls}">${val}</div><div class="sk">${key}</div>${hint ? `<div class="sh">${hint}</div>` : ""}</div>`;
+  grid.innerHTML =
+    sc("", total, I18N.t("ui.total_hosts"), "") +
+    sc(rate >= 80 ? "ok" : rate >= 50 ? "warn" : "crit", rate + "%", I18N.t("section.online_rate"), online + "/" + total + " " + I18N.t("ui.online")) +
+    sc(healthy ? "ok" : "crit", healthy ? I18N.t("section.health_ok") : I18N.t("section.health_error"), I18N.t("section.health_status"), !healthy ? I18N.t("section.unprocessed_alerts") + ": " + (s.critical_alerts || 0) : "") +
+    sc(allAlerts > 0 ? "warn" : "ok", allAlerts, I18N.t("section.total_alerts"), I18N.t("ui.critical_alerts") + ": " + (s.critical_alerts || 0) + " / " + I18N.t("ui.warning") + ": " + (s.warning_alerts || 0));
+  // 更新节头徽章（在线率摘要）
+  const badge = $("statsHealthBadge");
+  if (badge) badge.textContent = I18N.t("section.online_rate") + " " + rate + "%";
+}
+
 /* ---------- 渲染：告警 / 事件 ---------- */
 const ALERT_TYPES = [
   {key:"", label:I18N.t("ui.all")}, {key:"cpu", label:"CPU"}, {key:"memory", label:I18N.t("ui.memory")},
@@ -567,11 +591,28 @@ function renderAlerts(alerts) {
     const durSpan = a.since
       ? `<span class="src alert-dur" data-since="${a.since}" title="${I18N.t("section.first_fired")} ${fmtDateTime(a.since)}">${dur}</span>`
       : "";
-    return `<div class="row-item ${esc(a.level)}" tabindex="0" data-key="${esc(alertKey(a))}">
+    // 告警状态标签与操作按钮
+    let statusBadge = "", actions = "";
+    const hid = esc(a.host_id || ""), atyp = esc(a.type || ""), asc = esc(a.scope || "");
+    const actAttrs = `data-host="${hid}" data-type="${atyp}" data-scope="${asc}"`;
+    if (a.status === "acknowledged") {
+      statusBadge = `<span class="badge status-badge status-ack">${I18N.t("alert.acknowledged")}</span>`;
+      actions = `<button class="alert-action" data-action="clear" ${actAttrs} title="${I18N.t("alert.clear_status")}">↩</button>`;
+    } else if (a.status === "silenced") {
+      statusBadge = `<span class="badge status-badge status-silence">${I18N.t("alert.silenced")}</span>`;
+      actions = `<button class="alert-action" data-action="clear" ${actAttrs} title="${I18N.t("alert.clear_status")}">↩</button>`;
+    } else {
+      actions = `<button class="alert-action" data-action="ack" ${actAttrs} title="${I18N.t("alert.acknowledge")}">✔</button>` +
+        `<button class="alert-action" data-action="silence" ${actAttrs} title="${I18N.t("alert.silence")}">🔇</button>`;
+    }
+    const statusClass = a.status ? ` status-${esc(a.status)}` : "";
+    return `<div class="row-item ${esc(a.level)}${statusClass}" tabindex="0" data-key="${esc(alertKey(a))}">
     <span class="badge ${esc(a.level)}">${a.level === "critical" ? I18N.t("ui.critical") : a.level === "info" ? I18N.t("toast.recovered") : I18N.t("ui.warning")}</span>
+    ${statusBadge}
     <strong>${esc(a.hostname)}</strong>${ipStr}<span class="msg">${esc(a.message)}</span>
     ${durSpan}
-    ${timeStr}</div>`;
+    ${timeStr}
+    <span class="alert-actions">${actions}</span></div>`;
   };
   // Apply filters
   let filtered = alerts;
@@ -611,15 +652,15 @@ function renderTop(hosts) {
 
   // 面板定义：[key, title, unit, valueFn, isPct, displayFn]
   const panels = [
-    { key: "cpu", title: "CPU " + I18N.t("notify.type_cpu"), unit: "%", fn: m => m.cpu_percent || 0, isPct: true },
-    ...(hasGPU ? [{ key: "gpu", title: "GPU", unit: "%", fn: gpuMax, isPct: true }] : []),
-    { key: "mem", title: I18N.t("section.mem"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
-    { key: "disk", title: I18N.t("section.disk"), unit: "%", fn: diskMax, isPct: true },
-    { key: "diskio", title: "磁盘 IO", unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
-    { key: "iops", title: I18N.t("ui.disk_iops_title"), unit: I18N.t("unit.iops"), fn: iopsTotal, isPct: false },
-    { key: "net", title: I18N.t("section.net"), unit: I18N.t("unit.mbps"), fn: netTotal, isPct: false },
-    { key: "load", title: I18N.t("section.load"), unit: "", fn: m => m.load5 || 0, isPct: false },
-    { key: "proc", title: "进程数", unit: "", fn: m => m.proc_count || 0, isPct: false },
+    { key: "cpu", title: I18N.t("section.cpu_top10"), unit: "%", fn: m => m.cpu_percent || 0, isPct: true },
+    ...(hasGPU ? [{ key: "gpu", title: I18N.t("section.gpu_top10"), unit: "%", fn: gpuMax, isPct: true }] : []),
+    { key: "mem", title: I18N.t("section.mem_top10"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
+    { key: "disk", title: I18N.t("section.disk_top10"), unit: "%", fn: diskMax, isPct: true },
+    { key: "diskio", title: I18N.t("section.diskio_top10"), unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
+    { key: "iops", title: I18N.t("section.iops_top10"), unit: I18N.t("unit.iops"), fn: iopsTotal, isPct: false },
+    { key: "net", title: I18N.t("section.net_top10"), unit: I18N.t("unit.mbps"), fn: netTotal, isPct: false },
+    { key: "load", title: I18N.t("section.load_top10"), unit: "", fn: m => m.load5 || 0, isPct: false },
+    { key: "proc", title: I18N.t("section.proc_top10"), unit: "", fn: m => m.proc_count || 0, isPct: false },
   ];
 
   const topN = (arr, fn, n) => arr.slice().sort((a, b) => fn(b.latest) - fn(a.latest)).slice(0, n);
@@ -790,16 +831,16 @@ function setLogPageSize(v) {
 function hostCard(h) {
   const m = h.latest || {};
   const swap = (m.swap_total || 0) > 0
-    ? bar(I18N.t("section.swap"), m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + "G")
+    ? bar(I18N.t("section.swap"), m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + I18N.t("unit.gb"))
     : "";
   const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
   const disksHtml = disks.length
-    ? disks.map(d => bar(I18N.t("ui.disk_label") + " " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + "G")).join("")
-    : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + "G");
+    ? disks.map(d => bar(I18N.t("ui.disk_label") + " " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + I18N.t("unit.gb"))).join("")
+    : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + I18N.t("unit.gb"));
   const gpus = Array.isArray(m.gpus) ? m.gpus : [];
   const gpusHtml = gpus.map(g => {
     const util = Math.max(0, Math.min(g.util_percent || 0, 100));
-    const memTxt = (g.mem_total || 0) > 0 ? " · " + I18N.t("ui.gpu_mem_short") + " " + fmtGB(g.mem_used || 0) + "/" + fmtGB(g.mem_total || 0) + "G" : "";
+    const memTxt = (g.mem_total || 0) > 0 ? " · " + I18N.t("ui.gpu_mem_short") + " " + fmtGB(g.mem_used || 0) + "/" + fmtGB(g.mem_total || 0) + I18N.t("unit.gb") : "";
     const tempTxt = (g.temp || 0) > 0 ? " · " + Math.round(g.temp) + "℃" : "";
     const name = esc((g.name || "GPU").slice(0, 22));
     return `<div class="metric gpu"><div class="row"><span class="label">GPU ${name}</span>
@@ -841,7 +882,7 @@ function hostCard(h) {
       </div>
     </div>
     ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + I18N.t("ui.cores"))}
-    ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + "G")}
+    ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + I18N.t("unit.gb"))}
     ${swap}
     ${disksHtml}
     ${gpusHtml}
@@ -855,8 +896,8 @@ function hostCard(h) {
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
       <span class="g">💾<span class="mono">${I18N.t("ui.disk_read")} ${fmtIORate(m.disk_read_rate || 0)}</span> <span class="mono">${I18N.t("ui.disk_write")} ${fmtIORate(m.disk_write_rate || 0)}</span></span>
       <span class="g">💿<span class="mono">${fmtIOPS((m.disk_read_iops || 0) + (m.disk_write_iops || 0))} ${I18N.t("unit.iops")}</span></span>
-      <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
-      <span class="g">📊<span class="mono">${m.proc_count || 0}</span> 进程</span>
+      <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> ${I18N.t("section.connections")}</span>
+      <span class="g">📊<span class="mono">${m.proc_count || 0}</span> ${I18N.t("section.processes")}</span>
       ${lastCell}
     </div>
   </div>`;
@@ -886,7 +927,7 @@ function hostRow(h) {
     ? `<span class="hrow-status offline" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : isStale
       ? `<span class="hrow-status stale" title="${I18N.t('section.data_stale')}">⚠ ${ago(h.last_seen)}</span>`
-      : `<span class="hrow-status online">运行 ${fmtUptime(m.uptime || 0)}</span>`;
+      : `<span class="hrow-status online">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
   const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
   const termBtn = (h.online && TERMINAL_ENABLED)
     ? `<button class="term-btn" data-act="term" title="${I18N.t('ui.remote_terminal')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
@@ -3916,7 +3957,7 @@ async function refresh(force) {
       s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
       s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
     }
-    renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
+    renderCards(s); renderStatsHealth(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
     updateFavicon(s.critical_alerts || 0);
     notifyCriticalAlerts(s.critical_alerts || 0);
     const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse";
@@ -4152,6 +4193,29 @@ safeAddEventListener("copyRelayGatewayBtn", "click", function() {
 });
 safeAddEventListener("copyRelayInternalBtn", "click", function() {
   copyWithFeedback(this, $("relayInternalCmd").textContent, I18N.t("toast.copy_intranet_install"));
+});
+
+// 告警操作按钮事件委托（确认 / 静默 / 清除状态）
+document.addEventListener("click", async function(e) {
+  const btn = e.target.closest(".alert-action");
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const action = btn.dataset.action;
+  const body = JSON.stringify({
+    host_id: btn.dataset.host || "",
+    type: btn.dataset.type || "",
+    scope: btn.dataset.scope || ""
+  });
+  try {
+    const r = await fetch(`${API}/alerts/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    if (r.ok) {
+      toast(action === "ack" ? I18N.t("toast.alert_ack") : action === "silence" ? I18N.t("toast.alert_silence") : I18N.t("toast.alert_cleared"), "ok");
+      await refresh(true);
+    } else {
+      toast(I18N.t("toast.operation_failed"), "err");
+    }
+  } catch (e) { toast(I18N.t("toast.network_error"), "err"); }
 });
 
 /* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */

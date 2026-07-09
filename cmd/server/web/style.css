@@ -280,7 +280,8 @@ select:focus{outline:none; border-color:var(--accent)}
 section{scroll-margin-top:80px; margin-bottom:24px}
 
 /* ---------- KPI 卡片 ---------- */
-.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px}
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px;
+  margin-bottom:var(--ov-section-gap)}
 .card{
   background:var(--panel); border:1px solid var(--line); border-radius:var(--r-lg);
   padding:16px 18px; display:flex; align-items:center; gap:14px; cursor:pointer;
@@ -343,6 +344,18 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .badge.critical{ background:var(--crit-soft); color:var(--crit-txt); border:1px solid var(--crit-border) }
 .badge.warning{ background:var(--warn-soft); color:var(--warn-txt); border:1px solid var(--warn-border) }
 .badge.info{ background:var(--info-soft); color:var(--info-txt); border:1px solid var(--info-border) }
+/* 告警状态标签与操作按钮 */
+.badge.status-badge{font-size:10px; padding:1px 7px; border-radius:4px; margin-left:-2px}
+.badge.status-ack{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
+.badge.status-silence{background:rgba(132,146,166,.12); color:var(--muted); border:1px solid rgba(132,146,166,.25)}
+.alert-actions{display:flex; gap:4px; margin-left:auto; flex:none}
+.alert-action{background:none; border:1px solid var(--line); border-radius:4px; padding:2px 6px;
+  font-size:12px; cursor:pointer; color:var(--muted); line-height:1; transition:all var(--transition-fast)}
+.alert-action:hover{color:var(--txt); border-color:var(--line2); background:var(--panel2)}
+.alert-action[data-action="clear"]:hover{color:var(--ok)}
+.alert-action[data-action="silence"]:hover{color:var(--warn)}
+.row-item.status-acknowledged{opacity:.55}
+.row-item.status-silenced{opacity:.45}
 .src{font-size:11px; color:var(--muted2); margin-left:auto; flex:none; white-space:nowrap}
 .log-time{font-size:11px; color:var(--muted2); flex:none; white-space:nowrap; margin-left:8px; font-variant-numeric:tabular-nums}
 .empty-line{color:var(--muted2); font-size:13px; padding:16px; text-align:center;
@@ -690,6 +703,18 @@ svg.sparkline{width:100%; height:46px; display:block}
 .icon-btn:hover{background:var(--panel3); color:var(--txt); border-color:var(--hover-border)}
 .icon-btn.danger:hover{background:var(--crit-soft); color:var(--crit-txt); border-color:var(--crit-border)}
 .icon-btn:disabled{opacity:.4; cursor:not-allowed}
+
+/* ---------- 概览：统计与健康小结 ---------- */
+.stats-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:4px}
+.stat-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+  padding:14px 16px; text-align:center; transition:border-color var(--transition), box-shadow var(--transition)}
+.stat-card:hover{border-color:var(--hover-border)}
+.stat-card .sv{font-size:22px; font-weight:700; letter-spacing:-.5px; color:var(--txt)}
+.stat-card .sv.ok{color:var(--ok)}
+.stat-card .sv.warn{color:var(--warn)}
+.stat-card .sv.crit{color:var(--crit)}
+.stat-card .sk{font-size:11px; color:var(--muted); margin-top:4px}
+.stat-card .sh{font-size:10px; color:var(--muted2); margin-top:2px}
 
 /* ---------- 概览：资源 TOP10 排行榜（多面板横向条形图） ---------- */
 /* 3 列网格布局，每行最多 3 个面板 */
@@ -1181,6 +1206,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 @media(max-width:1200px){
   .grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
   .top-grid{grid-template-columns:repeat(2,1fr)}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
 }
 /* 平板竖屏 (≤900px)：侧栏变抽屉 */
 @media(max-width:900px){
@@ -1198,6 +1224,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 @media(max-width:700px){
   .grid{grid-template-columns:1fr}
   .top-grid{grid-template-columns:1fr}
+  .stats-grid{grid-template-columns:1fr}
   .topbar{flex-wrap:wrap; gap:8px}
   .page-head{flex:1 1 100%; order:-1}
   .search{width:100%; max-width:none; margin-left:0}

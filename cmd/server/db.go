@@ -41,13 +41,14 @@ type dbSession struct {
 }
 
 type dbSnapshot struct {
-	Version  int                  `json:"version"`
-	SavedAt  int64                `json:"saved_at"`
-	Hosts    []dbHost             `json:"hosts"`
-	Events   []storedEvent        `json:"events"`
-	Activity []LogEntry           `json:"activity"`
-	Deleted  map[string]int64     `json:"deleted"`
-	Sessions map[string]dbSession `json:"sessions"`
+	Version     int                  `json:"version"`
+	SavedAt     int64                `json:"saved_at"`
+	Hosts       []dbHost             `json:"hosts"`
+	Events      []storedEvent        `json:"events"`
+	Activity    []LogEntry           `json:"activity"`
+	Deleted     map[string]int64     `json:"deleted"`
+	Sessions    map[string]dbSession `json:"sessions"`
+	AlertStates map[string]string    `json:"alert_states"`
 }
 
 // DB binds the snapshot file to the live Store and Auth state.
@@ -101,6 +102,10 @@ func (d *DB) Load() {
 	}
 	s.events = snap.Events
 	s.activity = snap.Activity
+	s.alertStates = snap.AlertStates
+	if s.alertStates == nil {
+		s.alertStates = make(map[string]string)
+	}
 	if snap.Deleted != nil {
 		s.deleted = snap.Deleted
 	}
@@ -178,6 +183,12 @@ func (d *DB) export() dbSnapshot {
 	snap.Activity = append(snap.Activity, s.activity...)
 	for k, v := range s.deleted {
 		snap.Deleted[k] = v
+	}
+	if s.alertStates != nil {
+		snap.AlertStates = make(map[string]string, len(s.alertStates))
+		for k, v := range s.alertStates {
+			snap.AlertStates[k] = v
+		}
 	}
 	s.mu.RUnlock()
 	snap.Sessions = d.auth.exportSessions()
