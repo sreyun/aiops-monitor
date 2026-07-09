@@ -16,7 +16,7 @@ import (
 )
 
 // appVersion is shown in the dashboard sidebar and the summary API.
-// The default "aiops" is a fallback for development builds; production builds
+// The default "AIOps" is a fallback for development builds; production builds
 // inject the real Git tag at build time via ldflags:
 //
 //   go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent
@@ -25,7 +25,7 @@ import (
 //
 // git describe --tags outputs tags like "v3.9.4" (already has the "v" prefix),
 // so the frontend renders the value as-is without prepending another "v".
-var appVersion = "aiops"
+var appVersion = "AIOps"
 
 // resolveDist finds the directory that holds the downloadable agent binaries
 // (+ plugins.zip). It tries the -dist flag, ./dist, then the server executable's

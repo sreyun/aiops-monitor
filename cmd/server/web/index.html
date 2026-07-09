@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AIOps Monitor · 主机监控运维平台</title>
-<meta name="theme-color" content="#0a0d13">
+<meta name="theme-color" content="#0a0d13" media="(prefers-color-scheme:dark)">
+<meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme:light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="AIOps">
@@ -12,6 +13,7 @@
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/style.css">
+<script>(function(){var t=localStorage.getItem("aiops_theme")||"dark";document.documentElement.setAttribute("data-theme",t)})()</script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
 <link rel="alternate" hreflang="en" href="/?lang=en">
@@ -62,7 +64,7 @@
     </nav>
 
     <div class="side-actions">
-      <div class="side-status"><span class="pulse" id="pulse"></span><span id="clock" class="mono">--:--:--</span><span class="push-indicator" id="pushIndicator" title="实时推送状态"><span class="push-dot"></span></span><span class="ver" id="verLabel"></span></div>
+      <div class="side-status"><span class="pulse" id="pulse"></span></div>
     </div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
@@ -192,7 +194,7 @@
         <div class="pager" id="pager"></div>
         <div class="empty" id="empty">
           暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
-          <code>aiops-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
+          <code>AIOps-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
           <button class="btn primary icon" onclick="openInstall()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
             <span>安装 Agent</span>

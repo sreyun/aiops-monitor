@@ -389,9 +389,11 @@ function renderCards(s) {
   // 空态引导 & 版本号
   const ob = $("onboarding");
   if (ob) ob.style.display = s.total_hosts === 0 ? "block" : "none";
-  const ver = $("verLabel");
-  // 版本号直接显示，git tag 本身已带 v 前缀（如 v3.9.4），回退值为 "aiops"
-  if (ver && s.version) ver.textContent = s.version;
+  // 版本号显示在 brand 副标题中
+  const verSpan = document.querySelector(".brand .sub");
+  if (verSpan && s.version && s.version !== "AIOps") {
+    verSpan.textContent = s.version;
+  }
   TERMINAL_ENABLED = s.terminal_enabled !== false;
 }
 
@@ -659,7 +661,7 @@ function exportLogsCSV() {
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `aiops-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  a.download = `AIOps-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast(`${I18N.t("toast.exported")} ${rows.length} ${I18N.t("time.records")}${I18N.t("ui.log")}`, "ok");
@@ -1380,7 +1382,7 @@ function initTermContextMenu() {
       }
       case "reconnect":
         if (tab.ws && tab.ws.readyState === 1) { toast("终端已连接", "info"); return; }
-        reconnectTermTab();
+        reconnectTermTab(tab);
         break;
       case "clear":
         if (tab.vt && tab.vt.fullReset) {
@@ -1631,9 +1633,11 @@ function closeAllTermTabs() {
 }
 
 /* ---------- 终端重连 ---------- */
-function reconnectTermTab() {
-  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
-  const tab = TERM_TABS[TERM_ACTIVE];
+function reconnectTermTab(tab) {
+  if (!tab) {
+    if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+    tab = TERM_TABS[TERM_ACTIVE];
+  }
   // 关闭旧连接
   if (tab.ws) { try { tab.ws.close(); } catch(e) {} tab.ws = null; }
   tab.retry = 0;
@@ -2838,7 +2842,7 @@ function renderInstallCmd() {
   if (CUR_OS === "windows") {
     cmd = `irm "${server}/install.ps1?${q}" | iex`;
     label = I18N.t("install.powershell_cmd");
-    hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\aiops-agent 并注册用户级开机自启。";
+    hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\AIOps-agent 并注册用户级开机自启。";
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
     label = I18N.t("install.terminal_one_line");
@@ -3592,11 +3596,9 @@ async function refresh(force) {
     renderCards(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
     updateFavicon(s.critical_alerts || 0);
     notifyCriticalAlerts(s.critical_alerts || 0);
-    $("clock").textContent = new Date().toLocaleTimeString("zh-CN");
-    $("pulse").className = "pulse";
+    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse";
   } catch (e) {
-    $("clock").textContent = I18N.t("ui.connect_failed");
-    $("pulse").className = "pulse off";
+    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse off";
     if (CONN_STATE === "connected") {
       CONN_STATE = "disconnected";
       toast(I18N.t("ui.reconnecting"), "err");
@@ -3740,7 +3742,7 @@ function togglePause() {
   PAUSED = !PAUSED;
   const btn = $("pauseBtn");
   if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? I18N.t("toast.paused_click") : I18N.t("ui.pause_refresh"); }
-  $("pulse").className = PAUSED ? "pulse paused" : "pulse";
+  const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = PAUSED ? "pulse paused" : "pulse";
   toast(PAUSED ? I18N.t("toast.paused") : I18N.t("toast.resumed"), "ok");
   if (!PAUSED) refresh(true);
 }
@@ -4477,8 +4479,6 @@ function initPushWS() {
     PUSH_WS.onopen = () => {
       PUSH_CONNECTED = true;
       PUSH_RETRY = 0;
-      const ind = $("pushIndicator");
-      if (ind) { ind.classList.add("live"); ind.title = I18N.t("toast.push_connected"); }
     };
     PUSH_WS.onmessage = (e) => {
       try {
@@ -4496,8 +4496,6 @@ function initPushWS() {
     };
     PUSH_WS.onclose = () => {
       PUSH_CONNECTED = false;
-      const ind = $("pushIndicator");
-      if (ind) { ind.classList.remove("live"); ind.title = I18N.t("toast.push_disconnected"); }
       // 指数退避重连
       PUSH_RETRY++;
       if (PUSH_RETRY <= 10) {
