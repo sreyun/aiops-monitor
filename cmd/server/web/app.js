@@ -1296,31 +1296,34 @@ let TERM_ACTIVE = -1;    // active tab index
 let TERM_RESIZE = null;  // window resize listener
 
 function openTerminal(id, name) {
-  let idx = TERM_TABS.findIndex(t => t.id === id);
-  if (idx >= 0) {
-    // 如果该标签页已收起到 dock，从 dock 恢复
-    if (TERM_DOCK_IDS.has(id)) {
-      TERM_DOCK_IDS.delete(id);
-      const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
-      if (dockItem) dockItem.remove();
-      updateTermDock();
-    }
-    switchTermTab(idx);
+  // 多会话支持：同一 hostID 可创建多个标签页，每个标签页拥有独立的 WebSocket 连接。
+  // 如果已有该主机的标签页且处于 dock 收起状态，优先恢复而不是新建。
+  const dockedIdx = TERM_TABS.findIndex(t => t.id === id && TERM_DOCK_IDS.has(t.id));
+  if (dockedIdx >= 0) {
+    TERM_DOCK_IDS.delete(id);
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+    if (dockItem) dockItem.remove();
+    updateTermDock();
+    switchTermTab(dockedIdx);
     $("termMask").classList.add("show");
     requestAnimationFrame(() => requestAnimationFrame(termRefit));
     return;
   }
-  createTermTab(id, name);
+  // 统计同一主机已有标签数，生成序号标题
+  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id);
+  const tabName = sameHostTabs.length > 0 ? `${name} (${sameHostTabs.length + 1})` : name;
+  createTermTab(id, name, tabName);
 }
 
-function createTermTab(id, name) {
+function createTermTab(id, name, tabName) {
+  tabName = tabName || name;
   const screens = $("termScreens"), tabbar = $("termTabbar");
   const screen = document.createElement("pre");
   screen.className = "term-screen"; screen.tabIndex = 0; screen.spellcheck = false;
   screens.appendChild(screen);
   const tab = document.createElement("button");
   tab.className = "term-tab";
-  tab.innerHTML = `<span>${esc(name)}</span><span class="term-tab-close" title="${I18N.t('ui.close_tab')}">×</span>`;
+  tab.innerHTML = `<span>${esc(tabName)}</span><span class="term-tab-close" title="${I18N.t('ui.close_tab')}">×</span>`;
   tabbar.appendChild(tab);
   const vt = makeVT(screen);
   screen._vt = vt;
@@ -1339,7 +1342,7 @@ function createTermTab(id, name) {
   input.setAttribute("wrap", "off");
   input.readOnly = false;
   screen.appendChild(input);
-  const tabObj = {id, name, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false};
+  const tabObj = {id, hostId: id, name, tabName, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false};
   TERM_TABS.push(tabObj);
   const idx = TERM_TABS.length - 1;
   tab.onclick = (e) => {
@@ -1451,6 +1454,9 @@ function createTermTab(id, name) {
 
 function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
+  // 隐藏断开遮罩，显示重连按钮
+  const overlay = $("termDisconnectOverlay"); if (overlay) overlay.style.display = "none";
+  const reconnBtn = $("termReconnBtn"); if (reconnBtn) reconnBtn.style.display = "none";
   setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
@@ -1464,7 +1470,7 @@ function connectTermWS(tab) {
     if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
     const data = new Uint8Array(ev.data);
-    // Check for ZMODEM frame: [0xFF][0xFE][type][len:4 BE][payload]
+    // Check for ZMODEM/file-transfer frame: [0xFF][0xFE][type][len:4 BE][payload]
     if (data.length >= 7 && data[0] === 0xFF && data[1] === 0xFE) {
       handleZmBrowserFrame(tab, data);
       return;
@@ -1480,10 +1486,12 @@ function connectTermWS(tab) {
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot off"; } }
     const mask = $("termMask");
-    if (mask.classList.contains("show") && tab.retry < 3) {
-      tab.retry++;
-      setTermStatus(`${I18N.t("misc.reconnecting")}(${tab.retry}/3)`, "");
-      setTimeout(() => { if (mask.classList.contains("show")) connectTermWS(tab); }, 2000);
+    if (mask && mask.classList.contains("show")) {
+      // 显示断开遮罩和重连按钮
+      const overlay = $("termDisconnectOverlay");
+      if (overlay) overlay.style.display = "flex";
+      const reconnBtn = $("termReconnBtn");
+      if (reconnBtn) reconnBtn.style.display = "flex";
     }
   };
   ws.onerror = () => setTermStatus(I18N.t("ui.connect_error"), "off");
@@ -1493,7 +1501,7 @@ function switchTermTab(idx) {
   if (idx < 0 || idx >= TERM_TABS.length) return;
   TERM_ACTIVE = idx;
   TERM_TABS.forEach((t, i) => { t.tabEl.classList.toggle("active", i === idx); t.screenEl.classList.toggle("active", i === idx); });
-  $("termTitle").textContent = TERM_TABS[idx].name + " " + I18N.t("term.title");
+  $("termTitle").textContent = (TERM_TABS[idx].tabName || TERM_TABS[idx].name) + " " + I18N.t("term.title");
   requestAnimationFrame(() => { const t = TERM_TABS[idx]; if (t && t.inputEl) t.inputEl.focus({ preventScroll: true }); else if (t) t.screenEl.focus(); });
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
   TERM_RESIZE = () => termRefit();
@@ -1523,6 +1531,80 @@ function closeAllTermTabs() {
   const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
   if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
   clearTermDock();
+}
+
+/* ---------- 终端重连 ---------- */
+function reconnectTermTab() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  // 关闭旧连接
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} tab.ws = null; }
+  tab.retry = 0;
+  connectTermWS(tab);
+}
+
+/* ---------- 文件上传/下载（按钮交互） ---------- */
+function startTermFileUpload() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
+  // 弹出目标路径输入
+  const targetPath = prompt("请输入远程目标路径（如 /tmp/upload.dat）：", "/tmp/");
+  if (!targetPath || !targetPath.trim()) return;
+  // 弹出文件选择器
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.display = "none";
+  document.body.appendChild(input);
+  input.onchange = async () => {
+    const file = input.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      toast("文件超过 100MB 限制，请使用其他方式传输", "err");
+      return;
+    }
+    toast(`正在上传: ${file.name} (${formatZmSize(file.size)})`, "info");
+    try {
+      // 发送上传元数据 'f' 帧
+      const meta = JSON.stringify({ filename: file.name, size: file.size, target_path: targetPath.trim() });
+      const metaBytes = new TextEncoder().encode(meta);
+      const metaFrame = new Uint8Array(metaBytes.length + 1);
+      metaFrame[0] = 0x66; // 'f'
+      metaFrame.set(metaBytes, 1);
+      tab.ws.send(metaFrame);
+      // 分块发送文件数据
+      const buf = await file.arrayBuffer();
+      const data = new Uint8Array(buf);
+      const chunkSize = 32 * 1024;
+      for (let offset = 0; offset < data.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, data.length);
+        termSendUpload(tab.ws, data.slice(offset, end));
+      }
+      termSendEnd(tab.ws);
+    } catch (err) {
+      toast(`上传失败: ${err.message}`, "err");
+    }
+  };
+  input.click();
+}
+
+function startTermFileDownload() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
+  const remotePath = prompt("请输入远程文件路径（如 /var/log/syslog）：", "/tmp/");
+  if (!remotePath || !remotePath.trim()) return;
+  toast(`正在请求下载: ${remotePath.trim()}`, "info");
+  // 发送下载请求 'd' 帧
+  const meta = JSON.stringify({ remote_path: remotePath.trim() });
+  const metaBytes = new TextEncoder().encode(meta);
+  const metaFrame = new Uint8Array(metaBytes.length + 1);
+  metaFrame[0] = 0x64; // 'd'
+  metaFrame.set(metaBytes, 1);
+  tab.ws.send(metaFrame);
+  // 准备接收下载数据
+  tab.fileDownload = { filename: remotePath.split("/").pop() || "download.dat", chunks: [], received: 0 };
 }
 
 /* ---------- 终端收起到右下角 ---------- */
@@ -1595,8 +1677,8 @@ function updateTermDock() {
     // 更新主机名 + tooltip
     const nameEl = item.querySelector(".dock-name");
     if (nameEl) {
-      nameEl.textContent = tab.name;
-      item.title = tab.name + " · " + I18N.t("ui.remote_terminal");
+      nameEl.textContent = tab.tabName || tab.name;
+      item.title = (tab.tabName || tab.name) + " · " + I18N.t("ui.remote_terminal");
     }
     // 更新连接状态
     const dot = item.querySelector(".dock-dot");
@@ -1940,6 +2022,13 @@ safeAddEventListener("termMaxBtn", "click", () => {
 safeAddEventListener("termMinBtn", "click", () => {
   minimizeTerminal();
 });
+// 重新连接
+safeAddEventListener("termReconnBtn", "click", () => reconnectTermTab());
+safeAddEventListener("termReconnOverlayBtn", "click", () => reconnectTermTab());
+// 文件上传
+safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
+// 文件下载
+safeAddEventListener("termDownloadBtn", "click", () => startTermFileDownload());
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
   // 同步更新当前活动 tab 的 dock 卡片状态
@@ -1979,8 +2068,8 @@ function termSendEnd(ws) {
   if (!ws || ws.readyState !== 1) return;
   ws.send(new Uint8Array([0x65])); // 'e'
 }
-// ---- ZMODEM 浏览器端帧处理 ----
-// handleZmBrowserFrame 解析并处理来自 Agent 的 ZMODEM 帧。
+// ---- ZMODEM/文件传输 浏览器端帧处理 ----
+// handleZmBrowserFrame 解析并处理来自 Agent 的 ZMODEM/文件传输帧。
 // 帧格式: [0xFF][0xFE][type][len:4 BE][payload]
 function handleZmBrowserFrame(tab, data) {
   const zmType = data[2];
@@ -2001,10 +2090,38 @@ function handleZmBrowserFrame(tab, data) {
       }
       break;
     }
+    case 0x46: { // 'F' — 文件信息（按钮上传ACK或下载元数据）
+      const info = new TextDecoder().decode(zmPayload);
+      let meta;
+      try { meta = JSON.parse(info); } catch (e) { return; }
+      if (meta.type === "upload_ack") {
+        if (meta.status === "ok") {
+          toast(`上传完成: ${meta.filename || ""}`, "ok");
+        } else {
+          toast(`上传失败: ${meta.message || "未知错误"}`, "err");
+        }
+      } else if (meta.type === "download_meta") {
+        // 下载元数据：准备接收文件数据
+        tab.fileDownload = tab.fileDownload || {};
+        tab.fileDownload.filename = meta.filename || "download.dat";
+        tab.fileDownload.size = meta.size || 0;
+        tab.fileDownload.chunks = [];
+        tab.fileDownload.received = 0;
+        toast(`正在下载: ${meta.filename} (${formatZmSize(meta.size)})`, "info");
+      } else if (meta.type === "download_error") {
+        toast(`下载失败: ${meta.message || "未知错误"}`, "err");
+        tab.fileDownload = null;
+      }
+      break;
+    }
     case 0x44: // 'D' — 下载数据块
       if (tab.zmDownload) {
         tab.zmDownload.chunks.push(zmPayload);
         tab.zmDownload.received += zmPayload.length;
+      }
+      if (tab.fileDownload) {
+        tab.fileDownload.chunks.push(zmPayload);
+        tab.fileDownload.received += zmPayload.length;
       }
       break;
     case 0x45: // 'E' — 传输完成
@@ -2021,6 +2138,20 @@ function handleZmBrowserFrame(tab, data) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast(I18N.t("term.download_done") + ": " + dl.filename, "ok");
         tab.zmDownload = null;
+      }
+      if (tab.fileDownload) {
+        const dl = tab.fileDownload;
+        const blob = new Blob(dl.chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = dl.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(`下载完成: ${dl.filename}`, "ok");
+        tab.fileDownload = null;
       }
       break;
   }
@@ -2097,28 +2228,33 @@ function getSelectedTermText(tab) {
   return "";
 }
 // ---- 全局 copy 事件处理（终端文本复制）----
-// 仅注册一次，避免 createTermTab 重复注册导致多个 handler 互相干扰。
-// 当用户选中终端文本后按 Ctrl+C 或右键菜单复制时，浏览器触发 copy 事件。
-// 此时隐藏 textarea 已通过 termKeyDown 中的 blur 临时失焦，
-// window.getSelection() 可以正确返回终端 pre 元素中的选区文本。
+// 仅注册一次。当用户通过右键菜单或 Ctrl+C 触发 copy 事件时，
+// 临时 blur 隐藏 textarea 让 window.getSelection() 可见，然后写入剪贴板。
 (function() {
   document.addEventListener("copy", function(ev) {
-    // 只处理当前活跃 tab 的复制
     const activeTab = TERM_ACTIVE >= 0 ? TERM_TABS[TERM_ACTIVE] : null;
     if (!activeTab || !activeTab.screenEl) return;
-    // 如果终端面板未显示，不拦截
     const mask = document.getElementById("termMask");
     if (!mask || !mask.classList.contains("show")) return;
-    let sel = window.getSelection().toString();
-    if (!sel) {
-      // textarea 可能仍聚焦 → 临时 blur 读取选区
-      const ae = document.activeElement;
-      if (ae && ae.classList.contains("term-input")) {
-        ae.blur();
-        try { sel = window.getSelection().toString(); } finally {
-          ae.focus({ preventScroll: true });
+    // 临时 blur textarea 使 pre 中的选区对 window.getSelection() 可见
+    const ae = document.activeElement;
+    const hasTermInput = ae && ae.classList.contains("term-input");
+    if (hasTermInput) ae.blur();
+    let sel = "";
+    try {
+      const s = window.getSelection();
+      if (s && s.rangeCount > 0) {
+        for (let i = 0; i < s.rangeCount; i++) {
+          const rng = s.getRangeAt(i);
+          if (activeTab.screenEl.contains(rng.commonAncestorContainer)) {
+            sel = rng.toString();
+            break;
+          }
         }
       }
+      if (!sel) sel = window.getSelection().toString();
+    } finally {
+      if (hasTermInput && ae) ae.focus({ preventScroll: true });
     }
     if (!sel) return;
     ev.preventDefault();
@@ -2142,35 +2278,52 @@ function termKeyDown(e, tab) {
   }
 
   // Ctrl+C / Cmd+C → 有选区时复制，无选区时发送 SIGINT
-  // Ctrl+Shift+C / Cmd+Shift+C / Ctrl+Insert → 强制复制（主流终端习惯）
+  // Ctrl+Shift+C / Cmd+Shift+C / Ctrl+Insert → 强制复制
   if ((mod && (k === "c" || k === "C")) || (mod && k === "Insert")) {
     const shiftCopy = e.shiftKey;
 
-    // 临时 blur textarea 让 document 选区可见
+    // 临时 blur textarea 让 document 选区对 window.getSelection() 可见
     const ae = document.activeElement;
     const hasTermInput = ae && ae.classList.contains("term-input");
-    if (hasTermInput) { ae.blur(); }
+    if (hasTermInput) ae.blur();
 
-    const sel = getSelectedTermText(tab);
+    let sel = "";
+    try {
+      const s = window.getSelection();
+      if (s && s.rangeCount > 0) {
+        for (let i = 0; i < s.rangeCount; i++) {
+          const rng = s.getRangeAt(i);
+          if (tab && tab.screenEl && tab.screenEl.contains(rng.commonAncestorContainer)) {
+            sel = rng.toString();
+            break;
+          }
+        }
+      }
+      if (!sel) sel = window.getSelection().toString();
+    } finally {
+      if (hasTermInput && ae) ae.focus({ preventScroll: true });
+    }
 
     if (shiftCopy || sel) {
       e.preventDefault();
       if (sel) {
-        // 创建临时 textarea 确保 execCommand('copy') 有有效选区
-        const ta = document.createElement("textarea");
-        ta.value = sel;
-        ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-        document.body.appendChild(ta);
-        ta.focus(); ta.select();
-        try { document.execCommand("copy"); } catch (_) {}
-        document.body.removeChild(ta);
+        // 优先使用 navigator.clipboard API（现代浏览器），fallback 到 execCommand
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(sel).then(() => {}, () => {});
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = sel;
+          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          try { document.execCommand("copy"); } catch (_) {}
+          document.body.removeChild(ta);
+        }
       }
-      if (hasTermInput && ae) { ae.focus({ preventScroll: true }); }
       return;
     }
 
-    // 无选区 → re-focus 并继续执行，发送 SIGINT (\x03)
-    if (hasTermInput && ae) { ae.focus({ preventScroll: true }); }
+    // 无选区 → 发送 SIGINT (\x03)
   }
 
   const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)

@@ -518,6 +518,15 @@
       <h3 id="termTitle">远程终端</h3>
       <span class="term-status" id="termStatus">连接中…</span>
       <div class="term-ctls">
+        <button class="term-ctl" id="termReconnBtn" title="重新连接" aria-label="重新连接终端" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+        </button>
+        <button class="term-ctl" id="termUploadBtn" title="上传文件" aria-label="上传文件到远程主机">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </button>
+        <button class="term-ctl" id="termDownloadBtn" title="下载文件" aria-label="从远程主机下载文件">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
         <button class="term-ctl" id="termMinBtn" title="收起到右下角" aria-label="收起窗口">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5v6a1 1 0 0 1-1 1H6"/><path d="M12 19l5-7-5 7"/></svg>
         </button>
@@ -532,6 +541,13 @@
     <div class="modal-body term-body">
       <div class="term-tabbar" id="termTabbar"></div>
       <div class="term-screens" id="termScreens"></div>
+      <div class="term-disconnect-overlay" id="termDisconnectOverlay" style="display:none">
+        <div class="term-disconnect-msg">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:28px;height:28px;margin-bottom:8px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          <span>连接已断开</span>
+          <button class="btn primary" id="termReconnOverlayBtn">重新连接</button>
+        </div>
+      </div>
       <div class="term-hint">经 Agent 反向通道连接 · 点击窗口后即可输入 · 支持 Ctrl+C / Tab / 方向键 · 多标签可同时连接多台主机 · 关闭窗口结束所有会话</div>
     </div>
   </div>

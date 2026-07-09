@@ -179,6 +179,10 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	// to the ZMODEM upload handler running in the tx goroutine.
 	zmChan := make(chan []byte, 32)
 
+	// fileTxChan carries file operation frames (upload ACK, download data)
+	// from the rx goroutine to the tx goroutine for writing to the browser.
+	fileTxChan := make(chan []byte, 32)
+
 	// tx: stream shell output up with ZMODEM detection + framing
 	// Frame format: [type:1][len:4 BE][payload]
 	//   'O' (0x4F) = normal PTY output
@@ -204,8 +208,8 @@ func (a *Agent) runTerminalSession(server, sid string) {
 			reqDone <- doErr
 		}()
 
-		// Write framed PTY output to pw, with ZMODEM interception.
-		streamPTYFramed(sh, pw, zmChan)
+		// Write framed PTY output to pw, with ZMODEM interception and file operations.
+		streamPTYFramed(sh, pw, zmChan, fileTxChan)
 		pw.Close()
 		<-reqDone
 	}()
@@ -218,7 +222,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 			return
 		}
 		defer resp.Body.Close()
-		readTermFrames(resp.Body, sh, zmChan)
+		readTermFrames(resp.Body, sh, zmChan, fileTxChan)
 	}()
 
 	_ = sh.Wait()
@@ -228,17 +232,53 @@ func (a *Agent) runTerminalSession(server, sid string) {
 
 // readTermFrames parses the rx stream: each frame is [type:1][len:2 BE][payload].
 // type 'i' = input bytes, 'r' = resize ("colsxrows"),
-// 'u' = upload data chunk, 'e' = end of upload.
-func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte) {
+// 'u' = upload data chunk, 'e' = end of upload,
+// 'f' = file upload metadata (JSON), 'd' = download request (JSON).
+func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan chan<- []byte) {
 	var hdr [3]byte
+
+	// File upload state (button-based, not ZMODEM)
+	type fileUploadState struct {
+		file     *os.File
+		filename string
+		size     int64
+		received int64
+	}
+	var upload *fileUploadState
+
+	// Helper: send a framed file-info message to the browser via fileTxChan
+	sendFileInfo := func(typ string, meta map[string]interface{}) {
+		meta["type"] = typ
+		js, _ := json.Marshal(meta)
+		frame := make([]byte, 5+len(js))
+		frame[0] = 'F'
+		binary.BigEndian.PutUint32(frame[1:], uint32(len(js)))
+		copy(frame[5:], js)
+		select {
+		case fileTxChan <- frame:
+		default:
+		}
+	}
+
 	for {
 		if _, err := io.ReadFull(r, hdr[:]); err != nil {
+			// Clean up upload if in progress
+			if upload != nil {
+				upload.file.Close()
+				os.Remove(upload.file.Name())
+				upload = nil
+			}
 			return
 		}
 		n := int(binary.BigEndian.Uint16(hdr[1:]))
 		payload := make([]byte, n)
 		if n > 0 {
 			if _, err := io.ReadFull(r, payload); err != nil {
+				if upload != nil {
+					upload.file.Close()
+					os.Remove(upload.file.Name())
+					upload = nil
+				}
 				return
 			}
 		}
@@ -251,23 +291,182 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte) {
 			if cols, rows, ok := parseSize(string(payload)); ok {
 				_ = sh.Resize(cols, rows)
 			}
+		case 'f':
+			// File upload metadata (button-based)
+			var meta struct {
+				Filename   string `json:"filename"`
+				Size       int64  `json:"size"`
+				TargetPath string `json:"target_path"`
+			}
+			if err := json.Unmarshal(payload, &meta); err != nil || meta.TargetPath == "" {
+				slog.Warn("文件上传元数据无效", "err", err)
+				continue
+			}
+			if meta.Size > 100<<20 {
+				sendFileInfo("upload_ack", map[string]interface{}{
+					"status": "error", "message": "文件超过100MB限制",
+				})
+				continue
+			}
+			// Create the target file
+			f, err := os.Create(meta.TargetPath)
+			if err != nil {
+				slog.Warn("无法创建上传文件", "path", meta.TargetPath, "err", err)
+				sendFileInfo("upload_ack", map[string]interface{}{
+					"status": "error", "message": fmt.Sprintf("无法创建文件: %v", err),
+				})
+				continue
+			}
+			upload = &fileUploadState{
+				file:     f,
+				filename: meta.Filename,
+				size:     meta.Size,
+			}
+			slog.Info("文件上传开始", "filename", meta.Filename, "target", meta.TargetPath, "size", meta.Size)
+
 		case 'u':
-			// Upload data chunk → forward to ZMODEM handler
-			if len(payload) > 0 {
-				select {
-				case zmChan <- payload:
-				default:
-					// channel full, drop chunk (ZMODEM will retransmit)
+			if upload != nil {
+				// Button-based upload: write to file
+				if _, err := upload.file.Write(payload); err != nil {
+					slog.Warn("写入上传文件失败", "err", err)
+					upload.file.Close()
+					os.Remove(upload.file.Name())
+					upload = nil
+				}
+				upload.received += int64(len(payload))
+			} else {
+				// ZMODEM upload: forward to zmChan
+				if len(payload) > 0 {
+					select {
+					case zmChan <- payload:
+					default:
+					}
 				}
 			}
+
 		case 'e':
-			// End of upload → signal ZMODEM handler
+			if upload != nil {
+				// Button-based upload complete
+				upload.file.Close()
+				slog.Info("文件上传完成", "filename", upload.filename, "received", upload.received)
+				sendFileInfo("upload_ack", map[string]interface{}{
+					"status":   "ok",
+					"filename": upload.filename,
+					"size":     upload.received,
+				})
+				upload = nil
+			} else {
+				// ZMODEM upload: forward to zmChan
+				select {
+				case zmChan <- nil:
+				default:
+				}
+			}
+
+		case 'd':
+			// Download request (button-based)
+			var meta struct {
+				RemotePath string `json:"remote_path"`
+			}
+			if err := json.Unmarshal(payload, &meta); err != nil || meta.RemotePath == "" {
+				slog.Warn("下载请求无效", "err", err)
+				continue
+			}
+			go handleFileDownload(meta.RemotePath, fileTxChan)
+		}
+	}
+}
+
+// handleFileDownload reads a remote file and sends it to the browser via fileTxChan.
+func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("文件下载异常", "path", remotePath, "panic", r)
+		}
+	}()
+
+	// Helper: send a framed file-info message
+	sendFileInfo := func(typ string, meta map[string]interface{}) {
+		meta["type"] = typ
+		js, _ := json.Marshal(meta)
+		frame := make([]byte, 5+len(js))
+		frame[0] = 'F'
+		binary.BigEndian.PutUint32(frame[1:], uint32(len(js)))
+		copy(frame[5:], js)
+		select {
+		case fileTxChan <- frame:
+		default:
+		}
+	}
+
+	// Check file
+	info, err := os.Stat(remotePath)
+	if err != nil {
+		sendFileInfo("download_error", map[string]interface{}{
+			"message": fmt.Sprintf("文件不存在或无法访问: %v", err),
+		})
+		return
+	}
+	if info.IsDir() {
+		sendFileInfo("download_error", map[string]interface{}{
+			"message": "不支持下载目录",
+		})
+		return
+	}
+	if info.Size() > 100<<20 {
+		sendFileInfo("download_error", map[string]interface{}{
+			"message": "文件超过100MB限制",
+		})
+		return
+	}
+
+	// Send metadata
+	fname := info.Name()
+	sendFileInfo("download_meta", map[string]interface{}{
+		"filename": fname,
+		"size":     info.Size(),
+	})
+
+	// Read and send file chunks
+	f, err := os.Open(remotePath)
+	if err != nil {
+		sendFileInfo("download_error", map[string]interface{}{
+			"message": fmt.Sprintf("无法打开文件: %v", err),
+		})
+		return
+	}
+	defer f.Close()
+
+	slog.Info("文件下载开始", "path", remotePath, "size", info.Size())
+	buf := make([]byte, 32<<10) // 32KB chunks
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			// Send 'D' frame
+			frame := make([]byte, 5+n)
+			frame[0] = 'D'
+			binary.BigEndian.PutUint32(frame[1:], uint32(n))
+			copy(frame[5:], chunk)
 			select {
-			case zmChan <- nil:
+			case fileTxChan <- frame:
 			default:
 			}
 		}
+		if err != nil {
+			break
+		}
 	}
+
+	// Send 'E' frame (transfer complete)
+	endFrame := make([]byte, 5)
+	endFrame[0] = 'E'
+	select {
+	case fileTxChan <- endFrame:
+	default:
+	}
+	slog.Info("文件下载完成", "path", remotePath, "size", info.Size())
 }
 
 func parseSize(s string) (cols, rows int, ok bool) {
@@ -460,7 +659,7 @@ func writeFrame(w io.Writer, typ byte, payload []byte) error {
 //
 // Uses a goroutine for PTY reading so the main loop can multiplex PTY data,
 // upload data (zmChan), and a rz/sz detection timer via select.
-func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
+func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte, fileTxChan <-chan []byte) {
 	// PTY reader goroutine → channel (avoids blocking main loop when
 	// remote rz is waiting for ZFILE and no PTY output is coming).
 	type ptyData struct {
@@ -684,6 +883,13 @@ func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
 				uploadReady = true
 			} else {
 				uploadBuf = append(uploadBuf, chunk...)
+			}
+
+		case frame := <-fileTxChan:
+			// File operation frames (upload ACK, download data) are pre-framed
+			// and ready to write directly to the tx stream.
+			if len(frame) > 0 {
+				w.Write(frame)
 			}
 		}
 	}

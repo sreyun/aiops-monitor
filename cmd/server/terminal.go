@@ -324,6 +324,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 				typ, payload = 'u', data[1:] // upload data chunk
 			case 'e':
 				typ, payload = 'e', nil // end of upload
+			case 'f':
+				typ, payload = 'f', data[1:] // file upload metadata
+			case 'd':
+				typ, payload = 'd', data[1:] // download request
 			}
 			if len(payload) == 0 && typ != 'e' {
 				continue
@@ -501,6 +505,14 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 
 		case 'E': // Transfer complete
 			b := buildZmBrowserFrame('E', nil)
+			select {
+			case sess.toBrowser <- b:
+			case <-sess.done:
+				return
+			}
+
+		case 'F': // File info (upload ACK or download metadata)
+			b := buildZmBrowserFrame('F', payload)
 			select {
 			case sess.toBrowser <- b:
 			case <-sess.done:
