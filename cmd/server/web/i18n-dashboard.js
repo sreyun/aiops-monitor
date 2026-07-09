@@ -671,7 +671,26 @@
   "forward.tcp_hint": "创建 TCP 转发后，通过 监听地址:端口 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）.",
   "forward.http_hint": "在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。",
   "form.proxy_name": "名称（可选）",
-  "form.proxy_name_placeholder": "如 内部API服务"
+  "form.proxy_name_placeholder": "如 内部API服务",
+  "ui.view_list": "列表",
+  "ui.view_card": "卡片",
+  "ui.enable": "启用",
+  "ui.disable": "停用",
+  "ui.copy": "复制",
+  "ui.edit": "编辑",
+  "ui.delete": "删除",
+  "ui.listen_addr": "监听地址",
+  "ui.target": "目标",
+  "ui.active_sessions": "活跃连接",
+  "ui.enabled": "已启用",
+  "ui.disabled": "已停用",
+  "toast.enabled": "已启用",
+  "toast.disabled": "已停用",
+  "toast.toggle_failed": "切换状态失败",
+  "toast.copied": "已复制",
+  "toast.copy_failed": "复制失败",
+  "toast.edited": "已更新",
+  "toast.edit_failed": "更新失败"
 };
 
   function t(key, fallback) {

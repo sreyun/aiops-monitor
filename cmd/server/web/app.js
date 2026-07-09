@@ -4048,47 +4048,102 @@ async function loadForwards() {
   } catch(e) {}
 }
 
+// 转发视图模式：list（默认）| card
+let FORWARD_VIEW_MODE = "list";
+
+// 操作图标（统一的描边 SVG，使用 currentColor 跟随文字色）
+const FWD_ICONS = {
+  enable:  '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+  disable: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>',
+  copy:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  edit:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  del:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>',
+  open:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
+  addr:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+};
+
+function switchForwardView(mode) {
+  FORWARD_VIEW_MODE = mode;
+  const wrap = $("forwardViewToggle");
+  if (wrap) wrap.querySelectorAll(".vt-btn").forEach(b => b.classList.toggle("active", b.dataset.view === mode));
+  renderForwards();
+}
+
+// 构建单条转发的操作按钮组
+function fwdActionButtons(item) {
+  const toggleIcon = item.enabled ? FWD_ICONS.disable : FWD_ICONS.enable;
+  const toggleLabel = item.enabled ? I18N.t("ui.disable") : I18N.t("ui.enable");
+  const primary = item.type === "http"
+    ? `<button class="icon-btn" title="${I18N.t("ui.open")}" onclick="openProxyUrl('${item.proxyUrl}')">${FWD_ICONS.open}</button>`
+    : `<button class="icon-btn" title="${I18N.t("ui.copy_addr")}" onclick="copyText('${esc(item.listenAddr)}')">${FWD_ICONS.addr}</button>`;
+  return `
+    <button class="icon-btn" title="${toggleLabel}" onclick="toggleForward('${item.type}','${esc(item.id)}',${!item.enabled})">${toggleIcon}</button>
+    ${primary}
+    <button class="icon-btn" title="${I18N.t("ui.copy")}" onclick="copyForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.copy}</button>
+    <button class="icon-btn" title="${I18N.t("ui.edit")}" onclick="editForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.edit}</button>
+    <button class="icon-btn danger" title="${I18N.t("ui.delete")}" onclick="deleteForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.del}</button>`;
+}
+
+// 将 TCP / HTTP 两条数据源统一为渲染模型
+function collectForwardItems() {
+  const items = [];
+  (LAST_FORWARDS || []).forEach(f => {
+    items.push({
+      type: "tcp", id: f.id,
+      enabled: f.enabled !== false,
+      badge: "TCP", badgeClass: "op",
+      title: `${esc(f.hostname)} → :${f.target_port}`,
+      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")}`,
+      listenAddr: f.listen_addr,
+    });
+  });
+  (LAST_HTTP_PROXIES || []).forEach(p => {
+    const proxyUrl = `/proxy/${encodeURIComponent(p.host_id)}/${p.target_port}/${(p.default_path || "").replace(/^\//, "")}`;
+    items.push({
+      type: "http", id: p.id,
+      enabled: p.enabled !== false,
+      badge: "HTTP", badgeClass: "sys",
+      title: esc(p.name || `${p.hostname}:${p.target_port}`),
+      sub: `${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}`,
+      proxyUrl,
+    });
+  });
+  return items;
+}
+
 function renderForwards() {
   const list = $("forwardList");
   const empty = $("forwardEmpty");
   if (!list || !empty) return;
-  
-  // TCP 转发卡片
-  const tcpCards = (LAST_FORWARDS || []).map(f => `
-    <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-      <span class="badge op" style="font-size:11px; padding:2px 8px;">TCP</span>
-      <div style="flex:1; min-width:200px;">
-        <div style="font-weight:600;">${esc(f.hostname)} → :${f.target_port}</div>
-        <div class="hint" style="margin-top:2px;">${I18N.t("section.local_listen")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("section.active_connections")}</div>
-      </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <button class="btn" onclick="copyText('${esc(f.listen_addr)}')" title="${I18N.t('ui.copy_addr')}">${I18N.t("ui.copy_addr")}</button>
-        <button class="btn ghost" onclick="deleteForward('${esc(f.id)}')" title="${I18N.t('ui.close_forward')}">${I18N.t("ui.close_forward")}</button>
-      </div>
-    </div>
-  `).join("");
-  
-  // HTTP 代理卡片
-  const httpCards = (LAST_HTTP_PROXIES || []).map(p => {
-    const proxyUrl = `/proxy/${encodeURIComponent(p.host_id)}/${p.target_port}/${(p.default_path || "").replace(/^\//, "")}`;
-    const displayName = p.name || `${p.hostname}:${p.target_port}`;
-    return `
-      <div class="card" style="padding:14px 16px; border:1px solid var(--line2); border-radius:10px; background:var(--panel); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-        <span class="badge sys" style="font-size:11px; padding:2px 8px;">HTTP</span>
-        <div style="flex:1; min-width:200px;">
-          <div style="font-weight:600;">${esc(displayName)}</div>
-          <div class="hint" style="margin-top:2px;">${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}</div>
+
+  const items = collectForwardItems();
+
+  if (FORWARD_VIEW_MODE === "card") {
+    list.className = "fwd-list fwd-grid";
+    list.innerHTML = items.map(it => `
+      <div class="fwd-card ${it.enabled ? "" : "fwd-off"}">
+        <div class="fwd-card-head">
+          <span class="badge ${it.badgeClass}">${it.badge}</span>
+          <span class="fwd-status ${it.enabled ? "on" : "off"}">${it.enabled ? I18N.t("ui.enabled") : I18N.t("ui.disabled")}</span>
         </div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn primary" onclick="openProxyUrl('${proxyUrl}')">${I18N.t("ui.open")}</button>
-          <button class="btn ghost" onclick="deleteHttpProxy('${esc(p.id)}')">${I18N.t("ui.delete")}</button>
+        <div class="fwd-title">${it.title}</div>
+        <div class="fwd-sub">${it.sub}</div>
+        <div class="fwd-actions">${fwdActionButtons(it)}</div>
+      </div>`).join("");
+  } else {
+    list.className = "fwd-list";
+    list.innerHTML = items.map(it => `
+      <div class="fwd-row ${it.enabled ? "" : "fwd-off"}">
+        <span class="badge ${it.badgeClass}">${it.badge}</span>
+        <div class="fwd-main">
+          <div class="fwd-title">${it.title}</div>
+          <div class="fwd-sub">${it.sub}</div>
         </div>
-      </div>
-    `;
-  }).join("");
-  
-  list.innerHTML = tcpCards + httpCards;
-  empty.style.display = (tcpCards || httpCards) ? "none" : "";
+        <div class="fwd-actions">${fwdActionButtons(it)}</div>
+      </div>`).join("");
+  }
+
+  empty.style.display = items.length ? "none" : "";
 }
 
 function switchFwdMode(mode) {
@@ -4209,19 +4264,36 @@ async function loadHttpProxies() {
   } catch(e) {}
 }
 
-async function deleteHttpProxy(id) {
-  if (!confirm(I18N.t("valid.confirm_delete"))) return;
+// 启用 / 停用某条转发（TCP 或 HTTP）
+async function toggleForward(type, id, enable) {
+  const url = type === "tcp"
+    ? `/api/v1/forward/${id}/toggle`
+    : `/api/v1/http-proxy/${id}/toggle`;
   try {
-    const res = await fetch("/api/v1/http-proxy/" + id, {
-      method: "DELETE",
-      credentials: "include"
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ enabled: enable })
     });
-    if (res.ok) {
-      toast(I18N.t("toast.deleted"), "ok");
-      loadHttpProxies();
-    } else {
-      toast(I18N.t("toast.delete_failed"), "err");
-    }
+    if (!res.ok) { toast(I18N.t("toast.toggle_failed"), "err"); return; }
+    toast(enable ? I18N.t("toast.enabled") : I18N.t("toast.disabled"), "ok");
+    loadForwards();
+  } catch(e) {
+    toast(I18N.t("toast.network_error2"), "err");
+  }
+}
+
+// 复制（克隆）某条转发
+async function copyForward(type, id) {
+  const url = type === "tcp"
+    ? `/api/v1/forward/${id}/copy`
+    : `/api/v1/http-proxy/${id}/copy`;
+  try {
+    const res = await fetch(url, { method: "POST", credentials: "include" });
+    if (!res.ok) { toast(I18N.t("toast.copy_failed"), "err"); return; }
+    toast(I18N.t("toast.copied"), "ok");
+    loadForwards();
   } catch(e) {
     toast(I18N.t("toast.network_error2"), "err");
   }
@@ -4234,21 +4306,100 @@ function closeForwardModal() {
   if (backdrop) backdrop.style.display = "none";
 }
 
-async function deleteForward(id) {
-  if (!confirm(I18N.t("valid.confirm_close_forward"))) return;
+// 删除某条转发（统一 TCP / HTTP）
+async function deleteForward(type, id) {
+  if (!confirm(I18N.t("valid.confirm_delete"))) return;
+  const url = type === "tcp"
+    ? `/api/v1/forward/${id}`
+    : `/api/v1/http-proxy/${id}`;
   try {
-    const res = await fetch("/api/v1/forward/" + id, {
-      method: "DELETE",
-      credentials: "include"
-    });
-    if (!res.ok) {
-      toast(I18N.t("toast.close_failed"), "err");
-      return;
+    const res = await fetch(url, { method: "DELETE", credentials: "include" });
+    if (res.ok) {
+      toast(I18N.t("toast.deleted"), "ok");
+      loadForwards();
+    } else {
+      toast(I18N.t("toast.delete_failed"), "err");
     }
-    toast(I18N.t("toast.forward_closed"), "ok");
-    loadForwards();
   } catch(e) {
     toast(I18N.t("toast.network_error2"), "err");
+  }
+}
+
+// 打开编辑弹窗并预填数据
+function editForward(type, id) {
+  const item = type === "tcp"
+    ? (LAST_FORWARDS || []).find(f => f.id === id)
+    : (LAST_HTTP_PROXIES || []).find(p => p.id === id);
+  if (!item) return;
+  $("fwdEditId").value = id;
+  $("fwdEditType").value = type;
+  populateForwardHosts();
+  $("fwdEditHost").value = item.host_id;
+  $("fwdEditPort").value = item.target_port;
+  if (type === "tcp") {
+    $("fwdEditTcpField").style.display = "";
+    $("fwdEditLocalPort").value = item.local_port || 0;
+    $("fwdEditHttpNameField").style.display = "none";
+    $("fwdEditHttpPathField").style.display = "none";
+  } else {
+    $("fwdEditTcpField").style.display = "none";
+    $("fwdEditHttpNameField").style.display = "";
+    $("fwdEditHttpPathField").style.display = "";
+    $("fwdEditName").value = item.name || "";
+    $("fwdEditPath").value = item.default_path || "";
+  }
+  const mask = $("fwdEditMask");
+  const backdrop = $("backdrop");
+  if (mask) mask.classList.add("show");
+  if (backdrop) backdrop.style.display = "";
+}
+
+function closeForwardEditModal() {
+  const mask = $("fwdEditMask");
+  const backdrop = $("backdrop");
+  if (mask) mask.classList.remove("show");
+  if (backdrop) backdrop.style.display = "none";
+}
+
+// 保存编辑结果
+async function saveForwardEdit() {
+  const type = $("fwdEditType").value;
+  const id = $("fwdEditId").value;
+  const hostID = $("fwdEditHost").value;
+  const targetPort = parseInt($("fwdEditPort").value || "0");
+  if (!hostID || targetPort < 1 || targetPort > 65535) {
+    toast(I18N.t("valid.fill_target_port"), "err");
+    return;
+  }
+  if (type === "tcp") {
+    const localPort = parseInt($("fwdEditLocalPort").value || "0");
+    try {
+      const res = await fetch(`/api/v1/forward/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+      });
+      if (!res.ok) { toast(I18N.t("toast.edit_failed"), "err"); return; }
+      toast(I18N.t("toast.edited"), "ok");
+      closeForwardEditModal();
+      loadForwards();
+    } catch(e) { toast(I18N.t("toast.network_error2"), "err"); }
+  } else {
+    const name = $("fwdEditName").value || "";
+    const defaultPath = $("fwdEditPath").value || "";
+    try {
+      const res = await fetch(`/api/v1/http-proxy/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+      });
+      if (!res.ok) { toast(I18N.t("toast.edit_failed"), "err"); return; }
+      toast(I18N.t("toast.edited"), "ok");
+      closeForwardEditModal();
+      loadForwards();
+    } catch(e) { toast(I18N.t("toast.network_error2"), "err"); }
   }
 }
 
@@ -4274,6 +4425,7 @@ safeAddEventListener("fwdHttpOpenBtn", "click", () => {
   const targetPort = parseInt($("fwdTargetPort")?.value || "0");
   if (hostID && targetPort > 0) openHttpProxy(hostID, targetPort);
 });
+safeAddEventListener("fwdEditSaveBtn", "click", saveForwardEdit);
 // Mode tab clicks
 document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
   btn.addEventListener("click", () => switchFwdMode(btn.dataset.fwdmode));

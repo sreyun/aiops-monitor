@@ -306,12 +306,16 @@
       <section class="view" id="view-forward">
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <div class="view-toggle" id="forwardViewToggle" role="group" aria-label="视图切换">
+              <button class="vt-btn active" data-view="list" title="列表" onclick="switchForwardView('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+              <button class="vt-btn" data-view="card" title="卡片" onclick="switchForwardView('card')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+            </div>
             <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_forward">+ 新建转发</button>
           </div>
         </div>
 
         <!-- 活跃转发列表 -->
-        <div id="forwardList" style="display:flex; flex-direction:column; gap:10px"></div>
+        <div id="forwardList" class="fwd-list"></div>
         <div class="empty" id="forwardEmpty" data-i18n="empty.no_forwards">
           还没有端口转发规则。点「新建转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
         </div>
@@ -834,6 +838,43 @@
     <div class="modal-foot" id="fwdHttpFoot" style="display:none">
       <button class="btn" id="fwdHttpSaveBtn" data-i18n="forward.save_http">保存配置</button>
       <button class="btn primary" id="fwdHttpOpenBtn" data-i18n="forward.open_http">打开链接</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 编辑转发弹窗 ===== -->
+<div class="mask" id="fwdEditMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="ui.edit_forward">编辑转发</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="fwdEditId">
+      <input type="hidden" id="fwdEditType">
+      <div class="field">
+        <label data-i18n="form.target_host">目标主机</label>
+        <select id="fwdEditHost" style="width:100%"></select>
+      </div>
+      <div class="field">
+        <label data-i18n="form.target_port">目标端口</label>
+        <input type="number" id="fwdEditPort" min="1" max="65535" style="width:100%" placeholder="如 3306">
+      </div>
+      <div class="field" id="fwdEditTcpField">
+        <label data-i18n="form.local_port_optional">本地端口（可选）</label>
+        <input type="number" id="fwdEditLocalPort" min="0" max="65535" style="width:100%" placeholder="自动分配">
+      </div>
+      <div class="field" id="fwdEditHttpNameField" style="display:none">
+        <label data-i18n="form.proxy_name">名称（可选）</label>
+        <input type="text" id="fwdEditName" style="width:100%" placeholder="如 内部API服务">
+      </div>
+      <div class="field" id="fwdEditHttpPathField" style="display:none">
+        <label data-i18n="form.access_path_optional">访问路径（可选）</label>
+        <input type="text" id="fwdEditPath" style="width:100%" placeholder="如 /api/users">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="fwdEditSaveBtn" data-i18n="ui.save">保存</button>
     </div>
   </div>
 </div>

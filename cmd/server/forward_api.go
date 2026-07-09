@@ -186,3 +186,200 @@ func (s *Server) handleHTTPProxyDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }
+
+// --- TCP Forward Enhanced API ---
+
+// handleForwardToggle enables or disables a TCP forwarding rule.
+// PUT /api/v1/forward/{id}/toggle
+func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	rule, err := s.forward.toggleRule(id, req.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Get sessions count
+	sessions := 0
+	for _, sess := range s.forward.sessions {
+		if sess.ruleID == id {
+			sessions++
+		}
+	}
+	writeJSON(w, http.StatusOK, forwardInfo{
+		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
+		TargetPort: rule.targetPort, LocalPort: rule.localPort,
+		ListenAddr: rule.listenAddr, Status: "active",
+		CreatedAt: rule.createdAt, Operator: rule.operator,
+		Sessions: sessions, Enabled: rule.enabled,
+	})
+}
+
+// handleForwardEdit updates a TCP forwarding rule's target port.
+// PUT /api/v1/forward/{id}
+func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		TargetPort int `json:"target_port"`
+		LocalPort  int `json:"local_port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.TargetPort < 1 || req.TargetPort > 65535 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.invalid_port")})
+		return
+	}
+	rule, err := s.forward.updateRule(id, req.TargetPort, req.LocalPort)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Get sessions count
+	sessions := 0
+	for _, sess := range s.forward.sessions {
+		if sess.ruleID == id {
+			sessions++
+		}
+	}
+	writeJSON(w, http.StatusOK, forwardInfo{
+		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
+		TargetPort: rule.targetPort, LocalPort: rule.localPort,
+		ListenAddr: rule.listenAddr, Status: "active",
+		CreatedAt: rule.createdAt, Operator: rule.operator,
+		Sessions: sessions, Enabled: rule.enabled,
+	})
+}
+
+// handleForwardCopy duplicates a TCP forwarding rule.
+// POST /api/v1/forward/{id}/copy
+func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	newRule, err := s.forward.copyRule(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Start the listener for the new rule
+	go s.serveForwardListener(newRule)
+	// Get sessions count
+	sessions := 0
+	for _, sess := range s.forward.sessions {
+		if sess.ruleID == newRule.id {
+			sessions++
+		}
+	}
+	writeJSON(w, http.StatusOK, forwardInfo{
+		ID: newRule.id, HostID: newRule.hostID, Hostname: newRule.hostname,
+		TargetPort: newRule.targetPort, LocalPort: newRule.localPort,
+		ListenAddr: newRule.listenAddr, Status: "active",
+		CreatedAt: newRule.createdAt, Operator: newRule.operator,
+		Sessions: sessions, Enabled: newRule.enabled,
+	})
+}
+
+// --- HTTP Proxy Enhanced API ---
+
+// handleHTTPProxyToggle enables or disables an HTTP proxy shortcut.
+// PUT /api/v1/http-proxy/{id}/toggle
+func (s *Server) handleHTTPProxyToggle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if err := s.cfg.ToggleHTTPProxy(id, req.Enabled); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Return updated proxy
+	proxies := s.cfg.ListHTTPProxies()
+	for _, p := range proxies {
+		if p.ID == id {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// handleHTTPProxyEdit updates an HTTP proxy shortcut configuration.
+// PUT /api/v1/http-proxy/{id}
+func (s *Server) handleHTTPProxyEdit(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req HTTPProxyConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.HostID == "" || req.TargetPort < 1 || req.TargetPort > 65535 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
+		return
+	}
+	// Lookup hostname
+	for _, h := range s.store.ListHosts() {
+		if h.ID == req.HostID {
+			req.Hostname = h.Hostname
+			break
+		}
+	}
+	if err := s.cfg.UpdateHTTPProxy(id, req); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Return updated proxy
+	proxies := s.cfg.ListHTTPProxies()
+	for _, p := range proxies {
+		if p.ID == id {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// handleHTTPProxyCopy duplicates an HTTP proxy shortcut.
+// POST /api/v1/http-proxy/{id}/copy
+func (s *Server) handleHTTPProxyCopy(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	newProxy, err := s.cfg.CopyHTTPProxy(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, newProxy)
+}

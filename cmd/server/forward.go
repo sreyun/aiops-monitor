@@ -121,6 +121,7 @@ type forwardRule struct {
 	listener   net.Listener
 	operator   string
 	createdAt  int64
+	enabled    bool // whether this rule is currently active
 }
 
 // forwardWaitInfo is what the agent receives from the long-poll.
@@ -142,6 +143,7 @@ type forwardInfo struct {
 	CreatedAt  int64  `json:"created_at"`
 	Operator   string `json:"operator"`
 	Sessions   int    `json:"sessions"`
+	Enabled    bool   `json:"enabled"`
 }
 
 type forwardManager struct {
@@ -341,6 +343,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		targetPort: targetPort, localPort: actualPort,
 		listenAddr: actualAddr,
 		listener: ln, operator: operator, createdAt: time.Now().Unix(),
+		enabled: true,
 	}
 	m.mu.Lock()
 	m.rules[r.id] = r
@@ -377,6 +380,66 @@ func (m *forwardManager) removeRule(id string) bool {
 	return true
 }
 
+// toggleRule enables or disables a forwarding rule.
+// When disabled, the listener is stopped but the rule config is preserved.
+func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error) {
+	m.mu.Lock()
+	r, ok := m.rules[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("rule not found")
+	}
+	if r.enabled == enable {
+		m.mu.Unlock()
+		return r, nil // already in desired state
+	}
+	r.enabled = enable
+	m.mu.Unlock()
+	return r, nil
+}
+
+// updateRule modifies target_port and local_port of an existing rule.
+func (m *forwardManager) updateRule(id string, targetPort, localPort int) (*forwardRule, error) {
+	m.mu.Lock()
+	r, ok := m.rules[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("rule not found")
+	}
+	if targetPort > 0 {
+		r.targetPort = targetPort
+	}
+	if localPort > 0 {
+		r.localPort = localPort
+	}
+	m.mu.Unlock()
+	return r, nil
+}
+
+// copyRule duplicates an existing rule with a new ID.
+func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rules[id]
+	if !ok {
+		return nil, fmt.Errorf("rule not found")
+	}
+	newRule := &forwardRule{
+		id:         termID()[:8],
+		hostID:     r.hostID,
+		hostname:   r.hostname,
+		targetPort: r.targetPort,
+		localPort:  0, // will be auto-assigned
+		listenAddr: "",
+		listener:   nil,
+		operator:   r.operator,
+		createdAt:  time.Now().Unix(),
+		enabled:    true,
+	}
+	m.rules[newRule.id] = newRule
+	return newRule, nil
+}
+
 func (m *forwardManager) listRules() []forwardInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -393,7 +456,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 			TargetPort: r.targetPort, LocalPort: r.localPort,
 			ListenAddr: r.listenAddr, Status: "active",
 			CreatedAt: r.createdAt, Operator: r.operator,
-			Sessions: sessions,
+			Sessions: sessions, Enabled: r.enabled,
 		})
 	}
 	return out

@@ -111,6 +111,7 @@ type HTTPProxyConfig struct {
 	DefaultPath string `json:"default_path"` // Default path prefix (e.g. "/api/v1")
 	Operator    string `json:"operator"`     // Who created this
 	CreatedAt   int64  `json:"created_at"`   // Creation timestamp
+	Enabled     bool   `json:"enabled"`      // Whether this proxy is currently active
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.
@@ -689,4 +690,74 @@ func (cs *ConfigStore) DeleteHTTPProxy(id string) error {
 	cs.cfg.HTTPProxies = kept
 	cs.mu.Unlock()
 	return cs.save()
+}
+
+// ToggleHTTPProxy enables or disables an HTTP proxy configuration.
+func (cs *ConfigStore) ToggleHTTPProxy(id string, enabled bool) error {
+	cs.mu.Lock()
+	found := false
+	for i, p := range cs.cfg.HTTPProxies {
+		if p.ID == id {
+			cs.cfg.HTTPProxies[i].Enabled = enabled
+			found = true
+			break
+		}
+	}
+	cs.mu.Unlock()
+	if !found {
+		return fmt.Errorf("proxy not found")
+	}
+	return cs.save()
+}
+
+// UpdateHTTPProxy updates an existing HTTP proxy configuration.
+func (cs *ConfigStore) UpdateHTTPProxy(id string, updated HTTPProxyConfig) error {
+	cs.mu.Lock()
+	found := false
+	for i, p := range cs.cfg.HTTPProxies {
+		if p.ID == id {
+			// Preserve ID and CreatedAt
+			updated.ID = p.ID
+			updated.CreatedAt = p.CreatedAt
+			// Preserve Enabled if not explicitly set
+			if !updated.Enabled {
+				updated.Enabled = p.Enabled
+			}
+			cs.cfg.HTTPProxies[i] = updated
+			found = true
+			break
+		}
+	}
+	cs.mu.Unlock()
+	if !found {
+		return fmt.Errorf("proxy not found")
+	}
+	return cs.save()
+}
+
+// CopyHTTPProxy duplicates an HTTP proxy configuration with a new ID.
+func (cs *ConfigStore) CopyHTTPProxy(id string) (HTTPProxyConfig, error) {
+	cs.mu.Lock()
+	var original *HTTPProxyConfig
+	for i, p := range cs.cfg.HTTPProxies {
+		if p.ID == id {
+			original = &cs.cfg.HTTPProxies[i]
+			break
+		}
+	}
+	if original == nil {
+		cs.mu.Unlock()
+		return HTTPProxyConfig{}, fmt.Errorf("proxy not found")
+	}
+	// Create a copy with new ID and timestamp
+	newProxy := *original
+	newProxy.ID = termID()[:8]
+	newProxy.CreatedAt = time.Now().Unix()
+	newProxy.Name = original.Name + " (副本)"
+	cs.cfg.HTTPProxies = append(cs.cfg.HTTPProxies, newProxy)
+	cs.mu.Unlock()
+	if err := cs.save(); err != nil {
+		return HTTPProxyConfig{}, err
+	}
+	return newProxy, nil
 }
