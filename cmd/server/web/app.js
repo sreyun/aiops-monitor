@@ -114,10 +114,10 @@ function withLoading(btnId, fn) {
 const fmtRate = b => b < 1024 ? b.toFixed(0) + " " + I18N.t("unit.bps")
   : b < 1048576 ? (b / 1024).toFixed(1) + " " + I18N.t("unit.kbps")
   : (b / 1048576).toFixed(2) + " " + I18N.t("unit.mbps");
-const fmtIORate = b => b < 1024 ? b.toFixed(0) + " B/s"
-  : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
-  : b < 1073741824 ? (b / 1048576).toFixed(1) + " MB/s"
-  : (b / 1073741824).toFixed(2) + " GB/s";
+const fmtIORate = b => b < 1024 ? b.toFixed(0) + " " + I18N.t("unit.bps")
+  : b < 1048576 ? (b / 1024).toFixed(1) + " " + I18N.t("unit.kbps")
+  : b < 1073741824 ? (b / 1048576).toFixed(1) + " " + I18N.t("unit.mbps")
+  : (b / 1073741824).toFixed(2) + " " + I18N.t("unit.gbs");
 const fmtIOPS = v => v < 1000 ? v.toFixed(0) : v < 10000 ? (v / 1000).toFixed(1) + "K" : (v / 1000).toFixed(0) + "K";
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
@@ -616,7 +616,7 @@ function renderTop(hosts) {
     { key: "mem", title: I18N.t("section.mem"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
     { key: "disk", title: I18N.t("section.disk"), unit: "%", fn: diskMax, isPct: true },
     { key: "diskio", title: "磁盘 IO", unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
-    { key: "iops", title: "磁盘 IOPS", unit: "IOPS", fn: iopsTotal, isPct: false },
+    { key: "iops", title: I18N.t("ui.disk_iops_title"), unit: I18N.t("unit.iops"), fn: iopsTotal, isPct: false },
     { key: "net", title: I18N.t("section.net"), unit: I18N.t("unit.mbps"), fn: netTotal, isPct: false },
     { key: "load", title: I18N.t("section.load"), unit: "", fn: m => m.load5 || 0, isPct: false },
     { key: "proc", title: "进程数", unit: "", fn: m => m.proc_count || 0, isPct: false },
@@ -635,7 +635,7 @@ function renderTop(hosts) {
       let disp;
       if (panel.isPct) disp = v.toFixed(1) + "%";
       else if (panel.key === "net") disp = fmtRate(v);
-      else if (panel.key === "iops") disp = fmtIOPS(v) + " IOPS";
+      else if (panel.key === "iops") disp = fmtIOPS(v) + " " + I18N.t("unit.iops");
       else if (panel.key === "load") disp = v.toFixed(2);
       else if (panel.key === "proc") disp = v.toFixed(0);
       else disp = v.toFixed(1);
@@ -670,7 +670,7 @@ function checkTopPanels() {
   const checks = (Array.isArray(LAST_CHECKS) ? LAST_CHECKS : []).filter(c => !c.builtin);
   if (!checks.length) return "";
   const byType = t => checks.filter(c => c.type === t);
-  const panels = checkTopPanel("Ping TOP10（RTT）", byType("ping"), false)
+  const panels = checkTopPanel(I18N.t("section.ping_top10"), byType("ping"), false)
     + checkTopPanel(I18N.t("section.tcp_top10"), byType("tcp"), false)
     + checkTopPanel(I18N.t("section.http_top10"), byType("http"), false)
     + checkTopPanel(I18N.t("section.process_top10"), byType("process"), true);
@@ -695,7 +695,7 @@ function checkTopPanel(title, list, isProc) {
     else if (unknown) { val = I18N.t("ui.pending"); color = "var(--muted2)"; width = 0; }
     else {
       const lat = Math.round(c.latency_ms || 0);
-      val = lat + " ms"; color = lat >= 1000 ? "var(--crit)" : lat >= 300 ? "var(--warn)" : "var(--ok)";
+      val = lat + " " + I18N.t("unit.ms"); color = lat >= 1000 ? "var(--crit)" : lat >= 300 ? "var(--warn)" : "var(--ok)";
       width = Math.min(100, (c.latency_ms || 0) / maxLat * 100);
     }
     return `<div class="checks-item" data-check-id="${esc(c.id)}" data-check-name="${esc(c.name)}" data-check-type="${esc(c.type)}" title="${I18N.t("section.click_history")}">
@@ -790,7 +790,7 @@ function setLogPageSize(v) {
 function hostCard(h) {
   const m = h.latest || {};
   const swap = (m.swap_total || 0) > 0
-    ? bar("SWAP", m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + "G")
+    ? bar(I18N.t("section.swap"), m.swap_percent || 0, (m.swap_percent || 0).toFixed(1) + "% · " + fmtGB(m.swap_used || 0) + "/" + fmtGB(m.swap_total || 0) + "G")
     : "";
   const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
   const disksHtml = disks.length
@@ -846,15 +846,15 @@ function hostCard(h) {
     ${disksHtml}
     ${gpusHtml}
     <div class="loadline" title="${loadTitle}">
-      <div class="load-cell"><div class="lv mono">${(m.load1 || 0).toFixed(2)}</div><div class="lk">1 min</div></div>
-      <div class="load-cell"><div class="lv mono">${(m.load5 || 0).toFixed(2)}</div><div class="lk">5 min</div></div>
-      <div class="load-cell"><div class="lv mono">${(m.load15 || 0).toFixed(2)}</div><div class="lk">15 min</div></div>
+      <div class="load-cell"><div class="lv mono">${(m.load1 || 0).toFixed(2)}</div><div class="lk">${I18N.t("section.load_1m")}</div></div>
+      <div class="load-cell"><div class="lv mono">${(m.load5 || 0).toFixed(2)}</div><div class="lk">${I18N.t("section.load_5m")}</div></div>
+      <div class="load-cell"><div class="lv mono">${(m.load15 || 0).toFixed(2)}</div><div class="lk">${I18N.t("section.load_15m")}</div></div>
     </div>
     ${chips}
     <div class="foot">
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
-      <span class="g">💾<span class="mono">R ${fmtIORate(m.disk_read_rate || 0)}</span> <span class="mono">W ${fmtIORate(m.disk_write_rate || 0)}</span></span>
-      <span class="g">💿<span class="mono">${fmtIOPS((m.disk_read_iops || 0) + (m.disk_write_iops || 0))} IOPS</span></span>
+      <span class="g">💾<span class="mono">${I18N.t("ui.disk_read")} ${fmtIORate(m.disk_read_rate || 0)}</span> <span class="mono">${I18N.t("ui.disk_write")} ${fmtIORate(m.disk_write_rate || 0)}</span></span>
+      <span class="g">💿<span class="mono">${fmtIOPS((m.disk_read_iops || 0) + (m.disk_write_iops || 0))} ${I18N.t("unit.iops")}</span></span>
       <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
       <span class="g">📊<span class="mono">${m.proc_count || 0}</span> 进程</span>
       ${lastCell}
@@ -1112,9 +1112,9 @@ async function loadAndRenderCharts() {
 
     // 系统负载组合曲线：load1 / load5 / load15 三条折线同一坐标系
     DETAIL_CHARTS.chartLoad = createChart('chartLoad', samples, [
-      { key: 'load1', label: 'Load 1m', color: '#4c8dff', fmt: v => v.toFixed(1) },
-      { key: 'load5', label: 'Load 5m', color: '#f7b23b', fmt: v => v.toFixed(1) },
-      { key: 'load15', label: 'Load 15m', color: '#f2545b', fmt: v => v.toFixed(1) },
+      { key: 'load1', label: I18N.t("section.load_1m_label"), color: '#4c8dff', fmt: v => v.toFixed(1) },
+      { key: 'load5', label: I18N.t("section.load_5m_label"), color: '#f7b23b', fmt: v => v.toFixed(1) },
+      { key: 'load15', label: I18N.t("section.load_15m_label"), color: '#f2545b', fmt: v => v.toFixed(1) },
     ], null, null, { title: I18N.t("section.load_avg") });
 
     // 磁盘：每个分区一条线。以「磁盘数最多」的样本为准，避免首个样本缺盘时丢失分区曲线
@@ -1135,7 +1135,7 @@ async function loadAndRenderCharts() {
       const gpuNames = [];
       samples.forEach(s => (s.gpus || []).forEach((g, i) => { if (!gpuNames[i]) gpuNames[i] = g.name || ('GPU' + i); }));
       const gpuSeries = gpuNames.map((nm, idx) => ({
-        key: `gpu_${idx}`, label: 'GPU ' + nm,
+        key: `gpu_${idx}`, label: nm,
         color: ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b'][idx % 4], fmt: v => v.toFixed(0) + '%',
         transform: (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g.util_percent || 0) : null; }
       }));
@@ -1148,14 +1148,14 @@ async function loadAndRenderCharts() {
     ], null, null, { title: I18N.t("section.net_throughput") });
 
     DETAIL_CHARTS.chartDiskIO = createChart('chartDiskIO', samples, [
-      { key: 'disk_read_rate', label: I18N.t("ui.disk_read") || '磁盘读', color: '#2fd07a', fmt: fmtIORate },
-      { key: 'disk_write_rate', label: I18N.t("ui.disk_write") || '磁盘写', color: '#f7b23b', fmt: fmtIORate },
-    ], null, null, { title: I18N.t("ui.disk_io") || '磁盘 IO 吞吐' });
+      { key: 'disk_read_rate', label: I18N.t("ui.disk_read"), color: '#2fd07a', fmt: fmtIORate },
+      { key: 'disk_write_rate', label: I18N.t("ui.disk_write"), color: '#f7b23b', fmt: fmtIORate },
+    ], null, null, { title: I18N.t("ui.disk_io") });
 
     DETAIL_CHARTS.chartIOPS = createChart('chartIOPS', samples, [
-      { key: 'disk_read_iops', label: '读 IOPS', color: '#2fd07a', fmt: fmtIOPS },
-      { key: 'disk_write_iops', label: '写 IOPS', color: '#f7b23b', fmt: fmtIOPS },
-    ], null, null, { title: '磁盘 IOPS' });
+      { key: 'disk_read_iops', label: I18N.t("ui.disk_read_iops"), color: '#2fd07a', fmt: fmtIOPS },
+      { key: 'disk_write_iops', label: I18N.t("ui.disk_write_iops"), color: '#f7b23b', fmt: fmtIOPS },
+    ], null, null, { title: I18N.t("ui.disk_iops_title") });
 
     DETAIL_CHARTS.chartProc = createChart('chartProc', samples, [
       { key: 'proc_count', label: '进程数', color: '#8b5cf6', fmt: v => v.toFixed(0) },
@@ -3310,11 +3310,11 @@ async function loadCheckHistory() {
       `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
       <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
-      <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ms · 悬停查看数值，拖动框选放大，双击还原。</div>`;
+      <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ${I18N.t("unit.ms")} · 悬停查看数值，拖动框选放大，双击还原。</div>`;
     CHK_CHARTS = {};
     CHK_CHARTS.chkLat = createChart("chkLat", samples, [
-      { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
-    ], 0, null, { title: name + " · 延时(ms)" });
+      { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
+    ], 0, null, { title: name + " · " + I18N.t("form.latency") + "(" + I18N.t("unit.ms") + ")" });
     if (isPing) {
       CHK_CHARTS.chkLoss = createChart("chkLoss", samples, [
         { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
