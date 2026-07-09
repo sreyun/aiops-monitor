@@ -147,20 +147,22 @@ type forwardInfo struct {
 }
 
 type forwardManager struct {
-	mu       sync.Mutex
-	rules    map[string]*forwardRule
-	sessions map[string]*forwardSession
-	waiters  map[string]chan forwardWaitInfo // hostID -> a waiting agent poll
-	stats    forwardStats                     // P3: aggregate metrics
-	cfg      *ConfigStore                     // config reference for port range
+	mu              sync.Mutex
+	rules           map[string]*forwardRule
+	sessions        map[string]*forwardSession
+	waiters         map[string]chan forwardWaitInfo // hostID -> a waiting agent poll
+	pendingSessions map[string][]forwardWaitInfo    // v5.2.5: queued for agents between polls
+	stats           forwardStats                    // P3: aggregate metrics
+	cfg             *ConfigStore                    // config reference for port range
 }
 
 func newForwardManager(cfg *ConfigStore) *forwardManager {
 	fm := &forwardManager{
-		rules:    map[string]*forwardRule{},
-		sessions: map[string]*forwardSession{},
-		waiters:  map[string]chan forwardWaitInfo{},
-		cfg:      cfg,
+		rules:           map[string]*forwardRule{},
+		sessions:        map[string]*forwardSession{},
+		waiters:         map[string]chan forwardWaitInfo{},
+		pendingSessions: map[string][]forwardWaitInfo{},
+		cfg:             cfg,
 	}
 	go fm.idleChecker()
 	return fm
@@ -377,20 +379,30 @@ func (m *forwardManager) removeSession(id string) {
 }
 
 // notifyAgent hands a new forward session to the agent currently long-polling
-// for hostID; returns false if none is waiting.
+// for hostID. If no active waiter exists, the notification is queued in
+// pendingSessions so the agent can pick it up on its next poll cycle —
+// eliminating the race where the agent is between polls and the notification
+// is silently dropped (causing 502).
 func (m *forwardManager) notifyAgent(hostID string, info forwardWaitInfo) bool {
 	m.mu.Lock()
 	w := m.waiters[hostID]
 	delete(m.waiters, hostID)
-	m.mu.Unlock()
 	if w == nil {
-		return false
+		// No active waiter — queue for next poll (same pattern as termManager)
+		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], info)
+		m.mu.Unlock()
+		return true
 	}
+	m.mu.Unlock()
 	select {
 	case w <- info:
 		return true
 	default:
-		return false
+		// Waiter channel full — queue instead of dropping
+		m.mu.Lock()
+		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], info)
+		m.mu.Unlock()
+		return true
 	}
 }
 
@@ -884,9 +896,9 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// open, causing the agent's tx goroutine (which reads from the conn as a POST
 	// body) to hang indefinitely waiting for EOF.
 	fmt.Fprintf(&reqBuf, "Connection: close\r\n")
-	// P2: copy all headers EXCEPT hop-by-hop (blacklist approach, more complete than whitelist)
+	// P2: copy all headers EXCEPT hop-by-hop and Host (v5.2.5: skip Host to avoid duplicate)
 	for k, vs := range r.Header {
-		if hopByHopHeaders[k] {
+		if hopByHopHeaders[k] || strings.EqualFold(k, "Host") {
 			continue
 		}
 		for _, v := range vs {
@@ -897,13 +909,20 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&reqBuf, "X-Forwarded-For: %s\r\n", s.clientIP(r))
 	fmt.Fprintf(&reqBuf, "X-Forwarded-Proto: %s\r\n", schemeOf(r))
 	fmt.Fprintf(&reqBuf, "X-Real-IP: %s\r\n", s.clientIP(r))
-	reqBuf.WriteString("\r\n")
 	// P0: copy request body with size limit (prevent OOM)
+	var bodyLen int64
 	if r.Body != nil {
 		limitedBody := io.LimitReader(r.Body, maxForwardBodySize)
-		n, _ := io.Copy(&reqBuf, limitedBody)
-		s.forward.stats.addBytes(n)
+		bodyLen, _ = io.Copy(&reqBuf, limitedBody)
+		s.forward.stats.addBytes(bodyLen)
 	}
+	// v5.2.5: add Content-Length so the target knows exact body size
+	// (Transfer-Encoding: chunked was stripped as hop-by-hop, so without
+	// Content-Length the target can't determine where the body ends)
+	if bodyLen > 0 {
+		fmt.Fprintf(&reqBuf, "Content-Length: %d\r\n", bodyLen)
+	}
+	reqBuf.WriteString("\r\n")
 
 	// send the request through the tunnel in chunks.
 	// If the Agent closed the session (e.g. because it failed to connect to the
@@ -1196,6 +1215,25 @@ func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.host_required")})
 		return
 	}
+	// v5.2.5: Check pending sessions first (same pattern as terminal)
+	s.forward.mu.Lock()
+	if pending := s.forward.pendingSessions[host]; len(pending) > 0 {
+		info := pending[0]
+		if len(pending) == 1 {
+			delete(s.forward.pendingSessions, host)
+		} else {
+			s.forward.pendingSessions[host] = pending[1:]
+		}
+		s.forward.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session":     info.sessionID,
+			"target_port": info.targetPort,
+			"mode":        info.mode,
+		})
+		return
+	}
+	s.forward.mu.Unlock()
+	// No pending — register waiter for long-poll
 	ch := s.forward.registerWaiter(host)
 	defer s.forward.unregisterWaiter(host, ch)
 	select {
@@ -1239,7 +1277,21 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 				flusher.Flush()
 			}
 		case <-sess.done:
-			return
+			// v5.2.5: drain remaining frames from toAgent after session close
+			// to prevent data loss from select race (same pattern as rawForwardReader)
+			for {
+				select {
+				case b := <-sess.toAgent:
+					if _, err := w.Write(b); err != nil {
+						return
+					}
+					if flusher != nil {
+						flusher.Flush()
+					}
+				default:
+					return
+				}
+			}
 		case <-r.Context().Done():
 			sess.closeWith(Tz("log.forward_reason_agent_down"))
 			return
@@ -1260,12 +1312,6 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.markAgentUp()
-	// 当 Agent 完成响应回传（目标关闭连接 → r.Body 读到 EOF → 本函数返回）
-	// 时，关闭 session，向「用户侧」发出流结束信号。
-	// 这解决了此前 io.Pipe 竞态导致的 "unexpected EOF"，也让新的
-	// rawForwardReader（io.ReadAll 模式）能可靠地拿到 EOF 而正常结束，
-	// 不会陷入「要等 handler 返回才关 sess.done，而 handler 又在等 ReadAll
-	// 返回」的死锁。sess.close() 由 doneOnce 保护，幂等安全。
 	defer sess.close()
 	buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 	for {
@@ -1277,6 +1323,17 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 			select {
 			case sess.toUser <- b:
 			case <-sess.done:
+				// v5.2.5: drain remaining body data to toUser after session close
+				// to prevent last-frame loss from select race
+				if n2, _ := r.Body.Read(buf); n2 > 0 {
+					b2 := make([]byte, n2)
+					copy(b2, buf[:n2])
+					s.forward.stats.addBytes(int64(n2))
+					select {
+					case sess.toUser <- b2:
+					default:
+					}
+				}
 				return
 			}
 		}
