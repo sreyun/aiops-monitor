@@ -33,7 +33,7 @@ type linuxCollector struct {
 	primed   bool
 }
 
-type diskIOTotals struct{ readBytes, writeBytes uint64 }
+type diskIOTotals struct{ readBytes, writeBytes, readIOs, writeIOs uint64 }
 
 func newCollector(diskPath string) Collector {
 	if diskPath == "" {
@@ -105,6 +105,9 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 			if elapsed := now.Sub(c.prevDiskIOT).Seconds(); elapsed > 0 {
 				m.DiskReadRate = round1(rate(dio.readBytes, c.prevDiskIO.readBytes, elapsed))
 				m.DiskWriteRate = round1(rate(dio.writeBytes, c.prevDiskIO.writeBytes, elapsed))
+				// IOPS: read/write operations per second
+				m.DiskReadIOPS = round1(rate(dio.readIOs, c.prevDiskIO.readIOs, elapsed))
+				m.DiskWriteIOPS = round1(rate(dio.writeIOs, c.prevDiskIO.writeIOs, elapsed))
 				// IO util: rough estimate based on total bytes throughput vs typical disk bandwidth
 				totalRate := m.DiskReadRate + m.DiskWriteRate
 				m.DiskIOUtilPercent = round1(totalRate / 200e6 * 100) // 200 MB/s as reference max
@@ -461,10 +464,15 @@ func readDiskIO() (diskIOTotals, error) {
 		}
 		// Field indices (Linux kernel Documentation/iostats.txt):
 		//   5 = sectors read, 9 = sectors written
+		//   7 = read IOs completed, 11 = write IOs completed
 		rdSec, _ := strconv.ParseUint(fields[5], 10, 64)
 		wrSec, _ := strconv.ParseUint(fields[9], 10, 64)
+		rdIO, _ := strconv.ParseUint(fields[7], 10, 64)
+		wrIO, _ := strconv.ParseUint(fields[11], 10, 64)
 		dio.readBytes += rdSec * 512
 		dio.writeBytes += wrSec * 512
+		dio.readIOs += rdIO
+		dio.writeIOs += wrIO
 	}
 	return dio, nil
 }

@@ -36,6 +36,9 @@ type Metrics struct {
 	DiskReadRate     float64 `json:"disk_read_rate"`
 	DiskWriteRate    float64 `json:"disk_write_rate"`
 	DiskIOUtilPercent float64 `json:"disk_io_util_percent"`
+	// Disk IOPS: read/write operations per second
+	DiskReadIOPS  float64 `json:"disk_read_iops"`
+	DiskWriteIOPS float64 `json:"disk_write_iops"`
 }
 
 // GPUInfo is per-GPU usage. Collection is best-effort and vendor-dependent:

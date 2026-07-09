@@ -118,6 +118,7 @@ const fmtIORate = b => b < 1024 ? b.toFixed(0) + " B/s"
   : b < 1048576 ? (b / 1024).toFixed(1) + " KB/s"
   : b < 1073741824 ? (b / 1048576).toFixed(1) + " MB/s"
   : (b / 1073741824).toFixed(2) + " GB/s";
+const fmtIOPS = v => v < 1000 ? v.toFixed(0) : v < 10000 ? (v / 1000).toFixed(1) + "K" : (v / 1000).toFixed(0) + "K";
 const fmtGB = b => (b / 1073741824).toFixed(1);
 const fmtUptime = s => {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
@@ -606,6 +607,7 @@ function renderTop(hosts) {
   const diskMax = m => { const d = m.disks || []; return d.length ? Math.max(...d.map(x => x.percent)) : (m.disk_percent || 0); };
   const gpuMax = m => { const g = m.gpus || []; return g.length ? Math.max(...g.map(x => x.util_percent || 0)) : 0; };
   const netTotal = m => (m.net_sent_rate || 0) + (m.net_recv_rate || 0);
+  const iopsTotal = m => (m.disk_read_iops || 0) + (m.disk_write_iops || 0);
 
   // 面板定义：[key, title, unit, valueFn, isPct, displayFn]
   const panels = [
@@ -614,8 +616,10 @@ function renderTop(hosts) {
     { key: "mem", title: I18N.t("section.mem"), unit: "%", fn: m => m.mem_percent || 0, isPct: true },
     { key: "disk", title: I18N.t("section.disk"), unit: "%", fn: diskMax, isPct: true },
     { key: "diskio", title: "磁盘 IO", unit: "%", fn: m => m.disk_io_util_percent || 0, isPct: true },
+    { key: "iops", title: "磁盘 IOPS", unit: "IOPS", fn: iopsTotal, isPct: false },
     { key: "net", title: I18N.t("section.net"), unit: I18N.t("unit.mbps"), fn: netTotal, isPct: false },
     { key: "load", title: I18N.t("section.load"), unit: "", fn: m => m.load5 || 0, isPct: false },
+    { key: "proc", title: "进程数", unit: "", fn: m => m.proc_count || 0, isPct: false },
   ];
 
   const topN = (arr, fn, n) => arr.slice().sort((a, b) => fn(b.latest) - fn(a.latest)).slice(0, n);
@@ -631,7 +635,9 @@ function renderTop(hosts) {
       let disp;
       if (panel.isPct) disp = v.toFixed(1) + "%";
       else if (panel.key === "net") disp = fmtRate(v);
+      else if (panel.key === "iops") disp = fmtIOPS(v) + " IOPS";
       else if (panel.key === "load") disp = v.toFixed(2);
+      else if (panel.key === "proc") disp = v.toFixed(0);
       else disp = v.toFixed(1);
       return `<div class="top-item" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" title="${esc(h.hostname || h.id)} · ${esc(disp)}">
         <span class="top-name">${esc(h.hostname || h.id)}</span>
@@ -848,8 +854,9 @@ function hostCard(h) {
     <div class="foot">
       <span class="g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
       <span class="g">💾<span class="mono">R ${fmtIORate(m.disk_read_rate || 0)}</span> <span class="mono">W ${fmtIORate(m.disk_write_rate || 0)}</span></span>
+      <span class="g">💿<span class="mono">${fmtIOPS((m.disk_read_iops || 0) + (m.disk_write_iops || 0))} IOPS</span></span>
       <span class="g">🔗<span class="mono">${m.net_conns || 0}</span> 连接</span>
-      <span class="g">${I18N.t("ui.process")} <span class="mono">${m.proc_count || 0}</span></span>
+      <span class="g">📊<span class="mono">${m.proc_count || 0}</span> 进程</span>
       ${lastCell}
     </div>
   </div>`;
@@ -1093,7 +1100,7 @@ async function loadAndRenderCharts() {
         ${renderChartControls(DETAIL_TIME_RANGE, "range")}
       </div>
       <div class="chart-container">
-        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}${wrap('chartDiskIO')}
+        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
       </div>
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
@@ -1144,6 +1151,15 @@ async function loadAndRenderCharts() {
       { key: 'disk_read_rate', label: I18N.t("ui.disk_read") || '磁盘读', color: '#2fd07a', fmt: fmtIORate },
       { key: 'disk_write_rate', label: I18N.t("ui.disk_write") || '磁盘写', color: '#f7b23b', fmt: fmtIORate },
     ], null, null, { title: I18N.t("ui.disk_io") || '磁盘 IO 吞吐' });
+
+    DETAIL_CHARTS.chartIOPS = createChart('chartIOPS', samples, [
+      { key: 'disk_read_iops', label: '读 IOPS', color: '#2fd07a', fmt: fmtIOPS },
+      { key: 'disk_write_iops', label: '写 IOPS', color: '#f7b23b', fmt: fmtIOPS },
+    ], null, null, { title: '磁盘 IOPS' });
+
+    DETAIL_CHARTS.chartProc = createChart('chartProc', samples, [
+      { key: 'proc_count', label: '进程数', color: '#8b5cf6', fmt: v => v.toFixed(0) },
+    ], null, null, { title: '进程数趋势' });
 
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;

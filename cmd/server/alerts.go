@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -15,6 +16,8 @@ type Thresholds struct {
 	MemWarn, MemCrit   float64
 	DiskWarn, DiskCrit float64
 	DiskIOWarn, DiskIOCrit float64
+	IOPSWarn, IOPSCrit float64
+	ProcWarn           float64 // 进程数突增/突降比例阈值
 	OfflineAfter       time.Duration
 }
 
@@ -24,6 +27,8 @@ func DefaultThresholds() Thresholds {
 		MemWarn: 80, MemCrit: 90,
 		DiskWarn: 85, DiskCrit: 95,
 		DiskIOWarn: 80, DiskIOCrit: 90,
+		IOPSWarn: 10000, IOPSCrit: 20000,
+		ProcWarn: 0.5,
 		OfflineAfter: 30 * time.Second,
 	}
 }
@@ -34,7 +39,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | diskio | offline | check | load | gpu
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -147,6 +152,37 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 						fmtRateBytes(m.DiskReadRate), fmtRateBytes(m.DiskWriteRate)),
 					Value:     m.DiskIOUtilPercent, Timestamp: now,
 				})
+			}
+		}
+		// IOPS alert (>10000 warning, >20000 critical)
+		totalIOPS := m.DiskReadIOPS + m.DiskWriteIOPS
+		if totalIOPS > 0 {
+			if lv := classify(totalIOPS, t.IOPSWarn, t.IOPSCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "iops",
+					Message: Tz("alert.iops_high", totalIOPS, m.DiskReadIOPS, m.DiskWriteIOPS),
+					Value:     totalIOPS, Timestamp: now,
+				})
+			}
+		}
+		// Process count anomaly: compare current proc count vs 1h baseline
+		if m.ProcCount > 0 && t.ProcWarn > 0 && len(h.hist1m) > 0 {
+			var sumProc float64
+			for _, s := range h.hist1m {
+				sumProc += float64(s.ProcCount)
+			}
+			baseline := sumProc / float64(len(h.hist1m))
+			if baseline > 0 {
+				change := math.Abs(float64(m.ProcCount)-baseline) / baseline
+				if change >= t.ProcWarn {
+					dir := "increase"
+					if float64(m.ProcCount) < baseline { dir = "decrease" }
+					alerts = append(alerts, Alert{
+						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: "warning", Type: "proc",
+						Message: Tz("alert.proc_anomaly", m.ProcCount, baseline, change*100, dir),
+						Value:     change * 100, Timestamp: now,
+					})
+				}
 			}
 		}
 	}
