@@ -134,10 +134,25 @@ func (cb *circuitBreaker) failure() {
 	}
 }
 
-// isOpen returns true when the breaker is tripped (for logging).
+// isOpen returns true when the breaker is tripped AND still in cooldown.
+//
+// v5.2.8: CRITICAL FIX — previously isOpen() returned true whenever state==cbOpen,
+// regardless of whether the cooldown had elapsed. The main report loop checks
+// isOpen() BEFORE allow(), and does `continue` (skipping the goroutine that
+// calls allow()). This meant allow() — the only method that transitions
+// cbOpen→cbHalfOpen — was never called, so the breaker stayed open FOREVER
+// after a server restart. Agents would never recover.
+//
+// Now: isOpen() returns false once the cooldown expires, allowing the goroutine
+// to be created, where allow() handles the half-open transition.
 func (cb *circuitBreaker) isOpen() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	if cb.state == cbOpen && time.Since(cb.lastFailureTime) > cb.cooldown {
+		// Cooldown expired — don't skip this target. The goroutine's allow()
+		// call will transition to cbHalfOpen and permit a trial request.
+		return false
+	}
 	return cb.state == cbOpen
 }
 

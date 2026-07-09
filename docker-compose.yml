@@ -21,6 +21,7 @@ services:
       dockerfile: docker/Dockerfile
       target: server
     container_name: aiops-server
+    stop_grace_timeout: 30s  # v5.2.8: allow DB flush on shutdown (default 10s too short)
     ports:
       - "8529:8529"
       # TCP 端口转发监听范围（默认 10000-10099，共 100 个端口）
