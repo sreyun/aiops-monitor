@@ -978,7 +978,22 @@ async function editCategory(id, cur) {
 
 /* ---------- 主机趋势弹窗 ---------- */
 let DETAIL_HOST_ID = '';
-let DETAIL_TIME_RANGE = 24; // hours: 24, 48, 72
+let DETAIL_TIME_RANGE = 24; // hours: 1, 24, 48, 168, 720
+
+// 统一的时间跨度控件渲染函数（主机图表和监控图表共用）
+const CHART_SPANS = [
+  [1, "time.1h"],
+  [24, "time.24h"],
+  [48, "48h"],
+  [168, "7d"],
+  [720, "time.30d"],
+];
+function renderChartControls(currentRange, prefix) {
+  return CHART_SPANS.map(([h, key]) => {
+    const lab = key === "48h" ? "48" + I18N.t("time.hour") : key === "7d" ? "7" + I18N.t("time.day") : I18N.t(key);
+    return `<button class="chip-btn ${currentRange === h ? "active" : ""}" data-${prefix}="${h}">${lab}</button>`;
+  }).join("");
+}
 async function openDetail(id, name) {
   DETAIL_HOST_ID = id;
   DETAIL_TIME_RANGE = 24;
@@ -1006,17 +1021,14 @@ async function loadAndRenderCharts() {
     const gran = DETAIL_TIME_RANGE <= 2 ? I18N.t("time.raw") : DETAIL_TIME_RANGE <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
     const pct = v => v.toFixed(1) + '%';
-    const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="230"></canvas>` +
+    const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${id}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `
       <div class="chart-controls">
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 1 ? 'active' : ''}" data-range="1">${I18N.t("time.1h")}</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 24 ? 'active' : ''}" data-range="24">${I18N.t("time.24h")}</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 48 ? 'active' : ''}" data-range="48">48${I18N.t("time.hour")}</button>
-        <button class="chip-btn ${DETAIL_TIME_RANGE === 168 ? 'active' : ''}" data-range="168">7${I18N.t("time.day")}</button>
+        ${renderChartControls(DETAIL_TIME_RANGE, "range")}
       </div>
       <div class="chart-container">
-        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
+        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}
       </div>
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
@@ -1025,6 +1037,13 @@ async function loadAndRenderCharts() {
       [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, { title: I18N.t("section.cpu_usage") });
     DETAIL_CHARTS.chartMem = createChart('chartMem', samples,
       [{ key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct }], 0, 100, { title: I18N.t("section.mem_usage") });
+
+    // 系统负载组合曲线：load1 / load5 / load15 三条折线同一坐标系
+    DETAIL_CHARTS.chartLoad = createChart('chartLoad', samples, [
+      { key: 'load1', label: 'Load 1m', color: '#4c8dff', fmt: v => v.toFixed(1) },
+      { key: 'load5', label: 'Load 5m', color: '#f7b23b', fmt: v => v.toFixed(1) },
+      { key: 'load15', label: 'Load 15m', color: '#f2545b', fmt: v => v.toFixed(1) },
+    ], null, null, { title: I18N.t("section.load_avg") });
 
     // 磁盘：每个分区一条线。以「磁盘数最多」的样本为准，避免首个样本缺盘时丢失分区曲线
     let diskProto = [];
@@ -1115,9 +1134,9 @@ function drawChart(state) {
   const n = vis.length;
   ctx.clearRect(0, 0, w, h);
 
-  // P2-3: 使用 CSS 变量适配深色/浅色主题
+  // 使用 CSS 变量适配深色/浅色主题
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const gridColor = cssVar("--line2") || "rgba(43,53,71,.7)";
+  const gridColor = cssVar("--line2") || "rgba(43,53,71,.5)";
   const labelColor = cssVar("--muted") || "#8a95a8";
   const txtColor = cssVar("--txt") || "#e8eef6";
   const bgColor = cssVar("--bg") || "#0a0d13";
@@ -1131,8 +1150,9 @@ function drawChart(state) {
   }));
   if (dMin === Infinity) dMin = 0;
   if (dMax === -Infinity) dMax = state.yMax !== null ? state.yMax : 100;
-  if (state.yMin === null) dMin = Math.max(0, dMin * 0.9);
-  if (state.yMax === null) dMax = dMax * 1.1 || 1;
+  // 自动范围：对 auto-range 做 8% padding（比原来的 10% 更紧凑）
+  if (state.yMin === null) dMin = Math.max(0, dMin * 0.92);
+  if (state.yMax === null) dMax = dMax * 1.08 || 1;
   if (dMax <= dMin) dMax = dMin + 1;
   const yRange = dMax - dMin;
   state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
@@ -1140,69 +1160,107 @@ function drawChart(state) {
   const xAt = i => pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
   const yAt = v => pad.top + ch - ((v - dMin) / yRange) * ch;
 
-  // grid + y labels
+  // 网格 + Y 轴标签（5 条水平线）
   ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
-  ctx.font = "11px monospace"; ctx.textAlign = "right";
+  ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"; ctx.textAlign = "right";
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + (ch / 4) * i;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
     const val = dMax - (yRange / 4) * i;
     ctx.fillStyle = labelColor;
-    ctx.fillText(series[0].fmt ? series[0].fmt(val) : val.toFixed(1), pad.left - 8, y + 4);
+    // 使用第一个 series 的 fmt 格式化 Y 轴标签，确保网络图正确显示速率单位
+    const fmt = series[0].fmt;
+    const label = fmt ? fmt(val) : val.toFixed(1);
+    ctx.fillText(label, pad.left - 8, y + 4);
   }
-  // x time labels
+
+  // X 轴时间标签
   if (n >= 1) {
     const firstTs = vis[0].timestamp, span = vis[n - 1].timestamp - firstTs;
-    ctx.textAlign = "center"; ctx.fillStyle = labelColor;
+    ctx.textAlign = "center"; ctx.fillStyle = labelColor; ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
     for (let i = 0; i <= 4; i++) {
       const x = pad.left + (cw / 4) * i;
       const d = new Date((firstTs + (span / 4) * i) * 1000);
       const lab = span > 172800
         ? `${d.getMonth() + 1}/${d.getDate()}`
         : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      ctx.fillText(lab, x, h - 9);
+      ctx.fillText(lab, x, h - 8);
     }
   }
-  // series lines + area + legend
+
+  // 系列折线 + 渐变填充区域
   series.forEach((s, sIdx) => {
     const pts = [];
     vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
     if (pts.length >= 2) {
-      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+      // 折线路径
+      ctx.save();
+      ctx.strokeStyle = s.color; ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
       ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
-      // P2-3: 渐变填充替代固定透明度
+      ctx.restore();
+
+      // 半透明渐变填充区域（提升视觉层次）
       const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-      grad.addColorStop(0, s.color + "22");
-      grad.addColorStop(1, s.color + "05");
+      grad.addColorStop(0, s.color + "28");
+      grad.addColorStop(0.6, s.color + "0A");
+      grad.addColorStop(1, s.color + "02");
       ctx.fillStyle = grad;
       ctx.beginPath(); ctx.moveTo(pts[0].x, pad.top + ch);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
       ctx.lineTo(pts[pts.length - 1].x, pad.top + ch); ctx.closePath(); ctx.fill();
     }
+  });
+
+  // 图例：水平排列在图表右上角区域，允许换行
+  const legendY = pad.top + 4;
+  let legendX = pad.left + 8;
+  const legendSpacing = 14; // 条目间距
+  const legendItemWidth = 160; // 每个图例条目预估宽度
+  series.forEach((s, sIdx) => {
+    const pts = [];
+    vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
     const vals = pts.map(p => p.val);
     const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
     const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
-    const ly = pad.top + 6 + sIdx * 17;
-    ctx.fillStyle = s.color; ctx.fillRect(pad.left + 8, ly, 10, 10);
-    ctx.fillStyle = txtColor; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
-    ctx.fillText(`${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`, pad.left + 24, ly + 9);
+
+    // 换行检查：如果当前行放不下，换到下一行
+    if (legendX + legendItemWidth > w - pad.right && sIdx > 0) {
+      legendX = pad.left + 8;
+    }
+
+    ctx.fillStyle = s.color; ctx.fillRect(legendX, legendY, 9, 9);
+    ctx.fillStyle = txtColor; ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "left";
+    const labelText = `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
+    ctx.fillText(labelText, legendX + 13, legendY + 9);
+    legendX += ctx.measureText(labelText).width + 28;
+
+    // 下一行图例 Y 偏移
+    if (legendX + legendItemWidth > w - pad.right) {
+      legendX = pad.left + 8;
+    }
   });
 
-  // selection rectangle (during box-select drag)
+  // 框选矩形
   if (state.drag && state.moved && state.downX !== null && state.curX !== null) {
     const x0 = Math.min(state.downX, state.curX), x1 = Math.max(state.downX, state.curX);
-    ctx.fillStyle = "rgba(76,141,255,.16)"; ctx.fillRect(x0, pad.top, x1 - x0, ch);
-    ctx.strokeStyle = "rgba(76,141,255,.6)"; ctx.lineWidth = 1; ctx.strokeRect(x0, pad.top, x1 - x0, ch);
+    ctx.fillStyle = "rgba(76,141,255,.12)"; ctx.fillRect(x0, pad.top, x1 - x0, ch);
+    ctx.strokeStyle = "rgba(76,141,255,.5)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.strokeRect(x0, pad.top, x1 - x0, ch); ctx.setLineDash([]);
   }
-  // crosshair + hover markers
+
+  // 十字线（更细、更淡，不干扰数据观察）
   if (state.hover >= state.i0 && state.hover <= state.i1 && !state.drag) {
     const li = state.hover - state.i0, x = xAt(li);
-    ctx.strokeStyle = "rgba(200,210,230,.35)"; ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(200,210,230,.22)"; ctx.lineWidth = 0.8;
+    ctx.setLineDash([3, 5]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
+    // 悬停数据点（小圆点，带背景光晕）
     series.forEach(s => {
       const v = seriesVal(s, vis[li]); if (v === null) return;
-      ctx.fillStyle = s.color; ctx.strokeStyle = bgColor; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, yAt(v), 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const py = yAt(v);
+      // 外圈光晕
+      ctx.fillStyle = s.color + "30"; ctx.beginPath(); ctx.arc(x, py, 6, 0, Math.PI * 2); ctx.fill();
+      // 实心圆点
+      ctx.fillStyle = s.color; ctx.strokeStyle = bgColor; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, py, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     });
   }
 }
@@ -3038,10 +3096,10 @@ async function loadChecks() {
 }
 
 let CHK_CHARTS = {};
-let CHK_HIST = { id: "", name: "", type: "", range: 0 }; // range=小时数，0 表示全部
+let CHK_HIST = { id: "", name: "", type: "", range: 24 }; // range=小时数，默认 24h
 // 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选（与主机趋势图一致）
 function openCheckHistory(id, name, type) {
-  CHK_HIST = { id, name, type, range: 0 };
+  CHK_HIST = { id, name, type, range: 24 };
   $("checkHistTitle").textContent = name + " · 监控历史";
   $("checkHistMask").classList.add("show");
   loadCheckHistory();
@@ -3050,8 +3108,7 @@ async function loadCheckHistory() {
   const { id, name, type, range } = CHK_HIST;
   const body = $("checkHistBody");
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
-  const ctrl = [[1, I18N.t("time.1h")], [6, I18N.t("time.6h")], [24, I18N.t("time.24h")], [0, I18N.t("ui.all")]].map(([h, lab]) =>
-    `<button class="chip-btn ${range === h ? "active" : ""}" data-crange="${h}">${lab}</button>`).join("");
+  const ctrl = renderChartControls(range, "crange");
   try {
     const all = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
     const now = Math.floor(Date.now() / 1000);
@@ -3066,7 +3123,7 @@ async function loadCheckHistory() {
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
     const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now");
-    const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="230"></canvas>` +
+    const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
       <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>

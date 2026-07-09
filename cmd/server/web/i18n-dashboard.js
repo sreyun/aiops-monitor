@@ -333,6 +333,7 @@
   "time.1h": "1小时",
   "time.6h": "6小时",
   "time.24h": "24小时",
+  "time.30d": "30天",
   "time.records": "条",
   "misc.critical_alert_title": "AIOps Monitor - 严重告警",
   "misc.new_alerts_count": "条新的严重告警需要处理（总计",

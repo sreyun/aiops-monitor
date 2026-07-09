@@ -751,27 +751,27 @@ svg.sparkline{width:100%; height:46px; display:block}
 .metric.gpu .row .label{color:var(--accent2-txt)}
 
 /* ---------- 趋势图交互 ---------- */
-.chart-controls{display:flex; gap:7px; margin-bottom:16px; padding:0 2px}
-.chart-container{display:flex; flex-direction:column; gap:16px}
-.chart-container canvas{width:100%; height:auto; display:block; background:var(--bg2); border-radius:var(--r-sm); border:1px solid var(--line)}
-.chart-wrap{position:relative}
-.chart-wrap canvas{cursor:crosshair}
-.chart-enlarge{position:absolute; top:8px; right:10px; z-index:3; width:26px; height:26px; border-radius:6px;
+.chart-controls{display:flex; gap:8px; margin-bottom:18px; padding:0 2px; flex-wrap:wrap}
+.chart-container{display:flex; flex-direction:column; gap:18px}
+.chart-container canvas{width:100%; height:auto; display:block; background:var(--bg2); border-radius:var(--r); border:1px solid var(--line); transition:border-color .2s}
+.chart-wrap{position:relative; border-radius:var(--r); overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.03)}
+.chart-wrap canvas{cursor:crosshair; border:none; border-radius:0}
+.chart-enlarge{position:absolute; top:10px; right:12px; z-index:3; width:28px; height:28px; border-radius:var(--r-sm);
   border:1px solid var(--line2); background:var(--panel2); color:var(--muted); cursor:pointer;
-  display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity var(--transition-fast), color var(--transition-fast)}
+  display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity var(--transition-fast), color var(--transition-fast), transform .12s}
 .chart-wrap:hover .chart-enlarge{opacity:1}
-.chart-enlarge:hover{color:var(--txt); border-color:var(--accent); background:var(--panel3)}
+.chart-enlarge:hover{color:var(--txt); border-color:var(--accent); background:var(--panel3); transform:scale(1.08)}
 .chart-enlarge svg{width:15px; height:15px}
 .chart-tip{position:fixed; z-index:210; pointer-events:none; background:var(--panel);
   border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px; font-size:11.5px; color:var(--txt);
   box-shadow:var(--shadow-lg); display:none; min-width:132px; backdrop-filter:var(--blur-sm)}
-.chart-tip .tip-t{color:var(--muted); font-size:10.5px; margin-bottom:5px}
+.chart-tip .tip-t{color:var(--muted); font-size:10.5px; margin-bottom:5px; letter-spacing:.02em}
 .chart-tip .tip-r{display:flex; align-items:center; gap:6px; margin-top:3px; white-space:nowrap}
-.chart-tip .tip-dot{width:8px; height:8px; border-radius:2px; flex:none}
+.chart-tip .tip-dot{width:8px; height:8px; border-radius:3px; flex:none}
 .chart-tip .tip-v{margin-left:auto; font-weight:700; font-variant-numeric:tabular-nums}
 .modal.modal-wide{max-width:1120px}
 .zoom-hint{font-size:11px; color:var(--muted2); margin-bottom:12px}
-#chartZoomCanvas{width:100%; height:auto; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm)}
+#chartZoomCanvas{width:100%; height:auto; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r)}
 
 /* ---------- 远程终端 ---------- */
 .term-status{margin-left:auto; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px}

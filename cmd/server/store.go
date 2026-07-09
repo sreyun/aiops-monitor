@@ -19,7 +19,7 @@ const (
 	// History storage constants (multi-tier downsampling)
 	histRawMax     = 1200 // raw samples: ~1.5h at 5s interval
 	hist1mMax      = 2880 // 1-min aggregates: 48h (2880 points)
-	hist5mMax      = 2016 // 5-min aggregates: 7 days (2016 points)
+	hist5mMax      = 8640 // 5-min aggregates: 30 days (8640 points, 12/hour × 24h × 30d)
 	hist1mInterval = 60   // aggregate to 1-min every 60s
 	hist5mInterval = 300  // aggregate to 5-min every 300s
 )
@@ -43,7 +43,7 @@ type Host struct {
 	// Time-series history (multi-tier downsampling; persisted via the embedded DB)
 	histRaw  []shared.Sample // raw samples (5s interval, ~1.5h)
 	hist1m   []shared.Sample // 1-min aggregates (last 48h)
-	hist5m   []shared.Sample // 5-min aggregates (last 7 days)
+	hist5m   []shared.Sample // 5-min aggregates (last 30 days)
 	last1mTs int64           // timestamp of last 1-min aggregation
 	last5mTs int64           // timestamp of last 5-min aggregation
 }
