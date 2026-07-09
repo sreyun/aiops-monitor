@@ -1,21 +1,45 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
 	"aiops-monitor/shared"
 )
 
+// decompressBody transparently handles gzip Content-Encoding on request bodies.
+// Go's http.Server does NOT auto-decompress request bodies (unlike responses).
+// Since agent v5.1.0, the report payload may be gzip-compressed to save bandwidth.
+// Returns the original r.Body when no compression is used (backward-compatible).
+func decompressBody(r *http.Request) (io.ReadCloser, error) {
+	if r.Header.Get("Content-Encoding") != "gzip" {
+		return r.Body, nil
+	}
+	gr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return gr, nil
+}
+
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	body, err := decompressBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	defer body.Close()
+
 	var req struct {
 		HostID      string `json:"host_id"`
 		Hostname    string `json:"hostname"`
 		Token       string `json:"token"`
 		Fingerprint string `json:"fingerprint"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
@@ -43,9 +67,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // install token — so rotating the token never breaks already-installed agents.
 // Verification + upsert happen atomically inside Store.UpsertAuthenticated to
 // avoid a TOCTOU window and double-lock overhead on the hot report path.
+//
+// Since v5.1.0, agents may gzip-compress the JSON body (Content-Encoding: gzip)
+// to reduce bandwidth. This handler transparently decompresses when needed.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	body, err := decompressBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	defer body.Close()
+
 	var rep shared.Report
-	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+	if err := json.NewDecoder(body).Decode(&rep); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
