@@ -233,32 +233,50 @@ type rawForwardReader struct {
 
 func (x *rawForwardReader) Read(p []byte) (int, error) {
 	for {
+		// 优先非阻塞地消费通道中已到达的数据：避免「sess.done 已关闭、
+		// 但 toUser 缓冲里仍有最后一帧」时 select 随机选中 done 而丢字节。
 		select {
 		case b, ok := <-x.ch:
 			if !ok {
 				return 0, io.EOF
 			}
 			if len(b) == 0 {
-				continue // 跳过空帧
+				continue
 			}
-			if x.diag != nil && x.diagLeft > 0 {
-				x.diagMu.Lock()
-				if x.diagLeft > 0 {
-					n := len(b)
-					if n > x.diagLeft {
-						n = x.diagLeft
-					}
-					x.diag.Write(b[:n])
-					x.diagLeft -= n
-				}
-				x.diagMu.Unlock()
+			return x.emit(p, b), nil
+		default:
+			// 通道暂空，进入阻塞等待：数据到达或会话结束
+		}
+		select {
+		case b, ok := <-x.ch:
+			if !ok {
+				return 0, io.EOF
 			}
-			n := copy(p, b)
-			return n, nil
+			if len(b) == 0 {
+				continue
+			}
+			return x.emit(p, b), nil
 		case <-x.done:
 			return 0, io.EOF
 		}
 	}
+}
+
+// emit 写入诊断镜像并返回拷贝到 p 的字节数。
+func (x *rawForwardReader) emit(p, b []byte) int {
+	if x.diag != nil && x.diagLeft > 0 {
+		x.diagMu.Lock()
+		if x.diagLeft > 0 {
+			n := len(b)
+			if n > x.diagLeft {
+				n = x.diagLeft
+			}
+			x.diag.Write(b[:n])
+			x.diagLeft -= n
+		}
+		x.diagMu.Unlock()
+	}
+	return copy(p, b)
 }
 
 // truncateStr 截取 s 为前 max 个字符（中文按 rune 处理），超出时追加 "…"。
@@ -469,13 +487,19 @@ func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error
 	return r, nil
 }
 
-// updateRule modifies target_port and local_port of an existing rule.
-func (m *forwardManager) updateRule(id string, targetPort, localPort int) (*forwardRule, error) {
+// updateRule modifies host_id, hostname, target_port and local_port of an existing rule.
+// When hostID is non-empty, both hostID and hostname are updated so the rule points to
+// the correct host after editing. When hostID is empty, host fields are left unchanged.
+func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, localPort int) (*forwardRule, error) {
 	m.mu.Lock()
 	r, ok := m.rules[id]
 	if !ok {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("rule not found")
+	}
+	if hostID != "" {
+		r.hostID = hostID
+		r.hostname = hostname
 	}
 	if targetPort > 0 {
 		r.targetPort = targetPort
@@ -1177,12 +1201,13 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.markAgentUp()
-	// P1: 不要在 Agent tx 结束后立即关闭 session！
-	// 原因：Agent 读取完 HTTP 响应后会关闭 TCP 连接，导致 r.Body.Read() 返回 EOF。
-	// 如果这里 defer sess.close()，会立即关闭 session，导致 pipe reader goroutine 退出，
-	// 但此时 http.ReadResponse 可能还在读取数据，导致 "unexpected EOF"。
-	// 解决方案：让 HTTP proxy handler 控制 session 的生命周期。
-	// defer sess.close()  // 移除这行
+	// 当 Agent 完成响应回传（目标关闭连接 → r.Body 读到 EOF → 本函数返回）
+	// 时，关闭 session，向「用户侧」发出流结束信号。
+	// 这解决了此前 io.Pipe 竞态导致的 "unexpected EOF"，也让新的
+	// rawForwardReader（io.ReadAll 模式）能可靠地拿到 EOF 而正常结束，
+	// 不会陷入「要等 handler 返回才关 sess.done，而 handler 又在等 ReadAll
+	// 返回」的死锁。sess.close() 由 doneOnce 保护，幂等安全。
+	defer sess.close()
 	buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 	for {
 		n, err := r.Body.Read(buf)

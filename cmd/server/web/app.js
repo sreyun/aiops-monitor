@@ -4025,11 +4025,13 @@ let LAST_FORWARDS = [];
 let LAST_HTTP_PROXIES = [];
 let FWD_MODE = "tcp"; // "tcp" | "http"
 
-// 填充主机下拉选择框
+// 填充主机下拉选择框（同时填充创建弹窗 fwdHost 和编辑弹窗 fwdEditHost）
 function populateForwardHosts() {
   const opts = LAST_HOSTS.map(h => `<option value="${h.id}">${esc(h.hostname)} (${short(h.id)})</option>`).join("");
   const fh = $("fwdHost");
   if (fh) fh.innerHTML = opts;
+  const efh = $("fwdEditHost");
+  if (efh) efh.innerHTML = opts;
 }
 
 function short(id) { return id && id.length > 8 ? id.slice(0, 8) : id; }
@@ -4388,12 +4390,15 @@ async function saveForwardEdit() {
   } else {
     const name = $("fwdEditName").value || "";
     const defaultPath = $("fwdEditPath").value || "";
+    // 保持当前启用状态，避免编辑后规则被意外禁用
+    const cur = (LAST_HTTP_PROXIES || []).find(p => p.id === id);
+    const keepEnabled = cur ? cur.enabled !== false : true;
     try {
       const res = await fetch(`/api/v1/http-proxy/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath, enabled: keepEnabled })
       });
       if (!res.ok) { toast(I18N.t("toast.edit_failed"), "err"); return; }
       toast(I18N.t("toast.edited"), "ok");

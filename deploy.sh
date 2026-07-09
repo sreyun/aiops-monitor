@@ -4,41 +4,43 @@ set -e
 SERVER="192.168.30.15"
 USER="root"
 REMOTE_PATH="/opt/aiops-monitor"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 echo "========================================"
 echo "部署 AIOps 服务端到 $SERVER"
+echo "（若 SSH 需要密码，请先配置密钥或手动输入；脚本已关闭 host key 校验）"
 echo "========================================"
 echo
 
 # 1. 上传新编译的服务端程序
 echo "[1/4] 上传 aiops-server.exe..."
-scp aiops-server.exe ${USER}@${SERVER}:${REMOTE_PATH}/aiops-server.exe.new
+scp ${SSH_OPTS} aiops-server.exe ${USER}@${SERVER}:${REMOTE_PATH}/aiops-server.exe.new
 echo "✓ 上传完成"
 echo
 
 # 2. 停止旧服务
 echo "[2/4] 停止旧服务..."
-ssh ${USER}@${SERVER} "systemctl stop aiops-monitor 2>/dev/null || pkill -f aiops-server.exe || true"
+ssh ${SSH_OPTS} ${USER}@${SERVER} "systemctl stop aiops-monitor 2>/dev/null || pkill -f aiops-server.exe || true"
 sleep 2
 echo "✓ 已停止"
 echo
 
 # 3. 替换二进制文件
 echo "[3/4] 替换二进制文件..."
-ssh ${USER}@${SERVER} "cd ${REMOTE_PATH} && mv aiops-server.exe.new aiops-server.exe && chmod +x aiops-server.exe"
+ssh ${SSH_OPTS} ${USER}@${SERVER} "cd ${REMOTE_PATH} && mv aiops-server.exe.new aiops-server.exe && chmod +x aiops-server.exe"
 echo "✓ 替换完成"
 echo
 
 # 4. 启动新服务
 echo "[4/4] 启动新服务..."
-ssh ${USER}@${SERVER} "systemctl start aiops-monitor 2>/dev/null || cd ${REMOTE_PATH} && nohup ./aiops-server.exe > server.log 2>&1 &"
+ssh ${SSH_OPTS} ${USER}@${SERVER} "systemctl start aiops-monitor 2>/dev/null || (cd ${REMOTE_PATH} && nohup ./aiops-server.exe > server.log 2>&1 &)"
 sleep 3
 echo "✓ 启动完成"
 echo
 
 # 验证服务状态
 echo "验证服务状态..."
-ssh ${USER}@${SERVER} "ps aux | grep aiops-server.exe | grep -v grep" || echo "服务可能未启动，请检查日志"
+ssh ${SSH_OPTS} ${USER}@${SERVER} "ps aux | grep aiops-server.exe | grep -v grep" || echo "服务可能未启动，请检查日志"
 echo
 echo "========================================"
 echo "部署完成！"

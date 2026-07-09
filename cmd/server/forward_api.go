@@ -227,7 +227,7 @@ func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleForwardEdit updates a TCP forwarding rule's target port.
+// handleForwardEdit updates a TCP forwarding rule (host, target port, local port).
 // PUT /api/v1/forward/{id}
 func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -236,8 +236,9 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TargetPort int `json:"target_port"`
-		LocalPort  int `json:"local_port"`
+		HostID     string `json:"host_id"`
+		TargetPort int    `json:"target_port"`
+		LocalPort  int    `json:"local_port"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -247,7 +248,18 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.invalid_port")})
 		return
 	}
-	rule, err := s.forward.updateRule(id, req.TargetPort, req.LocalPort)
+	// Lookup hostname when host_id is provided
+	var hostname string
+	if req.HostID != "" {
+		hostname = shortID(req.HostID)
+		for _, h := range s.store.ListHosts() {
+			if h.ID == req.HostID {
+				hostname = h.Hostname
+				break
+			}
+		}
+	}
+	rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
