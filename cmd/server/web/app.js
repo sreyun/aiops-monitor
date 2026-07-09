@@ -1384,27 +1384,31 @@ function createTermTab(id, name) {
       if (tabObj.ws) termSend(tabObj.ws, "\x7f");
     }
   });
-  // 点击终端区域 → 聚焦隐藏 textarea（触发虚拟键盘 / 接收键盘输入）
+  // mousedown 聚焦隐藏 textarea（在选区开始前就聚焦，避免选区上下文丢失）
   // 注意：focus() 不会清除选区，用户可以继续用鼠标选中终端文本
-  screen.addEventListener("click", function() {
+  screen.addEventListener("mousedown", function() {
     if (document.activeElement !== input) {
       input.focus({ preventScroll: true });
     }
   });
-  // copy 事件：当用户通过右键菜单或 Ctrl+C（textarea 未聚焦时）触发复制，
-  // 确保选中的终端文本被写入系统剪贴板
+  // copy 事件：当用户通过右键菜单或 Ctrl+C 触发复制时，
+  // 确保选中的终端文本被写入系统剪贴板。
+  // 注意：隐藏 textarea 聚焦时 window.getSelection().rangeCount==0，需临时 blur。
   screen.addEventListener("copy", ev => {
-    const sel = window.getSelection().toString();
+    let sel = window.getSelection().toString();
+    if (!sel) {
+      // textarea 聚焦导致选区不可见，临时 blur 再检查
+      const ae = document.activeElement;
+      if (ae && ae.classList.contains("term-input")) {
+        ae.blur();
+        try { sel = window.getSelection().toString(); } finally {
+          ae.focus({ preventScroll: true });
+        }
+      }
+    }
     if (!sel) return;
     ev.preventDefault();
-    // 优先 navigator.clipboard，兜底 execCommand
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(sel).catch(() => {
-        ev.clipboardData.setData("text/plain", sel);
-      });
-    } else {
-      ev.clipboardData.setData("text/plain", sel);
-    }
+    ev.clipboardData.setData("text/plain", sel);
   });
   // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
   screen.addEventListener("focus", function() {
@@ -1455,7 +1459,14 @@ function connectTermWS(tab) {
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot on"; } }
     if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
   ws.onmessage = ev => {
-    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
+    const data = new Uint8Array(ev.data);
+    // Check for ZMODEM frame: [0xFF][0xFE][type][len:4 BE][payload]
+    if (data.length >= 7 && data[0] === 0xFF && data[1] === 0xFE) {
+      handleZmBrowserFrame(tab, data);
+      return;
+    }
+    // Normal PTY output
+    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(data, { stream: true });
     vt.feed(text);
   };
   ws.onclose = () => {
@@ -1951,13 +1962,123 @@ function termSend(ws, str) {
   framed.set(body, 1);
   ws.send(framed);
 }
+// 发送上传数据块（帧首字节 'u'）
+function termSendUpload(ws, chunk) {
+  if (!ws || ws.readyState !== 1) return;
+  const framed = new Uint8Array(chunk.length + 1);
+  framed[0] = 0x75; // 'u'
+  framed.set(chunk, 1);
+  ws.send(framed);
+}
+// 发送上传结束信号（帧首字节 'e'）
+function termSendEnd(ws) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(new Uint8Array([0x65])); // 'e'
+}
+// ---- ZMODEM 浏览器端帧处理 ----
+// handleZmBrowserFrame 解析并处理来自 Agent 的 ZMODEM 帧。
+// 帧格式: [0xFF][0xFE][type][len:4 BE][payload]
+function handleZmBrowserFrame(tab, data) {
+  const zmType = data[2];
+  const zmLen = (data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6];
+  const zmPayload = data.slice(7, 7 + zmLen);
+  switch (zmType) {
+    case 0x5A: { // 'Z' — ZMODEM 信号
+      const info = new TextDecoder().decode(zmPayload);
+      let meta;
+      try { meta = JSON.parse(info); } catch (e) { return; }
+      if (meta.type === "sz") {
+        // 下载：准备接收文件数据
+        tab.zmDownload = { filename: meta.filename || "download.dat", size: meta.size || 0, chunks: [], received: 0 };
+        toast(I18N.t("term.downloading") + ": " + tab.zmDownload.filename + " (" + formatZmSize(tab.zmDownload.size) + ")", "info");
+      } else if (meta.type === "rz") {
+        // 上传：弹出文件选择对话框
+        showZmUploadDialog(tab);
+      }
+      break;
+    }
+    case 0x44: // 'D' — 下载数据块
+      if (tab.zmDownload) {
+        tab.zmDownload.chunks.push(zmPayload);
+        tab.zmDownload.received += zmPayload.length;
+      }
+      break;
+    case 0x45: // 'E' — 传输完成
+      if (tab.zmDownload) {
+        const dl = tab.zmDownload;
+        const blob = new Blob(dl.chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = dl.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(I18N.t("term.download_done") + ": " + dl.filename, "ok");
+        tab.zmDownload = null;
+      }
+      break;
+  }
+}
+// showZmUploadDialog 弹出文件选择对话框，读取文件并通过 WebSocket 上传。
+function showZmUploadDialog(tab) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.display = "none";
+  document.body.appendChild(input);
+  input.onchange = async () => {
+    const file = input.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      toast(I18N.t("term.file_too_large"), "err");
+      return;
+    }
+    toast(I18N.t("term.uploading") + ": " + file.name + " (" + formatZmSize(file.size) + ")", "info");
+    try {
+      const buf = await file.arrayBuffer();
+      const data = new Uint8Array(buf);
+      const chunkSize = 32 * 1024; // 32KB chunks
+      for (let offset = 0; offset < data.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, data.length);
+        termSendUpload(tab.ws, data.slice(offset, end));
+      }
+      termSendEnd(tab.ws);
+    } catch (err) {
+      toast(I18N.t("term.upload_failed") + ": " + err.message, "err");
+    }
+  };
+  input.click();
+}
+// formatZmSize 格式化文件大小显示
+function formatZmSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
 // getSelectedTermText 获取当前终端屏幕内的选中文本。
-// 聚焦在隐藏 textarea 时 window.getSelection() 可能返回空字符串，
-// 因为浏览器为表单元素维护独立的选区上下文。这里通过遍历选区 range
-// 检查是否落在 term-screen 内，作为 window.getSelection 的补充。
+// 聚焦在隐藏 textarea 时 window.getSelection().rangeCount 为 0，
+// 因为浏览器为表单元素维护独立的选区上下文。此时临时 blur 再检查。
 function getSelectedTermText(tab) {
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return "";
+  if (!sel || sel.rangeCount === 0) {
+    // 如果 textarea 聚焦导致 rangeCount=0，临时 blur 后再检查
+    const ae = document.activeElement;
+    if (ae && ae.classList.contains("term-input")) {
+      ae.blur();
+      try {
+        const s2 = window.getSelection();
+        if (s2 && s2.rangeCount > 0) {
+          const t = s2.toString();
+          if (t) return t;
+        }
+      } finally {
+        ae.focus({ preventScroll: true });
+      }
+    }
+    return "";
+  }
   // 方法1：直接取全局选区文本（大多数情况足够）
   const text = sel.toString();
   if (text) return text;

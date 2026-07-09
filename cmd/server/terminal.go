@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -299,7 +300,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// browser → agent. The browser tags each WS message: byte 0 'i' = input,
-	// 'r' = resize ("colsxrows"). We re-encode it as a self-delimiting frame
+	// 'r' = resize ("colsxrows"), 'u' = upload data chunk, 'e' = end upload.
+	// We re-encode it as a self-delimiting frame
 	// ([type:1][len:2 BE][payload]) so the agent can demultiplex input vs resize
 	// off the raw rx byte stream regardless of HTTP chunk boundaries.
 	go func() {
@@ -318,8 +320,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 				typ, payload = 'r', data[1:]
 			case 'i':
 				typ, payload = 'i', data[1:]
+			case 'u':
+				typ, payload = 'u', data[1:] // upload data chunk
+			case 'e':
+				typ, payload = 'e', nil // end of upload
 			}
-			if len(payload) == 0 {
+			if len(payload) == 0 && typ != 'e' {
 				continue
 			}
 			// Record input for audit + replay; log completed commands
@@ -427,7 +433,12 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentTermTx receives the shell's output stream from the agent (chunked
-// request body) and fans it to the browser.
+// request body) and fans it to the browser. The stream uses a simple frame format:
+//   [type:1][len:4 BE][payload]
+//   'O' (0x4F) = normal PTY output → toBrowser as raw bytes
+//   'Z' (0x5A) = ZMODEM signal      → toBrowser as [0xFF][0xFE]['Z'][len:4][json]
+//   'D' (0x44) = download data chunk → toBrowser as [0xFF][0xFE]['D'][len:4][data]
+//   'E' (0x45) = transfer complete   → toBrowser as [0xFF][0xFE]['E'][len:4][]
 func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
@@ -440,22 +451,73 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.markAgentUp()
 	defer sess.close()
-	buf := make([]byte, 16<<10)
+
+	// Read framed data from the agent.
+	var hdr [5]byte
 	for {
-		n, err := r.Body.Read(buf)
-		if n > 0 {
-			b := make([]byte, n)
-			copy(b, buf[:n])
+		// Read the 5-byte header: [type:1][len:4 BE]
+		_, err := io.ReadFull(r.Body, hdr[:])
+		if err != nil {
+			return
+		}
+		typ := hdr[0]
+		payloadLen := int(binary.BigEndian.Uint32(hdr[1:]))
+		if payloadLen > 100<<20 { // cap at 100MB
+			return
+		}
+		payload := make([]byte, payloadLen)
+		if payloadLen > 0 {
+			if _, err := io.ReadFull(r.Body, payload); err != nil {
+				return
+			}
+		}
+
+		switch typ {
+		case 'O': // Normal PTY output
+			b := make([]byte, len(payload))
+			copy(b, payload)
+			select {
+			case sess.toBrowser <- b:
+			case <-sess.done:
+				return
+			}
+
+		case 'Z': // ZMODEM signal
+			// Send as [0xFF][0xFE]['Z'][len:4][payload]
+			b := buildZmBrowserFrame('Z', payload)
+			select {
+			case sess.toBrowser <- b:
+			case <-sess.done:
+				return
+			}
+
+		case 'D': // Download data chunk
+			b := buildZmBrowserFrame('D', payload)
+			select {
+			case sess.toBrowser <- b:
+			case <-sess.done:
+				return
+			}
+
+		case 'E': // Transfer complete
+			b := buildZmBrowserFrame('E', nil)
 			select {
 			case sess.toBrowser <- b:
 			case <-sess.done:
 				return
 			}
 		}
-		if err != nil {
-			return
-		}
 	}
+}
+
+// buildZmBrowserFrame builds a ZMODEM browser frame: [0xFF][0xFE][type][len:4][payload].
+func buildZmBrowserFrame(typ byte, payload []byte) []byte {
+	hdr := make([]byte, 7)
+	hdr[0] = 0xFF
+	hdr[1] = 0xFE
+	hdr[2] = typ
+	binary.BigEndian.PutUint32(hdr[3:], uint32(len(payload)))
+	return append(hdr, payload...)
 }
 
 // ---- terminal enhancement: session list, replay, observer, command audit ----

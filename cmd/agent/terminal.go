@@ -175,20 +175,42 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
 	fp := url.QueryEscape(a.identity.Fingerprint)
 
-	// tx: stream shell output up (body ends when the shell exits)
+	// zmChan carries upload data received from the browser (via rx stream)
+	// to the ZMODEM upload handler running in the tx goroutine.
+	zmChan := make(chan []byte, 32)
+
+	// tx: stream shell output up with ZMODEM detection + framing
+	// Frame format: [type:1][len:4 BE][payload]
+	//   'O' (0x4F) = normal PTY output
+	//   'Z' (0x5A) = ZMODEM signal (JSON with filename/size)
+	//   'D' (0x44) = download data chunk
+	//   'E' (0x45) = transfer complete
 	go func() {
 		defer closeAll()
-		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, sh)
+		pr, pw := io.Pipe()
+		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, pr)
 		if err != nil {
+			pw.Close()
 			return
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
-		if resp, err := termHTTP.Do(req); err == nil {
-			resp.Body.Close()
-		}
+		// Fire off the HTTP request in a goroutine; write to pw in the main goroutine.
+		reqDone := make(chan error, 1)
+		go func() {
+			resp, doErr := termHTTP.Do(req)
+			if doErr == nil {
+				resp.Body.Close()
+			}
+			reqDone <- doErr
+		}()
+
+		// Write framed PTY output to pw, with ZMODEM interception.
+		streamPTYFramed(sh, pw, zmChan)
+		pw.Close()
+		<-reqDone
 	}()
 
-	// rx: framed keystrokes / resize from the server → the shell
+	// rx: framed keystrokes / resize / upload from the server → the shell
 	go func() {
 		defer closeAll()
 		resp, err := termHTTP.Get(server + "/api/v1/agent/terminal/rx?session=" + sid + "&fp=" + fp)
@@ -196,7 +218,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 			return
 		}
 		defer resp.Body.Close()
-		readTermFrames(resp.Body, sh)
+		readTermFrames(resp.Body, sh, zmChan)
 	}()
 
 	_ = sh.Wait()
@@ -205,8 +227,9 @@ func (a *Agent) runTerminalSession(server, sid string) {
 }
 
 // readTermFrames parses the rx stream: each frame is [type:1][len:2 BE][payload].
-// type 'i' = input bytes, 'r' = resize ("colsxrows").
-func readTermFrames(r io.Reader, sh termShell) {
+// type 'i' = input bytes, 'r' = resize ("colsxrows"),
+// 'u' = upload data chunk, 'e' = end of upload.
+func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte) {
 	var hdr [3]byte
 	for {
 		if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -227,6 +250,21 @@ func readTermFrames(r io.Reader, sh termShell) {
 		case 'r':
 			if cols, rows, ok := parseSize(string(payload)); ok {
 				_ = sh.Resize(cols, rows)
+			}
+		case 'u':
+			// Upload data chunk → forward to ZMODEM handler
+			if len(payload) > 0 {
+				select {
+				case zmChan <- payload:
+				default:
+					// channel full, drop chunk (ZMODEM will retransmit)
+				}
+			}
+		case 'e':
+			// End of upload → signal ZMODEM handler
+			select {
+			case zmChan <- nil:
+			default:
 			}
 		}
 	}
@@ -393,4 +431,210 @@ func shellCommand() (string, []string) {
 		return "cmd.exe", []string{"/K", "chcp 65001 >nul"}
 	}
 	return shellPath(), []string{"-l", "-i"} // -l: login shell
+}
+
+// ---- ZMODEM-aware PTY output stream ----
+
+// writeFrame writes a framed message: [type:1][len:4 BE][payload].
+func writeFrame(w io.Writer, typ byte, payload []byte) error {
+	if len(payload) > 0x7FFFFFFF {
+		payload = payload[:0x7FFFFFFF]
+	}
+	var hdr [5]byte
+	hdr[0] = typ
+	binary.BigEndian.PutUint32(hdr[1:], uint32(len(payload)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		_, err := w.Write(payload)
+		return err
+	}
+	return nil
+}
+
+// streamPTYFramed reads from the PTY, detects ZMODEM headers, and writes
+// framed data to w. Normal PTY output is written as 'O' frames. When ZMODEM
+// is detected, the function runs the ZMODEM protocol and writes 'Z'/'D'/'E'
+// frames. Upload data is received via zmChan.
+func streamPTYFramed(ptyReader io.Reader, w io.Writer, zmChan <-chan []byte) {
+	buf := make([]byte, 32<<10)
+
+	// Track whether we're in ZMODEM mode
+	inZmodem := false
+	var zmSession *ZmSession
+
+	// Upload state: accumulate file data from browser
+	var uploadBuf []byte
+	uploadReady := false
+
+	for {
+		// Drain zmChan: accumulate upload data
+		drained := true
+		for drained {
+			select {
+			case chunk := <-zmChan:
+				if chunk == nil {
+					// End of upload — all data received
+					uploadReady = true
+				} else {
+					uploadBuf = append(uploadBuf, chunk...)
+				}
+			default:
+				drained = false
+			}
+		}
+
+		// If upload data is ready and we're in ZMODEM mode waiting for upload,
+		// start the upload protocol by sending ZRINIT to the remote rz.
+		if uploadReady && len(uploadBuf) > 0 && inZmodem && zmSession != nil && zmSession.State == zmInit {
+			slog.Info("ZMODEM上传数据已就绪，开始上传协议", "size", len(uploadBuf))
+			zmSession.UploadData = uploadBuf
+			zmSession.File = &ZFileInfo{Name: "upload.dat", Size: int64(len(uploadBuf))}
+			// Send ZRINIT to acknowledge the remote rz
+			if w2, ok := ptyReader.(io.Writer); ok {
+				w2.Write(buildZrinitFrame())
+			}
+			uploadBuf = nil
+			uploadReady = false
+		}
+
+		n, readErr := ptyReader.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+
+			if inZmodem {
+				// Feed chunk to ZMODEM session (accumulate + parse frames)
+				zmBuf := append([]byte(nil), chunk...)
+				for len(zmBuf) > 0 {
+					frame, consumed, _ := parseZmFrame(zmBuf)
+					if frame == nil {
+						break
+					}
+					zmBuf = zmBuf[consumed:]
+
+					responses := zmSession.HandleFrame(frame)
+					for _, resp := range responses {
+						if w2, ok := ptyReader.(io.Writer); ok {
+							w2.Write(resp)
+						}
+					}
+
+					// Check if download is complete
+					if zmSession.State == zmIdle && zmSession.DataBuf.Len() > 0 {
+						// File download complete — send to server
+						fname := "download.dat"
+						fsize := int64(zmSession.DataBuf.Len())
+						if zmSession.File != nil && zmSession.File.Name != "" {
+							fname = zmSession.File.Name
+						}
+						slog.Info("ZMODEM下载完成", "filename", fname, "size", fsize)
+
+						// Send ZMODEM signal frame
+						zmJSON := fmt.Sprintf(`{"type":"sz","filename":"%s","size":%d}`, fname, fsize)
+						writeFrame(w, 'Z', []byte(zmJSON))
+						// Send file data in chunks
+						data := zmSession.DataBuf.Bytes()
+						chunkSz := 32 << 10 // 32KB chunks
+						for offset := 0; offset < len(data); offset += chunkSz {
+							end := offset + chunkSz
+							if end > len(data) {
+								end = len(data)
+							}
+							writeFrame(w, 'D', data[offset:end])
+						}
+						// Send complete frame
+						writeFrame(w, 'E', nil)
+
+						// Reset ZMODEM state
+						inZmodem = false
+						zmSession = nil
+						uploadBuf = nil
+						uploadReady = false
+						break
+					}
+				}
+			} else {
+				// Check for ZMODEM header
+				if HasZmodemHeader(chunk) {
+					idx := IndexZmodemHeader(chunk)
+					if idx > 0 {
+						// Flush data before the header as normal output
+						writeFrame(w, 'O', chunk[:idx])
+					}
+					zmChunk := chunk[idx:]
+					frame, _, _ := parseZmFrame(zmChunk)
+
+					// Enter ZMODEM mode
+					inZmodem = true
+					zmSession = NewZmSession()
+					zmSession.State = zmInit
+
+					if frame != nil && frame.Type == ZRQINIT {
+						// Remote side sent ZRQINIT — this could be sz (send) or rz (receive).
+						// We can't distinguish yet. For sz, the remote will send ZFILE next.
+						// For rz, the remote is waiting for us to send a file.
+						// Send a 'Z' signal to the browser so it can prepare for either case.
+						zmJSON := fmt.Sprintf(`{"type":"rz"}`)
+						writeFrame(w, 'Z', []byte(zmJSON))
+						slog.Info("ZMODEM握手检测到(ZRQINIT)，等待文件传输")
+						// Do NOT send ZRINIT yet — for rz, we need to wait for the browser
+						// to provide the file. For sz, the remote will send ZFILE and we
+						// handle it normally.
+					} else {
+						slog.Info("ZMODEM握手检测到，开始文件传输")
+						// For non-ZRQINIT frames, process normally
+						if frame != nil {
+							responses := zmSession.HandleFrame(frame)
+							for _, resp := range responses {
+								if w2, ok := ptyReader.(io.Writer); ok {
+									w2.Write(resp)
+								}
+							}
+						}
+					}
+
+					// Process remaining frames in the chunk (skip the first one we already handled)
+					remaining := zmChunk
+					if frame != nil {
+						for i := 0; i < len(zmChunk); i++ {
+							frame2, consumed2, _ := parseZmFrame(zmChunk[i:])
+							if frame2 != nil && consumed2 > 0 {
+								remaining = zmChunk[i+consumed2:]
+								break
+							}
+						}
+					}
+					zmBuf := remaining
+					for len(zmBuf) > 0 {
+						frame2, consumed2, _ := parseZmFrame(zmBuf)
+						if frame2 == nil {
+							break
+						}
+						zmBuf = zmBuf[consumed2:]
+						// Skip ZRQINIT processing (already handled)
+						if frame2.Type == ZRQINIT {
+							continue
+						}
+						responses := zmSession.HandleFrame(frame2)
+						for _, resp := range responses {
+							if w2, ok := ptyReader.(io.Writer); ok {
+								w2.Write(resp)
+							}
+						}
+					}
+				} else {
+					// Normal output
+					writeFrame(w, 'O', chunk)
+				}
+			}
+		}
+
+		if readErr != nil {
+			if readErr != io.EOF {
+				slog.Warn("PTY读取错误", "err", readErr)
+			}
+			return
+		}
+	}
 }
