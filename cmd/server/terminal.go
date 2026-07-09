@@ -456,6 +456,21 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 	sess.markAgentUp()
 	defer sess.close()
 
+	// Exec sessions (playbook): the agent sends raw command output (no framing),
+	// so read the entire body as-is and send it to toBrowser.
+	if sess.mode == "exec" {
+		data, err := io.ReadAll(r.Body)
+		if err == nil && len(data) > 0 {
+			b := make([]byte, len(data))
+			copy(b, data)
+			select {
+			case sess.toBrowser <- b:
+			case <-sess.done:
+			}
+		}
+		return
+	}
+
 	// Read framed data from the agent.
 	var hdr [5]byte
 	for {

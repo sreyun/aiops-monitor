@@ -1526,10 +1526,10 @@ function createTermTab(id, name, tabName) {
   screen.addEventListener("focus", function() {
     if (input && document.activeElement !== input) input.focus({ preventScroll: true });
   });
-  // 右键菜单
-  screen.addEventListener("contextmenu", function(ev) {
-    showTermContextMenu(tabObj, ev);
-  });
+  // 右键菜单（暂时禁用，待修复后重新启用）
+  // screen.addEventListener("contextmenu", function(ev) {
+  //   showTermContextMenu(tabObj, ev);
+  // });
   // JS fallback for :focus-within — toggle .term-focused class on screen
   // This ensures cursor blink animation works on iOS Safari where :focus-within
   // may not trigger for opacity:0 elements
@@ -1649,13 +1649,15 @@ function startTermFileUpload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
   if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
-  // 弹出目标路径输入
+  // 先弹出目标路径输入
   const targetPath = prompt("请输入远程目标路径（如 /tmp/upload.dat）：", "/tmp/");
   if (!targetPath || !targetPath.trim()) return;
-  // 弹出文件选择器
+  // 弹出文件选择器（不要设置 display:none，否则某些浏览器会阻止 click()）
   const input = document.createElement("input");
   input.type = "file";
-  input.style.display = "none";
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  input.style.top = "-9999px";
   document.body.appendChild(input);
   input.onchange = async () => {
     const file = input.files[0];
@@ -1674,6 +1676,8 @@ function startTermFileUpload() {
       metaFrame[0] = 0x66; // 'f'
       metaFrame.set(metaBytes, 1);
       tab.ws.send(metaFrame);
+      // 确认 WebSocket 仍然连接
+      if (tab.ws.readyState !== 1) { toast("终端连接已断开，上传取消", "err"); return; }
       // 分块发送文件数据
       const buf = await file.arrayBuffer();
       const data = new Uint8Array(buf);
@@ -1681,13 +1685,18 @@ function startTermFileUpload() {
       for (let offset = 0; offset < data.length; offset += chunkSize) {
         const end = Math.min(offset + chunkSize, data.length);
         termSendUpload(tab.ws, data.slice(offset, end));
+        // 给 WebSocket 缓冲一点时间，避免背压过大
+        if (offset % (chunkSize * 4) === 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
       }
       termSendEnd(tab.ws);
     } catch (err) {
       toast(`上传失败: ${err.message}`, "err");
     }
   };
-  input.click();
+  // 使用 setTimeout 确保 prompt 关闭后浏览器恢复用户手势上下文
+  setTimeout(() => input.click(), 100);
 }
 
 function startTermFileDownload() {
