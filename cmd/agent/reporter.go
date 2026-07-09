@@ -61,7 +61,7 @@ const gzipCompressThreshold = 512
 type serverTarget struct {
 	server string
 	token  string
-	httpc  *http.Client // isolated connection pool + 8s timeout
+	httpc  *http.Client // isolated connection pool + 30s timeout
 
 	regMu      sync.Mutex
 	registered bool
@@ -70,6 +70,12 @@ type serverTarget struct {
 	// never starves or delays reports to healthy servers.
 	bo *backoff
 	cb *circuitBreaker
+
+	// gzipMu protects disableGzip, which is set true when the server returns
+	// 400 on a gzip-compressed request (proxy corruption, server bug, etc.).
+	// Once disabled, all subsequent reports to this target skip compression.
+	gzipMu      sync.Mutex
+	disableGzip bool
 }
 
 // register sends the agent's identity (with this target's token) to the server.
@@ -109,8 +115,13 @@ func (t *serverTarget) isRegistered() bool {
 
 // send posts one report payload to this server. The report's Token field is
 // set to this target's token before marshalling. The body is gzip-compressed
-// when above the threshold to reduce bandwidth. Returns errForbidden on 403
-// so the caller can re-register and retry.
+// when above the threshold to reduce bandwidth, UNLESS a previous 400 response
+// triggered gzip degradation (proxy corruption on external networks).
+// Returns errForbidden on 403 so the caller can re-register and retry.
+// Returns errBadPayload on 400 when the body was gzip-compressed — the caller
+// should disable gzip and retry.
+var errBadPayload = errors.New("bad payload (server returned 400)")
+
 func (t *serverTarget) send(rep shared.Report) error {
 	rep.Token = t.token
 	body, err := json.Marshal(rep)
@@ -118,12 +129,15 @@ func (t *serverTarget) send(rep shared.Report) error {
 		return err
 	}
 
-	// Gzip compress when payload exceeds threshold. Reports with many disks
-	// or process names can swell from ~2KB to ~8KB; gzip typically reduces
-	// JSON by 4-8x, saving bandwidth for both agent and server.
+	// Decide whether to gzip: only if payload is large enough AND gzip has
+	// not been disabled for this target (see sendWithRetry fallback).
+	t.gzipMu.Lock()
+	useGzip := !t.disableGzip
+	t.gzipMu.Unlock()
+
 	var reader *bytes.Reader
 	contentEnc := ""
-	if len(body) >= gzipCompressThreshold {
+	if useGzip && len(body) >= gzipCompressThreshold {
 		buf := getBytesBuf()
 		defer putBytesBuf(buf)
 		gw, _ := gzip.NewWriterLevel(buf, 3) // level 3 = best speed/size trade
@@ -156,10 +170,72 @@ func (t *serverTarget) send(rep shared.Report) error {
 	if resp.StatusCode == http.StatusForbidden {
 		return errForbidden
 	}
+	if resp.StatusCode == http.StatusBadRequest {
+		// 400 when we sent gzip → likely proxy corruption on external network.
+		// Signal caller to disable gzip and retry immediately.
+		if contentEnc == "gzip" {
+			return errBadPayload
+		}
+		// 400 without gzip → genuine bad request, don't retry.
+		return fmt.Errorf("服务端返回状态码 400（请求格式错误）")
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("服务端返回状态码 %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// sendWithRetry wraps send() with in-cycle retries and gzip degradation.
+// On external networks, transient failures (proxy timeouts, gzip corruption)
+// are common — retrying within the same cycle avoids wasting a full 10s
+// report interval and prevents the circuit breaker from opening prematurely.
+//
+// Retry strategy:
+//   - Up to 3 attempts per cycle (initial + 2 retries)
+//   - 1s delay between retries (short enough to stay within one cycle)
+//   - On 400 with gzip: disable gzip for this target, retry immediately
+//   - On 403: re-register then retry
+//   - Network errors / 5xx: retry after short delay
+func (t *serverTarget) sendWithRetry(rep shared.Report) error {
+	const maxAttempts = 3
+	const retryDelay = 1 * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			slog.Info("上报重试", "server", t.server, "attempt", attempt+1, "last_err", lastErr)
+			time.Sleep(retryDelay)
+		}
+
+		err := t.send(rep)
+		if err == nil {
+			return nil // success
+		}
+
+		lastErr = err
+
+		// 403 → re-register once, then retry
+		if errors.Is(err, errForbidden) {
+			slog.Warn("上报被拒(指纹未绑定)，重新注册后重试", "server", t.server)
+			if t.register(rep) {
+				// Registration succeeded, retry the send
+				continue
+			}
+			return fmt.Errorf("注册失败，跳过本次上报")
+		}
+
+		// 400 with gzip → disable gzip for this target, retry without compression
+		if errors.Is(err, errBadPayload) {
+			slog.Warn("服务端返回400，疑似gzip被外网代理损坏，已禁用压缩", "server", t.server)
+			t.gzipMu.Lock()
+			t.disableGzip = true
+			t.gzipMu.Unlock()
+			continue // retry immediately without gzip
+		}
+
+		// Other errors (network timeout, 5xx, etc.) → retry
+	}
+	return lastErr
 }
 
 // Agent ties together the native collector (fast base metrics) and the plugin
@@ -193,7 +269,7 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 				Transport: reportTransport,
 			},
 			bo: newBackoff(1*time.Second, 60*time.Second),
-			cb: newCircuitBreaker(5, 30*time.Second), // open after 5 consecutive failures, cooldown 30s
+			cb: newCircuitBreaker(8, 15*time.Second), // open after 8 consecutive failures, cooldown 15s — tuned for external networks where transient errors are common
 		}
 	}
 	return &Agent{
@@ -346,9 +422,11 @@ func (a *Agent) runPlugins() {
 // blocks or affects the others. Events are re-queued only if ALL targets
 // failed (at least one success means events were delivered).
 //
-// Circuit breaker: if a target has 5 consecutive failures, the breaker opens
-// and we skip that target for 30s — preventing futile connection attempts that
-// waste CPU and network resources on an unreachable server.
+// Circuit breaker: if a target has 8 consecutive failures (each already retried
+// 3x internally), the breaker opens and we skip that target for 15s — preventing
+// futile connection attempts that waste CPU and network resources. Threshold and
+// cooldown are tuned for external networks: old values (5/30s) were too aggressive
+// and caused agents to go "offline" after brief network jitter.
 func (a *Agent) reportOnce() {
 	var base shared.Metrics
 	if a.collector.Supported() {
@@ -404,15 +482,9 @@ func (a *Agent) reportOnce() {
 				return
 			}
 
-			err := tgt.send(rep)
-			if err == errForbidden {
-				slog.Warn("上报被拒(指纹未绑定)，重新注册后重试", "server", tgt.server)
-				if tgt.register(a.identity) {
-					err = tgt.send(rep)
-				} else {
-					err = fmt.Errorf("注册失败，跳过本次上报重试")
-				}
-			}
+			// sendWithRetry handles in-cycle retries, gzip degradation,
+			// and 403 re-registration — all within a single report cycle.
+			err := tgt.sendWithRetry(rep)
 			if err != nil {
 				slog.Error("上报失败", "server", tgt.server, "err", err)
 				tgt.cb.failure()

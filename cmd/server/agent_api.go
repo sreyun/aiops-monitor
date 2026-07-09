@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -73,6 +74,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	body, err := decompressBody(r)
 	if err != nil {
+		// Gzip decompression failure — likely caused by proxy corruption
+		// on external networks. Log the error so operators can diagnose.
+		slog.Warn("Agent 上报 gzip 解压失败（可能外网代理损坏）",
+			"remote", r.RemoteAddr, "content_encoding", r.Header.Get("Content-Encoding"),
+			"content_length", r.ContentLength, "err", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
@@ -80,6 +86,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 
 	var rep shared.Report
 	if err := json.NewDecoder(body).Decode(&rep); err != nil {
+		slog.Warn("Agent 上报 JSON 解析失败",
+			"remote", r.RemoteAddr, "content_encoding", r.Header.Get("Content-Encoding"),
+			"err", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
