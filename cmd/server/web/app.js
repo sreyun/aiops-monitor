@@ -794,7 +794,7 @@ function exportLogsCSV() {
 function renderLog(items) {
   LAST_LOG = items;
   const n = items.length;
-  $("logCount").textContent = n; $("navLog").textContent = n; $("ovLogCount").textContent = n;
+  $("logCount").textContent = n; $("navLog").textContent = n;
   const kcls = k => k === "operation" ? "op" : k === "system" ? "sys" : "plg";
   const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
   const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
@@ -811,8 +811,6 @@ function renderLog(items) {
   const pageItems = filtered.slice((LOG_PAGE - 1) * LOG_PAGE_SIZE, LOG_PAGE * LOG_PAGE_SIZE);
   $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">${I18N.t("empty.no_logs")}</div>`;
   renderLogPager(pages, total);
-  // 概览页活动列表：差量更新，避免全量 innerHTML 重建导致闪烁
-  diffUpdateList($("ovLog"), items.slice(0, 6), row, logKey, `<div class="empty-line">${I18N.t("empty.no_activity")}</div>`);
 }
 
 function renderLogPager(pages, total) {
