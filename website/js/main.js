@@ -31,9 +31,14 @@ var observer = new IntersectionObserver(function(entries) {
   });
 }, { threshold: 0.1, rootMargin: "0px 0px -60px 0px" });
 
-document.querySelectorAll(".reveal").forEach(function(el) {
-  observer.observe(el);
-});
+function observeReveals() {
+  document.querySelectorAll(".reveal:not(.visible)").forEach(function(el) {
+    observer.observe(el);
+  });
+}
+observeReveals();
+/* i18n 注入动态内容后，重新观察新元素 */
+window.addEventListener("reveal:refresh", observeReveals);
 
 /* 错开动画延迟 */
 document.querySelectorAll(".pain-card, .feature-card").forEach(function(el, i) {

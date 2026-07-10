@@ -12,17 +12,17 @@
 <link rel="canonical" href="https://sreyun.github.io/aiops-monitor/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="AIOps Monitor">
-<meta property="og:title" content="AIOps Monitor — 轻量级主机监控运维平台">
-<meta property="og:description" content="Go 原生采集 + Python 插件 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。单二进制、零依赖、三平台原生、3 分钟部署。">
+<meta property="og:title" data-i18n="page.title" content="AIOps Monitor — 轻量级主机监控运维平台">
+<meta property="og:description" data-i18n="page.desc" content="Go 原生采集 + Python 插件 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。单二进制、零依赖、三平台原生、3 分钟部署。">
 <meta property="og:url" content="https://sreyun.github.io/aiops-monitor/">
-<meta property="og:locale" content="zh_CN">
+<meta property="og:locale" data-i18n="page.oglocale" content="zh_CN">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="AIOps Monitor — 轻量级主机监控运维平台">
-<meta name="twitter:description" content="Go 原生采集 + Python 插件 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。">
+<meta name="twitter:title" data-i18n="page.title" content="AIOps Monitor — 轻量级主机监控运维平台">
+<meta name="twitter:description" data-i18n="page.desc" content="Go 原生采集 + Python 插件 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。">
 <!-- 社交分享图：放置 1200x630 的 assets/og-cover.png 后取消下一行注释
 <meta property="og:image" content="https://sreyun.github.io/aiops-monitor/assets/og-cover.png">
 -->
-<script type="application/ld+json">
+<script type="application/ld+json" id="ldjsonApp">
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -49,6 +49,8 @@
       <a href="features.html" data-i18n="nav.features">功能详情</a>
       <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
       <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+      <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+      <a href="contact.html" data-i18n="nav.contact">联系我们</a>
     </div>
     <a href="https://github.com/sreyun/aiops-monitor" target="_blank" class="nav-cta" data-i18n="nav.cta">免费部署</a>
     <button class="nav-toggle">☰</button>
@@ -172,10 +174,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         </div>
         <h3 data-i18n="feat1.title">实时监控</h3>
-        <p class="desc">CPU / 内存 / SWAP / 多磁盘 / 网络收发 / TCP 连接数 / 负载 / 进程数 / 运行时长 —— 5 秒级采集，多级降采样保留 7 天历史趋势。</p>
+        <p class="desc" data-i18n="feat1.desc">CPU / 内存 / SWAP / 多磁盘 / 网络收发 / TCP 连接数 / 负载 / 进程数 / 运行时长 —— 5 秒级采集，多级降采样保留 7 天历史趋势。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          运维人员无需逐台 SSH 查看状态
+          <span data-i18n="feat1.val">运维人员无需逐台 SSH 查看状态</span>
         </div>
       </div>
       <div class="feature-card reveal">
@@ -184,10 +186,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         </div>
         <h3 data-i18n="feat2.title">智能告警</h3>
-        <p class="desc">分级告警（严重/警告）+ 去重冷却 + 飞书/钉钉/邮件推送 + 桌面通知。告警噪音降低 80%。</p>
+        <p class="desc" data-i18n="feat2.desc">分级告警（严重/警告）+ 去重冷却 + 飞书/钉钉/邮件推送 + 桌面通知。告警噪音降低 80%。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          告警疲劳问题彻底解决
+          <span data-i18n="feat2.val">告警疲劳问题彻底解决</span>
         </div>
       </div>
       <div class="feature-card reveal">
@@ -196,10 +198,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </div>
         <h3 data-i18n="feat3.title">远程终端</h3>
-        <p class="desc">浏览器直连主机终端，Agent 反向连接免开端口。会话全程录制，支持回放追溯和实时旁观。</p>
+        <p class="desc" data-i18n="feat3.desc">浏览器直连主机终端，Agent 反向连接免开端口。会话全程录制，支持回放追溯和实时旁观。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          故障排查从 30 分钟缩短到 5 分钟
+          <span data-i18n="feat3.val">故障排查从 30 分钟缩短到 5 分钟</span>
         </div>
       </div>
       <div class="feature-card reveal">
@@ -208,10 +210,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
         </div>
         <h3 data-i18n="feat4.title">自动化运维</h3>
-        <p class="desc">可视化剧本编排，批量执行命令到多台主机。执行结果实时回传，历史可追溯。</p>
+        <p class="desc" data-i18n="feat4.desc">可视化剧本编排，批量执行命令到多台主机。执行结果实时回传，历史可追溯。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          100 台主机的补丁更新，10 分钟搞定
+          <span data-i18n="feat4.val">100 台主机的补丁更新，10 分钟搞定</span>
         </div>
       </div>
       <div class="feature-card reveal">
@@ -220,10 +222,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         </div>
         <h3 data-i18n="feat5.title">安全与合规</h3>
-        <p class="desc">多用户 RBAC（管理员/操作员/观察员）+ MFA 两步验证 + 会话审计 + 操作日志全记录。支持账户找回（邮箱验证码）和邮箱解除 MFA。</p>
+        <p class="desc" data-i18n="feat5.desc">多用户 RBAC（管理员/操作员/观察员）+ MFA 两步验证 + 会话审计 + 操作日志全记录。支持账户找回（邮箱验证码）和邮箱解除 MFA。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          满足等保审计要求
+          <span data-i18n="feat5.val">满足等保审计要求</span>
         </div>
       </div>
       <div class="feature-card reveal">
@@ -232,10 +234,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </div>
         <h3 data-i18n="feat6.title">跨平台原生采集</h3>
-        <p class="desc">Linux（/proc + syscall）、Windows（Win32 API）、macOS（sysctl）三平台原生采集，AMD64 + ARM64 全覆盖。支持 NVIDIA、AMD、Apple GPU 监控。</p>
+        <p class="desc" data-i18n="feat6.desc">Linux（/proc + syscall）、Windows（Win32 API）、macOS（sysctl）三平台原生采集，AMD64 + ARM64 全覆盖。支持 NVIDIA、AMD、Apple GPU 监控。</p>
         <div class="value">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          混合环境一套工具统管
+          <span data-i18n="feat6.val">混合环境一套工具统管</span>
         </div>
       </div>
     </div>
@@ -246,33 +248,33 @@
 <section class="section" style="background:var(--bg2)">
   <div class="section-inner">
     <div class="section-head reveal">
-      <div class="section-tag">工作原理</div>
-      <h2>一套架构，覆盖从采集到运维的闭环</h2>
-      <p class="section-desc">Agent 反向连接免开端口，数据汇聚到单二进制服务端，告警 / 终端 / 剧本一站完成</p>
+      <div class="section-tag" data-i18n="arch.tag">工作原理</div>
+      <h2 data-i18n="arch.title">一套架构，覆盖从采集到运维的闭环</h2>
+      <p class="section-desc" data-i18n="arch.desc">Agent 反向连接免开端口，数据汇聚到单二进制服务端，告警 / 终端 / 剧本一站完成</p>
     </div>
     <div class="arch reveal">
       <div class="arch-col">
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg></div>
-          <div><div class="t">Linux Agent</div><div class="s">/proc + syscall 原生采集</div></div>
+          <div><div class="t" data-i18n="arch.linux">Linux Agent</div><div class="s" data-i18n="arch.linuxSub">/proc + syscall 原生采集</div></div>
         </div>
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div>
-          <div><div class="t">Windows Agent</div><div class="s">Win32 API + ConPTY 终端</div></div>
+          <div><div class="t" data-i18n="arch.win">Windows Agent</div><div class="s" data-i18n="arch.winSub">Win32 API + ConPTY 终端</div></div>
         </div>
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"/></svg></div>
-          <div><div class="t">macOS Agent</div><div class="s">sysctl + Apple GPU</div></div>
+          <div><div class="t" data-i18n="arch.mac">macOS Agent</div><div class="s" data-i18n="arch.macSub">sysctl + Apple GPU</div></div>
         </div>
       </div>
       <div class="arch-center">
         <div class="arch-arrow">➜</div>
         <div class="arch-core">
           <div class="logo-icon">AI</div>
-          <h4>AIOps Monitor 服务端</h4>
-          <p>单二进制 · 零外部依赖</p>
+          <h4 data-i18n="arch.serverTitle">AIOps Monitor 服务端</h4>
+          <p data-i18n="arch.serverSub">单二进制 · 零外部依赖</p>
           <div class="arch-caps">
-            <span>指标存储</span><span>告警引擎</span><span>远程终端</span><span>剧本编排</span><span>RBAC / MFA</span>
+            <span data-i18n="arch.cap1">指标存储</span><span data-i18n="arch.cap2">告警引擎</span><span data-i18n="arch.cap3">远程终端</span><span data-i18n="arch.cap4">剧本编排</span><span data-i18n="arch.cap5">RBAC / MFA</span>
           </div>
         </div>
         <div class="arch-arrow">➜</div>
@@ -280,15 +282,15 @@
       <div class="arch-col">
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
-          <div><div class="t">浏览器实时面板</div><div class="s">PWA · 多端访问</div></div>
+          <div><div class="t" data-i18n="arch.panel">浏览器实时面板</div><div class="s" data-i18n="arch.panelSub">PWA · 多端访问</div></div>
         </div>
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
-          <div><div class="t">飞书 / 钉钉 / 邮件</div><div class="s">分级告警推送</div></div>
+          <div><div class="t" data-i18n="arch.notify">飞书 / 钉钉 / 邮件</div><div class="s" data-i18n="arch.notifySub">分级告警推送</div></div>
         </div>
         <div class="arch-node">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7L12 2z"/></svg></div>
-          <div><div class="t">多服务端 / 中继</div><div class="s">容灾 · 跨网段穿透</div></div>
+          <div><div class="t" data-i18n="arch.multi">多服务端 / 中继</div><div class="s" data-i18n="arch.multiSub">容灾 · 跨网段穿透</div></div>
         </div>
       </div>
     </div>
@@ -329,6 +331,8 @@
         <a href="features.html" data-i18n="nav.features">功能详情</a>
         <a href="solutions.html" data-i18n="nav.solutions">解决方案</a>
         <a href="comparison.html" data-i18n="nav.comparison">产品对比</a>
+        <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+        <a href="contact.html" data-i18n="nav.contact">联系我们</a>
       </div>
       <div class="footer-col">
         <h4 data-i18n="footer.resources">资源</h4>
