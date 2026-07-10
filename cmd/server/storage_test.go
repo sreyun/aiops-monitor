@@ -1,6 +1,28 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// The VM read path must reassemble per-series export lines into per-timestamp
+// samples (join by ts, ms→s, correct field mapping, sorted).
+func TestVMExportParse(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_cpu_percent","host":"h1"},"values":[50,60],"timestamps":[105000,100000]}
+{"metric":{"__name__":"aiops_mem_percent","host":"h1"},"values":[70,80],"timestamps":[105000,100000]}
+{"metric":{"__name__":"aiops_load1","host":"h1"},"values":[1.5],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 2 {
+		t.Fatalf("expected 2 samples (2 distinct timestamps), got %d", len(s))
+	}
+	// sorted ascending: ts=100 first
+	if s[0].Timestamp != 100 || s[0].CPUPercent != 60 || s[0].MemPercent != 80 || s[0].Load1 != 1.5 {
+		t.Errorf("sample@100 wrong: %+v", s[0])
+	}
+	if s[1].Timestamp != 105 || s[1].CPUPercent != 50 || s[1].MemPercent != 70 {
+		t.Errorf("sample@105 wrong: %+v", s[1])
+	}
+}
 
 func TestPasswordPolicy(t *testing.T) {
 	good := []string{"Abcd123!", "P@ssw0rd", "aB3$aB3$", "Zx9#mnop", "长密码Ab1!x"}

@@ -4,10 +4,26 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
 )
+
+// pgFromEnv opens the PostgreSQL store from AIOPS_POSTGRES_DSN, or returns nil if
+// it is unset or unreachable (callers then fall back to embedded/file mode).
+func pgFromEnv() *pgStore {
+	dsn := os.Getenv("AIOPS_POSTGRES_DSN")
+	if dsn == "" {
+		return nil
+	}
+	ps, err := openPGStore(dsn)
+	if err != nil {
+		slog.Error("PostgreSQL 连接失败，回落内嵌存储", "err", err)
+		return nil
+	}
+	return ps
+}
 
 // ============================================================================
 // PostgreSQL persistence (optional, enabled via AIOPS_POSTGRES_DSN).
@@ -70,8 +86,184 @@ func (p *pgStore) migrate() error {
 			data       JSONB NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS tickets_status ON tickets(status);
+		CREATE TABLE IF NOT EXISTS app_config (
+			id   INT PRIMARY KEY,
+			data JSONB NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS audit_log (
+			id   BIGSERIAL PRIMARY KEY,
+			ts   BIGINT,
+			data JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS audit_log_ts ON audit_log(ts);
+		CREATE TABLE IF NOT EXISTS events (
+			id   BIGSERIAL PRIMARY KEY,
+			ts   BIGINT,
+			data JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+		CREATE TABLE IF NOT EXISTS hosts (
+			id   TEXT PRIMARY KEY,
+			data JSONB NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS kv_state (
+			k    TEXT PRIMARY KEY,
+			data JSONB NOT NULL
+		);
 	`)
 	return err
+}
+
+// --- hosts (metadata + latest + custom gauges; history lives in VM, not PG) ---
+
+func (p *pgStore) loadHosts() ([]*Host, error) {
+	rows, err := p.db.Query(`SELECT data FROM hosts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Host
+	for rows.Next() {
+		var raw []byte
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var h Host
+		if json.Unmarshal(raw, &h) == nil && h.ID != "" {
+			hh := h
+			out = append(out, &hh)
+		}
+	}
+	return out, rows.Err()
+}
+
+// saveHosts replaces the host set atomically (DELETE + INSERT in one tx) so
+// operator-deleted hosts don't linger. Host counts are small, so this is cheap.
+func (p *pgStore) saveHosts(hosts []*Host) error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM hosts`); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO hosts(id,data) VALUES($1,$2)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, h := range hosts {
+		if h == nil || h.ID == "" {
+			continue
+		}
+		raw, _ := json.Marshal(h)
+		if _, err := stmt.Exec(h.ID, raw); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// --- small key-value state blobs (alert-ack states, login sessions) ---
+
+func (p *pgStore) loadKV(key string) ([]byte, error) {
+	var raw []byte
+	err := p.db.QueryRow(`SELECT data FROM kv_state WHERE k=$1`, key).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return raw, err
+}
+
+func (p *pgStore) saveKV(key string, raw []byte) error {
+	_, err := p.db.Exec(`INSERT INTO kv_state(k,data) VALUES($1,$2)
+		ON CONFLICT(k) DO UPDATE SET data=EXCLUDED.data`, key, raw)
+	return err
+}
+
+// --- config blob (whole ServerConfig as one JSONB row; replaces the JSON file) ---
+
+func (p *pgStore) loadConfigBlob() ([]byte, bool, error) {
+	var raw []byte
+	err := p.db.QueryRow(`SELECT data FROM app_config WHERE id=1`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
+func (p *pgStore) saveConfigBlob(raw []byte) error {
+	_, err := p.db.Exec(`INSERT INTO app_config(id,data) VALUES(1,$1)
+		ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data`, raw)
+	return err
+}
+
+// --- audit log (append-only, unbounded in PG; the store keeps a recent cache) ---
+
+func (p *pgStore) appendAudit(e LogEntry) {
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	if _, err := p.db.Exec(`INSERT INTO audit_log(ts,data) VALUES($1,$2)`, e.Timestamp, raw); err != nil {
+		slog.Warn("PG 写审计日志失败", "err", err)
+	}
+}
+
+func (p *pgStore) loadRecentAudit(limit int) ([]LogEntry, error) {
+	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM audit_log ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LogEntry
+	for rows.Next() {
+		var raw []byte
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var e LogEntry
+		if json.Unmarshal(raw, &e) == nil {
+			out = append(out, e)
+		}
+	}
+	return out, rows.Err()
+}
+
+// --- plugin events ---
+
+func (p *pgStore) appendEvent(e storedEvent) {
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	if _, err := p.db.Exec(`INSERT INTO events(ts,data) VALUES($1,$2)`, e.Timestamp, raw); err != nil {
+		slog.Warn("PG 写事件失败", "err", err)
+	}
+}
+
+func (p *pgStore) loadRecentEvents(limit int) ([]storedEvent, error) {
+	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM events ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []storedEvent
+	for rows.Next() {
+		var raw []byte
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var e storedEvent
+		if json.Unmarshal(raw, &e) == nil {
+			out = append(out, e)
+		}
+	}
+	return out, rows.Err()
 }
 
 // --- incidents ---
@@ -166,35 +358,52 @@ func (p *pgStore) close() {
 	}
 }
 
-// runPGSync wires PostgreSQL as the persistence backend for incidents + tickets
-// when a DSN is configured: it loads existing rows on start, then periodically
-// (and on demand) writes the managers' current state back. Returns the store so
-// the caller can also flush on shutdown.
-func (s *Server) startPGSync(dsn string) *pgStore {
-	ps, err := openPGStore(dsn)
-	if err != nil {
-		slog.Error("PostgreSQL 连接失败，回落内嵌快照", "err", err)
-		return nil
+// bindPG wires an already-open PostgreSQL store as the persistence backend for
+// all durable relational state: incidents, work orders, host metadata, alert-ack
+// states and login sessions. It loads existing rows on start, then periodically
+// writes the current state back.
+func (s *Server) bindPG(ps *pgStore) {
+	if ps == nil {
+		return
 	}
-	slog.Info("PostgreSQL 已连接：事件/工单持久化到 PG")
-	// Load existing records into the managers (PG is now the source of truth).
 	if incs, err := ps.loadIncidents(); err == nil && len(incs) > 0 {
 		s.incidents.Import(incs)
 	}
 	if tks, err := ps.loadTickets(); err == nil && len(tks) > 0 {
 		s.tickets.Import(tks)
 	}
+	// Login sessions survive restart (no forced re-login in dual-DB mode).
+	if raw, _ := ps.loadKV("sessions"); raw != nil {
+		var sess map[string]dbSession
+		if json.Unmarshal(raw, &sess) == nil {
+			s.auth.importSessions(sess)
+		}
+	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for range t.C {
-			if err := ps.saveIncidents(s.incidents.Export()); err != nil {
-				slog.Warn("PG 同步事件失败", "err", err)
-			}
-			if err := ps.saveTickets(s.tickets.Export()); err != nil {
-				slog.Warn("PG 同步工单失败", "err", err)
-			}
+			s.pgFlush(ps)
 		}
 	}()
-	return ps
+}
+
+// pgFlush persists the current relational state to PostgreSQL (also called on
+// shutdown for a final flush).
+func (s *Server) pgFlush(ps *pgStore) {
+	if err := ps.saveIncidents(s.incidents.Export()); err != nil {
+		slog.Warn("PG 同步事件失败", "err", err)
+	}
+	if err := ps.saveTickets(s.tickets.Export()); err != nil {
+		slog.Warn("PG 同步工单失败", "err", err)
+	}
+	if err := ps.saveHosts(s.store.exportHosts()); err != nil {
+		slog.Warn("PG 同步主机失败", "err", err)
+	}
+	if raw, err := json.Marshal(s.store.exportAlertStates()); err == nil {
+		_ = ps.saveKV("alert_states", raw)
+	}
+	if raw, err := json.Marshal(s.auth.exportSessions()); err == nil {
+		_ = ps.saveKV("sessions", raw)
+	}
 }

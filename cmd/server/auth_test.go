@@ -74,7 +74,7 @@ func TestSessionTokensStoredHashed(t *testing.T) {
 func newTestConfigStore(t *testing.T) *ConfigStore {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test_config.json")
-	cs, err := NewConfigStore(path)
+	cs, err := NewConfigStore(path, nil)
 	if err != nil {
 		t.Fatalf("NewConfigStore failed: %v", err)
 	}

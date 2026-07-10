@@ -37,7 +37,7 @@ func TestBackfillThresholdPartial(t *testing.T) {
 // Saving a config whose new-metric thresholds are 0 (blank form) persists the
 // standard defaults instead of the meaningless zeros, and passes validation.
 func TestSetBackfillsThresholds(t *testing.T) {
-	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"))
+	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"), nil)
 	if err != nil {
 		t.Fatalf("NewConfigStore: %v", err)
 	}

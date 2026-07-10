@@ -30,7 +30,15 @@ func (s *Server) wireSRE() {
 	// SLO evaluation needs metric + check history and can raise incidents.
 	s.slos.incidents = s.incidents
 	s.slos.metricSamples = func(hostID string, fromTs int64) []shared.Sample {
-		samples, _ := s.store.GetHistory(hostID, fromTs, time.Now().Unix())
+		now := time.Now().Unix()
+		// Long SLO windows exceed the in-memory tiers, so read from VM (the
+		// authoritative time-series store) when it's enabled.
+		if s.vm.enabled() {
+			if samples, ok := s.vm.queryHistory(hostID, fromTs, now); ok {
+				return samples
+			}
+		}
+		samples, _ := s.store.GetHistory(hostID, fromTs, now)
 		return samples
 	}
 	s.slos.checkPoints = s.checks.HistoryOf

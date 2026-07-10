@@ -29,7 +29,7 @@ type SMTPConfig struct {
 	Username string `json:"smtp_username"` // sender email account
 	Password string `json:"smtp_password,omitempty"`
 	FromName string `json:"smtp_from_name"` // display name, default "AIOps Monitor"
-	UseTLS   bool   `json:"smtp_use_tls"`  // true = implicit TLS (465), false = STARTTLS/plain
+	UseTLS   bool   `json:"smtp_use_tls"`   // true = implicit TLS (465), false = STARTTLS/plain
 }
 
 // CustomWebhookConfig holds a user-defined generic HTTP(S) webhook channel.
@@ -37,9 +37,9 @@ type SMTPConfig struct {
 type CustomWebhookConfig struct {
 	Enabled      bool   `json:"enabled"`
 	URL          string `json:"url"`
-	Method       string `json:"method"`       // POST (default) | GET
-	ContentType  string `json:"content_type"` // application/json (default) | text/plain
-	Headers      string `json:"headers"`      // optional JSON key-value map, e.g. {"X-Token":"abc"}
+	Method       string `json:"method"`        // POST (default) | GET
+	ContentType  string `json:"content_type"`  // application/json (default) | text/plain
+	Headers      string `json:"headers"`       // optional JSON key-value map, e.g. {"X-Token":"abc"}
 	BodyTemplate string `json:"body_template"` // Go template; empty = default Markdown-like text
 }
 
@@ -72,7 +72,7 @@ func defaultThresholdConfig() ThresholdConfig {
 		IOPSWarn: 50000, IOPSCrit: 100000,
 		GPUWarn: 80, GPUCrit: 95,
 		LoadWarn: 4.0, LoadCrit: 8.0,
-		ProcWarn: 0.5,
+		ProcWarn:        0.5,
 		OfflineAfterSec: 60,
 	}
 }
@@ -124,7 +124,7 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		IOPSWarn: t.IOPSWarn, IOPSCrit: t.IOPSCrit,
 		GPUWarn: t.GPUWarn, GPUCrit: t.GPUCrit,
 		LoadWarn: t.LoadWarn, LoadCrit: t.LoadCrit,
-		ProcWarn: t.ProcWarn,
+		ProcWarn:     t.ProcWarn,
 		OfflineAfter: time.Duration(t.OfflineAfterSec) * time.Second,
 	}
 }
@@ -193,28 +193,28 @@ type HTTPProxyConfig struct {
 // ServerConfig is the operator-editable server configuration persisted to disk.
 // Categories holds manual per-host category overrides (host id -> category).
 type ServerConfig struct {
-	AlertsEnabled bool              `json:"alerts_enabled"`
-	Feishu          WebhookConfig       `json:"feishu"`
-	Dingtalk        WebhookConfig       `json:"dingtalk"`
-	CustomWebhook   CustomWebhookConfig `json:"custom_webhook"`
-	SMTP            SMTPConfig          `json:"smtp"`
-	Thresholds      ThresholdConfig     `json:"thresholds"`
-	Categories    map[string]string `json:"categories"`
-	InstallToken  string            `json:"install_token"`
+	AlertsEnabled bool                `json:"alerts_enabled"`
+	Feishu        WebhookConfig       `json:"feishu"`
+	Dingtalk      WebhookConfig       `json:"dingtalk"`
+	CustomWebhook CustomWebhookConfig `json:"custom_webhook"`
+	SMTP          SMTPConfig          `json:"smtp"`
+	Thresholds    ThresholdConfig     `json:"thresholds"`
+	Categories    map[string]string   `json:"categories"`
+	InstallToken  string              `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
 	// grace period, so existing agents don't drop offline the instant the token is
 	// rotated. Managed by ResetToken (rotate).
-	PrevInstallToken   string `json:"prev_install_token,omitempty"`
-	PrevTokenExpiresAt int64  `json:"prev_token_expires_at,omitempty"`
-	RequireToken       bool   `json:"require_token"`
-	Account       AccountConfig     `json:"account"`
-	Checks        []CustomCheck     `json:"checks"`
-	Playbooks     []Playbook        `json:"playbooks,omitempty"`
+	PrevInstallToken   string        `json:"prev_install_token,omitempty"`
+	PrevTokenExpiresAt int64         `json:"prev_token_expires_at,omitempty"`
+	RequireToken       bool          `json:"require_token"`
+	Account            AccountConfig `json:"account"`
+	Checks             []CustomCheck `json:"checks"`
+	Playbooks          []Playbook    `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
 	SLOs             []SLO             `json:"slos,omitempty"`
-	AI               AIConfig          `json:"ai,omitempty"` // optional AI provider for inspection/diagnosis
-	VM               VMConfig          `json:"vm,omitempty"` // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
+	AI               AIConfig          `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
+	VM               VMConfig          `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
 	PostgresDSN      string            `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
@@ -307,17 +307,33 @@ type ConfigStore struct {
 	cfg     ServerConfig
 	prev    ServerConfig // snapshot before the last Set(), for Revert()
 	hasPrev bool         // whether prev holds a valid snapshot
+	pg      *pgStore     // when set, config persists to PostgreSQL instead of the JSON file
 }
 
-func NewConfigStore(path string) (*ConfigStore, error) {
-	cs := &ConfigStore{path: path, cfg: defaultServerConfig()}
-	if b, err := os.ReadFile(path); err == nil {
-		var c ServerConfig
-		if json.Unmarshal(b, &c) == nil {
-			if c.Categories == nil {
-				c.Categories = map[string]string{}
+func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
+	cs := &ConfigStore{path: path, cfg: defaultServerConfig(), pg: pg}
+	loaded := false
+	if pg != nil { // PostgreSQL is the source of truth in dual-DB mode
+		if raw, ok, err := pg.loadConfigBlob(); err == nil && ok {
+			var c ServerConfig
+			if json.Unmarshal(raw, &c) == nil {
+				if c.Categories == nil {
+					c.Categories = map[string]string{}
+				}
+				cs.cfg = c
+				loaded = true
 			}
-			cs.cfg = c
+		}
+	}
+	if !loaded {
+		if b, err := os.ReadFile(path); err == nil {
+			var c ServerConfig
+			if json.Unmarshal(b, &c) == nil {
+				if c.Categories == nil {
+					c.Categories = map[string]string{}
+				}
+				cs.cfg = c
+			}
 		}
 	}
 	dirty := false
@@ -699,16 +715,16 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	cs.mu.Lock()
 	cs.prev = cs.cfg // snapshot for potential rollback
 	cs.hasPrev = true
-	c.Categories = cs.cfg.Categories     // categories managed via SetCategory
-	c.InstallToken = cs.cfg.InstallToken // token managed via install endpoints
-	c.Account = cs.cfg.Account           // account managed via auth endpoints
-	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
-	c.Playbooks = cs.cfg.Playbooks       // playbooks managed via playbook endpoints
+	c.Categories = cs.cfg.Categories             // categories managed via SetCategory
+	c.InstallToken = cs.cfg.InstallToken         // token managed via install endpoints
+	c.Account = cs.cfg.Account                   // account managed via auth endpoints
+	c.Checks = cs.cfg.Checks                     // checks managed via check endpoints
+	c.Playbooks = cs.cfg.Playbooks               // playbooks managed via playbook endpoints
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
-	c.SLOs = cs.cfg.SLOs                 // managed via SLO endpoints
-	c.AI = cs.cfg.AI                     // managed via AI config endpoint
-	c.VM = cs.cfg.VM                     // managed via env / storage config
-	c.PostgresDSN = cs.cfg.PostgresDSN   // managed via env / storage config
+	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
+	c.AI = cs.cfg.AI                             // managed via AI config endpoint
+	c.VM = cs.cfg.VM                             // managed via env / storage config
+	c.PostgresDSN = cs.cfg.PostgresDSN           // managed via env / storage config
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -773,9 +789,13 @@ func (cs *ConfigStore) CategoryOverride(hostID string) (string, bool) {
 func (cs *ConfigStore) save() error {
 	cs.mu.RLock()
 	b, err := json.MarshalIndent(cs.cfg, "", "  ")
+	pg := cs.pg
 	cs.mu.RUnlock()
 	if err != nil {
 		return err
+	}
+	if pg != nil { // PostgreSQL-backed: persist the whole config as one JSONB row
+		return pg.saveConfigBlob(b)
 	}
 	// 0o600: this file holds password hashes, MFA secrets and the install token —
 	// it must not be world-readable on a shared host.

@@ -56,7 +56,7 @@ services:
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
-      - "-retentionPeriod=12"        # 指标保留 12 个月，可按需调整
+      - "-retentionPeriod=36"        # 指标保留 12 个月，可按需调整
       - "-httpListenAddr=:8428"
     ports:
       - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）

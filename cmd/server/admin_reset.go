@@ -38,7 +38,7 @@ var resetToken string
 // It reads the server config, resets the first admin's password, prints the
 // new password to stdout, and exits the process.
 func runResetAdmin(cfgPath string) {
-	cfg, err := NewConfigStore(cfgPath)
+	cfg, err := NewConfigStore(cfgPath, pgFromEnv())
 	if err != nil {
 		log.Fatalf("Failed to load config %q: %v", cfgPath, err)
 	}
@@ -65,7 +65,7 @@ func runResetAdmin(cfgPath string) {
 // a two-step admin password reset flow. The server generates a one-time token
 // (printed to console) and accepts authenticated reset requests.
 func runResetAdminAPI(cfgPath, listenAddr string) {
-	cfg, err := NewConfigStore(cfgPath)
+	cfg, err := NewConfigStore(cfgPath, pgFromEnv())
 	if err != nil {
 		log.Fatalf("Failed to load config %q: %v", cfgPath, err)
 	}

@@ -31,7 +31,7 @@ func TestParseHHMM(t *testing.T) {
 
 func newTestPM(t *testing.T) *playbookManager {
 	t.Helper()
-	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"))
+	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"), nil)
 	if err != nil {
 		t.Fatalf("NewConfigStore: %v", err)
 	}

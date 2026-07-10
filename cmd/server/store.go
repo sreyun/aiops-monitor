@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -73,10 +74,69 @@ type Store struct {
 	hosts       map[string]*Host
 	events      []storedEvent
 	activity    []LogEntry
-	deleted      map[string]int64 // hostID -> unix time of manual deletion (re-add suppression)
-	lastEvent    map[string]int64 // dedup key -> last unix time (plugin-event noise suppression)
-	alertStates  map[string]string // alert key -> "acknowledged" | "silenced" (persisted)
-	dirty        bool             // set on every mutation; consumed by the embedded DB's autosave
+	deleted     map[string]int64  // hostID -> unix time of manual deletion (re-add suppression)
+	lastEvent   map[string]int64  // dedup key -> last unix time (plugin-event noise suppression)
+	alertStates map[string]string // alert key -> "acknowledged" | "silenced" (persisted)
+	dirty       bool              // set on every mutation; consumed by the embedded DB's autosave
+	pg          *pgStore          // when set, audit log + events are also written to PostgreSQL
+}
+
+// BindPG wires PostgreSQL as the durable store for host metadata, the audit log,
+// plugin events and alert-ack states, seeding the in-memory state from it.
+func (s *Store) BindPG(pg *pgStore) {
+	if pg == nil {
+		return
+	}
+	audit, _ := pg.loadRecentAudit(maxActivity)
+	events, _ := pg.loadRecentEvents(maxEvents)
+	hosts, _ := pg.loadHosts()
+	var alertStates map[string]string
+	if raw, _ := pg.loadKV("alert_states"); raw != nil {
+		_ = json.Unmarshal(raw, &alertStates)
+	}
+	s.mu.Lock()
+	s.pg = pg
+	if len(audit) > 0 {
+		s.activity = audit
+	}
+	if len(events) > 0 {
+		s.events = events
+	}
+	for _, h := range hosts { // host list survives restart (history stays in VM)
+		if h.ID != "" {
+			hh := *h
+			s.hosts[h.ID] = &hh
+		}
+	}
+	if alertStates != nil {
+		s.alertStates = alertStates
+	}
+	s.mu.Unlock()
+}
+
+// exportHosts returns copies of every host's metadata WITHOUT the history tiers
+// (those live in VictoriaMetrics) — for periodic persistence to PostgreSQL.
+func (s *Store) exportHosts() []*Host {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Host, 0, len(s.hosts))
+	for _, h := range s.hosts {
+		cp := *h
+		cp.histRaw, cp.hist1m, cp.hist5m = nil, nil, nil
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// exportAlertStates returns a copy of the ack/silence state map.
+func (s *Store) exportAlertStates() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]string, len(s.alertStates))
+	for k, v := range s.alertStates {
+		out[k] = v
+	}
+	return out
 }
 
 func NewStore() *Store {
@@ -234,7 +294,11 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 			}
 		}
 		s.lastEvent[key] = now
-		s.events = append(s.events, storedEvent{Event: e, HostID: h.ID, Hostname: h.Hostname})
+		se := storedEvent{Event: e, HostID: h.ID, Hostname: h.Hostname}
+		s.events = append(s.events, se)
+		if s.pg != nil {
+			go s.pg.appendEvent(se)
+		}
 		s.appendLog(LogEntry{Timestamp: e.Timestamp, Kind: KindPlugin, Level: e.Level, Actor: e.Source, Host: h.Hostname, Message: e.Message})
 	}
 	if len(s.events) > maxEvents {
@@ -568,6 +632,9 @@ func (s *Store) appendLog(e LogEntry) {
 		s.activity = s.activity[len(s.activity)-maxActivity:]
 	}
 	s.dirty = true
+	if s.pg != nil { // PostgreSQL keeps the full, durable audit trail
+		go s.pg.appendAudit(e)
+	}
 }
 
 // AddLog records an activity-log entry (locks internally).

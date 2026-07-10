@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,4 +140,122 @@ func (v *vmWriter) push(url string, samples []vmSample) {
 		return
 	}
 	resp.Body.Close()
+}
+
+// enabled reports whether VM is the active time-series store.
+func (v *vmWriter) enabled() bool {
+	if v == nil {
+		return false
+	}
+	c := v.cfg.VMConfig()
+	return c.Enabled && c.URL != ""
+}
+
+// setSampleMetric writes one VM series value into the matching Sample field.
+func setSampleMetric(s *shared.Sample, name string, val float64) {
+	switch strings.TrimPrefix(name, "aiops_") {
+	case "cpu_percent":
+		s.CPUPercent = val
+	case "mem_percent":
+		s.MemPercent = val
+	case "mem_used_bytes":
+		s.MemUsed = uint64(val)
+	case "swap_percent":
+		s.SwapPercent = val
+	case "disk_percent":
+		s.DiskPercent = val
+	case "disk_io_util_percent":
+		s.DiskIOUtilPercent = val
+	case "disk_read_rate":
+		s.DiskReadRate = val
+	case "disk_write_rate":
+		s.DiskWriteRate = val
+	case "disk_read_iops":
+		s.DiskReadIOPS = val
+	case "disk_write_iops":
+		s.DiskWriteIOPS = val
+	case "net_sent_rate":
+		s.NetSentRate = val
+	case "net_recv_rate":
+		s.NetRecvRate = val
+	case "net_conns":
+		s.NetConns = int(val)
+	case "load1":
+		s.Load1 = val
+	case "load5":
+		s.Load5 = val
+	case "load15":
+		s.Load15 = val
+	case "proc_count":
+		s.ProcCount = int(val)
+	}
+}
+
+// queryHistory reads a host's series back from VM (the authoritative time-series
+// store) over [from,to] and reassembles []shared.Sample keyed by timestamp.
+func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample, bool) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil, false
+	}
+	q := url.Values{
+		"match[]": {fmt.Sprintf(`{host=%q,__name__=~"aiops_.*"}`, hostID)},
+		"start":   {strconv.FormatInt(from, 10)},
+		"end":     {strconv.FormatInt(to, 10)},
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/export?"+q.Encode(), nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	out := parseVMExport(resp.Body)
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// parseVMExport reassembles VM's /api/v1/export NDJSON (one line per series) into
+// []shared.Sample joined by timestamp. Split out so it can be unit-tested without
+// a live VM.
+func parseVMExport(r io.Reader) []shared.Sample {
+	byTs := map[int64]*shared.Sample{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
+	for sc.Scan() {
+		var line struct {
+			Metric     map[string]string `json:"metric"`
+			Values     []float64         `json:"values"`
+			Timestamps []int64           `json:"timestamps"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil {
+			continue
+		}
+		name := line.Metric["__name__"]
+		for i := range line.Values {
+			if i >= len(line.Timestamps) {
+				break
+			}
+			ts := line.Timestamps[i] / 1000
+			s := byTs[ts]
+			if s == nil {
+				s = &shared.Sample{Timestamp: ts}
+				byTs[ts] = s
+			}
+			setSampleMetric(s, name, line.Values[i])
+		}
+	}
+	out := make([]shared.Sample, 0, len(byTs))
+	for _, s := range byTs {
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
+	return out
 }

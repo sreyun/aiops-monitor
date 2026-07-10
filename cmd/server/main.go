@@ -19,7 +19,7 @@ import (
 // The default "AIOps" is a fallback for development builds; production builds
 // inject the real Git tag at build time via ldflags:
 //
-//   go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent
+//	go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent
 //
 // or use the build script:  powershell -File build.ps1
 //
@@ -194,45 +194,62 @@ func main() {
 
 	dist := resolveDist(*distDir)
 	store := NewStore()
-	cfg, err := NewConfigStore(*cfgPath)
+	// Open PostgreSQL early (from env) so config + relational state load from it.
+	// When set, PG becomes the sole relational store and the embedded aiops.db is
+	// retired; when unset the server keeps the backward-compatible embedded mode.
+	var pg *pgStore
+	if dsn := os.Getenv("AIOPS_POSTGRES_DSN"); dsn != "" {
+		if p, err := openPGStore(dsn); err != nil {
+			slog.Error("PostgreSQL 连接失败，回落内嵌存储", "err", err)
+		} else {
+			pg = p
+			slog.Info("PostgreSQL 已连接：配置 / 审计 / 事件 / 工单持久化到 PG")
+			store.BindPG(pg) // audit log + plugin events → PG
+		}
+	}
+	cfg, err := NewConfigStore(*cfgPath, pg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
 
-	// embedded lightweight DB: restore state, then autosave + flush on exit
-	db := NewDB(dbPathFor(*cfgPath), store, server.auth)
-	db.BindSRE(server.incidents, server.tickets) // persist incidents + work orders
-	db.Load()
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
-	// Optional PostgreSQL backend for durable SRE records (incidents + tickets).
-	// Loaded AFTER db.Load so PG overrides the snapshot when configured.
-	var pg *pgStore
-	if dsn := cfg.PostgresDSN(); dsn != "" {
-		pg = server.startPGSync(dsn)
+	// Terminal recordings are always file-backed on the data volume; SRE records
+	// go to PG when configured.
+	if pg != nil {
+		server.bindPG(pg) // load + periodically persist incidents / work orders
 	}
-	go db.AutoSave(15 * time.Second)
+	// Embedded aiops.db is used ONLY without PostgreSQL (single-file mode). In PG
+	// mode all relational state is in PG and all time-series in VictoriaMetrics.
+	var db *DB
+	if pg == nil {
+		db = NewDB(dbPathFor(*cfgPath), store, server.auth)
+		db.BindSRE(server.incidents, server.tickets)
+		db.Load()
+		go db.AutoSave(15 * time.Second)
+	}
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		if err := db.Save(); err != nil {
-			slog.Error(Tz("server.save_failed"), "err", err)
-		} else {
-			slog.Info(Tz("server.saved_exit"))
+		if db != nil {
+			if err := db.Save(); err != nil {
+				slog.Error(Tz("server.save_failed"), "err", err)
+			} else {
+				slog.Info(Tz("server.saved_exit"))
+			}
 		}
-		if pg != nil { // final flush to PostgreSQL
-			_ = pg.saveIncidents(server.incidents.Export())
-			_ = pg.saveTickets(server.tickets.Export())
+		if pg != nil { // final flush of all relational state to PostgreSQL
+			server.pgFlush(pg)
 			pg.close()
 		}
 		os.Exit(0)
 	}()
 
-	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
-	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
-	go server.runScheduler(30 * time.Second) // timed playbook triggers (interval/daily/weekly)
+	go notifier.Run(10 * time.Second)           // periodic alert evaluation + dedup push
+	go server.checks.Run(5 * time.Second)       // custom HTTP/TCP synthetic checks
+	go server.runScheduler(30 * time.Second)    // timed playbook triggers (interval/daily/weekly)
 	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
 	go server.vm.run()                          // optional VictoriaMetrics remote-write pump

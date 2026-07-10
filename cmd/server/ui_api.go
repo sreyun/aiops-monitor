@@ -83,6 +83,15 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In VM mode VictoriaMetrics is the authoritative time-series store — read the
+	// trend history from it. Fall back to the in-memory tiers if VM is disabled or
+	// returns nothing (e.g. very recent window not yet queryable).
+	if s.vm.enabled() {
+		if samples, ok := s.vm.queryHistory(id, from, to); ok {
+			writeJSON(w, http.StatusOK, samples)
+			return
+		}
+	}
 	samples, ok := s.store.GetHistory(id, from, to)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
