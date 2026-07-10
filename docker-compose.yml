@@ -11,7 +11,7 @@
 #
 # 端口说明：
 #   - 8529: Web UI 和 API 端口
-#   - 10000-10099: TCP 端口转发监听范围（默认 100 个端口）
+#   - 10100-10300: TCP 端口转发监听范围（默认 201 个端口）
 # ============================================================
 
 services:
@@ -23,7 +23,7 @@ services:
     container_name: aiops-server
     ports:
       - "8529:8529"
-      # TCP 端口转发监听范围（默认 10000-10099，共 100 个端口）
+      # TCP 端口转发监听范围（默认 10100-10300，共 201 个端口）
       # 如需更多端口，可扩展范围，但建议不超过 500 个
       - "10100-10300:10100-10300"
     volumes:
@@ -35,7 +35,7 @@ services:
       # 也可以通过挂载 server_config.json 设置 forward_listen 字段。
       - AIOPS_FORWARD_LISTEN=0.0.0.0
       # 可选：转发端口范围（需与 ports 映射一致）
-      # - AIOPS_FORWARD_PORT_RANGE=10000-10099
+      # - AIOPS_FORWARD_PORT_RANGE=10100-10300
       # 可选：中继节点共享密钥（与 Agent 端 relay-secret 一致）
       # - AIOPS_RELAY_SECRET=your-shared-secret
     restart: unless-stopped

@@ -137,7 +137,7 @@ docker compose up -d aiops-server
 
 - 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./server_config.json`
 - 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
-- 默认映射 TCP 转发端口范围 `10000-10099`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`（容器内默认 `127.0.0.1` 仅限容器自身访问）
+- 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`（容器内默认 `127.0.0.1` 仅限容器自身访问）
 - Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用
 - Docker 镜像支持 `amd64` 和 `arm64` 双架构，`docker pull` 自动匹配
 
@@ -357,7 +357,7 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `trust_proxy` | bool | `false` | 反代后设 `true`：采信 `X-Real-IP` 做限流 |
 | `forward_disabled` | bool | `false` | 全局禁用端口转发与 HTTP 代理 |
 | `forward_listen` | string | `127.0.0.1` | TCP 转发监听地址（Docker 部署需设为 `0.0.0.0`） |
-| `forward_port_range` | string | `10000-10099` | TCP 转发端口范围（需与 Docker `ports` 映射一致） |
+| `forward_port_range` | string | `10100-10300` | TCP 转发端口范围（需与 Docker `ports` 映射一致） |
 | `relay_secret` | string | `""` | 中继节点共享密钥（v5.4.1，与 Agent 端 `-relay-secret` 一致） |
 | `smtp.smtp_enabled` | bool | `false` | 邮件推送开关 |
 | `smtp.smtp_host` | string | `""` | SMTP 服务器地址 |
@@ -402,7 +402,7 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | 环境变量 | 对应配置项 | 类型 | 说明 |
 |---|---|---|---|
 | `AIOPS_FORWARD_LISTEN` | `forward_listen` | string | TCP 转发监听地址（Docker 部署必须设为 `0.0.0.0`） |
-| `AIOPS_FORWARD_PORT_RANGE` | `forward_port_range` | string | TCP 转发端口范围，如 `10000-10099` |
+| `AIOPS_FORWARD_PORT_RANGE` | `forward_port_range` | string | TCP 转发端口范围，如 `10100-10300` |
 | `AIOPS_RELAY_SECRET` | `relay_secret` | string | 中继节点共享密钥 |
 | `AIOPS_FORWARD_DISABLED` | `forward_disabled` | bool | 设为 `true` 全局禁用端口转发 |
 | `AIOPS_TERMINAL_DISABLED` | `terminal_disabled` | bool | 设为 `true` 全局禁用远程终端 |

@@ -221,7 +221,7 @@ type ServerConfig struct {
 	// use the AIOPS_FORWARD_LISTEN environment variable to override.
 	ForwardListen string `json:"forward_listen,omitempty"`
 	// ForwardPortRange is the port range for TCP port forwarding ("min-max").
-	// Default "10000-10099" for Docker deployments to expose a predictable range.
+	// Default "10100-10300" for Docker deployments to expose a predictable range.
 	// Set to "" or "0-0" to let the OS assign any available port.
 	ForwardPortRange string `json:"forward_port_range,omitempty"`
 	// HTTPProxies is the list of saved HTTP proxy shortcuts.
@@ -457,22 +457,22 @@ func (cs *ConfigStore) ForwardListenAddr() string {
 }
 
 // ForwardPortRangeBounds returns the min and max port for TCP forwarding.
-// Defaults to 10000-10099 for predictable Docker port exposure.
+// Defaults to 10100-10300 for predictable Docker port exposure.
 // Returns (0, 0) to let the OS assign any port if not configured or "0-0".
 func (cs *ConfigStore) ForwardPortRangeBounds() (minPort, maxPort int) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	if cs.cfg.ForwardPortRange == "" {
-		return 10000, 10099 // default range for Docker (100 ports)
+		return 10100, 10300 // default range for Docker (201 ports)
 	}
 	parts := strings.Split(cs.cfg.ForwardPortRange, "-")
 	if len(parts) != 2 {
-		return 10000, 10099
+		return 10100, 10300
 	}
-	minPort = parseIntSafe(parts[0], 10000)
-	maxPort = parseIntSafe(parts[1], 10099)
+	minPort = parseIntSafe(parts[0], 10100)
+	maxPort = parseIntSafe(parts[1], 10300)
 	if minPort <= 0 || maxPort <= 0 || minPort > maxPort {
-		return 10000, 10099
+		return 10100, 10300
 	}
 	return minPort, maxPort
 }

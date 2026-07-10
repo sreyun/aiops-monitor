@@ -295,4 +295,4 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 **TCP 端口转发连不上?**
 - 检查 `forward_listen` 配置：v5.4.1 起默认 `127.0.0.1`（仅限本机），Docker 部署或需从其他机器访问时需设为 `0.0.0.0`。
 - Docker 部署确认 `docker-compose.yml` 中 `AIOPS_FORWARD_LISTEN=0.0.0.0` 已启用，且 `ports` 映射了对应端口范围。
-- 防火墙是否放行了转发端口范围（默认 `10000-10099`）。
+- 防火墙是否放行了转发端口范围（默认 `10100-10300`）。
