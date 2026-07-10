@@ -15,6 +15,38 @@
    ============================================================ */
 "use strict";
 
+/* ===== UI/UX 审查修复（5.6 弹窗语义角色 / 6.4 全局加载指示） ===== */
+(function(){
+  /* 6.4 全局请求加载指示：包装原生 fetch，任何请求进行中时显示顶部细进度条 */
+  var _origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (_origFetch) {
+    var _pending = 0;
+    var _bar = document.createElement("div");
+    _bar.className = "loadbar";
+    _bar.setAttribute("aria-hidden", "true");
+    document.addEventListener("DOMContentLoaded", function(){ document.body.appendChild(_bar); });
+    window.fetch = function() {
+      _pending++; _bar.classList.add("active");
+      return _origFetch.apply(window, arguments).finally(function(){
+        _pending--; if (_pending <= 0) { _pending = 0; _bar.classList.remove("active"); }
+      });
+    };
+  }
+  /* 5.6 为所有弹窗补充语义角色（读屏支持），含动态创建的弹窗 */
+  function enhanceModals(){
+    document.querySelectorAll(".modal:not([role])").forEach(function(m){
+      m.setAttribute("role", "dialog");
+      m.setAttribute("aria-modal", "true");
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", enhanceModals);
+  else enhanceModals();
+  var _mo = window.MutationObserver && new MutationObserver(function(muts){
+    muts.forEach(function(m){ if (m.addedNodes && m.addedNodes.length) enhanceModals(); });
+  });
+  if (_mo) _mo.observe(document.documentElement, { childList:true, subtree:true });
+})();
+
 // 防御性初始化：若 i18n-dashboard.js 加载失败，注入最小可用 I18N 对象，
 // 避免 app.js 中大量顶层 I18N.t() 调用抛出 ReferenceError 导致整个脚本崩溃，
 // 进而阻止 initAuth() 执行、登录界面无法显示。
@@ -3814,7 +3846,17 @@ function fetchWithTimeout(url, opts, timeoutMs) {
 async function initAuth() {
   try {
     const r = await fetchWithTimeout(`${API}/me`, {}, 10000);
-    if (r.ok) { setUser(await r.json()); $("loginView").classList.remove("show"); startApp(); }
+    if (r.ok) {
+      const me = await r.json();
+      setUser(me);
+      $("loginView").classList.remove("show");
+      startApp();
+      // v5.4.0: force password change if admin reset was used
+      if (me.must_change_password) {
+        toast(I18N.t("auth.must_change_password") || "请立即修改密码", "warn");
+        setTimeout(() => openProfile(), 500);
+      }
+    }
     else { $("loginView").classList.add("show"); }
   } catch (e) {
     // Network error on initial auth check — show login with a friendly hint
@@ -4914,6 +4956,21 @@ safeAddEventListener("loginForm", "submit", async e => {
       else if (r.ok && j.require_mfa_setup) {
         openMfaSetup(true);
       }
+      else if (r.ok && j.must_change_password) {
+        // v5.4.0: admin password was reset — force password change
+        let user;
+        try {
+          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
+        } catch (_) {
+          user = { username: $("loginUser").value.trim(), display_name: "" };
+        }
+        setUser(user);
+        $("loginView").classList.remove("show");
+        startApp();
+        // Show a toast and open the profile modal for password change
+        toast(I18N.t("auth.must_change_password") || "请立即修改密码", "warn");
+        setTimeout(() => openProfile(), 500);
+      }
       else if (r.ok) {
         // Post-login /me fetch: wrap in try/catch so a transient network
         // hiccup doesn't leave the user stuck on the login page after
@@ -5033,6 +5090,7 @@ function renderPlaybooks(pbs) {
       <div class="pb-meta">
         <span class="tag">${stepCount} 步</span>
         <span class="tag">${targets.length} 目标</span>
+        ${pb.schedule && pb.schedule.enabled ? `<span class="tag sched">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
         <span class="mono" style="color:var(--muted)">${esc(pb.id)}</span>
       </div>
     </div>`;
@@ -5046,7 +5104,34 @@ function openPlaybookModal(pb) {
   $("pbDesc").value = pb ? (pb.description || "") : "";
   const steps = pb ? pb.steps : [];
   renderPbSteps(steps.length > 0 ? steps : [{name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false}]);
+  // Populate the timed-trigger fields from the playbook's schedule (if any).
+  const sc = (pb && pb.schedule) ? pb.schedule : null;
+  $("pbSchedEnabled").checked = !!(sc && sc.enabled);
+  $("pbSchedKind").value = (sc && sc.kind) || "interval";
+  $("pbSchedInterval").value = (sc && sc.interval_min) || 60;
+  $("pbSchedAt").value = (sc && sc.at) || "03:00";
+  $("pbSchedWeekday").value = String((sc && typeof sc.weekday === "number") ? sc.weekday : 1);
+  pbSchedRefresh();
   $("playbookMask").classList.add("show");
+}
+
+// Show/hide the schedule sub-fields based on the enable toggle + selected kind.
+function pbSchedRefresh() {
+  const on = $("pbSchedEnabled").checked;
+  $("pbSchedFields").style.display = on ? "" : "none";
+  const kind = $("pbSchedKind").value;
+  $("pbSchedIntervalField").style.display = (kind === "interval") ? "" : "none";
+  $("pbSchedAtField").style.display = (kind === "daily" || kind === "weekly") ? "" : "none";
+  $("pbSchedWeekdayField").style.display = (kind === "weekly") ? "" : "none";
+}
+
+// Human-readable schedule summary for the playbook card badge.
+function pbSchedLabel(sc) {
+  if (!sc || !sc.enabled) return "";
+  if (sc.kind === "interval") return `每 ${sc.interval_min} 分钟`;
+  if (sc.kind === "daily") return `每天 ${sc.at}`;
+  if (sc.kind === "weekly") { const wd = ["日","一","二","三","四","五","六"][sc.weekday] || ""; return `每周${wd} ${sc.at}`; }
+  return "定时";
 }
 
 function renderPbSteps(steps) {
@@ -5059,7 +5144,7 @@ function renderPbSteps(steps) {
         <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
-      <div class="field"><label>${I18N.t("form.command")}</label><input type="text" class="pb-step-cmd" value="${esc(s.command||"")}" placeholder="${I18N.t('form.hint_command')}" style="font-family:monospace"></div>
+      <div class="field"><label>${I18N.t("form.command")}</label><textarea class="pb-step-cmd" rows="2" placeholder="${I18N.t('form.hint_command')}" spellcheck="false" style="resize:vertical;min-height:54px;line-height:1.5">${esc(s.command||"")}</textarea></div>
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
         <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
@@ -5144,7 +5229,15 @@ function collectPlaybook() {
       continue_on_error: el.querySelector(".pb-step-cont").checked
     });
   });
-  return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps };
+  let schedule = null;
+  if ($("pbSchedEnabled").checked) {
+    const kind = $("pbSchedKind").value;
+    schedule = { enabled: true, kind };
+    if (kind === "interval") schedule.interval_min = parseInt($("pbSchedInterval").value) || 0;
+    if (kind === "daily" || kind === "weekly") schedule.at = $("pbSchedAt").value.trim();
+    if (kind === "weekly") schedule.weekday = parseInt($("pbSchedWeekday").value) || 0;
+  }
+  return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps, schedule };
 }
 
 async function savePlaybook() {
@@ -5241,6 +5334,8 @@ safeAddEventListener("pbAddStep", "click", () => {
   renderPbSteps(existing);
 });
 safeAddEventListener("pbSaveBtn", "click", savePlaybook);
+safeAddEventListener("pbSchedEnabled", "change", pbSchedRefresh);
+safeAddEventListener("pbSchedKind", "change", pbSchedRefresh);
 safeAddEventListener("pbHistoryBtn", "click", loadExecHistory);
 safeAddEventListener("playbookList", "click", e => {
   const card = e.target.closest(".pb-card"); if (!card) return;

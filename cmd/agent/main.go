@@ -34,6 +34,7 @@ type config struct {
 	Token          string         `json:"token"`               // legacy single-server token
 	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
 	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
+	RelaySecret    string         `json:"relay_secret,omitempty"` // v5.4.1: shared secret for relay auth
 }
 
 func defaultConfig() config {
@@ -94,6 +95,7 @@ func main() {
 	flag.StringVar(&cfg.Token, "token", cfg.Token, "安装 Token（由服务端安装命令注入，可选）")
 	flag.BoolVar(&cfg.Relay, "relay", cfg.Relay, "网关中继模式：监听本地端口，转发所有请求到 --server 指定的云监控中心")
 	flag.StringVar(&cfg.Listen, "listen", cfg.Listen, "Relay 监听地址，如 :8529")
+	flag.StringVar(&cfg.RelaySecret, "relay-secret", cfg.RelaySecret, "Relay 共享密钥，用于上游服务端验证中继请求")
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
 	flag.Parse()
 	_ = cfgFlag
@@ -106,7 +108,7 @@ func main() {
 		if listen == "" {
 			listen = ":8529"
 		}
-		runRelay(listen, strings.TrimRight(cfg.Server, "/"))
+		runRelay(listen, strings.TrimRight(cfg.Server, "/"), cfg.RelaySecret)
 		return
 	}
 

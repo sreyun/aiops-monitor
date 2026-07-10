@@ -65,15 +65,15 @@ type ThresholdConfig struct {
 
 func defaultThresholdConfig() ThresholdConfig {
 	return ThresholdConfig{
-		CPUWarn: 80, CPUCrit: 90,
-		MemWarn: 80, MemCrit: 90,
-		DiskWarn: 85, DiskCrit: 95,
-		DiskIOWarn: 80, DiskIOCrit: 90,
-		IOPSWarn: 10000, IOPSCrit: 20000,
-		GPUWarn: 80, GPUCrit: 90,
-		LoadWarn: 2.0, LoadCrit: 3.0,
+		CPUWarn: 80, CPUCrit: 95,
+		MemWarn: 85, MemCrit: 95,
+		DiskWarn: 80, DiskCrit: 90,
+		DiskIOWarn: 80, DiskIOCrit: 95,
+		IOPSWarn: 50000, IOPSCrit: 100000,
+		GPUWarn: 80, GPUCrit: 95,
+		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn: 0.5,
-		OfflineAfterSec: 30,
+		OfflineAfterSec: 60,
 	}
 }
 
@@ -109,6 +109,9 @@ type AccountConfig struct {
 	// Empty means the user has not set a terminal password yet.
 	TerminalPasswordHash string `json:"terminal_password_hash,omitempty"`
 	TerminalPasswordSalt string `json:"terminal_password_salt,omitempty"`
+	// MustChangePassword forces the user to change their password on next login.
+	// Set by the admin password reset tool (v5.4.0).
+	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
 func defaultAccount() AccountConfig {
@@ -175,8 +178,9 @@ type ServerConfig struct {
 	// existing configs (zero value = enabled); set true to globally disable it.
 	ForwardDisabled bool `json:"forward_disabled"`
 	// ForwardListen is the bind address for TCP port forwarding listeners.
-	// Default "0.0.0.0" binds all interfaces (reachable from other machines).
-	// Set to "127.0.0.1" to restrict access to the local machine only.
+	// Default "127.0.0.1" restricts access to the local machine only (v5.4.1).
+	// Set to "0.0.0.0" to allow external access (e.g. Docker deployments), or
+	// use the AIOPS_FORWARD_LISTEN environment variable to override.
 	ForwardListen string `json:"forward_listen,omitempty"`
 	// ForwardPortRange is the port range for TCP port forwarding ("min-max").
 	// Default "10000-10099" for Docker deployments to expose a predictable range.
@@ -189,6 +193,11 @@ type ServerConfig struct {
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
 	AllowAnonymousAgents bool `json:"allow_anonymous_agents"`
+	// RelaySecret is the shared secret for gateway relay authentication (v5.4.1).
+	// When set, all agent-facing requests (register, report, terminal, forward)
+	// that arrive via a relay must carry the matching X-Relay-Secret header.
+	// This prevents unauthorized relays from proxying to the upstream server.
+	RelaySecret string `json:"relay_secret,omitempty"`
 	// TrustProxy tells the server it sits behind a trusted reverse proxy, so it
 	// may believe the X-Real-IP / X-Forwarded-For headers for the real client
 	// address (used by login rate-limiting and audit logs). Default false: when
@@ -276,6 +285,9 @@ func NewConfigStore(path string) (*ConfigStore, error) {
 	if migrateUsers(&cs.cfg) {
 		dirty = true
 	}
+	// Apply environment variable overrides (v5.4.1): Docker Compose users can
+	// set AIOPS_* env vars to override config file values without editing JSON.
+	cs.applyEnvOverrides()
 	// Validate the loaded config — refuse to start with an obviously broken one.
 	if err := cs.cfg.Validate(); err != nil {
 		return nil, err
@@ -284,6 +296,47 @@ func NewConfigStore(path string) (*ConfigStore, error) {
 		_ = cs.save()
 	}
 	return cs, nil
+}
+
+// applyEnvOverrides reads AIOPS_* environment variables and overrides the
+// corresponding config fields. This allows Docker Compose users to configure
+// security-sensitive settings (forward_listen, relay_secret, etc.) via the
+// environment block without editing server_config.json.
+//
+// Supported variables:
+//   AIOPS_FORWARD_LISTEN          → forward_listen
+//   AIOPS_FORWARD_PORT_RANGE      → forward_port_range
+//   AIOPS_FORWARD_DISABLED        → forward_disabled (true/false)
+//   AIOPS_TERMINAL_DISABLED       → terminal_disabled (true/false)
+//   AIOPS_RELAY_SECRET            → relay_secret
+//   AIOPS_ALLOW_ANONYMOUS_AGENTS  → allow_anonymous_agents (true/false)
+//   AIOPS_TRUST_PROXY             → trust_proxy (true/false)
+//   AIOPS_REQUIRE_TOKEN           → require_token (true/false)
+func (cs *ConfigStore) applyEnvOverrides() {
+	if v, ok := os.LookupEnv("AIOPS_FORWARD_LISTEN"); ok && v != "" {
+		cs.cfg.ForwardListen = v
+	}
+	if v, ok := os.LookupEnv("AIOPS_FORWARD_PORT_RANGE"); ok && v != "" {
+		cs.cfg.ForwardPortRange = v
+	}
+	if v, ok := os.LookupEnv("AIOPS_RELAY_SECRET"); ok && v != "" {
+		cs.cfg.RelaySecret = v
+	}
+	if v, ok := os.LookupEnv("AIOPS_FORWARD_DISABLED"); ok && v != "" {
+		cs.cfg.ForwardDisabled = v == "true" || v == "1"
+	}
+	if v, ok := os.LookupEnv("AIOPS_TERMINAL_DISABLED"); ok && v != "" {
+		cs.cfg.TerminalDisabled = v == "true" || v == "1"
+	}
+	if v, ok := os.LookupEnv("AIOPS_ALLOW_ANONYMOUS_AGENTS"); ok && v != "" {
+		cs.cfg.AllowAnonymousAgents = v == "true" || v == "1"
+	}
+	if v, ok := os.LookupEnv("AIOPS_TRUST_PROXY"); ok && v != "" {
+		cs.cfg.TrustProxy = v == "true" || v == "1"
+	}
+	if v, ok := os.LookupEnv("AIOPS_REQUIRE_TOKEN"); ok && v != "" {
+		cs.cfg.RequireToken = v == "true" || v == "1"
+	}
 }
 
 func genToken() string {
@@ -344,14 +397,17 @@ func (cs *ConfigStore) ForwardEnabled() bool {
 }
 
 // ForwardListenAddr returns the configured bind address for TCP forwarding
-// listeners. Defaults to "0.0.0.0" (all interfaces) so forwarded ports are
-// reachable from other machines — essential for Docker deployments where
-// 127.0.0.1 would only be reachable inside the container.
+// listeners. Defaults to "127.0.0.1" (localhost only) as a security measure —
+// exposing forwarded ports to all network interfaces allows unauthenticated
+// TCP connections to tunnel into internal services on monitored hosts.
+// Set forward_listen to "0.0.0.0" explicitly in server_config.json to allow
+// external access (e.g. for Docker deployments where 127.0.0.1 is only
+// reachable inside the container).
 func (cs *ConfigStore) ForwardListenAddr() string {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	if cs.cfg.ForwardListen == "" {
-		return "0.0.0.0"
+		return "127.0.0.1"
 	}
 	return cs.cfg.ForwardListen
 }
@@ -407,6 +463,14 @@ func (cs *ConfigStore) MFARequired() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.MFARequired
+}
+
+// RelaySecret returns the configured shared secret for gateway relay
+// authentication (v5.4.1). Empty string means relay auth is disabled.
+func (cs *ConfigStore) RelaySecret() string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.RelaySecret
 }
 
 // SetMFARequired toggles the global MFA enforcement policy and persists it.
@@ -643,7 +707,15 @@ func (cs *ConfigStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cs.path, b, 0o644)
+	// 0o600: this file holds password hashes, MFA secrets and the install token —
+	// it must not be world-readable on a shared host.
+	if err := os.WriteFile(cs.path, b, 0o600); err != nil {
+		return err
+	}
+	// WriteFile keeps the existing mode when the file already exists, so force
+	// 0o600 to also tighten configs written by earlier (0o644) versions.
+	_ = os.Chmod(cs.path, 0o600)
+	return nil
 }
 
 // ---- playbooks ----

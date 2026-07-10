@@ -7,9 +7,15 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 )
+
+// zmMaxFileBytes caps how much file data a single ZMODEM transfer may buffer in
+// memory, preventing a huge (or maliciously crafted) sz stream from OOM-ing the
+// agent. Matches the 100MB button-based transfer limit.
+const zmMaxFileBytes = 100 << 20
 
 // ZMODEM protocol handler — minimal but functional implementation for sz/rz.
 //
@@ -498,6 +504,13 @@ func (s *ZmSession) HandleFrame(f *ZmFrame) [][]byte {
 			data = f.Data
 		}
 		if len(data) > 0 {
+			// Cap in-memory accumulation so a huge/malicious transfer can't OOM
+			// the agent. On overflow, abort the session and tell the peer to stop.
+			if s.DataBuf.Len()+len(data) > zmMaxFileBytes {
+				slog.Warn("ZMODEM 传输超过大小上限，已中止", "limit", zmMaxFileBytes, "received", s.DataBuf.Len())
+				s.Reset()
+				return [][]byte{buildZfinFrame()}
+			}
 			s.DataBuf.Write(data)
 			s.CRC32 = crc32.Update(s.CRC32, crc32.IEEETable, data)
 		}

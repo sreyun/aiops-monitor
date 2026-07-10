@@ -22,6 +22,8 @@
   "install_token": "",
   "require_token": false,
   "mfa_required": false,
+  "forward_listen": "127.0.0.1",
+  "forward_port_range": "10000-10099",
   "account": {
     "username": "admin",
     "display_name": "管理员",

@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net"
@@ -531,30 +533,39 @@ func (m *forwardManager) removeRule(id string) bool {
 
 // toggleRule enables or disables a forwarding rule.
 // When disabled, the listener is stopped but the rule config is preserved.
+// When enabled with a nil listener, the caller must re-create the listener
+// and call serveForwardListener.
 func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.rules[id]
 	if !ok {
-		m.mu.Unlock()
 		return nil, fmt.Errorf("rule not found")
 	}
 	if r.enabled == enable {
-		m.mu.Unlock()
 		return r, nil // already in desired state
 	}
 	r.enabled = enable
-	m.mu.Unlock()
+	// v5.4.1: actually stop the listener when disabling, so TCP connections
+	// are no longer accepted and forwarded.
+	if !enable && r.listener != nil {
+		_ = r.listener.Close()
+		r.listener = nil
+	}
 	return r, nil
 }
 
 // updateRule modifies host_id, hostname, target_port and local_port of an existing rule.
 // When hostID is non-empty, both hostID and hostname are updated so the rule points to
 // the correct host after editing. When hostID is empty, host fields are left unchanged.
+// v5.4.1: when localPort changes, the old listener is closed and the new port is
+// reflected in listenAddr. The caller must re-create the listener and restart
+// serveForwardListener.
 func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, localPort int) (*forwardRule, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.rules[id]
 	if !ok {
-		m.mu.Unlock()
 		return nil, fmt.Errorf("rule not found")
 	}
 	if hostID != "" {
@@ -564,10 +575,18 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 	if targetPort > 0 {
 		r.targetPort = targetPort
 	}
-	if localPort > 0 {
+	// v5.4.1: rebind listener when localPort changes
+	if localPort > 0 && localPort != r.localPort {
+		if r.listener != nil {
+			_ = r.listener.Close()
+			r.listener = nil
+		}
 		r.localPort = localPort
+		// Rebuild listenAddr with the new port, keeping the original host
+		if host, _, err := net.SplitHostPort(r.listenAddr); err == nil && host != "" {
+			r.listenAddr = net.JoinHostPort(host, strconv.Itoa(localPort))
+		}
 	}
-	m.mu.Unlock()
 	return r, nil
 }
 
@@ -803,6 +822,51 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 
 // handleHTTPProxy tunnels an HTTP request through the agent to the target's
 // HTTP service. The URL pattern is /proxy/{hostID}/{port}/{path...}.
+// injectBaseTag inserts a <base href="..."> element at the start of a page's
+// <head> so that relative asset URLs in a path-proxied app resolve back through
+// the /proxy/{host}/{port}/ prefix instead of hitting the monitor's own root.
+//
+// It is a best-effort text transform:
+//   - if the document already declares a <base>, it is left untouched (the app
+//     knows its own base better than we do);
+//   - if there is no <head>/<html> to anchor to, the body is returned unchanged.
+//
+// NOTE: <base> only fixes RELATIVE URLs (e.g. "static/app.js"). Root-absolute
+// URLs ("/static/app.js") still bypass the proxy prefix — those apps need to be
+// reached via a sub-domain-style proxy instead.
+func injectBaseTag(body []byte, baseHref string) []byte {
+	lower := bytes.ToLower(body)
+	if bytes.Contains(lower, []byte("<base")) {
+		return body // respect the app's own <base>
+	}
+	// html.EscapeString keeps the attribute value from breaking out of the
+	// double quotes even if hostID somehow carried markup metacharacters.
+	tag := []byte(`<base href="` + html.EscapeString(baseHref) + `">`)
+	insertAfterTag := func(name string) ([]byte, bool) {
+		i := bytes.Index(lower, []byte(name))
+		if i < 0 {
+			return body, false
+		}
+		end := bytes.IndexByte(body[i:], '>')
+		if end < 0 {
+			return body, false
+		}
+		pos := i + end + 1
+		out := make([]byte, 0, len(body)+len(tag))
+		out = append(out, body[:pos]...)
+		out = append(out, tag...)
+		out = append(out, body[pos:]...)
+		return out, true
+	}
+	if out, ok := insertAfterTag("<head"); ok {
+		return out
+	}
+	if out, ok := insertAfterTag("<html"); ok {
+		return out
+	}
+	return body
+}
+
 func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.ForwardEnabled() {
 		http.Error(w, Tr(r, "forward.disabled"), http.StatusForbidden)
@@ -1017,6 +1081,63 @@ readResponse:
 	resp, parseErr := http.ReadResponse(bufio.NewReader(bytes.NewReader(rawResp)), r)
 	if parseErr == nil {
 		defer resp.Body.Close()
+
+		// HTML rewrite: inject a <base> so a path-proxied app's relative asset
+		// URLs resolve through /proxy/{host}/{port}/ rather than the monitor's
+		// own root. Requires the full body (HEAD/empty bodies fall through to the
+		// verbatim relay so their original Content-Length is preserved).
+		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+			body, rerr := io.ReadAll(resp.Body)
+			if rerr == nil && len(body) > 0 {
+				enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+				decoded, canRewrite := body, enc == ""
+				if enc == "gzip" {
+					if gz, gerr := gzip.NewReader(bytes.NewReader(body)); gerr == nil {
+						if d, derr := io.ReadAll(gz); derr == nil {
+							decoded, canRewrite = d, true // will re-serve uncompressed
+						}
+						gz.Close()
+					}
+				}
+				if canRewrite {
+					decoded = injectBaseTag(decoded, "/proxy/"+hostID+"/"+strconv.Itoa(port)+"/")
+					for k, vs := range resp.Header {
+						// body length changed and it is now uncompressed, so drop
+						// the upstream Content-Length / Content-Encoding.
+						if hopByHopHeaders[k] || k == "Content-Length" || k == "Content-Encoding" {
+							continue
+						}
+						for _, v := range vs {
+							w.Header().Add(k, v)
+						}
+					}
+					w.Header().Set("Content-Length", strconv.Itoa(len(decoded)))
+					w.WriteHeader(resp.StatusCode)
+					n, _ := w.Write(decoded)
+					s.forward.stats.addBytes(int64(n))
+					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+						Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
+					return
+				}
+				// Encoding we can't decode (br/deflate): relay verbatim, no rewrite.
+				for k, vs := range resp.Header {
+					if hopByHopHeaders[k] {
+						continue
+					}
+					for _, v := range vs {
+						w.Header().Add(k, v)
+					}
+				}
+				w.WriteHeader(resp.StatusCode)
+				n, _ := w.Write(body)
+				s.forward.stats.addBytes(int64(n))
+				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+					Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
+				return
+			}
+			// empty/HEAD body or read error: fall through to verbatim relay.
+		}
+
 		for k, vs := range resp.Header {
 			if hopByHopHeaders[k] {
 				continue // P2: strip hop-by-hop from response too
@@ -1270,7 +1391,7 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
-	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+	if !s.forwardFingerprintOKByHost(sess.hostID, agentFP(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
@@ -1307,7 +1428,12 @@ func (s *Server) handleAgentForwardRx(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case <-r.Context().Done():
-			sess.closeWith(Tz("log.forward_reason_agent_down"))
+			// The agent closed the rx stream. In HTTP mode this is NORMAL: it
+			// happens right after the full request ('c' frame) is delivered, while
+			// the response is still streaming back on tx. Closing the session here
+			// would race-kill the response path (raw_len=0 → "unexpected EOF" 502).
+			// So just stop relaying — the session close is driven by tx completion
+			// (HTTP) or the user/target side (TCP), with the idle checker as backstop.
 			return
 		}
 	}
@@ -1321,7 +1447,7 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
-	if !s.forwardFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+	if !s.forwardFingerprintOKByHost(sess.hostID, agentFP(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
@@ -1375,6 +1501,17 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// agentFP extracts the agent fingerprint (the report/forward/terminal auth
+// credential) from a request. New agents send it in the X-Agent-Fingerprint
+// header to keep it out of access/reverse-proxy logs; older agents send it as
+// the ?fp= query param, which we still accept for backward compatibility.
+func agentFP(r *http.Request) string {
+	if h := r.Header.Get("X-Agent-Fingerprint"); h != "" {
+		return h
+	}
+	return r.URL.Query().Get("fp")
+}
+
 // forwardFingerprintOKByHost verifies the agent-presented fingerprint against
 // the fingerprint bound to hostID at registration (constant-time).
 func (s *Server) forwardFingerprintOKByHost(hostID, fp string) bool {
@@ -1390,5 +1527,5 @@ func (s *Server) forwardFingerprintOKByHost(hostID, fp string) bool {
 
 // forwardFingerprintOK is the request-flavored wrapper for handleAgentForwardWait.
 func (s *Server) forwardFingerprintOK(r *http.Request) bool {
-	return s.forwardFingerprintOKByHost(r.URL.Query().Get("host"), r.URL.Query().Get("fp"))
+	return s.forwardFingerprintOKByHost(r.URL.Query().Get("host"), agentFP(r))
 }

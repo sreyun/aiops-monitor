@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
 )
@@ -209,6 +210,18 @@ func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// v5.4.1: re-create the listener when re-enabling a rule that was stopped.
+	if req.Enabled && rule.listener == nil {
+		ln, lnErr := net.Listen("tcp", rule.listenAddr)
+		if lnErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+			return
+		}
+		s.forward.mu.Lock()
+		rule.listener = ln
+		s.forward.mu.Unlock()
+		go s.serveForwardListener(rule)
+	}
 	// Count sessions belonging to this rule (under lock)
 	sessions := 0
 	s.forward.mu.Lock()
@@ -264,6 +277,18 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// v5.4.1: when localPort changed, the old listener was closed — rebind
+	if rule.listener == nil && rule.enabled {
+		ln, lnErr := net.Listen("tcp", rule.listenAddr)
+		if lnErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+			return
+		}
+		s.forward.mu.Lock()
+		rule.listener = ln
+		s.forward.mu.Unlock()
+		go s.serveForwardListener(rule)
+	}
 	// Count sessions belonging to this rule (under lock)
 	sessions := 0
 	s.forward.mu.Lock()
@@ -290,12 +315,25 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	newRule, err := s.forward.copyRule(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	// Look up the original rule to copy its parameters
+	orig := s.forward.getRule(id)
+	if orig == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
 		return
 	}
-	// Start the listener for the new rule
+	user, _ := s.currentUser(r)
+	operator := s.clientIP(r)
+	if user.Username != "" {
+		operator = user.Username
+	}
+	// v5.4.1: use createRule (which creates a real listener) instead of
+	// copyRule (which leaves listener=nil, causing a panic in serveForwardListener).
+	listenHost := s.cfg.ForwardListenAddr()
+	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, operator)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	go s.serveForwardListener(newRule)
 	// Count sessions for the new rule (under lock)
 	sessions := 0

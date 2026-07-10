@@ -10,12 +10,26 @@ import (
 // Playbook is an operator-defined automation: a sequence of shell commands run
 // on a set of target hosts via the Agent reverse-terminal channel.
 type Playbook struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Steps       []PlaybookStep `json:"steps"`
-	CreatedAt   int64          `json:"created_at"`
-	UpdatedAt   int64          `json:"updated_at"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Steps       []PlaybookStep    `json:"steps"`
+	Schedule    *PlaybookSchedule `json:"schedule,omitempty"` // optional timed trigger
+	CreatedAt   int64             `json:"created_at"`
+	UpdatedAt   int64             `json:"updated_at"`
+}
+
+// PlaybookSchedule defines an optional timed trigger for a playbook. A minimal,
+// dependency-free model covering the common cases (no full cron parser):
+//   - kind="interval": run every IntervalMin minutes
+//   - kind="daily":    run every day at At ("HH:MM", server local time)
+//   - kind="weekly":   run every week on Weekday (0=Sun..6=Sat) at At
+type PlaybookSchedule struct {
+	Enabled     bool   `json:"enabled"`
+	Kind        string `json:"kind"`                   // interval | daily | weekly
+	IntervalMin int    `json:"interval_min,omitempty"` // kind=interval
+	At          string `json:"at,omitempty"`           // "HH:MM" for daily/weekly
+	Weekday     int    `json:"weekday,omitempty"`      // 0=Sun..6=Sat for weekly
 }
 
 // PlaybookStep is one command in a playbook. Target selectors:
@@ -63,10 +77,123 @@ type playbookManager struct {
 	cfg        *ConfigStore
 	executions []PlaybookExecution
 	nextExecID int64
+	// --- scheduler bookkeeping (in-memory; resets on restart) ---
+	lastCheck time.Time            // last scheduler tick, for daily/weekly windowing
+	lastRun   map[string]time.Time // playbook ID -> last scheduled fire (interval baseline + dedup)
+	schedBusy map[string]bool      // playbook ID -> a scheduled run is currently in flight
 }
 
 func newPlaybookManager(cfg *ConfigStore) *playbookManager {
-	return &playbookManager{cfg: cfg, nextExecID: 1}
+	return &playbookManager{
+		cfg: cfg, nextExecID: 1,
+		lastRun:   map[string]time.Time{},
+		schedBusy: map[string]bool{},
+	}
+}
+
+// parseHHMM parses "HH:MM" (24h) into minutes-of-day; ok=false if malformed.
+func parseHHMM(s string) (int, bool) {
+	var h, m int
+	if n, err := fmt.Sscanf(strings.TrimSpace(s), "%d:%d", &h, &m); err != nil || n != 2 {
+		return 0, false
+	}
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// scheduledInstant returns today's date at the given "HH:MM" in now's location.
+func scheduledInstant(now time.Time, hhmm string) (time.Time, bool) {
+	mins, ok := parseHHMM(hhmm)
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Date(now.Year(), now.Month(), now.Day(), mins/60, mins%60, 0, 0, now.Location()), true
+}
+
+// sanitizeSchedule validates a schedule in place. A disabled schedule is accepted
+// as-is; an enabled one must be well-formed for its kind.
+func sanitizeSchedule(sc *PlaybookSchedule) error {
+	if sc == nil || !sc.Enabled {
+		return nil
+	}
+	switch sc.Kind {
+	case "interval":
+		if sc.IntervalMin < 1 {
+			return fmt.Errorf("%s", Tz("playbook.sched_bad_interval"))
+		}
+	case "daily":
+		if _, ok := parseHHMM(sc.At); !ok {
+			return fmt.Errorf("%s", Tz("playbook.sched_bad_time"))
+		}
+	case "weekly":
+		if sc.Weekday < 0 || sc.Weekday > 6 {
+			return fmt.Errorf("%s", Tz("playbook.sched_bad_weekday"))
+		}
+		if _, ok := parseHHMM(sc.At); !ok {
+			return fmt.Errorf("%s", Tz("playbook.sched_bad_time"))
+		}
+	default:
+		return fmt.Errorf("%s", Tz("playbook.sched_bad_kind"))
+	}
+	return nil
+}
+
+// dueSchedules returns the playbooks whose schedule is due to fire at `now`,
+// updating internal bookkeeping so each occurrence fires exactly once. Playbooks
+// with a scheduled run already in flight are skipped to avoid pileup. The caller
+// must clearSchedBusy(id) when each returned playbook's run finishes.
+func (pm *playbookManager) dueSchedules(now time.Time) []Playbook {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	prevCheck := pm.lastCheck
+	if prevCheck.IsZero() {
+		prevCheck = now // first tick establishes a baseline; never fire retroactively
+	}
+	var due []Playbook
+	for _, pb := range pm.cfg.Playbooks() {
+		sc := pb.Schedule
+		if sc == nil || !sc.Enabled || pm.schedBusy[pb.ID] {
+			continue
+		}
+		fire := false
+		switch sc.Kind {
+		case "interval":
+			if sc.IntervalMin >= 1 {
+				last, seen := pm.lastRun[pb.ID]
+				if !seen {
+					pm.lastRun[pb.ID] = now // baseline; first fire one interval later
+				} else if now.Sub(last) >= time.Duration(sc.IntervalMin)*time.Minute {
+					fire = true
+				}
+			}
+		case "daily":
+			if inst, ok := scheduledInstant(now, sc.At); ok && inst.After(prevCheck) && !inst.After(now) {
+				fire = true
+			}
+		case "weekly":
+			if int(now.Weekday()) == sc.Weekday {
+				if inst, ok := scheduledInstant(now, sc.At); ok && inst.After(prevCheck) && !inst.After(now) {
+					fire = true
+				}
+			}
+		}
+		if fire {
+			pm.lastRun[pb.ID] = now
+			pm.schedBusy[pb.ID] = true
+			due = append(due, pb)
+		}
+	}
+	pm.lastCheck = now
+	return due
+}
+
+// clearSchedBusy releases the in-flight guard for a playbook's scheduled run.
+func (pm *playbookManager) clearSchedBusy(id string) {
+	pm.mu.Lock()
+	delete(pm.schedBusy, id)
+	pm.mu.Unlock()
 }
 
 // List returns all playbooks from config.
@@ -100,6 +227,9 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 	if len(p.Steps) == 0 {
 		return Playbook{}, fmt.Errorf("%s", Tz("playbook.step_required"))
 	}
+	if err := sanitizeSchedule(p.Schedule); err != nil {
+		return Playbook{}, err
+	}
 	now := time.Now().Unix()
 	p.UpdatedAt = now
 	if p.ID == "" {
@@ -130,7 +260,17 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	case strings.HasPrefix(target, "category:"):
 		cat := target[len("category:"):]
 		for _, h := range hosts {
-			if h.Category == cat || (h.Category == "" && cat == Tz("playbook.uncategorized")) {
+			// Use the EFFECTIVE category: an operator-set override wins over the
+			// agent-self-reported category, exactly as the host list display does.
+			// Otherwise a host's playbook membership would be driven by whatever
+			// category its (untrusted) agent chose to report.
+			effective := h.Category
+			if pm.cfg != nil {
+				if ov, ok := pm.cfg.CategoryOverride(h.ID); ok {
+					effective = ov
+				}
+			}
+			if effective == cat || (effective == "" && cat == Tz("playbook.uncategorized")) {
 				result = append(result, h)
 			}
 		}

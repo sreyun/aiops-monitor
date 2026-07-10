@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/subtle"
+	"crypto/rand"
 	"fmt"
 	"strings"
 )
@@ -179,6 +179,7 @@ func (cs *ConfigStore) UpdateUserMeta(username, displayName, email, role string)
 }
 
 // SetUserPassword sets a user's password (self change-password or admin reset).
+// v5.4.0: also clears the MustChangePassword flag since the password is being changed.
 func (cs *ConfigStore) SetUserPassword(username, password string) error {
 	cs.mu.Lock()
 	i := cs.findLocked(username)
@@ -189,8 +190,54 @@ func (cs *ConfigStore) SetUserPassword(username, password string) error {
 	salt := genToken()[:16]
 	cs.cfg.Users[i].Salt = salt
 	cs.cfg.Users[i].Hash = hashPassword(password, salt)
+	cs.cfg.Users[i].MustChangePassword = false
 	cs.mu.Unlock()
 	return cs.save()
+}
+
+// upgradeLoginHash re-hashes a user's login password with the current KDF,
+// reusing the existing per-user salt. Called after a successful login when the
+// stored hash is still in the legacy SHA-256 format, so existing accounts
+// migrate to PBKDF2 transparently.
+func (cs *ConfigStore) upgradeLoginHash(username, pass string) error {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return fmt.Errorf("%s", Tz("user.not_found"))
+	}
+	if !isLegacyHash(cs.cfg.Users[i].Hash) {
+		cs.mu.Unlock()
+		return nil // already upgraded by a concurrent login
+	}
+	cs.cfg.Users[i].Hash = hashPassword(pass, cs.cfg.Users[i].Salt)
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetMustChangePassword sets the MustChangePassword flag for a user, forcing
+// a password change on the next login. Used when default credentials are
+// detected during login (v5.4.0).
+func (cs *ConfigStore) SetMustChangePassword(username string) {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i >= 0 {
+		cs.cfg.Users[i].MustChangePassword = true
+	}
+	cs.mu.Unlock()
+	_ = cs.save()
+}
+
+// ClearMustChangePassword clears the MustChangePassword flag for a user.
+// v5.4.0: called after a successful self password change.
+func (cs *ConfigStore) ClearMustChangePassword(username string) {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i >= 0 {
+		cs.cfg.Users[i].MustChangePassword = false
+	}
+	cs.mu.Unlock()
+	_ = cs.save()
 }
 
 // SetUserProfile updates a user's own display name + email.
@@ -238,7 +285,7 @@ func (cs *ConfigStore) VerifyTerminalPassword(username, password string) bool {
 	if hash == "" || salt == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(hashPassword(password, salt)), []byte(hash)) == 1
+	return verifyPassword(password, salt, hash)
 }
 
 // HasTerminalPassword reports whether the user has set a terminal password.
@@ -308,6 +355,51 @@ func (cs *ConfigStore) DeleteUser(username string) error {
 	cs.cfg.Users = append(cs.cfg.Users[:i], cs.cfg.Users[i+1:]...)
 	cs.mu.Unlock()
 	return cs.save()
+}
+
+// ResetAdminPassword resets the password of the first admin user to a random
+// value, forces a password change on next login, and returns the username and
+// new plaintext password. Returns an error when no admin user exists.
+// v5.4.0: admin password recovery via CLI / local API.
+func (cs *ConfigStore) ResetAdminPassword() (string, string, error) {
+	cs.mu.Lock()
+	// Find the first admin user
+	adminIdx := -1
+	for i := range cs.cfg.Users {
+		if cs.cfg.Users[i].Role == RoleAdmin {
+			adminIdx = i
+			break
+		}
+	}
+	if adminIdx < 0 {
+		cs.mu.Unlock()
+		return "", "", fmt.Errorf("no admin user found in config")
+	}
+	username := cs.cfg.Users[adminIdx].Username
+	newPass := generateRandomPassword()
+	salt := genToken()[:16]
+	cs.cfg.Users[adminIdx].Salt = salt
+	cs.cfg.Users[adminIdx].Hash = hashPassword(newPass, salt)
+	cs.cfg.Users[adminIdx].MustChangePassword = true
+	cs.mu.Unlock()
+	if err := cs.save(); err != nil {
+		return "", "", err
+	}
+	return username, newPass, nil
+}
+
+// generateRandomPassword creates a cryptographically random 16-character
+// password with mixed case letters, digits, and special characters.
+func generateRandomPassword() string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "AIOps-Reset-000000" // fallback, never empty
+	}
+	for i := range b {
+		b[i] = chars[int(b[i])%len(chars)]
+	}
+	return string(b)
 }
 
 // AlertEmails returns the deduplicated non-empty emails of all users — the

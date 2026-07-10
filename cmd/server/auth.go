@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,11 +20,78 @@ const (
 	sessionTTL    = 7 * 24 * time.Hour
 )
 
-// hashPassword returns a salted SHA-256 hash of the password (hex). Stdlib-only;
-// adequate for a LAN ops dashboard behind a session cookie.
+// Password hashing — PBKDF2-HMAC-SHA256 (stdlib only, no external deps).
+//
+// Migrated from single-round salted SHA-256 (a fast hash trivially brute-forced
+// on GPUs) to PBKDF2 with a high iteration count. Stored hashes are
+// self-describing ("pbkdf2$sha256$<iter>$<hex>"); legacy 64-hex SHA-256 hashes
+// are still accepted by verifyPassword and transparently upgraded on next login.
+const pbkdf2Iter = 600000 // OWASP 2023 guidance for PBKDF2-HMAC-SHA256
+
+// pbkdf2SHA256 implements PBKDF2 (RFC 8018 §5.2) over HMAC-SHA256.
+func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
+	prf := hmac.New(sha256.New, password)
+	hLen := prf.Size()
+	numBlocks := (keyLen + hLen - 1) / hLen
+	dk := make([]byte, 0, numBlocks*hLen)
+	var idx [4]byte
+	for block := 1; block <= numBlocks; block++ {
+		prf.Reset()
+		prf.Write(salt)
+		binary.BigEndian.PutUint32(idx[:], uint32(block))
+		prf.Write(idx[:])
+		u := prf.Sum(nil)
+		t := make([]byte, len(u))
+		copy(t, u)
+		for n := 2; n <= iter; n++ {
+			prf.Reset()
+			prf.Write(u)
+			u = prf.Sum(nil)
+			for i := range t {
+				t[i] ^= u[i]
+			}
+		}
+		dk = append(dk, t...)
+	}
+	return dk[:keyLen]
+}
+
+// hashPassword returns a PBKDF2-HMAC-SHA256 hash of pass, salted with salt. The
+// result is self-describing so the iteration count can evolve over time.
 func hashPassword(pass, salt string) string {
+	dk := pbkdf2SHA256([]byte(pass), []byte(salt), pbkdf2Iter, 32)
+	return "pbkdf2$sha256$" + strconv.Itoa(pbkdf2Iter) + "$" + hex.EncodeToString(dk)
+}
+
+// verifyPassword reports, in constant time, whether pass matches the stored hash
+// for the given salt. It accepts both the current PBKDF2 format and the legacy
+// single-round salted SHA-256 (bare 64-hex) format for a seamless migration.
+func verifyPassword(pass, salt, stored string) bool {
+	if strings.HasPrefix(stored, "pbkdf2$") {
+		parts := strings.Split(stored, "$")
+		if len(parts) != 4 || parts[1] != "sha256" {
+			return false
+		}
+		iter, err := strconv.Atoi(parts[2])
+		if err != nil || iter < 1 {
+			return false
+		}
+		want, err := hex.DecodeString(parts[3])
+		if err != nil || len(want) == 0 {
+			return false
+		}
+		got := pbkdf2SHA256([]byte(pass), []byte(salt), iter, len(want))
+		return subtle.ConstantTimeCompare(got, want) == 1
+	}
+	// Legacy salted SHA-256 (hex).
 	sum := sha256.Sum256([]byte(salt + ":" + pass))
-	return hex.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(stored)) == 1
+}
+
+// isLegacyHash reports whether stored is an old single-round SHA-256 hash that
+// should be upgraded to PBKDF2 on the next successful authentication.
+func isLegacyHash(stored string) bool {
+	return stored != "" && !strings.HasPrefix(stored, "pbkdf2$")
 }
 
 type session struct {
@@ -140,25 +210,44 @@ func newSessionToken() string {
 func (a *Auth) CheckPassword(user, pass string) (AccountConfig, bool) {
 	acc, found := a.cfg.UserByName(user)
 	if !found {
-		hashPassword(pass, "dummy-salt-000000") // constant-ish timing
+		hashPassword(pass, "dummy-salt-000000") // constant-ish timing (runs the full KDF)
 		return AccountConfig{}, false
 	}
-	if subtle.ConstantTimeCompare([]byte(hashPassword(pass, acc.Salt)), []byte(acc.Hash)) != 1 {
+	if !verifyPassword(pass, acc.Salt, acc.Hash) {
 		return AccountConfig{}, false
+	}
+	// Transparently upgrade a legacy SHA-256 hash to PBKDF2 now that we hold the
+	// verified plaintext — existing users get the stronger hash without any
+	// action on their part.
+	if isLegacyHash(acc.Hash) {
+		if err := a.cfg.upgradeLoginHash(user, pass); err == nil {
+			if u, ok := a.cfg.UserByName(user); ok {
+				acc = u
+			}
+		}
 	}
 	return acc, true
+}
+
+// sessionKey maps a raw session token to its storage key. Sessions are indexed
+// by the SHA-256 of the token so neither memory nor the persisted DB ever holds
+// a usable token — a leaked snapshot can't be replayed to hijack a session.
+func sessionKey(tok string) string {
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *Auth) validate(tok string) bool {
 	if tok == "" {
 		return false
 	}
+	key := sessionKey(tok)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s, ok := a.sessions[tok]
+	s, ok := a.sessions[key]
 	if !ok || time.Now().After(s.expires) {
 		if ok {
-			delete(a.sessions, tok)
+			delete(a.sessions, key)
 		}
 		return false
 	}
@@ -175,7 +264,7 @@ func (a *Auth) ValidateRequest(r *http.Request) bool {
 
 func (a *Auth) Logout(tok string) {
 	a.mu.Lock()
-	delete(a.sessions, tok)
+	delete(a.sessions, sessionKey(tok))
 	a.dirty = true
 	a.mu.Unlock()
 }
@@ -193,7 +282,7 @@ func (a *Auth) ClearSessions() {
 func (a *Auth) issueSession(user string) string {
 	tok := newSessionToken()
 	a.mu.Lock()
-	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL)}
+	a.sessions[sessionKey(tok)] = session{user: user, expires: time.Now().Add(sessionTTL)}
 	a.dirty = true
 	a.mu.Unlock()
 	return tok
@@ -205,7 +294,7 @@ func (a *Auth) issueSession(user string) string {
 func (a *Auth) issueRestrictedSession(user string) string {
 	tok := newSessionToken()
 	a.mu.Lock()
-	a.sessions[tok] = session{user: user, expires: time.Now().Add(sessionTTL), restricted: true}
+	a.sessions[sessionKey(tok)] = session{user: user, expires: time.Now().Add(sessionTTL), restricted: true}
 	a.dirty = true
 	a.mu.Unlock()
 	return tok
@@ -219,7 +308,7 @@ func (a *Auth) isRestricted(r *http.Request) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s, ok := a.sessions[c.Value]
+	s, ok := a.sessions[sessionKey(c.Value)]
 	if !ok || time.Now().After(s.expires) {
 		return false
 	}
@@ -234,9 +323,9 @@ func (a *Auth) upgradeSession(r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if s, ok := a.sessions[c.Value]; ok {
+	if s, ok := a.sessions[sessionKey(c.Value)]; ok {
 		s.restricted = false
-		a.sessions[c.Value] = s
+		a.sessions[sessionKey(c.Value)] = s
 		a.dirty = true
 	}
 }
@@ -250,7 +339,7 @@ func (a *Auth) userForRequest(r *http.Request) string {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s, ok := a.sessions[c.Value]
+	s, ok := a.sessions[sessionKey(c.Value)]
 	if !ok || time.Now().After(s.expires) {
 		return ""
 	}
@@ -379,7 +468,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" { // user management + global MFA: admin only
 		return rank >= roleRank(RoleAdmin)
 	}
-	if strings.Contains(p, "/terminal") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") { // remote shell + port forwarding: operator+
+	if strings.Contains(p, "/terminal") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") || p == "/api/v1/proxy-token" { // remote shell + port forwarding: operator+
 		return rank >= roleRank(RoleOperator)
 	}
 	if r.Method == http.MethodGet { // reads: viewer+
@@ -392,6 +481,18 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 // role for the requested route.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// v5.4.1: verify relay shared secret when configured. Requests that
+		// carry X-Relay-Secret must match the configured secret; requests
+		// without the header are allowed (direct, not through relay).
+		if relaySecret := s.cfg.RelaySecret(); relaySecret != "" {
+			if hdr := r.Header.Get("X-Relay-Secret"); hdr != "" {
+				if subtle.ConstantTimeCompare([]byte(hdr), []byte(relaySecret)) != 1 {
+					s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.relay_secret_mismatch")})
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.relay_unauthorized")})
+					return
+				}
+			}
+		}
 		if isPublicPath(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -449,7 +550,7 @@ func (a *Auth) isTerminalVerified(r *http.Request) (verified bool, hasPassword b
 		return true, false // no password set → no verification needed
 	}
 	a.mu.Lock()
-	s, ok := a.sessions[c.Value]
+	s, ok := a.sessions[sessionKey(c.Value)]
 	a.mu.Unlock()
 	if !ok {
 		return false, true
@@ -464,9 +565,9 @@ func (a *Auth) markTerminalVerified(r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	if s, ok := a.sessions[c.Value]; ok {
+	if s, ok := a.sessions[sessionKey(c.Value)]; ok {
 		s.terminalVerified = true
-		a.sessions[c.Value] = s
+		a.sessions[sessionKey(c.Value)] = s
 		a.dirty = true
 	}
 	a.mu.Unlock()
@@ -528,6 +629,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return
 	}
+	// v5.4.0: detect default admin/admin credentials and force a password
+	// change on first login. Do not override an existing MustChangePassword
+	// flag (it may already be set by the admin reset tool).
+	if !acc.MustChangePassword && req.Username == "admin" && req.Password == "admin" {
+		s.cfg.SetMustChangePassword(req.Username)
+		acc.MustChangePassword = true
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, Message: Tz("log.default_credentials", req.Username)})
+	}
 	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
 	// The requirement is revealed only AFTER the password checks out, so an
 	// unauthenticated prober can't learn whether the account has MFA enabled.
@@ -565,7 +674,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, Message: Tz("log.login_success", req.Username)})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	resp := map[string]any{"ok": true}
+	// v5.4.0: force password change if admin reset was used
+	if acc.MustChangePassword {
+		resp["must_change_password"] = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -587,6 +701,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username": acc.Username, "display_name": acc.DisplayName, "email": acc.Email,
 		"mfa_enabled": acc.MFAEnabled, "role": acc.Role,
+		"must_change_password": acc.MustChangePassword,
 	})
 }
 
@@ -640,7 +755,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Old, acc.Salt)), []byte(acc.Hash)) != 1 {
+	if !verifyPassword(req.Old, acc.Salt, acc.Hash) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.wrong_old_password")})
 		return
 	}
@@ -649,6 +764,8 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetUserPassword(acc.Username, req.New)
+	// v5.4.0: clear MustChangePassword flag after a successful self-change
+	s.cfg.ClearMustChangePassword(acc.Username)
 	// Invalidate only THIS user's other sessions, then re-issue one for the current.
 	s.auth.clearUserSessions(acc.Username)
 	tok := s.auth.issueSession(acc.Username)
@@ -762,7 +879,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Password, acc.Salt)), []byte(acc.Hash)) != 1 {
+	if !verifyPassword(req.Password, acc.Salt, acc.Hash) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.wrong_password")})
 		return
 	}

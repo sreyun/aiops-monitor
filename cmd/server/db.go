@@ -124,7 +124,9 @@ func (d *DB) Load() {
 func (d *DB) Save() error {
 	snap := d.export()
 	tmp := d.path + ".tmp"
-	f, err := os.Create(tmp)
+	// 0o600: the DB holds session tokens (hashed), activity logs and host state —
+	// it must not be world-readable. O_TRUNC matches the previous os.Create.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

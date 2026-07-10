@@ -185,6 +185,24 @@ func (m *termManager) remove(id string) {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
 	delete(m.sessions, id)
+	if ok {
+		// Purge this id from the host's pending queue so a recovering agent never
+		// picks up a now-dead session (e.g. after its exec timed out). Without this,
+		// a briefly-offline agent could attach to a stale session and waste a poll.
+		if q := m.pendingSessions[s.hostID]; len(q) > 0 {
+			kept := make([]string, 0, len(q))
+			for _, sid := range q {
+				if sid != id {
+					kept = append(kept, sid)
+				}
+			}
+			if len(kept) == 0 {
+				delete(m.pendingSessions, s.hostID)
+			} else {
+				m.pendingSessions[s.hostID] = kept
+			}
+		}
+	}
 	if ok && s.operator != "playbook-exec" {
 		s.recMu.Lock()
 		if len(s.recording) > 0 {
@@ -271,7 +289,7 @@ func (s *Server) termFingerprintOKByHost(hostID, fp string) bool {
 // termFingerprintOK is the request-flavored wrapper for handleAgentTermWait,
 // which carries host + fp as query params.
 func (s *Server) termFingerprintOK(r *http.Request) bool {
-	return s.termFingerprintOKByHost(r.URL.Query().Get("host"), r.URL.Query().Get("fp"))
+	return s.termFingerprintOKByHost(r.URL.Query().Get("host"), agentFP(r))
 }
 
 // handleTerminal (browser side) upgrades to WebSocket and relays a shell session.
@@ -387,10 +405,25 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if typ == 'r' {
 				sess.recordFrame("resize", payload)
 			}
-			select {
-			case sess.toAgent <- termFrame(typ, payload):
-			case <-sess.done:
-				return
+			// Chunk payloads larger than the 2-byte frame length limit into
+			// multiple same-type frames. termFrame would otherwise SILENTLY
+			// TRUNCATE at 65535 bytes — corrupting large pastes ('i') or upload
+			// chunks ('u'). The agent processes each frame independently, so
+			// splitting is fully transparent.
+			for {
+				chunk := payload
+				if len(chunk) > 0xffff {
+					chunk = chunk[:0xffff]
+				}
+				select {
+				case sess.toAgent <- termFrame(typ, chunk):
+				case <-sess.done:
+					return
+				}
+				if len(payload) <= 0xffff {
+					break // sent the only/last chunk (also covers the empty 'e' frame)
+				}
+				payload = payload[0xffff:]
 			}
 		}
 	}()
@@ -433,20 +466,36 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	// immediately without entering the long-poll.
 	s.term.mu.Lock()
 	if pending := s.term.pendingSessions[host]; len(pending) > 0 {
-		sid := pending[0]
-		if len(pending) == 1 {
+		// Deliver the first session that is still live; drop any already-removed
+		// ones (e.g. their exec timed out) so the agent never wastes a poll cycle
+		// attaching to a dead session.
+		var sid string
+		rest := pending
+		for len(rest) > 0 {
+			cand := rest[0]
+			rest = rest[1:]
+			if _, live := s.term.sessions[cand]; live {
+				sid = cand
+				break
+			}
+		}
+		if len(rest) == 0 {
 			delete(s.term.pendingSessions, host)
 		} else {
-			s.term.pendingSessions[host] = pending[1:]
+			s.term.pendingSessions[host] = rest
 		}
-		s.term.mu.Unlock()
-		out := map[string]string{"session": sid}
-		if sess := s.term.get(sid); sess != nil && sess.mode == "exec" {
-			out["mode"] = "exec"
-			out["command"] = sess.command
+		if sid != "" {
+			sess := s.term.sessions[sid]
+			s.term.mu.Unlock()
+			out := map[string]string{"session": sid}
+			if sess != nil && sess.mode == "exec" {
+				out["mode"] = "exec"
+				out["command"] = sess.command
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
 		}
-		writeJSON(w, http.StatusOK, out)
-		return
+		// all pending were dead — fall through to the normal long-poll
 	}
 	s.term.mu.Unlock()
 	// No pending session — enter long-poll as usual.
@@ -473,7 +522,7 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
-	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+	if !s.termFingerprintOKByHost(sess.hostID, agentFP(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}
@@ -518,7 +567,7 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.session_gone")})
 		return
 	}
-	if !s.termFingerprintOKByHost(sess.hostID, r.URL.Query().Get("fp")) {
+	if !s.termFingerprintOKByHost(sess.hostID, agentFP(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
 		return
 	}

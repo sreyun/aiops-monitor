@@ -20,6 +20,14 @@
 <link rel="alternate" hreflang="x-default" href="/">
 </head>
 <body>
+<noscript>
+  <div style="position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;background:#0a0d13;color:#e7ebf2;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;text-align:center;line-height:1.7">
+    <div style="max-width:460px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:10px">AIOps Monitor 需要启用 JavaScript</div>
+      <div style="font-size:14px;color:#b3bccb">本监控面板为动态渲染页面，请在浏览器中启用 JavaScript 后刷新本页。<br>This dashboard requires JavaScript — please enable it and reload.</div>
+    </div>
+  </div>
+</noscript>
 <div class="app" id="app">
 
   <!-- ===== 左侧导航 ===== -->
@@ -842,7 +850,7 @@
 
 <!-- ===== 剧本编辑弹窗 ===== -->
 <div class="mask" id="playbookMask" data-close>
-  <div class="modal">
+  <div class="modal modal-lg">
     <div class="modal-head">
       <h3 id="playbookModalTitle" data-i18n="playbook.new">新建剧本</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
@@ -855,6 +863,30 @@
       <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
       <button class="btn" id="pbAddStep" type="button" style="margin-top:8px" data-i18n="playbook.add_step">+ 添加步骤</button>
       <div class="hint" data-i18n="playbook.hint">每个步骤在选定的目标主机上并行执行。目标可选：全部主机 / 按分类 / 指定主机。</div>
+
+      <div class="subhead" data-i18n="playbook.schedule">定时触发</div>
+      <label class="switch" style="margin-bottom:2px"><input type="checkbox" id="pbSchedEnabled"> <span data-i18n="playbook.sched_enable">启用定时触发（到点自动在目标主机上执行）</span></label>
+      <div id="pbSchedFields" style="display:none; margin-top:8px">
+        <div class="grid2">
+          <div class="field"><label data-i18n="playbook.sched_kind">触发方式</label><div class="select-wrap"><select id="pbSchedKind">
+            <option value="interval" data-i18n="playbook.sched_interval">按间隔</option>
+            <option value="daily" data-i18n="playbook.sched_daily">每天</option>
+            <option value="weekly" data-i18n="playbook.sched_weekly">每周</option>
+          </select></div></div>
+          <div class="field" id="pbSchedIntervalField"><label data-i18n="playbook.sched_interval_min">间隔（分钟）</label><input type="text" id="pbSchedInterval" class="mono" value="60"></div>
+          <div class="field" id="pbSchedAtField" style="display:none"><label data-i18n="playbook.sched_at">时间 (HH:MM)</label><input type="text" id="pbSchedAt" class="mono" value="03:00" placeholder="03:00"></div>
+          <div class="field" id="pbSchedWeekdayField" style="display:none"><label data-i18n="playbook.sched_weekday">星期</label><div class="select-wrap"><select id="pbSchedWeekday">
+            <option value="1" data-i18n="playbook.wd_mon">周一</option>
+            <option value="2" data-i18n="playbook.wd_tue">周二</option>
+            <option value="3" data-i18n="playbook.wd_wed">周三</option>
+            <option value="4" data-i18n="playbook.wd_thu">周四</option>
+            <option value="5" data-i18n="playbook.wd_fri">周五</option>
+            <option value="6" data-i18n="playbook.wd_sat">周六</option>
+            <option value="0" data-i18n="playbook.wd_sun">周日</option>
+          </select></div></div>
+        </div>
+        <div class="hint" data-i18n="playbook.sched_hint">定时触发以服务器本地时间为准；触发时若无在线目标则自动跳过；上一次调度尚未结束则本次跳过以防堆积。</div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn primary" id="pbSaveBtn" data-i18n="playbook.save">保存剧本</button>

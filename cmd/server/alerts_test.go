@@ -31,17 +31,32 @@ func TestClassify(t *testing.T) {
 
 func TestDefaultThresholds(t *testing.T) {
 	th := DefaultThresholds()
-	if th.CPUWarn != 80 || th.CPUCrit != 90 {
+	if th.CPUWarn != 80 || th.CPUCrit != 95 {
 		t.Errorf("cpu thresholds wrong: warn=%v crit=%v", th.CPUWarn, th.CPUCrit)
 	}
-	if th.MemWarn != 80 || th.MemCrit != 90 {
+	if th.MemWarn != 85 || th.MemCrit != 95 {
 		t.Errorf("mem thresholds wrong: warn=%v crit=%v", th.MemWarn, th.MemCrit)
 	}
-	if th.DiskWarn != 85 || th.DiskCrit != 95 {
+	if th.DiskWarn != 80 || th.DiskCrit != 90 {
 		t.Errorf("disk thresholds wrong: warn=%v crit=%v", th.DiskWarn, th.DiskCrit)
 	}
-	if th.OfflineAfter != 30*time.Second {
+	if th.OfflineAfter != 60*time.Second {
 		t.Errorf("offline after wrong: %v", th.OfflineAfter)
+	}
+	// Verify StandardThresholds is the same as DefaultThresholds
+	st := StandardThresholds()
+	if th != st {
+		t.Errorf("DefaultThresholds() != StandardThresholds()")
+	}
+	// Verify ConservativeThresholds has tighter values
+	ct := ConservativeThresholds()
+	if ct.CPUWarn >= th.CPUWarn || ct.CPUCrit >= th.CPUCrit {
+		t.Error("Conservative thresholds should be tighter than Standard")
+	}
+	// Verify RelaxedThresholds has looser values
+	rt := RelaxedThresholds()
+	if rt.CPUWarn <= th.CPUWarn || rt.CPUCrit <= th.CPUCrit {
+		t.Error("Relaxed thresholds should be looser than Standard")
 	}
 }
 
@@ -87,8 +102,8 @@ func TestEvaluate(t *testing.T) {
 		}
 	})
 
-	t.Run("cpu critical at 90 percent", func(t *testing.T) {
-		h := mkHost("h1", "node-1", now, shared.Metrics{CPUPercent: 90, CPUCores: 4})
+	t.Run("cpu critical at 95 percent", func(t *testing.T) {
+		h := mkHost("h1", "node-1", now, shared.Metrics{CPUPercent: 95, CPUCores: 4})
 		alerts := Evaluate([]*Host{h}, th)
 		if len(alerts) != 1 {
 			t.Fatalf("expected 1 alert, got %d", len(alerts))
@@ -157,8 +172,8 @@ func TestEvaluate(t *testing.T) {
 		}
 	})
 
-	t.Run("load alert exceeds cores times two", func(t *testing.T) {
-		h := mkHost("h1", "node-1", now, shared.Metrics{CPUCores: 4, Load5: 10})
+	t.Run("load alert exceeds cores times four", func(t *testing.T) {
+		h := mkHost("h1", "node-1", now, shared.Metrics{CPUCores: 4, Load5: 20})
 		alerts := Evaluate([]*Host{h}, th)
 		found := false
 		for _, a := range alerts {

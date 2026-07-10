@@ -175,7 +175,20 @@ func main() {
 	addr := flag.String("addr", ":8529", Tz("server.flag_addr"))
 	cfgPath := flag.String("config", "server_config.json", Tz("server.flag_config"))
 	distDir := flag.String("dist", "", Tz("server.flag_dist"))
+	// v5.4.0: admin password reset
+	resetAdmin := flag.Bool("reset-admin", false, "Reset the first admin user's password to a random value and print it to console, then exit")
+	resetAdminAPI := flag.String("reset-admin-api", "", "Start a local HTTP API on 127.0.0.1:PORT for admin password reset (e.g. -reset-admin-api=:9999)")
 	flag.Parse()
+
+	// Handle admin password reset flags before any server logic
+	if *resetAdmin {
+		runResetAdmin(*cfgPath)
+		return
+	}
+	if *resetAdminAPI != "" {
+		runResetAdminAPI(*cfgPath, *resetAdminAPI)
+		return
+	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -206,6 +219,7 @@ func main() {
 
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
+	go server.runScheduler(30 * time.Second) // timed playbook triggers (interval/daily/weekly)
 
 	handler := securityHeadersMiddleware(corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
 	srv := &http.Server{

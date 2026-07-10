@@ -136,6 +136,7 @@ docker compose up -d aiops-server
 
 - 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./server_config.json`
 - 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
+- 默认映射 TCP 转发端口范围 `10000-10099`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`（容器内默认 `127.0.0.1` 仅限容器自身访问）
 - Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用
 - Docker 镜像支持 `amd64` 和 `arm64` 双架构，`docker pull` 自动匹配
 
@@ -333,20 +334,30 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `dingtalk.webhook` | string | `""` | 钉钉机器人 Webhook |
 | `dingtalk.secret` | string | `""` | 钉钉加签 Secret |
 | `thresholds.cpu_warn` | float | `80` | CPU 警告阈值（%） |
-| `thresholds.cpu_crit` | float | `90` | CPU 严重阈值（%） |
-| `thresholds.mem_warn` | float | `80` | 内存警告阈值（%） |
-| `thresholds.mem_crit` | float | `90` | 内存严重阈值（%） |
-| `thresholds.disk_warn` | float | `85` | 磁盘警告阈值（%） |
-| `thresholds.disk_crit` | float | `95` | 磁盘严重阈值（%） |
-| `thresholds.offline_after_sec` | int | `30` | 主机失联判定秒数 |
+| `thresholds.cpu_crit` | float | `95` | CPU 严重阈值（%） |
+| `thresholds.mem_warn` | float | `85` | 内存警告阈值（%） |
+| `thresholds.mem_crit` | float | `95` | 内存严重阈值（%） |
+| `thresholds.disk_warn` | float | `80` | 磁盘警告阈值（%） |
+| `thresholds.disk_crit` | float | `90` | 磁盘严重阈值（%） |
+| `thresholds.diskio_warn` | float | `80` | 磁盘 IO 利用率警告阈值（%） |
+| `thresholds.diskio_crit` | float | `95` | 磁盘 IO 利用率严重阈值（%） |
+| `thresholds.iops_warn` | float | `50000` | IOPS 警告阈值（总读写 IOPS） |
+| `thresholds.iops_crit` | float | `100000` | IOPS 严重阈值 |
+| `thresholds.gpu_warn` | float | `80` | GPU 利用率警告阈值（%） |
+| `thresholds.gpu_crit` | float | `95` | GPU 利用率严重阈值（%） |
+| `thresholds.load_warn` | float | `4.0` | 系统负载警告倍率（× CPU 核心数） |
+| `thresholds.load_crit` | float | `8.0` | 系统负载严重倍率（× CPU 核心数） |
+| `thresholds.proc_warn` | float | `0.5` | 进程数异常变化比例（50% = 突增/突降一半） |
+| `thresholds.offline_after_sec` | int | `60` | 主机失联判定秒数 |
 | `require_token` | bool | `false` | 强制 Agent Token |
 | `allow_anonymous_agents` | bool | `false` | 允许无 Token Agent |
 | `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
 | `install_token` | string | 自动生成 | Agent 安装 Token |
 | `trust_proxy` | bool | `false` | 反代后设 `true`：采信 `X-Real-IP` 做限流 |
 | `forward_disabled` | bool | `false` | 全局禁用端口转发与 HTTP 代理 |
-| `forward_listen` | string | `0.0.0.0` | TCP 转发监听地址（`127.0.0.1` 仅限本机） |
-| `forward_port_range` | string | `10000-10099` | TCP 转发端口范围（Docker 部署用） |
+| `forward_listen` | string | `127.0.0.1` | TCP 转发监听地址（Docker 部署需设为 `0.0.0.0`） |
+| `forward_port_range` | string | `10000-10099` | TCP 转发端口范围（需与 Docker `ports` 映射一致） |
+| `relay_secret` | string | `""` | 中继节点共享密钥（v5.4.1，与 Agent 端 `-relay-secret` 一致） |
 | `smtp.smtp_enabled` | bool | `false` | 邮件推送开关 |
 | `smtp.smtp_host` | string | `""` | SMTP 服务器地址 |
 | `smtp.smtp_port` | int | `0` | SMTP 端口（465 隐式 TLS / 587 STARTTLS） |
@@ -355,6 +366,26 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `smtp.smtp_from_name` | string | `"AIOps Monitor"` | 发件人显示名称 |
 | `smtp.smtp_use_tls` | bool | `false` | 启用隐式 TLS（465 选 `true`，587 选 `false`） |
 
+#### 告警阈值三档预设（v5.4.1）
+
+默认使用「标准」档，用户可根据部署环境通过 `server_config.json` 的 `thresholds` 字段切换：
+
+| 指标 | 保守（敏感） | 标准（推荐·默认） | 宽松（低噪） |
+|---|---|---|---|
+| CPU 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
+| 内存 警告/严重 | 75 / 90 | 85 / 95 | 90 / 98 |
+| 磁盘 警告/严重 | 75 / 85 | 80 / 90 | 90 / 97 |
+| 磁盘 IO 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
+| IOPS 警告/严重 | 20K / 50K | 50K / 100K | 100K / 200K |
+| GPU 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
+| 负载 警告/严重 | 2.0× / 4.0× | 4.0× / 8.0× | 6.0× / 12.0× |
+| 进程数变化 | 0.3 (30%) | 0.5 (50%) | 0.8 (80%) |
+| 离线判定 | 30s | 60s | 120s |
+
+> **保守**：生产关键系统，尽早发现异常 → 误报较多。  
+> **标准**：多数场景推荐，平衡灵敏度与噪音 → 新安装默认值。  
+> **宽松**：开发/测试环境，减少告警疲劳 → 阈值最宽容。
+
 ### 服务端命令行参数
 
 | 参数 | 说明 | 默认值 |
@@ -362,6 +393,23 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `-addr` | 监听地址 | `:8529` |
 | `-config` | 配置文件路径 | `server_config.json` |
 | `-dist` | Agent 下载目录 | 自动探测 `./dist` 或程序所在目录 |
+
+### 环境变量覆盖（v5.4.1）
+
+以下环境变量可覆盖 `server_config.json` 中对应字段，Docker Compose 部署时无需修改配置文件即可调整安全策略：
+
+| 环境变量 | 对应配置项 | 类型 | 说明 |
+|---|---|---|---|
+| `AIOPS_FORWARD_LISTEN` | `forward_listen` | string | TCP 转发监听地址（Docker 部署必须设为 `0.0.0.0`） |
+| `AIOPS_FORWARD_PORT_RANGE` | `forward_port_range` | string | TCP 转发端口范围，如 `10000-10099` |
+| `AIOPS_RELAY_SECRET` | `relay_secret` | string | 中继节点共享密钥 |
+| `AIOPS_FORWARD_DISABLED` | `forward_disabled` | bool | 设为 `true` 全局禁用端口转发 |
+| `AIOPS_TERMINAL_DISABLED` | `terminal_disabled` | bool | 设为 `true` 全局禁用远程终端 |
+| `AIOPS_ALLOW_ANONYMOUS_AGENTS` | `allow_anonymous_agents` | bool | 设为 `true` 允许无 Token Agent |
+| `AIOPS_TRUST_PROXY` | `trust_proxy` | bool | 设为 `true` 采信反向代理客户端 IP 头 |
+| `AIOPS_REQUIRE_TOKEN` | `require_token` | bool | 设为 `true` 强制 Agent Token 校验 |
+
+> **优先级**：环境变量 > `server_config.json` 文件。布尔类型支持 `true`/`false` 或 `1`/`0`。
 
 ---
 
@@ -433,7 +481,8 @@ mysql -h 127.0.0.1 -P 13306 -u root -p
 
 - 支持自动分配端口（`local_port: 0`）或指定端口
 - 规则可启用/禁用/编辑/复制/删除
-- 监听地址可配置（`forward_listen`），Docker 部署可设端口范围（`forward_port_range`）
+- 监听地址可配置（`forward_listen`），默认 `127.0.0.1`（仅限本机），Docker 部署需设为 `0.0.0.0` 或通过 `AIOPS_FORWARD_LISTEN` 环境变量覆盖
+- 端口范围可配置（`forward_port_range`），Docker 部署需与 `ports` 映射一致
 
 ### HTTP 反向代理
 
@@ -671,7 +720,7 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 <details>
 <summary><b>主机显示离线</b></summary>
 
-- 默认 30 秒未上报即判离线，可在告警设置中调整 `offline_after_sec`
+- 默认 60 秒未上报即判离线，可在告警设置中调整 `offline_after_sec`
 - 检查 Agent 进程：`ps aux | grep aiops-agent`（Linux）或任务管理器（Windows）
 - 检查 Agent 到服务端的网络连通性
 </details>

@@ -24,7 +24,11 @@ import (
 // script through the relay and auto-configure with the relay as their server,
 // then download binaries and report metrics through the relay — zero manual
 // configuration needed.
-func runRelay(listenAddr, upstream string) {
+//
+// v5.4.1: relaySecret is an optional shared secret that the relay injects as
+// X-Relay-Secret on every proxied request. When configured on the upstream
+// server, all agent-facing requests via the relay must carry this header.
+func runRelay(listenAddr, upstream, relaySecret string) {
 	target, err := url.Parse(upstream)
 	if err != nil {
 		log.Fatalf("Relay: 无效的上游地址 %q: %v", upstream, err)
@@ -44,6 +48,10 @@ func runRelay(listenAddr, upstream string) {
 		if r.URL.Path == "/install.sh" || r.URL.Path == "/install.ps1" {
 			serveRelayInstallScript(w, r, upstream)
 			return
+		}
+		// v5.4.1: inject shared secret for relay authentication
+		if relaySecret != "" {
+			r.Header.Set("X-Relay-Secret", relaySecret)
 		}
 		proxy.ServeHTTP(w, r)
 	})

@@ -11,6 +11,11 @@ import (
 // version would load these per-host / per-rule and require a sustained
 // duration before firing. Plugin-generated findings arrive as Events instead
 // and are surfaced separately from these threshold alerts.
+//
+// Three preset profiles are available (v5.4.1):
+//   - ConservativeThresholds() — sensitive, for production-critical systems
+//   - StandardThresholds()    — recommended default, balanced noise/sensitivity
+//   - RelaxedThresholds()     — low-noise, for dev/staging environments
 type Thresholds struct {
 	CPUWarn, CPUCrit   float64
 	MemWarn, MemCrit   float64
@@ -23,17 +28,57 @@ type Thresholds struct {
 	OfflineAfter       time.Duration
 }
 
+// DefaultThresholds returns the Standard profile (recommended defaults).
+// This is the alias used by the config store for new installations.
 func DefaultThresholds() Thresholds {
+	return StandardThresholds()
+}
+
+// ConservativeThresholds returns sensitive thresholds for production-critical
+// systems where early warning is preferred over reducing noise.
+func ConservativeThresholds() Thresholds {
 	return Thresholds{
-		CPUWarn: 80, CPUCrit: 90,
-		MemWarn: 80, MemCrit: 90,
-		DiskWarn: 85, DiskCrit: 95,
-		DiskIOWarn: 80, DiskIOCrit: 90,
-		IOPSWarn: 10000, IOPSCrit: 20000,
-		GPUWarn: 80, GPUCrit: 90,
-		LoadWarn: 2.0, LoadCrit: 3.0,
-		ProcWarn: 0.5,
+		CPUWarn: 70, CPUCrit: 85,
+		MemWarn: 75, MemCrit: 90,
+		DiskWarn: 75, DiskCrit: 85,
+		DiskIOWarn: 70, DiskIOCrit: 85,
+		IOPSWarn: 20000, IOPSCrit: 50000,
+		GPUWarn: 70, GPUCrit: 85,
+		LoadWarn: 2.0, LoadCrit: 4.0,
+		ProcWarn: 0.3,
 		OfflineAfter: 30 * time.Second,
+	}
+}
+
+// StandardThresholds returns the recommended balanced thresholds for most
+// deployments. This is the new default since v5.4.1.
+func StandardThresholds() Thresholds {
+	return Thresholds{
+		CPUWarn: 80, CPUCrit: 95,
+		MemWarn: 85, MemCrit: 95,
+		DiskWarn: 80, DiskCrit: 90,
+		DiskIOWarn: 80, DiskIOCrit: 95,
+		IOPSWarn: 50000, IOPSCrit: 100000,
+		GPUWarn: 80, GPUCrit: 95,
+		LoadWarn: 4.0, LoadCrit: 8.0,
+		ProcWarn: 0.5,
+		OfflineAfter: 60 * time.Second,
+	}
+}
+
+// RelaxedThresholds returns low-noise thresholds suitable for dev/staging
+// environments where alert fatigue should be minimized.
+func RelaxedThresholds() Thresholds {
+	return Thresholds{
+		CPUWarn: 90, CPUCrit: 98,
+		MemWarn: 90, MemCrit: 98,
+		DiskWarn: 90, DiskCrit: 97,
+		DiskIOWarn: 90, DiskIOCrit: 98,
+		IOPSWarn: 100000, IOPSCrit: 200000,
+		GPUWarn: 90, GPUCrit: 98,
+		LoadWarn: 6.0, LoadCrit: 12.0,
+		ProcWarn: 0.8,
+		OfflineAfter: 120 * time.Second,
 	}
 }
 

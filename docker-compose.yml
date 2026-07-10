@@ -30,6 +30,14 @@ services:
       - server-data:/app/data
     environment:
       - TZ=Asia/Shanghai
+      # v5.4.1: TCP 转发默认监听 127.0.0.1（仅容器内可访问），Docker 部署
+      # 必须设为 0.0.0.0 才能让宿主机/其他容器访问转发的端口。
+      # 也可以通过挂载 server_config.json 设置 forward_listen 字段。
+      - AIOPS_FORWARD_LISTEN=0.0.0.0
+      # 可选：转发端口范围（需与 ports 映射一致）
+      # - AIOPS_FORWARD_PORT_RANGE=10000-10099
+      # 可选：中继节点共享密钥（与 Agent 端 relay-secret 一致）
+      # - AIOPS_RELAY_SECRET=your-shared-secret
     restart: unless-stopped
 
   # 取消注释即可启用本机 Agent

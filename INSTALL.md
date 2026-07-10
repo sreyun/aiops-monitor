@@ -62,6 +62,20 @@ systemctl daemon-reload && systemctl enable --now aiops-server
 
 浏览器打开 `http://<服务端IP>:8529` 即为面板。服务端配置(告警 webhook / 阈值 / 分类覆盖)持久化在其工作目录的 `server_config.json`。
 
+**TCP 端口转发监听地址**（v5.4.1）：
+
+默认监听 `127.0.0.1`（仅本机可访问转发端口），提升安全性。如需从其他机器访问转发端口（如 Docker 部署、局域网访问），需将 `forward_listen` 设为 `0.0.0.0`：
+
+```bash
+# 方式一：环境变量（推荐，Docker 部署友好）
+AIOPS_FORWARD_LISTEN=0.0.0.0 ./aiops-server
+
+# 方式二：修改 server_config.json
+# 添加 "forward_listen": "0.0.0.0" 后重启服务端
+```
+
+> Docker 部署时容器内 `127.0.0.1` 仅限容器自身，必须设为 `0.0.0.0` 才能让宿主机访问转发端口。`docker-compose.yml` 已内置 `AIOPS_FORWARD_LISTEN=0.0.0.0` 环境变量。
+
 ---
 
 ## 二、客户端 Agent 通用说明
@@ -277,3 +291,8 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 
 **主机分类不对 / 想改?**
 - Agent 端用 `--category` 设定;也可在面板点卡片上的分类标签**手动覆盖**(覆盖优先于 Agent 上报)。
+
+**TCP 端口转发连不上?**
+- 检查 `forward_listen` 配置：v5.4.1 起默认 `127.0.0.1`（仅限本机），Docker 部署或需从其他机器访问时需设为 `0.0.0.0`。
+- Docker 部署确认 `docker-compose.yml` 中 `AIOPS_FORWARD_LISTEN=0.0.0.0` 已启用，且 `ports` 映射了对应端口范围。
+- 防火墙是否放行了转发端口范围（默认 `10000-10099`）。

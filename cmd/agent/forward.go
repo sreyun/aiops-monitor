@@ -35,6 +35,19 @@ var forwardWaitHTTP = &http.Client{Timeout: 35 * time.Second}
 // TCP connections and goroutines.
 const forwardSessionTimeout = 15 * time.Minute
 
+// agentGet issues a GET carrying the agent fingerprint (the reverse-channel
+// auth credential) in the X-Agent-Fingerprint header instead of the URL query,
+// keeping it out of server access / reverse-proxy logs. Non-secret params
+// (host, session) stay in rawURL.
+func agentGet(client *http.Client, rawURL, fp string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Agent-Fingerprint", fp)
+	return client.Do(req)
+}
+
 // runForwardChannelFor runs a persistent reverse forward channel for one
 // server target. Each target gets its own goroutine so forward sessions from
 // different servers don't interfere.
@@ -59,8 +72,8 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 
 // forwardWait long-polls the server for a pending forward session.
 func (a *Agent) forwardWait(server string) (sessionID string, targetPort int, mode string, ok bool) {
-	q := url.Values{"host": {a.identity.HostID}, "fp": {a.identity.Fingerprint}}
-	resp, err := forwardWaitHTTP.Get(server + "/api/v1/agent/forward/wait?" + q.Encode())
+	q := url.Values{"host": {a.identity.HostID}}
+	resp, err := agentGet(forwardWaitHTTP, server+"/api/v1/agent/forward/wait?"+q.Encode(), a.identity.Fingerprint)
 	if err != nil {
 		return "", 0, "", false
 	}
@@ -94,14 +107,14 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	if err != nil {
 		slog.Warn("转发目标连接失败", "session", sid, "target", target, "err", err)
 		// Send an error frame to the server so it knows the target is unreachable
-		fp := url.QueryEscape(a.identity.Fingerprint)
 		var errBuf bytes.Buffer
 		// P1: 修复 Content-Length 计算错误
 		errMsg := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAgent failed to connect to localhost:%d: %s", targetPort, err.Error())
 		errBuf.WriteString(errMsg)
 		req, _ := http.NewRequest("POST",
-			server+"/api/v1/agent/forward/tx?session="+sid+"&fp="+fp, &errBuf)
+			server+"/api/v1/agent/forward/tx?session="+sid, &errBuf)
 		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
 		if resp, err := termHTTP.Do(req); err == nil {
 			resp.Body.Close()
 		}
@@ -111,7 +124,6 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	// HTTP 代理的响应可能是流式的、长时间的，设置全局 deadline 会导致连接被意外关闭
 	// 如果需要超时控制，应该在具体的读写操作中单独设置
 	slog.Info("转发会话开始", "session", sid, "target", target)
-	fp := url.QueryEscape(a.identity.Fingerprint)
 
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = conn.Close() }) }
@@ -134,11 +146,12 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	go func() {
 		defer wg.Done()
 		req, err := http.NewRequest("POST",
-			server+"/api/v1/agent/forward/tx?session="+sid+"&fp="+fp, conn)
+			server+"/api/v1/agent/forward/tx?session="+sid, conn)
 		if err != nil {
 			return
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
 		if resp, err := termHTTP.Do(req); err == nil {
 			resp.Body.Close()
 		}
@@ -150,7 +163,7 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 	// 与 tx（响应读完）都已完成，可安全关闭，避免提前关闭导致响应被截断。
 	go func() {
 		defer wg.Done()
-		resp, err := termHTTP.Get(server + "/api/v1/agent/forward/rx?session=" + sid + "&fp=" + fp)
+		resp, err := agentGet(termHTTP, server+"/api/v1/agent/forward/rx?session="+sid, a.identity.Fingerprint)
 		if err != nil {
 			return
 		}

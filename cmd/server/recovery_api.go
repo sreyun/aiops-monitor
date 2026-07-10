@@ -207,6 +207,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		Code       string `json:"code"`
 		NewPass    string `json:"new_password"`
 		ResetToken string `json:"reset_token"`
+		TOTPCode   string `json:"totp_code"` // v5.4.1: MFA for legacy path
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -232,6 +233,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Path B: legacy flow (username + email + code)
+	// v5.4.1: MFA verification is now required when the account has MFA enabled.
 	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.TrimSpace(req.Email)
 	req.Code = strings.TrimSpace(req.Code)
@@ -251,6 +253,20 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	if !s.emailMgr.verifyCode(user.Email, "reset_password", req.Code) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.code_invalid")})
 		return
+	}
+	// v5.4.1: require MFA TOTP when the account has MFA enabled
+	if user.MFAEnabled && user.MFASecret != "" {
+		totpCode := strings.TrimSpace(req.TOTPCode)
+		if totpCode == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.mfa_required_for_reset")})
+			return
+		}
+		if !totpVerify(user.MFASecret, totpCode) {
+			s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
+			return
+		}
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_success", user.Username)})
 	}
 	_ = s.cfg.SetUserPassword(user.Username, req.NewPass)
 	s.auth.clearUserSessions(user.Username)

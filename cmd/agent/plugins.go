@@ -57,6 +57,8 @@ func NewPluginRunner(dir, python string, timeout time.Duration) *PluginRunner {
 // discover returns the plugin files to run, skipping the SDK helper, dotfiles
 // and underscore-prefixed files. Cached after first call — plugin list doesn't
 // change while the agent is running.
+// v5.4.1: only allow known safe extensions (.py, .sh); reject extensionless
+// files and potential binary/native executables (.exe, .bin, etc.).
 func (p *PluginRunner) discover() []string {
 	p.filesOnce.Do(func() {
 		entries, err := os.ReadDir(p.dir)
@@ -75,8 +77,18 @@ func (p *PluginRunner) discover() []string {
 			if name == "plugin_sdk.py" || name == "requirements.txt" {
 				continue
 			}
-			switch strings.ToLower(filepath.Ext(name)) {
-			case ".json", ".txt", ".md", ".yaml", ".yml", ".conf", ".ini", ".cfg", ".log":
+			// v5.4.1: whitelist approach — only allow known safe extensions
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext == "" {
+				// Extensionless files are dangerous (could be native binaries)
+				continue
+			}
+			switch ext {
+			case ".py", ".sh":
+				// allowed
+			default:
+				// reject: .json, .txt, .md, .yaml, .yml, .conf, .ini, .cfg, .log,
+				//         .exe, .bin, .bat, .cmd, .ps1, .dll, .so, .dylib, etc.
 				continue
 			}
 			out = append(out, filepath.Join(p.dir, name))

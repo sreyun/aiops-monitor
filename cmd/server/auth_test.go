@@ -1,11 +1,73 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestPBKDF2SHA256Vector checks the hand-rolled PBKDF2 against published
+// PBKDF2-HMAC-SHA256 known-answer vectors (P="password", S="salt").
+func TestPBKDF2SHA256Vector(t *testing.T) {
+	cases := []struct {
+		iter int
+		want string
+	}{
+		{1, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"},
+		{2, "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"},
+	}
+	for _, c := range cases {
+		got := hex.EncodeToString(pbkdf2SHA256([]byte("password"), []byte("salt"), c.iter, 32))
+		if got != c.want {
+			t.Errorf("pbkdf2 iter=%d = %s, want %s", c.iter, got, c.want)
+		}
+	}
+}
+
+// TestPasswordHashRoundTripAndLegacy verifies the new PBKDF2 format round-trips
+// and that legacy salted-SHA256 hashes still verify (seamless migration).
+func TestPasswordHashRoundTripAndLegacy(t *testing.T) {
+	salt := "abcd1234abcd1234"
+	h := hashPassword("s3cret", salt)
+	if !strings.HasPrefix(h, "pbkdf2$sha256$") {
+		t.Fatalf("new hash not pbkdf2 format: %s", h)
+	}
+	if !verifyPassword("s3cret", salt, h) {
+		t.Error("verifyPassword rejected correct password (pbkdf2)")
+	}
+	if verifyPassword("wrong", salt, h) {
+		t.Error("verifyPassword accepted wrong password (pbkdf2)")
+	}
+	// A legacy single-round salted SHA-256 hash must still verify.
+	sum := sha256.Sum256([]byte(salt + ":" + "s3cret"))
+	legacy := hex.EncodeToString(sum[:])
+	if !verifyPassword("s3cret", salt, legacy) {
+		t.Error("verifyPassword rejected correct password (legacy)")
+	}
+	if !isLegacyHash(legacy) || isLegacyHash(h) {
+		t.Error("isLegacyHash misclassified a hash")
+	}
+}
+
+// TestSessionTokensStoredHashed ensures the persisted/in-memory session map is
+// keyed by a hash, never the raw cookie token that a leaked DB could replay.
+func TestSessionTokensStoredHashed(t *testing.T) {
+	a := NewAuth(newTestConfigStore(t))
+	tok := a.issueSession("admin")
+	if _, raw := a.sessions[tok]; raw {
+		t.Fatal("session map is keyed by the RAW token (leaked DB would be replayable)")
+	}
+	if _, hashed := a.sessions[sessionKey(tok)]; !hashed {
+		t.Fatal("session not stored under its hashed key")
+	}
+	if !a.validate(tok) {
+		t.Error("validate rejected a freshly issued token")
+	}
+}
 
 // newTestConfigStore builds a ConfigStore backed by a temp file so save() works
 // without polluting the repo. The default config creates an admin/admin account.

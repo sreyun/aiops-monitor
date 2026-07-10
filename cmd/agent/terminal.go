@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -97,8 +98,8 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 }
 
 func (a *Agent) termWait(server string) (sessionID, mode, command string, ok bool) {
-	q := url.Values{"host": {a.identity.HostID}, "fp": {a.identity.Fingerprint}}
-	resp, err := termWaitHTTP.Get(server + "/api/v1/agent/terminal/wait?" + q.Encode())
+	q := url.Values{"host": {a.identity.HostID}}
+	resp, err := agentGet(termWaitHTTP, server+"/api/v1/agent/terminal/wait?"+q.Encode(), a.identity.Fingerprint)
 	if err != nil {
 		return "", "", "", false
 	}
@@ -162,12 +163,13 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	// appended on its own line so success/failure can be surfaced precisely.
 	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
 	req, err := http.NewRequest("POST",
-		server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+url.QueryEscape(a.identity.Fingerprint),
+		server+"/api/v1/agent/terminal/tx?session="+sid,
 		bytes.NewReader(body))
 	if err != nil {
 		return
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
 	if resp, err := termHTTP.Do(req); err == nil {
 		resp.Body.Close()
 	}
@@ -197,8 +199,6 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	})
 	defer timeoutTimer.Stop()
 
-	fp := url.QueryEscape(a.identity.Fingerprint)
-
 	// zmChan carries upload data received from the browser (via rx stream)
 	// to the ZMODEM upload handler running in the tx goroutine.
 	zmChan := make(chan []byte, 32)
@@ -218,12 +218,13 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	go func() {
 		defer closeAll()
 		pr, pw := io.Pipe()
-		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid+"&fp="+fp, pr)
+		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid, pr)
 		if err != nil {
 			pw.Close()
 			return
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
 		// Fire off the HTTP request in a goroutine; write to pw in the main goroutine.
 		reqDone := make(chan error, 1)
 		go func() {
@@ -243,7 +244,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 	// rx: framed keystrokes / resize / upload from the server → the shell
 	go func() {
 		defer closeAll()
-		resp, err := termHTTP.Get(server + "/api/v1/agent/terminal/rx?session=" + sid + "&fp=" + fp)
+		resp, err := agentGet(termHTTP, server+"/api/v1/agent/terminal/rx?session="+sid, a.identity.Fingerprint)
 		if err != nil {
 			return
 		}
@@ -332,16 +333,24 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 				slog.Warn("文件上传元数据无效", "err", err)
 				continue
 			}
-			if meta.Size > 100<<20 {
+			if meta.Size < 0 || meta.Size > 100<<20 {
 				sendFileInfo("upload_ack", map[string]interface{}{
 					"status": "error", "message": "文件超过100MB限制",
 				})
 				continue
 			}
-			// Create the target file
-			f, err := os.Create(meta.TargetPath)
+			// Path hygiene: clean the target, and confine a bare/relative path to a
+			// safe temp dir so an upload can't land somewhere unexpected relative to
+			// the agent's working directory. Absolute paths are honored (the operator
+			// already has a full terminal on this host, so this is a guardrail against
+			// surprises, not a privilege boundary).
+			target := filepath.Clean(meta.TargetPath)
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(os.TempDir(), filepath.Base(target))
+			}
+			f, err := os.Create(target)
 			if err != nil {
-				slog.Warn("无法创建上传文件", "path", meta.TargetPath, "err", err)
+				slog.Warn("无法创建上传文件", "path", target, "err", err)
 				sendFileInfo("upload_ack", map[string]interface{}{
 					"status": "error", "message": fmt.Sprintf("无法创建文件: %v", err),
 				})
@@ -352,16 +361,32 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 				filename: meta.Filename,
 				size:     meta.Size,
 			}
-			slog.Info("文件上传开始", "filename", meta.Filename, "target", meta.TargetPath, "size", meta.Size)
+			slog.Info("文件上传开始", "filename", meta.Filename, "target", target, "size", meta.Size)
 
 		case 'u':
 			if upload != nil {
-				// Button-based upload: write to file
+				// Enforce the declared size: a client must not stream more than it
+				// announced, otherwise a bad/hostile peer could fill the disk past
+				// the 100MB cap.
+				if upload.received+int64(len(payload)) > upload.size {
+					slog.Warn("上传数据超过声明大小，已中止", "filename", upload.filename)
+					upload.file.Close()
+					os.Remove(upload.file.Name())
+					sendFileInfo("upload_ack", map[string]interface{}{
+						"status": "error", "message": "上传数据超过声明大小",
+					})
+					upload = nil
+					continue
+				}
+				// Button-based upload: write to file. On error, drop the upload and
+				// STOP (previously this fell through to upload.received on a nil
+				// upload → panic that crashed the session goroutine).
 				if _, err := upload.file.Write(payload); err != nil {
 					slog.Warn("写入上传文件失败", "err", err)
 					upload.file.Close()
 					os.Remove(upload.file.Name())
 					upload = nil
+					continue
 				}
 				upload.received += int64(len(payload))
 			} else {

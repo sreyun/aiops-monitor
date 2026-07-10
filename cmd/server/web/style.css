@@ -3,6 +3,34 @@
    设计语言：克制、扁平、专业的深色后台（参考 TDesign 暗色 / Linear）
    —— 单层中性色阶 · 统一 4px 间距栅格 · 克制的状态反馈 · 零外链
    ============================================================ */
+/* 统一品牌 Token（与营销站 aiops-design-tokens.css 内容保持一致）
+   此处内联而非 @import：面板经 Go embed 嵌入，静态路由仅精确匹配 /style.css，
+   无 /aiops-design-tokens.css 路由，@import 会 404 导致全局 token 缺失。 */
+:root{
+  /* 品牌主色（统一为同一蓝色家族，消除割裂感） */
+  --accent:#4c8dff; --accent-hover:#6aa1ff; --accent-soft:rgba(76,141,255,.13);
+  --accent2:#06b6d4; --accent2-soft:rgba(6,182,212,.12);
+  /* 语义状态色（统一色相） */
+  --ok:#10b981; --ok-soft:rgba(16,185,129,.12);
+  --warn:#f59e0b; --warn-soft:rgba(245,158,11,.12);
+  --crit:#ef4444; --crit-soft:rgba(239,68,68,.12);
+  --info:#3fb5ef; --info-soft:rgba(63,181,239,.12);
+  --purple:#8b5cf6; --purple-soft:rgba(139,92,246,.12);
+  /* 圆角 / 阴影 / 过渡 / 间距 / 字体 / 渐变（统一） */
+  --r-xs:6px; --r-sm:8px; --r:12px; --r-lg:16px; --r-xl:24px; --r-2xl:28px;
+  --shadow-sm:0 2px 8px rgba(0,0,0,.28);
+  --shadow:0 4px 24px rgba(0,0,0,.32);
+  --shadow-lg:0 12px 48px rgba(0,0,0,.42);
+  --transition-fast:140ms cubic-bezier(.4,0,.2,1);
+  --transition:200ms cubic-bezier(.4,0,.2,1);
+  --transition-slow:320ms cubic-bezier(.4,0,.2,1);
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
+  --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px; --sp-16:64px;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  --gradient:linear-gradient(135deg,var(--accent),var(--accent2));
+  --gradient-soft:linear-gradient(135deg,var(--accent-soft),rgba(6,182,212,.08));
+  --max-w:1200px;
+}
 :root{
   /* 中性色阶（由深到浅：底 → 面 → 输入/悬停 → 轨道/激活） */
   --bg:#0a0d13; --bg2:#0d1119; --bg3:#111722;
@@ -14,11 +42,12 @@
   /* 离线/未知灰（统一 #49525f / #556 / #8a93a3） */
   --gray-off:#4a5360; --gray-txt:#8a93a3;
 
-  /* 文本 —— 提升 muted2 亮度以满足 WCAG AA 4.5:1（原 #586273 对比度仅 3.9:1） */
-  --txt:#e7ebf2; --txt2:#b3bccb; --muted:#8492a6; --muted2:#6b7588;
+  /* 文本 —— muted2 提亮至 #808a9c：在 --bg/--panel/--panel2 上均达 WCAG AA 4.5:1
+     （旧值 #6b7588 仅 3.2–4.2:1 不达标），同时仍明显暗于 --muted 以保留层级。 */
+  --txt:#e7ebf2; --txt2:#b3bccb; --muted:#8492a6; --muted2:#808a9c;
 
-  /* 功能色（低饱和、克制） */
-  --accent:#4c8dff; --accent-hover:#6aa1ff; --accent-soft:rgba(76,141,255,.13);
+  /* 品牌主色（--accent 等）已在上方内联块引用共享 token（与营销站 aiops-design-tokens.css 一致）。
+     此处仅保留面板专属辅助色（紫）与面板调校的语义色，确保面板视觉不被改变 */
   --accent2:#7c6bff; --accent2-soft:rgba(124,107,255,.13);
   --ok:#31c46b; --ok-soft:rgba(49,196,107,.12);
   --warn:#e8a13c; --warn-soft:rgba(232,161,60,.12);
@@ -80,7 +109,10 @@
   --hover-border:#b8c0cc;
   --gray-off:#b0b8c4; --gray-txt:#8a93a3;
 
-  --txt:#1a2332; --txt2:#4a5568; --muted:#6b7588; --muted2:#9ca5b5;
+  /* muted2 加深至 #767f8e：旧值 #9ca5b5 在浅底上仅 2.1–2.5:1 严重不达标；
+     受该浅色阶所限（--muted 自身在白底也仅 4.64:1），此值已尽量贴近 AA
+     且仍浅于 --muted 以保留层级。 */
+  --txt:#1a2332; --txt2:#4a5568; --muted:#6b7588; --muted2:#767f8e;
 
   --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:rgba(37,99,235,.10);
   --accent2:#7c3aed; --accent2-soft:rgba(124,58,237,.10);
@@ -328,7 +360,7 @@ select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(
   color:var(--muted); pointer-events:none; font-size:10px}
 
 /* 默认「标准」宽度：居中限宽；用户可切换到「宽屏」。 */
-.content{padding:22px 24px 48px; max-width:1280px; width:100%; margin:0 auto;
+.content{padding:22px 24px 48px; max-width:1440px; width:100%; margin:0 auto;
   transition:max-width var(--transition)}
 .app.wide .content{max-width:1720px}
 section{scroll-margin-top:80px; margin-bottom:24px}
@@ -1598,6 +1630,16 @@ body[data-role="viewer"] #installBtn{display:none !important}
 .pb-meta{display:flex; gap:8px; align-items:center; font-size:12px}
 .pb-step{background:var(--panel2); border:1px solid var(--line); border-radius:var(--r-xs); padding:10px 12px; display:flex; flex-direction:column; gap:8px}
 .pb-step .grid2{gap:10px}
+/* Multi-line command editor (replaces the old single-line input so long / multi-line
+   commands are fully visible and editable). */
+.pb-step textarea.pb-step-cmd{width:100%; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12.5px; color:var(--txt);
+  background:var(--bg2); border:1px solid var(--line2); border-radius:var(--r-sm); padding:9px 11px; line-height:1.5;
+  resize:vertical; min-height:54px; transition:border-color var(--transition-fast)}
+.pb-step textarea.pb-step-cmd::placeholder{color:var(--muted2)}
+/* Wider playbook editor gives multi-line commands and the schedule fields room. */
+.modal.modal-lg{max-width:880px}
+/* Timed-trigger badge on the playbook card. */
+.pb-meta .tag.sched{color:var(--accent-txt); background:var(--accent-soft); border-color:transparent}
 
 /* ---------- 执行结果 ---------- */
 .exec-meta{font-size:12px; color:var(--muted2); margin-bottom:12px; display:flex; gap:16px; flex-wrap:wrap}
@@ -1611,7 +1653,7 @@ body[data-role="viewer"] #installBtn{display:none !important}
 .exec-step.running{border-left-color:var(--accent)}
 .exec-step-name{font-weight:600; font-size:12px}
 .exec-step-status{font-size:11px; color:var(--muted2); margin-left:8px}
-.exec-step-out{font-family:monospace; font-size:11px; color:var(--txt2); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; margin-top:4px}
+.exec-step-out{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:11.5px; color:var(--txt2); white-space:pre-wrap; word-break:break-all; max-height:360px; overflow:auto; margin-top:4px}
 
 /* ---------- 执行历史 ---------- */
 .exec-hist-row{display:flex; align-items:center; gap:12px; padding:10px 14px; border:1px solid var(--line); border-radius:var(--r-xs); margin-bottom:6px; cursor:pointer; font-size:13px}
@@ -1736,3 +1778,38 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .term-pwd-status-val{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px}
 .term-pwd-status-val.set{background:var(--ok-soft);color:var(--ok-txt);border:1px solid var(--ok-border)}
 .term-pwd-status-val.unset{background:var(--warn-soft);color:var(--warn-txt);border:1px solid var(--warn-border)}
+
+/* ============================================================
+   UI/UX 审查修复合集（对应 UI_UX_REVIEW.md 优先级汇总表 · 面板侧）
+   ============================================================ */
+
+/* 3.4 概览页区块标题与 section-title 风格统一 */
+.ov-section-header h3{font-size:15px;font-weight:600;letter-spacing:.01em}
+
+/* 5.4 textarea 焦点环（全局已 outline:none!important，此处用 box-shadow 恢复可见焦点，避免键盘用户无指示） */
+.field textarea:focus, textarea:focus{
+  outline:none;
+  box-shadow:0 0 0 3px var(--accent-soft);
+  border-color:var(--accent);
+}
+
+/* 4.2 窄屏：筛选工具栏 sticky 吸顶，避免换行长工具栏挤压内容；覆盖内联 margin/width 使搜索框占满一行 */
+@media (max-width:768px){
+  .section-title{position:sticky;top:0;z-index:6;background:var(--bg);
+    padding-top:10px;padding-bottom:12px;margin-bottom:10px;box-shadow:0 1px 0 var(--line)}
+  .section-title .search{width:100%!important;max-width:none!important;margin-left:0!important;margin-right:0!important}
+  .section-title .select-wrap{margin-left:0!important}
+  .section-title > div{margin-left:0!important;width:100%}
+}
+
+/* 6.4 全局请求加载指示条（顶部细进度条，任何 fetch 进行中显示） */
+.loadbar{position:fixed;top:0;left:0;height:2px;width:100%;
+  background:var(--accent);transform:scaleX(0);transform-origin:left center;
+  opacity:0;transition:opacity .2s;z-index:99999;pointer-events:none}
+.loadbar.active{opacity:1;animation:loadbar-slide 1.1s ease-in-out infinite}
+@keyframes loadbar-slide{0%{transform:scaleX(.08)}50%{transform:scaleX(.55)}100%{transform:scaleX(.08)}}
+
+/* 尊重 prefers-reduced-motion（前庭敏感 / 无障碍合规） */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
