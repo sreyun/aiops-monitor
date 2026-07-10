@@ -114,5 +114,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.fingerprint_failed")})
 		return
 	}
+	// Mirror the sample to VictoriaMetrics when enabled (non-blocking, best-effort).
+	s.vm.enqueue(rep.HostID, rep.Hostname, s.effectiveCategory(rep.HostID), time.Now().Unix(), rep.Metrics)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": h.ID})
 }

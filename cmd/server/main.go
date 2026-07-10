@@ -205,6 +205,13 @@ func main() {
 	db := NewDB(dbPathFor(*cfgPath), store, server.auth)
 	db.BindSRE(server.incidents, server.tickets) // persist incidents + work orders
 	db.Load()
+	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
+	// Optional PostgreSQL backend for durable SRE records (incidents + tickets).
+	// Loaded AFTER db.Load so PG overrides the snapshot when configured.
+	var pg *pgStore
+	if dsn := cfg.PostgresDSN(); dsn != "" {
+		pg = server.startPGSync(dsn)
+	}
 	go db.AutoSave(15 * time.Second)
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -215,6 +222,11 @@ func main() {
 		} else {
 			slog.Info(Tz("server.saved_exit"))
 		}
+		if pg != nil { // final flush to PostgreSQL
+			_ = pg.saveIncidents(server.incidents.Export())
+			_ = pg.saveTickets(server.tickets.Export())
+			pg.close()
+		}
 		os.Exit(0)
 	}()
 
@@ -223,6 +235,7 @@ func main() {
 	go server.runScheduler(30 * time.Second) // timed playbook triggers (interval/daily/weekly)
 	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
+	go server.vm.run()                          // optional VictoriaMetrics remote-write pump
 
 	handler := securityHeadersMiddleware(corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
 	srv := &http.Server{

@@ -42,8 +42,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.invalid_username_format")})
 		return
 	}
-	if len(strings.TrimSpace(req.Password)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.password_too_short")})
+	if !validatePasswordStrength(strings.TrimSpace(req.Password)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
 		return
 	}
 	if !validRole(req.Role) {
@@ -115,8 +115,8 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if len(strings.TrimSpace(req.Password)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "user.password_too_short")})
+	if !validatePasswordStrength(strings.TrimSpace(req.Password)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
 		return
 	}
 	if err := s.cfg.SetUserPassword(username, req.Password); err != nil {

@@ -221,8 +221,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.token_invalid")})
 			return
 		}
-		if len(strings.TrimSpace(req.NewPass)) < 4 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.password_too_short")})
+		if !validatePasswordStrength(strings.TrimSpace(req.NewPass)) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
 			return
 		}
 		_ = s.cfg.SetUserPassword(username, req.NewPass)

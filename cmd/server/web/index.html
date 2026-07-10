@@ -493,18 +493,21 @@
         <button class="tab" data-os="macos">macOS</button>
       </div>
       <div class="field">
-        <label class="relay-toggle">
-          <input type="checkbox" id="relayMode">
-          <span data-i18n="install.relay_mode">网关中继模式</span>
-          <span class="hint" style="font-weight:normal" data-i18n="install.relay_hint">仅一台机器能联网时使用</span>
-        </label>
-      </div>
-      <div class="field">
-        <label class="relay-toggle">
-          <input type="checkbox" id="multiServerMode">
-          <span data-i18n="install.multi_server">多服务端推送</span>
-          <span class="hint" style="font-weight:normal" data-i18n="install.multi_server_hint">单 Agent 同时向多个服务端推送</span>
-        </label>
+        <label data-i18n="install.mode_label">安装模式</label>
+        <div class="install-mode-row">
+          <label class="install-mode-opt">
+            <input type="radio" name="installMode" value="normal" checked>
+            <span data-i18n="install.mode_normal">标准模式</span>
+          </label>
+          <label class="install-mode-opt">
+            <input type="radio" name="installMode" value="relay">
+            <span data-i18n="install.relay_mode">网关中继模式</span>
+          </label>
+          <label class="install-mode-opt">
+            <input type="radio" name="installMode" value="multi">
+            <span data-i18n="install.multi_server">多服务端推送</span>
+          </label>
+        </div>
       </div>
       <div id="multiServerSection" style="display:none">
         <div class="relay-info">
@@ -851,7 +854,7 @@
       <div class="tab-panel" id="tab-profile-password" role="tabpanel">
         <div class="subhead subhead-first" data-i18n="profile.change_password">修改密码</div>
         <div class="field"><label data-i18n="profile.old_password">原密码</label><input type="password" id="pfOld" autocomplete="current-password"></div>
-        <div class="field"><label data-i18n="profile.new_password">新密码（至少 4 位）</label><input type="password" id="pfNew" autocomplete="new-password"></div>
+        <div class="field"><label data-i18n="profile.new_password">新密码（≥8位·含大小写+数字+特殊字符）</label><input type="password" id="pfNew" autocomplete="new-password"></div>
         <div class="login-err" id="pfPwdErr" style="display:none"></div>
         <div class="mfa-foot"><button class="btn primary" id="pfPwdBtn" data-i18n="profile.change_password">修改密码</button></div>
 

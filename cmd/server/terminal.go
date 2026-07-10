@@ -6,8 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -104,7 +108,8 @@ type termManager struct {
 	mu       sync.Mutex
 	sessions map[string]*termSession
 	waiters  map[string]chan string // hostID -> a waiting agent poll
-	archived []termArchive          // recordings of recently-ended sessions (for replay)
+	archived []termArchive          // in-memory index of recent ended sessions (for replay)
+	recDir   string                 // directory where session recordings are persisted as files
 	// pendingSessions stores session IDs that were created for a host but the
 	// agent wasn't in a long-poll wait at the time of notification. This fixes
 	// a race condition in batch playbook execution: when multiple hosts are
@@ -134,25 +139,89 @@ type dbTermArchive struct {
 	Recording []termRecordFrame `json:"recording"`
 }
 
-// exportArchives / importArchives bridge the recording archive to the DB snapshot
-// so terminal replays survive a restart (fixing the docker-compose data-loss).
-func (m *termManager) exportArchives() []dbTermArchive {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]dbTermArchive, len(m.archived))
-	for i, a := range m.archived {
-		out[i] = dbTermArchive{Info: a.info, Recording: a.recording}
-	}
-	return out
+// --- recording file persistence: one JSON file per ended session under recDir
+// (a plain bind-mounted directory — no DB), so replays survive restarts. ---
+
+func (m *termManager) recordingPath(id string) string {
+	return filepath.Join(m.recDir, id+".json")
 }
 
-func (m *termManager) importArchives(list []dbTermArchive) {
+// persistRecording writes one ended session's recording to its file (atomic).
+func (m *termManager) persistRecording(a termArchive) {
+	if m.recDir == "" || a.info.ID == "" || len(a.recording) == 0 {
+		return
+	}
+	if err := os.MkdirAll(m.recDir, 0o755); err != nil {
+		return
+	}
+	b, err := json.Marshal(dbTermArchive{Info: a.info, Recording: a.recording})
+	if err != nil {
+		return
+	}
+	tmp := m.recordingPath(a.info.ID) + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, m.recordingPath(a.info.ID))
+	}
+}
+
+// readRecordingFile loads one session's full recording from disk (on-demand replay).
+func (m *termManager) readRecordingFile(id string) []termRecordFrame {
+	if m.recDir == "" {
+		return nil
+	}
+	b, err := os.ReadFile(m.recordingPath(id))
+	if err != nil {
+		return nil
+	}
+	var d dbTermArchive
+	if json.Unmarshal(b, &d) != nil {
+		return nil
+	}
+	return d.Recording
+}
+
+// loadRecordings indexes the most-recent persisted recordings into the in-memory
+// archive (metadata only — full frames are read from file on replay) so ended
+// sessions still list and replay after a restart.
+func (m *termManager) loadRecordings(dir string) {
+	m.recDir = dir
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return // first run / no recordings yet
+	}
+	type fe struct {
+		id  string
+		mod int64
+	}
+	var files []fe
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fe{strings.TrimSuffix(e.Name(), ".json"), info.ModTime().Unix()})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod < files[j].mod }) // oldest first
+	if len(files) > termArchiveCap {
+		files = files[len(files)-termArchiveCap:]
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.archived = make([]termArchive, 0, len(list))
-	for _, d := range list {
-		d.Info.Active = false // restored sessions are never live
-		m.archived = append(m.archived, termArchive{info: d.Info, recording: d.Recording})
+	m.archived = m.archived[:0]
+	for _, f := range files {
+		b, err := os.ReadFile(m.recordingPath(f.id))
+		if err != nil {
+			continue
+		}
+		var d dbTermArchive
+		if json.Unmarshal(b, &d) != nil {
+			continue
+		}
+		d.Info.Active = false
+		m.archived = append(m.archived, termArchive{info: d.Info}) // frames lazy-loaded on replay
 	}
 }
 
@@ -242,17 +311,19 @@ func (m *termManager) remove(id string) {
 		if len(s.recording) > 0 {
 			rec := make([]termRecordFrame, len(s.recording))
 			copy(rec, s.recording)
-			m.archived = append(m.archived, termArchive{
+			arch := termArchive{
 				info: termSessionInfo{
 					ID: s.id, HostID: s.hostID, Hostname: s.hostname,
 					Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 					Active: false, Frames: len(rec),
 				},
 				recording: rec,
-			})
-			if len(m.archived) > termArchiveCap { // retention cap (persisted across restarts)
+			}
+			m.archived = append(m.archived, arch)
+			if len(m.archived) > termArchiveCap { // in-memory index cap
 				m.archived = m.archived[len(m.archived)-termArchiveCap:]
 			}
+			go m.persistRecording(arch) // write to /app/data/recordings so replays survive restart
 		}
 		s.recMu.Unlock()
 	}
@@ -750,25 +821,29 @@ func (m *termManager) listSessions() []termSessionInfo {
 	return out
 }
 
-// getRecording returns the recorded frames for a session (for replay).
+// getRecording returns the recorded frames for a session (for replay). Live
+// sessions come from memory; ended sessions come from the in-memory archive if
+// still loaded, otherwise from the persisted file (survives restart / eviction).
 func (m *termManager) getRecording(sessionID string) []termRecordFrame {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if s, ok := m.sessions[sessionID]; ok {
 		s.recMu.Lock()
 		out := make([]termRecordFrame, len(s.recording))
 		copy(out, s.recording)
 		s.recMu.Unlock()
+		m.mu.Unlock()
 		return out
 	}
 	for _, a := range m.archived {
-		if a.info.ID == sessionID {
+		if a.info.ID == sessionID && len(a.recording) > 0 {
 			out := make([]termRecordFrame, len(a.recording))
 			copy(out, a.recording)
+			m.mu.Unlock()
 			return out
 		}
 	}
-	return nil
+	m.mu.Unlock()
+	return m.readRecordingFile(sessionID) // read frames from disk on demand
 }
 
 // addObserver attaches a read-only observer to a session.

@@ -30,6 +30,7 @@ type Server struct {
 	tickets     *ticketManager     // work orders
 	logs        *logStore          // aggregated agent logs
 	ai          *aiManager         // AI inspection + diagnosis
+	vm          *vmWriter          // optional VictoriaMetrics remote-write
 	distDir     string             // directory of downloadable agent binaries + plugins.zip
 }
 
@@ -49,6 +50,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		tickets:     newTicketManager(),
 		logs:        newLogStore(),
 		ai:          newAIManager(cfg),
+		vm:          newVMWriter(cfg),
 	}
 	s.wireSRE()
 	return s

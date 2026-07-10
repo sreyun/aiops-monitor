@@ -1,17 +1,25 @@
 # ============================================================
-# AIOps Monitor · Docker Compose（单容器模式）
+# AIOps Monitor · Docker Compose
 # ------------------------------------------------------------
-# Go 二进制内嵌前端（//go:embed），单容器即可运行
+# 服务组成：
+#   - aiops-server      : Go 单容器（内嵌前端），Web/API 端口 8529
+#   - victoriametrics   : 时序指标库（server 通过 remote-write 写入）
+#   - postgres          : 关系库（事件 / 工单持久化）
+#
+# 数据持久化：
+#   - ./data            : 本地目录映射，存放 server_config.json / aiops.db
+#                         / recordings/（终端会话录制，重启不丢）
+#   - vm-data / pg-data : 命名卷，存放 VM / PostgreSQL 数据
 #
 # 使用方式：
-#   docker compose up -d                # 启动
-#   docker compose up -d --build        # 重新构建并启动
-#   docker compose logs -f              # 查看日志
-#   docker compose down                 # 停止
+#   docker compose up -d --build     # 构建并启动
+#   docker compose logs -f           # 查看日志
+#   docker compose down              # 停止（数据保留；加 -v 才会删卷）
 #
-# 端口说明：
-#   - 8529: Web UI 和 API 端口
-#   - 10100-10300: TCP 端口转发监听范围（默认 201 个端口）
+# 端口：
+#   - 8529            : Web UI / API
+#   - 8428            : VictoriaMetrics UI / PromQL（可选，仅内网建议）
+#   - 10100-10300     : TCP 端口转发监听范围
 # ============================================================
 
 services:
@@ -23,24 +31,56 @@ services:
     container_name: aiops-server
     ports:
       - "8529:8529"
-      # TCP 端口转发监听范围（默认 10100-10300，共 201 个端口）
-      # 如需更多端口，可扩展范围，但建议不超过 500 个
       - "10100-10300:10100-10300"
     volumes:
-      - server-data:/app/data
+      # 本地目录映射：配置 / 内嵌库 / 终端录制(recordings/) 均落此目录 → 重启不丢
+      - ./data:/app/data
     environment:
       - TZ=Asia/Shanghai
-      # v5.4.1: TCP 转发默认监听 127.0.0.1（仅容器内可访问），Docker 部署
-      # 必须设为 0.0.0.0 才能让宿主机/其他容器访问转发的端口。
-      # 也可以通过挂载 server_config.json 设置 forward_listen 字段。
+      # Docker 部署下 TCP 转发需监听 0.0.0.0 才能被宿主机/其它容器访问
       - AIOPS_FORWARD_LISTEN=0.0.0.0
-      # 可选：转发端口范围（需与 ports 映射一致）
-      # - AIOPS_FORWARD_PORT_RANGE=10100-10300
-      # 可选：中继节点共享密钥（与 Agent 端 relay-secret 一致）
-      # - AIOPS_RELAY_SECRET=your-shared-secret
+      # 时序指标写入 VictoriaMetrics（remote-write / Prometheus import）
+      - AIOPS_VM_URL=http://victoriametrics:8428
+      # 事件 / 工单持久化到 PostgreSQL（⚠️ 生产请改密码，并与 postgres 服务保持一致）
+      - AIOPS_POSTGRES_DSN=postgres://aiops:aiops_pg_pass@postgres:5432/aiops?sslmode=disable
+    depends_on:
+      victoriametrics:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
-  # 取消注释即可启用本机 Agent
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: aiops-vm
+    command:
+      - "-storageDataPath=/vmdata"
+      - "-retentionPeriod=12"        # 指标保留 12 个月，可按需调整
+      - "-httpListenAddr=:8428"
+    ports:
+      - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
+    volumes:
+      - vm-data:/vmdata
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: aiops-pg
+    environment:
+      - POSTGRES_USER=aiops
+      - POSTGRES_PASSWORD=aiops_pg_pass   # ⚠️ 生产环境务必修改，并同步上方 AIOPS_POSTGRES_DSN
+      - POSTGRES_DB=aiops
+      - TZ=Asia/Shanghai
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # 取消注释即可启用本机 Agent（采集本容器/宿主指标）
   # aiops-agent:
   #   build:
   #     context: .
@@ -51,7 +91,10 @@ services:
   #     - aiops-server
   #   environment:
   #     - TZ=Asia/Shanghai
+  #     # 采集日志文件（逗号分隔）：
+  #     # command: ["--server", "http://aiops-server:8529", "--log-paths", "/var/log/syslog"]
   #   restart: unless-stopped
 
 volumes:
-  server-data:
+  vm-data:
+  pg-data:

@@ -78,6 +78,12 @@ func dbPathFor(cfgPath string) string {
 	return filepath.Join(dir, "aiops.db")
 }
 
+// recordingsDirFor places the terminal session recordings next to the config/DB,
+// so they live on the same persistent data volume.
+func recordingsDirFor(cfgPath string) string {
+	return filepath.Join(filepath.Dir(cfgPath), "recordings")
+}
+
 // Load restores a snapshot if one exists. Corrupt or missing files are not
 // fatal — the server just starts empty, exactly like before persistence.
 func (d *DB) Load() {

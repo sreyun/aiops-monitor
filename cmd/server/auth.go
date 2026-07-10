@@ -451,6 +451,29 @@ func (s *Server) currentUser(r *http.Request) (AccountConfig, bool) {
 	return s.cfg.UserByName(name)
 }
 
+// validatePasswordStrength enforces the account password policy: at least 8
+// characters including an uppercase letter, a lowercase letter, a digit and a
+// special (non-alphanumeric) character.
+func validatePasswordStrength(pw string) bool {
+	if len([]rune(pw)) < 8 {
+		return false
+	}
+	var up, lo, dg, sp bool
+	for _, c := range pw {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			up = true
+		case c >= 'a' && c <= 'z':
+			lo = true
+		case c >= '0' && c <= '9':
+			dg = true
+		default:
+			sp = true // any non-alphanumeric rune counts as a special character
+		}
+	}
+	return up && lo && dg && sp
+}
+
 // routeAllowed enforces RBAC: any logged-in role may manage its own account;
 // viewer is otherwise read-only; the remote terminal needs operator+; user
 // management needs admin; every other write needs operator+.
@@ -760,8 +783,8 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.wrong_old_password")})
 		return
 	}
-	if len(strings.TrimSpace(req.New)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_too_short")})
+	if !validatePasswordStrength(strings.TrimSpace(req.New)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
 		return
 	}
 	_ = s.cfg.SetUserPassword(acc.Username, req.New)

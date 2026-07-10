@@ -7,6 +7,7 @@
   "auth.invalid_username_format": "使用者名稱僅限字母/數字/-_.，長度 2–32 位",
   "auth.wrong_old_password": "原密碼錯誤",
   "auth.password_too_short": "新密碼至少 4 位",
+  "auth.password_policy": "密碼至少 8 位，且需同時包含大寫字母、小寫字母、數字和特殊字元",
   "auth.gen_secret_failed": "產生密鑰失敗",
   "auth.gen_qr_failed": "產生 QR 碼失敗",
   "auth.totp_verify_failed": "驗證碼不正確，請確認手機時間已同步後重試",

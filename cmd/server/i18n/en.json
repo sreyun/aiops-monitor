@@ -7,6 +7,7 @@
   "auth.invalid_username_format": "Username may only contain letters/digits/-_. (2-32 chars)",
   "auth.wrong_old_password": "Current password is incorrect",
   "auth.password_too_short": "Password must be at least 4 characters",
+  "auth.password_policy": "Password must be at least 8 characters and include uppercase, lowercase, a digit and a special character",
   "auth.gen_secret_failed": "Failed to generate secret key",
   "auth.gen_qr_failed": "Failed to generate QR code",
   "auth.totp_verify_failed": "Verification code is incorrect, please ensure your phone time is synced",

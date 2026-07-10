@@ -65,6 +65,11 @@ if (typeof window.I18N === "undefined" || typeof window.I18N.t !== "function") {
 
 const API = "/api/v1";
 
+// Account password policy (mirrors the server): >=8 chars incl. upper/lower/digit/special.
+function pwPolicyOK(pw){
+  return typeof pw==="string" && pw.length>=8 && /[A-Z]/.test(pw) && /[a-z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
+}
+
 /* 复制到剪贴板（兼容 HTTP 环境） */
 function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
@@ -3497,8 +3502,8 @@ async function openInstall() {
     updateTokenDisplay();
     RELAY_MODE = false;
     MULTI_SERVER_MODE = false;
-    const cb = $("relayMode"); if (cb) cb.checked = false;
-    const ms = $("multiServerMode"); if (ms) ms.checked = false;
+    const normalRadio = document.querySelector('input[name="installMode"][value="normal"]');
+    if (normalRadio) normalRadio.checked = true;
     renderInstallCmd();
     $("installMask").classList.add("show");
   } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
@@ -4002,6 +4007,11 @@ async function changePassword() {
     else toast(I18N.t("valid.fill_passwords"), "err");
     return;
   }
+  if (!pwPolicyOK($("pfNew").value)) {
+    if (errEl) { errEl.textContent = I18N.t("auth.password_policy"); errEl.style.display = "block"; }
+    else toast(I18N.t("auth.password_policy"), "err");
+    return;
+  }
   try {
     const r = await fetch(`${API}/password`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -4296,9 +4306,9 @@ async function usersAction(name, act) {
     const j = await r.json().catch(() => ({}));
     if (r.ok) { toast(I18N.t("toast.user_deleted"), "ok"); loadUsers(); } else toast(j.error || I18N.t("toast.delete_failed"), "err");
   } else if (act === "pwd") {
-    const pass = prompt(`为「${name}」设置新密码（至少 4 位）：`);
+    const pass = prompt(`为「${name}」设置新密码（至少 8 位）：`);
     if (pass == null) return;
-    if (pass.trim().length < 4) { toast(I18N.t("toast.password_too_short"), "err"); return; }
+    if (!pwPolicyOK(pass.trim())) { toast(I18N.t("auth.password_policy"), "err"); return; }
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pass }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) toast(I18N.t("toast.password_reset"), "ok"); else toast(j.error || I18N.t("toast.reset_failed"), "err");
@@ -4437,7 +4447,7 @@ function showSetNewPassword(token) {
     const errEl = $("rcErr"); errEl.textContent = "";
     const p1 = $("rcNewPass").value;
     const p2 = $("rcNewPass2").value;
-    if (p1.length < 4) { errEl.textContent = I18N.t("toast.password_too_short2"); return; }
+    if (!pwPolicyOK(p1)) { errEl.textContent = I18N.t("auth.password_policy"); return; }
     if (p1 !== p2) { errEl.textContent = I18N.t("auth.password_mismatch"); return; }
     try {
       const r = await fetch(`${API}/account/reset-password`, {
@@ -4721,26 +4731,15 @@ safeAddEventListener("osTabs", "click", e => {
 safeAddEventListener("copyUninstallBtn", "click", function() {
   copyWithFeedback(this, $("uninstallCmd").textContent, I18N.t("toast.copy_uninstall"));
 });
-// 网关中继模式
-safeAddEventListener("relayMode", "change", function() {
-  RELAY_MODE = this.checked;
-  // 互斥：开启中继模式时关闭多服务端模式
-  if (RELAY_MODE && MULTI_SERVER_MODE) {
-    MULTI_SERVER_MODE = false;
-    const ms = $("multiServerMode"); if (ms) ms.checked = false;
-  }
-  renderInstallCmd();
+// 安装模式切换（radio buttons）
+document.querySelectorAll('input[name="installMode"]').forEach(r => {
+  r.addEventListener("change", function() {
+    RELAY_MODE = (this.value === "relay");
+    MULTI_SERVER_MODE = (this.value === "multi");
+    renderInstallCmd();
+  });
 });
-// 多服务端推送模式
-safeAddEventListener("multiServerMode", "change", function() {
-  MULTI_SERVER_MODE = this.checked;
-  // 互斥：开启多服务端时关闭中继模式
-  if (MULTI_SERVER_MODE && RELAY_MODE) {
-    RELAY_MODE = false;
-    const rb = $("relayMode"); if (rb) rb.checked = false;
-  }
-  renderInstallCmd();
-});
+// 多服务端推送列表变更
 safeAddEventListener("multiServerList", "input", renderInstallCmd);
 safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
 safeAddEventListener("copyRelayGatewayBtn", "click", function() {

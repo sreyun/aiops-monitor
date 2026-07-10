@@ -214,6 +214,8 @@ type ServerConfig struct {
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
 	SLOs             []SLO             `json:"slos,omitempty"`
 	AI               AIConfig          `json:"ai,omitempty"` // optional AI provider for inspection/diagnosis
+	VM               VMConfig          `json:"vm,omitempty"` // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
+	PostgresDSN      string            `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
@@ -362,6 +364,16 @@ func NewConfigStore(path string) (*ConfigStore, error) {
 //   AIOPS_TRUST_PROXY             → trust_proxy (true/false)
 //   AIOPS_REQUIRE_TOKEN           → require_token (true/false)
 func (cs *ConfigStore) applyEnvOverrides() {
+	// External storage (Docker Compose points these at the VM / Postgres services):
+	//   AIOPS_VM_URL         → enable VictoriaMetrics remote-write to this URL
+	//   AIOPS_POSTGRES_DSN   → enable PostgreSQL persistence with this DSN
+	if v, ok := os.LookupEnv("AIOPS_VM_URL"); ok && v != "" {
+		cs.cfg.VM.Enabled = true
+		cs.cfg.VM.URL = v
+	}
+	if v, ok := os.LookupEnv("AIOPS_POSTGRES_DSN"); ok && v != "" {
+		cs.cfg.PostgresDSN = v
+	}
 	if v, ok := os.LookupEnv("AIOPS_FORWARD_LISTEN"); ok && v != "" {
 		cs.cfg.ForwardListen = v
 	}
@@ -695,6 +707,8 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                 // managed via SLO endpoints
 	c.AI = cs.cfg.AI                     // managed via AI config endpoint
+	c.VM = cs.cfg.VM                     // managed via env / storage config
+	c.PostgresDSN = cs.cfg.PostgresDSN   // managed via env / storage config
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -935,6 +949,20 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	cs.cfg.AI = a
 	cs.mu.Unlock()
 	return cs.save()
+}
+
+// ---- external storage (VictoriaMetrics / PostgreSQL), usually set via env ----
+
+func (cs *ConfigStore) VMConfig() VMConfig {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.VM
+}
+
+func (cs *ConfigStore) PostgresDSN() string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.PostgresDSN
 }
 
 // --- HTTP Proxy Config Management ---
