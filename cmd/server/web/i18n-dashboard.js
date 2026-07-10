@@ -688,6 +688,17 @@
   "login.forgot_user": "忘记用户名",
   "login.forgot_pass": "忘记密码",
   "login.hint": "首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。",
+  /* --- 首次登录 · 安全初始化 --- */
+  "init.title": "首次登录 · 安全初始化",
+  "init.desc": "检测到当前使用的是默认或临时凭据。为保障系统安全，请先设置新的登录用户名与密码，再进入控制台。",
+  "init.username": "登录用户名",
+  "init.new_password": "新密码（≥8位 · 含大小写字母+数字+特殊字符）",
+  "init.confirm_password": "确认新密码",
+  "init.submit": "完成初始化并进入",
+  "init.err_username": "请输入登录用户名",
+  "init.err_password": "请输入新密码",
+  "init.err_mismatch": "两次输入的密码不一致",
+  "init.done": "安全初始化完成，正在进入…",
   /* --- 账户找回弹窗 --- */
   "recover.title": "账户找回",
   "recover.enter_email_desc": "输入已绑定的邮箱地址，系统将发送 6 位验证码。",

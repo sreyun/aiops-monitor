@@ -1877,6 +1877,8 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 /* 密码设置/验证描述 */
 .term-setpwd-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin:0 0 10px}
 .term-setpwd-req{font-size:12px;color:var(--warn-txt);background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:var(--r-sm);padding:8px 12px;margin:0 0 14px;line-height:1.5}
+/* 首次登录·安全初始化：说明面板（柔和告警色，契合深色主题） */
+.init-desc{font-size:13px;color:var(--txt2);line-height:1.65;margin:0 0 16px;padding:10px 12px;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:var(--r-sm)}
 
 /* 密码可见性切换按钮 */
 .term-pwd-toggle{

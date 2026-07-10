@@ -484,7 +484,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	}
 	p := r.URL.Path
 	switch p { // own-account self-service: any logged-in role
-	case "/api/v1/logout", "/api/v1/password", "/api/v1/profile",
+	case "/api/v1/logout", "/api/v1/password", "/api/v1/profile", "/api/v1/account/init",
 		"/api/v1/mfa/setup", "/api/v1/mfa/enable", "/api/v1/mfa/disable",
 		"/api/v1/mfa/unbind-via-email":
 		return true
@@ -800,6 +800,67 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	})
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAccountInit performs the forced first-login credential setup in one
+// atomic step: the user picks a new username AND a new password without
+// re-entering the old one. It is deliberately gated on MustChangePassword being
+// set — i.e. it only works right after a forced-change login (default admin/admin
+// or an admin password reset) and refuses once the flag is cleared. So it can
+// never be abused during normal operation to bypass the old-password check in
+// handleSetPassword.
+func (s *Server) handleAccountInit(w http.ResponseWriter, r *http.Request) {
+	acc, ok := s.currentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
+		return
+	}
+	if !acc.MustChangePassword {
+		// Forced-init window is closed: normal changes must go through
+		// /profile + /password (which verify the current password).
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.init_not_required")})
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if !validatePasswordStrength(strings.TrimSpace(req.Password)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
+		return
+	}
+	name := acc.Username
+	// Optional self-rename: validate, apply, then repoint the session so the
+	// current cookie keeps working under the new username.
+	if strings.TrimSpace(req.Username) != "" && req.Username != acc.Username {
+		uname := sanitizeUsername(req.Username)
+		if uname == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.invalid_username_format")})
+			return
+		}
+		if err := s.cfg.RenameUser(acc.Username, uname); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.auth.renameSessions(acc.Username, uname)
+		name = uname
+	}
+	_ = s.cfg.SetUserPassword(name, req.Password)
+	s.cfg.ClearMustChangePassword(name)
+	// Invalidate this user's other sessions, then re-issue one for the current.
+	s.auth.clearUserSessions(name)
+	tok := s.auth.issueSession(name)
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
+	})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
 }
 
 // ---- MFA (TOTP two-factor) ----

@@ -1272,6 +1272,34 @@
   </form>
 </div>
 
+<!-- ===== 首次登录 · 安全初始化弹窗（强制修改用户名+密码，不可关闭/不可 ESC/不可点遮罩关闭） ===== -->
+<div class="mask" id="initSetupMask" data-forced>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="init.title">首次登录 · 安全初始化</h3>
+    </div>
+    <div class="modal-body">
+      <p class="init-desc" data-i18n="init.desc">检测到当前使用的是默认或临时凭据。为保障系统安全，请先设置新的登录用户名与密码，再进入控制台。</p>
+      <div class="field">
+        <label data-i18n="init.username">登录用户名</label>
+        <input type="text" id="initUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号">
+      </div>
+      <div class="field">
+        <label data-i18n="init.new_password">新密码（≥8位 · 含大小写字母+数字+特殊字符）</label>
+        <input type="password" id="initPass" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label data-i18n="init.confirm_password">确认新密码</label>
+        <input type="password" id="initPass2" autocomplete="new-password">
+      </div>
+      <div class="login-err" id="initErr" style="display:none"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary block" id="initSubmitBtn" data-i18n="init.submit">完成初始化并进入</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 账户找回弹窗 ===== -->
 <div class="mask" id="recoverMask" data-close>
   <div class="modal">

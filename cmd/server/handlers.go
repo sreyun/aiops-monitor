@@ -90,6 +90,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)
 	mux.HandleFunc("POST /api/v1/password", s.handleSetPassword)
+	mux.HandleFunc("POST /api/v1/account/init", s.handleAccountInit)
 	mux.HandleFunc("POST /api/v1/mfa/setup", s.handleMFASetup)
 	mux.HandleFunc("POST /api/v1/mfa/enable", s.handleMFAEnable)
 	mux.HandleFunc("POST /api/v1/mfa/disable", s.handleMFADisable)

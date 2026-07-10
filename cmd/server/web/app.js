@@ -3911,8 +3911,8 @@ async function initAuth() {
       startApp();
       // v5.4.0: force password change if admin reset was used
       if (me.must_change_password) {
-        toast(I18N.t("auth.must_change_password") || "请立即修改密码", "warn");
-        setTimeout(() => openProfile(), 500);
+        // 强制进入「安全初始化」弹窗：需修改用户名 + 密码后方可进入控制台
+        setTimeout(() => openInitSetup(), 300);
       }
     }
     else { $("loginView").classList.add("show"); }
@@ -3952,6 +3952,49 @@ function startApp() {
   });
   // P3-1: 初始化 WebSocket 推送（带降级到轮询）
   initPushWS();
+}
+// 首次登录 · 安全初始化：强制修改用户名 + 密码的专用弹窗（替代直接打开个人信息页）。
+// 弹窗带 data-forced，无法通过 ESC / 点遮罩 / ✕ 关闭；完成后会话重签并刷新进入。
+async function openInitSetup() {
+  try {
+    const me = await fetch(`${API}/me`).then(r => r.json()).catch(() => ({}));
+    const u = $("initUser"); if (u) u.value = me.username || "";
+    const p = $("initPass"); if (p) p.value = "";
+    const p2 = $("initPass2"); if (p2) p2.value = "";
+    const err = $("initErr"); if (err) { err.textContent = ""; err.style.display = "none"; }
+    const mask = $("initSetupMask"); if (mask) mask.classList.add("show");
+    if (u) setTimeout(() => u.focus(), 60);
+  } catch (e) { toast(I18N.t("toast.read_failed2") + e, "err"); }
+}
+async function submitInitSetup() {
+  const err = $("initErr");
+  const showErr = (m) => { if (err) { err.textContent = m; err.style.display = "block"; } else toast(m, "err"); };
+  if (err) { err.textContent = ""; err.style.display = "none"; }
+  const uname = ($("initUser").value || "").trim();
+  const pw = $("initPass").value || "";
+  const pw2 = $("initPass2").value || "";
+  if (!uname) { showErr(I18N.t("init.err_username", "请输入登录用户名")); return; }
+  if (!pw) { showErr(I18N.t("init.err_password", "请输入新密码")); return; }
+  if (pw !== pw2) { showErr(I18N.t("init.err_mismatch", "两次输入的密码不一致")); return; }
+  if (pw.length < 8) { showErr(I18N.t("auth.password_policy", "密码需至少 8 位，含大小写字母、数字和特殊字符")); return; }
+  await withLoading($("initSubmitBtn"), async () => {
+    try {
+      const r = await fetch(`${API}/account/init`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: uname, password: pw })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        const mask = $("initSetupMask"); if (mask) mask.classList.remove("show");
+        setUser({ username: j.username || uname });
+        toast(I18N.t("init.done", "安全初始化完成，正在进入…"), "ok");
+        // 用户名/密码已更新、会话已重签，刷新以干净状态进入控制台。
+        setTimeout(() => location.reload(), 500);
+      } else {
+        showErr(j.error || I18N.t("toast.save_failed"));
+      }
+    } catch (e) { showErr(I18N.t("toast.save_failed2") + e); }
+  });
 }
 async function openProfile(tab) {
   try {
@@ -4895,6 +4938,7 @@ function filterChecks(type) {
 // 弹窗关闭：点遮罩空白处 或 右上角 ✕
 document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
   if (e.target === mk || e.target.closest("[data-close-btn]")) {
+    if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
     mk.classList.remove("show"); hideChartTip();
     if (mk.id === "termMask") { closeTerminalWS(); }
     if (mk.id === "termReplayMask") { closeReplay(); }
@@ -4910,7 +4954,7 @@ document.addEventListener("keydown", e => {
     const hadReplay = $("termReplayMask") && $("termReplayMask").classList.contains("show");
     const hadObserve = $("termObserveMask") && $("termObserveMask").classList.contains("show");
     const hadSessions = $("termSessionsMask") && $("termSessionsMask").classList.contains("show");
-    document.querySelectorAll(".mask.show").forEach(mk => mk.classList.remove("show"));
+    document.querySelectorAll(".mask.show:not([data-forced])").forEach(mk => mk.classList.remove("show"));
     hideChartTip();
     if (hadTerm) closeTerminalWS();
     if (hadReplay) closeReplay();
@@ -5052,6 +5096,9 @@ safeAddEventListener("usersList", "click", async e => {
 });
 safeAddEventListener("pfSaveBtn", "click", saveProfile);
 safeAddEventListener("pfPwdBtn", "click", changePassword);
+// 首次登录·安全初始化弹窗：提交按钮 + 确认密码框回车提交
+safeAddEventListener("initSubmitBtn", "click", submitInitSetup);
+safeAddEventListener("initPass2", "keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitInitSetup(); } });
 safeAddEventListener("pfTermPwdBtn", "click", submitTermPwdChange);
 safeAddEventListener("mfaToggleChk", "change", () => {
   const chk = $("mfaToggleChk");
@@ -5100,9 +5147,8 @@ safeAddEventListener("loginForm", "submit", async e => {
         setUser(user);
         $("loginView").classList.remove("show");
         startApp();
-        // Show a toast and open the profile modal for password change
-        toast(I18N.t("auth.must_change_password") || "请立即修改密码", "warn");
-        setTimeout(() => openProfile(), 500);
+        // 强制进入「安全初始化」弹窗：需修改用户名 + 密码后方可进入控制台
+        setTimeout(() => openInitSetup(), 300);
       }
       else if (r.ok) {
         // Post-login /me fetch: wrap in try/catch so a transient network
@@ -5816,7 +5862,7 @@ document.querySelectorAll(".replay-speed-btn").forEach(btn => {
 // P1-4: 全局 Escape 键关闭模态弹窗
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    const masks = document.querySelectorAll(".mask.show");
+    const masks = document.querySelectorAll(".mask.show:not([data-forced])");
     if (masks.length > 0) {
       // 只关闭最上层的弹窗
       const top = masks[masks.length - 1];

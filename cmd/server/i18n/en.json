@@ -17,6 +17,7 @@
   "auth.unauthorized": "Unauthorized",
   "auth.relay_unauthorized": "Relay secret verification failed",
     "auth.must_change_password": "Your password has been reset by the administrator. Please change it now.",
+  "auth.init_not_required": "Initialization not required: the account is already set up.",
 
   "alert.offline": "Host %s (%s) has been offline for %d seconds",
   "alert.cpu_high": "CPU usage %.1f%% (idle %.1f%%)",

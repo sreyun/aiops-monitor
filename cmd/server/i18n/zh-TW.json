@@ -17,6 +17,7 @@
   "auth.unauthorized": "未授權",
   "auth.relay_unauthorized": "中繼金鑰驗證失敗",
     "auth.must_change_password": "管理員已重設您的密碼，請立即修改密碼",
+  "auth.init_not_required": "無需初始化：帳戶已完成安全設定",
 
   "alert.offline": "主機 %s（%s）已失聯 %d 秒",
   "alert.cpu_high": "CPU 使用率 %.1f%%（空閒 %.1f%%）",

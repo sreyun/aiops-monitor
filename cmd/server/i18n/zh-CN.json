@@ -17,6 +17,7 @@
   "auth.unauthorized": "未授权",
   "auth.relay_unauthorized": "中继密钥验证失败",
     "auth.must_change_password": "管理员已重置您的密码，请立即修改密码",
+  "auth.init_not_required": "无需初始化：账户已完成安全设置",
 
   "alert.offline": "主机 %s（%s）已失联 %d 秒",
   "alert.cpu_high": "CPU 使用率 %.1f%%（空闲 %.1f%%）",

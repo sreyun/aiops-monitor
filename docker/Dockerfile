@@ -1,5 +1,5 @@
 # ---- Build stage ----
-FROM golang:1.22-alpine AS builder
+FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/golang:1.22-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
@@ -17,7 +17,7 @@ RUN GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /
     cp /out/aiops-agent /out/dist/aiops-agent-linux-amd64
 
 # ---- Server image ----
-FROM alpine:3.20 AS server
+FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/alpine:3.20 AS server
 RUN apk add --no-cache ca-certificates tzdata zip
 WORKDIR /app
 
@@ -34,7 +34,7 @@ ENTRYPOINT ["/app/aiops-server"]
 CMD ["-addr", ":8529", "-config", "/app/data/server_config.json", "-dist", "/app/dist"]
 
 # ---- Agent image ----
-FROM alpine:3.20 AS agent
+FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/alpine:3.20 AS agent
 RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
 WORKDIR /app
 
