@@ -1767,7 +1767,8 @@ async function checkTerminalAccess() {
 function onTermProtocolAgreed() {
   localStorage.setItem(TERM_PROTOCOL_KEY, "1");
   $("termProtocolMask").classList.remove("show");
-  // 继续检查密码状态
+  // 重置检查锁，让 checkTerminalAccess 能继续执行后续步骤
+  TERM_AUTH_CHECKING = false;
   checkTerminalAccess();
 }
 
