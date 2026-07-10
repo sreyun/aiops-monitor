@@ -210,6 +210,10 @@ type ServerConfig struct {
 	Account       AccountConfig     `json:"account"`
 	Checks        []CustomCheck     `json:"checks"`
 	Playbooks     []Playbook        `json:"playbooks,omitempty"`
+	// SRE workflow definitions (runtime state lives in the DB snapshot).
+	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
+	SLOs             []SLO             `json:"slos,omitempty"`
+	AI               AIConfig          `json:"ai,omitempty"` // optional AI provider for inspection/diagnosis
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
@@ -688,6 +692,9 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Account = cs.cfg.Account           // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks             // checks managed via check endpoints
 	c.Playbooks = cs.cfg.Playbooks       // playbooks managed via playbook endpoints
+	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
+	c.SLOs = cs.cfg.SLOs                 // managed via SLO endpoints
+	c.AI = cs.cfg.AI                     // managed via AI config endpoint
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -807,6 +814,125 @@ func (cs *ConfigStore) DeletePlaybook(id string) error {
 		}
 	}
 	cs.cfg.Playbooks = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// ---- remediation rules ----
+
+func (cs *ConfigStore) RemediationRules() []RemediationRule {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]RemediationRule, len(cs.cfg.RemediationRules))
+	copy(out, cs.cfg.RemediationRules)
+	return out
+}
+
+func (cs *ConfigStore) UpsertRemediationRule(r RemediationRule) (RemediationRule, error) {
+	cs.mu.Lock()
+	if r.ID == "" {
+		r.ID = genToken()[:8]
+		r.CreatedAt = time.Now().Unix()
+		r.UpdatedAt = r.CreatedAt
+		cs.cfg.RemediationRules = append(cs.cfg.RemediationRules, r)
+	} else {
+		r.UpdatedAt = time.Now().Unix()
+		found := false
+		for i := range cs.cfg.RemediationRules {
+			if cs.cfg.RemediationRules[i].ID == r.ID {
+				r.CreatedAt = cs.cfg.RemediationRules[i].CreatedAt
+				cs.cfg.RemediationRules[i] = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.CreatedAt = time.Now().Unix()
+			cs.cfg.RemediationRules = append(cs.cfg.RemediationRules, r)
+		}
+	}
+	cs.mu.Unlock()
+	return r, cs.save()
+}
+
+func (cs *ConfigStore) DeleteRemediationRule(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.RemediationRules[:0]
+	for _, r := range cs.cfg.RemediationRules {
+		if r.ID != id {
+			kept = append(kept, r)
+		}
+	}
+	cs.cfg.RemediationRules = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// ---- SLOs ----
+
+func (cs *ConfigStore) SLOs() []SLO {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]SLO, len(cs.cfg.SLOs))
+	copy(out, cs.cfg.SLOs)
+	return out
+}
+
+func (cs *ConfigStore) UpsertSLO(s SLO) (SLO, error) {
+	cs.mu.Lock()
+	if s.ID == "" {
+		s.ID = genToken()[:8]
+		s.CreatedAt = time.Now().Unix()
+		s.UpdatedAt = s.CreatedAt
+		cs.cfg.SLOs = append(cs.cfg.SLOs, s)
+	} else {
+		s.UpdatedAt = time.Now().Unix()
+		found := false
+		for i := range cs.cfg.SLOs {
+			if cs.cfg.SLOs[i].ID == s.ID {
+				s.CreatedAt = cs.cfg.SLOs[i].CreatedAt
+				cs.cfg.SLOs[i] = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.CreatedAt = time.Now().Unix()
+			cs.cfg.SLOs = append(cs.cfg.SLOs, s)
+		}
+	}
+	cs.mu.Unlock()
+	return s, cs.save()
+}
+
+func (cs *ConfigStore) DeleteSLO(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.SLOs[:0]
+	for _, s := range cs.cfg.SLOs {
+		if s.ID != id {
+			kept = append(kept, s)
+		}
+	}
+	cs.cfg.SLOs = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// ---- AI provider config ----
+
+func (cs *ConfigStore) AIConfig() AIConfig {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.AI
+}
+
+func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
+	cs.mu.Lock()
+	// Preserve a previously-saved API key when the browser submits a masked/blank one.
+	if a.APIKey == "" || strings.Contains(a.APIKey, "****") {
+		a.APIKey = cs.cfg.AI.APIKey
+	}
+	cs.cfg.AI = a
 	cs.mu.Unlock()
 	return cs.save()
 }

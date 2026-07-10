@@ -3948,20 +3948,40 @@ function startApp() {
   // P3-1: 初始化 WebSocket 推送（带降级到轮询）
   initPushWS();
 }
-async function openProfile() {
+async function openProfile(tab) {
   try {
     const me = await fetch(`${API}/me`).then(r => r.json());
     $("pfUsername").value = me.username || "";
     $("pfDisplay").value = me.display_name || "";
     $("pfEmail").value = me.email || "";
     $("pfOld").value = ""; $("pfNew").value = "";
+    setUser(me); // 用最新 /me 刷新顶栏与 CUR_ROLE（角色可能已变更）
+    // 清空各 Tab 内联错误
+    ["pfProfileErr", "pfPwdErr", "pfTermPwdErr"].forEach(id => { const e = $(id); if (e) { e.textContent = ""; e.style.display = "none"; } });
     renderMfaState(!!me.mfa_enabled);
     // v5.3.0: 加载终端密码状态
     loadTermPwdStatus();
     $("profileMask").classList.add("show");
+    // 切换到底层请求指定的 Tab（默认「个人信息」）；非管理员无法进入用户管理
+    const target = (tab === "users" && !isAdmin()) ? "info" : (tab || "info");
+    switchProfileTab(target);
   } catch (e) { toast(I18N.t("toast.read_failed2") + e, "err"); }
 }
+let PROFILE_TAB = "info";
+let PROFILE_USERS_LOADED = false;
+async function switchProfileTab(tab) {
+  PROFILE_TAB = tab;
+  document.querySelectorAll("#profileTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.ptab === tab));
+  document.querySelectorAll("#profileMask .tab-panel").forEach(p => p.classList.toggle("active", p.id === "tab-profile-" + tab));
+  // 用户管理 Tab：首次进入时按需独立加载（保持其它 Tab 状态不重渲染）
+  if (tab === "users" && isAdmin() && !PROFILE_USERS_LOADED) {
+    PROFILE_USERS_LOADED = true;
+    await loadUsers();
+  }
+}
 async function saveProfile() {
+  const errEl = $("pfProfileErr");
+  if (errEl) { errEl.textContent = ""; errEl.style.display = "none"; }
   try {
     const uname = $("pfUsername").value.trim();
     const r = await fetch(`${API}/profile`, {
@@ -3970,11 +3990,18 @@ async function saveProfile() {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { toast(I18N.t("toast.profile_saved"), "ok"); setUser({ display_name: $("pfDisplay").value.trim(), username: j.username || uname }); }
+    else if (errEl) { errEl.textContent = j.error || I18N.t("toast.save_failed"); errEl.style.display = "block"; }
     else toast(j.error || I18N.t("toast.save_failed"), "err");
   } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
 }
 async function changePassword() {
-  if (!$("pfOld").value || !$("pfNew").value) { toast(I18N.t("valid.fill_passwords"), "err"); return; }
+  const errEl = $("pfPwdErr");
+  if (errEl) { errEl.textContent = ""; errEl.style.display = "none"; }
+  if (!$("pfOld").value || !$("pfNew").value) {
+    if (errEl) { errEl.textContent = I18N.t("valid.fill_passwords"); errEl.style.display = "block"; }
+    else toast(I18N.t("valid.fill_passwords"), "err");
+    return;
+  }
   try {
     const r = await fetch(`${API}/password`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -3982,6 +4009,7 @@ async function changePassword() {
     });
     const j = await r.json();
     if (r.ok) { toast(I18N.t("toast.password_changed"), "ok"); $("pfOld").value = ""; $("pfNew").value = ""; }
+    else if (errEl) { errEl.textContent = j.error || I18N.t("toast.update_failed"); errEl.style.display = "block"; }
     else toast(j.error || I18N.t("toast.update_failed"), "err");
   } catch (e) { toast(I18N.t("toast.update_failed2") + e, "err"); }
 }
@@ -4199,8 +4227,8 @@ function openMfaEmailUnbind() {
 
 /* ---------- 用户管理（管理员）---------- */
 async function openUsers() {
-  $("usersMask").classList.add("show");
-  await loadUsers();
+  // 用户管理已并入「个人信息」四 Tab 布局中的「用户管理」分页
+  openProfile("users");
 }
 async function loadUsers() {
   // Fetch global MFA policy status
@@ -4756,6 +4784,8 @@ const PAGE_META = {
   checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
   automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
+  sre:      { title: I18N.t("section.sre"), sub: I18N.t("section.sre_desc") },
+  logs:     { title: I18N.t("section.logs"), sub: I18N.t("section.logs_desc") },
   log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
@@ -4780,6 +4810,8 @@ function switchView(view) {
   }
   if (view === "automation") loadPlaybooks();
   if (view === "forward") loadForwards();
+  if (view === "sre") loadSRE();
+  if (view === "logs") loadLogs();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
@@ -4787,6 +4819,22 @@ navItems.forEach(n => n.addEventListener("click", () => {
   const appEl = $("app");
   if (appEl) appEl.classList.remove("nav-open");
 }));
+
+// Collapsible nav groups (Nightingale-style); collapsed state persists per group.
+(function initNavGroups(){
+  let collapsed = {};
+  try { collapsed = JSON.parse(localStorage.getItem("aiops_nav_collapsed")||"{}"); } catch(e){}
+  document.querySelectorAll(".nav-group").forEach(g => {
+    const key = g.dataset.group;
+    if (collapsed[key]) g.classList.add("collapsed");
+    const label = g.querySelector(".nav-group-label");
+    if (label) label.addEventListener("click", () => {
+      g.classList.toggle("collapsed");
+      collapsed[key] = g.classList.contains("collapsed");
+      try { localStorage.setItem("aiops_nav_collapsed", JSON.stringify(collapsed)); } catch(e){}
+    });
+  });
+})();
 
 // 汉堡：桌面收起/展开侧栏；移动端打开/关闭抽屉
 safeAddEventListener("menuBtn", "click", () => {
@@ -4974,7 +5022,11 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   // 初始化主题标签
 })();
 // 旧的 profileBtn 直接打开个人信息 — 已被上面的下拉菜单替代
-safeAddEventListener("usersBtn", "click", openUsers);
+// #usersBtn 已废弃（用户管理并入个人信息四 Tab），仅保留 openUsers() 重定向入口
+safeAddEventListener("profileTabs", "click", function (e) {
+  const t = e.target.closest(".tab");
+  if (t && t.dataset.ptab) switchProfileTab(t.dataset.ptab);
+});
 safeAddEventListener("userAddBtn", "click", () => openUserEdit(null));
 safeAddEventListener("globalMfaChk", "change", async () => {
   const chk = $("globalMfaChk");
@@ -5436,6 +5488,313 @@ safeAddEventListener("playbookList", "click", e => {
     fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast(I18N.t("toast.deleted"),"ok");loadPlaybooks();});
   }
 });
+
+// ============ SRE 中枢：事件 / 自动修复 / SLO / 工单 ============
+let SRE_TAB = "incidents";
+let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [];
+const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","offline","check"];
+const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
+const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||s;
+const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||s;
+const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
+const _tlKind = k => ({created:"创建",fired:"触发",recovered:"恢复",acked:"确认",resolved:"解决",remediation:"自动修复",comment:"评论",escalated:"升级工单",note:"备注",ai_diagnosis:"🤖 AI 诊断"})[k]||k;
+const _runStatus = s => ({running:"执行中",success:"成功",failed:"失败",pending_approval:"待审批",skipped_cooldown:"冷却跳过",skipped_ratelimit:"限频跳过",rejected:"已拒绝",no_playbook:"无剧本"})[s]||s;
+const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
+const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
+const _tkStatusCls = s => (s==="resolved"||s==="closed")?"ok":s==="in_progress"?"warn":"info";
+
+async function loadSRE(){
+  try {
+    const [hosts, pbs] = await Promise.all([
+      fetch(`${API}/hosts`).then(r=>r.json()),
+      fetch(`${API}/playbooks`).then(r=>r.json())
+    ]);
+    SRE_HOSTS = hosts||[]; SRE_PLAYBOOKS = pbs||[];
+  } catch(e){}
+  try { SRE_CHECKS = (await fetch(`${API}/checks`).then(r=>r.json()))||[]; } catch(e){ SRE_CHECKS=[]; }
+  loadSRETab(SRE_TAB); loadSREBadge();
+}
+async function loadSREBadge(){
+  try {
+    const o = await fetch(`${API}/sre/overview`).then(r=>r.json());
+    const b = $("navSre"), n = (o.open_incidents||0)+(o.pending_remediations||0);
+    if (b){ b.textContent=n; b.style.display=n>0?"":"none"; }
+  } catch(e){}
+}
+function switchSRETab(tab){
+  SRE_TAB = tab;
+  document.querySelectorAll("#sreTabs .chip-btn").forEach(b=>b.classList.toggle("active", b.dataset.sretab===tab));
+  document.querySelectorAll(".sre-panel").forEach(p=>p.classList.toggle("active", p.id==="srePanel-"+tab));
+  loadSRETab(tab);
+}
+function loadSRETab(tab){
+  if (tab==="incidents") loadIncidents();
+  else if (tab==="remediation") loadRemediation();
+  else if (tab==="slo") loadSLOs();
+  else if (tab==="tickets") loadTickets();
+  else if (tab==="ai") loadInspections();
+}
+
+/* ---- 事件 ---- */
+async function loadIncidents(){
+  try {
+    const list = await fetch(`${API}/incidents`).then(r=>r.json());
+    const el = $("incidentList");
+    if (!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无事件</div>`; return; }
+    el.innerHTML = list.map(i=>`<div class="sre-row" data-incident="${i.id}">
+      <span class="badge ${_sevCls(i.severity)}">${esc(i.severity)}</span>
+      <div class="sre-row-main"><div class="sre-row-title">${esc(i.title)}</div>
+        <div class="sre-row-sub">#${i.id} · ${_srcLabel(i.source)}${i.hostname?" · "+esc(i.hostname):""} · ${fmtDateTime(i.created_at)}</div></div>
+      <span class="badge ${_incStatusCls(i.status)}">${_incStatus(i.status)}</span></div>`).join("");
+    el.querySelectorAll("[data-incident]").forEach(r=>r.onclick=()=>openIncidentDetail(r.dataset.incident));
+  } catch(e){ toast("加载失败: "+e,"err"); }
+}
+async function openIncidentDetail(id){
+  try {
+    const inc = await fetch(`${API}/incidents/${id}`).then(r=>r.json());
+    $("incidentDetailTitle").textContent = `#${inc.id} ${inc.title}`;
+    const tl = (inc.timeline||[]).slice().reverse().map(e=>`<div class="tl-item">
+      <div class="tl-dot ${_sevCls(inc.severity)}"></div>
+      <div class="tl-body"><div class="tl-head"><b>${_tlKind(e.kind)}</b> <span class="tl-time">${fmtDateTime(e.ts)}</span>${e.actor?` · <span class="tl-actor">${esc(e.actor)}</span>`:""}</div>${e.text?`<div class="tl-text">${esc(e.text)}</div>`:""}</div></div>`).join("");
+    $("incidentDetailBody").innerHTML = `<div class="sre-meta">
+      <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span>
+      <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
+      <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
+      ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 工单 #${inc.ticket_id}</span>`:""}</div>
+      <div class="subhead">时间线</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>`;
+    const acts=[];
+    acts.push(`<button class="btn sm" data-iact="diagnose">🤖 AI 诊断</button>`);
+    if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">确认</button>`); acts.push(`<button class="btn sm" data-iact="resolve">解决</button>`); }
+    if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">升级工单</button>`);
+    acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="添加评论…" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">发送</button>`);
+    const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
+    foot.querySelectorAll("[data-iact]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.iact));
+    $("incidentDetailMask").classList.add("show");
+  } catch(e){ toast("加载失败: "+e,"err"); }
+}
+async function incidentAction(id, act){
+  try {
+    if (act==="comment"){ const t=$("incCommentInput").value.trim(); if(!t)return;
+      await fetch(`${API}/incidents/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t})}); }
+    else if (act==="escalate"){ await fetch(`${API}/incidents/${id}/ticket`,{method:"POST"}); toast("已升级为工单","ok"); }
+    else if (act==="diagnose"){ toast("AI 诊断中，请稍候…","ok"); await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST"}); }
+    else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
+    openIncidentDetail(id); loadIncidents(); loadSREBadge();
+  } catch(e){ toast("操作失败: "+e,"err"); }
+}
+function openNewIncident(){
+  $("niTitle").value=""; $("niSeverity").value="warning";
+  $("niHost").innerHTML=`<option value="">—</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  $("newIncidentMask").classList.add("show");
+}
+async function saveNewIncident(){
+  const title=$("niTitle").value.trim(); if(!title){ toast("请填写标题","err"); return; }
+  await fetch(`${API}/incidents`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,severity:$("niSeverity").value,host_id:$("niHost").value})});
+  $("newIncidentMask").classList.remove("show"); loadIncidents(); loadSREBadge(); toast("已保存","ok");
+}
+
+/* ---- 自动修复 ---- */
+async function loadRemediation(){
+  try {
+    const [rules,runs] = await Promise.all([fetch(`${API}/remediation/rules`).then(r=>r.json()),fetch(`${API}/remediation/runs`).then(r=>r.json())]);
+    SRE_RULES = rules||[]; renderRules(SRE_RULES); renderRuns(runs||[]);
+  } catch(e){ toast("加载失败: "+e,"err"); }
+}
+function renderRules(rules){
+  const el=$("remediationRuleList");
+  if(!rules.length){ el.innerHTML=`<div class="empty-line">暂无修复规则</div>`; return; }
+  el.innerHTML = rules.map(r=>{
+    const pb=SRE_PLAYBOOKS.find(p=>p.id===r.playbook_id);
+    const g=[]; if(r.require_approval)g.push("需审批"); if(r.cooldown_sec)g.push(`冷却${r.cooldown_sec}s`); if(r.max_per_hour)g.push(`≤${r.max_per_hour}/h`);
+    const match=(r.match_types&&r.match_types.length?r.match_types.join("/"):"任意类型")+(r.min_level?` ≥${r.min_level}`:"");
+    return `<div class="pb-card fwd-card ${r.enabled?"":"pb-off"}" data-rule="${esc(r.id)}">
+      <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(r.name)}</strong><span class="pb-desc">${esc(match)} → ${esc(pb?pb.name:r.playbook_id)}</span></div>
+        <span class="fwd-status ${r.enabled?"on":"off"}">${r.enabled?"已启用":"已停用"}</span></div>
+      <div class="pb-card-foot"><div class="pb-pills">${g.map(x=>`<span class="badge">${esc(x)}</span>`).join("")}</div>
+        <div class="fwd-actions"><button class="btn sm" data-rract="edit">编辑</button><button class="btn danger sm" data-rract="del">删除</button></div></div></div>`;
+  }).join("");
+  el.querySelectorAll("[data-rule]").forEach(card=>card.querySelectorAll("[data-rract]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
+    const id=card.dataset.rule;
+    if(b.dataset.rract==="edit") openRuleModal(SRE_RULES.find(x=>x.id===id));
+    else if(confirm("确认删除该规则？")) fetch(`${API}/remediation/rules/${id}`,{method:"DELETE"}).then(()=>loadRemediation());
+  }));
+}
+function renderRuns(runs){
+  const el=$("remediationRunList");
+  if(!runs.length){ el.innerHTML=`<div class="empty-line">暂无执行记录</div>`; return; }
+  el.innerHTML = runs.map(r=>`<div class="sre-row">
+    <span class="badge ${_runCls(r.status)}">${_runStatus(r.status)}</span>
+    <div class="sre-row-main"><div class="sre-row-title">${esc(r.rule_name)} → ${esc(r.playbook_name||r.playbook_id)}</div>
+      <div class="sre-row-sub">${esc(r.hostname)} · ${esc(r.alert_type)} · ${fmtDateTime(r.created_at)}${r.reason?" · "+esc(r.reason):""}</div></div>
+    ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">批准</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">拒绝</button></div>`:""}</div>`).join("");
+  el.querySelectorAll("[data-runact]").forEach(b=>b.onclick=async()=>{ await fetch(`${API}/remediation/runs/${b.dataset.run}/${b.dataset.runact}`,{method:"POST"}); loadRemediation(); loadSREBadge(); });
+}
+function openRuleModal(r){
+  $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?"编辑规则":"新建规则";
+  $("rrName").value=r?r.name:""; $("rrEnabled").checked=r?r.enabled:true;
+  $("rrLevel").value=r?(r.min_level||""):"critical"; $("rrCategory").value=r?(r.match_category||""):"";
+  $("rrCooldown").value=r?r.cooldown_sec:300; $("rrMaxPerHour").value=r?r.max_per_hour:6; $("rrApproval").checked=r?r.require_approval:false;
+  $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">（请先创建剧本）</option>`;
+  const sel=new Set(r?(r.match_types||[]):[]);
+  $("rrTypes").innerHTML=SRE_ALERT_TYPES.map(t=>`<label class="chip-check"><input type="checkbox" value="${t}" ${sel.has(t)?"checked":""}> ${t}</label>`).join("");
+  $("remediationRuleMask").classList.add("show");
+}
+async function saveRule(){
+  const types=[...document.querySelectorAll("#rrTypes input:checked")].map(c=>c.value);
+  const body={id:$("rrId").value,name:$("rrName").value.trim(),enabled:$("rrEnabled").checked,match_types:types,min_level:$("rrLevel").value,match_category:$("rrCategory").value.trim(),playbook_id:$("rrPlaybook").value,require_approval:$("rrApproval").checked,cooldown_sec:parseInt($("rrCooldown").value)||0,max_per_hour:parseInt($("rrMaxPerHour").value)||0};
+  const r=await fetch(`${API}/remediation/rules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.ok){ $("remediationRuleMask").classList.remove("show"); loadRemediation(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+}
+
+/* ---- SLO ---- */
+async function loadSLOs(){
+  try { SRE_SLOS = (await fetch(`${API}/slos`).then(r=>r.json()))||[]; renderSLOs(SRE_SLOS); }
+  catch(e){ toast("加载失败: "+e,"err"); }
+}
+function renderSLOs(list){
+  const el=$("sloList");
+  if(!list.length){ el.innerHTML=`<div class="empty-line">暂无 SLO</div>`; return; }
+  el.innerHTML=list.map(s=>{
+    const bCls=s.error_budget<=0?"crit":s.error_budget<30?"warn":"ok";
+    const src=s.source_type==="check"?"拨测 up 率":`${s.metric} ${s.comparator} ${s.threshold}`;
+    return `<div class="pb-card fwd-card ${s.enabled?"":"pb-off"}" data-slo="${esc(s.id)}">
+      <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(s.name)}</strong><span class="pb-desc">${esc(src)} · 目标 ${s.target}% · ${s.window_days}d</span></div>
+        <span class="badge ${s.breaching?"crit":"ok"}">SLI ${s.sli.toFixed(2)}%</span></div>
+      <div class="slo-budget"><div class="slo-budget-bar"><div class="slo-budget-fill ${bCls}" style="width:${Math.max(0,Math.min(100,s.error_budget))}%"></div></div>
+        <div class="slo-budget-txt">错误预算 ${s.error_budget.toFixed(0)}% · 燃尽 ${s.burn_rate.toFixed(2)}× · 达标 ${s.good_events}/${s.total_events}</div></div>
+      <div class="pb-card-foot"><div class="pb-pills">${s.breaching?`<span class="badge crit">超标</span>`:`<span class="badge ok">健康</span>`}${s.enabled?"":`<span class="badge">停用</span>`}</div>
+        <div class="fwd-actions"><button class="btn sm" data-sloact="edit">编辑</button><button class="btn danger sm" data-sloact="del">删除</button></div></div></div>`;
+  }).join("");
+  el.querySelectorAll("[data-slo]").forEach(card=>card.querySelectorAll("[data-sloact]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
+    const id=card.dataset.slo;
+    if(b.dataset.sloact==="edit") openSloModal(SRE_SLOS.find(x=>x.id===id));
+    else if(confirm("确认删除该 SLO？")) fetch(`${API}/slos/${id}`,{method:"DELETE"}).then(()=>loadSLOs());
+  }));
+}
+function sloSourceChange(){
+  const src=$("sloSource").value;
+  $("sloCheckField").style.display=src==="check"?"":"none";
+  $("sloMetricFields").style.display=src==="metric"?"":"none";
+}
+function openSloModal(s){
+  $("sloId").value=s?s.id:""; $("sloModalTitle").textContent=s?"编辑 SLO":"新建 SLO";
+  $("sloName").value=s?s.name:""; $("sloEnabled").checked=s?s.enabled:true; $("sloSource").value=s?s.source_type:"check";
+  $("sloCheck").innerHTML=SRE_CHECKS.map(c=>`<option value="${esc(c.id)}" ${s&&s.check_id===c.id?"selected":""}>${esc(c.name)}</option>`).join("")||`<option value="">（请先创建拨测）</option>`;
+  $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc(h.hostname)}</option>`).join("");
+  if(s){ $("sloMetric").value=s.metric||"cpu_percent"; $("sloComparator").value=s.comparator||"<"; $("sloThreshold").value=s.threshold||90; } else { $("sloComparator").value="<"; $("sloThreshold").value=90; }
+  $("sloTarget").value=s?s.target:99.9; $("sloWindow").value=s?s.window_days:30;
+  sloSourceChange(); $("sloMask").classList.add("show");
+}
+async function saveSlo(){
+  const src=$("sloSource").value;
+  const body={id:$("sloId").value,name:$("sloName").value.trim(),enabled:$("sloEnabled").checked,source_type:src,target:parseFloat($("sloTarget").value)||99,window_days:parseInt($("sloWindow").value)||30};
+  if(src==="check") body.check_id=$("sloCheck").value;
+  else { body.host_id=$("sloHost").value; body.metric=$("sloMetric").value; body.comparator=$("sloComparator").value; body.threshold=parseFloat($("sloThreshold").value)||0; }
+  const r=await fetch(`${API}/slos`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.ok){ $("sloMask").classList.remove("show"); loadSLOs(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+}
+
+/* ---- 工单 ---- */
+async function loadTickets(){
+  try { SRE_TICKETS=(await fetch(`${API}/tickets`).then(r=>r.json()))||[]; renderTickets(SRE_TICKETS); }
+  catch(e){ toast("加载失败: "+e,"err"); }
+}
+function renderTickets(list){
+  const el=$("ticketList");
+  if(!list.length){ el.innerHTML=`<div class="empty-line">暂无工单</div>`; return; }
+  el.innerHTML=list.map(t=>`<div class="sre-row" data-ticket="${t.id}">
+    <span class="badge ${_prioCls(t.priority)}">${esc((t.priority||"p3").toUpperCase())}</span>
+    <div class="sre-row-main"><div class="sre-row-title">${esc(t.title)}</div>
+      <div class="sre-row-sub">#${t.id}${t.assignee?" · @"+esc(t.assignee):""}${t.incident_id?" · 🔗事件#"+t.incident_id:""} · ${fmtDateTime(t.updated_at)}</div></div>
+    <span class="badge ${_tkStatusCls(t.status)}">${esc(t.status)}</span></div>`).join("");
+  el.querySelectorAll("[data-ticket]").forEach(row=>row.onclick=()=>openTicketModal(SRE_TICKETS.find(x=>x.id==row.dataset.ticket)));
+}
+function openTicketModal(t){
+  $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:"新建工单";
+  $("tkTitle").value=t?t.title:""; $("tkPriority").value=t?t.priority:"p3"; $("tkStatus").value=t?t.status:"open";
+  $("tkAssignee").value=t?(t.assignee||""):""; $("tkDesc").value=t?(t.description||""):"";
+  const cm=$("tkComments"),cf=$("tkCommentField");
+  if(t){ cm.innerHTML=`<div class="subhead">评论</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div></div>`).join("")||`<div class="empty-line">—</div>`); cf.style.display=""; }
+  else { cm.innerHTML=""; cf.style.display="none"; }
+  $("ticketMask").classList.add("show");
+}
+async function saveTicket(){
+  const id=$("ticketId").value;
+  const body={title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,assignee:$("tkAssignee").value.trim(),description:$("tkDesc").value.trim()};
+  if(!body.title){ toast("请填写标题","err"); return; }
+  const r=await fetch(id?`${API}/tickets/${id}`:`${API}/tickets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.ok){ $("ticketMask").classList.remove("show"); loadTickets(); loadSREBadge(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+}
+async function addTicketComment(){
+  const id=$("ticketId").value,t=$("tkCommentInput").value.trim(); if(!id||!t)return;
+  await fetch(`${API}/tickets/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t})});
+  $("tkCommentInput").value=""; const tk=await fetch(`${API}/tickets/${id}`).then(r=>r.json()); openTicketModal(tk); loadTickets();
+}
+
+document.querySelectorAll("#sreTabs .chip-btn").forEach(b=>b.addEventListener("click",()=>switchSRETab(b.dataset.sretab)));
+safeAddEventListener("newIncidentBtn","click",openNewIncident);
+safeAddEventListener("niSaveBtn","click",saveNewIncident);
+safeAddEventListener("newRemediationBtn","click",()=>openRuleModal(null));
+safeAddEventListener("rrSaveBtn","click",saveRule);
+safeAddEventListener("newSloBtn","click",()=>openSloModal(null));
+safeAddEventListener("sloSaveBtn","click",saveSlo);
+safeAddEventListener("sloSource","change",sloSourceChange);
+safeAddEventListener("newTicketBtn","click",()=>openTicketModal(null));
+safeAddEventListener("tkSaveBtn","click",saveTicket);
+safeAddEventListener("tkCommentBtn","click",addTicketComment);
+
+/* ---- 日志检索 ---- */
+const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
+async function loadLogs(){
+  try { if (!SRE_HOSTS.length) SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; } catch(e){}
+  const hs=$("logHost");
+  if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">全部主机</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  searchLogs();
+}
+async function searchLogs(){
+  const host=$("logHost").value,level=$("logLevel").value,since=$("logSince").value,kw=$("logKeyword").value.trim();
+  const qs=new URLSearchParams(); if(host)qs.set("host",host); if(level)qs.set("level",level); if(since&&since!=="0")qs.set("since_min",since); if(kw)qs.set("q",kw); qs.set("limit","500");
+  try {
+    const list=await fetch(`${API}/logs?${qs}`).then(r=>r.json());
+    const el=$("logResults");
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; return; }
+    el.innerHTML=list.map(l=>`<div class="log-line ${_logLvlCls(l.level)}"><span class="log-ts mono">${fmtDateTime(l.ts)}</span><span class="log-lvl ${_logLvlCls(l.level)}">${esc(l.level)}</span><span class="log-host">${esc(l.hostname)}</span><span class="log-msg">${esc(l.message)}</span></div>`).join("");
+  } catch(e){ toast("检索失败: "+e,"err"); }
+}
+
+/* ---- AI 巡检 ---- */
+async function loadInspections(){
+  try {
+    const list=await fetch(`${API}/ai/inspections`).then(r=>r.json());
+    const el=$("aiReportList");
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无巡检报告，点「立即巡检」生成一次。</div>`; return; }
+    el.innerHTML=list.map(rep=>{
+      const f=(rep.findings||[]).map(x=>`<div class="ai-finding"><span class="badge ${_sevCls(x.severity)}">${esc(x.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(x.title)}</div>${x.detail?`<div class="ai-f-detail">${esc(x.detail)}</div>`:""}</div></div>`).join("");
+      return `<div class="ai-report"><div class="ai-report-head"><span class="badge ${rep.source==="ai"?"info":""}">${rep.source==="ai"?"AI 研判":"启发式"}</span><span class="ai-report-trigger">${rep.trigger==="manual"?"手动":"定时"}</span><span class="mono" style="color:var(--muted)">${fmtDateTime(rep.ts)}</span></div>
+        <div class="ai-summary">${esc(rep.summary)}</div>${f?`<div class="ai-findings">${f}</div>`:""}</div>`;
+    }).join("");
+  } catch(e){ toast("加载失败: "+e,"err"); }
+}
+async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
+async function openAIConfig(){
+  try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
+    $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
+  } catch(e){}
+  $("aiConfigMask").classList.add("show");
+}
+async function saveAIConfig(){
+  const body={enabled:$("aiEnabled").checked,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim(),inspect_interval_min:parseInt($("aiInterval").value)||30};
+  const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
+}
+safeAddEventListener("logSearchBtn","click",searchLogs);
+safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
+safeAddEventListener("aiInspectBtn","click",runInspect);
+safeAddEventListener("aiConfigBtn","click",openAIConfig);
+safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);

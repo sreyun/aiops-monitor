@@ -421,6 +421,16 @@
   "section.start_label": " · 开始: ",
   /* --- 端口转发 HTML 视图所需 key --- */
   "nav.forward": "转发",
+  "nav.sre": "SRE",
+  "section.sre": "SRE 中枢",
+  "section.sre_desc": "事件闭环 · 自动修复 · SLO · 工单",
+  "nav.logs": "日志检索",
+  "section.logs": "日志检索",
+  "section.logs_desc": "主机日志聚合 · 全文检索",
+  "navgroup.observe": "可观测",
+  "navgroup.alerting": "告警响应",
+  "navgroup.ops": "运维工具",
+  "navgroup.system": "系统",
   "form.target_host": "目标主机",
   "form.target_port": "目标端口",
   "form.local_port_optional": "本地端口（可选）",
@@ -612,6 +622,11 @@
   "profile.logout": "退出登录",
   "profile.user_mgmt": "用户管理",
   "profile.save_profile": "保存资料",
+  /* --- 个人信息四 Tab 标签 --- */
+  "profile.tab_info": "个人信息",
+  "profile.tab_password": "密码修改",
+  "profile.tab_mfa": "MFA 管理",
+  "profile.tab_users": "用户管理",
   /* --- 用户管理弹窗 --- */
   "users.title": "用户管理",
   "users.global_mfa": "全局 MFA 强制策略",

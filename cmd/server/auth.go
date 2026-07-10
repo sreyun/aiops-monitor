@@ -427,7 +427,8 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/account/recover-username",
 		"/api/v1/account/send-reset-code",
 		"/api/v1/account/reset-password",
-		"/api/v1/agent/register", "/api/v1/agent/report":
+		"/api/v1/agent/register", "/api/v1/agent/report",
+		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}
 	// Agent-facing terminal reverse channels are token-gated, not session-gated.

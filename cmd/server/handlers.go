@@ -23,11 +23,18 @@ type Server struct {
 	emailMgr  *emailManager       // verification codes + reset tokens
 	playbooks *playbookManager    // automation playbooks + execution history
 	push      *pushHub            // P3-1: WebSocket push hub for real-time updates
-	distDir   string              // directory of downloadable agent binaries + plugins.zip
+	// --- SRE workflow layer ---
+	incidents   *incidentManager   // incident hub (alert/SLO/manual)
+	remediation *remediationManager // closed-loop auto-remediation
+	slos        *sloManager        // SLO + error budgets
+	tickets     *ticketManager     // work orders
+	logs        *logStore          // aggregated agent logs
+	ai          *aiManager         // AI inspection + diagnosis
+	distDir     string             // directory of downloadable agent binaries + plugins.zip
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
-	return &Server{
+	s := &Server{
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
 		auth:      NewAuth(cfg),
 		checks:    newCheckRunner(cfg, store, notifier, selfAddr),
@@ -36,7 +43,15 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		emailMgr:  newEmailManager(),
 		playbooks: newPlaybookManager(cfg),
 		push:      newPushHub(),
+		incidents:   newIncidentManager(),
+		remediation: newRemediationManager(cfg),
+		slos:        newSLOManager(cfg),
+		tickets:     newTicketManager(),
+		logs:        newLogStore(),
+		ai:          newAIManager(cfg),
 	}
+	s.wireSRE()
+	return s
 }
 
 // Routes builds the HTTP handler using Go 1.22 method+path patterns.
@@ -107,6 +122,39 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/playbooks/{id}/execute", s.handleExecutePlaybook)
 	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
 	mux.HandleFunc("GET /api/v1/playbooks/executions/{id}", s.handleGetExecution)
+	// SRE workflow: incidents / auto-remediation / SLOs / work orders
+	mux.HandleFunc("GET /api/v1/sre/overview", s.handleSREOverview)
+	mux.HandleFunc("GET /api/v1/incidents", s.handleListIncidents)
+	mux.HandleFunc("POST /api/v1/incidents", s.handleCreateIncident)
+	mux.HandleFunc("GET /api/v1/incidents/{id}", s.handleGetIncident)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/ack", s.handleAckIncident)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/resolve", s.handleResolveIncident)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/comment", s.handleCommentIncident)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/ticket", s.handleEscalateIncident)
+	mux.HandleFunc("GET /api/v1/remediation/rules", s.handleListRemediationRules)
+	mux.HandleFunc("POST /api/v1/remediation/rules", s.handleUpsertRemediationRule)
+	mux.HandleFunc("DELETE /api/v1/remediation/rules/{id}", s.handleDeleteRemediationRule)
+	mux.HandleFunc("GET /api/v1/remediation/runs", s.handleListRemediationRuns)
+	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/approve", s.handleApproveRemediation)
+	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/reject", s.handleRejectRemediation)
+	mux.HandleFunc("GET /api/v1/slos", s.handleListSLOs)
+	mux.HandleFunc("POST /api/v1/slos", s.handleUpsertSLO)
+	mux.HandleFunc("DELETE /api/v1/slos/{id}", s.handleDeleteSLO)
+	mux.HandleFunc("GET /api/v1/tickets", s.handleListTickets)
+	mux.HandleFunc("POST /api/v1/tickets", s.handleCreateTicket)
+	mux.HandleFunc("GET /api/v1/tickets/{id}", s.handleGetTicket)
+	mux.HandleFunc("POST /api/v1/tickets/{id}", s.handleUpdateTicket)
+	mux.HandleFunc("POST /api/v1/tickets/{id}/comment", s.handleCommentTicket)
+	mux.HandleFunc("DELETE /api/v1/tickets/{id}", s.handleDeleteTicket)
+	// Log aggregation (agent ingest is fingerprint-authed) + search
+	mux.HandleFunc("POST /api/v1/agent/logs", s.handleAgentLogs)
+	mux.HandleFunc("GET /api/v1/logs", s.handleSearchLogs)
+	// AI: config + inspection + incident diagnosis
+	mux.HandleFunc("GET /api/v1/ai/config", s.handleGetAIConfig)
+	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)
+	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
+	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnose", s.handleDiagnoseIncident)
 	// Terminal enhancements
 	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)

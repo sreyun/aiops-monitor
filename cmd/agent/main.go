@@ -35,6 +35,7 @@ type config struct {
 	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
 	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
 	RelaySecret    string         `json:"relay_secret,omitempty"` // v5.4.1: shared secret for relay auth
+	LogPaths       []string       `json:"log_paths,omitempty"`  // log files to tail and forward to the server
 }
 
 func defaultConfig() config {
@@ -97,8 +98,17 @@ func main() {
 	flag.StringVar(&cfg.Listen, "listen", cfg.Listen, "Relay 监听地址，如 :8529")
 	flag.StringVar(&cfg.RelaySecret, "relay-secret", cfg.RelaySecret, "Relay 共享密钥，用于上游服务端验证中继请求")
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
+	var logPathsFlag string
+	flag.StringVar(&logPathsFlag, "log-paths", "", "采集的日志文件路径，逗号分隔（如 /var/log/syslog,/var/log/nginx/error.log）")
 	flag.Parse()
 	_ = cfgFlag
+	if logPathsFlag != "" {
+		for _, p := range strings.Split(logPathsFlag, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				cfg.LogPaths = append(cfg.LogPaths, p)
+			}
+		}
+	}
 
 	// Relay mode: act as a gateway for internal machines that can't reach the
 	// internet. The agent listens on a local port and reverse-proxies to the
@@ -131,6 +141,7 @@ func main() {
 		time.Duration(cfg.PluginInterval)*time.Second,
 		collector, runner, hostID, cfg.Category,
 	)
+	agent.logPaths = cfg.LogPaths
 
 	go func() {
 		sig := make(chan os.Signal, 1)

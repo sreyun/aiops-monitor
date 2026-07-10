@@ -203,6 +203,7 @@ func main() {
 
 	// embedded lightweight DB: restore state, then autosave + flush on exit
 	db := NewDB(dbPathFor(*cfgPath), store, server.auth)
+	db.BindSRE(server.incidents, server.tickets) // persist incidents + work orders
 	db.Load()
 	go db.AutoSave(15 * time.Second)
 	go func() {
@@ -220,6 +221,8 @@ func main() {
 	go notifier.Run(10 * time.Second)     // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second) // custom HTTP/TCP synthetic checks
 	go server.runScheduler(30 * time.Second) // timed playbook triggers (interval/daily/weekly)
+	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
+	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
 
 	handler := securityHeadersMiddleware(corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
 	srv := &http.Server{

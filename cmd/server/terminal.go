@@ -116,11 +116,44 @@ type termManager struct {
 	pendingSessions map[string][]string // hostID -> queued session IDs
 }
 
+// termArchiveCap is how many ended sessions' recordings are retained for replay.
+// Archives are persisted in the DB snapshot, so they survive restarts ("permanent"
+// within this retention window). Recordings are already frame-capped per session.
+const termArchiveCap = 100
+
 // termArchive keeps an ended session's recording so it can still be replayed
 // after the live session has been removed.
 type termArchive struct {
 	info      termSessionInfo
 	recording []termRecordFrame
+}
+
+// dbTermArchive is the JSON-serializable form of a termArchive for the DB snapshot.
+type dbTermArchive struct {
+	Info      termSessionInfo   `json:"info"`
+	Recording []termRecordFrame `json:"recording"`
+}
+
+// exportArchives / importArchives bridge the recording archive to the DB snapshot
+// so terminal replays survive a restart (fixing the docker-compose data-loss).
+func (m *termManager) exportArchives() []dbTermArchive {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]dbTermArchive, len(m.archived))
+	for i, a := range m.archived {
+		out[i] = dbTermArchive{Info: a.info, Recording: a.recording}
+	}
+	return out
+}
+
+func (m *termManager) importArchives(list []dbTermArchive) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.archived = make([]termArchive, 0, len(list))
+	for _, d := range list {
+		d.Info.Active = false // restored sessions are never live
+		m.archived = append(m.archived, termArchive{info: d.Info, recording: d.Recording})
+	}
 }
 
 func newTermManager() *termManager {
@@ -217,8 +250,8 @@ func (m *termManager) remove(id string) {
 				},
 				recording: rec,
 			})
-			if len(m.archived) > 20 { // keep only the most recent sessions
-				m.archived = m.archived[len(m.archived)-20:]
+			if len(m.archived) > termArchiveCap { // retention cap (persisted across restarts)
+				m.archived = m.archived[len(m.archived)-termArchiveCap:]
 			}
 		}
 		s.recMu.Unlock()

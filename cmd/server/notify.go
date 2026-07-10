@@ -28,6 +28,9 @@ type Notifier struct {
 	mu     sync.Mutex
 	active map[string]Alert // alertKey -> alert currently firing
 	since  map[string]int64 // alertKey -> unix time the alert first fired
+	// SRE hooks (set during server wiring; nil-safe).
+	incidents   *incidentManager
+	remediation *remediationManager
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -64,6 +67,17 @@ func (n *Notifier) ResetState() {
 
 // Trigger runs one evaluation immediately (used right after a config save).
 func (n *Notifier) Trigger() { n.tick() }
+
+// ActiveAlerts returns a copy of the alerts currently firing (for AI inspection).
+func (n *Notifier) ActiveAlerts() []Alert {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]Alert, 0, len(n.active))
+	for _, a := range n.active {
+		out = append(out, a)
+	}
+	return out
+}
 
 // ActiveSince returns a copy of the first-fired times keyed by alertKey,
 // letting the alerts API show "elapsed X minutes".
@@ -121,6 +135,14 @@ func (n *Notifier) tick() {
 
 	for _, t := range todo {
 		n.dispatch(cfg, t.a, t.firing)
+		// SRE closed loop: open/resolve an incident, and on a firing alert run any
+		// matching auto-remediation rule (scoped to the affected host).
+		if n.incidents != nil {
+			incID := n.incidents.OnAlertTransition(t.a, alertKey(t.a), t.firing)
+			if t.firing && incID != 0 && n.remediation != nil {
+				n.remediation.OnAlert(t.a, incID)
+			}
+		}
 	}
 }
 

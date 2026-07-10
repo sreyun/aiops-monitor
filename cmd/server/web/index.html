@@ -45,30 +45,62 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
         <span data-i18n="nav.overview">概览</span>
       </a>
-      <a class="nav-item" data-view="hosts" data-i18n-title="nav.hosts" title="主机">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><path d="M6 6h.01M6 18h.01"/></svg>
-        <span data-i18n="nav.hosts">主机</span><span class="nav-count" id="navHosts">0</span>
-      </a>
-      <a class="nav-item" data-view="checks" data-i18n-title="nav.checks" title="自定义监控（网站/端口拨测）">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
-      </a>
-      <a class="nav-item" data-view="alerts" data-i18n-title="nav.alerts" title="告警">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
-        <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
-      </a>
-      <a class="nav-item" data-view="automation" data-i18n-title="nav.automation" title="剧本编排 + 批量执行">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
-        <span data-i18n="nav.automation">自动化</span>
-      </a>
-      <a class="nav-item" data-view="forward" data-i18n-title="nav.forward" title="转发">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M2 12h3M19 12h3M9 12h6"/></svg>
-        <span data-i18n="nav.forward">转发</span>
-      </a>
-      <a class="nav-item" data-view="log" data-i18n-title="nav.log" title="操作与介入日志">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-        <span data-i18n="nav.log">日志</span><span class="nav-count" id="navLog">0</span>
-      </a>
+
+      <div class="nav-group" data-group="observe">
+        <button class="nav-group-label" type="button"><span data-i18n="navgroup.observe">可观测</span><svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-group-items">
+          <a class="nav-item" data-view="hosts" data-i18n-title="nav.hosts" title="主机">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><path d="M6 6h.01M6 18h.01"/></svg>
+            <span data-i18n="nav.hosts">主机</span><span class="nav-count" id="navHosts">0</span>
+          </a>
+          <a class="nav-item" data-view="checks" data-i18n-title="nav.checks" title="自定义监控（网站/端口拨测）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
+          </a>
+          <a class="nav-item" data-view="logs" data-i18n-title="nav.logs" title="主机日志聚合检索">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
+            <span data-i18n="nav.logs">日志检索</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="alerting">
+        <button class="nav-group-label" type="button"><span data-i18n="navgroup.alerting">告警响应</span><svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-group-items">
+          <a class="nav-item" data-view="alerts" data-i18n-title="nav.alerts" title="告警">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
+            <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
+          </a>
+          <a class="nav-item" data-view="sre" data-i18n-title="nav.sre" title="SRE 中枢：事件 / 自动修复 / SLO / 工单 / AI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>
+            <span data-i18n="nav.sre">SRE</span><span class="nav-count" id="navSre">0</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="ops">
+        <button class="nav-group-label" type="button"><span data-i18n="navgroup.ops">运维工具</span><svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-group-items">
+          <a class="nav-item" data-view="automation" data-i18n-title="nav.automation" title="剧本编排 + 批量执行">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+            <span data-i18n="nav.automation">自动化</span>
+          </a>
+          <a class="nav-item" data-view="forward" data-i18n-title="nav.forward" title="转发">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M2 12h3M19 12h3M9 12h6"/></svg>
+            <span data-i18n="nav.forward">转发</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="system">
+        <button class="nav-group-label" type="button"><span data-i18n="navgroup.system">系统</span><svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-group-items">
+          <a class="nav-item" data-view="log" data-i18n-title="nav.log" title="操作与介入日志">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+            <span data-i18n="nav.log">审计日志</span><span class="nav-count" id="navLog">0</span>
+          </a>
+        </div>
+      </div>
     </nav>
 
     <div class="side-actions">
@@ -334,6 +366,78 @@
           <div class="pb-empty-title">还没有自动化剧本</div>
           <div class="pb-empty-sub">点「+ 新建剧本」创建批量执行流程——选择目标主机、编写命令步骤、可选设置定时触发，一键并行下发执行。</div>
         </div>
+      </section>
+
+      <!-- SRE 中枢：事件 / 自动修复 / SLO / 工单 -->
+      <section class="view" id="view-sre">
+        <div class="section-title"><span data-i18n="section.sre">SRE 中枢</span><span class="tag" data-i18n="section.sre_desc">事件闭环 · 自动修复 · SLO · 工单</span>
+          <div class="sre-tabs" id="sreTabs" style="margin-left:auto; display:flex; gap:4px; flex-wrap:wrap">
+            <button class="chip-btn active" data-sretab="incidents" data-i18n="sre.tab_incidents">事件</button>
+            <button class="chip-btn" data-sretab="remediation" data-i18n="sre.tab_remediation">自动修复</button>
+            <button class="chip-btn" data-sretab="slo" data-i18n="sre.tab_slo">SLO</button>
+            <button class="chip-btn" data-sretab="tickets" data-i18n="sre.tab_tickets">工单</button>
+            <button class="chip-btn" data-sretab="ai" data-i18n="sre.tab_ai">AI 巡检</button>
+          </div>
+        </div>
+
+        <div class="sre-panel active" id="srePanel-incidents">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.incidents_hint">告警触发 / SLO 燃尽 / 手动创建的事件都汇聚于此，含完整时间线与自动修复记录。</span>
+            <button class="btn primary sm" id="newIncidentBtn" data-i18n="sre.new_incident">+ 新建事件</button>
+          </div>
+          <div id="incidentList" class="sre-list"></div>
+        </div>
+
+        <div class="sre-panel" id="srePanel-remediation">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.remediation_hint">告警触发时自动匹配规则并执行剧本；护栏：人工审批 / 冷却 / 限频，防止命令风暴。</span>
+            <button class="btn primary sm" id="newRemediationBtn" data-i18n="sre.new_rule">+ 新建规则</button>
+          </div>
+          <div class="subhead" data-i18n="sre.rules">修复规则</div>
+          <div id="remediationRuleList" class="fwd-list fwd-grid"></div>
+          <div class="subhead" data-i18n="sre.runs">执行记录</div>
+          <div id="remediationRunList" class="sre-list"></div>
+        </div>
+
+        <div class="sre-panel" id="srePanel-slo">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.slo_hint">以拨测 up 率或指标达标率衡量 SLI，跟踪错误预算与燃尽率，预算耗尽自动开事件。</span>
+            <button class="btn primary sm" id="newSloBtn" data-i18n="sre.new_slo">+ 新建 SLO</button>
+          </div>
+          <div id="sloList" class="fwd-list fwd-grid"></div>
+        </div>
+
+        <div class="sre-panel" id="srePanel-tickets">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.tickets_hint">轻量工单：优先级 / 状态流转 / 指派 / 评论，可从事件一键升级生成。</span>
+            <button class="btn primary sm" id="newTicketBtn" data-i18n="sre.new_ticket">+ 新建工单</button>
+          </div>
+          <div id="ticketList" class="sre-list"></div>
+        </div>
+
+        <div class="sre-panel" id="srePanel-ai">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
+            <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
+            <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
+          </div>
+          <div id="aiReportList" class="sre-list"></div>
+        </div>
+      </section>
+
+      <!-- 日志检索 -->
+      <section class="view" id="view-logs">
+        <div class="section-title"><span data-i18n="section.logs">日志检索</span><span class="tag" data-i18n="section.logs_desc">主机日志聚合 · 全文检索</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <div class="select-wrap"><select id="logHost"><option value="" data-i18n="ui.all_hosts">全部主机</option></select></div>
+            <div class="select-wrap"><select id="logLevel"><option value="" data-i18n="logs.all_levels">全部级别</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option></select></div>
+            <div class="select-wrap"><select id="logSince"><option value="15">近15分钟</option><option value="60" selected>近1小时</option><option value="360">近6小时</option><option value="1440">近1天</option><option value="0" data-i18n="logs.all_time">全部</option></select></div>
+            <input type="text" id="logKeyword" data-i18n-placeholder="logs.keyword_ph" placeholder="关键字…" style="width:160px">
+            <button class="btn primary sm" id="logSearchBtn" data-i18n="logs.search">检索</button>
+          </div>
+        </div>
+        <div class="hint" data-i18n="section.logs_hint">Agent 以 --log-paths 指定采集的日志文件（逗号分隔）增量上报；此处按主机 / 级别 / 关键字 / 时间检索。</div>
+        <div id="logResults" class="log-results"></div>
       </section>
 
       <!-- 端口转发 -->
@@ -718,57 +822,97 @@
   </div>
 </div>
 
-<!-- ===== 个人信息弹窗 ===== -->
+<!-- ===== 个人信息弹窗（四 Tab 布局）===== -->
 <div class="mask" id="profileMask" data-close>
-  <div class="modal">
+  <div class="modal wide">
     <div class="modal-head">
       <h3 data-i18n="profile.title">个人信息</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="subhead subhead-first" data-i18n="profile.account_info">账户资料</div>
-      <div class="field"><label data-i18n="profile.username">用户名</label><input type="text" id="pfUsername" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号"></div>
-      <div class="field"><label data-i18n="profile.display_name">显示名称</label><input type="text" id="pfDisplay" data-i18n-placeholder="form.hint_display_name" placeholder="如 运维小王"></div>
-      <div class="field"><label data-i18n="profile.email">邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
-      <div class="subhead" data-i18n="profile.change_password">修改密码</div>
-      <div class="field"><label data-i18n="profile.old_password">原密码</label><input type="password" id="pfOld"></div>
-      <div class="field"><label data-i18n="profile.new_password">新密码（至少 4 位）</label><input type="password" id="pfNew"></div>
-      <div class="subhead" data-i18n="profile.mfa">两步验证（Google Authenticator）</div>
-      <div class="mfa-row">
-        <div class="mfa-info">
-          <span id="mfaState" class="mfa-state">加载中…</span>
-          <div class="mfa-desc" data-i18n="profile.mfa_desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
+      <!-- Tab 头：四个标签页，切换保持页面状态（各面板常驻 DOM） -->
+      <div class="tabs" id="profileTabs" role="tablist">
+        <button class="tab active" role="tab" data-ptab="info" data-i18n="profile.tab_info">个人信息</button>
+        <button class="tab" role="tab" data-ptab="password" data-i18n="profile.tab_password">密码修改</button>
+        <button class="tab" role="tab" data-ptab="mfa" data-i18n="profile.tab_mfa">MFA 管理</button>
+        <button class="tab admin-only" role="tab" data-ptab="users" data-i18n="profile.tab_users">用户管理</button>
+      </div>
+
+      <!-- Tab 1：个人信息 -->
+      <div class="tab-panel active" id="tab-profile-info" role="tabpanel">
+        <div class="field"><label data-i18n="profile.username">用户名</label><input type="text" id="pfUsername" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号"></div>
+        <div class="field"><label data-i18n="profile.display_name">显示名称</label><input type="text" id="pfDisplay" data-i18n-placeholder="form.hint_display_name" placeholder="如 运维小王"></div>
+        <div class="field"><label data-i18n="profile.email">邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
+        <div class="login-err" id="pfProfileErr" style="display:none"></div>
+        <div class="mfa-foot"><button class="btn primary" id="pfSaveBtn" data-i18n="profile.save_profile">保存资料</button></div>
+      </div>
+
+      <!-- Tab 2：密码修改（含终端密码更改） -->
+      <div class="tab-panel" id="tab-profile-password" role="tabpanel">
+        <div class="subhead subhead-first" data-i18n="profile.change_password">修改密码</div>
+        <div class="field"><label data-i18n="profile.old_password">原密码</label><input type="password" id="pfOld" autocomplete="current-password"></div>
+        <div class="field"><label data-i18n="profile.new_password">新密码（至少 4 位）</label><input type="password" id="pfNew" autocomplete="new-password"></div>
+        <div class="login-err" id="pfPwdErr" style="display:none"></div>
+        <div class="mfa-foot"><button class="btn primary" id="pfPwdBtn" data-i18n="profile.change_password">修改密码</button></div>
+
+        <div class="subhead" data-i18n="term_auth.change_terminal_password">修改终端访问密码</div>
+        <div class="term-pwd-status" id="pfTermPwdStatus">
+          <span class="term-pwd-status-label" data-i18n="term_auth.new_terminal_password">终端访问密码：</span>
+          <span class="term-pwd-status-val unset" id="pfTermPwdStatusVal" data-i18n="term_auth.no_password_set">未设置</span>
         </div>
-        <label class="mfa-switch" title="启用/关闭两步验证">
-          <input type="checkbox" id="mfaToggleChk">
-          <span class="mfa-track"><span class="mfa-thumb"></span></span>
-        </label>
+        <div class="field" id="pfTermPwdAuthField" style="display:none">
+          <label id="pfTermPwdAuthLabel" data-i18n="term_auth.current_password">当前登录密码（用于验证）</label>
+          <input type="password" id="pfTermPwdAuth" autocomplete="current-password">
+        </div>
+        <div class="field" id="pfTermPwdNewField" style="display:none">
+          <label data-i18n="term_auth.new_terminal_password">新的终端密码</label>
+          <input type="password" id="pfTermPwdNew" autocomplete="new-password">
+        </div>
+        <div class="login-err" id="pfTermPwdErr" style="display:none"></div>
+        <div class="mfa-foot"><button class="btn" id="pfTermPwdBtn" data-i18n="term_auth.change_password_btn">修改终端密码</button></div>
       </div>
-      <div class="subhead" data-i18n="term_auth.change_terminal_password">修改终端访问密码</div>
-      <div class="term-pwd-status" id="pfTermPwdStatus">
-        <span class="term-pwd-status-label" data-i18n="term_auth.new_terminal_password">终端访问密码：</span>
-        <span class="term-pwd-status-val unset" id="pfTermPwdStatusVal" data-i18n="term_auth.no_password_set">未设置</span>
+
+      <!-- Tab 3：MFA 管理 -->
+      <div class="tab-panel" id="tab-profile-mfa" role="tabpanel">
+        <div class="subhead subhead-first" data-i18n="profile.mfa">两步验证（Google Authenticator）</div>
+        <div class="mfa-row">
+          <div class="mfa-info">
+            <span id="mfaState" class="mfa-state">加载中…</span>
+            <div class="mfa-desc" data-i18n="profile.mfa_desc">启用后，登录除账号密码外还需输入 TOTP 应用（Google Authenticator 等）生成的 6 位动态口令。</div>
+          </div>
+          <label class="mfa-switch" title="启用/关闭两步验证">
+            <input type="checkbox" id="mfaToggleChk">
+            <span class="mfa-track"><span class="mfa-thumb"></span></span>
+          </label>
+        </div>
       </div>
-      <div class="field" id="pfTermPwdAuthField" style="display:none">
-        <label id="pfTermPwdAuthLabel" data-i18n="term_auth.current_password">当前登录密码（用于验证）</label>
-        <input type="password" id="pfTermPwdAuth" autocomplete="current-password">
+
+      <!-- Tab 4：用户管理（仅管理员可见） -->
+      <div class="tab-panel" id="tab-profile-users" role="tabpanel">
+        <div class="global-mfa-row">
+          <div class="global-mfa-info">
+            <span class="global-mfa-title" data-i18n="users.global_mfa">全局 MFA 强制策略</span>
+            <span class="mfa-desc" data-i18n="users.global_mfa_desc">开启后，所有未启用两步验证的用户下次登录时必须完成 MFA 绑定后才能进入系统。</span>
+          </div>
+          <label class="mfa-switch" title="开启/关闭全局 MFA 强制">
+            <input type="checkbox" id="globalMfaChk">
+            <span class="mfa-track"><span class="mfa-thumb"></span></span>
+          </label>
+        </div>
+        <div class="users-toolbar">
+          <span class="mfa-desc" data-i18n="users.role_desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
+          <button class="btn primary sm" id="userAddBtn" type="button" data-i18n="ui.new_user">+ 新建用户</button>
+        </div>
+        <div id="usersList"></div>
       </div>
-      <div class="field" id="pfTermPwdNewField" style="display:none">
-        <label data-i18n="term_auth.new_terminal_password">新的终端密码</label>
-        <input type="password" id="pfTermPwdNew" autocomplete="new-password">
-      </div>
-      <div class="login-err" id="pfTermPwdErr" style="display:none"></div>
     </div>
     <div class="modal-foot">
       <button class="btn danger" id="logoutBtn" data-i18n="profile.logout">退出登录</button>
-      <button class="btn admin-only" id="usersBtn" data-i18n="profile.user_mgmt">用户管理</button>
-      <div style="flex:1"></div>
-      <button class="btn" id="pfPwdBtn" data-i18n="profile.change_password">修改密码</button>
-      <button class="btn" id="pfTermPwdBtn" data-i18n="term_auth.change_password_btn">修改终端密码</button>
-      <button class="btn primary" id="pfSaveBtn" data-i18n="profile.save_profile">保存资料</button>
     </div>
   </div>
 </div>
+
+<!-- ===== 用户管理弹窗（已合并入个人信息四 Tab 布局，保留 #userEditMask 与 #mfaMask） ===== -->
 
 <!-- ===== 两步验证设置弹窗 ===== -->
 <div class="mask" id="mfaMask" data-close>
@@ -778,33 +922,6 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="mfaBody"></div>
-  </div>
-</div>
-
-<!-- ===== 用户管理弹窗 ===== -->
-<div class="mask" id="usersMask" data-close>
-  <div class="modal wide">
-    <div class="modal-head">
-      <h3 data-i18n="users.title">用户管理</h3>
-      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="global-mfa-row">
-        <div class="global-mfa-info">
-          <span class="global-mfa-title" data-i18n="users.global_mfa">全局 MFA 强制策略</span>
-          <span class="mfa-desc" data-i18n="users.global_mfa_desc">开启后，所有未启用两步验证的用户下次登录时必须完成 MFA 绑定后才能进入系统。</span>
-        </div>
-        <label class="mfa-switch" title="开启/关闭全局 MFA 强制">
-          <input type="checkbox" id="globalMfaChk">
-          <span class="mfa-track"><span class="mfa-thumb"></span></span>
-        </label>
-      </div>
-      <div class="users-toolbar">
-        <span class="mfa-desc" data-i18n="users.role_desc">管理登录账户与角色权限：管理员（全部+用户管理）、运维（可操作）、只读（仅查看）。</span>
-        <button class="btn primary sm" id="userAddBtn" type="button" data-i18n="ui.new_user">+ 新建用户</button>
-      </div>
-      <div id="usersList"></div>
-    </div>
   </div>
 </div>
 
@@ -921,6 +1038,125 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="execResultBody"></div>
+  </div>
+</div>
+
+<!-- ===== 事件详情弹窗 ===== -->
+<div class="mask" id="incidentDetailMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head"><h3 id="incidentDetailTitle">事件详情</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body" id="incidentDetailBody"></div>
+    <div class="modal-foot" id="incidentDetailFoot"></div>
+  </div>
+</div>
+
+<!-- ===== 新建事件弹窗 ===== -->
+<div class="mask" id="newIncidentMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3 data-i18n="sre.new_incident">新建事件</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="field"><label data-i18n="sre.title">标题</label><input type="text" id="niTitle"></div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.severity">级别</label><div class="select-wrap"><select id="niSeverity"><option value="critical">critical</option><option value="warning" selected>warning</option><option value="info">info</option></select></div></div>
+        <div class="field"><label data-i18n="sre.host_optional">主机（可选）</label><div class="select-wrap"><select id="niHost"><option value="">—</option></select></div></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="niSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
+</div>
+
+<!-- ===== 修复规则弹窗 ===== -->
+<div class="mask" id="remediationRuleMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3 id="rrTitle" data-i18n="sre.new_rule">新建规则</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="rrId">
+      <div class="field"><label data-i18n="sre.rule_name">规则名称</label><input type="text" id="rrName" data-i18n-placeholder="sre.rule_name_ph" placeholder="如 CPU 飙高自动重启服务"></div>
+      <label class="switch" style="margin-bottom:4px"><input type="checkbox" id="rrEnabled" checked> <span data-i18n="sre.enabled">启用</span></label>
+      <div class="subhead" data-i18n="sre.match">匹配条件</div>
+      <div class="field"><label data-i18n="sre.match_types">告警类型（多选，空=全部）</label><div id="rrTypes" class="chip-multi"></div></div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.min_level">最低级别</label><div class="select-wrap"><select id="rrLevel"><option value="" data-i18n="sre.any">任意</option><option value="warning">warning</option><option value="critical" selected>critical</option></select></div></div>
+        <div class="field"><label data-i18n="sre.category_opt">主机分类（空=全部）</label><input type="text" id="rrCategory"></div>
+      </div>
+      <div class="subhead" data-i18n="sre.action">动作</div>
+      <div class="field"><label data-i18n="sre.playbook">执行剧本（在告警主机上）</label><div class="select-wrap"><select id="rrPlaybook"></select></div></div>
+      <div class="subhead" data-i18n="sre.guards">安全护栏</div>
+      <label class="switch" style="margin-bottom:8px"><input type="checkbox" id="rrApproval"> <span data-i18n="sre.require_approval">需人工审批后才执行（否则自动执行）</span></label>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.cooldown">冷却（秒 / 每主机）</label><input type="text" id="rrCooldown" class="mono" value="300"></div>
+        <div class="field"><label data-i18n="sre.max_per_hour">每小时上限（0=不限）</label><input type="text" id="rrMaxPerHour" class="mono" value="6"></div>
+      </div>
+      <div class="hint" data-i18n="sre.guards_hint">冷却防止同一主机短时间反复触发；限频为整条规则每小时执行次数上限——两者共同防止告警抖动引发命令风暴。</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="rrSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
+</div>
+
+<!-- ===== SLO 弹窗 ===== -->
+<div class="mask" id="sloMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3 id="sloModalTitle" data-i18n="sre.new_slo">新建 SLO</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="sloId">
+      <div class="field"><label data-i18n="sre.slo_name">名称</label><input type="text" id="sloName" data-i18n-placeholder="sre.slo_name_ph" placeholder="如 API 可用性"></div>
+      <label class="switch" style="margin-bottom:4px"><input type="checkbox" id="sloEnabled" checked> <span data-i18n="sre.enabled">启用</span></label>
+      <div class="field"><label data-i18n="sre.sli_source">SLI 来源</label><div class="select-wrap"><select id="sloSource"><option value="check" data-i18n="sre.src_check">拨测 up 率</option><option value="metric" data-i18n="sre.src_metric">指标达标率</option></select></div></div>
+      <div class="field" id="sloCheckField"><label data-i18n="sre.check">拨测项</label><div class="select-wrap"><select id="sloCheck"></select></div></div>
+      <div id="sloMetricFields" style="display:none">
+        <div class="grid2">
+          <div class="field"><label data-i18n="sre.host">主机</label><div class="select-wrap"><select id="sloHost"></select></div></div>
+          <div class="field"><label data-i18n="sre.metric">指标</label><div class="select-wrap"><select id="sloMetric"><option value="cpu_percent">CPU %</option><option value="mem_percent">内存 %</option><option value="disk_percent">磁盘 %</option><option value="load1">Load 1m</option><option value="diskio_util">磁盘IO %</option></select></div></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="sre.good_when">达标条件（指标）</label><div class="select-wrap"><select id="sloComparator"><option value="&lt;">&lt;</option><option value="&lt;=">&le;</option><option value="&gt;">&gt;</option><option value="&gt;=">&ge;</option></select></div></div>
+          <div class="field"><label data-i18n="sre.threshold">阈值</label><input type="text" id="sloThreshold" class="mono" value="90"></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.target">目标（%）</label><input type="text" id="sloTarget" class="mono" value="99.9"></div>
+        <div class="field"><label data-i18n="sre.window_days">滚动窗口（天）</label><input type="text" id="sloWindow" class="mono" value="30"></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="sloSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
+</div>
+
+<!-- ===== 工单弹窗 ===== -->
+<div class="mask" id="ticketMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3 id="ticketModalTitle" data-i18n="sre.new_ticket">新建工单</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="ticketId">
+      <div class="field"><label data-i18n="sre.title">标题</label><input type="text" id="tkTitle"></div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.priority">优先级</label><div class="select-wrap"><select id="tkPriority"><option value="p1">P1 · 紧急</option><option value="p2">P2 · 高</option><option value="p3" selected>P3 · 中</option><option value="p4">P4 · 低</option></select></div></div>
+        <div class="field"><label data-i18n="sre.status">状态</label><div class="select-wrap"><select id="tkStatus"><option value="open">open</option><option value="in_progress">in_progress</option><option value="resolved">resolved</option><option value="closed">closed</option></select></div></div>
+      </div>
+      <div class="field"><label data-i18n="sre.assignee">指派给</label><input type="text" id="tkAssignee"></div>
+      <div class="field"><label data-i18n="sre.description">描述</label><textarea id="tkDesc" rows="3" style="resize:vertical;min-height:60px"></textarea></div>
+      <div id="tkComments"></div>
+      <div class="field" id="tkCommentField" style="display:none"><label data-i18n="sre.add_comment">添加评论</label><div style="display:flex;gap:6px"><input type="text" id="tkCommentInput" style="flex:1"><button class="btn sm" id="tkCommentBtn" data-i18n="sre.send">发送</button></div></div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="tkSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
+</div>
+
+<!-- ===== AI 设置弹窗 ===== -->
+<div class="mask" id="aiConfigMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3 data-i18n="sre.ai_settings">AI 设置</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span data-i18n="sre.ai_enable">启用 AI Provider（OpenAI 兼容）</span></label>
+      <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions"></div>
+      <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sre.ai_model">模型</label><input type="text" id="aiModel" placeholder="gpt-4o-mini"></div>
+        <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
+      </div>
+      <div class="hint" data-i18n="sre.ai_hint2">兼容任意 OpenAI 格式 chat/completions 端点（含本地 Ollama / vLLM）。不启用时自动使用内置启发式引擎，开箱即用。</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
   </div>
 </div>
 

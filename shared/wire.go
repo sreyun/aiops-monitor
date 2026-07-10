@@ -69,6 +69,22 @@ type Sample struct {
 	Metrics
 }
 
+// LogLine is one collected log line from an agent's log sources.
+type LogLine struct {
+	Ts      int64  `json:"ts"`
+	Source  string `json:"source"`  // file path / "journald" / "docker:<name>"
+	Level   string `json:"level"`   // error|warn|info|debug
+	Message string `json:"message"`
+}
+
+// LogBatch is a batch of collected log lines POSTed by an agent. The agent
+// authenticates via the X-Agent-Fingerprint header (like the terminal + forward
+// channels), so no credential travels in the body.
+type LogBatch struct {
+	HostID string    `json:"host_id"`
+	Lines  []LogLine `json:"lines"`
+}
+
 // Event is a discrete signal emitted by a plugin — this is the channel the
 // Python plugin / AI / automation layer uses to raise findings (anomalies,
 // service-down, predictions, remediation results...).

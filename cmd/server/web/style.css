@@ -253,6 +253,24 @@ body{
 }
 .nav-item.active .nav-count{ background:var(--accent); color:#fff; }
 
+/* Nightingale-style grouped navigation: category headers + collapsible sections */
+.nav-group{margin-top:11px; display:flex; flex-direction:column; gap:2px}
+.nav-group-label{
+  display:flex; align-items:center; gap:6px; width:100%; text-align:left;
+  padding:6px 12px 5px; background:none; border:none; cursor:pointer;
+  color:var(--muted2); font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+  transition:color var(--transition-fast); user-select:none;
+}
+.nav-group-label:hover{color:var(--muted)}
+.nav-group-label .nav-caret{width:13px; height:13px; margin-left:auto; opacity:.65; transition:transform .2s}
+.nav-group.collapsed .nav-caret{transform:rotate(-90deg)}
+.nav-group-items{display:flex; flex-direction:column; gap:2px}
+.nav-group.collapsed .nav-group-items{display:none}
+/* Icon-only sidebar mode: drop category labels, keep item icons with a divider */
+.app.collapsed .nav-group-label{display:none}
+.app.collapsed .nav-group{margin-top:6px; padding-top:6px; border-top:1px solid var(--line)}
+.app.collapsed .nav-group.collapsed .nav-group-items{display:flex} /* never hide items when only the label is hidden */
+
 .side-actions{margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:14px}
 .btn.block{width:100%; justify-content:center}
 .side-status{display:flex; flex-direction:column; align-items:center; gap:8px; padding-top:12px; border-top:1px solid var(--line); margin-top:6px}
@@ -1745,6 +1763,73 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 
 /* 转发操作按钮组 */
 .fwd-actions{display:flex; gap:4px; flex:none; margin-left:auto}
+
+/* ============================================================
+   SRE 中枢：事件 / 自动修复 / SLO / 工单
+   ============================================================ */
+.sre-panel{display:none}
+.sre-panel.active{display:block}
+.sre-toolbar{display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap}
+.sre-toolbar .hint{flex:1; min-width:200px; margin-top:0}
+.sre-list{display:flex; flex-direction:column; gap:6px}
+.sre-row{display:flex; align-items:center; gap:12px; padding:11px 14px; border-radius:var(--r-sm);
+  border:1px solid var(--line); background:var(--panel); cursor:pointer;
+  transition:border-color var(--transition-fast), background var(--transition-fast)}
+.sre-row:hover{border-color:var(--line2); background:var(--panel2)}
+.sre-row-main{flex:1; min-width:0}
+.sre-row-title{font-size:13px; font-weight:600; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sre-row-sub{font-size:11px; color:var(--muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sre-meta{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px}
+#srePanel-remediation .subhead:first-of-type{margin-top:4px}
+/* 事件时间线 */
+.timeline{display:flex; flex-direction:column; padding-left:2px}
+.tl-item{display:flex; gap:10px; padding:0 0 12px 0; position:relative}
+.tl-item:not(:last-child)::before{content:""; position:absolute; left:4px; top:12px; bottom:0; width:1px; background:var(--line2)}
+.tl-dot{width:9px; height:9px; border-radius:50%; background:var(--accent); flex:none; margin-top:3px; z-index:1; box-shadow:0 0 0 3px var(--bg)}
+.tl-dot.crit{background:var(--crit)} .tl-dot.warn{background:var(--warn)} .tl-dot.info{background:var(--info)}
+.tl-body{flex:1; min-width:0}
+.tl-head{font-size:12px; color:var(--txt2)}
+.tl-time{color:var(--muted2); font-size:10.5px}
+.tl-actor{color:var(--muted)}
+.tl-text{font-size:12px; color:var(--muted); margin-top:2px; word-break:break-word}
+/* SLO 错误预算条 */
+.slo-budget{margin:2px 0 4px}
+.slo-budget-bar{height:6px; border-radius:3px; background:var(--panel3); overflow:hidden}
+.slo-budget-fill{height:100%; border-radius:3px; transition:width .3s}
+.slo-budget-fill.ok{background:var(--ok)} .slo-budget-fill.warn{background:var(--warn)} .slo-budget-fill.crit{background:var(--crit)}
+.slo-budget-txt{font-size:11px; color:var(--muted); margin-top:5px}
+/* 告警类型多选 chip */
+.chip-multi{display:flex; flex-wrap:wrap; gap:6px}
+.chip-check{display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--txt2);
+  background:var(--panel2); border:1px solid var(--line2); border-radius:999px; padding:3px 10px; cursor:pointer}
+.chip-check input{width:14px; height:14px; accent-color:var(--accent)}
+/* 工单评论 */
+.tk-comment{background:var(--panel2); border:1px solid var(--line); border-radius:var(--r-xs); padding:8px 10px; margin-bottom:6px; font-size:12px}
+.tk-c-author{font-weight:600; color:var(--txt2)}
+.tk-c-time{color:var(--muted2); font-size:10.5px; margin-left:6px}
+.badge.info{background:var(--info-soft); color:var(--info-txt)}
+.tl-text{white-space:pre-wrap}
+/* 日志检索 */
+.log-results{display:flex; flex-direction:column; gap:1px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px}
+.log-line{display:flex; align-items:baseline; gap:10px; padding:4px 9px; border-radius:var(--r-xs); background:var(--panel); border-left:2px solid var(--line2)}
+.log-line:hover{background:var(--panel2)}
+.log-line.crit{border-left-color:var(--crit)}
+.log-line.warn{border-left-color:var(--warn)}
+.log-ts{color:var(--muted2); flex:none; font-size:11px}
+.log-lvl{flex:none; width:44px; font-size:10px; text-transform:uppercase; font-weight:600}
+.log-lvl.crit{color:var(--crit-txt)} .log-lvl.warn{color:var(--warn-txt)} .log-lvl.info{color:var(--muted)}
+.log-host{flex:none; color:var(--accent-txt); font-size:11px}
+.log-msg{flex:1; min-width:0; color:var(--txt2); word-break:break-all; white-space:pre-wrap}
+/* AI 巡检报告 */
+.ai-report{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 14px; margin-bottom:8px}
+.ai-report-head{display:flex; align-items:center; gap:8px; margin-bottom:8px}
+.ai-report-trigger{font-size:11px; color:var(--muted)}
+.ai-summary{font-size:13px; color:var(--txt); line-height:1.65; white-space:pre-wrap; margin-bottom:8px}
+.ai-findings{display:flex; flex-direction:column}
+.ai-finding{display:flex; gap:8px; align-items:baseline; padding:6px 0; border-top:1px solid var(--line)}
+.ai-f-body{flex:1; min-width:0}
+.ai-f-title{font-size:12px; color:var(--txt2)}
+.ai-f-detail{font-size:11px; color:var(--muted); margin-top:2px}
 
 /* 图标按钮（转发操作栏专用） */
 .icon-btn{

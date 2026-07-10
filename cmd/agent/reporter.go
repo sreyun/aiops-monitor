@@ -253,6 +253,8 @@ type Agent struct {
 	identity       shared.Report // template with host fields pre-filled (Token is per-target)
 	httpc          *http.Client  // used for non-report HTTP (e.g. plugin downloads)
 
+	logPaths      []string // log files to tail and forward (empty = collector disabled)
+
 	mu            sync.Mutex
 	latestCustom  map[string]float64
 	pendingEvents []shared.Event
@@ -335,6 +337,11 @@ func (a *Agent) Run() {
 	// long-polls for pending port forwarding sessions.
 	for _, t := range a.targets {
 		go a.runForwardChannelFor(t)
+	}
+
+	// Start one log collector per target (no-op when no log paths are configured).
+	for _, t := range a.targets {
+		go a.runLogCollectorFor(t)
 	}
 
 	// base-metric report loop, higher frequency.

@@ -83,6 +83,14 @@ func NewStore() *Store {
 	return &Store{hosts: make(map[string]*Host), deleted: make(map[string]int64), lastEvent: make(map[string]int64), alertStates: make(map[string]string)}
 }
 
+// MarkDirty flags the store so the next AutoSave persists. Used by SRE managers
+// (incidents / tickets) whose state lives in the DB snapshot but not the Store.
+func (s *Store) MarkDirty() {
+	s.mu.Lock()
+	s.dirty = true
+	s.mu.Unlock()
+}
+
 // GetHost returns a shallow copy of one host by id (for fingerprint verification).
 func (s *Store) GetHost(id string) (*Host, bool) {
 	s.mu.RLock()

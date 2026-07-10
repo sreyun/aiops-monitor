@@ -49,17 +49,27 @@ type dbSnapshot struct {
 	Deleted     map[string]int64     `json:"deleted"`
 	Sessions    map[string]dbSession `json:"sessions"`
 	AlertStates map[string]string    `json:"alert_states"`
+	Incidents   []Incident           `json:"incidents,omitempty"`
+	Tickets     []Ticket             `json:"tickets,omitempty"`
 }
 
 // DB binds the snapshot file to the live Store and Auth state.
 type DB struct {
-	path  string
-	store *Store
-	auth  *Auth
+	path      string
+	store     *Store
+	auth      *Auth
+	incidents *incidentManager // SRE state (set after server construction; nil-safe)
+	tickets   *ticketManager
 }
 
 func NewDB(path string, store *Store, auth *Auth) *DB {
 	return &DB{path: path, store: store, auth: auth}
+}
+
+// BindSRE wires the incident + ticket managers so their state is persisted.
+func (d *DB) BindSRE(inc *incidentManager, tk *ticketManager) {
+	d.incidents = inc
+	d.tickets = tk
 }
 
 // dbPathFor places the database next to the server config file.
@@ -112,6 +122,12 @@ func (d *DB) Load() {
 	s.mu.Unlock()
 
 	d.auth.importSessions(snap.Sessions)
+	if d.incidents != nil {
+		d.incidents.Import(snap.Incidents)
+	}
+	if d.tickets != nil {
+		d.tickets.Import(snap.Tickets)
+	}
 	slog.Info(Tz("db.restored"),
 		"hosts", len(snap.Hosts),
 		"events", len(snap.Events),
@@ -194,6 +210,12 @@ func (d *DB) export() dbSnapshot {
 	}
 	s.mu.RUnlock()
 	snap.Sessions = d.auth.exportSessions()
+	if d.incidents != nil {
+		snap.Incidents = d.incidents.Export()
+	}
+	if d.tickets != nil {
+		snap.Tickets = d.tickets.Export()
+	}
 	return snap
 }
 

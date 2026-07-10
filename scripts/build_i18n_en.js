@@ -68,7 +68,12 @@ const MANUAL_EN = {
   "section.resource_heatmap": "Resource TOP10 Ranking",
   "section.realtime_top10": "Realtime TOP10",
   "profile.account_info": "Account Info",
-  "ui.edit_forward": "Edit Forward"
+  "ui.edit_forward": "Edit Forward",
+  // 个人信息四 Tab 标签
+  "profile.tab_info": "Profile",
+  "profile.tab_password": "Password",
+  "profile.tab_mfa": "MFA",
+  "profile.tab_users": "Users"
 };
 
 // Normalize: drop invented, rename ui.by_category -> filter.by_category
