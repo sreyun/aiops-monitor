@@ -429,6 +429,10 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .badge.critical{ background:var(--crit-soft); color:var(--crit-txt); border:1px solid var(--crit-border) }
 .badge.warning{ background:var(--warn-soft); color:var(--warn-txt); border:1px solid var(--warn-border) }
 .badge.info{ background:var(--info-soft); color:var(--info-txt); border:1px solid var(--info-border) }
+/* Execution status variants (used by playbook exec results + history rows). */
+.badge.ok{ background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border) }
+.badge.crit{ background:var(--crit-soft); color:var(--crit-txt); border:1px solid var(--crit-border) }
+.badge.warn{ background:var(--warn-soft); color:var(--warn-txt); border:1px solid var(--warn-border) }
 /* 告警状态标签与操作按钮 */
 .badge.status-badge{font-size:10px; padding:1px 7px; border-radius:4px; margin-left:-2px}
 .badge.status-ack{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
@@ -1621,13 +1625,25 @@ body[data-role="viewer"] #installBtn{display:none !important}
 .ubtn-del{color:var(--crit-txt)}
 
 /* ---------- 自动化运维 ---------- */
-.pb-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:14px 16px; display:flex; flex-direction:column; gap:8px}
-.pb-card:hover{border-color:var(--line2)}
-.pb-head{display:flex; justify-content:space-between; align-items:flex-start; gap:12px}
-.pb-head strong{font-size:14px}
-.pb-desc{font-size:12px; color:var(--muted2); margin-left:8px}
+/* Playbook cards laid out as a responsive grid (matches the forward-grid pattern)
+   for a cleaner, more scannable automation view than a full-width stack. */
+#playbookList{display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; align-items:stretch}
+.pb-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:14px 16px;
+  display:flex; flex-direction:column; gap:11px; transition:border-color var(--transition-fast), background var(--transition-fast)}
+.pb-card:hover{border-color:var(--hover-border); background:var(--panel2)}
+.pb-card-top{display:flex; justify-content:space-between; align-items:flex-start; gap:10px}
+.pb-card-title{min-width:0; display:flex; flex-direction:column; gap:3px}
+.pb-card-title strong{font-size:14.5px; font-weight:600; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pb-desc{font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pb-desc-empty{color:var(--muted2); font-style:italic}
+.pb-sched-badge{flex:none; font-size:11px; font-weight:500; color:var(--accent-txt); background:var(--accent-soft);
+  padding:2px 9px; border-radius:999px; white-space:nowrap; line-height:1.7}
+.pb-card-foot{display:flex; align-items:center; justify-content:space-between; gap:10px;
+  border-top:1px solid var(--line); padding-top:11px; margin-top:auto; flex-wrap:wrap}
+.pb-pills{display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:0}
+.pb-pill{font-size:11px; color:var(--muted); background:var(--panel3); border:1px solid var(--line); padding:2px 8px; border-radius:999px; white-space:nowrap}
+.pb-pill-id{color:var(--muted2); background:transparent; border-color:transparent; padding-left:0}
 .pb-actions{display:flex; gap:6px; flex:none}
-.pb-meta{display:flex; gap:8px; align-items:center; font-size:12px}
 .pb-step{background:var(--panel2); border:1px solid var(--line); border-radius:var(--r-xs); padding:10px 12px; display:flex; flex-direction:column; gap:8px}
 .pb-step .grid2{gap:10px}
 /* Multi-line command editor (replaces the old single-line input so long / multi-line
@@ -1638,8 +1654,11 @@ body[data-role="viewer"] #installBtn{display:none !important}
 .pb-step textarea.pb-step-cmd::placeholder{color:var(--muted2)}
 /* Wider playbook editor gives multi-line commands and the schedule fields room. */
 .modal.modal-lg{max-width:880px}
-/* Timed-trigger badge on the playbook card. */
-.pb-meta .tag.sched{color:var(--accent-txt); background:var(--accent-soft); border-color:transparent}
+/* Playbook empty-state placeholder. */
+.pb-empty{display:flex; flex-direction:column; align-items:center; gap:6px}
+.pb-empty-icon{font-size:32px; line-height:1; color:var(--muted2); opacity:.7; margin-bottom:4px}
+.pb-empty-title{font-size:15px; font-weight:600; color:var(--txt2)}
+.pb-empty-sub{font-size:13px; color:var(--muted); max-width:440px; line-height:1.6}
 
 /* ---------- 执行结果 ---------- */
 .exec-meta{font-size:12px; color:var(--muted2); margin-bottom:12px; display:flex; gap:16px; flex-wrap:wrap}

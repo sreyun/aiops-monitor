@@ -5079,23 +5079,26 @@ function renderPlaybooks(pbs) {
   list.innerHTML = pbs.map(pb => {
     const stepCount = (pb.steps || []).length;
     const targets = [...new Set((pb.steps || []).map(s => s.target))];
+    const sched = pb.schedule && pb.schedule.enabled;
     return `<div class="pb-card" data-id="${esc(pb.id)}">
-      <div class="pb-head">
-        <div>
+      <div class="pb-card-top">
+        <div class="pb-card-title">
           <strong>${esc(pb.name)}</strong>
-          ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : ""}
+          ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : `<span class="pb-desc pb-desc-empty">暂无描述</span>`}
+        </div>
+        ${sched ? `<span class="pb-sched-badge" title="定时触发">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
+      </div>
+      <div class="pb-card-foot">
+        <div class="pb-pills">
+          <span class="pb-pill">${stepCount} 步骤</span>
+          <span class="pb-pill">${targets.length} 目标</span>
+          <span class="pb-pill pb-pill-id mono">${esc(pb.id)}</span>
         </div>
         <div class="pb-actions">
-          <button class="btn primary sm" data-pbact="exec">${I18N.t("ui.execute")}</button>
+          <button class="btn primary sm" data-pbact="exec">▶ ${I18N.t("ui.execute")}</button>
           <button class="btn sm" data-pbact="edit">${I18N.t("ui.edit")}</button>
           <button class="btn danger sm" data-pbact="del">${I18N.t("ui.delete")}</button>
         </div>
-      </div>
-      <div class="pb-meta">
-        <span class="tag">${stepCount} 步</span>
-        <span class="tag">${targets.length} 目标</span>
-        ${pb.schedule && pb.schedule.enabled ? `<span class="tag sched">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
-        <span class="mono" style="color:var(--muted)">${esc(pb.id)}</span>
       </div>
     </div>`;
   }).join("");

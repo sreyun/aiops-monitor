@@ -323,9 +323,11 @@
             <button class="btn primary" id="addPlaybookBtn">+ 新建剧本</button>
           </div>
         </div>
-        <div id="playbookList" style="display:flex; flex-direction:column; gap:10px"></div>
-        <div class="empty" id="playbookEmpty">
-          还没有自动化剧本。点「新建剧本」创建一个批量执行流程——选择目标主机、编写命令步骤、一键并行执行。
+        <div id="playbookList"></div>
+        <div class="empty pb-empty" id="playbookEmpty">
+          <div class="pb-empty-icon">⚙</div>
+          <div class="pb-empty-title">还没有自动化剧本</div>
+          <div class="pb-empty-sub">点「+ 新建剧本」创建批量执行流程——选择目标主机、编写命令步骤、可选设置定时触发，一键并行下发执行。</div>
         </div>
       </section>
 
