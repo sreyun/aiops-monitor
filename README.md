@@ -4,7 +4,7 @@
 
 **轻量级主机监控运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本
 
-[![Version](https://img.shields.io/badge/Version-v5.2.7-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v5.3.0-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
@@ -15,7 +15,7 @@
 
 </div>
 
-> 单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。内置交互式趋势图、自定义拨测、远程终端（免开端口）、自动化剧本编排、多用户 RBAC、MFA 两步验证、内嵌持久化、PWA 安装。
+> 单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。内置交互式趋势图、自定义拨测、远程终端（免开端口 + 二次认证）、自动化剧本编排、多用户 RBAC、MFA 两步验证、内嵌持久化、PWA 安装、端口转发与 HTTP 代理、i18n 国际化（中/英/繁中）。
 
 ## 目录
 
@@ -35,7 +35,6 @@
 - [安全机制](#安全机制)
 - [跨网络部署](#跨网络部署)
 - [FAQ / 故障排查](#faq--故障排查)
-- [项目目录结构](#项目目录结构)
 - [技术栈与架构](#技术栈与架构)
 - [性能与规模](#性能与规模)
 - [API 参考](#api-参考)
@@ -106,7 +105,7 @@ docker compose up -d
 | **GPU 监控** | NVIDIA（`nvidia-smi`）、AMD（Linux sysfs）、Apple（macOS `ioreg`），best-effort + 缓存 |
 | **交互式趋势图** | 纯 Canvas，悬停十字线 + 数值气泡、框选放大、双击还原、放大预览；渐变填充、统一时间跨度控件（1h~30天）、水平图例 |
 | **自定义拨测** | HTTP（状态码/延时/TLS 证书天数）/ TCP / Ping（丢包率/RTT）/ 进程存活；历史曲线回看 |
-| **远程终端** | 浏览器全 TTY，经 Agent 反向连接（免开端口）；多标签、会话录制回放、只读旁观、命令审计 |
+| **远程终端** | 浏览器全 TTY，经 Agent 反向连接（免开端口）；多标签、会话录制回放、只读旁观、命令审计、二次认证 |
 | **自动化剧本** | 多步骤编排 + 按 全部/分类/系统/主机 选目标 → 批量并行执行 → 实时输出 + 历史报告 |
 | **告警推送** | 飞书 / 钉钉 Webhook + 邮件 SMTP，触发/恢复各推一次，不刷屏 |
 | **多用户 RBAC** | admin / operator / viewer 三角色，路由级权限拦截，用户管理界面 |
@@ -122,6 +121,8 @@ docker compose up -d
 | **端口转发（TCP）** | 经 Agent 隧道将远端主机的 TCP 端口映射到服务端本地端口，支持持久规则 + 启停/编辑/复制 |
 | **HTTP 反向代理** | 无状态代理：`/proxy/{hostID}/{port}/{path}` 直通目标主机 Web 服务，支持 WebSocket 升级 |
 | **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
+| **告警阈值分级** | 保守 / 标准 / 宽松三档预设，面板一键切换，适配不同部署场景 |
+| **i18n 国际化** | 中文简体 / English / 中文繁体，全链路覆盖前端面板与后端 API |
 
 ---
 
@@ -736,48 +737,6 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 
 ---
 
-## 项目目录结构
-
-```
-aiops-monitor/
-├── cmd/                    # Go 源代码
-│   ├── server/            #   服务端（API + WebSocket + 告警 + 终端）
-│   │   └── web/           #     前端静态资源（//go:embed 嵌入）
-│   ├── agent/             #   Agent（采集器 + 上报 + 终端 + 插件）
-│   └── ...
-├── shared/                # 共享类型定义（通信协议层）
-├── vendor/                # Go 依赖（go-qrcode）
-├── plugins/               # Python 插件（进程监控/服务探活/AI 异常检测）
-├── docker/                # Docker 配置
-│   ├── Dockerfile         #   多阶段构建（server + agent）
-│   └── nginx/             #   nginx 反代配置参考（未来分离时可用）
-│       └── nginx-frontend.conf
-├── deploy/                # 部署示例
-│   └── nginx-aiops.conf   #   Nginx 反向代理示例（SSL/HTTPS）
-├── generated/             # 自动生成的文件（.gitignore 忽略内容）
-│   ├── reports/           #   检测报告、覆盖率报告
-│   ├── logs/              #   运行日志
-│   └── test-output/      #   测试输出
-├── bin/                   # 预编译二进制（.gitignore 忽略）
-├── dist/                  # 交叉编译分发产物（.gitignore 忽略）
-├── docker-compose.yml     # 根级 Docker Compose 编排
-├── .env.example           # 环境变量模板
-├── .dockerignore           # Docker 构建上下文排除项
-├── .gitignore
-├── go.mod / go.sum
-├── Dockerfile             # （已迁移至 docker/）
-├── README.md / README_EN.md
-├── INSTALL.md
-└── config.example.json    # Agent 配置模板
-```
-
-> **目录说明**：
-> - `docker/` — 所有 Docker 相关配置统一存放，支持独立构建部署
-> - `generated/` — 检测报告、日志、测试输出集中管理，已加入 `.gitignore`
-> - `cmd/server/web/` — 前端 SPA 源码（原生 JS，未来可迁移至 React/Vue）
-
----
-
 ## 技术栈与架构
 
 ### 技术选型
@@ -1043,6 +1002,11 @@ aiops-monitor/
 - [x] 全局强制 MFA 策略 + 浅色主题
 - [x] 终端文件传输（ZMODEM/lrzsz）+ 终端悬浮卡片最小化
 - [x] 资源热力图仪表盘 + 全链路 i18n 国际化（中/英/繁中）
+- [x] 终端二次认证：访问终端前需再次验证密码或 MFA 动态口令
+- [x] 安全协议确认流程：终端/剧本使用前需阅读并同意安全协议
+- [x] 告警阈值三档预设：保守 / 标准 / 宽松，一键切换适配不同场景
+- [x] 管理员密码重置 CLI 子命令 + 环境变量覆盖配置（`AIOPS_*`）
+- [x] TCP 转发默认监听 127.0.0.1 + 可配置监听地址与端口范围
 
 ### 进行中 / 计划中
 
@@ -1054,6 +1018,19 @@ aiops-monitor/
 ---
 
 ## 更新日志
+
+<details>
+<summary>v5.3.0 — 终端二次认证 · 安全协议 · 告警阈值分级</summary>
+
+- 终端二次认证：访问终端前需再次验证密码或 MFA 动态口令，提升敏感操作安全性
+- 安全协议确认流程：首次使用终端/剧本需阅读并同意安全协议，记录同意时间戳
+- 告警阈值三档预设：保守/标准/宽松，面板一键切换，适配不同部署场景
+- 管理员密码重置 CLI 子命令（`aiops-server reset-password`）
+- 环境变量覆盖配置：`AIOPS_FORWARD_LISTEN`、`AIOPS_TERMINAL_DISABLED` 等 8 个变量
+- TCP 转发默认监听地址改为 `127.0.0.1`（提升安全性），Docker 部署通过环境变量设为 `0.0.0.0`
+- i18n 国际化完善：补齐 en/zh-TW 缺失翻译，前端字典新增补充
+- 多项 UI/UX 修复与样式优化
+</details>
 
 <details>
 <summary>v5.2.7 — Windows Agent 卸载修复</summary>
