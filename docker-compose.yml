@@ -58,8 +58,8 @@ services:
       - "-storageDataPath=/vmdata"
       - "-retentionPeriod=36"        # 指标保留 12 个月，可按需调整
       - "-httpListenAddr=:8428"
-    ports:
-      - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
+    #ports:
+    #  - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
     volumes:
       - ./vm-data:/vmdata
     restart: unless-stopped
@@ -74,7 +74,7 @@ services:
       - POSTGRES_DB=aiops
       - TZ=Asia/Shanghai
     volumes:
-      - ./pg-data:/var/lib/postgresql/data
+      - ./pg-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
       interval: 10s
