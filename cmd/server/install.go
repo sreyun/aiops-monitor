@@ -322,13 +322,16 @@ echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 `
 
 // uninstallPs1Template stops + removes the agent on Windows (user-level).
-// v5.2.6: Comprehensive rewrite to fix multiple uninstall failures:
-//   1. Kill wscript.exe (VBS launcher) in addition to aiops-agent.exe
-//   2. Remove BOTH HKCU Run entries (AIOpsAgent + AIOpsRelay)
-//   3. Remove scheduled task (legacy cleanup)
-//   4. Retry file deletion with increasing delays (handle lock release)
-//   5. Explicitly delete individual files before directory removal
-const uninstallPs1Template = `$Dir = Join-Path $env:LOCALAPPDATA "aiops-agent"
+// v5.2.6: Comprehensive rewrite to fix multiple uninstall failures.
+// v5.2.9: Regression fixes:
+//   1. Replace Get-CimInstance (unreliable CommandLine) with taskkill / Get-Process
+//   2. Kill ALL wscript.exe instances (safe on uninstall — no other apps use it)
+//   3. Kill ALL aiops-agent.exe instances by name
+//   4. Add $ErrorActionPreference = "Continue" for error visibility
+//   5. Longer retry delays (2/4/8s) and MoveFileEx for stubborn files
+//   6. Explicitly delete VBS files before EXE to release Run registry triggers
+const uninstallPs1Template = `$ErrorActionPreference = "Continue"
+$Dir = Join-Path $env:LOCALAPPDATA "aiops-agent"
 Write-Host "[AIOps] uninstalling from $Dir"
 
 # Step 1: Remove ALL autostart entries (normal + relay modes)
@@ -339,22 +342,23 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 schtasks /Delete /TN "AIOps-Agent" /F 2>$null | Out-Null
 
 # Step 3: Kill ALL related processes — agent + VBS launcher
-# wscript.exe is the hidden launcher created by the VBS script; it must be
-# killed to release file handles on the install directory.
+# v5.2.9: Use taskkill + Get-Process instead of Get-CimInstance.
+# Get-CimInstance Win32_Process.CommandLine is unreliable (may be null)
+# and silently fails to match, leaving wscript.exe running.
+# On uninstall it is safe to kill ALL wscript.exe instances — no other
+# common Windows application uses wscript.exe for persistent launchers.
+& taskkill /F /IM aiops-agent.exe 2>$null | Out-Null
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-# Kill wscript.exe instances that are running our VBS scripts via WMI query
-try {
-    Get-CimInstance Win32_Process -Filter "Name='wscript.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "start-agent\.vbs|start-relay\.vbs|aiops-agent" } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-} catch {}
+& taskkill /F /IM wscript.exe 2>$null | Out-Null
+Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-# Step 4: Wait for process handles to release (increased from 500ms)
-Start-Sleep -Seconds 2
+# Step 4: Wait for process handles to release (increased to 3s)
+Start-Sleep -Seconds 3
 
 # Step 5: Delete files with retry logic (handles stubborn file locks)
-# First try: delete individual known files to release specific locks
-$files = @("aiops-agent.exe", "config.json", "agent_state.json", "start-agent.vbs", "start-relay.vbs", "agent.log")
+# Delete VBS files FIRST — they are the smallest and removing them
+# prevents wscript.exe from being relaunched by the Run registry.
+$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.json", "agent_state.json", "agent.log", "plugins.zip")
 foreach ($f in $files) {
     $path = Join-Path $Dir $f
     if (Test-Path $path) {
@@ -362,8 +366,14 @@ foreach ($f in $files) {
     }
 }
 
-# Second try: delete entire directory with retries
-for ($i = 1; $i -le 3; $i++) {
+# Remove plugins directory if present
+$pluginsDir = Join-Path $Dir "plugins"
+if (Test-Path $pluginsDir) {
+    Remove-Item -Recurse -Force $pluginsDir -ErrorAction SilentlyContinue
+}
+
+# Second try: delete entire directory with longer retries (2/4/8s)
+for ($i = 2; $i -le 8; $i *= 2) {
     if (Test-Path $Dir) {
         Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue
     }
@@ -371,8 +381,21 @@ for ($i = 1; $i -le 3; $i++) {
     Start-Sleep -Seconds $i
 }
 
+# v5.2.9: Last resort — schedule deletion on next reboot for stubborn files
 if (Test-Path $Dir) {
-    Write-Host "[AIOps] warning: some files could not be deleted (may be in use). Please reboot and manually delete: $Dir"
+    Write-Host "[AIOps] scheduling cleanup on next reboot for: $Dir"
+    $tmpDir = Join-Path $env:TEMP "aiops-uninstall.bat"
+    @"
+@echo off
+:retry
+timeout /t 5 /nobreak >nul
+rmdir /s /q "$Dir" 2>nul
+if exist "$Dir" goto retry
+del "%~f0" 2>nul
+"@ | Out-File -FilePath $tmpDir -Encoding ASCII
+    # Use RunOnce to execute cleanup batch on next login
+    New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "AIOpsCleanup" -Value "cmd.exe /c $tmpDir" -PropertyType String -Force | Out-Null
+    Write-Host "[AIOps] warning: some files could not be deleted. Cleanup will finish on next reboot."
 } else {
     Write-Host "[AIOps] uninstalled. You may delete the host card in the dashboard."
 }

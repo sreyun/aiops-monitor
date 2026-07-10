@@ -883,10 +883,28 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// construct raw HTTP request bytes
+	// ====== v5.2.9: CRITICAL FIX — request construction order ======
+	// Previously the body was io.Copy'd into reqBuf BEFORE the Content-Length
+	// header and final CRLF, which meant the target server would see body bytes
+	// interleaved with headers — a protocol violation causing "bad request"
+	// errors or silently dropped requests.
+	//
+	// Fix: read body into a separate buffer first, then construct the request
+	// in the correct order: request-line → headers (including Content-Length)
+	// → CRLF → body.
 	path := "/" + r.PathValue("path")
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
+
+	// P0: read body first into a separate buffer (prevent OOM with limit)
+	var bodyBytes []byte
+	if r.Body != nil {
+		limitedBody := io.LimitReader(r.Body, maxForwardBodySize)
+		bodyBytes, _ = io.ReadAll(limitedBody)
+		s.forward.stats.addBytes(int64(len(bodyBytes)))
+	}
+
 	var reqBuf bytes.Buffer
 	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, path)
 	// set Host header to the target
@@ -896,9 +914,13 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// open, causing the agent's tx goroutine (which reads from the conn as a POST
 	// body) to hang indefinitely waiting for EOF.
 	fmt.Fprintf(&reqBuf, "Connection: close\r\n")
-	// P2: copy all headers EXCEPT hop-by-hop and Host (v5.2.5: skip Host to avoid duplicate)
+	// v5.2.9: add Content-Length BEFORE the body (protocol-correct order).
+	// Also skip the original Content-Length header to avoid duplicates.
+	fmt.Fprintf(&reqBuf, "Content-Length: %d\r\n", len(bodyBytes))
+	// P2: copy all headers EXCEPT hop-by-hop, Host, and Content-Length
+	// (v5.2.5: skip Host; v5.2.9: skip Content-Length — we already set it)
 	for k, vs := range r.Header {
-		if hopByHopHeaders[k] || strings.EqualFold(k, "Host") {
+		if hopByHopHeaders[k] || strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") {
 			continue
 		}
 		for _, v := range vs {
@@ -909,20 +931,12 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&reqBuf, "X-Forwarded-For: %s\r\n", s.clientIP(r))
 	fmt.Fprintf(&reqBuf, "X-Forwarded-Proto: %s\r\n", schemeOf(r))
 	fmt.Fprintf(&reqBuf, "X-Real-IP: %s\r\n", s.clientIP(r))
-	// P0: copy request body with size limit (prevent OOM)
-	var bodyLen int64
-	if r.Body != nil {
-		limitedBody := io.LimitReader(r.Body, maxForwardBodySize)
-		bodyLen, _ = io.Copy(&reqBuf, limitedBody)
-		s.forward.stats.addBytes(bodyLen)
-	}
-	// v5.2.5: add Content-Length so the target knows exact body size
-	// (Transfer-Encoding: chunked was stripped as hop-by-hop, so without
-	// Content-Length the target can't determine where the body ends)
-	if bodyLen > 0 {
-		fmt.Fprintf(&reqBuf, "Content-Length: %d\r\n", bodyLen)
-	}
+	// End of headers
 	reqBuf.WriteString("\r\n")
+	// Body (after the header-body separator)
+	if len(bodyBytes) > 0 {
+		reqBuf.Write(bodyBytes)
+	}
 
 	// send the request through the tunnel in chunks.
 	// If the Agent closed the session (e.g. because it failed to connect to the
@@ -1323,15 +1337,33 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 			select {
 			case sess.toUser <- b:
 			case <-sess.done:
-				// v5.2.5: drain remaining body data to toUser after session close
-				// to prevent last-frame loss from select race
-				if n2, _ := r.Body.Read(buf); n2 > 0 {
-					b2 := make([]byte, n2)
-					copy(b2, buf[:n2])
-					s.forward.stats.addBytes(int64(n2))
-					select {
-					case sess.toUser <- b2:
-					default:
+				// v5.2.9: CRITICAL FIX — send the current chunk b BEFORE draining.
+				// Previously the chunk b was discarded when sess.done was selected,
+				// and only a new read from r.Body was drained. This caused data loss
+				// (typically the last response chunk), resulting in truncated HTTP
+				// responses → "unexpected EOF" / 502 errors.
+				//
+				// Fix: send b first (non-blocking — if toUser is full, the session
+				// is already ending and the reader will drain), then drain remaining
+				// body data.
+				select {
+				case sess.toUser <- b:
+				default:
+				}
+				// Drain remaining body data to toUser
+				for {
+					n2, err2 := r.Body.Read(buf)
+					if n2 > 0 {
+						b2 := make([]byte, n2)
+						copy(b2, buf[:n2])
+						s.forward.stats.addBytes(int64(n2))
+						select {
+						case sess.toUser <- b2:
+						default:
+						}
+					}
+					if err2 != nil {
+						break
 					}
 				}
 				return
