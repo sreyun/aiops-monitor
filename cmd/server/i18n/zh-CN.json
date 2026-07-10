@@ -305,5 +305,16 @@
   "forward.reason_host_unknown": "主机未注册或从未上报",
   "forward.reason_agent_down": "Agent 已离线 %s 分钟",
   "forward.reason_no_fingerprint": "Agent 未采集到机器指纹（无法建立转发通道）",
-  "forward.reason_channel_not_ready": "转发通道未就绪，请稍后重试"
+  "forward.reason_channel_not_ready": "转发通道未就绪，请稍后重试",
+
+  "terminal_auth.password_too_short": "终端密码至少需要 8 位字符",
+  "terminal_auth.password_weak": "终端密码必须同时包含大写字母、小写字母、数字和特殊字符",
+  "terminal_auth.not_set": "尚未设置终端密码",
+  "terminal_auth.wrong_password": "终端密码错误",
+  "terminal_auth.locked": "终端密码验证次数过多，请 5 分钟后再试",
+  "terminal_auth.terminal_verify_required": "需要验证终端密码",
+  "terminal_auth.terminal_password_not_set": "需要先设置终端密码",
+
+  "log.terminal_password_set": "设置终端密码：%s",
+  "log.terminal_verified": "终端密码验证通过：%s"
 }

@@ -282,6 +282,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal.disabled")})
 		return
 	}
+	// v5.3.0: terminal secondary verification — check before WebSocket upgrade
+	// so the frontend can show the password dialog before trying to open a WS.
+	verified, hasPassword := s.auth.isTerminalVerified(r)
+	if !verified {
+		code := "terminal_verify_required"
+		if !hasPassword {
+			code = "terminal_password_not_set"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": Tr(r, "terminal_auth."+code),
+			"code":  code,
+		})
+		return
+	}
 	ws, err := wsAccept(w, r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "terminal.ws_required")})

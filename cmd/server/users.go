@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"strings"
 )
@@ -204,6 +205,53 @@ func (cs *ConfigStore) SetUserProfile(username, displayName, email string) error
 	cs.cfg.Users[i].Email = email
 	cs.mu.Unlock()
 	return cs.save()
+}
+
+// SetTerminalPassword sets (or changes) the terminal secondary password.
+// v5.3.0: terminal password uses the same salted SHA-256 scheme as login password.
+func (cs *ConfigStore) SetTerminalPassword(username, password string) error {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return fmt.Errorf("%s", Tz("user.not_found"))
+	}
+	salt := genToken()[:16]
+	cs.cfg.Users[i].TerminalPasswordSalt = salt
+	cs.cfg.Users[i].TerminalPasswordHash = hashPassword(password, salt)
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// VerifyTerminalPassword checks the terminal secondary password.
+// Returns true if the password matches.
+func (cs *ConfigStore) VerifyTerminalPassword(username, password string) bool {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return false
+	}
+	hash := cs.cfg.Users[i].TerminalPasswordHash
+	salt := cs.cfg.Users[i].TerminalPasswordSalt
+	cs.mu.Unlock()
+	if hash == "" || salt == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(hashPassword(password, salt)), []byte(hash)) == 1
+}
+
+// HasTerminalPassword reports whether the user has set a terminal password.
+func (cs *ConfigStore) HasTerminalPassword(username string) bool {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return false
+	}
+	has := cs.cfg.Users[i].TerminalPasswordHash != ""
+	cs.mu.Unlock()
+	return has
 }
 
 // RenameUser changes a user's login name. Fails if the new name is taken.

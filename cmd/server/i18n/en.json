@@ -300,5 +300,16 @@
   "forward.reason_host_unknown": "Host not registered or never reported",
   "forward.reason_agent_down": "Agent offline for %s min",
   "forward.reason_no_fingerprint": "Agent has no machine fingerprint (forwarding channel cannot be established)",
-  "forward.reason_channel_not_ready": "Forwarding channel not ready, please retry"
+  "forward.reason_channel_not_ready": "Forwarding channel not ready, please retry",
+
+  "terminal_auth.password_too_short": "Terminal password must be at least 8 characters",
+  "terminal_auth.password_weak": "Terminal password must contain uppercase, lowercase, digit, and special character",
+  "terminal_auth.not_set": "Terminal password not set",
+  "terminal_auth.wrong_password": "Terminal password incorrect",
+  "terminal_auth.locked": "Too many terminal password attempts, please try again in 5 minutes",
+  "terminal_auth.terminal_verify_required": "Terminal password verification required",
+  "terminal_auth.terminal_password_not_set": "Terminal password must be set first",
+
+  "log.terminal_password_set": "Terminal password set: %s",
+  "log.terminal_verified": "Terminal password verified: %s"
 }

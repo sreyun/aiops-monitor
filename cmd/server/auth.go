@@ -28,6 +28,8 @@ type session struct {
 	user       string
 	expires    time.Time
 	restricted bool // true = only MFA setup/enable/logout endpoints allowed (global MFA enforcement)
+	// v5.3.0: terminal secondary verification — true once verified in this session.
+	terminalVerified bool
 }
 
 // Auth manages login sessions against the account in ConfigStore. Sessions
@@ -44,12 +46,21 @@ type Auth struct {
 
 	limMu    sync.Mutex
 	loginHit map[string][]int64 // client ip -> recent FAILED attempt unix times
+
+	// v5.3.0: terminal verification rate limiting
+	termAttemptMu sync.Mutex
+	termAttempts  map[string]int      // user -> consecutive failed terminal verify attempts
+	termLocked    map[string]time.Time // user -> locked until
 }
 
 const (
 	loginWindowSec   = 300 // sliding window for brute-force throttling
 	loginMaxFailures = 8   // max failed attempts per IP per window
 	proxyTokenTTL    = 60 * time.Second // HTTP proxy token lifetime
+
+	// v5.3.0: terminal verification rate limiting
+	termMaxAttempts = 3                // max failed terminal verify attempts
+	termLockoutSec  = 300              // lockout duration (5 minutes)
 )
 
 type proxyToken struct {
@@ -79,7 +90,7 @@ func (a *Auth) validateProxyToken(tok string) string {
 }
 
 func NewAuth(cfg *ConfigStore) *Auth {
-	return &Auth{cfg: cfg, sessions: map[string]session{}, proxyTokens: map[string]proxyToken{}, loginHit: map[string][]int64{}}
+	return &Auth{cfg: cfg, sessions: map[string]session{}, proxyTokens: map[string]proxyToken{}, loginHit: map[string][]int64{}, termAttempts: map[string]int{}, termLocked: map[string]time.Time{}}
 }
 
 // loginAllowed reports whether ip is under the failed-attempt threshold. It also
@@ -419,6 +430,78 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isTerminalVerified reports whether the current session has passed terminal
+// secondary verification. Returns false if the user has no terminal password
+// set (which means verification is not required).
+func (a *Auth) isTerminalVerified(r *http.Request) (verified bool, hasPassword bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false, false
+	}
+	name := a.userForRequest(r)
+	if name == "" {
+		return false, false
+	}
+	hasPassword = a.cfg.HasTerminalPassword(name)
+	if !hasPassword {
+		return true, false // no password set → no verification needed
+	}
+	a.mu.Lock()
+	s, ok := a.sessions[c.Value]
+	a.mu.Unlock()
+	if !ok {
+		return false, true
+	}
+	return s.terminalVerified, true
+}
+
+// markTerminalVerified marks the current session as terminal-verified.
+func (a *Auth) markTerminalVerified(r *http.Request) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	if s, ok := a.sessions[c.Value]; ok {
+		s.terminalVerified = true
+		a.sessions[c.Value] = s
+		a.dirty = true
+	}
+	a.mu.Unlock()
+}
+
+// terminalAttemptAllowed checks rate limiting for terminal password verification.
+// Returns (allowed, remaining attempts).
+func (a *Auth) terminalAttemptAllowed(user string) (bool, int) {
+	a.termAttemptMu.Lock()
+	defer a.termAttemptMu.Unlock()
+	if lockedUntil, ok := a.termLocked[user]; ok && time.Now().Before(lockedUntil) {
+		return false, 0
+	}
+	attempts := a.termAttempts[user]
+	if attempts >= termMaxAttempts {
+		a.termLocked[user] = time.Now().Add(termLockoutSec * time.Second)
+		delete(a.termAttempts, user)
+		return false, 0
+	}
+	return true, termMaxAttempts - attempts
+}
+
+// terminalAttemptFailed records a failed terminal password attempt.
+func (a *Auth) terminalAttemptFailed(user string) {
+	a.termAttemptMu.Lock()
+	a.termAttempts[user]++
+	a.termAttemptMu.Unlock()
+}
+
+// terminalAttemptReset clears the attempt counter (on success or explicit reset).
+func (a *Auth) terminalAttemptReset(user string) {
+	a.termAttemptMu.Lock()
+	delete(a.termAttempts, user)
+	delete(a.termLocked, user)
+	a.termAttemptMu.Unlock()
 }
 
 // ---- auth handlers ----

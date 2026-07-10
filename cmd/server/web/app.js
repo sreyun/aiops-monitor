@@ -1588,6 +1588,11 @@ let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
 let TERM_ACTIVE = -1;    // active tab index
 let TERM_RESIZE = null;  // window resize listener
 
+/* ---------- v5.3.0: 终端二次认证 ---------- */
+let TERM_AUTH_VERIFIED = false;    // 当前会话是否已验证终端密码
+let TERM_AUTH_CHECKING = false;    // 是否正在执行认证流程
+let TERM_AUTH_PENDING = null;      // 待处理的终端打开请求 {id, name}
+
 function openTerminal(id, name) {
   // 多会话支持：同一 hostID 可创建多个标签页，每个标签页拥有独立的 WebSocket 连接。
   // 如果已有该主机的标签页且处于 dock 收起状态，优先恢复而不是新建。
@@ -1602,10 +1607,11 @@ function openTerminal(id, name) {
     requestAnimationFrame(() => requestAnimationFrame(termRefit));
     return;
   }
-  // 统计同一主机已有标签数，生成序号标题
-  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id);
-  const tabName = sameHostTabs.length > 0 ? `${name} (${sameHostTabs.length + 1})` : name;
-  createTermTab(id, name, tabName);
+
+  // v5.3.0: 终端二次认证流程
+  if (TERM_AUTH_CHECKING) return; // 避免重复触发
+  TERM_AUTH_PENDING = { id, name };
+  checkTerminalAccess();
 }
 
 /* ---------- 终端右键菜单 ---------- */
@@ -1709,6 +1715,209 @@ function showTermContextMenu(tab, e) {
   TERM_CMENU_EL.style.left = x + "px";
   TERM_CMENU_EL.style.top = y + "px";
   TERM_CMENU_EL.classList.add("show");
+}
+
+/* ---------- v5.3.0: 终端二次认证流程 ---------- */
+const TERM_PROTOCOL_KEY = "aiops_term_protocol_agreed";
+
+// 实际执行终端打开（原 openTerminal 后半部分逻辑）
+function doOpenTerminal(id, name) {
+  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id);
+  const tabName = sameHostTabs.length > 0 ? `${name} (${sameHostTabs.length + 1})` : name;
+  createTermTab(id, name, tabName);
+}
+
+// 终端访问权限检查：协议 → 密码状态 → 验证
+async function checkTerminalAccess() {
+  if (TERM_AUTH_CHECKING) return;
+  TERM_AUTH_CHECKING = true;
+
+  try {
+    // 1. 检查协议是否已同意
+    if (!localStorage.getItem(TERM_PROTOCOL_KEY)) {
+      showTermProtocol();
+      return;
+    }
+
+    // 2. 检查是否已设置密码
+    const statusRes = await fetch("/api/user/terminal-password/status", { credentials: "include" });
+    const status = await statusRes.json().catch(() => ({}));
+
+    if (!status.has_password) {
+      // 未设置密码，弹出设置窗口
+      showTermSetPassword();
+      return;
+    }
+
+    // 3. 检查当前会话是否已验证
+    if (TERM_AUTH_VERIFIED) {
+      proceedToTerminal();
+      return;
+    }
+
+    // 需要验证密码
+    showTermVerify();
+  } catch (e) {
+    TERM_AUTH_CHECKING = false;
+    toast(I18N.t("toast.network_error"), "err");
+  }
+}
+
+// 协议同意后继续流程
+function onTermProtocolAgreed() {
+  localStorage.setItem(TERM_PROTOCOL_KEY, "1");
+  $("termProtocolMask").classList.remove("show");
+  // 继续检查密码状态
+  checkTerminalAccess();
+}
+
+// 显示协议弹窗
+function showTermProtocol() {
+  $("termProtocolAgree").checked = false;
+  $("termProtocolContinue").disabled = true;
+  $("termProtocolMask").classList.add("show");
+}
+
+// 显示密码设置弹窗
+function showTermSetPassword() {
+  $("termSetPwd").value = "";
+  $("termSetPwd2").value = "";
+  $("termSetPwdErr").textContent = "";
+  $("termSetPwdErr").style.display = "none";
+  $("termSetPwdMask").classList.add("show");
+}
+
+// 显示密码验证弹窗
+function showTermVerify() {
+  $("termVerifyPwd").value = "";
+  $("termVerifyErr").textContent = "";
+  $("termVerifyErr").style.display = "none";
+  $("termAttemptsInfo").style.display = "none";
+  $("termVerifyMask").classList.add("show");
+  setTimeout(() => { const el = $("termVerifyPwd"); if (el) el.focus(); }, 100);
+}
+
+// 密码设置/验证完成后打开终端
+function proceedToTerminal() {
+  TERM_AUTH_CHECKING = false;
+  if (!TERM_AUTH_PENDING) return;
+  const { id, name } = TERM_AUTH_PENDING;
+  TERM_AUTH_PENDING = null;
+  doOpenTerminal(id, name);
+}
+
+// 取消终端认证流程
+function cancelTermAuth() {
+  TERM_AUTH_CHECKING = false;
+  TERM_AUTH_PENDING = null;
+  $("termProtocolMask").classList.remove("show");
+  $("termSetPwdMask").classList.remove("show");
+  $("termVerifyMask").classList.remove("show");
+}
+
+// 提交设置终端密码
+async function submitTermSetPassword() {
+  const pwd = $("termSetPwd").value;
+  const pwd2 = $("termSetPwd2").value;
+  const errEl = $("termSetPwdErr");
+
+  if (!pwd || !pwd2) {
+    errEl.textContent = "请填写密码";
+    errEl.style.display = "block";
+    return;
+  }
+  if (pwd !== pwd2) {
+    errEl.textContent = I18N.t("term_auth.password_mismatch");
+    errEl.style.display = "block";
+    return;
+  }
+  if (pwd.length < 8) {
+    errEl.textContent = I18N.t("term_auth.password_too_short");
+    errEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/user/terminal-password/set", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pwd })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      TERM_AUTH_VERIFIED = true;
+      $("termSetPwdMask").classList.remove("show");
+      toast(I18N.t("term_auth.password_set_ok"), "ok");
+      proceedToTerminal();
+    } else {
+      errEl.textContent = j.error || I18N.t("toast.save_failed");
+      errEl.style.display = "block";
+    }
+  } catch (e) {
+    errEl.textContent = I18N.t("toast.network_error");
+    errEl.style.display = "block";
+  }
+}
+
+// 提交验证终端密码
+async function submitTermVerify() {
+  const pwd = $("termVerifyPwd").value;
+  const errEl = $("termVerifyErr");
+  const attemptsEl = $("termAttemptsInfo");
+
+  if (!pwd) {
+    errEl.textContent = "请输入密码";
+    errEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/user/terminal-password/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pwd })
+    });
+    const j = await r.json().catch(() => ({}));
+
+    if (r.ok) {
+      TERM_AUTH_VERIFIED = true;
+      $("termVerifyMask").classList.remove("show");
+      toast(I18N.t("term_auth.password_verified"), "ok");
+      proceedToTerminal();
+    } else {
+      if (j.locked) {
+        // 锁定状态
+        $("termVerifyMask").classList.remove("show");
+        $("termLockedMask").classList.add("show");
+        TERM_AUTH_CHECKING = false;
+        TERM_AUTH_PENDING = null;
+        return;
+      }
+      errEl.textContent = j.error || I18N.t("toast.verify_failed");
+      errEl.style.display = "block";
+      if (typeof j.remaining === "number" && j.remaining > 0) {
+        attemptsEl.textContent = I18N.t("term_auth.remaining_attempts") + j.remaining;
+        attemptsEl.style.display = "block";
+      }
+      $("termVerifyPwd").value = "";
+      $("termVerifyPwd").focus();
+    }
+  } catch (e) {
+    errEl.textContent = I18N.t("toast.network_error");
+    errEl.style.display = "block";
+  }
+}
+
+// 密码可见性切换
+function toggleTermPwdVisibility(inputId, btnId) {
+  const input = $(inputId);
+  const btn = $(btnId);
+  if (!input || !btn) return;
+  const isPassword = input.type === "password";
+  input.type = isPassword ? "text" : "password";
+  btn.querySelector("svg").innerHTML = isPassword
+    ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
 }
 
 function createTermTab(id, name, tabName) {
@@ -2436,6 +2645,67 @@ safeAddEventListener("termMinBtn", "click", () => {
 safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
 // 文件下载
 safeAddEventListener("termDownloadBtn", "click", () => startTermFileDownload());
+
+/* ---------- v5.3.0: 终端二次认证弹窗事件绑定 ---------- */
+// 协议弹窗：勾选启用继续按钮
+safeAddEventListener("termProtocolAgree", "change", function() {
+  $("termProtocolContinue").disabled = !this.checked;
+});
+// 协议弹窗：同意并继续
+safeAddEventListener("termProtocolContinue", "click", onTermProtocolAgreed);
+// 协议弹窗：关闭（取消）
+$("termProtocolMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    cancelTermAuth();
+  }
+});
+
+// 密码设置弹窗：提交
+safeAddEventListener("termSetPwdBtn", "click", submitTermSetPassword);
+// 密码设置弹窗：取消
+safeAddEventListener("termSetPwdCancel", "click", function() {
+  $("termSetPwdMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termSetPwdMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termSetPwdMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码设置弹窗：回车提交
+safeAddEventListener("termSetPwd", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+safeAddEventListener("termSetPwd2", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+// 密码设置弹窗：显示/隐藏密码
+safeAddEventListener("termSetPwdToggle", "click", function() { toggleTermPwdVisibility("termSetPwd", "termSetPwdToggle"); });
+safeAddEventListener("termSetPwd2Toggle", "click", function() { toggleTermPwdVisibility("termSetPwd2", "termSetPwd2Toggle"); });
+
+// 密码验证弹窗：提交
+safeAddEventListener("termVerifyBtn", "click", submitTermVerify);
+// 密码验证弹窗：取消
+safeAddEventListener("termVerifyCancel", "click", function() {
+  $("termVerifyMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termVerifyMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termVerifyMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码验证弹窗：回车提交
+safeAddEventListener("termVerifyPwd", "keydown", function(e) { if (e.key === "Enter") submitTermVerify(); });
+// 密码验证弹窗：显示/隐藏密码
+safeAddEventListener("termVerifyPwdToggle", "click", function() { toggleTermPwdVisibility("termVerifyPwd", "termVerifyPwdToggle"); });
+
+// 锁定弹窗：关闭
+$("termLockedMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termLockedMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
   // 同步更新当前活动 tab 的 dock 卡片状态
@@ -3590,6 +3860,8 @@ async function openProfile() {
     $("pfEmail").value = me.email || "";
     $("pfOld").value = ""; $("pfNew").value = "";
     renderMfaState(!!me.mfa_enabled);
+    // v5.3.0: 加载终端密码状态
+    loadTermPwdStatus();
     $("profileMask").classList.add("show");
   } catch (e) { toast(I18N.t("toast.read_failed2") + e, "err"); }
 }
@@ -3616,6 +3888,96 @@ async function changePassword() {
     if (r.ok) { toast(I18N.t("toast.password_changed"), "ok"); $("pfOld").value = ""; $("pfNew").value = ""; }
     else toast(j.error || I18N.t("toast.update_failed"), "err");
   } catch (e) { toast(I18N.t("toast.update_failed2") + e, "err"); }
+}
+
+/* ===================== v5.3.0: 终端密码管理（个人信息页） ===================== */
+let TERM_PWD_CHANGE_SHOWING = false;
+
+async function loadTermPwdStatus() {
+  try {
+    const r = await fetch("/api/user/terminal-password/status", { credentials: "include" });
+    const j = await r.json().catch(() => ({}));
+    const valEl = $("pfTermPwdStatusVal");
+    if (valEl) {
+      if (j.has_password) {
+        valEl.textContent = I18N.t("term_auth.password_set");
+        valEl.className = "term-pwd-status-val set";
+      } else {
+        valEl.textContent = I18N.t("term_auth.no_password_set");
+        valEl.className = "term-pwd-status-val unset";
+      }
+    }
+  } catch (e) { /* 静默失败 */ }
+}
+
+function toggleTermPwdChange() {
+  TERM_PWD_CHANGE_SHOWING = !TERM_PWD_CHANGE_SHOWING;
+  const authField = $("pfTermPwdAuthField");
+  const newField = $("pfTermPwdNewField");
+  const errEl = $("pfTermPwdErr");
+  const btn = $("pfTermPwdBtn");
+
+  if (TERM_PWD_CHANGE_SHOWING) {
+    // 显示修改表单
+    $("pfTermPwdAuth").value = "";
+    $("pfTermPwdNew").value = "";
+    if (errEl) { errEl.textContent = ""; errEl.style.display = "none"; }
+    if (authField) authField.style.display = "block";
+    if (newField) newField.style.display = "block";
+    if (btn) btn.textContent = I18N.t("ui.cancel");
+    // 根据 MFA 状态调整验证字段标签
+    const authLabel = $("pfTermPwdAuthLabel");
+    if (authLabel) {
+      authLabel.textContent = MFA_ENABLED ? I18N.t("term_auth.mfa_code") : I18N.t("term_auth.current_password");
+    }
+    $("pfTermPwdAuth").placeholder = MFA_ENABLED ? I18N.t("mfa.code_6") : "";
+    $("pfTermPwdAuth").maxLength = MFA_ENABLED ? 6 : 524288;
+  } else {
+    // 隐藏修改表单
+    if (authField) authField.style.display = "none";
+    if (newField) newField.style.display = "none";
+    if (errEl) { errEl.textContent = ""; errEl.style.display = "none"; }
+    if (btn) btn.textContent = I18N.t("term_auth.change_password_btn");
+  }
+}
+
+async function submitTermPwdChange() {
+  if (!TERM_PWD_CHANGE_SHOWING) {
+    toggleTermPwdChange();
+    return;
+  }
+  const code = $("pfTermPwdAuth").value.trim();
+  const newPwd = $("pfTermPwdNew").value.trim();
+  const errEl = $("pfTermPwdErr");
+
+  if (!code || !newPwd) {
+    if (errEl) { errEl.textContent = "请填写验证信息和新的终端密码"; errEl.style.display = "block"; }
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/user/terminal-password/set", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: newPwd, code: code })
+    });
+    const j = await r.json().catch(() => ({}));
+
+    if (r.ok) {
+      toast(I18N.t("term_auth.changed_ok"), "ok");
+      toggleTermPwdChange(); // 收起表单
+      loadTermPwdStatus();   // 刷新状态
+    } else {
+      if (j.mfa_required) {
+        // 修改时需要 MFA，但未提供
+        if (errEl) { errEl.textContent = "请输入 MFA 动态口令"; errEl.style.display = "block"; }
+        return;
+      }
+      if (errEl) { errEl.textContent = j.error || I18N.t("toast.update_failed"); errEl.style.display = "block"; }
+    }
+  } catch (e) {
+    if (errEl) { errEl.textContent = I18N.t("toast.network_error"); errEl.style.display = "block"; }
+  }
 }
 
 /* ===================== 两步验证（TOTP / Google Authenticator） ===================== */
@@ -4384,6 +4746,8 @@ document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e 
     if (mk.id === "termReplayMask") { closeReplay(); }
     if (mk.id === "termObserveMask") { closeObserveWS(); }
     if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
+    // v5.3.0: 终端认证弹窗关闭时清理状态
+    if (mk.id === "termProtocolMask" || mk.id === "termSetPwdMask" || mk.id === "termVerifyMask" || mk.id === "termLockedMask") { cancelTermAuth(); }
   }
 }));
 document.addEventListener("keydown", e => {
@@ -4512,6 +4876,7 @@ safeAddEventListener("usersList", "click", async e => {
 });
 safeAddEventListener("pfSaveBtn", "click", saveProfile);
 safeAddEventListener("pfPwdBtn", "click", changePassword);
+safeAddEventListener("pfTermPwdBtn", "click", submitTermPwdChange);
 safeAddEventListener("mfaToggleChk", "change", () => {
   const chk = $("mfaToggleChk");
   if (chk) chk.checked = MFA_ENABLED; // revert immediately; renderMfaState will update on success

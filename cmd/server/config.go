@@ -105,6 +105,10 @@ type AccountConfig struct {
 	MFASecret  string `json:"mfa_secret,omitempty"`
 	// Role is the RBAC role: admin | operator | viewer.
 	Role string `json:"role,omitempty"`
+	// Terminal secondary password (v5.3.0): hashed+salted, never returned to browser.
+	// Empty means the user has not set a terminal password yet.
+	TerminalPasswordHash string `json:"terminal_password_hash,omitempty"`
+	TerminalPasswordSalt string `json:"terminal_password_salt,omitempty"`
 }
 
 func defaultAccount() AccountConfig {

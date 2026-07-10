@@ -44,6 +44,10 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/agent/register", s.handleRegister)
 	mux.HandleFunc("POST /api/v1/agent/report", s.handleReport)
+	// terminal auth: secondary password + protocol agreement
+	mux.HandleFunc("GET /api/user/terminal-password/status", s.handleTerminalPasswordStatus)
+	mux.HandleFunc("POST /api/user/terminal-password/set", s.handleTerminalPasswordSet)
+	mux.HandleFunc("POST /api/user/terminal-password/verify", s.handleTerminalPasswordVerify)
 	// remote terminal: browser WebSocket (auth) + agent reverse streams (token)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/terminal", s.handleTerminal)
 	mux.HandleFunc("GET /api/v1/agent/terminal/wait", s.handleAgentTermWait)

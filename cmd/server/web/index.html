@@ -728,12 +728,27 @@
           <span class="mfa-track"><span class="mfa-thumb"></span></span>
         </label>
       </div>
+      <div class="subhead" data-i18n="term_auth.change_terminal_password">修改终端访问密码</div>
+      <div class="term-pwd-status" id="pfTermPwdStatus">
+        <span class="term-pwd-status-label" data-i18n="term_auth.new_terminal_password">终端访问密码：</span>
+        <span class="term-pwd-status-val unset" id="pfTermPwdStatusVal" data-i18n="term_auth.no_password_set">未设置</span>
+      </div>
+      <div class="field" id="pfTermPwdAuthField" style="display:none">
+        <label id="pfTermPwdAuthLabel" data-i18n="term_auth.current_password">当前登录密码（用于验证）</label>
+        <input type="password" id="pfTermPwdAuth" autocomplete="current-password">
+      </div>
+      <div class="field" id="pfTermPwdNewField" style="display:none">
+        <label data-i18n="term_auth.new_terminal_password">新的终端密码</label>
+        <input type="password" id="pfTermPwdNew" autocomplete="new-password">
+      </div>
+      <div class="login-err" id="pfTermPwdErr" style="display:none"></div>
     </div>
     <div class="modal-foot">
       <button class="btn danger" id="logoutBtn" data-i18n="profile.logout">退出登录</button>
       <button class="btn admin-only" id="usersBtn" data-i18n="profile.user_mgmt">用户管理</button>
       <div style="flex:1"></div>
       <button class="btn" id="pfPwdBtn" data-i18n="profile.change_password">修改密码</button>
+      <button class="btn" id="pfTermPwdBtn" data-i18n="term_auth.change_password_btn">修改终端密码</button>
       <button class="btn primary" id="pfSaveBtn" data-i18n="profile.save_profile">保存资料</button>
     </div>
   </div>
@@ -986,6 +1001,114 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="recoverBody"></div>
+  </div>
+</div>
+
+<!-- ===== 终端连接协议弹窗 ===== -->
+<div class="mask" id="termProtocolMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="term_auth.protocol_title">终端连接协议</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="term-protocol-section">
+        <h4 class="term-protocol-heading" data-i18n="term_auth.protocol_security">安全说明</h4>
+        <p class="term-protocol-text" data-i18n="term_auth.protocol_security_text">终端连接通过 Agent 反向通道加密传输，系统会记录所有操作日志用于审计。终端环境的安全性取决于目标主机自身的防护措施，请确保被控主机已采取适当的安全加固。</p>
+      </div>
+      <div class="term-protocol-section">
+        <h4 class="term-protocol-heading" data-i18n="term_auth.protocol_disclaimer">免责声明</h4>
+        <p class="term-protocol-text" data-i18n="term_auth.protocol_disclaimer_text">远程终端具有完全的系统操作权限。使用者需自行承担因误操作、权限滥用、恶意命令等导致的数据丢失、系统故障或法律后果。平台方不承担因终端操作引发的任何直接或间接责任。</p>
+      </div>
+      <label class="switch term-protocol-agree">
+        <input type="checkbox" id="termProtocolAgree">
+        <span data-i18n="term_auth.protocol_agree">我已阅读并同意上述协议</span>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="termProtocolContinue" disabled data-i18n="term_auth.protocol_continue">同意并继续</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端密码设置弹窗 ===== -->
+<div class="mask" id="termSetPwdMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="term_auth.set_password_title">设置终端访问密码</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="term-setpwd-desc" data-i18n="term_auth.set_password_desc">为了保障终端操作安全，请设置一个不同于登录密码的终端访问密码。后续每次登录后首次访问终端时需验证此密码。</p>
+      <p class="term-setpwd-req" data-i18n="term_auth.password_requirements">密码要求：至少 8 位，需同时包含大写字母、小写字母、数字和特殊字符</p>
+      <div class="field">
+        <label data-i18n="term_auth.new_password">终端访问密码</label>
+        <div style="position:relative">
+          <input type="password" id="termSetPwd" autocomplete="new-password">
+          <button class="term-pwd-toggle" id="termSetPwdToggle" type="button" tabindex="-1" title="显示/隐藏密码">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <label data-i18n="term_auth.confirm_password">确认密码</label>
+        <div style="position:relative">
+          <input type="password" id="termSetPwd2" autocomplete="new-password">
+          <button class="term-pwd-toggle" id="termSetPwd2Toggle" type="button" tabindex="-1" title="显示/隐藏密码">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="term-pwd-err" id="termSetPwdErr" style="display:none"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="termSetPwdCancel" data-i18n="term_auth.skip_verify">暂不设置</button>
+      <button class="btn primary" id="termSetPwdBtn" data-i18n="term_auth.set_password_btn">设置密码</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端密码验证弹窗 ===== -->
+<div class="mask" id="termVerifyMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="term_auth.verify_title">验证终端访问密码</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="term-setpwd-desc" data-i18n="term_auth.verify_desc">请输入终端访问密码以继续。本次登录会话内不再重复验证。</p>
+      <div class="field">
+        <label data-i18n="term_auth.verify_password">终端访问密码</label>
+        <div style="position:relative">
+          <input type="password" id="termVerifyPwd" autocomplete="off">
+          <button class="term-pwd-toggle" id="termVerifyPwdToggle" type="button" tabindex="-1" title="显示/隐藏密码">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="term-pwd-err" id="termVerifyErr" style="display:none"></div>
+      <div class="term-attempts" id="termAttemptsInfo" style="display:none"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="termVerifyCancel" data-i18n="term_auth.skip_verify">暂不验证</button>
+      <button class="btn primary" id="termVerifyBtn" data-i18n="term_auth.verify_btn">验证</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 终端密码验证锁定弹窗 ===== -->
+<div class="mask" id="termLockedMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="term_auth.locked_title">验证已锁定</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="term-setpwd-desc" data-i18n="term_auth.locked_desc">终端密码验证次数过多，请 5 分钟后再试，或重新登录。</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" data-close-btn>确定</button>
+    </div>
   </div>
 </div>
 

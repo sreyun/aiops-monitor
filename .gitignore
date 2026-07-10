@@ -62,3 +62,6 @@ node_modules/
 evaluation-report.html
 evaluation-report-v2.html
 fix-summary.html
+
+# 产品官网（独立部署，不纳入项目源码）
+website/

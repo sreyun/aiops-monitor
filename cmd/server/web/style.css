@@ -1655,3 +1655,41 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
   .fwd-actions{flex:1 1 100%; order:3; justify-content:flex-start}
   .fwd-row .badge{order:1}
 }
+
+/* ============================================================
+   v5.3.0: 终端二次认证弹窗
+   ============================================================ */
+/* 协议弹窗 */
+.term-protocol-section{margin-bottom:16px}
+.term-protocol-heading{font-size:14px;font-weight:650;color:var(--txt);margin:0 0 8px;letter-spacing:.01em}
+.term-protocol-text{font-size:13px;color:var(--txt2);line-height:1.7;margin:0;white-space:pre-line}
+.term-protocol-agree{margin-top:8px;padding-top:14px;border-top:1px solid var(--line)}
+.term-protocol-agree span{font-size:13px;color:var(--txt);font-weight:500}
+
+/* 密码设置/验证描述 */
+.term-setpwd-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin:0 0 10px}
+.term-setpwd-req{font-size:12px;color:var(--warn-txt);background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:var(--r-sm);padding:8px 12px;margin:0 0 14px;line-height:1.5}
+
+/* 密码可见性切换按钮 */
+.term-pwd-toggle{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  width:30px;height:30px;border:none;background:transparent;color:var(--muted);
+  cursor:pointer;border-radius:var(--r-xs);padding:0;display:flex;align-items:center;justify-content:center;
+  transition:color var(--transition-fast),background var(--transition-fast);
+}
+.term-pwd-toggle:hover{color:var(--txt);background:var(--panel2)}
+.term-pwd-toggle svg{width:16px;height:16px}
+
+/* 错误提示 */
+.term-pwd-err{display:none;color:var(--crit-txt);font-size:12.5px;padding:8px 12px;background:var(--crit-soft);border:1px solid var(--crit-border);border-radius:var(--r-sm);margin-top:8px;line-height:1.4}
+.term-pwd-err:not(:empty){display:block}
+
+/* 剩余尝试次数 */
+.term-attempts{font-size:12px;color:var(--warn-txt);margin-top:8px;font-weight:500}
+
+/* 个人信息 - 终端密码状态 */
+.term-pwd-status{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel2);margin-top:8px}
+.term-pwd-status-label{font-size:12px;color:var(--muted);flex:none}
+.term-pwd-status-val{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px}
+.term-pwd-status-val.set{background:var(--ok-soft);color:var(--ok-txt);border:1px solid var(--ok-border)}
+.term-pwd-status-val.unset{background:var(--warn-soft);color:var(--warn-txt);border:1px solid var(--warn-border)}
