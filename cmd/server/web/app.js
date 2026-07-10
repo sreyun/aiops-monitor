@@ -3342,15 +3342,19 @@ async function openSettings() {
     $("smtpPassword").value = s.smtp_password || "";
     $("smtpFromName").value = s.smtp_from_name || "";
     $("smtpTLS").checked = !!s.smtp_use_tls;
-    $("cpuWarn").value = t.cpu_warn; $("cpuCrit").value = t.cpu_crit;
-    $("memWarn").value = t.mem_warn; $("memCrit").value = t.mem_crit;
-    $("diskWarn").value = t.disk_warn; $("diskCrit").value = t.disk_crit;
-    $("diskioWarn").value = t.diskio_warn != null ? t.diskio_warn : 80; $("diskioCrit").value = t.diskio_crit != null ? t.diskio_crit : 90;
-    $("iopsWarn").value = t.iops_warn != null ? t.iops_warn : 10000; $("iopsCrit").value = t.iops_crit != null ? t.iops_crit : 20000;
-    $("gpuWarn").value = t.gpu_warn != null ? t.gpu_warn : 80; $("gpuCrit").value = t.gpu_crit != null ? t.gpu_crit : 90;
-    $("loadWarn").value = t.load_warn != null ? t.load_warn : 2.0; $("loadCrit").value = t.load_crit != null ? t.load_crit : 3.0;
-    $("procWarn").value = t.proc_warn != null ? t.proc_warn : 0.5;
-    $("offlineSec").value = t.offline_after_sec;
+    // Threshold display: treat 0 / null / undefined as "unset" → show the standard
+    // default. The backend also backfills these zeros, so display and storage stay
+    // consistent, and every metric always shows a sane standard threshold.
+    const td = (v, def) => (v == null || v === 0 || isNaN(v)) ? def : v;
+    $("cpuWarn").value = td(t.cpu_warn, 80); $("cpuCrit").value = td(t.cpu_crit, 95);
+    $("memWarn").value = td(t.mem_warn, 85); $("memCrit").value = td(t.mem_crit, 95);
+    $("diskWarn").value = td(t.disk_warn, 80); $("diskCrit").value = td(t.disk_crit, 90);
+    $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
+    $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
+    $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
+    $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
+    $("procWarn").value = td(t.proc_warn, 0.5);
+    $("offlineSec").value = td(t.offline_after_sec, 60);
 
     // Reset to first tab
     switchNotifyTab("tab-feishu");

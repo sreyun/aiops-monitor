@@ -77,6 +77,44 @@ func defaultThresholdConfig() ThresholdConfig {
 	}
 }
 
+// backfillThresholdDefaults replaces any zero (i.e. unset) threshold field with
+// its standard default. A zero threshold is never meaningful — the alert engine
+// fires when metric >= threshold, so a 0 would alert constantly — so a 0 is
+// treated as "not configured" and healed from defaultThresholdConfig(). This
+// makes every metric fall back to a sane standard threshold even for configs
+// saved before a field existed or saved with a blank form input. Returns true if
+// any field changed.
+func backfillThresholdDefaults(t *ThresholdConfig) bool {
+	d := defaultThresholdConfig()
+	changed := false
+	fix := func(p *float64, def float64) {
+		if *p == 0 {
+			*p = def
+			changed = true
+		}
+	}
+	fix(&t.CPUWarn, d.CPUWarn)
+	fix(&t.CPUCrit, d.CPUCrit)
+	fix(&t.MemWarn, d.MemWarn)
+	fix(&t.MemCrit, d.MemCrit)
+	fix(&t.DiskWarn, d.DiskWarn)
+	fix(&t.DiskCrit, d.DiskCrit)
+	fix(&t.DiskIOWarn, d.DiskIOWarn)
+	fix(&t.DiskIOCrit, d.DiskIOCrit)
+	fix(&t.IOPSWarn, d.IOPSWarn)
+	fix(&t.IOPSCrit, d.IOPSCrit)
+	fix(&t.GPUWarn, d.GPUWarn)
+	fix(&t.GPUCrit, d.GPUCrit)
+	fix(&t.LoadWarn, d.LoadWarn)
+	fix(&t.LoadCrit, d.LoadCrit)
+	fix(&t.ProcWarn, d.ProcWarn)
+	if t.OfflineAfterSec == 0 {
+		t.OfflineAfterSec = d.OfflineAfterSec
+		changed = true
+	}
+	return changed
+}
+
 func (t ThresholdConfig) toThresholds() Thresholds {
 	return Thresholds{
 		CPUWarn: t.CPUWarn, CPUCrit: t.CPUCrit,
@@ -278,6 +316,12 @@ func NewConfigStore(path string) (*ConfigStore, error) {
 	dirty := false
 	if cs.cfg.InstallToken == "" {
 		cs.cfg.InstallToken = genToken()
+		dirty = true
+	}
+	// Heal thresholds: any metric left at 0 (missing in an older config, or saved
+	// blank by the form) is backfilled to its standard default so every metric
+	// always has a sane alert threshold. Persist the healed values.
+	if backfillThresholdDefaults(&cs.cfg.Thresholds) {
 		dirty = true
 	}
 	// Migrate the legacy single Account into the multi-user Users list and ensure
@@ -628,6 +672,10 @@ func (cs *ConfigStore) DeleteCheck(id string) error {
 // persists to disk. The current config is snapshotted first so a bad change can
 // be rolled back via Revert().
 func (cs *ConfigStore) Set(c ServerConfig) error {
+	// Backfill any zero threshold to its standard default BEFORE validating, so a
+	// blank form field (which arrives as 0) becomes the default instead of an
+	// invalid/meaningless 0 — this is what makes "save uses standard thresholds".
+	backfillThresholdDefaults(&c.Thresholds)
 	if err := c.Validate(); err != nil {
 		return err
 	}
