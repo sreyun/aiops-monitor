@@ -115,7 +115,9 @@
 *{box-sizing:border-box}
 /* 全局表单元素重置：移除 iOS Safari / Android Chrome 默认的橙色/红色 outline、
    box-shadow 和 -webkit-appearance，防止 :focus / :invalid 状态出现“红框” */
-input,button,select,textarea{
+/* 全局表单重置：checkbox/radio 保留原生渲染（依赖 accent-color），
+   其余 input / select / textarea 移除默认外观以自定义 */
+input:not([type="checkbox"]):not([type="radio"]),button,select,textarea{
   -webkit-appearance:none; -moz-appearance:none; appearance:none;
   outline:none !important;
   box-shadow:none !important;
@@ -126,6 +128,45 @@ select:focus{box-shadow:0 0 0 3px var(--accent-soft) !important}
 .search:focus{box-shadow:0 0 0 3px var(--accent-soft) !important}
 /* 按钮保留 焦点环用于键盘导航 */
 .btn:focus-visible{outline:2px solid var(--accent) !important; outline-offset:2px; box-shadow:none !important}
+
+/* ===== 全局复选框 / 单选按钮（v5.3.1 可见性修复）===== */
+input[type="checkbox"], input[type="radio"]{
+  accent-color:var(--accent);
+  width:16px; height:16px; cursor:pointer; flex:none; vertical-align:middle;
+}
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+/* 复选框 hover 微反馈 */
+input[type="checkbox"]:hover, input[type="radio"]:hover{
+  filter:brightness(1.15);
+}
+/* 复选框选中态：增强勾选标记对比度 */
+input[type="checkbox"]:checked{
+  accent-color:var(--accent);
+}
+/* 禁用态 */
+input[type="checkbox"]:disabled, input[type="radio"]:disabled{
+  opacity:.45; cursor:not-allowed; filter:none;
+}
+
+/* ===== 全局 select 下拉选择框（v5.3.1 可见性修复）===== */
+/* 下拉选项：确保深/浅主题下选项文字/背景对比度充足 */
+select option{
+  background:var(--panel); color:var(--txt);
+  padding:6px 10px;
+}
+select optgroup{
+  background:var(--panel2); color:var(--muted);
+  font-weight:600; font-style:normal;
+}
+/* 浅色主题下 select 选项 highlight 覆盖 */
+[data-theme="light"] select option:checked{
+  background:var(--accent); color:#fff;
+}
+[data-theme="dark"] select option:checked{
+  background:var(--accent); color:#fff;
+}
 html,body{margin:0;padding:0}
 body{
   background:var(--bg);
@@ -277,12 +318,12 @@ body{
 .spacer{flex:1}
 .select-wrap{position:relative}
 select{
-  font-family:inherit; font-size:13px; color:var(--txt2); background:var(--panel2);
+  font-family:inherit; font-size:13px; color:var(--txt); background:var(--panel2);
   border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 28px 8px 12px;
   cursor:pointer; appearance:none; transition:border-color var(--transition-fast);
 }
-select:hover{border-color:var(--hover-border)}
-select:focus{outline:none; border-color:var(--accent)}
+select:hover{border-color:var(--hover-border); background:var(--panel3)}
+select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
 .select-wrap::after{content:"▾"; position:absolute; right:11px; top:50%; transform:translateY(-50%);
   color:var(--muted); pointer-events:none; font-size:10px}
 
@@ -652,7 +693,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   display:flex; align-items:center; justify-content:center; transition:color var(--transition-fast), background var(--transition-fast)}
 .vt-btn svg{width:16px; height:16px}
 .vt-btn:hover{color:var(--txt)}
-.vt-btn.active{background:var(--accent-soft); color:var(--accent-txt); border:1px solid var(--accent-border)}
+.vt-btn.active{background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-border); font-weight:600}
 
 /* 监控：列表视图（默认） */
 .checks-list{display:flex; flex-direction:column; gap:10px}
@@ -1663,8 +1704,10 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .term-protocol-section{margin-bottom:16px}
 .term-protocol-heading{font-size:14px;font-weight:650;color:var(--txt);margin:0 0 8px;letter-spacing:.01em}
 .term-protocol-text{font-size:13px;color:var(--txt2);line-height:1.7;margin:0;white-space:pre-line}
-.term-protocol-agree{margin-top:8px;padding-top:14px;border-top:1px solid var(--line)}
+.term-protocol-agree{margin-top:8px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:center;gap:8px;cursor:pointer}
 .term-protocol-agree span{font-size:13px;color:var(--txt);font-weight:500}
+/* 协议勾选框：加大尺寸，确保选中标记清晰可见 */
+.term-protocol-agree input[type="checkbox"]{width:18px;height:18px;accent-color:var(--accent);cursor:pointer;flex:none}
 
 /* 密码设置/验证描述 */
 .term-setpwd-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin:0 0 10px}
