@@ -179,6 +179,7 @@
   "empty.no_terminal_match": "没有匹配的终端会话",
   "empty.no_active_sessions": "当前没有活跃的终端会话",
   "empty.no_offline_hosts": "当前没有离线主机",
+    "empty.no_online_hosts": "当前没有在线主机",
   "empty.no_host_match2": "无匹配主机",
   "empty.no_recording": "该会话无录制数据",
   "empty.no_log_export": "当前筛选下没有日志可导出",

@@ -280,6 +280,8 @@
   "common.invalid_from_param": "無效的 'from' 參數",
   "common.from_less_than_to": "'from' 必須小於 'to'",
 
+  "empty.no_online_hosts": "目前沒有在線主機",
+
   "forward.disabled": "端口轉發已被管理員停用",
   "forward.invalid_port": "無效的連接埠號",
   "forward.host_port_required": "host_id 和 target_port 必填",

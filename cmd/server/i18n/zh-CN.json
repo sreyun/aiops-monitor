@@ -289,6 +289,8 @@
   "common.invalid_from_param": "无效的 'from' 参数",
   "common.from_less_than_to": "'from' 必须小于 'to'",
 
+  "empty.no_online_hosts": "当前没有在线主机",
+
   "forward.disabled": "端口转发已被管理员禁用",
   "forward.invalid_port": "无效的端口号",
   "forward.host_port_required": "host_id 和 target_port 必填",

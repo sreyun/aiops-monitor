@@ -284,6 +284,8 @@
   "common.invalid_from_param": "Invalid 'from' parameter",
   "common.from_less_than_to": "'from' must be less than 'to'",
 
+  "empty.no_online_hosts": "No online hosts available",
+
   "forward.disabled": "Port forwarding has been disabled by the administrator",
   "forward.invalid_port": "Invalid port number",
   "forward.host_port_required": "host_id and target_port are required",
