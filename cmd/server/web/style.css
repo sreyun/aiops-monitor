@@ -310,6 +310,24 @@ body{
 .tb-icon:active{background:var(--panel3)}
 .tb-icon.active{background:var(--warn-soft); color:var(--warn)}
 .tb-icon svg{width:18px; height:18px}
+/* 顶栏语言切换 — 分段按钮组（简 / 繁 / EN） */
+.tb-lang{
+  display:inline-flex; align-items:center; flex:none;
+  background:var(--panel2); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:2px; gap:2px;
+}
+.tb-lang-opt{
+  min-width:30px; height:26px; padding:0 8px;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:none; border-radius:calc(var(--r-sm) - 2px);
+  color:var(--muted); cursor:pointer;
+  font-size:12px; font-weight:600; font-family:inherit; line-height:1; white-space:nowrap;
+  transition:background .15s ease, color .15s ease;
+}
+.tb-lang-opt:hover{background:var(--panel3); color:var(--txt)}
+.tb-lang-opt.active{background:var(--accent); color:#fff}
+.tb-lang-opt:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (max-width:640px){ .tb-lang{display:none} }
 /* 顶栏操作按钮 — 图标+文字紧凑样式 */
 .tb-action{
   display:inline-flex; align-items:center; gap:6px;
@@ -507,12 +525,14 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .load-cell .lv{font-size:13px; font-weight:650; font-variant-numeric:tabular-nums}
 .load-cell .lk{font-size:9px; color:var(--muted2); margin-top:1px}
 
-.chips{display:flex; flex-wrap:wrap; gap:5px; margin-top:8px}
-.chip{font-size:10px; padding:2px 7px; border-radius:5px; background:var(--panel2); color:var(--txt2); border:1px solid var(--line)}
+/* Custom (plugin) metrics: a clearly separated, labeled section of subtle pills
+   consistent with the card pill language — keeps the info but reduces clutter. */
+.chips{display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line)}
+.chip{font-size:10px; padding:2px 8px; border-radius:999px; background:var(--panel3); color:var(--txt2); border:1px solid var(--line)}
 .chip b{color:var(--info-txt); font-weight:700}
 .chip.crit b{color:var(--crit-txt)}
 .chip.crit{border-color:var(--crit-border)}
-.chip-label{font-size:9px; color:var(--muted2); width:100%; margin-top:2px}
+.chip-label{font-size:9px; color:var(--muted2); width:100%; order:-1; letter-spacing:.05em; text-transform:uppercase}
 
 .foot{display:flex; justify-content:space-between; gap:8px; font-size:10px; color:var(--muted);
   margin-top:auto; padding-top:8px; border-top:1px solid var(--line); flex-wrap:wrap}
@@ -553,6 +573,8 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .switch input{width:16px; height:16px; accent-color:var(--accent)}
 .subhead{font-size:12px; color:var(--muted); letter-spacing:.02em;
   font-weight:600; margin:18px 0 12px; padding-top:16px; border-top:1px solid var(--line)}
+/* Leading section header (no divider above — the modal head already bounds it). */
+.subhead.subhead-first{margin-top:0; padding-top:0; border-top:none}
 .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
 .hint{font-size:11px; color:var(--muted2); margin-top:6px; line-height:1.55}
 .spark{margin-top:6px}
@@ -674,6 +696,23 @@ svg.sparkline{width:100%; height:46px; display:block}
 .user-dropdown-item.active-lang svg{color:var(--accent)}
 
 .user-dropdown-sep{height:1px; background:var(--line); margin:4px 0}
+
+.user-dropdown-lang{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:7px 10px; font-size:13px;
+}
+.udd-lang-label{color:var(--muted); font-size:13px}
+.lang-seg{
+  display:inline-flex; background:var(--panel2); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:2px; gap:2px;
+}
+.lang-opt{
+  border:none; background:none; cursor:pointer; font-family:inherit; font-size:12px;
+  color:var(--muted); padding:4px 11px; border-radius:calc(var(--r-sm) - 2px);
+  transition:background var(--transition-fast), color var(--transition-fast);
+}
+.lang-opt:hover{color:var(--txt)}
+.lang-opt.active{background:var(--accent); color:#fff; font-weight:600}
 
 @media(max-width:600px){
   .user-dropdown{width:220px}
@@ -949,8 +988,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 
 /* ---------- 趋势图交互 ---------- */
 .chart-controls{display:flex; gap:8px; margin-bottom:18px; padding:0 2px; flex-wrap:wrap}
-.chart-container{display:flex; flex-direction:column; gap:18px}
-.chart-container canvas{width:100%; height:auto; display:block; background:var(--bg2); border-radius:var(--r); border:1px solid var(--line); transition:border-color .2s}
+/* Two-up responsive grid on the wide detail modal; collapses to one column on
+   narrow screens (min() guard prevents horizontal overflow). Canvas height is
+   pinned by JS (HiDPI sizing), so no height:auto here. */
+.chart-container{display:grid; grid-template-columns:repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap:16px}
+.chart-container canvas{width:100%; display:block; background:var(--bg2); border-radius:var(--r); border:1px solid var(--line); transition:border-color .2s}
 .chart-wrap{position:relative; border-radius:var(--r); overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.03)}
 .chart-wrap canvas{cursor:crosshair; border:none; border-radius:0}
 .chart-enlarge{position:absolute; top:10px; right:12px; z-index:3; width:28px; height:28px; border-radius:var(--r-sm);
@@ -959,7 +1001,11 @@ svg.sparkline{width:100%; height:46px; display:block}
 .chart-wrap:hover .chart-enlarge{opacity:1}
 .chart-enlarge:hover{color:var(--txt); border-color:var(--accent); background:var(--panel3); transform:scale(1.08)}
 .chart-enlarge svg{width:15px; height:15px}
-.chart-tip{position:fixed; z-index:210; pointer-events:none; background:var(--panel);
+/* z-index MUST sit above .mask (400) / #mfaMask (410): the charts live inside the
+   detail modal, and the tip is appended to <body> — at 210 it rendered BEHIND the
+   modal, so hovering showed no values (and network values, shown only here, looked
+   "missing"). 460 keeps it above every modal but below toasts (500). */
+.chart-tip{position:fixed; z-index:460; pointer-events:none; background:var(--panel);
   border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px; font-size:11.5px; color:var(--txt);
   box-shadow:var(--shadow-lg); display:none; min-width:132px; backdrop-filter:blur(12px);
   -webkit-backdrop-filter:blur(12px); background:rgba(17,22,33,.8)}
@@ -1687,8 +1733,8 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 
 /* 转发列表容器 */
 .fwd-list{display:flex; flex-direction:column; gap:6px}
-/* 卡片网格视图 */
-.fwd-list.fwd-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; align-items:start}
+/* 卡片网格视图 — 与自动化剧本卡片网格一致（同 minmax/gap/对齐）。 */
+.fwd-list.fwd-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; align-items:stretch}
 
 /* 转发行（列表视图） */
 .fwd-row{
@@ -1701,36 +1747,24 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .fwd-row.fwd-off{opacity:.55; filter:grayscale(.35)}
 .fwd-row.fwd-off:hover{opacity:.8}
 
-/* 转发卡片（卡片视图） */
-.fwd-card{
-  display:flex; flex-direction:column; gap:10px;
-  padding:14px 16px; border-radius:var(--r);
-  border:1px solid var(--line); background:var(--panel);
-  transition:border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
-}
-.fwd-card:hover{border-color:var(--line2); background:var(--panel2); box-shadow:var(--shadow-sm)}
-.fwd-card.fwd-off{opacity:.5; filter:grayscale(.35)}
-.fwd-card.fwd-off:hover{opacity:.75}
+/* 转发卡片复用自动化 .pb-card 结构（见"自动化运维"段）；此处仅保留禁用态
+   与转发专有的状态徽标、列表视图元素。 */
+.pb-card.pb-off{opacity:.55; filter:grayscale(.35)}
+.pb-card.pb-off:hover{opacity:.85}
 
-/* 卡片头部：类型徽章 + 状态 */
-.fwd-card-head{display:flex; align-items:center; gap:8px}
+/* 状态徽标（启用/停用） */
 .fwd-status{font-size:10px; font-weight:600; padding:2px 8px; border-radius:999px; flex:none}
 .fwd-status.on{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
 .fwd-status.off{background:var(--panel3); color:var(--muted); border:1px solid var(--line2)}
 
-/* 转发标题 */
+/* 转发标题/副标题（列表视图 fwd-row 仍在用） */
 .fwd-title{font-size:13px; font-weight:650; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-/* 转发副标题 */
 .fwd-sub{font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.4}
 .fwd-sub code{font-size:11px; padding:1px 4px}
-
-/* 转发主内容区域（列表视图） */
 .fwd-main{flex:1; min-width:0; display:flex; flex-direction:column; gap:3px}
 
 /* 转发操作按钮组 */
 .fwd-actions{display:flex; gap:4px; flex:none; margin-left:auto}
-.fwd-card .fwd-actions{justify-content:flex-end; margin-top:2px}
 
 /* 图标按钮（转发操作栏专用） */
 .icon-btn{

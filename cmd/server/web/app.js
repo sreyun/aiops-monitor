@@ -57,6 +57,7 @@ if (typeof window.I18N === "undefined" || typeof window.I18N.t !== "function") {
     applyTranslations: function() {},
     setLang: function() {},
     getLang: function() { return "zh-CN"; },
+    syncLangButtons: function() {},
     supported: ["zh-CN"],
     init: function() {}
   };
@@ -1322,16 +1323,51 @@ function drawChartEmpty(ctx, w, h, message) {
 // createChart builds an interactive line chart on a canvas and returns its
 // state. The state (samples/series/visible-window) lives on canvas._chart so a
 // single set of event listeners always drives the current chart.
+// sizeChartCanvas makes a canvas crisp on HiDPI screens: the pixel buffer is
+// scaled by devicePixelRatio while all chart code keeps working in CSS pixels.
+// cssH fixes the display height so a chart looks right at any column width
+// (full-width or the two-up grid). Returns the logical {W,H,dpr} to draw within.
+function sizeChartCanvas(canvas, cssH) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap at 2 to bound memory
+  const cssW = Math.round(canvas.getBoundingClientRect().width) || 1000;
+  canvas.style.height = cssH + "px";
+  canvas.width = Math.max(1, Math.round(cssW * dpr));
+  canvas.height = Math.max(1, Math.round(cssH * dpr));
+  canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { W: cssW, H: cssH, dpr };
+}
+
+// resizeAllCharts re-fits every live chart to its current column width (buffers
+// are pinned at creation for HiDPI crispness, so a viewport resize needs a refit).
+function resizeAllCharts() {
+  const states = [];
+  for (const k in DETAIL_CHARTS) if (DETAIL_CHARTS[k]) states.push(DETAIL_CHARTS[k]);
+  for (const k in (typeof CHK_CHARTS !== "undefined" ? CHK_CHARTS : {})) if (CHK_CHARTS[k]) states.push(CHK_CHARTS[k]);
+  states.forEach(st => {
+    if (!st.canvas || !st.canvas.isConnected) return;
+    const d = sizeChartCanvas(st.canvas, st.cssH || 210);
+    st.W = d.W; st.H = d.H; st.dpr = d.dpr;
+    drawChart(st);
+  });
+}
+let _chartResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(_chartResizeTimer);
+  _chartResizeTimer = setTimeout(resizeAllCharts, 150);
+});
+
 function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opts = {}) {
   const canvas = $(canvasId);
   if (!canvas) return null;
+  const cssH = opts.isZoom ? 440 : 210;
+  const dim = sizeChartCanvas(canvas, cssH);
   if (!allSamples || !allSamples.length) {
-    const ctx = canvas.getContext("2d");
-    drawChartEmpty(ctx, canvas.width, canvas.height, I18N.t("empty.no_trend_data") || "暂无趋势数据");
+    drawChartEmpty(canvas.getContext("2d"), dim.W, dim.H, I18N.t("empty.no_trend_data") || "暂无趋势数据");
     return null;
   }
   const state = {
     canvas, ctx: canvas.getContext("2d"),
+    W: dim.W, H: dim.H, dpr: dim.dpr, cssH,
     all: allSamples, series, yMin, yMax,
     title: opts.title || "", isZoom: !!opts.isZoom,
     i0: 0, i1: allSamples.length - 1,
@@ -1356,8 +1392,9 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
 
 function drawChart(state) {
   const { ctx, canvas, series, pad } = state;
-  const w = canvas.width, h = canvas.height;
-  const cw = w - pad.left - pad.right, ch = h - pad.top - pad.bottom;
+  // Draw in CSS pixels; the buffer is dpr-scaled so lines/text are crisp on HiDPI.
+  ctx.setTransform(state.dpr || 1, 0, 0, state.dpr || 1, 0, 0);
+  const w = state.W || canvas.width, h = state.H || canvas.height;
   const vis = state.all.slice(state.i0, state.i1 + 1);
   const n = vis.length;
   ctx.clearRect(0, 0, w, h);
@@ -1383,6 +1420,18 @@ function drawChart(state) {
   if (state.yMax === null) dMax = dMax * 1.08 || 1;
   if (dMax <= dMin) dMax = dMin + 1;
   const yRange = dMax - dMin;
+  // Dynamic left padding: widen it to fit the Y-axis labels so long values
+  // (network rates like "1.45 MB/s", disk IO/GB) are never clipped off the canvas
+  // edge — the fixed 56px was too narrow for rate charts.
+  ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
+  let maxLabelW = 0;
+  for (let i = 0; i <= 4; i++) {
+    const val = dMax - (yRange / 4) * i;
+    const lab = series[0].fmt ? series[0].fmt(val) : val.toFixed(1);
+    maxLabelW = Math.max(maxLabelW, ctx.measureText(lab).width);
+  }
+  pad.left = Math.max(56, Math.ceil(maxLabelW) + 14);
+  const cw = w - pad.left - pad.right, ch = h - pad.top - pad.bottom;
   state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
 
   const xAt = i => pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
@@ -1696,7 +1745,7 @@ function initTermContextMenu() {
     switch (action) {
       case "copy": {
         const sel = getSelectedTermText(tab);
-        if (sel) copyToClipboard(sel).then(() => toast("已复制", "ok"), () => toast("复制失败", "err"));
+        if (sel) copyToClipboard(sel).then(() => toast(I18N.t("toast.copied"), "ok"), () => toast(I18N.t("toast.copy_failed"), "err"));
         break;
       }
       case "paste": {
@@ -1710,7 +1759,7 @@ function initTermContextMenu() {
         break;
       }
       case "reconnect":
-        if (tab.ws && tab.ws.readyState === 1) { toast("终端已连接", "info"); return; }
+        if (tab.ws && tab.ws.readyState === 1) { toast(I18N.t("term.connected"), "info"); return; }
         reconnectTermTab(tab);
         break;
       case "clear":
@@ -1855,7 +1904,7 @@ async function submitTermSetPassword() {
   const errEl = $("termSetPwdErr");
 
   if (!pwd || !pwd2) {
-    errEl.textContent = "请填写密码";
+    errEl.textContent = I18N.t("valid.fill_password");
     errEl.style.display = "block";
     return;
   }
@@ -1899,7 +1948,7 @@ async function submitTermVerify() {
   const attemptsEl = $("termAttemptsInfo");
 
   if (!pwd) {
-    errEl.textContent = "请输入密码";
+    errEl.textContent = I18N.t("valid.enter_password");
     errEl.style.display = "block";
     return;
   }
@@ -2181,7 +2230,7 @@ function reconnectTermTab(tab) {
 function startTermFileUpload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
-  if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
+  if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
   // 先弹出目标目录输入（默认 /tmp/），文件名将在选择文件后自动拼接
   const targetDir = prompt("请输入远程目标目录（如 /tmp/ 或 /home/user/）：", "/tmp/");
   if (!targetDir || !targetDir.trim()) return;
@@ -2199,12 +2248,12 @@ function startTermFileUpload() {
     document.body.removeChild(input);
     if (!file) return;
     if (file.size > 100 * 1024 * 1024) {
-      toast("文件超过 100MB 限制，请使用其他方式传输", "err");
+      toast(I18N.t("term.file_too_large"), "err");
       return;
     }
     // 自动拼接目标目录 + 文件名
     const targetPath = dir + file.name;
-    toast(`正在上传: ${file.name} → ${targetPath} (${formatZmSize(file.size)})`, "info");
+    toast(I18N.t("term.uploading") + ": " + file.name + " → " + targetPath + " (" + formatZmSize(file.size) + ")", "info");
     try {
       // 发送上传元数据 'f' 帧
       const meta = JSON.stringify({ filename: file.name, size: file.size, target_path: targetPath });
@@ -2214,7 +2263,7 @@ function startTermFileUpload() {
       metaFrame.set(metaBytes, 1);
       tab.ws.send(metaFrame);
       // 确认 WebSocket 仍然连接
-      if (tab.ws.readyState !== 1) { toast("终端连接已断开，上传取消", "err"); return; }
+      if (tab.ws.readyState !== 1) { toast(I18N.t("term.upload_cancelled"), "err"); return; }
       // 分块发送文件数据
       const buf = await file.arrayBuffer();
       const data = new Uint8Array(buf);
@@ -2234,7 +2283,7 @@ function startTermFileUpload() {
       termSendEnd(tab.ws);
       tab._uploadTarget = targetPath;
     } catch (err) {
-      toast(`上传失败: ${err.message}`, "err");
+      toast(I18N.t("term.upload_failed") + ": " + err.message, "err");
     }
   };
   // 使用 setTimeout 确保 prompt 关闭后浏览器恢复用户手势上下文
@@ -2244,7 +2293,7 @@ function startTermFileUpload() {
 function startTermFileDownload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
-  if (!tab.ws || tab.ws.readyState !== 1) { toast("终端未连接", "err"); return; }
+  if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
   const remotePath = prompt("请输入远程文件路径（如 /var/log/syslog）：", "/tmp/");
   if (!remotePath || !remotePath.trim()) return;
   toast(`正在请求下载: ${remotePath.trim()}`, "info");
@@ -3998,7 +4047,7 @@ async function submitTermPwdChange() {
   const errEl = $("pfTermPwdErr");
 
   if (!code || !newPwd) {
-    if (errEl) { errEl.textContent = "请填写验证信息和新的终端密码"; errEl.style.display = "block"; }
+    if (errEl) { errEl.textContent = I18N.t("term_auth.fill_verify_password"); errEl.style.display = "block"; }
     return;
   }
 
@@ -4017,7 +4066,7 @@ async function submitTermPwdChange() {
     } else {
       if (j.mfa_required) {
         // 修改时需要 MFA，但未提供
-        if (errEl) { errEl.textContent = "请输入 MFA 动态口令"; errEl.style.display = "block"; }
+        if (errEl) { errEl.textContent = I18N.t("term_auth.enter_mfa_code"); errEl.style.display = "block"; }
         return;
       }
       if (errEl) { errEl.textContent = j.error || I18N.t("toast.update_failed"); errEl.style.display = "block"; }
@@ -4709,6 +4758,17 @@ const PAGE_META = {
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
   log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
 };
+// Rebuild the JS-baked page-meta strings in the current language (called on
+// i18n:changed so titles/subtitles follow an in-place language switch).
+function rebuildPageMeta() {
+  PAGE_META.overview   = { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") };
+  PAGE_META.hosts      = { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") };
+  PAGE_META.alerts     = { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") };
+  PAGE_META.checks     = { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") };
+  PAGE_META.automation = { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") };
+  PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
+  PAGE_META.log        = { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") };
+}
 function switchView(view) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   navItems.forEach(n => n.classList.toggle("active", n.dataset.view === view));
@@ -4882,6 +4942,24 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   });
   // 主题切换
   safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
+  // 语言切换（持久化到 cookie，就地重渲染所有文案，不刷新页面）
+  var userDropdown = $("userDropdown");
+  if (userDropdown) {
+    userDropdown.addEventListener("click", function(e) {
+      var b = e.target.closest("[data-lang]");
+      if (b) I18N.setLang(b.dataset.lang);
+    });
+  }
+  // 顶栏语言切换按钮组（简 / 繁 / EN）
+  var tbLang = $("tbLang");
+  if (tbLang) {
+    tbLang.addEventListener("click", function(e) {
+      var b = e.target.closest("[data-lang]");
+      if (b) I18N.setLang(b.dataset.lang);
+    });
+  }
+  // 标记当前选中的语言（涵盖顶栏与下拉两处 [data-lang] 控件）
+  if (I18N.syncLangButtons) I18N.syncLangButtons();
   // 告警设置
   safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
   // 告警设置弹窗内 Tab 切换
@@ -5086,7 +5164,7 @@ function renderPlaybooks(pbs) {
           <strong>${esc(pb.name)}</strong>
           ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : `<span class="pb-desc pb-desc-empty">暂无描述</span>`}
         </div>
-        ${sched ? `<span class="pb-sched-badge" title="定时触发">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
+        ${sched ? `<span class="pb-sched-badge" title="${I18N.t("playbook.sched_badge_title")}">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
       </div>
       <div class="pb-card-foot">
         <div class="pb-pills">
@@ -5410,6 +5488,30 @@ window.addEventListener("hashchange", () => {
   }
 });
 
+// 语言就地切换：i18n-dashboard.js 已完成静态 [data-i18n] 文本替换，这里负责
+// 重建 JS 动态生成的文案（页面标题/副标题、各视图列表、图表等），并保持当前视图/滚动/
+// 已打开面板不变（不刷新页面）。
+document.addEventListener("i18n:changed", () => {
+  try { rebuildPageMeta(); } catch (e) {}
+  const activeNav = document.querySelector(".nav-item.active");
+  const view = activeNav ? activeNav.dataset.view : null;
+  if (view && PAGE_META[view]) {
+    const t = $("pageTitle"), s = $("pageSub");
+    if (t) t.textContent = PAGE_META[view].title;
+    if (s) s.textContent = PAGE_META[view].sub;
+  }
+  // 概览数据（卡片/健康/告警/活动/主机/TOP）强制重渲染
+  try { refresh(true); } catch (e) {}
+  // 当前视图专属的动态列表按需重载（模块级筛选/分页状态保持不变）
+  try {
+    if (view === "checks") loadChecks();
+    else if (view === "automation") loadPlaybooks();
+    else if (view === "forward") { loadForwards(); loadHttpProxies(); }
+    else if (view === "hosts") loadHostsMeta();
+  } catch (e) {}
+  if (I18N.syncLangButtons) I18N.syncLangButtons();
+});
+
 initAuth();
 
 /* ============================================================
@@ -5542,7 +5644,7 @@ function collectForwardItems() {
       type: "http", id: p.id,
       enabled: p.enabled !== false,
       badge: "HTTP", badgeClass: "sys",
-      title: esc(p.name || `${p.hostname}:${p.target_port}`),
+      title: esc(p.name || `${p.hostname}:${p.target_port}`) + (p.is_copy ? I18N.t("forward.copy_suffix") : ""),
       sub: `${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}`,
       proxyUrl,
     });
@@ -5559,15 +5661,22 @@ function renderForwards() {
 
   if (FORWARD_VIEW_MODE === "card") {
     list.className = "fwd-list fwd-grid";
+    // Reuse the automation playbook-card structure (pb-card*) so forward cards are
+    // visually identical: title + sub top-left, status top-right, divider, footer
+    // with a type pill and the action buttons.
     list.innerHTML = items.map(it => `
-      <div class="fwd-card ${it.enabled ? "" : "fwd-off"}">
-        <div class="fwd-card-head">
-          <span class="badge ${it.badgeClass}">${it.badge}</span>
+      <div class="pb-card fwd-card ${it.enabled ? "" : "pb-off"}">
+        <div class="pb-card-top">
+          <div class="pb-card-title">
+            <strong>${it.title}</strong>
+            <span class="pb-desc">${it.sub}</span>
+          </div>
           <span class="fwd-status ${it.enabled ? "on" : "off"}">${it.enabled ? I18N.t("ui.enabled") : I18N.t("ui.disabled")}</span>
         </div>
-        <div class="fwd-title">${it.title}</div>
-        <div class="fwd-sub">${it.sub}</div>
-        <div class="fwd-actions">${fwdActionButtons(it)}</div>
+        <div class="pb-card-foot">
+          <div class="pb-pills"><span class="badge ${it.badgeClass}">${it.badge}</span></div>
+          <div class="fwd-actions">${fwdActionButtons(it)}</div>
+        </div>
       </div>`).join("");
   } else {
     list.className = "fwd-list";

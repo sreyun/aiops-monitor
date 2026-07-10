@@ -1,12 +1,12 @@
 /**
- * Dashboard i18n — Minimal Chinese-only mode
- * Language switching has been DISABLED to fix page access issues.
- * All I18N.t() calls return zh-CN translations.
- * To re-enable switching, restore the original i18n-dashboard.js from git.
+ * Dashboard i18n — multilingual support.
+ * zh-CN is the embedded source-of-truth dictionary; DICT_EN (i18n-dashboard.en.js)
+ * is the generated English mirror. The active language is chosen from
+ * ?lang= > cookie(aiops_lang) > Accept-Language > zh-CN, and persisted via cookie.
  */
 (function() {
   "use strict";
-  var DICT = {
+  var DICT_ZH = {
   "toast.copy_failed": "复制失败，请手动选择复制",
   "toast.deleted": "已删除",
   "toast.host_deleted": "已删除主机",
@@ -821,37 +821,179 @@
   "term_auth.change_password_btn": "修改终端密码",
   "term_auth.changed_ok": "终端密码已修改",
   "term_auth.no_password_set": "未设置",
-  "term_auth.password_set": "已设置"
+  "term_auth.password_set": "已设置",
+
+  // --- New keys added for multi-language support (i18n audit) ---
+  "app.title": "AIOps Monitor · 主机监控与运维平台",
+  "app.js_required": "AIOps Monitor 需要启用 JavaScript",
+  "ui.not_logged_in": "未登录",
+  "ui.theme_toggle": "主题切换",
+  "ui.language": "语言",
+  "term.connected": "终端已连接",
+  "term.not_connected": "终端未连接",
+  "term.uploading": "上传中",
+  "term.upload_failed": "上传失败",
+  "term.file_too_large": "文件超过 100MB 限制，请使用其他方式传输",
+  "term.upload_cancelled": "终端断开，上传已取消",
+  "valid.fill_password": "请输入密码",
+  "valid.enter_password": "请输入密码",
+  "term_auth.fill_verify_password": "请填写验证信息和新的终端密码",
+  "term_auth.enter_mfa_code": "请输入 MFA 动态口令",
+  "playbook.sched_badge_title": "已定时",
+  "forward.copy_suffix": " (副本)",
+  "filter.type_diskio": "磁盘 IO",
+  "filter.type_iops": "磁盘 IOPS",
+  "filter.type_proc": "进程数",
+  "ui.login": "登 录",
+  "ui.add_check": "+ 添加检查",
+  "ui.new_playbook": "+ 新建剧本",
+  "filter.page_size_10": "每页 10 条",
+  "filter.page_size_30": "每页 30 条",
+  "filter.page_size_50": "每页 50 条",
+  "filter.page_size_100": "每页 100 条",
+  // --- Keys referenced by HTML/JS but missing from the original dict (added) ---
+  "empty.no_trend_data": "暂无趋势数据",
+  "term_auth.password_too_short": "密码长度至少 8 位",
+  "term.downloading": "下载中",
+  "term.download_done": "下载完成",
+  "auth.must_change_password": "请修改密码后继续",
+  "config.title": "告警设置",
+  "section.resource_heatmap": "资源 TOP10 排行榜",
+  "section.realtime_top10": "实时 TOP10",
+  "profile.account_info": "账户资料",
+  "ui.edit_forward": "编辑转发"
 };
 
+  // English mirror (scripts/build_i18n_en.js) & Traditional Chinese mirror
+  // (scripts/build_i18n_tw.js). Both fall back to zh-CN for any missing key.
+  var DICT_EN = (typeof window.DICT_EN !== "undefined") ? window.DICT_EN : {};
+  var DICT_TW = (typeof window.DICT_TW !== "undefined") ? window.DICT_TW : {};
+
+  var I18N_COOKIE = "aiops_lang";
+  var I18N_SUPPORTED = ["zh-CN", "zh-TW", "en"];
+  var I18N_DEFAULT = "zh-CN";
+
+  function i18nGetCookie(name) {
+    var m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
+    return m ? decodeURIComponent(m[1]) : "";
+  }
+  function i18nSetCookie(name, val, days) {
+    var d = new Date();
+    d.setTime(d.getTime() + (days || 365) * 86400000);
+    document.cookie = name + "=" + encodeURIComponent(val) +
+      ";path=/;expires=" + d.toUTCString() + ";SameSite=Lax";
+  }
+  function i18nNormalizeLang(l) {
+    if (!l) return I18N_DEFAULT;
+    l = String(l).toLowerCase();
+    if (l === "zh" || l === "zh-cn" || l.indexOf("zh-cn") === 0) return "zh-CN";
+    if (l === "zh-tw" || l.indexOf("zh-tw") === 0) return "zh-TW";
+    if (l === "en" || l.indexOf("en") === 0) return "en";
+    return I18N_SUPPORTED.indexOf(l) >= 0 ? l : I18N_DEFAULT;
+  }
+  function i18nResolveLang() {
+    // Explicit ?lang override wins (any supported value, incl. zh-CN).
+    var qp = new URLSearchParams(location.search).get("lang");
+    if (qp) {
+      var fromQ = i18nNormalizeLang(qp);
+      if (I18N_SUPPORTED.indexOf(fromQ) >= 0) return fromQ;
+    }
+    // Then the user's own saved choice.
+    var c = i18nGetCookie(I18N_COOKIE);
+    if (c && I18N_SUPPORTED.indexOf(c) >= 0) return c;
+    // Otherwise always default to Simplified Chinese (no browser auto-detect,
+    // per product requirement: 默认语言为中文简体).
+    return I18N_DEFAULT;
+  }
+  function i18nSelectDict(lang) {
+    var src = null;
+    if (lang === "en") src = DICT_EN;
+    else if (lang === "zh-TW") src = DICT_TW;
+    if (!src) return DICT_ZH;
+    var merged = {};
+    for (var k in DICT_ZH) merged[k] = DICT_ZH[k];
+    for (var k2 in src) if (src[k2]) merged[k2] = src[k2];
+    return merged;
+  }
+
+  var currentLang = I18N_DEFAULT;
+  var currentDict = DICT_ZH;
+
   function t(key, fallback) {
-    return DICT[key] || fallback || key;
+    return currentDict[key] || fallback || key;
   }
 
   // applyTranslations scans the DOM for data-i18n, data-i18n-placeholder and
-  // data-i18n-title attributes and replaces their content with DICT values.
+  // data-i18n-title attributes and replaces their content with dict values.
   function applyTranslations(root) {
     root = root || document;
-    // 1. data-i18n → textContent (element inner text)
     root.querySelectorAll("[data-i18n]").forEach(function(el) {
       var key = el.getAttribute("data-i18n");
-      if (key && DICT[key]) el.textContent = DICT[key];
+      if (key && currentDict[key]) el.textContent = currentDict[key];
     });
-    // 2. data-i18n-placeholder → placeholder attribute
     root.querySelectorAll("[data-i18n-placeholder]").forEach(function(el) {
       var key = el.getAttribute("data-i18n-placeholder");
-      if (key && DICT[key]) el.placeholder = DICT[key];
+      if (key && currentDict[key]) el.placeholder = currentDict[key];
     });
-    // 3. data-i18n-title → title attribute
     root.querySelectorAll("[data-i18n-title]").forEach(function(el) {
       var key = el.getAttribute("data-i18n-title");
-      if (key && DICT[key]) el.title = DICT[key];
+      if (key && currentDict[key]) el.title = currentDict[key];
+    });
+    if (currentDict["app.title"]) document.title = currentDict["app.title"];
+  }
+
+  // Reflect the active language onto every language-switch control on the page.
+  // Any element carrying a data-lang="<code>" attribute gets an "active" class
+  // when it matches the current language (used by the topbar + dropdown controls).
+  function syncLangButtons() {
+    document.querySelectorAll("[data-lang]").forEach(function(el) {
+      var on = el.getAttribute("data-lang") === currentLang;
+      el.classList.toggle("active", on);
+      if (el.hasAttribute("aria-pressed")) el.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
 
-  function setLang() {}
-  function getLang() { return "zh-CN"; }
-  function init() { applyTranslations(); }
+  // In-place language switch: swaps the dictionary, re-applies static
+  // translations, then notifies the app (app.js) to re-render dynamic content —
+  // WITHOUT reloading, so the current view / scroll / open panels are preserved.
+  function setLang(lang) {
+    lang = i18nNormalizeLang(lang);
+    if (I18N_SUPPORTED.indexOf(lang) < 0) lang = I18N_DEFAULT;
+    if (lang === currentLang) { syncLangButtons(); return; }
+    currentLang = lang;
+    currentDict = i18nSelectDict(lang);
+    i18nSetCookie(I18N_COOKIE, lang, 365);
+    try { document.documentElement.setAttribute("lang", lang); } catch (e) {}
+    // Drop any ?lang override from the URL without navigating (avoids a reload).
+    try {
+      var params = new URLSearchParams(location.search);
+      if (params.has("lang")) {
+        params.delete("lang");
+        var qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+      }
+    } catch (e2) {}
+    applyTranslations();
+    syncLangButtons();
+    // Let app.js rebuild JS-generated strings (page titles, tables, toasts, …).
+    try {
+      document.dispatchEvent(new CustomEvent("i18n:changed", { detail: { lang: lang } }));
+    } catch (e3) {
+      var ev = document.createEvent("CustomEvent");
+      ev.initCustomEvent("i18n:changed", false, false, { lang: lang });
+      document.dispatchEvent(ev);
+    }
+  }
+
+  function getLang() { return currentLang; }
+
+  function init() {
+    currentLang = i18nResolveLang();
+    currentDict = i18nSelectDict(currentLang);
+    try { document.documentElement.setAttribute("lang", currentLang); } catch (e) {}
+    applyTranslations();
+    syncLangButtons();
+  }
 
   // Auto-run when DOM is ready (i18n-dashboard.js is sync-loaded before DOM).
   if (document.readyState === "loading") {
@@ -861,5 +1003,5 @@
   }
 
   window.I18N = { t: t, applyTranslations: applyTranslations, setLang: setLang, getLang: getLang,
-    supported: ["zh-CN"], init: init };
+    syncLangButtons: syncLangButtons, supported: I18N_SUPPORTED, defaultLang: I18N_DEFAULT, init: init };
 })();

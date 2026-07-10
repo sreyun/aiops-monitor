@@ -44,6 +44,7 @@ type termSession struct {
 	lastCommand string         // last extracted command (for audit logging)
 	createdAt int64            // session start time
 	recMu     sync.Mutex       // protects recording + cmdBuffer + observers
+	lang      string           // operator's preferred UI language (for agent-side messages)
 }
 
 func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
@@ -337,6 +338,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		operator = user.Username
 	}
 	sess := s.term.create(hostID, hostname, operator)
+	sess.lang = langFromRequest(r)
 	sess.ip = clientIP
 	defer s.term.remove(sess.id)
 	op := operator
@@ -488,9 +490,14 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 			sess := s.term.sessions[sid]
 			s.term.mu.Unlock()
 			out := map[string]string{"session": sid}
-			if sess != nil && sess.mode == "exec" {
-				out["mode"] = "exec"
-				out["command"] = sess.command
+			if sess != nil {
+				if sess.mode == "exec" {
+					out["mode"] = "exec"
+					out["command"] = sess.command
+				}
+				if sess.lang != "" {
+					out["lang"] = sess.lang
+				}
 			}
 			writeJSON(w, http.StatusOK, out)
 			return
@@ -504,9 +511,14 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	select {
 	case sid := <-ch:
 		out := map[string]string{"session": sid}
-		if sess := s.term.get(sid); sess != nil && sess.mode == "exec" {
-			out["mode"] = "exec"
-			out["command"] = sess.command
+		if sess := s.term.get(sid); sess != nil {
+			if sess.mode == "exec" {
+				out["mode"] = "exec"
+				out["command"] = sess.command
+			}
+			if sess.lang != "" {
+				out["lang"] = sess.lang
+			}
 		}
 		writeJSON(w, http.StatusOK, out)
 	case <-time.After(25 * time.Second):

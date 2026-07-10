@@ -158,6 +158,8 @@ func (s *Server) Routes() http.Handler {
 		mux.Handle("GET /style.css", fsrv)
 		mux.Handle("GET /app.js", fsrv)
 		mux.Handle("GET /i18n-dashboard.js", fsrv)
+		mux.Handle("GET /i18n-dashboard.en.js", fsrv)
+		mux.Handle("GET /i18n-dashboard.zh-TW.js", fsrv)
 		// P2-1: support split CSS/JS modules
 		mux.Handle("GET /css/", http.StripPrefix("/css/", http.FileServer(http.FS(sub))))
 		mux.Handle("GET /js/", http.StripPrefix("/js/", http.FileServer(http.FS(sub))))

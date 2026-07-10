@@ -417,7 +417,7 @@ func (a *Auth) consumeDirty() bool {
 func isPublicPath(r *http.Request) bool {
 	p := r.URL.Path
 	switch p {
-	case "/", "/healthz", "/style.css", "/app.js", "/i18n-dashboard.js",
+	case "/", "/healthz", "/style.css", "/app.js", "/i18n-dashboard.js", "/i18n-dashboard.en.js", "/i18n-dashboard.zh-TW.js",
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/api/v1/login", "/api/v1/me",
 		"/api/v1/forward/health",

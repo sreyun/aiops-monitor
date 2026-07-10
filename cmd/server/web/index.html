@@ -95,6 +95,11 @@
         <button class="tb-icon" id="pauseBtn" title="暂停自动刷新" aria-label="暂停/继续自动刷新">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
         </button>
+        <div class="tb-lang" id="tbLang" role="group" data-i18n-title="ui.language" title="语言">
+          <button type="button" class="tb-lang-opt" data-lang="zh-CN" aria-pressed="false" title="简体中文">简</button>
+          <button type="button" class="tb-lang-opt" data-lang="zh-TW" aria-pressed="false" title="繁體中文">繁</button>
+          <button type="button" class="tb-lang-opt" data-lang="en" aria-pressed="false" title="English">EN</button>
+        </div>
         <button class="tb-icon" id="termSessionsBtn" data-i18n-title="ui.term_sessions_title" title="终端会话">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </button>
@@ -110,15 +115,23 @@
             <div class="user-dropdown-header">
               <span class="avatar lg" id="userAvatarLg">A</span>
               <div class="user-dropdown-info">
-                <span class="user-dropdown-name" id="userNameLg">未登录</span>
+                <span class="user-dropdown-name" id="userNameLg" data-i18n="ui.not_logged_in">未登录</span>
                 <span class="user-dropdown-role" id="userRoleLg">—</span>
               </div>
             </div>
             <button class="user-dropdown-item" id="ddThemeToggle">
               <svg class="icon-theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
               <svg class="icon-theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
-              <span>主题切换</span>
+              <span data-i18n="ui.theme_toggle">主题切换</span>
             </button>
+            <div class="user-dropdown-lang">
+              <span class="udd-lang-label" data-i18n="ui.language">语言</span>
+              <div class="lang-seg" id="langSeg">
+                <button type="button" class="lang-opt" data-lang="zh-CN">简体</button>
+                <button type="button" class="lang-opt" data-lang="zh-TW">繁體</button>
+                <button type="button" class="lang-opt" data-lang="en">EN</button>
+              </div>
+            </div>
             <div class="user-dropdown-sep"></div>
             <button class="user-dropdown-item" id="ddSettings">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -216,10 +229,10 @@
         <div class="empty" id="empty">
           暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
           <code>AIOps-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
-          <button class="btn primary icon" onclick="openInstall()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-            <span>安装 Agent</span>
-          </button>
+            <button class="btn primary icon" onclick="openInstall()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+              <span data-i18n="ui.install_agent_btn">安装 Agent</span>
+            </button>
         </div>
       </section>
 
@@ -233,13 +246,13 @@
           <button class="chip-btn" data-atype="cpu" data-i18n="notify.type_cpu">CPU</button>
           <button class="chip-btn" data-atype="memory" data-i18n="notify.type_memory">内存</button>
           <button class="chip-btn" data-atype="disk" data-i18n="notify.type_disk">磁盘</button>
-          <button class="chip-btn" data-atype="diskio">磁盘 IO</button>
-          <button class="chip-btn" data-atype="iops">磁盘 IOPS</button>
+          <button class="chip-btn" data-atype="diskio" data-i18n="filter.type_diskio">磁盘 IO</button>
+          <button class="chip-btn" data-atype="iops" data-i18n="filter.type_iops">磁盘 IOPS</button>
           <button class="chip-btn" data-atype="gpu" data-i18n="notify.type_gpu">GPU</button>
           <button class="chip-btn" data-atype="load" data-i18n="notify.type_load">负载</button>
           <button class="chip-btn" data-atype="offline" data-i18n="filter.offline_type">失联</button>
           <button class="chip-btn" data-atype="check" data-i18n="filter.check_type">拨测</button>
-          <button class="chip-btn" data-atype="proc">进程数</button>
+          <button class="chip-btn" data-atype="proc" data-i18n="filter.type_proc">进程数</button>
         </div>
         <div class="stack" id="alerts"></div>
       </section>
@@ -306,7 +319,7 @@
                 <option value="process" data-i18n="check.type_process">进程</option>
               </select>
             </div>
-            <button class="btn primary" id="addCheckBtn">+ 添加检查</button>
+            <button class="btn primary" id="addCheckBtn" data-i18n="ui.add_check">+ 添加检查</button>
           </div>
         </div>
         <div class="checks-list" id="checksGrid"></div>
@@ -320,7 +333,7 @@
         <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <button class="btn" id="pbHistoryBtn" data-i18n-title="ui.exec_history_title" data-i18n="ui.exec_history" title="查看执行历史">执行历史</button>
-            <button class="btn primary" id="addPlaybookBtn">+ 新建剧本</button>
+            <button class="btn primary" id="addPlaybookBtn" data-i18n="ui.new_playbook">+ 新建剧本</button>
           </div>
         </div>
         <div id="playbookList"></div>
@@ -357,12 +370,12 @@
 <div class="mask" id="installMask" data-close>
   <div class="modal">
     <div class="modal-head">
-      <h3>安装 Agent（被监控端）</h3>
+      <h3 data-i18n="install.title">安装 Agent（被监控端）</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
       <div class="field">
-        <label>安装 Token</label>
+        <label data-i18n="install.token_label">安装 Token</label>
         <div class="token-row">
           <input type="text" id="installToken" class="mono" readonly>
           <button class="token-action-btn" id="tokenToggleBtn" type="button" title="显示/隐藏 Token" aria-label="显示/隐藏 Token">
@@ -372,7 +385,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
           </button>
         </div>
-        <div class="hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
+        <div class="hint" data-i18n="install.token_hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
       </div>
       <div class="field">
         <label data-i18n="install.category_label">主机分类（可选，安装后自动归入该分组）</label>
@@ -409,10 +422,10 @@
         </div>
       </div>
       <div id="normalInstallSection" class="field">
-        <label id="cmdLabel">一条命令安装</label>
+        <label id="cmdLabel" data-i18n="install.one_cmd">一条命令安装</label>
         <div class="cmd-row">
           <pre id="installCmd" class="cmd"></pre>
-          <button class="btn" id="copyCmdBtn">复制</button>
+          <button class="btn" id="copyCmdBtn" data-i18n="install.copy">复制</button>
         </div>
         <div class="hint" id="cmdHint"></div>
       </div>
@@ -424,33 +437,33 @@
           二进制下载、指标上报、终端通道均自动穿透，内网机器无需任何额外配置。
         </div>
         <div class="field">
-          <label>① 网关机器安装命令（在能联网的机器上执行）</label>
+          <label data-i18n="install.gateway_cmd_label">① 网关机器安装命令（在能联网的机器上执行）</label>
           <div class="cmd-row">
             <pre id="relayGatewayCmd" class="cmd"></pre>
-            <button class="btn" id="copyRelayGatewayBtn">复制</button>
+            <button class="btn" id="copyRelayGatewayBtn" data-i18n="install.copy">复制</button>
           </div>
-          <div class="hint">安装后自动启动中继服务，监听 8529 端口，转发所有请求到云监控中心。</div>
+          <div class="hint" data-i18n="install.gateway_cmd_hint">安装后自动启动中继服务，监听 8529 端口，转发所有请求到云监控中心。</div>
         </div>
         <div class="field">
           <label data-i18n="install.gateway_ip_label">网关内网 IP（供内网机器连接）</label>
           <input type="text" id="relayGatewayIP" data-i18n-placeholder="install.gateway_ip_placeholder" placeholder="如 192.168.1.10">
         </div>
         <div class="field">
-          <label>② 内网机器安装命令（在无法联网的机器上执行）</label>
+          <label data-i18n="install.internal_cmd_label">② 内网机器安装命令（在无法联网的机器上执行）</label>
           <div class="cmd-row">
             <pre id="relayInternalCmd" class="cmd"></pre>
-            <button class="btn" id="copyRelayInternalBtn">复制</button>
+            <button class="btn" id="copyRelayInternalBtn" data-i18n="install.copy">复制</button>
           </div>
-          <div class="hint">内网机器通过网关中继连接云监控中心，无需直连公网。</div>
+          <div class="hint" data-i18n="install.internal_cmd_hint">内网机器通过网关中继连接云监控中心，无需直连公网。</div>
         </div>
       </div>
       <div class="field">
-        <label>一条命令卸载</label>
+        <label data-i18n="install.uninstall_label">一条命令卸载</label>
         <div class="cmd-row">
           <pre id="uninstallCmd" class="cmd cmd-warn"></pre>
-          <button class="btn" id="copyUninstallBtn">复制</button>
+          <button class="btn" id="copyUninstallBtn" data-i18n="install.copy">复制</button>
         </div>
-        <div class="hint">在被监控主机执行即可停止服务并移除 Agent。</div>
+        <div class="hint" data-i18n="install.uninstall_hint">在被监控主机执行即可停止服务并移除 Agent。</div>
       </div>
     </div>
   </div>
@@ -721,6 +734,7 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
+      <div class="subhead subhead-first" data-i18n="profile.account_info">账户资料</div>
       <div class="field"><label data-i18n="profile.username">用户名</label><input type="text" id="pfUsername" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号"></div>
       <div class="field"><label data-i18n="profile.display_name">显示名称</label><input type="text" id="pfDisplay" data-i18n-placeholder="form.hint_display_name" placeholder="如 运维小王"></div>
       <div class="field"><label data-i18n="profile.email">邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
@@ -900,7 +914,7 @@
 <div class="mask" id="execHistMask" data-close>
   <div class="modal modal-wide">
     <div class="modal-head">
-      <h3>执行历史</h3>
+      <h3 data-i18n="ui.exec_history">执行历史</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="execHistBody"></div>
@@ -1011,13 +1025,13 @@
   <form class="login-card" id="loginForm">
     <div class="login-brand">
       <div class="logo">AI</div>
-      <div><h1>AIOps Monitor</h1><div class="sub">主机监控运维平台</div></div>
+      <div><h1>AIOps Monitor</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
     </div>
-    <div class="field"><label>用户名</label><input type="text" id="loginUser" autocomplete="username" placeholder="管理员账号"></div>
-    <div class="field"><label>密码</label><input type="password" id="loginPass" autocomplete="current-password" placeholder="登录密码"></div>
+    <div class="field"><label data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" placeholder="管理员账号"></div>
+    <div class="field"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" placeholder="登录密码"></div>
     <div class="field" id="loginCodeField" style="display:none"><label>动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Authenticator 6 位口令"></div>
     <div class="login-err" id="loginErr"></div>
-    <button class="btn primary block" type="submit">登 录</button>
+    <button class="btn primary block" type="submit" data-i18n="ui.login">登 录</button>
     <div class="login-links">
       <a href="javascript:void(0)" id="forgotUserLink">忘记用户名</a>
       <span class="sep">·</span>
@@ -1149,6 +1163,8 @@
 <div class="toast" id="toast"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
+<script src="/i18n-dashboard.en.js"></script>
+<script src="/i18n-dashboard.zh-TW.js"></script>
 <script src="/i18n-dashboard.js"></script>
 <script src="/app.js" defer></script>
 </body>

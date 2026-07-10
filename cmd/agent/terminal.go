@@ -70,6 +70,63 @@ var (
 	termSessionTimeout = 30 * time.Minute
 )
 
+// agentDict is a minimal embedded i18n table for user-visible terminal
+// messages. The agent is a separate binary and does not import the server's
+// i18n package; only the handful of file-transfer errors that render in the
+// browser terminal are translated here. The language is supplied per terminal
+// session from the operator's dashboard preference (threaded through the
+// terminal/wait response), so these messages follow the UI language.
+var agentDict = map[string]map[string]string{
+	"zh-CN": {
+		"agent.file.upload_too_large":   "文件超过100MB限制",
+		"agent.file.create_failed":      "无法创建文件: %v",
+		"agent.file.upload_oversize":    "上传数据超过声明大小",
+		"agent.file.not_found":          "文件不存在或无法访问: %v",
+		"agent.file.dir_unsupported":    "不支持下载目录",
+		"agent.file.download_too_large": "文件超过100MB限制",
+		"agent.file.open_failed":        "无法打开文件: %v",
+	},
+	"zh-TW": {
+		"agent.file.upload_too_large":   "檔案超過100MB限制",
+		"agent.file.create_failed":      "無法建立檔案: %v",
+		"agent.file.upload_oversize":    "上傳資料超過宣告大小",
+		"agent.file.not_found":          "檔案不存在或無法存取: %v",
+		"agent.file.dir_unsupported":    "不支援下載目錄",
+		"agent.file.download_too_large": "檔案超過100MB限制",
+		"agent.file.open_failed":        "無法開啟檔案: %v",
+	},
+	"en": {
+		"agent.file.upload_too_large":   "File exceeds 100MB limit",
+		"agent.file.create_failed":      "Failed to create file: %v",
+		"agent.file.upload_oversize":    "Uploaded data exceeds declared size",
+		"agent.file.not_found":          "File not found or inaccessible: %v",
+		"agent.file.dir_unsupported":    "Directory download is not supported",
+		"agent.file.download_too_large": "File exceeds 100MB limit",
+		"agent.file.open_failed":        "Failed to open file: %v",
+	},
+}
+
+// agentT translates a terminal key for the given language, with optional
+// fmt.Sprintf args (the dict values use %v placeholders). Falls back to zh-CN,
+// then to the key itself if the key is unknown.
+func agentT(lang, key string, args ...interface{}) string {
+	if lang == "" {
+		lang = "zh-CN"
+	}
+	m, ok := agentDict[lang]
+	if !ok {
+		m = agentDict["zh-CN"]
+	}
+	s, ok := m[key]
+	if !ok {
+		return key
+	}
+	if len(args) > 0 {
+		return fmt.Sprintf(s, args...)
+	}
+	return s
+}
+
 // runTerminalChannelFor runs a persistent reverse terminal channel for one
 // server target. Each target gets its own goroutine so terminal sessions from
 // different servers don't interfere. The fingerprint (machine-bound) is the
@@ -81,7 +138,7 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 	}
 	slog.Info("远程终端通道已就绪，等待服务端呼叫…", "server", t.server)
 	for {
-		sid, mode, command, ok := a.termWait(t.server)
+		sid, mode, command, lang, ok := a.termWait(t.server)
 		if !ok {
 			time.Sleep(3 * time.Second)
 			continue
@@ -92,28 +149,29 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 		if mode == "exec" {
 			go a.runExecSession(t.server, sid, command) // one-shot playbook command (no PTY)
 		} else {
-			go a.runTerminalSession(t.server, sid) // interactive terminal
+			go a.runTerminalSession(t.server, sid, lang) // interactive terminal
 		}
 	}
 }
 
-func (a *Agent) termWait(server string) (sessionID, mode, command string, ok bool) {
+func (a *Agent) termWait(server string) (sessionID, mode, command, lang string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}}
 	resp, err := agentGet(termWaitHTTP, server+"/api/v1/agent/terminal/wait?"+q.Encode(), a.identity.Fingerprint)
 	if err != nil {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	var out struct {
 		Session string `json:"session"`
 		Mode    string `json:"mode"`
 		Command string `json:"command"`
+		Lang    string `json:"lang"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out.Session, out.Mode, out.Command, true
+	return out.Session, out.Mode, out.Command, out.Lang, true
 }
 
 // runExecSession runs a single playbook command via a one-shot child process
@@ -175,7 +233,7 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	}
 }
 
-func (a *Agent) runTerminalSession(server, sid string) {
+func (a *Agent) runTerminalSession(server, sid, lang string) {
 	// A terminal/playbook session must never crash the whole agent: recover any
 	// panic so metrics reporting and future sessions keep working.
 	defer func() {
@@ -249,7 +307,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 			return
 		}
 		defer resp.Body.Close()
-		readTermFrames(resp.Body, sh, zmChan, fileTxChan)
+		readTermFrames(resp.Body, sh, lang, zmChan, fileTxChan)
 	}()
 
 	_ = sh.Wait()
@@ -261,7 +319,7 @@ func (a *Agent) runTerminalSession(server, sid string) {
 // type 'i' = input bytes, 'r' = resize ("colsxrows"),
 // 'u' = upload data chunk, 'e' = end of upload,
 // 'f' = file upload metadata (JSON), 'd' = download request (JSON).
-func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan chan<- []byte) {
+func readTermFrames(r io.Reader, sh termShell, lang string, zmChan chan<- []byte, fileTxChan chan<- []byte) {
 	var hdr [3]byte
 
 	// File upload state (button-based, not ZMODEM)
@@ -334,9 +392,9 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 				continue
 			}
 			if meta.Size < 0 || meta.Size > 100<<20 {
-				sendFileInfo("upload_ack", map[string]interface{}{
-					"status": "error", "message": "文件超过100MB限制",
-				})
+			sendFileInfo("upload_ack", map[string]interface{}{
+				"status": "error", "message": agentT(lang, "agent.file.upload_too_large"),
+			})
 				continue
 			}
 			// Path hygiene: clean the target, and confine a bare/relative path to a
@@ -352,7 +410,7 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 			if err != nil {
 				slog.Warn("无法创建上传文件", "path", target, "err", err)
 				sendFileInfo("upload_ack", map[string]interface{}{
-					"status": "error", "message": fmt.Sprintf("无法创建文件: %v", err),
+					"status": "error", "message": agentT(lang, "agent.file.create_failed", err),
 				})
 				continue
 			}
@@ -372,9 +430,9 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 					slog.Warn("上传数据超过声明大小，已中止", "filename", upload.filename)
 					upload.file.Close()
 					os.Remove(upload.file.Name())
-					sendFileInfo("upload_ack", map[string]interface{}{
-						"status": "error", "message": "上传数据超过声明大小",
-					})
+				sendFileInfo("upload_ack", map[string]interface{}{
+					"status": "error", "message": agentT(lang, "agent.file.upload_oversize"),
+				})
 					upload = nil
 					continue
 				}
@@ -427,13 +485,13 @@ func readTermFrames(r io.Reader, sh termShell, zmChan chan<- []byte, fileTxChan 
 				slog.Warn("下载请求无效", "err", err)
 				continue
 			}
-			go handleFileDownload(meta.RemotePath, fileTxChan)
+			go handleFileDownload(meta.RemotePath, lang, fileTxChan)
 		}
 	}
 }
 
 // handleFileDownload reads a remote file and sends it to the browser via fileTxChan.
-func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
+func handleFileDownload(remotePath, lang string, fileTxChan chan<- []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Warn("文件下载异常", "path", remotePath, "panic", r)
@@ -460,19 +518,19 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 	info, err := os.Stat(remotePath)
 	if err != nil {
 		sendFileInfo("download_error", map[string]interface{}{
-			"message": fmt.Sprintf("文件不存在或无法访问: %v", err),
+			"message": agentT(lang, "agent.file.not_found", err),
 		})
 		return
 	}
 	if info.IsDir() {
 		sendFileInfo("download_error", map[string]interface{}{
-			"message": "不支持下载目录",
+			"message": agentT(lang, "agent.file.dir_unsupported"),
 		})
 		return
 	}
 	if info.Size() > 100<<20 {
 		sendFileInfo("download_error", map[string]interface{}{
-			"message": "文件超过100MB限制",
+			"message": agentT(lang, "agent.file.download_too_large"),
 		})
 		return
 	}
@@ -488,7 +546,7 @@ func handleFileDownload(remotePath string, fileTxChan chan<- []byte) {
 	f, err := os.Open(remotePath)
 	if err != nil {
 		sendFileInfo("download_error", map[string]interface{}{
-			"message": fmt.Sprintf("无法打开文件: %v", err),
+			"message": agentT(lang, "agent.file.open_failed", err),
 		})
 		return
 	}

@@ -187,6 +187,7 @@ type HTTPProxyConfig struct {
 	Operator    string `json:"operator"`     // Who created this
 	CreatedAt   int64  `json:"created_at"`   // Creation timestamp
 	Enabled     bool   `json:"enabled"`      // Whether this proxy is currently active
+	IsCopy      bool   `json:"is_copy"`      // True for copies made via "duplicate"; the "(copy)" suffix is rendered at display time, not stored, so it localizes with the UI language.
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.
@@ -909,7 +910,10 @@ func (cs *ConfigStore) CopyHTTPProxy(id string) (HTTPProxyConfig, error) {
 	newProxy := *original
 	newProxy.ID = termID()[:8]
 	newProxy.CreatedAt = time.Now().Unix()
-	newProxy.Name = original.Name + " (副本)"
+	// Store a neutral name (no language-specific suffix) and mark it as a copy;
+	// the UI appends the localized "forward.copy_suffix" at render time.
+	newProxy.Name = original.Name
+	newProxy.IsCopy = true
 	cs.cfg.HTTPProxies = append(cs.cfg.HTTPProxies, newProxy)
 	cs.mu.Unlock()
 	if err := cs.save(); err != nil {
