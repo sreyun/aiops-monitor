@@ -17,6 +17,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.Dingtalk.Secret = maskSecret(c.Dingtalk.Secret)
 	c.CustomWebhook.URL = maskSecret(c.CustomWebhook.URL)
 	c.SMTP.Password = maskSecret(c.SMTP.Password)
+	c.AI.APIKey = maskSecret(c.AI.APIKey)     // AI provider credential
+	c.PostgresDSN = maskSecret(c.PostgresDSN) // DSN carries the PostgreSQL password
 	// Never expose the password hash/salt or the MFA secret to the browser.
 	c.Account.Salt, c.Account.Hash, c.Account.MFASecret = "", "", ""
 	c.Users = nil // the user list (with hashes) is served via /api/v1/users, not here
