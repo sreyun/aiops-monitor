@@ -97,7 +97,7 @@ bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts
 
 > **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。
 >
-> **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（长度 24，含大小写字母 / 数字 / 特殊字符），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
+> **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（PG 密码 20 位纯字母数字，SECRET_KEY 为 `aiops-` + 44 位随机字母数字共 50 位），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
 
 ### 二进制直接运行
 
