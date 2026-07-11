@@ -996,7 +996,16 @@ svg.sparkline{width:100%; height:46px; display:block}
 .metric.gpu .row .label{color:var(--accent2-txt)}
 
 /* ---------- 趋势图交互 ---------- */
-.chart-controls{display:flex; gap:8px; margin-bottom:18px; padding:0 2px; flex-wrap:wrap}
+.chart-controls{display:flex; gap:8px; margin-bottom:18px; padding:0 2px; flex-wrap:wrap; align-items:center}
+/* 自定义查询周期：datetime-local 起止 + 应用按钮，克制扁平·深色适配 */
+.chart-custom-range{display:inline-flex; align-items:center; gap:6px}
+.chart-custom-range[hidden]{display:none}
+.chart-custom-range .dt-input{font-family:inherit; font-size:12px; color:var(--txt); background:var(--bg2);
+  border:1px solid var(--line2); border-radius:var(--r-sm); padding:5px 8px; line-height:1.2}
+.chart-custom-range .dt-input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.chart-custom-range .dt-sep{color:var(--muted); font-size:12px; user-select:none}
+.chip-btn.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
+.chip-btn.primary:hover{filter:brightness(1.06); color:#fff}
 /* Two-up responsive grid on the wide detail modal; collapses to one column on
    narrow screens (min() guard prevents horizontal overflow). Canvas height is
    pinned by JS (HiDPI sizing), so no height:auto here. */

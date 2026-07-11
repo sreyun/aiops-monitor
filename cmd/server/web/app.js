@@ -1148,6 +1148,14 @@ async function editCategory(id, cur) {
 /* ---------- 主机趋势弹窗 ---------- */
 let DETAIL_HOST_ID = '';
 let DETAIL_TIME_RANGE = 24; // hours: 1, 24, 48, 168, 720
+let DETAIL_CUSTOM = null;   // {from,to} unix seconds — set when a custom range is active
+
+// 把 unix 秒格式化为 <input type="datetime-local"> 需要的本地时间字符串 YYYY-MM-DDTHH:mm
+function toLocalDatetimeValue(unixSec) {
+  const d = new Date(unixSec * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 // 统一的时间跨度控件渲染函数（主机图表和监控图表共用）
 const CHART_SPANS = [
@@ -1166,6 +1174,7 @@ function renderChartControls(currentRange, prefix) {
 async function openDetail(id, name) {
   DETAIL_HOST_ID = id;
   DETAIL_TIME_RANGE = 24;
+  DETAIL_CUSTOM = null;
   $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
   const body = $("detailBody");
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading")}</div>`;
@@ -1176,10 +1185,12 @@ async function openDetail(id, name) {
 async function loadAndRenderCharts() {
   const body = $("detailBody");
   const now = Math.floor(Date.now() / 1000);
-  const from = now - DETAIL_TIME_RANGE * 3600;
+  const to = DETAIL_CUSTOM ? DETAIL_CUSTOM.to : now;
+  const from = DETAIL_CUSTOM ? DETAIL_CUSTOM.from : now - DETAIL_TIME_RANGE * 3600;
+  const spanH = Math.max(0, (to - from) / 3600); // effective window in hours
 
   try {
-    const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${now}`).then(r => r.json());
+    const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`).then(r => r.json());
     if (!Array.isArray(samples) || !samples.length) {
       body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
       return;
@@ -1187,14 +1198,21 @@ async function loadAndRenderCharts() {
 
     // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮
     DETAIL_CHARTS = {};
-    const gran = DETAIL_TIME_RANGE <= 2 ? I18N.t("time.raw") : DETAIL_TIME_RANGE <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
+    const gran = spanH <= 2 ? I18N.t("time.raw") : spanH <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
     const pct = v => v.toFixed(1) + '%';
     const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${id}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `
       <div class="chart-controls">
-        ${renderChartControls(DETAIL_TIME_RANGE, "range")}
+        ${renderChartControls(DETAIL_CUSTOM ? -1 : DETAIL_TIME_RANGE, "range")}
+        <button class="chip-btn ${DETAIL_CUSTOM ? "active" : ""}" data-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
+        <span class="chart-custom-range" id="detailCustomPanel"${DETAIL_CUSTOM ? "" : " hidden"}>
+          <input type="datetime-local" id="detailCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
+          <span class="dt-sep">→</span>
+          <input type="datetime-local" id="detailCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
+          <button class="chip-btn primary" data-custom-apply>${I18N.t("time.custom_apply") || "应用"}</button>
+        </span>
       </div>
       <div class="chart-container">
         ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
@@ -1267,12 +1285,34 @@ async function loadAndRenderCharts() {
 safeAddEventListener("detailBody", "click", e => {
   const en = e.target.closest(".chart-enlarge");
   if (en) { const ch = DETAIL_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch); return; }
+  // 自定义时间范围：展开/收起面板
+  const tog = e.target.closest("[data-custom-toggle]");
+  if (tog) {
+    const panel = $("detailCustomPanel");
+    if (panel) { panel.hidden = !panel.hidden; if (!panel.hidden) { const f = $("detailCustomFrom"); if (f) f.focus(); } }
+    return;
+  }
+  // 自定义时间范围：应用
+  if (e.target.closest("[data-custom-apply]")) { applyDetailCustomRange(); return; }
   const btn = e.target.closest(".chip-btn[data-range]");
   if (!btn) return;
+  DETAIL_CUSTOM = null; // 切回预设跨度（相对当前时间）
   DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
-  document.querySelectorAll("#detailBody .chip-btn").forEach(b => b.classList.toggle("active", b === btn));
   loadAndRenderCharts();
 });
+
+// 读取两个 datetime-local 输入，校验后按自定义绝对时间范围重新拉取并渲染
+function applyDetailCustomRange() {
+  const fEl = $("detailCustomFrom"), tEl = $("detailCustomTo");
+  if (!fEl || !tEl || !fEl.value || !tEl.value) { toast(I18N.t("time.custom_incomplete") || "请选择开始和结束时间", "warn"); return; }
+  const from = Math.floor(new Date(fEl.value).getTime() / 1000);
+  const to = Math.floor(new Date(tEl.value).getTime() / 1000);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) { toast(I18N.t("time.custom_invalid") || "时间格式无效", "err"); return; }
+  if (to <= from) { toast(I18N.t("time.custom_order") || "结束时间必须晚于开始时间", "warn"); return; }
+  if (to - from < 60) { toast(I18N.t("time.custom_tooshort") || "时间范围太短（至少 1 分钟）", "warn"); return; }
+  DETAIL_CUSTOM = { from, to };
+  loadAndRenderCharts();
+}
 
 /* ---------- Canvas 折线图（交互：悬停十字线 + 数值气泡 / 框选放大 / 双击还原 / 点击放大预览） ---------- */
 let DETAIL_CHARTS = {};
@@ -1590,7 +1630,17 @@ function drawChart(state) {
 function attachChartEvents(canvas) {
   if (canvas._evt) return;
   canvas._evt = true;
-  const toX = e => { const r = canvas.getBoundingClientRect(); return (e.clientX - r.left) * (canvas.width / r.width); };
+  // Map a pointer's clientX into the chart's CSS-pixel coordinate space (state.W),
+  // which is what drawChart / pad.left / _cw work in. Using canvas.width (the
+  // dpr-scaled backing buffer) here caused the crosshair to be offset by the
+  // devicePixelRatio on HiDPI / zoomed displays — hovering snapped to the wrong point.
+  const toX = e => {
+    const st = canvas._chart;
+    const r = canvas.getBoundingClientRect();
+    if (!r.width) return 0;
+    const W = (st && st.W) || r.width; // CSS-pixel width the chart was drawn with
+    return (e.clientX - r.left) * (W / r.width);
+  };
   const localIdx = (st, x) => {
     const n = st._n; if (n <= 1) return 0;
     return Math.max(0, Math.min(n - 1, Math.round((x - st.pad.left) / st._cw * (n - 1))));
