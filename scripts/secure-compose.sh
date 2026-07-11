@@ -24,11 +24,12 @@
 #   COMPOSE_URL  编排文件地址（默认自动检测 GitHub/Gitee）
 #   OUT_FILE     输出文件名（默认 docker-compose.yml）
 
-# 在 set -eu 之前设置默认值，避免 macOS bash 3.2 在 process substitution
-# 模式下 ${VAR:-default} 赋值后仍被 set -u 视为 unbound variable
+# 在 set -e 之前设置默认值
 OUT_FILE="${OUT_FILE:-docker-compose.yml}"
 
-set -eu
+# set -e：命令失败时退出；不使用 -u（macOS bash 3.2 在 process substitution
+# 模式下会对整个脚本做静态解析，即使变量在 set -u 前已赋值，后续引用仍被拦截）
+set -e
 
 # ---------- 可配置项 ----------
 # 编排文件地址：默认自动检测（GitHub 可达 → GitHub，否则 → Gitee 镜像）
