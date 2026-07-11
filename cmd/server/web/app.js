@@ -6137,7 +6137,7 @@ function fwdActionButtons(item) {
     ? `<button class="icon-btn" title="${I18N.t("ui.open")}" onclick="openProxyUrl('${item.proxyUrl}')">${FWD_ICONS.open}</button>`
     : ""; // TCP：应用户要求移除「复制地址」按钮（列表/卡片里的监听地址仍可直接复制）
   return `
-    <button class="icon-btn" title="${toggleLabel}" onclick="toggleForward('${item.type}','${esc(item.id)}',${!item.enabled})">${toggleIcon}</button>
+    <button class="icon-btn" title="${toggleLabel}" onclick="toggleForward(event,'${item.type}','${esc(item.id)}',${!item.enabled})">${toggleIcon}</button>
     ${primary}
     <button class="icon-btn" title="${I18N.t("ui.copy")}" onclick="copyForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.copy}</button>
     <button class="icon-btn" title="${I18N.t("ui.edit")}" onclick="editForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.edit}</button>
@@ -6306,7 +6306,7 @@ async function saveHttpProxy() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath, enabled: true })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -6340,7 +6340,7 @@ async function saveAndOpenHttpProxy() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath, enabled: true })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -6379,23 +6379,25 @@ async function loadHttpProxies() {
 }
 
 // 启用 / 停用某条转发（TCP 或 HTTP）
-async function toggleForward(type, id, enable) {
-  const url = type === "tcp"
-    ? `/api/v1/forward/${id}/toggle`
-    : `/api/v1/http-proxy/${id}/toggle`;
-  try {
-    const res = await fetch(url, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ enabled: enable })
-    });
-    if (!res.ok) { toast(I18N.t("toast.toggle_failed"), "err"); return; }
-    toast(enable ? I18N.t("toast.enabled") : I18N.t("toast.disabled"), "ok");
-    loadForwards();
-  } catch(e) {
-    toast(I18N.t("toast.network_error2"), "err");
-  }
+async function toggleForward(ev, type, id, enable) {
+  await withLoading(ev.currentTarget, async () => {
+    const url = type === "tcp"
+      ? `/api/v1/forward/${id}/toggle`
+      : `/api/v1/http-proxy/${id}/toggle`;
+    try {
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ enabled: enable })
+      });
+      if (!res.ok) { toast(I18N.t("toast.toggle_failed"), "err"); return; }
+      toast(enable ? I18N.t("toast.enabled") : I18N.t("toast.disabled"), "ok");
+      loadForwards();
+    } catch(e) {
+      toast(I18N.t("toast.network_error2"), "err");
+    }
+  })
 }
 
 // 复制（克隆）某条转发
