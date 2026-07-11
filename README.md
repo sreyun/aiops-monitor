@@ -75,22 +75,21 @@
 ### Docker 一键启动（推荐）
 
 ```bash
-# 下载并自动生成随机密码，一键启动（无需克隆仓库、无需编译）
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
-PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
-SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
-sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
-sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
-echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
+# 方式 A（极简，本地/测试）：使用仓库内置默认密钥，直接启动
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
 docker compose up -d
-# 浏览器打开 http://localhost:8529
+
+# 方式 B（推荐，生产）：下载并自动生成强随机密钥写入 compose 文件
+bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
 ```
 
 > 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
 >
 > 镜像托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。
 
-> **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。上述命令已自动生成随机数据库密码和加密密钥，**请务必保存输出的 `PG password` 和 `SECRET_KEY`**。
+> **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。
+>
+> **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（长度 24，含大小写字母 / 数字 / 特殊字符），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
 
 ### 二进制直接运行
 
@@ -147,7 +146,7 @@ docker compose up -d
 **一键部署（自动生成随机密码）：**
 
 ```bash
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
 sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
