@@ -24,9 +24,20 @@
 #   docker compose logs -f           # 查看日志
 #   docker compose down              # 停止（数据保留；加 -v 才会删卷）
 #
-# 镜像仓库：
+# 镜像仓库策略：
 #   - aiops-server / aiops-agent : 华为云 SWR（CI/CD 自动构建 linux/amd64 + linux/arm64 双架构）
-#   - postgres / victoriametrics : Docker Hub 官方镜像（原生多架构，ARM64 兼容）
+#
+#   - postgres / victoriametrics : 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）
+#     国内用户若无法拉取 Docker Hub，有两种方案：
+#     【方案 1 · 推荐】配置 Docker 镜像加速器（一劳永逸，AMD64/ARM64 均可用）：
+#       sudo mkdir -p /etc/docker
+#       sudo tee /etc/docker/daemon.json <<-'EOF'
+#       { "registry-mirrors": ["https://docker.1ms.run"] }
+#       EOF
+#       sudo systemctl daemon-reload && sudo systemctl restart docker
+#     【方案 2 · 仅限 AMD64】将下方 postgres/victoriametrics 的 image 替换为注释中的 SWR 镜像
+#       （SWR 仅同步了 amd64 架构，Apple Silicon / ARM64 服务器不可用）
+#
 #     swr.cn-east-3.myhuaweicloud.com/sreyun/
 #
 # 端口：
@@ -74,7 +85,7 @@ services:
 
   victoriametrics:
     image: victoriametrics/victoria-metrics:latest
-    # 国内加速镜像（仅 amd64，ARM64 请用上方 Docker Hub 官方镜像）：
+    # 国内用户若无法拉取 Docker Hub，可替换为下方 SWR 镜像（仅限 AMD64 架构！）：
     # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/victoriametrics/victoria-metrics:latest
     container_name: aiops-vm
     command:
@@ -89,7 +100,7 @@ services:
 
   postgres:
     image: postgres:18-alpine
-    # 国内加速镜像（仅 amd64，ARM64 请用上方 Docker Hub 官方镜像）：
+    # 国内用户若无法拉取 Docker Hub，可替换为下方 SWR 镜像（仅限 AMD64 架构！）：
     # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/postgres:18-alpine
     container_name: aiops-pg
     environment:

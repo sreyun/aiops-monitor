@@ -93,11 +93,31 @@ bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts
 
 > 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
 >
-> 镜像托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。
+> 镜像说明：**aiops-server / aiops-agent** 托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。**postgres / victoriametrics** 使用 Docker Hub 官方多架构镜像（ARM64 兼容），国内用户若无法拉取请参考下方「国内 Docker Hub 访问说明」。
 
 > **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。
 >
 > **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（PG 密码 20 位纯字母数字，SECRET_KEY 为 `aiops-` + 44 位随机字母数字共 50 位），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
+
+### 国内 Docker Hub 访问说明
+
+`postgres` 和 `victoriametrics` 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）。国内用户若无法直接拉取，有以下两种方案：
+
+**方案 1 · 推荐：配置 Docker 镜像加速器（一劳永逸，AMD64/ARM64 均可）**
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{ "registry-mirrors": ["https://docker.1ms.run"] }
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart docker
+```
+
+> macOS（Docker Desktop）：Settings → Docker Engine → 添加 `"registry-mirrors"` → Apply & Restart。
+
+**方案 2 · 仅限 AMD64：替换为 SWR 镜像**
+
+编辑 `docker-compose.yml`，将 postgres 和 victoriametrics 的 `image` 替换为注释中的 SWR 镜像地址。**注意：SWR 仅同步了 amd64 架构，Apple Silicon（M1/M2/M3/M4）及 ARM64 服务器不可用！**
 
 ### 二进制直接运行
 
@@ -174,6 +194,8 @@ docker compose up -d
 ```
 
 > 以上命令自动完成：下载编排文件 → 生成随机密码/密钥 → 写入配置 → 拉取镜像并启动。**请务必保存输出的密码和密钥！**
+>
+> **国内用户注意**：`postgres` 和 `victoriametrics` 从 Docker Hub 拉取，若网络受限请先配置 Docker 镜像加速器（见上方「国内 Docker Hub 访问说明」），或在 `docker-compose.yml` 中将这两个服务的 `image` 替换为注释中的 SWR 镜像（仅限 AMD64）。
 
 **指定版本（推荐生产环境）：**
 
@@ -184,8 +206,9 @@ sed -i 's|aiops-agent:latest|aiops-agent:v5.5.5|' docker-compose.yml
 docker compose up -d
 ```
 
-- 镜像托管于华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
+- **aiops-server / aiops-agent** 镜像托管于华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
 - 每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像
+- **postgres / victoriametrics** 使用 Docker Hub 官方镜像（多架构），国内用户若拉取失败请参考上方「国内 Docker Hub 访问说明」
 - 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./data/server_config.json`
 - 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
 - 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`
