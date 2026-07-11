@@ -5955,15 +5955,16 @@ async function openAIConfig(){
 // Quick AI provider presets: fill in common endpoint + model defaults
 function setAIPreset(type){
   const presets={
-    "bailian-compat":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",model:"qwen-plus"},
-    "bailian-native":{endpoint:"https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",model:"qwen-plus"},
-    "openai":{endpoint:"https://api.openai.com/v1",model:"gpt-4o-mini"},
-    "deepseek":{endpoint:"https://api.deepseek.com/v1",model:"deepseek-chat"},
-    "ollama":{endpoint:"http://localhost:11434/v1",model:"qwen2.5:7b"},
+    "bailian-compat":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",model:"qwen-plus",label:"百炼 OpenAI 兼容"},
+    "bailian-native":{endpoint:"https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",model:"qwen-plus",label:"百炼原生 Text Gen"},
+    "bailian-anthropic":{endpoint:"https://coding.dashscope.aliyuncs.com/apps/anthropic",model:"claude-3-5-sonnet-20241022",label:"百炼 Anthropic（Claude）"},
+    "openai":{endpoint:"https://api.openai.com/v1",model:"gpt-4o-mini",label:"OpenAI"},
+    "deepseek":{endpoint:"https://api.deepseek.com/v1",model:"deepseek-chat",label:"DeepSeek"},
+    "ollama":{endpoint:"http://localhost:11434/v1",model:"qwen2.5:7b",label:"本地 Ollama"},
   };
   const p=presets[type]; if(!p) return;
   $("aiEndpoint").value=p.endpoint; $("aiModel").value=p.model;
-  toast(`已设为 ${type}`,"ok");
+  toast(`已设为 ${p.label}`,"ok");
 }
 async function saveAIConfig(){
   const body={enabled:$("aiEnabled").checked,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim(),inspect_interval_min:parseInt($("aiInterval").value)||30};
@@ -5979,11 +5980,18 @@ async function testAIConfig(){
     const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
     if(!el) return;
-    if(j.ok){ el.textContent=`✓ 可用 · ${j.latency_ms||0}ms · ${(j.reply||"").slice(0,48)}`; el.className="ai-test-result ok"; }
+    if(j.ok){
+      let extra="";
+      if(j.provider_hint){
+        const labels={openai:"OpenAI 兼容","bailian-compat":"百炼兼容","bailian-native":"百炼原生",anthropic:"Anthropic"};
+        extra=` · ${labels[j.provider_hint]||j.provider_hint}`;
+      }
+      el.textContent=`✓ 可用${extra} · ${j.latency_ms||0}ms · ${(j.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
+    }
     else {
       let err=j.error||"未知错误";
       // Highlight 404 errors with extra guidance
-      if(err.includes("404")){ err="🔍 "+err+"\n提示：请确认 Endpoint 地址正确。百炼用户可点击上方「百炼兼容」按钮快速填入。"; }
+      if(err.includes("404")){ err="🔍 "+err+"\n提示：请确认 Endpoint 类型正确。百炼用户可点上方「百炼兼容」/「Anthropic」按钮快速填入正确端点。"; }
       el.textContent="✗ "+err; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
     }
   }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }

@@ -656,10 +656,18 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 Endpoint 和模型名称"})
 		return
 	}
-	// Detect Bailian and provide helpful hint
-	hint := ""
-	if isBailianEndpoint(c.Endpoint) {
-		hint = "bailian"
+	// Classify provider for targeted hints
+	_, prov := normalizeEndpoint(c.Endpoint)
+	hint := "openai"
+	switch prov {
+	case aiProvBailianNative:
+		hint = "bailian-native"
+	case aiProvAnthropic:
+		hint = "anthropic"
+	case aiProvOpenAI:
+		if isBailianEndpoint(c.Endpoint) {
+			hint = "bailian-compat"
+		}
 	}
 	start := time.Now()
 	reply, err := aiComplete(c, "你是连通性自检助手，用一句话确认你已就绪。", "请回复：AI 服务正常，已就绪。")
@@ -681,12 +689,16 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 	}
 	models := []modelSuggestion{
-		// Alibaba Bailian (DashScope)
+		// Alibaba Bailian (DashScope) — OpenAI 兼容 / 原生 Text Gen
 		{Value: "qwen-plus", Label: "通义千问-Plus（性价比推荐）", Provider: "bailian"},
 		{Value: "qwen-max", Label: "通义千问-Max（最强能力）", Provider: "bailian"},
 		{Value: "qwen-turbo", Label: "通义千问-Turbo（速度优先）", Provider: "bailian"},
 		{Value: "qwen-plus-latest", Label: "通义千问-Plus-Latest", Provider: "bailian"},
 		{Value: "qwen-max-latest", Label: "通义千问-Max-Latest", Provider: "bailian"},
+		// Anthropic / Claude（百炼 Anthropic 兼容端点）
+		{Value: "claude-3-5-sonnet-20241022", Label: "Claude 3.5 Sonnet（推荐）", Provider: "anthropic"},
+		{Value: "claude-3-5-haiku-20241022", Label: "Claude 3.5 Haiku（轻量快速）", Provider: "anthropic"},
+		{Value: "claude-3-opus-20240229", Label: "Claude 3 Opus（最强推理）", Provider: "anthropic"},
 		// OpenAI
 		{Value: "gpt-4o-mini", Label: "GPT-4o Mini（轻量推荐）", Provider: "openai"},
 		{Value: "gpt-4o", Label: "GPT-4o（全能）", Provider: "openai"},

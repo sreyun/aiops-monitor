@@ -1168,8 +1168,9 @@
       <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span data-i18n="sre.ai_enable">启用 AI Provider（OpenAI 兼容 / 百炼）</span></label>
       <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions"></div>
       <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px">
-        <button class="btn sm" onclick="setAIPreset('bailian-compat')" title="百炼兼容模式">百炼兼容</button>
-        <button class="btn sm" onclick="setAIPreset('bailian-native')" title="百炼原生 API">百炼原生</button>
+        <button class="btn sm" onclick="setAIPreset('bailian-compat')" title="百炼 OpenAI 兼容模式">百炼兼容</button>
+        <button class="btn sm" onclick="setAIPreset('bailian-native')" title="百炼原生 Text Gen API">百炼原生</button>
+        <button class="btn sm" onclick="setAIPreset('bailian-anthropic')" title="百炼 Anthropic 兼容（Claude）">Anthropic</button>
         <button class="btn sm" onclick="setAIPreset('openai')" title="OpenAI">OpenAI</button>
         <button class="btn sm" onclick="setAIPreset('deepseek')" title="DeepSeek">DeepSeek</button>
         <button class="btn sm" onclick="setAIPreset('ollama')" title="本地 Ollama">Ollama</button>
@@ -1179,7 +1180,7 @@
         <div class="field"><label data-i18n="sre.ai_model">模型</label><input type="text" id="aiModel" placeholder="gpt-4o-mini" list="aiModelList"><datalist id="aiModelList"></datalist></div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>
-      <div class="hint" data-i18n="sre.ai_hint2">兼容任意 OpenAI 格式 chat/completions 端点（含本地 Ollama / vLLM）。百炼自动适配原生/兼容两种模式。不启用时自动使用内置启发式引擎，开箱即用。</div>
+      <div class="hint" data-i18n="sre.ai_hint2">支持 OpenAI 兼容 / 百炼原生 / Anthropic 三种格式，自动识别端点类型。百炼 Anthropic 端点示例：https://coding.dashscope.aliyuncs.com/apps/anthropic（需填入 Claude 模型名）。不启用时自动使用内置启发式引擎，开箱即用。</div>
     </div>
     <div class="modal-foot"><span id="aiTestResult" class="ai-test-result"></span><button class="btn" id="aiTestBtn" data-i18n="sre.ai_test">测试连接</button><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
   </div>
