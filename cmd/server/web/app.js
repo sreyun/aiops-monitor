@@ -4101,10 +4101,10 @@ async function submitInitSetup() {
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
         const mask = $("initSetupMask"); if (mask) mask.classList.remove("show");
-        setUser({ username: j.username || uname });
-        toast(I18N.t("init.done", "安全初始化完成，正在进入…"), "ok");
-        // 用户名/密码已更新、会话已重签，刷新以干净状态进入控制台。
-        setTimeout(() => location.reload(), 500);
+        // 后端已清除会话并要求重新登录（relogin:true）：不再进入控制台，
+        // 而是提示并跳转到登录页，强制用新的用户名/密码重新登录。
+        toast(I18N.t("init.relogin", "初始化完成，请用新的用户名和密码重新登录"), "ok");
+        setTimeout(() => location.reload(), 1000);
       } else {
         showErr(j.error || I18N.t("toast.save_failed"));
       }
@@ -6135,7 +6135,7 @@ function fwdActionButtons(item) {
   const toggleLabel = item.enabled ? I18N.t("ui.disable") : I18N.t("ui.enable");
   const primary = item.type === "http"
     ? `<button class="icon-btn" title="${I18N.t("ui.open")}" onclick="openProxyUrl('${item.proxyUrl}')">${FWD_ICONS.open}</button>`
-    : `<button class="icon-btn" title="${I18N.t("ui.copy_addr")}" onclick="copyText('${esc(item.listenAddr)}')">${FWD_ICONS.addr}</button>`;
+    : ""; // TCP：应用户要求移除「复制地址」按钮（列表/卡片里的监听地址仍可直接复制）
   return `
     <button class="icon-btn" title="${toggleLabel}" onclick="toggleForward('${item.type}','${esc(item.id)}',${!item.enabled})">${toggleIcon}</button>
     ${primary}
@@ -6322,6 +6322,53 @@ async function saveHttpProxy() {
   });
 }
 
+// 保存 HTTP 反向代理配置并立即在新标签打开（合并原「保存配置」+「打开链接」两个按钮）。
+// 先同步 window.open 占位窗口，避免 save/token 两次 await 之后 window.open 被弹窗拦截。
+async function saveAndOpenHttpProxy() {
+  const hostID = $("fwdHost")?.value;
+  const targetPort = parseInt($("fwdTargetPort")?.value || "0");
+  const name = $("fwdHttpName")?.value || "";
+  const defaultPath = $("fwdHttpPath")?.value || "";
+  if (!hostID || targetPort < 1 || targetPort > 65535) {
+    toast(I18N.t("valid.fill_target_port"), "err");
+    return;
+  }
+  const win = window.open("", "_blank"); // 同步占位窗口，保住用户手势，规避弹窗拦截
+  await withLoading("fwdHttpOpenBtn", async () => {
+    try {
+      const res = await fetch("/api/v1/http-proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, name, default_path: defaultPath })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        if (win) win.close();
+        toast(err.error || I18N.t("toast.save_failed"), "err");
+        return;
+      }
+      toast(I18N.t("toast.saved"), "ok");
+      loadHttpProxies();
+      // 取一次性代理令牌（服务端同时下发 cookie），再把占位窗口导航到代理地址
+      const tokRes = await fetch("/api/v1/proxy-token", { credentials: "include" });
+      const baseUrl = `/proxy/${encodeURIComponent(hostID)}/${encodeURIComponent(targetPort)}/${defaultPath.replace(/^\//, "")}`;
+      if (tokRes.ok) {
+        const tok = await tokRes.json();
+        const sep = baseUrl.includes("?") ? "&" : "?";
+        const url = baseUrl + sep + "pt=" + encodeURIComponent(tok.token);
+        if (win) win.location = url; else window.open(url, "_blank");
+      } else if (win) {
+        win.close();
+      }
+      closeForwardModal();
+    } catch (e) {
+      if (win) win.close();
+      toast(I18N.t("toast.network_error2"), "err");
+    }
+  });
+}
+
 async function loadHttpProxies() {
   try {
     const res = await fetch("/api/v1/http-proxy", { credentials: "include" });
@@ -6489,12 +6536,8 @@ safeAddEventListener("addForwardBtn", "click", () => {
   if (backdrop) backdrop.style.display = "";
 });
 safeAddEventListener("fwdSubmitBtn", "click", submitForward);
-safeAddEventListener("fwdHttpSaveBtn", "click", saveHttpProxy);
-safeAddEventListener("fwdHttpOpenBtn", "click", () => {
-  const hostID = $("fwdHost")?.value;
-  const targetPort = parseInt($("fwdTargetPort")?.value || "0");
-  if (hostID && targetPort > 0) openHttpProxy(hostID, targetPort);
-});
+// 「保存并打开」：合并了原「保存配置」+「打开链接」（保存配置按钮已移除）
+safeAddEventListener("fwdHttpOpenBtn", "click", saveAndOpenHttpProxy);
 safeAddEventListener("fwdEditSaveBtn", "click", saveForwardEdit);
 // Mode tab clicks
 document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {

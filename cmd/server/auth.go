@@ -962,16 +962,17 @@ func (s *Server) handleAccountInit(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.SetUserPassword(name, req.Password)
 	s.cfg.ClearMustChangePassword(name)
-	// Invalidate this user's other sessions, then re-issue one for the current.
+	// Force a fresh re-login: invalidate ALL of this user's sessions (including the
+	// current one) and clear the session cookie, so the user must sign in again
+	// with the new credentials. This confirms they actually know the new password
+	// and starts a clean session under the (possibly renamed) account.
 	s.auth.clearUserSessions(name)
-	tok := s.auth.issueSession(name)
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
-		Secure:   isHTTPS(r),
-		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
+		Name: sessionCookie, Value: "", Path: "/", HttpOnly: true,
+		Secure: isHTTPS(r), SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", name)})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name, "relogin": true})
 }
 
 // ---- MFA (TOTP two-factor) ----

@@ -669,6 +669,7 @@ window.DICT_TW = {
   "init.err_password": "請輸入新密碼",
   "init.err_mismatch": "兩次輸入的密碼不一致",
   "init.done": "安全初始化完成，正在進入…",
+  "init.relogin": "初始化完成，請用新的使用者名稱和密碼重新登入",
   /* --- 訊息中心 --- */
   "notif.title": "訊息中心",
   "notif.read_all": "全部已讀",
@@ -756,7 +757,7 @@ window.DICT_TW = {
   "forward.submit_tcp": "建立轉發",
   "forward.submit_http": "開啟連結",
   "forward.save_http": "儲存配置",
-  "forward.open_http": "開啟連結",
+  "forward.open_http": "儲存並開啟",
   "forward.tcp_hint": "建立 TCP 轉發後，通過 監聽地址:埠 連線被監控主機上的 TCP 服務（如 MySQL、Redis、SSH）.",
   "forward.http_hint": "在新標籤頁中訪問被監控主機上的 HTTP 服務（如內部 Web 應用、管理面板）。",
   "form.proxy_name": "名稱（可選）",

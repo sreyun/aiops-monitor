@@ -669,6 +669,7 @@ window.DICT_EN = {
   "init.err_password": "Please enter a new password",
   "init.err_mismatch": "The two passwords do not match",
   "init.done": "Security setup complete, entering…",
+  "init.relogin": "Setup complete — please sign in again with your new username and password",
   /* --- Notification center --- */
   "notif.title": "Notifications",
   "notif.read_all": "Mark all read",
@@ -756,7 +757,7 @@ window.DICT_EN = {
   "forward.submit_tcp": "Create forward",
   "forward.submit_http": "Open link",
   "forward.save_http": "Save config",
-  "forward.open_http": "Open link",
+  "forward.open_http": "Save & open",
   "forward.tcp_hint": "After creating a TCP forward, connect to the TCP service on the monitored host (e.g. MySQL, Redis, SSH) via listen-addr:port.",
   "forward.http_hint": "Access the HTTP service on the monitored host (e.g. internal web app, admin panel) in a new tab.",
   "form.proxy_name": "Name (optional)",

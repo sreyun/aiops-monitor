@@ -706,6 +706,7 @@
   "init.err_password": "请输入新密码",
   "init.err_mismatch": "两次输入的密码不一致",
   "init.done": "安全初始化完成，正在进入…",
+  "init.relogin": "初始化完成，请用新的用户名和密码重新登录",
   /* --- 消息中心 --- */
   "notif.title": "消息中心",
   "notif.read_all": "全部已读",
@@ -803,7 +804,7 @@
   "forward.submit_tcp": "创建转发",
   "forward.submit_http": "打开链接",
   "forward.save_http": "保存配置",
-  "forward.open_http": "打开链接",
+  "forward.open_http": "保存并打开",
   "forward.tcp_hint": "创建 TCP 转发后，通过 监听地址:端口 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）.",
   "forward.http_hint": "在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。",
   "form.proxy_name": "名称（可选）",
