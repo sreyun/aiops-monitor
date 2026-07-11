@@ -24,9 +24,10 @@
 #   docker compose logs -f           # 查看日志
 #   docker compose down              # 停止（数据保留；加 -v 才会删卷）
 #
-# 镜像仓库：swr.cn-east-3.myhuaweicloud.com/sreyun/
-#   - aiops-server:{version} / :latest     （服务端，内嵌前端）
-#   - aiops-agent:{version} / :latest      （可选 Agent 容器）
+# 镜像仓库：
+#   - aiops-server / aiops-agent : 华为云 SWR（CI/CD 自动构建 linux/amd64 + linux/arm64 双架构）
+#   - postgres / victoriametrics : Docker Hub 官方镜像（原生多架构，ARM64 兼容）
+#     swr.cn-east-3.myhuaweicloud.com/sreyun/
 #
 # 端口：
 #   - 8529            : Web UI / API
@@ -72,8 +73,9 @@ services:
     restart: unless-stopped
 
   victoriametrics:
-    # image: victoriametrics/victoria-metrics:latest
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/victoriametrics/victoria-metrics:latest
+    image: victoriametrics/victoria-metrics:latest
+    # 国内加速镜像（仅 amd64，ARM64 请用上方 Docker Hub 官方镜像）：
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/victoriametrics/victoria-metrics:latest
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
@@ -86,8 +88,9 @@ services:
     restart: unless-stopped
 
   postgres:
-    # image: postgres:18-alpine
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/postgres:18-alpine
+    image: postgres:18-alpine
+    # 国内加速镜像（仅 amd64，ARM64 请用上方 Docker Hub 官方镜像）：
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/postgres:18-alpine
     container_name: aiops-pg
     environment:
       - POSTGRES_USER=aiops
