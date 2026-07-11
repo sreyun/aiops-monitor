@@ -77,16 +77,16 @@ Install scripts auto-detect CPU architecture and download the matching binary éˆ
 # Choose the download URL based on your network environment:
 #
 # Option A (minimal, local/test): use the repo's built-in default secrets, start directly
-# -- International users (GitHub) --
+# -- Via GitHub --
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
-# -- China users (Gitee mirror) --
+# -- Via Gitee mirror (recommended if GitHub is slow) --
 curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml
 docker compose up -d
 
 # Option B (recommended, production): download and auto-generate strong random secrets
-# -- International users (GitHub) --
+# -- Via GitHub --
 bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
-# -- China users (Gitee mirror) --
+# -- Via Gitee mirror (recommended if GitHub is slow) --
 bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts/secure-compose.sh) && docker compose up -d
 ```
 
@@ -148,7 +148,7 @@ Open `http://localhost:8529` éˆ¥?host card and metrics appear within seconds.
 **One-click deploy (auto-generates random passwords):**
 
 ```bash
-# International users (GitHub):
+# Via GitHub:
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
@@ -157,7 +157,7 @@ sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" d
 echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 
-# China users (Gitee mirror):
+# Via Gitee mirror (recommended if GitHub is slow):
 curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \

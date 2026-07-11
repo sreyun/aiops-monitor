@@ -78,16 +78,16 @@
 # 根据网络环境选择下载地址：
 #
 # 方式 A（极简，本地/测试）：使用仓库内置默认密钥，直接启动
-# -- 国外用户（GitHub）--
+# -- 通过 GitHub 下载 --
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
-# -- 国内用户（Gitee 镜像）--
+# -- 通过 Gitee 镜像下载（GitHub 访问受限时推荐）--
 curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml
 docker compose up -d
 
 # 方式 B（推荐，生产）：下载并自动生成强随机密钥写入 compose 文件
-# -- 国外用户（GitHub）--
+# -- 通过 GitHub 下载 --
 bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
-# -- 国内用户（Gitee 镜像）--
+# -- 通过 Gitee 镜像下载（GitHub 访问受限时推荐）--
 bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts/secure-compose.sh) && docker compose up -d
 ```
 
@@ -154,7 +154,7 @@ bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts
 **一键部署（自动生成随机密码）：**
 
 ```bash
-# 国外用户（GitHub）：
+# 通过 GitHub 下载：
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
@@ -163,7 +163,7 @@ sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" d
 echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 
-# 国内用户（Gitee 镜像）：
+# 通过 Gitee 镜像下载（GitHub 访问受限时推荐）：
 curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
