@@ -6085,7 +6085,7 @@ let FWD_MODE = "tcp"; // "tcp" | "http"
 
 // 填充主机下拉选择框（同时填充创建弹窗 fwdHost 和编辑弹窗 fwdEditHost）
 function populateForwardHosts() {
-  const opts = LAST_HOSTS.map(h => `<option value="${h.id}">${esc(h.hostname)} (${short(h.id)})</option>`).join("");
+  const opts = LAST_HOSTS.map(h => `<option value="${h.id}">${esc(h.hostname)} (${esc(h.ip || "—")})</option>`).join("");
   const fh = $("fwdHost");
   if (fh) fh.innerHTML = opts;
   const efh = $("fwdEditHost");
