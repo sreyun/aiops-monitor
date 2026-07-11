@@ -867,7 +867,7 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Build rich system prompt with full incident context
-	sys := buildIncidentDiagnosisPrompt(inc)
+	sys := s.buildIncidentDiagnosisPrompt(inc)
 	// Collect existing AI diagnosis from timeline as additional context
 	for _, e := range inc.Timeline {
 		if e.Kind == "ai_diagnosis" && e.Text != "" {
@@ -903,9 +903,11 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 }
 
 // buildIncidentDiagnosisPrompt constructs a system prompt with the incident's
-// full context so the AI has all the information it needs to reason about the
-// problem without the operator having to retype it.
-func buildIncidentDiagnosisPrompt(inc Incident) string {
+// full context — metadata, timeline, host metrics, active alerts, recent logs —
+// so the AI has all the information it needs to reason about the problem without
+// the operator having to retype it. All data-source failures are non-fatal: they
+// log a warning and skip the affected section rather than blocking the diagnosis.
+func (s *Server) buildIncidentDiagnosisPrompt(inc Incident) string {
 	var b strings.Builder
 	b.WriteString("你是资深 SRE 值班工程师，正在协助排查一个线上事件。以下是该事件的完整上下文：\n\n")
 	fmt.Fprintf(&b, "事件 #%d：%s\n", inc.ID, inc.Title)
@@ -930,8 +932,97 @@ func buildIncidentDiagnosisPrompt(inc Incident) string {
 			fmt.Fprintf(&b, "  [%s] %s — %s\n", ts, e.Kind, e.Actor)
 		}
 	}
+
+	// --- 1. 实时指标快照 ---
+	if inc.HostID != "" {
+		if h := s.hostByID(inc.HostID); h != nil && h.Latest != nil {
+			m := h.Latest
+			b.WriteString("\n【当前主机指标】（最近一个采样点）\n")
+			fmt.Fprintf(&b, "  CPU %.1f%% | 内存 %.1f%% (%d/%d GB) | 磁盘 %.1f%%",
+				m.CPUPercent, m.MemPercent, m.MemUsed/1073741824, m.MemTotal/1073741824, m.DiskPercent)
+			if m.SwapTotal > 0 {
+				fmt.Fprintf(&b, " | SWAP %.1f%%", m.SwapPercent)
+			}
+			fmt.Fprintf(&b, "\n  Load %.2f/%.2f/%.2f | 进程 %d | 网络 ↓%.1f ↑%.1f MB/s",
+				m.Load1, m.Load5, m.Load15, m.ProcCount,
+				m.NetRecvRate/1048576, m.NetSentRate/1048576)
+			if m.DiskReadRate+m.DiskWriteRate > 0 {
+				fmt.Fprintf(&b, " | 磁盘IO ↓%.1f ↑%.1f MB/s IOPS r%.0f/w%.0f",
+					m.DiskReadRate/1048576, m.DiskWriteRate/1048576,
+					m.DiskReadIOPS, m.DiskWriteIOPS)
+			}
+			if m.Uptime > 0 {
+				fmt.Fprintf(&b, " | 运行 %s", formatUptime(m.Uptime))
+			}
+			b.WriteByte('\n')
+			// Per-disk details
+			if len(m.Disks) > 0 {
+				b.WriteString("  各磁盘：")
+				for i, d := range m.Disks {
+					if i > 0 {
+						b.WriteString(" · ")
+					}
+					fmt.Fprintf(&b, "%s %.1f%%", d.Path, d.Percent)
+				}
+				b.WriteByte('\n')
+			}
+		}
+	}
+
+	// --- 2. 活跃告警 ---
+	if inc.HostID != "" && s.notifier != nil {
+		var hostAlerts []string
+		for _, a := range s.notifier.ActiveAlerts() {
+			if a.HostID == inc.HostID && a.Status == "" {
+				hostAlerts = append(hostAlerts, fmt.Sprintf("%s (%s, %.1f)", a.Type, a.Level, a.Value))
+			}
+		}
+		if len(hostAlerts) > 0 {
+			if len(hostAlerts) > 10 {
+				hostAlerts = hostAlerts[:10]
+			}
+			b.WriteString("\n【当前活跃告警】\n  ")
+			b.WriteString(strings.Join(hostAlerts, " · "))
+			b.WriteByte('\n')
+		}
+	}
+
+	// --- 3. 近期日志摘要 ---
+	if inc.HostID != "" && s.logs != nil {
+		logSince := time.Now().Unix() - 300 // last 5 minutes
+		errs := s.logs.search(inc.HostID, "error", "", logSince, 5)
+		warns := s.logs.search(inc.HostID, "warn", "", logSince, 5)
+		if len(errs) > 0 || len(warns) > 0 {
+			b.WriteString("\n【最近 5 分钟日志摘要】\n")
+			for _, e := range errs {
+				ts := time.Unix(e.Ts, 0).Format("15:04:05")
+				fmt.Fprintf(&b, "  [%s ERROR] %s\n", ts, trimLine(e.Message, 200))
+			}
+			for _, e := range warns {
+				ts := time.Unix(e.Ts, 0).Format("15:04:05")
+				fmt.Fprintf(&b, "  [%s WARN]  %s\n", ts, trimLine(e.Message, 160))
+			}
+		} else {
+			b.WriteString("\n【最近 5 分钟日志摘要】\n  无 error/warn 日志。\n")
+		}
+	}
+
 	b.WriteString("\n你的任务：根据以上上下文，回答操作员的追问。请用简洁中文，给出具体可执行的排查方向或处置建议。如果信息不足，明确指出还需要什么信息。")
 	return b.String()
+}
+
+// formatUptime converts uptime in seconds to a human-readable string.
+func formatUptime(seconds uint64) string {
+	d := seconds / 86400
+	h := (seconds % 86400) / 3600
+	m := (seconds % 3600) / 60
+	if d > 0 {
+		return fmt.Sprintf("%dd%dh", d, h)
+	}
+	if h > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 // buildTerminalSummary finds the most recent terminal session for the given host,
