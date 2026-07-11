@@ -539,3 +539,64 @@ func (m *aiManager) Diagnose(inc Incident) (string, string) {
 	}
 	return heuristicDiagnose(inc, ctx), "heuristic"
 }
+
+// embedText calls the Bailian DashScope Embedding V2 API to convert text into a
+// 1536-dimensional vector. Returns nil on any error (caller falls back gracefully).
+// API: https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+func embedText(cfg AIConfig, text string) []float64 {
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return nil
+	}
+	// Only Bailian supports embedding V2; other providers are skipped silently.
+	if !isBailianEndpoint(cfg.Endpoint) {
+		return nil
+	}
+	if text = strings.TrimSpace(text); text == "" {
+		return nil
+	}
+	// Truncate to avoid exceeding the model's input limit (text-embedding-v2: 2048 tokens).
+	if len([]rune(text)) > 3000 {
+		text = string([]rune(text)[:3000])
+	}
+	reqBody := map[string]any{
+		"model": "text-embedding-v2",
+		"input": map[string]any{
+			"texts": []string{text},
+		},
+		"parameters": map[string]string{
+			"text_type": "query",
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost,
+		"https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
+		bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var result struct {
+		Output struct {
+			Embeddings []struct {
+				TextIndex int       `json:"text_index"`
+				Embedding []float64 `json:"embedding"`
+			} `json:"embeddings"`
+		} `json:"output"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	if len(result.Output.Embeddings) == 0 {
+		return nil
+	}
+	return result.Output.Embeddings[0].Embedding
+}

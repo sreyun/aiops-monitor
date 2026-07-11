@@ -3,8 +3,10 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -72,6 +74,7 @@ func openPGStore(dsn string) (*pgStore, error) {
 
 func (p *pgStore) migrate() error {
 	_, err := p.db.Exec(`
+		CREATE EXTENSION IF NOT EXISTS vector;
 		CREATE TABLE IF NOT EXISTS incidents (
 			id         BIGINT PRIMARY KEY,
 			status     TEXT,
@@ -109,6 +112,27 @@ func (p *pgStore) migrate() error {
 		CREATE TABLE IF NOT EXISTS kv_state (
 			k    TEXT PRIMARY KEY,
 			data JSONB NOT NULL
+		);
+		-- AI 诊断向量记忆（RAG 相似案例检索）
+		CREATE TABLE IF NOT EXISTS diagnosis_embeddings (
+			id          BIGSERIAL PRIMARY KEY,
+			incident_id BIGINT,
+			embedding   vector(1536),
+			summary     TEXT NOT NULL,
+			severity    TEXT,
+			tags        TEXT,
+			feedback    TEXT DEFAULT '',
+			created_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS diag_emb_incident ON diagnosis_embeddings(incident_id);
+		-- 经验规则库（高频问题 best practice）
+		CREATE TABLE IF NOT EXISTS experience_rules (
+			id          BIGSERIAL PRIMARY KEY,
+			pattern     TEXT NOT NULL,
+			conclusion  TEXT NOT NULL,
+			severity    TEXT,
+			incident_id BIGINT,
+			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 	`)
 	return err
@@ -352,6 +376,128 @@ func (p *pgStore) saveTickets(list []Ticket) error {
 	return tx.Commit()
 }
 
+// ============================================================================
+// pgvector: AI 诊断向量记忆（RAG 相似案例检索）
+// ============================================================================
+
+// vecStr formats a []float64 as a pgvector literal string, e.g. "[0.1,0.2,...]".
+func vecStr(v []float64) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, f := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%g", f)
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// insertDiagnosisEmbedding stores a diagnosis embedding for later RAG retrieval.
+func (p *pgStore) insertDiagnosisEmbedding(incidentID int64, emb []float64, summary, severity, tags string) (int64, error) {
+	var id int64
+	err := p.db.QueryRow(
+		`INSERT INTO diagnosis_embeddings(incident_id, embedding, summary, severity, tags)
+		 VALUES($1, $2::vector, $3, $4, $5) RETURNING id`,
+		incidentID, vecStr(emb), summary, severity, tags,
+	).Scan(&id)
+	return id, err
+}
+
+// searchSimilarCases returns the top-N similar diagnosis cases by cosine distance.
+func (p *pgStore) searchSimilarCases(emb []float64, limit int) ([]similarCase, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+	rows, err := p.db.Query(
+		`SELECT id, incident_id, summary, severity, tags, feedback,
+		        embedding <=> $1::vector AS distance
+		 FROM diagnosis_embeddings
+		 ORDER BY embedding <=> $1::vector
+		 LIMIT $2`,
+		vecStr(emb), limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []similarCase
+	for rows.Next() {
+		var c similarCase
+		if err := rows.Scan(&c.ID, &c.IncidentID, &c.Summary, &c.Severity, &c.Tags, &c.Feedback, &c.Distance); err != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// updateDiagnosisFeedback records user feedback on a diagnosis embedding.
+func (p *pgStore) updateDiagnosisFeedback(incidentID int64, feedback string) error {
+	_, err := p.db.Exec(
+		`UPDATE diagnosis_embeddings SET feedback=$1 WHERE incident_id=$2`,
+		feedback, incidentID,
+	)
+	return err
+}
+
+type similarCase struct {
+	ID         int64   `json:"id"`
+	IncidentID int64   `json:"incident_id"`
+	Summary    string  `json:"summary"`
+	Severity   string  `json:"severity"`
+	Tags       string  `json:"tags"`
+	Feedback   string  `json:"feedback"`
+	Distance   float64 `json:"distance"` // cosine distance, lower = more similar
+}
+
+// ============================================================================
+// 经验规则库 CRUD
+// ============================================================================
+
+// experienceRule is one manually-curated or AI-extracted best-practice rule.
+type experienceRule struct {
+	ID         int64  `json:"id"`
+	Pattern    string `json:"pattern"`
+	Conclusion string `json:"conclusion"`
+	Severity   string `json:"severity,omitempty"`
+	IncidentID int64  `json:"incident_id,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+func (p *pgStore) insertExperienceRule(r experienceRule) (int64, error) {
+	var id int64
+	err := p.db.QueryRow(
+		`INSERT INTO experience_rules(pattern, conclusion, severity, incident_id)
+		 VALUES($1, $2, $3, $4) RETURNING id`,
+		r.Pattern, r.Conclusion, r.Severity, r.IncidentID,
+	).Scan(&id)
+	return id, err
+}
+
+func (p *pgStore) listExperienceRules() ([]experienceRule, error) {
+	rows, err := p.db.Query(`SELECT id, pattern, conclusion, severity, incident_id, created_at FROM experience_rules ORDER BY id DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []experienceRule
+	for rows.Next() {
+		var r experienceRule
+		if err := rows.Scan(&r.ID, &r.Pattern, &r.Conclusion, &r.Severity, &r.IncidentID, &r.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) deleteExperienceRule(id int64) error {
+	_, err := p.db.Exec(`DELETE FROM experience_rules WHERE id=$1`, id)
+	return err
+}
+
 func (p *pgStore) close() {
 	if p != nil && p.db != nil {
 		_ = p.db.Close()
@@ -366,6 +512,7 @@ func (s *Server) bindPG(ps *pgStore) {
 	if ps == nil {
 		return
 	}
+	s.pg = ps
 	if incs, err := ps.loadIncidents(); err == nil && len(incs) > 0 {
 		s.incidents.Import(incs)
 	}

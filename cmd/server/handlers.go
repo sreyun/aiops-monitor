@@ -33,6 +33,7 @@ type Server struct {
 	vm          *vmWriter          // optional VictoriaMetrics remote-write
 	messages    *messageHub        // unified notification center (SRE/alert/AI feed)
 	distDir     string             // directory of downloadable agent binaries + plugins.zip
+	pg          *pgStore           // PostgreSQL persistence (optional, for pgvector/RAG)
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
@@ -171,6 +172,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnose", s.handleDiagnoseIncident)
 	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnose-chat", s.handleDiagnoseChatIncident)
 	mux.HandleFunc("GET /api/v1/incidents/{id}/diagnose-chat", s.handleGetDiagnosisChatHistory)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnosis-feedback", s.handleDiagnosisFeedback)
+	// AI 经验规则库
+	mux.HandleFunc("GET /api/v1/experience-rules", s.handleListExperienceRules)
+	mux.HandleFunc("POST /api/v1/experience-rules", s.handleCreateExperienceRule)
+	mux.HandleFunc("DELETE /api/v1/experience-rules/{id}", s.handleDeleteExperienceRule)
 	// Terminal enhancements
 	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)

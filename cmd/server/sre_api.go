@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -899,6 +900,8 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	}
 	// Persist this chat turn to PG for learning/accumulation
 	s.saveDiagnosisChatTurn(id, req.Message, reply)
+	// Async: save vector embedding for RAG (non-blocking, best-effort)
+	go s.saveDiagnosisEmbedding(id, inc, reply)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply})
 }
 
@@ -1004,6 +1007,59 @@ func (s *Server) buildIncidentDiagnosisPrompt(inc Incident) string {
 			}
 		} else {
 			b.WriteString("\n【最近 5 分钟日志摘要】\n  无 error/warn 日志。\n")
+		}
+	}
+
+	// --- 4. RAG 相似历史案例检索 ---
+	if s.pg != nil && inc.HostID != "" {
+		cfg := s.cfg.AIConfig()
+		if cfg.Enabled && cfg.APIKey != "" {
+			// Build a concise summary for embedding
+			summaryText := fmt.Sprintf("事件：%s。告警类型：%s。严重程度：%s。", inc.Title, inc.Type, inc.Severity)
+			if emb := embedText(cfg, summaryText); len(emb) > 0 {
+				if cases, err := s.pg.searchSimilarCases(emb, 3); err == nil && len(cases) > 0 {
+					b.WriteString("\n【📚 相似历史案例】（RAG 检索）\n")
+					for i, c := range cases {
+						sim := int((1.0 - c.Distance) * 100)
+						if sim < 0 {
+							sim = 0
+						}
+						fb := ""
+						if c.Feedback == "helpful" {
+							fb = " 👍"
+						} else if c.Feedback == "unhelpful" {
+							fb = " 👎"
+						}
+						fmt.Fprintf(&b, "  案例 %d（相似度 %d%%%s）：%s\n", i+1, sim, fb, trimLine(c.Summary, 250))
+					}
+				}
+			}
+		}
+	}
+
+	// --- 5. 经验规则匹配 ---
+	if s.pg != nil {
+		if rules, err := s.pg.listExperienceRules(); err == nil && len(rules) > 0 {
+			var matched []string
+			for _, r := range rules {
+				if r.Pattern == "" {
+					continue
+				}
+				// Try to match pattern against incident title, type, or log messages
+				target := inc.Title + " " + inc.Type
+				if strings.Contains(strings.ToLower(target), strings.ToLower(r.Pattern)) {
+					matched = append(matched, fmt.Sprintf("  • %s（%s）→ %s", r.Pattern, r.Severity, r.Conclusion))
+					if len(matched) >= 5 {
+						break
+					}
+				}
+			}
+			if len(matched) > 0 {
+				b.WriteString("\n【📋 匹配经验规则】\n")
+				for _, m := range matched {
+					b.WriteString(m + "\n")
+				}
+			}
 		}
 	}
 
@@ -1151,14 +1207,14 @@ type diagnosisChatMessage struct {
 // saveDiagnosisChatTurn persists a chat turn to PostgreSQL via kv_state so the
 // conversation history survives restarts and accumulates over time.
 func (s *Server) saveDiagnosisChatTurn(incidentID int64, userMsg, aiReply string) {
-	if s.store == nil || s.store.pg == nil {
+	if s.pg == nil {
 		return
 	}
 	key := fmt.Sprintf("ai_diag_chat_%d", incidentID)
 	now := time.Now().Unix()
 	// Load existing history
 	var history []diagnosisChatMessage
-	if raw, _ := s.store.pg.loadKV(key); raw != nil {
+	if raw, _ := s.pg.loadKV(key); raw != nil {
 		_ = json.Unmarshal(raw, &history)
 	}
 	history = append(history,
@@ -1170,7 +1226,7 @@ func (s *Server) saveDiagnosisChatTurn(incidentID int64, userMsg, aiReply string
 		history = history[len(history)-100:]
 	}
 	raw, _ := json.Marshal(history)
-	_ = s.store.pg.saveKV(key, raw)
+	_ = s.pg.saveKV(key, raw)
 }
 
 // handleGetDiagnosisChatHistory returns the persisted chat history for an incident.
@@ -1182,9 +1238,9 @@ func (s *Server) handleGetDiagnosisChatHistory(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var history []diagnosisChatMessage
-	if s.store != nil && s.store.pg != nil {
+	if s.pg != nil {
 		key := fmt.Sprintf("ai_diag_chat_%d", id)
-		if raw, _ := s.store.pg.loadKV(key); raw != nil {
+		if raw, _ := s.pg.loadKV(key); raw != nil {
 			_ = json.Unmarshal(raw, &history)
 		}
 	}
@@ -1208,4 +1264,112 @@ func (s *Server) handleSREOverview(w http.ResponseWriter, r *http.Request) {
 		"open_tickets":         s.tickets.OpenCount(),
 		"slo_breaching":        breaching,
 	})
+}
+
+// saveDiagnosisEmbedding generates a vector embedding for the diagnosis summary
+// and stores it in PG for future RAG retrieval. Runs async (best-effort, non-blocking).
+func (s *Server) saveDiagnosisEmbedding(incidentID int64, inc Incident, reply string) {
+	if s.pg == nil {
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return
+	}
+	// Build a concise summary from the incident + diagnosis for embedding
+	summary := fmt.Sprintf("事件：%s。告警类型：%s。严重程度：%s。诊断：%s",
+		inc.Title, inc.Type, inc.Severity, trimLine(reply, 500))
+	emb := embedText(cfg, summary)
+	if len(emb) == 0 {
+		return
+	}
+	if _, err := s.pg.insertDiagnosisEmbedding(incidentID, emb, summary, inc.Severity, inc.Type); err != nil {
+		slog.Warn("保存诊断向量失败", "incident", incidentID, "err", err)
+	}
+}
+
+// handleDiagnosisFeedback records user feedback on an AI diagnosis.
+// POST /api/v1/incidents/{id}/diagnosis-feedback  {message_index, helpful}
+func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		MessageIndex int  `json:"message_index"`
+		Helpful      bool `json:"helpful"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	fb := "unhelpful"
+	if req.Helpful {
+		fb = "helpful"
+	}
+	if s.pg != nil {
+		if err := s.pg.updateDiagnosisFeedback(id, fb); err != nil {
+			slog.Warn("保存诊断反馈失败", "incident", id, "err", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleListExperienceRules returns all experience rules.
+// GET /api/v1/experience-rules
+func (s *Server) handleListExperienceRules(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, []experienceRule{})
+		return
+	}
+	rules, err := s.pg.listExperienceRules()
+	if err != nil {
+		writeJSON(w, http.StatusOK, []experienceRule{})
+		return
+	}
+	if rules == nil {
+		rules = []experienceRule{}
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+// handleCreateExperienceRule creates a new experience rule.
+// POST /api/v1/experience-rules  {pattern, conclusion, severity, incident_id}
+func (s *Server) handleCreateExperienceRule(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	var req experienceRule
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" || req.Conclusion == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pattern 和 conclusion 为必填项"})
+		return
+	}
+	id, err := s.pg.insertExperienceRule(req)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
+}
+
+// handleDeleteExperienceRule deletes an experience rule by ID.
+// DELETE /api/v1/experience-rules/{id}
+func (s *Server) handleDeleteExperienceRule(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	if err := s.pg.deleteExperienceRule(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -5773,11 +5773,27 @@ function renderDiagnosisChat(){
   const el=$("incDiagnosisChat"); if(!el) return;
   const hist=window._incDiagHistory||[];
   if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击上方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
-  el.innerHTML=hist.map(m=>{
+  el.innerHTML=hist.map((m,i)=>{
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
-    return `<div class="ai-chat-msg ${cls}">${esc(m.content)}</div>`;
+    let fb="";
+    if(m.role==="assistant" && m.content!=="思考中…"){
+      fb=`<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="有用">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="无用">👎</button></div>`;
+    }
+    return `<div class="ai-chat-msg ${cls}">${esc(m.content)}${fb}</div>`;
   }).join("");
+  // Wire feedback buttons
+  el.querySelectorAll("[data-fb]").forEach(b=>b.onclick=()=>sendDiagnosisFeedback(parseInt(b.dataset.idx),b.dataset.fb==="helpful"));
   el.scrollTop=el.scrollHeight;
+}
+async function sendDiagnosisFeedback(idx,helpful){
+  if(!window._incDiagId) return;
+  try {
+    await fetch(`${API}/incidents/${window._incDiagId}/diagnosis-feedback`,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message_index:idx,helpful})
+    });
+    toast(helpful?"已标记为有用 👍":"已标记为无用 👎","ok");
+  } catch(e){ /* ignore */ }
 }
 async function sendDiagnosisChatMsg(){
   const el=$("incDiagInput"); if(!el) return;
