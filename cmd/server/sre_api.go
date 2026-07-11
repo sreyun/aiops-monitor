@@ -374,7 +374,15 @@ func (s *Server) handleEscalateIncident(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.incidents.SetTicket(inc.ID, tk.ID, s.actorName(r))
+	// Append a more descriptive timeline entry with the ticket number
+	s.incidents.AddEvent(inc.ID, "escalated", s.actorName(r),
+		fmt.Sprintf("已升级为工单 #%d（优先级 %s）", tk.ID, strings.ToUpper(prio)))
 	s.store.MarkDirty()
+	// Push notification to message center
+	s.messages.push("ticket", "info",
+		fmt.Sprintf("事件 #%d 已升级为工单 #%d", inc.ID, tk.ID),
+		fmt.Sprintf("事件：%s | 优先级：%s | 操作人：%s", inc.Title, strings.ToUpper(prio), s.actorName(r)),
+		"sre", strconv.FormatInt(tk.ID, 10))
 	writeJSON(w, http.StatusOK, tk)
 }
 
@@ -491,7 +499,33 @@ func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "ticket.not_found")})
 		return
 	}
-	writeJSON(w, http.StatusOK, tk)
+	// Enrich with linked incident info for traceability
+	result := map[string]any{
+		"id":           tk.ID,
+		"title":        tk.Title,
+		"description":  tk.Description,
+		"priority":     tk.Priority,
+		"status":       tk.Status,
+		"assignee":     tk.Assignee,
+		"reporter":     tk.Reporter,
+		"incident_id":  tk.IncidentID,
+		"comments":     tk.Comments,
+		"created_at":   tk.CreatedAt,
+		"updated_at":   tk.UpdatedAt,
+	}
+	if tk.IncidentID > 0 {
+		if inc, found := s.incidents.Get(tk.IncidentID); found {
+			result["incident"] = map[string]any{
+				"id":         inc.ID,
+				"title":      inc.Title,
+				"severity":   inc.Severity,
+				"status":     inc.Status,
+				"hostname":   inc.Hostname,
+				"created_at": inc.CreatedAt,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +570,14 @@ func (s *Server) handleUpdateTicket(w http.ResponseWriter, r *http.Request) {
 			label = "已关闭"
 		}
 		s.messages.push("ticket", "success", "工单"+label+"："+tk.Title, "", "sre", strconv.FormatInt(tk.ID, 10))
+		// Auto-resolve the linked incident when the ticket is resolved/closed.
+		if tk.IncidentID > 0 {
+			if inc, found := s.incidents.Get(tk.IncidentID); found && inc.Status != "resolved" {
+				s.incidents.Resolve(tk.IncidentID, "工单 #"+strconv.FormatInt(tk.ID, 10)+" 已"+label)
+				s.incidents.AddEvent(tk.IncidentID, "note", "system",
+					fmt.Sprintf("关联工单 #%d 已%s，事件自动标记为已解决", tk.ID, label))
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, tk)
 }
@@ -785,6 +827,156 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 	s.incidents.AddEvent(id, "ai_diagnosis", actor, diag)
 	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, map[string]string{"diagnosis": diag, "source": source})
+}
+
+// handleDiagnoseChatIncident provides multi-turn AI diagnosis chat for an
+// incident, carrying the full incident context as system prompt so the operator
+// can ask follow-up questions, challenge conclusions, or request deeper analysis.
+// POST /api/v1/incidents/{id}/diagnose-chat  {message, history:[{role,content}]}
+func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	inc, found := s.incidents.Get(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
+		return
+	}
+	var req struct {
+		Message string `json:"message"`
+		History []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"history,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
+		return
+	}
+	// Build rich system prompt with full incident context
+	sys := buildIncidentDiagnosisPrompt(inc)
+	// Collect existing AI diagnosis from timeline as additional context
+	for _, e := range inc.Timeline {
+		if e.Kind == "ai_diagnosis" && e.Text != "" {
+			sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
+			break // only the latest one
+		}
+	}
+	msgs := []map[string]string{{"role": "system", "content": sys}}
+	hist := req.History
+	if len(hist) > 20 {
+		hist = hist[len(hist)-20:]
+	}
+	for _, h := range hist {
+		if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
+			msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
+		}
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
+	reply, err := aiChat(cfg, msgs)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	// Persist this chat turn to PG for learning/accumulation
+	s.saveDiagnosisChatTurn(id, req.Message, reply)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply})
+}
+
+// buildIncidentDiagnosisPrompt constructs a system prompt with the incident's
+// full context so the AI has all the information it needs to reason about the
+// problem without the operator having to retype it.
+func buildIncidentDiagnosisPrompt(inc Incident) string {
+	var b strings.Builder
+	b.WriteString("你是资深 SRE 值班工程师，正在协助排查一个线上事件。以下是该事件的完整上下文：\n\n")
+	fmt.Fprintf(&b, "事件 #%d：%s\n", inc.ID, inc.Title)
+	fmt.Fprintf(&b, "严重程度：%s | 状态：%s | 来源：%s\n", inc.Severity, inc.Status, inc.Source)
+	if inc.Hostname != "" {
+		fmt.Fprintf(&b, "关联主机：%s\n", inc.Hostname)
+	}
+	if inc.Type != "" {
+		fmt.Fprintf(&b, "告警类型：%s\n", inc.Type)
+	}
+	if inc.Assignee != "" {
+		fmt.Fprintf(&b, "指派人：%s\n", inc.Assignee)
+	}
+	fmt.Fprintf(&b, "创建时间：%s\n", time.Unix(inc.CreatedAt, 0).Format("2006-01-02 15:04:05"))
+	// Timeline summary
+	b.WriteString("\n事件时间线摘要：\n")
+	for _, e := range inc.Timeline {
+		ts := time.Unix(e.Ts, 0).Format("15:04:05")
+		if e.Text != "" {
+			fmt.Fprintf(&b, "  [%s] %s — %s: %s\n", ts, e.Kind, e.Actor, trimLine(e.Text, 200))
+		} else {
+			fmt.Fprintf(&b, "  [%s] %s — %s\n", ts, e.Kind, e.Actor)
+		}
+	}
+	b.WriteString("\n你的任务：根据以上上下文，回答操作员的追问。请用简洁中文，给出具体可执行的排查方向或处置建议。如果信息不足，明确指出还需要什么信息。")
+	return b.String()
+}
+
+// diagnosisChatMessage is a single turn in an incident diagnosis conversation.
+type diagnosisChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Ts      int64  `json:"ts"`
+}
+
+// saveDiagnosisChatTurn persists a chat turn to PostgreSQL via kv_state so the
+// conversation history survives restarts and accumulates over time.
+func (s *Server) saveDiagnosisChatTurn(incidentID int64, userMsg, aiReply string) {
+	if s.store == nil || s.store.pg == nil {
+		return
+	}
+	key := fmt.Sprintf("ai_diag_chat_%d", incidentID)
+	now := time.Now().Unix()
+	// Load existing history
+	var history []diagnosisChatMessage
+	if raw, _ := s.store.pg.loadKV(key); raw != nil {
+		_ = json.Unmarshal(raw, &history)
+	}
+	history = append(history,
+		diagnosisChatMessage{Role: "user", Content: userMsg, Ts: now},
+		diagnosisChatMessage{Role: "assistant", Content: aiReply, Ts: now},
+	)
+	// Cap at 100 messages (50 turns) to avoid unbounded growth
+	if len(history) > 100 {
+		history = history[len(history)-100:]
+	}
+	raw, _ := json.Marshal(history)
+	_ = s.store.pg.saveKV(key, raw)
+}
+
+// handleGetDiagnosisChatHistory returns the persisted chat history for an incident.
+// GET /api/v1/incidents/{id}/diagnose-chat
+func (s *Server) handleGetDiagnosisChatHistory(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var history []diagnosisChatMessage
+	if s.store != nil && s.store.pg != nil {
+		key := fmt.Sprintf("ai_diag_chat_%d", id)
+		if raw, _ := s.store.pg.loadKV(key); raw != nil {
+			_ = json.Unmarshal(raw, &history)
+		}
+	}
+	if history == nil {
+		history = []diagnosisChatMessage{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": history})
 }
 
 // handleSREOverview returns badge counts for the navigation.

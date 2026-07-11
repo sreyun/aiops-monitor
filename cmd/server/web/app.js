@@ -2569,8 +2569,8 @@ function renderTerminalSessions(sessions) {
       </div>
       ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} ${I18N.t("ui.observe")}</span>` : `<span class="term-session-badge">${I18N.t("ui.active")}</span>`}
       <div class="term-session-actions">
-        <button class="btn sm" onclick="openTerminalObserve('${s.id}','${esc(s.hostname)}')">${I18N.t("ui.observe")}</button>
-        <button class="btn sm" onclick="openTerminalReplay('${s.id}','${esc(s.hostname)}')">${I18N.t("ui.replay")}</button>
+        <button class="btn sm" data-act="term-observe" data-sid="${esc(s.id)}" data-host="${esc(s.hostname)}">${I18N.t("ui.observe")}</button>
+        <button class="btn sm" data-act="term-replay" data-sid="${esc(s.id)}" data-host="${esc(s.hostname)}">${I18N.t("ui.replay")}</button>
       </div>
     </div>`;
   }).join("");
@@ -4480,8 +4480,8 @@ async function usersAction(name, act) {
 
 /* ---------- 账户找回：用户名 / 密码 ---------- */
 // New dual-verification flow (email code + optional MFA TOTP)
-function openRecoverUser() { showRecoverFlow('recover_username'); }
-function openRecoverPass() { showRecoverFlow('recover_password'); }
+function openRecoverUser(e) { if (e) e.preventDefault(); showRecoverFlow('recover_username'); }
+function openRecoverPass(e) { if (e) e.preventDefault(); showRecoverFlow('recover_password'); }
 
 function showRecoverFlow(purpose) {
   const body = $("recoverBody");
@@ -4584,7 +4584,7 @@ function showRecoverResult(purpose, result) {
     toast(I18N.t("toast.username_recovered"), "ok");
     body.innerHTML = `
       <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.username_recovered")}</div>
-      <div class="field"><input type="text" value="${esc(result.username)}" readonly style="font-weight:700;font-size:16px;text-align:center;cursor:pointer" onclick="navigator.clipboard.writeText(this.value);toast(I18N.t('toast.copied'),'ok')" title="${I18N.t('toast.copied')}"></div>
+      <div class="field"><input type="text" value="${esc(result.username)}" readonly style="font-weight:700;font-size:16px;text-align:center;cursor:pointer" data-act="copy-input" title="${I18N.t('toast.copied')}"></div>
       <div class="mfa-foot"><button class="btn primary" id="rcClose" type="button">${I18N.t("recover.back_to_login")}</button></div>`;
     $("rcClose").onclick = () => $("recoverMask").classList.remove("show");
   } else {
@@ -5438,7 +5438,7 @@ function renderPbSteps(steps) {
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.step_name")}</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="${I18N.t('form.hint_step_name')}"></div>
-        <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" onchange="pbTargetPreview(this)">${tgtOpts}</select></div></div>
+        <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" data-act-change="pb-target-preview">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
       <div class="field"><label>${I18N.t("form.command")}</label><textarea class="pb-step-cmd" rows="2" placeholder="${I18N.t('form.hint_command')}" spellcheck="false" style="resize:vertical;min-height:54px;line-height:1.5">${esc(s.command||"")}</textarea></div>
@@ -5654,8 +5654,8 @@ let SRE_TAB = "incidents";
 let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [];
 const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","offline","check"];
 const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
-const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||s;
-const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||s;
+const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||esc(s);
+const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
 const _tlKind = k => ({created:"创建",fired:"触发",recovered:"恢复",acked:"确认",resolved:"解决",remediation:"自动修复",comment:"评论",escalated:"升级工单",note:"备注",ai_diagnosis:"🤖 AI 诊断"})[k]||k;
 const _runStatus = s => ({running:"执行中",success:"成功",failed:"失败",pending_approval:"待审批",skipped_cooldown:"冷却跳过",skipped_ratelimit:"限频跳过",rejected:"已拒绝",no_playbook:"无剧本"})[s]||s;
@@ -5721,7 +5721,13 @@ async function openIncidentDetail(id){
       <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
       <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
       ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 工单 #${inc.ticket_id}</span>`:""}</div>
-      <div class="subhead">时间线</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>`;
+      <div class="subhead">时间线</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
+      <div class="subhead" style="margin-top:16px">🤖 AI 诊断对话</div>
+      <div id="incDiagnosisChat" class="ai-diagnosis-chat"></div>
+      <div class="ai-diagnosis-input">
+        <textarea id="incDiagInput" rows="2" placeholder="追问 AI 细节、反驳结论、要求进一步排查…"></textarea>
+        <button class="btn primary" id="incDiagSendBtn">发送</button>
+      </div>`;
     const acts=[];
     acts.push(`<button class="btn sm" data-iact="diagnose">🤖 AI 诊断</button>`);
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">确认</button>`); acts.push(`<button class="btn sm" data-iact="resolve">解决</button>`); }
@@ -5729,6 +5735,12 @@ async function openIncidentDetail(id){
     acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="添加评论…" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">发送</button>`);
     const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
     foot.querySelectorAll("[data-iact]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.iact));
+    // Wire up diagnosis chat
+    window._incDiagId = inc.id;
+    window._incDiagHistory = [];
+    loadDiagnosisChatHistory(inc.id);
+    $("incDiagSendBtn").onclick = () => sendDiagnosisChatMsg();
+    $("incDiagInput").onkeydown = e => { if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendDiagnosisChatMsg(); } };
     $("incidentDetailMask").classList.add("show");
   } catch(e){ toast("加载失败: "+e,"err"); }
 }
@@ -5736,11 +5748,63 @@ async function incidentAction(id, act){
   try {
     if (act==="comment"){ const t=$("incCommentInput").value.trim(); if(!t)return;
       await fetch(`${API}/incidents/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t})}); }
-    else if (act==="escalate"){ await fetch(`${API}/incidents/${id}/ticket`,{method:"POST"}); toast("已升级为工单","ok"); }
+    else if (act==="escalate"){
+      const r=await fetch(`${API}/incidents/${id}/ticket`,{method:"POST"});
+      const tk=await r.json().catch(()=>({}));
+      toast(`已升级为工单 #${tk.id||"?"}`,"ok");
+    }
     else if (act==="diagnose"){ toast("AI 诊断中，请稍候…","ok"); await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST"}); }
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
   } catch(e){ toast("操作失败: "+e,"err"); }
+}
+// ---- AI 诊断多轮对话 ----
+async function loadDiagnosisChatHistory(incidentId){
+  const el=$("incDiagnosisChat"); if(!el) return;
+  try {
+    const r=await fetch(`${API}/incidents/${incidentId}/diagnose-chat`);
+    const j=await r.json();
+    window._incDiagHistory = (j.history||[]).map(m=>({role:m.role,content:m.content}));
+  } catch(e){ window._incDiagHistory=[]; }
+  renderDiagnosisChat();
+}
+function renderDiagnosisChat(){
+  const el=$("incDiagnosisChat"); if(!el) return;
+  const hist=window._incDiagHistory||[];
+  if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击上方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
+  el.innerHTML=hist.map(m=>{
+    const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
+    return `<div class="ai-chat-msg ${cls}">${esc(m.content)}</div>`;
+  }).join("");
+  el.scrollTop=el.scrollHeight;
+}
+async function sendDiagnosisChatMsg(){
+  const el=$("incDiagInput"); if(!el) return;
+  const msg=el.value.trim(); if(!msg) return;
+  const chat=$("incDiagnosisChat");
+  // Show user message immediately
+  window._incDiagHistory.push({role:"user",content:msg});
+  renderDiagnosisChat();
+  el.value=""; el.disabled=true; $("incDiagSendBtn").disabled=true;
+  // Add a placeholder for AI response
+  window._incDiagHistory.push({role:"assistant",content:"思考中…"});
+  renderDiagnosisChat();
+  try {
+    const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…")})
+    });
+    const j=await r.json().catch(()=>({}));
+    // Replace the placeholder with real response
+    window._incDiagHistory.pop();
+    if(j.ok){ window._incDiagHistory.push({role:"assistant",content:j.reply}); }
+    else { window._incDiagHistory.push({role:"assistant",content:"❌ "+(j.error||"请求失败")}); }
+  } catch(e){
+    window._incDiagHistory.pop();
+    window._incDiagHistory.push({role:"assistant",content:"❌ 网络错误: "+e});
+  }
+  renderDiagnosisChat();
+  el.disabled=false; $("incDiagSendBtn").disabled=false; el.focus();
 }
 function openNewIncident(){
   $("niTitle").value=""; $("niSeverity").value="warning";
@@ -5796,7 +5860,7 @@ function openRuleModal(r){
   $("rrCooldown").value=r?r.cooldown_sec:300; $("rrMaxPerHour").value=r?r.max_per_hour:6; $("rrApproval").checked=r?r.require_approval:false;
   $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">（请先创建剧本）</option>`;
   const sel=new Set(r?(r.match_types||[]):[]);
-  $("rrTypes").innerHTML=SRE_ALERT_TYPES.map(t=>`<label class="chip-check"><input type="checkbox" value="${t}" ${sel.has(t)?"checked":""}> ${t}</label>`).join("");
+  $("rrTypes").innerHTML=SRE_ALERT_TYPES.map(t=>`<label class="chip-check"><input type="checkbox" value="${esc(t)}" ${sel.has(t)?"checked":""}> ${esc(t)}</label>`).join("");
   $("remediationRuleMask").classList.add("show");
 }
 async function saveRule(){
@@ -5875,6 +5939,16 @@ function openTicketModal(t){
   $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:"新建工单";
   $("tkTitle").value=t?t.title:""; $("tkPriority").value=t?t.priority:"p3"; $("tkStatus").value=t?t.status:"open";
   $("tkAssignee").value=t?(t.assignee||""):""; $("tkDesc").value=t?(t.description||""):"";
+  // Show linked incident info if present
+  const incInfo=$("tkIncidentInfo");
+  if(t && t.incident){
+    const inc=t.incident;
+    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 关联事件：<a href="#" onclick="openIncidentDetail(${inc.id});return false" style="font-weight:600">#${inc.id} ${esc(inc.title)}</a> · <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span> · ${esc(inc.hostname||"")} · ${fmtDateTime(inc.created_at)}</div>`;
+    incInfo.style.display="";
+  } else if(t && t.incident_id){
+    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 关联事件：<a href="#" onclick="openIncidentDetail(${t.incident_id});return false" style="font-weight:600">#${t.incident_id}</a></div>`;
+    incInfo.style.display="";
+  } else { incInfo.style.display="none"; }
   const cm=$("tkComments"),cf=$("tkCommentField");
   if(t){ cm.innerHTML=`<div class="subhead">评论</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div></div>`).join("")||`<div class="empty-line">—</div>`); cf.style.display=""; }
   else { cm.innerHTML=""; cf.style.display="none"; }
@@ -5948,7 +6022,7 @@ async function openAIConfig(){
   // Load model suggestions
   try {
     const m=await fetch(`${API}/ai/models`).then(r=>r.json());
-    const dl=$("aiModelList"); if(dl && m.models){ dl.innerHTML=m.models.map(m=>`<option value="${m.value}">${m.label}</option>`).join(""); }
+    const dl=$("aiModelList"); if(dl && m.models){ dl.innerHTML=m.models.map(m=>`<option value="${esc(m.value)}">${esc(m.label)}</option>`).join(""); }
   } catch(e){}
   $("aiConfigMask").classList.add("show");
 }
@@ -6216,14 +6290,14 @@ function fwdActionButtons(item) {
   const toggleIcon = item.enabled ? FWD_ICONS.disable : FWD_ICONS.enable;
   const toggleLabel = item.enabled ? I18N.t("ui.disable") : I18N.t("ui.enable");
   const primary = item.type === "http"
-    ? `<button class="icon-btn" title="${I18N.t("ui.open")}" onclick="openProxyUrl('${item.proxyUrl}')">${FWD_ICONS.open}</button>`
+    ? `<button class="icon-btn" title="${I18N.t("ui.open")}" data-act="proxy-open" data-url="${esc(item.proxyUrl)}">${FWD_ICONS.open}</button>`
     : ""; // TCP：应用户要求移除「复制地址」按钮（列表/卡片里的监听地址仍可直接复制）
   return `
-    <button class="icon-btn" title="${toggleLabel}" onclick="toggleForward(event,'${item.type}','${esc(item.id)}',${!item.enabled})">${toggleIcon}</button>
+    <button class="icon-btn" title="${toggleLabel}" data-act="fwd-toggle" data-ftype="${esc(item.type)}" data-fid="${esc(item.id)}" data-enable="${item.enabled ? "0" : "1"}">${toggleIcon}</button>
     ${primary}
-    <button class="icon-btn" title="${I18N.t("ui.copy")}" onclick="copyForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.copy}</button>
-    <button class="icon-btn" title="${I18N.t("ui.edit")}" onclick="editForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.edit}</button>
-    <button class="icon-btn danger" title="${I18N.t("ui.delete")}" onclick="deleteForward('${item.type}','${esc(item.id)}')">${FWD_ICONS.del}</button>`;
+    <button class="icon-btn" title="${I18N.t("ui.copy")}" data-act="fwd-copy" data-ftype="${esc(item.type)}" data-fid="${esc(item.id)}">${FWD_ICONS.copy}</button>
+    <button class="icon-btn" title="${I18N.t("ui.edit")}" data-act="fwd-edit" data-ftype="${esc(item.type)}" data-fid="${esc(item.id)}">${FWD_ICONS.edit}</button>
+    <button class="icon-btn danger" title="${I18N.t("ui.delete")}" data-act="fwd-del" data-ftype="${esc(item.type)}" data-fid="${esc(item.id)}">${FWD_ICONS.del}</button>`;
 }
 
 // 将 TCP / HTTP 两条数据源统一为渲染模型
@@ -6632,6 +6706,46 @@ document.querySelectorAll("#fwdModeTabs .fwd-mode-tab").forEach(btn => {
 function copyText(text) {
   navigator.clipboard?.writeText(text).then(() => toast(I18N.t("toast.copied_detail") + text, "ok"));
 }
+
+/* ============================================================
+   CSP 加固：把所有内联 on*= 事件处理器统一改为「事件委托」
+   —— 目的有二：
+   1) 允许在 CSP 中移除 script-src 'unsafe-inline'，即便出现 XSS 也无法执行内联脚本；
+   2) 消除此前把主机名/代理 URL 直接拼进 onclick JS 字符串导致的 DOM XSS
+      （esc() 不转义单引号，恶意主机名带 ' 即可越界注入）。
+   约定：可点击元素用 data-act="动作"，附带的参数放 data-* 属性，经 dataset 读取，
+   数据不再进入任何可执行上下文。
+   ============================================================ */
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  switch (el.dataset.act) {
+    case "install": openInstall(); break;
+    case "ai-preset": setAIPreset(el.dataset.preset); break;
+    case "fwd-view": switchForwardView(el.dataset.view); break;
+    case "term-observe": openTerminalObserve(el.dataset.sid, el.dataset.host); break;
+    case "term-replay": openTerminalReplay(el.dataset.sid, el.dataset.host); break;
+    case "proxy-open": openProxyUrl(el.dataset.url); break;
+    case "fwd-toggle": toggleForward(e, el.dataset.ftype, el.dataset.fid, el.dataset.enable === "1"); break;
+    case "fwd-copy": copyForward(el.dataset.ftype, el.dataset.fid); break;
+    case "fwd-edit": editForward(el.dataset.ftype, el.dataset.fid); break;
+    case "fwd-del": deleteForward(el.dataset.ftype, el.dataset.fid); break;
+    case "copy-input": navigator.clipboard?.writeText(el.value); toast(I18N.t("toast.copied"), "ok"); break;
+  }
+});
+document.addEventListener("change", e => {
+  const el = e.target.closest("[data-act-change]");
+  if (!el) return;
+  switch (el.dataset.actChange) {
+    case "filter-hosts": filterHosts(el.value); break;
+    case "sort-hosts": sortHosts(el.value); break;
+    case "filter-logs-level": filterLogsByLevel(el.value); break;
+    case "filter-logs-time": filterLogsByTime(el.value); break;
+    case "log-page-size": setLogPageSize(el.value); break;
+    case "filter-checks": filterChecks(el.value); break;
+    case "pb-target-preview": pbTargetPreview(el); break;
+  }
+});
 
 /* ============================================================
    离线检测

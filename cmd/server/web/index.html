@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/style.css">
-<script>(function(){var t=localStorage.getItem("aiops_theme")||"dark";document.documentElement.setAttribute("data-theme",t)})()</script>
+<script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
 <link rel="alternate" hreflang="en" href="/?lang=en">
@@ -200,7 +200,7 @@
             <div class="ob-step"><span class="ob-num">2</span><div><b data-i18n="onboard.step2_title">查看主机</b><div class="hint" data-i18n="onboard.step2_hint">几秒后主机卡片自动出现在「主机」页</div></div></div>
             <div class="ob-step"><span class="ob-num">3</span><div><b data-i18n="onboard.step3_title">配置告警</b><div class="hint" data-i18n="onboard.step3_hint">在「告警设置」里接入飞书 / 钉钉机器人</div></div></div>
           </div>
-          <button class="btn primary icon" onclick="openInstall()">
+          <button class="btn primary icon" data-act="install">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
             <span data-i18n="onboard.install_now">立即安装第一台 Agent</span>
           </button>
@@ -238,14 +238,14 @@
         <div class="section-title"><span data-i18n="section.host_list">主机列表</span><span class="count-pill" id="hostsCount">0</span>
           <input type="text" id="hostSearch" class="search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / 系统 / 分类…">
           <div class="select-wrap" style="margin-left:12px;">
-            <select id="hostFilter" onchange="filterHosts(this.value)" data-i18n-title="filter.by_status" title="按状态筛选">
+            <select id="hostFilter" data-act-change="filter-hosts" data-i18n-title="filter.by_status" title="按状态筛选">
               <option value="all" data-i18n="filter.all_hosts">全部主机</option>
               <option value="online" data-i18n="ui.online">在线</option>
               <option value="offline" data-i18n="ui.offline">离线</option>
             </select>
           </div>
           <div class="select-wrap" style="margin-left:12px;">
-            <select id="hostSort" onchange="sortHosts(this.value)" title="排序方式">
+            <select id="hostSort" data-act-change="sort-hosts" title="排序方式">
               <option value="name" data-i18n="sort.by_name">按名称</option>
               <option value="cpu" data-i18n="sort.by_cpu">按 CPU</option>
               <option value="mem" data-i18n="sort.by_mem">按内存</option>
@@ -267,7 +267,7 @@
         <div class="empty" id="empty">
           暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
           <code>AIOps-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
-            <button class="btn primary icon" onclick="openInstall()">
+            <button class="btn primary icon" data-act="install">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
               <span data-i18n="ui.install_agent_btn">安装 Agent</span>
             </button>
@@ -300,7 +300,7 @@
         <div class="section-title"><span data-i18n="section.op_log">操作与介入日志</span><span class="tag" data-i18n="section.op_sys_plugin">操作 / 系统 / 插件</span><span class="count-pill" id="logCount">0</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="select-wrap">
-              <select id="logLevelFilter" onchange="filterLogsByLevel(this.value)" data-i18n-title="filter.by_level" title="按级别筛选">
+              <select id="logLevelFilter" data-act-change="filter-logs-level" data-i18n-title="filter.by_level" title="按级别筛选">
                 <option value="all" data-i18n="filter.all_levels">全部级别</option>
                 <option value="critical" data-i18n="ui.critical">严重</option>
                 <option value="warning" data-i18n="ui.warning">警告</option>
@@ -308,7 +308,7 @@
               </select>
             </div>
             <div class="select-wrap">
-              <select id="logTimeRange" onchange="filterLogsByTime(this.value)" data-i18n-title="filter.time_range" title="时间范围">
+              <select id="logTimeRange" data-act-change="filter-logs-time" data-i18n-title="filter.time_range" title="时间范围">
                 <option value="all" data-i18n="filter.all_time">全部时间</option>
                 <option value="1h" data-i18n="filter.last_1h">最近1小时</option>
                 <option value="6h" data-i18n="filter.last_6h">最近6小时</option>
@@ -316,7 +316,7 @@
               </select>
             </div>
             <div class="select-wrap">
-              <select id="logPageSize" onchange="setLogPageSize(this.value)" data-i18n-title="filter.page_size" title="每页条数">
+              <select id="logPageSize" data-act-change="log-page-size" data-i18n-title="filter.page_size" title="每页条数">
                 <option value="10">10 条/页</option>
                 <option value="30">30 条/页</option>
                 <option value="50" selected>50 条/页</option>
@@ -349,7 +349,7 @@
               </button>
             </div>
             <div class="select-wrap">
-              <select id="checkFilter" onchange="filterChecks(this.value)" title="按类型筛选">
+              <select id="checkFilter" data-act-change="filter-checks" title="按类型筛选">
                 <option value="all" data-i18n="filter.all_check_types">全部类型</option>
                 <option value="http" data-i18n="check.type_http">HTTP</option>
                 <option value="tcp" data-i18n="check.type_tcp">TCP</option>
@@ -460,8 +460,8 @@
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="view-toggle" id="forwardViewToggle" role="group" aria-label="视图切换">
-              <button class="vt-btn active" data-view="list" title="列表" onclick="switchForwardView('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
-              <button class="vt-btn" data-view="card" title="卡片" onclick="switchForwardView('card')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn active" data-view="list" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+              <button class="vt-btn" data-view="card" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
             </div>
             <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_forward">+ 新建转发</button>
           </div>
@@ -1146,6 +1146,7 @@
     <div class="modal-head"><h3 id="ticketModalTitle" data-i18n="sre.new_ticket">新建工单</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <input type="hidden" id="ticketId">
+      <div id="tkIncidentInfo" style="display:none"></div>
       <div class="field"><label data-i18n="sre.title">标题</label><input type="text" id="tkTitle"></div>
       <div class="grid2">
         <div class="field"><label data-i18n="sre.priority">优先级</label><div class="select-wrap"><select id="tkPriority"><option value="p1">P1 · 紧急</option><option value="p2">P2 · 高</option><option value="p3" selected>P3 · 中</option><option value="p4">P4 · 低</option></select></div></div>
@@ -1168,12 +1169,12 @@
       <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span data-i18n="sre.ai_enable">启用 AI Provider（OpenAI 兼容 / 百炼）</span></label>
       <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions"></div>
       <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px">
-        <button class="btn sm" onclick="setAIPreset('bailian-compat')" title="百炼 OpenAI 兼容模式">百炼兼容</button>
-        <button class="btn sm" onclick="setAIPreset('bailian-native')" title="百炼原生 Text Gen API">百炼原生</button>
-        <button class="btn sm" onclick="setAIPreset('bailian-anthropic')" title="百炼 Anthropic 兼容（Claude）">Anthropic</button>
-        <button class="btn sm" onclick="setAIPreset('openai')" title="OpenAI">OpenAI</button>
-        <button class="btn sm" onclick="setAIPreset('deepseek')" title="DeepSeek">DeepSeek</button>
-        <button class="btn sm" onclick="setAIPreset('ollama')" title="本地 Ollama">Ollama</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="bailian-compat" title="百炼 OpenAI 兼容模式">百炼兼容</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="bailian-native" title="百炼原生 Text Gen API">百炼原生</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="bailian-anthropic" title="百炼 Anthropic 兼容（Claude）">Anthropic</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="openai" title="OpenAI">OpenAI</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="deepseek" title="DeepSeek">DeepSeek</button>
+        <button class="btn sm" data-act="ai-preset" data-preset="ollama" title="本地 Ollama">Ollama</button>
       </div>
       <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
       <div class="grid2">
@@ -1304,9 +1305,9 @@
     <div class="login-err" id="loginErr"></div>
     <button class="btn primary block" type="submit" data-i18n="ui.login">登 录</button>
     <div class="login-links">
-      <a href="javascript:void(0)" id="forgotUserLink">忘记用户名</a>
+      <a href="#" id="forgotUserLink">忘记用户名</a>
       <span class="sep">·</span>
-      <a href="javascript:void(0)" id="forgotPassLink">忘记密码</a>
+      <a href="#" id="forgotPassLink">忘记密码</a>
     </div>
     <div class="hint" id="loginHint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。</div>
   </form>

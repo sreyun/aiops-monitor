@@ -169,6 +169,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
 	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnose", s.handleDiagnoseIncident)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/diagnose-chat", s.handleDiagnoseChatIncident)
+	mux.HandleFunc("GET /api/v1/incidents/{id}/diagnose-chat", s.handleGetDiagnosisChatHistory)
 	// Terminal enhancements
 	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)
@@ -219,6 +221,7 @@ func (s *Server) Routes() http.Handler {
 		fsrv := http.FileServer(http.FS(sub))
 		mux.Handle("GET /style.css", fsrv)
 		mux.Handle("GET /app.js", fsrv)
+		mux.Handle("GET /theme-init.js", fsrv) // 主题预置（外置内联脚本，配合 CSP 去 unsafe-inline）
 		mux.Handle("GET /i18n-dashboard.js", fsrv)
 		mux.Handle("GET /i18n-dashboard.en.js", fsrv)
 		mux.Handle("GET /i18n-dashboard.zh-TW.js", fsrv)
