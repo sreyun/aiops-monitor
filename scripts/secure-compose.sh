@@ -24,6 +24,10 @@
 #   COMPOSE_URL  编排文件地址（默认自动检测 GitHub/Gitee）
 #   OUT_FILE     输出文件名（默认 docker-compose.yml）
 
+# 在 set -eu 之前设置默认值，避免 macOS bash 3.2 在 process substitution
+# 模式下 ${VAR:-default} 赋值后仍被 set -u 视为 unbound variable
+OUT_FILE="${OUT_FILE:-docker-compose.yml}"
+
 set -eu
 
 # ---------- 可配置项 ----------
@@ -31,7 +35,6 @@ set -eu
 # 也可通过环境变量 COMPOSE_URL 强制指定
 GITHUB_COMPOSE="https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml"
 GITEE_COMPOSE="https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml"
-OUT_FILE="${OUT_FILE:-docker-compose.yml}"
 
 # ---------- 生成 PostgreSQL 密码（20 位，仅 A-Za-z0-9） ----------
 gen_pg_password() {
