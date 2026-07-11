@@ -1,11 +1,89 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"aiops-monitor/shared"
 )
+
+// TestLogStorePersistRoundTrip mirrors the PG blob cycle: export → JSON → import.
+// It guards the fix for "logs lost after container restart".
+func TestLogStorePersistRoundTrip(t *testing.T) {
+	src := newLogStore()
+	src.ingest("h1", "web", []shared.LogLine{
+		{Ts: 100, Source: "/var/log/a", Level: "ERROR", Message: "boom"},
+		{Ts: 101, Source: "/var/log/a", Level: "info", Message: "ok"},
+	})
+	raw, err := json.Marshal(src.export())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var logs []StoredLog
+	if err := json.Unmarshal(raw, &logs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	dst := newLogStore()
+	dst.importLogs(logs)
+	if dst.count() != 2 {
+		t.Fatalf("restored count=%d, want 2", dst.count())
+	}
+	if dst.errorCount(0) != 1 {
+		t.Fatalf("restored errorCount=%d, want 1", dst.errorCount(0))
+	}
+	// New ingests continue to append onto restored history.
+	dst.ingest("h1", "web", []shared.LogLine{{Ts: 102, Level: "warn", Message: "later"}})
+	if dst.count() != 3 {
+		t.Fatalf("post-restore count=%d, want 3", dst.count())
+	}
+}
+
+// TestLogStorePersistCap ensures persistence only writes a bounded warm tail.
+func TestLogStorePersistCap(t *testing.T) {
+	ls := newLogStore()
+	lines := make([]shared.LogLine, logPersistCap+500)
+	for i := range lines {
+		lines[i] = shared.LogLine{Ts: int64(i), Level: "info", Message: "x"}
+	}
+	ls.ingest("h1", "web", lines)
+	exported := ls.export()
+	if len(exported) != logPersistCap {
+		t.Fatalf("exported=%d, want %d (capped)", len(exported), logPersistCap)
+	}
+	// The tail must be the newest lines.
+	if exported[len(exported)-1].Ts != int64(logPersistCap+499) {
+		t.Fatalf("tail Ts=%d, want newest", exported[len(exported)-1].Ts)
+	}
+}
+
+// TestInspectionPersistRoundTrip guards the fix for "AI inspections lost after
+// restart" and verifies the ID sequence resumes past the highest persisted ID.
+func TestInspectionPersistRoundTrip(t *testing.T) {
+	src := &aiManager{nextID: 0}
+	src.reports = []InspectionReport{
+		{ID: 1, Ts: 100, Trigger: "scheduled", Source: "heuristic", Summary: "健康"},
+		{ID: 2, Ts: 200, Trigger: "manual", Source: "ai", Model: "gpt", Summary: "异常"},
+	}
+	src.nextID = 2
+	raw, err := json.Marshal(src.exportReports())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var reps []InspectionReport
+	if err := json.Unmarshal(raw, &reps); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	dst := newAIManager(nil)
+	dst.importReports(reps)
+	got := dst.Reports() // newest-first
+	if len(got) != 2 || got[0].ID != 2 || got[0].Summary != "异常" {
+		t.Fatalf("restored reports wrong: %+v", got)
+	}
+	if dst.nextID != 2 {
+		t.Fatalf("nextID=%d, want 2 (resume from max persisted ID)", dst.nextID)
+	}
+}
 
 func TestLogStoreSearch(t *testing.T) {
 	ls := newLogStore()

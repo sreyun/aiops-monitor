@@ -264,7 +264,7 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		// Final flush of all relational state to PostgreSQL, then close cleanly.
-		server.pgFlush(pg)
+		server.pgFlush(pg, true)
 		pg.close()
 		os.Exit(0)
 	}()

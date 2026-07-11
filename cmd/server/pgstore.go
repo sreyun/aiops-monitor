@@ -386,18 +386,49 @@ func (s *Server) bindPG(ps *pgStore) {
 			s.messages.importMsgs(msgs)
 		}
 	}
+	// AI inspection history survives restart (SRE 中枢巡检报告).
+	if raw, _ := ps.loadKV("ai_inspections"); raw != nil {
+		var reps []InspectionReport
+		if json.Unmarshal(raw, &reps) == nil {
+			s.ai.importReports(reps)
+		}
+	}
+	// Remediation run history survives restart (自动修复执行历史).
+	if raw, _ := ps.loadKV("remediation_runs"); raw != nil {
+		var runs []RemediationRun
+		if json.Unmarshal(raw, &runs) == nil {
+			s.remediation.Import(runs)
+		}
+	}
+	// SLO burning state survives restart (SLO 燃烧状态).
+	if raw, _ := ps.loadKV("slo_burning"); raw != nil {
+		var burning map[string]bool
+		if json.Unmarshal(raw, &burning) == nil {
+			s.slos.importBurning(burning)
+		}
+	}
+	// Aggregated agent logs survive restart (日志检索缓冲).
+	if raw, _ := ps.loadKV("logs"); raw != nil {
+		var logs []StoredLog
+		if json.Unmarshal(raw, &logs) == nil {
+			s.logs.importLogs(logs)
+		}
+	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
+		tick := 0
 		for range t.C {
-			s.pgFlush(ps)
+			tick++
+			s.pgFlush(ps, tick%2 == 0) // heavy log blob every ~30s
 		}
 	}()
 }
 
 // pgFlush persists the current relational state to PostgreSQL (also called on
-// shutdown for a final flush).
-func (s *Server) pgFlush(ps *pgStore) {
+// shutdown for a final flush). withLogs gates the large aggregated-log blob so
+// the periodic 15s flush does not rewrite it every time.
+func (s *Server) pgFlush(ps *pgStore, withLogs bool) {
 	if err := ps.saveIncidents(s.incidents.Export()); err != nil {
 		slog.Warn("PG 同步事件失败", "err", err)
 	}
@@ -415,5 +446,23 @@ func (s *Server) pgFlush(ps *pgStore) {
 	}
 	if raw, err := json.Marshal(s.messages.export()); err == nil {
 		_ = ps.saveKV("messages", raw)
+	}
+	// AI inspection history is small (≤ inspectionReportCap) — persist every flush.
+	if raw, err := json.Marshal(s.ai.exportReports()); err == nil {
+		_ = ps.saveKV("ai_inspections", raw)
+	}
+	// Remediation run history is small (≤ remediationRunCap) — persist every flush.
+	if raw, err := json.Marshal(s.remediation.Export()); err == nil {
+		_ = ps.saveKV("remediation_runs", raw)
+	}
+	// SLO burning state is tiny — persist every flush.
+	if raw, err := json.Marshal(s.slos.exportBurning()); err == nil {
+		_ = ps.saveKV("slo_burning", raw)
+	}
+	// Aggregated agent logs can be large — only on the slower cadence / shutdown.
+	if withLogs {
+		if raw, err := json.Marshal(s.logs.export()); err == nil {
+			_ = ps.saveKV("logs", raw)
+		}
 	}
 }

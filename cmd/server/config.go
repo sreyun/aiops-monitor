@@ -190,6 +190,20 @@ type HTTPProxyConfig struct {
 	IsCopy      bool   `json:"is_copy"`      // True for copies made via "duplicate"; the "(copy)" suffix is rendered at display time, not stored, so it localizes with the UI language.
 }
 
+// PersistedForwardRule is a serializable TCP forwarding rule stored in ServerConfig.
+// The listener (net.Listener) is recreated on startup from the persisted fields.
+type PersistedForwardRule struct {
+	ID         string `json:"id"`
+	HostID     string `json:"host_id"`
+	Hostname   string `json:"hostname"`
+	TargetPort int    `json:"target_port"`
+	LocalPort  int    `json:"local_port"`
+	ListenAddr string `json:"listen_addr"`
+	Operator   string `json:"operator"`
+	CreatedAt  int64  `json:"created_at"`
+	Enabled    bool   `json:"enabled"`
+}
+
 // ServerConfig is the operator-editable server configuration persisted to disk.
 // Categories holds manual per-host category overrides (host id -> category).
 type ServerConfig struct {
@@ -234,6 +248,9 @@ type ServerConfig struct {
 	// HTTPProxies is the list of saved HTTP proxy shortcuts.
 	// Each entry stores a target host+port+path for quick access.
 	HTTPProxies []HTTPProxyConfig `json:"http_proxies,omitempty"`
+	// ForwardRules is the list of persisted TCP forwarding rules.
+	// Listeners are recreated on startup from these persisted fields.
+	ForwardRules []PersistedForwardRule `json:"forward_rules,omitempty"`
 	// AllowAnonymousAgents is an inverted flag: by default (zero value = false)
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
@@ -729,6 +746,8 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.VM = cs.cfg.VM                             // managed via env / storage config
 	c.PostgresDSN = cs.cfg.PostgresDSN           // managed via env / storage config
 	c.RelaySecret = cs.cfg.RelaySecret           // managed via storage/relay config (masked in GET)
+	c.HTTPProxies = cs.cfg.HTTPProxies          // managed via proxy endpoints
+	c.ForwardRules = cs.cfg.ForwardRules         // managed via forward endpoints
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -1108,4 +1127,68 @@ func (cs *ConfigStore) CopyHTTPProxy(id string) (HTTPProxyConfig, error) {
 		return HTTPProxyConfig{}, err
 	}
 	return newProxy, nil
+}
+
+// ---- Forward Rules (TCP port forwarding) ----
+
+func (cs *ConfigStore) ListForwardRules() []PersistedForwardRule {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return append([]PersistedForwardRule{}, cs.cfg.ForwardRules...)
+}
+
+func (cs *ConfigStore) AddForwardRule(r PersistedForwardRule) error {
+	cs.mu.Lock()
+	cs.cfg.ForwardRules = append(cs.cfg.ForwardRules, r)
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+func (cs *ConfigStore) DeleteForwardRule(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.ForwardRules[:0]
+	for _, r := range cs.cfg.ForwardRules {
+		if r.ID != id {
+			kept = append(kept, r)
+		}
+	}
+	cs.cfg.ForwardRules = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+func (cs *ConfigStore) ToggleForwardRule(id string, enabled bool) error {
+	cs.mu.Lock()
+	found := false
+	for i, r := range cs.cfg.ForwardRules {
+		if r.ID == id {
+			cs.cfg.ForwardRules[i].Enabled = enabled
+			found = true
+			break
+		}
+	}
+	cs.mu.Unlock()
+	if !found {
+		return fmt.Errorf("forward rule not found")
+	}
+	return cs.save()
+}
+
+func (cs *ConfigStore) UpdateForwardRule(id string, updated PersistedForwardRule) error {
+	cs.mu.Lock()
+	found := false
+	for i, r := range cs.cfg.ForwardRules {
+		if r.ID == id {
+			updated.ID = r.ID
+			updated.CreatedAt = r.CreatedAt
+			cs.cfg.ForwardRules[i] = updated
+			found = true
+			break
+		}
+	}
+	cs.mu.Unlock()
+	if !found {
+		return fmt.Errorf("forward rule not found")
+	}
+	return cs.save()
 }

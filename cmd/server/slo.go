@@ -223,6 +223,26 @@ func (m *sloManager) EvaluateAndAlert() {
 	}
 }
 
+// exportBurning / importBurning bridge the SLO burning state to PostgreSQL.
+func (m *sloManager) exportBurning() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]bool, len(m.burning))
+	for k, v := range m.burning {
+		out[k] = v
+	}
+	return out
+}
+
+func (m *sloManager) importBurning(burning map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.burning = make(map[string]bool, len(burning))
+	for k, v := range burning {
+		m.burning[k] = v
+	}
+}
+
 // validateSLO normalizes and checks an SLO before persisting.
 func validateSLO(s *SLO) error {
 	s.Name = strings.TrimSpace(s.Name)

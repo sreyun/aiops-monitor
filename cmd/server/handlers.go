@@ -55,6 +55,8 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		messages:    newMessageHub(),
 	}
 	s.wireSRE()
+	// Restore persisted TCP forward rules (recreate listeners)
+	s.forward.restoreRules(s)
 	return s
 }
 

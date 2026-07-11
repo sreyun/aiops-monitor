@@ -276,6 +276,35 @@ func (m *aiManager) Reports() []InspectionReport {
 	return out
 }
 
+// exportReports returns inspection history in chronological (storage) order for
+// PG persistence.
+func (m *aiManager) exportReports() []InspectionReport {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]InspectionReport, len(m.reports))
+	copy(out, m.reports)
+	return out
+}
+
+// importReports restores inspection history from PG on startup, resuming the ID
+// sequence from the highest persisted ID so new reports never collide.
+func (m *aiManager) importReports(reps []InspectionReport) {
+	if len(reps) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(reps) > inspectionReportCap {
+		reps = reps[len(reps)-inspectionReportCap:]
+	}
+	m.reports = reps
+	for _, r := range reps {
+		if r.ID > m.nextID {
+			m.nextID = r.ID
+		}
+	}
+}
+
 // runInspectionLoop is the scheduled inspector.
 func (m *aiManager) runInspectionLoop() {
 	for {

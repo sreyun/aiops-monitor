@@ -28,6 +28,11 @@ type StoredLog struct {
 
 const logStoreCap = 50000
 
+// logPersistCap bounds how many recent lines get written to PG. Memory keeps the
+// full ring for search; persistence only needs a warm tail to survive restart,
+// so the periodic blob stays small enough to avoid heavy WAL churn.
+const logPersistCap = 8000
+
 type logStore struct {
 	mu   sync.Mutex
 	logs []StoredLog
@@ -132,4 +137,31 @@ func (ls *logStore) count() int {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	return len(ls.logs)
+}
+
+// export returns a snapshot copy of the most recent logPersistCap lines for PG
+// persistence (chronological order).
+func (ls *logStore) export() []StoredLog {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	src := ls.logs
+	if len(src) > logPersistCap {
+		src = src[len(src)-logPersistCap:]
+	}
+	out := make([]StoredLog, len(src))
+	copy(out, src)
+	return out
+}
+
+// importLogs restores the log buffer from PG on startup (capped to logStoreCap).
+func (ls *logStore) importLogs(logs []StoredLog) {
+	if len(logs) == 0 {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if len(logs) > logStoreCap {
+		logs = logs[len(logs)-logStoreCap:]
+	}
+	ls.logs = logs
 }

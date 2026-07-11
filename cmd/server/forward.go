@@ -156,6 +156,8 @@ type forwardManager struct {
 	pendingSessions map[string][]forwardWaitInfo    // v5.2.5: queued for agents between polls
 	stats           forwardStats                    // P3: aggregate metrics
 	cfg             *ConfigStore                    // config reference for port range
+	store           *Store                          // store reference for host lookup
+	server          *Server                         // server reference for serveForwardListener (restart)
 }
 
 func newForwardManager(cfg *ConfigStore) *forwardManager {
@@ -489,16 +491,24 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 
 	actualPort = ln.Addr().(*net.TCPAddr).Port
 	actualAddr := listenHost + ":" + strconv.Itoa(actualPort)
+	now := time.Now().Unix()
 	r := &forwardRule{
 		id: termID()[:8], hostID: hostID, hostname: hostname,
 		targetPort: targetPort, localPort: actualPort,
 		listenAddr: actualAddr,
-		listener: ln, operator: operator, createdAt: time.Now().Unix(),
+		listener: ln, operator: operator, createdAt: now,
 		enabled: true,
 	}
 	m.mu.Lock()
 	m.rules[r.id] = r
 	m.mu.Unlock()
+	// Persist to config (PostgreSQL)
+	_ = m.cfg.AddForwardRule(PersistedForwardRule{
+		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
+		TargetPort: r.targetPort, LocalPort: r.localPort,
+		ListenAddr: r.listenAddr, Operator: r.operator,
+		CreatedAt: now, Enabled: true,
+	})
 	return r, nil
 }
 
@@ -528,6 +538,8 @@ func (m *forwardManager) removeRule(id string) bool {
 	if r.listener != nil {
 		_ = r.listener.Close()
 	}
+	// Persist deletion to config (PostgreSQL)
+	_ = m.cfg.DeleteForwardRule(id)
 	return true
 }
 
@@ -552,6 +564,8 @@ func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error
 		_ = r.listener.Close()
 		r.listener = nil
 	}
+	// Persist toggle to config (PostgreSQL)
+	_ = m.cfg.ToggleForwardRule(id, enable)
 	return r, nil
 }
 
@@ -587,6 +601,13 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 			r.listenAddr = net.JoinHostPort(host, strconv.Itoa(localPort))
 		}
 	}
+	// Persist update to config (PostgreSQL)
+	_ = m.cfg.UpdateForwardRule(id, PersistedForwardRule{
+		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
+		TargetPort: r.targetPort, LocalPort: r.localPort,
+		ListenAddr: r.listenAddr, Operator: r.operator,
+		CreatedAt: r.createdAt, Enabled: r.enabled,
+	})
 	return r, nil
 }
 
@@ -612,6 +633,62 @@ func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
 	}
 	m.rules[newRule.id] = newRule
 	return newRule, nil
+}
+
+// restoreRules recreates TCP forward listeners from persisted config on startup.
+// The caller (NewServer) must pass a server reference so listeners can be started.
+func (m *forwardManager) restoreRules(srv *Server) {
+	rules := m.cfg.ListForwardRules()
+	if len(rules) == 0 {
+		return
+	}
+	listenHost := m.cfg.ForwardListenAddr()
+	for _, pr := range rules {
+		if !pr.Enabled {
+			// Store disabled rules without a listener
+			m.mu.Lock()
+			m.rules[pr.ID] = &forwardRule{
+				id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
+				targetPort: pr.TargetPort, localPort: pr.LocalPort,
+				listenAddr: pr.ListenAddr, operator: pr.Operator,
+				createdAt: pr.CreatedAt, enabled: false,
+			}
+			m.mu.Unlock()
+			continue
+		}
+		// Try to re-bind the listener
+		ln, err := net.Listen("tcp", pr.ListenAddr)
+		if err != nil {
+			slog.Warn("恢复转发规则监听失败，尝试自动分配端口", "id", pr.ID, "addr", pr.ListenAddr, "err", err)
+			// Fall back to OS-assigned port
+			ln, err = net.Listen("tcp", listenHost+":0")
+			if err != nil {
+				slog.Error("恢复转发规则失败，跳过", "id", pr.ID, "err", err)
+				continue
+			}
+		}
+		actualPort := ln.Addr().(*net.TCPAddr).Port
+		actualAddr := ln.Addr().String()
+		r := &forwardRule{
+			id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
+			targetPort: pr.TargetPort, localPort: actualPort,
+			listenAddr: actualAddr, listener: ln,
+			operator: pr.Operator, createdAt: pr.CreatedAt, enabled: true,
+		}
+		// If the port changed, update the persisted config
+		if actualPort != pr.LocalPort {
+			_ = m.cfg.UpdateForwardRule(pr.ID, PersistedForwardRule{
+				ID: r.id, HostID: r.hostID, Hostname: r.hostname,
+				TargetPort: r.targetPort, LocalPort: r.localPort,
+				ListenAddr: r.listenAddr, Operator: r.operator,
+				CreatedAt: r.createdAt, Enabled: r.enabled,
+			})
+		}
+		m.mu.Lock()
+		m.rules[r.id] = r
+		m.mu.Unlock()
+		go srv.serveForwardListener(r)
+	}
 }
 
 func (m *forwardManager) listRules() []forwardInfo {

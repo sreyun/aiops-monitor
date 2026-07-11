@@ -373,6 +373,29 @@ func (m *remediationManager) PendingCount() int {
 	return n
 }
 
+// Export/Import bridge the manager to PostgreSQL.
+func (m *remediationManager) Export() []RemediationRun {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]RemediationRun, len(m.runs))
+	copy(out, m.runs)
+	return out
+}
+
+func (m *remediationManager) Import(list []RemediationRun) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runs = make([]RemediationRun, len(list))
+	copy(m.runs, list)
+	var maxID int64
+	for _, r := range m.runs {
+		if r.ID > maxID {
+			maxID = r.ID
+		}
+	}
+	m.nextID = maxID
+}
+
 // validateRemediationRule normalizes and checks a rule before persisting.
 func validateRemediationRule(r *RemediationRule) error {
 	r.Name = strings.TrimSpace(r.Name)
