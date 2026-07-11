@@ -134,6 +134,40 @@ func (p *pgStore) migrate() error {
 			incident_id BIGINT,
 			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
+		-- Hermes Agent 规则库（诊断规则 + 行动策略）
+		CREATE TABLE IF NOT EXISTS hermes_rules (
+			id          BIGSERIAL PRIMARY KEY,
+			name        TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			priority    INT DEFAULT 0,
+			enabled     BOOLEAN DEFAULT true,
+			config      JSONB NOT NULL,
+			created_at  TIMESTAMPTZ DEFAULT NOW(),
+			updated_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS hermes_rules_enabled ON hermes_rules(enabled);
+		-- Hermes Agent 提示模板库（系统提示 + 场景模板）
+		CREATE TABLE IF NOT EXISTS hermes_templates (
+			id          BIGSERIAL PRIMARY KEY,
+			name        TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			content     TEXT NOT NULL,
+			category    TEXT DEFAULT 'system',
+			version     INT DEFAULT 1,
+			active      BOOLEAN DEFAULT true,
+			created_at  TIMESTAMPTZ DEFAULT NOW(),
+			updated_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS hermes_templates_active ON hermes_templates(active);
+		-- Hermes Agent 会话记忆
+		CREATE TABLE IF NOT EXISTS hermes_sessions (
+			id          BIGSERIAL PRIMARY KEY,
+			incident_id BIGINT DEFAULT 0,
+			status      TEXT DEFAULT 'active',
+			messages    JSONB NOT NULL DEFAULT '[]',
+			created_at  TIMESTAMPTZ DEFAULT NOW(),
+			updated_at  TIMESTAMPTZ DEFAULT NOW()
+		);
 	`)
 	return err
 }
@@ -496,6 +530,167 @@ func (p *pgStore) listExperienceRules() ([]experienceRule, error) {
 func (p *pgStore) deleteExperienceRule(id int64) error {
 	_, err := p.db.Exec(`DELETE FROM experience_rules WHERE id=$1`, id)
 	return err
+}
+
+// --- Hermes rules CRUD ---
+
+type hermesRule struct {
+	ID          int64           `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Priority    int             `json:"priority"`
+	Enabled     bool            `json:"enabled"`
+	Config      json.RawMessage `json:"config"`
+	CreatedAt   string          `json:"created_at,omitempty"`
+	UpdatedAt   string          `json:"updated_at,omitempty"`
+}
+
+func (p *pgStore) listHermesRules() ([]hermesRule, error) {
+	rows, err := p.db.Query(`SELECT id,name,description,priority,enabled,config,created_at,updated_at FROM hermes_rules ORDER BY priority DESC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []hermesRule
+	for rows.Next() {
+		var r hermesRule
+		var ca, ua sql.NullTime
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &r.Enabled, &r.Config, &ca, &ua); err != nil {
+			continue
+		}
+		if ca.Valid {
+			r.CreatedAt = ca.Time.Format(time.RFC3339)
+		}
+		if ua.Valid {
+			r.UpdatedAt = ua.Time.Format(time.RFC3339)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) upsertHermesRule(r hermesRule) (int64, error) {
+	if r.ID > 0 {
+		_, err := p.db.Exec(`UPDATE hermes_rules SET name=$1,description=$2,priority=$3,enabled=$4,config=$5,updated_at=NOW() WHERE id=$6`,
+			r.Name, r.Description, r.Priority, r.Enabled, r.Config, r.ID)
+		return r.ID, err
+	}
+	var id int64
+	err := p.db.QueryRow(`INSERT INTO hermes_rules(name,description,priority,enabled,config) VALUES($1,$2,$3,$4,$5) RETURNING id`,
+		r.Name, r.Description, r.Priority, r.Enabled, r.Config).Scan(&id)
+	return id, err
+}
+
+func (p *pgStore) deleteHermesRule(id int64) error {
+	_, err := p.db.Exec(`DELETE FROM hermes_rules WHERE id=$1`, id)
+	return err
+}
+
+// --- Hermes templates CRUD ---
+
+type hermesTemplate struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+	Category    string `json:"category"`
+	Version     int    `json:"version"`
+	Active      bool   `json:"active"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+}
+
+func (p *pgStore) listHermesTemplates(activeOnly bool) ([]hermesTemplate, error) {
+	q := `SELECT id,name,description,content,category,version,active,created_at,updated_at FROM hermes_templates`
+	if activeOnly {
+		q += ` WHERE active=true`
+	}
+	q += ` ORDER BY id ASC`
+	rows, err := p.db.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []hermesTemplate
+	for rows.Next() {
+		var t hermesTemplate
+		var ca, ua sql.NullTime
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Content, &t.Category, &t.Version, &t.Active, &ca, &ua); err != nil {
+			continue
+		}
+		if ca.Valid {
+			t.CreatedAt = ca.Time.Format(time.RFC3339)
+		}
+		if ua.Valid {
+			t.UpdatedAt = ua.Time.Format(time.RFC3339)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) upsertHermesTemplate(t hermesTemplate) (int64, error) {
+	if t.ID > 0 {
+		_, err := p.db.Exec(`UPDATE hermes_templates SET name=$1,description=$2,content=$3,category=$4,version=version+1,active=$5,updated_at=NOW() WHERE id=$6`,
+			t.Name, t.Description, t.Content, t.Category, t.Active, t.ID)
+		return t.ID, err
+	}
+	var id int64
+	err := p.db.QueryRow(`INSERT INTO hermes_templates(name,description,content,category,active) VALUES($1,$2,$3,$4,$5) RETURNING id`,
+		t.Name, t.Description, t.Content, t.Category, t.Active).Scan(&id)
+	return id, err
+}
+
+func (p *pgStore) deleteHermesTemplate(id int64) error {
+	_, err := p.db.Exec(`DELETE FROM hermes_templates WHERE id=$1`, id)
+	return err
+}
+
+// --- Hermes sessions ---
+
+func (p *pgStore) loadHermesSession(id int64) ([]byte, error) {
+	var raw []byte
+	err := p.db.QueryRow(`SELECT messages FROM hermes_sessions WHERE id=$1`, id).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return raw, err
+}
+
+func (p *pgStore) saveHermesSession(id int64, messages []byte, incidentID int64) (int64, error) {
+	if id > 0 {
+		_, err := p.db.Exec(`UPDATE hermes_sessions SET messages=$1,updated_at=NOW() WHERE id=$2`, messages, id)
+		return id, err
+	}
+	var newID int64
+	err := p.db.QueryRow(`INSERT INTO hermes_sessions(incident_id,messages) VALUES($1,$2) RETURNING id`, incidentID, messages).Scan(&newID)
+	return newID, err
+}
+
+func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
+	rows, err := p.db.Query(`SELECT id,incident_id,status,created_at,updated_at FROM hermes_sessions ORDER BY updated_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var id, iid int64
+		var status string
+		var ca, ua sql.NullTime
+		if err := rows.Scan(&id, &iid, &status, &ca, &ua); err != nil {
+			continue
+		}
+		m := map[string]any{"id": id, "incident_id": iid, "status": status}
+		if ca.Valid {
+			m["created_at"] = ca.Time.Format(time.RFC3339)
+		}
+		if ua.Valid {
+			m["updated_at"] = ua.Time.Format(time.RFC3339)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func (p *pgStore) close() {

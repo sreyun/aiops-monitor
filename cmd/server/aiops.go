@@ -28,6 +28,9 @@ type AIConfig struct {
 	APIKey             string `json:"api_key,omitempty"`
 	Model              string `json:"model"`                // e.g. gpt-4o-mini / a local model name
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
+	// Hermes Agent 配置
+	HermesEnabled     bool `json:"hermes_enabled,omitempty"`      // 启用 Hermes 自主 Agent
+	HermesAutoApprove bool `json:"hermes_auto_approve,omitempty"` // 低风险操作自动执行
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be

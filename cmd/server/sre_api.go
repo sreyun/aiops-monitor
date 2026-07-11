@@ -1457,3 +1457,229 @@ func (s *Server) handleDeleteExperienceRule(w http.ResponseWriter, r *http.Reque
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// ============================================================================
+// Hermes Agent — 自主运维 Agent 对话 + 规则/模板管理
+// ============================================================================
+
+// handleHermesChat provides multi-turn Hermes Agent conversation with
+// Function Calling support. Supports SSE streaming via stream=true.
+// POST /api/v1/hermes/chat
+func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
+	if s.hermes == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Hermes Agent 未启用"})
+		return
+	}
+	var req struct {
+		Message    string `json:"message"`
+		SessionID  int64  `json:"session_id,omitempty"`
+		IncidentID int64  `json:"incident_id,omitempty"`
+		Stream     bool   `json:"stream,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用"})
+		return
+	}
+	session := s.hermes.ensureHermesSession(req.IncidentID)
+	if req.Stream {
+		s.setupSSE(w)
+		s.hermes.Chat(session, req.Message, true, w)
+		return
+	}
+	reply, err := s.hermes.Chat(session, req.Message, false, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "session_id": session.ID})
+}
+
+// handleHermesSessions lists recent Hermes sessions.
+// GET /api/v1/hermes/sessions
+func (s *Server) handleHermesSessions(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	sessions, err := s.pg.listHermesSessions(20)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if sessions == nil {
+		sessions = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// handleHermesSession loads a single Hermes session.
+// GET /api/v1/hermes/sessions/{id}
+func (s *Server) handleHermesSession(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	raw, err := s.pg.loadHermesSession(id)
+	if err != nil || raw == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
+		return
+	}
+	var msgs []map[string]string
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": msgs})
+}
+
+// handleHermesListRules returns all Hermes rules.
+// GET /api/v1/hermes/rules
+func (s *Server) handleHermesListRules(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	rules, err := s.pg.listHermesRules()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if rules == nil {
+		rules = []hermesRule{}
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+// handleHermesUpsertRule creates or updates a Hermes rule.
+// POST /api/v1/hermes/rules
+func (s *Server) handleHermesUpsertRule(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	var rule hermesRule
+	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if rule.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "规则名称不能为空"})
+		return
+	}
+	id, err := s.pg.upsertHermesRule(rule)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// Trigger hot-reload
+	if s.hermes != nil {
+		s.hermes.reloadConfig()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
+}
+
+// handleHermesDeleteRule deletes a Hermes rule.
+// DELETE /api/v1/hermes/rules/{id}
+func (s *Server) handleHermesDeleteRule(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	if err := s.pg.deleteHermesRule(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.hermes != nil {
+		s.hermes.reloadConfig()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleHermesListTemplates returns all Hermes templates.
+// GET /api/v1/hermes/templates
+func (s *Server) handleHermesListTemplates(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	tmpls, err := s.pg.listHermesTemplates(false)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if tmpls == nil {
+		tmpls = []hermesTemplate{}
+	}
+	writeJSON(w, http.StatusOK, tmpls)
+}
+
+// handleHermesUpsertTemplate creates or updates a Hermes template.
+// POST /api/v1/hermes/templates
+func (s *Server) handleHermesUpsertTemplate(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	var tmpl hermesTemplate
+	if err := json.NewDecoder(r.Body).Decode(&tmpl); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if tmpl.Name == "" || tmpl.Content == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "模板名称和内容不能为空"})
+		return
+	}
+	id, err := s.pg.upsertHermesTemplate(tmpl)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.hermes != nil {
+		s.hermes.reloadConfig()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
+}
+
+// handleHermesDeleteTemplate deletes a Hermes template.
+// DELETE /api/v1/hermes/templates/{id}
+func (s *Server) handleHermesDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	if err := s.pg.deleteHermesTemplate(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.hermes != nil {
+		s.hermes.reloadConfig()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}

@@ -34,6 +34,7 @@ type Server struct {
 	messages    *messageHub        // unified notification center (SRE/alert/AI feed)
 	distDir     string             // directory of downloadable agent binaries + plugins.zip
 	pg          *pgStore           // PostgreSQL persistence (optional, for pgvector/RAG)
+	hermes      *HermesCore        // Hermes Agent (autonomous SRE agent)
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
@@ -58,6 +59,10 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	s.wireSRE()
 	// Restore persisted TCP forward rules (recreate listeners)
 	s.forward.restoreRules(s)
+	// Hermes Agent: initialize if AI is configured
+	if cfg := s.cfg.AIConfig(); cfg.HermesEnabled && cfg.Enabled {
+		s.hermes = newHermesCore(s)
+	}
 	return s
 }
 
@@ -177,6 +182,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/experience-rules", s.handleListExperienceRules)
 	mux.HandleFunc("POST /api/v1/experience-rules", s.handleCreateExperienceRule)
 	mux.HandleFunc("DELETE /api/v1/experience-rules/{id}", s.handleDeleteExperienceRule)
+	// Hermes Agent — 自主运维 Agent
+	mux.HandleFunc("POST /api/v1/hermes/chat", s.handleHermesChat)
+	mux.HandleFunc("GET /api/v1/hermes/sessions", s.handleHermesSessions)
+	mux.HandleFunc("GET /api/v1/hermes/sessions/{id}", s.handleHermesSession)
+	mux.HandleFunc("GET /api/v1/hermes/rules", s.handleHermesListRules)
+	mux.HandleFunc("POST /api/v1/hermes/rules", s.handleHermesUpsertRule)
+	mux.HandleFunc("DELETE /api/v1/hermes/rules/{id}", s.handleHermesDeleteRule)
+	mux.HandleFunc("GET /api/v1/hermes/templates", s.handleHermesListTemplates)
+	mux.HandleFunc("POST /api/v1/hermes/templates", s.handleHermesUpsertTemplate)
+	mux.HandleFunc("DELETE /api/v1/hermes/templates/{id}", s.handleHermesDeleteTemplate)
 	// Terminal enhancements
 	mux.HandleFunc("GET /api/v1/terminal/sessions", s.handleListTerminalSessions)
 	mux.HandleFunc("GET /api/v1/terminal/sessions/{id}/replay", s.handleTerminalReplay)

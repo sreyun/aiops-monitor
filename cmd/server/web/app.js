@@ -6191,6 +6191,53 @@ safeAddEventListener("aiChatBtn","click",openAIChat);
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
 
+// ---- Hermes Agent 独立对话 ----
+let HERMES_HISTORY=[];
+let HERMES_SESSION_ID=0;
+function openHermesChat(){
+  HERMES_HISTORY=[];
+  HERMES_SESSION_ID=0;
+  const log=$("hermesChatLog");
+  if(log) log.innerHTML=`<div class="ai-chat-msg sys">🤖 Hermes Agent 已就绪。你可以直接描述问题，例如：<br>"主机 web-01 CPU 飙到 90%，帮我排查原因"<br>"检查 nginx 服务状态"<br>"最近有什么告警？"</div>`;
+  $("hermesMask").classList.add("show");
+  setTimeout(()=>{ const i=$("hermesChatInput"); if(i) i.focus(); },80);
+}
+function appendHermesMsg(role,text){
+  const log=$("hermesChatLog"); if(!log) return null;
+  const div=document.createElement("div");
+  div.className="ai-chat-msg "+(role==="user"?"me":role==="assistant"?"ai":"sys");
+  div.textContent=text;
+  log.appendChild(div); log.scrollTop=log.scrollHeight;
+  return div;
+}
+async function sendHermesChat(){
+  const inp=$("hermesChatInput"); if(!inp) return;
+  const msg=inp.value.trim(); if(!msg) return;
+  inp.value="";
+  appendHermesMsg("user",msg);
+  const pending=appendHermesMsg("assistant","🤔 思考中…");
+  try{
+    const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,session_id:HERMES_SESSION_ID,stream:true})});
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    let streamed=false;
+    await readSSEStream(r,
+      (delta,fullText)=>{
+        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
+        if(pending) pending.textContent=fullText;
+      },
+      (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
+      (fullText)=>{
+        if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; }
+        HERMES_HISTORY.push({role:"user",content:msg},{role:"assistant",content:fullText||""});
+        if(HERMES_HISTORY.length>30) HERMES_HISTORY=HERMES_HISTORY.slice(-30);
+      }
+    );
+  }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
+}
+safeAddEventListener("hermesBtn","click",openHermesChat);
+safeAddEventListener("hermesChatSendBtn","click",sendHermesChat);
+safeAddEventListener("hermesChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHermesChat(); } });
+
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
 // 终端会话搜索

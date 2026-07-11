@@ -434,6 +434,7 @@
             <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
             <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
             <button class="btn sm" id="aiChatBtn" data-i18n="sre.ai_chat">AI 对话</button>
+            <button class="btn sm" id="hermesBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)">🤖 Hermes</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
           </div>
           <div id="aiReportList" class="sre-list"></div>
@@ -1200,6 +1201,27 @@
       <div class="ai-chat-input">
         <textarea id="aiChatInput" rows="2" data-i18n-placeholder="sre.ai_chat_ph" placeholder="输入消息，Enter 发送、Shift+Enter 换行…"></textarea>
         <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Hermes Agent 对话弹窗（自主运维 Agent） ===== -->
+<div class="mask" id="hermesMask" data-close>
+  <div class="modal" style="max-width:700px">
+    <div class="modal-head">
+      <h3>🤖 Hermes Agent · 自主运维</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px">Hermes 是自主运维 Agent，可查询指标、搜索日志、分析告警、执行诊断命令、触发修复动作。你可以直接描述问题，它会自动调用工具来排查。</div>
+      <div id="hermesChatLog" class="ai-chat-log"></div>
+      <div class="ai-chat-input">
+        <textarea id="hermesChatInput" rows="2" placeholder="描述你遇到的问题，Hermes 会自主排查…"></textarea>
+        <button class="btn primary" id="hermesChatSendBtn">发送</button>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">
+        可用工具：query_metrics | search_logs | list_alerts | search_similar_cases | run_diagnostic | run_python_action
       </div>
     </div>
   </div>
