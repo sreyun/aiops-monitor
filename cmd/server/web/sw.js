@@ -2,7 +2,7 @@
 // Cache: app shell on install, stale-while-revalidate for static, network-only for API.
 // Offline: cached shell + navigation fallback to "/" so the UI shows even offline.
 
-const CACHE = "AIOps-v2.5.0";
+const CACHE = "AIOps-v5.5.0";
 const SHELL = ["/", "/style.css", "/app.js", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", e => {
@@ -26,15 +26,25 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   if (url.pathname.startsWith("/api/")) return;
 
-  // Navigation requests: network-first, fallback to cached "/" for offline
-  if (req.mode === "navigate") {
+  // Navigation + code assets (index / app.js / style.css / any .js/.css):
+  // NETWORK-FIRST so a new deploy applies on the very next load when online;
+  // fall back to cache only when offline. (The previous stale-while-revalidate
+  // strategy left users one reload behind after every frontend update.)
+  const p = url.pathname;
+  if (req.mode === "navigate" || p === "/" || p.endsWith(".js") || p.endsWith(".css")) {
     e.respondWith(
-      fetch(req).catch(() => caches.match("/"))
+      fetch(req).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(req, clone));
+        }
+        return res;
+      }).catch(() => caches.match(req).then(c => c || caches.match("/")))
     );
     return;
   }
 
-  // Static assets: stale-while-revalidate
+  // Other static assets (icons / manifest / fonts): stale-while-revalidate.
   e.respondWith(
     caches.open(CACHE).then(async cache => {
       const cached = await cache.match(req);

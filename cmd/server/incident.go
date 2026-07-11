@@ -52,6 +52,10 @@ type incidentManager struct {
 	incidents []Incident
 	nextID    int64
 	openByKey map[string]int64 // dedup key -> open incident ID
+	// onChange is invoked (outside the lock) whenever an incident is newly
+	// raised (isNew=true) or resolved (isNew=false). Wired in wireSRE to push
+	// a notification-center message + trigger auto AI diagnosis. May be nil.
+	onChange func(inc Incident, isNew bool)
 }
 
 func newIncidentManager() *incidentManager {
@@ -85,10 +89,10 @@ func addEventLocked(inc *Incident, kind, actor, text string) {
 // on the next append, so a pointer must never escape the lock.
 func (m *incidentManager) raise(key, title, severity, source, hostID, hostname, typ string) (int64, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if key != "" {
 		if id, ok := m.openByKey[key]; ok {
 			if inc := m.find(id); inc != nil {
+				m.mu.Unlock()
 				return inc.ID, false
 			}
 			delete(m.openByKey, key) // stale index entry; fall through to create
@@ -106,7 +110,12 @@ func (m *incidentManager) raise(key, title, severity, source, hostID, hostname, 
 		m.openByKey[key] = inc.ID
 	}
 	m.trimLocked()
-	return inc.ID, true
+	newInc := inc // value copy — safe to hand to the callback after unlocking
+	m.mu.Unlock()
+	if m.onChange != nil {
+		m.onChange(newInc, true)
+	}
+	return newInc.ID, true
 }
 
 // resolveByKey resolves the open incident bound to key (used when an alert
@@ -116,20 +125,26 @@ func (m *incidentManager) resolveByKey(key, note string) int64 {
 		return 0
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	id, ok := m.openByKey[key]
 	if !ok {
+		m.mu.Unlock()
 		return 0
 	}
 	delete(m.openByKey, key)
 	inc := m.find(id)
 	if inc == nil || inc.Status == "resolved" {
+		m.mu.Unlock()
 		return 0
 	}
 	inc.Status = "resolved"
 	inc.ResolvedAt = time.Now().Unix()
 	addEventLocked(inc, "recovered", "alert-engine", note)
-	return inc.ID
+	resolved := *inc
+	m.mu.Unlock()
+	if m.onChange != nil {
+		m.onChange(resolved, false)
+	}
+	return resolved.ID
 }
 
 // OnAlertTransition is the notifier hook: a firing alert opens/reuses an incident,

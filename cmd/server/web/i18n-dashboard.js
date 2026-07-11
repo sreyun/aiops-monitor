@@ -699,6 +699,10 @@
   "init.err_password": "请输入新密码",
   "init.err_mismatch": "两次输入的密码不一致",
   "init.done": "安全初始化完成，正在进入…",
+  /* --- 消息中心 --- */
+  "notif.title": "消息中心",
+  "notif.read_all": "全部已读",
+  "notif.empty": "暂无消息",
   /* --- 账户找回弹窗 --- */
   "recover.title": "账户找回",
   "recover.enter_email_desc": "输入已绑定的邮箱地址，系统将发送 6 位验证码。",

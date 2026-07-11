@@ -3927,11 +3927,73 @@ async function initAuth() {
     if (loginErrEl) loginErrEl.textContent = I18N.t("toast.network_check_failed");
   }
 }
+/* ---------- 消息中心（顶栏铃铛 + 未读徽标 + 下拉面板） ---------- */
+let MSG_POLL = null;
+function msgEsc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function initMsgCenter() {
+  const panel = $("notifPanel"), wrap = $("notifWrap");
+  if (!$("notifBtn") || !panel) return;
+  safeAddEventListener("notifBtn", "click", (e) => {
+    e.stopPropagation();
+    const open = panel.classList.toggle("show");
+    if (open) loadMessages();
+  });
+  safeAddEventListener("notifReadAll", "click", async (e) => {
+    e.stopPropagation();
+    try { await fetch(`${API}/messages/read-all`, { method: "POST" }); } catch (_) {}
+    loadMessages();
+  });
+  document.addEventListener("click", (e) => { if (wrap && !wrap.contains(e.target)) panel.classList.remove("show"); });
+  loadMessages();
+  if (MSG_POLL) clearInterval(MSG_POLL);
+  MSG_POLL = setInterval(loadMessages, 20000);
+}
+async function loadMessages() {
+  try {
+    const data = await fetch(`${API}/messages?limit=50`).then(r => r.json());
+    const msgs = data.messages || [];
+    const unread = data.unread || 0;
+    const badge = $("notifBadge");
+    if (badge) {
+      if (unread > 0) { badge.textContent = unread > 99 ? "99+" : unread; badge.style.display = ""; }
+      else badge.style.display = "none";
+    }
+    renderMessages(msgs);
+  } catch (_) {}
+}
+function renderMessages(msgs) {
+  const list = $("notifList"), empty = $("notifEmpty");
+  if (!list) return;
+  if (empty) empty.style.display = msgs.length ? "none" : "";
+  const pad = n => String(n).padStart(2, "0");
+  list.innerHTML = msgs.map(m => {
+    const t = new Date((m.ts || 0) * 1000);
+    const ts = `${t.getMonth()+1}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    return `<div class="notif-item ${m.read ? "" : "unread"}" data-id="${m.id}" data-view="${msgEsc(m.view || "")}">
+      <span class="notif-dot ${msgEsc(m.level || "info")}"></span>
+      <div class="notif-body">
+        <div class="notif-title">${msgEsc(m.title || "")}</div>
+        ${m.body ? `<div class="notif-sub">${msgEsc(m.body)}</div>` : ""}
+        <div class="notif-time">${ts}</div>
+      </div></div>`;
+  }).join("");
+  list.querySelectorAll(".notif-item").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = parseInt(el.dataset.id, 10);
+      const view = el.dataset.view;
+      try { await fetch(`${API}/messages/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [id] }) }); } catch (_) {}
+      const p = $("notifPanel"); if (p) p.classList.remove("show");
+      if (view && typeof switchView === "function") switchView(view);
+      loadMessages();
+    });
+  });
+}
 function startApp() {
   if (APP_STARTED) return;
   APP_STARTED = true;
   initTheme();
   initNotifications();
+  initMsgCenter();
   showSkeleton();
   refresh(); loadChecks();
   // P1-2: 差异化轮询频率 — 按当前视图 + 标签页可见性调整刷新间隔

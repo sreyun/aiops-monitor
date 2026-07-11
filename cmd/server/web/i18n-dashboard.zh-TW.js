@@ -662,6 +662,10 @@ window.DICT_TW = {
   "init.err_password": "請輸入新密碼",
   "init.err_mismatch": "兩次輸入的密碼不一致",
   "init.done": "安全初始化完成，正在進入…",
+  /* --- 訊息中心 --- */
+  "notif.title": "訊息中心",
+  "notif.read_all": "全部已讀",
+  "notif.empty": "暫無訊息",
   "recover.title": "賬戶找回",
   "recover.enter_email_desc": "輸入已繫結的郵箱地址，系統將傳送 6 位驗證碼。",
   "recover.enter_code_desc": "請輸入郵箱收到的 6 位驗證碼。",

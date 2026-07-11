@@ -1885,6 +1885,27 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .term-setpwd-req{font-size:12px;color:var(--warn-txt);background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:var(--r-sm);padding:8px 12px;margin:0 0 14px;line-height:1.5}
 /* 首次登录·安全初始化：说明面板（柔和告警色，契合深色主题） */
 .init-desc{font-size:13px;color:var(--txt2);line-height:1.65;margin:0 0 16px;padding:10px 12px;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:var(--r-sm)}
+/* 消息中心：顶栏铃铛 + 未读徽标 + 下拉面板 */
+.notif-wrap{position:relative}
+.notif-badge{position:absolute;top:-3px;right:-3px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--crit,#e5484d);color:#fff;font-size:10px;font-weight:700;line-height:16px;text-align:center;box-shadow:0 0 0 2px var(--panel)}
+.notif-panel{position:absolute;top:calc(100% + 8px);right:0;width:344px;max-width:92vw;max-height:72vh;display:none;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow-xl);z-index:420;overflow:hidden}
+.notif-panel.show{display:flex}
+.notif-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:650}
+.notif-readall{background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;font-family:inherit;padding:0}
+.notif-list{overflow-y:auto;flex:1}
+.notif-item{display:flex;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;transition:background var(--transition-fast)}
+.notif-item:hover{background:var(--bg2)}
+.notif-item.unread{background:var(--accent-soft)}
+.notif-dot{flex:none;width:8px;height:8px;border-radius:50%;margin-top:5px;background:var(--muted2)}
+.notif-dot.critical{background:var(--crit,#e5484d)}
+.notif-dot.warning{background:var(--warn-txt,#d97706)}
+.notif-dot.success{background:var(--ok,#30a46c)}
+.notif-dot.info,.notif-dot.ai,.notif-dot.incident{background:var(--accent)}
+.notif-body{min-width:0;flex:1}
+.notif-title{font-size:13px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notif-sub{font-size:11.5px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notif-time{font-size:10.5px;color:var(--muted2);margin-top:3px}
+.notif-empty{padding:30px 14px;text-align:center;color:var(--muted2);font-size:12.5px}
 
 /* 密码可见性切换按钮 */
 .term-pwd-toggle{

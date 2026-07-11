@@ -108,10 +108,17 @@ func (v *vmWriter) push(url string, samples []vmSample) {
 		ms := s.ts * 1000
 		w := func(name string, val float64) { fmt.Fprintf(&b, "aiops_%s{%s} %g %d\n", name, lbl, val, ms) }
 		w("cpu_percent", s.m.CPUPercent)
+		w("cpu_cores", float64(s.m.CPUCores))
 		w("mem_percent", s.m.MemPercent)
 		w("mem_used_bytes", float64(s.m.MemUsed))
+		w("mem_total_bytes", float64(s.m.MemTotal))
 		w("swap_percent", s.m.SwapPercent)
+		w("swap_used_bytes", float64(s.m.SwapUsed))
+		w("swap_total_bytes", float64(s.m.SwapTotal))
 		w("disk_percent", s.m.DiskPercent)
+		w("disk_used_bytes", float64(s.m.DiskUsed))
+		w("disk_total_bytes", float64(s.m.DiskTotal))
+		w("uptime_seconds", float64(s.m.Uptime))
 		w("disk_io_util_percent", s.m.DiskIOUtilPercent)
 		w("disk_read_rate", s.m.DiskReadRate)
 		w("disk_write_rate", s.m.DiskWriteRate)
@@ -156,14 +163,28 @@ func setSampleMetric(s *shared.Sample, name string, val float64) {
 	switch strings.TrimPrefix(name, "aiops_") {
 	case "cpu_percent":
 		s.CPUPercent = val
+	case "cpu_cores":
+		s.CPUCores = int(val)
 	case "mem_percent":
 		s.MemPercent = val
 	case "mem_used_bytes":
 		s.MemUsed = uint64(val)
+	case "mem_total_bytes":
+		s.MemTotal = uint64(val)
 	case "swap_percent":
 		s.SwapPercent = val
+	case "swap_used_bytes":
+		s.SwapUsed = uint64(val)
+	case "swap_total_bytes":
+		s.SwapTotal = uint64(val)
 	case "disk_percent":
 		s.DiskPercent = val
+	case "disk_used_bytes":
+		s.DiskUsed = uint64(val)
+	case "disk_total_bytes":
+		s.DiskTotal = uint64(val)
+	case "uptime_seconds":
+		s.Uptime = uint64(val)
 	case "disk_io_util_percent":
 		s.DiskIOUtilPercent = val
 	case "disk_read_rate":

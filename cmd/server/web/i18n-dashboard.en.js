@@ -662,6 +662,10 @@ window.DICT_EN = {
   "init.err_password": "Please enter a new password",
   "init.err_mismatch": "The two passwords do not match",
   "init.done": "Security setup complete, entering…",
+  /* --- Notification center --- */
+  "notif.title": "Notifications",
+  "notif.read_all": "Mark all read",
+  "notif.empty": "No messages",
   "recover.title": "Account recovery",
   "recover.enter_email_desc": "Enter the bound email address; the system will send a 6-digit code.",
   "recover.enter_code_desc": "Please enter the 6-digit code received by email.",

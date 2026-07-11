@@ -27,6 +27,42 @@ func (s *Server) wireSRE() {
 	s.remediation.trigger = s.triggerPlaybookOnHost
 	s.remediation.onIncident = s.incidents.AddEvent
 
+	// Notification center: every raised / recovered incident becomes a message
+	// with a deep-link into the SRE hub. New CRITICAL incidents also trigger an
+	// automatic AI/heuristic diagnosis (broadening AI coverage) whose result is
+	// appended to the incident timeline and surfaced as its own message.
+	s.incidents.onChange = func(inc Incident, isNew bool) {
+		ref := strconv.FormatInt(inc.ID, 10)
+		if isNew {
+			s.messages.push("incident", inc.Severity, "新事件："+inc.Title, incidentMsgBody(inc), "sre", ref)
+			if inc.Severity == "critical" {
+				go s.autoDiagnose(inc)
+			}
+		} else {
+			s.messages.push("incident", "success", "事件已恢复："+inc.Title, "", "sre", ref)
+		}
+	}
+	// AI inspection: only surface a message when the round actually found risks,
+	// so the scheduled healthy inspections don't spam the inbox.
+	s.ai.onReport = func(rep InspectionReport) {
+		crit, warn := 0, 0
+		for _, f := range rep.Findings {
+			if f.Severity == "critical" {
+				crit++
+			} else if f.Severity == "warning" {
+				warn++
+			}
+		}
+		if crit+warn == 0 {
+			return
+		}
+		lvl := "warning"
+		if crit > 0 {
+			lvl = "critical"
+		}
+		s.messages.push("ai", lvl, fmt.Sprintf("AI 巡检发现 %d 项风险", crit+warn), trimLine(rep.Summary, 200), "sre", "")
+	}
+
 	// SLO evaluation needs metric + check history and can raise incidents.
 	s.slos.incidents = s.incidents
 	s.slos.metricSamples = func(hostID string, fromTs int64) []shared.Sample {
@@ -79,6 +115,7 @@ func (s *Server) wireSRE() {
 		}
 		ic.RecentErrors = s.logs.recentErrors(now-1800, 30)
 		ic.ErrorCount = s.logs.errorCount(now - 1800)
+		ic.WarnCount = len(s.logs.search("", "warn", "", now-1800, 500))
 		return ic
 	}
 	s.ai.diagContext = func(inc Incident) string {
@@ -92,12 +129,32 @@ func (s *Server) wireSRE() {
 			fmt.Fprintf(&b, "当前指标：CPU %.1f%% · 内存 %.1f%% · 磁盘 %.1f%% · Load %.2f · 进程 %d\n",
 				m.CPUPercent, m.MemPercent, m.DiskPercent, m.Load1, m.ProcCount)
 		}
+		logSince := time.Now().Unix() - 3600
 		if inc.HostID != "" {
-			errs := s.logs.search(inc.HostID, "error", "", time.Now().Unix()-3600, 10)
+			errs := s.logs.search(inc.HostID, "error", "", logSince, 12)
+			warns := s.logs.search(inc.HostID, "warn", "", logSince, 8)
 			if len(errs) > 0 {
-				b.WriteString("近 1 小时错误日志：\n")
+				fmt.Fprintf(&b, "近 1 小时该主机错误日志（%d 条节选）：\n", len(errs))
 				for _, e := range errs {
 					b.WriteString("  - " + trimLine(e.Message, 200) + "\n")
+				}
+			}
+			if len(warns) > 0 {
+				b.WriteString("近 1 小时该主机告警(warn)日志（节选）：\n")
+				for _, e := range warns {
+					b.WriteString("  - " + trimLine(e.Message, 160) + "\n")
+				}
+			}
+			if len(errs) == 0 && len(warns) == 0 {
+				b.WriteString("近 1 小时该主机无 error/warn 日志。\n")
+			}
+		} else {
+			// 集群级事件（无特定主机）：附上跨主机近期错误日志，辅助根因关联。
+			errs := s.logs.recentErrors(logSince, 12)
+			if len(errs) > 0 {
+				b.WriteString("近 1 小时集群错误日志（跨主机节选）：\n")
+				for _, e := range errs {
+					fmt.Fprintf(&b, "  - [%s] %s\n", e.Hostname, trimLine(e.Message, 180))
 				}
 			}
 		}
@@ -112,6 +169,31 @@ func (s *Server) hostByID(id string) *Host {
 		}
 	}
 	return nil
+}
+
+// incidentMsgBody renders a compact one-line body for an incident notification.
+func incidentMsgBody(inc Incident) string {
+	b := "级别 " + inc.Severity + " · 来源 " + inc.Source
+	if inc.Hostname != "" {
+		b += " · 主机 " + inc.Hostname
+	}
+	return b
+}
+
+// autoDiagnose runs an AI (or heuristic) diagnosis for a freshly-raised critical
+// incident, appends the result to its timeline, and surfaces it as a message —
+// so serious incidents arrive pre-analysed without any operator action. This
+// broadens AI coverage from on-demand to automatic. Best-effort: a panic in the
+// provider path never affects the caller (runs in its own goroutine).
+func (s *Server) autoDiagnose(inc Incident) {
+	defer func() { _ = recover() }()
+	out, kind := s.ai.Diagnose(inc)
+	if out == "" {
+		return
+	}
+	s.incidents.AddEvent(inc.ID, "note", "ai-"+kind, out)
+	s.messages.push("ai", "info", "AI 诊断 · "+inc.Title, trimLine(out, 220), "sre", strconv.FormatInt(inc.ID, 10))
+	s.store.MarkDirty()
 }
 
 func (s *Server) effectiveCategory(hostID string) string {

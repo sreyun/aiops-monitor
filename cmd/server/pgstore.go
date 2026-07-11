@@ -379,6 +379,13 @@ func (s *Server) bindPG(ps *pgStore) {
 			s.auth.importSessions(sess)
 		}
 	}
+	// Notification-center feed + read state survive restart.
+	if raw, _ := ps.loadKV("messages"); raw != nil {
+		var msgs []Message
+		if json.Unmarshal(raw, &msgs) == nil {
+			s.messages.importMsgs(msgs)
+		}
+	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
@@ -405,5 +412,8 @@ func (s *Server) pgFlush(ps *pgStore) {
 	}
 	if raw, err := json.Marshal(s.auth.exportSessions()); err == nil {
 		_ = ps.saveKV("sessions", raw)
+	}
+	if raw, err := json.Marshal(s.messages.export()); err == nil {
+		_ = ps.saveKV("messages", raw)
 	}
 }

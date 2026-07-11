@@ -31,6 +31,7 @@ type Server struct {
 	logs        *logStore          // aggregated agent logs
 	ai          *aiManager         // AI inspection + diagnosis
 	vm          *vmWriter          // optional VictoriaMetrics remote-write
+	messages    *messageHub        // unified notification center (SRE/alert/AI feed)
 	distDir     string             // directory of downloadable agent binaries + plugins.zip
 }
 
@@ -51,6 +52,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		logs:        newLogStore(),
 		ai:          newAIManager(cfg),
 		vm:          newVMWriter(cfg),
+		messages:    newMessageHub(),
 	}
 	s.wireSRE()
 	return s
@@ -152,6 +154,10 @@ func (s *Server) Routes() http.Handler {
 	// Log aggregation (agent ingest is fingerprint-authed) + search
 	mux.HandleFunc("POST /api/v1/agent/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /api/v1/logs", s.handleSearchLogs)
+	// Notification center (unified message feed)
+	mux.HandleFunc("GET /api/v1/messages", s.handleListMessages)
+	mux.HandleFunc("POST /api/v1/messages/read", s.handleMarkMessagesRead)
+	mux.HandleFunc("POST /api/v1/messages/read-all", s.handleMarkAllMessagesRead)
 	// AI: config + inspection + incident diagnosis
 	mux.HandleFunc("GET /api/v1/ai/config", s.handleGetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)

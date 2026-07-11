@@ -41,6 +41,7 @@ func TestHeuristicInspect(t *testing.T) {
 		OfflineHosts:  []string{"db-01"},
 		FiringAlerts:  []Alert{{Level: "critical", Hostname: "web-01", Message: "CPU 96%"}},
 		BreachingSLOs: []SLOStatus{{SLO: SLO{Name: "API可用性", Target: 99.9}, SLI: 99.0}},
+		HighUsage:     []string{"web-01 CPU 96%"},
 		ErrorCount:    60,
 	}
 	summary, findings := heuristicInspect(ctx)
@@ -56,11 +57,11 @@ func TestHeuristicInspect(t *testing.T) {
 			warn++
 		}
 	}
-	if crit < 2 {
-		t.Errorf("expected >=2 critical findings (offline+alert), got %d", crit)
+	if crit < 3 {
+		t.Errorf("expected >=3 critical findings (offline+alert+errors>=50), got %d", crit)
 	}
 	if warn < 2 {
-		t.Errorf("expected >=2 warning findings (slo+errors>=50), got %d", warn)
+		t.Errorf("expected >=2 warning findings (slo+high-usage), got %d", warn)
 	}
 	// A healthy snapshot yields no findings.
 	if s2, f2 := heuristicInspect(inspectionContext{OnlineHosts: 5}); len(f2) != 0 || s2 == "" {

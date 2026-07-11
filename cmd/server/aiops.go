@@ -101,6 +101,7 @@ type inspectionContext struct {
 	BreachingSLOs []SLOStatus
 	RecentErrors  []StoredLog
 	ErrorCount    int
+	WarnCount     int
 	HighUsage     []string
 }
 
@@ -114,6 +115,7 @@ type aiManager struct {
 	// injected data sources (set during wiring)
 	snapshot    func() inspectionContext
 	diagContext func(inc Incident) string
+	onReport    func(rep InspectionReport) // notify hook: surface findings as messages
 }
 
 func newAIManager(cfg *ConfigStore) *aiManager { return &aiManager{cfg: cfg, nextID: 1} }
@@ -139,16 +141,19 @@ func heuristicInspect(ctx inspectionContext) (string, []InspectionFinding) {
 	for _, hu := range ctx.HighUsage {
 		f = append(f, InspectionFinding{"warning", "资源高位：" + hu, ""})
 	}
-	if ctx.ErrorCount > 0 {
+	if ctx.ErrorCount > 0 || ctx.WarnCount > 0 {
 		sev := "info"
 		if ctx.ErrorCount >= 50 {
+			sev = "critical"
+		} else if ctx.ErrorCount >= 10 {
 			sev = "warning"
 		}
-		f = append(f, InspectionFinding{sev, fmt.Sprintf("近 30 分钟错误日志 %d 条", ctx.ErrorCount),
-			"可在「日志检索」按 error 级别定位。"})
+		f = append(f, InspectionFinding{sev,
+			fmt.Sprintf("近 30 分钟日志：error %d 条 · warn %d 条", ctx.ErrorCount, ctx.WarnCount),
+			"可在「日志检索」按级别 + 主机定位错误起始时间与来源服务。"})
 	}
-	summary := fmt.Sprintf("在线 %d 台 · 离线 %d 台 · firing 告警 %d 条 · SLO 超标 %d 项 · 近期错误日志 %d 条。",
-		ctx.OnlineHosts, len(ctx.OfflineHosts), len(ctx.FiringAlerts), len(ctx.BreachingSLOs), ctx.ErrorCount)
+	summary := fmt.Sprintf("在线 %d 台 · 离线 %d 台 · firing 告警 %d 条 · SLO 超标 %d 项 · 近 30 分钟 error %d/warn %d 条。",
+		ctx.OnlineHosts, len(ctx.OfflineHosts), len(ctx.FiringAlerts), len(ctx.BreachingSLOs), ctx.ErrorCount, ctx.WarnCount)
 	if len(f) == 0 {
 		summary = "系统健康：本轮巡检未发现异常。"
 	}
@@ -185,6 +190,9 @@ func buildInspectionPrompt(ctx inspectionContext) string {
 			}
 			b.WriteString("  - " + e.Hostname + ": " + trimLine(e.Message, 160) + "\n")
 		}
+	}
+	if ctx.WarnCount > 0 {
+		b.WriteString(fmt.Sprintf("近 30 分钟告警(warn)级日志 %d 条（可作为错误的前兆信号）。\n", ctx.WarnCount))
 	}
 	if b.Len() == 0 {
 		b.WriteString("无异常指标。")
@@ -225,6 +233,9 @@ func (m *aiManager) RunInspection(trigger string) InspectionReport {
 		m.reports = m.reports[len(m.reports)-inspectionReportCap:]
 	}
 	m.mu.Unlock()
+	if m.onReport != nil {
+		m.onReport(rep)
+	}
 	return rep
 }
 

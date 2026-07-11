@@ -132,6 +132,20 @@
           <button type="button" class="tb-lang-opt" data-lang="zh-TW" aria-pressed="false" title="繁體中文">繁</button>
           <button type="button" class="tb-lang-opt" data-lang="en" aria-pressed="false" title="English">EN</button>
         </div>
+        <div class="notif-wrap" id="notifWrap">
+          <button class="tb-icon" id="notifBtn" data-i18n-title="notif.title" title="消息中心" aria-label="消息中心">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+          </button>
+          <div class="notif-panel" id="notifPanel">
+            <div class="notif-head">
+              <span data-i18n="notif.title">消息中心</span>
+              <button class="notif-readall" id="notifReadAll" data-i18n="notif.read_all">全部已读</button>
+            </div>
+            <div class="notif-list" id="notifList"></div>
+            <div class="notif-empty" id="notifEmpty" data-i18n="notif.empty">暂无消息</div>
+          </div>
+        </div>
         <button class="tb-icon" id="termSessionsBtn" data-i18n-title="ui.term_sessions_title" title="终端会话">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </button>
