@@ -75,17 +75,22 @@
 ### Docker 一键启动（推荐）
 
 ```bash
-# 直接拉取预构建镜像启动（无需克隆仓库、无需编译）
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+# 下载并自动生成随机密码，一键启动（无需克隆仓库、无需编译）
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
+PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
+SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
+sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
+sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
+echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 # 浏览器打开 http://localhost:8529
 ```
 
 > 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
 >
-> 镜像托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次 Release 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像，`docker pull` 自动匹配。
+> 镜像托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。
 
-> **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。生产请务必修改 `docker-compose.yml` 中的 `POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY`。
+> **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。上述命令已自动生成随机数据库密码和加密密钥，**请务必保存输出的 `PG password` 和 `SECRET_KEY`**。
 
 ### 二进制直接运行
 
@@ -137,13 +142,28 @@ docker compose up -d
 
 ## 安装部署指南
 
-### 方式一：Docker 部署（预构建镜像）
+### 方式一：Docker 部署（预构建镜像·推荐）
+
+**一键部署（自动生成随机密码）：**
 
 ```bash
-# 下载 docker-compose.yml
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
+PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
+SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
+sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
+sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
+echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
+docker compose up -d
+```
 
-# 拉取预构建镜像并启动（无需克隆仓库、无需编译）
+> 以上命令自动完成：下载编排文件 → 生成随机密码/密钥 → 写入配置 → 拉取镜像并启动。**请务必保存输出的密码和密钥！**
+
+**指定版本（推荐生产环境）：**
+
+```bash
+# 编辑 docker-compose.yml，将 :latest 替换为具体版本号
+sed -i 's|aiops-server:latest|aiops-server:v5.5.5|' docker-compose.yml
+sed -i 's|aiops-agent:latest|aiops-agent:v5.5.5|' docker-compose.yml
 docker compose up -d
 ```
 
@@ -154,6 +174,32 @@ docker compose up -d
 - 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`
 - Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用
 - 如需本地构建，将 `docker-compose.yml` 中 `image:` 替换为注释的 `build:` 配置后执行 `docker compose up -d --build`
+
+### CI/CD 自动构建
+
+每次推送版本标签（`v*`）到 GitHub 后，GitHub Actions 自动执行以下流程：
+
+1. **检出代码** → 提取 Git tag 作为版本号
+2. **多架构交叉编译** → `linux/amd64` + `linux/arm64` 双架构 Go 二进制
+3. **构建 Docker 镜像** → 使用 `docker/build-push-action` 构建多架构镜像
+4. **HMAC-SHA256 认证** → 使用 `HW_ACCESS_KEY` / `HW_SECRET_KEY` 自动生成 SWR 登录凭证
+5. **推送至华为云 SWR** → `swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:{tag}` 和 `aiops-agent:{tag}`
+
+**镜像标签：**
+
+| 标签 | 说明 |
+|---|---|
+| `:latest` | 始终指向最新 Release |
+| `:v5.5.5` 等 | 锁定特定版本（推荐生产使用） |
+
+**所需 GitHub Secrets**（在仓库 Settings → Secrets and variables → Actions 配置）：
+
+| Secret | 说明 |
+|---|---|
+| `HW_ACCESS_KEY` | 华为云访问密钥 AK（IAM「我的凭证」获取） |
+| `HW_SECRET_KEY` | 华为云秘密密钥 SK（同上） |
+
+> 工作流定义见 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
 
 <details>
 <summary>Docker 手动构建</summary>
@@ -764,6 +810,8 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 
 | 组件 | 技术 |
 |---|---|
+| **关系存储** | PostgreSQL（配置/用户/审计/事件/工单/会话/密钥） |
+| **时序存储** | VictoriaMetrics（指标/趋势/SLO） |
 | Agent 核心 | Go 1.22+，纯标准库，零第三方依赖 |
 | 服务端 | Go 1.22+，`net/http`（Go 1.22 路由），`embed` 内嵌面板 |
 | 前端面板 | 原生 HTML/CSS/JS，无框架依赖 |
@@ -805,20 +853,29 @@ aiops-monitor/
 ├── cmd/
 │   ├── server/                     # Go 服务端
 │   │   ├── main.go                 # 入口、路由、中间件
-│   │   ├── handlers.go             # API 处理器
-│   │   ├── store.go                # 内存存储 + 多级降采样历史
-│   │   ├── db.go                   # 内嵌轻量库（gzip+JSON 落盘）
+│   │   ├── handlers.go             # API 处理器（路由分发）
+│   │   ├── pgstore.go              # ★ PostgreSQL 持久化层
+│   │   ├── store.go                # 内存存储 + 多级降采样热缓存
+│   │   ├── db.go                   # ~~内嵌轻量库~~（已停用，保留兼容）
 │   │   ├── alerts.go               # 阈值告警引擎
 │   │   ├── auth.go                 # 登录认证 + MFA + RBAC
 │   │   ├── users.go                # 多用户管理
 │   │   ├── check.go                # 自定义监控（HTTP/TCP/Ping/进程）
-│   │   ├── ws.go                   # 手写 WebSocket（远程终端）
-│   │   ├── terminal.go             # 远程终端中转
+│   │   ├── ws.go                   # 手写 WebSocket（远程终端/转发）
+│   │   ├── terminal.go             # 远程终端中转 + 二次认证
+│   │   ├── forward.go              # TCP 端口转发 + HTTP 代理
 │   │   ├── notify.go               # 飞书/钉钉/邮件推送
 │   │   ├── email.go                # SMTP + 验证码管理
 │   │   ├── playbook.go             # 自动化剧本引擎
 │   │   ├── totp.go                 # TOTP 两步验证
-│   │   ├── config.go               # 配置持久化
+│   │   ├── config.go               # 配置持久化 + AES-256-GCM 加密
+│   │   ├── incident.go             # SRE 事件管理
+│   │   ├── remediation.go          # SRE 告警→剧本自动修复
+│   │   ├── slo.go                  # SLO / 错误预算
+│   │   ├── ticket.go               # 工单系统
+│   │   ├── logs.go                 # 日志聚合与检索
+│   │   ├── ai.go                   # AI 巡检诊断
+│   │   ├── messages.go             # 统一消息中心
 │   │   ├── install.go              # 一键安装脚本生成
 │   │   └── web/                    # 面板前端（编译时 embed）
 │   │       ├── index.html / app.js / style.css
@@ -835,10 +892,13 @@ aiops-monitor/
 │       ├── pty_windows.go          # Windows ConPTY
 │       ├── pty_unix.go             # Linux/macOS openpty
 │       ├── pty_linux.go / pty_darwin.go
+│       ├── forward.go              # TCP/HTTP 转发通道
 │       ├── relay.go                # 网关中继模式
-│       ├── plugins.go              # 插件运行器
-│       ├── identity.go             # 稳定 host_id / 指纹
-│       └── reporter.go             # 双心跳上报
+│       ├── infra.go                # 韧性原语（退避/熔断器/脱敏）
+│       ├── i18n_agent.go           # Agent 端本地化
+│       ├── plugins.go              # 插件运行器（Python/Shell）
+│       ├── identity.go             # 稳定 host_id / 指纹防克隆
+│       └── reporter.go             # 双心跳上报 + 多服务端广播
 ├── plugins/                        # ★ Python 插件层
 │   ├── plugin_sdk.py               # 插件 SDK
 │   ├── core_metrics.py             # psutil 兜底

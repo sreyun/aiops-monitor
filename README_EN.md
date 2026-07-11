@@ -74,17 +74,22 @@ Install scripts auto-detect CPU architecture and download the matching binary �
 ### Docker One-Click (Recommended)
 
 ```bash
-# Pull pre-built images and start (no clone, no compile required)
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+# Download, auto-generate random passwords, and start (no clone, no compile)
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
+PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
+SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
+sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
+sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
+echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 # Open http://localhost:8529 in your browser
 ```
 
 > Three-container stack: `aiops-server` (Go single binary with `//go:embed` front-end) + `postgres` + `victoriametrics`, all brought up by one compose command. The server **requires** PG + VM and refuses to start without them.
 >
-> Images are hosted on Huawei Cloud SWR (`swr.cn-east-3.myhuaweicloud.com/sreyun/`). Every Release automatically builds `linux/amd64` + `linux/arm64` multi-arch images; `docker pull` auto-selects the matching architecture.
+> Images are hosted on Huawei Cloud SWR (`swr.cn-east-3.myhuaweicloud.com/sreyun/`). Every tag push triggers GitHub Actions to build `linux/amd64` + `linux/arm64` multi-arch images and push them to SWR; `docker pull` auto-selects the matching architecture.
 
-> **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. In production, be sure to change `POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY` in `docker-compose.yml`.
+> **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. The command above auto-generates random DB password and encryption key — **make sure to save the printed `PG password` and `SECRET_KEY`**.
 
 ### Binary Direct Run
 
@@ -133,13 +138,28 @@ Open `http://localhost:8529` — host card and metrics appear within seconds.
 
 ## Installation & Deployment
 
-### Option 1: Docker (Pre-built Images)
+### Option 1: Docker (Pre-built Images · Recommended)
+
+**One-click deploy (auto-generates random passwords):**
 
 ```bash
-# Download docker-compose.yml
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml && \
+PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
+SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
+sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
+sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
+echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
+docker compose up -d
+```
 
-# Pull pre-built images and start (no clone, no compile required)
+> The command above: downloads compose file → generates random passwords/keys → writes them into config → pulls images and starts. **Make sure to save the printed passwords and keys!**
+
+**Pin to a specific version (recommended for production):**
+
+```bash
+# Replace :latest with a specific version tag in docker-compose.yml
+sed -i 's|aiops-server:latest|aiops-server:v5.5.5|' docker-compose.yml
+sed -i 's|aiops-agent:latest|aiops-agent:v5.5.5|' docker-compose.yml
 docker compose up -d
 ```
 
@@ -149,6 +169,32 @@ docker compose up -d
 - Default port `8529`, modifiable in `docker-compose.yml`
 - Agent container not started by default — uncomment `aiops-agent` section to enable
 - To build locally, replace `image:` with the commented `build:` config in `docker-compose.yml` and run `docker compose up -d --build`
+
+### CI/CD Auto-Build
+
+Every version tag push (`v*`) to GitHub triggers the following pipeline:
+
+1. **Checkout** → Extract Git tag as version number
+2. **Multi-arch cross-compile** → `linux/amd64` + `linux/arm64` Go binaries
+3. **Build Docker images** → Multi-arch images via `docker/build-push-action`
+4. **HMAC-SHA256 auth** → Auto-generate SWR login credentials from `HW_ACCESS_KEY` / `HW_SECRET_KEY`
+5. **Push to Huawei Cloud SWR** → `swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:{tag}` and `aiops-agent:{tag}`
+
+**Image tags:**
+
+| Tag | Description |
+|---|---|
+| `:latest` | Always points to the latest Release |
+| `:v5.5.5` etc. | Pin to a specific version (recommended for production) |
+
+**Required GitHub Secrets** (configure in repo Settings → Secrets and variables → Actions):
+
+| Secret | Description |
+|---|---|
+| `HW_ACCESS_KEY` | Huawei Cloud Access Key (AK) |
+| `HW_SECRET_KEY` | Huawei Cloud Secret Key (SK) |
+
+> Workflow definition: [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 <details>
 <summary>Manual Docker build</summary>
@@ -651,6 +697,8 @@ Agent uses **active reverse connection**: server address is固化 to `--server` 
 
 | Component | Technology |
 |---|---|
+| **Relational storage** | PostgreSQL (config / users / audit / incidents / tickets / sessions / secrets) |
+| **Time-series storage** | VictoriaMetrics (metrics / trends / SLO) |
 | Agent core | Go 1.22+, pure stdlib, zero third-party deps |
 | Server | Go 1.22+, `net/http` (Go 1.22 routing), `embed` for dashboard |
 | Dashboard | Vanilla HTML/CSS/JS, no framework deps |
