@@ -71,20 +71,20 @@ PG_PASSWORD=$(gen_pg_password)
 echo "==> 正在将随机密钥写入 $OUT_FILE（无需手动修改）"
 echo "    PG 密码：20 位纯字母数字"
 echo "    SECRET_KEY：aiops- + 44 位随机字母数字（共 50 位）"
-awk -v q="'" -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" '
+awk -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" '
   /AIOPS_SECRET_KEY=/ {
     eq = index($0, "=")
-    print substr($0, 1, eq) q secret q
+    print substr($0, 1, eq) secret
     next
   }
   /POSTGRES_PASSWORD=/ {
     eq = index($0, "=")
-    print substr($0, 1, eq) q pg q
+    print substr($0, 1, eq) pg
     next
   }
   /AIOPS_POSTGRES_DSN=/ {
     eq = index($0, "=")
-    print substr($0, 1, eq) q "postgres://aiops:" pg "@postgres:5432/aiops?sslmode=disable" q
+    print substr($0, 1, eq) "postgres://aiops:" pg "@postgres:5432/aiops?sslmode=disable"
     next
   }
   { print }
