@@ -762,8 +762,10 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/ai/chat  {message, history:[{role,content}]}
 func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Message string `json:"message"`
-		History []struct {
+		Message    string `json:"message"`
+		IncidentID int64  `json:"incident_id,omitempty"`
+		Stream     bool   `json:"stream,omitempty"`
+		History    []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"history,omitempty"`
@@ -781,7 +783,23 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
 		return
 	}
-	msgs := []map[string]string{{"role": "system", "content": "你是资深 SRE / 运维助手，用简洁中文回答监控、告警、排障、性能与自动化相关问题；无关问题礼貌拒答。"}}
+
+	// Build system prompt. If incident_id is provided, inject full rich context
+	// (metrics + alerts + logs + RAG + rules) just like buildIncidentDiagnosisPrompt.
+	sys := "你是资深 SRE / 运维助手，用简洁中文回答监控、告警、排障、性能与自动化相关问题；无关问题礼貌拒答。"
+	if req.IncidentID > 0 {
+		if inc, found := s.incidents.Get(req.IncidentID); found {
+			sys = s.buildIncidentDiagnosisPrompt(inc) + "\n\n你是资深 SRE / 运维助手，结合以上事件上下文回答操作员的提问，用简洁中文给出具体建议。"
+			for _, e := range inc.Timeline {
+				if e.Kind == "ai_diagnosis" && e.Text != "" {
+					sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
+					break
+				}
+			}
+		}
+	}
+
+	msgs := []map[string]string{{"role": "system", "content": sys}}
 	hist := req.History
 	if len(hist) > 10 { // bound token usage to the last few turns
 		hist = hist[len(hist)-10:]
@@ -792,6 +810,14 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
+
+	// Stream mode
+	if req.Stream {
+		s.setupSSE(w)
+		_, _ = streamChat(w, cfg, msgs)
+		return
+	}
+
 	reply, err := aiChat(cfg, msgs)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -809,7 +835,8 @@ func (s *Server) handleRunInspection(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDiagnoseIncident runs an AI (or heuristic) diagnosis and appends it to
-// the incident timeline.
+// the incident timeline. Supports optional stream=true parameter for SSE streaming.
+// POST /api/v1/incidents/{id}/diagnose  {stream?:bool}
 func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) {
 	id, ok := sreParseID(r)
 	if !ok {
@@ -821,14 +848,59 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
-	diag, source := s.ai.Diagnose(inc)
-	actor := "启发式"
-	if source == "ai" {
-		actor = "AI"
+
+	// Optional stream flag
+	var req struct {
+		Stream bool `json:"stream,omitempty"`
 	}
-	s.incidents.AddEvent(id, "ai_diagnosis", actor, diag)
+	json.NewDecoder(r.Body).Decode(&req)
+
+	cfg := s.cfg.AIConfig()
+	if cfg.Enabled && cfg.Endpoint != "" && cfg.Model != "" {
+		// AI mode: use rich context (metrics + alerts + logs + RAG + rules)
+		sys := s.buildIncidentDiagnosisPrompt(inc)
+		for _, e := range inc.Timeline {
+			if e.Kind == "ai_diagnosis" && e.Text != "" {
+				sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
+				break
+			}
+		}
+		userMsg := fmt.Sprintf("请对事件 #%d 进行诊断分析，给出根因判断和处置建议。", inc.ID)
+
+		if req.Stream {
+			s.setupSSE(w)
+			_, _ = streamChat(w, cfg, []map[string]string{
+				{"role": "system", "content": sys},
+				{"role": "user", "content": userMsg},
+			})
+			return
+		}
+
+		diag, err := aiComplete(cfg, sys, userMsg)
+		if err != nil {
+			slog.Warn("ai diagnosis failed, falling back to heuristic", "id", id, "err", err)
+		} else {
+			s.incidents.AddEvent(id, "ai_diagnosis", "AI", diag)
+			s.store.MarkDirty()
+			// Async: save embedding for RAG
+			go s.saveDiagnosisEmbedding(id, inc, diag)
+			writeJSON(w, http.StatusOK, map[string]string{"diagnosis": diag, "source": "ai"})
+			return
+		}
+	}
+
+	// Fallback to heuristic
+	diag, source := s.ai.Diagnose(inc)
+	s.incidents.AddEvent(id, "ai_diagnosis", "启发式", diag)
 	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, map[string]string{"diagnosis": diag, "source": source})
+}
+
+// setupSSE sets the standard headers for Server-Sent Events streaming.
+func (s *Server) setupSSE(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 }
 
 // handleDiagnoseChatIncident provides multi-turn AI diagnosis chat for an
@@ -848,6 +920,7 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	}
 	var req struct {
 		Message         string `json:"message"`
+		Stream          bool   `json:"stream,omitempty"`
 		History         []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
@@ -893,6 +966,17 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
+
+	if req.Stream {
+		s.setupSSE(w)
+		reply, _ := streamChat(w, cfg, msgs)
+		if reply != "" {
+			s.saveDiagnosisChatTurn(id, req.Message, reply)
+			go s.saveDiagnosisEmbedding(id, inc, reply)
+		}
+		return
+	}
+
 	reply, err := aiChat(cfg, msgs)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})

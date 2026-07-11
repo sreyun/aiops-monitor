@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -262,6 +263,178 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	})
+}
+
+// streamChat calls the AI provider with streaming enabled (SSE) and writes each
+// token chunk to the ResponseWriter as an SSE "data:" event. For providers that
+// do not support streaming (Anthropic), it falls back to aiChat and sends the
+// whole reply as a single SSE event. Returns the accumulated full reply text.
+// The caller must set the proper headers (Content-Type: text/event-stream,
+// Cache-Control: no-cache, Connection: keep-alive) before calling this function.
+func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
+	if cfg.Endpoint == "" || cfg.Model == "" {
+		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
+		return "", nil
+	}
+
+	ep, prov := normalizeEndpoint(cfg.Endpoint)
+
+	// Anthropic-compatible endpoints don't support SSE streaming in the same way;
+	// fall back to a single-chunk response.
+	if prov == aiProvAnthropic {
+		reply, err := aiChat(cfg, messages)
+		if err != nil {
+			fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+			return "", nil
+		}
+		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString(reply))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		return reply, nil
+	}
+
+	// Build streaming request body
+	var reqBody map[string]any
+	var extraHeaders map[string]string
+
+	switch prov {
+	case aiProvBailianNative:
+		reqBody = map[string]any{
+			"model": cfg.Model,
+			"input": map[string]any{
+				"messages": messages,
+			},
+			"parameters": map[string]any{
+				"temperature":        0.2,
+				"result_format":      "message",
+				"incremental_output": true,
+			},
+		}
+	default: // aiProvOpenAI
+		reqBody = map[string]any{
+			"model":       cfg.Model,
+			"messages":    messages,
+			"temperature": 0.2,
+			"stream":      true,
+		}
+	}
+
+	b, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost, ep, bytes.NewReader(b))
+	if err != nil {
+		fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+		return "", nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	if prov == aiProvBailianNative {
+		req.Header.Set("X-DashScope-SSE", "enable")
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+		return "", nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
+		fmt.Fprintf(w, "data: {\"error\":\"HTTP %d: %s\"}\n\n", resp.StatusCode, escapeSSE(strings.TrimSpace(string(body))))
+		return "", nil
+	}
+
+	// Parse SSE stream line by line, accumulating the full reply
+	var fullReply strings.Builder
+	flusher, _ := w.(http.Flusher)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return fullReply.String(), nil
+		}
+		// Extract delta content from the chunk
+		delta := parseStreamDelta(data, prov)
+		if delta == "" {
+			continue
+		}
+		fullReply.WriteString(delta)
+		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString(delta))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	// If scanner ended without [DONE], send a done marker
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return fullReply.String(), nil
+}
+
+// parseStreamDelta extracts the content delta from a single SSE chunk.
+func parseStreamDelta(data string, prov aiProviderType) string {
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Output struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return ""
+	}
+	// OpenAI-compatible format: choices[0].delta.content
+	if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+		return chunk.Choices[0].Delta.Content
+	}
+	// Bailian native format: output.choices[0].message.content
+	if len(chunk.Output.Choices) > 0 && chunk.Output.Choices[0].Message.Content != "" {
+		return chunk.Output.Choices[0].Message.Content
+	}
+	return ""
+}
+
+// escapeSSE escapes special characters for safe SSE data field output.
+func escapeSSE(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
+}
+
+// jsonString marshals a string as a JSON string (with quotes).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // InspectionFinding is one item on an inspection report.

@@ -5760,6 +5760,40 @@ async function incidentAction(id, act){
   } catch(e){ toast("操作失败: "+e,"err"); }
 }
 // ---- AI 诊断多轮对话 ----
+// readSSEStream reads a Server-Sent Events stream from a fetch response and
+// calls onDelta for each token chunk, onError for errors, and onDone when complete.
+// Returns the accumulated full text.
+async function readSSEStream(resp,onDelta,onError,onDone){
+  const reader=resp.body.getReader();
+  const decoder=new TextDecoder();
+  let buf="";
+  let fullText="";
+  try {
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buf+=decoder.decode(value,{stream:true});
+      // Split by double newlines to get SSE events
+      const parts=buf.split("\n\n");
+      buf=parts.pop()||"";
+      for(const p of parts){
+        const lines=p.split("\n");
+        for(const line of lines){
+          if(!line.startsWith("data: ")) continue;
+          const data=line.slice(6);
+          if(data==="[DONE]"){ if(onDone) onDone(fullText); return fullText; }
+          try {
+            const j=JSON.parse(data);
+            if(j.error){ if(onError) onError(j.error); return fullText; }
+            if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
+          } catch(e){ /* skip malformed chunks */ }
+        }
+      }
+    }
+  } finally { reader.releaseLock(); }
+  if(onDone) onDone(fullText);
+  return fullText;
+}
 async function loadDiagnosisChatHistory(incidentId){
   const el=$("incDiagnosisChat"); if(!el) return;
   try {
@@ -5809,18 +5843,38 @@ async function sendDiagnosisChatMsg(){
   try {
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…"),include_terminal:!!$("incTermCheck")?.checked})
+      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…"),include_terminal:!!$("incTermCheck")?.checked,stream:true})
     });
-    const j=await r.json().catch(()=>({}));
-    // Replace the placeholder with real response
-    window._incDiagHistory.pop();
-    if(j.ok){ window._incDiagHistory.push({role:"assistant",content:j.reply}); }
-    else { window._incDiagHistory.push({role:"assistant",content:"❌ "+(j.error||"请求失败")}); }
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    // SSE streaming: replace placeholder with incremental content
+    let streamed=false;
+    await readSSEStream(r,
+      (delta,fullText)=>{
+        if(!streamed){ window._incDiagHistory.pop(); streamed=true; }
+        // Update last message in-place
+        const last=window._incDiagHistory[window._incDiagHistory.length-1];
+        if(last&&last.role==="assistant"){ last.content=fullText; }
+        else { window._incDiagHistory.push({role:"assistant",content:fullText}); }
+        renderDiagnosisChat();
+      },
+      (err)=>{
+        window._incDiagHistory.pop();
+        window._incDiagHistory.push({role:"assistant",content:"❌ "+err});
+        renderDiagnosisChat();
+      },
+      (fullText)=>{
+        if(!streamed){
+          window._incDiagHistory.pop();
+          window._incDiagHistory.push({role:"assistant",content:fullText||"（空回复）"});
+        }
+        renderDiagnosisChat();
+      }
+    );
   } catch(e){
     window._incDiagHistory.pop();
     window._incDiagHistory.push({role:"assistant",content:"❌ 网络错误: "+e});
+    renderDiagnosisChat();
   }
-  renderDiagnosisChat();
   el.disabled=false; $("incDiagSendBtn").disabled=false; el.focus();
 }
 function openNewIncident(){
@@ -6110,13 +6164,21 @@ async function sendAIChat(){
   appendChatMsg("user",msg);
   const pending=appendChatMsg("assistant","思考中…");
   try{
-    const r=await fetch(`${API}/ai/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:AI_CHAT_HISTORY})});
-    const j=await r.json().catch(()=>({}));
-    if(j.ok){
-      if(pending) pending.textContent=j.reply||"（空回复）";
-      AI_CHAT_HISTORY.push({role:"user",content:msg},{role:"assistant",content:j.reply||""});
-      if(AI_CHAT_HISTORY.length>20) AI_CHAT_HISTORY=AI_CHAT_HISTORY.slice(-20);
-    } else if(pending){ pending.textContent="✗ "+(j.error||"调用失败"); pending.classList.add("err"); }
+    const r=await fetch(`${API}/ai/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:AI_CHAT_HISTORY,stream:true})});
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    let streamed=false;
+    await readSSEStream(r,
+      (delta,fullText)=>{
+        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
+        if(pending) pending.textContent=fullText;
+      },
+      (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
+      (fullText)=>{
+        if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; }
+        AI_CHAT_HISTORY.push({role:"user",content:msg},{role:"assistant",content:fullText||""});
+        if(AI_CHAT_HISTORY.length>20) AI_CHAT_HISTORY=AI_CHAT_HISTORY.slice(-20);
+      }
+    );
   }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
 }
 safeAddEventListener("logSearchBtn","click",searchLogs);
