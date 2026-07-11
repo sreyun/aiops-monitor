@@ -7,7 +7,7 @@ name: Release · Build & Push to Huawei SWR
 #   HW_ACCESS_KEY  =  <华为云访问密钥 AK>           （IAM「我的凭证」获取）
 #   HW_SECRET_KEY  =  <华为云秘密密钥 SK>           （同上）
 #
-#   登录使用 AK/SK 直接认证，无需额外生成。
+#   登录密钥由 AK/SK 在 CI 中通过 HMAC-SHA256 自动生成。
 #
 #   另需在 SWR 控制台的 sreyun 组织下预先创建镜像仓库 aiops-server 与 aiops-agent
 #   （或将组织设为允许自动创建）。
@@ -60,12 +60,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Generate SWR login credential
+        id: swr-login
+        run: |
+          SWR_USERNAME="cn-east-3@${{ secrets.HW_ACCESS_KEY }}"
+          SWR_PASSWORD=$(printf '%s' "${{ secrets.HW_ACCESS_KEY }}" | openssl dgst -binary -sha256 -hmac "${{ secrets.HW_SECRET_KEY }}" | od -An -vtx1 | tr -d ' \n')
+          echo "username=$SWR_USERNAME" >> "$GITHUB_OUTPUT"
+          echo "password=$SWR_PASSWORD" >> "$GITHUB_OUTPUT"
+
       - name: Log in to Huawei SWR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.SWR_REGISTRY }}
-          username: cn-east-3@${{ secrets.HW_ACCESS_KEY }}
-          password: ${{ secrets.HW_SECRET_KEY }}
+          username: ${{ steps.swr-login.outputs.username }}
+          password: ${{ steps.swr-login.outputs.password }}
 
       - name: Build & push server image
         uses: docker/build-push-action@v6
