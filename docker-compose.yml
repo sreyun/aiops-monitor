@@ -84,9 +84,8 @@ services:
     restart: unless-stopped
 
   victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
-    # 国内用户若无法拉取 Docker Hub，可替换为下方 SWR 镜像（仅限 AMD64 架构！）：
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/victoriametrics/victoria-metrics:latest
+    image: swr.cn-east-3.myhuaweicloud.com/sreyun/victoria-metrics:latest
+    # image: victoriametrics/victoria-metrics:latest
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
@@ -99,9 +98,8 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:18-alpine
-    # 国内用户若无法拉取 Docker Hub，可替换为下方 SWR 镜像（仅限 AMD64 架构！）：
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/postgres:18-alpine
+    image: swr.cn-east-3.myhuaweicloud.com/sreyun/postgres:18-alpine
+    # image: postgres:18-alpine
     container_name: aiops-pg
     environment:
       - POSTGRES_USER=aiops
