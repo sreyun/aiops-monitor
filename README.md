@@ -976,6 +976,45 @@ aiops-monitor/
 | POST | `/api/v1/agent/forward/tx` | Agent → Server 转发数据流 |
 | **实时推送** | | |
 | GET | `/ws/push` | WebSocket 实时推送（主机状态/告警） |
+| **SRE · 事件** | | |
+| GET | `/api/v1/incidents` | 事件列表 |
+| POST | `/api/v1/incidents` | 手动创建事件 |
+| GET | `/api/v1/incidents/{id}` | 事件详情（含时间线） |
+| POST | `/api/v1/incidents/{id}/ack` | 认领事件 |
+| POST | `/api/v1/incidents/{id}/resolve` | 解决事件 |
+| POST | `/api/v1/incidents/{id}/comment` | 追加评论 |
+| POST | `/api/v1/incidents/{id}/ticket` | 升级为工单 |
+| POST | `/api/v1/incidents/{id}/diagnose` | AI / 启发式根因诊断 |
+| **SRE · 自动修复** | | |
+| GET | `/api/v1/remediation/rules` | 修复规则列表 |
+| POST | `/api/v1/remediation/rules` | 创建 / 更新规则 |
+| DELETE | `/api/v1/remediation/rules/{id}` | 删除规则 |
+| GET | `/api/v1/remediation/runs` | 执行记录 |
+| POST | `/api/v1/remediation/runs/{id}/approve` | 审批通过并执行 |
+| POST | `/api/v1/remediation/runs/{id}/reject` | 驳回待审批修复 |
+| **SRE · SLO** | | |
+| GET | `/api/v1/slos` | SLO 列表（含 SLI / 错误预算） |
+| POST | `/api/v1/slos` | 创建 / 更新 SLO |
+| DELETE | `/api/v1/slos/{id}` | 删除 SLO |
+| **SRE · 工单** | | |
+| GET | `/api/v1/tickets` | 工单列表 |
+| POST | `/api/v1/tickets` | 创建工单 |
+| GET | `/api/v1/tickets/{id}` | 工单详情 |
+| POST | `/api/v1/tickets/{id}` | 更新工单（状态 / 指派等） |
+| POST | `/api/v1/tickets/{id}/comment` | 追加评论 |
+| DELETE | `/api/v1/tickets/{id}` | 删除工单 |
+| **日志聚合** | | |
+| POST | `/api/v1/agent/logs` | Agent 日志上报（指纹鉴权） |
+| GET | `/api/v1/logs` | 日志检索（`host` / `level` / `q` / `since_min` / `limit`） |
+| **AI 巡检与诊断** | | |
+| GET | `/api/v1/ai/config` | 获取 AI Provider 配置 |
+| POST | `/api/v1/ai/config` | 保存 AI Provider 配置 |
+| GET | `/api/v1/ai/inspections` | 巡检报告列表 |
+| POST | `/api/v1/ai/inspect` | 立即执行一次巡检 |
+| **消息中心** | | |
+| GET | `/api/v1/messages` | 消息列表 + 未读数（事件 / AI / 自动修复 / 工单） |
+| POST | `/api/v1/messages/read` | 标记指定消息已读 |
+| POST | `/api/v1/messages/read-all` | 全部标记已读 |
 | **其他** | | |
 | GET | `/` | Web 面板 |
 | GET | `/healthz` | 健康检查 |

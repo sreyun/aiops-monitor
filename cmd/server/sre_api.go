@@ -42,6 +42,15 @@ func (s *Server) wireSRE() {
 			s.messages.push("incident", "success", "事件已恢复："+inc.Title, "", "sre", ref)
 		}
 	}
+	// Auto-remediation transitions (awaiting approval / success / failure) → message
+	// center, so operators are alerted to pending approvals and outcomes out-of-band.
+	s.remediation.onNotify = func(level, title, body string, incidentID int64) {
+		ref := ""
+		if incidentID > 0 {
+			ref = strconv.FormatInt(incidentID, 10)
+		}
+		s.messages.push("remediation", level, title, body, "sre", ref)
+	}
 	// AI inspection: only surface a message when the round actually found risks,
 	// so the scheduled healthy inspections don't spam the inbox.
 	s.ai.onReport = func(rep InspectionReport) {
@@ -497,6 +506,8 @@ func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.MarkDirty()
+	s.messages.push("ticket", "info", "新工单："+tk.Title,
+		fmt.Sprintf("优先级 %s · 状态 %s", tk.Priority, tk.Status), "sre", strconv.FormatInt(tk.ID, 10))
 	writeJSON(w, http.StatusOK, tk)
 }
 
@@ -517,6 +528,15 @@ func (s *Server) handleUpdateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.MarkDirty()
+	// Only message on the meaningful terminal transitions (resolved/closed) to
+	// keep the inbox low-noise on routine edits.
+	if tk.Status == "resolved" || tk.Status == "closed" {
+		label := "已解决"
+		if tk.Status == "closed" {
+			label = "已关闭"
+		}
+		s.messages.push("ticket", "success", "工单"+label+"："+tk.Title, "", "sre", strconv.FormatInt(tk.ID, 10))
+	}
 	writeJSON(w, http.StatusOK, tk)
 }
 

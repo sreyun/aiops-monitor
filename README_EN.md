@@ -2,8 +2,9 @@
 
 # AIOps Monitor
 
-**Lightweight Host Monitoring & Ops Platform** — Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks
+**Enterprise Host Monitoring & SRE Ops Platform** — Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks + SRE hub (incidents / auto-remediation / SLO / tickets) + log collection & search + AI inspection & diagnosis
 
+[![Version](https://img.shields.io/badge/Version-v5.5.0-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
@@ -14,7 +15,9 @@
 
 </div>
 
-> Single-binary server, zero-dependency agent, tri-platform native collection (incl. GPU), one-command install, ready out of the box. Built-in interactive trend charts, custom probes, remote terminal (no port opening), automation playbooks, multi-user RBAC, MFA two-factor, embedded persistence, PWA installable.
+> Single-binary server, zero-dependency agent, tri-platform native collection (incl. GPU), one-command install. Built-in interactive trend charts, custom probes, remote terminal (no port opening + terminal password), automation playbooks, SRE hub (incidents / auto-remediation / SLO / tickets), log collection & full-text search, AI inspection & incident diagnosis, multi-user RBAC, MFA two-factor, PWA installable, port forwarding & HTTP proxy, i18n (zh / en / zh-TW).
+>
+> **v5.5.0 architecture upgrade**: storage unified on **PostgreSQL (all relational data) + VictoriaMetrics (all time-series)** — the embedded `aiops.db` single-file store is fully retired. Adds config-secret **AES-256-GCM encryption at rest**, optional **TLS in transit**, forced **security initialization** on first login, and cross-platform **boot autostart + keep-alive** (systemd / launchd / Scheduled Task).
 
 ## Table of Contents
 
@@ -72,11 +75,13 @@ Install scripts auto-detect CPU architecture and download the matching binary �
 
 ```bash
 git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
-docker compose up -d aiops-server
+docker compose up -d
 # Open http://localhost:8529 in your browser
 ```
 
-> **Default credentials**: `admin / admin`. Change username and password immediately after first login, and consider enabling MFA.
+> Three-container stack: `aiops-server` (Go single binary with `//go:embed` front-end) + `postgres` + `victoriametrics`, all brought up by one compose command. The server **requires** PG + VM and refuses to start without them.
+
+> **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. In production, be sure to change `POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY` in `docker-compose.yml`.
 
 ### Binary Direct Run
 
@@ -110,7 +115,13 @@ Open `http://localhost:8529` — host card and metrics appear within seconds.
 | **Multi-server push** | Single agent pushes to multiple servers; collect once, broadcast all; independent auth/retry |
 | **Gateway relay mode** | One internet-connected machine proxies all requests to cloud; binary/report/terminal auto-tunnel |
 | **Machine fingerprint auth** | machine-id + MAC hash fingerprint binding; token rotation doesn't affect installed agents |
-| **Persistence** | Embedded lightweight DB (gzip+JSON to `aiops.db`), survives restart |
+| **SRE hub** | Incidents (alert / SLO / manual with timeline) · alert→playbook closed-loop auto-remediation (guardrails + approval) · SLO / error budget (long-window queried from VM) · tickets |
+| **Log collection & search** | Agent `--log-paths` incremental tailing → server search by host / level / keyword / time; auto level classification error/warn/info |
+| **AI inspection & diagnosis** | Scheduled health inspection + incident root-cause analysis; agent-level analysis when an AI provider is configured, heuristic fallback otherwise; **error/warn logs are fed into the analysis context** |
+| **Unified storage (PG + VM)** | Relational data (config / users / audit / incidents / tickets / sessions) in PostgreSQL, time-series (metrics / trends) in VictoriaMetrics; embedded aiops.db fully retired, refuses to start without both |
+| **Encryption at rest & TLS** | Config secrets (MFA / SMTP / AI / webhook / relay) sealed with AES-256-GCM (`AIOPS_SECRET_KEY`); optional HTTPS/TLS in transit |
+| **Message center** | In-app notification bell aggregating incidents / AI diagnosis / auto-remediation / tickets, each deep-linked into the SRE hub |
+| **Persistence** | All state in PostgreSQL + VictoriaMetrics (the in-memory tiered window is a hot cache only) |
 | **PWA installable** | Install to desktop, Service Worker offline cache, standalone window |
 | **gzip compression** | API/static auto-gzip, ~8-10x bandwidth reduction for multi-host polling |
 | **One-click install** | Dashboard-generated Token command, auto-download + config + boot autostart |
@@ -340,6 +351,20 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 | `-config` | Config file path | `server_config.json` |
 | `-dist` | Agent download directory | auto-detect `./dist` or executable dir |
 
+### Environment Variables
+
+| Variable | Required | Description |
+|---|:---:|---|
+| `AIOPS_POSTGRES_DSN` | **Yes** | PostgreSQL DSN, e.g. `postgres://user:pwd@host:5432/db?sslmode=disable`. All relational data lives in PG; **the server refuses to start without it** |
+| `AIOPS_VM_URL` | **Yes** | VictoriaMetrics URL, e.g. `http://victoriametrics:8428`. All time-series lives in VM; **refuses to start without it** |
+| `AIOPS_SECRET_KEY` | Strongly recommended | Master key for at-rest encryption of config secrets (AES-256-GCM). **Back it up — losing it makes already-encrypted secrets unrecoverable** |
+| `AIOPS_TLS_CERT` / `AIOPS_TLS_KEY` | Optional | TLS cert / key paths; serves HTTPS when set, otherwise plain HTTP (put behind a TLS-terminating proxy) |
+| `AIOPS_FORWARD_LISTEN` | Optional | TCP forward listen address (must be `0.0.0.0` for Docker) |
+| `AIOPS_TRUST_PROXY` | Optional | Set `true` behind a trusted reverse proxy to honor `X-Real-IP` for rate limiting |
+| `AIOPS_TERMINAL_DISABLED` / `AIOPS_FORWARD_DISABLED` / `AIOPS_REQUIRE_TOKEN` / `AIOPS_ALLOW_ANONYMOUS_AGENTS` | Optional | Feature/security toggles (`true`/`false` or `1`/`0`) |
+
+> Priority: environment variables > `server_config.json`.
+
 ---
 
 ## Monitoring Metrics
@@ -509,11 +534,14 @@ Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) 
 ### Agent & Data Security
 
 - **Mandatory Agent Token** (default on): `register`/`report` must carry valid Token (constant-time compare)
-- **Request body limit**: 2 MiB, prevents oversized JSON memory exhaustion
+- **Request body limit**: 100 MiB (covers port-forward file transfer), prevents oversized JSON memory exhaustion
+- **Encryption at rest**: config MFA/SMTP/AI/webhook/relay secrets sealed with AES-256-GCM derived from `AIOPS_SECRET_KEY`
+- **Encryption in transit**: optional TLS (`AIOPS_TLS_CERT/KEY`); the agent supports self-signed CA trust (`--ca-cert` / `tls_skip_verify`)
+- **Forced security initialization**: default admin/admin must go through a mandatory "change username + password" dialog on first login — not skippable
 - **Security headers**: `nosniff`, `DENY` (anti-clickjacking), `no-referrer`
-- **Secret masking**: Webhook/SMTP passwords masked on display, blank preserves original
+- **Secret masking**: Webhook/SMTP/AI-key/PostgreSQL-DSN masked on display, blank preserves original
 - **Host identity anti-clone**: Cloned images with copied `agent_state.json` detected, `host_id` regenerated
-- **Remote terminal dual auth**: Browser needs login session + Agent needs Token; open/close audited
+- **Remote terminal dual auth**: Browser needs login session + terminal secondary password; open/close audited
 - **For public exposure: place behind reverse proxy with HTTPS**
 
 ---
@@ -659,7 +687,13 @@ aiops-monitor/
 │   │   ├── main.go                 # Entry, routing, middleware
 │   │   ├── handlers.go             # API handlers
 │   │   ├── store.go                # In-memory store + multi-level downsampling
-│   │   ├── db.go                   # Embedded lightweight DB (gzip+JSON)
+│   │   ├── pgstore.go              # PostgreSQL store (all relational data)
+│   │   ├── vm.go                   # VictoriaMetrics writer/reader (all time-series)
+│   │   ├── crypto.go               # AES-256-GCM secret encryption at rest
+│   │   ├── logstore.go             # Log aggregation + search
+│   │   ├── aiops.go                # AI inspection + heuristic diagnosis
+│   │   ├── incident.go/slo.go/ticket.go/remediation.go  # SRE hub
+│   │   ├── message.go              # Notification message center
 │   │   ├── alerts.go               # Threshold alert engine
 │   │   ├── auth.go                 # Login auth + MFA + RBAC
 │   │   ├── users.go                # Multi-user management
@@ -716,7 +750,7 @@ aiops-monitor/
 - **Process isolation**: Plugins run as subprocesses, timeout killable, one bad plugin doesn't crash core
 - **Alert dedup**: Only pushes on "new trigger" and "recover" transitions, persistent alerts don't spam
 - **Multi-level downsampling**: Raw (~1.5h) / 1-min aggregate (48h) / 5-min aggregate (7 days)
-- **Embedded persistence**: gzip+JSON atomic flush to `aiops.db`, periodic save + exit flush
+- **Unified storage**: relational data (config / users / audit / incidents / tickets / sessions) in PostgreSQL, time-series (metrics / trends / SLO) in VictoriaMetrics; embedded aiops.db fully retired (the in-memory tiered window is a hot cache only)
 - **gzip compression**: Multi-host polling JSON compresses ~8-10x; WebSocket upgrades auto-skipped
 
 ---
@@ -806,6 +840,33 @@ aiops-monitor/
 | POST | `/api/v1/install/reset-token` | Reset Token |
 | GET | `/install.sh` / `/install.ps1` | Install scripts |
 | GET | `/uninstall.sh` / `/uninstall.ps1` | Uninstall scripts |
+| **Other** | | |
+| **SRE · Incidents** | | |
+| GET / POST | `/api/v1/incidents` | List / create incident |
+| GET | `/api/v1/incidents/{id}` | Incident detail (with timeline) |
+| POST | `/api/v1/incidents/{id}/ack` · `/resolve` · `/comment` · `/ticket` · `/diagnose` | Ack / resolve / comment / escalate to ticket / AI diagnosis |
+| **SRE · Auto-remediation** | | |
+| GET / POST | `/api/v1/remediation/rules` | List / upsert rules |
+| DELETE | `/api/v1/remediation/rules/{id}` | Delete rule |
+| GET | `/api/v1/remediation/runs` | Run history |
+| POST | `/api/v1/remediation/runs/{id}/approve` · `/reject` | Approve & run / reject pending remediation |
+| **SRE · SLO** | | |
+| GET / POST | `/api/v1/slos` | List (with SLI / error budget) / upsert |
+| DELETE | `/api/v1/slos/{id}` | Delete SLO |
+| **SRE · Tickets** | | |
+| GET / POST | `/api/v1/tickets` | List / create ticket |
+| GET / POST / DELETE | `/api/v1/tickets/{id}` | Detail / update / delete |
+| POST | `/api/v1/tickets/{id}/comment` | Add comment |
+| **Log Aggregation** | | |
+| POST | `/api/v1/agent/logs` | Agent log ingest (fingerprint-authed) |
+| GET | `/api/v1/logs` | Log search (`host` / `level` / `q` / `since_min` / `limit`) |
+| **AI** | | |
+| GET / POST | `/api/v1/ai/config` | Get / save AI provider config |
+| GET | `/api/v1/ai/inspections` | Inspection reports |
+| POST | `/api/v1/ai/inspect` | Run an inspection now |
+| **Message Center** | | |
+| GET | `/api/v1/messages` | Messages + unread count (incidents / AI / remediation / tickets) |
+| POST | `/api/v1/messages/read` · `/read-all` | Mark read / mark all read |
 | **Other** | | |
 | GET | `/` | Web dashboard |
 | GET | `/healthz` | Health check |

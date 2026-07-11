@@ -11,10 +11,17 @@ dist/
 *.exe
 *.zip
 
-# 运行时数据
+# 运行时数据（本地卷 / 单文件库 —— 体积大，且构建不需要）
 aiops.db
 agent_state.json
 server_config.json
+data/
+pg-data/
+vm-data/
+*.log
+
+# 营销站点（构建镜像不需要）
+website/
 
 # 自动生成的文件
 generated/

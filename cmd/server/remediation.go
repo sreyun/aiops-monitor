@@ -87,6 +87,9 @@ type remediationManager struct {
 	// when it finishes, and returns the playbook execution ID immediately.
 	trigger    func(pb Playbook, host *Host, operator string, onDone func(ok bool)) int64
 	onIncident func(incidentID int64, kind, actor, text string)
+	// onNotify surfaces a remediation transition (awaiting approval / success /
+	// failure) to the message center so operators are alerted out-of-band.
+	onNotify func(level, title, body string, incidentID int64)
 }
 
 func newRemediationManager(cfg *ConfigStore) *remediationManager {
@@ -185,6 +188,10 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 			m.onIncident(incidentID, "remediation", "auto",
 				Tz("remediation.evt_pending", r.Name, pbName))
 		}
+		if m.onNotify != nil {
+			m.onNotify("warning", "自动修复待审批："+r.Name,
+				"修复剧本「"+pbName+"」已排队，等待人工审批，请在 SRE · 自动修复 页处理。", incidentID)
+		}
 		return
 	}
 	// Auto-run: reserve cooldown/rate-limit slots now to prevent double-fire.
@@ -244,6 +251,13 @@ func (m *remediationManager) finish(runID int64, ok bool, reason string) {
 			key = "remediation.evt_failed"
 		}
 		m.onIncident(incID, "remediation", "auto", Tz(key, name, host))
+	}
+	if m.onNotify != nil {
+		if ok {
+			m.onNotify("success", "自动修复成功："+name, "主机 "+host+" 已成功执行修复剧本。", incID)
+		} else {
+			m.onNotify("critical", "自动修复失败："+name, "主机 "+host+"："+trimLine(reason, 160), incID)
+		}
 	}
 }
 

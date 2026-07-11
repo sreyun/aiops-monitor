@@ -1,23 +1,43 @@
-# ---- Build stage ----
-FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/golang:1.22-alpine AS builder
+# syntax=docker/dockerfile:1
+# ============================================================================
+# Multi-arch (linux/amd64 + linux/arm64) build with version injection.
+# - BASE_REGISTRY defaults to the Huawei SWR mirror (fast for local/China builds);
+#   CI passes BASE_REGISTRY=docker.io to use the official multi-arch base images.
+# - VERSION is injected into main.appVersion (set to the git tag by the release CI).
+# - The Go builds are cross-compiled on the native build host (CGO off), so an
+#   arm64 image does NOT pay for QEMU emulation of the (slow) Go compile.
+# ============================================================================
+ARG BASE_REGISTRY=swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io
+
+# ---- Build stage (always runs on the native BUILDPLATFORM) ----
+FROM --platform=$BUILDPLATFORM ${BASE_REGISTRY}/golang:1.22-alpine AS builder
 WORKDIR /src
+# TARGETOS/TARGETARCH are provided automatically by buildx per target platform.
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
 COPY shared/ shared/
 COPY cmd/ cmd/
 
-RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/aiops-server ./cmd/server
-RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/aiops-agent  ./cmd/agent
+# Server + agent binaries for THIS image's target arch (native cross-compile).
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
+    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/aiops-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
+    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/aiops-agent  ./cmd/agent
 
-# Cross-compile agents for distribution (one-click install)
-RUN GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/dist/aiops-agent.exe           ./cmd/agent && \
-    GOOS=darwin  GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/dist/aiops-agent-darwin-arm64  ./cmd/agent && \
-    GOOS=darwin  GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/dist/aiops-agent-darwin-amd64  ./cmd/agent && \
-    GOOS=linux   GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="-s -w" -o /out/dist/aiops-agent-linux-arm64   ./cmd/agent && \
-    cp /out/aiops-agent /out/dist/aiops-agent-linux-amd64
+# All-platform agent binaries for the one-click install distribution (served by the
+# server via /dl/, so they must cover every platform regardless of the image arch).
+RUN set -e; LD="-s -w -X main.appVersion=${VERSION}"; \
+    GOOS=linux   GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-linux-amd64  ./cmd/agent; \
+    GOOS=linux   GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-linux-arm64  ./cmd/agent; \
+    GOOS=darwin  GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-darwin-amd64 ./cmd/agent; \
+    GOOS=darwin  GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-darwin-arm64 ./cmd/agent; \
+    GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent.exe          ./cmd/agent
 
 # ---- Server image ----
-FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/alpine:3.20 AS server
+FROM ${BASE_REGISTRY}/alpine:3.20 AS server
 RUN apk add --no-cache ca-certificates tzdata zip
 WORKDIR /app
 
@@ -34,7 +54,7 @@ ENTRYPOINT ["/app/aiops-server"]
 CMD ["-addr", ":8529", "-config", "/app/data/server_config.json", "-dist", "/app/dist"]
 
 # ---- Agent image ----
-FROM swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io/alpine:3.20 AS agent
+FROM ${BASE_REGISTRY}/alpine:3.20 AS agent
 RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
 WORKDIR /app
 
