@@ -653,17 +653,52 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 		c.APIKey = s.cfg.AIConfig().APIKey // the browser never receives the real key
 	}
 	if strings.TrimSpace(c.Endpoint) == "" || strings.TrimSpace(c.Model) == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 Endpoint 和模型"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 Endpoint 和模型名称"})
 		return
+	}
+	// Detect Bailian and provide helpful hint
+	hint := ""
+	if isBailianEndpoint(c.Endpoint) {
+		hint = "bailian"
 	}
 	start := time.Now()
 	reply, err := aiComplete(c, "你是连通性自检助手，用一句话确认你已就绪。", "请回复：AI 服务正常，已就绪。")
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency, "provider_hint": hint})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "latency_ms": latency, "model": c.Model})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "latency_ms": latency, "model": c.Model, "provider_hint": hint})
+}
+
+// handleAIModels returns a curated list of recommended models for quick selection.
+// GET /api/v1/ai/models
+func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	// Provider-specific model suggestions
+	type modelSuggestion struct {
+		Value    string `json:"value"`
+		Label    string `json:"label"`
+		Provider string `json:"provider"`
+	}
+	models := []modelSuggestion{
+		// Alibaba Bailian (DashScope)
+		{Value: "qwen-plus", Label: "通义千问-Plus（性价比推荐）", Provider: "bailian"},
+		{Value: "qwen-max", Label: "通义千问-Max（最强能力）", Provider: "bailian"},
+		{Value: "qwen-turbo", Label: "通义千问-Turbo（速度优先）", Provider: "bailian"},
+		{Value: "qwen-plus-latest", Label: "通义千问-Plus-Latest", Provider: "bailian"},
+		{Value: "qwen-max-latest", Label: "通义千问-Max-Latest", Provider: "bailian"},
+		// OpenAI
+		{Value: "gpt-4o-mini", Label: "GPT-4o Mini（轻量推荐）", Provider: "openai"},
+		{Value: "gpt-4o", Label: "GPT-4o（全能）", Provider: "openai"},
+		{Value: "gpt-4-turbo", Label: "GPT-4 Turbo", Provider: "openai"},
+		// DeepSeek
+		{Value: "deepseek-chat", Label: "DeepSeek-V3（通用对话）", Provider: "deepseek"},
+		{Value: "deepseek-reasoner", Label: "DeepSeek-R1（推理增强）", Provider: "deepseek"},
+		// Moonshot / Kimi
+		{Value: "moonshot-v1-8k", Label: "Moonshot v1-8K", Provider: "moonshot"},
+		{Value: "moonshot-v1-32k", Label: "Moonshot v1-32K（长文本）", Provider: "moonshot"},
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // handleAIChat is a lightweight SRE-assistant chat over the configured provider so

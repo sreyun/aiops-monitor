@@ -29,21 +29,74 @@ type AIConfig struct {
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
 }
 
-// aiChat calls an OpenAI-compatible chat/completions endpoint with a full message
-// list (multi-turn, stdlib only). On a non-200 it surfaces a snippet of the
-// provider's error body so the caller (e.g. the config test) can show WHY it failed.
+// isBailianEndpoint reports whether the endpoint targets Alibaba Bailian (DashScope).
+func isBailianEndpoint(endpoint string) bool {
+	return strings.Contains(endpoint, "dashscope.aliyuncs.com")
+}
+
+// normalizeEndpoint auto-corrects common endpoint mistakes:
+// - Bailian compatible-mode without /chat/completions suffix → append it
+// - Bailian native-mode (api/v1/services) → leave as-is for native handling
+// Returns the (possibly corrected) endpoint and whether it's Bailian native mode.
+func normalizeEndpoint(endpoint string) (string, bool) {
+	ep := strings.TrimRight(endpoint, "/")
+	if !isBailianEndpoint(ep) {
+		// Non-Bailian: if it's an OpenAI-compatible base URL without /chat/completions, append it.
+		if !strings.HasSuffix(ep, "/chat/completions") && !strings.Contains(ep, "/chat/completions?") {
+			// Check if it looks like a base URL (ends with /v1 or similar)
+			if strings.HasSuffix(ep, "/v1") || strings.HasSuffix(ep, "/v1/") {
+				ep += "/chat/completions"
+			}
+		}
+		return ep, false
+	}
+	// Bailian: check if it's the native API endpoint (not compatible-mode)
+	if strings.Contains(ep, "/api/v1/services/") || strings.Contains(ep, "/text-generation/") {
+		return ep, true // native mode
+	}
+	// Bailian compatible-mode: ensure /chat/completions suffix
+	if !strings.HasSuffix(ep, "/chat/completions") && !strings.Contains(ep, "/chat/completions?") {
+		ep += "/chat/completions"
+	}
+	return ep, false
+}
+
+// aiChat calls an OpenAI-compatible or Bailian-native chat/completions endpoint
+// with a full message list (multi-turn, stdlib only). On a non-200 it surfaces a
+// snippet of the provider's error body so the caller (e.g. the config test) can
+// show WHY it failed.
 func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
-		return "", fmt.Errorf("ai endpoint/model not configured")
+		return "", fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
-	reqBody := map[string]any{
-		"model":       cfg.Model,
-		"messages":    messages,
-		"temperature": 0.2,
-		"stream":      false,
+
+	ep, isBailianNative := normalizeEndpoint(cfg.Endpoint)
+
+	var reqBody map[string]any
+	if isBailianNative {
+		// Bailian native API format: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+		reqBody = map[string]any{
+			"model": cfg.Model,
+			"input": map[string]any{
+				"messages": messages,
+			},
+			"parameters": map[string]any{
+				"temperature":   0.2,
+				"result_format": "message",
+			},
+		}
+	} else {
+		// OpenAI-compatible format
+		reqBody = map[string]any{
+			"model":       cfg.Model,
+			"messages":    messages,
+			"temperature": 0.2,
+			"stream":      false,
+		}
 	}
+
 	b, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest(http.MethodPost, cfg.Endpoint, bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
 		return "", err
 	}
@@ -51,19 +104,68 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
+	// Bailian native API also accepts X-DashScope-SSE header control
+	if isBailianNative {
+		req.Header.Set("X-DashScope-SSE", "disable")
+	}
+
 	client := &http.Client{Timeout: 45 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("网络请求失败：%v（请检查 Endpoint 地址是否正确）", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
-		if msg := strings.TrimSpace(string(body)); msg != "" {
-			return "", fmt.Errorf("HTTP %d：%s", resp.StatusCode, trimLine(msg, 220))
+		msg := strings.TrimSpace(string(body))
+		// Provide actionable hints for common status codes
+		switch resp.StatusCode {
+		case 404:
+			if isBailianEndpoint(cfg.Endpoint) {
+				return "", fmt.Errorf("HTTP 404：百炼 API 端点不存在。请确认 Endpoint 格式：\n"+
+					"  兼容模式：https://dashscope.aliyuncs.com/compatible-mode/v1\n"+
+					"  原生模式：https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation\n"+
+					"当前端点：%s", cfg.Endpoint)
+			}
+			return "", fmt.Errorf("HTTP 404：API 端点不存在，请检查 Endpoint 地址是否正确（当前：%s）", cfg.Endpoint)
+		case 401, 403:
+			return "", fmt.Errorf("HTTP %d：认证失败，请检查 API Key 是否正确且有效", resp.StatusCode)
+		case 400:
+			if msg != "" {
+				return "", fmt.Errorf("HTTP 400：请求参数错误 — %s", trimLine(msg, 200))
+			}
+			return "", fmt.Errorf("HTTP 400：请求参数错误，请检查模型名称是否正确（当前：%s）", cfg.Model)
+		default:
+			if msg != "" {
+				return "", fmt.Errorf("HTTP %d：%s", resp.StatusCode, trimLine(msg, 220))
+			}
+			return "", fmt.Errorf("HTTP %d：服务端返回异常状态码", resp.StatusCode)
 		}
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+
+	// Parse response — handle both Bailian native and OpenAI-compatible formats.
+	if isBailianNative {
+		// Bailian native response: {"output": {"choices": [{"message": {"content": "..."}}]}}
+		var out struct {
+			Output struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			} `json:"output"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return "", fmt.Errorf("解析百炼响应失败：%v", err)
+		}
+		if len(out.Output.Choices) == 0 {
+			return "", fmt.Errorf("百炼 API 返回空结果")
+		}
+		return strings.TrimSpace(out.Output.Choices[0].Message.Content), nil
+	}
+
+	// OpenAI-compatible response: {"choices": [{"message": {"content": "..."}}]}
 	var out struct {
 		Choices []struct {
 			Message struct {
@@ -72,10 +174,10 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", fmt.Errorf("解析 AI 响应失败：%v", err)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("provider returned no choices")
+		return "", fmt.Errorf("AI 服务返回空结果")
 	}
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
 }
