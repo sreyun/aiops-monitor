@@ -2,7 +2,7 @@
 
 # AIOps Monitor
 
-**Enterprise Host Monitoring & SRE Ops Platform** �?Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks + SRE hub (incidents / auto-remediation / SLO / tickets) + log collection & search + AI inspection & diagnosis
+**Enterprise Host Monitoring & SRE Ops Platform** 鈥?Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks + SRE hub (incidents / auto-remediation / SLO / tickets) + log collection & search + AI inspection & diagnosis
 
 [![Version](https://img.shields.io/badge/Version-v5.5.5-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -11,13 +11,13 @@
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
 [![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
-[中文](README.md) · [English](README_EN.md)
+[涓�枃](README.md) 路 [English](README_EN.md)
 
 </div>
 
 > Single-binary server, zero-dependency agent, tri-platform native collection (incl. GPU), one-command install. Built-in interactive trend charts, custom probes, remote terminal (no port opening + terminal password), automation playbooks, SRE hub (incidents / auto-remediation / SLO / tickets), log collection & full-text search, AI inspection & incident diagnosis, multi-user RBAC, MFA two-factor, PWA installable, port forwarding & HTTP proxy, i18n (zh / en / zh-TW).
 >
-> **v5.5.0 architecture upgrade**: storage unified on **PostgreSQL (all relational data) + VictoriaMetrics (all time-series)** �?the embedded `aiops.db` single-file store is fully retired. Adds config-secret **AES-256-GCM encryption at rest**, optional **TLS in transit**, forced **security initialization** on first login, and cross-platform **boot autostart + keep-alive** (systemd / launchd / Scheduled Task).
+> **v5.5.0 architecture upgrade**: storage unified on **PostgreSQL (all relational data) + VictoriaMetrics (all time-series)** 鈥?the embedded `aiops.db` single-file store is fully retired. Adds config-secret **AES-256-GCM encryption at rest**, optional **TLS in transit**, forced **security initialization** on first login, and cross-platform **boot autostart + keep-alive** (systemd / launchd / Scheduled Task).
 
 ## Table of Contents
 
@@ -48,8 +48,8 @@
 
 | Architecture | Linux | Windows | macOS |
 |---|:---:|:---:|:---:|
-| **AMD64 / x86_64** | �?| �?| �?Intel Mac |
-| **ARM64 / aarch64** | �?| �?| �?Apple Silicon (M1/M2/M3/M4) |
+| **AMD64 / x86_64** | 鉁?| 鉁?| 鉁?Intel Mac |
+| **ARM64 / aarch64** | 鉁?| 鈥?| 鉁?Apple Silicon (M1/M2/M3/M4) |
 
 > **Apple Silicon native**: `GOARCH=arm64` + `GOOS=darwin`, no Rosetta needed.  
 > **Intel Mac native**: `GOARCH=amd64` + `GOOS=darwin`.  
@@ -65,7 +65,7 @@
 | `aiops-agent-darwin-arm64` | macOS | Apple Silicon |
 | `aiops-agent.exe` | Windows | AMD64 |
 
-Install scripts auto-detect CPU architecture and download the matching binary �?no manual selection needed.
+Install scripts auto-detect CPU architecture and download the matching binary 鈥?no manual selection needed.
 
 ---
 
@@ -74,22 +74,27 @@ Install scripts auto-detect CPU architecture and download the matching binary �
 ### Docker One-Click (Recommended)
 
 ```bash
-# Download, auto-generate random passwords, and start (no clone, no compile)
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
-PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
-SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
-sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
-sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
-echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
+# Choose the download URL based on your network environment:
+#
+# Option A (minimal, local/test): use the repo's built-in default secrets, start directly
+# -- International users (GitHub) --
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
+# -- China users (Gitee mirror) --
+curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml
 docker compose up -d
-# Open http://localhost:8529 in your browser
+
+# Option B (recommended, production): download and auto-generate strong random secrets
+# -- International users (GitHub) --
+bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
+# -- China users (Gitee mirror) --
+bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts/secure-compose.sh) && docker compose up -d
 ```
 
 > Three-container stack: `aiops-server` (Go single binary with `//go:embed` front-end) + `postgres` + `victoriametrics`, all brought up by one compose command. The server **requires** PG + VM and refuses to start without them.
 >
 > Images are hosted on Huawei Cloud SWR (`swr.cn-east-3.myhuaweicloud.com/sreyun/`). Every tag push triggers GitHub Actions to build `linux/amd64` + `linux/arm64` multi-arch images and push them to SWR; `docker pull` auto-selects the matching architecture.
 
-> **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. The command above auto-generates random DB password and encryption key �?**make sure to save the printed `PG password` and `SECRET_KEY`**.
+> **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. The command above auto-generates random DB password and encryption key 鈥?**make sure to save the printed `PG password` and `SECRET_KEY`**.
 
 ### Binary Direct Run
 
@@ -101,7 +106,7 @@ docker compose up -d
 ./bin/aiops-agent --server http://<server-IP>:8529 --category Production
 ```
 
-Open `http://localhost:8529` �?host card and metrics appear within seconds.
+Open `http://localhost:8529` 鈥?host card and metrics appear within seconds.
 
 ---
 
@@ -115,7 +120,7 @@ Open `http://localhost:8529` �?host card and metrics appear within seconds.
 | **Interactive trend charts** | Pure Canvas, hover crosshair + tooltip, drag-zoom, double-click reset, enlarge preview |
 | **Custom probes** | HTTP (status/latency/TLS cert days) / TCP / Ping (loss%/RTT) / process; history curves |
 | **Remote terminal** | Browser full TTY via Agent reverse connection (no inbound port); multi-tab, recording playback, read-only observe, command audit |
-| **Automation playbooks** | Multi-step orchestration + target selection (all/category/system/host) �?batch parallel execution �?real-time output + history |
+| **Automation playbooks** | Multi-step orchestration + target selection (all/category/system/host) 鈫?batch parallel execution 鈫?real-time output + history |
 | **Alert push** | Feishu / DingTalk Webhook + Email SMTP, trigger/recover transitions only, no spam |
 | **Multi-user RBAC** | admin / operator / viewer, route-level permission, user management UI |
 | **MFA two-factor** | TOTP (RFC 6238), Google Authenticator compatible, QR enrollment |
@@ -123,8 +128,8 @@ Open `http://localhost:8529` �?host card and metrics appear within seconds.
 | **Multi-server push** | Single agent pushes to multiple servers; collect once, broadcast all; independent auth/retry |
 | **Gateway relay mode** | One internet-connected machine proxies all requests to cloud; binary/report/terminal auto-tunnel |
 | **Machine fingerprint auth** | machine-id + MAC hash fingerprint binding; token rotation doesn't affect installed agents |
-| **SRE hub** | Incidents (alert / SLO / manual with timeline) · alert→playbook closed-loop auto-remediation (guardrails + approval) · SLO / error budget (long-window queried from VM) · tickets |
-| **Log collection & search** | Agent `--log-paths` incremental tailing �?server search by host / level / keyword / time; auto level classification error/warn/info |
+| **SRE hub** | Incidents (alert / SLO / manual with timeline) 路 alert鈫抪laybook closed-loop auto-remediation (guardrails + approval) 路 SLO / error budget (long-window queried from VM) 路 tickets |
+| **Log collection & search** | Agent `--log-paths` incremental tailing 鈫?server search by host / level / keyword / time; auto level classification error/warn/info |
 | **AI inspection & diagnosis** | Scheduled health inspection + incident root-cause analysis; agent-level analysis when an AI provider is configured, heuristic fallback otherwise; **error/warn logs are fed into the analysis context** |
 | **Unified storage (PG + VM)** | Relational data (config / users / audit / incidents / tickets / sessions) in PostgreSQL, time-series (metrics / trends) in VictoriaMetrics; embedded aiops.db fully retired, refuses to start without both |
 | **Encryption at rest & TLS** | Config secrets (MFA / SMTP / AI / webhook / relay) sealed with AES-256-GCM (`AIOPS_SECRET_KEY`); optional HTTPS/TLS in transit |
@@ -138,12 +143,22 @@ Open `http://localhost:8529` �?host card and metrics appear within seconds.
 
 ## Installation & Deployment
 
-### Option 1: Docker (Pre-built Images · Recommended)
+### Option 1: Docker (Pre-built Images 路 Recommended)
 
 **One-click deploy (auto-generates random passwords):**
 
 ```bash
+# International users (GitHub):
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
+PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
+SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
+sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
+sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
+echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
+docker compose up -d
+
+# China users (Gitee mirror):
+curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml && \
 PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
 SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
 sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
@@ -152,7 +167,7 @@ echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 ```
 
-> The command above: downloads compose file �?generates random passwords/keys �?writes them into config �?pulls images and starts. **Make sure to save the printed passwords and keys!**
+> The command above: downloads compose file 鈫?generates random passwords/keys 鈫?writes them into config 鈫?pulls images and starts. **Make sure to save the printed passwords and keys!**
 
 **Pin to a specific version (recommended for production):**
 
@@ -167,18 +182,18 @@ docker compose up -d
 - Every tag push triggers GitHub Actions to build `linux/amd64` + `linux/arm64` multi-arch images
 - Server data persists via volume (`/app/data`), config at `./data/server_config.json`
 - Default port `8529`, modifiable in `docker-compose.yml`
-- Agent container not started by default �?uncomment `aiops-agent` section to enable
+- Agent container not started by default 鈥?uncomment `aiops-agent` section to enable
 - To build locally, replace `image:` with the commented `build:` config in `docker-compose.yml` and run `docker compose up -d --build`
 
 ### CI/CD Auto-Build
 
 Every version tag push (`v*`) to GitHub triggers the following pipeline:
 
-1. **Checkout** �?Extract Git tag as version number
-2. **Multi-arch cross-compile** �?`linux/amd64` + `linux/arm64` Go binaries
-3. **Build Docker images** �?Multi-arch images via `docker/build-push-action`
-4. **HMAC-SHA256 auth** �?Auto-generate SWR login credentials from `HW_ACCESS_KEY` / `HW_SECRET_KEY`
-5. **Push to Huawei Cloud SWR** �?`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:{tag}` and `aiops-agent:{tag}`
+1. **Checkout** 鈫?Extract Git tag as version number
+2. **Multi-arch cross-compile** 鈫?`linux/amd64` + `linux/arm64` Go binaries
+3. **Build Docker images** 鈫?Multi-arch images via `docker/build-push-action`
+4. **HMAC-SHA256 auth** 鈫?Auto-generate SWR login credentials from `HW_ACCESS_KEY` / `HW_SECRET_KEY`
+5. **Push to Huawei Cloud SWR** 鈫?`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:{tag}` and `aiops-agent:{tag}`
 
 **Image tags:**
 
@@ -187,7 +202,7 @@ Every version tag push (`v*`) to GitHub triggers the following pipeline:
 | `:latest` | Always points to the latest Release |
 | `:v5.5.5` etc. | Pin to a specific version (recommended for production) |
 
-**Required GitHub Secrets** (configure in repo Settings �?Secrets and variables �?Actions):
+**Required GitHub Secrets** (configure in repo Settings 鈫?Secrets and variables 鈫?Actions):
 
 | Secret | Description |
 |---|---|
@@ -213,16 +228,16 @@ docker run -d -p 8529:8529 -v aiops-data:/app/data --name aiops-server aiops-ser
 
 ### Option 2: One-Click Install Script (Recommended for Production)
 
-Click **「Install Agent�?* in the dashboard top-right �?select target OS �?copy command to monitored host:
+Click **銆孖nstall Agent銆?* in the dashboard top-right 鈫?select target OS 鈫?copy command to monitored host:
 
 ```bash
-# Linux (root/sudo) �?auto-detects amd64/arm64
+# Linux (root/sudo) 鈥?auto-detects amd64/arm64
 curl -fsSL "http://<server>:8529/install.sh?token=<TOKEN>" | sudo sh
 
 # Windows (admin PowerShell)
 irm "http://<server>:8529/install.ps1?token=<TOKEN>" | iex
 
-# macOS �?auto-detects Intel/Apple Silicon
+# macOS 鈥?auto-detects Intel/Apple Silicon
 curl -fsSL "http://<server>:8529/install.sh?token=<TOKEN>" | sh
 ```
 
@@ -411,7 +426,7 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 |---|:---:|---|
 | `AIOPS_POSTGRES_DSN` | **Yes** | PostgreSQL DSN, e.g. `postgres://user:pwd@host:5432/db?sslmode=disable`. All relational data lives in PG; **the server refuses to start without it** |
 | `AIOPS_VM_URL` | **Yes** | VictoriaMetrics URL, e.g. `http://victoriametrics:8428`. All time-series lives in VM; **refuses to start without it** |
-| `AIOPS_SECRET_KEY` | Strongly recommended | Master key for at-rest encryption of config secrets (AES-256-GCM). **Back it up �?losing it makes already-encrypted secrets unrecoverable** |
+| `AIOPS_SECRET_KEY` | Strongly recommended | Master key for at-rest encryption of config secrets (AES-256-GCM). **Back it up 鈥?losing it makes already-encrypted secrets unrecoverable** |
 | `AIOPS_TLS_CERT` / `AIOPS_TLS_KEY` | Optional | TLS cert / key paths; serves HTTPS when set, otherwise plain HTTP (put behind a TLS-terminating proxy) |
 | `AIOPS_FORWARD_LISTEN` | Optional | TCP forward listen address (must be `0.0.0.0` for Docker) |
 | `AIOPS_TRUST_PROXY` | Optional | Set `true` behind a trusted reverse proxy to honor `X-Real-IP` for rate limiting |
@@ -441,22 +456,22 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 
 ## Custom Monitoring (Probes)
 
-The dashboard「Monitoring」page lets you add active probes �?periodic checks on websites, ports, host connectivity, and process alive:
+The dashboard銆孧onitoring銆峱age lets you add active probes 鈥?periodic checks on websites, ports, host connectivity, and process alive:
 
 | Type | What to fill | Failure condition |
 |---|---|---|
-| **HTTP website** | URL (e.g. `https://example.com`) | Status �?400, or timeout/failure |
+| **HTTP website** | URL (e.g. `https://example.com`) | Status 鈮?400, or timeout/failure |
 | **TCP port** | host:port (e.g. `10.0.0.5:3306`) | Cannot connect |
 | **Ping host** | host/IP (e.g. `8.8.8.8`) | 100% loss (unreachable) |
-| **Process alive** | �?Target host + �?Process name | Process not reported by target host (or offline) |
+| **Process alive** | 鈶?Target host + 鈶?Process name | Process not reported by target host (or offline) |
 
-> Process monitoring requires selecting target host first, then process name �?the server checks the host's Agent-reported process list. Case-insensitive substring match. Each item supports list/pill dual view + history curve.
+> Process monitoring requires selecting target host first, then process name 鈥?the server checks the host's Agent-reported process list. Case-insensitive substring match. Each item supports list/pill dual view + history curve.
 
 ---
 
 ## Automation Playbook
 
-The dashboard「Automation」page lets you orchestrate playbooks �?ordered shell commands executed in batch on target hosts:
+The dashboard銆孉utomation銆峱age lets you orchestrate playbooks 鈥?ordered shell commands executed in batch on target hosts:
 
 **Create playbook**: name + steps, each with:
 - **Command**: one-line shell command (Linux `sh -c`, Windows `cmd /c`)
@@ -465,7 +480,7 @@ The dashboard「Automation」page lets you orchestrate playbooks �?ordered shel
 
 **Execution**: commands sent via Agent reverse channel, executed as one-shot subprocesses, returning output + exit code. All matching online hosts execute in parallel; each host runs steps sequentially. History retains last 100 runs.
 
-> Commands are non-interactive �?don't use `vim`/`top`/`ssh`. Each step is an independent process; `cd`/`export` don't carry over �?chain with `&&` in the same step.
+> Commands are non-interactive 鈥?don't use `vim`/`top`/`ssh`. Each step is an independent process; `cd`/`export` don't carry over 鈥?chain with `&&` in the same step.
 
 ---
 
@@ -475,10 +490,10 @@ The dashboard「Automation」page lets you orchestrate playbooks �?ordered shel
 - **Recording & playback**: auto-recorded (timestamped frames), progress bar drag, speed control
 - **Read-only observe**: multiple admins can observe an active session simultaneously
 - **Command audit**: executed commands auto-extracted to activity log
-- **Cross-platform TTY**: Windows ConPTY (chcp 65001 + GBK→UTF-8), Linux/macOS openpty
+- **Cross-platform TTY**: Windows ConPTY (chcp 65001 + GBK鈫扷TF-8), Linux/macOS openpty
 - **No port opening**: via Agent reverse connection, no inbound port on target
 
-> Terminal/playbook share the Agent reverse channel �?one session per host at a time. Cross-network requires [Nginx WebSocket config](#cross-network-deployment).
+> Terminal/playbook share the Agent reverse channel 鈥?one session per host at a time. Cross-network requires [Nginx WebSocket config](#cross-network-deployment).
 
 ---
 
@@ -497,29 +512,29 @@ p.event("warning", "Replication lag 8s")   # Event (info | warning | critical)
 p.emit()                                   # Output JSON
 ```
 
-Drop in `plugins/` directory for auto-discovery, executed every `--plugin-interval`. Crashes/timeouts/bad JSON are logged and skipped �?no impact on core. Non-`.py` executables also work as plugins �?any language.
+Drop in `plugins/` directory for auto-discovery, executed every `--plugin-interval`. Crashes/timeouts/bad JSON are logged and skipped 鈥?no impact on core. Non-`.py` executables also work as plugins 鈥?any language.
 
 ---
 
 ## Alert Configuration
 
-Alerts are configured visually in the dashboard �?no file editing:
+Alerts are configured visually in the dashboard 鈥?no file editing:
 
 1. Click **Alert Settings** in the top-right
 2. Fill Feishu or DingTalk Webhook URL (DingTalk: fill Secret if using signing), check enable
 3. **Email push**: expand SMTP section, fill server/port/account/auth code, port 465 = implicit TLS, 587 = not
 4. Click **Send Test** to verify connectivity
-5. Click **Save** �?outstanding alerts re-pushed after save
+5. Click **Save** 鈥?outstanding alerts re-pushed after save
 
 | Alert type | Trigger condition | Level |
 |---|---|---|
 | CPU / Memory / Disk | Exceeds threshold | Warning / Critical |
 | Host offline | No report within threshold | Critical |
-| GPU usage | �?80% warning, �?90% critical | Warning / Critical |
-| System load | 5-min load �?cores×2 | Warning / Critical |
+| GPU usage | 鈮?80% warning, 鈮?90% critical | Warning / Critical |
+| System load | 5-min load 鈮?cores脳2 | Warning / Critical |
 | HTTP / TCP / Ping / Process | Probe failure | Custom |
 
-> Feishu custom bot keyword: `AIOps` or `告警`. DingTalk: use "signing" security.
+> Feishu custom bot keyword: `AIOps` or `鍛婅�`. DingTalk: use "signing" security.
 
 ---
 
@@ -529,7 +544,7 @@ Alerts are configured visually in the dashboard �?no file editing:
 
 A single agent instance pushes to multiple monitoring servers simultaneously. **Collection executes once, results broadcast to all servers.**
 
-**Configuration**: Use `servers` array in `config.json` (see Configuration Reference above), or check「Multi-Server Push」in the dashboard install dialog.
+**Configuration**: Use `servers` array in `config.json` (see Configuration Reference above), or check銆孧ulti-Server Push銆峣n the dashboard install dialog.
 
 | Dimension | Description |
 |---|---|
@@ -547,10 +562,10 @@ A single agent instance pushes to multiple monitoring servers simultaneously. **
 When only one internal machine has internet access, install Agent in Relay mode on that machine: the relay service listens on a local port and reverse-proxies all internal Agent requests to the cloud server.
 
 ```bash
-# �?Gateway machine (internet-connected)
+# 鈶?Gateway machine (internet-connected)
 curl -fsSL "https://cloud-server/install-relay.sh?token=TOKEN" | sudo sh
 
-# �?Internal machine (via gateway)
+# 鈶?Internal machine (via gateway)
 curl -fsSL "http://<gateway-IP>:8529/install.sh?token=TOKEN" | sudo sh
 ```
 
@@ -558,7 +573,7 @@ curl -fsSL "http://<gateway-IP>:8529/install.sh?token=TOKEN" | sudo sh
 
 ### Machine Fingerprint Auth
 
-Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) to server at registration. All subsequent reports and terminal channel requests authenticate via fingerprint, **not install Token** �?token rotation doesn't affect installed agents. Each server validates fingerprints independently in multi-server scenarios.
+Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) to server at registration. All subsequent reports and terminal channel requests authenticate via fingerprint, **not install Token** 鈥?token rotation doesn't affect installed agents. Each server validates fingerprints independently in multi-server scenarios.
 
 ---
 
@@ -576,12 +591,12 @@ Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) 
 - **admin**: Full access, including user management (create/edit/delete/reset password/unbind MFA)
 - **operator**: All operations except user management (terminal/playbook/config/host deletion)
 - **viewer**: View only; can manage own profile/password/MFA
-- Route-level interception: every API request checked by `authMiddleware` �?`routeAllowed`
+- Route-level interception: every API request checked by `authMiddleware` 鈫?`routeAllowed`
 
 ### Account Recovery
 
-- **Forgot username**: Enter bound email �?receive username notification (anti-enumeration)
-- **Forgot password**: Enter username �?receive 6-digit code (10-min TTL) �?reset after verification
+- **Forgot username**: Enter bound email 鈫?receive username notification (anti-enumeration)
+- **Forgot password**: Enter username 鈫?receive 6-digit code (10-min TTL) 鈫?reset after verification
 - **MFA unbind via email**: Lost phone? Unbind MFA via bound email verification code
 - Code security: 6-digit random, 10-min TTL, single-use, 60s send interval limit
 
@@ -591,7 +606,7 @@ Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) 
 - **Request body limit**: 100 MiB (covers port-forward file transfer), prevents oversized JSON memory exhaustion
 - **Encryption at rest**: config MFA/SMTP/AI/webhook/relay secrets sealed with AES-256-GCM derived from `AIOPS_SECRET_KEY`
 - **Encryption in transit**: optional TLS (`AIOPS_TLS_CERT/KEY`); the agent supports self-signed CA trust (`--ca-cert` / `tls_skip_verify`)
-- **Forced security initialization**: default admin/admin must go through a mandatory "change username + password" dialog on first login �?not skippable
+- **Forced security initialization**: default admin/admin must go through a mandatory "change username + password" dialog on first login 鈥?not skippable
 - **Security headers**: `nosniff`, `DENY` (anti-clickjacking), `no-referrer`
 - **Secret masking**: Webhook/SMTP/AI-key/PostgreSQL-DSN masked on display, blank preserves original
 - **Host identity anti-clone**: Cloned images with copied `agent_state.json` detected, `host_id` regenerated
@@ -618,7 +633,7 @@ location / {
     proxy_set_header X-Forwarded-Host  $host;         # Auto-use domain in install command
     proxy_set_header X-Real-IP         $remote_addr;  # Real client IP (with trust_proxy)
 
-    # —�?Remote terminal essentials (all required) —�?
+    # 鈥斺€?Remote terminal essentials (all required) 鈥斺€?
     proxy_set_header Upgrade    $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_buffering         off;
@@ -630,11 +645,11 @@ location / {
 
 > Full example: [deploy/nginx-aiops.conf](deploy/nginx-aiops.conf). After editing: `nginx -t && nginx -s reload`.  
 > Behind reverse proxy, set `"trust_proxy": true` in `server_config.json` to honor `X-Real-IP` for rate-limiting.  
-> Cloud load balancers (ALB/CLB/K8s Ingress) similarly need WebSocket support, disabled buffering, idle timeout �?h.
+> Cloud load balancers (ALB/CLB/K8s Ingress) similarly need WebSocket support, disabled buffering, idle timeout 鈮?h.
 
 ### Terminal Tunnel
 
-Agent uses **active reverse connection**: server address is固化 to `--server` at install time. Cross-network requires a **public-reachable domain or IP**. The dashboard install dialog auto-derives server address from current access URL �?access via domain and the install command auto-uses that domain.
+Agent uses **active reverse connection**: server address is鍥哄寲 to `--server` at install time. Cross-network requires a **public-reachable domain or IP**. The dashboard install dialog auto-derives server address from current access URL 鈥?access via domain and the install command auto-uses that domain.
 
 ---
 
@@ -659,8 +674,8 @@ Agent uses **active reverse connection**: server address is固化 to `--server` 
 <details>
 <summary><b>Terminal Chinese character garbled</b></summary>
 
-- Windows ConPTY auto-applies `chcp 65001` + GBK→UTF-8 conversion
-- Playbook execution has 3-layer encoding: chcp 65001 + locale env vars + GBK→UTF-8 API fallback
+- Windows ConPTY auto-applies `chcp 65001` + GBK鈫扷TF-8 conversion
+- Playbook execution has 3-layer encoding: chcp 65001 + locale env vars + GBK鈫扷TF-8 API fallback
 - Linux/macOS terminals default to UTF-8, no extra handling needed
 </details>
 
@@ -686,7 +701,7 @@ Agent uses **active reverse connection**: server address is固化 to `--server` 
 - NVIDIA GPU requires `nvidia-smi` installed
 - AMD GPU (Linux) requires sysfs permissions
 - macOS only supports Apple Silicon GPU monitoring
-- GPU is best-effort �?no tool = no display, doesn't affect other metrics
+- GPU is best-effort 鈥?no tool = no display, doesn't affect other metrics
 </details>
 
 ---
@@ -709,24 +724,24 @@ Agent uses **active reverse connection**: server address is固化 to `--server` 
 ### Architecture Diagram
 
 ```
-                ┌─────────────── Go Agent Core ────────────────�?
-                �? Collector (tri-platform native) �?base       �?
-                �? PluginRunner �?concurrent Python plugins     �?
-                �? Reporter �?broadcast to all servers           �?
-  Report ─HTTP─►│  Terminal �?per-server reverse channel        �?
-                �? Shares types with server via shared/          �?
-                └──┬──────────────────────────┬─────────────────�?
-                   �?                         �?
-              ┌────┴────�?              ┌─────┴─────�?
-              �?Server A �?              �? Server B  �? (multi-server push)
-              └─────────�?              └───────────�?
-                                               �?subprocess + JSON
-                    ┌──────────────────────────┼──────────────────────�?
-              ┌─────┴───────�?         ┌───────┴───────�?      ┌──────┴───────�?
-              �?Custom       �?         �?AI / Anomaly   �?      �?Process      �?
-              �?collection   �?         �?detection      �?      �?Monitor      �?
-              �?(.py)        �?         �?(.py)          �?      �?(.py)        �?
-              └──────────────�?         └───────────────�?      └──────────────�?
+                鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ Go Agent Core 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+                鈹? Collector (tri-platform native) 鈫?base       鈹?
+                鈹? PluginRunner 鈫?concurrent Python plugins     鈹?
+                鈹? Reporter 鈫?broadcast to all servers           鈹?
+  Report 鈹€HTTP鈹€鈻衡攤  Terminal 鈫?per-server reverse channel        鈹?
+                鈹? Shares types with server via shared/          鈹?
+                鈹斺攢鈹€鈹�攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹�攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+                   鈹?                         鈹?
+              鈹屸攢鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹?              鈹屸攢鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹?
+              鈹?Server A 鈹?              鈹? Server B  鈹? (multi-server push)
+              鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?              鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+                                               鈹?subprocess + JSON
+                    鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+              鈹屸攢鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹?         鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹?      鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹粹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+              鈹?Custom       鈹?         鈹?AI / Anomaly   鈹?      鈹?Process      鈹?
+              鈹?collection   鈹?         鈹?detection      鈹?      鈹?Monitor      鈹?
+              鈹?(.py)        鈹?         鈹?(.py)          鈹?      鈹?(.py)        鈹?
+              鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?         鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?      鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
 ```
 
 **Design principle**: High-frequency, performance-sensitive base collection uses Go (single binary, zero deps); variable, ecosystem-dependent custom/AI logic uses Python. Process boundary isolates each.
@@ -735,73 +750,73 @@ Agent uses **active reverse connection**: server address is固化 to `--server` 
 
 ```
 aiops-monitor/
-├── go.mod                          # Go module
-├── shared/
-�?  └── wire.go                     # �?Shared types (Agent �?Server contract)
-├── cmd/
-�?  ├── server/                     # Go server
-�?  �?  ├── main.go                 # Entry, routing, middleware
-�?  �?  ├── handlers.go             # API handlers
-�?  �?  ├── store.go                # In-memory store + multi-level downsampling
-�?  �?  ├── pgstore.go              # PostgreSQL store (all relational data)
-�?  �?  ├── vm.go                   # VictoriaMetrics writer/reader (all time-series)
-�?  �?  ├── crypto.go               # AES-256-GCM secret encryption at rest
-�?  �?  ├── logstore.go             # Log aggregation + search
-�?  �?  ├── aiops.go                # AI inspection + heuristic diagnosis
-�?  �?  ├── incident.go/slo.go/ticket.go/remediation.go  # SRE hub
-�?  �?  ├── message.go              # Notification message center
-�?  �?  ├── alerts.go               # Threshold alert engine
-�?  �?  ├── auth.go                 # Login auth + MFA + RBAC
-�?  �?  ├── users.go                # Multi-user management
-�?  �?  ├── check.go                # Custom monitoring (HTTP/TCP/Ping/process)
-�?  �?  ├── ws.go                   # Hand-written WebSocket (terminal)
-�?  �?  ├── terminal.go             # Remote terminal relay
-�?  �?  ├── notify.go               # Feishu/DingTalk/Email push
-�?  �?  ├── email.go                # SMTP + verification code manager
-�?  �?  ├── playbook.go             # Automation playbook engine
-�?  �?  ├── totp.go                 # TOTP two-factor auth
-�?  �?  ├── config.go               # Config persistence
-�?  �?  ├── install.go              # One-click install script generation
-�?  �?  └── web/                    # Dashboard frontend (embedded at compile time)
-�?  �?      ├── index.html / app.js / style.css
-�?  �?      ├── manifest.json / sw.js / icon.svg
-�?  └── agent/                      # �?Go Agent core
-�?      ├── main.go                 # Config / flags / signals
-�?      ├── collector.go            # Collector interface
-�?      ├── collector_linux.go      # Linux native collection
-�?      ├── collector_windows.go    # Windows native collection
-�?      ├── collector_darwin.go     # macOS native collection
-�?      ├── collector_other.go      # Other platform stub
-�?      ├── gpu.go                  # GPU collection (tri-platform)
-�?      ├── terminal.go             # Remote terminal Agent-side
-�?      ├── pty_windows.go          # Windows ConPTY
-�?      ├── pty_unix.go             # Linux/macOS openpty
-�?      ├── pty_linux.go / pty_darwin.go
-�?      ├── relay.go                # Gateway relay mode
-�?      ├── plugins.go              # Plugin runner
-�?      ├── identity.go             # Stable host_id / fingerprint
-�?      └── reporter.go             # Dual-heartbeat reporting
-├── plugins/                        # �?Python plugin layer
-�?  ├── plugin_sdk.py               # Plugin SDK
-�?  ├── core_metrics.py             # psutil fallback
-�?  ├── example_service_check.py    # Example: service probe
-�?  ├── example_ai_anomaly.py       # Example: anomaly detection
-�?  ├── process_monitor.py          # Process monitoring
-�?  └── requirements.txt
-├── deploy/
-�?  └── nginx-aiops.conf            # Nginx reverse proxy example
-├── dist/                           # Agent distribution (platform binaries)
-├── bin/                            # Pre-compiled binaries
-├── config.example.json             # Agent config example
-├── server_config.example.json      # Server config example
-├── Dockerfile                      # Multi-stage build
-├── docker-compose.yml              # Docker Compose
-└── INSTALL.md                      # Detailed installation guide
+鈹溾攢鈹€ go.mod                          # Go module
+鈹溾攢鈹€ shared/
+鈹?  鈹斺攢鈹€ wire.go                     # 鈽?Shared types (Agent 鈫?Server contract)
+鈹溾攢鈹€ cmd/
+鈹?  鈹溾攢鈹€ server/                     # Go server
+鈹?  鈹?  鈹溾攢鈹€ main.go                 # Entry, routing, middleware
+鈹?  鈹?  鈹溾攢鈹€ handlers.go             # API handlers
+鈹?  鈹?  鈹溾攢鈹€ store.go                # In-memory store + multi-level downsampling
+鈹?  鈹?  鈹溾攢鈹€ pgstore.go              # PostgreSQL store (all relational data)
+鈹?  鈹?  鈹溾攢鈹€ vm.go                   # VictoriaMetrics writer/reader (all time-series)
+鈹?  鈹?  鈹溾攢鈹€ crypto.go               # AES-256-GCM secret encryption at rest
+鈹?  鈹?  鈹溾攢鈹€ logstore.go             # Log aggregation + search
+鈹?  鈹?  鈹溾攢鈹€ aiops.go                # AI inspection + heuristic diagnosis
+鈹?  鈹?  鈹溾攢鈹€ incident.go/slo.go/ticket.go/remediation.go  # SRE hub
+鈹?  鈹?  鈹溾攢鈹€ message.go              # Notification message center
+鈹?  鈹?  鈹溾攢鈹€ alerts.go               # Threshold alert engine
+鈹?  鈹?  鈹溾攢鈹€ auth.go                 # Login auth + MFA + RBAC
+鈹?  鈹?  鈹溾攢鈹€ users.go                # Multi-user management
+鈹?  鈹?  鈹溾攢鈹€ check.go                # Custom monitoring (HTTP/TCP/Ping/process)
+鈹?  鈹?  鈹溾攢鈹€ ws.go                   # Hand-written WebSocket (terminal)
+鈹?  鈹?  鈹溾攢鈹€ terminal.go             # Remote terminal relay
+鈹?  鈹?  鈹溾攢鈹€ notify.go               # Feishu/DingTalk/Email push
+鈹?  鈹?  鈹溾攢鈹€ email.go                # SMTP + verification code manager
+鈹?  鈹?  鈹溾攢鈹€ playbook.go             # Automation playbook engine
+鈹?  鈹?  鈹溾攢鈹€ totp.go                 # TOTP two-factor auth
+鈹?  鈹?  鈹溾攢鈹€ config.go               # Config persistence
+鈹?  鈹?  鈹溾攢鈹€ install.go              # One-click install script generation
+鈹?  鈹?  鈹斺攢鈹€ web/                    # Dashboard frontend (embedded at compile time)
+鈹?  鈹?      鈹溾攢鈹€ index.html / app.js / style.css
+鈹?  鈹?      鈹溾攢鈹€ manifest.json / sw.js / icon.svg
+鈹?  鈹斺攢鈹€ agent/                      # 鈽?Go Agent core
+鈹?      鈹溾攢鈹€ main.go                 # Config / flags / signals
+鈹?      鈹溾攢鈹€ collector.go            # Collector interface
+鈹?      鈹溾攢鈹€ collector_linux.go      # Linux native collection
+鈹?      鈹溾攢鈹€ collector_windows.go    # Windows native collection
+鈹?      鈹溾攢鈹€ collector_darwin.go     # macOS native collection
+鈹?      鈹溾攢鈹€ collector_other.go      # Other platform stub
+鈹?      鈹溾攢鈹€ gpu.go                  # GPU collection (tri-platform)
+鈹?      鈹溾攢鈹€ terminal.go             # Remote terminal Agent-side
+鈹?      鈹溾攢鈹€ pty_windows.go          # Windows ConPTY
+鈹?      鈹溾攢鈹€ pty_unix.go             # Linux/macOS openpty
+鈹?      鈹溾攢鈹€ pty_linux.go / pty_darwin.go
+鈹?      鈹溾攢鈹€ relay.go                # Gateway relay mode
+鈹?      鈹溾攢鈹€ plugins.go              # Plugin runner
+鈹?      鈹溾攢鈹€ identity.go             # Stable host_id / fingerprint
+鈹?      鈹斺攢鈹€ reporter.go             # Dual-heartbeat reporting
+鈹溾攢鈹€ plugins/                        # 鈽?Python plugin layer
+鈹?  鈹溾攢鈹€ plugin_sdk.py               # Plugin SDK
+鈹?  鈹溾攢鈹€ core_metrics.py             # psutil fallback
+鈹?  鈹溾攢鈹€ example_service_check.py    # Example: service probe
+鈹?  鈹溾攢鈹€ example_ai_anomaly.py       # Example: anomaly detection
+鈹?  鈹溾攢鈹€ process_monitor.py          # Process monitoring
+鈹?  鈹斺攢鈹€ requirements.txt
+鈹溾攢鈹€ deploy/
+鈹?  鈹斺攢鈹€ nginx-aiops.conf            # Nginx reverse proxy example
+鈹溾攢鈹€ dist/                           # Agent distribution (platform binaries)
+鈹溾攢鈹€ bin/                            # Pre-compiled binaries
+鈹溾攢鈹€ config.example.json             # Agent config example
+鈹溾攢鈹€ server_config.example.json      # Server config example
+鈹溾攢鈹€ Dockerfile                      # Multi-stage build
+鈹溾攢鈹€ docker-compose.yml              # Docker Compose
+鈹斺攢鈹€ INSTALL.md                      # Detailed installation guide
 ```
 
 ### Key Design
 
-- **Shared code**: `shared/wire.go` imported by both server and agent �?contract never drifts
+- **Shared code**: `shared/wire.go` imported by both server and agent 鈥?contract never drifts
 - **Dual-heartbeat**: Base metrics high-frequency; plugins low-frequency, results sent alongside
 - **Process isolation**: Plugins run as subprocesses, timeout killable, one bad plugin doesn't crash core
 - **Alert dedup**: Only pushes on "new trigger" and "recover" transitions, persistent alerts don't spam
@@ -814,8 +829,8 @@ aiops-monitor/
 ## Performance & Scale
 
 - **Bandwidth**: gzip ~8-10x compression, 3000 hosts polling `/hosts` every 3s drops from MB/s to ~100KB/s
-- **Report throughput**: 3000 hosts × every 10s �?300 writes/s, `Upsert` briefly holds write lock
-- **Memory**: ~1-2 MB per host for 3-layer history, 3000 hosts �?4-7 GB (tunable via retention constants)
+- **Report throughput**: 3000 hosts 脳 every 10s 鈮?300 writes/s, `Upsert` briefly holds write lock
+- **Memory**: ~1-2 MB per host for 3-layer history, 3000 hosts 鈮?4-7 GB (tunable via retention constants)
 - **Rendering**: Host list paginated (9/page), DOM only renders current page
 - **Tuning**: Increase `--interval` (e.g. 10-15s) for large fleets to reduce bandwidth
 
@@ -864,8 +879,8 @@ aiops-monitor/
 | GET | `/api/v1/terminal/sessions/{id}/observe` | Read-only observe (WebSocket) |
 | GET | `/api/v1/hosts/{id}/terminal` | Browser WebSocket terminal |
 | GET | `/api/v1/agent/terminal/wait` | Agent long-poll |
-| GET | `/api/v1/agent/terminal/rx` | Server �?Agent frame stream |
-| POST | `/api/v1/agent/terminal/tx` | Agent �?Server output stream |
+| GET | `/api/v1/agent/terminal/rx` | Server 鈫?Agent frame stream |
+| POST | `/api/v1/agent/terminal/tx` | Agent 鈫?Server output stream |
 | **Config Management** | | |
 | GET | `/api/v1/config` | Get alert config (masked) |
 | POST | `/api/v1/config` | Update alert config |
@@ -897,19 +912,19 @@ aiops-monitor/
 | GET | `/install.sh` / `/install.ps1` | Install scripts |
 | GET | `/uninstall.sh` / `/uninstall.ps1` | Uninstall scripts |
 | **Other** | | |
-| **SRE · Incidents** | | |
+| **SRE 路 Incidents** | | |
 | GET / POST | `/api/v1/incidents` | List / create incident |
 | GET | `/api/v1/incidents/{id}` | Incident detail (with timeline) |
-| POST | `/api/v1/incidents/{id}/ack` · `/resolve` · `/comment` · `/ticket` · `/diagnose` | Ack / resolve / comment / escalate to ticket / AI diagnosis |
-| **SRE · Auto-remediation** | | |
+| POST | `/api/v1/incidents/{id}/ack` 路 `/resolve` 路 `/comment` 路 `/ticket` 路 `/diagnose` | Ack / resolve / comment / escalate to ticket / AI diagnosis |
+| **SRE 路 Auto-remediation** | | |
 | GET / POST | `/api/v1/remediation/rules` | List / upsert rules |
 | DELETE | `/api/v1/remediation/rules/{id}` | Delete rule |
 | GET | `/api/v1/remediation/runs` | Run history |
-| POST | `/api/v1/remediation/runs/{id}/approve` · `/reject` | Approve & run / reject pending remediation |
-| **SRE · SLO** | | |
+| POST | `/api/v1/remediation/runs/{id}/approve` 路 `/reject` | Approve & run / reject pending remediation |
+| **SRE 路 SLO** | | |
 | GET / POST | `/api/v1/slos` | List (with SLI / error budget) / upsert |
 | DELETE | `/api/v1/slos/{id}` | Delete SLO |
-| **SRE · Tickets** | | |
+| **SRE 路 Tickets** | | |
 | GET / POST | `/api/v1/tickets` | List / create ticket |
 | GET / POST / DELETE | `/api/v1/tickets/{id}` | Detail / update / delete |
 | POST | `/api/v1/tickets/{id}/comment` | Add comment |
@@ -922,7 +937,7 @@ aiops-monitor/
 | POST | `/api/v1/ai/inspect` | Run an inspection now |
 | **Message Center** | | |
 | GET | `/api/v1/messages` | Messages + unread count (incidents / AI / remediation / tickets) |
-| POST | `/api/v1/messages/read` · `/read-all` | Mark read / mark all read |
+| POST | `/api/v1/messages/read` 路 `/read-all` | Mark read / mark all read |
 | **Other** | | |
 | GET | `/` | Web dashboard |
 | GET | `/healthz` | Health check |
@@ -940,12 +955,12 @@ aiops-monitor/
 - [x] GPU monitoring: NVIDIA / AMD / Apple, best-effort + cache
 - [x] Python plugin layer + SDK + examples (service probe / anomaly detection / process monitor / psutil fallback)
 - [x] Go server: in-memory store + multi-level downsampling + embedded persistence (survives restart)
-- [x] Custom monitoring: HTTP / TCP / Ping / process; list·pill dual view + history curves
+- [x] Custom monitoring: HTTP / TCP / Ping / process; list路pill dual view + history curves
 - [x] Interactive trend charts: hover crosshair + drag-zoom + enlarge preview
 - [x] Auth & security: salted password + rate-limiting + mandatory Token + security headers + secret masking + anti-clone
 - [x] MFA two-factor (TOTP) + account recovery (email code) + MFA unbind via email
 - [x] Email alert push (SMTP)
-- [x] Real-time dashboard: overview + TOP10 + category grouping/search/pagination + card·list dual view + wide toggle
+- [x] Real-time dashboard: overview + TOP10 + category grouping/search/pagination + card路list dual view + wide toggle
 - [x] Alert push: Feishu / DingTalk + Email, dedup + state transition
 - [x] gzip compression + PWA installable + mobile responsive
 - [x] Multi-select category filter + collapse + keyboard shortcuts
