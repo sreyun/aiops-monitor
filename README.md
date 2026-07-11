@@ -4,7 +4,7 @@
 
 **企业级主机监控与 SRE 运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本 + SRE 中枢（事件/自动修复/SLO/工单）+ 日志采集检索 + AI 巡检诊断
 
-[![Version](https://img.shields.io/badge/Version-v5.5.0-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v5.5.5-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
@@ -75,12 +75,15 @@
 ### Docker 一键启动（推荐）
 
 ```bash
-git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
+# 直接拉取预构建镜像启动（无需克隆仓库、无需编译）
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
 docker compose up -d
 # 浏览器打开 http://localhost:8529
 ```
 
 > 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
+>
+> 镜像托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次 Release 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像，`docker pull` 自动匹配。
 
 > **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。生产请务必修改 `docker-compose.yml` 中的 `POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY`。
 
@@ -134,18 +137,23 @@ docker compose up -d
 
 ## 安装部署指南
 
-### 方式一：Docker 部署
+### 方式一：Docker 部署（预构建镜像）
 
 ```bash
-git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
-docker compose up -d aiops-server
+# 下载 docker-compose.yml
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+
+# 拉取预构建镜像并启动（无需克隆仓库、无需编译）
+docker compose up -d
 ```
 
-- 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./server_config.json`
+- 镜像托管于华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
+- 每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像
+- 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./data/server_config.json`
 - 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
-- 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`（容器内默认 `127.0.0.1` 仅限容器自身访问）
+- 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`
 - Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用
-- Docker 镜像支持 `amd64` 和 `arm64` 双架构，`docker pull` 自动匹配
+- 如需本地构建，将 `docker-compose.yml` 中 `image:` 替换为注释的 `build:` 配置后执行 `docker compose up -d --build`
 
 <details>
 <summary>Docker 手动构建</summary>

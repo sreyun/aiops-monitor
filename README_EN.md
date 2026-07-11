@@ -4,7 +4,7 @@
 
 **Enterprise Host Monitoring & SRE Ops Platform** — Go-native collection + Python plugin layer + real-time dashboard + threshold alerts + remote terminal + automation playbooks + SRE hub (incidents / auto-remediation / SLO / tickets) + log collection & search + AI inspection & diagnosis
 
-[![Version](https://img.shields.io/badge/Version-v5.5.0-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v5.5.5-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
@@ -74,12 +74,15 @@ Install scripts auto-detect CPU architecture and download the matching binary �
 ### Docker One-Click (Recommended)
 
 ```bash
-git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
+# Pull pre-built images and start (no clone, no compile required)
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
 docker compose up -d
 # Open http://localhost:8529 in your browser
 ```
 
 > Three-container stack: `aiops-server` (Go single binary with `//go:embed` front-end) + `postgres` + `victoriametrics`, all brought up by one compose command. The server **requires** PG + VM and refuses to start without them.
+>
+> Images are hosted on Huawei Cloud SWR (`swr.cn-east-3.myhuaweicloud.com/sreyun/`). Every Release automatically builds `linux/amd64` + `linux/arm64` multi-arch images; `docker pull` auto-selects the matching architecture.
 
 > **Default credentials**: `admin / admin`. **On first login a forced "Security Initialization" dialog requires changing the username + password before you can enter**; enabling MFA afterwards is recommended. In production, be sure to change `POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY` in `docker-compose.yml`.
 
@@ -130,17 +133,22 @@ Open `http://localhost:8529` — host card and metrics appear within seconds.
 
 ## Installation & Deployment
 
-### Option 1: Docker
+### Option 1: Docker (Pre-built Images)
 
 ```bash
-git clone https://github.com/sreyun/aiops-monitor.git && cd aiops-monitor
-docker compose up -d aiops-server
+# Download docker-compose.yml
+curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/main/docker-compose.yml
+
+# Pull pre-built images and start (no clone, no compile required)
+docker compose up -d
 ```
 
-- Server data persists via volume (`/app/data`), config at `./server_config.json`
+- Images hosted on Huawei Cloud SWR: `swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
+- Every tag push triggers GitHub Actions to build `linux/amd64` + `linux/arm64` multi-arch images
+- Server data persists via volume (`/app/data`), config at `./data/server_config.json`
 - Default port `8529`, modifiable in `docker-compose.yml`
 - Agent container not started by default — uncomment `aiops-agent` section to enable
-- Docker images support `amd64` and `arm64` dual-arch; `docker pull` auto-matches
+- To build locally, replace `image:` with the commented `build:` config in `docker-compose.yml` and run `docker compose up -d --build`
 
 <details>
 <summary>Manual Docker build</summary>
