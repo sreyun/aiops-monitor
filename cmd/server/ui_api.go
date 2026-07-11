@@ -23,6 +23,12 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		if cat, ok := s.cfg.CategoryOverride(h.ID); ok {
 			h.Category = cat // manual override wins over the agent-reported category
 		}
+		// SECURITY: never expose the agent fingerprint to the browser. It is the
+		// sole credential authenticating the agent reverse channels (terminal
+		// rx/tx, report, logs, forward); leaking it to any viewer would let them
+		// hijack terminals or spoof host telemetry. h is a copy (hostMeta), so
+		// blanking it here does not affect the stored host.
+		h.Fingerprint = ""
 		views = append(views, hostView{Host: h, Online: now-h.LastSeen <= offline})
 	}
 	sort.Slice(views, func(i, j int) bool {

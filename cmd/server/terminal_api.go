@@ -11,6 +11,13 @@ func (s *Server) handleListTerminalSessions(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) {
+	// Replays contain the full shell I/O of a past session (potentially secrets
+	// typed by another user), so require the same terminal secondary verification
+	// the live shell enforces — not just the operator role.
+	if verified, _ := s.auth.isTerminalVerified(r); !verified {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal_auth.terminal_verify_required"), "code": "terminal_verify_required"})
+		return
+	}
 	sid := r.PathValue("id")
 	frames := s.term.getRecording(sid)
 	if frames == nil {
@@ -26,6 +33,12 @@ func (s *Server) handleTerminalObserve(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("id")
 	if !s.cfg.TerminalEnabled() {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal.disabled")})
+		return
+	}
+	// Observing streams another user's live shell output — gate on the terminal
+	// secondary verification, same as opening a shell.
+	if verified, _ := s.auth.isTerminalVerified(r); !verified {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal_auth.terminal_verify_required"), "code": "terminal_verify_required"})
 		return
 	}
 	obs, ok := s.term.addObserver(sid)

@@ -56,7 +56,11 @@ func (s *Server) handleTerminalPasswordStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	has := s.cfg.HasTerminalPassword(acc.Username)
-	writeJSON(w, http.StatusOK, map[string]bool{"has_password": has})
+	// Also report whether THIS session already passed terminal verification, so a
+	// browser refresh (the session server-side still remembers it) doesn't force
+	// the user to re-enter the terminal password.
+	verified, _ := s.auth.isTerminalVerified(r)
+	writeJSON(w, http.StatusOK, map[string]bool{"has_password": has, "verified": verified})
 }
 
 // handleTerminalPasswordSet sets or changes the terminal secondary password.
@@ -90,7 +94,7 @@ func (s *Server) handleTerminalPasswordSet(w http.ResponseWriter, r *http.Reques
 				writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true})
 				return
 			}
-			if !totpVerify(acc.MFASecret, req.Code) {
+			if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, req.Code) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.totp_error")})
 				return
 			}

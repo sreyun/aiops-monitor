@@ -500,9 +500,13 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			if len(payload) == 0 && typ != 'e' {
 				continue
 			}
-			// Record input for audit + replay; log completed commands
+			// SECURITY: do NOT persist raw input keystrokes into the recording — they
+			// would capture non-echoed secrets (passwords typed at sudo/ssh/mysql
+			// prompts) verbatim on disk. Visual replay is reconstructed from the
+			// shell's echoed OUTPUT stream (recorded below), which already reflects
+			// everything shown on screen; the completed-command audit is the intended
+			// keystroke audit trail.
 			if typ == 'i' {
-				sess.recordFrame("input", payload)
 				if cmd := sess.processCommandAudit(payload); cmd != "" {
 					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.terminal_cmd", hostname, cmd)})
 				}

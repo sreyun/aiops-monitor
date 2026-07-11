@@ -43,20 +43,26 @@ func (s *Server) handleRecoverSendCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.invalid_purpose")})
 		return
 	}
-	// Prevent email enumeration: always return the same response.
-	user, found := s.cfg.UserByEmail(req.Email)
-	if !found || user.Email == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": Tr(r, "recovery.code_sent")})
-		return
-	}
+	// Check SMTP availability BEFORE the user lookup so this response is identical
+	// whether or not the address maps to a real account (removes the enumeration
+	// oracle where a found user returned no_smtp but a missing one returned code_sent).
 	cfg := s.cfg.Get()
 	if !cfg.SMTP.Enabled || cfg.SMTP.Host == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.no_smtp")})
 		return
 	}
+	// Prevent email enumeration: a non-existent address gets the same "code sent".
+	user, found := s.cfg.UserByEmail(req.Email)
+	if !found || user.Email == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": Tr(r, "recovery.code_sent")})
+		return
+	}
 	code, err := s.emailMgr.issueCode(user.Email, req.Purpose)
 	if err != nil {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+		// Rate-limited: keep the response identical to the success/not-found path so
+		// it can't be used to probe for accounts; record the reason server-side.
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.reset_code_failed", err.Error())})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": Tr(r, "recovery.code_sent")})
 		return
 	}
 	// Build email content based on purpose
@@ -77,7 +83,8 @@ func (s *Server) handleRecoverSendCode(w http.ResponseWriter, r *http.Request) {
 </div>`, title, body, Tz("recovery.email_reset_validity"), Tz("recovery.email_reset_disclaimer"), fmt.Sprintf(Tz("recovery.email_time"), time.Now().Format("2006-01-02 15:04:05")))
 	if err := sendEmail(cfg.SMTP, user.Email, title, html); err != nil {
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.reset_code_failed", err.Error())})
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": Tr(r, "recovery.email_send_failed")})
+		// Same generic response even on send failure — don't reveal the address exists.
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": Tr(r, "recovery.code_sent")})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.reset_code_sent")})
@@ -164,7 +171,7 @@ func (s *Server) handleRecoverVerifyMFA(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Verify TOTP
-	if !totpVerify(user.MFASecret, req.TOTPCode) {
+	if !s.auth.verifyTOTPOnce(user.Username, user.MFASecret, req.TOTPCode) {
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 		return
@@ -241,8 +248,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.invalid_params")})
 		return
 	}
-	if len(strings.TrimSpace(req.NewPass)) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.password_too_short")})
+	if !validatePasswordStrength(strings.TrimSpace(req.NewPass)) {
+		// Enforce the full password policy here too (was a weak ≥4-char check),
+		// matching the token-based reset path and normal password changes.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.password_policy")})
 		return
 	}
 	user, found := s.cfg.UserByName(req.Username)
@@ -261,7 +270,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.mfa_required_for_reset")})
 			return
 		}
-		if !totpVerify(user.MFASecret, totpCode) {
+		if !s.auth.verifyTOTPOnce(user.Username, user.MFASecret, totpCode) {
 			s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 			return

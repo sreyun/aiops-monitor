@@ -3,12 +3,15 @@
 # ------------------------------------------------------------
 # 服务组成：
 #   - aiops-server      : Go 单容器（内嵌前端），Web/API 端口 8529
-#   - victoriametrics   : 时序指标库（server 通过 remote-write 写入）
-#   - postgres          : 关系库（事件 / 工单持久化）
+#   - victoriametrics   : 时序指标库（全部指标/趋势，server 通过 remote-write 写入）
+#   - postgres          : 关系库（配置/用户/审计/事件/工单/会话统一持久化）
+#
+# 存储说明：内置 aiops.db 已彻底停用；server 强制要求 PostgreSQL + VictoriaMetrics，
+#          未配置二者之一将拒绝启动（不再回落本地单文件库）。
 #
 # 数据持久化：
-#   - ./data            : 本地目录映射，存放 server_config.json / aiops.db
-#                         / recordings/（终端会话录制，重启不丢）
+#   - ./data            : 本地目录映射，仅存放 recordings/（终端会话录制，重启不丢）
+#                         及可选 TLS 证书；配置/关系数据已全部落 PG
 #   - ./vm-data / ./pg-data : 本地目录映射，存放 VM / PostgreSQL 数据
 #
 # 使用方式：
@@ -41,8 +44,15 @@ services:
       - AIOPS_FORWARD_LISTEN=0.0.0.0
       # 时序指标写入 VictoriaMetrics（remote-write / Prometheus import）
       - AIOPS_VM_URL=http://victoriametrics:8428
-      # 事件 / 工单持久化到 PostgreSQL（⚠️ 生产请改密码，并与 postgres 服务保持一致）
+      # 关系数据（配置/用户/审计/事件/工单/会话）持久化到 PostgreSQL
+      # ⚠️ 生产请改密码，并与 postgres 服务保持一致；如需服务端↔PG 加密可改 sslmode=require（需 PG 侧配置证书）
       - AIOPS_POSTGRES_DSN=postgres://aiops:h3Y7Vmb1CZBOApZM86D@postgres:5432/aiops?sslmode=disable
+      # 可选：启用 HTTPS/TLS 加密传输（把证书/私钥挂到 ./data/tls 后取消注释；否则明文 HTTP，建议置于 TLS 终止代理之后）
+      # - AIOPS_TLS_CERT=/app/data/tls/server.crt
+      # - AIOPS_TLS_KEY=/app/data/tls/server.key
+      # 配置落库主密钥：对 MFA/SMTP/AI/webhook/relay 等敏感密钥做 AES-256-GCM 静态加密（已默认启用）
+      # ⚠️ 生产务必改成你自己的长随机串，并妥善备份——丢失此密钥将无法解密库中已加密的凭据！
+      - AIOPS_SECRET_KEY=aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026
     depends_on:
       victoriametrics:
         condition: service_started

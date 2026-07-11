@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -65,6 +66,15 @@ func runResetAdmin(cfgPath string) {
 // a two-step admin password reset flow. The server generates a one-time token
 // (printed to console) and accepts authenticated reset requests.
 func runResetAdminAPI(cfgPath, listenAddr string) {
+	// SECURITY: this recovery API mints a fresh admin password and returns it in
+	// the HTTP body, so it must never be reachable off-host. Force the bind to
+	// loopback regardless of what the operator passed (":9999" or "0.0.0.0:9999"
+	// → "127.0.0.1:9999"), matching the console banner's localhost claim.
+	if _, p, err := net.SplitHostPort(listenAddr); err == nil && p != "" {
+		listenAddr = net.JoinHostPort("127.0.0.1", p)
+	} else {
+		listenAddr = "127.0.0.1:9999"
+	}
 	cfg, err := NewConfigStore(cfgPath, pgFromEnv())
 	if err != nil {
 		log.Fatalf("Failed to load config %q: %v", cfgPath, err)

@@ -38,6 +38,12 @@ type dbHost struct {
 type dbSession struct {
 	User    string `json:"user"`
 	Expires int64  `json:"expires"`
+	// Persist the session's auth state so a server restart doesn't silently drop
+	// it: terminalVerified (else the terminal password is re-prompted after every
+	// restart) and restricted (else a global-MFA restricted session would escalate
+	// to full access on restart).
+	TerminalVerified bool `json:"terminal_verified,omitempty"`
+	Restricted       bool `json:"restricted,omitempty"`
 }
 
 type dbSnapshot struct {

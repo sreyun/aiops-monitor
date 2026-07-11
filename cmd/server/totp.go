@@ -71,6 +71,24 @@ func totpVerify(secret, code string) bool {
 	return ok
 }
 
+// totpMatchStep verifies code across the ±1-step skew window and returns the
+// matched time-step index (unix/period) so callers can enforce single-use
+// (record the consumed step per user). ok is false if no step matched.
+func totpMatchStep(secret, code string) (step int64, ok bool) {
+	code = strings.TrimSpace(code)
+	if secret == "" || len(code) != totpDigits {
+		return 0, false
+	}
+	now := time.Now().Unix()
+	for _, d := range []int64{0, -totpPeriod, totpPeriod} {
+		if subtle.ConstantTimeCompare([]byte(totpAt(secret, now+d)), []byte(code)) == 1 {
+			step = (now + d) / totpPeriod
+			ok = true // keep looping so timing doesn't reveal which step matched
+		}
+	}
+	return step, ok
+}
+
 // otpauthURL builds the provisioning URI ("otpauth://totp/…") that the enrollment
 // QR encodes and that authenticator apps import.
 //

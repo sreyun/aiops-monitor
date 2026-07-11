@@ -1835,7 +1835,10 @@ async function checkTerminalAccess() {
       return;
     }
 
-    // 3. 检查当前会话是否已验证
+    // 3. 检查当前会话是否已验证——以服务端会话状态为准：浏览器刷新后本地
+    //    TERM_AUTH_VERIFIED 会被重置，但服务端 session 仍记得已验证，
+    //    因此这里读取 status.verified 并同步本地标记，避免刷新后反复重输终端密码。
+    if (status.verified) TERM_AUTH_VERIFIED = true;
     if (TERM_AUTH_VERIFIED) {
       proceedToTerminal();
       return;

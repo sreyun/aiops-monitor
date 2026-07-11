@@ -171,6 +171,26 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// mustOpenPG connects to PostgreSQL, retrying briefly so a docker-compose cold
+// start (PG still initializing behind its healthcheck) doesn't abort the boot.
+// There is no embedded fallback: after the retry window a connection failure is
+// fatal, by design — the platform stores all relational state in PostgreSQL.
+func mustOpenPG(dsn string) *pgStore {
+	const attempts = 10
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		p, err := openPGStore(dsn)
+		if err == nil {
+			return p
+		}
+		lastErr = err
+		slog.Warn("PostgreSQL 连接未就绪，重试中…", "attempt", i+1, "max", attempts, "err", err)
+		time.Sleep(2 * time.Second)
+	}
+	log.Fatalf("PostgreSQL 连接失败（已重试 %d 次），服务终止：%v", attempts, lastErr)
+	return nil
+}
+
 func main() {
 	addr := flag.String("addr", ":8529", Tz("server.flag_addr"))
 	cfgPath := flag.String("config", "server_config.json", Tz("server.flag_config"))
@@ -194,19 +214,30 @@ func main() {
 
 	dist := resolveDist(*distDir)
 	store := NewStore()
-	// Open PostgreSQL early (from env) so config + relational state load from it.
-	// When set, PG becomes the sole relational store and the embedded aiops.db is
-	// retired; when unset the server keeps the backward-compatible embedded mode.
-	var pg *pgStore
-	if dsn := os.Getenv("AIOPS_POSTGRES_DSN"); dsn != "" {
-		if p, err := openPGStore(dsn); err != nil {
-			slog.Error("PostgreSQL 连接失败，回落内嵌存储", "err", err)
-		} else {
-			pg = p
-			slog.Info("PostgreSQL 已连接：配置 / 审计 / 事件 / 工单持久化到 PG")
-			store.BindPG(pg) // audit log + plugin events → PG
-		}
+
+	// Storage is unified on PostgreSQL (all relational data) + VictoriaMetrics (all
+	// time-series). The embedded aiops.db single-file store is fully retired — both
+	// backends are REQUIRED and the server refuses to start without them, so state
+	// can never silently land in a local file.
+	dsn := strings.TrimSpace(os.Getenv("AIOPS_POSTGRES_DSN"))
+	if dsn == "" {
+		log.Fatal("AIOPS_POSTGRES_DSN 未配置：本平台已统一使用 PostgreSQL + VictoriaMetrics 存储，内置数据库已停用。请在环境变量中配置 PostgreSQL DSN（参见 docker-compose.yml）")
 	}
+	if strings.TrimSpace(os.Getenv("AIOPS_VM_URL")) == "" {
+		log.Fatal("AIOPS_VM_URL 未配置：时序数据（指标/趋势）已统一写入 VictoriaMetrics。请在环境变量中配置 VM 地址（参见 docker-compose.yml）")
+	}
+	// Connect to PostgreSQL with a bounded retry so a docker-compose cold start (PG
+	// still initializing) doesn't abort the boot; after the window it is fatal —
+	// there is no local fallback.
+	pg := mustOpenPG(dsn)
+	slog.Info("PostgreSQL 已连接：配置 / 用户 / 审计 / 事件 / 工单 / 会话统一持久化到 PG")
+	store.BindPG(pg) // audit log + plugin events → PG
+	if secretEncryptionEnabled() {
+		slog.Info("配置密钥落库加密已启用（AIOPS_SECRET_KEY）：MFA/SMTP/AI/webhook 等密钥 AES-256-GCM 静态加密")
+	} else {
+		slog.Warn("未设置 AIOPS_SECRET_KEY：配置中的密钥以明文存库，建议设置以启用静态加密")
+	}
+
 	cfg, err := NewConfigStore(*cfgPath, pg)
 	if err != nil {
 		log.Fatal(err)
@@ -215,35 +246,14 @@ func main() {
 	server := NewServer(store, cfg, notifier, dist, *addr)
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
-	// Terminal recordings are always file-backed on the data volume; SRE records
-	// go to PG when configured.
-	if pg != nil {
-		server.bindPG(pg) // load + periodically persist incidents / work orders
-	}
-	// Embedded aiops.db is used ONLY without PostgreSQL (single-file mode). In PG
-	// mode all relational state is in PG and all time-series in VictoriaMetrics.
-	var db *DB
-	if pg == nil {
-		db = NewDB(dbPathFor(*cfgPath), store, server.auth)
-		db.BindSRE(server.incidents, server.tickets)
-		db.Load()
-		go db.AutoSave(15 * time.Second)
-	}
+	server.bindPG(pg)                                      // load + periodically persist incidents / work orders / sessions
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		if db != nil {
-			if err := db.Save(); err != nil {
-				slog.Error(Tz("server.save_failed"), "err", err)
-			} else {
-				slog.Info(Tz("server.saved_exit"))
-			}
-		}
-		if pg != nil { // final flush of all relational state to PostgreSQL
-			server.pgFlush(pg)
-			pg.close()
-		}
+		// Final flush of all relational state to PostgreSQL, then close cleanly.
+		server.pgFlush(pg)
+		pg.close()
 		os.Exit(0)
 	}()
 
@@ -269,12 +279,28 @@ func main() {
 	slog.Info(Tz("server.dashboard_url"), "url", "http://localhost"+*addr)
 	slog.Info(Tz("server.api_url"), "url", "http://localhost"+*addr+"/api/v1/")
 	slog.Info(Tz("server.config_file"), "path", *cfgPath)
-	slog.Info(Tz("server.db_path"), "path", dbPathFor(*cfgPath), "note", Tz("server.db_note"))
+	slog.Info("存储后端", "relational", "PostgreSQL", "timeseries", "VictoriaMetrics", "note", "内置 aiops.db 已停用")
 	if hasAgentBinary(dist) {
 		slog.Info(Tz("server.dist_dir"), "path", dist, "note", Tz("server.dist_ok"))
 	} else {
 		slog.Warn(Tz("server.dist_missing"))
 	}
+	// TLS / HTTPS: when a cert+key pair is provided, serve over TLS so agent↔server
+	// and browser↔server traffic (login credentials, session cookie, agent
+	// fingerprint, terminal I/O) is encrypted. When enabled, isHTTPS(r) becomes true
+	// for direct connections, so the session cookie's Secure flag is set automatically.
+	// Without it the server still serves plain HTTP (intended only behind a
+	// TLS-terminating reverse proxy) and warns loudly.
+	certFile := strings.TrimSpace(os.Getenv("AIOPS_TLS_CERT"))
+	keyFile := strings.TrimSpace(os.Getenv("AIOPS_TLS_KEY"))
+	if certFile != "" && keyFile != "" {
+		slog.Info("已启用 TLS/HTTPS（加密传输）", "cert", certFile)
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	slog.Warn("未配置 TLS（AIOPS_TLS_CERT/AIOPS_TLS_KEY）：以明文 HTTP 提供服务。生产环境请启用 TLS，或置于 HTTPS 终止代理之后，否则登录凭据/会话/终端数据将明文传输")
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

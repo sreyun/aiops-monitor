@@ -87,6 +87,9 @@ func mergeSecrets(in *ServerConfig, old ServerConfig) {
 	if in.SMTP.FromName == "" {
 		in.SMTP.FromName = old.SMTP.FromName
 	}
+	// Custom webhook headers may carry auth tokens and are masked in GET responses;
+	// restore the stored value when the browser submits a blank/masked placeholder.
+	in.CustomWebhook.Headers = keepIfBlank(in.CustomWebhook.Headers, old.CustomWebhook.Headers)
 }
 
 func keepIfBlank(newv, oldv string) string {

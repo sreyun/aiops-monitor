@@ -168,7 +168,12 @@ func (s *Server) handleProxyToken(w http.ResponseWriter, r *http.Request) {
 	// Set as a short-lived SameSite=Lax cookie so the subsequent window.open
 	// automatically carries it. Using raw header write to avoid any potential
 	// interaction with gzip-wrapped ResponseWriter.
-	ck := fmt.Sprintf("proxy_token=%s; Path=/; Max-Age=%d; SameSite=Lax", tok, int(proxyTokenTTL.Seconds()))
+	// HttpOnly so page JS can't read the proxy token; Secure when served over TLS.
+	secure := ""
+	if isHTTPS(r) {
+		secure = "; Secure"
+	}
+	ck := fmt.Sprintf("proxy_token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s", tok, int(proxyTokenTTL.Seconds()), secure)
 	w.Header().Add("Set-Cookie", ck)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }

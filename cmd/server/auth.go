@@ -100,6 +100,9 @@ type session struct {
 	restricted bool // true = only MFA setup/enable/logout endpoints allowed (global MFA enforcement)
 	// v5.3.0: terminal secondary verification — true once verified in this session.
 	terminalVerified bool
+	// v5.5.0: last activity time — drives the sliding idle timeout (absolute cap
+	// stays expires). Not persisted; imported sessions start fresh on restart.
+	lastSeen time.Time
 }
 
 // Auth manages login sessions against the account in ConfigStore. Sessions
@@ -121,6 +124,15 @@ type Auth struct {
 	termAttemptMu sync.Mutex
 	termAttempts  map[string]int      // user -> consecutive failed terminal verify attempts
 	termLocked    map[string]time.Time // user -> locked until
+
+	// v5.5.0: per-account login throttle (independent of IP, blunts IP-rotating
+	// distributed brute force) — shares limMu with loginHit.
+	loginHitUser map[string][]int64 // username -> recent failed attempt unix times
+
+	// v5.5.0: TOTP single-use — a code (by time-step) accepted once for a user
+	// can't be replayed within the skew window.
+	totpMu   sync.Mutex
+	totpUsed map[string]int64 // "user:step" -> expiry unix
 }
 
 const (
@@ -131,6 +143,11 @@ const (
 	// v5.3.0: terminal verification rate limiting
 	termMaxAttempts = 3                // max failed terminal verify attempts
 	termLockoutSec  = 300              // lockout duration (5 minutes)
+
+	// v5.5.0: per-account login throttle + session idle expiry
+	loginAccountWindowSec = 900             // 15-min sliding window per account
+	loginAccountMaxFail   = 10              // max failed attempts per ACCOUNT per window
+	sessionIdleTimeout    = 24 * time.Hour  // sliding idle expiry (absolute cap stays sessionTTL)
 )
 
 type proxyToken struct {
@@ -160,7 +177,7 @@ func (a *Auth) validateProxyToken(tok string) string {
 }
 
 func NewAuth(cfg *ConfigStore) *Auth {
-	return &Auth{cfg: cfg, sessions: map[string]session{}, proxyTokens: map[string]proxyToken{}, loginHit: map[string][]int64{}, termAttempts: map[string]int{}, termLocked: map[string]time.Time{}}
+	return &Auth{cfg: cfg, sessions: map[string]session{}, proxyTokens: map[string]proxyToken{}, loginHit: map[string][]int64{}, loginHitUser: map[string][]int64{}, totpUsed: map[string]int64{}, termAttempts: map[string]int{}, termLocked: map[string]time.Time{}}
 }
 
 // loginAllowed reports whether ip is under the failed-attempt threshold. It also
@@ -193,6 +210,79 @@ func (a *Auth) loginFailed(ip string) {
 	a.limMu.Lock()
 	a.loginHit[ip] = append(a.loginHit[ip], now)
 	a.limMu.Unlock()
+}
+
+// loginAccountAllowed reports whether the account is under the per-account failed-
+// attempt threshold. Independent of IP, so a botnet rotating source addresses
+// can't exceed loginAccountMaxFail against one account per window. Case-insensitive.
+func (a *Auth) loginAccountAllowed(user string) bool {
+	key := strings.ToLower(strings.TrimSpace(user))
+	if key == "" {
+		return true
+	}
+	now := time.Now().Unix()
+	cutoff := now - loginAccountWindowSec
+	a.limMu.Lock()
+	defer a.limMu.Unlock()
+	if len(a.loginHitUser) > 4096 { // safety valve against unbounded growth
+		a.loginHitUser = map[string][]int64{}
+	}
+	kept := a.loginHitUser[key][:0]
+	for _, t := range a.loginHitUser[key] {
+		if t >= cutoff {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == 0 {
+		delete(a.loginHitUser, key)
+	} else {
+		a.loginHitUser[key] = kept
+	}
+	return len(kept) < loginAccountMaxFail
+}
+
+// loginAccountFailed records one failed attempt against an account.
+func (a *Auth) loginAccountFailed(user string) {
+	key := strings.ToLower(strings.TrimSpace(user))
+	if key == "" {
+		return
+	}
+	now := time.Now().Unix()
+	a.limMu.Lock()
+	a.loginHitUser[key] = append(a.loginHitUser[key], now)
+	a.limMu.Unlock()
+}
+
+// loginAccountReset clears an account's failed-attempt history after a success.
+func (a *Auth) loginAccountReset(user string) {
+	a.limMu.Lock()
+	delete(a.loginHitUser, strings.ToLower(strings.TrimSpace(user)))
+	a.limMu.Unlock()
+}
+
+// verifyTOTPOnce verifies a TOTP code AND enforces single-use: a code (identified
+// by its 30s time-step) accepted once for a user can't be replayed within the
+// ±1-step skew window. Blunts reuse of a phished/observed code across login,
+// account recovery and terminal-password changes.
+func (a *Auth) verifyTOTPOnce(user, secret, code string) bool {
+	step, ok := totpMatchStep(secret, code)
+	if !ok {
+		return false
+	}
+	now := time.Now().Unix()
+	key := strings.ToLower(user) + ":" + strconv.FormatInt(step, 10)
+	a.totpMu.Lock()
+	defer a.totpMu.Unlock()
+	for k, exp := range a.totpUsed { // prune expired entries
+		if now > exp {
+			delete(a.totpUsed, k)
+		}
+	}
+	if _, used := a.totpUsed[key]; used {
+		return false // replay within the skew window
+	}
+	a.totpUsed[key] = now + 2*totpPeriod
+	return true
 }
 
 func newSessionToken() string {
@@ -245,12 +335,20 @@ func (a *Auth) validate(tok string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s, ok := a.sessions[key]
-	if !ok || time.Now().After(s.expires) {
-		if ok {
-			delete(a.sessions, key)
-		}
+	if !ok {
 		return false
 	}
+	now := time.Now()
+	// Absolute expiry (hard cap) OR sliding idle timeout — either invalidates.
+	// A zero lastSeen (e.g. a session imported before this field existed) is
+	// treated as active so a restart doesn't force everyone to re-login.
+	if now.After(s.expires) || (!s.lastSeen.IsZero() && now.Sub(s.lastSeen) > sessionIdleTimeout) {
+		delete(a.sessions, key)
+		a.dirty = true
+		return false
+	}
+	s.lastSeen = now // slide the idle window on activity
+	a.sessions[key] = s
 	return true
 }
 
@@ -281,8 +379,9 @@ func (a *Auth) ClearSessions() {
 // issueSession creates and stores a fresh session token for user.
 func (a *Auth) issueSession(user string) string {
 	tok := newSessionToken()
+	now := time.Now()
 	a.mu.Lock()
-	a.sessions[sessionKey(tok)] = session{user: user, expires: time.Now().Add(sessionTTL)}
+	a.sessions[sessionKey(tok)] = session{user: user, expires: now.Add(sessionTTL), lastSeen: now}
 	a.dirty = true
 	a.mu.Unlock()
 	return tok
@@ -293,8 +392,9 @@ func (a *Auth) issueSession(user string) string {
 // global MFA policy forces a user to bind TOTP before they can use the system.
 func (a *Auth) issueRestrictedSession(user string) string {
 	tok := newSessionToken()
+	now := time.Now()
 	a.mu.Lock()
-	a.sessions[sessionKey(tok)] = session{user: user, expires: time.Now().Add(sessionTTL), restricted: true}
+	a.sessions[sessionKey(tok)] = session{user: user, expires: now.Add(sessionTTL), restricted: true, lastSeen: now}
 	a.dirty = true
 	a.mu.Unlock()
 	return tok
@@ -382,7 +482,7 @@ func (a *Auth) exportSessions() map[string]dbSession {
 	now := time.Now()
 	for tok, s := range a.sessions {
 		if s.expires.After(now) {
-			out[tok] = dbSession{User: s.user, Expires: s.expires.Unix()}
+			out[tok] = dbSession{User: s.user, Expires: s.expires.Unix(), TerminalVerified: s.terminalVerified, Restricted: s.restricted}
 		}
 	}
 	return out
@@ -398,7 +498,7 @@ func (a *Auth) importSessions(in map[string]dbSession) {
 	for tok, s := range in {
 		exp := time.Unix(s.Expires, 0)
 		if exp.After(now) {
-			a.sessions[tok] = session{user: s.User, expires: exp}
+			a.sessions[tok] = session{user: s.User, expires: exp, terminalVerified: s.TerminalVerified, restricted: s.Restricted, lastSeen: now}
 		}
 	}
 }
@@ -646,9 +746,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	// Per-account throttle (independent of the per-IP limit above) blunts
+	// distributed brute force that rotates source IPs against one account.
+	if !s.auth.loginAccountAllowed(req.Username) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+		return
+	}
 	acc, ok := s.auth.CheckPassword(req.Username, req.Password)
 	if !ok {
 		s.auth.loginFailed(ip)
+		s.auth.loginAccountFailed(req.Username)
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", req.Username)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return
@@ -669,13 +776,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true})
 			return
 		}
-		if !totpVerify(acc.MFASecret, req.Code) {
+		if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, req.Code) {
 			s.auth.loginFailed(ip)
+			s.auth.loginAccountFailed(req.Username)
 			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.totp_failed", req.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 			return
 		}
 	}
+	// Credentials fully verified — clear the per-account failed-attempt counter.
+	s.auth.loginAccountReset(req.Username)
 	// Global MFA policy: if admin has enabled MFARequired and this user hasn't
 	// set up MFA yet, issue a restricted session and direct them to enroll.
 	if s.cfg.MFARequired() && !acc.MFAEnabled {

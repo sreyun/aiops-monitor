@@ -118,7 +118,8 @@ else
 EOF
 fi
 
-if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+  # Linux + root → systemd: auto-start on boot + auto-restart on crash/kill.
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
 Description=AIOps Monitor Agent
@@ -135,11 +136,49 @@ WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
   systemctl enable --now aiops-agent
-  echo "[AIOps] systemd service started: aiops-agent"
+  echo "[AIOps] systemd service started: aiops-agent (boot autostart + auto-restart)"
+elif [ "$OS" = "Darwin" ]; then
+  # macOS → launchd. RunAtLoad starts it on boot/login; KeepAlive relaunches it
+  # automatically if it ever exits or is killed. This fixes the previous macOS
+  # behaviour (a one-off background process that never came back after a reboot).
+  if [ "$(id -u)" = "0" ]; then PLIST_DIR="/Library/LaunchDaemons"; else PLIST_DIR="$HOME/Library/LaunchAgents"; fi
+  mkdir -p "$PLIST_DIR"
+  PLIST="$PLIST_DIR/com.aiops.agent.plist"
+  cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aiops.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$DIR/aiops-agent</string>
+    <string>--config</string>
+    <string>$DIR/config.json</string>
+  </array>
+  <key>WorkingDirectory</key><string>$DIR</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$DIR/agent.log</string>
+  <key>StandardErrorPath</key><string>$DIR/agent.log</string>
+</dict>
+</plist>
+PL
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST"
+  echo "[AIOps] launchd job installed: com.aiops.agent (autostart on boot + keepalive)"
 else
+  # Fallback (non-root Linux without systemd): run now + a @reboot crontab entry
+  # so it survives reboots. root+systemd is recommended for restart-on-crash too.
   pkill -f "$DIR/aiops-agent" 2>/dev/null || true
   nohup "$DIR/aiops-agent" --config "$DIR/config.json" > "$DIR/agent.log" 2>&1 &
-  echo "[AIOps] started in background (log: $DIR/agent.log)"
+  if command -v crontab >/dev/null 2>&1; then
+    ( crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" ; \
+      echo "@reboot $DIR/aiops-agent --config $DIR/config.json >> $DIR/agent.log 2>&1" ) | crontab - 2>/dev/null || true
+    echo "[AIOps] started in background + @reboot autostart added (log: $DIR/agent.log)"
+  else
+    echo "[AIOps] started in background (log: $DIR/agent.log)"
+  fi
 fi
 echo "[AIOps] done. Check the dashboard for this host."
 `
@@ -185,17 +224,39 @@ if ($ServersJson -ne "") {
 }
 [System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
 
-# User-level autostart (no admin required): HKCU Run + hidden VBS launcher
+# User-level autostart + keepalive (no admin required).
+# start-agent.vbs is a *supervisor*: it launches the agent ONLY if it is not
+# already running, so neither the logon Run key nor the 5-minute keepalive task
+# ever spawns a duplicate. Two triggers together mean the agent survives both a
+# reboot (Run key at logon) and being stopped/killed (task relaunches within 5m).
 $exe  = "$Dir\aiops-agent.exe"
 $conf = "$Dir\config.json"
 $vbs  = "$Dir\start-agent.vbs"
-$line = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $conf + '""", 0, False'
-[System.IO.File]::WriteAllText($vbs, $line, (New-Object System.Text.ASCIIEncoding))
+$runLine = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $conf + '""", 0, False'
+$vbsBody = @"
+' AIOps agent supervisor — start the agent only if it is not already running.
+Dim running : running = False
+On Error Resume Next
+Dim wmi : Set wmi = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+Dim procs : Set procs = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name = 'aiops-agent.exe'")
+If Not procs Is Nothing Then If procs.Count > 0 Then running = True
+On Error GoTo 0
+If Not running Then $runLine
+"@
+[System.IO.File]::WriteAllText($vbs, $vbsBody, (New-Object System.Text.UTF8Encoding $false))
+
+# 1) Autostart at logon (survives reboot)
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
 
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
+# 2) Keepalive: re-run the supervisor every 5 minutes so a stopped/killed agent
+#    is relaunched. Current-user context — no admin. Escaped inner quotes so the
+#    path survives even under usernames that contain spaces.
+$trTask = 'wscript.exe \"' + $vbs + '\"'
+schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 2>$null | Out-Null
+
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
-Write-Host "[AIOps] installed and started (user-level autostart). Check the dashboard."
+Write-Host "[AIOps] installed with autostart + 5-min keepalive (user-level). Check the dashboard."
 `
 
 // relayInstallShTemplate installs the agent in GATEWAY RELAY mode on Linux /
@@ -311,10 +372,16 @@ if command -v systemctl >/dev/null 2>&1; then
   rm -f /etc/systemd/system/aiops-agent.service
   systemctl daemon-reload 2>/dev/null || true
 fi
-PLIST="$HOME/Library/LaunchAgents/com.aiops.agent.plist"
-if [ -f "$PLIST" ]; then
-  launchctl unload "$PLIST" 2>/dev/null || true
-  rm -f "$PLIST"
+# launchd (macOS): remove both the per-user LaunchAgent and the root LaunchDaemon.
+for PLIST in "$HOME/Library/LaunchAgents/com.aiops.agent.plist" "/Library/LaunchDaemons/com.aiops.agent.plist"; do
+  if [ -f "$PLIST" ]; then
+    launchctl unload "$PLIST" 2>/dev/null || true
+    rm -f "$PLIST"
+  fi
+done
+# Remove the @reboot crontab entry added by the non-root fallback install.
+if command -v crontab >/dev/null 2>&1; then
+  crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" | crontab - 2>/dev/null || true
 fi
 pkill -f "$DIR/aiops-agent" 2>/dev/null || true
 rm -rf "$DIR"
@@ -338,7 +405,10 @@ Write-Host "[AIOps] uninstalling from $Dir"
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -ErrorAction SilentlyContinue
 
-# Step 2: Remove legacy scheduled task (if any)
+# Step 2: Remove the keepalive scheduled task FIRST — otherwise it relaunches the
+# agent within 5 minutes and the file deletion below fails ("can't uninstall").
+# Delete both the current name and the legacy hyphenated one.
+schtasks /Delete /TN "AIOpsAgent" /F 2>$null | Out-Null
 schtasks /Delete /TN "AIOps-Agent" /F 2>$null | Out-Null
 
 # Step 3: Kill ALL related processes — agent + VBS launcher

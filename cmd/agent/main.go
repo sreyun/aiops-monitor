@@ -36,6 +36,8 @@ type config struct {
 	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
 	RelaySecret    string         `json:"relay_secret,omitempty"` // v5.4.1: shared secret for relay auth
 	LogPaths       []string       `json:"log_paths,omitempty"`  // log files to tail and forward to the server
+	TLSSkipVerify  bool           `json:"tls_skip_verify,omitempty"` // skip server TLS cert verification (insecure; self-signed/lab only)
+	CACert         string         `json:"ca_cert,omitempty"`          // path to a CA PEM bundle to trust (proper self-signed support)
 }
 
 func defaultConfig() config {
@@ -100,6 +102,8 @@ func main() {
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
 	var logPathsFlag string
 	flag.StringVar(&logPathsFlag, "log-paths", "", "采集的日志文件路径，逗号分隔（如 /var/log/syslog,/var/log/nginx/error.log）")
+	flag.BoolVar(&cfg.TLSSkipVerify, "tls-skip-verify", cfg.TLSSkipVerify, "跳过服务端 TLS 证书校验（不安全，仅自签/内网临时使用）")
+	flag.StringVar(&cfg.CACert, "ca-cert", cfg.CACert, "信任的 CA 证书路径（PEM），用于校验自签名服务端证书")
 	flag.Parse()
 	_ = cfgFlag
 	if logPathsFlag != "" {
@@ -109,6 +113,10 @@ func main() {
 			}
 		}
 	}
+
+	// Apply server TLS trust (self-signed CA / skip-verify) to every agent→server
+	// HTTP client before the first request is made.
+	configureServerTLS(cfg.TLSSkipVerify, cfg.CACert)
 
 	// Relay mode: act as a gateway for internal machines that can't reach the
 	// internet. The agent listens on a local port and reverse-proxies to the

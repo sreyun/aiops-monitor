@@ -336,6 +336,9 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 			}
 		}
 	}
+	// Decrypt any at-rest-encrypted secrets into plaintext for in-memory use
+	// (no-op for plaintext / legacy values, or when no master key is set).
+	decryptConfigSecrets(&cs.cfg)
 	dirty := false
 	if cs.cfg.InstallToken == "" {
 		cs.cfg.InstallToken = genToken()
@@ -725,6 +728,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint
 	c.VM = cs.cfg.VM                             // managed via env / storage config
 	c.PostgresDSN = cs.cfg.PostgresDSN           // managed via env / storage config
+	c.RelaySecret = cs.cfg.RelaySecret           // managed via storage/relay config (masked in GET)
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
 	if c.SMTP.Password == "" || strings.Contains(c.SMTP.Password, "****") {
@@ -788,9 +792,19 @@ func (cs *ConfigStore) CategoryOverride(hostID string) (string, bool) {
 
 func (cs *ConfigStore) save() error {
 	cs.mu.RLock()
-	b, err := json.MarshalIndent(cs.cfg, "", "  ")
+	// Value copy so field-level secret encryption below can't mutate the live,
+	// plaintext in-memory config. Deep-copy Users (a slice) for the same reason.
+	c := cs.cfg
+	if len(c.Users) > 0 {
+		users := make([]AccountConfig, len(c.Users))
+		copy(users, c.Users)
+		c.Users = users
+	}
 	pg := cs.pg
 	cs.mu.RUnlock()
+	// Encrypt reversible secrets at rest (no-op unless AIOPS_SECRET_KEY is set).
+	encryptConfigSecrets(&c)
+	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
