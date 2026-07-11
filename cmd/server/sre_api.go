@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -832,7 +833,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 // handleDiagnoseChatIncident provides multi-turn AI diagnosis chat for an
 // incident, carrying the full incident context as system prompt so the operator
 // can ask follow-up questions, challenge conclusions, or request deeper analysis.
-// POST /api/v1/incidents/{id}/diagnose-chat  {message, history:[{role,content}]}
+// POST /api/v1/incidents/{id}/diagnose-chat  {message, history:[{role,content}], include_terminal}
 func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Request) {
 	id, ok := sreParseID(r)
 	if !ok {
@@ -845,11 +846,12 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		Message string `json:"message"`
-		History []struct {
+		Message         string `json:"message"`
+		History         []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"history,omitempty"`
+		IncludeTerminal bool `json:"include_terminal,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -871,6 +873,12 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		if e.Kind == "ai_diagnosis" && e.Text != "" {
 			sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
 			break // only the latest one
+		}
+	}
+	// Optionally inject terminal operation summary (方案 A: 分段摘要注入)
+	if req.IncludeTerminal && inc.HostID != "" {
+		if termSummary := s.buildTerminalSummary(inc.HostID); termSummary != "" {
+			sys += "\n\n【终端操作记录（分段摘要）】\n" + termSummary
 		}
 	}
 	msgs := []map[string]string{{"role": "system", "content": sys}}
@@ -923,6 +931,122 @@ func buildIncidentDiagnosisPrompt(inc Incident) string {
 		}
 	}
 	b.WriteString("\n你的任务：根据以上上下文，回答操作员的追问。请用简洁中文，给出具体可执行的排查方向或处置建议。如果信息不足，明确指出还需要什么信息。")
+	return b.String()
+}
+
+// buildTerminalSummary finds the most recent terminal session for the given host,
+// splits the output frames into 30-second windows, and returns a human-readable
+// timeline summary. This is 方案 A: 分段摘要注入 — the AI sees compact operation
+// history without the full raw terminal dump.
+func (s *Server) buildTerminalSummary(hostID string) string {
+	if s.term == nil {
+		return ""
+	}
+	sessions := s.term.findSessionsByHost(hostID)
+	if len(sessions) == 0 {
+		return ""
+	}
+	// Pick the newest session (already sorted newest-first)
+	best := sessions[0]
+	frames := s.term.getRecording(best.ID)
+	if len(frames) == 0 {
+		return ""
+	}
+	// Group output frames into 30-second windows
+	type window struct {
+		startTs int64
+		lines   []string
+	}
+	const windowSec = 30
+	var windows []window
+	var cur *window
+	for _, f := range frames {
+		if f.Type != "output" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(f.Data)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		text := stripANSI(string(data))
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		sec := f.Ts / 1000 // convert ms to seconds
+		if cur == nil || sec-cur.startTs >= windowSec {
+			windows = append(windows, window{startTs: sec})
+			cur = &windows[len(windows)-1]
+		}
+		// Append non-empty lines from this frame
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				cur.lines = append(cur.lines, line)
+			}
+		}
+	}
+	if len(windows) == 0 {
+		return ""
+	}
+	// Build summary: one line per window, with the most informative output line
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("主机 %s 最近一次终端会话（操作人：%s，%s）：\n",
+		best.Hostname, best.Operator, time.Unix(best.CreatedAt, 0).Format("2006-01-02 15:04:05")))
+	maxWindows := 20
+	if len(windows) > maxWindows {
+		windows = windows[len(windows)-maxWindows:] // keep the most recent
+	}
+	for _, w := range windows {
+		ts := time.Unix(w.startTs, 0).Format("15:04:05")
+		// Pick the first 2-3 meaningful lines as summary
+		summary := ""
+		for j, line := range w.lines {
+			if j >= 3 {
+				break
+			}
+			if len(line) > 150 {
+				line = line[:150] + "…"
+			}
+			if summary != "" {
+				summary += " | "
+			}
+			summary += line
+		}
+		if summary == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "  [%s] %s\n", ts, summary)
+	}
+	return b.String()
+}
+
+// stripANSI removes ANSI escape sequences and control characters from terminal
+// output, leaving only printable text.
+func stripANSI(s string) string {
+	// Remove ANSI CSI sequences: ESC[ ... m (SGR), ESC[ ... J, ESC[ ... K, etc.
+	var b strings.Builder
+	b.Grow(len(s))
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b { // ESC
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			// CSI sequences end with a letter (m, J, K, H, etc.)
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+				inEscape = false
+			}
+			continue
+		}
+		// Skip other control characters (except newline and tab)
+		if c < 0x20 && c != '\n' && c != '\t' {
+			continue
+		}
+		b.WriteByte(c)
+	}
 	return b.String()
 }
 

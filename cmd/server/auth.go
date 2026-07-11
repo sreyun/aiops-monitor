@@ -517,7 +517,7 @@ func (a *Auth) consumeDirty() bool {
 func isPublicPath(r *http.Request) bool {
 	p := r.URL.Path
 	switch p {
-	case "/", "/healthz", "/style.css", "/app.js", "/i18n-dashboard.js", "/i18n-dashboard.en.js", "/i18n-dashboard.zh-TW.js",
+	case "/", "/healthz", "/style.css", "/app.js", "/theme-init.js", "/i18n-dashboard.js", "/i18n-dashboard.en.js", "/i18n-dashboard.zh-TW.js",
 		"/sw.js", "/manifest.json", "/icon.svg", // PWA shell: SW must register on the pre-login page too
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/api/v1/login", "/api/v1/me",

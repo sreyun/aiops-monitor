@@ -921,3 +921,31 @@ func (m *termManager) getDecodedRecording(sessionID string) [][]byte {
 	}
 	return out
 }
+
+// findSessionsByHost returns all terminal sessions (active + archived) for a
+// given host, newest first. Used by the AI diagnosis layer to enrich the prompt
+// with terminal operation context.
+func (m *termManager) findSessionsByHost(hostID string) []termSessionInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []termSessionInfo
+	for _, s := range m.sessions {
+		if s.hostID != hostID || s.operator == "playbook-exec" {
+			continue
+		}
+		s.recMu.Lock()
+		out = append(out, termSessionInfo{
+			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
+			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
+			Active: true, Observers: len(s.observers),
+			Frames: len(s.recording),
+		})
+		s.recMu.Unlock()
+	}
+	for i := len(m.archived) - 1; i >= 0; i-- {
+		if m.archived[i].info.HostID == hostID {
+			out = append(out, m.archived[i].info)
+		}
+	}
+	return out
+}

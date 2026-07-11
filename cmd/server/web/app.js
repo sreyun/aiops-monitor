@@ -5727,7 +5727,8 @@ async function openIncidentDetail(id){
       <div class="ai-diagnosis-input">
         <textarea id="incDiagInput" rows="2" placeholder="追问 AI 细节、反驳结论、要求进一步排查…"></textarea>
         <button class="btn primary" id="incDiagSendBtn">发送</button>
-      </div>`;
+      </div>
+      <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> 包含终端操作上下文（分段摘要）</label>`;
     const acts=[];
     acts.push(`<button class="btn sm" data-iact="diagnose">🤖 AI 诊断</button>`);
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">确认</button>`); acts.push(`<button class="btn sm" data-iact="resolve">解决</button>`); }
@@ -5792,7 +5793,7 @@ async function sendDiagnosisChatMsg(){
   try {
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…")})
+      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…"),include_terminal:!!$("incTermCheck")?.checked})
     });
     const j=await r.json().catch(()=>({}));
     // Replace the placeholder with real response
