@@ -640,6 +640,75 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleTestAIConfig verifies the AI provider is reachable and actually returns a
+// completion, so operators can confirm endpoint/key/model BEFORE relying on it.
+// POST /api/v1/ai/test — a masked/blank key means "use the currently-saved one".
+func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
+	var c AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if c.APIKey == "" || strings.Contains(c.APIKey, "****") {
+		c.APIKey = s.cfg.AIConfig().APIKey // the browser never receives the real key
+	}
+	if strings.TrimSpace(c.Endpoint) == "" || strings.TrimSpace(c.Model) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 Endpoint 和模型"})
+		return
+	}
+	start := time.Now()
+	reply, err := aiComplete(c, "你是连通性自检助手，用一句话确认你已就绪。", "请回复：AI 服务正常，已就绪。")
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "latency_ms": latency, "model": c.Model})
+}
+
+// handleAIChat is a lightweight SRE-assistant chat over the configured provider so
+// operators can interactively confirm the AI works and ask ops questions.
+// POST /api/v1/ai/chat  {message, history:[{role,content}]}
+func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Message string `json:"message"`
+		History []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"history,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
+		return
+	}
+	msgs := []map[string]string{{"role": "system", "content": "你是资深 SRE / 运维助手，用简洁中文回答监控、告警、排障、性能与自动化相关问题；无关问题礼貌拒答。"}}
+	hist := req.History
+	if len(hist) > 10 { // bound token usage to the last few turns
+		hist = hist[len(hist)-10:]
+	}
+	for _, h := range hist {
+		if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
+			msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
+		}
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
+	reply, err := aiChat(cfg, msgs)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply})
+}
+
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ai.Reports())
 }

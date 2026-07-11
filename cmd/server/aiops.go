@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,17 +29,16 @@ type AIConfig struct {
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
 }
 
-// aiComplete calls an OpenAI-compatible chat completion endpoint (stdlib only).
-func aiComplete(cfg AIConfig, system, user string) (string, error) {
+// aiChat calls an OpenAI-compatible chat/completions endpoint with a full message
+// list (multi-turn, stdlib only). On a non-200 it surfaces a snippet of the
+// provider's error body so the caller (e.g. the config test) can show WHY it failed.
+func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", fmt.Errorf("ai endpoint/model not configured")
 	}
 	reqBody := map[string]any{
-		"model": cfg.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
-		},
+		"model":       cfg.Model,
+		"messages":    messages,
 		"temperature": 0.2,
 		"stream":      false,
 	}
@@ -58,7 +58,11 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ai http %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
+		if msg := strings.TrimSpace(string(body)); msg != "" {
+			return "", fmt.Errorf("HTTP %d：%s", resp.StatusCode, trimLine(msg, 220))
+		}
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out struct {
 		Choices []struct {
@@ -71,9 +75,17 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 		return "", err
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("ai empty response")
+		return "", fmt.Errorf("provider returned no choices")
 	}
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+}
+
+// aiComplete is the single-turn (system + user) convenience wrapper around aiChat.
+func aiComplete(cfg AIConfig, system, user string) (string, error) {
+	return aiChat(cfg, []map[string]string{
+		{"role": "system", "content": system},
+		{"role": "user", "content": user},
+	})
 }
 
 // InspectionFinding is one item on an inspection report.
@@ -85,12 +97,15 @@ type InspectionFinding struct {
 
 // InspectionReport is one automated (or on-demand) health inspection.
 type InspectionReport struct {
-	ID       int64               `json:"id"`
-	Ts       int64               `json:"ts"`
-	Trigger  string              `json:"trigger"` // scheduled|manual
-	Source   string              `json:"source"`  // ai|heuristic
-	Summary  string              `json:"summary"`
-	Findings []InspectionFinding `json:"findings"`
+	ID         int64               `json:"id"`
+	Ts         int64               `json:"ts"`
+	Trigger    string              `json:"trigger"`               // scheduled|manual
+	Source     string              `json:"source"`                // ai|heuristic
+	Model      string              `json:"model,omitempty"`       // AI model used, or 启发式规则
+	Context    string              `json:"context,omitempty"`     // human-readable "what was inspected"
+	DurationMs int64               `json:"duration_ms,omitempty"` // how long this round took
+	Summary    string              `json:"summary"`
+	Findings   []InspectionFinding `json:"findings"`
 }
 
 // inspectionContext is the snapshot the AI/heuristic engine reasons over.
@@ -211,20 +226,30 @@ func trimLine(s string, n int) string {
 // RunInspection performs one inspection (AI-enhanced when configured, heuristic
 // otherwise) and stores the report.
 func (m *aiManager) RunInspection(trigger string) InspectionReport {
+	start := time.Now()
 	ctx := inspectionContext{}
 	if m.snapshot != nil {
 		ctx = m.snapshot()
 	}
+	// Human-readable description of exactly what this round looked at — surfaced in
+	// the report so operators can see the AI/heuristic actually ran over real data.
+	inspectCtx := fmt.Sprintf("巡检范围：在线主机 %d 台 · 离线 %d 台 · firing 告警 %d 条 · SLO %d 项 · 近 30 分钟 error %d/warn %d 条 · 资源高位 %d 项。",
+		ctx.OnlineHosts, len(ctx.OfflineHosts), len(ctx.FiringAlerts), len(ctx.BreachingSLOs), ctx.ErrorCount, ctx.WarnCount, len(ctx.HighUsage))
 	summary, findings := heuristicInspect(ctx)
-	source := "heuristic"
+	source, model := "heuristic", "启发式规则"
 	if cfg := m.cfg.AIConfig(); cfg.Enabled {
 		sys := "你是资深 SRE 专家。根据以下系统巡检快照，用简洁中文给出整体健康研判、风险优先级与处置建议，控制在 200 字内。"
 		if out, err := aiComplete(cfg, sys, buildInspectionPrompt(ctx)); err == nil && out != "" {
 			summary = out
 			source = "ai"
+			model = cfg.Model
 		}
 	}
-	rep := InspectionReport{Trigger: trigger, Source: source, Summary: summary, Findings: findings, Ts: time.Now().Unix()}
+	rep := InspectionReport{
+		Trigger: trigger, Source: source, Model: model, Context: inspectCtx,
+		DurationMs: time.Since(start).Milliseconds(),
+		Summary:   summary, Findings: findings, Ts: time.Now().Unix(),
+	}
 	m.mu.Lock()
 	m.nextID++
 	rep.ID = m.nextID

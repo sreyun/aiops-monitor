@@ -433,6 +433,7 @@
           <div class="sre-toolbar">
             <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
             <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
+            <button class="btn sm" id="aiChatBtn" data-i18n="sre.ai_chat">AI 对话</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
           </div>
           <div id="aiReportList" class="sre-list"></div>
@@ -1173,7 +1174,25 @@
       </div>
       <div class="hint" data-i18n="sre.ai_hint2">兼容任意 OpenAI 格式 chat/completions 端点（含本地 Ollama / vLLM）。不启用时自动使用内置启发式引擎，开箱即用。</div>
     </div>
-    <div class="modal-foot"><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
+    <div class="modal-foot"><span id="aiTestResult" class="ai-test-result"></span><button class="btn" id="aiTestBtn" data-i18n="sre.ai_test">测试连接</button><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
+</div>
+
+<!-- ===== AI 对话弹窗（与已配置 Provider 直接对话，确认可用） ===== -->
+<div class="mask" id="aiChatMask" data-close>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 data-i18n="sre.ai_chat_title">AI 对话 · 助手自检</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px" data-i18n="sre.ai_chat_hint">与已配置的 AI Provider 直接对话，确认其确实可用；也可询问监控 / 告警 / 排障相关问题。</div>
+      <div id="aiChatLog" class="ai-chat-log"></div>
+      <div class="ai-chat-input">
+        <textarea id="aiChatInput" rows="2" data-i18n-placeholder="sre.ai_chat_ph" placeholder="输入消息，Enter 发送、Shift+Enter 换行…"></textarea>
+        <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
+      </div>
+    </div>
   </div>
 </div>
 

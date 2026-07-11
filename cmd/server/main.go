@@ -98,6 +98,18 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		// Content-Security-Policy: defense-in-depth. 'unsafe-inline' is required
+		// because the dashboard uses inline event handlers + styles, but the rest
+		// still blocks plugins, base-tag/ form hijacking, framing (clickjacking),
+		// and any cross-origin data exfiltration (connect/img/font limited to self).
+		// Skipped for /proxy/ — those responses are arbitrary target-host web apps
+		// that must keep their own CSP/resources.
+		if !strings.HasPrefix(r.URL.Path, "/proxy/") {
+			h.Set("Content-Security-Policy",
+				"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+					"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "+
+					"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

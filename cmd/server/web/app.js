@@ -5933,7 +5933,9 @@ async function loadInspections(){
     if(!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无巡检报告，点「立即巡检」生成一次。</div>`; return; }
     el.innerHTML=list.map(rep=>{
       const f=(rep.findings||[]).map(x=>`<div class="ai-finding"><span class="badge ${_sevCls(x.severity)}">${esc(x.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(x.title)}</div>${x.detail?`<div class="ai-f-detail">${esc(x.detail)}</div>`:""}</div></div>`).join("");
-      return `<div class="ai-report"><div class="ai-report-head"><span class="badge ${rep.source==="ai"?"info":""}">${rep.source==="ai"?"AI 研判":"启发式"}</span><span class="ai-report-trigger">${rep.trigger==="manual"?"手动":"定时"}</span><span class="mono" style="color:var(--muted)">${fmtDateTime(rep.ts)}</span></div>
+      const meta=[rep.model?esc(rep.model):"",(typeof rep.duration_ms==="number"&&rep.duration_ms>=0)?rep.duration_ms+"ms":""].filter(Boolean).join(" · ");
+      return `<div class="ai-report"><div class="ai-report-head"><span class="badge ${rep.source==="ai"?"info":""}">${rep.source==="ai"?"AI 研判":"启发式"}</span><span class="ai-report-trigger">${rep.trigger==="manual"?"手动":"定时"}</span>${meta?`<span class="mono" style="color:var(--muted2);font-size:11px">${meta}</span>`:""}<span class="mono" style="color:var(--muted);margin-left:auto">${fmtDateTime(rep.ts)}</span></div>
+        ${rep.context?`<div class="ai-report-ctx">${esc(rep.context)}</div>`:""}
         <div class="ai-summary">${esc(rep.summary)}</div>${f?`<div class="ai-findings">${f}</div>`:""}</div>`;
     }).join("");
   } catch(e){ toast("加载失败: "+e,"err"); }
@@ -5950,11 +5952,60 @@ async function saveAIConfig(){
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
+// AI 连接测试：把当前表单配置发到后端做一次真实 completion，直接展示是否可用 + 延迟 + 回复
+async function testAIConfig(){
+  const el=$("aiTestResult");
+  if(el){ el.textContent="测试中…"; el.className="ai-test-result testing"; }
+  const body={enabled:true,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim()};
+  try{
+    const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(j.ok){ el.textContent=`✓ 可用 · ${j.latency_ms||0}ms · ${(j.reply||"").slice(0,36)}`; el.className="ai-test-result ok"; }
+    else { el.textContent=`✗ ${j.error||"未知错误"}`; el.className="ai-test-result err"; }
+  }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
+}
+let AI_CHAT_HISTORY=[];
+function openAIChat(){
+  AI_CHAT_HISTORY=[];
+  const log=$("aiChatLog");
+  if(log) log.innerHTML=`<div class="ai-chat-msg sys">已连接「AI 设置」里配置的 Provider。发一条消息试试，看它是否真的在回复。</div>`;
+  $("aiChatMask").classList.add("show");
+  setTimeout(()=>{ const i=$("aiChatInput"); if(i) i.focus(); },80);
+}
+function appendChatMsg(role,text){
+  const log=$("aiChatLog"); if(!log) return null;
+  const div=document.createElement("div");
+  div.className="ai-chat-msg "+(role==="user"?"me":role==="assistant"?"ai":"sys");
+  div.textContent=text;
+  log.appendChild(div); log.scrollTop=log.scrollHeight;
+  return div;
+}
+async function sendAIChat(){
+  const inp=$("aiChatInput"); if(!inp) return;
+  const msg=inp.value.trim(); if(!msg) return;
+  inp.value="";
+  appendChatMsg("user",msg);
+  const pending=appendChatMsg("assistant","思考中…");
+  try{
+    const r=await fetch(`${API}/ai/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:AI_CHAT_HISTORY})});
+    const j=await r.json().catch(()=>({}));
+    if(j.ok){
+      if(pending) pending.textContent=j.reply||"（空回复）";
+      AI_CHAT_HISTORY.push({role:"user",content:msg},{role:"assistant",content:j.reply||""});
+      if(AI_CHAT_HISTORY.length>20) AI_CHAT_HISTORY=AI_CHAT_HISTORY.slice(-20);
+    } else if(pending){ pending.textContent="✗ "+(j.error||"调用失败"); pending.classList.add("err"); }
+  }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
+}
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
+safeAddEventListener("aiTestBtn","click",testAIConfig);
+safeAddEventListener("aiChatBtn","click",openAIChat);
+safeAddEventListener("aiChatSendBtn","click",sendAIChat);
+safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
 
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
