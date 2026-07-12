@@ -598,6 +598,7 @@ safeAddEventListener("loginForm", "submit", async e => {
   if (loginErrEl) loginErrEl.textContent = "";
   const submitBtn = e.target.querySelector('button[type="submit"]');
   await withLoading(submitBtn, async () => {
+    let fetched = false; // fetch 是否已成功返回（用于区分"网络失败" vs "登录后处理出错"）
     try {
       const codeEl = $("loginCode");
       const r = await fetchWithTimeout(`${API}/login`, {
@@ -608,6 +609,7 @@ safeAddEventListener("loginForm", "submit", async e => {
           code: codeEl ? codeEl.value.trim() : ""
         })
       }, 15000);
+      fetched = true; // 请求已成功返回——之后任何错误都不是"网络连接失败"
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.mfa_required) {
         const f = $("loginCodeField"); if (f) f.style.display = "";
@@ -653,12 +655,19 @@ safeAddEventListener("loginForm", "submit", async e => {
         if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
       }
     } catch (err) {
-      // Distinguish AbortError (timeout) from generic network errors so
-      // mobile users see a helpful message instead of "TypeError: Failed to fetch".
-      const msg = err.name === "AbortError"
-        ? I18N.t("toast.login_timeout")
-        : I18N.t("toast.login_network_error");
-      if (loginErrEl) loginErrEl.textContent = msg;
+      if (!fetched) {
+        // 网络层失败（fetch 未成功返回）：区分超时 vs 一般网络错误。
+        const msg = err.name === "AbortError"
+          ? I18N.t("toast.login_timeout")
+          : I18N.t("toast.login_network_error");
+        if (loginErrEl) loginErrEl.textContent = msg;
+      } else {
+        // 登录本身已成功（会话已建立），只是登录后初始化出错——绝不误报"网络连接失败"，
+        // 记录到 console 并照常进入控制台，避免把用户卡在登录页。
+        console.error("登录成功但初始化出错：", err);
+        const lv = $("loginView"); if (lv) lv.classList.remove("show");
+        try { startApp(); } catch (_) {}
+      }
     }
   });
 });
