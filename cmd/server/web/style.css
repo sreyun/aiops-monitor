@@ -98,6 +98,19 @@
   --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.06);
   --ov-card-lift:-3px;
   --ov-section-gap:24px;
+
+  /* ---- 语义化别名（v5.5.0 新增，增量美化） ---- */
+  --surface:var(--panel);
+  --surface-hover:var(--panel2);
+  --border-subtle:var(--line);
+  --border-strong:var(--line2);
+  --text-primary:var(--txt);
+  --text-secondary:var(--txt2);
+  --text-tertiary:var(--muted);
+  --elevation-1:var(--shadow-sm);
+  --elevation-2:var(--shadow);
+  --elevation-3:var(--shadow-lg);
+  --elevation-4:var(--shadow-xl);
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -143,6 +156,19 @@
   /* 概览页浅色主题覆盖 */
   --ov-card-shadow:0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.04);
   --ov-card-shadow-hover:0 6px 20px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.06);
+
+  /* 语义化别名（浅色） */
+  --surface:var(--panel);
+  --surface-hover:var(--panel2);
+  --border-subtle:var(--line);
+  --border-strong:var(--line2);
+  --text-primary:var(--txt);
+  --text-secondary:var(--txt2);
+  --text-tertiary:var(--muted);
+  --elevation-1:var(--shadow-sm);
+  --elevation-2:var(--shadow);
+  --elevation-3:var(--shadow-lg);
+  --elevation-4:var(--shadow-xl);
 }
 *{box-sizing:border-box}
 /* 全局表单元素重置：移除 iOS Safari / Android Chrome 默认的橙色/红色 outline、
@@ -1992,6 +2018,218 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
   opacity:0;transition:opacity .2s;z-index:99999;pointer-events:none}
 .loadbar.active{opacity:1;animation:loadbar-slide 1.1s ease-in-out infinite}
 @keyframes loadbar-slide{0%{transform:scaleX(.08)}50%{transform:scaleX(.55)}100%{transform:scaleX(.08)}}
+
+/* ============================================================
+   v5.5.0 增量美化 — 卡片与容器（Task 10）
+   ============================================================ */
+
+/* 主机卡片：hover 阴影增强 + 状态指示器优化 */
+.host{
+  transition:transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+}
+.host:hover{
+  transform:translateY(-1px);
+  box-shadow:var(--elevation-2);
+  border-color:var(--hover-border);
+}
+.host.online{ border-left:3px solid var(--ok) }
+.host.offline{ border-left:3px solid var(--gray-off) }
+
+/* 监控检测卡片：统一风格 */
+.check-card{
+  transition:transform var(--transition), box-shadow var(--transition);
+}
+.check-card:hover{
+  transform:translateY(-1px);
+  box-shadow:var(--elevation-2);
+}
+
+/* SRE 事件卡片：层次感增强 */
+.sre-event{
+  transition:transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+}
+.sre-event:hover{
+  border-color:var(--hover-border);
+  box-shadow:var(--elevation-1);
+}
+
+/* ============================================================
+   v5.5.0 增量美化 — 按钮与输入（Task 11）
+   ============================================================ */
+
+/* 主按钮：渐变背景 + hover 提亮 */
+.btn.primary{
+  background:linear-gradient(135deg, var(--accent), var(--accent-hover));
+  box-shadow:0 1px 3px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.08);
+}
+.btn.primary:hover{
+  background:linear-gradient(135deg, var(--accent-hover), var(--accent));
+  box-shadow:0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.12);
+}
+
+/* 次要按钮：边框式 */
+.btn.secondary{
+  background:transparent;
+  border-color:var(--accent-border);
+  color:var(--accent-txt);
+}
+.btn.secondary:hover{
+  background:var(--accent-soft);
+  border-color:var(--accent);
+}
+
+/* 下拉菜单：阴影增强、圆角统一 */
+.cat-dd-menu, .dropdown-menu{
+  box-shadow:var(--elevation-3);
+  border:1px solid var(--border-strong);
+  border-radius:var(--r);
+}
+
+/* 标签（badge）：统一 pill 形状 */
+.badge{
+  border-radius:999px;
+  padding:2px 10px;
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:.01em;
+}
+
+/* ============================================================
+   v5.5.0 增量美化 — 弹窗与遮罩（Task 12）
+   ============================================================ */
+
+/* 遮罩层：模糊背景增强 */
+.mask{
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+}
+
+/* 弹窗关闭按钮：统一 hover 效果 */
+.modal-close, .mask-close{
+  width:32px; height:32px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:var(--r-sm);
+  border:none; background:transparent;
+  color:var(--muted); cursor:pointer;
+  font-size:18px; transition:background var(--transition-fast), color var(--transition-fast);
+}
+.modal-close:hover, .mask-close:hover{
+  background:var(--panel3);
+  color:var(--txt);
+}
+
+/* AI/Hermes 聊天面板：消息气泡美化 */
+.hermes-msg{
+  padding:10px 14px;
+  border-radius:var(--r-lg);
+  margin-bottom:8px;
+  max-width:88%;
+  line-height:1.5;
+  font-size:13px;
+}
+.hermes-msg.user{
+  background:var(--accent-soft);
+  color:var(--accent-txt);
+  margin-left:auto;
+  border-bottom-right-radius:4px;
+}
+.hermes-msg.assistant{
+  background:var(--panel2);
+  color:var(--txt);
+  border-bottom-left-radius:4px;
+}
+
+/* ============================================================
+   v5.5.0 增量美化 — 导航与侧边栏（Task 13）
+   ============================================================ */
+
+/* 品牌标识区域：渐变文字 */
+.brand{
+  background:linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+  font-weight:700;
+}
+
+/* 导航分组折叠：动画优化 */
+.nav-group-items{
+  overflow:hidden;
+  transition:max-height var(--transition-slow), opacity var(--transition);
+}
+.nav-group.collapsed .nav-group-items{
+  max-height:0;
+  opacity:0;
+}
+
+/* ============================================================
+   v5.5.0 增量美化 — 表格与列表（Task 14）
+   ============================================================ */
+
+/* 表头 sticky 效果 */
+table thead th{
+  position:sticky;
+  top:0;
+  z-index:2;
+  background:var(--panel);
+}
+
+/* 行 hover 高亮 */
+table tbody tr{
+  transition:background var(--transition-fast);
+}
+table tbody tr:hover{
+  background:var(--surface-hover);
+}
+
+/* 空态提示美化 */
+.empty-line{
+  color:var(--text-tertiary);
+  font-size:13px;
+  padding:24px;
+  text-align:center;
+}
+
+/* ============================================================
+   v5.5.0 增量美化 — 移动端适配（Task 15）
+   ============================================================ */
+
+/* 卡片网格自适应 */
+@media (max-width:1200px){
+  .cards{ grid-template-columns:repeat(3,1fr) }
+}
+@media (max-width:768px){
+  .cards{ grid-template-columns:repeat(2,1fr); gap:10px }
+
+  /* 侧边栏自动折叠 */
+  .app{ grid-template-columns:0 1fr }
+  .app .side{ transform:translateX(-100%); transition:transform var(--transition) }
+  .app.side-open .side{ transform:translateX(0); z-index:50 }
+
+  /* 弹窗全屏模式 */
+  .modal{
+    max-width:100% !important;
+    border-radius:var(--r-lg) var(--r-lg) 0 0;
+    margin:auto 0 0 0;
+  }
+  .mask{ align-items:flex-end; padding:0 }
+
+  /* 触摸目标最小 44px */
+  .btn, .nav-item, .tb-icon, .tab{
+    min-height:var(--touch-min);
+  }
+
+  /* 表格横向滚动 */
+  .table-wrap{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+}
+@media (max-width:480px){
+  .cards{ grid-template-columns:1fr; gap:8px }
+  .card{ padding:12px 14px }
+  .card .v{ font-size:20px }
+}
 
 /* 尊重 prefers-reduced-motion（前庭敏感 / 无障碍合规） */
 @media (prefers-reduced-motion: reduce){

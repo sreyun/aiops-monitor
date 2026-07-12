@@ -1,0 +1,1730 @@
+/* ============================================================
+   AIOps Monitor · terminal.js — 远程终端、VT100 仿真、会话管理、回放、ZMODEM
+   依赖：core.js（$, esc, toast, safeAddEventListener, copyToClipboard, AIOps 命名空间）
+   加载顺序：在 core.js 之后，auth.js 之前
+   ============================================================ */
+"use strict";
+
+window.AIOps = window.AIOps || {};
+
+/* ---------- 远程终端（经 Agent 反向通道）· 多标签 ---------- */
+let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
+let TERM_ACTIVE = -1;    // active tab index
+let TERM_RESIZE = null;  // window resize listener
+
+/* ---------- v5.3.0: 终端二次认证 ---------- */
+let TERM_AUTH_VERIFIED = false;    // 当前会话是否已验证终端密码
+let TERM_AUTH_CHECKING = false;    // 是否正在执行认证流程
+let TERM_AUTH_PENDING = null;      // 待处理的终端打开请求 {id, name}
+
+function openTerminal(id, name) {
+  // 多会话支持：同一 hostID 可创建多个标签页，每个标签页拥有独立的 WebSocket 连接。
+  // 如果已有该主机的标签页且处于 dock 收起状态，优先恢复而不是新建。
+  const dockedIdx = TERM_TABS.findIndex(t => t.id === id && TERM_DOCK_IDS.has(t.id));
+  if (dockedIdx >= 0) {
+    TERM_DOCK_IDS.delete(id);
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+    if (dockItem) dockItem.remove();
+    updateTermDock();
+    switchTermTab(dockedIdx);
+    $("termMask").classList.add("show");
+    requestAnimationFrame(() => requestAnimationFrame(termRefit));
+    return;
+  }
+
+  // v5.3.0: 终端二次认证流程
+  if (TERM_AUTH_CHECKING) return; // 避免重复触发
+  TERM_AUTH_PENDING = { id, name };
+  checkTerminalAccess();
+}
+
+/* ---------- 终端右键菜单 ---------- */
+let TERM_CMENU_EL = null;
+function initTermContextMenu() {
+  if (TERM_CMENU_EL) return;
+  TERM_CMENU_EL = document.createElement("div");
+  TERM_CMENU_EL.className = "term-cmenu";
+  TERM_CMENU_EL.innerHTML = `
+    <div class="term-cmenu-item" data-action="copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span>复制</span><span class="cmenu-key">Ctrl+C</span>
+    </div>
+    <div class="term-cmenu-item" data-action="paste">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+      <span>粘贴</span><span class="cmenu-key">Ctrl+V</span>
+    </div>
+    <div class="term-cmenu-sep"></div>
+    <div class="term-cmenu-item" data-action="reconnect">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+      <span>重新连接</span>
+    </div>
+    <div class="term-cmenu-sep"></div>
+    <div class="term-cmenu-item" data-action="clear">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <span>清屏</span>
+    </div>
+  `;
+  document.body.appendChild(TERM_CMENU_EL);
+  // 点击菜单外部关闭
+  document.addEventListener("click", (e) => {
+    if (TERM_CMENU_EL && !TERM_CMENU_EL.contains(e.target)) {
+      TERM_CMENU_EL.classList.remove("show");
+    }
+  });
+  // Esc 关闭
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && TERM_CMENU_EL) {
+      TERM_CMENU_EL.classList.remove("show");
+    }
+  });
+  // 菜单项点击处理
+  TERM_CMENU_EL.addEventListener("click", (e) => {
+    const item = e.target.closest(".term-cmenu-item");
+    if (!item || item.classList.contains("disabled")) return;
+    const action = item.dataset.action;
+    const tab = TERM_CMENU_EL._termTab;
+    TERM_CMENU_EL.classList.remove("show");
+    if (!tab) return;
+    switch (action) {
+      case "copy": {
+        const sel = getSelectedTermText(tab);
+        if (sel) copyToClipboard(sel).then(() => toast(I18N.t("toast.copied"), "ok"), () => toast(I18N.t("toast.copy_failed"), "err"));
+        break;
+      }
+      case "paste": {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(t => {
+            if (t && tab.ws && tab.ws.readyState === 1) termSend(tab.ws, t);
+          }).catch(() => {});
+        }
+        // 聚焦输入框让用户手动粘贴
+        if (tab.inputEl) tab.inputEl.focus({ preventScroll: true });
+        break;
+      }
+      case "reconnect":
+        if (tab.ws && tab.ws.readyState === 1) { toast(I18N.t("term.connected"), "info"); return; }
+        reconnectTermTab(tab);
+        break;
+      case "clear":
+        if (tab.vt && tab.vt.fullReset) {
+          tab.vt.fullReset();
+          tab.vt.render();
+        }
+        break;
+    }
+  });
+}
+function showTermContextMenu(tab, e) {
+  initTermContextMenu();
+  if (!TERM_CMENU_EL) return;
+  e.preventDefault();
+  e.stopPropagation();
+  TERM_CMENU_EL._termTab = tab;
+  // 更新菜单项状态
+  const copyItem = TERM_CMENU_EL.querySelector('[data-action="copy"]');
+  const reconnectItem = TERM_CMENU_EL.querySelector('[data-action="reconnect"]');
+  const hasSelection = getSelectedTermText(tab).length > 0;
+  if (copyItem) copyItem.classList.toggle("disabled", !hasSelection);
+  const disconnected = !tab.ws || tab.ws.readyState !== 1;
+  if (reconnectItem) reconnectItem.classList.toggle("disabled", !disconnected);
+  // 定位
+  TERM_CMENU_EL.style.display = "block";
+  let x = e.clientX, y = e.clientY;
+  const mw = TERM_CMENU_EL.offsetWidth || 160;
+  const mh = TERM_CMENU_EL.offsetHeight || 150;
+  if (x + mw > window.innerWidth) x = window.innerWidth - mw - 4;
+  if (y + mh > window.innerHeight) y = window.innerHeight - mh - 4;
+  if (x < 0) x = 4;
+  if (y < 0) y = 4;
+  TERM_CMENU_EL.style.left = x + "px";
+  TERM_CMENU_EL.style.top = y + "px";
+  TERM_CMENU_EL.classList.add("show");
+}
+
+/* ---------- v5.3.0: 终端二次认证流程 ---------- */
+const TERM_PROTOCOL_KEY = "aiops_term_protocol_agreed";
+
+// 实际执行终端打开（原 openTerminal 后半部分逻辑）
+function doOpenTerminal(id, name) {
+  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id);
+  const tabName = sameHostTabs.length > 0 ? `${name} (${sameHostTabs.length + 1})` : name;
+  createTermTab(id, name, tabName);
+}
+
+// 终端访问权限检查：协议 → 密码状态 → 验证
+async function checkTerminalAccess() {
+  if (TERM_AUTH_CHECKING) return;
+  TERM_AUTH_CHECKING = true;
+
+  try {
+    // 1. 检查协议是否已同意
+    if (!localStorage.getItem(TERM_PROTOCOL_KEY)) {
+      showTermProtocol();
+      return;
+    }
+
+    // 2. 检查是否已设置密码
+    const statusRes = await fetch("/api/user/terminal-password/status", { credentials: "include" });
+    const status = await statusRes.json().catch(() => ({}));
+
+    if (!status.has_password) {
+      // 未设置密码，弹出设置窗口
+      showTermSetPassword();
+      return;
+    }
+
+    // 3. 检查当前会话是否已验证——以服务端会话状态为准：浏览器刷新后本地
+    //    TERM_AUTH_VERIFIED 会被重置，但服务端 session 仍记得已验证，
+    //    因此这里读取 status.verified 并同步本地标记，避免刷新后反复重输终端密码。
+    if (status.verified) TERM_AUTH_VERIFIED = true;
+    if (TERM_AUTH_VERIFIED) {
+      proceedToTerminal();
+      return;
+    }
+
+    // 需要验证密码
+    showTermVerify();
+  } catch (e) {
+    TERM_AUTH_CHECKING = false;
+    toast(I18N.t("toast.network_error"), "err");
+  }
+}
+
+// 协议同意后继续流程
+function onTermProtocolAgreed() {
+  localStorage.setItem(TERM_PROTOCOL_KEY, "1");
+  $("termProtocolMask").classList.remove("show");
+  // 重置检查锁，让 checkTerminalAccess 能继续执行后续步骤
+  TERM_AUTH_CHECKING = false;
+  checkTerminalAccess();
+}
+
+// 显示协议弹窗
+function showTermProtocol() {
+  $("termProtocolAgree").checked = false;
+  $("termProtocolContinue").disabled = true;
+  $("termProtocolMask").classList.add("show");
+}
+
+// 显示密码设置弹窗
+function showTermSetPassword() {
+  $("termSetPwd").value = "";
+  $("termSetPwd2").value = "";
+  $("termSetPwdErr").textContent = "";
+  $("termSetPwdErr").style.display = "none";
+  $("termSetPwdMask").classList.add("show");
+}
+
+// 显示密码验证弹窗
+function showTermVerify() {
+  $("termVerifyPwd").value = "";
+  $("termVerifyErr").textContent = "";
+  $("termVerifyErr").style.display = "none";
+  $("termAttemptsInfo").style.display = "none";
+  $("termVerifyMask").classList.add("show");
+  setTimeout(() => { const el = $("termVerifyPwd"); if (el) el.focus(); }, 100);
+}
+
+// 密码设置/验证完成后打开终端
+function proceedToTerminal() {
+  TERM_AUTH_CHECKING = false;
+  if (!TERM_AUTH_PENDING) return;
+  const { id, name } = TERM_AUTH_PENDING;
+  TERM_AUTH_PENDING = null;
+  doOpenTerminal(id, name);
+}
+
+// 取消终端认证流程
+function cancelTermAuth() {
+  TERM_AUTH_CHECKING = false;
+  TERM_AUTH_PENDING = null;
+  $("termProtocolMask").classList.remove("show");
+  $("termSetPwdMask").classList.remove("show");
+  $("termVerifyMask").classList.remove("show");
+}
+
+// 提交设置终端密码
+async function submitTermSetPassword() {
+  const pwd = $("termSetPwd").value;
+  const pwd2 = $("termSetPwd2").value;
+  const errEl = $("termSetPwdErr");
+
+  if (!pwd || !pwd2) {
+    errEl.textContent = I18N.t("valid.fill_password");
+    errEl.style.display = "block";
+    return;
+  }
+  if (pwd !== pwd2) {
+    errEl.textContent = I18N.t("term_auth.password_mismatch");
+    errEl.style.display = "block";
+    return;
+  }
+  if (pwd.length < 8) {
+    errEl.textContent = I18N.t("term_auth.password_too_short");
+    errEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/user/terminal-password/set", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pwd })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      TERM_AUTH_VERIFIED = true;
+      $("termSetPwdMask").classList.remove("show");
+      toast(I18N.t("term_auth.password_set_ok"), "ok");
+      proceedToTerminal();
+    } else {
+      errEl.textContent = j.error || I18N.t("toast.save_failed");
+      errEl.style.display = "block";
+    }
+  } catch (e) {
+    errEl.textContent = I18N.t("toast.network_error");
+    errEl.style.display = "block";
+  }
+}
+
+// 提交验证终端密码
+async function submitTermVerify() {
+  const pwd = $("termVerifyPwd").value;
+  const errEl = $("termVerifyErr");
+  const attemptsEl = $("termAttemptsInfo");
+
+  if (!pwd) {
+    errEl.textContent = I18N.t("valid.enter_password");
+    errEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/user/terminal-password/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pwd })
+    });
+    const j = await r.json().catch(() => ({}));
+
+    if (r.ok) {
+      TERM_AUTH_VERIFIED = true;
+      $("termVerifyMask").classList.remove("show");
+      toast(I18N.t("term_auth.password_verified"), "ok");
+      proceedToTerminal();
+    } else {
+      if (j.locked) {
+        // 锁定状态
+        $("termVerifyMask").classList.remove("show");
+        $("termLockedMask").classList.add("show");
+        TERM_AUTH_CHECKING = false;
+        TERM_AUTH_PENDING = null;
+        return;
+      }
+      errEl.textContent = j.error || I18N.t("toast.verify_failed");
+      errEl.style.display = "block";
+      if (typeof j.remaining === "number" && j.remaining > 0) {
+        attemptsEl.textContent = I18N.t("term_auth.remaining_attempts") + j.remaining;
+        attemptsEl.style.display = "block";
+      }
+      $("termVerifyPwd").value = "";
+      $("termVerifyPwd").focus();
+    }
+  } catch (e) {
+    errEl.textContent = I18N.t("toast.network_error");
+    errEl.style.display = "block";
+  }
+}
+
+// 密码可见性切换
+function toggleTermPwdVisibility(inputId, btnId) {
+  const input = $(inputId);
+  const btn = $(btnId);
+  if (!input || !btn) return;
+  const isPassword = input.type === "password";
+  input.type = isPassword ? "text" : "password";
+  btn.querySelector("svg").innerHTML = isPassword
+    ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+}
+
+function createTermTab(id, name, tabName) {
+  tabName = tabName || name;
+  const screens = $("termScreens"), tabbar = $("termTabbar");
+  const screen = document.createElement("pre");
+  screen.className = "term-screen"; screen.tabIndex = 0; screen.spellcheck = false;
+  screens.appendChild(screen);
+  const tab = document.createElement("button");
+  tab.className = "term-tab";
+  tab.innerHTML = `<span>${esc(tabName)}</span><span class="term-tab-close" title="${I18N.t('ui.close_tab')}">×</span>`;
+  tabbar.appendChild(tab);
+  const vt = makeVT(screen);
+  screen._vt = vt;
+  /* 移动端虚拟键盘支持：在终端屏幕内注入隐藏 textarea 捕获输入。
+     必须在 makeVT() 之后创建——makeVT 会 screen.innerHTML="" 清空子节点。
+     <pre> 元素在移动端无法唤起虚拟键盘，<textarea> 可以。 */
+  const input = document.createElement("textarea");
+  input.className = "term-input";
+  input.setAttribute("autocapitalize", "off");
+  input.setAttribute("autocorrect", "off");
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("spellcheck", "false");
+  input.setAttribute("aria-label", I18N.t("misc.terminal_input"));
+  input.setAttribute("enterkeyhint", "enter");
+  input.setAttribute("rows", "1");
+  input.setAttribute("wrap", "off");
+  input.readOnly = false;
+  screen.appendChild(input);
+  const tabObj = {id, hostId: id, name, tabName, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false};
+  TERM_TABS.push(tabObj);
+  const idx = TERM_TABS.length - 1;
+  tab.onclick = (e) => {
+    if (e.target.classList.contains("term-tab-close")) { e.stopPropagation(); closeTermTab(TERM_TABS.indexOf(tabObj)); }
+    else switchTermTab(TERM_TABS.indexOf(tabObj));
+  };
+  // 键盘事件绑定到隐藏 textarea（桌面+移动端统一入口）
+  input.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj); };
+  // 粘贴
+  input.onpaste = ev => {
+    ev.preventDefault();
+    const t = (ev.clipboardData || window.clipboardData).getData("text");
+    if (t && tabObj.ws) termSend(tabObj.ws, t);
+  };
+  // screen 级粘贴兜底：textarea 未聚焦时也能接收粘贴
+  screen.addEventListener("paste", ev => {
+    if (document.activeElement === input) return;
+    ev.preventDefault();
+    input.focus({ preventScroll: true });
+    const t = (ev.clipboardData || window.clipboardData).getData("text");
+    if (t && tabObj.ws) termSend(tabObj.ws, t);
+  });
+  // input 事件：移动端虚拟键盘字符输入 + 桌面端可打印字符（termKeyDown 不再处理可打印字符）
+  input.addEventListener("input", ev => {
+    if (tabObj.composing || ev.isComposing) return; // IME 组合中，等 compositionend
+    const text = input.value;
+    if (text && tabObj.ws) termSend(tabObj.ws, text);
+    input.value = "";
+  });
+  // IME 组合输入（中文/日文等输入法）
+  input.addEventListener("compositionstart", () => { tabObj.composing = true; });
+  input.addEventListener("compositionend", ev => {
+    tabObj.composing = false;
+    if (ev.data && tabObj.ws) termSend(tabObj.ws, ev.data);
+    input.value = "";
+  });
+  // beforeinput 兜底：部分移动浏览器 keydown 不触发 Backspace，用 beforeinput 捕获
+  input.addEventListener("beforeinput", ev => {
+    if (tabObj.composing) return;
+    if (ev.inputType === "deleteContentBackward") {
+      ev.preventDefault();
+      if (tabObj.ws) termSend(tabObj.ws, "\x7f");
+    }
+  });
+  // mouseup 聚焦隐藏 textarea：在鼠标松开后聚焦，不干扰用户拖拽选区。
+  // （mousedown 时 focus() 会让浏览器把 textarea 作为选区上下文，
+  //  导致 window.getSelection().rangeCount 变为 0，选区不可见。）
+  screen.addEventListener("mouseup", function(ev) {
+    // 如果用户刚完成了一次拖拽选区（选中了文本），不要立即聚焦 textarea，
+    // 否则会清除选区。仅当用户单纯点击（无选区变化）时聚焦。
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    if (document.activeElement !== input) {
+      input.focus({ preventScroll: true });
+    }
+  });
+  // 键盘事件委托：当 screen(pre) 被聚焦但 textarea 未聚焦时（例如用户
+  // 点击终端后未选中文本），将 keydown 重定向到 textarea，确保 termKeyDown
+  // 能够正确处理所有键盘输入。
+  screen.addEventListener("keydown", function(ev) {
+    if (document.activeElement !== input) {
+      input.focus({ preventScroll: true });
+      // 重新构造并分发事件到 textarea，让 input.onkeydown 处理
+      const newEv = new KeyboardEvent("keydown", {
+        key: ev.key, code: ev.code, keyCode: ev.keyCode, which: ev.which,
+        ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey,
+        altKey: ev.altKey, metaKey: ev.metaKey,
+        repeat: ev.repeat, bubbles: true, cancelable: true
+      });
+      ev.preventDefault();
+      ev.stopPropagation();
+      input.dispatchEvent(newEv);
+    }
+  });
+  // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
+  screen.addEventListener("focus", function() {
+    if (input && document.activeElement !== input) input.focus({ preventScroll: true });
+  });
+  // JS fallback for :focus-within — toggle .term-focused class on screen
+  // This ensures cursor blink animation works on iOS Safari where :focus-within
+  // may not trigger for opacity:0 elements
+  input.addEventListener("focus", function() {
+    screen.classList.add("term-focused");
+  });
+  input.addEventListener("blur", function() {
+    screen.classList.remove("term-focused");
+  });
+  // Mobile keyboard viewport adaptation: when virtual keyboard appears,
+  // adjust terminal height to keep cursor visible
+  if (window.visualViewport) {
+    const vpHandler = function() {
+      const mask = $("termMask");
+      if (mask && mask.classList.contains("show")) {
+        const modal = mask.querySelector(".term-modal");
+        if (modal) {
+          modal.style.height = window.visualViewport.height + "px";
+        }
+      }
+    };
+    window.visualViewport.addEventListener("resize", vpHandler);
+    window.visualViewport.addEventListener("scroll", vpHandler);
+  }
+  switchTermTab(idx);
+  $("termMask").classList.remove("maximized");
+  const mb = $("termMaxBtn"); if (mb) mb.title = I18N.t("ui.maximize_window");
+  $("termMask").classList.add("show");
+  connectTermWS(tabObj);
+}
+
+function connectTermWS(tab) {
+  const screen = tab.screenEl, vt = tab.vt;
+  setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
+  ws.binaryType = "arraybuffer";
+  tab.ws = ws;
+  const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
+  ws.onopen = () => { tab.retry = 0; setTermStatus(I18N.t("ui.connected"), "on");
+    // 更新 dock 卡片状态
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot on"; } }
+    if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
+  ws.onmessage = ev => {
+    const data = new Uint8Array(ev.data);
+    // Check for ZMODEM/file-transfer frame: [0xFF][0xFE][type][len:4 BE][payload]
+    if (data.length >= 7 && data[0] === 0xFF && data[1] === 0xFE) {
+      handleZmBrowserFrame(tab, data);
+      return;
+    }
+    // Normal PTY output
+    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(data, { stream: true });
+    vt.feed(text);
+  };
+  ws.onclose = () => {
+    setTermStatus(I18N.t("ui.disconnected"), "off");
+    if (tab.ws === ws) tab.ws = null;
+    // 更新 dock 卡片状态
+    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot off"; } }
+
+  };
+  ws.onerror = () => setTermStatus(I18N.t("ui.connect_error"), "off");
+}
+
+function switchTermTab(idx) {
+  if (idx < 0 || idx >= TERM_TABS.length) return;
+  TERM_ACTIVE = idx;
+  TERM_TABS.forEach((t, i) => { t.tabEl.classList.toggle("active", i === idx); t.screenEl.classList.toggle("active", i === idx); });
+  $("termTitle").textContent = (TERM_TABS[idx].tabName || TERM_TABS[idx].name) + " " + I18N.t("term.title");
+  requestAnimationFrame(() => { const t = TERM_TABS[idx]; if (t && t.inputEl) t.inputEl.focus({ preventScroll: true }); else if (t) t.screenEl.focus(); });
+  if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
+  TERM_RESIZE = () => termRefit();
+  window.addEventListener("resize", TERM_RESIZE);
+}
+
+function closeTermTab(idx) {
+  if (idx < 0 || idx >= TERM_TABS.length) return;
+  const tab = TERM_TABS[idx];
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
+  tab.screenEl.remove(); tab.tabEl.remove();
+  // 清理对应的 dock 卡片
+  TERM_DOCK_IDS.delete(tab.id);
+  const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+  if (dockItem) dockItem.remove();
+  TERM_TABS.splice(idx, 1);
+  if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
+  if (TERM_ACTIVE >= 0) switchTermTab(TERM_ACTIVE);
+  else { $("termMask").classList.remove("show"); if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; } }
+  updateTermDock();
+}
+
+function closeAllTermTabs() {
+  TERM_TABS.forEach(t => { if (t.ws) { try { t.ws.close(); } catch(e) {} } });
+  TERM_TABS = []; TERM_ACTIVE = -1;
+  const sc = $("termScreens"); if (sc) sc.innerHTML = "";
+  const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
+  if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  clearTermDock();
+}
+
+/* ---------- 终端重连 ---------- */
+function reconnectTermTab(tab) {
+  if (!tab) {
+    if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+    tab = TERM_TABS[TERM_ACTIVE];
+  }
+  // 关闭旧连接
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} tab.ws = null; }
+  tab.retry = 0;
+  connectTermWS(tab);
+}
+
+/* ---------- 文件上传/下载（按钮交互） ---------- */
+function startTermFileUpload() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
+  // 先弹出目标目录输入（默认 /tmp/），文件名将在选择文件后自动拼接
+  const targetDir = prompt("请输入远程目标目录（如 /tmp/ 或 /home/user/）：", "/tmp/");
+  if (!targetDir || !targetDir.trim()) return;
+  // 确保目录以 / 结尾
+  const dir = targetDir.trim().replace(/\/+$/, "") + "/";
+  // 弹出文件选择器
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  input.style.top = "-9999px";
+  document.body.appendChild(input);
+  input.onchange = async () => {
+    const file = input.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      toast(I18N.t("term.file_too_large"), "err");
+      return;
+    }
+    // 自动拼接目标目录 + 文件名
+    const targetPath = dir + file.name;
+    toast(I18N.t("term.uploading") + ": " + file.name + " → " + targetPath + " (" + formatZmSize(file.size) + ")", "info");
+    try {
+      // 发送上传元数据 'f' 帧
+      const meta = JSON.stringify({ filename: file.name, size: file.size, target_path: targetPath });
+      const metaBytes = new TextEncoder().encode(meta);
+      const metaFrame = new Uint8Array(metaBytes.length + 1);
+      metaFrame[0] = 0x66; // 'f'
+      metaFrame.set(metaBytes, 1);
+      tab.ws.send(metaFrame);
+      // 确认 WebSocket 仍然连接
+      if (tab.ws.readyState !== 1) { toast(I18N.t("term.upload_cancelled"), "err"); return; }
+      // 分块发送文件数据
+      const buf = await file.arrayBuffer();
+      const data = new Uint8Array(buf);
+      const chunkSize = 32 * 1024;
+      let bytesSent = 0;
+      for (let offset = 0; offset < data.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, data.length);
+        termSendUpload(tab.ws, data.slice(offset, end));
+        bytesSent = end;
+        // 每 128KB 让出主线程，避免阻塞 WebSocket 发送缓冲区
+        if (offset % (chunkSize * 4) === 0 && offset > 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      // 等待最后一帧被 WebSocket 发送完毕
+      await new Promise(r => setTimeout(r, 50));
+      termSendEnd(tab.ws);
+      tab._uploadTarget = targetPath;
+    } catch (err) {
+      toast(I18N.t("term.upload_failed") + ": " + err.message, "err");
+    }
+  };
+  // 使用 setTimeout 确保 prompt 关闭后浏览器恢复用户手势上下文
+  setTimeout(() => input.click(), 150);
+}
+
+function startTermFileDownload() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
+  const remotePath = prompt("请输入远程文件路径（如 /var/log/syslog）：", "/tmp/");
+  if (!remotePath || !remotePath.trim()) return;
+  toast(`正在请求下载: ${remotePath.trim()}`, "info");
+  // 发送下载请求 'd' 帧
+  const meta = JSON.stringify({ remote_path: remotePath.trim() });
+  const metaBytes = new TextEncoder().encode(meta);
+  const metaFrame = new Uint8Array(metaBytes.length + 1);
+  metaFrame[0] = 0x64; // 'd'
+  metaFrame.set(metaBytes, 1);
+  tab.ws.send(metaFrame);
+  // 准备接收下载数据
+  tab.fileDownload = { filename: remotePath.split("/").pop() || "download.dat", chunks: [], received: 0 };
+}
+
+/* ---------- 终端收起到右下角 ---------- */
+let TERM_DOCK_IDS = new Set();  // 收起的 tab id 集合
+
+function minimizeTerminal() {
+  if (TERM_TABS.length === 0) return;
+  TERM_TABS.forEach(t => TERM_DOCK_IDS.add(t.id));
+  const mask = $("termMask");
+  if (mask) {
+    const modal = mask.querySelector(".term-modal");
+    if (modal) {
+      modal.style.transition = "transform .2s ease, opacity .2s ease";
+      modal.style.transform = "scale(.92) translateY(20px)";
+      modal.style.opacity = "0";
+      setTimeout(() => {
+        mask.classList.remove("show", "maximized");
+        modal.style.transition = "";
+        modal.style.transform = "";
+        modal.style.opacity = "";
+      }, 200);
+    } else {
+      mask.classList.remove("show", "maximized");
+    }
+  }
+  if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  setTimeout(updateTermDock, 200);
+}
+
+function updateTermDock() {
+  const dock = $("termDock"); if (!dock) return;
+  // 移除已不存在的 tab 对应的卡片
+  dock.querySelectorAll(".term-dock-item").forEach(el => {
+    if (!TERM_TABS.find(t => t.id === el.dataset.tabId)) el.remove();
+  });
+  // 为每个收起的 tab 创建/更新卡片
+  const docked = TERM_TABS.filter(t => TERM_DOCK_IDS.has(t.id));
+  dock.style.display = docked.length > 0 ? "flex" : "none";
+  docked.forEach(tab => {
+    let item = dock.querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (!item) {
+      item = document.createElement("div");
+      item.className = "term-dock-item";
+      item.dataset.tabId = tab.id;
+      item.innerHTML = `
+        <span class="dock-dot"></span>
+        <span class="dock-name"></span>
+        <button class="dock-btn" title="${I18N.t('ui.expand_window')}" aria-label="${I18N.t('ui.expand_window')}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V13a1 1 0 0 1 1-1h12"/><path d="M12 5l-5 7 5-7"/></svg>
+        </button>
+        <button class="dock-btn close" title="${I18N.t('ui.close_session')}" aria-label="${I18N.t('ui.close_session')}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>`;
+      // 点击卡片主体（非按钮）也展开
+      item.addEventListener("click", e => {
+        if (e.target.closest(".dock-btn")) return;
+        expandTermFromDock(tab.id);
+      });
+      item.addEventListener("dblclick", () => expandTermFromDock(tab.id));
+      // 展开按钮
+      item.querySelector(".dock-btn:not(.close)").addEventListener("click", e => {
+        e.stopPropagation(); expandTermFromDock(tab.id);
+      });
+      // 关闭按钮
+      item.querySelector(".dock-btn.close").addEventListener("click", e => {
+        e.stopPropagation(); closeTermFromDock(tab.id);
+      });
+      dock.appendChild(item);
+    }
+    // 更新主机名 + tooltip
+    const nameEl = item.querySelector(".dock-name");
+    if (nameEl) {
+      nameEl.textContent = tab.tabName || tab.name;
+      item.title = (tab.tabName || tab.name) + " · " + I18N.t("ui.remote_terminal");
+    }
+    // 更新连接状态
+    const dot = item.querySelector(".dock-dot");
+    if (dot) {
+      dot.className = "dock-dot";
+      if (tab.ws && tab.ws.readyState === 1) dot.classList.add("on");
+      else if (tab.ws && tab.ws.readyState === 3) dot.classList.add("off");
+    }
+  });
+}
+
+function expandTermFromDock(tabId) {
+  const idx = TERM_TABS.findIndex(t => t.id === tabId);
+  if (idx < 0) return;
+  TERM_DOCK_IDS.delete(tabId);
+  switchTermTab(idx);
+  const mask = $("termMask");
+  const modal = mask.querySelector(".term-modal");
+  if (modal) {
+    modal.style.transition = "transform .22s cubic-bezier(.34,1.56,.64,1), opacity .22s ease";
+    modal.style.transform = "scale(.94)";
+    modal.style.opacity = "0";
+    mask.classList.add("show");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        modal.style.transform = "scale(1)";
+        modal.style.opacity = "1";
+        setTimeout(() => {
+          modal.style.transition = "";
+          modal.style.transform = "";
+          modal.style.opacity = "";
+        }, 250);
+      });
+    });
+  } else {
+    mask.classList.add("show");
+  }
+  requestAnimationFrame(() => requestAnimationFrame(termRefit));
+  updateTermDock();
+}
+
+function closeTermFromDock(tabId) {
+  const idx = TERM_TABS.findIndex(t => t.id === tabId);
+  if (idx < 0) return;
+  const tab = TERM_TABS[idx];
+  // Close WS without triggering switchTermTab (modal is hidden — minimized state)
+  if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
+  tab.screenEl.remove();
+  tab.tabEl.remove();
+  TERM_DOCK_IDS.delete(tabId);
+  // Animate dock card removal
+  const item = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
+  if (item) {
+    item.classList.add("removing");
+    setTimeout(() => { item.remove(); updateTermDock(); }, 200);
+  }
+  // Remove from array — but DON'T call switchTermTab (modal is hidden)
+  TERM_TABS.splice(idx, 1);
+  if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
+  // If no tabs left, clean up fully
+  if (TERM_TABS.length === 0) {
+    TERM_ACTIVE = -1;
+    const mask = $("termMask");
+    if (mask) mask.classList.remove("show", "maximized");
+    if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  }
+  // Immediate dock update (the animated removal happens in 200ms)
+  updateTermDock();
+}
+
+function clearTermDock() {
+  TERM_DOCK_IDS.clear();
+  const dock = $("termDock");
+  if (dock) { dock.innerHTML = ""; dock.style.display = "none"; }
+}
+
+/* ---------- 终端会话管理（列表 / 回放 / 旁观） ---------- */
+let TERM_SESSIONS_TIMER = null;
+
+function openTerminalSessions() {
+  $("termSessionsMask").classList.add("show");
+  loadTerminalSessions();
+  if (TERM_SESSIONS_TIMER) clearInterval(TERM_SESSIONS_TIMER);
+  TERM_SESSIONS_TIMER = setInterval(loadTerminalSessions, 3000);
+}
+
+let LAST_TERM_SESSIONS = [];
+let TERM_SEARCH = "";
+
+function loadTerminalSessions() {
+  const mask = $("termSessionsMask");
+  if (!mask || !mask.classList.contains("show")) {
+    if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+    return;
+  }
+  fetch(`${API}/terminal/sessions`).then(r => r.json()).then(sessions => {
+    LAST_TERM_SESSIONS = sessions || [];
+    renderTerminalSessions(LAST_TERM_SESSIONS);
+  }).catch(e => console.warn("load sessions:", e));
+}
+
+function renderTerminalSessions(sessions) {
+  const c = $("termSessionsList");
+  if (!c) return;
+  // 按搜索关键词过滤
+  const q = TERM_SEARCH.trim().toLowerCase();
+  const filtered = q ? sessions.filter(s => {
+    return (s.operator || "").toLowerCase().includes(q) ||
+           (s.hostname || "").toLowerCase().includes(q) ||
+           (s.ip || "").toLowerCase().includes(q);
+  }) : sessions;
+  // 更新计数
+  const cnt = $("termSessionCount");
+  if (cnt) {
+    cnt.textContent = q ? `${filtered.length}/${sessions.length} 条` : `${sessions.length} 条`;
+  }
+  if (filtered.length === 0) {
+    c.innerHTML = `<div style="text-align:center; color:var(--muted2); padding:32px 0">${q ? I18N.t("empty.no_terminal_match") : I18N.t("empty.no_active_sessions")}</div>`;
+    return;
+  }
+  c.innerHTML = filtered.map(s => {
+    const t = new Date(s.created_at * 1000);
+    const time = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+    const ipStr = s.ip ? ` · IP ${esc(s.ip)}` : "";
+    return `<div class="term-session-item">
+      <div class="term-session-info">
+        <div class="term-session-host">${esc(s.hostname)}</div>
+        <div class="term-session-meta">${I18N.t("section.operator")} <strong style="color:var(--accent-txt)">${esc(s.operator)}</strong>${ipStr}${I18N.t("section.start_label")}${time} · ${s.frames} ${I18N.t("ui.frames_recorded")}</div>
+      </div>
+      ${s.observers > 0 ? `<span class="term-session-badge observers">${s.observers} ${I18N.t("ui.observe")}</span>` : `<span class="term-session-badge">${I18N.t("ui.active")}</span>`}
+      <div class="term-session-actions">
+        <button class="btn sm" data-act="term-observe" data-sid="${esc(s.id)}" data-host="${esc(s.hostname)}">${I18N.t("ui.observe")}</button>
+        <button class="btn sm" data-act="term-replay" data-sid="${esc(s.id)}" data-host="${esc(s.hostname)}">${I18N.t("ui.replay")}</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- 终端回放 ---------- */
+let REPLAY = null; // {frames, idx, vt, timer, playing, speed}
+
+function openTerminalReplay(sessionId, hostname) {
+  fetch(`${API}/terminal/sessions/${encodeURIComponent(sessionId)}/replay`)
+    .then(r => r.json())
+    .then(data => {
+      // Replay OUTPUT frames (shell output) + RESIZE frames (terminal dimension changes).
+      // INPUT frames are excluded: the shell output already contains the command echo.
+      const frames = (data.frames || []).filter(f => f.type === "output" || f.type === "resize");
+      if (frames.length === 0) { toast(I18N.t("empty.no_recording"), "err"); return; }
+      // 从第一个 resize 帧获取录制时的初始终端尺寸
+      let initCols = 80, initRows = 24;
+      for (const f of frames) {
+        if (f.type === "resize") {
+          try {
+            const parts = atob(f.data).split("x");
+            const c = parseInt(parts[0]), r = parseInt(parts[1]);
+            if (c >= 20 && r >= 6) { initCols = c; initRows = r; }
+          } catch (e) {}
+          break;
+        }
+      }
+      $("termReplayTitle").textContent = hostname + " " + I18N.t("term.replay_title");
+      const screen = $("termReplayScreen");
+      const vt = makeVT(screen);
+      // 用录制时的终端尺寸初始化 VT，避免 80x24 默认值导致换行错位
+      if (initCols !== 80 || initRows !== 24) {
+        vt.resizeTo(initCols, initRows);
+      }
+      screen._vt = vt;
+      REPLAY = {frames, idx: 0, vt, timer: null, playing: false, speed: 2};
+      $("termReplayMask").classList.add("show");
+      $("termSessionsMask").classList.remove("show");
+      if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+      document.querySelectorAll(".replay-speed-btn").forEach(b => {
+        b.classList.toggle("active", parseFloat(b.dataset.speed) === 2);
+      });
+      updateReplayProgress();
+      playReplay();
+    })
+    .catch(e => toast(I18N.t("toast.load_replay_failed") + e, "err"));
+}
+
+function playReplay() {
+  if (!REPLAY || REPLAY.playing) return;
+  REPLAY.playing = true;
+  const btn = $("replayPlayBtn"); if (btn) btn.textContent = "⏸";
+  const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.playing"); st.className = "term-status on"; }
+  scheduleNextFrame();
+}
+
+function pauseReplay() {
+  if (!REPLAY) return;
+  REPLAY.playing = false;
+  if (REPLAY.timer) { clearTimeout(REPLAY.timer); REPLAY.timer = null; }
+  const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
+  const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.paused"); st.className = "term-status"; }
+}
+
+function scheduleNextFrame() {
+  if (!REPLAY || !REPLAY.playing) return;
+  if (REPLAY.idx >= REPLAY.frames.length) {
+    REPLAY.playing = false;
+    const btn = $("replayPlayBtn"); if (btn) btn.textContent = "▶";
+    const st = $("replayStatus"); if (st) { st.textContent = I18N.t("ui.playback_done"); st.className = "term-status"; }
+    updateReplayProgress();
+    return;
+  }
+  const frame = REPLAY.frames[REPLAY.idx];
+  const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
+  if (frame.type === "resize") {
+    // resize 帧：解析 cols/rows 并调整 VT 网格，不 feed 文本
+    const parts = new TextDecoder().decode(bytes).split("x");
+    const c = parseInt(parts[0]), r = parseInt(parts[1]);
+    if (c >= 20 && r >= 6) REPLAY.vt.resizeTo(c, r);
+  } else {
+    const text = REPLAY.vt.dec.decode(bytes, { stream: true });
+    REPLAY.vt.feed(text);
+  }
+  REPLAY.idx++;
+  updateReplayProgress();
+  let delay = 0;
+  if (REPLAY.idx < REPLAY.frames.length) {
+    const next = REPLAY.frames[REPLAY.idx];
+    delay = (next.ts - frame.ts) / REPLAY.speed;
+    delay = Math.min(Math.max(delay, 1), 3000 / REPLAY.speed);
+  }
+  REPLAY.timer = setTimeout(scheduleNextFrame, delay);
+}
+
+function setReplaySpeed(speed) {
+  if (!REPLAY) return;
+  REPLAY.speed = speed;
+  document.querySelectorAll(".replay-speed-btn").forEach(b => {
+    b.classList.toggle("active", parseFloat(b.dataset.speed) === speed);
+  });
+}
+
+function seekReplay(progress) {
+  if (!REPLAY) return;
+  pauseReplay();
+  const targetIdx = Math.floor(progress * REPLAY.frames.length);
+  // 从头回放：先用第一个 resize 帧确定初始尺寸
+  let initCols = 80, initRows = 24;
+  for (const f of REPLAY.frames) {
+    if (f.type === "resize") {
+      try {
+        const parts = atob(f.data).split("x");
+        const c = parseInt(parts[0]), r = parseInt(parts[1]);
+        if (c >= 20 && r >= 6) { initCols = c; initRows = r; }
+      } catch (e) {}
+      break;
+    }
+  }
+  const screen = $("termReplayScreen");
+  const vt = makeVT(screen);
+  if (initCols !== 80 || initRows !== 24) vt.resizeTo(initCols, initRows);
+  screen._vt = vt;
+  REPLAY.vt = vt;
+  REPLAY.idx = 0;
+  for (let i = 0; i < targetIdx; i++) {
+    const frame = REPLAY.frames[i];
+    const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
+    if (frame.type === "resize") {
+      const parts = new TextDecoder().decode(bytes).split("x");
+      const c = parseInt(parts[0]), r = parseInt(parts[1]);
+      if (c >= 20 && r >= 6) vt.resizeTo(c, r);
+    } else {
+      const text = vt.dec.decode(bytes, { stream: true });
+      vt.feed(text);
+    }
+  }
+  REPLAY.idx = targetIdx;
+  updateReplayProgress();
+}
+
+function updateReplayProgress() {
+  if (!REPLAY) return;
+  const pct = REPLAY.frames.length > 0 ? (REPLAY.idx / REPLAY.frames.length) * 100 : 0;
+  const bar = $("replayProgress"); if (bar) bar.style.width = pct + "%";
+  const time = $("replayTime"); if (time) time.textContent = `${REPLAY.idx} / ${REPLAY.frames.length} 帧`;
+}
+
+function closeReplay() { pauseReplay(); REPLAY = null; }
+
+/* ---------- 终端只读旁观 ---------- */
+let OBSERVE_WS = null;
+
+function openTerminalObserve(sessionId, hostname) {
+  const screen = $("termObserveScreen");
+  const vt = makeVT(screen);
+  screen._vt = vt;
+  $("termObserveTitle").textContent = hostname + " " + I18N.t("term.observe_title");
+  setObserveStatus(I18N.t("ui.connecting"), "");
+  $("termObserveMask").classList.add("show");
+  $("termSessionsMask").classList.remove("show");
+  if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+  closeObserveWS();
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}/observe`);
+  ws.binaryType = "arraybuffer";
+  OBSERVE_WS = ws;
+  ws.onopen = () => setObserveStatus(I18N.t("ui.observing"), "on");
+  ws.onmessage = ev => {
+    const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(new Uint8Array(ev.data), { stream: true });
+    vt.feed(text);
+  };
+  ws.onclose = () => setObserveStatus(I18N.t("ui.session_ended"), "off");
+  ws.onerror = () => setObserveStatus(I18N.t("ui.connect_error"), "off");
+}
+
+function closeObserveWS() {
+  if (OBSERVE_WS) { try { OBSERVE_WS.close(); } catch(e) {} OBSERVE_WS = null; }
+}
+
+function setObserveStatus(txt, cls) {
+  const s = $("observeStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
+}
+// 发送窗口尺寸（帧首字节 'r'，负载 "colsxrows"）→ 服务端 → Agent → PTY
+function termResizeSend(ws, cols, rows) {
+  if (!ws || ws.readyState !== 1) return;
+  const body = new TextEncoder().encode(cols + "x" + rows);
+  const framed = new Uint8Array(body.length + 1);
+  framed[0] = 0x72; // 'r'
+  framed.set(body, 1);
+  ws.send(framed);
+}
+// 重新测量终端并把新尺寸告知 PTY（放大/还原/窗口变化后调用）
+function termRefit() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (tab.vt && tab.ws) { const s = tab.vt.fit(); if (s && tab.ws.readyState === 1) termResizeSend(tab.ws, s.cols, s.rows); }
+}
+
+function setTermStatus(txt, cls) {
+  const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
+  // 同步更新当前活动 tab 的 dock 卡片状态
+  if (TERM_ACTIVE >= 0 && TERM_TABS[TERM_ACTIVE]) {
+    const tab = TERM_TABS[TERM_ACTIVE];
+    const item = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
+    if (item) {
+      const dot = item.querySelector(".dock-dot");
+      if (dot) {
+        dot.className = "dock-dot";
+        if (cls === "on") dot.classList.add("on");
+        else if (cls === "off") dot.classList.add("off");
+      }
+    }
+  }
+}
+function closeTerminalWS() { closeAllTermTabs(); }
+// 发送输入（帧首字节 'i' 标识 input）
+function termSend(ws, str) {
+  if (!ws || ws.readyState !== 1) return;
+  const body = new TextEncoder().encode(str);
+  const framed = new Uint8Array(body.length + 1);
+  framed[0] = 0x69; // 'i'
+  framed.set(body, 1);
+  ws.send(framed);
+}
+// 发送上传数据块（帧首字节 'u'）
+function termSendUpload(ws, chunk) {
+  if (!ws || ws.readyState !== 1) return;
+  const framed = new Uint8Array(chunk.length + 1);
+  framed[0] = 0x75; // 'u'
+  framed.set(chunk, 1);
+  ws.send(framed);
+}
+// 发送上传结束信号（帧首字节 'e'）
+function termSendEnd(ws) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(new Uint8Array([0x65])); // 'e'
+}
+// ---- ZMODEM/文件传输 浏览器端帧处理 ----
+// handleZmBrowserFrame 解析并处理来自 Agent 的 ZMODEM/文件传输帧。
+// 帧格式: [0xFF][0xFE][type][len:4 BE][payload]
+function handleZmBrowserFrame(tab, data) {
+  const zmType = data[2];
+  const zmLen = (data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6];
+  const zmPayload = data.slice(7, 7 + zmLen);
+  switch (zmType) {
+    case 0x5A: { // 'Z' — ZMODEM 信号
+      const info = new TextDecoder().decode(zmPayload);
+      let meta;
+      try { meta = JSON.parse(info); } catch (e) { return; }
+      if (meta.type === "sz") {
+        // 下载：准备接收文件数据
+        tab.zmDownload = { filename: meta.filename || "download.dat", size: meta.size || 0, chunks: [], received: 0 };
+        toast(I18N.t("term.downloading") + ": " + tab.zmDownload.filename + " (" + formatZmSize(tab.zmDownload.size) + ")", "info");
+      } else if (meta.type === "rz") {
+        // 上传：弹出文件选择对话框
+        showZmUploadDialog(tab);
+      }
+      break;
+    }
+    case 0x46: { // 'F' — 文件信息（按钮上传ACK或下载元数据）
+      const info = new TextDecoder().decode(zmPayload);
+      let meta;
+      try { meta = JSON.parse(info); } catch (e) { return; }
+      if (meta.type === "upload_ack") {
+        if (meta.status === "ok") {
+          toast(`上传完成: ${meta.filename || ""}`, "ok");
+        } else {
+          toast(`上传失败: ${meta.message || "未知错误"}`, "err");
+        }
+      } else if (meta.type === "download_meta") {
+        // 下载元数据：准备接收文件数据
+        tab.fileDownload = tab.fileDownload || {};
+        tab.fileDownload.filename = meta.filename || "download.dat";
+        tab.fileDownload.size = meta.size || 0;
+        tab.fileDownload.chunks = [];
+        tab.fileDownload.received = 0;
+        toast(`正在下载: ${meta.filename} (${formatZmSize(meta.size)})`, "info");
+      } else if (meta.type === "download_error") {
+        toast(`下载失败: ${meta.message || "未知错误"}`, "err");
+        tab.fileDownload = null;
+      }
+      break;
+    }
+    case 0x44: // 'D' — 下载数据块
+      if (tab.zmDownload) {
+        tab.zmDownload.chunks.push(zmPayload);
+        tab.zmDownload.received += zmPayload.length;
+      }
+      if (tab.fileDownload) {
+        tab.fileDownload.chunks.push(zmPayload);
+        tab.fileDownload.received += zmPayload.length;
+      }
+      break;
+    case 0x45: // 'E' — 传输完成
+      if (tab.zmDownload) {
+        const dl = tab.zmDownload;
+        const blob = new Blob(dl.chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = dl.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(I18N.t("term.download_done") + ": " + dl.filename, "ok");
+        tab.zmDownload = null;
+      }
+      if (tab.fileDownload) {
+        const dl = tab.fileDownload;
+        const blob = new Blob(dl.chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = dl.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(`下载完成: ${dl.filename}`, "ok");
+        tab.fileDownload = null;
+      }
+      break;
+  }
+}
+// showZmUploadDialog 弹出文件选择对话框，读取文件并通过 WebSocket 上传。
+function showZmUploadDialog(tab) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.style.display = "none";
+  document.body.appendChild(input);
+  input.onchange = async () => {
+    const file = input.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      toast(I18N.t("term.file_too_large"), "err");
+      return;
+    }
+    toast(I18N.t("term.uploading") + ": " + file.name + " (" + formatZmSize(file.size) + ")", "info");
+    try {
+      const buf = await file.arrayBuffer();
+      const data = new Uint8Array(buf);
+      const chunkSize = 32 * 1024; // 32KB chunks
+      for (let offset = 0; offset < data.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, data.length);
+        termSendUpload(tab.ws, data.slice(offset, end));
+      }
+      termSendEnd(tab.ws);
+    } catch (err) {
+      toast(I18N.t("term.upload_failed") + ": " + err.message, "err");
+    }
+  };
+  input.click();
+}
+// formatZmSize 格式化文件大小显示
+function formatZmSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+// getSelectedTermText 获取当前终端屏幕内的选中文本。
+// 聚焦在隐藏 textarea 时 window.getSelection().rangeCount 为 0，
+// 因为浏览器为表单元素维护独立的选区上下文。此时临时 blur 再检查。
+function getSelectedTermText(tab) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) {
+    // 如果 textarea 聚焦导致 rangeCount=0，临时 blur 后再检查
+    const ae = document.activeElement;
+    if (ae && ae.classList.contains("term-input")) {
+      ae.blur();
+      try {
+        const s2 = window.getSelection();
+        if (s2 && s2.rangeCount > 0) {
+          const t = s2.toString();
+          if (t) return t;
+        }
+      } finally {
+        ae.focus({ preventScroll: true });
+      }
+    }
+    return "";
+  }
+  // 方法1：直接取全局选区文本（大多数情况足够）
+  const text = sel.toString();
+  if (text) return text;
+  // 方法2：检查 range 是否落在当前 tab 的 screen 内
+  if (!tab || !tab.screenEl) return "";
+  for (let i = 0; i < sel.rangeCount; i++) {
+    const rng = sel.getRangeAt(i);
+    if (tab.screenEl.contains(rng.commonAncestorContainer)) {
+      return rng.toString();
+    }
+  }
+  return "";
+}
+// ---- 全局 copy 事件处理（终端文本复制）----
+// 仅注册一次。当用户通过右键菜单或 Ctrl+C 触发 copy 事件时，
+// 临时 blur 隐藏 textarea 让 window.getSelection() 可见，然后写入剪贴板。
+(function() {
+  document.addEventListener("copy", function(ev) {
+    const activeTab = TERM_ACTIVE >= 0 ? TERM_TABS[TERM_ACTIVE] : null;
+    if (!activeTab || !activeTab.screenEl) return;
+    const mask = document.getElementById("termMask");
+    if (!mask || !mask.classList.contains("show")) return;
+    // 临时 blur textarea 使 pre 中的选区对 window.getSelection() 可见
+    const ae = document.activeElement;
+    const hasTermInput = ae && ae.classList.contains("term-input");
+    if (hasTermInput) ae.blur();
+    let sel = "";
+    try {
+      const s = window.getSelection();
+      if (s && s.rangeCount > 0) {
+        for (let i = 0; i < s.rangeCount; i++) {
+          const rng = s.getRangeAt(i);
+          if (activeTab.screenEl.contains(rng.commonAncestorContainer)) {
+            sel = rng.toString();
+            break;
+          }
+        }
+      }
+      if (!sel) sel = window.getSelection().toString();
+    } finally {
+      if (hasTermInput && ae) ae.focus({ preventScroll: true });
+    }
+    if (!sel) return;
+    ev.preventDefault();
+    ev.clipboardData.setData("text/plain", sel);
+  });
+})();
+
+function termKeyDown(e, tab) {
+  e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
+  const ws = tab ? tab.ws : null;
+  const k = e.key;
+  const mod = e.ctrlKey || e.metaKey;
+
+  // ====== P0: 剪贴板双向交互 ======
+
+  // Ctrl+V / Cmd+V / Shift+Insert → 粘贴剪贴板内容
+  // 关键：不调用 preventDefault()，让浏览器原生 paste 事件正常触发，
+  // 由 input.onpaste / screen paste 兜底处理器捕获文本并发送。
+  if ((mod && (k === "v" || k === "V")) || (e.shiftKey && k === "Insert")) {
+    return; // 放行浏览器 paste，不发送 \x16
+  }
+
+  // Ctrl+C / Cmd+C → 有选区时复制，无选区时发送 SIGINT
+  // Ctrl+Shift+C / Cmd+Shift+C / Ctrl+Insert → 强制复制
+  if ((mod && (k === "c" || k === "C")) || (mod && k === "Insert")) {
+    const shiftCopy = e.shiftKey;
+
+    // 临时 blur textarea 让 document 选区对 window.getSelection() 可见
+    const ae = document.activeElement;
+    const hasTermInput = ae && ae.classList.contains("term-input");
+    if (hasTermInput) ae.blur();
+
+    let sel = "";
+    try {
+      const s = window.getSelection();
+      if (s && s.rangeCount > 0) {
+        for (let i = 0; i < s.rangeCount; i++) {
+          const rng = s.getRangeAt(i);
+          if (tab && tab.screenEl && tab.screenEl.contains(rng.commonAncestorContainer)) {
+            sel = rng.toString();
+            break;
+          }
+        }
+      }
+      if (!sel) sel = window.getSelection().toString();
+    } finally {
+      if (hasTermInput && ae) ae.focus({ preventScroll: true });
+    }
+
+    if (shiftCopy || sel) {
+      e.preventDefault();
+      if (sel) {
+        // 优先使用 navigator.clipboard API（现代浏览器），fallback 到 execCommand
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(sel).then(() => {}, () => {});
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = sel;
+          ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          try { document.execCommand("copy"); } catch (_) {}
+          document.body.removeChild(ta);
+        }
+      }
+      return;
+    }
+
+    // 无选区 → 发送 SIGINT (\x03)
+  }
+
+  const ac = (tab && tab.vt && tab.vt.appCursor) ? "\x1bO" : "\x1b["; // 应用光标模式(vim/less…)
+  let seq = null;
+  if (k === "Enter") seq = "\r";
+  else if (k === "Backspace") seq = "\x7f";
+  else if (k === "Tab") seq = "\t";
+  else if (k === "Escape") seq = "\x1b";
+  else if (k === "ArrowUp") seq = ac + "A";
+  else if (k === "ArrowDown") seq = ac + "B";
+  else if (k === "ArrowRight") seq = ac + "C";
+  else if (k === "ArrowLeft") seq = ac + "D";
+  else if (k === "Home") seq = "\x1b[H";
+  else if (k === "End") seq = "\x1b[F";
+  else if (k === "Delete") seq = "\x1b[3~";
+  else if (k === "PageUp") seq = "\x1b[5~";
+  else if (k === "PageDown") seq = "\x1b[6~";
+  else if (e.ctrlKey && k.length === 1) {
+    const c = k.toLowerCase().charCodeAt(0);
+    if (c >= 97 && c <= 122) seq = String.fromCharCode(c - 96); // Ctrl+A..Z → 0x01..0x1A
+  }
+  // 可打印字符不再由 keydown 处理——改由隐藏 textarea 的 input 事件统一处理。
+  // 原因：移动端虚拟键盘的 keydown e.key 常为 "Unidentified"，不可靠；
+  //       input 事件在所有平台都能正确获取实际输入文本。
+  // 桌面端：keydown 不 preventDefault → 字符进入 textarea → input 事件发送 → 清空 textarea
+  // 移动端：keydown 可能不识别 → 同样由 input 事件兜底发送
+  if (seq !== null) { e.preventDefault(); termSend(ws, seq); }
+}
+/* ---------- 阶段2：VT100 / xterm 子集终端仿真器 ----------
+   支持屏幕缓冲 + 光标寻址(CUP/CUU…)、擦除(ED/EL)、SGR 颜色(16/256/RGB、粗体/下划线/反显)、
+   滚动区(DECSTBM)、插入/删除行列、备用屏(?1049)、回滚缓冲，可跑 vim/top 等全屏程序。 */
+const VT_PAL = [
+  "#2b303b", "#ff6b72", "#4fd483", "#e8b84b", "#5b9bff", "#c88bf0", "#4fc3f0", "#c8ced8",
+  "#5a6473", "#ff8f95", "#7ee6a5", "#ffd071", "#82b4ff", "#d9b3f7", "#8fd7f7", "#ffffff"
+];
+function vt256(n) {
+  n = n | 0;
+  if (n < 16) return VT_PAL[n] || null;
+  if (n < 232) { n -= 16; const r = Math.floor(n / 36), g = Math.floor((n % 36) / 6), b = n % 6; const c = v => v ? 55 + v * 40 : 0; return `rgb(${c(r)},${c(g)},${c(b)})`; }
+  const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`;
+}
+const vtEsc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function makeVT(screen) {
+  const vt = {
+    screen, dec: new TextDecoder("utf-8"),
+    cols: 80, rows: 24, cx: 0, cy: 0,
+    fg: null, bg: null, flags: 0,          // flags: 1 粗体 2 反显 4 下划线 8 弱化
+    sCx: 0, sCy: 0, sFg: null, sBg: null, sFlags: 0,
+    top: 0, bot: 23, wrapNext: false,
+    grid: null, SB_MAX: 2000,
+    altActive: false, savedGrid: null, savedPos: null,
+    st: 0, parm: "", coll: "",             // 解析状态 0 ground 1 esc 2 csi 3 osc 4 charset 5 osc-st
+    cursorVis: true, appCursor: false, raf: 0,
+  };
+  const clampX = x => Math.max(0, Math.min(vt.cols - 1, x));
+  const clampY = y => Math.max(0, Math.min(vt.rows - 1, y));
+  const blank = () => ({ c: " ", f: null, b: null, a: 0 });
+  const newRow = () => { const r = new Array(vt.cols); for (let i = 0; i < vt.cols; i++) r[i] = blank(); return r; };
+  function alloc() { vt.grid = []; for (let y = 0; y < vt.rows; y++) vt.grid.push(newRow()); }
+
+  screen.innerHTML = "";
+  const sb = document.createElement("div"); sb.className = "term-sb";
+  const lv = document.createElement("div"); lv.className = "term-lv";
+  screen.appendChild(sb); screen.appendChild(lv);
+  alloc();
+
+  function clearCell(cell) { cell.c = " "; cell.f = null; cell.b = vt.bg; cell.a = 0; }
+  function scrollUp(n) {
+    for (let i = 0; i < n; i++) {
+      const removed = vt.grid.splice(vt.top, 1)[0];
+      if (!vt.altActive && vt.top === 0) {
+        const div = document.createElement("div"); div.className = "term-row"; div.innerHTML = renderRow(removed, -1);
+        sb.appendChild(div);
+        while (sb.childElementCount > vt.SB_MAX) sb.removeChild(sb.firstChild);
+      }
+      vt.grid.splice(vt.bot, 0, newRow());
+    }
+  }
+  function scrollDown(n) { for (let i = 0; i < n; i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.top, 0, newRow()); } }
+  function lineFeed() { if (vt.cy === vt.bot) scrollUp(1); else if (vt.cy < vt.rows - 1) vt.cy++; }
+  function revIndex() { if (vt.cy === vt.top) scrollDown(1); else if (vt.cy > 0) vt.cy--; }
+  function putChar(ch) {
+    if (vt.wrapNext) { vt.cx = 0; lineFeed(); vt.wrapNext = false; }
+    const cell = vt.grid[vt.cy][vt.cx];
+    cell.c = ch; cell.f = vt.fg; cell.b = vt.bg; cell.a = vt.flags;
+    if (vt.cx + 1 >= vt.cols) vt.wrapNext = true; else vt.cx++;
+  }
+  function eraseInLine(m) {
+    const row = vt.grid[vt.cy];
+    if (m === 1) { for (let x = 0; x <= vt.cx; x++) clearCell(row[x]); }
+    else if (m === 2) { for (let x = 0; x < vt.cols; x++) clearCell(row[x]); }
+    else { for (let x = vt.cx; x < vt.cols; x++) clearCell(row[x]); }
+  }
+  function eraseDisplay(m) {
+    if (m === 1) { for (let y = 0; y < vt.cy; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); eraseInLine(1); }
+    else if (m === 2 || m === 3) { for (let y = 0; y < vt.rows; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); if (m === 3) sb.innerHTML = ""; }
+    else { eraseInLine(0); for (let y = vt.cy + 1; y < vt.rows; y++) for (let x = 0; x < vt.cols; x++) clearCell(vt.grid[y][x]); }
+  }
+  function saveCursor() { vt.sCx = vt.cx; vt.sCy = vt.cy; vt.sFg = vt.fg; vt.sBg = vt.bg; vt.sFlags = vt.flags; }
+  function restoreCursor() { vt.cx = clampX(vt.sCx); vt.cy = clampY(vt.sCy); vt.fg = vt.sFg; vt.bg = vt.sBg; vt.flags = vt.sFlags; }
+  function enterAlt() { if (vt.altActive) return; vt.altActive = true; vt.savedGrid = vt.grid; vt.savedPos = { x: vt.cx, y: vt.cy }; alloc(); vt.cx = 0; vt.cy = 0; sb.style.display = "none"; }
+  function exitAlt() { if (!vt.altActive) return; vt.altActive = false; vt.grid = vt.savedGrid; if (vt.savedPos) { vt.cx = clampX(vt.savedPos.x); vt.cy = clampY(vt.savedPos.y); } vt.top = 0; vt.bot = vt.rows - 1; sb.style.display = ""; }
+  function fullReset() { vt.fg = vt.bg = null; vt.flags = 0; vt.top = 0; vt.bot = vt.rows - 1; if (vt.altActive) exitAlt(); alloc(); vt.cx = vt.cy = 0; vt.wrapNext = false; }
+
+  function sgrExt(ps, i, isFg) {
+    const mode = ps[i + 1]; let color = null, used = i;
+    if (mode === 5) { color = vt256(ps[i + 2] || 0); used = i + 2; }
+    else if (mode === 2) { color = `rgb(${ps[i + 2] || 0},${ps[i + 3] || 0},${ps[i + 4] || 0})`; used = i + 4; }
+    if (color !== null) { if (isFg) vt.fg = color; else vt.bg = color; }
+    return used;
+  }
+  function sgr(ps) {
+    if (!ps.length) ps = [0];
+    for (let i = 0; i < ps.length; i++) {
+      const n = ps[i];
+      if (n === 0) { vt.fg = vt.bg = null; vt.flags = 0; }
+      else if (n === 1) vt.flags |= 1; else if (n === 2) vt.flags |= 8;
+      else if (n === 4) vt.flags |= 4; else if (n === 7) vt.flags |= 2;
+      else if (n === 22) vt.flags &= ~9; else if (n === 24) vt.flags &= ~4; else if (n === 27) vt.flags &= ~2;
+      else if (n >= 30 && n <= 37) vt.fg = VT_PAL[n - 30];
+      else if (n === 38) i = sgrExt(ps, i, true);
+      else if (n === 39) vt.fg = null;
+      else if (n >= 40 && n <= 47) vt.bg = VT_PAL[n - 40];
+      else if (n === 48) i = sgrExt(ps, i, false);
+      else if (n === 49) vt.bg = null;
+      else if (n >= 90 && n <= 97) vt.fg = VT_PAL[8 + n - 90];
+      else if (n >= 100 && n <= 107) vt.bg = VT_PAL[8 + n - 100];
+    }
+  }
+  function setMode(ps, priv, on) {
+    if (!priv) return;
+    for (const n of ps) {
+      if (n === 25) vt.cursorVis = on;
+      else if (n === 1) vt.appCursor = on;
+      else if (n === 47 || n === 1047 || n === 1049) { on ? enterAlt() : exitAlt(); }
+    }
+  }
+  function csi(f) {
+    const priv = vt.coll.indexOf("?") >= 0;
+    const ps = vt.parm.split(";").map(x => x === "" ? 0 : parseInt(x, 10) || 0);
+    const p0 = ps[0] || 0, row = () => vt.grid[vt.cy];
+    switch (f) {
+      case "A": vt.cy = Math.max(vt.top, vt.cy - Math.max(1, p0)); break;
+      case "B": vt.cy = Math.min(vt.bot, vt.cy + Math.max(1, p0)); break;
+      case "C": vt.cx = Math.min(vt.cols - 1, vt.cx + Math.max(1, p0)); vt.wrapNext = false; break;
+      case "D": vt.cx = Math.max(0, vt.cx - Math.max(1, p0)); vt.wrapNext = false; break;
+      case "E": vt.cx = 0; vt.cy = Math.min(vt.bot, vt.cy + Math.max(1, p0)); break;
+      case "F": vt.cx = 0; vt.cy = Math.max(vt.top, vt.cy - Math.max(1, p0)); break;
+      case "G": case "`": vt.cx = clampX((p0 || 1) - 1); vt.wrapNext = false; break;
+      case "d": vt.cy = clampY((p0 || 1) - 1); break;
+      case "H": case "f": vt.cy = clampY((ps[0] || 1) - 1); vt.cx = clampX((ps[1] || 1) - 1); vt.wrapNext = false; break;
+      case "J": eraseDisplay(p0); break;
+      case "K": eraseInLine(p0); break;
+      case "m": sgr(ps); break;
+      case "r": { const t = (ps[0] || 1) - 1, b = (ps[1] || vt.rows) - 1; if (t < b) { vt.top = clampY(t); vt.bot = clampY(b); vt.cx = 0; vt.cy = vt.top; } break; }
+      case "s": saveCursor(); break;
+      case "u": restoreCursor(); break;
+      case "L": if (vt.cy >= vt.top && vt.cy <= vt.bot) for (let i = 0; i < Math.max(1, p0); i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.cy, 0, newRow()); } break;
+      case "M": if (vt.cy >= vt.top && vt.cy <= vt.bot) for (let i = 0; i < Math.max(1, p0); i++) { vt.grid.splice(vt.cy, 1); vt.grid.splice(vt.bot, 0, newRow()); } break;
+      case "P": { const r = row(); for (let i = 0; i < Math.max(1, p0); i++) { r.splice(vt.cx, 1); r.push(blank()); } break; }
+      case "@": { const r = row(); for (let i = 0; i < Math.max(1, p0); i++) { r.splice(vt.cx, 0, blank()); r.pop(); } break; }
+      case "X": { const r = row(); for (let x = vt.cx; x < Math.min(vt.cols, vt.cx + Math.max(1, p0)); x++) clearCell(r[x]); break; }
+      case "S": scrollUp(Math.max(1, p0)); break;
+      case "T": scrollDown(Math.max(1, p0)); break;
+      case "h": setMode(ps, priv, true); break;
+      case "l": setMode(ps, priv, false); break;
+    }
+  }
+  vt.feed = function (text) {
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i], code = text.charCodeAt(i);
+      if (vt.st === 0) {
+        if (code === 0x1b) { vt.st = 1; vt.parm = ""; vt.coll = ""; }
+        else if (ch === "\r") { vt.cx = 0; vt.wrapNext = false; }
+        else if (code === 10 || code === 11 || code === 12) lineFeed();
+        else if (code === 8) { vt.cx = Math.max(0, vt.cx - 1); vt.wrapNext = false; }
+        else if (code === 9) vt.cx = Math.min(vt.cols - 1, vt.cx - (vt.cx % 8) + 8);
+        else if (code === 7) { /* BEL */ }
+        else if (code >= 32) putChar(ch);
+      } else if (vt.st === 1) {
+        if (ch === "[") { vt.st = 2; vt.parm = ""; vt.coll = ""; }
+        else if (ch === "]") { vt.st = 3; }
+        else if (ch === "(" || ch === ")" || ch === "*" || ch === "+") vt.st = 4;
+        else { if (ch === "M") revIndex(); else if (ch === "D") lineFeed(); else if (ch === "E") { vt.cx = 0; lineFeed(); } else if (ch === "7") saveCursor(); else if (ch === "8") restoreCursor(); else if (ch === "c") fullReset(); vt.st = 0; }
+      } else if (vt.st === 2) {
+        if (code >= 0x40 && code <= 0x7e) { csi(ch); vt.st = 0; }
+        else if (ch === "?" || ch === ">" || ch === "=" || ch === "!") vt.coll += ch;
+        else vt.parm += ch;
+      } else if (vt.st === 3) { if (code === 7) vt.st = 0; else if (code === 0x1b) vt.st = 5; }
+      else if (vt.st === 4) vt.st = 0;
+      else if (vt.st === 5) vt.st = 0;
+    }
+    scheduleRender();
+  };
+
+  function cellStyle(cell) {
+    let f = cell.f, b = cell.b; const a = cell.a;
+    if (a & 2) { const t = f; f = b || "#05070b"; b = t || "#d6dde8"; }
+    let s = "";
+    if (f) s += "color:" + f + ";";
+    if (b) s += "background:" + b + ";";
+    if (a & 1) s += "font-weight:600;";
+    if (a & 8) s += "opacity:.7;";
+    if (a & 4) s += "text-decoration:underline;";
+    return s;
+  }
+  function renderRow(rowCells, cursorX) {
+    let end = -1;
+    for (let x = rowCells.length - 1; x >= 0; x--) { const c = rowCells[x]; if (c.c !== " " || c.f || c.b || c.a) { end = x; break; } }
+    if (cursorX >= 0 && cursorX > end) end = cursorX;
+    let html = "", run = "", style = null;
+    const flush = () => { if (run !== "") { html += style ? `<span style="${style}">${vtEsc(run)}</span>` : vtEsc(run); run = ""; } };
+    for (let x = 0; x <= end; x++) {
+      const cell = rowCells[x];
+      if (x === cursorX) { flush(); style = null; html += `<span class="term-cursor">${vtEsc(cell.c === " " ? " " : cell.c)}</span>`; continue; }
+      const st = cellStyle(cell);
+      if (st !== style) { flush(); style = st; }
+      run += cell.c;
+    }
+    flush();
+    return html;
+  }
+  function render() {
+    // screen.contains 涵盖两种焦点来源：<pre> 自身聚焦（桌面直接 Tab）
+    // 和隐藏 <textarea> 子元素聚焦（移动端虚拟键盘 / 桌面端统一输入入口）
+    const focused = screen.contains(document.activeElement);
+    let html = "";
+    for (let y = 0; y < vt.rows; y++) {
+      const cx = (vt.cursorVis && focused && y === vt.cy) ? vt.cx : -1;
+      html += `<div class="term-row">${renderRow(vt.grid[y], cx)}</div>`;
+    }
+    lv.innerHTML = html;
+    screen.scrollTop = screen.scrollHeight;
+  }
+  function scheduleRender() {
+    if (vt.pending) return;
+    vt.pending = true;
+    const run = () => { if (!vt.pending) return; vt.pending = false; render(); };
+    requestAnimationFrame(run);       // 可见标签页：随帧渲染，流畅
+    setTimeout(run, 120);             // 兜底：后台标签页 rAF 被暂停时仍能渲染
+  }
+
+  // resizeTo — 重新分配网格到指定 cols/rows，保留已有内容
+  vt.resizeTo = function(cols, rows) {
+    cols = Math.max(20, cols); rows = Math.max(6, rows);
+    if (cols === vt.cols && rows === vt.rows) return;
+    const old = vt.grid;
+    vt.cols = cols; vt.rows = rows; vt.grid = [];
+    for (let y = 0; y < rows; y++) {
+      const r = newRow();
+      if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x];
+      vt.grid.push(r);
+    }
+    vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false;
+    scheduleRender();
+  };
+
+  vt.fit = function () {
+    const probe = document.createElement("span");
+    probe.textContent = "MMMMMMMMMMMMMMMMMMMM";
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;left:-9999px";
+    lv.appendChild(probe);
+    const rect = probe.getBoundingClientRect();
+    const cw = rect.width / 20, chh = rect.height;
+    lv.removeChild(probe);
+    if (!cw || !chh) return null;
+    const cs = getComputedStyle(screen);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const cols = Math.max(20, Math.floor((screen.clientWidth - padX) / cw));
+    const rows = Math.max(6, Math.floor((screen.clientHeight - padY) / chh));
+    vt.resizeTo(cols, rows);
+    return { cols: vt.cols, rows: vt.rows };
+  };
+  vt.fullReset = fullReset;
+  vt.render = render;
+  return vt;
+}
+
+/* ---------- 终端事件绑定 ---------- */
+// 放大 / 还原 终端窗口
+safeAddEventListener("termMaxBtn", "click", () => {
+  const mask = $("termMask"); if (!mask) return;
+  const max = mask.classList.toggle("maximized");
+  const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
+  requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
+});
+// 收起到右下角
+safeAddEventListener("termMinBtn", "click", () => {
+  minimizeTerminal();
+});
+// 文件上传
+safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
+// 文件下载
+safeAddEventListener("termDownloadBtn", "click", () => startTermFileDownload());
+
+/* ---------- v5.3.0: 终端二次认证弹窗事件绑定 ---------- */
+// 协议弹窗：勾选启用继续按钮
+safeAddEventListener("termProtocolAgree", "change", function() {
+  $("termProtocolContinue").disabled = !this.checked;
+});
+// 协议弹窗：同意并继续
+safeAddEventListener("termProtocolContinue", "click", onTermProtocolAgreed);
+// 协议弹窗：关闭（取消）
+$("termProtocolMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    cancelTermAuth();
+  }
+});
+
+// 密码设置弹窗：提交
+safeAddEventListener("termSetPwdBtn", "click", submitTermSetPassword);
+// 密码设置弹窗：取消
+safeAddEventListener("termSetPwdCancel", "click", function() {
+  $("termSetPwdMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termSetPwdMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termSetPwdMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码设置弹窗：回车提交
+safeAddEventListener("termSetPwd", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+safeAddEventListener("termSetPwd2", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+// 密码设置弹窗：显示/隐藏密码
+safeAddEventListener("termSetPwdToggle", "click", function() { toggleTermPwdVisibility("termSetPwd", "termSetPwdToggle"); });
+safeAddEventListener("termSetPwd2Toggle", "click", function() { toggleTermPwdVisibility("termSetPwd2", "termSetPwd2Toggle"); });
+
+// 密码验证弹窗：提交
+safeAddEventListener("termVerifyBtn", "click", submitTermVerify);
+// 密码验证弹窗：取消
+safeAddEventListener("termVerifyCancel", "click", function() {
+  $("termVerifyMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termVerifyMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termVerifyMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码验证弹窗：回车提交
+safeAddEventListener("termVerifyPwd", "keydown", function(e) { if (e.key === "Enter") submitTermVerify(); });
+// 密码验证弹窗：显示/隐藏密码
+safeAddEventListener("termVerifyPwdToggle", "click", function() { toggleTermPwdVisibility("termVerifyPwd", "termVerifyPwdToggle"); });
+
+// 锁定弹窗：关闭
+$("termLockedMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termLockedMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+
+/* ---------- 挂载到 AIOps 命名空间 ---------- */
+Object.assign(window.AIOps, {
+  openTerminal,
+  closeTerminalWS,
+  closeAllTermTabs,
+  openTerminalSessions,
+  openTerminalReplay,
+  openTerminalObserve,
+  closeReplay,
+  closeObserveWS,
+  minimizeTerminal,
+  updateTermDock,
+  clearTermDock,
+  expandTermFromDock,
+  closeTermFromDock,
+  termRefit,
+  termKeyDown,
+  makeVT,
+  vt256,
+  vtEsc
+});
