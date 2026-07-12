@@ -2449,3 +2449,89 @@ table tbody tr:hover{
 .modal pre,.modal code,.modal .mono{max-width:100%; overflow-x:auto}
 /* 键盘可达：非按钮的可点区域获得焦点时也给出清晰轮廓 */
 .nav-item:focus-visible,.mini-btn:focus-visible,[data-act]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+/* ============================================================
+   全局表单控件统一打磨（输入 / 选择 / 文本域 / 下拉 / 按钮 / 开关）
+   —— 克制专业深色：三类控件统一"输入井"外观（同背景/边框/圆角/高度/
+   过渡/hover/focus），修掉此前 input(--bg2) 与 select(--panel2) 背景不一致、
+   textarea 无统一基样、下拉箭头字形粗糙等问题。
+   ============================================================ */
+
+/* 统一外观：同背景(--bg2)、同边框、同圆角、同字号、同过渡 */
+.field input:not([type=checkbox]):not([type=radio]),
+.field select,
+.field textarea,
+textarea,
+select {
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-sm);
+  color: var(--txt);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+/* 统一内距/高度：三类控件同 36px 视觉高度；select 右侧留出箭头位 */
+.field input:not([type=checkbox]):not([type=radio]),
+.field textarea,
+textarea { padding: 9px 12px; }
+select { padding: 9px 30px 9px 12px; }
+.field textarea, textarea { min-height: 66px; resize: vertical; }
+
+/* 统一 hover：边框微亮（此前只有 select 有 hover，且会切换背景造成"跳色"） */
+.field input:not([type=checkbox]):not([type=radio]):hover:not(:focus),
+.field textarea:hover:not(:focus),
+textarea:hover:not(:focus),
+select:hover:not(:focus) {
+  border-color: var(--hover-border);
+  background: var(--bg2);
+}
+
+/* 统一 focus：accent 边框 + 柔和聚焦环（键盘/鼠标一致，无红框） */
+.field input:not([type=checkbox]):not([type=radio]):focus,
+.field textarea:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+  background: var(--bg2);
+}
+
+/* 统一 placeholder / 禁用态 */
+.field input::placeholder, .field textarea::placeholder, textarea::placeholder, input::placeholder { color: var(--muted2); }
+.field input:disabled, .field select:disabled, .field textarea:disabled, textarea:disabled, select:disabled {
+  opacity: .55; cursor: not-allowed; background: var(--bg3); border-color: var(--line);
+}
+
+/* 下拉箭头：细线 chevron（替代粗糙的 ▾ 字形），hover 时随边框一起提亮 */
+.select-wrap::after {
+  content: ""; position: absolute; right: 12px; top: calc(50% - 3px);
+  width: 7px; height: 7px; border: 0; border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted); transform: rotate(45deg);
+  pointer-events: none; font-size: 0;
+  transition: border-color var(--transition-fast);
+}
+.select-wrap:hover::after { border-color: var(--txt2); }
+
+/* 顶部搜索框：与全局输入井统一（背景/圆角/focus 环一致，去掉此前的 --panel2 异色） */
+.search { background: var(--bg2); border: 1px solid var(--line2); border-radius: var(--r-sm); transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.search:hover:not(:focus) { border-color: var(--hover-border); }
+.search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft) !important; }
+
+/* 按钮交互细节：主/次按钮 hover 轻微上浮、active 回落，主按钮加极淡光晕（克制） */
+.btn { transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast); }
+.btn:hover:not(:disabled):not(.ghost) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: translateY(0); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 3px 12px -2px var(--accent-soft); }
+
+/* 开关(switch)标签 hover 时文字提亮，增强可点击暗示 */
+.switch:hover { color: var(--txt); }
+
+/* 自定义下拉菜单(分类/AI 模型/告警治理)与原生控件统一圆角与投影层级 */
+.cat-dd-menu, .ai-model-dropdown { border-radius: var(--r-sm); box-shadow: var(--shadow-lg); border: 1px solid var(--line2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:hover:not(:disabled):not(.ghost), .btn:active:not(:disabled) { transform: none; }
+}

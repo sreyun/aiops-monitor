@@ -12,7 +12,18 @@ document.addEventListener("keydown", e => {
 });
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).then(reg => {
+      if (reg) setInterval(() => reg.update().catch(() => {}), 60000); // 每分钟探测新版本
+    }).catch(() => {});
+  });
+  // 新 SW 接管（clients.claim）时自动刷新一次，确保拿到最新 app.js —— 兜底防止
+  // 旧 SW 缓存了坏版本（如某次拼接语法错误）把用户永久卡在坏页面（含登录页不显示）。
+  // 用 controller 存否 + refreshing 双重守卫，避免首访无控制器时的刷新循环。
+  let SW_REFRESHING = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (SW_REFRESHING || !navigator.serviceWorker.controller) return;
+    SW_REFRESHING = true;
+    location.reload();
   });
 }
 let DEFERRED_PROMPT = null;
