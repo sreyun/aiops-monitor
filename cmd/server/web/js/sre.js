@@ -746,26 +746,35 @@ async function openAIConfig(){
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
   } catch(e){}
-  // Load model suggestions
-  try {
-    const m=await fetch(`${API}/ai/models`).then(r=>r.json());
-    const dl=$("aiModelList"); if(dl && m.models){ dl.innerHTML=m.models.map(m=>`<option value="${esc(m.value)}">${esc(m.label)}</option>`).join(""); }
-  } catch(e){}
+  loadAIModels(); // 打开时按当前配置自动挂载 provider 模型
   $("aiConfigMask").classList.add("show");
 }
-// Quick AI provider presets: fill in common endpoint + model defaults
+// 从当前表单 Endpoint+Key 拉取该 Provider 的可用模型,填充可下拉/搜索的 datalist。
+async function loadAIModels(){
+  const dl=$("aiModelList"); if(!dl) return;
+  const info=$("aiModelInfo"); if(info) info.textContent="加载中…";
+  try {
+    const body={endpoint:($("aiEndpoint").value||"").trim(),api_key:$("aiKey").value||""};
+    const m=await fetch(`${API}/ai/models`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
+    if(m&&m.models){ dl.innerHTML=m.models.map(x=>`<option value="${esc(x.value)}">${esc(x.label)}</option>`).join(""); }
+    if(info) info.textContent=(m&&m.live_count>0)?`· 已自动挂载 ${m.live_count} 个`:"· 精选列表(填 Endpoint+Key 后自动挂载)";
+  } catch(e){ if(info) info.textContent=""; }
+}
+// AI 预设:仅两种接口类型（OpenAI 兼容 / Anthropic），百炼走兼容模式。
 function setAIPreset(type){
   const presets={
-    "bailian-compat":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",model:"qwen-plus",label:"百炼 OpenAI 兼容"},
-    "bailian-native":{endpoint:"https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",model:"qwen-plus",label:"百炼原生 Text Gen"},
-    "bailian-anthropic":{endpoint:"https://coding.dashscope.aliyuncs.com/apps/anthropic",model:"claude-3-5-sonnet-20241022",label:"百炼 Anthropic（Claude）"},
+    // OpenAI 兼容类
+    "bailian":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",model:"qwen-plus",label:"阿里云百炼（OpenAI 兼容）"},
     "openai":{endpoint:"https://api.openai.com/v1",model:"gpt-4o-mini",label:"OpenAI"},
     "deepseek":{endpoint:"https://api.deepseek.com/v1",model:"deepseek-chat",label:"DeepSeek"},
     "ollama":{endpoint:"http://localhost:11434/v1",model:"qwen2.5:7b",label:"本地 Ollama"},
+    // Anthropic 类
+    "claude":{endpoint:"https://dashscope.aliyuncs.com/apps/anthropic",model:"claude-3-5-sonnet-20241022",label:"Claude（百炼 Anthropic）"},
   };
   const p=presets[type]; if(!p) return;
   $("aiEndpoint").value=p.endpoint; $("aiModel").value=p.model;
   toast(`已设为 ${p.label}`,"ok");
+  loadAIModels(); // 选预设后自动挂载该 provider 的模型
 }
 async function saveAIConfig(){
   const body={enabled:$("aiEnabled").checked,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim(),inspect_interval_min:parseInt($("aiInterval").value)||30};
@@ -797,11 +806,13 @@ async function testAIConfig(){
     }
   }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
 }
-let AI_CHAT_HISTORY=[];
+// 统一「AI 对话」——单窗口,后端走 Hermes 自主运维 Agent（能对话 + 自动调用工具,
+// 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
+let AI_CHAT_SESSION=0; // Hermes 服务端会话 id（0=新会话/当前会话）
 function openAIChat(){
-  AI_CHAT_HISTORY=[];
+  AI_CHAT_SESSION=0;
   const log=$("aiChatLog");
-  if(log) log.innerHTML=`<div class="ai-chat-msg sys">已连接「AI 设置」里配置的 Provider。发一条消息试试，看它是否真的在回复。</div>`;
+  if(log) log.innerHTML=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检,也可直接描述问题让它自动排查,例如:<br>· "主机 web-01 CPU 飙到 90%,帮我排查原因"<br>· "检查 nginx 服务状态"　·　"最近有什么告警?"<br>需要时它会自动调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div>`;
   $("aiChatMask").classList.add("show");
   setTimeout(()=>{ const i=$("aiChatInput"); if(i) i.focus(); },80);
 }
@@ -818,22 +829,15 @@ async function sendAIChat(){
   const msg=inp.value.trim(); if(!msg) return;
   inp.value="";
   appendChatMsg("user",msg);
-  const pending=appendChatMsg("assistant","思考中…");
+  const pending=appendChatMsg("assistant","🤔 思考中…");
   try{
-    const r=await fetch(`${API}/ai/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,history:AI_CHAT_HISTORY,stream:true})});
+    const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
     await readSSEStream(r,
-      (delta,fullText)=>{
-        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
-        if(pending) pending.textContent=fullText;
-      },
+      (delta,fullText)=>{ if(!streamed){ if(pending) pending.textContent=""; streamed=true; } if(pending) pending.textContent=fullText; },
       (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
-      (fullText)=>{
-        if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; }
-        AI_CHAT_HISTORY.push({role:"user",content:msg},{role:"assistant",content:fullText||""});
-        if(AI_CHAT_HISTORY.length>20) AI_CHAT_HISTORY=AI_CHAT_HISTORY.slice(-20);
-      }
+      (fullText)=>{ if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; } }
     );
   }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
 }
@@ -843,56 +847,13 @@ safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiTestBtn","click",testAIConfig);
+safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
+safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiChatBtn","click",openAIChat);
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
 
-// ---- Hermes Agent 独立对话 ----
-let HERMES_HISTORY=[];
-let HERMES_SESSION_ID=0;
-function openHermesChat(){
-  HERMES_HISTORY=[];
-  HERMES_SESSION_ID=0;
-  const log=$("hermesChatLog");
-  if(log) log.innerHTML=`<div class="ai-chat-msg sys">🤖 Hermes Agent 已就绪。你可以直接描述问题，例如：<br>"主机 web-01 CPU 飙到 90%，帮我排查原因"<br>"检查 nginx 服务状态"<br>"最近有什么告警？"</div>`;
-  $("hermesMask").classList.add("show");
-  setTimeout(()=>{ const i=$("hermesChatInput"); if(i) i.focus(); },80);
-}
-function appendHermesMsg(role,text){
-  const log=$("hermesChatLog"); if(!log) return null;
-  const div=document.createElement("div");
-  div.className="ai-chat-msg "+(role==="user"?"me":role==="assistant"?"ai":"sys");
-  div.textContent=text;
-  log.appendChild(div); log.scrollTop=log.scrollHeight;
-  return div;
-}
-async function sendHermesChat(){
-  const inp=$("hermesChatInput"); if(!inp) return;
-  const msg=inp.value.trim(); if(!msg) return;
-  inp.value="";
-  appendHermesMsg("user",msg);
-  const pending=appendHermesMsg("assistant","🤔 思考中…");
-  try{
-    const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,session_id:HERMES_SESSION_ID,stream:true})});
-    if(!r.ok){ throw new Error("HTTP "+r.status); }
-    let streamed=false;
-    await readSSEStream(r,
-      (delta,fullText)=>{
-        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
-        if(pending) pending.textContent=fullText;
-      },
-      (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
-      (fullText)=>{
-        if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; }
-        HERMES_HISTORY.push({role:"user",content:msg},{role:"assistant",content:fullText||""});
-        if(HERMES_HISTORY.length>30) HERMES_HISTORY=HERMES_HISTORY.slice(-30);
-      }
-    );
-  }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
-}
-safeAddEventListener("hermesBtn","click",openHermesChat);
-safeAddEventListener("hermesChatSendBtn","click",sendHermesChat);
-safeAddEventListener("hermesChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHermesChat(); } });
+// （原独立的 Hermes 对话已并入上方统一的「AI 对话」——单窗口即走 Hermes Agent。）
 
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);

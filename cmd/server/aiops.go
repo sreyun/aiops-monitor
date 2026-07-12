@@ -38,9 +38,8 @@ type AIConfig struct {
 type aiProviderType int
 
 const (
-	aiProvOpenAI         aiProviderType = iota // OpenAI-compatible chat/completions (default)
-	aiProvBailianNative                        // Bailian native text-generation/generation
-	aiProvAnthropic                            // Anthropic Messages API (coding.dashscope.aliyuncs.com/apps/anthropic)
+	aiProvOpenAI    aiProviderType = iota // OpenAI 兼容 chat/completions（默认，覆盖 OpenAI/DeepSeek/Ollama/百炼兼容模式/本地模型等）
+	aiProvAnthropic                       // Anthropic Messages API（Claude，直连 api.anthropic.com 或百炼 /apps/anthropic）
 )
 
 // isBailianEndpoint reports whether the endpoint targets Alibaba Bailian (DashScope).
@@ -51,34 +50,20 @@ func isBailianEndpoint(endpoint string) bool {
 // normalizeEndpoint auto-corrects common endpoint mistakes and classifies the
 // provider type so the caller can pick the right request/response format.
 //
-// Classification rules:
-//   - Bailian native text-generation  → aiProvBailianNative
-//   - Bailian /apps/anthropic          → aiProvAnthropic
-//   - Bailian everything else          → aiProvOpenAI (compatible-mode)
-//   - Non-Bailian                      → aiProvOpenAI
+// 分类规则（仅两种类型）：
+//   - 端点含 "anthropic"（直连 api.anthropic.com 或百炼 /apps/anthropic）→ aiProvAnthropic
+//   - 其余一律 → aiProvOpenAI（OpenAI 兼容 chat/completions，含百炼兼容模式/DeepSeek/Ollama…）
 func normalizeEndpoint(endpoint string) (string, aiProviderType) {
 	ep := strings.TrimRight(endpoint, "/")
-	if !isBailianEndpoint(ep) {
-		// Non-Bailian: if it's an OpenAI-compatible base URL without /chat/completions, append it.
-		if !strings.HasSuffix(ep, "/chat/completions") && !strings.Contains(ep, "/chat/completions?") {
-			if strings.HasSuffix(ep, "/v1") || strings.HasSuffix(ep, "/v1/") {
-				ep += "/chat/completions"
-			}
-		}
-		return ep, aiProvOpenAI
-	}
-	// Bailian Anthropic-compatible endpoint (Claude models via Anthropic Messages API)
-	if strings.Contains(ep, "/apps/anthropic") || strings.Contains(ep, "/anthropic/") {
-		// Anthropic endpoints DON'T use /chat/completions — they use the Messages API directly.
+	// Anthropic Messages API（Claude）：端点按用户填写原样使用（预设已填好），不追加 /chat/completions。
+	if strings.Contains(ep, "anthropic") {
 		return ep, aiProvAnthropic
 	}
-	// Bailian native text-generation API
-	if strings.Contains(ep, "/api/v1/services/") || strings.Contains(ep, "/text-generation/") {
-		return ep, aiProvBailianNative
-	}
-	// Bailian compatible-mode: ensure /chat/completions suffix
+	// 其余全部按 OpenAI 兼容处理。base URL（以 /v1 结尾或百炼域名）缺 /chat/completions 时补齐。
 	if !strings.HasSuffix(ep, "/chat/completions") && !strings.Contains(ep, "/chat/completions?") {
-		ep += "/chat/completions"
+		if strings.HasSuffix(ep, "/v1") || strings.HasSuffix(ep, "/v1/") || isBailianEndpoint(ep) {
+			ep += "/chat/completions"
+		}
 	}
 	return ep, aiProvOpenAI
 }
@@ -98,17 +83,6 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	var extraHeaders map[string]string
 
 	switch prov {
-	case aiProvBailianNative:
-		reqBody = map[string]any{
-			"model": cfg.Model,
-			"input": map[string]any{
-				"messages": messages,
-			},
-			"parameters": map[string]any{
-				"temperature":   0.2,
-				"result_format": "message",
-			},
-		}
 	case aiProvAnthropic:
 		// Anthropic Messages API format.
 		// system prompt is a top-level field, not a message role.
@@ -156,10 +130,6 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	} else if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
-	if prov == aiProvBailianNative {
-		req.Header.Set("X-DashScope-SSE", "disable")
-	}
-
 	client := &http.Client{Timeout: 45 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -175,8 +145,7 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 			if isBailianEndpoint(cfg.Endpoint) {
 				return "", fmt.Errorf("HTTP 404：百炼 API 端点不存在。请确认 Endpoint 格式：\n"+
 					"  OpenAI 兼容：https://dashscope.aliyuncs.com/compatible-mode/v1\n"+
-					"  百炼原生 Text Gen：https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation\n"+
-					"  Anthropic 兼容：https://coding.dashscope.aliyuncs.com/apps/anthropic\n"+
+					"  Anthropic（Claude）：https://dashscope.aliyuncs.com/apps/anthropic\n"+
 					"当前端点：%s", cfg.Endpoint)
 			}
 			return "", fmt.Errorf("HTTP 404：API 端点不存在，请检查 Endpoint 地址是否正确（当前：%s）", cfg.Endpoint)
@@ -200,24 +169,6 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 
 	// Parse response according to provider type.
 	switch prov {
-	case aiProvBailianNative:
-		var out struct {
-			Output struct {
-				Choices []struct {
-					Message struct {
-						Content string `json:"content"`
-					} `json:"message"`
-				} `json:"choices"`
-			} `json:"output"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			return "", fmt.Errorf("解析百炼响应失败：%v", err)
-		}
-		if len(out.Output.Choices) == 0 {
-			return "", fmt.Errorf("百炼 API 返回空结果")
-		}
-		return strings.TrimSpace(out.Output.Choices[0].Message.Content), nil
-
 	case aiProvAnthropic:
 		// Anthropic response: {"content":[{"type":"text","text":"..."}],"role":"assistant",...}
 		var out struct {
@@ -295,30 +246,12 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 		return reply, nil
 	}
 
-	// Build streaming request body
-	var reqBody map[string]any
-	var extraHeaders map[string]string
-
-	switch prov {
-	case aiProvBailianNative:
-		reqBody = map[string]any{
-			"model": cfg.Model,
-			"input": map[string]any{
-				"messages": messages,
-			},
-			"parameters": map[string]any{
-				"temperature":        0.2,
-				"result_format":      "message",
-				"incremental_output": true,
-			},
-		}
-	default: // aiProvOpenAI
-		reqBody = map[string]any{
-			"model":       cfg.Model,
-			"messages":    messages,
-			"temperature": 0.2,
-			"stream":      true,
-		}
+	// 流式仅走 OpenAI 兼容（Anthropic 已在上方非流式处理并返回）。
+	reqBody := map[string]any{
+		"model":       cfg.Model,
+		"messages":    messages,
+		"temperature": 0.2,
+		"stream":      true,
 	}
 
 	b, _ := json.Marshal(reqBody)
@@ -330,12 +263,6 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	if prov == aiProvBailianNative {
-		req.Header.Set("X-DashScope-SSE", "enable")
-	}
-	for k, v := range extraHeaders {
-		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 120 * time.Second}

@@ -433,8 +433,7 @@
           <div class="sre-toolbar">
             <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
             <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
-            <button class="btn sm" id="aiChatBtn" data-i18n="sre.ai_chat">AI 对话</button>
-            <button class="btn sm" id="hermesBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)">🤖 Hermes</button>
+            <button class="btn sm" id="aiChatBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n="sre.ai_chat">🤖 AI 对话</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
           </div>
           <div id="aiReportList" class="sre-list"></div>
@@ -1167,22 +1166,25 @@
   <div class="modal">
     <div class="modal-head"><h3 data-i18n="sre.ai_settings">AI 设置</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span data-i18n="sre.ai_enable">启用 AI Provider（OpenAI 兼容 / 百炼）</span></label>
-      <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions"></div>
-      <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px">
-        <button class="btn sm" data-act="ai-preset" data-preset="bailian-compat" title="百炼 OpenAI 兼容模式">百炼兼容</button>
-        <button class="btn sm" data-act="ai-preset" data-preset="bailian-native" title="百炼原生 Text Gen API">百炼原生</button>
-        <button class="btn sm" data-act="ai-preset" data-preset="bailian-anthropic" title="百炼 Anthropic 兼容（Claude）">Anthropic</button>
+      <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span>启用 AI Provider（仅两种通用接口:OpenAI 兼容 / Anthropic,按端点自动识别）</span></label>
+      <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></div>
+      <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+        <span style="font-size:11px;color:var(--muted)">OpenAI 兼容:</span>
+        <button class="btn sm" data-act="ai-preset" data-preset="bailian" title="阿里云百炼 OpenAI 兼容模式">百炼</button>
         <button class="btn sm" data-act="ai-preset" data-preset="openai" title="OpenAI">OpenAI</button>
         <button class="btn sm" data-act="ai-preset" data-preset="deepseek" title="DeepSeek">DeepSeek</button>
         <button class="btn sm" data-act="ai-preset" data-preset="ollama" title="本地 Ollama">Ollama</button>
+        <span style="font-size:11px;color:var(--muted);margin-left:6px">Anthropic:</span>
+        <button class="btn sm" data-act="ai-preset" data-preset="claude" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
       </div>
       <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
       <div class="grid2">
-        <div class="field"><label data-i18n="sre.ai_model">模型</label><input type="text" id="aiModel" placeholder="gpt-4o-mini" list="aiModelList"><datalist id="aiModelList"></datalist></div>
+        <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span style="font-size:11px;color:var(--muted)" id="aiModelInfo"></span></label>
+          <div style="display:flex;gap:4px"><input type="text" id="aiModel" placeholder="下拉选择或输入搜索…" list="aiModelList" style="flex:1;min-width:0"><datalist id="aiModelList"></datalist><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 拉取可用模型">刷新</button></div>
+        </div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>
-      <div class="hint" data-i18n="sre.ai_hint2">支持 OpenAI 兼容 / 百炼原生 / Anthropic 三种格式，自动识别端点类型。百炼 Anthropic 端点示例：https://coding.dashscope.aliyuncs.com/apps/anthropic（需填入 Claude 模型名）。不启用时自动使用内置启发式引擎，开箱即用。</div>
+      <div class="hint">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 会自动挂载该 Provider 的可用模型(下拉选择 / 输入搜索);不启用时用内置启发式引擎,开箱即用。</div>
     </div>
     <div class="modal-foot"><span id="aiTestResult" class="ai-test-result"></span><button class="btn" id="aiTestBtn" data-i18n="sre.ai_test">测试连接</button><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
   </div>
@@ -1190,42 +1192,24 @@
 
 <!-- ===== AI 对话弹窗（与已配置 Provider 直接对话，确认可用） ===== -->
 <div class="mask" id="aiChatMask" data-close>
-  <div class="modal">
+  <div class="modal" style="max-width:700px">
     <div class="modal-head">
-      <h3 data-i18n="sre.ai_chat_title">AI 对话 · 助手自检</h3>
+      <h3>🤖 AI 对话 · 自主运维助手</h3>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="hint" style="margin-bottom:10px" data-i18n="sre.ai_chat_hint">与已配置的 AI Provider 直接对话，确认其确实可用；也可询问监控 / 告警 / 排障相关问题。</div>
+      <div class="hint" style="margin-bottom:10px">统一 AI 对话:既能闲聊自检确认 Provider 可用,也能作为自主运维 Agent 帮你排障——描述问题即可,它会自动调用工具(查指标/日志/告警/诊断/修复)。</div>
       <div id="aiChatLog" class="ai-chat-log"></div>
       <div class="ai-chat-input">
-        <textarea id="aiChatInput" rows="2" data-i18n-placeholder="sre.ai_chat_ph" placeholder="输入消息，Enter 发送、Shift+Enter 换行…"></textarea>
+        <textarea id="aiChatInput" rows="2" placeholder="输入消息或描述问题，Enter 发送、Shift+Enter 换行…"></textarea>
         <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
       </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具:query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action</div>
     </div>
   </div>
 </div>
 
-<!-- ===== Hermes Agent 对话弹窗（自主运维 Agent） ===== -->
-<div class="mask" id="hermesMask" data-close>
-  <div class="modal" style="max-width:700px">
-    <div class="modal-head">
-      <h3>🤖 Hermes Agent · 自主运维</h3>
-      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="hint" style="margin-bottom:10px">Hermes 是自主运维 Agent，可查询指标、搜索日志、分析告警、执行诊断命令、触发修复动作。你可以直接描述问题，它会自动调用工具来排查。</div>
-      <div id="hermesChatLog" class="ai-chat-log"></div>
-      <div class="ai-chat-input">
-        <textarea id="hermesChatInput" rows="2" placeholder="描述你遇到的问题，Hermes 会自主排查…"></textarea>
-        <button class="btn primary" id="hermesChatSendBtn">发送</button>
-      </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">
-        可用工具：query_metrics | search_logs | list_alerts | search_similar_cases | run_diagnostic | run_python_action
-      </div>
-    </div>
-  </div>
-</div>
+<!-- （Hermes 对话弹窗已并入上方 aiChatMask「AI 对话」——单窗口统一走 Hermes Agent。） -->
 
 <!-- ===== 新建转发弹窗 ===== -->
 <div class="mask" id="forwardMask" data-close>

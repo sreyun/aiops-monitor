@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -704,11 +705,9 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	_, prov := normalizeEndpoint(c.Endpoint)
 	hint := "openai"
 	switch prov {
-	case aiProvBailianNative:
-		hint = "bailian-native"
 	case aiProvAnthropic:
 		hint = "anthropic"
-	case aiProvOpenAI:
+	default: // aiProvOpenAI
 		if isBailianEndpoint(c.Endpoint) {
 			hint = "bailian-compat"
 		}
@@ -725,36 +724,104 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleAIModels returns a curated list of recommended models for quick selection.
 // GET /api/v1/ai/models
+// fetchProviderModels 查询 OpenAI 兼容 provider 的 GET {base}/models（适用于
+// OpenAI / DeepSeek / Ollama / 百炼兼容模式…），返回模型 ID 列表。任何失败都返回
+// nil,调用方回落到精选列表。Anthropic 无公开的 models 列表端点 → 返回 nil。
+func fetchProviderModels(endpoint, apiKey string) []string {
+	if strings.TrimSpace(endpoint) == "" {
+		return nil
+	}
+	ep, prov := normalizeEndpoint(endpoint)
+	if prov == aiProvAnthropic {
+		return nil
+	}
+	base := ep
+	if i := strings.LastIndex(base, "/chat/completions"); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.TrimRight(base, "/")
+	req, err := http.NewRequest(http.MethodGet, base+"/models", nil)
+	if err != nil {
+		return nil
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out) != nil {
+		return nil
+	}
+	var ids []string
+	for _, m := range out.Data {
+		if strings.TrimSpace(m.ID) != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}
+
+// handleAIModels 返回模型下拉候选：自动挂载已配置 provider 的实时模型列表
+// （表单值优先，其次已保存配置；百炼兼容模式会返回 qwen-* 等），再并上精选兜底。
+// POST /api/v1/ai/models  {endpoint?, api_key?}
 func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
-	// Provider-specific model suggestions
 	type modelSuggestion struct {
 		Value    string `json:"value"`
 		Label    string `json:"label"`
 		Provider string `json:"provider"`
 	}
-	models := []modelSuggestion{
-		// Alibaba Bailian (DashScope) — OpenAI 兼容 / 原生 Text Gen
+	var c AIConfig
+	_ = json.NewDecoder(r.Body).Decode(&c) // body 可选
+	saved := s.cfg.AIConfig()
+	if strings.TrimSpace(c.Endpoint) == "" {
+		c.Endpoint = saved.Endpoint
+	}
+	if c.APIKey == "" || strings.Contains(c.APIKey, "****") {
+		c.APIKey = saved.APIKey
+	}
+
+	// 自动挂载：查询 provider 的 /models
+	var live []modelSuggestion
+	for _, id := range fetchProviderModels(c.Endpoint, c.APIKey) {
+		live = append(live, modelSuggestion{Value: id, Label: id, Provider: "live"})
+	}
+
+	// 精选补充/兜底（Anthropic/Claude 无 /models 端点，靠这个）
+	curated := []modelSuggestion{
 		{Value: "qwen-plus", Label: "通义千问-Plus（性价比推荐）", Provider: "bailian"},
 		{Value: "qwen-max", Label: "通义千问-Max（最强能力）", Provider: "bailian"},
 		{Value: "qwen-turbo", Label: "通义千问-Turbo（速度优先）", Provider: "bailian"},
-		{Value: "qwen-plus-latest", Label: "通义千问-Plus-Latest", Provider: "bailian"},
-		{Value: "qwen-max-latest", Label: "通义千问-Max-Latest", Provider: "bailian"},
-		// Anthropic / Claude（百炼 Anthropic 兼容端点）
 		{Value: "claude-3-5-sonnet-20241022", Label: "Claude 3.5 Sonnet（推荐）", Provider: "anthropic"},
 		{Value: "claude-3-5-haiku-20241022", Label: "Claude 3.5 Haiku（轻量快速）", Provider: "anthropic"},
 		{Value: "claude-3-opus-20240229", Label: "Claude 3 Opus（最强推理）", Provider: "anthropic"},
-		// OpenAI
 		{Value: "gpt-4o-mini", Label: "GPT-4o Mini（轻量推荐）", Provider: "openai"},
 		{Value: "gpt-4o", Label: "GPT-4o（全能）", Provider: "openai"},
-		{Value: "gpt-4-turbo", Label: "GPT-4 Turbo", Provider: "openai"},
-		// DeepSeek
 		{Value: "deepseek-chat", Label: "DeepSeek-V3（通用对话）", Provider: "deepseek"},
 		{Value: "deepseek-reasoner", Label: "DeepSeek-R1（推理增强）", Provider: "deepseek"},
-		// Moonshot / Kimi
-		{Value: "moonshot-v1-8k", Label: "Moonshot v1-8K", Provider: "moonshot"},
-		{Value: "moonshot-v1-32k", Label: "Moonshot v1-32K（长文本）", Provider: "moonshot"},
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+
+	seen := map[string]bool{}
+	models := make([]modelSuggestion, 0, len(live)+len(curated))
+	for _, m := range append(live, curated...) {
+		if m.Value == "" || seen[m.Value] {
+			continue
+		}
+		seen[m.Value] = true
+		models = append(models, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models, "live_count": len(live)})
 }
 
 // handleAIChat is a lightweight SRE-assistant chat over the configured provider so
