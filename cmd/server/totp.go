@@ -3,7 +3,7 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- TOTP/HOTP(RFC 6238/4226)标准强制用 HMAC-SHA1
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"

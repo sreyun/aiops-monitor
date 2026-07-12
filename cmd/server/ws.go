@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- WebSocket 握手(RFC 6455)强制用 SHA-1 生成 Sec-WebSocket-Accept，非加密用途
 	"encoding/base64"
 	"encoding/binary"
 	"errors"

@@ -47,10 +47,10 @@ func loadOrCreateHostID(path string) string {
 	b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp})
 	if err == nil {
 		tmp := path + ".tmp"
-		if e := os.WriteFile(tmp, b, 0o644); e == nil {
+		if e := os.WriteFile(tmp, b, 0o600); e == nil {
 			_ = os.Rename(tmp, path)
 		} else {
-			_ = os.WriteFile(path, b, 0o644) // fallback: direct write
+			_ = os.WriteFile(path, b, 0o600) // fallback: direct write（host-id 身份文件，仅属主可读）
 		}
 	}
 	return id

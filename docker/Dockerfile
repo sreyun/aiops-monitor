@@ -8,9 +8,14 @@
 #   arm64 image does NOT pay for QEMU emulation of the (slow) Go compile.
 # ============================================================================
 ARG BASE_REGISTRY=swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io
+# GO_VERSION 默认 1.22（SWR 镜像仓现只有此版本，保证本地构建可用）。
+# ⚠️ 安全：Go 1.22 已 EOL，含 crypto/tls CVE(GO-2026-5856)。发布版应升级：
+#   先把 golang:1.26-alpine 同步到 SWR，再改此默认；或用官方源构建：
+#   docker build --build-arg BASE_REGISTRY=docker.io --build-arg GO_VERSION=1.26 ...
+ARG GO_VERSION=1.22
 
 # ---- Build stage (always runs on the native BUILDPLATFORM) ----
-FROM --platform=$BUILDPLATFORM ${BASE_REGISTRY}/golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM ${BASE_REGISTRY}/golang:${GO_VERSION}-alpine AS builder
 WORKDIR /src
 # TARGETOS/TARGETARCH are provided automatically by buildx per target platform.
 ARG TARGETOS

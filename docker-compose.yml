@@ -89,7 +89,7 @@ services:
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
-      - "-retentionPeriod=36"        # 指标保留 12 个月，可按需调整
+      - "-retentionPeriod=36"        # 指标保留 36 个月，可按需调整
       - "-httpListenAddr=:8428"
     #ports:
     #  - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
@@ -98,8 +98,11 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/postgres:18-alpine
-    # image: postgres:18-alpine
+    # pgvector 版 PostgreSQL：AI 诊断 RAG（diagnosis_embeddings 的 vector 列）必需。
+    # ⚠️ 原版 postgres:18-alpine 不含 pgvector，CREATE EXTENSION vector 会失败导致服务端起不来。
+    # 国内/生产：建议把 pgvector/pgvector:pg18 同步到 SWR 后改用镜像地址加速拉取。
+    image: pgvector/pgvector:pg18
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/postgres:18-alpine   # 原版无 pgvector，勿用
     container_name: aiops-pg
     environment:
       - POSTGRES_USER=aiops

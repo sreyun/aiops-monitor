@@ -151,7 +151,7 @@ func (m *termManager) persistRecording(a termArchive) {
 	if m.recDir == "" || a.info.ID == "" || len(a.recording) == 0 {
 		return
 	}
-	if err := os.MkdirAll(m.recDir, 0o755); err != nil {
+	if err := os.MkdirAll(m.recDir, 0o750); err != nil { // 会话录制含敏感内容，禁止 others 读
 		return
 	}
 	b, err := json.Marshal(dbTermArchive{Info: a.info, Recording: a.recording})
