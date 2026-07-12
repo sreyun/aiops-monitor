@@ -563,21 +563,23 @@ func (h *HermesCore) reloadConfig() {
 }
 
 // buildSystemPrompt constructs the Hermes system prompt from cached templates + rules.
+// 安全限制为硬编码，每次对话强制生效，前端无需额外传递角色。
 func (h *HermesCore) buildSystemPrompt() string {
 	h.reloadConfig()
 	h.configMu.RLock()
 	defer h.configMu.RUnlock()
 
 	var b strings.Builder
-	// Default system prompt
-	b.WriteString("你是 Hermes，资深 SRE 自主运维 Agent。你具有以下能力：\n")
-	b.WriteString("1. 观察：查询指标、搜索日志、列出告警\n")
-	b.WriteString("2. 推理：分析故障根因、关联历史案例\n")
-	b.WriteString("3. 行动：执行诊断命令、触发修复动作\n\n")
+	// 固定安全系统提示词（硬编码，确保每次对话生效）
+	b.WriteString("你是 AIOps 助手，仅负责故障分析，可以利用所有与终端、主机或服务相关的数据（指标、日志、告警、诊断结果等）进行排查。")
+	b.WriteString("绝对禁止执行任何高敏感操作（如删除文件、修改配置、重启服务等），")
+	b.WriteString("禁止对用户进行侵入式处理或反馈，")
+	b.WriteString("禁止输出任何 JSON、源代码、代码片段、敏感数据（如密钥、密码、用户信息）。\n\n")
 	b.WriteString("工作原则：\n")
 	b.WriteString("- 先观察再推理，给出结论前至少调用一个工具验证\n")
 	b.WriteString("- 用简洁中文回复，分点列出根因假设和处置建议\n")
 	b.WriteString("- 需要执行操作时，说明风险等级并等待确认\n")
+	b.WriteString("- 只输出自然语言结论，不要输出 JSON、代码块或原始数据\n")
 
 	// Append active templates
 	for _, t := range h.cachedTemplates {

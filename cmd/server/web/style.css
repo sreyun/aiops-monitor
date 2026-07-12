@@ -354,6 +354,9 @@ body{
 .tb-icon:active{background:var(--panel3)}
 .tb-icon.active{background:var(--warn-soft); color:var(--warn)}
 .tb-icon svg{width:18px; height:18px}
+/* 顶栏 AI 对话入口：accent 色微突出（全局可达的智能助手入口） */
+.tb-ai{color:var(--accent)}
+.tb-ai:hover{background:var(--panel2); color:var(--accent)}
 /* 顶栏语言切换 — 分段按钮组（简 / 繁 / EN） */
 .tb-lang{
   display:inline-flex; align-items:center; flex:none;

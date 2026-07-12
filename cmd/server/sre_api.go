@@ -686,8 +686,8 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTestAIConfig verifies the AI provider is reachable and actually returns a
-// completion, so operators can confirm endpoint/key/model BEFORE relying on it.
-// POST /api/v1/ai/test — a masked/blank key means "use the currently-saved one".
+// completion via SSE streaming, so operators can confirm endpoint/key/model BEFORE
+// relying on it. POST /api/v1/ai/test — a masked/blank key means "use the currently-saved one".
 func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	var c AIConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
@@ -713,13 +713,23 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	start := time.Now()
-	reply, err := aiComplete(c, "你是连通性自检助手，用一句话确认你已就绪。", "请回复：AI 服务正常，已就绪。")
+
+	// 统一使用流式 SSE 输出
+	s.setupSSE(w)
+	reply, err := streamChatFiltered(w, c, []map[string]string{
+		{"role": "system", "content": "你是连通性自检助手，用一句话确认你已就绪。"},
+		{"role": "user", "content": "请回复：AI 服务正常，已就绪。"},
+	})
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency, "provider_hint": hint})
+		fmt.Fprintf(w, "data: {\"error\":\"%s\",\"latency_ms\":%d,\"provider_hint\":\"%s\"}\n\n", escapeSSE(err.Error()), latency, hint)
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "latency_ms": latency, "model": c.Model, "provider_hint": hint})
+	// 发送结果元数据后结束
+	meta, _ := json.Marshal(map[string]any{"ok": true, "reply": reply, "latency_ms": latency, "model": c.Model, "provider_hint": hint})
+	fmt.Fprintf(w, "data: {\"result\":%s}\n\n", string(meta))
+	fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
 // handleAIModels returns a curated list of recommended models for quick selection.
@@ -847,7 +857,9 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
+		s.setupSSE(w)
+		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写并保存\"}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
 
@@ -878,19 +890,9 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
-	// Stream mode
-	if req.Stream {
-		s.setupSSE(w)
-		_, _ = streamChat(w, cfg, msgs)
-		return
-	}
-
-	reply, err := aiChat(cfg, msgs)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply})
+	// 统一 AI 对话默认走 SSE 流式
+	s.setupSSE(w)
+	_, _ = streamChat(w, cfg, msgs)
 }
 
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
@@ -1553,28 +1555,17 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
-		if req.Stream {
-			// 统一 AI 对话走 SSE：未启用时也发 SSE 错误帧，前端才能正确显示。
-			s.setupSSE(w)
-			fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写 Endpoint / Key / 模型并勾选启用后保存\"}\n\n")
-			fmt.Fprint(w, "data: [DONE]\n\n")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用"})
+		// 统一 AI 对话走 SSE：未启用时也发 SSE 错误帧，前端才能正确显示。
+		s.setupSSE(w)
+		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写 Endpoint / Key / 模型并勾选启用后保存\"}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
 	session := s.hermes.ensureHermesSession(req.IncidentID)
-	if req.Stream {
-		s.setupSSE(w)
-		s.hermes.Chat(session, req.Message, true, w)
-		return
-	}
-	reply, err := s.hermes.Chat(session, req.Message, false, nil)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "session_id": session.ID})
+	// 统一 AI 对话默认走 SSE 流式
+	s.setupSSE(w)
+	s.hermes.Chat(session, req.Message, true, w)
+	return
 }
 
 // handleHermesSessions lists recent Hermes sessions.

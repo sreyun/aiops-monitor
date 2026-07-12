@@ -417,9 +417,9 @@ async function incidentAction(id, act){
 }
 // ---- AI 诊断多轮对话 ----
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
-// calls onDelta for each token chunk, onError for errors, and onDone when complete.
-// Returns the accumulated full text.
-async function readSSEStream(resp,onDelta,onError,onDone){
+// calls onDelta for each token chunk, onError for errors, onResult for result
+// metadata, and onDone when complete. Returns the accumulated full text.
+async function readSSEStream(resp,onDelta,onError,onDone,onResult){
   const reader=resp.body.getReader();
   const decoder=new TextDecoder();
   let buf="";
@@ -441,6 +441,7 @@ async function readSSEStream(resp,onDelta,onError,onDone){
           try {
             const j=JSON.parse(data);
             if(j.error){ if(onError) onError(j.error); return fullText; }
+            if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
           } catch(e){ /* skip malformed chunks */ }
         }
@@ -781,30 +782,58 @@ async function saveAIConfig(){
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
-// AI 连接测试：把当前表单配置发到后端做一次真实 completion，直接展示是否可用 + 延迟 + 回复
+// AI 连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
 async function testAIConfig(){
   const el=$("aiTestResult");
   if(el){ el.textContent="测试中…"; el.className="ai-test-result testing"; }
   const body={enabled:true,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim()};
   try{
     const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    // 读取 SSE 流式响应
+    let resultMeta=null, reply="", error=null;
+    await readSSEStream(r,
+      (delta,fullText)=>{ reply=fullText; },  // 累积 delta（不逐字展示，仅收集结果）
+      (err)=>{ error=err; },
+      (fullText)=>{ if(!reply) reply=fullText; },
+      (meta)=>{ resultMeta=meta; }  // 接收 result 元数据
+    );
     if(!el) return;
-    if(j.ok){
-      let extra="";
-      if(j.provider_hint){
-        const labels={openai:"OpenAI 兼容","bailian-compat":"百炼兼容","bailian-native":"百炼原生",anthropic:"Anthropic"};
-        extra=` · ${labels[j.provider_hint]||j.provider_hint}`;
-      }
-      el.textContent=`✓ 可用${extra} · ${j.latency_ms||0}ms · ${(j.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
+    if(error){
+      el.textContent="✗ "+error; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+      return;
     }
-    else {
-      let err=j.error||"未知错误";
-      // Highlight 404 errors with extra guidance
-      if(err.includes("404")){ err="🔍 "+err+"\n提示：请确认 Endpoint 类型正确。百炼用户可点上方「百炼兼容」/「Anthropic」按钮快速填入正确端点。"; }
-      el.textContent="✗ "+err; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+    // 优先使用 result 元数据展示
+    if(resultMeta && resultMeta.ok){
+      let extra="";
+      if(resultMeta.provider_hint){
+        const labels={openai:"OpenAI 兼容","bailian-compat":"百炼兼容",anthropic:"Anthropic"};
+        extra=` · ${labels[resultMeta.provider_hint]||resultMeta.provider_hint}`;
+      }
+      el.textContent=`✓ 可用${extra} · ${resultMeta.latency_ms||0}ms · ${(resultMeta.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
+    } else if(reply){
+      el.textContent=`✓ 可用 · ${reply.slice(0,48)}`; el.className="ai-test-result ok";
+    } else {
+      el.textContent="✗ 未收到有效回复"; el.className="ai-test-result err";
     }
   }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
+}
+
+// 过滤 AI 输出中的敏感内容：JSON 块、代码块、密钥、密码等
+function filterDisplayContent(text){
+  if(!text) return text;
+  let t=text;
+  // 去掉 markdown 代码块（```json ... ``` 或 ``` ... ```）
+  t=t.replace(/```[\s\S]*?```/g,'[已过滤代码块]');
+  // 去掉内联代码块 `...`
+  t=t.replace(/`{1,2}[^`]+`{1,2}/g,'');
+  // 去掉 JSON 对象/数组（tool_calls 等）
+  t=t.replace(/\{\s*"tool_calls"[\s\S]*?\}\s*$/g,'');
+  // 隐藏 API 密钥（sk-... 格式）
+  t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,'[已隐藏密钥]');
+  // 隐藏常见密码/密钥字段
+  t=t.replace(/\b(api_key|apikey|secret|password|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1=[已隐藏]');
+  return t.trim();
 }
 // 统一「AI 对话」——单窗口,后端走 Hermes 自主运维 Agent（能对话 + 自动调用工具,
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
@@ -835,9 +864,19 @@ async function sendAIChat(){
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
     await readSSEStream(r,
-      (delta,fullText)=>{ if(!streamed){ if(pending) pending.textContent=""; streamed=true; } if(pending) pending.textContent=fullText; },
+      (delta,fullText)=>{
+        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
+        // 过滤敏感内容后展示（允许思考过程，过滤 JSON/代码块/密钥）
+        const filtered=filterDisplayContent(fullText);
+        if(pending) pending.textContent=filtered||"…";
+      },
       (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
-      (fullText)=>{ if(!streamed&&pending){ pending.textContent=fullText||"（空回复）"; } }
+      (fullText)=>{
+        if(!streamed&&pending){
+          const filtered=filterDisplayContent(fullText||"");
+          pending.textContent=filtered||"（空回复）";
+        }
+      }
     );
   }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
 }
@@ -850,6 +889,7 @@ safeAddEventListener("aiTestBtn","click",testAIConfig);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiChatBtn","click",openAIChat);
+safeAddEventListener("topAiBtn","click",openAIChat); // 顶栏 AI 对话入口（全局可达）
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
 

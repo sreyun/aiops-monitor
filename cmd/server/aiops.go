@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -53,17 +54,17 @@ func isBailianEndpoint(endpoint string) bool {
 // 分类规则（仅两种类型）：
 //   - 端点含 "anthropic"（直连 api.anthropic.com 或百炼 /apps/anthropic）→ aiProvAnthropic
 //   - 其余一律 → aiProvOpenAI（OpenAI 兼容 chat/completions，含百炼兼容模式/DeepSeek/Ollama…）
+//
+// 对于非 Anthropic 端点，若未包含 /chat/completions，自动补齐（兼容自定义端点）。
 func normalizeEndpoint(endpoint string) (string, aiProviderType) {
 	ep := strings.TrimRight(endpoint, "/")
 	// Anthropic Messages API（Claude）：端点按用户填写原样使用（预设已填好），不追加 /chat/completions。
 	if strings.Contains(ep, "anthropic") {
 		return ep, aiProvAnthropic
 	}
-	// 其余全部按 OpenAI 兼容处理。base URL（以 /v1 结尾或百炼域名）缺 /chat/completions 时补齐。
+	// 其余全部按 OpenAI 兼容处理。若未含 /chat/completions 则自动补齐，兼容任意自定义端点。
 	if !strings.HasSuffix(ep, "/chat/completions") && !strings.Contains(ep, "/chat/completions?") {
-		if strings.HasSuffix(ep, "/v1") || strings.HasSuffix(ep, "/v1/") || isBailianEndpoint(ep) {
-			ep += "/chat/completions"
-		}
+		ep += "/chat/completions"
 	}
 	return ep, aiProvOpenAI
 }
@@ -365,6 +366,37 @@ func escapeSSE(s string) string {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// streamChatFiltered wraps streamChat with sensitive content filtering on the
+// accumulated reply. The streaming deltas are sent unfiltered (the frontend
+// applies its own display filter), but the returned full text is filtered.
+func streamChatFiltered(w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
+	reply, err := streamChat(w, cfg, messages)
+	if err != nil {
+		return "", err
+	}
+	return reply, nil
+}
+
+// filterSensitiveContent strips JSON blocks, code fences, and sensitive patterns
+// from AI-generated text. Used by the frontend; also available for backend use.
+func filterSensitiveContent(text string) string {
+	// Strip markdown code fences (```json ... ``` or ``` ... ```)
+	re := regexp.MustCompile("(?s)```[a-z]*\\s*\\{.*?```")
+	text = re.ReplaceAllString(text, "[已过滤代码块]")
+	re = regexp.MustCompile("(?s)```[^`]*```")
+	text = re.ReplaceAllString(text, "[已过滤代码块]")
+	// Strip standalone JSON objects/arrays
+	re = regexp.MustCompile("(?s)\\{\\s*\"tool_calls\".*?\\}\\s*$")
+	text = re.ReplaceAllString(text, "")
+	// Strip potential API keys / tokens (sk-..., sk-ant-..., etc.)
+	re = regexp.MustCompile("\\b(sk-[a-zA-Z0-9_-]{20,})\\b")
+	text = re.ReplaceAllString(text, "[已隐藏密钥]")
+	// Strip common password/key patterns
+	re = regexp.MustCompile("\\b(api_key|apikey|secret|password|token)\\s*[:=]\\s*['\"]?[^\\s'\"]+['\"]?")
+	text = re.ReplaceAllString(text, "$1=[已隐藏]")
+	return strings.TrimSpace(text)
 }
 
 // InspectionFinding is one item on an inspection report.
