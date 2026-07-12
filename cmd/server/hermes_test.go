@@ -70,7 +70,7 @@ func TestHermesHostContextAndToolLoop(t *testing.T) {
 
 	// (2) 工具调用闭环
 	sess := &HermesSession{}
-	reply, err := h.Chat(context.Background(), sess, "查询主机 web-01 的 CPU 使用率", false, nil)
+	reply, err := h.Chat(context.Background(), sess, "查询主机 web-01 的 CPU 使用率", nil, false, nil)
 	if err != nil {
 		t.Fatalf("Chat 出错: %v", err)
 	}
@@ -276,5 +276,87 @@ func TestDiagCommandAllowed(t *testing.T) {
 		if ok, reason := diagCommandAllowed(cmd); !ok {
 			t.Errorf("只读命令应放行却被拦截: %q → %s", cmd, reason)
 		}
+	}
+}
+
+// TestIsLikelyChatModel 验证模型下拉过滤：保留对话模型，剔除嵌入/语音/图像/重排等非对话模型（选中会 404）。
+func TestIsLikelyChatModel(t *testing.T) {
+	chat := []string{"gpt-4o", "gpt-4o-mini", "qwen-plus", "deepseek-chat", "claude-3-5-sonnet", "qwen-vl-max", "gpt-4o-audio-preview", "llama3.1:8b", "o1-preview"}
+	for _, m := range chat {
+		if !isLikelyChatModel(m) {
+			t.Errorf("对话模型被误过滤: %q", m)
+		}
+	}
+	nonchat := []string{"text-embedding-3-small", "text-embedding-v3", "bge-large-zh", "whisper-1", "tts-1", "dall-e-3", "stable-diffusion-xl", "bge-reranker-v2", "omni-moderation-latest", "cogview-3", "wanx-v1", "sora-1"}
+	for _, m := range nonchat {
+		if isLikelyChatModel(m) {
+			t.Errorf("非对话模型未被过滤: %q", m)
+		}
+	}
+}
+
+// TestExecDiagnosticGatedOnTerminalAccess 验证 AI 终端只读巡检的门控：未开启则拒绝执行任何主机命令；
+// 开启后只读白名单仍然生效（权限开关不放开写操作）。
+func TestExecDiagnosticGatedOnTerminalAccess(t *testing.T) {
+	store := NewStore()
+	store.RegisterHost("h1", "web-01", "fp")
+	cfg := newTestConfigStore(t)
+	hc := newHermesCore(&Server{store: store, cfg: cfg})
+
+	// 默认未开启 → 拒绝（且不解析主机、不执行）
+	out, _ := hc.execDiagnostic(map[string]any{"host_id": "web-01", "command": "df -h"})
+	if !strings.Contains(out, "未开启") {
+		t.Fatalf("终端权限未开启时应拒绝，实际: %q", out)
+	}
+	// 开启后，危险命令仍被只读白名单拦截（不受权限开关影响）
+	if err := cfg.SetHermesTerminalEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	out2, _ := hc.execDiagnostic(map[string]any{"host_id": "web-01", "command": "rm -rf /"})
+	if strings.Contains(out2, "未开启") {
+		t.Fatalf("已开启后不应再报未开启: %q", out2)
+	}
+	if !strings.Contains(out2, "非白名单") && !strings.Contains(out2, "禁止") {
+		t.Fatalf("危险命令应被只读白名单拦截: %q", out2)
+	}
+}
+
+// TestBuildRequestMessagesVision 验证多模态消息构造：图片按 provider 附到「用户提问」消息，
+// 且不误附到工具结果消息；无图片时 content 仍为字符串（不回归）。
+func TestBuildRequestMessagesVision(t *testing.T) {
+	msgs := []map[string]string{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "看这张图"},
+	}
+	imgs := []chatImage{{MIME: "image/png", Data: "AAAA"}}
+
+	oa := buildRequestMessages(msgs, imgs, aiProvOpenAI)
+	uc, ok := oa[1]["content"].([]map[string]any)
+	if !ok || len(uc) != 2 || uc[1]["type"] != "image_url" {
+		t.Fatalf("OpenAI 用户消息应为 [text,image_url]: %+v", oa[1]["content"])
+	}
+
+	an := buildRequestMessages(msgs, imgs, aiProvAnthropic)
+	uc2, ok := an[1]["content"].([]map[string]any)
+	if !ok || uc2[1]["type"] != "image" {
+		t.Fatalf("Anthropic 用户消息图片应为 image: %+v", an[1]["content"])
+	}
+
+	if plain := buildRequestMessages(msgs, nil, aiProvOpenAI); func() bool { _, s := plain[1]["content"].(string); return !s }() {
+		t.Errorf("无图片时 content 应保持字符串（避免回归）")
+	}
+
+	// 图片应附到「用户提问」而非「工具执行结果」消息
+	msgs2 := []map[string]string{
+		{"role": "user", "content": "看图"},
+		{"role": "assistant", "content": "..."},
+		{"role": "user", "content": "工具执行结果：xxx"},
+	}
+	r := buildRequestMessages(msgs2, imgs, aiProvOpenAI)
+	if _, isArr := r[0]["content"].([]map[string]any); !isArr {
+		t.Errorf("图片应附到用户提问(idx0)")
+	}
+	if _, isStr := r[2]["content"].(string); !isStr {
+		t.Errorf("工具结果消息不应带图片")
 	}
 }

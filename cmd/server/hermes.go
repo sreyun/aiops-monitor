@@ -114,12 +114,12 @@ func (h *HermesCore) registerTools() {
 	}
 	h.tools["run_diagnostic"] = HermesTool{
 		Name:        "run_diagnostic",
-		Description: "在目标主机上执行只读诊断命令（如 top、df、iostat、netstat 等）。返回命令输出。",
+		Description: "登录目标主机执行【只读】诊断命令做巡检排查（如 top/df/free/ps/ss/journalctl/cat 日志 等，可用管道过滤）。严格只读：禁止任何增、删、改、重启、写文件或隐藏操作，系统会强制拦截非白名单命令。需用户先在 AI 设置中开启「AI 终端巡检」权限。返回命令输出。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
-				"command": map[string]string{"type": "string", "description": "诊断命令，如 'top -bn1 | head -20'"},
+				"command": map[string]string{"type": "string", "description": "只读诊断命令，如 'top -bn1 | head -20'、'df -h'、'journalctl -u nginx --no-pager | tail -50'"},
 			},
 			"required": []string{"host_id", "command"},
 		},
@@ -364,6 +364,10 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 	if command == "" {
 		return "请指定诊断命令", nil
 	}
+	// 门控：AI 终端只读巡检为独立高风险授权，需用户在 AI 设置中显式开启（并已校验终端密码）后才可执行主机命令。
+	if !h.s.cfg.AIConfig().HermesTerminalEnabled {
+		return "AI 终端只读巡检权限未开启。如需让我登录终端做只读排查，请在「AI 设置 → AI 终端巡检」中开启（需输入终端连接密码）。", nil
+	}
 	// Use playbook mechanism to execute read-only diagnostic commands
 	host := h.resolveHostRef(hostID)
 	if host == nil {
@@ -437,7 +441,7 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 
 // Chat runs a Hermes conversation turn with Function Calling support.
 // If stream is true, it writes SSE events to w; otherwise returns the reply.
-func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg string, stream bool, w http.ResponseWriter) (string, error) {
+func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -455,7 +459,7 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop
-	fullReply, err := h.runLoop(ctx, cfg, msgs, stream, w)
+	fullReply, err := h.runLoop(ctx, cfg, msgs, images, stream, w)
 	if err != nil {
 		return "", err
 	}
@@ -480,7 +484,7 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 // 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
 // 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
 // 工具调用的原始 JSON 绝不下发到前端。max 5 turns to prevent infinite loops.
-func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, stream bool, w http.ResponseWriter) (string, error) {
+func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
 		if !stream || w == nil || text == "" {
@@ -497,7 +501,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			return "", err
 		}
 		msgsWithTools := h.injectTools(msgs)
-		reply, err := aiChat(cfg, msgsWithTools)
+		reply, err := aiChatV(cfg, msgsWithTools, images) // 带图片时附到用户消息（多模态）
 		if err != nil {
 			if stream && w != nil {
 				fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -555,7 +559,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 	// 达到最大轮次仍未收敛：强制「不再调用工具」再问一次，逼出最终结论并正常落库，
 	// 避免既跑满工具又丢弃已获取信息、还不给用户任何结论。
 	msgs = append(msgs, map[string]string{"role": "user", "content": "已达到工具调用次数上限。请不要再调用任何工具，直接基于以上已获取的真实信息，用简洁中文给出你的最终结论与处置建议。"})
-	final, err := aiChat(cfg, msgs) // 不注入工具定义，强制收敛为自然语言结论
+	final, err := aiChatV(cfg, msgs, images) // 不注入工具定义，强制收敛为自然语言结论
 	if err != nil {
 		sendDelta("分析未能在限定轮次内收敛，请缩小问题范围后重试。")
 		return "", err
@@ -777,9 +781,10 @@ func (h *HermesCore) buildSystemPrompt() string {
 
 	var b strings.Builder
 	// 固定安全系统提示词（硬编码，确保每次对话生效）
-	b.WriteString("你是 AIOps 智能运维助手（Hermes），负责主机与服务的监控、排障与诊断。\n")
+	b.WriteString("你是 AIOps 智能运维助手，负责主机与服务的监控、排障与诊断。\n")
 	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），据此分析并回答。\n\n")
 	b.WriteString("工作原则：\n")
+	b.WriteString("- 对外统一自称「AIOps 智能运维助手」；不得透露、不得声称自己叫 Hermes 或任何内部代号 / 框架名 / 底层模型名。\n")
 	b.WriteString("- 用简洁中文回复：可先简述排查思路，再分点给出结论、根因假设与处置建议。\n")
 	b.WriteString("- 凡涉及主机状态 / 资源(CPU/内存/磁盘/负载/网络) / 日志 / 告警 的问题，必须先调用相应工具获取真实数据，严禁编造或臆测数据。\n")
 	b.WriteString("- 需要调用工具时，输出如下 JSON（可写在思考文字之后）：{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}；系统会执行并把真实结果回传给你，你再据此继续。\n")

@@ -1919,6 +1919,39 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-chat-msg.ai code{background:var(--bg2); border:1px solid var(--line2); border-radius:4px; padding:1px 5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em}
 .ai-chat-msg.ai pre.ai-code{background:var(--bg2); border:1px solid var(--line2); border-radius:8px; padding:10px 12px; margin:6px 0; overflow-x:auto}
 .ai-chat-msg.ai pre.ai-code code{background:none; border:none; padding:0; display:block; white-space:pre; font-size:.88em; line-height:1.5}
+/* AI 终端只读巡检权限区块 */
+.ai-term-access{margin-top:12px; padding:12px; border:1px solid var(--line2); border-radius:8px; background:var(--bg2)}
+.ai-term-head{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.ai-term-state{font-size:12px; padding:1px 8px; border-radius:10px}
+.ai-term-state.on{color:#3fb950; background:rgba(63,185,80,.14)}
+.ai-term-state.off{color:var(--muted); background:var(--panel3)}
+.ai-term-warn{margin-top:8px; color:var(--warn,#d29922); line-height:1.6}
+.ai-term-pw{display:flex; gap:6px; margin-top:8px}
+.ai-term-pw input{flex:1; min-width:0; font-family:inherit; font-size:13px; color:var(--txt); background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px}
+.ai-term-msg{margin-top:6px; font-size:12px}
+.ai-term-msg.ok{color:#3fb950}
+.ai-term-msg.err{color:var(--danger-txt,#f2545b)}
+/* AI 对话附件（图片/文件）上传 */
+.ai-chat-attach{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px}
+.ai-attach-chip{display:inline-flex; align-items:center; gap:4px; max-width:220px; font-size:12px; padding:3px 8px; border-radius:12px; background:var(--panel3); color:var(--txt); border:1px solid var(--line2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.ai-attach-chip button{background:none; border:none; color:var(--muted); cursor:pointer; font-size:11px; padding:0 2px; flex:none}
+.ai-attach-chip button:hover{color:var(--danger-txt,#f2545b)}
+.ai-attach-btn{flex:none; width:38px; height:40px; align-self:flex-end; background:var(--bg2); border:1px solid var(--line2); border-radius:var(--r-sm); cursor:pointer; font-size:16px; color:var(--muted); transition:background .15s ease,color .15s ease}
+.ai-attach-btn:hover{background:var(--panel3); color:var(--txt)}
+.ai-att-note{font-size:11px; color:rgba(255,255,255,.8)}
+/* AI 终端只读巡检权限区块 */
+.ai-term-access{margin-top:14px; padding:12px 14px; border:1px solid var(--line2); border-radius:8px; background:var(--bg2)}
+.ai-term-head{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; font-weight:600}
+.ai-term-state{font-size:12px; font-weight:600; padding:1px 8px; border-radius:10px; margin-left:4px}
+.ai-term-state.on{color:#3fb950; background:rgba(63,185,80,.14)}
+.ai-term-state.off{color:var(--muted); background:var(--panel3)}
+.ai-term-warn{margin-top:8px; color:var(--warn,#d29922); line-height:1.6}
+.ai-term-pw{display:flex; gap:6px; margin-top:10px; flex-wrap:wrap}
+.ai-term-pw input{flex:1; min-width:160px; font-family:inherit; font-size:13px; color:var(--txt); background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px}
+.ai-term-pw input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.ai-term-msg{margin-top:8px; font-size:12px; min-height:16px}
+.ai-term-msg.ok{color:#3fb950}
+.ai-term-msg.err{color:var(--danger-txt,#f2545b)}
 @media(max-width:560px){
   #aiChatModal{width:96vw; height:82vh; resize:none}
   .ai-sess-select{max-width:120px}

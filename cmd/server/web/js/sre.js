@@ -748,9 +748,40 @@ async function openAIConfig(){
   const tr=$("aiTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; } // 清除上次遗留的测试结果
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
+    AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
   } catch(e){}
   loadAIModels(); // 打开时按当前配置自动获取 provider 模型
   $("aiConfigMask").classList.add("show");
+}
+// ===== AI 终端只读巡检权限：独立开关，开启需终端连接密码 =====
+let AI_TERM_ENABLED=false;
+function renderAITermState(){
+  const lbl=$("aiTermStateLabel"), btn=$("aiTermToggleBtn"), row=$("aiTermPwRow"), msg=$("aiTermMsg");
+  if(lbl){ lbl.textContent=AI_TERM_ENABLED?"已开启":"未开启"; lbl.className="ai-term-state "+(AI_TERM_ENABLED?"on":"off"); }
+  if(btn){ btn.textContent=AI_TERM_ENABLED?"关闭":"开启"; }
+  if(row) row.style.display="none";
+  if(msg){ msg.textContent=""; msg.className="ai-term-msg"; }
+}
+function toggleAITerm(){
+  if(AI_TERM_ENABLED){ aiTermSet(false,""); return; } // 关闭无需密码
+  const row=$("aiTermPwRow"); if(row) row.style.display="flex";
+  const pw=$("aiTermPw"); if(pw){ pw.value=""; setTimeout(()=>pw.focus(),50); }
+}
+function confirmAITerm(){
+  const pw=$("aiTermPw"), msg=$("aiTermMsg"), password=pw?pw.value:"";
+  if(!password){ if(msg){ msg.textContent="请输入终端连接密码"; msg.className="ai-term-msg err"; } return; }
+  aiTermSet(true,password);
+}
+async function aiTermSet(enabled,password){
+  const msg=$("aiTermMsg");
+  try{
+    const r=await fetch(`${API}/ai/terminal-access`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled,password})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ if(msg){ msg.textContent="✗ "+(j.error||("HTTP "+r.status)); msg.className="ai-term-msg err"; } return; }
+    AI_TERM_ENABLED=!!j.enabled; renderAITermState();
+    if(msg){ msg.textContent=AI_TERM_ENABLED?"✓ 已开启：AI 可执行只读终端巡检（仅查询，禁止任何增删改）":"已关闭 AI 终端巡检"; msg.className="ai-term-msg ok"; }
+    if(typeof toast==="function") toast(AI_TERM_ENABLED?"已开启 AI 终端只读巡检":"已关闭 AI 终端巡检","ok");
+  }catch(e){ if(msg){ msg.textContent="✗ 请求失败："+e; msg.className="ai-term-msg err"; } }
 }
 // 从当前表单 Endpoint+Key 自动获取该 Provider 的可用模型，填充可下拉/搜索的 datalist；
 // 获取不到时保留手动输入。不再内置任何预设模型。
@@ -896,9 +927,10 @@ function openAIChat(){
 }
 // 开新会话：清空会话 id / 历史 / 消息区
 function newAIChat(){
-  AI_CHAT_SESSION=0; AI_CHAT_HISTORY=[];
+  AI_CHAT_SESSION=0; AI_CHAT_HISTORY=[]; AI_ATTACHMENTS=[];
   const log=$("aiChatLog"); if(log) log.innerHTML=AI_CHAT_INTRO;
   const sel=$("aiSessionSelect"); if(sel) sel.value="";
+  renderAttachments();
 }
 // 加载历史会话列表到下拉选择器
 async function loadAISessions(){
@@ -949,20 +981,29 @@ function appendChatMsg(role,text){
   return div;
 }
 let _aiChatBusy=false;
+let AI_ATTACHMENTS=[]; // 待发送附件：{kind:"image"|"file", name, mime, data(图片base64), text(文件文本)}
 async function sendAIChat(){
   if(_aiChatBusy) return; // 双发守卫：上一条未完成前不再发，避免重复请求 / 会话分裂
   const inp=$("aiChatInput"); if(!inp) return;
-  const msg=inp.value.trim(); if(!msg) return;
+  const msg=inp.value.trim();
+  const atts=AI_ATTACHMENTS.slice();
+  if(!msg && !atts.length) return; // 无文本且无附件则不发
   inp.value="";
   _aiChatBusy=true;
   const sendBtn=$("aiChatSendBtn"); if(sendBtn) sendBtn.disabled=true;
-  appendChatMsg("user",msg);
-  AI_CHAT_HISTORY.push({role:"user",content:msg});
+  const imgN=atts.filter(a=>a.kind==="image").length, fileN=atts.filter(a=>a.kind==="file").length;
+  const attNote=atts.length?`　<span class="ai-att-note">📎 ${imgN?imgN+" 图 ":""}${fileN?fileN+" 文件":""}</span>`:"";
+  const log=$("aiChatLog");
+  if(log){ const d=document.createElement("div"); d.className="ai-chat-msg me"; d.innerHTML=esc(msg||"（附件）")+attNote; log.appendChild(d); log.scrollTop=log.scrollHeight; }
+  AI_CHAT_HISTORY.push({role:"user",content:msg||"（附件）"});
+  AI_ATTACHMENTS=[]; renderAttachments();
   const pending=appendChatMsg("assistant","🤔 思考中…");
   let answer="";
   try{
+    const images=atts.filter(a=>a.kind==="image").map(a=>({mime:a.mime,data:a.data}));
+    const files=atts.filter(a=>a.kind==="file").map(a=>({name:a.name,text:a.text}));
     const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),stream:true})});
+      body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),images,files,stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
     await readSSEStream(r,
@@ -994,6 +1035,33 @@ async function sendAIChat(){
     if(inp) inp.focus();
   }
 }
+// 附件预览渲染（图片/文件 chip，可删除）
+function renderAttachments(){
+  const box=$("aiChatAttach"); if(!box) return;
+  if(!AI_ATTACHMENTS.length){ box.innerHTML=""; box.style.display="none"; return; }
+  box.style.display="flex";
+  box.innerHTML=AI_ATTACHMENTS.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-att="${i}" title="移除">✕</button></span>`).join("");
+  box.querySelectorAll("[data-att]").forEach(b=>b.onclick=()=>{ AI_ATTACHMENTS.splice(parseInt(b.dataset.att),1); renderAttachments(); });
+}
+// 选择图片/文件：图片读为 base64（视觉），文本文件读为文本（注入上下文）
+function onAIChatFiles(ev){
+  const files=Array.from((ev.target&&ev.target.files)||[]);
+  for(const f of files){
+    if(f.type&&f.type.startsWith("image/")){
+      if(AI_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast("最多 4 张图片","err"); continue; }
+      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`图片 ${f.name} 超过 4MB`,"err"); continue; }
+      const rd=new FileReader();
+      rd.onload=()=>{ const s=String(rd.result||""); const c=s.indexOf(","); AI_ATTACHMENTS.push({kind:"image",name:f.name,mime:f.type||"image/png",data:c>=0?s.slice(c+1):s}); renderAttachments(); };
+      rd.readAsDataURL(f);
+    } else {
+      if(f.size>512*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 512KB，请上传关键片段`,"err"); continue; }
+      const rd=new FileReader();
+      rd.onload=()=>{ AI_ATTACHMENTS.push({kind:"file",name:f.name,text:String(rd.result||"")}); renderAttachments(); };
+      rd.readAsText(f);
+    }
+  }
+  if(ev.target) ev.target.value=""; // 允许重复选同一文件
+}
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
@@ -1003,10 +1071,16 @@ safeAddEventListener("aiTestBtn","click",testAIConfig);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型
+safeAddEventListener("aiTermToggleBtn","click",toggleAITerm);
+safeAddEventListener("aiTermConfirmBtn","click",confirmAITerm);
+safeAddEventListener("aiTermCancelBtn","click",()=>{ const r=$("aiTermPwRow"); if(r) r.style.display="none"; const m=$("aiTermMsg"); if(m){ m.textContent=""; m.className="ai-term-msg"; } });
+safeAddEventListener("aiTermPw","keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); confirmAITerm(); } });
 safeAddEventListener("aiChatBtn","click",openAIChat);
 safeAddEventListener("topAiBtn","click",openAIChat); // 顶栏 AI 对话入口（全局可达）
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
+safeAddEventListener("aiChatAttachBtn","click",()=>{ const f=$("aiChatFile"); if(f) f.click(); });
+safeAddEventListener("aiChatFile","change",onAIChatFiles);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
 safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));
 

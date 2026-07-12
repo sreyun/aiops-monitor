@@ -732,6 +732,54 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
+// handleAITerminalAccess 开启/关闭「AI 终端只读巡检」权限（独立开关）。
+// 开启为高风险授权：必须当前用户已设终端连接密码并校验通过（复用终端二次密码机制 + 限流）；
+// 关闭为安全方向，无需密码。开启后 AI 可执行【只读】诊断命令替代人工巡检，禁止任何增删改。
+// POST /api/v1/ai/terminal-access  {enabled:bool, password?:string}
+func (s *Server) handleAITerminalAccess(w http.ResponseWriter, r *http.Request) {
+	acc, ok := s.currentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
+		return
+	}
+	var req struct {
+		Enabled  bool   `json:"enabled"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if !req.Enabled { // 关闭：安全方向，直接关
+		_ = s.cfg.SetHermesTerminalEnabled(false)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "关闭 AI 终端只读巡检权限：" + acc.Username})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": false})
+		return
+	}
+	// 开启：必须已设终端密码 + 校验通过
+	if !s.cfg.HasTerminalPassword(acc.Username) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请先在「个人设置 → 终端安全」中设置终端连接密码，再开启 AI 终端巡检"})
+		return
+	}
+	allowed, remaining := s.auth.terminalAttemptAllowed(acc.Username)
+	if !allowed {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": Tr(r, "terminal_auth.locked"), "locked": true})
+		return
+	}
+	if !s.cfg.VerifyTerminalPassword(acc.Username, req.Password) {
+		s.auth.terminalAttemptFailed(acc.Username)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "终端密码错误", "remaining": remaining - 1})
+		return
+	}
+	s.auth.terminalAttemptReset(acc.Username)
+	if err := s.cfg.SetHermesTerminalEnabled(true); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存失败"})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "开启 AI 终端只读巡检权限（已校验终端密码）：" + acc.Username})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": true})
+}
+
 // fetchProviderModels 查询 OpenAI 兼容 provider 的 GET {base}/models（适用于
 // OpenAI / DeepSeek / Ollama / 百炼兼容模式…），返回模型 ID 列表。任何失败都返回
 // nil,调用方据此提示用户手动输入。Anthropic 无公开的 models 列表端点 → 返回 nil。
@@ -774,11 +822,31 @@ func fetchProviderModels(endpoint, apiKey string) []string {
 	}
 	var ids []string
 	for _, m := range out.Data {
-		if strings.TrimSpace(m.ID) != "" {
-			ids = append(ids, m.ID)
+		id := strings.TrimSpace(m.ID)
+		if id != "" && isLikelyChatModel(id) {
+			ids = append(ids, id)
 		}
 	}
 	return ids
+}
+
+// isLikelyChatModel 过滤掉明显非「对话(chat)」类模型（嵌入 / 语音 / 图像 / 重排 / 审核 / 视频等）。
+// 这些模型不能用于 /chat/completions，用户从下拉里选中它们测试/对话会直接 404/400，
+// 是"下拉选了模型却报 404"的根因。多模态对话模型（vl / audio / vision）予以保留。
+func isLikelyChatModel(id string) bool {
+	l := strings.ToLower(id)
+	for _, bad := range []string{
+		"embedding", "embed", "bge", "m3e", "gte-", "text2vec",
+		"tts", "whisper", "transcrib", "text-to-speech", "speech-to", "asr",
+		"dall-e", "dalle", "stable-diffusion", "flux", "cogview", "wanx", "midjourney", "kolors",
+		"rerank", "moderation",
+		"sora", "video",
+	} {
+		if strings.Contains(l, bad) {
+			return false
+		}
+	}
+	return true
 }
 
 // handleAIModels 返回模型下拉候选：仅自动获取已配置 provider 的实时模型列表
@@ -1525,13 +1593,21 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 		SessionID  int64               `json:"session_id,omitempty"`
 		IncidentID int64               `json:"incident_id,omitempty"`
 		History    []map[string]string `json:"history,omitempty"`
-		Stream     bool                `json:"stream,omitempty"`
+		Images     []struct {
+			MIME string `json:"mime"`
+			Data string `json:"data"` // base64（不含 data: 前缀）
+		} `json:"images,omitempty"`
+		Files []struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		} `json:"files,omitempty"`
+		Stream bool `json:"stream,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
+	if strings.TrimSpace(req.Message) == "" && len(req.Images) == 0 && len(req.Files) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
 		return
 	}
@@ -1543,12 +1619,41 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
+	// 展开上传的文本文件到消息上下文（对所有模型有效）；图片走多模态（需视觉模型）
+	msg := req.Message
+	for _, f := range req.Files {
+		txt := strings.TrimSpace(f.Text)
+		if txt == "" {
+			continue
+		}
+		if len([]rune(txt)) > 8000 { // 限制单文件注入长度，避免上下文爆炸
+			txt = string([]rune(txt)[:8000]) + "\n…（文件过长，已截断）"
+		}
+		name := f.Name
+		if name == "" {
+			name = "附件"
+		}
+		msg += fmt.Sprintf("\n\n【用户上传的文件：%s】\n%s", name, txt)
+	}
+	if strings.TrimSpace(msg) == "" {
+		msg = "（用户上传了图片，请查看并分析）"
+	}
+	var images []chatImage
+	for _, im := range req.Images {
+		if strings.TrimSpace(im.Data) == "" {
+			continue
+		}
+		images = append(images, chatImage{MIME: im.MIME, Data: im.Data})
+		if len(images) >= 4 { // 最多 4 张，控制上下文与成本
+			break
+		}
+	}
 	// 按 session_id 解析会话（多轮记忆 / 刷新恢复），前端 history 作为兜底
 	session := s.hermes.resolveSession(req.SessionID, req.History)
 	session.IncidentID = req.IncidentID
 	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
-	s.hermes.Chat(r.Context(), session, req.Message, true, w)
+	s.hermes.Chat(r.Context(), session, msg, images, true, w)
 	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]
 	fmt.Fprintf(w, "data: {\"session_id\":%d}\n\n", session.ID)
 	fmt.Fprint(w, "data: [DONE]\n\n")

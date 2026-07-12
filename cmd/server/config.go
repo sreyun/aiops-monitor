@@ -999,7 +999,20 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if a.APIKey == "" || strings.Contains(a.APIKey, "****") {
 		a.APIKey = cs.cfg.AI.APIKey
 	}
+	// AI 配置表单不含这些 Hermes 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
+	a.HermesEnabled = cs.cfg.AI.HermesEnabled
+	a.HermesAutoApprove = cs.cfg.AI.HermesAutoApprove
+	a.HermesTerminalEnabled = cs.cfg.AI.HermesTerminalEnabled
 	cs.cfg.AI = a
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetHermesTerminalEnabled 单独设置「AI 终端只读巡检」开关
+// （由 handleAITerminalAccess 在校验终端密码后调用；不走上面的表单保存路径）。
+func (cs *ConfigStore) SetHermesTerminalEnabled(v bool) error {
+	cs.mu.Lock()
+	cs.cfg.AI.HermesTerminalEnabled = v
 	cs.mu.Unlock()
 	return cs.save()
 }

@@ -30,8 +30,9 @@ type AIConfig struct {
 	Model              string `json:"model"`                // e.g. gpt-4o-mini / a local model name
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
 	// Hermes Agent 配置
-	HermesEnabled     bool `json:"hermes_enabled,omitempty"`      // 启用 Hermes 自主 Agent
-	HermesAutoApprove bool `json:"hermes_auto_approve,omitempty"` // 低风险操作自动执行
+	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
+	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
+	HermesTerminalEnabled bool `json:"hermes_terminal_enabled,omitempty"` // AI 终端只读巡检权限（独立开关，开启需校验终端密码；仅允许只读诊断命令）
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be
@@ -69,11 +70,110 @@ func normalizeEndpoint(endpoint string) (string, aiProviderType) {
 	return ep, aiProvOpenAI
 }
 
+// providerHTTPErrorMsg 把 provider 返回的非 200 状态转成用户友好的中文说明。
+// 关键：/chat/completions 在端点正确时，404 通常是【模型不存在/非对话模型】而非端点错误，
+// 所以 404 优先指向模型（此前一律说"端点不存在"会误导用户）。
+func providerHTTPErrorMsg(status int, body string, cfg AIConfig) string {
+	body = trimLine(strings.TrimSpace(body), 220)
+	suffix := ""
+	if body != "" {
+		suffix = "\n原始响应：" + body
+	}
+	switch status {
+	case http.StatusNotFound: // 404
+		msg := fmt.Sprintf("HTTP 404：模型不存在或该端点不支持此模型。请确认【模型名】%q 是否为该服务商有效的“对话(chat)”模型（嵌入/语音/图像等模型不能用于对话），或换用其它模型；并确认 Endpoint 正确。", cfg.Model)
+		if isBailianEndpoint(cfg.Endpoint) {
+			msg += "\n百炼 OpenAI 兼容 Endpoint 应为 https://dashscope.aliyuncs.com/compatible-mode/v1"
+		}
+		return msg + suffix
+	case http.StatusUnauthorized, http.StatusForbidden: // 401/403
+		lb := strings.ToLower(body)
+		if strings.Contains(lb, "access denied") || strings.Contains(lb, "accessdenied") ||
+			strings.Contains(lb, "not activated") || strings.Contains(lb, "未开通") || strings.Contains(lb, "no permission") {
+			return fmt.Sprintf("HTTP %d：模型 %q 未开通 / 未授权（Model.AccessDenied）。该模型在你的账号下没有访问权限，请到服务商控制台开通此模型，或改用已开通的模型（百炼一般默认可用 qwen-plus / qwen-turbo / qwen-max）。", status, cfg.Model) + suffix
+		}
+		return fmt.Sprintf("HTTP %d：认证失败，请检查 API Key 是否正确、是否有权调用模型 %q。", status, cfg.Model) + suffix
+	case http.StatusBadRequest: // 400
+		if body != "" {
+			return "HTTP 400：请求参数错误 — " + body
+		}
+		return fmt.Sprintf("HTTP 400：请求参数错误，请检查模型名称是否正确（当前：%s）", cfg.Model)
+	default:
+		if body != "" {
+			return fmt.Sprintf("HTTP %d：%s", status, body)
+		}
+		return fmt.Sprintf("HTTP %d：服务端返回异常状态码", status)
+	}
+}
+
 // aiChat calls an OpenAI-compatible, Bailian-native, or Anthropic-compatible
 // chat/completions endpoint with a full message list (multi-turn, stdlib only).
 // On a non-200 it surfaces a snippet of the provider's error body so the caller
 // (e.g. the config test) can show WHY it failed.
+// chatImage 是要发给多模态(视觉)模型的一张图片：MIME 类型 + base64 数据（不含 data: 前缀）。
+type chatImage struct {
+	MIME string
+	Data string
+}
+
+// buildRequestMessages 把纯文本消息转成请求消息；若带图片，则把图片附到「最后一条非工具结果的
+// user 消息」（即用户本轮提问），并按 provider 生成多模态 content 数组。无图片时与原来完全一致。
+func buildRequestMessages(messages []map[string]string, images []chatImage, prov aiProviderType) []map[string]any {
+	anchor := -1
+	if len(images) > 0 {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i]["role"] == "user" && !strings.HasPrefix(messages[i]["content"], "工具执行结果") {
+				anchor = i
+				break
+			}
+		}
+	}
+	out := make([]map[string]any, 0, len(messages))
+	for i, m := range messages {
+		if i == anchor {
+			out = append(out, map[string]any{"role": m["role"], "content": multimodalContent(m["content"], images, prov)})
+		} else {
+			out = append(out, map[string]any{"role": m["role"], "content": m["content"]})
+		}
+	}
+	return out
+}
+
+// multimodalContent 生成「文本 + 图片」的 content 数组（OpenAI 用 image_url，Anthropic 用 image/source）。
+func multimodalContent(text string, images []chatImage, prov aiProviderType) []map[string]any {
+	parts := make([]map[string]any, 0, len(images)+1)
+	if strings.TrimSpace(text) != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": text})
+	}
+	for _, img := range images {
+		if img.Data == "" {
+			continue
+		}
+		mime := img.MIME
+		if mime == "" {
+			mime = "image/png"
+		}
+		if prov == aiProvAnthropic {
+			parts = append(parts, map[string]any{
+				"type":   "image",
+				"source": map[string]any{"type": "base64", "media_type": mime, "data": img.Data},
+			})
+		} else {
+			parts = append(parts, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": "data:" + mime + ";base64," + img.Data},
+			})
+		}
+	}
+	return parts
+}
+
 func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
+	return aiChatV(cfg, messages, nil)
+}
+
+// aiChatV 在 aiChat 基础上支持给用户消息附带图片（多模态/视觉）。images 为 nil 时等价于纯文本。
+func aiChatV(cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
@@ -83,15 +183,17 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	var reqBody map[string]any
 	var extraHeaders map[string]string
 
+	reqMsgs := buildRequestMessages(messages, images, prov) // 无图片时等价于原 messages
 	switch prov {
 	case aiProvAnthropic:
-		// Anthropic Messages API format.
-		// system prompt is a top-level field, not a message role.
+		// Anthropic Messages API format. system prompt is a top-level field, not a message role.
 		var sys string
-		var userMsgs []map[string]string
-		for _, m := range messages {
+		var userMsgs []map[string]any
+		for _, m := range reqMsgs {
 			if m["role"] == "system" && sys == "" {
-				sys = m["content"]
+				if s, ok := m["content"].(string); ok {
+					sys = s
+				}
 			} else {
 				userMsgs = append(userMsgs, m)
 			}
@@ -111,7 +213,7 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	default: // aiProvOpenAI
 		reqBody = map[string]any{
 			"model":       cfg.Model,
-			"messages":    messages,
+			"messages":    reqMsgs,
 			"temperature": 0.2,
 			"stream":      false,
 		}
@@ -140,32 +242,7 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
-		msg := strings.TrimSpace(string(body))
-		switch resp.StatusCode {
-		case 404:
-			if isBailianEndpoint(cfg.Endpoint) {
-				return "", fmt.Errorf("HTTP 404：百炼 API 端点不存在。请确认 Endpoint 格式：\n"+
-					"  OpenAI 兼容：https://dashscope.aliyuncs.com/compatible-mode/v1\n"+
-					"  Anthropic（Claude）：https://dashscope.aliyuncs.com/apps/anthropic\n"+
-					"当前端点：%s", cfg.Endpoint)
-			}
-			return "", fmt.Errorf("HTTP 404：API 端点不存在，请检查 Endpoint 地址是否正确（当前：%s）", cfg.Endpoint)
-		case 401, 403:
-			if prov == aiProvAnthropic {
-				return "", fmt.Errorf("HTTP %d：认证失败，Anthropic 兼容端点请确认 API Key 是否正确（使用 x-api-key 头）", resp.StatusCode)
-			}
-			return "", fmt.Errorf("HTTP %d：认证失败，请检查 API Key 是否正确且有效", resp.StatusCode)
-		case 400:
-			if msg != "" {
-				return "", fmt.Errorf("HTTP 400：请求参数错误 — %s", trimLine(msg, 200))
-			}
-			return "", fmt.Errorf("HTTP 400：请求参数错误，请检查模型名称是否正确（当前：%s）", cfg.Model)
-		default:
-			if msg != "" {
-				return "", fmt.Errorf("HTTP %d：%s", resp.StatusCode, trimLine(msg, 220))
-			}
-			return "", fmt.Errorf("HTTP %d：服务端返回异常状态码", resp.StatusCode)
-		}
+		return "", fmt.Errorf("%s", providerHTTPErrorMsg(resp.StatusCode, string(body), cfg))
 	}
 
 	// Parse response according to provider type.
@@ -276,7 +353,7 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
-		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))))
+		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(providerHTTPErrorMsg(resp.StatusCode, string(body), cfg)))
 		return "", nil
 	}
 
