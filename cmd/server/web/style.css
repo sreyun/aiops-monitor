@@ -1871,6 +1871,43 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .log-lvl.crit{color:var(--crit-txt)} .log-lvl.warn{color:var(--warn-txt)} .log-lvl.info{color:var(--muted)}
 .log-host{flex:none; color:var(--accent-txt); font-size:11px}
 .log-msg{flex:1; min-width:0; color:var(--txt2); word-break:break-all; white-space:pre-wrap}
+/* 日志统计面板 */
+.log-stats{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:10px 14px; margin-bottom:10px; font-size:12px; display:none}
+.log-stats-bar{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px}
+.log-stats-left{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.log-stat-total{color:var(--muted); font-size:12px}
+.log-stat-total strong{color:var(--txt); font-size:14px}
+.log-stat-chip{display:inline-flex; align-items:center; gap:3px; padding:2px 8px; border-radius:999px; font-size:11px; background:var(--bg2); border:1px solid var(--line2); color:var(--txt2)}
+.log-stat-chip.crit{border-color:var(--crit);color:var(--crit-txt)}
+.log-stat-chip.warn{border-color:var(--warn);color:var(--warn-txt)}
+.log-stat-chip.info{color:var(--muted)}
+.log-stat-chip.host{cursor:pointer; transition:var(--transition-fast)}
+.log-stat-chip.host:hover{border-color:var(--accent);color:var(--accent-txt);background:var(--accent-soft)}
+.log-stat-chip.time{color:var(--muted); font-size:11px}
+.log-stat-chip strong{font-weight:600; font-size:12px}
+.log-stat-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px}
+.log-stat-label{color:var(--muted2); font-size:11px; flex:none}
+/* 日志行诊断按钮 */
+.log-line{position:relative}
+.log-diag-btn{flex:none; width:22px; height:22px; padding:0; border:none; border-radius:var(--r-xs); background:transparent; color:var(--muted); cursor:pointer; font-size:12px; transition:var(--transition-fast); opacity:0}
+.log-line:hover .log-diag-btn{opacity:1}
+.log-diag-btn:hover{background:var(--accent-soft); color:var(--accent)}
+/* 诊断结果卡片 */
+.log-diag-card{background:var(--panel); border:1px solid var(--warn); border-radius:var(--r-sm); padding:12px 14px; margin-top:12px}
+.log-diag-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:600; color:var(--txt); font-size:13px}
+.log-diag-close{background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; padding:2px 6px}
+.log-diag-close:hover{color:var(--txt)}
+.log-diag-summary{font-size:12px; color:var(--txt2); line-height:1.6; margin-bottom:8px; white-space:pre-wrap}
+.log-diag-ctx{font-size:11px; color:var(--muted); margin-top:6px; padding-top:6px; border-top:1px solid var(--line)}
+/* 诊断按钮 */
+#logDiagBtn{animation:pulse-border 2s infinite}
+@keyframes pulse-border{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.4)}50%{box-shadow:0 0 0 4px rgba(245,158,11,0)}}
+/* 移动端适配 */
+@media(max-width:768px){
+  .log-stats-bar{flex-direction:column; align-items:flex-start}
+  .log-stat-row{flex-direction:column; align-items:flex-start}
+  .log-diag-btn{opacity:1; width:28px; height:28px}
+}
 /* AI 巡检报告 */
 .ai-report{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 14px; margin-bottom:8px}
 /* 巡检「巡检了什么」上下文行 */
@@ -2375,3 +2412,29 @@ table tbody tr:hover{
 @media (max-width:720px){
   .api-ep-grid,.api-ep-grid2,.api-ep-grid3{grid-template-columns:1fr}
 }
+
+/* ===== 告警治理 ===== */
+.gov-section{margin-bottom:18px}
+.gov-section-head{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px}
+.gov-section-title{font-weight:600; font-size:14px; color:var(--txt)}
+.gov-section-desc{color:var(--muted); font-size:12px; flex:1; min-width:180px}
+.gov-section-head .btn{white-space:nowrap}
+.gov-empty{padding:20px; text-align:center; color:var(--muted); background:var(--bg2); border:1px dashed var(--line2); border-radius:10px; font-size:13px}
+.gov-rule{position:relative; border:1px solid var(--line2); border-radius:10px; padding:12px 14px; background:var(--bg2); margin-bottom:10px}
+.gov-rule-top{display:flex; align-items:center; gap:12px; margin-bottom:8px; padding-right:26px}
+.gov-name{flex:1; padding:7px 10px; font-size:13px; font-weight:600; background:var(--bg3); border:1px solid var(--line2); border-radius:6px; color:var(--txt)}
+.gov-en{white-space:nowrap; margin:0}
+.gov-match{background:var(--bg3); border:1px solid var(--line); border-radius:8px; padding:9px 10px; margin-bottom:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.gov-match-label{width:100%; font-size:12px; color:var(--txt2); margin-bottom:2px}
+.gov-match input[type=text],.gov-match input:not([type]){flex:1; min-width:150px}
+.gov-match input{padding:6px 9px; font-size:12px; background:var(--bg2); border:1px solid var(--line2); border-radius:6px; color:var(--txt)}
+.gm-m-host,.gm-src-host,.gm-tgt-host,.gm-m-types,.gm-src-types,.gm-tgt-types{flex:1; min-width:150px}
+.gov-lv-group{display:inline-flex; gap:10px; white-space:nowrap}
+.gov-lv,.gov-wd,.gov-ch{display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--txt2); cursor:pointer}
+.gov-window,.gov-weekdays,.gov-channels{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; font-size:12px}
+.gov-win-label{color:var(--muted); min-width:56px}
+.gov-window input[type=time]{padding:5px 8px; background:var(--bg3); border:1px solid var(--line2); border-radius:6px; color:var(--txt); font-size:12px}
+.gov-hint-inline{color:var(--muted); font-size:11px}
+.gov-weekdays,.gov-channels{gap:12px}
+.gov-samehost,.gov-continue{margin:0; font-size:12px}
+.gov-rule .switch span{font-size:12px}

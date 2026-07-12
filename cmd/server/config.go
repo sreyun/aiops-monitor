@@ -230,13 +230,14 @@ type ServerConfig struct {
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
 	// grace period, so existing agents don't drop offline the instant the token is
 	// rotated. Managed by ResetToken (rotate).
-	PrevInstallToken   string        `json:"prev_install_token,omitempty"`
-	PrevTokenExpiresAt int64         `json:"prev_token_expires_at,omitempty"`
-	RequireToken       bool          `json:"require_token"`
-	Account            AccountConfig `json:"account"`
-	Checks             []CustomCheck `json:"checks"`
-	APISystems         []APISystem   `json:"api_systems,omitempty"` // API 性能监控：按业务系统分组的批量接口
-	Playbooks          []Playbook    `json:"playbooks,omitempty"`
+	PrevInstallToken   string          `json:"prev_install_token,omitempty"`
+	PrevTokenExpiresAt int64           `json:"prev_token_expires_at,omitempty"`
+	RequireToken       bool            `json:"require_token"`
+	Account            AccountConfig   `json:"account"`
+	Checks             []CustomCheck   `json:"checks"`
+	APISystems         []APISystem     `json:"api_systems,omitempty"` // API 性能监控：按业务系统分组的批量接口
+	Governance         AlertGovernance `json:"governance,omitempty"`  // 告警治理：静默/抑制/生效时段/通知路由
+	Playbooks          []Playbook      `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
 	SLOs             []SLO             `json:"slos,omitempty"`
@@ -755,6 +756,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Checks = cs.cfg.Checks                     // checks managed via check endpoints
 	c.Playbooks = cs.cfg.Playbooks               // playbooks managed via playbook endpoints
 	c.APISystems = cs.cfg.APISystems             // API 性能监控：由专用端点管理，保护不被表单清零
+	c.Governance = cs.cfg.Governance             // 告警治理：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint

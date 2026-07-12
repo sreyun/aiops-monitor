@@ -75,6 +75,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
             <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
           </a>
+          <a class="nav-item" data-view="governance" title="告警治理：静默/抑制/生效时段/通知路由">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12M10 19h4"/></svg>
+            <span>告警治理</span>
+          </a>
           <a class="nav-item" data-view="sre" data-i18n-title="nav.sre" title="SRE 中枢：事件 / 自动修复 / SLO / 工单 / AI">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>
             <span data-i18n="nav.sre">SRE</span><span class="nav-count" id="navSre">0</span>
@@ -380,6 +384,25 @@
         <div id="apimonSystems"></div>
       </section>
 
+      <!-- 告警治理 -->
+      <section class="view" id="view-governance">
+        <div class="section-title"><span>告警治理</span><span class="tag">静默 / 抑制 / 生效时段 / 通知路由 —— 保存后即时生效</span>
+          <div style="margin-left:auto"><button class="btn primary" id="govSaveBtn">保存全部规则</button></div>
+        </div>
+        <div class="gov-section">
+          <div class="gov-section-head"><span class="gov-section-title">🔇 静默规则</span><span class="gov-section-desc">命中的告警不推送通知（仍记录、页面仍可见），可设生效时段做夜间静默</span><button class="btn" id="govAddSilence">+ 添加静默</button></div>
+          <div id="govSilenceList"></div>
+        </div>
+        <div class="gov-section">
+          <div class="gov-section-head"><span class="gov-section-title">🚫 抑制规则</span><span class="gov-section-desc">某源告警活跃时抑制目标告警，避免故障风暴（如主机离线时不再刷其指标告警）</span><button class="btn" id="govAddInhibit">+ 添加抑制</button></div>
+          <div id="govInhibitList"></div>
+        </div>
+        <div class="gov-section">
+          <div class="gov-section-head"><span class="gov-section-title">🔀 通知路由</span><span class="gov-section-desc">按级别/主机/类型决定发往哪些渠道；未配置任何路由=全部启用渠道都发</span><button class="btn" id="govAddRoute">+ 添加路由</button></div>
+          <div id="govRouteList"></div>
+        </div>
+      </section>
+
       <!-- 自动化运维 -->
       <section class="view" id="view-automation">
         <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
@@ -466,7 +489,10 @@
           </div>
         </div>
         <div class="hint" data-i18n="section.logs_hint">Agent 以 --log-paths 指定采集的日志文件（逗号分隔）增量上报；此处按主机 / 级别 / 关键字 / 时间检索。</div>
+        <div id="logStatsPanel" class="log-stats"></div>
         <div id="logResults" class="log-results"></div>
+        <div class="pager" id="logPager"></div>
+        <div id="logDiagResult"></div>
       </section>
 
       <!-- 端口转发 -->

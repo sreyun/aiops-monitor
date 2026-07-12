@@ -636,9 +636,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			} else if pt := r.URL.Query().Get("pt"); pt != "" {
 				tok = pt
 			}
-			if tok != "" && s.auth.validateProxyToken(tok) != "" {
-				next.ServeHTTP(w, r)
-				return
+			if tok != "" {
+				if user := s.auth.validateProxyToken(tok); user != "" {
+					// 纵深防御：代理令牌本就仅 operator+ 可签发，这里仍按令牌所属用户的
+					// 当前角色复核 RBAC，防止签发后被降权的用户在令牌有效窗口内经 /proxy/ 越权。
+					if s.routeAllowed(r, s.cfg.RoleOf(user)) {
+						next.ServeHTTP(w, r)
+						return
+					}
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.insufficient_permission")})
+					return
+				}
 			}
 		}
 		name := s.auth.userForRequest(r)

@@ -92,6 +92,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("POST /api/v1/alerts/ack", s.handleAlertAck)
 	mux.HandleFunc("POST /api/v1/alerts/silence", s.handleAlertSilence)
+	mux.HandleFunc("GET /api/v1/alerts/governance", s.handleGetGovernance)
+	mux.HandleFunc("POST /api/v1/alerts/governance", s.handleSetGovernance)
 	mux.HandleFunc("POST /api/v1/alerts/clear", s.handleAlertClear)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	mux.HandleFunc("GET /api/v1/activity", s.handleActivity)
@@ -169,9 +171,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/tickets/{id}", s.handleUpdateTicket)
 	mux.HandleFunc("POST /api/v1/tickets/{id}/comment", s.handleCommentTicket)
 	mux.HandleFunc("DELETE /api/v1/tickets/{id}", s.handleDeleteTicket)
-	// Log aggregation (agent ingest is fingerprint-authed) + search
+	// Log aggregation (agent ingest is fingerprint-authed) + search + diagnosis
 	mux.HandleFunc("POST /api/v1/agent/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /api/v1/logs", s.handleSearchLogs)
+	mux.HandleFunc("POST /api/v1/logs/diagnose", s.handleLogDiagnose)
 	// Notification center (unified message feed)
 	mux.HandleFunc("GET /api/v1/messages", s.handleListMessages)
 	mux.HandleFunc("POST /api/v1/messages/read", s.handleMarkMessagesRead)
@@ -260,7 +263,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "init"} {
+			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

@@ -711,23 +711,205 @@ safeAddEventListener("tkCommentBtn","click",addTicketComment);
 
 /* ---- 日志检索 ---- */
 const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
+// 日志检索分页状态
+let LOG_PAGE = 1, LOG_PAGE_SIZE = 50, LOG_TOTAL = 0, LOG_PAGES = 1;
+let LAST_LOG_STATS = null; // 缓存上次搜索的统计数据
+
 async function loadLogs(){
   try { if (!SRE_HOSTS.length) SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; } catch(e){}
   const hs=$("logHost");
   if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">全部主机</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
   searchLogs();
 }
-async function searchLogs(){
+
+async function searchLogs(page){
+  if (page !== undefined) { LOG_PAGE = page; } else { LOG_PAGE = 1; }
   const host=$("logHost").value,level=$("logLevel").value,since=$("logSince").value,kw=$("logKeyword").value.trim();
-  const qs=new URLSearchParams(); if(host)qs.set("host",host); if(level)qs.set("level",level); if(since&&since!=="0")qs.set("since_min",since); if(kw)qs.set("q",kw); qs.set("limit","500");
+  const qs=new URLSearchParams();
+  if(host)qs.set("host",host); if(level)qs.set("level",level);
+  if(since&&since!=="0")qs.set("since_min",since); if(kw)qs.set("q",kw);
+  qs.set("page",String(LOG_PAGE)); qs.set("page_size",String(LOG_PAGE_SIZE));
   try {
-    const list=await fetch(`${API}/logs?${qs}`).then(r=>r.json());
+    const resp=await fetch(`${API}/logs?${qs}`).then(r=>r.json());
+    const items=resp.items||[]; LOG_TOTAL=resp.total||0; LOG_PAGES=resp.pages||1;
+    LAST_LOG_STATS = resp.stats || null;
+
+    // 渲染统计面板
+    renderLogStats(resp.stats, resp.total);
+
+    // 渲染日志列表
     const el=$("logResults");
-    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; return; }
-    el.innerHTML=list.map(l=>`<div class="log-line ${_logLvlCls(l.level)}"><span class="log-ts mono">${fmtDateTime(l.ts)}</span><span class="log-lvl ${_logLvlCls(l.level)}">${esc(l.level)}</span><span class="log-host">${esc(l.hostname)}</span><span class="log-msg">${esc(l.message)}</span></div>`).join("");
+    if(!items.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; renderLogPager(); return; }
+    el.innerHTML=items.map(l=>`<div class="log-line ${_logLvlCls(l.level)}">
+      <span class="log-ts mono">${fmtDateTime(l.ts)}</span>
+      <span class="log-lvl ${_logLvlCls(l.level)}">${esc(l.level)}</span>
+      <span class="log-host">${esc(l.hostname)}</span>
+      <span class="log-msg">${esc(l.message)}</span>
+      ${(l.level==="error"||l.level==="warn")?`<button class="log-diag-btn" data-log='${esc(JSON.stringify({ts:l.ts,hostname:l.hostname,host_id:l.host_id||"",level:l.level,message:l.message}))}' title="提交诊断">🔍</button>`:""}
+    </div>`).join("");
+
+    // 绑定单条日志诊断按钮
+    el.querySelectorAll(".log-diag-btn").forEach(b=>{ b.onclick=function(e){ e.stopPropagation(); const d=JSON.parse(this.dataset.log); diagnoseLogLine(d); }; });
+
+    // 渲染分页控件
+    renderLogPager();
   } catch(e){ toast("检索失败: "+e,"err"); }
 }
 
+// 渲染日志统计面板
+function renderLogStats(stats, total){
+  const panel=$("logStatsPanel");
+  if(!panel) return;
+  if(!stats || !total){
+    panel.innerHTML=""; panel.style.display="none";
+    return;
+  }
+  panel.style.display="";
+  const byLvl=stats.by_level||{};
+  const topHosts=stats.top_hosts||[];
+  const timeDist=stats.time_distribution||{};
+
+  // 按级别统计
+  let levelHTML="";
+  ["error","warn","info","debug"].forEach(lv=>{
+    const cnt=byLvl[lv]||0;
+    if(cnt>0 || lv==="error" || lv==="warn"){
+      levelHTML+=`<span class="log-stat-chip ${_logLvlCls(lv)}">${lv}: <strong>${cnt}</strong></span>`;
+    }
+  });
+
+  // 按主机 Top 5
+  let hostHTML="";
+  if(topHosts.length){
+    hostHTML='<div class="log-stat-row"><span class="log-stat-label">Top 主机：</span>';
+    topHosts.forEach(h=>{
+      hostHTML+=`<span class="log-stat-chip host" data-host="${esc(h.hostname)}">${esc(h.hostname)} <strong>${h.count}</strong></span>`;
+    });
+    hostHTML+='</div>';
+  }
+
+  // 时间分布
+  const h1=timeDist["1h"]||0, h6=timeDist["6h"]||0, h24=timeDist["24h"]||0;
+  const timeHTML=`<span class="log-stat-chip time">近1h: <strong>${h1}</strong></span><span class="log-stat-chip time">近6h: <strong>${h6}</strong></span><span class="log-stat-chip time">近24h: <strong>${h24}</strong></span>`;
+
+  // 一键诊断按钮（error > 10 条且 since_min <= 30）
+  const errCount=byLvl["error"]||0;
+  const sinceVal=$("logSince").value;
+  const showDiag=errCount>=10 && (sinceVal==="15"||sinceVal==="30"||sinceVal==="60"||!sinceVal||sinceVal==="0");
+  const diagBtn=showDiag ? `<button class="btn warn sm" id="logDiagBtn" style="margin-left:auto">⚡ 一键诊断（${errCount} 条错误）</button>` : "";
+
+  panel.innerHTML=`<div class="log-stats-bar">
+    <div class="log-stats-left">
+      <span class="log-stat-total">共 <strong>${total}</strong> 条</span>
+      ${levelHTML}
+    </div>
+    ${diagBtn}
+  </div>
+  ${hostHTML}
+  <div class="log-stat-row"><span class="log-stat-label">时间分布：</span>${timeHTML}</div>`;
+
+  // 绑定 Top 主机点击筛选
+  panel.querySelectorAll(".log-stat-chip.host").forEach(chip=>{
+    chip.onclick=()=>{
+      const hostSel=$("logHost");
+      if(!hostSel) return;
+      const hn=chip.dataset.host;
+      for(let i=0;i<hostSel.options.length;i++){
+        if(hostSel.options[i].textContent===hn){ hostSel.value=hostSel.options[i].value; break; }
+      }
+      searchLogs(1);
+    };
+  });
+
+  // 绑定一键诊断
+  const diagBtnEl=$("logDiagBtn");
+  if(diagBtnEl){
+    diagBtnEl.onclick=()=>{
+      const host=$("logHost").value, hostname=$("logHost").selectedOptions[0]?.textContent||"";
+      const since=$("logSince").value;
+      diagnoseBulkLogs(host, hostname, parseInt(since)||60);
+    };
+  }
+}
+
+// 渲染日志分页控件
+function renderLogPager(){
+  const pager=$("logPager");
+  if(!pager) return;
+  if(LOG_TOTAL===0){ pager.innerHTML=""; return; }
+  if(LOG_PAGES<=1){ pager.innerHTML=`<span class="pinfo">共 ${LOG_TOTAL} 条</span>`; return; }
+  let btns=`<button ${LOG_PAGE===1?"disabled":""} data-lpg="prev">‹</button>`;
+  for(let i=1;i<=LOG_PAGES;i++){
+    if(i===1||i===LOG_PAGES||Math.abs(i-LOG_PAGE)<=1){
+      btns+=`<button class="${i===LOG_PAGE?"active":""}" data-lpg="${i}">${i}</button>`;
+    }else if(Math.abs(i-LOG_PAGE)===2){
+      btns+=`<span class="pinfo">…</span>`;
+    }
+  }
+  btns+=`<button ${LOG_PAGE===LOG_PAGES?"disabled":""} data-lpg="next">›</button>`;
+  btns+=`<span class="pinfo">共 ${LOG_TOTAL} 条 · ${LOG_PAGE}/${LOG_PAGES} 页</span>`;
+  pager.innerHTML=btns;
+
+  // 绑定分页按钮事件
+  pager.querySelectorAll("[data-lpg]").forEach(b=>{
+    b.onclick=()=>{
+      const v=b.dataset.lpg;
+      if(v==="prev"){ if(LOG_PAGE>1) searchLogs(LOG_PAGE-1); }
+      else if(v==="next"){ if(LOG_PAGE<LOG_PAGES) searchLogs(LOG_PAGE+1); }
+      else{ const p=parseInt(v); if(p>0&&p<=LOG_PAGES) searchLogs(p); }
+    };
+  });
+}
+
+// 一键诊断：批量错误日志
+async function diagnoseBulkLogs(hostID, hostname, sinceMin){
+  toast("正在诊断…","ok");
+  try {
+    const r=await fetch(`${API}/logs/diagnose`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({host_id:hostID,hostname:hostname,since_min:sinceMin})
+    });
+    if(!r.ok){ toast("诊断请求失败: "+r.status,"err"); return; }
+    const rep=await r.json();
+    // 显示诊断结果
+    showDiagnosisResult(rep);
+  } catch(e){ toast("诊断失败: "+e,"err"); }
+}
+
+// 单条日志诊断
+async function diagnoseLogLine(log){
+  toast("正在诊断…","ok");
+  try {
+    const r=await fetch(`${API}/logs/diagnose`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        host_id:log.host_id||"",
+        hostname:log.hostname||"",
+        since_min:30,
+        single_log:`[${log.level}] ${log.hostname} ${fmtDateTime(log.ts)} ${log.message}`
+      })
+    });
+    if(!r.ok){ toast("诊断请求失败: "+r.status,"err"); return; }
+    const rep=await r.json();
+    showDiagnosisResult(rep);
+  } catch(e){ toast("诊断失败: "+e,"err"); }
+}
+
+// 显示诊断结果
+function showDiagnosisResult(rep){
+  const panel=$("logDiagResult");
+  if(!panel) return;
+  const findings=(rep.findings||[]).map(f=>`<div class="ai-finding"><span class="badge ${f.severity==="critical"?"crit":"warn"}">${esc(f.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(f.title)}</div>${f.detail?`<div class="ai-f-detail">${esc(f.detail)}</div>`:""}</div></div>`).join("");
+  panel.innerHTML=`<div class="log-diag-card">
+    <div class="log-diag-head"><span>🔍 诊断结果</span><button class="log-diag-close" onclick="$('logDiagResult').innerHTML=''">✕</button></div>
+    <div class="log-diag-summary">${esc(rep.summary||"")}</div>
+    ${findings?`<div class="ai-findings">${findings}</div>`:""}
+    ${rep.context?`<div class="log-diag-ctx">${esc(rep.context)}</div>`:""}
+  </div>`;
+  panel.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
 /* ---- AI 巡检 ---- */
 async function loadInspections(){
   try {

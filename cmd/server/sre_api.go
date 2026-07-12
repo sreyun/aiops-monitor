@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"aiops-monitor/shared"
@@ -662,7 +663,7 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleSearchLogs returns matching aggregated logs (host/level/keyword/time).
+// handleSearchLogs returns matching aggregated logs (host/level/keyword/time) with server-side pagination and stats.
 func (s *Server) handleSearchLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var since int64
@@ -671,13 +672,116 @@ func (s *Server) handleSearchLogs(w http.ResponseWriter, r *http.Request) {
 			since = time.Now().Unix() - int64(v)*60
 		}
 	}
-	limit := 500
-	if l := q.Get("limit"); l != "" {
-		if v, _ := strconv.Atoi(l); v > 0 {
-			limit = v
+	page := 1
+	if p := q.Get("page"); p != "" {
+		if v, _ := strconv.Atoi(p); v > 0 {
+			page = v
 		}
 	}
-	writeJSON(w, http.StatusOK, s.logs.search(q.Get("host"), q.Get("level"), q.Get("q"), since, limit))
+	pageSize := 50
+	if ps := q.Get("page_size"); ps != "" {
+		if v, _ := strconv.Atoi(ps); v > 0 && v <= 200 {
+			pageSize = v
+		}
+	}
+	items, total := s.logs.searchPage(q.Get("host"), q.Get("level"), q.Get("q"), since, page, pageSize)
+	pages := 1
+	if total > 0 {
+		pages = (total + pageSize - 1) / pageSize
+	}
+	stats := s.logs.searchStats(q.Get("host"), q.Get("level"), q.Get("q"), since)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":     items,
+		"total":     total,
+		"pages":     pages,
+		"page":      page,
+		"page_size": pageSize,
+		"stats":     stats,
+	})
+}
+
+// handleLogDiagnose runs heuristic inspection against current log search context.
+func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		HostID       string   `json:"host_id"`
+		Hostname     string   `json:"hostname"`
+		SinceMin     int      `json:"since_min"`
+		ErrorLogs    []string `json:"error_logs"`
+		SingleLog    string   `json:"single_log"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req = struct {
+			HostID       string   `json:"host_id"`
+			Hostname     string   `json:"hostname"`
+			SinceMin     int      `json:"since_min"`
+			ErrorLogs    []string `json:"error_logs"`
+			SingleLog    string   `json:"single_log"`
+		}{}
+	}
+
+	since := int64(0)
+	if req.SinceMin > 0 {
+		since = time.Now().Unix() - int64(req.SinceMin)*60
+	} else {
+		since = time.Now().Unix() - 1800 // default 30 min
+	}
+
+	// Build inspection context from log search
+	ctx := inspectionContext{}
+	if req.HostID != "" {
+		if h := s.hostByID(req.HostID); h != nil {
+			ctx.OnlineHosts++
+			if h.Latest != nil {
+				ctx.HighUsage = append(ctx.HighUsage,
+					fmt.Sprintf("%s CPU %.1f%% Mem %.1f%% Disk %.1f%%", h.Hostname, h.Latest.CPUPercent, h.Latest.MemPercent, h.Latest.DiskPercent))
+			}
+		}
+	}
+	ctx.RecentErrors = s.logs.recentErrors(since, 50)
+	ctx.ErrorCount = s.logs.errorCount(since)
+
+	// Run heuristic inspection
+	summary, findings := heuristicInspect(ctx)
+
+	// Build a report
+	report := InspectionReport{
+		ID:       atomic.AddInt64(&s.ai.nextID, 1),
+		Ts:       time.Now().Unix(),
+		Source:   "heuristic",
+		Trigger:  "manual",
+		Summary:  summary,
+		Findings: findings,
+		Context:  fmt.Sprintf("日志诊断：主机 %s，时间范围 %d 分钟", req.Hostname, req.SinceMin),
+	}
+
+	// If single log line provided, prepend it to the summary
+	if req.SingleLog != "" {
+		report.Summary = "单条日志诊断：" + req.SingleLog + "\n" + report.Summary
+	}
+	if len(req.ErrorLogs) > 0 {
+		report.Context += fmt.Sprintf("，错误日志 %d 条", len(req.ErrorLogs))
+	}
+
+	s.ai.mu.Lock()
+	s.ai.reports = append(s.ai.reports, report)
+	if len(s.ai.reports) > 100 {
+		s.ai.reports = s.ai.reports[len(s.ai.reports)-100:]
+	}
+	s.ai.mu.Unlock()
+
+	// Also notify via message hub
+	if s.ai.onReport != nil {
+		s.ai.onReport(report)
+	}
+
+	s.store.AddLog(LogEntry{
+		Kind:    KindOperation,
+		Level:   "info",
+		Actor:   s.actorName(r),
+		Message: fmt.Sprintf("日志诊断：主机 %s，结论 %s", req.Hostname, summary),
+	})
+
+	writeJSON(w, http.StatusOK, report)
 }
 
 // ----------------------------------------------------------------------------

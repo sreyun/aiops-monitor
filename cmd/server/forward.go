@@ -491,6 +491,12 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 
 	actualPort = ln.Addr().(*net.TCPAddr).Port
 	actualAddr := listenHost + ":" + strconv.Itoa(actualPort)
+	// 安全提示：绑定到非回环地址（如 Docker 部署常用的 0.0.0.0）时，任何能访问该端口的
+	// 客户端都可经隧道直达目标主机 localhost 的内网服务（Redis/MySQL/SSH）。转发是裸 TCP
+	// 隧道、无法对任意 TCP 客户端做票据握手，故此暴露必须靠防火墙/网络隔离控制——这里显式告警。
+	if listenHost != "127.0.0.1" && listenHost != "localhost" && listenHost != "::1" {
+		slog.Warn("端口转发监听在非回环地址，暴露面较大：请确保有防火墙/网络隔离限制来源", "addr", actualAddr, "host", hostname, "operator", operator)
+	}
 	now := time.Now().Unix()
 	r := &forwardRule{
 		id: termID()[:8], hostID: hostID, hostname: hostname,
@@ -792,6 +798,9 @@ func (s *Server) handleForwardList(w http.ResponseWriter, r *http.Request) {
 // serveForwardListener accepts TCP connections for a rule and tunnels each
 // one through the agent reverse channel.
 func (s *Server) serveForwardListener(rule *forwardRule) {
+	if rule == nil || rule.listener == nil {
+		return // 防御：未绑定监听器的规则（如复制后尚未建链）不应进入 Accept 循环，避免 nil panic
+	}
 	for {
 		conn, err := rule.listener.Accept()
 		if err != nil {

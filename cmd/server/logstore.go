@@ -1,8 +1,10 @@
 package main
 
 import (
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"aiops-monitor/shared"
 )
@@ -101,6 +103,155 @@ func (ls *logStore) search(hostID, level, keyword string, since int64, limit int
 		out = append(out, l)
 	}
 	return out
+}
+
+// searchPage returns paginated matching logs newest-first plus total count.
+// offset = (page-1) * pageSize; limit = pageSize.
+func (ls *logStore) searchPage(hostID, level, keyword string, since int64, page, pageSize int) ([]StoredLog, int) {
+	if pageSize <= 0 || pageSize > 2000 {
+		pageSize = 50
+	}
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * pageSize
+	kw := strings.ToLower(strings.TrimSpace(keyword))
+
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	// First pass: count total matches
+	total := 0
+	for i := len(ls.logs) - 1; i >= 0; i-- {
+		l := ls.logs[i]
+		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if level != "" && l.Level != level {
+			continue
+		}
+		if since > 0 && l.Ts < since {
+			continue
+		}
+		if kw != "" && !strings.Contains(strings.ToLower(l.Message), kw) {
+			continue
+		}
+		total++
+	}
+
+	// Second pass: collect paginated items (skip offset, take pageSize)
+	skipped := 0
+	out := make([]StoredLog, 0, pageSize)
+	for i := len(ls.logs) - 1; i >= 0 && len(out) < pageSize; i-- {
+		l := ls.logs[i]
+		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if level != "" && l.Level != level {
+			continue
+		}
+		if since > 0 && l.Ts < since {
+			continue
+		}
+		if kw != "" && !strings.Contains(strings.ToLower(l.Message), kw) {
+			continue
+		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		out = append(out, l)
+	}
+	return out, total
+}
+
+// logStats holds aggregated statistics for the current search scope.
+type logStats struct {
+	ByLevel          map[string]int    `json:"by_level"`
+	TopHosts         []logHostCount    `json:"top_hosts"`
+	TimeDistribution map[string]int    `json:"time_distribution"`
+}
+
+type logHostCount struct {
+	Hostname string `json:"hostname"`
+	HostID   string `json:"host_id"`
+	Count    int    `json:"count"`
+}
+
+// searchStats aggregates stats for matching logs (level breakdown, top hosts, time distribution).
+func (ls *logStore) searchStats(hostID, level, keyword string, since int64) logStats {
+	kw := strings.ToLower(strings.TrimSpace(keyword))
+	now := time.Now().Unix()
+
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	stats := logStats{
+		ByLevel:          map[string]int{"error": 0, "warn": 0, "info": 0, "debug": 0},
+		TimeDistribution: map[string]int{"1h": 0, "6h": 0, "24h": 0},
+	}
+	hostCounts := map[string]struct {
+		hostname string
+		count    int
+	}{}
+
+	for i := len(ls.logs) - 1; i >= 0; i-- {
+		l := ls.logs[i]
+		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if level != "" && l.Level != level {
+			continue
+		}
+		if since > 0 && l.Ts < since {
+			// Still count for time distribution if within 24h window
+			if l.Ts < now-86400 {
+				continue
+			}
+		}
+		if kw != "" && !strings.Contains(strings.ToLower(l.Message), kw) {
+			continue
+		}
+
+		// Level breakdown
+		stats.ByLevel[l.Level]++
+
+		// Host distribution
+		if l.Hostname != "" {
+			hc := hostCounts[l.Hostname]
+			hc.hostname = l.Hostname
+			hc.count++
+			hostCounts[l.Hostname] = hc
+		}
+
+		// Time distribution
+		diff := now - l.Ts
+		switch {
+		case diff <= 3600:
+			stats.TimeDistribution["1h"]++
+		case diff <= 21600:
+			stats.TimeDistribution["6h"]++
+		case diff <= 86400:
+			stats.TimeDistribution["24h"]++
+		}
+	}
+
+	// Top 5 hosts
+	type hc struct{ hn, hid string; n int }
+	var sorted []hc
+	for _, v := range hostCounts {
+		sorted = append(sorted, hc{v.hostname, "", v.count})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].n > sorted[j].n })
+	for i := 0; i < len(sorted) && i < 5; i++ {
+		stats.TopHosts = append(stats.TopHosts, logHostCount{
+			Hostname: sorted[i].hn,
+			HostID:   sorted[i].hid,
+			Count:    sorted[i].n,
+		})
+	}
+
+	return stats
 }
 
 // recentErrors returns up to limit error/warn lines since a timestamp (AI input).

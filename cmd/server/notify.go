@@ -159,9 +159,24 @@ func (n *Notifier) dispatch(cfg ServerConfig, a Alert, firing bool) {
 // pushChannels sends the alert text to every enabled bot channel and logs the
 // push result. Shared by threshold alerts and custom-check alerts.
 func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
+	// 告警治理：仅对「触发」通知做静默/抑制；「恢复」通知一律照发，避免规则造成"永远告警"错觉。
+	if firing {
+		if ok, rule := govSilenced(cfg.Governance, a, time.Now()); ok {
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "静默规则「" + rule + "」已抑制通知：" + a.Message})
+			return
+		}
+		if ok, rule := govInhibited(cfg.Governance, a, n.ActiveAlerts()); ok {
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "抑制规则「" + rule + "」已抑制通知：" + a.Message})
+			return
+		}
+	}
+	// 通知路由：命中路由则仅发其指定渠道；无任何路由命中=默认全部启用渠道（向后兼容）。
+	routeSel, routed := govRouteChannels(cfg.Governance, a)
+	send := func(ch string) bool { return !routed || routeSel[ch] }
+
 	text := formatAlert(a, firing)
 	var sent []string
-	if cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
+	if send("feishu") && cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, text); err != nil {
 			slog.Error(Tz("notify.feishu_failed"), "err", err)
 			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.feishu_failed", err.Error())})
@@ -169,7 +184,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 			sent = append(sent, Tz("notify.feishu"))
 		}
 	}
-	if cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
+	if send("dingtalk") && cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
 		if err := n.sendDingtalk(cfg.Dingtalk, text); err != nil {
 			slog.Error(Tz("notify.dingtalk_failed"), "err", err)
 			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.dingtalk_failed", err.Error())})
@@ -178,7 +193,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 		}
 	}
 	// Email alert notification — sent to the operator's bound email if SMTP is configured
-	if cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
+	if send("email") && cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
 		html := alertEmailHTML(a, firing)
 		okAny := false
 		for _, to := range n.cfg.AlertEmails() {
@@ -194,7 +209,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 		}
 	}
 	// Custom webhook
-	if cfg.CustomWebhook.Enabled && cfg.CustomWebhook.URL != "" {
+	if send("webhook") && cfg.CustomWebhook.Enabled && cfg.CustomWebhook.URL != "" {
 		if err := sendCustomWebhook(cfg.CustomWebhook, text, a, firing); err != nil {
 			slog.Error(Tz("notify.custom_webhook_failed"), "err", err)
 			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.custom_webhook_failed", err.Error())})
