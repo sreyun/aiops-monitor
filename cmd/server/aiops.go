@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ type AIConfig struct {
 	APIKey             string `json:"api_key,omitempty"`
 	Model              string `json:"model"`                // e.g. gpt-4o-mini / a local model name
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
+	MaxTokens          int    `json:"max_tokens,omitempty"` // 单次输出 token 上限（0 = 默认 4096）
 	// Hermes Agent 配置
 	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
 	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
@@ -169,11 +171,14 @@ func multimodalContent(text string, images []chatImage, prov aiProviderType) []m
 }
 
 func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
-	return aiChatV(cfg, messages, nil)
+	return aiChatV(context.Background(), cfg, messages, nil)
 }
 
-// aiChatV 在 aiChat 基础上支持给用户消息附带图片（多模态/视觉）。images 为 nil 时等价于纯文本。
-func aiChatV(cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+// aiChatV 在 aiChat 基础上支持传入 ctx（客户端中止 / 超时控制）+ 给用户消息附带图片（多模态/视觉）。
+func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
@@ -219,8 +224,18 @@ func aiChatV(cfg AIConfig, messages []map[string]string, images []chatImage) (st
 		}
 	}
 
+	// 统一输出上限（可在 AI 设置配置，默认 4096）；两种 provider 都带上
+	maxTok := cfg.MaxTokens
+	if maxTok <= 0 {
+		maxTok = 4096
+	}
+	reqBody["max_tokens"] = maxTok
+
 	b, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest(http.MethodPost, ep, bytes.NewReader(b))
+	// 请求级 ctx：既受客户端「终止」影响、又设 120s 上限（模型慢时不至于过早断开）
+	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
 		return "", err
 	}
@@ -233,10 +248,16 @@ func aiChatV(cfg AIConfig, messages []map[string]string, images []chatImage) (st
 	} else if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := &http.Client{Timeout: 125 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("网络请求失败：%v（请检查 Endpoint 地址是否正确）", err)
+		if ctx.Err() != nil { // 用户主动终止
+			return "", fmt.Errorf("已终止")
+		}
+		if reqCtx.Err() == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "Client.Timeout") {
+			return "", fmt.Errorf("AI 响应超时（>120 秒）。可能是模型较慢、网络不稳或 Endpoint 不正确——请重试、换更快的模型，或检查 Endpoint / 网络。")
+		}
+		return "", fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
 	}
 	defer resp.Body.Close()
 

@@ -1706,6 +1706,42 @@ func (s *Server) handleHermesSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": msgs})
 }
 
+// handleHermesSessionUndo 撤销会话最后一轮问答（删除末尾 assistant + user 各一条），
+// 供前端「撤销」修正上次提问后重试。POST /api/v1/hermes/sessions/{id}/undo
+func (s *Server) handleHermesSessionUndo(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	raw, err := s.pg.loadHermesSession(id)
+	if err != nil || raw == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
+		return
+	}
+	var msgs []map[string]string
+	if json.Unmarshal(raw, &msgs) != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "会话数据损坏"})
+		return
+	}
+	if n := len(msgs); n > 0 && msgs[n-1]["role"] == "assistant" {
+		msgs = msgs[:n-1]
+	}
+	if n := len(msgs); n > 0 && msgs[n-1]["role"] == "user" {
+		msgs = msgs[:n-1]
+	}
+	out, _ := json.Marshal(msgs)
+	if _, err := s.pg.saveHermesSession(id, out, 0); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": msgs})
+}
+
 // handleHermesListRules returns all Hermes rules.
 // GET /api/v1/hermes/rules
 func (s *Server) handleHermesListRules(w http.ResponseWriter, r *http.Request) {

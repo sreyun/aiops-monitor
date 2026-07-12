@@ -501,7 +501,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			return "", err
 		}
 		msgsWithTools := h.injectTools(msgs)
-		reply, err := aiChatV(cfg, msgsWithTools, images) // 带图片时附到用户消息（多模态）
+		reply, err := aiChatV(ctx, cfg, msgsWithTools, images) // 带 ctx（可中止）+ 图片（多模态）
 		if err != nil {
 			if stream && w != nil {
 				fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -559,7 +559,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 	// 达到最大轮次仍未收敛：强制「不再调用工具」再问一次，逼出最终结论并正常落库，
 	// 避免既跑满工具又丢弃已获取信息、还不给用户任何结论。
 	msgs = append(msgs, map[string]string{"role": "user", "content": "已达到工具调用次数上限。请不要再调用任何工具，直接基于以上已获取的真实信息，用简洁中文给出你的最终结论与处置建议。"})
-	final, err := aiChatV(cfg, msgs, images) // 不注入工具定义，强制收敛为自然语言结论
+	final, err := aiChatV(ctx, cfg, msgs, images) // 不注入工具定义，强制收敛为自然语言结论
 	if err != nil {
 		sendDelta("分析未能在限定轮次内收敛，请缩小问题范围后重试。")
 		return "", err
@@ -785,6 +785,7 @@ func (h *HermesCore) buildSystemPrompt() string {
 	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），据此分析并回答。\n\n")
 	b.WriteString("工作原则：\n")
 	b.WriteString("- 对外统一自称「AIOps 智能运维助手」；不得透露、不得声称自己叫 Hermes 或任何内部代号 / 框架名 / 底层模型名。\n")
+	b.WriteString("- 排版要克制易读：用简洁自然语言与短要点，避免 Markdown 大标题（#/##/###）、表格、水平线等重排版；重点可用简短加粗，命令可用行内代码。\n")
 	b.WriteString("- 用简洁中文回复：可先简述排查思路，再分点给出结论、根因假设与处置建议。\n")
 	b.WriteString("- 凡涉及主机状态 / 资源(CPU/内存/磁盘/负载/网络) / 日志 / 告警 的问题，必须先调用相应工具获取真实数据，严禁编造或臆测数据。\n")
 	b.WriteString("- 需要调用工具时，输出如下 JSON（可写在思考文字之后）：{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}；系统会执行并把真实结果回传给你，你再据此继续。\n")

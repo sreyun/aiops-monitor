@@ -1184,6 +1184,7 @@
         </div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>
+      <div class="field"><label>输出长度上限 max_tokens <span style="font-size:11px;color:var(--muted)">（留空按模型默认 4096；上下文/输出较长时可调大）</span></label><input type="text" id="aiMaxTokens" class="mono" placeholder="4096（默认）"></div>
       <div class="hint">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 后会自动获取该 Provider 的可用模型(下拉选择 / 搜索),也可手动输入模型名;无内置预设模型。不启用时用内置启发式引擎,开箱即用。</div>
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
       <div class="ai-term-access">
@@ -1214,10 +1215,12 @@
           <option value="">＋ 新会话</option>
         </select>
         <button class="btn ghost" id="aiNewChatBtn" title="新建会话">＋ 新建</button>
+        <button class="btn ghost" id="aiUndoBtn" title="撤销上一轮问答，可修改后重问">↶ 撤销</button>
         <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
       </div>
     </div>
     <div class="modal-body">
+      <div id="aiChatQueue" class="ai-queue-hint"></div>
       <div class="hint" style="margin-bottom:10px">统一 AI 对话：既能闲聊自检确认 Provider 可用，也能作为自主运维 Agent 帮你排障——描述问题即可，它会自动调用工具（查指标 / 日志 / 告警 / 诊断 / 修复），并能识别当前纳管主机。</div>
       <div id="aiChatLog" class="ai-chat-log"></div>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
@@ -1226,6 +1229,7 @@
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env" style="display:none">
         <textarea id="aiChatInput" rows="2" placeholder="输入消息或描述问题，可 📎 上传图片/日志文件，Enter 发送、Shift+Enter 换行…"></textarea>
         <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
+        <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹ 终止</button>
       </div>
       <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action</div>
     </div>

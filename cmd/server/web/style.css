@@ -1939,6 +1939,22 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-attach-btn{flex:none; width:38px; height:40px; align-self:flex-end; background:var(--bg2); border:1px solid var(--line2); border-radius:var(--r-sm); cursor:pointer; font-size:16px; color:var(--muted); transition:background .15s ease,color .15s ease}
 .ai-attach-btn:hover{background:var(--panel3); color:var(--txt)}
 .ai-att-note{font-size:11px; color:rgba(255,255,255,.8)}
+/* AI 回复 Markdown 深化：标题 / 引用 / 分割线 */
+.ai-chat-msg.ai .ai-h{font-weight:650; margin:6px 0 2px; line-height:1.4}
+.ai-chat-msg.ai .ai-h1{font-size:1.13em}
+.ai-chat-msg.ai .ai-h2{font-size:1.07em}
+.ai-chat-msg.ai .ai-h3,.ai-chat-msg.ai .ai-h4{font-size:1em}
+.ai-chat-msg.ai .ai-bq{margin:4px 0; padding:3px 10px; border-left:3px solid var(--line2); color:var(--muted); background:var(--panel3); border-radius:0 4px 4px 0}
+.ai-chat-msg.ai .ai-hr{border:none; border-top:1px solid var(--line2); margin:8px 0}
+/* 每条 AI 回复的操作栏（复制），hover 显示 */
+.ai-msg-tools{display:none; justify-content:flex-end; gap:6px; margin-top:6px}
+.ai-chat-msg.ai:hover .ai-msg-tools{display:flex}
+.ai-msg-tools button{background:var(--panel); border:1px solid var(--line2); border-radius:5px; color:var(--muted); cursor:pointer; font-size:11px; padding:1px 8px; font-family:inherit}
+.ai-msg-tools button:hover{color:var(--txt); background:var(--panel3)}
+/* 终止按钮 + 排队提示 */
+.ai-stop-btn{flex:none; align-self:flex-end; height:40px; padding:0 14px; background:rgba(242,84,91,.14); color:var(--danger-txt,#f2545b); border:1px solid var(--danger-txt,#f2545b); border-radius:var(--r-sm); cursor:pointer; font-size:13px; font-family:inherit}
+.ai-stop-btn:hover{background:var(--danger-txt,#f2545b); color:#fff}
+.ai-queue-hint{font-size:11px; color:var(--warn,#d29922); margin-top:4px; min-height:14px}
 /* AI 终端只读巡检权限区块 */
 .ai-term-access{margin-top:14px; padding:12px 14px; border:1px solid var(--line2); border-radius:8px; background:var(--bg2)}
 .ai-term-head{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; font-weight:600}

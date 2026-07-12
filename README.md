@@ -48,11 +48,19 @@
 
 ## 营销网站（对外宣传站）
 
-`website/` 是一套零依赖的静态营销站（原生 HTML/CSS/JS，深色科技主题，内置中 / 英 / 繁中三语切换），用于对外介绍产品能力与快速上手。
+`website/` 是一套零依赖的静态营销站（原生 HTML/CSS/JS，深色 + 浅色双主题，内置中 / 英 / 繁中三语切换），用于对外介绍产品能力、场景方案与快速上手。
 
 - **在线演示**：<https://sreyun.github.io/aiops-monitor/>
 - **本地预览**：`cd website && python3 serve.py <端口>`，浏览器打开 `http://localhost:<端口>`（脚本见 `website/serve.py`）
-- **页面构成**：`index`（首页 / 核心能力 / 架构 / 端口转发 / 技术生态）· `features`（功能详情，按 10 大能力分组）· `solutions`（场景方案）· `comparison`（竞品对比）· `faq`（常见问题）· `contact`（联系我们）
+- **页面构成**：
+  - `index` —— 首页：核心能力 · 架构总览 · 端口转发 · 技术生态 · 一键部署
+  - `features` —— 功能详情：按 12 大能力分组（采集 / 告警 / 终端 / 剧本 / SRE / 日志 / AI / 插件 / 拨测 / 安全 / 企业集成 / 数据治理）
+  - `solutions` —— 真实场景 · 真实价值：7 大落地场景（单机部署 / 多机房纳管 / 团队协作 / 合规审计 / 故障应急与夜间值班 / 网站可用性 / 成本优化与资源治理）
+  - `comparison` —— 产品对比：与主流监控方案的 26 维度横向对比
+  - `faq` —— 常见问题：15 条高频问答（部署 / 存储 / 大规模 / 企业版 / 等保等）
+  - `contact` —— 联系我们：企业级部署形态 · 支持 SLA · 合作流程 · 信任要素
+- **主题切换**：导航栏一键切换深 / 浅主题，首屏前内联脚本定主题（无闪烁），偏好写入 `localStorage` 持久化，首次访问跟随系统 `prefers-color-scheme`；切主题仅切换 `data-theme` 属性，过渡一致、无刷新。
+- **数据存储表述**：所有监控数据（指标 / 日志 / 审计）均永久存储，不自动过期或删除，高压缩存储长期回溯无压力。
 
 > 营销站与本项目同仓库维护，文案与功能矩阵随版本同步更新；若修改了 `website/js/i18n.js` 的多语言字典，请保持中 / 英 / 繁中三语 key 对齐。
 
@@ -104,15 +112,15 @@ bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts
 
 > 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
 >
-> 镜像说明：**aiops-server / aiops-agent** 托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。**postgres / victoriametrics** 使用 Docker Hub 官方多架构镜像（ARM64 兼容），国内用户若无法拉取请参考下方「国内 Docker Hub 访问说明」。
+> 镜像说明：**aiops-server / aiops-agent** 托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。**postgres / victoriametrics** 使用 Docker Hub 官方多架构镜像（ARM64 兼容），若镜像拉取受限请参考下方「Docker Hub 镜像加速器配置」。
 
 > **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。
 >
 > **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（PG 密码 20 位纯字母数字，SECRET_KEY 为 `aiops-` + 44 位随机字母数字共 50 位），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
 
-### 国内 Docker Hub 访问说明
+### Docker Hub 镜像加速器配置
 
-`postgres` 和 `victoriametrics` 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）。国内用户若无法直接拉取，有以下两种方案：
+`postgres` 和 `victoriametrics` 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）。若镜像拉取受限，有以下两种方案：
 
 **方案 1 · 推荐：配置 Docker 镜像加速器（一劳永逸，AMD64/ARM64 均可）**
 
@@ -206,7 +214,7 @@ docker compose up -d
 
 > 以上命令自动完成：下载编排文件 → 生成随机密码/密钥 → 写入配置 → 拉取镜像并启动。**请务必保存输出的密码和密钥！**
 >
-> **国内用户注意**：`postgres` 和 `victoriametrics` 从 Docker Hub 拉取，若网络受限请先配置 Docker 镜像加速器（见上方「国内 Docker Hub 访问说明」），或在 `docker-compose.yml` 中将这两个服务的 `image` 替换为注释中的 SWR 镜像（仅限 AMD64）。
+> **镜像拉取提示**：`postgres` 和 `victoriametrics` 从 Docker Hub 拉取，若网络受限请先配置 Docker 镜像加速器（见上方「Docker Hub 镜像加速器配置」），或在 `docker-compose.yml` 中将这两个服务的 `image` 替换为注释中的 SWR 镜像（仅限 AMD64）。
 
 **指定版本（推荐生产环境）：**
 
@@ -219,7 +227,7 @@ docker compose up -d
 
 - **aiops-server / aiops-agent** 镜像托管于华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
 - 每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像
-- **postgres / victoriametrics** 使用 Docker Hub 官方镜像（多架构），国内用户若拉取失败请参考上方「国内 Docker Hub 访问说明」
+- **postgres / victoriametrics** 使用 Docker Hub 官方镜像（多架构），若拉取失败请参考上方「Docker Hub 镜像加速器配置」
 - 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./data/server_config.json`
 - 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
 - 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`

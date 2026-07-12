@@ -188,6 +188,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/hermes/chat", s.handleHermesChat)
 	mux.HandleFunc("GET /api/v1/hermes/sessions", s.handleHermesSessions)
 	mux.HandleFunc("GET /api/v1/hermes/sessions/{id}", s.handleHermesSession)
+	mux.HandleFunc("POST /api/v1/hermes/sessions/{id}/undo", s.handleHermesSessionUndo)
 	mux.HandleFunc("GET /api/v1/hermes/rules", s.handleHermesListRules)
 	mux.HandleFunc("POST /api/v1/hermes/rules", s.handleHermesUpsertRule)
 	mux.HandleFunc("DELETE /api/v1/hermes/rules/{id}", s.handleHermesDeleteRule)
