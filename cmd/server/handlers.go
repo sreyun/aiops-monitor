@@ -59,10 +59,11 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	s.wireSRE()
 	// Restore persisted TCP forward rules (recreate listeners)
 	s.forward.restoreRules(s)
-	// Hermes Agent: initialize if AI is configured
-	if cfg := s.cfg.AIConfig(); cfg.HermesEnabled && cfg.Enabled {
-		s.hermes = newHermesCore(s)
-	}
+	// Hermes Agent 引擎是统一「AI 对话」的后端：无条件初始化（仅注册工具定义，很轻）。
+	// 能否真正对话由请求时的 AI 配置（cfg.Enabled）决定——见 handleHermesChat，
+	// 未启用时优雅返回提示而非 503。此前 gated on HermesEnabled&&Enabled 且仅在启动时
+	// 判断，导致"配置完模型点 AI 对话仍 503"（s.hermes 为 nil）。
+	s.hermes = newHermesCore(s)
 	return s
 }
 

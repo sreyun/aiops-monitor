@@ -1553,6 +1553,13 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		if req.Stream {
+			// 统一 AI 对话走 SSE：未启用时也发 SSE 错误帧，前端才能正确显示。
+			s.setupSSE(w)
+			fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写 Endpoint / Key / 模型并勾选启用后保存\"}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用"})
 		return
 	}

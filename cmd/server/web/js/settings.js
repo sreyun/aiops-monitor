@@ -624,12 +624,12 @@ function startApp() {
   showSkeleton();
   refresh(); loadChecks();
   // P1-2: 差异化轮询频率 — 按当前视图 + 标签页可见性调整刷新间隔
-  const POLL_BASE = 3000;
+  const POLL_BASE = 5000;
   let pollTimer = null;
   function schedulePoll() {
     if (pollTimer) clearTimeout(pollTimer);
     const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
-    const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, forward: 15000, log: 10000 };
+    const intervals = { overview: 5000, hosts: 5000, checks: 10000, alerts: 5000, automation: 15000, forward: 15000, log: 10000 };
     let interval = intervals[view] || POLL_BASE;
     // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
     if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);

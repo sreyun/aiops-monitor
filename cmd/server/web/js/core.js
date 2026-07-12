@@ -110,7 +110,6 @@ let LAST_CHECKS = []; // 最近一次自定义监控数据
 let HOST_META = [];   // 主机元数据（id + hostname）用于进程监控
 let DEFAULT_EMPTY = null;
 let APP_STARTED = false;
-let PAUSED = false;   // 暂停自动刷新（查看时不跳动）
 let LOG_PAGE = 1;     // 日志分页当前页
 let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
 let CHECK_VIEW = "pill"; // 自定义监控视图：pill(卡片,默认) | list(列表)

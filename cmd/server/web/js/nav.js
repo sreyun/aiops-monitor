@@ -15,7 +15,6 @@ function updateFavicon(critCount) {
   link.href = canvas.toDataURL();
 }
 async function refresh(force) {
-  if (PAUSED && !force) return;
   try {
     const rs = await fetch(`${API}/summary`);
     if (rs.status === 401) { $("loginView").classList.add("show"); return; }
@@ -190,15 +189,7 @@ function sortHosts(value) {
   renderHosts(LAST_HOSTS);
 }
 
-// 暂停 / 恢复自动刷新
-function togglePause() {
-  PAUSED = !PAUSED;
-  const btn = $("pauseBtn");
-  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? I18N.t("toast.paused_click") : I18N.t("ui.pause_refresh"); }
-  const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = PAUSED ? "pulse paused" : "pulse";
-  toast(PAUSED ? I18N.t("toast.paused") : I18N.t("toast.resumed"), "ok");
-  if (!PAUSED) refresh(true);
-}
+// 暂停/恢复已移除，系统始终开启自动刷新（PAUSED 恒为 false）
 
 // 一键清理所有离线主机
 async function purgeOffline() {
@@ -491,8 +482,7 @@ safeAddEventListener("topPanels", "click", e => {
 });
 // 日志导出
 safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
-// 暂停自动刷新 + 批量清理离线
-safeAddEventListener("pauseBtn", "click", togglePause);
+// 批量清理离线
 safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
 // ===== 顶栏用户菜单 =====
 (function initUserDropdown() {

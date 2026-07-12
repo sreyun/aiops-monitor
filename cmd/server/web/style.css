@@ -1411,7 +1411,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   .page-head{flex:1 1 100%; order:-1}
   .search{width:100%; max-width:none; margin-left:0}
   /* topbar 工具栏折叠 */
-  #pauseBtn, #widthBtn{display:none}
+  #widthBtn{display:none}
   .select-wrap{min-width:0}
 }
 /* 手机竖屏 (≤480px) */
