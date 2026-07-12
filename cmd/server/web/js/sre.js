@@ -419,7 +419,7 @@ async function incidentAction(id, act){
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
 // calls onDelta for each token chunk, onError for errors, onResult for result
 // metadata, and onDone when complete. Returns the accumulated full text.
-async function readSSEStream(resp,onDelta,onError,onDone,onResult){
+async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta){
   const reader=resp.body.getReader();
   const decoder=new TextDecoder();
   let buf="";
@@ -441,6 +441,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult){
           try {
             const j=JSON.parse(data);
             if(j.error){ if(onError) onError(j.error); return fullText; }
+            if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
           } catch(e){ /* skip malformed chunks */ }
@@ -744,38 +745,49 @@ async function loadInspections(){
 }
 async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
 async function openAIConfig(){
+  const tr=$("aiTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; } // 清除上次遗留的测试结果
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
   } catch(e){}
-  loadAIModels(); // 打开时按当前配置自动挂载 provider 模型
+  loadAIModels(); // 打开时按当前配置自动获取 provider 模型
   $("aiConfigMask").classList.add("show");
 }
-// 从当前表单 Endpoint+Key 拉取该 Provider 的可用模型,填充可下拉/搜索的 datalist。
+// 从当前表单 Endpoint+Key 自动获取该 Provider 的可用模型，填充可下拉/搜索的 datalist；
+// 获取不到时保留手动输入。不再内置任何预设模型。
+let _aiModelsReq=0;
 async function loadAIModels(){
   const dl=$("aiModelList"); if(!dl) return;
-  const info=$("aiModelInfo"); if(info) info.textContent="加载中…";
+  const info=$("aiModelInfo");
+  const ep=($("aiEndpoint").value||"").trim();
+  const myReq=++_aiModelsReq;
+  if(!ep){ dl.innerHTML=""; if(info) info.textContent="· 填入 Endpoint 后自动获取，或直接手动输入模型名"; return; }
+  if(info) info.textContent="· 获取中…";
   try {
-    const body={endpoint:($("aiEndpoint").value||"").trim(),api_key:$("aiKey").value||""};
+    const body={endpoint:ep,api_key:$("aiKey").value||""};
     const m=await fetch(`${API}/ai/models`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
-    if(m&&m.models){ dl.innerHTML=m.models.map(x=>`<option value="${esc(x.value)}">${esc(x.label)}</option>`).join(""); }
-    if(info) info.textContent=(m&&m.live_count>0)?`· 已自动挂载 ${m.live_count} 个`:"· 精选列表(填 Endpoint+Key 后自动挂载)";
-  } catch(e){ if(info) info.textContent=""; }
+    if(myReq!==_aiModelsReq) return; // 有更新的请求在途，丢弃过期结果
+    const list=(m&&Array.isArray(m.models))?m.models:[];
+    dl.innerHTML=list.map(x=>`<option value="${esc(x.value)}">${esc(x.label||x.value)}</option>`).join("");
+    if(info) info.textContent=list.length
+      ? `· 已获取 ${list.length} 个模型，可下拉 / 搜索 / 手动输入`
+      : "· 未获取到模型，请检查 Endpoint/Key，或直接手动输入模型名";
+  } catch(e){ if(myReq!==_aiModelsReq) return; if(info) info.textContent="· 获取失败，可手动输入模型名"; }
 }
-// AI 预设:仅两种接口类型（OpenAI 兼容 / Anthropic），百炼走兼容模式。
+// AI 预设:仅设置 Endpoint（两种接口类型:OpenAI 兼容 / Anthropic，按端点自动识别）。
+// 取消默认预设模型：切换 Provider 后清空模型，改由自动获取 / 搜索 / 手动输入。
 function setAIPreset(type){
   const presets={
-    // OpenAI 兼容类
-    "bailian":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",model:"qwen-plus",label:"阿里云百炼（OpenAI 兼容）"},
-    "openai":{endpoint:"https://api.openai.com/v1",model:"gpt-4o-mini",label:"OpenAI"},
-    "deepseek":{endpoint:"https://api.deepseek.com/v1",model:"deepseek-chat",label:"DeepSeek"},
-    "ollama":{endpoint:"http://localhost:11434/v1",model:"qwen2.5:7b",label:"本地 Ollama"},
-    // Anthropic 类
-    "claude":{endpoint:"https://dashscope.aliyuncs.com/apps/anthropic",model:"claude-3-5-sonnet-20241022",label:"Claude（百炼 Anthropic）"},
+    "bailian":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",label:"阿里云百炼（OpenAI 兼容）"},
+    "openai":{endpoint:"https://api.openai.com/v1",label:"OpenAI"},
+    "deepseek":{endpoint:"https://api.deepseek.com/v1",label:"DeepSeek"},
+    "ollama":{endpoint:"http://localhost:11434/v1",label:"本地 Ollama"},
+    "claude":{endpoint:"https://dashscope.aliyuncs.com/apps/anthropic",label:"Claude（百炼 Anthropic）"},
   };
   const p=presets[type]; if(!p) return;
-  $("aiEndpoint").value=p.endpoint; $("aiModel").value=p.model;
-  toast(`已设为 ${p.label}`,"ok");
-  loadAIModels(); // 选预设后自动挂载该 provider 的模型
+  $("aiEndpoint").value=p.endpoint;
+  $("aiModel").value=""; // 取消默认预设模型，切 Provider 后需重新获取/输入
+  toast(`已设为 ${p.label} · 正在获取模型…`,"ok");
+  loadAIModels(); // 选预设后自动获取该 provider 的模型
 }
 async function saveAIConfig(){
   const body={enabled:$("aiEnabled").checked,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim(),inspect_interval_min:parseInt($("aiInterval").value)||30};
@@ -837,14 +849,58 @@ function filterDisplayContent(text){
 }
 // 统一「AI 对话」——单窗口,后端走 Hermes 自主运维 Agent（能对话 + 自动调用工具,
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
-let AI_CHAT_SESSION=0; // Hermes 服务端会话 id（0=新会话/当前会话）
+let AI_CHAT_SESSION=0;   // Hermes 服务端会话 id（0=新会话）
+let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
+const AI_CHAT_INTRO=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检，也可直接描述问题让它自动排查，例如：<br>· "当前有哪些主机在线？"　·　"查询主机 web-01 的 CPU 使用率"<br>· "检查 nginx 服务状态"　·　"最近有什么告警？"<br>它会自动识别当前纳管主机并按需调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div>`;
 function openAIChat(){
-  AI_CHAT_SESSION=0;
-  const log=$("aiChatLog");
-  if(log) log.innerHTML=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检,也可直接描述问题让它自动排查,例如:<br>· "主机 web-01 CPU 飙到 90%,帮我排查原因"<br>· "检查 nginx 服务状态"　·　"最近有什么告警?"<br>需要时它会自动调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div>`;
+  newAIChat();
   $("aiChatMask").classList.add("show");
+  loadAISessions();
   setTimeout(()=>{ const i=$("aiChatInput"); if(i) i.focus(); },80);
 }
+// 开新会话：清空会话 id / 历史 / 消息区
+function newAIChat(){
+  AI_CHAT_SESSION=0; AI_CHAT_HISTORY=[];
+  const log=$("aiChatLog"); if(log) log.innerHTML=AI_CHAT_INTRO;
+  const sel=$("aiSessionSelect"); if(sel) sel.value="";
+}
+// 加载历史会话列表到下拉选择器
+async function loadAISessions(){
+  const sel=$("aiSessionSelect"); if(!sel) return;
+  try{
+    const r=await fetch(`${API}/hermes/sessions`);
+    if(!r.ok) return;
+    const list=await r.json();
+    sel.innerHTML=`<option value="">＋ 新会话</option>`+
+      (Array.isArray(list)?list:[]).map(s=>{
+        const cnt=s.msg_count?` (${s.msg_count})`:"";
+        return `<option value="${s.id}">${esc((s.title||"会话")+cnt)}</option>`;
+      }).join("");
+    sel.value=AI_CHAT_SESSION?String(AI_CHAT_SESSION):"";
+  }catch(e){ /* 无 PG / 接口不可用时静默 */ }
+}
+// 切换到某历史会话并恢复其消息
+async function switchAISession(id){
+  if(!id){ newAIChat(); return; }
+  try{
+    const r=await fetch(`${API}/hermes/sessions/${id}`);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    const msgs=(j.messages||[]).filter(m=>m&&(m.role==="user"||m.role==="assistant"));
+    AI_CHAT_SESSION=Number(id);
+    AI_CHAT_HISTORY=msgs.map(m=>({role:m.role,content:m.content}));
+    const log=$("aiChatLog");
+    if(log){
+      log.innerHTML=msgs.length
+        ? msgs.map(m=>`<div class="ai-chat-msg ${m.role==="user"?"me":"ai"}">${esc(filterDisplayContent(m.content||""))}</div>`).join("")
+        : `<div class="ai-chat-msg sys">（空会话）</div>`;
+      log.scrollTop=log.scrollHeight;
+    }
+  }catch(e){ if(typeof toast==="function") toast("加载会话失败："+e,"err"); }
+}
+// 会话有更新后延迟刷新列表（合并短时间内多次更新）
+let _aiSessTimer=null;
+function refreshAISessionsSoon(){ if(_aiSessTimer) clearTimeout(_aiSessTimer); _aiSessTimer=setTimeout(loadAISessions,700); }
 function appendChatMsg(role,text){
   const log=$("aiChatLog"); if(!log) return null;
   const div=document.createElement("div");
@@ -858,26 +914,33 @@ async function sendAIChat(){
   const msg=inp.value.trim(); if(!msg) return;
   inp.value="";
   appendChatMsg("user",msg);
+  AI_CHAT_HISTORY.push({role:"user",content:msg});
   const pending=appendChatMsg("assistant","🤔 思考中…");
+  let answer="";
   try{
-    const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,stream:true})});
+    const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
     await readSSEStream(r,
       (delta,fullText)=>{
         if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
-        // 过滤敏感内容后展示（允许思考过程，过滤 JSON/代码块/密钥）
-        const filtered=filterDisplayContent(fullText);
-        if(pending) pending.textContent=filtered||"…";
+        // 过滤敏感内容后展示（保留思考过程，过滤 JSON/代码块/密钥）
+        answer=filterDisplayContent(fullText);
+        if(pending) pending.textContent=answer||"…";
       },
       (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
       (fullText)=>{
         if(!streamed&&pending){
-          const filtered=filterDisplayContent(fullText||"");
-          pending.textContent=filtered||"（空回复）";
+          answer=filterDisplayContent(fullText||"");
+          pending.textContent=answer||"（空回复）";
         }
-      }
+      },
+      null,
+      (meta)=>{ if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); } }
     );
+    if(answer){ AI_CHAT_HISTORY.push({role:"assistant",content:answer}); }
+    refreshAISessionsSoon();
   }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
 }
 safeAddEventListener("logSearchBtn","click",searchLogs);
@@ -888,10 +951,13 @@ safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiTestBtn","click",testAIConfig);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
+safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型
 safeAddEventListener("aiChatBtn","click",openAIChat);
 safeAddEventListener("topAiBtn","click",openAIChat); // 顶栏 AI 对话入口（全局可达）
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
+safeAddEventListener("aiNewChatBtn","click",newAIChat);
+safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));
 
 // （原独立的 Hermes 对话已并入上方统一的「AI 对话」——单窗口即走 Hermes Agent。）
 

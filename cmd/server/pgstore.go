@@ -668,7 +668,7 @@ func (p *pgStore) saveHermesSession(id int64, messages []byte, incidentID int64)
 }
 
 func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
-	rows, err := p.db.Query(`SELECT id,incident_id,status,created_at,updated_at FROM hermes_sessions ORDER BY updated_at DESC LIMIT $1`, limit)
+	rows, err := p.db.Query(`SELECT id,incident_id,status,created_at,updated_at,messages FROM hermes_sessions ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +678,8 @@ func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
 		var id, iid int64
 		var status string
 		var ca, ua sql.NullTime
-		if err := rows.Scan(&id, &iid, &status, &ca, &ua); err != nil {
+		var raw []byte
+		if err := rows.Scan(&id, &iid, &status, &ca, &ua, &raw); err != nil {
 			continue
 		}
 		m := map[string]any{"id": id, "incident_id": iid, "status": status}
@@ -688,9 +689,52 @@ func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
 		if ua.Valid {
 			m["updated_at"] = ua.Time.Format(time.RFC3339)
 		}
+		// 从消息内容提取标题（首条用户消息）、摘要（末条消息）与条数，便于前端列表展示
+		title, summary, count := hermesSessionDigest(raw)
+		m["title"] = title
+		m["summary"] = summary
+		m["msg_count"] = count
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// hermesSessionDigest 从会话 messages(JSON) 提取标题（首条 user 内容）、摘要（末条内容）与消息条数。
+func hermesSessionDigest(raw []byte) (title, summary string, count int) {
+	if len(raw) == 0 {
+		return "新会话", "", 0
+	}
+	var msgs []map[string]string
+	if json.Unmarshal(raw, &msgs) != nil {
+		return "新会话", "", 0
+	}
+	count = len(msgs)
+	for _, m := range msgs {
+		if m["role"] == "user" && strings.TrimSpace(m["content"]) != "" {
+			title = hermesTrunc(m["content"], 24)
+			break
+		}
+	}
+	if title == "" {
+		title = "新会话"
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if strings.TrimSpace(msgs[i]["content"]) != "" {
+			summary = hermesTrunc(msgs[i]["content"], 40)
+			break
+		}
+	}
+	return title, summary, count
+}
+
+// hermesTrunc 按 Unicode 字符（rune）截断字符串，避免中文被切成半个字符。
+func hermesTrunc(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func (p *pgStore) close() {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,15 +42,13 @@ type HermesSession struct {
 
 // HermesCore is the autonomous agent engine.
 type HermesCore struct {
-	s       *Server
-	tools   map[string]HermesTool
-	mu      sync.Mutex
-	session *HermesSession // current active session (simplified: single-session)
+	s     *Server
+	tools map[string]HermesTool
 	// Cached config (hot-reloaded from PG)
-	configMu    sync.RWMutex
+	configMu        sync.RWMutex
 	cachedRules     []hermesRule
 	cachedTemplates []hermesTemplate
-	lastLoad time.Time
+	lastLoad        time.Time
 }
 
 // newHermesCore creates and initializes the Hermes engine.
@@ -390,19 +389,58 @@ func (h *HermesCore) Chat(session *HermesSession, userMsg string, stream bool, w
 }
 
 // runLoop implements the core observe→reason→act loop with Function Calling.
-// max 5 turns to prevent infinite loops.
+// 每轮都以【非流式】方式调用 LLM，以便可靠解析 tool_calls：流式模式难以在 token 中途
+// 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
+// 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
+// 工具调用的原始 JSON 绝不下发到前端。max 5 turns to prevent infinite loops.
 func (h *HermesCore) runLoop(cfg AIConfig, msgs []map[string]string, stream bool, w http.ResponseWriter) (string, error) {
+	flusher, _ := w.(http.Flusher)
+	sendDelta := func(text string) {
+		if !stream || w == nil || text == "" {
+			return
+		}
+		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString(text))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
 	for turn := 0; turn < 5; turn++ {
-		// Call LLM with tools
-		respText, toolCalls, err := h.callLLMWithTools(cfg, msgs, stream, w)
+		msgsWithTools := h.injectTools(msgs)
+		reply, err := aiChat(cfg, msgsWithTools)
 		if err != nil {
+			if stream && w != nil {
+				fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
 			return "", err
 		}
-		// If no tool calls, this is the final answer
+
+		toolCalls := h.parseToolCalls(reply)
 		if len(toolCalls) == 0 {
-			return respText, nil
+			// 无工具调用 = 最终结论。剥掉可能残留的 JSON/代码块后下发。
+			final := stripToolCallJSON(reply)
+			if final == "" {
+				final = strings.TrimSpace(reply)
+			}
+			sendDelta(final)
+			return final, nil
 		}
-		// Execute tools and append results
+
+		// 有工具调用：先把模型的「思考文字」（JSON 之前的自然语言）推给用户
+		if think := stripToolCallJSON(reply); think != "" {
+			sendDelta(think + "\n")
+		}
+		// 推送工具执行状态（不含 JSON）
+		names := make([]string, 0, len(toolCalls))
+		for _, tc := range toolCalls {
+			names = append(names, tc.Name)
+		}
+		sendDelta("🔧 正在执行：" + strings.Join(names, "、") + " …\n")
+
+		// 执行工具，汇总结果
 		var toolResults strings.Builder
 		for _, tc := range toolCalls {
 			slog.Info("hermes tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
@@ -418,43 +456,21 @@ func (h *HermesCore) runLoop(cfg AIConfig, msgs []map[string]string, stream bool
 				toolResults.WriteString(fmt.Sprintf("工具 %s 结果：\n%s\n", tc.Name, result))
 			}
 		}
-		// Append tool results as a user message for the next LLM call
-		msgs = append(msgs, map[string]string{
-			"role": "user",
-			"content": fmt.Sprintf("工具执行结果：\n%s\n请根据以上结果继续分析。", toolResults.String()),
-		})
+		// 把模型本轮的工具调用 + 真实结果追加进上下文，供下一轮推理
+		msgs = append(msgs,
+			map[string]string{"role": "assistant", "content": reply},
+			map[string]string{"role": "user", "content": fmt.Sprintf("工具执行结果：\n%s\n请根据以上真实结果继续分析；若信息足够，请直接用简洁中文给出最终结论，不要再输出 JSON。", toolResults.String())},
+		)
 	}
-	return "", fmt.Errorf("达到最大推理轮次，请简化问题重试")
+	// 兜底：达到最大轮次
+	sendDelta("分析轮次已达上限，请缩小问题范围后重试。")
+	return "", fmt.Errorf("达到最大推理轮次")
 }
 
 // toolCall represents a parsed tool call from the LLM response.
 type toolCall struct {
 	Name string
 	Args map[string]any
-}
-
-// callLLMWithTools calls the LLM and parses tool_calls from the response.
-// For streaming, it accumulates the full response and sends deltas to w.
-func (h *HermesCore) callLLMWithTools(cfg AIConfig, msgs []map[string]string, stream bool, w http.ResponseWriter) (string, []toolCall, error) {
-	// Inject tool definitions into the system message
-	msgsWithTools := h.injectTools(msgs)
-
-	if stream && w != nil {
-		// Stream mode: accumulate full text, then parse tool calls
-		fullText, err := streamChat(w, cfg, msgsWithTools)
-		if err != nil {
-			return "", nil, err
-		}
-		tools := h.parseToolCalls(fullText)
-		return fullText, tools, nil
-	}
-	// Non-stream mode
-	reply, err := aiChat(cfg, msgsWithTools)
-	if err != nil {
-		return "", nil, err
-	}
-	tools := h.parseToolCalls(reply)
-	return reply, tools, nil
 }
 
 // injectTools adds tool definitions to the last system message.
@@ -533,6 +549,74 @@ func (h *HermesCore) parseToolCallJSON(jsonStr string) []toolCall {
 	return out
 }
 
+// stripToolCallJSON 去掉模型回复中的 ```代码块``` 与 {"tool_calls":...} JSON，
+// 只保留自然语言（思考文字 / 最终结论），用于下发给前端展示——工具调用 JSON 对用户不可见。
+func stripToolCallJSON(text string) string {
+	t := text
+	// 1) 去掉所有 ``` ... ``` 代码块（含 ```json）
+	for {
+		start := strings.Index(t, "```")
+		if start < 0 {
+			break
+		}
+		rest := t[start+3:]
+		end := strings.Index(rest, "```")
+		if end < 0 {
+			t = t[:start] // 未闭合：删到结尾
+			break
+		}
+		t = t[:start] + t[start+3+end+3:]
+	}
+	// 2) 去掉裸 {"tool_calls" ... } —— 按花括号配平找到该 JSON 的结束位置
+	for {
+		idx := strings.Index(t, "{\"tool_calls\"")
+		if idx < 0 {
+			// 兼容含空格的写法 {"tool_calls" 前可能有空白，宽松再找一次
+			idx = indexToolCallsLoose(t)
+			if idx < 0 {
+				break
+			}
+		}
+		depth, endPos := 0, -1
+		for i := idx; i < len(t); i++ {
+			switch t[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					endPos = i + 1
+				}
+			}
+			if endPos >= 0 {
+				break
+			}
+		}
+		if endPos > 0 {
+			t = t[:idx] + t[endPos:]
+		} else {
+			t = t[:idx] // 不配平：删到结尾
+			break
+		}
+	}
+	return strings.TrimSpace(t)
+}
+
+// indexToolCallsLoose 查找形如 { "tool_calls" （键前有空白）的起始花括号位置，找不到返回 -1。
+func indexToolCallsLoose(t string) int {
+	m := strings.Index(t, "\"tool_calls\"")
+	if m < 0 {
+		return -1
+	}
+	// 向前回溯到最近的 '{'
+	for i := m; i >= 0; i-- {
+		if t[i] == '{' {
+			return i
+		}
+	}
+	return -1
+}
+
 // --- Hot-reload: rules + templates from PG ---
 
 // reloadConfig refreshes cached rules and templates from PostgreSQL.
@@ -571,15 +655,18 @@ func (h *HermesCore) buildSystemPrompt() string {
 
 	var b strings.Builder
 	// 固定安全系统提示词（硬编码，确保每次对话生效）
-	b.WriteString("你是 AIOps 助手，仅负责故障分析，可以利用所有与终端、主机或服务相关的数据（指标、日志、告警、诊断结果等）进行排查。")
-	b.WriteString("绝对禁止执行任何高敏感操作（如删除文件、修改配置、重启服务等），")
-	b.WriteString("禁止对用户进行侵入式处理或反馈，")
-	b.WriteString("禁止输出任何 JSON、源代码、代码片段、敏感数据（如密钥、密码、用户信息）。\n\n")
+	b.WriteString("你是 AIOps 智能运维助手（Hermes），负责主机与服务的监控、排障与诊断。\n")
+	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），据此分析并回答。\n\n")
 	b.WriteString("工作原则：\n")
-	b.WriteString("- 先观察再推理，给出结论前至少调用一个工具验证\n")
-	b.WriteString("- 用简洁中文回复，分点列出根因假设和处置建议\n")
-	b.WriteString("- 需要执行操作时，说明风险等级并等待确认\n")
-	b.WriteString("- 只输出自然语言结论，不要输出 JSON、代码块或原始数据\n")
+	b.WriteString("- 用简洁中文回复：可先简述排查思路，再分点给出结论、根因假设与处置建议。\n")
+	b.WriteString("- 凡涉及主机状态 / 资源(CPU/内存/磁盘/负载/网络) / 日志 / 告警 的问题，必须先调用相应工具获取真实数据，严禁编造或臆测数据。\n")
+	b.WriteString("- 需要调用工具时，输出如下 JSON（可写在思考文字之后）：{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}；系统会执行并把真实结果回传给你，你再据此继续。\n")
+	b.WriteString("- 该 tool_calls JSON 仅用于系统内部调用、对用户不可见；面向用户的最终回复只用自然语言，不要贴出工具调用的 JSON、代码块，也不要输出任何密钥/密码/token 等敏感信息。\n")
+	b.WriteString("- 高危操作（删除文件、修改配置、重启服务、扩缩容等）只能给出建议并说明风险等级，绝不擅自执行。\n")
+
+	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，
+	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。
+	b.WriteString(h.buildHostContext())
 
 	// Append active templates
 	for _, t := range h.cachedTemplates {
@@ -597,20 +684,102 @@ func (h *HermesCore) buildSystemPrompt() string {
 	return b.String()
 }
 
-// ensureHermesSession gets or creates a Hermes session.
-func (h *HermesCore) ensureHermesSession(incidentID int64) *HermesSession {
-	if h.session != nil {
-		return h.session
+// buildHostContext 生成「当前纳管主机」清单文本，作为系统提示词的一部分注入。
+// 让 AI 知道可查询哪些主机，并能将用户提到的主机名 / IP 映射到工具所需的 host_id。
+func (h *HermesCore) buildHostContext() string {
+	if h.s == nil || h.s.store == nil {
+		return ""
 	}
-	h.session = &HermesSession{IncidentID: incidentID}
-	// Try to load from PG
-	if h.s.pg != nil && h.session.ID > 0 {
-		if raw, err := h.s.pg.loadHermesSession(h.session.ID); err == nil && raw != nil {
+	hosts := h.s.store.ListHosts()
+	if len(hosts) == 0 {
+		return "\n\n【当前纳管主机】暂无已纳管主机。若用户询问主机相关问题，请如实说明当前没有可查询的主机。\n"
+	}
+	// 稳定排序：在线优先，其次按主机名，保证每次注入顺序一致
+	sort.Slice(hosts, func(i, j int) bool {
+		oi, oj := hermesHostOnline(hosts[i]), hermesHostOnline(hosts[j])
+		if oi != oj {
+			return oi
+		}
+		return hosts[i].Hostname < hosts[j].Hostname
+	})
+	now := time.Now().Unix()
+	online := 0
+	for _, hst := range hosts {
+		if hermesHostOnline(hst) {
+			online++
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n【当前纳管主机】共 %d 台，在线 %d 台。调用工具（query_metrics / search_logs / list_alerts / run_diagnostic）时，请使用下表的 id 作为 host_id 参数；用户可能用主机名或 IP 指代主机，你需自行映射到对应 id：\n", len(hosts), online)
+	const limit = 50
+	for i, hst := range hosts {
+		if i >= limit {
+			fmt.Fprintf(&b, "…（其余 %d 台省略）\n", len(hosts)-limit)
+			break
+		}
+		status := "离线"
+		if hermesHostOnline(hst) {
+			status = "在线"
+		}
+		fmt.Fprintf(&b, "- id=%s 主机名=%s IP=%s 状态=%s", hst.ID, hst.Hostname, hermesIPOr(hst.IP), status)
+		if hst.OS != "" {
+			fmt.Fprintf(&b, " 系统=%s", hst.OS)
+		}
+		if hst.Latest != nil {
+			fmt.Fprintf(&b, " 当前CPU=%.0f%% 内存=%.0f%%", hst.Latest.CPUPercent, hst.Latest.MemPercent)
+		}
+		if hst.LastSeen > 0 {
+			fmt.Fprintf(&b, " 最后上报=%ds前", now-hst.LastSeen)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// hermesHostOnline 判断主机是否在线（最近上报 ≤120s，与 forward.go 的离线判定一致）。
+func hermesHostOnline(h *Host) bool {
+	return h != nil && h.LastSeen > 0 && time.Now().Unix()-h.LastSeen <= 120
+}
+
+func hermesIPOr(ip string) string {
+	if strings.TrimSpace(ip) == "" {
+		return "未知"
+	}
+	return ip
+}
+
+// resolveSession 按 session_id 解析会话，作为多轮记忆的权威来源：
+//   - sessionID>0：从 PostgreSQL 加载完整消息历史（刷新页面 / 切换会话后仍能延续）。
+//   - sessionID==0：新建会话；若 PG 不可用或加载失败，用前端传入的 history 兜底，保证前后端状态一致。
+func (h *HermesCore) resolveSession(sessionID int64, history []map[string]string) *HermesSession {
+	sess := &HermesSession{ID: sessionID}
+	if sessionID > 0 && h.s.pg != nil {
+		if raw, err := h.s.pg.loadHermesSession(sessionID); err == nil && raw != nil {
 			var msgs []map[string]string
 			if json.Unmarshal(raw, &msgs) == nil {
-				h.session.Messages = msgs
+				sess.Messages = msgs
+				return sess
 			}
 		}
 	}
-	return h.session
+	// 新会话，或 PG 不可用 / 未找到：用前端历史兜底
+	if len(sess.Messages) == 0 && len(history) > 0 {
+		sess.Messages = sanitizeHistory(history)
+	}
+	return sess
+}
+
+// sanitizeHistory 清洗前端传入的会话历史：仅保留合法的 user/assistant 非空消息，并限制最近 40 条。
+func sanitizeHistory(history []map[string]string) []map[string]string {
+	out := make([]map[string]string, 0, len(history))
+	for _, m := range history {
+		role, content := m["role"], m["content"]
+		if (role == "user" || role == "assistant") && strings.TrimSpace(content) != "" {
+			out = append(out, map[string]string{"role": role, "content": content})
+		}
+	}
+	if len(out) > 40 {
+		out = out[len(out)-40:]
+	}
+	return out
 }

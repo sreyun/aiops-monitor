@@ -732,11 +732,9 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
-// handleAIModels returns a curated list of recommended models for quick selection.
-// GET /api/v1/ai/models
 // fetchProviderModels 查询 OpenAI 兼容 provider 的 GET {base}/models（适用于
 // OpenAI / DeepSeek / Ollama / 百炼兼容模式…），返回模型 ID 列表。任何失败都返回
-// nil,调用方回落到精选列表。Anthropic 无公开的 models 列表端点 → 返回 nil。
+// nil,调用方据此提示用户手动输入。Anthropic 无公开的 models 列表端点 → 返回 nil。
 func fetchProviderModels(endpoint, apiKey string) []string {
 	if strings.TrimSpace(endpoint) == "" {
 		return nil
@@ -783,8 +781,10 @@ func fetchProviderModels(endpoint, apiKey string) []string {
 	return ids
 }
 
-// handleAIModels 返回模型下拉候选：自动挂载已配置 provider 的实时模型列表
-// （表单值优先，其次已保存配置；百炼兼容模式会返回 qwen-* 等），再并上精选兜底。
+// handleAIModels 返回模型下拉候选：仅自动获取已配置 provider 的实时模型列表
+// （表单值优先，其次已保存配置；百炼兼容模式会返回 qwen-* 等）。
+// 不再内置任何预设 / 精选模型；获取不到时返回空列表，前端提示手动输入模型名
+// （Anthropic 无公开 /models 端点，也走手动输入）。
 // POST /api/v1/ai/models  {endpoint?, api_key?}
 func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 	type modelSuggestion struct {
@@ -802,36 +802,17 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 		c.APIKey = saved.APIKey
 	}
 
-	// 自动挂载：查询 provider 的 /models
-	var live []modelSuggestion
-	for _, id := range fetchProviderModels(c.Endpoint, c.APIKey) {
-		live = append(live, modelSuggestion{Value: id, Label: id, Provider: "live"})
-	}
-
-	// 精选补充/兜底（Anthropic/Claude 无 /models 端点，靠这个）
-	curated := []modelSuggestion{
-		{Value: "qwen-plus", Label: "通义千问-Plus（性价比推荐）", Provider: "bailian"},
-		{Value: "qwen-max", Label: "通义千问-Max（最强能力）", Provider: "bailian"},
-		{Value: "qwen-turbo", Label: "通义千问-Turbo（速度优先）", Provider: "bailian"},
-		{Value: "claude-3-5-sonnet-20241022", Label: "Claude 3.5 Sonnet（推荐）", Provider: "anthropic"},
-		{Value: "claude-3-5-haiku-20241022", Label: "Claude 3.5 Haiku（轻量快速）", Provider: "anthropic"},
-		{Value: "claude-3-opus-20240229", Label: "Claude 3 Opus（最强推理）", Provider: "anthropic"},
-		{Value: "gpt-4o-mini", Label: "GPT-4o Mini（轻量推荐）", Provider: "openai"},
-		{Value: "gpt-4o", Label: "GPT-4o（全能）", Provider: "openai"},
-		{Value: "deepseek-chat", Label: "DeepSeek-V3（通用对话）", Provider: "deepseek"},
-		{Value: "deepseek-reasoner", Label: "DeepSeek-R1（推理增强）", Provider: "deepseek"},
-	}
-
+	// 自动获取：查询 provider 的 GET {base}/models，作为模型候选的唯一来源。
 	seen := map[string]bool{}
-	models := make([]modelSuggestion, 0, len(live)+len(curated))
-	for _, m := range append(live, curated...) {
-		if m.Value == "" || seen[m.Value] {
+	models := make([]modelSuggestion, 0, 16)
+	for _, id := range fetchProviderModels(c.Endpoint, c.APIKey) {
+		if id == "" || seen[id] {
 			continue
 		}
-		seen[m.Value] = true
-		models = append(models, m)
+		seen[id] = true
+		models = append(models, modelSuggestion{Value: id, Label: id, Provider: "live"})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": models, "live_count": len(live)})
+	writeJSON(w, http.StatusOK, map[string]any{"models": models, "live_count": len(models)})
 }
 
 // handleAIChat is a lightweight SRE-assistant chat over the configured provider so
@@ -1540,10 +1521,11 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Message    string `json:"message"`
-		SessionID  int64  `json:"session_id,omitempty"`
-		IncidentID int64  `json:"incident_id,omitempty"`
-		Stream     bool   `json:"stream,omitempty"`
+		Message    string              `json:"message"`
+		SessionID  int64               `json:"session_id,omitempty"`
+		IncidentID int64               `json:"incident_id,omitempty"`
+		History    []map[string]string `json:"history,omitempty"`
+		Stream     bool                `json:"stream,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -1561,11 +1543,18 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
-	session := s.hermes.ensureHermesSession(req.IncidentID)
+	// 按 session_id 解析会话（多轮记忆 / 刷新恢复），前端 history 作为兜底
+	session := s.hermes.resolveSession(req.SessionID, req.History)
+	session.IncidentID = req.IncidentID
 	// 统一 AI 对话默认走 SSE 流式
 	s.setupSSE(w)
 	s.hermes.Chat(session, req.Message, true, w)
-	return
+	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]
+	fmt.Fprintf(w, "data: {\"session_id\":%d}\n\n", session.ID)
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // handleHermesSessions lists recent Hermes sessions.
