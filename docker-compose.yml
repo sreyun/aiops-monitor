@@ -98,8 +98,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18
-    # image: pgvector/pgvector:pg18
+    # 本地用 docker.io 官方 pgvector（SWR 需登录，本机未登录会拉取失败）。
+    # 你在已登录 SWR 的环境部署时，改用下面注释的 SWR 镜像即可。
+    image: pgvector/pgvector:pg18
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18
     container_name: aiops-pg
     environment:
       - POSTGRES_USER=aiops
@@ -107,7 +109,10 @@ services:
       - POSTGRES_DB=aiops
       - TZ=Asia/Shanghai
     volumes:
-      - ./pg-data:/var/lib/postgresql
+      # 具名卷：Windows/Mac 上 Docker 绑定挂载(./pg-data)对 PG 的 fsync 不可靠，
+      # 会导致 WAL 损坏/启动崩溃。改用 Docker 具名卷（在 VM 内，可靠）。
+      # Linux 服务器可改回 - ./pg-data:/var/lib/postgresql（原生 fs 无此问题）。
+      - aiops-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
       interval: 10s
@@ -131,3 +136,8 @@ services:
   #     # 采集日志文件（逗号分隔）：
   #     # command: ["--server", "http://aiops-server:8529", "--log-paths", "/var/log/syslog"]
   #   restart: unless-stopped
+
+# 具名卷：PostgreSQL 数据（Windows/Mac 上比绑定挂载可靠，避免 WAL 损坏）。
+# 备份用 `docker exec aiops-pg pg_dump ...`；删除数据用 `docker volume rm aiops-monitor_aiops-pgdata`。
+volumes:
+  aiops-pgdata:

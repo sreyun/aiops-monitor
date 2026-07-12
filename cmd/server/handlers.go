@@ -247,8 +247,9 @@ func (s *Server) Routes() http.Handler {
 		mux.Handle("GET /i18n-dashboard.en.js", fsrv)
 		mux.Handle("GET /i18n-dashboard.zh-TW.js", fsrv)
 		// P2-1: support split CSS/JS modules
-		mux.Handle("GET /css/", http.StripPrefix("/css/", http.FileServer(http.FS(sub))))
-		mux.Handle("GET /js/", http.StripPrefix("/js/", http.FileServer(http.FS(sub))))
+		// 注意：不能 StripPrefix——文件在 web/js、web/css 子目录下，需保留前缀映射到子目录。
+		mux.Handle("GET /css/", fsrv)
+		mux.Handle("GET /js/", fsrv)
 		mux.Handle("GET /manifest.json", fsrv)
 		mux.Handle("GET /icon.svg", fsrv)
 		// Service Worker: needs Service-Worker-Allowed header for root scope control

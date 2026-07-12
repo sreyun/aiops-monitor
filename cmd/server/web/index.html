@@ -1489,12 +1489,8 @@
 <script src="/i18n-dashboard.zh-TW.js"></script>
 <script src="/i18n-dashboard.js"></script>
 <!-- JS 模块：按依赖顺序加载（core → render → charts → terminal → auth → automation → app） -->
-<script src="/js/core.js" defer></script>
-<script src="/js/render.js" defer></script>
-<script src="/js/charts.js" defer></script>
-<script src="/js/terminal.js" defer></script>
-<script src="/js/auth.js" defer></script>
-<script src="/js/automation.js" defer></script>
+<!-- 前端 JS 模块拆分(commit e810457)因编码损坏(app.js 变 mojibake→SyntaxError)已回退：
+     恢复为单文件干净 app.js。模块拆分需用正确 UTF-8 处理后重做。 -->
 <script src="/app.js" defer></script>
 </body>
 </html>

@@ -532,6 +532,10 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}
+	// 拆分后的前端静态模块（/js/*.js、/css/*）与 /app.js、/style.css 同属登录前外壳，需放行。
+	if strings.HasPrefix(p, "/js/") || strings.HasPrefix(p, "/css/") {
+		return true
+	}
 	// Agent-facing terminal reverse channels are token-gated, not session-gated.
 	if strings.HasPrefix(p, "/api/v1/agent/terminal/") {
 		return true
