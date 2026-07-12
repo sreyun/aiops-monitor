@@ -2536,6 +2536,7 @@ select:focus {
 .ai-suggest-chip { text-align: left; font-size: 13px; color: var(--txt2); background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 9px 13px; cursor: pointer; line-height: 1.45; transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast); }
 .ai-suggest-chip:hover { border-color: var(--accent); color: var(--txt); background: var(--accent-soft); transform: translateX(2px); }
 .ai-suggest-chip:active { transform: translateX(0); }
+.log-stat-empty { color: var(--muted); font-size: 12px; margin-left: 10px; }
 @media (prefers-reduced-motion: reduce) { .ai-suggest-chip:hover, .ai-suggest-chip:active { transform: none; } }
 
 /* 按钮交互细节：主/次按钮 hover 轻微上浮、active 回落，主按钮加极淡光晕（克制） */

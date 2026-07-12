@@ -762,10 +762,13 @@ function renderLogStats(stats, total){
   const panel=$("logStatsPanel");
   if(!panel) return;
   if(!stats || !total){
-    panel.innerHTML=""; panel.style.display="none";
+    // 空态也保留看板结构，避免用户以为功能缺失；并提示数据来源
+    // 注意：.log-stats 默认 display:none，须显式设为可见值（""会回落到 CSS 的 none）
+    panel.style.display="block";
+    panel.innerHTML=`<div class="log-stats-bar"><div class="log-stats-left"><span class="log-stat-total">共 <strong>0</strong> 条</span><span class="log-stat-empty">暂无匹配日志——被控端需在安装时以 --log-paths 指定采集文件；或放宽上方筛选条件后重试</span></div></div>`;
     return;
   }
-  panel.style.display="";
+  panel.style.display="block"; // 显式可见（.log-stats 默认 display:none，""会回落到 none）
   const byLvl=stats.by_level||{};
   const topHosts=stats.top_hosts||[];
   const timeDist=stats.time_distribution||{};
@@ -837,7 +840,7 @@ function renderLogStats(stats, total){
 function renderLogsPager(){
   const pager=$("logsPager");
   if(!pager) return;
-  if(LOGS_TOTAL===0){ pager.innerHTML=""; return; }
+  if(LOGS_TOTAL===0){ pager.innerHTML=`<span class="pinfo">共 0 条</span>`; return; }
   if(LOGS_PAGES<=1){ pager.innerHTML=`<span class="pinfo">共 ${LOGS_TOTAL} 条</span>`; return; }
   let btns=`<button ${LOGS_PAGE===1?"disabled":""} data-lpg="prev">‹</button>`;
   for(let i=1;i<=LOGS_PAGES;i++){
