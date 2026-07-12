@@ -73,6 +73,11 @@ function openAPISystemModal(sys) {
   $("apiSysLevel").value = sys ? sys.level : "critical";
   $("apiSysEnabled").checked = sys ? sys.enabled : true;
   $("apiSysModalTitle").textContent = sys ? "编辑业务系统" : "添加业务系统";
+  // 回填公共请求头
+  const commonHeadersText = (sys && sys.common_headers)
+    ? Object.entries(sys.common_headers).map(([k, v]) => `${k}: ${v}`).join("\n")
+    : "";
+  $("apiSysCommonHeaders").value = commonHeadersText;
   const rows = $("apiEndpointRows");
   rows.innerHTML = "";
   const eps = (sys && sys.endpoints) || [];
@@ -89,6 +94,7 @@ function addAPIEndpointRow(ep) {
   const m = (ep && ep.method) || "GET";
   const methods = ["GET", "POST", "PUT", "DELETE", "HEAD", "PATCH"].map(x => `<option ${x === m ? "selected" : ""}>${x}</option>`).join("");
   const headersText = (ep && ep.headers) ? Object.entries(ep.headers).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
+  const commonHeaders = ($("apiSysCommonHeaders")?.value || "").trim();
   div.innerHTML = `
     <button class="api-ep-del" data-aact="ep-del" title="移除接口">✕</button>
     <div class="api-ep-grid">
@@ -102,10 +108,13 @@ function addAPIEndpointRow(ep) {
       <input class="ep-jsonpath" placeholder="JSON路径 如 code" value="${esc((ep && ep.json_path) || "")}">
       <input class="ep-jsonexpect" placeholder="JSON期望值 如 0" value="${esc((ep && ep.json_expect) || "")}">
     </div>
-    <div class="api-ep-grid3">
-      <textarea class="ep-headers" rows="2" placeholder="请求头(可选)，每行 Key: Value，如 Authorization: Bearer xxx">${esc(headersText)}</textarea>
-      <textarea class="ep-body" rows="2" placeholder="请求体(可选，POST/PUT)">${esc((ep && ep.body) || "")}</textarea>
-    </div>`;
+    <details class="api-ep-advanced">
+      <summary>高级选项（请求头 / 请求体）${commonHeaders ? `<span class="hint">· 已继承系统级公共请求头</span>` : ""}</summary>
+      <div class="api-ep-grid3">
+        <textarea class="ep-headers" rows="2" placeholder="接口级请求头（覆盖同名的公共头），每行 Key: Value，如 Authorization: Bearer xxx">${esc(headersText)}</textarea>
+        <textarea class="ep-body" rows="2" placeholder="请求体(可选，POST/PUT)">${esc((ep && ep.body) || "")}</textarea>
+      </div>
+    </details>`;
   rows.appendChild(div);
 }
 
@@ -127,12 +136,19 @@ async function saveAPISystem() {
       enabled: true
     };
   }).filter(ep => ep.name && ep.url);
+  // 读取业务系统级公共请求头
+  const commonHeaders = {};
+  ($("apiSysCommonHeaders").value || "").split("\n").forEach(line => {
+    const i = line.indexOf(":");
+    if (i > 0) { const k = line.slice(0, i).trim(); if (k) commonHeaders[k] = line.slice(i + 1).trim(); }
+  });
   const body = {
     id: $("apiSysId").value,
     name: $("apiSysName").value.trim(),
     interval_sec: Math.max(5, parseInt($("apiSysInterval").value) || 60),
     level: $("apiSysLevel").value,
     enabled: $("apiSysEnabled").checked,
+    common_headers: commonHeaders,
     endpoints: endpoints
   };
   if (!body.name) { toast("请填写业务系统名称", "err"); return; }

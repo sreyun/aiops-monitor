@@ -368,6 +368,17 @@ safeAddEventListener("menuBtn", "click", () => {
   if (!appEl) return;
   if (window.innerWidth <= 900) appEl.classList.toggle("nav-open");
   else appEl.classList.toggle("collapsed");
+  // a11y：同步汉堡按钮的展开态（移动端看 nav-open，桌面看是否 collapsed）
+  const btn = $("menuBtn");
+  if (btn) {
+    const expanded = window.innerWidth <= 900 ? appEl.classList.contains("nav-open") : !appEl.classList.contains("collapsed");
+    btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+});
+// a11y：给所有弹窗补 role=dialog + aria-modal（集中一处，免逐个改 HTML；仅可见时对读屏器生效）
+document.querySelectorAll(".mask .modal").forEach(m => {
+  if (!m.hasAttribute("role")) m.setAttribute("role", "dialog");
+  m.setAttribute("aria-modal", "true");
 });
 safeAddEventListener("backdrop", "click", () => {
   const appEl = $("app");

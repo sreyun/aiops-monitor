@@ -711,8 +711,9 @@ safeAddEventListener("tkCommentBtn","click",addTicketComment);
 
 /* ---- 日志检索 ---- */
 const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
-// 日志检索分页状态
-let LOG_PAGE = 1, LOG_PAGE_SIZE = 50, LOG_TOTAL = 0, LOG_PAGES = 1;
+// 日志检索分页状态（LOG_PAGE / LOG_PAGE_SIZE 已在 core.js 顶层声明，此处只声明新增的两个——
+// 重复的顶层 let 会让整个拼接后的 app.js 抛 SyntaxError 而全部失效）
+let LOG_TOTAL = 0, LOG_PAGES = 1;
 let LAST_LOG_STATS = null; // 缓存上次搜索的统计数据
 
 async function loadLogs(){

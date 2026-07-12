@@ -252,7 +252,7 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 	} else if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
-	client := &http.Client{Timeout: 125 * time.Second}
+	client := newGuardedHTTPClient(125 * time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil { // 用户主动终止
@@ -368,7 +368,7 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := newGuardedHTTPClient(120 * time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -652,7 +652,7 @@ func (m *aiManager) RunInspection(trigger string) InspectionReport {
 	rep := InspectionReport{
 		Trigger: trigger, Source: source, Model: model, Context: inspectCtx,
 		DurationMs: time.Since(start).Milliseconds(),
-		Summary:   summary, Findings: findings, Ts: time.Now().Unix(),
+		Summary:    summary, Findings: findings, Ts: time.Now().Unix(),
 	}
 	m.mu.Lock()
 	m.nextID++

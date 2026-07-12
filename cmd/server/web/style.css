@@ -2409,6 +2409,12 @@ table tbody tr:hover{
 .api-ep-grid3{display:grid; grid-template-columns:1fr 1fr; gap:8px}
 .api-ep-row input,.api-ep-row select,.api-ep-row textarea{width:100%; padding:6px 9px; font-size:12px; background:var(--bg3); border:1px solid var(--line2); border-radius:6px; color:var(--txt); box-sizing:border-box}
 .api-ep-row textarea{font-family:monospace; resize:vertical}
+/* 接口高级选项折叠 */
+.api-ep-advanced{margin-top:4px}
+.api-ep-advanced summary{font-size:11px; color:var(--muted); cursor:pointer; padding:2px 0; user-select:none}
+.api-ep-advanced summary:hover{color:var(--txt2)}
+.api-ep-advanced summary .hint{font-size:10px; color:var(--accent-txt); font-weight:400}
+.api-ep-advanced .api-ep-grid3{margin-top:6px}
 @media (max-width:720px){
   .api-ep-grid,.api-ep-grid2,.api-ep-grid3{grid-template-columns:1fr}
 }
@@ -2438,3 +2444,8 @@ table tbody tr:hover{
 .gov-weekdays,.gov-channels{gap:12px}
 .gov-samehost,.gov-continue{margin:0; font-size:12px}
 .gov-rule .switch span{font-size:12px}
+
+/* 可读性/无障碍：弹窗内长代码/JSON 块横向滚动，避免截断隐藏内容或撑破弹窗 */
+.modal pre,.modal code,.modal .mono{max-width:100%; overflow-x:auto}
+/* 键盘可达：非按钮的可点区域获得焦点时也给出清晰轮廓 */
+.nav-item:focus-visible,.mini-btn:focus-visible,[data-act]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}

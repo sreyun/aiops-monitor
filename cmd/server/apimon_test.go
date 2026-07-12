@@ -14,7 +14,7 @@ func TestAPIEndpointToCheck(t *testing.T) {
 		Headers: map[string]string{"X-Api-Key": "k"}, Body: `{"u":"a"}`,
 		ExpectStatus: 200, ExpectKeyword: "ok", JSONPath: "code", JSONExpect: "0",
 	}
-	c := ep.toCheck()
+	c := ep.toCheck(nil) // 无公共头
 	if !c.Advanced || c.Type != "http" {
 		t.Fatal("应为 http 高级拨测")
 	}
@@ -26,6 +26,34 @@ func TestAPIEndpointToCheck(t *testing.T) {
 	}
 	if c.JSONPath != "code" || c.JSONExpect != "0" {
 		t.Fatal("JSON 断言未正确映射")
+	}
+}
+
+// TestAPIEndpointToCheckWithCommonHeaders 验证公共请求头合并 + 接口级覆盖。
+func TestAPIEndpointToCheckWithCommonHeaders(t *testing.T) {
+	ep := APIEndpoint{
+		ID: "ep1", Name: "查询", URL: "https://x/query", Method: "GET",
+		Headers: map[string]string{"X-Override": "ep-value", "X-Extra": "ep-only"},
+	}
+	c := ep.toCheck(map[string]string{
+		"Authorization": "Bearer shared",
+		"X-Override":    "sys-value",
+	})
+	// 公共头应被继承
+	if c.Headers["Authorization"] != "Bearer shared" {
+		t.Fatal("公共头 Authorization 未被继承")
+	}
+	// 接口级应覆盖同名公共头
+	if c.Headers["X-Override"] != "ep-value" {
+		t.Fatalf("接口级 X-Override 应覆盖公共头，实际=%s", c.Headers["X-Override"])
+	}
+	// 接口级独有头应保留
+	if c.Headers["X-Extra"] != "ep-only" {
+		t.Fatal("接口级独有头 X-Extra 丢失")
+	}
+	// 合并后总共 3 个 key
+	if len(c.Headers) != 3 {
+		t.Fatalf("合并后应有 3 个 key，实际=%d", len(c.Headers))
 	}
 }
 

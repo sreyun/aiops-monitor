@@ -35,10 +35,19 @@ type APIEndpoint struct {
 }
 
 // toCheck 把接口适配成一个 HTTP 高级拨测，复用 probeHTTPAdvanced 的完整探测能力。
-func (e APIEndpoint) toCheck() CustomCheck {
+// commonHeaders 为业务系统级公共请求头，接口级 Headers 会覆盖同名 key。
+func (e APIEndpoint) toCheck(commonHeaders map[string]string) CustomCheck {
+	// 合并：先复制公共头，再用接口级覆盖（接口级优先）
+	merged := make(map[string]string, len(commonHeaders)+len(e.Headers))
+	for k, v := range commonHeaders {
+		merged[k] = v
+	}
+	for k, v := range e.Headers {
+		merged[k] = v
+	}
 	return CustomCheck{
 		ID: e.ID, Name: e.Name, Type: "http", Target: e.URL,
-		Advanced: true, Method: e.Method, Headers: e.Headers, Body: e.Body,
+		Advanced: true, Method: e.Method, Headers: merged, Body: e.Body,
 		ExpectStatus: e.ExpectStatus, ExpectKeyword: e.ExpectKeyword,
 		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect,
 	}
@@ -46,13 +55,14 @@ func (e APIEndpoint) toCheck() CustomCheck {
 
 // APISystem 是一个业务系统：一批接口 + 统一的探测周期与告警级别。
 type APISystem struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	IntervalSec int           `json:"interval_sec"` // 批量探测周期（秒，最小 5）
-	Level       string        `json:"level"`        // warning | critical
-	Enabled     bool          `json:"enabled"`
-	Endpoints   []APIEndpoint `json:"endpoints"`
-	CreatedAt   int64         `json:"created_at"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	IntervalSec   int               `json:"interval_sec"`   // 批量探测周期（秒，最小 5）
+	Level         string            `json:"level"`          // warning | critical
+	Enabled       bool              `json:"enabled"`
+	CommonHeaders map[string]string `json:"common_headers,omitempty"` // 业务系统级公共请求头，所有接口共用
+	Endpoints     []APIEndpoint     `json:"endpoints"`
+	CreatedAt     int64             `json:"created_at"`
 }
 
 // ---- ConfigStore：业务系统 CRUD（持久化到 PG/JSON，与 checks 同机制） ----
@@ -232,7 +242,7 @@ func (ar *apiRunner) gc() {
 }
 
 func (ar *apiRunner) probe(sys APISystem, ep APIEndpoint) {
-	res := ar.cr.probeHTTPAdvanced(ep.toCheck())
+	res := ar.cr.probeHTTPAdvanced(ep.toCheck(sys.CommonHeaders))
 	now := time.Now().Unix()
 
 	ar.mu.Lock()

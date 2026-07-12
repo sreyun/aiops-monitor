@@ -37,7 +37,7 @@ func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
 	return &Notifier{
 		store:  store,
 		cfg:    cfg,
-		httpc:  &http.Client{Timeout: 8 * time.Second},
+		httpc:  newGuardedHTTPClient(8 * time.Second), // SSRF：飞书/钉钉 webhook 用户可配，拦元数据/链路本地
 		active: map[string]Alert{},
 		since:  map[string]int64{},
 	}
@@ -467,7 +467,7 @@ func sendCustomWebhook(cfg CustomWebhookConfig, text string, a Alert, firing boo
 		}
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := newGuardedHTTPClient(8 * time.Second) // SSRF：自定义 webhook URL 用户可配，拦元数据/链路本地
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

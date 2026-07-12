@@ -40,7 +40,7 @@
       </div>
     </div>
 
-    <nav class="nav">
+    <nav class="nav" aria-label="主导航">
       <a class="nav-item active" data-view="overview" data-i18n-title="nav.overview" title="概览">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
         <span data-i18n="nav.overview">概览</span>
@@ -123,7 +123,7 @@
   <!-- ===== 主内容 ===== -->
   <main class="main">
     <header class="topbar">
-      <button class="tb-icon" id="menuBtn" aria-label="菜单">
+      <button class="tb-icon" id="menuBtn" aria-label="展开/收起菜单" aria-expanded="false" aria-controls="sidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
       <div class="page-head">
@@ -1022,6 +1022,11 @@
         <div class="field"><label>告警级别</label><div class="select-wrap"><select id="apiSysLevel"><option value="critical">严重</option><option value="warning">警告</option></select></div></div>
         <div class="field" style="display:flex; align-items:flex-end"><label class="switch"><input type="checkbox" id="apiSysEnabled" checked> <span>启用该业务系统</span></label></div>
       </div>
+      <div class="field">
+        <label>公共请求头 <span class="tag">该业务系统下所有接口共用</span></label>
+        <textarea id="apiSysCommonHeaders" rows="3" placeholder="每行 Key: Value，如&#10;Authorization: Bearer eyJh...&#10;Content-Type: application/json" style="font-family:monospace; font-size:12px"></textarea>
+        <div class="hint">公共请求头自动应用于所有接口，接口级请求头会覆盖同名的公共头。</div>
+      </div>
       <div class="subhead" style="display:flex; align-items:center">接口列表<button class="btn" id="apiAddEndpointBtn" type="button" style="margin-left:auto">+ 添加接口</button></div>
       <div id="apiEndpointRows" style="display:flex; flex-direction:column; gap:10px"></div>
       <div class="hint">每个接口按上面的间隔批量探测；支持自定义方法 / 请求头（含 Bearer / API-Key 鉴权）/ 请求体，以及期望状态码、响应关键字、JSON 断言校验。响应时间自动分解 DNS/TCP/TLS/TTFB 并入 VM，异常按级别自动告警。</div>
@@ -1589,7 +1594,7 @@
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
 <script src="/i18n-dashboard.en.js"></script>
