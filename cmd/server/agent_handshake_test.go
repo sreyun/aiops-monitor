@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,9 +10,57 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"aiops-monitor/shared"
 )
+
+// TestLogEncryptHandshakeEndToEnd 验证日志加密全链路：注册下发 log_key → 用该密钥加密一批
+// 日志 → 服务端 handleAgentLogs 按指纹重派生密钥解密解压并入库；且请求体不含明文。
+func TestLogEncryptHandshakeEndToEnd(t *testing.T) {
+	os.Setenv("AIOPS_SECRET_KEY", "test-master-key-e2e")
+	defer os.Unsetenv("AIOPS_SECRET_KEY")
+
+	srv, token := newTestServer(t)
+	const hostID, fp = "h-log", "fp-log-0001"
+
+	rr := postJSON(t, srv.handleRegister, "/api/v1/agent/register", map[string]string{
+		"host_id": hostID, "hostname": "n", "token": token, "fingerprint": fp,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("注册失败: %d %s", rr.Code, rr.Body)
+	}
+	var reg struct {
+		LogKey     string `json:"log_key"`
+		LogEncrypt bool   `json:"log_encrypt"`
+	}
+	if json.Unmarshal(rr.Body.Bytes(), &reg) != nil || !reg.LogEncrypt || reg.LogKey == "" {
+		t.Fatalf("注册响应应下发 log_key + log_encrypt: %s", rr.Body)
+	}
+	key, err := base64.StdEncoding.DecodeString(reg.LogKey)
+	if err != nil || len(key) != 32 {
+		t.Fatalf("log_key 非法: len=%d err=%v", len(key), err)
+	}
+
+	// 用下发密钥加密一批日志（sealLog 与 agent 的 sealLogAgent 同算法）→ 上报
+	batch := shared.LogBatch{HostID: hostID, Lines: []shared.LogLine{{Ts: time.Now().Unix(), Source: "/var/log/x", Level: "error", Message: "secret-boom-42"}}}
+	plain, _ := json.Marshal(batch)
+	sealed, err := sealLog(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealed, []byte("secret-boom-42")) {
+		t.Fatal("密文泄露明文")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/logs", bytes.NewReader(sealed))
+	req.Header.Set("X-Log-Enc", "aesgcm-gzip")
+	req.Header.Set("X-Agent-Fingerprint", fp)
+	rr2 := httptest.NewRecorder()
+	srv.handleAgentLogs(rr2, req)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("加密日志入库失败: %d %s", rr2.Code, rr2.Body)
+	}
+}
 
 // newTestServer builds a real Server backed by an in-memory Store and a throwaway
 // ConfigStore (no PostgreSQL needed — persistence is orthogonal to the agent
@@ -100,10 +149,10 @@ func TestAgentHandshakeEndToEnd(t *testing.T) {
 // there for external shell/PowerShell syntax checking.
 func TestInstallScriptsRobustness(t *testing.T) {
 	server, token := "https://mon.example.com", "tok-123"
-	shIn := renderScript(installShTemplate, server, token, "prod", "")
-	ps1In := renderScript(installPs1Template, server, token, "prod", "")
-	shUn := renderScript(uninstallShTemplate, server, token, "prod", "")
-	ps1Un := renderScript(uninstallPs1Template, server, token, "prod", "")
+	shIn := renderScript(installShTemplate, server, token, "prod", "", "")
+	ps1In := renderScript(installPs1Template, server, token, "prod", "", "")
+	shUn := renderScript(uninstallShTemplate, server, token, "prod", "", "")
+	ps1Un := renderScript(uninstallPs1Template, server, token, "prod", "", "")
 
 	must := func(name, hay string, needles ...string) {
 		for _, n := range needles {

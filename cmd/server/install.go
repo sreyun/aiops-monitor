@@ -10,13 +10,55 @@ import (
 // and '$' characters pass through untouched. serversJSON is a pre-validated JSON
 // array string (e.g. [{"server":"...","token":"..."}]); when empty the template
 // falls back to the single server+token config.
-func renderScript(tmpl, server, token, category, serversJSON string) string {
+func renderScript(tmpl, server, token, category, serversJSON, logPaths string) string {
+	if strings.TrimSpace(logPaths) == "" {
+		logPaths = "[]" // 必须是合法 JSON 数组，否则生成的 config.json 语法错误
+	}
 	return strings.NewReplacer(
 		"__SERVER__", server,
 		"__TOKEN__", token,
 		"__CATEGORY__", category,
 		"__SERVERS_JSON__", serversJSON,
+		"__LOG_PATHS__", logPaths,
 	).Replace(tmpl)
+}
+
+// sanitizeLogPaths 把用户填写的日志路径（换行或逗号分隔）清洗为一个【合法 JSON 数组字符串】，
+// 用于注入安装脚本生成的 config.json 的 log_paths 字段。
+// 关键安全点：路径会被写进未加引号的 shell heredoc，若含 $ ` 等会被展开导致命令注入，
+// 因此逐字符白名单（仅保留路径合法字符），再用 json.Marshal 正确转义。
+func sanitizeLogPaths(raw string) string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' })
+	var paths []string
+	seen := map[string]bool{}
+	for _, f := range fields {
+		clean := strings.TrimSpace(strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				return r
+			case r == '/', r == '.', r == '_', r == '-', r == ':', r == '*', r == ' ', r == '\\':
+				return r
+			default:
+				return -1 // 丢弃 $ ` " ; | & < > ( ) 等危险字符
+			}
+		}, strings.TrimSpace(f)))
+		if clean == "" || seen[clean] {
+			continue
+		}
+		if len(clean) > 256 {
+			clean = clean[:256]
+		}
+		seen[clean] = true
+		paths = append(paths, clean)
+		if len(paths) >= 20 { // 上限 20 条，避免超长命令
+			break
+		}
+	}
+	if len(paths) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(paths)
+	return string(b)
 }
 
 // sanitizeServersJSON parses a JSON array of {server,token} objects, sanitizes
@@ -98,6 +140,7 @@ if [ -n "$SERVERS_JSON" ]; then
 {
   "servers": $SERVERS_JSON,
   "category": "$CATEGORY",
+  "log_paths": __LOG_PATHS__,
   "report_interval": 10,
   "plugin_interval": 15,
   "plugins_dir": "$DIR/plugins",
@@ -110,6 +153,7 @@ else
   "server": "$SERVER",
   "token": "$TOKEN",
   "category": "$CATEGORY",
+  "log_paths": __LOG_PATHS__,
   "report_interval": 10,
   "plugin_interval": 15,
   "plugins_dir": "$DIR/plugins",
@@ -190,6 +234,7 @@ const installPs1Template = `$ErrorActionPreference = "Stop"
 $Server   = "__SERVER__"
 $Token    = "__TOKEN__"
 $Category = "__CATEGORY__"
+$LogPaths = '__LOG_PATHS__'
 $Dir      = Join-Path $env:LOCALAPPDATA "aiops-agent"
 
 Write-Host "[AIOps] installing to $Dir (server $Server)"
@@ -206,6 +251,7 @@ if ($ServersJson -ne "") {
   $cfg = @{
     servers = ($ServersJson | ConvertFrom-Json)
     category = $Category
+    log_paths = @($LogPaths | ConvertFrom-Json)
     report_interval = 10
     plugin_interval = 15
     plugins_dir = "$Dir\plugins"
@@ -216,6 +262,7 @@ if ($ServersJson -ne "") {
     server = $Server
     token = $Token
     category = $Category
+    log_paths = @($LogPaths | ConvertFrom-Json)
     report_interval = 10
     plugin_interval = 15
     plugins_dir = "$Dir\plugins"

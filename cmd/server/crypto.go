@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -104,6 +108,68 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// ---- 日志传输加密（gzip + AES-256-GCM）----
+//
+// 每个 agent 的日志密钥 = 派生自服务端主密钥 + agent 指纹：注册时服务端计算并把 key 一次性
+// 下发给 agent；之后每批日志 agent 用它 gzip+AES-GCM 加密上报，服务端按上报头里的指纹重新
+// 派生同一 key 解密——服务端无需存储 per-agent 密钥。未设置 AIOPS_SECRET_KEY 时返回 nil，
+// 日志走明文（向后兼容 / 调试）。
+
+func deriveLogKey(fingerprint string) []byte {
+	master := loadSecretKey()
+	if master == nil || strings.TrimSpace(fingerprint) == "" {
+		return nil
+	}
+	buf := make([]byte, 0, len(master)+64)
+	buf = append(buf, master...)
+	buf = append(buf, []byte(":logenc:v1:"+fingerprint)...)
+	sum := sha256.Sum256(buf)
+	return sum[:]
+}
+
+// sealLog: gzip 压缩明文后 AES-256-GCM 加密，返回 nonce||ciphertext。
+func sealLog(key, plaintext []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(plaintext); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	gcm, err := newGCM(key)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, buf.Bytes(), nil), nil
+}
+
+// openLog: sealLog 的逆操作——AES-256-GCM 解密 + gzip 解压。
+func openLog(key, data []byte) ([]byte, error) {
+	gcm, err := newGCM(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < gcm.NonceSize() {
+		return nil, fmt.Errorf("密文过短")
+	}
+	nonce, ct := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+	comp, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(comp))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	return io.ReadAll(io.LimitReader(zr, 16<<20))
 }
 
 // encryptConfigSecrets seals every reversible secret in c in place. Operates on a

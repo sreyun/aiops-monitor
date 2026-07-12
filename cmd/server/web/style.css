@@ -254,6 +254,8 @@ body{
   background:linear-gradient(135deg,var(--accent),var(--accent2));
   display:flex; align-items:center; justify-content:center;
   font-weight:800; font-size:14px; color:#fff; letter-spacing:.3px;
+  /* 覆盖父级 .brand 的 background-clip:text 透明填充（否则会继承导致 “AI” 字消失，只剩图标底色），强制白色 */
+  -webkit-text-fill-color:#fff;
 }
 .brand-txt h1{font-size:15px; margin:0; font-weight:650; letter-spacing:.2px}
 .brand-txt .sub{font-size:11px; color:var(--muted); margin-top:2px}
@@ -1939,6 +1941,13 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-attach-btn{flex:none; width:38px; height:40px; align-self:flex-end; background:var(--bg2); border:1px solid var(--line2); border-radius:var(--r-sm); cursor:pointer; font-size:16px; color:var(--muted); transition:background .15s ease,color .15s ease}
 .ai-attach-btn:hover{background:var(--panel3); color:var(--txt)}
 .ai-att-note{font-size:11px; color:rgba(255,255,255,.8)}
+/* 安装弹窗「日志采集」折叠区块 */
+.log-collect{border:1px solid var(--line2); border-radius:8px; padding:10px 12px; background:var(--bg2)}
+.log-collect-head{display:flex; align-items:center; justify-content:space-between; cursor:pointer; font-size:13px; font-weight:600; user-select:none}
+.log-collect-head:hover{color:var(--accent)}
+.log-collect-head .lc-caret{color:var(--muted); font-size:12px; transition:color .15s ease}
+.log-collect #logCollectBody{margin-top:8px}
+.log-collect textarea{width:100%; color:var(--txt); background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px}
 /* AI 回复 Markdown 深化：标题 / 引用 / 分割线 */
 .ai-chat-msg.ai .ai-h{font-weight:650; margin:6px 0 2px; line-height:1.4}
 .ai-chat-msg.ai .ai-h1{font-size:1.13em}

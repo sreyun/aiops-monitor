@@ -167,6 +167,9 @@ function renderInstallCmd() {
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
   let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  // 日志采集（可选）：把用户填写的路径（换行/逗号分隔）拼进安装命令，服务端写入 config.json 的 log_paths
+  const lp = (($("installLogPaths") && $("installLogPaths").value) || "").trim();
+  if (lp) q += "&log_paths=" + encodeURIComponent(lp);
   // Multi-server: append servers_json so the generated config.json uses a
   // servers array instead of a single server+token.
   let cmd, label, hint;

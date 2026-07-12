@@ -35,7 +35,8 @@ type config struct {
 	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
 	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
 	RelaySecret    string         `json:"relay_secret,omitempty"` // v5.4.1: shared secret for relay auth
-	LogPaths       []string       `json:"log_paths,omitempty"`  // log files to tail and forward to the server
+	LogPaths       []string       `json:"log_paths,omitempty"`  // log files/dirs to tail and forward to the server
+	LogEncrypt     bool           `json:"log_encrypt"`          // gzip+AES-256-GCM encrypt log uploads (default true)
 	TLSSkipVerify  bool           `json:"tls_skip_verify,omitempty"` // skip server TLS cert verification (insecure; self-signed/lab only)
 	CACert         string         `json:"ca_cert,omitempty"`          // path to a CA PEM bundle to trust (proper self-signed support)
 }
@@ -56,6 +57,7 @@ func defaultConfig() config {
 		Category:       "",
 		Token:          "",
 		Listen:         ":8529",
+		LogEncrypt:     true, // 日志加密上报默认开启
 	}
 }
 
@@ -101,7 +103,8 @@ func main() {
 	flag.StringVar(&cfg.RelaySecret, "relay-secret", cfg.RelaySecret, "Relay 共享密钥，用于上游服务端验证中继请求")
 	flag.StringVar(&cfgFlag, "config", cfgPath, "配置文件路径")
 	var logPathsFlag string
-	flag.StringVar(&logPathsFlag, "log-paths", "", "采集的日志文件路径，逗号分隔（如 /var/log/syslog,/var/log/nginx/error.log）")
+	flag.StringVar(&logPathsFlag, "log-paths", "", "采集的日志文件或目录路径，逗号分隔（如 /var/log/syslog,/var/log/nginx/）")
+	flag.BoolVar(&cfg.LogEncrypt, "log-encrypt", cfg.LogEncrypt, "加密上报日志(gzip+AES-256-GCM)，默认开启；调试可设 --log-encrypt=false")
 	flag.BoolVar(&cfg.TLSSkipVerify, "tls-skip-verify", cfg.TLSSkipVerify, "跳过服务端 TLS 证书校验（不安全，仅自签/内网临时使用）")
 	flag.StringVar(&cfg.CACert, "ca-cert", cfg.CACert, "信任的 CA 证书路径（PEM），用于校验自签名服务端证书")
 	flag.Parse()
@@ -150,6 +153,7 @@ func main() {
 		collector, runner, hostID, cfg.Category,
 	)
 	agent.logPaths = cfg.LogPaths
+	agent.logEncrypt = cfg.LogEncrypt
 
 	go func() {
 		sig := make(chan os.Signal, 1)

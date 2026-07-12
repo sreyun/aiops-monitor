@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -69,11 +70,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.RegisterHost(req.HostID, req.Hostname, req.Fingerprint)
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":           "ok",
 		"host_id":          req.HostID,
 		"server_time_unix": time.Now().Unix(),
-	})
+	}
+	// 日志加密：把按「主密钥 + 指纹」派生的日志密钥一次性下发给 agent（未配置主密钥则不下发，日志走明文）
+	if lk := deriveLogKey(req.Fingerprint); lk != nil {
+		resp["log_key"] = base64.StdEncoding.EncodeToString(lk)
+		resp["log_encrypt"] = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleReport ingests a metrics report (base + custom + events) from an agent.

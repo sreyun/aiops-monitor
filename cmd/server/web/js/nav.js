@@ -237,6 +237,14 @@ safeAddEventListener("installCmd", "click", function() {
   sel.addRange(range);
 });
 safeAddEventListener("installCategory", "input", renderInstallCmd);
+safeAddEventListener("installLogPaths", "input", renderInstallCmd); // 日志路径变化即时更新安装命令
+safeAddEventListener("logCollectToggle", "click", () => { // 折叠/展开「日志采集」
+  const b = document.getElementById("logCollectBody"), c = document.getElementById("lcCaret");
+  if (!b) return;
+  const hidden = b.style.display === "none";
+  b.style.display = hidden ? "" : "none";
+  if (c) c.textContent = hidden ? "▾" : "▸";
+});
 safeAddEventListener("osTabs", "click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
   CUR_OS = t.dataset.os;

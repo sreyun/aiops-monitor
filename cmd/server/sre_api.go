@@ -625,7 +625,28 @@ func (s *Server) handleDeleteTicket(w http.ResponseWriter, r *http.Request) {
 // handleAgentLogs ingests a batch of agent logs (fingerprint-authenticated).
 func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	var batch shared.LogBatch
-	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+	if r.Header.Get("X-Log-Enc") != "" {
+		// 加密上报：按上报指纹重新派生日志密钥 → AES-256-GCM 解密 + gzip 解压
+		key := deriveLogKey(agentFP(r))
+		if key == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "服务端未启用日志加密（未配置 AIOPS_SECRET_KEY）"})
+			return
+		}
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+			return
+		}
+		plain, err := openLog(key, raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "日志解密失败"})
+			return
+		}
+		if err := json.Unmarshal(plain, &batch); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+			return
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}

@@ -95,11 +95,13 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// so one agent pushes to multiple backends. Sanitized+re-serialized here so
 	// a crafted payload can't inject shell/PowerShell metacharacters.
 	serversJSON := sanitizeServersJSON(r.URL.Query().Get("servers_json"))
+	// 日志采集路径（可选）：清洗为合法 JSON 数组注入生成的 config.json 的 log_paths
+	logPaths := sanitizeLogPaths(r.URL.Query().Get("log_paths"))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(installPs1Template, server, token, category, serversJSON)
+		body = renderScript(installPs1Template, server, token, category, serversJSON, logPaths)
 	} else {
-		body = renderScript(installShTemplate, server, token, category, serversJSON)
+		body = renderScript(installShTemplate, server, token, category, serversJSON, logPaths)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)
@@ -115,9 +117,9 @@ func (s *Server) handleRelayInstallScript(w http.ResponseWriter, r *http.Request
 	server := sanitizeServerURL(serverURL(r))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(relayInstallPs1Template, server, token, category, "")
+		body = renderScript(relayInstallPs1Template, server, token, category, "", "")
 	} else {
-		body = renderScript(relayInstallShTemplate, server, token, category, "")
+		body = renderScript(relayInstallShTemplate, server, token, category, "", "")
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)

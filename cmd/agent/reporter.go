@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,6 +79,8 @@ type serverTarget struct {
 	// Once disabled, all subsequent reports to this target skip compression.
 	gzipMu      sync.Mutex
 	disableGzip bool
+
+	logKey []byte // 服务端注册时下发的日志加密密钥（32B AES-256）；空 = 明文上报
 }
 
 // register sends the agent's identity (with this target's token) to the server.
@@ -100,6 +103,15 @@ func (t *serverTarget) register(base shared.Report) bool {
 	if resp.StatusCode >= 300 {
 		slog.Warn("注册被拒，可能 Token 已失效或指纹无效", "server", t.server, "status", resp.StatusCode)
 		return false
+	}
+	// 取出服务端下发的日志加密密钥（base64）；之后每批日志用它 gzip+AES-GCM 加密上报
+	var rr struct {
+		LogKey string `json:"log_key"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&rr) == nil && rr.LogKey != "" {
+		if k, err := base64.StdEncoding.DecodeString(rr.LogKey); err == nil && len(k) == 32 {
+			t.logKey = k
+		}
 	}
 	t.regMu.Lock()
 	t.registered = true
@@ -253,7 +265,8 @@ type Agent struct {
 	identity       shared.Report // template with host fields pre-filled (Token is per-target)
 	httpc          *http.Client  // used for non-report HTTP (e.g. plugin downloads)
 
-	logPaths      []string // log files to tail and forward (empty = collector disabled)
+	logPaths      []string // log files/dirs to tail and forward (empty = collector disabled)
+	logEncrypt    bool     // 加密上报日志（gzip+AES-GCM），有服务端下发密钥时生效；--log-encrypt=false 可关
 
 	mu            sync.Mutex
 	latestCustom  map[string]float64

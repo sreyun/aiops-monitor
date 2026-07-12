@@ -3,11 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,11 +21,16 @@ import (
 
 // Log collection — agent side.
 //
-// The agent tails the configured log files (--log-paths), classifies each new
-// line's level heuristically, and forwards batches to the server every cycle.
-// Only lines appended AFTER startup are sent (we seek to EOF first), so enabling
-// collection never floods the server with historical logs. Rotation/truncation
-// is detected (size < last offset) and re-read from the top.
+// The agent tails the configured log paths (--log-paths / config log_paths). Each
+// entry may be a FILE or a DIRECTORY: directories are expanded to the log files
+// beneath them (.log/.out/.err/.txt and rotated *.log.*), rescanned periodically so
+// newly-created files are picked up. Only lines appended AFTER a file is first seen
+// are forwarded (we seek to EOF), so enabling collection never floods historical
+// logs. Rotation/truncation is detected (size < last offset) and re-read from the top.
+//
+// Batches are gzip-compressed + AES-256-GCM encrypted before upload whenever the
+// server handed us a per-agent log key at registration (default on); set
+// --log-encrypt=false to send plaintext for debugging.
 
 var logCollectHTTP = &http.Client{Timeout: 20 * time.Second}
 
@@ -28,19 +38,33 @@ func (a *Agent) runLogCollectorFor(t *serverTarget) {
 	if len(a.logPaths) == 0 || a.identity.Fingerprint == "" {
 		return
 	}
-	slog.Info("日志采集已启用", "server", t.server, "文件数", len(a.logPaths))
+	slog.Info("日志采集已启用", "server", t.server, "配置路径数", len(a.logPaths), "加密", a.logEncrypt && len(t.logKey) == 32)
 	offsets := make(map[string]int64)
-	for _, p := range a.logPaths { // seek to end so only NEW lines are forwarded
-		if fi, err := os.Stat(p); err == nil {
-			offsets[p] = fi.Size()
+	ensure := func() []string { // 展开目标文件；新文件定位到当前末尾（只采后续新行）
+		targets := expandLogTargets(a.logPaths)
+		for _, p := range targets {
+			if _, ok := offsets[p]; !ok {
+				if fi, err := os.Stat(p); err == nil {
+					offsets[p] = fi.Size()
+				} else {
+					offsets[p] = 0
+				}
+			}
 		}
+		return targets
 	}
+	targets := ensure()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	cycle := 0
 	for range ticker.C {
+		cycle++
+		if cycle%6 == 0 { // ~60s 重新扫描目录，纳入新出现的日志文件
+			targets = ensure()
+		}
 		var batch []shared.LogLine
 		now := time.Now().Unix()
-		for _, p := range a.logPaths {
+		for _, p := range targets {
 			lines, newOff := readNewLines(p, offsets[p])
 			offsets[p] = newOff
 			for _, ln := range lines {
@@ -57,6 +81,49 @@ func (a *Agent) runLogCollectorFor(t *serverTarget) {
 			a.sendLogBatch(t, batch)
 		}
 	}
+}
+
+// expandLogTargets 把用户配置的路径展开为要 tail 的具体文件：文件→直接采集；
+// 目录→采集其下的日志文件（.log/.out/.err/.txt 及含 .log 的轮转文件）。
+func expandLogTargets(paths []string) []string {
+	var files []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			files = append(files, p)
+		}
+	}
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if !fi.IsDir() {
+			add(p)
+			continue
+		}
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && isLogFileName(e.Name()) {
+				add(filepath.Join(p, e.Name()))
+			}
+		}
+	}
+	return files
+}
+
+func isLogFileName(name string) bool {
+	l := strings.ToLower(name)
+	for _, suf := range []string{".log", ".out", ".err", ".txt"} {
+		if strings.HasSuffix(l, suf) {
+			return true
+		}
+	}
+	return strings.Contains(l, ".log") // 轮转文件如 access.log.1 / error.log.2024-01-01
 }
 
 // readNewLines returns the lines appended after `off` plus the new offset.
@@ -113,13 +180,49 @@ func classifyLogLevel(line string) string {
 	}
 }
 
+// sealLogAgent gzip 压缩后 AES-256-GCM 加密（nonce 前置），与服务端 openLog 对应。
+func sealLogAgent(key, plaintext []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(plaintext); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, buf.Bytes(), nil), nil
+}
+
 func (a *Agent) sendLogBatch(t *serverTarget, lines []shared.LogLine) {
 	body, _ := json.Marshal(shared.LogBatch{HostID: a.identity.HostID, Lines: lines})
+	enc := ""
+	if a.logEncrypt && len(t.logKey) == 32 { // 默认加密上报（服务端下发密钥时）
+		if sealed, err := sealLogAgent(t.logKey, body); err == nil {
+			body, enc = sealed, "aesgcm-gzip"
+		}
+	}
 	req, err := http.NewRequest(http.MethodPost, t.server+"/api/v1/agent/logs", bytes.NewReader(body))
 	if err != nil {
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if enc != "" {
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Log-Enc", enc)
+	} else {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
 	if resp, err := logCollectHTTP.Do(req); err == nil {
 		resp.Body.Close()
