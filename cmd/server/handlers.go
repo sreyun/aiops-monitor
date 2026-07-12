@@ -241,7 +241,23 @@ func (s *Server) Routes() http.Handler {
 	if sub, err := fs.Sub(webFS, "web"); err == nil {
 		fsrv := http.FileServer(http.FS(sub))
 		mux.Handle("GET /style.css", fsrv)
-		mux.Handle("GET /app.js", fsrv)
+		// /app.js: 把 web/js/ 下的 8 个源模块按依赖顺序拼成【单个脚本】返回。
+		// 必须作为单脚本加载——整文件函数提升(hoisting)才生效；若用 8 个独立
+		// <script> 标签，早模块顶层调用晚模块里定义的 helper/handler 会因
+		// 每脚本独立提升而 ReferenceError。源码保持拆分(便于维护)，运行时=单文件。
+		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "init"} {
+				b, err := webFS.ReadFile("web/js/" + m + ".js")
+				if err != nil {
+					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(b)
+				_, _ = w.Write([]byte("\n;\n")) // 模块间安全分隔（空语句），防 ASI 边界问题
+			}
+		})
 		mux.Handle("GET /theme-init.js", fsrv) // 主题预置（外置内联脚本，配合 CSP 去 unsafe-inline）
 		mux.Handle("GET /i18n-dashboard.js", fsrv)
 		mux.Handle("GET /i18n-dashboard.en.js", fsrv)

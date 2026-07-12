@@ -1488,15 +1488,9 @@
 <script src="/i18n-dashboard.en.js"></script>
 <script src="/i18n-dashboard.zh-TW.js"></script>
 <script src="/i18n-dashboard.js"></script>
-<!-- 前端 JS 按功能模块加载（字节安全物理切分自 app.js：cat 拼回逐字节==原文、逐个 node --check 通过、
-     顺序即原文件顺序 → 运行时行为与单文件完全一致）。禁止在模块间重复声明同名 const/let。 -->
-<script src="/js/core.js" defer></script>
-<script src="/js/overview.js" defer></script>
-<script src="/js/hosts.js" defer></script>
-<script src="/js/terminal.js" defer></script>
-<script src="/js/settings.js" defer></script>
-<script src="/js/nav.js" defer></script>
-<script src="/js/sre.js" defer></script>
-<script src="/js/init.js" defer></script>
+<!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
+     以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
+     （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
+<script src="/app.js" defer></script>
 </body>
 </html>
