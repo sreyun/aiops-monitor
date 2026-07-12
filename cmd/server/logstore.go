@@ -200,9 +200,8 @@ func (ls *logStore) searchStats(hostID, level, keyword string, since int64) logS
 		if hostID != "" && l.HostID != hostID {
 			continue
 		}
-		if level != "" && l.Level != level {
-			continue
-		}
+		// 统计面板刻意不按 level 过滤：ByLevel 需展示所有级别的总数（需求：筛选某级别时其他级别
+		// 保留总数）；TopHosts / 时间分布同样按整体口径统计。level 过滤只作用于日志列表(searchPage)。
 		if since > 0 && l.Ts < since {
 			// Still count for time distribution if within 24h window
 			if l.Ts < now-86400 {

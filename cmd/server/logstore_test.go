@@ -2,11 +2,63 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"aiops-monitor/shared"
 )
+
+// TestLogSearchPageAndStats 覆盖服务端分页(offset/total/页不重叠)与统计口径
+//（ByLevel 在按某级别过滤列表时仍保留其它级别总数——需求核心）。
+func TestLogSearchPageAndStats(t *testing.T) {
+	ls := newLogStore()
+	var lines []shared.LogLine
+	for i := 0; i < 60; i++ {
+		lines = append(lines, shared.LogLine{Ts: int64(1000 + i), Level: "error", Message: fmt.Sprintf("err-%d", i)})
+	}
+	for i := 0; i < 40; i++ {
+		lines = append(lines, shared.LogLine{Ts: int64(2000 + i), Level: "warn", Message: fmt.Sprintf("warn-%d", i)})
+	}
+	for i := 0; i < 20; i++ {
+		lines = append(lines, shared.LogLine{Ts: int64(3000 + i), Level: "info", Message: fmt.Sprintf("info-%d", i)})
+	}
+	ls.ingest("h1", "web", lines)
+
+	// 分页：120 条 / 每页 50 → 3 页
+	p1, total := ls.searchPage("", "", "", 0, 1, 50)
+	if total != 120 {
+		t.Fatalf("total=%d want 120", total)
+	}
+	if len(p1) != 50 {
+		t.Fatalf("page1 len=%d want 50", len(p1))
+	}
+	p3, _ := ls.searchPage("", "", "", 0, 3, 50)
+	if len(p3) != 20 {
+		t.Fatalf("page3 len=%d want 20 (120-100)", len(p3))
+	}
+	// 页间不重叠 → offset 计算正确
+	p2, _ := ls.searchPage("", "", "", 0, 2, 50)
+	if p1[0].Message == p2[0].Message || p1[len(p1)-1].Message == p2[0].Message {
+		t.Fatal("page1/page2 内容重叠，offset 计算错误")
+	}
+
+	// 统计：按 error 过滤时，ByLevel 仍保留 warn/info 的总数
+	stats := ls.searchStats("", "error", "", 0)
+	if stats.ByLevel["error"] != 60 || stats.ByLevel["warn"] != 40 || stats.ByLevel["info"] != 20 {
+		t.Fatalf("过滤 error 时其它级别应保留总数，实际 %+v", stats.ByLevel)
+	}
+	// 但列表(searchPage)仍按 error 过滤：total=60 且只含 error
+	ep, eTotal := ls.searchPage("", "error", "", 0, 1, 50)
+	if eTotal != 60 {
+		t.Fatalf("error 列表 total=%d want 60", eTotal)
+	}
+	for _, it := range ep {
+		if it.Level != "error" {
+			t.Fatalf("error 过滤下列表出现 %s", it.Level)
+		}
+	}
+}
 
 // TestLogStorePersistRoundTrip mirrors the PG blob cycle: export → JSON → import.
 // It guards the fix for "logs lost after container restart".

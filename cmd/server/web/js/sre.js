@@ -711,9 +711,9 @@ safeAddEventListener("tkCommentBtn","click",addTicketComment);
 
 /* ---- 日志检索 ---- */
 const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
-// 日志检索分页状态（LOG_PAGE / LOG_PAGE_SIZE 已在 core.js 顶层声明，此处只声明新增的两个——
-// 重复的顶层 let 会让整个拼接后的 app.js 抛 SyntaxError 而全部失效）
-let LOG_TOTAL = 0, LOG_PAGES = 1;
+// 日志检索分页状态：与概览「操作日志」的 LOG_PAGE/LOG_PAGE_SIZE（core.js）完全独立，
+// 独立命名 + 独立 #logsPager 元素 + 独立 renderLogsPager，避免两个日志视图互相干扰。
+let LOGS_PAGE = 1, LOGS_PAGE_SIZE = 50, LOGS_TOTAL = 0, LOGS_PAGES = 1;
 let LAST_LOG_STATS = null; // 缓存上次搜索的统计数据
 
 async function loadLogs(){
@@ -724,15 +724,15 @@ async function loadLogs(){
 }
 
 async function searchLogs(page){
-  if (page !== undefined) { LOG_PAGE = page; } else { LOG_PAGE = 1; }
+  if (page !== undefined) { LOGS_PAGE = page; } else { LOGS_PAGE = 1; }
   const host=$("logHost").value,level=$("logLevel").value,since=$("logSince").value,kw=$("logKeyword").value.trim();
   const qs=new URLSearchParams();
   if(host)qs.set("host",host); if(level)qs.set("level",level);
   if(since&&since!=="0")qs.set("since_min",since); if(kw)qs.set("q",kw);
-  qs.set("page",String(LOG_PAGE)); qs.set("page_size",String(LOG_PAGE_SIZE));
+  qs.set("page",String(LOGS_PAGE)); qs.set("page_size",String(LOGS_PAGE_SIZE));
   try {
     const resp=await fetch(`${API}/logs?${qs}`).then(r=>r.json());
-    const items=resp.items||[]; LOG_TOTAL=resp.total||0; LOG_PAGES=resp.pages||1;
+    const items=resp.items||[]; LOGS_TOTAL=resp.total||0; LOGS_PAGES=resp.pages||1;
     LAST_LOG_STATS = resp.stats || null;
 
     // 渲染统计面板
@@ -740,7 +740,7 @@ async function searchLogs(page){
 
     // 渲染日志列表
     const el=$("logResults");
-    if(!items.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; renderLogPager(); return; }
+    if(!items.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; renderLogsPager(); return; }
     el.innerHTML=items.map(l=>`<div class="log-line ${_logLvlCls(l.level)}">
       <span class="log-ts mono">${fmtDateTime(l.ts)}</span>
       <span class="log-lvl ${_logLvlCls(l.level)}">${esc(l.level)}</span>
@@ -753,7 +753,7 @@ async function searchLogs(page){
     el.querySelectorAll(".log-diag-btn").forEach(b=>{ b.onclick=function(e){ e.stopPropagation(); const d=JSON.parse(this.dataset.log); diagnoseLogLine(d); }; });
 
     // 渲染分页控件
-    renderLogPager();
+    renderLogsPager();
   } catch(e){ toast("检索失败: "+e,"err"); }
 }
 
@@ -834,30 +834,30 @@ function renderLogStats(stats, total){
 }
 
 // 渲染日志分页控件
-function renderLogPager(){
-  const pager=$("logPager");
+function renderLogsPager(){
+  const pager=$("logsPager");
   if(!pager) return;
-  if(LOG_TOTAL===0){ pager.innerHTML=""; return; }
-  if(LOG_PAGES<=1){ pager.innerHTML=`<span class="pinfo">共 ${LOG_TOTAL} 条</span>`; return; }
-  let btns=`<button ${LOG_PAGE===1?"disabled":""} data-lpg="prev">‹</button>`;
-  for(let i=1;i<=LOG_PAGES;i++){
-    if(i===1||i===LOG_PAGES||Math.abs(i-LOG_PAGE)<=1){
-      btns+=`<button class="${i===LOG_PAGE?"active":""}" data-lpg="${i}">${i}</button>`;
-    }else if(Math.abs(i-LOG_PAGE)===2){
+  if(LOGS_TOTAL===0){ pager.innerHTML=""; return; }
+  if(LOGS_PAGES<=1){ pager.innerHTML=`<span class="pinfo">共 ${LOGS_TOTAL} 条</span>`; return; }
+  let btns=`<button ${LOGS_PAGE===1?"disabled":""} data-lpg="prev">‹</button>`;
+  for(let i=1;i<=LOGS_PAGES;i++){
+    if(i===1||i===LOGS_PAGES||Math.abs(i-LOGS_PAGE)<=1){
+      btns+=`<button class="${i===LOGS_PAGE?"active":""}" data-lpg="${i}">${i}</button>`;
+    }else if(Math.abs(i-LOGS_PAGE)===2){
       btns+=`<span class="pinfo">…</span>`;
     }
   }
-  btns+=`<button ${LOG_PAGE===LOG_PAGES?"disabled":""} data-lpg="next">›</button>`;
-  btns+=`<span class="pinfo">共 ${LOG_TOTAL} 条 · ${LOG_PAGE}/${LOG_PAGES} 页</span>`;
+  btns+=`<button ${LOGS_PAGE===LOGS_PAGES?"disabled":""} data-lpg="next">›</button>`;
+  btns+=`<span class="pinfo">共 ${LOGS_TOTAL} 条 · ${LOGS_PAGE}/${LOGS_PAGES} 页</span>`;
   pager.innerHTML=btns;
 
   // 绑定分页按钮事件
   pager.querySelectorAll("[data-lpg]").forEach(b=>{
     b.onclick=()=>{
       const v=b.dataset.lpg;
-      if(v==="prev"){ if(LOG_PAGE>1) searchLogs(LOG_PAGE-1); }
-      else if(v==="next"){ if(LOG_PAGE<LOG_PAGES) searchLogs(LOG_PAGE+1); }
-      else{ const p=parseInt(v); if(p>0&&p<=LOG_PAGES) searchLogs(p); }
+      if(v==="prev"){ if(LOGS_PAGE>1) searchLogs(LOGS_PAGE-1); }
+      else if(v==="next"){ if(LOGS_PAGE<LOGS_PAGES) searchLogs(LOGS_PAGE+1); }
+      else{ const p=parseInt(v); if(p>0&&p<=LOGS_PAGES) searchLogs(p); }
     };
   });
 }
@@ -904,11 +904,14 @@ function showDiagnosisResult(rep){
   if(!panel) return;
   const findings=(rep.findings||[]).map(f=>`<div class="ai-finding"><span class="badge ${f.severity==="critical"?"crit":"warn"}">${esc(f.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(f.title)}</div>${f.detail?`<div class="ai-f-detail">${esc(f.detail)}</div>`:""}</div></div>`).join("");
   panel.innerHTML=`<div class="log-diag-card">
-    <div class="log-diag-head"><span>🔍 诊断结果</span><button class="log-diag-close" onclick="$('logDiagResult').innerHTML=''">✕</button></div>
+    <div class="log-diag-head"><span>🔍 诊断结果</span><button class="log-diag-close" title="关闭">✕</button></div>
     <div class="log-diag-summary">${esc(rep.summary||"")}</div>
     ${findings?`<div class="ai-findings">${findings}</div>`:""}
     ${rep.context?`<div class="log-diag-ctx">${esc(rep.context)}</div>`:""}
   </div>`;
+  // CSP 禁内联 onclick：渲染后再绑定关闭（此前 onclick="..." 会被 script-src 'self' 拦截而失效）
+  const closeBtn=panel.querySelector(".log-diag-close");
+  if(closeBtn) closeBtn.onclick=()=>{ panel.innerHTML=""; };
   panel.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 /* ---- AI 巡检 ---- */
