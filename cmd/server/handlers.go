@@ -199,6 +199,7 @@ func (s *Server) Routes() http.Handler {
 	// Hermes Agent — 自主运维 Agent
 	mux.HandleFunc("POST /api/v1/hermes/chat", s.handleHermesChat)
 	mux.HandleFunc("GET /api/v1/hermes/suggestions", s.handleHermesSuggestions)
+	mux.HandleFunc("POST /api/v1/hermes/parse", s.handleHermesParse)
 	mux.HandleFunc("GET /api/v1/hermes/sessions", s.handleHermesSessions)
 	mux.HandleFunc("GET /api/v1/hermes/sessions/{id}", s.handleHermesSession)
 	mux.HandleFunc("POST /api/v1/hermes/sessions/{id}/undo", s.handleHermesSessionUndo)

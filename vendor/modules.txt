@@ -1,3 +1,6 @@
+# github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80
+## explicit
+github.com/ledongthuc/pdf
 # github.com/lib/pq v1.12.3
 ## explicit; go 1.21
 github.com/lib/pq

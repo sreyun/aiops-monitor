@@ -1326,8 +1326,9 @@
       <div id="aiChatLog" class="ai-chat-log"></div>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
       <div class="ai-chat-input">
-        <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文件，辅助 AI 深入排查">📎</button>
-        <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env" style="display:none">
+        <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档（含 Word / Excel / PDF），辅助 AI 深入排查">📎</button>
+        <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页 URL，提取正文注入对话">🔗</button>
+        <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
         <textarea id="aiChatInput" rows="2" placeholder="输入消息或描述问题，可 📎 上传图片/日志文件，Enter 发送、Shift+Enter 换行…"></textarea>
         <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
         <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹ 终止</button>
