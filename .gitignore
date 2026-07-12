@@ -73,8 +73,11 @@ fix-summary.html
 # 产品官网（独立部署，不纳入项目源码）
 website/
 
-# CI/CD 配置（非项目源码）
-.github/
+# CI/CD 配置（仅保留 release.yml 自动构建，其他 .github/ 内容不提交）
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/release.yml
 Makefile
 
 # 运行时数据目录（不提交）
