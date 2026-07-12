@@ -1123,7 +1123,7 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Hermes 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检，也可直接描述问题让它自动排查，例如：<br>· "当前有哪些主机在线？"　·　"查询主机 web-01 的 CPU 使用率"<br>· "检查 nginx 服务状态"　·　"最近有什么告警？"<br>它会自动识别当前纳管主机并按需调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div>`;
+const AI_CHAT_INTRO=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检，也可直接描述问题让它自动排查——它会识别当前纳管主机并按需调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 function openAIChat(){
   newAIChat();
   $("aiChatMask").classList.add("show");
@@ -1137,6 +1137,31 @@ function newAIChat(){
   const log=$("aiChatLog"); if(log) log.innerHTML=AI_CHAT_INTRO;
   const sel=$("aiSessionSelect"); if(sel) sel.value="";
   renderAttachments(); renderQueueHint(); setAIChatBusyUI(false);
+  loadAISuggestions(); // 拉取并渲染快捷问题/推荐 Prompt
+}
+// ===== 快捷问题 / 推荐 Prompt（结合当前告警/主机/日志的动态建议 + 能力示例，随机展示） =====
+let AI_SUGGEST={dynamic:[],curated:[]};
+function _aiShuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+async function loadAISuggestions(){
+  const box=$("aiChatSuggest"); if(!box) return;
+  try{
+    const r=await fetch(`${API}/hermes/suggestions`); if(!r.ok){ box.style.display="none"; return; }
+    AI_SUGGEST=(await r.json())||{dynamic:[],curated:[]};
+    renderAISuggest();
+  }catch(e){ box.style.display="none"; }
+}
+function renderAISuggest(){
+  const box=$("aiChatSuggest"); if(!box) return;
+  const dyn=(AI_SUGGEST.dynamic||[]).slice(0,2);
+  const need=Math.max(0,5-dyn.length);
+  const cur=_aiShuffle(AI_SUGGEST.curated||[]).slice(0,need);
+  const items=dyn.concat(cur);
+  if(!items.length){ box.style.display="none"; return; }
+  box.style.display="";
+  box.innerHTML=`<div class="ai-suggest-head"><span>💡 试试这些问题</span><button class="ai-suggest-refresh" title="换一批推荐">↻ 换一批</button></div>`+
+    `<div class="ai-suggest-chips">`+items.map(q=>`<button class="ai-suggest-chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")+`</div>`;
+  const rf=box.querySelector(".ai-suggest-refresh"); if(rf) rf.onclick=renderAISuggest;
+  box.querySelectorAll(".ai-suggest-chip").forEach(b=>b.onclick=()=>{ const inp=$("aiChatInput"); if(inp) inp.value=b.dataset.q; sendAIChat(); });
 }
 // 加载历史会话列表到下拉选择器
 async function loadAISessions(){
@@ -1206,6 +1231,7 @@ async function sendAIChat(){
   const msg=inp.value.trim();
   const atts=AI_ATTACHMENTS.slice();
   if(!msg && !atts.length) return; // 无文本且无附件则不发
+  { const _sg=$("aiChatSuggest"); if(_sg) _sg.style.display="none"; } // 发起对话后隐藏推荐问题
   if(_aiChatBusy){ // 忙时排队：完成后自动续发（可点终止清空排队）
     AI_CHAT_QUEUE.push({msg,atts});
     inp.value=""; AI_ATTACHMENTS=[]; renderAttachments(); renderQueueHint();
