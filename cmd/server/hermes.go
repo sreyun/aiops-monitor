@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -142,15 +143,46 @@ func (h *HermesCore) registerTools() {
 
 // --- Tool implementations ---
 
+// resolveHostRef 按 host_id 精确匹配主机；失败则回退到主机名 / IP（忽略大小写，再退化到
+// 主机名包含匹配），让 AI 即便把主机名或 IP 当作 host_id 传入也能命中正确主机。
+func (h *HermesCore) resolveHostRef(ref string) *Host {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || h.s == nil {
+		return nil
+	}
+	if hst := h.s.hostByID(ref); hst != nil {
+		return hst
+	}
+	if h.s.store == nil {
+		return nil
+	}
+	hosts := h.s.store.ListHosts()
+	low := strings.ToLower(ref)
+	for _, hst := range hosts { // 精确匹配主机名 / IP
+		if strings.ToLower(hst.Hostname) == low || strings.ToLower(hst.IP) == low {
+			return hst
+		}
+	}
+	for _, hst := range hosts { // 宽松：主机名包含
+		if hst.Hostname != "" && strings.Contains(strings.ToLower(hst.Hostname), low) {
+			return hst
+		}
+	}
+	return nil
+}
+
 func (h *HermesCore) execQueryMetrics(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	metric, _ := args["metric"].(string)
 	if metric == "" {
 		metric = "all"
 	}
-	hst := h.s.hostByID(hostID)
-	if hst == nil || hst.Latest == nil {
-		return fmt.Sprintf("主机 %s 不在线或暂无指标数据", hostID), nil
+	hst := h.resolveHostRef(hostID)
+	if hst == nil {
+		return fmt.Sprintf("未找到主机 %q（可查询的主机见系统提示中的主机清单）", hostID), nil
+	}
+	if hst.Latest == nil {
+		return fmt.Sprintf("主机 %s 当前不在线或暂无指标数据", hst.Hostname), nil
 	}
 	m := hst.Latest
 	var b strings.Builder
@@ -200,13 +232,17 @@ func (h *HermesCore) execSearchLogs(args map[string]any) (string, error) {
 	if h.s.logs == nil {
 		return "日志存储不可用", nil
 	}
+	name := hostID
+	if hst := h.resolveHostRef(hostID); hst != nil {
+		hostID, name = hst.ID, hst.Hostname
+	}
 	since := time.Now().Unix() - int64(minutes*60)
 	entries := h.s.logs.search(hostID, level, keyword, since, 10)
 	if len(entries) == 0 {
-		return fmt.Sprintf("主机 %s 最近 %d 分钟无匹配日志", hostID, minutes), nil
+		return fmt.Sprintf("主机 %s 最近 %d 分钟无匹配日志", name, minutes), nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "主机 %s 最近 %d 分钟日志（%d 条）：\n", hostID, minutes, len(entries))
+	fmt.Fprintf(&b, "主机 %s 最近 %d 分钟日志（%d 条）：\n", name, minutes, len(entries))
 	for _, e := range entries {
 		ts := time.Unix(e.Ts, 0).Format("15:04:05")
 		fmt.Fprintf(&b, "  [%s %s] %s\n", ts, strings.ToUpper(e.Level), trimLine(e.Message, 200))
@@ -219,6 +255,11 @@ func (h *HermesCore) execListAlerts(args map[string]any) (string, error) {
 	if h.s.notifier == nil {
 		return "告警系统不可用", nil
 	}
+	if hostID != "" {
+		if hst := h.resolveHostRef(hostID); hst != nil {
+			hostID = hst.ID
+		}
+	}
 	var matched []string
 	for _, a := range h.s.notifier.ActiveAlerts() {
 		if a.Status != "" {
@@ -227,7 +268,11 @@ func (h *HermesCore) execListAlerts(args map[string]any) (string, error) {
 		if hostID != "" && a.HostID != hostID {
 			continue
 		}
-		matched = append(matched, fmt.Sprintf("  %s (%s, %.1f) — %s", a.Type, a.Level, a.Value, hostID))
+		hn := a.Hostname
+		if hn == "" {
+			hn = a.HostID
+		}
+		matched = append(matched, fmt.Sprintf("  %s (%s, %.1f) — 主机 %s", a.Type, a.Level, a.Value, hn))
 	}
 	if len(matched) == 0 {
 		return "当前无活跃告警", nil
@@ -276,6 +321,43 @@ func (h *HermesCore) execSearchCases(args map[string]any) (string, error) {
 	return b.String(), nil
 }
 
+// diagCommandAllowed 校验诊断命令是否为「只读命令 + 只读管道过滤」。
+// 命令在被控端经 shell 执行，故：
+//  1. 拒绝可用于注入 / 破坏 / 外联 / 重定向 / 子shell 的元字符（; & $ < > ` \ 换行 () {}）；
+//  2. 允许用管道 | 串联，但逐段校验每段命令首词必须精确命中白名单（非松散前缀，dfoo 不算 df）。
+// 返回 (是否放行, 拒绝原因)。
+func diagCommandAllowed(command string) (bool, string) {
+	cmdTrim := strings.TrimSpace(command)
+	if cmdTrim == "" {
+		return false, "请指定诊断命令"
+	}
+	if strings.ContainsAny(cmdTrim, ";&$<>\n\r\\(){}"+"`") {
+		return false, "诊断命令含被禁止的字符（; & $ < > ` 等），仅允许只读命令与管道过滤"
+	}
+	allow := []string{
+		"top", "df", "iostat", "vmstat", "mpstat", "sar", "pidstat", "netstat", "ss", "free",
+		"ps", "uptime", "cat", "head", "tail", "grep", "egrep", "ls", "du", "lsof", "dmesg",
+		"journalctl", "systemctl status", "docker ps", "docker logs", "docker stats",
+		"kubectl get", "kubectl describe", "wc", "sort", "uniq", "cut", "tr", "nl", "tac",
+		"column", "date", "hostname", "uname", "who", "w",
+	}
+	segOK := func(seg string) bool {
+		seg = strings.ToLower(strings.TrimSpace(seg))
+		for _, p := range allow {
+			if seg == p || strings.HasPrefix(seg, p+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, seg := range strings.Split(cmdTrim, "|") {
+		if !segOK(seg) {
+			return false, fmt.Sprintf("诊断命令 %q 含非白名单命令，仅允许只读诊断命令（top/df/free/ps/ss/cat/grep/journalctl 等）及其管道过滤", command)
+		}
+	}
+	return true, ""
+}
+
 func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	command, _ := args["command"].(string)
@@ -283,23 +365,14 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 		return "请指定诊断命令", nil
 	}
 	// Use playbook mechanism to execute read-only diagnostic commands
-	host := h.s.hostByID(hostID)
+	host := h.resolveHostRef(hostID)
 	if host == nil {
-		return fmt.Sprintf("主机 %s 不在线", hostID), nil
+		return fmt.Sprintf("未找到主机 %q", hostID), nil
 	}
-	// Sanitize: only allow read-only commands
-	cmdLower := strings.ToLower(strings.TrimSpace(command))
-	allowed := false
-	for _, prefix := range []string{"top", "df", "iostat", "netstat", "ss", "free", "ps", "uptime",
-		"cat", "head", "tail", "grep", "find", "ls", "du", "lsof", "dmesg", "journalctl", "systemctl status",
-		"docker ps", "docker logs", "kubectl get", "kubectl describe"} {
-		if strings.HasPrefix(cmdLower, prefix) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return fmt.Sprintf("诊断命令 '%s' 不在允许列表中（仅限只读诊断命令）", command), nil
+	hostID = host.ID
+	// 安全校验：命令最终在被控端经 shell 执行，前缀白名单不足以防注入。详见 diagCommandAllowed。
+	if ok, reason := diagCommandAllowed(command); !ok {
+		return reason, nil
 	}
 	// Run via playbook executor (one-shot command)
 	pb := Playbook{
@@ -339,12 +412,23 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 	if actionName == "" {
 		return "请指定动作名称", nil
 	}
-	// Execute hermes_actions.py with the action name
-	cmd := exec.Command("python3", "plugins/hermes_actions.py", actionName, hostID, argStr)
+	// run_python_action 属于「写操作」（重启服务 / 清理缓存 / 扩缩容等）。仅在显式开启
+	// HermesAutoApprove（低风险自动执行）时才真正执行，否则挂起并返回需人工确认，
+	// 避免 AI 未经批准擅自变更主机（此前该配置从未在执行路径生效，属安全缺口）。
+	if !h.s.cfg.AIConfig().HermesAutoApprove {
+		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前未开启「自动执行」(hermes_auto_approve)，已阻止自动执行；请操作员手动处置，或在 AI 设置中开启后重试。", actionName), nil
+	}
+	// 加 30s 超时，避免插件脚本卡死导致请求 goroutine 永久阻塞
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python3", "plugins/hermes_actions.py", actionName, hostID, argStr)
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Sprintf("动作 %q 执行超时（30s）", actionName), nil
+	}
 	if err != nil {
 		slog.Warn("hermes python action failed", "action", actionName, "err", err, "output", string(output))
-		return fmt.Sprintf("动作 '%s' 执行失败：%v\n输出：%s", actionName, err, string(output)), nil
+		return fmt.Sprintf("动作 %q 执行失败：%v\n输出：%s", actionName, err, string(output)), nil
 	}
 	return string(output), nil
 }
@@ -353,7 +437,10 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 
 // Chat runs a Hermes conversation turn with Function Calling support.
 // If stream is true, it writes SSE events to w; otherwise returns the reply.
-func (h *HermesCore) Chat(session *HermesSession, userMsg string, stream bool, w http.ResponseWriter) (string, error) {
+func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg string, stream bool, w http.ResponseWriter) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg := h.s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		return "", fmt.Errorf("AI 未配置或未启用")
@@ -368,7 +455,7 @@ func (h *HermesCore) Chat(session *HermesSession, userMsg string, stream bool, w
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop
-	fullReply, err := h.runLoop(cfg, msgs, stream, w)
+	fullReply, err := h.runLoop(ctx, cfg, msgs, stream, w)
 	if err != nil {
 		return "", err
 	}
@@ -393,7 +480,7 @@ func (h *HermesCore) Chat(session *HermesSession, userMsg string, stream bool, w
 // 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
 // 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
 // 工具调用的原始 JSON 绝不下发到前端。max 5 turns to prevent infinite loops.
-func (h *HermesCore) runLoop(cfg AIConfig, msgs []map[string]string, stream bool, w http.ResponseWriter) (string, error) {
+func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, stream bool, w http.ResponseWriter) (string, error) {
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
 		if !stream || w == nil || text == "" {
@@ -406,6 +493,9 @@ func (h *HermesCore) runLoop(cfg AIConfig, msgs []map[string]string, stream bool
 	}
 
 	for turn := 0; turn < 5; turn++ {
+		if err := ctx.Err(); err != nil { // 客户端已断开：停止后续 LLM 调用与工具执行，避免用户离开后仍在主机上跑命令
+			return "", err
+		}
 		msgsWithTools := h.injectTools(msgs)
 		reply, err := aiChat(cfg, msgsWithTools)
 		if err != nil {
@@ -462,9 +552,20 @@ func (h *HermesCore) runLoop(cfg AIConfig, msgs []map[string]string, stream bool
 			map[string]string{"role": "user", "content": fmt.Sprintf("工具执行结果：\n%s\n请根据以上真实结果继续分析；若信息足够，请直接用简洁中文给出最终结论，不要再输出 JSON。", toolResults.String())},
 		)
 	}
-	// 兜底：达到最大轮次
-	sendDelta("分析轮次已达上限，请缩小问题范围后重试。")
-	return "", fmt.Errorf("达到最大推理轮次")
+	// 达到最大轮次仍未收敛：强制「不再调用工具」再问一次，逼出最终结论并正常落库，
+	// 避免既跑满工具又丢弃已获取信息、还不给用户任何结论。
+	msgs = append(msgs, map[string]string{"role": "user", "content": "已达到工具调用次数上限。请不要再调用任何工具，直接基于以上已获取的真实信息，用简洁中文给出你的最终结论与处置建议。"})
+	final, err := aiChat(cfg, msgs) // 不注入工具定义，强制收敛为自然语言结论
+	if err != nil {
+		sendDelta("分析未能在限定轮次内收敛，请缩小问题范围后重试。")
+		return "", err
+	}
+	final = stripToolCallJSON(final)
+	if final == "" {
+		final = "分析未能得出明确结论，请补充信息后重试。"
+	}
+	sendDelta(final)
+	return final, nil
 }
 
 // toolCall represents a parsed tool call from the LLM response.
@@ -475,9 +576,15 @@ type toolCall struct {
 
 // injectTools adds tool definitions to the last system message.
 func (h *HermesCore) injectTools(msgs []map[string]string) []map[string]string {
-	// Build tool definitions JSON
+	// Build tool definitions JSON（按工具名排序，保证注入顺序稳定，利于 Provider prompt 缓存与可复现）
+	names := make([]string, 0, len(h.tools))
+	for name := range h.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	var toolDefs []map[string]any
-	for _, t := range h.tools {
+	for _, name := range names {
+		t := h.tools[name]
 		toolDefs = append(toolDefs, map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -516,11 +623,26 @@ func (h *HermesCore) parseToolCalls(text string) []toolCall {
 		if start < 0 {
 			return nil
 		}
-		end := strings.Index(text[start:], "\n")
-		if end < 0 {
-			end = len(text) - start
+		// 按花括号配平提取完整 JSON（支持模型输出的多行美化 JSON，不再按首个换行截断）
+		depth, endPos := 0, -1
+		for i := start; i < len(text); i++ {
+			switch text[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					endPos = i + 1
+				}
+			}
+			if endPos >= 0 {
+				break
+			}
 		}
-		return h.parseToolCallJSON(text[start : start+end])
+		if endPos < 0 {
+			return nil
+		}
+		return h.parseToolCallJSON(text[start:endPos])
 	}
 	start += 7 // skip ```json
 	end := strings.Index(text[start:], "```")
@@ -625,12 +747,12 @@ func (h *HermesCore) reloadConfig() {
 	if h.s.pg == nil {
 		return
 	}
-	// Throttle: reload at most every 5 seconds
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+	// Throttle: reload at most every 5 seconds（节流判断置于锁内，避免对 lastLoad 的数据竞争）
 	if time.Since(h.lastLoad) < 5*time.Second {
 		return
 	}
-	h.configMu.Lock()
-	defer h.configMu.Unlock()
 	h.lastLoad = time.Now()
 	if rules, err := h.s.pg.listHermesRules(); err == nil {
 		var enabled []hermesRule

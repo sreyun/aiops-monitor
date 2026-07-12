@@ -1909,9 +1909,22 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
   font-family:inherit; font-size:12px; cursor:pointer;
 }
 .ai-sess-select:focus{outline:none; border-color:var(--accent)}
+/* AI 回复的 Markdown 渲染样式（加粗/斜体/列表/段落） */
+.ai-chat-msg.ai{white-space:normal}
+.ai-chat-msg.ai>div{margin:2px 0}
+.ai-chat-msg.ai ul,.ai-chat-msg.ai ol{margin:4px 0; padding-left:20px}
+.ai-chat-msg.ai li{margin:2px 0}
+.ai-chat-msg.ai strong{font-weight:650}
+.ai-chat-msg.ai em{font-style:italic}
+.ai-chat-msg.ai code{background:var(--bg2); border:1px solid var(--line2); border-radius:4px; padding:1px 5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em}
+.ai-chat-msg.ai pre.ai-code{background:var(--bg2); border:1px solid var(--line2); border-radius:8px; padding:10px 12px; margin:6px 0; overflow-x:auto}
+.ai-chat-msg.ai pre.ai-code code{background:none; border:none; padding:0; display:block; white-space:pre; font-size:.88em; line-height:1.5}
 @media(max-width:560px){
   #aiChatModal{width:96vw; height:82vh; resize:none}
   .ai-sess-select{max-width:120px}
+  /* 头部省空间：标题省略号、隐藏"新建"按钮（下拉首项即新会话） */
+  #aiChatModal .modal-head h3{font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+  #aiNewChatBtn{display:none}
 }
 .ai-diagnosis-input{display:flex; gap:6px; align-items:flex-end}
 .ai-diagnosis-input textarea{flex:1; resize:vertical; min-height:36px; max-height:100px; font-family:inherit; font-size:13px; color:var(--txt); background:var(--bg2); border:1px solid var(--line2); border-radius:var(--r-sm); padding:6px 8px}

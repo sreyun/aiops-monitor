@@ -501,7 +501,7 @@ async function sendDiagnosisChatMsg(){
   try {
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…"),include_terminal:!!$("incTermCheck")?.checked,stream:true})
+      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…").slice(0,-1),include_terminal:!!$("incTermCheck")?.checked,stream:true})
     });
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     // SSE streaming: replace placeholder with incremental content
@@ -790,15 +790,23 @@ function setAIPreset(type){
   loadAIModels(); // 选预设后自动获取该 provider 的模型
 }
 async function saveAIConfig(){
-  const body={enabled:$("aiEnabled").checked,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim(),inspect_interval_min:parseInt($("aiInterval").value)||30};
+  const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
+  if(enabled && (!endpoint || !model)){ toast("启用 AI 需填写 Endpoint 和模型","err"); return; } // 轻校验：启用却没填必填项
+  const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
 // AI 连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
+let _aiTestBusy=false;
 async function testAIConfig(){
+  if(_aiTestBusy) return; // 防重复点击
   const el=$("aiTestResult");
+  const endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
+  if(!endpoint||!model){ if(el){ el.textContent="✗ 请先填写 Endpoint 和模型"; el.className="ai-test-result err"; } return; }
+  _aiTestBusy=true;
+  const testBtn=$("aiTestBtn"); if(testBtn) testBtn.disabled=true;
   if(el){ el.textContent="测试中…"; el.className="ai-test-result testing"; }
-  const body={enabled:true,endpoint:$("aiEndpoint").value.trim(),api_key:$("aiKey").value,model:$("aiModel").value.trim()};
+  const body={enabled:true,endpoint,api_key:$("aiKey").value,model};
   try{
     const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
@@ -829,24 +837,52 @@ async function testAIConfig(){
       el.textContent="✗ 未收到有效回复"; el.className="ai-test-result err";
     }
   }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
+  finally{ _aiTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
-// 过滤 AI 输出中的敏感内容：JSON 块、代码块、密钥、密码等
+// 过滤 AI 输出中的敏感信息（密钥 / 密码 / token）。代码与命令予以保留、交由 Markdown 渲染
+// 展示——工具调用 JSON 已在后端剥离，这里仅对结尾残留兜底，不再误删正文里的命令/代码。
 function filterDisplayContent(text){
   if(!text) return text;
   let t=text;
-  // 去掉 markdown 代码块（```json ... ``` 或 ``` ... ```）
-  t=t.replace(/```[\s\S]*?```/g,'[已过滤代码块]');
-  // 去掉内联代码块 `...`
-  t=t.replace(/`{1,2}[^`]+`{1,2}/g,'');
-  // 去掉 JSON 对象/数组（tool_calls 等）
-  t=t.replace(/\{\s*"tool_calls"[\s\S]*?\}\s*$/g,'');
-  // 隐藏 API 密钥（sk-... 格式）
-  t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,'[已隐藏密钥]');
-  // 隐藏常见密码/密钥字段
-  t=t.replace(/\b(api_key|apikey|secret|password|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1=[已隐藏]');
+  t=t.replace(/\{\s*"tool_calls"[\s\S]*?\}\s*$/g,''); // 兜底：结尾残留的 tool_calls JSON
+  t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,'[已隐藏密钥]'); // API 密钥
+  t=t.replace(/\b(api_key|apikey|secret|password|passwd|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1=[已隐藏]');
   return t.trim();
 }
+// 轻量 Markdown 渲染：先转义 HTML 防 XSS，再套用有限格式（加粗/斜体/有序无序列表/换行）。
+// 输入应为已经 filterDisplayContent 过滤的文本（代码块/密钥已剔除）。
+function renderAIMarkdown(raw){
+  if(!raw) return "";
+  // 1) 先抽出围栏代码块占位，避免其内部被当作 Markdown/HTML 处理
+  const blocks=[];
+  let t=raw.replace(/```[a-zA-Z0-9_+#-]*\n?([\s\S]*?)```/g,(m,code)=>{
+    blocks.push(code.replace(/\n+$/,""));
+    return "SNTLCB"+(blocks.length-1)+"SNTL";
+  });
+  t=esc(t); // 2) 转义 HTML，杜绝注入
+  t=t.replace(/`([^`\n]+)`/g,"<code>$1</code>"); // 3) 行内代码（内容已转义）
+  t=t.replace(/\*\*([^*\n]+)\*\*/g,"<strong>$1</strong>"); // 4) 加粗 / 斜体
+  t=t.replace(/__([^_\n]+)__/g,"<strong>$1</strong>");
+  t=t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,"$1<em>$2</em>");
+  const lines=t.split("\n"); // 5) 列表 / 段落
+  let html="",inList=false,listTag="ul";
+  const close=()=>{ if(inList){ html+="</"+listTag+">"; inList=false; } };
+  for(const line of lines){
+    if(line.indexOf("SNTLCB")>=0){ close(); html+=line; continue; } // 代码块占位单独成行
+    const ul=line.match(/^\s*[-*•·]\s+(.+)$/);
+    const ol=line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if(ul){ if(!inList||listTag!=="ul"){ close(); html+="<ul>"; inList=true; listTag="ul"; } html+="<li>"+ul[1]+"</li>"; }
+    else if(ol){ if(!inList||listTag!=="ol"){ close(); html+="<ol>"; inList=true; listTag="ol"; } html+="<li>"+ol[1]+"</li>"; }
+    else { close(); html+=(line.trim()==="")?"":("<div>"+line+"</div>"); }
+  }
+  close();
+  html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>"<pre class=\"ai-code\"><code>"+esc(blocks[+i])+"</code></pre>"); // 6) 还原代码块
+  return html;
+}
+// AI 对话消息区：判断是否贴底（供流式时决定要不要自动滚动）
+function aiChatStick(){ const log=$("aiChatLog"); return log ? (log.scrollHeight-log.scrollTop-log.clientHeight<80) : true; }
+function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.scrollHeight; }
 // 统一「AI 对话」——单窗口,后端走 Hermes 自主运维 Agent（能对话 + 自动调用工具,
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Hermes 服务端会话 id（0=新会话）
@@ -892,7 +928,10 @@ async function switchAISession(id){
     const log=$("aiChatLog");
     if(log){
       log.innerHTML=msgs.length
-        ? msgs.map(m=>`<div class="ai-chat-msg ${m.role==="user"?"me":"ai"}">${esc(filterDisplayContent(m.content||""))}</div>`).join("")
+        ? msgs.map(m=> m.role==="user"
+            ? `<div class="ai-chat-msg me">${esc(m.content||"")}</div>`
+            : `<div class="ai-chat-msg ai">${renderAIMarkdown(filterDisplayContent(m.content||""))}</div>`
+          ).join("")
         : `<div class="ai-chat-msg sys">（空会话）</div>`;
       log.scrollTop=log.scrollHeight;
     }
@@ -909,10 +948,14 @@ function appendChatMsg(role,text){
   log.appendChild(div); log.scrollTop=log.scrollHeight;
   return div;
 }
+let _aiChatBusy=false;
 async function sendAIChat(){
+  if(_aiChatBusy) return; // 双发守卫：上一条未完成前不再发，避免重复请求 / 会话分裂
   const inp=$("aiChatInput"); if(!inp) return;
   const msg=inp.value.trim(); if(!msg) return;
   inp.value="";
+  _aiChatBusy=true;
+  const sendBtn=$("aiChatSendBtn"); if(sendBtn) sendBtn.disabled=true;
   appendChatMsg("user",msg);
   AI_CHAT_HISTORY.push({role:"user",content:msg});
   const pending=appendChatMsg("assistant","🤔 思考中…");
@@ -924,17 +967,20 @@ async function sendAIChat(){
     let streamed=false;
     await readSSEStream(r,
       (delta,fullText)=>{
+        const stick=aiChatStick();
         if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
-        // 过滤敏感内容后展示（保留思考过程，过滤 JSON/代码块/密钥）
+        // 过滤敏感内容后按 Markdown 渲染（保留思考过程，过滤 JSON/代码块/密钥）
         answer=filterDisplayContent(fullText);
-        if(pending) pending.textContent=answer||"…";
+        if(pending) pending.innerHTML=renderAIMarkdown(answer)||"…";
+        if(stick) aiChatToBottom();
       },
       (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
       (fullText)=>{
         if(!streamed&&pending){
           answer=filterDisplayContent(fullText||"");
-          pending.textContent=answer||"（空回复）";
+          pending.innerHTML=renderAIMarkdown(answer)||"（空回复）";
         }
+        aiChatToBottom();
       },
       null,
       (meta)=>{ if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); } }
@@ -942,6 +988,11 @@ async function sendAIChat(){
     if(answer){ AI_CHAT_HISTORY.push({role:"assistant",content:answer}); }
     refreshAISessionsSoon();
   }catch(e){ if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); } }
+  finally{
+    _aiChatBusy=false;
+    if(sendBtn) sendBtn.disabled=false;
+    if(inp) inp.focus();
+  }
 }
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });

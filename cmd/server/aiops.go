@@ -98,7 +98,7 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 		}
 		reqBody = map[string]any{
 			"model":      cfg.Model,
-			"max_tokens": 1024,
+			"max_tokens": 4096,
 			"messages":   userMsgs,
 		}
 		if sys != "" {
@@ -239,7 +239,7 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	if prov == aiProvAnthropic {
 		reply, err := aiChat(cfg, messages)
 		if err != nil {
-			fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+			fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 			return "", nil
 		}
 		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString(reply))
@@ -258,7 +258,7 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	b, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest(http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
-		fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 		return "", nil
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -269,14 +269,14 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(w, "data: {\"error\":\"%s\"}\n\n", escapeSSE(err.Error()))
+		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 		return "", nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
-		fmt.Fprintf(w, "data: {\"error\":\"HTTP %d: %s\"}\n\n", resp.StatusCode, escapeSSE(strings.TrimSpace(string(body))))
+		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))))
 		return "", nil
 	}
 
@@ -351,15 +351,6 @@ func parseStreamDelta(data string, prov aiProviderType) string {
 		return chunk.Output.Choices[0].Message.Content
 	}
 	return ""
-}
-
-// escapeSSE escapes special characters for safe SSE data field output.
-func escapeSSE(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "\"", "\\\"")
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "")
-	return s
 }
 
 // jsonString marshals a string as a JSON string (with quotes).

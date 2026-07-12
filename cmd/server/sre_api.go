@@ -722,7 +722,7 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		fmt.Fprintf(w, "data: {\"error\":\"%s\",\"latency_ms\":%d,\"provider_hint\":\"%s\"}\n\n", escapeSSE(err.Error()), latency, hint)
+		fmt.Fprintf(w, "data: {\"error\":%s,\"latency_ms\":%d,\"provider_hint\":%s}\n\n", jsonString(err.Error()), latency, jsonString(hint))
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
@@ -1546,9 +1546,9 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	// 按 session_id 解析会话（多轮记忆 / 刷新恢复），前端 history 作为兜底
 	session := s.hermes.resolveSession(req.SessionID, req.History)
 	session.IncidentID = req.IncidentID
-	// 统一 AI 对话默认走 SSE 流式
+	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
-	s.hermes.Chat(session, req.Message, true, w)
+	s.hermes.Chat(r.Context(), session, req.Message, true, w)
 	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]
 	fmt.Fprintf(w, "data: {\"session_id\":%d}\n\n", session.ID)
 	fmt.Fprint(w, "data: [DONE]\n\n")

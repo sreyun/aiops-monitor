@@ -21,6 +21,7 @@
 
 ## Table of Contents
 
+- [Marketing Website](#marketing-website)
 - [Platform & Architecture Support](#platform--architecture-support)
 - [Quick Start](#quick-start)
 - [Core Features](#core-features)
@@ -43,6 +44,16 @@
 - [License](#license)
 
 ---
+
+## Marketing Website
+
+The `website/` directory holds a zero-dependency static marketing site (vanilla HTML/CSS/JS, dark tech theme, with built-in zh / en / zh-TW language switching) that introduces the product and getting-started.
+
+- **Live demo**: <https://sreyun.github.io/aiops-monitor/>
+- **Local preview**: `cd website && python3 serve.py <port>`, then open `http://localhost:<port>` (script: `website/serve.py`)
+- **Pages**: `index` (home / core capabilities / architecture / port forwarding / tech ecosystem) · `features` (feature details, grouped into 10 capability areas) · `solutions` (scenarios) · `comparison` (competitor comparison) · `faq` · `contact`
+
+> The marketing site is maintained in the same repository as the project; copy and the feature matrix are kept in sync with each release.
 
 ## Platform & Architecture Support
 
