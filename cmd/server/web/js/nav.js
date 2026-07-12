@@ -464,6 +464,7 @@ safeAddEventListener("pager", "click", e => {
 safeAddEventListener("addCheckBtn", "click", () => openCheckModal(null));
 safeAddEventListener("ckType", "change", updateCkTargetLabel);
 safeAddEventListener("ckSaveBtn", "click", saveCheck);
+safeAddEventListener("ckAdvanced", "change", () => { const b = document.getElementById("ckAdvancedBody"); if (b) b.style.display = document.getElementById("ckAdvanced").checked ? "" : "none"; }); // 高级模式展开/收起
 safeAddEventListener("checksGrid", "click", e => {
   const card = e.target.closest(".check-card"); if (!card) return;
   const act = e.target.closest("[data-cact]"); if (!act) return;

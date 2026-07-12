@@ -56,6 +56,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
 	}
+	s.checks.vm = s.vm // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.wireSRE()
 	// Restore persisted TCP forward rules (recreate listeners)
 	s.forward.restoreRules(s)

@@ -18,8 +18,7 @@ import (
 // TestLogEncryptHandshakeEndToEnd 验证日志加密全链路：注册下发 log_key → 用该密钥加密一批
 // 日志 → 服务端 handleAgentLogs 按指纹重派生密钥解密解压并入库；且请求体不含明文。
 func TestLogEncryptHandshakeEndToEnd(t *testing.T) {
-	os.Setenv("AIOPS_SECRET_KEY", "test-master-key-e2e")
-	defer os.Unsetenv("AIOPS_SECRET_KEY")
+	t.Setenv("AIOPS_SECRET_KEY", "test-master-key-e2e") // 隔离 + 自动还原
 
 	srv, token := newTestServer(t)
 	const hostID, fp = "h-log", "fp-log-0001"

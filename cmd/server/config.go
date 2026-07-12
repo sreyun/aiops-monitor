@@ -169,11 +169,23 @@ func defaultAccount() AccountConfig {
 type CustomCheck struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Type        string `json:"type"`   // http | tcp | process
+	Type        string `json:"type"`   // http | tcp | ping | process
 	Target      string `json:"target"` // URL for http, host:port for tcp, hostID/procName for process
 	IntervalSec int    `json:"interval_sec"`
 	Level       string `json:"level"` // warning | critical
 	Enabled     bool   `json:"enabled"`
+
+	// HTTP 高级模式（仅 type=http，Advanced=true 时生效；均为可选，向后兼容）
+	Advanced       bool              `json:"advanced,omitempty"`         // 启用高级检测
+	Method         string            `json:"method,omitempty"`           // GET/POST/PUT/...（默认 GET）
+	Headers        map[string]string `json:"headers,omitempty"`          // 自定义请求头（含 Authorization / X-API-Key 等静态鉴权）
+	Body           string            `json:"body,omitempty"`             // 请求体（POST/PUT）
+	ExpectStatus   int               `json:"expect_status,omitempty"`    // 期望状态码（0=默认 <400 即通过）
+	ExpectKeyword  string            `json:"expect_keyword,omitempty"`   // 响应体应包含的关键字（或正则）
+	KeywordIsRegex bool              `json:"keyword_is_regex,omitempty"` // 关键字是否按正则匹配
+	JSONPath       string            `json:"json_path,omitempty"`        // JSON 断言的点路径，如 code / data.token
+	JSONExpect     string            `json:"json_expect,omitempty"`      // JSON 断言期望值（字符串比较；留空=只要求路径存在）
+	CertWarnDays   int               `json:"cert_warn_days,omitempty"`   // 证书剩余天数低于此值即判失败告警（0=不检测）
 }
 
 // HTTPProxyConfig is a saved HTTP proxy shortcut for quick access.
@@ -766,6 +778,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
+	c.Users = cs.cfg.Users // 保护多用户列表：前端表单不含 Users，必须保留现有值
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()

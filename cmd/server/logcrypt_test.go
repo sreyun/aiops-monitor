@@ -1,15 +1,13 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 // TestDeriveAndSealLog 验证日志密钥派生 + gzip/AES-256-GCM 加解密往返（服务端侧，与 agent 同算法）。
 func TestDeriveAndSealLog(t *testing.T) {
-	os.Setenv("AIOPS_SECRET_KEY", "test-master-key-123")
-	defer os.Unsetenv("AIOPS_SECRET_KEY")
+	t.Setenv("AIOPS_SECRET_KEY", "test-master-key-123") // 隔离 + 自动还原，避免与并行的配置加密测试竞争
 
 	fp := "fp-abc123"
 	key := deriveLogKey(fp)
@@ -45,7 +43,7 @@ func TestDeriveAndSealLog(t *testing.T) {
 
 // TestDeriveLogKeyNoMaster 未配置主密钥时返回 nil（日志加密关闭，明文上报）。
 func TestDeriveLogKeyNoMaster(t *testing.T) {
-	os.Unsetenv("AIOPS_SECRET_KEY")
+	t.Setenv("AIOPS_SECRET_KEY", "") // 空 = 未配置主密钥
 	if deriveLogKey("fp") != nil {
 		t.Fatal("无主密钥应返回 nil（加密禁用）")
 	}

@@ -39,14 +39,43 @@ type vmSample struct {
 	m                          shared.Metrics
 }
 
+// vmCheckSample 是一次自定义拨测/接口探测结果，排队持久化到 VM（重启不丢，可查历史趋势）。
+type vmCheckSample struct {
+	checkID, name, checkType    string
+	ts                          int64
+	ok                          bool
+	latencyMs                   float64
+	statusCode                  int
+	lossPct                     float64
+	dnsMs, tcpMs, tlsMs, ttfbMs float64 // HTTP 高级模式分段计时（0=未测）
+	certDays                    int     // 证书剩余天数（-1=非 HTTPS/未知）
+	respBytes                   int64   // 响应体大小（0=未记）
+}
+
 type vmWriter struct {
-	cfg   *ConfigStore
-	ch    chan vmSample
-	httpc *http.Client
+	cfg     *ConfigStore
+	ch      chan vmSample
+	checkCh chan vmCheckSample
+	httpc   *http.Client
 }
 
 func newVMWriter(cfg *ConfigStore) *vmWriter {
-	return &vmWriter{cfg: cfg, ch: make(chan vmSample, 8192), httpc: &http.Client{Timeout: 15 * time.Second}}
+	return &vmWriter{cfg: cfg, ch: make(chan vmSample, 8192), checkCh: make(chan vmCheckSample, 4096), httpc: &http.Client{Timeout: 15 * time.Second}}
+}
+
+// enqueueCheck 排队一次拨测结果到 VM（VM 未启用或缓冲满时非阻塞丢弃）。
+func (v *vmWriter) enqueueCheck(cs vmCheckSample) {
+	if v == nil {
+		return
+	}
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return
+	}
+	select {
+	case v.checkCh <- cs:
+	default:
+	}
 }
 
 // enqueue queues one sample for VM (no-op + non-blocking when VM is disabled or
@@ -68,16 +97,23 @@ func (v *vmWriter) enqueue(hostID, hostname, category string, ts int64, m shared
 // run batches queued samples and pushes them to VM every few seconds.
 func (v *vmWriter) run() {
 	buf := make([]vmSample, 0, 512)
+	cbuf := make([]vmCheckSample, 0, 256)
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	flush := func() {
-		if len(buf) == 0 {
+		if len(buf) == 0 && len(cbuf) == 0 {
 			return
 		}
 		if c := v.cfg.VMConfig(); c.Enabled && c.URL != "" {
-			v.push(c.URL, buf)
+			if len(buf) > 0 {
+				v.push(c.URL, buf)
+			}
+			if len(cbuf) > 0 {
+				v.pushChecks(c.URL, cbuf)
+			}
 		}
 		buf = buf[:0]
+		cbuf = cbuf[:0]
 	}
 	for {
 		select {
@@ -86,10 +122,137 @@ func (v *vmWriter) run() {
 			if len(buf) >= 512 {
 				flush()
 			}
+		case cs := <-v.checkCh:
+			cbuf = append(cbuf, cs)
+			if len(cbuf) >= 256 {
+				flush()
+			}
 		case <-t.C:
 			flush()
 		}
 	}
+}
+
+// pushChecks 把拨测结果批量写入 VM（Prometheus 文本格式）。
+// 指标：aiops_check_up(1/0) / _latency_ms / _status_code / _loss_pct，label 含 check_id/check_type/name。
+func (v *vmWriter) pushChecks(url string, samples []vmCheckSample) {
+	var b strings.Builder
+	for _, s := range samples {
+		lbl := fmt.Sprintf(`check_id="%s",check_type="%s",name="%s"`, lblEsc(s.checkID), lblEsc(s.checkType), lblEsc(s.name))
+		ms := s.ts * 1000
+		up := 0.0
+		if s.ok {
+			up = 1
+		}
+		fmt.Fprintf(&b, "aiops_check_up{%s} %g %d\n", lbl, up, ms)
+		fmt.Fprintf(&b, "aiops_check_latency_ms{%s} %g %d\n", lbl, s.latencyMs, ms)
+		if s.statusCode > 0 {
+			fmt.Fprintf(&b, "aiops_check_status_code{%s} %d %d\n", lbl, s.statusCode, ms)
+		}
+		if s.lossPct >= 0 {
+			fmt.Fprintf(&b, "aiops_check_loss_pct{%s} %g %d\n", lbl, s.lossPct, ms)
+		}
+		if s.dnsMs > 0 {
+			fmt.Fprintf(&b, "aiops_check_dns_ms{%s} %g %d\n", lbl, s.dnsMs, ms)
+		}
+		if s.tcpMs > 0 {
+			fmt.Fprintf(&b, "aiops_check_tcp_ms{%s} %g %d\n", lbl, s.tcpMs, ms)
+		}
+		if s.tlsMs > 0 {
+			fmt.Fprintf(&b, "aiops_check_tls_ms{%s} %g %d\n", lbl, s.tlsMs, ms)
+		}
+		if s.ttfbMs > 0 {
+			fmt.Fprintf(&b, "aiops_check_ttfb_ms{%s} %g %d\n", lbl, s.ttfbMs, ms)
+		}
+		if s.certDays >= 0 {
+			fmt.Fprintf(&b, "aiops_check_cert_days{%s} %d %d\n", lbl, s.certDays, ms)
+		}
+		if s.respBytes > 0 {
+			fmt.Fprintf(&b, "aiops_check_resp_bytes{%s} %d %d\n", lbl, s.respBytes, ms)
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(url, "/")+"/api/v1/import/prometheus", strings.NewReader(b.String()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		slog.Warn("VictoriaMetrics 写入拨测数据失败", "err", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// queryCheckHistory 从 VM 读取某拨测在 [from,to] 的结果序列，重组为 []CheckPoint（重启后仍可查历史）。
+func (v *vmWriter) queryCheckHistory(checkID string, from, to int64) []CheckPoint {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil
+	}
+	q := url.Values{
+		"match[]": {fmt.Sprintf(`{check_id=%q,__name__=~"aiops_check_.*"}`, checkID)},
+		"start":   {strconv.FormatInt(from, 10)},
+		"end":     {strconv.FormatInt(to, 10)},
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/export?"+q.Encode(), nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	return parseVMCheckExport(resp.Body)
+}
+
+// parseVMCheckExport 把 VM /export 的 NDJSON（每行一条 series）按时间戳重组为 []CheckPoint。
+func parseVMCheckExport(r io.Reader) []CheckPoint {
+	byTs := map[int64]*CheckPoint{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
+	for sc.Scan() {
+		var line struct {
+			Metric     map[string]string `json:"metric"`
+			Values     []float64         `json:"values"`
+			Timestamps []int64           `json:"timestamps"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil {
+			continue
+		}
+		name := line.Metric["__name__"]
+		for i := range line.Values {
+			if i >= len(line.Timestamps) {
+				break
+			}
+			ts := line.Timestamps[i] / 1000
+			p := byTs[ts]
+			if p == nil {
+				p = &CheckPoint{Ts: ts, LossPct: -1}
+				byTs[ts] = p
+			}
+			switch name {
+			case "aiops_check_up":
+				p.OK = line.Values[i] >= 0.5
+			case "aiops_check_latency_ms":
+				p.LatencyMs = line.Values[i]
+			case "aiops_check_status_code":
+				p.StatusCode = int(line.Values[i])
+			case "aiops_check_loss_pct":
+				p.LossPct = line.Values[i]
+			}
+		}
+	}
+	out := make([]CheckPoint, 0, len(byTs))
+	for _, p := range byTs {
+		out = append(out, *p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ts < out[j].Ts })
+	return out
 }
 
 // lblEsc escapes a Prometheus label value.

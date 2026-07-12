@@ -426,6 +426,7 @@ async function loadHostsMeta() {
 }
 function updateCkTargetLabel() {
   const t = $("ckType").value;
+  const adv = $("ckAdvancedWrap"); if (adv) adv.style.display = (t === "http") ? "" : "none"; // 高级模式仅 HTTP
   if (t === "process") {
     $("ckHostField").style.display = "block";
     $("ckTargetLabel").textContent = I18N.t("form.process_name");
@@ -459,6 +460,18 @@ function openCheckModal(check) {
   $("ckInterval").value = check ? check.interval_sec : 30;
   $("ckLevel").value = check ? check.level : "critical";
   $("ckEnabled").checked = check ? check.enabled : true;
+  // HTTP 高级模式回填
+  $("ckAdvanced").checked = !!(check && check.advanced);
+  $("ckMethod").value = (check && check.method) || "GET";
+  $("ckExpectStatus").value = (check && check.expect_status) ? check.expect_status : "";
+  $("ckHeaders").value = (check && check.headers) ? Object.entries(check.headers).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
+  $("ckBody").value = (check && check.body) || "";
+  $("ckExpectKeyword").value = (check && check.expect_keyword) || "";
+  $("ckKeywordRegex").checked = !!(check && check.keyword_is_regex);
+  $("ckJsonPath").value = (check && check.json_path) || "";
+  $("ckJsonExpect").value = (check && check.json_expect) || "";
+  $("ckCertWarnDays").value = (check && check.cert_warn_days) ? check.cert_warn_days : "";
+  $("ckAdvancedBody").style.display = $("ckAdvanced").checked ? "" : "none";
   // Populate host select for process type
   populateHostSelect(check);
   updateCkTargetLabel();
@@ -488,6 +501,20 @@ async function saveCheck() {
     level: $("ckLevel").value,
     enabled: $("ckEnabled").checked
   };
+  if (type === "http" && $("ckAdvanced").checked) { // HTTP 高级模式字段
+    body.advanced = true;
+    body.method = $("ckMethod").value;
+    const hs = {};
+    ($("ckHeaders").value || "").split("\n").forEach(line => { const i = line.indexOf(":"); if (i > 0) { const k = line.slice(0, i).trim(); if (k) hs[k] = line.slice(i + 1).trim(); } });
+    body.headers = hs;
+    body.body = $("ckBody").value;
+    body.expect_status = parseInt($("ckExpectStatus").value) || 0;
+    body.expect_keyword = $("ckExpectKeyword").value.trim();
+    body.keyword_is_regex = $("ckKeywordRegex").checked;
+    body.json_path = $("ckJsonPath").value.trim();
+    body.json_expect = $("ckJsonExpect").value.trim();
+    body.cert_warn_days = parseInt($("ckCertWarnDays").value) || 0;
+  }
   if (!body.name || !body.target) { toast(I18N.t("valid.fill_name_target"), "err"); return; }
   await withLoading("ckSaveBtn", async () => {
     try {

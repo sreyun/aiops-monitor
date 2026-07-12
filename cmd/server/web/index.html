@@ -995,6 +995,24 @@
       </div>
       <label class="switch"><input type="checkbox" id="ckEnabled" checked> <span data-i18n="check.enable">启用该检查</span></label>
       <div class="hint" data-i18n="check.hint">异常（HTTP ≥400/超时、TCP 无法连接、Ping 不可达，或进程不存在）时自动产生告警并按「告警设置」推送。</div>
+      <!-- HTTP 高级模式（仅 HTTP 类型显示） -->
+      <div id="ckAdvancedWrap" style="display:none; margin-top:8px">
+        <label class="switch"><input type="checkbox" id="ckAdvanced"> <span>🔬 高级模式（自定义请求 + 响应校验 + 分段计时 + 证书检测）</span></label>
+        <div id="ckAdvancedBody" style="display:none; margin-top:8px; border:1px solid var(--line2); border-radius:8px; padding:10px 12px; background:var(--bg2)">
+          <div class="grid2">
+            <div class="field"><label>请求方法</label><div class="select-wrap"><select id="ckMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option></select></div></div>
+            <div class="field"><label>期望状态码（留空 = &lt;400 即通过）</label><input type="text" id="ckExpectStatus" class="mono" placeholder="200"></div>
+          </div>
+          <div class="field"><label>自定义请求头（每行 <code>Key: Value</code>，含 Authorization / X-API-Key 等鉴权）</label><textarea id="ckHeaders" rows="2" style="width:100%;font-family:monospace;font-size:12px" placeholder="Authorization: Bearer xxx&#10;X-API-Key: your-key"></textarea></div>
+          <div class="field"><label>请求体（POST/PUT，可选）</label><textarea id="ckBody" rows="2" style="width:100%;font-family:monospace;font-size:12px" placeholder='{"user":"admin"}'></textarea></div>
+          <div class="field"><label>响应体校验（关键字或正则）　<label class="switch" style="display:inline-flex;vertical-align:middle"><input type="checkbox" id="ckKeywordRegex"> <span style="font-size:12px">按正则</span></label></label><input type="text" id="ckExpectKeyword" placeholder="响应应包含的关键字 / 正则表达式"></div>
+          <div class="grid2">
+            <div class="field"><label>JSON 断言路径</label><input type="text" id="ckJsonPath" class="mono" placeholder="code 或 data.token"></div>
+            <div class="field"><label>期望值（留空 = 仅要求存在）</label><input type="text" id="ckJsonExpect" class="mono" placeholder="0"></div>
+          </div>
+          <div class="field"><label>SSL 证书剩余天数低于此值即告警（0 = 不检测）</label><input type="text" id="ckCertWarnDays" class="mono" placeholder="15"></div>
+        </div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn primary" id="ckSaveBtn" data-i18n="ui.save">保存</button>

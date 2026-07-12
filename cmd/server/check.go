@@ -2,9 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -56,6 +62,7 @@ type checkRunner struct {
 	history   map[string][]CheckPoint // check id -> bounded time-series for the trend view
 	failCount map[string]int           // consecutive failures (debounce: require 2 before marking down)
 	okCount   map[string]int           // consecutive successes (debounce: require 2 before marking up)
+	vm        *vmWriter                // 持久化拨测结果到 VictoriaMetrics（可选；重启后仍可查历史趋势）
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
@@ -175,6 +182,9 @@ func (cr *checkRunner) runSelfCheck() {
 	}
 	cr.mu.Unlock()
 
+	// 持久化自检结果到 VM
+	cr.vm.enqueueCheck(vmCheckSample{checkID: selfCheckID, name: SelfCheckName(), checkType: "http", ts: nowUnix, ok: ok, latencyMs: lat, statusCode: code, lossPct: -1})
+
 	if nowDown && !wasDown {
 		// Self health-check failures should not clutter the activity log
 		// They are still tracked in alerts and visible in the checks view
@@ -242,9 +252,16 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 	var msg string
 	code, certDays := 0, -1
 	lossPct, pingRTT := -1.0, -1.0
+	var adv *httpProbeResult // HTTP 高级模式的分段计时结果（非高级模式为 nil）
 	switch c.Type {
 	case "http":
-		ok, msg, code, certDays = cr.probeHTTP(c.Target)
+		if c.Advanced {
+			r := cr.probeHTTPAdvanced(c)
+			ok, msg, code, certDays = r.ok, r.msg, r.code, r.certDays
+			adv = &r
+		} else {
+			ok, msg, code, certDays = cr.probeHTTP(c.Target)
+		}
 	case "tcp":
 		ok, msg = cr.probeTCP(c.Target)
 	case "ping":
@@ -261,6 +278,9 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 		} else {
 			lat = 0
 		}
+	}
+	if adv != nil && adv.totalMs > 0 { // 高级模式用精确测得的总耗时
+		lat = adv.totalMs
 	}
 	nowUnix := time.Now().Unix()
 	cr.mu.Lock()
@@ -291,6 +311,13 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 		}
 	}
 	cr.mu.Unlock()
+
+	// 持久化本次拨测结果到 VM（重启不丢，供历史曲线读取）；高级模式附带分段计时
+	cs := vmCheckSample{checkID: c.ID, name: c.Name, checkType: c.Type, ts: nowUnix, ok: ok, latencyMs: lat, statusCode: code, lossPct: lossPct, certDays: certDays}
+	if adv != nil {
+		cs.dnsMs, cs.tcpMs, cs.tlsMs, cs.ttfbMs = adv.dnsMs, adv.tcpMs, adv.tlsMs, adv.ttfbMs
+	}
+	cr.vm.enqueueCheck(cs)
 
 	// Only fire transition notifications when the debounced down state actually changes
 	if nowDown && !wasDown {
@@ -356,6 +383,162 @@ func certDaysRemaining(resp *http.Response) int {
 	notAfter := resp.TLS.PeerCertificates[0].NotAfter
 	d := time.Until(notAfter).Hours() / 24
 	return int(d)
+}
+
+// httpProbeResult 是高级 HTTP 拨测的完整结果（含分段计时）。
+type httpProbeResult struct {
+	ok                                   bool
+	msg                                  string
+	code, certDays                       int
+	dnsMs, tcpMs, tlsMs, ttfbMs, totalMs float64
+}
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
+// probeHTTPAdvanced 执行高级 HTTP 拨测：自定义 方法/请求头/请求体（含静态鉴权头）+
+// 分段计时(DNS/TCP/TLS/TTFB/总) + 状态码/关键字/JSON 断言校验 + 证书到期阈值。
+func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
+	target := c.Target
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		target = "http://" + target
+	}
+	method := strings.ToUpper(strings.TrimSpace(c.Method))
+	if method == "" {
+		method = "GET"
+	}
+	res := httpProbeResult{certDays: -1}
+	var bodyReader io.Reader
+	if c.Body != "" {
+		bodyReader = strings.NewReader(c.Body)
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
+	if err != nil {
+		res.msg = Tz("check.request_failed", err.Error())
+		return res
+	}
+	for k, v := range c.Headers {
+		if strings.TrimSpace(k) != "" {
+			req.Header.Set(k, v)
+		}
+	}
+	if c.Body != "" && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	var dnsStart, connStart, tlsStart, firstByte time.Time
+	trace := &httptrace.ClientTrace{
+		DNSStart:             func(httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:              func(httptrace.DNSDoneInfo) { if !dnsStart.IsZero() { res.dnsMs = ms(time.Since(dnsStart)) } },
+		ConnectStart:         func(_, _ string) { connStart = time.Now() },
+		ConnectDone:          func(_, _ string, _ error) { if !connStart.IsZero() { res.tcpMs = ms(time.Since(connStart)) } },
+		TLSHandshakeStart:    func() { tlsStart = time.Now() },
+		TLSHandshakeDone:     func(tls.ConnectionState, error) { if !tlsStart.IsZero() { res.tlsMs = ms(time.Since(tlsStart)) } },
+		GotFirstResponseByte: func() { firstByte = time.Now() },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(context.Background(), trace))
+
+	start := time.Now()
+	resp, err := cr.httpc.Do(req)
+	if err != nil {
+		res.msg = Tz("check.request_failed", err.Error())
+		res.totalMs = ms(time.Since(start))
+		return res
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10)) // 最多读 256KB 用于校验
+	resp.Body.Close()
+	res.totalMs = ms(time.Since(start))
+	if !firstByte.IsZero() {
+		res.ttfbMs = ms(firstByte.Sub(start))
+	}
+	res.code = resp.StatusCode
+	res.certDays = certDaysRemaining(resp)
+
+	// 校验：状态码
+	if c.ExpectStatus > 0 {
+		if resp.StatusCode != c.ExpectStatus {
+			res.msg = fmt.Sprintf("状态码 %d ≠ 期望 %d", resp.StatusCode, c.ExpectStatus)
+			return res
+		}
+	} else if resp.StatusCode >= 400 {
+		res.msg = "HTTP " + resp.Status
+		return res
+	}
+	// 校验：响应体关键字（正则或纯文本）
+	if c.ExpectKeyword != "" {
+		if c.KeywordIsRegex {
+			re, e := regexp.Compile(c.ExpectKeyword)
+			if e != nil {
+				res.msg = "关键字正则无效：" + e.Error()
+				return res
+			}
+			if !re.Match(body) {
+				res.msg = "响应未匹配正则：" + c.ExpectKeyword
+				return res
+			}
+		} else if !strings.Contains(string(body), c.ExpectKeyword) {
+			res.msg = "响应未包含关键字：" + c.ExpectKeyword
+			return res
+		}
+	}
+	// 校验：JSON 路径断言（如 code == 0）
+	if c.JSONPath != "" {
+		val, ok := jsonPathValue(body, c.JSONPath)
+		if !ok {
+			res.msg = "JSON 路径不存在：" + c.JSONPath
+			return res
+		}
+		if c.JSONExpect != "" && val != c.JSONExpect {
+			res.msg = fmt.Sprintf("JSON %s=%q ≠ 期望 %q", c.JSONPath, val, c.JSONExpect)
+			return res
+		}
+	}
+	// 校验：证书剩余天数低于阈值
+	if c.CertWarnDays > 0 && res.certDays >= 0 && res.certDays < c.CertWarnDays {
+		res.msg = fmt.Sprintf("证书剩余 %d 天 < 阈值 %d 天", res.certDays, c.CertWarnDays)
+		return res
+	}
+	res.ok = true
+	res.msg = fmt.Sprintf("HTTP %s · TTFB %.0fms", resp.Status, res.ttfbMs)
+	return res
+}
+
+// jsonPathValue 取 JSON 里点路径的值并转成字符串（用于断言比较）。支持对象逐级 key，如 code / data.token。
+func jsonPathValue(body []byte, path string) (string, bool) {
+	var v any
+	if json.Unmarshal(body, &v) != nil {
+		return "", false
+	}
+	cur := v
+	for _, key := range strings.Split(path, ".") {
+		key = strings.TrimSpace(strings.TrimPrefix(key, "$"))
+		if key == "" {
+			continue
+		}
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		cur, ok = m[key]
+		if !ok {
+			return "", false
+		}
+	}
+	switch t := cur.(type) {
+	case string:
+		return t, true
+	case float64:
+		if t == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10), true
+		}
+		return strconv.FormatFloat(t, 'g', -1, 64), true
+	case bool:
+		return strconv.FormatBool(t), true
+	case nil:
+		return "", true
+	default:
+		b, _ := json.Marshal(t)
+		return string(b), true
+	}
 }
 
 func (cr *checkRunner) probeTCP(target string) (bool, string) {
