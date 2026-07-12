@@ -224,12 +224,16 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 		}
 	}
 
-	// 统一输出上限（可在 AI 设置配置，默认 4096）；两种 provider 都带上
-	maxTok := cfg.MaxTokens
-	if maxTok <= 0 {
-		maxTok = 4096
+	// 输出长度默认按所选模型的最大值：OpenAI 兼容不指定 max_tokens（由服务商按模型上限输出，
+	// 现多为很大的上下文/输出窗口）；Anthropic 该字段必填，给一个安全的较大默认。
+	// cfg.MaxTokens>0 才作为显式上限覆盖——UI 不暴露此项，一般无需配置。
+	if cfg.MaxTokens > 0 {
+		reqBody["max_tokens"] = cfg.MaxTokens
+	} else if prov == aiProvAnthropic {
+		reqBody["max_tokens"] = 8192
+	} else {
+		delete(reqBody, "max_tokens")
 	}
-	reqBody["max_tokens"] = maxTok
 
 	b, _ := json.Marshal(reqBody)
 	// 请求级 ctx：既受客户端「终止」影响、又设 120s 上限（模型慢时不至于过早断开）
