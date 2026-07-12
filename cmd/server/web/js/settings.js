@@ -1,13 +1,508 @@
-/* ============================================================
-   AIOps Monitor · auth.js — 认证、用户管理、MFA、账户恢复、个人信息
-   依赖：core.js（$, esc, toast, withLoading, pwPolicyOK, safeAddEventListener, AIOps 命名空间）
-   加载顺序：在 core.js / render.js / charts.js / terminal.js 之后，automation.js 之前
-   ============================================================ */
-"use strict";
+/* ---------- 告警设置 ---------- */
+async function openSettings() {
+  try {
+    const c = await fetch(`${API}/config`).then(r => r.json());
+    const t = c.thresholds || {};
+    $("alertsEnabled").checked = !!c.alerts_enabled;
+    $("feishuEnabled").checked = !!(c.feishu && c.feishu.enabled);
+    $("feishuWebhook").value = (c.feishu && c.feishu.webhook) || "";
+    $("dingEnabled").checked = !!(c.dingtalk && c.dingtalk.enabled);
+    $("dingWebhook").value = (c.dingtalk && c.dingtalk.webhook) || "";
+    $("dingSecret").value = (c.dingtalk && c.dingtalk.secret) || "";
+    // Custom webhook
+    const cw = c.custom_webhook || {};
+    $("customWebhookEnabled").checked = !!cw.enabled;
+    $("customWebhookURL").value = cw.url || "";
+    $("customWebhookMethod").value = cw.method || "POST";
+    $("customWebhookContentType").value = cw.content_type || "application/json";
+    $("customWebhookHeaders").value = cw.headers || "";
+    $("customWebhookBodyTemplate").value = cw.body_template || "";
+    // SMTP email config
+    const s = c.smtp || {};
+    $("smtpEnabled").checked = !!s.smtp_enabled;
+    $("smtpHost").value = s.smtp_host || "";
+    $("smtpPort").value = s.smtp_port || "";
+    $("smtpUsername").value = s.smtp_username || "";
+    $("smtpPassword").value = s.smtp_password || "";
+    $("smtpFromName").value = s.smtp_from_name || "";
+    $("smtpTLS").checked = !!s.smtp_use_tls;
+    // Threshold display: treat 0 / null / undefined as "unset" → show the standard
+    // default. The backend also backfills these zeros, so display and storage stay
+    // consistent, and every metric always shows a sane standard threshold.
+    const td = (v, def) => (v == null || v === 0 || isNaN(v)) ? def : v;
+    $("cpuWarn").value = td(t.cpu_warn, 80); $("cpuCrit").value = td(t.cpu_crit, 95);
+    $("memWarn").value = td(t.mem_warn, 85); $("memCrit").value = td(t.mem_crit, 95);
+    $("diskWarn").value = td(t.disk_warn, 80); $("diskCrit").value = td(t.disk_crit, 90);
+    $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
+    $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
+    $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
+    $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
+    $("procWarn").value = td(t.proc_warn, 0.5);
+    $("offlineSec").value = td(t.offline_after_sec, 60);
 
-window.AIOps = window.AIOps || {};
+    // Reset to first tab
+    switchNotifyTab("tab-feishu");
 
-/* ---------- 账户 / 角色 ---------- */
+    $("settingsMask").classList.add("show");
+  } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
+}
+
+// Tab switching for notification channels
+function switchNotifyTab(tabId) {
+  document.querySelectorAll("#notifyTabs .tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tabId));
+  document.querySelectorAll("#settingsMask .tab-panel").forEach(p => p.classList.toggle("active", p.id === tabId));
+}
+
+function collectSettings() {
+  const num = id => parseFloat($(id).value) || 0;
+  return {
+    alerts_enabled: $("alertsEnabled").checked,
+    feishu: { enabled: $("feishuEnabled").checked, webhook: $("feishuWebhook").value.trim() },
+    dingtalk: { enabled: $("dingEnabled").checked, webhook: $("dingWebhook").value.trim(), secret: $("dingSecret").value.trim() },
+    custom_webhook: {
+      enabled: $("customWebhookEnabled").checked,
+      url: $("customWebhookURL").value.trim(),
+      method: $("customWebhookMethod").value,
+      content_type: $("customWebhookContentType").value.trim(),
+      headers: $("customWebhookHeaders").value.trim(),
+      body_template: $("customWebhookBodyTemplate").value.trim()
+    },
+    smtp: {
+      smtp_enabled: $("smtpEnabled").checked,
+      smtp_host: $("smtpHost").value.trim(),
+      smtp_port: parseInt($("smtpPort").value) || 0,
+      smtp_username: $("smtpUsername").value.trim(),
+      smtp_password: $("smtpPassword").value,
+      smtp_from_name: $("smtpFromName").value.trim(),
+      smtp_use_tls: $("smtpTLS").checked
+    },
+    thresholds: {
+      cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
+      mem_warn: num("memWarn"), mem_crit: num("memCrit"),
+      disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
+      diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
+      iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
+      gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
+      load_warn: num("loadWarn"), load_crit: num("loadCrit"),
+      proc_warn: num("procWarn"),
+      offline_after_sec: Math.round(num("offlineSec"))
+    }
+  };
+}
+async function saveSettings() {
+  await withLoading("saveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+      if (r.ok) { toast(I18N.t("toast.config_saved"), "ok"); $("settingsMask").classList.remove("show"); } else { toast(I18N.t("toast.save_failed"), "err"); }
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
+}
+async function testSettings() {
+  await withLoading("testBtn", async () => {
+    try {
+      const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+      const j = await r.json();
+      if (j.ok) toast(I18N.t("toast.test_sent"), "ok");
+      else toast(I18N.t("toast.test_failed2") + (j.errors || []).join("; "), "err");
+    } catch (e) { toast(I18N.t("toast.test_failed2") + e, "err"); }
+  });
+}
+
+/* ---------- 安装 Agent ---------- */
+let INSTALL = { server_url: "", token: "" };
+let CUR_OS = "linux";
+let RELAY_MODE = false;
+let MULTI_SERVER_MODE = false;
+let TOKEN_REVEALED = false; // Token 脱敏状态
+function maskToken(t) {
+  if (!t) return "";
+  if (TOKEN_REVEALED) return t;
+  if (t.length <= 8) return "••••••••";
+  return t.slice(0, 4) + "••••••••" + t.slice(-4);
+}
+function updateTokenDisplay() {
+  const el = $("installToken"); if (!el) return;
+  el.value = maskToken(INSTALL.token || "");
+  el.dataset.revealed = TOKEN_REVEALED ? "1" : "0";
+}
+async function openInstall() {
+  try {
+    INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
+    TOKEN_REVEALED = false;
+    updateTokenDisplay();
+    RELAY_MODE = false;
+    MULTI_SERVER_MODE = false;
+    const normalRadio = document.querySelector('input[name="installMode"][value="normal"]');
+    if (normalRadio) normalRadio.checked = true;
+    renderInstallCmd();
+    $("installMask").classList.add("show");
+  } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
+}
+function parseMultiServerList() {
+  const text = ($("multiServerList") || {}).value || "";
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l);
+  const servers = [];
+  for (const line of lines) {
+    const parts = line.split(/\s+/);
+    const server = parts[0];
+    const token = parts.slice(1).join(" ") || "";
+    if (server) servers.push({ server, token });
+  }
+  return servers.length > 0 ? JSON.stringify(servers) : "";
+}
+function renderInstallCmd() {
+  // Multi-server section visibility
+  const msSection = $("multiServerSection");
+  if (msSection) msSection.style.display = (MULTI_SERVER_MODE && !RELAY_MODE) ? "" : "none";
+  // Relay mode: show gateway + internal commands, hide normal install
+  if (RELAY_MODE) {
+    $("normalInstallSection").style.display = "none";
+    $("relaySection").style.display = "";
+    renderRelayCmd();
+    return;
+  }
+  $("normalInstallSection").style.display = "";
+  $("relaySection").style.display = "none";
+  const server = INSTALL.server_url || location.origin;
+  const token = INSTALL.token || "";
+  const cat = $("installCategory").value.trim();
+  let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  // Multi-server: append servers_json so the generated config.json uses a
+  // servers array instead of a single server+token.
+  let cmd, label, hint;
+  if (MULTI_SERVER_MODE) {
+    const sj = parseMultiServerList();
+    if (sj) q += "&servers_json=" + encodeURIComponent(sj);
+    label = I18N.t("install.multi_server");
+    hint = I18N.t("install.multi_desc");
+  }
+  if (CUR_OS === "windows") {
+    cmd = `irm "${server}/install.ps1?${q}" | iex`;
+    label = I18N.t("install.powershell_cmd");
+    hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\AIOps-agent 并注册用户级开机自启。";
+  } else if (CUR_OS === "macos") {
+    cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
+    label = I18N.t("install.terminal_one_line");
+    hint = I18N.t("install.linux_detail");
+  } else {
+    cmd = `curl -fsSL "${server}/install.sh?${q}" | sudo sh`;
+    label = I18N.t("install.linux_cmd");
+    hint = I18N.t("install.linux_desc");
+  }
+  $("installCmd").textContent = cmd;
+  $("cmdLabel").textContent = label;
+  $("cmdHint").textContent = hint;
+  $("uninstallCmd").textContent = (CUR_OS === "windows")
+    ? `irm "${server}/uninstall.ps1" | iex`
+    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+}
+function renderRelayCmd() {
+  const server = INSTALL.server_url || location.origin;
+  const token = INSTALL.token || "";
+  const cat = $("installCategory").value.trim();
+  let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  const gwIP = $("relayGatewayIP").value.trim() || I18N.t("install.gateway_ip");
+  const relay = `http://${gwIP}:8529`;
+  let gatewayCmd, internalCmd;
+  if (CUR_OS === "windows") {
+    gatewayCmd = `irm "${server}/install-relay.ps1?${q}" | iex`;
+    internalCmd = `irm "${relay}/install.ps1?${q}" | iex`;
+  } else if (CUR_OS === "macos") {
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sh`;
+    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
+  } else {
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sudo sh`;
+    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sudo sh`;
+  }
+  $("relayGatewayCmd").textContent = gatewayCmd;
+  $("relayInternalCmd").textContent = internalCmd;
+  $("uninstallCmd").textContent = (CUR_OS === "windows")
+    ? `irm "${server}/uninstall.ps1" | iex`
+    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+}
+async function resetToken() {
+  if (!confirm(I18N.t("install.reset_warning"))) return;
+  try {
+    const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
+    INSTALL.token = j.token; TOKEN_REVEALED = false; updateTokenDisplay(); renderInstallCmd();
+    toast(I18N.t("toast.token_reset"), "ok");
+  } catch (e) { toast(I18N.t("toast.reset_failed2") + e, "err"); }
+}
+
+/* ---------- 自定义监控 ---------- */
+// 进程类目标形如 hostID/进程名，展示为「进程 @ 主机名」更友好。
+function checkTargetDisplay(c) {
+  if (c.type === "process") {
+    const i = c.target.indexOf("/");
+    if (i > 0) {
+      const hid = c.target.slice(0, i), pname = c.target.slice(i + 1);
+      const meta = HOST_META.find(h => h.id === hid);
+      return pname + " @ " + (meta ? meta.hostname || hid.slice(0, 8) : hid.slice(0, 8));
+    }
+  }
+  return c.target;
+}
+// TCP 目标拆分为 主机 / 端口（末个冒号分隔）
+function splitHostPort(t) {
+  t = String(t || "");
+  const i = t.lastIndexOf(":");
+  if (i > 0) return { host: t.slice(0, i), port: t.slice(i + 1) };
+  return { host: t, port: "" };
+}
+// 进程目标 hostID/进程名 拆分，并把 hostID 解析为主机名
+function splitProcessTarget(c) {
+  const t = String(c.target || "");
+  const i = t.indexOf("/");
+  if (i > 0) {
+    const hid = t.slice(0, i), proc = t.slice(i + 1);
+    const meta = HOST_META.find(h => h.id === hid);
+    return { proc, hostName: meta ? (meta.hostname || hid.slice(0, 8)) : hid.slice(0, 8) };
+  }
+  return { proc: t, hostName: "—" };
+}
+// 详情项：键 + 值 + 值配色
+function cdItem(k, v, cls) {
+  return `<div class="cd-item"><div class="cd-k">${k}</div><div class="cd-v ${cls || ""}" title="${esc(v)}">${esc(v)}</div></div>`;
+}
+function renderChecks(checks) {
+  LAST_CHECKS = checks;
+  const userChecks = checks.filter(c => !c.builtin);
+  $("navChecks").textContent = userChecks.filter(c => !c.ok && c.checked_at).length || userChecks.length;
+  const grid = $("checksGrid"), empty = $("checksEmpty");
+  grid.className = "checks-list" + (CHECK_VIEW === "pill" ? " pill" : "");
+  if (!userChecks.length && !checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
+  empty.style.display = "none";
+
+  // 应用类型筛选
+  let shown = checks;
+  if (CHECK_TYPE && CHECK_TYPE !== "all") shown = shown.filter(c => c.type === CHECK_TYPE);
+
+  grid.innerHTML = shown.map(c => {
+    const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
+    const stText = !c.enabled ? I18N.t("ui.disabled_status") : (c.checked_at ? (c.ok ? I18N.t("ui.normal") : I18N.t("ui.abnormal")) : I18N.t("ui.pending"));
+    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : I18N.t("ui.process");
+    const builtin = c.builtin ? ' data-builtin="1"' : "";
+    const histBtn = `<button class="mini-btn" data-cact="hist" title="${I18N.t('ui.history_chart')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button>`;
+    const actions = `<span class="ch-actions">${histBtn}${c.builtin ? "" : `
+          <button class="mini-btn" data-cact="run" title="${I18N.t('ui.check_now')}">▶</button>
+          <button class="mini-btn" data-cact="edit" title="${I18N.t('ui.edit')}">✎</button>
+          <button class="mini-btn del" data-cact="del" title="${I18N.t('ui.delete')}">✕</button>`}</span>`;
+    const builtinTag = c.builtin ? `<span class="type-badge" style="background:var(--ok-soft);color:var(--ok-txt)">${I18N.t("ui.builtin")}</span>` : "";
+
+    // 详情字段：按监控类型给出各自贴合的字段，三类监控信息量对齐
+    const stCls = st === "up" ? "ok" : st === "down" ? "crit" : "muted";
+    const lat = c.checked_at ? Math.round(c.latency_ms) + " ms" : "—";
+    const latCls = c.checked_at ? "" : "muted";
+    const detail = [];
+    if (c.type === "http") {
+      detail.push(cdItem(I18N.t("form.check_url"), checkTargetDisplay(c), "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      const code = c.status_code || 0;
+      detail.push(cdItem(I18N.t("form.status_code"), code ? String(code) : "—", code === 0 ? "muted" : code >= 400 ? "crit" : "ok"));
+      detail.push(cdItem(I18N.t("form.response_latency"), lat, latCls));
+      if (typeof c.cert_days === "number" && c.cert_days >= 0) {
+        const d = c.cert_days;
+        detail.push(cdItem(I18N.t("form.cert_remaining"), d + I18N.t("time.days"), d <= 7 ? "crit" : d <= 30 ? "warn" : "ok"));
+      }
+    } else if (c.type === "tcp") {
+      const hp = splitHostPort(c.target);
+      detail.push(cdItem(I18N.t("form.target"), hp.host || c.target, "muted"));
+      detail.push(cdItem(I18N.t("form.port"), hp.port || "—", ""));
+      detail.push(cdItem(I18N.t("form.connect_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.connect_latency"), lat, latCls));
+    } else if (c.type === "ping") {
+      detail.push(cdItem(I18N.t("form.check_url"), c.target, "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      const loss = (typeof c.loss_pct === "number" && c.loss_pct >= 0) ? c.loss_pct : null;
+      detail.push(cdItem(I18N.t("form.loss_rate"), loss === null ? "—" : Math.round(loss) + "%",
+        loss === null ? "muted" : loss === 0 ? "ok" : loss >= 100 ? "crit" : "warn"));
+      const hasRtt = c.checked_at && c.latency_ms > 0;
+      detail.push(cdItem(I18N.t("form.avg_latency"), hasRtt ? Math.round(c.latency_ms) + " ms" : "—", hasRtt ? "" : "muted"));
+    } else if (c.type === "process") {
+      const pr = splitProcessTarget(c);
+      detail.push(cdItem(I18N.t("form.process_name2"), pr.proc, ""));
+      detail.push(cdItem(I18N.t("form.target_host2"), pr.hostName, "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.check_duration"), lat, latCls));
+    } else {
+      detail.push(cdItem(I18N.t("form.check_url"), checkTargetDisplay(c), "muted"));
+      detail.push(cdItem(I18N.t("form.run_status"), stText, stCls));
+      detail.push(cdItem(I18N.t("form.latency"), lat, latCls));
+    }
+    detail.push(cdItem(I18N.t("form.check_interval"), I18N.t("section.every") + c.interval_sec + "s", "muted"));
+    detail.push(cdItem(I18N.t("form.last_check"), c.checked_at ? ago(c.checked_at) : I18N.t("ui.not_checked"), "muted"));
+
+    return `<div class="check-card st-${st}" data-id="${esc(c.id)}"${builtin}>
+      <div class="check-row-top">
+        <span class="st-dot ${st}"></span>
+        <span class="ch-name" title="${esc(c.name)}">${esc(c.name)}</span>
+        <span class="type-badge t-${esc(c.type)}">${typeText}</span>
+        ${builtinTag}
+        <span class="st-pill ${st}">${stText}</span>
+        ${actions}
+      </div>
+      <div class="check-detail">${detail.join("")}</div>
+      ${(!c.ok && c.checked_at) ? `<div class="check-err">${esc(c.message)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+// 列表 / 胶囊视图切换
+function setCheckView(v) {
+  CHECK_VIEW = v === "pill" ? "pill" : "list";
+  try { localStorage.setItem("aiops_check_view", CHECK_VIEW); } catch (e) {}
+  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
+  renderChecks(LAST_CHECKS);
+}
+// 主机 卡片 / 列表 视图切换
+function setHostView(v) {
+  HOST_VIEW = v === "list" ? "list" : "card";
+  try { localStorage.setItem("aiops_host_view", HOST_VIEW); } catch (e) {}
+  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
+async function loadChecks() {
+  try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
+}
+
+let CHK_CHARTS = {};
+let CHK_HIST = { id: "", name: "", type: "", range: 24 }; // range=小时数，默认 24h
+// 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选（与主机趋势图一致）
+function openCheckHistory(id, name, type) {
+  CHK_HIST = { id, name, type, range: 24 };
+  $("checkHistTitle").textContent = name + " · 监控历史";
+  $("checkHistMask").classList.add("show");
+  loadCheckHistory();
+}
+async function loadCheckHistory() {
+  const { id, name, type, range } = CHK_HIST;
+  const body = $("checkHistBody");
+  body.innerHTML = `<div class="empty-line">加载中…</div>`;
+  const ctrl = renderChartControls(range, "crange");
+  try {
+    const all = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
+    const now = Math.floor(Date.now() / 1000);
+    const from = range > 0 ? now - range * 3600 : 0;
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);
+    if (!pts.length) {
+      body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
+      return;
+    }
+    const samples = pts.map(p => ({ timestamp: p.timestamp, latency_ms: p.latency_ms, loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null), ok: p.ok }));
+    const isPing = type === "ping";
+    const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
+    const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
+    const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now");
+    const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="240"></canvas>` +
+      `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+    body.innerHTML = `<div class="chart-controls">${ctrl}</div>
+      <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
+      <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ${I18N.t("unit.ms")} · 悬停查看数值，拖动框选放大，双击还原。</div>`;
+    CHK_CHARTS = {};
+    CHK_CHARTS.chkLat = createChart("chkLat", samples, [
+      { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
+    ], 0, null, { title: name + " · " + I18N.t("form.latency") + "(" + I18N.t("unit.ms") + ")" });
+    if (isPing) {
+      CHK_CHARTS.chkLoss = createChart("chkLoss", samples, [
+        { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
+      ], 0, 100, { title: name + " · 丢包率(%)" });
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
+  }
+}
+// 历史弹窗：时间范围切换 + 图表放大委托
+safeAddEventListener("checkHistBody", "click", e => {
+  const rb = e.target.closest(".chip-btn[data-crange]");
+  if (rb) { CHK_HIST.range = parseInt(rb.dataset.crange); loadCheckHistory(); return; }
+  const en = e.target.closest(".chart-enlarge"); if (!en) return;
+  const ch = CHK_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
+});
+async function loadHostsMeta() {
+  try { HOST_META = await fetch(`${API}/hosts/meta`).then(r => r.json()); } catch (e) { /* ignore */ }
+}
+function updateCkTargetLabel() {
+  const t = $("ckType").value;
+  if (t === "process") {
+    $("ckHostField").style.display = "block";
+    $("ckTargetLabel").textContent = I18N.t("form.process_name");
+    $("ckTarget").placeholder = I18N.t("form.hint_process");
+    return;
+  }
+  $("ckHostField").style.display = "none";
+  if (t === "http") {
+    $("ckTargetLabel").textContent = I18N.t("form.url");
+    $("ckTarget").placeholder = "https://example.com";
+  } else if (t === "ping") {
+    $("ckTargetLabel").textContent = I18N.t("form.host_addr");
+    $("ckTarget").placeholder = I18N.t("form.hint_url");
+  } else {
+    $("ckTargetLabel").textContent = I18N.t("form.host_port");
+    $("ckTarget").placeholder = "127.0.0.1:3306";
+  }
+}
+function openCheckModal(check) {
+  $("checkModalTitle").textContent = check ? I18N.t("ui.edit_check") : I18N.t("ui.add_check");
+  $("ckId").value = check ? check.id : "";
+  $("ckName").value = check ? check.name : "";
+  $("ckType").value = check ? check.type : "http";
+  // For process type, extract process name only (not "hostID/procName")
+  if (check && check.type === "process") {
+    const idx = check.target.indexOf("/");
+    $("ckTarget").value = idx > 0 ? check.target.slice(idx + 1) : check.target;
+  } else {
+    $("ckTarget").value = check ? check.target : "";
+  }
+  $("ckInterval").value = check ? check.interval_sec : 30;
+  $("ckLevel").value = check ? check.level : "critical";
+  $("ckEnabled").checked = check ? check.enabled : true;
+  // Populate host select for process type
+  populateHostSelect(check);
+  updateCkTargetLabel();
+  $("checkMask").classList.add("show");
+}
+function populateHostSelect(check) {
+  const sel = $("ckHost");
+  sel.innerHTML = `<option value="">-- 选择主机 --</option>` + HOST_META.map(h =>
+    `<option value="${esc(h.id)}" ${check && check.target.startsWith(h.id + "/") ? "selected" : ""}>${esc(h.hostname || h.id)}</option>`
+  ).join("");
+}
+async function saveCheck() {
+  let target = $("ckTarget").value.trim();
+  const type = $("ckType").value;
+  if (type === "process") {
+    const hostId = $("ckHost").value;
+    if (!hostId) { toast(I18N.t("valid.select_host"), "err"); return; }
+    if (!target) { toast(I18N.t("valid.fill_process"), "err"); return; }
+    target = hostId + "/" + target;
+  }
+  const body = {
+    id: $("ckId").value,
+    name: $("ckName").value.trim(),
+    type: type,
+    target: target,
+    interval_sec: Math.max(5, parseInt($("ckInterval").value) || 30),
+    level: $("ckLevel").value,
+    enabled: $("ckEnabled").checked
+  };
+  if (!body.name || !body.target) { toast(I18N.t("valid.fill_name_target"), "err"); return; }
+  await withLoading("ckSaveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) { toast(I18N.t("toast.saved"), "ok"); $("checkMask").classList.remove("show"); loadChecks(); }
+      else { const j = await r.json(); toast(I18N.t("toast.save_failed2") + (j.error || ""), "err"); }
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
+}
+async function delCheck(id) {
+  if (!confirm(I18N.t("valid.confirm_delete_check"))) return;
+  try {
+    const r = await fetch(`${API}/checks/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (r.ok) { toast(I18N.t("toast.deleted"), "ok"); loadChecks(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
+  } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
+}
+
+/* ---------- 账户 / 个人信息 ---------- */
 let CUR_ROLE = "";
 const roleLabel = r => ({ admin: I18N.t("ui.admin"), operator: I18N.t("ui.operator"), viewer: I18N.t("ui.readonly") }[r] || r || "");
 const canWrite = () => CUR_ROLE === "operator" || CUR_ROLE === "admin";
@@ -59,7 +554,97 @@ async function initAuth() {
     if (loginErrEl) loginErrEl.textContent = I18N.t("toast.network_check_failed");
   }
 }
-
+/* ---------- 消息中心（顶栏铃铛 + 未读徽标 + 下拉面板） ---------- */
+let MSG_POLL = null;
+function msgEsc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function initMsgCenter() {
+  const panel = $("notifPanel"), wrap = $("notifWrap");
+  if (!$("notifBtn") || !panel) return;
+  safeAddEventListener("notifBtn", "click", (e) => {
+    e.stopPropagation();
+    const open = panel.classList.toggle("show");
+    if (open) loadMessages();
+  });
+  safeAddEventListener("notifReadAll", "click", async (e) => {
+    e.stopPropagation();
+    try { await fetch(`${API}/messages/read-all`, { method: "POST" }); } catch (_) {}
+    loadMessages();
+  });
+  document.addEventListener("click", (e) => { if (wrap && !wrap.contains(e.target)) panel.classList.remove("show"); });
+  loadMessages();
+  if (MSG_POLL) clearInterval(MSG_POLL);
+  MSG_POLL = setInterval(loadMessages, 20000);
+}
+async function loadMessages() {
+  try {
+    const data = await fetch(`${API}/messages?limit=50`).then(r => r.json());
+    const msgs = data.messages || [];
+    const unread = data.unread || 0;
+    const badge = $("notifBadge");
+    if (badge) {
+      if (unread > 0) { badge.textContent = unread > 99 ? "99+" : unread; badge.style.display = ""; }
+      else badge.style.display = "none";
+    }
+    renderMessages(msgs);
+  } catch (_) {}
+}
+function renderMessages(msgs) {
+  const list = $("notifList"), empty = $("notifEmpty");
+  if (!list) return;
+  if (empty) empty.style.display = msgs.length ? "none" : "";
+  const pad = n => String(n).padStart(2, "0");
+  list.innerHTML = msgs.map(m => {
+    const t = new Date((m.ts || 0) * 1000);
+    const ts = `${t.getMonth()+1}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    return `<div class="notif-item ${m.read ? "" : "unread"}" data-id="${m.id}" data-view="${msgEsc(m.view || "")}">
+      <span class="notif-dot ${msgEsc(m.level || "info")}"></span>
+      <div class="notif-body">
+        <div class="notif-title">${msgEsc(m.title || "")}</div>
+        ${m.body ? `<div class="notif-sub">${msgEsc(m.body)}</div>` : ""}
+        <div class="notif-time">${ts}</div>
+      </div></div>`;
+  }).join("");
+  list.querySelectorAll(".notif-item").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = parseInt(el.dataset.id, 10);
+      const view = el.dataset.view;
+      try { await fetch(`${API}/messages/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [id] }) }); } catch (_) {}
+      const p = $("notifPanel"); if (p) p.classList.remove("show");
+      if (view && typeof switchView === "function") switchView(view);
+      loadMessages();
+    });
+  });
+}
+function startApp() {
+  if (APP_STARTED) return;
+  APP_STARTED = true;
+  initTheme();
+  initNotifications();
+  initMsgCenter();
+  showSkeleton();
+  refresh(); loadChecks();
+  // P1-2: 差异化轮询频率 — 按当前视图 + 标签页可见性调整刷新间隔
+  const POLL_BASE = 3000;
+  let pollTimer = null;
+  function schedulePoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
+    const intervals = { overview: 3000, hosts: 5000, checks: 10000, alerts: 3000, automation: 15000, forward: 15000, log: 10000 };
+    let interval = intervals[view] || POLL_BASE;
+    // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
+    if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);
+    pollTimer = setTimeout(() => { refresh(); loadChecks(); if (document.querySelector("#view-forward.active")) loadForwards(); schedulePoll(); }, interval);
+  }
+  schedulePoll();
+  // 视图切换时立即调整轮询频率
+  document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => setTimeout(schedulePoll, 100)));
+  // 标签页可见性变化时重排轮询
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { refresh(true); schedulePoll(); }
+  });
+  // P3-1: 初始化 WebSocket 推送（带降级到轮询）
+  initPushWS();
+}
 // 首次登录 · 安全初始化：强制修改用户名 + 密码的专用弹窗（替代直接打开个人信息页）。
 // 弹窗带 data-forced，无法通过 ESC / 点遮罩 / ✕ 关闭；完成后会话重签并刷新进入。
 async function openInitSetup() {
@@ -103,8 +688,6 @@ async function submitInitSetup() {
     } catch (e) { showErr(I18N.t("toast.save_failed2") + e); }
   });
 }
-
-/* ---------- 个人信息 ---------- */
 async function openProfile(tab) {
   try {
     const me = await fetch(`${API}/me`).then(r => r.json());
@@ -626,91 +1209,3 @@ async function logout() {
   location.reload();
 }
 
-/* ---------- 登录表单处理 ---------- */
-safeAddEventListener("loginForm", "submit", async e => {
-  e.preventDefault();
-  const loginErrEl = $("loginErr");
-  if (loginErrEl) loginErrEl.textContent = "";
-  const submitBtn = e.target.querySelector('button[type="submit"]');
-  await withLoading(submitBtn, async () => {
-    try {
-      const codeEl = $("loginCode");
-      const r = await fetchWithTimeout(`${API}/login`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: $("loginUser").value.trim(),
-          password: $("loginPass").value,
-          code: codeEl ? codeEl.value.trim() : ""
-        })
-      }, 15000);
-      const j = await r.json().catch(() => ({}));
-      if (r.ok && j.mfa_required) {
-        const f = $("loginCodeField"); if (f) f.style.display = "";
-        if (codeEl) codeEl.focus();
-        if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
-      }
-      else if (r.ok && j.require_mfa_setup) {
-        openMfaSetup(true);
-      }
-      else if (r.ok && j.must_change_password) {
-        // v5.4.0: admin password was reset — force password change
-        let user;
-        try {
-          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
-        } catch (_) {
-          user = { username: $("loginUser").value.trim(), display_name: "" };
-        }
-        setUser(user);
-        $("loginView").classList.remove("show");
-        startApp();
-        // 强制进入「安全初始化」弹窗：需修改用户名 + 密码后方可进入控制台
-        setTimeout(() => openInitSetup(), 300);
-      }
-      else if (r.ok) {
-        // Post-login /me fetch: wrap in try/catch so a transient network
-        // hiccup doesn't leave the user stuck on the login page after
-        // successful authentication.
-        let user;
-        try {
-          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
-        } catch (_) {
-          // Login succeeded but /me failed — proceed anyway, the next poll
-          // will populate user info. Better than showing an error after
-          // the user already typed their credentials correctly.
-          user = { username: $("loginUser").value.trim(), display_name: "" };
-        }
-        setUser(user);
-        const loginViewEl = $("loginView");
-        if (loginViewEl) loginViewEl.classList.remove("show");
-        startApp();
-      }
-      else {
-        if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
-      }
-    } catch (err) {
-      // Distinguish AbortError (timeout) from generic network errors so
-      // mobile users see a helpful message instead of "TypeError: Failed to fetch".
-      const msg = err.name === "AbortError"
-        ? I18N.t("toast.login_timeout")
-        : I18N.t("toast.login_network_error");
-      if (loginErrEl) loginErrEl.textContent = msg;
-    }
-  });
-});
-
-// 导出到 AIOps 命名空间
-Object.assign(window.AIOps, {
-  fetchWithTimeout, initAuth,
-  setUser, roleLabel, canWrite, isAdmin,
-  openInitSetup, submitInitSetup,
-  openProfile, switchProfileTab, saveProfile, changePassword,
-  loadTermPwdStatus, toggleTermPwdChange, submitTermPwdChange,
-  renderMfaState, openMfaSetup, openMfaDisable, openMfaEmailUnbind,
-  openUsers, loadUsers, openUserEdit, usersAction,
-  openRecoverUser, openRecoverPass, showRecoverFlow,
-  logout,
-  get CUR_ROLE() { return CUR_ROLE; }, set CUR_ROLE(v) { CUR_ROLE = v; },
-  get MFA_ENABLED() { return MFA_ENABLED; }, set MFA_ENABLED(v) { MFA_ENABLED = v; },
-  get PROFILE_TAB() { return PROFILE_TAB; }, set PROFILE_TAB(v) { PROFILE_TAB = v; },
-  get PROFILE_USERS_LOADED() { return PROFILE_USERS_LOADED; }, set PROFILE_USERS_LOADED(v) { PROFILE_USERS_LOADED = v; },
-});

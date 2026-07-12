@@ -1,10 +1,19 @@
 /* ============================================================
-   AIOps Monitor · core.js — 全局变量、工具函数、路由、轮询、主题、通知
-   加载顺序：必须在所有其他模块之前加载
+   AIOps Monitor · 前端逻辑
+   数据源：/api/v1/{summary,hosts,alerts,events,config}
+   3 秒轮询（P1-2: 已改为差异化轮询频率）；事件委托绑定，避免内联 onclick 的转义隐患。
+
+   P2-1 模块拆分说明：
+   本文件可按功能域拆分为多个模块（服务端已支持 /js/ 路由）：
+   - js/app-core.js    : 全局变量、工具函数、路由、轮询、主题、通知
+   - js/app-render.js  : renderCards, renderHosts, renderAlerts, renderLog, renderTop
+   - js/app-chart.js   : createChart, drawChart, attachChartEvents（Canvas 图表引擎）
+   - js/app-terminal.js: VT100 仿真器、远程终端、会话回放
+   - js/app-auth.js    : initAuth, login, MFA, 用户管理
+   - js/app-automation.js: 剧本编排、批量执行
+   在 index.html 中按依赖顺序加载多个 <script> 标签即可。
    ============================================================ */
 "use strict";
-
-window.AIOps = window.AIOps || {};
 
 /* ===== UI/UX 审查修复（5.6 弹窗语义角色 / 6.4 全局加载指示） ===== */
 (function(){
@@ -85,8 +94,6 @@ function copyWithFeedback(btn, text, okMsg) {
     () => toast(I18N.t("toast.copy_failed"), "err")
   );
 }
-
-/* ---------- 全局状态变量 ---------- */
 let CUR_CATS = [];    // 当前分类多选筛选（空数组=全部）
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
@@ -116,7 +123,6 @@ let LAST_CATS_KEY = ""; // 用于检测分类列表是否变化
 let LAST_RENDER_KEY = ""; // P0-3: 用于差量更新检测
 let ALERT_TYPE = "";   // 告警类型筛选
 let ALERT_SEARCH = ""; // 告警主机搜索
-let LAST_ALERTS = [];
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
@@ -232,12 +238,8 @@ function toggleTheme() {
   localStorage.setItem("aiops_theme", next);
   syncThemeIcons(next);
   // 重绘所有已存在的 Canvas 图表，使其使用新的 CSS 变量颜色
-  if (typeof DETAIL_CHARTS !== "undefined") {
-    for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
-  }
-  if (typeof CHK_CHARTS !== "undefined") {
-    for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
-  }
+  for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
+  for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
 }
 /* 同步当前主题图标 */
 function syncThemeIcons(theme) {
@@ -349,6 +351,50 @@ function showSkeleton() {
   }
 }
 
+/* ============================================================
+   P0-3: 渲染性能优化 — 差量更新
+   ============================================================ */
+let HOST_DOM_CACHE = {}; // hostID -> { element, data }
+function updateHostCard(h) {
+  const existing = HOST_DOM_CACHE[h.id];
+  if (!existing) return false; // 新主机，需全量重建
+  const el = existing.element;
+  // 更新在线状态 class（卡片 + 状态灯）
+  el.classList.toggle("online", !!h.online);
+  el.classList.toggle("offline", !h.online);
+  const dot = el.querySelector(".dot");
+  if (dot) dot.className = "dot " + (h.online ? "on" : "off");
+  // 更新指标数值
+  const m = h.latest || {};
+  if (m.cpu_percent !== undefined) {
+    const cpuEl = el.querySelector("[data-metric=cpu]");
+    if (cpuEl) cpuEl.textContent = (m.cpu_percent || 0).toFixed(1) + "%";
+    const cpuBar = el.querySelector("[data-bar=cpu]");
+    if (cpuBar) { cpuBar.style.width = (m.cpu_percent || 0) + "%"; cpuBar.style.background = usageColor(m.cpu_percent); }
+  }
+  if (m.mem_percent !== undefined) {
+    const memEl = el.querySelector("[data-metric=mem]");
+    if (memEl) memEl.textContent = (m.mem_percent || 0).toFixed(1) + "%";
+    const memBar = el.querySelector("[data-bar=mem]");
+    if (memBar) { memBar.style.width = (m.mem_percent || 0) + "%"; memBar.style.background = usageColor(m.mem_percent); }
+  }
+  if (m.disk_percent !== undefined) {
+    const diskEl = el.querySelector("[data-metric=disk]");
+    if (diskEl) diskEl.textContent = (m.disk_percent || 0).toFixed(1) + "%";
+    const diskBar = el.querySelector("[data-bar=disk]");
+    if (diskBar) { diskBar.style.width = (m.disk_percent || 0) + "%"; diskBar.style.background = usageColor(m.disk_percent); }
+  }
+  existing.data = h;
+  return true;
+}
+function buildHostCache() {
+  HOST_DOM_CACHE = {};
+  document.querySelectorAll(".host").forEach(el => {
+    const id = el.dataset.id;
+    if (id) HOST_DOM_CACHE[id] = { element: el, data: null };
+  });
+}
+
 function toast(msg, kind) {
   const t = $("toast");
   t.textContent = msg;
@@ -388,359 +434,3 @@ function animateValue(el, from, to, duration = 400) {
   requestAnimationFrame(step);
 }
 
-/* ---------- 主循环 ---------- */
-function updateFavicon(critCount) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 16; canvas.height = 16;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#0a0d13"; ctx.fillRect(0, 0, 16, 16);
-  ctx.fillStyle = "#4c8dff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("AI", 8, 8.5);
-  if (critCount > 0) {
-    ctx.fillStyle = "#ef4d5a"; ctx.beginPath(); ctx.arc(13, 3, 3.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#fff"; ctx.font = "bold 5px sans-serif"; ctx.fillText(critCount > 9 ? "9+" : String(critCount), 13, 3.5);
-  }
-  let link = document.querySelector("link[rel=icon]");
-  if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
-  link.href = canvas.toDataURL();
-}
-
-async function refresh(force) {
-  if (PAUSED && !force) return;
-  try {
-    const rs = await fetch(`${API}/summary`);
-    if (rs.status === 401) { $("loginView").classList.add("show"); return; }
-    const s = await rs.json();
-    const [hosts, alerts, activity] = await Promise.all([
-      fetch(`${API}/hosts`).then(r => r.json()),
-      fetch(`${API}/alerts`).then(r => r.json()),
-      fetch(`${API}/activity`).then(r => r.json())
-    ]);
-    // P0-#2: Connection state feedback
-    if (FIRST_LOAD) { FIRST_LOAD = false; }
-    if (CONN_STATE !== "connected") {
-      if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
-      CONN_STATE = "connected";
-    }
-    // Filter hosts by category for overview
-    const filteredHosts = CUR_CATS.length > 0
-      ? hosts.filter(h => CUR_CATS.includes(h.category || I18N.t("section.uncategorized")))
-      : hosts;
-    // Compute overview stats from filtered hosts
-    if (CUR_CATS.length > 0) {
-      let online = 0;
-      filteredHosts.forEach(h => { if (h.online) online++; });
-      const filteredAlerts = alerts.filter(a => !a.host_id || filteredHosts.some(h => h.id === a.host_id));
-      s.total_hosts = filteredHosts.length;
-      s.online_hosts = online;
-      s.offline_hosts = filteredHosts.length - online;
-      s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
-      s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
-    }
-    renderCards(s); renderStatsHealth(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
-    updateFavicon(s.critical_alerts || 0);
-    notifyCriticalAlerts(s.critical_alerts || 0);
-    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse";
-  } catch (e) {
-    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse off";
-    if (CONN_STATE === "connected") {
-      CONN_STATE = "disconnected";
-      toast(I18N.t("ui.reconnecting"), "err");
-    }
-  }
-}
-
-// Helper function to safely add event listeners
-function safeAddEventListener(id, event, handler) {
-  const el = $(id);
-  if (el) {
-    el.addEventListener(event, handler);
-  } else {
-    console.warn(`Element with id "${id}" not found`);
-  }
-}
-
-// 暂停 / 恢复自动刷新
-function togglePause() {
-  PAUSED = !PAUSED;
-  const btn = $("pauseBtn");
-  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? I18N.t("toast.paused_click") : I18N.t("ui.pause_refresh"); }
-  const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = PAUSED ? "pulse paused" : "pulse";
-  toast(PAUSED ? I18N.t("toast.paused") : I18N.t("toast.resumed"), "ok");
-  if (!PAUSED) refresh(true);
-}
-
-// 一键清理所有离线主机
-async function purgeOffline() {
-  const off = LAST_HOSTS.filter(h => !h.online);
-  if (!off.length) { toast(I18N.t("empty.no_offline_hosts"), "ok"); return; }
-  if (!confirm(`确认清理 ${off.length} 台离线主机？\n若其 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
-  let ok = 0;
-  for (const h of off) {
-    try { const r = await fetch(`${API}/hosts/${encodeURIComponent(h.id)}`, { method: "DELETE" }); if (r.ok) ok++; } catch (e) { /* skip */ }
-  }
-  toast(I18N.t("toast.cleaned") + ok + I18N.t("toast.hosts_cleaned"), "ok");
-  refresh(true);
-}
-
-/* ---------- 事件绑定（委托） ---------- */
-const groupsEl = $("groups");
-
-/* ---------- Multi-select category dropdown ---------- */
-function getSelectedCats() {
-  try { const s = localStorage.getItem("aiops_cats"); if (s) return JSON.parse(s); } catch (e) {}
-  return [];
-}
-function setSelectedCats(arr) {
-  CUR_CATS = arr;
-  try { localStorage.setItem("aiops_cats", JSON.stringify(arr)); } catch (e) {}
-}
-function catCollapsed(cat) {
-  try { const s = localStorage.getItem("aiops_collapsed"); if (s) { const arr = JSON.parse(s); return arr.includes(cat); } } catch (e) {}
-  return false;
-}
-function toggleCatCollapse(cat) {
-  let arr = [];
-  try { const s = localStorage.getItem("aiops_collapsed"); if (s) arr = JSON.parse(s); } catch (e) {}
-  const i = arr.indexOf(cat);
-  if (i >= 0) arr.splice(i, 1); else arr.push(cat);
-  try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
-}
-function renderCatDropdown(cats) {
-  const wrap = $("catDropdownWrap") ? $("catDropdownWrap").parentElement : null;
-  if (!wrap) return; // 分类筛选已移除
-  if (wrap.querySelector(".cat-dropdown")) {
-    updateCatDropdownOptions(cats);
-    return;
-  }
-  const oldSel = $("catFilter");
-  if (oldSel) oldSel.remove();
-  wrap.innerHTML = `<div class="cat-dropdown" id="catDropdownWrap">
-    <button class="cat-dd-btn" id="catDropdownBtn"><span id="catDropdownLabel">${I18N.t("ui.all_categories")}</span> <span class="dd-arrow">▾</span></button>
-    <div class="cat-dd-menu" id="catDropdownMenu"></div>
-  </div>`;
-  updateCatDropdownOptions(cats);
-  $("catDropdownBtn").addEventListener("click", e => {
-    e.stopPropagation();
-    $("catDropdownMenu").classList.toggle("show");
-  });
-  document.addEventListener("click", e => {
-    const menu = $("catDropdownMenu");
-    if (menu && !e.target.closest(".cat-dropdown")) menu.classList.remove("show");
-  });
-}
-function updateCatDropdownOptions(cats) {
-  const menu = $("catDropdownMenu");
-  if (!menu) return;
-  CUR_CATS = CUR_CATS.filter(c => cats.includes(c));
-  const newKey = cats.join("\u0001");
-  if (newKey === LAST_CATS_KEY) {
-    menu.querySelectorAll("input").forEach(inp => {
-      if (inp.value === "") inp.checked = CUR_CATS.length === 0;
-      else inp.checked = CUR_CATS.includes(inp.value);
-    });
-    updateCatDropdownLabel();
-    return;
-  }
-  LAST_CATS_KEY = newKey;
-  menu.innerHTML = `<label class="cat-dd-opt"><input type="checkbox" value="" ${CUR_CATS.length === 0 ? "checked" : ""}> 全部分类</label>` +
-    cats.map(c => `<label class="cat-dd-opt"><input type="checkbox" value="${esc(c)}" ${CUR_CATS.includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("");
-  menu.querySelectorAll("input").forEach(inp => {
-    inp.addEventListener("change", () => {
-      if (inp.value === "") {
-        if (inp.checked) {
-          menu.querySelectorAll("input").forEach(x => { if (x !== inp) x.checked = false; });
-          setSelectedCats([]);
-        }
-      } else {
-        menu.querySelector('input[value=""]').checked = false;
-        const selected = [...menu.querySelectorAll('input:checked')].map(x => x.value).filter(v => v !== "");
-        setSelectedCats(selected);
-      }
-      HOST_PAGE = 1;
-      updateCatDropdownLabel();
-      renderHosts(LAST_HOSTS);
-    });
-  });
-  updateCatDropdownLabel();
-}
-function updateCatDropdownLabel() {
-  const label = $("catDropdownLabel");
-  if (!label) return;
-  const btn = $("catDropdownBtn");
-  if (CUR_CATS.length === 0) {
-    label.textContent = I18N.t("section.all_categories");
-    if (btn) btn.classList.remove("filtered");
-  } else {
-    if (CUR_CATS.length <= 2) label.textContent = CUR_CATS.join(", ");
-    else label.textContent = CUR_CATS.length + " 个分类";
-    if (btn) btn.classList.add("filtered");
-  }
-}
-
-/* ---------- Host filters ---------- */
-function filterHosts(value) {
-  HOST_FILTER = value;
-  HOST_PAGE = 1;
-  renderHosts(LAST_HOSTS);
-}
-function sortHosts(value) {
-  HOST_SORT = value;
-  HOST_PAGE = 1;
-  renderHosts(LAST_HOSTS);
-}
-
-/* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
-const navItems = document.querySelectorAll(".nav-item");
-const PAGE_META = {
-  overview: { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") },
-  hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
-  alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
-  checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
-  automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
-  forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
-  sre:      { title: I18N.t("section.sre"), sub: I18N.t("section.sre_desc") },
-  logs:     { title: I18N.t("section.logs"), sub: I18N.t("section.logs_desc") },
-  log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
-};
-function rebuildPageMeta() {
-  PAGE_META.overview   = { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") };
-  PAGE_META.hosts      = { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") };
-  PAGE_META.alerts     = { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") };
-  PAGE_META.checks     = { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") };
-  PAGE_META.automation = { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") };
-  PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
-  PAGE_META.log        = { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") };
-}
-function switchView(view) {
-  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
-  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === view));
-  const meta = PAGE_META[view];
-  if (meta) {
-    const t = $("pageTitle"), s = $("pageSub");
-    if (t) t.textContent = meta.title;
-    if (s) s.textContent = meta.sub;
-  }
-  if (view === "automation") loadPlaybooks();
-  if (view === "forward") loadForwards();
-  if (view === "sre") loadSRE();
-  if (view === "logs") loadLogs();
-  window.scrollTo(0, 0);
-}
-
-/* ---------- 读取本地偏好并应用 ---------- */
-function initPrefs() {
-  try { const cv = localStorage.getItem("aiops_check_view"); if (cv === "pill" || cv === "list") CHECK_VIEW = cv; } catch (e) {}
-  try { const hv = localStorage.getItem("aiops_host_view"); if (hv === "list" || hv === "card") HOST_VIEW = hv; } catch (e) {}
-  if (HOST_VIEW !== "list" && HOST_VIEW !== "card") HOST_VIEW = "card";
-  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
-  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
-}
-
-/* ---------- Alert filter helpers ---------- */
-function filterAlertsByType(type) {
-  ALERT_TYPE = type;
-  document.querySelectorAll("#alertFilter .chip-btn").forEach(b => b.classList.toggle("active", b.dataset.atype === type));
-  renderAlerts(LAST_ALERTS);
-}
-
-/* ---------- 设置自定义监控视图 ---------- */
-function setCheckView(view) {
-  CHECK_VIEW = view;
-  try { localStorage.setItem("aiops_check_view", view); } catch (e) {}
-  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === view));
-  renderChecks(LAST_CHECKS);
-}
-function setHostView(view) {
-  HOST_VIEW = view;
-  try { localStorage.setItem("aiops_host_view", view); } catch (e) {}
-  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === view));
-  HOST_PAGE = 1;
-  renderHosts(LAST_HOSTS);
-}
-
-/* ============================================================
-   P3-1: WebSocket 推送（替代轮询，带降级）
-   ============================================================ */
-let PUSH_WS = null;
-let PUSH_CONNECTED = false;
-let PUSH_RETRY = 0;
-
-function initPushWS() {
-  if (!window.WebSocket || (!window.isSecureContext && location.hostname !== "localhost")) return;
-  try {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    PUSH_WS = new WebSocket(proto + "//" + location.host + "/ws/push");
-    PUSH_WS.onopen = () => {
-      PUSH_CONNECTED = true;
-      PUSH_RETRY = 0;
-    };
-    PUSH_WS.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "summary" && msg.data) {
-          renderCards(msg.data);
-          updateFavicon(msg.data.critical_alerts || 0);
-          notifyCriticalAlerts(msg.data.critical_alerts || 0);
-        } else if (msg.type === "alerts" && msg.data) {
-          renderAlerts(msg.data);
-        } else if (msg.type === "hosts" && msg.data) {
-          renderHosts(msg.data);
-        }
-      } catch(err) {}
-    };
-    PUSH_WS.onclose = () => {
-      PUSH_CONNECTED = false;
-      PUSH_RETRY++;
-      if (PUSH_RETRY <= 10) {
-        setTimeout(() => initPushWS(), Math.min(30000, 1000 * Math.pow(2, PUSH_RETRY)));
-      }
-    };
-    PUSH_WS.onerror = () => { try { PUSH_WS.close(); } catch(e) {} };
-  } catch(e) {}
-}
-
-/* ============================================================
-   离线检测
-   ============================================================ */
-window.addEventListener("online", () => {
-  toast(I18N.t("toast.network_recovered"), "ok");
-  refresh(true);
-});
-window.addEventListener("offline", () => {
-  toast(I18N.t("toast.network_disconnected"), "err");
-});
-
-/* ============================================================
-   侧栏实时时钟
-   ============================================================ */
-function updateSideClock() {
-  const el = $("sideClock");
-  if (!el) return;
-  const now = new Date();
-  const pad = n => String(n).padStart(2, "0");
-  el.textContent = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-}
-
-// 导出到 AIOps 命名空间
-Object.assign(window.AIOps, {
-  API, $, esc, withLoading, toast, icon, bar, animateValue,
-  fmtRate, fmtIORate, fmtIOPS, fmtGB, fmtUptime, fmtDateTime, fmtDur,
-  usageColor, ago, translateLogKind, translateLogLevel, translateExecStatus, translateStepStatus,
-  isSystemMount, pwPolicyOK, copyToClipboard, copyWithFeedback,
-  initTheme, toggleTheme, syncThemeIcons,
-  initNotifications, requestNotificationPermission, notifyCriticalAlerts,
-  trapFocus, releaseFocus, closeMask, openMask, showSkeleton,
-  safeAddEventListener, refresh, updateFavicon, togglePause, purgeOffline,
-  getSelectedCats, setSelectedCats, catCollapsed, toggleCatCollapse,
-  renderCatDropdown, updateCatDropdownOptions, updateCatDropdownLabel,
-  filterHosts, sortHosts, filterAlertsByType, filterLogsByLevel, filterLogsByTime,
-  switchView, rebuildPageMeta, initPrefs, setCheckView, setHostView,
-  initPushWS, updateSideClock,
-  get CUR_CATS() { return CUR_CATS; }, set CUR_CATS(v) { CUR_CATS = v; },
-  get LAST_HOSTS() { return LAST_HOSTS; }, set LAST_HOSTS(v) { LAST_HOSTS = v; },
-  get PAUSED() { return PAUSED; }, set PAUSED(v) { PAUSED = v; },
-  get CONN_STATE() { return CONN_STATE; }, set CONN_STATE(v) { CONN_STATE = v; },
-  get FIRST_LOAD() { return FIRST_LOAD; }, set FIRST_LOAD(v) { FIRST_LOAD = v; },
-  get TERMINAL_ENABLED() { return TERMINAL_ENABLED; }, set TERMINAL_ENABLED(v) { TERMINAL_ENABLED = v; },
-});

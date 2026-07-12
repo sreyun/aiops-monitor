@@ -1,12 +1,3 @@
-/* ============================================================
-   AIOps Monitor · automation.js — 自动化运维：剧本编排、SRE 中枢、AI 巡检、Hermes Agent
-   依赖：core.js（$, esc, toast, withLoading, safeAddEventListener, fmtDateTime, AIOps 命名空间）
-   加载顺序：在 core.js / render.js / charts.js / terminal.js / auth.js 之后，app.js 之前
-   ============================================================ */
-"use strict";
-
-window.AIOps = window.AIOps || {};
-
 /* ===================== 自动化运维：剧本编排 + 批量执行 ===================== */
 let PB_HOSTS = []; // cached full host list for target selection
 let PB_CATS = []; // cached unique categories
@@ -167,6 +158,8 @@ function pbTargetPreview(sel) {
     count = PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
   } else if (target.startsWith("system:")) {
     const sys = target.slice("system:".length);
+    // Match by h.os (runtime.GOOS: "linux"/"windows"/"darwin"), not h.platform
+    // (which is a version string). macOS hosts have h.os="darwin".
     count = PB_HOSTS.filter(h => {
       const os = (h.os || "").toLowerCase();
       return os === sys || (sys === "macos" && os === "darwin");
@@ -702,7 +695,6 @@ async function addTicketComment(){
   $("tkCommentInput").value=""; const tk=await fetch(`${API}/tickets/${id}`).then(r=>r.json()); openTicketModal(tk); loadTickets();
 }
 
-// SRE event listeners
 document.querySelectorAll("#sreTabs .chip-btn").forEach(b=>b.addEventListener("click",()=>switchSRETab(b.dataset.sretab)));
 safeAddEventListener("newIncidentBtn","click",openNewIncident);
 safeAddEventListener("niSaveBtn","click",saveNewIncident);
@@ -902,22 +894,20 @@ safeAddEventListener("hermesBtn","click",openHermesChat);
 safeAddEventListener("hermesChatSendBtn","click",sendHermesChat);
 safeAddEventListener("hermesChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHermesChat(); } });
 
-// 导出到 AIOps 命名空间
-Object.assign(window.AIOps, {
-  loadPlaybooks, renderPlaybooks, openPlaybookModal, savePlaybook, executePlaybook,
-  loadExecHistory, renderExecResult,
-  pbTargetPreview, pbSchedRefresh, collectPlaybook,
-  loadSRE, loadSREBadge, switchSRETab,
-  loadIncidents, openIncidentDetail, incidentAction,
-  loadRemediation, openRuleModal, saveRule,
-  loadSLOs, openSloModal, saveSlo,
-  loadTickets, openTicketModal, saveTicket, addTicketComment,
-  loadLogs, searchLogs,
-  loadInspections, runInspect, openAIConfig, setAIPreset, saveAIConfig, testAIConfig,
-  openAIChat, sendAIChat, appendChatMsg,
-  openHermesChat, sendHermesChat, appendHermesMsg,
-  readSSEStream,
-  get SRE_HOSTS() { return SRE_HOSTS; }, set SRE_HOSTS(v) { SRE_HOSTS = v; },
-  get SRE_PLAYBOOKS() { return SRE_PLAYBOOKS; }, set SRE_PLAYBOOKS(v) { SRE_PLAYBOOKS = v; },
-  get SRE_TAB() { return SRE_TAB; }, set SRE_TAB(v) { SRE_TAB = v; },
+// 终端会话管理 + 回放 + 旁观
+safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
+// 终端会话搜索
+safeAddEventListener("termSessionSearch", "input", e => {
+  TERM_SEARCH = e.target.value;
+  renderTerminalSessions(LAST_TERM_SESSIONS);
 });
+safeAddEventListener("replayPlayBtn", "click", () => { if (REPLAY && REPLAY.playing) pauseReplay(); else playReplay(); });
+safeAddEventListener("replayProgressBg", "click", e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const progress = (e.clientX - rect.left) / rect.width;
+  seekReplay(Math.max(0, Math.min(1, progress)));
+});
+document.querySelectorAll(".replay-speed-btn").forEach(btn => {
+  btn.addEventListener("click", () => setReplaySpeed(parseFloat(btn.dataset.speed)));
+});
+

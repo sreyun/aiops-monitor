@@ -1488,9 +1488,15 @@
 <script src="/i18n-dashboard.en.js"></script>
 <script src="/i18n-dashboard.zh-TW.js"></script>
 <script src="/i18n-dashboard.js"></script>
-<!-- JS 模块：按依赖顺序加载（core → render → charts → terminal → auth → automation → app） -->
-<!-- 前端 JS 模块拆分(commit e810457)因编码损坏(app.js 变 mojibake→SyntaxError)已回退：
-     恢复为单文件干净 app.js。模块拆分需用正确 UTF-8 处理后重做。 -->
-<script src="/app.js" defer></script>
+<!-- 前端 JS 按功能模块加载（字节安全物理切分自 app.js：cat 拼回逐字节==原文、逐个 node --check 通过、
+     顺序即原文件顺序 → 运行时行为与单文件完全一致）。禁止在模块间重复声明同名 const/let。 -->
+<script src="/js/core.js" defer></script>
+<script src="/js/overview.js" defer></script>
+<script src="/js/hosts.js" defer></script>
+<script src="/js/terminal.js" defer></script>
+<script src="/js/settings.js" defer></script>
+<script src="/js/nav.js" defer></script>
+<script src="/js/sre.js" defer></script>
+<script src="/js/init.js" defer></script>
 </body>
 </html>

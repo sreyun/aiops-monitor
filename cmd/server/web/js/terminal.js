@@ -1,12 +1,3 @@
-/* ============================================================
-   AIOps Monitor · terminal.js — 远程终端、VT100 仿真、会话管理、回放、ZMODEM
-   依赖：core.js（$, esc, toast, safeAddEventListener, copyToClipboard, AIOps 命名空间）
-   加载顺序：在 core.js 之后，auth.js 之前
-   ============================================================ */
-"use strict";
-
-window.AIOps = window.AIOps || {};
-
 /* ---------- 远程终端（经 Agent 反向通道）· 多标签 ---------- */
 let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
 let TERM_ACTIVE = -1;    // active tab index
@@ -454,6 +445,10 @@ function createTermTab(id, name, tabName) {
   screen.addEventListener("focus", function() {
     if (input && document.activeElement !== input) input.focus({ preventScroll: true });
   });
+  // 右键菜单（暂时禁用，待修复后重新启用）
+  // screen.addEventListener("contextmenu", function(ev) {
+  //   showTermContextMenu(tabObj, ev);
+  // });
   // JS fallback for :focus-within — toggle .term-focused class on screen
   // This ensures cursor blink animation works on iOS Safari where :focus-within
   // may not trigger for opacity:0 elements
@@ -1054,6 +1049,81 @@ function termRefit() {
   const tab = TERM_TABS[TERM_ACTIVE];
   if (tab.vt && tab.ws) { const s = tab.vt.fit(); if (s && tab.ws.readyState === 1) termResizeSend(tab.ws, s.cols, s.rows); }
 }
+// 放大 / 还原 终端窗口
+safeAddEventListener("termMaxBtn", "click", () => {
+  const mask = $("termMask"); if (!mask) return;
+  const max = mask.classList.toggle("maximized");
+  const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
+  requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
+});
+// 收起到右下角
+safeAddEventListener("termMinBtn", "click", () => {
+  minimizeTerminal();
+});
+// 文件上传
+safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
+// 文件下载
+safeAddEventListener("termDownloadBtn", "click", () => startTermFileDownload());
+
+/* ---------- v5.3.0: 终端二次认证弹窗事件绑定 ---------- */
+// 协议弹窗：勾选启用继续按钮
+safeAddEventListener("termProtocolAgree", "change", function() {
+  $("termProtocolContinue").disabled = !this.checked;
+});
+// 协议弹窗：同意并继续
+safeAddEventListener("termProtocolContinue", "click", onTermProtocolAgreed);
+// 协议弹窗：关闭（取消）
+$("termProtocolMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    cancelTermAuth();
+  }
+});
+
+// 密码设置弹窗：提交
+safeAddEventListener("termSetPwdBtn", "click", submitTermSetPassword);
+// 密码设置弹窗：取消
+safeAddEventListener("termSetPwdCancel", "click", function() {
+  $("termSetPwdMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termSetPwdMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termSetPwdMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码设置弹窗：回车提交
+safeAddEventListener("termSetPwd", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+safeAddEventListener("termSetPwd2", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
+// 密码设置弹窗：显示/隐藏密码
+safeAddEventListener("termSetPwdToggle", "click", function() { toggleTermPwdVisibility("termSetPwd", "termSetPwdToggle"); });
+safeAddEventListener("termSetPwd2Toggle", "click", function() { toggleTermPwdVisibility("termSetPwd2", "termSetPwd2Toggle"); });
+
+// 密码验证弹窗：提交
+safeAddEventListener("termVerifyBtn", "click", submitTermVerify);
+// 密码验证弹窗：取消
+safeAddEventListener("termVerifyCancel", "click", function() {
+  $("termVerifyMask").classList.remove("show");
+  cancelTermAuth();
+});
+$("termVerifyMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termVerifyMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
+// 密码验证弹窗：回车提交
+safeAddEventListener("termVerifyPwd", "keydown", function(e) { if (e.key === "Enter") submitTermVerify(); });
+// 密码验证弹窗：显示/隐藏密码
+safeAddEventListener("termVerifyPwdToggle", "click", function() { toggleTermPwdVisibility("termVerifyPwd", "termVerifyPwdToggle"); });
+
+// 锁定弹窗：关闭
+$("termLockedMask").addEventListener("click", function(e) {
+  if (e.target === this || e.target.closest("[data-close-btn]")) {
+    $("termLockedMask").classList.remove("show");
+    cancelTermAuth();
+  }
+});
 
 function setTermStatus(txt, cls) {
   const s = $("termStatus"); if (s) { s.textContent = txt; s.className = "term-status" + (cls ? " " + cls : ""); }
@@ -1630,101 +1700,3 @@ function makeVT(screen) {
   return vt;
 }
 
-/* ---------- 终端事件绑定 ---------- */
-// 放大 / 还原 终端窗口
-safeAddEventListener("termMaxBtn", "click", () => {
-  const mask = $("termMask"); if (!mask) return;
-  const max = mask.classList.toggle("maximized");
-  const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
-  requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
-});
-// 收起到右下角
-safeAddEventListener("termMinBtn", "click", () => {
-  minimizeTerminal();
-});
-// 文件上传
-safeAddEventListener("termUploadBtn", "click", () => startTermFileUpload());
-// 文件下载
-safeAddEventListener("termDownloadBtn", "click", () => startTermFileDownload());
-
-/* ---------- v5.3.0: 终端二次认证弹窗事件绑定 ---------- */
-// 协议弹窗：勾选启用继续按钮
-safeAddEventListener("termProtocolAgree", "change", function() {
-  $("termProtocolContinue").disabled = !this.checked;
-});
-// 协议弹窗：同意并继续
-safeAddEventListener("termProtocolContinue", "click", onTermProtocolAgreed);
-// 协议弹窗：关闭（取消）
-$("termProtocolMask").addEventListener("click", function(e) {
-  if (e.target === this || e.target.closest("[data-close-btn]")) {
-    cancelTermAuth();
-  }
-});
-
-// 密码设置弹窗：提交
-safeAddEventListener("termSetPwdBtn", "click", submitTermSetPassword);
-// 密码设置弹窗：取消
-safeAddEventListener("termSetPwdCancel", "click", function() {
-  $("termSetPwdMask").classList.remove("show");
-  cancelTermAuth();
-});
-$("termSetPwdMask").addEventListener("click", function(e) {
-  if (e.target === this || e.target.closest("[data-close-btn]")) {
-    $("termSetPwdMask").classList.remove("show");
-    cancelTermAuth();
-  }
-});
-// 密码设置弹窗：回车提交
-safeAddEventListener("termSetPwd", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
-safeAddEventListener("termSetPwd2", "keydown", function(e) { if (e.key === "Enter") submitTermSetPassword(); });
-// 密码设置弹窗：显示/隐藏密码
-safeAddEventListener("termSetPwdToggle", "click", function() { toggleTermPwdVisibility("termSetPwd", "termSetPwdToggle"); });
-safeAddEventListener("termSetPwd2Toggle", "click", function() { toggleTermPwdVisibility("termSetPwd2", "termSetPwd2Toggle"); });
-
-// 密码验证弹窗：提交
-safeAddEventListener("termVerifyBtn", "click", submitTermVerify);
-// 密码验证弹窗：取消
-safeAddEventListener("termVerifyCancel", "click", function() {
-  $("termVerifyMask").classList.remove("show");
-  cancelTermAuth();
-});
-$("termVerifyMask").addEventListener("click", function(e) {
-  if (e.target === this || e.target.closest("[data-close-btn]")) {
-    $("termVerifyMask").classList.remove("show");
-    cancelTermAuth();
-  }
-});
-// 密码验证弹窗：回车提交
-safeAddEventListener("termVerifyPwd", "keydown", function(e) { if (e.key === "Enter") submitTermVerify(); });
-// 密码验证弹窗：显示/隐藏密码
-safeAddEventListener("termVerifyPwdToggle", "click", function() { toggleTermPwdVisibility("termVerifyPwd", "termVerifyPwdToggle"); });
-
-// 锁定弹窗：关闭
-$("termLockedMask").addEventListener("click", function(e) {
-  if (e.target === this || e.target.closest("[data-close-btn]")) {
-    $("termLockedMask").classList.remove("show");
-    cancelTermAuth();
-  }
-});
-
-/* ---------- 挂载到 AIOps 命名空间 ---------- */
-Object.assign(window.AIOps, {
-  openTerminal,
-  closeTerminalWS,
-  closeAllTermTabs,
-  openTerminalSessions,
-  openTerminalReplay,
-  openTerminalObserve,
-  closeReplay,
-  closeObserveWS,
-  minimizeTerminal,
-  updateTermDock,
-  clearTermDock,
-  expandTermFromDock,
-  closeTermFromDock,
-  termRefit,
-  termKeyDown,
-  makeVT,
-  vt256,
-  vtEsc
-});

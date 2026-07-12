@@ -1,0 +1,710 @@
+/* ---------- 主循环 ---------- */
+function updateFavicon(critCount) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 16; canvas.height = 16;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0a0d13"; ctx.fillRect(0, 0, 16, 16);
+  ctx.fillStyle = "#4c8dff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("AI", 8, 8.5);
+  if (critCount > 0) {
+    ctx.fillStyle = "#ef4d5a"; ctx.beginPath(); ctx.arc(13, 3, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 5px sans-serif"; ctx.fillText(critCount > 9 ? "9+" : String(critCount), 13, 3.5);
+  }
+  let link = document.querySelector("link[rel=icon]");
+  if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+  link.href = canvas.toDataURL();
+}
+async function refresh(force) {
+  if (PAUSED && !force) return;
+  try {
+    const rs = await fetch(`${API}/summary`);
+    if (rs.status === 401) { $("loginView").classList.add("show"); return; }
+    const s = await rs.json();
+    const [hosts, alerts, activity] = await Promise.all([
+      fetch(`${API}/hosts`).then(r => r.json()),
+      fetch(`${API}/alerts`).then(r => r.json()),
+      fetch(`${API}/activity`).then(r => r.json())
+    ]);
+    // P0-#2: Connection state feedback
+    if (FIRST_LOAD) { FIRST_LOAD = false; }
+    if (CONN_STATE !== "connected") {
+      if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
+      CONN_STATE = "connected";
+    }
+    // Filter hosts by category for overview
+    const filteredHosts = CUR_CATS.length > 0
+      ? hosts.filter(h => CUR_CATS.includes(h.category || I18N.t("section.uncategorized")))
+      : hosts;
+    // Compute overview stats from filtered hosts
+    if (CUR_CATS.length > 0) {
+      let online = 0;
+      filteredHosts.forEach(h => { if (h.online) online++; });
+      const filteredAlerts = alerts.filter(a => !a.host_id || filteredHosts.some(h => h.id === a.host_id));
+      s.total_hosts = filteredHosts.length;
+      s.online_hosts = online;
+      s.offline_hosts = filteredHosts.length - online;
+      s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
+      s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
+    }
+    renderCards(s); renderStatsHealth(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
+    updateFavicon(s.critical_alerts || 0);
+    notifyCriticalAlerts(s.critical_alerts || 0);
+    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse";
+  } catch (e) {
+    const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse off";
+    if (CONN_STATE === "connected") {
+      CONN_STATE = "disconnected";
+      toast(I18N.t("ui.reconnecting"), "err");
+    }
+  }
+}
+
+/* ---------- 事件绑定（委托） ---------- */
+const groupsEl = $("groups");
+// 折叠功能已临时停用：移除 group-head 点击事件委托中的 toggleCatCollapse 逻辑
+if (groupsEl) {
+  groupsEl.addEventListener("click", e => {
+    const host = e.target.closest(".host"); if (!host) return;
+    const act = e.target.closest("[data-act]");
+    const { id, name, cat } = host.dataset;
+    if (act) {
+      if (act.dataset.act === "detail") openDetail(id, name);
+      else if (act.dataset.act === "cat") editCategory(id, cat);
+      else if (act.dataset.act === "del") delHost(id, name);
+      else if (act.dataset.act === "term") openTerminal(id, name);
+    } else {
+      // 点击主机卡片/行内任意非操作按钮区域（进度条、负载、底部等）→ 打开详情
+      openDetail(id, name);
+    }
+  });
+}
+
+/* ---------- Multi-select category dropdown ---------- */
+function getSelectedCats() {
+  try { const s = localStorage.getItem("aiops_cats"); if (s) return JSON.parse(s); } catch (e) {}
+  return [];
+}
+function setSelectedCats(arr) {
+  CUR_CATS = arr;
+  try { localStorage.setItem("aiops_cats", JSON.stringify(arr)); } catch (e) {}
+}
+function catCollapsed(cat) {
+  try { const s = localStorage.getItem("aiops_collapsed"); if (s) { const arr = JSON.parse(s); return arr.includes(cat); } } catch (e) {}
+  return false;
+}
+function toggleCatCollapse(cat) {
+  let arr = [];
+  try { const s = localStorage.getItem("aiops_collapsed"); if (s) arr = JSON.parse(s); } catch (e) {}
+  const i = arr.indexOf(cat);
+  if (i >= 0) arr.splice(i, 1); else arr.push(cat);
+  try { localStorage.setItem("aiops_collapsed", JSON.stringify(arr)); } catch (e) {}
+}
+function renderCatDropdown(cats) {
+  const wrap = $("catDropdownWrap") ? $("catDropdownWrap").parentElement : null;
+  if (!wrap) return; // 分类筛选已移除
+  if (wrap.querySelector(".cat-dropdown")) {
+    // Update options in existing dropdown
+    updateCatDropdownOptions(cats);
+    return;
+  }
+  // Remove native select
+  const oldSel = $("catFilter");
+  if (oldSel) oldSel.remove();
+  wrap.innerHTML = `<div class="cat-dropdown" id="catDropdownWrap">
+    <button class="cat-dd-btn" id="catDropdownBtn"><span id="catDropdownLabel">${I18N.t("ui.all_categories")}</span> <span class="dd-arrow">▾</span></button>
+    <div class="cat-dd-menu" id="catDropdownMenu"></div>
+  </div>`;
+  updateCatDropdownOptions(cats);
+  // Toggle menu
+  $("catDropdownBtn").addEventListener("click", e => {
+    e.stopPropagation();
+    $("catDropdownMenu").classList.toggle("show");
+  });
+  document.addEventListener("click", e => {
+    const menu = $("catDropdownMenu");
+    if (menu && !e.target.closest(".cat-dropdown")) menu.classList.remove("show");
+  });
+}
+function updateCatDropdownOptions(cats) {
+  const menu = $("catDropdownMenu");
+  if (!menu) return;
+  // Clean stale selections
+  CUR_CATS = CUR_CATS.filter(c => cats.includes(c));
+  // P0-#1: Only rebuild DOM when category list actually changes
+  const newKey = cats.join("\u0001");
+  if (newKey === LAST_CATS_KEY) {
+    // Same categories: just sync checkbox states without rebuilding DOM
+    menu.querySelectorAll("input").forEach(inp => {
+      if (inp.value === "") inp.checked = CUR_CATS.length === 0;
+      else inp.checked = CUR_CATS.includes(inp.value);
+    });
+    updateCatDropdownLabel();
+    return;
+  }
+  LAST_CATS_KEY = newKey;
+  menu.innerHTML = `<label class="cat-dd-opt"><input type="checkbox" value="" ${CUR_CATS.length === 0 ? "checked" : ""}> 全部分类</label>` +
+    cats.map(c => `<label class="cat-dd-opt"><input type="checkbox" value="${esc(c)}" ${CUR_CATS.includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("");
+  menu.querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("change", () => {
+      if (inp.value === "") {
+        if (inp.checked) {
+          menu.querySelectorAll("input").forEach(x => { if (x !== inp) x.checked = false; });
+          setSelectedCats([]);
+        }
+      } else {
+        menu.querySelector('input[value=""]').checked = false;
+        const selected = [...menu.querySelectorAll('input:checked')].map(x => x.value).filter(v => v !== "");
+        setSelectedCats(selected);
+      }
+      HOST_PAGE = 1;
+      updateCatDropdownLabel();
+      renderHosts(LAST_HOSTS);
+    });
+  });
+  updateCatDropdownLabel();
+}
+function updateCatDropdownLabel() {
+  const label = $("catDropdownLabel");
+  if (!label) return;
+  const btn = $("catDropdownBtn");
+  if (CUR_CATS.length === 0) {
+    label.textContent = I18N.t("section.all_categories");
+    if (btn) btn.classList.remove("filtered");
+  } else {
+    if (CUR_CATS.length <= 2) label.textContent = CUR_CATS.join(", ");
+    else label.textContent = CUR_CATS.length + " 个分类";
+    if (btn) btn.classList.add("filtered");
+  }
+}
+
+/* ---------- Host filters ---------- */
+function filterHosts(value) {
+  HOST_FILTER = value;
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
+
+function sortHosts(value) {
+  HOST_SORT = value;
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
+
+// 暂停 / 恢复自动刷新
+function togglePause() {
+  PAUSED = !PAUSED;
+  const btn = $("pauseBtn");
+  if (btn) { btn.classList.toggle("active", PAUSED); btn.title = PAUSED ? I18N.t("toast.paused_click") : I18N.t("ui.pause_refresh"); }
+  const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = PAUSED ? "pulse paused" : "pulse";
+  toast(PAUSED ? I18N.t("toast.paused") : I18N.t("toast.resumed"), "ok");
+  if (!PAUSED) refresh(true);
+}
+
+// 一键清理所有离线主机
+async function purgeOffline() {
+  const off = LAST_HOSTS.filter(h => !h.online);
+  if (!off.length) { toast(I18N.t("empty.no_offline_hosts"), "ok"); return; }
+  if (!confirm(`确认清理 ${off.length} 台离线主机？\n若其 Agent 仍在运行，约 60 秒后会重新出现。`)) return;
+  let ok = 0;
+  for (const h of off) {
+    try { const r = await fetch(`${API}/hosts/${encodeURIComponent(h.id)}`, { method: "DELETE" }); if (r.ok) ok++; } catch (e) { /* skip */ }
+  }
+  toast(I18N.t("toast.cleaned") + ok + I18N.t("toast.hosts_cleaned"), "ok");
+  refresh(true);
+}
+
+// Helper function to safely add event listeners
+function safeAddEventListener(id, event, handler) {
+  const el = $(id);
+  if (el) {
+    el.addEventListener(event, handler);
+  } else {
+    console.warn(`Element with id "${id}" not found`);
+  }
+}
+
+// 注：settingsBtn / themeToggle / topbarThemeBtn 已移入右上角用户下拉菜单
+// 侧栏菜单
+safeAddEventListener("saveBtn", "click", saveSettings);
+safeAddEventListener("testBtn", "click", testSettings);
+safeAddEventListener("installBtn", "click", openInstall);
+safeAddEventListener("resetTokenBtn", "click", resetToken);
+safeAddEventListener("tokenToggleBtn", "click", function() {
+  TOKEN_REVEALED = !TOKEN_REVEALED;
+  updateTokenDisplay();
+  this.title = TOKEN_REVEALED ? I18N.t("ui.hide_token") : I18N.t("ui.show_token");
+});
+safeAddEventListener("copyCmdBtn", "click", function() {
+  copyWithFeedback(this, $("installCmd").textContent, I18N.t("toast.copy_install"));
+});
+// 点击命令区域本身也可复制
+safeAddEventListener("installCmd", "click", function() {
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(this);
+  sel.addRange(range);
+});
+safeAddEventListener("installCategory", "input", renderInstallCmd);
+safeAddEventListener("osTabs", "click", e => {
+  const t = e.target.closest(".tab"); if (!t) return;
+  CUR_OS = t.dataset.os;
+  document.querySelectorAll("#osTabs .tab").forEach(x => x.classList.toggle("active", x === t));
+  renderInstallCmd();
+});
+safeAddEventListener("copyUninstallBtn", "click", function() {
+  copyWithFeedback(this, $("uninstallCmd").textContent, I18N.t("toast.copy_uninstall"));
+});
+// 安装模式切换（radio buttons）
+document.querySelectorAll('input[name="installMode"]').forEach(r => {
+  r.addEventListener("change", function() {
+    RELAY_MODE = (this.value === "relay");
+    MULTI_SERVER_MODE = (this.value === "multi");
+    renderInstallCmd();
+  });
+});
+// 多服务端推送列表变更
+safeAddEventListener("multiServerList", "input", renderInstallCmd);
+safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
+safeAddEventListener("copyRelayGatewayBtn", "click", function() {
+  copyWithFeedback(this, $("relayGatewayCmd").textContent, I18N.t("toast.copy_relay_install"));
+});
+safeAddEventListener("copyRelayInternalBtn", "click", function() {
+  copyWithFeedback(this, $("relayInternalCmd").textContent, I18N.t("toast.copy_intranet_install"));
+});
+
+// 告警操作按钮事件委托（确认 / 静默 / 清除状态）
+document.addEventListener("click", async function(e) {
+  const btn = e.target.closest(".alert-action");
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const action = btn.dataset.action;
+  const body = JSON.stringify({
+    host_id: btn.dataset.host || "",
+    type: btn.dataset.type || "",
+    scope: btn.dataset.scope || ""
+  });
+  try {
+    const r = await fetch(`${API}/alerts/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    if (r.ok) {
+      toast(action === "ack" ? I18N.t("toast.alert_ack") : action === "silence" ? I18N.t("toast.alert_silence") : I18N.t("toast.alert_cleared"), "ok");
+      await refresh(true);
+    } else {
+      toast(I18N.t("toast.operation_failed"), "err");
+    }
+  } catch (e) { toast(I18N.t("toast.network_error"), "err"); }
+});
+
+/* ---------- 侧栏导航：视图切换 + 收起 + 移动抽屉 ---------- */
+const navItems = document.querySelectorAll(".nav-item");
+// 页面头元信息：标题 + 副标题。副标题让顶栏页面头承载“页面语义”，
+// 而非机械回显侧栏导航名，从根上消除“两个概览”的重复观感。
+const PAGE_META = {
+  overview: { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") },
+  hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
+  alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
+  checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
+  automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
+  forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
+  sre:      { title: I18N.t("section.sre"), sub: I18N.t("section.sre_desc") },
+  logs:     { title: I18N.t("section.logs"), sub: I18N.t("section.logs_desc") },
+  log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
+};
+// Rebuild the JS-baked page-meta strings in the current language (called on
+// i18n:changed so titles/subtitles follow an in-place language switch).
+function rebuildPageMeta() {
+  PAGE_META.overview   = { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") };
+  PAGE_META.hosts      = { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") };
+  PAGE_META.alerts     = { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") };
+  PAGE_META.checks     = { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") };
+  PAGE_META.automation = { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") };
+  PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
+  PAGE_META.log        = { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") };
+}
+function switchView(view) {
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
+  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === view));
+  const meta = PAGE_META[view];
+  if (meta) {
+    const t = $("pageTitle"), s = $("pageSub");
+    if (t) t.textContent = meta.title;
+    if (s) s.textContent = meta.sub;
+  }
+  if (view === "automation") loadPlaybooks();
+  if (view === "forward") loadForwards();
+  if (view === "sre") loadSRE();
+  if (view === "logs") loadLogs();
+  window.scrollTo(0, 0);
+}
+navItems.forEach(n => n.addEventListener("click", () => {
+  switchView(n.dataset.view);
+  const appEl = $("app");
+  if (appEl) appEl.classList.remove("nav-open");
+}));
+
+// Collapsible nav groups (Nightingale-style); collapsed state persists per group.
+(function initNavGroups(){
+  let collapsed = {};
+  try { collapsed = JSON.parse(localStorage.getItem("aiops_nav_collapsed")||"{}"); } catch(e){}
+  document.querySelectorAll(".nav-group").forEach(g => {
+    const key = g.dataset.group;
+    if (collapsed[key]) g.classList.add("collapsed");
+    const label = g.querySelector(".nav-group-label");
+    if (label) label.addEventListener("click", () => {
+      g.classList.toggle("collapsed");
+      collapsed[key] = g.classList.contains("collapsed");
+      try { localStorage.setItem("aiops_nav_collapsed", JSON.stringify(collapsed)); } catch(e){}
+    });
+  });
+})();
+
+// 汉堡：桌面收起/展开侧栏；移动端打开/关闭抽屉
+safeAddEventListener("menuBtn", "click", () => {
+  const appEl = $("app");
+  if (!appEl) return;
+  if (window.innerWidth <= 900) appEl.classList.toggle("nav-open");
+  else appEl.classList.toggle("collapsed");
+});
+safeAddEventListener("backdrop", "click", () => {
+  const appEl = $("app");
+  if (appEl) appEl.classList.remove("nav-open");
+});
+
+// 日志类型筛选
+safeAddEventListener("logFilter", "click", e => {
+  const b = e.target.closest(".chip-btn"); if (!b) return;
+  LOG_KIND = b.dataset.kind;
+  LOG_PAGE = 1;
+  document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
+  renderLog(LAST_LOG);
+});
+
+// 告警类型筛选
+safeAddEventListener("alertFilter", "click", e => {
+  const b = e.target.closest(".chip-btn"); if (!b) return;
+  filterAlertsByType(b.dataset.atype);
+});
+// 告警搜索
+safeAddEventListener("alertSearch", "input", e => { ALERT_SEARCH = e.target.value; renderAlerts(LAST_ALERTS); });
+
+// 日志级别和时间范围筛选
+function filterLogsByLevel(level) {
+  LOG_LEVEL = level;
+  LOG_PAGE = 1;
+  renderLog(LAST_LOG);
+}
+
+function filterLogsByTime(range) {
+  LOG_TIME_RANGE = range;
+  LOG_PAGE = 1;
+  renderLog(LAST_LOG);
+}
+
+// 日志分页点击
+safeAddEventListener("logPager", "click", e => {
+  const b = e.target.closest("button[data-lpg]"); if (!b) return;
+  const pg = b.dataset.lpg;
+  if (pg === "prev") LOG_PAGE--;
+  else if (pg === "next") LOG_PAGE++;
+  else LOG_PAGE = parseInt(pg);
+  renderLog(LAST_LOG);
+});
+
+// 监控类型筛选
+function filterChecks(type) {
+  CHECK_TYPE = type;
+  renderChecks(LAST_CHECKS);
+}
+// 弹窗关闭：点遮罩空白处 或 右上角 ✕
+document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
+  if (e.target === mk || e.target.closest("[data-close-btn]")) {
+    if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
+    mk.classList.remove("show"); hideChartTip();
+    if (mk.id === "termMask") { closeTerminalWS(); }
+    if (mk.id === "termReplayMask") { closeReplay(); }
+    if (mk.id === "termObserveMask") { closeObserveWS(); }
+    if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
+    // v5.3.0: 终端认证弹窗关闭时清理状态
+    if (mk.id === "termProtocolMask" || mk.id === "termSetPwdMask" || mk.id === "termVerifyMask" || mk.id === "termLockedMask") { cancelTermAuth(); }
+  }
+}));
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    const hadTerm = $("termMask") && $("termMask").classList.contains("show");
+    const hadReplay = $("termReplayMask") && $("termReplayMask").classList.contains("show");
+    const hadObserve = $("termObserveMask") && $("termObserveMask").classList.contains("show");
+    const hadSessions = $("termSessionsMask") && $("termSessionsMask").classList.contains("show");
+    document.querySelectorAll(".mask.show:not([data-forced])").forEach(mk => mk.classList.remove("show"));
+    hideChartTip();
+    if (hadTerm) closeTerminalWS();
+    if (hadReplay) closeReplay();
+    if (hadObserve) closeObserveWS();
+    if (hadSessions && TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
+  }
+});
+
+// KPI 卡片点击 → 跳转对应视图（并按需过滤主机）
+safeAddEventListener("cards", "click", e => {
+  const c = e.target.closest(".card"); if (!c) return;
+  const [view, filter] = (c.dataset.goto || "").split(":");
+  if (view === "hosts") { HOST_FILTER = filter || "all"; HOST_PAGE = 1; renderHosts(LAST_HOSTS); }
+  if (view) switchView(view);
+});
+// 主机搜索 + 分页
+safeAddEventListener("hostSearch", "input", e => { HOST_SEARCH = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+safeAddEventListener("pager", "click", e => {
+  const b = e.target.closest("button[data-pg]"); if (!b) return;
+  const pg = b.dataset.pg;
+  if (pg === "prev") HOST_PAGE--;
+  else if (pg === "next") HOST_PAGE++;
+  else HOST_PAGE = parseInt(pg);
+  renderHosts(LAST_HOSTS);
+});
+// 自定义监控
+safeAddEventListener("addCheckBtn", "click", () => openCheckModal(null));
+safeAddEventListener("ckType", "change", updateCkTargetLabel);
+safeAddEventListener("ckSaveBtn", "click", saveCheck);
+safeAddEventListener("checksGrid", "click", e => {
+  const card = e.target.closest(".check-card"); if (!card) return;
+  const act = e.target.closest("[data-cact]"); if (!act) return;
+  const id = card.dataset.id, check = LAST_CHECKS.find(c => c.id === id);
+  const cact = act.dataset.cact;
+  if (cact === "hist") { if (check) openCheckHistory(id, check.name, check.type); return; } // 历史对内置检查也开放
+  if (card.dataset.builtin) return; // 内置检查仅可查看历史，无编辑/删除
+  if (cact === "edit") openCheckModal(check);
+  else if (cact === "del") delCheck(id);
+  else if (cact === "run") {
+    fetch(`${API}/checks/${encodeURIComponent(id)}/run`, { method: "POST" })
+      .then(() => { toast(I18N.t("toast.check_triggered"), "ok"); setTimeout(loadChecks, 1500); })
+      .catch(e => toast(I18N.t("toast.trigger_failed2") + e, "err"));
+  }
+});
+// 概览 资源 TOP10 点击：主机详情 / 监控历史
+safeAddEventListener("topPanels", "click", e => {
+  // 行点击 → 主机详情
+  const row = e.target.closest(".top-item");
+  if (row) { openDetail(row.dataset.id, row.dataset.name); return; }
+  // 监控探针点击
+  const chk = e.target.closest(".checks-item");
+  if (chk) { openCheckHistory(chk.dataset.checkId, chk.dataset.checkName, chk.dataset.checkType); return; }
+});
+// 日志导出
+safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
+// 暂停自动刷新 + 批量清理离线
+safeAddEventListener("pauseBtn", "click", togglePause);
+safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
+// ===== 顶栏用户菜单 =====
+(function initUserDropdown() {
+  const wrap = $("topbarUserWrap");
+  const btn = $("profileBtn");
+  if (!wrap || !btn) return;
+  // 点击头像切换下拉
+  btn.addEventListener("click", function(e) {
+    e.stopPropagation();
+    wrap.classList.toggle("open");
+  });
+  // 点击外部关闭
+  document.addEventListener("click", function(e) {
+    if (!wrap.contains(e.target)) wrap.classList.remove("open");
+  });
+  // ESC 关闭
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") wrap.classList.remove("open");
+  });
+  // 主题切换
+  safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
+  // 语言切换（持久化到 cookie，就地重渲染所有文案，不刷新页面）
+  var userDropdown = $("userDropdown");
+  if (userDropdown) {
+    userDropdown.addEventListener("click", function(e) {
+      var b = e.target.closest("[data-lang]");
+      if (b) I18N.setLang(b.dataset.lang);
+    });
+  }
+  // 顶栏语言切换按钮组（简 / 繁 / EN）
+  var tbLang = $("tbLang");
+  if (tbLang) {
+    tbLang.addEventListener("click", function(e) {
+      var b = e.target.closest("[data-lang]");
+      if (b) I18N.setLang(b.dataset.lang);
+    });
+  }
+  // 标记当前选中的语言（涵盖顶栏与下拉两处 [data-lang] 控件）
+  if (I18N.syncLangButtons) I18N.syncLangButtons();
+  // 告警设置
+  safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
+  // 告警设置弹窗内 Tab 切换
+  safeAddEventListener("notifyTabs", "click", function(e) {
+    const tab = e.target.closest(".tab");
+    if (tab && tab.dataset.tab) switchNotifyTab(tab.dataset.tab);
+  });
+  // 个人信息
+  safeAddEventListener("ddProfile", "click", function() { openProfile(); wrap.classList.remove("open"); });
+  // 退出登录
+  safeAddEventListener("ddLogout", "click", function() { logout(); wrap.classList.remove("open"); });
+  // 初始化主题标签
+})();
+// 旧的 profileBtn 直接打开个人信息 — 已被上面的下拉菜单替代
+// #usersBtn 已废弃（用户管理并入个人信息四 Tab），仅保留 openUsers() 重定向入口
+safeAddEventListener("profileTabs", "click", function (e) {
+  const t = e.target.closest(".tab");
+  if (t && t.dataset.ptab) switchProfileTab(t.dataset.ptab);
+});
+safeAddEventListener("userAddBtn", "click", () => openUserEdit(null));
+safeAddEventListener("globalMfaChk", "change", async () => {
+  const chk = $("globalMfaChk");
+  if (!chk) return;
+  const required = chk.checked;
+  chk.disabled = true;
+  try {
+    const r = await fetch(`${API}/mfa/global`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ required }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast(required ? I18N.t("toast.global_mfa_on") : I18N.t("toast.global_mfa_off"), "ok");
+    else { toast(j.error || I18N.t("toast.operation_failed"), "err"); chk.checked = !required; }
+  } catch (e) { toast(I18N.t("toast.network_error"), "err"); chk.checked = !required; }
+  chk.disabled = false;
+});
+safeAddEventListener("usersList", "click", async e => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const row = e.target.closest(".user-row"); if (!row) return;
+  const name = row.dataset.name, act = btn.dataset.act;
+  if (act === "edit") {
+    const users = await fetch(`${API}/users`).then(r => r.json()).catch(() => []);
+    const u = Array.isArray(users) && users.find(x => x.username === name);
+    if (u) openUserEdit(u);
+  } else { usersAction(name, act); }
+});
+safeAddEventListener("pfSaveBtn", "click", saveProfile);
+safeAddEventListener("pfPwdBtn", "click", changePassword);
+// 首次登录·安全初始化弹窗：提交按钮 + 确认密码框回车提交
+safeAddEventListener("initSubmitBtn", "click", submitInitSetup);
+safeAddEventListener("initPass2", "keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitInitSetup(); } });
+safeAddEventListener("pfTermPwdBtn", "click", submitTermPwdChange);
+safeAddEventListener("mfaToggleChk", "change", () => {
+  const chk = $("mfaToggleChk");
+  if (chk) chk.checked = MFA_ENABLED; // revert immediately; renderMfaState will update on success
+  MFA_ENABLED ? openMfaDisable() : openMfaSetup();
+});
+safeAddEventListener("logoutBtn", "click", logout);
+// 登录页找回入口
+safeAddEventListener("forgotUserLink", "click", openRecoverUser);
+safeAddEventListener("forgotPassLink", "click", openRecoverPass);
+
+// 登录
+safeAddEventListener("loginForm", "submit", async e => {
+  e.preventDefault();
+  const loginErrEl = $("loginErr");
+  if (loginErrEl) loginErrEl.textContent = "";
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  await withLoading(submitBtn, async () => {
+    try {
+      const codeEl = $("loginCode");
+      const r = await fetchWithTimeout(`${API}/login`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: $("loginUser").value.trim(),
+          password: $("loginPass").value,
+          code: codeEl ? codeEl.value.trim() : ""
+        })
+      }, 15000);
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.mfa_required) {
+        const f = $("loginCodeField"); if (f) f.style.display = "";
+        if (codeEl) codeEl.focus();
+        if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
+      }
+      else if (r.ok && j.require_mfa_setup) {
+        openMfaSetup(true);
+      }
+      else if (r.ok && j.must_change_password) {
+        // v5.4.0: admin password was reset — force password change
+        let user;
+        try {
+          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
+        } catch (_) {
+          user = { username: $("loginUser").value.trim(), display_name: "" };
+        }
+        setUser(user);
+        $("loginView").classList.remove("show");
+        startApp();
+        // 强制进入「安全初始化」弹窗：需修改用户名 + 密码后方可进入控制台
+        setTimeout(() => openInitSetup(), 300);
+      }
+      else if (r.ok) {
+        // Post-login /me fetch: wrap in try/catch so a transient network
+        // hiccup doesn't leave the user stuck on the login page after
+        // successful authentication.
+        let user;
+        try {
+          user = await fetchWithTimeout(`${API}/me`, {}, 10000).then(x => x.json());
+        } catch (_) {
+          // Login succeeded but /me failed — proceed anyway, the next poll
+          // will populate user info. Better than showing an error after
+          // the user already typed their credentials correctly.
+          user = { username: $("loginUser").value.trim(), display_name: "" };
+        }
+        setUser(user);
+        const loginViewEl = $("loginView");
+        if (loginViewEl) loginViewEl.classList.remove("show");
+        startApp();
+      }
+      else {
+        if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
+      }
+    } catch (err) {
+      // Distinguish AbortError (timeout) from generic network errors so
+      // mobile users see a helpful message instead of "TypeError: Failed to fetch".
+      const msg = err.name === "AbortError"
+        ? I18N.t("toast.login_timeout")
+        : I18N.t("toast.login_network_error");
+      if (loginErrEl) loginErrEl.textContent = msg;
+    }
+  });
+});
+
+/* ---------- 布局宽度切换（已移除，由默认值控制） ---------- */
+
+/* ---------- 自定义监控视图切换（列表 / 胶囊） ---------- */
+safeAddEventListener("checkViewToggle", "click", e => {
+  const b = e.target.closest(".vt-btn"); if (!b) return;
+  setCheckView(b.dataset.cview);
+});
+safeAddEventListener("hostViewToggle", "click", e => {
+  const b = e.target.closest(".vt-btn"); if (!b) return;
+  setHostView(b.dataset.hview);
+});
+
+// 读取本地偏好并应用（视图 / 布局宽度）
+function initPrefs() {
+  try { const cv = localStorage.getItem("aiops_check_view"); if (cv === "pill" || cv === "list") CHECK_VIEW = cv; } catch (e) {}
+  try { const hv = localStorage.getItem("aiops_host_view"); if (hv === "list" || hv === "card") HOST_VIEW = hv; } catch (e) {}
+  // 默认卡片视图：即使 localStorage 无值也确保 HOST_VIEW 为 "card"
+  if (HOST_VIEW !== "list" && HOST_VIEW !== "card") HOST_VIEW = "card";
+  document.querySelectorAll("#checkViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.cview === CHECK_VIEW));
+  document.querySelectorAll("#hostViewToggle .vt-btn").forEach(b => b.classList.toggle("active", b.dataset.hview === HOST_VIEW));
+}
+
+initPrefs();
+CUR_CATS = getSelectedCats();
+
+/* ---------- P2-#18: Keyboard shortcuts 1-5 switch views ---------- */
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const views = ["overview", "hosts", "checks", "alerts", "automation", "log"];
+  const idx = parseInt(e.key) - 1;
+  if (idx >= 0 && idx < views.length) {
+    e.preventDefault();
+    switchView(views[idx]);
+  }
+});
+
+/* ---------- Alert filter helpers ---------- */
+function filterAlertsByType(type) {
+  ALERT_TYPE = type;
+  document.querySelectorAll("#alertFilter .chip-btn").forEach(b => b.classList.toggle("active", b.dataset.atype === type));
+  renderAlerts(LAST_ALERTS);
+}
+let LAST_ALERTS = [];
+
