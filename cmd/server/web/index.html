@@ -1191,7 +1191,7 @@
       <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
       <div class="grid2">
         <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span style="font-size:11px;color:var(--muted)" id="aiModelInfo"></span></label>
-          <div style="display:flex;gap:4px"><input type="text" id="aiModel" placeholder="自动获取后下拉 / 搜索，或手动输入模型名" list="aiModelList" autocomplete="off" style="flex:1;min-width:0"><datalist id="aiModelList"></datalist><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button></div>
+          <div class="ai-model-wrap" style="display:flex;gap:4px;position:relative"><input type="text" id="aiModel" placeholder="点击展开选择，或输入搜索 / 手动填写模型名" autocomplete="off" style="flex:1;min-width:0"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
         </div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>

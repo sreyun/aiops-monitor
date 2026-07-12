@@ -783,27 +783,40 @@ async function aiTermSet(enabled,password){
     if(typeof toast==="function") toast(AI_TERM_ENABLED?"已开启 AI 终端只读巡检":"已关闭 AI 终端巡检","ok");
   }catch(e){ if(msg){ msg.textContent="✗ 请求失败："+e; msg.className="ai-term-msg err"; } }
 }
-// 从当前表单 Endpoint+Key 自动获取该 Provider 的可用模型，填充可下拉/搜索的 datalist；
+// 从当前表单 Endpoint+Key 自动获取该 Provider 的可用模型，填充自定义下拉（可搜索）；
 // 获取不到时保留手动输入。不再内置任何预设模型。
 let _aiModelsReq=0;
+let AI_MODELS=[]; // 已获取的可选模型 [{value,label}]
 async function loadAIModels(){
-  const dl=$("aiModelList"); if(!dl) return;
   const info=$("aiModelInfo");
   const ep=($("aiEndpoint").value||"").trim();
   const myReq=++_aiModelsReq;
-  if(!ep){ dl.innerHTML=""; if(info) info.textContent="· 填入 Endpoint 后自动获取，或直接手动输入模型名"; return; }
+  if(!ep){ AI_MODELS=[]; renderModelDropdown(); if(info) info.textContent="· 填入 Endpoint 后自动获取，或直接手动输入模型名"; return; }
   if(info) info.textContent="· 获取中…";
   try {
     const body={endpoint:ep,api_key:$("aiKey").value||""};
     const m=await fetch(`${API}/ai/models`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
     if(myReq!==_aiModelsReq) return; // 有更新的请求在途，丢弃过期结果
-    const list=(m&&Array.isArray(m.models))?m.models:[];
-    dl.innerHTML=list.map(x=>`<option value="${esc(x.value)}">${esc(x.label||x.value)}</option>`).join("");
-    if(info) info.textContent=list.length
-      ? `· 已获取 ${list.length} 个模型，可下拉 / 搜索 / 手动输入`
+    AI_MODELS=(m&&Array.isArray(m.models))?m.models:[];
+    renderModelDropdown();
+    if(info) info.textContent=AI_MODELS.length
+      ? `· 已获取 ${AI_MODELS.length} 个模型，点输入框展开选择 / 搜索 / 手动输入`
       : "· 未获取到模型，请检查 Endpoint/Key，或直接手动输入模型名";
   } catch(e){ if(myReq!==_aiModelsReq) return; if(info) info.textContent="· 获取失败，可手动输入模型名"; }
 }
+// 自定义模型下拉：始终显示全部已获取模型（可按输入内容过滤），点选填入输入框。
+// 替代原生 <datalist>——原生下拉会按输入框【已有值】过滤，导致“提示 N 个却只显示 1 个”。
+function renderModelDropdown(filter){
+  const dd=$("aiModelDropdown"); if(!dd) return;
+  const f=(filter||"").trim().toLowerCase();
+  const list=AI_MODELS.filter(x=>!f || String(x.value).toLowerCase().includes(f) || String(x.label||"").toLowerCase().includes(f));
+  if(!list.length){ dd.innerHTML=`<div class="ai-model-empty">${AI_MODELS.length?"无匹配模型":"暂无模型，填好 Endpoint+Key 后点刷新"}</div>`; return; }
+  dd.innerHTML=list.map(x=>`<div class="ai-model-opt" data-val="${esc(x.value)}" title="${esc(x.value)}">${esc(x.label||x.value)}</div>`).join("");
+  dd.querySelectorAll(".ai-model-opt").forEach(el=>el.onclick=()=>{ const t=$("aiModel"); if(t) t.value=el.dataset.val; hideModelDropdown(); });
+}
+function showModelDropdown(){ const dd=$("aiModelDropdown"); if(!dd) return; renderModelDropdown(); dd.style.display="block"; } // 展开显示全部（不按已选值过滤，正是修复点）
+function hideModelDropdown(){ const dd=$("aiModelDropdown"); if(dd) dd.style.display="none"; }
+function toggleModelDropdown(){ const dd=$("aiModelDropdown"); if(dd&&dd.style.display==="block") hideModelDropdown(); else showModelDropdown(); }
 // AI 预设:仅设置 Endpoint（两种接口类型:OpenAI 兼容 / Anthropic，按端点自动识别）。
 // 取消默认预设模型：切换 Provider 后清空模型，改由自动获取 / 搜索 / 手动输入。
 function setAIPreset(type){
@@ -1137,6 +1150,10 @@ safeAddEventListener("aiTestBtn","click",testAIConfig);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型
+safeAddEventListener("aiModelCaretBtn","click",toggleModelDropdown);
+safeAddEventListener("aiModel","focus",showModelDropdown);
+safeAddEventListener("aiModel","input",e=>{ renderModelDropdown(e.target.value); const dd=$("aiModelDropdown"); if(dd) dd.style.display="block"; });
+document.addEventListener("click",e=>{ if(!e.target.closest || !e.target.closest(".ai-model-wrap")) hideModelDropdown(); });
 safeAddEventListener("aiTermToggleBtn","click",toggleAITerm);
 safeAddEventListener("aiTermConfirmBtn","click",confirmAITerm);
 safeAddEventListener("aiTermCancelBtn","click",()=>{ const r=$("aiTermPwRow"); if(r) r.style.display="none"; const m=$("aiTermMsg"); if(m){ m.textContent=""; m.className="ai-term-msg"; } });

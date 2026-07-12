@@ -1948,6 +1948,12 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .log-collect-head .lc-caret{color:var(--muted); font-size:12px; transition:color .15s ease}
 .log-collect #logCollectBody{margin-top:8px}
 .log-collect textarea{width:100%; color:var(--txt); background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm); padding:8px 10px}
+/* AI 设置：自定义模型下拉（替代原生 datalist，始终显示全部可选模型） */
+.ai-model-dropdown{position:absolute; top:calc(100% + 3px); left:0; right:0; z-index:60; max-height:240px; overflow-y:auto; background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm); box-shadow:0 8px 24px rgba(0,0,0,.32)}
+.ai-model-opt{padding:7px 10px; font-size:13px; color:var(--txt); cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ai-model-opt:hover{background:var(--accent-soft); color:var(--accent)}
+.ai-model-empty{padding:8px 10px; font-size:12px; color:var(--muted)}
+#aiModelCaretBtn{min-width:30px; padding:0 8px}
 /* AI 回复 Markdown 深化：标题 / 引用 / 分割线 */
 .ai-chat-msg.ai .ai-h{font-weight:650; margin:6px 0 2px; line-height:1.4}
 .ai-chat-msg.ai .ai-h1{font-size:1.13em}
