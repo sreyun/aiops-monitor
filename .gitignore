@@ -59,9 +59,27 @@ generated/test-output/*
 node_modules/
 
 # 评估报告和临时文档
+*.html
+!cmd/server/web/index.html
 evaluation-report.html
 evaluation-report-v2.html
 fix-summary.html
+*_REPORT.md
+*_REVIEW.md
+*_AUDIT.md
+*_UPGRADE.md
+*_EVAL_AND_HARDENING.md
 
 # 产品官网（独立部署，不纳入项目源码）
 website/
+
+# CI/CD 配置（非项目源码）
+.github/
+Makefile
+
+# 运行时数据目录（不提交）
+data/
+pg-data/
+pg-data.alpine-old/
+vm-data/
+pg-backup-vectorfix.sql
