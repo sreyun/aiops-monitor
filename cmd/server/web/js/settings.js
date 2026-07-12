@@ -383,7 +383,7 @@ async function loadCheckHistory() {
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
   const ctrl = renderChartControls(range, "crange");
   try {
-    const all = await fetch(`${API}/checks/${encodeURIComponent(id)}/history`).then(r => r.json());
+    const all = await fetch(`${API}/${CHK_HIST.base || "checks"}/${encodeURIComponent(id)}/history`).then(r => r.json());
     const now = Math.floor(Date.now() / 1000);
     const from = range > 0 ? now - range * 3600 : 0;
     const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);

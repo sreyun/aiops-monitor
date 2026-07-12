@@ -57,6 +57,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
           </a>
+          <a class="nav-item" data-view="apimon" title="API 性能监控：按业务系统批量监控接口">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>
+            <span>API 监控</span>
+          </a>
           <a class="nav-item" data-view="logs" data-i18n-title="nav.logs" title="主机日志聚合检索">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
             <span data-i18n="nav.logs">日志检索</span>
@@ -364,6 +368,16 @@
         <div class="empty" id="checksEmpty">
           还没有自定义监控。点「添加检查」监控一个网站（HTTP）或服务端口（TCP），异常时自动产生告警并推送飞书 / 钉钉。
         </div>
+      </section>
+
+      <!-- API 性能监控 -->
+      <section class="view" id="view-apimon">
+        <div class="section-title"><span>API 性能监控</span><span class="tag">按业务系统批量监控接口 · 可用率 / 平均·P95 响应 / 吞吐 · 数据入 VM 重启不丢</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <button class="btn primary" id="apimonAddBtn">+ 添加业务系统</button>
+          </div>
+        </div>
+        <div id="apimonSystems"></div>
       </section>
 
       <!-- 自动化运维 -->
@@ -962,6 +976,34 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="userEditBody"></div>
+  </div>
+</div>
+
+<!-- ===== API 性能监控·业务系统编辑弹窗 ===== -->
+<div class="mask" id="apimonMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h3 id="apiSysModalTitle">添加业务系统</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="apiSysId">
+      <div class="grid2">
+        <div class="field"><label>业务系统名称</label><input type="text" id="apiSysName" placeholder="如 订单系统 / 支付网关"></div>
+        <div class="field"><label>探测间隔（秒）</label><input type="text" id="apiSysInterval" class="mono" value="60"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>告警级别</label><div class="select-wrap"><select id="apiSysLevel"><option value="critical">严重</option><option value="warning">警告</option></select></div></div>
+        <div class="field" style="display:flex; align-items:flex-end"><label class="switch"><input type="checkbox" id="apiSysEnabled" checked> <span>启用该业务系统</span></label></div>
+      </div>
+      <div class="subhead" style="display:flex; align-items:center">接口列表<button class="btn" id="apiAddEndpointBtn" type="button" style="margin-left:auto">+ 添加接口</button></div>
+      <div id="apiEndpointRows" style="display:flex; flex-direction:column; gap:10px"></div>
+      <div class="hint">每个接口按上面的间隔批量探测；支持自定义方法 / 请求头（含 Bearer / API-Key 鉴权）/ 请求体，以及期望状态码、响应关键字、JSON 断言校验。响应时间自动分解 DNS/TCP/TLS/TTFB 并入 VM，异常按级别自动告警。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close-btn>取消</button>
+      <button class="btn primary" id="apiSysSaveBtn">保存</button>
+    </div>
   </div>
 </div>
 

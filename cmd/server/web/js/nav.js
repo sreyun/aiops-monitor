@@ -304,6 +304,7 @@ const PAGE_META = {
   hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
   alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
   checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
+  apimon:   { title: "API 性能监控", sub: "按业务系统批量监控接口，统计可用率、P95 响应时间与吞吐" },
   automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
   sre:      { title: I18N.t("section.sre"), sub: I18N.t("section.sre_desc") },
@@ -334,6 +335,7 @@ function switchView(view) {
   if (view === "forward") loadForwards();
   if (view === "sre") loadSRE();
   if (view === "logs") loadLogs();
+  if (view === "apimon") loadAPIMon();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

@@ -18,35 +18,36 @@ type Server struct {
 	notifier  *Notifier
 	auth      *Auth
 	checks    *checkRunner
-	term      *termManager        // remote terminal relay
-	forward   *forwardManager     // port forwarding relay (TCP + HTTP proxy)
-	emailMgr  *emailManager       // verification codes + reset tokens
-	playbooks *playbookManager    // automation playbooks + execution history
-	push      *pushHub            // P3-1: WebSocket push hub for real-time updates
+	apimon    *apiRunner       // API 性能监控：按业务系统批量探测接口
+	term      *termManager     // remote terminal relay
+	forward   *forwardManager  // port forwarding relay (TCP + HTTP proxy)
+	emailMgr  *emailManager    // verification codes + reset tokens
+	playbooks *playbookManager // automation playbooks + execution history
+	push      *pushHub         // P3-1: WebSocket push hub for real-time updates
 	// --- SRE workflow layer ---
-	incidents   *incidentManager   // incident hub (alert/SLO/manual)
+	incidents   *incidentManager    // incident hub (alert/SLO/manual)
 	remediation *remediationManager // closed-loop auto-remediation
-	slos        *sloManager        // SLO + error budgets
-	tickets     *ticketManager     // work orders
-	logs        *logStore          // aggregated agent logs
-	ai          *aiManager         // AI inspection + diagnosis
-	vm          *vmWriter          // optional VictoriaMetrics remote-write
-	messages    *messageHub        // unified notification center (SRE/alert/AI feed)
-	distDir     string             // directory of downloadable agent binaries + plugins.zip
-	pg          *pgStore           // PostgreSQL persistence (optional, for pgvector/RAG)
-	hermes      *HermesCore        // Hermes Agent (autonomous SRE agent)
+	slos        *sloManager         // SLO + error budgets
+	tickets     *ticketManager      // work orders
+	logs        *logStore           // aggregated agent logs
+	ai          *aiManager          // AI inspection + diagnosis
+	vm          *vmWriter           // optional VictoriaMetrics remote-write
+	messages    *messageHub         // unified notification center (SRE/alert/AI feed)
+	distDir     string              // directory of downloadable agent binaries + plugins.zip
+	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
+	hermes      *HermesCore         // Hermes Agent (autonomous SRE agent)
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
 	s := &Server{
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
-		auth:      NewAuth(cfg),
-		checks:    newCheckRunner(cfg, store, notifier, selfAddr),
-		term:      newTermManager(),
-		forward:   newForwardManager(cfg),
-		emailMgr:  newEmailManager(),
-		playbooks: newPlaybookManager(cfg),
-		push:      newPushHub(),
+		auth:        NewAuth(cfg),
+		checks:      newCheckRunner(cfg, store, notifier, selfAddr),
+		term:        newTermManager(),
+		forward:     newForwardManager(cfg),
+		emailMgr:    newEmailManager(),
+		playbooks:   newPlaybookManager(cfg),
+		push:        newPushHub(),
 		incidents:   newIncidentManager(),
 		remediation: newRemediationManager(cfg),
 		slos:        newSLOManager(cfg),
@@ -56,7 +57,8 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
 	}
-	s.checks.vm = s.vm // 拨测结果持久化到 VM（重启后仍可查历史趋势）
+	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
+	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
 	s.wireSRE()
 	// Restore persisted TCP forward rules (recreate listeners)
 	s.forward.restoreRules(s)
@@ -130,6 +132,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
 	mux.HandleFunc("GET /api/v1/checks/{id}/history", s.handleCheckHistory)
 	mux.HandleFunc("DELETE /api/v1/checks/{id}", s.handleDeleteCheck)
+	// API 性能监控：业务系统 + 接口批量监控
+	mux.HandleFunc("GET /api/v1/apimon/systems", s.handleAPIMonOverview)
+	mux.HandleFunc("POST /api/v1/apimon/systems", s.handleUpsertAPISystem)
+	mux.HandleFunc("POST /api/v1/apimon/systems/{id}/run", s.handleRunAPISystem)
+	mux.HandleFunc("DELETE /api/v1/apimon/systems/{id}", s.handleDeleteAPISystem)
+	mux.HandleFunc("GET /api/v1/apimon/endpoints/{id}/history", s.handleAPIEndpointHistory)
 	// Playbooks (automation)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("POST /api/v1/playbooks", s.handleUpsertPlaybook)
@@ -252,7 +260,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "init"} {
+			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

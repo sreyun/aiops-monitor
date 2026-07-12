@@ -274,6 +274,7 @@ func main() {
 
 	go notifier.Run(10 * time.Second)           // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second)       // custom HTTP/TCP synthetic checks
+	go server.apimon.Run(5 * time.Second)       // API 性能监控：按业务系统批量探测接口
 	go server.runScheduler(30 * time.Second)    // timed playbook triggers (interval/daily/weekly)
 	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection

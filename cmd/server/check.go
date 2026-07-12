@@ -57,12 +57,12 @@ type checkRunner struct {
 	mu        sync.Mutex
 	status    map[string]CheckStatus
 	down      map[string]bool
-	downSince map[string]int64        // check id -> unix time it first went down
+	downSince map[string]int64 // check id -> unix time it first went down
 	lastRun   map[string]time.Time
 	history   map[string][]CheckPoint // check id -> bounded time-series for the trend view
-	failCount map[string]int           // consecutive failures (debounce: require 2 before marking down)
-	okCount   map[string]int           // consecutive successes (debounce: require 2 before marking up)
-	vm        *vmWriter                // 持久化拨测结果到 VictoriaMetrics（可选；重启后仍可查历史趋势）
+	failCount map[string]int          // consecutive failures (debounce: require 2 before marking down)
+	okCount   map[string]int          // consecutive successes (debounce: require 2 before marking up)
+	vm        *vmWriter               // 持久化拨测结果到 VictoriaMetrics（可选；重启后仍可查历史趋势）
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
@@ -391,9 +391,11 @@ type httpProbeResult struct {
 	msg                                  string
 	code, certDays                       int
 	dnsMs, tcpMs, tlsMs, ttfbMs, totalMs float64
+	bytes                                int64 // 响应体大小（读取上限内）
 }
 
-func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+// ms 把耗时转成毫秒，保留纳秒精度（亚毫秒的极快接口也不会被截断成 0）。
+func ms(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
 
 // probeHTTPAdvanced 执行高级 HTTP 拨测：自定义 方法/请求头/请求体（含静态鉴权头）+
 // 分段计时(DNS/TCP/TLS/TTFB/总) + 状态码/关键字/JSON 断言校验 + 证书到期阈值。
@@ -427,12 +429,24 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 
 	var dnsStart, connStart, tlsStart, firstByte time.Time
 	trace := &httptrace.ClientTrace{
-		DNSStart:             func(httptrace.DNSStartInfo) { dnsStart = time.Now() },
-		DNSDone:              func(httptrace.DNSDoneInfo) { if !dnsStart.IsZero() { res.dnsMs = ms(time.Since(dnsStart)) } },
-		ConnectStart:         func(_, _ string) { connStart = time.Now() },
-		ConnectDone:          func(_, _ string, _ error) { if !connStart.IsZero() { res.tcpMs = ms(time.Since(connStart)) } },
-		TLSHandshakeStart:    func() { tlsStart = time.Now() },
-		TLSHandshakeDone:     func(tls.ConnectionState, error) { if !tlsStart.IsZero() { res.tlsMs = ms(time.Since(tlsStart)) } },
+		DNSStart: func(httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone: func(httptrace.DNSDoneInfo) {
+			if !dnsStart.IsZero() {
+				res.dnsMs = ms(time.Since(dnsStart))
+			}
+		},
+		ConnectStart: func(_, _ string) { connStart = time.Now() },
+		ConnectDone: func(_, _ string, _ error) {
+			if !connStart.IsZero() {
+				res.tcpMs = ms(time.Since(connStart))
+			}
+		},
+		TLSHandshakeStart: func() { tlsStart = time.Now() },
+		TLSHandshakeDone: func(tls.ConnectionState, error) {
+			if !tlsStart.IsZero() {
+				res.tlsMs = ms(time.Since(tlsStart))
+			}
+		},
 		GotFirstResponseByte: func() { firstByte = time.Now() },
 	}
 	req = req.WithContext(httptrace.WithClientTrace(context.Background(), trace))
@@ -446,7 +460,11 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10)) // 最多读 256KB 用于校验
 	resp.Body.Close()
+	res.bytes = int64(len(body))
 	res.totalMs = ms(time.Since(start))
+	if res.totalMs <= 0 {
+		res.totalMs = 0.01 // 时钟粒度下极快响应可能测得 0：钳到极小正值，避免"0=无数据"歧义
+	}
 	if !firstByte.IsZero() {
 		res.ttfbMs = ms(firstByte.Sub(start))
 	}
@@ -670,7 +688,7 @@ func (cr *checkRunner) DownAlerts() []Alert {
 		st := cr.status[selfCheckID]
 		out = append(out, Alert{
 			Level: "critical", Type: "check", Scope: selfCheckID, Hostname: SelfCheckName(),
-			Since: cr.downSince[selfCheckID],
+			Since:   cr.downSince[selfCheckID],
 			Message: Tz("check.self_failed", st.Message), Timestamp: st.CheckedAt,
 		})
 	}
@@ -690,7 +708,7 @@ func (cr *checkRunner) DownAlerts() []Alert {
 		st := cr.status[c.ID]
 		out = append(out, Alert{
 			Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name,
-			Since: cr.downSince[c.ID],
+			Since:   cr.downSince[c.ID],
 			Message: Tz("check.custom_failed", c.Name, st.Message), Timestamp: st.CheckedAt,
 		})
 	}

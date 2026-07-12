@@ -235,6 +235,7 @@ type ServerConfig struct {
 	RequireToken       bool          `json:"require_token"`
 	Account            AccountConfig `json:"account"`
 	Checks             []CustomCheck `json:"checks"`
+	APISystems         []APISystem   `json:"api_systems,omitempty"` // API 性能监控：按业务系统分组的批量接口
 	Playbooks          []Playbook    `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
@@ -403,14 +404,15 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 // environment block without editing server_config.json.
 //
 // Supported variables:
-//   AIOPS_FORWARD_LISTEN          → forward_listen
-//   AIOPS_FORWARD_PORT_RANGE      → forward_port_range
-//   AIOPS_FORWARD_DISABLED        → forward_disabled (true/false)
-//   AIOPS_TERMINAL_DISABLED       → terminal_disabled (true/false)
-//   AIOPS_RELAY_SECRET            → relay_secret
-//   AIOPS_ALLOW_ANONYMOUS_AGENTS  → allow_anonymous_agents (true/false)
-//   AIOPS_TRUST_PROXY             → trust_proxy (true/false)
-//   AIOPS_REQUIRE_TOKEN           → require_token (true/false)
+//
+//	AIOPS_FORWARD_LISTEN          → forward_listen
+//	AIOPS_FORWARD_PORT_RANGE      → forward_port_range
+//	AIOPS_FORWARD_DISABLED        → forward_disabled (true/false)
+//	AIOPS_TERMINAL_DISABLED       → terminal_disabled (true/false)
+//	AIOPS_RELAY_SECRET            → relay_secret
+//	AIOPS_ALLOW_ANONYMOUS_AGENTS  → allow_anonymous_agents (true/false)
+//	AIOPS_TRUST_PROXY             → trust_proxy (true/false)
+//	AIOPS_REQUIRE_TOKEN           → require_token (true/false)
 func (cs *ConfigStore) applyEnvOverrides() {
 	// External storage (Docker Compose points these at the VM / Postgres services):
 	//   AIOPS_VM_URL         → enable VictoriaMetrics remote-write to this URL
@@ -752,13 +754,14 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Account = cs.cfg.Account                   // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks                     // checks managed via check endpoints
 	c.Playbooks = cs.cfg.Playbooks               // playbooks managed via playbook endpoints
+	c.APISystems = cs.cfg.APISystems             // API 性能监控：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint
 	c.VM = cs.cfg.VM                             // managed via env / storage config
 	c.PostgresDSN = cs.cfg.PostgresDSN           // managed via env / storage config
 	c.RelaySecret = cs.cfg.RelaySecret           // managed via storage/relay config (masked in GET)
-	c.HTTPProxies = cs.cfg.HTTPProxies          // managed via proxy endpoints
+	c.HTTPProxies = cs.cfg.HTTPProxies           // managed via proxy endpoints
 	c.ForwardRules = cs.cfg.ForwardRules         // managed via forward endpoints
 	// Preserve SMTP password when the incoming value is blank or masked (same
 	// strategy as webhook secrets — the browser may submit without re-typing it).
