@@ -101,8 +101,8 @@ services:
     # pgvector 版 PostgreSQL：AI 诊断 RAG（diagnosis_embeddings 的 vector 列）必需。
     # ⚠️ 原版 postgres:18-alpine 不含 pgvector，CREATE EXTENSION vector 会失败导致服务端起不来。
     # 国内/生产：建议把 pgvector/pgvector:pg18 同步到 SWR 后改用镜像地址加速拉取。
-    image: pgvector/pgvector:pg18
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/postgres:18-alpine   # 原版无 pgvector，勿用
+    image: swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18
+    # image: pgvector/pgvector:pg18
     container_name: aiops-pg
     environment:
       - POSTGRES_USER=aiops
