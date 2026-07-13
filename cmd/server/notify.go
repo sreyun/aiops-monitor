@@ -553,12 +553,15 @@ func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 	//   - 含 ${...} 占位符（如 ${MESSAGE}）→ 整体替换为实际告警内容（JSON 转义），
 	//     从而适配任意变量名的模板：填 {"MESSAGE":"${MESSAGE}"} 即动态注入告警内容；
 	//   - 纯静态 JSON（无 ${...}）→ 原样发送（固定文案）。
+	// 先清洗告警文本为短信可接受形态（去 emoji/换行/特殊符号、截断长度），否则阿里云会报
+	// isv.UNSUPPORTED_SMS_CONTENT（如测试文案里的 ✅ 表情、换行、【】）。
+	safe := smsSafeVar(text)
 	jsonEsc := func(s string) string { b, _ := json.Marshal(s); return string(b[1 : len(b)-1]) }
 	templateParam := cfg.TemplateParam
 	if templateParam == "" {
-		templateParam = `{"message":"` + jsonEsc(text) + `"}`
+		templateParam = `{"message":"` + jsonEsc(safe) + `"}`
 	} else if strings.Contains(templateParam, "${") {
-		templateParam = regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllStringFunc(templateParam, func(string) string { return jsonEsc(text) })
+		templateParam = regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllStringFunc(templateParam, func(string) string { return jsonEsc(safe) })
 	}
 	params := map[string]string{
 		"PhoneNumbers":  phones,

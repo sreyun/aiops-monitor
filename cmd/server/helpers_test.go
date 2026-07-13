@@ -1,6 +1,23 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// smsSafeVar 必须剔除阿里云短信不支持的内容（emoji/换行/【】等），否则 isv.UNSUPPORTED_SMS_CONTENT。
+func TestSMSSafeVar(t *testing.T) {
+	out := smsSafeVar("【AIOps Monitor】测试消息：告警通道连通正常 ✅\n时间: 2026-07-13 19:20:30")
+	if strings.ContainsAny(out, "✅【】\n\r\t") {
+		t.Errorf("清洗后仍含 emoji/换行/括号：%q", out)
+	}
+	if !strings.Contains(out, "AIOps") || !strings.Contains(out, "测试消息") {
+		t.Errorf("正常内容被误删：%q", out)
+	}
+	if len([]rune(out)) > 45 {
+		t.Errorf("未按 45 字截断：%d 字 %q", len([]rune(out)), out)
+	}
+}
 
 // mergeSecrets 必须还原 GET 中被脱敏的 短信/语音 AccessKey + SecretKey，否则「发送测试」或
 // 再次保存会拿脱敏串（如 LTAI****GHIJ）当真实凭证做 ACS3-HMAC-SHA256 签名 →

@@ -107,6 +107,32 @@ func keepIfBlank(newv, oldv string) string {
 	return newv
 }
 
+// smsSafeVar 清洗要塞进短信模板变量的文本，使其符合阿里云短信内容审核。
+// 阿里云对变量内容有严格限制：不支持 emoji、换行、【】（签名专用）及多数特殊符号，
+// 且单个变量长度有限——否则报 isv.UNSUPPORTED_SMS_CONTENT。这里：换行/制表→空格，
+// 只保留 中文/字母/数字/常用标点，丢弃 emoji 等其它符号，折叠空白并截断到 45 字。
+func smsSafeVar(s string) string {
+	s = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == ' ',
+			r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			unicode.Is(unicode.Han, r):
+			b.WriteRune(r)
+		case strings.ContainsRune("，。：；、！？（）().,:;-/_%", r):
+			b.WriteRune(r)
+		default:
+			// 丢弃 emoji / 其它特殊符号（如 ✅ ★ 【 】）
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ") // 折叠多余空白
+	if rs := []rune(out); len(rs) > 45 {                 // 单变量保守长度上限
+		out = string(rs[:45])
+	}
+	return out
+}
+
 // ---- install-script parameter sanitizers ----
 // /install.sh and /install.ps1 are public and echo these query params into a
 // shell/PowerShell script that a machine pipes straight to sh/iex. Any of them
