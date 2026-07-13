@@ -26,6 +26,24 @@ async function openSettings() {
     $("smtpPassword").value = s.smtp_password || "";
     $("smtpFromName").value = s.smtp_from_name || "";
     $("smtpTLS").checked = !!s.smtp_use_tls;
+    // SMS config
+    const sms = c.sms || {};
+    $("smsEnabled").checked = !!sms.enabled;
+    $("smsProvider").value = sms.provider || "aliyun";
+    $("smsAccessKey").value = sms.access_key || "";
+    $("smsSecretKey").value = sms.secret_key || "";
+    $("smsSignName").value = sms.sign_name || "";
+    $("smsTemplateCode").value = sms.template_code || "";
+    $("smsPhones").value = (sms.phones || []).join(",");
+    // VoiceCall config
+    const vc = c.voice_call || {};
+    $("voiceCallEnabled").checked = !!vc.enabled;
+    $("voiceCallProvider").value = vc.provider || "aliyun";
+    $("voiceCallAccessKey").value = vc.access_key || "";
+    $("voiceCallSecretKey").value = vc.secret_key || "";
+    $("voiceCallCalledNumbers").value = (vc.called_numbers || []).join(",");
+    $("voiceCallTtsCode").value = vc.tts_code || "";
+    $("voiceCallTtsParam").value = vc.tts_param || "";
     // Threshold display: treat 0 / null / undefined as "unset" → show the standard
     // default. The backend also backfills these zeros, so display and storage stay
     // consistent, and every metric always shows a sane standard threshold.
@@ -118,6 +136,24 @@ function collectSettings() {
       smtp_password: $("smtpPassword").value,
       smtp_from_name: $("smtpFromName").value.trim(),
       smtp_use_tls: $("smtpTLS").checked
+    },
+    sms: {
+      enabled: $("smsEnabled").checked,
+      provider: $("smsProvider").value,
+      access_key: $("smsAccessKey").value.trim(),
+      secret_key: $("smsSecretKey").value,
+      sign_name: $("smsSignName").value.trim(),
+      template_code: $("smsTemplateCode").value.trim(),
+      phones: ($("smsPhones").value || "").split(",").map(s => s.trim()).filter(Boolean)
+    },
+    voice_call: {
+      enabled: $("voiceCallEnabled").checked,
+      provider: $("voiceCallProvider").value,
+      access_key: $("voiceCallAccessKey").value.trim(),
+      secret_key: $("voiceCallSecretKey").value,
+      called_numbers: ($("voiceCallCalledNumbers").value || "").split(",").map(s => s.trim()).filter(Boolean),
+      tts_code: $("voiceCallTtsCode").value.trim(),
+      tts_param: $("voiceCallTtsParam").value.trim()
     },
     thresholds: {
       cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),

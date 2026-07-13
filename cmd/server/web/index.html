@@ -680,10 +680,12 @@
 
       <!-- ===== 通知渠道 Tab 切换 ===== -->
       <div class="tabs" id="notifyTabs">
-        <button class="tab active" data-tab="tab-feishu" data-i18n="settings.feishu">飞书机器人</button>
-        <button class="tab" data-tab="tab-dingtalk" data-i18n="settings.dingtalk">钉钉机器人</button>
-        <button class="tab" data-tab="tab-webhook" data-i18n="settings.custom_webhook">自定义 Webhook</button>
-        <button class="tab" data-tab="tab-smtp" data-i18n="settings.smtp">邮件服务（SMTP）</button>
+        <button class="tab active" data-tab="tab-feishu" data-i18n="settings.feishu">飞书推送</button>
+        <button class="tab" data-tab="tab-dingtalk" data-i18n="settings.dingtalk">钉钉推送</button>
+        <button class="tab" data-tab="tab-webhook" data-i18n="settings.custom_webhook">Webhook</button>
+        <button class="tab" data-tab="tab-smtp" data-i18n="settings.smtp">邮件推送</button>
+        <button class="tab" data-tab="tab-sms" data-i18n="settings.sms">短信推送</button>
+        <button class="tab" data-tab="tab-voicecall" data-i18n="settings.voice_call">电话推送</button>
       </div>
 
       <!-- 飞书面板 -->
@@ -758,6 +760,60 @@
         <div class="field">
           <label data-i18n="settings.smtp_from_name">发件人显示名称</label>
           <input type="text" id="smtpFromName" placeholder="AIOps Monitor">
+        </div>
+      </div>
+
+      <!-- 短信推送面板 -->
+      <div class="tab-panel" id="tab-sms">
+        <label class="switch mb"><input type="checkbox" id="smsEnabled" data-i18n-label="settings.enable_sms"> 启用短信推送</label>
+        <div class="field">
+          <label data-i18n="settings.sms_provider">云服务商</label>
+          <div class="select-wrap"><select id="smsProvider">
+            <option value="aliyun" data-i18n="settings.provider_aliyun">阿里云</option>
+            <option value="huawei" data-i18n="settings.provider_huawei">华为云</option>
+            <option value="tencent" data-i18n="settings.provider_tencent">腾讯云</option>
+          </select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="settings.sms_access_key">AccessKey</label><input type="text" id="smsAccessKey" placeholder="LTAI5t..."></div>
+          <div class="field"><label data-i18n="settings.sms_secret_key">SecretKey</label><input type="password" id="smsSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="settings.sms_sign_name">短信签名</label><input type="text" id="smsSignName" placeholder="AIOps"></div>
+          <div class="field"><label data-i18n="settings.sms_template_code">模板编码</label><input type="text" id="smsTemplateCode" placeholder="SMS_123456789"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.sms_phones">接收手机号</label>
+          <input type="text" id="smsPhones" data-i18n-placeholder="settings.sms_phones_placeholder" placeholder="多个号码逗号分隔，如 13800138000,13900139000">
+        </div>
+      </div>
+
+      <!-- 电话推送面板 -->
+      <div class="tab-panel" id="tab-voicecall">
+        <label class="switch mb"><input type="checkbox" id="voiceCallEnabled" data-i18n-label="settings.enable_voice_call"> 启用电话推送</label>
+        <div class="field">
+          <label data-i18n="settings.voice_provider">云服务商</label>
+          <div class="select-wrap"><select id="voiceCallProvider">
+            <option value="aliyun" data-i18n="settings.provider_aliyun">阿里云</option>
+            <option value="huawei" data-i18n="settings.provider_huawei">华为云</option>
+            <option value="tencent" data-i18n="settings.provider_tencent">腾讯云</option>
+          </select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="settings.voice_access_key">AccessKey</label><input type="text" id="voiceCallAccessKey" placeholder="LTAI5t..."></div>
+          <div class="field"><label data-i18n="settings.voice_secret_key">SecretKey</label><input type="password" id="voiceCallSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.voice_called_numbers">被叫号码</label>
+          <input type="text" id="voiceCallCalledNumbers" data-i18n-placeholder="settings.voice_called_numbers_placeholder" placeholder="多个号码逗号分隔，如 13800138000,13900139000">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.voice_tts_code">语音模板编码</label>
+          <input type="text" id="voiceCallTtsCode" placeholder="TTS_123456789">
+        </div>
+        <div class="field">
+          <label data-i18n="settings.voice_tts_param">语音模板参数（JSON）</label>
+          <input type="text" id="voiceCallTtsParam" data-i18n-placeholder="settings.voice_tts_param_placeholder" placeholder='{"key":"value"}'>
         </div>
       </div>
 

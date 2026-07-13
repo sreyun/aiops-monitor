@@ -5,7 +5,7 @@
  * 避免"新增一条就把其它卡片未保存的编辑重渲染丢掉"。
  */
 let GOV = { silence_rules: [], inhibit_rules: [], routes: [] };
-const GOV_CHANNELS = [["feishu", "飞书"], ["dingtalk", "钉钉"], ["email", "邮件"], ["webhook", "自定义 Webhook"]];
+const GOV_CHANNELS = [["feishu", "飞书"], ["dingtalk", "钉钉"], ["email", "邮件"], ["webhook", "Webhook"], ["sms", "短信"], ["voicecall", "电话"]];
 const GOV_WEEKDAYS = [["1", "一"], ["2", "二"], ["3", "三"], ["4", "四"], ["5", "五"], ["6", "六"], ["0", "日"]];
 
 async function loadGovernance() {

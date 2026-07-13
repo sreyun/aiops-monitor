@@ -43,6 +43,28 @@ type CustomWebhookConfig struct {
 	BodyTemplate string `json:"body_template"` // Go template; empty = default Markdown-like text
 }
 
+// SMSConfig holds the cloud SMS notification channel configuration.
+type SMSConfig struct {
+	Enabled      bool     `json:"enabled"`
+	Provider     string   `json:"provider"`      // aliyun | huawei | tencent
+	AccessKey    string   `json:"access_key"`
+	SecretKey    string   `json:"secret_key,omitempty"`
+	SignName     string   `json:"sign_name"`
+	TemplateCode string   `json:"template_code"`
+	Phones       []string `json:"phones"`
+}
+
+// VoiceCallConfig holds the cloud voice call (TTS) notification channel configuration.
+type VoiceCallConfig struct {
+	Enabled       bool     `json:"enabled"`
+	Provider      string   `json:"provider"`       // aliyun | huawei | tencent
+	AccessKey     string   `json:"access_key"`
+	SecretKey     string   `json:"secret_key,omitempty"`
+	CalledNumbers []string `json:"called_numbers"`
+	TTSCode       string   `json:"tts_code"`
+	TTSParam      string   `json:"tts_param"`
+}
+
 // ThresholdConfig is the JSON-friendly, operator-editable alert threshold set.
 type ThresholdConfig struct {
 	CPUWarn         float64 `json:"cpu_warn"`
@@ -224,6 +246,8 @@ type ServerConfig struct {
 	Dingtalk      WebhookConfig       `json:"dingtalk"`
 	CustomWebhook CustomWebhookConfig `json:"custom_webhook"`
 	SMTP          SMTPConfig          `json:"smtp"`
+	SMS           SMSConfig           `json:"sms"`
+	VoiceCall     VoiceCallConfig     `json:"voice_call"`
 	Thresholds    ThresholdConfig     `json:"thresholds"`
 	Categories    map[string]string   `json:"categories"`
 	InstallToken  string              `json:"install_token"`
@@ -772,6 +796,14 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	}
 	if c.SMTP.FromName == "" {
 		c.SMTP.FromName = cs.cfg.SMTP.FromName
+	}
+	// Preserve SMS secret key when the incoming value is blank or masked.
+	if c.SMS.SecretKey == "" || strings.Contains(c.SMS.SecretKey, "****") {
+		c.SMS.SecretKey = cs.cfg.SMS.SecretKey
+	}
+	// Preserve VoiceCall secret key when the incoming value is blank or masked.
+	if c.VoiceCall.SecretKey == "" || strings.Contains(c.VoiceCall.SecretKey, "****") {
+		c.VoiceCall.SecretKey = cs.cfg.VoiceCall.SecretKey
 	}
 	// Operational security flags are managed via the config file, not the alert
 	// settings form — preserve them so a settings save can't silently flip them.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,6 +219,24 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 			sent = append(sent, Tz("notify.custom_webhook"))
 		}
 	}
+	// SMS notification
+	if send("sms") && cfg.SMS.Enabled && cfg.SMS.AccessKey != "" {
+		if err := n.sendSMS(cfg.SMS, text); err != nil {
+			slog.Error("sms send failed", "err", err)
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "短信发送失败: " + err.Error()})
+		} else {
+			sent = append(sent, "短信")
+		}
+	}
+	// Voice call notification
+	if send("voicecall") && cfg.VoiceCall.Enabled && cfg.VoiceCall.AccessKey != "" {
+		if err := n.sendVoiceCall(cfg.VoiceCall, text); err != nil {
+			slog.Error("voice call send failed", "err", err)
+			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "电话通知失败: " + err.Error()})
+		} else {
+			sent = append(sent, "电话")
+		}
+	}
 	if len(sent) > 0 {
 		n.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: Tz("notify.notification"), Host: a.Hostname, Message: Tz("log.pushed", strings.Join(sent, "/"), a.Message)})
 	}
@@ -283,7 +303,17 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 			errs = append(errs, Tz("notify.custom_webhook")+": "+err.Error())
 		}
 	}
-	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled && !cfg.CustomWebhook.Enabled {
+	if cfg.SMS.Enabled && cfg.SMS.AccessKey != "" {
+		if err := n.sendSMS(cfg.SMS, msg); err != nil {
+			errs = append(errs, "短信: "+err.Error())
+		}
+	}
+	if cfg.VoiceCall.Enabled && cfg.VoiceCall.AccessKey != "" {
+		if err := n.sendVoiceCall(cfg.VoiceCall, msg); err != nil {
+			errs = append(errs, "电话: "+err.Error())
+		}
+	}
+	if !cfg.Feishu.Enabled && !cfg.Dingtalk.Enabled && !cfg.SMTP.Enabled && !cfg.CustomWebhook.Enabled && !cfg.SMS.Enabled && !cfg.VoiceCall.Enabled {
 		errs = append(errs, Tz("notify.no_channel"))
 	}
 	return errs
@@ -393,6 +423,136 @@ func (n *Notifier) post(webhook string, body []byte) error {
 			code, msg = r.Errcode, r.Errmsg
 		}
 		return fmt.Errorf("API returned code=%d %s", code, msg)
+	}
+	return nil
+}
+
+// ----- cloud SMS / voice notification helpers -----
+
+// aliyunSign builds the Alibaba Cloud API V1 signature (HMAC-SHA1).
+func aliyunSign(method string, params map[string]string, secret string) string {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var qs []string
+	for _, k := range keys {
+		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(params[k]))
+	}
+	canonical := strings.Join(qs, "&")
+	stringToSign := method + "&" + url.QueryEscape("/") + "&" + url.QueryEscape(canonical)
+	h := hmac.New(sha1.New, []byte(secret+"&"))
+	h.Write([]byte(stringToSign))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+// sendSMS sends an alert via cloud SMS API (Aliyun / Huawei / Tencent).
+func (n *Notifier) sendSMS(cfg SMSConfig, text string) error {
+	if cfg.Provider == "" || cfg.Provider == "aliyun" {
+		return n.sendAliyunSMS(cfg, text)
+	}
+	// Huawei Cloud and Tencent Cloud SMS: use simple HTTP POST (placeholder for future full signing)
+	return fmt.Errorf("SMS provider %s not yet implemented", cfg.Provider)
+}
+
+func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
+	phones := strings.Join(cfg.Phones, ",")
+	if phones == "" {
+		return fmt.Errorf("no phone numbers configured")
+	}
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)[:16]
+	params := map[string]string{
+		"AccessKeyId":      cfg.AccessKey,
+		"Action":           "SendSms",
+		"Format":           "JSON",
+		"PhoneNumbers":     phones,
+		"SignName":         cfg.SignName,
+		"TemplateCode":     cfg.TemplateCode,
+		"TemplateParam":    fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`)),
+		"SignatureMethod":  "HMAC-SHA1",
+		"SignatureNonce":   nonce,
+		"SignatureVersion": "1.0",
+		"Timestamp":        ts,
+		"Version":          "2017-05-25",
+	}
+	params["Signature"] = aliyunSign("GET", params, cfg.SecretKey)
+
+	var qs []string
+	for k, v := range params {
+		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(v))
+	}
+	reqURL := "https://dysmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
+	resp, err := n.httpc.Get(reqURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var r struct {
+		Code    string `json:"Code"`
+		Message string `json:"Message"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Code != "OK" {
+		return fmt.Errorf("SMS API: %s (%s)", r.Message, r.Code)
+	}
+	return nil
+}
+
+// sendVoiceCall sends an alert via cloud voice call (TTS) API.
+func (n *Notifier) sendVoiceCall(cfg VoiceCallConfig, text string) error {
+	if cfg.Provider == "" || cfg.Provider == "aliyun" {
+		return n.sendAliyunVoiceCall(cfg, text)
+	}
+	return fmt.Errorf("voice call provider %s not yet implemented", cfg.Provider)
+}
+
+func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
+	phones := strings.Join(cfg.CalledNumbers, ",")
+	if phones == "" {
+		return fmt.Errorf("no called numbers configured")
+	}
+	// Build TTS params: merge template param with the alert message
+	tsParam := cfg.TTSParam
+	if tsParam == "" {
+		tsParam = fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
+	}
+	calledNumber := cfg.CalledNumbers[0] // SingleCallByTts only supports one callee per call
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)[:16]
+	params := map[string]string{
+		"AccessKeyId":      cfg.AccessKey,
+		"Action":           "SingleCallByTts",
+		"Format":           "JSON",
+		"CalledNumber":     calledNumber,
+		"TtsCode":          cfg.TTSCode,
+		"TtsParam":         tsParam,
+		"SignatureMethod":  "HMAC-SHA1",
+		"SignatureNonce":   nonce,
+		"SignatureVersion": "1.0",
+		"Timestamp":        ts,
+		"Version":          "2017-05-25",
+	}
+	params["Signature"] = aliyunSign("GET", params, cfg.SecretKey)
+
+	var qs []string
+	for k, v := range params {
+		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(v))
+	}
+	reqURL := "https://dyvmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
+	resp, err := n.httpc.Get(reqURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var r struct {
+		Code    string `json:"Code"`
+		Message string `json:"Message"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Code != "OK" {
+		return fmt.Errorf("VoiceCall API: %s (%s)", r.Message, r.Code)
 	}
 	return nil
 }
