@@ -34,7 +34,7 @@
 - [Alert Configuration](#alert-configuration)
 - [Alert Governance](#alert-governance)
 - [API Monitoring](#api-monitoring)
-- [AI Ops Assistant (Hermes)](#ai-ops-assistant-hermes)
+- [AI Ops Assistant](#ai-ops-assistant)
 - [Unified Message Center](#unified-message-center)
 - [Advanced Features](#advanced-features)
 - [Security Mechanisms](#security-mechanisms)
@@ -123,7 +123,7 @@ Open `http://localhost:8529` 鈥?host card and metrics appear within seconds.
 | **Custom probes** | HTTP (status/latency/TLS cert days) / TCP / Ping (loss%/RTT) / process; history curves |
 | **Remote terminal** | Browser full TTY via Agent reverse connection (no inbound port); multi-tab, recording playback, read-only observe, command audit |
 | **Automation playbooks** | Multi-step orchestration + target selection (all/category/system/host) 鈫?batch parallel execution 鈫?real-time output + history |
-| **Alert push** | Feishu / DingTalk Webhook + Email SMTP, trigger/recover transitions only, no spam |
+| **Alert push** | Feishu / DingTalk Webhook + Email SMTP + SMS + Voice call (TTS), trigger/recover transitions only, no spam |
 | **Multi-user RBAC** | admin / operator / viewer, route-level permission, user management UI |
 | **MFA two-factor** | TOTP (RFC 6238), Google Authenticator compatible, QR enrollment |
 | **Account recovery** | Forgot username / forgot password (email code) / MFA unbind via email, anti-enumeration |
@@ -413,6 +413,20 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 | `smtp.smtp_password` | string | `""` | SMTP auth code/password (masked) |
 | `smtp.smtp_from_name` | string | `"AIOps Monitor"` | Sender display name |
 | `smtp.smtp_use_tls` | bool | `false` | Enable implicit TLS (465 = `true`, 587 = `false`) |
+| `sms.enabled` | bool | `false` | SMS push toggle |
+| `sms.provider` | string | `"aliyun"` | SMS provider (`aliyun`; `huawei`/`tencent` not yet implemented) |
+| `sms.access_key` | string | `""` | Cloud account AccessKey |
+| `sms.secret_key` | string | `""` | Cloud account SecretKey (masked) |
+| `sms.sign_name` | string | `""` | SMS signature (SignName) |
+| `sms.template_code` | string | `""` | SMS template CODE (TemplateCode) |
+| `sms.phones` | []string | `[]` | Recipient phone numbers |
+| `voice_call.enabled` | bool | `false` | Voice call push toggle |
+| `voice_call.provider` | string | `"aliyun"` | Voice provider (`aliyun`; `huawei`/`tencent` not yet implemented) |
+| `voice_call.access_key` | string | `""` | Cloud account AccessKey |
+| `voice_call.secret_key` | string | `""` | Cloud account SecretKey (masked) |
+| `voice_call.called_numbers` | []string | `[]` | Called numbers |
+| `voice_call.tts_code` | string | `""` | Voice template TTS CODE (TTSCode) |
+| `voice_call.tts_param` | string | `""` | Voice template params (JSON, default `{"message":"..."}`) |
 
 ### Server CLI Parameters
 
@@ -525,8 +539,10 @@ Alerts are configured visually in the dashboard 鈥?no file editing:
 1. Click **Alert Settings** in the top-right
 2. Fill Feishu or DingTalk Webhook URL (DingTalk: fill Secret if using signing), check enable
 3. **Email push**: expand SMTP section, fill server/port/account/auth code, port 465 = implicit TLS, 587 = not
-4. Click **Send Test** to verify connectivity
-5. Click **Save** 鈥?outstanding alerts re-pushed after save
+4. **SMS push**: expand the SMS section, choose provider (default `aliyun`), fill AccessKey / SecretKey / SignName / TemplateCode / recipient phones, check enable
+5. **Voice call push**: expand the Voice call section, fill AccessKey / SecretKey / called numbers / TTS Code (optional TTS param), check enable; uses Aliyun SingleCallByTts to read the alert aloud to on-call
+6. Click **Send Test** to verify connectivity (SMS / voice can be tested separately)
+7. Click **Save** 鈥?outstanding alerts re-pushed after save
 
 | Alert type | Trigger condition | Level |
 |---|---|---|
@@ -561,14 +577,14 @@ Batch health / performance black-box probes for **a business system's set of API
 - Endpoint anomalies fire unified alerts by business-system level (same source as custom probes).
 - Use cases: website / OpenAPI / microservice SLA monitoring, core-link availability dashboards.
 
-## AI Ops Assistant (Hermes)
+## AI Ops Assistant
 
 A built-in **autonomous ops Agent framework** on pluggable LLMs (OpenAI-compatible / Anthropic / BaiLian) + AI inspection diagnosis — the intelligent value-add layer on top of monitoring data:
 
 - **AI inspection (aiops)**: scheduled / manual health inspection combining online / offline hosts, active alerts, SLO breaches, and recent error logs into a health assessment; **falls back to a built-in heuristic when no LLM is configured — runs with zero external dependency**.
 - **Incident diagnosis + RAG**: a critical incident auto-triggers AI root-cause analysis written into the incident timeline; optional **pgvector diagnosis embeddings** retrieve historically similar cases (requires an embedding endpoint) — gets smarter over time.
-- **Hermes autonomous Agent**: multi-turn chat in dashboard "AI Assistant" (SSE streaming + session persistence) with **Function Calling tool use** — query metrics / search logs / list alerts / retrieve similar cases / read-only terminal inspection; configurable Hermes rules (rules / templates) plus auto-approve and read-only terminal toggles.
-- Config: intelligent analysis is enabled only after filling `ai{enabled, endpoint, api_key, model, hermes_enabled, hermes_auto_approve, hermes_terminal_enabled}` in "AI Config"; secrets are AES-encrypted at rest via `AIOPS_SECRET_KEY`.
+- **Autonomous Agent**: multi-turn chat in dashboard "AI Assistant" (SSE streaming + session persistence) with **Function Calling tool use** — query metrics / search logs / list alerts / retrieve similar cases / read-only terminal inspection; configurable agent rules (rules / templates) plus auto-approve and read-only terminal toggles.
+- Config: intelligent analysis is enabled after filling the LLM endpoint, model and secret (AES-encrypted at rest via `AIOPS_SECRET_KEY`) in "AI Config"; the autonomous Agent, RAG diagnosis and other capabilities can then be turned on.
 
 ## Unified Message Center
 
@@ -642,7 +658,7 @@ Agent sends machine fingerprint (machine-id + primary MAC SHA-256 first 12 hex) 
 
 - **Mandatory Agent Token** (default on): `register`/`report` must carry valid Token (constant-time compare)
 - **Request body limit**: 100 MiB (covers port-forward file transfer), prevents oversized JSON memory exhaustion
-- **Encryption at rest**: config MFA/SMTP/AI/webhook/relay secrets sealed with AES-256-GCM derived from `AIOPS_SECRET_KEY`
+- **Encryption at rest**: config MFA/SMTP/AI/webhook/relay/**SMS & voice call (AccessKey/SecretKey)** secrets sealed with AES-256-GCM derived from `AIOPS_SECRET_KEY`
 - **Encryption in transit**: optional TLS (`AIOPS_TLS_CERT/KEY`); the agent supports self-signed CA trust (`--ca-cert` / `tls_skip_verify`)
 - **Forced security initialization**: default admin/admin must go through a mandatory "change username + password" dialog on first login 鈥?not skippable
 - **Security headers**: `nosniff`, `DENY` (anti-clickjacking), `no-referrer`
@@ -756,7 +772,7 @@ Agent uses **active reverse connection**: server address is鍥哄寲 to `--serve
 | Server | Go 1.22+, `net/http` (Go 1.22 routing), `embed` for dashboard |
 | Dashboard | Vanilla HTML/CSS/JS, no framework deps |
 | Plugin layer | Python 3 + psutil (optional) |
-| Alert push | Feishu/DingTalk Webhook + Email SMTP (`net/smtp` + `crypto/tls`) |
+| Alert push | Feishu/DingTalk Webhook + Email SMTP + SMS + Voice call (`net/smtp` + Aliyun SendSms / SingleCallByTts) |
 | PWA | manifest.json + Service Worker + icon.svg |
 
 ### Architecture Diagram
@@ -809,7 +825,7 @@ aiops-monitor/
 鈹?  鈹?  鈹溾攢鈹€ check.go                # Custom monitoring (HTTP/TCP/Ping/process)
 鈹?  鈹?  鈹溾攢鈹€ ws.go                   # Hand-written WebSocket (terminal)
 鈹?  鈹?  鈹溾攢鈹€ terminal.go             # Remote terminal relay
-鈹?  鈹?  鈹溾攢鈹€ notify.go               # Feishu/DingTalk/Email push
+鈹?  鈹?  鈹溾攢鈹€ notify.go               # Feishu/DingTalk/Email/SMS/Voice push
 鈹?  鈹?  鈹溾攢鈹€ email.go                # SMTP + verification code manager
 鈹?  鈹?  鈹溾攢鈹€ playbook.go             # Automation playbook engine
 鈹?  鈹?  鈹溾攢鈹€ totp.go                 # TOTP two-factor auth
@@ -982,14 +998,10 @@ aiops-monitor/
 | **Alert Governance** | | |
 | GET | `/api/v1/alerts/governance` | Governance rules (silence/inhibit/route) |
 | POST | `/api/v1/alerts/governance` | Save governance rules |
-| **AI Ops Assistant (Hermes)** | | |
+| **AI Ops Assistant** | | |
 | POST | `/api/v1/ai/chat` | AI chat (SSE streaming) |
 | POST | `/api/v1/ai/diagnose` | Incident AI root-cause diagnosis |
 | GET | `/api/v1/ai/inspections` | Inspection reports |
-| GET | `/api/v1/hermes/chat` | Hermes autonomous Agent chat |
-| GET | `/api/v1/hermes/suggestions` | Chat quick questions |
-| GET/POST/DELETE | `/api/v1/hermes/sessions[/{id}[/undo]]` | Hermes session management |
-| GET/POST/DELETE | `/api/v1/hermes/rules` · `/templates` | Hermes rules / templates |
 | **Message Center** | | |
 | GET | `/api/v1/messages` | Messages + unread count (incidents / AI / remediation / tickets) |
 | POST | `/api/v1/messages/read` 路 `/read-all` | Mark read / mark all read |
@@ -1027,8 +1039,9 @@ aiops-monitor/
 - [x] Machine fingerprint auth: token rotation doesn't affect installed agents
 - [x] One-click install: auto-detect architecture + download + config + boot autostart
 - [x] Alert governance: silence (time/weekday) / inhibit (root-cause suppresses derived) / route (by level/host to channels)
+- [x] Alert notification channels expanded: SMS (Aliyun SendSms) + Voice call (TTS) push, working alongside Feishu / DingTalk / Email
 - [x] API monitoring: batch black-box probes for business-system APIs (availability / latency / P95 / throughput)
-- [x] AI Ops Assistant: pluggable-LLM inspection diagnosis + RAG similar cases + Hermes autonomous Agent (Function Calling)
+- [x] AI Ops Assistant: pluggable-LLM inspection diagnosis + RAG similar cases + autonomous Agent (Function Calling)
 - [x] Unified Message Center: single inbox for incidents / alerts / SLO / auto-remediation / AI / tickets
 - [x] Security hardening: SSRF outbound guard (safedial), log AES-256-GCM encrypted upload, pgvector RAG diagnosis embeddings
 - [x] Agent enhancements: log collection (encrypted upload), Agent-Server TLS CA trust, ZMODEM file transfer, machine-fingerprint anti-clone
