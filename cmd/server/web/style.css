@@ -1982,7 +1982,10 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
   display:none; transition:width .18s ease;
 }
 #aiChatMask.show{ display:block; }
-#aiChatMask.ai-expanded{ width:calc(100vw - var(--sidew)); }  /* 放大：铺满右侧交互区（仍不盖左侧栏） */
+/* 放大：铺满右侧交互区（仍不盖左侧栏）。用 left 锚定到侧栏右缘（=--sidew），而非
+   width:calc(100vw-…)——后者 100vw 含滚动条、right:0 却按内容宽计，两者差一个滚动条宽度
+   导致面板左缘压住侧栏约 10px；left 锚定则精确对齐，收起侧栏(--sidew 同步为 64)时也自适应。 */
+#aiChatMask.ai-expanded{ left:var(--sidew); right:0; width:auto; }
 #aiChatModal{
   position:absolute; inset:0;       /* 填满遮罩容器（右侧停靠区） */
   width:auto; height:auto; margin:0; min-width:0; max-width:none; min-height:0; max-height:none;

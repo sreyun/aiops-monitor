@@ -563,6 +563,25 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+	// Keepalive: ping the browser every 25s so an idle/minimized terminal WS isn't
+	// torn down by a proxy / NAT / browser-background idle timeout — which would
+	// surface as a spurious "已断开" and lose the shell. Server-originated pings keep
+	// both directions warm (the browser auto-pongs); this is NOT a reconnect, so the
+	// session survives. Stops when the session ends or the socket is already dead.
+	go func() {
+		t := time.NewTicker(25 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if err := ws.WritePing(nil); err != nil {
+					return
+				}
+			case <-sess.done:
+				return
+			}
+		}
+	}()
 	<-sess.done
 }
 

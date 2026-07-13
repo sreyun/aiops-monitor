@@ -418,14 +418,13 @@ async function loadAndRenderCharts() {
         { key: 'conn_udp', label: 'UDP', color: '#2fd07a', fmt: v => v.toFixed(0), transform: (s) => sumProto(s, 'udp') },
       ], null, null, { title: I18N.t("section.conn_count") });
 
-      // 会话状态：收集出现过的 TCP 状态，按常见优先级排序后每状态一条线
-      const STATE_ORDER = ['ESTABLISHED', 'TIME_WAIT', 'CLOSE_WAIT', 'LISTEN', 'SYN_SENT', 'SYN_RECV', 'FIN_WAIT1', 'FIN_WAIT2', 'LAST_ACK', 'CLOSING', 'CLOSE', 'OTHER'];
-      const stateSet = [];
-      samples.forEach(s => (s.conns || []).forEach(c => { if (c.proto === 'tcp' && c.state && !stateSet.includes(c.state)) stateSet.push(c.state); }));
-      stateSet.sort((a, b) => { const ia = STATE_ORDER.indexOf(a), ib = STATE_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
-      const stateColors = ['#4c8dff', '#f7b23b', '#f2545b', '#2fd07a', '#8b5cf6', '#43b6f0', '#e06c9a', '#e8a33d', '#6ac4b8', '#c77dff', '#9aa7bd', '#ff8a5b'];
+      // 会话状态：只画关键状态（ESTABLISHED / TIME_WAIT / LISTEN / CLOSE_WAIT），其余细分状态
+      // 一般无运维意义且会把图例塞满，故不单独成线，保持图例仅显示关键指标。
+      const KEY_STATES = ['ESTABLISHED', 'TIME_WAIT', 'LISTEN', 'CLOSE_WAIT'];
+      const stateSet = KEY_STATES.filter(st => samples.some(s => (s.conns || []).some(c => c.proto === 'tcp' && c.state === st)));
+      const stateColors = { ESTABLISHED: '#4c8dff', TIME_WAIT: '#f7b23b', LISTEN: '#2fd07a', CLOSE_WAIT: '#f2545b' };
       const stateSeries = stateSet.map((st, idx) => ({
-        key: `cst_${idx}`, label: st, color: stateColors[idx % stateColors.length], fmt: v => v.toFixed(0),
+        key: `cst_${idx}`, label: st, color: stateColors[st] || '#8b5cf6', fmt: v => v.toFixed(0),
         transform: (s) => { if (!Array.isArray(s.conns)) return null; const c = s.conns.find(x => x.proto === 'tcp' && x.state === st); return c ? c.count : 0; }
       }));
       if (stateSeries.length) DETAIL_CHARTS.chartConnStates = createChart('chartConnStates', samples, stateSeries, null, null, { title: I18N.t("section.conn_states") });
@@ -665,6 +664,15 @@ function drawChart(state) {
     ctx.fillText(label, pad.left - 8, y + 4);
   }
   ctx.setLineDash([]);
+
+  // 图表标题（左上角）：各图无独立标题元素，靠此标明本图指标——尤其 GPU 算力/温度/显存、
+  // TCP/UDP 连接等同为「一堆同色系折线」的图，没有标题就分不清是什么指标。
+  if (state.title) {
+    ctx.textAlign = "left";
+    ctx.fillStyle = txtColor;
+    ctx.font = "600 11.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
+    ctx.fillText(state.title, pad.left, 14);
+  }
 
   // X 轴时间标签
   if (n >= 1) {

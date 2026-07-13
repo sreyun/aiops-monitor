@@ -148,6 +148,12 @@ func (c *wsConn) WriteText(b []byte) error { return c.writeFrame(wsOpText, b) }
 // valid UTF-8.
 func (c *wsConn) WriteBinary(b []byte) error { return c.writeFrame(wsOpBinary, b) }
 
+// WritePing sends a ping frame. Used as an application-level keepalive so an idle
+// (e.g. minimized) terminal WebSocket isn't torn down by a proxy / NAT idle
+// timeout — the browser's WS stack auto-replies with a pong, keeping both
+// directions warm without any client-side JS or losing the shell session.
+func (c *wsConn) WritePing(b []byte) error { return c.writeFrame(wsOpPing, b) }
+
 func (c *wsConn) writeFrame(opcode byte, data []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()

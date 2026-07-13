@@ -544,7 +544,7 @@
   "install.multi_principle": "原理",
   "install.multi_principle_desc": "采集只执行一次，结果广播到所有服务端；各服务端独立鉴权、独立重试，互不影响。",
   "install.server_list_label": "服务端列表（每行一个，格式：URL [Token]）",
-  "install.server_list_hint": "每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。",
+  "install.server_list_hint": "每行一个服务端，格式 URL [Token]（Token 可选，空格分隔）。",
   "install.one_cmd": "一条命令安装",
   "install.copy": "复制",
   "install.relay_scenario": "适用场景",

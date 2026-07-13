@@ -537,7 +537,7 @@ window.DICT_TW = {
   "install.multi_principle": "原理",
   "install.multi_principle_desc": "採集只執行一次，結果廣播到所有服務端；各服務端獨立鑑權、獨立重試，互不影響。",
   "install.server_list_label": "服務端列表（每行一個，格式：URL [Token]）",
-  "install.server_list_hint": "每行一個服務端地址，Token 可選（空格分隔）。Agent 將同時向所有服務端推送資料和建立終端通道。",
+  "install.server_list_hint": "每行一個服務端，格式 URL [Token]（Token 可選，空格分隔）。",
   "install.one_cmd": "一條命令安裝",
   "install.copy": "複製",
   "install.relay_scenario": "適用場景",

@@ -404,8 +404,17 @@ navItems.forEach(n => n.addEventListener("click", () => {
 safeAddEventListener("menuBtn", "click", () => {
   const appEl = $("app");
   if (!appEl) return;
-  if (window.innerWidth <= 900) appEl.classList.toggle("nav-open");
-  else appEl.classList.toggle("collapsed");
+  if (window.innerWidth <= 900) {
+    appEl.classList.toggle("nav-open");
+    document.documentElement.style.removeProperty("--sidew"); // 移动端抽屉用默认宽度
+  } else {
+    const collapsed = appEl.classList.toggle("collapsed");
+    // AI 面板等「.app 之外的 body 级固定元素」靠 --sidew 定位；.app.collapsed 里改 --sidew 不会
+    // 级联到 .app 之外，故这里在 root 同步实际侧栏宽度（收起=64px，展开=清除回默认），
+    // 让放大后的 AI 面板始终与侧栏右缘对齐、收起时不留空隙。
+    if (collapsed) document.documentElement.style.setProperty("--sidew", "64px");
+    else document.documentElement.style.removeProperty("--sidew");
+  }
   // a11y：同步汉堡按钮的展开态（移动端看 nav-open，桌面看是否 collapsed）
   const btn = $("menuBtn");
   if (btn) {

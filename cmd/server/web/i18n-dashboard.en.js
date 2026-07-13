@@ -537,7 +537,7 @@ window.DICT_EN = {
   "install.multi_principle": "Principle",
   "install.multi_principle_desc": "Collection runs once and results are broadcast to all servers; each server authenticates and retries independently, with no mutual interference.",
   "install.server_list_label": "Server list (one per line, format: URL [Token])",
-  "install.server_list_hint": "One server address per line, token optional (space-separated). The agent pushes data to and establishes terminal channels with all servers simultaneously.",
+  "install.server_list_hint": "One server per line, format URL [Token] (token optional, space-separated).",
   "install.one_cmd": "One-command install",
   "install.copy": "Copy",
   "install.relay_scenario": "Scenario",
