@@ -97,7 +97,7 @@ func (c *darwinCollector) Collect() (shared.Metrics, error) {
 		c.prevDiskT = now
 	}
 
-	m.NetConns = darwinTCPConns()
+	m.Conns, m.NetConns = darwinConnStats()
 	m.Load1, m.Load5, m.Load15 = darwinLoad()
 	m.ProcCount = darwinProcCount()
 	m.ProcessNames = darwinProcNames()
@@ -365,14 +365,64 @@ func darwinNet() (rx, tx uint64, ok bool) {
 	return rx, tx, true
 }
 
-func darwinTCPConns() int {
-	n := 0
+// normTCPState normalizes a macOS netstat state token to the canonical state
+// name shared with the Linux/Windows collectors (empty = not a real state).
+func normTCPState(s string) string {
+	switch s {
+	case "ESTABLISHED":
+		return "ESTABLISHED"
+	case "SYN_SENT":
+		return "SYN_SENT"
+	case "SYN_RCVD", "SYN_RECV":
+		return "SYN_RECV"
+	case "FIN_WAIT_1", "FIN_WAIT1":
+		return "FIN_WAIT1"
+	case "FIN_WAIT_2", "FIN_WAIT2":
+		return "FIN_WAIT2"
+	case "TIME_WAIT":
+		return "TIME_WAIT"
+	case "CLOSE_WAIT":
+		return "CLOSE_WAIT"
+	case "LAST_ACK":
+		return "LAST_ACK"
+	case "LISTEN":
+		return "LISTEN"
+	case "CLOSING":
+		return "CLOSING"
+	case "CLOSED", "CLOSE":
+		return "CLOSE"
+	}
+	return ""
+}
+
+// darwinConnStats parses `netstat -an -p tcp` (per-state) and `-p udp` (total),
+// returning per-proto/state counts plus the established-TCP count for NetConns.
+func darwinConnStats() ([]shared.ConnStat, int) {
+	tcpStates := map[string]int{}
 	for _, ln := range strings.Split(run("netstat", "-an", "-p", "tcp"), "\n") {
-		if strings.Contains(ln, "ESTABLISHED") {
-			n++
+		f := strings.Fields(ln)
+		if len(f) < 4 || !strings.HasPrefix(f[0], "tcp") {
+			continue
+		}
+		if st := normTCPState(f[len(f)-1]); st != "" {
+			tcpStates[st]++
 		}
 	}
-	return n
+	udpTotal := 0
+	for _, ln := range strings.Split(run("netstat", "-an", "-p", "udp"), "\n") {
+		f := strings.Fields(ln)
+		if len(f) >= 4 && strings.HasPrefix(f[0], "udp") {
+			udpTotal++
+		}
+	}
+	out := make([]shared.ConnStat, 0, len(tcpStates)+1)
+	for st, n := range tcpStates {
+		out = append(out, shared.ConnStat{Proto: "tcp", State: st, Count: n})
+	}
+	if udpTotal > 0 {
+		out = append(out, shared.ConnStat{Proto: "udp", Count: udpTotal})
+	}
+	return out, tcpStates["ESTABLISHED"]
 }
 
 func darwinLoad() (l1, l5, l15 float64) {

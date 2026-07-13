@@ -191,7 +191,7 @@ function collectForwardItems() {
       enabled: f.enabled !== false,
       badge: f.protocol === "udp" ? "UDP" : "TCP", badgeClass: "op",
       title: `${esc(f.hostname)} → :${f.target_port}`,
-      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")}`,
+      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")} · ${f.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
       listenAddr: f.listen_addr,
       groupID: f.group_id || "",           // 端口范围批量组（同组共享）
       targetPort: f.target_port,
@@ -206,7 +206,7 @@ function collectForwardItems() {
       enabled: p.enabled !== false,
       badge: "HTTP", badgeClass: "sys",
       title: esc(p.name || `${p.hostname}:${p.target_port}`) + (p.is_copy ? I18N.t("forward.copy_suffix") : ""),
-      sub: `${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""}`,
+      sub: `${esc(p.hostname)}:${p.target_port}${p.default_path ? " · " + esc(p.default_path) : ""} · ${p.sessions || 0} ${I18N.t("ui.active_sessions")} · ${p.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
       proxyUrl,
     });
   });

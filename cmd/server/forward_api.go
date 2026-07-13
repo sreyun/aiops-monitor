@@ -304,11 +304,27 @@ func (s *Server) handleForwardHealth(w http.ResponseWriter, r *http.Request) {
 
 // --- HTTP Proxy Shortcuts API ---
 
-// handleHTTPProxyList returns all saved HTTP proxy configurations.
+// httpProxyInfo is the API view of an HTTP proxy shortcut, enriched with live
+// connection counts (active + cumulative) tracked by the forward manager.
+type httpProxyInfo struct {
+	HTTPProxyConfig
+	Sessions      int   `json:"sessions"`       // 当前活跃连接（请求）数
+	TotalSessions int64 `json:"total_sessions"` // 累计总连接（请求）数
+}
+
+// handleHTTPProxyList returns all saved HTTP proxy configurations with live stats.
 // GET /api/v1/http-proxy
 func (s *Server) handleHTTPProxyList(w http.ResponseWriter, r *http.Request) {
 	proxies := s.cfg.ListHTTPProxies()
-	writeJSON(w, http.StatusOK, proxies)
+	m := s.forward
+	m.mu.Lock()
+	out := make([]httpProxyInfo, 0, len(proxies))
+	for _, p := range proxies {
+		active, total := m.counts(sessionCounterKey("", p.HostID, p.TargetPort))
+		out = append(out, httpProxyInfo{HTTPProxyConfig: p, Sessions: active, TotalSessions: total})
+	}
+	m.mu.Unlock()
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleHTTPProxyCreate creates a new HTTP proxy shortcut.

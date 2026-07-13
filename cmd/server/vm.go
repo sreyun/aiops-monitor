@@ -545,6 +545,16 @@ func (v *vmWriter) push(url string, samples []vmSample) {
 		for _, g := range s.m.GPUs {
 			gl := lbl + fmt.Sprintf(`,gpu="%s"`, lblEsc(g.Name))
 			fmt.Fprintf(&b, "aiops_gpu_util_percent{%s} %g %d\n", gl, g.UtilPercent, ms)
+			fmt.Fprintf(&b, "aiops_gpu_temp_c{%s} %g %d\n", gl, g.Temp, ms)
+			fmt.Fprintf(&b, "aiops_gpu_mem_percent{%s} %g %d\n", gl, g.MemPercent, ms)
+			fmt.Fprintf(&b, "aiops_gpu_mem_used_bytes{%s} %g %d\n", gl, float64(g.MemUsed), ms)
+			fmt.Fprintf(&b, "aiops_gpu_mem_free_bytes{%s} %g %d\n", gl, float64(g.MemFree), ms)
+			fmt.Fprintf(&b, "aiops_gpu_mem_total_bytes{%s} %g %d\n", gl, float64(g.MemTotal), ms)
+		}
+		// 每 (协议,状态) 一条连接计数序列，支撑「连接数 / 会话状态」趋势图
+		for _, c := range s.m.Conns {
+			cl := lbl + fmt.Sprintf(`,proto="%s",state="%s"`, lblEsc(c.Proto), lblEsc(c.State))
+			fmt.Fprintf(&b, "aiops_net_conn_count{%s} %g %d\n", cl, float64(c.Count), ms)
 		}
 	}
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(url, "/")+"/api/v1/import/prometheus", strings.NewReader(b.String()))
@@ -623,20 +633,53 @@ func setSampleMetric(s *shared.Sample, name string, val float64) {
 	}
 }
 
-// setSampleGPU 把一条 aiops_gpu_util_percent 系列（按 gpu 标签区分不同显卡）并回该时间点
-// 样本的 GPUs 数组。VM 里 GPU 利用率是带 gpu 标签的独立系列，parseVMExport 必须按名重建，
-// 否则从 VM 读回的历史样本永远缺 gpus，前端「近期趋势」就画不出 GPU 图（本次修复的 bug 点）。
-func setSampleGPU(s *shared.Sample, gpuName string, val float64) {
+// setSampleGPU 把一条带 gpu 标签的 aiops_gpu_* 系列（按显卡名区分）并回该时间点样本的 GPUs
+// 数组，按名重建每块显卡的 利用率/温度/显存 各字段。VM 里每块显卡是带 gpu 标签的独立系列，
+// parseVMExport 必须按名重建，否则从 VM 读回的历史样本永远缺 gpus，前端趋势画不出 GPU 图。
+func setSampleGPU(s *shared.Sample, gpuName, name string, val float64) {
 	if gpuName == "" {
 		gpuName = "GPU"
 	}
+	idx := -1
 	for i := range s.GPUs {
 		if s.GPUs[i].Name == gpuName {
-			s.GPUs[i].UtilPercent = val
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.GPUs = append(s.GPUs, shared.GPUInfo{Name: gpuName})
+		idx = len(s.GPUs) - 1
+	}
+	switch name {
+	case "aiops_gpu_util_percent":
+		s.GPUs[idx].UtilPercent = val
+	case "aiops_gpu_temp_c":
+		s.GPUs[idx].Temp = val
+	case "aiops_gpu_mem_percent":
+		s.GPUs[idx].MemPercent = val
+	case "aiops_gpu_mem_used_bytes":
+		s.GPUs[idx].MemUsed = uint64(val)
+	case "aiops_gpu_mem_free_bytes":
+		s.GPUs[idx].MemFree = uint64(val)
+	case "aiops_gpu_mem_total_bytes":
+		s.GPUs[idx].MemTotal = uint64(val)
+	}
+}
+
+// setSampleConn 把一条带 proto+state 标签的 aiops_net_conn_count 系列并回样本的 Conns 数组，
+// 按 (协议,状态) 重建，支撑「连接数 / 会话状态」趋势图。
+func setSampleConn(s *shared.Sample, proto, state string, val float64) {
+	if proto == "" {
+		return
+	}
+	for i := range s.Conns {
+		if s.Conns[i].Proto == proto && s.Conns[i].State == state {
+			s.Conns[i].Count = int(val)
 			return
 		}
 	}
-	s.GPUs = append(s.GPUs, shared.GPUInfo{Name: gpuName, UtilPercent: val})
+	s.Conns = append(s.Conns, shared.ConnStat{Proto: proto, State: state, Count: int(val)})
 }
 
 // setSampleDisk 把一条带 path 标签的 aiops_disk_vol_* 系列并回该时间点样本的 Disks 数组，
@@ -715,8 +758,10 @@ func parseVMExport(r io.Reader) []shared.Sample {
 			continue
 		}
 		name := line.Metric["__name__"]
-		gpuName := line.Metric["gpu"]   // GPU 利用率系列带 gpu 标签（每块显卡一条），需按名重建 s.GPUs
-		diskPath := line.Metric["path"] // 磁盘分区系列带 path 标签（每个分区一条），需按路径重建 s.Disks
+		gpuName := line.Metric["gpu"]     // GPU 系列带 gpu 标签（每块显卡一条），需按名重建 s.GPUs
+		diskPath := line.Metric["path"]   // 磁盘分区系列带 path 标签（每个分区一条），需按路径重建 s.Disks
+		connProto := line.Metric["proto"] // 连接计数系列带 proto+state 标签，需按 (协议,状态) 重建 s.Conns
+		connState := line.Metric["state"]
 		for i := range line.Values {
 			if i >= len(line.Timestamps) {
 				break
@@ -727,10 +772,12 @@ func parseVMExport(r io.Reader) []shared.Sample {
 				s = &shared.Sample{Timestamp: ts}
 				byTs[ts] = s
 			}
-			if name == "aiops_gpu_util_percent" {
-				setSampleGPU(s, gpuName, line.Values[i])
+			if strings.HasPrefix(name, "aiops_gpu_") {
+				setSampleGPU(s, gpuName, name, line.Values[i])
 			} else if strings.HasPrefix(name, "aiops_disk_vol_") {
 				setSampleDisk(s, diskPath, name, line.Values[i])
+			} else if name == "aiops_net_conn_count" {
+				setSampleConn(s, connProto, connState, line.Values[i])
 			} else {
 				setSampleMetric(s, name, line.Values[i])
 			}
@@ -740,6 +787,14 @@ func parseVMExport(r io.Reader) []shared.Sample {
 	for _, s := range byTs {
 		if len(s.Disks) > 1 { // 分区按 path 排序，保证跨样本顺序稳定
 			sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
+		}
+		if len(s.Conns) > 1 { // 连接按 proto+state 排序，保证跨样本顺序稳定
+			sort.Slice(s.Conns, func(a, b int) bool {
+				if s.Conns[a].Proto != s.Conns[b].Proto {
+					return s.Conns[a].Proto < s.Conns[b].Proto
+				}
+				return s.Conns[a].State < s.Conns[b].State
+			})
 		}
 		out = append(out, *s)
 	}

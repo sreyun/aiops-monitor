@@ -312,6 +312,7 @@ async function loadAndRenderCharts() {
     DETAIL_CHARTS = {};
     const gran = spanH <= 2 ? I18N.t("time.raw") : spanH <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
+    const hasConns = samples.some(s => Array.isArray(s.conns) && s.conns.length);
     const pct = v => v.toFixed(1) + '%';
     const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${id}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
@@ -327,7 +328,7 @@ async function loadAndRenderCharts() {
         </span>
       </div>
       <div class="chart-container">
-        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') : ''}${wrap('chartNet')}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
+        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') + wrap('chartGPUTemp') + wrap('chartGPUMemPct') + wrap('chartGPUMem') : ''}${wrap('chartNet')}${hasConns ? wrap('chartConns') + wrap('chartConnStates') : ''}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
       </div>
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
@@ -369,22 +370,66 @@ async function loadAndRenderCharts() {
       diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: I18N.t("section.root_partition"), color: '#f7b23b', fmt: pct }],
       0, 100, { title: I18N.t("section.disk_usage") });
 
-    // GPU：每块显卡一条线（存在时才有该图）
+    // GPU：每块显卡一组曲线（存在时才有这些图）。核心算力使用率 / 显卡温度 / 显存占用率 /
+    // 显存已用·空闲 —— 覆盖 GPU 深度指标。
     if (hasGPU) {
       const gpuNames = [];
       samples.forEach(s => (s.gpus || []).forEach((g, i) => { if (!gpuNames[i]) gpuNames[i] = g.name || ('GPU' + i); }));
-      const gpuSeries = gpuNames.map((nm, idx) => ({
-        key: `gpu_${idx}`, label: nm,
-        color: ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b'][idx % 4], fmt: v => v.toFixed(0) + '%',
-        transform: (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g.util_percent || 0) : null; }
-      }));
-      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuSeries, 0, 100, { title: I18N.t("section.gpu_usage") });
+      const gpalette = ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b', '#f2545b', '#e06c9a'];
+      const gcolor = idx => gpalette[idx % gpalette.length];
+      const gpuVal = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) : null; };
+      const gbUnit = I18N.t("unit.gb");
+      const gpuBytesGB = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) / 1073741824 : null; };
+
+      // 核心算力使用率 %
+      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuNames.map((nm, idx) => ({
+        key: `gpu_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'util_percent')
+      })), 0, 100, { title: I18N.t("section.gpu_usage") });
+
+      // 显卡温度 ℃
+      DETAIL_CHARTS.chartGPUTemp = createChart('chartGPUTemp', samples, gpuNames.map((nm, idx) => ({
+        key: `gput_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '℃', transform: gpuVal(idx, 'temp')
+      })), null, null, { title: I18N.t("section.gpu_temp") });
+
+      // 显存占用率 %
+      DETAIL_CHARTS.chartGPUMemPct = createChart('chartGPUMemPct', samples, gpuNames.map((nm, idx) => ({
+        key: `gpump_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'mem_percent')
+      })), 0, 100, { title: I18N.t("section.gpu_mem_pct") });
+
+      // 显存已用 / 空闲（GB），每卡两条
+      const gpuMemSeries = [];
+      gpuNames.forEach((nm, idx) => {
+        gpuMemSeries.push({ key: `gpumu_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_used")}`, color: gcolor(idx * 2), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_used') });
+        gpuMemSeries.push({ key: `gpumf_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_free")}`, color: gcolor(idx * 2 + 1), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_free') });
+      });
+      DETAIL_CHARTS.chartGPUMem = createChart('chartGPUMem', samples, gpuMemSeries, null, null, { title: I18N.t("section.gpu_vram") });
     }
 
     DETAIL_CHARTS.chartNet = createChart('chartNet', samples, [
       { key: 'net_recv_rate', label: I18N.t("section.net_recv"), color: '#2fd07a', fmt: fmtRate },
       { key: 'net_sent_rate', label: I18N.t("section.net_send"), color: '#43b6f0', fmt: fmtRate },
     ], null, null, { title: I18N.t("section.net_throughput") });
+
+    // 连接数（TCP/UDP 总数）+ 会话状态（TCP 各状态一条线）
+    if (hasConns) {
+      const sumProto = (s, proto) => Array.isArray(s.conns) ? s.conns.reduce((a, c) => c.proto === proto ? a + (c.count || 0) : a, 0) : null;
+      DETAIL_CHARTS.chartConns = createChart('chartConns', samples, [
+        { key: 'conn_tcp', label: 'TCP', color: '#43b6f0', fmt: v => v.toFixed(0), transform: (s) => sumProto(s, 'tcp') },
+        { key: 'conn_udp', label: 'UDP', color: '#2fd07a', fmt: v => v.toFixed(0), transform: (s) => sumProto(s, 'udp') },
+      ], null, null, { title: I18N.t("section.conn_count") });
+
+      // 会话状态：收集出现过的 TCP 状态，按常见优先级排序后每状态一条线
+      const STATE_ORDER = ['ESTABLISHED', 'TIME_WAIT', 'CLOSE_WAIT', 'LISTEN', 'SYN_SENT', 'SYN_RECV', 'FIN_WAIT1', 'FIN_WAIT2', 'LAST_ACK', 'CLOSING', 'CLOSE', 'OTHER'];
+      const stateSet = [];
+      samples.forEach(s => (s.conns || []).forEach(c => { if (c.proto === 'tcp' && c.state && !stateSet.includes(c.state)) stateSet.push(c.state); }));
+      stateSet.sort((a, b) => { const ia = STATE_ORDER.indexOf(a), ib = STATE_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+      const stateColors = ['#4c8dff', '#f7b23b', '#f2545b', '#2fd07a', '#8b5cf6', '#43b6f0', '#e06c9a', '#e8a33d', '#6ac4b8', '#c77dff', '#9aa7bd', '#ff8a5b'];
+      const stateSeries = stateSet.map((st, idx) => ({
+        key: `cst_${idx}`, label: st, color: stateColors[idx % stateColors.length], fmt: v => v.toFixed(0),
+        transform: (s) => { if (!Array.isArray(s.conns)) return null; const c = s.conns.find(x => x.proto === 'tcp' && x.state === st); return c ? c.count : 0; }
+      }));
+      if (stateSeries.length) DETAIL_CHARTS.chartConnStates = createChart('chartConnStates', samples, stateSeries, null, null, { title: I18N.t("section.conn_states") });
+    }
 
     DETAIL_CHARTS.chartDiskIO = createChart('chartDiskIO', samples, [
       { key: 'disk_read_rate', label: I18N.t("ui.disk_read"), color: '#2fd07a', fmt: fmtIORate },

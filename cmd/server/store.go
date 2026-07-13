@@ -426,7 +426,7 @@ func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int6
 	// Per-GPU info: aggregate each GPU by name (average util / VRAM)
 	if len(window) > 0 && len(window[0].GPUs) > 0 {
 		type gacc struct {
-			util, memUsed, memTotal, temp, n float64
+			util, memUsed, memFree, memTotal, temp, n float64
 		}
 		order := []string{}
 		gmap := map[string]*gacc{}
@@ -440,6 +440,7 @@ func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int6
 				}
 				a.util += g.UtilPercent
 				a.memUsed += float64(g.MemUsed)
+				a.memFree += float64(g.MemFree)
 				a.memTotal += float64(g.MemTotal)
 				a.temp += g.Temp
 				a.n++
@@ -454,6 +455,7 @@ func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int6
 				Name:        name,
 				UtilPercent: a.util / a.n,
 				MemUsed:     uint64(a.memUsed / a.n),
+				MemFree:     uint64(a.memFree / a.n),
 				MemTotal:    uint64(a.memTotal / a.n),
 				Temp:        a.temp / a.n,
 			}
@@ -479,6 +481,35 @@ func (h *Host) aggregateSamples(samples []shared.Sample, from, to, interval int6
 		connsSum += float64(s.NetConns)
 	}
 	agg.NetConns = int(connsSum / n)
+
+	// Per-(proto,state) connection counts: average each series by key so the
+	// connection-count / session-state trend survives 1m/5m downsampling.
+	if len(window) > 0 && len(window[0].Conns) > 0 {
+		type ckey struct{ proto, state string }
+		type cacc struct{ sum, cnt float64 }
+		corder := []ckey{}
+		cmap := map[ckey]*cacc{}
+		for _, s := range window {
+			for _, c := range s.Conns {
+				k := ckey{c.Proto, c.State}
+				a := cmap[k]
+				if a == nil {
+					a = &cacc{}
+					cmap[k] = a
+					corder = append(corder, k)
+				}
+				a.sum += float64(c.Count)
+				a.cnt++
+			}
+		}
+		for _, k := range corder {
+			a := cmap[k]
+			if a.cnt == 0 {
+				continue
+			}
+			agg.Conns = append(agg.Conns, shared.ConnStat{Proto: k.proto, State: k.state, Count: int(a.sum / a.cnt)})
+		}
+	}
 
 	// Load averages
 	var l1Sum, l5Sum, l15Sum float64

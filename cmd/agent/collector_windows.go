@@ -34,6 +34,7 @@ var (
 	procEnumProcesses        = modpsapi.NewProc("EnumProcesses")
 	procGetIfTable           = modiphlpapi.NewProc("GetIfTable")
 	procGetTcpTable          = modiphlpapi.NewProc("GetTcpTable")
+	procGetUdpTable          = modiphlpapi.NewProc("GetUdpTable")
 	procRtlGetVersion        = syscall.NewLazyDLL("ntdll.dll").NewProc("RtlGetVersion")
 
 	modkernel32x                 = syscall.NewLazyDLL("kernel32.dll")
@@ -181,8 +182,8 @@ func (c *windowsCollector) Collect() (shared.Metrics, error) {
 		c.prevDiskT = now
 	}
 
-	// ---- Established TCP connections ----
-	m.NetConns = countTCPConns()
+	// ---- TCP per-state + UDP connection counts ----
+	m.Conns, m.NetConns = collectConnStats()
 
 	// ---- Process count ----
 	m.ProcCount = countProcs()
@@ -328,42 +329,70 @@ func readIfTable() (rx, tx uint64, ok bool) {
 	return rx, tx, true
 }
 
-// countTCPConns counts established IPv4 TCP connections via GetTcpTable.
-// MIB_TCPROW is 20 bytes with dwState first; MIB_TCP_STATE_ESTAB == 5.
-func countTCPConns() int {
+// winTCPStateNames maps Win32 MIB_TCP_STATE (dwState) codes to canonical state
+// names (aligned with the Linux collector so charts share one legend).
+var winTCPStateNames = map[uint32]string{
+	1: "CLOSE", 2: "LISTEN", 3: "SYN_SENT", 4: "SYN_RECV", 5: "ESTABLISHED",
+	6: "FIN_WAIT1", 7: "FIN_WAIT2", 8: "CLOSE_WAIT", 9: "CLOSING",
+	10: "LAST_ACK", 11: "TIME_WAIT", 12: "DELETE_TCB",
+}
+
+// collectConnStats enumerates IPv4 TCP connections per state via GetTcpTable
+// (MIB_TCPROW, 20 bytes, dwState first) and IPv4 UDP sockets via GetUdpTable.
+// IPv6 tables are not enumerated (the classic Win32 table APIs are IPv4-only),
+// matching the prior established-count behavior. Returns per-proto/state counts
+// plus the established-TCP count for the legacy NetConns field.
+func collectConnStats() ([]shared.ConnStat, int) {
+	tcpStates := map[string]int{}
+	// --- IPv4 TCP ---
 	var size uint32
 	procGetTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
-	if size == 0 || size > 1<<20 { // sanity cap
-		return 0
-	}
-	buf := getBuf32K()
-	defer putBuf32K(buf)
-	if uint32(len(buf)) < size {
-		buf = make([]byte, size)
-	}
-	if r, _, _ := procGetTcpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-	); r != 0 {
-		return 0
-	}
-	const (
-		rowSize    = 20
-		stateEstab = 5
-	)
-	n := binary.LittleEndian.Uint32(buf[0:])
-	count := 0
-	for i := 0; i < int(n); i++ {
-		base := 4 + i*rowSize
-		if base+4 > len(buf) {
-			break
+	if size > 0 && size <= 1<<20 {
+		pooled := getBuf32K()
+		buf := pooled
+		if uint32(len(buf)) < size {
+			buf = make([]byte, size)
 		}
-		if binary.LittleEndian.Uint32(buf[base:]) == stateEstab {
-			count++
+		if r, _, _ := procGetTcpTable.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0); r == 0 {
+			const rowSize = 20
+			n := binary.LittleEndian.Uint32(buf[0:])
+			for i := 0; i < int(n); i++ {
+				base := 4 + i*rowSize
+				if base+4 > len(buf) {
+					break
+				}
+				st := winTCPStateNames[binary.LittleEndian.Uint32(buf[base:])]
+				if st == "" {
+					st = "OTHER"
+				}
+				tcpStates[st]++
+			}
 		}
+		putBuf32K(pooled)
 	}
-	return count
+	// --- IPv4 UDP (MIB_UDPTABLE: dwNumEntries then MIB_UDPROW rows) ---
+	udpTotal := 0
+	var usize uint32
+	procGetUdpTable.Call(0, uintptr(unsafe.Pointer(&usize)), 0)
+	if usize > 0 && usize <= 1<<20 {
+		pooled := getBuf32K()
+		buf := pooled
+		if uint32(len(buf)) < usize {
+			buf = make([]byte, usize)
+		}
+		if r, _, _ := procGetUdpTable.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&usize)), 0); r == 0 && len(buf) >= 4 {
+			udpTotal = int(binary.LittleEndian.Uint32(buf[0:]))
+		}
+		putBuf32K(pooled)
+	}
+	out := make([]shared.ConnStat, 0, len(tcpStates)+1)
+	for st, cnt := range tcpStates {
+		out = append(out, shared.ConnStat{Proto: "tcp", State: st, Count: cnt})
+	}
+	if udpTotal > 0 {
+		out = append(out, shared.ConnStat{Proto: "udp", Count: udpTotal})
+	}
+	return out, tcpStates["ESTABLISHED"]
 }
 
 // countProcs returns the number of running processes via EnumProcesses,

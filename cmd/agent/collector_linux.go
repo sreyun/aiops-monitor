@@ -29,20 +29,20 @@ type netTotals struct{ rx, tx uint64 }
 // process listing (which reads /proc/*/comm for every PID) are cached with
 // per-cycle throttling — they change slowly and don't need 10s granularity.
 type linuxCollector struct {
-	diskPath string
-	prevCPU  cpuTimes
-	prevNet  netTotals
-	prevNetT time.Time
-	prevDiskIO diskIOTotals
+	diskPath    string
+	prevCPU     cpuTimes
+	prevNet     netTotals
+	prevNetT    time.Time
+	prevDiskIO  diskIOTotals
 	prevDiskIOT time.Time
-	primed   bool
+	primed      bool
 
 	// Cached results — refreshed once per multi-cycle cache window.
-	diskCache     []shared.DiskInfo
-	diskCacheAt   time.Time
-	procCache     procInfo
-	procCacheAt   time.Time
-	procCacheMu   sync.Mutex
+	diskCache   []shared.DiskInfo
+	diskCacheAt time.Time
+	procCache   procInfo
+	procCacheAt time.Time
+	procCacheMu sync.Mutex
 }
 
 type procInfo struct {
@@ -127,7 +127,7 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 		c.prevNetT = now
 	}
 
-	m.NetConns = countTCPConns()
+	m.Conns, m.NetConns = collectConnStats()
 
 	// Disk IO: read/write rates from /proc/diskstats
 	if dio, err := readDiskIO(); err == nil {
@@ -141,7 +141,9 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 				// IO util: rough estimate based on total bytes throughput vs typical disk bandwidth
 				totalRate := m.DiskReadRate + m.DiskWriteRate
 				m.DiskIOUtilPercent = round1(totalRate / 200e6 * 100) // 200 MB/s as reference max
-				if m.DiskIOUtilPercent > 100 { m.DiskIOUtilPercent = 100 }
+				if m.DiskIOUtilPercent > 100 {
+					m.DiskIOUtilPercent = 100
+				}
 			}
 		}
 		c.prevDiskIO = dio
@@ -198,6 +200,9 @@ func amdSysfsGPUs() []shared.GPUInfo {
 				used, _ := strconv.ParseUint(strings.TrimSpace(string(ub)), 10, 64)
 				total, _ := strconv.ParseUint(strings.TrimSpace(string(tb)), 10, 64)
 				g.MemUsed, g.MemTotal = used, total
+				if total >= used {
+					g.MemFree = total - used
+				}
 				if total > 0 {
 					g.MemPercent = round1(float64(used) / float64(total) * 100)
 				}
@@ -300,30 +305,61 @@ func readNet() (netTotals, error) {
 	return nt, nil
 }
 
-// countTCPConns counts established TCP connections from procfs (v4 + v6).
-// The state column (index 3) is a hex code; 01 == TCP_ESTABLISHED.
-func countTCPConns() int {
-	n := 0
+// tcpStateNames maps the Linux procfs hex state code (column index 3 of
+// /proc/net/tcp*) to a canonical TCP state name.
+var tcpStateNames = map[string]string{
+	"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV", "04": "FIN_WAIT1",
+	"05": "FIN_WAIT2", "06": "TIME_WAIT", "07": "CLOSE", "08": "CLOSE_WAIT",
+	"09": "LAST_ACK", "0A": "LISTEN", "0B": "CLOSING",
+}
+
+// collectConnStats reads /proc/net/{tcp,tcp6,udp,udp6} and returns per-state TCP
+// counts plus a single UDP total, along with the established-TCP count (for the
+// legacy NetConns field). Zero external dependencies — pure procfs.
+func collectConnStats() ([]shared.ConnStat, int) {
+	tcpStates := map[string]int{}
+	udpTotal := 0
 	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		f, err := os.Open(path)
-		if err != nil {
+		forEachNetRow(path, func(fields []string) {
+			if len(fields) >= 4 {
+				st := tcpStateNames[strings.ToUpper(fields[3])]
+				if st == "" {
+					st = "OTHER"
+				}
+				tcpStates[st]++
+			}
+		})
+	}
+	for _, path := range []string{"/proc/net/udp", "/proc/net/udp6"} {
+		forEachNetRow(path, func(fields []string) { udpTotal++ })
+	}
+	out := make([]shared.ConnStat, 0, len(tcpStates)+1)
+	for st, n := range tcpStates {
+		out = append(out, shared.ConnStat{Proto: "tcp", State: st, Count: n})
+	}
+	if udpTotal > 0 {
+		out = append(out, shared.ConnStat{Proto: "udp", Count: udpTotal})
+	}
+	return out, tcpStates["ESTABLISHED"]
+}
+
+// forEachNetRow scans a /proc/net/{tcp,udp}* file, calling fn with the
+// whitespace-split fields of each data row (the header line is skipped).
+func forEachNetRow(path string, fn func(fields []string)) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	first := true
+	for sc.Scan() {
+		if first {
+			first = false // skip header
 			continue
 		}
-		sc := bufio.NewScanner(f)
-		first := true
-		for sc.Scan() {
-			if first {
-				first = false // skip header
-				continue
-			}
-			fields := strings.Fields(sc.Text())
-			if len(fields) >= 4 && fields[3] == "01" {
-				n++
-			}
-		}
-		f.Close()
+		fn(strings.Fields(sc.Text()))
 	}
-	return n
 }
 
 func readLoadAvg() (l1, l5, l15 float64, err error) {

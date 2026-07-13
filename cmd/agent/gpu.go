@@ -54,7 +54,7 @@ func runCmd(name string, args ...string) string {
 
 // nvidiaSmiQuery is the field list requested from nvidia-smi. Column order here
 // must match parseNvidiaSmi's indexing.
-const nvidiaSmiQuery = "name,utilization.gpu,memory.used,memory.total,temperature.gpu"
+const nvidiaSmiQuery = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,memory.free"
 
 // nvidiaSmiGPUs probes NVIDIA GPUs. Shared by the Linux and Windows collectors.
 func nvidiaSmiGPUs() []shared.GPUInfo {
@@ -65,8 +65,8 @@ func nvidiaSmiGPUs() []shared.GPUInfo {
 }
 
 // parseNvidiaSmi parses the CSV (noheader,nounits) output of nvidia-smi. Each
-// line is: name, util%, memUsedMiB, memTotalMiB, tempC. Missing/[N/A] fields
-// parse to 0.
+// line is: name, util%, memUsedMiB, memTotalMiB, tempC, memFreeMiB. Missing/[N/A]
+// fields parse to 0.
 func parseNvidiaSmi(out string) []shared.GPUInfo {
 	var gpus []shared.GPUInfo
 	for _, ln := range strings.Split(out, "\n") {
@@ -91,11 +91,19 @@ func parseNvidiaSmi(out string) []shared.GPUInfo {
 			MemUsed:     uint64(usedMiB) * 1024 * 1024,
 			MemTotal:    uint64(totalMiB) * 1024 * 1024,
 		}
+		if totalMiB >= usedMiB {
+			g.MemFree = uint64(totalMiB-usedMiB) * 1024 * 1024 // fallback: total-used
+		}
 		if totalMiB > 0 {
 			g.MemPercent = round1(usedMiB / totalMiB * 100)
 		}
 		if len(f) >= 5 {
 			g.Temp = round1(parseNum(f[4]))
+		}
+		if len(f) >= 6 {
+			if free := parseNum(f[5]); free > 0 {
+				g.MemFree = uint64(free) * 1024 * 1024 // prefer nvidia-smi's memory.free
+			}
 		}
 		gpus = append(gpus, g)
 	}

@@ -71,6 +71,55 @@ func TestVMExportParseDisks(t *testing.T) {
 	}
 }
 
+// GPU 多指标：util/temp/mem_* 各自是带 gpu 标签的独立系列，parseVMExport 须把它们并回同一块
+// 显卡的不同字段（本次 GPU 深度指标扩展的读回路径）。
+func TestVMExportParseGPUFull(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU0"},"values":[30],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_temp_c","host":"h1","gpu":"GPU0"},"values":[65],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_mem_used_bytes","host":"h1","gpu":"GPU0"},"values":[2000],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_mem_free_bytes","host":"h1","gpu":"GPU0"},"values":[6000],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_mem_total_bytes","host":"h1","gpu":"GPU0"},"values":[8000],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_mem_percent","host":"h1","gpu":"GPU0"},"values":[25],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 1 || len(s[0].GPUs) != 1 {
+		t.Fatalf("应重建 1 个样本 1 块 GPU，实际 samples=%d", len(s))
+	}
+	g := s[0].GPUs[0]
+	if g.Name != "GPU0" || g.UtilPercent != 30 || g.Temp != 65 || g.MemUsed != 2000 || g.MemFree != 6000 || g.MemTotal != 8000 || g.MemPercent != 25 {
+		t.Errorf("GPU 多指标重建错误：%+v", g)
+	}
+}
+
+// 连接计数在 VM 里是带 proto+state 标签的独立系列，parseVMExport 须按 (协议,状态) 重建
+// s.Conns，否则「连接数 / 会话状态」趋势图读不到历史。
+func TestVMExportParseConns(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_net_conn_count","host":"h1","proto":"tcp","state":"ESTABLISHED"},"values":[12,15],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_net_conn_count","host":"h1","proto":"tcp","state":"TIME_WAIT"},"values":[3],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_net_conn_count","host":"h1","proto":"udp","state":""},"values":[7],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 2 {
+		t.Fatalf("expected 2 samples, got %d", len(s))
+	}
+	// ts=100：tcp ESTABLISHED=12, tcp TIME_WAIT=3, udp=7 — 排序后 tcp 在 udp 前，ESTABLISHED 在 TIME_WAIT 前
+	if len(s[0].Conns) != 3 {
+		t.Fatalf("sample@100 应重建 3 条连接序列，实际 %d：%+v", len(s[0].Conns), s[0].Conns)
+	}
+	get := func(sm int, proto, state string) int {
+		for _, c := range s[sm].Conns {
+			if c.Proto == proto && c.State == state {
+				return c.Count
+			}
+		}
+		return -1
+	}
+	if get(0, "tcp", "ESTABLISHED") != 12 || get(0, "tcp", "TIME_WAIT") != 3 || get(0, "udp", "") != 7 {
+		t.Errorf("sample@100 连接计数错误：%+v", s[0].Conns)
+	}
+	if len(s[1].Conns) != 1 || get(1, "tcp", "ESTABLISHED") != 15 { // ts=105 仅 ESTABLISHED
+		t.Errorf("sample@105 连接计数错误：%+v", s[1].Conns)
+	}
+}
+
 func TestPasswordPolicy(t *testing.T) {
 	good := []string{"Abcd123!", "P@ssw0rd", "aB3$aB3$", "Zx9#mnop", "长密码Ab1!x"}
 	for _, p := range good {

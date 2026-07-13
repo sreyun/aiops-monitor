@@ -138,6 +138,7 @@ func (m *forwardManager) Snapshot() ForwardSnapshot {
 type forwardSession struct {
 	id          string
 	ruleID      string // TCP rule that spawned this session; "" for HTTP
+	counterKey  string // per-rule / per-http-proxy connection-counter key
 	hostID      string
 	hostname    string
 	targetPort  int
@@ -206,19 +207,28 @@ type forwardWaitInfo struct {
 
 // forwardInfo is the JSON view for the API.
 type forwardInfo struct {
-	ID         string `json:"id"`
-	HostID     string `json:"host_id"`
-	Hostname   string `json:"hostname"`
-	TargetPort int    `json:"target_port"`
-	LocalPort  int    `json:"local_port"`
-	ListenAddr string `json:"listen_addr"`
-	Status     string `json:"status"`
-	CreatedAt  int64  `json:"created_at"`
-	Operator   string `json:"operator"`
-	Sessions   int    `json:"sessions"`
-	Enabled    bool   `json:"enabled"`
-	Protocol   string `json:"protocol,omitempty"` // "tcp" | "udp"
-	GroupID    string `json:"group_id,omitempty"` // 端口范围批量组（同组共享），供整组操作
+	ID            string `json:"id"`
+	HostID        string `json:"host_id"`
+	Hostname      string `json:"hostname"`
+	TargetPort    int    `json:"target_port"`
+	LocalPort     int    `json:"local_port"`
+	ListenAddr    string `json:"listen_addr"`
+	Status        string `json:"status"`
+	CreatedAt     int64  `json:"created_at"`
+	Operator      string `json:"operator"`
+	Sessions      int    `json:"sessions"`       // 当前活跃连接（会话）数
+	TotalSessions int64  `json:"total_sessions"` // 累计总连接（会话）数
+	Enabled       bool   `json:"enabled"`
+	Protocol      string `json:"protocol,omitempty"` // "tcp" | "udp"
+	GroupID       string `json:"group_id,omitempty"` // 端口范围批量组（同组共享），供整组操作
+}
+
+// fwdCounter tracks per-rule / per-http-proxy connection counts. active is the
+// current live count (inc on create, dec on close); total is cumulative
+// (inc-only). Guarded by forwardManager.mu.
+type fwdCounter struct {
+	active int64
+	total  int64
 }
 
 type forwardManager struct {
@@ -227,6 +237,7 @@ type forwardManager struct {
 	sessions        map[string]*forwardSession
 	waiters         map[string]chan forwardWaitInfo // hostID -> a waiting agent poll
 	pendingSessions map[string][]forwardWaitInfo    // v5.2.5: queued for agents between polls
+	connCounts      map[string]*fwdCounter          // per-rule / per-http-proxy 活跃+累计连接数
 	stats           forwardStats                    // P3: aggregate metrics
 	cfg             *ConfigStore                    // config reference for port range
 	store           *Store                          // store reference for host lookup
@@ -239,10 +250,28 @@ func newForwardManager(cfg *ConfigStore) *forwardManager {
 		sessions:        map[string]*forwardSession{},
 		waiters:         map[string]chan forwardWaitInfo{},
 		pendingSessions: map[string][]forwardWaitInfo{},
+		connCounts:      map[string]*fwdCounter{},
 		cfg:             cfg,
 	}
 	go fm.idleChecker()
 	return fm
+}
+
+// sessionCounterKey derives the connection-counter key for a session: per-rule
+// for TCP/UDP (ruleID set), per host+port for HTTP/WS proxies (ruleID empty).
+func sessionCounterKey(ruleID, hostID string, targetPort int) string {
+	if ruleID != "" {
+		return "rule:" + ruleID
+	}
+	return "hp:" + hostID + ":" + strconv.Itoa(targetPort)
+}
+
+// counts returns (active, total) for a counter key. Caller must hold m.mu.
+func (m *forwardManager) counts(key string) (int, int64) {
+	if c := m.connCounts[key]; c != nil {
+		return int(c.active), c.total
+	}
+	return 0, 0
 }
 
 // idleChecker closes sessions that have had no data for forwardIdleTimeout.
@@ -425,14 +454,22 @@ func (m *forwardManager) createSession(ruleID, hostID, hostname string, targetPo
 		m.stats.incError()
 		return nil, fmt.Errorf("%s", Tz("forward.too_many_sessions"))
 	}
+	key := sessionCounterKey(ruleID, hostID, targetPort)
 	s := &forwardSession{
-		id: termID(), ruleID: ruleID, hostID: hostID, hostname: hostname,
+		id: termID(), ruleID: ruleID, counterKey: key, hostID: hostID, hostname: hostname,
 		targetPort: targetPort, mode: mode, operator: operator,
 		toAgent: make(chan []byte, 64), toUser: make(chan []byte, 256),
 		agentUp: make(chan struct{}), done: make(chan struct{}),
 		lastActive: time.Now().Unix(),
 	}
 	m.sessions[s.id] = s
+	c := m.connCounts[key]
+	if c == nil {
+		c = &fwdCounter{}
+		m.connCounts[key] = c
+	}
+	c.active++
+	c.total++
 	m.stats.incActive()
 	m.mu.Unlock()
 	return s, nil
@@ -449,6 +486,11 @@ func (m *forwardManager) removeSession(id string) {
 	sess, ok := m.sessions[id]
 	if ok {
 		delete(m.sessions, id)
+		if c := m.connCounts[sess.counterKey]; c != nil {
+			if c.active--; c.active < 0 {
+				c.active = 0
+			}
+		}
 		m.stats.decActive()
 	}
 	m.mu.Unlock()
@@ -881,12 +923,14 @@ func (m *forwardManager) listRules() []forwardInfo {
 				sessions++
 			}
 		}
+		_, total := m.counts("rule:" + r.id)
 		out = append(out, forwardInfo{
 			ID: r.id, HostID: r.hostID, Hostname: r.hostname,
 			TargetPort: r.targetPort, LocalPort: r.localPort,
 			ListenAddr: r.listenAddr, Status: "active",
 			CreatedAt: r.createdAt, Operator: r.operator,
-			Sessions: sessions, Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
+			Sessions: sessions, TotalSessions: total,
+			Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
 		})
 	}
 	return out
