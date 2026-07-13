@@ -177,7 +177,7 @@ function runAPISystem(id) {
 
 // 接口历史：复用自定义监控的历史曲线弹窗（同为 CheckPoint 序列），仅切换取数端点。
 function openAPIHistory(id, name) {
-  CHK_HIST = { id, name, type: "http", range: 24, base: "apimon/endpoints" };
+  CHK_HIST = { id, name, type: "http", range: 1, base: "apimon/endpoints" };
   $("checkHistTitle").textContent = name + " · 接口性能历史";
   $("checkHistMask").classList.add("show");
   loadCheckHistory();

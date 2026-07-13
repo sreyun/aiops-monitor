@@ -262,7 +262,7 @@ async function editCategory(id, cur) {
 
 /* ---------- 主机趋势弹窗 ---------- */
 let DETAIL_HOST_ID = '';
-let DETAIL_TIME_RANGE = 24; // hours: 1, 24, 48, 168, 720
+let DETAIL_TIME_RANGE = 1; // hours: 1/3/6/12/24/72/168/336（默认 1 小时）
 let DETAIL_CUSTOM = null;   // {from,to} unix seconds — set when a custom range is active
 
 // 把 unix 秒格式化为 <input type="datetime-local"> 需要的本地时间字符串 YYYY-MM-DDTHH:mm
@@ -273,22 +273,19 @@ function toLocalDatetimeValue(unixSec) {
 }
 
 // 统一的时间跨度控件渲染函数（主机图表和监控图表共用）
-const CHART_SPANS = [
-  [1, "time.1h"],
-  [24, "time.24h"],
-  [48, "48h"],
-  [168, "7d"],
-  [720, "time.30d"],
-];
+// 快捷时间跨度（小时）：1/3/6/12 小时 + 1/3/7/14 天（+ 自定义，由各视图单独渲染）
+const CHART_SPANS = [1, 3, 6, 12, 24, 72, 168, 336];
+function chartSpanLabel(h) {
+  return h < 24 ? h + I18N.t("time.hour") : (h / 24) + I18N.t("time.day");
+}
 function renderChartControls(currentRange, prefix) {
-  return CHART_SPANS.map(([h, key]) => {
-    const lab = key === "48h" ? "48" + I18N.t("time.hour") : key === "7d" ? "7" + I18N.t("time.day") : I18N.t(key);
-    return `<button class="chip-btn ${currentRange === h ? "active" : ""}" data-${prefix}="${h}">${lab}</button>`;
-  }).join("");
+  return CHART_SPANS.map(h =>
+    `<button class="chip-btn ${currentRange === h ? "active" : ""}" data-${prefix}="${h}">${chartSpanLabel(h)}</button>`
+  ).join("");
 }
 async function openDetail(id, name) {
   DETAIL_HOST_ID = id;
-  DETAIL_TIME_RANGE = 24;
+  DETAIL_TIME_RANGE = 1;
   DETAIL_CUSTOM = null;
   $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
   const body = $("detailBody");

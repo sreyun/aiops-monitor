@@ -161,7 +161,7 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 | **PWA 安装** | 可安装到桌面、Service Worker 离线缓存、独立窗口运行 |
 | **侧栏实时时钟** | 左侧导航栏底部显示当前日期与精确到秒的实时时间（`YYYY-MM-DD HH:mm:ss`），适配浅色/深色主题，侧栏折叠时竖排保持可见 |
 | **gzip 压缩** | API/静态资源自动 gzip，多主机轮询带宽 ~8-10 倍压缩 |
-| **端口转发（TCP）** | 经 Agent 隧道将远端主机的 TCP 端口映射到服务端本地端口，支持持久规则 + 启停/编辑/复制 |
+| **端口转发（TCP / UDP / HTTP）** | 经 Agent 隧道将远端主机的 TCP / UDP 端口映射到服务端本地端口（HTTP 走无状态代理隧道直通 Web 服务）；支持端口范围批量转发（单批 ≤100 端口）+ 持久规则启停/编辑/复制 |
 | **HTTP 反向代理** | 无状态代理：`/proxy/{hostID}/{port}/{path}` 直通目标主机 Web 服务，支持 WebSocket 升级 |
 | **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
 | **告警阈值自定义** | 27 组细粒度 warn/crit 阈值（主机 / 拨测 / API / 任务 / 转发五大维度）逐项可调，主机维度另含保守/标准/宽松三档预设，零值自动兜底默认 |
@@ -626,26 +626,43 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 
 ## 端口转发与 HTTP 代理
 
-通过 Agent 反向隧道，无需目标主机开放端口即可访问其内部服务。两种模式：
+通过 Agent 反向隧道，无需目标主机开放端口即可访问其内部服务。支持 TCP / UDP / HTTP 三种协议，其中 TCP 与 UDP 还支持端口范围批量转发：
 
-### TCP 端口映射
+### TCP / UDP 端口映射
 
-将远端主机的 TCP 端口持久映射到服务端本地端口，适合数据库、SSH 等长连接协议：
+将远端主机的 TCP 或 UDP 端口持久映射到服务端本地端口。TCP 适合数据库、SSH 等长连接协议；UDP 适合 DNS、游戏、音视频等基于数据报的服务：
 
 ```bash
-# 例：将 Agent 所在主机的 MySQL 3306 映射到服务端 13306 端口
+# 例：将 Agent 所在主机的 MySQL 3306 映射到服务端 13306 端口（TCP）
 # 面板「转发」页创建规则，或 API：
 curl -X POST http://<服务端>:8529/api/v1/forward \
   -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
+
+# UDP 示例：映射 DNS 53 到本地 1353
+curl -X POST http://<服务端>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":53,"local_port":1353,"protocol":"udp"}'
 
 # 然后用本地客户端直连
 mysql -h 127.0.0.1 -P 13306 -u root -p
 ```
 
+- 通过 `protocol` 指定 `tcp`（默认）或 `udp`
 - 支持自动分配端口（`local_port: 0`）或指定端口
 - 规则可启用/禁用/编辑/复制/删除
 - 监听地址可配置（`forward_listen`），默认 `127.0.0.1`（仅限本机），Docker 部署需设为 `0.0.0.0` 或通过 `AIOPS_FORWARD_LISTEN` 环境变量覆盖
 - 端口范围可配置（`forward_port_range`），Docker 部署需与 `ports` 映射一致
+
+### TCP / UDP 端口范围批量转发
+
+TCP 与 UDP 支持一次性映射整段连续端口：填写起始端口 `target_port` 与结束端口 `target_port_end`（**含端点**，且 `target_port_end > target_port`），系统为区间内每个端口各创建一条独立规则，同一批次共享组 ID，可整组启用 / 停用 / 删除，无需逐条操作。**单批最多 100 个端口**。
+
+```bash
+# 例：将 Agent 主机 abc123 的 UDP 5000–5010 整段映射（共 11 个端口，归为一组）
+curl -X POST http://<服务端>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":5000,"target_port_end":5010,"protocol":"udp"}'
+```
+
+> 说明：端口范围批量转发仅适用于 TCP / UDP；HTTP 转发走下方无状态代理隧道，按需逐 URL 访问，不存在「整段端口」概念。
 
 ### HTTP 反向代理
 
@@ -1016,7 +1033,7 @@ aiops-monitor/
 │   │   ├── check.go                # 自定义监控（HTTP/TCP/Ping/进程）
 │   │   ├── ws.go                   # 手写 WebSocket（远程终端/转发）
 │   │   ├── terminal.go             # 远程终端中转 + 二次认证
-│   │   ├── forward.go              # TCP 端口转发 + HTTP 代理
+│   │   ├── forward.go              # TCP/UDP 端口转发 + HTTP 代理
 │   │   ├── notify.go               # 飞书/钉钉/邮件/短信/语音推送
 │   │   ├── email.go                # SMTP + 验证码管理
 │   │   ├── playbook.go             # 自动化剧本引擎
@@ -1289,7 +1306,7 @@ aiops-monitor/
 - [x] 机器指纹鉴权：Token 轮换不影响已装 Agent
 - [x] 一键安装：自动检测架构 + 下载 + 配置 + 开机自启
 - [x] 侧栏实时时钟：YYYY-MM-DD HH:mm:ss，每秒更新，适配浅色/深色主题
-- [x] 端口转发（TCP 映射）+ HTTP 反向代理：经 Agent 隧道免开端口访问远端服务
+- [x] 端口转发（TCP/UDP 映射 + 端口范围批量）+ HTTP 反向代理：经 Agent 隧道免开端口访问远端服务
 - [x] 告警确认/静默/清除 + WebSocket 实时推送
 - [x] 全局强制 MFA 策略 + 浅色主题
 - [x] 终端文件传输（ZMODEM/lrzsz）+ 终端悬浮卡片最小化
@@ -1402,7 +1419,7 @@ aiops-monitor/
 <details>
 <summary>v3.10.x — 端口转发/i18n/终端增强</summary>
 
-- TCP 端口映射 + HTTP 反向代理（经 Agent 隧道免开端口）
+- TCP/UDP 端口映射 + 端口范围批量转发 + HTTP 反向代理（经 Agent 隧道免开端口）
 - 全链路 i18n 国际化（中/英/繁中）
 - 终端 ZMODEM 文件传输、悬浮卡片最小化、右键菜单
 - 资源热力图仪表盘、全局强制 MFA、浅色主题

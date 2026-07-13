@@ -528,10 +528,10 @@ async function loadChecks() {
 }
 
 let CHK_CHARTS = {};
-let CHK_HIST = { id: "", name: "", type: "", range: 24 }; // range=小时数，默认 24h
+let CHK_HIST = { id: "", name: "", type: "", range: 1 }; // range=小时数，默认 1h
 // 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选（与主机趋势图一致）
 function openCheckHistory(id, name, type) {
-  CHK_HIST = { id, name, type, range: 24 };
+  CHK_HIST = { id, name, type, range: 1 };
   $("checkHistTitle").textContent = name + " · 监控历史";
   $("checkHistMask").classList.add("show");
   loadCheckHistory();

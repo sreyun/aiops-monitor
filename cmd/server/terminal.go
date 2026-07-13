@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -31,9 +32,9 @@ type termSession struct {
 	hostID    string
 	hostname  string
 	operator  string
-	ip        string // client IP of the operator (for audit + display)
-	mode      string // "" = interactive terminal, "exec" = one-shot playbook command
-	command   string // the command to run when mode == "exec"
+	ip        string        // client IP of the operator (for audit + display)
+	mode      string        // "" = interactive terminal, "exec" = one-shot playbook command
+	command   string        // the command to run when mode == "exec"
 	toAgent   chan []byte   // browser keystrokes → agent (rx stream)
 	toBrowser chan []byte   // agent shell output → browser
 	agentUp   chan struct{} // closed once the agent attaches its tx stream
@@ -42,13 +43,14 @@ type termSession struct {
 	doneOnce  sync.Once
 
 	// --- terminal enhancements ---
-	recording []termRecordFrame // session recording (timestamped I/O frames)
-	observers map[*termObserver]struct{} // read-only watchers
-	cmdBuffer string           // accumulates input for command-level audit
-	lastCommand string         // last extracted command (for audit logging)
-	createdAt int64            // session start time
-	recMu     sync.Mutex       // protects recording + cmdBuffer + observers
-	lang      string           // operator's preferred UI language (for agent-side messages)
+	recording      []termRecordFrame          // session recording (timestamped I/O frames)
+	observers      map[*termObserver]struct{} // read-only watchers
+	cmdBuffer      string                     // accumulates input for command-level audit
+	lastCommand    string                     // last extracted command (for audit logging)
+	pwPromptActive bool                       // 上段输出是密码提示 → 抑制下一行输入的审计（避免记录密码）
+	createdAt      int64                      // session start time
+	recMu          sync.Mutex                 // protects recording + cmdBuffer + observers
+	lang           string                     // operator's preferred UI language (for agent-side messages)
 }
 
 func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
@@ -79,9 +81,9 @@ func (s *termSession) fanOut(b []byte) {
 
 // termRecordFrame is one timestamped frame in the session recording.
 type termRecordFrame struct {
-	Ts     int64  `json:"ts"`      // unix millisecond
-	Type   string `json:"type"`    // "input" | "output"
-	Data   string `json:"data"`    // base64-encoded raw bytes
+	Ts   int64  `json:"ts"`   // unix millisecond
+	Type string `json:"type"` // "input" | "output"
+	Data string `json:"data"` // base64-encoded raw bytes
 }
 
 // termObserver is a read-only watcher of a terminal session.
@@ -282,6 +284,7 @@ func (m *termManager) get(id string) *termSession {
 	defer m.mu.Unlock()
 	return m.sessions[id]
 }
+
 // remove deletes a session, first archiving its recording so an ended interactive
 // session can still be replayed. Internal playbook-exec sessions are not archived.
 func (m *termManager) remove(id string) {
@@ -550,7 +553,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			select {
 			case b := <-sess.toBrowser:
 				sess.recordFrame("output", b)
-				sess.fanOut(b) // deliver to observers under lock (avoids the map race → panic)
+				sess.notePasswordPrompt(b) // 检测密码提示，抑制下一条输入行的命令审计（防密码入库）
+				sess.fanOut(b)             // deliver to observers under lock (avoids the map race → panic)
 				if err := ws.WriteBinary(b); err != nil {
 					return
 				}
@@ -682,11 +686,12 @@ func (s *Server) handleAgentTermRx(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentTermTx receives the shell's output stream from the agent (chunked
 // request body) and fans it to the browser. The stream uses a simple frame format:
-//   [type:1][len:4 BE][payload]
-//   'O' (0x4F) = normal PTY output → toBrowser as raw bytes
-//   'Z' (0x5A) = ZMODEM signal      → toBrowser as [0xFF][0xFE]['Z'][len:4][json]
-//   'D' (0x44) = download data chunk → toBrowser as [0xFF][0xFE]['D'][len:4][data]
-//   'E' (0x45) = transfer complete   → toBrowser as [0xFF][0xFE]['E'][len:4][]
+//
+//	[type:1][len:4 BE][payload]
+//	'O' (0x4F) = normal PTY output → toBrowser as raw bytes
+//	'Z' (0x5A) = ZMODEM signal      → toBrowser as [0xFF][0xFE]['Z'][len:4][json]
+//	'D' (0x44) = download data chunk → toBrowser as [0xFF][0xFE]['D'][len:4][data]
+//	'E' (0x45) = transfer complete   → toBrowser as [0xFF][0xFE]['E'][len:4][]
 func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 	sess := s.term.get(r.URL.Query().Get("session"))
 	if sess == nil {
@@ -887,6 +892,40 @@ func (m *termManager) removeObserver(sessionID string, obs *termObserver) {
 	s.recMu.Unlock()
 }
 
+// 密码提示正则：输出尾部形如 "Password:" / "密码：" / "passphrase:" / "[sudo] password for x:"。
+var pwPromptRE = regexp.MustCompile(`(?i)(password|passphrase|passwd|密\s*码|口\s*令)[^\n:：]{0,24}[:：]\s*$`)
+
+// 内联密钥正则：命令里明文的 password=xxx / token: xxx / --password xxx，落审计前替换为 ***。
+var (
+	inlineSecretKVRE = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)(\s*[=:]\s*)(\S+)`)
+	inlinePwFlagRE   = regexp.MustCompile(`(?i)(--password[=\s]+)(\S+)`)
+	mysqlPwFlagRE    = regexp.MustCompile(`(?i)(-p)(\S+)`)
+)
+
+// notePasswordPrompt 扫描 shell 输出尾部：若是密码提示则置位，下一条完整输入行（即用户键入的
+// 密码）会被 processCommandAudit 跳过审计——避免把密码写进终端审计日志。
+func (s *termSession) notePasswordPrompt(out []byte) {
+	tail := out
+	if len(tail) > 200 {
+		tail = tail[len(tail)-200:]
+	}
+	if pwPromptRE.Match(tail) {
+		s.recMu.Lock()
+		s.pwPromptActive = true
+		s.recMu.Unlock()
+	}
+}
+
+// redactInlineSecrets 把命令行里明文的密码/令牌替换为 ***，再落审计日志。
+func redactInlineSecrets(cmd string) string {
+	cmd = inlineSecretKVRE.ReplaceAllString(cmd, "$1$2***")
+	cmd = inlinePwFlagRE.ReplaceAllString(cmd, "$1***")
+	if low := strings.ToLower(cmd); strings.Contains(low, "mysql") || strings.Contains(low, "mariadb") {
+		cmd = mysqlPwFlagRE.ReplaceAllString(cmd, "$1***") // mysql -pSECRET → -p***
+	}
+	return cmd
+}
+
 // processCommandAudit extracts commands from the input stream by detecting
 // Enter (CR/LF) and returning the accumulated line for audit logging.
 // This is best-effort — control characters, escape sequences, and multi-line
@@ -900,8 +939,12 @@ func (s *termSession) processCommandAudit(payload []byte) string {
 			cmd := strings.TrimSpace(s.cmdBuffer)
 			s.cmdBuffer = ""
 			if cmd != "" && cmd[0] != 0x1b && cmd[0] != 0x03 {
+				if s.pwPromptActive { // 紧随密码提示后的这一行是密码——不审计、不落库
+					s.pwPromptActive = false
+					return ""
+				}
 				s.lastCommand = cmd
-				return cmd
+				return redactInlineSecrets(cmd) // 内联密钥（password=/token=/mysql -p…）脱敏后再审计
 			}
 		} else if b >= 0x20 && b < 0x7f {
 			s.cmdBuffer += string(b)
