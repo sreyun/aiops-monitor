@@ -113,13 +113,15 @@ func (p *pgStore) migrate() error {
 			k    TEXT PRIMARY KEY,
 			data JSONB NOT NULL
 		);
-		-- 终端会话录制（永久审计留存）：一行一条已结束会话，info=元数据、recording=完整帧
+		-- 终端会话录制的「永久审计索引」：只存元数据(info)，录制内容(帧)留在本地文件
+		-- (/app/data/recordings/<id>.json，随持久卷永久保存)，避免大 blob 撑爆 PG。
 		CREATE TABLE IF NOT EXISTS terminal_recordings (
-			id        TEXT PRIMARY KEY,
-			ts        BIGINT,
-			info      JSONB NOT NULL,
-			recording JSONB NOT NULL
+			id   TEXT PRIMARY KEY,
+			ts   BIGINT,
+			info JSONB NOT NULL
 		);
+		-- 兼容早期把整段录制塞进 PG 的版本：删掉重列，回归「内容存文件、PG 只存元数据」。
+		ALTER TABLE terminal_recordings DROP COLUMN IF EXISTS recording;
 		CREATE INDEX IF NOT EXISTS terminal_recordings_ts ON terminal_recordings(ts DESC);
 		-- AI 诊断向量记忆（RAG 相似案例检索）
 		CREATE TABLE IF NOT EXISTS diagnosis_embeddings (
@@ -312,40 +314,23 @@ func (p *pgStore) loadRecentAudit(limit int) ([]LogEntry, error) {
 
 // --- terminal session recordings (permanent audit retention) ---
 
-// saveTermRecording persists one ended session's full recording to PG permanently
-// (idempotent: a session id is written once). This is the durable audit trail;
-// the file + in-memory archive are just a fast local cache with a small cap.
+// saveTermRecording persists one ended session's METADATA to PG permanently
+// (idempotent). The recording CONTENT (frames) stays in the local file
+// /app/data/recordings/<id>.json — PG only holds the audit index so the session
+// list shows full history without bloating the DB with large blobs.
 func (p *pgStore) saveTermRecording(a termArchive) {
-	if a.info.ID == "" || len(a.recording) == 0 {
+	if a.info.ID == "" {
 		return
 	}
 	info, err := json.Marshal(a.info)
 	if err != nil {
 		return
 	}
-	rec, err := json.Marshal(a.recording)
-	if err != nil {
-		return
-	}
 	if _, err := p.db.Exec(
-		`INSERT INTO terminal_recordings(id,ts,info,recording) VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
-		a.info.ID, a.info.CreatedAt, info, rec); err != nil {
-		slog.Warn("PG 写终端会话录制失败", "err", err)
+		`INSERT INTO terminal_recordings(id,ts,info) VALUES($1,$2,$3) ON CONFLICT (id) DO NOTHING`,
+		a.info.ID, a.info.CreatedAt, info); err != nil {
+		slog.Warn("PG 写终端会话录制索引失败", "err", err)
 	}
-}
-
-// getTermRecording loads one session's full recorded frames from PG (permanent),
-// used as the replay fallback once the file/in-memory cache has been evicted.
-func (p *pgStore) getTermRecording(id string) ([]termRecordFrame, bool) {
-	var raw []byte
-	if err := p.db.QueryRow(`SELECT recording FROM terminal_recordings WHERE id=$1`, id).Scan(&raw); err != nil {
-		return nil, false
-	}
-	var frames []termRecordFrame
-	if json.Unmarshal(raw, &frames) != nil {
-		return nil, false
-	}
-	return frames, true
 }
 
 // listTermRecordings returns recent ended sessions' metadata (newest first) from

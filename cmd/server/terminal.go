@@ -901,15 +901,7 @@ func (m *termManager) getRecording(sessionID string) []termRecordFrame {
 		}
 	}
 	m.mu.Unlock()
-	if f := m.readRecordingFile(sessionID); f != nil { // fast local file cache first
-		return f
-	}
-	if m.pg != nil { // 文件被淘汰后仍可从 PG 永久留存里回放
-		if frames, ok := m.pg.getTermRecording(sessionID); ok {
-			return frames
-		}
-	}
-	return nil
+	return m.readRecordingFile(sessionID) // 内容存本地文件（PG 只存元数据索引），按 id 直读
 }
 
 // addObserver attaches a read-only observer to a session.
