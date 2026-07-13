@@ -262,6 +262,7 @@ func main() {
 	notifier.forward = server.forward
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
+	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）
 	server.bindPG(pg)                                      // load + periodically persist incidents / work orders / sessions
 	go func() {
 		sig := make(chan os.Signal, 1)

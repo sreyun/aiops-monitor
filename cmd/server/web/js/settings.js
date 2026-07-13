@@ -515,24 +515,33 @@ async function loadChecks() {
 }
 
 let CHK_CHARTS = {};
-let CHK_HIST = { id: "", name: "", type: "", range: 1 }; // range=小时数，默认 1h
-// 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选（与主机趋势图一致）
+let CHK_HIST = { id: "", name: "", type: "", range: 1, custom: null }; // range=小时数，默认 1h；custom={from,to}
+// 自定义监控·历史曲线：复用交互式图表引擎，支持按时间范围筛选 + 自定义绝对区间（与主机趋势图一致）
 function openCheckHistory(id, name, type) {
-  CHK_HIST = { id, name, type, range: 1 };
+  CHK_HIST = { id, name, type, range: 1, custom: null };
   $("checkHistTitle").textContent = name + " · 监控历史";
   $("checkHistMask").classList.add("show");
   loadCheckHistory();
 }
 async function loadCheckHistory() {
-  const { id, name, type, range } = CHK_HIST;
+  const { id, name, type, range, custom } = CHK_HIST;
   const body = $("checkHistBody");
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
-  const ctrl = renderChartControls(range, "crange");
+  const now = Math.floor(Date.now() / 1000);
+  const from = custom ? custom.from : (range > 0 ? now - range * 3600 : 0);
+  const to = custom ? custom.to : now;
+  // 快捷跨度按钮 + 自定义绝对区间（与主机趋势图一致）
+  const ctrl = `${renderChartControls(custom ? -1 : range, "crange")}
+    <button class="chip-btn ${custom ? "active" : ""}" data-chk-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
+    <span class="chart-custom-range" id="chkCustomPanel"${custom ? "" : " hidden"}>
+      <input type="datetime-local" id="chkCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from > 0 ? from : now - 3600)}">
+      <span class="dt-sep">→</span>
+      <input type="datetime-local" id="chkCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
+      <button class="chip-btn primary" data-chk-custom-apply>${I18N.t("time.custom_apply") || "应用"}</button>
+    </span>`;
   try {
     const all = await fetch(`${API}/${CHK_HIST.base || "checks"}/${encodeURIComponent(id)}/history`).then(r => r.json());
-    const now = Math.floor(Date.now() / 1000);
-    const from = range > 0 ? now - range * 3600 : 0;
-    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && (custom ? p.timestamp <= to : true));
     if (!pts.length) {
       body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
       return;
@@ -560,13 +569,28 @@ async function loadCheckHistory() {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
-// 历史弹窗：时间范围切换 + 图表放大委托
+// 历史弹窗：时间范围切换（快捷/自定义）+ 图表放大委托
 safeAddEventListener("checkHistBody", "click", e => {
+  const tog = e.target.closest("[data-chk-custom-toggle]");
+  if (tog) { const p = $("chkCustomPanel"); if (p) { p.hidden = !p.hidden; if (!p.hidden) { const f = $("chkCustomFrom"); if (f) f.focus(); } } return; }
+  if (e.target.closest("[data-chk-custom-apply]")) { applyChkCustomRange(); return; }
   const rb = e.target.closest(".chip-btn[data-crange]");
-  if (rb) { CHK_HIST.range = parseInt(rb.dataset.crange); loadCheckHistory(); return; }
+  if (rb) { CHK_HIST.custom = null; CHK_HIST.range = parseInt(rb.dataset.crange); loadCheckHistory(); return; }
   const en = e.target.closest(".chart-enlarge"); if (!en) return;
   const ch = CHK_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });
+// 读取两个 datetime-local 输入，校验后按自定义绝对区间重新拉取（与主机趋势图一致）
+function applyChkCustomRange() {
+  const fEl = $("chkCustomFrom"), tEl = $("chkCustomTo");
+  if (!fEl || !tEl || !fEl.value || !tEl.value) { toast(I18N.t("time.custom_incomplete") || "请选择开始和结束时间", "warn"); return; }
+  const from = Math.floor(new Date(fEl.value).getTime() / 1000);
+  const to = Math.floor(new Date(tEl.value).getTime() / 1000);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) { toast(I18N.t("time.custom_invalid") || "时间格式无效", "err"); return; }
+  if (to <= from) { toast(I18N.t("time.custom_order") || "结束时间必须晚于开始时间", "warn"); return; }
+  if (to - from < 60) { toast(I18N.t("time.custom_tooshort") || "时间范围太短（至少 1 分钟）", "warn"); return; }
+  CHK_HIST.custom = { from, to };
+  loadCheckHistory();
+}
 async function loadHostsMeta() {
   try { HOST_META = await fetch(`${API}/hosts/meta`).then(r => r.json()); } catch (e) { /* ignore */ }
 }

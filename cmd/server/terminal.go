@@ -112,6 +112,7 @@ type termManager struct {
 	waiters  map[string]chan string // hostID -> a waiting agent poll
 	archived []termArchive          // in-memory index of recent ended sessions (for replay)
 	recDir   string                 // directory where session recordings are persisted as files
+	pg       *pgStore               // 永久审计留存：已结束会话录制写入 PG（可选，非空即启用）
 	// pendingSessions stores session IDs that were created for a host but the
 	// agent wasn't in a long-poll wait at the time of notification. This fixes
 	// a race condition in batch playbook execution: when multiple hosts are
@@ -327,6 +328,9 @@ func (m *termManager) remove(id string) {
 				m.archived = m.archived[len(m.archived)-termArchiveCap:]
 			}
 			go m.persistRecording(arch) // write to /app/data/recordings so replays survive restart
+			if m.pg != nil {
+				go m.pg.saveTermRecording(arch) // 永久审计留存：完整录制写入 PG（不受 100 条内存上限影响）
+			}
 		}
 		s.recMu.Unlock()
 	}
@@ -830,11 +834,12 @@ type termSessionInfo struct {
 	Frames    int    `json:"frames"`
 }
 
-// listSessions returns all active terminal sessions.
+// listSessions returns active sessions + ended sessions. Ended sessions come from
+// the permanent PG store (full history) when available, else the in-memory archive.
 func (m *termManager) listSessions() []termSessionInfo {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]termSessionInfo, 0, len(m.sessions)+len(m.archived))
+	seen := map[string]bool{}
 	for _, s := range m.sessions {
 		if s.operator == "playbook-exec" {
 			continue // hide internal playbook sessions from the session list
@@ -847,10 +852,29 @@ func (m *termManager) listSessions() []termSessionInfo {
 			Frames: len(s.recording),
 		})
 		s.recMu.Unlock()
+		seen[s.id] = true
 	}
-	// Archived (ended) sessions, newest first.
+	// snapshot the in-memory archive (newest first) under the lock; PG I/O happens after unlock
+	memArch := make([]termSessionInfo, 0, len(m.archived))
 	for i := len(m.archived) - 1; i >= 0; i-- {
-		out = append(out, m.archived[i].info)
+		memArch = append(memArch, m.archived[i].info)
+	}
+	pg := m.pg
+	m.mu.Unlock()
+
+	// Recent in-memory archives first (covers the async PG-write window), then the
+	// permanent PG history (full retention); dedup by id so nothing appears twice.
+	add := func(list []termSessionInfo) {
+		for _, a := range list {
+			if !seen[a.ID] {
+				out = append(out, a)
+				seen[a.ID] = true
+			}
+		}
+	}
+	add(memArch)
+	if pg != nil {
+		add(pg.listTermRecordings(500)) // 展示全量历史（不止内存里的最近 100 条）
 	}
 	return out
 }
@@ -877,7 +901,15 @@ func (m *termManager) getRecording(sessionID string) []termRecordFrame {
 		}
 	}
 	m.mu.Unlock()
-	return m.readRecordingFile(sessionID) // read frames from disk on demand
+	if f := m.readRecordingFile(sessionID); f != nil { // fast local file cache first
+		return f
+	}
+	if m.pg != nil { // 文件被淘汰后仍可从 PG 永久留存里回放
+		if frames, ok := m.pg.getTermRecording(sessionID); ok {
+			return frames
+		}
+	}
+	return nil
 }
 
 // addObserver attaches a read-only observer to a session.

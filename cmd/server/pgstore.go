@@ -113,6 +113,14 @@ func (p *pgStore) migrate() error {
 			k    TEXT PRIMARY KEY,
 			data JSONB NOT NULL
 		);
+		-- 终端会话录制（永久审计留存）：一行一条已结束会话，info=元数据、recording=完整帧
+		CREATE TABLE IF NOT EXISTS terminal_recordings (
+			id        TEXT PRIMARY KEY,
+			ts        BIGINT,
+			info      JSONB NOT NULL,
+			recording JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS terminal_recordings_ts ON terminal_recordings(ts DESC);
 		-- AI 诊断向量记忆（RAG 相似案例检索）
 		CREATE TABLE IF NOT EXISTS diagnosis_embeddings (
 			id          BIGSERIAL PRIMARY KEY,
@@ -300,6 +308,68 @@ func (p *pgStore) loadRecentAudit(limit int) ([]LogEntry, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// --- terminal session recordings (permanent audit retention) ---
+
+// saveTermRecording persists one ended session's full recording to PG permanently
+// (idempotent: a session id is written once). This is the durable audit trail;
+// the file + in-memory archive are just a fast local cache with a small cap.
+func (p *pgStore) saveTermRecording(a termArchive) {
+	if a.info.ID == "" || len(a.recording) == 0 {
+		return
+	}
+	info, err := json.Marshal(a.info)
+	if err != nil {
+		return
+	}
+	rec, err := json.Marshal(a.recording)
+	if err != nil {
+		return
+	}
+	if _, err := p.db.Exec(
+		`INSERT INTO terminal_recordings(id,ts,info,recording) VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
+		a.info.ID, a.info.CreatedAt, info, rec); err != nil {
+		slog.Warn("PG 写终端会话录制失败", "err", err)
+	}
+}
+
+// getTermRecording loads one session's full recorded frames from PG (permanent),
+// used as the replay fallback once the file/in-memory cache has been evicted.
+func (p *pgStore) getTermRecording(id string) ([]termRecordFrame, bool) {
+	var raw []byte
+	if err := p.db.QueryRow(`SELECT recording FROM terminal_recordings WHERE id=$1`, id).Scan(&raw); err != nil {
+		return nil, false
+	}
+	var frames []termRecordFrame
+	if json.Unmarshal(raw, &frames) != nil {
+		return nil, false
+	}
+	return frames, true
+}
+
+// listTermRecordings returns recent ended sessions' metadata (newest first) from
+// the permanent PG store, so the session list shows the full history, not just
+// the last termArchiveCap sessions held in memory.
+func (p *pgStore) listTermRecordings(limit int) []termSessionInfo {
+	rows, err := p.db.Query(`SELECT info FROM terminal_recordings ORDER BY ts DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []termSessionInfo
+	for rows.Next() {
+		var raw []byte
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var info termSessionInfo
+		if json.Unmarshal(raw, &info) == nil {
+			info.Active = false
+			out = append(out, info)
+		}
+	}
+	return out
 }
 
 // --- plugin events ---
