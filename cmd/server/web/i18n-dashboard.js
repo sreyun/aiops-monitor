@@ -449,11 +449,11 @@
   "ui.create": "创建",
   "ui.cancel": "取消",
   "ui.open_link": "打开链接",
-  "ui.new_tcp_forward": "+ 新建 TCP/UDP 端口转发",
+  "ui.new_tcp_forward": "+ 新建端口转发",
   "section.http_reverse_proxy": "HTTP 反向代理",
   "section.forward_hint": "创建后可在本机通过 localhost:端口 连接被监控主机上的 TCP/UDP 服务（如 MySQL、Redis、SSH、DNS）。",
   "section.proxy_hint": "点击「打开链接」在新标签页中访问被监控主机上的 HTTP 服务（如内部 Web 应用、管理面板）。",
-  "empty.no_forwards": "还没有端口转发规则。点「新建 TCP/UDP 端口转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。",
+  "empty.no_forwards": "还没有端口转发规则。点「新建端口转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。",
   "section.active_connections": "个活跃连接",
   /* --- 导航 / 侧栏 / 顶栏 --- */
   "ui.theme": "主题",
@@ -847,7 +847,7 @@
   "exec.success_count": "成功",
   "empty.no_executions": "暂无执行历史",
   /* --- 统一转发 UI --- */
-  "ui.new_forward": "+ 新建 TCP/UDP 端口转发",
+  "ui.new_forward": "+ 新建端口转发",
   "forward.mode_tcp": "TCP/UDP 端口转发",
   "forward.mode_http": "HTTP 反向代理",
   "forward.submit_tcp": "创建转发",
