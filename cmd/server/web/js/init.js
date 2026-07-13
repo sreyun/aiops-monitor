@@ -288,13 +288,16 @@ function submitForward() {
 async function createTcpForward(hostID, targetPort) {
   const localPort = parseInt($("fwdLocalPort")?.value || "0");
   const protocol = $("fwdProtocol")?.value || "tcp"; // tcp | udp
+  const endPort = parseInt($("fwdTargetPortEnd")?.value || "0"); // > targetPort = 端口范围批量转发
+  const body = { host_id: hostID, target_port: targetPort, local_port: localPort, protocol };
+  if (endPort > targetPort) body.target_port_end = endPort;
   await withLoading("fwdSubmitBtn", async () => {
     try {
       const res = await fetch("/api/v1/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort, protocol })
+        body: JSON.stringify(body)
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -302,7 +305,8 @@ async function createTcpForward(hostID, targetPort) {
         return;
       }
       const result = await res.json();
-      toast(I18N.t("toast.forward_created") + result.listen_addr, "ok");
+      if (result.count > 1) toast(`已批量创建 ${result.count} 条 ${protocol.toUpperCase()} 转发（端口 ${targetPort}-${endPort}）`, "ok");
+      else toast(I18N.t("toast.forward_created") + result.listen_addr, "ok");
       closeForwardModal();
       loadForwards();
     } catch(e) {

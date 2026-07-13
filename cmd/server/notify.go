@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -461,7 +463,49 @@ func aliyunEncode(s string) string {
 	return b.String()
 }
 
+// sha256Hex 返回字符串的 SHA-256 哈希（小写十六进制）。
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// aliyunSignV3 按阿里云 API 签名 V3（ACS3-HMAC-SHA256）计算签名。
+// 规范：
+//   canonicalRequest = HTTPMethod + "\n" + CanonicalURI + "\n" + CanonicalQueryString +
+//                      "\n" + CanonicalHeaders + "\n" + SignedHeaders + "\n" + HashedPayload
+//   stringToSign = "ACS3-HMAC-SHA256\n" + SHA256(canonicalRequest)
+//   signature = Hex(HMAC-SHA256(AccessKeySecret, stringToSign))
+func aliyunSignV3(method, canonicalURI, queryString, payload string, headers map[string]string, signedHeaders []string, secret string) string {
+	// 1) 构建规范化请求头（按 signedHeaders 顺序，全小写，值去首尾空白）
+	sort.Strings(signedHeaders)
+	var ch strings.Builder
+	for _, h := range signedHeaders {
+		ch.WriteString(h)
+		ch.WriteByte(':')
+		ch.WriteString(strings.TrimSpace(headers[h]))
+		ch.WriteByte('\n')
+	}
+	sh := strings.Join(signedHeaders, ";")
+
+	// 2) 哈希请求体
+	hashedPayload := sha256Hex(payload)
+
+	// 3) 规范化请求 → 哈希
+	canonicalRequest := method + "\n" + canonicalURI + "\n" + queryString + "\n" +
+		ch.String() + "\n" + sh + "\n" + hashedPayload
+	hashedCanonicalRequest := sha256Hex(canonicalRequest)
+
+	// 4) 待签字符串
+	stringToSign := "ACS3-HMAC-SHA256\n" + hashedCanonicalRequest
+
+	// 5) HMAC-SHA256(AccessKeySecret, stringToSign) → hex
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(stringToSign))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // aliyunSign builds the Alibaba Cloud API V1 signature (HMAC-SHA1).
+// 保留用于兼容旧版，新代码请使用 aliyunSignV3。
 func aliyunSign(method string, params map[string]string, secret string) string {
 	keys := make([]string, 0, len(params))
 	for k := range params {
@@ -488,35 +532,67 @@ func (n *Notifier) sendSMS(cfg SMSConfig, text string) error {
 	return fmt.Errorf("SMS provider %s not yet implemented", cfg.Provider)
 }
 
+// sendAliyunSMS 使用阿里云 API 签名 V3（ACS3-HMAC-SHA256）发送短信。
+// 参数通过 POST + Query String 传递，签名写入 Authorization 请求头。
 func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 	phones := strings.Join(cfg.Phones, ",")
 	if phones == "" {
 		return fmt.Errorf("no phone numbers configured")
 	}
-	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)[:16]
-	params := map[string]string{
-		"AccessKeyId":      cfg.AccessKey,
-		"Action":           "SendSms",
-		"Format":           "JSON",
-		"PhoneNumbers":     phones,
-		"SignName":         cfg.SignName,
-		"TemplateCode":     cfg.TemplateCode,
-		"TemplateParam":    fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`)),
-		"SignatureMethod":  "HMAC-SHA1",
-		"SignatureNonce":   nonce,
-		"SignatureVersion": "1.0",
-		"Timestamp":        ts,
-		"Version":          "2017-05-25",
-	}
-	params["Signature"] = aliyunSign("GET", params, cfg.SecretKey)
 
-	var qs []string
-	for k, v := range params {
-		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(v))
+	// 构建查询参数（按 key 排序 → 规范化查询字符串）
+	templateParam := fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
+	params := map[string]string{
+		"PhoneNumbers":  phones,
+		"SignName":      cfg.SignName,
+		"TemplateCode":  cfg.TemplateCode,
+		"TemplateParam": templateParam,
 	}
-	reqURL := "https://dysmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
-	resp, err := n.httpc.Get(reqURL)
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var qs []string
+	for _, k := range keys {
+		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(params[k]))
+	}
+	queryString := strings.Join(qs, "&")
+
+	// 构建 V3 签名所需请求头
+	now := time.Now().UTC()
+	xAcsDate := now.Format("2006-01-02T15:04:05Z")
+	nonce := make([]byte, 16)
+	_, _ = rand.Read(nonce)
+	xAcsNonce := hex.EncodeToString(nonce)
+	host := "dysmsapi.aliyuncs.com"
+
+	headers := map[string]string{
+		"host":                  host,
+		"x-acs-action":          "SendSms",
+		"x-acs-version":         "2017-05-25",
+		"x-acs-signature-nonce": xAcsNonce,
+		"x-acs-date":            xAcsDate,
+		"x-acs-content-sha256":  sha256Hex(""),
+	}
+	signedHeaders := []string{"host", "x-acs-action", "x-acs-content-sha256", "x-acs-date", "x-acs-signature-nonce", "x-acs-version"}
+
+	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, cfg.SecretKey)
+
+	// 构建 Authorization 请求头
+	auth := fmt.Sprintf("ACS3-HMAC-SHA256 Credential=%s,SignedHeaders=%s,Signature=%s",
+		cfg.AccessKey, strings.Join(signedHeaders, ";"), signature)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://"+host+"/?"+queryString, nil)
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("x-acs-action", "SendSms")
+	req.Header.Set("x-acs-version", "2017-05-25")
+	req.Header.Set("x-acs-signature-nonce", xAcsNonce)
+	req.Header.Set("x-acs-date", xAcsDate)
+	req.Header.Set("x-acs-content-sha256", sha256Hex(""))
+	req.Header.Set("Host", host)
+
+	resp, err := n.httpc.Do(req)
 	if err != nil {
 		return err
 	}
@@ -540,6 +616,7 @@ func (n *Notifier) sendVoiceCall(cfg VoiceCallConfig, text string) error {
 	return fmt.Errorf("voice call provider %s not yet implemented", cfg.Provider)
 }
 
+// sendAliyunVoiceCall 使用阿里云 API 签名 V3（ACS3-HMAC-SHA256）发送语音通知。
 func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 	phones := strings.Join(cfg.CalledNumbers, ",")
 	if phones == "" {
@@ -551,29 +628,57 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 		tsParam = fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
 	}
 	calledNumber := cfg.CalledNumbers[0] // SingleCallByTts only supports one callee per call
-	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)[:16]
-	params := map[string]string{
-		"AccessKeyId":      cfg.AccessKey,
-		"Action":           "SingleCallByTts",
-		"Format":           "JSON",
-		"CalledNumber":     calledNumber,
-		"TtsCode":          cfg.TTSCode,
-		"TtsParam":         tsParam,
-		"SignatureMethod":  "HMAC-SHA1",
-		"SignatureNonce":   nonce,
-		"SignatureVersion": "1.0",
-		"Timestamp":        ts,
-		"Version":          "2017-05-25",
-	}
-	params["Signature"] = aliyunSign("GET", params, cfg.SecretKey)
 
-	var qs []string
-	for k, v := range params {
-		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(v))
+	// 构建查询参数（按 key 排序 → 规范化查询字符串）
+	params := map[string]string{
+		"CalledNumber": calledNumber,
+		"TtsCode":      cfg.TTSCode,
+		"TtsParam":     tsParam,
 	}
-	reqURL := "https://dyvmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
-	resp, err := n.httpc.Get(reqURL)
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var qs []string
+	for _, k := range keys {
+		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(params[k]))
+	}
+	queryString := strings.Join(qs, "&")
+
+	// 构建 V3 签名所需请求头
+	now := time.Now().UTC()
+	xAcsDate := now.Format("2006-01-02T15:04:05Z")
+	nonce := make([]byte, 16)
+	_, _ = rand.Read(nonce)
+	xAcsNonce := hex.EncodeToString(nonce)
+	host := "dyvmsapi.aliyuncs.com"
+
+	headers := map[string]string{
+		"host":                  host,
+		"x-acs-action":          "SingleCallByTts",
+		"x-acs-version":         "2017-05-25",
+		"x-acs-signature-nonce": xAcsNonce,
+		"x-acs-date":            xAcsDate,
+		"x-acs-content-sha256":  sha256Hex(""),
+	}
+	signedHeaders := []string{"host", "x-acs-action", "x-acs-content-sha256", "x-acs-date", "x-acs-signature-nonce", "x-acs-version"}
+
+	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, cfg.SecretKey)
+
+	auth := fmt.Sprintf("ACS3-HMAC-SHA256 Credential=%s,SignedHeaders=%s,Signature=%s",
+		cfg.AccessKey, strings.Join(signedHeaders, ";"), signature)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://"+host+"/?"+queryString, nil)
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("x-acs-action", "SingleCallByTts")
+	req.Header.Set("x-acs-version", "2017-05-25")
+	req.Header.Set("x-acs-signature-nonce", xAcsNonce)
+	req.Header.Set("x-acs-date", xAcsDate)
+	req.Header.Set("x-acs-content-sha256", sha256Hex(""))
+	req.Header.Set("Host", host)
+
+	resp, err := n.httpc.Do(req)
 	if err != nil {
 		return err
 	}

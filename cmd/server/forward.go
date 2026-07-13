@@ -852,10 +852,11 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HostID     string `json:"host_id"`
-		TargetPort int    `json:"target_port"`
-		LocalPort  int    `json:"local_port"` // 0 = auto-allocate
-		Protocol   string `json:"protocol"`   // "tcp"(默认) | "udp"
+		HostID        string `json:"host_id"`
+		TargetPort    int    `json:"target_port"`
+		TargetPortEnd int    `json:"target_port_end"` // > target_port：端口范围批量转发（含端点）
+		LocalPort     int    `json:"local_port"`      // 0 = auto-allocate
+		Protocol      string `json:"protocol"`        // "tcp"(默认) | "udp"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -879,21 +880,60 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		operator = user.Username
 	}
 	listenHost := s.cfg.ForwardListenAddr()
-	rule, err := s.forward.createRule(req.HostID, hostname, req.TargetPort, req.LocalPort, listenHost, req.Protocol, operator)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	// 端口范围批量转发：target_port..target_port_end（含）。每个端口一条独立规则，
+	// 复用单端口的监听/会话/隧道全套机制（Agent 无需改动）。范围模式下本地端口镜像
+	// 目标端口（listen:P → target:P），便于成组访问；被占用时回退到端口段自动分配。
+	end := req.TargetPortEnd
+	isRange := end > req.TargetPort
+	if !isRange {
+		end = req.TargetPort
+	}
+	if end < 1 || end > 65535 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
 		return
 	}
-	// start accepting connections in the background
-	go s.serveRule(rule)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
-		Message: Tz("log.forward_create", rule.id, hostname, req.TargetPort, rule.listenAddr)})
-	writeJSON(w, http.StatusOK, forwardInfo{
-		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
-		TargetPort: rule.targetPort, LocalPort: rule.localPort,
-		ListenAddr: rule.listenAddr, Status: "active",
-		CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol,
-	})
+	const maxRangePorts = 100
+	if end-req.TargetPort+1 > maxRangePorts {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "端口范围过大，单次最多 100 个端口"})
+		return
+	}
+	var created []forwardInfo
+	var firstErr error
+	for p := req.TargetPort; p <= end; p++ {
+		lp := req.LocalPort
+		if isRange {
+			lp = p // 范围：本地端口镜像目标端口
+		}
+		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, operator)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		go s.serveRule(rule)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
+			Message: Tz("log.forward_create", rule.id, hostname, p, rule.listenAddr)})
+		created = append(created, forwardInfo{
+			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
+			TargetPort: rule.targetPort, LocalPort: rule.localPort,
+			ListenAddr: rule.listenAddr, Status: "active",
+			CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol,
+		})
+	}
+	if len(created) == 0 {
+		msg := "创建转发失败"
+		if firstErr != nil {
+			msg = firstErr.Error()
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
+		return
+	}
+	if !isRange { // 单端口：保持原有响应契约（前端读 listen_addr 等字段）
+		writeJSON(w, http.StatusOK, created[0])
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": created, "count": len(created), "listen_addr": created[0].ListenAddr})
 }
 
 // handleForwardDelete closes a forwarding rule and its listener.

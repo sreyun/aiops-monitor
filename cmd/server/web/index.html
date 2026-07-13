@@ -1509,10 +1509,14 @@
           <div class="select-wrap"><select id="fwdProtocol" style="width:100%"><option value="tcp">TCP（MySQL / Redis / SSH …）</option><option value="udp">UDP（DNS / SNMP / syslog / 游戏 …）</option></select></div>
         </div>
         <div class="field">
+          <label>结束端口（范围批量转发，可选）</label>
+          <input type="number" id="fwdTargetPortEnd" placeholder="留空=单端口；填「大于目标端口的值」批量转发该范围（≤100 个）" min="1" max="65535" style="width:100%">
+        </div>
+        <div class="field">
           <label data-i18n="form.local_port_optional">本地端口（可选）</label>
           <input type="number" id="fwdLocalPort" data-i18n-placeholder="form.auto_assign" placeholder="自动分配" min="0" max="65535" style="width:100%">
         </div>
-        <div class="hint" data-i18n="forward.tcp_hint">创建转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP / UDP 服务（如 MySQL、Redis、SSH、DNS）。</div>
+        <div class="hint" data-i18n="forward.tcp_hint">创建转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP / UDP 服务（如 MySQL、Redis、SSH、DNS）。填结束端口即按范围批量转发（本地端口镜像目标端口）。</div>
       </div>
       <!-- HTTP mode fields -->
       <div id="fwdHttpFields" style="display:none">
