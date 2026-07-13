@@ -525,11 +525,16 @@ func aliyunSign(method string, params map[string]string, secret string) string {
 
 // sendSMS sends an alert via cloud SMS API (Aliyun / Huawei / Tencent).
 func (n *Notifier) sendSMS(cfg SMSConfig, text string) error {
-	if cfg.Provider == "" || cfg.Provider == "aliyun" {
+	switch cfg.Provider {
+	case "", "aliyun":
 		return n.sendAliyunSMS(cfg, text)
+	case "huawei":
+		return n.sendHuaweiSMS(cfg, text)
+	case "tencent":
+		return n.sendTencentSMS(cfg, text)
+	default:
+		return fmt.Errorf("SMS provider %s not yet implemented", cfg.Provider)
 	}
-	// Huawei Cloud and Tencent Cloud SMS: use simple HTTP POST (placeholder for future full signing)
-	return fmt.Errorf("SMS provider %s not yet implemented", cfg.Provider)
 }
 
 // sendAliyunSMS 使用阿里云 API 签名 V3（ACS3-HMAC-SHA256）发送短信。
@@ -613,10 +618,16 @@ func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 
 // sendVoiceCall sends an alert via cloud voice call (TTS) API.
 func (n *Notifier) sendVoiceCall(cfg VoiceCallConfig, text string) error {
-	if cfg.Provider == "" || cfg.Provider == "aliyun" {
+	switch cfg.Provider {
+	case "", "aliyun":
 		return n.sendAliyunVoiceCall(cfg, text)
+	case "huawei":
+		return n.sendHuaweiVoiceCall(cfg, text)
+	case "tencent":
+		return n.sendTencentVoiceCall(cfg, text)
+	default:
+		return fmt.Errorf("voice call provider %s not yet implemented", cfg.Provider)
 	}
-	return fmt.Errorf("voice call provider %s not yet implemented", cfg.Provider)
 }
 
 // sendAliyunVoiceCall 使用阿里云 API 签名 V3（ACS3-HMAC-SHA256）发送语音通知。
@@ -695,6 +706,362 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 		return fmt.Errorf("VoiceCall API: %s (%s)", r.Message, r.Code)
 	}
 	return nil
+}
+
+// ---------- 华为云短信（X-WSSE 鉴权，API v2）----------
+
+// sendHuaweiSMS 使用华为云 SMS API v2 + X-WSSE 鉴权发送短信。
+// 文档：https://support.huaweicloud.com/api-msgsms/sms_05_0001.html
+func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
+	phones := strings.Join(cfg.Phones, ",")
+	if phones == "" {
+		return fmt.Errorf("no phone numbers configured")
+	}
+	projectID := strings.TrimSpace(cfg.AppID)
+	if projectID == "" {
+		return fmt.Errorf("Huawei Cloud SMS requires project_id (AppID)")
+	}
+
+	// 构建模板参数：优先用用户自定义 JSON 数组，否则兜底
+	var templateParas []string
+	tp := strings.TrimSpace(cfg.TemplateParam)
+	if tp != "" {
+		if err := json.Unmarshal([]byte(tp), &templateParas); err != nil {
+			templateParas = []string{text}
+		}
+	} else {
+		templateParas = []string{text}
+	}
+
+	// 国际号码格式：不加前缀的默认 +86
+	var toList []string
+	for _, p := range strings.Split(phones, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "+") {
+			p = "+86" + p
+		}
+		toList = append(toList, p)
+	}
+
+	// 华为云 SMS 区域端点（默认 cn-north-4）
+	endpoint := "https://smsapi.cn-north-4.myhuaweicloud.com:443"
+	url := fmt.Sprintf("%s/v2/%s/sms/batch-send-sms", endpoint, projectID)
+
+	// X-WSSE 鉴权
+	nonceBytes := make([]byte, 16)
+	_, _ = rand.Read(nonceBytes)
+	nonce := hex.EncodeToString(nonceBytes)
+	created := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	h := sha256.New()
+	h.Write([]byte(nonce + created + cfg.SecretKey))
+	passwordDigest := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	xWsse := fmt.Sprintf(`UsernameToken Username="%s", PasswordDigest="%s", Nonce="%s", Created="%s"`,
+		cfg.AccessKey, passwordDigest, nonce, created)
+
+	body := map[string]any{
+		"from":         "",
+		"to":           strings.Join(toList, ","),
+		"templateId":   cfg.TemplateCode,
+		"templateParas": templateParas,
+		"signature":    cfg.SignName,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	req.Header.Set("Authorization", `WSSE realm="SDP", profile="UsernameToken", type="Appkey"`)
+	req.Header.Set("X-WSSE", xWsse)
+
+	resp, err := n.httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	var r struct {
+		Code        string `json:"code"`
+		Description string `json:"description"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Code != "000000" {
+		return fmt.Errorf("Huawei SMS API: %s (%s)", r.Description, r.Code)
+	}
+	return nil
+}
+
+// ---------- 腾讯云短信（TC3-HMAC-SHA256 签名，API 2021-01-11）----------
+
+// sendTencentSMS 使用腾讯云 SMS API 2021-01-11 + TC3-HMAC-SHA256 签名发送短信。
+func (n *Notifier) sendTencentSMS(cfg SMSConfig, text string) error {
+	phones := strings.Join(cfg.Phones, ",")
+	if phones == "" {
+		return fmt.Errorf("no phone numbers configured")
+	}
+	sdkAppID := strings.TrimSpace(cfg.AppID)
+	if sdkAppID == "" {
+		return fmt.Errorf("Tencent Cloud SMS requires SmsSdkAppId (AppID)")
+	}
+
+	// 构建模板参数：优先用用户自定义 JSON 数组，否则兜底
+	var templateParamSet []string
+	tp := strings.TrimSpace(cfg.TemplateParam)
+	if tp != "" {
+		if err := json.Unmarshal([]byte(tp), &templateParamSet); err != nil {
+			templateParamSet = []string{text}
+		}
+	} else {
+		templateParamSet = []string{text}
+	}
+
+	// 国际号码格式：腾讯云要求 +86 前缀
+	var phoneSet []string
+	for _, p := range strings.Split(phones, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "+") {
+			p = "+86" + p
+		}
+		phoneSet = append(phoneSet, p)
+	}
+
+	host := "sms.tencentcloudapi.com"
+	service := "sms"
+	action := "SendSms"
+	version := "2021-01-11"
+
+	payload := map[string]any{
+		"PhoneNumberSet":   phoneSet,
+		"SmsSdkAppId":      sdkAppID,
+		"SignName":         cfg.SignName,
+		"TemplateId":       cfg.TemplateCode,
+		"TemplateParamSet": templateParamSet,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	payloadStr := string(payloadBytes)
+
+	timestamp := time.Now().Unix()
+	auth, err := tencentSignV3(cfg.AccessKey, cfg.SecretKey, host, service, action, version, payloadStr, timestamp)
+	if err != nil {
+		return err
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, "https://"+host, bytes.NewReader(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Host", host)
+	req.Header.Set("X-TC-Action", action)
+	req.Header.Set("X-TC-Version", version)
+	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(timestamp, 10))
+	req.Header.Set("Authorization", auth)
+
+	resp, err := n.httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	var r struct {
+		Response struct {
+			Error *struct {
+				Code    string `json:"Code"`
+				Message string `json:"Message"`
+			} `json:"Error"`
+		} `json:"Response"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Response.Error != nil {
+		return fmt.Errorf("Tencent SMS API: %s (%s)", r.Response.Error.Message, r.Response.Error.Code)
+	}
+	return nil
+}
+
+// ---------- 华为云语音通知（X-WSSE 鉴权）----------
+
+// sendHuaweiVoiceCall 发送华为云语音通知（TTS）。
+func (n *Notifier) sendHuaweiVoiceCall(cfg VoiceCallConfig, text string) error {
+	if len(cfg.CalledNumbers) == 0 {
+		return fmt.Errorf("no called numbers configured")
+	}
+	projectID := strings.TrimSpace(cfg.AppID)
+	if projectID == "" {
+		return fmt.Errorf("Huawei Cloud Voice Call requires project_id (AppID)")
+	}
+
+	// 被叫号码
+	called := cfg.CalledNumbers[0]
+	if !strings.HasPrefix(called, "+") {
+		called = "+86" + called
+	}
+
+	// 模板参数
+	var templateParas []string
+	tp := strings.TrimSpace(cfg.TTSParam)
+	if tp != "" {
+		if err := json.Unmarshal([]byte(tp), &templateParas); err != nil {
+			templateParas = []string{text}
+		}
+	} else {
+		templateParas = []string{text}
+	}
+
+	endpoint := "https://rtc-api.myhuaweicloud.com:443"
+	url := fmt.Sprintf("%s/v2/%s/voice/tts", endpoint, projectID)
+
+	// X-WSSE 鉴权（同短信）
+	nonceBytes := make([]byte, 16)
+	_, _ = rand.Read(nonceBytes)
+	nonce := hex.EncodeToString(nonceBytes)
+	created := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	h := sha256.New()
+	h.Write([]byte(nonce + created + cfg.SecretKey))
+	passwordDigest := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	xWsse := fmt.Sprintf(`UsernameToken Username="%s", PasswordDigest="%s", Nonce="%s", Created="%s"`,
+		cfg.AccessKey, passwordDigest, nonce, created)
+
+	body := map[string]any{
+		"called":        called,
+		"templateId":    cfg.TTSCode,
+		"templateParas": templateParas,
+		"playTimes":     1,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	req.Header.Set("Authorization", `WSSE realm="SDP", profile="UsernameToken", type="Appkey"`)
+	req.Header.Set("X-WSSE", xWsse)
+
+	resp, err := n.httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	var r struct {
+		Code        string `json:"code"`
+		Description string `json:"description"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Code != "000000" {
+		return fmt.Errorf("Huawei VoiceCall API: %s (%s)", r.Description, r.Code)
+	}
+	return nil
+}
+
+// ---------- 腾讯云语音通知（TC3-HMAC-SHA256 签名，API 2020-02-24）----------
+
+// sendTencentVoiceCall 发送腾讯云语音通知（TTS）。
+func (n *Notifier) sendTencentVoiceCall(cfg VoiceCallConfig, text string) error {
+	if len(cfg.CalledNumbers) == 0 {
+		return fmt.Errorf("no called numbers configured")
+	}
+	voiceAppID := strings.TrimSpace(cfg.AppID)
+	if voiceAppID == "" {
+		return fmt.Errorf("Tencent Cloud Voice Call requires VoiceSdkAppId (AppID)")
+	}
+
+	called := cfg.CalledNumbers[0]
+	if !strings.HasPrefix(called, "+") {
+		called = "+86" + called
+	}
+
+	var templateParamSet []string
+	tp := strings.TrimSpace(cfg.TTSParam)
+	if tp != "" {
+		if err := json.Unmarshal([]byte(tp), &templateParamSet); err != nil {
+			templateParamSet = []string{text}
+		}
+	} else {
+		templateParamSet = []string{text}
+	}
+
+	host := "vms.tencentcloudapi.com"
+	service := "vms"
+	action := "SendTts"
+	version := "2020-02-24"
+
+	payload := map[string]any{
+		"TemplateId":       cfg.TTSCode,
+		"CalledNumber":     called,
+		"VoiceSdkAppid":    voiceAppID,
+		"TemplateParamSet": templateParamSet,
+		"PlayTimes":        1,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	payloadStr := string(payloadBytes)
+
+	timestamp := time.Now().Unix()
+	auth, err := tencentSignV3(cfg.AccessKey, cfg.SecretKey, host, service, action, version, payloadStr, timestamp)
+	if err != nil {
+		return err
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, "https://"+host, bytes.NewReader(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Host", host)
+	req.Header.Set("X-TC-Action", action)
+	req.Header.Set("X-TC-Version", version)
+	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(timestamp, 10))
+	req.Header.Set("Authorization", auth)
+
+	resp, err := n.httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	var r struct {
+		Response struct {
+			Error *struct {
+				Code    string `json:"Code"`
+				Message string `json:"Message"`
+			} `json:"Error"`
+		} `json:"Response"`
+	}
+	if json.Unmarshal(rb, &r) == nil && r.Response.Error != nil {
+		return fmt.Errorf("Tencent VoiceCall API: %s (%s)", r.Response.Error.Message, r.Response.Error.Code)
+	}
+	return nil
+}
+
+// tencentSignV3 计算腾讯云 API TC3-HMAC-SHA256 签名。
+func tencentSignV3(secretID, secretKey, host, service, action, version, payload string, timestamp int64) (string, error) {
+	date := time.Unix(timestamp, 0).UTC().Format("2006-01-02")
+
+	// 1) 规范化请求
+	canonicalHeaders := fmt.Sprintf("content-type:application/json\nhost:%s\n", host)
+	signedHeaders := "content-type;host"
+	hashedPayload := sha256Hex(payload)
+	canonicalRequest := fmt.Sprintf("POST\n/\n\n%s\n%s\n%s", canonicalHeaders, signedHeaders, hashedPayload)
+
+	// 2) 待签字符串
+	credentialScope := fmt.Sprintf("%s/%s/tc3_request", date, service)
+	hashedCanonical := sha256Hex(canonicalRequest)
+	stringToSign := fmt.Sprintf("TC3-HMAC-SHA256\n%d\n%s\n%s", timestamp, credentialScope, hashedCanonical)
+
+	// 3) 派生签名密钥
+	secretDate := hmacSHA256Bytes([]byte("TC3"+secretKey), date)
+	secretService := hmacSHA256Bytes(secretDate, service)
+	secretSigning := hmacSHA256Bytes(secretService, "tc3_request")
+
+	// 4) 签名
+	signature := hex.EncodeToString(hmacSHA256Bytes(secretSigning, stringToSign))
+
+	auth := fmt.Sprintf("TC3-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		secretID, credentialScope, signedHeaders, signature)
+	return auth, nil
+}
+
+// hmacSHA256Bytes 返回 HMAC-SHA256 的原始字节。
+func hmacSHA256Bytes(key []byte, data string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return h.Sum(nil)
 }
 
 // sendCustomWebhook sends an alert to a user-defined HTTP(S) endpoint.
