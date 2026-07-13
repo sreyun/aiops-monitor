@@ -35,6 +35,7 @@ async function openSettings() {
     $("smsSignName").value = sms.sign_name || "";
     $("smsTemplateCode").value = sms.template_code || "";
     $("smsTemplateParam").value = sms.template_param || "";
+    $("smsAppId").value = sms.app_id || "";
     $("smsPhones").value = (sms.phones || []).join(",");
     // VoiceCall config
     const vc = c.voice_call || {};
@@ -45,6 +46,7 @@ async function openSettings() {
     $("voiceCallCalledNumbers").value = (vc.called_numbers || []).join(",");
     $("voiceCallTtsCode").value = vc.tts_code || "";
     $("voiceCallTtsParam").value = vc.tts_param || "";
+    $("voiceCallAppId").value = vc.app_id || "";
     // Threshold display: treat 0 / null / undefined as "unset" → show the standard
     // default. The backend also backfills these zeros, so display and storage stay
     // consistent, and every metric always shows a sane standard threshold.
@@ -206,6 +208,7 @@ function collectSettings() {
       sign_name: $("smsSignName").value.trim(),
       template_code: $("smsTemplateCode").value.trim(),
       template_param: $("smsTemplateParam").value.trim(),
+      app_id: $("smsAppId").value.trim(),
       phones: ($("smsPhones").value || "").split(",").map(s => s.trim()).filter(Boolean)
     },
     voice_call: {
@@ -215,7 +218,8 @@ function collectSettings() {
       secret_key: $("voiceCallSecretKey").value,
       called_numbers: ($("voiceCallCalledNumbers").value || "").split(",").map(s => s.trim()).filter(Boolean),
       tts_code: $("voiceCallTtsCode").value.trim(),
-      tts_param: $("voiceCallTtsParam").value.trim()
+      tts_param: $("voiceCallTtsParam").value.trim(),
+      app_id: $("voiceCallAppId").value.trim()
     },
     thresholds: {
       cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
