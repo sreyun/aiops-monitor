@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -746,9 +748,10 @@ func (a *Auth) terminalAttemptReset(user string) {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Code     string `json:"code"` // TOTP second factor (only when MFA is enabled)
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		LoginType string `json:"login_type"` // "username" (default), "phone", "sms"
+		Code      string `json:"code"`       // TOTP second factor (only when MFA is enabled)
 	}
 	ip := s.clientIP(r)
 	if !s.auth.loginAllowed(ip) {
@@ -759,27 +762,67 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	// Per-account throttle (independent of the per-IP limit above) blunts
-	// distributed brute force that rotates source IPs against one account.
-	if !s.auth.loginAccountAllowed(req.Username) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+	// Resolve account by login type
+	var acc AccountConfig
+	var ok bool
+	throttleKey := req.Username
+	switch req.LoginType {
+	case "phone":
+		throttleKey = req.Username // phone number is in username field
+		acc, ok = s.cfg.UserByPhone(req.Username)
+		if !ok {
+			// Dummy hash to blunt enumeration timing
+			hashPassword(req.Password, "dummy-salt-000000")
+		}
+	case "sms":
+		// Reserved: SMS verification code login — not yet implemented
+		writeJSON(w, http.StatusOK, map[string]any{"sms_required": true, "message": Tr(r, "login.sms_not_available")})
 		return
+	default:
+		// Default: username login
+		throttleKey = req.Username
+		acc, ok = s.auth.CheckPassword(req.Username, req.Password)
+		if !ok {
+			s.auth.loginFailed(ip)
+			s.auth.loginAccountFailed(req.Username)
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", req.Username)})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
+			return
+		}
+		goto passwordOK
 	}
-	acc, ok := s.auth.CheckPassword(req.Username, req.Password)
-	if !ok {
-		s.auth.loginFailed(ip)
-		s.auth.loginAccountFailed(req.Username)
-		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", req.Username)})
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
-		return
+
+	// Phone login: validate password ourselves (since CheckPassword uses UserByName)
+	if req.LoginType == "phone" {
+		if !ok {
+			s.auth.loginFailed(ip)
+			s.auth.loginAccountFailed(throttleKey)
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", "phone:"+req.Username)})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
+			return
+		}
+		if !verifyPassword(req.Password, acc.Salt, acc.Hash) {
+			s.auth.loginFailed(ip)
+			s.auth.loginAccountFailed(throttleKey)
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", acc.Username)})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
+			return
+		}
+		// Per-account throttle: use the resolved username
+		if !s.auth.loginAccountAllowed(acc.Username) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+			return
+		}
 	}
+
+passwordOK:
 	// v5.4.0: detect default admin/admin credentials and force a password
 	// change on first login. Do not override an existing MustChangePassword
 	// flag (it may already be set by the admin reset tool).
-	if !acc.MustChangePassword && req.Username == "admin" && req.Password == "admin" {
-		s.cfg.SetMustChangePassword(req.Username)
+	if !acc.MustChangePassword && acc.Username == "admin" && req.Password == "admin" {
+		s.cfg.SetMustChangePassword(acc.Username)
 		acc.MustChangePassword = true
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, Message: Tz("log.default_credentials", req.Username)})
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, Message: Tz("log.default_credentials", acc.Username)})
 	}
 	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
 	// The requirement is revealed only AFTER the password checks out, so an
@@ -791,14 +834,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, req.Code) {
 			s.auth.loginFailed(ip)
-			s.auth.loginAccountFailed(req.Username)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.totp_failed", req.Username)})
+			s.auth.loginAccountFailed(acc.Username)
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.totp_failed", acc.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 			return
 		}
 	}
 	// Credentials fully verified — clear the per-account failed-attempt counter.
-	s.auth.loginAccountReset(req.Username)
+	s.auth.loginAccountReset(acc.Username)
 	// Global MFA policy: if admin has enabled MFARequired and this user hasn't
 	// set up MFA yet, issue a restricted session and direct them to enroll.
 	if s.cfg.MFARequired() && !acc.MFAEnabled {
@@ -820,7 +863,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, Message: Tz("log.login_success", req.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, Message: Tz("log.login_success", acc.Username)})
 	resp := map[string]any{"ok": true}
 	// v5.4.0: force password change if admin reset was used
 	if acc.MustChangePassword {
@@ -846,7 +889,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"username": acc.Username, "display_name": acc.DisplayName, "email": acc.Email,
+		"username": acc.Username, "display_name": acc.DisplayName, "email": acc.Email, "phone": acc.Phone,
 		"mfa_enabled": acc.MFAEnabled, "role": acc.Role,
 		"must_change_password": acc.MustChangePassword,
 	})
@@ -862,6 +905,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		Username    string `json:"username"`
 		DisplayName string `json:"display_name"`
 		Email       string `json:"email"`
+		Phone       string `json:"phone"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -883,9 +927,72 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		s.auth.renameSessions(acc.Username, uname)
 		name = uname
 	}
-	_ = s.cfg.SetUserProfile(name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email))
+	_ = s.cfg.SetUserProfile(name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email), strings.TrimSpace(req.Phone))
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.update_profile", name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
+}
+
+// ---- SMS verification code (reserved for future phone login) ----
+
+// smsCodeEntry is a temporary in-memory store for SMS verification codes.
+type smsCodeEntry struct {
+	Code     string
+	ExpireAt time.Time
+}
+
+var (
+	smsCodeMu sync.Mutex
+	smsCodes  = map[string]smsCodeEntry{} // phone -> entry
+	smsLastMu sync.Mutex
+	smsLast   = map[string]time.Time{} // phone -> last send time (rate limit)
+)
+
+// handleLoginSMSCode sends a 6-digit verification code to the given phone number.
+// This is a reserved endpoint — SMS sending is not yet implemented.
+func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Phone string `json:"phone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	if phone == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "login.phone_required")})
+		return
+	}
+	// Check if phone is registered
+	_, found := s.cfg.UserByPhone(phone)
+	if !found {
+		// Don't reveal whether phone exists — use the same delay
+		writeJSON(w, http.StatusOK, map[string]any{"message": Tr(r, "login.sms_sent")})
+		return
+	}
+	// Rate limit: 60s between sends
+	smsLastMu.Lock()
+	last, exists := smsLast[phone]
+	if exists && time.Since(last) < 60*time.Second {
+		smsLastMu.Unlock()
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "recovery.rate_limited")})
+		return
+	}
+	smsLast[phone] = time.Now()
+	smsLastMu.Unlock()
+	// Generate 6-digit code using crypto/rand
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate code"})
+		return
+	}
+	code := fmt.Sprintf("%06d", n.Int64())
+	smsCodeMu.Lock()
+	smsCodes[phone] = smsCodeEntry{Code: code, ExpireAt: time.Now().Add(5 * time.Minute)}
+	smsCodeMu.Unlock()
+	// TODO: Call actual SMS sending service here
+	// sendSMS(phone, code)
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: s.clientIP(r), Message: fmt.Sprintf("SMS code sent to %s (placeholder)", phone)})
+	writeJSON(w, http.StatusOK, map[string]any{"message": Tr(r, "login.sms_sent")})
 }
 
 func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {

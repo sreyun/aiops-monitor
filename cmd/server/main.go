@@ -259,6 +259,7 @@ func main() {
 	}
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
+	notifier.forward = server.forward
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
 	server.bindPG(pg)                                      // load + periodically persist incidents / work orders / sessions

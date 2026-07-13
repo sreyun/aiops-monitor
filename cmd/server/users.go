@@ -111,6 +111,18 @@ func (cs *ConfigStore) UserByEmail(email string) (AccountConfig, bool) {
 	return AccountConfig{}, false
 }
 
+// UserByPhone returns the first user whose phone number matches (exact).
+func (cs *ConfigStore) UserByPhone(phone string) (AccountConfig, bool) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	for _, u := range cs.cfg.Users {
+		if u.Phone != "" && u.Phone == phone {
+			return u, true
+		}
+	}
+	return AccountConfig{}, false
+}
+
 // RoleOf returns a user's role, or "" if the user doesn't exist.
 func (cs *ConfigStore) RoleOf(name string) string {
 	cs.mu.RLock()
@@ -241,7 +253,7 @@ func (cs *ConfigStore) ClearMustChangePassword(username string) {
 }
 
 // SetUserProfile updates a user's own display name + email.
-func (cs *ConfigStore) SetUserProfile(username, displayName, email string) error {
+func (cs *ConfigStore) SetUserProfile(username, displayName, email, phone string) error {
 	cs.mu.Lock()
 	i := cs.findLocked(username)
 	if i < 0 {
@@ -250,6 +262,7 @@ func (cs *ConfigStore) SetUserProfile(username, displayName, email string) error
 	}
 	cs.cfg.Users[i].DisplayName = displayName
 	cs.cfg.Users[i].Email = email
+	cs.cfg.Users[i].Phone = phone
 	cs.mu.Unlock()
 	return cs.save()
 }

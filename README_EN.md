@@ -32,6 +32,10 @@
 - [Remote Terminal](#remote-terminal)
 - [Plugin Development](#plugin-development)
 - [Alert Configuration](#alert-configuration)
+- [Alert Governance](#alert-governance)
+- [API Monitoring](#api-monitoring)
+- [AI Ops Assistant (Hermes)](#ai-ops-assistant-hermes)
+- [Unified Message Center](#unified-message-center)
 - [Advanced Features](#advanced-features)
 - [Security Mechanisms](#security-mechanisms)
 - [Cross-Network Deployment](#cross-network-deployment)
@@ -536,6 +540,42 @@ Alerts are configured visually in the dashboard 鈥?no file editing:
 
 ---
 
+## Alert Governance
+
+Inserts a decision layer before notifications are actually sent, applying **silence / inhibition / route** to firing alerts to suppress alert storms, reduce night-time noise, and split by business:
+
+- **Silence rules**: match by `host / type / level`, support **time window** (start/end `HH:MM`, can cross midnight) + **weekday** temporary silence. e.g. "silence non-critical alerts every 23:00–08:00".
+- **Inhibit rules**: a root-cause alert suppresses derived alerts. e.g. when "host down" fires, automatically suppress that host's CPU/memory/disk alerts, avoiding dozens of alerts from one failure.
+- **Notification routes**: split matched alerts to a channel (Feishu / DingTalk / Email / Custom Webhook); `Continue` can chain to the next rule. e.g. "critical → phone/DingTalk, warning → Feishu only".
+- **Recovery notifications are always sent**, unaffected by silence.
+
+> Config: dashboard "Alerts" → "Alert Governance"; submitted as a whole, server strips unnamed rules.
+
+## API Monitoring
+
+Batch health / performance black-box probes for **a business system's set of APIs**, complementing the "business availability" dimension beyond host metrics:
+
+- Dashboard "Monitoring" → "API Monitoring" to add a business system with multiple endpoints (URL / method / Header / Body / expected status / keyword / JSONPath / JSON assertion / cert warning days).
+- Reuses the advanced HTTP probe engine (DNS / TCP / TLS / TTFB segmented timing); results written to VictoriaMetrics (`aiops_api_*` metric family).
+- Aggregated on the fly: avg latency / **P95 latency** / 1h·24h **availability** / throughput.
+- Endpoint anomalies fire unified alerts by business-system level (same source as custom probes).
+- Use cases: website / OpenAPI / microservice SLA monitoring, core-link availability dashboards.
+
+## AI Ops Assistant (Hermes)
+
+A built-in **autonomous ops Agent framework** on pluggable LLMs (OpenAI-compatible / Anthropic / BaiLian) + AI inspection diagnosis — the intelligent value-add layer on top of monitoring data:
+
+- **AI inspection (aiops)**: scheduled / manual health inspection combining online / offline hosts, active alerts, SLO breaches, and recent error logs into a health assessment; **falls back to a built-in heuristic when no LLM is configured — runs with zero external dependency**.
+- **Incident diagnosis + RAG**: a critical incident auto-triggers AI root-cause analysis written into the incident timeline; optional **pgvector diagnosis embeddings** retrieve historically similar cases (requires an embedding endpoint) — gets smarter over time.
+- **Hermes autonomous Agent**: multi-turn chat in dashboard "AI Assistant" (SSE streaming + session persistence) with **Function Calling tool use** — query metrics / search logs / list alerts / retrieve similar cases / read-only terminal inspection; configurable Hermes rules (rules / templates) plus auto-approve and read-only terminal toggles.
+- Config: intelligent analysis is enabled only after filling `ai{enabled, endpoint, api_key, model, hermes_enabled, hermes_auto_approve, hermes_terminal_enabled}` in "AI Config"; secrets are AES-encrypted at rest via `AIOPS_SECRET_KEY`.
+
+## Unified Message Center
+
+Aggregates notifications from the SRE workflow and AI into a **single inbox**: incidents / alerts / SLO breaches / auto-remediation / AI inspections / tickets, with unread counts, deep links, and one-click read/all-read; persisted in PostgreSQL `kv_state`, survives refresh. Entry: the bell icon at top-right of the dashboard.
+
+---
+
 ## Advanced Features
 
 ### Multi-Server Push
@@ -933,6 +973,23 @@ aiops-monitor/
 | GET / POST | `/api/v1/ai/config` | Get / save AI provider config |
 | GET | `/api/v1/ai/inspections` | Inspection reports |
 | POST | `/api/v1/ai/inspect` | Run an inspection now |
+| **API Monitoring** | | |
+| GET | `/api/v1/apimon/systems` | Business systems (live status + VM aggregates) |
+| POST | `/api/v1/apimon/systems` | Add / update business system |
+| POST | `/api/v1/apimon/systems/{id}/run` | Probe now |
+| DELETE | `/api/v1/apimon/systems/{id}` | Delete business system |
+| GET | `/api/v1/apimon/endpoints/{id}/history` | Endpoint history |
+| **Alert Governance** | | |
+| GET | `/api/v1/alerts/governance` | Governance rules (silence/inhibit/route) |
+| POST | `/api/v1/alerts/governance` | Save governance rules |
+| **AI Ops Assistant (Hermes)** | | |
+| POST | `/api/v1/ai/chat` | AI chat (SSE streaming) |
+| POST | `/api/v1/ai/diagnose` | Incident AI root-cause diagnosis |
+| GET | `/api/v1/ai/inspections` | Inspection reports |
+| GET | `/api/v1/hermes/chat` | Hermes autonomous Agent chat |
+| GET | `/api/v1/hermes/suggestions` | Chat quick questions |
+| GET/POST/DELETE | `/api/v1/hermes/sessions[/{id}[/undo]]` | Hermes session management |
+| GET/POST/DELETE | `/api/v1/hermes/rules` · `/templates` | Hermes rules / templates |
 | **Message Center** | | |
 | GET | `/api/v1/messages` | Messages + unread count (incidents / AI / remediation / tickets) |
 | POST | `/api/v1/messages/read` 路 `/read-all` | Mark read / mark all read |
@@ -969,6 +1026,12 @@ aiops-monitor/
 - [x] Gateway relay mode: auto-tunnel binary/report/terminal
 - [x] Machine fingerprint auth: token rotation doesn't affect installed agents
 - [x] One-click install: auto-detect architecture + download + config + boot autostart
+- [x] Alert governance: silence (time/weekday) / inhibit (root-cause suppresses derived) / route (by level/host to channels)
+- [x] API monitoring: batch black-box probes for business-system APIs (availability / latency / P95 / throughput)
+- [x] AI Ops Assistant: pluggable-LLM inspection diagnosis + RAG similar cases + Hermes autonomous Agent (Function Calling)
+- [x] Unified Message Center: single inbox for incidents / alerts / SLO / auto-remediation / AI / tickets
+- [x] Security hardening: SSRF outbound guard (safedial), log AES-256-GCM encrypted upload, pgvector RAG diagnosis embeddings
+- [x] Agent enhancements: log collection (encrypted upload), Agent-Server TLS CA trust, ZMODEM file transfer, machine-fingerprint anti-clone
 
 ### In Progress / Planned
 

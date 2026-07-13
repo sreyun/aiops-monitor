@@ -110,6 +110,15 @@ type ThresholdConfig struct {
 	TaskFailCrit    int     `json:"task_fail_crit"`    // 执行失败次数 严重
 	TaskTimeoutWarn float64 `json:"task_timeout_warn"` // 超时时长 警告 s
 	TaskTimeoutCrit float64 `json:"task_timeout_crit"` // 超时时长 严重 s
+	// ---- 端口转发监控阈值 ----
+	ForwardConnWarn  int     `json:"forward_conn_warn"`  // 活跃连接数 警告
+	ForwardConnCrit  int     `json:"forward_conn_crit"`  // 活跃连接数 严重
+	ForwardBwWarn    float64 `json:"forward_bw_warn"`    // 带宽使用率 警告 %
+	ForwardBwCrit    float64 `json:"forward_bw_crit"`    // 带宽使用率 严重 %
+	ForwardErrWarn   float64 `json:"forward_err_warn"`   // 错误率 警告 %
+	ForwardErrCrit   float64 `json:"forward_err_crit"`   // 错误率 严重 %
+	ForwardLatWarn   float64 `json:"forward_lat_warn"`   // 平均延迟 警告 ms
+	ForwardLatCrit   float64 `json:"forward_lat_crit"`   // 平均延迟 严重 ms
 }
 
 func defaultThresholdConfig() ThresholdConfig {
@@ -138,6 +147,11 @@ func defaultThresholdConfig() ThresholdConfig {
 		// 编排定时任务默认阈值
 		TaskFailWarn:    1,  TaskFailCrit:    5,
 		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
+		// 端口转发监控默认阈值
+		ForwardConnWarn: 200, ForwardConnCrit: 280,
+		ForwardBwWarn:   80,  ForwardBwCrit:   95,
+		ForwardErrWarn:  5,   ForwardErrCrit:  15,
+		ForwardLatWarn:  1000, ForwardLatCrit: 5000,
 	}
 }
 
@@ -214,6 +228,20 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	}
 	fix(&t.TaskTimeoutWarn, d.TaskTimeoutWarn)
 	fix(&t.TaskTimeoutCrit, d.TaskTimeoutCrit)
+	if t.ForwardConnWarn == 0 {
+		t.ForwardConnWarn = d.ForwardConnWarn
+		changed = true
+	}
+	if t.ForwardConnCrit == 0 {
+		t.ForwardConnCrit = d.ForwardConnCrit
+		changed = true
+	}
+	fix(&t.ForwardBwWarn, d.ForwardBwWarn)
+	fix(&t.ForwardBwCrit, d.ForwardBwCrit)
+	fix(&t.ForwardErrWarn, d.ForwardErrWarn)
+	fix(&t.ForwardErrCrit, d.ForwardErrCrit)
+	fix(&t.ForwardLatWarn, d.ForwardLatWarn)
+	fix(&t.ForwardLatCrit, d.ForwardLatCrit)
 	if t.OfflineAfterSec == 0 {
 		t.OfflineAfterSec = d.OfflineAfterSec
 		changed = true
@@ -247,6 +275,11 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		// 编排定时任务
 		TaskFailWarn: t.TaskFailWarn, TaskFailCrit: t.TaskFailCrit,
 		TaskTimeoutWarn: t.TaskTimeoutWarn, TaskTimeoutCrit: t.TaskTimeoutCrit,
+		// 端口转发监控
+		ForwardConnWarn: t.ForwardConnWarn, ForwardConnCrit: t.ForwardConnCrit,
+		ForwardBwWarn: t.ForwardBwWarn, ForwardBwCrit: t.ForwardBwCrit,
+		ForwardErrWarn: t.ForwardErrWarn, ForwardErrCrit: t.ForwardErrCrit,
+		ForwardLatWarn: t.ForwardLatWarn, ForwardLatCrit: t.ForwardLatCrit,
 	}
 }
 
@@ -256,6 +289,7 @@ type AccountConfig struct {
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+	Phone       string `json:"phone,omitempty"`
 	Salt        string `json:"salt"`
 	Hash        string `json:"hash"`
 	// Optional TOTP (Google Authenticator) second factor. MFASecret is the base32

@@ -12,7 +12,7 @@ import (
 func userView(u AccountConfig) map[string]any {
 	return map[string]any{
 		"username": u.Username, "display_name": u.DisplayName,
-		"email": u.Email, "role": u.Role, "mfa_enabled": u.MFAEnabled,
+		"email": u.Email, "phone": u.Phone, "role": u.Role, "mfa_enabled": u.MFAEnabled,
 	}
 }
 

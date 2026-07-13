@@ -200,62 +200,84 @@
         </div>
         <div class="gov-section">
           <!-- 系统监控 -->
-          <div class="hint" style="margin-top:0;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_system">系统监控</div>
-          <div class="grid2">
-            <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.diskio_thresh">磁盘 IO 占用 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="diskioWarn" class="mono"><input type="text" id="diskioCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
-              <div class="grid2"><input type="text" id="iopsWarn" class="mono"><input type="text" id="iopsCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="gpuWarn" class="mono"><input type="text" id="gpuCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（×核心数）</label>
-              <div class="grid2"><input type="text" id="loadWarn" class="mono"><input type="text" id="loadCrit" class="mono"></div></div>
-            <div class="field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
-              <input type="text" id="procWarn" class="mono"></div>
-            <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
-              <input type="text" id="offlineSec" class="mono"></div>
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-system"><span class="th-label" data-i18n="settings.group_system">系统监控</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="cpuWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="cpuCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="memWarn" class="mono" placeholder="85"><span class="unit">%</span><input type="text" id="memCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="diskWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="diskCrit" class="mono" placeholder="90"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.diskio_thresh">磁盘 IO 占用 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="diskioWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="diskioCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
+                <div class="th-input-row"><input type="text" id="iopsWarn" class="mono" placeholder="50000"><input type="text" id="iopsCrit" class="mono" placeholder="100000"></div></div>
+              <div class="threshold-field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="gpuWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="gpuCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（x核心数）</label>
+                <div class="th-input-row"><input type="text" id="loadWarn" class="mono" placeholder="4.0"><input type="text" id="loadCrit" class="mono" placeholder="8.0"></div></div>
+              <div class="threshold-field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
+                <div class="th-input-row"><input type="text" id="procWarn" class="mono" placeholder="0.5"></div></div>
+              <div class="threshold-field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
+                <div class="th-input-row"><input type="text" id="offlineSec" class="mono" placeholder="60"><span class="unit">s</span></div></div>
+            </div>
           </div>
           <!-- 拨测监控 -->
-          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_probe">拨测监控</div>
-          <div class="grid2">
-            <div class="field"><label data-i18n="settings.check_ping_loss_thresh">Ping 丢包率 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="checkPingLossWarn" class="mono" placeholder="10"><input type="text" id="checkPingLossCrit" class="mono" placeholder="30"></div></div>
-            <div class="field"><label data-i18n="settings.check_ping_latency_thresh">Ping 平均延迟 警告 / 严重（ms）</label>
-              <div class="grid2"><input type="text" id="checkPingLatencyWarn" class="mono" placeholder="100"><input type="text" id="checkPingLatencyCrit" class="mono" placeholder="500"></div></div>
-            <div class="field"><label data-i18n="settings.check_tcp_timeout_thresh">TCP 连接超时 警告 / 严重（ms）</label>
-              <div class="grid2"><input type="text" id="checkTCPTimeoutWarn" class="mono" placeholder="1000"><input type="text" id="checkTCPTimeoutCrit" class="mono" placeholder="5000"></div></div>
-            <div class="field"><label data-i18n="settings.check_http_resp_thresh">HTTP 响应时间 警告 / 严重（ms）</label>
-              <div class="grid2"><input type="text" id="checkHTTPRespWarn" class="mono" placeholder="1000"><input type="text" id="checkHTTPRespCrit" class="mono" placeholder="5000"></div></div>
-            <div class="field"><label data-i18n="settings.check_http_status_thresh">HTTP 非 2xx 状态码 警告 / 严重（次）</label>
-              <div class="grid2"><input type="text" id="checkHTTPStatusWarn" class="mono" placeholder="1"><input type="text" id="checkHTTPStatusCrit" class="mono" placeholder="5"></div></div>
-            <div class="field"><label data-i18n="settings.check_proc_fail_thresh">进程存活失败次数 警告 / 严重（次）</label>
-              <div class="grid2"><input type="text" id="checkProcFailWarn" class="mono" placeholder="1"><input type="text" id="checkProcFailCrit" class="mono" placeholder="3"></div></div>
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-probe"><span class="th-label" data-i18n="settings.group_probe">拨测监控</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.check_ping_loss_thresh">Ping 丢包率 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="checkPingLossWarn" class="mono" placeholder="10"><span class="unit">%</span><input type="text" id="checkPingLossCrit" class="mono" placeholder="30"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_ping_latency_thresh">Ping 平均延迟 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="checkPingLatencyWarn" class="mono" placeholder="100"><span class="unit">ms</span><input type="text" id="checkPingLatencyCrit" class="mono" placeholder="500"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_tcp_timeout_thresh">TCP 连接超时 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="checkTCPTimeoutWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="checkTCPTimeoutCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_http_resp_thresh">HTTP 响应时间 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="checkHTTPRespWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="checkHTTPRespCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_http_status_thresh">HTTP 非 2xx 状态码 警告 / 严重（次）</label>
+                <div class="th-input-row"><input type="text" id="checkHTTPStatusWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="checkHTTPStatusCrit" class="mono" placeholder="5"><span class="unit">次</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_proc_fail_thresh">进程存活失败次数 警告 / 严重（次）</label>
+                <div class="th-input-row"><input type="text" id="checkProcFailWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="checkProcFailCrit" class="mono" placeholder="3"><span class="unit">次</span></div></div>
+            </div>
           </div>
           <!-- API 业务监控 -->
-          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_api">API 业务监控</div>
-          <div class="grid2">
-            <div class="field"><label data-i18n="settings.api_avail_thresh">API 可用率 警告 / 严重（%）</label>
-              <div class="grid2"><input type="text" id="apiAvailWarn" class="mono" placeholder="99"><input type="text" id="apiAvailCrit" class="mono" placeholder="95"></div></div>
-            <div class="field"><label data-i18n="settings.api_avg_resp_thresh">API 平均响应时间 警告 / 严重（ms）</label>
-              <div class="grid2"><input type="text" id="apiAvgRespWarn" class="mono" placeholder="500"><input type="text" id="apiAvgRespCrit" class="mono" placeholder="2000"></div></div>
-            <div class="field"><label data-i18n="settings.api_p95_resp_thresh">API P95 响应时间 警告 / 严重（ms）</label>
-              <div class="grid2"><input type="text" id="apiP95RespWarn" class="mono" placeholder="1000"><input type="text" id="apiP95RespCrit" class="mono" placeholder="5000"></div></div>
-            <div class="field"><label data-i18n="settings.api_throughput_thresh">API 吞吐量 警告 / 严重（req/s）</label>
-              <div class="grid2"><input type="text" id="apiThroughputWarn" class="mono" placeholder="100"><input type="text" id="apiThroughputCrit" class="mono" placeholder="10"></div></div>
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-api"><span class="th-label" data-i18n="settings.group_api">API 业务监控</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.api_avail_thresh">API 可用率 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="apiAvailWarn" class="mono" placeholder="99"><span class="unit">%</span><input type="text" id="apiAvailCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.api_avg_resp_thresh">API 平均响应时间 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="apiAvgRespWarn" class="mono" placeholder="500"><span class="unit">ms</span><input type="text" id="apiAvgRespCrit" class="mono" placeholder="2000"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.api_p95_resp_thresh">API P95 响应时间 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="apiP95RespWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="apiP95RespCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.api_throughput_thresh">API 吞吐量 警告 / 严重（req/s）</label>
+                <div class="th-input-row"><input type="text" id="apiThroughputWarn" class="mono" placeholder="100"><span class="unit">req/s</span><input type="text" id="apiThroughputCrit" class="mono" placeholder="10"><span class="unit">req/s</span></div></div>
+            </div>
           </div>
           <!-- 编排定时任务 -->
-          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_task">编排定时任务</div>
-          <div class="grid2">
-            <div class="field"><label data-i18n="settings.task_fail_thresh">任务执行失败次数 警告 / 严重</label>
-              <div class="grid2"><input type="text" id="taskFailWarn" class="mono" placeholder="1"><input type="text" id="taskFailCrit" class="mono" placeholder="5"></div></div>
-            <div class="field"><label data-i18n="settings.task_timeout_thresh">任务超时时长 警告 / 严重（秒）</label>
-              <div class="grid2"><input type="text" id="taskTimeoutWarn" class="mono" placeholder="60"><input type="text" id="taskTimeoutCrit" class="mono" placeholder="300"></div></div>
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-task"><span class="th-label" data-i18n="settings.group_task">编排定时任务</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.task_fail_thresh">任务执行失败次数 警告 / 严重</label>
+                <div class="th-input-row"><input type="text" id="taskFailWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="taskFailCrit" class="mono" placeholder="5"><span class="unit">次</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.task_timeout_thresh">任务超时时长 警告 / 严重（秒）</label>
+                <div class="th-input-row"><input type="text" id="taskTimeoutWarn" class="mono" placeholder="60"><span class="unit">s</span><input type="text" id="taskTimeoutCrit" class="mono" placeholder="300"><span class="unit">s</span></div></div>
+            </div>
+          </div>
+          <!-- 端口转发监控 -->
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-forward"><span class="th-label" data-i18n="settings.group_forward">转发监控</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.forward_conn_thresh">活跃连接数 警告 / 严重（个）</label>
+                <div class="th-input-row"><input type="text" id="forwardConnWarn" class="mono" placeholder="200"><span class="unit">个</span><input type="text" id="forwardConnCrit" class="mono" placeholder="280"><span class="unit">个</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.forward_bw_thresh">带宽使用率 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="forwardBwWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="forwardBwCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.forward_err_thresh">错误率 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="forwardErrWarn" class="mono" placeholder="5"><span class="unit">%</span><input type="text" id="forwardErrCrit" class="mono" placeholder="15"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.forward_lat_thresh">平均转发延迟 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="forwardLatWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="forwardLatCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
+            </div>
           </div>
           <div class="hint" style="margin-top:10px">阈值留空或为 0 视为「未设置」，按标准默认值处理。修改后点「保存阈值」立即生效。</div>
         </div>
@@ -363,6 +385,7 @@
           <button class="chip-btn" data-atype="proc" data-i18n="filter.type_proc">进程数</button>
           <button class="chip-btn" data-atype="api" data-i18n="filter.type_api">API 监控</button>
           <button class="chip-btn" data-atype="task" data-i18n="filter.type_task">定时任务</button>
+          <button class="chip-btn" data-atype="forward" data-i18n="filter.type_forward">端口转发</button>
         </div>
         <div class="stack" id="alerts"></div>
       </section>
@@ -1020,6 +1043,7 @@
         <div class="field"><label data-i18n="profile.username">用户名</label><input type="text" id="pfUsername" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="登录账号"></div>
         <div class="field"><label data-i18n="profile.display_name">显示名称</label><input type="text" id="pfDisplay" data-i18n-placeholder="form.hint_display_name" placeholder="如 运维小王"></div>
         <div class="field"><label data-i18n="profile.email">邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com"></div>
+        <div class="field"><label data-i18n="profile.phone">手机号</label><input type="text" id="pfPhone" placeholder="13800138000" maxlength="11"></div>
         <div class="login-err" id="pfProfileErr" style="display:none"></div>
         <div class="mfa-foot"><button class="btn primary" id="pfSaveBtn" data-i18n="profile.save_profile">保存资料</button></div>
       </div>
@@ -1544,12 +1568,14 @@
       <div class="logo">AI</div>
       <div><h1>AIOps Monitor</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
     </div>
-    <div class="field"><label data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" placeholder="管理员账号"></div>
+    <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="管理员账号"></div>
     <div class="field"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" placeholder="登录密码"></div>
     <div class="field" id="loginCodeField" style="display:none"><label>动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Authenticator 6 位口令"></div>
     <div class="login-err" id="loginErr"></div>
     <button class="btn primary block" type="submit" data-i18n="ui.login">登 录</button>
     <div class="login-links">
+      <a href="#" id="loginSwitchType">手机号登录</a>
+      <span class="sep">·</span>
       <a href="#" id="forgotUserLink">忘记用户名</a>
       <span class="sep">·</span>
       <a href="#" id="forgotPassLink">忘记密码</a>

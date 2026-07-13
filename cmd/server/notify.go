@@ -33,6 +33,7 @@ type Notifier struct {
 	// SRE hooks (set during server wiring; nil-safe).
 	incidents   *incidentManager
 	remediation *remediationManager
+	forward     *forwardManager // set after server startup
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -96,6 +97,9 @@ func (n *Notifier) ActiveSince() map[string]int64 {
 func (n *Notifier) tick() {
 	cfg := n.cfg.Get()
 	alerts := Evaluate(n.store.ListHosts(), n.cfg.Thresholds())
+	if n.forward != nil {
+		alerts = append(alerts, EvaluateForward(n.forward.Snapshot(), n.cfg.Thresholds())...)
+	}
 	cur := make(map[string]Alert, len(alerts))
 	for _, a := range alerts {
 		cur[alertKey(a)] = a
@@ -255,7 +259,7 @@ func formatAlert(a Alert, firing bool) string {
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "diskio": Tz("notify.type_diskio"),
 		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -341,7 +345,7 @@ func alertEmailHTML(a Alert, firing bool) string {
 	typeMap := map[string]string{
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {

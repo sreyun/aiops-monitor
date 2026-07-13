@@ -41,6 +41,11 @@ type Thresholds struct {
 	// ---- 编排定时任务阈值 ----
 	TaskFailWarn, TaskFailCrit     int     // 失败次数
 	TaskTimeoutWarn, TaskTimeoutCrit float64 // 超时时长 s
+	// ---- 端口转发监控阈值 ----
+	ForwardConnWarn, ForwardConnCrit   int     // 活跃连接数
+	ForwardBwWarn, ForwardBwCrit       float64 // 带宽使用率 %
+	ForwardErrWarn, ForwardErrCrit     float64 // 错误率 %
+	ForwardLatWarn, ForwardLatCrit     float64 // 平均延迟 ms
 }
 
 // DefaultThresholds returns the Standard profile (recommended defaults).
@@ -74,6 +79,10 @@ func ConservativeThresholds() Thresholds {
 		APIThroughputWarn: 200, APIThroughputCrit: 50,
 		TaskFailWarn: 1, TaskFailCrit: 3,
 		TaskTimeoutWarn: 30, TaskTimeoutCrit: 120,
+		ForwardConnWarn: 150, ForwardConnCrit: 230,
+		ForwardBwWarn: 70, ForwardBwCrit: 90,
+		ForwardErrWarn: 3, ForwardErrCrit: 10,
+		ForwardLatWarn: 500, ForwardLatCrit: 3000,
 	}
 }
 
@@ -102,6 +111,10 @@ func StandardThresholds() Thresholds {
 		APIThroughputWarn: 100, APIThroughputCrit: 10,
 		TaskFailWarn: 1, TaskFailCrit: 5,
 		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
+		ForwardConnWarn: 200, ForwardConnCrit: 280,
+		ForwardBwWarn: 80, ForwardBwCrit: 95,
+		ForwardErrWarn: 5, ForwardErrCrit: 15,
+		ForwardLatWarn: 1000, ForwardLatCrit: 5000,
 	}
 }
 
@@ -130,6 +143,10 @@ func RelaxedThresholds() Thresholds {
 		APIThroughputWarn: 50, APIThroughputCrit: 5,
 		TaskFailWarn: 3, TaskFailCrit: 10,
 		TaskTimeoutWarn: 120, TaskTimeoutCrit: 600,
+		ForwardConnWarn: 260, ForwardConnCrit: 300,
+		ForwardBwWarn: 90, ForwardBwCrit: 98,
+		ForwardErrWarn: 10, ForwardErrCrit: 25,
+		ForwardLatWarn: 3000, ForwardLatCrit: 10000,
 	}
 }
 
@@ -139,7 +156,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | api | task
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | api | task | forward
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -391,6 +408,58 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 		}
 		return alerts[i].Hostname < alerts[j].Hostname
 	})
+	return alerts
+}
+
+// EvaluateForward generates threshold-based alerts from forwarding metrics.
+func EvaluateForward(snap ForwardSnapshot, t Thresholds) []Alert {
+	now := time.Now().Unix()
+	var alerts []Alert
+
+	// 活跃连接数
+	if t.ForwardConnWarn > 0 {
+		fc := float64(snap.ActiveSessions)
+		if lv := classify(fc, float64(t.ForwardConnWarn), float64(t.ForwardConnCrit)); lv != "" {
+			alerts = append(alerts, Alert{
+				Hostname: "Forward", Level: lv, Type: "forward", Scope: "connections",
+				Message: Tz("alert.forward_conn", snap.ActiveSessions, snap.MaxSessions),
+				Value: fc, Timestamp: now,
+			})
+		}
+	}
+	// 带宽使用率（相对于最大带宽 100MB/s = 100e6 B/s）
+	const maxBwBps = 100e6
+	if snap.BandwidthBps > 0 && t.ForwardBwWarn > 0 {
+		bwPct := snap.BandwidthBps / maxBwBps * 100
+		if lv := classify(bwPct, t.ForwardBwWarn, t.ForwardBwCrit); lv != "" {
+			alerts = append(alerts, Alert{
+				Hostname: "Forward", Level: lv, Type: "forward", Scope: "bandwidth",
+				Message: Tz("alert.forward_bw", bwPct, snap.BandwidthBps/1e6),
+				Value: bwPct, Timestamp: now,
+			})
+		}
+	}
+	// 错误率
+	if snap.TotalSessions > 0 && t.ForwardErrWarn > 0 {
+		errPct := float64(snap.Errors) / float64(snap.TotalSessions) * 100
+		if lv := classify(errPct, t.ForwardErrWarn, t.ForwardErrCrit); lv != "" {
+			alerts = append(alerts, Alert{
+				Hostname: "Forward", Level: lv, Type: "forward", Scope: "errors",
+				Message: Tz("alert.forward_err", errPct, snap.Errors),
+				Value: errPct, Timestamp: now,
+			})
+		}
+	}
+	// 平均延迟
+	if snap.AvgLatencyMs > 0 && t.ForwardLatWarn > 0 {
+		if lv := classify(snap.AvgLatencyMs, t.ForwardLatWarn, t.ForwardLatCrit); lv != "" {
+			alerts = append(alerts, Alert{
+				Hostname: "Forward", Level: lv, Type: "forward", Scope: "latency",
+				Message: Tz("alert.forward_lat", snap.AvgLatencyMs),
+				Value: snap.AvgLatencyMs, Timestamp: now,
+			})
+		}
+	}
 	return alerts
 }
 

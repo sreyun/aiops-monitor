@@ -102,6 +102,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/config", s.handleSetConfig)
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
 	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/login/sms-code", s.handleLoginSMSCode)
 	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)

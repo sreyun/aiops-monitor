@@ -210,7 +210,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	crit, warn := 0, 0
-	for _, a := range append(Evaluate(hosts, th), s.checks.DownAlerts()...) {
+	for _, a := range append(append(Evaluate(hosts, th), s.checks.DownAlerts()...), EvaluateForward(s.forward.Snapshot(), th)...) {
 		if a.Level == "critical" {
 			crit++
 		} else {

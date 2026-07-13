@@ -650,6 +650,30 @@ safeAddEventListener("forgotUserLink", "click", openRecoverUser);
 safeAddEventListener("forgotPassLink", "click", openRecoverPass);
 
 // 登录
+let LOGIN_TYPE = "username"; // "username" | "phone"
+safeAddEventListener("loginSwitchType", "click", (e) => {
+  e.preventDefault();
+  if (LOGIN_TYPE === "username") {
+    LOGIN_TYPE = "phone";
+    $("loginUserLabel").textContent = I18N.t("profile.phone") || "手机号";
+    $("loginUser").placeholder = I18N.t("login.phone_placeholder") || "输入手机号";
+    $("loginUser").type = "tel";
+    $("loginUser").maxLength = 11;
+    $("loginSwitchType").textContent = I18N.t("login.switch_username") || "用户名登录";
+  } else {
+    LOGIN_TYPE = "username";
+    $("loginUserLabel").textContent = I18N.t("login.username") || "用户名";
+    $("loginUser").placeholder = "管理员账号";
+    $("loginUser").type = "text";
+    $("loginUser").maxLength = 524288;
+    $("loginSwitchType").textContent = I18N.t("login.switch_phone") || "手机号登录";
+  }
+  $("loginUser").value = "";
+  $("loginPass").value = "";
+  const loginErrEl = $("loginErr"); if (loginErrEl) loginErrEl.textContent = "";
+  const codeField = $("loginCodeField"); if (codeField) codeField.style.display = "none";
+});
+
 safeAddEventListener("loginForm", "submit", async e => {
   e.preventDefault();
   const loginErrEl = $("loginErr");
@@ -664,6 +688,7 @@ safeAddEventListener("loginForm", "submit", async e => {
         body: JSON.stringify({
           username: $("loginUser").value.trim(),
           password: $("loginPass").value,
+          login_type: LOGIN_TYPE,
           code: codeEl ? codeEl.value.trim() : ""
         })
       }, 15000);

@@ -72,6 +72,11 @@ async function openSettings() {
     // 编排定时任务
     $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
     $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
+    // 端口转发监控
+    $("forwardConnWarn").value = td(t.forward_conn_warn, 200); $("forwardConnCrit").value = td(t.forward_conn_crit, 280);
+    $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
+    $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
+    $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
 
     // Reset to first tab
     switchNotifyTab("tab-feishu");
@@ -113,6 +118,11 @@ async function loadThresholds() {
     // 编排定时任务阈值
     $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
     $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
+    // 端口转发监控阈值
+    $("forwardConnWarn").value = td(t.forward_conn_warn, 200); $("forwardConnCrit").value = td(t.forward_conn_crit, 280);
+    $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
+    $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
+    $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 async function saveThresholds() {
@@ -144,7 +154,12 @@ async function saveThresholds() {
         api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
         // 编排定时任务
         task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
-        task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit")
+        task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit"),
+        // 端口转发监控
+        forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
+        forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
+        forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
+        forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit")
       };
       const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
       if (r.ok) toast("告警阈值已保存，即时生效", "ok");
@@ -217,7 +232,12 @@ function collectSettings() {
       api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
       // 编排定时任务
       task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
-      task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit")
+      task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit"),
+      // 端口转发监控
+      forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
+      forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
+      forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
+      forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit")
     }
   };
 }
@@ -857,6 +877,7 @@ async function openProfile(tab) {
     $("pfUsername").value = me.username || "";
     $("pfDisplay").value = me.display_name || "";
     $("pfEmail").value = me.email || "";
+    $("pfPhone").value = me.phone || "";
     $("pfOld").value = ""; $("pfNew").value = "";
     setUser(me); // 用最新 /me 刷新顶栏与 CUR_ROLE（角色可能已变更）
     // 清空各 Tab 内联错误
@@ -889,7 +910,7 @@ async function saveProfile() {
     const uname = $("pfUsername").value.trim();
     const r = await fetch(`${API}/profile`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: uname, display_name: $("pfDisplay").value.trim(), email: $("pfEmail").value.trim() })
+      body: JSON.stringify({ username: uname, display_name: $("pfDisplay").value.trim(), email: $("pfEmail").value.trim(), phone: $("pfPhone").value.trim() })
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { toast(I18N.t("toast.profile_saved"), "ok"); setUser({ display_name: $("pfDisplay").value.trim(), username: j.username || uname }); }

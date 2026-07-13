@@ -59,12 +59,74 @@ type forwardStats struct {
 	TotalSessions  int64
 	TotalBytes     int64
 	Errors         int64
+	TotalLatencyMs int64 // 累计延迟毫秒
+	LatencySamples int64 // 延迟采样计数
+	// 带宽滑动窗口（最近 60 秒字节数）
+	bwMu      sync.Mutex
+	bwBuckets [60]int64 // 每秒一个桶
+	bwIdx     int
+	bwLastSec int64
 }
 
-func (fs *forwardStats) incActive() { atomic.AddInt64(&fs.ActiveSessions, 1); atomic.AddInt64(&fs.TotalSessions, 1) }
-func (fs *forwardStats) decActive() { atomic.AddInt64(&fs.ActiveSessions, -1) }
-func (fs *forwardStats) addBytes(n int64) { atomic.AddInt64(&fs.TotalBytes, n) }
-func (fs *forwardStats) incError() { atomic.AddInt64(&fs.Errors, 1) }
+func (fs *forwardStats) incActive()  { atomic.AddInt64(&fs.ActiveSessions, 1); atomic.AddInt64(&fs.TotalSessions, 1) }
+func (fs *forwardStats) decActive()  { atomic.AddInt64(&fs.ActiveSessions, -1) }
+func (fs *forwardStats) addBytes(n int64) {
+	atomic.AddInt64(&fs.TotalBytes, n)
+	fs.recordBW(n)
+}
+func (fs *forwardStats) incError()      { atomic.AddInt64(&fs.Errors, 1) }
+func (fs *forwardStats) addLatency(ms int64) { atomic.AddInt64(&fs.TotalLatencyMs, ms); atomic.AddInt64(&fs.LatencySamples, 1) }
+
+// recordBW appends bytes to the current second's bandwidth bucket.
+func (fs *forwardStats) recordBW(n int64) {
+	fs.bwMu.Lock()
+	defer fs.bwMu.Unlock()
+	now := time.Now().Unix()
+	if now != fs.bwLastSec {
+		fs.bwIdx = (fs.bwIdx + 1) % 60
+		fs.bwBuckets[fs.bwIdx] = 0
+		fs.bwLastSec = now
+	}
+	fs.bwBuckets[fs.bwIdx] += n
+}
+
+// bandwidthBps returns the current bytes-per-second rate (last 60s avg).
+func (fs *forwardStats) bandwidthBps() float64 {
+	fs.bwMu.Lock()
+	defer fs.bwMu.Unlock()
+	var total int64
+	for _, v := range fs.bwBuckets {
+		total += v
+	}
+	return float64(total) / 60.0
+}
+
+// ForwardSnapshot is a point-in-time snapshot of forwarding metrics.
+type ForwardSnapshot struct {
+	ActiveSessions int64   `json:"active_sessions"`
+	TotalSessions  int64   `json:"total_sessions"`
+	TotalBytes     int64   `json:"total_bytes"`
+	Errors         int64   `json:"errors"`
+	AvgLatencyMs   float64 `json:"avg_latency_ms"`
+	BandwidthBps   float64 `json:"bandwidth_bps"`
+	MaxSessions    int64   `json:"max_sessions"`
+}
+
+// Snapshot returns a point-in-time snapshot of forwarding metrics.
+func (m *forwardManager) Snapshot() ForwardSnapshot {
+	var s ForwardSnapshot
+	s.ActiveSessions = atomic.LoadInt64(&m.stats.ActiveSessions)
+	s.TotalSessions = atomic.LoadInt64(&m.stats.TotalSessions)
+	s.TotalBytes = atomic.LoadInt64(&m.stats.TotalBytes)
+	s.Errors = atomic.LoadInt64(&m.stats.Errors)
+	samples := atomic.LoadInt64(&m.stats.LatencySamples)
+	if samples > 0 {
+		s.AvgLatencyMs = float64(atomic.LoadInt64(&m.stats.TotalLatencyMs)) / float64(samples)
+	}
+	s.BandwidthBps = m.stats.bandwidthBps()
+	s.MaxSessions = maxForwardSessions
+	return s
+}
 
 // forwardSession is one tunneled connection (TCP or HTTP).
 type forwardSession struct {
@@ -954,6 +1016,7 @@ func injectBaseTag(body []byte, baseHref string) []byte {
 }
 
 func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	if !s.cfg.ForwardEnabled() {
 		http.Error(w, Tr(r, "forward.disabled"), http.StatusForbidden)
 		return
@@ -1201,6 +1264,7 @@ readResponse:
 					w.WriteHeader(resp.StatusCode)
 					n, _ := w.Write(decoded)
 					s.forward.stats.addBytes(int64(n))
+					s.forward.stats.addLatency(time.Since(start).Milliseconds())
 					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
 						Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 					return
@@ -1217,6 +1281,7 @@ readResponse:
 				w.WriteHeader(resp.StatusCode)
 				n, _ := w.Write(body)
 				s.forward.stats.addBytes(int64(n))
+				s.forward.stats.addLatency(time.Since(start).Milliseconds())
 				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
 					Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 				return
@@ -1235,6 +1300,7 @@ readResponse:
 		w.WriteHeader(resp.StatusCode)
 		n, _ := io.Copy(w, resp.Body)
 		s.forward.stats.addBytes(n)
+		s.forward.stats.addLatency(time.Since(start).Milliseconds())
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
 			Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 		return
