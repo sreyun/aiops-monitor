@@ -965,13 +965,20 @@ async function loadInspections(){
 }
 async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
 async function openAIConfig(){
-  const tr=$("aiTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; } // 清除上次遗留的测试结果
+  const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
+  const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
     $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
+    // 更新向量化模型卡片摘要
+    updateEmbedCardSummary();
+    // 向量化模型默认折叠
+    const body=$("embedCardBody"), arrow=$("embedCardArrow");
+    if(body){ body.style.display="none"; }
+    if(arrow){ arrow.classList.remove("open"); }
   } catch(e){}
-  loadAIModels(); // 打开时按当前配置自动获取 provider 模型
+  loadAIModels();
   $("aiConfigMask").classList.add("show");
 }
 // ===== AI 终端只读巡检权限：独立开关，开启需终端连接密码 =====
@@ -1062,48 +1069,92 @@ async function saveAIConfig(){
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
-// AI 连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
+// AI 对话模型连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
 let _aiTestBusy=false;
-async function testAIConfig(){
-  if(_aiTestBusy) return; // 防重复点击
-  const el=$("aiTestResult");
+async function testAIChatConfig(){
+  if(_aiTestBusy) return;
+  const el=$("aiChatTestResult");
   const endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
   if(!endpoint||!model){ if(el){ el.textContent="✗ 请先填写 Endpoint 和模型"; el.className="ai-test-result err"; } return; }
   _aiTestBusy=true;
-  const testBtn=$("aiTestBtn"); if(testBtn) testBtn.disabled=true;
-  if(el){ el.textContent="测试中…"; el.className="ai-test-result testing"; }
+  const testBtn=$("aiChatTestBtn"); if(testBtn) testBtn.disabled=true;
+  if(el){ el.textContent="对话模型 测试中…"; el.className="ai-test-result testing"; }
   const body={enabled:true,endpoint,api_key:$("aiKey").value,model};
   try{
     const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
-    // 读取 SSE 流式响应
     let resultMeta=null, reply="", error=null;
     await readSSEStream(r,
-      (delta,fullText)=>{ reply=fullText; },  // 累积 delta（不逐字展示，仅收集结果）
+      (delta,fullText)=>{ reply=fullText; },
       (err)=>{ error=err; },
       (fullText)=>{ if(!reply) reply=fullText; },
-      (meta)=>{ resultMeta=meta; }  // 接收 result 元数据
+      (meta)=>{ resultMeta=meta; }
     );
     if(!el) return;
     if(error){
-      el.textContent="✗ "+error; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+      el.textContent="✗ 对话模型 "+error; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
       return;
     }
-    // 优先使用 result 元数据展示
     if(resultMeta && resultMeta.ok){
       let extra="";
       if(resultMeta.provider_hint){
         const labels={openai:"OpenAI 兼容","bailian-compat":"百炼兼容",anthropic:"Anthropic"};
         extra=` · ${labels[resultMeta.provider_hint]||resultMeta.provider_hint}`;
       }
-      el.textContent=`✓ 可用${extra} · ${resultMeta.latency_ms||0}ms · ${(resultMeta.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
+      el.textContent=`✓ 对话模型可用${extra} · ${resultMeta.latency_ms||0}ms · ${(resultMeta.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
     } else if(reply){
-      el.textContent=`✓ 可用 · ${reply.slice(0,48)}`; el.className="ai-test-result ok";
+      el.textContent=`✓ 对话模型可用 · ${reply.slice(0,48)}`; el.className="ai-test-result ok";
     } else {
-      el.textContent="✗ 未收到有效回复"; el.className="ai-test-result err";
+      el.textContent="✗ 对话模型 未收到有效回复"; el.className="ai-test-result err";
     }
-  }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
+  }catch(e){ if(el){ el.textContent="✗ 对话模型 请求失败："+e; el.className="ai-test-result err"; } }
   finally{ _aiTestBusy=false; if(testBtn) testBtn.disabled=false; }
+}
+
+// AI 向量化模型连接测试
+let _aiEmbedTestBusy=false;
+async function testAIEmbedConfig(){
+  if(_aiEmbedTestBusy) return;
+  const el=$("aiEmbedTestResult");
+  _aiEmbedTestBusy=true;
+  const testBtn=$("aiEmbedTestBtn"); if(testBtn) testBtn.disabled=true;
+  if(el){ el.textContent="向量化模型 测试中…"; el.className="ai-test-result testing"; }
+  const body={enabled:true,
+    embed_endpoint:$("embedEndpoint").value.trim(),
+    embed_api_key:$("embedKey").value,
+    embed_model:$("embedModel").value.trim(),
+    embed_dimensions:parseInt($("embedDim").value)||0,
+    endpoint:$("aiEndpoint").value.trim(),
+    api_key:$("aiKey").value
+  };
+  try{
+    const r=await fetch(`${API}/ai/test-embed`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(j.ok){
+      el.textContent=`✓ 向量化模型可用 · ${j.latency_ms||0}ms · ${j.dimensions||0}维 · ${j.model||""}`; el.className="ai-test-result ok";
+    } else {
+      el.textContent="✗ 向量化模型 "+(j.error||"测试失败"); el.className="ai-test-result err";
+    }
+  }catch(e){ if(el){ el.textContent="✗ 向量化模型 请求失败："+e; el.className="ai-test-result err"; } }
+  finally{ _aiEmbedTestBusy=false; if(testBtn) testBtn.disabled=false; }
+}
+
+// 折叠/展开向量化模型卡片
+function toggleEmbedCard(){
+  const body=$("embedCardBody"), arrow=$("embedCardArrow");
+  if(!body) return;
+  const isOpen=body.style.display!=="none";
+  body.style.display=isOpen?"none":"block";
+  if(arrow){ arrow.classList.toggle("open",!isOpen); }
+}
+
+// 更新向量化模型卡片折叠状态摘要
+function updateEmbedCardSummary(){
+  const summary=$("embedCardSummary"); if(!summary) return;
+  const model=$("embedModel").value.trim();
+  if(model){ summary.textContent=` · 已配置：${model}`; }
+  else { summary.textContent=""; }
 }
 
 // 过滤 AI 输出中的敏感信息（密钥 / 密码 / token）。代码与命令予以保留、交由 Markdown 渲染
@@ -1519,7 +1570,9 @@ safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
-safeAddEventListener("aiTestBtn","click",testAIConfig);
+safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
+safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
+safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型

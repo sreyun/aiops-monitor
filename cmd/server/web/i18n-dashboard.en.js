@@ -904,5 +904,11 @@ window.DICT_EN = {
   "section.resource_heatmap": "Resource TOP10 Ranking",
   "section.realtime_top10": "Realtime TOP10",
   "profile.account_info": "Account Info",
-  "ui.edit_forward": "Edit Forward"
+  "ui.edit_forward": "Edit Forward",
+  "sre.ai_chat_model": "Chat Model",
+  "sre.ai_chat_model_desc": "For AI diagnosis and smart conversations",
+  "sre.ai_embed_model": "Embedding Model",
+  "sre.ai_embed_model_desc": "For RAG smart memory and retrieval",
+  "sre.ai_test_chat": "Test Chat Model",
+  "sre.ai_test_embed": "Test Embedding Model"
 };

@@ -1405,32 +1405,68 @@
     <div class="modal-head"><h3 data-i18n="sre.ai_settings">AI 设置</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span>启用 AI Provider（仅两种通用接口:OpenAI 兼容 / Anthropic,按端点自动识别）</span></label>
-      <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></div>
-      <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px;align-items:center">
-        <span style="font-size:11px;color:var(--muted)">OpenAI 兼容:</span>
-        <button class="btn sm" data-act="ai-preset" data-preset="bailian" title="阿里云百炼 OpenAI 兼容模式">百炼</button>
-        <button class="btn sm" data-act="ai-preset" data-preset="openai" title="OpenAI">OpenAI</button>
-        <button class="btn sm" data-act="ai-preset" data-preset="deepseek" title="DeepSeek">DeepSeek</button>
-        <button class="btn sm" data-act="ai-preset" data-preset="ollama" title="本地 Ollama">Ollama</button>
-        <span style="font-size:11px;color:var(--muted);margin-left:6px">Anthropic:</span>
-        <button class="btn sm" data-act="ai-preset" data-preset="claude" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
-      </div>
-      <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
-      <div class="grid2" style="align-items:end">
-        <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span style="font-size:11px;color:var(--muted)" id="aiModelInfo"></span></label>
-          <div class="ai-model-wrap" style="display:flex;gap:4px;position:relative;align-items:center"><input type="text" id="aiModel" placeholder="选择或输入模型名" autocomplete="off" style="flex:1;min-width:0"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
+
+      <!-- 对话模型卡片 -->
+      <div class="ai-card">
+        <div class="ai-card-header">
+          <span class="ai-card-icon">💬</span>
+          <div class="ai-card-header-text">
+            <span class="ai-card-title" data-i18n="sre.ai_chat_model">对话模型</span>
+            <span class="ai-card-desc" data-i18n="sre.ai_chat_model_desc">用于 AI 诊断、智能对话</span>
+          </div>
         </div>
-        <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
+        <div class="ai-card-body">
+          <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></div>
+          <div class="ai-preset-btns" style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+            <span style="font-size:11px;color:var(--muted)">OpenAI 兼容:</span>
+            <button class="btn sm" data-act="ai-preset" data-preset="bailian" title="阿里云百炼 OpenAI 兼容模式">百炼</button>
+            <button class="btn sm" data-act="ai-preset" data-preset="openai" title="OpenAI">OpenAI</button>
+            <button class="btn sm" data-act="ai-preset" data-preset="deepseek" title="DeepSeek">DeepSeek</button>
+            <button class="btn sm" data-act="ai-preset" data-preset="ollama" title="本地 Ollama">Ollama</button>
+            <span style="font-size:11px;color:var(--muted);margin-left:6px">Anthropic:</span>
+            <button class="btn sm" data-act="ai-preset" data-preset="claude" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
+          </div>
+          <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
+          <div class="grid2" style="align-items:end">
+            <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span style="font-size:11px;color:var(--muted)" id="aiModelInfo"></span></label>
+              <div class="ai-model-wrap" style="display:flex;gap:4px;position:relative;align-items:center"><input type="text" id="aiModel" placeholder="选择或输入模型名" autocomplete="off" style="flex:1;min-width:0"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
+            </div>
+            <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
+          </div>
+          <div class="ai-card-test">
+            <span data-i18n-placeholder="" class="ai-test-result" id="aiChatTestResult"></span>
+            <button class="btn sm" id="aiChatTestBtn" data-i18n="sre.ai_test_chat">测试对话模型</button>
+          </div>
+        </div>
       </div>
-      <div class="subhead" style="margin-top:14px">嵌入 / 向量化（RAG 记忆）· 可独立于对话模型</div>
-      <div class="hint" style="margin-bottom:8px">留空则复用上方 Endpoint / Key。走通用 OpenAI 兼容 <code>/embeddings</code> 接口，不再绑定百炼。模型需输出 <b>1536</b> 维（如 text-embedding-3-small；text-embedding-3-large 可用维度参数）。若全部留空且主端点为百炼，则自动沿用百炼 text-embedding-v2。</div>
-      <div class="field"><label>嵌入 Endpoint</label><input type="text" id="embedEndpoint" placeholder="留空=复用上方 Endpoint；或 https://api.openai.com/v1"></div>
-      <div class="field"><label>嵌入 API Key</label><input type="password" id="embedKey" autocomplete="off" placeholder="留空=复用上方 API Key"></div>
-      <div class="grid2" style="align-items:end">
-        <div class="field"><label>嵌入模型</label><input type="text" id="embedModel" placeholder="如 text-embedding-3-small / text-embedding-v2"></div>
-        <div class="field"><label>维度（默认 1536）</label><input type="text" id="embedDim" class="mono" placeholder="1536"></div>
+
+      <!-- 向量化模型卡片（可折叠） -->
+      <div class="ai-card ai-card-collapsible" id="embedCard">
+        <div class="ai-card-header ai-card-header-clickable" id="embedCardHeader">
+          <span class="ai-card-arrow" id="embedCardArrow">▸</span>
+          <span class="ai-card-icon">🧠</span>
+          <div class="ai-card-header-text">
+            <span class="ai-card-title" data-i18n="sre.ai_embed_model">向量化模型</span>
+            <span class="ai-card-desc"><span data-i18n="sre.ai_embed_model_desc">用于 RAG 智能记忆与检索</span><span class="ai-card-summary" id="embedCardSummary"></span></span>
+          </div>
+        </div>
+        <div class="ai-card-body" id="embedCardBody" style="display:none">
+          <div class="hint" style="margin-bottom:8px">留空则复用上方 Endpoint / Key。走通用 OpenAI 兼容 <code>/embeddings</code> 接口，不再绑定百炼。模型需输出 <b>1536</b> 维（如 text-embedding-3-small；text-embedding-3-large 可用维度参数）。若全部留空且主端点为百炼，则自动沿用百炼 text-embedding-v2。</div>
+          <div class="field"><label>嵌入 Endpoint</label><input type="text" id="embedEndpoint" placeholder="留空=复用上方 Endpoint；或 https://api.openai.com/v1"></div>
+          <div class="field"><label>嵌入 API Key</label><input type="password" id="embedKey" autocomplete="off" placeholder="留空=复用上方 API Key"></div>
+          <div class="grid2" style="align-items:end">
+            <div class="field"><label>嵌入模型</label><input type="text" id="embedModel" placeholder="如 text-embedding-3-small / text-embedding-v2"></div>
+            <div class="field"><label>维度（默认 1536）</label><input type="text" id="embedDim" class="mono" placeholder="1536"></div>
+          </div>
+          <div class="ai-card-test">
+            <span data-i18n-placeholder="" class="ai-test-result" id="aiEmbedTestResult"></span>
+            <button class="btn sm" id="aiEmbedTestBtn" data-i18n="sre.ai_test_embed">测试向量化模型</button>
+          </div>
+        </div>
       </div>
-      <div class="hint">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 后会自动获取该 Provider 的可用模型(下拉选择 / 搜索),也可手动输入模型名;无内置预设模型。不启用时用内置启发式引擎,开箱即用。</div>
+
+      <div class="hint" style="margin-top:8px">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 后会自动获取该 Provider 的可用模型(下拉选择 / 搜索),也可手动输入模型名;无内置预设模型。不启用时用内置启发式引擎,开箱即用。</div>
+
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
       <div class="ai-term-access">
         <div class="ai-term-head">
@@ -1446,7 +1482,9 @@
         <div id="aiTermMsg" class="ai-term-msg"></div>
       </div>
     </div>
-    <div class="modal-foot"><span id="aiTestResult" class="ai-test-result"></span><button class="btn" id="aiTestBtn" data-i18n="sre.ai_test">测试连接</button><button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button></div>
+    <div class="modal-foot">
+      <button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button>
+    </div>
   </div>
 </div>
 

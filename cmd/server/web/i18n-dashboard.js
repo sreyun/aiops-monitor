@@ -956,7 +956,14 @@
   "section.resource_heatmap": "资源 TOP10 排行榜",
   "section.realtime_top10": "实时 TOP10",
   "profile.account_info": "账户资料",
-  "ui.edit_forward": "编辑转发"
+  "ui.edit_forward": "编辑转发",
+  /* --- AI 设置卡片 --- */
+  "sre.ai_chat_model": "对话模型",
+  "sre.ai_chat_model_desc": "用于 AI 诊断、智能对话",
+  "sre.ai_embed_model": "向量化模型",
+  "sre.ai_embed_model_desc": "用于 RAG 智能记忆与检索",
+  "sre.ai_test_chat": "测试对话模型",
+  "sre.ai_test_embed": "测试向量化模型"
 };
 
   // English mirror (scripts/build_i18n_en.js) & Traditional Chinese mirror

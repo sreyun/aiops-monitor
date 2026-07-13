@@ -862,6 +862,52 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
+// handleTestEmbedConfig 测试向量化/嵌入模型连通性。
+// POST /api/v1/ai/test-embed — 用一条简短文本调用 embedText，返回 ok + 延迟。
+func (s *Server) handleTestEmbedConfig(w http.ResponseWriter, r *http.Request) {
+	var c AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if c.EmbedAPIKey == "" || strings.Contains(c.EmbedAPIKey, "****") {
+		c.EmbedAPIKey = s.cfg.AIConfig().EmbedAPIKey
+		if c.EmbedAPIKey == "" {
+			c.EmbedAPIKey = s.cfg.AIConfig().APIKey
+		}
+	}
+	if strings.TrimSpace(c.EmbedEndpoint) == "" {
+		c.EmbedEndpoint = s.cfg.AIConfig().EmbedEndpoint
+		if c.EmbedEndpoint == "" {
+			c.EmbedEndpoint = s.cfg.AIConfig().Endpoint
+		}
+	}
+	if strings.TrimSpace(c.EmbedModel) == "" {
+		c.EmbedModel = s.cfg.AIConfig().EmbedModel
+	}
+	if c.EmbedAPIKey == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 API Key"})
+		return
+	}
+	if strings.TrimSpace(c.EmbedModel) == "" && !isBailianEndpoint(c.EmbedEndpoint) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写嵌入模型名称"})
+		return
+	}
+	c.Enabled = true
+	start := time.Now()
+	emb := embedText(c, "连通性测试")
+	latency := time.Since(start).Milliseconds()
+	if len(emb) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "向量化调用失败，请检查 Endpoint / Key / 模型名称", "latency_ms": latency})
+		return
+	}
+	modelLabel := c.EmbedModel
+		if modelLabel == "" {
+			modelLabel = "自动"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "dimensions": len(emb), "model": modelLabel})
+}
+
 // handleAITerminalAccess 开启/关闭「AI 终端只读巡检」权限（独立开关）。
 // 开启为高风险授权：必须当前用户已设终端连接密码并校验通过（复用终端二次密码机制 + 限流）；
 // 关闭为安全方向，无需密码。开启后 AI 可执行【只读】诊断命令替代人工巡检，禁止任何增删改。

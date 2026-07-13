@@ -184,6 +184,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/config", s.handleGetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
+		mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)

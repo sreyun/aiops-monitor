@@ -525,6 +525,33 @@ async function toggleForward(btn, type, id, enable) {
   })
 }
 
+// 整组启用 / 停用（端口范围批量组）
+async function toggleForwardGroup(ev, gid, enable) {
+  await withLoading(ev.currentTarget, async () => {
+    try {
+      const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}/toggle`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ enabled: enable })
+      });
+      if (!res.ok) { toast(I18N.t("toast.toggle_failed"), "err"); return; }
+      const j = await res.json().catch(() => ({}));
+      toast((enable ? "已启用整组 " : "已停用整组 ") + (j.toggled || 0) + " 条", "ok");
+      loadForwards();
+    } catch (e) { toast(I18N.t("toast.network_error2"), "err"); }
+  });
+}
+// 整组删除（端口范围批量组）——一次删完整段端口，免逐条删除
+async function deleteForwardGroup(gid, count) {
+  if (!confirm(`确认删除该端口范围组的全部 ${count || ""} 条转发规则？`)) return;
+  try {
+    const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}`, { method: "DELETE", credentials: "include" });
+    if (!res.ok) { toast(I18N.t("toast.delete_failed") || "删除失败", "err"); return; }
+    const j = await res.json().catch(() => ({}));
+    toast("已删除整组 " + (j.deleted || 0) + " 条转发", "ok");
+    loadForwards();
+  } catch (e) { toast(I18N.t("toast.network_error2"), "err"); }
+}
+
 // 复制（克隆）某条转发
 async function copyForward(type, id) {
   const url = type === "tcp"
@@ -700,6 +727,8 @@ document.addEventListener("click", e => {
     case "fwd-copy": copyForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-edit": editForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-del": deleteForward(el.dataset.ftype, el.dataset.fid); break;
+    case "fwd-group-toggle": toggleForwardGroup(e, el.dataset.gid, el.dataset.enable === "1"); break;
+    case "fwd-group-del": deleteForwardGroup(el.dataset.gid, el.dataset.count); break;
     case "copy-input": navigator.clipboard?.writeText(el.value); toast(I18N.t("toast.copied"), "ok"); break;
   }
 });

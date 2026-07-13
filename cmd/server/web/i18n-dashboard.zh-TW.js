@@ -904,5 +904,11 @@ window.DICT_TW = {
   "section.resource_heatmap": "資源 TOP10 排行榜",
   "section.realtime_top10": "即時 TOP10",
   "profile.account_info": "賬戶資料",
-  "ui.edit_forward": "編輯轉發"
+  "ui.edit_forward": "編輯轉發",
+  "sre.ai_chat_model": "對話模型",
+  "sre.ai_chat_model_desc": "用於 AI 診斷、智慧對話",
+  "sre.ai_embed_model": "向量化模型",
+  "sre.ai_embed_model_desc": "用於 RAG 智慧記憶與檢索",
+  "sre.ai_test_chat": "測試對話模型",
+  "sre.ai_test_embed": "測試向量化模型"
 };
