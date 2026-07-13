@@ -38,28 +38,36 @@ type PlaybookSchedule struct {
 type PlaybookStep struct {
 	Name        string `json:"name"`
 	Command     string `json:"command"`
-	Target      string `json:"target"` // "all" | "category:xxx" | "host:ID"
+	CommandWin  string `json:"command_win,omitempty"` // Windows 覆盖命令（留空=用 Command）
+	CommandMac  string `json:"command_mac,omitempty"` // macOS 覆盖命令（留空=用 Command）
+	Target      string `json:"target"`                // "all" | "category:xxx" | "system:os" | "host:ID"
 	TimeoutSec  int    `json:"timeout_sec"`
 	ContinueErr bool   `json:"continue_on_error"`
+	IgnoreExit  bool   `json:"ignore_exit,omitempty"` // 非零退出码也算成功（grep/diff 等过滤命令）
+	Register    string `json:"register,omitempty"`    // 把本步输出存入该变量名，供后续步骤 {{名}} 引用
+	When        string `json:"when,omitempty"`        // 条件：求值为空/false/0/no 则跳过本步
+	// 内置模块（非空则走模块、忽略上面的 Command）：gather_facts / service / package / copy
+	Module string            `json:"module,omitempty"`
+	Args   map[string]string `json:"args,omitempty"`
 }
 
 // PlaybookExecution is one run of a playbook: tracks per-host status + output.
 type PlaybookExecution struct {
-	ID         int64                    `json:"id"`
-	PlaybookID string                   `json:"playbook_id"`
-	PlaybookName string                 `json:"playbook_name"`
-	Operator   string                   `json:"operator"`
-	StartTime  int64                    `json:"start_time"`
-	EndTime    int64                    `json:"end_time,omitempty"`
-	Status     string                   `json:"status"` // running | completed | failed | cancelled
-	HostResults map[string]HostExecResult `json:"host_results"`
+	ID           int64                     `json:"id"`
+	PlaybookID   string                    `json:"playbook_id"`
+	PlaybookName string                    `json:"playbook_name"`
+	Operator     string                    `json:"operator"`
+	StartTime    int64                     `json:"start_time"`
+	EndTime      int64                     `json:"end_time,omitempty"`
+	Status       string                    `json:"status"` // running | completed | failed | cancelled
+	HostResults  map[string]HostExecResult `json:"host_results"`
 }
 
 // HostExecResult tracks one host's execution outcome.
 type HostExecResult struct {
-	Hostname string `json:"hostname"`
-	Status   string `json:"status"` // pending | running | success | failed | timeout
-	Output   string `json:"output"`
+	Hostname string       `json:"hostname"`
+	Status   string       `json:"status"` // pending | running | success | failed | timeout
+	Output   string       `json:"output"`
 	Steps    []StepResult `json:"steps"`
 }
 
@@ -313,13 +321,13 @@ func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []
 	pm.mu.Lock()
 	pm.nextExecID++
 	exec := PlaybookExecution{
-		ID:          pm.nextExecID,
-		PlaybookID:  pb.ID,
+		ID:           pm.nextExecID,
+		PlaybookID:   pb.ID,
 		PlaybookName: pb.Name,
-		Operator:    operator,
-		StartTime:   time.Now().Unix(),
-		Status:      "running",
-		HostResults: map[string]HostExecResult{},
+		Operator:     operator,
+		StartTime:    time.Now().Unix(),
+		Status:       "running",
+		HostResults:  map[string]HostExecResult{},
 	}
 	for _, h := range hosts {
 		exec.HostResults[h.ID] = HostExecResult{

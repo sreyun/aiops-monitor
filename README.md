@@ -1066,7 +1066,7 @@ aiops-monitor/
 │       ├── pty_windows.go          # Windows ConPTY
 │       ├── pty_unix.go             # Linux/macOS openpty
 │       ├── pty_linux.go / pty_darwin.go
-│       ├── forward.go              # TCP/HTTP 转发通道
+│       ├── forward.go              # TCP/UDP 端口转发 + HTTP 代理
 │       ├── relay.go                # 网关中继模式
 │       ├── infra.go                # 韧性原语（退避/熔断器/脱敏）
 │       ├── plugins.go              # 插件运行器（Python/Shell）

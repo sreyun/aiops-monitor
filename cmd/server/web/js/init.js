@@ -811,6 +811,7 @@ document.addEventListener("change", e => {
     case "log-page-size": setLogPageSize(el.value); break;
     case "filter-checks": filterChecks(el.value); break;
     case "pb-target-preview": pbTargetPreview(el); break;
+    case "pb-module-change": pbModuleChange(el); break;
   }
 });
 

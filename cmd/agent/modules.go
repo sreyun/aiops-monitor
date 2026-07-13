@@ -1,0 +1,307 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// modulePrefix 标识一条「内置模块调用」封套命令。必须与服务端 cmd/server/playbook_api.go
+// 中的同名常量保持一致。服务端把模块步骤编码成 modulePrefix+" "+JSON 下发，Agent 识别后
+// 直接用 Go 执行对应模块（跨系统一致、无需运维背命令），复用现有 exec 通道与退出码机制。
+const modulePrefix = "__AIOPS_MODULE__"
+
+// moduleCall 是模块调用封套的 JSON 结构。
+type moduleCall struct {
+	Module string            `json:"module"`
+	Args   map[string]string `json:"args"`
+}
+
+// runModule 解析封套并分派到对应内置模块，返回合并输出与退出码（0=成功）。
+func (a *Agent) runModule(payload string) ([]byte, int) {
+	var mc moduleCall
+	if err := json.Unmarshal([]byte(payload), &mc); err != nil {
+		return []byte("模块参数解析失败: " + err.Error()), 1
+	}
+	switch mc.Module {
+	case "gather_facts":
+		return moduleGatherFacts()
+	case "service":
+		return moduleService(mc.Args)
+	case "package":
+		return modulePackage(mc.Args)
+	case "copy":
+		return moduleCopy(mc.Args)
+	default:
+		return []byte("未知模块: " + mc.Module), 1
+	}
+}
+
+// moduleGatherFacts 采集本机基础信息（跨系统一致）。它专治「获取 IP 地址」这类痛点：
+// 运维不必再为 Linux 写 `ip a|grep`、为 macOS 写 `ifconfig`、为 Windows 写 `ipconfig`。
+func moduleGatherFacts() ([]byte, int) {
+	var b strings.Builder
+	host, _ := os.Hostname()
+	ips := localIPv4s()
+	first := ""
+	if len(ips) > 0 {
+		first = ips[0]
+	}
+	fmt.Fprintf(&b, "hostname=%s\n", host)
+	fmt.Fprintf(&b, "os=%s\n", runtime.GOOS)
+	fmt.Fprintf(&b, "arch=%s\n", runtime.GOARCH)
+	fmt.Fprintf(&b, "cpus=%d\n", runtime.NumCPU())
+	fmt.Fprintf(&b, "ip=%s\n", first)
+	fmt.Fprintf(&b, "ips=%s\n", strings.Join(ips, ", "))
+	return []byte(b.String()), 0
+}
+
+// localIPv4s 返回所有已启用、非回环网卡的 IPv4 地址。
+func localIPv4s() []string {
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				out = append(out, ip4.String())
+			}
+		}
+	}
+	return out
+}
+
+// moduleService 管理系统服务。参数：name（必填）、state（started/stopped/restarted/reloaded，
+// 默认 started）、enabled（true/false，可选，控制开机自启）。按系统选择 systemctl/sc/brew。
+func moduleService(args map[string]string) ([]byte, int) {
+	name := strings.TrimSpace(args["name"])
+	if name == "" {
+		return []byte("service 模块缺少 name 参数"), 1
+	}
+	state := strings.ToLower(strings.TrimSpace(args["state"]))
+	if state == "" {
+		state = "started"
+	}
+	enabled := strings.ToLower(strings.TrimSpace(args["enabled"]))
+
+	var cmds [][]string
+	switch runtime.GOOS {
+	case "linux":
+		switch state {
+		case "started":
+			cmds = append(cmds, []string{"systemctl", "start", name})
+		case "stopped":
+			cmds = append(cmds, []string{"systemctl", "stop", name})
+		case "restarted":
+			cmds = append(cmds, []string{"systemctl", "restart", name})
+		case "reloaded":
+			cmds = append(cmds, []string{"systemctl", "reload", name})
+		default:
+			return []byte("未知 state: " + state), 1
+		}
+		switch enabled {
+		case "true":
+			cmds = append(cmds, []string{"systemctl", "enable", name})
+		case "false":
+			cmds = append(cmds, []string{"systemctl", "disable", name})
+		}
+	case "windows":
+		switch state {
+		case "started":
+			cmds = append(cmds, []string{"sc", "start", name})
+		case "stopped":
+			cmds = append(cmds, []string{"sc", "stop", name})
+		case "restarted", "reloaded":
+			cmds = append(cmds, []string{"sc", "stop", name}, []string{"sc", "start", name})
+		default:
+			return []byte("未知 state: " + state), 1
+		}
+		switch enabled {
+		case "true":
+			cmds = append(cmds, []string{"sc", "config", name, "start=", "auto"})
+		case "false":
+			cmds = append(cmds, []string{"sc", "config", name, "start=", "demand"})
+		}
+	case "darwin":
+		action := map[string]string{"started": "start", "stopped": "stop", "restarted": "restart", "reloaded": "restart"}[state]
+		if action == "" {
+			return []byte("未知 state: " + state), 1
+		}
+		cmds = append(cmds, []string{"brew", "services", action, name})
+	default:
+		return []byte("service 模块不支持当前系统: " + runtime.GOOS), 1
+	}
+	return runModuleCmds(cmds)
+}
+
+// modulePackage 安装/卸载软件包。参数：name（必填）、state（present/installed/latest=安装，
+// absent/removed=卸载；默认 present）。自动探测系统包管理器。
+func modulePackage(args map[string]string) ([]byte, int) {
+	name := strings.TrimSpace(args["name"])
+	if name == "" {
+		return []byte("package 模块缺少 name 参数"), 1
+	}
+	state := strings.ToLower(strings.TrimSpace(args["state"]))
+	install := state != "absent" && state != "removed"
+	argv, err := packageArgv(install, name)
+	if err != nil {
+		return []byte(err.Error()), 1
+	}
+	return runModuleCmds([][]string{argv})
+}
+
+// packageArgv 依据系统与已安装的包管理器，返回安装/卸载某包的命令行参数。
+func packageArgv(install bool, name string) ([]string, error) {
+	switch runtime.GOOS {
+	case "linux":
+		switch {
+		case have("apt-get"):
+			if install {
+				return []string{"apt-get", "install", "-y", name}, nil
+			}
+			return []string{"apt-get", "remove", "-y", name}, nil
+		case have("dnf"):
+			if install {
+				return []string{"dnf", "install", "-y", name}, nil
+			}
+			return []string{"dnf", "remove", "-y", name}, nil
+		case have("yum"):
+			if install {
+				return []string{"yum", "install", "-y", name}, nil
+			}
+			return []string{"yum", "remove", "-y", name}, nil
+		case have("apk"):
+			if install {
+				return []string{"apk", "add", name}, nil
+			}
+			return []string{"apk", "del", name}, nil
+		case have("zypper"):
+			if install {
+				return []string{"zypper", "--non-interactive", "install", name}, nil
+			}
+			return []string{"zypper", "--non-interactive", "remove", name}, nil
+		case have("pacman"):
+			if install {
+				return []string{"pacman", "-S", "--noconfirm", name}, nil
+			}
+			return []string{"pacman", "-R", "--noconfirm", name}, nil
+		}
+		return nil, fmt.Errorf("未找到受支持的包管理器 (apt/dnf/yum/apk/zypper/pacman)")
+	case "darwin":
+		if !have("brew") {
+			return nil, fmt.Errorf("未找到 brew，请先安装 Homebrew")
+		}
+		if install {
+			return []string{"brew", "install", name}, nil
+		}
+		return []string{"brew", "uninstall", name}, nil
+	case "windows":
+		if have("choco") {
+			if install {
+				return []string{"choco", "install", "-y", name}, nil
+			}
+			return []string{"choco", "uninstall", "-y", name}, nil
+		}
+		if have("winget") {
+			if install {
+				return []string{"winget", "install", "--silent", "--accept-package-agreements", "--accept-source-agreements", name}, nil
+			}
+			return []string{"winget", "uninstall", "--silent", name}, nil
+		}
+		return nil, fmt.Errorf("未找到 choco 或 winget")
+	}
+	return nil, fmt.Errorf("package 模块不支持当前系统: %s", runtime.GOOS)
+}
+
+// moduleCopy 把内容写入目标文件（自动创建父目录）。参数：dest（必填）、content、mode（八进制，
+// 如 0644，默认 0644）。跨系统一致，无需 echo/重定向。
+func moduleCopy(args map[string]string) ([]byte, int) {
+	dest := strings.TrimSpace(args["dest"])
+	if dest == "" {
+		return []byte("copy 模块缺少 dest 参数"), 1
+	}
+	content := args["content"]
+	perm := os.FileMode(0o644)
+	if m := strings.TrimSpace(args["mode"]); m != "" {
+		if v, err := strconv.ParseUint(m, 8, 32); err == nil {
+			perm = os.FileMode(v)
+		}
+	}
+	if dir := filepath.Dir(dest); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	if err := os.WriteFile(dest, []byte(content), perm); err != nil {
+		return []byte("写入失败: " + err.Error()), 1
+	}
+	return []byte(fmt.Sprintf("已写入 %s (%d 字节)", dest, len(content))), 0
+}
+
+// runModuleCmds 顺序执行一组命令（非 shell，直接 argv），拼接输出；任一失败即中止并返回其退出码。
+func runModuleCmds(cmds [][]string) ([]byte, int) {
+	var b bytes.Buffer
+	for _, c := range cmds {
+		b.WriteString("$ " + strings.Join(c, " ") + "\n")
+		out, exit := runArgv(c)
+		b.Write(out)
+		if n := len(out); n > 0 && out[n-1] != '\n' {
+			b.WriteByte('\n')
+		}
+		if exit != 0 {
+			return b.Bytes(), exit
+		}
+	}
+	return b.Bytes(), 0
+}
+
+// runArgv 执行单条 argv 命令，返回合并输出与退出码。
+func runArgv(argv []string) ([]byte, int) {
+	if len(argv) == 0 {
+		return nil, 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = execEnv()
+	out, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exit = ee.ExitCode()
+		} else {
+			exit = -1
+			out = append(out, []byte("\n"+err.Error())...)
+		}
+	}
+	return out, exit
+}
+
+// have 报告某可执行文件是否在 PATH 中。
+func have(bin string) bool {
+	_, err := exec.LookPath(bin)
+	return err == nil
+}

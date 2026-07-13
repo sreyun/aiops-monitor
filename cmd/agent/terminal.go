@@ -184,24 +184,10 @@ func (a *Agent) runExecSession(server, sid, command string) {
 			slog.Warn("剧本命令会话异常已恢复", "session", sid, "panic", r)
 		}
 	}()
-	if strings.TrimSpace(command) == "" {
+	command = strings.TrimSpace(command)
+	if command == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		// Prefix with chcp 65001 so cmd.exe and its built-in commands emit UTF-8
-		// instead of the system ANSI code page (GBK on Chinese Windows). Without
-		// this, any Chinese text in the command output is garbled.
-		cmd = exec.CommandContext(ctx, "cmd", "/c", "chcp 65001 >nul && "+command)
-	} else {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	}
-	// Set a UTF-8 locale so command output (including Chinese) is encoded as
-	// UTF-8 on all platforms. On Windows, chcp 65001 handles the console code
-	// page; PYTHONIOENCODING helps Python programs that read the env.
-	cmd.Env = execEnv()
 	// 关键：先开 tx POST（用管道作为请求体），让请求头立刻到达服务端，从而服务端 tx 处理器的
 	// markAgentUp 立即触发（标记「已接单」）。此前本函数是「跑完命令才 POST」，服务端 Phase1
 	// 等 agentUp 的窗口（40s）会被慢命令占满 → 被误判为 no-pickup 而失败并重试（甚至把同一命令
@@ -220,15 +206,15 @@ func (a *Agent) runExecSession(server, sid, command string) {
 			resp.Body.Close()
 		}
 	}()
-	out, err := cmd.CombinedOutput()
-	exit := 0
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			exit = ee.ExitCode()
-		} else {
-			exit = -1
-			out = append(out, []byte("\n"+err.Error())...)
-		}
+
+	// 内置模块：以 modulePrefix 开头的命令不经过 shell，直接由 Agent 用 Go 执行（跨系统一致、
+	// 无需运维背命令，且天然规避 grep 无匹配/命令不存在等 shell 语义坑）。否则按普通 shell 执行。
+	var out []byte
+	var exit int
+	if payload, ok := strings.CutPrefix(command, modulePrefix); ok {
+		out, exit = a.runModule(strings.TrimSpace(payload))
+	} else {
+		out, exit = runShellCommand(command)
 	}
 	// Fallback: some programs bypass chcp and emit bytes in the system ANSI
 	// code page (e.g., a C program using printf with GBK literals). Convert any
@@ -239,6 +225,37 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	_, _ = pw.Write(body)
 	_ = pw.Close()
 	<-posted
+}
+
+// runShellCommand 用系统 shell 执行一条命令，返回合并输出（stdout+stderr）与退出码。
+func runShellCommand(command string) ([]byte, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// chcp 65001 让 cmd 内建命令尽量输出 UTF-8。但 Agent 作为 Windows 服务运行时无控制台，
+		// chcp 会失败——必须用「&」而非「&&」串接：否则 chcp 一失败就短路，真正的命令根本不执行，
+		// cmd 直接返回 chcp 的非零退出码 → 表现为「命令退出码 1」。用「&」则无论 chcp 成败都执行
+		// 命令，退出码取命令自身；chcp 的输出/报错全部丢弃，非 UTF-8 字节仍由上层 ensureUTF8 兜底。
+		cmd = exec.CommandContext(ctx, "cmd", "/c", "chcp 65001 >nul 2>nul & "+command)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	}
+	// Set a UTF-8 locale so command output (including Chinese) is encoded as
+	// UTF-8 on all platforms. On Windows, chcp 65001 handles the console code
+	// page; PYTHONIOENCODING helps Python programs that read the env.
+	cmd.Env = execEnv()
+	out, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exit = ee.ExitCode()
+		} else {
+			exit = -1
+			out = append(out, []byte("\n"+err.Error())...)
+		}
+	}
+	return out, exit
 }
 
 func (a *Agent) runTerminalSession(server, sid, lang string) {

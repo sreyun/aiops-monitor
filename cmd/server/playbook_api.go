@@ -4,11 +4,85 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// modulePrefix 标识一条「内置模块调用」封套命令，Agent 端识别后按系统执行对应模块。
+const modulePrefix = "__AIOPS_MODULE__"
+
+// playbookHostVars 预置一台主机的内置变量（供 {{名}} 引用与 when 条件求值）。
+func playbookHostVars(h *Host) map[string]string {
+	return map[string]string{
+		"host_id":  h.ID,
+		"hostname": h.Hostname,
+		"ip":       h.IP,
+		"os":       strings.ToLower(h.OS),
+		"category": h.Category,
+	}
+}
+
+var pbVarRE = regexp.MustCompile(`\{\{\s*([a-zA-Z_]\w*)\s*\}\}`)
+
+// substitutePlaybookVars 把 {{ 变量 }} 替换为 vars 中的值（未知变量替为空串）。
+func substitutePlaybookVars(s string, vars map[string]string) string {
+	return pbVarRE.ReplaceAllStringFunc(s, func(m string) string {
+		return vars[pbVarRE.FindStringSubmatch(m)[1]]
+	})
+}
+
+// evalPlaybookWhen 求值 when 条件：支持 a==b / a!=b；否则按真值（空/false/0/no/off = 假）。
+func evalPlaybookWhen(when string, vars map[string]string) bool {
+	when = strings.TrimSpace(substitutePlaybookVars(when, vars))
+	if i := strings.Index(when, "=="); i >= 0 {
+		return strings.TrimSpace(when[:i]) == strings.TrimSpace(when[i+2:])
+	}
+	if i := strings.Index(when, "!="); i >= 0 {
+		return strings.TrimSpace(when[:i]) != strings.TrimSpace(when[i+2:])
+	}
+	switch strings.ToLower(when) {
+	case "", "false", "0", "no", "off":
+		return false
+	}
+	return true
+}
+
+// resolvePlaybookCommand 决定某步在一台主机上实际执行的命令：
+// 模块 > 分系统覆盖 > 默认命令，最后做 {{变量}} 替换。
+func resolvePlaybookCommand(step PlaybookStep, h *Host, vars map[string]string) string {
+	if step.Module != "" {
+		return buildModuleCommand(step.Module, step.Args, vars)
+	}
+	cmd := step.Command
+	switch strings.ToLower(h.OS) {
+	case "windows":
+		if strings.TrimSpace(step.CommandWin) != "" {
+			cmd = step.CommandWin
+		}
+	case "darwin":
+		if strings.TrimSpace(step.CommandMac) != "" {
+			cmd = step.CommandMac
+		}
+	}
+	return substitutePlaybookVars(cmd, vars)
+}
+
+// buildModuleCommand 把模块调用编码成 Agent 可识别的封套命令：
+//
+//	__AIOPS_MODULE__ {"module":"...","args":{...}}
+//
+// 复用现有 exec 通道与退出码机制，Agent 端按系统执行内置模块。
+func buildModuleCommand(module string, args map[string]string, vars map[string]string) string {
+	sub := make(map[string]string, len(args))
+	for k, v := range args {
+		sub[k] = substitutePlaybookVars(v, vars)
+	}
+	payload, _ := json.Marshal(map[string]any{"module": module, "args": sub})
+	return modulePrefix + " " + string(payload)
+}
 
 // -----------------------------------------------------------------------
 // Playbook (automation) handlers
@@ -142,9 +216,27 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
+			vars := playbookHostVars(h) // 变量存储：预置主机 facts，register 逐步累加
 			for _, step := range pb.Steps {
 				sr := StepResult{Name: step.Name, Status: "running"}
 				start := time.Now()
+				// when 条件：不满足则跳过本步
+				if step.When != "" && !evalPlaybookWhen(step.When, vars) {
+					sr.Status = "skipped"
+					sr.Output = "（when 条件不满足，已跳过）"
+					sr.Duration = time.Since(start).Milliseconds()
+					result.Steps = append(result.Steps, sr)
+					continue
+				}
+				// 解析最终命令：模块 > 分系统覆盖 > 默认，并做 {{变量}} 替换
+				cmd := resolvePlaybookCommand(step, h, vars)
+				if strings.TrimSpace(cmd) == "" {
+					sr.Status = "skipped"
+					sr.Output = "（本系统无对应命令，已跳过）"
+					sr.Duration = time.Since(start).Milliseconds()
+					result.Steps = append(result.Steps, sr)
+					continue
+				}
 				// Retry infrastructure-class failures (agent didn't pick up,
 				// timeout, abnormal end) — the usual cause of "some nodes fail"
 				// in large batches. A genuine non-zero command exit is NOT retried.
@@ -152,7 +244,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				var kind execKind
 				var err error
 				for attempt := 1; attempt <= playbookMaxAttempts; attempt++ {
-					output, kind, err = s.execCommandOnHost(h, step.Command, step.TimeoutSec)
+					output, kind, err = s.execCommandOnHost(h, cmd, step.TimeoutSec)
 					if err == nil {
 						if attempt > 1 {
 							output += "\n" + Tz("playbook.retry_recovered", attempt)
@@ -169,7 +261,18 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					output += "\n" + Tz("playbook.attempts_failed", attempt)
 				}
 				sr.Duration = time.Since(start).Milliseconds()
-				if err != nil {
+				// ignore_exit：仅「命令跑完但退出码非零」可被忽略（no-pickup/超时等基础设施失败不忽略）
+				failed := err != nil
+				if failed && step.IgnoreExit && kind == execExit {
+					failed = false
+					err = nil
+					output += "\n（已忽略非零退出码）"
+				}
+				// register：把本步输出存入变量，供后续步骤 {{名}} 引用
+				if step.Register != "" {
+					vars[step.Register] = strings.TrimSpace(output)
+				}
+				if failed {
 					sr.Status = "failed"
 					sr.Output = output + "\n[error] " + err.Error()
 					result.Status = "failed"

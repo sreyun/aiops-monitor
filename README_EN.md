@@ -29,6 +29,7 @@
 - [Monitoring Metrics](#monitoring-metrics)
 - [Custom Monitoring (Probes)](#custom-monitoring-probes)
 - [Automation Playbook](#automation-playbook)
+- [Port Forwarding and HTTP Proxy](#port-forwarding-and-http-proxy)
 - [Remote Terminal](#remote-terminal)
 - [Plugin Development](#plugin-development)
 - [Alert Configuration](#alert-configuration)
@@ -122,6 +123,7 @@ Open `http://localhost:8529` 鈥?host card and metrics appear within seconds.
 | **Interactive trend charts** | Pure Canvas, hover crosshair + tooltip, drag-zoom, double-click reset, enlarge preview |
 | **Custom probes** | HTTP (status/latency/TLS cert days) / TCP / Ping (loss%/RTT) / process; history curves |
 | **Remote terminal** | Browser full TTY via Agent reverse connection (no inbound port); multi-tab, recording playback, read-only observe, command audit |
+| **Port forwarding (TCP / UDP / HTTP)** | Map a remote host's TCP / UDP ports to the server's local ports via the Agent tunnel (HTTP uses a stateless proxy tunnel straight to web services); port-range batch forwarding (≤100 ports per batch) + persistent rules with enable/disable/edit/copy |
 | **Automation playbooks** | Multi-step orchestration + target selection (all/category/system/host) 鈫?batch parallel execution 鈫?real-time output + history |
 | **Alert push** | Feishu / DingTalk Webhook + Email SMTP + **multi-cloud SMS + multi-cloud Voice call** (Aliyun / Huawei / Tencent, TTS), trigger/recover transitions only, no spam |
 | **Custom alert thresholds** | 27 fine-grained warn/crit pairs (host / probe / API / task / forward), host dimension also offers conservative/standard/relaxed presets, zero-value auto-backfill |
@@ -539,6 +541,67 @@ The dashboard銆孉utomation銆峱age lets you orchestrate playbooks 鈥?ordered
 **Execution**: commands sent via Agent reverse channel, executed as one-shot subprocesses, returning output + exit code. All matching online hosts execute in parallel; each host runs steps sequentially. History retains last 100 runs.
 
 > Commands are non-interactive 鈥?don't use `vim`/`top`/`ssh`. Each step is an independent process; `cd`/`export` don't carry over 鈥?chain with `&&` in the same step.
+
+---
+
+## Port Forwarding and HTTP Proxy
+
+Access a target host's internal services through the Agent's reverse tunnel without opening any inbound port on that host. Three protocols are supported — TCP / UDP / HTTP — and TCP / UDP additionally support port-range batch forwarding:
+
+### TCP / UDP Port Mapping
+
+Persistently map a remote host's TCP or UDP port to the server's local port. TCP suits long-lived protocols like databases and SSH; UDP suits datagram services like DNS, gaming, and media:
+
+```bash
+# Example: map Agent host's MySQL 3306 to server 13306 (TCP)
+# Create a rule on the "Forwarding" page, or via API:
+curl -X POST http://<server>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
+
+# UDP example: map DNS 53 to local 1353
+curl -X POST http://<server>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":53,"local_port":1353,"protocol":"udp"}'
+
+# Then connect from your local client
+mysql -h 127.0.0.1 -P 13306 -u root -p
+```
+
+- Set `protocol` to `tcp` (default) or `udp`
+- Auto-allocate (`local_port: 0`) or specify a port
+- Rules can be enabled/disabled/edited/copied/deleted
+- Listen address configurable (`forward_listen`), default `127.0.0.1` (local only); Docker deployments must set `0.0.0.0` or override via `AIOPS_FORWARD_LISTEN`
+- Port range configurable (`forward_port_range`); Docker deployments must match the `ports` mapping
+
+### TCP / UDP Port-Range Batch Forwarding
+
+TCP and UDP can map an entire contiguous port range in one shot: set a start port `target_port` and an end port `target_port_end` (**inclusive**, with `target_port_end > target_port`). The system creates one independent rule per port in the range; the whole batch shares a group ID so it can be enabled / disabled / deleted together instead of one rule at a time. **Up to 100 ports per batch.**
+
+```bash
+# Example: map Agent host abc123's UDP 5000–5010 (11 ports, grouped as one)
+curl -X POST http://<server>:8529/api/v1/forward \
+  -d '{"host_id":"abc123","target_port":5000,"target_port_end":5010,"protocol":"udp"}'
+```
+
+> Note: port-range batch forwarding applies to TCP / UDP only. HTTP forwarding uses the stateless proxy tunnel below and is accessed per-URL on demand, so there is no "whole port range" concept.
+
+### HTTP Reverse Proxy
+
+A stateless proxy that needs no rule — access the target host's web service directly by URL:
+
+```bash
+# Access /api/health on port 8080 of Agent host abc123
+curl http://<server>:8529/proxy/abc123/8080/api/health
+
+# All HTTP methods + WebSocket upgrade supported
+ws://<server>:8529/proxy/abc123/8080/ws
+```
+
+- Supports GET/POST/PUT/DELETE/PATCH
+- Supports WebSocket upgrade (Nginx must pass the Upgrade headers)
+- The panel can save frequently used proxies as quick entries
+- `window.open()` scenarios use a one-time `proxy_token` for auth
+
+> Port forwarding is enabled by default; set `forward_disabled: true` in alert settings to disable it globally.
 
 ---
 

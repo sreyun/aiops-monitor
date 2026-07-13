@@ -104,25 +104,103 @@ function renderPbSteps(steps) {
   const c = $("pbSteps");
   c.innerHTML = steps.map((s, i) => {
     const tgtOpts = buildTargetOptions(s.target);
+    const a = s.args || {};
+    const mod = s.module || "";
+    const av = (k) => esc(a[k] || "");
+    const optSel = (v, cur) => (v === (cur || "") ? "selected" : "");
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.step_name")}</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="${I18N.t('form.hint_step_name')}"></div>
         <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" data-act-change="pb-target-preview">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
-      <div class="field"><label>${I18N.t("form.command")}</label><textarea class="pb-step-cmd" rows="2" placeholder="${I18N.t('form.hint_command')}" spellcheck="false" style="resize:vertical;min-height:54px;line-height:1.5">${esc(s.command||"")}</textarea></div>
+      <div class="field"><label>类型</label><div class="select-wrap"><select class="pb-step-module" data-act-change="pb-module-change">
+        <option value="" ${optSel("",mod)}>Shell 命令</option>
+        <option value="gather_facts" ${optSel("gather_facts",mod)}>采集主机信息 · gather_facts</option>
+        <option value="service" ${optSel("service",mod)}>服务管理 · service</option>
+        <option value="package" ${optSel("package",mod)}>软件包 · package</option>
+        <option value="copy" ${optSel("copy",mod)}>写入文件 · copy</option>
+      </select></div></div>
+
+      <div class="pb-mod pb-mod-shell" style="display:none">
+        <div class="field"><label>${I18N.t("form.command")}</label><textarea class="pb-step-cmd" rows="2" placeholder="${I18N.t('form.hint_command')}" spellcheck="false" style="resize:vertical;min-height:54px;line-height:1.5">${esc(s.command||"")}</textarea></div>
+        <details class="pb-adv"${(s.command_win||s.command_mac)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">分系统命令（留空则统一用上面的命令）</summary>
+          <div class="field"><label>Windows 覆盖命令</label><textarea class="pb-step-cmdwin" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="仅 Windows 主机执行此命令">${esc(s.command_win||"")}</textarea></div>
+          <div class="field"><label>macOS 覆盖命令</label><textarea class="pb-step-cmdmac" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="仅 macOS 主机执行此命令">${esc(s.command_mac||"")}</textarea></div>
+        </details>
+      </div>
+
+      <div class="pb-mod pb-mod-gather_facts" style="display:none">
+        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px;line-height:1.6">采集主机名、IP、架构、CPU 数（跨系统一致，替代 <code>ip a</code> / <code>ipconfig</code>）。建议配合下方「保存输出到变量」在后续步骤引用。</div>
+      </div>
+
+      <div class="pb-mod pb-mod-service" style="display:none">
+        <div class="grid2">
+          <div class="field"><label>服务名</label><input type="text" class="pb-arg-service-name" value="${av('name')}" placeholder="nginx"></div>
+          <div class="field"><label>目标状态</label><div class="select-wrap"><select class="pb-arg-service-state">
+            <option value="started" ${optSel('started',a.state)}>启动 started</option>
+            <option value="stopped" ${optSel('stopped',a.state)}>停止 stopped</option>
+            <option value="restarted" ${optSel('restarted',a.state)}>重启 restarted</option>
+            <option value="reloaded" ${optSel('reloaded',a.state)}>重载 reloaded</option>
+          </select></div></div>
+        </div>
+        <div class="field"><label>开机自启</label><div class="select-wrap"><select class="pb-arg-service-enabled">
+          <option value="" ${optSel('',a.enabled)}>不修改</option>
+          <option value="true" ${optSel('true',a.enabled)}>启用</option>
+          <option value="false" ${optSel('false',a.enabled)}>禁用</option>
+        </select></div></div>
+      </div>
+
+      <div class="pb-mod pb-mod-package" style="display:none">
+        <div class="grid2">
+          <div class="field"><label>包名</label><input type="text" class="pb-arg-package-name" value="${av('name')}" placeholder="nginx"></div>
+          <div class="field"><label>操作</label><div class="select-wrap"><select class="pb-arg-package-state">
+            <option value="present" ${optSel('present',a.state)}>安装 present</option>
+            <option value="absent" ${optSel('absent',a.state)}>卸载 absent</option>
+            <option value="latest" ${optSel('latest',a.state)}>安装/升级到最新 latest</option>
+          </select></div></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px">自动探测系统包管理器（apt/dnf/yum/apk/zypper/pacman · brew · choco/winget）。</div>
+      </div>
+
+      <div class="pb-mod pb-mod-copy" style="display:none">
+        <div class="grid2">
+          <div class="field"><label>目标路径</label><input type="text" class="pb-arg-copy-dest" value="${av('dest')}" placeholder="/etc/app/config.yml"></div>
+          <div class="field"><label>权限（八进制）</label><input type="text" class="pb-arg-copy-mode mono" value="${av('mode')}" placeholder="0644" style="width:110px"></div>
+        </div>
+        <div class="field"><label>文件内容</label><textarea class="pb-arg-copy-content" rows="4" spellcheck="false" style="resize:vertical;min-height:70px">${esc(a.content||"")}</textarea></div>
+      </div>
+
+      <details class="pb-adv"${(s.when||s.register)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">条件与变量（选填）</summary>
+        <div class="grid2">
+          <div class="field"><label>when 条件</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="如 {{os}} == linux；结果空/false/0 则跳过本步"></div>
+          <div class="field"><label>保存输出到变量</label><input type="text" class="pb-step-register" value="${esc(s.register||"")}" placeholder="变量名 → 后续步骤用 {{变量名}} 引用"></div>
+        </div>
+      </details>
+
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
         <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
       </div>
+      <label class="switch" style="display:flex;margin:2px 0 10px"><input type="checkbox" class="pb-step-ignore" ${s.ignore_exit?"checked":""}> 忽略非零退出码（grep 无匹配、diff 有差异等也算成功）</label>
       <button class="btn danger sm pb-step-del" type="button">${I18N.t("ui.delete_step")}</button>
     </div>`;
   }).join("");
   c.querySelectorAll(".pb-step-del").forEach(btn => {
     btn.onclick = () => { btn.closest(".pb-step").remove(); };
   });
-  // Initialize previews
+  // Initialize previews + module visibility
   c.querySelectorAll(".pb-step-target").forEach(sel => pbTargetPreview(sel));
+  c.querySelectorAll(".pb-step-module").forEach(sel => pbModuleChange(sel));
+}
+
+// Show only the argument block matching the step's selected type (module).
+function pbModuleChange(sel) {
+  const step = sel.closest(".pb-step");
+  if (!step) return;
+  step.querySelectorAll(".pb-mod").forEach(m => { m.style.display = "none"; });
+  const show = step.querySelector(".pb-mod-" + (sel.value === "" ? "shell" : sel.value));
+  if (show) show.style.display = "";
 }
 
 // Build <option> list for target select: all / by category / by system / per host
@@ -187,13 +265,25 @@ function pbTargetPreview(sel) {
 function collectPlaybook() {
   const steps = [];
   document.querySelectorAll("#pbSteps .pb-step").forEach(el => {
-    steps.push({
+    const mod = el.querySelector(".pb-step-module").value;
+    const step = {
       name: el.querySelector(".pb-step-name").value.trim(),
-      command: el.querySelector(".pb-step-cmd").value.trim(),
       target: el.querySelector(".pb-step-target").value,
       timeout_sec: parseInt(el.querySelector(".pb-step-timeout").value) || 30,
-      continue_on_error: el.querySelector(".pb-step-cont").checked
-    });
+      continue_on_error: el.querySelector(".pb-step-cont").checked,
+      ignore_exit: el.querySelector(".pb-step-ignore").checked,
+      when: el.querySelector(".pb-step-when").value.trim(),
+      register: el.querySelector(".pb-step-register").value.trim()
+    };
+    if (mod) {
+      step.module = mod;
+      step.args = collectModuleArgs(el, mod);
+    } else {
+      step.command = el.querySelector(".pb-step-cmd").value.trim();
+      step.command_win = el.querySelector(".pb-step-cmdwin").value.trim();
+      step.command_mac = el.querySelector(".pb-step-cmdmac").value.trim();
+    }
+    steps.push(step);
   });
   let schedule = null;
   if ($("pbSchedEnabled").checked) {
@@ -204,6 +294,27 @@ function collectPlaybook() {
     if (kind === "weekly") schedule.weekday = parseInt($("pbSchedWeekday").value) || 0;
   }
   return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps, schedule };
+}
+
+// Gather module-specific arguments from a step's form into an args object.
+function collectModuleArgs(el, mod) {
+  const args = {};
+  const g = (cls) => { const n = el.querySelector(cls); return n ? n.value.trim() : ""; };
+  if (mod === "service") {
+    args.name = g(".pb-arg-service-name");
+    args.state = g(".pb-arg-service-state");
+    const en = g(".pb-arg-service-enabled"); if (en) args.enabled = en;
+  } else if (mod === "package") {
+    args.name = g(".pb-arg-package-name");
+    args.state = g(".pb-arg-package-state");
+  } else if (mod === "copy") {
+    args.dest = g(".pb-arg-copy-dest");
+    const cont = el.querySelector(".pb-arg-copy-content");
+    args.content = cont ? cont.value : ""; // preserve exact content (no trim)
+    const mode = g(".pb-arg-copy-mode"); if (mode) args.mode = mode;
+  }
+  // gather_facts takes no args
+  return args;
 }
 
 async function savePlaybook() {
