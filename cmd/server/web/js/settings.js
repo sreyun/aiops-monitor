@@ -34,6 +34,7 @@ async function openSettings() {
     $("smsSecretKey").value = sms.secret_key || "";
     $("smsSignName").value = sms.sign_name || "";
     $("smsTemplateCode").value = sms.template_code || "";
+    $("smsTemplateParam").value = sms.template_param || "";
     $("smsPhones").value = (sms.phones || []).join(",");
     // VoiceCall config
     const vc = c.voice_call || {};
@@ -204,6 +205,7 @@ function collectSettings() {
       secret_key: $("smsSecretKey").value,
       sign_name: $("smsSignName").value.trim(),
       template_code: $("smsTemplateCode").value.trim(),
+      template_param: $("smsTemplateParam").value.trim(),
       phones: ($("smsPhones").value || "").split(",").map(s => s.trim()).filter(Boolean)
     },
     voice_call: {

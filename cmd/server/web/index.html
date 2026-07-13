@@ -846,6 +846,10 @@
           <div class="field"><label data-i18n="settings.sms_template_code">模板编码</label><input type="text" id="smsTemplateCode" placeholder="SMS_123456789"></div>
         </div>
         <div class="field">
+          <label data-i18n="settings.sms_template_param">模板参数 JSON</label>
+          <input type="text" id="smsTemplateParam" data-i18n-placeholder="settings.sms_template_param_placeholder" placeholder='按阿里云短信模板的实际变量名填写，如 {"code":"${code}"} 或 {"message":"${alert_text}"}；留空则默认 {"message":"告警内容"}'>
+        </div>
+        <div class="field">
           <label data-i18n="settings.sms_phones">接收手机号</label>
           <input type="text" id="smsPhones" data-i18n-placeholder="settings.sms_phones_placeholder" placeholder="多个号码逗号分隔，如 13800138000,13900139000">
         </div>

@@ -191,6 +191,7 @@ type forwardRule struct {
 	listener   net.Listener
 	packetConn net.PacketConn // UDP：非空表示 UDP 转发（与 listener 二选一）
 	protocol   string         // "tcp"(默认) | "udp"
+	groupID    string         // 端口范围批量创建时同组共享，供整组删除/停用
 	operator   string
 	createdAt  int64
 	enabled    bool // whether this rule is currently active
@@ -217,6 +218,7 @@ type forwardInfo struct {
 	Sessions   int    `json:"sessions"`
 	Enabled    bool   `json:"enabled"`
 	Protocol   string `json:"protocol,omitempty"` // "tcp" | "udp"
+	GroupID    string `json:"group_id,omitempty"` // 端口范围批量组（同组共享），供整组操作
 }
 
 type forwardManager struct {
@@ -520,7 +522,7 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 
 // ---- rule management ----
 
-func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, operator string) (*forwardRule, error) {
+func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, groupID, operator string) (*forwardRule, error) {
 	if protocol != "udp" {
 		protocol = "tcp"
 	}
@@ -579,7 +581,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		id: termID()[:8], hostID: hostID, hostname: hostname,
 		targetPort: targetPort, localPort: actualPort,
 		listenAddr: actualAddr,
-		listener:   ln, packetConn: pc, protocol: protocol,
+		listener:   ln, packetConn: pc, protocol: protocol, groupID: groupID,
 		operator: operator, createdAt: now,
 		enabled: true,
 	}
@@ -591,7 +593,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
 		TargetPort: r.targetPort, LocalPort: r.localPort,
 		ListenAddr: r.listenAddr, Operator: r.operator,
-		CreatedAt: now, Enabled: true, Protocol: protocol,
+		CreatedAt: now, Enabled: true, Protocol: protocol, GroupID: groupID,
 	})
 	return r, nil
 }
@@ -603,6 +605,46 @@ func (s *Server) serveRule(rule *forwardRule) {
 	} else {
 		s.serveForwardListener(rule)
 	}
+}
+
+// groupRuleIDs 返回同一端口范围组（groupID）下的所有规则 ID，供整组删除 / 启停。
+func (m *forwardManager) groupRuleIDs(gid string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gid == "" {
+		return nil
+	}
+	var ids []string
+	for id, r := range m.rules {
+		if r.groupID == gid {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// rebindRuleListener 按协议为一条已停用规则重建监听器并启动 serve（重新启用时用）。
+func (s *Server) rebindRuleListener(rule *forwardRule) error {
+	if rule.protocol == "udp" {
+		pc, err := net.ListenPacket("udp", rule.listenAddr)
+		if err != nil {
+			return err
+		}
+		s.forward.mu.Lock()
+		rule.packetConn = pc
+		s.forward.mu.Unlock()
+		go s.serveForwardUDP(rule)
+		return nil
+	}
+	ln, err := net.Listen("tcp", rule.listenAddr)
+	if err != nil {
+		return err
+	}
+	s.forward.mu.Lock()
+	rule.listener = ln
+	s.forward.mu.Unlock()
+	go s.serveForwardListener(rule)
+	return nil
 }
 
 func (m *forwardManager) getRule(id string) *forwardRule {
@@ -762,7 +804,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
 				targetPort: pr.TargetPort, localPort: pr.LocalPort,
 				listenAddr: pr.ListenAddr, operator: pr.Operator,
-				createdAt: pr.CreatedAt, enabled: false, protocol: pr.Protocol,
+				createdAt: pr.CreatedAt, enabled: false, protocol: pr.Protocol, groupID: pr.GroupID,
 			}
 			m.mu.Unlock()
 			continue
@@ -802,7 +844,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 		r := &forwardRule{
 			id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
 			targetPort: pr.TargetPort, localPort: actualPort,
-			listenAddr: actualAddr, listener: ln, packetConn: pc, protocol: proto,
+			listenAddr: actualAddr, listener: ln, packetConn: pc, protocol: proto, groupID: pr.GroupID,
 			operator: pr.Operator, createdAt: pr.CreatedAt, enabled: true,
 		}
 		// If the port changed, update the persisted config
@@ -811,7 +853,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				ID: r.id, HostID: r.hostID, Hostname: r.hostname,
 				TargetPort: r.targetPort, LocalPort: r.localPort,
 				ListenAddr: r.listenAddr, Operator: r.operator,
-				CreatedAt: r.createdAt, Enabled: r.enabled, Protocol: proto,
+				CreatedAt: r.createdAt, Enabled: r.enabled, Protocol: proto, GroupID: pr.GroupID,
 			})
 		}
 		m.mu.Lock()
@@ -837,7 +879,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 			TargetPort: r.targetPort, LocalPort: r.localPort,
 			ListenAddr: r.listenAddr, Status: "active",
 			CreatedAt: r.createdAt, Operator: r.operator,
-			Sessions: sessions, Enabled: r.enabled, Protocol: r.protocol,
+			Sessions: sessions, Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
 		})
 	}
 	return out
@@ -897,6 +939,10 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "端口范围过大，单次最多 100 个端口"})
 		return
 	}
+	groupID := ""
+	if isRange {
+		groupID = termID()[:8] // 同批范围共享一个组 ID，供整组删除 / 启停
+	}
 	var created []forwardInfo
 	var firstErr error
 	for p := req.TargetPort; p <= end; p++ {
@@ -904,7 +950,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		if isRange {
 			lp = p // 范围：本地端口镜像目标端口
 		}
-		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, operator)
+		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, groupID, operator)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -918,7 +964,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 			TargetPort: rule.targetPort, LocalPort: rule.localPort,
 			ListenAddr: rule.listenAddr, Status: "active",
-			CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol,
+			CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol, GroupID: rule.groupID,
 		})
 	}
 	if len(created) == 0 {

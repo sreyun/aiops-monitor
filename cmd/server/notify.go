@@ -541,7 +541,10 @@ func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 	}
 
 	// 构建查询参数（按 key 排序 → 规范化查询字符串）
-	templateParam := fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
+	templateParam := cfg.TemplateParam
+	if templateParam == "" {
+		templateParam = fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
+	}
 	params := map[string]string{
 		"PhoneNumbers":  phones,
 		"SignName":      cfg.SignName,

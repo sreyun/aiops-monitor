@@ -609,6 +609,8 @@ window.DICT_EN = {
   "settings.sms_secret_key": "SecretKey",
   "settings.sms_sign_name": "SMS Sign Name",
   "settings.sms_template_code": "Template Code",
+  "settings.sms_template_param": "Template Param JSON",
+  "settings.sms_template_param_placeholder": "Fill in your SMS template variable names, e.g. {\"code\":\"${code}\"} or {\"message\":\"${alert_text}\"}; leave empty for default {\"message\":\"alert text\"}",
   "settings.sms_phones": "Phone Numbers",
   "settings.sms_phones_placeholder": "Comma-separated, e.g. 13800138000,13900139000",
   "settings.voice_call": "Voice Call Push",

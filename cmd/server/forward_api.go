@@ -97,6 +97,62 @@ func (s *Server) handleForwardStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleForwardGroupDelete 删除同一端口范围组的所有转发规则（一次删完，免逐条删除）。
+// DELETE /api/v1/forward/group/{gid}
+func (s *Server) handleForwardGroupDelete(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	deleted := 0
+	for _, id := range s.forward.groupRuleIDs(gid) {
+		if s.forward.removeRule(id) {
+			deleted++
+		}
+	}
+	if deleted == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r),
+		Message: fmt.Sprintf("删除端口范围转发组 %s（%d 条）", gid, deleted)})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+// handleForwardGroupToggle 整组启用 / 停用同一端口范围组的所有规则。
+// PUT /api/v1/forward/group/{gid}/toggle
+func (s *Server) handleForwardGroupToggle(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	toggled := 0
+	for _, id := range s.forward.groupRuleIDs(gid) {
+		rule, err := s.forward.toggleRule(id, req.Enabled)
+		if err != nil {
+			continue
+		}
+		if req.Enabled && rule.listener == nil && rule.packetConn == nil {
+			_ = s.rebindRuleListener(rule) // 重新启用：按协议重建监听
+		}
+		toggled++
+	}
+	if toggled == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"toggled": toggled, "enabled": req.Enabled})
+}
+
 // handleForwardHealth checks if forwarding is available.
 // GET /api/v1/forward/health
 func (s *Server) handleForwardHealth(w http.ResponseWriter, r *http.Request) {
@@ -349,7 +405,7 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 	// v5.4.1: use createRule (which creates a real listener) instead of
 	// copyRule (which leaves listener=nil, causing a panic in serveForwardListener).
 	listenHost := s.cfg.ForwardListenAddr()
-	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, operator)
+	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

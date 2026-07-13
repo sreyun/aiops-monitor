@@ -609,6 +609,8 @@ window.DICT_TW = {
   "settings.sms_secret_key": "SecretKey",
   "settings.sms_sign_name": "簡訊簽名",
   "settings.sms_template_code": "模板編碼",
+  "settings.sms_template_param": "模板參數 JSON",
+  "settings.sms_template_param_placeholder": "按阿里雲短信模板的實際變數名填寫，如 {\"code\":\"${code}\"} 或 {\"message\":\"${alert_text}\"}；留空則預設 {\"message\":\"告警內容\"}",
   "settings.sms_phones": "接收手機號",
   "settings.sms_phones_placeholder": "多個號碼逗號分隔，如 13800138000,13900139000",
   "settings.voice_call": "電話推送",

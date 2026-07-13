@@ -626,6 +626,8 @@
   "settings.sms_secret_key": "SecretKey",
   "settings.sms_sign_name": "短信签名",
   "settings.sms_template_code": "模板编码",
+  "settings.sms_template_param": "模板参数 JSON",
+  "settings.sms_template_param_placeholder": "按阿里云短信模板的实际变量名填写，如 {\"code\":\"${code}\"} 或 {\"message\":\"${alert_text}\"}；留空则默认 {\"message\":\"告警内容\"}",
   "settings.sms_phones": "接收手机号",
   "settings.sms_phones_placeholder": "多个号码逗号分隔，如 13800138000,13900139000",
   "settings.voice_call": "电话推送",

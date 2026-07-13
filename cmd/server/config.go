@@ -45,13 +45,14 @@ type CustomWebhookConfig struct {
 
 // SMSConfig holds the cloud SMS notification channel configuration.
 type SMSConfig struct {
-	Enabled      bool     `json:"enabled"`
-	Provider     string   `json:"provider"` // aliyun | huawei | tencent
-	AccessKey    string   `json:"access_key"`
-	SecretKey    string   `json:"secret_key,omitempty"`
-	SignName     string   `json:"sign_name"`
-	TemplateCode string   `json:"template_code"`
-	Phones       []string `json:"phones"`
+	Enabled       bool     `json:"enabled"`
+	Provider      string   `json:"provider"` // aliyun | huawei | tencent
+	AccessKey     string   `json:"access_key"`
+	SecretKey     string   `json:"secret_key,omitempty"`
+	SignName      string   `json:"sign_name"`
+	TemplateCode  string   `json:"template_code"`
+	TemplateParam string   `json:"template_param,omitempty"` // 自定义模板参数 JSON，如 {"code":"${code}"}；空时默认 {"message":"..."}
+	Phones        []string `json:"phones"`
 }
 
 // VoiceCallConfig holds the cloud voice call (TTS) notification channel configuration.
@@ -370,6 +371,7 @@ type PersistedForwardRule struct {
 	CreatedAt  int64  `json:"created_at"`
 	Enabled    bool   `json:"enabled"`
 	Protocol   string `json:"protocol,omitempty"` // "tcp"(默认/空) | "udp"
+	GroupID    string `json:"group_id,omitempty"` // 端口范围批量组 ID（同组共享）
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.

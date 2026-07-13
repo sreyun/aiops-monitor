@@ -193,6 +193,10 @@ function collectForwardItems() {
       title: `${esc(f.hostname)} → :${f.target_port}`,
       sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")}`,
       listenAddr: f.listen_addr,
+      groupID: f.group_id || "",           // 端口范围批量组（同组共享）
+      targetPort: f.target_port,
+      protocol: f.protocol === "udp" ? "udp" : "tcp",
+      hostname: f.hostname,
     });
   });
   (LAST_HTTP_PROXIES || []).forEach(p => {
@@ -210,6 +214,40 @@ function collectForwardItems() {
   return items;
 }
 
+// 把转发项按端口范围组（groupID）聚合：同组多条 → 一个组单元；其余 → 单条单元。
+function fwdRenderUnits(items) {
+  const groups = {}; const units = [];
+  items.forEach(it => {
+    if (it.groupID) {
+      if (!groups[it.groupID]) { groups[it.groupID] = { group: true, gid: it.groupID, items: [] }; units.push(groups[it.groupID]); }
+      groups[it.groupID].items.push(it);
+    } else {
+      units.push({ group: false, item: it });
+    }
+  });
+  // 只有 1 条的“组”降级为单条显示
+  return units.map(u => (u.group && u.items.length === 1) ? { group: false, item: u.items[0] } : u);
+}
+function fwdGroupMeta(u) {
+  const its = u.items;
+  const ports = its.map(x => x.targetPort).filter(Boolean).sort((a, b) => a - b);
+  const enabledCount = its.filter(x => x.enabled).length;
+  return {
+    hostname: its[0].hostname, badge: its[0].badge, badgeClass: its[0].badgeClass,
+    count: its.length, enabledCount, portMin: ports[0], portMax: ports[ports.length - 1],
+    anyEnabled: enabledCount > 0,
+  };
+}
+// 组操作按钮：整组启停 + 整组删除（一次操作整段端口范围）
+function fwdGroupActions(u) {
+  const m = fwdGroupMeta(u);
+  const toggleIcon = m.anyEnabled ? FWD_ICONS.disable : FWD_ICONS.enable;
+  const toggleLabel = m.anyEnabled ? "停用整组" : "启用整组";
+  return `
+    <button class="icon-btn" title="${toggleLabel}" data-act="fwd-group-toggle" data-gid="${esc(u.gid)}" data-enable="${m.anyEnabled ? "0" : "1"}">${toggleIcon}</button>
+    <button class="icon-btn danger" title="删除整组（${m.count} 条）" data-act="fwd-group-del" data-gid="${esc(u.gid)}" data-count="${m.count}">${FWD_ICONS.del}</button>`;
+}
+
 function renderForwards() {
   const list = $("forwardList");
   const empty = $("forwardEmpty");
@@ -220,13 +258,28 @@ function renderForwards() {
   if (vt) vt.querySelectorAll(".vt-btn").forEach(b => b.classList.toggle("active", b.dataset.view === FORWARD_VIEW_MODE));
 
   const items = collectForwardItems();
+  const units = fwdRenderUnits(items);
 
-  if (FORWARD_VIEW_MODE === "card") {
-    list.className = "fwd-list fwd-grid";
-    // Reuse the automation playbook-card structure (pb-card*) so forward cards are
-    // visually identical: title + sub top-left, status top-right, divider, footer
-    // with a type pill and the action buttons.
-    list.innerHTML = items.map(it => `
+  const cardHTML = u => {
+    if (u.group) {
+      const m = fwdGroupMeta(u);
+      return `
+      <div class="pb-card fwd-card fwd-group ${m.anyEnabled ? "" : "pb-off"}">
+        <div class="pb-card-top">
+          <div class="pb-card-title">
+            <strong>${esc(m.hostname)} → :${m.portMin}-${m.portMax}</strong>
+            <span class="pb-desc">端口范围组 · ${m.count} 条端口 · ${m.enabledCount} 启用</span>
+          </div>
+          <span class="fwd-status ${m.anyEnabled ? "on" : "off"}">${m.badge} 组</span>
+        </div>
+        <div class="pb-card-foot">
+          <div class="pb-pills"><span class="badge ${m.badgeClass}">${m.badge}</span><span class="pb-pill">${m.count} 端口</span></div>
+          <div class="fwd-actions">${fwdGroupActions(u)}</div>
+        </div>
+      </div>`;
+    }
+    const it = u.item;
+    return `
       <div class="pb-card fwd-card ${it.enabled ? "" : "pb-off"}">
         <div class="pb-card-top">
           <div class="pb-card-title">
@@ -239,10 +292,23 @@ function renderForwards() {
           <div class="pb-pills"><span class="badge ${it.badgeClass}">${it.badge}</span></div>
           <div class="fwd-actions">${fwdActionButtons(it)}</div>
         </div>
-      </div>`).join("");
-  } else {
-    list.className = "fwd-list";
-    list.innerHTML = items.map(it => `
+      </div>`;
+  };
+  const rowHTML = u => {
+    if (u.group) {
+      const m = fwdGroupMeta(u);
+      return `
+      <div class="fwd-row fwd-group ${m.anyEnabled ? "" : "fwd-off"}">
+        <span class="badge ${m.badgeClass}">${m.badge}</span>
+        <div class="fwd-main">
+          <div class="fwd-title">${esc(m.hostname)} → :${m.portMin}-${m.portMax} <span class="pb-pill">${m.count} 端口</span></div>
+          <div class="fwd-sub">端口范围组 · ${m.count} 条 · ${m.enabledCount} 启用</div>
+        </div>
+        <div class="fwd-actions">${fwdGroupActions(u)}</div>
+      </div>`;
+    }
+    const it = u.item;
+    return `
       <div class="fwd-row ${it.enabled ? "" : "fwd-off"}">
         <span class="badge ${it.badgeClass}">${it.badge}</span>
         <div class="fwd-main">
@@ -250,7 +316,15 @@ function renderForwards() {
           <div class="fwd-sub">${it.sub}</div>
         </div>
         <div class="fwd-actions">${fwdActionButtons(it)}</div>
-      </div>`).join("");
+      </div>`;
+  };
+
+  if (FORWARD_VIEW_MODE === "card") {
+    list.className = "fwd-list fwd-grid";
+    list.innerHTML = units.map(cardHTML).join("");
+  } else {
+    list.className = "fwd-list";
+    list.innerHTML = units.map(rowHTML).join("");
   }
 
   empty.style.display = items.length ? "none" : "";
