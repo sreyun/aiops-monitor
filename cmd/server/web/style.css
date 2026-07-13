@@ -1894,6 +1894,15 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .log-stat-chip strong{font-weight:600; font-size:12px}
 .log-stat-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px}
 .log-stat-label{color:var(--muted2); font-size:11px; flex:none}
+/* Top 主机横向柱状图 */
+.log-top-host-bars{flex:1; min-width:200px; display:flex; flex-direction:column; gap:5px}
+.log-top-host-item{display:flex; align-items:center; gap:8px; cursor:pointer; padding:3px 6px; border-radius:var(--r-xs); transition:background var(--transition-fast)}
+.log-top-host-item:hover{background:var(--bg2)}
+.log-top-host-name{flex:none; width:100px; font-size:11px; color:var(--txt2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:right}
+.log-top-host-track{flex:1; height:18px; background:var(--bg2); border-radius:999px; overflow:hidden; position:relative}
+.log-top-host-fill{height:100%; border-radius:999px; transition:width .4s ease; min-width:4px; position:relative}
+.log-top-host-fill::after{content:''; position:absolute; top:0; left:0; right:0; height:50%; background:linear-gradient(180deg, rgba(255,255,255,.25) 0%, transparent 100%); border-radius:999px 999px 0 0}
+.log-top-host-count{flex:none; width:40px; font-size:12px; font-weight:700; text-align:right; tabular-nums:tabular-nums}
 /* 日志行诊断按钮 */
 .log-line{position:relative}
 .log-diag-btn{flex:none; width:22px; height:22px; padding:0; border:none; border-radius:var(--r-xs); background:transparent; color:var(--muted); cursor:pointer; font-size:12px; transition:var(--transition-fast); opacity:0}
@@ -1913,6 +1922,9 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 @media(max-width:768px){
   .log-stats-bar{flex-direction:column; align-items:flex-start}
   .log-stat-row{flex-direction:column; align-items:flex-start}
+  .log-top-host-name{width:70px; font-size:10px}
+  .log-top-host-track{height:14px}
+  .log-top-host-count{width:32px; font-size:11px}
   .log-diag-btn{opacity:1; width:28px; height:28px}
 }
 /* AI 巡检报告 */

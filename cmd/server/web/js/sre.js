@@ -805,14 +805,22 @@ function renderLogStats(stats, total){
     }
   });
 
-  // 按主机 Top 5
+  // 按主机 Top 5 — 横向柱状图可视化
   let hostHTML="";
   if(topHosts.length){
-    hostHTML='<div class="log-stat-row"><span class="log-stat-label">Top 主机：</span>';
-    topHosts.forEach(h=>{
-      hostHTML+=`<span class="log-stat-chip host" data-host="${esc(h.hostname)}">${esc(h.hostname)} <strong>${h.count}</strong></span>`;
+    const maxCount=topHosts[0].count||1;
+    const barColors=['#4c8dff','#06b6d4','#8b5cf6','#22c55e','#f59e0b'];
+    hostHTML='<div class="log-stat-row"><span class="log-stat-label">Top 主机：</span><div class="log-top-host-bars">';
+    topHosts.forEach((h,i)=>{
+      const pct=Math.round((h.count/maxCount)*100);
+      const color=barColors[i%barColors.length];
+      hostHTML+=`<div class="log-top-host-item" data-host="${esc(h.hostname)}" title="${esc(h.hostname)}：${h.count} 条日志">
+        <span class="log-top-host-name">${esc(h.hostname)}</span>
+        <div class="log-top-host-track"><div class="log-top-host-fill" style="width:${pct}%;background:${color}"></div></div>
+        <span class="log-top-host-count" style="color:${color}">${h.count}</span>
+      </div>`;
     });
-    hostHTML+='</div>';
+    hostHTML+='</div></div>';
   }
 
   // 时间分布
@@ -836,11 +844,11 @@ function renderLogStats(stats, total){
   <div class="log-stat-row"><span class="log-stat-label">时间分布：</span>${timeHTML}</div>`;
 
   // 绑定 Top 主机点击筛选
-  panel.querySelectorAll(".log-stat-chip.host").forEach(chip=>{
-    chip.onclick=()=>{
+  panel.querySelectorAll(".log-top-host-item").forEach(item=>{
+    item.onclick=()=>{
       const hostSel=$("logHost");
       if(!hostSel) return;
-      const hn=chip.dataset.host;
+      const hn=item.dataset.host;
       for(let i=0;i<hostSel.options.length;i++){
         if(hostSel.options[i].textContent===hn){ hostSel.value=hostSel.options[i].value; break; }
       }
