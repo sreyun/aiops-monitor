@@ -226,7 +226,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/forward/group/{gid}", s.handleForwardGroupDelete)
 	mux.HandleFunc("PUT /api/v1/forward/group/{gid}/toggle", s.handleForwardGroupToggle)
 	mux.HandleFunc("POST /api/v1/forward/group/{gid}/copy", s.handleForwardGroupCopy)
-	mux.HandleFunc("PUT /api/v1/forward/group/{gid}", s.handleForwardGroupEdit)
+	mux.HandleFunc("PUT /api/v1/forward/group/{gid}/edit", s.handleForwardGroupEdit)
 	mux.HandleFunc("GET /api/v1/forward/stats", s.handleForwardStats)
 	mux.HandleFunc("GET /api/v1/forward/health", s.handleForwardHealth)
 	// HTTP proxy shortcuts (saved configs)

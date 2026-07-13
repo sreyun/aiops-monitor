@@ -679,7 +679,7 @@ async function saveForwardEdit() {
   if (gid) {
     const localPort = parseInt($("fwdEditLocalPort").value || "0");
     try {
-      const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}`, {
+      const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}/edit`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
