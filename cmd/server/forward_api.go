@@ -22,33 +22,35 @@ import (
 // TCPForwardRequest creates a persistent TCP port mapping.
 //
 // Example (curl):
-//   curl -X POST http://localhost:8529/api/v1/forward \
-//     -H "Content-Type: application/json" \
-//     -H "Cookie: aiops_session=<your-session>" \
-//     -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
+//
+//	curl -X POST http://localhost:8529/api/v1/forward \
+//	  -H "Content-Type: application/json" \
+//	  -H "Cookie: aiops_session=<your-session>" \
+//	  -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
 //
 // This opens 0.0.0.0:13306 on the server (configurable via forward_listen),
 // relaying all TCP traffic through the agent to localhost:3306 on the target host.
 // Use any MySQL client to connect:
-//   mysql -h 127.0.0.1 -P 13306 -u root -p
+//
+//	mysql -h 127.0.0.1 -P 13306 -u root -p
 type TCPForwardRequest struct {
-	HostID     string `json:"host_id"`               // Required: monitored host ID
-	TargetPort int    `json:"target_port"`           // Required: port on the target host (1-65535)
-	LocalPort  int    `json:"local_port,omitempty"`   // Optional: local listen port (0 = auto-assign)
+	HostID     string `json:"host_id"`              // Required: monitored host ID
+	TargetPort int    `json:"target_port"`          // Required: port on the target host (1-65535)
+	LocalPort  int    `json:"local_port,omitempty"` // Optional: local listen port (0 = auto-assign)
 }
 
 // TCPForwardResponse is returned when a TCP forward rule is created.
 type TCPForwardResponse struct {
-	ID         string `json:"id"`          // Rule ID (use for deletion)
+	ID         string `json:"id"` // Rule ID (use for deletion)
 	HostID     string `json:"host_id"`
 	Hostname   string `json:"hostname"`
 	TargetPort int    `json:"target_port"`
 	LocalPort  int    `json:"local_port"`
-	ListenAddr string `json:"listen_addr"`  // e.g. "0.0.0.0:13306"
-	Status     string `json:"status"`       // always "active"
+	ListenAddr string `json:"listen_addr"` // e.g. "0.0.0.0:13306"
+	Status     string `json:"status"`      // always "active"
 	CreatedAt  int64  `json:"created_at"`
 	Operator   string `json:"operator"`
-	Sessions   int    `json:"sessions"`     // current active connections
+	Sessions   int    `json:"sessions"` // current active connections
 }
 
 // --- HTTP Forwarding API ---
@@ -216,16 +218,29 @@ func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// v5.4.1: re-create the listener when re-enabling a rule that was stopped.
-	if req.Enabled && rule.listener == nil {
-		ln, lnErr := net.Listen("tcp", rule.listenAddr)
-		if lnErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
-			return
+	// 按协议重建：UDP 用 ListenPacket + serveForwardUDP，TCP 用 Listen + serveForwardListener。
+	if req.Enabled && rule.listener == nil && rule.packetConn == nil {
+		if rule.protocol == "udp" {
+			pc, lnErr := net.ListenPacket("udp", rule.listenAddr)
+			if lnErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+				return
+			}
+			s.forward.mu.Lock()
+			rule.packetConn = pc
+			s.forward.mu.Unlock()
+			go s.serveForwardUDP(rule)
+		} else {
+			ln, lnErr := net.Listen("tcp", rule.listenAddr)
+			if lnErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+				return
+			}
+			s.forward.mu.Lock()
+			rule.listener = ln
+			s.forward.mu.Unlock()
+			go s.serveForwardListener(rule)
 		}
-		s.forward.mu.Lock()
-		rule.listener = ln
-		s.forward.mu.Unlock()
-		go s.serveForwardListener(rule)
 	}
 	// Count sessions belonging to this rule (under lock)
 	sessions := 0
@@ -334,12 +349,12 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 	// v5.4.1: use createRule (which creates a real listener) instead of
 	// copyRule (which leaves listener=nil, causing a panic in serveForwardListener).
 	listenHost := s.cfg.ForwardListenAddr()
-	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, operator)
+	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, operator)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	go s.serveForwardListener(newRule)
+	go s.serveRule(newRule)
 	// Count sessions for the new rule (under lock)
 	sessions := 0
 	s.forward.mu.Lock()

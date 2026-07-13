@@ -1505,10 +1505,14 @@
       <!-- TCP mode fields -->
       <div id="fwdTcpFields">
         <div class="field">
+          <label>协议</label>
+          <div class="select-wrap"><select id="fwdProtocol" style="width:100%"><option value="tcp">TCP（MySQL / Redis / SSH …）</option><option value="udp">UDP（DNS / SNMP / syslog / 游戏 …）</option></select></div>
+        </div>
+        <div class="field">
           <label data-i18n="form.local_port_optional">本地端口（可选）</label>
           <input type="number" id="fwdLocalPort" data-i18n-placeholder="form.auto_assign" placeholder="自动分配" min="0" max="65535" style="width:100%">
         </div>
-        <div class="hint" data-i18n="forward.tcp_hint">创建 TCP 转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP 服务（如 MySQL、Redis、SSH）。</div>
+        <div class="hint" data-i18n="forward.tcp_hint">创建转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP / UDP 服务（如 MySQL、Redis、SSH、DNS）。</div>
       </div>
       <!-- HTTP mode fields -->
       <div id="fwdHttpFields" style="display:none">

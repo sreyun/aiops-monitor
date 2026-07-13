@@ -436,6 +436,31 @@ func (n *Notifier) post(webhook string, body []byte) error {
 
 // ----- cloud SMS / voice notification helpers -----
 
+// aliyunEncode 按阿里云 API 签名 V1 规范做百分号编码。
+// 规则：A-Z a-z 0-9 - _ . ~ 不编码；空格编码为 %20（非 +）；
+// 其余全部编码为 %XX（大写十六进制）。这与 Go 标准库 url.QueryEscape
+// 的关键区别在于空格 → %20，确保签名计算与阿里云服务端一致。
+func aliyunEncode(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == '~':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteString("%20")
+		default:
+			// 统一走 UTF-8 字节编码，避免 rune 直接转义
+			for _, by := range []byte(string(r)) {
+				fmt.Fprintf(&b, "%%%02X", by)
+			}
+		}
+	}
+	return b.String()
+}
+
 // aliyunSign builds the Alibaba Cloud API V1 signature (HMAC-SHA1).
 func aliyunSign(method string, params map[string]string, secret string) string {
 	keys := make([]string, 0, len(params))
@@ -445,10 +470,10 @@ func aliyunSign(method string, params map[string]string, secret string) string {
 	sort.Strings(keys)
 	var qs []string
 	for _, k := range keys {
-		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(params[k]))
+		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(params[k]))
 	}
 	canonical := strings.Join(qs, "&")
-	stringToSign := method + "&" + url.QueryEscape("/") + "&" + url.QueryEscape(canonical)
+	stringToSign := method + "&" + aliyunEncode("/") + "&" + aliyunEncode(canonical)
 	h := hmac.New(sha1.New, []byte(secret+"&"))
 	h.Write([]byte(stringToSign))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -488,7 +513,7 @@ func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 
 	var qs []string
 	for k, v := range params {
-		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(v))
+		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(v))
 	}
 	reqURL := "https://dysmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
 	resp, err := n.httpc.Get(reqURL)
@@ -545,7 +570,7 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 
 	var qs []string
 	for k, v := range params {
-		qs = append(qs, url.QueryEscape(k)+"="+url.QueryEscape(v))
+		qs = append(qs, aliyunEncode(k)+"="+aliyunEncode(v))
 	}
 	reqURL := "https://dyvmsapi.aliyuncs.com/?" + strings.Join(qs, "&")
 	resp, err := n.httpc.Get(reqURL)

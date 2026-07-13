@@ -189,7 +189,7 @@ function collectForwardItems() {
     items.push({
       type: "tcp", id: f.id,
       enabled: f.enabled !== false,
-      badge: "TCP", badgeClass: "op",
+      badge: f.protocol === "udp" ? "UDP" : "TCP", badgeClass: "op",
       title: `${esc(f.hostname)} → :${f.target_port}`,
       sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")}`,
       listenAddr: f.listen_addr,
@@ -287,13 +287,14 @@ function submitForward() {
 
 async function createTcpForward(hostID, targetPort) {
   const localPort = parseInt($("fwdLocalPort")?.value || "0");
+  const protocol = $("fwdProtocol")?.value || "tcp"; // tcp | udp
   await withLoading("fwdSubmitBtn", async () => {
     try {
       const res = await fetch("/api/v1/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort, protocol })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

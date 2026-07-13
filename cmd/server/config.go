@@ -369,6 +369,7 @@ type PersistedForwardRule struct {
 	Operator   string `json:"operator"`
 	CreatedAt  int64  `json:"created_at"`
 	Enabled    bool   `json:"enabled"`
+	Protocol   string `json:"protocol,omitempty"` // "tcp"(默认/空) | "udp"
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.

@@ -99,8 +99,12 @@ func (a *Agent) runForwardSession(server, sid string, targetPort int, mode strin
 			slog.Warn("转发会话异常已恢复（不影响 Agent 运行）", "session", sid, "panic", r)
 		}
 	}()
+	if mode == "udp" { // UDP：走数据报中继（两个方向都按帧保留数据报边界）
+		a.runForwardSessionUDP(server, sid, targetPort)
+		return
+	}
 	target := "localhost:" + strconv.Itoa(targetPort)
-	
+
 	// P1: 添加连接超时控制（5秒）
 	dialer := net.Dialer{Timeout: 5 * time.Second}
 	conn, err := dialer.Dial("tcp", target)
@@ -200,4 +204,82 @@ func readForwardFrames(r io.Reader, conn net.Conn) {
 			return // close signal from the server
 		}
 	}
+}
+
+// runForwardSessionUDP relays UDP datagrams between the server tunnel and a local
+// UDP service (localhost:targetPort). Both directions are framed
+// ([type:1][len:2 BE][payload]) so datagram boundaries survive the byte-stream
+// tunnel: rx 'd' 帧 → 一个 UDP 数据报写往目标；目标回程数据报 → 封一帧上行 tx。
+func (a *Agent) runForwardSessionUDP(server, sid string, targetPort int) {
+	target := "localhost:" + strconv.Itoa(targetPort)
+	conn, err := net.Dial("udp", target) // 连接态 UDP：Write=一个数据报，Read=一个数据报
+	if err != nil {
+		slog.Warn("UDP 转发目标连接失败", "session", sid, "target", target, "err", err)
+		return
+	}
+	defer conn.Close()
+	slog.Info("UDP 转发会话开始", "session", sid, "target", target)
+
+	var once sync.Once
+	closeAll := func() { once.Do(func() { _ = conn.Close() }) }
+	defer closeAll()
+
+	timeoutTimer := time.AfterFunc(forwardSessionTimeout, closeAll) // 会话时长上限，防泄漏
+	defer timeoutTimer.Stop()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// tx: 读本地 UDP 回程数据报 → 逐个封帧 → POST 上行（用 io.Pipe 作为分帧 body）
+	go func() {
+		defer wg.Done()
+		defer closeAll()
+		pr, pw := io.Pipe()
+		go func() {
+			buf := make([]byte, 64*1024)
+			var hdr [3]byte
+			hdr[0] = 'd'
+			for {
+				_ = conn.SetReadDeadline(time.Now().Add(forwardSessionTimeout))
+				n, rerr := conn.Read(buf)
+				if n > 0 {
+					binary.BigEndian.PutUint16(hdr[1:], uint16(n))
+					if _, e := pw.Write(hdr[:]); e != nil {
+						break
+					}
+					if _, e := pw.Write(buf[:n]); e != nil {
+						break
+					}
+				}
+				if rerr != nil {
+					break
+				}
+			}
+			_ = pw.Close()
+		}()
+		req, rerr := http.NewRequest("POST", server+"/api/v1/agent/forward/tx?session="+sid, pr)
+		if rerr != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
+		if resp, e := termHTTP.Do(req); e == nil {
+			resp.Body.Close()
+		}
+	}()
+
+	// rx: 服务端下行帧 → 每个 'd' 帧写一个 UDP 数据报到目标（复用 readForwardFrames）
+	go func() {
+		defer wg.Done()
+		defer closeAll()
+		resp, rerr := agentGet(termHTTP, server+"/api/v1/agent/forward/rx?session="+sid, a.identity.Fingerprint)
+		if rerr != nil {
+			return
+		}
+		defer resp.Body.Close()
+		readForwardFrames(resp.Body, conn)
+	}()
+
+	wg.Wait()
+	slog.Info("UDP 转发会话结束", "session", sid, "target", target)
 }

@@ -32,9 +32,9 @@ import (
 // ---- Constants (P0: security limits) ----
 
 const (
-	maxForwardSessions  = 300           // P0: maximum concurrent forwarding sessions
-	maxForwardBodySize  = 100 << 20     // P0: maximum HTTP request body (100MB) to prevent OOM
-	forwardReadBufSize  = 32 << 10      // P1: 32KB read buffer (was 16KB)
+	maxForwardSessions  = 300              // P0: maximum concurrent forwarding sessions
+	maxForwardBodySize  = 100 << 20        // P0: maximum HTTP request body (100MB) to prevent OOM
+	forwardReadBufSize  = 32 << 10         // P1: 32KB read buffer (was 16KB)
 	forwardReadTimeout  = 30 * time.Second // P1: HTTP response read timeout
 	forwardTCPKeepAlive = 60 * time.Second // P1: TCP keepalive interval
 )
@@ -68,14 +68,20 @@ type forwardStats struct {
 	bwLastSec int64
 }
 
-func (fs *forwardStats) incActive()  { atomic.AddInt64(&fs.ActiveSessions, 1); atomic.AddInt64(&fs.TotalSessions, 1) }
-func (fs *forwardStats) decActive()  { atomic.AddInt64(&fs.ActiveSessions, -1) }
+func (fs *forwardStats) incActive() {
+	atomic.AddInt64(&fs.ActiveSessions, 1)
+	atomic.AddInt64(&fs.TotalSessions, 1)
+}
+func (fs *forwardStats) decActive() { atomic.AddInt64(&fs.ActiveSessions, -1) }
 func (fs *forwardStats) addBytes(n int64) {
 	atomic.AddInt64(&fs.TotalBytes, n)
 	fs.recordBW(n)
 }
-func (fs *forwardStats) incError()      { atomic.AddInt64(&fs.Errors, 1) }
-func (fs *forwardStats) addLatency(ms int64) { atomic.AddInt64(&fs.TotalLatencyMs, ms); atomic.AddInt64(&fs.LatencySamples, 1) }
+func (fs *forwardStats) incError() { atomic.AddInt64(&fs.Errors, 1) }
+func (fs *forwardStats) addLatency(ms int64) {
+	atomic.AddInt64(&fs.TotalLatencyMs, ms)
+	atomic.AddInt64(&fs.LatencySamples, 1)
+}
 
 // recordBW appends bytes to the current second's bandwidth bucket.
 func (fs *forwardStats) recordBW(n int64) {
@@ -130,22 +136,22 @@ func (m *forwardManager) Snapshot() ForwardSnapshot {
 
 // forwardSession is one tunneled connection (TCP or HTTP).
 type forwardSession struct {
-	id         string
-	ruleID     string // TCP rule that spawned this session; "" for HTTP
-	hostID     string
-	hostname   string
-	targetPort int
-	mode       string // "tcp" | "http"
-	operator   string
-	toAgent    chan []byte   // user data → agent (rx stream)
-	toUser     chan []byte   // agent data → user (tx stream)
-	agentUp    chan struct{} // closed once the agent attaches its tx stream
-	done       chan struct{}
-	upOnce     sync.Once
-	doneOnce   sync.Once
+	id          string
+	ruleID      string // TCP rule that spawned this session; "" for HTTP
+	hostID      string
+	hostname    string
+	targetPort  int
+	mode        string // "tcp" | "http"
+	operator    string
+	toAgent     chan []byte   // user data → agent (rx stream)
+	toUser      chan []byte   // agent data → user (tx stream)
+	agentUp     chan struct{} // closed once the agent attaches its tx stream
+	done        chan struct{}
+	upOnce      sync.Once
+	doneOnce    sync.Once
 	closeReason string // P3: reason the session ended
-	mu         sync.Mutex
-	lastActive int64 // unix seconds of last data transfer (for idle timeout)
+	mu          sync.Mutex
+	lastActive  int64 // unix seconds of last data transfer (for idle timeout)
 }
 
 func (s *forwardSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
@@ -183,6 +189,8 @@ type forwardRule struct {
 	localPort  int
 	listenAddr string // "127.0.0.1:port"
 	listener   net.Listener
+	packetConn net.PacketConn // UDP：非空表示 UDP 转发（与 listener 二选一）
+	protocol   string         // "tcp"(默认) | "udp"
 	operator   string
 	createdAt  int64
 	enabled    bool // whether this rule is currently active
@@ -208,6 +216,7 @@ type forwardInfo struct {
 	Operator   string `json:"operator"`
 	Sessions   int    `json:"sessions"`
 	Enabled    bool   `json:"enabled"`
+	Protocol   string `json:"protocol,omitempty"` // "tcp" | "udp"
 }
 
 type forwardManager struct {
@@ -511,47 +520,53 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 
 // ---- rule management ----
 
-func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, operator string) (*forwardRule, error) {
+func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, operator string) (*forwardRule, error) {
+	if protocol != "udp" {
+		protocol = "tcp"
+	}
 	// If localPort is 0 or requested port is unavailable, try ports in the configured range
 	minPort, maxPort := m.cfg.ForwardPortRangeBounds()
 	var ln net.Listener
+	var pc net.PacketConn
 	var err error
 	actualPort := localPort
+	// tryBind 按协议绑定 TCP 监听器或 UDP 报文连接（二选一）。
+	tryBind := func(addr string) error {
+		if protocol == "udp" {
+			pc, err = net.ListenPacket("udp", addr)
+		} else {
+			ln, err = net.Listen("tcp", addr)
+		}
+		return err
+	}
+	bound := func() bool { return ln != nil || pc != nil }
 
 	if localPort > 0 {
-		// Try the user-specified port first
-		addr := listenHost + ":" + strconv.Itoa(localPort)
-		ln, err = net.Listen("tcp", addr)
-		if err != nil {
-			// User asked for a specific port but it failed, try the range
-			actualPort = 0
+		if tryBind(listenHost+":"+strconv.Itoa(localPort)) != nil {
+			actualPort = 0 // 指定端口占用，退回端口段
 		}
 	}
-
-	// If no listener yet, try ports in the configured range
-	if ln == nil {
-		// P1: Random port selection within range for better load distribution.
-		// Uses a simple hash-based offset seeded by time to avoid import overhead.
-		rng := int(time.Now().UnixNano() % int64((maxPort - minPort) + 1))
+	if !bound() {
+		rng := int(time.Now().UnixNano() % int64((maxPort-minPort)+1))
 		for attempt := 0; attempt < 100; attempt++ {
 			candidate := minPort + ((rng + attempt) % ((maxPort - minPort) + 1))
-			addr := listenHost + ":" + strconv.Itoa(candidate)
-			ln, err = net.Listen("tcp", addr)
-			if err == nil {
+			if tryBind(listenHost+":"+strconv.Itoa(candidate)) == nil {
 				actualPort = candidate
 				break
 			}
 		}
-		// If still no listener, fall back to OS-assigned port
-		if ln == nil {
-			ln, err = net.Listen("tcp", listenHost+":0")
-			if err != nil {
+		if !bound() { // 端口段也满，退回 OS 自动分配
+			if tryBind(listenHost+":0") != nil {
 				return nil, fmt.Errorf("%s", Tz("forward.listen_failed", err))
 			}
 		}
 	}
 
-	actualPort = ln.Addr().(*net.TCPAddr).Port
+	if protocol == "udp" {
+		actualPort = pc.LocalAddr().(*net.UDPAddr).Port
+	} else {
+		actualPort = ln.Addr().(*net.TCPAddr).Port
+	}
 	actualAddr := listenHost + ":" + strconv.Itoa(actualPort)
 	// 安全提示：绑定到非回环地址（如 Docker 部署常用的 0.0.0.0）时，任何能访问该端口的
 	// 客户端都可经隧道直达目标主机 localhost 的内网服务（Redis/MySQL/SSH）。转发是裸 TCP
@@ -564,7 +579,8 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		id: termID()[:8], hostID: hostID, hostname: hostname,
 		targetPort: targetPort, localPort: actualPort,
 		listenAddr: actualAddr,
-		listener: ln, operator: operator, createdAt: now,
+		listener:   ln, packetConn: pc, protocol: protocol,
+		operator: operator, createdAt: now,
 		enabled: true,
 	}
 	m.mu.Lock()
@@ -575,9 +591,18 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
 		TargetPort: r.targetPort, LocalPort: r.localPort,
 		ListenAddr: r.listenAddr, Operator: r.operator,
-		CreatedAt: now, Enabled: true,
+		CreatedAt: now, Enabled: true, Protocol: protocol,
 	})
 	return r, nil
+}
+
+// serveRule 按协议分发到 TCP 监听循环或 UDP 报文循环。
+func (s *Server) serveRule(rule *forwardRule) {
+	if rule.protocol == "udp" {
+		s.serveForwardUDP(rule)
+	} else {
+		s.serveForwardListener(rule)
+	}
 }
 
 func (m *forwardManager) getRule(id string) *forwardRule {
@@ -606,6 +631,9 @@ func (m *forwardManager) removeRule(id string) bool {
 	if r.listener != nil {
 		_ = r.listener.Close()
 	}
+	if r.packetConn != nil { // UDP：删除时关闭报文连接，避免泄漏 UDP socket
+		_ = r.packetConn.Close()
+	}
 	// Persist deletion to config (PostgreSQL)
 	_ = m.cfg.DeleteForwardRule(id)
 	return true
@@ -628,9 +656,24 @@ func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error
 	r.enabled = enable
 	// v5.4.1: actually stop the listener when disabling, so TCP connections
 	// are no longer accepted and forwarded.
-	if !enable && r.listener != nil {
-		_ = r.listener.Close()
-		r.listener = nil
+	if !enable {
+		if r.listener != nil {
+			_ = r.listener.Close()
+			r.listener = nil
+		}
+		if r.packetConn != nil { // UDP：关闭报文连接以停止接收新数据报
+			_ = r.packetConn.Close()
+			r.packetConn = nil
+		}
+	}
+	if !enable { // 彻底停用：断开该规则下所有在途会话（不只是停止接受新连接，否则已建立的连接仍能访问）
+		for sid, sess := range m.sessions {
+			if sess.ruleID == id {
+				sess.closeWith(Tz("log.forward_reason_eof"))
+				delete(m.sessions, sid)
+				m.stats.decActive()
+			}
+		}
 	}
 	// Persist toggle to config (PostgreSQL)
 	_ = m.cfg.ToggleForwardRule(id, enable)
@@ -719,28 +762,47 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
 				targetPort: pr.TargetPort, localPort: pr.LocalPort,
 				listenAddr: pr.ListenAddr, operator: pr.Operator,
-				createdAt: pr.CreatedAt, enabled: false,
+				createdAt: pr.CreatedAt, enabled: false, protocol: pr.Protocol,
 			}
 			m.mu.Unlock()
 			continue
 		}
-		// Try to re-bind the listener
-		ln, err := net.Listen("tcp", pr.ListenAddr)
-		if err != nil {
-			slog.Warn("恢复转发规则监听失败，尝试自动分配端口", "id", pr.ID, "addr", pr.ListenAddr, "err", err)
-			// Fall back to OS-assigned port
-			ln, err = net.Listen("tcp", listenHost+":0")
-			if err != nil {
-				slog.Error("恢复转发规则失败，跳过", "id", pr.ID, "err", err)
-				continue
+		// 按协议重新绑定（TCP 监听器 / UDP 报文连接）
+		proto := pr.Protocol
+		if proto != "udp" {
+			proto = "tcp"
+		}
+		var ln net.Listener
+		var pc net.PacketConn
+		var err error
+		if proto == "udp" {
+			if pc, err = net.ListenPacket("udp", pr.ListenAddr); err != nil {
+				slog.Warn("恢复 UDP 转发监听失败，尝试自动分配端口", "id", pr.ID, "addr", pr.ListenAddr, "err", err)
+				pc, err = net.ListenPacket("udp", listenHost+":0")
+			}
+		} else {
+			if ln, err = net.Listen("tcp", pr.ListenAddr); err != nil {
+				slog.Warn("恢复转发规则监听失败，尝试自动分配端口", "id", pr.ID, "addr", pr.ListenAddr, "err", err)
+				ln, err = net.Listen("tcp", listenHost+":0")
 			}
 		}
-		actualPort := ln.Addr().(*net.TCPAddr).Port
-		actualAddr := ln.Addr().String()
+		if err != nil {
+			slog.Error("恢复转发规则失败，跳过", "id", pr.ID, "proto", proto, "err", err)
+			continue
+		}
+		var actualPort int
+		var actualAddr string
+		if proto == "udp" {
+			actualPort = pc.LocalAddr().(*net.UDPAddr).Port
+			actualAddr = pc.LocalAddr().String()
+		} else {
+			actualPort = ln.Addr().(*net.TCPAddr).Port
+			actualAddr = ln.Addr().String()
+		}
 		r := &forwardRule{
 			id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
 			targetPort: pr.TargetPort, localPort: actualPort,
-			listenAddr: actualAddr, listener: ln,
+			listenAddr: actualAddr, listener: ln, packetConn: pc, protocol: proto,
 			operator: pr.Operator, createdAt: pr.CreatedAt, enabled: true,
 		}
 		// If the port changed, update the persisted config
@@ -749,13 +811,13 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				ID: r.id, HostID: r.hostID, Hostname: r.hostname,
 				TargetPort: r.targetPort, LocalPort: r.localPort,
 				ListenAddr: r.listenAddr, Operator: r.operator,
-				CreatedAt: r.createdAt, Enabled: r.enabled,
+				CreatedAt: r.createdAt, Enabled: r.enabled, Protocol: proto,
 			})
 		}
 		m.mu.Lock()
 		m.rules[r.id] = r
 		m.mu.Unlock()
-		go srv.serveForwardListener(r)
+		go srv.serveRule(r)
 	}
 }
 
@@ -775,7 +837,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 			TargetPort: r.targetPort, LocalPort: r.localPort,
 			ListenAddr: r.listenAddr, Status: "active",
 			CreatedAt: r.createdAt, Operator: r.operator,
-			Sessions: sessions, Enabled: r.enabled,
+			Sessions: sessions, Enabled: r.enabled, Protocol: r.protocol,
 		})
 	}
 	return out
@@ -793,6 +855,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		HostID     string `json:"host_id"`
 		TargetPort int    `json:"target_port"`
 		LocalPort  int    `json:"local_port"` // 0 = auto-allocate
+		Protocol   string `json:"protocol"`   // "tcp"(默认) | "udp"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -816,20 +879,20 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		operator = user.Username
 	}
 	listenHost := s.cfg.ForwardListenAddr()
-	rule, err := s.forward.createRule(req.HostID, hostname, req.TargetPort, req.LocalPort, listenHost, operator)
+	rule, err := s.forward.createRule(req.HostID, hostname, req.TargetPort, req.LocalPort, listenHost, req.Protocol, operator)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	// start accepting connections in the background
-	go s.serveForwardListener(rule)
+	go s.serveRule(rule)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
 		Message: Tz("log.forward_create", rule.id, hostname, req.TargetPort, rule.listenAddr)})
 	writeJSON(w, http.StatusOK, forwardInfo{
 		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
 		TargetPort: rule.targetPort, LocalPort: rule.localPort,
 		ListenAddr: rule.listenAddr, Status: "active",
-		CreatedAt: rule.createdAt, Operator: operator,
+		CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol,
 	})
 }
 
@@ -1027,6 +1090,23 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	if err != nil || port < 1 || port > 65535 {
 		http.Error(w, Tr(r, "forward.invalid_port"), http.StatusBadRequest)
 		return
+	}
+	// 停用即失效：若该 host+port 存在已保存的 HTTP 转发配置且全部处于停用状态，则拒绝访问。
+	// /proxy 路由本身按 host+port 直通，此前只受全局开关约束，导致停用单条配置后仍可访问（本次修复点）。
+	if cfgs := s.cfg.ListHTTPProxies(); len(cfgs) > 0 {
+		match, anyEnabled := false, false
+		for _, p := range cfgs {
+			if p.HostID == hostID && p.TargetPort == port {
+				match = true
+				if p.Enabled {
+					anyEnabled = true
+				}
+			}
+		}
+		if match && !anyEnabled {
+			http.Error(w, Tr(r, "forward.disabled"), http.StatusForbidden)
+			return
+		}
 	}
 	// look up hostname
 	hostname := shortID(hostID)
@@ -1605,6 +1685,10 @@ func (s *Server) handleAgentForwardTx(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.markAgentUp()
 	defer sess.close()
+	if sess.mode == "udp" { // UDP：agent 上行按帧封装数据报，逐帧还原后投递给对应 UDP 流
+		readForwardTxFrames(r.Body, sess)
+		return
+	}
 	buf := make([]byte, forwardReadBufSize) // P1: 32KB buffer
 	for {
 		n, err := r.Body.Read(buf)
