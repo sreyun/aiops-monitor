@@ -57,6 +57,14 @@ async function openSettings() {
     $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
     $("procWarn").value = td(t.proc_warn, 0.5);
     $("offlineSec").value = td(t.offline_after_sec, 60);
+    // API 业务监控
+    $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
+    $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
+    $("apiP95RespWarn").value = td(t.api_p95_resp_warn, 1000); $("apiP95RespCrit").value = td(t.api_p95_resp_crit, 5000);
+    $("apiThroughputWarn").value = td(t.api_throughput_warn, 100); $("apiThroughputCrit").value = td(t.api_throughput_crit, 10);
+    // 编排定时任务
+    $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
+    $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
 
     // Reset to first tab
     switchNotifyTab("tab-feishu");
@@ -83,6 +91,14 @@ async function loadThresholds() {
     $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
     $("procWarn").value = td(t.proc_warn, 0.5);
     $("offlineSec").value = td(t.offline_after_sec, 60);
+    // API 业务监控阈值
+    $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
+    $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
+    $("apiP95RespWarn").value = td(t.api_p95_resp_warn, 1000); $("apiP95RespCrit").value = td(t.api_p95_resp_crit, 5000);
+    $("apiThroughputWarn").value = td(t.api_throughput_warn, 100); $("apiThroughputCrit").value = td(t.api_throughput_crit, 10);
+    // 编排定时任务阈值
+    $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
+    $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 async function saveThresholds() {
@@ -99,7 +115,15 @@ async function saveThresholds() {
         gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
         load_warn: num("loadWarn"), load_crit: num("loadCrit"),
         proc_warn: num("procWarn"),
-        offline_after_sec: Math.round(num("offlineSec"))
+        offline_after_sec: Math.round(num("offlineSec")),
+        // API 业务监控
+        api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
+        api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
+        api_p95_resp_warn: num("apiP95RespWarn"), api_p95_resp_crit: num("apiP95RespCrit"),
+        api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
+        // 编排定时任务
+        task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
+        task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit")
       };
       const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
       if (r.ok) toast("告警阈值已保存，即时生效", "ok");
@@ -164,7 +188,15 @@ function collectSettings() {
       gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
       load_warn: num("loadWarn"), load_crit: num("loadCrit"),
       proc_warn: num("procWarn"),
-      offline_after_sec: Math.round(num("offlineSec"))
+      offline_after_sec: Math.round(num("offlineSec")),
+      // API 业务监控
+      api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
+      api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
+      api_p95_resp_warn: num("apiP95RespWarn"), api_p95_resp_crit: num("apiP95RespCrit"),
+      api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
+      // 编排定时任务
+      task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
+      task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit")
     }
   };
 }

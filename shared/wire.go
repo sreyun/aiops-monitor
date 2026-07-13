@@ -39,6 +39,16 @@ type Metrics struct {
 	// Disk IOPS: read/write operations per second
 	DiskReadIOPS  float64 `json:"disk_read_iops"`
 	DiskWriteIOPS float64 `json:"disk_write_iops"`
+
+	// ---- API 业务监控指标（由插件或外部系统上报，可选）----
+	APIAvailPercent    float64 `json:"api_avail_percent,omitempty"`    // 接口可用率 %
+	APIAvgRespMs       float64 `json:"api_avg_resp_ms,omitempty"`      // 平均响应时间 ms
+	APIP95RespMs       float64 `json:"api_p95_resp_ms,omitempty"`      // P95 响应时间 ms
+	APIThroughputRPS   float64 `json:"api_throughput_rps,omitempty"`   // 吞吐量 req/s
+
+	// ---- 编排定时任务指标（由插件或外部系统上报，可选）----
+	TaskFailCount    int     `json:"task_fail_count,omitempty"`    // 执行失败次数
+	TaskTimeoutSec   float64 `json:"task_timeout_sec,omitempty"`   // 超时时长 s
 }
 
 // GPUInfo is per-GPU usage. Collection is best-effort and vendor-dependent:

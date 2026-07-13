@@ -254,6 +254,7 @@ func formatAlert(a Alert, firing bool) string {
 	typeMap := map[string]string{
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -339,6 +340,7 @@ func alertEmailHTML(a Alert, firing bool) string {
 	typeMap := map[string]string{
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {

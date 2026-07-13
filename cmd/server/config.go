@@ -83,6 +83,20 @@ type ThresholdConfig struct {
 	LoadCrit        float64 `json:"load_crit"`
 	ProcWarn        float64 `json:"proc_warn"` // 进程数突增/突降比例（如 0.5 = 50%）
 	OfflineAfterSec int     `json:"offline_after_sec"`
+	// ---- API 业务监控阈值 ----
+	APIAvailWarn      float64 `json:"api_avail_warn"`      // 接口可用率 警告 %（低于此值告警）
+	APIAvailCrit      float64 `json:"api_avail_crit"`      // 接口可用率 严重 %
+	APIAvgRespWarn    float64 `json:"api_avg_resp_warn"`   // 平均响应时间 警告 ms
+	APIAvgRespCrit    float64 `json:"api_avg_resp_crit"`   // 平均响应时间 严重 ms
+	APIP95RespWarn    float64 `json:"api_p95_resp_warn"`   // P95 响应时间 警告 ms
+	APIP95RespCrit    float64 `json:"api_p95_resp_crit"`   // P95 响应时间 严重 ms
+	APIThroughputWarn float64 `json:"api_throughput_warn"` // 吞吐量 警告 req/s（低于此值告警）
+	APIThroughputCrit float64 `json:"api_throughput_crit"` // 吞吐量 严重 req/s
+	// ---- 编排定时任务阈值 ----
+	TaskFailWarn    int     `json:"task_fail_warn"`    // 执行失败次数 警告
+	TaskFailCrit    int     `json:"task_fail_crit"`    // 执行失败次数 严重
+	TaskTimeoutWarn float64 `json:"task_timeout_warn"` // 超时时长 警告 s
+	TaskTimeoutCrit float64 `json:"task_timeout_crit"` // 超时时长 严重 s
 }
 
 func defaultThresholdConfig() ThresholdConfig {
@@ -96,6 +110,14 @@ func defaultThresholdConfig() ThresholdConfig {
 		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn:        0.5,
 		OfflineAfterSec: 60,
+		// API 业务监控默认阈值
+		APIAvailWarn:      99.0, APIAvailCrit:      95.0,
+		APIAvgRespWarn:    500,  APIAvgRespCrit:    2000,
+		APIP95RespWarn:    1000, APIP95RespCrit:    5000,
+		APIThroughputWarn: 100,  APIThroughputCrit: 10,
+		// 编排定时任务默认阈值
+		TaskFailWarn:    1,  TaskFailCrit:    5,
+		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
 	}
 }
 
@@ -130,6 +152,24 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	fix(&t.LoadWarn, d.LoadWarn)
 	fix(&t.LoadCrit, d.LoadCrit)
 	fix(&t.ProcWarn, d.ProcWarn)
+	fix(&t.APIAvailWarn, d.APIAvailWarn)
+	fix(&t.APIAvailCrit, d.APIAvailCrit)
+	fix(&t.APIAvgRespWarn, d.APIAvgRespWarn)
+	fix(&t.APIAvgRespCrit, d.APIAvgRespCrit)
+	fix(&t.APIP95RespWarn, d.APIP95RespWarn)
+	fix(&t.APIP95RespCrit, d.APIP95RespCrit)
+	fix(&t.APIThroughputWarn, d.APIThroughputWarn)
+	fix(&t.APIThroughputCrit, d.APIThroughputCrit)
+	if t.TaskFailWarn == 0 {
+		t.TaskFailWarn = d.TaskFailWarn
+		changed = true
+	}
+	if t.TaskFailCrit == 0 {
+		t.TaskFailCrit = d.TaskFailCrit
+		changed = true
+	}
+	fix(&t.TaskTimeoutWarn, d.TaskTimeoutWarn)
+	fix(&t.TaskTimeoutCrit, d.TaskTimeoutCrit)
 	if t.OfflineAfterSec == 0 {
 		t.OfflineAfterSec = d.OfflineAfterSec
 		changed = true

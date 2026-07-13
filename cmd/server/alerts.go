@@ -26,6 +26,14 @@ type Thresholds struct {
 	LoadWarn, LoadCrit float64 // 按 CPU 核心数倍率
 	ProcWarn           float64 // 进程数突增/突降比例阈值
 	OfflineAfter       time.Duration
+	// ---- API 业务监控阈值 ----
+	APIAvailWarn, APIAvailCrit         float64 // 可用率 %（低于阈值告警）
+	APIAvgRespWarn, APIAvgRespCrit     float64 // 平均响应 ms
+	APIP95RespWarn, APIP95RespCrit     float64 // P95 响应 ms
+	APIThroughputWarn, APIThroughputCrit float64 // 吞吐量 req/s（低于阈值告警）
+	// ---- 编排定时任务阈值 ----
+	TaskFailWarn, TaskFailCrit     int     // 失败次数
+	TaskTimeoutWarn, TaskTimeoutCrit float64 // 超时时长 s
 }
 
 // DefaultThresholds returns the Standard profile (recommended defaults).
@@ -47,6 +55,12 @@ func ConservativeThresholds() Thresholds {
 		LoadWarn: 2.0, LoadCrit: 4.0,
 		ProcWarn: 0.3,
 		OfflineAfter: 30 * time.Second,
+		APIAvailWarn: 99.5, APIAvailCrit: 98.0,
+		APIAvgRespWarn: 300, APIAvgRespCrit: 1000,
+		APIP95RespWarn: 500, APIP95RespCrit: 2000,
+		APIThroughputWarn: 200, APIThroughputCrit: 50,
+		TaskFailWarn: 1, TaskFailCrit: 3,
+		TaskTimeoutWarn: 30, TaskTimeoutCrit: 120,
 	}
 }
 
@@ -63,6 +77,12 @@ func StandardThresholds() Thresholds {
 		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn: 0.5,
 		OfflineAfter: 60 * time.Second,
+		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
+		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
+		APIP95RespWarn: 1000, APIP95RespCrit: 5000,
+		APIThroughputWarn: 100, APIThroughputCrit: 10,
+		TaskFailWarn: 1, TaskFailCrit: 5,
+		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
 	}
 }
 
@@ -79,6 +99,12 @@ func RelaxedThresholds() Thresholds {
 		LoadWarn: 6.0, LoadCrit: 12.0,
 		ProcWarn: 0.8,
 		OfflineAfter: 120 * time.Second,
+		APIAvailWarn: 95.0, APIAvailCrit: 90.0,
+		APIAvgRespWarn: 1000, APIAvgRespCrit: 5000,
+		APIP95RespWarn: 2000, APIP95RespCrit: 10000,
+		APIThroughputWarn: 50, APIThroughputCrit: 5,
+		TaskFailWarn: 3, TaskFailCrit: 10,
+		TaskTimeoutWarn: 120, TaskTimeoutCrit: 600,
 	}
 }
 
@@ -88,7 +114,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | api | task
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -102,6 +128,19 @@ func classify(v, warn, crit float64) string {
 	case v >= crit:
 		return "critical"
 	case v >= warn:
+		return "warning"
+	default:
+		return ""
+	}
+}
+
+// classifyLow returns the alert level for "lower is worse" metrics (availability,
+// throughput) where the value dropping below the threshold is the concern.
+func classifyLow(v, warn, crit float64) string {
+	switch {
+	case v <= crit:
+		return "critical"
+	case v <= warn:
 		return "warning"
 	default:
 		return ""
@@ -234,6 +273,89 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 						Value:     change * 100, Timestamp: now,
 					})
 				}
+			}
+		}
+	}
+
+	// ---- API 业务监控告警（每个主机可独立上报 API 指标）----
+	for _, h := range hosts {
+		if h.Latest == nil {
+			continue
+		}
+		m := h.Latest
+		// 接口可用率（低于阈值告警）
+		if m.APIAvailPercent > 0 {
+			if lv := classifyLow(m.APIAvailPercent, t.APIAvailWarn, t.APIAvailCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
+					Scope: "availability",
+					Message:   Tz("alert.api_avail_low", m.APIAvailPercent),
+					Value:     m.APIAvailPercent, Timestamp: now,
+				})
+			}
+		}
+		// 平均响应时间
+		if m.APIAvgRespMs > 0 {
+			if lv := classify(m.APIAvgRespMs, t.APIAvgRespWarn, t.APIAvgRespCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
+					Scope: "avg_resp",
+					Message:   Tz("alert.api_avg_resp_high", m.APIAvgRespMs),
+					Value:     m.APIAvgRespMs, Timestamp: now,
+				})
+			}
+		}
+		// P95 响应时间
+		if m.APIP95RespMs > 0 {
+			if lv := classify(m.APIP95RespMs, t.APIP95RespWarn, t.APIP95RespCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
+					Scope: "p95_resp",
+					Message:   Tz("alert.api_p95_resp_high", m.APIP95RespMs),
+					Value:     m.APIP95RespMs, Timestamp: now,
+				})
+			}
+		}
+		// 吞吐量（低于阈值告警）
+		if m.APIThroughputRPS > 0 {
+			if lv := classifyLow(m.APIThroughputRPS, t.APIThroughputWarn, t.APIThroughputCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
+					Scope: "throughput",
+					Message:   Tz("alert.api_throughput_low", m.APIThroughputRPS),
+					Value:     m.APIThroughputRPS, Timestamp: now,
+				})
+			}
+		}
+	}
+
+	// ---- 编排定时任务告警 ----
+	for _, h := range hosts {
+		if h.Latest == nil {
+			continue
+		}
+		m := h.Latest
+		// 执行失败次数
+		if m.TaskFailCount > 0 && t.TaskFailWarn > 0 {
+			fc := float64(m.TaskFailCount)
+			if lv := classify(fc, float64(t.TaskFailWarn), float64(t.TaskFailCrit)); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "task",
+					Scope: "fail_count",
+					Message:   Tz("alert.task_fail", m.TaskFailCount),
+					Value:     fc, Timestamp: now,
+				})
+			}
+		}
+		// 超时时长
+		if m.TaskTimeoutSec > 0 {
+			if lv := classify(m.TaskTimeoutSec, t.TaskTimeoutWarn, t.TaskTimeoutCrit); lv != "" {
+				alerts = append(alerts, Alert{
+					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "task",
+					Scope: "timeout",
+					Message:   Tz("alert.task_timeout", m.TaskTimeoutSec),
+					Value:     m.TaskTimeoutSec, Timestamp: now,
+				})
 			}
 		}
 	}
