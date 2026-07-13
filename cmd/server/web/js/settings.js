@@ -103,8 +103,11 @@ async function loadThresholds() {
     $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
     $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
     $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
+    $("gpuTempWarn").value = td(t.gpu_temp_warn, 85); $("gpuTempCrit").value = td(t.gpu_temp_crit, 95);
+    $("gpuMemWarn").value = td(t.gpu_mem_warn, 90); $("gpuMemCrit").value = td(t.gpu_mem_crit, 97);
     $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
     $("procWarn").value = td(t.proc_warn, 0.5);
+    $("connWarn").value = td(t.conn_warn, 5000); $("connCrit").value = td(t.conn_crit, 10000);
     $("offlineSec").value = td(t.offline_after_sec, 60);
     // 拨测监控阈值
     $("checkPingLossWarn").value = td(t.check_ping_loss_warn, 10); $("checkPingLossCrit").value = td(t.check_ping_loss_crit, 30);
@@ -140,8 +143,11 @@ async function saveThresholds() {
         diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
         iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
         gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
+        gpu_temp_warn: num("gpuTempWarn"), gpu_temp_crit: num("gpuTempCrit"),
+        gpu_mem_warn: num("gpuMemWarn"), gpu_mem_crit: num("gpuMemCrit"),
         load_warn: num("loadWarn"), load_crit: num("loadCrit"),
         proc_warn: num("procWarn"),
+        conn_warn: Math.round(num("connWarn")), conn_crit: Math.round(num("connCrit")),
         offline_after_sec: Math.round(num("offlineSec")),
         // 拨测监控
         check_ping_loss_warn: num("checkPingLossWarn"), check_ping_loss_crit: num("checkPingLossCrit"),
@@ -178,7 +184,6 @@ function switchNotifyTab(tabId) {
 }
 
 function collectSettings() {
-  const num = id => parseFloat($(id).value) || 0;
   return {
     alerts_enabled: $("alertsEnabled").checked,
     feishu: { enabled: $("feishuEnabled").checked, webhook: $("feishuWebhook").value.trim() },
@@ -220,37 +225,19 @@ function collectSettings() {
       tts_code: $("voiceCallTtsCode").value.trim(),
       tts_param: $("voiceCallTtsParam").value.trim(),
       app_id: $("voiceCallAppId").value.trim()
-    },
-    thresholds: {
-      cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
-      mem_warn: num("memWarn"), mem_crit: num("memCrit"),
-      disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
-      diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
-      iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
-      gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
-      load_warn: num("loadWarn"), load_crit: num("loadCrit"),
-      proc_warn: num("procWarn"),
-      offline_after_sec: Math.round(num("offlineSec")),
-      // API 业务监控
-      api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
-      api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
-      api_p95_resp_warn: num("apiP95RespWarn"), api_p95_resp_crit: num("apiP95RespCrit"),
-      api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
-      // 编排定时任务
-      task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
-      task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit"),
-      // 端口转发监控
-      forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
-      forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
-      forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
-      forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit")
     }
+    // 注意：告警阈值由独立的「告警阈值」Tab（saveThresholds）管理，此处不再序列化 thresholds，
+    // 否则保存告警通知设置会用一份不完整的阈值覆盖掉 check_*/GPU 温度·显存/连接数 等字段（被后端
+    // 零值回填成默认值 → 静默丢失用户自定义阈值）。saveSettings 改为「拉全量→仅覆盖通知字段→回存」。
   };
 }
 async function saveSettings() {
   await withLoading("saveBtn", async () => {
     try {
-      const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
+      // 拉全量配置，仅覆盖告警通知字段后回存，避免清空 thresholds 等由其它 Tab 管理的设置。
+      const full = await fetch(`${API}/config`).then(r => r.json());
+      Object.assign(full, collectSettings());
+      const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(full) });
       if (r.ok) { toast(I18N.t("toast.config_saved"), "ok"); $("settingsMask").classList.remove("show"); } else { toast(I18N.t("toast.save_failed"), "err"); }
     } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
   });

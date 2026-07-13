@@ -17,35 +17,38 @@ import (
 //   - StandardThresholds()    — recommended default, balanced noise/sensitivity
 //   - RelaxedThresholds()     — low-noise, for dev/staging environments
 type Thresholds struct {
-	CPUWarn, CPUCrit   float64
-	MemWarn, MemCrit   float64
-	DiskWarn, DiskCrit float64
-	DiskIOWarn, DiskIOCrit float64
-	IOPSWarn, IOPSCrit float64
-	GPUWarn, GPUCrit   float64
-	LoadWarn, LoadCrit float64 // 按 CPU 核心数倍率
-	ProcWarn           float64 // 进程数突增/突降比例阈值
-	OfflineAfter       time.Duration
+	CPUWarn, CPUCrit         float64
+	MemWarn, MemCrit         float64
+	DiskWarn, DiskCrit       float64
+	DiskIOWarn, DiskIOCrit   float64
+	IOPSWarn, IOPSCrit       float64
+	GPUWarn, GPUCrit         float64 // GPU 核心算力使用率 %
+	GPUTempWarn, GPUTempCrit float64 // GPU 温度 °C
+	GPUMemWarn, GPUMemCrit   float64 // GPU 显存占用率 %
+	LoadWarn, LoadCrit       float64 // 按 CPU 核心数倍率
+	ProcWarn                 float64 // 进程数突增/突降比例阈值
+	ConnWarn, ConnCrit       float64 // 主机连接数（TCP+UDP 总数）
+	OfflineAfter             time.Duration
 	// ---- 拨测监控阈值（Ping / TCP / HTTP / 进程）----
-	CheckPingLossWarn, CheckPingLossCrit         float64 // 丢包率 %
-	CheckPingLatencyWarn, CheckPingLatencyCrit   float64 // 平均延迟 ms
-	CheckTCPTimeoutWarn, CheckTCPTimeoutCrit     float64 // 连接超时 ms
-	CheckHTTPRespWarn, CheckHTTPRespCrit         float64 // 响应时间 ms
-	CheckHTTPStatusWarn, CheckHTTPStatusCrit     int     // 非 2xx 次数
-	CheckProcFailWarn, CheckProcFailCrit         int     // 进程存活失败次数
+	CheckPingLossWarn, CheckPingLossCrit       float64 // 丢包率 %
+	CheckPingLatencyWarn, CheckPingLatencyCrit float64 // 平均延迟 ms
+	CheckTCPTimeoutWarn, CheckTCPTimeoutCrit   float64 // 连接超时 ms
+	CheckHTTPRespWarn, CheckHTTPRespCrit       float64 // 响应时间 ms
+	CheckHTTPStatusWarn, CheckHTTPStatusCrit   int     // 非 2xx 次数
+	CheckProcFailWarn, CheckProcFailCrit       int     // 进程存活失败次数
 	// ---- API 业务监控阈值 ----
-	APIAvailWarn, APIAvailCrit         float64 // 可用率 %（低于阈值告警）
-	APIAvgRespWarn, APIAvgRespCrit     float64 // 平均响应 ms
-	APIP95RespWarn, APIP95RespCrit     float64 // P95 响应 ms
+	APIAvailWarn, APIAvailCrit           float64 // 可用率 %（低于阈值告警）
+	APIAvgRespWarn, APIAvgRespCrit       float64 // 平均响应 ms
+	APIP95RespWarn, APIP95RespCrit       float64 // P95 响应 ms
 	APIThroughputWarn, APIThroughputCrit float64 // 吞吐量 req/s（低于阈值告警）
 	// ---- 编排定时任务阈值 ----
-	TaskFailWarn, TaskFailCrit     int     // 失败次数
+	TaskFailWarn, TaskFailCrit       int     // 失败次数
 	TaskTimeoutWarn, TaskTimeoutCrit float64 // 超时时长 s
 	// ---- 端口转发监控阈值 ----
-	ForwardConnWarn, ForwardConnCrit   int     // 活跃连接数
-	ForwardBwWarn, ForwardBwCrit       float64 // 带宽使用率 %
-	ForwardErrWarn, ForwardErrCrit     float64 // 错误率 %
-	ForwardLatWarn, ForwardLatCrit     float64 // 平均延迟 ms
+	ForwardConnWarn, ForwardConnCrit int     // 活跃连接数
+	ForwardBwWarn, ForwardBwCrit     float64 // 带宽使用率 %
+	ForwardErrWarn, ForwardErrCrit   float64 // 错误率 %
+	ForwardLatWarn, ForwardLatCrit   float64 // 平均延迟 ms
 }
 
 // DefaultThresholds returns the Standard profile (recommended defaults).
@@ -64,9 +67,12 @@ func ConservativeThresholds() Thresholds {
 		DiskIOWarn: 70, DiskIOCrit: 85,
 		IOPSWarn: 20000, IOPSCrit: 50000,
 		GPUWarn: 70, GPUCrit: 85,
+		GPUTempWarn: 80, GPUTempCrit: 90,
+		GPUMemWarn: 85, GPUMemCrit: 95,
 		LoadWarn: 2.0, LoadCrit: 4.0,
 		ProcWarn: 0.3,
-		OfflineAfter: 30 * time.Second,
+		ConnWarn: 2000, ConnCrit: 5000,
+		OfflineAfter:      30 * time.Second,
 		CheckPingLossWarn: 5, CheckPingLossCrit: 15,
 		CheckPingLatencyWarn: 50, CheckPingLatencyCrit: 200,
 		CheckTCPTimeoutWarn: 500, CheckTCPTimeoutCrit: 2000,
@@ -96,9 +102,12 @@ func StandardThresholds() Thresholds {
 		DiskIOWarn: 80, DiskIOCrit: 95,
 		IOPSWarn: 50000, IOPSCrit: 100000,
 		GPUWarn: 80, GPUCrit: 95,
+		GPUTempWarn: 85, GPUTempCrit: 95,
+		GPUMemWarn: 90, GPUMemCrit: 97,
 		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn: 0.5,
-		OfflineAfter: 60 * time.Second,
+		ConnWarn: 5000, ConnCrit: 10000,
+		OfflineAfter:      60 * time.Second,
 		CheckPingLossWarn: 10, CheckPingLossCrit: 30,
 		CheckPingLatencyWarn: 100, CheckPingLatencyCrit: 500,
 		CheckTCPTimeoutWarn: 1000, CheckTCPTimeoutCrit: 5000,
@@ -128,9 +137,12 @@ func RelaxedThresholds() Thresholds {
 		DiskIOWarn: 90, DiskIOCrit: 98,
 		IOPSWarn: 100000, IOPSCrit: 200000,
 		GPUWarn: 90, GPUCrit: 98,
+		GPUTempWarn: 90, GPUTempCrit: 98,
+		GPUMemWarn: 95, GPUMemCrit: 99,
 		LoadWarn: 6.0, LoadCrit: 12.0,
 		ProcWarn: 0.8,
-		OfflineAfter: 120 * time.Second,
+		ConnWarn: 10000, ConnCrit: 20000,
+		OfflineAfter:      120 * time.Second,
 		CheckPingLossWarn: 20, CheckPingLossCrit: 50,
 		CheckPingLatencyWarn: 300, CheckPingLatencyCrit: 1000,
 		CheckTCPTimeoutWarn: 3000, CheckTCPTimeoutCrit: 10000,
@@ -156,7 +168,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | api | task | forward
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | conn | api | task | forward
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`
@@ -216,15 +228,15 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 		if lv := classify(m.CPUPercent, t.CPUWarn, t.CPUCrit); lv != "" {
 			alerts = append(alerts, Alert{
 				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "cpu",
-				Message:   Tz("alert.cpu_high", m.CPUPercent, 100-m.CPUPercent),
-				Value:     m.CPUPercent, Timestamp: now,
+				Message: Tz("alert.cpu_high", m.CPUPercent, 100-m.CPUPercent),
+				Value:   m.CPUPercent, Timestamp: now,
 			})
 		}
 		if lv := classify(m.MemPercent, t.MemWarn, t.MemCrit); lv != "" {
 			alerts = append(alerts, Alert{
 				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "memory",
-				Message:   Tz("alert.mem_high", m.MemPercent, fmtBytes(m.MemTotal-m.MemUsed)),
-				Value:     m.MemPercent, Timestamp: now,
+				Message: Tz("alert.mem_high", m.MemPercent, fmtBytes(m.MemTotal-m.MemUsed)),
+				Value:   m.MemPercent, Timestamp: now,
 			})
 		}
 		if len(m.Disks) > 0 {
@@ -232,16 +244,16 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				if lv := classify(d.Percent, t.DiskWarn, t.DiskCrit); lv != "" {
 					alerts = append(alerts, Alert{
 						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "disk", Scope: d.Path,
-						Message:   Tz("alert.disk_path_high", d.Path, d.Percent, fmtBytes(d.Total-d.Used)),
-						Value:     d.Percent, Timestamp: now,
+						Message: Tz("alert.disk_path_high", d.Path, d.Percent, fmtBytes(d.Total-d.Used)),
+						Value:   d.Percent, Timestamp: now,
 					})
 				}
 			}
 		} else if lv := classify(m.DiskPercent, t.DiskWarn, t.DiskCrit); lv != "" {
 			alerts = append(alerts, Alert{
 				HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "disk",
-				Message:   Tz("alert.disk_high", m.DiskPercent, fmtBytes(m.DiskTotal-m.DiskUsed)),
-				Value:     m.DiskPercent, Timestamp: now,
+				Message: Tz("alert.disk_high", m.DiskPercent, fmtBytes(m.DiskTotal-m.DiskUsed)),
+				Value:   m.DiskPercent, Timestamp: now,
 			})
 		}
 		// System load alert (5-min load exceeding core count × threshold)
@@ -255,24 +267,42 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				}
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "load",
-					Message:   Tz("alert.load_high", m.Load5, m.CPUCores, loadWarn),
-					Value:     m.Load5, Timestamp: now,
+					Message: Tz("alert.load_high", m.Load5, m.CPUCores, loadWarn),
+					Value:   m.Load5, Timestamp: now,
 				})
 			}
 		}
-		// GPU alert (configurable thresholds)
+		// GPU alerts (configurable): 核心算力使用率 / 温度 / 显存占用率。三项用不同 Scope
+		// （name、name/temp、name/mem），否则 alertKey=host/gpu/name 冲突会互相覆盖。
 		for _, g := range m.GPUs {
-			util := g.UtilPercent
-			if lv := classify(util, t.GPUWarn, t.GPUCrit); lv != "" {
+			if lv := classify(g.UtilPercent, t.GPUWarn, t.GPUCrit); lv != "" {
 				tempStr := ""
 				if g.Temp > 0 {
 					tempStr = Tz("alert.gpu_temp", int(g.Temp))
 				}
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "gpu", Scope: g.Name,
-					Message:   Tz("alert.gpu_high", g.Name, util, tempStr),
-					Value:     util, Timestamp: now,
+					Message: Tz("alert.gpu_high", g.Name, g.UtilPercent, tempStr),
+					Value:   g.UtilPercent, Timestamp: now,
 				})
+			}
+			if g.Temp > 0 && t.GPUTempWarn > 0 {
+				if lv := classify(g.Temp, t.GPUTempWarn, t.GPUTempCrit); lv != "" {
+					alerts = append(alerts, Alert{
+						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "gpu", Scope: g.Name + "/temp",
+						Message: Tz("alert.gpu_temp_high", g.Name, int(g.Temp)),
+						Value:   g.Temp, Timestamp: now,
+					})
+				}
+			}
+			if g.MemPercent > 0 && t.GPUMemWarn > 0 {
+				if lv := classify(g.MemPercent, t.GPUMemWarn, t.GPUMemCrit); lv != "" {
+					alerts = append(alerts, Alert{
+						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "gpu", Scope: g.Name + "/mem",
+						Message: Tz("alert.gpu_mem_high", g.Name, g.MemPercent, fmtBytes(g.MemUsed), fmtBytes(g.MemTotal)),
+						Value:   g.MemPercent, Timestamp: now,
+					})
+				}
 			}
 		}
 		// Disk IO alert (>80% warning, >90% critical)
@@ -282,7 +312,7 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "diskio",
 					Message: Tz("alert.diskio_high", m.DiskIOUtilPercent,
 						fmtRateBytes(m.DiskReadRate), fmtRateBytes(m.DiskWriteRate)),
-					Value:     m.DiskIOUtilPercent, Timestamp: now,
+					Value: m.DiskIOUtilPercent, Timestamp: now,
 				})
 			}
 		}
@@ -293,7 +323,7 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "iops",
 					Message: Tz("alert.iops_high", totalIOPS, m.DiskReadIOPS, m.DiskWriteIOPS),
-					Value:     totalIOPS, Timestamp: now,
+					Value:   totalIOPS, Timestamp: now,
 				})
 			}
 		}
@@ -308,11 +338,33 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 				change := math.Abs(float64(m.ProcCount)-baseline) / baseline
 				if change >= t.ProcWarn {
 					dir := "increase"
-					if float64(m.ProcCount) < baseline { dir = "decrease" }
+					if float64(m.ProcCount) < baseline {
+						dir = "decrease"
+					}
 					alerts = append(alerts, Alert{
 						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: "warning", Type: "proc",
 						Message: Tz("alert.proc_anomaly", m.ProcCount, baseline, change*100, dir),
-						Value:     change * 100, Timestamp: now,
+						Value:   change * 100, Timestamp: now,
+					})
+				}
+			}
+		}
+		// Host connection count (TCP+UDP total): catches连接泄漏 / TIME_WAIT 风暴 / fd 耗尽。
+		// 优先用新采集的分状态计数求和，回退到旧的 established 标量（兼容未升级 Agent）。
+		if t.ConnWarn > 0 {
+			totalConns := m.NetConns
+			if len(m.Conns) > 0 {
+				totalConns = 0
+				for _, c := range m.Conns {
+					totalConns += c.Count
+				}
+			}
+			if totalConns > 0 {
+				if lv := classify(float64(totalConns), t.ConnWarn, t.ConnCrit); lv != "" {
+					alerts = append(alerts, Alert{
+						HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "conn",
+						Message: Tz("alert.conn_high", totalConns),
+						Value:   float64(totalConns), Timestamp: now,
 					})
 				}
 			}
@@ -330,9 +382,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classifyLow(m.APIAvailPercent, t.APIAvailWarn, t.APIAvailCrit); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
-					Scope: "availability",
-					Message:   Tz("alert.api_avail_low", m.APIAvailPercent),
-					Value:     m.APIAvailPercent, Timestamp: now,
+					Scope:   "availability",
+					Message: Tz("alert.api_avail_low", m.APIAvailPercent),
+					Value:   m.APIAvailPercent, Timestamp: now,
 				})
 			}
 		}
@@ -341,9 +393,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classify(m.APIAvgRespMs, t.APIAvgRespWarn, t.APIAvgRespCrit); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
-					Scope: "avg_resp",
-					Message:   Tz("alert.api_avg_resp_high", m.APIAvgRespMs),
-					Value:     m.APIAvgRespMs, Timestamp: now,
+					Scope:   "avg_resp",
+					Message: Tz("alert.api_avg_resp_high", m.APIAvgRespMs),
+					Value:   m.APIAvgRespMs, Timestamp: now,
 				})
 			}
 		}
@@ -352,9 +404,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classify(m.APIP95RespMs, t.APIP95RespWarn, t.APIP95RespCrit); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
-					Scope: "p95_resp",
-					Message:   Tz("alert.api_p95_resp_high", m.APIP95RespMs),
-					Value:     m.APIP95RespMs, Timestamp: now,
+					Scope:   "p95_resp",
+					Message: Tz("alert.api_p95_resp_high", m.APIP95RespMs),
+					Value:   m.APIP95RespMs, Timestamp: now,
 				})
 			}
 		}
@@ -363,9 +415,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classifyLow(m.APIThroughputRPS, t.APIThroughputWarn, t.APIThroughputCrit); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "api",
-					Scope: "throughput",
-					Message:   Tz("alert.api_throughput_low", m.APIThroughputRPS),
-					Value:     m.APIThroughputRPS, Timestamp: now,
+					Scope:   "throughput",
+					Message: Tz("alert.api_throughput_low", m.APIThroughputRPS),
+					Value:   m.APIThroughputRPS, Timestamp: now,
 				})
 			}
 		}
@@ -383,9 +435,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classify(fc, float64(t.TaskFailWarn), float64(t.TaskFailCrit)); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "task",
-					Scope: "fail_count",
-					Message:   Tz("alert.task_fail", m.TaskFailCount),
-					Value:     fc, Timestamp: now,
+					Scope:   "fail_count",
+					Message: Tz("alert.task_fail", m.TaskFailCount),
+					Value:   fc, Timestamp: now,
 				})
 			}
 		}
@@ -394,9 +446,9 @@ func Evaluate(hosts []*Host, t Thresholds) []Alert {
 			if lv := classify(m.TaskTimeoutSec, t.TaskTimeoutWarn, t.TaskTimeoutCrit); lv != "" {
 				alerts = append(alerts, Alert{
 					HostID: h.ID, Hostname: h.Hostname, IP: h.IP, Level: lv, Type: "task",
-					Scope: "timeout",
-					Message:   Tz("alert.task_timeout", m.TaskTimeoutSec),
-					Value:     m.TaskTimeoutSec, Timestamp: now,
+					Scope:   "timeout",
+					Message: Tz("alert.task_timeout", m.TaskTimeoutSec),
+					Value:   m.TaskTimeoutSec, Timestamp: now,
 				})
 			}
 		}
@@ -423,7 +475,7 @@ func EvaluateForward(snap ForwardSnapshot, t Thresholds) []Alert {
 			alerts = append(alerts, Alert{
 				Hostname: "Forward", Level: lv, Type: "forward", Scope: "connections",
 				Message: Tz("alert.forward_conn", snap.ActiveSessions, snap.MaxSessions),
-				Value: fc, Timestamp: now,
+				Value:   fc, Timestamp: now,
 			})
 		}
 	}
@@ -435,7 +487,7 @@ func EvaluateForward(snap ForwardSnapshot, t Thresholds) []Alert {
 			alerts = append(alerts, Alert{
 				Hostname: "Forward", Level: lv, Type: "forward", Scope: "bandwidth",
 				Message: Tz("alert.forward_bw", bwPct, snap.BandwidthBps/1e6),
-				Value: bwPct, Timestamp: now,
+				Value:   bwPct, Timestamp: now,
 			})
 		}
 	}
@@ -446,7 +498,7 @@ func EvaluateForward(snap ForwardSnapshot, t Thresholds) []Alert {
 			alerts = append(alerts, Alert{
 				Hostname: "Forward", Level: lv, Type: "forward", Scope: "errors",
 				Message: Tz("alert.forward_err", errPct, snap.Errors),
-				Value: errPct, Timestamp: now,
+				Value:   errPct, Timestamp: now,
 			})
 		}
 	}
@@ -456,7 +508,7 @@ func EvaluateForward(snap ForwardSnapshot, t Thresholds) []Alert {
 			alerts = append(alerts, Alert{
 				Hostname: "Forward", Level: lv, Type: "forward", Scope: "latency",
 				Message: Tz("alert.forward_lat", snap.AvgLatencyMs),
-				Value: snap.AvgLatencyMs, Timestamp: now,
+				Value:   snap.AvgLatencyMs, Timestamp: now,
 			})
 		}
 	}

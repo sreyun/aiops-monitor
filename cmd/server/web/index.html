@@ -213,12 +213,18 @@
                 <div class="th-input-row"><input type="text" id="diskioWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="diskioCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
               <div class="threshold-field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
                 <div class="th-input-row"><input type="text" id="iopsWarn" class="mono" placeholder="50000"><input type="text" id="iopsCrit" class="mono" placeholder="100000"></div></div>
-              <div class="threshold-field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
+              <div class="threshold-field"><label data-i18n="settings.gpu_thresh">GPU 核心算力 警告 / 严重（%）</label>
                 <div class="th-input-row"><input type="text" id="gpuWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="gpuCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.gpu_temp_thresh">GPU 温度 警告 / 严重（℃）</label>
+                <div class="th-input-row"><input type="text" id="gpuTempWarn" class="mono" placeholder="85"><span class="unit">℃</span><input type="text" id="gpuTempCrit" class="mono" placeholder="95"><span class="unit">℃</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.gpu_mem_thresh">GPU 显存占用 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="gpuMemWarn" class="mono" placeholder="90"><span class="unit">%</span><input type="text" id="gpuMemCrit" class="mono" placeholder="97"><span class="unit">%</span></div></div>
               <div class="threshold-field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（x核心数）</label>
                 <div class="th-input-row"><input type="text" id="loadWarn" class="mono" placeholder="4.0"><input type="text" id="loadCrit" class="mono" placeholder="8.0"></div></div>
               <div class="threshold-field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
                 <div class="th-input-row"><input type="text" id="procWarn" class="mono" placeholder="0.5"></div></div>
+              <div class="threshold-field"><label data-i18n="settings.conn_thresh">主机连接数 警告 / 严重（TCP+UDP）</label>
+                <div class="th-input-row"><input type="text" id="connWarn" class="mono" placeholder="5000"><input type="text" id="connCrit" class="mono" placeholder="10000"></div></div>
               <div class="threshold-field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
                 <div class="th-input-row"><input type="text" id="offlineSec" class="mono" placeholder="60"><span class="unit">s</span></div></div>
             </div>
@@ -1412,7 +1418,7 @@
   <div class="modal">
     <div class="modal-head"><h3 data-i18n="sre.ai_settings">AI 设置</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span>启用 AI Provider（仅两种通用接口:OpenAI 兼容 / Anthropic,按端点自动识别）</span></label>
+      <label class="switch" style="margin-bottom:10px"><input type="checkbox" id="aiEnabled"> <span>启用 AI Provider（OpenAI 兼容 / Anthropic，按端点自动识别）</span></label>
 
       <!-- 对话模型卡片 -->
       <div class="ai-card">
@@ -1459,7 +1465,7 @@
           </div>
         </div>
         <div class="ai-card-body" id="embedCardBody" style="display:none">
-          <div class="hint" style="margin-bottom:8px">留空则复用上方 Endpoint / Key。走通用 OpenAI 兼容 <code>/embeddings</code> 接口，不再绑定百炼。模型需输出 <b>1536</b> 维（如 text-embedding-3-small；text-embedding-3-large 可用维度参数）。若全部留空且主端点为百炼，则自动沿用百炼 text-embedding-v2。</div>
+          <div class="hint" style="margin-bottom:8px">留空则复用上方 Endpoint / Key，走通用 OpenAI 兼容 <code>/embeddings</code> 接口。模型须输出 <b>1536</b> 维（如 text-embedding-3-small）。主端点为百炼且此处全空时，自动沿用 text-embedding-v2。</div>
           <div class="field"><label>嵌入 Endpoint</label><input type="text" id="embedEndpoint" placeholder="留空=复用上方 Endpoint；或 https://api.openai.com/v1"></div>
           <div class="field"><label>嵌入 API Key</label><input type="password" id="embedKey" autocomplete="off" placeholder="留空=复用上方 API Key"></div>
           <div class="grid2" style="align-items:end">
@@ -1473,7 +1479,7 @@
         </div>
       </div>
 
-      <div class="hint" style="margin-top:8px">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 后会自动获取该 Provider 的可用模型(下拉选择 / 搜索),也可手动输入模型名;无内置预设模型。不启用时用内置启发式引擎,开箱即用。</div>
+      <div class="hint" style="margin-top:8px">按 Endpoint 自动识别两类接口：<b>OpenAI 兼容</b>（OpenAI / DeepSeek / Ollama / 百炼等）与 <b>Anthropic</b>（Claude）。填好 Endpoint + Key 后自动拉取可用模型（下拉 / 搜索），也可手动输入。未启用时用内置启发式引擎，开箱即用。</div>
 
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
       <div class="ai-term-access">
@@ -1481,7 +1487,7 @@
           <span>🖥️ AI 终端只读巡检权限 <b id="aiTermStateLabel" class="ai-term-state off">未开启</b></span>
           <button class="btn sm" id="aiTermToggleBtn" type="button">开启</button>
         </div>
-        <div class="hint ai-term-warn">⚠️ 开启后 AI 可连接终端、执行<b>只读</b>诊断命令(top / df / ps / 日志等)替代人工巡检排查;<b>严禁任何增、删、改、隐藏文件或程序</b>等风险操作,仅能查询。此为高风险授权,开启需输入<b>终端连接密码</b>。</div>
+        <div class="hint ai-term-warn">⚠️ 开启后 AI 可连终端执行<b>只读</b>诊断命令（top / df / ps / 日志等）替代人工排查，仅查询、<b>不做任何增删改</b>。高风险授权，开启需输入<b>终端连接密码</b>。</div>
         <div id="aiTermPwRow" class="ai-term-pw" style="display:none">
           <input type="password" id="aiTermPw" autocomplete="off" placeholder="输入终端连接密码以开启">
           <button class="btn primary sm" id="aiTermConfirmBtn" type="button">确认开启</button>

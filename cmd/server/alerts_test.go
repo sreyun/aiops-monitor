@@ -9,9 +9,9 @@ import (
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name       string
-		v, w, c    float64
-		want       string
+		name    string
+		v, w, c float64
+		want    string
 	}{
 		{"below warn", 50, 80, 90, ""},
 		{"at warn", 80, 80, 90, "warning"},
@@ -42,6 +42,15 @@ func TestDefaultThresholds(t *testing.T) {
 	}
 	if th.OfflineAfter != 60*time.Second {
 		t.Errorf("offline after wrong: %v", th.OfflineAfter)
+	}
+	if th.GPUTempWarn != 85 || th.GPUTempCrit != 95 {
+		t.Errorf("gpu temp thresholds wrong: warn=%v crit=%v", th.GPUTempWarn, th.GPUTempCrit)
+	}
+	if th.GPUMemWarn != 90 || th.GPUMemCrit != 97 {
+		t.Errorf("gpu mem thresholds wrong: warn=%v crit=%v", th.GPUMemWarn, th.GPUMemCrit)
+	}
+	if th.ConnWarn != 5000 || th.ConnCrit != 10000 {
+		t.Errorf("conn thresholds wrong: warn=%v crit=%v", th.ConnWarn, th.ConnCrit)
 	}
 	// Verify StandardThresholds is the same as DefaultThresholds
 	st := StandardThresholds()
@@ -188,6 +197,75 @@ func TestEvaluate(t *testing.T) {
 			t.Errorf("expected load alert, got %+v", alerts)
 		}
 	})
+
+	// GPU util/temp/mem must produce three separate alerts with DISTINCT scopes,
+	// else alertKey=host/gpu/<name> collides and they overwrite each other.
+	t.Run("gpu util/temp/vram alerts have distinct scopes", func(t *testing.T) {
+		h := mkHost("h1", "node-1", now, shared.Metrics{
+			CPUCores: 4,
+			GPUs:     []shared.GPUInfo{{Name: "GPU0", UtilPercent: 90, Temp: 96, MemPercent: 92, MemUsed: 8 << 30, MemTotal: 8 << 30}},
+		})
+		alerts := Evaluate([]*Host{h}, th)
+		scopes := map[string]string{}
+		for _, a := range alerts {
+			if a.Type == "gpu" {
+				scopes[a.Scope] = a.Level
+			}
+		}
+		if len(scopes) != 3 {
+			t.Fatalf("expected 3 distinct gpu scopes, got %d: %v", len(scopes), scopes)
+		}
+		if scopes["GPU0"] != "warning" { // util 90: warn 80 / crit 95
+			t.Errorf("gpu util scope/level wrong: %v", scopes)
+		}
+		if scopes["GPU0/temp"] != "critical" { // temp 96: warn 85 / crit 95
+			t.Errorf("gpu temp scope/level wrong: %v", scopes)
+		}
+		if scopes["GPU0/mem"] != "warning" { // mem 92: warn 90 / crit 97
+			t.Errorf("gpu mem scope/level wrong: %v", scopes)
+		}
+	})
+
+	t.Run("host connection count alert (sum of Conns)", func(t *testing.T) {
+		h := mkHost("h1", "node-1", now, shared.Metrics{
+			CPUCores: 4,
+			Conns: []shared.ConnStat{
+				{Proto: "tcp", State: "ESTABLISHED", Count: 8000},
+				{Proto: "tcp", State: "TIME_WAIT", Count: 3000},
+				{Proto: "udp", Count: 500},
+			},
+		})
+		alerts := Evaluate([]*Host{h}, th)
+		var conn *Alert
+		for i := range alerts {
+			if alerts[i].Type == "conn" {
+				conn = &alerts[i]
+			}
+		}
+		if conn == nil {
+			t.Fatalf("expected conn alert, got %+v", alerts)
+		}
+		if conn.Value != 11500 { // 8000+3000+500
+			t.Errorf("expected total 11500, got %v", conn.Value)
+		}
+		if conn.Level != "critical" { // 11500 > ConnCrit 10000
+			t.Errorf("expected critical, got %s", conn.Level)
+		}
+	})
+
+	t.Run("host connection alert falls back to NetConns for legacy agents", func(t *testing.T) {
+		h := mkHost("h1", "node-1", now, shared.Metrics{CPUCores: 4, NetConns: 6000}) // no Conns array
+		alerts := Evaluate([]*Host{h}, th)
+		found := false
+		for _, a := range alerts {
+			if a.Type == "conn" && a.Value == 6000 && a.Level == "warning" { // 6000 > ConnWarn 5000
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected warning conn alert from NetConns fallback, got %+v", alerts)
+		}
+	})
 }
 
 func TestEvaluateSortOrder(t *testing.T) {
@@ -196,7 +274,7 @@ func TestEvaluateSortOrder(t *testing.T) {
 	// Two hosts: "zeta" has a warning, "alpha" has a critical. Critical must
 	// come first regardless of hostname; within the same level, alphabetical.
 	hosts := []*Host{
-		mkHost("h1", "zeta", now, shared.Metrics{CPUPercent: 85, CPUCores: 4}), // warning
+		mkHost("h1", "zeta", now, shared.Metrics{CPUPercent: 85, CPUCores: 4}),  // warning
 		mkHost("h2", "alpha", now, shared.Metrics{CPUPercent: 95, CPUCores: 4}), // critical
 	}
 	alerts := Evaluate(hosts, th)

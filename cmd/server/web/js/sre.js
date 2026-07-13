@@ -432,7 +432,7 @@ safeAddEventListener("playbookList", "click", e => {
 // ============ SRE 中枢：事件 / 自动修复 / SLO / 工单 ============
 let SRE_TAB = "incidents";
 let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [];
-const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","offline","check"];
+const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","conn","offline","check"];
 const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||esc(s);
 const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||esc(s);

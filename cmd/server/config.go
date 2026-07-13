@@ -82,9 +82,15 @@ type ThresholdConfig struct {
 	IOPSCrit        float64 `json:"iops_crit"`
 	GPUWarn         float64 `json:"gpu_warn"`
 	GPUCrit         float64 `json:"gpu_crit"`
-	LoadWarn        float64 `json:"load_warn"` // 按 CPU 核心数倍率，如 2.0 = 核心数×2
+	GPUTempWarn     float64 `json:"gpu_temp_warn"` // GPU 温度 警告 °C
+	GPUTempCrit     float64 `json:"gpu_temp_crit"` // GPU 温度 严重 °C
+	GPUMemWarn      float64 `json:"gpu_mem_warn"`  // GPU 显存占用 警告 %
+	GPUMemCrit      float64 `json:"gpu_mem_crit"`  // GPU 显存占用 严重 %
+	LoadWarn        float64 `json:"load_warn"`     // 按 CPU 核心数倍率，如 2.0 = 核心数×2
 	LoadCrit        float64 `json:"load_crit"`
 	ProcWarn        float64 `json:"proc_warn"` // 进程数突增/突降比例（如 0.5 = 50%）
+	ConnWarn        int     `json:"conn_warn"` // 主机连接数（TCP+UDP 总数）警告
+	ConnCrit        int     `json:"conn_crit"` // 主机连接数（TCP+UDP 总数）严重
 	OfflineAfterSec int     `json:"offline_after_sec"`
 	// ---- 拨测监控阈值（Ping / TCP / HTTP / 进程）----
 	CheckPingLossWarn    float64 `json:"check_ping_loss_warn"`    // Ping 丢包率 警告 %
@@ -132,8 +138,11 @@ func defaultThresholdConfig() ThresholdConfig {
 		DiskIOWarn: 80, DiskIOCrit: 95,
 		IOPSWarn: 50000, IOPSCrit: 100000,
 		GPUWarn: 80, GPUCrit: 95,
+		GPUTempWarn: 85, GPUTempCrit: 95,
+		GPUMemWarn: 90, GPUMemCrit: 97,
 		LoadWarn: 4.0, LoadCrit: 8.0,
-		ProcWarn:        0.5,
+		ProcWarn: 0.5,
+		ConnWarn: 5000, ConnCrit: 10000,
 		OfflineAfterSec: 60,
 		// 拨测监控默认阈值
 		CheckPingLossWarn: 10, CheckPingLossCrit: 30,
@@ -186,9 +195,21 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	fix(&t.IOPSCrit, d.IOPSCrit)
 	fix(&t.GPUWarn, d.GPUWarn)
 	fix(&t.GPUCrit, d.GPUCrit)
+	fix(&t.GPUTempWarn, d.GPUTempWarn)
+	fix(&t.GPUTempCrit, d.GPUTempCrit)
+	fix(&t.GPUMemWarn, d.GPUMemWarn)
+	fix(&t.GPUMemCrit, d.GPUMemCrit)
 	fix(&t.LoadWarn, d.LoadWarn)
 	fix(&t.LoadCrit, d.LoadCrit)
 	fix(&t.ProcWarn, d.ProcWarn)
+	if t.ConnWarn == 0 {
+		t.ConnWarn = d.ConnWarn
+		changed = true
+	}
+	if t.ConnCrit == 0 {
+		t.ConnCrit = d.ConnCrit
+		changed = true
+	}
 	fix(&t.CheckPingLossWarn, d.CheckPingLossWarn)
 	fix(&t.CheckPingLossCrit, d.CheckPingLossCrit)
 	fix(&t.CheckPingLatencyWarn, d.CheckPingLatencyWarn)
@@ -260,8 +281,11 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		DiskIOWarn: t.DiskIOWarn, DiskIOCrit: t.DiskIOCrit,
 		IOPSWarn: t.IOPSWarn, IOPSCrit: t.IOPSCrit,
 		GPUWarn: t.GPUWarn, GPUCrit: t.GPUCrit,
+		GPUTempWarn: t.GPUTempWarn, GPUTempCrit: t.GPUTempCrit,
+		GPUMemWarn: t.GPUMemWarn, GPUMemCrit: t.GPUMemCrit,
 		LoadWarn: t.LoadWarn, LoadCrit: t.LoadCrit,
-		ProcWarn:     t.ProcWarn,
+		ProcWarn: t.ProcWarn,
+		ConnWarn: float64(t.ConnWarn), ConnCrit: float64(t.ConnCrit),
 		OfflineAfter: time.Duration(t.OfflineAfterSec) * time.Second,
 		// 拨测监控
 		CheckPingLossWarn: t.CheckPingLossWarn, CheckPingLossCrit: t.CheckPingLossCrit,
