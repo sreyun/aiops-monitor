@@ -210,56 +210,86 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	// Lookup hostname when host_id is provided
-	var hostname string
+	// 收集组内旧规则（目标端口 / 主机 / 协议），并求最小端口作为整段平移的基准。
+	// 关键修复：此前把 req.TargetPort 直接套到组内每一条 → 整段塌成同一个端口、只剩一条能
+	// 绑定；改为「按最小端口平移」，保留各端口的相对偏移（TCP / UDP 通用）。
+	type oldRule struct {
+		target           int
+		hostID, hostname string
+		protocol         string
+	}
+	var olds []oldRule
+	oldStart := 0
+	for _, id := range s.forward.groupRuleIDs(gid) {
+		rule := s.forward.getRule(id)
+		if rule == nil {
+			continue
+		}
+		olds = append(olds, oldRule{rule.targetPort, rule.hostID, rule.hostname, rule.protocol})
+		if oldStart == 0 || rule.targetPort < oldStart {
+			oldStart = rule.targetPort
+		}
+	}
+	if len(olds) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+		return
+	}
+	// 可选：整组改到新主机。
+	newHost, newHostname := "", ""
 	if req.HostID != "" {
-		hostname = shortID(req.HostID)
+		newHost = req.HostID
+		newHostname = shortID(req.HostID)
 		for _, h := range s.store.ListHosts() {
 			if h.ID == req.HostID {
-				hostname = h.Hostname
+				newHostname = h.Hostname
 				break
 			}
 		}
 	}
-	edited := 0
+	newStart := req.TargetPort
+	if newStart < 1 || newStart > 65535 {
+		newStart = oldStart // 未改端口则不平移
+	}
+	delta := newStart - oldStart
+	user, _ := s.currentUser(r)
+	operator := s.clientIP(r)
+	if user.Username != "" {
+		operator = user.Username
+	}
+	// 先删旧规则（关掉全部旧监听），再按平移后的端口整段重建——避免就地改端口时新旧端口
+	// 区间重叠导致的绑定冲突。沿用同一 group id，组关系不变；本地端口镜像目标端口。
 	for _, id := range s.forward.groupRuleIDs(gid) {
-		rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort)
+		s.forward.removeRule(id)
+	}
+	listenHost := s.cfg.ForwardListenAddr()
+	var created []forwardInfo
+	for _, o := range olds {
+		host, hostname := o.hostID, o.hostname
+		if newHost != "" {
+			host, hostname = newHost, newHostname
+		}
+		nt := o.target + delta
+		if nt < 1 || nt > 65535 {
+			continue
+		}
+		rule, err := s.forward.createRule(host, hostname, nt, nt, listenHost, o.protocol, gid, operator)
 		if err != nil {
 			continue
 		}
-		// Rebind listener if needed (same logic as single edit)
-		if rule.enabled {
-			if rule.protocol == "udp" {
-				if rule.packetConn == nil {
-					pc, lnErr := net.ListenPacket("udp", rule.listenAddr)
-					if lnErr != nil {
-						continue
-					}
-					s.forward.mu.Lock()
-					rule.packetConn = pc
-					s.forward.mu.Unlock()
-					go s.serveForwardUDP(rule)
-				}
-			} else {
-				if rule.listener == nil {
-					ln, lnErr := net.Listen("tcp", rule.listenAddr)
-					if lnErr != nil {
-						continue
-					}
-					s.forward.mu.Lock()
-					rule.listener = ln
-					s.forward.mu.Unlock()
-					go s.serveForwardListener(rule)
-				}
-			}
-		}
-		edited++
+		go s.serveRule(rule)
+		created = append(created, forwardInfo{
+			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
+			TargetPort: rule.targetPort, LocalPort: rule.localPort,
+			ListenAddr: rule.listenAddr, Status: "active",
+			CreatedAt: rule.createdAt, Operator: rule.operator,
+			Enabled: rule.enabled, Protocol: rule.protocol, GroupID: rule.groupID,
+		})
 	}
-	if edited == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+	if len(created) == 0 {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "整组编辑失败"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"edited": edited})
+	writeJSON(w, http.StatusOK, map[string]any{"edited": len(created), "rules": created})
 }
 
 // handleForwardHealth checks if forwarding is available.

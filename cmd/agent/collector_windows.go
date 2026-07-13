@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,15 +30,16 @@ var (
 	procGetTickCount64       = modkernel32.NewProc("GetTickCount64")
 	procGetLogicalDrives     = modkernel32.NewProc("GetLogicalDriveStringsW")
 	procGetDriveType         = modkernel32.NewProc("GetDriveTypeW")
+	procDeviceIoControl      = modkernel32.NewProc("DeviceIoControl")
 	procEnumProcesses        = modpsapi.NewProc("EnumProcesses")
 	procGetIfTable           = modiphlpapi.NewProc("GetIfTable")
 	procGetTcpTable          = modiphlpapi.NewProc("GetTcpTable")
 	procRtlGetVersion        = syscall.NewLazyDLL("ntdll.dll").NewProc("RtlGetVersion")
 
-	modkernel32x = syscall.NewLazyDLL("kernel32.dll")
+	modkernel32x                 = syscall.NewLazyDLL("kernel32.dll")
 	procCreateToolhelp32Snapshot = modkernel32x.NewProc("CreateToolhelp32Snapshot")
-	procProcess32First          = modkernel32x.NewProc("Process32FirstW")
-	procProcess32Next           = modkernel32x.NewProc("Process32NextW")
+	procProcess32First           = modkernel32x.NewProc("Process32FirstW")
+	procProcess32Next            = modkernel32x.NewProc("Process32NextW")
 )
 
 type filetime struct {
@@ -65,6 +67,9 @@ type windowsCollector struct {
 	prevIdle, prevKernel, prevUser uint64
 	prevRx, prevTx                 uint64
 	prevNetT                       time.Time
+	prevDiskRead, prevDiskWrite    uint64
+	prevDiskROps, prevDiskWOps     uint64
+	prevDiskT                      time.Time
 	load1, load5, load15           float64
 	lastT                          time.Time
 	primed                         bool
@@ -161,6 +166,21 @@ func (c *windowsCollector) Collect() (shared.Metrics, error) {
 		c.prevNetT = now
 	}
 
+	// ---- Disk IO: IOCTL_DISK_PERFORMANCE 累计计数器差分为速率（读写字节 + 读写 IOPS） ----
+	if rb, wb, ro, wo := winDiskIO(); rb+wb+ro+wo > 0 {
+		if c.primed && !c.prevDiskT.IsZero() {
+			if elapsed := now.Sub(c.prevDiskT).Seconds(); elapsed > 0 {
+				m.DiskReadRate = round1(rate(rb, c.prevDiskRead, elapsed))
+				m.DiskWriteRate = round1(rate(wb, c.prevDiskWrite, elapsed))
+				m.DiskReadIOPS = round1(rate(ro, c.prevDiskROps, elapsed))
+				m.DiskWriteIOPS = round1(rate(wo, c.prevDiskWOps, elapsed))
+			}
+		}
+		c.prevDiskRead, c.prevDiskWrite = rb, wb
+		c.prevDiskROps, c.prevDiskWOps = ro, wo
+		c.prevDiskT = now
+	}
+
 	// ---- Established TCP connections ----
 	m.NetConns = countTCPConns()
 
@@ -183,6 +203,60 @@ func (c *windowsCollector) Collect() (shared.Metrics, error) {
 	c.lastT = now
 	c.primed = true
 	return m, nil
+}
+
+// DISK_PERFORMANCE（Win32）：一块磁盘的累计 IO 统计。仅用到读写字节数与读写次数。
+type diskPerformance struct {
+	BytesRead           int64
+	BytesWritten        int64
+	ReadTime            int64
+	WriteTime           int64
+	IdleTime            int64
+	ReadCount           uint32
+	WriteCount          uint32
+	QueueDepth          uint32
+	SplitCount          uint32
+	QueryTime           int64
+	StorageDeviceNumber uint32
+	StorageManagerName  [8]uint16
+}
+
+const ioctlDiskPerformance = 0x70020 // CTL_CODE(IOCTL_DISK_BASE,0x0008,METHOD_BUFFERED,FILE_ANY_ACCESS)
+
+// winDiskIO 汇总所有物理磁盘（\\.\PhysicalDriveN）的累计读写字节数与读写次数，经
+// IOCTL_DISK_PERFORMANCE 获取。需管理员权限——Agent 作为 Windows 服务以 SYSTEM 运行时
+// 满足；权限不足则打不开磁盘句柄，返回 0（上层保持 0，不报错）。
+func winDiskIO() (readBytes, writeBytes, readOps, writeOps uint64) {
+	miss := 0
+	for i := 0; i < 32 && miss < 4; i++ {
+		p, err := syscall.UTF16PtrFromString(`\\.\PhysicalDrive` + strconv.Itoa(i))
+		if err != nil {
+			miss++
+			continue
+		}
+		h, err := syscall.CreateFile(p, 0, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, 0, 0)
+		if err != nil {
+			miss++
+			continue
+		}
+		miss = 0
+		var dp diskPerformance
+		var ret uint32
+		r, _, _ := procDeviceIoControl.Call(
+			uintptr(h), uintptr(ioctlDiskPerformance),
+			0, 0,
+			uintptr(unsafe.Pointer(&dp)), unsafe.Sizeof(dp),
+			uintptr(unsafe.Pointer(&ret)), 0,
+		)
+		syscall.CloseHandle(h)
+		if r != 0 {
+			readBytes += uint64(dp.BytesRead)
+			writeBytes += uint64(dp.BytesWritten)
+			readOps += uint64(dp.ReadCount)
+			writeOps += uint64(dp.WriteCount)
+		}
+	}
+	return
 }
 
 // updateLoad maintains a Unix-like 1/5/15-minute load approximation. Windows
@@ -215,7 +289,7 @@ func ewma(prev, x, dt, tau float64) float64 {
 func readIfTable() (rx, tx uint64, ok bool) {
 	var size uint32
 	procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0) // size probe
-	if size == 0 || size > 1<<20 { // sanity cap: ifTable >1MB is impossible
+	if size == 0 || size > 1<<20 {                            // sanity cap: ifTable >1MB is impossible
 		return 0, 0, false
 	}
 	// Reuse pooled buffer for the MIB_IFTABLE to avoid large alloc per cycle.

@@ -19,10 +19,13 @@ import (
 // tools for everything else. It cross-compiles from any host (no cgo);
 // runtime values should be spot-checked on a real Mac.
 type darwinCollector struct {
-	diskPath       string
-	prevRx, prevTx uint64
-	prevNetT       time.Time
-	primed         bool
+	diskPath                    string
+	prevRx, prevTx              uint64
+	prevNetT                    time.Time
+	prevDiskRead, prevDiskWrite uint64
+	prevDiskROps, prevDiskWOps  uint64
+	prevDiskT                   time.Time
+	primed                      bool
 }
 
 func newCollector(diskPath string) Collector {
@@ -79,6 +82,21 @@ func (c *darwinCollector) Collect() (shared.Metrics, error) {
 		c.prevNetT = now
 	}
 
+	// 磁盘 IO：ioreg 的 IOBlockStorageDriver 累计读写字节 + 操作数，差分为速率与 IOPS
+	if rb, wb, ro, wo := darwinDiskIO(); rb+wb+ro+wo > 0 {
+		if c.primed && !c.prevDiskT.IsZero() {
+			if el := now.Sub(c.prevDiskT).Seconds(); el > 0 {
+				m.DiskReadRate = round1(rate(rb, c.prevDiskRead, el))
+				m.DiskWriteRate = round1(rate(wb, c.prevDiskWrite, el))
+				m.DiskReadIOPS = round1(rate(ro, c.prevDiskROps, el))
+				m.DiskWriteIOPS = round1(rate(wo, c.prevDiskWOps, el))
+			}
+		}
+		c.prevDiskRead, c.prevDiskWrite = rb, wb
+		c.prevDiskROps, c.prevDiskWOps = ro, wo
+		c.prevDiskT = now
+	}
+
 	m.NetConns = darwinTCPConns()
 	m.Load1, m.Load5, m.Load15 = darwinLoad()
 	m.ProcCount = darwinProcCount()
@@ -88,6 +106,44 @@ func (c *darwinCollector) Collect() (shared.Metrics, error) {
 
 	c.primed = true
 	return m, nil
+}
+
+// darwinDiskIO 从 ioreg 的 IOBlockStorageDriver 统计里汇总所有磁盘的累计读写字节数与
+// 读写操作数（供上层算速率）。字段位于每块盘的 "Statistics" 字典中，跨多块盘求和。
+func darwinDiskIO() (readBytes, writeBytes, readOps, writeOps uint64) {
+	out := run("ioreg", "-r", "-c", "IOBlockStorageDriver", "-w", "0")
+	if out == "" {
+		return
+	}
+	readBytes = sumIORegStat(out, `"Bytes (Read)"`)
+	writeBytes = sumIORegStat(out, `"Bytes (Write)"`)
+	readOps = sumIORegStat(out, `"Operations (Read)"`)
+	writeOps = sumIORegStat(out, `"Operations (Write)"`)
+	return
+}
+
+// sumIORegStat 汇总 ioreg 文本里所有 `key=<数字>` 的数值之和（同一 key 可能出现在多块盘）。
+func sumIORegStat(out, key string) uint64 {
+	var total uint64
+	mark := key + "="
+	for idx := 0; ; {
+		i := strings.Index(out[idx:], mark)
+		if i < 0 {
+			break
+		}
+		p := idx + i + len(mark)
+		j := p
+		for j < len(out) && out[j] >= '0' && out[j] <= '9' {
+			j++
+		}
+		if j > p {
+			if v, err := strconv.ParseUint(out[p:j], 10, 64); err == nil {
+				total += v
+			}
+		}
+		idx = p // 越过本次 mark（p 严格大于起点，不会死循环）
+	}
+	return total
 }
 
 // darwinGPUs reads GPU utilization from IOKit's IOAccelerator objects via
@@ -350,15 +406,21 @@ func darwinProcNames() []string {
 	var names []string
 	for _, ln := range strings.Split(out, "\n") {
 		name := strings.TrimSpace(ln)
-		if name == "" || seen[name] { continue }
+		if name == "" || seen[name] {
+			continue
+		}
 		// ps comm may include full path; take basename
 		if idx := strings.LastIndex(name, "/"); idx >= 0 {
 			name = name[idx+1:]
 		}
-		if name == "" || seen[name] { continue }
+		if name == "" || seen[name] {
+			continue
+		}
 		seen[name] = true
 		names = append(names, name)
-		if len(names) >= 256 { break }
+		if len(names) >= 256 {
+			break
+		}
 	}
 	return names
 }

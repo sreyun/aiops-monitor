@@ -528,8 +528,10 @@ async function toggleForward(btn, type, id, enable) {
 }
 
 // 整组启用 / 停用（端口范围批量组）
-async function toggleForwardGroup(ev, gid, enable) {
-  await withLoading(ev.currentTarget, async () => {
+// 必须传入按钮元素本身（同 toggleForward）：委托事件的 currentTarget=document，
+// withLoading 内 document.style.opacity 会抛错，导致 fetch 根本没执行 → 开关无反应。
+async function toggleForwardGroup(btn, gid, enable) {
+  await withLoading(btn, async () => {
     try {
       const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}/toggle`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
@@ -584,17 +586,25 @@ async function copyForwardGroup(gid, count) {
 function editForwardGroup(gid) {
   const rules = (LAST_FORWARDS || []).filter(f => f.group_id === gid);
   if (rules.length === 0) return;
+  const ports = rules.map(r => r.target_port).filter(Boolean).sort((a, b) => a - b);
+  const minP = ports[0], maxP = ports[ports.length - 1];
   const first = rules[0];
   $("fwdEditId").value = "";
   $("fwdEditType").value = "tcp";
   $("fwdEditGroupId").value = gid;
   populateForwardHosts();
   $("fwdEditHost").value = first.host_id;
-  $("fwdEditPort").value = first.target_port;
-  $("fwdEditTcpField").style.display = "";
-  $("fwdEditLocalPort").value = first.local_port || 0;
+  $("fwdEditPort").value = minP; // 起始端口（整段平移基准）
+  $("fwdEditTcpField").style.display = "none"; // 组：本地端口镜像目标端口，无需单独填
   $("fwdEditHttpNameField").style.display = "none";
   $("fwdEditHttpPathField").style.display = "none";
+  const hint = $("fwdEditGroupHint");
+  if (hint) {
+    hint.textContent = `端口范围组：共 ${rules.length} 条端口 ${minP}-${maxP}（${(first.protocol || "tcp").toUpperCase()}）。改「目标端口」为新起始端口即整段平移；改主机则整组切换；本地端口自动镜像。`;
+    hint.style.display = "";
+  }
+  const title = document.querySelector("#fwdEditMask .modal-head h3");
+  if (title) title.textContent = "编辑端口范围组";
   const mask = $("fwdEditMask");
   const backdrop = $("backdrop");
   if (mask) mask.classList.add("show");
@@ -636,6 +646,8 @@ function editForward(type, id) {
   $("fwdEditId").value = id;
   $("fwdEditType").value = type;
   $("fwdEditGroupId").value = ""; // 单条编辑，清空组 ID
+  const gHint = $("fwdEditGroupHint"); if (gHint) gHint.style.display = "none"; // 单条编辑隐藏组提示
+  const eTitle = document.querySelector("#fwdEditMask .modal-head h3"); if (eTitle) eTitle.textContent = "编辑转发";
   populateForwardHosts();
   $("fwdEditHost").value = item.host_id;
   $("fwdEditPort").value = item.target_port;
@@ -781,7 +793,7 @@ document.addEventListener("click", e => {
     case "fwd-copy": copyForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-edit": editForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-del": deleteForward(el.dataset.ftype, el.dataset.fid); break;
-    case "fwd-group-toggle": toggleForwardGroup(e, el.dataset.gid, el.dataset.enable === "1"); break;
+    case "fwd-group-toggle": toggleForwardGroup(el, el.dataset.gid, el.dataset.enable === "1"); break;
     case "fwd-group-copy": copyForwardGroup(el.dataset.gid, parseInt(el.dataset.count || "0")); break;
     case "fwd-group-edit": editForwardGroup(el.dataset.gid); break;
     case "fwd-group-del": deleteForwardGroup(el.dataset.gid, el.dataset.count); break;

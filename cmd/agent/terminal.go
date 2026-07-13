@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -37,11 +36,11 @@ import (
 
 // termShell is a spawned interactive shell — a PTY master or a piped fallback.
 type termShell interface {
-	io.Reader                      // shell output
-	Write(p []byte) (int, error)   // keystrokes to the shell
-	Resize(cols, rows int) error   // window size (no-op for piped fallback)
-	Wait() error                   // block until the shell exits
-	Close() error                  // terminate + release
+	io.Reader                    // shell output
+	Write(p []byte) (int, error) // keystrokes to the shell
+	Resize(cols, rows int) error // window size (no-op for piped fallback)
+	Wait() error                 // block until the shell exits
+	Close() error                // terminate + release
 }
 
 // newPTY is provided per-platform; it returns nil when no native PTY is
@@ -55,9 +54,9 @@ var (
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
-			MaxIdleConns:        10,
-			IdleConnTimeout:     90 * time.Second,
-			ForceAttemptHTTP2:   true,
+			MaxIdleConns:      10,
+			IdleConnTimeout:   90 * time.Second,
+			ForceAttemptHTTP2: true,
 		},
 	} // rx/tx streams are long-lived — no client-level timeout
 	// termWaitHTTP bounds the long-poll wait so a half-open network can't wedge
@@ -203,6 +202,24 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	// UTF-8 on all platforms. On Windows, chcp 65001 handles the console code
 	// page; PYTHONIOENCODING helps Python programs that read the env.
 	cmd.Env = execEnv()
+	// 关键：先开 tx POST（用管道作为请求体），让请求头立刻到达服务端，从而服务端 tx 处理器的
+	// markAgentUp 立即触发（标记「已接单」）。此前本函数是「跑完命令才 POST」，服务端 Phase1
+	// 等 agentUp 的窗口（40s）会被慢命令占满 → 被误判为 no-pickup 而失败并重试（甚至把同一命令
+	// 重复下发）。开管道后「接单」与「命令完成」解耦：接单即刻确认，Phase2 计时才是命令真实预算。
+	pr, pw := io.Pipe()
+	posted := make(chan struct{})
+	go func() {
+		defer close(posted)
+		req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid, pr)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
+		if resp, err := termHTTP.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
 	out, err := cmd.CombinedOutput()
 	exit := 0
 	if err != nil {
@@ -217,20 +234,11 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	// code page (e.g., a C program using printf with GBK literals). Convert any
 	// non-UTF-8 bytes to UTF-8 via the Windows API (no-op on Linux/macOS).
 	out = ensureUTF8(out)
-	// The server detects completion by the tx body ending; the exit code is
-	// appended on its own line so success/failure can be surfaced precisely.
+	// 命令完成：写入全部输出 + 退出码标记，再关闭管道（tx body 结束 → 服务端判定命令完成）。
 	body := append(out, []byte(fmt.Sprintf("\n[AIOPS_EXIT]%d\n", exit))...)
-	req, err := http.NewRequest("POST",
-		server+"/api/v1/agent/terminal/tx?session="+sid,
-		bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
-	if resp, err := termHTTP.Do(req); err == nil {
-		resp.Body.Close()
-	}
+	_, _ = pw.Write(body)
+	_ = pw.Close()
+	<-posted
 }
 
 func (a *Agent) runTerminalSession(server, sid, lang string) {
@@ -392,9 +400,9 @@ func readTermFrames(r io.Reader, sh termShell, lang string, zmChan chan<- []byte
 				continue
 			}
 			if meta.Size < 0 || meta.Size > 100<<20 {
-			sendFileInfo("upload_ack", map[string]interface{}{
-				"status": "error", "message": agentT(lang, "agent.file.upload_too_large"),
-			})
+				sendFileInfo("upload_ack", map[string]interface{}{
+					"status": "error", "message": agentT(lang, "agent.file.upload_too_large"),
+				})
 				continue
 			}
 			// Path hygiene: clean the target, and confine a bare/relative path to a
@@ -430,9 +438,9 @@ func readTermFrames(r io.Reader, sh termShell, lang string, zmChan chan<- []byte
 					slog.Warn("上传数据超过声明大小，已中止", "filename", upload.filename)
 					upload.file.Close()
 					os.Remove(upload.file.Name())
-				sendFileInfo("upload_ack", map[string]interface{}{
-					"status": "error", "message": agentT(lang, "agent.file.upload_oversize"),
-				})
+					sendFileInfo("upload_ack", map[string]interface{}{
+						"status": "error", "message": agentT(lang, "agent.file.upload_oversize"),
+					})
 					upload = nil
 					continue
 				}
