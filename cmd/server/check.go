@@ -679,8 +679,11 @@ func (cr *checkRunner) snapshot() map[string]CheckStatus {
 func SelfCheckName() string { return Tz("check.self_name") }
 
 // DownAlerts returns the currently-failing checks as alerts for the /alerts view.
+// It also generates threshold-based alerts for probe metrics (ping loss/latency,
+// TCP timeout, HTTP response/status, process failures) when thresholds are configured.
 func (cr *checkRunner) DownAlerts() []Alert {
 	var out []Alert
+	th := cr.cfg.Thresholds()
 
 	// Self health-check
 	cr.mu.Lock()
@@ -698,19 +701,105 @@ func (cr *checkRunner) DownAlerts() []Alert {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	for _, c := range checks {
-		if !c.Enabled || !cr.down[c.ID] {
+		if !c.Enabled {
 			continue
 		}
-		lvl := c.Level
-		if lvl == "" {
-			lvl = "critical"
-		}
 		st := cr.status[c.ID]
-		out = append(out, Alert{
-			Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name,
-			Since:   cr.downSince[c.ID],
-			Message: Tz("check.custom_failed", c.Name, st.Message), Timestamp: st.CheckedAt,
-		})
+		now := time.Now().Unix()
+
+		// Existing boolean down/up alert
+		if cr.down[c.ID] {
+			lvl := c.Level
+			if lvl == "" {
+				lvl = "critical"
+			}
+			out = append(out, Alert{
+				Level: lvl, Type: "check", Scope: c.ID, Hostname: c.Name,
+				Since:   cr.downSince[c.ID],
+				Message: Tz("check.custom_failed", c.Name, st.Message), Timestamp: st.CheckedAt,
+			})
+		}
+
+		// ---- Threshold-based probe alerts (generated alongside down/up alerts) ----
+		switch c.Type {
+		case "ping":
+			// Ping 丢包率
+			if st.LossPct >= 0 && th.CheckPingLossWarn > 0 {
+				lv := classify(st.LossPct, th.CheckPingLossWarn, th.CheckPingLossCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/ping_loss", Hostname: c.Name,
+						Message: Tz("alert.check_ping_loss", st.LossPct),
+						Value: st.LossPct, Timestamp: now,
+					})
+				}
+			}
+			// Ping 平均延迟
+			if st.LatencyMs > 0 && th.CheckPingLatencyWarn > 0 {
+				lv := classify(st.LatencyMs, th.CheckPingLatencyWarn, th.CheckPingLatencyCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/ping_latency", Hostname: c.Name,
+						Message: Tz("alert.check_ping_latency", st.LatencyMs),
+						Value: st.LatencyMs, Timestamp: now,
+					})
+				}
+			}
+		case "tcp":
+			// TCP 连接超时
+			if st.LatencyMs > 0 && th.CheckTCPTimeoutWarn > 0 {
+				lv := classify(st.LatencyMs, th.CheckTCPTimeoutWarn, th.CheckTCPTimeoutCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/tcp_timeout", Hostname: c.Name,
+						Message: Tz("alert.check_tcp_timeout", st.LatencyMs),
+						Value: st.LatencyMs, Timestamp: now,
+					})
+				}
+			}
+		case "http":
+			// HTTP 响应时间
+			if st.LatencyMs > 0 && th.CheckHTTPRespWarn > 0 {
+				lv := classify(st.LatencyMs, th.CheckHTTPRespWarn, th.CheckHTTPRespCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/http_resp", Hostname: c.Name,
+						Message: Tz("alert.check_http_resp", st.LatencyMs),
+						Value: st.LatencyMs, Timestamp: now,
+					})
+				}
+			}
+			// HTTP 非 2xx 状态码
+			if st.StatusCode > 0 && st.StatusCode >= 400 && th.CheckHTTPStatusWarn > 0 {
+				// Use failCount as proxy for non-2xx count (incremented on each failure)
+				fc := float64(cr.failCount[c.ID])
+				if fc > 0 {
+					lv := classify(fc, float64(th.CheckHTTPStatusWarn), float64(th.CheckHTTPStatusCrit))
+					if lv != "" {
+						out = append(out, Alert{
+							Level: lv, Type: "check", Scope: c.ID + "/http_status", Hostname: c.Name,
+							Message: Tz("alert.check_http_status", st.StatusCode, cr.failCount[c.ID]),
+							Value: fc, Timestamp: now,
+						})
+					}
+				}
+			}
+		case "process":
+			// 进程存活失败次数
+			if !st.OK && th.CheckProcFailWarn > 0 {
+				fc := float64(cr.failCount[c.ID])
+				if fc > 0 {
+					lv := classify(fc, float64(th.CheckProcFailWarn), float64(th.CheckProcFailCrit))
+					if lv != "" {
+						out = append(out, Alert{
+							Level: lv, Type: "check", Scope: c.ID + "/proc_fail", Hostname: c.Name,
+							Message: Tz("alert.check_proc_fail", cr.failCount[c.ID]),
+							Value: fc, Timestamp: now,
+						})
+					}
+				}
+			}
+		}
 	}
 	return out
 }

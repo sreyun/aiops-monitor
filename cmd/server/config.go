@@ -83,6 +83,19 @@ type ThresholdConfig struct {
 	LoadCrit        float64 `json:"load_crit"`
 	ProcWarn        float64 `json:"proc_warn"` // 进程数突增/突降比例（如 0.5 = 50%）
 	OfflineAfterSec int     `json:"offline_after_sec"`
+	// ---- 拨测监控阈值（Ping / TCP / HTTP / 进程）----
+	CheckPingLossWarn    float64 `json:"check_ping_loss_warn"`    // Ping 丢包率 警告 %
+	CheckPingLossCrit    float64 `json:"check_ping_loss_crit"`    // Ping 丢包率 严重 %
+	CheckPingLatencyWarn float64 `json:"check_ping_latency_warn"` // Ping 平均延迟 警告 ms
+	CheckPingLatencyCrit float64 `json:"check_ping_latency_crit"` // Ping 平均延迟 严重 ms
+	CheckTCPTimeoutWarn  float64 `json:"check_tcp_timeout_warn"`  // TCP 连接超时 警告 ms
+	CheckTCPTimeoutCrit  float64 `json:"check_tcp_timeout_crit"`  // TCP 连接超时 严重 ms
+	CheckHTTPRespWarn    float64 `json:"check_http_resp_warn"`    // HTTP 响应时间 警告 ms
+	CheckHTTPRespCrit    float64 `json:"check_http_resp_crit"`    // HTTP 响应时间 严重 ms
+	CheckHTTPStatusWarn  int     `json:"check_http_status_warn"`  // HTTP 非 2xx 次数 警告
+	CheckHTTPStatusCrit  int     `json:"check_http_status_crit"`  // HTTP 非 2xx 次数 严重
+	CheckProcFailWarn    int     `json:"check_proc_fail_warn"`    // 进程存活失败次数 警告
+	CheckProcFailCrit    int     `json:"check_proc_fail_crit"`    // 进程存活失败次数 严重
 	// ---- API 业务监控阈值 ----
 	APIAvailWarn      float64 `json:"api_avail_warn"`      // 接口可用率 警告 %（低于此值告警）
 	APIAvailCrit      float64 `json:"api_avail_crit"`      // 接口可用率 严重 %
@@ -110,6 +123,13 @@ func defaultThresholdConfig() ThresholdConfig {
 		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn:        0.5,
 		OfflineAfterSec: 60,
+		// 拨测监控默认阈值
+		CheckPingLossWarn:    10,  CheckPingLossCrit:    30,
+		CheckPingLatencyWarn: 100, CheckPingLatencyCrit: 500,
+		CheckTCPTimeoutWarn:  1000, CheckTCPTimeoutCrit:  5000,
+		CheckHTTPRespWarn:    1000, CheckHTTPRespCrit:    5000,
+		CheckHTTPStatusWarn:  1,    CheckHTTPStatusCrit:  5,
+		CheckProcFailWarn:    1,    CheckProcFailCrit:    3,
 		// API 业务监控默认阈值
 		APIAvailWarn:      99.0, APIAvailCrit:      95.0,
 		APIAvgRespWarn:    500,  APIAvgRespCrit:    2000,
@@ -152,6 +172,30 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	fix(&t.LoadWarn, d.LoadWarn)
 	fix(&t.LoadCrit, d.LoadCrit)
 	fix(&t.ProcWarn, d.ProcWarn)
+	fix(&t.CheckPingLossWarn, d.CheckPingLossWarn)
+	fix(&t.CheckPingLossCrit, d.CheckPingLossCrit)
+	fix(&t.CheckPingLatencyWarn, d.CheckPingLatencyWarn)
+	fix(&t.CheckPingLatencyCrit, d.CheckPingLatencyCrit)
+	fix(&t.CheckTCPTimeoutWarn, d.CheckTCPTimeoutWarn)
+	fix(&t.CheckTCPTimeoutCrit, d.CheckTCPTimeoutCrit)
+	fix(&t.CheckHTTPRespWarn, d.CheckHTTPRespWarn)
+	fix(&t.CheckHTTPRespCrit, d.CheckHTTPRespCrit)
+	if t.CheckHTTPStatusWarn == 0 {
+		t.CheckHTTPStatusWarn = d.CheckHTTPStatusWarn
+		changed = true
+	}
+	if t.CheckHTTPStatusCrit == 0 {
+		t.CheckHTTPStatusCrit = d.CheckHTTPStatusCrit
+		changed = true
+	}
+	if t.CheckProcFailWarn == 0 {
+		t.CheckProcFailWarn = d.CheckProcFailWarn
+		changed = true
+	}
+	if t.CheckProcFailCrit == 0 {
+		t.CheckProcFailCrit = d.CheckProcFailCrit
+		changed = true
+	}
 	fix(&t.APIAvailWarn, d.APIAvailWarn)
 	fix(&t.APIAvailCrit, d.APIAvailCrit)
 	fix(&t.APIAvgRespWarn, d.APIAvgRespWarn)
@@ -188,6 +232,21 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		LoadWarn: t.LoadWarn, LoadCrit: t.LoadCrit,
 		ProcWarn:     t.ProcWarn,
 		OfflineAfter: time.Duration(t.OfflineAfterSec) * time.Second,
+		// 拨测监控
+		CheckPingLossWarn: t.CheckPingLossWarn, CheckPingLossCrit: t.CheckPingLossCrit,
+		CheckPingLatencyWarn: t.CheckPingLatencyWarn, CheckPingLatencyCrit: t.CheckPingLatencyCrit,
+		CheckTCPTimeoutWarn: t.CheckTCPTimeoutWarn, CheckTCPTimeoutCrit: t.CheckTCPTimeoutCrit,
+		CheckHTTPRespWarn: t.CheckHTTPRespWarn, CheckHTTPRespCrit: t.CheckHTTPRespCrit,
+		CheckHTTPStatusWarn: t.CheckHTTPStatusWarn, CheckHTTPStatusCrit: t.CheckHTTPStatusCrit,
+		CheckProcFailWarn: t.CheckProcFailWarn, CheckProcFailCrit: t.CheckProcFailCrit,
+		// API 业务监控
+		APIAvailWarn: t.APIAvailWarn, APIAvailCrit: t.APIAvailCrit,
+		APIAvgRespWarn: t.APIAvgRespWarn, APIAvgRespCrit: t.APIAvgRespCrit,
+		APIP95RespWarn: t.APIP95RespWarn, APIP95RespCrit: t.APIP95RespCrit,
+		APIThroughputWarn: t.APIThroughputWarn, APIThroughputCrit: t.APIThroughputCrit,
+		// 编排定时任务
+		TaskFailWarn: t.TaskFailWarn, TaskFailCrit: t.TaskFailCrit,
+		TaskTimeoutWarn: t.TaskTimeoutWarn, TaskTimeoutCrit: t.TaskTimeoutCrit,
 	}
 }
 

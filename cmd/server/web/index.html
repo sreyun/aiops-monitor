@@ -199,6 +199,8 @@
           <div style="margin-left:auto"><button class="btn primary" id="saveThresholdsBtn">保存阈值</button></div>
         </div>
         <div class="gov-section">
+          <!-- 系统监控 -->
+          <div class="hint" style="margin-top:0;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_system">系统监控</div>
           <div class="grid2">
             <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
               <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
@@ -219,7 +221,24 @@
             <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
               <input type="text" id="offlineSec" class="mono"></div>
           </div>
-          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600">API 业务监控</div>
+          <!-- 拨测监控 -->
+          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_probe">拨测监控</div>
+          <div class="grid2">
+            <div class="field"><label data-i18n="settings.check_ping_loss_thresh">Ping 丢包率 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="checkPingLossWarn" class="mono" placeholder="10"><input type="text" id="checkPingLossCrit" class="mono" placeholder="30"></div></div>
+            <div class="field"><label data-i18n="settings.check_ping_latency_thresh">Ping 平均延迟 警告 / 严重（ms）</label>
+              <div class="grid2"><input type="text" id="checkPingLatencyWarn" class="mono" placeholder="100"><input type="text" id="checkPingLatencyCrit" class="mono" placeholder="500"></div></div>
+            <div class="field"><label data-i18n="settings.check_tcp_timeout_thresh">TCP 连接超时 警告 / 严重（ms）</label>
+              <div class="grid2"><input type="text" id="checkTCPTimeoutWarn" class="mono" placeholder="1000"><input type="text" id="checkTCPTimeoutCrit" class="mono" placeholder="5000"></div></div>
+            <div class="field"><label data-i18n="settings.check_http_resp_thresh">HTTP 响应时间 警告 / 严重（ms）</label>
+              <div class="grid2"><input type="text" id="checkHTTPRespWarn" class="mono" placeholder="1000"><input type="text" id="checkHTTPRespCrit" class="mono" placeholder="5000"></div></div>
+            <div class="field"><label data-i18n="settings.check_http_status_thresh">HTTP 非 2xx 状态码 警告 / 严重（次）</label>
+              <div class="grid2"><input type="text" id="checkHTTPStatusWarn" class="mono" placeholder="1"><input type="text" id="checkHTTPStatusCrit" class="mono" placeholder="5"></div></div>
+            <div class="field"><label data-i18n="settings.check_proc_fail_thresh">进程存活失败次数 警告 / 严重（次）</label>
+              <div class="grid2"><input type="text" id="checkProcFailWarn" class="mono" placeholder="1"><input type="text" id="checkProcFailCrit" class="mono" placeholder="3"></div></div>
+          </div>
+          <!-- API 业务监控 -->
+          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_api">API 业务监控</div>
           <div class="grid2">
             <div class="field"><label data-i18n="settings.api_avail_thresh">API 可用率 警告 / 严重（%）</label>
               <div class="grid2"><input type="text" id="apiAvailWarn" class="mono" placeholder="99"><input type="text" id="apiAvailCrit" class="mono" placeholder="95"></div></div>
@@ -230,7 +249,8 @@
             <div class="field"><label data-i18n="settings.api_throughput_thresh">API 吞吐量 警告 / 严重（req/s）</label>
               <div class="grid2"><input type="text" id="apiThroughputWarn" class="mono" placeholder="100"><input type="text" id="apiThroughputCrit" class="mono" placeholder="10"></div></div>
           </div>
-          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600">编排定时任务</div>
+          <!-- 编排定时任务 -->
+          <div class="hint" style="margin-top:14px;margin-bottom:10px;color:var(--accent);font-weight:600" data-i18n="settings.group_task">编排定时任务</div>
           <div class="grid2">
             <div class="field"><label data-i18n="settings.task_fail_thresh">任务执行失败次数 警告 / 严重</label>
               <div class="grid2"><input type="text" id="taskFailWarn" class="mono" placeholder="1"><input type="text" id="taskFailCrit" class="mono" placeholder="5"></div></div>

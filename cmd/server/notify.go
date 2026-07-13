@@ -252,8 +252,9 @@ func formatAlert(a Alert, firing bool) string {
 		lv = Tz("notify.critical")
 	}
 	typeMap := map[string]string{
-		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
-		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
+		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "diskio": Tz("notify.type_diskio"),
+		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
+		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
 		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"),
 	}
 	typeLabel := typeMap[a.Type]

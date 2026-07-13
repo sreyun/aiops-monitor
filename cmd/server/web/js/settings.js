@@ -57,6 +57,13 @@ async function openSettings() {
     $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
     $("procWarn").value = td(t.proc_warn, 0.5);
     $("offlineSec").value = td(t.offline_after_sec, 60);
+    // 拨测监控
+    $("checkPingLossWarn").value = td(t.check_ping_loss_warn, 10); $("checkPingLossCrit").value = td(t.check_ping_loss_crit, 30);
+    $("checkPingLatencyWarn").value = td(t.check_ping_latency_warn, 100); $("checkPingLatencyCrit").value = td(t.check_ping_latency_crit, 500);
+    $("checkTCPTimeoutWarn").value = td(t.check_tcp_timeout_warn, 1000); $("checkTCPTimeoutCrit").value = td(t.check_tcp_timeout_crit, 5000);
+    $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
+    $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
+    $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
     // API 业务监控
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -91,6 +98,13 @@ async function loadThresholds() {
     $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
     $("procWarn").value = td(t.proc_warn, 0.5);
     $("offlineSec").value = td(t.offline_after_sec, 60);
+    // 拨测监控阈值
+    $("checkPingLossWarn").value = td(t.check_ping_loss_warn, 10); $("checkPingLossCrit").value = td(t.check_ping_loss_crit, 30);
+    $("checkPingLatencyWarn").value = td(t.check_ping_latency_warn, 100); $("checkPingLatencyCrit").value = td(t.check_ping_latency_crit, 500);
+    $("checkTCPTimeoutWarn").value = td(t.check_tcp_timeout_warn, 1000); $("checkTCPTimeoutCrit").value = td(t.check_tcp_timeout_crit, 5000);
+    $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
+    $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
+    $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
     // API 业务监控阈值
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -116,6 +130,13 @@ async function saveThresholds() {
         load_warn: num("loadWarn"), load_crit: num("loadCrit"),
         proc_warn: num("procWarn"),
         offline_after_sec: Math.round(num("offlineSec")),
+        // 拨测监控
+        check_ping_loss_warn: num("checkPingLossWarn"), check_ping_loss_crit: num("checkPingLossCrit"),
+        check_ping_latency_warn: num("checkPingLatencyWarn"), check_ping_latency_crit: num("checkPingLatencyCrit"),
+        check_tcp_timeout_warn: num("checkTCPTimeoutWarn"), check_tcp_timeout_crit: num("checkTCPTimeoutCrit"),
+        check_http_resp_warn: num("checkHTTPRespWarn"), check_http_resp_crit: num("checkHTTPRespCrit"),
+        check_http_status_warn: Math.round(num("checkHTTPStatusWarn")), check_http_status_crit: Math.round(num("checkHTTPStatusCrit")),
+        check_proc_fail_warn: Math.round(num("checkProcFailWarn")), check_proc_fail_crit: Math.round(num("checkProcFailCrit")),
         // API 业务监控
         api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
         api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),

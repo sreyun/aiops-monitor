@@ -26,6 +26,13 @@ type Thresholds struct {
 	LoadWarn, LoadCrit float64 // 按 CPU 核心数倍率
 	ProcWarn           float64 // 进程数突增/突降比例阈值
 	OfflineAfter       time.Duration
+	// ---- 拨测监控阈值（Ping / TCP / HTTP / 进程）----
+	CheckPingLossWarn, CheckPingLossCrit         float64 // 丢包率 %
+	CheckPingLatencyWarn, CheckPingLatencyCrit   float64 // 平均延迟 ms
+	CheckTCPTimeoutWarn, CheckTCPTimeoutCrit     float64 // 连接超时 ms
+	CheckHTTPRespWarn, CheckHTTPRespCrit         float64 // 响应时间 ms
+	CheckHTTPStatusWarn, CheckHTTPStatusCrit     int     // 非 2xx 次数
+	CheckProcFailWarn, CheckProcFailCrit         int     // 进程存活失败次数
 	// ---- API 业务监控阈值 ----
 	APIAvailWarn, APIAvailCrit         float64 // 可用率 %（低于阈值告警）
 	APIAvgRespWarn, APIAvgRespCrit     float64 // 平均响应 ms
@@ -55,6 +62,12 @@ func ConservativeThresholds() Thresholds {
 		LoadWarn: 2.0, LoadCrit: 4.0,
 		ProcWarn: 0.3,
 		OfflineAfter: 30 * time.Second,
+		CheckPingLossWarn: 5, CheckPingLossCrit: 15,
+		CheckPingLatencyWarn: 50, CheckPingLatencyCrit: 200,
+		CheckTCPTimeoutWarn: 500, CheckTCPTimeoutCrit: 2000,
+		CheckHTTPRespWarn: 500, CheckHTTPRespCrit: 2000,
+		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 3,
+		CheckProcFailWarn: 1, CheckProcFailCrit: 2,
 		APIAvailWarn: 99.5, APIAvailCrit: 98.0,
 		APIAvgRespWarn: 300, APIAvgRespCrit: 1000,
 		APIP95RespWarn: 500, APIP95RespCrit: 2000,
@@ -77,6 +90,12 @@ func StandardThresholds() Thresholds {
 		LoadWarn: 4.0, LoadCrit: 8.0,
 		ProcWarn: 0.5,
 		OfflineAfter: 60 * time.Second,
+		CheckPingLossWarn: 10, CheckPingLossCrit: 30,
+		CheckPingLatencyWarn: 100, CheckPingLatencyCrit: 500,
+		CheckTCPTimeoutWarn: 1000, CheckTCPTimeoutCrit: 5000,
+		CheckHTTPRespWarn: 1000, CheckHTTPRespCrit: 5000,
+		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 5,
+		CheckProcFailWarn: 1, CheckProcFailCrit: 3,
 		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
 		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
 		APIP95RespWarn: 1000, APIP95RespCrit: 5000,
@@ -99,6 +118,12 @@ func RelaxedThresholds() Thresholds {
 		LoadWarn: 6.0, LoadCrit: 12.0,
 		ProcWarn: 0.8,
 		OfflineAfter: 120 * time.Second,
+		CheckPingLossWarn: 20, CheckPingLossCrit: 50,
+		CheckPingLatencyWarn: 300, CheckPingLatencyCrit: 1000,
+		CheckTCPTimeoutWarn: 3000, CheckTCPTimeoutCrit: 10000,
+		CheckHTTPRespWarn: 3000, CheckHTTPRespCrit: 10000,
+		CheckHTTPStatusWarn: 3, CheckHTTPStatusCrit: 10,
+		CheckProcFailWarn: 3, CheckProcFailCrit: 5,
 		APIAvailWarn: 95.0, APIAvailCrit: 90.0,
 		APIAvgRespWarn: 1000, APIAvgRespCrit: 5000,
 		APIP95RespWarn: 2000, APIP95RespCrit: 10000,
