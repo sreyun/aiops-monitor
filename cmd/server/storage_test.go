@@ -24,6 +24,31 @@ func TestVMExportParse(t *testing.T) {
 	}
 }
 
+// GPU 利用率在 VM 里是带 gpu 标签的独立系列（每块显卡一条），parseVMExport 必须按名
+// 重建每个时间点的 GPUs 数组——否则历史读回缺 gpus，前端画不出「GPU 近期趋势图」（曾漏）。
+func TestVMExportParseGPU(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU0"},"values":[30,40],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU1"},"values":[55],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_cpu_percent","host":"h1"},"values":[10],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 2 {
+		t.Fatalf("expected 2 samples, got %d", len(s))
+	}
+	if len(s[0].GPUs) != 2 { // ts=100：两块显卡都应重建出来
+		t.Fatalf("sample@100 应重建 2 块 GPU，实际 %d：%+v", len(s[0].GPUs), s[0].GPUs)
+	}
+	byName := map[string]float64{}
+	for _, g := range s[0].GPUs {
+		byName[g.Name] = g.UtilPercent
+	}
+	if byName["GPU0"] != 30 || byName["GPU1"] != 55 {
+		t.Errorf("sample@100 GPU 值错误：%+v", s[0].GPUs)
+	}
+	if len(s[1].GPUs) != 1 || s[1].GPUs[0].Name != "GPU0" || s[1].GPUs[0].UtilPercent != 40 { // ts=105：仅 GPU0
+		t.Errorf("sample@105 GPU 重建错误：%+v", s[1].GPUs)
+	}
+}
+
 func TestPasswordPolicy(t *testing.T) {
 	good := []string{"Abcd123!", "P@ssw0rd", "aB3$aB3$", "Zx9#mnop", "长密码Ab1!x"}
 	for _, p := range good {

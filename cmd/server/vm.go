@@ -617,6 +617,22 @@ func setSampleMetric(s *shared.Sample, name string, val float64) {
 	}
 }
 
+// setSampleGPU 把一条 aiops_gpu_util_percent 系列（按 gpu 标签区分不同显卡）并回该时间点
+// 样本的 GPUs 数组。VM 里 GPU 利用率是带 gpu 标签的独立系列，parseVMExport 必须按名重建，
+// 否则从 VM 读回的历史样本永远缺 gpus，前端「近期趋势」就画不出 GPU 图（本次修复的 bug 点）。
+func setSampleGPU(s *shared.Sample, gpuName string, val float64) {
+	if gpuName == "" {
+		gpuName = "GPU"
+	}
+	for i := range s.GPUs {
+		if s.GPUs[i].Name == gpuName {
+			s.GPUs[i].UtilPercent = val
+			return
+		}
+	}
+	s.GPUs = append(s.GPUs, shared.GPUInfo{Name: gpuName, UtilPercent: val})
+}
+
 // queryHistory reads a host's series back from VM (the authoritative time-series
 // store) over [from,to] and reassembles []shared.Sample keyed by timestamp.
 func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample, bool) {
@@ -665,6 +681,7 @@ func parseVMExport(r io.Reader) []shared.Sample {
 			continue
 		}
 		name := line.Metric["__name__"]
+		gpuName := line.Metric["gpu"] // GPU 利用率系列带 gpu 标签（每块显卡一条），需按名重建 s.GPUs
 		for i := range line.Values {
 			if i >= len(line.Timestamps) {
 				break
@@ -675,7 +692,11 @@ func parseVMExport(r io.Reader) []shared.Sample {
 				s = &shared.Sample{Timestamp: ts}
 				byTs[ts] = s
 			}
-			setSampleMetric(s, name, line.Values[i])
+			if name == "aiops_gpu_util_percent" {
+				setSampleGPU(s, gpuName, line.Values[i])
+			} else {
+				setSampleMetric(s, name, line.Values[i])
+			}
 		}
 	}
 	out := make([]shared.Sample, 0, len(byTs))

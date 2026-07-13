@@ -218,6 +218,12 @@ function safeAddEventListener(id, event, handler) {
 // 侧栏菜单
 safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("saveThresholdsBtn", "click", saveThresholds); // 告警阈值 Tab 独立保存
+safeAddEventListener("aiExpandBtn", "click", function () { // AI 面板放大↔还原（铺满右侧交互区 / 默认宽度）
+  const m = $("aiChatModal"); if (!m) return;
+  const on = m.classList.toggle("ai-expanded");
+  this.textContent = on ? "⤡" : "⤢";
+  this.title = on ? "还原窗口" : "放大窗口";
+});
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
 safeAddEventListener("resetTokenBtn", "click", resetToken);
@@ -427,6 +433,10 @@ safeAddEventListener("logFilter", "click", e => {
 });
 // 审计日志搜索框：按内容/操作者/主机关键字过滤
 safeAddEventListener("auditSearch", "input", e => { LOG_SEARCH = (e.target.value || "").trim().toLowerCase(); LOG_PAGE = 1; renderLog(LAST_LOG); });
+// 监控 / 编排 / 转发 搜索框（复用标准 .search）
+safeAddEventListener("checkSearch", "input", e => { CHECK_SEARCH = (e.target.value || "").trim(); renderChecks(LAST_CHECKS); });
+safeAddEventListener("playbookSearch", "input", e => { PB_SEARCH = (e.target.value || "").trim(); renderPlaybooks(LAST_PLAYBOOKS); });
+safeAddEventListener("forwardSearch", "input", e => { FWD_SEARCH = (e.target.value || "").trim(); renderForwards(); });
 
 // 告警类型筛选
 safeAddEventListener("alertFilter", "click", e => {

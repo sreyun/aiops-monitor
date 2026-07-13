@@ -1938,13 +1938,21 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-diagnosis-chat .ai-chat-msg{max-width:90%}
 /* AI 对话弹窗：支持右下角拖拽缩放；消息区随窗口伸缩 */
 #aiChatModal{
-  overflow:auto;
-  /* 响应式自适应尺寸（不再用 resize:both——手动拖拽会写死内联尺寸，窗口缩放后不重排导致"对话窗口消失"） */
-  width:min(720px,92vw); height:min(72vh,640px);
-  min-width:min(360px,92vw); max-width:92vw;
-  min-height:300px; max-height:85vh;
-  display:flex; flex-direction:column;
+  overflow:hidden;
+  /* 右侧悬浮面板（非模态）：固定在顶栏下方、贴右缘，不覆盖左侧导航与顶栏；
+     可「放大」铺满整个右侧交互区，或「还原」回默认宽度；关闭走 ✕。 */
+  position:fixed; top:53px; right:0; bottom:0; left:auto;
+  width:min(440px, calc(100vw - var(--sidew) - 16px));
+  min-width:0; max-width:none; height:auto; min-height:0; max-height:none; margin:0;
+  border:1px solid var(--line); border-right:none; border-radius:12px 0 0 12px;
+  box-shadow:-10px 0 34px rgba(0,0,0,.34);
+  display:flex; flex-direction:column; pointer-events:auto;
+  transition:width .18s ease;
 }
+#aiChatModal.ai-expanded{ width:calc(100vw - var(--sidew)); }
+/* 遮罩改为非阻断：透明 + 不吃点击，让用户能同时操作左侧导航 / 顶栏及主区其它功能 */
+#aiChatMask{ background:transparent !important; pointer-events:none; padding:0; }
+#aiChatMask.show{ display:block; }
 #aiChatModal .modal-body{flex:1 1 auto; display:flex; flex-direction:column; min-height:0; max-height:none}
 #aiChatModal .ai-chat-log{flex:1 1 auto; height:auto; min-height:0}
 .ai-head-ctl{display:flex; align-items:center; gap:8px}
@@ -2028,7 +2036,8 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-term-msg.ok{color:#3fb950}
 .ai-term-msg.err{color:var(--danger-txt,#f2545b)}
 @media(max-width:560px){
-  #aiChatModal{width:96vw; height:82vh; resize:none}
+  /* 窄屏无侧栏空间：面板全屏（移动端标准，覆盖可接受） */
+  #aiChatModal, #aiChatModal.ai-expanded{top:0; right:0; left:0; width:100vw; border-radius:0; border:none}
   .ai-sess-select{max-width:120px}
   /* 头部省空间：标题省略号、隐藏"新建"按钮（下拉首项即新会话） */
   #aiChatModal .modal-head h3{font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}

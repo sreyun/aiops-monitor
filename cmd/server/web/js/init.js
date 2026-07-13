@@ -206,6 +206,7 @@ function collectForwardItems() {
       proxyUrl,
     });
   });
+  if (FWD_SEARCH) { const q = FWD_SEARCH.toLowerCase(); return items.filter(it => ((it.title || "") + " " + (it.sub || "") + " " + (it.listenAddr || "") + " " + (it.proxyUrl || "")).toLowerCase().includes(q)); }
   return items;
 }
 

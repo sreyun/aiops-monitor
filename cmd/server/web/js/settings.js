@@ -319,9 +319,10 @@ function renderChecks(checks) {
   if (!userChecks.length && !checks.length) { grid.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
 
-  // 应用类型筛选
+  // 应用类型筛选 + 关键字搜索
   let shown = checks;
   if (CHECK_TYPE && CHECK_TYPE !== "all") shown = shown.filter(c => c.type === CHECK_TYPE);
+  if (CHECK_SEARCH) { const q = CHECK_SEARCH.toLowerCase(); shown = shown.filter(c => ((c.name || "") + " " + (c.target || "")).toLowerCase().includes(q)); }
 
   grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");

@@ -374,6 +374,7 @@
       <section class="view" id="view-checks">
         <div class="section-title"><span data-i18n="section.custom_checks">自定义监控</span><span class="tag" data-i18n="section.check_types">网站 HTTP / 端口 TCP / 主机 Ping / 进程存活</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <input type="text" id="checkSearch" class="search" placeholder="搜索名称 / 目标…" style="max-width:200px; margin-left:0">
             <div class="view-toggle" id="checkViewToggle" title="切换卡片 / 列表视图">
               <button class="vt-btn active" data-cview="pill" title="卡片视图">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
@@ -433,6 +434,7 @@
       <section class="view" id="view-automation">
         <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <input type="text" id="playbookSearch" class="search" placeholder="搜索剧本名称 / 描述…" style="max-width:200px; margin-left:0">
             <div class="view-toggle" id="playbookViewToggle" role="group" aria-label="视图切换">
               <button class="vt-btn active" title="卡片" data-act="pb-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
               <button class="vt-btn" title="列表" data-act="pb-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
@@ -529,6 +531,7 @@
       <section class="view" id="view-forward">
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <input type="text" id="forwardSearch" class="search" placeholder="搜索主机 / 端口 / 监听地址…" style="max-width:220px; margin-left:0">
             <div class="view-toggle" id="forwardViewToggle" role="group" aria-label="视图切换">
               <button class="vt-btn active" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
               <button class="vt-btn" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
@@ -1326,6 +1329,7 @@
         </select>
         <button class="btn ghost" id="aiNewChatBtn" title="新建会话">＋ 新建</button>
         <button class="btn ghost" id="aiUndoBtn" title="撤销上一轮问答，可修改后重问">↶ 撤销</button>
+        <button class="btn ghost" id="aiExpandBtn" title="放大 / 还原窗口" aria-label="放大或还原窗口">⤢</button>
         <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
       </div>
     </div>

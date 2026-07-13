@@ -14,7 +14,8 @@ async function loadPlaybooks() {
     // System types are hardcoded (linux/macos/windows) — do NOT extract from
     // h.platform (which is a version string like "Ubuntu 22.04"), use h.os
     // (runtime.GOOS: "linux"/"windows"/"darwin") for matching.
-    renderPlaybooks(pbs || []);
+    LAST_PLAYBOOKS = pbs || [];
+    renderPlaybooks(LAST_PLAYBOOKS);
   } catch (e) { console.warn("load playbooks:", e); }
 }
 
@@ -27,6 +28,7 @@ function switchAutomationView(mode) {
 function renderPlaybooks(pbs) {
   const list = $("playbookList"), empty = $("playbookEmpty");
   if (!list) return;
+  if (PB_SEARCH) { const q = PB_SEARCH.toLowerCase(); pbs = (pbs || []).filter(p => ((p.name || "") + " " + (p.description || "") + " " + (p.id || "")).toLowerCase().includes(q)); }
   if (empty) empty.style.display = pbs.length === 0 ? "" : "none";
   // 视图模式：卡片(默认) / 列表——复用同一 .pb-card 结构，列表态仅由 CSS 重排为紧凑单行，
   // 从而不改动 data-pbact 委托对 .pb-card[data-id] 的依赖。
