@@ -245,6 +245,8 @@ function fwdGroupActions(u) {
   const toggleLabel = m.anyEnabled ? "停用整组" : "启用整组";
   return `
     <button class="icon-btn" title="${toggleLabel}" data-act="fwd-group-toggle" data-gid="${esc(u.gid)}" data-enable="${m.anyEnabled ? "0" : "1"}">${toggleIcon}</button>
+    <button class="icon-btn" title="复制整组（${m.count} 条）" data-act="fwd-group-copy" data-gid="${esc(u.gid)}" data-count="${m.count}">${FWD_ICONS.copy}</button>
+    <button class="icon-btn" title="编辑整组" data-act="fwd-group-edit" data-gid="${esc(u.gid)}">${FWD_ICONS.edit}</button>
     <button class="icon-btn danger" title="删除整组（${m.count} 条）" data-act="fwd-group-del" data-gid="${esc(u.gid)}" data-count="${m.count}">${FWD_ICONS.del}</button>`;
 }
 
@@ -567,6 +569,38 @@ async function copyForward(type, id) {
   }
 }
 
+// 整组复制（端口范围批量组）
+async function copyForwardGroup(gid, count) {
+  try {
+    const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}/copy`, { method: "POST", credentials: "include" });
+    if (!res.ok) { toast(I18N.t("toast.copy_failed"), "err"); return; }
+    const j = await res.json().catch(() => ({}));
+    toast("已复制整组 " + (j.copied || 0) + " 条转发", "ok");
+    loadForwards();
+  } catch (e) { toast(I18N.t("toast.network_error2"), "err"); }
+}
+
+// 整组编辑（端口范围批量组）——打开编辑弹窗，预填首条规则数据
+function editForwardGroup(gid) {
+  const rules = (LAST_FORWARDS || []).filter(f => f.group_id === gid);
+  if (rules.length === 0) return;
+  const first = rules[0];
+  $("fwdEditId").value = "";
+  $("fwdEditType").value = "tcp";
+  $("fwdEditGroupId").value = gid;
+  populateForwardHosts();
+  $("fwdEditHost").value = first.host_id;
+  $("fwdEditPort").value = first.target_port;
+  $("fwdEditTcpField").style.display = "";
+  $("fwdEditLocalPort").value = first.local_port || 0;
+  $("fwdEditHttpNameField").style.display = "none";
+  $("fwdEditHttpPathField").style.display = "none";
+  const mask = $("fwdEditMask");
+  const backdrop = $("backdrop");
+  if (mask) mask.classList.add("show");
+  if (backdrop) backdrop.style.display = "";
+}
+
 function closeForwardModal() {
   const forwardMask = $("forwardMask");
   const backdrop = $("backdrop");
@@ -601,6 +635,7 @@ function editForward(type, id) {
   if (!item) return;
   $("fwdEditId").value = id;
   $("fwdEditType").value = type;
+  $("fwdEditGroupId").value = ""; // 单条编辑，清空组 ID
   populateForwardHosts();
   $("fwdEditHost").value = item.host_id;
   $("fwdEditPort").value = item.target_port;
@@ -633,10 +668,29 @@ function closeForwardEditModal() {
 async function saveForwardEdit() {
   const type = $("fwdEditType").value;
   const id = $("fwdEditId").value;
+  const gid = $("fwdEditGroupId").value;
   const hostID = $("fwdEditHost").value;
   const targetPort = parseInt($("fwdEditPort").value || "0");
   if (!hostID || targetPort < 1 || targetPort > 65535) {
     toast(I18N.t("valid.fill_target_port"), "err");
+    return;
+  }
+  // 整组编辑：走 group API
+  if (gid) {
+    const localPort = parseInt($("fwdEditLocalPort").value || "0");
+    try {
+      const res = await fetch(`/api/v1/forward/group/${encodeURIComponent(gid)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+      });
+      if (!res.ok) { toast(I18N.t("toast.edit_failed"), "err"); return; }
+      const j = await res.json().catch(() => ({}));
+      toast("已编辑整组 " + (j.edited || 0) + " 条转发", "ok");
+      closeForwardEditModal();
+      loadForwards();
+    } catch (e) { toast(I18N.t("toast.network_error2"), "err"); }
     return;
   }
   if (type === "tcp") {
@@ -728,6 +782,8 @@ document.addEventListener("click", e => {
     case "fwd-edit": editForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-del": deleteForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-group-toggle": toggleForwardGroup(e, el.dataset.gid, el.dataset.enable === "1"); break;
+    case "fwd-group-copy": copyForwardGroup(el.dataset.gid, parseInt(el.dataset.count || "0")); break;
+    case "fwd-group-edit": editForwardGroup(el.dataset.gid); break;
     case "fwd-group-del": deleteForwardGroup(el.dataset.gid, el.dataset.count); break;
     case "copy-input": navigator.clipboard?.writeText(el.value); toast(I18N.t("toast.copied"), "ok"); break;
   }

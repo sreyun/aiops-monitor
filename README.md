@@ -146,7 +146,7 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 | **自定义拨测** | HTTP（状态码/延时/TLS 证书天数）/ TCP / Ping（丢包率/RTT）/ 进程存活；历史曲线回看 |
 | **远程终端** | 浏览器全 TTY，经 Agent 反向连接（免开端口）；多标签、会话录制回放、只读旁观、命令审计、二次认证 |
 | **自动化剧本** | 多步骤编排 + 按 全部/分类/系统/主机 选目标 → 批量并行执行 → 实时输出 + 历史报告 |
-| **告警推送** | 飞书 / 钉钉 Webhook + 邮件 SMTP + 短信 + 语音电话（TTS 语音通知），触发/恢复各推一次，不刷屏 |
+| **告警推送** | 飞书 / 钉钉 Webhook + 邮件 SMTP + **多云短信 + 多云语音电话**（阿里云 / 华为云 / 腾讯云，TTS 语音通知），触发/恢复各推一次，不刷屏 |
 | **多用户 RBAC** | admin / operator / viewer 三角色，路由级权限拦截，用户管理界面 |
 | **MFA 两步验证** | TOTP（RFC 6238），Google Authenticator 兼容，扫码入网 |
 | **账户找回** | 未登录双重验证：邮箱验证码 + 可选 MFA（TOTP 动态口令）→ 找回用户名/重置密码 |
@@ -164,7 +164,8 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 | **端口转发（TCP）** | 经 Agent 隧道将远端主机的 TCP 端口映射到服务端本地端口，支持持久规则 + 启停/编辑/复制 |
 | **HTTP 反向代理** | 无状态代理：`/proxy/{hostID}/{port}/{path}` 直通目标主机 Web 服务，支持 WebSocket 升级 |
 | **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
-| **告警阈值分级** | 保守 / 标准 / 宽松三档预设，面板一键切换，适配不同部署场景 |
+| **告警阈值自定义** | 27 组细粒度 warn/crit 阈值（主机 / 拨测 / API / 任务 / 转发五大维度）逐项可调，主机维度另含保守/标准/宽松三档预设，零值自动兜底默认 |
+| **向量化模型配置** | RAG 嵌入模型与对话模型解耦，可接任意 OpenAI 兼容 `/embeddings`（OpenAI / 百炼 / bge / m3e 等），维度可配 + 一键连通性自检 |
 | **i18n 国际化** | 中文简体 / English / 中文繁体，全链路覆盖前端面板与后端 API |
 | **告警治理** | 静默（时段/星期）/ 抑制（主因抑衍生）/ 路由（按级别·主机分流渠道），抑制告警风暴 |
 | **API 监控** | 业务系统接口批量黑盒拨测：可用性 / 时延 / P95 / 吞吐，补齐「业务可用性」维度 |
@@ -458,6 +459,22 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `thresholds.load_crit` | float | `8.0` | 系统负载严重倍率（× CPU 核心数） |
 | `thresholds.proc_warn` | float | `0.5` | 进程数异常变化比例（50% = 突增/突降一半） |
 | `thresholds.offline_after_sec` | int | `60` | 主机失联判定秒数 |
+| `thresholds.check_ping_loss_warn` / `_crit` | float | `10` / `30` | 拨测 Ping 丢包率 警告 / 严重（%） |
+| `thresholds.check_ping_latency_warn` / `_crit` | float | `100` / `500` | 拨测 Ping 平均延迟 警告 / 严重（ms） |
+| `thresholds.check_tcp_timeout_warn` / `_crit` | float | `1000` / `5000` | 拨测 TCP 连接超时 警告 / 严重（ms） |
+| `thresholds.check_http_resp_warn` / `_crit` | float | `1000` / `5000` | 拨测 HTTP 响应时间 警告 / 严重（ms） |
+| `thresholds.check_http_status_warn` / `_crit` | int | `1` / `5` | 拨测 HTTP 非 2xx 次数 警告 / 严重 |
+| `thresholds.check_proc_fail_warn` / `_crit` | int | `1` / `3` | 进程存活失败次数 警告 / 严重 |
+| `thresholds.api_avail_warn` / `_crit` | float | `99` / `95` | API 接口可用率 警告 / 严重（低于此值告警，%） |
+| `thresholds.api_avg_resp_warn` / `_crit` | float | `500` / `2000` | API 平均响应时间 警告 / 严重（ms） |
+| `thresholds.api_p95_resp_warn` / `_crit` | float | `1000` / `5000` | API P95 响应时间 警告 / 严重（ms） |
+| `thresholds.api_throughput_warn` / `_crit` | float | `100` / `10` | API 吞吐量 警告 / 严重（低于此值告警，req/s） |
+| `thresholds.task_fail_warn` / `_crit` | int | `1` / `5` | 编排定时任务失败次数 警告 / 严重 |
+| `thresholds.task_timeout_warn` / `_crit` | float | `60` / `300` | 编排定时任务超时时长 警告 / 严重（s） |
+| `thresholds.forward_conn_warn` / `_crit` | int | `200` / `280` | 端口转发活跃连接数 警告 / 严重 |
+| `thresholds.forward_bw_warn` / `_crit` | float | `80` / `95` | 端口转发带宽使用率 警告 / 严重（%） |
+| `thresholds.forward_err_warn` / `_crit` | float | `5` / `15` | 端口转发错误率 警告 / 严重（%） |
+| `thresholds.forward_lat_warn` / `_crit` | float | `1000` / `5000` | 端口转发平均延迟 警告 / 严重（ms） |
 | `require_token` | bool | `false` | 强制 Agent Token |
 | `allow_anonymous_agents` | bool | `false` | 允许无 Token Agent |
 | `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
@@ -475,23 +492,42 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | `smtp.smtp_from_name` | string | `"AIOps Monitor"` | 发件人显示名称 |
 | `smtp.smtp_use_tls` | bool | `false` | 启用隐式 TLS（465 选 `true`，587 选 `false`） |
 | `sms.enabled` | bool | `false` | 短信推送开关 |
-| `sms.provider` | string | `"aliyun"` | 短信服务商（`aliyun`；`huawei`/`tencent` 暂未实现） |
-| `sms.access_key` | string | `""` | 云账号 AccessKey |
-| `sms.secret_key` | string | `""` | 云账号 SecretKey（脱敏回显） |
+| `sms.provider` | string | `"aliyun"` | 短信服务商：`aliyun`（阿里云）/ `huawei`（华为云）/ `tencent`（腾讯云），三云均已支持 |
+| `sms.access_key` | string | `""` | 云账号 AccessKey（阿里云 AccessKeyId / 华为云 AppKey / 腾讯云 SecretId） |
+| `sms.secret_key` | string | `""` | 云账号 SecretKey（阿里云 AccessKeySecret / 华为云 AppSecret / 腾讯云 SecretKey；脱敏回显） |
+| `sms.app_id` | string | `""` | 应用/项目标识：**华为云** = 短信应用的 project_id；**腾讯云** = SmsSdkAppId；阿里云留空 |
 | `sms.sign_name` | string | `""` | 短信签名（SignName） |
-| `sms.template_code` | string | `""` | 短信模板 CODE（TemplateCode） |
-| `sms.phones` | []string | `[]` | 接收手机号列表 |
+| `sms.template_code` | string | `""` | 短信模板 CODE（阿里云 TemplateCode / 华为云 templateId / 腾讯云 TemplateId） |
+| `sms.template_param` | string | `""` | 自定义模板参数（JSON，如 `{"code":"${code}"}`；留空时默认注入 `{"message":"告警文本"}`） |
+| `sms.phones` | []string | `[]` | 接收手机号列表（华为/腾讯自动补 `+86` 前缀） |
 | `voice_call.enabled` | bool | `false` | 语音电话推送开关 |
-| `voice_call.provider` | string | `"aliyun"` | 语音服务商（`aliyun`；`huawei`/`tencent` 暂未实现） |
-| `voice_call.access_key` | string | `""` | 云账号 AccessKey |
-| `voice_call.secret_key` | string | `""` | 云账号 SecretKey（脱敏回显） |
-| `voice_call.called_numbers` | []string | `[]` | 被叫号码列表 |
-| `voice_call.tts_code` | string | `""` | 语音模板 TTS CODE（TTSCode） |
+| `voice_call.provider` | string | `"aliyun"` | 语音服务商：`aliyun`（阿里云）/ `huawei`（华为云）/ `tencent`（腾讯云），三云均已支持 |
+| `voice_call.access_key` | string | `""` | 云账号 AccessKey（同短信规则） |
+| `voice_call.secret_key` | string | `""` | 云账号 SecretKey（同短信规则；脱敏回显） |
+| `voice_call.app_id` | string | `""` | 应用/项目标识：**华为云** = project_id；**腾讯云** = VoiceSdkAppid；阿里云留空 |
+| `voice_call.called_numbers` | []string | `[]` | 被叫号码列表（华为/腾讯自动补 `+86` 前缀） |
+| `voice_call.tts_code` | string | `""` | 语音模板 TTS CODE（阿里云 TtsCode / 华为云 displayNbr 对应模板 / 腾讯云 TemplateId） |
 | `voice_call.tts_param` | string | `""` | 语音模板参数（JSON，默认 `{"message":"..."}`） |
 
-#### 告警阈值三档预设（v5.4.1）
+> **多云短信 / 语音鉴权说明**：阿里云走 ACS3-HMAC-SHA256 签名 V3（`dysmsapi` / `dyvmsapi`）；华为云走 X-WSSE（`smsapi.cn-north-4` / `rtc-api`，需填 `app_id` = project_id）；腾讯云走 TC3-HMAC-SHA256（`sms.tencentcloudapi.com` / `vms.tencentcloudapi.com`，需填 `app_id`）。切换服务商只需改 `provider` 并填写对应字段，无需改动部署。
 
-默认使用「标准」档，用户可根据部署环境通过 `server_config.json` 的 `thresholds` 字段切换：
+#### 报警阈值自定义配置
+
+系统提供 **27 组（warn / crit）细粒度阈值**，覆盖五大监控维度，全部可通过 `server_config.json` 的 `thresholds` 字段或面板「告警设置」逐项自定义，保存即生效：
+
+| 维度 | 覆盖指标 |
+|---|---|
+| **主机资源** | CPU / 内存 / 磁盘 / 磁盘 IO / IOPS / GPU / 系统负载 / 进程数变化 / 离线判定 |
+| **拨测监控** | Ping 丢包率与延迟 / TCP 连接超时 / HTTP 响应时间与状态码 / 进程存活失败次数 |
+| **API 业务监控** | 接口可用率 / 平均响应 / P95 响应 / 吞吐量 |
+| **编排定时任务** | 执行失败次数 / 超时时长 |
+| **端口转发** | 活跃连接数 / 带宽使用率 / 错误率 / 平均延迟 |
+
+> **零值自动兜底（backfill）**：告警引擎按 `指标 ≥ 阈值` 触发，阈值 0 会导致持续误报，因此任何 0 值（未配置 / 表单留空 / 旧配置缺字段）都会被自动回退到标准默认值——**填多少用多少，不填自动用推荐默认**，无需担心漏配。
+
+##### 主机资源三档预设（快速起步）
+
+主机资源维度内置保守 / 标准 / 宽松三档，默认「标准」，可作为自定义的起点：
 
 | 指标 | 保守（敏感） | 标准（推荐·默认） | 宽松（低噪） |
 |---|---|---|---|
@@ -672,8 +708,8 @@ p.emit()                                   # 输出 JSON
 1. 面板右上角 **告警设置**
 2. 填飞书或钉钉 Webhook（钉钉加签需填 Secret），勾选启用
 3. **邮件推送**：展开 SMTP 区域，填服务器/端口/账号/授权码，465 端口选隐式 TLS，587 不选
-4. **短信推送**：展开「短信」区域，选服务商（默认 `aliyun`），填 AccessKey / SecretKey / 短信签名 / 模板 CODE / 接收手机号，勾选启用
-5. **语音电话推送**：展开「语音通知」区域，填 AccessKey / SecretKey / 被叫号码 / 语音模板 TTS CODE（可选 TTS 参数），勾选启用；走阿里云语音服务（SingleCallByTts）将告警文本转为语音呼叫值班人
+4. **短信推送**：展开「短信」区域，选服务商（**阿里云 / 华为云 / 腾讯云**），填 AccessKey / SecretKey / 短信签名 / 模板 CODE / 接收手机号；华为云 / 腾讯云还需填应用标识（`app_id`，华为=project_id、腾讯=SmsSdkAppId），可选自定义模板参数 JSON，勾选启用
+5. **语音电话推送**：展开「语音通知」区域，选服务商（阿里云 / 华为云 / 腾讯云），填 AccessKey / SecretKey / 被叫号码 / 语音模板 TTS CODE（可选 TTS 参数），华为 / 腾讯需填 `app_id`（华为=project_id、腾讯=VoiceSdkAppid），勾选启用；将告警文本转为语音（TTS）呼叫值班人
 6. 点 **发送测试** 确认通道连通（可单独验证短信 / 语音电话）
 7. 点 **保存** — 保存后立即补推当前未恢复告警
 
@@ -715,9 +751,24 @@ p.emit()                                   # 输出 JSON
 基于可插拔 LLM（OpenAI 兼容 / Anthropic / 百炼）的内置**自主运维 Agent 框架** + AI 巡检诊断，是监控数据的智能增值层：
 
 - **AI 巡检（aiops）**：定时 / 手动健康巡检，综合在线 / 离线主机、活跃告警、SLO 突破、近时段错误日志产出健康研判；**未配置 LLM 时自动启用内置启发式兜底，零外部依赖也能跑**。
-- **事件诊断 + RAG**：critical 事件自动触发 AI 根因研判并写入事件时间线；可选启用 **pgvector 诊断向量**检索历史相似案例（需配置 embedding 端点），越用越准。
+- **事件诊断 + RAG**：critical 事件自动触发 AI 根因研判并写入事件时间线；可选启用 **pgvector 诊断向量**检索历史相似案例（需配置向量化模型端点），越用越准。
 - **自主 Agent**：面板「AI 助手」多轮对话（SSE 流式 + 会话持久化），支持 **Function Calling 工具调用**——查询指标 / 检索日志 / 列出告警 / 检索相似案例 / 只读终端巡检；可配置 Agent 规则（rules / templates）与自动审批、终端只读开关。
 - 配置：在「AI 配置」中填写 LLM 端点、模型与密钥（经 `AIOPS_SECRET_KEY` AES 加密落库）并启用智能分析后，即可开启自主 Agent、RAG 诊断等能力。
+
+#### 向量化模型（RAG）配置
+
+RAG 诊断依赖的**向量化（embedding）模型已与对话模型解耦**，可指向任意 OpenAI 兼容的 `/embeddings` 服务（OpenAI text-embedding-3、阿里百炼 text-embedding-v2、以及自建 bge / m3e / gte / text2vec 等本地模型），不再绑定单一厂商：
+
+| 字段（`ai.*`） | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `ai.embed_endpoint` | string | `""` | 向量化端点，留空时**回退复用主对话模型 Endpoint** |
+| `ai.embed_api_key` | string | `""` | 向量化 API Key，留空时回退复用主 API Key（脱敏回显） |
+| `ai.embed_model` | string | `""` | 向量化模型名，如 `text-embedding-3-small` / `text-embedding-v2` / `bge-large-zh` |
+| `ai.embed_dimensions` | int | `1536` | 目标向量维度，**必须与 PostgreSQL `pgvector` 列维度一致** |
+
+- **解耦优势**：对话可用大模型、向量化用轻量嵌入模型，二者独立计费、独立限流，成本与性能各自最优。
+- **维度一致性**：`embed_dimensions` 决定写入 `diagnosis_embeddings` 表的向量长度，须与建表时的 `vector(N)` 列维度对齐（默认 1536），改动维度需同步迁移向量列。
+- **连通性自检**：「AI 配置」页点 **测试向量化配置**（`POST /api/v1/ai/test-embed`）即时校验端点 / 密钥 / 模型是否可用，并回显实际返回的向量维度，避免配置错位导致 RAG 写入失败。
 
 ## 统一消息中心
 
@@ -918,7 +969,7 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 | 服务端 | Go 1.22+，`net/http`（Go 1.22 路由），`embed` 内嵌面板 |
 | 前端面板 | 原生 HTML/CSS/JS，无框架依赖 |
 | 插件层 | Python 3 + psutil（可选） |
-| 告警推送 | 飞书/钉钉 Webhook + 邮件 SMTP + 短信 + 语音电话（`net/smtp` + 阿里云 SendSms / SingleCallByTts） |
+| 告警推送 | 飞书/钉钉 Webhook + 邮件 SMTP + 多云短信 + 多云语音电话（`net/smtp` + 阿里云 / 华为云 / 腾讯云 SMS & TTS 语音） |
 | PWA | manifest.json + Service Worker + icon.svg |
 
 ### 架构图
@@ -1249,7 +1300,9 @@ aiops-monitor/
 - [x] 管理员密码重置 CLI 子命令 + 环境变量覆盖配置（`AIOPS_*`）
 - [x] TCP 转发默认监听 127.0.0.1 + 可配置监听地址与端口范围
 - [x] 告警治理：静默（时段/星期）/ 抑制（主因抑衍生）/ 路由（按级别·主机分流渠道）
-- [x] 告警通知渠道扩展：短信（阿里云 SendSms）+ 语音电话（TTS 语音通知）推送，与飞书/钉钉/邮件协同
+- [x] 告警通知渠道扩展：**多云短信 + 多云语音电话**（阿里云 / 华为云 / 腾讯云，SMS & TTS 语音）推送，与飞书/钉钉/邮件协同
+- [x] 报警阈值自定义：27 组 warn/crit 细粒度阈值（主机 / 拨测 / API / 任务 / 转发五大维度），零值自动兜底默认
+- [x] 向量化模型解耦：RAG 嵌入模型独立配置（端点 / 密钥 / 模型 / 维度），支持任意 OpenAI 兼容 `/embeddings` + 一键连通性自检
 - [x] API 监控：业务系统接口批量黑盒拨测（可用性 / 时延 / P95 / 吞吐）
 - [x] AI 运维助手：可插拔 LLM 巡检诊断 + RAG 相似案例 + 自主 Agent（Function Calling）
 - [x] 统一消息中心：事件 / 告警 / SLO / 自动修复 / AI / 工单 统一收件箱

@@ -222,9 +222,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/v1/forward/{id}", s.handleForwardEdit)
 	mux.HandleFunc("PUT /api/v1/forward/{id}/toggle", s.handleForwardToggle)
 	mux.HandleFunc("POST /api/v1/forward/{id}/copy", s.handleForwardCopy)
-	// 端口范围批量组：整组删除 / 启停（避免几百条逐条操作）
+	// 端口范围批量组：整组删除 / 启停 / 复制 / 编辑（避免几百条逐条操作）
 	mux.HandleFunc("DELETE /api/v1/forward/group/{gid}", s.handleForwardGroupDelete)
 	mux.HandleFunc("PUT /api/v1/forward/group/{gid}/toggle", s.handleForwardGroupToggle)
+	mux.HandleFunc("POST /api/v1/forward/group/{gid}/copy", s.handleForwardGroupCopy)
+	mux.HandleFunc("PUT /api/v1/forward/group/{gid}", s.handleForwardGroupEdit)
 	mux.HandleFunc("GET /api/v1/forward/stats", s.handleForwardStats)
 	mux.HandleFunc("GET /api/v1/forward/health", s.handleForwardHealth)
 	// HTTP proxy shortcuts (saved configs)

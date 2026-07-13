@@ -606,7 +606,7 @@
         <!-- 活跃转发列表 -->
         <div id="forwardList" class="fwd-list"></div>
         <div class="empty" id="forwardEmpty" data-i18n="empty.no_forwards">
-          还没有端口转发规则。点「新建转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
+          还没有端口转发规则。点「新建 TCP/UDP 端口转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
         </div>
       </section>
     </div>
@@ -1600,6 +1600,7 @@
     <div class="modal-body">
       <input type="hidden" id="fwdEditId">
       <input type="hidden" id="fwdEditType">
+      <input type="hidden" id="fwdEditGroupId">
       <div class="field">
         <label data-i18n="form.target_host">目标主机</label>
         <select id="fwdEditHost" style="width:100%"></select>

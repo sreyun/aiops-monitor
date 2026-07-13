@@ -471,10 +471,11 @@ func sha256Hex(s string) string {
 
 // aliyunSignV3 按阿里云 API 签名 V3（ACS3-HMAC-SHA256）计算签名。
 // 规范：
-//   canonicalRequest = HTTPMethod + "\n" + CanonicalURI + "\n" + CanonicalQueryString +
-//                      "\n" + CanonicalHeaders + "\n" + SignedHeaders + "\n" + HashedPayload
-//   stringToSign = "ACS3-HMAC-SHA256\n" + SHA256(canonicalRequest)
-//   signature = Hex(HMAC-SHA256(AccessKeySecret, stringToSign))
+//
+//	canonicalRequest = HTTPMethod + "\n" + CanonicalURI + "\n" + CanonicalQueryString +
+//	                   "\n" + CanonicalHeaders + "\n" + SignedHeaders + "\n" + HashedPayload
+//	stringToSign = "ACS3-HMAC-SHA256\n" + SHA256(canonicalRequest)
+//	signature = Hex(HMAC-SHA256(AccessKeySecret, stringToSign))
 func aliyunSignV3(method, canonicalURI, queryString, payload string, headers map[string]string, signedHeaders []string, secret string) string {
 	// 1) 构建规范化请求头（按 signedHeaders 顺序，全小写，值去首尾空白）
 	sort.Strings(signedHeaders)
@@ -585,11 +586,12 @@ func (n *Notifier) sendAliyunSMS(cfg SMSConfig, text string) error {
 	}
 	signedHeaders := []string{"host", "x-acs-action", "x-acs-content-sha256", "x-acs-date", "x-acs-signature-nonce", "x-acs-version"}
 
-	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, cfg.SecretKey)
+	// 去首尾空白，防止粘贴凭证时带入空格/换行导致签名不匹配
+	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, strings.TrimSpace(cfg.SecretKey))
 
 	// 构建 Authorization 请求头
 	auth := fmt.Sprintf("ACS3-HMAC-SHA256 Credential=%s,SignedHeaders=%s,Signature=%s",
-		cfg.AccessKey, strings.Join(signedHeaders, ";"), signature)
+		strings.TrimSpace(cfg.AccessKey), strings.Join(signedHeaders, ";"), signature)
 
 	req, _ := http.NewRequest(http.MethodPost, "https://"+host+"/?"+queryString, nil)
 	req.Header.Set("Authorization", auth)
@@ -678,10 +680,11 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 	}
 	signedHeaders := []string{"host", "x-acs-action", "x-acs-content-sha256", "x-acs-date", "x-acs-signature-nonce", "x-acs-version"}
 
-	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, cfg.SecretKey)
+	// 去首尾空白，防止粘贴凭证时带入空格/换行导致签名不匹配
+	signature := aliyunSignV3("POST", "/", queryString, "", headers, signedHeaders, strings.TrimSpace(cfg.SecretKey))
 
 	auth := fmt.Sprintf("ACS3-HMAC-SHA256 Credential=%s,SignedHeaders=%s,Signature=%s",
-		cfg.AccessKey, strings.Join(signedHeaders, ";"), signature)
+		strings.TrimSpace(cfg.AccessKey), strings.Join(signedHeaders, ";"), signature)
 
 	req, _ := http.NewRequest(http.MethodPost, "https://"+host+"/?"+queryString, nil)
 	req.Header.Set("Authorization", auth)
@@ -762,11 +765,11 @@ func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
 		cfg.AccessKey, passwordDigest, nonce, created)
 
 	body := map[string]any{
-		"from":         "",
-		"to":           strings.Join(toList, ","),
-		"templateId":   cfg.TemplateCode,
+		"from":          "",
+		"to":            strings.Join(toList, ","),
+		"templateId":    cfg.TemplateCode,
 		"templateParas": templateParas,
-		"signature":    cfg.SignName,
+		"signature":     cfg.SignName,
 	}
 	bodyBytes, _ := json.Marshal(body)
 

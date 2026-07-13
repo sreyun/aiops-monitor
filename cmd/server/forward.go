@@ -748,6 +748,10 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 			_ = r.listener.Close()
 			r.listener = nil
 		}
+		if r.packetConn != nil {
+			_ = r.packetConn.Close()
+			r.packetConn = nil
+		}
 		r.localPort = localPort
 		// Rebuild listenAddr with the new port, keeping the original host
 		if host, _, err := net.SplitHostPort(r.listenAddr); err == nil && host != "" {
@@ -780,6 +784,9 @@ func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
 		localPort:  0, // will be auto-assigned
 		listenAddr: "",
 		listener:   nil,
+		packetConn: nil,
+		protocol:   r.protocol,
+		groupID:    r.groupID,
 		operator:   r.operator,
 		createdAt:  time.Now().Unix(),
 		enabled:    true,

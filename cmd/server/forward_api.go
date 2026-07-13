@@ -153,6 +153,115 @@ func (s *Server) handleForwardGroupToggle(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"toggled": toggled, "enabled": req.Enabled})
 }
 
+// handleForwardGroupCopy 复制同一端口范围组的所有转发规则（整组克隆）。
+// POST /api/v1/forward/group/{gid}/copy
+func (s *Server) handleForwardGroupCopy(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	user, _ := s.currentUser(r)
+	operator := s.clientIP(r)
+	if user.Username != "" {
+		operator = user.Username
+	}
+	listenHost := s.cfg.ForwardListenAddr()
+	var created []forwardInfo
+	for _, id := range s.forward.groupRuleIDs(gid) {
+		orig := s.forward.getRule(id)
+		if orig == nil {
+			continue
+		}
+		newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator)
+		if err != nil {
+			continue
+		}
+		go s.serveRule(newRule)
+		created = append(created, forwardInfo{
+			ID: newRule.id, HostID: newRule.hostID, Hostname: newRule.hostname,
+			TargetPort: newRule.targetPort, LocalPort: newRule.localPort,
+			ListenAddr: newRule.listenAddr, Status: "active",
+			CreatedAt: newRule.createdAt, Operator: newRule.operator,
+			Enabled: newRule.enabled, Protocol: newRule.protocol,
+		})
+	}
+	if len(created) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"copied": len(created), "rules": created})
+}
+
+// handleForwardGroupEdit 批量编辑同一端口范围组的所有转发规则（host / target port / local port）。
+// PUT /api/v1/forward/group/{gid}
+func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	if gid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		HostID     string `json:"host_id"`
+		TargetPort int    `json:"target_port"`
+		LocalPort  int    `json:"local_port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	// Lookup hostname when host_id is provided
+	var hostname string
+	if req.HostID != "" {
+		hostname = shortID(req.HostID)
+		for _, h := range s.store.ListHosts() {
+			if h.ID == req.HostID {
+				hostname = h.Hostname
+				break
+			}
+		}
+	}
+	edited := 0
+	for _, id := range s.forward.groupRuleIDs(gid) {
+		rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort)
+		if err != nil {
+			continue
+		}
+		// Rebind listener if needed (same logic as single edit)
+		if rule.enabled {
+			if rule.protocol == "udp" {
+				if rule.packetConn == nil {
+					pc, lnErr := net.ListenPacket("udp", rule.listenAddr)
+					if lnErr != nil {
+						continue
+					}
+					s.forward.mu.Lock()
+					rule.packetConn = pc
+					s.forward.mu.Unlock()
+					go s.serveForwardUDP(rule)
+				}
+			} else {
+				if rule.listener == nil {
+					ln, lnErr := net.Listen("tcp", rule.listenAddr)
+					if lnErr != nil {
+						continue
+					}
+					s.forward.mu.Lock()
+					rule.listener = ln
+					s.forward.mu.Unlock()
+					go s.serveForwardListener(rule)
+				}
+			}
+		}
+		edited++
+	}
+	if edited == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"edited": edited})
+}
+
 // handleForwardHealth checks if forwarding is available.
 // GET /api/v1/forward/health
 func (s *Server) handleForwardHealth(w http.ResponseWriter, r *http.Request) {
@@ -354,16 +463,33 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// v5.4.1: when localPort changed, the old listener was closed — rebind
-	if rule.listener == nil && rule.enabled {
-		ln, lnErr := net.Listen("tcp", rule.listenAddr)
-		if lnErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
-			return
+	// v5.5.76: handle both TCP and UDP re-listen after edit
+	if rule.enabled {
+		if rule.protocol == "udp" {
+			if rule.packetConn == nil {
+				pc, lnErr := net.ListenPacket("udp", rule.listenAddr)
+				if lnErr != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+					return
+				}
+				s.forward.mu.Lock()
+				rule.packetConn = pc
+				s.forward.mu.Unlock()
+				go s.serveForwardUDP(rule)
+			}
+		} else {
+			if rule.listener == nil {
+				ln, lnErr := net.Listen("tcp", rule.listenAddr)
+				if lnErr != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": lnErr.Error()})
+					return
+				}
+				s.forward.mu.Lock()
+				rule.listener = ln
+				s.forward.mu.Unlock()
+				go s.serveForwardListener(rule)
+			}
 		}
-		s.forward.mu.Lock()
-		rule.listener = ln
-		s.forward.mu.Unlock()
-		go s.serveForwardListener(rule)
 	}
 	// Count sessions belonging to this rule (under lock)
 	sessions := 0

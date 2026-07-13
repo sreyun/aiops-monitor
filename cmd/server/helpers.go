@@ -90,6 +90,13 @@ func mergeSecrets(in *ServerConfig, old ServerConfig) {
 	// Custom webhook headers may carry auth tokens and are masked in GET responses;
 	// restore the stored value when the browser submits a blank/masked placeholder.
 	in.CustomWebhook.Headers = keepIfBlank(in.CustomWebhook.Headers, old.CustomWebhook.Headers)
+	// 短信 / 语音的 AccessKey + SecretKey 在 GET 里被 maskSecret 脱敏（如 LTAI****GHIJ）。
+	// 表单回传脱敏串时必须还原为原值——否则「发送测试」或再次保存会拿脱敏串当真实凭证去做
+	// ACS3-HMAC-SHA256 签名，导致阿里云返回 SignatureDoesNotMatch / InvalidAccessKeyId。
+	in.SMS.AccessKey = keepIfBlank(in.SMS.AccessKey, old.SMS.AccessKey)
+	in.SMS.SecretKey = keepIfBlank(in.SMS.SecretKey, old.SMS.SecretKey)
+	in.VoiceCall.AccessKey = keepIfBlank(in.VoiceCall.AccessKey, old.VoiceCall.AccessKey)
+	in.VoiceCall.SecretKey = keepIfBlank(in.VoiceCall.SecretKey, old.VoiceCall.SecretKey)
 }
 
 func keepIfBlank(newv, oldv string) string {

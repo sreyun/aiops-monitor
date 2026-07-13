@@ -123,7 +123,9 @@ Open `http://localhost:8529` 鈥?host card and metrics appear within seconds.
 | **Custom probes** | HTTP (status/latency/TLS cert days) / TCP / Ping (loss%/RTT) / process; history curves |
 | **Remote terminal** | Browser full TTY via Agent reverse connection (no inbound port); multi-tab, recording playback, read-only observe, command audit |
 | **Automation playbooks** | Multi-step orchestration + target selection (all/category/system/host) 鈫?batch parallel execution 鈫?real-time output + history |
-| **Alert push** | Feishu / DingTalk Webhook + Email SMTP + SMS + Voice call (TTS), trigger/recover transitions only, no spam |
+| **Alert push** | Feishu / DingTalk Webhook + Email SMTP + **multi-cloud SMS + multi-cloud Voice call** (Aliyun / Huawei / Tencent, TTS), trigger/recover transitions only, no spam |
+| **Custom alert thresholds** | 27 fine-grained warn/crit pairs (host / probe / API / task / forward), host dimension also offers conservative/standard/relaxed presets, zero-value auto-backfill |
+| **Embedding model config** | RAG embedding model decoupled from chat model, any OpenAI-compatible `/embeddings` (OpenAI / BaiLian / bge / m3e), configurable dimension + one-click self-check |
 | **Multi-user RBAC** | admin / operator / viewer, route-level permission, user management UI |
 | **MFA two-factor** | TOTP (RFC 6238), Google Authenticator compatible, QR enrollment |
 | **Account recovery** | Forgot username / forgot password (email code) / MFA unbind via email, anti-enumeration |
@@ -400,7 +402,28 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 | `thresholds.mem_crit` | float | `90` | Memory critical threshold (%) |
 | `thresholds.disk_warn` | float | `85` | Disk warning threshold (%) |
 | `thresholds.disk_crit` | float | `95` | Disk critical threshold (%) |
-| `thresholds.offline_after_sec` | int | `30` | Host offline threshold (seconds) |
+| `thresholds.offline_after_sec` | int | `60` | Host offline threshold (seconds) |
+| `thresholds.diskio_warn` / `_crit` | float | `80` / `95` | Disk IO utilization warn / crit (%) |
+| `thresholds.iops_warn` / `_crit` | float | `50000` / `100000` | IOPS warn / crit (total read+write) |
+| `thresholds.gpu_warn` / `_crit` | float | `80` / `95` | GPU utilization warn / crit (%) |
+| `thresholds.load_warn` / `_crit` | float | `4.0` / `8.0` | System load multiplier warn / crit (× CPU cores) |
+| `thresholds.proc_warn` | float | `0.5` | Process-count change ratio (0.5 = ±50%) |
+| `thresholds.check_ping_loss_warn` / `_crit` | float | `10` / `30` | Probe Ping packet loss warn / crit (%) |
+| `thresholds.check_ping_latency_warn` / `_crit` | float | `100` / `500` | Probe Ping latency warn / crit (ms) |
+| `thresholds.check_tcp_timeout_warn` / `_crit` | float | `1000` / `5000` | Probe TCP connect timeout warn / crit (ms) |
+| `thresholds.check_http_resp_warn` / `_crit` | float | `1000` / `5000` | Probe HTTP response time warn / crit (ms) |
+| `thresholds.check_http_status_warn` / `_crit` | int | `1` / `5` | Probe HTTP non-2xx count warn / crit |
+| `thresholds.check_proc_fail_warn` / `_crit` | int | `1` / `3` | Process-alive failure count warn / crit |
+| `thresholds.api_avail_warn` / `_crit` | float | `99` / `95` | API availability warn / crit (alerts below, %) |
+| `thresholds.api_avg_resp_warn` / `_crit` | float | `500` / `2000` | API avg response warn / crit (ms) |
+| `thresholds.api_p95_resp_warn` / `_crit` | float | `1000` / `5000` | API P95 response warn / crit (ms) |
+| `thresholds.api_throughput_warn` / `_crit` | float | `100` / `10` | API throughput warn / crit (alerts below, req/s) |
+| `thresholds.task_fail_warn` / `_crit` | int | `1` / `5` | Scheduled-task failure count warn / crit |
+| `thresholds.task_timeout_warn` / `_crit` | float | `60` / `300` | Scheduled-task timeout warn / crit (s) |
+| `thresholds.forward_conn_warn` / `_crit` | int | `200` / `280` | Port-forward active connections warn / crit |
+| `thresholds.forward_bw_warn` / `_crit` | float | `80` / `95` | Port-forward bandwidth usage warn / crit (%) |
+| `thresholds.forward_err_warn` / `_crit` | float | `5` / `15` | Port-forward error rate warn / crit (%) |
+| `thresholds.forward_lat_warn` / `_crit` | float | `1000` / `5000` | Port-forward avg latency warn / crit (ms) |
 | `require_token` | bool | `false` | Require Agent Token |
 | `allow_anonymous_agents` | bool | `false` | Allow Token-less Agents |
 | `terminal_disabled` | bool | `false` | Globally disable remote terminal |
@@ -414,19 +437,38 @@ See [INSTALL.md](INSTALL.md) for detailed deployment guide.
 | `smtp.smtp_from_name` | string | `"AIOps Monitor"` | Sender display name |
 | `smtp.smtp_use_tls` | bool | `false` | Enable implicit TLS (465 = `true`, 587 = `false`) |
 | `sms.enabled` | bool | `false` | SMS push toggle |
-| `sms.provider` | string | `"aliyun"` | SMS provider (`aliyun`; `huawei`/`tencent` not yet implemented) |
-| `sms.access_key` | string | `""` | Cloud account AccessKey |
-| `sms.secret_key` | string | `""` | Cloud account SecretKey (masked) |
+| `sms.provider` | string | `"aliyun"` | SMS provider: `aliyun` / `huawei` / `tencent` — all three supported |
+| `sms.access_key` | string | `""` | Cloud account AccessKey (Aliyun AccessKeyId / Huawei AppKey / Tencent SecretId) |
+| `sms.secret_key` | string | `""` | Cloud account SecretKey (Aliyun AccessKeySecret / Huawei AppSecret / Tencent SecretKey; masked) |
+| `sms.app_id` | string | `""` | App/project id: **Huawei** = SMS app project_id; **Tencent** = SmsSdkAppId; leave empty for Aliyun |
 | `sms.sign_name` | string | `""` | SMS signature (SignName) |
-| `sms.template_code` | string | `""` | SMS template CODE (TemplateCode) |
-| `sms.phones` | []string | `[]` | Recipient phone numbers |
+| `sms.template_code` | string | `""` | SMS template CODE (Aliyun TemplateCode / Huawei templateId / Tencent TemplateId) |
+| `sms.template_param` | string | `""` | Custom template params (JSON, e.g. `{"code":"${code}"}`; defaults to `{"message":"<alert>"}` when empty) |
+| `sms.phones` | []string | `[]` | Recipient phone numbers (Huawei/Tencent auto-prefix `+86`) |
 | `voice_call.enabled` | bool | `false` | Voice call push toggle |
-| `voice_call.provider` | string | `"aliyun"` | Voice provider (`aliyun`; `huawei`/`tencent` not yet implemented) |
-| `voice_call.access_key` | string | `""` | Cloud account AccessKey |
-| `voice_call.secret_key` | string | `""` | Cloud account SecretKey (masked) |
-| `voice_call.called_numbers` | []string | `[]` | Called numbers |
-| `voice_call.tts_code` | string | `""` | Voice template TTS CODE (TTSCode) |
+| `voice_call.provider` | string | `"aliyun"` | Voice provider: `aliyun` / `huawei` / `tencent` — all three supported |
+| `voice_call.access_key` | string | `""` | Cloud account AccessKey (same rule as SMS) |
+| `voice_call.secret_key` | string | `""` | Cloud account SecretKey (same rule as SMS; masked) |
+| `voice_call.app_id` | string | `""` | App/project id: **Huawei** = project_id; **Tencent** = VoiceSdkAppid; leave empty for Aliyun |
+| `voice_call.called_numbers` | []string | `[]` | Called numbers (Huawei/Tencent auto-prefix `+86`) |
+| `voice_call.tts_code` | string | `""` | Voice template TTS CODE (Aliyun TtsCode / Huawei template / Tencent TemplateId) |
 | `voice_call.tts_param` | string | `""` | Voice template params (JSON, default `{"message":"..."}`) |
+
+> **Multi-cloud SMS / voice auth**: Aliyun uses ACS3-HMAC-SHA256 signature V3 (`dysmsapi` / `dyvmsapi`); Huawei uses X-WSSE (`smsapi.cn-north-4` / `rtc-api`, requires `app_id` = project_id); Tencent uses TC3-HMAC-SHA256 (`sms.tencentcloudapi.com` / `vms.tencentcloudapi.com`, requires `app_id`). Switching provider only needs a `provider` change plus the matching fields — no redeploy.
+
+#### Custom Alert Thresholds
+
+The platform ships **27 fine-grained (warn / crit) threshold pairs** across five monitoring dimensions, all individually editable via the `thresholds` field in `server_config.json` or the dashboard "Alert Settings" — effective on save:
+
+| Dimension | Metrics covered |
+|---|---|
+| **Host resources** | CPU / Memory / Disk / Disk IO / IOPS / GPU / System load / Process-count change / Offline detection |
+| **Probe monitoring** | Ping loss & latency / TCP connect timeout / HTTP response & status code / Process-alive failures |
+| **API business monitoring** | Availability / Avg response / P95 response / Throughput |
+| **Scheduled tasks** | Failure count / Timeout duration |
+| **Port forwarding** | Active connections / Bandwidth usage / Error rate / Avg latency |
+
+> **Zero-value backfill**: the alert engine fires on `metric ≥ threshold`, so a `0` would alert constantly. Any `0` value (unconfigured / blank form / legacy config missing a field) is automatically healed to its standard default — **fill what you need, the rest fall back to recommended defaults**. Host-resource metrics additionally offer conservative / standard / relaxed presets (default: standard) as a starting point.
 
 ### Server CLI Parameters
 
@@ -539,8 +581,8 @@ Alerts are configured visually in the dashboard 鈥?no file editing:
 1. Click **Alert Settings** in the top-right
 2. Fill Feishu or DingTalk Webhook URL (DingTalk: fill Secret if using signing), check enable
 3. **Email push**: expand SMTP section, fill server/port/account/auth code, port 465 = implicit TLS, 587 = not
-4. **SMS push**: expand the SMS section, choose provider (default `aliyun`), fill AccessKey / SecretKey / SignName / TemplateCode / recipient phones, check enable
-5. **Voice call push**: expand the Voice call section, fill AccessKey / SecretKey / called numbers / TTS Code (optional TTS param), check enable; uses Aliyun SingleCallByTts to read the alert aloud to on-call
+4. **SMS push**: expand the SMS section, choose provider (**Aliyun / Huawei Cloud / Tencent Cloud**), fill AccessKey / SecretKey / SignName / TemplateCode / recipient phones; Huawei/Tencent also need `app_id` (Huawei = project_id, Tencent = SmsSdkAppId) and an optional custom template-param JSON, check enable
+5. **Voice call push**: expand the Voice call section, choose provider (Aliyun / Huawei / Tencent), fill AccessKey / SecretKey / called numbers / TTS Code (optional TTS param); Huawei/Tencent need `app_id` (Huawei = project_id, Tencent = VoiceSdkAppid), check enable; reads the alert aloud (TTS) to on-call
 6. Click **Send Test** to verify connectivity (SMS / voice can be tested separately)
 7. Click **Save** 鈥?outstanding alerts re-pushed after save
 
@@ -585,6 +627,21 @@ A built-in **autonomous ops Agent framework** on pluggable LLMs (OpenAI-compatib
 - **Incident diagnosis + RAG**: a critical incident auto-triggers AI root-cause analysis written into the incident timeline; optional **pgvector diagnosis embeddings** retrieve historically similar cases (requires an embedding endpoint) — gets smarter over time.
 - **Autonomous Agent**: multi-turn chat in dashboard "AI Assistant" (SSE streaming + session persistence) with **Function Calling tool use** — query metrics / search logs / list alerts / retrieve similar cases / read-only terminal inspection; configurable agent rules (rules / templates) plus auto-approve and read-only terminal toggles.
 - Config: intelligent analysis is enabled after filling the LLM endpoint, model and secret (AES-encrypted at rest via `AIOPS_SECRET_KEY`) in "AI Config"; the autonomous Agent, RAG diagnosis and other capabilities can then be turned on.
+
+#### Embedding Model (RAG) Configuration
+
+The **embedding model used for RAG is decoupled from the chat model** and can point to any OpenAI-compatible `/embeddings` service (OpenAI text-embedding-3, Aliyun BaiLian text-embedding-v2, or self-hosted bge / m3e / gte / text2vec) — no longer tied to a single vendor:
+
+| Field (`ai.*`) | Type | Default | Description |
+|---|---|---|---|
+| `ai.embed_endpoint` | string | `""` | Embedding endpoint; **falls back to the main chat endpoint** when empty |
+| `ai.embed_api_key` | string | `""` | Embedding API Key; falls back to the main API Key when empty (masked) |
+| `ai.embed_model` | string | `""` | Embedding model name, e.g. `text-embedding-3-small` / `text-embedding-v2` / `bge-large-zh` |
+| `ai.embed_dimensions` | int | `1536` | Target vector dimension; **must match the PostgreSQL `pgvector` column dimension** |
+
+- **Decoupling benefit**: use a large model for chat and a lightweight embedding model for vectorization — independently billed and rate-limited, each optimized for cost and performance.
+- **Dimension consistency**: `embed_dimensions` determines the vector length written to `diagnosis_embeddings` and must align with the table's `vector(N)` column (default 1536); changing it requires migrating the vector column.
+- **Connectivity self-check**: click **Test Embedding Config** (`POST /api/v1/ai/test-embed`) in "AI Config" to validate endpoint / key / model instantly and echo back the actual returned dimension, avoiding mismatches that break RAG writes.
 
 ## Unified Message Center
 
@@ -772,7 +829,7 @@ Agent uses **active reverse connection**: server address is鍥哄寲 to `--serve
 | Server | Go 1.22+, `net/http` (Go 1.22 routing), `embed` for dashboard |
 | Dashboard | Vanilla HTML/CSS/JS, no framework deps |
 | Plugin layer | Python 3 + psutil (optional) |
-| Alert push | Feishu/DingTalk Webhook + Email SMTP + SMS + Voice call (`net/smtp` + Aliyun SendSms / SingleCallByTts) |
+| Alert push | Feishu/DingTalk Webhook + Email SMTP + multi-cloud SMS + multi-cloud Voice call (`net/smtp` + Aliyun / Huawei / Tencent SMS & TTS voice) |
 | PWA | manifest.json + Service Worker + icon.svg |
 
 ### Architecture Diagram
@@ -1039,7 +1096,9 @@ aiops-monitor/
 - [x] Machine fingerprint auth: token rotation doesn't affect installed agents
 - [x] One-click install: auto-detect architecture + download + config + boot autostart
 - [x] Alert governance: silence (time/weekday) / inhibit (root-cause suppresses derived) / route (by level/host to channels)
-- [x] Alert notification channels expanded: SMS (Aliyun SendSms) + Voice call (TTS) push, working alongside Feishu / DingTalk / Email
+- [x] Alert notification channels expanded: **multi-cloud SMS + multi-cloud Voice call** (Aliyun / Huawei / Tencent, SMS & TTS voice), working alongside Feishu / DingTalk / Email
+- [x] Custom alert thresholds: 27 fine-grained warn/crit pairs (host / probe / API / task / forward), zero-value auto-backfill to defaults
+- [x] Decoupled embedding model: standalone RAG embedding config (endpoint / key / model / dimension), any OpenAI-compatible `/embeddings` + one-click self-check
 - [x] API monitoring: batch black-box probes for business-system APIs (availability / latency / P95 / throughput)
 - [x] AI Ops Assistant: pluggable-LLM inspection diagnosis + RAG similar cases + autonomous Agent (Function Calling)
 - [x] Unified Message Center: single inbox for incidents / alerts / SLO / auto-remediation / AI / tickets
