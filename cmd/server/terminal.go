@@ -449,6 +449,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, Host: hostname, Message: Tz("log.open_terminal", hostname)})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.close_terminal", hostname)})
 
+	// 终端审计：把会话里解析出的每条命令记为独立的「终端审计日志」(KindTerminal)，附主机 IP。
+	hostIP := ""
+	if h := s.hostByID(hostID); h != nil {
+		hostIP = h.IP
+	}
+
 	if !s.term.notifyAgent(hostID, sess.id) {
 		_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.no_channel") + "\x1b[0m\r\n\r\n" + Tz("terminal.no_channel_hint_1") + "\r\n" + Tz("terminal.no_channel_hint_2") + "\r\n" + Tz("terminal.no_channel_hint_3") + "\r\n\r\n" + Tz("terminal.no_channel_hint_4") + "\r\n"))
 		return
@@ -508,7 +514,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// keystroke audit trail.
 			if typ == 'i' {
 				if cmd := sess.processCommandAudit(payload); cmd != "" {
-					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.terminal_cmd", hostname, cmd)})
+					s.store.AddLog(LogEntry{Kind: KindTerminal, Level: "info", Actor: op, Host: hostname, Message: Tz("log.terminal_cmd", hostname, hostIP, cmd)})
 				}
 			}
 			// Record resize frames so replay can restore the original terminal dimensions

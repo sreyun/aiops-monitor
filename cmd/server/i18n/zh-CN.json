@@ -287,7 +287,7 @@
   "log.sched_no_target": "定时剧本「%s」无在线目标，已跳过",
   "log.open_terminal": "打开远程终端 %s",
   "log.close_terminal": "关闭远程终端 %s",
-  "log.terminal_cmd": "终端命令 [%s]: %s",
+  "log.terminal_cmd": "终端命令 [%s %s]: %s",
   "log.alert_fired": "告警触发：%s",
   "log.alert_recovered": "告警恢复：%s",
   "log.alert_ack": "确认告警：%s（%s）",

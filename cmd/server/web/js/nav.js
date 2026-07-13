@@ -420,6 +420,8 @@ safeAddEventListener("logFilter", "click", e => {
   document.querySelectorAll("#logFilter .chip-btn").forEach(x => x.classList.toggle("active", x === b));
   renderLog(LAST_LOG);
 });
+// 审计日志搜索框：按内容/操作者/主机关键字过滤
+safeAddEventListener("auditSearch", "input", e => { LOG_SEARCH = (e.target.value || "").trim().toLowerCase(); LOG_PAGE = 1; renderLog(LAST_LOG); });
 
 // 告警类型筛选
 safeAddEventListener("alertFilter", "click", e => {

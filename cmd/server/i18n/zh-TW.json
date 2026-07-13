@@ -284,7 +284,7 @@
   "log.sched_no_target": "定時劇本「%s」無線上目標，已跳過",
   "log.open_terminal": "開啟遠端終端 %s",
   "log.close_terminal": "關閉遠端終端 %s",
-  "log.terminal_cmd": "終端命令 [%s]: %s",
+  "log.terminal_cmd": "終端命令 [%s %s]: %s",
   "log.alert_fired": "告警觸發：%s",
   "log.alert_recovered": "告警恢復：%s",
   "log.feishu_failed": "飛書推送失敗：%s",

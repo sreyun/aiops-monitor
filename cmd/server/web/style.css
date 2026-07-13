@@ -275,9 +275,9 @@ body{
 }
 .nav-item svg{ width:18px; height:18px; flex:none; }
 .nav-count{
-  margin-left:auto; background:var(--panel3); color:var(--muted);
-  font-size:11px; padding:1px 8px; border-radius:999px;
-  font-weight:600; min-width:22px; text-align:center;
+  margin-left:8px; background:var(--panel3); color:var(--muted);
+  font-size:11px; padding:1px 7px; border-radius:999px;
+  font-weight:600; min-width:20px; text-align:center;
 }
 .nav-item.active .nav-count{ background:var(--accent); color:#fff; }
 
@@ -1932,9 +1932,10 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-diagnosis-chat .ai-chat-msg{max-width:90%}
 /* AI 对话弹窗：支持右下角拖拽缩放；消息区随窗口伸缩 */
 #aiChatModal{
-  resize:both; overflow:auto;
+  overflow:auto;
+  /* 响应式自适应尺寸（不再用 resize:both——手动拖拽会写死内联尺寸，窗口缩放后不重排导致"对话窗口消失"） */
   width:min(720px,92vw); height:min(72vh,640px);
-  min-width:360px; max-width:90vw;
+  min-width:min(360px,92vw); max-width:92vw;
   min-height:300px; max-height:85vh;
   display:flex; flex-direction:column;
 }
@@ -2463,7 +2464,7 @@ table tbody tr:hover{
 .field textarea,
 textarea,
 select {
-  background: var(--bg2);
+  background-color: var(--bg2);
   border: 1px solid var(--line2);
   border-radius: var(--r-sm);
   color: var(--txt);
@@ -2477,8 +2478,8 @@ select {
 .field input:not([type=checkbox]):not([type=radio]),
 .field textarea,
 textarea { padding: 9px 12px; }
-select { padding: 9px 30px 9px 12px; }
-.field textarea, textarea { min-height: 66px; resize: vertical; }
+select { padding: 9px 30px 9px 12px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238492a6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 11px center; }
+.field textarea, textarea { width: 100%; min-height: 66px; resize: both; box-sizing: border-box; }
 
 /* 统一 hover：边框微亮（此前只有 select 有 hover，且会切换背景造成"跳色"） */
 .field input:not([type=checkbox]):not([type=radio]):hover:not(:focus),
@@ -2486,7 +2487,7 @@ select { padding: 9px 30px 9px 12px; }
 textarea:hover:not(:focus),
 select:hover:not(:focus) {
   border-color: var(--hover-border);
-  background: var(--bg2);
+  background-color: var(--bg2);
 }
 
 /* 统一 focus：accent 边框 + 柔和聚焦环（键盘/鼠标一致，无红框） */
@@ -2496,7 +2497,7 @@ textarea:focus,
 select:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px var(--accent-soft) !important;
-  background: var(--bg2);
+  background-color: var(--bg2);
 }
 
 /* 统一 placeholder / 禁用态 */
@@ -2505,15 +2506,8 @@ select:focus {
   opacity: .55; cursor: not-allowed; background: var(--bg3); border-color: var(--line);
 }
 
-/* 下拉箭头：细线 chevron（替代粗糙的 ▾ 字形），hover 时随边框一起提亮 */
-.select-wrap::after {
-  content: ""; position: absolute; right: 12px; top: calc(50% - 3px);
-  width: 7px; height: 7px; border: 0; border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted); transform: rotate(45deg);
-  pointer-events: none; font-size: 0;
-  transition: border-color var(--transition-fast);
-}
-.select-wrap:hover::after { border-color: var(--txt2); }
+/* 下拉箭头统一为 select 自身背景 chevron（对齐每个 select 右缘，杜绝 .select-wrap 错位）；停用伪元素箭头避免双箭头/错位 */
+.select-wrap::after { content: none; }
 
 /* 全局搜索框：与输入井统一 + 内嵌放大镜图标（克制精致），focus 环一致 */
 .search {
@@ -2537,6 +2531,7 @@ select:focus {
 .ai-suggest-chip:hover { border-color: var(--accent); color: var(--txt); background: var(--accent-soft); transform: translateX(2px); }
 .ai-suggest-chip:active { transform: translateX(0); }
 .log-stat-empty { color: var(--muted); font-size: 12px; margin-left: 10px; }
+.kind.term { background: var(--accent-soft); color: var(--accent); } /* 终端审计日志徽标 */
 
 /* IA 视图内 Tab 栏（监控 ⊃ 拨测/API、告警 ⊃ 当前/治理） */
 .view-tabs { display: flex; gap: 2px; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
@@ -2556,6 +2551,11 @@ select:focus {
 .ai-chat-modal .ai-code-copy { font-size: 11px; color: var(--muted); background: transparent; border: 1px solid var(--line2); border-radius: 5px; padding: 2px 9px; cursor: pointer; transition: border-color var(--transition-fast), color var(--transition-fast); }
 .ai-chat-modal .ai-code-copy:hover { border-color: var(--accent); color: var(--accent); }
 .ai-chat-modal .ai-code-wrap pre.ai-code { margin: 0; border: none; border-radius: 0; background: transparent; }
+/* 语法高亮 token（在深/浅底都可读的中性配色） */
+.ai-chat-modal .ai-code .tok-kw { color: #a66bd4; }
+.ai-chat-modal .ai-code .tok-str { color: #4a9e5c; }
+.ai-chat-modal .ai-code .tok-num { color: #c07a2e; }
+.ai-chat-modal .ai-code .tok-com { color: var(--muted); font-style: italic; }
 
 /* 空态居中欢迎语 */
 .ai-chat-modal .ai-welcome { text-align: center; padding: 26px 16px 10px; }

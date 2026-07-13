@@ -287,7 +287,7 @@
   "log.sched_no_target": "Scheduled playbook \"%s\" has no online targets — skipped",
   "log.open_terminal": "Opened remote terminal %s",
   "log.close_terminal": "Closed remote terminal %s",
-  "log.terminal_cmd": "Terminal command [%s]: %s",
+  "log.terminal_cmd": "Terminal command [%s %s]: %s",
   "log.alert_fired": "Alert fired: %s",
   "log.alert_recovered": "Alert recovered: %s",
   "log.feishu_failed": "Feishu push failed: %s",

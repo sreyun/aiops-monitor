@@ -381,6 +381,10 @@ function applyLogFilters(items) {
     const hours = parseInt(LOG_TIME_RANGE);
     filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
   }
+  if (LOG_SEARCH) {
+    const q = LOG_SEARCH;
+    filtered = filtered.filter(e => ((e.message || "") + " " + (e.actor || "") + " " + (e.host || "")).toLowerCase().includes(q));
+  }
   // Filter out internal alert engine logs (actor="告警引擎" from backend)
   return filtered.filter(e => e.actor !== I18N.t("notify.alert_engine"));
 }
@@ -404,7 +408,7 @@ function renderLog(items) {
   LAST_LOG = items;
   const n = items.length;
   $("logCount").textContent = n; $("navLog").textContent = n;
-  const kcls = k => k === "operation" ? "op" : k === "system" ? "sys" : "plg";
+  const kcls = k => k === "operation" ? "op" : k === "system" ? "sys" : k === "terminal" ? "term" : "plg";
   const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
   const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
     <span class="kind ${kcls(e.kind)}">${esc(translateLogKind(e.kind))}</span>

@@ -98,6 +98,7 @@ let CUR_CATS = [];    // 当前分类多选筛选（空数组=全部）
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LOG_LEVEL = "";   // 日志级别筛选
+let LOG_SEARCH = ""; // 审计日志关键字搜索（内容/操作者/主机）
 let LOG_TIME_RANGE = "all"; // 日志时间范围
 let CHECK_TYPE = "all"; // 监控类型筛选
 let HOST_SORT = "name"; // 主机排序方式
@@ -188,6 +189,7 @@ const translateLogKind = k => {
   if (k === "operation") return I18N.t("ui.operation");
   if (k === "system") return I18N.t("ui.system");
   if (k === "plugin") return I18N.t("section.op_sys_plugin_plugin");
+  if (k === "terminal") return "终端";
   return k;
 };
 // Translate log level from English enum to display text

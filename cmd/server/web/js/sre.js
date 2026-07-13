@@ -585,7 +585,16 @@ function renderRuns(runs){
 function openRuleModal(r){
   $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?"编辑规则":"新建规则";
   $("rrName").value=r?r.name:""; $("rrEnabled").checked=r?r.enabled:true;
-  $("rrLevel").value=r?(r.min_level||""):"critical"; $("rrCategory").value=r?(r.match_category||""):"";
+  $("rrLevel").value=r?(r.min_level||""):"critical";
+  { // 主机分类改为下拉选择：从当前纳管主机的分类去重生成选项（含已保存但当前无主机的分类）
+    const cur=r?(r.match_category||""):"";
+    const _hs=((typeof LAST_HOSTS!=="undefined"&&LAST_HOSTS)||[]);
+    // 包含所有主机分类 + 操作系统类型（去重）
+    const cats=[...new Set([..._hs.map(h=>h.category).filter(Boolean), ..._hs.map(h=>h.os).filter(Boolean)])];
+    if(cur&&!cats.includes(cur)) cats.push(cur);
+    $("rrCategory").innerHTML='<option value="">全部分类</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
+    $("rrCategory").value=cur;
+  }
   $("rrCooldown").value=r?r.cooldown_sec:300; $("rrMaxPerHour").value=r?r.max_per_hour:6; $("rrApproval").checked=r?r.require_approval:false;
   $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">（请先创建剧本）</option>`;
   const sel=new Set(r?(r.match_types||[]):[]);
@@ -1085,6 +1094,57 @@ function filterDisplayContent(text){
 }
 // 轻量 Markdown 渲染：先转义 HTML 防 XSS，再套用有限格式（加粗/斜体/有序无序列表/换行）。
 // 输入应为已经 filterDisplayContent 过滤的文本（代码块/密钥已剔除）。
+// ===== 轻量语法高亮（CSP 安全·零依赖）：常见运维语言的 注释/字符串/数字/关键字 =====
+const HL_KW = {
+  python:"def class return if elif else for while import from as with try except finally raise in is and or not None True False lambda pass break continue yield assert del async await global nonlocal self print",
+  py:"def class return if elif else for while import from as with try except finally raise in is and or not None True False lambda pass break continue yield del async await self",
+  bash:"if then else elif fi for while do done case esac function in return export local echo cd exit set unset read source",
+  sh:"if then else elif fi for while do done case esac function in return export local echo cd exit set unset read source",
+  shell:"if then else elif fi for while do done case esac function in return export local echo cd exit",
+  javascript:"function return if else for while const let var new class extends import export default async await try catch finally throw typeof instanceof in of null undefined true false this switch case break continue delete void",
+  js:"function return if else for while const let var new class import export default async await try catch throw null undefined true false this switch case break continue",
+  typescript:"function return if else for while const let var new class extends implements interface type enum import export default async await try catch finally throw typeof in of null undefined true false this public private protected readonly",
+  ts:"function return if else for while const let var new class interface type import export async await try catch throw null undefined true false public private readonly",
+  go:"func package import return if else for range var const type struct interface map chan go defer select switch case break continue fallthrough nil true false make new append len cap panic recover",
+  sql:"select from where insert update delete into values set create table drop alter add index join left right inner outer full on group by order having limit offset as and or not null is distinct count sum avg min max like between union all",
+  json:"true false null",
+  yaml:"true false null yes no on off",
+  yml:"true false null yes no on off",
+  java:"public private protected class interface extends implements return if else for while new import package void int long double float boolean char String null true false this static final abstract try catch finally throw throws",
+  c:"int char float double void long short unsigned signed return if else for while do struct union enum typedef const static sizeof break continue switch case default goto NULL",
+  cpp:"int char float double void return if else for while class struct namespace using template typename const static public private protected virtual true false nullptr new delete this",
+  rust:"fn let mut const struct enum impl trait pub use mod match if else for while loop return break continue self Self Some None Ok Err true false as ref move async await where",
+};
+const HL_LINE = { python:"#",py:"#",bash:"#",sh:"#",shell:"#",yaml:"#",yml:"#",toml:"#",ini:"#",conf:"#",sql:"--",javascript:"//",js:"//",typescript:"//",ts:"//",go:"//",java:"//",c:"//",cpp:"//",rust:"//" };
+const HL_BLOCK = { javascript:1,js:1,typescript:1,ts:1,go:1,java:1,c:1,cpp:1,rust:1,css:1 };
+function _hlEsc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function _hlReEsc(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+function highlightCode(code, lang){
+  lang=String(lang||"").toLowerCase();
+  const kw=new Set((HL_KW[lang]||"").split(/\s+/).filter(Boolean));
+  const line=Object.prototype.hasOwnProperty.call(HL_LINE,lang)?HL_LINE[lang]:null;
+  const block=!!HL_BLOCK[lang];
+  const parts=[];
+  if(block) parts.push("\\/\\*[\\s\\S]*?\\*\\/");
+  if(line) parts.push(_hlReEsc(line)+"[^\\n]*");
+  parts.push('"(?:\\\\.|[^"\\\\\\n])*"',"'(?:\\\\.|[^'\\\\\\n])*'","`(?:\\\\.|[^`\\\\])*`");
+  parts.push("\\b\\d[\\d._]*\\b","[A-Za-z_$][A-Za-z0-9_$]*");
+  const re=new RegExp(parts.join("|"),"g");
+  let out="",last=0,m;
+  while((m=re.exec(code))){
+    out+=_hlEsc(code.slice(last,m.index));
+    const tok=m[0]; last=m.index+tok.length;
+    let cls="";
+    if(block&&tok.startsWith("/*")) cls="tok-com";
+    else if(line&&tok.startsWith(line)) cls="tok-com";
+    else if(tok[0]==='"'||tok[0]==="'"||tok[0]==="`") cls="tok-str";
+    else if(tok[0]>="0"&&tok[0]<="9") cls="tok-num";
+    else if(kw.has(tok)) cls="tok-kw";
+    out+=cls?`<span class="${cls}">${_hlEsc(tok)}</span>`:_hlEsc(tok);
+  }
+  out+=_hlEsc(code.slice(last));
+  return out;
+}
 function renderAIMarkdown(raw){
   if(!raw) return "";
   // 1) 先抽出围栏代码块占位，避免其内部被当作 Markdown/HTML 处理
@@ -1117,7 +1177,7 @@ function renderAIMarkdown(raw){
   }
   close();
   html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>{ const b=blocks[+i]||{code:""}; const lang=b.lang||"代码"; // 6) 还原代码块：语言标签 + 独立复制按钮
-    return "<div class=\"ai-code-wrap\"><div class=\"ai-code-head\"><span class=\"ai-code-lang\">"+esc(lang)+"</span><button class=\"ai-code-copy\" type=\"button\" title=\"复制代码\">复制</button></div><pre class=\"ai-code\"><code>"+esc(b.code)+"</code></pre></div>"; });
+    return "<div class=\"ai-code-wrap\"><div class=\"ai-code-head\"><span class=\"ai-code-lang\">"+esc(lang)+"</span><button class=\"ai-code-copy\" type=\"button\" title=\"复制代码\">复制</button></div><pre class=\"ai-code\"><code>"+highlightCode(b.code,b.lang)+"</code></pre></div>"; });
   return html;
 }
 // AI 对话消息区：判断是否贴底（供流式时决定要不要自动滚动）

@@ -334,6 +334,8 @@
           <button class="chip-btn" data-kind="operation" data-i18n="section.op_sys_plugin_op">操作</button>
           <button class="chip-btn" data-kind="system" data-i18n="ui.system">系统</button>
           <button class="chip-btn" data-kind="plugin" data-i18n="section.op_sys_plugin_plugin">插件</button>
+          <button class="chip-btn" data-kind="terminal">终端</button>
+          <input type="text" id="auditSearch" class="search" placeholder="搜索日志内容 / 操作者 / 主机…" style="max-width:300px">
         </div>
         <div class="stack" id="log"></div>
         <div class="pager" id="logPager"></div>
@@ -541,9 +543,9 @@
       <div class="field log-collect">
         <div class="log-collect-head" id="logCollectToggle" role="button" tabindex="0">
           <span>📄 日志采集（可选）</span>
-          <span class="lc-caret" id="lcCaret">▾</span>
+          <span class="lc-caret" id="lcCaret">▸</span>
         </div>
-        <div id="logCollectBody">
+        <div id="logCollectBody" style="display:none">
           <div class="hint">填写后 Agent 安装即开始采集这些日志并<b>加密上报</b>（gzip + AES‑256‑GCM），可在「日志检索」查看。每行一个路径，支持<b>文件或目录</b>（目录会自动采集其下 .log/.out/.err 等日志文件）。</div>
           <textarea id="installLogPaths" rows="3" style="width:100%;font-family:monospace;font-size:12px" placeholder="/var/log/nginx/access.log&#10;/var/log/nginx/error.log&#10;/var/log/myapp/"></textarea>
         </div>
@@ -1192,7 +1194,7 @@
       <div class="field"><label data-i18n="sre.match_types">告警类型（多选，空=全部）</label><div id="rrTypes" class="chip-multi"></div></div>
       <div class="grid2">
         <div class="field"><label data-i18n="sre.min_level">最低级别</label><div class="select-wrap"><select id="rrLevel"><option value="" data-i18n="sre.any">任意</option><option value="warning">warning</option><option value="critical" selected>critical</option></select></div></div>
-        <div class="field"><label data-i18n="sre.category_opt">主机分类（空=全部）</label><input type="text" id="rrCategory"></div>
+        <div class="field"><label data-i18n="sre.category_opt">主机分类（空=全部）</label><div class="select-wrap"><select id="rrCategory"></select></div></div>
       </div>
       <div class="subhead" data-i18n="sre.action">动作</div>
       <div class="field"><label data-i18n="sre.playbook">执行剧本（在告警主机上）</label><div class="select-wrap"><select id="rrPlaybook"></select></div></div>
@@ -1275,9 +1277,9 @@
         <button class="btn sm" data-act="ai-preset" data-preset="claude" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
       </div>
       <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
-      <div class="grid2">
+      <div class="grid2" style="align-items:end">
         <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span style="font-size:11px;color:var(--muted)" id="aiModelInfo"></span></label>
-          <div class="ai-model-wrap" style="display:flex;gap:4px;position:relative"><input type="text" id="aiModel" placeholder="点击展开选择，或输入搜索 / 手动填写模型名" autocomplete="off" style="flex:1;min-width:0"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
+          <div class="ai-model-wrap" style="display:flex;gap:4px;position:relative;align-items:center"><input type="text" id="aiModel" placeholder="选择或输入模型名" autocomplete="off" style="flex:1;min-width:0"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
         </div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>

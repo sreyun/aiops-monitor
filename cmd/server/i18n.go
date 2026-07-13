@@ -138,6 +138,7 @@ const (
 	KindOperation = "operation"
 	KindSystem     = "system"
 	KindPlugin     = "plugin"
+	KindTerminal   = "terminal" // 终端会话中用户输入的每条命令（终端审计日志）
 )
 
 // TranslateLogKind converts an internal LogEntry.Kind to a display string.
