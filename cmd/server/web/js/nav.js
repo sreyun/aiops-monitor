@@ -219,7 +219,7 @@ function safeAddEventListener(id, event, handler) {
 safeAddEventListener("saveBtn", "click", saveSettings);
 safeAddEventListener("saveThresholdsBtn", "click", saveThresholds); // 告警阈值 Tab 独立保存
 safeAddEventListener("aiExpandBtn", "click", function () { // AI 面板放大↔还原（铺满右侧交互区 / 默认宽度）
-  const m = $("aiChatModal"); if (!m) return;
+  const m = $("aiChatMask"); if (!m) return; // 几何在遮罩容器上，放大切遮罩宽度
   const on = m.classList.toggle("ai-expanded");
   this.textContent = on ? "⤡" : "⤢";
   this.title = on ? "还原窗口" : "放大窗口";

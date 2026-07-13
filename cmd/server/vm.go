@@ -536,6 +536,12 @@ func (v *vmWriter) push(url string, samples []vmSample) {
 		w("load5", s.m.Load5)
 		w("load15", s.m.Load15)
 		w("proc_count", float64(s.m.ProcCount))
+		for _, d := range s.m.Disks {
+			dl := lbl + fmt.Sprintf(`,path="%s"`, lblEsc(d.Path))
+			fmt.Fprintf(&b, "aiops_disk_vol_percent{%s} %g %d\n", dl, d.Percent, ms)
+			fmt.Fprintf(&b, "aiops_disk_vol_used_bytes{%s} %g %d\n", dl, float64(d.Used), ms)
+			fmt.Fprintf(&b, "aiops_disk_vol_total_bytes{%s} %g %d\n", dl, float64(d.Total), ms)
+		}
 		for _, g := range s.m.GPUs {
 			gl := lbl + fmt.Sprintf(`,gpu="%s"`, lblEsc(g.Name))
 			fmt.Fprintf(&b, "aiops_gpu_util_percent{%s} %g %d\n", gl, g.UtilPercent, ms)
@@ -633,6 +639,34 @@ func setSampleGPU(s *shared.Sample, gpuName string, val float64) {
 	s.GPUs = append(s.GPUs, shared.GPUInfo{Name: gpuName, UtilPercent: val})
 }
 
+// setSampleDisk 把一条带 path 标签的 aiops_disk_vol_* 系列并回该时间点样本的 Disks 数组，
+// 按分区路径重建（每个分区的 percent/used/total）。VM 里多盘是带 path 标签的独立系列，不
+// 重建则历史样本缺 disks，前端「近期趋势」只剩一条聚合根分区线（本次修复的 bug 点）。
+func setSampleDisk(s *shared.Sample, path, name string, val float64) {
+	if path == "" {
+		return
+	}
+	idx := -1
+	for i := range s.Disks {
+		if s.Disks[i].Path == path {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.Disks = append(s.Disks, shared.DiskInfo{Path: path})
+		idx = len(s.Disks) - 1
+	}
+	switch name {
+	case "aiops_disk_vol_percent":
+		s.Disks[idx].Percent = val
+	case "aiops_disk_vol_used_bytes":
+		s.Disks[idx].Used = uint64(val)
+	case "aiops_disk_vol_total_bytes":
+		s.Disks[idx].Total = uint64(val)
+	}
+}
+
 // queryHistory reads a host's series back from VM (the authoritative time-series
 // store) over [from,to] and reassembles []shared.Sample keyed by timestamp.
 func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample, bool) {
@@ -681,7 +715,8 @@ func parseVMExport(r io.Reader) []shared.Sample {
 			continue
 		}
 		name := line.Metric["__name__"]
-		gpuName := line.Metric["gpu"] // GPU 利用率系列带 gpu 标签（每块显卡一条），需按名重建 s.GPUs
+		gpuName := line.Metric["gpu"]   // GPU 利用率系列带 gpu 标签（每块显卡一条），需按名重建 s.GPUs
+		diskPath := line.Metric["path"] // 磁盘分区系列带 path 标签（每个分区一条），需按路径重建 s.Disks
 		for i := range line.Values {
 			if i >= len(line.Timestamps) {
 				break
@@ -694,6 +729,8 @@ func parseVMExport(r io.Reader) []shared.Sample {
 			}
 			if name == "aiops_gpu_util_percent" {
 				setSampleGPU(s, gpuName, line.Values[i])
+			} else if strings.HasPrefix(name, "aiops_disk_vol_") {
+				setSampleDisk(s, diskPath, name, line.Values[i])
 			} else {
 				setSampleMetric(s, name, line.Values[i])
 			}
@@ -701,6 +738,9 @@ func parseVMExport(r io.Reader) []shared.Sample {
 	}
 	out := make([]shared.Sample, 0, len(byTs))
 	for _, s := range byTs {
+		if len(s.Disks) > 1 { // 分区按 path 排序，保证跨样本顺序稳定
+			sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
+		}
 		out = append(out, *s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })

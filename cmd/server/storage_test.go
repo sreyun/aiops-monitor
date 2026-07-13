@@ -49,6 +49,28 @@ func TestVMExportParseGPU(t *testing.T) {
 	}
 }
 
+// 多盘同理：aiops_disk_vol_* 带 path 标签，parseVMExport 须按分区重建 s.Disks（percent/used/
+// total），否则历史里只剩聚合根分区一条线（Windows C/D/E、Linux/macOS 多挂载点均受影响）。
+func TestVMExportParseDisks(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_disk_vol_percent","host":"h1","path":"C:"},"values":[60,62],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_disk_vol_used_bytes","host":"h1","path":"C:"},"values":[600,620],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_disk_vol_total_bytes","host":"h1","path":"C:"},"values":[1000,1000],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_disk_vol_percent","host":"h1","path":"D:"},"values":[30],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 2 {
+		t.Fatalf("expected 2 samples, got %d", len(s))
+	}
+	if len(s[0].Disks) != 2 || s[0].Disks[0].Path != "C:" || s[0].Disks[1].Path != "D:" { // 按 path 排序
+		t.Fatalf("sample@100 分区重建/排序错误：%+v", s[0].Disks)
+	}
+	if s[0].Disks[0].Percent != 60 || s[0].Disks[0].Used != 600 || s[0].Disks[0].Total != 1000 {
+		t.Errorf("C: 明细（percent/used/total）错误：%+v", s[0].Disks[0])
+	}
+	if len(s[1].Disks) != 1 || s[1].Disks[0].Path != "C:" || s[1].Disks[0].Percent != 62 {
+		t.Errorf("sample@105 C: 错误：%+v", s[1].Disks)
+	}
+}
+
 func TestPasswordPolicy(t *testing.T) {
 	good := []string{"Abcd123!", "P@ssw0rd", "aB3$aB3$", "Zx9#mnop", "长密码Ab1!x"}
 	for _, p := range good {
@@ -57,13 +79,13 @@ func TestPasswordPolicy(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"":           "empty",
-		"Ab1!xy":     "too short (6)",
-		"abcdefg1!":  "no uppercase",
-		"ABCDEFG1!":  "no lowercase",
-		"Abcdefgh!":  "no digit",
-		"Abcdefg12":  "no special",
-		"abcdefgh":   "only lowercase",
+		"":          "empty",
+		"Ab1!xy":    "too short (6)",
+		"abcdefg1!": "no uppercase",
+		"ABCDEFG1!": "no lowercase",
+		"Abcdefgh!": "no digit",
+		"Abcdefg12": "no special",
+		"abcdefgh":  "only lowercase",
 	}
 	for p, why := range bad {
 		if validatePasswordStrength(p) {

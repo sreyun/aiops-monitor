@@ -347,14 +347,26 @@ async function loadAndRenderCharts() {
       { key: 'load15', label: I18N.t("section.load_15m_label"), color: '#f2545b', fmt: v => v.toFixed(1) },
     ], null, null, { title: I18N.t("section.load_avg") });
 
-    // 磁盘：每个分区一条线。以「磁盘数最多」的样本为准，避免首个样本缺盘时丢失分区曲线
+    // 磁盘：每个分区一条线（按 path 匹配，稳健于分区数/顺序变化）。以「磁盘数最多」的样本
+    // 为准建分区列表；并用最近一个含容量的样本给每个分区标注「已用 / 共 / 剩余」明细。
     let diskProto = [];
     samples.forEach(s => { if (Array.isArray(s.disks) && s.disks.length > diskProto.length) diskProto = s.disks; });
     const diskKeys = diskProto.map(d => d.path);
+    const latestDisk = {};
+    for (let i = samples.length - 1; i >= 0 && Object.keys(latestDisk).length < diskKeys.length; i--) {
+      (samples[i].disks || []).forEach(d => { if (!(d.path in latestDisk)) latestDisk[d.path] = d; });
+    }
+    const _gb = b => b / 1073741824;
+    const diskLabel = (path) => {
+      const d = latestDisk[path];
+      if (!d || !d.total) return '磁盘 ' + path;
+      const used = _gb(d.used), tot = _gb(d.total);
+      return `磁盘 ${path} · 已用 ${used.toFixed(0)}/${tot.toFixed(0)}GB · 剩 ${(tot - used).toFixed(0)}GB`;
+    };
     const diskSeries = diskKeys.map((path, idx) => ({
-      key: `disk_${idx}`, label: '磁盘 ' + path,
-      color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0'][idx % 4], fmt: pct,
-      transform: (s) => { const d = s.disks && s.disks[idx] ? s.disks[idx] : null; return d ? d.percent : null; }
+      key: `disk_${idx}`, label: diskLabel(path),
+      color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0', '#8b5cf6', '#e06c9a'][idx % 6], fmt: pct,
+      transform: (s) => { const d = (s.disks || []).find(x => x.path === path); return d ? d.percent : null; }
     }));
     DETAIL_CHARTS.chartDisk = createChart('chartDisk', samples,
       diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: I18N.t("section.root_partition"), color: '#f7b23b', fmt: pct }],
