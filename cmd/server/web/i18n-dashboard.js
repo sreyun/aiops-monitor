@@ -504,7 +504,7 @@
   "filter.check_type": "拨测",
   /* --- 日志 --- */
   "section.op_log": "操作与介入日志",
-  "section.op_sys_plugin": "操作 / 系统 / 插件",
+  "section.op_sys_plugin": "操作 / 系统 / 插件 / 终端",
   "filter.by_level": "按级别筛选",
   "filter.all_levels": "全部级别",
   "filter.info_level": "信息",

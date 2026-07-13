@@ -492,7 +492,7 @@ window.DICT_EN = {
   "filter.offline_type": "Offline",
   "filter.check_type": "Probe",
   "section.op_log": "Operation & intervention log",
-  "section.op_sys_plugin": "Operation / System / Plugin",
+  "section.op_sys_plugin": "Operation / System / Plugin / Terminal",
   "filter.by_level": "Filter by level",
   "filter.all_levels": "All levels",
   "filter.info_level": "Info",

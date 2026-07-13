@@ -278,6 +278,7 @@ body{
   margin-left:8px; background:var(--panel3); color:var(--muted);
   font-size:11px; padding:1px 7px; border-radius:999px;
   font-weight:600; min-width:20px; text-align:center;
+  display:none;
 }
 .nav-item.active .nav-count{ background:var(--accent); color:#fff; }
 
@@ -474,7 +475,7 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .section-title .tag{font-weight:500; font-size:11px;
   color:var(--muted); background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:1px 7px}
 .count-pill{background:var(--panel2); color:var(--muted); border:1px solid var(--line);
-  border-radius:999px; font-size:11px; padding:1px 9px; font-weight:600; margin-left:auto}
+  border-radius:999px; font-size:11px; padding:1px 9px; font-weight:600; margin-left:0}
 .stack{display:flex; flex-direction:column; gap:7px; contain:content}
 .row-item{
   display:flex; align-items:center; gap:11px; padding:12px 14px; border-radius:var(--r-sm);
@@ -864,7 +865,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .fwd-status.on{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
 .fwd-status.off{background:var(--panel3); color:var(--muted); border:1px solid var(--line2)}
 .fwd-card .fwd-title{margin-top:2px}
-.fwd-card .fwd-actions{margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
+.fwd-card .fwd-actions{margin-top:12px; padding-top:12px}
 /* 操作图标按钮（统一描边 SVG，跟随文字色） */
 .icon-btn{width:30px; height:30px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0;

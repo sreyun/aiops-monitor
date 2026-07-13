@@ -492,7 +492,7 @@ window.DICT_TW = {
   "filter.offline_type": "失聯",
   "filter.check_type": "撥測",
   "section.op_log": "操作與介入日誌",
-  "section.op_sys_plugin": "操作 / 系統 / 外掛",
+  "section.op_sys_plugin": "操作 / 系統 / 外掛 / 終端",
   "filter.by_level": "按級別篩選",
   "filter.all_levels": "全部級別",
   "filter.info_level": "資訊",
