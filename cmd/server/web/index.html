@@ -57,13 +57,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
           </a>
-          <a class="nav-item" data-view="apimon" title="API 性能监控：按业务系统批量监控接口">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>
-            <span>性能</span>
-          </a>
+          <!-- 「性能」已并入「监控」的 API 业务监控 Tab（IA 重构 方案B） -->
           <a class="nav-item" data-view="logs" data-i18n-title="nav.logs" title="主机日志聚合检索">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
-            <span data-i18n="nav.logs">检索</span>
+            <span data-i18n="nav.logs">主机日志</span>
           </a>
         </div>
       </div>
@@ -75,10 +72,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17v.4"/></svg>
             <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
           </a>
-          <a class="nav-item" data-view="governance" title="告警治理：静默/抑制/生效时段/通知路由">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12M10 19h4"/></svg>
-            <span>治理</span>
-          </a>
+          <!-- 「治理」已并入「告警」的治理规则 Tab（IA 重构 方案B） -->
           <a class="nav-item" data-view="sre" data-i18n-title="nav.sre" title="SRE 中枢：事件 / 自动修复 / SLO / 工单 / AI">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>
             <span data-i18n="nav.sre">诊断</span><span class="nav-count" id="navSre">0</span>
@@ -198,6 +192,7 @@
     </header>
 
     <div class="content">
+      <div id="viewTabs" class="view-tabs" style="display:none"></div>
       <!-- 概览 -->
       <section class="view active" id="view-overview">
         <!-- 空态引导：还没有任何主机时展示三步上手 -->
@@ -484,7 +479,7 @@
             <div class="select-wrap"><select id="logHost"><option value="" data-i18n="ui.all_hosts">全部主机</option></select></div>
             <div class="select-wrap"><select id="logLevel"><option value="" data-i18n="logs.all_levels">全部级别</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option></select></div>
             <div class="select-wrap"><select id="logSince"><option value="15">近15分钟</option><option value="60" selected>近1小时</option><option value="360">近6小时</option><option value="1440">近1天</option><option value="0" data-i18n="logs.all_time">全部</option></select></div>
-            <input type="text" id="logKeyword" data-i18n-placeholder="logs.keyword_ph" placeholder="关键字…" style="width:160px">
+            <input type="text" id="logKeyword" class="search" data-i18n-placeholder="logs.keyword_ph" placeholder="关键字…" style="width:190px; margin-left:0">
             <button class="btn primary sm" id="logSearchBtn" data-i18n="logs.search">检索</button>
           </div>
         </div>
@@ -812,7 +807,7 @@
     <div class="modal-body">
       <div class="hint" style="margin-bottom:12px" data-i18n="term.sessions_hint">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
       <div class="term-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-        <input type="text" id="termSessionSearch" data-i18n-placeholder="term.sessions_search" placeholder="搜索：用户名 / 主机名 / IP 地址" 
+        <input type="text" id="termSessionSearch" class="search" style="margin-left:0" data-i18n-placeholder="term.sessions_search" placeholder="搜索：用户名 / 主机名 / IP 地址"
           style="flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 12px;color:var(--txt);font-size:13px;font-family:inherit"
           aria-label="搜索终端会话" />
         <span style="font-size:12px;color:var(--muted)" id="termSessionCount"></span>
@@ -1324,14 +1319,15 @@
       <div id="aiChatQueue" class="ai-queue-hint"></div>
       <div class="hint" style="margin-bottom:10px">统一 AI 对话：既能闲聊自检确认 Provider 可用，也能作为自主运维 Agent 帮你排障——描述问题即可，它会自动调用工具（查指标 / 日志 / 告警 / 诊断 / 修复），并能识别当前纳管主机。</div>
       <div id="aiChatLog" class="ai-chat-log"></div>
+      <button id="aiChatScrollBtn" class="ai-scroll-btn" type="button" title="回到底部" style="display:none">↓</button>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
       <div class="ai-chat-input">
         <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档（含 Word / Excel / PDF），辅助 AI 深入排查">📎</button>
         <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页 URL，提取正文注入对话">🔗</button>
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
-        <textarea id="aiChatInput" rows="2" placeholder="输入消息或描述问题，可 📎 上传图片/日志文件，Enter 发送、Shift+Enter 换行…"></textarea>
-        <button class="btn primary" id="aiChatSendBtn" data-i18n="ui.send">发送</button>
-        <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹ 终止</button>
+        <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行"></textarea>
+        <button class="btn primary ai-send-btn" id="aiChatSendBtn" title="发送 (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹</button>
       </div>
       <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action</div>
     </div>

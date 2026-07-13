@@ -2537,6 +2537,96 @@ select:focus {
 .ai-suggest-chip:hover { border-color: var(--accent); color: var(--txt); background: var(--accent-soft); transform: translateX(2px); }
 .ai-suggest-chip:active { transform: translateX(0); }
 .log-stat-empty { color: var(--muted); font-size: 12px; margin-left: 10px; }
+
+/* IA 视图内 Tab 栏（监控 ⊃ 拨测/API、告警 ⊃ 当前/治理） */
+.view-tabs { display: flex; gap: 2px; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
+.view-tab { padding: 9px 16px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer; margin-bottom: -1px; transition: color var(--transition-fast), border-color var(--transition-fast); }
+.view-tab:hover { color: var(--txt2); }
+.view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* AI 对话·回到底部悬浮按钮 */
+.ai-chat-modal .modal-body { position: relative; }
+.ai-chat-modal .ai-scroll-btn { position: absolute; right: 20px; bottom: 104px; width: 34px; height: 34px; border-radius: 50%; background: var(--panel2); border: 1px solid var(--line2); color: var(--txt2); cursor: pointer; align-items: center; justify-content: center; font-size: 16px; box-shadow: var(--shadow); z-index: 3; transition: border-color var(--transition-fast), color var(--transition-fast); }
+.ai-chat-modal .ai-scroll-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 代码块：语言标签 + 独立复制按钮（Claude 观感） */
+.ai-chat-modal .ai-code-wrap { margin: 8px 0; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.ai-chat-modal .ai-code-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: var(--panel2); border-bottom: 1px solid var(--line2); }
+.ai-chat-modal .ai-code-lang { font-size: 11px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; text-transform: uppercase; letter-spacing: .04em; }
+.ai-chat-modal .ai-code-copy { font-size: 11px; color: var(--muted); background: transparent; border: 1px solid var(--line2); border-radius: 5px; padding: 2px 9px; cursor: pointer; transition: border-color var(--transition-fast), color var(--transition-fast); }
+.ai-chat-modal .ai-code-copy:hover { border-color: var(--accent); color: var(--accent); }
+.ai-chat-modal .ai-code-wrap pre.ai-code { margin: 0; border: none; border-radius: 0; background: transparent; }
+
+/* 空态居中欢迎语 */
+.ai-chat-modal .ai-welcome { text-align: center; padding: 26px 16px 10px; }
+.ai-chat-modal .ai-welcome-icon { font-size: 34px; line-height: 1; margin-bottom: 10px; }
+.ai-chat-modal .ai-welcome-title { font-size: 16px; font-weight: 600; color: var(--txt); margin-bottom: 6px; }
+.ai-chat-modal .ai-welcome-sub { font-size: 13px; color: var(--muted); line-height: 1.65; max-width: 440px; margin: 0 auto; }
+.ai-chat-modal .ai-welcome + .ai-suggest { max-width: 560px; margin-left: auto; margin-right: auto; }
+
+/* 诊断(SRE) 内部子 Tab：统一为下划线 Tab 观感（与 IA 视图 Tab 栏一致） */
+#sreTabs.sre-tabs { gap: 2px; }
+#sreTabs .chip-btn { border: none; background: transparent; border-radius: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 14px; font-weight: 500; transition: color var(--transition-fast), border-color var(--transition-fast); }
+#sreTabs .chip-btn:hover { color: var(--txt2); background: transparent; }
+#sreTabs .chip-btn.active { color: var(--accent); background: transparent; border-bottom-color: var(--accent); }
+
+/* ============================================================
+   AI 对话 · Claude 会话风格重构（纯 CSS 呈现层）
+   仅作用于主对话 #aiChatModal(.ai-chat-modal)；不改任何 JS——流式/会话/工具/
+   附件/Markdown 渲染逻辑完全不动。诊断内联对话(.ai-diagnosis-chat)不受影响。
+   ============================================================ */
+.ai-chat-modal { max-width: 760px; }
+.ai-chat-modal .modal-body > .hint { font-size: 11.5px; opacity: .72; }
+
+/* 消息区：整行阅读列 + 充裕留白，取代窄气泡 */
+.ai-chat-modal .ai-chat-log { gap: 2px; padding: 6px 2px; }
+.ai-chat-modal .ai-chat-msg {
+  max-width: none; align-self: stretch; position: relative;
+  padding: 14px 14px 14px 48px; margin: 0; border-radius: 12px;
+  font-size: 14px; line-height: 1.72; background: transparent; border: none; white-space: normal;
+}
+/* 左侧头像：绝对定位，不干扰多块 Markdown 排版 */
+.ai-chat-modal .ai-chat-msg::before {
+  position: absolute; left: 10px; top: 13px; width: 28px; height: 28px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+}
+/* 助手：留白正文（无边框气泡）+ 机器人头像 */
+.ai-chat-modal .ai-chat-msg.ai { color: var(--txt); background: transparent; }
+.ai-chat-modal .ai-chat-msg.ai::before { content: "🤖"; background: var(--accent-soft); }
+/* 用户：淡底容器 + 用户头像（取代刺眼蓝气泡），保留纯文本换行 */
+.ai-chat-modal .ai-chat-msg.me {
+  color: var(--txt); background: var(--bg3); border: 1px solid var(--line);
+  border-radius: 12px; white-space: pre-wrap; word-break: break-word;
+}
+.ai-chat-modal .ai-chat-msg.me::before { content: "🧑"; background: var(--panel3); }
+/* 系统/引导：静音、无头像、左对齐 */
+.ai-chat-modal .ai-chat-msg.sys { padding-left: 14px; color: var(--muted); background: transparent; text-align: left; }
+.ai-chat-modal .ai-chat-msg.sys::before { content: none; }
+
+/* 组合输入区：统一圆角容器 + focus 光晕，内部控件无边框（Claude composer 观感） */
+.ai-chat-modal .ai-chat-input {
+  align-items: flex-end; gap: 4px; background: var(--bg2); border: 1px solid var(--line2);
+  border-radius: 14px; padding: 5px 6px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.ai-chat-modal .ai-chat-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ai-chat-modal .ai-chat-input textarea {
+  border: none !important; background: transparent !important; box-shadow: none !important;
+  min-height: 30px; max-height: 168px; padding: 7px 6px; resize: none; line-height: 1.6;
+}
+.ai-chat-modal .ai-attach-btn {
+  width: 34px; height: 34px; border: none; background: transparent; border-radius: 9px;
+  color: var(--muted); align-self: flex-end;
+}
+.ai-chat-modal .ai-attach-btn:hover { background: var(--panel3); color: var(--accent); }
+/* 圆形发送箭头 + 圆形终止（Claude/ChatGPT composer 观感） */
+.ai-chat-modal #aiChatSendBtn { width: 36px; height: 36px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; align-self: flex-end; }
+.ai-chat-modal #aiChatSendBtn svg { width: 18px; height: 18px; }
+.ai-chat-modal .ai-stop-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; align-self: flex-end; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+/* 流式打字光标：生成中在最后一条助手消息末尾闪烁 */
+.ai-chat-modal .ai-chat-log.ai-streaming .ai-chat-msg.ai:last-child::after { content: "▋"; color: var(--accent); margin-left: 1px; animation: aiTypeBlink 1s steps(2, start) infinite; }
+@keyframes aiTypeBlink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ai-chat-modal .ai-chat-log.ai-streaming .ai-chat-msg.ai:last-child::after { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .ai-suggest-chip:hover, .ai-suggest-chip:active { transform: none; } }
 
 /* 按钮交互细节：主/次按钮 hover 轻微上浮、active 回落，主按钮加极淡光晕（克制） */

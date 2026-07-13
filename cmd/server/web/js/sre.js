@@ -1089,8 +1089,8 @@ function renderAIMarkdown(raw){
   if(!raw) return "";
   // 1) 先抽出围栏代码块占位，避免其内部被当作 Markdown/HTML 处理
   const blocks=[];
-  let t=raw.replace(/```[a-zA-Z0-9_+#-]*\n?([\s\S]*?)```/g,(m,code)=>{
-    blocks.push(code.replace(/\n+$/,""));
+  let t=raw.replace(/```([a-zA-Z0-9_+#-]*)\n?([\s\S]*?)```/g,(m,lang,code)=>{
+    blocks.push({lang:(lang||"").toLowerCase(), code:code.replace(/\n+$/,"")});
     return "SNTLCB"+(blocks.length-1)+"SNTL";
   });
   t=esc(t); // 2) 转义 HTML，杜绝注入
@@ -1116,7 +1116,8 @@ function renderAIMarkdown(raw){
     else { close(); html+=(line.trim()==="")?"":("<div>"+line+"</div>"); }
   }
   close();
-  html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>"<pre class=\"ai-code\"><code>"+esc(blocks[+i])+"</code></pre>"); // 6) 还原代码块
+  html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>{ const b=blocks[+i]||{code:""}; const lang=b.lang||"代码"; // 6) 还原代码块：语言标签 + 独立复制按钮
+    return "<div class=\"ai-code-wrap\"><div class=\"ai-code-head\"><span class=\"ai-code-lang\">"+esc(lang)+"</span><button class=\"ai-code-copy\" type=\"button\" title=\"复制代码\">复制</button></div><pre class=\"ai-code\"><code>"+esc(b.code)+"</code></pre></div>"; });
   return html;
 }
 // AI 对话消息区：判断是否贴底（供流式时决定要不要自动滚动）
@@ -1126,7 +1127,7 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Hermes 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-chat-msg sys">🤖 AI 助手已就绪（自主运维 Agent）。可以闲聊自检，也可直接描述问题让它自动排查——它会识别当前纳管主机并按需调用工具（查指标 / 日志 / 告警 / 诊断 / 修复）。</div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">AI 运维助手已就绪</div><div class="ai-welcome-sub">描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。</div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 function openAIChat(){
   newAIChat();
   $("aiChatMask").classList.add("show");
@@ -1224,7 +1225,10 @@ function setAIChatBusyUI(busy){
   const send=$("aiChatSendBtn"), stop=$("aiChatStopBtn");
   if(send) send.style.display=busy?"none":"";
   if(stop) stop.style.display=busy?"":"none";
+  const log=$("aiChatLog"); if(log) log.classList.toggle("ai-streaming", busy); // 流式打字光标
 }
+// 输入框自增高（Claude 风：随内容增长，封顶 168px 后内部滚动）
+function autoGrowAIInput(){ const t=$("aiChatInput"); if(!t) return; t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,168)+"px"; }
 function renderQueueHint(){
   const el=$("aiChatQueue"); if(!el) return;
   el.textContent=AI_CHAT_QUEUE.length?`⏳ 已排队 ${AI_CHAT_QUEUE.length} 条，将在当前回复完成后依次发送`:"";
@@ -1240,7 +1244,7 @@ async function sendAIChat(){
     inp.value=""; AI_ATTACHMENTS=[]; renderAttachments(); renderQueueHint();
     return;
   }
-  inp.value="";
+  inp.value=""; autoGrowAIInput();
   _aiChatBusy=true; _aiChatAborted=false; setAIChatBusyUI(true);
   _aiChatAbort=(typeof AbortController!=="undefined")?new AbortController():null;
   const imgN=atts.filter(a=>a.kind==="image").length, fileN=atts.filter(a=>a.kind==="file").length;
@@ -1324,10 +1328,26 @@ function _fallbackCopy(t){ const ta=document.createElement("textarea"); ta.value
 // 给一条 AI 回复挂上「复制」操作栏
 function addCopyTool(div,rawText){
   if(!div) return;
+  // 代码块独立复制（复制对应 <pre> 内容）
+  div.querySelectorAll(".ai-code-copy").forEach(b=>{
+    b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent="已复制"; setTimeout(()=>b.textContent="复制",1200); } };
+  });
   const bar=document.createElement("div"); bar.className="ai-msg-tools";
   const btn=document.createElement("button"); btn.textContent="复制"; btn.title="复制回复";
   btn.onclick=()=>{ copyText(rawText); btn.textContent="已复制"; setTimeout(()=>{ btn.textContent="复制"; },1200); };
-  bar.appendChild(btn); div.appendChild(bar);
+  bar.appendChild(btn);
+  const rebtn=document.createElement("button"); rebtn.textContent="重答"; rebtn.title="用上一条问题重新回答";
+  rebtn.onclick=regenerateAIChat;
+  bar.appendChild(rebtn);
+  div.appendChild(bar);
+}
+// 重答：取最近一条用户提问重新发送（追加一轮新回答）
+function regenerateAIChat(){
+  if(_aiChatBusy){ if(typeof toast==="function") toast("生成中，请先终止再重答","err"); return; }
+  let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
+  if(!q){ if(typeof toast==="function") toast("暂无可重答的问题","err"); return; }
+  const inp=$("aiChatInput"); if(inp){ inp.value=q; if(typeof autoGrowAIInput==="function") autoGrowAIInput(); }
+  sendAIChat();
 }
 // 附件预览渲染（图片/文件 chip，可删除）
 function renderAttachments(){
@@ -1414,6 +1434,9 @@ safeAddEventListener("aiChatBtn","click",openAIChat);
 safeAddEventListener("topAiBtn","click",openAIChat); // 顶栏 AI 对话入口（全局可达）
 safeAddEventListener("aiChatSendBtn","click",sendAIChat);
 safeAddEventListener("aiChatInput","keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAIChat(); } });
+safeAddEventListener("aiChatInput","input",autoGrowAIInput);
+safeAddEventListener("aiChatLog","scroll",()=>{ const b=$("aiChatScrollBtn"); if(b) b.style.display=aiChatStick()?"none":"flex"; });
+safeAddEventListener("aiChatScrollBtn","click",()=>{ aiChatToBottom(); const b=$("aiChatScrollBtn"); if(b) b.style.display="none"; });
 safeAddEventListener("aiChatAttachBtn","click",()=>{ const f=$("aiChatFile"); if(f) f.click(); });
 safeAddEventListener("aiChatUrlBtn","click",attachURL);
 safeAddEventListener("aiChatFile","change",onAIChatFiles);

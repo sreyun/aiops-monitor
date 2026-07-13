@@ -299,33 +299,60 @@ document.addEventListener("click", async function(e) {
 const navItems = document.querySelectorAll(".nav-item");
 // 页面头元信息：标题 + 副标题。副标题让顶栏页面头承载“页面语义”，
 // 而非机械回显侧栏导航名，从根上消除“两个概览”的重复观感。
+// 方案A 分层一致：页头标题=侧栏短名，描述放副标题。合并后的父视图(监控/告警)标题一致，
+// 由视图内 Tab 指示子上下文。
+const _SUB_MON = "合成监控 · 拨测（网站 / 端口 / 进程）与 API 业务接口性能";
+const _SUB_ALT = "当前告警 与 治理规则（静默 / 抑制 / 生效时段 / 通知路由）";
 const PAGE_META = {
-  overview: { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") },
+  overview: { title: "首页", sub: I18N.t("section.overview_desc") },
   hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
-  alerts:   { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") },
-  checks:   { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") },
-  apimon:   { title: "API 性能监控", sub: "按业务系统批量监控接口，统计可用率、P95 响应时间与吞吐" },
-  governance: { title: "告警治理", sub: "静默 / 抑制 / 生效时段（夜间静默）/ 按级别·主机的通知路由" },
-  automation: { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") },
+  alerts:   { title: "告警", sub: _SUB_ALT },
+  governance: { title: "告警", sub: _SUB_ALT },
+  checks:   { title: "监控", sub: _SUB_MON },
+  apimon:   { title: "监控", sub: _SUB_MON },
+  automation: { title: "编排", sub: I18N.t("section.automation_desc") },
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
-  sre:      { title: I18N.t("section.sre"), sub: I18N.t("section.sre_desc") },
-  logs:     { title: I18N.t("section.logs"), sub: I18N.t("section.logs_desc") },
-  log:      { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") },
+  sre:      { title: "诊断", sub: I18N.t("section.sre_desc") },
+  logs:     { title: "主机日志", sub: I18N.t("section.logs_desc") },
+  log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).
 function rebuildPageMeta() {
-  PAGE_META.overview   = { title: I18N.t("ui.overview"), sub: I18N.t("section.overview_desc") };
+  PAGE_META.overview   = { title: "首页", sub: I18N.t("section.overview_desc") };
   PAGE_META.hosts      = { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") };
-  PAGE_META.alerts     = { title: I18N.t("ui.alerts"), sub: I18N.t("section.alerts_desc") };
-  PAGE_META.checks     = { title: I18N.t("ui.checks"), sub: I18N.t("section.checks_desc") };
-  PAGE_META.automation = { title: I18N.t("ui.automation"), sub: I18N.t("section.automation_desc") };
+  PAGE_META.alerts     = { title: "告警", sub: _SUB_ALT };
+  PAGE_META.governance = { title: "告警", sub: _SUB_ALT };
+  PAGE_META.checks     = { title: "监控", sub: _SUB_MON };
+  PAGE_META.apimon     = { title: "监控", sub: _SUB_MON };
+  PAGE_META.automation = { title: "编排", sub: I18N.t("section.automation_desc") };
   PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
-  PAGE_META.log        = { title: I18N.t("ui.log"), sub: I18N.t("section.log_desc") };
+  PAGE_META.sre        = { title: "诊断", sub: I18N.t("section.sre_desc") };
+  PAGE_META.logs       = { title: "主机日志", sub: I18N.t("section.logs_desc") };
+  PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
+}
+// IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
+// 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
+const VIEW_TAB_GROUPS = {
+  checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
+  apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
+  alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"]] },
+  governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"]] },
+};
+function renderViewTabs(view) {
+  const bar = $("viewTabs"); if (!bar) return;
+  const g = VIEW_TAB_GROUPS[view];
+  if (!g) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+  bar.style.display = "";
+  bar.innerHTML = g.tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
+  bar.querySelectorAll("[data-vtab]").forEach(b => b.addEventListener("click", () => switchView(b.dataset.vtab)));
 }
 function switchView(view) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
-  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === view));
+  const g = VIEW_TAB_GROUPS[view];
+  const activeNav = g ? g.parent : view; // 子视图(性能/治理)时高亮父导航(监控/告警)
+  navItems.forEach(n => n.classList.toggle("active", n.dataset.view === activeNav));
+  renderViewTabs(view);
   const meta = PAGE_META[view];
   if (meta) {
     const t = $("pageTitle"), s = $("pageSub");
