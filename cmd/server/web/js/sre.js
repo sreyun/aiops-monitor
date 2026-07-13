@@ -478,7 +478,7 @@ async function loadDiagnosisChatHistory(incidentId){
 function renderDiagnosisChat(){
   const el=$("incDiagnosisChat"); if(!el) return;
   const hist=window._incDiagHistory||[];
-  if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击上方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
+  if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击下方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
   el.innerHTML=hist.map((m,i)=>{
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
     let fb="";
@@ -968,6 +968,7 @@ async function openAIConfig(){
   const tr=$("aiTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; } // 清除上次遗留的测试结果
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
+    $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
   } catch(e){}
   loadAIModels(); // 打开时按当前配置自动获取 provider 模型
@@ -1056,7 +1057,8 @@ function setAIPreset(type){
 async function saveAIConfig(){
   const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
   if(enabled && (!endpoint || !model)){ toast("启用 AI 需填写 Endpoint 和模型","err"); return; } // 轻校验：启用却没填必填项
-  const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30};
+  const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30,
+    embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }

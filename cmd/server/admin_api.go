@@ -21,8 +21,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.SMS.AccessKey = maskSecret(c.SMS.AccessKey)
 	c.VoiceCall.SecretKey = maskSecret(c.VoiceCall.SecretKey)
 	c.VoiceCall.AccessKey = maskSecret(c.VoiceCall.AccessKey)
-	c.AI.APIKey = maskSecret(c.AI.APIKey)       // AI provider credential
-	c.PostgresDSN = maskSecret(c.PostgresDSN)   // DSN carries the PostgreSQL password
+	c.AI.APIKey = maskSecret(c.AI.APIKey)                         // AI provider credential
+	c.AI.EmbedAPIKey = maskSecret(c.AI.EmbedAPIKey)               // 嵌入服务凭证（独立于对话）
+	c.PostgresDSN = maskSecret(c.PostgresDSN)                     // DSN carries the PostgreSQL password
 	c.InstallToken = maskSecret(c.InstallToken)                   // agent enrollment token — not for viewers
 	c.RelaySecret = maskSecret(c.RelaySecret)                     // gateway relay shared secret
 	c.CustomWebhook.Headers = maskSecret(c.CustomWebhook.Headers) // may carry auth tokens (e.g. X-Token)

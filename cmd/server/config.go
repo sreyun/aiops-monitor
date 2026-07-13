@@ -46,7 +46,7 @@ type CustomWebhookConfig struct {
 // SMSConfig holds the cloud SMS notification channel configuration.
 type SMSConfig struct {
 	Enabled      bool     `json:"enabled"`
-	Provider     string   `json:"provider"`      // aliyun | huawei | tencent
+	Provider     string   `json:"provider"` // aliyun | huawei | tencent
 	AccessKey    string   `json:"access_key"`
 	SecretKey    string   `json:"secret_key,omitempty"`
 	SignName     string   `json:"sign_name"`
@@ -57,7 +57,7 @@ type SMSConfig struct {
 // VoiceCallConfig holds the cloud voice call (TTS) notification channel configuration.
 type VoiceCallConfig struct {
 	Enabled       bool     `json:"enabled"`
-	Provider      string   `json:"provider"`       // aliyun | huawei | tencent
+	Provider      string   `json:"provider"` // aliyun | huawei | tencent
 	AccessKey     string   `json:"access_key"`
 	SecretKey     string   `json:"secret_key,omitempty"`
 	CalledNumbers []string `json:"called_numbers"`
@@ -111,14 +111,14 @@ type ThresholdConfig struct {
 	TaskTimeoutWarn float64 `json:"task_timeout_warn"` // 超时时长 警告 s
 	TaskTimeoutCrit float64 `json:"task_timeout_crit"` // 超时时长 严重 s
 	// ---- 端口转发监控阈值 ----
-	ForwardConnWarn  int     `json:"forward_conn_warn"`  // 活跃连接数 警告
-	ForwardConnCrit  int     `json:"forward_conn_crit"`  // 活跃连接数 严重
-	ForwardBwWarn    float64 `json:"forward_bw_warn"`    // 带宽使用率 警告 %
-	ForwardBwCrit    float64 `json:"forward_bw_crit"`    // 带宽使用率 严重 %
-	ForwardErrWarn   float64 `json:"forward_err_warn"`   // 错误率 警告 %
-	ForwardErrCrit   float64 `json:"forward_err_crit"`   // 错误率 严重 %
-	ForwardLatWarn   float64 `json:"forward_lat_warn"`   // 平均延迟 警告 ms
-	ForwardLatCrit   float64 `json:"forward_lat_crit"`   // 平均延迟 严重 ms
+	ForwardConnWarn int     `json:"forward_conn_warn"` // 活跃连接数 警告
+	ForwardConnCrit int     `json:"forward_conn_crit"` // 活跃连接数 严重
+	ForwardBwWarn   float64 `json:"forward_bw_warn"`   // 带宽使用率 警告 %
+	ForwardBwCrit   float64 `json:"forward_bw_crit"`   // 带宽使用率 严重 %
+	ForwardErrWarn  float64 `json:"forward_err_warn"`  // 错误率 警告 %
+	ForwardErrCrit  float64 `json:"forward_err_crit"`  // 错误率 严重 %
+	ForwardLatWarn  float64 `json:"forward_lat_warn"`  // 平均延迟 警告 ms
+	ForwardLatCrit  float64 `json:"forward_lat_crit"`  // 平均延迟 严重 ms
 }
 
 func defaultThresholdConfig() ThresholdConfig {
@@ -133,25 +133,25 @@ func defaultThresholdConfig() ThresholdConfig {
 		ProcWarn:        0.5,
 		OfflineAfterSec: 60,
 		// 拨测监控默认阈值
-		CheckPingLossWarn:    10,  CheckPingLossCrit:    30,
+		CheckPingLossWarn: 10, CheckPingLossCrit: 30,
 		CheckPingLatencyWarn: 100, CheckPingLatencyCrit: 500,
-		CheckTCPTimeoutWarn:  1000, CheckTCPTimeoutCrit:  5000,
-		CheckHTTPRespWarn:    1000, CheckHTTPRespCrit:    5000,
-		CheckHTTPStatusWarn:  1,    CheckHTTPStatusCrit:  5,
-		CheckProcFailWarn:    1,    CheckProcFailCrit:    3,
+		CheckTCPTimeoutWarn: 1000, CheckTCPTimeoutCrit: 5000,
+		CheckHTTPRespWarn: 1000, CheckHTTPRespCrit: 5000,
+		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 5,
+		CheckProcFailWarn: 1, CheckProcFailCrit: 3,
 		// API 业务监控默认阈值
-		APIAvailWarn:      99.0, APIAvailCrit:      95.0,
-		APIAvgRespWarn:    500,  APIAvgRespCrit:    2000,
-		APIP95RespWarn:    1000, APIP95RespCrit:    5000,
-		APIThroughputWarn: 100,  APIThroughputCrit: 10,
+		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
+		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
+		APIP95RespWarn: 1000, APIP95RespCrit: 5000,
+		APIThroughputWarn: 100, APIThroughputCrit: 10,
 		// 编排定时任务默认阈值
-		TaskFailWarn:    1,  TaskFailCrit:    5,
+		TaskFailWarn: 1, TaskFailCrit: 5,
 		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
 		// 端口转发监控默认阈值
 		ForwardConnWarn: 200, ForwardConnCrit: 280,
-		ForwardBwWarn:   80,  ForwardBwCrit:   95,
-		ForwardErrWarn:  5,   ForwardErrCrit:  15,
-		ForwardLatWarn:  1000, ForwardLatCrit: 5000,
+		ForwardBwWarn: 80, ForwardBwCrit: 95,
+		ForwardErrWarn: 5, ForwardErrCrit: 15,
+		ForwardLatWarn: 1000, ForwardLatCrit: 5000,
 	}
 }
 
@@ -1181,6 +1181,10 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	// Preserve a previously-saved API key when the browser submits a masked/blank one.
 	if a.APIKey == "" || strings.Contains(a.APIKey, "****") {
 		a.APIKey = cs.cfg.AI.APIKey
+	}
+	// 嵌入 Key 同样：表单提交空/脱敏值时保留原值。
+	if a.EmbedAPIKey == "" || strings.Contains(a.EmbedAPIKey, "****") {
+		a.EmbedAPIKey = cs.cfg.AI.EmbedAPIKey
 	}
 	// AI 配置表单不含这些 Hermes 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
 	a.HermesEnabled = cs.cfg.AI.HermesEnabled

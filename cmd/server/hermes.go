@@ -299,24 +299,39 @@ func (h *HermesCore) execSearchCases(args map[string]any) (string, error) {
 	if len(emb) == 0 {
 		return "向量嵌入失败", nil
 	}
-	cases, err := h.s.pg.searchSimilarCases(emb, 3)
-	if err != nil || len(cases) == 0 {
-		return "未找到相似历史案例", nil
+	// 同时检索「诊断案例库」与「通用 AI 记忆库」（对话 / 文件 / URL / 历史全都沉淀在此），
+	// 让每次交互积累的知识都能被后续对话复用——真正的自我进化。
+	cases, _ := h.s.pg.searchSimilarCases(emb, 3)
+	mems, _ := h.s.pg.searchMemory(emb, 3)
+	if len(cases) == 0 && len(mems) == 0 {
+		return "未找到相似历史案例或记忆", nil
 	}
 	var b strings.Builder
-	b.WriteString("相似历史案例：\n")
-	for i, c := range cases {
-		sim := int((1.0 - c.Distance) * 100)
-		if sim < 0 {
-			sim = 0
+	if len(cases) > 0 {
+		b.WriteString("相似历史诊断案例：\n")
+		for i, c := range cases {
+			sim := int((1.0 - c.Distance) * 100)
+			if sim < 0 {
+				sim = 0
+			}
+			fb := ""
+			if c.Feedback == "helpful" {
+				fb = " 👍"
+			} else if c.Feedback == "unhelpful" {
+				fb = " 👎"
+			}
+			fmt.Fprintf(&b, "  %d. 相似度 %d%%%s: %s\n", i+1, sim, fb, trimLine(c.Summary, 250))
 		}
-		fb := ""
-		if c.Feedback == "helpful" {
-			fb = " 👍"
-		} else if c.Feedback == "unhelpful" {
-			fb = " 👎"
+	}
+	if len(mems) > 0 {
+		b.WriteString("相关历史记忆（对话 / 文件 / URL）：\n")
+		for i, m := range mems {
+			sim := int((1.0 - m.Distance) * 100)
+			if sim < 0 {
+				sim = 0
+			}
+			fmt.Fprintf(&b, "  %d. [%s] 相似度 %d%%: %s\n", i+1, m.Kind, sim, trimLine(m.Content, 250))
 		}
-		fmt.Fprintf(&b, "  %d. 相似度 %d%%%s: %s\n", i+1, sim, fb, trimLine(c.Summary, 250))
 	}
 	return b.String(), nil
 }

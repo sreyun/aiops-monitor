@@ -1418,6 +1418,14 @@
         </div>
         <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
       </div>
+      <div class="subhead" style="margin-top:14px">嵌入 / 向量化（RAG 记忆）· 可独立于对话模型</div>
+      <div class="hint" style="margin-bottom:8px">留空则复用上方 Endpoint / Key。走通用 OpenAI 兼容 <code>/embeddings</code> 接口，不再绑定百炼。模型需输出 <b>1536</b> 维（如 text-embedding-3-small；text-embedding-3-large 可用维度参数）。若全部留空且主端点为百炼，则自动沿用百炼 text-embedding-v2。</div>
+      <div class="field"><label>嵌入 Endpoint</label><input type="text" id="embedEndpoint" placeholder="留空=复用上方 Endpoint；或 https://api.openai.com/v1"></div>
+      <div class="field"><label>嵌入 API Key</label><input type="password" id="embedKey" autocomplete="off" placeholder="留空=复用上方 API Key"></div>
+      <div class="grid2" style="align-items:end">
+        <div class="field"><label>嵌入模型</label><input type="text" id="embedModel" placeholder="如 text-embedding-3-small / text-embedding-v2"></div>
+        <div class="field"><label>维度（默认 1536）</label><input type="text" id="embedDim" class="mono" placeholder="1536"></div>
+      </div>
       <div class="hint">仅两种接口类型,按端点自动识别:<b>OpenAI 兼容</b>(覆盖 OpenAI / DeepSeek / Ollama / 百炼兼容模式等) 与 <b>Anthropic</b>(Claude,如百炼 https://coding.dashscope.aliyuncs.com/apps/anthropic)。填好 Endpoint + Key 后会自动获取该 Provider 的可用模型(下拉选择 / 搜索),也可手动输入模型名;无内置预设模型。不启用时用内置启发式引擎,开箱即用。</div>
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
       <div class="ai-term-access">

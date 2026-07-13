@@ -125,6 +125,16 @@ func (p *pgStore) migrate() error {
 			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS diag_emb_incident ON diagnosis_embeddings(incident_id);
+		-- 通用 AI 记忆库：对话 / 文件 / URL / 多轮历史 全部向量化，持续沉淀为可 RAG 检索的知识
+		CREATE TABLE IF NOT EXISTS ai_memory_embeddings (
+			id         BIGSERIAL PRIMARY KEY,
+			kind       TEXT NOT NULL,
+			source     TEXT,
+			content    TEXT NOT NULL,
+			embedding  vector(1536),
+			created_at BIGINT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS ai_mem_kind ON ai_memory_embeddings(kind);
 		-- 经验规则库（高频问题 best practice）
 		CREATE TABLE IF NOT EXISTS experience_rules (
 			id          BIGSERIAL PRIMARY KEY,
@@ -484,6 +494,49 @@ type similarCase struct {
 	Tags       string  `json:"tags"`
 	Feedback   string  `json:"feedback"`
 	Distance   float64 `json:"distance"` // cosine distance, lower = more similar
+}
+
+// ---- 通用 AI 记忆（对话 / 文件 / URL / 多轮历史 向量化，持续沉淀 RAG 知识，自我进化）----
+
+// insertMemoryEmbedding 存一条 AI 记忆向量。kind: chat|file|url|history|diagnosis。
+func (p *pgStore) insertMemoryEmbedding(kind, source, content string, emb []float64, ts int64) error {
+	_, err := p.db.Exec(
+		`INSERT INTO ai_memory_embeddings(kind, source, content, embedding, created_at)
+		 VALUES($1, $2, $3, $4::vector, $5)`,
+		kind, source, content, vecStr(emb), ts)
+	return err
+}
+
+type memoryHit struct {
+	Kind     string  `json:"kind"`
+	Source   string  `json:"source"`
+	Content  string  `json:"content"`
+	Distance float64 `json:"distance"`
+}
+
+// searchMemory 按余弦距离取最相近的 N 条 AI 记忆（RAG 检索，跨对话/文件/URL/历史）。
+func (p *pgStore) searchMemory(emb []float64, limit int) ([]memoryHit, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+	rows, err := p.db.Query(
+		`SELECT kind, source, content, embedding <=> $1::vector AS distance
+		 FROM ai_memory_embeddings
+		 ORDER BY embedding <=> $1::vector LIMIT $2`,
+		vecStr(emb), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []memoryHit
+	for rows.Next() {
+		var m memoryHit
+		if err := rows.Scan(&m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // ============================================================================

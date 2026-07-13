@@ -207,6 +207,8 @@ func (s *Server) autoDiagnose(inc Incident) {
 	s.incidents.AddEvent(inc.ID, "note", "ai-"+kind, out)
 	s.messages.push("ai", "info", "AI 诊断 · "+inc.Title, trimLine(out, 220), "sre", strconv.FormatInt(inc.ID, 10))
 	s.store.MarkDirty()
+	// 事件自动诊断结果同样向量化入库，供后续 RAG 相似案例检索（此前仅手动诊断/诊断对话会向量化）。
+	go s.saveDiagnosisEmbedding(inc.ID, inc, out)
 }
 
 func (s *Server) effectiveCategory(hostID string) string {
@@ -505,17 +507,17 @@ func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enrich with linked incident info for traceability
 	result := map[string]any{
-		"id":           tk.ID,
-		"title":        tk.Title,
-		"description":  tk.Description,
-		"priority":     tk.Priority,
-		"status":       tk.Status,
-		"assignee":     tk.Assignee,
-		"reporter":     tk.Reporter,
-		"incident_id":  tk.IncidentID,
-		"comments":     tk.Comments,
-		"created_at":   tk.CreatedAt,
-		"updated_at":   tk.UpdatedAt,
+		"id":          tk.ID,
+		"title":       tk.Title,
+		"description": tk.Description,
+		"priority":    tk.Priority,
+		"status":      tk.Status,
+		"assignee":    tk.Assignee,
+		"reporter":    tk.Reporter,
+		"incident_id": tk.IncidentID,
+		"comments":    tk.Comments,
+		"created_at":  tk.CreatedAt,
+		"updated_at":  tk.UpdatedAt,
 	}
 	if tk.IncidentID > 0 {
 		if inc, found := s.incidents.Get(tk.IncidentID); found {
@@ -703,19 +705,19 @@ func (s *Server) handleSearchLogs(w http.ResponseWriter, r *http.Request) {
 // handleLogDiagnose runs heuristic inspection against current log search context.
 func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		HostID       string   `json:"host_id"`
-		Hostname     string   `json:"hostname"`
-		SinceMin     int      `json:"since_min"`
-		ErrorLogs    []string `json:"error_logs"`
-		SingleLog    string   `json:"single_log"`
+		HostID    string   `json:"host_id"`
+		Hostname  string   `json:"hostname"`
+		SinceMin  int      `json:"since_min"`
+		ErrorLogs []string `json:"error_logs"`
+		SingleLog string   `json:"single_log"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req = struct {
-			HostID       string   `json:"host_id"`
-			Hostname     string   `json:"hostname"`
-			SinceMin     int      `json:"since_min"`
-			ErrorLogs    []string `json:"error_logs"`
-			SingleLog    string   `json:"single_log"`
+			HostID    string   `json:"host_id"`
+			Hostname  string   `json:"hostname"`
+			SinceMin  int      `json:"since_min"`
+			ErrorLogs []string `json:"error_logs"`
+			SingleLog string   `json:"single_log"`
 		}{}
 	}
 
@@ -792,6 +794,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg.AIConfig()
 	if c.APIKey != "" {
 		c.APIKey = "****" // never echo the key back to the browser
+	}
+	if c.EmbedAPIKey != "" {
+		c.EmbedAPIKey = "****" // 嵌入 Key 同样不回显
 	}
 	writeJSON(w, http.StatusOK, c)
 }
@@ -1162,9 +1167,9 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		Message         string `json:"message"`
-		Stream          bool   `json:"stream,omitempty"`
-		History         []struct {
+		Message string `json:"message"`
+		Stream  bool   `json:"stream,omitempty"`
+		History []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"history,omitempty"`
@@ -1615,6 +1620,34 @@ func (s *Server) saveDiagnosisEmbedding(incidentID int64, inc Incident, reply st
 	}
 }
 
+// rememberAI 把一段 AI 相关文本（对话 / 文件 / URL / 多轮历史）向量化并永久存入 pgvector，
+// 供后续 RAG 检索——让每次交互都沉淀为可复用记忆，持续自我进化。异步、尽力而为、不阻塞主流程。
+// 无 pgvector 或未配置嵌入（非百炼 / 未启用）时静默跳过。
+func (s *Server) rememberAI(kind, source, content string) {
+	if s.pg == nil {
+		return
+	}
+	content = strings.TrimSpace(content)
+	if len([]rune(content)) < 12 { // 太短，无检索价值
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return
+	}
+	emb := embedText(cfg, content)
+	if len(emb) == 0 {
+		return
+	}
+	stored := content
+	if len([]rune(stored)) > 4000 { // 存储正文限长
+		stored = string([]rune(stored)[:4000]) + "…"
+	}
+	if err := s.pg.insertMemoryEmbedding(kind, source, stored, emb, time.Now().Unix()); err != nil {
+		slog.Warn("保存 AI 记忆向量失败", "kind", kind, "err", err)
+	}
+}
+
 // handleDiagnosisFeedback records user feedback on an AI diagnosis.
 // POST /api/v1/incidents/{id}/diagnosis-feedback  {message_index, helpful}
 func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request) {
@@ -1778,7 +1811,17 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	session.IncidentID = req.IncidentID
 	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
-	s.hermes.Chat(r.Context(), session, msg, images, true, w)
+	final, _ := s.hermes.Chat(r.Context(), session, msg, images, true, w)
+	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（对话 + 上传文件 / URL 正文均含在 msg 内；
+	// 附件再各存一条便于精确召回）。多轮历史随每轮持续累积。异步、尽力而为、不阻塞响应。
+	if strings.TrimSpace(final) != "" {
+		go s.rememberAI("chat", fmt.Sprintf("session:%d", session.ID), "【用户】\n"+msg+"\n\n【AI】\n"+final)
+	}
+	for _, f := range req.Files {
+		if strings.TrimSpace(f.Text) != "" {
+			go s.rememberAI("file", f.Name, f.Text)
+		}
+	}
 	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]
 	fmt.Fprintf(w, "data: {\"session_id\":%d}\n\n", session.ID)
 	fmt.Fprint(w, "data: [DONE]\n\n")

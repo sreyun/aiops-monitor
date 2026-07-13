@@ -178,6 +178,7 @@ func openLog(key, data []byte) ([]byte, error) {
 func encryptConfigSecrets(c *ServerConfig) {
 	c.SMTP.Password = encryptSecret(c.SMTP.Password)
 	c.AI.APIKey = encryptSecret(c.AI.APIKey)
+	c.AI.EmbedAPIKey = encryptSecret(c.AI.EmbedAPIKey)
 	c.RelaySecret = encryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = encryptSecret(c.Dingtalk.Secret)
 	c.CustomWebhook.Headers = encryptSecret(c.CustomWebhook.Headers)
@@ -192,6 +193,7 @@ func encryptConfigSecrets(c *ServerConfig) {
 func decryptConfigSecrets(c *ServerConfig) {
 	c.SMTP.Password = decryptSecret(c.SMTP.Password)
 	c.AI.APIKey = decryptSecret(c.AI.APIKey)
+	c.AI.EmbedAPIKey = decryptSecret(c.AI.EmbedAPIKey)
 	c.RelaySecret = decryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = decryptSecret(c.Dingtalk.Secret)
 	c.CustomWebhook.Headers = decryptSecret(c.CustomWebhook.Headers)

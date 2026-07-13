@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -31,6 +32,12 @@ type AIConfig struct {
 	Model              string `json:"model"`                // e.g. gpt-4o-mini / a local model name
 	InspectIntervalMin int    `json:"inspect_interval_min"` // 0 = default 30
 	MaxTokens          int    `json:"max_tokens,omitempty"` // 单次输出 token 上限（0 = 默认 4096）
+	// 嵌入（向量化 / RAG）配置——与对话模型解耦，可指向任意 OpenAI 兼容 /embeddings 服务，
+	// 不再绑定阿里百炼。留空时回退到主 Endpoint / API Key。
+	EmbedEndpoint   string `json:"embed_endpoint,omitempty"`   // 嵌入端点，留空=复用主 Endpoint
+	EmbedAPIKey     string `json:"embed_api_key,omitempty"`    // 嵌入 Key，留空=复用主 API Key
+	EmbedModel      string `json:"embed_model,omitempty"`      // 嵌入模型，如 text-embedding-3-small / text-embedding-v2
+	EmbedDimensions int    `json:"embed_dimensions,omitempty"` // 目标维度，默认 1536（须与 pgvector 列一致）
 	// Hermes Agent 配置
 	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
 	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
@@ -768,32 +775,103 @@ func (m *aiManager) Diagnose(inc Incident) (string, string) {
 	return heuristicDiagnose(inc, ctx), "heuristic"
 }
 
-// embedText calls the Bailian DashScope Embedding V2 API to convert text into a
-// 1536-dimensional vector. Returns nil on any error (caller falls back gracefully).
-// API: https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+// embedDim 是向量存储列（pgvector）的固定维度。嵌入模型必须输出该维度，否则入库失败。
+const embedDim = 1536
+
+// embedText 把文本转成向量。与对话模型解耦：默认走「OpenAI 兼容 /embeddings」，兼容
+// OpenAI / 本地(Ollama/LocalAI/Xinference) / 百炼兼容模式 等任意服务；仅当用户未配置嵌入且
+// 主端点为百炼原生时，沿用旧的百炼 DashScope 原生 text-embedding-v2（向后兼容）。
+// 任何错误返回 nil，调用方优雅降级（不阻塞主流程）。
 func embedText(cfg AIConfig, text string) []float64 {
-	if !cfg.Enabled || cfg.APIKey == "" {
-		return nil
-	}
-	// Only Bailian supports embedding V2; other providers are skipped silently.
-	if !isBailianEndpoint(cfg.Endpoint) {
+	if !cfg.Enabled {
 		return nil
 	}
 	if text = strings.TrimSpace(text); text == "" {
 		return nil
 	}
-	// Truncate to avoid exceeding the model's input limit (text-embedding-v2: 2048 tokens).
-	if len([]rune(text)) > 3000 {
+	if len([]rune(text)) > 3000 { // 控制输入长度，避免超模型上限
 		text = string([]rune(text)[:3000])
 	}
+	ep := strings.TrimSpace(cfg.EmbedEndpoint)
+	key := strings.TrimSpace(cfg.EmbedAPIKey)
+	if key == "" {
+		key = cfg.APIKey
+	}
+	model := strings.TrimSpace(cfg.EmbedModel)
+	if key == "" {
+		return nil
+	}
+	// 未配置自定义嵌入 + 主端点是百炼原生 → 沿用旧的百炼原生 v2（向后兼容既有用户）
+	if ep == "" && model == "" && isBailianEndpoint(cfg.Endpoint) {
+		return embedBailianNative(key, text)
+	}
+	if ep == "" {
+		ep = cfg.Endpoint // 复用主端点 base
+	}
+	if model == "" {
+		return nil // 通用模式必须指定嵌入模型
+	}
+	return embedOpenAICompat(ep, key, model, cfg.EmbedDimensions, text)
+}
+
+// embedEndpointURL 把用户填的 base / 对话端点规整为 OpenAI 兼容的 /embeddings 完整地址。
+func embedEndpointURL(ep string) string {
+	ep = strings.TrimRight(strings.TrimSpace(ep), "/")
+	if strings.HasSuffix(ep, "/embeddings") {
+		return ep
+	}
+	if strings.HasSuffix(ep, "/chat/completions") { // 用户填了对话端点：替换尾段
+		return strings.TrimSuffix(ep, "/chat/completions") + "/embeddings"
+	}
+	return ep + "/embeddings"
+}
+
+// embedOpenAICompat 调用 OpenAI 兼容的 /embeddings 接口。dim>0 时请求指定维度
+// （OpenAI text-embedding-3-* 支持；其它服务忽略并返回原生维度）。
+func embedOpenAICompat(ep, key, model string, dim int, text string) []float64 {
+	reqBody := map[string]any{"model": model, "input": text}
+	if dim > 0 {
+		reqBody["dimensions"] = dim
+	}
+	body, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost, embedEndpointURL(ep), bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slog.Warn("嵌入接口返回非 200（检查嵌入 Endpoint / Key / 模型）", "status", resp.StatusCode, "model", model)
+		return nil
+	}
+	var result struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
+		return nil
+	}
+	emb := result.Data[0].Embedding
+	if len(emb) != embedDim { // 维度须与 pgvector 列一致，否则入库失败——告警并跳过
+		slog.Warn("嵌入维度与存储列不一致，已跳过（请选输出 1536 维的模型，或用支持 dimensions 的模型）",
+			"got", len(emb), "want", embedDim, "model", model)
+		return nil
+	}
+	return emb
+}
+
+// embedBailianNative 是旧的百炼 DashScope 原生 text-embedding-v2 路径（向后兼容既有配置）。
+func embedBailianNative(key, text string) []float64 {
 	reqBody := map[string]any{
-		"model": "text-embedding-v2",
-		"input": map[string]any{
-			"texts": []string{text},
-		},
-		"parameters": map[string]string{
-			"text_type": "query",
-		},
+		"model":      "text-embedding-v2",
+		"input":      map[string]any{"texts": []string{text}},
+		"parameters": map[string]string{"text_type": "query"},
 	}
 	body, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest(http.MethodPost,
@@ -803,7 +881,7 @@ func embedText(cfg AIConfig, text string) []float64 {
 		return nil
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil
@@ -815,15 +893,11 @@ func embedText(cfg AIConfig, text string) []float64 {
 	var result struct {
 		Output struct {
 			Embeddings []struct {
-				TextIndex int       `json:"text_index"`
 				Embedding []float64 `json:"embedding"`
 			} `json:"embeddings"`
 		} `json:"output"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
-	}
-	if len(result.Output.Embeddings) == 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Output.Embeddings) == 0 {
 		return nil
 	}
 	return result.Output.Embeddings[0].Embedding
