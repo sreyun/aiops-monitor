@@ -50,6 +50,8 @@ type SMSConfig struct {
 	AccessKey     string   `json:"access_key"`
 	SecretKey     string   `json:"secret_key,omitempty"`
 	AppID         string   `json:"app_id,omitempty"` // 华为云=project_id; 腾讯云=SmsSdkAppId
+	Sender        string   `json:"sender,omitempty"` // 华为云=短信通道号(from，必填)；阿里/腾讯留空
+	Region        string   `json:"region,omitempty"` // 腾讯云=地域(如 ap-guangzhou，必填)；阿里/华为留空
 	SignName      string   `json:"sign_name"`
 	TemplateCode  string   `json:"template_code"`
 	TemplateParam string   `json:"template_param,omitempty"` // 自定义模板参数 JSON，如 {"code":"${code}"}；空时默认 {"message":"..."}
@@ -62,7 +64,9 @@ type VoiceCallConfig struct {
 	Provider      string   `json:"provider"` // aliyun | huawei | tencent
 	AccessKey     string   `json:"access_key"`
 	SecretKey     string   `json:"secret_key,omitempty"`
-	AppID         string   `json:"app_id,omitempty"` // 华为云=project_id; 腾讯云=VoiceSdkAppId
+	AppID         string   `json:"app_id,omitempty"`      // 华为云=project_id; 腾讯云=VoiceSdkAppId
+	Region        string   `json:"region,omitempty"`      // 腾讯云=地域(如 ap-guangzhou，必填)；阿里/华为留空
+	DisplayNbr    string   `json:"display_nbr,omitempty"` // 华为云=主叫号码 displayNbr(必填)；阿里/腾讯留空
 	CalledNumbers []string `json:"called_numbers"`
 	TTSCode       string   `json:"tts_code"`
 	TTSParam      string   `json:"tts_param"`

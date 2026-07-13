@@ -36,6 +36,8 @@ async function openSettings() {
     $("smsTemplateCode").value = sms.template_code || "";
     $("smsTemplateParam").value = sms.template_param || "";
     $("smsAppId").value = sms.app_id || "";
+    $("smsSender").value = sms.sender || "";
+    $("smsRegion").value = sms.region || "";
     $("smsPhones").value = (sms.phones || []).join(",");
     // VoiceCall config
     const vc = c.voice_call || {};
@@ -47,6 +49,8 @@ async function openSettings() {
     $("voiceCallTtsCode").value = vc.tts_code || "";
     $("voiceCallTtsParam").value = vc.tts_param || "";
     $("voiceCallAppId").value = vc.app_id || "";
+    $("voiceCallDisplayNbr").value = vc.display_nbr || "";
+    $("voiceCallRegion").value = vc.region || "";
     // Threshold display: treat 0 / null / undefined as "unset" → show the standard
     // default. The backend also backfills these zeros, so display and storage stay
     // consistent, and every metric always shows a sane standard threshold.
@@ -214,6 +218,8 @@ function collectSettings() {
       template_code: $("smsTemplateCode").value.trim(),
       template_param: $("smsTemplateParam").value.trim(),
       app_id: $("smsAppId").value.trim(),
+      sender: $("smsSender").value.trim(),
+      region: $("smsRegion").value.trim(),
       phones: ($("smsPhones").value || "").split(",").map(s => s.trim()).filter(Boolean)
     },
     voice_call: {
@@ -224,7 +230,9 @@ function collectSettings() {
       called_numbers: ($("voiceCallCalledNumbers").value || "").split(",").map(s => s.trim()).filter(Boolean),
       tts_code: $("voiceCallTtsCode").value.trim(),
       tts_param: $("voiceCallTtsParam").value.trim(),
-      app_id: $("voiceCallAppId").value.trim()
+      app_id: $("voiceCallAppId").value.trim(),
+      display_nbr: $("voiceCallDisplayNbr").value.trim(),
+      region: $("voiceCallRegion").value.trim()
     }
     // 注意：告警阈值由独立的「告警阈值」Tab（saveThresholds）管理，此处不再序列化 thresholds，
     // 否则保存告警通知设置会用一份不完整的阈值覆盖掉 check_*/GPU 温度·显存/连接数 等字段（被后端

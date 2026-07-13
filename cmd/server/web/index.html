@@ -849,6 +849,10 @@
           <input type="text" id="smsAppId" placeholder="阿里云留空；华为云填 project_id；腾讯云填 SmsSdkAppId">
         </div>
         <div class="grid2">
+          <div class="field"><label>通道号 Sender（华为云必填）</label><input type="text" id="smsSender" placeholder="华为云短信通道号，如 1069…；阿里/腾讯留空"></div>
+          <div class="field"><label>地域 Region（腾讯云必填）</label><input type="text" id="smsRegion" placeholder="腾讯云地域，如 ap-guangzhou；阿里/华为留空"></div>
+        </div>
+        <div class="grid2">
           <div class="field"><label data-i18n="settings.sms_sign_name">短信签名</label><input type="text" id="smsSignName" placeholder="AIOps"></div>
           <div class="field"><label data-i18n="settings.sms_template_code">模板编码</label><input type="text" id="smsTemplateCode" placeholder="SMS_123456789"></div>
         </div>
@@ -880,6 +884,10 @@
         <div class="field">
           <label data-i18n="settings.voice_app_id">AppID（华为云 project_id / 腾讯云 VoiceSdkAppId）</label>
           <input type="text" id="voiceCallAppId" placeholder="阿里云留空；华为云填 project_id；腾讯云填 VoiceSdkAppId">
+        </div>
+        <div class="grid2">
+          <div class="field"><label>主叫号码 displayNbr（华为云必填）</label><input type="text" id="voiceCallDisplayNbr" placeholder="华为云购买的主叫号码；阿里/腾讯留空"></div>
+          <div class="field"><label>地域 Region（腾讯云必填）</label><input type="text" id="voiceCallRegion" placeholder="腾讯云地域，如 ap-guangzhou；阿里/华为留空"></div>
         </div>
         <div class="field">
           <label data-i18n="settings.voice_called_numbers">被叫号码</label>

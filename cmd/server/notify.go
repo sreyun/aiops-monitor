@@ -650,10 +650,15 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 	if phones == "" {
 		return fmt.Errorf("no called numbers configured")
 	}
-	// Build TTS params: merge template param with the alert message
+	// Build TTS params — 与短信一致：清洗告警文本，空模板默认 {"message":...}；含 ${...} 占位符
+	// 则整体替换为告警内容（JSON 转义），从而适配任意变量名的 TTS 模板。
+	safe := smsSafeVar(text)
+	jsonEsc := func(s string) string { b, _ := json.Marshal(s); return string(b[1 : len(b)-1]) }
 	tsParam := cfg.TTSParam
 	if tsParam == "" {
-		tsParam = fmt.Sprintf(`{"message":"%s"}`, strings.ReplaceAll(text, `"`, `\"`))
+		tsParam = `{"message":"` + jsonEsc(safe) + `"}`
+	} else if strings.Contains(tsParam, "${") {
+		tsParam = regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllStringFunc(tsParam, func(string) string { return jsonEsc(safe) })
 	}
 	calledNumber := cfg.CalledNumbers[0] // SingleCallByTts only supports one callee per call
 
@@ -736,6 +741,11 @@ func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
 	if projectID == "" {
 		return fmt.Errorf("Huawei Cloud SMS requires project_id (AppID)")
 	}
+	// 华为云短信必须携带「通道号 from」，缺失会被服务端拒绝（此前硬编码为空导致必失败）。
+	from := strings.TrimSpace(cfg.Sender)
+	if from == "" {
+		return fmt.Errorf("华为云短信需配置通道号（Sender/from）")
+	}
 
 	// 构建模板参数：优先用用户自定义 JSON 数组，否则兜底
 	var templateParas []string
@@ -777,7 +787,7 @@ func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
 		cfg.AccessKey, passwordDigest, nonce, created)
 
 	body := map[string]any{
-		"from":          "",
+		"from":          from,
 		"to":            strings.Join(toList, ","),
 		"templateId":    cfg.TemplateCode,
 		"templateParas": templateParas,
@@ -871,6 +881,11 @@ func (n *Notifier) sendTencentSMS(cfg SMSConfig, text string) error {
 	req.Header.Set("X-TC-Action", action)
 	req.Header.Set("X-TC-Version", version)
 	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(timestamp, 10))
+	tcRegion := strings.TrimSpace(cfg.Region)
+	if tcRegion == "" {
+		tcRegion = "ap-guangzhou" // 腾讯云短信/语音必需地域参数，缺失会被拒；默认广州
+	}
+	req.Header.Set("X-TC-Region", tcRegion) // 此前遗漏，导致腾讯云短信/语音必失败
 	req.Header.Set("Authorization", auth)
 
 	resp, err := n.httpc.Do(req)
@@ -905,6 +920,11 @@ func (n *Notifier) sendHuaweiVoiceCall(cfg VoiceCallConfig, text string) error {
 	if projectID == "" {
 		return fmt.Errorf("Huawei Cloud Voice Call requires project_id (AppID)")
 	}
+	// 华为云语音通知必须携带主叫号码 displayNbr（购买的固话/号码），缺失会被拒。
+	displayNbr := strings.TrimSpace(cfg.DisplayNbr)
+	if displayNbr == "" {
+		return fmt.Errorf("华为云语音需配置主叫号码（displayNbr）")
+	}
 
 	// 被叫号码
 	called := cfg.CalledNumbers[0]
@@ -938,6 +958,7 @@ func (n *Notifier) sendHuaweiVoiceCall(cfg VoiceCallConfig, text string) error {
 		cfg.AccessKey, passwordDigest, nonce, created)
 
 	body := map[string]any{
+		"displayNbr":    displayNbr,
 		"called":        called,
 		"templateId":    cfg.TTSCode,
 		"templateParas": templateParas,
@@ -1021,6 +1042,11 @@ func (n *Notifier) sendTencentVoiceCall(cfg VoiceCallConfig, text string) error 
 	req.Header.Set("X-TC-Action", action)
 	req.Header.Set("X-TC-Version", version)
 	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(timestamp, 10))
+	tcRegion := strings.TrimSpace(cfg.Region)
+	if tcRegion == "" {
+		tcRegion = "ap-guangzhou" // 腾讯云短信/语音必需地域参数，缺失会被拒；默认广州
+	}
+	req.Header.Set("X-TC-Region", tcRegion) // 此前遗漏，导致腾讯云短信/语音必失败
 	req.Header.Set("Authorization", auth)
 
 	resp, err := n.httpc.Do(req)
