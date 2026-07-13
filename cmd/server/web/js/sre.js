@@ -18,10 +18,21 @@ async function loadPlaybooks() {
   } catch (e) { console.warn("load playbooks:", e); }
 }
 
+function switchAutomationView(mode) {
+  AUTOMATION_VIEW_MODE = mode;
+  try { localStorage.setItem("aiops_pb_view", mode); } catch (e) {}
+  loadPlaybooks(); // 重新拉取并渲染（renderPlaybooks 内按模式设 className + 同步按钮态）
+}
+
 function renderPlaybooks(pbs) {
   const list = $("playbookList"), empty = $("playbookEmpty");
   if (!list) return;
   if (empty) empty.style.display = pbs.length === 0 ? "" : "none";
+  // 视图模式：卡片(默认) / 列表——复用同一 .pb-card 结构，列表态仅由 CSS 重排为紧凑单行，
+  // 从而不改动 data-pbact 委托对 .pb-card[data-id] 的依赖。
+  list.className = AUTOMATION_VIEW_MODE === "list" ? "pb-listmode" : "";
+  const vt = $("playbookViewToggle");
+  if (vt) vt.querySelectorAll(".vt-btn").forEach(b => b.classList.toggle("active", b.dataset.view === AUTOMATION_VIEW_MODE));
   list.innerHTML = pbs.map(pb => {
     const stepCount = (pb.steps || []).length;
     const targets = [...new Set((pb.steps || []).map(s => s.target))];
@@ -419,7 +430,7 @@ async function incidentAction(id, act){
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
 // calls onDelta for each token chunk, onError for errors, onResult for result
 // metadata, and onDone when complete. Returns the accumulated full text.
-async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta){
+async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool){
   const reader=resp.body.getReader();
   const decoder=new TextDecoder();
   let buf="";
@@ -443,6 +454,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta){
             if(j.error){ if(onError) onError(j.error); return fullText; }
             if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
+            if(j.tool){ if(onTool) onTool(j.tool); continue; } // 工具执行状态帧（run/ok/err）
             if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
           } catch(e){ /* skip malformed chunks */ }
         }
@@ -1323,24 +1335,41 @@ async function sendAIChat(){
       body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),images,files,stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
+    // 工具调用状态 chip（run→ok/err）：与回答正文分离渲染，实时更新且不污染最终回答
+    const toolStates=[];
+    const toolTraceHTML=()=> toolStates.length ? '<div class="ai-tool-trace">'+toolStates.map(s=>{
+      const ic = s.state==="run"
+        ? '<svg class="ai-tool-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>'
+        : (s.state==="ok" ? "✓" : "✗");
+      return `<span class="ai-tool-chip ${s.state}">${ic}<span>${esc(s.name)}</span></span>`;
+    }).join("")+'</div>' : "";
+    const paint=()=>{ if(pending) pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…")); };
     await readSSEStream(r,
       (delta,fullText)=>{
         const stick=aiChatStick();
         if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
         answer=filterDisplayContent(fullText);
-        if(pending) pending.innerHTML=renderAIMarkdown(answer)||"…";
+        paint();
         if(stick) aiChatToBottom();
       },
       (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
       (fullText)=>{
-        if(!streamed&&pending){
-          answer=filterDisplayContent(fullText||"");
-          pending.innerHTML=renderAIMarkdown(answer)||"（空回复）";
+        if(pending){
+          answer=filterDisplayContent(fullText||answer||"");
+          pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"（空回复）"));
         }
         aiChatToBottom();
       },
       null,
-      (meta)=>{ if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); } }
+      (meta)=>{ if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); } },
+      (t)=>{ // 工具状态帧：run 追加 chip，ok/err 更新最近的同名 run chip
+        if(!t||!t.name) return;
+        if(t.state==="run") toolStates.push({name:t.name,state:"run"});
+        else { for(let i=toolStates.length-1;i>=0;i--){ if(toolStates[i].name===t.name&&toolStates[i].state==="run"){ toolStates[i].state=t.state; break; } } }
+        if(pending && !streamed){ pending.textContent=""; streamed=true; }
+        paint();
+        if(aiChatStick()) aiChatToBottom();
+      }
     );
     if(answer){ AI_CHAT_HISTORY.push({role:"assistant",content:answer}); addCopyTool(pending,answer); }
     refreshAISessionsSoon();

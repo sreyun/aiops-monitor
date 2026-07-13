@@ -145,7 +145,8 @@ async function loadForwards() {
 }
 
 // 转发视图模式：list（默认）| card
-let FORWARD_VIEW_MODE = "list";
+let FORWARD_VIEW_MODE = (function () { try { return localStorage.getItem("aiops_fwd_view") === "list" ? "list" : "card"; } catch (e) { return "card"; } })(); // 默认卡片视图
+let AUTOMATION_VIEW_MODE = (function () { try { return localStorage.getItem("aiops_pb_view") === "list" ? "list" : "card"; } catch (e) { return "card"; } })(); // 编排默认卡片视图
 
 // 操作图标（统一的描边 SVG，使用 currentColor 跟随文字色）
 const FWD_ICONS = {
@@ -160,6 +161,7 @@ const FWD_ICONS = {
 
 function switchForwardView(mode) {
   FORWARD_VIEW_MODE = mode;
+  try { localStorage.setItem("aiops_fwd_view", mode); } catch (e) {}
   const wrap = $("forwardViewToggle");
   if (wrap) wrap.querySelectorAll(".vt-btn").forEach(b => b.classList.toggle("active", b.dataset.view === mode));
   renderForwards();
@@ -211,6 +213,10 @@ function renderForwards() {
   const list = $("forwardList");
   const empty = $("forwardEmpty");
   if (!list || !empty) return;
+
+  // 同步视图切换按钮的选中态到当前模式（覆盖初次加载时 HTML 静态 active 与持久化偏好不一致的情况）
+  const vt = $("forwardViewToggle");
+  if (vt) vt.querySelectorAll(".vt-btn").forEach(b => b.classList.toggle("active", b.dataset.view === FORWARD_VIEW_MODE));
 
   const items = collectForwardItems();
 
@@ -415,8 +421,11 @@ async function loadHttpProxies() {
 }
 
 // 启用 / 停用某条转发（TCP 或 HTTP）
-async function toggleForward(ev, type, id, enable) {
-  await withLoading(ev.currentTarget, async () => {
+async function toggleForward(btn, type, id, enable) {
+  // 注意：必须传入按钮元素本身。此前传的是委托事件的 currentTarget = document，
+  // withLoading 内 `document.style.opacity=...` 会抛错（document 无 style），
+  // 导致 fetch 根本没执行 —— 表现为「点开关无反应、状态无法切换」。
+  await withLoading(btn, async () => {
     const url = type === "tcp"
       ? `/api/v1/forward/${id}/toggle`
       : `/api/v1/http-proxy/${id}/toggle`;
@@ -603,10 +612,11 @@ document.addEventListener("click", e => {
     case "install": openInstall(); break;
     case "ai-preset": setAIPreset(el.dataset.preset); break;
     case "fwd-view": switchForwardView(el.dataset.view); break;
+    case "pb-view": switchAutomationView(el.dataset.view); break;
     case "term-observe": openTerminalObserve(el.dataset.sid, el.dataset.host); break;
     case "term-replay": openTerminalReplay(el.dataset.sid, el.dataset.host); break;
     case "proxy-open": openProxyUrl(el.dataset.url); break;
-    case "fwd-toggle": toggleForward(e, el.dataset.ftype, el.dataset.fid, el.dataset.enable === "1"); break;
+    case "fwd-toggle": toggleForward(el, el.dataset.ftype, el.dataset.fid, el.dataset.enable === "1"); break;
     case "fwd-copy": copyForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-edit": editForward(el.dataset.ftype, el.dataset.fid); break;
     case "fwd-del": deleteForward(el.dataset.ftype, el.dataset.fid); break;

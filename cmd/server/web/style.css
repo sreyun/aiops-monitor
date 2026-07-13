@@ -1723,6 +1723,12 @@ body[data-role="viewer"] #installBtn{display:none !important}
 /* Playbook cards laid out as a responsive grid (matches the forward-grid pattern)
    for a cleaner, more scannable automation view than a full-width stack. */
 #playbookList{display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; align-items:stretch}
+/* 编排剧本·列表视图：复用 .pb-card 结构，仅重排为紧凑单行（保持 data-pbact 对 .pb-card[data-id] 的依赖不变） */
+#playbookList.pb-listmode{grid-template-columns:1fr; gap:8px}
+#playbookList.pb-listmode .pb-card{display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:16px; padding:10px 16px}
+#playbookList.pb-listmode .pb-card-top{flex:1 1 auto; min-width:0; align-items:center}
+#playbookList.pb-listmode .pb-desc{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:520px}
+#playbookList.pb-listmode .pb-card-foot{flex:0 0 auto; width:auto; margin-top:0; border-top:none; padding-top:0; gap:14px}
 .pb-card{background:var(--panel); border:1px solid var(--line); border-radius:var(--r-sm); padding:14px 16px;
   display:flex; flex-direction:column; gap:11px; transition:border-color var(--transition-fast), background var(--transition-fast)}
 .pb-card:hover{border-color:var(--hover-border); background:var(--panel2)}
@@ -2538,6 +2544,15 @@ select:focus {
 .view-tab { padding: 9px 16px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer; margin-bottom: -1px; transition: color var(--transition-fast), border-color var(--transition-fast); }
 .view-tab:hover { color: var(--txt2); }
 .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* AI 工具调用状态 chip：与回答正文分离的一排状态徽标，实时 执行中→✓/✗ */
+.ai-tool-trace{display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px}
+.ai-tool-chip{display:inline-flex; align-items:center; gap:5px; font-size:12px; line-height:1;
+  padding:4px 9px; border-radius:999px; border:1px solid var(--line2); background:var(--panel2); color:var(--muted)}
+.ai-tool-chip.run{color:var(--accent); border-color:var(--accent-soft,var(--accent))}
+.ai-tool-chip.ok{color:#4a9e5c; border-color:#2f5d3a}
+.ai-tool-chip.err{color:#ef4d5a; border-color:#5d2f34}
+.ai-tool-spin{width:12px; height:12px; animation:spin .6s linear infinite}
 
 /* AI 对话·回到底部悬浮按钮 */
 .ai-chat-modal .modal-body { position: relative; }

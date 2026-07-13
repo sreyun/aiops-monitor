@@ -80,10 +80,10 @@ func (h *HermesCore) registerTools() {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id":  map[string]string{"type": "string", "description": "主机 ID"},
-				"level":    map[string]string{"type": "string", "description": "日志级别：error/warn/info"},
-				"keyword":  map[string]string{"type": "string", "description": "搜索关键词"},
-				"minutes":  map[string]any{"type": "integer", "description": "最近 N 分钟"},
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"level":   map[string]string{"type": "string", "description": "日志级别：error/warn/info"},
+				"keyword": map[string]string{"type": "string", "description": "搜索关键词"},
+				"minutes": map[string]any{"type": "integer", "description": "最近 N 分钟"},
 			},
 			"required": []string{"host_id"},
 		},
@@ -325,6 +325,7 @@ func (h *HermesCore) execSearchCases(args map[string]any) (string, error) {
 // 命令在被控端经 shell 执行，故：
 //  1. 拒绝可用于注入 / 破坏 / 外联 / 重定向 / 子shell 的元字符（; & $ < > ` \ 换行 () {}）；
 //  2. 允许用管道 | 串联，但逐段校验每段命令首词必须精确命中白名单（非松散前缀，dfoo 不算 df）。
+//
 // 返回 (是否放行, 拒绝原因)。
 func diagCommandAllowed(command string) (bool, string) {
 	cmdTrim := strings.TrimSpace(command)
@@ -495,6 +496,17 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			flusher.Flush()
 		}
 	}
+	// sendTool 以独立 SSE 帧下发工具执行状态（state: run/ok/err），前端渲染为可实时更新的
+	// 「工具调用」状态 chip；刻意与 delta 正文分离，既让用户看到实时进度，又不污染最终回答。
+	sendTool := func(name, state string) {
+		if !stream || w == nil {
+			return
+		}
+		fmt.Fprintf(w, "data: {\"tool\":{\"name\":%s,\"state\":%s}}\n\n", jsonString(name), jsonString(state))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 
 	for turn := 0; turn < 5; turn++ {
 		if err := ctx.Err(); err != nil { // 客户端已断开：停止后续 LLM 调用与工具执行，避免用户离开后仍在主机上跑命令
@@ -527,26 +539,24 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		if think := stripToolCallJSON(reply); think != "" {
 			sendDelta(think + "\n")
 		}
-		// 推送工具执行状态（不含 JSON）
-		names := make([]string, 0, len(toolCalls))
-		for _, tc := range toolCalls {
-			names = append(names, tc.Name)
-		}
-		sendDelta("🔧 正在执行：" + strings.Join(names, "、") + " …\n")
-
-		// 执行工具，汇总结果
+		// 逐个工具「执行中 → 完成/失败」以独立 tool 帧实时下发，前端渲染为状态 chip；
+		// 让用户在「工具执行 + 下一轮 LLM 调用」的间隙始终看到进度，不再「回复到一半像卡住」。
 		var toolResults strings.Builder
 		for _, tc := range toolCalls {
 			slog.Info("hermes tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
 			tool, ok := h.tools[tc.Name]
 			if !ok {
+				sendTool(tc.Name, "err")
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 不存在]\n", tc.Name))
 				continue
 			}
+			sendTool(tc.Name, "run")
 			result, err := tool.Execute(tc.Args)
 			if err != nil {
+				sendTool(tc.Name, "err")
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行失败：%v]\n", tc.Name, err))
 			} else {
+				sendTool(tc.Name, "ok")
 				toolResults.WriteString(fmt.Sprintf("工具 %s 结果：\n%s\n", tc.Name, result))
 			}
 		}

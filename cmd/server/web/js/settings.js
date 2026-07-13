@@ -47,6 +47,49 @@ async function openSettings() {
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 
+// ---- 告警阈值 Tab（已从「告警设置」弹窗独立出来，隶属「告警」模块）----
+// 阈值输入框（同 ID）现位于 #view-thresholds。加载：拉全量配置回填字段；
+// 保存：拉全量配置 → 仅覆盖 thresholds → 回存，从而不触碰 webhook/smtp 等其它设置
+// （脱敏密钥原样回传，由后端按「掩码=保持原值」逻辑保留）。
+async function loadThresholds() {
+  try {
+    const c = await fetch(`${API}/config`).then(r => r.json());
+    const t = c.thresholds || {};
+    const td = (v, def) => (v == null || v === 0 || isNaN(v)) ? def : v;
+    $("cpuWarn").value = td(t.cpu_warn, 80); $("cpuCrit").value = td(t.cpu_crit, 95);
+    $("memWarn").value = td(t.mem_warn, 85); $("memCrit").value = td(t.mem_crit, 95);
+    $("diskWarn").value = td(t.disk_warn, 80); $("diskCrit").value = td(t.disk_crit, 90);
+    $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
+    $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
+    $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
+    $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
+    $("procWarn").value = td(t.proc_warn, 0.5);
+    $("offlineSec").value = td(t.offline_after_sec, 60);
+  } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
+}
+async function saveThresholds() {
+  await withLoading("saveThresholdsBtn", async () => {
+    try {
+      const c = await fetch(`${API}/config`).then(r => r.json()); // 全量配置（密钥已脱敏，回存时后端按原值保留）
+      const num = id => parseFloat($(id).value) || 0;
+      c.thresholds = {
+        cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
+        mem_warn: num("memWarn"), mem_crit: num("memCrit"),
+        disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
+        diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
+        iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
+        gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
+        load_warn: num("loadWarn"), load_crit: num("loadCrit"),
+        proc_warn: num("procWarn"),
+        offline_after_sec: Math.round(num("offlineSec"))
+      };
+      const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+      if (r.ok) toast("告警阈值已保存，即时生效", "ok");
+      else toast(I18N.t("toast.save_failed"), "err");
+    } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
+  });
+}
+
 // Tab switching for notification channels
 function switchNotifyTab(tabId) {
   document.querySelectorAll("#notifyTabs .tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tabId));

@@ -193,6 +193,35 @@
 
     <div class="content">
       <div id="viewTabs" class="view-tabs" style="display:none"></div>
+      <!-- 告警阈值（从「告警设置」独立出的 Tab，隶属「告警」模块；tab 由 nav.js VIEW_TAB_GROUPS 渲染） -->
+      <section class="view" id="view-thresholds">
+        <div class="section-title"><span data-i18n="settings.thresholds">告警阈值</span><span class="tag">基础指标（CPU / 内存 / 磁盘 / 负载 …）触发 警告 / 严重 的判定阈值 —— 保存后即时生效</span>
+          <div style="margin-left:auto"><button class="btn primary" id="saveThresholdsBtn">保存阈值</button></div>
+        </div>
+        <div class="gov-section">
+          <div class="grid2">
+            <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.diskio_thresh">磁盘 IO 占用 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="diskioWarn" class="mono"><input type="text" id="diskioCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
+              <div class="grid2"><input type="text" id="iopsWarn" class="mono"><input type="text" id="iopsCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
+              <div class="grid2"><input type="text" id="gpuWarn" class="mono"><input type="text" id="gpuCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（×核心数）</label>
+              <div class="grid2"><input type="text" id="loadWarn" class="mono"><input type="text" id="loadCrit" class="mono"></div></div>
+            <div class="field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
+              <input type="text" id="procWarn" class="mono"></div>
+            <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
+              <input type="text" id="offlineSec" class="mono"></div>
+          </div>
+          <div class="hint" style="margin-top:10px">阈值留空或为 0 视为「未设置」，按标准默认值处理。修改后点「保存阈值」立即生效。</div>
+        </div>
+      </section>
       <!-- 概览 -->
       <section class="view active" id="view-overview">
         <!-- 空态引导：还没有任何主机时展示三步上手 -->
@@ -404,6 +433,10 @@
       <section class="view" id="view-automation">
         <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <div class="view-toggle" id="playbookViewToggle" role="group" aria-label="视图切换">
+              <button class="vt-btn active" title="卡片" data-act="pb-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn" title="列表" data-act="pb-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            </div>
             <button class="btn" id="pbHistoryBtn" data-i18n-title="ui.exec_history_title" data-i18n="ui.exec_history" title="查看执行历史">执行历史</button>
             <button class="btn primary" id="addPlaybookBtn" data-i18n="ui.new_playbook">+ 新建剧本</button>
           </div>
@@ -497,8 +530,8 @@
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
             <div class="view-toggle" id="forwardViewToggle" role="group" aria-label="视图切换">
-              <button class="vt-btn active" data-view="list" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
-              <button class="vt-btn" data-view="card" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn active" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
             </div>
             <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_forward">+ 新建转发</button>
           </div>
@@ -725,28 +758,7 @@
         </div>
       </div>
 
-      <!-- ===== 告警阈值 ===== -->
-      <div class="subhead" data-i18n="settings.thresholds">告警阈值</div>
-      <div class="grid2">
-        <div class="field"><label data-i18n="settings.cpu_thresh">CPU 警告 / 严重（%）</label>
-          <div class="grid2"><input type="text" id="cpuWarn" class="mono"><input type="text" id="cpuCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.mem_thresh">内存 警告 / 严重（%）</label>
-          <div class="grid2"><input type="text" id="memWarn" class="mono"><input type="text" id="memCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.disk_thresh">磁盘 警告 / 严重（%）</label>
-          <div class="grid2"><input type="text" id="diskWarn" class="mono"><input type="text" id="diskCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.diskio_thresh">磁盘 IO 占用 警告 / 严重（%）</label>
-          <div class="grid2"><input type="text" id="diskioWarn" class="mono"><input type="text" id="diskioCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.iops_thresh">磁盘 IOPS 警告 / 严重</label>
-          <div class="grid2"><input type="text" id="iopsWarn" class="mono"><input type="text" id="iopsCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.gpu_thresh">GPU 警告 / 严重（%）</label>
-          <div class="grid2"><input type="text" id="gpuWarn" class="mono"><input type="text" id="gpuCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.load_thresh">系统负载 警告 / 严重（×核心数）</label>
-          <div class="grid2"><input type="text" id="loadWarn" class="mono"><input type="text" id="loadCrit" class="mono"></div></div>
-        <div class="field"><label data-i18n="settings.proc_thresh">进程数突增/突降比例</label>
-          <input type="text" id="procWarn" class="mono"></div>
-        <div class="field"><label data-i18n="settings.offline_sec">失联判定（秒）</label>
-          <input type="text" id="offlineSec" class="mono"></div>
-      </div>
+      <!-- 告警阈值已独立为「告警 → 告警阈值」Tab（#view-thresholds），此处不再重复。 -->
       <div class="hint" data-i18n="settings.keep_original">留空的 Webhook / Secret 表示保持原值不变（回显为脱敏）。</div>
     </div>
     <div class="modal-foot">

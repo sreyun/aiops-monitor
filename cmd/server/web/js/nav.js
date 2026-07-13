@@ -217,6 +217,7 @@ function safeAddEventListener(id, event, handler) {
 // 注：settingsBtn / themeToggle / topbarThemeBtn 已移入右上角用户下拉菜单
 // 侧栏菜单
 safeAddEventListener("saveBtn", "click", saveSettings);
+safeAddEventListener("saveThresholdsBtn", "click", saveThresholds); // 告警阈值 Tab 独立保存
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
 safeAddEventListener("resetTokenBtn", "click", resetToken);
@@ -302,12 +303,13 @@ const navItems = document.querySelectorAll(".nav-item");
 // 方案A 分层一致：页头标题=侧栏短名，描述放副标题。合并后的父视图(监控/告警)标题一致，
 // 由视图内 Tab 指示子上下文。
 const _SUB_MON = "合成监控 · 拨测（网站 / 端口 / 进程）与 API 业务接口性能";
-const _SUB_ALT = "当前告警 与 治理规则（静默 / 抑制 / 生效时段 / 通知路由）";
+const _SUB_ALT = "当前告警 · 治理规则（静默 / 抑制 / 生效时段 / 通知路由）· 告警阈值";
 const PAGE_META = {
   overview: { title: "首页", sub: I18N.t("section.overview_desc") },
   hosts:    { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") },
   alerts:   { title: "告警", sub: _SUB_ALT },
   governance: { title: "告警", sub: _SUB_ALT },
+  thresholds: { title: "告警", sub: _SUB_ALT },
   checks:   { title: "监控", sub: _SUB_MON },
   apimon:   { title: "监控", sub: _SUB_MON },
   automation: { title: "编排", sub: I18N.t("section.automation_desc") },
@@ -323,6 +325,7 @@ function rebuildPageMeta() {
   PAGE_META.hosts      = { title: I18N.t("nav.hosts"), sub: I18N.t("section.hosts_desc") };
   PAGE_META.alerts     = { title: "告警", sub: _SUB_ALT };
   PAGE_META.governance = { title: "告警", sub: _SUB_ALT };
+  PAGE_META.thresholds = { title: "告警", sub: _SUB_ALT };
   PAGE_META.checks     = { title: "监控", sub: _SUB_MON };
   PAGE_META.apimon     = { title: "监控", sub: _SUB_MON };
   PAGE_META.automation = { title: "编排", sub: I18N.t("section.automation_desc") };
@@ -336,8 +339,9 @@ function rebuildPageMeta() {
 const VIEW_TAB_GROUPS = {
   checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
   apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
-  alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"]] },
-  governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"]] },
+  alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
+  governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
+  thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
 };
 function renderViewTabs(view) {
   const bar = $("viewTabs"); if (!bar) return;
@@ -365,6 +369,7 @@ function switchView(view) {
   if (view === "logs") loadLogs();
   if (view === "apimon") loadAPIMon();
   if (view === "governance") loadGovernance();
+  if (view === "thresholds") loadThresholds();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {
