@@ -321,7 +321,7 @@ const PAGE_META = {
   automation: { title: "编排", sub: I18N.t("section.automation_desc") },
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
   sre:      { title: "诊断", sub: I18N.t("section.sre_desc") },
-  logs:     { title: "主机日志", sub: I18N.t("section.logs_desc") },
+  logs:     { title: "日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
 };
@@ -338,7 +338,7 @@ function rebuildPageMeta() {
   PAGE_META.automation = { title: "编排", sub: I18N.t("section.automation_desc") };
   PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
   PAGE_META.sre        = { title: "诊断", sub: I18N.t("section.sre_desc") };
-  PAGE_META.logs       = { title: "主机日志", sub: I18N.t("section.logs_desc") };
+  PAGE_META.logs       = { title: "日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
 }

@@ -58,9 +58,9 @@
             <span data-i18n="nav.checks">监控</span><span class="nav-count" id="navChecks">0</span>
           </a>
           <!-- 「性能」已并入「监控」的 API 业务监控 Tab（IA 重构 方案B） -->
-          <a class="nav-item" data-view="logs" data-i18n-title="nav.logs" title="主机日志聚合检索">
+          <a class="nav-item" data-view="logs" data-i18n-title="nav.logs" title="日志聚合检索">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
-            <span data-i18n="nav.logs">主机日志</span>
+            <span data-i18n="nav.logs">日志</span>
           </a>
         </div>
       </div>
@@ -584,7 +584,7 @@
 
       <!-- 日志检索 -->
       <section class="view" id="view-logs">
-        <div class="section-title"><span data-i18n="section.logs">日志检索</span><span class="tag" data-i18n="section.logs_desc">主机日志聚合 · 全文检索</span>
+        <div class="section-title"><span data-i18n="section.logs">日志检索</span><span class="tag" data-i18n="section.logs_desc">日志聚合 · 全文检索</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
             <div class="select-wrap"><select id="logSource" title="日志来源：本地聚合 或 接入的 Loki 数据源"><option value="">本地聚合</option></select></div>
             <div class="select-wrap" id="logJobWrap" style="display:none"><select id="logJob" title="Loki job 标签筛选"><option value="">全部 job</option></select></div>
