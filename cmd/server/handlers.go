@@ -243,6 +243,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/v1/datasources/{id}", s.handleDataSourceUpdate)
 	mux.HandleFunc("DELETE /api/v1/datasources/{id}", s.handleDataSourceDelete)
 	mux.HandleFunc("POST /api/v1/datasources/{id}/query", s.handleDataSourceQuery)
+	mux.HandleFunc("GET /api/v1/datasources/{id}/labels", s.handleDataSourceLabels)
 	// HTTP proxy auth token for window.open() scenarios
 	mux.HandleFunc("GET /api/v1/proxy-token", s.handleProxyToken)
 	// HTTP proxy: support all methods (GET/POST/PUT/DELETE/PATCH)

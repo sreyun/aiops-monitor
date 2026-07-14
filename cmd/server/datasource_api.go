@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -140,4 +142,44 @@ func (s *Server) handleDataSourceQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": result})
+}
+
+// GET /api/v1/datasources/{id}/labels?label=job — fetch label values from Loki.
+// Example: /api/v1/datasources/xxx/labels?label=job returns all job values.
+func (s *Server) handleDataSourceLabels(w http.ResponseWriter, r *http.Request) {
+	ds, ok := s.cfg.GetDataSource(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "数据源不存在"})
+		return
+	}
+	labelName := r.URL.Query().Get("label")
+	if labelName == "" {
+		labelName = "job"
+	}
+	if ds.Type != "loki" {
+		writeJSON(w, http.StatusOK, map[string]any{"labels": []string{}, "note": "仅 Loki 数据源支持标签查询"})
+		return
+	}
+	body, code, err := dataSourceGet(ds, "/loki/api/v1/label/"+url.QueryEscape(labelName)+"/values", nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if code != http.StatusOK {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": fmt.Sprintf("Loki HTTP %d: %s", code, dsTruncate(string(body), 200))})
+		return
+	}
+	var result struct {
+		Status string   `json:"status"`
+		Data   []string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "解析 Loki 响应失败"})
+		return
+	}
+	if result.Status != "success" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "Loki 返回非 success 状态"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "labels": result.Data})
 }

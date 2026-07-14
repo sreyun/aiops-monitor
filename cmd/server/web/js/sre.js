@@ -869,19 +869,60 @@ async function loadLogs(){
   searchLogs();
 }
 
-// 切换日志来源：Loki 模式下隐藏主机/级别筛选（Loki 用自己的标签选择器），关键字框改为 LogQL 输入
+// 切换日志来源：Loki 模式下隐藏主机/级别筛选（Loki 用自己的标签选择器），显示 Job 筛选
+// 关键字框改为 LogQL 输入
 function onLogSourceChange(){
   const loki=!!($("logSource") && $("logSource").value);
   const hw=$("logHostWrap"), lw=$("logLevelWrap"), kw=$("logKeyword");
+  const jw=$("logJobWrap"), js=$("logJob");
   if (hw) hw.style.display=loki?"none":"";
   if (lw) lw.style.display=loki?"none":"";
   if (kw) {
     if (loki) { kw.placeholder='LogQL，如 {job="nginx"} |= "error"'; kw.style.width="360px"; }
     else { kw.placeholder=I18N.t("logs.keyword_ph")||"关键字…"; kw.style.width="190px"; }
   }
+  // Job 筛选：仅 Loki 模式显示，切换时自动加载 job 列表
+  if (jw) {
+    if (loki) {
+      jw.style.display="";
+      if (js) { js.value=""; loadLogJobs($("logSource").value); }
+    } else {
+      jw.style.display="none";
+    }
+  }
   const el=$("logResults"); if (el) el.innerHTML="";
   const sp=$("logStatsPanel"); if (sp) sp.style.display="none";
   const pg=$("logsPager"); if (pg) pg.innerHTML="";
+}
+
+// 从 Loki 数据源加载 job 标签值列表
+async function loadLogJobs(dsId){
+  const js=$("logJob");
+  if (!js || !dsId) return;
+  const cur=js.value;
+  js.innerHTML='<option value="">全部 job</option><option value="">加载中…</option>';
+  try {
+    const resp=await fetch(`${API}/datasources/${encodeURIComponent(dsId)}/labels?label=job`).then(r=>r.json());
+    const labels=(resp.ok && Array.isArray(resp.labels))?resp.labels:[];
+    js.innerHTML='<option value="">全部 job</option>'+labels.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    if (cur && labels.includes(cur)) js.value=cur;
+  } catch(e) {
+    js.innerHTML='<option value="">全部 job</option><option value="">加载失败，请手动输入</option>';
+  }
+}
+
+// Job 筛选变更：自动更新 LogQL 关键字框中的 job 选择器
+function onLogJobChange(){
+  const js=$("logJob"), kw=$("logKeyword");
+  if (!js || !kw) return;
+  const job=js.value;
+  if (job) {
+    // 选中具体 job：更新关键字框为 {job="xxx"}
+    kw.value=`{job="${job}"}`;
+  } else {
+    // 全部 job：清空关键字框
+    kw.value="";
+  }
 }
 
 // Loki 检索：把关键字框内容当 LogQL，经数据源查询接口直查，渲染成日志行
@@ -1737,6 +1778,7 @@ async function attachURL(){
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
 safeAddEventListener("logSource","change",()=>{ onLogSourceChange(); if(!$("logSource").value) searchLogs(); });
+safeAddEventListener("logJob","change",()=>{ onLogJobChange(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);

@@ -587,6 +587,7 @@
         <div class="section-title"><span data-i18n="section.logs">日志检索</span><span class="tag" data-i18n="section.logs_desc">主机日志聚合 · 全文检索</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
             <div class="select-wrap"><select id="logSource" title="日志来源：本地聚合 或 接入的 Loki 数据源"><option value="">本地聚合</option></select></div>
+            <div class="select-wrap" id="logJobWrap" style="display:none"><select id="logJob" title="Loki job 标签筛选"><option value="">全部 job</option></select></div>
             <div class="select-wrap" id="logHostWrap"><select id="logHost"><option value="" data-i18n="ui.all_hosts">全部主机</option></select></div>
             <div class="select-wrap" id="logLevelWrap"><select id="logLevel"><option value="" data-i18n="logs.all_levels">全部级别</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option></select></div>
             <div class="select-wrap"><select id="logSince"><option value="15">近15分钟</option><option value="60" selected>近1小时</option><option value="360">近6小时</option><option value="1440">近1天</option><option value="0" data-i18n="logs.all_time">全部</option></select></div>
