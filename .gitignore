@@ -1,5 +1,6 @@
 # Compiled binaries
 bin/
+agent
 *.exe
 
 # Distribution directory (agent binaries + plugins.zip for one-line install)
@@ -86,3 +87,13 @@ pg-data/
 pg-data.alpine-old/
 vm-data/
 pg-backup-vectorfix.sql
+fresh-test-prev-backup.sql
+
+# Android 项目目录（独立管理，不纳入主项目源码）
+android/
+
+# 临时截图
+datasource-view-screenshot.png
+screenshot_1_home.png
+screenshot_2_datasource.png
+website-audit-2026-07-13.md

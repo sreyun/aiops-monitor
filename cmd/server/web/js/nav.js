@@ -323,6 +323,7 @@ const PAGE_META = {
   sre:      { title: "诊断", sub: I18N.t("section.sre_desc") },
   logs:     { title: "主机日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
+  datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).
@@ -339,6 +340,7 @@ function rebuildPageMeta() {
   PAGE_META.sre        = { title: "诊断", sub: I18N.t("section.sre_desc") };
   PAGE_META.logs       = { title: "主机日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
+  PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
@@ -376,6 +378,7 @@ function switchView(view) {
   if (view === "apimon") loadAPIMon();
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
+  if (view === "datasource") loadDataSources();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

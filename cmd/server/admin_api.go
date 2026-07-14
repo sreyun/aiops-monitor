@@ -27,6 +27,15 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.InstallToken = maskSecret(c.InstallToken)                   // agent enrollment token — not for viewers
 	c.RelaySecret = maskSecret(c.RelaySecret)                     // gateway relay shared secret
 	c.CustomWebhook.Headers = maskSecret(c.CustomWebhook.Headers) // may carry auth tokens (e.g. X-Token)
+	if len(c.DataSources) > 0 {                                   // 数据源 Basic Auth 密码脱敏
+		// 复制切片再脱敏——切片底层数组与已存配置共享，就地改会污染真实密码。
+		ds := make([]DataSource, len(c.DataSources))
+		copy(ds, c.DataSources)
+		for i := range ds {
+			ds[i].AuthPass = maskSecret(ds[i].AuthPass)
+		}
+		c.DataSources = ds
+	}
 	// Never expose the password hash/salt or the MFA secret to the browser.
 	c.Account.Salt, c.Account.Hash, c.Account.MFASecret = "", "", ""
 	c.Users = nil // the user list (with hashes) is served via /api/v1/users, not here

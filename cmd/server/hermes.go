@@ -139,6 +139,81 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execPythonAction,
 	}
+	h.tools["list_datasources"] = HermesTool{
+		Name:        "list_datasources",
+		Description: "列出已接入的外部数据源（Loki 日志 / Prometheus 指标）及其 id/名称/类型。查询前先用它确认有哪些数据源可用。",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Execute:     h.execListDataSources,
+	}
+	h.tools["query_datasource"] = HermesTool{
+		Name:        "query_datasource",
+		Description: "直接查询外部数据源做分析排查：Prometheus 传 PromQL（如 up、node_load1、rate(http_requests_total[5m])）；Loki 传 LogQL（如 {job=\"nginx\"} |= \"error\"）。先用 list_datasources 拿到数据源 id 或名称。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"datasource": map[string]string{"type": "string", "description": "数据源 id 或名称"},
+				"query":      map[string]string{"type": "string", "description": "PromQL（Prometheus）或 LogQL（Loki）查询语句"},
+				"limit":      map[string]any{"type": "integer", "description": "Loki 返回日志行数上限（默认 100）"},
+				"since_min":  map[string]any{"type": "integer", "description": "Loki 查询最近 N 分钟（默认 60）"},
+			},
+			"required": []string{"datasource", "query"},
+		},
+		Execute: h.execQueryDataSource,
+	}
+}
+
+// resolveDataSource matches a configured data source by id, then by name (case-insensitive).
+func (h *HermesCore) resolveDataSource(ref string) (DataSource, bool) {
+	ref = strings.TrimSpace(ref)
+	if ds, ok := h.s.cfg.GetDataSource(ref); ok {
+		return ds, true
+	}
+	low := strings.ToLower(ref)
+	for _, d := range h.s.cfg.ListDataSources() {
+		if strings.ToLower(d.Name) == low {
+			return d, true
+		}
+	}
+	return DataSource{}, false
+}
+
+func (h *HermesCore) execListDataSources(args map[string]any) (string, error) {
+	list := h.s.cfg.ListDataSources()
+	if len(list) == 0 {
+		return "（未接入任何数据源，请先在「数据源」页添加 Loki / Prometheus）", nil
+	}
+	var sb strings.Builder
+	for _, d := range list {
+		status := "启用"
+		if !d.Enabled {
+			status = "停用"
+		}
+		fmt.Fprintf(&sb, "- id=%s 名称=%s 类型=%s 状态=%s\n", d.ID, d.Name, d.Type, status)
+	}
+	return sb.String(), nil
+}
+
+func (h *HermesCore) execQueryDataSource(args map[string]any) (string, error) {
+	ref, _ := args["datasource"].(string)
+	query, _ := args["query"].(string)
+	if strings.TrimSpace(ref) == "" || strings.TrimSpace(query) == "" {
+		return "", fmt.Errorf("datasource 和 query 必填")
+	}
+	ds, ok := h.resolveDataSource(ref)
+	if !ok {
+		return "", fmt.Errorf("未找到数据源 %q，请先用 list_datasources 确认可用数据源", ref)
+	}
+	if !ds.Enabled {
+		return "", fmt.Errorf("数据源 %s 已停用", ds.Name)
+	}
+	limit, sinceMin := 0, 0
+	if v, ok := args["limit"].(float64); ok {
+		limit = int(v)
+	}
+	if v, ok := args["since_min"].(float64); ok {
+		sinceMin = int(v)
+	}
+	return queryDataSource(ds, query, limit, sinceMin)
 }
 
 // --- Tool implementations ---

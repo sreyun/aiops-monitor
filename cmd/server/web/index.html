@@ -91,6 +91,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M2 12h3M19 12h3M9 12h6"/></svg>
             <span data-i18n="nav.forward">转发</span>
           </a>
+          <a class="nav-item" data-view="datasource" data-i18n-title="nav.datasource" title="数据源接入（Loki / Prometheus）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+            <span data-i18n="nav.datasource">数据源</span>
+          </a>
         </div>
       </div>
 
@@ -582,8 +586,9 @@
       <section class="view" id="view-logs">
         <div class="section-title"><span data-i18n="section.logs">日志检索</span><span class="tag" data-i18n="section.logs_desc">主机日志聚合 · 全文检索</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-            <div class="select-wrap"><select id="logHost"><option value="" data-i18n="ui.all_hosts">全部主机</option></select></div>
-            <div class="select-wrap"><select id="logLevel"><option value="" data-i18n="logs.all_levels">全部级别</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option></select></div>
+            <div class="select-wrap"><select id="logSource" title="日志来源：本地聚合 或 接入的 Loki 数据源"><option value="">本地聚合</option></select></div>
+            <div class="select-wrap" id="logHostWrap"><select id="logHost"><option value="" data-i18n="ui.all_hosts">全部主机</option></select></div>
+            <div class="select-wrap" id="logLevelWrap"><select id="logLevel"><option value="" data-i18n="logs.all_levels">全部级别</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option><option value="debug">debug</option></select></div>
             <div class="select-wrap"><select id="logSince"><option value="15">近15分钟</option><option value="60" selected>近1小时</option><option value="360">近6小时</option><option value="1440">近1天</option><option value="0" data-i18n="logs.all_time">全部</option></select></div>
             <input type="text" id="logKeyword" class="search" data-i18n-placeholder="logs.keyword_ph" placeholder="关键字…" style="width:190px; margin-left:0">
             <button class="btn primary sm" id="logSearchBtn" data-i18n="logs.search">检索</button>
@@ -615,8 +620,51 @@
           还没有端口转发规则。点「新建端口转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
         </div>
       </section>
+
+      <!-- 数据源接入（Loki / Prometheus） -->
+      <section class="view" id="view-datasource">
+        <div class="section-title"><span data-i18n="section.datasource">数据源接入</span><span class="tag" data-i18n="section.datasource_desc">接入 Loki 日志 / Prometheus 指标，供 AI 对话、日志检索、告警直接查询分析</span>
+          <div style="margin-left:auto"><button class="btn primary" id="addDataSourceBtn" data-i18n="ui.add_datasource">+ 添加数据源</button></div>
+        </div>
+        <div id="dataSourceList" class="fwd-list"></div>
+        <div class="ds-empty" id="dataSourceEmpty"><span class="ds-empty-icon">📡</span>还没有数据源。点「<b>添加数据源</b>」接入 Loki 或 Prometheus——填地址与可选的用户名/密码，即可让 AI 对话直接查询分析、排查问题。</div>
+
+        <!-- 即时查询面板 -->
+        <div class="ds-query-panel" id="dsQueryPanel" style="display:none">
+          <div class="section-title" style="margin-top:0"><span>即时查询</span><span class="tag">Prometheus 填 PromQL；Loki 填 LogQL</span></div>
+          <div class="grid2">
+            <div class="field"><label>数据源</label><div class="select-wrap"><select id="dsQuerySource"></select></div></div>
+            <div class="field"><label>时间范围 / 行数（Loki）</label><div class="th-input-row"><input id="dsQuerySince" class="mono" placeholder="60" style="width:70px"><span class="unit">分钟</span><input id="dsQueryLimit" class="mono" placeholder="100" style="width:70px"><span class="unit">行</span></div></div>
+          </div>
+          <div class="field"><label>查询语句</label><textarea id="dsQueryText" rows="2" spellcheck="false" style="resize:vertical;min-height:48px" placeholder='PromQL 如 node_load1；LogQL 如 {job=&quot;nginx&quot;} |= &quot;error&quot;'></textarea></div>
+          <button class="btn primary" id="dsRunQueryBtn">运行查询</button>
+          <pre id="dsQueryResult" class="cmd" style="margin-top:10px;max-height:340px;overflow:auto;white-space:pre-wrap"></pre>
+        </div>
+      </section>
     </div>
   </main>
+</div>
+
+<!-- ===== 数据源 添加/编辑 弹窗 ===== -->
+<div class="mask" id="dataSourceMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3 id="dataSourceModalTitle">添加数据源</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="dsId">
+      <div class="grid2">
+        <div class="field"><label>名称</label><input type="text" id="dsName" placeholder="如 生产 Prometheus"></div>
+        <div class="field"><label>类型</label><div class="select-wrap"><select id="dsType"><option value="prometheus">Prometheus（指标）</option><option value="loki">Loki（日志）</option></select></div></div>
+      </div>
+      <div class="field"><label>地址 URL</label><input type="text" id="dsUrl" placeholder="Prometheus 如 http://prometheus:9090；Loki 如 http://loki:3100"></div>
+      <div class="grid2">
+        <div class="field"><label>用户名（可选）</label><input type="text" id="dsAuthUser" autocomplete="off" placeholder="Basic Auth 用户名，无认证则留空"></div>
+        <div class="field"><label>密码（可选）</label><input type="password" id="dsAuthPass" autocomplete="new-password" placeholder="留空保持原值不变"></div>
+      </div>
+      <label class="switch" style="display:flex;margin:4px 0 2px"><input type="checkbox" id="dsEnabled" checked> 启用</label>
+      <div class="ai-card-test" style="margin-top:8px"><span id="dsTestResult" class="ai-test-result"></span><button class="btn sm" id="dsTestBtn" type="button">测试连接</button></div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="dsSaveBtn" data-i18n="ui.save">保存</button></div>
+  </div>
 </div>
 
 <!-- ===== 安装 Agent 弹窗 ===== -->

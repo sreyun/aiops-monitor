@@ -854,10 +854,68 @@ async function loadLogs(){
   try { if (!SRE_HOSTS.length) SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; } catch(e){}
   const hs=$("logHost");
   if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">全部主机</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  // 日志来源下拉：本地聚合 + 已接入且启用的 Loki 数据源
+  const srcSel=$("logSource");
+  if (srcSel) {
+    const cur=srcSel.value;
+    try {
+      const ds=await fetch(`${API}/datasources`).then(r=>r.json());
+      const loki=(Array.isArray(ds)?ds:[]).filter(d=>d.type==="loki" && d.enabled!==false);
+      srcSel.innerHTML=`<option value="">本地聚合</option>`+loki.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}（Loki）</option>`).join("");
+      if (cur && loki.some(d=>d.id===cur)) srcSel.value=cur;
+    } catch(e){}
+    onLogSourceChange();
+  }
   searchLogs();
 }
 
+// 切换日志来源：Loki 模式下隐藏主机/级别筛选（Loki 用自己的标签选择器），关键字框改为 LogQL 输入
+function onLogSourceChange(){
+  const loki=!!($("logSource") && $("logSource").value);
+  const hw=$("logHostWrap"), lw=$("logLevelWrap"), kw=$("logKeyword");
+  if (hw) hw.style.display=loki?"none":"";
+  if (lw) lw.style.display=loki?"none":"";
+  if (kw) {
+    if (loki) { kw.placeholder='LogQL，如 {job="nginx"} |= "error"'; kw.style.width="360px"; }
+    else { kw.placeholder=I18N.t("logs.keyword_ph")||"关键字…"; kw.style.width="190px"; }
+  }
+  const el=$("logResults"); if (el) el.innerHTML="";
+  const sp=$("logStatsPanel"); if (sp) sp.style.display="none";
+  const pg=$("logsPager"); if (pg) pg.innerHTML="";
+}
+
+// Loki 检索：把关键字框内容当 LogQL，经数据源查询接口直查，渲染成日志行
+async function searchLokiLogs(dsId){
+  const q=$("logKeyword").value.trim();
+  const since=$("logSince").value;
+  const el=$("logResults");
+  if (!q) { if (el) el.innerHTML=`<div class="empty-line">请输入 LogQL，如 {job="nginx"} |= "error"</div>`; return; }
+  if (el) el.innerHTML=`<div class="empty-line">检索中…</div>`;
+  const sp=$("logStatsPanel"); if (sp) sp.style.display="none";
+  const pg=$("logsPager"); if (pg) pg.innerHTML="";
+  try {
+    const body={ query:q, limit:300, since_min:(since && since!=="0")?parseInt(since):720 };
+    const resp=await fetch(`${API}/datasources/${encodeURIComponent(dsId)}/query`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
+    if (!resp.ok) { if (el) el.innerHTML=`<div class="empty-line">检索失败: ${esc(resp.error||"未知错误")}</div>`; return; }
+    const lines=(resp.result||"").split("\n").filter(x=>x.trim());
+    if (!lines.length || (lines.length===1 && lines[0].startsWith("（"))) { if (el) el.innerHTML=`<div class="empty-line">${esc(lines[0]||"无匹配日志")}</div>`; return; }
+    el.innerHTML=lines.map(line=>{
+      const m=line.match(/^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\s+([\s\S]*)$/);
+      const ts=m?m[1]:"", msg=m?m[2]:line;
+      const lvl=/\b(error|err|fatal|panic|exception)\b/i.test(msg)?"error":/\b(warn|warning)\b/i.test(msg)?"warn":"info";
+      return `<div class="log-line ${_logLvlCls(lvl)}">
+        <span class="log-ts mono">${esc(ts)}</span>
+        <span class="log-lvl ${_logLvlCls(lvl)}">${esc(lvl)}</span>
+        <span class="log-msg">${esc(msg)}</span>
+      </div>`;
+    }).join("");
+  } catch(e){ if (el) el.innerHTML=`<div class="empty-line">检索失败: ${esc(e)}</div>`; }
+}
+
 async function searchLogs(page){
+  // Loki 数据源模式：走 LogQL 直查，不用本地聚合的分页/筛选
+  const srcSel=$("logSource");
+  if (srcSel && srcSel.value) { return searchLokiLogs(srcSel.value); }
   if (page !== undefined) { LOGS_PAGE = page; } else { LOGS_PAGE = 1; }
   const host=$("logHost").value,level=$("logLevel").value,since=$("logSince").value,kw=$("logKeyword").value.trim();
   const qs=new URLSearchParams();
@@ -1678,6 +1736,7 @@ async function attachURL(){
 }
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
+safeAddEventListener("logSource","change",()=>{ onLogSourceChange(); if(!$("logSource").value) searchLogs(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);

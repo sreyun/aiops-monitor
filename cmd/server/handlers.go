@@ -184,7 +184,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/config", s.handleGetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
-		mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
+	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
@@ -236,6 +236,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/v1/http-proxy/{id}", s.handleHTTPProxyEdit)
 	mux.HandleFunc("PUT /api/v1/http-proxy/{id}/toggle", s.handleHTTPProxyToggle)
 	mux.HandleFunc("POST /api/v1/http-proxy/{id}/copy", s.handleHTTPProxyCopy)
+	// External data sources (Loki / Prometheus): AI query + log search + alert queries
+	mux.HandleFunc("GET /api/v1/datasources", s.handleDataSourceList)
+	mux.HandleFunc("POST /api/v1/datasources", s.handleDataSourceCreate)
+	mux.HandleFunc("POST /api/v1/datasources/test", s.handleDataSourceTest)
+	mux.HandleFunc("PUT /api/v1/datasources/{id}", s.handleDataSourceUpdate)
+	mux.HandleFunc("DELETE /api/v1/datasources/{id}", s.handleDataSourceDelete)
+	mux.HandleFunc("POST /api/v1/datasources/{id}/query", s.handleDataSourceQuery)
 	// HTTP proxy auth token for window.open() scenarios
 	mux.HandleFunc("GET /api/v1/proxy-token", s.handleProxyToken)
 	// HTTP proxy: support all methods (GET/POST/PUT/DELETE/PATCH)
@@ -272,7 +279,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "init"} {
+			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

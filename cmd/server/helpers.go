@@ -97,6 +97,17 @@ func mergeSecrets(in *ServerConfig, old ServerConfig) {
 	in.SMS.SecretKey = keepIfBlank(in.SMS.SecretKey, old.SMS.SecretKey)
 	in.VoiceCall.AccessKey = keepIfBlank(in.VoiceCall.AccessKey, old.VoiceCall.AccessKey)
 	in.VoiceCall.SecretKey = keepIfBlank(in.VoiceCall.SecretKey, old.VoiceCall.SecretKey)
+	// 数据源 Basic Auth 密码同理：GET 脱敏，全量配置回传脱敏串时按 ID 还原原值。
+	for i := range in.DataSources {
+		if p := in.DataSources[i].AuthPass; p == "" || strings.Contains(p, "****") {
+			for _, od := range old.DataSources {
+				if od.ID == in.DataSources[i].ID {
+					in.DataSources[i].AuthPass = od.AuthPass
+					break
+				}
+			}
+		}
+	}
 }
 
 func keepIfBlank(newv, oldv string) string {

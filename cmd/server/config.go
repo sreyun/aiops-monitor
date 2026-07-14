@@ -452,6 +452,9 @@ type ServerConfig struct {
 	// HTTPProxies is the list of saved HTTP proxy shortcuts.
 	// Each entry stores a target host+port+path for quick access.
 	HTTPProxies []HTTPProxyConfig `json:"http_proxies,omitempty"`
+	// DataSources is the list of external observability data sources (Loki /
+	// Prometheus) operators connect for AI query, log search and alert queries.
+	DataSources []DataSource `json:"data_sources,omitempty"`
 	// ForwardRules is the list of persisted TCP forwarding rules.
 	// Listeners are recreated on startup from these persisted fields.
 	ForwardRules []PersistedForwardRule `json:"forward_rules,omitempty"`

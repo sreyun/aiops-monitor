@@ -429,6 +429,10 @@
   "section.start_label": " · 开始: ",
   /* --- 端口转发 HTML 视图所需 key --- */
   "nav.forward": "转发",
+  "nav.datasource": "数据源",
+  "section.datasource": "数据源接入",
+  "section.datasource_desc": "接入 Loki 日志 / Prometheus 指标，供 AI 对话、日志检索、告警直接查询分析",
+  "ui.add_datasource": "+ 添加数据源",
   "nav.sre": "诊断",
   "section.sre": "SRE 中枢",
   "section.sre_desc": "事件闭环 · 自动修复 · SLO · 工单",
