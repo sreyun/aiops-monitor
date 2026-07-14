@@ -881,11 +881,12 @@ function onLogSourceChange(){
     if (loki) { kw.placeholder='LogQL，如 {job="nginx"} |= "error"'; kw.style.width="360px"; }
     else { kw.placeholder=I18N.t("logs.keyword_ph")||"关键字…"; kw.style.width="190px"; }
   }
-  // Job 筛选：仅 Loki 模式显示，切换时自动加载 job 列表
+  // Job 筛选：仅 Loki 模式显示，切换时自动加载 job 列表并更新关键字框
   if (jw) {
     if (loki) {
       jw.style.display="";
       if (js) { js.value=""; loadLogJobs($("logSource").value); }
+      onLogJobChange();
     } else {
       jw.style.display="none";
     }
@@ -920,8 +921,8 @@ function onLogJobChange(){
     // 选中具体 job：更新关键字框为 {job="xxx"}
     kw.value=`{job="${job}"}`;
   } else {
-    // 全部 job：清空关键字框
-    kw.value="";
+    // 全部 job：匹配所有含 job 标签的日志流
+    kw.value='{job=~"(.+)"}';
   }
 }
 
