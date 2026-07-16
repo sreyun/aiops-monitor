@@ -472,13 +472,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	// 使用实际登录用户名作为操作者，IP 始终记录真实客户端地址用于审计溯源
-	clientIP := s.clientIP(r)
-	user, ok := s.currentUser(r)
-	operator := clientIP // fallback: IP 地址
-	if ok && user.Username != "" {
-		operator = user.Username
-	}
+	// operator = username (or IP fallback); clientIP always records the real
+	// client address for audit traceability (honoring TrustProxy / CF-Connecting-IP).
+	operator, clientIP := s.actorIP(r)
 	sess := s.term.create(hostID, hostname, operator)
 	sess.lang = langFromRequest(r)
 	sess.ip = clientIP

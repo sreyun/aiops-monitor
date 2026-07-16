@@ -7,29 +7,55 @@ import (
 	"unicode"
 )
 
-// clientIP extracts the operator's IP for the activity log.
+// normalizeIPv6Loopback maps the IPv6 loopback "::1" to its IPv4 equivalent so
+// audit logs show a consistent "127.0.0.1" regardless of whether the local
+// connection arrived over IPv4 or IPv6.
+func normalizeIPv6Loopback(ip string) string {
+	if ip == "::1" {
+		return "127.0.0.1"
+	}
+	return ip
+}
+
 // clientIP returns the request's client address for audit logs and login
-// rate-limiting. Reverse-proxy headers (X-Real-IP / X-Forwarded-For) are honored
-// ONLY when trust_proxy is enabled — otherwise they are attacker-forgeable and a
-// directly-exposed server would let anyone reset their rate-limit bucket (and
-// forge audit-log origins) by spoofing a header, so we use the raw connection
-// address instead.
+// rate-limiting. Reverse-proxy headers are honored ONLY when trust_proxy is
+// enabled — otherwise they are attacker-forgeable and a directly-exposed
+// server would let anyone reset their rate-limit bucket (and forge audit-log
+// origins) by spoofing a header, so we use the raw connection address instead.
+//
+// Extraction priority (when TrustProxy is on):
+//  1. CF-Connecting-IP   — Cloudflare always sets this to the visitor's IP
+//  2. X-Real-IP          — commonly set by nginx (proxy_set_header X-Real-IP $remote_addr)
+//  3. X-Forwarded-For[0] — the LEFTMOST entry is the original client; each proxy
+//    appends the sender's address to the right, so in CDN→Nginx→Server the
+//    header reads "clientIP, cdnEdgeIP" and [0] = clientIP (the real public IP)
+//  4. RemoteAddr          — direct TCP connection (fallback)
 func (s *Server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxy() {
-		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
-			return xr
+		// 1. CF-Connecting-IP (Cloudflare — always the end-user's IP)
+		if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" {
+			return normalizeIPv6Loopback(cf)
 		}
+		// 2. X-Real-IP (nginx single-value header)
+		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+			return normalizeIPv6Loopback(xr)
+		}
+		// 3. X-Forwarded-For — first (leftmost) entry is the original client.
+		//    Format: "client, proxy1, proxy2, ..." — each proxy appends the
+		//    address it received the connection from, so [0] is always the
+		//    originating client (the real public IP we want for audit logs).
 		if f := r.Header.Get("X-Forwarded-For"); f != "" {
-			// Last hop is the address our trusted proxy actually saw (nginx appends
-			// $remote_addr); the client-controlled prefix is not trusted.
-			parts := strings.Split(f, ",")
-			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-				return ip
+			if idx := strings.Index(f, ","); idx >= 0 {
+				f = f[:idx]
+			}
+			if ip := strings.TrimSpace(f); ip != "" {
+				return normalizeIPv6Loopback(ip)
 			}
 		}
 	}
+	// 4. Fallback: raw TCP connection address
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+		return normalizeIPv6Loopback(host)
 	}
 	return r.RemoteAddr
 }

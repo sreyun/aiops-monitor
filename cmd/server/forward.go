@@ -1245,12 +1245,7 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	user, _ := s.currentUser(r)
-	operator := s.clientIP(r)
-	clientIP := operator
-	if user.Username != "" {
-		operator = user.Username
-	}
+	operator, clientIP := s.actorIP(r)
 
 	// P2: WebSocket upgrade detection — tunnel as raw TCP instead of HTTP
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
