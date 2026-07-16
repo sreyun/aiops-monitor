@@ -316,6 +316,31 @@ func (pm *playbookManager) ExecutionHistory() []PlaybookExecution {
 	return out
 }
 
+// exportExecutions returns a copy of execution history for PG persistence.
+func (pm *playbookManager) exportExecutions() []PlaybookExecution {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	out := make([]PlaybookExecution, len(pm.executions))
+	copy(out, pm.executions)
+	return out
+}
+
+// importExecutions restores execution history from PG at startup.
+func (pm *playbookManager) importExecutions(execs []PlaybookExecution) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.executions = execs
+	if len(pm.executions) > 100 {
+		pm.executions = pm.executions[len(pm.executions)-100:]
+	}
+	// Restore nextExecID to max seen so new IDs are monotonically increasing.
+	for _, e := range execs {
+		if e.ID >= pm.nextExecID {
+			pm.nextExecID = e.ID + 1
+		}
+	}
+}
+
 // StartExecution creates a new execution record and returns it.
 func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []*Host) *PlaybookExecution {
 	pm.mu.Lock()

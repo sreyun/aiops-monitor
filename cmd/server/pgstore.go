@@ -1105,6 +1105,13 @@ func (s *Server) bindPG(ps *pgStore) {
 			s.logs.importLogs(logs)
 		}
 	}
+	// Playbook execution history survives restart (剧本执行审计).
+	if raw, _ := ps.loadKV("playbook_executions"); raw != nil {
+		var execs []PlaybookExecution
+		if json.Unmarshal(raw, &execs) == nil {
+			s.playbooks.importExecutions(execs)
+		}
+	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
@@ -1155,5 +1162,9 @@ func (s *Server) pgFlush(ps *pgStore, withLogs bool) {
 		if raw, err := json.Marshal(s.logs.export()); err == nil {
 			_ = ps.saveKV("logs", raw)
 		}
+	}
+	// Playbook execution history is small (≤ 100 records) — persist every flush.
+	if raw, err := json.Marshal(s.playbooks.exportExecutions()); err == nil {
+		_ = ps.saveKV("playbook_executions", raw)
 	}
 }
