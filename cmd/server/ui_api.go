@@ -140,8 +140,8 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	// Active alerts from real-time evaluation (snapshot of current metric state)
 	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
-	// stamp threshold alerts with their first-fired time (check alerts carry it already)
 	since := s.notifier.ActiveSince()
 	states := s.store.AlertStates()
 	for i := range alerts {
@@ -151,7 +151,6 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		alerts[i].Status = states[alertKey(alerts[i])]
 	}
 	alerts = append(alerts, s.checks.DownAlerts()...)
-	// also attach status for check alerts
 	for i := range alerts {
 		if alerts[i].Status == "" {
 			if st, ok := states[alertKey(alerts[i])]; ok {
@@ -162,7 +161,62 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	if alerts == nil {
 		alerts = []Alert{}
 	}
+	// Append resolved alerts from persistent history so the alerts page shows
+	// both currently-firing and recently-recovered records.
+	showHistory := r.URL.Query().Get("history") == "true"
+	sevenDaysAgo := time.Now().Unix() - 7*86400
+	history := s.store.AlertHistory(200, false)
+	for _, rec := range history {
+		// Skip records that are still active (already covered by Evaluate result)
+		if rec.ResolvedAt == 0 {
+			continue
+		}
+		// Without ?history=true, only include records resolved within the last 7 days
+		if !showHistory && rec.ResolvedAt < sevenDaysAgo {
+			continue
+		}
+		alerts = append(alerts, Alert{
+			HostID:    rec.HostID,
+			Hostname:  rec.Hostname,
+			IP:        rec.IP,
+			Level:     rec.Level,
+			Type:      rec.Type,
+			Scope:     rec.Scope,
+			Since:     rec.FiredAt,
+			Message:   rec.Message,
+			Value:     rec.Value,
+			Timestamp: rec.ResolvedAt,
+			Status:    "resolved",
+		})
+	}
 	writeJSON(w, http.StatusOK, alerts)
+}
+
+// handleAlertHistory returns the full persistent alert history for audit and
+// historical queries. Supports: ?limit=N&status=firing|resolved|all
+func (s *Server) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	statusFilter := r.URL.Query().Get("status")
+	activeOnly := statusFilter == "firing"
+	records := s.store.AlertHistory(limit, activeOnly)
+	if statusFilter == "resolved" {
+		filtered := records[:0]
+		for _, rec := range records {
+			if rec.ResolvedAt > 0 {
+				filtered = append(filtered, rec)
+			}
+		}
+		records = filtered
+	}
+	if records == nil {
+		records = []AlertRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
 }
 
 // handleEvents returns recent plugin-generated events (the Python/AI layer's findings).

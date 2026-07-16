@@ -27,12 +27,13 @@ import (
 // to Feishu / DingTalk bots. Only alert transitions (fire / resolve) are sent,
 // so a persistent condition never spams the channel.
 type Notifier struct {
-	store  *Store
-	cfg    *ConfigStore
-	httpc  *http.Client
-	mu     sync.Mutex
-	active map[string]Alert // alertKey -> alert currently firing
-	since  map[string]int64 // alertKey -> unix time the alert first fired
+	store     *Store
+	cfg       *ConfigStore
+	httpc     *http.Client
+	mu        sync.Mutex
+	active    map[string]Alert  // alertKey -> alert currently firing
+	since     map[string]int64  // alertKey -> unix time the alert first fired
+	recordIDs map[string]int64  // alertKey -> PG record ID (for resolve update)
 	// SRE hooks (set during server wiring; nil-safe).
 	incidents   *incidentManager
 	remediation *remediationManager
@@ -41,11 +42,12 @@ type Notifier struct {
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
 	return &Notifier{
-		store:  store,
-		cfg:    cfg,
-		httpc:  newGuardedHTTPClient(8 * time.Second), // SSRF：飞书/钉钉 webhook 用户可配，拦元数据/链路本地
-		active: map[string]Alert{},
-		since:  map[string]int64{},
+		store:     store,
+		cfg:       cfg,
+		httpc:     newGuardedHTTPClient(8 * time.Second), // SSRF：飞书/钉钉 webhook 用户可配，拦元数据/链路本地
+		active:    map[string]Alert{},
+		since:     map[string]int64{},
+		recordIDs: map[string]int64{},
 	}
 }
 
@@ -162,6 +164,30 @@ func (n *Notifier) dispatch(cfg ServerConfig, a Alert, firing bool) {
 		verb, tlvl = Tz("notify.alert_recovered"), "info"
 	}
 	n.store.AddLog(LogEntry{Kind: KindSystem, Level: tlvl, Actor: Tz("notify.alert_engine"), Host: a.Hostname, Message: verb + "：" + a.Message})
+	// Persist alert lifecycle event: write on fire, resolve on recover.
+	key := alertKey(a)
+	if firing {
+		id := n.store.AddAlertRecord(AlertRecord{
+			Key:      key,
+			HostID:   a.HostID,
+			Hostname: a.Hostname,
+			IP:       a.IP,
+			Level:    a.Level,
+			Type:     a.Type,
+			Scope:    a.Scope,
+			Message:  a.Message,
+			Value:    a.Value,
+			FiredAt:  a.Timestamp,
+		})
+		n.mu.Lock()
+		n.recordIDs[key] = id
+		n.mu.Unlock()
+	} else {
+		n.store.ResolveAlert(key, time.Now().Unix())
+		n.mu.Lock()
+		delete(n.recordIDs, key)
+		n.mu.Unlock()
+	}
 	n.pushChannels(cfg, a, firing)
 }
 

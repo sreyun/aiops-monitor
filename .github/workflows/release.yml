@@ -84,6 +84,8 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           provenance: false
+          sbom: false
+          outputs: type=registry,oci-mediatypes=false
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             BASE_REGISTRY=docker.io
@@ -102,6 +104,8 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           provenance: false
+          sbom: false
+          outputs: type=registry,oci-mediatypes=false
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             BASE_REGISTRY=docker.io

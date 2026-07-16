@@ -197,6 +197,16 @@ func (p *pgStore) migrate() error {
 			created_at  TIMESTAMPTZ DEFAULT NOW(),
 			updated_at  TIMESTAMPTZ DEFAULT NOW()
 		);
+		-- 告警历史持久化记录（触发时写入，恢复时更新 resolved_at）
+		CREATE TABLE IF NOT EXISTS alert_history (
+			id          BIGSERIAL PRIMARY KEY,
+			key         TEXT NOT NULL,
+			fired_at    BIGINT NOT NULL,
+			resolved_at BIGINT DEFAULT 0,
+			data        JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS alert_history_key ON alert_history(key);
+		CREATE INDEX IF NOT EXISTS alert_history_fired ON alert_history(fired_at DESC);
 	`)
 	return err
 }
@@ -393,6 +403,45 @@ func (p *pgStore) loadRecentEvents(limit int) ([]storedEvent, error) {
 		var e storedEvent
 		if json.Unmarshal(raw, &e) == nil {
 			out = append(out, e)
+		}
+	}
+	return out, rows.Err()
+}
+
+// --- alert history (fire on insert, resolve on update; unbounded in PG) ---
+
+func (p *pgStore) appendAlertRecord(r AlertRecord) {
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return
+	}
+	if _, err := p.db.Exec(`INSERT INTO alert_history(key,fired_at,data) VALUES($1,$2,$3)`,
+		r.Key, r.FiredAt, raw); err != nil {
+		slog.Warn("PG 写告警历史失败", "err", err)
+	}
+}
+
+func (p *pgStore) resolveAlertRecord(id int64, resolvedAt int64) {
+	if _, err := p.db.Exec(`UPDATE alert_history SET resolved_at=$1 WHERE id=$2`, resolvedAt, id); err != nil {
+		slog.Warn("PG 更新告警恢复时间失败", "err", err)
+	}
+}
+
+func (p *pgStore) loadRecentAlerts(limit int) ([]AlertRecord, error) {
+	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM alert_history ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AlertRecord
+	for rows.Next() {
+		var raw []byte
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var r AlertRecord
+		if json.Unmarshal(raw, &r) == nil {
+			out = append(out, r)
 		}
 	}
 	return out, rows.Err()

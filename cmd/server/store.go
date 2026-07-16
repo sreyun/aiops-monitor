@@ -15,6 +15,7 @@ const (
 	eventsPerAPI      = 100  // cap returned by the events endpoint
 	deleteSuppressSec = 60   // ignore a host's re-reports for this long after a manual delete
 	maxActivity       = 1000 // ring of recent activity-log entries (persisted)
+	maxAlertHistory   = 500  // ring of persisted alert event records
 	eventCooldownSec  = 300  // min gap between identical plugin events (noise suppression)
 
 	// History storage constants (multi-tier downsampling)
@@ -69,17 +70,37 @@ type LogEntry struct {
 	Message   string `json:"message"`
 }
 
+// AlertRecord is a persistent record of a single alert lifecycle event.
+// Created when an alert fires; updated when it resolves. Survives restart via PG.
+type AlertRecord struct {
+	ID         int64   `json:"id"`
+	Key        string  `json:"key"`                   // hostID/type/scope (dedup key)
+	HostID     string  `json:"host_id"`
+	Hostname   string  `json:"hostname"`
+	IP         string  `json:"ip,omitempty"`
+	Level      string  `json:"level"`                 // warning | critical
+	Type       string  `json:"type"`                  // cpu | memory | disk | offline | ...
+	Scope      string  `json:"scope,omitempty"`
+	Message    string  `json:"message"`
+	Value      float64 `json:"value"`
+	FiredAt    int64   `json:"fired_at"`
+	ResolvedAt int64   `json:"resolved_at,omitempty"` // 0 = still firing
+	Status     string  `json:"status"`                // firing | resolved | acknowledged | silenced
+}
+
 // Store holds all host state and a ring of recent plugin events.
 type Store struct {
-	mu          sync.RWMutex
-	hosts       map[string]*Host
-	events      []storedEvent
-	activity    []LogEntry
-	deleted     map[string]int64  // hostID -> unix time of manual deletion (re-add suppression)
-	lastEvent   map[string]int64  // dedup key -> last unix time (plugin-event noise suppression)
-	alertStates map[string]string // alert key -> "acknowledged" | "silenced" (persisted)
-	dirty       bool              // set on every mutation; consumed by the embedded DB's autosave
-	pg          *pgStore          // when set, audit log + events are also written to PostgreSQL
+	mu           sync.RWMutex
+	hosts        map[string]*Host
+	events       []storedEvent
+	activity     []LogEntry
+	deleted      map[string]int64  // hostID -> unix time of manual deletion (re-add suppression)
+	lastEvent    map[string]int64  // dedup key -> last unix time (plugin-event noise suppression)
+	alertStates  map[string]string // alert key -> "acknowledged" | "silenced" (persisted)
+	alertHistory []AlertRecord     // persistent alert lifecycle records (ring buffer, cap=maxAlertHistory)
+	alertSeq     int64             // monotonically increasing ID for AlertRecord
+	dirty        bool              // set on every mutation; consumed by the embedded DB's autosave
+	pg           *pgStore          // when set, audit log + events are also written to PostgreSQL
 }
 
 // BindPG wires PostgreSQL as the durable store for host metadata, the audit log,
@@ -91,6 +112,7 @@ func (s *Store) BindPG(pg *pgStore) {
 	audit, _ := pg.loadRecentAudit(maxActivity)
 	events, _ := pg.loadRecentEvents(maxEvents)
 	hosts, _ := pg.loadHosts()
+	alertHistory, _ := pg.loadRecentAlerts(maxAlertHistory)
 	var alertStates map[string]string
 	if raw, _ := pg.loadKV("alert_states"); raw != nil {
 		_ = json.Unmarshal(raw, &alertStates)
@@ -111,6 +133,14 @@ func (s *Store) BindPG(pg *pgStore) {
 	}
 	if alertStates != nil {
 		s.alertStates = alertStates
+	}
+	if len(alertHistory) > 0 {
+		s.alertHistory = alertHistory
+		for _, r := range alertHistory {
+			if r.ID > s.alertSeq {
+				s.alertSeq = r.ID
+			}
+		}
 	}
 	s.mu.Unlock()
 }
@@ -721,4 +751,83 @@ func (s *Store) AlertStates() map[string]string {
 		cp[k] = v
 	}
 	return cp
+}
+
+// ---------- 告警历史持久化记录 ----------
+
+// AddAlertRecord writes a new alert lifecycle record. Returns the assigned ID.
+// The caller must NOT already hold s.mu.
+func (s *Store) AddAlertRecord(r AlertRecord) int64 {
+	s.mu.Lock()
+	s.alertSeq++
+	r.ID = s.alertSeq
+	if r.FiredAt == 0 {
+		r.FiredAt = time.Now().Unix()
+	}
+	r.Status = "firing"
+	s.alertHistory = append(s.alertHistory, r)
+	if len(s.alertHistory) > maxAlertHistory {
+		s.alertHistory = s.alertHistory[len(s.alertHistory)-maxAlertHistory:]
+	}
+	s.dirty = true
+	if s.pg != nil {
+		go s.pg.appendAlertRecord(r)
+	}
+	s.mu.Unlock()
+	return r.ID
+}
+
+// ResolveAlert marks the most recent firing record for key as resolved.
+func (s *Store) ResolveAlert(key string, resolvedAt int64) {
+	s.mu.Lock()
+	// Walk backwards to find the latest firing record for this key.
+	for i := len(s.alertHistory) - 1; i >= 0; i-- {
+		if s.alertHistory[i].Key == key && s.alertHistory[i].ResolvedAt == 0 {
+			s.alertHistory[i].ResolvedAt = resolvedAt
+			s.alertHistory[i].Status = "resolved"
+			s.dirty = true
+			if s.pg != nil {
+				go s.pg.resolveAlertRecord(s.alertHistory[i].ID, resolvedAt)
+			}
+			break
+		}
+	}
+	s.mu.Unlock()
+}
+
+// AlertHistory returns alert history records, newest first.
+// If activeOnly is true, only records with ResolvedAt == 0 are returned.
+func (s *Store) AlertHistory(limit int, activeOnly bool) []AlertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		limit = maxAlertHistory
+	}
+	var out []AlertRecord
+	for i := len(s.alertHistory) - 1; i >= 0 && len(out) < limit; i-- {
+		if activeOnly && s.alertHistory[i].ResolvedAt != 0 {
+			continue
+		}
+		out = append(out, s.alertHistory[i])
+	}
+	return out
+}
+
+// ImportAlertHistory loads alert records from PG at startup, restoring the in-memory buffer.
+func (s *Store) ImportAlertHistory(records []AlertRecord) {
+	if len(records) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alertHistory = records
+	if len(s.alertHistory) > maxAlertHistory {
+		s.alertHistory = s.alertHistory[len(s.alertHistory)-maxAlertHistory:]
+	}
+	// Restore alertSeq to the max ID seen so records get monotonically increasing IDs.
+	for _, r := range records {
+		if r.ID > s.alertSeq {
+			s.alertSeq = r.ID
+		}
+	}
 }

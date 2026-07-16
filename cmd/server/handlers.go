@@ -113,6 +113,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
 	mux.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleDeleteHost)
 	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
+	mux.HandleFunc("GET /api/v1/alerts/history", s.handleAlertHistory)
 	mux.HandleFunc("POST /api/v1/alerts/ack", s.handleAlertAck)
 	mux.HandleFunc("POST /api/v1/alerts/silence", s.handleAlertSilence)
 	mux.HandleFunc("GET /api/v1/alerts/governance", s.handleGetGovernance)
