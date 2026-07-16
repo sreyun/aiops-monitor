@@ -707,6 +707,18 @@ func parseSize(s string) (cols, rows int, ok bool) {
 	return c, rw, true
 }
 
+// userHomeDir returns the home directory of the current OS user.
+// Falls back to /root (uid 0) or empty string when unavailable.
+func userHomeDir() string {
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir
+	}
+	if runtime.GOOS != "windows" && os.Getuid() == 0 {
+		return "/root"
+	}
+	return ""
+}
+
 // shellPath returns the user's preferred shell, falling back to /bin/bash then /bin/sh.
 func shellPath() string {
 	if sh := os.Getenv("SHELL"); sh != "" {
@@ -734,10 +746,8 @@ func buildShellEnv() []string {
 		return false
 	}
 	if !has("HOME") {
-		if u, err := user.Current(); err == nil && u.HomeDir != "" {
-			env = append(env, "HOME="+u.HomeDir)
-		} else if os.Getuid() == 0 {
-			env = append(env, "HOME=/root")
+		if h := userHomeDir(); h != "" {
+			env = append(env, "HOME="+h)
 		} else {
 			env = append(env, "HOME=/tmp")
 		}
@@ -802,6 +812,9 @@ func newPipeShell() termShell {
 	name, args := shellCommand()
 	cmd := exec.Command(name, args...)
 	cmd.Env = buildShellEnv()
+	if dir := userHomeDir(); dir != "" {
+		cmd.Dir = dir
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil

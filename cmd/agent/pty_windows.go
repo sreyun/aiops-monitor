@@ -147,6 +147,12 @@ func newPTY(cols, rows int) termShell {
 		closeConPTY(hpc, inW, outR)
 		return nil
 	}
+	// Start the shell in the user's home directory (not the agent's CWD).
+	var cwdPtr uintptr
+	if dir := userHomeDir(); dir != "" {
+		cwd, _ := syscall.UTF16PtrFromString(dir)
+		cwdPtr = uintptr(unsafe.Pointer(cwd))
+	}
 	var pi syscall.ProcessInformation
 	r, _, _ := procCreateProcessW2.Call(
 		0,                                    // application name
@@ -154,7 +160,7 @@ func newPTY(cols, rows int) termShell {
 		0, 0,                                 // process / thread security
 		0,                                    // bInheritHandles = FALSE (ConPTY passes stdio via the attribute)
 		extendedStartupInfoPresent,           // creation flags
-		0, 0,                                 // environment / current dir
+		0, cwdPtr,                            // environment / current dir
 		uintptr(unsafe.Pointer(&si)),         // lpStartupInfo (STARTUPINFOEX)
 		uintptr(unsafe.Pointer(&pi)),         // lpProcessInformation
 	)

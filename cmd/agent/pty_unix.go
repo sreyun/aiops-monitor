@@ -59,6 +59,9 @@ func newPTY(cols, rows int) termShell {
 	cmd := exec.Command(shellPath(), "-l", "-i") // -l: login shell (sources /etc/profile)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.Env = buildShellEnv()
+	if dir := userHomeDir(); dir != "" {
+		cmd.Dir = dir
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true} // new session, slave becomes the controlling tty
 	if err := cmd.Start(); err != nil {
 		master.Close()
