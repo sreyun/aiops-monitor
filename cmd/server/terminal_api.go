@@ -54,12 +54,8 @@ func (s *Server) handleTerminalObserve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 	// Record audit log with actual logged-in username
-	user, _ := s.currentUser(r)
-	actor := user.Username
-	if actor == "" {
-		actor = s.clientIP(r)
-	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, Message: Tz("log.observe_terminal", sid[:8])})
+	actor, ip := s.actorIP(r)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, IP: ip, Message: Tz("log.observe_terminal", sid[:8])})
 	// Send recorded history first so the observer sees the full context
 	for _, data := range s.term.getDecodedRecording(sid) {
 		if err := ws.WriteBinary(data); err != nil {

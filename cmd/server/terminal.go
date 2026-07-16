@@ -122,6 +122,9 @@ type termManager struct {
 	// pendingSessions, the session ID persists until the agent's next poll picks
 	// it up immediately (no long-poll wait needed).
 	pendingSessions map[string][]string // hostID -> queued session IDs
+	// onArchive is called when a session ends and is archived. Used to save
+	// terminal output summary to AI memory for cross-session RAG retrieval.
+	onArchive func(info termSessionInfo, text string)
 }
 
 // termArchiveCap is how many ended sessions' recordings are retained for replay.
@@ -331,6 +334,34 @@ func (m *termManager) remove(id string) {
 			if m.pg != nil {
 				go m.pg.saveTermRecording(arch) // 永久审计留存：完整录制写入 PG（不受 100 条内存上限影响）
 			}
+			// 提取终端输出摘要存入 AI 记忆库，供跨会话 RAG 检索复用
+			if m.onArchive != nil {
+				go func(a termArchive) {
+					var lines []string
+					for _, f := range a.recording {
+						if f.Type != "output" {
+							continue
+						}
+						data, err := base64.StdEncoding.DecodeString(f.Data)
+						if err != nil || len(data) == 0 {
+							continue
+						}
+						text := stripANSI(string(data))
+						if text != "" {
+							lines = append(lines, text)
+						}
+					}
+					if len(lines) == 0 {
+						return
+					}
+					// 取最近 50 行作为摘要（避免过长）
+					if len(lines) > 50 {
+						lines = lines[len(lines)-50:]
+					}
+					summary := strings.Join(lines, "\n")
+					m.onArchive(a.info, summary)
+				}(arch)
+			}
 		}
 		s.recMu.Unlock()
 	}
@@ -441,7 +472,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	// 使用实际登录用户名作为操作者，IP 仅用于审计记录
+	// 使用实际登录用户名作为操作者，IP 始终记录真实客户端地址用于审计溯源
 	clientIP := s.clientIP(r)
 	user, ok := s.currentUser(r)
 	operator := clientIP // fallback: IP 地址
@@ -453,8 +484,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	sess.ip = clientIP
 	defer s.term.remove(sess.id)
 	op := operator
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, Host: hostname, Message: Tz("log.open_terminal", hostname)})
-	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Host: hostname, Message: Tz("log.close_terminal", hostname)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.open_terminal", hostname)})
+	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.close_terminal", hostname)})
 
 	// 终端审计：把会话里解析出的每条命令记为独立的「终端审计日志」(KindTerminal)，附主机 IP。
 	hostIP := ""
@@ -521,7 +552,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// keystroke audit trail.
 			if typ == 'i' {
 				if cmd := sess.processCommandAudit(payload); cmd != "" {
-					s.store.AddLog(LogEntry{Kind: KindTerminal, Level: "info", Actor: op, Host: hostname, Message: Tz("log.terminal_cmd", hostname, hostIP, cmd)})
+					s.store.AddLog(LogEntry{Kind: KindTerminal, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.terminal_cmd", hostname, hostIP, cmd)})
 				}
 			}
 			// Record resize frames so replay can restore the original terminal dimensions

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"sync"
+	"time"
 )
 
 //go:embed web
@@ -36,6 +38,10 @@ type Server struct {
 	distDir     string              // directory of downloadable agent binaries + plugins.zip
 	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
 	hermes      *HermesCore         // Hermes Agent (autonomous SRE agent)
+	// --- AI 记忆异步写入通道 ---
+	memoryCh  chan memoryJob      // 异步记忆写入队列
+	memorySem chan struct{}       // Embedding API 并发信号量（最多 3 并发）
+	memoryWg  sync.WaitGroup      // 等待 worker 排空
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
@@ -67,6 +73,23 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	// 未启用时优雅返回提示而非 503。此前 gated on HermesEnabled&&Enabled 且仅在启动时
 	// 判断，导致"配置完模型点 AI 对话仍 503"（s.hermes 为 nil）。
 	s.hermes = newHermesCore(s)
+	// AI 记忆异步写入 worker pool：3 个 worker，并发上限 3
+	s.memoryCh = make(chan memoryJob, 100)
+	s.memorySem = make(chan struct{}, 3)
+	s.startMemoryWorkers()
+	// 记忆衰减定时任务：每天执行一次，对超过 90 天且未被检索命中的记忆降低优先级
+	if s.pg != nil {
+		go func() {
+			// 启动后立即执行一次
+			s.pg.decayOldMemories()
+			// 每 24 小时执行一次
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				s.pg.decayOldMemories()
+			}
+		}()
+	}
 	return s
 }
 

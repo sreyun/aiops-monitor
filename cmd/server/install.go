@@ -181,6 +181,15 @@ UNIT
   systemctl daemon-reload
   systemctl enable --now aiops-agent
   echo "[AIOps] systemd service started: aiops-agent (boot autostart + auto-restart)"
+  # 麒麟/UOS 系统自动检测并配置 kysec 白名单
+  if command -v kysec_adm &>/dev/null; then
+    kysec_adm -a $DIR/aiops-agent 2>/dev/null && echo "[AIOps] kysec whitelist added: $DIR/aiops-agent" || true
+  fi
+  # SELinux: check and warn if enforcing
+  if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+    echo "[AIOps] WARNING: SELinux is enforcing. If agent data collection is blocked, run:"
+    echo "  sudo setenforce 0  (temporary) or load a custom SELinux policy module."
+  fi
 elif [ "$OS" = "Darwin" ]; then
   # macOS → launchd. RunAtLoad starts it on boot/login; KeepAlive relaunches it
   # automatically if it ever exits or is killed. This fixes the previous macOS

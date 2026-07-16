@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -142,9 +144,16 @@ func (p *pgStore) migrate() error {
 			source     TEXT,
 			content    TEXT NOT NULL,
 			embedding  vector(1536),
-			created_at BIGINT NOT NULL
+			created_at BIGINT NOT NULL,
+			last_hit_at BIGINT DEFAULT 0,
+			priority   REAL DEFAULT 1.0
 		);
+		-- 兼容老表：补增 last_hit_at / priority 列（若不存在）
+		ALTER TABLE ai_memory_embeddings ADD COLUMN IF NOT EXISTS last_hit_at BIGINT DEFAULT 0;
+		ALTER TABLE ai_memory_embeddings ADD COLUMN IF NOT EXISTS priority REAL DEFAULT 1.0;
 		CREATE INDEX IF NOT EXISTS ai_mem_kind ON ai_memory_embeddings(kind);
+		CREATE INDEX IF NOT EXISTS ai_mem_created ON ai_memory_embeddings(created_at DESC);
+		CREATE INDEX IF NOT EXISTS ai_mem_kind_created ON ai_memory_embeddings(kind, created_at DESC);
 		-- 经验规则库（高频问题 best practice）
 		CREATE TABLE IF NOT EXISTS experience_rules (
 			id          BIGSERIAL PRIMARY KEY,
@@ -563,6 +572,7 @@ func (p *pgStore) insertMemoryEmbedding(kind, source, content string, emb []floa
 }
 
 type memoryHit struct {
+	ID       int64   `json:"id"`
 	Kind     string  `json:"kind"`
 	Source   string  `json:"source"`
 	Content  string  `json:"content"`
@@ -575,9 +585,9 @@ func (p *pgStore) searchMemory(emb []float64, limit int) ([]memoryHit, error) {
 		limit = 3
 	}
 	rows, err := p.db.Query(
-		`SELECT kind, source, content, embedding <=> $1::vector AS distance
+		`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
 		 FROM ai_memory_embeddings
-		 ORDER BY embedding <=> $1::vector LIMIT $2`,
+		 ORDER BY (embedding <=> $1::vector) / GREATEST(priority, 0.1) LIMIT $2`,
 		vecStr(emb), limit)
 	if err != nil {
 		return nil, err
@@ -586,12 +596,150 @@ func (p *pgStore) searchMemory(emb []float64, limit int) ([]memoryHit, error) {
 	var out []memoryHit
 	for rows.Next() {
 		var m memoryHit
-		if err := rows.Scan(&m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
 			continue
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// searchMemoryByKind 按 kind 优先检索记忆：先查指定 kind 的 Top-K，不足时补充其他 kind。
+// 用于诊断对话优先召回历史诊断结论、普通对话优先召回通用知识等场景。
+// 排序公式：distance / (priority * time_factor)，其中：
+//   - time_factor = max(0.5, 1 - days/365) 时间衰减
+//   - 最近 7 天额外 1.5x 权重加成
+func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int) ([]memoryHit, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	now := time.Now().Unix()
+	sevenDaysAgo := now - 7*86400
+	// 先查指定 kind 的前 limit 条
+	preferred := limit * 2 / 3 // 2/3 给优先 kind
+	if preferred < 1 {
+		preferred = 1
+	}
+	rows, err := p.db.Query(
+		`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
+		 FROM ai_memory_embeddings WHERE kind = $4
+		 ORDER BY (embedding <=> $1::vector) / (GREATEST(priority, 0.1) *
+		   GREATEST(0.5, 1.0 - (EXTRACT(EPOCH FROM NOW()) - created_at) / 31536000.0) *
+		   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END)
+		 LIMIT $2`,
+		vecStr(emb), preferred, sevenDaysAgo, preferKind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []memoryHit
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var m memoryHit
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+			continue
+		}
+		key := m.Kind + ":" + m.Source
+		if !seen[key] {
+			out = append(out, m)
+			seen[key] = true
+		}
+	}
+	// 不足 limit 时，补充其他 kind
+	if len(out) < limit {
+		rows2, err2 := p.db.Query(
+			`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
+			 FROM ai_memory_embeddings WHERE kind != $4
+			 ORDER BY (embedding <=> $1::vector) / (GREATEST(priority, 0.1) *
+			   GREATEST(0.5, 1.0 - (EXTRACT(EPOCH FROM NOW()) - created_at) / 31536000.0) *
+			   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END)
+			 LIMIT $2`,
+			vecStr(emb), limit-len(out), sevenDaysAgo, preferKind)
+		if err2 == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var m memoryHit
+				if err := rows2.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+					continue
+				}
+				key := m.Kind + ":" + m.Source
+				if !seen[key] {
+					out = append(out, m)
+					seen[key] = true
+				}
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+// memoryContentHash 计算内容哈希用于去重判断（SHA256 前 16 位）。
+func memoryContentHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:8])
+}
+
+// hasDuplicateMemory 检查是否已存在高度相似的记忆（余弦距离 < 0.12，即相似度 > 88%）。
+// 阈值从 0.05 放宽到 0.12，覆盖更多语义等价内容（如 "CPU 90%" vs "CPU 使用率超过 90%"）。
+// 返回 duplicate ID 以便调用方执行合并逻辑。
+func (p *pgStore) hasDuplicateMemory(emb []float64, kind string) (bool, int64, error) {
+	var id int64
+	err := p.db.QueryRow(
+		`SELECT id FROM ai_memory_embeddings
+		 WHERE kind = $2 AND embedding <=> $1::vector < 0.12
+		 ORDER BY embedding <=> $1::vector LIMIT 1`,
+		vecStr(emb), kind).Scan(&id)
+	if err != nil {
+		return false, 0, nil // no duplicate found
+	}
+	return true, id, nil
+}
+
+// mergeDuplicateMemory appends new content to an existing memory and updates its embedding.
+// Used when a near-duplicate is detected: instead of creating a new entry, the new
+// knowledge is appended to preserve both the original and supplementary information.
+func (p *pgStore) mergeDuplicateMemory(id int64, appendContent string, newEmb []float64) error {
+	_, err := p.db.Exec(
+		`UPDATE ai_memory_embeddings
+		 SET content = content || E'\n' || $2,
+		     embedding = $3::vector,
+		     created_at = $4
+		 WHERE id = $1`,
+		id, appendContent, vecStr(newEmb), time.Now().Unix())
+	return err
+}
+
+// touchMemoryHits 批量更新被检索命中的记忆的 last_hit_at 字段，
+// 用于衰减策略判断“未被检索命中”的记忆。
+func (p *pgStore) touchMemoryHits(ids []int64) {
+	if len(ids) == 0 {
+		return
+	}
+	now := time.Now().Unix()
+	for _, id := range ids {
+		_, _ = p.db.Exec(
+			`UPDATE ai_memory_embeddings SET last_hit_at = $2 WHERE id = $1`,
+			id, now)
+	}
+}
+
+// decayOldMemories 对超过 90 天且未被检索命中的记忆降低优先级（priority *= 0.8），
+// 而非删除——保留历史知识但让新鲜记忆在检索时排名更高。
+// 建议每天调用一次（由 Server 启动时 goroutine 驱动）。
+func (p *pgStore) decayOldMemories() {
+	cutoff := time.Now().Add(-90 * 24 * time.Hour).Unix()
+	res, err := p.db.Exec(
+		`UPDATE ai_memory_embeddings
+		 SET priority = GREATEST(priority * 0.8, 0.1)
+		 WHERE created_at < $1 AND (last_hit_at = 0 OR last_hit_at < $1)`,
+		cutoff)
+	if err != nil {
+		slog.Warn("记忆衰减执行失败", "err", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("记忆衰减完成", "降低优先级条数", n)
+	}
 }
 
 // ============================================================================

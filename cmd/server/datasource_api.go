@@ -57,11 +57,12 @@ func (s *Server) handleDataSourceCreate(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	actor := s.clientIP(r)
-	if u, ok := s.currentUser(r); ok && u.Username != "" {
-		actor = u.Username
-	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, Message: "接入数据源 " + saved.Type + "：" + saved.Name})
+	actor, ip := s.actorIP(r)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, IP: ip, Message: "接入数据源 " + saved.Type + "：" + saved.Name})
+	// 数据源接入信息存入 AI 记忆库，供跨会话 RAG 检索复用
+	go s.rememberAI("datasource", saved.ID,
+		fmt.Sprintf("【新接入数据源】%s\n类型：%s | 地址：%s | 用户：%s",
+			saved.Name, saved.Type, saved.URL, saved.AuthUser))
 	writeJSON(w, http.StatusOK, maskDataSource(saved))
 }
 
@@ -81,6 +82,10 @@ func (s *Server) handleDataSourceUpdate(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// 数据源更新信息存入 AI 记忆库，供跨会话 RAG 检索复用
+	go s.rememberAI("datasource", id,
+		fmt.Sprintf("【数据源更新】ID: %s\n类型：%s | 地址：%s",
+			id, ds.Type, ds.URL))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

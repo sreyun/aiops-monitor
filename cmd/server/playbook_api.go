@@ -103,14 +103,14 @@ func (s *Server) handleUpsertPlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.save_playbook", saved.Name)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.save_playbook", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeletePlaybook(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.playbooks.Delete(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_playbook", id)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.delete_playbook", id)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -126,10 +126,10 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
 		return
 	}
-	exec := s.playbooks.StartExecution(pb, s.clientIP(r), targetList)
+	exec := s.playbooks.StartExecution(pb, s.actorName(r), targetList)
 	// Run each step on each host sequentially via the agent reverse terminal channel
 	go s.runPlaybookExecution(pb, exec, targetList)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.execute_playbook", pb.Name, len(targetList))})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.execute_playbook", pb.Name, len(targetList))})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": exec.ID})
 }
 

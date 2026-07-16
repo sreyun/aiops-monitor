@@ -2110,6 +2110,22 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-chat-msg.ai .ai-h3,.ai-chat-msg.ai .ai-h4{font-size:1em}
 .ai-chat-msg.ai .ai-bq{margin:4px 0; padding:3px 10px; border-left:3px solid var(--line2); color:var(--muted); background:var(--panel3); border-radius:0 4px 4px 0}
 .ai-chat-msg.ai .ai-hr{border:none; border-top:1px solid var(--line2); margin:8px 0}
+
+/* AI 流式输出：思考动画 + 打字光标 + 流式纯文本 */
+.ai-thinking{display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; padding:4px 0}
+.ai-thinking-dots{display:inline-flex; gap:3px}
+.ai-thinking-dots span{width:6px; height:6px; border-radius:50%; background:var(--accent); opacity:.4; animation:aiDotPulse 1.4s ease-in-out infinite}
+.ai-thinking-dots span:nth-child(2){animation-delay:.2s}
+.ai-thinking-dots span:nth-child(3){animation-delay:.4s}
+@keyframes aiDotPulse{0%,80%,100%{opacity:.4; transform:scale(.8)} 40%{opacity:1; transform:scale(1)}}
+.ai-thinking-text{animation:aiThinkFade 2s ease-in-out infinite alternate}
+@keyframes aiThinkFade{0%{opacity:.5} 100%{opacity:1}}
+/* 流式打字光标：闪烁的竖线 */
+.ai-stream-cursor{color:var(--accent); font-weight:300; animation:aiCursorBlink .8s step-end infinite; margin-left:1px; user-select:none}
+@keyframes aiCursorBlink{0%,100%{opacity:1} 50%{opacity:0}}
+/* 流式正文：纯文本展示（避免未完成 Markdown 导致渲染抖动） */
+.ai-stream-body{white-space:pre-wrap; word-break:break-word; line-height:1.6; font-size:13px}
+.ai-stream-text{color:var(--txt)}
 /* 每条 AI 回复的操作栏（复制），hover 显示 */
 .ai-msg-tools{display:none; justify-content:flex-end; gap:6px; margin-top:6px}
 .ai-chat-msg.ai:hover .ai-msg-tools{display:flex}

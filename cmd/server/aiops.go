@@ -789,8 +789,8 @@ func embedText(cfg AIConfig, text string) []float64 {
 	if text = strings.TrimSpace(text); text == "" {
 		return nil
 	}
-	if len([]rune(text)) > 3000 { // 控制输入长度，避免超模型上限
-		text = string([]rune(text)[:3000])
+	if len([]rune(text)) > 8000 { // 控制输入长度，避免超模型上限（~8000字符 ≈ 4000 token）
+		text = string([]rune(text)[:8000])
 	}
 	ep := strings.TrimSpace(cfg.EmbedEndpoint)
 	key := strings.TrimSpace(cfg.EmbedAPIKey)

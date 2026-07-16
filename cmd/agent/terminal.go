@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -66,8 +67,80 @@ var (
 	// termSessionTimeout is the maximum duration of a single terminal session.
 	// After this duration, the shell is killed and resources released —
 	// prevents forgotten sessions from leaking PTY descriptors and memory.
-	termSessionTimeout = 30 * time.Minute
+	// v5.4.0: raised from 30m to 24h so operators can keep long-lived sessions
+	// (e.g. monitoring a build overnight) without being forcibly disconnected.
+	termSessionTimeout = 24 * time.Hour
 )
+
+// backoffTimer implements exponential backoff with jitter for reconnection.
+// Formula: base * 2^(retry-1) + rand(0, base), capped at max.
+// After deepBackoffThreshold consecutive failures, uses deep backoff (5min probe).
+// Shared by terminal and forward channels.
+type backoffTimer struct {
+	retry int
+	base  time.Duration
+	max   time.Duration
+}
+
+func newBackoffTimer(base, max time.Duration) *backoffTimer {
+	return &backoffTimer{base: base, max: max}
+}
+
+const deepBackoffThreshold = 5
+
+// next returns the next backoff duration and increments the retry counter.
+func (b *backoffTimer) next() time.Duration {
+	b.retry++
+	if b.retry > deepBackoffThreshold {
+		return 5 * time.Minute // deep backoff: probe every 5min
+	}
+	d := b.base * time.Duration(1<<(b.retry-1))
+	if d > b.max {
+		d = b.max
+	}
+	d += time.Duration(rand.Int63n(int64(b.base))) // jitter
+	return d
+}
+
+// reset resets the retry counter on successful connection.
+func (b *backoffTimer) reset() {
+	b.retry = 0
+}
+
+// deadlineReader wraps an io.ReadCloser with periodic SetReadDeadline to detect
+// half-open connections (e.g. NAT silent drops). Every heartbeatInterval the
+// deadline is refreshed; if no data arrives within the window, Read returns
+// a timeout error, allowing the caller to close the stale connection.
+type deadlineReader struct {
+	conn     net.Conn // underlying connection for SetReadDeadline (may be nil)
+	body     io.ReadCloser
+	interval time.Duration
+}
+
+func newDeadlineReader(body io.ReadCloser, interval time.Duration) *deadlineReader {
+	// Try to extract net.Conn from the response body for deadline support
+	type connAccessor interface {
+		SetReadDeadline(time.Time) error
+	}
+	var conn net.Conn
+	if ca, ok := body.(connAccessor); ok {
+		if c, ok := ca.(net.Conn); ok {
+			conn = c
+		}
+	}
+	return &deadlineReader{conn: conn, body: body, interval: interval}
+}
+
+func (d *deadlineReader) Read(p []byte) (int, error) {
+	if d.conn != nil {
+		_ = d.conn.SetReadDeadline(time.Now().Add(d.interval))
+	}
+	return d.body.Read(p)
+}
+
+func (d *deadlineReader) Close() error {
+	return d.body.Close()
+}
 
 // agentDict is a minimal embedded i18n table for user-visible terminal
 // messages. The agent is a separate binary and does not import the server's
@@ -136,12 +209,16 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 		return
 	}
 	slog.Info("远程终端通道已就绪，等待服务端呼叫…", "server", t.server)
+	backoff := newBackoffTimer(1*time.Second, 60*time.Second)
 	for {
 		sid, mode, command, lang, ok := a.termWait(t.server)
 		if !ok {
-			time.Sleep(3 * time.Second)
+			d := backoff.next()
+			slog.Debug("终端通道连接失败，指数退避等待", "delay", d, "retry", backoff.retry)
+			time.Sleep(d)
 			continue
 		}
+		backoff.reset() // success: reset backoff
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}
@@ -325,6 +402,9 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 	}()
 
 	// rx: framed keystrokes / resize / upload from the server → the shell
+	// Half-open detection: wrap rx body with deadline reader (90s heartbeat)
+	// to detect NAT silent drops where the connection appears alive but
+	// no data flows in either direction.
 	go func() {
 		defer closeAll()
 		resp, err := agentGet(termHTTP, server+"/api/v1/agent/terminal/rx?session="+sid, a.identity.Fingerprint)
@@ -332,7 +412,9 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 			return
 		}
 		defer resp.Body.Close()
-		readTermFrames(resp.Body, sh, lang, zmChan, fileTxChan)
+		// Wrap with deadline reader for half-open connection detection
+		dr := newDeadlineReader(resp.Body, 90*time.Second)
+		readTermFrames(dr, sh, lang, zmChan, fileTxChan)
 	}()
 
 	_ = sh.Wait()

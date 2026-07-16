@@ -42,6 +42,10 @@ func (s *Server) wireSRE() {
 			if inc.Severity == "critical" {
 				go s.autoDiagnose(inc)
 			}
+			// 新事件存入 AI 记忆库，供跨会话 RAG 检索复用
+			go s.rememberAI("alert", fmt.Sprintf("incident:%d", inc.ID),
+				fmt.Sprintf("【新告警事件】%s\n严重程度：%s | 类型：%s | 主机：%s | 来源：%s",
+					inc.Title, inc.Severity, inc.Type, inc.Hostname, inc.Source))
 		} else {
 			s.messages.push("incident", "success", "事件已恢复："+inc.Title, "", "sre", ref)
 		}
@@ -74,6 +78,10 @@ func (s *Server) wireSRE() {
 			lvl = "critical"
 		}
 		s.messages.push("ai", lvl, fmt.Sprintf("AI 巡检发现 %d 项风险", crit+warn), trimLine(rep.Summary, 200), "sre", "")
+		// AI 巡检报告存入 AI 记忆库，供跨会话 RAG 检索复用
+		go s.rememberAI("inspection", fmt.Sprintf("inspection:%d", rep.ID),
+			fmt.Sprintf("【AI巡检报告】%s\n发现：%d 项严重 / %d 项警告\n%s",
+				rep.Context, crit, warn, rep.Summary))
 	}
 
 	// SLO evaluation needs metric + check history and can raise incidents.
@@ -95,6 +103,15 @@ func (s *Server) wireSRE() {
 	// The alert engine drives incidents + remediation on every fire/recover.
 	s.notifier.incidents = s.incidents
 	s.notifier.remediation = s.remediation
+
+	// Terminal session end → extract output summary and save to AI memory for RAG.
+	if s.term != nil {
+		s.term.onArchive = func(info termSessionInfo, text string) {
+			go s.rememberAI("terminal", info.HostID,
+				fmt.Sprintf("【终端会话摘要】主机：%s | 操作者：%s\n%s",
+					info.Hostname, info.Operator, text))
+		}
+	}
 
 	// AI inspection reasons over a live snapshot; diagnosis over incident context.
 	s.ai.snapshot = func() inspectionContext {
@@ -209,6 +226,8 @@ func (s *Server) autoDiagnose(inc Incident) {
 	s.store.MarkDirty()
 	// 事件自动诊断结果同样向量化入库，供后续 RAG 相似案例检索（此前仅手动诊断/诊断对话会向量化）。
 	go s.saveDiagnosisEmbedding(inc.ID, inc, out)
+	// 同时存入通用 AI 记忆库，供跨会话 RAG 检索复用
+	go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【自动诊断】"+out)
 }
 
 func (s *Server) effectiveCategory(hostID string) string {
@@ -221,12 +240,65 @@ func (s *Server) effectiveCategory(hostID string) string {
 	return ""
 }
 
-// actorName returns the acting operator's username, falling back to their IP.
-func (s *Server) actorName(r *http.Request) string {
-	if u, ok := s.currentUser(r); ok && u.Username != "" {
-		return u.Username
+// checkSlowDegradation detects slow resource degradation: if CPU/memory/disk
+// show an upward trend over the last 3 samples AND are approaching warning
+// thresholds (>85% of threshold), raise a warning incident with AI analysis.
+func (s *Server) checkSlowDegradation(hostID string) {
+	samples, ok := s.store.GetSamples(hostID)
+	if !ok || len(samples) < 3 {
+		return
 	}
-	return s.clientIP(r)
+	n := len(samples)
+	s1, s2, s3 := samples[n-3], samples[n-2], samples[n-1]
+
+	isTrending := func(v1, v2, v3 float64) bool {
+		return v2 > v1 && v3 > v2
+	}
+
+	th := s.cfg.Thresholds()
+	var issues []string
+
+	if isTrending(s1.CPUPercent, s2.CPUPercent, s3.CPUPercent) && s3.CPUPercent >= th.CPUWarn*0.85 {
+		issues = append(issues, fmt.Sprintf("CPU 持续上升 %.1f%%→%.1f%%→%.1f%%（接近阈值%.0f%%）",
+			s1.CPUPercent, s2.CPUPercent, s3.CPUPercent, th.CPUWarn))
+	}
+	if isTrending(s1.MemPercent, s2.MemPercent, s3.MemPercent) && s3.MemPercent >= th.MemWarn*0.85 {
+		issues = append(issues, fmt.Sprintf("内存持续上升 %.1f%%→%.1f%%→%.1f%%（接近阈值%.0f%%）",
+			s1.MemPercent, s2.MemPercent, s3.MemPercent, th.MemWarn))
+	}
+	if isTrending(s1.DiskPercent, s2.DiskPercent, s3.DiskPercent) && s3.DiskPercent >= th.DiskWarn*0.85 {
+		issues = append(issues, fmt.Sprintf("磁盘持续上升 %.1f%%→%.1f%%→%.1f%%（接近阈值%.0f%%）",
+			s1.DiskPercent, s2.DiskPercent, s3.DiskPercent, th.DiskWarn))
+	}
+
+	if len(issues) == 0 {
+		return
+	}
+
+	host := s.hostByID(hostID)
+	if host == nil {
+		return
+	}
+
+	title := fmt.Sprintf("[趋势预警] 主机 %s 资源缓慢恶化", host.Hostname)
+	analysis := fmt.Sprintf("检测到以下资源呈持续上升趋势，可能在数小时内达到告警阈值：\n- %s\n建议：检查相关服务是否有内存泄漏、日志膨胀或异常负载增长。",
+		strings.Join(issues, "\n- "))
+
+	inc := s.incidents.CreateManual(title, "warning", hostID, host.Hostname, "AI趋势检测")
+	if inc.ID > 0 {
+		s.incidents.AddEvent(inc.ID, "ai_analysis", "AI", analysis)
+		s.store.MarkDirty()
+		go s.rememberAI("alert", fmt.Sprintf("degradation:%s", hostID),
+			fmt.Sprintf("【趋势预警】%s\n%s", title, analysis))
+	}
+}
+
+// actorName returns the operator identity for audit logs: the authenticated
+// username when available, otherwise the resolved client IP. For callers that
+// also need the IP separately, use actorIP directly.
+func (s *Server) actorName(r *http.Request) string {
+	actor, _ := s.actorIP(r)
+	return actor
 }
 
 // triggerPlaybookOnHost runs a playbook against a single host asynchronously and
@@ -415,7 +487,7 @@ func (s *Server) handleUpsertRemediationRule(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), Message: Tz("log.remediation_saved", saved.Name)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.remediation_saved", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
@@ -477,7 +549,7 @@ func (s *Server) handleUpsertSLO(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), Message: Tz("log.slo_saved", saved.Name)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.slo_saved", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
@@ -776,10 +848,12 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 		s.ai.onReport(report)
 	}
 
+	actor, ip := s.actorIP(r)
 	s.store.AddLog(LogEntry{
 		Kind:    KindOperation,
 		Level:   "info",
-		Actor:   s.actorName(r),
+		Actor:   actor,
+		IP:      ip,
 		Message: fmt.Sprintf("日志诊断：主机 %s，结论 %s", req.Hostname, summary),
 	})
 
@@ -811,7 +885,7 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), Message: Tz("ai.config_saved")})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("ai.config_saved")})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -928,7 +1002,7 @@ func (s *Server) handleAITerminalAccess(w http.ResponseWriter, r *http.Request) 
 	}
 	if !req.Enabled { // 关闭：安全方向，直接关
 		_ = s.cfg.SetHermesTerminalEnabled(false)
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "关闭 AI 终端只读巡检权限：" + acc.Username})
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: "关闭 AI 终端只读巡检权限：" + acc.Username})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": false})
 		return
 	}
@@ -952,7 +1026,7 @@ func (s *Server) handleAITerminalAccess(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存失败"})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "开启 AI 终端只读巡检权限（已校验终端密码）：" + acc.Username})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: "开启 AI 终端只读巡检权限（已校验终端密码）：" + acc.Username})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": true})
 }
 
@@ -1103,6 +1177,13 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// RAG: 检索历史记忆注入 system prompt，让 AI 能跨会话复用已有知识
+	memKind := "chat"
+	if req.IncidentID > 0 {
+		memKind = "diagnosis"
+	}
+	sys += s.retrieveMemoryForPrompt(memKind, req.Message, 8)
+
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	hist := req.History
 	if len(hist) > 10 { // bound token usage to the last few turns
@@ -1117,7 +1198,11 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 
 	// 统一 AI 对话默认走 SSE 流式
 	s.setupSSE(w)
-	_, _ = streamChat(w, cfg, msgs)
+	reply, _ := streamChat(w, cfg, msgs)
+	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
+	if strings.TrimSpace(reply) != "" {
+		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
+	}
 }
 
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
@@ -1160,27 +1245,22 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		userMsg := fmt.Sprintf("请对事件 #%d 进行诊断分析，给出根因判断和处置建议。", inc.ID)
+		// RAG: 检索历史诊断记忆注入 system prompt
+		sys += s.retrieveMemoryForPrompt("diagnosis", userMsg, 8)
 
-		if req.Stream {
-			s.setupSSE(w)
-			_, _ = streamChat(w, cfg, []map[string]string{
-				{"role": "system", "content": sys},
-				{"role": "user", "content": userMsg},
-			})
-			return
-		}
-
-		diag, err := aiComplete(cfg, sys, userMsg)
-		if err != nil {
-			slog.Warn("ai diagnosis failed, falling back to heuristic", "id", id, "err", err)
-		} else {
+		// 统一走 SSE 流式输出，前端无需显式传 stream=true
+		s.setupSSE(w)
+		diag, _ := streamChat(w, cfg, []map[string]string{
+			{"role": "system", "content": sys},
+			{"role": "user", "content": userMsg},
+		})
+		if diag != "" {
 			s.incidents.AddEvent(id, "ai_diagnosis", "AI", diag)
 			s.store.MarkDirty()
-			// Async: save embedding for RAG
 			go s.saveDiagnosisEmbedding(id, inc, diag)
-			writeJSON(w, http.StatusOK, map[string]string{"diagnosis": diag, "source": "ai"})
-			return
+			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断结论】"+diag)
 		}
+		return
 	}
 
 	// Fallback to heuristic
@@ -1231,7 +1311,10 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
+		// AI 未配置时也走 SSE，前端才能正确解析错误
+		s.setupSSE(w)
+		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写并保存\"}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}
 	// Build rich system prompt with full incident context
@@ -1249,6 +1332,8 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 			sys += "\n\n【终端操作记录（分段摘要）】\n" + termSummary
 		}
 	}
+	// RAG: 检索历史诊断记忆注入 system prompt
+	sys += s.retrieveMemoryForPrompt("diagnosis", req.Message, 8)
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	hist := req.History
 	if len(hist) > 20 {
@@ -1261,26 +1346,18 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
-	if req.Stream {
-		s.setupSSE(w)
-		reply, _ := streamChat(w, cfg, msgs)
-		if reply != "" {
-			s.saveDiagnosisChatTurn(id, req.Message, reply)
-			go s.saveDiagnosisEmbedding(id, inc, reply)
-		}
-		return
+	// 统一走 SSE 流式输出，前端无需显式传 stream=true
+	s.setupSSE(w)
+	reply, _ := streamChat(w, cfg, msgs)
+	if reply != "" {
+		s.saveDiagnosisChatTurn(id, req.Message, reply)
+		go s.saveDiagnosisEmbedding(id, inc, reply)
+		go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断对话】"+req.Message+"\n【AI回复】"+reply)
 	}
-
-	reply, err := aiChat(cfg, msgs)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
-	// Persist this chat turn to PG for learning/accumulation
-	s.saveDiagnosisChatTurn(id, req.Message, reply)
-	// Async: save vector embedding for RAG (non-blocking, best-effort)
-	go s.saveDiagnosisEmbedding(id, inc, reply)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply})
 }
 
 // buildIncidentDiagnosisPrompt constructs a system prompt with the incident's
@@ -1666,11 +1743,18 @@ func (s *Server) saveDiagnosisEmbedding(incidentID int64, inc Incident, reply st
 	}
 }
 
-// rememberAI 把一段 AI 相关文本（对话 / 文件 / URL / 多轮历史）向量化并永久存入 pgvector，
-// 供后续 RAG 检索——让每次交互都沉淀为可复用记忆，持续自我进化。异步、尽力而为、不阻塞主流程。
-// 无 pgvector 或未配置嵌入（非百炼 / 未启用）时静默跳过。
+// memoryJob 是一个待向量化并入库的 AI 记忆任务。
+type memoryJob struct {
+	kind    string
+	source  string
+	content string
+}
+
+// rememberAI 把一段 AI 相关文本（对话 / 文件 / URL / 多轮历史）推入异步写入队列，
+// 由后台 worker pool 完成向量化 + 去重 + 入库。非阻塞，队列满时静默丢弃。
+// 无 pgvector 或未配置嵌入时静默跳过。
 func (s *Server) rememberAI(kind, source, content string) {
-	if s.pg == nil {
+	if s.pg == nil || s.memoryCh == nil {
 		return
 	}
 	content = strings.TrimSpace(content)
@@ -1681,17 +1765,152 @@ func (s *Server) rememberAI(kind, source, content string) {
 	if !cfg.Enabled || cfg.APIKey == "" {
 		return
 	}
+	// 非阻塞入队：队列满时丢弃，避免突发流量打爆内存
+	select {
+	case s.memoryCh <- memoryJob{kind: kind, source: source, content: content}:
+	default:
+		slog.Warn("AI 记忆队列已满，丢弃本次写入", "kind", kind)
+	}
+}
+
+// startMemoryWorkers 启动 3 个后台 worker，从 memoryCh 批量拉取记忆任务，
+// 通过 semaphore 控制并发（最多 3 个同时调用 Embedding API），失败重试一次后静默丢弃。
+func (s *Server) startMemoryWorkers() {
+	const workerCount = 3
+	for i := 0; i < workerCount; i++ {
+		s.memoryWg.Add(1)
+		go func() {
+			defer s.memoryWg.Done()
+			for job := range s.memoryCh {
+				s.processMemoryJob(job)
+			}
+		}()
+	}
+}
+
+// processMemoryJob 执行单条记忆任务的向量化 + 去重 + 入库。
+// 通过 memorySem 信号量限制并发，防止突发大量写入导致 API 限流。
+// 增强：
+//   - 超过 2000 字符的内容在入库前生成 AI 摘要（仅 chat/terminal kind）
+//   - 去重阈值 0.12 cosine distance，重复时合并而非丢弃
+func (s *Server) processMemoryJob(job memoryJob) {
+	// 获取信号量（并发上限保护）
+	s.memorySem <- struct{}{}
+	defer func() { <-s.memorySem }()
+
+	content := job.content
+
+	// 记忆摘要压缩：超过 2000 字符的 chat/terminal 内容生成 AI 摘要
+	if (job.kind == "chat" || job.kind == "terminal") && len([]rune(content)) > 2000 {
+		content = s.generateMemorySummary(job.kind, content)
+	}
+
+	if len([]rune(content)) > 8000 { // 存储正文限长（~8000字符 ≈ 4000 token）
+		content = string([]rune(content)[:8000]) + "…"
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return
+	}
 	emb := embedText(cfg, content)
 	if len(emb) == 0 {
 		return
 	}
-	stored := content
-	if len([]rune(stored)) > 4000 { // 存储正文限长
-		stored = string([]rune(stored)[:4000]) + "…"
+	// 去重检查：余弦距离 < 0.12（相似度 > 88%）视为重复，合并而非丢弃
+	if dup, dupID, _ := s.pg.hasDuplicateMemory(emb, job.kind); dup {
+		// 合并逻辑：将新内容追加到已有记忆
+		appendContent := content
+		if len([]rune(appendContent)) > 500 { // 合并时只取摘要部分
+			appendContent = string([]rune(appendContent)[:500]) + "…"
+		}
+		if err := s.pg.mergeDuplicateMemory(dupID, appendContent, emb); err != nil {
+			slog.Debug("AI 记忆合并失败，回退为跳过", "kind", job.kind, "err", err)
+		} else {
+			slog.Debug("AI 记忆重复，已合并到已有记录", "kind", job.kind, "source", job.source, "dup_id", dupID)
+		}
+		return
 	}
-	if err := s.pg.insertMemoryEmbedding(kind, source, stored, emb, time.Now().Unix()); err != nil {
-		slog.Warn("保存 AI 记忆向量失败", "kind", kind, "err", err)
+	if err := s.pg.insertMemoryEmbedding(job.kind, job.source, content, emb, time.Now().Unix()); err != nil {
+		slog.Warn("保存 AI 记忆向量失败", "kind", job.kind, "err", err)
 	}
+}
+
+// generateMemorySummary 对长文本生成 200 字 AI 摘要，格式为「摘要 + 原文截断」。
+// 仅对 chat 和 terminal kind 做摘要压缩，diagnosis 和 alert 保持原文。
+func (s *Server) generateMemorySummary(kind, content string) string {
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		// AI 未配置，直接截断
+		return string([]rune(content)[:2000]) + "…"
+	}
+	// 调用 AI 生成摘要
+	msgs := []map[string]string{
+		{"role": "system", "content": "用不超过200字概括以下运维" + kind + "内容的核心知识点，保留关键指标、结论和建议。直接输出摘要文本，不要加任何格式标记。"},
+		{"role": "user", "content": content},
+	}
+	summary, err := aiChat(cfg, msgs)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		return string([]rune(content)[:2000]) + "…"
+	}
+	summary = strings.TrimSpace(summary)
+	// 格式：摘要在前 + 原文截断保留
+	truncated := content
+	if len([]rune(truncated)) > 4000 {
+		truncated = string([]rune(truncated)[:4000]) + "…"
+	}
+	return "【摘要】" + summary + "\n【原文】" + truncated
+}
+
+// retrieveMemoryForPrompt 根据用户当前消息检索语义最相关的 Top-K 历史记忆，
+// 返回可拼入 system prompt 的文本片段。无 pg / 无 embedding 配置时返回空串。
+// preferKind 指定优先召回的记忆类型（如 "chat"、"diagnosis"），
+// 检索策略为 2/3 优先 kind + 1/3 其他 kind，兼顾场景相关性与跨域知识。
+func (s *Server) retrieveMemoryForPrompt(preferKind, userMsg string, topK int) string {
+	if s.pg == nil {
+		return ""
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return ""
+	}
+	if topK <= 0 {
+		topK = 8
+	}
+	// 对用户消息做向量化（截断至 8000 字符，与 embedText 保持一致）
+	query := userMsg
+	if len([]rune(query)) > 8000 {
+		query = string([]rune(query)[:8000])
+	}
+	emb := embedText(cfg, query)
+	if len(emb) == 0 {
+		return ""
+	}
+	hits, err := s.pg.searchMemoryByKind(emb, preferKind, topK)
+	if err != nil || len(hits) == 0 {
+		return ""
+	}
+	// 异步更新命中记忆的 last_hit_at（用于衰减策略判断）
+	go func() {
+		ids := make([]int64, len(hits))
+		for i, h := range hits {
+			ids[i] = h.ID
+		}
+		s.pg.touchMemoryHits(ids)
+	}()
+	var b strings.Builder
+	b.WriteString("\n\n【历史记忆参考（RAG 检索，仅供参考，以实际数据为准）】\n")
+	for i, h := range hits {
+		if i >= topK {
+			break
+		}
+		// 截断过长内容，避免撑爆 prompt token
+		content := h.Content
+		if len([]rune(content)) > 1500 {
+			content = string([]rune(content)[:1500]) + "…"
+		}
+		fmt.Fprintf(&b, "[%d] (%s) %s\n", i+1, h.Kind, content)
+	}
+	return b.String()
 }
 
 // handleDiagnosisFeedback records user feedback on an AI diagnosis.

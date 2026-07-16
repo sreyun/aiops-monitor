@@ -115,7 +115,7 @@ func (s *Server) handleForwardGroupDelete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r),
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
 		Message: fmt.Sprintf("删除端口范围转发组 %s（%d 条）", gid, deleted)})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }

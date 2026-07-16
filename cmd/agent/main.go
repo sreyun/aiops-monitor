@@ -107,6 +107,8 @@ func main() {
 	flag.BoolVar(&cfg.LogEncrypt, "log-encrypt", cfg.LogEncrypt, "加密上报日志(gzip+AES-256-GCM)，默认开启；调试可设 --log-encrypt=false")
 	flag.BoolVar(&cfg.TLSSkipVerify, "tls-skip-verify", cfg.TLSSkipVerify, "跳过服务端 TLS 证书校验（不安全，仅自签/内网临时使用）")
 	flag.StringVar(&cfg.CACert, "ca-cert", cfg.CACert, "信任的 CA 证书路径（PEM），用于校验自签名服务端证书")
+	var securityMode string
+	flag.StringVar(&securityMode, "security-mode", "auto", "安全模块模式: auto(自动诊断输出修复命令)/permissive(自动切换宽容模式,2h后恢复)/enforcing(恢复强制模式)")
 	flag.Parse()
 	_ = cfgFlag
 	if logPathsFlag != "" {
@@ -136,6 +138,74 @@ func main() {
 	hostID := loadOrCreateHostID(cfg.StateFile)
 	collector := newCollector(cfg.DiskPath)
 	runner := NewPluginRunner(cfg.PluginsDir, cfg.Python, 15*time.Second)
+
+	// v5.4.0: 安全环境检测（麒麟 kysec / SELinux / AppArmor / firewalld / Defender / SIP）
+	// 启动时主动探测并输出诊断信息，让运维人员第一时间看到安全模块拦截风险。
+	// 输出检测到的 OS 发行版信息
+	osDist := getOSDist()
+	if osDist.PrettyName != "" {
+		slog.Info("检测到操作系统", "distro", osDist.PrettyName, "id", osDist.ID, "version", osDist.Version)
+	} else if osDist.Name != "" {
+		slog.Info("检测到操作系统", "name", osDist.Name, "id", osDist.ID, "version", osDist.Version)
+	}
+
+	if secModules, isKylin := detectSecurityEnv(); isKylin || len(secModules) > 0 {
+		if isKylin {
+			slog.Warn("检测到麒麟操作系统，请确认 kysec 安全模块不会拦截 Agent 数据采集",
+				"os", runtime.GOOS, "distro", osDist.PrettyName)
+		}
+		var enforcingModules []SecurityModule
+		for _, m := range secModules {
+			level := slog.LevelInfo
+			if m.Status == "enforcing" {
+				level = slog.LevelWarn
+				enforcingModules = append(enforcingModules, m)
+			}
+			slog.Log(nil, level, "检测到安全模块",
+				"module", m.Name, "status", m.Status, "details", m.Details)
+		}
+		// Handle --security-mode parameter
+		switch securityMode {
+		case "permissive":
+			if len(enforcingModules) > 0 {
+				slog.Warn("安全模式=permissive，正在切换安全模块为宽容模式（2小时后自动恢复）")
+				if err := setKysecMode("permissive", 2*time.Hour); err != nil {
+					slog.Error("切换安全模块失败", "err", err)
+				} else {
+					slog.Info("安全模块已切换为宽容模式，2小时后自动恢复 enforcing")
+				}
+			}
+		case "enforcing":
+			slog.Info("安全模式=enforcing，正在恢复安全模块强制模式")
+			if err := setKysecMode("enforcing", 0); err != nil {
+				slog.Error("恢复安全模块失败", "err", err)
+			} else {
+				slog.Info("安全模块已恢复为 enforcing 模式")
+			}
+		case "auto":
+			// Auto mode: output fix commands for any enforcing modules
+			if len(enforcingModules) > 0 {
+				cmds := securityFixCommands(enforcingModules)
+				if len(cmds) > 0 {
+					slog.Warn("检测到 enforcing 安全模块，以下是推荐的修复命令：")
+					for _, cmd := range cmds {
+						slog.Warn("  " + cmd)
+					}
+				}
+			}
+		}
+		// Proactively check if procfs access is blocked
+		if blocked := checkProcAccess(); len(blocked) > 0 {
+			var paths []string
+			for p := range blocked {
+				paths = append(paths, p)
+			}
+			slog.Error("启动检测：部分 /proc 路径无法读取，数据采集可能不完整",
+				"blocked_paths", paths,
+				"hint", "请以 root 身份运行 Agent，或配置安全模块白名单",
+			)
+		}
+	}
 
 	// Resolve the effective server list: if "servers" is configured it takes
 	// precedence; otherwise fall back to the legacy single "server" + "token".

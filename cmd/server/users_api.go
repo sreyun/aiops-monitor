@@ -59,7 +59,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.create_user", uname, req.Role)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.create_user", uname, req.Role)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -87,7 +87,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.update_user", username, req.Role)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.update_user", username, req.Role)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -102,7 +102,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.clearUserSessions(username) // kick the removed user out
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_user", username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.delete_user", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -124,7 +124,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auth.clearUserSessions(username) // force re-login with the new password
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.reset_user_password", username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.reset_user_password", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -134,6 +134,6 @@ func (s *Server) handleResetUserMFA(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.admin_reset_mfa", username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.admin_reset_mfa", username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

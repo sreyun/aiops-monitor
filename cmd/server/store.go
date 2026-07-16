@@ -61,9 +61,10 @@ type storedEvent struct {
 // and plugin findings (plugin).
 type LogEntry struct {
 	Timestamp int64  `json:"timestamp"`
-	Kind      string `json:"kind"`  // operation | system | plugin
-	Level     string `json:"level"` // info | warning | critical
-	Actor     string `json:"actor"`
+	Kind      string `json:"kind"`   // operation | system | plugin | terminal
+	Level     string `json:"level"`  // info | warning | critical
+	Actor     string `json:"actor"`  // operator name (or IP if anonymous)
+	IP        string `json:"ip,omitempty"` // real client IP for audit traceability
 	Host      string `json:"host,omitempty"`
 	Message   string `json:"message"`
 }

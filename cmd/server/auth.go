@@ -618,7 +618,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if relaySecret := s.cfg.RelaySecret(); relaySecret != "" {
 			if hdr := r.Header.Get("X-Relay-Secret"); hdr != "" {
 				if subtle.ConstantTimeCompare([]byte(hdr), []byte(relaySecret)) != 1 {
-					s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.relay_secret_mismatch")})
+					s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: s.clientIP(r), IP: s.clientIP(r), Message: Tz("log.relay_secret_mismatch")})
 					writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.relay_unauthorized")})
 					return
 				}
@@ -785,7 +785,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(req.Username)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", req.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", req.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 			return
 		}
@@ -797,14 +797,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(throttleKey)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", "phone:"+req.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", "phone:"+req.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 			return
 		}
 		if !verifyPassword(req.Password, acc.Salt, acc.Hash) {
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(throttleKey)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.login_failed", acc.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", acc.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 			return
 		}
@@ -822,7 +822,7 @@ passwordOK:
 	if !acc.MustChangePassword && acc.Username == "admin" && req.Password == "admin" {
 		s.cfg.SetMustChangePassword(acc.Username)
 		acc.MustChangePassword = true
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, Message: Tz("log.default_credentials", acc.Username)})
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.default_credentials", acc.Username)})
 	}
 	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
 	// The requirement is revealed only AFTER the password checks out, so an
@@ -835,7 +835,7 @@ passwordOK:
 		if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, req.Code) {
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(acc.Username)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, Message: Tz("log.totp_failed", acc.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.totp_failed", acc.Username)})
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
 			return
 		}
@@ -863,7 +863,7 @@ passwordOK:
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, Message: Tz("log.login_success", acc.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, IP: ip, Message: Tz("log.login_success", acc.Username)})
 	resp := map[string]any{"ok": true}
 	// v5.4.0: force password change if admin reset was used
 	if acc.MustChangePassword {
@@ -928,7 +928,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 		name = uname
 	}
 	_ = s.cfg.SetUserProfile(name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email), strings.TrimSpace(req.Phone))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.update_profile", name)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.update_profile", name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
 }
 
@@ -991,7 +991,7 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	smsCodeMu.Unlock()
 	// TODO: Call actual SMS sending service here
 	// sendSMS(phone, code)
-	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: s.clientIP(r), Message: fmt.Sprintf("SMS code sent to %s (placeholder)", phone)})
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: fmt.Sprintf("SMS code sent to %s (placeholder)", phone)})
 	writeJSON(w, http.StatusOK, map[string]any{"message": Tr(r, "login.sms_sent")})
 }
 
@@ -1028,7 +1028,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", acc.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.change_password", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -1090,7 +1090,7 @@ func (s *Server) handleAccountInit(w http.ResponseWriter, r *http.Request) {
 		Name: sessionCookie, Value: "", Path: "/", HttpOnly: true,
 		Secure: isHTTPS(r), SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.change_password", name)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.change_password", name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name, "relogin": true})
 }
 
@@ -1144,7 +1144,7 @@ func (s *Server) handleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetUserMFA(acc.Username, true, strings.TrimSpace(req.Secret))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.enable_mfa", acc.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.enable_mfa", acc.Username)})
 	// Upgrade a restricted session (global MFA enforcement) to a full session.
 	s.auth.upgradeSession(r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1176,7 +1176,7 @@ func (s *Server) handleMFAGlobalSet(w http.ResponseWriter, r *http.Request) {
 	if req.Required {
 		action = Tz("log.global_mfa_on")
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: action})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: action})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mfa_required": req.Required})
 }
 
@@ -1200,6 +1200,6 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.SetUserMFA(acc.Username, false, "")
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.disable_mfa", acc.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.disable_mfa", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

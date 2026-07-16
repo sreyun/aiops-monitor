@@ -57,7 +57,7 @@ func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	// immediately receives the currently-outstanding alerts.
 	s.notifier.ResetState()
 	go s.notifier.Trigger()
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.update_config")})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.update_config")})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -68,7 +68,7 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mergeSecrets(&in, s.cfg.Get())
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.test_alert")})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.test_alert")})
 	if errs := s.notifier.SendTest(in); len(errs) > 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "errors": errs})
 		return
@@ -88,7 +88,7 @@ func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResetToken(w http.ResponseWriter, r *http.Request) {
 	tok := s.cfg.ResetToken()
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.reset_token")})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.reset_token")})
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 

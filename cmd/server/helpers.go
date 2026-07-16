@@ -34,6 +34,20 @@ func (s *Server) clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// actorIP returns both the operator identity and the real client IP for audit
+// logging. When the request carries an authenticated session the Actor is the
+// username; otherwise it falls back to the client IP. The IP is always the
+// resolved client address (honoring TrustProxy) regardless of authentication
+// state, so every log entry is fully traceable even for logged-in users behind
+// NAT / VPN / CDN.
+func (s *Server) actorIP(r *http.Request) (actor, ip string) {
+	ip = s.clientIP(r)
+	if u, ok := s.currentUser(r); ok && u.Username != "" {
+		return u.Username, ip
+	}
+	return ip, ip
+}
+
 func shortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]

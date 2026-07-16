@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -43,6 +44,10 @@ type linuxCollector struct {
 	procCache   procInfo
 	procCacheAt time.Time
 	procCacheMu sync.Mutex
+
+	// v5.4.0: security-awareness — track permission errors to avoid log spam.
+	secWarned    bool
+	secPermPaths []string // procfs paths that returned permission errors
 }
 
 type procInfo struct {
@@ -72,6 +77,9 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	now := time.Now()
 	m := shared.Metrics{CPUCores: runtime.NumCPU()}
 
+	// v5.4.0: Track permission errors across all collection points for diagnostics.
+	var permErrors []string
+
 	if ct, err := readCPUTimes(); err == nil {
 		if c.primed && ct.total > c.prevCPU.total {
 			totalDelta := ct.total - c.prevCPU.total
@@ -79,6 +87,8 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 			m.CPUPercent = round1(float64(totalDelta-idleDelta) / float64(totalDelta) * 100)
 		}
 		c.prevCPU = ct
+	} else if isPermissionError(err) {
+		permErrors = append(permErrors, "/proc/stat")
 	}
 
 	if mi, err := readMemInfo(); err == nil {
@@ -94,6 +104,8 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 			m.SwapUsed = sused
 			m.SwapPercent = round1(float64(sused) / float64(mi.swapTotal) * 100)
 		}
+	} else if isPermissionError(err) {
+		permErrors = append(permErrors, "/proc/meminfo")
 	}
 
 	var st syscall.Statfs_t
@@ -105,6 +117,8 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 		m.DiskTotal = total
 		m.DiskUsed = used
 		m.DiskPercent = round1(float64(used) / float64(total) * 100)
+	} else if err != nil && isPermissionError(err) {
+		permErrors = append(permErrors, c.diskPath+" (statfs)")
 	}
 
 	// Cached disk enumeration: syscall.Statfs per mount is expensive and disk
@@ -125,6 +139,8 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 		}
 		c.prevNet = nt
 		c.prevNetT = now
+	} else if isPermissionError(err) {
+		permErrors = append(permErrors, "/proc/net/dev")
 	}
 
 	m.Conns, m.NetConns = collectConnStats()
@@ -152,6 +168,8 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 
 	if l1, l5, l15, err := readLoadAvg(); err == nil {
 		m.Load1, m.Load5, m.Load15 = l1, l5, l15
+	} else if isPermissionError(err) {
+		permErrors = append(permErrors, "/proc/loadavg")
 	}
 
 	// Process count + names: cached to avoid reading /proc twice (countProcs
@@ -167,8 +185,24 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	m.ProcessNames = pi.names
 	if up, err := readUptime(); err == nil {
 		m.Uptime = up
+	} else if isPermissionError(err) {
+		permErrors = append(permErrors, "/proc/uptime")
 	}
 	m.GPUs = cachedGPUs(linuxGPUs)
+
+	// v5.4.0: Permission error diagnostics — log once with actionable guidance.
+	if len(permErrors) > 0 && !c.secWarned {
+		c.secWarned = true
+		c.secPermPaths = permErrors
+		slog.Error("数据采集权限不足：部分 /proc 路径被安全模块拦截",
+			"blocked_paths", permErrors,
+			"hint", "请检查 kysec/SELinux/AppArmor 配置，或尝试以下方法:",
+			"fix_1", "sudo setenforce 0  (临时关闭 SELinux，仅用于排查)",
+			"fix_2", "sudo kysec_set -m permissive  (临时切换 kysec 为宽容模式)",
+			"fix_3", "以 root 身份运行 Agent: sudo ./aiops-agent",
+			"fix_4", "为 Agent 添加 kysec 白名单: sudo kysec_adm -a /path/to/aiops-agent",
+		)
+	}
 
 	c.primed = true
 	return m, nil
@@ -393,6 +427,8 @@ func readUptime() (uint64, error) {
 // readProcInfo returns the process count and unique process names from /proc,
 // merging what was previously two independent scans (countProcs + listProcNames)
 // into a single ReadDir pass — halving /proc directory reads.
+// When /proc/[pid]/comm is blocked by security modules, it degrades to
+// /proc/[pid]/cmdline (which often has more permissive access controls).
 func readProcInfo() procInfo {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -400,6 +436,7 @@ func readProcInfo() procInfo {
 	}
 	seen := map[string]bool{}
 	var names []string
+	restricted := false
 	count := 0
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -417,18 +454,54 @@ func readProcInfo() procInfo {
 		}
 		count++
 		if len(names) < 256 {
-			b, err := os.ReadFile("/proc/" + e.Name() + "/comm")
-			if err != nil || len(b) == 0 {
+			name := readProcNameDegraded(e.Name())
+			if name == "restricted" {
+				restricted = true
 				continue
 			}
-			name := strings.TrimSpace(string(b))
 			if name != "" && !seen[name] {
 				seen[name] = true
 				names = append(names, name)
 			}
 		}
 	}
+	// If all comm reads were blocked, mark as "restricted" so the server
+	// knows it's a permission issue, not an empty process list.
+	if restricted && len(names) == 0 {
+		names = append(names, "restricted")
+	}
 	return procInfo{count: count, names: names}
+}
+
+// readProcNameDegraded reads the process name for a given PID, falling back
+// from /proc/[pid]/comm to /proc/[pid]/cmdline when security modules block
+// comm access. Returns "restricted" if both fail due to permissions.
+func readProcNameDegraded(pid string) string {
+	// Primary: /proc/[pid]/comm (cleaner, just the process name)
+	b, err := os.ReadFile("/proc/" + pid + "/comm")
+	if err == nil && len(b) > 0 {
+		return strings.TrimSpace(string(b))
+	}
+	// Degraded: /proc/[pid]/cmdline (argv[0], may include path)
+	if isPermissionError(err) {
+		cb, cerr := os.ReadFile("/proc/" + pid + "/cmdline")
+		if cerr == nil && len(cb) > 0 {
+			// cmdline is null-separated; take the first field (program name)
+			cmdline := string(cb)
+			if idx := strings.IndexByte(cmdline, 0); idx > 0 {
+				cmdline = cmdline[:idx]
+			}
+			// Extract basename from path
+			if idx := strings.LastIndexByte(cmdline, '/'); idx >= 0 {
+				cmdline = cmdline[idx+1:]
+			}
+			return strings.TrimSpace(cmdline)
+		}
+		if isPermissionError(cerr) {
+			return "restricted"
+		}
+	}
+	return ""
 }
 
 // enumLinuxDisks returns usage for every real filesystem mount, de-duplicated

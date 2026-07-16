@@ -534,7 +534,14 @@ async function incidentAction(id, act){
       const tk=await r.json().catch(()=>({}));
       toast(`已升级为工单 #${tk.id||"?"}`,"ok");
     }
-    else if (act==="diagnose"){ toast("AI 诊断中，请稍候…","ok"); await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST"}); }
+    else if (act==="diagnose"){
+      toast("AI 诊断中，请稍候…","ok");
+      const r=await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream:true})});
+      if(r.ok && r.headers.get("content-type")?.includes("event-stream")){
+        // SSE 流式响应：等待完成后再刷新详情
+        await readSSEStream(r,()=>{},()=>{},()=>{});
+      }
+    }
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
   } catch(e){ toast("操作失败: "+e,"err"); }
@@ -592,14 +599,27 @@ function renderDiagnosisChat(){
   if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击下方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
   el.innerHTML=hist.map((m,i)=>{
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
+    let body;
+    if(m.role==="assistant" && m._streaming && m._loading){
+      // 等待 AI 响应：显示动态加载提示
+      body=`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||"正在分析…")}</span></div>`;
+    } else if(m.role==="assistant" && m._streaming){
+      // 流式中：显示纯文本 + 闪烁光标，避免未完成 Markdown 导致渲染抖动
+      body=`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`;
+    } else if(m.role==="assistant" && m.content!=="思考中…" && !m.content.startsWith("❌")){
+      body=renderAIMarkdown(filterDisplayContent(m.content||""));
+    } else {
+      body=esc(m.content);
+    }
     let fb="";
-    if(m.role==="assistant" && m.content!=="思考中…"){
+    if(m.role==="assistant" && m.content!=="思考中…" && !m._streaming){
       fb=`<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="有用">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="无用">👎</button></div>`;
     }
-    return `<div class="ai-chat-msg ${cls}">${esc(m.content)}${fb}</div>`;
+    return `<div class="ai-chat-msg ${cls}">${body}${fb}</div>`;
   }).join("");
   // Wire feedback buttons
   el.querySelectorAll("[data-fb]").forEach(b=>b.onclick=()=>sendDiagnosisFeedback(parseInt(b.dataset.idx),b.dataset.fb==="helpful"));
+  el.querySelectorAll(".ai-chat-msg.ai").forEach(d=>addCopyTool(d,d.textContent));
   el.scrollTop=el.scrollHeight;
 }
 async function sendDiagnosisFeedback(idx,helpful){
@@ -620,42 +640,53 @@ async function sendDiagnosisChatMsg(){
   window._incDiagHistory.push({role:"user",content:msg});
   renderDiagnosisChat();
   el.value=""; el.disabled=true; $("incDiagSendBtn").disabled=true;
-  // Add a placeholder for AI response
-  window._incDiagHistory.push({role:"assistant",content:"思考中…"});
+  // Add a placeholder for AI response with animated loading
+  const aiMsg={role:"assistant",content:"",_streaming:true,_loading:true};
+  window._incDiagHistory.push(aiMsg);
   renderDiagnosisChat();
+  // 动画加载提示
+  const loadingPhrases=["🔍 正在分析事件上下文…","📊 检索历史相似案例…","🤖 AI 正在思考…"];
+  let loadingIdx=0;
+  const loadingTimer=setInterval(()=>{
+    loadingIdx=(loadingIdx+1)%loadingPhrases.length;
+    if(aiMsg._loading){ aiMsg.content=loadingPhrases[loadingIdx]; renderDiagnosisChat(); }
+  },2000);
   try {
+    const cleanHist=window._incDiagHistory.filter(m=>!m._streaming&&m.content!=="思考中…").map(m=>({role:m.role,content:m.content}));
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,history:window._incDiagHistory.filter(m=>m.content!=="思考中…").slice(0,-1),include_terminal:!!$("incTermCheck")?.checked,stream:true})
+      body:JSON.stringify({message:msg,history:cleanHist,include_terminal:!!$("incTermCheck")?.checked,stream:true})
     });
     if(!r.ok){ throw new Error("HTTP "+r.status); }
-    // SSE streaming: replace placeholder with incremental content
-    let streamed=false;
+    // SSE streaming: 流中显示纯文本+光标，流结束后渲染完整 Markdown
+    let renderThrottle=null;
+    const throttledRender=()=>{
+      if(renderThrottle) return;
+      renderThrottle=setTimeout(()=>{ renderThrottle=null; renderDiagnosisChat(); },120);
+    };
     await readSSEStream(r,
       (delta,fullText)=>{
-        if(!streamed){ window._incDiagHistory.pop(); streamed=true; }
-        // Update last message in-place
-        const last=window._incDiagHistory[window._incDiagHistory.length-1];
-        if(last&&last.role==="assistant"){ last.content=fullText; }
-        else { window._incDiagHistory.push({role:"assistant",content:fullText}); }
-        renderDiagnosisChat();
+        if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
+        aiMsg.content=fullText;
+        throttledRender();
       },
       (err)=>{
-        window._incDiagHistory.pop();
-        window._incDiagHistory.push({role:"assistant",content:"❌ "+err});
+        clearInterval(loadingTimer); aiMsg._loading=false; aiMsg._streaming=false;
+        aiMsg.content="❌ "+err;
         renderDiagnosisChat();
       },
       (fullText)=>{
-        if(!streamed){
-          window._incDiagHistory.pop();
-          window._incDiagHistory.push({role:"assistant",content:fullText||"（空回复）"});
-        }
+        clearInterval(loadingTimer); aiMsg._loading=false;
+        aiMsg._streaming=false; // 流结束：下次 render 使用完整 Markdown
+        aiMsg.content=fullText||aiMsg.content||"（空回复）";
+        if(renderThrottle){ clearTimeout(renderThrottle); renderThrottle=null; }
         renderDiagnosisChat();
       }
     );
   } catch(e){
-    window._incDiagHistory.pop();
-    window._incDiagHistory.push({role:"assistant",content:"❌ 网络错误: "+e});
+    clearInterval(loadingTimer);
+    aiMsg._loading=false; aiMsg._streaming=false;
+    aiMsg.content="❌ 网络错误: "+e;
     renderDiagnosisChat();
   }
   el.disabled=false; $("incDiagSendBtn").disabled=false; el.focus();
@@ -1599,7 +1630,8 @@ async function sendAIChat(){
   if(log){ const d=document.createElement("div"); d.className="ai-chat-msg me"; d.innerHTML=esc(msg||"（附件）")+attNote; log.appendChild(d); log.scrollTop=log.scrollHeight; }
   AI_CHAT_HISTORY.push({role:"user",content:msg||"（附件）"});
   AI_ATTACHMENTS=[]; renderAttachments();
-  const pending=appendChatMsg("assistant","🤔 思考中…");
+  const pending=appendChatMsg("assistant","");
+  if(pending) pending.innerHTML='<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">正在思考…</span></div>';
   let answer="";
   try{
     const images=atts.filter(a=>a.kind==="image").map(a=>({mime:a.mime,data:a.data}));
@@ -1617,20 +1649,38 @@ async function sendAIChat(){
         : (s.state==="ok" ? "✓" : "✗");
       return `<span class="ai-tool-chip ${s.state}">${ic}<span>${esc(s.name)}</span></span>`;
     }).join("")+'</div>' : "";
-    const paint=()=>{ if(pending) pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…")); };
+    // 流式渲染节流：每 150ms 最多更新一次，流中显示纯文本+光标，避免 Markdown 解析抖动
+    let streamTimer=null, needsPaint=false;
+    const paintStream=()=>{
+      if(!pending) return;
+      pending.innerHTML=toolTraceHTML()
+        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+'</span><span class="ai-stream-cursor">▍</span></div>';
+    };
+    const schedulePaint=()=>{
+      if(streamTimer){ needsPaint=true; return; }
+      paintStream();
+      streamTimer=setTimeout(()=>{
+        streamTimer=null;
+        if(needsPaint){ needsPaint=false; paintStream(); }
+      },150);
+    };
+    const paintFinal=()=>{
+      if(streamTimer){ clearTimeout(streamTimer); streamTimer=null; needsPaint=false; }
+      if(pending) pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"));
+    };
     await readSSEStream(r,
       (delta,fullText)=>{
         const stick=aiChatStick();
-        if(!streamed){ if(pending) pending.textContent=""; streamed=true; }
+        if(!streamed){ streamed=true; }
         answer=filterDisplayContent(fullText);
-        paint();
+        schedulePaint();
         if(stick) aiChatToBottom();
       },
-      (err)=>{ if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
+      (err)=>{ if(streamTimer){ clearTimeout(streamTimer); streamTimer=null; } if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
       (fullText)=>{
         if(pending){
           answer=filterDisplayContent(fullText||answer||"");
-          pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"（空回复）"));
+          paintFinal();
         }
         aiChatToBottom();
       },
@@ -1640,8 +1690,8 @@ async function sendAIChat(){
         if(!t||!t.name) return;
         if(t.state==="run") toolStates.push({name:t.name,state:"run"});
         else { for(let i=toolStates.length-1;i>=0;i--){ if(toolStates[i].name===t.name&&toolStates[i].state==="run"){ toolStates[i].state=t.state; break; } } }
-        if(pending && !streamed){ pending.textContent=""; streamed=true; }
-        paint();
+        if(pending && !streamed){ streamed=true; }
+        schedulePaint();
         if(aiChatStick()) aiChatToBottom();
       }
     );

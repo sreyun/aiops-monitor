@@ -57,12 +57,16 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 		return
 	}
 	slog.Info("端口转发通道已就绪，等待服务端呼叫…", "server", t.server)
+	backoff := newBackoffTimer(1*time.Second, 60*time.Second)
 	for {
 		sid, targetPort, mode, ok := a.forwardWait(t.server)
 		if !ok {
-			time.Sleep(3 * time.Second)
+			d := backoff.next()
+			slog.Debug("转发通道连接失败，指数退避等待", "delay", d, "retry", backoff.retry)
+			time.Sleep(d)
 			continue
 		}
+		backoff.reset() // success: reset backoff
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}

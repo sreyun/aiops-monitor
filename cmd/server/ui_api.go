@@ -123,7 +123,7 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	if cat == "" {
 		msg = Tz("log.clear_category", shortID(id))
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": id, "category": cat})
 }
 
@@ -135,7 +135,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "host_id": id})
 }
 
@@ -249,7 +249,7 @@ func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 	if req.Scope != "" {
 		msg = Tz("log.alert_ack_scope", shortID(req.HostID), req.Type, req.Scope)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "acknowledged"})
 }
 
@@ -265,7 +265,7 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 	if req.Scope != "" {
 		msg = Tz("log.alert_silence_scope", shortID(req.HostID), req.Type, req.Scope)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: msg})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "silenced"})
 }
 
@@ -277,6 +277,6 @@ func (s *Server) handleAlertClear(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope
 	s.store.ClearAlertState(key)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.alert_clear", shortID(req.HostID), req.Type)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.alert_clear", shortID(req.HostID), req.Type)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": ""})
 }

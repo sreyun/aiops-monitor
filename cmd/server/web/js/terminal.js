@@ -3,6 +3,69 @@ let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
 let TERM_ACTIVE = -1;    // active tab index
 let TERM_RESIZE = null;  // window resize listener
 
+/* ---------- v5.4.0: Web Worker 心跳（绕过浏览器后台 Tab 节流）---------- */
+// 现代浏览器对后台 Tab 的 setTimeout/setInterval 节流到最低 1 分钟，
+// 导致服务端 25s ping 的 pong 可能延迟 → 代理/NAT 认为连接空闲超时。
+// Web Worker 不受此限制，每 15s 发送一个 keepalive 帧保持连接活跃。
+let _termHeartbeatWorker = null;
+function ensureTermHeartbeatWorker() {
+  if (_termHeartbeatWorker) return;
+  try {
+    const blob = new Blob([`
+      let timer = null;
+      self.onmessage = function(e) {
+        if (e.data === "start") {
+          if (timer) clearInterval(timer);
+          timer = setInterval(function() { self.postMessage("tick"); }, 15000);
+        } else if (e.data === "stop") {
+          if (timer) { clearInterval(timer); timer = null; }
+        }
+      };
+    `], { type: "application/javascript" });
+    _termHeartbeatWorker = new Worker(URL.createObjectURL(blob));
+    _termHeartbeatWorker.onmessage = () => {
+      // Worker tick: send keepalive to all connected terminal tabs
+      for (const tab of TERM_TABS) {
+        if (tab.ws && tab.ws.readyState === 1) {
+          try {
+            // Send a single 'i' byte (0x69) with NO payload — server skips
+            // empty payloads (see handleTerminal: len(payload)==0 → continue)
+            // so this only keeps the TCP connection alive without affecting PTY.
+            tab.ws.send(new Uint8Array([0x69]));
+          } catch (_) {}
+        }
+      }
+    };
+    _termHeartbeatWorker.postMessage("start");
+  } catch (_) {
+    // Worker creation failed — fallback: use setInterval (will be throttled in background)
+    setInterval(() => {
+      for (const tab of TERM_TABS) {
+        if (tab.ws && tab.ws.readyState === 1) {
+          try { tab.ws.send(new Uint8Array([0x69])); } catch (_) {}
+        }
+      }
+    }, 15000);
+  }
+}
+
+/* ---------- v5.4.0: 页面可见性变化 — Tab 恢复时立即检查并重连 ---------- */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  for (const tab of TERM_TABS) {
+    if (!tab.ws || tab.ws.readyState === 3 /* CLOSED */ || tab.ws.readyState === 2 /* CLOSING */) {
+      // Auto-reconnect when tab becomes visible and WS is dead
+      if (tab._autoReconnecting) continue;
+      tab._autoReconnecting = true;
+      tab.retry = 0;
+      setTimeout(() => {
+        tab._autoReconnecting = false;
+        if (!tab.ws || tab.ws.readyState !== 1) connectTermWS(tab);
+      }, 500);
+    }
+  }
+});
+
 /* ---------- v5.3.0: 终端二次认证 ---------- */
 let TERM_AUTH_VERIFIED = false;    // 当前会话是否已验证终端密码
 let TERM_AUTH_CHECKING = false;    // 是否正在执行认证流程
@@ -477,22 +540,30 @@ function createTermTab(id, name, tabName) {
   $("termMask").classList.remove("maximized");
   const mb = $("termMaxBtn"); if (mb) mb.title = I18N.t("ui.maximize_window");
   $("termMask").classList.add("show");
+  ensureTermHeartbeatWorker(); // v5.4.0: 启动 Web Worker 心跳
   connectTermWS(tabObj);
 }
 
 function connectTermWS(tab) {
+  tab._closed = false; // v5.4.0: clear closed flag so auto-reconnect works
   const screen = tab.screenEl, vt = tab.vt;
-  setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry}/3)` : I18N.t("ui.connecting"), "");
+  setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry})` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
-  ws.onopen = () => { tab.retry = 0; setTermStatus(I18N.t("ui.connected"), "on");
+  ws.onopen = () => { tab.retry = 0; tab._manualReconnect = false; setTermStatus(I18N.t("ui.connected"), "on");
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot on"; } }
-    if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus(); requestAnimationFrame(doResize); };
+    if (tab.inputEl) tab.inputEl.focus({ preventScroll: true }); else screen.focus();
+    // Reconnect resize: 重连成功后自动发送 resize 帧，恢复终端窗口尺寸
+    requestAnimationFrame(doResize);
+    // Hide manual reconnect overlay if visible
+    const overlay = tab.screenEl && tab.screenEl.querySelector(".term-reconnect-overlay");
+    if (overlay) overlay.remove();
+  };
   ws.onmessage = ev => {
     const data = new Uint8Array(ev.data);
     // Check for ZMODEM/file-transfer frame: [0xFF][0xFE][type][len:4 BE][payload]
@@ -504,13 +575,51 @@ function connectTermWS(tab) {
     const text = (typeof ev.data === "string") ? ev.data : vt.dec.decode(data, { stream: true });
     vt.feed(text);
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     setTermStatus(I18N.t("ui.disconnected"), "off");
     if (tab.ws === ws) tab.ws = null;
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
     if (dockItem) { const dot = dockItem.querySelector(".dock-dot"); if (dot) { dot.className = "dock-dot off"; } }
 
+    // v5.4.0: 自动重连 — 指数退避（1s, 2s, 4s, 8s, 最大 30s），最多重试 50 次
+    // 覆盖场景：浏览器后台节流、网络抖动、代理超时等导致的非主动断开
+    const MAX_RETRY = 50;
+    const MANUAL_THRESHOLD = 10; // 连续失败 10 次后降级为手动重连
+    if (!tab._closed && tab.retry < MAX_RETRY && !tab._manualReconnect) {
+      tab.retry = (tab.retry || 0) + 1;
+      // 降级为手动重连模式：避免后台无限重试浪费资源
+      if (tab.retry >= MANUAL_THRESHOLD) {
+        tab._manualReconnect = true;
+        setTermStatus(I18N.t("ui.disconnected"), "off");
+        // Show clickable reconnect overlay
+        const overlay = document.createElement("div");
+        overlay.className = "term-reconnect-overlay";
+        overlay.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:rgba(0,0,0,0.6);cursor:pointer;";
+        overlay.innerHTML = `<div style="text-align:center;color:#ccc;font-size:14px;">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+          <div>${I18N.t("misc.reconnect_hint") || "点击重新连接"}</div>
+        </div>`;
+        overlay.addEventListener("click", () => {
+          overlay.remove();
+          tab._manualReconnect = false;
+          tab.retry = 0;
+          connectTermWS(tab);
+        });
+        if (tab.screenEl && tab.screenEl.isConnected) {
+          tab.screenEl.style.position = "relative";
+          tab.screenEl.appendChild(overlay);
+        }
+        return;
+      }
+      const delay = Math.min(1000 * Math.pow(2, tab.retry - 1), 30000);
+      setTermStatus(`${I18N.t("misc.reconnecting")}(${tab.retry}/${MAX_RETRY})`, "");
+      setTimeout(() => {
+        if (!tab._closed && tab.screenEl && tab.screenEl.isConnected) {
+          connectTermWS(tab);
+        }
+      }, delay);
+    }
   };
   ws.onerror = () => setTermStatus(I18N.t("ui.connect_error"), "off");
 }
@@ -529,6 +638,7 @@ function switchTermTab(idx) {
 function closeTermTab(idx) {
   if (idx < 0 || idx >= TERM_TABS.length) return;
   const tab = TERM_TABS[idx];
+  tab._closed = true; // v5.4.0: prevent auto-reconnect
   if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
   tab.screenEl.remove(); tab.tabEl.remove();
   // 清理对应的 dock 卡片
@@ -543,7 +653,7 @@ function closeTermTab(idx) {
 }
 
 function closeAllTermTabs() {
-  TERM_TABS.forEach(t => { if (t.ws) { try { t.ws.close(); } catch(e) {} } });
+  TERM_TABS.forEach(t => { t._closed = true; if (t.ws) { try { t.ws.close(); } catch(e) {} } });
   TERM_TABS = []; TERM_ACTIVE = -1;
   const sc = $("termScreens"); if (sc) sc.innerHTML = "";
   const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
@@ -560,6 +670,10 @@ function reconnectTermTab(tab) {
   // 关闭旧连接
   if (tab.ws) { try { tab.ws.close(); } catch(e) {} tab.ws = null; }
   tab.retry = 0;
+  tab._manualReconnect = false;
+  // Remove manual reconnect overlay if present
+  const overlay = tab.screenEl && tab.screenEl.querySelector(".term-reconnect-overlay");
+  if (overlay) overlay.remove();
   connectTermWS(tab);
 }
 

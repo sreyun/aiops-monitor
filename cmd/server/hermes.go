@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aiops-monitor/shared"
 )
 
 // ============================================================================
@@ -159,6 +161,32 @@ func (h *HermesCore) registerTools() {
 			"required": []string{"datasource", "query"},
 		},
 		Execute: h.execQueryDataSource,
+	}
+	// --- New tools for enhanced AI capabilities ---
+	h.tools["list_recent_changes"] = HermesTool{
+		Name:        "list_recent_changes",
+		Description: "查询主机最近 N 小时的指标变化趋势（CPU/内存/磁盘增长率），帮助判断是否恶化中。返回结构化 JSON 包含趋势方向（上升/下降/稳定）和变化幅度。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"hours":   map[string]any{"type": "integer", "description": "查询最近 N 小时（默认 6）"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execListRecentChanges,
+	}
+	h.tools["check_host_health"] = HermesTool{
+		Name:        "check_host_health",
+		Description: "综合评估主机健康状态：聚合当前指标、活跃告警、日志异常，返回 healthy/degraded/critical 分级结论和详细分析。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execCheckHostHealth,
 	}
 }
 
@@ -528,6 +556,208 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 	return string(output), nil
 }
 
+// trendArrow returns a direction indicator for a numeric change.
+func trendArrow(delta float64) string {
+	if delta > 2 {
+		return "↑"
+	}
+	if delta < -2 {
+		return "↓"
+	}
+	return "→"
+}
+
+// execListRecentChanges queries historical samples and computes per-metric trends.
+func (h *HermesCore) execListRecentChanges(args map[string]any) (string, error) {
+	hostID, _ := args["host_id"].(string)
+	hours := 6
+	if v, ok := args["hours"].(float64); ok && v > 0 {
+		hours = int(v)
+	}
+	if hostID == "" {
+		return "请指定 host_id", nil
+	}
+	name := hostID
+	if hst := h.resolveHostRef(hostID); hst != nil {
+		hostID, name = hst.ID, hst.Hostname
+	}
+	now := time.Now().Unix()
+	from := now - int64(hours)*3600
+	var samples []shared.Sample
+	if h.s.vm != nil && h.s.vm.enabled() {
+		samples, _ = h.s.vm.queryHistory(hostID, from, now)
+	}
+	if len(samples) == 0 {
+		samples, _ = h.s.store.GetHistory(hostID, from, now)
+	}
+	if len(samples) < 2 {
+		return fmt.Sprintf("主机 %s 最近 %d 小时历史数据不足（仅 %d 个样本），无法计算趋势", name, hours, len(samples)), nil
+	}
+	// Split into 3 windows: early / mid / late for trend direction detection.
+	n := len(samples)
+	third := n / 3
+	if third < 1 {
+		third = 1
+	}
+	early := samples[:third]
+	late := samples[n-third:]
+	avg := func(ss []shared.Sample, field func(shared.Sample) float64) float64 {
+		if len(ss) == 0 {
+			return 0
+		}
+		var sum float64
+		for _, s := range ss {
+			sum += field(s)
+		}
+		return sum / float64(len(ss))
+	}
+	cpuEarly := avg(early, func(s shared.Sample) float64 { return s.CPUPercent })
+	cpuLate := avg(late, func(s shared.Sample) float64 { return s.CPUPercent })
+	memEarly := avg(early, func(s shared.Sample) float64 { return s.MemPercent })
+	memLate := avg(late, func(s shared.Sample) float64 { return s.MemPercent })
+	diskEarly := avg(early, func(s shared.Sample) float64 { return s.DiskPercent })
+	diskLate := avg(late, func(s shared.Sample) float64 { return s.DiskPercent })
+	loadEarly := avg(early, func(s shared.Sample) float64 { return s.Load1 })
+	loadLate := avg(late, func(s shared.Sample) float64 { return s.Load1 })
+
+	type metricTrend struct {
+		Name  string  `json:"metric"`
+		Early float64 `json:"early_avg"`
+		Late  float64 `json:"late_avg"`
+		Delta float64 `json:"delta"`
+		Arrow string  `json:"trend"`
+	}
+	trends := []metricTrend{
+		{"CPU使用率(%)", cpuEarly, cpuLate, cpuLate - cpuEarly, trendArrow(cpuLate - cpuEarly)},
+		{"内存使用率(%)", memEarly, memLate, memLate - memEarly, trendArrow(memLate - memEarly)},
+		{"磁盘使用率(%)", diskEarly, diskLate, diskLate - diskEarly, trendArrow(diskLate - diskEarly)},
+		{"负载(Load1)", loadEarly, loadLate, loadLate - loadEarly, trendArrow((loadLate - loadEarly) * 10)},
+	}
+	out, _ := json.Marshal(map[string]any{
+		"host":    name,
+		"hours":   hours,
+		"samples": n,
+		"trends":  trends,
+	})
+	return string(out), nil
+}
+
+// execCheckHostHealth performs a comprehensive health assessment of a host.
+func (h *HermesCore) execCheckHostHealth(args map[string]any) (string, error) {
+	hostID, _ := args["host_id"].(string)
+	if hostID == "" {
+		return "请指定 host_id", nil
+	}
+	name := hostID
+	if hst := h.resolveHostRef(hostID); hst != nil {
+		hostID, name = hst.ID, hst.Hostname
+	}
+	host := h.s.hostByID(hostID)
+	if host == nil {
+		return fmt.Sprintf("未找到主机 %q", hostID), nil
+	}
+	// Determine online status.
+	now := time.Now().Unix()
+	offlineSec := int64(h.s.cfg.Thresholds().OfflineAfter.Seconds())
+	online := now-host.LastSeen <= offlineSec
+
+	type healthResult struct {
+		Host      string   `json:"host"`
+		Status    string   `json:"status"` // healthy | degraded | critical
+		Online    bool     `json:"online"`
+		Issues    []string `json:"issues,omitempty"`
+		Metrics   string   `json:"metrics_summary"`
+		Alerts    int      `json:"active_alerts"`
+		ErrorLogs int      `json:"recent_errors"`
+	}
+	result := healthResult{Host: name, Online: online}
+
+	if !online {
+		result.Status = "critical"
+		result.Issues = append(result.Issues, "主机离线")
+		out, _ := json.Marshal(result)
+		return string(out), nil
+	}
+	if host.Latest == nil {
+		result.Status = "degraded"
+		result.Issues = append(result.Issues, "无指标数据")
+		out, _ := json.Marshal(result)
+		return string(out), nil
+	}
+	m := host.Latest
+	result.Metrics = fmt.Sprintf("CPU %.1f%% | 内存 %.1f%% | 磁盘 %.1f%% | Load %.2f/%.2f | 进程 %d",
+		m.CPUPercent, m.MemPercent, m.DiskPercent, m.Load1, m.Load5, m.ProcCount)
+
+	// Check thresholds.
+	th := h.s.cfg.Thresholds()
+	var score int
+	if m.CPUPercent >= th.CPUCrit {
+		result.Issues = append(result.Issues, fmt.Sprintf("CPU 使用率严重过高 %.1f%% (阈值 %.0f%%)", m.CPUPercent, th.CPUCrit))
+		score += 3
+	} else if m.CPUPercent >= th.CPUWarn {
+		result.Issues = append(result.Issues, fmt.Sprintf("CPU 使用率偏高 %.1f%% (阈值 %.0f%%)", m.CPUPercent, th.CPUWarn))
+		score++
+	}
+	if m.MemPercent >= th.MemCrit {
+		result.Issues = append(result.Issues, fmt.Sprintf("内存使用率严重过高 %.1f%% (阈值 %.0f%%)", m.MemPercent, th.MemCrit))
+		score += 3
+	} else if m.MemPercent >= th.MemWarn {
+		result.Issues = append(result.Issues, fmt.Sprintf("内存使用率偏高 %.1f%% (阈值 %.0f%%)", m.MemPercent, th.MemWarn))
+		score++
+	}
+	if m.DiskPercent >= th.DiskCrit {
+		result.Issues = append(result.Issues, fmt.Sprintf("磁盘使用率严重过高 %.1f%% (阈值 %.0f%%)", m.DiskPercent, th.DiskCrit))
+		score += 3
+	} else if m.DiskPercent >= th.DiskWarn {
+		result.Issues = append(result.Issues, fmt.Sprintf("磁盘使用率偏高 %.1f%% (阈值 %.0f%%)", m.DiskPercent, th.DiskWarn))
+		score++
+	}
+	if m.Load1 > float64(m.CPUCores)*2 {
+		result.Issues = append(result.Issues, fmt.Sprintf("负载过高 Load1=%.2f (%d核)", m.Load1, m.CPUCores))
+		score += 2
+	}
+
+	// Count active alerts for this host.
+	if h.s.notifier != nil {
+		for _, a := range h.s.notifier.ActiveAlerts() {
+			if a.HostID == hostID && a.Status == "" {
+				result.Alerts++
+			}
+		}
+	}
+	if result.Alerts > 0 {
+		score += result.Alerts
+	}
+
+	// Check recent error logs.
+	if h.s.logs != nil {
+		errs := h.s.logs.recentErrors(now-1800, 50)
+		for _, e := range errs {
+			if e.HostID == hostID {
+				result.ErrorLogs++
+			}
+		}
+	}
+	if result.ErrorLogs > 5 {
+		score++
+	}
+
+	// Determine status based on cumulative score.
+	switch {
+	case score >= 5:
+		result.Status = "critical"
+	case score >= 2:
+		result.Status = "degraded"
+	default:
+		result.Status = "healthy"
+		if len(result.Issues) == 0 {
+			result.Issues = append(result.Issues, "各项指标正常")
+		}
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
 // --- Core loop: Observe → Reason → Act ---
 
 // Chat runs a Hermes conversation turn with Function Calling support.
@@ -544,9 +774,46 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 	// Build system prompt from cached templates + rules
 	sys := h.buildSystemPrompt()
 
+	// RAG: 检索历史记忆注入 system prompt，让 Agent 能跨会话复用已有知识
+	// Token 预算管理：动态裁剪 RAG 记忆，确保 system prompt 不超过 8000 token
+	ragText := h.s.retrieveMemoryForPrompt("chat", userMsg, 8)
+	sysBudget := 8000 - estimateTokens(sys)
+	if sysBudget < 500 {
+		sysBudget = 500 // 最低保留 500 token 给 RAG
+	}
+	ragTokens := estimateTokens(ragText)
+	if ragTokens > sysBudget {
+		// 截断 RAG 文本以符合预算
+		ragRunes := []rune(ragText)
+		for len(ragRunes) > 100 && estimateTokens(string(ragRunes)) > sysBudget {
+			ragRunes = ragRunes[:len(ragRunes)*sysBudget/ragTokens]
+		}
+		ragText = string(ragRunes) + "\n…(RAG 记忆已截断以符合 token 预算)"
+	}
+	sys += ragText
+
 	// Build messages
 	msgs := []map[string]string{{"role": "system", "content": sys}}
-	msgs = append(msgs, session.Messages...)
+	// Token 预算管理：限制历史轮次，超出的旧轮次只保留摘要
+	const maxHistoryTurns = 20
+	historyMsgs := session.Messages
+	if len(historyMsgs) > maxHistoryTurns*2 { // 每轮 user+assistant = 2 条消息
+		// 保留最近 maxHistoryTurns 轮，旧轮次用摘要替代
+		oldMsgs := historyMsgs[:len(historyMsgs)-maxHistoryTurns*2]
+		recentMsgs := historyMsgs[len(historyMsgs)-maxHistoryTurns*2:]
+		var summaryB strings.Builder
+		summaryB.WriteString("[历史对话摘要] ")
+		for _, m := range oldMsgs {
+			if c := m["content"]; c != "" {
+				summaryB.WriteString(m["role"] + ": " + truncateStr(c, 200) + " | ")
+			}
+		}
+		historyMsgs = append([]map[string]string{
+			{"role": "user", "content": summaryB.String()},
+			{"role": "assistant", "content": "[已总结以上历史对话]"},
+		}, recentMsgs...)
+	}
+	msgs = append(msgs, historyMsgs...)
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop
@@ -566,6 +833,11 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 		if err == nil && newID > 0 {
 			session.ID = newID
 		}
+	}
+	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
+	if strings.TrimSpace(fullReply) != "" {
+		go h.s.rememberAI("chat", fmt.Sprintf("hermes:%d", session.ID),
+			"【用户】\n"+userMsg+"\n\n【AI】\n"+fullReply)
 	}
 	return fullReply, nil
 }
@@ -647,7 +919,12 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行失败：%v]\n", tc.Name, err))
 			} else {
 				sendTool(tc.Name, "ok")
-				toolResults.WriteString(fmt.Sprintf("工具 %s 结果：\n%s\n", tc.Name, result))
+				// Token 预算：工具结果截断到 4000 字符，避免单次工具返回擑爆 prompt
+				truncResult := result
+				if len([]rune(truncResult)) > 4000 {
+					truncResult = string([]rune(truncResult)[:4000]) + "\n…(工具结果已截断)"
+				}
+				toolResults.WriteString(fmt.Sprintf("工具 %s 结果：\n%s\n", tc.Name, truncResult))
 			}
 		}
 		// 把模型本轮的工具调用 + 真实结果追加进上下文，供下一轮推理
@@ -1011,3 +1288,19 @@ func sanitizeHistory(history []map[string]string) []map[string]string {
 	}
 	return out
 }
+
+// estimateTokens estimates the token count of a mixed Chinese/English text.
+// Chinese characters typically use ~1.5 tokens each; ASCII ~0.5 tokens each.
+func estimateTokens(text string) int {
+	tokens := 0
+	for _, r := range text {
+		if r > 127 {
+			tokens += 2 // CJK / non-ASCII: ~1.5-2 tokens
+		} else {
+			tokens++ // ASCII: 1 token per char (conservative)
+		}
+	}
+	// Rough approximation: 1 token ≈ 3-4 chars for English, 1-2 chars for Chinese
+	return tokens * 2 / 3
+}
+

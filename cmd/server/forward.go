@@ -967,11 +967,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	user, _ := s.currentUser(r)
-	operator := s.clientIP(r)
-	if user.Username != "" {
-		operator = user.Username
-	}
+	operator, clientIP := s.actorIP(r)
 	listenHost := s.cfg.ForwardListenAddr()
 	// 端口范围批量转发：target_port..target_port_end（含）。每个端口一条独立规则，
 	// 复用单端口的监听/会话/隧道全套机制（Agent 无需改动）。范围模式下本地端口镜像
@@ -1009,7 +1005,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		go s.serveRule(rule)
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Host: hostname,
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: hostname,
 			Message: Tz("log.forward_create", rule.id, hostname, p, rule.listenAddr)})
 		created = append(created, forwardInfo{
 			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
@@ -1041,13 +1037,9 @@ func (s *Server) handleForwardDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
 		return
 	}
-	user, _ := s.currentUser(r)
-	operator := s.clientIP(r)
-	if user.Username != "" {
-		operator = user.Username
-	}
+	operator, clientIP := s.actorIP(r)
 	s.forward.removeRule(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: rule.hostname,
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: rule.hostname,
 		Message: Tz("log.forward_close", rule.hostname, rule.targetPort)})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -1255,6 +1247,7 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	user, _ := s.currentUser(r)
 	operator := s.clientIP(r)
+	clientIP := operator
 	if user.Username != "" {
 		operator = user.Username
 	}
@@ -1482,7 +1475,7 @@ readResponse:
 					n, _ := w.Write(decoded)
 					s.forward.stats.addBytes(int64(n))
 					s.forward.stats.addLatency(time.Since(start).Milliseconds())
-					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+					s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: hostname,
 						Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 					return
 				}
@@ -1499,7 +1492,7 @@ readResponse:
 				n, _ := w.Write(body)
 				s.forward.stats.addBytes(int64(n))
 				s.forward.stats.addLatency(time.Since(start).Milliseconds())
-				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: hostname,
 					Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 				return
 			}
@@ -1518,7 +1511,7 @@ readResponse:
 		n, _ := io.Copy(w, resp.Body)
 		s.forward.stats.addBytes(n)
 		s.forward.stats.addLatency(time.Since(start).Milliseconds())
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, Host: hostname,
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: hostname,
 			Message: Tz("log.forward_http", hostname, port, r.Method, path, resp.StatusCode)})
 		return
 	}
@@ -1531,7 +1524,7 @@ readResponse:
 	rawPreview := truncateStr(string(rawResp), 500)
 	slog.Warn(Tz("log.forward_parse_failed_short"), "host", hostname, "port", port, "path", path,
 		"err", parseErr.Error(), "raw_len", len(rawResp), "raw_preview", rawPreview)
-	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, Host: hostname,
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: operator, IP: clientIP, Host: hostname,
 		Message: Tz("log.forward_parse_failed", port, path, parseErr.Error())})
 	if len(rawResp) == 0 {
 		http.Error(w, Tr(r, "forward.parse_response_failed", parseErr.Error()), http.StatusBadGateway)
