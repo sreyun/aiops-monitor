@@ -3,6 +3,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"os/exec"
 	"syscall"
@@ -59,11 +60,17 @@ func newPTY(cols, rows int) termShell {
 	cmd := exec.Command(shellPath(), "-l", "-i") // -l: login shell (sources /etc/profile)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.Env = buildShellEnv()
+	// Set working directory to user home — but ONLY if the path actually exists.
+	// An invalid cmd.Dir causes cmd.Start() to fail, which kills the whole PTY
+	// and falls back to pipeShell (which would fail with the same dir → no terminal).
 	if dir := userHomeDir(); dir != "" {
-		cmd.Dir = dir
+		if _, err := os.Stat(dir); err == nil {
+			cmd.Dir = dir
+		}
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true} // new session, slave becomes the controlling tty
 	if err := cmd.Start(); err != nil {
+		slog.Warn("PTY shell 启动失败", "err", err, "dir", cmd.Dir)
 		master.Close()
 		slave.Close()
 		return nil

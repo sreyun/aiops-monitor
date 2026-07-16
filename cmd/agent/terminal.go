@@ -708,13 +708,37 @@ func parseSize(s string) (cols, rows int, ok bool) {
 }
 
 // userHomeDir returns the home directory of the current OS user.
-// Falls back to /root (uid 0) or empty string when unavailable.
+//
+// Resolution chain (first success wins):
+//  1. os.UserHomeDir()  — fastest, works for both cgo and pure-Go builds
+//  2. user.Current().HomeDir — reads /etc/passwd (Linux/macOS) or Windows API
+//  3. $HOME / $USERPROFILE env var — fallback for minimal containers / systemd
+//  4. /root (uid 0, non-Windows) — last resort for root daemons
+//
+// Returns "" if nothing reliable is found. The result is NOT validated against
+// the filesystem — callers should os.Stat() before using as cmd.Dir.
 func userHomeDir() string {
+	// 1. os.UserHomeDir — uses getpwuid_r on Unix, SHGetKnownFolderPath on Windows.
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	// 2. user.Current — reads /etc/passwd or Windows user API.
 	if u, err := user.Current(); err == nil && u.HomeDir != "" {
 		return u.HomeDir
 	}
-	if runtime.GOOS != "windows" && os.Getuid() == 0 {
-		return "/root"
+	// 3. Environment variable — works when all else fails (systemd, containers).
+	if h := strings.TrimSpace(os.Getenv("HOME")); h != "" {
+		return h
+	}
+	if runtime.GOOS == "windows" {
+		if h := strings.TrimSpace(os.Getenv("USERPROFILE")); h != "" {
+			return h
+		}
+	} else {
+		// 4. Hard-coded root fallback for uid-0 daemons.
+		if os.Getuid() == 0 {
+			return "/root"
+		}
 	}
 	return ""
 }
@@ -745,18 +769,42 @@ func buildShellEnv() []string {
 		}
 		return false
 	}
-	if !has("HOME") {
+	// On Unix, ALWAYS force HOME to the correct user home directory.
+	// The interactive shell is a separate session for the remote operator —
+	// the agent's inherited HOME (from systemd, sudo, etc.) is often wrong
+	// (e.g. /opt/AIOps-agent). Login shell "cd $HOME" depends on this value.
+	if runtime.GOOS != "windows" {
+		homeSet := false
 		if h := userHomeDir(); h != "" {
-			env = append(env, "HOME="+h)
-		} else {
-			env = append(env, "HOME=/tmp")
+			// Replace or append HOME=
+			for i, e := range env {
+				if len(e) > 5 && e[:5] == "HOME=" {
+					env[i] = "HOME=" + h
+					homeSet = true
+					break
+				}
+			}
+			if !homeSet {
+				env = append(env, "HOME="+h)
+			}
 		}
-	}
-	if !has("USER") {
+		// Also force USER / LOGNAME to match.
 		if u, err := user.Current(); err == nil && u.Username != "" {
-			env = append(env, "USER="+u.Username, "LOGNAME="+u.Username)
+			for i, e := range env {
+				if strings.HasPrefix(e, "USER=") {
+					env[i] = "USER=" + u.Username
+				} else if strings.HasPrefix(e, "LOGNAME=") {
+					env[i] = "LOGNAME=" + u.Username
+				}
+			}
 		} else if os.Getuid() == 0 {
-			env = append(env, "USER=root", "LOGNAME=root")
+			for i, e := range env {
+				if strings.HasPrefix(e, "USER=") {
+					env[i] = "USER=root"
+				} else if strings.HasPrefix(e, "LOGNAME=") {
+					env[i] = "LOGNAME=root"
+				}
+			}
 		}
 	}
 	if !has("SHELL") {
@@ -812,8 +860,13 @@ func newPipeShell() termShell {
 	name, args := shellCommand()
 	cmd := exec.Command(name, args...)
 	cmd.Env = buildShellEnv()
+	// Set working directory to user home — validate the path exists to
+	// avoid cmd.Start() failing on non-existent directories (e.g. unmounted
+	// network homes). Gracefully degrade: skip cmd.Dir if invalid.
 	if dir := userHomeDir(); dir != "" {
-		cmd.Dir = dir
+		if _, err := os.Stat(dir); err == nil {
+			cmd.Dir = dir
+		}
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -827,6 +880,7 @@ func newPipeShell() termShell {
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 	if err := cmd.Start(); err != nil {
+		slog.Warn("pipe shell 启动失败", "err", err, "dir", cmd.Dir)
 		_ = stdin.Close()
 		_ = pr.Close()
 		_ = pw.Close()
@@ -860,12 +914,14 @@ func (p *pipeShell) Close() error {
 
 // shellCommand picks the interactive shell per OS (used by the piped fallback).
 // On Windows, /K chcp 65001 forces UTF-8 output so Chinese text is not garbled.
+// "cd /d %USERPROFILE%" explicitly navigates to the user's home directory.
 func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
+		initCmd := "chcp 65001 >nul & cd /d %USERPROFILE% 2>nul"
 		if c := os.Getenv("COMSPEC"); c != "" {
-			return c, []string{"/K", "chcp 65001 >nul"}
+			return c, []string{"/K", initCmd}
 		}
-		return "cmd.exe", []string{"/K", "chcp 65001 >nul"}
+		return "cmd.exe", []string{"/K", initCmd}
 	}
 	return shellPath(), []string{"-l", "-i"} // -l: login shell
 }

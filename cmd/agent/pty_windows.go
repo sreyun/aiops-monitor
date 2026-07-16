@@ -148,10 +148,14 @@ func newPTY(cols, rows int) termShell {
 		return nil
 	}
 	// Start the shell in the user's home directory (not the agent's CWD).
+	// Validate the path exists — an invalid lpCurrentDirectory makes
+	// CreateProcessW fail silently (r == 0), leaving no terminal at all.
 	var cwdPtr uintptr
 	if dir := userHomeDir(); dir != "" {
-		cwd, _ := syscall.UTF16PtrFromString(dir)
-		cwdPtr = uintptr(unsafe.Pointer(cwd))
+		if _, err := os.Stat(dir); err == nil {
+			cwd, _ := syscall.UTF16PtrFromString(dir)
+			cwdPtr = uintptr(unsafe.Pointer(cwd))
+		}
 	}
 	var pi syscall.ProcessInformation
 	r, _, _ := procCreateProcessW2.Call(
@@ -189,11 +193,15 @@ func closeConPTY(hpc uintptr, inW, outR syscall.Handle) {
 // shellExe returns the shell to launch (COMSPEC or cmd.exe) with UTF-8 code page.
 // The /K flag runs chcp 65001 before entering interactive mode, ensuring all
 // output is UTF-8 on Chinese Windows (where the default OEM code page is GBK).
+// Additionally, "cd /d %USERPROFILE%" explicitly navigates to the user's home
+// directory — cmd.exe is NOT a login shell and does not auto-cd to HOME like
+// bash -l does, so lpCurrentDirectory alone is insufficient as a safety net.
 func shellExe() string {
+	initCmd := "chcp 65001 >nul & cd /d %USERPROFILE% 2>nul"
 	if c := os.Getenv("COMSPEC"); c != "" {
-		return c + " /K chcp 65001 >nul"
+		return c + " /K " + initCmd
 	}
-	return "cmd.exe /K chcp 65001 >nul"
+	return "cmd.exe /K " + initCmd
 }
 
 // ensureUTF8 converts possible non-UTF-8 bytes (GBK on Chinese Windows) to
