@@ -35,8 +35,11 @@
   "_comment_forward_2": "Agent 自动作为透明隧道：默认转发到 Agent 本机的 localhost:端口。",
   "_comment_forward_3": "跳板模式：创建规则时填写『远程目标』为 IP:Port（如 192.168.30.220:3306），",
   "_comment_forward_4": "Agent 将代为连接局域网内的其他服务，无需目标机器安装 Agent。",
-  "_comment_forward_5": "支持 TCP/UDP 协议。Server 端配置项: forward_listen（监听地址，默认 0.0.0.0）,",
-  "_comment_forward_6": "forward_port_range（端口范围，默认 10000-10099）, forward_disabled（禁用开关）。",
+  "_comment_forward_5": "支持 TCP/UDP 协议。Server 端配置项: forward_listen（监听地址，默认 127.0.0.1）,",
+  "_comment_forward_6": "forward_port_range（端口范围，默认 10100-10300）, forward_disabled（禁用开关）。",
+  "_comment_forward_7": "⚠️ 安全警告：跳板模式当前无目标 IP 白名单限制，任意 IP:Port 均可被转发。",
+  "_comment_forward_8": "建议：1) forward_listen 保持 127.0.0.1 仅本机访问；2) 配合防火墙限制 Agent 可访问的网段；",
+  "_comment_forward_9": "3) 仅授权管理员创建跳板规则；4) 审计日志会记录每次转发操作（含 remote_target）。",
 
   "__log__": "====== 日志采集 =====",
   "_comment_log_paths": "log_paths: 采集的日志文件或目录路径数组，支持通配符。目录会自动扫描 .log/.txt 等文件",
