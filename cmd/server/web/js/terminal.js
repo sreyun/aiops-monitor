@@ -49,6 +49,12 @@ function ensureTermHeartbeatWorker() {
   }
 }
 
+// v6.1.5: 从其他应用切换回浏览器窗口时恢复终端焦点
+window.addEventListener("focus", () => {
+  // 延迟 50ms 等浏览器完成焦点恢复流程
+  setTimeout(_refocusActiveTermInput, 50);
+});
+
 /* ---------- v5.4.0: 页面可见性变化 — Tab 恢复时立即检查并重连 ---------- */
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
@@ -63,6 +69,45 @@ document.addEventListener("visibilitychange", () => {
         if (!tab.ws || tab.ws.readyState !== 1) connectTermWS(tab);
       }, 500);
     }
+  }
+  // v6.1.5: 切回标签页时立即恢复活动终端的输入焦点
+  _refocusActiveTermInput();
+});
+
+/* ---------- v6.1.5: 全局焦点守卫 — 防止终端输入焦点在各种操作中丢失 ---------- */
+// 当终端面板可见且焦点漂移到非终端元素时，自动恢复焦点。
+// 覆盖场景：窗口 resize 后、最大化/还原后、从 dock 展开后、WS 重连后、
+// 浏览器标签页切换回来后、用户点击终端区域但焦点未进入 textarea 等。
+function _refocusActiveTermInput() {
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const mask = $("termMask");
+  if (!mask || !mask.classList.contains("show")) return; // 终端面板不可见
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.inputEl) return;
+  // 如果焦点已在 textarea 上，无需操作
+  if (document.activeElement === tab.inputEl) return;
+  // 如果焦点在终端区域内的其他元素（如 screen pre），重定向到 textarea
+  if (tab.screenEl && tab.screenEl.contains(document.activeElement)) {
+    tab.inputEl.focus({ preventScroll: true });
+    return;
+  }
+  // 焦点完全不在终端区域 — 恢复焦点
+  tab.inputEl.focus({ preventScroll: true });
+}
+document.addEventListener("focusin", () => {
+  // 焦点变化时检查：如果终端可见但焦点不在终端内，延迟恢复
+  // 使用 setTimeout 避免与正在进行的 click/keydown 事件冲突
+  if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
+  const mask = $("termMask");
+  if (!mask || !mask.classList.contains("show")) return;
+  const tab = TERM_TABS[TERM_ACTIVE];
+  if (!tab.inputEl) return;
+  // 如果焦点在终端区域外（如导航栏、弹窗等），不强制拉回
+  if (document.activeElement && !tab.screenEl.contains(document.activeElement)
+      && document.activeElement !== tab.inputEl) return;
+  // 焦点在 screen 但不在 textarea — 重定向
+  if (document.activeElement === tab.screenEl) {
+    setTimeout(() => { if (document.activeElement === tab.screenEl) tab.inputEl.focus({ preventScroll: true }); }, 0);
   }
 });
 
@@ -486,6 +531,17 @@ function createTermTab(id, name, tabName) {
       input.focus({ preventScroll: true });
     }
   });
+  // v6.1.5: mousedown 兜底 — 点击终端区域时确保 textarea 获得焦点
+  // 某些浏览器中 mouseup 可能被取消（如快速点击、拖拽操作），
+  // 在 mousedown 阶段先设置一个延迟聚焦守卫。
+  screen.addEventListener("mousedown", function() {
+    // 延迟 0ms：等 mousedown 默认行为完成后再聚焦，避免干扰选区
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (sel && sel.toString().length > 0) return; // 有选区不聚焦
+      if (document.activeElement !== input) input.focus({ preventScroll: true });
+    }, 0);
+  });
   // 键盘事件委托：当 screen(pre) 被聚焦但 textarea 未聚焦时（例如用户
   // 点击终端后未选中文本），将 keydown 重定向到 textarea，确保 termKeyDown
   // 能够正确处理所有键盘输入。
@@ -862,6 +918,9 @@ function expandTermFromDock(tabId) {
           modal.style.transition = "";
           modal.style.transform = "";
           modal.style.opacity = "";
+          // v6.1.5: 展开动画结束后 refit + 恢复焦点
+          termRefit();
+          _refocusActiveTermInput();
         }, 250);
       });
     });
@@ -1158,17 +1217,26 @@ function termResizeSend(ws, cols, rows) {
   ws.send(framed);
 }
 // 重新测量终端并把新尺寸告知 PTY（放大/还原/窗口变化后调用）
+// v6.1.5: resize 后自动恢复输入焦点，防止光标丢失
 function termRefit() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
   if (tab.vt && tab.ws) { const s = tab.vt.fit(); if (s && tab.ws.readyState === 1) termResizeSend(tab.ws, s.cols, s.rows); }
+  // v6.1.5: 确保 resize 后焦点回到输入框
+  _refocusActiveTermInput();
 }
 // 放大 / 还原 终端窗口
 safeAddEventListener("termMaxBtn", "click", () => {
   const mask = $("termMask"); if (!mask) return;
   const max = mask.classList.toggle("maximized");
   const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
-  requestAnimationFrame(() => requestAnimationFrame(termRefit)); // 等布局稳定后再测量
+  // v6.1.5: 等布局稳定后 refit + 恢复焦点（双层 rAF 确保浏览器完成布局）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      termRefit();
+      _refocusActiveTermInput();
+    });
+  });
 });
 // 收起到右下角
 safeAddEventListener("termMinBtn", "click", () => {
