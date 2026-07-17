@@ -125,6 +125,8 @@ function hostRow(h) {
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
   HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
+  // 跨模块共享主机列表（硬件监控、NetFlow 等页面依赖此缓存）
+  window._cachedHosts = hosts;
   if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
   $("hostsCount").textContent = hosts.length;
   $("navHosts").textContent = hosts.length;
