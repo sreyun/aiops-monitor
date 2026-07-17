@@ -2830,9 +2830,15 @@ select:focus {
 .hw-table th { color: var(--txt2); font-weight: 500; }
 .hw-warn-text { color: #d97706; }
 .hw-crit-text { color: #dc2626; }
-.hw-power-info { font-size: 12px; color: var(--txt2); margin-bottom: 6px; }
+.hw-expand-hint { font-size: 11px; color: var(--txt2); text-align: center; padding: 4px 0; opacity: 0.7; transition: opacity .15s; }
+.hw-card:hover .hw-expand-hint { opacity: 1; color: var(--accent); }
+.hw-card.expanded .hw-expand-hint { color: var(--accent); opacity: 1; }
+.hw-meta-row { font-size: 12px; color: var(--txt2); margin-bottom: 8px; }
+.hw-meta-label { font-weight: 500; margin-right: 4px; }
+.hw-error-row { background: #fef2f2; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px; }
+.hw-power-info { font-size: 12px; color: var(--txt2); margin-bottom: 8px; }
 
-/* ============================================================================
+/* =============================================================================
    网络流量面板 (NetFlow Panel)
    ============================================================================ */
 .nf-toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 0; flex-wrap: wrap; }
