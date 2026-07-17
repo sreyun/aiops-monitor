@@ -152,6 +152,39 @@ safeAddEventListener("addDataSourceBtn", "click", () => openDataSourceModal(null
 safeAddEventListener("dsSaveBtn", "click", saveDataSource);
 safeAddEventListener("dsTestBtn", "click", testDataSourceConn);
 safeAddEventListener("dsRunQueryBtn", "click", runDataSourceQuery);
+
+// AI 辅助：根据自然语言生成 LogQL / PromQL（按所选数据源类型自动切换），可一键应用到查询框
+safeAddEventListener("dsAIGenBtn", "click", () => {
+  const sel = $("dsQuerySource");
+  const ds = LAST_DATASOURCES.find(d => d.id === (sel && sel.value));
+  if (!ds) { toast("请先添加并选择数据源", "err"); return; }
+  const isLoki = ds.type === "loki";
+  openAIAssist({
+    task: isLoki ? "logql" : "promql",
+    title: isLoki ? "AI 生成 LogQL" : "AI 生成 PromQL",
+    mode: "generate",
+    placeholder: isLoki ? "如：查询 nginx 最近的 5xx 错误日志" : "如：CPU 使用率超过 80% 的主机",
+    context: `数据源：${ds.name}（类型 ${ds.type}，地址 ${ds.url}）`,
+    applyLabel: "应用到查询框",
+    applyTo: (code) => { const t = $("dsQueryText"); if (t) { t.value = code; t.focus(); } }
+  });
+});
+
+// AI 辅助：解读当前查询结果（弹窗结果诊断）
+safeAddEventListener("dsAIAnalyzeBtn", "click", () => {
+  const res = $("dsQueryResult");
+  const resText = res ? res.textContent.trim() : "";
+  if (!resText || resText === "查询中…") { toast("请先运行查询，得到结果后再分析", "err"); return; }
+  const sel = $("dsQuerySource");
+  const ds = LAST_DATASOURCES.find(d => d.id === (sel && sel.value));
+  const q = $("dsQueryText") ? $("dsQueryText").value.trim() : "";
+  openAIAssist({
+    task: "result_diagnosis",
+    title: "AI 分析查询结果",
+    mode: "analyze",
+    context: `查询语句：\n${q}\n\n数据源类型：${ds ? ds.type : "未知"}\n\n查询结果（截断）：\n${resText.slice(0, 6000)}`
+  });
+});
 safeAddEventListener("dataSourceList", "click", e => {
   const b = e.target.closest("[data-dsact]"); if (!b) return;
   const id = b.dataset.id;

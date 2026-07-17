@@ -283,6 +283,8 @@ type Agent struct {
 	oceanStorTargets []OceanStorTarget
 	netflowCfg       *NetFlowConfig
 	packetCfg        *PacketConfig
+	hypervInterval   time.Duration // Hyper-V 虚拟机采集间隔（0 → 默认 60s）
+	hypervDisabled   bool          // 显式关闭 Hyper-V 采集（默认自动探测）
 
 	mu            sync.Mutex
 	latestCustom  map[string]float64
@@ -436,6 +438,14 @@ func (a *Agent) Run() {
 			a.postNetFlowReport(rep)
 		})
 		slog.Info("五元组包采集器已启动")
+	}
+
+	// Start Hyper-V guest inventory collector — auto-detected, Windows Hyper-V
+	// hosts only. hypervAvailable() is false on non-Windows and on Windows boxes
+	// without the Hyper-V role, so this is a safe no-op everywhere else.
+	if !a.hypervDisabled && hypervAvailable() {
+		go a.runHyperVCollector()
+		slog.Info("Hyper-V 虚拟机采集器已启动")
 	}
 
 	// base-metric report loop, higher frequency.

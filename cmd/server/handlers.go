@@ -33,6 +33,7 @@ type Server struct {
 	tickets     *ticketManager      // work orders
 	logs        *logStore           // aggregated agent logs
 	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
+	hv          *hypervStore        // latest Hyper-V guest inventory per host (feeds VM alerts)
 	ai          *aiManager          // AI inspection + diagnosis
 	vm          *vmWriter           // optional VictoriaMetrics remote-write
 	messages    *messageHub         // unified notification center (SRE/alert/AI feed)
@@ -61,6 +62,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		tickets:     newTicketManager(),
 		logs:        newLogStore(),
 		hw:          newHardwareStore(),
+		hv:          newHypervStore(),
 		ai:          newAIManager(cfg),
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
@@ -133,6 +135,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	mux.HandleFunc("GET /api/v1/activity", s.handleActivity)
 	mux.HandleFunc("GET /api/v1/summary", s.handleSummary)
+	mux.HandleFunc("GET /api/v1/weather", s.handleWeather)
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config", s.handleSetConfig)
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
@@ -223,6 +226,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
+	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                 // 全站「AI 辅助」按钮统一入口（任务化 SSE）
+	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback) // 采纳/评价 AI 辅助结果 → 学习闭环强化
+	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)          // 值班晨报态势汇总（供前端流式生成）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
@@ -300,6 +306,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
 	mux.HandleFunc("GET /api/v1/hardware/events", s.handleHardwareEvents)
 	mux.HandleFunc("DELETE /api/v1/hardware/{hostID}", s.handleDeleteHardware)
+	// Hyper-V 虚拟机: agent ingest (fingerprint-gated) + frontend query
+	mux.HandleFunc("POST /api/v1/agent/hyperv", s.handleAgentHyperV)
+	mux.HandleFunc("GET /api/v1/hyperv/list", s.handleHyperVList)
+	mux.HandleFunc("GET /api/v1/hyperv/events", s.handleHyperVEvents)
+	mux.HandleFunc("DELETE /api/v1/hyperv/{hostID}", s.handleDeleteHyperV)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)
@@ -327,7 +338,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

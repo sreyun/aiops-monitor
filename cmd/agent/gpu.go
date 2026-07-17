@@ -52,6 +52,19 @@ func runCmd(name string, args ...string) string {
 	return string(out)
 }
 
+// runCmdTimeout is like runCmd but with a caller-chosen timeout and it surfaces
+// the error. The Hyper-V collector needs both: powershell.exe cold-start plus
+// Get-VM on a busy host can take well over runCmd's fixed 4s, and a non-zero exit
+// (cmdlet missing, access denied) must be distinguishable from "no VMs". Uses
+// Output() (not CombinedOutput) so stdout stays clean JSON; on failure the
+// *exec.ExitError still carries stderr for diagnostics.
+func runCmdTimeout(d time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	return string(out), err
+}
+
 // nvidiaSmiQuery is the field list requested from nvidia-smi. Column order here
 // must match parseNvidiaSmi's indexing.
 const nvidiaSmiQuery = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,memory.free"

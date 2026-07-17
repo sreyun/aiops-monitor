@@ -8,7 +8,7 @@ func TestHardwareToolsRegistered(t *testing.T) {
 	h.registerTools()
 	want := []string{
 		"query_hardware", "query_hardware_events", "query_hardware_history",
-		"query_hardware_changes", "query_netflow",
+		"query_hardware_changes", "query_netflow", "query_hyperv",
 	}
 	for _, n := range want {
 		tool, ok := h.tools[n]
@@ -27,7 +27,7 @@ func TestHardwareToolsRegistered(t *testing.T) {
 			t.Errorf("工具 %s 缺少 host_id 参数", n)
 		}
 	}
-	if len(h.tools) < 15 {
-		t.Errorf("工具总数 = %d, 期望 >=15（原 10 + 新增 5）", len(h.tools))
+	if len(h.tools) < 16 {
+		t.Errorf("工具总数 = %d, 期望 >=16（原 10 + 硬件/流量 5 + Hyper-V 1）", len(h.tools))
 	}
 }

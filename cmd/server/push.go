@@ -72,6 +72,7 @@ func (s *Server) pushPush(c *pushClient) {
 	}
 	alerts := Evaluate(hosts, th)
 	alerts = append(alerts, EvaluateForward(s.forward.Snapshot(), th)...)
+	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	crit, warn := 0, 0
 	for _, a := range alerts {
 		if a.Level == "critical" {

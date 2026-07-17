@@ -254,6 +254,27 @@ func (p *pgStore) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_hw_changes_host_time ON hardware_changes(host_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_hw_changes_component ON hardware_changes(host_id, kind, component);
+		-- Hyper-V 虚拟机清单：每台物理宿主机一份（整份 guests 存 JSONB），覆盖式 upsert。
+		-- 与 hardware_snapshot 同构，只是一台宿主对应一份清单，故主键仅 host_id。
+		CREATE TABLE IF NOT EXISTS hyperv_inventory (
+			host_id     TEXT PRIMARY KEY,
+			host_name   TEXT,
+			guest_count INT DEFAULT 0,
+			snapshot    JSONB NOT NULL,
+			updated_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		-- Hyper-V 虚拟机事件：VM 增/删/状态跳变，只在变化时写一条，永久保留。
+		CREATE TABLE IF NOT EXISTS hyperv_events (
+			id         BIGSERIAL PRIMARY KEY,
+			host_id    TEXT NOT NULL,
+			vm_name    TEXT,
+			vm_id      TEXT,
+			kind       TEXT NOT NULL,   -- vm_added / vm_removed / state_change
+			severity   TEXT,
+			message    TEXT,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_hyperv_events_host_time ON hyperv_events(host_id, created_at DESC);
 		-- Flow 明细：按月分区、**永久保留**（归档靠 DROP/DETACH 分区，不再定时删除）。
 		-- 分区键必须进主键，故 PK 是 (id, created_at)。
 		CREATE TABLE IF NOT EXISTS flow_records (
@@ -989,6 +1010,60 @@ func (p *pgStore) touchMemoryHits(ids []int64) {
 	}
 }
 
+// ---- 正向强化：与 decayOldMemories 负向衰减对称，构成「采纳/成功/解决即强化」学习闭环 ----
+//
+// 检索排序公式为 distance / (priority * time_factor * recency)，priority 越大越靠前。此前
+// priority 只会因衰减【下降】、从不上升，"好记忆"无法脱颖而出。这里补上正向半环：真实结果
+// （被采纳 / 执行成功 / 事件解决 / 👍）把相关记忆的 priority 上调，让被验证有效的知识随使用上浮。
+// 上限 5.0 与衰减下限 0.1 对称，避免单次反馈过度主导。
+const memoryPriorityCap = 5.0
+
+// boostMemoryPriority 按 factor 调整单条记忆优先级（factor>1 强化、<1 惩罚），并刷新 last_hit_at。
+func (p *pgStore) boostMemoryPriority(id int64, factor float64) {
+	if factor <= 0 {
+		factor = 1.3
+	}
+	if _, err := p.db.Exec(
+		`UPDATE ai_memory_embeddings
+		 SET priority = LEAST(GREATEST(priority, 0.1) * $2, $3), last_hit_at = $4
+		 WHERE id = $1`,
+		id, factor, memoryPriorityCap, time.Now().Unix()); err != nil {
+		slog.Warn("记忆强化失败", "id", id, "err", err)
+	}
+}
+
+// boostMemoryBySource 对某 kind+source 的记忆整体调整优先级。适用于 source 唯一的场景
+// （incident:ID / playbook:ID / session:ID）。返回受影响条数。
+func (p *pgStore) boostMemoryBySource(kind, source string, factor float64) int64 {
+	if factor <= 0 {
+		factor = 1.3
+	}
+	res, err := p.db.Exec(
+		`UPDATE ai_memory_embeddings
+		 SET priority = LEAST(GREATEST(priority, 0.1) * $3, $4), last_hit_at = $5
+		 WHERE kind = $1 AND source = $2`,
+		kind, source, factor, memoryPriorityCap, time.Now().Unix())
+	if err != nil {
+		slog.Warn("按来源强化记忆失败", "kind", kind, "source", source, "err", err)
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return n
+}
+
+// boostNearestMemory 找与 emb 语义最相近的一条 kind 记忆并调整其优先级，返回其 id。
+// 适用于 source 不唯一、需按内容定位具体交互的场景（如 AI 辅助采纳反馈）。
+func (p *pgStore) boostNearestMemory(emb []float64, kind string, factor float64) (int64, bool) {
+	var id int64
+	if err := p.db.QueryRow(
+		`SELECT id FROM ai_memory_embeddings WHERE kind = $2 ORDER BY embedding <=> $1::vector LIMIT 1`,
+		vecStr(emb), kind).Scan(&id); err != nil {
+		return 0, false
+	}
+	p.boostMemoryPriority(id, factor)
+	return id, true
+}
+
 // decayOldMemories 对超过 90 天且未被检索命中的记忆降低优先级（priority *= 0.8），
 // 而非删除——保留历史知识但让新鲜记忆在检索时排名更高。
 // 建议每天调用一次（由 Server 启动时 goroutine 驱动）。
@@ -1615,6 +1690,141 @@ func (p *pgStore) deleteHardwareSnapshot(hostID, targetName string) {
 	// 级联清理关联的事件与变更记录
 	_, _ = p.db.Exec(`DELETE FROM hardware_events WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
 	_, _ = p.db.Exec(`DELETE FROM hardware_changes WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
+}
+
+// ============================================================================
+// Hyper-V 虚拟机清单 PG methods（结构与 hardware_* 同构）
+// ============================================================================
+
+// upsertHyperVInventory overwrites a host's guest inventory (whole list as JSONB).
+func (p *pgStore) upsertHyperVInventory(hostID, hostName string, guests []shared.HyperVGuest) {
+	if guests == nil {
+		guests = []shared.HyperVGuest{}
+	}
+	raw, _ := json.Marshal(guests)
+	_, err := p.db.Exec(`
+		INSERT INTO hyperv_inventory(host_id, host_name, guest_count, snapshot, updated_at)
+		VALUES($1, $2, $3, $4, NOW())
+		ON CONFLICT (host_id) DO UPDATE
+		SET host_name=$2, guest_count=$3, snapshot=$4, updated_at=NOW()`,
+		hostID, hostName, len(guests), raw)
+	if err != nil {
+		slog.Warn("Upsert Hyper-V 清单失败", "host", hostID, "err", err)
+	}
+}
+
+// getHyperVInventoryDecoded returns a host's stored guests decoded back into wire
+// structs, so a fresh report can be diffed against it for change detection.
+func (p *pgStore) getHyperVInventoryDecoded(hostID string) ([]shared.HyperVGuest, bool) {
+	var raw []byte
+	err := p.db.QueryRow(`SELECT snapshot FROM hyperv_inventory WHERE host_id=$1`, hostID).Scan(&raw)
+	if err != nil {
+		return nil, false
+	}
+	var guests []shared.HyperVGuest
+	if err := json.Unmarshal(raw, &guests); err != nil {
+		return nil, false
+	}
+	return guests, true
+}
+
+// hypervInventoryRow is one host's inventory as returned to the frontend/AI.
+func (p *pgStore) scanHyperVRow(hostID, hostName string, snapshot json.RawMessage, guestCount int, updatedAt time.Time) map[string]any {
+	var guests any
+	json.Unmarshal(snapshot, &guests)
+	if guests == nil {
+		guests = []any{}
+	}
+	return map[string]any{
+		"host_id":     hostID,
+		"host_name":   hostName,
+		"guest_count": guestCount,
+		"guests":      guests,
+		"updated_at":  updatedAt,
+	}
+}
+
+// getHyperVInventory returns one host's inventory (nil,false when none).
+func (p *pgStore) getHyperVInventory(hostID string) (map[string]any, bool) {
+	var hostName string
+	var snapshot json.RawMessage
+	var guestCount int
+	var updatedAt time.Time
+	err := p.db.QueryRow(`SELECT host_name, guest_count, snapshot, updated_at
+		FROM hyperv_inventory WHERE host_id=$1`, hostID).Scan(&hostName, &guestCount, &snapshot, &updatedAt)
+	if err != nil {
+		return nil, false
+	}
+	return p.scanHyperVRow(hostID, hostName, snapshot, guestCount, updatedAt), true
+}
+
+// getAllHyperVInventories returns every host's inventory, most-recently-updated first.
+func (p *pgStore) getAllHyperVInventories() ([]map[string]any, error) {
+	rows, err := p.db.Query(`SELECT host_id, host_name, guest_count, snapshot, updated_at
+		FROM hyperv_inventory ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var hostID, hostName string
+		var guestCount int
+		var snapshot json.RawMessage
+		var updatedAt time.Time
+		if err := rows.Scan(&hostID, &hostName, &guestCount, &snapshot, &updatedAt); err != nil {
+			continue
+		}
+		out = append(out, p.scanHyperVRow(hostID, hostName, snapshot, guestCount, updatedAt))
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) insertHyperVEvent(hostID, vmName, vmID, kind, severity, message string) {
+	_, err := p.db.Exec(`
+		INSERT INTO hyperv_events(host_id, vm_name, vm_id, kind, severity, message)
+		VALUES($1, $2, $3, $4, $5, $6)`,
+		hostID, vmName, vmID, kind, severity, message)
+	if err != nil {
+		slog.Warn("插入 Hyper-V 事件失败", "host", hostID, "vm", vmName, "err", err)
+	}
+}
+
+// getHyperVEvents returns a host's VM change/state events, newest first.
+func (p *pgStore) getHyperVEvents(hostID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := p.db.Query(fmt.Sprintf(`SELECT vm_name, vm_id, kind, severity, message, created_at
+		FROM hyperv_events WHERE host_id=$1 ORDER BY created_at DESC LIMIT %d`, limit), hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var vmName, vmID, kind, severity, message sql.NullString
+		var createdAt time.Time
+		if err := rows.Scan(&vmName, &vmID, &kind, &severity, &message, &createdAt); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"vm_name":    vmName.String,
+			"vm_id":      vmID.String,
+			"kind":       kind.String,
+			"severity":   severity.String,
+			"message":    message.String,
+			"created_at": createdAt,
+		})
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) deleteHyperVInventory(hostID string) {
+	if _, err := p.db.Exec(`DELETE FROM hyperv_inventory WHERE host_id=$1`, hostID); err != nil {
+		slog.Warn("删除 Hyper-V 清单失败", "host", hostID, "err", err)
+	}
+	_, _ = p.db.Exec(`DELETE FROM hyperv_events WHERE host_id=$1`, hostID)
 }
 
 func (p *pgStore) insertFlowRecords(hostID, source string, flows []shared.FlowRecord) {

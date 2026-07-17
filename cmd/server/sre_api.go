@@ -42,6 +42,8 @@ func (s *Server) wireSRE() {
 			if inc.Severity == "critical" {
 				go s.autoDiagnose(inc)
 			}
+			// 事件自动串联：RAG 召回相似历史事件 + 已验证处置 + 匹配的自动修复规则，挂到时间线
+			go s.correlateIncident(inc)
 			// 新事件存入 AI 记忆库，供跨会话 RAG 检索复用
 			go s.rememberAI("alert", fmt.Sprintf("incident:%d", inc.ID),
 				fmt.Sprintf("【新告警事件】%s\n严重程度：%s | 类型：%s | 主机：%s | 来源：%s",
@@ -396,12 +398,19 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
+	// 可选解决说明（用于沉淀解决经验；缺省留空，向后兼容旧前端）
+	var body struct {
+		Note string `json:"note,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	inc, found := s.incidents.Resolve(id, s.actorName(r))
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
 	s.store.MarkDirty()
+	// 学习闭环 C：事件解决 → 沉淀「解决经验」记忆 + 强化促成解决的诊断记忆。异步、尽力而为。
+	go s.learnFromResolution(inc, strings.TrimSpace(body.Note))
 	writeJSON(w, http.StatusOK, inc)
 }
 
@@ -1212,6 +1221,155 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
 	}
+}
+
+// handleAIAssist 是全站「AI 辅助」按钮的统一后端：按 task 选择专用系统提示词，注入调用方
+// 提供的上下文与 RAG 历史记忆，复用 streamChat 流式（逐字 + 思维链）输出，并把本轮沉淀为记忆。
+// 一个端点覆盖：LogQL/PromQL 生成、剧本生成、图表数据分析、审计日志诊断、弹窗结果诊断、通用问答。
+// POST /api/v1/ai/assist  {task, input, context}
+func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Task    string `json:"task"`
+		Input   string `json:"input"`
+		Context string `json:"context,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	req.Task = strings.TrimSpace(req.Task)
+	if strings.TrimSpace(req.Input) == "" && strings.TrimSpace(req.Context) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请提供需求描述或待分析内容"})
+		return
+	}
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		s.setupSSE(w)
+		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写并保存\"}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
+	// 尽早建连并 Flush，前端立即显示「思考中」；后续 prompt 构建 + RAG 检索不阻塞首屏。
+	s.setupSSE(w)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	sys := buildAssistSystemPrompt(req.Task, req.Context)
+	// 诊断/分析类任务注入历史记忆（跨会话复用既有排障经验）
+	memKind := "chat"
+	switch req.Task {
+	case "audit_diagnosis", "result_diagnosis", "chart_analysis":
+		memKind = "diagnosis"
+	}
+	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
+	userMsg := strings.TrimSpace(req.Input)
+	if userMsg == "" {
+		userMsg = "请根据上述上下文进行分析并给出结论。"
+	}
+	reply, _ := streamChat(r.Context(), w, cfg, []map[string]string{
+		{"role": "system", "content": sys},
+		{"role": "user", "content": userMsg},
+	}, nil)
+	if strings.TrimSpace(reply) != "" {
+		go s.rememberAI("assist", "assist:"+req.Task, "【AI 辅助·"+req.Task+"】\n"+userMsg+"\n\n【AI】\n"+reply)
+	}
+}
+
+// buildAssistSystemPrompt 为各类「AI 辅助」任务构造专用系统提示词。ctxText 是调用方（前端）
+// 预先整理好的上下文文本（可用标签 / 数据摘要 / 结果正文 / 审计条目等），原样注入。
+func buildAssistSystemPrompt(task, ctxText string) string {
+	ctxBlock := ""
+	if strings.TrimSpace(ctxText) != "" {
+		ctxBlock = "\n\n【上下文】\n" + ctxText
+	}
+	switch task {
+	case "logql":
+		return "你是 Grafana Loki LogQL 专家。根据运维人员的自然语言需求，生成一条正确、高效的 LogQL 查询。" +
+			"要求：① 先用一个 ```logql 代码块只放最终查询语句；② 再用一两句中文说明查询逻辑与关键点；" +
+			"③ 必须使用上下文中列出的真实标签，不要臆造标签名；④ 善用标签选择器缩小范围后再做 |= / |~ 过滤与 | json / | logfmt 解析，避免全量扫描；" +
+			"⑤ 如需统计，用 rate()/count_over_time() 等。若信息不足，指出还需要哪些标签。" + ctxBlock
+	case "promql":
+		return "你是 Prometheus PromQL 专家。根据运维人员的自然语言需求，生成一条正确、高效的 PromQL 查询。" +
+			"要求：① 先用一个 ```promql 代码块只放最终查询语句；② 再用一两句中文说明；③ 优先使用上下文中列出的真实指标名与标签；" +
+			"④ 计数器类指标记得配合 rate()/irate() 与时间窗口；聚合用 sum/avg by(...)；⑤ 阈值/比率类给出清晰表达式。若信息不足，指出还需要哪些指标。" + ctxBlock
+	case "playbook":
+		return "你是自动化运维专家。根据运维人员的描述，生成一个可直接导入本平台的「运维剧本」JSON。" +
+			"严格输出一个 ```json 代码块，结构为：{\"name\":\"剧本名\",\"description\":\"用途\",\"steps\":[{" +
+			"\"name\":\"步骤名\",\"command\":\"Linux/通用命令\",\"command_win\":\"Windows 覆盖命令(可选)\",\"target\":\"all|category:分类|system:linux|host:ID\"," +
+			"\"timeout_sec\":30,\"continue_on_error\":false,\"ignore_exit\":false,\"register\":\"变量名(可选)\",\"when\":\"条件(可选)\"}]}。" +
+			"要求：① 命令须安全、幂等、只读优先，破坏性操作需在 description 明确风险并默认 continue_on_error=false；" +
+			"② 跨平台差异用 command_win / command_mac 覆盖；③ 需要引用上一步输出时用 register + {{变量名}}；④ 代码块后用中文简述每步意图与注意事项。" + ctxBlock
+	case "chart_analysis":
+		return "你是资深 SRE。以下是监控图表/指标的数据摘要。请：① 概述整体趋势与当前水位；② 指出异常点、突变、持续高位或逼近阈值的项；" +
+			"③ 推断可能原因；④ 给出可执行的排查方向或处置建议。用简洁中文、分点作答，只依据给定数据，不要编造。" + ctxBlock
+	case "audit_diagnosis":
+		return "你是安全审计与运维合规专家。以下是平台审计日志片段。请：① 识别异常/高风险操作（越权、异常登录、批量删除、配置篡改、异地/异常时间访问等）；" +
+			"② 归纳可疑模式与关联行为；③ 评估风险等级；④ 给出处置与加固建议。用简洁中文分点作答，严格基于给定日志，不臆测。" + ctxBlock
+	case "result_diagnosis":
+		return "你是资深 SRE 值班工程师。以下是某项操作/查询/巡检的执行结果。请：① 解读结果含义；② 判断是否异常及严重程度；" +
+			"③ 分析可能原因；④ 给出下一步排查或处置建议。用简洁中文分点作答，只基于给定结果，信息不足时说明还需要什么。" + ctxBlock
+	case "playbook_precheck":
+		return "你是自动化运维安全审计专家。以下是一份【即将执行】的运维剧本（步骤/命令/目标/选项）。请在执行前做风险预检：\n" +
+			"① 首行用【风险等级：红/黄/绿】给出总体评级（红=含破坏性或高危操作，需人工复核；黄=有注意事项；绿=安全可执行）；\n" +
+			"② 逐步排查并指出问题：破坏性操作（rm -rf、dd、mkfs、fdisk、drop/truncate、shutdown/reboot、kill -9、iptables flush 等）、" +
+			"非幂等风险（重复执行是否会累积副作用或损坏）、跨平台隐患（Linux/Windows/macOS 命令差异、是否缺 command_win/command_mac）、" +
+			"缺失防护（高危步骤未设 continue_on_error、超时不合理、未用 when 做前置校验、未用 register 校验上一步）；\n" +
+			"③ 给出可直接采纳的加固建议。用简洁中文分点作答，只依据给定内容，不臆测。" + ctxBlock
+	case "execution_retro":
+		return "你是资深 SRE 值班工程师，正在对一次【失败的剧本执行】做复盘。以下是各主机的分步执行结果与输出。请：\n" +
+			"① 定位失败根因（命令本身错误 / 目标主机环境或权限或依赖缺失 / 超时 / 基础设施抖动等），并引用关键错误输出佐证；\n" +
+			"② 区分「个别主机失败」与「普遍失败」，指出受影响范围；\n" +
+			"③ 给出针对性修复步骤与重跑建议（是否可安全重试、需先修什么）；\n" +
+			"④ 提出对该剧本的改进（补 when 校验 / 调整超时 / 补 command_win 覆盖 / 加 continue_on_error 等）。" +
+			"用简洁中文分点作答，严格基于给定输出，不臆测。" + ctxBlock
+	case "remediation_rule":
+		return "你是 SRE 自动化编排专家。请把给定【事件 + AI 诊断结论】里的处置建议，固化为一条「告警条件 → 修复剧本」的" +
+			"『自动修复规则草稿』。严格只输出一个 ```json 代码块，结构如下：\n" +
+			"{\"playbook\":{\"name\":\"修复剧本名\",\"description\":\"用途与风险说明\",\"steps\":[{\"name\":\"步骤名\"," +
+			"\"command\":\"Linux/通用命令\",\"command_win\":\"Windows 覆盖命令(可选)\",\"target\":\"all\"," +
+			"\"timeout_sec\":30,\"continue_on_error\":false}]}," +
+			"\"rule\":{\"name\":\"规则名\",\"match_types\":[\"事件的告警类型,如 cpu/memory/disk/load/proc/offline\"]," +
+			"\"min_level\":\"warning 或 critical\",\"match_category\":\"主机分类(可选,空=任意)\"," +
+			"\"require_approval\":true,\"cooldown_sec\":300,\"max_per_hour\":3},\"existing_playbook_id\":\"\"}\n" +
+			"要求：① 若【可用剧本】列表里已有能解决该问题的，填其 existing_playbook_id 并整段省略 playbook 字段；否则新建 playbook。" +
+			"② 修复命令务必安全、幂等，优先『先只读诊断确认、再谨慎处置』；凡含破坏性或有风险的操作，require_approval 必须为 true，" +
+			"并在 description 明确标注风险。③ match_types 用事件的真实告警类型，min_level 不低于事件级别；" +
+			"target 用 \"all\"（自动修复引擎会把剧本限定在触发告警的那台主机上执行）。④ 给合理的 cooldown_sec 与 max_per_hour 防止告警抖动引发修复风暴。" +
+			"⑤ 代码块之后，用中文简述：这条规则在什么条件下、对哪些主机、做什么，以及主要风险点与为何建议人工审批。" + ctxBlock
+	case "duty_report":
+		return dutyReportSystemPrompt + ctxBlock
+	default: // generic
+		return "你是资深 SRE / 运维助手，用简洁中文帮助运维人员处理监控、告警、排障、性能、日志与自动化相关问题；无关问题礼貌拒答。" + ctxBlock
+	}
+}
+
+// handleAIAssistFeedback 闭环 A：运维人员对某次 AI 辅助结果的处置（采纳/👍/👎）回流为记忆强化
+// 信号——「用了才算数」。语义定位该次 assist 记忆并强化或惩罚，使被反复采纳的生成/建议在后续
+// RAG 检索中上浮、被否定的下沉，实现自我进化。
+// POST /api/v1/ai/assist/feedback  {task, input, answer, action: applied|helpful|unhelpful}
+func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Task   string `json:"task"`
+		Input  string `json:"input"`
+		Answer string `json:"answer"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	factor := reinforceHelpful
+	switch req.Action {
+	case "applied":
+		factor = reinforceApplied
+	case "unhelpful":
+		factor = penalizeUnhelpful
+	}
+	// 用「需求 + 回答」语义定位最相近的一条 assist 记忆并调整其优先级
+	if text := strings.TrimSpace(req.Input + " " + req.Answer); text != "" {
+		s.reinforceMemory("assist", text, factor)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
@@ -2031,6 +2189,13 @@ func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request)
 			slog.Warn("保存诊断反馈失败", "incident", id, "err", err)
 		}
 	}
+	// 学习闭环：👍/👎 同步强化/惩罚该事件的诊断记忆（ai_memory），与 diagnosis_embeddings 双库一致，
+	// 让反馈既影响相似案例检索、也影响通用记忆检索。
+	factor := reinforceHelpful
+	if !req.Helpful {
+		factor = penalizeUnhelpful
+	}
+	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", id), factor)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

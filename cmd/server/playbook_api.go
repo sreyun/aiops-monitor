@@ -309,6 +309,9 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 	}
 	s.playbooks.FinishExecution(exec.ID, status)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, status)})
+	// 学习闭环 B：把执行结果沉淀为经验记忆，全成功则强化——让后续「AI 生成剧本 / 事件诊断」
+	// 复用被现实验证有效的自动化做法。异步、尽力而为。
+	s.rememberPlaybookOutcome(pb, exec, status)
 }
 
 // execKind classifies a single command run so the batch runner can decide

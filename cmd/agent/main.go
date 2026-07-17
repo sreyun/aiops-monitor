@@ -45,6 +45,9 @@ type config struct {
 	OceanStorTargets []OceanStorTarget `json:"oceanstor_targets,omitempty"` // 华为 OceanStor 存储/磁盘框采集
 	NetFlow          *NetFlowConfig    `json:"netflow,omitempty"`           // NetFlow 网络流量接收
 	PacketCapture    *PacketConfig     `json:"packet_capture,omitempty"`    // 五元组包报文采集
+	// Hyper-V 虚拟机采集：默认在 Windows Hyper-V 宿主机上自动探测启用，无需配置
+	HyperVIntervalSec int  `json:"hyperv_interval_sec,omitempty"` // 采集间隔(秒)，默认 60
+	HyperVDisabled    bool `json:"hyperv_disabled,omitempty"`     // 显式关闭 Hyper-V 采集
 }
 
 func defaultConfig() config {
@@ -238,6 +241,8 @@ func main() {
 	agent.oceanStorTargets = cfg.OceanStorTargets
 	agent.netflowCfg = cfg.NetFlow
 	agent.packetCfg = cfg.PacketCapture
+	agent.hypervInterval = time.Duration(cfg.HyperVIntervalSec) * time.Second
+	agent.hypervDisabled = cfg.HyperVDisabled
 
 	go func() {
 		sig := make(chan os.Signal, 1)

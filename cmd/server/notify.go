@@ -39,6 +39,7 @@ type Notifier struct {
 	remediation *remediationManager
 	forward     *forwardManager // set after server startup
 	hw          *hardwareStore  // set after server startup; feeds hardware alerts
+	hv          *hypervStore    // set after server startup; feeds Hyper-V VM alerts
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -109,6 +110,10 @@ func (n *Notifier) tick() {
 	// 硬件（Redfish/BMC）异常并入同一条告警链路：去重 → 触发/恢复 → 推送飞书/钉钉/短信…
 	if n.hw != nil {
 		alerts = append(alerts, EvaluateHardware(n.hw)...)
+	}
+	// Hyper-V 虚拟机异常同样并入：关机/暂停/健康/资源超阈值 → 推送 + critical 自动 AI 诊断。
+	if n.hv != nil {
+		alerts = append(alerts, EvaluateHyperV(n.hv)...)
 	}
 	cur := make(map[string]Alert, len(alerts))
 	for _, a := range alerts {
@@ -293,7 +298,7 @@ func formatAlert(a Alert, firing bool) string {
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "diskio": Tz("notify.type_diskio"),
 		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -379,7 +384,7 @@ func alertEmailHTML(a Alert, firing bool) string {
 	typeMap := map[string]string{
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {

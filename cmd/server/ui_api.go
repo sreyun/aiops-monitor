@@ -142,6 +142,8 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	// Active alerts from real-time evaluation (snapshot of current metric state)
 	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
+	// Hyper-V 虚拟机告警并入实时列表（与 CPU/磁盘等一致地带上 Since/Status）
+	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	since := s.notifier.ActiveSince()
 	states := s.store.AlertStates()
 	for i := range alerts {
@@ -264,7 +266,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	crit, warn := 0, 0
-	for _, a := range append(append(Evaluate(hosts, th), s.checks.DownAlerts()...), EvaluateForward(s.forward.Snapshot(), th)...) {
+	summ := append(append(Evaluate(hosts, th), s.checks.DownAlerts()...), EvaluateForward(s.forward.Snapshot(), th)...)
+	summ = append(summ, EvaluateHyperV(s.hv)...)
+	for _, a := range summ {
 		if a.Level == "critical" {
 			crit++
 		} else {

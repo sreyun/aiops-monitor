@@ -359,7 +359,15 @@ async function pollExecution(execId, pbId) {
 }
 
 function renderExecResult(exec) {
+  window._lastExecResult = exec; // 供「AI 复盘」按钮取用
   $("execResultTitle").textContent = `${I18N.t("ui.execute")}${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
+  // 有任何主机未成功 → 显示「AI 复盘」按钮（执行中不显示）
+  const rb = $("execRetroBtn");
+  if (rb) {
+    const done = exec.status !== "running";
+    const hasFail = exec.status === "failed" || Object.values(exec.host_results || {}).some(r => r.status !== "success");
+    rb.style.display = (done && hasFail) ? "" : "none";
+  }
   const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
     const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
     const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${translateStepStatus(s.status)}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
@@ -410,6 +418,80 @@ safeAddEventListener("pbAddStep", "click", () => {
   existing.push({name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false});
   renderPbSteps(existing);
 });
+
+// 把编辑器中的剧本对象整理为可读文本，供 AI 预检
+function playbookToText(pb) {
+  let s = `剧本名称：${pb.name || "(未命名)"}\n描述：${pb.description || "(无)"}\n步骤数：${(pb.steps || []).length}\n`;
+  (pb.steps || []).forEach((st, i) => {
+    s += `\n步骤${i + 1} [${st.name || "未命名"}] 目标=${st.target} 超时=${st.timeout_sec}s 失败继续=${st.continue_on_error ? "是" : "否"} 忽略退出码=${st.ignore_exit ? "是" : "否"}`;
+    if (st.when) s += ` 前置条件=${st.when}`;
+    if (st.register) s += ` 存变量=${st.register}`;
+    if (st.module) s += `\n  模块：${st.module} 参数：${JSON.stringify(st.args || {})}`;
+    else {
+      if (st.command) s += `\n  命令(Linux/通用)：${st.command}`;
+      if (st.command_win) s += `\n  命令(Windows)：${st.command_win}`;
+      if (st.command_mac) s += `\n  命令(macOS)：${st.command_mac}`;
+    }
+  });
+  return s;
+}
+// 把执行结果整理为聚焦失败的复盘文本
+function execResultToText(exec) {
+  let s = `剧本：${exec.playbook_name || ""}\n整体状态：${exec.status}\n操作者：${exec.operator || ""}\n`;
+  Object.values(exec.host_results || {}).forEach(r => {
+    s += `\n主机 ${r.hostname}（${r.status}）：`;
+    (r.steps || []).forEach(st => {
+      const out = (st.output || "").slice(0, 600);
+      s += `\n  - 步骤[${st.name}] ${st.status}` + (st.status !== "success" && out ? `\n    输出：${out}` : "");
+    });
+  });
+  return s.slice(0, 8000);
+}
+// AI 剧本预检：执行前审查命令的破坏性/幂等性/跨平台/防护缺失，给红黄绿评级
+safeAddEventListener("pbPrecheckBtn", "click", () => {
+  const pb = collectPlaybook();
+  if (!pb.steps || !pb.steps.length) { toast("请先添加至少一个步骤再预检", "err"); return; }
+  openAIAssist({
+    task: "playbook_precheck",
+    title: "AI 剧本预检 · 执行前风险审查",
+    mode: "analyze",
+    context: playbookToText(pb)
+  });
+});
+// AI 执行复盘：对失败的执行定位根因 + 修复/重跑建议 + 剧本改进
+safeAddEventListener("execRetroBtn", "click", () => {
+  const exec = window._lastExecResult;
+  if (!exec) { toast("暂无执行结果可复盘", "err"); return; }
+  openAIAssist({
+    task: "execution_retro",
+    title: "AI 执行复盘 · 失败根因分析",
+    mode: "analyze",
+    context: execResultToText(exec)
+  });
+});
+
+// AI 辅助：根据自然语言生成整份剧本（名称+描述+步骤），一键回填编辑器
+safeAddEventListener("pbAIGenBtn", "click", () => {
+  openAIAssist({
+    task: "playbook",
+    title: "AI 生成运维剧本",
+    mode: "generate",
+    placeholder: "如：滚动重启所有 nginx 主机上的 nginx 服务，任一失败则停止",
+    prefill: ($("pbDesc") && $("pbDesc").value.trim()) || ($("pbName") && $("pbName").value.trim()) || "",
+    applyLabel: "回填到编辑器",
+    applyTo: (text) => {
+      try {
+        const jsonText = extractFirstCodeBlock(text) || text;
+        const pb = JSON.parse(jsonText);
+        pb.id = ""; // 作为新剧本回填，保存时另建
+        openPlaybookModal(pb);
+        if (typeof toast === "function") toast("已生成，请检查步骤与命令后保存", "ok");
+      } catch (e) {
+        if (typeof toast === "function") toast("AI 输出不是合法剧本 JSON，请查看后手动填写", "err");
+      }
+    }
+  });
+});
 safeAddEventListener("pbSaveBtn", "click", savePlaybook);
 safeAddEventListener("pbSchedEnabled", "change", pbSchedRefresh);
 safeAddEventListener("pbSchedKind", "change", pbSchedRefresh);
@@ -437,7 +519,7 @@ const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||esc(s);
 const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
-const _tlKind = k => ({created:"创建",fired:"触发",recovered:"恢复",acked:"确认",resolved:"解决",remediation:"自动修复",comment:"评论",escalated:"升级工单",note:"备注",ai_diagnosis:"🤖 AI 诊断"})[k]||k;
+const _tlKind = k => ({created:"创建",fired:"触发",recovered:"恢复",acked:"确认",resolved:"解决",remediation:"自动修复",comment:"评论",escalated:"升级工单",note:"备注",ai_diagnosis:"🤖 AI 诊断",correlation:"🔗 关联分析",ai_analysis:"🤖 AI 分析"})[k]||k;
 const _runStatus = s => ({running:"执行中",success:"成功",failed:"失败",pending_approval:"待审批",skipped_cooldown:"冷却跳过",skipped_ratelimit:"限频跳过",rejected:"已拒绝",no_playbook:"无剧本"})[s]||s;
 const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
 const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
@@ -512,8 +594,13 @@ async function openIncidentDetail(id){
         <input type="file" id="incDiagFile" multiple hidden>
       </div>
       <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> 包含终端操作上下文（分段摘要）</label>`;
+    window._curIncident = inc; // 供「转自动化规则」等操作取用完整事件（含时间线诊断）
     const acts=[];
     acts.push(`<button class="btn sm" data-iact="diagnose">🤖 AI 诊断</button>`);
+    // 有 AI 诊断结论时，可一键把处置建议固化为「自动修复规则草稿」（停用态，需人工审核启用）
+    if ((inc.timeline||[]).some(e=>e.kind==="ai_diagnosis" && e.text)) {
+      acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="把诊断建议转成自动修复规则草稿，人工审核后启用"><span class="ai-assist-btn-ic">🤖</span>转自动化规则</button>`);
+    }
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">确认</button>`); acts.push(`<button class="btn sm" data-iact="resolve">解决</button>`); }
     if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">升级工单</button>`);
     acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="添加评论…" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">发送</button>`);
@@ -549,9 +636,58 @@ async function incidentAction(id, act){
         await readSSEStream(r,()=>{},()=>{},()=>{});
       }
     }
+    else if (act==="draft-rule"){ draftRemediationFromIncident(window._curIncident); return; } // 不走末尾刷新
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
   } catch(e){ toast("操作失败: "+e,"err"); }
+}
+
+// 闭环：把事件的 AI 诊断建议转成「自动修复规则草稿」。组织上下文（事件+最新诊断+可用剧本）后
+// 调用统一 /ai/assist（task=remediation_rule），AI 产出 {playbook?,rule} JSON 供人工确认后落地。
+function draftRemediationFromIncident(inc){
+  if(!inc){ toast("请重新打开事件详情后再试","err"); return; }
+  let diag="";
+  const tl=inc.timeline||[];
+  for(let i=tl.length-1;i>=0;i--){ if(tl[i].kind==="ai_diagnosis" && tl[i].text){ diag=tl[i].text; break; } }
+  if(!diag){ toast("请先运行「🤖 AI 诊断」，有诊断结论后再转规则","err"); return; }
+  const pbs=(SRE_PLAYBOOKS||[]).map(p=>`- id=${p.id} 名称=${p.name}${p.description?" 用途="+p.description:""}`).join("\n")||"（暂无已保存剧本，请新建）";
+  const ctx=`事件：${inc.title}\n告警类型：${inc.type||"(未知)"}\n级别：${inc.severity}\n主机：${inc.hostname||"(未知)"}\n\nAI 诊断结论：\n${diag}\n\n【可用剧本】\n${pbs}`;
+  openAIAssist({
+    task:"remediation_rule",
+    title:"AI 转自动化规则 · 草稿（需人工审核后启用）",
+    mode:"analyze",
+    context:ctx,
+    applyLabel:"创建为草稿规则",
+    applyTo:(text)=>applyRemediationDraft(text)
+  });
+}
+// 落地草稿：新建剧本(若需要) + 建「停用」规则(require_approval 默认 true)，双保险，绝不自动生效。
+async function applyRemediationDraft(text){
+  let draft;
+  try { draft=JSON.parse(extractFirstCodeBlock(text)||text); }
+  catch(e){ toast("AI 输出不是合法 JSON，请到「自动修复」手动创建规则","err"); return; }
+  try {
+    let playbookId=(draft.existing_playbook_id||"").trim();
+    if(!playbookId && draft.playbook){
+      const pb=draft.playbook; pb.id="";
+      const r=await fetch(`${API}/playbooks`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pb)});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||!j.id) throw new Error(j.error||"创建修复剧本失败");
+      playbookId=j.id;
+    }
+    if(!playbookId) throw new Error("AI 未给出可用剧本");
+    const rule=draft.rule||{};
+    rule.id=""; rule.playbook_id=playbookId;
+    rule.enabled=false; // 关键：草稿默认「停用」，绝不自动触发；人工审核后手动启用即生效
+    if(rule.require_approval===undefined) rule.require_approval=true; // 双保险：即便启用也先排队人工审批
+    const rr=await fetch(`${API}/remediation/rules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(rule)});
+    const rj=await rr.json().catch(()=>({}));
+    if(!rr.ok) throw new Error(rj.error||"创建规则失败");
+    toast("✅ 已创建『停用』草稿规则，请在「自动修复」审核命令与匹配条件后再启用","ok");
+    const m=$("incidentDetailMask"); if(m) m.classList.remove("show");
+    if(typeof switchSRETab==="function"){ switchSRETab("remediation"); }
+    else if(typeof loadRemediation==="function"){ loadRemediation(); }
+  } catch(e){ toast("落地草稿失败："+e,"err"); }
 }
 // ---- AI 诊断多轮对话 ----
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
@@ -1293,6 +1429,19 @@ async function loadInspections(){
   } catch(e){ toast("加载失败: "+e,"err"); }
 }
 async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
+// 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
+async function genDutyReport(){
+  let j;
+  try { j = await fetch(`${API}/ai/duty-context`).then(r=>r.json()); }
+  catch(e){ toast("获取运维态势失败："+e,"err"); return; }
+  openAIAssist({
+    task:"duty_report",
+    title:"🌅 AI 值班晨报",
+    mode:"analyze",
+    context:(j&&j.context)?j.context:"（当前无态势数据）",
+    hint:(j&&j.notable===false)?"当前态势平静，无未决事件/SLO超标/待审批修复。":"正在汇总今日运维态势…"
+  });
+}
 async function openAIConfig(){
   const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
   const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
@@ -1947,6 +2096,7 @@ safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(
 safeAddEventListener("logSource","change",()=>{ onLogSourceChange(); if(!$("logSource").value) searchLogs(); });
 safeAddEventListener("logJob","change",()=>{ onLogJobChange(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
+safeAddEventListener("dutyReportBtn","click",genDutyReport);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);

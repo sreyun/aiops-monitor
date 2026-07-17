@@ -348,6 +348,51 @@ type HardwareReport struct {
 }
 
 // ============================================================================
+// Hyper-V 虚拟机采集结构体（宿主机上的 Guest VM 清单）
+//
+// 与硬件快照同属"一台主机一份、变化慢、要追踪变更"的清单类数据，因此走独立
+// 上报通道（POST /api/v1/agent/hyperv）而非高频 metrics 热路径。数据由物理
+// 宿主机上的 Windows agent 通过 PowerShell(Get-VM) 采集。
+// ============================================================================
+
+// HyperVGuest is one Hyper-V guest VM as seen from the physical host.
+// Health 由 agent 侧从 State/Status/ReplicationHealth 归一而来（OK/Warning/
+// Critical），让服务端告警评估无需重复解析厂商字符串。
+type HyperVGuest struct {
+	Name             string   `json:"name"`
+	ID               string   `json:"id"`                  // VM GUID：稳定身份，用于变更追踪（改名也认得出是同一台）
+	State            string   `json:"state"`               // Running / Off / Paused / Saved / Starting / ...
+	Status           string   `json:"status,omitempty"`    // "Operating normally" / 降级/故障描述
+	Health           string   `json:"health,omitempty"`    // OK / Warning / Critical（归一后）
+	CPUUsage         float64  `json:"cpu_usage"`           // 宿主视角 CPU 占用 %
+	ProcessorCount   int      `json:"processor_count,omitempty"`
+	MemAssignedMB    float64  `json:"mem_assigned_mb,omitempty"`
+	MemDemandMB      float64  `json:"mem_demand_mb,omitempty"`
+	MemMaxMB         float64  `json:"mem_max_mb,omitempty"`
+	UptimeSec        int64    `json:"uptime_sec,omitempty"`
+	Generation       int      `json:"generation,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	IPAddresses      []string `json:"ip_addresses,omitempty"` // 由集成服务上报，Guest 运行时才有
+	Switches         []string `json:"switches,omitempty"`     // 连接的虚拟交换机名
+	VHDCount         int      `json:"vhd_count,omitempty"`
+	CheckpointCount  int      `json:"checkpoint_count,omitempty"`
+	ReplState        string   `json:"repl_state,omitempty"`  // Disabled / Enabled / ...
+	ReplHealth       string   `json:"repl_health,omitempty"` // NotApplicable / Normal / Warning / Critical
+}
+
+// HyperVReport is the payload agents POST for the Hyper-V guest inventory of one
+// physical host. Error carries a collection failure (e.g. Get-VM unavailable) so
+// the server can surface it without overwriting the last good inventory.
+type HyperVReport struct {
+	HostID      string        `json:"host_id"`
+	Fingerprint string        `json:"fingerprint,omitempty"`
+	Timestamp   int64         `json:"timestamp"`
+	HostName    string        `json:"host_name,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	Guests      []HyperVGuest `json:"guests"`
+}
+
+// ============================================================================
 // NetFlow / 五元组包采集结构体
 // ============================================================================
 

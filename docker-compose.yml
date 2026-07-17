@@ -76,6 +76,10 @@ services:
       # 配置落库主密钥：对 MFA/SMTP/AI/webhook/relay 等敏感密钥做 AES-256-GCM 静态加密（已默认启用）
       # ⚠️ 生产务必改成你自己的长随机串，并妥善备份——丢失此密钥将无法解密库中已加密的凭据！
       - AIOPS_SECRET_KEY=aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026
+      # 可选：App 首页天气头。填阿里云市场 ip-to-weather 的 AppCode 即启用（服务端代理，
+      # 密钥不入 APK）。内网/环回客户端定位不到时用 DEFAULT_IP 兜底（填任意公网 IP）。
+      # - AIOPS_WEATHER_APPCODE=你的AppCode
+      # - AIOPS_WEATHER_DEFAULT_IP=114.114.114.114
     depends_on:
       victoriametrics:
         condition: service_started

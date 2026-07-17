@@ -325,6 +325,7 @@ const PAGE_META = {
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
   hardware:  { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" },
+  hyperv:    { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" },
   netflow:   { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
@@ -344,6 +345,7 @@ function rebuildPageMeta() {
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
   PAGE_META.hardware   = { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" };
+  PAGE_META.hyperv     = { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" };
   PAGE_META.netflow    = { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
@@ -384,6 +386,7 @@ function switchView(view) {
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();
   if (view === "hardware" && window._pageRenderers && window._pageRenderers.hardware) window._pageRenderers.hardware();
+  if (view === "hyperv" && window._pageRenderers && window._pageRenderers.hyperv) window._pageRenderers.hyperv();
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   window.scrollTo(0, 0);
 }
@@ -568,6 +571,42 @@ safeAddEventListener("topPanels", "click", e => {
 });
 // 日志导出
 safeAddEventListener("exportLogBtn", "click", exportLogsCSV);
+// AI 诊断审计日志：分析当前筛选出的操作/系统/终端日志中的异常与安全风险
+safeAddEventListener("auditAIBtn", "click", () => {
+  const rows = (typeof applyLogFilters === "function") ? applyLogFilters(LAST_LOG) : (LAST_LOG || []);
+  if (!rows || !rows.length) { toast("当前没有可分析的日志", "err"); return; }
+  const sample = rows.slice(0, 200).map(e => {
+    const t = (typeof fmtDateTime === "function") ? fmtDateTime(e.timestamp) : (e.timestamp || "");
+    return `[${t}] ${e.level || "info"} ${translateLogKind ? translateLogKind(e.kind) : (e.kind || "")} ${e.actor || ""}${e.host ? "@" + e.host : ""}: ${e.message || ""}`;
+  });
+  openAIAssist({
+    task: "audit_diagnosis",
+    title: "AI 诊断审计日志",
+    mode: "analyze",
+    context: `共 ${rows.length} 条日志（分析前 ${Math.min(rows.length, 200)} 条）：\n` + sample.join("\n")
+  });
+});
+// AI 分析监控看板：基于当前主机水位 + 活跃告警，给出整体健康研判与建议（按需，补充定时巡检）
+safeAddEventListener("ovAIBtn", "click", () => {
+  const hosts = LAST_HOSTS || [];
+  const online = hosts.filter(h => h.online).length;
+  const offline = hosts.length - online;
+  const usage = hosts.filter(h => h.latest && h.online).map(h => ({
+    n: h.hostname || h.id,
+    cpu: Math.round(h.latest.cpu_percent || 0),
+    mem: Math.round(h.latest.mem_percent || 0),
+    disk: Math.round(h.latest.disk_percent || 0)
+  }));
+  const topCpu = usage.slice().sort((a, b) => b.cpu - a.cpu).slice(0, 8).map(u => `${u.n}  CPU ${u.cpu}% 内存 ${u.mem}% 磁盘 ${u.disk}%`);
+  const offlineNames = hosts.filter(h => !h.online).slice(0, 20).map(h => h.hostname || h.id);
+  const alerts = (typeof LAST_ALERTS !== "undefined" ? LAST_ALERTS : []) || [];
+  const alertLines = alerts.slice(0, 25).map(a => `${a.hostname || ""} ${a.type || ""} ${a.level || ""} ${a.message || ""}`.trim());
+  const ctx = `【主机】总数 ${hosts.length}，在线 ${online}，离线 ${offline}` +
+    (offlineNames.length ? `\n离线主机：${offlineNames.join("、")}` : "") +
+    `\n\n【资源水位 TOP】\n${topCpu.join("\n") || "（暂无在线主机指标）"}` +
+    `\n\n【活跃告警 ${alertLines.length}】\n${alertLines.join("\n") || "（无）"}`;
+  openAIAssist({ task: "chart_analysis", title: "AI 分析监控看板", mode: "analyze", context: ctx });
+});
 // 批量清理离线
 safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
 // ===== 顶栏用户菜单 =====

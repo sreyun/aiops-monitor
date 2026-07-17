@@ -276,6 +276,22 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execQueryNetFlow,
 	}
+
+	h.tools["query_hyperv"] = HermesTool{
+		Name: "query_hyperv",
+		Description: "查询某台物理宿主机上的 Hyper-V 虚拟机清单与状态：每台 VM 的运行/关机/暂停、CPU/内存占用、" +
+			"IP 地址、运行时长、复制健康，异常 VM 摆在最前；并能识别 VM 是否对应到一台已纳管主机。" +
+			"排查「宿主机上哪台虚拟机挂了/在抢资源」「某业务 VM 跑在哪台物理机上」时用这个。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "物理宿主机 ID"},
+				"vm_name": map[string]string{"type": "string", "description": "可选：只看指定名称的虚拟机"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryHyperV,
+	}
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).

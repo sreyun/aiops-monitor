@@ -318,6 +318,7 @@ func main() {
 	server := NewServer(store, cfg, notifier, dist, *addr)
 	notifier.forward = server.forward
 	notifier.hw = server.hw // 硬件异常接入统一告警链路（去重/推送与 CPU、磁盘等一致）
+	notifier.hv = server.hv // Hyper-V 虚拟机异常接入统一告警链路
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
 	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）
@@ -329,6 +330,7 @@ func main() {
 	go server.runScheduler(30 * time.Second)    // timed playbook triggers (interval/daily/weekly)
 	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
+	go server.runDutyReportLoop()               // daily AI duty morning report → message center
 	go server.vm.run()                          // optional VictoriaMetrics remote-write pump
 
 	handler := securityHeadersMiddleware(server.corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
