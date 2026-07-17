@@ -146,9 +146,9 @@ type HardwareSnapshot struct {
 	TargetName string           `json:"target_name"`
 	TargetURL  string           `json:"target_url"`
 	Timestamp  int64            `json:"timestamp"`
-	Health     string           `json:"health"`              // OK / Warning / Critical
-	State      string           `json:"state"`               // Enabled / Disabled / ...
-	System     RedfishSystem    `json:"system"`              // 整机身份（厂商/型号/序列号/BIOS…）
+	Health     string           `json:"health"` // OK / Warning / Critical
+	State      string           `json:"state"`  // Enabled / Disabled / ...
+	System     RedfishSystem    `json:"system"` // 整机身份（厂商/型号/序列号/BIOS…）
 	CPUs       []RedfishCPU     `json:"cpus"`
 	GPUs       []RedfishGPU     `json:"gpus,omitempty"` // Processors 里 ProcessorType=GPU 的成员
 	Memory     RedfishMemory    `json:"memory"`
@@ -171,12 +171,12 @@ type RedfishSystem struct {
 	SKU          string `json:"sku,omitempty"`          // Dell 的 Service Tag 就在这里
 	SerialNumber string `json:"serial_number,omitempty"`
 	AssetTag     string `json:"asset_tag,omitempty"`
-	HostName     string `json:"host_name,omitempty"`  // BMC 视角的 OS 主机名
+	HostName     string `json:"host_name,omitempty"` // BMC 视角的 OS 主机名
 	BIOSVersion  string `json:"bios_version,omitempty"`
 	PowerState   string `json:"power_state,omitempty"` // On / Off
 	IndicatorLED string `json:"indicator_led,omitempty"`
-	BMCModel     string `json:"bmc_model,omitempty"`     // iDRAC9 / iBMC
-	BMCFirmware  string `json:"bmc_firmware,omitempty"`  // Manager.FirmwareVersion
+	BMCModel     string `json:"bmc_model,omitempty"`    // iDRAC9 / iBMC
+	BMCFirmware  string `json:"bmc_firmware,omitempty"` // Manager.FirmwareVersion
 }
 
 // HardwareEvent is one BMC log entry (Dell iDRAC SEL/LC log, Huawei iBMC event
@@ -184,8 +184,8 @@ type RedfishSystem struct {
 // when — a Health=Critical rollup on its own tells an operator nothing.
 type HardwareEvent struct {
 	ID        string `json:"id,omitempty"`
-	Created   string `json:"created,omitempty"`   // RFC3339 from the BMC
-	Severity  string `json:"severity,omitempty"`  // OK / Warning / Critical
+	Created   string `json:"created,omitempty"`  // RFC3339 from the BMC
+	Severity  string `json:"severity,omitempty"` // OK / Warning / Critical
 	Message   string `json:"message"`
 	MessageID string `json:"message_id,omitempty"` // e.g. "AMP0300" / "Alert.1.0.PowerSupply"
 	// Component is the offending part, resolved from Links.OriginOfCondition or
@@ -196,13 +196,13 @@ type HardwareEvent struct {
 }
 
 type RedfishCPU struct {
-	Name       string `json:"name"`
-	Model      string `json:"model"`
-	Cores      int    `json:"cores"`
-	Threads    int    `json:"threads"`
-	Health     string `json:"health"`
+	Name       string  `json:"name"`
+	Model      string  `json:"model"`
+	Cores      int     `json:"cores"`
+	Threads    int     `json:"threads"`
+	Health     string  `json:"health"`
 	TempC      float64 `json:"temp_c,omitempty"`
-	MaxFreqMHz int    `json:"max_freq_mhz,omitempty"`
+	MaxFreqMHz int     `json:"max_freq_mhz,omitempty"`
 }
 
 // RedfishGPU is a GPU reported by the BMC (a Processors member whose
@@ -219,17 +219,17 @@ type RedfishGPU struct {
 
 // RedfishRAID is a storage/RAID controller (Storage member's StorageControllers).
 type RedfishRAID struct {
-	Name            string  `json:"name"`
-	Model           string  `json:"model,omitempty"`
-	Manufacturer    string  `json:"manufacturer,omitempty"`
-	FirmwareVersion string  `json:"firmware_version,omitempty"`
-	SpeedGbps       float64 `json:"speed_gbps,omitempty"`
-	Health          string  `json:"health"`
-	State           string  `json:"state,omitempty"`
-	DriveCount      int     `json:"drive_count,omitempty"`
-	SerialNumber    string  `json:"serial_number,omitempty"`
-	CacheMB         float64 `json:"cache_mb,omitempty"`   // CacheSummary.TotalCacheSizeMiB
-	CacheHealth     string  `json:"cache_health,omitempty"` // 掉电保护/BBU 状态
+	Name            string          `json:"name"`
+	Model           string          `json:"model,omitempty"`
+	Manufacturer    string          `json:"manufacturer,omitempty"`
+	FirmwareVersion string          `json:"firmware_version,omitempty"`
+	SpeedGbps       float64         `json:"speed_gbps,omitempty"`
+	Health          string          `json:"health"`
+	State           string          `json:"state,omitempty"`
+	DriveCount      int             `json:"drive_count,omitempty"`
+	SerialNumber    string          `json:"serial_number,omitempty"`
+	CacheMB         float64         `json:"cache_mb,omitempty"`     // CacheSummary.TotalCacheSizeMiB
+	CacheHealth     string          `json:"cache_health,omitempty"` // 掉电保护/BBU 状态
 	Volumes         []RedfishVolume `json:"volumes,omitempty"`
 }
 
@@ -243,9 +243,9 @@ type RedfishVolume struct {
 }
 
 type RedfishMemory struct {
-	TotalGB    float64          `json:"total_gb"`
-	UsedGB     float64          `json:"used_gb,omitempty"`
-	DIMMs      []MemoryDIMM     `json:"dimms,omitempty"`
+	TotalGB float64      `json:"total_gb"`
+	UsedGB  float64      `json:"used_gb,omitempty"`
+	DIMMs   []MemoryDIMM `json:"dimms,omitempty"`
 }
 
 type MemoryDIMM struct {
@@ -272,50 +272,50 @@ type RedfishStorage struct {
 	Status     string  `json:"status,omitempty"`     // OK / Warning / Critical
 	SMARTWarn  bool    `json:"smart_warn,omitempty"`
 	// 定位与寿命：换盘要知道插在哪个槽位，SSD 还要知道还剩多少寿命。
-	SerialNumber  string  `json:"serial_number,omitempty"`
-	Revision      string  `json:"revision,omitempty"` // 盘固件版本
-	Location      string  `json:"location,omitempty"` // 槽位，如 "Bay 3" / "Disk 0:1:3"
-	Manufacturer  string  `json:"manufacturer,omitempty"`
-	RotationRPM   int     `json:"rotation_rpm,omitempty"`
-	LifeLeftPct   float64 `json:"life_left_pct,omitempty"` // SSD 剩余寿命；-1 = 未知
-	SpeedGbps     float64 `json:"speed_gbps,omitempty"`
-	HotspareType  string  `json:"hotspare_type,omitempty"`
-	State         string  `json:"state,omitempty"`
+	SerialNumber string  `json:"serial_number,omitempty"`
+	Revision     string  `json:"revision,omitempty"` // 盘固件版本
+	Location     string  `json:"location,omitempty"` // 槽位，如 "Bay 3" / "Disk 0:1:3"
+	Manufacturer string  `json:"manufacturer,omitempty"`
+	RotationRPM  int     `json:"rotation_rpm,omitempty"`
+	LifeLeftPct  float64 `json:"life_left_pct,omitempty"` // SSD 剩余寿命；-1 = 未知
+	SpeedGbps    float64 `json:"speed_gbps,omitempty"`
+	HotspareType string  `json:"hotspare_type,omitempty"`
+	State        string  `json:"state,omitempty"`
 }
 
 type SensorReading struct {
-	Name     string  `json:"name"`
-	Reading  float64 `json:"reading"`
-	Unit     string  `json:"unit"`     // Celsius, etc.
-	Status   string  `json:"status"`   // OK / Warning / Critical
-	UpperCaution float64 `json:"upper_caution,omitempty"`
+	Name          string  `json:"name"`
+	Reading       float64 `json:"reading"`
+	Unit          string  `json:"unit"`   // Celsius, etc.
+	Status        string  `json:"status"` // OK / Warning / Critical
+	UpperCaution  float64 `json:"upper_caution,omitempty"`
 	UpperCritical float64 `json:"upper_critical,omitempty"`
 }
 
 type FanReading struct {
-	Name    string `json:"name"`
-	RPM     int    `json:"rpm"`
-	Health  string `json:"health"`
-	Status  string `json:"status,omitempty"`
+	Name   string `json:"name"`
+	RPM    int    `json:"rpm"`
+	Health string `json:"health"`
+	Status string `json:"status,omitempty"`
 }
 
 type RedfishPower struct {
-	Redundancy  string         `json:"redundancy"`           // Full / N+1 / NotRedundant
-	PSUs        []PSUReading   `json:"psus,omitempty"`
-	TotalWatts  float64        `json:"total_watts,omitempty"`
+	Redundancy string       `json:"redundancy"` // Full / N+1 / NotRedundant
+	PSUs       []PSUReading `json:"psus,omitempty"`
+	TotalWatts float64      `json:"total_watts,omitempty"`
 }
 
 type PSUReading struct {
-	Name        string  `json:"name"`
-	InputWatts  float64 `json:"input_watts"`
-	OutputWatts float64 `json:"output_watts,omitempty"`
-	Health      string  `json:"health"`
-	State       string  `json:"state"`
-	Model       string  `json:"model,omitempty"`
-	Manufacturer string `json:"manufacturer,omitempty"`
-	SerialNumber string `json:"serial_number,omitempty"`
-	FirmwareVersion string `json:"firmware_version,omitempty"`
-	CapacityWatts   float64 `json:"capacity_watts,omitempty"`    // 额定功率
+	Name             string  `json:"name"`
+	InputWatts       float64 `json:"input_watts"`
+	OutputWatts      float64 `json:"output_watts,omitempty"`
+	Health           string  `json:"health"`
+	State            string  `json:"state"`
+	Model            string  `json:"model,omitempty"`
+	Manufacturer     string  `json:"manufacturer,omitempty"`
+	SerialNumber     string  `json:"serial_number,omitempty"`
+	FirmwareVersion  string  `json:"firmware_version,omitempty"`
+	CapacityWatts    float64 `json:"capacity_watts,omitempty"` // 额定功率
 	LineInputVoltage float64 `json:"line_input_voltage,omitempty"`
 	PowerSupplyType  string  `json:"psu_type,omitempty"` // AC / DC
 }
@@ -366,7 +366,7 @@ type NetFlowStats struct {
 type NetFlowReport struct {
 	HostID      string       `json:"host_id"`
 	Fingerprint string       `json:"fingerprint,omitempty"`
-	Source      string       `json:"source"`       // "netflow" | "packet"
+	Source      string       `json:"source"` // "netflow" | "packet"
 	Timestamp   int64        `json:"timestamp"`
 	WindowSec   int          `json:"window_sec"`
 	Flows       []FlowRecord `json:"flows"`

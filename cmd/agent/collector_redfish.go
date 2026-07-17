@@ -104,8 +104,8 @@ type redfishCollector struct {
 	lastSEL   map[string]int64 // target_name → last event-log collect timestamp
 	// 事件日志按 selInterval 降频采集，但每份快照都要带上——快照是整体 upsert 的，
 	// 不带就等于把上一轮的事件清空，UI 上事件表会一闪一闪。
-	selCache  map[string][]shared.HardwareEvent
-	logPath   map[string]string // target_name → 已选定的 LogService 路径（避免每轮重新发现）
+	selCache map[string][]shared.HardwareEvent
+	logPath  map[string]string // target_name → 已选定的 LogService 路径（避免每轮重新发现）
 
 	// systemPath caches the discovered Systems member @odata.id per target
 	// (e.g. "/redfish/v1/Systems/System.Embedded.1" for Dell iDRAC).
@@ -159,7 +159,13 @@ func (rc *redfishCollector) pollLoop(t RedfishTarget, reporter func(shared.Hardw
 		slog.Warn("Redfish 采集失败", "target", t.Name, "err", snap.Error)
 	} else {
 		failCount = 0
-		slog.Info("Redfish 采集成功", "target", t.Name, "health", snap.Health)
+		// 首次采集把各部件条数打出来：某类部件为 0 往往意味着该机型的 Redfish
+		// 布局又有新花样（华为的 /Storages 就是这么暴露的），日志里一眼可见，
+		// 不用等人去翻代码或上机器抓包。
+		slog.Info("Redfish 采集成功", "target", t.Name, "health", snap.Health,
+			"model", snap.System.Model, "cpu", len(snap.CPUs), "dimm", len(snap.Memory.DIMMs),
+			"disk", len(snap.Storage), "raid", len(snap.RAID), "psu", len(snap.Power.PSUs),
+			"fan", len(snap.Fans), "temp", len(snap.Temps), "event", len(snap.Events))
 	}
 	rc.storeAndReport(t, snap, reporter)
 
@@ -352,11 +358,6 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		}
 	}
 
-	type redfishStatus struct {
-		Health string `json:"Health"`
-		State  string `json:"State"`
-	}
-
 	// Discover system path (vendor-agnostic)
 	sysPath, err := rc.getSystemPath(client, t)
 	if err != nil {
@@ -367,6 +368,9 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 
 	// Discover chassis path (vendor-agnostic)
 	chassisPath, _ := rc.getChassisPath(client, t, sysPath)
+	// Chassis 上取 Thermal/Power 的真实链接与物理盘列表。华为把盘挂在这里，
+	// 而 Thermal/Power 各家都还算标准（拿不到链接就按标准路径拼）。
+	thermalPath, powerPath, chassisDrives := rc.chassisLinks(client, t, password, chassisPath)
 
 	// 1. System overview（含整机身份：厂商/型号/序列号/BIOS）
 	var sys struct {
@@ -390,6 +394,20 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		MemorySummary struct {
 			TotalSystemMemoryGiB float64 `json:"TotalSystemMemoryGiB"`
 		} `json:"MemorySummary"`
+		// 子资源一律**跟随链接**，绝不用 sysPath+"/Storage" 这类拼接：
+		// 华为 iBMC 的 Storage 属性名虽是标准的，值却指向 /Systems/1/Storages(复数)，
+		// 拼接式路径在华为机器上直接 404 —— 整个存储区块因此永远是空的。
+		Storage     odataRef `json:"Storage"`
+		Memory      odataRef `json:"Memory"`
+		Processors  odataRef `json:"Processors"`
+		LogServices odataRef `json:"LogServices"`
+		Oem         struct {
+			// Go 的 json 解码本身大小写不敏感，Oem.Huawei / Oem.huawei 都能命中。
+			Huawei struct {
+				ProcessorView odataRef `json:"ProcessorView"`
+				MemoryView    odataRef `json:"MemoryView"`
+			} `json:"Huawei"`
+		} `json:"Oem"`
 	}
 	if err := rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sys); err != nil {
 		hint := classifyError(err)
@@ -432,58 +450,21 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	}
 
 	// 2. Processors detail
-	var procs struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
-	}
-	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Processors", &procs) == nil {
-		snap.CPUs = nil // replace summary with per-processor entries
-		for _, m := range procs.Members {
-			var p struct {
-				Name          string        `json:"Name"`
-				Model         string        `json:"Model"`
-				Manufacturer  string        `json:"Manufacturer"`
-				ProcessorType string        `json:"ProcessorType"` // CPU / GPU / FPGA / Accelerator…
-				TotalCores    int           `json:"TotalCores"`
-				TotalThreads  int           `json:"TotalThreads"`
-				MaxSpeedMHz   int           `json:"MaxSpeedMHz"`
-				Status        redfishStatus `json:"Status"`
-			}
-			if rc.rfGetRaw(client, t.URL, t.Username, password, m.ODataID, &p) != nil {
-				continue
-			}
-			// Processors 集合里同时挂 CPU 与 GPU/加速卡，按 ProcessorType 分流，
-			// 否则 GPU 会被当成 CPU 混进 CPU 列表（且 GPU 信息完全看不到）。
-			if strings.EqualFold(p.ProcessorType, "GPU") || strings.EqualFold(p.ProcessorType, "Accelerator") {
-				snap.GPUs = append(snap.GPUs, shared.RedfishGPU{
-					Name:         p.Name,
-					Model:        p.Model,
-					Manufacturer: p.Manufacturer,
-					Health:       p.Status.Health,
-					State:        p.Status.State,
-					MaxFreqMHz:   p.MaxSpeedMHz,
-				})
-				continue
-			}
-			snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
-				Name:       p.Name,
-				Model:      p.Model,
-				Cores:      p.TotalCores,
-				Threads:    p.TotalThreads,
-				Health:     p.Status.Health,
-				MaxFreqMHz: p.MaxSpeedMHz,
-			})
-		}
+	// 华为 iBMC 的 ProcessorView 一次 GET 就返回全部 CPU（含标准 schema 里没有的
+	// 温度），比逐个成员 GET 便宜得多；拿不到再回落标准 /Processors。
+	if !rc.collectHuaweiProcessorView(client, t, password, sys.Oem.Huawei.ProcessorView.ID, &snap) {
+		rc.collectProcessors(client, t, password, orDefault(sys.Processors.ID, sysPath+"/Processors"), &snap)
 	}
 
-	// 3. Memory DIMMs (lower frequency: every 5 min)
+	// 3. Memory DIMMs
+	// 同 CPU：华为 MemoryView 一次拿全，标准 /Memory 兜底。
 	var mems struct {
 		Members []struct {
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Memory", &mems) == nil {
+	if !rc.collectHuaweiMemoryView(client, t, password, sys.Oem.Huawei.MemoryView.ID, &snap) &&
+		rc.rfGetRaw(client, t.URL, t.Username, password, orDefault(sys.Memory.ID, sysPath+"/Memory"), &mems) == nil {
 		for _, m := range mems.Members {
 			var dimm struct {
 				Name              string        `json:"Name"`
@@ -533,13 +514,19 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		}
 	}
 
-	// 4. Storage (every 2 min)
+	// 4. Storage
+	// 路径**必须**取自 System.Storage 的 @odata.id：华为 iBMC(含 Kunpeng S920 S00 主板)
+	// 把它指向 /Systems/{id}/Storages（复数），硬拼 "/Storage" 会 404 → 存储、RAID 卡、
+	// 逻辑卷、硬盘全军覆没。链接缺失时才退回标准路径。
 	var storages struct {
 		Members []struct {
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Storage", &storages) == nil {
+	// 已见过的盘 URI —— 华为的盘同时挂在 Storage 成员和 Chassis.Links.Drives 下，
+	// 两边都要采（有的机型只有其中一边有），靠 URI 去重避免同一块盘出现两次。
+	seenDrives := map[string]bool{}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, orDefault(sys.Storage.ID, sysPath+"/Storage"), &storages) == nil {
 		for _, sm := range storages.Members {
 			var st struct {
 				Name   string `json:"Name"`
@@ -559,9 +546,9 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 					SpeedGbps       float64       `json:"SpeedGbps"`
 					Status          redfishStatus `json:"Status"`
 					CacheSummary    struct {
-						TotalCacheSizeMiB float64       `json:"TotalCacheSizeMiB"`
-						PersistentCacheSizeMiB float64  `json:"PersistentCacheSizeMiB"`
-						Status            redfishStatus `json:"Status"`
+						TotalCacheSizeMiB      float64       `json:"TotalCacheSizeMiB"`
+						PersistentCacheSizeMiB float64       `json:"PersistentCacheSizeMiB"`
+						Status                 redfishStatus `json:"Status"`
 					} `json:"CacheSummary"`
 				} `json:"StorageControllers"`
 			}
@@ -588,68 +575,15 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 					})
 				}
 				for _, d := range st.Drives {
-					var drv struct {
-						Name             string        `json:"Name"`
-						Model            string        `json:"Model"`
-						Manufacturer     string        `json:"Manufacturer"`
-						SerialNumber     string        `json:"SerialNumber"`
-						Revision         string        `json:"Revision"`
-						CapacityBytes    uint64        `json:"CapacityBytes"`
-						Status           redfishStatus `json:"Status"`
-						MediaType        string        `json:"MediaType"`
-						Protocol         string        `json:"Protocol"`
-						FailurePredicted bool          `json:"FailurePredicted"` // SMART 预测故障
-						RotationSpeedRPM float64       `json:"RotationSpeedRPM"`
-						NegotiatedSpeedGbs float64     `json:"NegotiatedSpeedGbs"`
-						HotspareType     string        `json:"HotspareType"`
-						PhysicalLocation struct {
-							PartLocation struct {
-								ServiceLabel   string `json:"ServiceLabel"`
-								LocationOrdinalValue int `json:"LocationOrdinalValue"`
-							} `json:"PartLocation"`
-							Info string `json:"Info"`
-						} `json:"PhysicalLocation"`
-						// SSD 剩余寿命；Redfish 里 null 表示未知，用指针区分 null 与 0%。
-						PredictedMediaLifeLeftPercent *float64 `json:"PredictedMediaLifeLeftPercent"`
-					}
-					if rc.rfGetRaw(client, t.URL, t.Username, password, d.ODataID, &drv) != nil {
-						continue
-					}
-					// 空盘位同样会以成员形式返回。
-					if strings.EqualFold(drv.Status.State, "Absent") {
-						continue
-					}
-					loc := strings.TrimSpace(drv.PhysicalLocation.PartLocation.ServiceLabel)
-					if loc == "" {
-						loc = strings.TrimSpace(drv.PhysicalLocation.Info)
-					}
-					life := -1.0 // -1 = BMC 未提供（区别于真的剩 0%）
-					if drv.PredictedMediaLifeLeftPercent != nil {
-						life = *drv.PredictedMediaLifeLeftPercent
-					}
-					snap.Storage = append(snap.Storage, shared.RedfishStorage{
-						Name:       drv.Name,
-						Model:      strings.TrimSpace(drv.Model),
-						CapacityGB: float64(drv.CapacityBytes) / (1024 * 1024 * 1024),
-						Health:     drv.Status.Health,
-						MediaType:  drv.MediaType,
-						Protocol:   drv.Protocol,
-						Status:     drv.Status.Health,
-						// 此前 SMARTWarn 从未被赋值，前端却按它标红——盘的预测故障永远看不到。
-						SMARTWarn:    drv.FailurePredicted,
-						SerialNumber: strings.TrimSpace(drv.SerialNumber),
-						Revision:     strings.TrimSpace(drv.Revision),
-						Location:     loc,
-						Manufacturer: strings.TrimSpace(drv.Manufacturer),
-						RotationRPM:  int(drv.RotationSpeedRPM),
-						LifeLeftPct:  life,
-						SpeedGbps:    drv.NegotiatedSpeedGbs,
-						HotspareType: drv.HotspareType,
-						State:        drv.Status.State,
-					})
+					rc.collectDrive(client, t, password, d.ODataID, seenDrives, &snap)
 				}
 			}
 		}
+	}
+	// 华为 iBMC 的物理盘权威列表在 Chassis.Links.Drives（/Chassis/1/Drives/HDDPlaneDisk0），
+	// 不在 Storage 成员下；某些机型两边都有、某些只有 Chassis 一边。合并去重后才完整。
+	for _, d := range chassisDrives {
+		rc.collectDrive(client, t, password, d, seenDrives, &snap)
 	}
 
 	// 5. Thermal (temperatures + fans)
@@ -668,8 +602,8 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			Status       redfishStatus `json:"Status"`
 		} `json:"Fans"`
 	}
-	if chassisPath != "" {
-		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Thermal", &thermal) == nil {
+	if thermalPath != "" {
+		if rc.rfGetRaw(client, t.URL, t.Username, password, thermalPath, &thermal) == nil {
 			for _, t := range thermal.Temperatures {
 				snap.Temps = append(snap.Temps, shared.SensorReading{
 					Name:          t.Name,
@@ -701,24 +635,24 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		// （"PowerSupply" 只是类型名，不是属性名）。此前写成 PowerSupply /
 		// PowerSupplyRedundancy，导致所有厂商的 PSU 一律解析不出来 → 前端电源区永不渲染。
 		PowerSupplies []struct {
-			Name              string        `json:"Name"`
-			PowerInputWatts   float64       `json:"PowerInputWatts"`
-			PowerOutputWatts  float64       `json:"PowerOutputWatts"`
-			PowerCapacityWatts float64      `json:"PowerCapacityWatts"`
-			LineInputVoltage  float64       `json:"LineInputVoltage"`
-			PowerSupplyType   string        `json:"PowerSupplyType"`
-			Model             string        `json:"Model"`
-			Manufacturer      string        `json:"Manufacturer"`
-			SerialNumber      string        `json:"SerialNumber"`
-			FirmwareVersion   string        `json:"FirmwareVersion"`
-			Status            redfishStatus `json:"Status"`
+			Name               string        `json:"Name"`
+			PowerInputWatts    float64       `json:"PowerInputWatts"`
+			PowerOutputWatts   float64       `json:"PowerOutputWatts"`
+			PowerCapacityWatts float64       `json:"PowerCapacityWatts"`
+			LineInputVoltage   float64       `json:"LineInputVoltage"`
+			PowerSupplyType    string        `json:"PowerSupplyType"`
+			Model              string        `json:"Model"`
+			Manufacturer       string        `json:"Manufacturer"`
+			SerialNumber       string        `json:"SerialNumber"`
+			FirmwareVersion    string        `json:"FirmwareVersion"`
+			Status             redfishStatus `json:"Status"`
 		} `json:"PowerSupplies"`
 		Redundancy []struct {
 			Mode string `json:"Mode"`
 		} `json:"Redundancy"`
 	}
-	if chassisPath != "" {
-		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Power", &power) == nil {
+	if powerPath != "" {
+		if rc.rfGetRaw(client, t.URL, t.Username, password, powerPath, &power) == nil {
 			if len(power.Redundancy) > 0 {
 				snap.Power.Redundancy = power.Redundancy[0].Mode
 			}
@@ -786,6 +720,273 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	return snap
 }
 
+// redfishStatus is the Status object every Redfish resource carries.
+type redfishStatus struct {
+	Health string `json:"Health"`
+	State  string `json:"State"`
+}
+
+// odataRef is a Redfish link ({"@odata.id": "..."}). Sub-resource paths are
+// ALWAYS taken from these, never string-concatenated: vendors point standard
+// property names at non-standard paths (Huawei's System.Storage →
+// "/redfish/v1/Systems/1/Storages"), and a hardcoded path just 404s.
+type odataRef struct {
+	ID string `json:"@odata.id"`
+}
+
+func orDefault(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+// chassisLinks resolves the Thermal/Power links and the chassis' physical drive
+// list. Huawei iBMC hangs drives off Chassis.Links.Drives
+// (/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0) rather than under the Storage
+// member, so a Storage-only sweep sees no disks at all on those machines.
+func (rc *redfishCollector) chassisLinks(client *http.Client, t RedfishTarget, password, chassisPath string) (thermal, power string, drives []string) {
+	if chassisPath == "" {
+		return "", "", nil
+	}
+	var ch struct {
+		Thermal odataRef   `json:"Thermal"`
+		Power   odataRef   `json:"Power"`
+		Drives  []odataRef `json:"Drives"` // 部分固件直接放顶层
+		Links   struct {
+			Drives []odataRef `json:"Drives"`
+		} `json:"Links"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, chassisPath, &ch) != nil {
+		// 读不到 Chassis 也别放弃散热/电源：退回标准路径拼接
+		return chassisPath + "/Thermal", chassisPath + "/Power", nil
+	}
+	for _, d := range append(append([]odataRef{}, ch.Links.Drives...), ch.Drives...) {
+		if d.ID != "" {
+			drives = append(drives, d.ID)
+		}
+	}
+	return orDefault(ch.Thermal.ID, chassisPath+"/Thermal"),
+		orDefault(ch.Power.ID, chassisPath+"/Power"), drives
+}
+
+// collectDrive fetches one physical drive and appends it. seen dedupes by URI —
+// the same disk is reachable from both the Storage member and Chassis.Links.
+func (rc *redfishCollector) collectDrive(client *http.Client, t RedfishTarget, password, path string, seen map[string]bool, snap *shared.HardwareSnapshot) {
+	if path == "" || seen[path] {
+		return
+	}
+	seen[path] = true
+
+	var drv struct {
+		Name               string        `json:"Name"`
+		Model              string        `json:"Model"`
+		Manufacturer       string        `json:"Manufacturer"`
+		SerialNumber       string        `json:"SerialNumber"`
+		Revision           string        `json:"Revision"`
+		CapacityBytes      uint64        `json:"CapacityBytes"`
+		Status             redfishStatus `json:"Status"`
+		MediaType          string        `json:"MediaType"`
+		Protocol           string        `json:"Protocol"`
+		FailurePredicted   bool          `json:"FailurePredicted"` // SMART 预测故障
+		RotationSpeedRPM   float64       `json:"RotationSpeedRPM"`
+		NegotiatedSpeedGbs float64       `json:"NegotiatedSpeedGbs"`
+		HotspareType       string        `json:"HotspareType"`
+		PhysicalLocation   struct {
+			PartLocation struct {
+				ServiceLabel         string `json:"ServiceLabel"`
+				LocationOrdinalValue int    `json:"LocationOrdinalValue"`
+			} `json:"PartLocation"`
+			Info string `json:"Info"`
+		} `json:"PhysicalLocation"`
+		// SSD 剩余寿命；Redfish 里 null 表示未知，用指针区分 null 与 0%。
+		PredictedMediaLifeLeftPercent *float64 `json:"PredictedMediaLifeLeftPercent"`
+		// 华为把槽位/健康细节塞在 Oem 里，标准字段常为空。
+		Oem struct {
+			Huawei struct {
+				Position       string `json:"Position"`
+				FirmwareStatus string `json:"FirmwareStatus"`
+			} `json:"Huawei"`
+		} `json:"Oem"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, path, &drv) != nil {
+		return
+	}
+	if strings.EqualFold(drv.Status.State, "Absent") {
+		return // 空盘位
+	}
+
+	loc := strings.TrimSpace(drv.PhysicalLocation.PartLocation.ServiceLabel)
+	if loc == "" {
+		loc = strings.TrimSpace(drv.PhysicalLocation.Info)
+	}
+	if loc == "" {
+		loc = strings.TrimSpace(drv.Oem.Huawei.Position) // 华为的槽位在这
+	}
+	life := -1.0 // -1 = BMC 未提供（区别于真的剩 0%）
+	if drv.PredictedMediaLifeLeftPercent != nil {
+		life = *drv.PredictedMediaLifeLeftPercent
+	}
+	snap.Storage = append(snap.Storage, shared.RedfishStorage{
+		Name:       drv.Name,
+		Model:      strings.TrimSpace(drv.Model),
+		CapacityGB: float64(drv.CapacityBytes) / (1024 * 1024 * 1024),
+		Health:     drv.Status.Health,
+		MediaType:  drv.MediaType,
+		Protocol:   drv.Protocol,
+		Status:     drv.Status.Health,
+		// 此前 SMARTWarn 从未被赋值，前端却按它标红——盘的预测故障永远看不到。
+		SMARTWarn:    drv.FailurePredicted,
+		SerialNumber: strings.TrimSpace(drv.SerialNumber),
+		Revision:     strings.TrimSpace(drv.Revision),
+		Location:     loc,
+		Manufacturer: strings.TrimSpace(drv.Manufacturer),
+		RotationRPM:  int(drv.RotationSpeedRPM),
+		LifeLeftPct:  life,
+		SpeedGbps:    drv.NegotiatedSpeedGbs,
+		HotspareType: drv.HotspareType,
+		State:        drv.Status.State,
+	})
+}
+
+// collectProcessors walks the standard /Processors collection, splitting CPUs
+// from GPUs/accelerators by ProcessorType.
+func (rc *redfishCollector) collectProcessors(client *http.Client, t RedfishTarget, password, path string, snap *shared.HardwareSnapshot) {
+	var procs struct {
+		Members []odataRef `json:"Members"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, path, &procs) != nil {
+		return
+	}
+	snap.CPUs = nil // 用逐个处理器的明细替换掉 summary 占位
+	for _, m := range procs.Members {
+		var p struct {
+			Name          string        `json:"Name"`
+			Model         string        `json:"Model"`
+			Manufacturer  string        `json:"Manufacturer"`
+			ProcessorType string        `json:"ProcessorType"` // CPU / GPU / FPGA / Accelerator…
+			TotalCores    int           `json:"TotalCores"`
+			TotalThreads  int           `json:"TotalThreads"`
+			MaxSpeedMHz   int           `json:"MaxSpeedMHz"`
+			Status        redfishStatus `json:"Status"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, m.ID, &p) != nil {
+			continue
+		}
+		if strings.EqualFold(p.Status.State, "Absent") {
+			continue // 空 CPU 槽
+		}
+		// Processors 集合里同时挂 CPU 与 GPU/加速卡，按 ProcessorType 分流，
+		// 否则 GPU 会被当成 CPU 混进 CPU 列表（且 GPU 信息完全看不到）。
+		if strings.EqualFold(p.ProcessorType, "GPU") || strings.EqualFold(p.ProcessorType, "Accelerator") {
+			snap.GPUs = append(snap.GPUs, shared.RedfishGPU{
+				Name: p.Name, Model: p.Model, Manufacturer: p.Manufacturer,
+				Health: p.Status.Health, State: p.Status.State, MaxFreqMHz: p.MaxSpeedMHz,
+			})
+			continue
+		}
+		snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
+			Name: p.Name, Model: p.Model, Cores: p.TotalCores, Threads: p.TotalThreads,
+			Health: p.Status.Health, MaxFreqMHz: p.MaxSpeedMHz,
+		})
+	}
+}
+
+// collectHuaweiProcessorView reads Oem.Huawei.ProcessorView — one GET returns
+// every CPU, including a Temperature the standard Processor schema has no field
+// for. Returns false when the view is absent/unusable so callers fall back.
+func (rc *redfishCollector) collectHuaweiProcessorView(client *http.Client, t RedfishTarget, password, path string, snap *shared.HardwareSnapshot) bool {
+	if path == "" {
+		return false
+	}
+	var v struct {
+		Information []struct {
+			Name          string        `json:"Name"`
+			Model         string        `json:"Model"`
+			Manufacturer  string        `json:"Manufacturer"`
+			ProcessorType string        `json:"ProcessorType"`
+			TotalCores    int           `json:"TotalCores"`
+			TotalThreads  int           `json:"TotalThreads"`
+			MaxSpeedMHz   int           `json:"MaxSpeedMHz"`
+			FrequencyMHz  int           `json:"FrequencyMHz"`
+			Temperature   float64       `json:"Temperature"`
+			Status        redfishStatus `json:"Status"`
+		} `json:"Information"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, path, &v) != nil || len(v.Information) == 0 {
+		return false
+	}
+	snap.CPUs = nil
+	for _, p := range v.Information {
+		if strings.EqualFold(p.Status.State, "Absent") {
+			continue
+		}
+		if strings.EqualFold(p.ProcessorType, "GPU") || strings.EqualFold(p.ProcessorType, "Accelerator") {
+			snap.GPUs = append(snap.GPUs, shared.RedfishGPU{
+				Name: p.Name, Model: p.Model, Manufacturer: p.Manufacturer,
+				Health: p.Status.Health, State: p.Status.State, MaxFreqMHz: p.MaxSpeedMHz,
+			})
+			continue
+		}
+		freq := p.MaxSpeedMHz
+		if freq == 0 {
+			freq = p.FrequencyMHz
+		}
+		snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
+			Name: p.Name, Model: strings.TrimSpace(p.Model), Cores: p.TotalCores,
+			Threads: p.TotalThreads, Health: p.Status.Health, MaxFreqMHz: freq,
+			TempC: p.Temperature,
+		})
+	}
+	return len(snap.CPUs) > 0 || len(snap.GPUs) > 0
+}
+
+// collectHuaweiMemoryView reads Oem.Huawei.MemoryView — one GET for all DIMMs.
+func (rc *redfishCollector) collectHuaweiMemoryView(client *http.Client, t RedfishTarget, password, path string, snap *shared.HardwareSnapshot) bool {
+	if path == "" {
+		return false
+	}
+	var v struct {
+		Information []struct {
+			Name              string        `json:"Name"`
+			CapacityMiB       float64       `json:"CapacityMiB"`
+			MemoryDeviceType  string        `json:"MemoryDeviceType"`
+			OperatingSpeedMhz int           `json:"OperatingSpeedMhz"`
+			Manufacturer      string        `json:"Manufacturer"`
+			PartNumber        string        `json:"PartNumber"`
+			SerialNumber      string        `json:"SerialNumber"`
+			RankCount         int           `json:"RankCount"`
+			DeviceLocator     string        `json:"DeviceLocator"`
+			Status            redfishStatus `json:"Status"`
+		} `json:"Information"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, path, &v) != nil || len(v.Information) == 0 {
+		return false
+	}
+	n := 0
+	for _, d := range v.Information {
+		// 华为同样把未安装的槽位一并返回，必须滤掉，否则"幻影内存条"。
+		if strings.EqualFold(d.Status.State, "Absent") || d.CapacityMiB <= 0 {
+			continue
+		}
+		snap.Memory.DIMMs = append(snap.Memory.DIMMs, shared.MemoryDIMM{
+			Name:         d.Name,
+			CapacityGB:   d.CapacityMiB / 1024,
+			Type:         d.MemoryDeviceType,
+			SpeedMHz:     d.OperatingSpeedMhz,
+			Health:       d.Status.Health,
+			Slot:         orDefault(strings.TrimSpace(d.DeviceLocator), d.Name),
+			Manufacturer: strings.TrimSpace(d.Manufacturer),
+			PartNumber:   strings.TrimSpace(d.PartNumber),
+			SerialNumber: strings.TrimSpace(d.SerialNumber),
+			RankCount:    d.RankCount,
+			State:        d.Status.State,
+		})
+		n++
+	}
+	return n > 0
+}
+
 // hwEventCap bounds how many BMC log entries ride along in each snapshot.
 // A Dell SEL holds ~500 entries and the LC log thousands; shipping them all on
 // every poll would bloat the report and the JSONB row for no operational gain.
@@ -836,10 +1037,10 @@ func (rc *redfishCollector) collectVolumes(client *http.Client, t RedfishTarget,
 	var out []shared.RedfishVolume
 	for _, m := range col.Members {
 		var v struct {
-			Name          string  `json:"Name"`
-			RAIDType      string  `json:"RAIDType"`
-			VolumeType    string  `json:"VolumeType"` // 老固件（iDRAC8/RH2288 V3）只有这个
-			CapacityBytes uint64  `json:"CapacityBytes"`
+			Name          string `json:"Name"`
+			RAIDType      string `json:"RAIDType"`
+			VolumeType    string `json:"VolumeType"` // 老固件（iDRAC8/RH2288 V3）只有这个
+			CapacityBytes uint64 `json:"CapacityBytes"`
 			Status        struct {
 				Health string `json:"Health"`
 				State  string `json:"State"`
@@ -863,60 +1064,72 @@ func (rc *redfishCollector) collectVolumes(client *http.Client, t RedfishTarget,
 	return out
 }
 
-// logServicePaths returns candidate LogService Entries endpoints, discovered
-// rather than hardcoded because the naming differs per vendor:
-//   - Dell iDRAC7/8/9:  Managers/iDRAC.Embedded.1/LogServices/Sel  (+ /Lclog)
-//   - Huawei iBMC (RH2288 V3 / TaiShan 200): Managers/1/LogServices/Log
-//   - Some models expose it under Systems/<id>/LogServices/... instead
+// logServicePaths returns candidate LogService endpoints in priority order,
+// discovered rather than hardcoded because vendors differ sharply:
+//   - Dell iDRAC7/8/9: Managers/iDRAC.Embedded.1/LogServices/Sel (硬件故障)
+//     外加 /Lclog（几千条配置变更噪声，不是我们要的）
+//   - Huawei iBMC (RH2288 V3 / TaiShan / Kunpeng S920 S00):
+//     硬件事件在 **Systems/{id}/LogServices/Log1**；
+//     Managers/1/LogServices 下的 OperateLog / RunLog / SecurityLog 是
+//     BMC 的操作、运行、安全日志 —— 跟硬件故障无关，选中它们等于答非所问。
+//     部分固件的 Manager 甚至没有 LogServices 属性。
 func (rc *redfishCollector) logServicePaths(client *http.Client, t RedfishTarget, password, sysPath string) []string {
 	var out []string
 	seen := map[string]bool{}
 
 	collect := func(base string) {
+		if base == "" {
+			return
+		}
 		var col struct {
-			Members []struct {
-				ODataID string `json:"@odata.id"`
-			} `json:"Members"`
+			Members []odataRef `json:"Members"`
 		}
 		if rc.rfGetRaw(client, t.URL, t.Username, password, base, &col) != nil {
 			return
 		}
 		for _, m := range col.Members {
-			if m.ODataID != "" && !seen[m.ODataID] {
-				seen[m.ODataID] = true
-				out = append(out, m.ODataID)
+			if m.ID != "" && !seen[m.ID] {
+				seen[m.ID] = true
+				out = append(out, m.ID)
 			}
 		}
 	}
 
-	// Managers/*/LogServices —— SEL 通常挂在 BMC 下
-	var mgrs struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
-	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Managers", &mgrs) == nil {
-		for _, m := range mgrs.Members {
-			collect(m.ODataID + "/LogServices")
-		}
-	}
+	// 先 Systems（华为硬件事件在这），再 Managers（Dell 的 SEL 在这）
 	if sysPath != "" {
 		collect(sysPath + "/LogServices")
 	}
+	var mgrs struct {
+		Members []odataRef `json:"Members"`
+	}
+	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Managers", &mgrs) == nil {
+		for _, m := range mgrs.Members {
+			collect(m.ID + "/LogServices")
+		}
+	}
 
-	// 优先级：SEL > 事件日志 > 其它。Dell 的 Lclog 有几千条配置变更噪声，
-	// SEL 才是硬件故障；华为 iBMC 只有 Log。
+	// 排序即取舍：数字越小越像"硬件故障日志"。
 	rank := func(p string) int {
-		lp := strings.ToLower(p)
+		lp := strings.ToLower(strings.TrimRight(p, "/"))
+		seg := lp
+		if i := strings.LastIndex(lp, "/"); i >= 0 {
+			seg = lp[i+1:] // 只看最后一段，避免父路径里的字样误伤
+		}
 		switch {
-		case strings.Contains(lp, "sel"):
-			return 0
-		case strings.Contains(lp, "eventlog"), strings.HasSuffix(lp, "/log"):
-			return 1
-		case strings.Contains(lp, "lclog"), strings.Contains(lp, "lifecycle"):
+		// BMC 自身的操作/运行/安全日志：明确排到最后，宁可没有也不要错的。
+		case strings.Contains(seg, "operate"), strings.Contains(seg, "runlog"),
+			strings.Contains(seg, "security"), strings.Contains(seg, "audit"):
+			return 9
+		case strings.Contains(seg, "lclog"), strings.Contains(seg, "lifecycle"):
+			return 8 // Dell LC 日志：噪声大，仅作兜底
+		case strings.Contains(seg, "sel"):
+			return 0 // Dell/通用 SEL
+		case strings.HasPrefix(seg, "log"):
+			return 1 // 华为 Log1 / Log
+		case strings.Contains(seg, "event"):
 			return 2
 		}
-		return 3
+		return 5
 	}
 	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
 	return out
@@ -941,34 +1154,26 @@ func (rc *redfishCollector) collectEvents(client *http.Client, t RedfishTarget, 
 		paths = rc.logServicePaths(client, t, password, sysPath)
 	}
 	for _, p := range paths {
-		// $top 让 BMC 只回最近的一批；不支持的固件会忽略该参数，此时靠下面截断兜底。
-		var col struct {
-			Members []struct {
-				Id       string `json:"Id"`
-				Created  string `json:"Created"`
-				Severity string `json:"Severity"`
-				Message  string `json:"Message"`
-				MessageId string `json:"MessageId"`
-				MessageArgs []string `json:"MessageArgs"`
-				EntryType   string `json:"EntryType"`
-				SensorType  string `json:"SensorType"`
-				SensorNumber *int  `json:"SensorNumber"`
-				Resolved    bool   `json:"Resolved"`
-				Links       struct {
-					OriginOfCondition struct {
-						ODataID string `json:"@odata.id"`
-					} `json:"OriginOfCondition"`
-				} `json:"Links"`
-				// 华为 iBMC 把归因塞在 Oem 里
-				Oem struct {
-					Huawei struct {
-						EventSubject string `json:"EventSubject"`
-					} `json:"Huawei"`
-				} `json:"Oem"`
-			} `json:"Members"`
+		// Entries 的地址同样取自 LogService 自身的链接，不做 p+"/Entries" 假设。
+		var svc struct {
+			Entries odataRef `json:"Entries"`
+			Name    string   `json:"Name"`
 		}
-		if rc.rfGetRaw(client, t.URL, t.Username, password, p+"/Entries?$top=100", &col) != nil {
-			if rc.rfGetRaw(client, t.URL, t.Username, password, p+"/Entries", &col) != nil {
+		entriesPath := p + "/Entries"
+		if rc.rfGetRaw(client, t.URL, t.Username, password, p, &svc) == nil && svc.Entries.ID != "" {
+			entriesPath = svc.Entries.ID
+		}
+
+		// $top 让 BMC 只回最近的一批；不支持的固件会忽略甚至拒绝该参数，故带回退。
+		var col struct {
+			Members []redfishLogEntry `json:"Members"`
+		}
+		sep := "?"
+		if strings.Contains(entriesPath, "?") {
+			sep = "&"
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, entriesPath+sep+"$top=100", &col) != nil {
+			if rc.rfGetRaw(client, t.URL, t.Username, password, entriesPath, &col) != nil {
 				continue
 			}
 		}
@@ -977,30 +1182,15 @@ func (rc *redfishCollector) collectEvents(client *http.Client, t RedfishTarget, 
 		}
 		out := make([]shared.HardwareEvent, 0, len(col.Members))
 		for _, m := range col.Members {
-			comp := strings.TrimSpace(m.Oem.Huawei.EventSubject)
-			if comp == "" {
-				comp = componentFromODataID(m.Links.OriginOfCondition.ODataID)
-			}
-			if comp == "" && len(m.MessageArgs) > 0 {
-				// Dell SEL 的 MessageArgs[0] 常就是部件名（"PSU 2" / "DIMM_A3"）。
-				comp = strings.TrimSpace(m.MessageArgs[0])
-			}
-			if comp == "" && m.SensorType != "" {
-				comp = m.SensorType
-				if m.SensorNumber != nil {
-					comp = fmt.Sprintf("%s #%d", m.SensorType, *m.SensorNumber)
+			// 部分 iBMC 固件的集合里只有 {"@odata.id": ...} 空壳，正文要再取一次。
+			// 不补这一步，事件表就是一排空白行。
+			if m.Message == "" && m.Created == "" && m.ODataID != "" {
+				var full redfishLogEntry
+				if rc.rfGetRaw(client, t.URL, t.Username, password, m.ODataID, &full) == nil {
+					m = full
 				}
 			}
-			out = append(out, shared.HardwareEvent{
-				ID:         m.Id,
-				Created:    m.Created,
-				Severity:   m.Severity,
-				Message:    strings.TrimSpace(m.Message),
-				MessageID:  m.MessageId,
-				Component:  comp,
-				SensorType: m.SensorType,
-				Resolved:   m.Resolved,
-			})
+			out = append(out, m.toEvent())
 		}
 		// BMC 返回顺序不一（Dell 由旧到新，部分 iBMC 相反）。统一按时间倒序，
 		// 再截断，保证留下的是**最近** N 条而不是最老的 N 条。
@@ -1019,6 +1209,80 @@ func (rc *redfishCollector) collectEvents(client *http.Client, t RedfishTarget, 
 	rc.lastSEL[t.Name] = now
 	rc.mu.Unlock()
 	return cached
+}
+
+// redfishLogEntry is one LogEntry as returned by any vendor's log service.
+type redfishLogEntry struct {
+	ODataID      string   `json:"@odata.id"`
+	Id           string   `json:"Id"`
+	Name         string   `json:"Name"`
+	Created      string   `json:"Created"`
+	Severity     string   `json:"Severity"`
+	Message      string   `json:"Message"`
+	MessageId    string   `json:"MessageId"`
+	MessageArgs  []string `json:"MessageArgs"`
+	EntryType    string   `json:"EntryType"`
+	SensorType   string   `json:"SensorType"`
+	SensorNumber *int     `json:"SensorNumber"`
+	Resolved     bool     `json:"Resolved"`
+	Links        struct {
+		OriginOfCondition odataRef `json:"OriginOfCondition"`
+	} `json:"Links"`
+	// 华为 iBMC 的归因与级别都在 Oem 里；Go 的 json 解码大小写不敏感，
+	// 所以 Oem.Huawei / Oem.huawei（两种写法固件里都出现过）都能命中。
+	Oem struct {
+		Huawei struct {
+			EventSubject string `json:"EventSubject"`
+			Level        string `json:"Level"`
+		} `json:"Huawei"`
+	} `json:"Oem"`
+}
+
+// hwSeverityNorm maps a vendor severity onto Redfish's OK/Warning/Critical.
+// 华为 iBMC 的 Oem.Huawei.Level 用的是 Normal/Minor/Major/WARN/CRIT 这类词，
+// 直接透传会让前端按未知级别渲染成灰色"未知"，等于丢掉了告警。
+func hwSeverityNorm(s string) string {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "OK", "NORMAL", "INFORMATIONAL", "INFO":
+		return "OK"
+	case "WARNING", "WARN", "MINOR":
+		return "Warning"
+	case "CRITICAL", "CRIT", "MAJOR", "FATAL", "ERROR":
+		return "Critical"
+	}
+	return ""
+}
+
+func (m redfishLogEntry) toEvent() shared.HardwareEvent {
+	comp := strings.TrimSpace(m.Oem.Huawei.EventSubject)
+	if comp == "" {
+		comp = componentFromODataID(m.Links.OriginOfCondition.ID)
+	}
+	if comp == "" && len(m.MessageArgs) > 0 {
+		// Dell SEL 的 MessageArgs[0] 常就是部件名（"PSU 2" / "DIMM_A3"）。
+		comp = strings.TrimSpace(m.MessageArgs[0])
+	}
+	if comp == "" && m.SensorType != "" {
+		comp = m.SensorType
+		if m.SensorNumber != nil {
+			comp = fmt.Sprintf("%s #%d", m.SensorType, *m.SensorNumber)
+		}
+	}
+	// 华为在 Run Log 一类条目上 Severity 不可靠，真实级别只在 Oem.Huawei.Level。
+	sev := hwSeverityNorm(m.Severity)
+	if sev == "" {
+		sev = hwSeverityNorm(m.Oem.Huawei.Level)
+	}
+	return shared.HardwareEvent{
+		ID:         m.Id,
+		Created:    m.Created,
+		Severity:   sev,
+		Message:    strings.TrimSpace(m.Message),
+		MessageID:  m.MessageId,
+		Component:  comp,
+		SensorType: m.SensorType,
+		Resolved:   m.Resolved,
+	}
 }
 
 // componentFromODataID turns a Redfish resource path into a human-readable part
