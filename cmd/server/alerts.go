@@ -172,7 +172,7 @@ type Alert struct {
 	Hostname  string  `json:"hostname"`
 	IP        string  `json:"ip"`
 	Level     string  `json:"level"`           // warning | critical
-	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | conn | api | task | forward
+	Type      string  `json:"type"`            // cpu | memory | disk | diskio | iops | offline | check | load | gpu | proc | conn | hardware | api | task | forward
 	Scope     string  `json:"scope,omitempty"` // sub-target (e.g. disk path) for per-item dedup
 	Since     int64   `json:"since,omitempty"` // unix time the condition first fired (for duration display)
 	Message   string  `json:"message"`

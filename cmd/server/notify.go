@@ -31,13 +31,14 @@ type Notifier struct {
 	cfg       *ConfigStore
 	httpc     *http.Client
 	mu        sync.Mutex
-	active    map[string]Alert  // alertKey -> alert currently firing
-	since     map[string]int64  // alertKey -> unix time the alert first fired
-	recordIDs map[string]int64  // alertKey -> PG record ID (for resolve update)
+	active    map[string]Alert // alertKey -> alert currently firing
+	since     map[string]int64 // alertKey -> unix time the alert first fired
+	recordIDs map[string]int64 // alertKey -> PG record ID (for resolve update)
 	// SRE hooks (set during server wiring; nil-safe).
 	incidents   *incidentManager
 	remediation *remediationManager
 	forward     *forwardManager // set after server startup
+	hw          *hardwareStore  // set after server startup; feeds hardware alerts
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -104,6 +105,10 @@ func (n *Notifier) tick() {
 	alerts := Evaluate(n.store.ListHosts(), n.cfg.Thresholds())
 	if n.forward != nil {
 		alerts = append(alerts, EvaluateForward(n.forward.Snapshot(), n.cfg.Thresholds())...)
+	}
+	// 硬件（Redfish/BMC）异常并入同一条告警链路：去重 → 触发/恢复 → 推送飞书/钉钉/短信…
+	if n.hw != nil {
+		alerts = append(alerts, EvaluateHardware(n.hw)...)
 	}
 	cur := make(map[string]Alert, len(alerts))
 	for _, a := range alerts {

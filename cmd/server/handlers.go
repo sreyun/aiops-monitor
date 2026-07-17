@@ -32,6 +32,7 @@ type Server struct {
 	slos        *sloManager         // SLO + error budgets
 	tickets     *ticketManager      // work orders
 	logs        *logStore           // aggregated agent logs
+	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
 	ai          *aiManager          // AI inspection + diagnosis
 	vm          *vmWriter           // optional VictoriaMetrics remote-write
 	messages    *messageHub         // unified notification center (SRE/alert/AI feed)
@@ -39,9 +40,9 @@ type Server struct {
 	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
 	hermes      *HermesCore         // Hermes Agent (autonomous SRE agent)
 	// --- AI 记忆异步写入通道 ---
-	memoryCh  chan memoryJob      // 异步记忆写入队列
-	memorySem chan struct{}       // Embedding API 并发信号量（最多 3 并发）
-	memoryWg  sync.WaitGroup      // 等待 worker 排空
+	memoryCh  chan memoryJob // 异步记忆写入队列
+	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
+	memoryWg  sync.WaitGroup // 等待 worker 排空
 }
 
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
@@ -59,6 +60,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		slos:        newSLOManager(cfg),
 		tickets:     newTicketManager(),
 		logs:        newLogStore(),
+		hw:          newHardwareStore(),
 		ai:          newAIManager(cfg),
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
@@ -84,7 +86,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			s.pg.decayOldMemories()
 			s.pg.cleanupExpiredMemories()
 			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
-			s.pg.cleanupFlowRecords()     // 清理过期 Flow 记录
+			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()

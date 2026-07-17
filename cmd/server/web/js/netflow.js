@@ -32,7 +32,7 @@ function renderNetFlowPanel() {
   html += `<option value="24h">${I18N.t("netflow.last_24h") || "最近24小时"}</option>`;
   html += `<option value="7d">${I18N.t("netflow.last_7d") || "最近7天"}</option>`;
   html += `</select>`;
-  html += `<button class="nf-btn" onclick="loadNetFlowData()">${I18N.t("common.refresh") || "刷新"}</button>`;
+  html += `<button class="nf-btn" data-nfact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
   html += `</div>`;
 
   html += `<div id="nfContent" class="nf-content">`;
@@ -108,8 +108,8 @@ function renderNfFlows(container, flows) {
 
   let html = `<div class="nf-flows-toolbar">`;
   html += `<input id="nfFilterInput" type="text" class="nf-input" placeholder="${I18N.t("netflow.filter_placeholder") || "筛选: src_ip:10.0.0.1 或 dst_port:443"}">`;
-  html += `<button class="nf-btn" onclick="applyNfFilter()">${I18N.t("netflow.filter") || "筛选"}</button>`;
-  html += `<button class="nf-btn" onclick="exportNfCSV()">${I18N.t("netflow.export_csv") || "导出 CSV"}</button>`;
+  html += `<button class="nf-btn" data-nfact="filter">${I18N.t("netflow.filter") || "筛选"}</button>`;
+  html += `<button class="nf-btn" data-nfact="export">${I18N.t("netflow.export_csv") || "导出 CSV"}</button>`;
   html += `</div>`;
 
   html += `<div class="nf-table-wrap"><table class="nf-flow-table">`;
@@ -191,6 +191,16 @@ function formatBytes(bytes) {
 }
 
 // Register with navigation
+// 事件委托：CSP 为 script-src 'self'，内联 onclick 会被浏览器拦截；且这些函数在 IIFE 内、
+// 不挂 window，内联写法即便没有 CSP 也会 ReferenceError。刷新/筛选/导出此前因此全是死按钮。
+safeAddEventListener("netflowPanel", "click", e => {
+  const b = e.target.closest("[data-nfact]");
+  if (!b) return;
+  if (b.dataset.nfact === "refresh") loadNetFlowData();
+  else if (b.dataset.nfact === "filter") applyNfFilter();
+  else if (b.dataset.nfact === "export") exportNfCSV();
+});
+
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};
 window._pageRenderers.netflow = renderNetFlowPanel;
 

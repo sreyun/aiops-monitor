@@ -40,16 +40,30 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 缓存最新快照（供告警评估每轮复用，避免每 10s 查一次 PG）
+	hostname, ip := rep.HostID, ""
+	if h := s.hostByID(rep.HostID); h != nil {
+		hostname, ip = h.Hostname, h.IP
+	}
+	s.hw.put(rep.HostID, hostname, ip, rep.Snapshots)
+
 	// Store snapshots in PG (upsert)
 	if s.pg != nil {
 		for _, snap := range rep.Snapshots {
+			// 采集失败（BMC 超时等）时快照各字段都是零值：直接 upsert 会把上一份**好数据**
+			// 覆盖成空白，整张卡片瞬间变“无数据/严重”。这类快照只报警不落库。
+			if snap.Error != "" {
+				slog.Warn("硬件采集失败，保留上一次快照不覆盖", "host_id", rep.HostID, "target", snap.TargetName, "err", snap.Error)
+				continue
+			}
 			s.pg.upsertHardwareSnapshot(rep.HostID, snap)
 
 			// Write numeric metrics to VM
 			s.vmHardwareMetrics(rep.HostID, snap)
 
-			// Detect health change → hardware event
-			if snap.Health != "" && snap.Health != "OK" {
+			// 健康事件：仅在**状态变化**时记一条。此前每轮（30-60s）都插，一台 Warning 主机
+			// 会无限追加相同事件，且该表无查询/无保留策略。
+			if snap.Health != "" && snap.Health != "OK" && s.hw.healthChanged(rep.HostID, snap.TargetName, snap.Health) {
 				s.pg.insertHardwareEvent(rep.HostID, snap.TargetName, "health_change",
 					strings.ToLower(snap.Health), fmt.Sprintf("健康状态: %s", snap.Health))
 			}

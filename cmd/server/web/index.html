@@ -635,7 +635,15 @@
 
       <!-- 硬件监控 (Redfish) -->
       <section class="view" id="view-hardware">
-        <div class="section-title"><span data-i18n="section.hardware">硬件监控</span><span class="tag" data-i18n="section.hardware_desc">Redfish BMC/iDRAC/iLO 服务器硬件状态总览</span></div>
+        <div class="section-title"><span data-i18n="section.hardware">硬件监控</span><span class="tag" data-i18n="section.hardware_desc">Redfish BMC/iDRAC/iLO 服务器硬件状态总览 · 异常优先排序，点任意一项看详情与历史</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center">
+            <div class="view-toggle" id="hwViewToggle" role="group" aria-label="视图切换">
+              <button class="vt-btn active" title="卡片" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn" title="列表" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+            </div>
+            <button class="btn sm" id="hwRefreshBtn" title="刷新">刷新</button>
+          </div>
+        </div>
         <div id="hardwarePanel"></div>
       </section>
 
@@ -667,6 +675,14 @@
       </section>
     </div>
   </main>
+</div>
+
+<!-- ===== 硬件详情弹窗（全量数据 + 重点突出 + 历史曲线） ===== -->
+<div class="mask" id="hwDetailMask" data-close>
+  <div class="modal wide">
+    <div class="modal-head"><h3 id="hwDetailTitle">硬件详情</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body" id="hwDetailBody"></div>
+  </div>
 </div>
 
 <!-- ===== 数据源 添加/编辑 弹窗 ===== -->

@@ -2832,6 +2832,37 @@ select:focus {
 .hw-crit-text { color: #dc2626; }
 .hw-expand-hint { font-size: 11px; color: var(--txt2); text-align: center; padding: 4px 0; opacity: 0.7; transition: opacity .15s; }
 .hw-card:hover .hw-expand-hint { opacity: 1; color: var(--accent); }
+
+/* ── 硬件：列表视图（与卡片视图自由切换）── */
+.hw-list{display:flex; flex-direction:column; gap:6px; padding:12px 0}
+.hw-row{display:grid; grid-template-columns:28px minmax(150px,1.4fr) 84px 84px 66px 66px 128px 1fr;
+  gap:10px; align-items:center; background:var(--card); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:8px 12px; cursor:pointer;
+  transition:border-color .15s, box-shadow .15s}
+.hw-row:hover{border-color:var(--accent); box-shadow:0 2px 10px -4px var(--shadow)}
+.hw-row .hw-health-dot{width:24px; height:24px; font-size:13px}
+.hw-row-id{min-width:0}
+.hw-row-name{font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-row-sub{font-size:11px; color:var(--txt2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-row-cell{font-size:12px; color:var(--txt2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* ── 硬件详情：KPI 摘要条（重点突出）── */
+.hw-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:8px; margin-bottom:12px}
+.hw-kpi{background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:8px 10px; text-align:center}
+.hw-kpi-v{font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-kpi-k{font-size:11px; color:var(--txt2); margin-top:2px}
+.hw-kpi.hw-ok .hw-kpi-v{color:#16a34a}
+.hw-kpi.hw-warn .hw-kpi-v{color:#d97706}
+.hw-kpi.hw-crit .hw-kpi-v{color:#dc2626}
+
+/* ── 硬件详情：异常项置顶框 ── */
+.hw-bad-box{border:1px solid rgba(220,38,38,.35); background:rgba(220,38,38,.06);
+  border-radius:var(--r-sm); padding:10px 12px; margin-bottom:12px}
+.hw-bad-box h4{margin:0 0 6px; font-size:13px; color:#dc2626}
+
+/* 硬件详情弹窗：比默认 .modal.wide(640) 宽，容纳 4 张历史曲线 */
+#hwDetailMask .modal{max-width:1080px; width:94%}
+#hwDetailBody h4{margin:14px 0 6px; font-size:13px; color:var(--txt2)}
 .hw-card.expanded .hw-expand-hint { color: var(--accent); opacity: 1; }
 .hw-meta-row { font-size: 12px; color: var(--txt2); margin-bottom: 8px; }
 .hw-meta-label { font-weight: 500; margin-right: 4px; }

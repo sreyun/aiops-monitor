@@ -73,6 +73,7 @@ const ALERT_TYPES = [
   {key:"", label:I18N.t("ui.all")}, {key:"cpu", label:"CPU"}, {key:"memory", label:I18N.t("ui.memory")},
   {key:"disk", label:I18N.t("ui.disk")}, {key:"gpu", label:"GPU"}, {key:"load", label:I18N.t("ui.load")},
   {key:"conn", label:I18N.t("section.connections")},
+  {key:"hardware", label:I18N.t("nav.hardware") || "硬件"},
   {key:"offline", label:I18N.t("ui.offline_status")}, {key:"check", label:I18N.t("ui.probe")}
 ];
 /*

@@ -278,6 +278,7 @@ func main() {
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
 	notifier.forward = server.forward
+	notifier.hw = server.hw // 硬件异常接入统一告警链路（去重/推送与 CPU、磁盘等一致）
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
 	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）
