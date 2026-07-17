@@ -12,6 +12,7 @@ let HW_VIEW_MODE = localStorage.getItem("aiops_hw_view") || "card"; // card | li
 let HW_CHARTS = {};                                    // 详情弹窗内的图表实例
 let HW_CUR = null;                                     // 当前打开详情的项
 let HW_HIST_RANGE = "6h";
+let HW_LOCAL_EVENTS = [];                              // 平台侧记录的状态变化（异步载入，导出时一并带上）
 
 /* ---------- i18n 小工具 ---------- */
 
@@ -465,6 +466,7 @@ function hwFmtTime(v) {
 
 async function loadHwLocalEvents() {
   const box = $("hwLocalEvents");
+  HW_LOCAL_EVENTS = [];
   if (!box || !HW_CUR) return;
   try {
     const qs = new URLSearchParams({ host: HW_CUR.host.id, limit: "50" });
@@ -472,6 +474,7 @@ async function loadHwLocalEvents() {
     if (target) qs.set("target", target);
     const d = await fetch(`${API}/hardware/events?${qs}`).then(r => r.json());
     const evs = d.events || [];
+    HW_LOCAL_EVENTS = evs;
     if (!evs.length) {
       box.innerHTML = `<div class="hw-sec-empty">${esc(hwT("hardware.no_events", "暂无事件记录"))}</div>`;
       return;
@@ -487,6 +490,163 @@ async function loadHwLocalEvents() {
       })) + `</div>`;
   } catch (e) {
     box.innerHTML = `<div class="hw-sec-empty">${esc(hwT("hardware.no_events", "暂无事件记录"))}</div>`;
+  }
+}
+
+/* ---------- 导出（资产管理） ---------- */
+
+// 把当前设备拍平成 export.js 的中性文档模型。刻意与弹窗里展示的内容一致——
+// 用户看到什么就导出什么，不搞"界面一套、导出另一套"。
+function hwExportModel(it) {
+  const snap = it.snap, sd = snap.snapshot || {}, sys = sd.system || {};
+  const m = hwHealthMeta(snap.health), s = hwSummary(sd);
+  const mem = sd.memory || {}, psus = (sd.power || {}).psus || [];
+  const D = hwDash;
+
+  const model = {
+    title: [snap.target_name || snap.target_url, it.host.hostname || it.host.id, sys.model].filter(Boolean).join(" · "),
+    subtitle: `${hwT("hardware.updated", "更新时间")}: ${hwFmtTime(snap.updated_at) }`,
+    meta: [],
+    sections: [],
+  };
+
+  const meta = [
+    [hwT("hardware.vendor", "厂商"), sys.manufacturer],
+    [hwT("hardware.model", "型号"), sys.model],
+    [hwT("hardware.serial", "序列号"), sys.serial_number],
+    [hwT("hardware.service_tag", "服务标签"), (sys.sku && sys.sku !== sys.serial_number) ? sys.sku : ""],
+    [hwT("hardware.asset_tag", "资产编号"), sys.asset_tag],
+    [hwT("hardware.os_hostname", "OS 主机名"), sys.host_name],
+    [hwT("hardware.bios", "BIOS 版本"), sys.bios_version],
+    [hwT("hardware.bmc", "BMC"), [sys.bmc_model, sys.bmc_firmware].filter(Boolean).join(" ")],
+    [hwT("hardware.power_state", "电源状态"), hwEnum("power", sys.power_state)],
+    [hwT("hardware.run_state", "运行状态"), hwEnum("state", sd.state)],
+    [hwT("hardware.bmc_addr", "BMC 地址"), snap.target_url],
+    [hwT("hardware.overall_health", "整机健康"), m.label],
+    [hwT("hardware.bad_parts", "异常部件"), String(s.bad)],
+    [hwT("hardware.max_temp", "最高温度"), s.maxTemp ? s.maxTemp.toFixed(0) + "°C" : ""],
+    [hwT("hardware.total_power", "总功耗"), s.watts ? s.watts.toFixed(0) + "W" : ""],
+    [hwT("hardware.power_redundancy", "电源冗余"), hwEnum("redundancy", (sd.power || {}).redundancy)],
+  ];
+  if (sd.error) meta.push([hwT("hardware.collect_error", "采集错误"), sd.error]);
+  model.meta = meta.filter(([, v]) => v);
+
+  const add = (title, columns, rows) => { if (rows.length) model.sections.push({ title, columns, rows }); };
+
+  add(hwT("hardware.needs_attention", "需要关注"),
+    [hwT("hardware.part", "部件"), hwT("hardware.name", "名称"), hwT("hardware.reading", "读数"), hwT("hardware.status", "状态")],
+    s.bads.map(b => [b.kind, b.name, b.reading, hwHealthText(b.status)]));
+
+  add(hwT("hardware.events_bmc", "BMC 事件日志（SEL）"),
+    [hwT("hardware.event_time", "时间"), hwT("hardware.event_severity", "级别"),
+     hwT("hardware.event_component", "触发部件"), hwT("hardware.event_message", "事件内容")],
+    (sd.events || []).map(e => [hwFmtTime(e.created), hwHealthText(e.severity), D(e.component), e.message || ""]));
+
+  add(hwT("hardware.cpu", "CPU"),
+    [hwT("hardware.name", "名称"), hwT("hardware.model", "型号"), hwT("hardware.cores_threads", "核心/线程"),
+     hwT("hardware.max_freq", "最大频率"), hwT("hardware.health", "健康")],
+    (sd.cpus || []).map(c => [c.name, D(c.model), `${c.cores || "?"}C / ${c.threads || "?"}T`,
+      c.max_freq_mhz ? c.max_freq_mhz + "MHz" : "-", hwHealthText(c.health)]));
+
+  add(hwT("hardware.gpu", "GPU / 加速卡"),
+    [hwT("hardware.name", "名称"), hwT("hardware.model", "型号"), hwT("hardware.manufacturer", "制造商"),
+     hwT("hardware.max_freq", "最大频率"), hwT("hardware.status", "状态"), hwT("hardware.health", "健康")],
+    (sd.gpus || []).map(g => [g.name, D(g.model), D(g.manufacturer),
+      g.max_freq_mhz ? g.max_freq_mhz + "MHz" : "-", hwEnum("state", g.state) || "-", hwHealthText(g.health)]));
+
+  add(hwT("hardware.memory", "内存"),
+    [hwT("hardware.slot", "插槽"), hwT("hardware.capacity", "容量"), hwT("hardware.type", "类型"),
+     hwT("hardware.speed", "速率"), hwT("hardware.manufacturer", "制造商"), hwT("hardware.part_number", "部件号"),
+     hwT("hardware.serial", "序列号"), hwT("hardware.health", "健康")],
+    (mem.dimms || []).map(d => [D(d.slot || d.name), (d.capacity_gb || 0).toFixed(0) + "GB", D(d.type),
+      d.speed_mhz ? d.speed_mhz + "MHz" : "-", D(d.manufacturer), D(d.part_number), D(d.serial_number),
+      hwHealthText(d.health)]));
+
+  add(hwT("hardware.storage", "存储"),
+    [hwT("hardware.location", "槽位"), hwT("hardware.name", "名称"), hwT("hardware.model", "型号"),
+     hwT("hardware.type", "类型"), hwT("hardware.capacity", "容量"), hwT("hardware.serial", "序列号"),
+     hwT("hardware.disk_fw", "盘固件"), hwT("hardware.life_left", "剩余寿命"),
+     hwT("hardware.smart", "SMART"), hwT("hardware.health", "健康")],
+    (sd.storage || []).map(d => [D(d.location), d.name, D(d.model),
+      D([d.media_type, d.protocol].filter(Boolean).join(" / ")), (d.capacity_gb || 0).toFixed(0) + "GB",
+      D(d.serial_number), D(d.revision), (d.life_left_pct >= 0) ? d.life_left_pct.toFixed(0) + "%" : "-",
+      d.smart_warn ? hwT("hardware.smart_fail", "⚠ 预测故障") : hwT("hardware.smart_ok", "正常"),
+      hwHealthText(d.health)]));
+
+  add(hwT("hardware.raid", "RAID / 存储控制器"),
+    [hwT("hardware.name", "名称"), hwT("hardware.model", "型号"), hwT("hardware.firmware", "固件版本"),
+     hwT("hardware.cache", "缓存"), hwT("hardware.drive_count", "挂载盘数"), hwT("hardware.speed", "速率"),
+     hwT("hardware.serial", "序列号"), hwT("hardware.health", "健康")],
+    (sd.raid || []).map(r => [r.name, D(r.model), D(r.firmware_version),
+      r.cache_mb ? r.cache_mb.toFixed(0) + "MB" : "-", D(r.drive_count),
+      r.speed_gbps ? r.speed_gbps + "Gbps" : "-", D(r.serial_number), hwHealthText(r.health)]));
+
+  add(hwT("hardware.volumes", "逻辑卷"),
+    [hwT("hardware.raid", "RAID / 存储控制器"), hwT("hardware.name", "名称"), hwT("hardware.raid_level", "RAID 级别"),
+     hwT("hardware.capacity", "容量"), hwT("hardware.status", "状态"), hwT("hardware.health", "健康")],
+    (sd.raid || []).flatMap(r => (r.volumes || []).map(v => [r.name, v.name, D(v.raid_type),
+      v.capacity_gb ? v.capacity_gb.toFixed(0) + "GB" : "-", hwEnum("state", v.state) || "-", hwHealthText(v.health)])));
+
+  add(hwT("hardware.power_supply", "电源"),
+    [hwT("hardware.name", "名称"), hwT("hardware.model", "型号"), hwT("hardware.input_watts", "输入(W)"),
+     hwT("hardware.output_watts", "输出(W)"), hwT("hardware.rated_watts", "额定功率"),
+     hwT("hardware.input_voltage", "输入电压"), hwT("hardware.serial", "序列号"),
+     hwT("hardware.status", "状态"), hwT("hardware.health", "健康")],
+    psus.map(p => [p.name, D(p.model), p.input_watts ? p.input_watts.toFixed(0) + "W" : "-",
+      p.output_watts ? p.output_watts.toFixed(0) + "W" : "-", p.capacity_watts ? p.capacity_watts.toFixed(0) + "W" : "-",
+      p.line_input_voltage ? p.line_input_voltage.toFixed(0) + "V" : "-", D(p.serial_number),
+      hwEnum("state", p.state) || "-", hwHealthText(p.health)]));
+
+  add(hwT("hardware.fans", "风扇"),
+    [hwT("hardware.name", "名称"), hwT("hardware.rpm", "转速"), hwT("hardware.status", "状态"), hwT("hardware.health", "健康")],
+    (sd.fans || []).map(f => [f.name, f.rpm + " RPM", hwEnum("state", f.status) || "-", hwHealthText(f.health)]));
+
+  add(hwT("hardware.temperature", "温度传感器"),
+    [hwT("hardware.sensor", "传感器"), hwT("hardware.reading", "读数"), hwT("hardware.caution_threshold", "告警阈值"),
+     hwT("hardware.crit_threshold", "严重阈值"), hwT("hardware.status", "状态")],
+    (sd.temps || []).map(t => [t.name, t.reading + "°C",
+      t.upper_caution > 0 ? t.upper_caution + "°C" : "-", t.upper_critical > 0 ? t.upper_critical + "°C" : "-",
+      hwHealthText(hwTempOver(t) || t.status)]));
+
+  add(hwT("hardware.firmware", "固件版本"),
+    [hwT("hardware.name", "名称"), hwT("hardware.version", "版本")],
+    (sd.firmware || []).map(f => [f.name, f.version]));
+
+  add(hwT("hardware.events_local", "监控记录的状态变化"),
+    [hwT("hardware.event_time", "时间"), hwT("hardware.event_severity", "级别"), hwT("hardware.event_message", "事件内容")],
+    HW_LOCAL_EVENTS.map(e => {
+      const sev = e.severity ? e.severity.charAt(0).toUpperCase() + e.severity.slice(1) : "";
+      return [hwFmtTime(e.created_at), sev ? hwHealthText(sev) : "-", e.message || e.event_type || ""];
+    }));
+
+  return model;
+}
+
+function hwToggleExportMenu(show) {
+  const menu = $("hwExportMenu"), btn = $("hwExportBtn");
+  if (!menu || !btn) return;
+  const open = show === undefined ? !menu.classList.contains("show") : show;
+  menu.classList.toggle("show", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function hwDoExport(fmt) {
+  if (!HW_CUR) return;
+  hwToggleExportMenu(false);
+  try {
+    const model = hwExportModel(HW_CUR);
+    const sys = (HW_CUR.snap.snapshot || {}).system || {};
+    const base = [hwT("hardware.export_prefix", "硬件资产"),
+                  HW_CUR.snap.target_name || HW_CUR.host.id, sys.model].filter(Boolean).join("_");
+    const ok = exportModel(model, fmt, base);
+    if (!ok) {
+      // PDF 走 window.open，被浏览器拦了必须说清楚，否则用户以为按钮坏了
+      toast(hwT("hardware.export_popup_blocked", "导出失败：请允许本站弹出窗口后重试"), "err");
+      return;
+    }
+    if (fmt !== "pdf") toast(hwT("toast.exported", "已导出"), "ok");
+  } catch (e) {
+    toast(hwT("hardware.export_failed", "导出失败") + "：" + e.message, "err");
   }
 }
 
@@ -570,6 +730,18 @@ safeAddEventListener("hwViewToggle", "click", e => {
   if (b) switchHwView(b.dataset.view);
 });
 safeAddEventListener("hwRefreshBtn", "click", loadHardwarePanel);
+
+// 导出下拉：按钮开合 + 选项点击 + 点外部/Esc 收起
+safeAddEventListener("hwExportBtn", "click", e => { e.stopPropagation(); hwToggleExportMenu(); });
+safeAddEventListener("hwExportMenu", "click", e => {
+  const o = e.target.closest("[data-hwexport]");
+  if (o) hwDoExport(o.dataset.hwexport);
+});
+document.addEventListener("click", e => {
+  // 点在下拉自身之内不收起（选项的 click 由上面的委托处理）
+  if (!e.target.closest("#hwExportDD")) hwToggleExportMenu(false);
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") hwToggleExportMenu(false); });
 safeAddEventListener("hwDetailBody", "click", e => {
   const r = e.target.closest("[data-hwrange]");
   if (r) {

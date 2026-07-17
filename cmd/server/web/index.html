@@ -680,7 +680,20 @@
 <!-- ===== 硬件详情弹窗（全量数据 + 重点突出 + 历史曲线） ===== -->
 <div class="mask" id="hwDetailMask" data-close>
   <div class="modal wide">
-    <div class="modal-head"><h3 id="hwDetailTitle">硬件详情</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-head"><h3 id="hwDetailTitle">硬件详情</h3>
+      <div class="modal-head-actions">
+        <div class="exp-dd" id="hwExportDD">
+          <button class="btn sm" id="hwExportBtn" aria-haspopup="true" aria-expanded="false" data-i18n="hardware.export">导出</button>
+          <div class="exp-dd-menu" id="hwExportMenu" role="menu">
+            <button class="exp-dd-opt" role="menuitem" data-hwexport="excel"><span data-i18n="hardware.export_excel">Excel 表格</span><span class="exp-dd-ext">.xlsx</span></button>
+            <button class="exp-dd-opt" role="menuitem" data-hwexport="word"><span data-i18n="hardware.export_word">Word 文档</span><span class="exp-dd-ext">.docx</span></button>
+            <button class="exp-dd-opt" role="menuitem" data-hwexport="markdown"><span data-i18n="hardware.export_md">Markdown</span><span class="exp-dd-ext">.md</span></button>
+            <button class="exp-dd-opt" role="menuitem" data-hwexport="pdf"><span data-i18n="hardware.export_pdf">PDF</span><span class="exp-dd-ext" data-i18n="hardware.export_pdf_ext">打印</span></button>
+          </div>
+        </div>
+        <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+      </div>
+    </div>
     <div class="modal-body" id="hwDetailBody"></div>
   </div>
 </div>

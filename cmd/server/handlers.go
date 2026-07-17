@@ -323,7 +323,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
+			for _, m := range []string{"core", "export", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

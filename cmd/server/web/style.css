@@ -60,6 +60,7 @@
 
   /* 功能色边框（统一各处散乱的 rgba 边框值） */
   --accent-border:rgba(76,141,255,.35);
+  --accent2-border:rgba(124,107,255,.3);
   --ok-border:rgba(49,196,107,.3);
   --warn-border:rgba(232,161,60,.3);
   --crit-border:rgba(239,77,90,.3);
@@ -138,6 +139,7 @@
   --ok-txt:#15803d; --warn-txt:#b45309; --crit-txt:#b91c1c; --info-txt:#0369a1;
 
   --accent-border:rgba(37,99,235,.25);
+  --accent2-border:rgba(124,58,237,.25);
   --ok-border:rgba(22,163,74,.25);
   --warn-border:rgba(217,119,6,.25);
   --crit-border:rgba(220,38,38,.25);
@@ -2910,6 +2912,25 @@ select:focus {
   background:var(--accent-soft); border-radius:var(--r-xs); padding:1px 6px; white-space:nowrap}
 .hw-events-wrap{max-height:280px; overflow-y:auto}
 
+/* ── 导出下拉（沿用 .cat-dd-menu 的视觉语言）── */
+.modal-head-actions{display:flex; align-items:center; gap:var(--sp-2)}
+.exp-dd{position:relative}
+.exp-dd-menu{
+  display:none; position:absolute; top:100%; right:0; z-index:60; min-width:190px;
+  background:var(--panel); border:1px solid var(--line2); border-radius:var(--r-sm);
+  box-shadow:var(--shadow-lg); margin-top:4px; padding:4px 0;
+}
+.exp-dd-menu.show{display:block}
+.exp-dd-opt{
+  display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3);
+  width:100%; padding:7px 12px; cursor:pointer; font-size:13px; color:var(--txt2);
+  background:none; border:none; text-align:left;
+  transition:background var(--transition-fast), color var(--transition-fast);
+}
+.exp-dd-opt:hover{background:var(--panel2); color:var(--txt)}
+.exp-dd-opt:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.exp-dd-ext{font-size:11px; color:var(--muted); font-family:var(--font-mono,ui-monospace,monospace)}
+
 /* 硬件详情弹窗：比默认 .modal.wide(640) 宽，容纳 4 张历史曲线 */
 #hwDetailMask .modal{max-width:1080px; width:94%}
 #hwDetailBody h4{margin:14px 0 6px; font-size:13px; color:var(--txt2)}
@@ -2930,8 +2951,13 @@ select:focus {
    网络流量面板 (NetFlow Panel)
    ============================================================================ */
 .nf-toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 0; flex-wrap: wrap; }
-.nf-select, .nf-input { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; color: var(--txt); }
-.nf-btn { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 14px; font-size: 13px; cursor: pointer; }
+/* 与硬件卡片同一个 bug：var(--card) 全项目从未定义，这些控件等于没有背景色，
+   在深色底上就是一圈边框浮在那儿。对齐基础组件用的 token（select/.btn = --panel2）。 */
+.nf-select, .nf-input { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; color: var(--txt); }
+.nf-select:hover, .nf-input:hover { border-color: var(--hover-border); }
+.nf-select:focus, .nf-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.nf-btn { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 6px 14px; font-size: 13px; color: var(--txt2); cursor: pointer; transition: background var(--transition-fast), border-color var(--transition-fast); }
+.nf-btn:hover { background: var(--panel3); border-color: var(--hover-border); color: var(--txt); }
 .nf-btn:hover { background: var(--bg2); }
 .nf-content { padding: 0; }
 .nf-section { margin-bottom: 24px; }
@@ -2947,9 +2973,13 @@ select:focus {
 .nf-table-wrap { overflow-x: auto; }
 .nf-flow-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .nf-flow-table th, .nf-flow-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); }
-.nf-flow-table th { color: var(--txt2); font-weight: 500; position: sticky; top: 0; background: var(--card); }
-.nf-badge { padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
-.nf-badge-netflow { background: #dbeafe; color: #1e40af; }
-.nf-badge-packet { background: #f3e8ff; color: #7c3aed; }
+/* sticky 表头必须是**不透明**的：var(--card) 未定义 → 表头透明 → 滚动时
+   数据行直接从表头文字底下穿过去，糊成一团。 */
+.nf-flow-table th { color: var(--txt2); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+/* 与硬件卡片同批遗留：浅色糖果色硬编码在深色面板上又刺眼又不统一，
+   换成语义 token（accent=NetFlow 采集 / purple=抓包采集），深浅主题自适应。 */
+.nf-badge { padding: 1px 6px; border-radius: var(--r-xs); font-size: 11px; font-weight: 600; }
+.nf-badge-netflow { background: var(--accent-soft); color: var(--accent-txt); border: 1px solid var(--accent-border); }
+.nf-badge-packet { background: var(--accent2-soft); color: var(--accent2-txt); border: 1px solid var(--accent2-border); }
 .empty-state { padding: 40px; text-align: center; color: var(--txt2); font-size: 14px; }
 .loading-dots { padding: 40px; text-align: center; color: var(--txt2); }
