@@ -69,6 +69,8 @@ type serverTarget struct {
 
 	regMu      sync.Mutex
 	registered bool
+	// canonicalHostID 是服务端在注册响应里下发的规范身份（见 register）。
+	canonicalHostID string
 
 	// Retry + circuit breaker: independent per-target so one failing server
 	// never starves or delays reports to healthy servers.
@@ -105,14 +107,20 @@ func (t *serverTarget) register(base shared.Report) bool {
 		slog.Warn("注册被拒，可能 Token 已失效或指纹无效", "server", t.server, "status", resp.StatusCode)
 		return false
 	}
-	// 取出服务端下发的日志加密密钥（base64）；之后每批日志用它 gzip+AES-GCM 加密上报
+	// 取出服务端下发的日志加密密钥（base64）；之后每批日志用它 gzip+AES-GCM 加密上报。
+	// host_id 是服务端认定的**规范身份**：与我们上报的不同即表示"这台机器早有记录"
+	// （重装换了随机 id），调用方应改用它，否则历史数据会被劈成两半。
 	var rr struct {
 		LogKey string `json:"log_key"`
+		HostID string `json:"host_id"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&rr) == nil && rr.LogKey != "" {
-		if k, err := base64.StdEncoding.DecodeString(rr.LogKey); err == nil && len(k) == 32 {
-			t.logKey = k
+	if json.NewDecoder(resp.Body).Decode(&rr) == nil {
+		if rr.LogKey != "" {
+			if k, err := base64.StdEncoding.DecodeString(rr.LogKey); err == nil && len(k) == 32 {
+				t.logKey = k
+			}
 		}
+		t.canonicalHostID = rr.HostID
 	}
 	t.regMu.Lock()
 	t.registered = true
@@ -268,11 +276,13 @@ type Agent struct {
 
 	logPaths      []string // log files/dirs to tail and forward (empty = collector disabled)
 	logEncrypt    bool     // 加密上报日志（gzip+AES-GCM），有服务端下发密钥时生效；--log-encrypt=false 可关
+	stateFile     string   // 身份状态文件路径；认回规范 host_id 后要写回这里
 
 	// 新增采集器配置（可选，未配置时不启动）
-	redfishTargets []RedfishTarget
-	netflowCfg     *NetFlowConfig
-	packetCfg      *PacketConfig
+	redfishTargets   []RedfishTarget
+	oceanStorTargets []OceanStorTarget
+	netflowCfg       *NetFlowConfig
+	packetCfg        *PacketConfig
 
 	mu            sync.Mutex
 	latestCustom  map[string]float64
@@ -322,7 +332,38 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 // The main loop is wrapped in a defer/recover so a panic in any cycle
 // (e.g. a nil dereference from a corrupted /proc read) can't kill the
 // whole agent — it's logged and the loop restarts.
+// reconcileIdentity asks the server which host id this machine is already known
+// by, and adopts it before anything starts reporting.
+//
+// 必须在 Run 的最前面做：下面的采集器（Redfish / OceanStor / NetFlow）在构造时就
+// 把 host_id 拷贝走了，认回身份要是晚于它们启动，这些采集器会一直用旧 id 上报。
+//
+// 尽力而为：服务端不可达时保持本地 id 继续跑（监控不能因为对不上身份就停摆），
+// 下次启动会再试一次；届时服务端仍会按指纹把它认回同一条记录。
+func (a *Agent) reconcileIdentity() {
+	if a.identity.Fingerprint == "" {
+		return // 拿不到机器指纹（无 machine-id 且无 MAC）时无从判定，保持原样
+	}
+	for _, t := range a.targets {
+		if !t.register(a.identity) {
+			continue // 该服务端不可达/拒绝，换下一个
+		}
+		canonical := t.canonicalHostID
+		if canonical == "" || canonical == a.identity.HostID {
+			return // 服务端认可当前身份（或是不认识 host_id 的旧版服务端）
+		}
+		slog.Warn("服务端按机器指纹认回了既有身份，改用之（Agent 重装会换新的随机 id，"+
+			"沿用新 id 会让这台机器的历史数据被劈成两半）",
+			"old", short(a.identity.HostID), "canonical", short(canonical))
+		a.identity.HostID = canonical
+		persistHostID(a.stateFile, canonical, a.identity.Fingerprint)
+		return
+	}
+}
+
 func (a *Agent) Run() {
+	// 认回规范身份必须先于一切上报与采集器启动
+	a.reconcileIdentity()
 	slog.Info("Agent 核心启动",
 		"host", a.identity.Hostname,
 		"os", a.identity.OS,
@@ -363,13 +404,20 @@ func (a *Agent) Run() {
 		go a.runLogCollectorFor(t)
 	}
 
-	// Start Redfish hardware collector (one goroutine per target).
-	if len(a.redfishTargets) > 0 {
-		rc := newRedfishCollector(a.redfishTargets, a.identity.HostID, a.identity.Fingerprint)
-		rc.run(func(rep shared.HardwareReport) {
-			a.postHardwareReport(rep)
-		})
-		slog.Info("Redfish 硬件采集器已启动", "targets", len(a.redfishTargets))
+	// Start hardware collectors (Redfish BMC + OceanStor DeviceManager).
+	// 两者都产出 HardwareReport，必须先在本地按 target 合并再上报：服务端的
+	// hardwareStore.put 是**整体替换**一台主机的快照集合，各报各的会让两个
+	// 采集器每轮互相覆盖，进而使对方的告警反复 fire/resolve 抖动。
+	if len(a.redfishTargets) > 0 || len(a.oceanStorTargets) > 0 {
+		agg := newHardwareAggregator(a.identity.HostID, a.identity.Fingerprint, a.postHardwareReport)
+		if len(a.redfishTargets) > 0 {
+			newRedfishCollector(a.redfishTargets, a.identity.HostID, a.identity.Fingerprint).run(agg.submit)
+			slog.Info("Redfish 硬件采集器已启动", "targets", len(a.redfishTargets))
+		}
+		if len(a.oceanStorTargets) > 0 {
+			newOceanStorCollector(a.oceanStorTargets, a.identity.HostID, a.identity.Fingerprint).run(agg.submit)
+			slog.Info("OceanStor 存储采集器已启动", "targets", len(a.oceanStorTargets))
+		}
 	}
 
 	// Start NetFlow receiver (UDP listener + aggregator).

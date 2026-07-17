@@ -193,6 +193,89 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execCheckHostHealth,
 	}
+
+	// ---- 硬件 / 流量：此前 AI 完全看不到这两块数据 ----
+
+	h.tools["query_hardware"] = HermesTool{
+		Name: "query_hardware",
+		Description: "查询主机的服务器硬件状态（Redfish/BMC 或 OceanStor 存储）：整机健康、厂商型号序列号、" +
+			"CPU/内存/硬盘/RAID卡/GPU/电源/风扇/温度/磁盘框的逐部件明细，并列出当前所有异常部件。" +
+			"排查硬件故障、确认配置、做资产核对时用这个。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"section": map[string]string{"type": "string",
+					"description": "要看的部分：summary(默认,概览+异常部件)/disk/memory/cpu/gpu/raid/psu/fan/temp/enclosure/firmware/all"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryHardware,
+	}
+
+	h.tools["query_hardware_events"] = HermesTool{
+		Name: "query_hardware_events",
+		Description: "查询 BMC 自身的硬件事件日志（Dell iDRAC 的 SEL / 华为 iBMC 事件 / OceanStor 当前告警）。" +
+			"**这是唯一能定位到「是哪个部件、什么时候出的问题」的数据源** —— 整机健康只说好坏，不说是谁。" +
+			"硬件报错但不知道换哪个件时，必须查这个。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"limit":   map[string]string{"type": "integer", "description": "返回条数，默认 20"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryHardwareEvents,
+	}
+
+	h.tools["query_hardware_history"] = HermesTool{
+		Name: "query_hardware_history",
+		Description: "查询硬件指标的历史趋势（温度/风扇转速/功耗/健康分），数据来自时序库，可长期回溯。" +
+			"判断「是不是一直这样」「什么时候开始变热的」「功耗有没有异常爬升」时用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"metric":  map[string]string{"type": "string", "description": "temperature / fan_rpm / power / health_score"},
+				"range":   map[string]string{"type": "string", "description": "时间范围，如 1h/6h/24h/7d/30d，默认 24h"},
+			},
+			"required": []string{"host_id", "metric"},
+		},
+		Execute: h.execQueryHardwareHistory,
+	}
+
+	h.tools["query_hardware_changes"] = HermesTool{
+		Name: "query_hardware_changes",
+		Description: "查询硬件资产变更历史：哪块盘/哪条内存/哪个电源什么时候被换过、加过、拔掉过，以及固件版本变更。" +
+			"排查「故障是不是换件之后开始的」「这台机器动过什么」时用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"limit":   map[string]string{"type": "integer", "description": "返回条数，默认 30"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryHardwareChanges,
+	}
+
+	h.tools["query_netflow"] = HermesTool{
+		Name: "query_netflow",
+		Description: "查询主机的网络流量 Top-N 排行（按对端 IP / 端口 / 协议聚合），数据来自永久保留的 Flow 明细。" +
+			"排查带宽被谁占了、有无异常外联、某个时间段在跟谁通信时用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id":   map[string]string{"type": "string", "description": "主机 ID"},
+				"dimension": map[string]string{"type": "string", "description": "聚合维度：dst_ip(默认)/src_ip/dst_port/src_port/protocol"},
+				"range":     map[string]string{"type": "string", "description": "时间范围，如 1h/24h/7d，默认 1h"},
+				"top":       map[string]string{"type": "integer", "description": "返回前 N 名，默认 10"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryNetFlow,
+	}
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).

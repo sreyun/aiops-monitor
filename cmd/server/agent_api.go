@@ -55,24 +55,44 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// no token, the agent can still re-join by proving its machine fingerprint.
 	// New agents (unknown host_id + unknown fingerprint) still require a token.
 	if s.cfg.AgentTokenRequired() && !s.cfg.ValidInstallToken(req.Token) {
-		// Check if this host already exists with a matching fingerprint
-		existingHost, hostExists := s.store.GetHost(req.HostID)
-		if !hostExists || existingHost.Fingerprint == "" || existingHost.Fingerprint != req.Fingerprint {
+		// 认**指纹**而不是 host_id：重装后 host_id 是全新的随机值，按 id 查必然落空，
+		// 于是一台早已登记在册的机器会被当成陌生 Agent 拒之门外——这与上面注释里
+		// "凭机器指纹即可重新加入"的意图相悖。指纹本就是后续所有上报的认证凭据，
+		// 用它准入不会放宽任何信任边界。
+		known := false
+		if req.Fingerprint != "" {
+			if h, ok := s.store.GetHost(req.HostID); ok && h.Fingerprint == req.Fingerprint {
+				known = true
+			} else if _, ok := s.store.CanonicalHostID(req.HostID, req.Fingerprint); ok {
+				known = true // 同一台机器的既有记录（重装换了 id）
+			}
+		}
+		if !known {
 			// Unknown host or fingerprint doesn't match → require install token
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.invalid_token")})
 			return
 		}
-		// Known host with matching fingerprint → allow re-registration (server restart recovery)
-		slog.Info("允许已知主机免Token重新注册（服务端重启恢复）", "host_id", req.HostID)
+		slog.Info("允许已知机器免Token重新注册（凭机器指纹）", "host_id", shortID(req.HostID))
 	}
 	if req.Fingerprint == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "agent.fingerprint_required")})
 		return
 	}
-	s.store.RegisterHost(req.HostID, req.Hostname, req.Fingerprint)
+	// 规范身份对齐：重装后 Agent 会带着**新的随机 host_id** 来注册。直接收下就多出
+	// 一条记录，而平台里所有数据都按 host_id 存（VM 指标 host 标签、日志、告警、
+	// 硬件快照/变更、Flow 明细…），这台机器的历史会被劈成两半。
+	// 按机器指纹认回它原来的 id 下发给 Agent，历史即自然接续，也不再产生重复。
+	hostID := req.HostID
+	if canonical, ok := s.store.CanonicalHostID(req.HostID, req.Fingerprint); ok {
+		slog.Info("按机器指纹认回既有身份（Agent 重装/换 ID）",
+			"claimed", shortID(req.HostID), "canonical", shortID(canonical), "hostname", req.Hostname)
+		hostID = canonical
+	}
+	s.store.RegisterHost(hostID, req.Hostname, req.Fingerprint)
 	resp := map[string]any{
-		"status":           "ok",
-		"host_id":          req.HostID,
+		"status": "ok",
+		// Agent 会改用这个 id：与请求里的不同即表示"你其实是这台老主机"。
+		"host_id":          hostID,
 		"server_time_unix": time.Now().Unix(),
 	}
 	// 日志加密：把按「主密钥 + 指纹」派生的日志密钥一次性下发给 agent（未配置主密钥则不下发，日志走明文）

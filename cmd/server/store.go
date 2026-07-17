@@ -227,6 +227,42 @@ func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
 	return h
 }
 
+// CanonicalHostID resolves a machine fingerprint to the host id already
+// established for that machine, so a reinstalled agent keeps its identity.
+//
+// 为什么需要它：Agent 的 host_id 是随机生成后存在本地状态文件里的，卸载重装会把
+// 状态文件一起删掉 → 新的随机 id。而**平台里的一切都按 host_id 存**：VM 指标的
+// host 标签、日志、告警、事件、硬件快照与变更、Flow 明细……于是同一台物理机重装
+// 一次，历史就被从中间劈成两半，旧的那半再也关联不到这台机器。
+//
+// 认指纹不认 id：指纹 = sha256(machine-id | 主 MAC)，跨重装稳定、跨机器唯一
+// （克隆状态文件到别的机器时指纹对不上，Agent 侧会自行重新生成 id，不会误判成同一台）。
+//
+// 取 FirstSeen 最早的那条作为规范身份：这样即使之前已经因重装攒下了重复记录，
+// Agent 升级后也会认回最初那条，历史自动接续，多余的记录随后可被清理。
+// 返回 (id, true) 表示调用方应改用 id；(_, false) 表示保持原样。
+func (s *Store) CanonicalHostID(claimed, fingerprint string) (string, bool) {
+	if fingerprint == "" {
+		return "", false // 没有指纹就无法判定同一台机器，绝不猜
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var oldest *Host
+	for _, h := range s.hosts {
+		if h.Fingerprint != fingerprint {
+			continue
+		}
+		if oldest == nil || h.FirstSeen < oldest.FirstSeen {
+			oldest = h
+		}
+	}
+	if oldest == nil || oldest.ID == claimed {
+		return "", false // 该机器还没记录，或它本来就是规范身份
+	}
+	return oldest.ID, true
+}
+
 // UpsertAuthenticated applies a report after verifying the agent's fingerprint
 // against the one bound at registration. Returns (nil, false) when the host is
 // unregistered, its fingerprint is not yet bound, or the fingerprint does not

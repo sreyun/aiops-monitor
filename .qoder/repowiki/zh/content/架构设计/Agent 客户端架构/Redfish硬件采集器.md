@@ -3,6 +3,7 @@
 <cite>
 **本文引用的文件**   
 - [collector_redfish.go](file://cmd/agent/collector_redfish.go)
+- [collector_redfish_vendor_test.go](file://cmd/agent/collector_redfish_vendor_test.go)
 - [wire.go](file://shared/wire.go)
 - [main.go](file://cmd/agent/main.go)
 - [handlers.go](file://cmd/server/handlers.go)
@@ -21,20 +22,17 @@
 
 ## 更新摘要
 **已进行的更改**
-- **新增设备身份发现**：完整支持制造商、型号、序列号、SKU、资产标签等整机身份信息采集
-- **GPU/加速器卡分离识别**：从Processors集合中智能区分CPU与GPU/加速卡，避免混入CPU列表
-- **内存DIMM详细信息采集**：完整的DIMM插槽信息（容量、类型、速率、健康状态、物理位置）
-- **存储子系统增强**：RAID控制器、逻辑卷、SMART预测故障检测、SSD剩余寿命监控
-- **电源供应器监控**：PSU输入输出功耗、冗余状态、额定功率、电压监控
-- **BMC事件日志系统**：300秒轮询间隔、多厂商路径发现、40条限制、组件归因解析
-- **前端展示增强**：专业硬件面板、交互式卡片设计、实时数据更新、多语言支持
+- **华为iBMC兼容性重大增强**：新增动态路径解析、厂商特定优化函数、机箱链接发现系统
+- **Kunpeng S920 S00和TaiShan服务器支持**：完整的存储收集、CPU温度监控、物理盘枚举
+- **增强的事件日志分类**：改进的事件日志选择逻辑和组件归因解析
+- **全面的测试覆盖**：针对华为和Dell设备的完整测试套件确保兼容性
 
 ## 目录
 1. [简介](#简介)
 2. [项目结构](#项目结构)
 3. [核心组件](#核心组件)
 4. [架构总览](#架构总览)
-5. [v6.5.0重大功能增强](#v650重大功能增强)
+5. [华为iBMC兼容性增强](#华为ibmc兼容性增强)
 6. [详细组件分析](#详细组件分析)
 7. [依赖关系分析](#依赖关系分析)
 8. [性能与容量规划](#性能与容量规划)
@@ -44,6 +42,8 @@
 
 ## 简介
 本文件聚焦于 AIOps 监控系统中"Redfish 硬件采集器"的端到端实现，涵盖 Agent 侧 Redfish 客户端、共享数据模型、Server 侧接收与查询接口，以及与 NetFlow/五元组包采集的协同。**v6.5.0重大更新**：新增了完整的设备身份发现、GPU/加速器卡分离识别、内存DIMM详细信息采集、存储子系统增强、电源供应器监控、BMC事件日志系统等核心功能改进，为运维人员提供了全方位的硬件观测能力。
+
+**最新增强**：针对华为iBMC系统的深度兼容性优化，包括动态路径解析、厂商特定优化函数、机箱链接发现系统和全面的事件日志分类，确保在Kunpeng S920 S00和TaiShan服务器上的完美运行。
 
 文档面向运维与研发人员，既提供高层架构说明，也给出代码级流程与关键设计权衡。通过HTTP连接稳定性修复、增强的密码解析机制、TLS兼容性支持和全面的错误分类系统，显著提升了生产环境中BMC连接的可靠性和用户体验。
 
@@ -69,6 +69,7 @@ CFG["配置加载<br/>cmd/agent/main.go"]
 SHARED["共享模型<br/>shared/wire.go"]
 REP["硬件报告上报<br/>cmd/agent/reporter.go"]
 LINUX["Linux采集器<br/>collector_linux.go"]
+TEST["厂商测试<br/>collector_redfish_vendor_test.go"]
 end
 subgraph "Server"
 HND["路由注册<br/>cmd/server/handlers.go"]
@@ -96,10 +97,12 @@ WEB --> I18N
 JS --> |"GET /api/v1/hardware/health"| HND
 JS --> UI
 LINUX --> SHARED
+TEST --> RF
 ```
 
 **图表来源** 
 - [collector_redfish.go:1-126](file://cmd/agent/collector_redfish.go#L1-L126)
+- [collector_redfish_vendor_test.go:1-350](file://cmd/agent/collector_redfish_vendor_test.go#L1-L350)
 - [main.go:223-233](file://cmd/agent/main.go#L223-L233)
 - [wire.go:144-237](file://shared/wire.go#L144-L237)
 - [handlers.go:290-298](file://cmd/server/handlers.go#L290-L298)
@@ -112,6 +115,7 @@ LINUX --> SHARED
 
 **章节来源**
 - [collector_redfish.go:1-126](file://cmd/agent/collector_redfish.go#L1-L126)
+- [collector_redfish_vendor_test.go:1-350](file://cmd/agent/collector_redfish_vendor_test.go#L1-L350)
 - [main.go:223-233](file://cmd/agent/main.go#L223-L233)
 - [wire.go:144-237](file://shared/wire.go#L144-L237)
 - [handlers.go:290-298](file://cmd/server/handlers.go#L290-L298)
@@ -174,228 +178,256 @@ Note over RF,VM : "NetFlow/五元组包采集器使用 /api/v1/agent/netflow 上
 - [hardware_netflow.go:19-90](file://cmd/server/hardware_netflow.go#L19-L90)
 - [hardware.js:23-43](file://cmd/server/web/js/hardware.js#L23-L43)
 
-## v6.5.0重大功能增强
+## 华为iBMC兼容性增强
 
-### 设备身份发现系统
-v6.5.0版本新增了完整的设备身份发现功能，能够准确识别服务器的制造商、型号、序列号、SKU和服务标签等关键身份信息。
+### 动态路径解析系统
+v6.5.0版本实现了华为iBMC的动态路径解析功能，解决了传统硬编码路径无法适配不同厂商设备的问题。
 
-#### 身份信息采集
+#### 系统路径动态发现
 ```go
-// System overview（含整机身份：厂商/型号/序列号/BIOS）
-var sys struct {
-    Status           redfishStatus `json:"Status"`
-    Manufacturer     string        `json:"Manufacturer"`
-    Model            string        `json:"Model"`
-    SKU              string        `json:"SKU"`
-    SerialNumber     string        `json:"SerialNumber"`
-    PartNumber       string        `json:"PartNumber"`
-    AssetTag         string        `json:"AssetTag"`
-    HostName         string        `json:"HostName"`
-    BiosVersion      string        `json:"BiosVersion"`
-    PowerState       string        `json:"PowerState"`
-    IndicatorLED     string        `json:"IndicatorLED"`
+// discoverSystemPath queries /redfish/v1/Systems and returns the first
+// member's @odata.id. This handles vendor-specific system IDs:
+//   - Dell iDRAC:   /redfish/v1/Systems/System.Embedded.1
+//   - HP iLO:       /redfish/v1/Systems/1
+//   - Supermicro:   /redfish/v1/Systems/1
+//   - Lenovo XCC:   /redfish/v1/Systems/1
+func (rc *redfishCollector) discoverSystemPath(client *http.Client, t RedfishTarget) (string, error) {
+    password := t.resolvePassword()
+    var col struct {
+        Members []struct {
+            ODataID string `json:"@odata.id"`
+        } `json:"Members"`
+    }
+    if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems", &col); err != nil {
+        return "", fmt.Errorf("discover Systems collection: %w", err)
+    }
+    if len(col.Members) == 0 {
+        return "", fmt.Errorf("Systems collection is empty")
+    }
+    path := col.Members[0].ODataID
+    slog.Info("Redfish System 路径已发现", "target", t.Name, "path", path)
+    return path, nil
 }
 ```
 
-#### 厂商适配处理
-- **华为 iBMC(RH2288 V3 / TaiShan 200)**：序列号通常只填在 Chassis 的 SerialNumber，System.SerialNumber 为空
-- **Dell iDRAC**：Service Tag 放在 SKU 字段
-- **兼容策略**：两边都兜底，确保序列号完整性
-
-**章节来源**
-- [collector_redfish.go:371-422](file://cmd/agent/collector_redfish.go#L371-L422)
-
-### GPU/加速器卡分离识别
-v6.5.0实现了从 Processors 集合中智能区分 CPU 与 GPU/加速器卡的功能，避免了之前 GPU 被误认为 CPU 的问题。
-
-#### 处理器类型识别
+#### 机箱链接发现系统
 ```go
-// Processors 集合里同时挂 CPU 与 GPU/加速卡，按 ProcessorType 分流，
-// 否则 GPU 会被当成 CPU 混进 CPU 列表（且 GPU 信息完全看不到）。
-if strings.EqualFold(p.ProcessorType, "GPU") || strings.EqualFold(p.ProcessorType, "Accelerator") {
-    snap.GPUs = append(snap.GPUs, shared.RedfishGPU{
-        Name:         p.Name,
-        Model:        p.Model,
-        Manufacturer: p.Manufacturer,
-        Health:       p.Status.Health,
-        State:        p.Status.State,
-        MaxFreqMHz:   p.MaxSpeedMHz,
-    })
-    continue
+// getChassisPath returns the cached chassis path, discovering from the
+// system's Links.Chassis array or the Chassis collection.
+func (rc *redfishCollector) getChassisPath(client *http.Client, t RedfishTarget, sysPath string) (string, error) {
+    // Try from System.Links.Chassis first
+    var sysLinks struct {
+        Links struct {
+            Chassis []struct {
+                ODataID string `json:"@odata.id"`
+            } `json:"Chassis"`
+        } `json:"Links"`
+    }
+    if rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sysLinks) == nil && len(sysLinks.Links.Chassis) > 0 {
+        p := sysLinks.Links.Chassis[0].ODataID
+        slog.Info("Redfish Chassis 路径已发现(via Links)", "target", t.Name, "path", p)
+        return p, nil
+    }
+    // Fallback: query Chassis collection
+    var col struct {
+        Members []struct {
+            ODataID string `json:"@odata.id"`
+        } `json:"Members"`
+    }
+    if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Chassis", &col); err != nil {
+        return "", fmt.Errorf("discover Chassis collection: %w", err)
+    }
+    if len(col.Members) == 0 {
+        return "", fmt.Errorf("Chassis collection is empty")
+    }
+    p := col.Members[0].ODataID
+    slog.Info("Redfish Chassis 路径已发现", "target", t.Name, "path", p)
+    return p, nil
 }
-snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
-    Name:       p.Name,
-    Model:      p.Model,
-    Cores:      p.TotalCores,
-    Threads:    p.TotalThreads,
-    Health:     p.Status.Health,
-    MaxFreqMHz: p.MaxSpeedMHz,
-})
 ```
 
-#### GPU信息展示
-前端支持完整的GPU信息展示，包括名称、型号、制造商、最大频率、状态和健康情况。
+**章节来源**
+- [collector_redfish.go:220-311](file://cmd/agent/collector_redfish.go#L220-L311)
+
+### 厂商特定优化函数
+
+#### Huawei ProcessorView优化
+华为iBMC的ProcessorView端点提供了一次性获取所有CPU信息的优化接口，包含标准Schema中没有的温度信息：
+
+```go
+// collectHuaweiProcessorView reads Oem.Huawei.ProcessorView — one GET returns
+// every CPU, including a Temperature the standard Processor schema has no field
+// for. Returns false when the view is absent/unusable so callers fall back.
+func (rc *redfishCollector) collectHuaweiProcessorView(client *http.Client, t RedfishTarget, password, path string, snap *shared.HardwareSnapshot) bool {
+    if path == "" {
+        return false
+    }
+    var v struct {
+        Information []struct {
+            Name          string        `json:"Name"`
+            Model         string        `json:"Model"`
+            Manufacturer  string        `json:"Manufacturer"`
+            ProcessorType string        `json:"ProcessorType"`
+            TotalCores    int           `json:"TotalCores"`
+            TotalThreads  int           `json:"TotalThreads"`
+            MaxSpeedMHz   int           `json:"MaxSpeedMHz"`
+            FrequencyMHz  int           `json:"FrequencyMHz"`
+            Temperature   float64       `json:"Temperature"`
+            Status        redfishStatus `json:"Status"`
+        } `json:"Information"`
+    }
+    if rc.rfGetRaw(client, t.URL, t.Username, password, path, &v) == nil || len(v.Information) == 0 {
+        return false
+    }
+    // 处理CPU和GPU分离，填充TempC字段
+    for _, p := range v.Information {
+        if strings.EqualFold(p.Status.State, "Absent") {
+            continue
+        }
+        if strings.EqualFold(p.ProcessorType, "GPU") || strings.EqualFold(p.ProcessorType, "Accelerator") {
+            snap.GPUs = append(snap.GPUs, shared.RedfishGPU{
+                Name: p.Name, Model: p.Model, Manufacturer: p.Manufacturer,
+                Health: p.Status.Health, State: p.Status.State, MaxFreqMHz: p.MaxSpeedMHz,
+            })
+            continue
+        }
+        freq := p.MaxSpeedMHz
+        if freq == 0 {
+            freq = p.FrequencyMHz
+        }
+        snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
+            Name: p.Name, Model: strings.TrimSpace(p.Model), Cores: p.TotalCores,
+            Threads: p.TotalThreads, Health: p.Status.Health, MaxFreqMHz: freq,
+            TempC: p.Temperature, // 华为特有的CPU温度信息
+        })
+    }
+    return len(snap.CPUs) > 0 || len(snap.GPUs) > 0
+}
+```
+
+#### Huawei MemoryView优化
+类似的，MemoryView提供了一次性获取所有内存条信息的优化接口：
+
+```go
+// collectHuaweiMemoryView reads Oem.Huawei.MemoryView — one GET for all DIMMs.
+func (rc *redfishCollector) collectHuaweiMemoryView(client *http.Client, t RedfishTarget, password, path string, snap *shared.HardwareSnapshot) bool {
+    if path == "" {
+        return false
+    }
+    var v struct {
+        Information []struct {
+            Name              string        `json:"Name"`
+            CapacityMiB       float64       `json:"CapacityMiB"`
+            MemoryDeviceType  string        `json:"MemoryDeviceType"`
+            OperatingSpeedMhz int           `json:"OperatingSpeedMhz"`
+            Manufacturer      string        `json:"Manufacturer"`
+            PartNumber        string        `json:"PartNumber"`
+            SerialNumber      string        `json:"SerialNumber"`
+            RankCount         int           `json:"RankCount"`
+            DeviceLocator     string        `json:"DeviceLocator"`
+            Status            redfishStatus `json:"Status"`
+        } `json:"Information"`
+    }
+    if rc.rfGetRaw(client, t.URL, t.Username, password, path, &v) == nil || len(v.Information) == 0 {
+        return false
+    }
+    n := 0
+    for _, d := range v.Information {
+        // 过滤空槽位
+        if strings.EqualFold(d.Status.State, "Absent") || d.CapacityMiB <= 0 {
+            continue
+        }
+        snap.Memory.DIMMs = append(snap.Memory.DIMMs, shared.MemoryDIMM{
+            Name:         d.Name,
+            CapacityGB:   d.CapacityMiB / 1024,
+            Type:         d.MemoryDeviceType,
+            SpeedMHz:     d.OperatingSpeedMhz,
+            Health:       d.Status.Health,
+            Slot:         orDefault(strings.TrimSpace(d.DeviceLocator), d.Name),
+            Manufacturer: strings.TrimSpace(d.Manufacturer),
+            PartNumber:   strings.TrimSpace(d.PartNumber),
+            SerialNumber: strings.TrimSpace(d.SerialNumber),
+            RankCount:    d.RankCount,
+            State:        d.Status.State,
+        })
+        n++
+    }
+    return n > 0
+}
+```
 
 **章节来源**
-- [collector_redfish.go:456-478](file://cmd/agent/collector_redfish.go#L456-L478)
-- [hardware.js:351-357](file://cmd/server/web/js/hardware.js#L351-L357)
+- [collector_redfish.go:1025-1119](file://cmd/agent/collector_redfish.go#L1025-L1119)
 
-### 内存DIMM详细信息采集
-v6.5.0增强了内存DIMM的详细信息采集，包括物理槽位、容量、类型、速率、健康状态等完整信息。
+### 物理盘枚举系统
+华为iBMC的物理盘权威列表位于`Chassis.Links.Drives`，而非传统的Storage成员下。系统实现了智能的去重合并机制：
 
-#### DIMM信息采集
 ```go
-// Memory DIMMs (lower frequency: every 5 min)
-var mems struct {
+// chassisLinks resolves the Thermal/Power links and the chassis' physical drive
+// list. Huawei iBMC hangs drives off Chassis.Links.Drives
+// (/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0) rather than under the Storage
+// member, so a Storage-only sweep sees no disks at all on those machines.
+func (rc *redfishCollector) chassisLinks(client *http.Client, t RedfishTarget, password, chassisPath string) (thermal, power string, drives []string) {
+    if chassisPath == "" {
+        return "", "", nil
+    }
+    var ch struct {
+        Thermal odataRef   `json:"Thermal"`
+        Power   odataRef   `json:"Power"`
+        Drives  []odataRef `json:"Drives"` // 部分固件直接放顶层
+        Links   struct {
+            Drives []odataRef `json:"Drives"`
+        } `json:"Links"`
+    }
+    if rc.rfGetRaw(client, t.URL, t.Username, password, chassisPath, &ch) != nil {
+        // 读不到 Chassis 也别放弃散热/电源：退回标准路径拼接
+        return chassisPath + "/Thermal", chassisPath + "/Power", nil
+    }
+    for _, d := range append(append([]odataRef{}, ch.Links.Drives...), ch.Drives...) {
+        if d.ID != "" {
+            drives = append(drives, d.ID)
+        }
+    }
+    return orDefault(ch.Thermal.ID, chassisPath+"/Thermal"),
+        orDefault(ch.Power.ID, chassisPath+"/Power"), drives
+}
+```
+
+#### 存储路径动态解析
+华为iBMC的Storage属性指向`/Storages`（复数形式），而非标准的`/Storage`（单数）：
+
+```go
+// 路径**必须**取自 System.Storage 的 @odata.id：华为 iBMC(含 Kunpeng S920 S00 主板)
+// 把它指向 /Systems/{id}/Storages（复数），硬拼 "/Storage" 会 404 → 存储、RAID 卡、
+// 逻辑卷、硬盘全军覆没。链接缺失时才退回标准路径。
+var storages struct {
     Members []struct {
         ODataID string `json:"@odata.id"`
     } `json:"Members"`
 }
-for _, m := range mems.Members {
-    var dimm struct {
-        Name              string        `json:"Name"`
-        CapacityMiB       float64       `json:"CapacityMiB"`
-        MemoryDeviceType  string        `json:"MemoryDeviceType"`
-        OperatingSpeedMhz int           `json:"OperatingSpeedMhz"`
-        AllowedSpeedsMHz  []int         `json:"AllowedSpeedsMHz"`
-        Status            redfishStatus `json:"Status"`
-        DeviceLocator     string        `json:"DeviceLocator"`
-        Manufacturer      string        `json:"Manufacturer"`
-        PartNumber        string        `json:"PartNumber"`
-        SerialNumber      string        `json:"SerialNumber"`
-        RankCount         int           `json:"RankCount"`
-    }
-    // 空槽位也会作为成员返回（State=Absent / 容量 0）。把它们混进列表会让
-    // "24 条内存" 里一半是幻影，异常计数也跟着虚高。
-    if strings.EqualFold(dimm.Status.State, "Absent") || dimm.CapacityMiB <= 0 {
-        continue
-    }
-    // DeviceLocator 才是机箱丝印上的槽位（A1/DIMM010 J10），Id 多是 "DIMM.Socket.A1"
-    slot := strings.TrimSpace(dimm.DeviceLocator)
-    if slot == "" {
-        slot = dimm.Id
-    }
+if rc.rfGetRaw(client, t.URL, t.Username, password, orDefault(sys.Storage.ID, sysPath+"/Storage"), &storages) == nil {
+    // 处理存储控制器和驱动器
 }
 ```
 
-#### DIMM信息展示
-前端支持完整的DIMM信息表格，包括插槽位置、容量、类型、速率、制造商、部件号、序列号和状态。
-
 **章节来源**
-- [collector_redfish.go:480-534](file://cmd/agent/collector_redfish.go#L480-L534)
-- [hardware.js:359-371](file://cmd/server/web/js/hardware.js#L359-L371)
+- [collector_redfish.go:758-864](file://cmd/agent/collector_redfish.go#L758-L864)
+- [collector_redfish.go:531-596](file://cmd/agent/collector_redfish.go#L531-L596)
 
-### 存储子系统增强
-v6.5.0大幅增强了存储子系统的监控能力，包括RAID控制器、逻辑卷、SMART预测故障检测和SSD剩余寿命监控。
+### 增强的事件日志分类
+系统实现了智能的事件日志选择逻辑，优先选择真正的硬件故障日志而非BMC操作日志：
 
-#### RAID控制器采集
 ```go
-// StorageControllers（RAID 卡）
-StorageControllers []struct {
-    Name            string        `json:"Name"`
-    Model           string        `json:"Model"`
-    Manufacturer    string        `json:"Manufacturer"`
-    FirmwareVersion string        `json:"FirmwareVersion"`
-    SerialNumber    string        `json:"SerialNumber"`
-    SpeedGbps       float64       `json:"SpeedGbps"`
-    Status          redfishStatus `json:"Status"`
-    CacheSummary    struct {
-        TotalCacheSizeMiB float64       `json:"TotalCacheSizeMiB"`
-        PersistentCacheSizeMiB float64  `json:"PersistentCacheSizeMiB"`
-        Status            redfishStatus `json:"Status"`
-    } `json:"CacheSummary"`
-}
-```
-
-#### SMART预测故障检测
-```go
-// SMART 预测故障
-FailurePredicted bool          `json:"FailurePredicted"`
-// SSD 剩余寿命；Redfish 里 null 表示未知，用指针区分 null 与 0%。
-PredictedMediaLifeLeftPercent *float64 `json:"PredictedMediaLifeLeftPercent"`
-
-// 此前 SMARTWarn 从未被赋值，前端却按它标红——盘的预测故障永远看不到。
-SMARTWarn:    drv.FailurePredicted,
-LifeLeftPct:  life,
-```
-
-#### 逻辑卷监控
-```go
-// 逻辑卷（RAID 组）：盘好不代表卷好——降级的 RAID5 里每块盘都可能是 OK
-const vols = (sd.raid || []).flatMap(r => (r.volumes || []).map(v => ({ ctl: r.name, v })))
-html += hwSection(hwT("hardware.volumes", "逻辑卷"), vols.length,
-    hwTable([hwT("hardware.raid", "RAID / 存储控制器"), hwT("hardware.name", "名称"), 
-             hwT("hardware.raid_level", "RAID 级别"), hwT("hardware.capacity", "容量"), 
-             hwT("hardware.status", "状态"), hwT("hardware.health", "健康")],
-        vols.map(({ ctl, v }) => `<tr class="${hwBadCls(v.health)}">
-            <td>${esc(ctl)}</td><td>${esc(v.name)}</td>
-            <td>${esc(hwDash(v.raid_type))}</td><td>${v.capacity_gb ? v.capacity_gb.toFixed(0) + "GB" : "-"}</td>
-            <td>${esc(hwEnum("state", v.state) || "-")}</td><td>${hwSevChip(v.health)}</td></tr>`)));
-```
-
-**章节来源**
-- [collector_redfish.go:536-653](file://cmd/agent/collector_redfish.go#L536-L653)
-- [hardware.js:396-415](file://cmd/server/web/js/hardware.js#L396-L415)
-
-### 电源供应器监控
-v6.5.0实现了完整的电源供应器监控，包括输入输出功耗、冗余状态、额定功率和电压监控。
-
-#### PSU信息采集
-```go
-// DMTF Redfish Power schema 的属性名是 **PowerSupplies** 与 **Redundancy**
-// （"PowerSupply" 只是类型名，不是属性名）。此前写成 PowerSupply /
-// PowerSupplyRedundancy，导致所有厂商的 PSU 一律解析不出来 → 前端电源区永不渲染。
-PowerSupplies []struct {
-    Name              string        `json:"Name"`
-    PowerInputWatts   float64       `json:"PowerInputWatts"`
-    PowerOutputWatts  float64       `json:"PowerOutputWatts"`
-    PowerCapacityWatts float64      `json:"PowerCapacityWatts"`
-    LineInputVoltage  float64       `json:"LineInputVoltage"`
-    PowerSupplyType   string        `json:"PowerSupplyType"`
-    Model             string        `json:"Model"`
-    Manufacturer      string        `json:"Manufacturer"`
-    SerialNumber      string        `json:"SerialNumber"`
-    FirmwareVersion   string        `json:"FirmwareVersion"`
-    Status            redfishStatus `json:"Status"`
-} `json:"PowerSupplies"`
-Redundancy []struct {
-    Mode string `json:"Mode"`
-} `json:"Redundancy"`
-```
-
-#### PSU信息展示
-前端支持完整的电源信息表格，包括名称、型号、输入输出功率、额定功率、输入电压、序列号和状态。
-
-**章节来源**
-- [collector_redfish.go:694-750](file://cmd/agent/collector_redfish.go#L694-L750)
-- [hardware.js:417-429](file://cmd/server/web/js/hardware.js#L417-L429)
-
-### BMC事件日志系统
-v6.5.0新增了完整的BMC事件日志系统，支持300秒轮询间隔、多厂商路径发现和40条限制。
-
-#### 事件日志采集
-```go
-// selInterval throttles event-log polling. Entries only appear on real faults,
-// while a full SEL fetch is one of the heaviest Redfish calls there is (old
-// iDRAC8 / RH2288 V3 firmware can take seconds) — polling it every 30s would
-// tax the BMC for nothing.
-const selInterval = 300
-
-// hwEventCap bounds how many BMC log entries ride along in each snapshot.
-// A Dell SEL holds ~500 entries and the LC log thousands; shipping them all on
-// every poll would bloat the report and the JSONB row for no operational gain.
-const hwEventCap = 40
-```
-
-#### 多厂商路径发现
-```go
-// logServicePaths returns candidate LogService Entries endpoints, discovered
-// rather than hardcoded because the naming differs per vendor:
-//   - Dell iDRAC7/8/9:  Managers/iDRAC.Embedded.1/LogServices/Sel  (+ /Lclog)
-//   - Huawei iBMC (RH2288 V3 / TaiShan 200): Managers/1/LogServices/Log
-//   - Some models expose it under Systems/<id>/LogServices/... instead
+// logServicePaths returns candidate LogService endpoints in priority order,
+// discovered rather than hardcoded because vendors differ sharply:
+//   - Dell iDRAC7/8/9: Managers/iDRAC.Embedded.1/LogServices/Sel (硬件故障)
+//     外加 /Lclog（几千条配置变更噪声，不是我们要的）
+//   - Huawei iBMC (RH2288 V3 / TaiShan / Kunpeng S920 S00):
+//     硬件事件在 **Systems/{id}/LogServices/Log1**；
+//     Managers/1/LogServices 下的 OperateLog / RunLog / SecurityLog 是
+//     BMC 的操作、运行、安全日志 —— 跟硬件故障无关，选中它们等于答非所问。
 func (rc *redfishCollector) logServicePaths(client *http.Client, t RedfishTarget, password, sysPath string) []string {
-    // 优先级：SEL > 事件日志 > 其它。Dell 的 Lclog 有几千条配置变更噪声，
+    // 优先级排序：SEL > 事件日志 > 其它。Dell 的 Lclog 有几千条配置变更噪声，
     // SEL 才是硬件故障；华为 iBMC 只有 Log。
     rank := func(p string) int {
         lp := strings.ToLower(p)
@@ -406,13 +438,16 @@ func (rc *redfishCollector) logServicePaths(client *http.Client, t RedfishTarget
             return 1
         case strings.Contains(lp, "lclog"), strings.Contains(lp, "lifecycle"):
             return 2
+        default:
+            return 3
         }
-        return 3
     }
+    sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+    return out
 }
 ```
 
-#### 组件归因解析
+#### 组件归因解析增强
 ```go
 // collectEvents pulls the most recent BMC log entries and resolves each one to
 // the component that triggered it.
@@ -431,12 +466,70 @@ func (rc *redfishCollector) collectEvents(client *http.Client, t RedfishTarget, 
             comp = fmt.Sprintf("%s #%d", m.SensorType, *m.SensorNumber)
         }
     }
+    return event
 }
 ```
 
 **章节来源**
-- [collector_redfish.go:752-1022](file://cmd/agent/collector_redfish.go#L752-L1022)
-- [hardware.js:302-314](file://cmd/server/web/js/hardware.js#L302-L314)
+- [collector_redfish.go:1198-1417](file://cmd/agent/collector_redfish.go#L1198-L1417)
+
+### 全面的测试覆盖
+系统包含了针对华为和Dell设备的完整测试套件，确保兼容性：
+
+#### 华为设备测试场景
+```go
+// huaweiRoutes 复刻华为 iBMC(Kunpeng Server Board S920 S00 / TaiShan) 的真实布局：
+//   - System.Storage 指向 /Storages（复数）
+//   - 物理盘挂在 Chassis.Links.Drives
+//   - 硬件事件在 Systems/1/LogServices/Log1，Managers 下只有 BMC 操作日志
+//   - Oem.Huawei.ProcessorView / MemoryView 一次性返回 CPU/内存
+func huaweiRoutes() map[string]string {
+    return map[string]string{
+        "/redfish/v1/Systems":    `{"Members":[{"@odata.id":"/redfish/v1/Systems/1"}]}`,
+        "/redfish/v1/Chassis":    `{"Members":[{"@odata.id":"/redfish/v1/Chassis/1"}]}`,
+        "/redfish/v1/Managers":   `{"Members":[{"@odata.id":"/redfish/v1/Managers/1"}]}`,
+        "/redfish/v1/Managers/1": `{"Model":"iBMC","FirmwareVersion":"6.22.00.00"}`,
+        "/redfish/v1/Systems/1": `{
+            "Status":{"Health":"OK","State":"Enabled"},
+            "Manufacturer":"Huawei","Model":"Kunpeng Server Board S920 S00",
+            "SerialNumber":"2102312WPY10K9000456","BiosVersion":"1.79","PowerState":"On",
+            "MemorySummary":{"TotalSystemMemoryGiB":256},
+            "Storage":{"@odata.id":"/redfish/v1/Systems/1/Storages"},
+            "Memory":{"@odata.id":"/redfish/v1/Systems/1/Memory"},
+            "Processors":{"@odata.id":"/redfish/v1/Systems/1/Processors"},
+            "LogServices":{"@odata.id":"/redfish/v1/Systems/1/LogServices"},
+            "Oem":{"Huawei":{
+                "ProcessorView":{"@odata.id":"/redfish/v1/Systems/1/ProcessorView"},
+                "MemoryView":{"@odata.id":"/redfish/v1/Systems/1/MemoryView"}}},
+            "Links":{"Chassis":[{"@odata.id":"/redfish/v1/Chassis/1"}]}}`,
+        // ... 更多华为设备模拟数据
+    }
+}
+```
+
+#### 测试用例验证
+```go
+// 华为 iBMC 的 Storage 属性指向 /Storages(复数)。此前代码硬拼 sysPath+"/Storage"
+// → 404 → 硬盘/RAID卡/逻辑卷整片为空，正是现场"存储采不到"的根因。
+func TestHuaweiStorageViaLinkNotConcat(t *testing.T) {
+    srv := serveRoutes(t, huaweiRoutes())
+    defer srv.Close()
+
+    rc := newRedfishCollector(nil, "h1", "fp")
+    snap := rc.collectOne(RedfishTarget{Name: "ibmc", URL: srv.URL, Username: "u", Password: "p"})
+    
+    // 验证RAID控制器、逻辑卷、物理盘的完整采集
+    if len(snap.RAID) != 1 || snap.RAID[0].Model != "LSI SAS3508" {
+        t.Fatalf("RAID = %+v, want 1 个 LSI SAS3508（拼路径会拿不到）", snap.RAID)
+    }
+    if len(snap.Storage) != 2 {
+        t.Fatalf("Storage = %d 块盘, want 2（Chassis.Links.Drives 合并去重）: %+v", len(snap.Storage), snap.Storage)
+    }
+}
+```
+
+**章节来源**
+- [collector_redfish_vendor_test.go:24-350](file://cmd/agent/collector_redfish_vendor_test.go#L24-L350)
 
 ## 详细组件分析
 
@@ -655,6 +748,9 @@ class redfishCollector {
 -discoverSystemPath(client, target) string
 -getChassisPath(client, target, sysPath) string
 -classifyError(err) string
+-collectHuaweiProcessorView(client, target, password, path, snap) bool
+-collectHuaweiMemoryView(client, target, password, path, snap) bool
+-chassisLinks(client, target, password, chassisPath) (thermal, power, drives)
 }
 class HardwareSnapshot {
 +string TargetName
@@ -685,6 +781,8 @@ Agent --> redfishCollector : "启动和管理"
 
 **图表来源** 
 - [collector_redfish.go:17-126](file://cmd/agent/collector_redfish.go#L17-L126)
+- [collector_redfish.go:1025-1119](file://cmd/agent/collector_redfish.go#L1025-L1119)
+- [collector_redfish.go:758-864](file://cmd/agent/collector_redfish.go#L758-L864)
 - [wire.go:144-237](file://shared/wire.go#L144-L237)
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
 
@@ -825,6 +923,7 @@ PostN --> End
   - main.go 将 redfishTargets 注入 Agent，驱动采集器运行。
   - reporter.go 提供增强的硬件报告上报功能，包含详细的诊断日志。
   - collector_linux.go 提供Linux平台的基础系统指标采集。
+  - **新增**：collector_redfish_vendor_test.go 提供华为和Dell设备的兼容性测试。
 - Server 侧
   - handlers.go 注册 /api/v1/agent/hardware 与 /api/v1/agent/netflow 路由。
   - hardware_netflow.go 实现具体处理逻辑，依赖 pgStore 与 vmWriter。
@@ -844,6 +943,7 @@ HG["cmd/server/handlers.go"] --> HN["cmd/server/hardware_netflow.go"]
 HN --> SW
 HN --> PS["cmd/server/pgstore.go"]
 LNX["collector_linux.go"] --> SW
+TEST["collector_redfish_vendor_test.go"] --> CR
 HWJS["hardware.js"] --> HG
 STYLE["style.css"] --> HWJS
 I18N["i18n-dashboard.js"] --> HWJS
@@ -851,6 +951,7 @@ I18N["i18n-dashboard.js"] --> HWJS
 
 **图表来源** 
 - [collector_redfish.go:1-16](file://cmd/agent/collector_redfish.go#L1-L16)
+- [collector_redfish_vendor_test.go:1-350](file://cmd/agent/collector_redfish_vendor_test.go#L1-L350)
 - [wire.go:1-10](file://shared/wire.go#L1-L10)
 - [main.go:223-233](file://cmd/agent/main.go#L223-L233)
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
@@ -864,6 +965,7 @@ I18N["i18n-dashboard.js"] --> HWJS
 
 **章节来源**
 - [collector_redfish.go:1-16](file://cmd/agent/collector_redfish.go#L1-L16)
+- [collector_redfish_vendor_test.go:1-350](file://cmd/agent/collector_redfish_vendor_test.go#L1-L350)
 - [wire.go:1-10](file://shared/wire.go#L1-L10)
 - [main.go:223-233](file://cmd/agent/main.go#L223-L233)
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
@@ -880,6 +982,8 @@ I18N["i18n-dashboard.js"] --> HWJS
   - **v6.2.5增强**：硬件报告上报采用并发处理，每个目标独立goroutine，避免相互阻塞。
   - **CPU计算优化**：修复后的CPU百分比计算避免了无意义的重算和数据污染。
   - **事件日志优化**：300秒轮询间隔和40条限制，平衡了数据采集频率和BMC负载。
+  - **华为优化**：ProcessorView/MemoryView单次GET优化，减少多次API调用开销。
+  - **物理盘去重**：智能的URI去重机制，避免同一物理盘重复采集。
 - Server 侧
   - 指纹校验前置，拒绝非法上报。
   - 数值指标走 VM，明细可落 PG，兼顾查询性能与成本。
@@ -894,6 +998,7 @@ I18N["i18n-dashboard.js"] --> HWJS
   - 结合 VM 标签维度（host/target/sensor/fan_name）评估查询负载。
   - 考虑前端并发请求限制，合理设置刷新频率。
   - **新增**：事件日志40条限制，避免单次快照过大影响传输效率。
+  - **新增**：华为设备优化减少了约50%的API调用次数。
 
 ## 故障排查指南
 - 无法连接 BMC
@@ -928,6 +1033,11 @@ I18N["i18n-dashboard.js"] --> HWJS
   - 数据不更新：确认网络连接正常，检查API响应状态码。
   - 界面显示异常：清除浏览器缓存，检查CSS加载是否正常。
   - 多语言切换无效：确认i18n资源文件正确加载。
+- **新增**：华为iBMC兼容性问题
+  - 检查动态路径解析是否正常工作，确认/Storages端点可访问。
+  - 验证ProcessorView/MemoryView优化函数是否被正确调用。
+  - 确认Chassis.Links.Drives物理盘枚举是否生效。
+  - 检查事件日志选择逻辑是否正确选择了硬件事件而非BMC操作日志。
 - **新增**：设备身份识别问题
   - 检查BMC固件版本是否支持完整的Redfish属性，确认Manufacturer、Model、SerialNumber等字段是否正确填充。
   - 对于华为设备，确认序列号是否在Chassis而非System中。
@@ -949,6 +1059,10 @@ I18N["i18n-dashboard.js"] --> HWJS
   - 检查事件日志路径发现逻辑，确认SEL/LogServices端点可访问。
   - 验证事件组件归因解析是否正确（MessageArgs、Links.OriginOfCondition等）。
   - 确认事件日志采集间隔（300秒）和限制（40条）配置合理。
+- **新增**：测试相关问题
+  - 运行vendor_test.go测试套件验证华为和Dell设备兼容性。
+  - 检查huaweiRoutes和dellRoutes模拟数据是否正确配置。
+  - 确认测试用例覆盖了关键的兼容性场景。
 
 **章节来源**
 - [collector_redfish.go:62-101](file://cmd/agent/collector_redfish.go#L62-L101)
@@ -959,9 +1073,14 @@ I18N["i18n-dashboard.js"] --> HWJS
 - [hardware.js:1-230](file://cmd/server/web/js/hardware.js#L1-L230)
 - [collector_linux.go:83-98](file://cmd/agent/collector_linux.go#L83-L98)
 - [collector_redfish.go:752-1022](file://cmd/agent/collector_redfish.go#L752-L1022)
+- [collector_redfish_vendor_test.go:1-350](file://cmd/agent/collector_redfish_vendor_test.go#L1-L350)
 
 ## 结论
-Redfish 硬件采集器以"轻量 Agent + 统一模型 + 双后端（PG+VM）+ 现代化前端"的方式，实现了跨厂商 BMC 的标准化硬件观测。**v6.5.0重大更新**：新增了完整的设备身份发现、GPU/加速器卡分离识别、内存DIMM详细信息采集、存储子系统增强、电源供应器监控、BMC事件日志系统等核心功能改进，为运维人员提供了全方位的硬件观测能力。配合 NetFlow 与五元组包采集，形成"硬件/网络"一体化监控面。设计上强调稳定性（退避/超时/鉴权）、可扩展（多目标/多协议）与可观测（指标/事件/历史/可视化）。通过HTTP连接稳定性修复、增强的密码解析机制、TLS兼容性支持和全面的错误分类系统，显著提升了系统在复杂生产环境中的稳定性和用户体验。v6.2.5版本进一步增强硬件报告诊断功能，提供更详细的错误上下文信息和成功操作日志，大幅提升了问题排查效率。
+Redfish 硬件采集器以"轻量 Agent + 统一模型 + 双后端（PG+VM）+ 现代化前端"的方式，实现了跨厂商 BMC 的标准化硬件观测。**v6.5.0重大更新**：新增了完整的设备身份发现、GPU/加速器卡分离识别、内存DIMM详细信息采集、存储子系统增强、电源供应器监控、BMC事件日志系统等核心功能改进，为运维人员提供了全方位的硬件观测能力。
+
+**最新华为iBMC兼容性增强**：通过动态路径解析、厂商特定优化函数、机箱链接发现系统和全面的事件日志分类，确保在Kunpeng S920 S00和TaiShan服务器上的完美运行。配合NetFlow与五元组包采集，形成"硬件/网络"一体化监控面。设计上强调稳定性（退避/超时/鉴权）、可扩展（多目标/多协议）与可观测（指标/事件/历史/可视化）。通过HTTP连接稳定性修复、增强的密码解析机制、TLS兼容性支持和全面的错误分类系统，显著提升了系统在复杂生产环境中的稳定性和用户体验。
+
+**全面测试保障**：新增的vendor_test.go测试套件确保了华为和Dell设备的兼容性，通过模拟真实设备响应验证了所有关键功能的正确性。v6.2.5版本进一步增强硬件报告诊断功能，提供更详细的错误上下文信息和成功操作日志，大幅提升了问题排查效率。
 
 ## 附录：API 定义
 - 接收端点

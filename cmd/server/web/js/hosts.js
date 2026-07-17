@@ -151,6 +151,11 @@ function renderHosts(hosts) {
   }
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
+
+  // 重复主机提示：主机页是管理主机的地方，这个入口理应在这里
+  // （硬件页也有一个，共用 duplicates.js 的同一份逻辑）。
+  const dupBar = $("hostDupBar");
+  if (dupBar) dupBar.innerHTML = dupBannerHTML();
   
   // Filter: multi-category + online status + search
   let shown = hosts.filter(h => {
@@ -452,6 +457,15 @@ async function loadAndRenderCharts() {
 }
 
 // 详情弹窗事件委托：放大按钮 + 时间范围切换
+// 重复主机横幅的按钮（横幅是重渲染出来的，故走事件委托）。
+// 清理后强制刷新主机列表：记录已被删掉，页面必须跟着更新。
+dupBindPanel("hostDupBar", () => refresh());
+// 首屏拉一次重复分组；有则在下一次渲染时显示横幅
+loadDuplicates(() => {
+  const bar = $("hostDupBar");
+  if (bar) bar.innerHTML = dupBannerHTML();
+});
+
 safeAddEventListener("detailBody", "click", e => {
   const en = e.target.closest(".chart-enlarge");
   if (en) { const ch = DETAIL_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch); return; }

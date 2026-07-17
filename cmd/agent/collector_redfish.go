@@ -3,12 +3,14 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,11 +103,15 @@ type redfishCollector struct {
 	mu        sync.Mutex
 	snapshots []shared.HardwareSnapshot
 	lastFW    map[string]int64 // target_name → last firmware collect timestamp
+	fwCache   map[string][]shared.FirmwareInfo
 	lastSEL   map[string]int64 // target_name → last event-log collect timestamp
 	// 事件日志按 selInterval 降频采集，但每份快照都要带上——快照是整体 upsert 的，
 	// 不带就等于把上一轮的事件清空，UI 上事件表会一闪一闪。
 	selCache map[string][]shared.HardwareEvent
 	logPath  map[string]string // target_name → 已选定的 LogService 路径（避免每轮重新发现）
+	// PCIe GPU 兜底同样降频 + 缓存，理由同上：快照是整体 upsert 的，不带就等于清空
+	lastPCIe  map[string]int64
+	pcieCache map[string][]shared.RedfishGPU
 
 	// systemPath caches the discovered Systems member @odata.id per target
 	// (e.g. "/redfish/v1/Systems/System.Embedded.1" for Dell iDRAC).
@@ -125,9 +131,12 @@ func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCol
 			Transport: redfishTransport(false),
 		},
 		lastFW:      make(map[string]int64),
+		fwCache:     make(map[string][]shared.FirmwareInfo),
 		lastSEL:     make(map[string]int64),
 		selCache:    make(map[string][]shared.HardwareEvent),
 		logPath:     make(map[string]string),
+		lastPCIe:    make(map[string]int64),
+		pcieCache:   make(map[string][]shared.RedfishGPU),
 		systemPath:  make(map[string]string),
 		chassisPath: make(map[string]string),
 	}
@@ -268,41 +277,71 @@ func (rc *redfishCollector) getChassisPath(client *http.Client, t RedfishTarget,
 
 	password := t.resolvePassword()
 
-	// Try from System.Links.Chassis first
+	// 候选顺序：System.Links.Chassis 优先，其次整个 Chassis 集合。
+	var candidates []string
 	var sysLinks struct {
 		Links struct {
-			Chassis []struct {
-				ODataID string `json:"@odata.id"`
-			} `json:"Chassis"`
+			Chassis []odataRef `json:"Chassis"`
 		} `json:"Links"`
 	}
-	if rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sysLinks) == nil && len(sysLinks.Links.Chassis) > 0 {
-		p := sysLinks.Links.Chassis[0].ODataID
-		slog.Info("Redfish Chassis 路径已发现(via Links)", "target", t.Name, "path", p)
-		rc.sysPathMu.Lock()
-		rc.chassisPath[t.Name] = p
-		rc.sysPathMu.Unlock()
-		return p, nil
+	if rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sysLinks) == nil {
+		for _, c := range sysLinks.Links.Chassis {
+			if c.ID != "" {
+				candidates = append(candidates, c.ID)
+			}
+		}
+	}
+	var col struct {
+		Members []odataRef `json:"Members"`
+	}
+	if err := rc.rfGetRaw(client, t.URL, t.Username, password, "/redfish/v1/Chassis", &col); err == nil {
+		for _, m := range col.Members {
+			if m.ID != "" && !containsStr(candidates, m.ID) {
+				candidates = append(candidates, m.ID)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no Chassis found")
 	}
 
-	// Fallback: query Chassis collection
-	var col struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
+	// **选带 Thermal 的那个**，而不是盲取第一个。华为刀箱/高密机型的 Chassis
+	// 集合里可能混着机框(HMM)、交换模块等成员，Members[0] 完全可能是一个没有
+	// Thermal/Power 的壳子 —— 于是风扇、温度、功耗全空，且毫无报错。
+	for _, c := range candidates {
+		var ch struct {
+			Thermal odataRef `json:"Thermal"`
+			Power   odataRef `json:"Power"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, c, &ch) != nil {
+			continue
+		}
+		if ch.Thermal.ID != "" || ch.Power.ID != "" {
+			slog.Info("Redfish Chassis 路径已发现", "target", t.Name, "path", c, "candidates", len(candidates))
+			rc.sysPathMu.Lock()
+			rc.chassisPath[t.Name] = c
+			rc.sysPathMu.Unlock()
+			return c, nil
+		}
 	}
-	if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Chassis", &col); err != nil {
-		return "", fmt.Errorf("discover Chassis collection: %w", err)
-	}
-	if len(col.Members) == 0 {
-		return "", fmt.Errorf("Chassis collection is empty")
-	}
-	p := col.Members[0].ODataID
-	slog.Info("Redfish Chassis 路径已发现", "target", t.Name, "path", p)
+
+	// 一个都没有 Thermal/Power：退回第一个候选，让 chassisLinks 去拼标准子路径。
+	p := candidates[0]
+	slog.Warn("没有任何 Chassis 暴露 Thermal/Power 链接，退回第一个候选",
+		"target", t.Name, "path", p, "candidates", len(candidates))
 	rc.sysPathMu.Lock()
 	rc.chassisPath[t.Name] = p
 	rc.sysPathMu.Unlock()
 	return p, nil
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyError returns a human-readable hint for common Redfish errors.
@@ -401,6 +440,9 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		Memory      odataRef `json:"Memory"`
 		Processors  odataRef `json:"Processors"`
 		LogServices odataRef `json:"LogServices"`
+		// GPU 兜底用。同样只跟随链接：iDRAC9 指向 /Chassis/{id}/PCIeDevices/{id}，
+		// iDRAC8 指向 /Systems/{id}/PCIeDevice/{id}（单数、挂在 Systems 下）。
+		PCIeDevices []odataRef `json:"PCIeDevices"`
 		Oem         struct {
 			// Go 的 json 解码本身大小写不敏感，Oem.Huawei / Oem.huawei 都能命中。
 			Huawei struct {
@@ -455,6 +497,12 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	if !rc.collectHuaweiProcessorView(client, t, password, sys.Oem.Huawei.ProcessorView.ID, &snap) {
 		rc.collectProcessors(client, t, password, orDefault(sys.Processors.ID, sysPath+"/Processors"), &snap)
 	}
+	// GPU 兜底：iDRAC8(R730 一代) 的 Processors 集合**按设计只有 CPU**，独显永远
+	// 不会出现在里面 —— 这才是"Dell 采不到 GPU"的真正原因，和厂商路径无关。
+	// 只有在 Processors 一块 GPU 都没给出时才走 PCIe，避免给 iDRAC9 白白加几十次 GET。
+	if len(snap.GPUs) == 0 {
+		snap.GPUs = rc.collectGPUsViaPCIe(client, t, password, sys.PCIeDevices, chassisPath)
+	}
 
 	// 3. Memory DIMMs
 	// 同 CPU：华为 MemoryView 一次拿全，标准 /Memory 兜底。
@@ -463,8 +511,19 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if !rc.collectHuaweiMemoryView(client, t, password, sys.Oem.Huawei.MemoryView.ID, &snap) &&
-		rc.rfGetRaw(client, t.URL, t.Username, password, orDefault(sys.Memory.ID, sysPath+"/Memory"), &mems) == nil {
+	memOK := rc.collectHuaweiMemoryView(client, t, password, sys.Oem.Huawei.MemoryView.ID, &snap)
+	if !memOK {
+		memPath := orDefault(sys.Memory.ID, sysPath+"/Memory")
+		err := rc.rfGetRaw(client, t.URL, t.Username, password, memPath, &mems)
+		// 404 = 该固件根本没有内存资源（iDRAC8 需 ≥2.60），和"有资源但没读到"是两回事，
+		// 混成一句 error 会让现场只能靠猜。这里把状态码打出来。
+		if err != nil {
+			slog.Warn("内存清单读取失败", "target", t.Name, "path", memPath,
+				"http_status", rfStatus(err), "err", err,
+				"hint", "404 通常表示 BMC 固件过旧（Dell iDRAC8 需 ≥2.60.60.60 才有 /Memory）")
+		} else if len(mems.Members) == 0 {
+			slog.Warn("内存集合为空", "target", t.Name, "path", memPath)
+		}
 		for _, m := range mems.Members {
 			var dimm struct {
 				Name              string        `json:"Name"`
@@ -587,41 +646,64 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	}
 
 	// 5. Thermal (temperatures + fans)
+	// 所有数值一律走 redfishNum：华为会在阈值字段回字符串 "N/A"，用 float64
+	// 会让整份 Thermal 解析失败，风扇和温度一起没。
 	var thermal struct {
 		Temperatures []struct {
 			Name                   string        `json:"Name"`
-			ReadingCelsius         float64       `json:"ReadingCelsius"`
+			ReadingCelsius         redfishNum    `json:"ReadingCelsius"`
 			Status                 redfishStatus `json:"Status"`
-			UpperThresholdCaution  float64       `json:"UpperThresholdCaution"`
-			UpperThresholdCritical float64       `json:"UpperThresholdCritical"`
+			UpperThresholdCaution  redfishNum    `json:"UpperThresholdCaution"`
+			UpperThresholdCritical redfishNum    `json:"UpperThresholdCritical"`
+			// DMTF 规范里 Caution 的正式名是 UpperThresholdNonCritical，
+			// 华为/部分固件只给这个；只认 UpperThresholdCaution 会让告警阈值恒为 0。
+			UpperThresholdNonCritical redfishNum `json:"UpperThresholdNonCritical"`
+			UpperThresholdFatal       redfishNum `json:"UpperThresholdFatal"`
 		} `json:"Temperatures"`
 		Fans []struct {
 			Name         string        `json:"Name"`
-			Reading      int           `json:"Reading"`
+			Reading      redfishNum    `json:"Reading"`
+			ReadingRPM   redfishNum    `json:"ReadingRPM"` // 部分厂商用这个字段名
 			ReadingUnits string        `json:"ReadingUnits"`
 			Status       redfishStatus `json:"Status"`
 		} `json:"Fans"`
 	}
 	if thermalPath != "" {
-		if rc.rfGetRaw(client, t.URL, t.Username, password, thermalPath, &thermal) == nil {
-			for _, t := range thermal.Temperatures {
-				snap.Temps = append(snap.Temps, shared.SensorReading{
-					Name:          t.Name,
-					Reading:       t.ReadingCelsius,
-					Unit:          "Celsius",
-					Status:        t.Status.Health,
-					UpperCaution:  t.UpperThresholdCaution,
-					UpperCritical: t.UpperThresholdCritical,
-				})
+		// 注意：这里**不能**因为 err != nil 就整份丢弃。Go 的 json 解码遇到类型
+		// 不符会记录错误但仍继续填充其余字段，早退等于把已经解出来的数据扔掉。
+		err := rc.rfGetRaw(client, t.URL, t.Username, password, thermalPath, &thermal)
+		if err != nil && len(thermal.Temperatures) == 0 && len(thermal.Fans) == 0 {
+			slog.Warn("Thermal 采集失败", "target", t.Name, "path", thermalPath, "err", err)
+		}
+		for _, t := range thermal.Temperatures {
+			caution := t.UpperThresholdCaution
+			if caution == 0 {
+				caution = t.UpperThresholdNonCritical
 			}
-			for _, f := range thermal.Fans {
-				snap.Fans = append(snap.Fans, shared.FanReading{
-					Name:   f.Name,
-					RPM:    f.Reading,
-					Health: f.Status.Health,
-					Status: f.Status.State,
-				})
+			critical := t.UpperThresholdCritical
+			if critical == 0 {
+				critical = t.UpperThresholdFatal
 			}
+			snap.Temps = append(snap.Temps, shared.SensorReading{
+				Name:          t.Name,
+				Reading:       t.ReadingCelsius.f(),
+				Unit:          "Celsius",
+				Status:        t.Status.Health,
+				UpperCaution:  caution.f(),
+				UpperCritical: critical.f(),
+			})
+		}
+		for _, f := range thermal.Fans {
+			rpm := f.Reading
+			if rpm == 0 {
+				rpm = f.ReadingRPM
+			}
+			snap.Fans = append(snap.Fans, shared.FanReading{
+				Name:   f.Name,
+				RPM:    rpm.i(),
+				Health: f.Status.Health,
+				Status: f.Status.State,
+			})
 		}
 	}
 
@@ -687,37 +769,80 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	// 出的问题"的数据源。整机 Health=Critical 本身不说明任何定位信息。
 	snap.Events = rc.collectEvents(client, t, password, sysPath)
 
-	// 8. Firmware (low frequency: every hour)
-	now := time.Now().Unix()
-	rc.mu.Lock()
-	lastFW := rc.lastFW[t.Name]
-	rc.mu.Unlock()
-	if now-lastFW >= 3600 {
-		var fw struct {
-			Members []struct {
-				ODataID string `json:"@odata.id"`
-			} `json:"Members"`
-		}
-		if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/UpdateService/FirmwareInventory", &fw) == nil {
-			for _, m := range fw.Members {
-				var f struct {
-					Name    string `json:"Name"`
-					Version string `json:"Version"`
-				}
-				if rc.rfGetRaw(client, t.URL, t.Username, password, m.ODataID, &f) == nil {
-					snap.Firmware = append(snap.Firmware, shared.FirmwareInfo{
-						Name:    f.Name,
-						Version: f.Version,
-					})
-				}
-			}
-			rc.mu.Lock()
-			rc.lastFW[t.Name] = now
-			rc.mu.Unlock()
-		}
-	}
+	// 8. 固件清单（降频采集 + 缓存）
+	snap.Firmware = rc.collectFirmware(client, t, password)
 
 	return snap
+}
+
+// collectFirmware returns the firmware inventory, refreshed at most hourly.
+//
+// 这里**必须**返回缓存而不是"过了周期才填、其余轮次留空"：快照是整体 upsert 的，
+// 留空就等于把上一次采到的固件抹掉。此前正是如此——固件每小时才写进一次快照，
+// 剩下 59 轮全是空的，于是"固件版本"在界面上几乎永远看不到。
+func (rc *redfishCollector) collectFirmware(client *http.Client, t RedfishTarget, password string) []shared.FirmwareInfo {
+	now := time.Now().Unix()
+	rc.mu.Lock()
+	last, cached := rc.lastFW[t.Name], rc.fwCache[t.Name]
+	rc.mu.Unlock()
+	if now-last < fwInterval {
+		return cached
+	}
+
+	// 路径同样跟随链接：ServiceRoot.UpdateService → UpdateService.FirmwareInventory。
+	// 硬拼 /redfish/v1/UpdateService/FirmwareInventory 在改了路径的固件上直接 404。
+	invPath := ""
+	var root struct {
+		UpdateService odataRef `json:"UpdateService"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, "/redfish/v1", &root) == nil && root.UpdateService.ID != "" {
+		var us struct {
+			FirmwareInventory odataRef `json:"FirmwareInventory"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, root.UpdateService.ID, &us) == nil {
+			invPath = us.FirmwareInventory.ID
+		}
+	}
+	invPath = orDefault(invPath, "/redfish/v1/UpdateService/FirmwareInventory")
+
+	var fw struct {
+		Members []odataRef `json:"Members"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, invPath, &fw) != nil {
+		rc.mu.Lock()
+		rc.lastFW[t.Name] = now // 记下时间，避免每轮重试整套发现
+		rc.mu.Unlock()
+		return cached
+	}
+
+	out := make([]shared.FirmwareInfo, 0, len(fw.Members))
+	for _, m := range fw.Members {
+		var f struct {
+			Name    string `json:"Name"`
+			Version string `json:"Version"`
+			Updateable *bool `json:"Updateable"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, m.ID, &f) != nil {
+			continue
+		}
+		name, ver := strings.TrimSpace(f.Name), strings.TrimSpace(f.Version)
+		if name == "" || ver == "" {
+			continue // 没版本号的条目对运维没有意义
+		}
+		out = append(out, shared.FirmwareInfo{Name: name, Version: ver})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+
+	rc.mu.Lock()
+	rc.lastFW[t.Name] = now
+	if len(out) > 0 {
+		rc.fwCache[t.Name] = out
+	}
+	rc.mu.Unlock()
+	if len(out) == 0 {
+		return cached
+	}
+	return out
 }
 
 // redfishStatus is the Status object every Redfish resource carries.
@@ -740,6 +865,33 @@ func orDefault(v, fallback string) string {
 	}
 	return v
 }
+
+// redfishNum is a number field that tolerates what BMCs actually send.
+//
+// 华为 iBMC（以及部分 iLO/浪潮固件）会在 schema 声明为 number 的字段里回
+// 字符串 "N/A"——典型的是没有配阈值的传感器。用 float64 直接解，
+// encoding/json 会对**整份文档**报 UnmarshalTypeError，调用方一看有错就把
+// 整个 Thermal 响应丢掉 → 风扇和温度**一起**消失，正是现场症状。
+// 这里单个坏字段只影响它自己，不牵连整份响应。
+type redfishNum float64
+
+func (n *redfishNum) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "" || s == "null" || strings.EqualFold(s, "N/A") || strings.EqualFold(s, "NA") {
+		*n = 0
+		return nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		*n = 0 // 认不出来就当没有，绝不因为一个字段让整台机器没数据
+		return nil
+	}
+	*n = redfishNum(f)
+	return nil
+}
+
+func (n redfishNum) f() float64 { return float64(n) }
+func (n redfishNum) i() int     { return int(n) }
 
 // chassisLinks resolves the Thermal/Power links and the chassis' physical drive
 // list. Huawei iBMC hangs drives off Chassis.Links.Drives
@@ -892,6 +1044,123 @@ func (rc *redfishCollector) collectProcessors(client *http.Client, t RedfishTarg
 	}
 }
 
+// pcieInterval throttles the PCIe sweep. It costs one GET per device plus one
+// per function (dozens on a populated box), and PCIe cards don't hot-plug —
+// so once an hour is plenty.
+const pcieInterval = 3600
+
+// collectGPUsViaPCIe finds GPUs by walking PCIe devices, for BMCs that don't
+// list them under /Processors (iDRAC8 is CPU-only by design).
+//
+// Discrimination is on PCI **ClassCode**, not DeviceClass: both a real GPU and
+// the onboard Matrox BMC video report DeviceClass "DisplayController". Only the
+// class code separates them —
+//
+//	0x0302xx = 3D controller  → 独显/计算卡（H100 / A40 …）
+//	0x0300xx = VGA controller → 板载 Matrox G200，绝不能当成 GPU 报给用户
+func (rc *redfishCollector) collectGPUsViaPCIe(client *http.Client, t RedfishTarget, password string, sysDevs []odataRef, chassisPath string) []shared.RedfishGPU {
+	now := time.Now().Unix()
+	rc.mu.Lock()
+	last, cached := rc.lastPCIe[t.Name], rc.pcieCache[t.Name]
+	rc.mu.Unlock()
+	if now-last < pcieInterval {
+		return cached // 未到周期：沿用上轮结果（快照整体 upsert，返回 nil 会把 GPU 抹掉）
+	}
+
+	devs := sysDevs
+	if len(devs) == 0 && chassisPath != "" {
+		// System 没挂 PCIeDevices 链接时，退到 Chassis 下的集合（iDRAC9 常见形态）。
+		var col struct {
+			Members []odataRef `json:"Members"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, chassisPath+"/PCIeDevices", &col) == nil {
+			devs = col.Members
+		}
+	}
+
+	var out []shared.RedfishGPU
+	for _, d := range devs {
+		if d.ID == "" {
+			continue
+		}
+		var dev struct {
+			Name         string        `json:"Name"`
+			Model        string        `json:"Model"`
+			Manufacturer string        `json:"Manufacturer"`
+			SerialNumber string        `json:"SerialNumber"`
+			Status       redfishStatus `json:"Status"`
+			PCIeFunctions odataRef     `json:"PCIeFunctions"` // 集合链接
+			Links        struct {
+				PCIeFunctions []odataRef `json:"PCIeFunctions"` // 直挂数组
+			} `json:"Links"`
+		}
+		if rc.rfGetRaw(client, t.URL, t.Username, password, d.ID, &dev) != nil {
+			continue
+		}
+		fns := dev.Links.PCIeFunctions
+		if len(fns) == 0 && dev.PCIeFunctions.ID != "" {
+			var col struct {
+				Members []odataRef `json:"Members"`
+			}
+			if rc.rfGetRaw(client, t.URL, t.Username, password, dev.PCIeFunctions.ID, &col) == nil {
+				fns = col.Members
+			}
+		}
+		for _, f := range fns {
+			var fn struct {
+				ClassCode   string `json:"ClassCode"`
+				DeviceClass string `json:"DeviceClass"`
+				Name        string `json:"Name"`
+				VendorId    string `json:"VendorId"`
+				DeviceId    string `json:"DeviceId"`
+			}
+			if rc.rfGetRaw(client, t.URL, t.Username, password, f.ID, &fn) != nil {
+				continue
+			}
+			if !isGPUClassCode(fn.ClassCode) {
+				continue
+			}
+			// iDRAC8 明确不上报 PCIe 设备的 Model/PartNumber，只能退而求其次：
+			// 用功能名（"GH100 [H100 PCIe]"），再不行用 VendorId:DeviceId。
+			model := strings.TrimSpace(dev.Model)
+			if model == "" {
+				model = strings.TrimSpace(fn.Name)
+			}
+			if model == "" && fn.VendorId != "" {
+				model = fn.VendorId + ":" + fn.DeviceId
+			}
+			name := strings.TrimSpace(dev.Name)
+			if name == "" {
+				name = strings.TrimSpace(fn.Name)
+			}
+			out = append(out, shared.RedfishGPU{
+				Name:         name,
+				Model:        model,
+				Manufacturer: strings.TrimSpace(dev.Manufacturer),
+				Health:       dev.Status.Health,
+				State:        dev.Status.State,
+			})
+			break // 一块卡只报一次，多功能设备不重复计数
+		}
+	}
+
+	rc.mu.Lock()
+	rc.lastPCIe[t.Name], rc.pcieCache[t.Name] = now, out
+	rc.mu.Unlock()
+	if len(out) > 0 {
+		slog.Info("经 PCIe 兜底发现 GPU", "target", t.Name, "count", len(out))
+	}
+	return out
+}
+
+// isGPUClassCode reports whether a PCI ClassCode is a 3D controller (0x0302xx).
+// 形如 "0x030200"；也容忍少数固件写成 "030200" 或大写。
+func isGPUClassCode(code string) bool {
+	c := strings.ToLower(strings.TrimSpace(code))
+	c = strings.TrimPrefix(c, "0x")
+	return strings.HasPrefix(c, "0302")
+}
+
 // collectHuaweiProcessorView reads Oem.Huawei.ProcessorView — one GET returns
 // every CPU, including a Temperature the standard Processor schema has no field
 // for. Returns false when the view is absent/unusable so callers fall back.
@@ -997,6 +1266,10 @@ const hwEventCap = 40
 // iDRAC8 / RH2288 V3 firmware can take seconds) — polling it every 30s would
 // tax the BMC for nothing.
 const selInterval = 300
+
+// fwInterval throttles firmware inventory: it's one GET per component (dozens),
+// and firmware only changes during a deliberate upgrade.
+const fwInterval = 3600
 
 // fillManagerInfo reads the BMC's own identity (iDRAC9 / iBMC + firmware
 // version) from the Managers collection. Best-effort: a BMC that doesn't expose
@@ -1304,15 +1577,24 @@ func (rc *redfishCollector) rfGet(client *http.Client, base, user, pass, path st
 	return rc.rfGetRaw(client, base, user, pass, path, dst)
 }
 
+// rfEscapeODataID makes an @odata.id safe to paste into a request URL.
+//
+// Dell iDRAC8 的内存成员 id 里带**字面 `#`**：
+//
+//	/redfish/v1/Systems/System.Embedded.1/Memory/iDRAC.Embedded.1#DIMMSLOTA1
+//
+// 而 `#` 在 URL 里是 fragment 分隔符，net/http 会把它之后的部分整段切掉，
+// 请求实际发到 /Memory/iDRAC.Embedded.1 → 404 → **所有内存条被静默丢光**，
+// 症状和"这台机器不支持内存采集"一模一样。iDRAC9 的 id 是 DIMM.Socket.A1
+// 不带 `#`，所以只有 R730 这代出问题。
+// 已经是 %23 的不受影响（那时字符串里没有字面 `#`）。
+func rfEscapeODataID(path string) string {
+	return strings.ReplaceAll(path, "#", "%23")
+}
+
 // rfGetRaw fetches an arbitrary Redfish path (may be @odata.id from collection members).
 func (rc *redfishCollector) rfGetRaw(client *http.Client, base, user, pass, path string, dst any) error {
-	url := base
-	if len(path) > 0 && path[0] == '/' {
-		url = base + path
-	} else {
-		// path is an @odata.id, already absolute on the BMC
-		url = base + path
-	}
+	url := base + rfEscapeODataID(path)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -1331,7 +1613,29 @@ func (rc *redfishCollector) rfGetRaw(client *http.Client, base, user, pass, path
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return &rfHTTPError{Status: resp.StatusCode, Path: path, Body: string(body)}
 	}
 	return json.NewDecoder(resp.Body).Decode(dst)
+}
+
+// rfHTTPError carries the status code so callers can tell "该机型没有这个资源"
+// (404) apart from "有资源但是空的" 和 "认证/网络挂了"。此前两者都只是一个
+// 笼统的 error，现场排查只能靠猜——这也是内存/存储采不到时最难定位的原因。
+type rfHTTPError struct {
+	Status int
+	Path   string
+	Body   string
+}
+
+func (e *rfHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d on %s: %s", e.Status, e.Path, e.Body)
+}
+
+// rfStatus returns the HTTP status behind an error, or 0 if it wasn't an HTTP error.
+func rfStatus(err error) int {
+	var he *rfHTTPError
+	if errors.As(err, &he) {
+		return he.Status
+	}
+	return 0
 }

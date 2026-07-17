@@ -154,6 +154,7 @@ type HardwareSnapshot struct {
 	Memory     RedfishMemory    `json:"memory"`
 	Storage    []RedfishStorage `json:"storage"`
 	RAID       []RedfishRAID    `json:"raid,omitempty"` // Storage 成员里的 StorageControllers（RAID 卡）
+	Enclosures []StorageEnclosure `json:"enclosures,omitempty"` // 磁盘框（OceanStor 等外置存储）
 	Temps      []SensorReading  `json:"temps"`
 	Fans       []FanReading     `json:"fans"`
 	Power      RedfishPower     `json:"power"`
@@ -240,6 +241,20 @@ type RedfishVolume struct {
 	CapacityGB float64 `json:"capacity_gb,omitempty"`
 	Health     string  `json:"health,omitempty"`
 	State      string  `json:"state,omitempty"`
+}
+
+// StorageEnclosure is a disk enclosure (磁盘框). Populated by the OceanStor
+// DeviceManager collector — OceanStor arrays expose no Redfish endpoint at all,
+// so this never comes from a BMC.
+type StorageEnclosure struct {
+	Name         string  `json:"name"`
+	Model        string  `json:"model,omitempty"`
+	SerialNumber string  `json:"serial_number,omitempty"`
+	Location     string  `json:"location,omitempty"`
+	Type         string  `json:"type,omitempty"`
+	Health       string  `json:"health"`
+	State        string  `json:"state,omitempty"`
+	TemperatureC float64 `json:"temperature_c,omitempty"`
 }
 
 type RedfishMemory struct {

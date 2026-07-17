@@ -43,17 +43,27 @@ func loadOrCreateHostID(path string) string {
 		}
 	}
 	id := randomID()
-	// Atomic write: temp file + rename to prevent partial writes on crash.
+	persistHostID(path, id, fp)
+	return id
+}
+
+// persistHostID atomically writes the identity state file.
+//
+// Atomic write: temp file + rename to prevent partial writes on crash.
+// On Windows, Rename is not atomic for existing targets, so we fall back to a
+// direct write — the file is tiny and a corrupted one just regenerates the id.
+func persistHostID(path, id, fp string) {
 	b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp})
-	if err == nil {
-		tmp := path + ".tmp"
-		if e := os.WriteFile(tmp, b, 0o600); e == nil {
-			_ = os.Rename(tmp, path)
-		} else {
-			_ = os.WriteFile(path, b, 0o600) // fallback: direct write（host-id 身份文件，仅属主可读）
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if e := os.WriteFile(tmp, b, 0o600); e == nil {
+		if e2 := os.Rename(tmp, path); e2 == nil {
+			return
 		}
 	}
-	return id
+	_ = os.WriteFile(path, b, 0o600) // fallback（host-id 身份文件，仅属主可读）
 }
 
 // machineFingerprint returns a stable, machine-unique fingerprint derived from

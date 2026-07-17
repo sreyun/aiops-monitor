@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,10 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("硬件采集失败，保留上一次快照不覆盖", "host_id", rep.HostID, "target", snap.TargetName, "err", snap.Error)
 				continue
 			}
+			// 资产变更必须在 upsert **之前**比对：upsert 会把上一份快照覆盖掉，
+			// 之后就没有"旧值"可比了。
+			s.recordHardwareChanges(rep.HostID, snap)
+
 			s.pg.upsertHardwareSnapshot(rep.HostID, snap)
 
 			// Write numeric metrics to VM
@@ -215,57 +220,24 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	from, to := parseTimeRange(rangeStr)
+	if dimension == "" {
+		dimension = "dst_ip"
+	}
 
-	if !s.vm.enabled() {
-		writeJSON(w, http.StatusOK, map[string]any{"summary": []any{}, "total_bytes": 0})
+	// 数据源从 VM 改为 PG：VM 里不再保留 src_port/五元组这类高基数 label
+	// （那正是压垮时序库的原因），明细在 flow_records 里永久保留，
+	// 任意维度的 Top-N 交给关系库做，又准又不炸基数。
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"summary": []any{}})
 		return
 	}
-
-	if dimension == "" {
-		dimension = "src_ip"
+	summary, err := s.pg.getFlowSummary(hostID, dimension, from, to, topN)
+	if err != nil {
+		slog.Warn("查询 Flow 汇总失败", "host", hostID, "dimension", dimension, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
 	}
-
-	// Query VM for aggregated flow bytes by dimension
-	promql := fmt.Sprintf(`sum by (%s) (aiops_netflow_bytes{host="%s"})`, dimension, hostID)
-	points := s.vm.queryRawRange(promql, from, to)
-
-	// Aggregate to top-N
-	agg := make(map[string]uint64)
-	for _, p := range points {
-		if m, ok := p.(map[string]any); ok {
-			label := ""
-			if labels, ok := m["labels"].(map[string]any); ok {
-				if v, ok := labels[dimension].(string); ok {
-					label = v
-				}
-			}
-			if val, ok := m["value"].(float64); ok {
-				agg[label] += uint64(val)
-			}
-		}
-	}
-
-	type kv struct {
-		Key   string `json:"key"`
-		Bytes uint64 `json:"bytes"`
-	}
-	var sorted []kv
-	for k, v := range agg {
-		sorted = append(sorted, kv{k, v})
-	}
-	// Simple sort (top-N)
-	for i := 0; i < len(sorted) && i < topN; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Bytes > sorted[i].Bytes {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
-	if len(sorted) > topN {
-		sorted = sorted[:topN]
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"summary": sorted})
+	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "dimension": dimension})
 }
 
 // handleNetFlowFlows returns flow detail records from PG.
@@ -372,22 +344,128 @@ func (s *Server) vmHardwareMetrics(hostID string, snap shared.HardwareSnapshot) 
 	}
 }
 
+// netflowTopN bounds how many peer / service-port series each report may emit.
+// 时间序列数据库的成本由**序列数**决定，不是采样点数。这里必须硬性封顶。
+const netflowTopN = 50
+
+// vmNetFlowMetrics writes AGGREGATED flow metrics to VM.
+//
+// 此前是每条 flow 一条序列，label 里带 src_ip/src_port/dst_ip/dst_port：
+//
+//	aiops_netflow_bytes{host,src_ip,dst_ip,src_port,dst_port,proto,source}
+//
+// src_port 是**临时端口**（每条连接随机），等于每条 flow 都开一条新序列。
+// 采集上限是 10000 flows/s，哪怕只跑到 100 flows/s 也是每天 860 万条新序列 ——
+// VM 撑不住百万级以上的活跃序列，几天就被拖垮，而"永久保留"只会让它死得更快。
+//
+// 改为三类**基数可控**的聚合序列：总量 / 对端 Top-N / 服务端口 Top-N。
+// 五元组明细不进 VM，落 PG（分区表，永久保留）供取证回溯。
 func (s *Server) vmNetFlowMetrics(hostID string, rep shared.NetFlowReport) {
 	if !s.vm.enabled() {
 		return
 	}
-	ts := rep.Timestamp * 1000 // Prometheus 导入格式要求毫秒；此前传秒导致数据写进 1970
-	for _, f := range rep.Flows {
-		labels := fmt.Sprintf(`host="%s",src_ip="%s",dst_ip="%s",src_port="%d",dst_port="%d",proto="%d",source="%s"`,
-			hostID, lblEsc(f.SrcIP), lblEsc(f.DstIP), f.SrcPort, f.DstPort, f.Protocol, lblEsc(rep.Source))
-
-		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_bytes{%s} %d %d", labels, f.Bytes, ts))
-		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_packets{%s} %d %d", labels, f.Packets, ts))
+	// 本机 IP 用来判定"对端"是谁；查不到就退化成按 dst 侧统计（仍然可用）。
+	selfIP := ""
+	if h := s.hostByID(hostID); h != nil {
+		selfIP = h.IP
 	}
+	for _, line := range rollupNetFlow(hostID, selfIP, rep) {
+		s.vm.pushRawLine(line)
+	}
+}
+
+// rollupNetFlow turns one report into a BOUNDED set of Prometheus lines.
+// 抽成纯函数是为了能直接对"产出多少条序列"做断言——基数封顶是这段代码存在的唯一理由。
+func rollupNetFlow(hostID, selfIP string, rep shared.NetFlowReport) []string {
+	var out []string
+	ts := rep.Timestamp * 1000 // Prometheus 导入格式要求毫秒；此前传秒导致数据写进 1970
+	src := lblEsc(rep.Source)
+
+	var total flowAgg
+	byPeer := map[string]*flowAgg{}
+	byPort := map[string]*flowAgg{}
+
+	for _, f := range rep.Flows {
+		total.bytes += f.Bytes
+		total.packets += f.Packets
+
+		peer := f.DstIP
+		if selfIP != "" && f.DstIP == selfIP {
+			peer = f.SrcIP // 入向流量，对端是源
+		}
+		a := byPeer[peer]
+		if a == nil {
+			a = &flowAgg{}
+			byPeer[peer] = a
+		}
+		a.bytes += f.Bytes
+		a.packets += f.Packets
+
+		// 服务端口：取两端里**较小**的那个，临时端口一定是大的那个，
+		// 这样 80/443/3306 这类真正有意义的服务端口才会被统计到。
+		svc := f.DstPort
+		if f.SrcPort < f.DstPort && f.SrcPort != 0 {
+			svc = f.SrcPort
+		}
+		k := fmt.Sprintf("%d/%d", svc, f.Protocol)
+		b := byPort[k]
+		if b == nil {
+			b = &flowAgg{}
+			byPort[k] = b
+		}
+		b.bytes += f.Bytes
+		b.packets += f.Packets
+	}
+
+	if total.bytes > 0 || total.packets > 0 {
+		out = append(out,
+			fmt.Sprintf(`aiops_netflow_total_bytes{host="%s",source="%s"} %d %d`, hostID, src, total.bytes, ts),
+			fmt.Sprintf(`aiops_netflow_total_packets{host="%s",source="%s"} %d %d`, hostID, src, total.packets, ts),
+			fmt.Sprintf(`aiops_netflow_flows{host="%s",source="%s"} %d %d`, hostID, src, len(rep.Flows), ts))
+	}
+
+	for _, kv := range topAggs(byPeer, netflowTopN) {
+		out = append(out, fmt.Sprintf(`aiops_netflow_peer_bytes{host="%s",peer="%s",source="%s"} %d %d`,
+			hostID, lblEsc(kv.key), src, kv.val.bytes, ts))
+	}
+	for _, kv := range topAggs(byPort, netflowTopN) {
+		port, proto, _ := strings.Cut(kv.key, "/")
+		out = append(out, fmt.Sprintf(`aiops_netflow_port_bytes{host="%s",port="%s",proto="%s",source="%s"} %d %d`,
+			hostID, port, proto, src, kv.val.bytes, ts))
+	}
+
 	if rep.Stats.DroppedPackets > 0 {
-		s.vm.pushRawLine(fmt.Sprintf(`aiops_netflow_dropped{host="%s"} %d %d`,
+		out = append(out, fmt.Sprintf(`aiops_netflow_dropped{host="%s"} %d %d`,
 			hostID, rep.Stats.DroppedPackets, ts))
 	}
+	return out
+}
+
+type flowAgg struct{ bytes, packets uint64 }
+
+type flowAggKV struct {
+	key string
+	val *flowAgg
+}
+
+// topAggs returns the n entries with the highest byte count, sorted descending.
+// 只发 Top-N 是基数封顶的关键：一台机器一轮最多贡献 n 条序列，
+// 而不是"有多少个对端就开多少条"。
+func topAggs(m map[string]*flowAgg, n int) []flowAggKV {
+	out := make([]flowAggKV, 0, len(m))
+	for k, v := range m {
+		out = append(out, flowAggKV{k, v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].val.bytes != out[j].val.bytes {
+			return out[i].val.bytes > out[j].val.bytes
+		}
+		return out[i].key < out[j].key // 同流量时按 key 排，保证输出稳定
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
 // ============================================================================

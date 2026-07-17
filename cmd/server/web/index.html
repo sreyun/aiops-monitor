@@ -374,6 +374,8 @@
           </div>
           <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" data-i18n-title="ui.purge_offline_title" data-i18n="ui.purge_offline" title="删除所有离线主机">清理离线</button>
         </div>
+        <!-- 重复主机（Agent 重装换 ID）提示条；无可清理项时由 JS 置空 -->
+        <div id="hostDupBar"></div>
         <div id="groups"></div>
         <div class="pager" id="pager"></div>
         <div class="empty" id="empty">

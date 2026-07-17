@@ -6,6 +6,10 @@
 
 let nfCurrentHost = "";
 let nfCurrentRange = "1h";
+let nfHostQuery = "";      // 主机搜索词
+let nfShowOffline = false; // 是否把离线主机也列进下拉
+let nfDimension = "dst_ip"; // Top-N 聚合维度（后端支持多种，之前前端写死了）
+let nfSearchT = null;
 
 function renderNetFlowPanel() {
   const container = $("netflowPanel");
@@ -19,21 +23,46 @@ function renderNetFlowPanel() {
 
   // Build host selector + range selector + panels
   let html = `<div class="nf-toolbar">`;
+  // 主机搜索：机器一多，下拉里翻找主机名非常痛苦
+  html += `<input type="search" id="nfHostSearch" class="nf-input" value="${esc(nfHostQuery)}"
+    placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}">`;
   html += `<select id="nfHostSelect" class="nf-select">`;
+  const q = nfHostQuery.trim().toLowerCase();
+  let shown = 0;
   hosts.forEach(h => {
-    if (h.online) {
-      html += `<option value="${esc(h.id)}">${esc(h.hostname || h.id)}</option>`;
-    }
+    // 离线主机默认不列（流量是 Agent 实时上报的），但允许显式包含——
+    // 排查"某台机器下线前在跟谁通信"时必须能选到它。
+    if (!h.online && !nfShowOffline) return;
+    const hay = `${h.hostname || ""} ${h.id} ${h.ip || ""}`.toLowerCase();
+    if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
+    shown++;
+    const sel = h.id === nfCurrentHost ? " selected" : "";
+    html += `<option value="${esc(h.id)}"${sel}>${h.online ? "" : "○ "}${esc(h.hostname || h.id)}</option>`;
   });
   html += `</select>`;
+  html += `<label class="nf-chk"><input type="checkbox" id="nfShowOffline"${nfShowOffline ? " checked" : ""}>
+    ${esc(I18N.t("netflow.show_offline") || "含离线主机")}</label>`;
   html += `<select id="nfRangeSelect" class="nf-select">`;
   html += `<option value="1h">${I18N.t("netflow.last_1h") || "最近1小时"}</option>`;
   html += `<option value="6h">${I18N.t("netflow.last_6h") || "最近6小时"}</option>`;
   html += `<option value="24h">${I18N.t("netflow.last_24h") || "最近24小时"}</option>`;
   html += `<option value="7d">${I18N.t("netflow.last_7d") || "最近7天"}</option>`;
   html += `</select>`;
+  // 聚合维度：后端本来就支持，之前前端写死了 src_ip，等于把能力藏起来了
+  html += `<select id="nfDimSelect" class="nf-select" title="${esc(I18N.t("netflow.dimension") || "聚合维度")}">`;
+  [["dst_ip", "netflow.dst_ip", "目的IP"], ["src_ip", "netflow.src_ip", "源IP"],
+   ["dst_port", "netflow.dst_port", "目的端口"], ["src_port", "netflow.src_port", "源端口"],
+   ["protocol", "netflow.protocol", "协议"]].forEach(([v, k, fb]) => {
+    html += `<option value="${v}"${v === nfDimension ? " selected" : ""}>${esc(I18N.t(k) || fb)}</option>`;
+  });
+  html += `</select>`;
   html += `<button class="nf-btn" data-nfact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
   html += `</div>`;
+  if (shown === 0) {
+    container.innerHTML = html + `<div class="empty-state">${I18N.t("empty.no_host_match2") || "没有匹配的主机"}</div>`;
+    nfBindToolbar();
+    return;
+  }
 
   html += `<div id="nfContent" class="nf-content">`;
   html += `<div id="nfSummary" class="nf-section"><h3>${I18N.t("netflow.top_talkers") || "流量排行"}</h3><div id="nfSummaryBody"></div></div>`;
@@ -42,16 +71,42 @@ function renderNetFlowPanel() {
 
   container.innerHTML = html;
 
-  // Auto-select first host
+  // 之前选中的主机若还在筛选结果里就保持不变，否则退回第一个 ——
+  // 不然每次输入搜索词都会把选中的主机跳走。
   const sel = $("nfHostSelect");
   if (sel && sel.options.length > 0) {
-    nfCurrentHost = sel.value;
+    if (![...sel.options].some(o => o.value === nfCurrentHost)) nfCurrentHost = sel.options[0].value;
+    sel.value = nfCurrentHost;
   }
+  nfBindToolbar();
+  if (nfCurrentHost) loadNetFlowData();
+}
+
+// nfBindToolbar 绑定工具栏事件。工具栏每次重渲染都会被替换掉，所以必须重新绑。
+function nfBindToolbar() {
+  const sel = $("nfHostSelect");
   sel && sel.addEventListener("change", function() { nfCurrentHost = this.value; loadNetFlowData(); });
   const rng = $("nfRangeSelect");
   rng && rng.addEventListener("change", function() { nfCurrentRange = this.value; loadNetFlowData(); });
+  const dim = $("nfDimSelect");
+  dim && dim.addEventListener("change", function() { nfDimension = this.value; loadNetFlowData(); });
+  const off = $("nfShowOffline");
+  off && off.addEventListener("change", function() { nfShowOffline = this.checked; renderNetFlowPanel(); });
 
-  if (nfCurrentHost) loadNetFlowData();
+  const search = $("nfHostSearch");
+  if (search) {
+    search.addEventListener("input", function() {
+      // 防抖 + 还原焦点：重渲染会让输入框失焦，否则一次只能敲一个字
+      clearTimeout(nfSearchT);
+      const v = this.value;
+      nfSearchT = setTimeout(() => {
+        nfHostQuery = v;
+        renderNetFlowPanel();
+        const s = $("nfHostSearch");
+        if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+      }, 200);
+    });
+  }
 }
 
 window.loadNetFlowData = function() {
@@ -66,10 +121,10 @@ window.loadNetFlowData = function() {
 
   // Fetch Top-N summary
   Promise.all([
-    fetch(`/api/v1/netflow/summary?host=${encodeURIComponent(host)}&range=${range}&dimension=src_ip&top=10`, { credentials: "same-origin" }).then(r => r.json()),
+    fetch(`/api/v1/netflow/summary?host=${encodeURIComponent(host)}&range=${range}&dimension=${encodeURIComponent(nfDimension)}&top=10`, { credentials: "same-origin" }).then(r => r.json()),
     fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&limit=100`, { credentials: "same-origin" }).then(r => r.json()),
   ]).then(([sumData, flowData]) => {
-    renderNfSummary(summaryBody, sumData.summary || [], "src_ip");
+    renderNfSummary(summaryBody, sumData.summary || [], sumData.dimension || nfDimension);
     renderNfFlows(flowsBody, flowData.flows || []);
   }).catch(() => {
     if (summaryBody) summaryBody.innerHTML = `<div class="empty-state">${I18N.t("netflow.load_error") || "加载失败"}</div>`;

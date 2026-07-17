@@ -77,6 +77,13 @@ func openPGStore(dsn string) (*pgStore, error) {
 }
 
 func (p *pgStore) migrate() error {
+	// 必须先于建表：老库里 flow_records 已存在时，下面的
+	// CREATE TABLE IF NOT EXISTS 会直接跳过，分区永远不会生效。
+	if err := p.migrateFlowRecordsToPartitioned(); err != nil {
+		// 改造失败不该让整个服务起不来——退回非分区老表照样能跑，只是没法按月归档。
+		slog.Error("flow_records 分区改造失败，继续以现有表结构运行", "err", err)
+	}
+
 	_, err := p.db.Exec(`
 		CREATE EXTENSION IF NOT EXISTS vector;
 		CREATE TABLE IF NOT EXISTS incidents (
@@ -230,9 +237,26 @@ func (p *pgStore) migrate() error {
 			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS idx_hw_events_host_time ON hardware_events(host_id, created_at DESC);
-		-- Flow 明细（可选，默认不启用，7天自动清理）
-		CREATE TABLE IF NOT EXISTS flow_records (
+		-- 硬件资产变更历史：**只在部件真的增/删/换时**写一条，永久保留。
+		-- 快照表只存最新一份（主键 host_id+target_name），换过哪块盘、哪条内存
+		-- 事后完全查不到——这张表就是补这个洞。每轮都存整份快照则 99% 是重复数据。
+		CREATE TABLE IF NOT EXISTS hardware_changes (
 			id          BIGSERIAL PRIMARY KEY,
+			host_id     TEXT NOT NULL,
+			target_name TEXT NOT NULL,
+			kind        TEXT NOT NULL,   -- disk / dimm / psu / cpu / gpu / raid / firmware / enclosure
+			component   TEXT NOT NULL,   -- 槽位或部件名，如 "Bay 3" / "DIMM A1"
+			action      TEXT NOT NULL,   -- added / removed / replaced / changed
+			old_value   TEXT,
+			new_value   TEXT,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_hw_changes_host_time ON hardware_changes(host_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_hw_changes_component ON hardware_changes(host_id, kind, component);
+		-- Flow 明细：按月分区、**永久保留**（归档靠 DROP/DETACH 分区，不再定时删除）。
+		-- 分区键必须进主键，故 PK 是 (id, created_at)。
+		CREATE TABLE IF NOT EXISTS flow_records (
+			id          BIGSERIAL,
 			host_id     TEXT NOT NULL,
 			source      TEXT NOT NULL,
 			src_ip      INET,
@@ -244,11 +268,113 @@ func (p *pgStore) migrate() error {
 			packets     BIGINT,
 			first_seen  TIMESTAMPTZ,
 			last_seen   TIMESTAMPTZ,
-			created_at  TIMESTAMPTZ DEFAULT NOW()
-		);
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (id, created_at)
+		) PARTITION BY RANGE (created_at);
+		-- 兜底分区：任何月份分区没来得及建时，数据落这里而不是插入失败。
+		CREATE TABLE IF NOT EXISTS flow_records_default PARTITION OF flow_records DEFAULT;
 		CREATE INDEX IF NOT EXISTS idx_flow_host_time ON flow_records(host_id, created_at DESC);
 	`)
 	return err
+}
+
+// migrateFlowRecordsToPartitioned converts a pre-existing non-partitioned
+// flow_records into a monthly-partitioned one, preserving rows.
+//
+// 必须在 initSchema **之前**跑：老表存在时 CREATE TABLE IF NOT EXISTS 不会报错也不会改造它，
+// 于是分区永远不会生效。整个改造在一个事务里完成（PG 的 DDL 是事务性的），
+// 中途失败会整体回滚，不会留下半吊子状态。
+func (p *pgStore) migrateFlowRecordsToPartitioned() error {
+	var exists, partitioned bool
+	if err := p.db.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='flow_records')`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil // 全新部署：initSchema 会直接建成分区表
+	}
+	if err := p.db.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM pg_partitioned_table pt JOIN pg_class c ON c.oid=pt.partrelid
+		WHERE c.relname='flow_records')`).Scan(&partitioned); err != nil {
+		return err
+	}
+	if partitioned {
+		return nil // 已经是分区表
+	}
+
+	// 数据量太大时不在启动路径上做在线拷贝——那会把服务卡住好几分钟。
+	// 老表此前一直有 7 天清理，正常不会很大；真超了就明确报出来让人工处理。
+	var n int64
+	if err := p.db.QueryRow(`SELECT count(*) FROM flow_records`).Scan(&n); err != nil {
+		return err
+	}
+	const maxInlineRows = 5_000_000
+	if n > maxInlineRows {
+		slog.Error("flow_records 行数过多，跳过自动分区改造（避免启动时长时间锁表）",
+			"rows", n, "limit", maxInlineRows,
+			"action", "请在维护窗口手工改造：重命名旧表→建分区表→分批回灌→删旧表")
+		return nil
+	}
+
+	slog.Info("开始把 flow_records 改造成按月分区表", "rows", n)
+	start := time.Now()
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`ALTER TABLE flow_records RENAME TO flow_records_legacy`,
+		`DROP INDEX IF EXISTS idx_flow_host_time`,
+		`CREATE TABLE flow_records (
+			id BIGSERIAL, host_id TEXT NOT NULL, source TEXT NOT NULL,
+			src_ip INET, dst_ip INET, src_port INT, dst_port INT, protocol INT,
+			bytes BIGINT, packets BIGINT, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (id, created_at)
+		) PARTITION BY RANGE (created_at)`,
+		`CREATE TABLE flow_records_default PARTITION OF flow_records DEFAULT`,
+		`INSERT INTO flow_records (host_id, source, src_ip, dst_ip, src_port, dst_port,
+			protocol, bytes, packets, first_seen, last_seen, created_at)
+		 SELECT host_id, source, src_ip, dst_ip, src_port, dst_port,
+			protocol, bytes, packets, first_seen, last_seen, COALESCE(created_at, NOW())
+		 FROM flow_records_legacy`,
+		`DROP TABLE flow_records_legacy`,
+		`CREATE INDEX idx_flow_host_time ON flow_records(host_id, created_at DESC)`,
+	}
+	for _, q := range stmts {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("分区改造失败于 [%.60s]: %w", q, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	slog.Info("flow_records 已改造为按月分区表", "rows", n, "耗时", time.Since(start))
+	return nil
+}
+
+// ensureFlowPartitions creates monthly partitions for the current and next
+// months. Idempotent; safe to call on every tick.
+//
+// 有 DEFAULT 兜底分区在，缺分区也不会插入失败；但数据落在 DEFAULT 里就没法按月
+// DROP 归档了。注意：DEFAULT 里一旦已有该月数据，PG 会拒绝再建这个月的分区，
+// 因此这里失败只记日志、不当错误——数据仍在 DEFAULT 中可查。
+func (p *pgStore) ensureFlowPartitions() {
+	now := time.Now().UTC()
+	for i := 0; i < 2; i++ {
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, i, 0)
+		end := start.AddDate(0, 1, 0)
+		name := fmt.Sprintf("flow_records_%04d%02d", start.Year(), start.Month())
+		q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s PARTITION OF flow_records
+			FOR VALUES FROM ('%s') TO ('%s')`,
+			name, start.Format("2006-01-02"), end.Format("2006-01-02"))
+		if _, err := p.db.Exec(q); err != nil {
+			slog.Debug("创建 Flow 月分区未成功（多为 DEFAULT 分区已有该月数据，可忽略）",
+				"partition", name, "err", err)
+		}
+	}
 }
 
 // --- hosts (metadata + latest + custom gauges; history lives in VM, not PG) ---
@@ -1287,6 +1413,67 @@ func (p *pgStore) upsertHardwareSnapshot(hostID string, snap shared.HardwareSnap
 	}
 }
 
+// getHardwareSnapshotDecoded returns the stored snapshot for one target,
+// decoded back into the wire struct so it can be diffed against a fresh one.
+func (p *pgStore) getHardwareSnapshotDecoded(hostID, targetName string) (shared.HardwareSnapshot, bool) {
+	var raw []byte
+	err := p.db.QueryRow(`SELECT snapshot FROM hardware_snapshot WHERE host_id=$1 AND target_name=$2`,
+		hostID, targetName).Scan(&raw)
+	if err != nil {
+		return shared.HardwareSnapshot{}, false
+	}
+	var snap shared.HardwareSnapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return shared.HardwareSnapshot{}, false
+	}
+	return snap, true
+}
+
+func (p *pgStore) insertHardwareChange(hostID, targetName string, c hwChange) {
+	_, err := p.db.Exec(`
+		INSERT INTO hardware_changes(host_id, target_name, kind, component, action, old_value, new_value)
+		VALUES($1,$2,$3,$4,$5,$6,$7)`,
+		hostID, targetName, c.Kind, c.Component, c.Action, c.Old, c.New)
+	if err != nil {
+		slog.Warn("写入硬件变更记录失败", "host", hostID, "component", c.Component, "err", err)
+	}
+}
+
+// getHardwareChanges returns asset change history, newest first.
+func (p *pgStore) getHardwareChanges(hostID, target string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT target_name, kind, component, action, COALESCE(old_value,''), COALESCE(new_value,''), created_at
+	      FROM hardware_changes WHERE host_id=$1`
+	args := []any{hostID}
+	if target != "" {
+		q += ` AND target_name=$2`
+		args = append(args, target)
+	}
+	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT %d`, limit)
+
+	rows, err := p.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []map[string]any{}
+	for rows.Next() {
+		var tn, kind, comp, action, oldV, newV string
+		var ts time.Time
+		if err := rows.Scan(&tn, &kind, &comp, &action, &oldV, &newV, &ts); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"target_name": tn, "kind": kind, "component": comp, "action": action,
+			"old_value": oldV, "new_value": newV, "created_at": ts,
+		})
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) insertHardwareEvent(hostID, targetName, eventType, severity, message string) {
 	_, err := p.db.Exec(`
 		INSERT INTO hardware_events(host_id, target_name, event_type, severity, message)
@@ -1392,6 +1579,57 @@ func (p *pgStore) insertFlowRecords(hostID, source string, flows []shared.FlowRe
 	_ = tx.Commit()
 }
 
+// flowSummaryDims whitelists the columns callers may GROUP BY.
+// 直接把 dimension 拼进 SQL 是注入面，必须白名单。
+var flowSummaryDims = map[string]string{
+	"src_ip":   "src_ip::text",
+	"dst_ip":   "dst_ip::text",
+	"src_port": "src_port::text",
+	"dst_port": "dst_port::text",
+	"protocol": "protocol::text",
+	"source":   "source",
+}
+
+// getFlowSummary returns Top-N traffic grouped by one dimension, from PG.
+//
+// 为什么不查 VM：VM 里现在只存**基数可控的聚合**（总量/对端 Top-N/服务端口 Top-N），
+// 不再有 src_port 这类高基数 label —— 那是压垮时序库的东西。按任意维度做
+// Top-N 聚合本来就是关系库的活，明细在 PG 里永久保留，查它才对。
+func (p *pgStore) getFlowSummary(hostID, dimension string, from, to int64, limit int) ([]map[string]any, error) {
+	col, ok := flowSummaryDims[dimension]
+	if !ok {
+		col = flowSummaryDims["dst_ip"]
+		dimension = "dst_ip"
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	q := fmt.Sprintf(`
+		SELECT %s AS k, SUM(bytes)::bigint AS b, SUM(packets)::bigint AS pk, COUNT(*)::bigint AS n
+		FROM flow_records
+		WHERE host_id=$1 AND created_at >= to_timestamp($2) AND created_at <= to_timestamp($3)
+		GROUP BY 1 ORDER BY b DESC LIMIT %d`, col, limit)
+
+	rows, err := p.db.Query(q, hostID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []map[string]any{}
+	for rows.Next() {
+		var k sql.NullString
+		var b, pk, n int64
+		if err := rows.Scan(&k, &b, &pk, &n); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"key": k.String, "bytes": b, "packets": pk, "flows": n,
+		})
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string]any, error) {
 	query := `SELECT source, src_ip::text, dst_ip::text, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen
 		FROM flow_records WHERE host_id=$1`
@@ -1459,12 +1697,7 @@ func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string
 
 // cleanupFlowRecords deletes flow records older than 7 days (called periodically).
 func (p *pgStore) cleanupFlowRecords() {
-	result, err := p.db.Exec(`DELETE FROM flow_records WHERE created_at < NOW() - INTERVAL '7 days'`)
-	if err != nil {
-		slog.Warn("清理过期 Flow 记录失败", "err", err)
-		return
-	}
-	if n, _ := result.RowsAffected(); n > 0 {
-		slog.Info("清理过期 Flow 记录", "deleted", n)
-	}
+	// Flow 明细现在**永久保留**（分区表，归档靠 DROP/DETACH 某个月的分区）。
+	// 这里只维护分区，不再删数据 —— 原先的 7 天 DELETE 与"永久存储"直接冲突。
+	p.ensureFlowPartitions()
 }

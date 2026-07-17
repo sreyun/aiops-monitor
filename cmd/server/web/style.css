@@ -2813,6 +2813,27 @@ select:focus {
 /* 状态色一律走 --ok/--warn/--crit token：此前这里硬编码了一整套浅色系
    (#dcfce7 / #fee2e2 / #16a34a …)，在深色主题下是刺眼的糖果色色块。
    同理 background 曾用 var(--card) —— 该变量全项目从未定义，等于没有背景色。 */
+/* ── 硬件：工具栏（搜索 / 状态 / 更新时间筛选）── */
+.hw-toolbar{display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; padding-top:var(--sp-3)}
+.hw-search{flex:1; min-width:200px; max-width:380px; background:var(--panel2); border:1px solid var(--line2);
+  border-radius:var(--r-sm); padding:7px 11px; font-size:13px; color:var(--txt); font-family:inherit}
+.hw-search:hover{border-color:var(--hover-border)}
+.hw-search:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.hw-sel{background:var(--panel2); border:1px solid var(--line2); border-radius:var(--r-sm);
+  padding:7px 10px; font-size:13px; color:var(--txt); cursor:pointer}
+.hw-count{font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; margin-left:auto}
+/* 主机在线状态点：硬件数据来自带外 BMC，主机离线不代表数据无效，
+   所以只做一个小标识，不弱化整张卡片 */
+.hw-dot{display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:5px; flex:none; vertical-align:middle}
+.hw-dot.on{background:var(--ok); box-shadow:0 0 0 2px var(--ok-soft)}
+.hw-dot.off{background:var(--gray-off); box-shadow:0 0 0 2px rgba(132,146,166,.12)}
+/* 重复主机提示条 */
+.hw-dup-bar{display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;
+  background:var(--warn-soft); border:1px solid var(--warn-border); color:var(--warn-txt);
+  border-radius:var(--r-sm); padding:8px 12px; margin-top:var(--sp-3); font-size:12px}
+.hw-dup-bar button{margin-left:auto}
+.hw-dup-bar button + button{margin-left:0}
+
 .hw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--sp-3); padding: var(--sp-4) 0; }
 .hw-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
   padding: var(--sp-4); cursor: pointer; display: flex; flex-direction: column; gap: var(--sp-3);
@@ -2958,6 +2979,8 @@ select:focus {
 .nf-select:focus, .nf-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .nf-btn { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 6px 14px; font-size: 13px; color: var(--txt2); cursor: pointer; transition: background var(--transition-fast), border-color var(--transition-fast); }
 .nf-btn:hover { background: var(--panel3); border-color: var(--hover-border); color: var(--txt); }
+.nf-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--txt2); cursor: pointer; white-space: nowrap; }
+.nf-chk input { width: 14px; height: 14px; }
 .nf-btn:hover { background: var(--bg2); }
 .nf-content { padding: 0; }
 .nf-section { margin-bottom: 24px; }

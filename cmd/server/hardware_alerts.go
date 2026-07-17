@@ -66,6 +66,22 @@ func (hs *hardwareStore) put(hostID, hostname, ip string, snaps []shared.Hardwar
 	hs.mu.Unlock()
 }
 
+// snapsOf returns the latest snapshots for one host (nil when none).
+func (hs *hardwareStore) snapsOf(hostID string) []shared.HardwareSnapshot {
+	if hs == nil {
+		return nil
+	}
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	e, ok := hs.byID[hostID]
+	if !ok {
+		return nil
+	}
+	out := make([]shared.HardwareSnapshot, len(e.snaps))
+	copy(out, e.snaps)
+	return out
+}
+
 // snapshot returns a copy of every host's latest hardware entry.
 func (hs *hardwareStore) snapshot() map[string]hwHostEntry {
 	if hs == nil {
@@ -221,6 +237,14 @@ func EvaluateHardware(hs *hardwareStore) []Alert {
 			for _, rd := range snap.RAID {
 				if lv := hwLevel(rd.Health); lv != "" {
 					add(lv, target+"/raid/"+rd.Name, Tz("alert.hw_raid", target, rd.Name, rd.Health), 0)
+				}
+			}
+
+			// 磁盘框（OceanStor 等外置存储）
+			for _, e := range snap.Enclosures {
+				if lv := hwLevel(e.Health); lv != "" {
+					add(lv, target+"/enclosure/"+e.Name,
+						Tz("alert.hw_enclosure", target, e.Name, e.Health), e.TemperatureC)
 				}
 			}
 		}

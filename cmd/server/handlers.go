@@ -120,6 +120,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
 	mux.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleDeleteHost)
+	// 重复主机（Agent 重装导致同一台机器出现多条记录）识别与清理
+	mux.HandleFunc("GET /api/v1/hosts/duplicates", s.handleHostDuplicates)
+	mux.HandleFunc("POST /api/v1/hosts/duplicates/cleanup", s.handleCleanupDuplicates)
 	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("GET /api/v1/alerts/history", s.handleAlertHistory)
 	mux.HandleFunc("POST /api/v1/alerts/ack", s.handleAlertAck)
@@ -323,7 +326,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

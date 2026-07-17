@@ -40,9 +40,11 @@ type config struct {
 	TLSSkipVerify  bool           `json:"tls_skip_verify,omitempty"` // skip server TLS cert verification (insecure; self-signed/lab only)
 	CACert         string         `json:"ca_cert,omitempty"`          // path to a CA PEM bundle to trust (proper self-signed support)
 	// ---- 新增采集器配置（可选，未配置时不启动）----
-	RedfishTargets []RedfishTarget `json:"redfish_targets,omitempty"` // Redfish 硬件状态采集
-	NetFlow        *NetFlowConfig  `json:"netflow,omitempty"`         // NetFlow 网络流量接收
-	PacketCapture  *PacketConfig   `json:"packet_capture,omitempty"`  // 五元组包报文采集
+	RedfishTargets []RedfishTarget `json:"redfish_targets,omitempty"` // Redfish 硬件状态采集（服务器 BMC/iDRAC/iBMC）
+	// OceanStor 不支持 Redfish，必须走 DeviceManager REST，因此是独立配置项
+	OceanStorTargets []OceanStorTarget `json:"oceanstor_targets,omitempty"` // 华为 OceanStor 存储/磁盘框采集
+	NetFlow          *NetFlowConfig    `json:"netflow,omitempty"`           // NetFlow 网络流量接收
+	PacketCapture    *PacketConfig     `json:"packet_capture,omitempty"`    // 五元组包报文采集
 }
 
 func defaultConfig() config {
@@ -231,7 +233,9 @@ func main() {
 	)
 	agent.logPaths = cfg.LogPaths
 	agent.logEncrypt = cfg.LogEncrypt
+	agent.stateFile = cfg.StateFile // 认回规范 host_id 后要写回身份文件
 	agent.redfishTargets = cfg.RedfishTargets
+	agent.oceanStorTargets = cfg.OceanStorTargets
 	agent.netflowCfg = cfg.NetFlow
 	agent.packetCfg = cfg.PacketCapture
 

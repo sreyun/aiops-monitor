@@ -89,7 +89,12 @@ services:
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
-      - "-retentionPeriod=36"        # 指标保留 36 个月，可按需调整
+      # 100y = 永久保留（VM 没有"无限"选项，100 年即等效）。
+      # 之所以敢这么设：NetFlow 已改为只写基数可控的聚合序列（总量/对端 Top-N/
+      # 服务端口 Top-N），不再按五元组开序列——时序库的成本取决于**序列数**而非
+      # 时间跨度，基数封住了，拉长保留期才是安全的。
+      # 磁盘吃紧时可改回 -retentionPeriod=36（36 个月）。
+      - "-retentionPeriod=100y"
       - "-httpListenAddr=:8428"
     #ports:
     #  - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
