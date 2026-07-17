@@ -52,13 +52,14 @@
   "log_encrypt": true,
 
   "__redfish__": "====== Redfish 硬件状态采集（BMC/iDRAC/iLO）======",
-  "_comment_redfish": "redfish_targets: 配置后 Agent 作为 Redfish REST 客户端轮询 BMC，采集 CPU/内存/存储/温度/风扇/电源/固件状态。未配置时不启动。password_env 指定密码所在环境变量名（密码不落盘）。interval_sec 为采集间隔秒数（默认 60）。skip_tls_verify 跳过 BMC 证书校验。",
+  "_comment_redfish": "redfish_targets: 配置后 Agent 作为 Redfish REST 客户端轮询 BMC，采集 CPU/内存/存储/温度/风扇/电源/固件状态。未配置时不启动。password_env 指定密码所在环境变量名（密码不落盘，推荐）。password 为直接密码（备选：当 systemd 服务无法读环境变量时使用）。interval_sec 为采集间隔秒数（默认 60）。skip_tls_verify 跳过 BMC 证书校验。",
   "redfish_targets": [
     {
       "name": "Dell-R740",
       "url": "https://192.168.1.100",
       "username": "root",
       "password_env": "REDFISH_DELL_PASSWORD",
+      "password": "",
       "skip_tls_verify": true,
       "interval_sec": 60
     },
@@ -67,6 +68,7 @@
       "url": "https://192.168.1.101",
       "username": "Administrator",
       "password_env": "REDFISH_HP_PASSWORD",
+      "password": "",
       "skip_tls_verify": true,
       "interval_sec": 120
     }

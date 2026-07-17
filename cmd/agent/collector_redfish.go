@@ -44,9 +44,36 @@ type RedfishTarget struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	Username      string `json:"username"`
-	PasswordEnv   string `json:"password_env"`
+	PasswordEnv   string `json:"password_env"`            // 密码所在环境变量名（优先，密码不落盘）
+	Password      string `json:"password,omitempty"`       // 直接密码（备选：当环境变量不可用时，如 systemd 服务）
 	SkipTLSVerify bool   `json:"skip_tls_verify"`
 	IntervalSec   int    `json:"interval_sec"`
+}
+
+// resolvePassword returns the effective password for this target.
+// Priority: environment variable (password_env) > direct field (password).
+// Logs diagnostics when the password appears empty.
+func (t RedfishTarget) resolvePassword() string {
+	pw := ""
+	if t.PasswordEnv != "" {
+		pw = os.Getenv(t.PasswordEnv)
+		if pw == "" {
+			slog.Warn("Redfish 密码环境变量为空",
+				"target", t.Name, "env", t.PasswordEnv,
+				"hint", "systemd 服务不继承用户环境变量，请在 .service 文件中设置 EnvironmentFile 或使用 password 字段")
+		}
+	}
+	if pw == "" && t.Password != "" {
+		pw = t.Password
+	}
+	if pw == "" {
+		slog.Error("Redfish 密码为空，认证将失败",
+			"target", t.Name,
+			"password_env", t.PasswordEnv,
+			"has_password_field", t.Password != "",
+			"fix", "1) 设置环境变量并配置 EnvironmentFile，或 2) 在 config.json 中添加 password 字段")
+	}
+	return pw
 }
 
 // redfishCollector manages periodic polling of one or more Redfish endpoints.
@@ -166,10 +193,7 @@ func (rc *redfishCollector) storeAndReport(t RedfishTarget, snap shared.Hardware
 //   - Supermicro:   /redfish/v1/Systems/1
 //   - Lenovo XCC:   /redfish/v1/Systems/1
 func (rc *redfishCollector) discoverSystemPath(client *http.Client, t RedfishTarget) (string, error) {
-	password := ""
-	if t.PasswordEnv != "" {
-		password = os.Getenv(t.PasswordEnv)
-	}
+	password := t.resolvePassword()
 	var col struct {
 		Members []struct {
 			ODataID string `json:"@odata.id"`
@@ -216,10 +240,7 @@ func (rc *redfishCollector) getChassisPath(client *http.Client, t RedfishTarget,
 	}
 	rc.sysPathMu.Unlock()
 
-	password := ""
-	if t.PasswordEnv != "" {
-		password = os.Getenv(t.PasswordEnv)
-	}
+	password := t.resolvePassword()
 
 	// Try from System.Links.Chassis first
 	var sysLinks struct {
@@ -300,10 +321,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		Timestamp:  time.Now().Unix(),
 	}
 
-	password := ""
-	if t.PasswordEnv != "" {
-		password = os.Getenv(t.PasswordEnv)
-	}
+	password := t.resolvePassword()
 
 	// Build per-target HTTP client with optional TLS skip
 	client := rc.httpc
