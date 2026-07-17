@@ -972,7 +972,12 @@ function onLogSourceChange(){
   if (lw) lw.style.display=loki?"none":"";
   if (kw) {
     if (loki) { kw.placeholder='LogQL，如 {job="nginx"} |= "error"'; kw.style.width="360px"; }
-    else { kw.placeholder=I18N.t("logs.keyword_ph")||"关键字…"; kw.style.width="190px"; }
+    else {
+      // I18N.t 在缺键时返回键名本身（真值），不能用 || 兜底，否则占位符会显示 "logs.keyword_ph"
+      const ph=I18N.t("logs.keyword_ph");
+      kw.placeholder=(ph && ph!=="logs.keyword_ph")?ph:"关键字…";
+      kw.style.width="190px";
+    }
   }
   // Job 筛选：仅 Loki 模式显示，切换时自动加载 job 列表并更新关键字框
   if (jw) {
