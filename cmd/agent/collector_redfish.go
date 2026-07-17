@@ -39,6 +39,18 @@ func redfishTLSConfig(skipVerify bool) *tls.Config {
 	}
 }
 
+// redfishTransport creates an http.Transport configured for BMC compatibility.
+// DisableKeepAlives is set because Dell iDRAC / HP iLO HTTP implementations
+// send stale data on idle connections, causing Go's HTTP client to log
+// "Unsolicited response received on idle HTTP channel". Each Redfish request
+// is independent (30-60s apart), so connection reuse provides no benefit.
+func redfishTransport(skipVerify bool) *http.Transport {
+	return &http.Transport{
+		TLSClientConfig:   redfishTLSConfig(skipVerify),
+		DisableKeepAlives: true,
+	}
+}
+
 // RedfishTarget is one BMC/iDRAC/iLO endpoint to poll (from config.json).
 type RedfishTarget struct {
 	Name          string `json:"name"`
@@ -102,10 +114,8 @@ func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCol
 		hostID:  hostID,
 		fp:      fp,
 		httpc: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: redfishTLSConfig(false),
-			},
+			Timeout:   30 * time.Second,
+			Transport: redfishTransport(false),
 		},
 		lastFW:      make(map[string]int64),
 		systemPath:  make(map[string]string),
@@ -327,10 +337,8 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	client := rc.httpc
 	if t.SkipTLSVerify {
 		client = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: redfishTLSConfig(true),
-			},
+			Timeout:   30 * time.Second,
+			Transport: redfishTransport(true),
 		}
 	}
 
