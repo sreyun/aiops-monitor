@@ -1297,6 +1297,45 @@ func (p *pgStore) insertHardwareEvent(hostID, targetName, eventType, severity, m
 	}
 }
 
+// getHardwareEvents returns recorded hardware state transitions for a host,
+// newest first. Optionally narrowed to one Redfish target.
+func (p *pgStore) getHardwareEvents(hostID, target string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT target_name, event_type, severity, message, created_at
+	      FROM hardware_events WHERE host_id=$1`
+	args := []any{hostID}
+	if target != "" {
+		q += ` AND target_name=$2`
+		args = append(args, target)
+	}
+	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT %d`, limit)
+
+	rows, err := p.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []map[string]any{}
+	for rows.Next() {
+		var targetName, eventType, severity, message sql.NullString
+		var createdAt time.Time
+		if err := rows.Scan(&targetName, &eventType, &severity, &message, &createdAt); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"target_name": targetName.String,
+			"event_type":  eventType.String,
+			"severity":    severity.String,
+			"message":     message.String,
+			"created_at":  createdAt,
+		})
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) getHardwareSnapshots(hostID string) ([]map[string]any, error) {
 	rows, err := p.db.Query(`
 		SELECT target_name, target_url, snapshot, health, updated_at

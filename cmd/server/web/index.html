@@ -638,10 +638,10 @@
         <div class="section-title"><span data-i18n="section.hardware">硬件监控</span><span class="tag" data-i18n="section.hardware_desc">Redfish BMC/iDRAC/iLO 服务器硬件状态总览 · 异常优先排序，点任意一项看详情与历史</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center">
             <div class="view-toggle" id="hwViewToggle" role="group" aria-label="视图切换">
-              <button class="vt-btn active" title="卡片" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
-              <button class="vt-btn" title="列表" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+              <button class="vt-btn active" title="卡片" data-i18n-title="hardware.view_card" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button class="vt-btn" title="列表" data-i18n-title="hardware.view_list" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
             </div>
-            <button class="btn sm" id="hwRefreshBtn" title="刷新">刷新</button>
+            <button class="btn sm" id="hwRefreshBtn" title="刷新" data-i18n-title="hardware.refresh" data-i18n="hardware.refresh">刷新</button>
           </div>
         </div>
         <div id="hardwarePanel"></div>

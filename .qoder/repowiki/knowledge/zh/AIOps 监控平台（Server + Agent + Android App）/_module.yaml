@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: AIOps 监控平台（Agent + Server + Android 客户端）
+title: AIOps 监控平台（Server + Agent + Android App）
 scope: []
 source_files: []
 depends_on: []

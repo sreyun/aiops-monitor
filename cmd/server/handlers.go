@@ -295,6 +295,7 @@ func (s *Server) Routes() http.Handler {
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
+	mux.HandleFunc("GET /api/v1/hardware/events", s.handleHardwareEvents)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)

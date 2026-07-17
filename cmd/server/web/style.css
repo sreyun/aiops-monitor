@@ -2808,66 +2808,123 @@ select:focus {
 /* ============================================================================
    硬件监控面板 (Hardware Health Panel)
    ============================================================================ */
-.hw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; padding: 16px 0; }
-.hw-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; cursor: pointer; transition: box-shadow .15s; }
-.hw-card:hover { box-shadow: 0 2px 12px -2px var(--shadow); }
-.hw-card.expanded { border-color: var(--accent); }
-.hw-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.hw-health-dot { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex-shrink: 0; }
-.hw-health-dot.hw-ok { background: #dcfce7; color: #166534; }
-.hw-health-dot.hw-warn { background: #fef9c3; color: #854d0e; }
-.hw-health-dot.hw-crit { background: #fee2e2; color: #991b1b; }
+/* 状态色一律走 --ok/--warn/--crit token：此前这里硬编码了一整套浅色系
+   (#dcfce7 / #fee2e2 / #16a34a …)，在深色主题下是刺眼的糖果色色块。
+   同理 background 曾用 var(--card) —— 该变量全项目从未定义，等于没有背景色。 */
+.hw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--sp-3); padding: var(--sp-4) 0; }
+.hw-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: var(--sp-4); cursor: pointer; display: flex; flex-direction: column; gap: var(--sp-3);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.hw-card:hover { border-color: var(--hover-border); box-shadow: var(--shadow-sm); }
+.hw-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 左侧 3px 状态色条：异常机器在一屏卡片里一眼可辨，不必逐张读文字 */
+.hw-card.hw-edge-warn { border-left: 3px solid var(--warn); }
+.hw-card.hw-edge-crit { border-left: 3px solid var(--crit); }
+
+.hw-card-header { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.hw-health-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; border: 1px solid transparent; }
+.hw-health-dot.hw-ok { background: var(--ok-soft); color: var(--ok-txt); border-color: var(--ok-border); }
+.hw-health-dot.hw-warn { background: var(--warn-soft); color: var(--warn-txt); border-color: var(--warn-border); }
+.hw-health-dot.hw-crit { background: var(--crit-soft); color: var(--crit-txt); border-color: var(--crit-border); }
+.hw-health-dot.hw-unknown { background: rgba(132,146,166,.12); color: var(--gray-txt); border-color: rgba(132,146,166,.25); }
 .hw-card-info { flex: 1; min-width: 0; }
-.hw-card-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hw-card-sub { font-size: 12px; color: var(--txt2); margin-top: 2px; }
-.hw-quick-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.hw-stat { background: var(--bg2); padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
-.hw-detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
-.hw-detail h4 { margin: 12px 0 6px; font-size: 13px; color: var(--txt2); }
-.hw-detail h4:first-child { margin-top: 0; }
+.hw-card-name { font-weight: 600; font-size: 14px; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-card-sub { font-size: 12px; color: var(--muted2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 机型（PowerEdge R740 / TaiShan 200…）——运维定位问题时第一眼要看的东西 */
+.hw-card-model { font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.hw-quick-stats { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.hw-stat { background: var(--bg2); border: 1px solid var(--line); padding: 3px 8px; border-radius: var(--r-xs);
+  font-size: 11px; font-weight: 500; color: var(--txt2); display: inline-flex; align-items: baseline; gap: 4px; }
+.hw-stat-k { color: var(--muted); font-weight: 400; }
+.hw-stat.hw-stat-warn { border-color: var(--warn-border); background: var(--warn-soft); color: var(--warn-txt); }
+.hw-stat.hw-stat-crit { border-color: var(--crit-border); background: var(--crit-soft); color: var(--crit-txt); }
+
 .hw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.hw-table th, .hw-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--line); }
-.hw-table th { color: var(--txt2); font-weight: 500; }
-.hw-warn-text { color: #d97706; }
-.hw-crit-text { color: #dc2626; }
-.hw-expand-hint { font-size: 11px; color: var(--txt2); text-align: center; padding: 4px 0; opacity: 0.7; transition: opacity .15s; }
-.hw-card:hover .hw-expand-hint { opacity: 1; color: var(--accent); }
+.hw-table th, .hw-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.hw-table th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+.hw-table td { color: var(--txt2); }
+.hw-table tr:last-child td { border-bottom: none; }
+.hw-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg2); }
+.hw-warn-text td, .hw-warn-text { color: var(--warn-txt); }
+.hw-crit-text td, .hw-crit-text { color: var(--crit-txt); }
+.hw-expand-hint { font-size: 11px; color: var(--muted); text-align: center; padding-top: var(--sp-1);
+  border-top: 1px solid var(--line); margin-top: auto; transition: color var(--transition-fast); }
+.hw-card:hover .hw-expand-hint { color: var(--accent); }
 
 /* ── 硬件：列表视图（与卡片视图自由切换）── */
-.hw-list{display:flex; flex-direction:column; gap:6px; padding:12px 0}
-.hw-row{display:grid; grid-template-columns:28px minmax(150px,1.4fr) 84px 84px 66px 66px 128px 1fr;
-  gap:10px; align-items:center; background:var(--card); border:1px solid var(--line);
+.hw-list{display:flex; flex-direction:column; gap:4px; padding:var(--sp-3) 0}
+.hw-row{display:grid; grid-template-columns:28px minmax(150px,1.6fr) 76px 72px 62px 62px 120px 1fr;
+  gap:10px; align-items:center; background:var(--panel); border:1px solid var(--line);
   border-radius:var(--r-sm); padding:8px 12px; cursor:pointer;
-  transition:border-color .15s, box-shadow .15s}
-.hw-row:hover{border-color:var(--accent); box-shadow:0 2px 10px -4px var(--shadow)}
-.hw-row .hw-health-dot{width:24px; height:24px; font-size:13px}
+  transition:border-color var(--transition-fast), background var(--transition-fast)}
+.hw-row:hover{border-color:var(--hover-border); background:var(--panel2)}
+.hw-row:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.hw-row .hw-health-dot{width:22px; height:22px; font-size:12px}
 .hw-row-id{min-width:0}
-.hw-row-name{font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.hw-row-sub{font-size:11px; color:var(--txt2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-row-name{font-weight:600; font-size:13px; color:var(--txt); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-row-sub{font-size:11px; color:var(--muted2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .hw-row-cell{font-size:12px; color:var(--txt2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 
+/* ── 硬件详情：整机身份卡 ── */
+.hw-ident{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:var(--sp-2) var(--sp-4);
+  background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:var(--sp-3) var(--sp-4); margin-bottom:var(--sp-3)}
+.hw-ident-item{min-width:0}
+.hw-ident-k{font-size:11px; color:var(--muted); margin-bottom:2px}
+.hw-ident-v{font-size:12px; color:var(--txt); font-weight:500; word-break:break-all}
+
 /* ── 硬件详情：KPI 摘要条（重点突出）── */
-.hw-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:8px; margin-bottom:12px}
-.hw-kpi{background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:8px 10px; text-align:center}
-.hw-kpi-v{font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.hw-kpi-k{font-size:11px; color:var(--txt2); margin-top:2px}
-.hw-kpi.hw-ok .hw-kpi-v{color:#16a34a}
-.hw-kpi.hw-warn .hw-kpi-v{color:#d97706}
-.hw-kpi.hw-crit .hw-kpi-v{color:#dc2626}
+.hw-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:var(--sp-2); margin-bottom:var(--sp-3)}
+.hw-kpi{background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-2) var(--sp-3); text-align:center}
+.hw-kpi-v{font-size:15px; font-weight:700; color:var(--txt); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hw-kpi-k{font-size:11px; color:var(--muted); margin-top:2px}
+.hw-kpi.hw-ok{border-color:var(--ok-border)} .hw-kpi.hw-ok .hw-kpi-v{color:var(--ok-txt)}
+.hw-kpi.hw-warn{border-color:var(--warn-border)} .hw-kpi.hw-warn .hw-kpi-v{color:var(--warn-txt)}
+.hw-kpi.hw-crit{border-color:var(--crit-border)} .hw-kpi.hw-crit .hw-kpi-v{color:var(--crit-txt)}
 
 /* ── 硬件详情：异常项置顶框 ── */
-.hw-bad-box{border:1px solid rgba(220,38,38,.35); background:rgba(220,38,38,.06);
-  border-radius:var(--r-sm); padding:10px 12px; margin-bottom:12px}
-.hw-bad-box h4{margin:0 0 6px; font-size:13px; color:#dc2626}
+.hw-bad-box{border:1px solid var(--crit-border); background:var(--crit-soft);
+  border-radius:var(--r-sm); padding:var(--sp-3); margin-bottom:var(--sp-3)}
+.hw-bad-box h4{margin:0 0 var(--sp-2); font-size:13px; color:var(--crit-txt)}
+.hw-bad-box .hw-table td{color:var(--txt2)}
+.hw-bad-box .hw-table th{color:var(--muted)}
+.hw-ok-box{border:1px solid var(--ok-border); background:var(--ok-soft); color:var(--ok-txt);
+  border-radius:var(--r-sm); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); font-size:12px}
+
+/* ── 硬件详情：部件区块 ── */
+.hw-sec{margin-top:var(--sp-4)}
+.hw-sec-head{display:flex; align-items:center; gap:var(--sp-2); margin-bottom:var(--sp-2)}
+.hw-sec-head h4{margin:0 !important; font-size:13px; color:var(--txt) !important; font-weight:600}
+.hw-sec-count{font-size:11px; color:var(--muted); background:var(--bg2); border:1px solid var(--line);
+  border-radius:var(--r-xs); padding:1px 6px}
+.hw-sec-empty{font-size:12px; color:var(--muted); padding:var(--sp-2) 0}
+.hw-sev{font-size:10px; font-weight:600; padding:1px 6px; border-radius:var(--r-xs); white-space:nowrap}
+.hw-sev.hw-ok{background:var(--ok-soft); color:var(--ok-txt); border:1px solid var(--ok-border)}
+.hw-sev.hw-warn{background:var(--warn-soft); color:var(--warn-txt); border:1px solid var(--warn-border)}
+.hw-sev.hw-crit{background:var(--crit-soft); color:var(--crit-txt); border:1px solid var(--crit-border)}
+.hw-sev.hw-unknown{background:rgba(132,146,166,.12); color:var(--gray-txt); border:1px solid rgba(132,146,166,.25)}
+/* 事件表里的"触发部件"是本次改版的重点，给它一点视觉权重 */
+.hw-comp{font-family:var(--font-mono,ui-monospace,monospace); font-size:11px; color:var(--accent-txt);
+  background:var(--accent-soft); border-radius:var(--r-xs); padding:1px 6px; white-space:nowrap}
+.hw-events-wrap{max-height:280px; overflow-y:auto}
 
 /* 硬件详情弹窗：比默认 .modal.wide(640) 宽，容纳 4 张历史曲线 */
 #hwDetailMask .modal{max-width:1080px; width:94%}
 #hwDetailBody h4{margin:14px 0 6px; font-size:13px; color:var(--txt2)}
-.hw-card.expanded .hw-expand-hint { color: var(--accent); opacity: 1; }
 .hw-meta-row { font-size: 12px; color: var(--txt2); margin-bottom: 8px; }
 .hw-meta-label { font-weight: 500; margin-right: 4px; }
-.hw-error-row { background: #fef2f2; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px; }
+.hw-error-row { background: var(--crit-soft); border: 1px solid var(--crit-border); color: var(--crit-txt);
+  padding: 6px 10px; border-radius: var(--r-xs); margin-bottom: 10px; font-size: 12px; }
 .hw-power-info { font-size: 12px; color: var(--txt2); margin-bottom: 8px; }
+
+@media (max-width: 720px) {
+  .hw-grid{grid-template-columns:1fr}
+  /* 8 列栅格在窄屏会把每格挤成 1 个字符宽，退化成两行更可读 */
+  .hw-row{grid-template-columns:22px 1fr auto; grid-auto-rows:min-content; row-gap:4px}
+  .hw-row .hw-row-cell{display:none}
+}
 
 /* =============================================================================
    网络流量面板 (NetFlow Panel)

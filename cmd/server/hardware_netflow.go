@@ -134,6 +134,29 @@ func (s *Server) handleHardwareHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
 }
 
+// handleHardwareEvents returns recorded hardware state transitions for a host.
+// These complement the BMC's own SEL (which rides along in the snapshot): the
+// SEL is the vendor's view, this is what our own polling actually observed.
+func (s *Server) handleHardwareEvents(w http.ResponseWriter, r *http.Request) {
+	hostID := r.URL.Query().Get("host")
+	if hostID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
+		return
+	}
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"events": []any{}})
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	events, err := s.pg.getHardwareEvents(hostID, r.URL.Query().Get("target"), limit)
+	if err != nil {
+		slog.Warn("查询硬件事件失败", "host", hostID, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
 // handleHardwareHistory returns hardware metric history from VM.
 func (s *Server) handleHardwareHistory(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")

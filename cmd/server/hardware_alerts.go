@@ -209,6 +209,20 @@ func EvaluateHardware(hs *hardwareStore) []Alert {
 					add(lv, target+"/cpu/"+c.Name, Tz("alert.hw_cpu", target, c.Name, c.Health), 0)
 				}
 			}
+
+			// GPU / 加速卡（BMC 带外视角，主机宕机也能看到）
+			for _, g := range snap.GPUs {
+				if lv := hwLevel(g.Health); lv != "" {
+					add(lv, target+"/gpu/"+g.Name, Tz("alert.hw_gpu", target, g.Name, g.Health), 0)
+				}
+			}
+
+			// RAID / HBA 控制器
+			for _, rd := range snap.RAID {
+				if lv := hwLevel(rd.Health); lv != "" {
+					add(lv, target+"/raid/"+rd.Name, Tz("alert.hw_raid", target, rd.Name, rd.Health), 0)
+				}
+			}
 		}
 	}
 	return alerts

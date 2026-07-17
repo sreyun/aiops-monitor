@@ -14,15 +14,16 @@
 - [hardware.js](file://cmd/server/web/js/hardware.js)
 - [style.css](file://cmd/server/web/style.css)
 - [i18n-dashboard.js](file://cmd/server/web/i18n-dashboard.js)
+- [collector_linux.go](file://cmd/agent/collector_linux.go)
+- [infra.go](file://cmd/agent/infra.go)
 </cite>
 
 ## 更新摘要
 **已进行的更改**
-- **新增**：前端硬件监控面板完整实现，支持内存/DIMM详细信息显示、完整的传感器数据展示、风扇转速监控、电源状态查看等
-- **增强**：交互式硬件卡片设计，支持点击展开/收起详细信息的用户交互体验
-- **完善**：专业的深色主题UI设计，包含健康状态指示器、快速统计标签、响应式网格布局
-- **优化**：多语言国际化支持，提供完整的中文界面翻译
-- **v6.2.5增强**：硬件报告诊断功能增强，包含响应体捕获（最多512字节）用于指纹不匹配和认证问题诊断，以及成功提交的INFO级别日志记录
+- **修复**：CPU百分比计算bug（idle时间负值问题），防止因内核iowait回退导致的uint64下溢和负值CPU使用率
+- **增强**：改进错误处理和超时配置，增加详细的中文错误分类提示
+- **优化**：BMC连接管理和重试机制，包括HTTP连接禁用KeepAlive、TLS兼容性支持和路径发现缓存
+- **完善**：连续失败退避机制，3次失败后自动退避5分钟降低BMC压力
 
 ## 目录
 1. [简介](#简介)
@@ -38,7 +39,7 @@
 11. [附录：API 定义](#附录api-定义)
 
 ## 简介
-本文件聚焦于 AIOps 监控系统中"Redfish 硬件采集器"的端到端实现，涵盖 Agent 侧 Redfish 客户端、共享数据模型、Server 侧接收与查询接口，以及与 NetFlow/五元组包采集的协同。**最新更新**：前端硬件监控面板得到显著增强，提供了完整的硬件状态可视化展示，包括内存/DIMM详细信息、传感器数据、风扇监控、电源状态等全方位硬件观测能力。
+本文件聚焦于 AIOps 监控系统中"Redfish 硬件采集器"的端到端实现，涵盖 Agent 侧 Redfish 客户端、共享数据模型、Server 侧接收与查询接口，以及与 NetFlow/五元组包采集的协同。**最新更新**：修复了关键的CPU百分比计算bug，改进了错误处理和超时配置，优化了BMC连接管理和重试机制，显著提升了系统在复杂生产环境中的稳定性和可靠性。
 
 文档面向运维与研发人员，既提供高层架构说明，也给出代码级流程与关键设计权衡。通过HTTP连接稳定性修复、增强的密码解析机制、TLS兼容性支持和全面的错误分类系统，显著提升了生产环境中BMC连接的可靠性和用户体验。
 
@@ -63,6 +64,7 @@ RF["Redfish 采集器<br/>collector_redfish.go"]
 CFG["配置加载<br/>cmd/agent/main.go"]
 SHARED["共享模型<br/>shared/wire.go"]
 REP["硬件报告上报<br/>cmd/agent/reporter.go"]
+LINUX["Linux采集器<br/>collector_linux.go"]
 end
 subgraph "Server"
 HND["路由注册<br/>cmd/server/handlers.go"]
@@ -89,6 +91,7 @@ WEB --> CSS
 WEB --> I18N
 JS --> |"GET /api/v1/hardware/health"| HND
 JS --> UI
+LINUX --> SHARED
 ```
 
 **图表来源** 
@@ -100,7 +103,8 @@ JS --> UI
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
 - [hardware.js:1-230](file://cmd/server/web/js/hardware.js#L1-L230)
 - [style.css:2808-2839](file://cmd/server/web/style.css#L2808-L2839)
-- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-L472)
+- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-472)
+- [collector_linux.go:83-98](file://cmd/agent/collector_linux.go#L83-L98)
 
 **章节来源**
 - [collector_redfish.go:1-126](file://cmd/agent/collector_redfish.go#L1-L126)
@@ -221,7 +225,7 @@ end
 **图表来源** 
 - [hardware.js:52-209](file://cmd/server/web/js/hardware.js#L52-L209)
 - [style.css:2810-2839](file://cmd/server/web/style.css#L2810-L2839)
-- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-L472)
+- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-472)
 
 ### 用户界面设计
 硬件监控面板采用专业的深色主题设计，遵循现代UI设计原则：
@@ -242,7 +246,7 @@ end
 **章节来源**
 - [hardware.js:52-209](file://cmd/server/web/js/hardware.js#L52-L209)
 - [style.css:2810-2839](file://cmd/server/web/style.css#L2810-L2839)
-- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-L472)
+- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-472)
 
 ## 详细组件分析
 
@@ -495,6 +499,43 @@ Agent --> redfishCollector : "启动和管理"
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
 - [wire.go:144-237](file://shared/wire.go#L144-L237)
 
+### Linux CPU采集器（CPU百分比计算修复）
+**重要修复**：解决了CPU百分比计算中的关键bug，防止因内核iowait回退导致的uint64下溢和负值CPU使用率。
+
+#### CPU计算逻辑修复
+```go
+// v5.4.0: Track permission errors across all collection points for diagnostics.
+var permErrors []string
+
+if ct, err := readCPUTimes(); err == nil {
+    if c.primed && ct.total > c.prevCPU.total {
+        totalDelta := ct.total - c.prevCPU.total
+        // idle 里折算了 iowait，而内核文档明确 iowait **可以回退**（CPU 热插拔同理）。
+        // 直接相减会 uint64 下溢成天文数字 → totalDelta-idleDelta 再次回绕 →
+        // CPU% 变成 -9.2e17 这种脏数据，污染图表/告警/AI 基线。故双向夹紧。
+        idleDelta := uint64(0)
+        if ct.idle > c.prevCPU.idle {
+            idleDelta = ct.idle - c.prevCPU.idle
+        }
+        if idleDelta > totalDelta {
+            idleDelta = totalDelta
+        }
+        m.CPUPercent = round1(float64(totalDelta-idleDelta) / float64(totalDelta) * 100)
+    }
+    c.prevCPU = ct
+}
+```
+
+#### 修复原理
+- **问题根源**：内核文档明确指出iowait计数器可以回退（例如CPU热插拔时）
+- **原始缺陷**：直接相减会导致uint64下溢，产生天文数字
+- **修复方案**：双向夹紧idleDelta，确保其不超过totalDelta
+- **影响范围**：防止CPU使用率出现负值（如-9.2e17），保护图表、告警和AI基线数据质量
+
+**章节来源**
+- [collector_linux.go:83-98](file://cmd/agent/collector_linux.go#L83-L98)
+- [collector_linux.go:261-286](file://cmd/agent/collector_linux.go#L261-L286)
+
 ### 共享数据模型（Agent ↔ Server）
 - HardwareSnapshot：单台服务器在某时间点的硬件快照，包含 CPU、内存、存储、传感器、风扇、电源、固件与健康状态。
 - HardwareReport：Agent 上报的批量快照载体，附带主机标识与指纹。
@@ -585,6 +626,7 @@ PostN --> End
   - collector_redfish.go 依赖 shared/wire.go 的数据模型。
   - main.go 将 redfishTargets 注入 Agent，驱动采集器运行。
   - reporter.go 提供增强的硬件报告上报功能，包含详细的诊断日志。
+  - collector_linux.go 提供Linux平台的基础系统指标采集。
 - Server 侧
   - handlers.go 注册 /api/v1/agent/hardware 与 /api/v1/agent/netflow 路由。
   - hardware_netflow.go 实现具体处理逻辑，依赖 pgStore 与 vmWriter。
@@ -601,6 +643,7 @@ REP["cmd/agent/reporter.go"] --> SW
 REP --> |"增强诊断日志"| SV["cmd/server/handlers.go"]
 HG["cmd/server/handlers.go"] --> HN["cmd/server/hardware_netflow.go"]
 HN --> SW
+LNX["collector_linux.go"] --> SW
 HWJS["hardware.js"] --> HG
 STYLE["style.css"] --> HWJS
 I18N["i18n-dashboard.js"] --> HWJS
@@ -615,7 +658,8 @@ I18N["i18n-dashboard.js"] --> HWJS
 - [hardware_netflow.go:1-13](file://cmd/server/hardware_netflow.go#L1-L13)
 - [hardware.js:1-230](file://cmd/server/web/js/hardware.js#L1-L230)
 - [style.css:2808-2839](file://cmd/server/web/style.css#L2808-L2839)
-- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-L472)
+- [i18n-dashboard.js:450-472](file://cmd/server/web/i18n-dashboard.js#L450-472)
+- [collector_linux.go:1-20](file://cmd/agent/collector_linux.go#L1-L20)
 
 **章节来源**
 - [collector_redfish.go:1-16](file://cmd/agent/collector_redfish.go#L1-L16)
@@ -632,6 +676,7 @@ I18N["i18n-dashboard.js"] --> HWJS
   - **新增**：路径发现结果缓存，避免重复查询。
   - **新增**：HTTP连接禁用KeepAlive，防止Dell iDRAC系统的陈旧数据问题。
   - **v6.2.5增强**：硬件报告上报采用并发处理，每个目标独立goroutine，避免相互阻塞。
+  - **CPU计算优化**：修复后的CPU百分比计算避免了无意义的重算和数据污染。
 - Server 侧
   - 指纹校验前置，拒绝非法上报。
   - 数值指标走 VM，明细可落 PG，兼顾查询性能与成本。
@@ -669,6 +714,9 @@ I18N["i18n-dashboard.js"] --> HWJS
   - 查看INFO级别的"硬件上报成功"日志，确认上报是否成功。
   - 对于失败的报告，检查WARN级别的详细错误信息，包括响应体内容。
   - 重点关注"fingerprint mismatch"错误，确认Agent与服务端的指纹绑定状态。
+- **CPU计算相关故障**
+  - **新增**：如果观察到CPU使用率为负值或异常大的数值，可能是内核iowait回退导致的计算问题，现已通过双向夹紧机制修复。
+  - 检查Linux内核版本和CPU热插拔配置，确认是否存在频繁的CPU状态变化。
 - **前端相关故障**
   - 硬件面板无法加载：检查浏览器控制台是否有JavaScript错误。
   - 数据不更新：确认网络连接正常，检查API响应状态码。
@@ -679,12 +727,13 @@ I18N["i18n-dashboard.js"] --> HWJS
 - [collector_redfish.go:62-101](file://cmd/agent/collector_redfish.go#L62-L101)
 - [collector_redfish.go:261-293](file://cmd/agent/collector_redfish.go#L261-L293)
 - [hardware_netflow.go:19-90](file://cmd/server/hardware_netflow.go#L19-L90)
-- [collector_netflow.go:203-216](file://cmd/agent/collector_netflow.go#L203-L216)
+- [collector_netflow.go:203-216](file://cmd/agent/collector_netflow.go#L203-216)
 - [reporter.go:609-644](file://cmd/agent/reporter.go#L609-L644)
 - [hardware.js:1-230](file://cmd/server/web/js/hardware.js#L1-L230)
+- [collector_linux.go:83-98](file://cmd/agent/collector_linux.go#L83-L98)
 
 ## 结论
-Redfish 硬件采集器以"轻量 Agent + 统一模型 + 双后端（PG+VM）+ 现代化前端"的方式，实现了跨厂商 BMC 的标准化硬件观测。**最新更新**：前端硬件监控面板的引入，为运维人员提供了直观的硬件状态可视化界面，支持内存/DIMM详细信息、传感器数据、风扇监控、电源状态等全方位硬件观测能力。
+Redfish 硬件采集器以"轻量 Agent + 统一模型 + 双后端（PG+VM）+ 现代化前端"的方式，实现了跨厂商 BMC 的标准化硬件观测。**最新更新**：修复了关键的CPU百分比计算bug，改进了错误处理和超时配置，优化了BMC连接管理和重试机制，为运维人员提供了直观的硬件状态可视化界面，支持内存/DIMM详细信息、传感器数据、风扇监控、电源状态等全方位硬件观测能力。
 
 配合 NetFlow 与五元组包采集，形成"硬件/网络"一体化监控面。设计上强调稳定性（退避/超时/鉴权）、可扩展（多目标/多协议）与可观测（指标/事件/历史/可视化）。通过HTTP连接稳定性修复、增强的密码解析机制、TLS兼容性支持和全面的错误分类系统，显著提升了系统在复杂生产环境中的稳定性和用户体验。v6.2.5版本进一步增强硬件报告诊断功能，提供更详细的错误上下文信息和成功操作日志，大幅提升了问题排查效率。
 
