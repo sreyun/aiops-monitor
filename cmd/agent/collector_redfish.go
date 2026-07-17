@@ -14,6 +14,31 @@ import (
 	"aiops-monitor/shared"
 )
 
+// redfishTLSConfig returns a tls.Config tuned for BMC/iDRAC/iLO compatibility.
+// Old firmware (Dell iDRAC 7/8, HP iLO 3/4, Supermicro IPMI) often only supports
+// TLS 1.0/1.1 and RSA key-exchange cipher suites that Go 1.22+ no longer offers
+// by default. This config explicitly enables those legacy options so the handshake
+// can succeed. BMC devices are internal-network only, so the reduced crypto
+// requirements are acceptable.
+func redfishTLSConfig(skipVerify bool) *tls.Config {
+	// Start with all ID-based cipher suites (Go default set)
+	cipherIDs := make([]uint16, 0, 32)
+	for _, cs := range tls.CipherSuites() {
+		cipherIDs = append(cipherIDs, cs.ID)
+	}
+	// Append insecure suites required by legacy BMC firmware:
+	//   - RSA key exchange (TLS_RSA_WITH_AES_*_CBC_SHA)
+	//   - 3DES suites
+	for _, cs := range tls.InsecureCipherSuites() {
+		cipherIDs = append(cipherIDs, cs.ID)
+	}
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS10, // allow TLS 1.0 for old iDRAC/iLO
+		CipherSuites:       cipherIDs,
+		InsecureSkipVerify: skipVerify,
+	}
+}
+
 // RedfishTarget is one BMC/iDRAC/iLO endpoint to poll (from config.json).
 type RedfishTarget struct {
 	Name          string `json:"name"`
@@ -52,7 +77,7 @@ func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCol
 		httpc: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+				TLSClientConfig: redfishTLSConfig(false),
 			},
 		},
 		lastFW:      make(map[string]int64),
@@ -237,8 +262,10 @@ func (rc *redfishCollector) getChassisPath(client *http.Client, t RedfishTarget,
 func classifyError(err error) string {
 	msg := err.Error()
 	switch {
-	case containsAny(msg, "x509", "certificate", "tls", "TLS"):
-		return "（TLS 证书错误：请在配置中设置 skip_tls_verify=true，或配置 ca_cert）"
+	case containsAny(msg, "handshake failure", "tls: "):
+		return "（TLS 握手失败：已启用 TLS 1.0+ 兼容模式，若仍失败请检查 BMC 固件版本是否过低，或尝试升级 iDRAC/iLO 固件）"
+	case containsAny(msg, "x509", "certificate"):
+		return "（TLS 证书错误：请在配置中设置 skip_tls_verify=true）"
 	case containsAny(msg, "connection refused", "connect: "):
 		return "（连接被拒绝：请检查 BMC 地址和端口是否正确，以及防火墙是否放行）"
 	case containsAny(msg, "no such host", "lookup"):
@@ -284,7 +311,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		client = &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig: redfishTLSConfig(true),
 			},
 		}
 	}
