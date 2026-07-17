@@ -26,6 +26,9 @@ WORKDIR /app
 COPY --from=builder /out/aiops-server /app/aiops-server
 COPY plugins/ /tmp/plugins/
 RUN mkdir -p /app/dist && cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
+# Agent 二进制 + 配置示例放入 dist，供 /dl/ 端点下载安装
+COPY --from=builder /out/aiops-agent /app/dist/aiops-agent-linux-amd64
+COPY config.example.json /app/dist/config.example.json
 
 EXPOSE 8529
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8529/healthz || exit 1

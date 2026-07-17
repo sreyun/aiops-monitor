@@ -134,6 +134,7 @@ if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
+curl -fsSL "$SERVER/dl/config.example.json" -o config.example.json 2>/dev/null || true
 SERVERS_JSON='__SERVERS_JSON__'
 if [ -n "$SERVERS_JSON" ]; then
   cat > config.json <<EOF
@@ -254,6 +255,7 @@ try {
   Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
   Remove-Item "$Dir\plugins.zip" -Force
 } catch { Write-Host "[AIOps] plugins skipped" }
+try { Invoke-WebRequest "$Server/dl/config.example.json" -OutFile "$Dir\config.example.json" -UseBasicParsing } catch {}
 
 $ServersJson = '__SERVERS_JSON__'
 if ($ServersJson -ne "") {
