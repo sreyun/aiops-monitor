@@ -35,6 +35,13 @@ type redfishCollector struct {
 	mu        sync.Mutex
 	snapshots []shared.HardwareSnapshot
 	lastFW    map[string]int64 // target_name → last firmware collect timestamp
+
+	// systemPath caches the discovered Systems member @odata.id per target
+	// (e.g. "/redfish/v1/Systems/System.Embedded.1" for Dell iDRAC).
+	// Avoids hardcoding "/redfish/v1/Systems/1" which varies by vendor.
+	sysPathMu  sync.Mutex
+	systemPath map[string]string // target_name → discovered system path
+	chassisPath map[string]string // target_name → discovered chassis path
 }
 
 func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCollector {
@@ -48,7 +55,9 @@ func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCol
 				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 			},
 		},
-		lastFW: make(map[string]int64),
+		lastFW:      make(map[string]int64),
+		systemPath:  make(map[string]string),
+		chassisPath: make(map[string]string),
 	}
 }
 
@@ -65,7 +74,7 @@ func (rc *redfishCollector) pollLoop(t RedfishTarget, reporter func(shared.Hardw
 		interval = 30 * time.Second
 	}
 
-	slog.Info("Redfish 采集器启动", "target", t.Name, "url", t.URL, "interval", interval)
+	slog.Info("Redfish 采集器启动", "target", t.Name, "url", t.URL, "interval", interval, "skip_tls", t.SkipTLSVerify)
 
 	failCount := 0
 	ticker := time.NewTicker(interval)
@@ -125,6 +134,137 @@ func (rc *redfishCollector) storeAndReport(t RedfishTarget, snap shared.Hardware
 	})
 }
 
+// discoverSystemPath queries /redfish/v1/Systems and returns the first
+// member's @odata.id. This handles vendor-specific system IDs:
+//   - Dell iDRAC:   /redfish/v1/Systems/System.Embedded.1
+//   - HP iLO:       /redfish/v1/Systems/1
+//   - Supermicro:   /redfish/v1/Systems/1
+//   - Lenovo XCC:   /redfish/v1/Systems/1
+func (rc *redfishCollector) discoverSystemPath(client *http.Client, t RedfishTarget) (string, error) {
+	password := ""
+	if t.PasswordEnv != "" {
+		password = os.Getenv(t.PasswordEnv)
+	}
+	var col struct {
+		Members []struct {
+			ODataID string `json:"@odata.id"`
+		} `json:"Members"`
+	}
+	if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems", &col); err != nil {
+		return "", fmt.Errorf("discover Systems collection: %w", err)
+	}
+	if len(col.Members) == 0 {
+		return "", fmt.Errorf("Systems collection is empty")
+	}
+	path := col.Members[0].ODataID
+	slog.Info("Redfish System 路径已发现", "target", t.Name, "path", path)
+	return path, nil
+}
+
+// getSystemPath returns the cached system path for a target, discovering
+// it on first call.
+func (rc *redfishCollector) getSystemPath(client *http.Client, t RedfishTarget) (string, error) {
+	rc.sysPathMu.Lock()
+	if p, ok := rc.systemPath[t.Name]; ok {
+		rc.sysPathMu.Unlock()
+		return p, nil
+	}
+	rc.sysPathMu.Unlock()
+
+	p, err := rc.discoverSystemPath(client, t)
+	if err != nil {
+		return "", err
+	}
+	rc.sysPathMu.Lock()
+	rc.systemPath[t.Name] = p
+	rc.sysPathMu.Unlock()
+	return p, nil
+}
+
+// getChassisPath returns the cached chassis path, discovering from the
+// system's Links.Chassis array or the Chassis collection.
+func (rc *redfishCollector) getChassisPath(client *http.Client, t RedfishTarget, sysPath string) (string, error) {
+	rc.sysPathMu.Lock()
+	if p, ok := rc.chassisPath[t.Name]; ok {
+		rc.sysPathMu.Unlock()
+		return p, nil
+	}
+	rc.sysPathMu.Unlock()
+
+	password := ""
+	if t.PasswordEnv != "" {
+		password = os.Getenv(t.PasswordEnv)
+	}
+
+	// Try from System.Links.Chassis first
+	var sysLinks struct {
+		Links struct {
+			Chassis []struct {
+				ODataID string `json:"@odata.id"`
+			} `json:"Chassis"`
+		} `json:"Links"`
+	}
+	if rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sysLinks) == nil && len(sysLinks.Links.Chassis) > 0 {
+		p := sysLinks.Links.Chassis[0].ODataID
+		slog.Info("Redfish Chassis 路径已发现(via Links)", "target", t.Name, "path", p)
+		rc.sysPathMu.Lock()
+		rc.chassisPath[t.Name] = p
+		rc.sysPathMu.Unlock()
+		return p, nil
+	}
+
+	// Fallback: query Chassis collection
+	var col struct {
+		Members []struct {
+			ODataID string `json:"@odata.id"`
+		} `json:"Members"`
+	}
+	if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Chassis", &col); err != nil {
+		return "", fmt.Errorf("discover Chassis collection: %w", err)
+	}
+	if len(col.Members) == 0 {
+		return "", fmt.Errorf("Chassis collection is empty")
+	}
+	p := col.Members[0].ODataID
+	slog.Info("Redfish Chassis 路径已发现", "target", t.Name, "path", p)
+	rc.sysPathMu.Lock()
+	rc.chassisPath[t.Name] = p
+	rc.sysPathMu.Unlock()
+	return p, nil
+}
+
+// classifyError returns a human-readable hint for common Redfish errors.
+func classifyError(err error) string {
+	msg := err.Error()
+	switch {
+	case containsAny(msg, "x509", "certificate", "tls", "TLS"):
+		return "（TLS 证书错误：请在配置中设置 skip_tls_verify=true，或配置 ca_cert）"
+	case containsAny(msg, "connection refused", "connect: "):
+		return "（连接被拒绝：请检查 BMC 地址和端口是否正确，以及防火墙是否放行）"
+	case containsAny(msg, "no such host", "lookup"):
+		return "（DNS 解析失败：请检查 BMC 地址是否可达）"
+	case containsAny(msg, "timeout", "deadline exceeded"):
+		return "（连接超时：BMC 可能不可达或网络不通）"
+	case containsAny(msg, "HTTP 401", "HTTP 403"):
+		return "（认证失败：请检查 username 和 password_env 环境变量是否正确）"
+	default:
+		return ""
+	}
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // collectOne does a full sweep of one Redfish target and returns a snapshot.
 func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot {
 	snap := shared.HardwareSnapshot{
@@ -154,6 +294,17 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		State  string `json:"State"`
 	}
 
+	// Discover system path (vendor-agnostic)
+	sysPath, err := rc.getSystemPath(client, t)
+	if err != nil {
+		hint := classifyError(err)
+		snap.Error = fmt.Sprintf("%v %s", err, hint)
+		return snap
+	}
+
+	// Discover chassis path (vendor-agnostic)
+	chassisPath, _ := rc.getChassisPath(client, t, sysPath)
+
 	// 1. System overview
 	var sys struct {
 		Status redfishStatus `json:"Status"`
@@ -167,8 +318,9 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			TotalSystemMemoryGiB float64 `json:"TotalSystemMemoryGiB"`
 		} `json:"MemorySummary"`
 	}
-	if err := rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems/1", &sys); err != nil {
-		snap.Error = fmt.Sprintf("Systems/1: %v", err)
+	if err := rc.rfGetRaw(client, t.URL, t.Username, password, sysPath, &sys); err != nil {
+		hint := classifyError(err)
+		snap.Error = fmt.Sprintf("Systems: %v %s", err, hint)
 		return snap
 	}
 	snap.Health = sys.Status.Health
@@ -194,7 +346,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems/1/Processors", &procs) == nil {
+	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Processors", &procs) == nil {
 		snap.CPUs = nil // replace summary with per-processor entries
 		for _, m := range procs.Members {
 			var p struct {
@@ -224,7 +376,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems/1/Memory", &mems) == nil {
+	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Memory", &mems) == nil {
 		for _, m := range mems.Members {
 			var dimm struct {
 				Name            string `json:"Name"`
@@ -253,7 +405,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			ODataID string `json:"@odata.id"`
 		} `json:"Members"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Systems/1/Storage", &storages) == nil {
+	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Storage", &storages) == nil {
 		for _, sm := range storages.Members {
 			var st struct {
 				Drives []struct {
@@ -302,7 +454,8 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			Status       redfishStatus `json:"Status"`
 		} `json:"Fans"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Chassis/1/Thermal", &thermal) == nil {
+	if chassisPath != "" {
+		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Thermal", &thermal) == nil {
 		for _, t := range thermal.Temperatures {
 			snap.Temps = append(snap.Temps, shared.SensorReading{
 				Name:          t.Name,
@@ -322,6 +475,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			})
 		}
 	}
+	}
 
 	// 6. Power (PSU + watts)
 	var power struct {
@@ -339,7 +493,8 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			Mode string `json:"Mode"`
 		} `json:"PowerSupplyRedundancy"`
 	}
-	if rc.rfGet(client, t.URL, t.Username, password, "/redfish/v1/Chassis/1/Power", &power) == nil {
+	if chassisPath != "" {
+		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Power", &power) == nil {
 		if len(power.PowerSupplyRedundancy) > 0 {
 			snap.Power.Redundancy = power.PowerSupplyRedundancy[0].Mode
 		}
@@ -355,6 +510,7 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 				State:       ps.Status.State,
 			})
 		}
+	}
 	}
 
 	// 7. Firmware (low frequency: every hour)
