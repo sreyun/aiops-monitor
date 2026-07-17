@@ -317,6 +317,7 @@
   "log.reset_token": "重設安裝 Token",
   "log.save_check": "儲存自訂監控：%s",
   "log.delete_check": "刪除自訂監控 %s",
+  "log.delete_hardware": "刪除硬體資產記錄：%s / %s",
   "log.set_category": "設定主機分類：%s → %s",
   "log.clear_category": "清除主機分類：%s",
   "log.delete_host": "刪除主機 %s",

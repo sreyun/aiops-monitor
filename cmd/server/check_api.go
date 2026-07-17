@@ -59,7 +59,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	c.Target = strings.TrimSpace(c.Target)
-	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "process") {
+	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "udp" && c.Type != "process") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "check_api.invalid_params")})
 		return
 	}

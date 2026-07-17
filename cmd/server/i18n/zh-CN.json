@@ -319,6 +319,7 @@
   "log.reset_token": "重置安装 Token",
   "log.save_check": "保存自定义监控：%s",
   "log.delete_check": "删除自定义监控 %s",
+  "log.delete_hardware": "删除硬件资产记录：%s / %s",
   "log.set_category": "设置主机分类：%s → %s",
   "log.clear_category": "清除主机分类：%s",
   "log.delete_host": "删除主机 %s",

@@ -1281,10 +1281,14 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 }
 
 // setupSSE sets the standard headers for Server-Sent Events streaming.
+// X-Accel-Buffering: no 关闭 nginx / 网关的响应缓冲，保证逐帧实时到达客户端；
+// 缺此头时反代会攒批下发，表现为「不逐字、整段蹦出」。Content-Type 一旦为
+// text/event-stream，gzipResponseWriter 会自动转 passthrough（见 main.go），不再压缩缓冲。
 func (s *Server) setupSSE(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 }
 
 // handleDiagnoseChatIncident provides multi-turn AI diagnosis chat for an

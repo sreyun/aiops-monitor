@@ -1005,7 +1005,21 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			callMsgs = h.injectTools(msgs)
 		}
 
-		reply, nativeCalls, err := aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）
+		// 真流式：仅 OpenAI 兼容 + 已开启 stream 时启用——content 逐字回调下发（实现主会话
+		// 逐字输出），tool_calls 结构化累积；原生 FC 下二者分离，不会把工具 JSON 泄漏给用户。
+		// Anthropic / 文本注入 / 非流式请求仍走可靠的非流式 aiChatV。
+		var reply string
+		var nativeCalls []nativeToolCall
+		var err error
+		streamedContent := false
+		if stream && w != nil && prov != aiProvAnthropic && len(h.tools) > 0 {
+			reply, nativeCalls, err = aiChatVStream(ctx, cfg, callMsgs, images, nativeTools, func(delta string) {
+				streamedContent = true
+				sendDelta(delta)
+			})
+		} else {
+			reply, nativeCalls, err = aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）
+		}
 		if err != nil {
 			if stream && w != nil {
 				fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -1031,12 +1045,16 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			if final == "" {
 				final = strings.TrimSpace(reply)
 			}
-			sendDelta(final)
+			// 流式模式下 content 已被逐字送达，末尾不再整段重发（否则前端会看到重复）。
+			if !streamedContent {
+				sendDelta(final)
+			}
 			return final, nil
 		}
 
-		// P3-3: 将模型的「思考文字」作为思维链下发
-		if think := stripToolCallJSON(reply); think != "" {
+		// P3-3: 将模型的「思考文字」作为思维链下发。
+		// 流式模式下推理旁白已随 content 逐字送达，此处跳过 blockquote 以免重复。
+		if think := stripToolCallJSON(reply); think != "" && !streamedContent {
 			sendDelta("\n> \U0001f9e0 " + strings.ReplaceAll(think, "\n", "\n> ") + "\n\n")
 		}
 		// 逐个工具「执行中 → 完成/失败」以独立 tool 帧实时下发

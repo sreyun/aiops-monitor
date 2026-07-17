@@ -319,6 +319,7 @@
   "log.reset_token": "Reset install token",
   "log.save_check": "Saved custom check: %s",
   "log.delete_check": "Deleted custom check %s",
+  "log.delete_hardware": "Deleted hardware asset record: %s / %s",
   "log.set_category": "Set host category: %s → %s",
   "log.clear_category": "Cleared host category: %s",
   "log.delete_host": "Deleted host %s",

@@ -37,6 +37,33 @@ func newHardwareStore() *hardwareStore {
 	return &hardwareStore{byID: map[string]hwHostEntry{}, lastHealth: map[string]string{}}
 }
 
+// remove deletes a specific target's snapshot from the in-memory store.
+func (hs *hardwareStore) remove(hostID, targetName string) {
+	if hs == nil || hostID == "" || targetName == "" {
+		return
+	}
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	e, ok := hs.byID[hostID]
+	if !ok {
+		return
+	}
+	// 从快照列表中移除指定 target
+	kept := e.snaps[:0]
+	for _, s := range e.snaps {
+		if s.TargetName != targetName {
+			kept = append(kept, s)
+		}
+	}
+	if len(kept) == 0 {
+		delete(hs.byID, hostID)
+	} else {
+		e.snaps = kept
+		hs.byID[hostID] = e
+	}
+	delete(hs.lastHealth, hostID+"|"+targetName)
+}
+
 // healthChanged reports whether a target's health differs from the last report,
 // so hardware events are recorded on TRANSITIONS only. Without this the events
 // table grows forever (one row per poll) for any host stuck in Warning.

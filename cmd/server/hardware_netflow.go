@@ -162,6 +162,26 @@ func (s *Server) handleHardwareEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+// handleDeleteHardware deletes a specific hardware target's snapshot,
+// events and change records from both in-memory store and PostgreSQL.
+func (s *Server) handleDeleteHardware(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("hostID")
+	target := r.URL.Query().Get("target")
+	if hostID == "" || target == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostID and target required"})
+		return
+	}
+	// 从内存中移除
+	s.hw.remove(hostID, target)
+	// 从 PG 中级联删除快照 + 事件 + 变更记录
+	if s.pg != nil {
+		s.pg.deleteHardwareSnapshot(hostID, target)
+	}
+	slog.Info("删除硬件资产记录", "host", hostID, "target", target, "actor", s.clientIP(r))
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hardware", hostID, target)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // handleHardwareHistory returns hardware metric history from VM.
 func (s *Server) handleHardwareHistory(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")

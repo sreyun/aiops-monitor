@@ -360,6 +360,156 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 	}
 }
 
+// streamToolChunk 解析 OpenAI 兼容流式响应里的 choices[0].delta，同时覆盖 content（正文增量）
+// 与 tool_calls（原生 Function Calling 增量）。tool_calls 以 index 分片到达，需按 index 累积。
+type streamToolChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+}
+
+// aiChatVStream 是面向 OpenAI 兼容 Provider 的「流式 + 原生 Function Calling」调用：
+//   - content 增量通过 onDelta 逐字回调，供上层实时下发前端，实现真正的逐字流式；
+//   - tool_calls 增量按 index 累积（id/name 取首个非空、arguments 分片拼接），流结束后解析为
+//     nativeToolCall 列表返回。
+//
+// 原生 FC 下 content 与 tool_calls 天然分离，直接透传 content 不会把工具 JSON 泄漏给用户。
+// 仅支持 OpenAI 兼容端点；Anthropic 走非流式 aiChatV（其流式 tool-use 帧格式不同，成本高）。
+// ctx 用于客户端断开/超时时中止在途请求。
+func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, onDelta func(string)) (string, []nativeToolCall, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg.Endpoint == "" || cfg.Model == "" {
+		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置")
+	}
+	ep, prov := normalizeEndpoint(cfg.Endpoint)
+	if prov == aiProvAnthropic { // 兜底：不应走到这里，直接回退非流式
+		return aiChatV(ctx, cfg, messages, images, tools)
+	}
+
+	reqBody := map[string]any{
+		"model":       cfg.Model,
+		"messages":    buildRequestMessages(messages, images, prov), // 无图片时等价原 messages
+		"temperature": 0.2,
+		"stream":      true,
+	}
+	if len(tools) > 0 {
+		reqBody["tools"] = tools
+		reqBody["tool_choice"] = "auto"
+	}
+	if cfg.MaxTokens > 0 {
+		reqBody["max_tokens"] = cfg.MaxTokens
+	}
+
+	b, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	client := newGuardedHTTPClient(125 * time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", nil, fmt.Errorf("已终止")
+		}
+		return "", nil, fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
+		return "", nil, fmt.Errorf("%s", providerHTTPErrorMsg(resp.StatusCode, string(body), cfg))
+	}
+
+	var content strings.Builder
+	// 按 index 累积分片到达的 tool_calls；order 保留首次出现顺序，保证多工具调用顺序稳定。
+	type toolAccumulator struct {
+		id, name string
+		args     strings.Builder
+	}
+	toolAcc := map[int]*toolAccumulator{}
+	var order []int
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 4*1024), 1024*1024)
+	for scanner.Scan() {
+		if ctx.Err() != nil { // 客户端断开：中止读取，释放 provider 连接
+			return content.String(), nil, ctx.Err()
+		}
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, ":") || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		var chunk streamToolChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		d := chunk.Choices[0].Delta
+		if d.Content != "" {
+			content.WriteString(d.Content)
+			if onDelta != nil {
+				onDelta(d.Content)
+			}
+		}
+		for _, tc := range d.ToolCalls {
+			a := toolAcc[tc.Index]
+			if a == nil {
+				a = &toolAccumulator{}
+				toolAcc[tc.Index] = a
+				order = append(order, tc.Index)
+			}
+			if tc.ID != "" {
+				a.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				a.name = tc.Function.Name
+			}
+			if tc.Function.Arguments != "" {
+				a.args.WriteString(tc.Function.Arguments)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		// 已有部分产出则算部分成功；完全无产出才报错
+		if content.Len() == 0 && len(order) == 0 {
+			return "", nil, fmt.Errorf("读取流式响应失败：%v", err)
+		}
+	}
+
+	var calls []nativeToolCall
+	for _, idx := range order {
+		a := toolAcc[idx]
+		if a.name == "" {
+			continue
+		}
+		var args map[string]any
+		if s := strings.TrimSpace(a.args.String()); s != "" {
+			_ = json.Unmarshal([]byte(s), &args)
+		}
+		calls = append(calls, nativeToolCall{ID: a.id, Name: a.name, Args: args})
+	}
+	return content.String(), calls, nil
+}
+
 // aiComplete is the single-turn (system + user) convenience wrapper around aiChat.
 func aiComplete(cfg AIConfig, system, user string) (string, error) {
 	return aiChat(cfg, []map[string]string{

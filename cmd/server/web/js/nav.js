@@ -324,6 +324,8 @@ const PAGE_META = {
   logs:     { title: "日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
+  hardware:  { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" },
+  netflow:   { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).

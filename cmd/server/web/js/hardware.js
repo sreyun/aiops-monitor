@@ -249,6 +249,9 @@ function hwCardHTML(items) {
           ${model ? `<div class="hw-card-model" title="${esc(model)}">${esc(model)}</div>` : ""}
         </div>
         ${s.bad > 0 ? `<span class="badge crit">${s.bad} ${esc(hwT("hardware.bad_count", "项异常"))}</span>` : ""}
+        <button class="icon-btn danger hw-del-btn" data-hwdel="${esc(snap.target_name || "")}" data-hwhost="${esc(it.host.id)}" title="${esc(hwT("hardware.delete", "删除"))}" data-i18n-title="hardware.delete">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
+        </button>
       </div>
       <div class="hw-quick-stats">
         ${stat(hwT("hardware.cpu", "CPU"), cpuTxt)}
@@ -287,6 +290,9 @@ function hwListHTML(items) {
       <span class="hw-row-cell mono">${s.watts ? s.watts.toFixed(0) + "W" : "-"}</span>
       <span class="hw-row-cell mono">${(sd.cpus || []).length}C / ${((sd.memory || {}).total_gb || 0).toFixed(0)}GB</span>
       <span class="hw-row-cell">${(sd.storage || []).length} ${esc(hwT("hardware.disk_unit", "盘"))} · ${s.fans.length} ${esc(hwT("hardware.fans", "风扇"))}</span>
+      <button class="icon-btn danger hw-del-btn" data-hwdel="${esc(snap.target_name || "")}" data-hwhost="${esc(it.host.id)}" title="${esc(hwT("hardware.delete", "删除"))}" data-i18n-title="hardware.delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
+      </button>
     </div>`;
   }).join("") + `</div>`;
 }
@@ -819,6 +825,7 @@ function switchHwView(mode) {
 /* ---------- 事件（全部委托，符合 CSP script-src 'self'） ---------- */
 
 safeAddEventListener("hardwarePanel", "click", e => {
+  if (e.target.closest("[data-hwdel]")) return; // 删除按钮自己处理，不打开详情
   const item = e.target.closest("[data-hwidx]");
   if (item) openHwDetail(parseInt(item.dataset.hwidx));
 });
@@ -832,6 +839,21 @@ safeAddEventListener("hwViewToggle", "click", e => {
   if (b) switchHwView(b.dataset.view);
 });
 safeAddEventListener("hwRefreshBtn", "click", loadHardwarePanel);
+safeAddEventListener("hardwarePanel", "click", e => {
+  const delBtn = e.target.closest("[data-hwdel]");
+  if (delBtn) {
+    e.stopPropagation();
+    const target = delBtn.dataset.hwdel;
+    const hostID = delBtn.dataset.hwhost;
+    if (!target || !hostID) return;
+    if (!confirm(hwT("hardware.confirm_delete", "确定删除该硬件资产记录？删除后不可恢复。"))) return;
+    fetch(`${API}/hardware/${encodeURIComponent(hostID)}?target=${encodeURIComponent(target)}`, { method: "DELETE" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(() => { toast(hwT("toast.deleted", "已删除"), "ok"); loadHardwarePanel(); })
+      .catch(err => toast(hwT("hardware.delete_failed", "删除失败") + ": " + err, "err"));
+    return;
+  }
+});
 
 /* ---------- 筛选 / 搜索 / 重复主机清理（工具栏是重渲染出来的，一律事件委托） ---------- */
 

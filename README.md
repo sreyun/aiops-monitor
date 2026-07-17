@@ -2,22 +2,22 @@
 
 # AIOps Monitor
 
-**企业级主机监控与 SRE 运维平台** —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本 + SRE 中枢（事件/自动修复/SLO/工单）+ 日志采集检索 + AI 巡检诊断
+**企业级全栈监控与 SRE 运维平台** —— Go 原生采集 + Redfish 硬件巡检 + NetFlow 流量分析 + Python 插件层 + Android 移动仪表盘 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本 + SRE 中枢（事件/自动修复/SLO/工单）+ 日志采集检索 + AI 巡检诊断
 
-[![Version](https://img.shields.io/badge/Version-v5.5.5-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v6.8.1-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20麒麟-lightgrey)]()
 [![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
 [中文](README.md) · [English](README_EN.md)
 
 </div>
 
-> 单二进制服务端、零第三方依赖 Agent、三平台原生采集（含 GPU）、一条命令安装。内置交互式趋势图、自定义拨测、远程终端（免开端口 + 二次密码认证）、自动化剧本编排、SRE 中枢（事件/自动修复/SLO/工单）、日志采集与全文检索、AI 巡检与事件诊断、多用户 RBAC、MFA 两步验证、PWA 安装、端口转发与 HTTP 代理、i18n 国际化（中/英/繁中）。
+> 单二进制服务端、零第三方依赖 Agent、四平台原生采集（Linux / Windows / macOS / 麒麟，含 GPU）、Redfish 硬件巡检（含华为 iBMC 兼容）、NetFlow / 五元组流量分析、OceanStor 存储采集、Android 移动仪表盘、一条命令安装。内置交互式趋势图、自定义拨测、远程终端（免开端口 + 二次密码认证）、自动化剧本编排、SRE 中枢（事件/自动修复/SLO/工单）、日志采集与全文检索、AI 巡检与事件诊断、多用户 RBAC、MFA 两步验证、PWA 安装、端口转发与 HTTP 代理、i18n 国际化（中/英/繁中）。
 >
-> **v5.5.0 架构升级**：存储统一为 **PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据）**，内置 `aiops.db` 单文件库已彻底停用；新增配置密钥 **AES-256-GCM 静态加密**、可选 **TLS 加密传输**、首次登录 **强制安全初始化**、跨平台 **开机自启 + 保活**（systemd / launchd / 计划任务）。
+> **存储架构**：**PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据）**，内置 `aiops.db` 已彻底停用；配置密钥 **AES-256-GCM 静态加密**、可选 **TLS 加密传输**、首次登录 **强制安全初始化**、跨平台 **开机自启 + 保活**（systemd / launchd / 计划任务）。
 
 ## 目录
 
@@ -27,10 +27,14 @@
 - [安装部署指南](#安装部署指南)
 - [配置参考](#配置参考)
 - [监控指标](#监控指标)
+- [硬件巡检（Redfish）](#硬件巡检redfish)
+- [NetFlow / 五元组流量分析](#netflow--五元组流量分析)
+- [OceanStor 存储采集](#oceanstor-存储采集)
 - [自定义监控（拨测）](#自定义监控拨测)
 - [自动化剧本（Playbook）](#自动化剧本playbook)
 - [端口转发与 HTTP 代理](#端口转发与-http-代理)
 - [远程终端](#远程终端)
+- [Android 移动端](#android-移动端)
 - [插件开发](#插件开发)
 - [告警配置](#告警配置)
 - [告警治理（静默/抑制/路由）](#告警治理静默抑制路由)
@@ -49,11 +53,13 @@
 
 ## 平台与架构支持
 
-| 处理器架构 | Linux | Windows | macOS |
-|---|:---:|:---:|:---:|
-| **AMD64 / x86_64** | ✅ | ✅ | ✅ Intel Mac |
-| **ARM64 / aarch64** | ✅ | — | ✅ Apple Silicon (M1/M2/M3/M4) |
+| 处理器架构 | Linux | Windows | macOS | Android |
+|---|:---:|:---:|:---:|:---:|
+| **AMD64 / x86_64** | ✅ | ✅ | ✅ Intel Mac | — |
+| **ARM64 / aarch64** | ✅ | — | ✅ Apple Silicon (M1/M2/M3/M4) | ✅（Kotlin + Jetpack Compose） |
 
+> **麒麟（Kylin）原生支持**：Agent 基于 Go 交叉编译，Linux ARM64 / AMD64 二进制可直接运行于银河麒麟 / 中标麒麟服务端版本，无需额外适配。  
+> **Android 移动端**：原生 Kotlin + Jetpack Compose 开发，独立 APK，非 WebView 套壳，详见 [Android 移动端](#android-移动端) 章节。  
 > **Apple Silicon 原生支持**：`GOARCH=arm64` + `GOOS=darwin`，无需 Rosetta 转译。  
 > **Intel Mac 原生支持**：`GOARCH=amd64` + `GOOS=darwin`。  
 > Docker 镜像已配置 `amd64` + `arm64` 多架构交叉编译，`docker pull` 自动获取匹配架构。
@@ -139,8 +145,9 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 
 | 能力 | 说明 |
 |---|---|
-| **三平台原生采集** | Linux（`/proc` + `syscall`）、Windows（Win32 API）、macOS（`sysctl`），均零第三方依赖 |
+| **三平台原生采集** | Linux（`/proc` + `syscall`）、Windows（Win32 API）、macOS（`sysctl`），均零第三方依赖；麒麟（Kylin）直接兼容 |
 | **全面指标** | CPU / 内存 / SWAP / 多磁盘 / 网络收发 / TCP 连接数 / 负载 / 进程数 / 运行时长 / **GPU** |
+| **硬件巡检（Redfish）** | 标准 Redfish 协议采集服务器硬件资产（CPU/内存/磁盘/RAID/网卡/风扇/电源/温度），含华为 iBMC 兼容性（ProcessorView/MemoryView） |
 | **GPU 监控** | NVIDIA（`nvidia-smi`）、AMD（Linux sysfs）、Apple（macOS `ioreg`），best-effort + 缓存 |
 | **交互式趋势图** | 纯 Canvas，悬停十字线 + 数值气泡、框选放大、双击还原、放大预览；渐变填充、统一时间跨度控件（1h~30天）、水平图例 |
 | **自定义拨测** | HTTP（状态码/延时/TLS 证书天数）/ TCP / Ping（丢包率/RTT）/ 进程存活；历史曲线回看 |
@@ -166,6 +173,9 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 | **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
 | **告警阈值自定义** | 27 组细粒度 warn/crit 阈值（主机 / 拨测 / API / 任务 / 转发五大维度）逐项可调，主机维度另含保守/标准/宽松三档预设，零值自动兜底默认 |
 | **向量化模型配置** | RAG 嵌入模型与对话模型解耦，可接任意 OpenAI 兼容 `/embeddings`（OpenAI / 百炼 / bge / m3e 等），维度可配 + 一键连通性自检 |
+| **NetFlow / 五元组流量分析** | 支持 NetFlow v5/v9/IPFIX 采集，五元组（源IP/目的IP/源端口/目的端口/协议）流量统计与 TOP-N 排行，可视化流量热力图 |
+| **OceanStor 存储采集** | 华为 OceanStor RESTful API 采集存储池/LUN/控制器/告警等资产与性能数据，纳入统一监控面板 |
+| **Android 移动端** | 原生 Kotlin + Jetpack Compose 开发，主机总览/告警推送/远程终端/硬件报表，私有化自托管 |
 | **i18n 国际化** | 中文简体 / English / 中文繁体，全链路覆盖前端面板与后端 API |
 | **告警治理** | 静默（时段/星期）/ 抑制（主因抑衍生）/ 路由（按级别·主机分流渠道），抑制告警风暴 |
 | **API 监控** | 业务系统接口批量黑盒拨测：可用性 / 时延 / P95 / 吞吐，补齐「业务可用性」维度 |
@@ -210,8 +220,8 @@ docker compose up -d
 
 ```bash
 # 编辑 docker-compose.yml，将 :latest 替换为具体版本号
-sed -i 's|aiops-server:latest|aiops-server:v5.5.5|' docker-compose.yml
-sed -i 's|aiops-agent:latest|aiops-agent:v5.5.5|' docker-compose.yml
+sed -i 's|aiops-server:latest|aiops-server:v6.8.1|' docker-compose.yml
+sed -i 's|aiops-agent:latest|aiops-agent:v6.8.1|' docker-compose.yml
 docker compose up -d
 ```
 
@@ -239,7 +249,7 @@ docker compose up -d
 | 标签 | 说明 |
 |---|---|
 | `:latest` | 始终指向最新 Release |
-| `:v5.5.5` 等 | 锁定特定版本（推荐生产使用） |
+| `:v6.8.1` 等 | 锁定特定版本（推荐生产使用） |
 
 **所需 GitHub Secrets**（在仓库 Settings → Secrets and variables → Actions 配置）：
 
@@ -594,6 +604,63 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 
 ---
 
+## 硬件巡检（Redfish）
+
+通过标准 Redfish/DMTF 协议远程采集服务器硬件资产与状态，无需在目标主机安装任何 Agent：
+
+| 采集项 | 说明 |
+|---|---|
+| **处理器** | 型号/核数/频率/健康状态 |
+| **内存** | 容量/类型/速度/插槽/健康状态 |
+| **磁盘** | 型号/容量/介质类型/健康状态/预测故障 |
+| **RAID 控制器** | 型号/固件版本/虚拟磁盘/物理磁盘 |
+| **网卡** | MAC/速率/链路状态 |
+| **风扇/电源/温度** | 转速/功率/进出风口温度 |
+| **Chassis** | 序列号/型号/固件版本 |
+
+**华为 iBMC 兼容性**：针对华为 TaiShan / Kunpeng 系列服务器的 iBMC 做了深度适配：
+- 使用 `ProcessorView` / `MemoryView` 一次性采集全部处理器和内存（华为 iBMC 特有路径）
+- Chassis Links 解析 Thermal/Power 真实链接
+- 存储路径来自 System.Storage 的 `@odata.id`（华为使用 `/Storages` 复数形式）
+- URI 去重避免华为盘重复条目
+- 首次采集日志打印各部件条数便于确认
+
+> 配置：面板「硬件巡检」页添加 BMC 地址 + 用户名/密码，支持批量导入。采集结果纳入统一硬件资产面板，支持导出。
+
+---
+
+## NetFlow / 五元组流量分析
+
+内置 NetFlow 采集器，支持标准 NetFlow v5/v9 及 IPFIX 协议，将网络设备导出的流量流记录入库并提供可视化分析：
+
+| 能力 | 说明 |
+|---|---|
+| **协议支持** | NetFlow v5 / v9 / IPFIX，UDP 监听可配置端口 |
+| **五元组统计** | 源 IP / 目的 IP / 源端口 / 目的端口 / 协议，按流量排序 TOP-N |
+| **流量热力图** | 按时间 × 主机/端口可视化流量分布，快速定位异常流量 |
+| **TOP-N 排行** | 按流量/包数/会话数排行，支持按源或目的维度切换 |
+| **flow_records 分区** | 按日自动分区，过期自动清理，避免单表膨胀 |
+
+> 适用场景：带宽滥用检测、异常流量定位、网络容量规划、安全事件溯源。配合交换机/路由器 NetFlow 导出即可，无需在服务器安装 Agent。
+
+---
+
+## OceanStor 存储采集
+
+通过华为 OceanStor RESTful API 采集存储阵列的资产与性能数据，纳入统一监控面板：
+
+| 采集项 | 说明 |
+|---|---|
+| **存储池** | 容量/已用/可用/使用率/健康状态 |
+| **LUN** | 容量/分配主机/映射关系/IO 性能 |
+| **控制器** | 状态/CPU 使用率/缓存命中率 |
+| **告警** | 实时告警同步（级别/描述/发生时间） |
+| **磁盘** | 型号/容量/健康状态/所属存储池 |
+
+> 配置：面板「存储」页添加 OceanStor 管理 IP + 账号密码，采集间隔可配置。数据统一存入 PostgreSQL，与主机/硬件资产同一面板查看。
+
+---
+
 ## 自定义监控（拨测）
 
 面板「监控」页可添加主动拨测，定时探测网站、端口、主机连通性、进程存活，异常时自动告警：
@@ -696,6 +763,33 @@ ws://<服务端>:8529/proxy/abc123/8080/ws
 - **免开端口**：经 Agent 反向连接，被控端无需开放 22/入站端口
 
 > 终端/剧本共用 Agent 反向通道，同一主机同一时刻只服务一个会话。跨外网使用需按 [Nginx 配置](#跨网络部署) 放行 WebSocket。
+
+---
+
+## Android 移动端
+
+基于 **Kotlin + Jetpack Compose** 开发的原生 Android 客户端，非 WebView 套壳，提供流畅的移动运维体验：
+
+| 功能 | 说明 |
+|---|---|
+| **主机总览** | CPU / 内存 / 磁盘 / 网络实时指标，多主机流畅切换，支持分类筛选与搜索 |
+| **告警推送** | 严重告警手机弹窗通知，点开即看详情与处置建议 |
+| **远程终端** | 内置安全终端，手机也能 SSH 排障，会话可回放审计 |
+| **硬件报表** | 硬件资产一览、Redfish 巡检结果查看 |
+| **私有化自托管** | 自定义服务器地址，数据始终留在内网，不经过任何第三方服务 |
+
+**技术栈**：
+- Kotlin 2.x + Jetpack Compose（Material 3 设计语言）
+- Retrofit + OkHttp 网络层，协程异步架构
+- Room 本地缓存，离线查看最近数据
+- 深色/浅色主题自适应
+
+**安装方式**：
+- 从项目 Releases 页下载 APK 直接安装
+- 首次启动配置服务端地址（内网 IP 或域名）
+- 登录凭据与 Web 端共用同一套 RBAC 账户体系
+
+> Android 客户端与服务端通过 RESTful API 通信，所有接口与 Web 面板相同，无需额外配置。
 
 ---
 
@@ -985,9 +1079,12 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 | Agent 核心 | Go 1.22+，纯标准库，零第三方依赖 |
 | 服务端 | Go 1.22+，`net/http`（Go 1.22 路由），`embed` 内嵌面板 |
 | 前端面板 | 原生 HTML/CSS/JS，无框架依赖 |
+| Android 客户端 | Kotlin 2.x + Jetpack Compose（Material 3） |
 | 插件层 | Python 3 + psutil（可选） |
 | 告警推送 | 飞书/钉钉 Webhook + 邮件 SMTP + 多云短信 + 多云语音电话（`net/smtp` + 阿里云 / 华为云 / 腾讯云 SMS & TTS 语音） |
 | PWA | manifest.json + Service Worker + icon.svg |
+| 硬件巡检 | Redfish/DMTF 标准协议 + 华为 iBMC 兼容 |
+| 流量分析 | NetFlow v5/v9/IPFIX 内置采集 |
 
 ### 架构图
 
@@ -1003,15 +1100,35 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
               ┌────┴────┐               ┌─────┴─────┐
               │ 服务端 A │               │  服务端 B  │  （多服务端推送）
               └─────────┘               └───────────┘
-                                               │ 子进程 + JSON
-                    ┌──────────────────────────┼──────────────────────┐
-              ┌─────┴───────┐          ┌───────┴───────┐       ┌──────┴───────┐
-              │ 自定义采集   │          │ AI / 异常检测  │       │ 进程监控      │
-              │ (.py)       │          │ (.py)         │       │ (.py)        │
-              └─────────────┘          └───────────────┘       └──────────────┘
+
+┌──────────────────────────────┐    ┌──────────────────────────────┐
+│   外部采集器（无需 Agent）      │    │   Android 移动端              │
+│  • Redfish/BMC 硬件巡检       │    │  Kotlin + Jetpack Compose    │
+│  • NetFlow 流量采集           │    │  主机总览 / 告警 / 终端 / 报表 │
+│  • OceanStor 存储采集         │    │  私有化自托管                  │
+└──────────────┬───────────────┘    └──────────────┬───────────────┘
+               │ RESTful API / UDP                  │ RESTful API
+               ▼                                    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    AIOps Monitor 服务端                          │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │
+│  │告警引擎 │ │SRE 中枢 │ │AI 巡检  │ │远程终端 │ │剧本编排 │ │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ PostgreSQL（关系数据） + VictoriaMetrics（时序数据）          ││
+│  └─────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│   Python 插件层              │
+│  • 自定义采集 (psutil 兜底) │
+│  • AI / 异常检测             │
+│  • 进程监控                  │
+└──────────────────────────────┘
 ```
 
-**分工原则**：高频、通用、对性能敏感的基础采集用 Go（单二进制、无依赖）；多变、需要生态的自定义/AI 逻辑用 Python。进程边界隔离，各自演进。
+**分工原则**：高频、通用、对性能敏感的基础采集用 Go（单二进制、无依赖）；多变、需要生态的自定义/AI 逻辑用 Python。外部采集器（Redfish/NetFlow/OceanStor）走标准协议无需 Agent。Android 移动端走 RESTful API 与服务端通信。进程边界隔离，各自演进。
 
 ### 目录结构
 
@@ -1051,9 +1168,17 @@ aiops-monitor/
 │   │   ├── message.go              # 统一消息中心
 │   │   ├── safedial.go             # SSRF 出站防护
 │   │   ├── install.go              # 一键安装脚本生成
+│   │   ├── hardware.go             # 硬件资产统一面板（Redfish + OceanStor）
+│   │   ├── netflow.go              # NetFlow 流量采集与分析
+│   │   ├── export.go               # 通用文档导出（Markdown/Excel/Word/PDF）
 │   │   └── web/                    # 面板前端（编译时 embed）
 │   │       ├── index.html / app.js / style.css
 │   │       ├── manifest.json / sw.js / icon.svg
+│   │       ├── js/                     # 模块化 JS
+│   │       │   ├── hardware.js         # 硬件资产面板
+│   │       │   ├── netflow.js          # NetFlow 流量分析
+│   │       │   ├── export.js           # 通用文档导出
+│   │       │   └── ...
 │   └── agent/                      # ★ Go Agent 核心
 │       ├── main.go                 # 配置 / flag / 信号
 │       ├── collector.go            # Collector 接口
@@ -1074,6 +1199,9 @@ aiops-monitor/
 │       ├── logcollect.go           # 日志采集（增量 tail + 加密上报）
 │       ├── tls.go                  # Agent↔Server TLS CA 信任
 │       ├── zmodem.go               # 终端内 ZMODEM 文件传输
+│       ├── collector_redfish.go    # ★ Redfish 硬件巡检（含华为 iBMC）
+│       ├── collector_redfish_vendor_test.go  # 华为 iBMC 厂商路径单测
+│       ├── collector_oceanstor.go  # ★ OceanStor 存储采集
 │       └── reporter.go             # 双心跳上报 + 多服务端广播
 ├── plugins/                        # ★ Python 插件层
 │   ├── plugin_sdk.py               # 插件 SDK
@@ -1082,6 +1210,8 @@ aiops-monitor/
 │   ├── example_ai_anomaly.py       # 示例：异常检测
 │   ├── process_monitor.py          # 进程监控
 │   └── requirements.txt
+├── android/                        # ★ Android 移动端（Kotlin + Jetpack Compose）
+├── website/                        # 营销网站（三语 i18n）
 ├── deploy/
 │   └── nginx-aiops.conf            # Nginx 反代示例
 ├── dist/                           # Agent 分发（各平台二进制）
@@ -1325,6 +1455,12 @@ aiops-monitor/
 - [x] 统一消息中心：事件 / 告警 / SLO / 自动修复 / AI / 工单 统一收件箱
 - [x] 安全加固：SSRF 出站防护（safedial）、日志 AES-256-GCM 加密上报、pgvector RAG 诊断向量
 - [x] Agent 增强：日志采集（加密上报）、Agent↔Server TLS CA 信任、ZMODEM 文件传输、机器指纹防克隆
+- [x] 硬件巡检（Redfish）：标准 Redfish/DMTF 协议采集服务器硬件资产，含华为 iBMC 兼容性（ProcessorView/MemoryView）
+- [x] NetFlow / 五元组流量分析：NetFlow v5/v9/IPFIX 采集，五元组流量统计与 TOP-N 排行，flow_records 按日分区
+- [x] OceanStor 存储采集：华为 OceanStor RESTful API 采集存储池/LUN/控制器/告警等资产与性能数据
+- [x] Android 移动端：原生 Kotlin + Jetpack Compose 开发，主机总览/告警推送/远程终端/硬件报表
+- [x] 通用文档导出：Markdown / Excel(.xlsx) / Word(.docx) / PDF 四种格式，零第三方依赖
+- [x] 统一存储架构：PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据），内置 aiops.db 已彻底停用
 
 ### 进行中 / 计划中
 

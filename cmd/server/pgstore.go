@@ -1556,6 +1556,16 @@ func (p *pgStore) getHardwareSnapshots(hostID string) ([]map[string]any, error) 
 	return results, rows.Err()
 }
 
+func (p *pgStore) deleteHardwareSnapshot(hostID, targetName string) {
+	_, err := p.db.Exec(`DELETE FROM hardware_snapshot WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
+	if err != nil {
+		slog.Warn("删除硬件快照失败", "host", hostID, "target", targetName, "err", err)
+	}
+	// 级联清理关联的事件与变更记录
+	_, _ = p.db.Exec(`DELETE FROM hardware_events WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
+	_, _ = p.db.Exec(`DELETE FROM hardware_changes WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
+}
+
 func (p *pgStore) insertFlowRecords(hostID, source string, flows []shared.FlowRecord) {
 	tx, err := p.db.Begin()
 	if err != nil {

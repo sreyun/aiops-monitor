@@ -151,10 +151,15 @@ var gzipWriterPool = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
 // gzipResponseWriter transparently compresses the response body. It strips any
 // Content-Length (now wrong post-compression) and advertises gzip on the first
 // write.
+//
+// SSE 例外：当 handler 把 Content-Type 设为 text/event-stream 时，本 writer 切换为
+// passthrough（直写底层、不压缩）。原因是 gzip.Writer 会把每个 data: 帧压进内部缓冲，
+// 直到 Close 才吐给客户端——这会彻底破坏「逐字流式」，让整段 AI 回复一次性到达。
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	gz    *gzip.Writer
-	wrote bool
+	gz          *gzip.Writer
+	wrote       bool
+	passthrough bool // true = 命中 SSE：绕过 gzip，直写底层并逐帧 Flush
 }
 
 func (w *gzipResponseWriter) ensureHeader() {
@@ -162,6 +167,11 @@ func (w *gzipResponseWriter) ensureHeader() {
 		return
 	}
 	w.wrote = true
+	// 流式响应（SSE）必须逐帧实时下发，不能经 gzip 缓冲。
+	if strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		w.passthrough = true
+		return
+	}
 	h := w.Header()
 	h.Del("Content-Length")
 	h.Set("Content-Encoding", "gzip")
@@ -180,7 +190,28 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.passthrough {
+		return w.ResponseWriter.Write(b)
+	}
 	return w.gz.Write(b)
+}
+
+// Flush 实现 http.Flusher —— 这是 SSE 逐字流式能工作的关键：
+//  1. gzipResponseWriter 仅内嵌 http.ResponseWriter 接口（该接口不含 Flush），若不显式
+//     实现，handler 里的 `w.(http.Flusher)` 断言就会失败、所有 flush 沦为空操作，数据全被
+//     憋到 handler 返回。这正是此前 AI 会话/诊断「不逐字」的根因。
+//  2. 压缩响应必须先 flush gzip 缓冲、再 flush 底层 writer，否则压缩字节滞留在 gzip 内部；
+//     SSE passthrough 则直接 flush 底层。
+func (w *gzipResponseWriter) Flush() {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	if !w.passthrough {
+		_ = w.gz.Flush()
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // gzipMiddleware compresses text/JSON responses for clients that accept gzip.
@@ -199,8 +230,16 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		}
 		gz := gzipWriterPool.Get().(*gzip.Writer)
 		gz.Reset(w)
-		defer func() { gz.Close(); gzipWriterPool.Put(gz) }()
-		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+		gzw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+		// 仅当确实用 gzip 压过内容才写 gzip 尾（Close）。SSE passthrough 与空响应跳过，
+		// 否则会往流式响应尾部追加乱码字节 / 往 204 等空响应硬塞一段空 gzip。
+		defer func() {
+			if gzw.wrote && !gzw.passthrough {
+				gz.Close()
+			}
+			gzipWriterPool.Put(gz)
+		}()
+		next.ServeHTTP(gzw, r)
 	})
 }
 

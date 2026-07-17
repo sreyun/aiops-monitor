@@ -299,6 +299,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
 	mux.HandleFunc("GET /api/v1/hardware/events", s.handleHardwareEvents)
+	mux.HandleFunc("DELETE /api/v1/hardware/{hostID}", s.handleDeleteHardware)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)

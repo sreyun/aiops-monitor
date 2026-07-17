@@ -2878,7 +2878,7 @@ select:focus {
 
 /* ── 硬件：列表视图（与卡片视图自由切换）── */
 .hw-list{display:flex; flex-direction:column; gap:4px; padding:var(--sp-3) 0}
-.hw-row{display:grid; grid-template-columns:28px minmax(150px,1.6fr) 76px 72px 62px 62px 120px 1fr;
+.hw-row{display:grid; grid-template-columns:28px minmax(150px,1.6fr) 76px 72px 62px 62px 120px 1fr 36px;
   gap:10px; align-items:center; background:var(--panel); border:1px solid var(--line);
   border-radius:var(--r-sm); padding:8px 12px; cursor:pointer;
   transition:border-color var(--transition-fast), background var(--transition-fast)}
@@ -2964,7 +2964,7 @@ select:focus {
 @media (max-width: 720px) {
   .hw-grid{grid-template-columns:1fr}
   /* 8 列栅格在窄屏会把每格挤成 1 个字符宽，退化成两行更可读 */
-  .hw-row{grid-template-columns:22px 1fr auto; grid-auto-rows:min-content; row-gap:4px}
+  .hw-row{grid-template-columns:22px 1fr auto 36px; grid-auto-rows:min-content; row-gap:4px}
   .hw-row .hw-row-cell{display:none}
 }
 
