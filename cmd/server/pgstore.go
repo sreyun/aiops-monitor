@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"aiops-monitor/shared"
 	_ "github.com/lib/pq"
 )
 
@@ -207,6 +209,44 @@ func (p *pgStore) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS alert_history_key ON alert_history(key);
 		CREATE INDEX IF NOT EXISTS alert_history_fired ON alert_history(fired_at DESC);
+		-- Redfish 硬件最新快照（UPSERT by host_id + target_name）
+		CREATE TABLE IF NOT EXISTS hardware_snapshot (
+			host_id     TEXT NOT NULL,
+			target_name TEXT NOT NULL,
+			target_url  TEXT,
+			snapshot    JSONB NOT NULL,
+			health      TEXT,
+			updated_at  TIMESTAMPTZ DEFAULT NOW(),
+			PRIMARY KEY (host_id, target_name)
+		);
+		-- Redfish 硬件事件（状态变更/故障/固件升级）
+		CREATE TABLE IF NOT EXISTS hardware_events (
+			id          BIGSERIAL PRIMARY KEY,
+			host_id     TEXT NOT NULL,
+			target_name TEXT,
+			event_type  TEXT NOT NULL,
+			severity    TEXT,
+			message     TEXT,
+			created_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_hw_events_host_time ON hardware_events(host_id, created_at DESC);
+		-- Flow 明细（可选，默认不启用，7天自动清理）
+		CREATE TABLE IF NOT EXISTS flow_records (
+			id          BIGSERIAL PRIMARY KEY,
+			host_id     TEXT NOT NULL,
+			source      TEXT NOT NULL,
+			src_ip      INET,
+			dst_ip      INET,
+			src_port    INT,
+			dst_port    INT,
+			protocol    INT,
+			bytes       BIGINT,
+			packets     BIGINT,
+			first_seen  TIMESTAMPTZ,
+			last_seen   TIMESTAMPTZ,
+			created_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_flow_host_time ON flow_records(host_id, created_at DESC);
 	`)
 	return err
 }
@@ -1227,5 +1267,165 @@ func (s *Server) pgFlush(ps *pgStore, withLogs bool) {
 	// Playbook execution history is small (≤ 100 records) — persist every flush.
 	if raw, err := json.Marshal(s.playbooks.exportExecutions()); err == nil {
 		_ = ps.saveKV("playbook_executions", raw)
+	}
+}
+
+// ============================================================================
+// Hardware / NetFlow PG methods
+// ============================================================================
+
+func (p *pgStore) upsertHardwareSnapshot(hostID string, snap shared.HardwareSnapshot) {
+	raw, _ := json.Marshal(snap)
+	_, err := p.db.Exec(`
+		INSERT INTO hardware_snapshot(host_id, target_name, target_url, snapshot, health, updated_at)
+		VALUES($1, $2, $3, $4, $5, NOW())
+		ON CONFLICT (host_id, target_name) DO UPDATE
+		SET snapshot=$4, health=$5, target_url=$3, updated_at=NOW()`,
+		hostID, snap.TargetName, snap.TargetURL, raw, snap.Health)
+	if err != nil {
+		slog.Warn("Upsert 硬件快照失败", "host", hostID, "target", snap.TargetName, "err", err)
+	}
+}
+
+func (p *pgStore) insertHardwareEvent(hostID, targetName, eventType, severity, message string) {
+	_, err := p.db.Exec(`
+		INSERT INTO hardware_events(host_id, target_name, event_type, severity, message)
+		VALUES($1, $2, $3, $4, $5)`,
+		hostID, targetName, eventType, severity, message)
+	if err != nil {
+		slog.Warn("插入硬件事件失败", "err", err)
+	}
+}
+
+func (p *pgStore) getHardwareSnapshots(hostID string) ([]map[string]any, error) {
+	rows, err := p.db.Query(`
+		SELECT target_name, target_url, snapshot, health, updated_at
+		FROM hardware_snapshot WHERE host_id=$1 ORDER BY updated_at DESC`, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]any
+	for rows.Next() {
+		var targetName, targetURL, health string
+		var snapshot json.RawMessage
+		var updatedAt time.Time
+		if err := rows.Scan(&targetName, &targetURL, &snapshot, &health, &updatedAt); err != nil {
+			continue
+		}
+		var snapData any
+		json.Unmarshal(snapshot, &snapData)
+		results = append(results, map[string]any{
+			"target_name": targetName,
+			"target_url":  targetURL,
+			"health":      health,
+			"snapshot":    snapData,
+			"updated_at":  updatedAt,
+		})
+	}
+	if results == nil {
+		results = []map[string]any{}
+	}
+	return results, rows.Err()
+}
+
+func (p *pgStore) insertFlowRecords(hostID, source string, flows []shared.FlowRecord) {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO flow_records(host_id, source, src_ip, dst_ip, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
+	if err != nil {
+		return
+	}
+	defer stmt.Close()
+
+	for _, f := range flows {
+		_, _ = stmt.Exec(hostID, source, f.SrcIP, f.DstIP, f.SrcPort, f.DstPort, f.Protocol,
+			f.Bytes, f.Packets,
+			time.Unix(f.FirstSeen, 0), time.Unix(f.LastSeen, 0))
+	}
+	_ = tx.Commit()
+}
+
+func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string]any, error) {
+	query := `SELECT source, src_ip::text, dst_ip::text, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen
+		FROM flow_records WHERE host_id=$1`
+	args := []any{hostID}
+	argIdx := 2
+
+	if filter != "" {
+		// Parse filter: "src_ip:10.0.0.0/8" or "dst_port:443"
+		parts := strings.SplitN(filter, ":", 2)
+		if len(parts) == 2 {
+			col := parts[0]
+			val := parts[1]
+			switch col {
+			case "src_ip", "dst_ip":
+				query += fmt.Sprintf(` AND %s::text = $%d`, col, argIdx)
+				args = append(args, val)
+				argIdx++
+			case "src_port", "dst_port", "protocol":
+				if n, err := strconv.Atoi(val); err == nil {
+					query += fmt.Sprintf(` AND %s = $%d`, col, argIdx)
+					args = append(args, n)
+					argIdx++
+				}
+			}
+		}
+	}
+
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, argIdx)
+	args = append(args, limit)
+
+	rows, err := p.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]any
+	for rows.Next() {
+		var source, srcIP, dstIP string
+		var srcPort, dstPort, protocol int
+		var bytes, packets int64
+		var firstSeen, lastSeen time.Time
+		if err := rows.Scan(&source, &srcIP, &dstIP, &srcPort, &dstPort, &protocol,
+			&bytes, &packets, &firstSeen, &lastSeen); err != nil {
+			continue
+		}
+		results = append(results, map[string]any{
+			"source":     source,
+			"src_ip":     srcIP,
+			"dst_ip":     dstIP,
+			"src_port":   srcPort,
+			"dst_port":   dstPort,
+			"protocol":   protocol,
+			"bytes":      bytes,
+			"packets":    packets,
+			"first_seen": firstSeen,
+			"last_seen":  lastSeen,
+		})
+	}
+	if results == nil {
+		results = []map[string]any{}
+	}
+	return results, rows.Err()
+}
+
+// cleanupFlowRecords deletes flow records older than 7 days (called periodically).
+func (p *pgStore) cleanupFlowRecords() {
+	result, err := p.db.Exec(`DELETE FROM flow_records WHERE created_at < NOW() - INTERVAL '7 days'`)
+	if err != nil {
+		slog.Warn("清理过期 Flow 记录失败", "err", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		slog.Info("清理过期 Flow 记录", "deleted", n)
 	}
 }

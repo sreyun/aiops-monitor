@@ -62,6 +62,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
             <span data-i18n="nav.logs">日志</span>
           </a>
+          <a class="nav-item" data-view="hardware" data-i18n-title="nav.hardware" title="Redfish 硬件状态监控">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M6 7V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v2"/><path d="M6 12h.01M10 12h.01"/></svg>
+            <span data-i18n="nav.hardware">硬件</span>
+          </a>
+          <a class="nav-item" data-view="netflow" data-i18n-title="nav.netflow" title="NetFlow 网络流量分析">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 5-5"/></svg>
+            <span data-i18n="nav.netflow">流量</span>
+          </a>
         </div>
       </div>
 
@@ -623,6 +631,18 @@
         <div class="empty" id="forwardEmpty" data-i18n="empty.no_forwards">
           还没有端口转发规则。点「新建端口转发」创建一个——选择目标主机和端口，即可在本机通过 localhost 访问远端服务。
         </div>
+      </section>
+
+      <!-- 硬件监控 (Redfish) -->
+      <section class="view" id="view-hardware">
+        <div class="section-title"><span data-i18n="section.hardware">硬件监控</span><span class="tag" data-i18n="section.hardware_desc">Redfish BMC/iDRAC/iLO 服务器硬件状态总览</span></div>
+        <div id="hardwarePanel"></div>
+      </section>
+
+      <!-- 网络流量 (NetFlow) -->
+      <section class="view" id="view-netflow">
+        <div class="section-title"><span data-i18n="section.netflow">网络流量</span><span class="tag" data-i18n="section.netflow_desc">NetFlow / 五元组包采集流量分析</span></div>
+        <div id="netflowPanel"></div>
       </section>
 
       <!-- 数据源接入（Loki / Prometheus） -->

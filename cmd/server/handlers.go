@@ -84,6 +84,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			s.pg.decayOldMemories()
 			s.pg.cleanupExpiredMemories()
 			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
+			s.pg.cleanupFlowRecords()     // 清理过期 Flow 记录
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
@@ -91,6 +92,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.decayOldMemories()
 				s.pg.cleanupExpiredMemories()
 				s.pg.capMemoriesByKind(2000)
+				s.pg.cleanupFlowRecords()
 			}
 		}()
 	}
@@ -285,6 +287,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agent/forward/wait", s.handleAgentForwardWait)
 	mux.HandleFunc("GET /api/v1/agent/forward/rx", s.handleAgentForwardRx)
 	mux.HandleFunc("POST /api/v1/agent/forward/tx", s.handleAgentForwardTx)
+	// Hardware + NetFlow: agent ingest (fingerprint-gated)
+	mux.HandleFunc("POST /api/v1/agent/hardware", s.handleAgentHardware)
+	mux.HandleFunc("POST /api/v1/agent/netflow", s.handleAgentNetFlow)
+	// Hardware + NetFlow: frontend query
+	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
+	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
+	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
+	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
+	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
@@ -309,7 +320,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "init"} {
+			for _, m := range []string{"core", "overview", "hosts", "terminal", "settings", "nav", "sre", "apimon", "governance", "datasource", "hardware", "netflow", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

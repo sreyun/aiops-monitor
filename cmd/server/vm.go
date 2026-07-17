@@ -801,3 +801,64 @@ func parseVMExport(r io.Reader) []shared.Sample {
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
 	return out
 }
+
+// ============================================================================
+// Hardware + NetFlow VM write helpers
+// ============================================================================
+
+// pushHardware writes one hardware metric to VM immediately (fire-and-forget).
+func (v *vmWriter) pushHardware(hostID, target string, ts int64, metric string, val float64) {
+	v.pushRawLine(fmt.Sprintf(`%s{host="%s",target="%s"} %f %d`, metric, hostID, target, val, ts))
+}
+
+// pushHardwareLabeled writes one hardware metric with an extra label.
+func (v *vmWriter) pushHardwareLabeled(hostID, target string, ts int64, metric string, val float64, extraKey, extraVal string) {
+	v.pushRawLine(fmt.Sprintf(`%s{host="%s",target="%s",%s="%s"} %f %d`,
+		metric, hostID, target, extraKey, extraVal, val, ts))
+}
+
+// pushRawLine writes one Prometheus text line directly to VM (fire-and-forget).
+// Used by hardware/netflow metrics that don't fit the standard sample pipeline.
+func (v *vmWriter) pushRawLine(line string) {
+	if v == nil || !v.enabled() {
+		return
+	}
+	c := v.cfg.VMConfig()
+	go func() {
+		body := line + "\n"
+		req, err := http.NewRequest("POST", c.URL+"/api/v1/import/prometheus", strings.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "text/plain")
+		resp, err := v.httpc.Do(req)
+		if err != nil {
+			return
+		}
+		resp.Body.Close()
+	}()
+}
+
+// queryRawRange executes a range query against VM and returns raw results.
+func (v *vmWriter) queryRawRange(promql string, from, to int64) []any {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil
+	}
+	u := fmt.Sprintf("%s/api/v1/query_range?query=%s&start=%d&end=%d&step=60",
+		c.URL, url.QueryEscape(promql), from, to)
+	resp, err := v.httpc.Get(u)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data struct {
+			Result []any `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&result) != nil {
+		return nil
+	}
+	return result.Data.Result
+}

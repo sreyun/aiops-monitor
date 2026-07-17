@@ -341,6 +341,8 @@ function rebuildPageMeta() {
   PAGE_META.logs       = { title: "日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
+  PAGE_META.hardware   = { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" };
+  PAGE_META.netflow    = { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
@@ -379,6 +381,8 @@ function switchView(view) {
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();
+  if (view === "hardware" && window._pageRenderers && window._pageRenderers.hardware) window._pageRenderers.hardware();
+  if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

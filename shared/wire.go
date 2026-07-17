@@ -136,3 +136,143 @@ type Report struct {
 	Custom      map[string]float64 `json:"custom,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
 }
+
+// ============================================================================
+// Redfish 硬件状态采集结构体
+// ============================================================================
+
+// HardwareSnapshot is one point-in-time snapshot of a Redfish-managed server.
+type HardwareSnapshot struct {
+	TargetName string           `json:"target_name"`
+	TargetURL  string           `json:"target_url"`
+	Timestamp  int64            `json:"timestamp"`
+	Health     string           `json:"health"`              // OK / Warning / Critical
+	State      string           `json:"state"`               // Enabled / Disabled / ...
+	CPUs       []RedfishCPU     `json:"cpus"`
+	Memory     RedfishMemory    `json:"memory"`
+	Storage    []RedfishStorage `json:"storage"`
+	Temps      []SensorReading  `json:"temps"`
+	Fans       []FanReading     `json:"fans"`
+	Power      RedfishPower     `json:"power"`
+	Firmware   []FirmwareInfo   `json:"firmware,omitempty"` // 降频采集
+	Error      string           `json:"error,omitempty"`
+}
+
+type RedfishCPU struct {
+	Name       string `json:"name"`
+	Model      string `json:"model"`
+	Cores      int    `json:"cores"`
+	Threads    int    `json:"threads"`
+	Health     string `json:"health"`
+	TempC      float64 `json:"temp_c,omitempty"`
+	MaxFreqMHz int    `json:"max_freq_mhz,omitempty"`
+}
+
+type RedfishMemory struct {
+	TotalGB    float64          `json:"total_gb"`
+	UsedGB     float64          `json:"used_gb,omitempty"`
+	DIMMs      []MemoryDIMM     `json:"dimms,omitempty"`
+}
+
+type MemoryDIMM struct {
+	Name       string  `json:"name"`
+	CapacityGB float64 `json:"capacity_gb"`
+	Type       string  `json:"type"`       // DDR4 / DDR5
+	SpeedMHz   int     `json:"speed_mhz"`
+	Health     string  `json:"health"`
+	Slot       string  `json:"slot,omitempty"`
+}
+
+type RedfishStorage struct {
+	Name       string `json:"name"`
+	Model      string `json:"model,omitempty"`
+	CapacityGB float64 `json:"capacity_gb"`
+	Health     string `json:"health"`
+	MediaType  string `json:"media_type,omitempty"` // HDD / SSD / NVMe
+	Protocol   string `json:"protocol,omitempty"`   // SATA / SAS / NVMe
+	Status     string `json:"status,omitempty"`     // OK / Warning / Critical
+	SMARTWarn  bool   `json:"smart_warn,omitempty"`
+}
+
+type SensorReading struct {
+	Name     string  `json:"name"`
+	Reading  float64 `json:"reading"`
+	Unit     string  `json:"unit"`     // Celsius, etc.
+	Status   string  `json:"status"`   // OK / Warning / Critical
+	UpperCaution float64 `json:"upper_caution,omitempty"`
+	UpperCritical float64 `json:"upper_critical,omitempty"`
+}
+
+type FanReading struct {
+	Name    string `json:"name"`
+	RPM     int    `json:"rpm"`
+	Health  string `json:"health"`
+	Status  string `json:"status,omitempty"`
+}
+
+type RedfishPower struct {
+	Redundancy  string         `json:"redundancy"`           // Full / N+1 / NotRedundant
+	PSUs        []PSUReading   `json:"psus,omitempty"`
+	TotalWatts  float64        `json:"total_watts,omitempty"`
+}
+
+type PSUReading struct {
+	Name       string  `json:"name"`
+	InputWatts float64 `json:"input_watts"`
+	OutputWatts float64 `json:"output_watts,omitempty"`
+	Health     string  `json:"health"`
+	State      string  `json:"state"`
+}
+
+type FirmwareInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// HardwareReport is the payload agents POST for Redfish hardware snapshots.
+type HardwareReport struct {
+	HostID      string             `json:"host_id"`
+	Fingerprint string             `json:"fingerprint,omitempty"`
+	Snapshots   []HardwareSnapshot `json:"snapshots"`
+}
+
+// ============================================================================
+// NetFlow / 五元组包采集结构体
+// ============================================================================
+
+// FlowRecord is one aggregated flow (five-tuple + bytes/packets).
+type FlowRecord struct {
+	SrcIP     string `json:"src_ip"`
+	DstIP     string `json:"dst_ip"`
+	SrcPort   uint16 `json:"src_port"`
+	DstPort   uint16 `json:"dst_port"`
+	Protocol  uint8  `json:"protocol"`
+	Bytes     uint64 `json:"bytes"`
+	Packets   uint64 `json:"packets"`
+	FirstSeen int64  `json:"first_seen"`
+	LastSeen  int64  `json:"last_seen"`
+	TCPFlags  uint8  `json:"tcp_flags"`
+	SrcAS     uint32 `json:"src_as,omitempty"`
+	DstAS     uint32 `json:"dst_as,omitempty"`
+	InputIf   uint32 `json:"input_if,omitempty"`
+	OutputIf  uint32 `json:"output_if,omitempty"`
+}
+
+type NetFlowStats struct {
+	TotalFlows     int    `json:"total_flows"`
+	TotalBytes     uint64 `json:"total_bytes"`
+	TotalPackets   uint64 `json:"total_packets"`
+	DroppedPackets uint64 `json:"dropped_packets"`
+	Sampled        bool   `json:"sampled,omitempty"`
+}
+
+// NetFlowReport is the payload agents POST for NetFlow/packet aggregated flows.
+type NetFlowReport struct {
+	HostID      string       `json:"host_id"`
+	Fingerprint string       `json:"fingerprint,omitempty"`
+	Source      string       `json:"source"`       // "netflow" | "packet"
+	Timestamp   int64        `json:"timestamp"`
+	WindowSec   int          `json:"window_sec"`
+	Flows       []FlowRecord `json:"flows"`
+	Stats       NetFlowStats `json:"stats"`
+}

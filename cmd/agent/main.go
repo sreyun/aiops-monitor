@@ -39,6 +39,10 @@ type config struct {
 	LogEncrypt     bool           `json:"log_encrypt"`          // gzip+AES-256-GCM encrypt log uploads (default true)
 	TLSSkipVerify  bool           `json:"tls_skip_verify,omitempty"` // skip server TLS cert verification (insecure; self-signed/lab only)
 	CACert         string         `json:"ca_cert,omitempty"`          // path to a CA PEM bundle to trust (proper self-signed support)
+	// ---- 新增采集器配置（可选，未配置时不启动）----
+	RedfishTargets []RedfishTarget `json:"redfish_targets,omitempty"` // Redfish 硬件状态采集
+	NetFlow        *NetFlowConfig  `json:"netflow,omitempty"`         // NetFlow 网络流量接收
+	PacketCapture  *PacketConfig   `json:"packet_capture,omitempty"`  // 五元组包报文采集
 }
 
 func defaultConfig() config {
@@ -224,6 +228,9 @@ func main() {
 	)
 	agent.logPaths = cfg.LogPaths
 	agent.logEncrypt = cfg.LogEncrypt
+	agent.redfishTargets = cfg.RedfishTargets
+	agent.netflowCfg = cfg.NetFlow
+	agent.packetCfg = cfg.PacketCapture
 
 	go func() {
 		sig := make(chan os.Signal, 1)

@@ -33,6 +33,10 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}
+	// Agent-facing hardware/netflow ingest are fingerprint-gated, not session-gated.
+	if p == "/api/v1/agent/hardware" || p == "/api/v1/agent/netflow" {
+		return true
+	}
 	// 拆分后的前端静态模块（/js/*.js、/css/*）与 /app.js、/style.css 同属登录前外壳，需放行。
 	if strings.HasPrefix(p, "/js/") || strings.HasPrefix(p, "/css/") {
 		return true

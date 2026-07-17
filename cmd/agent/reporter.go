@@ -268,6 +268,11 @@ type Agent struct {
 	logPaths      []string // log files/dirs to tail and forward (empty = collector disabled)
 	logEncrypt    bool     // 加密上报日志（gzip+AES-GCM），有服务端下发密钥时生效；--log-encrypt=false 可关
 
+	// 新增采集器配置（可选，未配置时不启动）
+	redfishTargets []RedfishTarget
+	netflowCfg     *NetFlowConfig
+	packetCfg      *PacketConfig
+
 	mu            sync.Mutex
 	latestCustom  map[string]float64
 	pendingEvents []shared.Event
@@ -355,6 +360,33 @@ func (a *Agent) Run() {
 	// Start one log collector per target (no-op when no log paths are configured).
 	for _, t := range a.targets {
 		go a.runLogCollectorFor(t)
+	}
+
+	// Start Redfish hardware collector (one goroutine per target).
+	if len(a.redfishTargets) > 0 {
+		rc := newRedfishCollector(a.redfishTargets, a.identity.HostID, a.identity.Fingerprint)
+		rc.run(func(rep shared.HardwareReport) {
+			a.postHardwareReport(rep)
+		})
+		slog.Info("Redfish 硬件采集器已启动", "targets", len(a.redfishTargets))
+	}
+
+	// Start NetFlow receiver (UDP listener + aggregator).
+	if a.netflowCfg != nil && a.netflowCfg.Listen != "" {
+		nr := newNetflowReceiver(*a.netflowCfg, a.identity.HostID, a.identity.Fingerprint)
+		nr.run(func(rep shared.NetFlowReport) {
+			a.postNetFlowReport(rep)
+		})
+		slog.Info("NetFlow 接收器已启动", "listen", a.netflowCfg.Listen)
+	}
+
+	// Start packet collector (nf_conntrack, Linux only).
+	if a.packetCfg != nil && a.packetCfg.Enabled {
+		pc := newPacketCollector(*a.packetCfg, a.identity.HostID, a.identity.Fingerprint)
+		pc.run(func(rep shared.NetFlowReport) {
+			a.postNetFlowReport(rep)
+		})
+		slog.Info("五元组包采集器已启动")
 	}
 
 	// base-metric report loop, higher frequency.
@@ -571,4 +603,66 @@ func short(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// postHardwareReport sends a Redfish hardware snapshot to all server targets.
+func (a *Agent) postHardwareReport(rep shared.HardwareReport) {
+	body, err := json.Marshal(rep)
+	if err != nil {
+		slog.Warn("硬件上报序列化失败", "err", err)
+		return
+	}
+	fp := a.identity.Fingerprint
+	for _, t := range a.targets {
+		go func(tgt *serverTarget) {
+			req, err := http.NewRequest("POST", tgt.server+"/api/v1/agent/hardware", bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if fp != "" {
+				req.Header.Set("X-Agent-Fingerprint", fp)
+			}
+			resp, err := tgt.httpc.Do(req)
+			if err != nil {
+				slog.Warn("硬件上报失败", "server", tgt.server, "err", err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				slog.Warn("硬件上报被拒", "server", tgt.server, "status", resp.StatusCode)
+			}
+		}(t)
+	}
+}
+
+// postNetFlowReport sends aggregated NetFlow/packet flows to all server targets.
+func (a *Agent) postNetFlowReport(rep shared.NetFlowReport) {
+	body, err := json.Marshal(rep)
+	if err != nil {
+		slog.Warn("NetFlow 上报序列化失败", "err", err)
+		return
+	}
+	fp := a.identity.Fingerprint
+	for _, t := range a.targets {
+		go func(tgt *serverTarget) {
+			req, err := http.NewRequest("POST", tgt.server+"/api/v1/agent/netflow", bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if fp != "" {
+				req.Header.Set("X-Agent-Fingerprint", fp)
+			}
+			resp, err := tgt.httpc.Do(req)
+			if err != nil {
+				slog.Warn("NetFlow 上报失败", "server", tgt.server, "err", err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				slog.Warn("NetFlow 上报被拒", "server", tgt.server, "status", resp.StatusCode)
+			}
+		}(t)
+	}
 }

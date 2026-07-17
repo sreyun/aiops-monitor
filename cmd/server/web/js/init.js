@@ -38,7 +38,7 @@ window.addEventListener("beforeinstallprompt", e => {
 });
 window.addEventListener("hashchange", () => {
   const h = location.hash.slice(1);
-  if (h && ["overview", "hosts", "checks", "alerts", "automation", "log"].includes(h)) {
+  if (h && ["overview", "hosts", "checks", "alerts", "automation", "log", "hardware", "netflow"].includes(h)) {
     switchView(h);
   }
 });
