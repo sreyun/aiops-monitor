@@ -791,6 +791,67 @@ func (p *pgStore) decayOldMemories() {
 	}
 }
 
+// cleanupExpiredMemories 删除超过 365 天且优先级已降至 < 0.3 的记忆。
+// 这些记忆已经历多次衰减且从未被检索命中，可安全清理以释放存储空间。
+// P3-2: 记忆生命周期管理的硬清理环节。
+func (p *pgStore) cleanupExpiredMemories() {
+	cutoff := time.Now().Add(-365 * 24 * time.Hour).Unix()
+	res, err := p.db.Exec(
+		`DELETE FROM ai_memory_embeddings
+		 WHERE created_at < $1 AND priority < 0.3
+		   AND (last_hit_at = 0 OR last_hit_at < $1)`,
+		cutoff)
+	if err != nil {
+		slog.Warn("记忆清理执行失败", "err", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("记忆清理完成", "删除过期记忆", n)
+	}
+}
+
+// capMemoriesByKind 对每种 kind 的记忆数量设置上限（maxPerKind），
+// 超出时删除最旧且优先级最低的记忆，防止单一类型无限增长。
+func (p *pgStore) capMemoriesByKind(maxPerKind int) {
+	if maxPerKind <= 0 {
+		maxPerKind = 2000
+	}
+	rows, err := p.db.Query(`SELECT kind, COUNT(*) FROM ai_memory_embeddings GROUP BY kind HAVING COUNT(*) > $1`, maxPerKind)
+	if err != nil {
+		slog.Warn("记忆容量检查失败", "err", err)
+		return
+	}
+	defer rows.Close()
+	totalDeleted := int64(0)
+	for rows.Next() {
+		var kind string
+		var count int
+		if err := rows.Scan(&kind, &count); err != nil {
+			continue
+		}
+		excess := count - maxPerKind
+		if excess <= 0 {
+			continue
+		}
+		// 删除最旧且优先级最低的 excess 条
+		res, err := p.db.Exec(
+			`DELETE FROM ai_memory_embeddings WHERE id IN (
+				SELECT id FROM ai_memory_embeddings WHERE kind = $1
+				ORDER BY priority ASC, created_at ASC LIMIT $2
+			)`, kind, excess)
+		if err != nil {
+			slog.Warn("记忆容量裁剪失败", "kind", kind, "err", err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			totalDeleted += n
+		}
+	}
+	if totalDeleted > 0 {
+		slog.Info("记忆容量裁剪完成", "删除总数", totalDeleted, "上限", maxPerKind)
+	}
+}
+
 // ============================================================================
 // 经验规则库 CRUD
 // ============================================================================

@@ -71,6 +71,7 @@ async function openSettings() {
     $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
     $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
     $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
+    $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
     // API 业务监控
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -120,6 +121,7 @@ async function loadThresholds() {
     $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
     $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
     $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
+    $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
     // API 业务监控阈值
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -160,6 +162,7 @@ async function saveThresholds() {
         check_http_resp_warn: num("checkHTTPRespWarn"), check_http_resp_crit: num("checkHTTPRespCrit"),
         check_http_status_warn: Math.round(num("checkHTTPStatusWarn")), check_http_status_crit: Math.round(num("checkHTTPStatusCrit")),
         check_proc_fail_warn: Math.round(num("checkProcFailWarn")), check_proc_fail_crit: Math.round(num("checkProcFailCrit")),
+        check_udp_timeout_warn: num("checkUDPTimeoutWarn"), check_udp_timeout_crit: num("checkUDPTimeoutCrit"),
         // API 业务监控
         api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
         api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
@@ -618,6 +621,9 @@ function updateCkTargetLabel() {
   } else if (t === "ping") {
     $("ckTargetLabel").textContent = I18N.t("form.host_addr");
     $("ckTarget").placeholder = I18N.t("form.hint_url");
+  } else if (t === "udp") {
+    $("ckTargetLabel").textContent = I18N.t("form.host_port");
+    $("ckTarget").placeholder = "127.0.0.1:53";
   } else {
     $("ckTargetLabel").textContent = I18N.t("form.host_port");
     $("ckTarget").placeholder = "127.0.0.1:3306";

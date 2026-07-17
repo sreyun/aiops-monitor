@@ -268,6 +268,8 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 		ok, msg, pingRTT, lossPct = cr.probePing(c.Target)
 	case "process":
 		ok, msg = cr.probeProcess(c.Target)
+	case "udp":
+		ok, msg = cr.probeUDP(c.Target)
 	default:
 		ok, msg = false, Tz("check.unknown_type", c.Type)
 	}
@@ -568,6 +570,40 @@ func (cr *checkRunner) probeTCP(target string) (bool, string) {
 	return true, Tz("check.connect_ok")
 }
 
+// probeUDP sends a small probe packet to target (host:port) and waits for any
+// response. UDP is connectionless so the result is best-effort:
+//   - Immediate ICMP "port unreachable" → port closed / not reachable → fail
+//   - Any UDP response received → service alive → ok
+//   - Read timeout (no response within 3s) → assumed ok (port may be open but
+//     service silent, e.g. DNS without a valid query); treated as "no reply"
+func (cr *checkRunner) probeUDP(target string) (bool, string) {
+	conn, err := net.DialTimeout("udp", target, 5*time.Second)
+	if err != nil {
+		return false, Tz("check.connect_failed", err.Error())
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	// Send a minimal probe payload (single byte)
+	_, err = conn.Write([]byte{0x00})
+	if err != nil {
+		return false, Tz("check.connect_failed", err.Error())
+	}
+	buf := make([]byte, 1024)
+	_, err = conn.Read(buf)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			// No response within timeout — port may be open but service silent
+			return true, Tz("check.udp_no_reply")
+		}
+		// Check for ICMP "port unreachable" wrapped in net.OpError
+		if opErr, ok := err.(*net.OpError); ok {
+			return false, Tz("check.connect_failed", opErr.Err.Error())
+		}
+		return false, Tz("check.connect_failed", err.Error())
+	}
+	return true, Tz("check.connect_ok")
+}
+
 // probePing runs the system `ping` (zero-dependency, no raw-socket privilege
 // needed) against target and returns (ok, message, avgRTTms, lossPct). ICMP is
 // unreachable/blocked → 100% loss → not ok. Reachable (any reply) → ok, with the
@@ -753,6 +789,18 @@ func (cr *checkRunner) DownAlerts() []Alert {
 					out = append(out, Alert{
 						Level: lv, Type: "check", Scope: c.ID + "/tcp_timeout", Hostname: c.Name,
 						Message: Tz("alert.check_tcp_timeout", st.LatencyMs),
+						Value: st.LatencyMs, Timestamp: now,
+					})
+				}
+			}
+		case "udp":
+			// UDP 探测超时
+			if st.LatencyMs > 0 && th.CheckUDPTimeoutWarn > 0 {
+				lv := classify(st.LatencyMs, th.CheckUDPTimeoutWarn, th.CheckUDPTimeoutCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/udp_timeout", Hostname: c.Name,
+						Message: Tz("alert.check_udp_timeout", st.LatencyMs),
 						Value: st.LatencyMs, Timestamp: now,
 					})
 				}

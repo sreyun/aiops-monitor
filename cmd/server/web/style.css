@@ -1164,9 +1164,10 @@ svg.sparkline{width:100%; height:46px; display:block}
   box-shadow:inset 0 0 0 1px var(--accent-soft), inset 0 0 20px rgba(76,141,255,.04);
 }
 .term-row{white-space:pre; min-height:1em; user-select:text; -webkit-user-select:text}
-.term-cursor{background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.5em; display:inline-block; text-align:center}
+.term-lv{position:relative; contain:layout paint style; will-change:contents}
+.term-cursor{position:absolute; display:flex; align-items:center; justify-content:center; background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.6em; pointer-events:none; z-index:1}
 /* focus-within 规则已移至 .term-input 定义之后统一处理 */
-@keyframes termCursorBlink{0%,49%{opacity:1}50%,100%{opacity:.25}}
+@keyframes termCursorBlink{0%,59%{opacity:1}60%,100%{opacity:.35}}
 /* 隐藏 textarea：移动端虚拟键盘捕获器（不可见但可聚焦） */
 .term-input{
   position:absolute; top:0; left:0; width:1px; height:1px;
@@ -1179,7 +1180,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 }
 /* JS fallback：当 :focus-within 不可靠时，通过 JS 添加 .term-focused 类 */
 .term-screen.term-focused .term-cursor,
-.term-screen:focus-within .term-cursor{animation:termCursorBlink 1.2s steps(2,start) infinite}
+.term-screen:focus-within .term-cursor{animation:termCursorBlink 1.5s ease-in-out infinite}
 .term-screen:not(.term-focused):not(:focus-within) .term-cursor{background:transparent; color:inherit; box-shadow:inset 0 0 0 1px var(--term-text); animation:none}
 .term-hint{font-size:11px; color:var(--muted2); padding:9px 16px; border-top:1px solid var(--line);
   background:var(--panel); border-radius:0 0 var(--r-lg) var(--r-lg); letter-spacing:.01em}

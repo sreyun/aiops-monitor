@@ -59,7 +59,7 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 	slog.Info("端口转发通道已就绪，等待服务端呼叫…", "server", t.server)
 	backoff := newBackoffTimer(1*time.Second, 60*time.Second)
 	for {
-		sid, targetPort, mode, ok := a.forwardWait(t.server)
+		sid, targetPort, mode, remoteTarget, ok := a.forwardWait(t.server)
 		if !ok {
 			d := backoff.next()
 			slog.Debug("转发通道连接失败，指数退避等待", "delay", d, "retry", backoff.retry)
@@ -70,44 +70,50 @@ func (a *Agent) runForwardChannelFor(t *serverTarget) {
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}
-		go a.runForwardSession(t.server, sid, targetPort, mode)
+		go a.runForwardSession(t.server, sid, targetPort, mode, remoteTarget)
 	}
 }
 
 // forwardWait long-polls the server for a pending forward session.
-func (a *Agent) forwardWait(server string) (sessionID string, targetPort int, mode string, ok bool) {
+func (a *Agent) forwardWait(server string) (sessionID string, targetPort int, mode string, remoteTarget string, ok bool) {
 	q := url.Values{"host": {a.identity.HostID}}
 	resp, err := agentGet(forwardWaitHTTP, server+"/api/v1/agent/forward/wait?"+q.Encode(), a.identity.Fingerprint)
 	if err != nil {
-		return "", 0, "", false
+		return "", 0, "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, "", false
+		return "", 0, "", "", false
 	}
 	var out struct {
-		Session    string `json:"session"`
-		TargetPort int    `json:"target_port"`
-		Mode       string `json:"mode"`
+		Session      string `json:"session"`
+		TargetPort   int    `json:"target_port"`
+		Mode         string `json:"mode"`
+		RemoteTarget string `json:"remote_target"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out.Session, out.TargetPort, out.Mode, true
+	return out.Session, out.TargetPort, out.Mode, out.RemoteTarget, true
 }
 
 // runForwardSession dials localhost:targetPort and relays data between the TCP
 // connection and the server's rx/tx streams. A panic in this goroutine must
 // never crash the whole agent.
-func (a *Agent) runForwardSession(server, sid string, targetPort int, mode string) {
+func (a *Agent) runForwardSession(server, sid string, targetPort int, mode, remoteTarget string) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Warn("转发会话异常已恢复（不影响 Agent 运行）", "session", sid, "panic", r)
 		}
 	}()
 	if mode == "udp" { // UDP：走数据报中继（两个方向都按帧保留数据报边界）
-		a.runForwardSessionUDP(server, sid, targetPort)
+		a.runForwardSessionUDP(server, sid, targetPort, remoteTarget)
 		return
 	}
+	// 跳板模式：如果 remoteTarget 非空，拨号远程地址；否则走本机 localhost
 	target := "localhost:" + strconv.Itoa(targetPort)
+	if remoteTarget != "" {
+		target = remoteTarget
+		slog.Info("跳板转发模式", "session", sid, "remote_target", remoteTarget)
+	}
 
 	// P1: 添加连接超时控制（5秒）
 	dialer := net.Dialer{Timeout: 5 * time.Second}
@@ -214,8 +220,12 @@ func readForwardFrames(r io.Reader, conn net.Conn) {
 // UDP service (localhost:targetPort). Both directions are framed
 // ([type:1][len:2 BE][payload]) so datagram boundaries survive the byte-stream
 // tunnel: rx 'd' 帧 → 一个 UDP 数据报写往目标；目标回程数据报 → 封一帧上行 tx。
-func (a *Agent) runForwardSessionUDP(server, sid string, targetPort int) {
+func (a *Agent) runForwardSessionUDP(server, sid string, targetPort int, remoteTarget string) {
 	target := "localhost:" + strconv.Itoa(targetPort)
+	if remoteTarget != "" {
+		target = remoteTarget
+		slog.Info("UDP 跳板转发模式", "session", sid, "remote_target", remoteTarget)
+	}
 	conn, err := net.Dial("udp", target) // 连接态 UDP：Write=一个数据报，Read=一个数据报
 	if err != nil {
 		slog.Warn("UDP 转发目标连接失败", "session", sid, "target", target, "err", err)

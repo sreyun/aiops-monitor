@@ -186,12 +186,13 @@ function fwdActionButtons(item) {
 function collectForwardItems() {
   const items = [];
   (LAST_FORWARDS || []).forEach(f => {
+    const jumpTag = f.remote_target ? ` · <span class="badge warn" title="跳板目标">⇢ ${esc(f.remote_target)}</span>` : "";
     items.push({
       type: "tcp", id: f.id,
       enabled: f.enabled !== false,
       badge: f.protocol === "udp" ? "UDP" : "TCP", badgeClass: "op",
       title: `${esc(f.hostname)} → :${f.target_port}`,
-      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code> · ${f.sessions} ${I18N.t("ui.active_sessions")} · ${f.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
+      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code>${jumpTag} · ${f.sessions} ${I18N.t("ui.active_sessions")} · ${f.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
       listenAddr: f.listen_addr,
       groupID: f.group_id || "",           // 端口范围批量组（同组共享）
       targetPort: f.target_port,
@@ -365,8 +366,10 @@ async function createTcpForward(hostID, targetPort) {
   const localPort = parseInt($("fwdLocalPort")?.value || "0");
   const protocol = $("fwdProtocol")?.value || "tcp"; // tcp | udp
   const endPort = parseInt($("fwdTargetPortEnd")?.value || "0"); // > targetPort = 端口范围批量转发
+  const remoteTarget = ($("fwdRemoteTarget")?.value || "").trim();
   const body = { host_id: hostID, target_port: targetPort, local_port: localPort, protocol };
   if (endPort > targetPort) body.target_port_end = endPort;
+  if (remoteTarget) body.remote_target = remoteTarget;
   await withLoading("fwdSubmitBtn", async () => {
     try {
       const res = await fetch("/api/v1/forward", {
@@ -754,6 +757,8 @@ safeAddEventListener("addForwardBtn", "click", () => {
   if (httpPath) httpPath.value = "";
   if (forwardMask) forwardMask.classList.add("show");
   if (backdrop) backdrop.style.display = "";
+  // 清空远程目标输入
+  const remoteTarget = $("fwdRemoteTarget"); if (remoteTarget) remoteTarget.value = "";
 });
 safeAddEventListener("fwdSubmitBtn", "click", submitForward);
 // 「保存并打开」：合并了原「保存配置」+「打开链接」（保存配置按钮已移除）

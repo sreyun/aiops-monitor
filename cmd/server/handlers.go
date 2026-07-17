@@ -77,16 +77,20 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	s.memoryCh = make(chan memoryJob, 100)
 	s.memorySem = make(chan struct{}, 3)
 	s.startMemoryWorkers()
-	// 记忆衰减定时任务：每天执行一次，对超过 90 天且未被检索命中的记忆降低优先级
+	// 记忆生命周期管理定时任务：每天执行衰减 + 清理 + 容量裁剪
 	if s.pg != nil {
 		go func() {
 			// 启动后立即执行一次
 			s.pg.decayOldMemories()
+			s.pg.cleanupExpiredMemories()
+			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for range ticker.C {
 				s.pg.decayOldMemories()
+				s.pg.cleanupExpiredMemories()
+				s.pg.capMemoriesByKind(2000)
 			}
 		}()
 	}
@@ -126,7 +130,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/config", s.handleSetConfig)
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
 	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
-	mux.HandleFunc("POST /api/v1/login/sms-code", s.handleLoginSMSCode)
+	// NOTE: POST /api/v1/login/sms-code removed — SMS login is not yet implemented.
+	// Re-register when the SMS sending backend is wired.
 	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)

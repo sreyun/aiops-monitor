@@ -81,10 +81,19 @@ func shortID(id string) string {
 	return id
 }
 
-// isHTTPS reports whether the request reached us over TLS, honoring the common
-// reverse-proxy header. Used to set the Secure flag on the session cookie.
-func isHTTPS(r *http.Request) bool {
-	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+// isHTTPS reports whether the request reached us over TLS, optionally honoring
+// the X-Forwarded-Proto reverse-proxy header when trust_proxy is enabled.
+// When trust_proxy is off (the default), X-Forwarded-Proto is ignored because
+// a directly-exposed server would let an attacker forge it. Used to set the
+// Secure flag on the session cookie.
+func (s *Server) isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if s.cfg.TrustProxy() && r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
 }
 
 // serverURL reconstructs the externally-reachable base URL from the request,

@@ -48,12 +48,12 @@
 
 services:
   aiops-server:
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest
-    # 如需本地构建（开发/自定义），替换上面 image 为下面的 build 配置：
-    # build:
-    #   context: .
-    #   dockerfile: docker/Dockerfile
-    #   target: server
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest
+    # 如需拉取预构建镜像启动（每次打 tag 自动构建推送至华为云 SWR）
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: server
     container_name: aiops-server
     ports:
       - "8529:8529"
@@ -121,21 +121,18 @@ services:
     restart: unless-stopped
 
   # 取消注释即可启用本机 Agent（采集本容器/宿主指标）
-  # aiops-agent:
-  #   image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-agent:latest
-  #   # 如需本地构建，替换上面 image 为下面的 build 配置：
-  #   # build:
-  #   #   context: .
-  #   #   dockerfile: docker/Dockerfile
-  #   #   target: agent
-  #   container_name: aiops-agent
-  #   depends_on:
-  #     - aiops-server
-  #   environment:
-  #     - TZ=Asia/Shanghai
-  #     # 采集日志文件（逗号分隔）：
-  #     # command: ["--server", "http://aiops-server:8529", "--log-paths", "/var/log/syslog"]
-  #   restart: unless-stopped
+  aiops-agent:
+    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-agent:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: agent
+    container_name: aiops-agent
+    depends_on:
+      - aiops-server
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
 
 # 具名卷：PostgreSQL 数据（Windows/Mac 上比绑定挂载可靠，避免 WAL 损坏）。
 # 备份用 `docker exec aiops-pg pg_dump ...`；删除数据用 `docker volume rm aiops-monitor_aiops-pgdata`。

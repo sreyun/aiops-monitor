@@ -1587,7 +1587,7 @@ function makeVT(screen) {
     grid: null, SB_MAX: 2000,
     altActive: false, savedGrid: null, savedPos: null,
     st: 0, parm: "", coll: "",             // 解析状态 0 ground 1 esc 2 csi 3 osc 4 charset 5 osc-st
-    cursorVis: true, appCursor: false, raf: 0,
+    cursorVis: true, appCursor: false, raf: 0, _rowCache: null,
   };
   const clampX = x => Math.max(0, Math.min(vt.cols - 1, x));
   const clampY = y => Math.max(0, Math.min(vt.rows - 1, y));
@@ -1598,7 +1598,9 @@ function makeVT(screen) {
   screen.innerHTML = "";
   const sb = document.createElement("div"); sb.className = "term-sb";
   const lv = document.createElement("div"); lv.className = "term-lv";
-  screen.appendChild(sb); screen.appendChild(lv);
+  const cursorOverlay = document.createElement("span"); cursorOverlay.className = "term-cursor"; cursorOverlay.style.display = "none";
+  screen.appendChild(sb); screen.appendChild(lv); lv.appendChild(cursorOverlay);
+  vt._rowCache = [];
   alloc();
 
   function clearCell(cell) { cell.c = " "; cell.f = null; cell.b = vt.bg; cell.a = 0; }
@@ -1635,9 +1637,9 @@ function makeVT(screen) {
   }
   function saveCursor() { vt.sCx = vt.cx; vt.sCy = vt.cy; vt.sFg = vt.fg; vt.sBg = vt.bg; vt.sFlags = vt.flags; }
   function restoreCursor() { vt.cx = clampX(vt.sCx); vt.cy = clampY(vt.sCy); vt.fg = vt.sFg; vt.bg = vt.sBg; vt.flags = vt.sFlags; }
-  function enterAlt() { if (vt.altActive) return; vt.altActive = true; vt.savedGrid = vt.grid; vt.savedPos = { x: vt.cx, y: vt.cy }; alloc(); vt.cx = 0; vt.cy = 0; sb.style.display = "none"; }
-  function exitAlt() { if (!vt.altActive) return; vt.altActive = false; vt.grid = vt.savedGrid; if (vt.savedPos) { vt.cx = clampX(vt.savedPos.x); vt.cy = clampY(vt.savedPos.y); } vt.top = 0; vt.bot = vt.rows - 1; sb.style.display = ""; }
-  function fullReset() { vt.fg = vt.bg = null; vt.flags = 0; vt.top = 0; vt.bot = vt.rows - 1; if (vt.altActive) exitAlt(); alloc(); vt.cx = vt.cy = 0; vt.wrapNext = false; }
+  function enterAlt() { if (vt.altActive) return; vt.altActive = true; vt.savedGrid = vt.grid; vt.savedPos = { x: vt.cx, y: vt.cy }; alloc(); vt.cx = 0; vt.cy = 0; vt._rowCache = []; sb.style.display = "none"; }
+  function exitAlt() { if (!vt.altActive) return; vt.altActive = false; vt.grid = vt.savedGrid; if (vt.savedPos) { vt.cx = clampX(vt.savedPos.x); vt.cy = clampY(vt.savedPos.y); } vt.top = 0; vt.bot = vt.rows - 1; vt._rowCache = []; sb.style.display = ""; }
+  function fullReset() { vt.fg = vt.bg = null; vt.flags = 0; vt.top = 0; vt.bot = vt.rows - 1; if (vt.altActive) exitAlt(); alloc(); vt.cx = vt.cy = 0; vt.wrapNext = false; vt._rowCache = []; }
 
   function sgrExt(ps, i, isFg) {
     const mode = ps[i + 1]; let color = null, used = i;
@@ -1761,12 +1763,57 @@ function makeVT(screen) {
     // screen.contains 涵盖两种焦点来源：<pre> 自身聚焦（桌面直接 Tab）
     // 和隐藏 <textarea> 子元素聚焦（移动端虚拟键盘 / 桌面端统一输入入口）
     const focused = screen.contains(document.activeElement);
-    let html = "";
+    const showCursor = vt.cursorVis && focused;
+    const firstRowEl = lv.querySelector(".term-row");
+    const lineH = firstRowEl ? firstRowEl.offsetHeight : 0;
+    const charW = firstRowEl ? firstRowEl.getBoundingClientRect().width / vt.cols
+      : screen.getBoundingClientRect().width / vt.cols;
+
+    // 行级缓存：仅更新内容变化的行 DOM，避免全量 innerHTML 替换
+    // 先把 cursorOverlay 移到末尾，保证 lv.children[0..rows-1] 都是行元素
+    if (cursorOverlay.parentNode === lv) lv.appendChild(cursorOverlay);
+    const cache = vt._rowCache;
     for (let y = 0; y < vt.rows; y++) {
-      const cx = (vt.cursorVis && focused && y === vt.cy) ? vt.cx : -1;
-      html += `<div class="term-row">${renderRow(vt.grid[y], cx)}</div>`;
+      const rowHTML = renderRow(vt.grid[y], -1);
+      if (cache[y] === rowHTML) continue;
+      cache[y] = rowHTML;
+      let el = lv.children[y];
+      if (!el || el === cursorOverlay) {
+        el = document.createElement("div");
+        el.className = "term-row";
+        lv.insertBefore(el, cursorOverlay);
+      }
+      el.innerHTML = rowHTML;
     }
-    lv.innerHTML = html;
+    // 移除多余行（resize 缩小后）
+    while (lv.children.length > vt.rows + 1) {
+      const last = lv.lastChild;
+      if (last === cursorOverlay) { if (lv.children.length > 1) lv.removeChild(lv.children[lv.children.length - 2]); else break; }
+      else lv.removeChild(last);
+    }
+    cache.length = vt.rows;
+
+    // 光标叠层：独立于行的绝对定位元素，不触发行重建
+    if (showCursor && lineH > 0) {
+      cursorOverlay.style.display = "";
+      cursorOverlay.style.top = vt.cy * lineH + "px";
+      cursorOverlay.style.left = vt.cx * charW + "px";
+      cursorOverlay.style.width = charW + "px";
+      cursorOverlay.style.height = lineH + "px";
+      const curCell = vt.grid[vt.cy] && vt.grid[vt.cy][vt.cx];
+      cursorOverlay.textContent = (curCell && curCell.c !== " ") ? curCell.c : " ";
+    } else if (showCursor) {
+      // lineH 尚未就绪（首帧），降级为 inline 光标
+      cursorOverlay.style.display = "none";
+      const curRow = lv.children[vt.cy];
+      if (curRow && curRow !== cursorOverlay) {
+        curRow.innerHTML = renderRow(vt.grid[vt.cy], vt.cx);
+        cache[vt.cy] = null;
+      }
+    } else {
+      cursorOverlay.style.display = "none";
+    }
+
     screen.scrollTop = screen.scrollHeight;
   }
   function scheduleRender() {
@@ -1788,7 +1835,7 @@ function makeVT(screen) {
       if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x];
       vt.grid.push(r);
     }
-    vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false;
+    vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false; vt._rowCache = [];
     scheduleRender();
   };
 

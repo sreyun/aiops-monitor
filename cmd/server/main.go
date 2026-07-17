@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"flag"
 	"log"
 	"log/slog"
@@ -70,9 +71,26 @@ func hasAgentBinary(dir string) bool {
 
 // corsMiddleware allows the dashboard (or external tools) to call the API
 // cross-origin and short-circuits preflight OPTIONS requests.
-func corsMiddleware(next http.Handler) http.Handler {
+// When CORSOrigins is configured, only matching Origin headers are echoed;
+// otherwise the legacy wildcard "*" is used for backward compatibility.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origins := s.cfg.CORSOrigins()
+		if len(origins) > 0 {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				for _, o := range origins {
+					if strings.TrimSpace(o) == origin {
+						w.Header().Set("Access-Control-Allow-Origin", origin)
+						w.Header().Set("Vary", "Origin")
+						break
+					}
+				}
+			}
+			// Origin absent or not in whitelist → no CORS headers → browser blocks.
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
@@ -264,15 +282,6 @@ func main() {
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
 	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）
 	server.bindPG(pg)                                      // load + periodically persist incidents / work orders / sessions
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
-		// Final flush of all relational state to PostgreSQL, then close cleanly.
-		server.pgFlush(pg, true)
-		pg.close()
-		os.Exit(0)
-	}()
 
 	go notifier.Run(10 * time.Second)           // periodic alert evaluation + dedup push
 	go server.checks.Run(5 * time.Second)       // custom HTTP/TCP synthetic checks
@@ -282,7 +291,7 @@ func main() {
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
 	go server.vm.run()                          // optional VictoriaMetrics remote-write pump
 
-	handler := securityHeadersMiddleware(corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
+	handler := securityHeadersMiddleware(server.corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,
@@ -292,6 +301,26 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	// Graceful shutdown: on SIGINT/SIGTERM, stop accepting new connections,
+	// drain active HTTP requests (up to 30s), flush PostgreSQL state, then exit.
+	// This replaces the old os.Exit(0) approach which bypassed defer cleanup
+	// and forcibly dropped active connections.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		slog.Info("收到停止信号，正在优雅关闭…")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Warn("HTTP 服务关闭异常", "err", err)
+		}
+		// Final flush of all relational state to PostgreSQL, then close cleanly.
+		server.pgFlush(pg, true)
+		pg.close()
+		os.Exit(0)
+	}()
 
 	slog.Info(Tz("server.started"))
 	slog.Info(Tz("server.dashboard_url"), "url", "http://localhost"+*addr)
@@ -313,13 +342,13 @@ func main() {
 	keyFile := strings.TrimSpace(os.Getenv("AIOPS_TLS_KEY"))
 	if certFile != "" && keyFile != "" {
 		slog.Info("已启用 TLS/HTTPS（加密传输）", "cert", certFile)
-		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil {
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 		return
 	}
 	slog.Warn("未配置 TLS（AIOPS_TLS_CERT/AIOPS_TLS_KEY）：以明文 HTTP 提供服务。生产环境请启用 TLS，或置于 HTTPS 终止代理之后，否则登录凭据/会话/终端数据将明文传输")
-	if err := srv.ListenAndServe(); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

@@ -109,6 +109,8 @@ type ThresholdConfig struct {
 	CheckHTTPStatusCrit  int     `json:"check_http_status_crit"`  // HTTP 非 2xx 次数 严重
 	CheckProcFailWarn    int     `json:"check_proc_fail_warn"`    // 进程存活失败次数 警告
 	CheckProcFailCrit    int     `json:"check_proc_fail_crit"`    // 进程存活失败次数 严重
+	CheckUDPTimeoutWarn  float64 `json:"check_udp_timeout_warn"`  // UDP 探测超时 警告 ms
+	CheckUDPTimeoutCrit  float64 `json:"check_udp_timeout_crit"`  // UDP 探测超时 严重 ms
 	// ---- API 业务监控阈值 ----
 	APIAvailWarn      float64 `json:"api_avail_warn"`      // 接口可用率 警告 %（低于此值告警）
 	APIAvailCrit      float64 `json:"api_avail_crit"`      // 接口可用率 严重 %
@@ -298,6 +300,7 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		CheckHTTPRespWarn: t.CheckHTTPRespWarn, CheckHTTPRespCrit: t.CheckHTTPRespCrit,
 		CheckHTTPStatusWarn: t.CheckHTTPStatusWarn, CheckHTTPStatusCrit: t.CheckHTTPStatusCrit,
 		CheckProcFailWarn: t.CheckProcFailWarn, CheckProcFailCrit: t.CheckProcFailCrit,
+		CheckUDPTimeoutWarn: t.CheckUDPTimeoutWarn, CheckUDPTimeoutCrit: t.CheckUDPTimeoutCrit,
 		// API 业务监控
 		APIAvailWarn: t.APIAvailWarn, APIAvailCrit: t.APIAvailCrit,
 		APIAvgRespWarn: t.APIAvgRespWarn, APIAvgRespCrit: t.APIAvgRespCrit,
@@ -391,17 +394,18 @@ type HTTPProxyConfig struct {
 // PersistedForwardRule is a serializable TCP forwarding rule stored in ServerConfig.
 // The listener (net.Listener) is recreated on startup from the persisted fields.
 type PersistedForwardRule struct {
-	ID         string `json:"id"`
-	HostID     string `json:"host_id"`
-	Hostname   string `json:"hostname"`
-	TargetPort int    `json:"target_port"`
-	LocalPort  int    `json:"local_port"`
-	ListenAddr string `json:"listen_addr"`
-	Operator   string `json:"operator"`
-	CreatedAt  int64  `json:"created_at"`
-	Enabled    bool   `json:"enabled"`
-	Protocol   string `json:"protocol,omitempty"` // "tcp"(默认/空) | "udp"
-	GroupID    string `json:"group_id,omitempty"` // 端口范围批量组 ID（同组共享）
+	ID           string `json:"id"`
+	HostID       string `json:"host_id"`
+	Hostname     string `json:"hostname"`
+	TargetPort   int    `json:"target_port"`
+	LocalPort    int    `json:"local_port"`
+	ListenAddr   string `json:"listen_addr"`
+	Operator     string `json:"operator"`
+	CreatedAt    int64  `json:"created_at"`
+	Enabled      bool   `json:"enabled"`
+	Protocol     string `json:"protocol,omitempty"`      // "tcp"(默认/空) | "udp"
+	GroupID      string `json:"group_id,omitempty"`      // 端口范围批量组 ID（同组共享）
+	RemoteTarget string `json:"remote_target,omitempty"` // 跳板目标，如 "192.168.30.220:3306"（为空时走 Agent 本机 localhost）
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.
@@ -477,6 +481,12 @@ type ServerConfig struct {
 	// without MFA enabled will be forced to enroll on their next login before
 	// they can access the dashboard. Managed by admin via /api/v1/mfa/global.
 	MFARequired bool `json:"mfa_required"`
+	// CORSOrigins restricts the Access-Control-Allow-Origin header. When empty
+	// (default), the server responds with "*" for backward compatibility. When
+	// set to one or more origins (e.g. ["https://ops.example.com"]), only
+	// matching Origin request headers are echoed; non-matching cross-origin
+	// requests receive no CORS headers and are therefore blocked by the browser.
+	CORSOrigins []string `json:"cors_origins,omitempty"`
 	// Users is the multi-account list (RBAC). The legacy single Account above is
 	// migrated into this list on load and then cleared.
 	Users []AccountConfig `json:"users"`
@@ -763,6 +773,14 @@ func (cs *ConfigStore) TrustProxy() bool {
 	return cs.cfg.TrustProxy
 }
 
+// CORSOrigins returns the configured CORS origin whitelist. An empty slice
+// means the legacy wildcard "*" behaviour.
+func (cs *ConfigStore) CORSOrigins() []string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.CORSOrigins
+}
+
 // MFARequired reports whether the global MFA enforcement policy is active.
 func (cs *ConfigStore) MFARequired() bool {
 	cs.mu.RLock()
@@ -984,6 +1002,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
+	c.CORSOrigins = cs.cfg.CORSOrigins // CORS 白名单：前端表单不含此字段，必须保留现有值
 	c.Users = cs.cfg.Users // 保护多用户列表：前端表单不含 Users，必须保留现有值
 	cs.cfg = c
 	cs.mu.Unlock()

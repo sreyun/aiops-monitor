@@ -173,7 +173,7 @@ func (s *Server) handleForwardGroupCopy(w http.ResponseWriter, r *http.Request) 
 		if orig == nil {
 			continue
 		}
-		newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator)
+		newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget)
 		if err != nil {
 			continue
 		}
@@ -272,7 +272,7 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 		if nt < 1 || nt > 65535 {
 			continue
 		}
-		rule, err := s.forward.createRule(host, hostname, nt, nt, listenHost, o.protocol, gid, operator)
+		rule, err := s.forward.createRule(host, hostname, nt, nt, listenHost, o.protocol, gid, operator, "")
 		if err != nil {
 			continue
 		}
@@ -383,7 +383,7 @@ func (s *Server) handleProxyToken(w http.ResponseWriter, r *http.Request) {
 	// interaction with gzip-wrapped ResponseWriter.
 	// HttpOnly so page JS can't read the proxy token; Secure when served over TLS.
 	secure := ""
-	if isHTTPS(r) {
+	if s.isHTTPS(r) {
 		secure = "; Secure"
 	}
 	ck := fmt.Sprintf("proxy_token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s", tok, int(proxyTokenTTL.Seconds()), secure)
@@ -480,9 +480,10 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HostID     string `json:"host_id"`
-		TargetPort int    `json:"target_port"`
-		LocalPort  int    `json:"local_port"`
+		HostID       string `json:"host_id"`
+		TargetPort   int    `json:"target_port"`
+		LocalPort    int    `json:"local_port"`
+		RemoteTarget string `json:"remote_target"` // 跳板目标
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -503,7 +504,7 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort)
+	rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort, req.RemoteTarget)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -577,7 +578,7 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 	// v5.4.1: use createRule (which creates a real listener) instead of
 	// copyRule (which leaves listener=nil, causing a panic in serveForwardListener).
 	listenHost := s.cfg.ForwardListenAddr()
-	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator)
+	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

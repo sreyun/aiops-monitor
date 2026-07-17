@@ -249,6 +249,8 @@
                 <div class="th-input-row"><input type="text" id="checkHTTPStatusWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="checkHTTPStatusCrit" class="mono" placeholder="5"><span class="unit">次</span></div></div>
               <div class="threshold-field"><label data-i18n="settings.check_proc_fail_thresh">进程存活失败次数 警告 / 严重（次）</label>
                 <div class="th-input-row"><input type="text" id="checkProcFailWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="checkProcFailCrit" class="mono" placeholder="3"><span class="unit">次</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_udp_timeout_thresh">UDP 探测超时 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="checkUDPTimeoutWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="checkUDPTimeoutCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
             </div>
           </div>
           <!-- API 业务监控 -->
@@ -462,6 +464,7 @@
                 <option value="http" data-i18n="check.type_http">HTTP</option>
                 <option value="tcp" data-i18n="check.type_tcp">TCP</option>
                 <option value="ping" data-i18n="check.type_ping">Ping</option>
+                <option value="udp" data-i18n="check.type_udp">UDP</option>
                 <option value="process" data-i18n="check.type_process">进程</option>
               </select>
             </div>
@@ -1257,6 +1260,7 @@
           <option value="http" data-i18n="check.type_http">HTTP 网站探测</option>
           <option value="tcp" data-i18n="check.type_tcp">TCP 端口探测</option>
           <option value="ping" data-i18n="check.type_ping">Ping 主机存活</option>
+          <option value="udp" data-i18n="check.type_udp">UDP 端口探测</option>
           <option value="process" data-i18n="check.type_process">进程存活监控</option>
         </select></div>
       </div>
@@ -1617,6 +1621,10 @@
         <div class="field">
           <label>协议</label>
           <div class="select-wrap"><select id="fwdProtocol" style="width:100%"><option value="tcp">TCP（MySQL / Redis / SSH …）</option><option value="udp">UDP（DNS / SNMP / syslog / 游戏 …）</option></select></div>
+        </div>
+        <div class="field">
+          <label data-i18n="form.remote_target_optional">远程目标（跳板模式，可选）</label>
+          <input type="text" id="fwdRemoteTarget" data-i18n-placeholder="form.remote_target_hint" placeholder="留空=Agent本机；填 IP:Port 如 192.168.30.220:3306 则经 Agent 跳板转发" style="width:100%">
         </div>
         <div class="field">
           <label>结束端口（范围批量转发，可选）</label>

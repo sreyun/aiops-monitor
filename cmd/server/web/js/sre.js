@@ -504,9 +504,12 @@ async function openIncidentDetail(id){
       <div class="subhead">时间线</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
       <div class="subhead" style="margin-top:16px">🤖 AI 诊断对话</div>
       <div id="incDiagnosisChat" class="ai-diagnosis-chat"></div>
+      <div id="incDiagAttach" style="display:none;flex-wrap:wrap;gap:4px;padding:4px 0"></div>
       <div class="ai-diagnosis-input">
         <textarea id="incDiagInput" rows="2" placeholder="追问 AI 细节、反驳结论、要求进一步排查…"></textarea>
+        <button class="btn sm" id="incDiagAttachBtn" title="上传图片或文件" style="padding:4px 8px">📎</button>
         <button class="btn primary" id="incDiagSendBtn">发送</button>
+        <input type="file" id="incDiagFile" multiple hidden>
       </div>
       <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> 包含终端操作上下文（分段摘要）</label>`;
     const acts=[];
@@ -519,9 +522,13 @@ async function openIncidentDetail(id){
     // Wire up diagnosis chat
     window._incDiagId = inc.id;
     window._incDiagHistory = [];
+    window._INC_DIAG_ATTACHMENTS = [];
     loadDiagnosisChatHistory(inc.id);
     $("incDiagSendBtn").onclick = () => sendDiagnosisChatMsg();
     $("incDiagInput").onkeydown = e => { if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendDiagnosisChatMsg(); } };
+    $("incDiagAttachBtn").onclick = () => { const f=$("incDiagFile"); if(f) f.click(); };
+    $("incDiagFile").onchange = onDiagChatFiles;
+    renderDiagAttachments();
     $("incidentDetailMask").classList.add("show");
   } catch(e){ toast("加载失败: "+e,"err"); }
 }
@@ -634,12 +641,17 @@ async function sendDiagnosisFeedback(idx,helpful){
 }
 async function sendDiagnosisChatMsg(){
   const el=$("incDiagInput"); if(!el) return;
-  const msg=el.value.trim(); if(!msg) return;
+  const msg=el.value.trim();
+  const atts=(window._INC_DIAG_ATTACHMENTS||[]).slice();
+  if(!msg && !atts.length) return;
   const chat=$("incDiagnosisChat");
-  // Show user message immediately
-  window._incDiagHistory.push({role:"user",content:msg});
+  // Show user message immediately (with attachment note)
+  const imgN=atts.filter(a=>a.kind==="image").length, fileN=atts.filter(a=>a.kind==="file").length;
+  const attNote=atts.length?` 📎 ${imgN?imgN+" 图 ":""}${fileN?fileN+" 文件":""}`:"";
+  window._incDiagHistory.push({role:"user",content:msg||"（附件）"+attNote});
   renderDiagnosisChat();
   el.value=""; el.disabled=true; $("incDiagSendBtn").disabled=true;
+  window._INC_DIAG_ATTACHMENTS=[]; renderDiagAttachments();
   // Add a placeholder for AI response with animated loading
   const aiMsg={role:"assistant",content:"",_streaming:true,_loading:true};
   window._incDiagHistory.push(aiMsg);
@@ -653,16 +665,18 @@ async function sendDiagnosisChatMsg(){
   },2000);
   try {
     const cleanHist=window._incDiagHistory.filter(m=>!m._streaming&&m.content!=="思考中…").map(m=>({role:m.role,content:m.content}));
+    const images=atts.filter(a=>a.kind==="image").map(a=>({mime:a.mime,data:a.data}));
+    const files=atts.filter(a=>a.kind==="file").map(a=>({name:a.name,text:a.text}));
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnose-chat`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,history:cleanHist,include_terminal:!!$("incTermCheck")?.checked,stream:true})
+      body:JSON.stringify({message:msg,history:cleanHist,include_terminal:!!$("incTermCheck")?.checked,stream:true,images,files})
     });
     if(!r.ok){ throw new Error("HTTP "+r.status); }
-    // SSE streaming: 流中显示纯文本+光标，流结束后渲染完整 Markdown
+    // SSE streaming
     let renderThrottle=null;
     const throttledRender=()=>{
       if(renderThrottle) return;
-      renderThrottle=setTimeout(()=>{ renderThrottle=null; renderDiagnosisChat(); },120);
+      renderThrottle=requestAnimationFrame(()=>{ renderThrottle=null; renderDiagnosisChat(); });
     };
     await readSSEStream(r,
       (delta,fullText)=>{
@@ -677,9 +691,9 @@ async function sendDiagnosisChatMsg(){
       },
       (fullText)=>{
         clearInterval(loadingTimer); aiMsg._loading=false;
-        aiMsg._streaming=false; // 流结束：下次 render 使用完整 Markdown
+        aiMsg._streaming=false;
         aiMsg.content=fullText||aiMsg.content||"（空回复）";
-        if(renderThrottle){ clearTimeout(renderThrottle); renderThrottle=null; }
+        if(renderThrottle){ cancelAnimationFrame(renderThrottle); renderThrottle=null; }
         renderDiagnosisChat();
       }
     );
@@ -690,6 +704,54 @@ async function sendDiagnosisChatMsg(){
     renderDiagnosisChat();
   }
   el.disabled=false; $("incDiagSendBtn").disabled=false; el.focus();
+}
+// Req1: 诊断对话附件渲染与文件处理（复用主对话的附件逻辑）
+function renderDiagAttachments(){
+  const box=$("incDiagAttach"); if(!box) return;
+  const atts=window._INC_DIAG_ATTACHMENTS||[];
+  if(!atts.length){ box.innerHTML=""; box.style.display="none"; return; }
+  box.style.display="flex";
+  box.innerHTML=atts.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-datt="${i}" title="移除">✕</button></span>`).join("");
+  box.querySelectorAll("[data-datt]").forEach(b=>b.onclick=()=>{ window._INC_DIAG_ATTACHMENTS.splice(parseInt(b.dataset.datt),1); renderDiagAttachments(); });
+}
+function onDiagChatFiles(ev){
+  const files=Array.from((ev.target&&ev.target.files)||[]);
+  if(!window._INC_DIAG_ATTACHMENTS) window._INC_DIAG_ATTACHMENTS=[];
+  for(const f of files){
+    if(f.type&&f.type.startsWith("image/")){
+      if(window._INC_DIAG_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast("最多 4 张图片","err"); continue; }
+      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`图片 ${f.name} 超过 4MB`,"err"); continue; }
+      const rd=new FileReader();
+      rd.onload=()=>{ const s=String(rd.result||""); const c=s.indexOf(","); window._INC_DIAG_ATTACHMENTS.push({kind:"image",name:f.name,mime:f.type||"image/png",data:c>=0?s.slice(c+1):s}); renderDiagAttachments(); };
+      rd.readAsDataURL(f);
+    } else if(_AI_PARSE_EXT.includes(_extOf(f.name))){
+      if(f.size>10*1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 10MB`,"err"); continue; }
+      parseDiagFileAttachment(f);
+    } else {
+      if(f.size>1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 1MB`,"err"); continue; }
+      const rd=new FileReader();
+      rd.onload=()=>{ window._INC_DIAG_ATTACHMENTS.push({kind:"file",name:f.name,text:String(rd.result||"")}); renderDiagAttachments(); };
+      rd.readAsText(f);
+    }
+  }
+  if(ev.target) ev.target.value="";
+}
+function parseDiagFileAttachment(f){
+  const rd=new FileReader();
+  rd.onload=async()=>{
+    const s=String(rd.result||""); const c=s.indexOf(","); const b64=c>=0?s.slice(c+1):s;
+    const ph={kind:"file",name:f.name,text:"（解析中…）"};
+    if(!window._INC_DIAG_ATTACHMENTS) window._INC_DIAG_ATTACHMENTS=[];
+    window._INC_DIAG_ATTACHMENTS.push(ph); renderDiagAttachments();
+    try{
+      const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:f.name,mime:f.type||"",data:b64})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||j.error){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败`,"err"); renderDiagAttachments(); return; }
+      ph.text=j.text||""; renderDiagAttachments();
+      if(typeof toast==="function") toast(`已解析 ${f.name}（${j.chars||0} 字）`,"ok");
+    }catch(e){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败`,"err"); renderDiagAttachments(); }
+  };
+  rd.readAsDataURL(f);
 }
 function openNewIncident(){
   $("niTitle").value=""; $("niSeverity").value="warning";
@@ -1649,23 +1711,19 @@ async function sendAIChat(){
         : (s.state==="ok" ? "✓" : "✗");
       return `<span class="ai-tool-chip ${s.state}">${ic}<span>${esc(s.name)}</span></span>`;
     }).join("")+'</div>' : "";
-    // 流式渲染节流：每 150ms 最多更新一次，流中显示纯文本+光标，避免 Markdown 解析抖动
-    let streamTimer=null, needsPaint=false;
+    // 流式渲染：使用 requestAnimationFrame 同步到显示刷新（≈16ms），消除 setTimeout 攒批延迟
+    let streamRAF=null;
     const paintStream=()=>{
       if(!pending) return;
       pending.innerHTML=toolTraceHTML()
-        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+'</span><span class="ai-stream-cursor">▍</span></div>';
+        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>";
     };
     const schedulePaint=()=>{
-      if(streamTimer){ needsPaint=true; return; }
-      paintStream();
-      streamTimer=setTimeout(()=>{
-        streamTimer=null;
-        if(needsPaint){ needsPaint=false; paintStream(); }
-      },150);
+      if(streamRAF) return;
+      streamRAF=requestAnimationFrame(()=>{ streamRAF=null; paintStream(); });
     };
     const paintFinal=()=>{
-      if(streamTimer){ clearTimeout(streamTimer); streamTimer=null; needsPaint=false; }
+      if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; }
       if(pending) pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"));
     };
     await readSSEStream(r,
@@ -1676,7 +1734,7 @@ async function sendAIChat(){
         schedulePaint();
         if(stick) aiChatToBottom();
       },
-      (err)=>{ if(streamTimer){ clearTimeout(streamTimer); streamTimer=null; } if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
+      (err)=>{ if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; } if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
       (fullText)=>{
         if(pending){
           answer=filterDisplayContent(fullText||answer||"");

@@ -757,8 +757,11 @@ func (s *Server) handleAgentTermTx(w http.ResponseWriter, r *http.Request) {
 
 	// Exec sessions (playbook): the agent sends raw command output (no framing),
 	// so read the entire body as-is and send it to toBrowser.
+	// Capped at 50 MiB (execOutputLimit) to prevent a runaway command (e.g.
+	// cat /dev/urandom) from exhausting server memory.
 	if sess.mode == "exec" {
-		data, err := io.ReadAll(r.Body)
+		const execOutputLimit = 50 << 20 // 50 MiB
+		data, err := io.ReadAll(io.LimitReader(r.Body, execOutputLimit))
 		if err == nil && len(data) > 0 {
 			b := make([]byte, len(data))
 			copy(b, data)

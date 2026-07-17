@@ -183,26 +183,28 @@ func (s *forwardSession) getCloseReason() string {
 
 // forwardRule is a persistent TCP forwarding rule with its own listener.
 type forwardRule struct {
-	id         string
-	hostID     string
-	hostname   string
-	targetPort int
-	localPort  int
-	listenAddr string // "127.0.0.1:port"
-	listener   net.Listener
-	packetConn net.PacketConn // UDP：非空表示 UDP 转发（与 listener 二选一）
-	protocol   string         // "tcp"(默认) | "udp"
-	groupID    string         // 端口范围批量创建时同组共享，供整组删除/停用
-	operator   string
-	createdAt  int64
-	enabled    bool // whether this rule is currently active
+	id           string
+	hostID       string
+	hostname     string
+	targetPort   int
+	localPort    int
+	listenAddr   string // "127.0.0.1:port"
+	listener     net.Listener
+	packetConn   net.PacketConn // UDP：非空表示 UDP 转发（与 listener 二选一）
+	protocol     string         // "tcp"(默认) | "udp"
+	groupID      string         // 端口范围批量创建时同组共享，供整组删除/停用
+	operator     string
+	createdAt    int64
+	enabled      bool   // whether this rule is currently active
+	remoteTarget string // 跳板目标，如 "192.168.30.220:3306"（为空时走 Agent 本机 localhost）
 }
 
 // forwardWaitInfo is what the agent receives from the long-poll.
 type forwardWaitInfo struct {
-	sessionID  string
-	targetPort int
-	mode       string
+	sessionID    string
+	targetPort   int
+	mode         string
+	remoteTarget string // 跳板目标地址（为空时 Agent 走 localhost）
 }
 
 // forwardInfo is the JSON view for the API.
@@ -216,11 +218,12 @@ type forwardInfo struct {
 	Status        string `json:"status"`
 	CreatedAt     int64  `json:"created_at"`
 	Operator      string `json:"operator"`
-	Sessions      int    `json:"sessions"`       // 当前活跃连接（会话）数
-	TotalSessions int64  `json:"total_sessions"` // 累计总连接（会话）数
+	Sessions      int    `json:"sessions"`        // 当前活跃连接（会话）数
+	TotalSessions int64  `json:"total_sessions"`  // 累计总连接（会话）数
 	Enabled       bool   `json:"enabled"`
-	Protocol      string `json:"protocol,omitempty"` // "tcp" | "udp"
-	GroupID       string `json:"group_id,omitempty"` // 端口范围批量组（同组共享），供整组操作
+	Protocol      string `json:"protocol,omitempty"`      // "tcp" | "udp"
+	GroupID       string `json:"group_id,omitempty"`       // 端口范围批量组（同组共享），供整组操作
+	RemoteTarget  string `json:"remote_target,omitempty"` // 跳板目标地址
 }
 
 // fwdCounter tracks per-rule / per-http-proxy connection counts. active is the
@@ -564,7 +567,7 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 
 // ---- rule management ----
 
-func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, groupID, operator string) (*forwardRule, error) {
+func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, groupID, operator, remoteTarget string) (*forwardRule, error) {
 	if protocol != "udp" {
 		protocol = "tcp"
 	}
@@ -625,7 +628,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		listenAddr: actualAddr,
 		listener:   ln, packetConn: pc, protocol: protocol, groupID: groupID,
 		operator: operator, createdAt: now,
-		enabled: true,
+		enabled: true, remoteTarget: remoteTarget,
 	}
 	m.mu.Lock()
 	m.rules[r.id] = r
@@ -636,6 +639,7 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		TargetPort: r.targetPort, LocalPort: r.localPort,
 		ListenAddr: r.listenAddr, Operator: r.operator,
 		CreatedAt: now, Enabled: true, Protocol: protocol, GroupID: groupID,
+		RemoteTarget: remoteTarget,
 	})
 	return r, nil
 }
@@ -770,7 +774,7 @@ func (m *forwardManager) toggleRule(id string, enable bool) (*forwardRule, error
 // v5.4.1: when localPort changes, the old listener is closed and the new port is
 // reflected in listenAddr. The caller must re-create the listener and restart
 // serveForwardListener.
-func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, localPort int) (*forwardRule, error) {
+func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, localPort int, remoteTarget string) (*forwardRule, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.rules[id]
@@ -783,6 +787,10 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 	}
 	if targetPort > 0 {
 		r.targetPort = targetPort
+	}
+	// Update remote target (jump mode)
+	if remoteTarget != "" || r.remoteTarget != "" {
+		r.remoteTarget = remoteTarget
 	}
 	// v5.4.1: rebind listener when localPort changes
 	if localPort > 0 && localPort != r.localPort {
@@ -806,6 +814,7 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 		TargetPort: r.targetPort, LocalPort: r.localPort,
 		ListenAddr: r.listenAddr, Operator: r.operator,
 		CreatedAt: r.createdAt, Enabled: r.enabled,
+		RemoteTarget: r.remoteTarget,
 	})
 	return r, nil
 }
@@ -819,19 +828,20 @@ func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
 		return nil, fmt.Errorf("rule not found")
 	}
 	newRule := &forwardRule{
-		id:         termID()[:8],
-		hostID:     r.hostID,
-		hostname:   r.hostname,
-		targetPort: r.targetPort,
-		localPort:  0, // will be auto-assigned
-		listenAddr: "",
-		listener:   nil,
-		packetConn: nil,
-		protocol:   r.protocol,
-		groupID:    r.groupID,
-		operator:   r.operator,
-		createdAt:  time.Now().Unix(),
-		enabled:    true,
+		id:           termID()[:8],
+		hostID:       r.hostID,
+		hostname:     r.hostname,
+		targetPort:   r.targetPort,
+		localPort:    0, // will be auto-assigned
+		listenAddr:   "",
+		listener:     nil,
+		packetConn:   nil,
+		protocol:     r.protocol,
+		groupID:      r.groupID,
+		operator:     r.operator,
+		createdAt:    time.Now().Unix(),
+		enabled:      true,
+		remoteTarget: r.remoteTarget,
 	}
 	m.rules[newRule.id] = newRule
 	return newRule, nil
@@ -854,6 +864,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				targetPort: pr.TargetPort, localPort: pr.LocalPort,
 				listenAddr: pr.ListenAddr, operator: pr.Operator,
 				createdAt: pr.CreatedAt, enabled: false, protocol: pr.Protocol, groupID: pr.GroupID,
+				remoteTarget: pr.RemoteTarget,
 			}
 			m.mu.Unlock()
 			continue
@@ -895,6 +906,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 			targetPort: pr.TargetPort, localPort: actualPort,
 			listenAddr: actualAddr, listener: ln, packetConn: pc, protocol: proto, groupID: pr.GroupID,
 			operator: pr.Operator, createdAt: pr.CreatedAt, enabled: true,
+			remoteTarget: pr.RemoteTarget,
 		}
 		// If the port changed, update the persisted config
 		if actualPort != pr.LocalPort {
@@ -903,6 +915,7 @@ func (m *forwardManager) restoreRules(srv *Server) {
 				TargetPort: r.targetPort, LocalPort: r.localPort,
 				ListenAddr: r.listenAddr, Operator: r.operator,
 				CreatedAt: r.createdAt, Enabled: r.enabled, Protocol: proto, GroupID: pr.GroupID,
+				RemoteTarget: r.remoteTarget,
 			})
 		}
 		m.mu.Lock()
@@ -931,6 +944,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 			CreatedAt: r.createdAt, Operator: r.operator,
 			Sessions: sessions, TotalSessions: total,
 			Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
+			RemoteTarget: r.remoteTarget,
 		})
 	}
 	return out
@@ -950,6 +964,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		TargetPortEnd int    `json:"target_port_end"` // > target_port：端口范围批量转发（含端点）
 		LocalPort     int    `json:"local_port"`      // 0 = auto-allocate
 		Protocol      string `json:"protocol"`        // "tcp"(默认) | "udp"
+		RemoteTarget  string `json:"remote_target"`   // 跳板目标，如 "192.168.30.220:3306"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -997,7 +1012,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		if isRange {
 			lp = p // 范围：本地端口镜像目标端口
 		}
-		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, groupID, operator)
+		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, groupID, operator, req.RemoteTarget)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -1083,9 +1098,14 @@ func (s *Server) handleForwardTCPConn(rule *forwardRule, conn net.Conn) {
 	// P3: TCP forward audit log
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: rule.operator, Host: rule.hostname,
 		Message: Tz("log.forward_tcp", rule.hostname, rule.targetPort)})
+	// 跳板模式审计：记录远程目标地址
+	if rule.remoteTarget != "" {
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: rule.operator, Host: rule.hostname,
+			Message: Tz("log.forward_jump", rule.hostname, rule.remoteTarget)})
+	}
 
 	// notify agent
-	if !s.forward.notifyAgent(rule.hostID, forwardWaitInfo{sessionID: sess.id, targetPort: rule.targetPort, mode: "tcp"}) {
+	if !s.forward.notifyAgent(rule.hostID, forwardWaitInfo{sessionID: sess.id, targetPort: rule.targetPort, mode: "tcp", remoteTarget: rule.remoteTarget}) {
 		sess.closeWith(Tz("log.forward_reason_agent_down"))
 		return // agent not polling
 	}
@@ -1718,9 +1738,10 @@ func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) 
 		}
 		s.forward.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session":     info.sessionID,
-			"target_port": info.targetPort,
-			"mode":        info.mode,
+			"session":       info.sessionID,
+			"target_port":   info.targetPort,
+			"mode":          info.mode,
+			"remote_target": info.remoteTarget,
 		})
 		return
 	}
@@ -1731,9 +1752,10 @@ func (s *Server) handleAgentForwardWait(w http.ResponseWriter, r *http.Request) 
 	select {
 	case info := <-ch:
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session":     info.sessionID,
-			"target_port": info.targetPort,
-			"mode":        info.mode,
+			"session":       info.sessionID,
+			"target_port":   info.targetPort,
+			"mode":          info.mode,
+			"remote_target": info.remoteTarget,
 		})
 	case <-time.After(25 * time.Second):
 		writeJSON(w, http.StatusOK, map[string]string{})

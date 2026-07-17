@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bufio"
@@ -178,16 +178,27 @@ func multimodalContent(text string, images []chatImage, prov aiProviderType) []m
 }
 
 func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
-	return aiChatV(context.Background(), cfg, messages, nil)
+	text, _, err := aiChatV(context.Background(), cfg, messages, nil, nil)
+	return text, err
+}
+
+// nativeToolCall represents a tool call parsed from the LLM's native function calling response.
+// P3-1: 使用 LLM 原生 Function Calling 替代文本解析，更可靠地提取工具调用。
+type nativeToolCall struct {
+	ID   string         // 工具调用 ID（OpenAI 格式），用于将结果关联回特定调用
+	Name string         // 工具名称
+	Args map[string]any // 工具参数
 }
 
 // aiChatV 在 aiChat 基础上支持传入 ctx（客户端中止 / 超时控制）+ 给用户消息附带图片（多模态/视觉）。
-func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+// P3-1: 新增 tools 参数，当非 nil 且为 OpenAI 兼容 Provider 时，使用原生 Function Calling。
+// 返回 (文本回复, 原生工具调用列表, error)。无工具调用时 toolCalls 为 nil。
+func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any) (string, []nativeToolCall, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if cfg.Endpoint == "" || cfg.Model == "" {
-		return "", fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
+		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
 
 	ep, prov := normalizeEndpoint(cfg.Endpoint)
@@ -229,6 +240,11 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 			"temperature": 0.2,
 			"stream":      false,
 		}
+		// P3-1: 当传入工具定义时，使用 OpenAI 原生 Function Calling
+		if len(tools) > 0 {
+			reqBody["tools"] = tools
+			reqBody["tool_choice"] = "auto"
+		}
 	}
 
 	// 输出长度默认按所选模型的最大值：OpenAI 兼容不指定 max_tokens（由服务商按模型上限输出，
@@ -248,7 +264,7 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if prov == aiProvAnthropic {
@@ -263,18 +279,18 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil { // 用户主动终止
-			return "", fmt.Errorf("已终止")
+			return "", nil, fmt.Errorf("已终止")
 		}
 		if reqCtx.Err() == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "Client.Timeout") {
-			return "", fmt.Errorf("AI 响应超时（>120 秒）。可能是模型较慢、网络不稳或 Endpoint 不正确——请重试、换更快的模型，或检查 Endpoint / 网络。")
+			return "", nil, fmt.Errorf("AI 响应超时（>120 秒）。可能是模型较慢、网络不稳或 Endpoint 不正确——请重试、换更快的模型，或检查 Endpoint / 网络。")
 		}
-		return "", fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
+		return "", nil, fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 600))
-		return "", fmt.Errorf("%s", providerHTTPErrorMsg(resp.StatusCode, string(body), cfg))
+		return "", nil, fmt.Errorf("%s", providerHTTPErrorMsg(resp.StatusCode, string(body), cfg))
 	}
 
 	// Parse response according to provider type.
@@ -289,7 +305,7 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 			Role string `json:"role"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			return "", fmt.Errorf("解析 Anthropic 响应失败：%v", err)
+			return "", nil, fmt.Errorf("解析 Anthropic 响应失败：%v", err)
 		}
 		// Collect text blocks from content array
 		var texts []string
@@ -299,25 +315,48 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 			}
 		}
 		if len(texts) == 0 {
-			return "", fmt.Errorf("Anthropic API 返回空结果")
+			return "", nil, fmt.Errorf("Anthropic API 返回空结果")
 		}
-		return strings.TrimSpace(strings.Join(texts, "\n")), nil
+		return strings.TrimSpace(strings.Join(texts, "\n")), nil, nil
 
 	default: // aiProvOpenAI
+		// P3-1: 扩展响应解析，支持原生 Function Calling 的 tool_calls 字段
 		var out struct {
 			Choices []struct {
 				Message struct {
-					Content string `json:"content"`
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						ID   string `json:"id"`
+						Type string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"` // JSON 字符串
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			return "", fmt.Errorf("解析 AI 响应失败：%v", err)
+			return "", nil, fmt.Errorf("解析 AI 响应失败：%v", err)
 		}
 		if len(out.Choices) == 0 {
-			return "", fmt.Errorf("AI 服务返回空结果")
+			return "", nil, fmt.Errorf("AI 服务返回空结果")
 		}
-		return strings.TrimSpace(out.Choices[0].Message.Content), nil
+		content := strings.TrimSpace(out.Choices[0].Message.Content)
+		// 解析原生 tool_calls
+		var calls []nativeToolCall
+		for _, tc := range out.Choices[0].Message.ToolCalls {
+			var args map[string]any
+			if tc.Function.Arguments != "" {
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			}
+			calls = append(calls, nativeToolCall{
+				ID:   tc.ID,
+				Name: tc.Function.Name,
+				Args: args,
+			})
+		}
+		return content, calls, nil
 	}
 }
 
@@ -330,12 +369,15 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 }
 
 // streamChat calls the AI provider with streaming enabled (SSE) and writes each
-// token chunk to the ResponseWriter as an SSE "data:" event. For providers that
-// do not support streaming (Anthropic), it falls back to aiChat and sends the
-// whole reply as a single SSE event. Returns the accumulated full reply text.
+// streamChat streams an AI chat response via SSE. When images are non-nil,
+// the last user message is converted to multimodal content format so vision
+// models can analyze uploaded screenshots.
+// For providers that do not support streaming (Anthropic), it falls back to
+// aiChat and sends the whole reply as a single SSE event.
 // The caller must set the proper headers (Content-Type: text/event-stream,
 // Cache-Control: no-cache, Connection: keep-alive) before calling this function.
-func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
+// ctx 用于客户端断开时取消到 LLM provider 的在途请求，防止资源泄漏。
+func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
 		return "", nil
@@ -357,15 +399,23 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	}
 
 	// 流式仅走 OpenAI 兼容（Anthropic 已在上方非流式处理并返回）。
+	// 当携带图片时，使用 buildRequestMessages 将最后一条 user 消息转为多模态 content 数组
+	var reqMessages any = messages
+	if len(images) > 0 {
+		reqMessages = buildRequestMessages(messages, images, prov)
+	}
 	reqBody := map[string]any{
 		"model":       cfg.Model,
-		"messages":    messages,
+		"messages":    reqMessages,
 		"temperature": 0.2,
 		"stream":      true,
 	}
 
 	b, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest(http.MethodPost, ep, bytes.NewReader(b))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 		return "", nil
@@ -393,8 +443,11 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	var fullReply strings.Builder
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 4*1024), 1024*1024)
 	for scanner.Scan() {
+		if ctx.Err() != nil { // 客户端已断开：中止读取 LLM 流，释放 provider 连接
+			return fullReply.String(), ctx.Err()
+		}
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue
@@ -429,25 +482,29 @@ func streamChat(w http.ResponseWriter, cfg AIConfig, messages []map[string]strin
 	return fullReply.String(), nil
 }
 
-// parseStreamDelta extracts the content delta from a single SSE chunk.
-func parseStreamDelta(data string, prov aiProviderType) string {
-	var chunk struct {
+// streamDeltaChunk 是 SSE 流式响应的 JSON 解析目标类型。
+// 提取为包级类型以便复用，编译器可优化栈分配，减少 GC 压力（P2-5 优化）。
+type streamDeltaChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Output struct {
 		Choices []struct {
-			Delta struct {
-				Content string `json:"content"`
-			} `json:"delta"`
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
-		Output struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		} `json:"output"`
-	}
+	} `json:"output"`
+}
+
+// parseStreamDelta extracts the content delta from a single SSE chunk.
+func parseStreamDelta(data string, prov aiProviderType) string {
+	var chunk streamDeltaChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return ""
 	}
@@ -471,31 +528,31 @@ func jsonString(s string) string {
 // streamChatFiltered wraps streamChat with sensitive content filtering on the
 // accumulated reply. The streaming deltas are sent unfiltered (the frontend
 // applies its own display filter), but the returned full text is filtered.
-func streamChatFiltered(w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
-	reply, err := streamChat(w, cfg, messages)
+func streamChatFiltered(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
+	reply, err := streamChat(ctx, w, cfg, messages, nil)
 	if err != nil {
 		return "", err
 	}
 	return reply, nil
 }
 
+// filterRegex 预编译正则，避免每次调用重复编译（P2-1 优化）。
+var (
+	reCodeFenceJSON = regexp.MustCompile("(?s)```[a-z]*\\s*\\{.*?```")
+	reCodeFenceAny  = regexp.MustCompile("(?s)```[^`]*```")
+	reToolCallJSON  = regexp.MustCompile("(?s)\\{\\s*\"tool_calls\".*?\\}\\s*$")
+	reAPIKey        = regexp.MustCompile("\\b(sk-[a-zA-Z0-9_-]{20,})\\b")
+	reSecretKV      = regexp.MustCompile("\\b(api_key|apikey|secret|password|token)\\s*[:=]\\s*['\"]?[^\\s'\"]+['\"]?")
+)
+
 // filterSensitiveContent strips JSON blocks, code fences, and sensitive patterns
 // from AI-generated text. Used by the frontend; also available for backend use.
 func filterSensitiveContent(text string) string {
-	// Strip markdown code fences (```json ... ``` or ``` ... ```)
-	re := regexp.MustCompile("(?s)```[a-z]*\\s*\\{.*?```")
-	text = re.ReplaceAllString(text, "[已过滤代码块]")
-	re = regexp.MustCompile("(?s)```[^`]*```")
-	text = re.ReplaceAllString(text, "[已过滤代码块]")
-	// Strip standalone JSON objects/arrays
-	re = regexp.MustCompile("(?s)\\{\\s*\"tool_calls\".*?\\}\\s*$")
-	text = re.ReplaceAllString(text, "")
-	// Strip potential API keys / tokens (sk-..., sk-ant-..., etc.)
-	re = regexp.MustCompile("\\b(sk-[a-zA-Z0-9_-]{20,})\\b")
-	text = re.ReplaceAllString(text, "[已隐藏密钥]")
-	// Strip common password/key patterns
-	re = regexp.MustCompile("\\b(api_key|apikey|secret|password|token)\\s*[:=]\\s*['\"]?[^\\s'\"]+['\"]?")
-	text = re.ReplaceAllString(text, "$1=[已隐藏]")
+	text = reCodeFenceJSON.ReplaceAllString(text, "[已过滤代码块]")
+	text = reCodeFenceAny.ReplaceAllString(text, "[已过滤代码块]")
+	text = reToolCallJSON.ReplaceAllString(text, "")
+	text = reAPIKey.ReplaceAllString(text, "[已隐藏密钥]")
+	text = reSecretKV.ReplaceAllString(text, "$1=[已隐藏]")
 	return strings.TrimSpace(text)
 }
 
@@ -778,6 +835,54 @@ func (m *aiManager) Diagnose(inc Incident) (string, string) {
 // embedDim 是向量存储列（pgvector）的固定维度。嵌入模型必须输出该维度，否则入库失败。
 const embedDim = 1536
 
+// embedCache 缓存嵌入向量，避免对相同文本重复调用 embedText API。
+// 容量有限，TTL 30 秒，适合对话场景下同一用户的连续请求复用。
+type embedCacheEntry struct {
+	vec    []float64
+	expiry time.Time
+}
+
+var (
+	embCacheMu  sync.Mutex
+	embCache    = make(map[string]embedCacheEntry)
+	embCacheTTL = 30 * time.Second
+	embCacheCap = 50
+)
+
+func embedCacheGet(text string) []float64 {
+	embCacheMu.Lock()
+	defer embCacheMu.Unlock()
+	if e, ok := embCache[text]; ok && time.Now().Before(e.expiry) {
+		return e.vec
+	}
+	return nil
+}
+
+func embedCacheSet(text string, vec []float64) {
+	embCacheMu.Lock()
+	defer embCacheMu.Unlock()
+	if len(embCache) >= embCacheCap {
+		now := time.Now()
+		for k, e := range embCache {
+			if now.After(e.expiry) {
+				delete(embCache, k)
+			}
+		}
+		if len(embCache) >= embCacheCap {
+			// 仍满则随机淘汰一半
+			i := 0
+			for k := range embCache {
+				delete(embCache, k)
+				i++
+				if i >= embCacheCap/2 {
+					break
+				}
+			}
+		}
+	}
+	embCache[text] = embedCacheEntry{vec: vec, expiry: time.Now().Add(embCacheTTL)}
+}
+
 // embedText 把文本转成向量。与对话模型解耦：默认走「OpenAI 兼容 /embeddings」，兼容
 // OpenAI / 本地(Ollama/LocalAI/Xinference) / 百炼兼容模式 等任意服务；仅当用户未配置嵌入且
 // 主端点为百炼原生时，沿用旧的百炼 DashScope 原生 text-embedding-v2（向后兼容）。
@@ -792,6 +897,10 @@ func embedText(cfg AIConfig, text string) []float64 {
 	if len([]rune(text)) > 8000 { // 控制输入长度，避免超模型上限（~8000字符 ≈ 4000 token）
 		text = string([]rune(text)[:8000])
 	}
+	// 嵌入缓存命中检查
+	if cached := embedCacheGet(text); cached != nil {
+		return cached
+	}
 	ep := strings.TrimSpace(cfg.EmbedEndpoint)
 	key := strings.TrimSpace(cfg.EmbedAPIKey)
 	if key == "" {
@@ -801,17 +910,23 @@ func embedText(cfg AIConfig, text string) []float64 {
 	if key == "" {
 		return nil
 	}
+	var emb []float64
 	// 未配置自定义嵌入 + 主端点是百炼原生 → 沿用旧的百炼原生 v2（向后兼容既有用户）
 	if ep == "" && model == "" && isBailianEndpoint(cfg.Endpoint) {
-		return embedBailianNative(key, text)
+		emb = embedBailianNative(key, text)
+	} else {
+		if ep == "" {
+			ep = cfg.Endpoint // 复用主端点 base
+		}
+		if model == "" {
+			return nil // 通用模式必须指定嵌入模型
+		}
+		emb = embedOpenAICompat(ep, key, model, cfg.EmbedDimensions, text)
 	}
-	if ep == "" {
-		ep = cfg.Endpoint // 复用主端点 base
+	if emb != nil {
+		embedCacheSet(text, emb)
 	}
-	if model == "" {
-		return nil // 通用模式必须指定嵌入模型
-	}
-	return embedOpenAICompat(ep, key, model, cfg.EmbedDimensions, text)
+	return emb
 }
 
 // embedEndpointURL 把用户填的 base / 对话端点规整为 OpenAI 兼容的 /embeddings 完整地址。
@@ -840,7 +955,7 @@ func embedOpenAICompat(ep, key, model string, dim int, text string) []float64 {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newGuardedHTTPClient(30 * time.Second).Do(req) // SSRF：嵌入端点用户可配，拦元数据/链路本地
 	if err != nil {
 		return nil
 	}
@@ -882,7 +997,7 @@ func embedBailianNative(key, text string) []float64 {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newGuardedHTTPClient(30 * time.Second).Do(req) // SSRF：百炼固定端点仍守卫
 	if err != nil {
 		return nil
 	}

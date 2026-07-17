@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -47,11 +47,16 @@ type HermesSession struct {
 type HermesCore struct {
 	s     *Server
 	tools map[string]HermesTool
+	ctx   context.Context
 	// Cached config (hot-reloaded from PG)
 	configMu        sync.RWMutex
 	cachedRules     []hermesRule
 	cachedTemplates []hermesTemplate
 	lastLoad        time.Time
+	// P1-2: 缓存工具定义 JSON，工具注册后不再变化，避免每轮重建
+	cachedToolPrompt string
+	// P3-1: 缓存原生 Function Calling 工具定义数组
+	cachedNativeToolDefs []map[string]any
 }
 
 // newHermesCore creates and initializes the Hermes engine.
@@ -450,7 +455,7 @@ func diagCommandAllowed(command string) (bool, string) {
 	if cmdTrim == "" {
 		return false, "请指定诊断命令"
 	}
-	if strings.ContainsAny(cmdTrim, ";&$<>\n\r\\(){}"+"`") {
+	if strings.ContainsAny(cmdTrim, ";&$<>\n\r\\(){}" + "`") {
 		return false, "诊断命令含被禁止的字符（; & $ < > ` 等），仅允许只读命令与管道过滤"
 	}
 	allow := []string{
@@ -459,6 +464,12 @@ func diagCommandAllowed(command string) (bool, string) {
 		"journalctl", "systemctl status", "docker ps", "docker logs", "docker stats",
 		"kubectl get", "kubectl describe", "wc", "sort", "uniq", "cut", "tr", "nl", "tac",
 		"column", "date", "hostname", "uname", "who", "w",
+	}
+	// P2-6: 敏感路径黑名单，防止通过 cat/grep 等读取敏感文件
+	deniedPaths := []string{
+		"/etc/shadow", "/etc/gshadow", "/etc/master.passwd",
+		".ssh/", ".gnupg/", ".aws/", ".kube/config",
+		"/etc/sudoers", "/root/.bash_history",
 	}
 	segOK := func(seg string) bool {
 		seg = strings.ToLower(strings.TrimSpace(seg))
@@ -472,6 +483,13 @@ func diagCommandAllowed(command string) (bool, string) {
 	for _, seg := range strings.Split(cmdTrim, "|") {
 		if !segOK(seg) {
 			return false, fmt.Sprintf("诊断命令 %q 含非白名单命令，仅允许只读诊断命令（top/df/free/ps/ss/cat/grep/journalctl 等）及其管道过滤", command)
+		}
+		// P2-6: 检查管道每段是否访问敏感路径
+		segLower := strings.ToLower(seg)
+		for _, dp := range deniedPaths {
+			if strings.Contains(segLower, dp) {
+				return false, fmt.Sprintf("诊断命令包含敏感路径 %q，已拦截", dp)
+			}
 		}
 	}
 	return true, ""
@@ -525,6 +543,8 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 		return "诊断命令执行失败", nil
 	case <-time.After(20 * time.Second):
 		return "诊断命令执行超时", nil
+	case <-h.ctx.Done():
+		return "诊断命令已被客户端取消", nil
 	}
 }
 
@@ -542,7 +562,11 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前未开启「自动执行」(hermes_auto_approve)，已阻止自动执行；请操作员手动处置，或在 AI 设置中开启后重试。", actionName), nil
 	}
 	// 加 30s 超时，避免插件脚本卡死导致请求 goroutine 永久阻塞
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	parentCtx := h.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "python3", "plugins/hermes_actions.py", actionName, hostID, argStr)
 	output, err := cmd.CombinedOutput()
@@ -766,6 +790,7 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	h.ctx = ctx
 	cfg := h.s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		return "", fmt.Errorf("AI 未配置或未启用")
@@ -860,11 +885,16 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 	}
 	// sendTool 以独立 SSE 帧下发工具执行状态（state: run/ok/err），前端渲染为可实时更新的
 	// 「工具调用」状态 chip；刻意与 delta 正文分离，既让用户看到实时进度，又不污染最终回答。
-	sendTool := func(name, state string) {
+	// P3-3: 增加 info 字段，携带工具参数（run 时）或结果摘要（ok 时），供前端展示推理链路。
+	sendTool := func(name, state string, info map[string]string) {
 		if !stream || w == nil {
 			return
 		}
-		fmt.Fprintf(w, "data: {\"tool\":{\"name\":%s,\"state\":%s}}\n\n", jsonString(name), jsonString(state))
+		extra := ""
+		for k, v := range info {
+			extra += fmt.Sprintf(",%s:%s", jsonString(k), jsonString(v))
+		}
+		fmt.Fprintf(w, "data: {\"tool\":{\"name\":%s,\"state\":%s%s}}\n\n", jsonString(name), jsonString(state), extra)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -874,8 +904,25 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		if err := ctx.Err(); err != nil { // 客户端已断开：停止后续 LLM 调用与工具执行，避免用户离开后仍在主机上跑命令
 			return "", err
 		}
-		msgsWithTools := h.injectTools(msgs)
-		reply, err := aiChatV(ctx, cfg, msgsWithTools, images) // 带 ctx（可中止）+ 图片（多模态）
+
+		// P3-1: 检测 Provider 类型，决定使用原生 Function Calling 还是文本注入
+		_, prov := normalizeEndpoint(cfg.Endpoint)
+		var callMsgs []map[string]string
+		var nativeTools []map[string]any
+		if prov != aiProvAnthropic && len(h.tools) > 0 {
+			// OpenAI 兼容 Provider：使用原生 Function Calling（更可靠）
+			callMsgs = msgs
+			// 确保 nativeToolDefs 已缓存
+			if h.cachedNativeToolDefs == nil {
+				h.injectTools(msgs) // 副作用：缓存 nativeToolDefs
+			}
+			nativeTools = h.cachedNativeToolDefs
+		} else {
+			// Anthropic 或无工具：使用文本注入（兼容回退）
+			callMsgs = h.injectTools(msgs)
+		}
+
+		reply, nativeCalls, err := aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）
 		if err != nil {
 			if stream && w != nil {
 				fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -886,7 +933,15 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			return "", err
 		}
 
-		toolCalls := h.parseToolCalls(reply)
+		// P3-1: 优先使用原生 tool_calls，无则回退到文本解析
+		var toolCalls []toolCall
+		if len(nativeCalls) > 0 {
+			for _, nc := range nativeCalls {
+				toolCalls = append(toolCalls, toolCall{Name: nc.Name, Args: nc.Args})
+			}
+		} else {
+			toolCalls = h.parseToolCalls(reply)
+		}
 		if len(toolCalls) == 0 {
 			// 无工具调用 = 最终结论。剥掉可能残留的 JSON/代码块后下发。
 			final := stripToolCallJSON(reply)
@@ -897,29 +952,42 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			return final, nil
 		}
 
-		// 有工具调用：先把模型的「思考文字」（JSON 之前的自然语言）推给用户
+		// P3-3: 将模型的「思考文字」作为思维链下发
 		if think := stripToolCallJSON(reply); think != "" {
-			sendDelta(think + "\n")
+			sendDelta("\n> \U0001f9e0 " + strings.ReplaceAll(think, "\n", "\n> ") + "\n\n")
 		}
-		// 逐个工具「执行中 → 完成/失败」以独立 tool 帧实时下发，前端渲染为状态 chip；
-		// 让用户在「工具执行 + 下一轮 LLM 调用」的间隙始终看到进度，不再「回复到一半像卡住」。
+		// 逐个工具「执行中 → 完成/失败」以独立 tool 帧实时下发
 		var toolResults strings.Builder
 		for _, tc := range toolCalls {
 			slog.Info("hermes tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
 			tool, ok := h.tools[tc.Name]
 			if !ok {
-				sendTool(tc.Name, "err")
+				sendTool(tc.Name, "err", nil)
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 不存在]\n", tc.Name))
 				continue
 			}
-			sendTool(tc.Name, "run")
+			argsInfo := map[string]string{}
+			if hostID, _ := tc.Args["host_id"].(string); hostID != "" {
+				argsInfo["target"] = hostID
+			}
+			if cmd, _ := tc.Args["command"].(string); cmd != "" {
+				argsInfo["detail"] = cmd
+			} else if q, _ := tc.Args["query"].(string); q != "" {
+				argsInfo["detail"] = q
+			} else if m, _ := tc.Args["metric"].(string); m != "" {
+				argsInfo["detail"] = m
+			}
+			sendTool(tc.Name, "run", argsInfo)
 			result, err := tool.Execute(tc.Args)
 			if err != nil {
-				sendTool(tc.Name, "err")
+				sendTool(tc.Name, "err", nil)
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行失败：%v]\n", tc.Name, err))
 			} else {
-				sendTool(tc.Name, "ok")
-				// Token 预算：工具结果截断到 4000 字符，避免单次工具返回擑爆 prompt
+				summary := strings.ReplaceAll(strings.TrimSpace(result), "\n", " ")
+				if len([]rune(summary)) > 120 {
+					summary = string([]rune(summary)[:120]) + "…"
+				}
+				sendTool(tc.Name, "ok", map[string]string{"summary": summary})
 				truncResult := result
 				if len([]rune(truncResult)) > 4000 {
 					truncResult = string([]rune(truncResult)[:4000]) + "\n…(工具结果已截断)"
@@ -936,7 +1004,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 	// 达到最大轮次仍未收敛：强制「不再调用工具」再问一次，逼出最终结论并正常落库，
 	// 避免既跑满工具又丢弃已获取信息、还不给用户任何结论。
 	msgs = append(msgs, map[string]string{"role": "user", "content": "已达到工具调用次数上限。请不要再调用任何工具，直接基于以上已获取的真实信息，用简洁中文给出你的最终结论与处置建议。"})
-	final, err := aiChatV(ctx, cfg, msgs, images) // 不注入工具定义，强制收敛为自然语言结论
+	final, _, err := aiChatV(ctx, cfg, msgs, images, nil) // 不注入工具定义，强制收敛为自然语言结论
 	if err != nil {
 		sendDelta("分析未能在限定轮次内收敛，请缩小问题范围后重试。")
 		return "", err
@@ -956,26 +1024,33 @@ type toolCall struct {
 }
 
 // injectTools adds tool definitions to the last system message.
+// P1-2: 工具定义 JSON 缓存于 h.cachedToolPrompt，仅首次调用时构建。
+// P3-1: 同时缓存原生 Function Calling 格式的工具定义。
 func (h *HermesCore) injectTools(msgs []map[string]string) []map[string]string {
-	// Build tool definitions JSON（按工具名排序，保证注入顺序稳定，利于 Provider prompt 缓存与可复现）
-	names := make([]string, 0, len(h.tools))
-	for name := range h.tools {
-		names = append(names, name)
+	if h.cachedToolPrompt == "" {
+		// Build tool definitions JSON（按工具名排序，保证注入顺序稳定，利于 Provider prompt 缓存与可复现）
+		names := make([]string, 0, len(h.tools))
+		for name := range h.tools {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var toolDefs []map[string]any
+		for _, name := range names {
+			t := h.tools[name]
+			toolDefs = append(toolDefs, map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        t.Name,
+					"description": t.Description,
+					"parameters":  t.Parameters,
+				},
+			})
+		}
+		toolsJSON, _ := json.Marshal(toolDefs)
+		h.cachedToolPrompt = "\n\n你可以使用以下工具来获取信息或执行操作。当需要调用工具时，请用以下 JSON 格式回复：\n```json\n{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}\n```\n\n可用工具定义：\n" + string(toolsJSON)
+		// P3-1: 缓存原生 Function Calling 工具定义（复用同一份排序后的 defs）
+		h.cachedNativeToolDefs = toolDefs
 	}
-	sort.Strings(names)
-	var toolDefs []map[string]any
-	for _, name := range names {
-		t := h.tools[name]
-		toolDefs = append(toolDefs, map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"parameters":  t.Parameters,
-			},
-		})
-	}
-	toolsJSON, _ := json.Marshal(toolDefs)
 
 	// Find the system message and append tool definitions
 	result := make([]map[string]string, len(msgs))
@@ -984,7 +1059,7 @@ func (h *HermesCore) injectTools(msgs []map[string]string) []map[string]string {
 		if m["role"] == "system" {
 			result[i] = map[string]string{
 				"role":    "system",
-				"content": m["content"] + "\n\n你可以使用以下工具来获取信息或执行操作。当需要调用工具时，请用以下 JSON 格式回复：\n```json\n{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}\n```\n\n可用工具定义：\n" + string(toolsJSON),
+				"content": m["content"] + h.cachedToolPrompt,
 			}
 			break
 		}

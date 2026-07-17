@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"encoding/base64"
@@ -920,7 +920,7 @@ func (s *Server) handleTestAIConfig(w http.ResponseWriter, r *http.Request) {
 
 	// 统一使用流式 SSE 输出
 	s.setupSSE(w)
-	reply, err := streamChatFiltered(w, c, []map[string]string{
+	reply, err := streamChatFiltered(r.Context(), w, c, []map[string]string{
 		{"role": "system", "content": "你是连通性自检助手，用一句话确认你已就绪。"},
 		{"role": "user", "content": "请回复：AI 服务正常，已就绪。"},
 	})
@@ -1162,6 +1162,13 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 尽早建立 SSE 连接并 Flush，让前端立即显示「思考中」动画；
+	// 后续的 system prompt 构建和 RAG 检索在 SSE 已建立后执行，不阻塞首屏。
+	s.setupSSE(w)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
 	// Build system prompt. If incident_id is provided, inject full rich context
 	// (metrics + alerts + logs + RAG + rules) just like buildIncidentDiagnosisPrompt.
 	sys := "你是资深 SRE / 运维助手，用简洁中文回答监控、告警、排障、性能与自动化相关问题；无关问题礼貌拒答。"
@@ -1178,6 +1185,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// RAG: 检索历史记忆注入 system prompt，让 AI 能跨会话复用已有知识
+	// （embedText + PG 查询可能耗时 1-3s，已在 SSE 连接建立后执行）
 	memKind := "chat"
 	if req.IncidentID > 0 {
 		memKind = "diagnosis"
@@ -1196,9 +1204,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
-	// 统一 AI 对话默认走 SSE 流式
-	s.setupSSE(w)
-	reply, _ := streamChat(w, cfg, msgs)
+	reply, _ := streamChat(r.Context(), w, cfg, msgs, nil)
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
@@ -1236,6 +1242,12 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 
 	cfg := s.cfg.AIConfig()
 	if cfg.Enabled && cfg.Endpoint != "" && cfg.Model != "" {
+		// 尽早建立 SSE 连接并 Flush，让前端立即显示「思考中」动画；
+		// 后续的 prompt 构建（含 embedText）和 RAG 检索在 SSE 已建立后执行。
+		s.setupSSE(w)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 		// AI mode: use rich context (metrics + alerts + logs + RAG + rules)
 		sys := s.buildIncidentDiagnosisPrompt(inc)
 		for _, e := range inc.Timeline {
@@ -1245,15 +1257,13 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		userMsg := fmt.Sprintf("请对事件 #%d 进行诊断分析，给出根因判断和处置建议。", inc.ID)
-		// RAG: 检索历史诊断记忆注入 system prompt
+		// RAG: 检索历史诊断记忆注入 system prompt（已在 SSE 连接建立后执行）
 		sys += s.retrieveMemoryForPrompt("diagnosis", userMsg, 8)
 
-		// 统一走 SSE 流式输出，前端无需显式传 stream=true
-		s.setupSSE(w)
-		diag, _ := streamChat(w, cfg, []map[string]string{
+		diag, _ := streamChat(r.Context(), w, cfg, []map[string]string{
 			{"role": "system", "content": sys},
 			{"role": "user", "content": userMsg},
-		})
+		}, nil)
 		if diag != "" {
 			s.incidents.AddEvent(id, "ai_diagnosis", "AI", diag)
 			s.store.MarkDirty()
@@ -1300,12 +1310,21 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 			Content string `json:"content"`
 		} `json:"history,omitempty"`
 		IncludeTerminal bool `json:"include_terminal,omitempty"`
+		// P3-Req1: 图片/文件附件，与主 AI 对话保持一致
+		Images []struct {
+			MIME string `json:"mime"`
+			Data string `json:"data"` // base64（不含 data: 前缀）
+		} `json:"images,omitempty"`
+		Files []struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		} `json:"files,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
+	if strings.TrimSpace(req.Message) == "" && len(req.Images) == 0 && len(req.Files) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
 		return
 	}
@@ -1316,6 +1335,12 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写并保存\"}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		return
+	}
+	// 尽早建立 SSE 连接并 Flush，让前端立即显示「思考中」动画；
+	// 后续的 prompt 构建（含 embedText）和 RAG 检索在 SSE 已建立后执行。
+	s.setupSSE(w)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 	// Build rich system prompt with full incident context
 	sys := s.buildIncidentDiagnosisPrompt(inc)
@@ -1344,11 +1369,40 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 			msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
+	// Req1: 将上传文件文本注入用户消息，图片走多模态链路
+	userMsg := req.Message
+	for _, f := range req.Files {
+		txt := strings.TrimSpace(f.Text)
+		if txt == "" {
+			continue
+		}
+		if len([]rune(txt)) > 8000 { // 限制单文件注入长度
+			txt = string([]rune(txt)[:8000]) + "\n…（文件过长，已截断）"
+		}
+		name := f.Name
+		if name == "" {
+			name = "附件"
+		}
+		userMsg += fmt.Sprintf("\n\n【上传的文件：%s】\n%s", name, txt)
+	}
+	if strings.TrimSpace(userMsg) == "" && len(req.Images) > 0 {
+		userMsg = "（上传了图片，请查看并分析）"
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
-	// 统一走 SSE 流式输出，前端无需显式传 stream=true
-	s.setupSSE(w)
-	reply, _ := streamChat(w, cfg, msgs)
+	// Req1: 解析图片为 chatImage 切片，传入 streamChat 多模态链路
+	var images []chatImage
+	for _, im := range req.Images {
+		if strings.TrimSpace(im.Data) == "" {
+			continue
+		}
+		images = append(images, chatImage{MIME: im.MIME, Data: im.Data})
+		if len(images) >= 4 { // 最多 4 张，控制上下文与成本
+			break
+		}
+	}
+
+	reply, _ := streamChat(r.Context(), w, cfg, msgs, images)
 	if reply != "" {
 		s.saveDiagnosisChatTurn(id, req.Message, reply)
 		go s.saveDiagnosisEmbedding(id, inc, reply)
@@ -2076,6 +2130,11 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	session.IncidentID = req.IncidentID
 	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
+	// 立即 Flush，确保 SSE 响应头到达客户端，前端开始显示「思考中」动画；
+	// 后续 Chat() 内的 RAG 检索（embedText + PG 查询）不会阻塞首屏。
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 	final, _ := s.hermes.Chat(r.Context(), session, msg, images, true, w)
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（对话 + 上传文件 / URL 正文均含在 msg 内；
 	// 附件再各存一条便于精确召回）。多轮历史随每轮持续累积。异步、尽力而为、不阻塞响应。

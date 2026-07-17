@@ -50,7 +50,7 @@ func (s *Server) serveForwardUDP(rule *forwardRule) {
 			mu.Lock()
 			flows[key] = sess
 			mu.Unlock()
-			if !s.forward.notifyAgent(rule.hostID, forwardWaitInfo{sessionID: sess.id, targetPort: rule.targetPort, mode: "udp"}) {
+			if !s.forward.notifyAgent(rule.hostID, forwardWaitInfo{sessionID: sess.id, targetPort: rule.targetPort, mode: "udp", remoteTarget: rule.remoteTarget}) {
 				s.forward.removeSession(sess.id)
 				mu.Lock()
 				delete(flows, key)
