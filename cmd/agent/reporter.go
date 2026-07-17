@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -628,9 +629,15 @@ func (a *Agent) postHardwareReport(rep shared.HardwareReport) {
 				slog.Warn("硬件上报失败", "server", tgt.server, "err", err)
 				return
 			}
-			resp.Body.Close()
+			defer resp.Body.Close()
 			if resp.StatusCode >= 300 {
-				slog.Warn("硬件上报被拒", "server", tgt.server, "status", resp.StatusCode)
+				// 读取响应体以便诊断拒绝原因（如 fingerprint mismatch）
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+				slog.Warn("硬件上报被拒", "server", tgt.server, "status", resp.StatusCode,
+					"host_id", rep.HostID, "snapshots", len(rep.Snapshots), "body", string(respBody))
+			} else {
+				slog.Info("硬件上报成功", "server", tgt.server, "host_id", rep.HostID,
+					"snapshots", len(rep.Snapshots))
 			}
 		}(t)
 	}

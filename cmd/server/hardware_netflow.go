@@ -20,6 +20,7 @@ import (
 func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 	var rep shared.HardwareReport
 	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+		slog.Warn("硬件上报 JSON 解析失败", "err", err, "remote", r.RemoteAddr)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
@@ -34,6 +35,7 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 		fp = r.URL.Query().Get("fp")
 	}
 	if !s.forwardFingerprintOKByHost(rep.HostID, fp) {
+		slog.Warn("硬件上报指纹校验失败", "host_id", rep.HostID, "fp", fp, "remote", r.RemoteAddr)
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "fingerprint mismatch"})
 		return
 	}
@@ -52,6 +54,9 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 					strings.ToLower(snap.Health), fmt.Sprintf("健康状态: %s", snap.Health))
 			}
 		}
+		slog.Info("硬件上报已存储", "host_id", rep.HostID, "snapshots", len(rep.Snapshots))
+	} else {
+		slog.Warn("硬件上报已接收但 PG 未配置，数据未持久化", "host_id", rep.HostID, "snapshots", len(rep.Snapshots))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
