@@ -1,0 +1,15 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: master
+nodes_managed: true
+exported_at: "2026-07-17T07:21:28Z"
+modules:
+    "":
+        dir_name: AIOps 监控平台（Agent + Server 双端）
+        title: AIOps 监控平台（Agent + Server 双端）
+        scope: []
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
