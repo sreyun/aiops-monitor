@@ -8,28 +8,31 @@ source_files:
     - go.mod
     - go.sum
     - plugins/requirements.txt
+    - android/app/build.gradle
+    - android/build.gradle
     - docker/Dockerfile
 ---
 
-本仓库采用“按组件拆分、各自管理”的依赖策略，涉及 Go 服务端/Agent、Python 插件层以及 Android 前端三个子系统：
+本仓库采用多语言、多模块的依赖管理方式，各子项目各自维护独立的依赖清单：
 
-1. **Go 模块（Server + Agent）**
-   - 根目录 `go.mod` 使用 module `aiops-monitor`，Go 版本固定为 1.22。
-   - 仅声明了 3 个第三方依赖：`github.com/lib/pq`（PostgreSQL 驱动）、`github.com/skip2/go-qrcode`（二维码生成）、`github.com/ledongthuc/pdf`（PDF 导出），均为极小依赖集。
-   - 通过 `go.sum` 对每个依赖的 h1 哈希进行校验，确保构建可重复；未使用 vendor 目录（`vendor/` 为空）。
-   - 未发现 GOPRIVATE / GONOSUMCHECK / GONOSUMDB / GONOPROXY 等私有代理配置，也未见自定义 go proxy 环境变量或 `.golangci.yml` 中的相关设置，表明当前依赖全部来自公共 Go 模块代理。
+1. **Go 核心（Server + Agent）**
+   - 使用 Go Modules，根目录 `go.mod` 声明 module 为 `aiops-monitor`，Go 版本固定为 1.22。
+   - 当前仅显式 require 三个第三方包：`github.com/lib/pq`（PostgreSQL 驱动）、`github.com/skip2/go-qrcode`（二维码生成）、`github.com/ledongthuc/pdf`（PDF 导出），其余均为标准库或内嵌代码。
+   - 配套的 `go.sum` 对每个依赖同时记录源码哈希与 go.mod 哈希，确保可重现构建。
+   - 未启用 vendor 目录（`vendor/` 为空），也未在 go.mod 中配置 GOPRIVATE / GONOSUMDB / proxy 等私有代理，依赖拉取完全依赖全局 Go 环境变量或网络可达性。
+   - 所有依赖均使用精确 commit hash 形式的 pseudo-version（如 `v0.0.0-20200617195104-da1b6568686e`），而非语义化版本号，便于锁定到具体提交。
 
 2. **Python 插件层**
-   - `plugins/requirements.txt` 仅声明一个可选依赖 `psutil>=5.9`，用于非 Linux 平台的基础指标采集；Linux 下由 Go 核心原生采集，可不安装。
-   - 无 `pipenv`、`poetry`、`Pipfile.lock` 等更严格的锁文件，仅以 `>=` 宽松约束为主。
+   - `plugins/requirements.txt` 声明可选依赖 `psutil>=5.9`，用于非 Linux 平台的基础指标采集；Linux 上由 Go 原生采集，可不安装。
+   - 无虚拟环境或 pipenv/poetry 锁文件，部署时需手动 `pip install -r plugins/requirements.txt`。
 
 3. **Android 前端**
-   - 基于 Gradle/Kotlin，依赖声明位于 `android/app/build.gradle` 与 `android/build.gradle`，由 Gradle 负责解析与缓存，不在 Go/Python 体系内。
+   - 基于 Gradle + Kotlin，依赖通过 `android/app/build.gradle` 及顶层 `build.gradle` 声明，未使用 BOM 或集中版本目录，依赖版本散落在各 build 脚本中。
 
-4. **Docker 构建**
-   - `docker/Dockerfile` 中通过 `go mod download` 拉取依赖，未挂载本地 vendor 目录，依赖在镜像构建时从网络获取。
+4. **Docker 镜像**
+   - `docker/Dockerfile` 以官方 `golang:1.22` 为基础镜像，在镜像内执行 `go mod download` 拉取依赖，不依赖宿主机 Go 环境。
 
 **开发者约定**
-- Go 新增依赖需同步更新 `go.mod` 与 `go.sum`，禁止手动编辑 `go.sum`。
-- Python 插件新增依赖请追加到 `plugins/requirements.txt`，并评估是否应改为严格版本号（如 `==x.y.z`）以保证可复现性。
-- 若后续引入私有 Go 模块或私有 PyPI 源，需在 CI 环境中注入 `GOPROXY`/`GONOSUMDB`/`PIP_INDEX_URL` 等变量，并在仓库中补充相应文档。
+- 新增 Go 依赖后需同步更新 `go.mod` 并检查 `go.sum` 是否被正确写入。
+- Python 插件依赖统一维护在 `plugins/requirements.txt`，升级时注意兼容 psutil 最低版本 5.9。
+- Android 依赖建议在顶层 `gradle/libs.versions.toml`（若引入）或统一 build 脚本中收敛版本，避免分散声明。

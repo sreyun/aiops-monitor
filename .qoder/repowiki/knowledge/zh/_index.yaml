@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: master
 nodes_managed: true
-exported_at: "2026-07-17T10:49:55Z"
+exported_at: "2026-07-17T13:36:39Z"
 modules:
     "":
-        dir_name: AIOps 监控平台（Agent + Server + Android Dashboard）
-        title: AIOps 监控平台（Agent + Server + Android Dashboard）
+        dir_name: AIOps 监控平台（Server + Agent + Android + Python 插件）
+        title: AIOps 监控平台（Server + Agent + Android + Python 插件）
         scope: []
         source_files: []
         children: []
