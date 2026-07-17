@@ -807,14 +807,16 @@ func parseVMExport(r io.Reader) []shared.Sample {
 // ============================================================================
 
 // pushHardware writes one hardware metric to VM immediately (fire-and-forget).
+// 标签值一律走 lblEsc：target / 传感器名等来自 Agent（乃至 BMC）上报，未转义时一个
+// 形如 `a"} evil{x="` 的传感器名就能凭空造出/污染其它序列。
 func (v *vmWriter) pushHardware(hostID, target string, ts int64, metric string, val float64) {
-	v.pushRawLine(fmt.Sprintf(`%s{host="%s",target="%s"} %f %d`, metric, hostID, target, val, ts))
+	v.pushRawLine(fmt.Sprintf(`%s{host="%s",target="%s"} %f %d`, metric, lblEsc(hostID), lblEsc(target), val, ts))
 }
 
 // pushHardwareLabeled writes one hardware metric with an extra label.
 func (v *vmWriter) pushHardwareLabeled(hostID, target string, ts int64, metric string, val float64, extraKey, extraVal string) {
 	v.pushRawLine(fmt.Sprintf(`%s{host="%s",target="%s",%s="%s"} %f %d`,
-		metric, hostID, target, extraKey, extraVal, val, ts))
+		metric, lblEsc(hostID), lblEsc(target), extraKey, lblEsc(extraVal), val, ts))
 }
 
 // pushRawLine writes one Prometheus text line directly to VM (fire-and-forget).

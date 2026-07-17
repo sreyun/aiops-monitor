@@ -83,7 +83,16 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	if ct, err := readCPUTimes(); err == nil {
 		if c.primed && ct.total > c.prevCPU.total {
 			totalDelta := ct.total - c.prevCPU.total
-			idleDelta := ct.idle - c.prevCPU.idle
+			// idle 里折算了 iowait，而内核文档明确 iowait **可以回退**（CPU 热插拔同理）。
+			// 直接相减会 uint64 下溢成天文数字 → totalDelta-idleDelta 再次回绕 →
+			// CPU% 变成 -9.2e17 这种脏数据，污染图表/告警/AI 基线。故双向夹紧。
+			idleDelta := uint64(0)
+			if ct.idle > c.prevCPU.idle {
+				idleDelta = ct.idle - c.prevCPU.idle
+			}
+			if idleDelta > totalDelta {
+				idleDelta = totalDelta
+			}
 			m.CPUPercent = round1(float64(totalDelta-idleDelta) / float64(totalDelta) * 100)
 		}
 		c.prevCPU = ct

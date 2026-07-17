@@ -123,7 +123,7 @@ func (s *Server) handleHardwareHealth(w http.ResponseWriter, r *http.Request) {
 // handleHardwareHistory returns hardware metric history from VM.
 func (s *Server) handleHardwareHistory(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")
-	metric := r.URL.Query().Get("metric") // temperature, power, fan_rpm, health_score
+	metric := r.URL.Query().Get("metric")  // temperature, power, fan_rpm, health_score
 	rangeStr := r.URL.Query().Get("range") // e.g. "24h", "7d"
 
 	if hostID == "" || metric == "" {
@@ -285,25 +285,37 @@ func (s *Server) handleNetFlowPackets(w http.ResponseWriter, r *http.Request) {
 // VM write helpers
 // ============================================================================
 
+// hardwareHealthScore maps a Redfish health string to a numeric series value.
+// ok=false for empty/unknown health so the caller can skip writing the metric
+// instead of silently reporting 0 (= Critical).
+func hardwareHealthScore(h string) (float64, bool) {
+	switch h {
+	case "OK":
+		return 2, true
+	case "Warning":
+		return 1, true
+	case "Critical":
+		return 0, true
+	}
+	return 0, false
+}
+
 func (s *Server) vmHardwareMetrics(hostID string, snap shared.HardwareSnapshot) {
 	if !s.vm.enabled() {
 		return
 	}
-	ts := snap.Timestamp
+	// Prometheus 导入格式的时间戳单位是**毫秒**（见 vm.go 主采样管道的 `ms := s.ts * 1000`）。
+	// snap.Timestamp 是 Unix 秒，此前直接透传 → 1.7e9 被当成毫秒 = 1970-01-21，
+	// 于是硬件/NetFlow 历史全写进 1970，查最近 24h 永远查不到点 → 历史曲线一直空。
+	ts := snap.Timestamp * 1000
 	target := snap.TargetName
 
-	// Health score: OK=2, Warning=1, Critical=0
-	var score float64
-	switch snap.Health {
-	case "OK":
-		score = 2
-	case "Warning":
-		score = 1
-	case "Critical":
-		score = 0
+	// Health score: OK=2 / Warning=1 / Critical=0。Health 为空或未知（如采集失败）时
+	// **不写该指标**——否则 var score 的零值 0 会被当成 Critical，误报一条“严重”。
+	// 传感器数据仍照常写入，不受影响。
+	if score, ok := hardwareHealthScore(snap.Health); ok {
+		s.vm.pushHardware(hostID, target, ts, "aiops_hardware_health_score", score)
 	}
-
-	s.vm.pushHardware(hostID, target, ts, "aiops_hardware_health_score", score)
 
 	// Temperature sensors
 	for _, t := range snap.Temps {
@@ -327,16 +339,17 @@ func (s *Server) vmNetFlowMetrics(hostID string, rep shared.NetFlowReport) {
 	if !s.vm.enabled() {
 		return
 	}
+	ts := rep.Timestamp * 1000 // Prometheus 导入格式要求毫秒；此前传秒导致数据写进 1970
 	for _, f := range rep.Flows {
 		labels := fmt.Sprintf(`host="%s",src_ip="%s",dst_ip="%s",src_port="%d",dst_port="%d",proto="%d",source="%s"`,
-			hostID, f.SrcIP, f.DstIP, f.SrcPort, f.DstPort, f.Protocol, rep.Source)
+			hostID, lblEsc(f.SrcIP), lblEsc(f.DstIP), f.SrcPort, f.DstPort, f.Protocol, lblEsc(rep.Source))
 
-		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_bytes{%s} %d %d", labels, f.Bytes, rep.Timestamp))
-		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_packets{%s} %d %d", labels, f.Packets, rep.Timestamp))
+		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_bytes{%s} %d %d", labels, f.Bytes, ts))
+		s.vm.pushRawLine(fmt.Sprintf("aiops_netflow_packets{%s} %d %d", labels, f.Packets, ts))
 	}
 	if rep.Stats.DroppedPackets > 0 {
 		s.vm.pushRawLine(fmt.Sprintf(`aiops_netflow_dropped{host="%s"} %d %d`,
-			hostID, rep.Stats.DroppedPackets, rep.Timestamp))
+			hostID, rep.Stats.DroppedPackets, ts))
 	}
 }
 

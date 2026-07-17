@@ -56,8 +56,8 @@ type RedfishTarget struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	Username      string `json:"username"`
-	PasswordEnv   string `json:"password_env"`            // 密码所在环境变量名（优先，密码不落盘）
-	Password      string `json:"password,omitempty"`       // 直接密码（备选：当环境变量不可用时，如 systemd 服务）
+	PasswordEnv   string `json:"password_env"`       // 密码所在环境变量名（优先，密码不落盘）
+	Password      string `json:"password,omitempty"` // 直接密码（备选：当环境变量不可用时，如 systemd 服务）
 	SkipTLSVerify bool   `json:"skip_tls_verify"`
 	IntervalSec   int    `json:"interval_sec"`
 }
@@ -103,8 +103,8 @@ type redfishCollector struct {
 	// systemPath caches the discovered Systems member @odata.id per target
 	// (e.g. "/redfish/v1/Systems/System.Embedded.1" for Dell iDRAC).
 	// Avoids hardcoding "/redfish/v1/Systems/1" which varies by vendor.
-	sysPathMu  sync.Mutex
-	systemPath map[string]string // target_name → discovered system path
+	sysPathMu   sync.Mutex
+	systemPath  map[string]string // target_name → discovered system path
 	chassisPath map[string]string // target_name → discovered chassis path
 }
 
@@ -360,12 +360,12 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 
 	// 1. System overview
 	var sys struct {
-		Status redfishStatus `json:"Status"`
+		Status           redfishStatus `json:"Status"`
 		ProcessorSummary struct {
-			Count         int    `json:"Count"`
-			Model         string `json:"Model"`
-			CoreCount     int    `json:"CoreCount"`
-			ThreadCount   int    `json:"ThreadCount"`
+			Count       int    `json:"Count"`
+			Model       string `json:"Model"`
+			CoreCount   int    `json:"CoreCount"`
+			ThreadCount int    `json:"ThreadCount"`
 		} `json:"ProcessorSummary"`
 		MemorySummary struct {
 			TotalSystemMemoryGiB float64 `json:"TotalSystemMemoryGiB"`
@@ -385,11 +385,11 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 
 	if sys.ProcessorSummary.Count > 0 {
 		snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
-			Name:       "CPU Summary",
-			Model:      sys.ProcessorSummary.Model,
-			Cores:      sys.ProcessorSummary.CoreCount,
-			Threads:    sys.ProcessorSummary.ThreadCount,
-			Health:     sys.Status.Health,
+			Name:    "CPU Summary",
+			Model:   sys.ProcessorSummary.Model,
+			Cores:   sys.ProcessorSummary.CoreCount,
+			Threads: sys.ProcessorSummary.ThreadCount,
+			Health:  sys.Status.Health,
 		})
 	}
 
@@ -403,12 +403,12 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 		snap.CPUs = nil // replace summary with per-processor entries
 		for _, m := range procs.Members {
 			var p struct {
-				Name          string `json:"Name"`
-				Model         string `json:"Model"`
-				TotalCores    int    `json:"TotalCores"`
-				TotalThreads  int    `json:"TotalThreads"`
-				MaxSpeedMHz   int    `json:"MaxSpeedMHz"`
-				Status        redfishStatus `json:"Status"`
+				Name         string        `json:"Name"`
+				Model        string        `json:"Model"`
+				TotalCores   int           `json:"TotalCores"`
+				TotalThreads int           `json:"TotalThreads"`
+				MaxSpeedMHz  int           `json:"MaxSpeedMHz"`
+				Status       redfishStatus `json:"Status"`
 			}
 			if rc.rfGetRaw(client, t.URL, t.Username, password, m.ODataID, &p) == nil {
 				snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
@@ -432,12 +432,12 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	if rc.rfGet(client, t.URL, t.Username, password, sysPath+"/Memory", &mems) == nil {
 		for _, m := range mems.Members {
 			var dimm struct {
-				Name            string `json:"Name"`
-				CapacityMiB     float64 `json:"CapacityMiB"`
-				MemoryDeviceType string `json:"MemoryDeviceType"`
-				OperatingSpeedMhz int  `json:"OperatingSpeedMhz"`
-				Status          redfishStatus `json:"Status"`
-				Id              string `json:"Id"`
+				Name              string        `json:"Name"`
+				CapacityMiB       float64       `json:"CapacityMiB"`
+				MemoryDeviceType  string        `json:"MemoryDeviceType"`
+				OperatingSpeedMhz int           `json:"OperatingSpeedMhz"`
+				Status            redfishStatus `json:"Status"`
+				Id                string        `json:"Id"`
 			}
 			if rc.rfGetRaw(client, t.URL, t.Username, password, m.ODataID, &dimm) == nil {
 				snap.Memory.DIMMs = append(snap.Memory.DIMMs, shared.MemoryDIMM{
@@ -468,12 +468,12 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 			if rc.rfGetRaw(client, t.URL, t.Username, password, sm.ODataID, &st) == nil {
 				for _, d := range st.Drives {
 					var drv struct {
-						Name         string  `json:"Name"`
-						Model        string  `json:"Model"`
-						CapacityBytes uint64 `json:"CapacityBytes"`
-						Status       redfishStatus `json:"Status"`
-						MediaType    string `json:"MediaType"`
-						Protocol     string `json:"Protocol"`
+						Name          string        `json:"Name"`
+						Model         string        `json:"Model"`
+						CapacityBytes uint64        `json:"CapacityBytes"`
+						Status        redfishStatus `json:"Status"`
+						MediaType     string        `json:"MediaType"`
+						Protocol      string        `json:"Protocol"`
 					}
 					if rc.rfGetRaw(client, t.URL, t.Username, password, d.ODataID, &drv) == nil {
 						snap.Storage = append(snap.Storage, shared.RedfishStorage{
@@ -494,76 +494,79 @@ func (rc *redfishCollector) collectOne(t RedfishTarget) shared.HardwareSnapshot 
 	// 5. Thermal (temperatures + fans)
 	var thermal struct {
 		Temperatures []struct {
-			Name                string  `json:"Name"`
-			ReadingCelsius      float64 `json:"ReadingCelsius"`
-			Status              redfishStatus `json:"Status"`
-			UpperThresholdCaution  float64 `json:"UpperThresholdCaution"`
-			UpperThresholdCritical float64 `json:"UpperThresholdCritical"`
+			Name                   string        `json:"Name"`
+			ReadingCelsius         float64       `json:"ReadingCelsius"`
+			Status                 redfishStatus `json:"Status"`
+			UpperThresholdCaution  float64       `json:"UpperThresholdCaution"`
+			UpperThresholdCritical float64       `json:"UpperThresholdCritical"`
 		} `json:"Temperatures"`
 		Fans []struct {
-			Name         string `json:"Name"`
-			Reading      int    `json:"Reading"`
-			ReadingUnits string `json:"ReadingUnits"`
+			Name         string        `json:"Name"`
+			Reading      int           `json:"Reading"`
+			ReadingUnits string        `json:"ReadingUnits"`
 			Status       redfishStatus `json:"Status"`
 		} `json:"Fans"`
 	}
 	if chassisPath != "" {
 		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Thermal", &thermal) == nil {
-		for _, t := range thermal.Temperatures {
-			snap.Temps = append(snap.Temps, shared.SensorReading{
-				Name:          t.Name,
-				Reading:       t.ReadingCelsius,
-				Unit:          "Celsius",
-				Status:        t.Status.Health,
-				UpperCaution:  t.UpperThresholdCaution,
-				UpperCritical: t.UpperThresholdCritical,
-			})
+			for _, t := range thermal.Temperatures {
+				snap.Temps = append(snap.Temps, shared.SensorReading{
+					Name:          t.Name,
+					Reading:       t.ReadingCelsius,
+					Unit:          "Celsius",
+					Status:        t.Status.Health,
+					UpperCaution:  t.UpperThresholdCaution,
+					UpperCritical: t.UpperThresholdCritical,
+				})
+			}
+			for _, f := range thermal.Fans {
+				snap.Fans = append(snap.Fans, shared.FanReading{
+					Name:   f.Name,
+					RPM:    f.Reading,
+					Health: f.Status.Health,
+					Status: f.Status.State,
+				})
+			}
 		}
-		for _, f := range thermal.Fans {
-			snap.Fans = append(snap.Fans, shared.FanReading{
-				Name:   f.Name,
-				RPM:    f.Reading,
-				Health: f.Status.Health,
-				Status: f.Status.State,
-			})
-		}
-	}
 	}
 
 	// 6. Power (PSU + watts)
 	var power struct {
 		PowerControl []struct {
-			Name             string  `json:"Name"`
+			Name               string  `json:"Name"`
 			PowerConsumedWatts float64 `json:"PowerConsumedWatts"`
 		} `json:"PowerControl"`
-		PowerSupply []struct {
-			Name             string  `json:"Name"`
-			PowerInputWatts  float64 `json:"PowerInputWatts"`
-			PowerOutputWatts float64 `json:"PowerOutputWatts"`
+		// DMTF Redfish Power schema 的属性名是 **PowerSupplies** 与 **Redundancy**
+		// （"PowerSupply" 只是类型名，不是属性名）。此前写成 PowerSupply /
+		// PowerSupplyRedundancy，导致所有厂商的 PSU 一律解析不出来 → 前端电源区永不渲染。
+		PowerSupplies []struct {
+			Name             string        `json:"Name"`
+			PowerInputWatts  float64       `json:"PowerInputWatts"`
+			PowerOutputWatts float64       `json:"PowerOutputWatts"`
 			Status           redfishStatus `json:"Status"`
-		} `json:"PowerSupply"`
-		PowerSupplyRedundancy []struct {
+		} `json:"PowerSupplies"`
+		Redundancy []struct {
 			Mode string `json:"Mode"`
-		} `json:"PowerSupplyRedundancy"`
+		} `json:"Redundancy"`
 	}
 	if chassisPath != "" {
 		if rc.rfGet(client, t.URL, t.Username, password, chassisPath+"/Power", &power) == nil {
-		if len(power.PowerSupplyRedundancy) > 0 {
-			snap.Power.Redundancy = power.PowerSupplyRedundancy[0].Mode
+			if len(power.Redundancy) > 0 {
+				snap.Power.Redundancy = power.Redundancy[0].Mode
+			}
+			for _, pc := range power.PowerControl {
+				snap.Power.TotalWatts += pc.PowerConsumedWatts
+			}
+			for _, ps := range power.PowerSupplies {
+				snap.Power.PSUs = append(snap.Power.PSUs, shared.PSUReading{
+					Name:        ps.Name,
+					InputWatts:  ps.PowerInputWatts,
+					OutputWatts: ps.PowerOutputWatts,
+					Health:      ps.Status.Health,
+					State:       ps.Status.State,
+				})
+			}
 		}
-		for _, pc := range power.PowerControl {
-			snap.Power.TotalWatts += pc.PowerConsumedWatts
-		}
-		for _, ps := range power.PowerSupply {
-			snap.Power.PSUs = append(snap.Power.PSUs, shared.PSUReading{
-				Name:        ps.Name,
-				InputWatts:  ps.PowerInputWatts,
-				OutputWatts: ps.PowerOutputWatts,
-				Health:      ps.Status.Health,
-				State:       ps.Status.State,
-			})
-		}
-	}
 	}
 
 	// 7. Firmware (low frequency: every hour)

@@ -307,9 +307,14 @@ func readIfTable() (rx, tx uint64, ok bool) {
 	); r != 0 { // NO_ERROR == 0
 		return 0, 0, false
 	}
+	// MIB_IFROW 布局：wszName[256]WCHAR=512B → dwIndex@512、dwType@516、…、
+	// dwInOctets@552、dwOutOctets@576、…、bDescr[256]@604 → 共 860B。
+	// 注意 offType 曾误写为 512（那是 dwIndex）：导致① 真正的回环网卡(dwType=24)从未被跳过，
+	// 本机 localhost 流量被并入网卡收发速率；② 恰好 ifIndex==24 的真实网卡被静默丢弃。
 	const (
 		rowSize        = 860
-		offType        = 512
+		offIndex       = 512
+		offType        = 516
 		offInOctets    = 552
 		offOutOctets   = 576
 		ifTypeLoopback = 24
