@@ -1184,6 +1184,8 @@
   "sre.ai_chat_model_desc": "用于 AI 诊断、智能对话",
   "sre.ai_embed_model": "向量化模型",
   "sre.ai_embed_model_desc": "用于 RAG 智能记忆与检索",
+  "sre.ai_rerank_model": "重排模型（可选）",
+  "sre.ai_rerank_model_desc": "RAG 精排，进一步提升召回相关性",
   "sre.ai_test_chat": "测试对话模型",
   "sre.ai_test_embed": "测试向量化模型"
 };

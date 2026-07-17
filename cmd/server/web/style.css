@@ -2129,6 +2129,20 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 /* 流式正文：纯文本展示（避免未完成 Markdown 导致渲染抖动） */
 .ai-stream-body{white-space:pre-wrap; word-break:break-word; line-height:1.6; font-size:13px}
 .ai-stream-text{color:var(--txt)}
+/* 推理模型思维链「思考过程」折叠区：暗色弱化、左侧强调线，与正文答案视觉分离 */
+.ai-reasoning{margin:0 0 8px; border-left:2px solid var(--line2); background:var(--panel2,var(--panel)); border-radius:0 6px 6px 0; overflow:hidden}
+.ai-reasoning-sum{cursor:pointer; user-select:none; list-style:none; padding:5px 10px; font-size:12px; color:var(--muted); font-weight:500; outline:none}
+.ai-reasoning-sum::-webkit-details-marker{display:none}
+.ai-reasoning-sum::before{content:"▸ "; color:var(--muted); font-size:10px}
+.ai-reasoning[open] .ai-reasoning-sum::before{content:"▾ "}
+.ai-reasoning-sum:hover{color:var(--txt)}
+.ai-reasoning-body{padding:2px 12px 9px; font-size:12px; line-height:1.55; color:var(--muted); white-space:pre-wrap; word-break:break-word; opacity:.85}
+/* P3 诊断置信度徽章：高=绿 / 中=琥珀 / 低=红，克制描边风格 */
+.ai-confidence{margin:6px 0}
+.ai-conf-badge{display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:3px 10px; border-radius:12px; border:1px solid currentColor; line-height:1.2}
+.ai-confidence.high .ai-conf-badge{color:#4a9e5c; background:rgba(74,158,92,.10)}
+.ai-confidence.mid .ai-conf-badge{color:#c08a2d; background:rgba(192,138,45,.10)}
+.ai-confidence.low .ai-conf-badge{color:#ef4d5a; background:rgba(239,77,90,.10)}
 /* 每条 AI 回复的操作栏（复制），hover 显示 */
 .ai-msg-tools{display:none; justify-content:flex-end; gap:6px; margin-top:6px}
 .ai-chat-msg.ai:hover .ai-msg-tools{display:flex}

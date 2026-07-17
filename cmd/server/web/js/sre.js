@@ -557,11 +557,12 @@ async function incidentAction(id, act){
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
 // calls onDelta for each token chunk, onError for errors, onResult for result
 // metadata, and onDone when complete. Returns the accumulated full text.
-async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool){
+async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,onReasoning){
   const reader=resp.body.getReader();
   const decoder=new TextDecoder();
   let buf="";
   let fullText="";
+  let fullReasoning="";
   try {
     while(true){
       const {done,value}=await reader.read();
@@ -582,6 +583,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool)
             if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.tool){ if(onTool) onTool(j.tool); continue; } // 工具执行状态帧（run/ok/err）
+            if(j.reasoning!==undefined){ fullReasoning+=j.reasoning; if(onReasoning) onReasoning(j.reasoning,fullReasoning); continue; } // 推理模型思维链增量
             if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
           } catch(e){ /* skip malformed chunks */ }
         }
@@ -590,6 +592,14 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool)
   } finally { reader.releaseLock(); }
   if(onDone) onDone(fullText);
   return fullText;
+}
+// 渲染「🧠 思考过程」可折叠区块：默认折叠、暗色弱化，与正文答案视觉分离。
+// streaming=true 时自动展开并显示光标，便于用户实时看到推理；完成后可手动收起。
+function renderReasoningBlock(reasoning,streaming){
+  if(!reasoning) return "";
+  const cursor=streaming?'<span class="ai-stream-cursor">▍</span>':"";
+  return `<details class="ai-reasoning"${streaming?" open":""}><summary class="ai-reasoning-sum">🧠 思考过程</summary>`
+    +`<div class="ai-reasoning-body">${esc(reasoning)}${cursor}</div></details>`;
 }
 async function loadDiagnosisChatHistory(incidentId){
   const el=$("incDiagnosisChat"); if(!el) return;
@@ -606,15 +616,17 @@ function renderDiagnosisChat(){
   if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击下方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
   el.innerHTML=hist.map((m,i)=>{
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
+    // 思维链折叠区（推理模型）：流式中展开、完成后收起；无思维链时返回空串
+    const rb=(m.role==="assistant")?renderReasoningBlock(m._reasoning,!!m._streaming):"";
     let body;
     if(m.role==="assistant" && m._streaming && m._loading){
-      // 等待 AI 响应：显示动态加载提示
-      body=`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||"正在分析…")}</span></div>`;
+      // 等待 AI 响应：显示动态加载提示（此时可能已在流式接收思维链）
+      body=rb+`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||"正在分析…")}</span></div>`;
     } else if(m.role==="assistant" && m._streaming){
       // 流式中：显示纯文本 + 闪烁光标，避免未完成 Markdown 导致渲染抖动
-      body=`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`;
+      body=rb+`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`;
     } else if(m.role==="assistant" && m.content!=="思考中…" && !m.content.startsWith("❌")){
-      body=renderAIMarkdown(filterDisplayContent(m.content||""));
+      body=rb+renderAIMarkdown(filterDisplayContent(m.content||""));
     } else {
       body=esc(m.content);
     }
@@ -695,6 +707,14 @@ async function sendDiagnosisChatMsg(){
         aiMsg.content=fullText||aiMsg.content||"（空回复）";
         if(renderThrottle){ cancelAnimationFrame(renderThrottle); renderThrottle=null; }
         renderDiagnosisChat();
+      },
+      null, // onResult
+      null, // onMeta
+      null, // onTool
+      (rd,fullReasoning)=>{ // 思维链增量：累积到 aiMsg._reasoning 并实时渲染
+        if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
+        aiMsg._reasoning=fullReasoning;
+        throttledRender();
       }
     );
   } catch(e){
@@ -1279,13 +1299,17 @@ async function openAIConfig(){
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
     $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
+    if($("rerankEndpoint")){ $("rerankEndpoint").value=c.rerank_endpoint||""; $("rerankKey").value=c.rerank_api_key||""; $("rerankModel").value=c.rerank_model||""; }
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
-    // 更新向量化模型卡片摘要
-    updateEmbedCardSummary();
-    // 向量化模型默认折叠
+    // 更新向量化 / 重排模型卡片摘要
+    updateEmbedCardSummary(); updateRerankCardSummary();
+    // 向量化、重排模型默认折叠
     const body=$("embedCardBody"), arrow=$("embedCardArrow");
     if(body){ body.style.display="none"; }
     if(arrow){ arrow.classList.remove("open"); }
+    const rbody=$("rerankCardBody"), rarrow=$("rerankCardArrow");
+    if(rbody){ rbody.style.display="none"; }
+    if(rarrow){ rarrow.classList.remove("open"); }
   } catch(e){}
   loadAIModels();
   $("aiConfigMask").classList.add("show");
@@ -1374,7 +1398,8 @@ async function saveAIConfig(){
   const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
   if(enabled && (!endpoint || !model)){ toast("启用 AI 需填写 Endpoint 和模型","err"); return; } // 轻校验：启用却没填必填项
   const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30,
-    embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0};
+    embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0,
+    rerank_endpoint:($("rerankEndpoint")?.value||"").trim(),rerank_api_key:$("rerankKey")?.value||"",rerank_model:($("rerankModel")?.value||"").trim()};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
@@ -1466,6 +1491,21 @@ function updateEmbedCardSummary(){
   else { summary.textContent=""; }
 }
 
+// 折叠/展开重排模型卡片
+function toggleRerankCard(){
+  const body=$("rerankCardBody"), arrow=$("rerankCardArrow");
+  if(!body) return;
+  const isOpen=body.style.display!=="none";
+  body.style.display=isOpen?"none":"block";
+  if(arrow){ arrow.classList.toggle("open",!isOpen); }
+}
+// 更新重排模型卡片折叠状态摘要
+function updateRerankCardSummary(){
+  const summary=$("rerankCardSummary"); if(!summary) return;
+  const model=($("rerankModel")?.value||"").trim();
+  summary.textContent=model?` · 已启用：${model}`:" · 未启用";
+}
+
 // 过滤 AI 输出中的敏感信息（密钥 / 密码 / token）。代码与命令予以保留、交由 Markdown 渲染
 // 展示——工具调用 JSON 已在后端剥离，这里仅对结尾残留兜底，不再误删正文里的命令/代码。
 function filterDisplayContent(text){
@@ -1553,6 +1593,12 @@ function renderAIMarkdown(raw){
     if(h){ close(); const tx=h[2].trim(); if(tx) html+=`<div class="ai-h ai-h${Math.min(h[1].length,4)}">${tx}</div>`; continue; }
     const bq=line.match(/^\s*&gt;\s?(.*)$/); // 引用（esc 后 > 变 &gt;）
     if(bq){ close(); html+=`<blockquote class="ai-bq">${bq[1]}</blockquote>`; continue; }
+    // P3 诊断置信度：整行以「置信度：高/中/低」起头时渲染为彩色徽章（容忍前置的 <strong>/*/> 标记）
+    if(/^\s*(?:<[^>]+>|[*>\s])*置信度\s*[:：]/.test(line)){
+      const cm=line.match(/置信度\s*[:：]\s*(?:<[^>]+>|[*\s])*(高|中|低)/);
+      if(cm){ close(); const lv=cm[1]; const cls=lv==="高"?"high":(lv==="低"?"low":"mid");
+        html+=`<div class="ai-confidence ${cls}"><span class="ai-conf-badge">🎯 置信度 ${lv}</span></div>`; continue; }
+    }
     const ul=line.match(/^\s*[-*•·]\s+(.+)$/);
     const ol=line.match(/^\s*\d+[.)]\s+(.+)$/);
     if(ul){ if(!inList||listTag!=="ul"){ close(); html+="<ul>"; inList=true; listTag="ul"; } html+="<li>"+ul[1]+"</li>"; }
@@ -1708,6 +1754,7 @@ async function sendAIChat(){
       body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),images,files,stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
+    let reasoning=""; // 推理模型思维链（独立于 answer，渲染到「思考过程」折叠区）
     // 工具调用状态 chip（run→ok/err）：与回答正文分离渲染，实时更新且不污染最终回答
     const toolStates=[];
     const toolTraceHTML=()=> toolStates.length ? '<div class="ai-tool-trace">'+toolStates.map(s=>{
@@ -1720,7 +1767,7 @@ async function sendAIChat(){
     let streamRAF=null;
     const paintStream=()=>{
       if(!pending) return;
-      pending.innerHTML=toolTraceHTML()
+      pending.innerHTML=renderReasoningBlock(reasoning,true)+toolTraceHTML()
         +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>";
     };
     const schedulePaint=()=>{
@@ -1729,7 +1776,7 @@ async function sendAIChat(){
     };
     const paintFinal=()=>{
       if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; }
-      if(pending) pending.innerHTML=toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"));
+      if(pending) pending.innerHTML=renderReasoningBlock(reasoning,false)+toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"));
     };
     await readSSEStream(r,
       (delta,fullText)=>{
@@ -1754,6 +1801,12 @@ async function sendAIChat(){
         if(t.state==="run") toolStates.push({name:t.name,state:"run"});
         else { for(let i=toolStates.length-1;i>=0;i--){ if(toolStates[i].name===t.name&&toolStates[i].state==="run"){ toolStates[i].state=t.state; break; } } }
         if(pending && !streamed){ streamed=true; }
+        schedulePaint();
+        if(aiChatStick()) aiChatToBottom();
+      },
+      (rd,fullReasoning)=>{ // 思维链增量：累积并实时渲染到折叠区
+        if(!streamed){ streamed=true; }
+        reasoning=fullReasoning;
         schedulePaint();
         if(aiChatStick()) aiChatToBottom();
       }
@@ -1899,6 +1952,7 @@ safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
+safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型

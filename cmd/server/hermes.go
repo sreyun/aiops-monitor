@@ -966,6 +966,17 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			flusher.Flush()
 		}
 	}
+	// sendReasoning 下发推理模型思维链增量（独立 {"reasoning":...} 帧）。前端收进「思考过程」
+	// 折叠区，与最终答案分离——既消除首字前的长静默，又不污染正文。
+	sendReasoning := func(text string) {
+		if !stream || w == nil || text == "" {
+			return
+		}
+		fmt.Fprintf(w, "data: {\"reasoning\":%s}\n\n", jsonString(text))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 	// sendTool 以独立 SSE 帧下发工具执行状态（state: run/ok/err），前端渲染为可实时更新的
 	// 「工具调用」状态 chip；刻意与 delta 正文分离，既让用户看到实时进度，又不污染最终回答。
 	// P3-3: 增加 info 字段，携带工具参数（run 时）或结果摘要（ok 时），供前端展示推理链路。
@@ -1013,10 +1024,13 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		var err error
 		streamedContent := false
 		if stream && w != nil && prov != aiProvAnthropic && len(h.tools) > 0 {
-			reply, nativeCalls, err = aiChatVStream(ctx, cfg, callMsgs, images, nativeTools, func(delta string) {
-				streamedContent = true
-				sendDelta(delta)
-			})
+			reply, nativeCalls, err = aiChatVStream(ctx, cfg, callMsgs, images, nativeTools,
+				func(delta string) {
+					streamedContent = true
+					sendDelta(delta)
+				},
+				sendReasoning, // 思维链增量 → 独立通道
+			)
 		} else {
 			reply, nativeCalls, err = aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）
 		}

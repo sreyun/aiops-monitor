@@ -872,6 +872,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if c.EmbedAPIKey != "" {
 		c.EmbedAPIKey = "****" // 嵌入 Key 同样不回显
 	}
+	if c.RerankAPIKey != "" {
+		c.RerankAPIKey = "****" // rerank Key 同样不回显
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -1256,7 +1259,20 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 				break
 			}
 		}
-		userMsg := fmt.Sprintf("请对事件 #%d 进行诊断分析，给出根因判断和处置建议。", inc.ID)
+		// P3：要求结构化输出（根因/置信度/证据/处置），置信度用固定行便于前端识别并渲染徽章。
+		userMsg := fmt.Sprintf(`请对事件 #%d 进行诊断分析，严格按以下 Markdown 结构输出（保留各节标题，用简洁中文）：
+
+## 🎯 根因研判
+最可能的根本原因（1-3 句）。信息不足时明确指出还需要哪些数据。
+
+## 📊 置信度
+另起一行，格式固定为「置信度：高」/「置信度：中」/「置信度：低」三者之一（单独成行），再用一句话说明依据。
+
+## 🔍 关键证据
+逐条列出支撑判断的具体指标/日志/告警，须引用上文真实数据，不得编造。
+
+## 🛠️ 处置建议
+按优先级给出可执行步骤（编号列表）。`, inc.ID)
 		// RAG: 检索历史诊断记忆注入 system prompt（已在 SSE 连接建立后执行）
 		sys += s.retrieveMemoryForPrompt("diagnosis", userMsg, 8)
 
@@ -1943,9 +1959,28 @@ func (s *Server) retrieveMemoryForPrompt(preferKind, userMsg string, topK int) s
 	if len(emb) == 0 {
 		return ""
 	}
-	hits, err := s.pg.searchMemoryByKind(emb, preferKind, topK)
+	// 配置了 rerank 时按 3×K 过取候选，交给 rerank 精排 —— 向量召回负责“找全”，rerank 负责“排准”。
+	fetch := topK
+	if _, _, _, ok := rerankConfig(cfg); ok {
+		fetch = topK * 3
+	}
+	hits, err := s.pg.searchMemoryByKind(emb, preferKind, fetch)
 	if err != nil || len(hits) == 0 {
 		return ""
+	}
+	// rerank 精排：失败 / 未配置时静默回退到原向量顺序，仅取前 topK。
+	if len(hits) > topK {
+		docs := make([]string, len(hits))
+		for i, h := range hits {
+			docs[i] = h.Content
+		}
+		if order := rerankDocuments(cfg, query, docs, topK); len(order) > 0 {
+			reordered := make([]memoryHit, 0, len(order))
+			for _, i := range order {
+				reordered = append(reordered, hits[i])
+			}
+			hits = reordered
+		}
 	}
 	// 异步更新命中记忆的 last_hit_at（用于衰减策略判断）
 	go func() {

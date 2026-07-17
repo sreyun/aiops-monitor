@@ -1133,6 +1133,8 @@ window.DICT_EN = {
   "sre.ai_chat_model_desc": "For AI diagnosis and smart conversations",
   "sre.ai_embed_model": "Embedding Model",
   "sre.ai_embed_model_desc": "For RAG smart memory and retrieval",
+  "sre.ai_rerank_model": "Rerank Model (optional)",
+  "sre.ai_rerank_model_desc": "Reranks RAG results for higher relevance",
   "sre.ai_test_chat": "Test Chat Model",
   "sre.ai_test_embed": "Test Embedding Model"
 };

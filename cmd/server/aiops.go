@@ -38,6 +38,12 @@ type AIConfig struct {
 	EmbedAPIKey     string `json:"embed_api_key,omitempty"`    // 嵌入 Key，留空=复用主 API Key
 	EmbedModel      string `json:"embed_model,omitempty"`      // 嵌入模型，如 text-embedding-3-small / text-embedding-v2
 	EmbedDimensions int    `json:"embed_dimensions,omitempty"` // 目标维度，默认 1536（须与 pgvector 列一致）
+	// 可选重排（rerank）：配置后 RAG 先按向量过取候选，再用 rerank 模型精排 Top-K，显著提升召回
+	// 相关性。留空=不启用（行为不变）。兼容 Jina / Cohere / 百炼 / SiliconFlow 等 OpenAI 风格
+	// /rerank；Endpoint / Key 留空时依次回退到嵌入配置、主配置。
+	RerankEndpoint string `json:"rerank_endpoint,omitempty"`
+	RerankModel    string `json:"rerank_model,omitempty"`
+	RerankAPIKey   string `json:"rerank_api_key,omitempty"`
 	// Hermes Agent 配置
 	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
 	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
@@ -365,8 +371,10 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 type streamToolChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"` // 推理模型思维链（DeepSeek-R1/QwQ/Qwen3-thinking）
+			Reasoning        string `json:"reasoning"`         // 部分网关字段名
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -387,7 +395,7 @@ type streamToolChunk struct {
 // 原生 FC 下 content 与 tool_calls 天然分离，直接透传 content 不会把工具 JSON 泄漏给用户。
 // 仅支持 OpenAI 兼容端点；Anthropic 走非流式 aiChatV（其流式 tool-use 帧格式不同，成本高）。
 // ctx 用于客户端断开/超时时中止在途请求。
-func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, onDelta func(string)) (string, []nativeToolCall, error) {
+func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, onDelta, onReasoning func(string)) (string, []nativeToolCall, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -464,6 +472,11 @@ func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]stri
 			continue
 		}
 		d := chunk.Choices[0].Delta
+		if r := d.ReasoningContent; r != "" && onReasoning != nil {
+			onReasoning(r) // 思维链走独立通道，不计入 content / 最终答案
+		} else if d.Reasoning != "" && onReasoning != nil {
+			onReasoning(d.Reasoning)
+		}
 		if d.Content != "" {
 			content.WriteString(d.Content)
 			if onDelta != nil {
@@ -613,8 +626,14 @@ func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messag
 			}
 			return fullReply.String(), nil
 		}
-		// Extract delta content from the chunk
-		delta := parseStreamDelta(data, prov)
+		// 分别提取正文增量与思维链增量：思维链走独立 {"reasoning":...} 帧，前端收进折叠区。
+		delta, reasoning := parseStreamDelta(data, prov)
+		if reasoning != "" {
+			fmt.Fprintf(w, "data: {\"reasoning\":%s}\n\n", jsonString(reasoning))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
 		if delta == "" {
 			continue
 		}
@@ -634,10 +653,15 @@ func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messag
 
 // streamDeltaChunk 是 SSE 流式响应的 JSON 解析目标类型。
 // 提取为包级类型以便复用，编译器可优化栈分配，减少 GC 压力（P2-5 优化）。
+// reasoning_content / reasoning：推理模型（DeepSeek-R1 / QwQ / Qwen3-thinking 等）把思维链
+// 放在独立字段，正文答案仍在 content——分开解析后前端可把 CoT 收进「思考过程」折叠区，
+// 既消除首字前的长时间静默，又不与最终答案混排。
 type streamDeltaChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
 		} `json:"delta"`
 		Message struct {
 			Content string `json:"content"`
@@ -652,21 +676,33 @@ type streamDeltaChunk struct {
 	} `json:"output"`
 }
 
-// parseStreamDelta extracts the content delta from a single SSE chunk.
-func parseStreamDelta(data string, prov aiProviderType) string {
+// parseStreamDelta 从单个 SSE chunk 提取「正文增量」与「思维链增量」。二者可同时为空，
+// 也可各自非空（推理阶段只有 reasoning，作答阶段只有 content）。
+func parseStreamDelta(data string, prov aiProviderType) (content, reasoning string) {
 	var chunk streamDeltaChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-		return ""
+		return "", ""
 	}
-	// OpenAI-compatible format: choices[0].delta.content
-	if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-		return chunk.Choices[0].Delta.Content
+	if len(chunk.Choices) > 0 {
+		d := chunk.Choices[0].Delta
+		content = d.Content
+		reasoning = d.ReasoningContent
+		if reasoning == "" {
+			reasoning = d.Reasoning
+		}
+		// 少数实现把内容放在 message.content（非 delta）——仅当 delta 为空时兜底
+		if content == "" && chunk.Choices[0].Message.Content != "" {
+			content = chunk.Choices[0].Message.Content
+		}
+		if content != "" || reasoning != "" {
+			return content, reasoning
+		}
 	}
 	// Bailian native format: output.choices[0].message.content
 	if len(chunk.Output.Choices) > 0 && chunk.Output.Choices[0].Message.Content != "" {
-		return chunk.Output.Choices[0].Message.Content
+		return chunk.Output.Choices[0].Message.Content, ""
 	}
-	return ""
+	return "", ""
 }
 
 // jsonString marshals a string as a JSON string (with quotes).
@@ -1077,6 +1113,95 @@ func embedText(cfg AIConfig, text string) []float64 {
 		embedCacheSet(text, emb)
 	}
 	return emb
+}
+
+// rerankConfig 解析 rerank 端点/密钥/模型；未配置 RerankModel 即视为未启用（ok=false）。
+// Endpoint / Key 依次回退：rerank 专用 → 嵌入 → 主配置。
+func rerankConfig(cfg AIConfig) (ep, key, model string, ok bool) {
+	model = strings.TrimSpace(cfg.RerankModel)
+	if model == "" {
+		return "", "", "", false
+	}
+	ep = strings.TrimSpace(cfg.RerankEndpoint)
+	if ep == "" {
+		ep = strings.TrimSpace(cfg.EmbedEndpoint)
+	}
+	if ep == "" {
+		ep = strings.TrimSpace(cfg.Endpoint)
+	}
+	key = strings.TrimSpace(cfg.RerankAPIKey)
+	if key == "" {
+		key = strings.TrimSpace(cfg.EmbedAPIKey)
+	}
+	if key == "" {
+		key = strings.TrimSpace(cfg.APIKey)
+	}
+	if ep == "" || key == "" {
+		return "", "", "", false
+	}
+	return ep, key, model, true
+}
+
+// rerankEndpointURL 把 base / 对话 / 嵌入端点规整为 OpenAI 风格的 /rerank 完整地址。
+func rerankEndpointURL(ep string) string {
+	ep = strings.TrimRight(strings.TrimSpace(ep), "/")
+	switch {
+	case strings.HasSuffix(ep, "/rerank"):
+		return ep
+	case strings.HasSuffix(ep, "/chat/completions"):
+		return strings.TrimSuffix(ep, "/chat/completions") + "/rerank"
+	case strings.HasSuffix(ep, "/embeddings"):
+		return strings.TrimSuffix(ep, "/embeddings") + "/rerank"
+	default:
+		return ep + "/rerank"
+	}
+}
+
+// rerankDocuments 调用 OpenAI 风格 /rerank 接口，对候选文档按与 query 的相关性重排，返回
+// 按相关性降序的原始下标（已裁剪到 topN）。未配置 / 出错 / 空结果时返回 nil，调用方回退到
+// 原向量顺序——rerank 是纯增强，绝不因其失败而降低可用性。
+func rerankDocuments(cfg AIConfig, query string, docs []string, topN int) []int {
+	ep, key, model, ok := rerankConfig(cfg)
+	if !ok || strings.TrimSpace(query) == "" || len(docs) == 0 {
+		return nil
+	}
+	reqBody := map[string]any{"model": model, "query": query, "documents": docs}
+	if topN > 0 {
+		reqBody["top_n"] = topN
+	}
+	body, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost, rerankEndpointURL(ep), bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := newGuardedHTTPClient(20 * time.Second).Do(req) // SSRF：rerank 端点用户可配，拦元数据/链路本地
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	// 兼容 Jina/Cohere/SiliconFlow：{"results":[{"index":int,"relevance_score":float},...]}（已按分降序）
+	var out struct {
+		Results []struct {
+			Index int `json:"index"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.Results) == 0 {
+		return nil
+	}
+	idx := make([]int, 0, len(out.Results))
+	seen := make(map[int]bool, len(out.Results))
+	for _, r := range out.Results {
+		if r.Index >= 0 && r.Index < len(docs) && !seen[r.Index] {
+			idx = append(idx, r.Index)
+			seen[r.Index] = true
+		}
+	}
+	return idx
 }
 
 // embedEndpointURL 把用户填的 base / 对话端点规整为 OpenAI 兼容的 /embeddings 完整地址。

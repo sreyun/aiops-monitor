@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -728,10 +729,57 @@ func (p *pgStore) insertDiagnosisEmbedding(incidentID int64, emb []float64, summ
 	return id, err
 }
 
-// searchSimilarCases returns the top-N similar diagnosis cases by cosine distance.
+// ---- 反馈驱动的检索重排：让 👍/👎 真正改变 RAG 结果（learn 闭环）----
+//
+// 用户对诊断结论的 👍/👎（helpful/unhelpful）此前只作为提示标注展示，并不影响检索排序，
+// 反馈形同虚设。这里把用户评价折算成「有效距离」的增减：👍 上浮、👎 下沉（通常被挤出 Top-N），
+// 使每一次反馈都改变后续对话能检索到的历史案例——这才是可自我进化的学习闭环。
+//
+// 权重刻意保守且仅用于排序：对外返回的 similarCase.Distance 保持原始余弦距离，
+// 展示的相似度% 依旧真实，不会被反馈"注水"。
+const (
+	feedbackHelpfulBonus     = 0.05 // 👍 案例：有效距离 -0.05，轻微提前
+	feedbackUnhelpfulPenalty = 0.20 // 👎 案例：有效距离 +0.20，显著靠后（通常被挤出 Top-N）
+)
+
+// feedbackAdjustedDistance 返回用于排序的「有效距离」：在原始余弦距离上叠加反馈增减。
+// 空 / 未知反馈按中性处理（不调整）。
+func feedbackAdjustedDistance(rawDistance float64, feedback string) float64 {
+	switch feedback {
+	case "helpful":
+		return rawDistance - feedbackHelpfulBonus
+	case "unhelpful":
+		return rawDistance + feedbackUnhelpfulPenalty
+	default:
+		return rawDistance
+	}
+}
+
+// rerankByFeedback 按「有效距离」升序稳定重排候选案例，再截断到 limit：
+// 👍 案例上浮、👎 案例下沉（通常被挤出 Top-N），实现反馈学习闭环。
+// limit<=0 表示不截断；原始 Distance 不被修改。
+func rerankByFeedback(cases []similarCase, limit int) []similarCase {
+	sort.SliceStable(cases, func(i, j int) bool {
+		return feedbackAdjustedDistance(cases[i].Distance, cases[i].Feedback) <
+			feedbackAdjustedDistance(cases[j].Distance, cases[j].Feedback)
+	})
+	if limit > 0 && len(cases) > limit {
+		cases = cases[:limit]
+	}
+	return cases
+}
+
+// searchSimilarCases returns the top-N similar diagnosis cases, re-ranked by user feedback.
+// 先用向量索引按余弦距离取较大候选集（保留 ivfflat 索引加速），再交给 rerankByFeedback 让
+// 👍/👎 影响最终排序，使用户反馈真正改变 RAG 检索结果（learn 闭环），而非仅作展示标注。
 func (p *pgStore) searchSimilarCases(emb []float64, limit int) ([]similarCase, error) {
 	if limit <= 0 {
 		limit = 3
+	}
+	// 放大候选集：Top 案例被 👎 惩罚挤下去后，仍需有优质案例补位；至少取 12 条。
+	fetch := limit * 4
+	if fetch < 12 {
+		fetch = 12
 	}
 	rows, err := p.db.Query(
 		`SELECT id, incident_id, summary, severity, tags, feedback,
@@ -739,7 +787,7 @@ func (p *pgStore) searchSimilarCases(emb []float64, limit int) ([]similarCase, e
 		 FROM diagnosis_embeddings
 		 ORDER BY embedding <=> $1::vector
 		 LIMIT $2`,
-		vecStr(emb), limit,
+		vecStr(emb), fetch,
 	)
 	if err != nil {
 		return nil, err
@@ -753,7 +801,10 @@ func (p *pgStore) searchSimilarCases(emb []float64, limit int) ([]similarCase, e
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return rerankByFeedback(out, limit), nil
 }
 
 // updateDiagnosisFeedback records user feedback on a diagnosis embedding.

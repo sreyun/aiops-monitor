@@ -1133,6 +1133,8 @@ window.DICT_TW = {
   "sre.ai_chat_model_desc": "用於 AI 診斷、智慧對話",
   "sre.ai_embed_model": "向量化模型",
   "sre.ai_embed_model_desc": "用於 RAG 智慧記憶與檢索",
+  "sre.ai_rerank_model": "重排模型（可選）",
+  "sre.ai_rerank_model_desc": "RAG 精排，進一步提升召回相關性",
   "sre.ai_test_chat": "測試對話模型",
   "sre.ai_test_embed": "測試向量化模型"
 };

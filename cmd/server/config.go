@@ -1241,6 +1241,10 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if a.EmbedAPIKey == "" || strings.Contains(a.EmbedAPIKey, "****") {
 		a.EmbedAPIKey = cs.cfg.AI.EmbedAPIKey
 	}
+	// rerank Key 同样：表单提交空/脱敏值时保留原值。
+	if a.RerankAPIKey == "" || strings.Contains(a.RerankAPIKey, "****") {
+		a.RerankAPIKey = cs.cfg.AI.RerankAPIKey
+	}
 	// AI 配置表单不含这些 Hermes 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
 	a.HermesEnabled = cs.cfg.AI.HermesEnabled
 	a.HermesAutoApprove = cs.cfg.AI.HermesAutoApprove

@@ -1588,6 +1588,24 @@
         </div>
       </div>
 
+      <!-- 重排(rerank)模型卡片（可折叠，可选增强） -->
+      <div class="ai-card ai-card-collapsible" id="rerankCard">
+        <div class="ai-card-header ai-card-header-clickable" id="rerankCardHeader">
+          <span class="ai-card-arrow" id="rerankCardArrow">▸</span>
+          <span class="ai-card-icon">🎯</span>
+          <div class="ai-card-header-text">
+            <span class="ai-card-title" data-i18n="sre.ai_rerank_model">重排模型（可选）</span>
+            <span class="ai-card-desc"><span data-i18n="sre.ai_rerank_model_desc">RAG 精排，进一步提升召回相关性</span><span class="ai-card-summary" id="rerankCardSummary"></span></span>
+          </div>
+        </div>
+        <div class="ai-card-body" id="rerankCardBody" style="display:none">
+          <div class="hint" style="margin-bottom:8px">选填。配置后 RAG 先按向量过取候选，再用 rerank 模型精排 Top-K，检索更准。兼容 Jina / Cohere / 百炼 / SiliconFlow 等 <code>/rerank</code> 接口。Endpoint / Key 留空时依次复用嵌入、主配置。<b>留空=不启用，行为不变。</b></div>
+          <div class="field"><label>rerank Endpoint</label><input type="text" id="rerankEndpoint" placeholder="留空=复用嵌入/主 Endpoint；或 https://api.siliconflow.cn/v1"></div>
+          <div class="field"><label>rerank API Key</label><input type="password" id="rerankKey" autocomplete="off" placeholder="留空=复用嵌入/主 API Key"></div>
+          <div class="field"><label>rerank 模型</label><input type="text" id="rerankModel" placeholder="如 BAAI/bge-reranker-v2-m3 / gte-rerank / jina-reranker-v2"></div>
+        </div>
+      </div>
+
       <div class="hint" style="margin-top:8px">按 Endpoint 自动识别两类接口：<b>OpenAI 兼容</b>（OpenAI / DeepSeek / Ollama / 百炼等）与 <b>Anthropic</b>（Claude）。填好 Endpoint + Key 后自动拉取可用模型（下拉 / 搜索），也可手动输入。未启用时用内置启发式引擎，开箱即用。</div>
 
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
