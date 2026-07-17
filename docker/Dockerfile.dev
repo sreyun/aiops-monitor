@@ -12,6 +12,8 @@ COPY go.mod go.sum ./
 COPY vendor/ vendor/
 COPY shared/ shared/
 COPY cmd/ cmd/
+# 将配置示例复制到 cmd/agent/ 以供 go:embed 内嵌（.gitignore 排除，构建时复制）
+COPY config.example.json cmd/agent/config_example.json
 
 # 仅构建当前平台 server + agent 二进制（跳过 dist 交叉编译）
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \

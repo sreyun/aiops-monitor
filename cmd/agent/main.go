@@ -92,6 +92,9 @@ func main() {
 		slog.Info("已加载配置文件", "path", cfgPath)
 	}
 
+	// 首次启动时在配置目录自动生成 config.example.json（已存在则跳过）
+	ensureConfigExample(cfgPath)
+
 	// flags override file/defaults
 	var cfgFlag string
 	flag.StringVar(&cfg.Server, "server", cfg.Server, "服务端地址，如 http://192.168.1.10:8529")
