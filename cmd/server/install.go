@@ -146,8 +146,8 @@ if [ -n "$SERVERS_JSON" ]; then
   "servers": $SERVERS_JSON,
   "category": "$CATEGORY",
   "log_paths": __LOG_PATHS__,
-  "report_interval": 10,
-  "plugin_interval": 15,
+  "report_interval": 30,
+  "plugin_interval": 60,
   "plugins_dir": "$DIR/plugins",
   "state_file": "$DIR/agent_state.json"
 }
@@ -159,8 +159,8 @@ else
   "token": "$TOKEN",
   "category": "$CATEGORY",
   "log_paths": __LOG_PATHS__,
-  "report_interval": 10,
-  "plugin_interval": 15,
+  "report_interval": 30,
+  "plugin_interval": 60,
   "plugins_dir": "$DIR/plugins",
   "state_file": "$DIR/agent_state.json"
 }
@@ -234,9 +234,29 @@ elif [ "$OS" = "Darwin" ]; then
 </dict>
 </plist>
 PL
+  # Strip the quarantine xattr: a curl-downloaded binary can carry
+  # com.apple.quarantine, and after a reboot Gatekeeper blocks launchd from starting
+  # a quarantined/unsigned binary — a prime cause of "monitoring dead after restart".
+  xattr -dr com.apple.quarantine "$DIR/aiops-agent" 2>/dev/null || true
+  UIDN=$(id -u)
   launchctl unload "$PLIST" 2>/dev/null || true
-  launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST"
-  echo "[AIOps] launchd job installed: com.aiops.agent (autostart on boot + keepalive)"
+  if [ "$UIDN" = "0" ]; then
+    # System LaunchDaemon: starts at boot regardless of login. Prefer the modern
+    # bootstrap API, fall back to legacy load -w on older macOS.
+    launchctl bootout system "$PLIST" 2>/dev/null || true
+    launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+    echo "[AIOps] launchd LaunchDaemon installed: com.aiops.agent (starts at boot + keepalive)"
+  else
+    # Per-user LaunchAgent: bootstrap + ENABLE so the enabled state survives a reboot
+    # (load -w alone can lose it on newer macOS); kickstart starts it right now.
+    launchctl bootout "gui/$UIDN" "$PLIST" 2>/dev/null || true
+    launchctl bootstrap "gui/$UIDN" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+    launchctl enable "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
+    launchctl kickstart "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
+    echo "[AIOps] launchd LaunchAgent installed: com.aiops.agent (starts at login + keepalive)"
+    echo "[AIOps] NOTE: a per-user agent starts only after LOGIN. For a headless Mac that"
+    echo "[AIOps] must collect before anyone logs in, re-run the installer with sudo."
+  fi
 else
   # Fallback (non-root Linux without systemd): run now + a @reboot crontab entry
   # so it survives reboots. root+systemd is recommended for restart-on-crash too.
@@ -265,6 +285,11 @@ echo "[AIOps] done. Check the dashboard for this host."
 // config.json is UTF-8 (no BOM); the agent is launched via a hidden VBS
 // supervisor that only starts it when not already running (no duplicates).
 const installPs1Template = `$ErrorActionPreference = "Stop"
+# Force TLS 1.2 before any download. Windows Server 2012/2016 default Invoke-WebRequest
+# to TLS 1.0, which fails against a TLS1.2-only HTTPS server ("Could not create SSL/TLS
+# secure channel") — a very common Windows install failure. Numeric 3072 = Tls12 avoids
+# an enum-undefined error on older .NET where the Tls12 name isn't defined.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
 $Server   = "__SERVER__"
 $Token    = "__TOKEN__"
 $Category = "__CATEGORY__"
@@ -276,6 +301,18 @@ if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = 
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
+
+# Stop any prior instance BEFORE downloading. A running agent holds aiops-agent.exe
+# locked, so downloading over it fails — on Server 2012 (no curl.exe) Invoke-WebRequest
+# throws and $ErrorActionPreference=Stop aborts the whole install. This is the #1 cause
+# of re-install failures, esp. on Hyper-V hosts that re-run the elevated install while
+# the 5-min keepalive is running. Delete the task first so it can't relaunch mid-install,
+# kill the process, then wait for the file handle to release. cmd /c avoids the PS 5.1
+# NativeCommandError when the task doesn't exist yet.
+cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
+
 # Prefer curl.exe (bundled on Win10+): supports resume (-C -) + retry so a flaky
 # link doesn't restart the whole 7.5MB. Fall back to Invoke-WebRequest on older OS.
 $AgentExe = Join-Path $Dir "aiops-agent.exe"
@@ -298,8 +335,8 @@ if ($ServersJson -ne "") {
     servers = ($ServersJson | ConvertFrom-Json)
     category = $Category
     log_paths = @($LogPaths | ConvertFrom-Json)
-    report_interval = 10
-    plugin_interval = 15
+    report_interval = 30
+    plugin_interval = 60
     plugins_dir = "$Dir\plugins"
     state_file = "$Dir\agent_state.json"
   } | ConvertTo-Json -Depth 3
@@ -309,8 +346,8 @@ if ($ServersJson -ne "") {
     token = $Token
     category = $Category
     log_paths = @($LogPaths | ConvertFrom-Json)
-    report_interval = 10
-    plugin_interval = 15
+    report_interval = 30
+    plugin_interval = 60
     plugins_dir = "$Dir\plugins"
     state_file = "$Dir\agent_state.json"
   } | ConvertTo-Json
@@ -338,12 +375,7 @@ If Not running Then $runLine
 "@
 [System.IO.File]::WriteAllText($vbs, $vbsBody, (New-Object System.Text.UTF8Encoding $false))
 
-# Remove any prior instance (either install mode) so we never run two agents.
-# cmd /c avoids PowerShell 5.1 NativeCommandError on non-zero exit (task not found).
-# Single-quoted PS string passes literal " to cmd.exe, which strips them for schtasks.
-cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
+# (Prior instance already stopped + task deleted before the download above.)
 if ($IsAdmin) {
   # Elevated: run the keepalive task as SYSTEM at Highest run level so Get-VM
   # (Hyper-V guest collection) has the privileges it needs. Same proven 5-minute
@@ -351,15 +383,21 @@ if ($IsAdmin) {
   # /Run starts it immediately. The HKCU Run key is irrelevant to SYSTEM, drop it.
   Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
   $trTask = 'wscript.exe \"' + $vbs + '\"'
+  # Continue-guard: schtasks writing to stderr can raise a NativeCommandError under
+  # $ErrorActionPreference=Stop (PS 5.1) and abort the install even on success.
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
   schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
+  $ErrorActionPreference = $eap
   Write-Host "[AIOps] installed as SYSTEM (elevated), 5-min keepalive. Hyper-V collection enabled."
 } else {
   # Non-elevated: classic per-user autostart (unchanged). Works without admin but
   # CANNOT collect Hyper-V guests -- Get-VM needs elevation.
   New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
   $trTask = 'wscript.exe \"' + $vbs + '\"'
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 2>$null | Out-Null
+  $ErrorActionPreference = $eap
   Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
   Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
   Write-Host "[AIOps] NOTE: Hyper-V VM collection needs admin. On a Hyper-V host, re-run this install command in an ELEVATED PowerShell."
@@ -449,12 +487,18 @@ echo "  curl -fsSL http://<this-host-ip>:${RELAY_PORT}/install.sh | sh"
 
 // relayInstallPs1Template installs the agent in GATEWAY RELAY mode on Windows.
 const relayInstallPs1Template = `$ErrorActionPreference = "Stop"
+# Force TLS 1.2 (numeric 3072) so downloads work on Server 2012/2016 which default to TLS 1.0.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
 $Server = "__SERVER__"
 $Listen = if ($env:RELAY_LISTEN) { $env:RELAY_LISTEN } else { ":8529" }
 $Dir    = Join-Path $env:LOCALAPPDATA "aiops-agent"
 
 Write-Host "[AIOps] installing relay to $Dir (upstream $Server)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
+# Stop a prior relay/agent before downloading so the running exe doesn't hold the
+# file locked (which would make Invoke-WebRequest throw and abort the install).
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
 Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
 
 $cfg = @{
@@ -517,6 +561,19 @@ const uninstallPs1Template = `$ErrorActionPreference = "Continue"
 # (%ProgramData%). Removing a SYSTEM install's task/dir needs an elevated shell.
 $Dirs = @((Join-Path $env:LOCALAPPDATA "aiops-agent"), (Join-Path $env:ProgramData "aiops-agent"))
 Write-Host "[AIOps] uninstalling ($($Dirs -join '; '))"
+
+# An elevated (SYSTEM) install registers its keepalive task + files machine-wide.
+# Removing a SYSTEM task and %ProgramData% needs admin: without it, schtasks /Delete
+# is access-denied (silently), the task relaunches the agent within 5 min, and the
+# file deletion below fails — the classic "uninstall didn't work". Warn up front.
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+$ProgramDataDir = Join-Path $env:ProgramData "aiops-agent"
+if (-not $IsAdmin -and (Test-Path $ProgramDataDir)) {
+    Write-Host "[AIOps] WARNING: an elevated (SYSTEM) install exists at $ProgramDataDir."
+    Write-Host "[AIOps] Its SYSTEM scheduled task CANNOT be removed without admin and will relaunch"
+    Write-Host "[AIOps] the agent within 5 minutes. Re-run this uninstall in an ELEVATED PowerShell"
+    Write-Host "[AIOps] (Run as Administrator) to fully remove it."
+}
 
 # Step 1: Remove ALL autostart entries (normal + relay modes)
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue

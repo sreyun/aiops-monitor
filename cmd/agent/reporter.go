@@ -388,9 +388,13 @@ func (a *Agent) Run(ctx context.Context) {
 	// for a clean drain on context cancellation.
 	var childWg sync.WaitGroup
 
-	// Register to all targets (best-effort with retry, non-blocking on failures)
+	// Register to all targets in the BACKGROUND. registerTarget retries 3× with
+	// backoff sleeps; doing it synchronously here delayed startup by seconds per
+	// unreachable server (the "slow start" symptom on hosts whose server is slow).
+	// The report loop re-registers on 403, so the first reports self-heal.
 	for _, t := range a.targets {
-		a.registerTarget(t)
+		tgt := t
+		go a.registerTarget(tgt)
 	}
 
 	childWg.Add(1)
@@ -442,25 +446,28 @@ func (a *Agent) Run(ctx context.Context) {
 		}
 	}
 
-	// Start NetFlow receiver
+	// Start NetFlow receiver. run() contains a BLOCKING UDP read loop, so it MUST run
+	// in its own goroutine — calling it inline would block Run() and prevent the main
+	// report loop (base metrics) and every collector below from ever starting. That
+	// was the "enable NetFlow → base monitoring dies / heavy-monitoring host hangs at
+	// startup" bug. Not tracked in childWg: a best-effort UDP receiver has no critical
+	// state to drain, so it's fine to let the process exit abandon it (fast shutdown).
 	if a.netflowCfg != nil && a.netflowCfg.Listen != "" {
 		nr := newNetflowReceiver(*a.netflowCfg, a.identity.HostID, a.identity.Fingerprint)
-		nr.run(func(rep shared.NetFlowReport) {
-			a.postNetFlowReport(rep)
-		})
+		go nr.run(func(rep shared.NetFlowReport) { a.postNetFlowReport(rep) })
 		slog.Info("NetFlow 接收器已启动", "listen", a.netflowCfg.Listen)
 	}
 
-	// Start packet collector
+	// Start packet collector (also a blocking loop → own goroutine).
 	if a.packetCfg != nil && a.packetCfg.Enabled {
 		pc := newPacketCollector(*a.packetCfg, a.identity.HostID, a.identity.Fingerprint)
-		pc.run(func(rep shared.NetFlowReport) {
-			a.postNetFlowReport(rep)
-		})
+		go pc.run(func(rep shared.NetFlowReport) { a.postNetFlowReport(rep) })
 		slog.Info("五元组包采集器已启动")
 	}
 
-	// Start SNMP poller + trap receiver（网络设备纳管）
+	// Start SNMP poller + trap receiver（网络设备纳管）。poller.run() spawns a goroutine
+	// per target and returns; trap receiver.run() has a BLOCKING UDP read loop, so it
+	// too must run in its own goroutine (same reason as NetFlow above).
 	if a.snmpCfg != nil {
 		if len(a.snmpCfg.Targets) > 0 {
 			sc := newSNMPCollector(*a.snmpCfg, a.identity.HostID, a.identity.Fingerprint)
@@ -469,7 +476,7 @@ func (a *Agent) Run(ctx context.Context) {
 		}
 		if a.snmpCfg.TrapEnabled {
 			tr := newSNMPTrapReceiver(*a.snmpCfg, a.identity.HostID, a.identity.Fingerprint)
-			tr.run(a.postSNMPTrapReport)
+			go tr.run(a.postSNMPTrapReport)
 			slog.Info("SNMP Trap 接收器已启动", "listen", a.snmpCfg.TrapListen)
 		}
 	}
@@ -494,8 +501,18 @@ func (a *Agent) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			slog.Info("上报循环收到停止信号，等待子协程排空...")
-			childWg.Wait()
-			slog.Info("所有子协程已退出。")
+			// Bound the drain: a collector goroutine blocked on a slow poll / in-flight
+			// HTTP / UDP read that doesn't watch ctx would otherwise hang childWg.Wait()
+			// until systemd's 90s SIGKILL — the "slow/laggy stop" symptom. Wait up to 5s
+			// for a clean drain, then exit regardless.
+			done := make(chan struct{})
+			go func() { childWg.Wait(); close(done) }()
+			select {
+			case <-done:
+				slog.Info("所有子协程已退出。")
+			case <-time.After(5 * time.Second):
+				slog.Warn("部分子协程未在 5s 内退出，直接结束（避免 systemctl stop 卡顿）")
+			}
 			return
 		case <-ticker.C:
 			a.reportOnceSafe()
