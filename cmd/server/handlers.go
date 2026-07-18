@@ -235,7 +235,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
 	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
-	mux.HandleFunc("/api/v1/mcp", s.handleMCP)                              // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关）
+	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                         // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)

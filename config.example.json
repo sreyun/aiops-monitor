@@ -74,6 +74,20 @@
     }
   ],
 
+  "__oceanstor__": "====== 华为 OceanStor 存储 / 磁盘柜采集（DeviceManager REST）======",
+  "_comment_oceanstor": "oceanstor_targets: 配置后 Agent 作为华为 DeviceManager REST 客户端轮询 OceanStor 存储阵列 / 磁盘柜，采集控制器 / 磁盘框 / 硬盘 / 寿命 / 健康。⚠ 重要：OceanStor 全系【不支持 Redfish】，华为存储必须配在【本段】——切勿填进 redfish_targets，否则每轮采集失败、设备永不显示。url 为 DeviceManager 管理地址，端口默认 8088（现场也见过 443），不是 Redfish 的 443 根路径。password_env 指定密码所在环境变量名（推荐，不落盘）；password 为直接密码（备选）。interval_sec 采集间隔秒（默认 120）。skip_tls_verify 跳过证书校验。配置后需重启 Agent 生效。未配置时不启动。",
+  "oceanstor_targets": [
+    {
+      "name": "OceanStor-5500",
+      "url": "https://192.168.1.200:8088",
+      "username": "admin",
+      "password_env": "OCEANSTOR_PASSWORD",
+      "password": "",
+      "skip_tls_verify": true,
+      "interval_sec": 120
+    }
+  ],
+
   "__netflow__": "====== NetFlow 网络流量接收 ======",
   "_comment_netflow": "netflow: 配置后 Agent 作为 NetFlow UDP 接收器，接收交换机/防火墙推送的 Flow 数据。listen 为 UDP 监听地址。protocols 支持的版本（v5 固定格式/v9 模板化）。window_sec 为聚合窗口秒数（默认 300=5分钟）。max_flows_per_sec 限速。buffer_size 为 UDP 接收缓冲区大小。未配置时不启动。",
   "netflow": {

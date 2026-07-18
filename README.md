@@ -657,7 +657,7 @@ launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
 | **告警** | 实时告警同步（级别/描述/发生时间） |
 | **磁盘** | 型号/容量/健康状态/所属存储池 |
 
-> 配置：面板「存储」页添加 OceanStor 管理 IP + 账号密码，采集间隔可配置。数据统一存入 PostgreSQL，与主机/硬件资产同一面板查看。
+> 配置：在**能连通存储管理网的那台 Agent** 的 `config.json` 里添加 `oceanstor_targets`（DeviceManager 地址默认端口 8088、账号、密码/密码环境变量，采集间隔可配），改后重启 Agent。⚠ OceanStor **不支持 Redfish**，务必配在 `oceanstor_targets` 段，**不要**填进 `redfish_targets`（否则每轮采集失败、设备不显示）。Agent 首次运行会在配置目录写出含该段的 `config.example.json` 可直接照抄。数据统一存入 PostgreSQL，与主机/硬件资产同一面板查看。
 
 ---
 
@@ -1128,7 +1128,7 @@ Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--ser
 └──────────────────────────────┘
 ```
 
-**分工原则**：高频、通用、对性能敏感的基础采集用 Go（单二进制、无依赖）；多变、需要生态的自定义/AI 逻辑用 Python。外部采集器（Redfish/NetFlow/OceanStor）走标准协议无需 Agent。Android 移动端走 RESTful API 与服务端通信。进程边界隔离，各自演进。
+**分工原则**：高频、通用、对性能敏感的基础采集用 Go（单二进制、无依赖）；多变、需要生态的自定义/AI 逻辑用 Python。外部采集器（Redfish/NetFlow/OceanStor）走标准协议、**由某台 Agent 远程轮询采集**——被采集设备（BMC/存储/交换机）本身无需安装 Agent，但需要一台能连通它的 Agent 运行采集器（在该 Agent 的 `config.json` 配置目标）。Android 移动端走 RESTful API 与服务端通信。进程边界隔离，各自演进。
 
 ### 目录结构
 
