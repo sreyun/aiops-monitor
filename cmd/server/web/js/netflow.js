@@ -163,7 +163,7 @@ function renderNfSummary(container, summary, dimension) {
   summary.forEach(item => {
     const pct = Math.max(2, (item.bytes / maxBytes) * 100);
     html += `<tr>`;
-    html += `<td class="nf-label">${esc(item.key)}</td>`;
+    html += `<td class="nf-label">${esc(item.key)}${item.enrich && nfEnrichText(item.enrich) ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(nfEnrichText(item.enrich))}</div>` : ""}</td>`;
     html += `<td class="nf-value">${formatBytes(item.bytes)}</td>`;
     html += `<td class="nf-bar-cell"><div class="nf-bar" style="width:${pct}%"></div></td>`;
     html += `</tr>`;
@@ -207,9 +207,9 @@ function renderNfFlows(container, flows) {
     const dur = nfDurationSec(f);
     html += `<tr>`;
     html += `<td><span class="nf-badge nf-badge-${f.source}">${f.source}</span></td>`;
-    html += `<td>${esc(f.src_ip || "")}</td>`;
+    html += `<td>${nfIPCell(f.src_ip, f.src_enrich)}</td>`;
     html += `<td>${f.src_port || ""}</td>`;
-    html += `<td>${esc(f.dst_ip || "")}</td>`;
+    html += `<td>${nfIPCell(f.dst_ip, f.dst_enrich)}</td>`;
     html += `<td>${f.dst_port || ""}</td>`;
     html += `<td>${protoName}</td>`;
     html += `<td>${formatBytes(bytes)}</td>`;
@@ -242,9 +242,12 @@ window.exportNfCSV = function() {
   const flows = window._nfFlowsCache || [];
   if (flows.length === 0) return;
 
-  let csv = "source,src_ip,src_port,dst_ip,dst_port,protocol,bytes,packets,first_seen,last_seen\n";
+  // org 里可能含逗号（如 "GOOGLE, US"），这些富化字段必须加引号转义。
+  const q = s => `"${String(s == null ? "" : s).replace(/"/g, '""')}"`;
+  let csv = "source,src_ip,src_port,dst_ip,dst_port,protocol,bytes,packets,first_seen,last_seen,dst_host,dst_org,dst_country,src_host,src_org\n";
   flows.forEach(f => {
-    csv += `${f.source},${f.src_ip},${f.src_port},${f.dst_ip},${f.dst_port},${f.protocol},${f.bytes},${f.packets},${f.first_seen || ""},${f.last_seen || ""}\n`;
+    const de = f.dst_enrich || {}, se = f.src_enrich || {};
+    csv += `${f.source},${f.src_ip},${f.src_port},${f.dst_ip},${f.dst_port},${f.protocol},${f.bytes},${f.packets},${f.first_seen || ""},${f.last_seen || ""},${q(de.host)},${q(de.org)},${q(de.country)},${q(se.host)},${q(se.org)}\n`;
   });
 
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -279,6 +282,21 @@ function nfShortTime(s) {
   return isNaN(d) ? "" : d.toLocaleTimeString();
 }
 
+// nfEnrichText 把富化结果拼成「域名 · 归属组织 · 国家」，回答"这个 IP 属于谁/在访问什么"。
+function nfEnrichText(e) {
+  if (!e) return "";
+  const parts = [];
+  if (e.host) parts.push(e.host);
+  if (e.org) parts.push(e.org);
+  if (e.country) parts.push(e.country);
+  return parts.join(" · ");
+}
+// nfIPCell 渲染一个 IP 单元格：IP 在上，富化的域名/归属在下（小字）。
+function nfIPCell(ip, enrich) {
+  const sub = nfEnrichText(enrich);
+  return `${esc(ip || "")}${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(sub)}</div>` : ""}`;
+}
+
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -302,7 +320,10 @@ function netflowToText() {
   const lines = [`主机：${hn}（${nfCurrentHost}）　时间范围：${nfCurrentRange}　聚合维度：${nfDimLabel(nfDimension)}`];
   if (sum.length) {
     lines.push(`\n# Top ${sum.length} ${nfDimLabel((nfLastSummary && nfLastSummary.dimension) || nfDimension)}（按流量降序）`);
-    sum.forEach((it, i) => lines.push(`  ${i + 1}. ${it.key} = ${formatBytes(Number(it.bytes) || 0)}`));
+    sum.forEach((it, i) => {
+      const en = nfEnrichText(it.enrich);
+      lines.push(`  ${i + 1}. ${it.key}${en ? "（" + en + "）" : ""} = ${formatBytes(Number(it.bytes) || 0)}`);
+    });
   }
   if (flows.length) {
     const top = flows.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 40);
@@ -311,7 +332,8 @@ function netflowToText() {
       const pkts = Number(f.packets) || 0, bytes = Number(f.bytes) || 0;
       const avg = pkts > 0 ? Math.round(bytes / pkts) : 0;
       const dur = nfDurationSec(f);
-      lines.push(`  - ${f.src_ip || "?"}:${f.src_port || "?"} → ${f.dst_ip || "?"}:${f.dst_port || "?"} ${protoNameMap(f.protocol)} ${formatBytes(bytes)} ${pkts}包 均包${avg}B 时长${dur === "" ? "-" : dur + "s"}`);
+      const den = nfEnrichText(f.dst_enrich);
+      lines.push(`  - ${f.src_ip || "?"}:${f.src_port || "?"} → ${f.dst_ip || "?"}:${f.dst_port || "?"}${den ? "[" + den + "]" : ""} ${protoNameMap(f.protocol)} ${formatBytes(bytes)} ${pkts}包 均包${avg}B 时长${dur === "" ? "-" : dur + "s"}`);
     });
   }
   return lines.join("\n").slice(0, 12000);

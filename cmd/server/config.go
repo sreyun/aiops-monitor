@@ -439,6 +439,9 @@ type ServerConfig struct {
 	// SNMPTrapSeverity：企业私有 trap 严重度覆盖表，key=trapOID(或其前缀,最长匹配)，
 	// value=info|warning|critical。用户可据自家设备厂商 MIB 精修，无需重装 agent。
 	SNMPTrapSeverity map[string]string `json:"snmp_trap_severity,omitempty"`
+	// FlowEnrichDisabled：关闭"流量目的地富化"（反向DNS + ASN归属 + 国家）。零值=启用（默认开）。
+	// 富化会对目的公网 IP 做外部 DNS 查询（隐私敏感），需要时可在此关闭。
+	FlowEnrichDisabled bool `json:"flow_enrich_disabled,omitempty"`
 	Categories       map[string]string `json:"categories"`
 	InstallToken  string              `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a

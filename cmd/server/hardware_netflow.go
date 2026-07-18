@@ -281,6 +281,23 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
 	}
+	// 维度为 IP 时富化每项排行的 key（把裸 IP 补域名/归属），让「流量排行」直接可读。
+	if (dimension == "dst_ip" || dimension == "src_ip") && !s.cfg.Get().FlowEnrichDisabled && len(summary) > 0 {
+		ips := make([]string, 0, len(summary))
+		for _, it := range summary {
+			if k, _ := it["key"].(string); k != "" {
+				ips = append(ips, k)
+			}
+		}
+		en := flowEnrich.enrichMany(ips, 3*time.Second)
+		for _, it := range summary {
+			if k, _ := it["key"].(string); k != "" {
+				if e, ok := en[k]; ok && !e.Private {
+					it["enrich"] = e
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "dimension": dimension})
 }
 
@@ -326,6 +343,32 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("查询 Flow 明细失败", "host", hostID, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
+	}
+	// 目的地富化：把裸 IP 补上「域名 + 归属组织(ASN) + 国家」，让"IP 在访问什么"可读。
+	// 惰性 + 缓存，首次稍慢、之后秒回；内网/保留地址不富化。可用 flow_enrich_disabled 关闭。
+	if !s.cfg.Get().FlowEnrichDisabled && len(flows) > 0 {
+		ips := make([]string, 0, len(flows)*2)
+		for _, f := range flows {
+			if v, _ := f["dst_ip"].(string); v != "" {
+				ips = append(ips, v)
+			}
+			if v, _ := f["src_ip"].(string); v != "" {
+				ips = append(ips, v)
+			}
+		}
+		en := flowEnrich.enrichMany(ips, 3*time.Second)
+		for _, f := range flows {
+			if v, _ := f["dst_ip"].(string); v != "" {
+				if e, ok := en[v]; ok && !e.Private {
+					f["dst_enrich"] = e
+				}
+			}
+			if v, _ := f["src_ip"].(string); v != "" {
+				if e, ok := en[v]; ok && !e.Private {
+					f["src_enrich"] = e
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"flows": flows})
 }
