@@ -315,7 +315,9 @@ If Not running Then $runLine
 [System.IO.File]::WriteAllText($vbs, $vbsBody, (New-Object System.Text.UTF8Encoding $false))
 
 # Remove any prior instance (either install mode) so we never run two agents.
-schtasks /Delete /TN "AIOpsAgent" /F 2>$null | Out-Null
+# cmd /c avoids PowerShell 5.1 NativeCommandError on non-zero exit (task not found).
+# Single-quoted PS string passes literal " to cmd.exe, which strips them for schtasks.
+cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 if ($IsAdmin) {
@@ -491,8 +493,8 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 # Step 2: Remove the keepalive scheduled task FIRST — otherwise it relaunches the
 # agent within 5 minutes and the file deletion below fails ("can't uninstall").
 # Delete both the current name and the legacy hyphenated one.
-schtasks /Delete /TN "AIOpsAgent" /F 2>$null | Out-Null
-schtasks /Delete /TN "AIOps-Agent" /F 2>$null | Out-Null
+cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
+cmd /c 'schtasks /Delete /TN "AIOps-Agent" /F 2>nul'
 
 # Step 3: Kill ALL related processes — agent + VBS launcher
 # v5.2.9: Use taskkill + Get-Process instead of Get-CimInstance.
