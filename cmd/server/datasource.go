@@ -128,7 +128,7 @@ func dataSourceGet(ds DataSource, path string, q url.Values) ([]byte, int, error
 
 func dsTruncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + "…"
+		return strings.ToValidUTF8(s[:n], "") + "…"
 	}
 	return s
 }

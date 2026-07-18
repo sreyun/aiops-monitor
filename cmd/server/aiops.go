@@ -1002,7 +1002,9 @@ func buildInspectionPrompt(ctx inspectionContext) string {
 func trimLine(s string, n int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
 	if len(s) > n {
-		return s[:n] + "…"
+		// s[:n] 按字节截断可能切断多字节 UTF-8 字符（如中文 3 字节），
+		// 产生无效字节序列导致 PostgreSQL 报 22021。用 ToValidUTF8 清洗。
+		return strings.ToValidUTF8(s[:n], "") + "…"
 	}
 	return s
 }
