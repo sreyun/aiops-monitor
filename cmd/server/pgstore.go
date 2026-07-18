@@ -164,6 +164,24 @@ func (p *pgStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS ai_mem_kind ON ai_memory_embeddings(kind);
 		CREATE INDEX IF NOT EXISTS ai_mem_created ON ai_memory_embeddings(created_at DESC);
 		CREATE INDEX IF NOT EXISTS ai_mem_kind_created ON ai_memory_embeddings(kind, created_at DESC);
+		-- AI 技能库（自进化核心）：从 experience/resolution 记忆中提炼出的「可复用 SOP」。
+		-- 与 ai_memory_embeddings（原始经验片段）不同，skill 是更高阶、命名化、带触发条件与
+		-- 操作步骤的结构化产物，检索后作为「已掌握技能」注入提示词，让 AI 直接复用被验证的做法。
+		CREATE TABLE IF NOT EXISTS ai_skills (
+			id            BIGSERIAL PRIMARY KEY,
+			name          TEXT NOT NULL,
+			trigger_desc  TEXT NOT NULL,          -- 何时适用（自然语言，供语义匹配；trigger 是 SQL 关键字故用 _desc）
+			steps         TEXT NOT NULL,          -- 怎么做（步骤 / SOP）
+			tags          TEXT DEFAULT '',
+			embedding     vector(1536),           -- name+trigger_desc 的向量，用于检索
+			use_count     INT  DEFAULT 0,
+			success_count INT  DEFAULT 0,
+			priority      REAL DEFAULT 1.0,
+			source        TEXT DEFAULT 'distilled', -- distilled | manual
+			created_at    BIGINT NOT NULL,
+			updated_at    BIGINT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS ai_skills_priority ON ai_skills(priority DESC);
 		-- 经验规则库（高频问题 best practice）
 		CREATE TABLE IF NOT EXISTS experience_rules (
 			id          BIGSERIAL PRIMARY KEY,
@@ -1062,6 +1080,152 @@ func (p *pgStore) boostNearestMemory(emb []float64, kind string, factor float64)
 	}
 	p.boostMemoryPriority(id, factor)
 	return id, true
+}
+
+// ---- AI 技能库（自进化）：提炼产物的存取 / 检索 / 强化 / 管理 ----
+
+// Skill 是从经验记忆中提炼出的一条可复用 SOP。
+type Skill struct {
+	ID           int64   `json:"id"`
+	Name         string  `json:"name"`
+	Trigger      string  `json:"trigger"` // 何时适用
+	Steps        string  `json:"steps"`   // 怎么做
+	Tags         string  `json:"tags"`
+	UseCount     int     `json:"use_count"`
+	SuccessCount int     `json:"success_count"`
+	Priority     float64 `json:"priority"`
+	Source       string  `json:"source"`
+	CreatedAt    int64   `json:"created_at"`
+	UpdatedAt    int64   `json:"updated_at"`
+	Distance     float64 `json:"distance,omitempty"`
+}
+
+func (p *pgStore) insertSkill(name, trigger, steps, tags, source string, emb []float64) (int64, error) {
+	now := time.Now().Unix()
+	var id int64
+	err := p.db.QueryRow(
+		`INSERT INTO ai_skills(name, trigger_desc, steps, tags, embedding, source, created_at, updated_at)
+		 VALUES($1,$2,$3,$4,$5::vector,$6,$7,$7) RETURNING id`,
+		name, trigger, steps, tags, vecStr(emb), source, now).Scan(&id)
+	return id, err
+}
+
+// findSimilarSkill 返回与 emb 语义最近的技能 id（若距离 ≤ maxDist），用于提炼时去重/合并。
+func (p *pgStore) findSimilarSkill(emb []float64, maxDist float64) (int64, bool) {
+	var id int64
+	var dist float64
+	if err := p.db.QueryRow(
+		`SELECT id, embedding <=> $1::vector AS d FROM ai_skills ORDER BY embedding <=> $1::vector LIMIT 1`,
+		vecStr(emb)).Scan(&id, &dist); err != nil || dist > maxDist {
+		return 0, false
+	}
+	return id, true
+}
+
+// updateSkill 覆盖一条技能（用于「用中自改进」——把更好的步骤写回）。
+func (p *pgStore) updateSkill(id int64, name, trigger, steps string, emb []float64) error {
+	_, err := p.db.Exec(
+		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, embedding=$5::vector, updated_at=$6 WHERE id=$1`,
+		id, name, trigger, steps, vecStr(emb), time.Now().Unix())
+	return err
+}
+
+// searchSkills 按 距离/优先级 检索最相关技能，供注入提示词。
+func (p *pgStore) searchSkills(emb []float64, limit int) ([]Skill, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := p.db.Query(
+		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
+		        embedding <=> $1::vector AS distance
+		 FROM ai_skills
+		 ORDER BY (embedding <=> $1::vector) / GREATEST(priority, 0.1) LIMIT $2`,
+		vecStr(emb), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Skill
+	for rows.Next() {
+		var s Skill
+		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.Distance); err == nil {
+			out = append(out, s)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) listSkills() ([]Skill, error) {
+	rows, err := p.db.Query(
+		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source, created_at, updated_at
+		 FROM ai_skills ORDER BY priority DESC, updated_at DESC LIMIT 500`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Skill
+	for rows.Next() {
+		var s Skill
+		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.CreatedAt, &s.UpdatedAt); err == nil {
+			out = append(out, s)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) deleteSkill(id int64) error {
+	_, err := p.db.Exec(`DELETE FROM ai_skills WHERE id=$1`, id)
+	return err
+}
+
+// recordSkillUse 记录一次技能被检索命中（use_count++），成功时额外强化 priority + success_count。
+func (p *pgStore) recordSkillUse(id int64, success bool) {
+	sc, factor := 0, 1.0
+	if success {
+		sc, factor = 1, 1.15
+	}
+	_, _ = p.db.Exec(
+		`UPDATE ai_skills SET use_count=use_count+1, success_count=success_count+$2,
+		 priority=LEAST(GREATEST(priority,0.1)*$3, 5.0), updated_at=$4 WHERE id=$1`,
+		id, sc, factor, time.Now().Unix())
+}
+
+// boostSkillNearest 语义定位最近技能并强化（事件解决 / 采纳时调用），实现技能层面的学习闭环。
+func (p *pgStore) boostSkillNearest(emb []float64, factor float64) {
+	var id int64
+	if err := p.db.QueryRow(`SELECT id FROM ai_skills ORDER BY embedding <=> $1::vector LIMIT 1`, vecStr(emb)).Scan(&id); err == nil {
+		_, _ = p.db.Exec(
+			`UPDATE ai_skills SET priority=LEAST(GREATEST(priority,0.1)*$2,5.0), success_count=success_count+1, updated_at=$3 WHERE id=$1`,
+			id, factor, time.Now().Unix())
+	}
+}
+
+func (p *pgStore) skillCount() int {
+	var n int
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM ai_skills`).Scan(&n)
+	return n
+}
+
+// memoriesForDistill 取用于技能提炼的候选记忆：experience/resolution/diagnosis 类、较新、
+// 按优先级(被强化程度)优先。这些是"被验证有价值"的经验，最适合提炼成可复用技能。
+func (p *pgStore) memoriesForDistill(sinceTs int64, limit int) []memoryHit {
+	rows, err := p.db.Query(
+		`SELECT id, kind, source, content FROM ai_memory_embeddings
+		 WHERE kind IN ('experience','resolution','diagnosis') AND created_at >= $1
+		 ORDER BY priority DESC, created_at DESC LIMIT $2`,
+		sinceTs, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []memoryHit
+	for rows.Next() {
+		var m memoryHit
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // decayOldMemories 对超过 90 天且未被检索命中的记忆降低优先级（priority *= 0.8），

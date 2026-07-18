@@ -1203,17 +1203,18 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		memKind = "diagnosis"
 	}
 	sys += s.retrieveMemoryForPrompt(memKind, req.Message, 8)
+	sys += s.retrieveSkillsForPrompt(req.Message, 4) // 注入已掌握技能(SOP)
 
 	msgs := []map[string]string{{"role": "system", "content": sys}}
-	hist := req.History
-	if len(hist) > 10 { // bound token usage to the last few turns
-		hist = hist[len(hist)-10:]
-	}
-	for _, h := range hist {
+	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 10 轮"（无状态：每次基于全量历史）
+	histMsgs := make([]map[string]string, 0, len(req.History))
+	for _, h := range req.History {
 		if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
-			msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
+			histMsgs = append(histMsgs, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
+	compressed, _, _ := compressHistory(cfg, histMsgs, 8, "", 0)
+	msgs = append(msgs, compressed...)
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
 	reply, _ := streamChat(r.Context(), w, cfg, msgs, nil)
@@ -1262,6 +1263,7 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 		memKind = "diagnosis"
 	}
 	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
+	sys += s.retrieveSkillsForPrompt(strings.TrimSpace(req.Input+" "+req.Context), 4) // 注入已掌握技能(SOP)
 	userMsg := strings.TrimSpace(req.Input)
 	if userMsg == "" {
 		userMsg = "请根据上述上下文进行分析并给出结论。"
@@ -1368,8 +1370,43 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 	// 用「需求 + 回答」语义定位最相近的一条 assist 记忆并调整其优先级
 	if text := strings.TrimSpace(req.Input + " " + req.Answer); text != "" {
 		s.reinforceMemory("assist", text, factor)
+		// 采纳/好评时，同步强化最相关技能(SOP)；差评不惩罚技能（技能来自多经验提炼，单次差评不足为据）
+		if factor > 1.0 {
+			s.reinforceSkill(text, factor)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleListSkills 列出已提炼的可复用技能(SOP)。GET /api/v1/ai/skills
+func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, []Skill{})
+		return
+	}
+	skills, err := s.pg.listSkills()
+	if err != nil || skills == nil {
+		skills = []Skill{}
+	}
+	writeJSON(w, http.StatusOK, skills)
+}
+
+// handleDeleteSkill 删除一条技能。DELETE /api/v1/ai/skills/{id}
+func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
+	if id, ok := sreParseID(r); ok && s.pg != nil {
+		_ = s.pg.deleteSkill(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleDistillSkills 手动触发一次技能提炼（回看 30 天）。POST /api/v1/ai/skills/distill
+func (s *Server) handleDistillSkills(w http.ResponseWriter, r *http.Request) {
+	n, err := s.distillSkills(30)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "created": n})
 }
 
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
@@ -1433,16 +1470,38 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 按优先级给出可执行步骤（编号列表）。`, inc.ID)
 		// RAG: 检索历史诊断记忆注入 system prompt（已在 SSE 连接建立后执行）
 		sys += s.retrieveMemoryForPrompt("diagnosis", userMsg, 8)
+		sys += s.retrieveSkillsForPrompt(userMsg+" "+inc.Title+" "+inc.Type, 4) // 注入已掌握技能(SOP)
 
-		diag, _ := streamChat(r.Context(), w, cfg, []map[string]string{
+		diagMsgs := []map[string]string{
 			{"role": "system", "content": sys},
 			{"role": "user", "content": userMsg},
-		}, nil)
+		}
+		// 诊断生成：配置了 MoA 则多模型集成研判，否则单模型；两者都流式且不发 [DONE]（末尾统一发）。
+		var diag string
+		if len(moaModelList(cfg)) > 1 {
+			diag = aiChatMoAStream(r.Context(), w, cfg, diagMsgs)
+		} else {
+			diag, _ = streamChatNoDone(r.Context(), w, cfg, diagMsgs, nil)
+		}
+		// 自我校验（可选）：独立第二遍对照证据复核结论，流式续写到同一响应。
+		verify := ""
+		if cfg.SelfVerify && strings.TrimSpace(diag) != "" {
+			verify = streamSelfVerify(r.Context(), w, cfg, sys, diag)
+		}
+		// 统一收尾：发送一次 [DONE]
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 		if diag != "" {
-			s.incidents.AddEvent(id, "ai_diagnosis", "AI", diag)
+			full := diag
+			if strings.TrimSpace(verify) != "" {
+				full += "\n\n🔎 自我校验：\n" + verify
+			}
+			s.incidents.AddEvent(id, "ai_diagnosis", "AI", full)
 			s.store.MarkDirty()
-			go s.saveDiagnosisEmbedding(id, inc, diag)
-			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断结论】"+diag)
+			go s.saveDiagnosisEmbedding(id, inc, full)
+			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断结论】"+full)
 		}
 		return
 	}
@@ -1537,16 +1596,17 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	}
 	// RAG: 检索历史诊断记忆注入 system prompt
 	sys += s.retrieveMemoryForPrompt("diagnosis", req.Message, 8)
+	sys += s.retrieveSkillsForPrompt(req.Message, 4) // 注入已掌握技能(SOP)
 	msgs := []map[string]string{{"role": "system", "content": sys}}
-	hist := req.History
-	if len(hist) > 20 {
-		hist = hist[len(hist)-20:]
-	}
-	for _, h := range hist {
+	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 20 轮"
+	histMsgs := make([]map[string]string, 0, len(req.History))
+	for _, h := range req.History {
 		if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
-			msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
+			histMsgs = append(histMsgs, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
+	compressed, _, _ := compressHistory(cfg, histMsgs, 10, "", 0)
+	msgs = append(msgs, compressed...)
 	// Req1: 将上传文件文本注入用户消息，图片走多模态链路
 	userMsg := req.Message
 	for _, f := range req.Files {

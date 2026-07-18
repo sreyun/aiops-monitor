@@ -41,6 +41,10 @@ type HermesSession struct {
 	IncidentID int64
 	Messages   []map[string]string
 	CreatedAt  int64
+	// 上下文压缩缓存：Summary 为早期对话的滚动摘要，SummarizedCount 为已被摘要覆盖的消息数，
+	// 用于增量压缩（只摘「新变旧」的段落）。为内存缓存，重启后丢失会自动重建，不影响正确性。
+	Summary         string
+	SummarizedCount int
 }
 
 // HermesCore is the autonomous agent engine.
@@ -915,29 +919,15 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 		ragText = string(ragRunes) + "\n…(RAG 记忆已截断以符合 token 预算)"
 	}
 	sys += ragText
+	sys += h.s.retrieveSkillsForPrompt(userMsg, 4) // 注入已提炼的可复用技能(SOP)，让 Agent 直接套用被验证的做法
 
 	// Build messages
 	msgs := []map[string]string{{"role": "system", "content": sys}}
-	// Token 预算管理：限制历史轮次，超出的旧轮次只保留摘要
-	const maxHistoryTurns = 20
-	historyMsgs := session.Messages
-	if len(historyMsgs) > maxHistoryTurns*2 { // 每轮 user+assistant = 2 条消息
-		// 保留最近 maxHistoryTurns 轮，旧轮次用摘要替代
-		oldMsgs := historyMsgs[:len(historyMsgs)-maxHistoryTurns*2]
-		recentMsgs := historyMsgs[len(historyMsgs)-maxHistoryTurns*2:]
-		var summaryB strings.Builder
-		summaryB.WriteString("[历史对话摘要] ")
-		for _, m := range oldMsgs {
-			if c := m["content"]; c != "" {
-				summaryB.WriteString(m["role"] + ": " + truncateStr(c, 200) + " | ")
-			}
-		}
-		historyMsgs = append([]map[string]string{
-			{"role": "user", "content": summaryB.String()},
-			{"role": "assistant", "content": "[已总结以上历史对话]"},
-		}, recentMsgs...)
-	}
-	msgs = append(msgs, historyMsgs...)
+	// 上下文压缩：历史超预算时，把较旧轮次用 AI 摘成要点、保留最近若干轮原文——替代此前的朴素
+	// 字符串截断，避免丢失早期关键上下文。摘要增量缓存在 session 上，只对「新变旧」的段落重算。
+	compressed, newSummary, newCount := compressHistory(cfg, session.Messages, 12, session.Summary, session.SummarizedCount)
+	session.Summary, session.SummarizedCount = newSummary, newCount
+	msgs = append(msgs, compressed...)
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop

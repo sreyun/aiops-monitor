@@ -134,6 +134,8 @@ func (s *Server) learnFromResolution(inc Incident, note string) {
 	s.rememberAI("resolution", fmt.Sprintf("incident:%d", inc.ID), strings.Join(parts, "\n"))
 	// 事件被解决 → 强化其诊断记忆，使同类事件下次更快召回这条被验证过的诊断脉络
 	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", inc.ID), reinforceResolved)
+	// 同时强化最相关的技能(SOP)——被现实验证有效的技能应在后续检索中上浮
+	s.reinforceSkill(inc.Title+" "+inc.Type+" "+note, reinforceResolved)
 }
 
 // correlateIncident 事件自动串联（知识复用闭环）：新事件创建时用 RAG 召回相似历史事件、已验证的

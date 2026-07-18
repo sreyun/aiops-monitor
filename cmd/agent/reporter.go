@@ -441,11 +441,17 @@ func (a *Agent) Run() {
 	}
 
 	// Start Hyper-V guest inventory collector — auto-detected, Windows Hyper-V
-	// hosts only. hypervAvailable() is false on non-Windows and on Windows boxes
-	// without the Hyper-V role, so this is a safe no-op everywhere else.
-	if !a.hypervDisabled && hypervAvailable() {
-		go a.runHyperVCollector()
-		slog.Info("Hyper-V 虚拟机采集器已启动")
+	// hosts only. The availability probe (a powershell shell-out, up to 8s) runs
+	// inside the goroutine, NOT here: the base-metric report loop below must never
+	// wait on a Hyper-V probe that could be slow or wedged. On non-Windows / non-
+	// Hyper-V hosts hypervAvailable() is false, so the goroutine just exits.
+	if !a.hypervDisabled {
+		go func() {
+			if hypervAvailable() {
+				slog.Info("Hyper-V 虚拟机采集器已启动")
+				a.runHyperVCollector()
+			}
+		}()
 	}
 
 	// base-metric report loop, higher frequency.

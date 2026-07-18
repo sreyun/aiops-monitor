@@ -237,17 +237,28 @@ fi
 echo "[AIOps] done. Check the dashboard for this host."
 `
 
-// installPs1Template installs the agent on Windows WITHOUT requiring admin:
-// it installs under %LOCALAPPDATA%, writes config.json (UTF-8, no BOM) and
-// registers a user-level autostart (HKCU Run) via a hidden VBS launcher.
+// installPs1Template installs the agent on Windows, privilege-adaptive:
+//   - Run ELEVATED (admin): installs under %ProgramData% and registers a
+//     scheduled task running as SYSTEM at Highest run level (boot + 5-min
+//     keepalive). SYSTEM has the privileges Get-VM needs, so Hyper-V guest
+//     collection works. This is the mode Hyper-V hosts must use.
+//   - Run NON-elevated: the classic per-user install under %LOCALAPPDATA%
+//     (HKCU Run + 5-min keepalive), unchanged. No admin required, but it
+//     cannot collect Hyper-V guests — the script says so and points at the
+//     elevated re-run.
+// config.json is UTF-8 (no BOM); the agent is launched via a hidden VBS
+// supervisor that only starts it when not already running (no duplicates).
 const installPs1Template = `$ErrorActionPreference = "Stop"
 $Server   = "__SERVER__"
 $Token    = "__TOKEN__"
 $Category = "__CATEGORY__"
 $LogPaths = '__LOG_PATHS__'
-$Dir      = Join-Path $env:LOCALAPPDATA "aiops-agent"
+# Elevated installs run the agent as SYSTEM (needed for Hyper-V Get-VM) and live
+# machine-wide under ProgramData; non-elevated installs stay per-user as before.
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = Join-Path $env:LOCALAPPDATA "aiops-agent" }
 
-Write-Host "[AIOps] installing to $Dir (server $Server)"
+Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
 Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
 try {
@@ -303,18 +314,30 @@ If Not running Then $runLine
 "@
 [System.IO.File]::WriteAllText($vbs, $vbsBody, (New-Object System.Text.UTF8Encoding $false))
 
-# 1) Autostart at logon (survives reboot)
-New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
-
-# 2) Keepalive: re-run the supervisor every 5 minutes so a stopped/killed agent
-#    is relaunched. Current-user context — no admin. Escaped inner quotes so the
-#    path survives even under usernames that contain spaces.
-$trTask = 'wscript.exe \"' + $vbs + '\"'
-schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 2>$null | Out-Null
-
+# Remove any prior instance (either install mode) so we never run two agents.
+schtasks /Delete /TN "AIOpsAgent" /F 2>$null | Out-Null
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
-Write-Host "[AIOps] installed with autostart + 5-min keepalive (user-level). Check the dashboard."
+
+if ($IsAdmin) {
+  # Elevated: run the keepalive task as SYSTEM at Highest run level so Get-VM
+  # (Hyper-V guest collection) has the privileges it needs. Same proven 5-minute
+  # schtasks keepalive as per-user mode, just under the SYSTEM account; schtasks
+  # /Run starts it immediately. The HKCU Run key is irrelevant to SYSTEM, drop it.
+  Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
+  $trTask = 'wscript.exe \"' + $vbs + '\"'
+  schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
+  schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
+  Write-Host "[AIOps] installed as SYSTEM (elevated), 5-min keepalive. Hyper-V collection enabled."
+} else {
+  # Non-elevated: classic per-user autostart (unchanged). Works without admin but
+  # CANNOT collect Hyper-V guests -- Get-VM needs elevation.
+  New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
+  $trTask = 'wscript.exe \"' + $vbs + '\"'
+  schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 2>$null | Out-Null
+  Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
+  Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
+  Write-Host "[AIOps] NOTE: Hyper-V VM collection needs admin. On a Hyper-V host, re-run this install command in an ELEVATED PowerShell."
+}
 `
 
 // relayInstallShTemplate installs the agent in GATEWAY RELAY mode on Linux /
@@ -456,8 +479,10 @@ echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 //   5. Longer retry delays (2/4/8s) and MoveFileEx for stubborn files
 //   6. Explicitly delete VBS files before EXE to release Run registry triggers
 const uninstallPs1Template = `$ErrorActionPreference = "Continue"
-$Dir = Join-Path $env:LOCALAPPDATA "aiops-agent"
-Write-Host "[AIOps] uninstalling from $Dir"
+# Clean both install locations: per-user (%LOCALAPPDATA%) and elevated
+# (%ProgramData%). Removing a SYSTEM install's task/dir needs an elevated shell.
+$Dirs = @((Join-Path $env:LOCALAPPDATA "aiops-agent"), (Join-Path $env:ProgramData "aiops-agent"))
+Write-Host "[AIOps] uninstalling ($($Dirs -join '; '))"
 
 # Step 1: Remove ALL autostart entries (normal + relay modes)
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
@@ -483,46 +508,38 @@ Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAc
 # Step 4: Wait for process handles to release (increased to 3s)
 Start-Sleep -Seconds 3
 
-# Step 5: Delete files with retry logic (handles stubborn file locks)
-# Delete VBS files FIRST — they are the smallest and removing them
-# prevents wscript.exe from being relaunched by the Run registry.
+# Step 5: Delete files with retry logic (handles stubborn file locks), for BOTH
+# install locations. Delete VBS files FIRST -- removing them prevents wscript.exe
+# from being relaunched by the Run registry.
 $files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.json", "agent_state.json", "agent.log", "plugins.zip")
-foreach ($f in $files) {
-    $path = Join-Path $Dir $f
-    if (Test-Path $path) {
-        Remove-Item $path -Force -ErrorAction SilentlyContinue
+foreach ($Dir in $Dirs) {
+    foreach ($f in $files) {
+        $path = Join-Path $Dir $f
+        if (Test-Path $path) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+    }
+    $pluginsDir = Join-Path $Dir "plugins"
+    if (Test-Path $pluginsDir) { Remove-Item -Recurse -Force $pluginsDir -ErrorAction SilentlyContinue }
+    for ($i = 2; $i -le 8; $i *= 2) {
+        if (Test-Path $Dir) { Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue }
+        if (-not (Test-Path $Dir)) { break }
+        Start-Sleep -Seconds $i
     }
 }
 
-# Remove plugins directory if present
-$pluginsDir = Join-Path $Dir "plugins"
-if (Test-Path $pluginsDir) {
-    Remove-Item -Recurse -Force $pluginsDir -ErrorAction SilentlyContinue
-}
-
-# Second try: delete entire directory with longer retries (2/4/8s)
-for ($i = 2; $i -le 8; $i *= 2) {
-    if (Test-Path $Dir) {
-        Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue
-    }
-    if (-not (Test-Path $Dir)) { break }
-    Start-Sleep -Seconds $i
-}
-
-# v5.2.9: Last resort — schedule deletion on next reboot for stubborn files
-if (Test-Path $Dir) {
-    Write-Host "[AIOps] scheduling cleanup on next reboot for: $Dir"
-    $tmpDir = Join-Path $env:TEMP "aiops-uninstall.bat"
-    @"
-@echo off
-:retry
-timeout /t 5 /nobreak >nul
-rmdir /s /q "$Dir" 2>nul
-if exist "$Dir" goto retry
-del "%~f0" 2>nul
-"@ | Out-File -FilePath $tmpDir -Encoding ASCII
-    # Use RunOnce to execute cleanup batch on next login
-    New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "AIOpsCleanup" -Value "cmd.exe /c $tmpDir" -PropertyType String -Force | Out-Null
+# Last resort -- schedule deletion of any still-locked dir on next reboot.
+$stuck = @($Dirs | Where-Object { Test-Path $_ })
+if ($stuck.Count -gt 0) {
+    Write-Host "[AIOps] scheduling cleanup on next reboot for: $($stuck -join '; ')"
+    $bat = Join-Path $env:TEMP "aiops-uninstall.bat"
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("@echo off")
+    [void]$sb.AppendLine(":retry")
+    [void]$sb.AppendLine("timeout /t 5 /nobreak >nul")
+    foreach ($d in $stuck) { [void]$sb.AppendLine('rmdir /s /q "' + $d + '" 2>nul') }
+    foreach ($d in $stuck) { [void]$sb.AppendLine('if exist "' + $d + '" goto retry') }
+    [void]$sb.AppendLine('del "%~f0" 2>nul')
+    [System.IO.File]::WriteAllText($bat, $sb.ToString(), (New-Object System.Text.ASCIIEncoding))
+    New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "AIOpsCleanup" -Value ("cmd.exe /c " + $bat) -PropertyType String -Force | Out-Null
     Write-Host "[AIOps] warning: some files could not be deleted. Cleanup will finish on next reboot."
 } else {
     Write-Host "[AIOps] uninstalled. You may delete the host card in the dashboard."

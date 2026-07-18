@@ -44,6 +44,16 @@ type AIConfig struct {
 	RerankEndpoint string `json:"rerank_endpoint,omitempty"`
 	RerankModel    string `json:"rerank_model,omitempty"`
 	RerankAPIKey   string `json:"rerank_api_key,omitempty"`
+	// 自我校验：诊断生成后追加一遍【独立】审校（对照证据复核结论、纠偏、给复核可信度）。
+	// 默认关闭——多一次 LLM 调用；对高价值诊断建议开启。
+	SelfVerify bool `json:"self_verify,omitempty"`
+	// Mixture-of-Agents：额外参与「集成研判」的模型名（逗号分隔）。配置后【诊断】走多模型并行
+	// 提案 → 聚合模型综合成一份更稳的结论。默认空=关闭（成本可控）。这些模型复用主 Endpoint / Key。
+	MoAModels string `json:"moa_models,omitempty"`
+	// MCP Server：把本平台的只读运维工具（指标/日志/告警/硬件/流量等）暴露为标准 MCP，供外部
+	// Agent（如 Nous Hermes Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
+	MCPEnabled bool   `json:"mcp_enabled,omitempty"`
+	MCPToken   string `json:"mcp_token,omitempty"`
 	// Hermes Agent 配置
 	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
 	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
@@ -531,6 +541,70 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 	})
 }
 
+// ---- 上下文压缩：长对话历史 → 「AI 摘要 + 最近若干轮 verbatim」，替代硬截断 ----
+//
+// 硬截断（只保留最近 N 轮）会丢掉早期关键上下文（如最初的现象、已确认结论、约束）。这里改为：
+// 超预算时把较旧轮次交给廉价模型摘成要点，保留最近轮次原文；摘要可增量缓存（见 HermesSession），
+// 只对「新变旧」的那段做增量摘要，避免每轮全量重算。
+
+// summaryMsg 把摘要包装成一条注入消息。
+func summaryMsg(summary string) map[string]string {
+	return map[string]string{"role": "user", "content": "【历史对话摘要】\n" + summary + "\n（以上为早期对话的要点摘要，请据此保持连贯）"}
+}
+
+// summarizeTurns 把一段旧对话（可基于已有摘要增量）压成要点摘要。失败则回退旧摘要。
+func summarizeTurns(cfg AIConfig, priorSummary string, msgs []map[string]string) string {
+	var b strings.Builder
+	if priorSummary != "" {
+		b.WriteString("已有摘要：\n" + priorSummary + "\n\n需要并入的新增对话：\n")
+	}
+	for _, m := range msgs {
+		if c := strings.TrimSpace(m["content"]); c != "" {
+			b.WriteString(m["role"] + "：" + trimLine(c, 500) + "\n")
+		}
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		return priorSummary
+	}
+	sys := "你是对话摘要器。把下面的运维对话压缩成简洁要点摘要，保留关键事实、已确认结论、约束、" +
+		"待办与决定，丢弃寒暄与冗余；若给了已有摘要，则在其基础上合并更新。只输出摘要正文，控制在 400 字内。"
+	out, err := aiComplete(cfg, sys, b.String())
+	if err != nil || strings.TrimSpace(out) == "" {
+		return priorSummary
+	}
+	return strings.TrimSpace(out)
+}
+
+// compressHistory 返回压缩后的历史消息列表 + 新摘要 + 新的「已被摘要覆盖的消息数」。
+// history 为 user/assistant 交替的全量历史；keepRecentTurns 为保留原文的最近轮数。
+// priorSummary/priorCount 为已缓存的摘要与其覆盖的消息数（无缓存传 "" / 0，即无状态调用）。
+func compressHistory(cfg AIConfig, history []map[string]string, keepRecentTurns int, priorSummary string, priorCount int) ([]map[string]string, string, int) {
+	if keepRecentTurns < 2 {
+		keepRecentTurns = 2
+	}
+	keep := keepRecentTurns * 2 // 每轮 user+assistant = 2 条
+	if len(history) <= keep {
+		// 历史不长，无需压缩；若此前已有摘要（更早的历史被删过）则保留在最前
+		if priorSummary != "" {
+			return append([]map[string]string{summaryMsg(priorSummary)}, history...), priorSummary, priorCount
+		}
+		return history, priorSummary, priorCount
+	}
+	cutoff := len(history) - keep
+	newSummary, newCount := priorSummary, priorCount
+	if cutoff > priorCount { // 有「新变旧」的段落需要增量并入摘要
+		newSummary = summarizeTurns(cfg, priorSummary, history[priorCount:cutoff])
+		newCount = cutoff
+	}
+	recent := history[cutoff:]
+	out := make([]map[string]string, 0, len(recent)+1)
+	if newSummary != "" {
+		out = append(out, summaryMsg(newSummary))
+	}
+	out = append(out, recent...)
+	return out, newSummary, newCount
+}
+
 // streamChat calls the AI provider with streaming enabled (SSE) and writes each
 // streamChat streams an AI chat response via SSE. When images are non-nil,
 // the last user message is converted to multimodal content format so vision
@@ -540,7 +614,7 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 // The caller must set the proper headers (Content-Type: text/event-stream,
 // Cache-Control: no-cache, Connection: keep-alive) before calling this function.
 // ctx 用于客户端断开时取消到 LLM provider 的在途请求，防止资源泄漏。
-func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
 		return "", nil
@@ -557,7 +631,9 @@ func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messag
 			return "", nil
 		}
 		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString(reply))
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		if sendDone {
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+		}
 		return reply, nil
 	}
 
@@ -620,9 +696,11 @@ func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messag
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
-			fmt.Fprintf(w, "data: [DONE]\n\n")
-			if flusher != nil {
-				flusher.Flush()
+			if sendDone {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
 			}
 			return fullReply.String(), nil
 		}
@@ -644,11 +722,41 @@ func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messag
 		}
 	}
 	// If scanner ended without [DONE], send a done marker
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
+	if sendDone {
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
 	}
 	return fullReply.String(), nil
+}
+
+// streamChat 保持原签名（自动发送结尾 [DONE]），既有调用方无需改动。
+func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+	return streamChatInner(ctx, w, cfg, messages, images, true)
+}
+
+// streamChatNoDone 与 streamChat 相同但【不发】结尾 [DONE]——用于把多段流式内容（诊断正文 +
+// 自我校验 / MoA 聚合）拼成一条 SSE 响应，最后由调用方统一发一次 [DONE]。
+func streamChatNoDone(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
+	return streamChatInner(ctx, w, cfg, messages, images, false)
+}
+
+// streamSelfVerify 是「自我校验」的独立第二遍：对照 evidence 复核 answer，把审校意见【流式续写】
+// 到 w（不发 [DONE]，由调用方统一收尾），返回审校全文。借鉴 Hermes Agent 的 background review。
+func streamSelfVerify(ctx context.Context, w http.ResponseWriter, cfg AIConfig, evidence, answer string) string {
+	if flusher, ok := w.(http.Flusher); ok {
+		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString("\n\n---\n🔎 **自我校验**（对照证据独立复核）\n\n"))
+		flusher.Flush()
+	}
+	sysV := "你是严谨的运维审校员。请对照【证据】逐条核对下面的【诊断结论】：指出哪些判断有证据支撑、" +
+		"哪些缺乏证据或属过度推断、有无自相矛盾；如有问题请直接修正，并给出复核后的可信度（高/中/低）" +
+		"与仍需补充的信息。简洁分点，只依据给定证据，不臆造。\n\n【证据】\n" + trimLine(evidence, 4000)
+	out, _ := streamChatNoDone(ctx, w, cfg, []map[string]string{
+		{"role": "system", "content": sysV},
+		{"role": "user", "content": "【诊断结论】\n" + answer},
+	}, nil)
+	return out
 }
 
 // streamDeltaChunk 是 SSE 流式响应的 JSON 解析目标类型。

@@ -2162,6 +2162,16 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-assist-err{color:#ef4d5a;font-size:13px;white-space:pre-wrap;word-break:break-word}
 .ai-assist-actions{display:flex;gap:8px;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--line2)}
 .ai-assist-actions:empty{display:none}
+/* ===== AI 技能库 ===== */
+.skill-list{display:flex;flex-direction:column;gap:10px}
+.skill-card{background:var(--panel3);border:1px solid var(--line2);border-radius:9px;padding:10px 12px}
+.skill-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.skill-head b{font-size:13.5px}
+.skill-meta{font-size:11.5px;color:var(--muted);font-family:var(--mono,monospace)}
+.skill-head .btn.danger{margin-left:auto}
+.skill-trigger{font-size:12.5px;color:var(--accent);margin:5px 0 3px}
+.skill-steps{font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--txt);background:var(--panel);border:1px solid var(--line2);border-radius:6px;padding:7px 9px;margin:0;max-height:200px;overflow:auto}
+.skill-tags{font-size:11.5px;color:var(--muted);margin-top:5px}
 /* 每条 AI 回复的操作栏（复制），hover 显示 */
 .ai-msg-tools{display:none; justify-content:flex-end; gap:6px; margin-top:6px}
 .ai-chat-msg.ai:hover .ai-msg-tools{display:flex}

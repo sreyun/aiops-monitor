@@ -1429,6 +1429,46 @@ async function loadInspections(){
   } catch(e){ toast("加载失败: "+e,"err"); }
 }
 async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
+// AI 技能库：查看/删除自进化提炼的技能，手动触发提炼
+async function openSkills(){
+  const m=$("skillsMask"); if(m) m.classList.add("show");
+  await loadSkills();
+}
+async function loadSkills(){
+  const body=$("skillsBody"); if(!body) return;
+  body.innerHTML=`<div class="empty-line" style="padding:16px">加载中…</div>`;
+  try{
+    const skills=await fetch(`${API}/ai/skills`).then(r=>r.json());
+    if(!skills||!skills.length){
+      body.innerHTML=`<div class="empty-line" style="padding:20px">还没有技能。随着 AI 诊断 / 剧本执行 / 事件解决 的经验积累，系统每日会自动从中提炼可复用技能；也可点右上角「立即提炼」。</div>`;
+      return;
+    }
+    body.innerHTML=`<div class="skill-list">`+skills.map(s=>{
+      const succ=s.use_count>0?Math.round((s.success_count/s.use_count)*100):0;
+      return `<div class="skill-card">
+        <div class="skill-head"><b>${esc(s.name)}</b>
+          <span class="skill-meta">用 ${s.use_count} · 成功 ${succ}% · 权重 ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · 手工":""}</span>
+          <button class="btn danger sm" data-skill-del="${s.id}">删除</button></div>
+        <div class="skill-trigger">适用：${esc(s.trigger||"")}</div>
+        <pre class="skill-steps">${esc(s.steps||"")}</pre>
+        ${s.tags?`<div class="skill-tags">🏷️ ${esc(s.tags)}</div>`:""}
+      </div>`;
+    }).join("")+`</div>`;
+    body.querySelectorAll("[data-skill-del]").forEach(b=>b.onclick=async()=>{
+      if(!confirm("删除该技能？")) return;
+      await fetch(`${API}/ai/skills/${b.dataset.skillDel}`,{method:"DELETE"});
+      loadSkills();
+    });
+  }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">加载失败：${esc(String(e))}</div>`; }
+}
+async function distillSkillsNow(){
+  toast("提炼中，请稍候…","ok");
+  try{
+    const j=await fetch(`${API}/ai/skills/distill`,{method:"POST"}).then(r=>r.json());
+    if(j.ok) toast(`提炼完成，新增 ${j.created||0} 条技能`,"ok"); else toast("提炼失败："+(j.error||"未知"),"err");
+    loadSkills();
+  }catch(e){ toast("提炼失败："+e,"err"); }
+}
 // 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
 async function genDutyReport(){
   let j;
@@ -1449,6 +1489,10 @@ async function openAIConfig(){
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
     $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
     if($("rerankEndpoint")){ $("rerankEndpoint").value=c.rerank_endpoint||""; $("rerankKey").value=c.rerank_api_key||""; $("rerankModel").value=c.rerank_model||""; }
+    if($("aiSelfVerify")) $("aiSelfVerify").checked=!!c.self_verify;
+    if($("aiMoAModels")) $("aiMoAModels").value=c.moa_models||"";
+    if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
+    if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     // 更新向量化 / 重排模型卡片摘要
     updateEmbedCardSummary(); updateRerankCardSummary();
@@ -1548,7 +1592,9 @@ async function saveAIConfig(){
   if(enabled && (!endpoint || !model)){ toast("启用 AI 需填写 Endpoint 和模型","err"); return; } // 轻校验：启用却没填必填项
   const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30,
     embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0,
-    rerank_endpoint:($("rerankEndpoint")?.value||"").trim(),rerank_api_key:$("rerankKey")?.value||"",rerank_model:($("rerankModel")?.value||"").trim()};
+    rerank_endpoint:($("rerankEndpoint")?.value||"").trim(),rerank_api_key:$("rerankKey")?.value||"",rerank_model:($("rerankModel")?.value||"").trim(),
+    self_verify:$("aiSelfVerify")?.checked||false,moa_models:($("aiMoAModels")?.value||"").trim(),
+    mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim()};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
 }
@@ -2097,6 +2143,8 @@ safeAddEventListener("logSource","change",()=>{ onLogSourceChange(); if(!$("logS
 safeAddEventListener("logJob","change",()=>{ onLogJobChange(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("dutyReportBtn","click",genDutyReport);
+safeAddEventListener("skillsBtn","click",openSkills);
+safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);

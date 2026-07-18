@@ -97,6 +97,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.cleanupExpiredMemories()
 				s.pg.capMemoriesByKind(2000)
 				s.pg.cleanupFlowRecords()
+				// 自进化：把近期高价值经验提炼成可复用技能(SOP)。放在维护循环里而非启动时，
+				// 避免每次启动都触发 AI 调用；提炼失败/无新经验时静默跳过（distillSkills 内部已记日志）。
+				_, _ = s.distillSkills(14)
 			}
 		}()
 	}
@@ -229,6 +232,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                 // 全站「AI 辅助」按钮统一入口（任务化 SSE）
 	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback) // 采纳/评价 AI 辅助结果 → 学习闭环强化
 	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)          // 值班晨报态势汇总（供前端流式生成）
+	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
+	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
+	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
+	mux.HandleFunc("/api/v1/mcp", s.handleMCP)                              // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
