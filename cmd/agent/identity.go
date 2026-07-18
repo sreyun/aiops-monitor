@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -55,6 +56,7 @@ func loadOrCreateHostID(path string) string {
 func persistHostID(path, id, fp string) {
 	b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp})
 	if err != nil {
+		slog.Error("身份文件序列化失败", "path", path, "err", err)
 		return
 	}
 	tmp := path + ".tmp"

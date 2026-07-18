@@ -198,10 +198,17 @@ func (rc *redfishCollector) pollLoop(t RedfishTarget, reporter func(shared.Hardw
 
 func (rc *redfishCollector) storeAndReport(t RedfishTarget, snap shared.HardwareSnapshot, reporter func(shared.HardwareReport)) {
 	rc.mu.Lock()
-	// Update or append snapshot
+	// Update or append snapshot. Match by TargetURL (stable across renames):
+	// if the user renamed a target in config.json but the URL is unchanged,
+	// overwrite the old entry instead of appending a duplicate.
 	found := false
 	for i, s := range rc.snapshots {
-		if s.TargetName == snap.TargetName && s.TargetURL == snap.TargetURL {
+		if s.TargetURL == snap.TargetURL && snap.TargetURL != "" {
+			rc.snapshots[i] = snap
+			found = true
+			break
+		}
+		if s.TargetURL == "" && s.TargetName == snap.TargetName {
 			rc.snapshots[i] = snap
 			found = true
 			break

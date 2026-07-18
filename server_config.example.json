@@ -20,6 +20,7 @@
   },
   "categories": {},
   "install_token": "",
+  "public_url": "",
   "require_token": false,
   "mfa_required": false,
   "forward_listen": "127.0.0.1",

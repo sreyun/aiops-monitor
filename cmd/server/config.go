@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -477,6 +479,14 @@ type ServerConfig struct {
 	// the server is directly exposed these headers are attacker-forgeable, so
 	// they are ignored and the raw connection address is used instead.
 	TrustProxy bool `json:"trust_proxy"`
+	// PublicURL is the externally-reachable base URL that agents should connect to.
+	// When set, install scripts (install.sh / install.ps1) and the dashboard's
+	// "install info" endpoint use this URL instead of deriving it from the HTTP
+	// request's Host header. This fixes the case where an admin browses the
+	// dashboard at localhost:8529 and the generated install command points remote
+	// agents at their own localhost (connection refused). Leave empty to keep the
+	// legacy auto-detect behaviour. Override via AIOPS_PUBLIC_URL env var.
+	PublicURL string `json:"public_url,omitempty"`
 	// MFARequired is the global MFA enforcement policy: when true, every user
 	// without MFA enabled will be forced to enroll on their next login before
 	// they can access the dashboard. Managed by admin via /api/v1/mfa/global.
@@ -542,6 +552,11 @@ type ConfigStore struct {
 	prev    ServerConfig // snapshot before the last Set(), for Revert()
 	hasPrev bool         // whether prev holds a valid snapshot
 	pg      *pgStore     // when set, config persists to PostgreSQL instead of the JSON file
+	// detectedHostIP is the first non-loopback IPv4 address found on the machine
+	// at startup. Used by serverURL() as a fallback when public_url is empty and
+	// the admin browses the dashboard from localhost — without this, the generated
+	// install command points remote agents at their own localhost (connection refused).
+	detectedHostIP string
 }
 
 func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
@@ -592,6 +607,12 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 	// Apply environment variable overrides (v5.4.1): Docker Compose users can
 	// set AIOPS_* env vars to override config file values without editing JSON.
 	cs.applyEnvOverrides()
+	// Auto-detect the machine's LAN IP once at startup so serverURL() can
+	// substitute it when the admin browses from localhost and public_url is empty.
+	cs.detectedHostIP = detectHostIP()
+	if cs.detectedHostIP != "" {
+		slog.Info("自动检测到主机 LAN IP", "ip", cs.detectedHostIP, "note", "用于安装命令自动替换 localhost")
+	}
 	// Validate the loaded config — refuse to start with an obviously broken one.
 	if err := cs.cfg.Validate(); err != nil {
 		return nil, err
@@ -648,6 +669,9 @@ func (cs *ConfigStore) applyEnvOverrides() {
 	}
 	if v, ok := os.LookupEnv("AIOPS_TRUST_PROXY"); ok && v != "" {
 		cs.cfg.TrustProxy = v == "true" || v == "1"
+	}
+	if v, ok := os.LookupEnv("AIOPS_PUBLIC_URL"); ok && v != "" {
+		cs.cfg.PublicURL = strings.TrimRight(v, "/")
 	}
 	if v, ok := os.LookupEnv("AIOPS_REQUIRE_TOKEN"); ok && v != "" {
 		cs.cfg.RequireToken = v == "true" || v == "1"
@@ -771,6 +795,54 @@ func (cs *ConfigStore) TrustProxy() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.TrustProxy
+}
+
+// PublicURL returns the configured externally-reachable server URL for agent
+// install scripts. Empty string means "auto-detect from request" (legacy).
+func (cs *ConfigStore) PublicURL() string {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.PublicURL
+}
+
+// DetectedHostIP returns the auto-detected LAN IP from startup (may be "").
+func (cs *ConfigStore) DetectedHostIP() string {
+	return cs.detectedHostIP
+}
+
+// detectHostIP scans all active network interfaces and returns the first
+// non-loopback IPv4 address. Runs once at startup; used by serverURL() as a
+// fallback when public_url is empty and r.Host is a loopback address.
+func detectHostIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
 }
 
 // CORSOrigins returns the configured CORS origin whitelist. An empty slice

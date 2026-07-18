@@ -122,8 +122,14 @@ func (oc *oceanStorCollector) pollLoop(t OceanStorTarget, reporter func(shared.H
 func (oc *oceanStorCollector) storeAndReport(snap shared.HardwareSnapshot, reporter func(shared.HardwareReport)) {
 	oc.mu.Lock()
 	found := false
+	// Match by TargetURL (stable across renames) first, then fall back to TargetName.
 	for i, s := range oc.snapshots {
-		if s.TargetName == snap.TargetName {
+		if s.TargetURL == snap.TargetURL && snap.TargetURL != "" {
+			oc.snapshots[i] = snap
+			found = true
+			break
+		}
+		if s.TargetURL == "" && s.TargetName == snap.TargetName {
 			oc.snapshots[i] = snap
 			found = true
 			break

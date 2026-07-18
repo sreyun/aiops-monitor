@@ -1874,6 +1874,45 @@ func (p *pgStore) deleteHardwareSnapshot(hostID, targetName string) {
 	_, _ = p.db.Exec(`DELETE FROM hardware_changes WHERE host_id=$1 AND target_name=$2`, hostID, targetName)
 }
 
+// findHardwareTargetByURL returns the target_name of an existing snapshot that
+// matches the given target_url, or "" if none found. Used to detect renames:
+// when a user changes the config.json "name" field for the same physical device
+// (same URL), we need to migrate the old record instead of creating a new one.
+func (p *pgStore) findHardwareTargetByURL(hostID, targetURL string) string {
+	if targetURL == "" {
+		return ""
+	}
+	var name string
+	err := p.db.QueryRow(`SELECT target_name FROM hardware_snapshot WHERE host_id=$1 AND target_url=$2`,
+		hostID, targetURL).Scan(&name)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// renameHardwareTarget migrates all data from oldName to newName for a given
+// host, covering snapshots, events, and changes. Called when the agent's
+// config.json "name" field is changed for the same physical device (matched
+// by target_url). Without this migration the old record lingers forever.
+func (p *pgStore) renameHardwareTarget(hostID, oldName, newName string) {
+	if oldName == newName || oldName == "" || newName == "" {
+		return
+	}
+	slog.Info("硬件目标改名迁移", "host", hostID, "old", oldName, "new", newName)
+	// 1. Delete the new name if it already exists (will be re-inserted by upsert)
+	_, _ = p.db.Exec(`DELETE FROM hardware_snapshot WHERE host_id=$1 AND target_name=$2`, hostID, newName)
+	// 2. Rename old → new in snapshots (preserves history)
+	_, _ = p.db.Exec(`UPDATE hardware_snapshot SET target_name=$3 WHERE host_id=$1 AND target_name=$2`,
+		hostID, oldName, newName)
+	// 3. Rename in events (state transitions timeline)
+	_, _ = p.db.Exec(`UPDATE hardware_events SET target_name=$3 WHERE host_id=$1 AND target_name=$2`,
+		hostID, oldName, newName)
+	// 4. Rename in changes (asset change history)
+	_, _ = p.db.Exec(`UPDATE hardware_changes SET target_name=$3 WHERE host_id=$1 AND target_name=$2`,
+		hostID, oldName, newName)
+}
+
 // ============================================================================
 // Hyper-V 虚拟机清单 PG methods（结构与 hardware_* 同构）
 // ============================================================================

@@ -64,6 +64,23 @@ func (hs *hardwareStore) remove(hostID, targetName string) {
 	delete(hs.lastHealth, hostID+"|"+targetName)
 }
 
+// migrateHealthKey moves the lastHealth entry from oldName to newName when a
+// hardware target is renamed. Without this the new name starts with an empty
+// health state, causing a spurious health_change event on the next poll.
+func (hs *hardwareStore) migrateHealthKey(hostID, oldName, newName string) {
+	if hs == nil || oldName == newName {
+		return
+	}
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	oldKey := hostID + "|" + oldName
+	newKey := hostID + "|" + newName
+	if h, ok := hs.lastHealth[oldKey]; ok {
+		hs.lastHealth[newKey] = h
+	}
+	delete(hs.lastHealth, oldKey)
+}
+
 // healthChanged reports whether a target's health differs from the last report,
 // so hardware events are recorded on TRANSITIONS only. Without this the events
 // table grows forever (one row per poll) for any host stuck in Warning.

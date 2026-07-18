@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
@@ -8,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -92,9 +95,23 @@ func main() {
 			cfgPath = os.Args[i+1]
 		}
 	}
+	// Load configuration: file-not-found is expected on first manual run, but
+	// JSON parse errors MUST surface — a silently-failed parse would leave the
+	// agent pointing at the hardcoded default (localhost:8529), which is the
+	// #1 cause of "agent reports to localhost" on freshly-installed Linux hosts
+	// where the install script exited before writing config.json.
 	if b, err := os.ReadFile(cfgPath); err == nil {
-		_ = json.Unmarshal(b, &cfg)
-		slog.Info("已加载配置文件", "path", cfgPath)
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			slog.Error("配置文件 JSON 解析失败，将使用默认值（localhost:8529）",
+				"path", cfgPath, "err", err,
+				"hint", "请检查 config.json 格式是否正确，或重新运行安装命令")
+		} else {
+			slog.Info("已加载配置文件", "path", cfgPath)
+		}
+	} else {
+		slog.Warn("配置文件不存在，使用默认配置（localhost:8529）",
+			"path", cfgPath,
+			"hint", "请运行安装命令生成 config.json，或使用 --config 指定路径")
 	}
 
 	// 首次启动时在配置目录自动生成 config.example.json（已存在则跳过）
@@ -129,6 +146,44 @@ func main() {
 				cfg.LogPaths = append(cfg.LogPaths, p)
 			}
 		}
+	}
+
+	// Environment variable overrides (lowest priority: flag > env > config file > default).
+	// Enables container / Kubernetes deployments where secrets are injected via env.
+	if v := os.Getenv("AIOPS_SERVER"); v != "" {
+		cfg.Server = v
+	}
+	if v := os.Getenv("AIOPS_TOKEN"); v != "" {
+		cfg.Token = v
+	}
+	if v := os.Getenv("AIOPS_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ReportInterval = n
+		}
+	}
+	if v := os.Getenv("AIOPS_CATEGORY"); v != "" {
+		cfg.Category = v
+	}
+	if v := os.Getenv("AIOPS_PLUGINS_DIR"); v != "" {
+		cfg.PluginsDir = v
+	}
+	if v := os.Getenv("AIOPS_STATE_FILE"); v != "" {
+		cfg.StateFile = v
+	}
+	if v := os.Getenv("AIOPS_LOG_ENCRYPT"); v != "" {
+		cfg.LogEncrypt = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("AIOPS_TLS_SKIP_VERIFY"); v != "" {
+		cfg.TLSSkipVerify = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("AIOPS_CA_CERT"); v != "" {
+		cfg.CACert = v
+	}
+	if v := os.Getenv("AIOPS_LISTEN"); v != "" {
+		cfg.Listen = v
+	}
+	if v := os.Getenv("AIOPS_RELAY_SECRET"); v != "" {
+		cfg.RelaySecret = v
 	}
 
 	// Apply server TLS trust (self-signed CA / skip-verify) to every agent→server
@@ -228,6 +283,25 @@ func main() {
 	if len(servers) == 0 {
 		log.Fatal("未配置任何服务端地址（--server 或 servers 字段）")
 	}
+	// Guard: detect localhost target — a freshly-installed remote agent
+	// connecting to its OWN localhost is the most common misconfiguration.
+	// This typically means config.json was never written (install script failed
+	// partway through, or the agent binary was copied without running the
+	// install command). Relay mode is exempt: it listens locally by design.
+	if !cfg.Relay {
+		for _, sc := range servers {
+			if strings.Contains(sc.Server, "localhost") || strings.Contains(sc.Server, "127.0.0.1") {
+				slog.Error("Agent 上报地址为本地回环地址，远程连接必然失败！",
+					"server", sc.Server,
+					"config_path", cfgPath,
+					"hint", "config.json 可能未正确生成。请在面板重新生成安装命令并执行，或手动编辑 config.json 的 server 字段为服务端实际可达地址")
+			}
+		}
+	}
+	// Log effective server(s) at startup for quick diagnosis
+	for _, sc := range servers {
+		slog.Info("Agent 上报目标", "server", sc.Server, "config_path", cfgPath)
+	}
 	agent := NewAgent(
 		servers,
 		time.Duration(cfg.ReportInterval)*time.Second,
@@ -244,13 +318,31 @@ func main() {
 	agent.hypervInterval = time.Duration(cfg.HyperVIntervalSec) * time.Second
 	agent.hypervDisabled = cfg.HyperVDisabled
 
+	// Graceful shutdown: cancel context on SIGTERM/SIGINT, then wait for all
+	// goroutines (report loop, plugin loop, terminal/forward channels, hardware
+	// collectors) to drain before exiting. This prevents data loss on in-flight
+	// reports and ensures the server sees a clean disconnect.
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
-		slog.Info("收到退出信号，Agent 停止。")
-		os.Exit(0)
+		select {
+		case <-sig:
+			slog.Info("收到退出信号，正在优雅停止...")
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
-	agent.Run()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		agent.Run(ctx)
+	}()
+
+	wg.Wait()
+	slog.Info("Agent 已完全停止。")
 }

@@ -162,6 +162,18 @@ else
 }
 EOF
 fi
+# Verify config.json was written correctly — on some systems set -e causes the
+# script to exit partway (e.g. plugins download failure) BEFORE reaching here,
+# leaving config.json missing. The agent would then silently use the hardcoded
+# default (localhost:8529). Catch this early so the user sees the real error.
+if [ ! -s config.json ]; then
+  echo "[AIOps] ERROR: config.json was not created! Installation incomplete."
+  echo "[AIOps] This usually means a download step failed. Re-run the install command."
+  exit 1
+fi
+# Restrict config.json to owner-only (contains tokens/secrets).
+chmod 600 config.json 2>/dev/null || true
+echo "[AIOps] config written: $DIR/config.json (server: $SERVER)"
 
 if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   # Linux + root → systemd: auto-start on boot + auto-restart on crash/kill.
@@ -385,6 +397,11 @@ cat > config.json <<EOF
   "server": "$SERVER"
 }
 EOF
+if [ ! -s config.json ]; then
+  echo "[AIOps] ERROR: config.json was not created! Installation incomplete."
+  exit 1
+fi
+echo "[AIOps] config written: $DIR/config.json (upstream: $SERVER, listen: $LISTEN)"
 
 if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   cat > /etc/systemd/system/aiops-relay.service <<UNIT

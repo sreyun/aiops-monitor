@@ -50,6 +50,23 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 
 	// Store snapshots in PG (upsert)
 	if s.pg != nil {
+		// Rename detection: when a user changes config.json "name" for the same
+		// physical device (same target_url), migrate the old record to the new name
+		// so history/events/changes aren't orphaned under the old name.
+		seenRename := map[string]bool{} // old_name → already migrated
+		for _, snap := range rep.Snapshots {
+			if snap.TargetURL == "" {
+				continue
+			}
+			oldName := s.pg.findHardwareTargetByURL(rep.HostID, snap.TargetURL)
+			if oldName != "" && oldName != snap.TargetName && !seenRename[oldName] {
+				s.pg.renameHardwareTarget(rep.HostID, oldName, snap.TargetName)
+				// Update in-memory lastHealth tracking: move old key to new
+				s.hw.migrateHealthKey(rep.HostID, oldName, snap.TargetName)
+				seenRename[oldName] = true
+			}
+		}
+
 		for _, snap := range rep.Snapshots {
 			// 采集失败（BMC 超时等）时快照各字段都是零值：直接 upsert 会把上一份**好数据**
 			// 覆盖成空白，整张卡片瞬间变“无数据/严重”。这类快照只报警不落库。

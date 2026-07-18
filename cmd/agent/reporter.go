@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -363,7 +364,7 @@ func (a *Agent) reconcileIdentity() {
 	}
 }
 
-func (a *Agent) Run() {
+func (a *Agent) Run(ctx context.Context) {
 	// 认回规范身份必须先于一切上报与采集器启动
 	a.reconcileIdentity()
 	slog.Info("Agent 核心启动",
@@ -382,34 +383,52 @@ func (a *Agent) Run() {
 		slog.Info("提示: 当前平台无原生采集器，基础指标依赖 core 插件(plugins/core_metrics.py)")
 	}
 
+	// childWg tracks all goroutines spawned by Run so the caller can wait
+	// for a clean drain on context cancellation.
+	var childWg sync.WaitGroup
+
 	// Register to all targets (best-effort with retry, non-blocking on failures)
 	for _, t := range a.targets {
 		a.registerTarget(t)
 	}
 
-	go a.pluginLoop() // Python layer, lower frequency
+	childWg.Add(1)
+	go func() {
+		defer childWg.Done()
+		a.pluginLoop(ctx)
+	}()
 
-	// Start one terminal channel per target — each server independently
-	// long-polls for pending terminal sessions.
+	// Start one terminal channel per target
 	for _, t := range a.targets {
-		go a.runTerminalChannelFor(t)
+		childWg.Add(1)
+		tgt := t
+		go func() {
+			defer childWg.Done()
+			a.runTerminalChannelFor(tgt)
+		}()
 	}
 
-	// Start one forward channel per target — each server independently
-	// long-polls for pending port forwarding sessions.
+	// Start one forward channel per target
 	for _, t := range a.targets {
-		go a.runForwardChannelFor(t)
+		childWg.Add(1)
+		tgt := t
+		go func() {
+			defer childWg.Done()
+			a.runForwardChannelFor(tgt)
+		}()
 	}
 
-	// Start one log collector per target (no-op when no log paths are configured).
+	// Start one log collector per target
 	for _, t := range a.targets {
-		go a.runLogCollectorFor(t)
+		childWg.Add(1)
+		tgt := t
+		go func() {
+			defer childWg.Done()
+			a.runLogCollectorFor(tgt)
+		}()
 	}
 
-	// Start hardware collectors (Redfish BMC + OceanStor DeviceManager).
-	// 两者都产出 HardwareReport，必须先在本地按 target 合并再上报：服务端的
-	// hardwareStore.put 是**整体替换**一台主机的快照集合，各报各的会让两个
-	// 采集器每轮互相覆盖，进而使对方的告警反复 fire/resolve 抖动。
+	// Start hardware collectors
 	if len(a.redfishTargets) > 0 || len(a.oceanStorTargets) > 0 {
 		agg := newHardwareAggregator(a.identity.HostID, a.identity.Fingerprint, a.postHardwareReport)
 		if len(a.redfishTargets) > 0 {
@@ -422,7 +441,7 @@ func (a *Agent) Run() {
 		}
 	}
 
-	// Start NetFlow receiver (UDP listener + aggregator).
+	// Start NetFlow receiver
 	if a.netflowCfg != nil && a.netflowCfg.Listen != "" {
 		nr := newNetflowReceiver(*a.netflowCfg, a.identity.HostID, a.identity.Fingerprint)
 		nr.run(func(rep shared.NetFlowReport) {
@@ -431,7 +450,7 @@ func (a *Agent) Run() {
 		slog.Info("NetFlow 接收器已启动", "listen", a.netflowCfg.Listen)
 	}
 
-	// Start packet collector (nf_conntrack, Linux only).
+	// Start packet collector
 	if a.packetCfg != nil && a.packetCfg.Enabled {
 		pc := newPacketCollector(*a.packetCfg, a.identity.HostID, a.identity.Fingerprint)
 		pc.run(func(rep shared.NetFlowReport) {
@@ -440,13 +459,11 @@ func (a *Agent) Run() {
 		slog.Info("五元组包采集器已启动")
 	}
 
-	// Start Hyper-V guest inventory collector — auto-detected, Windows Hyper-V
-	// hosts only. The availability probe (a powershell shell-out, up to 8s) runs
-	// inside the goroutine, NOT here: the base-metric report loop below must never
-	// wait on a Hyper-V probe that could be slow or wedged. On non-Windows / non-
-	// Hyper-V hosts hypervAvailable() is false, so the goroutine just exits.
+	// Start Hyper-V guest inventory collector
 	if !a.hypervDisabled {
+		childWg.Add(1)
 		go func() {
+			defer childWg.Done()
 			if hypervAvailable() {
 				slog.Info("Hyper-V 虚拟机采集器已启动")
 				a.runHyperVCollector()
@@ -454,15 +471,20 @@ func (a *Agent) Run() {
 		}()
 	}
 
-	// base-metric report loop, higher frequency.
-	// Wrap in defer/recover so a panic inside reportOnce (e.g. from a
-	// corrupted /proc read edge case) logs the stack and restarts the loop
-	// instead of killing the process.
-	a.reportOnceSafe() // report immediately
+	// base-metric report loop with context-aware ticker.
+	a.reportOnceSafe()
 	ticker := time.NewTicker(a.reportInterval)
 	defer ticker.Stop()
-	for range ticker.C {
-		a.reportOnceSafe()
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("上报循环收到停止信号，等待子协程排空...")
+			childWg.Wait()
+			slog.Info("所有子协程已退出。")
+			return
+		case <-ticker.C:
+			a.reportOnceSafe()
+		}
 	}
 }
 
@@ -502,18 +524,23 @@ func (a *Agent) registerTarget(t *serverTarget) {
 // pluginLoop runs plugins on a slower tick, independently of the report loop.
 // Wrapped in defer/recover so a panic in plugin execution (e.g. nil map from
 // a corrupted plugin output) doesn't kill the whole agent.
-func (a *Agent) pluginLoop() {
+func (a *Agent) pluginLoop(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("插件循环 panic 已恢复，尝试重启", "panic", r)
-			go a.pluginLoop() // restart after a brief pause
+			go a.pluginLoop(ctx)
 		}
 	}()
-	a.runPlugins() // run promptly on startup
+	a.runPlugins()
 	ticker := time.NewTicker(a.pluginInterval)
 	defer ticker.Stop()
-	for range ticker.C {
-		a.runPlugins()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.runPlugins()
+		}
 	}
 }
 

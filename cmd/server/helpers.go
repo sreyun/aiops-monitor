@@ -96,9 +96,19 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 	return false
 }
 
-// serverURL reconstructs the externally-reachable base URL from the request,
-// honoring common reverse-proxy headers.
-func serverURL(r *http.Request) string {
+// serverURL returns the externally-reachable base URL for agent install scripts.
+//
+// Priority:
+//  1. public_url (explicit admin config or AIOPS_PUBLIC_URL env var)
+//  2. X-Forwarded-Host (reverse proxy)
+//  3. Auto-detected LAN IP when r.Host is loopback — fixes the case where the
+//     admin browses from localhost:8529 and remote agents inherit that
+//     unreachable address (connection refused)
+//  4. r.Host (request Host header, legacy fallback)
+func (s *Server) serverURL(r *http.Request) string {
+	if u := s.cfg.PublicURL(); u != "" {
+		return u
+	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -109,6 +119,22 @@ func serverURL(r *http.Request) string {
 	host := r.Host
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
 		host = h
+	}
+	// Loopback auto-detect: when the admin browses from localhost (typical for
+	// same-machine panel access), substitute the server's LAN IP so that remote
+	// agents don't inherit an unreachable localhost address. This eliminates the
+	// need to manually set public_url in the common case.
+	if ip := s.cfg.DetectedHostIP(); ip != "" {
+		hostname := host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			hostname = h
+		}
+		if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
+			if _, port, err := net.SplitHostPort(host); err == nil {
+				return scheme + "://" + ip + ":" + port
+			}
+			return scheme + "://" + ip
+		}
 	}
 	return scheme + "://" + host
 }

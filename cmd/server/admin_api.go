@@ -80,7 +80,7 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 // commands: the reachable server URL and the current install token.
 func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"server_url":    serverURL(r),
+		"server_url":    s.serverURL(r),
 		"token":         s.cfg.InstallToken(),
 		"require_token": s.cfg.AgentTokenRequired(),
 	})
@@ -104,7 +104,7 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// double quotes; sanitize so a crafted ?category= (or a forged X-Forwarded-Host
 	// feeding serverURL) can't inject commands into the script a victim pipes to sh.
 	category := sanitizeCategory(r.URL.Query().Get("category"))
-	server := sanitizeServerURL(serverURL(r))
+	server := sanitizeServerURL(s.serverURL(r))
 	// Multi-server: the dashboard may pass a JSON array of {server,token} objects
 	// so one agent pushes to multiple backends. Sanitized+re-serialized here so
 	// a crafted payload can't inject shell/PowerShell metacharacters.
@@ -128,7 +128,7 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRelayInstallScript(w http.ResponseWriter, r *http.Request) {
 	token := sanitizeToken(r.URL.Query().Get("token"))
 	category := sanitizeCategory(r.URL.Query().Get("category"))
-	server := sanitizeServerURL(serverURL(r))
+	server := sanitizeServerURL(s.serverURL(r))
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
 		body = renderScript(relayInstallPs1Template, server, token, category, "", "")
