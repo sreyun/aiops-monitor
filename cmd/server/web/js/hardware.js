@@ -1,16 +1,18 @@
 // hardware.js — 硬件健康面板（Redfish/BMC）
 // Loaded as part of the unified app.js bundle.
 //
-// 交互：卡片 / 列表自由切换 → 点任意一项打开详情弹窗（全量数据 + 重点突出 + 历史曲线）。
+// 交互：主从式目录树（宿主机 ▸ 硬件目标，可折叠）→ 点选任意目标，右侧内联
+// 详情面板展示全量数据 + 重点突出 + 历史曲线（与虚拟机页同一套交互范式）。
 // 注意：CSP 为 script-src 'self'（无 unsafe-inline），**禁止内联 onclick**——一律事件委托。
 //
 // 覆盖机型：Dell R730/R740/R750/R760 (iDRAC8/9)、华为 RH2288 V3、TaiShan 200 (Model 2280)(iBMC)。
 // 各家 Redfish 字段完整度不一，渲染一律"有才画、没有不画空表"。
 
 let HW_RESULTS = [];                                   // [{host, snap}]
-let HW_VIEW_MODE = localStorage.getItem("aiops_hw_view") || "card"; // card | list
-let HW_CHARTS = {};                                    // 详情弹窗内的图表实例
-let HW_CUR = null;                                     // 当前打开详情的项
+let HW_SEL = null;                                     // 树中选中的目标 key（host.id|target_name）
+const HW_TREE_COLLAPSED = new Set();                   // 折叠的宿主机 id
+let HW_CHARTS = {};                                    // 详情面板内的图表实例
+let HW_CUR = null;                                     // 当前选中详情的项
 let HW_HIST_RANGE = "6h";
 let HW_HIST_SUMMARY = {};                              // 各指标历史概况（min/max/avg/最新），供导出补上"历史"数据
 let HW_LOCAL_EVENTS = [];                              // 平台侧记录的状态变化（异步载入，导出时一并带上）
@@ -135,8 +137,8 @@ function hwSummary(sd) {
 
 /* ---------- 渲染 ---------- */
 
-// 异常优先排序：Critical > Warning > OK，让最需要关注的排在最前。
-// 卡片/列表/详情三处必须用同一个顺序，否则 data-hwidx 会指错设备。
+// 异常优先排序：Critical > Warning > OK，让最需要关注的排在最前
+// （树内宿主分组与组内目标顺序都继承这个排序）。
 function hwSortedItems() {
   const order = { Critical: 0, Warning: 1, OK: 2 };
   return HW_RESULTS.slice().sort((a, b) =>
@@ -194,7 +196,7 @@ function hwToolbarHTML(shown, total) {
       ${opt("24h", HW_FILTER.fresh, hwT("hardware.fresh_24h", "24 小时内更新"))}
       ${opt("7d", HW_FILTER.fresh, hwT("hardware.fresh_7d", "7 天内更新"))}
     </select>
-    <span class="hw-count">${shown}/${total}</span>
+    <span class="hw-count" id="hwCountSpan">${shown}/${total}</span>
   </div>`;
 
   // 重复主机提示（仅在确有可清理项时出现，避免常态化噪音横幅）
@@ -203,6 +205,10 @@ function hwToolbarHTML(shown, total) {
 }
 
 function renderHardwarePanel() {
+  hwInjectTreeStyles();
+  // 视图切换按钮属于旧的卡片/列表模式，树形布局下隐藏（保留 DOM 兼容旧引用）
+  const vt = $("hwViewToggle");
+  if (vt) vt.style.display = "none";
   const container = $("hardwarePanel");
   if (!container) return;
   if (!HW_RESULTS.length) {
@@ -211,13 +217,22 @@ function renderHardwarePanel() {
     return;
   }
   const items = hwFilteredItems();
-  let body;
-  if (!items.length) {
-    body = `<div class="empty-line">${esc(hwT("hardware.no_match", "没有匹配的设备，试试放宽筛选条件"))}</div>`;
-  } else {
-    body = HW_VIEW_MODE === "list" ? hwListHTML(items) : hwCardHTML(items);
+  // 默认选中第一台异常设备（否则第一台），详情不留白
+  if (!hwSelItem()) {
+    const first = items.find(it => hwIsBad(it.snap.health)) || items[0];
+    HW_SEL = first ? hwKeyOf(first) : null;
   }
-  container.innerHTML = hwToolbarHTML(items.length, HW_RESULTS.length) + body;
+  container.innerHTML = hwToolbarHTML(items.length, HW_RESULTS.length) +
+    `<div class="hwx-wrap"><div class="hwx-tree" id="hwxTree">${hwTreeHTML()}</div><div class="hwx-detail" id="hwxDetail"></div></div>`;
+  hwRenderDetail();
+}
+
+// 筛选变化只重建树（详情里挂着 canvas 图表，整面板重绘会把曲线清掉还丢焦点）
+function hwRefreshTree() {
+  const t = $("hwxTree");
+  if (t) t.innerHTML = hwTreeHTML();
+  const c = $("hwCountSpan");
+  if (c) c.textContent = `${hwFilteredItems().length}/${HW_RESULTS.length}`;
 }
 
 // 机型一行：厂商 · 型号 · 序列号。Dell 的 Service Tag 落在 SKU，华为落在
@@ -229,90 +244,116 @@ function hwModelLine(sysInfo) {
   return parts.join(" · ");
 }
 
-function hwCardHTML(items) {
-  return `<div class="hw-grid">` + items.map((it, i) => {
-    const snap = it.snap, sd = snap.snapshot || {}, m = hwHealthMeta(snap.health), s = hwSummary(sd);
-    const sys = sd.system || {};
-    const stat = (label, v, cls) => v ? `<span class="hw-stat ${cls || ""}"><span class="hw-stat-k">${esc(label)}</span>${esc(v)}</span>` : "";
-    const cpus = sd.cpus || [], mem = sd.memory || {};
-    const cpuTxt = cpus.length ? `${cpus.length} × ${cpus[0].cores || "?"}C` : "";
-    const edge = m.cls === "crit" ? "hw-edge-crit" : m.cls === "warn" ? "hw-edge-warn" : "";
-    const model = hwModelLine(sys);
-    return `<div class="hw-card ${edge}" data-hwidx="${i}" role="button" tabindex="0">
-      <div class="hw-card-header">
-        <span class="hw-health-dot hw-${m.cls}" aria-hidden="true">${m.icon}</span>
-        <div class="hw-card-info">
-          <div class="hw-card-name">${esc(snap.target_name || snap.target_url)}</div>
-          <div class="hw-card-sub">
-            <span class="hw-dot ${it.online ? "on" : "off"}" title="${esc(it.online ? hwT("hardware.host_online", "主机在线") : hwT("hardware.host_offline", "主机离线"))}"></span>
-            ${esc(it.host.hostname || it.host.id)} · ${esc(m.label)}
-          </div>
-          ${model ? `<div class="hw-card-model" title="${esc(model)}">${esc(model)}</div>` : ""}
-        </div>
-        ${s.bad > 0 ? `<span class="badge crit">${s.bad} ${esc(hwT("hardware.bad_count", "项异常"))}</span>` : ""}
-        <button class="icon-btn danger hw-del-btn" data-hwdel="${esc(snap.target_name || "")}" data-hwhost="${esc(it.host.id)}" title="${esc(hwT("hardware.delete", "删除"))}" data-i18n-title="hardware.delete">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
-        </button>
-      </div>
-      <div class="hw-quick-stats">
-        ${stat(hwT("hardware.cpu", "CPU"), cpuTxt)}
-        ${stat(hwT("hardware.memory", "内存"), mem.total_gb ? mem.total_gb.toFixed(0) + "GB" : "")}
-        ${stat(hwT("hardware.max_temp", "最高温度"), s.maxTemp ? s.maxTemp.toFixed(0) + "°C" : "",
-               s.tempLvl === "Critical" ? "hw-stat-crit" : s.tempLvl === "Warning" ? "hw-stat-warn" : "")}
-        ${stat(hwT("hardware.power", "功耗"), s.watts ? s.watts.toFixed(0) + "W" : "")}
-        ${stat(hwT("hardware.storage", "存储"), (sd.storage || []).length ? String(sd.storage.length) : "")}
-        ${stat(hwT("hardware.fans", "风扇"), s.fans.length ? String(s.fans.length) : "")}
-        ${stat(hwT("hardware.gpu", "GPU / 加速卡"), (sd.gpus || []).length ? String(sd.gpus.length) : "")}
-        ${stat(hwT("hardware.raid", "RAID / 存储控制器"), (sd.raid || []).length ? String(sd.raid.length) : "")}
-        ${stat(hwT("hardware.enclosure", "磁盘框"), (sd.enclosures || []).length ? String(sd.enclosures.length) : "")}
-      </div>
-      <div class="hw-expand-hint">${esc(hwT("hardware.open_detail", "点击查看详情与历史曲线 →"))}</div>
-    </div>`;
-  }).join("") + `</div>`;
+/* ---------- 左侧目录树（宿主机 ▸ 硬件目标） ---------- */
+
+// 选中键：宿主 + 目标名。用稳定键而非列表下标——筛选会让下标漂移指错设备。
+function hwKeyOf(it) { return it.host.id + "|" + (it.snap.target_name || it.snap.target_url || ""); }
+
+function hwSelItem() {
+  if (!HW_SEL) return null;
+  return HW_RESULTS.find(it => hwKeyOf(it) === HW_SEL) || null;
 }
 
-function hwListHTML(items) {
-  return `<div class="hw-list">` + items.map((it, i) => {
-    const snap = it.snap, sd = snap.snapshot || {}, m = hwHealthMeta(snap.health), s = hwSummary(sd);
-    const sys = sd.system || {};
-    const badgeCls = m.cls === "ok" ? "ok" : m.cls === "warn" ? "warn" : m.cls === "crit" ? "crit" : "";
-    const sub = [it.host.hostname || it.host.id, sys.model].filter(Boolean).join(" · ");
-    return `<div class="hw-row" data-hwidx="${i}" role="button" tabindex="0">
-      <span class="hw-health-dot hw-${m.cls}" aria-hidden="true">${m.icon}</span>
-      <div class="hw-row-id">
-        <div class="hw-row-name">${esc(snap.target_name || snap.target_url)}</div>
-        <div class="hw-row-sub" title="${esc(sub)}">
-          <span class="hw-dot ${it.online ? "on" : "off"}"></span>${esc(sub)}
-        </div>
-      </div>
-      <span class="badge ${badgeCls}">${esc(m.label)}</span>
-      ${s.bad > 0 ? `<span class="badge crit">${s.bad} ${esc(hwT("hardware.bad_count", "项异常"))}</span>` : `<span class="hw-row-cell">—</span>`}
-      <span class="hw-row-cell mono">${s.maxTemp ? s.maxTemp.toFixed(0) + "°C" : "-"}</span>
-      <span class="hw-row-cell mono">${s.watts ? s.watts.toFixed(0) + "W" : "-"}</span>
-      <span class="hw-row-cell mono">${(sd.cpus || []).length}C / ${((sd.memory || {}).total_gb || 0).toFixed(0)}GB</span>
-      <span class="hw-row-cell">${(sd.storage || []).length} ${esc(hwT("hardware.disk_unit", "盘"))} · ${s.fans.length} ${esc(hwT("hardware.fans", "风扇"))}</span>
-      <button class="icon-btn danger hw-del-btn" data-hwdel="${esc(snap.target_name || "")}" data-hwhost="${esc(it.host.id)}" title="${esc(hwT("hardware.delete", "删除"))}" data-i18n-title="hardware.delete">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
-      </button>
-    </div>`;
-  }).join("") + `</div>`;
+function hwTreeNode(it) {
+  const snap = it.snap, sd = snap.snapshot || {}, m = hwHealthMeta(snap.health), s = hwSummary(sd);
+  const key = hwKeyOf(it), sel = HW_SEL === key;
+  const model = (sd.system || {}).model || "";
+  const dotCls = m.cls === "ok" ? "ok" : m.cls === "warn" ? "warn" : m.cls === "crit" ? "crit" : "na";
+  const mini = [
+    s.bad ? `<span class="hwx-badn">${s.bad}</span>` : "",
+    s.maxTemp ? Math.round(s.maxTemp) + "°C" : "",
+  ].filter(Boolean).join(" ");
+  return `<div class="hwx-node${sel ? " selected" : ""}${hwIsBad(snap.health) ? " bad" : ""}" data-hwsel="${esc(key)}" role="button" tabindex="0">
+    <span class="hwx-tdot ${dotCls}"></span>
+    <div class="nid">
+      <div class="nname" title="${esc(snap.target_name || snap.target_url)}">${esc(snap.target_name || snap.target_url)}</div>
+      ${model ? `<div class="nmodel" title="${esc(model)}">${esc(model)}</div>` : ""}
+    </div>
+    <span class="nmini">${mini}</span>
+  </div>`;
 }
 
-/* ---------- 详情弹窗 ---------- */
+function hwTreeHTML() {
+  const items = hwFilteredItems();
+  if (!items.length) {
+    return `<div class="empty-line">${esc(hwT("hardware.no_match", "没有匹配的设备，试试放宽筛选条件"))}</div>`;
+  }
+  // 按宿主机分组；items 已按严重度排序，Map 保持插入序 = 异常宿主靠前
+  const byHost = new Map();
+  items.forEach(it => {
+    const k = it.host.id;
+    if (!byHost.has(k)) byHost.set(k, { host: it.host, online: it.online, items: [] });
+    byHost.get(k).items.push(it);
+  });
+  const filtering = HW_FILTER.q || HW_FILTER.status !== "all" || HW_FILTER.fresh !== "all";
+  let h = "";
+  byHost.forEach(g => {
+    const bad = g.items.reduce((n, it) => n + (hwIsBad(it.snap.health) ? 1 : 0), 0);
+    const collapsed = HW_TREE_COLLAPSED.has(g.host.id) && !filtering;
+    h += `<div class="hwx-hostnode"><div class="hwx-hosthead" data-hwhtoggle="${esc(g.host.id)}">
+      <span class="hwx-caret">${collapsed ? "▸" : "▾"}</span>
+      <span class="hw-dot ${g.online ? "on" : "off"}" title="${esc(g.online ? hwT("hardware.host_online", "主机在线") : hwT("hardware.host_offline", "主机离线"))}"></span>
+      <span class="hname" title="${esc(g.host.hostname || g.host.id)}">${esc(g.host.hostname || g.host.id)}</span>
+      <span class="hwx-count${bad ? " bad" : ""}">${g.items.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
+    </div>`;
+    if (!collapsed) h += `<div class="hwx-list">${g.items.map(hwTreeNode).join("")}</div>`;
+    h += `</div>`;
+  });
+  return h;
+}
 
-function openHwDetail(idx) {
-  // 必须和渲染时用的**同一个**列表：卡片上的 data-hwidx 是筛选后列表的下标，
-  // 这里若用未筛选的列表会打开另一台设备的详情。
-  const it = hwFilteredItems()[idx];
-  if (!it) return;
+/* ---------- 右侧内联详情（复用原弹窗的 hwDetailHTML 全量渲染） ---------- */
+
+function hwSelect(key) {
+  HW_SEL = key;
+  const tree = $("hwxTree");
+  if (tree) tree.querySelectorAll(".hwx-node").forEach(n =>
+    n.classList.toggle("selected", n.dataset.hwsel === key));
+  hwRenderDetail();
+}
+
+// 详情头：标题 + 健康徽章 + 动作（AI 诊断 / 导出 / 删除）。
+// 动作用 data 属性走 hardwarePanel 的事件委托，逻辑复用原弹窗那套函数。
+function hwDetailHeadHTML(it, m) {
+  const snap = it.snap, sys = (snap.snapshot || {}).system || {};
+  const badgeCls = m.cls === "ok" ? "ok" : m.cls === "warn" ? "warn" : m.cls === "crit" ? "crit" : "";
+  const sub = [it.host.hostname || it.host.id, hwModelLine(sys)].filter(Boolean).join(" · ");
+  return `<div class="hwx-dhead">
+    <span class="hw-health-dot hw-${m.cls}" aria-hidden="true">${m.icon}</span>
+    <div class="hwx-dtitle">
+      <div class="t">${esc(snap.target_name || snap.target_url)}</div>
+      <div class="s" title="${esc(sub)}">${esc(sub)}</div>
+    </div>
+    <span class="badge ${badgeCls}">${esc(m.label)}</span>
+    <span style="flex:1"></span>
+    <button class="btn sm ai-assist-btn" data-hwai="1" title="${esc(hwT("hardware.ai_diag_title", "AI 分析该设备整体运行状态并沉淀记忆"))}"><span class="ai-assist-btn-ic">🤖</span>${esc(hwT("hardware.ai_diag", "AI 诊断"))}</button>
+    <div class="exp-dd hwx-dd">
+      <button class="btn sm" data-hwexpbtn="1" aria-haspopup="true">${esc(hwT("hardware.export", "导出"))}</button>
+      <div class="exp-dd-menu" data-hwexpmenu="1" role="menu">
+        <button class="exp-dd-opt" role="menuitem" data-hwexport="excel"><span>${esc(hwT("hardware.export_excel", "Excel 表格"))}</span><span class="exp-dd-ext">.xlsx</span></button>
+        <button class="exp-dd-opt" role="menuitem" data-hwexport="word"><span>${esc(hwT("hardware.export_word", "Word 文档"))}</span><span class="exp-dd-ext">.docx</span></button>
+        <button class="exp-dd-opt" role="menuitem" data-hwexport="markdown"><span>${esc(hwT("hardware.export_md", "Markdown"))}</span><span class="exp-dd-ext">.md</span></button>
+        <button class="exp-dd-opt" role="menuitem" data-hwexport="pdf"><span>${esc(hwT("hardware.export_pdf", "PDF"))}</span><span class="exp-dd-ext">${esc(hwT("hardware.export_pdf_ext", "打印"))}</span></button>
+      </div>
+    </div>
+    <button class="icon-btn danger" data-hwdel="${esc(snap.target_name || "")}" data-hwhost="${esc(it.host.id)}" title="${esc(hwT("hardware.delete", "删除"))}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
+    </button>
+  </div>`;
+}
+
+function hwRenderDetail() {
+  const box = $("hwxDetail");
+  if (!box) return;
+  const it = hwSelItem();
+  if (!it) {
+    HW_CUR = null;
+    box.innerHTML = `<div class="hwx-detailbox"><div class="hwx-empty">${esc(hwT("hardware.pick", "从左侧选择一台设备，查看部件详情与历史曲线"))}</div></div>`;
+    return;
+  }
   HW_CUR = it;
-  const snap = it.snap, sd = snap.snapshot || {}, m = hwHealthMeta(snap.health);
-  const sys = sd.system || {};
-  const title = [snap.target_name || snap.target_url, it.host.hostname || it.host.id, sys.model]
-    .filter(Boolean).join(" · ");
-  $("hwDetailTitle").textContent = title;
-  $("hwDetailBody").innerHTML = hwDetailHTML(it, sd, m);
-  $("hwDetailMask").classList.add("show");
+  const sd = it.snap.snapshot || {}, m = hwHealthMeta(it.snap.health);
+  box.innerHTML = `<div class="hwx-detailbox">${hwDetailHeadHTML(it, m)}${hwDetailHTML(it, sd, m)}</div>`;
   loadHwHistory();     // 异步填充历史曲线
   loadHwLocalEvents(); // 异步填充平台侧记录的状态变化
 }
@@ -367,7 +408,7 @@ function hwDetailHTML(it, sd, m) {
     [hwT("hardware.patch_version", "补丁版本"), sys.patch_version],
     [hwT("hardware.total_capacity", "总容量"), hwFmtCap(sys.total_capacity_gb)],
     [hwT("hardware.used_capacity", "已用容量"), hwFmtCap(sys.used_capacity_gb)],
-    [hwT("hardware.location", "设备位置"), sys.location],
+    [hwT("hardware.device_location", "设备位置"), sys.location],
     [hwT("hardware.os_hostname", "OS 主机名"), sys.host_name],
     [hwT("hardware.bios", "BIOS 版本"), sys.bios_version],
     [hwT("hardware.bmc", "BMC"), [sys.bmc_model, sys.bmc_firmware].filter(Boolean).join(" ")],
@@ -633,7 +674,7 @@ function hwExportModel(it) {
     [hwT("hardware.patch_version", "补丁版本"), sys.patch_version],
     [hwT("hardware.total_capacity", "总容量"), hwFmtCap(sys.total_capacity_gb)],
     [hwT("hardware.used_capacity", "已用容量"), hwFmtCap(sys.used_capacity_gb)],
-    [hwT("hardware.location", "设备位置"), sys.location],
+    [hwT("hardware.device_location", "设备位置"), sys.location],
     [hwT("hardware.os_hostname", "OS 主机名"), sys.host_name],
     [hwT("hardware.bios", "BIOS 版本"), sys.bios_version],
     [hwT("hardware.bmc", "BMC"), [sys.bmc_model, sys.bmc_firmware].filter(Boolean).join(" ")],
@@ -864,34 +905,11 @@ function hwParseSeries(points) {
   return out;
 }
 
-/* ---------- 视图切换 ---------- */
-
-function switchHwView(mode) {
-  HW_VIEW_MODE = mode === "list" ? "list" : "card";
-  try { localStorage.setItem("aiops_hw_view", HW_VIEW_MODE); } catch (e) {}
-  document.querySelectorAll("#hwViewToggle .vt-btn").forEach(b =>
-    b.classList.toggle("active", b.dataset.view === HW_VIEW_MODE));
-  renderHardwarePanel();
-}
-
 /* ---------- 事件（全部委托，符合 CSP script-src 'self'） ---------- */
 
-safeAddEventListener("hardwarePanel", "click", e => {
-  if (e.target.closest("[data-hwdel]")) return; // 删除按钮自己处理，不打开详情
-  const item = e.target.closest("[data-hwidx]");
-  if (item) openHwDetail(parseInt(item.dataset.hwidx));
-});
-safeAddEventListener("hardwarePanel", "keydown", e => {
-  if (e.key !== "Enter" && e.key !== " ") return;
-  const item = e.target.closest("[data-hwidx]");
-  if (item) { e.preventDefault(); openHwDetail(parseInt(item.dataset.hwidx)); }
-});
-safeAddEventListener("hwViewToggle", "click", e => {
-  const b = e.target.closest("[data-view]");
-  if (b) switchHwView(b.dataset.view);
-});
 safeAddEventListener("hwRefreshBtn", "click", loadHardwarePanel);
 safeAddEventListener("hardwarePanel", "click", e => {
+  // 删除（树节点/详情头共用）
   const delBtn = e.target.closest("[data-hwdel]");
   if (delBtn) {
     e.stopPropagation();
@@ -901,10 +919,68 @@ safeAddEventListener("hardwarePanel", "click", e => {
     if (!confirm(hwT("hardware.confirm_delete", "确定删除该硬件资产记录？删除后不可恢复。"))) return;
     fetch(`${API}/hardware/${encodeURIComponent(hostID)}?target=${encodeURIComponent(target)}`, { method: "DELETE" })
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-      .then(() => { toast(hwT("toast.deleted", "已删除"), "ok"); loadHardwarePanel(); })
+      .then(() => {
+        toast(hwT("toast.deleted", "已删除"), "ok");
+        if (HW_SEL === hostID + "|" + target) HW_SEL = null; // 被删设备正被选中→重选默认
+        loadHardwarePanel();
+      })
       .catch(err => toast(hwT("hardware.delete_failed", "删除失败") + ": " + err, "err"));
     return;
   }
+  // AI 诊断（详情头）
+  if (e.target.closest("[data-hwai]")) {
+    if (!HW_CUR) return;
+    if (typeof openAIAssist !== "function") { toast(hwT("hardware.ai_unavailable", "AI 面板未就绪"), "err"); return; }
+    const model = hwExportModel(HW_CUR);
+    openAIAssist({
+      task: "hardware_diagnosis",
+      title: "🤖 AI 硬件诊断 · " + (model.title || "设备"),
+      mode: "analyze",
+      context: hwModelToText(model).slice(0, 14000),
+    });
+    return;
+  }
+  // 导出下拉（详情头）
+  const eb = e.target.closest("[data-hwexpbtn]");
+  if (eb) {
+    e.stopPropagation();
+    const menu = eb.parentElement.querySelector("[data-hwexpmenu]");
+    if (menu) menu.classList.toggle("show");
+    return;
+  }
+  const eo = e.target.closest("[data-hwexport]");
+  if (eo) {
+    document.querySelectorAll("[data-hwexpmenu].show").forEach(m => m.classList.remove("show"));
+    hwDoExport(eo.dataset.hwexport);
+    return;
+  }
+  // 历史曲线时间范围 + 图表放大（详情已内联进面板）
+  const r = e.target.closest("[data-hwrange]");
+  if (r) {
+    HW_HIST_RANGE = r.dataset.hwrange;
+    document.querySelectorAll("#hardwarePanel [data-hwrange]").forEach(b =>
+      b.classList.toggle("active", b.dataset.hwrange === HW_HIST_RANGE));
+    loadHwHistory();
+    return;
+  }
+  const z = e.target.closest("[data-hwchart]");
+  if (z) { const ch = HW_CHARTS[z.dataset.hwchart]; if (ch) openChartZoom(ch); return; }
+  // 树：宿主机折叠/展开
+  const tg = e.target.closest("[data-hwhtoggle]");
+  if (tg) {
+    const id = tg.dataset.hwhtoggle;
+    if (HW_TREE_COLLAPSED.has(id)) HW_TREE_COLLAPSED.delete(id); else HW_TREE_COLLAPSED.add(id);
+    hwRefreshTree();
+    return;
+  }
+  // 树：选中目标
+  const node = e.target.closest("[data-hwsel]");
+  if (node) hwSelect(node.dataset.hwsel);
+});
+safeAddEventListener("hardwarePanel", "keydown", e => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const node = e.target.closest("[data-hwsel]");
+  if (node) { e.preventDefault(); hwSelect(node.dataset.hwsel); }
 });
 
 /* ---------- 筛选 / 搜索 / 重复主机清理（工具栏是重渲染出来的，一律事件委托） ---------- */
@@ -912,20 +988,14 @@ safeAddEventListener("hardwarePanel", "click", e => {
 let HW_SEARCH_T = null;
 safeAddEventListener("hardwarePanel", "input", e => {
   if (e.target.id !== "hwSearch") return;
-  // 防抖：每敲一个字就重建整个网格会明显卡顿
+  // 防抖 + 只重建树：详情面板挂着图表，且不重建搜索框本身就不会丢焦点
   clearTimeout(HW_SEARCH_T);
   const v = e.target.value;
-  HW_SEARCH_T = setTimeout(() => {
-    HW_FILTER.q = v;
-    renderHardwarePanel();
-    // 重渲染会丢焦点，搜索框必须还原焦点和光标位置，否则打不完一个词
-    const s = $("hwSearch");
-    if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
-  }, 200);
+  HW_SEARCH_T = setTimeout(() => { HW_FILTER.q = v; hwRefreshTree(); }, 200);
 });
 safeAddEventListener("hardwarePanel", "change", e => {
-  if (e.target.id === "hwStatusFilter") { HW_FILTER.status = e.target.value; renderHardwarePanel(); }
-  else if (e.target.id === "hwFreshFilter") { HW_FILTER.fresh = e.target.value; renderHardwarePanel(); }
+  if (e.target.id === "hwStatusFilter") { HW_FILTER.status = e.target.value; hwRefreshTree(); }
+  else if (e.target.id === "hwFreshFilter") { HW_FILTER.fresh = e.target.value; hwRefreshTree(); }
 });
 
 // 重复主机的提示/查看/清理逻辑在 duplicates.js 里，主机页与硬件页共用一份。
@@ -952,20 +1022,59 @@ safeAddEventListener("hwExportMenu", "click", e => {
 document.addEventListener("click", e => {
   // 点在下拉自身之内不收起（选项的 click 由上面的委托处理）
   if (!e.target.closest("#hwExportDD")) hwToggleExportMenu(false);
-});
-document.addEventListener("keydown", e => { if (e.key === "Escape") hwToggleExportMenu(false); });
-safeAddEventListener("hwDetailBody", "click", e => {
-  const r = e.target.closest("[data-hwrange]");
-  if (r) {
-    HW_HIST_RANGE = r.dataset.hwrange;
-    document.querySelectorAll("#hwDetailBody [data-hwrange]").forEach(b =>
-      b.classList.toggle("active", b.dataset.hwrange === HW_HIST_RANGE));
-    loadHwHistory();
-    return;
+  if (!e.target.closest(".hwx-dd")) {
+    document.querySelectorAll("[data-hwexpmenu].show").forEach(m => m.classList.remove("show"));
   }
-  const z = e.target.closest("[data-hwchart]");
-  if (z) { const ch = HW_CHARTS[z.dataset.hwchart]; if (ch) openChartZoom(ch); }
 });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  hwToggleExportMenu(false);
+  document.querySelectorAll("[data-hwexpmenu].show").forEach(m => m.classList.remove("show"));
+});
+
+/* ---------- 树形布局样式（注入一次；部件表/KPI 等沿用 style.css 既有类） ---------- */
+
+function hwInjectTreeStyles() {
+  if (document.getElementById("hwx-css")) return;
+  const s = document.createElement("style");
+  s.id = "hwx-css";
+  s.textContent = `
+  .hwx-wrap{display:flex;gap:14px;align-items:flex-start;margin-top:10px}
+  .hwx-tree{flex:0 0 320px;max-width:320px;min-width:240px}
+  .hwx-detail{flex:1 1 auto;min-width:0}
+  @media(max-width:960px){.hwx-wrap{flex-direction:column}.hwx-tree{flex-basis:auto;max-width:none;width:100%}}
+  .hwx-tree{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .hwx-hostnode{border-bottom:1px solid var(--line)}
+  .hwx-hostnode:last-child{border-bottom:none}
+  .hwx-hosthead{display:flex;align-items:center;gap:8px;padding:9px 10px;cursor:pointer;user-select:none}
+  .hwx-hosthead:hover{background:var(--panel2)}
+  .hwx-hosthead .hname{font-weight:600;color:var(--txt);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hwx-caret{color:var(--muted);font-size:11px;width:12px;text-align:center;flex:0 0 12px}
+  .hwx-count{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt2);background:var(--panel3);border:1px solid var(--line);border-radius:20px;padding:1px 8px;font-variant-numeric:tabular-nums;flex:0 0 auto}
+  .hwx-count .hc-bad{color:var(--warn-txt);font-weight:600}
+  .hwx-count .hc-bad::before{content:"⚠ "}
+  .hwx-list{padding:2px 0 6px}
+  .hwx-node{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 26px;cursor:pointer;border-left:2px solid transparent}
+  .hwx-node:hover{background:var(--panel2)}
+  .hwx-node.selected{background:var(--accent-soft);border-left-color:var(--accent)}
+  .hwx-node .nid{flex:1;min-width:0}
+  .hwx-node .nname{color:var(--txt2);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hwx-node.selected .nname{color:var(--txt);font-weight:600}
+  .hwx-node.bad .nname{color:var(--warn-txt)}
+  .hwx-node .nmodel{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hwx-node .nmini{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+  .hwx-badn{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--crit-soft);color:var(--crit-txt);border:1px solid var(--crit-border);font-weight:600}
+  .hwx-tdot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+  .hwx-tdot.ok{background:var(--ok)}.hwx-tdot.warn{background:var(--warn)}.hwx-tdot.crit{background:var(--crit)}.hwx-tdot.na{background:var(--muted)}
+  .hwx-detailbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-height:200px}
+  .hwx-dhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+  .hwx-dtitle{min-width:0}
+  .hwx-dtitle .t{font-size:16px;font-weight:600;color:var(--txt)}
+  .hwx-dtitle .s{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hwx-dd{position:relative}
+  .hwx-empty{color:var(--muted);padding:48px 12px;text-align:center;font-size:13px}`;
+  document.head.appendChild(s);
+}
 
 // 供 nav.js 的 _pageRenderers 调用
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};

@@ -2,9 +2,10 @@
   "_README": "Agent 配置文件示例 — 复制为 config.json 后按需修改，修改后需重启 Agent (systemctl restart aiops-agent)",
 
   "__basic__": "====== 基础配置 ======",
+  "_comment_interval": "report_interval 基础指标上报间隔(秒,默认30)；plugin_interval 插件执行周期(秒,默认60)。默认已按生产车队调优(降带宽/降进程冷启动)；需要更实时可下调,如 10/15。",
   "server": "http://localhost:8529",
-  "report_interval": 10,
-  "plugin_interval": 15,
+  "report_interval": 30,
+  "plugin_interval": 60,
   "disk_path": "/",
   "plugins_dir": "plugins",
   "python": "python3",
@@ -110,12 +111,22 @@
   },
 
   "__snmp__": "====== SNMP 网络设备纳管（轮询 + Trap 接收）======",
-  "_comment_snmp": "snmp: 配置后 Agent 作为 SNMP 采集探针，主动轮询交换机/路由器/防火墙等网络设备的接口流量/状态(IF-MIB)，并可监听 Trap(UDP:162)。targets 为轮询设备列表；version 支持 2c/3；v2c 用 community(或 community_env 环境变量优先，密文不落盘)；v3 用 user/auth_proto(MD5|SHA|SHA256)/auth_pass/priv_proto(DES|AES)/priv_pass 及 sec_level(noAuthNoPriv|authNoPriv|authPriv)。interval_sec 轮询间隔(默认60)；max_interfaces 接口数上限(默认200，控基数)；include_down 是否采 admin-down 口(默认否)。trap_enabled 开启 Trap 接收，trap_listen 监听地址(默认:162，特权端口需管理员/root)，trap_communities 白名单(空=全收)。未配置时不启动。",
+  "_comment_snmp": "snmp: 配置后 Agent 作为 SNMP 采集探针，主动轮询交换机/路由器/防火墙等网络设备的接口流量/状态(IF-MIB)，并可监听 Trap(UDP:162)。targets 为轮询设备列表；version 支持 2c/3；v2c 用 community(或 community_env 环境变量优先，密文不落盘)；v3 用 user/auth_proto(MD5|SHA|SHA256)/auth_pass/priv_proto(DES|AES)/priv_pass 及 sec_level(noAuthNoPriv|authNoPriv|authPriv)。interval_sec 轮询间隔(默认60)；max_interfaces 接口数上限(默认200，控基数)；include_down 是否采 admin-down 口(默认否)。trap_enabled 开启 Trap 接收，trap_listen 监听地址(默认:162，特权端口需管理员/root)，trap_communities 为 v1/v2c 白名单(空=全收)。trap_users 为 v3 trap/inform 的 USM 用户表(按 userName 匹配来信做验签/解密，authPriv 的 inform 会自动回 authenticated Response 确认)。未配置时不启动。",
   "snmp": {
     "default_interval_sec": 60,
     "trap_enabled": false,
     "trap_listen": ":162",
     "trap_communities": [],
+    "trap_users": [
+      {
+        "user": "trapmon",
+        "sec_level": "authPriv",
+        "auth_proto": "SHA",
+        "auth_pass_env": "SNMP_TRAP_AUTH_PASS",
+        "priv_proto": "AES",
+        "priv_pass_env": "SNMP_TRAP_PRIV_PASS"
+      }
+    ],
     "targets": [
       {
         "name": "core-switch-01",

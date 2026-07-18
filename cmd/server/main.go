@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"aiops-monitor/shared"
 )
 
 // appVersion is shown in the dashboard sidebar and the summary API.
@@ -179,7 +181,15 @@ func (w *gzipResponseWriter) ensureHeader() {
 }
 func (w *gzipResponseWriter) WriteHeader(code int) {
 	// 101/204/304 carry no compressible body — pass through untouched.
-	if code == http.StatusSwitchingProtocols || code == http.StatusNoContent || code == http.StatusNotModified {
+	// 206 Partial Content：Content-Range 按未压缩字节计，若再 gzip 会让分片长度与
+	// Content-Range 对不上、破坏断点续传，故一并 passthrough（/dl/ 已在中间件层 bypass，
+	// 这里是第二道保险，防其它 Range 响应踩坑）。
+	if code == http.StatusSwitchingProtocols || code == http.StatusNoContent ||
+		code == http.StatusNotModified || code == http.StatusPartialContent {
+		// 置 wrote+passthrough：206 带响应体，后续 Write() 若见 !wrote 会再次进入
+		// WriteHeader(200) 覆盖掉 206；置位后 Write 直写底层、defer 也不会误 gz.Close()。
+		w.wrote = true
+		w.passthrough = true
 		w.ResponseWriter.WriteHeader(code)
 		return
 	}
@@ -224,7 +234,8 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") ||
 			strings.Contains(r.URL.Path, "/terminal") || // WS upgrade + streaming relays must not be buffered
 			strings.Contains(r.URL.Path, "/forward") || // port forwarding streams must not be buffered
-			strings.HasPrefix(r.URL.Path, "/proxy/") { // HTTP proxy tunnels must not be buffered
+			strings.HasPrefix(r.URL.Path, "/proxy/") || // HTTP proxy tunnels must not be buffered
+			strings.HasPrefix(r.URL.Path, "/dl/") { // 二进制/zip 已是压缩态，再 gzip 无益且会破坏 Range 断点续传
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -271,6 +282,10 @@ func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "Reset the first admin user's password to a random value and print it to console, then exit")
 	resetAdminAPI := flag.String("reset-admin-api", "", "Start a local HTTP API on 127.0.0.1:PORT for admin password reset (e.g. -reset-admin-api=:9999)")
 	flag.Parse()
+
+	// 配置文件支持 JSON 或 YAML/YML：优先用给定路径（存在即用，其扩展名决定解析格式），
+	// 否则自动探测同名 .yaml/.yml，方便用户改用更易读的 YAML 配置。
+	*cfgPath = shared.ResolveConfigPath(*cfgPath, "server_config.yaml", "server_config.yml")
 
 	// Handle admin password reset flags before any server logic
 	if *resetAdmin {

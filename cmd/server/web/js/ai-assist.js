@@ -13,6 +13,9 @@
  * ========================================================================== */
 let _aiAssistState = { task: "", mode: "analyze", context: "", applyTo: null, lastAnswer: "", busy: false, abort: null };
 
+// i18n 小助手：有 I18N 取译文，否则回退中文默认（面板在多语言下就地翻译）
+function tA(k, f) { return (window.I18N && I18N.t) ? I18N.t(k, f) : f; }
+
 function ensureAIAssistPanel() {
   let mask = document.getElementById("aiAssistMask");
   if (mask) return mask;
@@ -23,20 +26,20 @@ function ensureAIAssistPanel() {
     <div class="ai-assist-panel" role="dialog" aria-modal="true">
       <div class="ai-assist-head">
         <span class="ai-assist-icon">🤖</span>
-        <span class="ai-assist-title" id="aiAssistTitle">AI 辅助</span>
-        <button class="ai-assist-close" id="aiAssistClose" title="关闭">×</button>
+        <span class="ai-assist-title" id="aiAssistTitle" data-i18n="assist.title">AI 辅助</span>
+        <button class="ai-assist-close" id="aiAssistClose" data-i18n-title="assist.close" title="关闭">×</button>
       </div>
       <div class="ai-assist-input-row" id="aiAssistInputRow" style="display:none">
-        <textarea class="ai-assist-input" id="aiAssistInput" rows="2" placeholder="用一句话描述你的需求…"></textarea>
-        <button class="btn primary sm" id="aiAssistRun">生成</button>
+        <textarea class="ai-assist-input" id="aiAssistInput" rows="2" data-i18n-placeholder="assist.input_ph" placeholder="用一句话描述你的需求…"></textarea>
+        <button class="btn primary sm" id="aiAssistRun" data-i18n="assist.run">生成</button>
       </div>
       <div class="ai-assist-body" id="aiAssistBody"></div>
       <div class="ai-assist-actions" id="aiAssistActions">
-        <button class="btn sm ai-assist-fb" id="aiAssistUp" title="这次结果有用（强化记忆）" style="display:none">👍</button>
-        <button class="btn sm ai-assist-fb" id="aiAssistDown" title="这次结果没用" style="display:none">👎</button>
-        <button class="btn primary sm" id="aiAssistApply" style="display:none">应用</button>
-        <button class="btn sm" id="aiAssistCopy" style="display:none">复制</button>
-        <button class="btn sm" id="aiAssistRegen" style="display:none">重新生成</button>
+        <button class="btn sm ai-assist-fb" id="aiAssistUp" data-i18n-title="assist.fb_up" title="这次结果有用（强化记忆）" style="display:none">👍</button>
+        <button class="btn sm ai-assist-fb" id="aiAssistDown" data-i18n-title="assist.fb_down" title="这次结果没用" style="display:none">👎</button>
+        <button class="btn primary sm" id="aiAssistApply" data-i18n="assist.apply_to_input" style="display:none">应用</button>
+        <button class="btn sm" id="aiAssistCopy" data-i18n="assist.copy" style="display:none">复制</button>
+        <button class="btn sm" id="aiAssistRegen" data-i18n="assist.regen" style="display:none">重新生成</button>
       </div>
     </div>`;
   document.body.appendChild(mask);
@@ -52,12 +55,13 @@ function ensureAIAssistPanel() {
     _aiAssistState.applyTo(code);
     closeAIAssist();
   });
-  document.getElementById("aiAssistUp").addEventListener("click", () => { sendAssistFeedback("helpful"); if (typeof toast === "function") toast("已标记为有用 👍，AI 会记住", "ok"); markAssistFeedbackDone(); });
-  document.getElementById("aiAssistDown").addEventListener("click", () => { sendAssistFeedback("unhelpful"); if (typeof toast === "function") toast("已标记为无用 👎", "ok"); markAssistFeedbackDone(); });
+  document.getElementById("aiAssistUp").addEventListener("click", () => { sendAssistFeedback("helpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_helpful", "已标记为有用 👍，AI 会记住"), "ok"); markAssistFeedbackDone(); });
+  document.getElementById("aiAssistDown").addEventListener("click", () => { sendAssistFeedback("unhelpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_unhelpful", "已标记为无用 👎"), "ok"); markAssistFeedbackDone(); });
   document.getElementById("aiAssistInput").addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runAIAssist(); }
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && mask.classList.contains("show")) closeAIAssist(); });
+  if (window.I18N && I18N.applyTranslations) I18N.applyTranslations(mask); // 面板文案按当前语言就地翻译
   return mask;
 }
 
@@ -69,12 +73,12 @@ function openAIAssist(opts) {
   _aiAssistState.applyTo = (typeof opts.applyTo === "function") ? opts.applyTo : null;
   _aiAssistState.lastAnswer = "";
   _aiAssistState.mode = opts.mode || (_aiAssistState.applyTo ? "generate" : "analyze");
-  document.getElementById("aiAssistTitle").textContent = opts.title || "AI 辅助";
+  document.getElementById("aiAssistTitle").textContent = opts.title || tA("assist.title", "AI 辅助");
   const inputRow = document.getElementById("aiAssistInputRow");
   const inputEl = document.getElementById("aiAssistInput");
   const applyBtn = document.getElementById("aiAssistApply");
-  applyBtn.textContent = opts.applyLabel || "应用到输入框";
-  document.getElementById("aiAssistBody").innerHTML = `<div class="ai-assist-hint">${esc(opts.hint || (_aiAssistState.mode === "generate" ? "描述需求后点「生成」，AI 会给出结果并可一键应用。" : "AI 正在分析…"))}</div>`;
+  applyBtn.textContent = opts.applyLabel || tA("assist.apply_to_input", "应用到输入框");
+  document.getElementById("aiAssistBody").innerHTML = `<div class="ai-assist-hint">${esc(opts.hint || (_aiAssistState.mode === "generate" ? tA("assist.hint_generate", "描述需求后点「生成」，AI 会给出结果并可一键应用。") : tA("assist.hint_analyze", "AI 正在分析…")))}</div>`;
   document.getElementById("aiAssistCopy").style.display = "none";
   document.getElementById("aiAssistRegen").style.display = "none";
   document.getElementById("aiAssistUp").style.display = "none";
@@ -84,7 +88,7 @@ function openAIAssist(opts) {
   mask.classList.add("show");
   if (_aiAssistState.mode === "generate") {
     inputRow.style.display = "flex";
-    inputEl.placeholder = opts.placeholder || "用一句话描述你的需求…";
+    inputEl.placeholder = opts.placeholder || tA("assist.input_ph", "用一句话描述你的需求…");
     inputEl.value = opts.presetInput || opts.prefill || ""; // prefill 只填不跑；presetInput 填并直接生成
     setTimeout(() => inputEl.focus(), 50);
     if (opts.presetInput) runAIAssist(); // 已预置需求则直接生成
@@ -110,13 +114,13 @@ async function runAIAssist() {
   document.getElementById("aiAssistDown").style.display = "none";
   document.getElementById("aiAssistActions").style.display = "none";
   document.getElementById("aiAssistRun").disabled = true;
-  body.innerHTML = `<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">正在思考…</span></div>`;
+  body.innerHTML = `<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(tA("assist.thinking", "正在思考…"))}</span></div>`;
   let answer = "", reasoning = "", raf = null;
   const paint = (streaming) => {
     body.innerHTML = renderReasoningBlock(reasoning, streaming) +
       (streaming
         ? `<div class="ai-stream-body"><span class="ai-stream-text">${esc(answer)}</span><span class="ai-stream-cursor">▍</span></div>`
-        : (renderAIMarkdown(answer) || "<div class='ai-assist-hint'>（空回复）</div>"));
+        : (renderAIMarkdown(answer) || `<div class='ai-assist-hint'>${esc(tA("assist.empty_reply", "（空回复）"))}</div>`));
     body.scrollTop = body.scrollHeight;
   };
   const schedule = () => { if (raf) return; raf = requestAnimationFrame(() => { raf = null; paint(true); }); };
@@ -137,7 +141,7 @@ async function runAIAssist() {
     );
   } catch (e) {
     if (raf) { cancelAnimationFrame(raf); raf = null; }
-    if (!(_aiAssistState.abort && e && e.name === "AbortError")) body.innerHTML = `<div class="ai-assist-err">✗ 请求失败：${esc(String(e))}</div>`;
+    if (!(_aiAssistState.abort && e && e.name === "AbortError")) body.innerHTML = `<div class="ai-assist-err">✗ ${esc(tA("assist.request_failed", "请求失败"))}：${esc(String(e))}</div>`;
   } finally {
     _aiAssistState.busy = false; _aiAssistState.abort = null;
     document.getElementById("aiAssistRun").disabled = false;

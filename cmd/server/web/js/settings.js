@@ -85,6 +85,9 @@ async function openSettings() {
     $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
     $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
     $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
+    // SNMP 网络设备
+    $("snmpIfUtilWarn").value = td(t.snmp_if_util_warn, 80); $("snmpIfUtilCrit").value = td(t.snmp_if_util_crit, 95);
+    $("snmpIfErrWarn").value = td(t.snmp_if_err_warn, 1); $("snmpIfErrCrit").value = td(t.snmp_if_err_crit, 10);
 
     // Reset to first tab
     switchNotifyTab("tab-feishu");
@@ -135,6 +138,9 @@ async function loadThresholds() {
     $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
     $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
     $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
+    // SNMP 网络设备
+    $("snmpIfUtilWarn").value = td(t.snmp_if_util_warn, 80); $("snmpIfUtilCrit").value = td(t.snmp_if_util_crit, 95);
+    $("snmpIfErrWarn").value = td(t.snmp_if_err_warn, 1); $("snmpIfErrCrit").value = td(t.snmp_if_err_crit, 10);
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 async function saveThresholds() {
@@ -175,7 +181,10 @@ async function saveThresholds() {
         forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
         forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
         forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
-        forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit")
+        forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit"),
+        // SNMP 网络设备
+        snmp_if_util_warn: num("snmpIfUtilWarn"), snmp_if_util_crit: num("snmpIfUtilCrit"),
+        snmp_if_err_warn: num("snmpIfErrWarn"), snmp_if_err_crit: num("snmpIfErrCrit")
       };
       const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
       if (r.ok) toast("告警阈值已保存，即时生效", "ok");
@@ -524,6 +533,33 @@ function setHostView(v) {
 async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
 }
+
+// 把当前拨测监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+function checksToText() {
+  const checks = LAST_CHECKS || [];
+  if (!checks.length) return "（当前没有任何拨测监控项）";
+  let down = 0, disabled = 0;
+  const lines = checks.map(c => {
+    if (c.enabled === false) disabled++;
+    const st = !c.enabled ? "已停用" : (c.checked_at ? (c.ok ? "正常" : "异常") : "未探测");
+    if (c.enabled && c.checked_at && !c.ok) down++;
+    const typeText = c.type === "http" ? "HTTP" : c.type === "tcp" ? "TCP" : c.type === "ping" ? "Ping" : c.type === "process" ? "进程" : (c.type || "");
+    let extra = "";
+    if (c.type === "http") extra = ` 状态码=${c.status_code || "—"}${(typeof c.cert_days === "number" && c.cert_days >= 0) ? " 证书剩余=" + c.cert_days + "天" : ""}`;
+    else if (c.type === "ping" && typeof c.loss_pct === "number" && c.loss_pct >= 0) extra = ` 丢包=${Math.round(c.loss_pct)}%`;
+    const lat = c.checked_at ? Math.round(c.latency_ms) + "ms" : "—";
+    const err = (c.enabled && c.checked_at && !c.ok && c.message) ? " 错误=" + c.message : "";
+    return `- [${typeText}] ${c.name} 目标=${checkTargetDisplay(c)} 状态=${st} 时延=${lat}${extra} 间隔=${c.interval_sec}s${err}`;
+  });
+  const head = `拨测项共 ${checks.length} 个 · 异常 ${down} 个 · 停用 ${disabled} 个。\n`;
+  return (head + lines.join("\n")).slice(0, 12000);
+}
+
+// 「🤖 AI 分析」：对当前所有拨测项的可用性/时延/证书/丢包做整体研判，结果自动进入 RAG 记忆闭环
+safeAddEventListener("checksAIBtn", "click", () => {
+  if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
+  openAIAssist({ task: "checks_diagnosis", mode: "analyze", title: I18N.t("assist.title_checks", "AI · 拨测监控分析"), context: checksToText() });
+});
 
 let CHK_CHARTS = {};
 let CHK_HIST = { id: "", name: "", type: "", range: 1, custom: null }; // range=小时数，默认 1h；custom={from,to}

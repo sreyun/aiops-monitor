@@ -50,6 +50,9 @@ type Thresholds struct {
 	ForwardBwWarn, ForwardBwCrit     float64 // 带宽使用率 %
 	ForwardErrWarn, ForwardErrCrit   float64 // 错误率 %
 	ForwardLatWarn, ForwardLatCrit   float64 // 平均延迟 ms
+	// ---- SNMP 网络设备阈值 ----
+	SNMPIfUtilWarn, SNMPIfUtilCrit float64 // 接口带宽利用率 %
+	SNMPIfErrWarn, SNMPIfErrCrit   float64 // 接口错误+丢包率 pps
 }
 
 // DefaultThresholds returns the Standard profile (recommended defaults).

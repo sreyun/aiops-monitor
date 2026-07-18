@@ -41,15 +41,15 @@ const (
 	tagEndOfMibView   = 0x82
 
 	// PDU（context-specific constructed）
-	pduGet     = 0xA0
-	pduGetNext = 0xA1
+	pduGet      = 0xA0
+	pduGetNext  = 0xA1
 	pduResponse = 0xA2
-	pduSet     = 0xA3
-	pduTrapV1  = 0xA4
-	pduGetBulk = 0xA5
-	pduInform  = 0xA6
-	pduTrapV2  = 0xA7
-	pduReport  = 0xA8
+	pduSet      = 0xA3
+	pduTrapV1   = 0xA4
+	pduGetBulk  = 0xA5
+	pduInform   = 0xA6
+	pduTrapV2   = 0xA7
+	pduReport   = 0xA8
 )
 
 // ----------------------------------------------------------------------------

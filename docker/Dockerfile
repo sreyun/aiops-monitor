@@ -43,6 +43,19 @@ RUN set -e; LD="-s -w -X main.appVersion=${VERSION}"; \
     GOOS=darwin  GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-darwin-arm64 ./cmd/agent; \
     GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent.exe          ./cmd/agent
 
+# Optional agent-binary compression. UPX roughly halves the /dl download (7.5MB -> ~3MB).
+# DEFAULT OFF: a packed binary can trip AV/EDR heuristics, and for a security-monitoring
+# agent a false-positive quarantine (agent deleted, monitoring dies) is worse than 4MB.
+# Enable with:  docker build --build-arg UPX=1 ...
+# Only linux-amd64 + windows-amd64 are packed — UPX Mach-O(darwin) support is unreliable,
+# and arm64 packing is best avoided; those stay uncompressed.
+ARG UPX=0
+RUN if [ "$UPX" = "1" ]; then \
+      apk add --no-cache upx && \
+      upx --best --lzma /out/dist/aiops-agent-linux-amd64 /out/dist/aiops-agent.exe && \
+      echo "[build] UPX applied to linux-amd64 + windows-amd64"; \
+    else echo "[build] UPX skipped (opt-in via --build-arg UPX=1)"; fi
+
 # ---- Server image ----
 FROM ${BASE_REGISTRY}/alpine:3.20 AS server
 RUN apk add --no-cache ca-certificates tzdata zip

@@ -145,7 +145,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	// Hyper-V 虚拟机告警并入实时列表（与 CPU/磁盘等一致地带上 Since/Status）
 	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	// SNMP 网络设备 + NetFlow 流量异常并入实时列表
-	alerts = append(alerts, EvaluateSNMP(s.snmp)...)
+	alerts = append(alerts, EvaluateSNMP(s.snmp, s.cfg.Thresholds())...)
 	alerts = append(alerts, EvaluateNetFlow(s.nf)...)
 	since := s.notifier.ActiveSince()
 	states := s.store.AlertStates()
@@ -271,7 +271,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	crit, warn := 0, 0
 	summ := append(append(Evaluate(hosts, th), s.checks.DownAlerts()...), EvaluateForward(s.forward.Snapshot(), th)...)
 	summ = append(summ, EvaluateHyperV(s.hv)...)
-	summ = append(summ, EvaluateSNMP(s.snmp)...)
+	summ = append(summ, EvaluateSNMP(s.snmp, th)...)
 	summ = append(summ, EvaluateNetFlow(s.nf)...)
 	for _, a := range summ {
 		if a.Level == "critical" {

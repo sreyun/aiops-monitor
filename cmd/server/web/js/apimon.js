@@ -203,6 +203,32 @@ safeAddEventListener("apimonSystems", "click", e => {
   else if (act === "del") delAPISystem(id);
 });
 
+// 把当前 API 业务监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+function apimonToText() {
+  const systems = (LAST_APIMON && LAST_APIMON.systems) || [];
+  if (!systems.length) return "（当前没有任何 API 业务监控系统）";
+  let totalEps = 0, totalDown = 0;
+  const lines = [];
+  systems.forEach(sys => {
+    const eps = sys.endpoints || [];
+    const down = eps.filter(e => e.down).length;
+    totalEps += eps.length; totalDown += down;
+    lines.push(`# 业务系统：${sys.name}（每 ${sys.interval_sec}s · 接口 ${eps.length} 个 · 异常 ${down} 个 · 级别 ${sys.level || "critical"}${sys.enabled === false ? " · 已停用" : ""}）`);
+    eps.forEach(ep => {
+      const st = !ep.checked_at ? "未探测" : (ep.ok ? "正常" : "异常");
+      lines.push(`  - ${ep.name} [${ep.method || "GET"} ${ep.url}] 状态=${st}${ep.status_code ? " HTTP" + ep.status_code : ""} 本次=${apiFmtMs(ep.latency_ms)} 平均1h=${apiFmtMs(ep.avg_ms)} P95=${apiFmtMs(ep.p95_ms)} 可用率1h=${apiFmtPct(ep.avail_1h)} 24h=${apiFmtPct(ep.avail_24h)} 吞吐1h=${ep.samples_1h > 0 ? ep.samples_1h.toFixed(0) : "—"}`);
+    });
+  });
+  const head = `业务系统 ${systems.length} 个 · 接口共 ${totalEps} 个 · 当前异常 ${totalDown} 个。\n`;
+  return (head + lines.join("\n")).slice(0, 12000);
+}
+
+// 「🤖 AI 分析」：对当前所有业务系统接口的可用率/时延/异常做整体研判，结果自动进入 RAG 记忆闭环
+safeAddEventListener("apimonAIBtn", "click", () => {
+  if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
+  openAIAssist({ task: "apimon_diagnosis", mode: "analyze", title: I18N.t("assist.title_apimon", "AI · API 业务监控分析"), context: apimonToText() });
+});
+
 // 仅在 API 性能监控视图可见时，每 15s 刷新一次聚合表（避免后台空拉）。
 function apimonTick() {
   const v = document.getElementById("view-apimon");

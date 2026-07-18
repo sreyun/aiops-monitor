@@ -128,13 +128,17 @@ esac
 echo "[AIOps] installing to $DIR (server $SERVER)"
 mkdir -p "$DIR"
 cd "$DIR"
-curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
+# resumable + retried download: on flaky/cross-border links, don't re-fetch the
+# whole 7.5MB from scratch. -C - resumes a partial; on a complete file the server
+# returns 416, so fall back to a plain full GET.
+curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent || curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
 chmod +x aiops-agent
 if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
-curl -fsSL "$SERVER/dl/config.example.json" -o config.example.json 2>/dev/null || true
+# config.example.json is written locally by the agent on first start
+# (ensureConfigExample), so we don't fetch it here — that was a wasted 404.
 SERVERS_JSON='__SERVERS_JSON__'
 if [ -n "$SERVERS_JSON" ]; then
   cat > config.json <<EOF
@@ -272,13 +276,21 @@ if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = 
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
-Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
+# Prefer curl.exe (bundled on Win10+): supports resume (-C -) + retry so a flaky
+# link doesn't restart the whole 7.5MB. Fall back to Invoke-WebRequest on older OS.
+$AgentExe = Join-Path $Dir "aiops-agent.exe"
+$Curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+if ($Curl) {
+  & curl.exe -fSL --retry 3 --retry-delay 2 -C - "$Server/dl/aiops-agent.exe" -o $AgentExe
+  if ($LASTEXITCODE -ne 0) { & curl.exe -fsSL "$Server/dl/aiops-agent.exe" -o $AgentExe }
+} else {
+  Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile $AgentExe -UseBasicParsing
+}
 try {
   Invoke-WebRequest "$Server/dl/plugins.zip" -OutFile "$Dir\plugins.zip" -UseBasicParsing
   Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
   Remove-Item "$Dir\plugins.zip" -Force
 } catch { Write-Host "[AIOps] plugins skipped" }
-try { Invoke-WebRequest "$Server/dl/config.example.json" -OutFile "$Dir\config.example.json" -UseBasicParsing } catch {}
 
 $ServersJson = '__SERVERS_JSON__'
 if ($ServersJson -ne "") {
@@ -387,7 +399,10 @@ esac
 echo "[AIOps] installing relay to $DIR (upstream $SERVER)"
 mkdir -p "$DIR"
 cd "$DIR"
-curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
+# resumable + retried download: on flaky/cross-border links, don't re-fetch the
+# whole 7.5MB from scratch. -C - resumes a partial; on a complete file the server
+# returns 416, so fall back to a plain full GET.
+curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent || curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
 chmod +x aiops-agent
 
 cat > config.json <<EOF

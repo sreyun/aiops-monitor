@@ -27,17 +27,47 @@ type SNMPConfig struct {
 	Targets            []SNMPTarget `json:"targets,omitempty"`
 	DefaultIntervalSec int          `json:"default_interval_sec,omitempty"` // 默认 60
 	// Trap 接收
-	TrapEnabled     bool     `json:"trap_enabled,omitempty"`
-	TrapListen      string   `json:"trap_listen,omitempty"`      // ":162"
-	TrapCommunities []string `json:"trap_communities,omitempty"` // 空=全收
+	TrapEnabled     bool           `json:"trap_enabled,omitempty"`
+	TrapListen      string         `json:"trap_listen,omitempty"`      // ":162"
+	TrapCommunities []string       `json:"trap_communities,omitempty"` // v1/v2c：空=全收
+	TrapUsers       []SNMPTrapUser `json:"trap_users,omitempty"`       // v3 trap/inform：按 userName 匹配来信做验签/解密
+}
+
+// SNMPTrapUser 是接收 v3 trap/inform 时用于验签/解密的 USM 用户。发送方(被管设备)是
+// authoritative engine，密钥按来信里的 engineID 本地化，故这里只需口令与协议、无需 engineID。
+type SNMPTrapUser struct {
+	User        string `json:"user"`
+	SecLevel    string `json:"sec_level,omitempty"` // noAuthNoPriv|authNoPriv|authPriv
+	AuthProto   string `json:"auth_proto,omitempty"`
+	AuthPass    string `json:"auth_pass,omitempty"`
+	AuthPassEnv string `json:"auth_pass_env,omitempty"`
+	PrivProto   string `json:"priv_proto,omitempty"`
+	PrivPass    string `json:"priv_pass,omitempty"`
+	PrivPassEnv string `json:"priv_pass_env,omitempty"`
+}
+
+func (u SNMPTrapUser) resolveAuthPass() string { return envOr(u.AuthPass, u.AuthPassEnv) }
+func (u SNMPTrapUser) resolvePrivPass() string { return envOr(u.PrivPass, u.PrivPassEnv) }
+
+// toUSMUser 把配置的 trap 用户转成 USM 运行时用户（secLevel 由显式配置或口令存在性推断）。
+func (u SNMPTrapUser) toUSMUser() *usmUser {
+	usr := &usmUser{
+		name:      u.User,
+		authProto: normalizeAuthProto(u.AuthProto),
+		authPass:  []byte(u.resolveAuthPass()),
+		privProto: normalizePrivProto(u.PrivProto),
+		privPass:  []byte(u.resolvePrivPass()),
+	}
+	usr.secLevel = deriveSecLevel(u.SecLevel, usr)
+	return usr
 }
 
 // SNMPTarget 是一个被轮询设备。
 type SNMPTarget struct {
 	Name    string `json:"name"`
 	IP      string `json:"ip"`
-	Port    int    `json:"port,omitempty"`    // 默认 161
-	Version string `json:"version"`           // "2c" | "3"
+	Port    int    `json:"port,omitempty"` // 默认 161
+	Version string `json:"version"`        // "2c" | "3"
 
 	// v2c
 	Community    string `json:"community,omitempty"`

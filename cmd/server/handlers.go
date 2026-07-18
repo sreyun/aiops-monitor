@@ -3,8 +3,12 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -314,6 +318,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/netflow", s.handleAgentNetFlow)
 	// SNMP: agent ingest (fingerprint-gated)
 	mux.HandleFunc("POST /api/v1/agent/snmp", s.handleAgentSNMP)
+	mux.HandleFunc("POST /api/v1/agent/snmp/trap", s.handleAgentSNMPTrap)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
@@ -355,7 +360,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)
@@ -390,9 +395,42 @@ func (s *Server) Routes() http.Handler {
 	}
 	// agent binaries + plugins.zip for the one-line install command
 	if s.distDir != "" {
-		mux.Handle("GET /dl/", http.StripPrefix("/dl/", http.FileServer(http.Dir(s.distDir))))
+		mux.HandleFunc("GET /dl/", s.handleDownload)
 	}
 	return mux
+}
+
+// handleDownload serves agent binaries / plugins.zip from distDir with strong
+// caching so re-installs and多机 installs don't re-download the full 7.5MB every
+// time. http.ServeContent 负责 Range(断点续传)+If-None-Match/If-Modified-Since
+// (条件 GET→304)，我们只需补上 ETag 与 Cache-Control：
+//   - ETag=size-mtime 指纹：内容不变则客户端/CDN 命中 304，只回 header 不回 body。
+//   - Cache-Control: public,max-age —— 让 CDN/relay 边缘缓存；用 max-age+ETag 而非
+//     immutable，因为发版后同名 URL 内容会变，必须允许重新校验才能拿到新版 agent。
+// gzip 中间件已对 /dl/ 前缀 bypass（二进制本就是压缩态，再 gzip 无益且破坏 Range）。
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/dl/")
+	if name == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// 防目录穿越：Clean("/"+name) 消解 ../，再 Join 到 distDir。
+	full := filepath.Join(s.distDir, filepath.Clean("/"+name))
+	f, err := os.Open(full)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

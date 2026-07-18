@@ -74,6 +74,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 5-5"/></svg>
             <span data-i18n="nav.netflow">流量</span>
           </a>
+          <a class="nav-item" data-view="snmp" data-i18n-title="nav.snmp" title="SNMP 网络设备监控">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+            <span data-i18n="nav.snmp">网络设备</span>
+          </a>
         </div>
       </div>
 
@@ -303,6 +307,16 @@
                 <div class="th-input-row"><input type="text" id="forwardLatWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="forwardLatCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
             </div>
           </div>
+          <!-- SNMP 网络设备 -->
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-snmp"><span class="th-label" data-i18n="settings.group_snmp">SNMP 网络设备</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.snmp_util_thresh">接口带宽利用率 警告 / 严重（%）</label>
+                <div class="th-input-row"><input type="text" id="snmpIfUtilWarn" class="mono" placeholder="80"><span class="unit">%</span><input type="text" id="snmpIfUtilCrit" class="mono" placeholder="95"><span class="unit">%</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.snmp_err_thresh">接口错误+丢包率 警告 / 严重（pps）</label>
+                <div class="th-input-row"><input type="text" id="snmpIfErrWarn" class="mono" placeholder="1"><span class="unit">pps</span><input type="text" id="snmpIfErrCrit" class="mono" placeholder="10"><span class="unit">pps</span></div></div>
+            </div>
+          </div>
           <div class="hint" style="margin-top:10px">阈值留空或为 0 视为「未设置」，按标准默认值处理。修改后点「保存阈值」立即生效。</div>
         </div>
       </section>
@@ -484,6 +498,7 @@
                 <option value="process" data-i18n="check.type_process">进程</option>
               </select>
             </div>
+            <button type="button" class="btn sm ai-assist-btn" id="checksAIBtn" title="AI 分析当前拨测监控整体状态并沉淀记忆"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="ai.analyze">AI 分析</span></button>
             <button class="btn primary" id="addCheckBtn" data-i18n="ui.add_check">+ 添加检查</button>
           </div>
         </div>
@@ -497,6 +512,7 @@
       <section class="view" id="view-apimon">
         <div class="section-title"><span>API 性能监控</span><span class="tag">按业务系统批量监控接口 · 可用率 / 平均·P95 响应 / 吞吐 · 数据入 VM 重启不丢</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn sm ai-assist-btn" id="apimonAIBtn" title="AI 分析当前 API 业务监控整体状态并沉淀记忆"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="ai.analyze">AI 分析</span></button>
             <button class="btn primary" id="apimonAddBtn">+ 添加业务系统</button>
           </div>
         </div>
@@ -632,6 +648,7 @@
               <button class="vt-btn active" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
               <button class="vt-btn" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
             </div>
+            <button type="button" class="btn sm ai-assist-btn" id="fwdAIBtn" title="AI 分析当前端口转发整体状态并沉淀记忆"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="ai.analyze">AI 分析</span></button>
             <button class="btn primary" id="addForwardBtn" data-i18n="ui.new_forward">+ 新建转发</button>
           </div>
         </div>
@@ -671,6 +688,12 @@
       <section class="view" id="view-netflow">
         <div class="section-title"><span data-i18n="section.netflow">网络流量</span><span class="tag" data-i18n="section.netflow_desc">NetFlow / 五元组包采集流量分析</span></div>
         <div id="netflowPanel"></div>
+      </section>
+
+      <!-- SNMP 网络设备 (轮询 + Trap) -->
+      <section class="view" id="view-snmp">
+        <div class="section-title"><span data-i18n="section.snmp">网络设备</span><span class="tag" data-i18n="section.snmp_desc">SNMP 交换机/路由器接口流量与 Trap 事件</span></div>
+        <div id="snmpPanel"></div>
       </section>
 
       <!-- 数据源接入（Loki / Prometheus） -->

@@ -327,6 +327,7 @@ const PAGE_META = {
   hardware:  { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" },
   hyperv:    { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" },
   netflow:   { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
+  snmp:      { title: I18N.t("nav.snmp") || "网络设备", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).
@@ -347,6 +348,7 @@ function rebuildPageMeta() {
   PAGE_META.hardware   = { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" };
   PAGE_META.hyperv     = { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" };
   PAGE_META.netflow    = { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
+  PAGE_META.snmp       = { title: I18N.t("nav.snmp") || "网络设备", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
@@ -388,6 +390,7 @@ function switchView(view) {
   if (view === "hardware" && window._pageRenderers && window._pageRenderers.hardware) window._pageRenderers.hardware();
   if (view === "hyperv" && window._pageRenderers && window._pageRenderers.hyperv) window._pageRenderers.hyperv();
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
+  if (view === "snmp" && window._pageRenderers && window._pageRenderers.snmp) window._pageRenderers.snmp();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

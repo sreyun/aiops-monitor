@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,12 +46,22 @@ func runRelay(listenAddr, upstream, relaySecret string) {
 	// agents report concurrently through the relay.
 	proxy.Transport = relayTransport
 
+	dlCache := newRelayDLCache(upstream, relaySecret)
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Intercept install scripts: rewrite SERVER to the relay's address so
 		// internal machines auto-configure to connect through the relay.
 		if r.URL.Path == "/install.sh" || r.URL.Path == "/install.ps1" {
 			serveRelayInstallScript(w, r, upstream)
 			return
+		}
+		// Intercept /dl/ downloads: cache the agent binary / plugins.zip on the
+		// gateway so a fleet install of N internal machines hits the cloud ONCE
+		// instead of N×7.5MB. Cache miss falls through to the normal proxy.
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/dl/") {
+			if dlCache.serve(w, r) {
+				return
+			}
 		}
 		// v5.4.1: inject shared secret for relay authentication
 		if relaySecret != "" {
@@ -187,3 +201,106 @@ func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream st
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.WriteString(w, rewritten)
 }
+
+// relayDLCacheTTL 是 /dl/ 缓存文件的新鲜期：期内直接从磁盘服务、不回源。装机通常是
+// 短时间内一批机器并发拉取，10 分钟足以让整批命中同一份缓存，又不至于让新版 agent
+// 长期拿不到（过期后单机回源刷新，上游的 ETag 让内容不变时只回 304）。
+const relayDLCacheTTL = 10 * time.Minute
+
+// relayDLCache caches /dl/ static artifacts (agent binaries, plugins.zip) on the
+// gateway. It collapses a fleet install into a single upstream fetch and serves
+// local copies with full Range support (http.ServeFile) for resumable downloads.
+type relayDLCache struct {
+	dir      string
+	upstream string
+	secret   string
+	mu       sync.Mutex
+	locks    map[string]*sync.Mutex // per-file lock: avoid thundering-herd on cold cache
+}
+
+func newRelayDLCache(upstream, secret string) *relayDLCache {
+	dir := filepath.Join(os.TempDir(), "aiops-relay-dl-cache")
+	_ = os.MkdirAll(dir, 0o755)
+	return &relayDLCache{dir: dir, upstream: upstream, secret: secret, locks: map[string]*sync.Mutex{}}
+}
+
+func (c *relayDLCache) lockFor(name string) *sync.Mutex {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	l := c.locks[name]
+	if l == nil {
+		l = &sync.Mutex{}
+		c.locks[name] = l
+	}
+	return l
+}
+
+// serve returns true if it handled the request (from cache or a fresh fetch),
+// false to let the caller fall through to the normal reverse proxy.
+func (c *relayDLCache) serve(w http.ResponseWriter, r *http.Request) bool {
+	name := path.Base(r.URL.Path)
+	// Reject anything that isn't a plain filename (path traversal / directory).
+	if name == "" || name == "." || name == "/" || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	cf := filepath.Join(c.dir, name)
+
+	// Fast path: fresh cache hit — serve straight from disk.
+	if fi, err := os.Stat(cf); err == nil && !fi.IsDir() && time.Since(fi.ModTime()) < relayDLCacheTTL {
+		http.ServeFile(w, r, cf)
+		return true
+	}
+
+	// Slow path: fetch under a per-file lock so concurrent installers don't all
+	// hit the cloud. Re-check freshness after acquiring the lock.
+	lk := c.lockFor(name)
+	lk.Lock()
+	defer lk.Unlock()
+	if fi, err := os.Stat(cf); err == nil && !fi.IsDir() && time.Since(fi.ModTime()) < relayDLCacheTTL {
+		http.ServeFile(w, r, cf)
+		return true
+	}
+	if err := c.fetch(r.URL.Path, cf); err != nil {
+		slog.Warn("Relay /dl 缓存回源失败，回退直连代理", "file", name, "err", err)
+		return false // fall through to proxy
+	}
+	slog.Info("Relay /dl 缓存已刷新", "file", name)
+	http.ServeFile(w, r, cf)
+	return true
+}
+
+// fetch downloads one artifact from the upstream server to a temp file, then
+// atomically renames it into place so a partial download never serves corrupt bytes.
+func (c *relayDLCache) fetch(urlPath, dst string) error {
+	req, err := http.NewRequest("GET", c.upstream+urlPath, nil)
+	if err != nil {
+		return err
+	}
+	if c.secret != "" {
+		req.Header.Set("X-Relay-Secret", c.secret)
+	}
+	resp, err := relayTransport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return &relayDLError{status: resp.StatusCode}
+	}
+	tmp, err := os.CreateTemp(c.dir, "dl-*.part")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	tmp.Close()
+	return os.Rename(tmpName, dst)
+}
+
+type relayDLError struct{ status int }
+
+func (e *relayDLError) Error() string { return "upstream status " + strconv.Itoa(e.status) }

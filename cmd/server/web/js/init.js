@@ -144,6 +144,35 @@ async function loadForwards() {
   } catch(e) {}
 }
 
+// 把当前端口转发/代理快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+function forwardsToText() {
+  const tcp = LAST_FORWARDS || [];
+  const http = LAST_HTTP_PROXIES || [];
+  if (!tcp.length && !http.length) return "（当前没有任何端口转发/代理规则）";
+  let off = 0, active = 0;
+  const lines = [];
+  tcp.forEach(f => {
+    const en = f.enabled !== false;
+    if (!en) off++;
+    active += (f.sessions || 0);
+    lines.push(`- [${f.protocol === "udp" ? "UDP" : "TCP"}] ${f.hostname} → :${f.target_port} 监听=${f.listen_addr}${f.remote_target ? " 跳板→" + f.remote_target : ""} ${en ? "启用" : "停用"} 活跃会话=${f.sessions || 0} 累计=${f.total_sessions || 0}`);
+  });
+  http.forEach(p => {
+    const en = p.enabled !== false;
+    if (!en) off++;
+    active += (p.sessions || 0);
+    lines.push(`- [HTTP] ${p.name || (p.hostname + ":" + p.target_port)} 目标=${p.hostname}:${p.target_port}${p.default_path || ""} ${en ? "启用" : "停用"} 活跃会话=${p.sessions || 0} 累计=${p.total_sessions || 0}`);
+  });
+  const head = `转发规则共 ${tcp.length + http.length} 条（TCP/UDP ${tcp.length} · HTTP ${http.length}） · 停用 ${off} 条 · 当前活跃会话合计 ${active}。\n`;
+  return (head + lines.join("\n")).slice(0, 12000);
+}
+
+// 「🤖 AI 分析」：对当前所有端口转发/代理的连通性/会话/暴露面做整体研判，结果自动进入 RAG 记忆闭环
+safeAddEventListener("fwdAIBtn", "click", () => {
+  if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
+  openAIAssist({ task: "forward_diagnosis", mode: "analyze", title: I18N.t("assist.title_forward", "AI · 端口转发分析"), context: forwardsToText() });
+});
+
 // 转发视图模式：list（默认）| card
 let FORWARD_VIEW_MODE = (function () { try { return localStorage.getItem("aiops_fwd_view") === "list" ? "list" : "card"; } catch (e) { return "card"; } })(); // 默认卡片视图
 let AUTOMATION_VIEW_MODE = (function () { try { return localStorage.getItem("aiops_pb_view") === "list" ? "list" : "card"; } catch (e) { return "card"; } })(); // 编排默认卡片视图

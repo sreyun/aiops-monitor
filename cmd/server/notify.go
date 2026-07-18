@@ -119,7 +119,7 @@ func (n *Notifier) tick() {
 	}
 	// SNMP 网络设备异常并入：接口 up/down、带宽利用率、错误/丢包率、采集失败。
 	if n.snmp != nil {
-		alerts = append(alerts, EvaluateSNMP(n.snmp)...)
+		alerts = append(alerts, EvaluateSNMP(n.snmp, n.cfg.Thresholds())...)
 	}
 	// NetFlow 流量异常并入：突增（EWMA 基线）、采集器丢包。
 	if n.nf != nil {

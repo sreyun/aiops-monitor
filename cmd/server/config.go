@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aiops-monitor/shared"
 )
 
 // WebhookConfig holds one bot channel (Feishu or DingTalk).
@@ -136,6 +138,11 @@ type ThresholdConfig struct {
 	ForwardErrCrit  float64 `json:"forward_err_crit"`  // 错误率 严重 %
 	ForwardLatWarn  float64 `json:"forward_lat_warn"`  // 平均延迟 警告 ms
 	ForwardLatCrit  float64 `json:"forward_lat_crit"`  // 平均延迟 严重 ms
+	// ---- SNMP 网络设备监控阈值 ----
+	SNMPIfUtilWarn float64 `json:"snmp_if_util_warn"` // 接口带宽利用率 警告 %
+	SNMPIfUtilCrit float64 `json:"snmp_if_util_crit"` // 接口带宽利用率 严重 %
+	SNMPIfErrWarn  float64 `json:"snmp_if_err_warn"`  // 接口错误+丢包率 警告 pps
+	SNMPIfErrCrit  float64 `json:"snmp_if_err_crit"`  // 接口错误+丢包率 严重 pps
 }
 
 func defaultThresholdConfig() ThresholdConfig {
@@ -172,6 +179,9 @@ func defaultThresholdConfig() ThresholdConfig {
 		ForwardBwWarn: 80, ForwardBwCrit: 95,
 		ForwardErrWarn: 5, ForwardErrCrit: 15,
 		ForwardLatWarn: 1000, ForwardLatCrit: 5000,
+		// SNMP 网络设备默认阈值
+		SNMPIfUtilWarn: 80, SNMPIfUtilCrit: 95,
+		SNMPIfErrWarn: 1, SNMPIfErrCrit: 10,
 	}
 }
 
@@ -274,6 +284,10 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	fix(&t.ForwardErrCrit, d.ForwardErrCrit)
 	fix(&t.ForwardLatWarn, d.ForwardLatWarn)
 	fix(&t.ForwardLatCrit, d.ForwardLatCrit)
+	fix(&t.SNMPIfUtilWarn, d.SNMPIfUtilWarn)
+	fix(&t.SNMPIfUtilCrit, d.SNMPIfUtilCrit)
+	fix(&t.SNMPIfErrWarn, d.SNMPIfErrWarn)
+	fix(&t.SNMPIfErrCrit, d.SNMPIfErrCrit)
 	if t.OfflineAfterSec == 0 {
 		t.OfflineAfterSec = d.OfflineAfterSec
 		changed = true
@@ -316,6 +330,9 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		ForwardBwWarn: t.ForwardBwWarn, ForwardBwCrit: t.ForwardBwCrit,
 		ForwardErrWarn: t.ForwardErrWarn, ForwardErrCrit: t.ForwardErrCrit,
 		ForwardLatWarn: t.ForwardLatWarn, ForwardLatCrit: t.ForwardLatCrit,
+		// SNMP 网络设备监控
+		SNMPIfUtilWarn: t.SNMPIfUtilWarn, SNMPIfUtilCrit: t.SNMPIfUtilCrit,
+		SNMPIfErrWarn: t.SNMPIfErrWarn, SNMPIfErrCrit: t.SNMPIfErrCrit,
 	}
 }
 
@@ -421,7 +438,10 @@ type ServerConfig struct {
 	SMS           SMSConfig           `json:"sms"`
 	VoiceCall     VoiceCallConfig     `json:"voice_call"`
 	Thresholds    ThresholdConfig     `json:"thresholds"`
-	Categories    map[string]string   `json:"categories"`
+	// SNMPTrapSeverity：企业私有 trap 严重度覆盖表，key=trapOID(或其前缀,最长匹配)，
+	// value=info|warning|critical。用户可据自家设备厂商 MIB 精修，无需重装 agent。
+	SNMPTrapSeverity map[string]string `json:"snmp_trap_severity,omitempty"`
+	Categories       map[string]string `json:"categories"`
 	InstallToken  string              `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
 	// grace period, so existing agents don't drop offline the instant the token is
@@ -575,9 +595,10 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 		}
 	}
 	if !loaded {
+		// 文件配置按扩展名支持 JSON 或 YAML/YML（PG blob 恒为 JSON，服务端自序列化）。
 		if b, err := os.ReadFile(path); err == nil {
 			var c ServerConfig
-			if json.Unmarshal(b, &c) == nil {
+			if shared.DecodeConfig(path, b, &c) == nil {
 				if c.Categories == nil {
 					c.Categories = map[string]string{}
 				}

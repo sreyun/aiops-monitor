@@ -1,0 +1,55 @@
+# Agent 配置文件示例（YAML 版）—— 与 config.example.json 等价，二选一即可。
+# 将本文件复制为 config.yaml（或 config.yml）放到 agent 同目录，或用 --config 指定路径。
+# Agent 按扩展名自动识别：.yaml/.yml 走 YAML，.json 走 JSON。修改后需重启 Agent。
+# 字段含义与 config.example.json 完全一致（复用同一套 json tag）。
+
+# ===== 基础配置 =====
+server: "http://localhost:8529"
+report_interval: 30        # 基础指标上报间隔(秒)，默认30；需更实时可下调如10
+plugin_interval: 60        # 插件执行周期(秒)，默认60
+disk_path: "/"
+plugins_dir: "plugins"
+python: "python3"
+state_file: "agent_state.json"
+category: ""
+
+# ===== 多服务端（可选，配置后优先于 server/token）=====
+# servers:
+#   - server: "https://aiops.example.com"
+#     token: "your-install-token"
+
+# ===== SNMP 网络设备纳管（轮询 + Trap 接收，可选）=====
+# snmp:
+#   default_interval_sec: 60
+#   targets:
+#     - name: "core-switch-01"
+#       ip: "10.0.0.1"
+#       version: "2c"
+#       community_env: "SNMP_COMMUNITY"   # 环境变量优先，密文不落盘
+#       interval_sec: 60
+#       max_interfaces: 200
+#     - name: "edge-router-v3"
+#       ip: "10.0.0.2"
+#       version: "3"
+#       sec_level: "authPriv"
+#       user: "monitor"
+#       auth_proto: "SHA"
+#       auth_pass_env: "SNMP_AUTH_PASS"
+#       priv_proto: "AES"
+#       priv_pass_env: "SNMP_PRIV_PASS"
+#   trap_enabled: false
+#   trap_listen: ":162"           # 特权端口需管理员/root
+#   trap_communities: []          # v1/v2c 白名单，空=全收
+#   trap_users:                   # v3 trap/inform USM 用户（验签/解密）
+#     - user: "trapmon"
+#       sec_level: "authPriv"
+#       auth_proto: "SHA"
+#       auth_pass_env: "SNMP_TRAP_AUTH_PASS"
+#       priv_proto: "AES"
+#       priv_pass_env: "SNMP_TRAP_PRIV_PASS"
+
+# ===== NetFlow 网络流量接收（可选）=====
+# netflow:
+#   listen: ":2055"
+#   protocols: ["v5", "v9"]
+#   window_sec: 300

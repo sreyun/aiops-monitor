@@ -100,9 +100,24 @@ func (ss *snmpStore) operDownShouldAlert(key string, up bool) bool {
 //
 // Scope 每子项唯一（device/iface/metric）——alertKey = HostID/Type/Scope，
 // 同 scope 会让兄弟接口互相覆盖。
-func EvaluateSNMP(ss *snmpStore) []Alert {
+func EvaluateSNMP(ss *snmpStore, th Thresholds) []Alert {
 	if ss == nil {
 		return nil
+	}
+	// 可配阈值优先；未配置(0)回退到内置常量，兼容旧配置与预设档。
+	utilWarn, utilCrit := th.SNMPIfUtilWarn, th.SNMPIfUtilCrit
+	if utilWarn <= 0 {
+		utilWarn = snmpUtilWarn
+	}
+	if utilCrit <= 0 {
+		utilCrit = snmpUtilCrit
+	}
+	errWarn, errCrit := th.SNMPIfErrWarn, th.SNMPIfErrCrit
+	if errWarn <= 0 {
+		errWarn = snmpErrWarn
+	}
+	if errCrit <= 0 {
+		errCrit = snmpErrCrit
 	}
 	var alerts []Alert
 	now := time.Now().Unix()
@@ -147,14 +162,14 @@ func EvaluateSNMP(ss *snmpStore) []Alert {
 				if iface.OutUtilPercent > util {
 					util = iface.OutUtilPercent
 				}
-				if lv := classify(util, snmpUtilWarn, snmpUtilCrit); lv != "" {
+				if lv := classify(util, utilWarn, utilCrit); lv != "" {
 					add(lv, device+"/"+iface.Name+"/util",
 						Tz("alert.snmp_if_util", device, iface.Name, util), util)
 				}
 
 				// 错误率 + 丢包率（合计）。
 				errPps := iface.InErrPps + iface.OutErrPps + iface.InDiscardPps + iface.OutDiscardPps
-				if lv := classify(errPps, snmpErrWarn, snmpErrCrit); lv != "" {
+				if lv := classify(errPps, errWarn, errCrit); lv != "" {
 					add(lv, device+"/"+iface.Name+"/errors",
 						Tz("alert.snmp_if_errors", device, iface.Name, errPps), errPps)
 				}

@@ -296,6 +296,49 @@ func (h *SreyunCore) registerTools() {
 		},
 		Execute: h.execQueryHyperV,
 	}
+
+	h.tools["query_snmp"] = SreyunTool{
+		Name: "query_snmp",
+		Description: "查询主机 SNMP 轮询到的网络设备（交换机/路由器/防火墙）接口健康：每台设备的接口 up/down、" +
+			"带宽利用率、错误/丢包率，异常接口摆最前。网络设备装不了 agent，排查「哪个口断了/带宽满了/丢包」用这个。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "运行 SNMP 采集的主机 ID"},
+				"device":  map[string]string{"type": "string", "description": "可选：只看名称包含该串的设备"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQuerySNMPMetric,
+	}
+
+	h.tools["query_interface_traffic"] = SreyunTool{
+		Name:        "query_interface_traffic",
+		Description: "列出 SNMP 网络设备各接口按实时带宽 Top-N（进/出 bps + 利用率），回答「哪个接口最忙/带宽被哪个口占了」。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "运行 SNMP 采集的主机 ID"},
+				"top":     map[string]string{"type": "integer", "description": "返回前 N 个接口，默认 10"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryInterfaceTraffic,
+	}
+
+	h.tools["query_traps"] = SreyunTool{
+		Name:        "query_traps",
+		Description: "查询主机最近收到的 SNMP Trap 事件（linkDown/linkUp/认证失败/厂商自定义等），含来源 IP、trapOID、严重度、时间。排查「网络设备主动报了什么告警」用这个。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "接收 Trap 的主机 ID"},
+				"limit":   map[string]string{"type": "integer", "description": "返回最近 N 条，默认 30"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryTraps,
+	}
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).

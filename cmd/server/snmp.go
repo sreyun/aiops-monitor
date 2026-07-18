@@ -10,9 +10,56 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"aiops-monitor/shared"
 )
+
+// trapSevRule 是一条 trapOID 前缀 → 严重度的映射。
+type trapSevRule struct{ prefix, severity string }
+
+// builtinTrapSeverity 是内置的企业私有 trap 严重度精修表。只收录确定性高、跨型号稳定的
+// 条目（Cisco ciscoEnvMon 环境监控子树最典型），其余交给用户可配的 SNMPTrapSeverity。
+// agent 端对企业私有 trap 保守判为 info，这里把明确该关注的抬到 warning/critical。
+var builtinTrapSeverity = []trapSevRule{
+	{"1.3.6.1.4.1.9.9.13.3.0.2", "critical"}, // Cisco 冗余电源故障
+	{"1.3.6.1.4.1.9.9.13.3.0.3", "critical"}, // Cisco 温度告警
+	{"1.3.6.1.4.1.9.9.13.3.0.4", "critical"}, // Cisco 风扇故障
+	{"1.3.6.1.4.1.9.9.13.3.0.5", "warning"},  // Cisco 温度关机预警
+}
+
+// validTrapSeverity 只接受三档，防用户配置里写入非法值污染告警链路。
+func validTrapSeverity(s string) bool {
+	return s == "info" || s == "warning" || s == "critical"
+}
+
+// refineTrapSeverity 精修 trap 严重度：用户配置(前缀最长匹配)优先 → 内置厂商表 →
+// 回退 agent 端启发式判定。让企业私有 trap 不再一律 info，且用户无需重装 agent 即可调整。
+func refineTrapSeverity(trapOID, agentSev string, override map[string]string) string {
+	if s := longestPrefixSeverity(trapOID, override); s != "" {
+		return s
+	}
+	for _, r := range builtinTrapSeverity {
+		if trapOID == r.prefix || strings.HasPrefix(trapOID, r.prefix+".") {
+			return r.severity
+		}
+	}
+	return agentSev
+}
+
+// longestPrefixSeverity 在用户覆盖表里做「最长前缀匹配」，返回其严重度（无匹配返回 ""）。
+func longestPrefixSeverity(trapOID string, m map[string]string) string {
+	best, bestLen := "", -1
+	for prefix, sev := range m {
+		if !validTrapSeverity(sev) {
+			continue
+		}
+		if (trapOID == prefix || strings.HasPrefix(trapOID, prefix+".")) && len(prefix) > bestLen {
+			best, bestLen = sev, len(prefix)
+		}
+	}
+	return best
+}
 
 // snmpMaxIfaces 是单台设备一轮最多写入 VM 的接口数上限。接口是稳定基数（不像
 // netflow 的 src_port 那样爆炸），但仍硬性封顶，守住"时序库成本由序列数决定"这条命。
@@ -59,6 +106,64 @@ func (s *Server) handleAgentSNMP(w http.ResponseWriter, r *http.Request) {
 		s.vmSNMPMetrics(rep.HostID, snap)
 		if s.pg != nil {
 			s.pg.upsertSNMPSnapshot(rep.HostID, snap)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleAgentSNMPTrap 接收 agent 上报的 SNMP Trap 事件：落库 + 事件日志 +
+// warning/critical 直接走渠道推送（范式 B），critical 额外转 Incident 复用学习回路。
+func (s *Server) handleAgentSNMPTrap(w http.ResponseWriter, r *http.Request) {
+	var rep shared.SNMPTrapReport
+	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if rep.HostID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
+		return
+	}
+	fp := r.Header.Get("X-Agent-Fingerprint")
+	if fp == "" {
+		fp = r.URL.Query().Get("fp")
+	}
+	if !s.forwardFingerprintOKByHost(rep.HostID, fp) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "fingerprint mismatch"})
+		return
+	}
+
+	hostname := rep.HostID
+	if h := s.hostByID(rep.HostID); h != nil {
+		hostname = h.Hostname
+	}
+	cfg := s.cfg.Get()
+	for _, ev := range rep.Traps {
+		// 服务端精修严重度：企业私有 trap 不再一律 info，且用户可配无需重装 agent。
+		sev := refineTrapSeverity(ev.TrapOID, ev.Severity, cfg.SNMPTrapSeverity)
+		if s.pg != nil {
+			s.pg.insertSNMPTrap(rep.HostID, ev)
+		}
+		// 事件流：每条 trap 记一条系统日志（含 info 级，供审计回溯）。
+		s.store.AddLog(LogEntry{
+			Kind: KindSystem, Level: sev, Actor: "SNMP Trap", Host: hostname,
+			Message: Tz("alert.trap_event", ev.SourceIP, ev.TrapOID),
+		})
+		// 告警：warning/critical 走统一渠道推送（含治理静默/路由）。
+		if sev == "warning" || sev == "critical" {
+			a := Alert{
+				HostID: rep.HostID, Hostname: hostname, IP: ev.SourceIP,
+				Level: sev, Type: "trap",
+				Scope:     ev.SourceIP + "/" + ev.TrapOID,
+				Message:   Tz("alert.trap_event", ev.SourceIP, ev.TrapOID),
+				Timestamp: ev.Timestamp,
+			}
+			if cfg.AlertsEnabled {
+				s.notifier.pushChannels(cfg, a, true)
+			}
+			// critical trap 转 Incident，自动获相似历史召回 + 解决经验沉淀。
+			if sev == "critical" && s.incidents != nil {
+				s.incidents.OnAlertTransition(a, alertKey(a), true)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

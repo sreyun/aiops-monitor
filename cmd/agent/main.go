@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"log/slog"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"aiops-monitor/shared"
 )
 
 // ServerConfig represents one backend server target for multi-server push.
@@ -60,9 +61,12 @@ func defaultConfig() config {
 		py = "python"
 	}
 	return config{
-		Server:         "http://localhost:8529",
-		ReportInterval: 10,
-		PluginInterval: 15,
+		Server: "http://localhost:8529",
+		// 默认 30s/60s：10s/15s 对生产车队过于激进（每小时 360 次全量上报 + 每分钟数十次
+		// 插件冷启动）。30s 是主流监控采样粒度（Prometheus/Zabbix 同量级），带宽降 3×、
+		// 插件 spawn 降 4×。需要更实时的用户可在配置里下调 report_interval/plugin_interval。
+		ReportInterval: 30,
+		PluginInterval: 60,
 		DiskPath:       defaultDiskPath(),
 		PluginsDir:     "plugins",
 		Python:         py,
@@ -89,23 +93,25 @@ func main() {
 
 	cfg := defaultConfig()
 
-	// resolve config file path (manual scan so we can load before flag defaults)
-	cfgPath := "config.json"
+	// resolve config file path (manual scan so we can load before flag defaults)。
+	// 默认自动探测 config.json / config.yaml / config.yml（第一个存在者）；
+	// --config 显式指定则优先，且按其扩展名决定 JSON/YAML 解析。
+	cfgPath := shared.ResolveConfigPath("config.json", "config.yaml", "config.yml")
 	for i, a := range os.Args {
 		if a == "--config" && i+1 < len(os.Args) {
 			cfgPath = os.Args[i+1]
 		}
 	}
 	// Load configuration: file-not-found is expected on first manual run, but
-	// JSON parse errors MUST surface — a silently-failed parse would leave the
+	// parse errors MUST surface — a silently-failed parse would leave the
 	// agent pointing at the hardcoded default (localhost:8529), which is the
 	// #1 cause of "agent reports to localhost" on freshly-installed Linux hosts
-	// where the install script exited before writing config.json.
+	// where the install script exited before writing config.
 	if b, err := os.ReadFile(cfgPath); err == nil {
-		if err := json.Unmarshal(b, &cfg); err != nil {
-			slog.Error("配置文件 JSON 解析失败，将使用默认值（localhost:8529）",
+		if err := shared.DecodeConfig(cfgPath, b, &cfg); err != nil {
+			slog.Error("配置文件解析失败，将使用默认值（localhost:8529）",
 				"path", cfgPath, "err", err,
-				"hint", "请检查 config.json 格式是否正确，或重新运行安装命令")
+				"hint", "请检查配置文件 JSON/YAML 格式是否正确，或重新运行安装命令")
 		} else {
 			slog.Info("已加载配置文件", "path", cfgPath)
 		}

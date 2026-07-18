@@ -13,8 +13,9 @@ import (
 
 // GPU collection is best-effort: it shells out to always-present vendor tools
 // (nvidia-smi) or reads OS interfaces (sysfs / ioreg). To avoid paying that
-// cost on every 5s report cycle, results are memoized for gpuCacheTTL.
-const gpuCacheTTL = 12 * time.Second
+// cost every report cycle, results are memoized for gpuCacheTTL. 对齐默认
+// report_interval(30s)：nvidia-smi 冷启动不便宜，一轮报告至多探一次即可。
+const gpuCacheTTL = 30 * time.Second
 
 var gpuCache struct {
 	mu   sync.Mutex

@@ -43,14 +43,14 @@ function renderPlaybooks(pbs) {
       <div class="pb-card-top">
         <div class="pb-card-title">
           <strong>${esc(pb.name)}</strong>
-          ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : `<span class="pb-desc pb-desc-empty">暂无描述</span>`}
+          ${pb.description ? `<span class="pb-desc">${esc(pb.description)}</span>` : `<span class="pb-desc pb-desc-empty">${I18N.t("sre.pb_no_desc","暂无描述")}</span>`}
         </div>
         ${sched ? `<span class="pb-sched-badge" title="${I18N.t("playbook.sched_badge_title")}">⏱ ${esc(pbSchedLabel(pb.schedule))}</span>` : ""}
       </div>
       <div class="pb-card-foot">
         <div class="pb-pills">
-          <span class="pb-pill">${stepCount} 步骤</span>
-          <span class="pb-pill">${targets.length} 目标</span>
+          <span class="pb-pill">${stepCount} ${I18N.t("sre.unit_steps","步骤")}</span>
+          <span class="pb-pill">${targets.length} ${I18N.t("sre.unit_targets","目标")}</span>
           <span class="pb-pill pb-pill-id mono">${esc(pb.id)}</span>
         </div>
         <div class="pb-actions">
@@ -94,10 +94,10 @@ function pbSchedRefresh() {
 // Human-readable schedule summary for the playbook card badge.
 function pbSchedLabel(sc) {
   if (!sc || !sc.enabled) return "";
-  if (sc.kind === "interval") return `每 ${sc.interval_min} 分钟`;
-  if (sc.kind === "daily") return `每天 ${sc.at}`;
-  if (sc.kind === "weekly") { const wd = ["日","一","二","三","四","五","六"][sc.weekday] || ""; return `每周${wd} ${sc.at}`; }
-  return "定时";
+  if (sc.kind === "interval") return `${I18N.t("sre.sched_every","每")} ${sc.interval_min} ${I18N.t("sre.unit_minutes","分钟")}`;
+  if (sc.kind === "daily") return `${I18N.t("sre.sched_daily","每天")} ${sc.at}`;
+  if (sc.kind === "weekly") { const wd = [I18N.t("sre.wd_0","日"),I18N.t("sre.wd_1","一"),I18N.t("sre.wd_2","二"),I18N.t("sre.wd_3","三"),I18N.t("sre.wd_4","四"),I18N.t("sre.wd_5","五"),I18N.t("sre.wd_6","六")][sc.weekday] || ""; return `${I18N.t("sre.sched_weekly","每周")}${wd} ${sc.at}`; }
+  return I18N.t("sre.sched_scheduled","定时");
 }
 
 function renderPbSteps(steps) {
@@ -114,75 +114,75 @@ function renderPbSteps(steps) {
         <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" data-act-change="pb-target-preview">${tgtOpts}</select></div></div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
-      <div class="field"><label>类型</label><div class="select-wrap"><select class="pb-step-module" data-act-change="pb-module-change">
-        <option value="" ${optSel("",mod)}>Shell 命令</option>
-        <option value="gather_facts" ${optSel("gather_facts",mod)}>采集主机信息 · gather_facts</option>
-        <option value="service" ${optSel("service",mod)}>服务管理 · service</option>
-        <option value="package" ${optSel("package",mod)}>软件包 · package</option>
-        <option value="copy" ${optSel("copy",mod)}>写入文件 · copy</option>
+      <div class="field"><label>${I18N.t("sre.label_type","类型")}</label><div class="select-wrap"><select class="pb-step-module" data-act-change="pb-module-change">
+        <option value="" ${optSel("",mod)}>${I18N.t("sre.mod_shell","Shell 命令")}</option>
+        <option value="gather_facts" ${optSel("gather_facts",mod)}>${I18N.t("sre.mod_gather","采集主机信息")} · gather_facts</option>
+        <option value="service" ${optSel("service",mod)}>${I18N.t("sre.mod_service","服务管理")} · service</option>
+        <option value="package" ${optSel("package",mod)}>${I18N.t("sre.mod_package","软件包")} · package</option>
+        <option value="copy" ${optSel("copy",mod)}>${I18N.t("sre.mod_copy","写入文件")} · copy</option>
       </select></div></div>
 
       <div class="pb-mod pb-mod-shell" style="display:none">
         <div class="field"><label>${I18N.t("form.command")}</label><textarea class="pb-step-cmd" rows="2" placeholder="${I18N.t('form.hint_command')}" spellcheck="false" style="resize:vertical;min-height:54px;line-height:1.5">${esc(s.command||"")}</textarea></div>
-        <details class="pb-adv"${(s.command_win||s.command_mac)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">分系统命令（留空则统一用上面的命令）</summary>
-          <div class="field"><label>Windows 覆盖命令</label><textarea class="pb-step-cmdwin" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="仅 Windows 主机执行此命令">${esc(s.command_win||"")}</textarea></div>
-          <div class="field"><label>macOS 覆盖命令</label><textarea class="pb-step-cmdmac" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="仅 macOS 主机执行此命令">${esc(s.command_mac||"")}</textarea></div>
+        <details class="pb-adv"${(s.command_win||s.command_mac)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">${I18N.t("sre.pb_per_os_cmd","分系统命令（留空则统一用上面的命令）")}</summary>
+          <div class="field"><label>${I18N.t("sre.pb_win_override","Windows 覆盖命令")}</label><textarea class="pb-step-cmdwin" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="${I18N.t("sre.pb_win_override_ph","仅 Windows 主机执行此命令")}">${esc(s.command_win||"")}</textarea></div>
+          <div class="field"><label>${I18N.t("sre.pb_mac_override","macOS 覆盖命令")}</label><textarea class="pb-step-cmdmac" rows="2" spellcheck="false" style="resize:vertical;min-height:44px" placeholder="${I18N.t("sre.pb_mac_override_ph","仅 macOS 主机执行此命令")}">${esc(s.command_mac||"")}</textarea></div>
         </details>
       </div>
 
       <div class="pb-mod pb-mod-gather_facts" style="display:none">
-        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px;line-height:1.6">采集主机名、IP、架构、CPU 数（跨系统一致，替代 <code>ip a</code> / <code>ipconfig</code>）。建议配合下方「保存输出到变量」在后续步骤引用。</div>
+        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px;line-height:1.6">${I18N.t("sre.pb_gather_desc","采集主机名、IP、架构、CPU 数（跨系统一致，替代 <code>ip a</code> / <code>ipconfig</code>）。建议配合下方「保存输出到变量」在后续步骤引用。")}</div>
       </div>
 
       <div class="pb-mod pb-mod-service" style="display:none">
         <div class="grid2">
-          <div class="field"><label>服务名</label><input type="text" class="pb-arg-service-name" value="${av('name')}" placeholder="nginx"></div>
-          <div class="field"><label>目标状态</label><div class="select-wrap"><select class="pb-arg-service-state">
-            <option value="started" ${optSel('started',a.state)}>启动 started</option>
-            <option value="stopped" ${optSel('stopped',a.state)}>停止 stopped</option>
-            <option value="restarted" ${optSel('restarted',a.state)}>重启 restarted</option>
-            <option value="reloaded" ${optSel('reloaded',a.state)}>重载 reloaded</option>
+          <div class="field"><label>${I18N.t("sre.label_service_name","服务名")}</label><input type="text" class="pb-arg-service-name" value="${av('name')}" placeholder="nginx"></div>
+          <div class="field"><label>${I18N.t("sre.label_target_state","目标状态")}</label><div class="select-wrap"><select class="pb-arg-service-state">
+            <option value="started" ${optSel('started',a.state)}>${I18N.t("sre.svc_started","启动")} started</option>
+            <option value="stopped" ${optSel('stopped',a.state)}>${I18N.t("sre.svc_stopped","停止")} stopped</option>
+            <option value="restarted" ${optSel('restarted',a.state)}>${I18N.t("sre.svc_restarted","重启")} restarted</option>
+            <option value="reloaded" ${optSel('reloaded',a.state)}>${I18N.t("sre.svc_reloaded","重载")} reloaded</option>
           </select></div></div>
         </div>
-        <div class="field"><label>开机自启</label><div class="select-wrap"><select class="pb-arg-service-enabled">
-          <option value="" ${optSel('',a.enabled)}>不修改</option>
-          <option value="true" ${optSel('true',a.enabled)}>启用</option>
-          <option value="false" ${optSel('false',a.enabled)}>禁用</option>
+        <div class="field"><label>${I18N.t("sre.label_boot_enable","开机自启")}</label><div class="select-wrap"><select class="pb-arg-service-enabled">
+          <option value="" ${optSel('',a.enabled)}>${I18N.t("sre.opt_nochange","不修改")}</option>
+          <option value="true" ${optSel('true',a.enabled)}>${I18N.t("sre.opt_enable","启用")}</option>
+          <option value="false" ${optSel('false',a.enabled)}>${I18N.t("sre.opt_disable","禁用")}</option>
         </select></div></div>
       </div>
 
       <div class="pb-mod pb-mod-package" style="display:none">
         <div class="grid2">
-          <div class="field"><label>包名</label><input type="text" class="pb-arg-package-name" value="${av('name')}" placeholder="nginx"></div>
-          <div class="field"><label>操作</label><div class="select-wrap"><select class="pb-arg-package-state">
-            <option value="present" ${optSel('present',a.state)}>安装 present</option>
-            <option value="absent" ${optSel('absent',a.state)}>卸载 absent</option>
-            <option value="latest" ${optSel('latest',a.state)}>安装/升级到最新 latest</option>
+          <div class="field"><label>${I18N.t("sre.label_pkg_name","包名")}</label><input type="text" class="pb-arg-package-name" value="${av('name')}" placeholder="nginx"></div>
+          <div class="field"><label>${I18N.t("sre.label_action","操作")}</label><div class="select-wrap"><select class="pb-arg-package-state">
+            <option value="present" ${optSel('present',a.state)}>${I18N.t("sre.pkg_install","安装")} present</option>
+            <option value="absent" ${optSel('absent',a.state)}>${I18N.t("sre.pkg_remove","卸载")} absent</option>
+            <option value="latest" ${optSel('latest',a.state)}>${I18N.t("sre.pkg_latest","安装/升级到最新")} latest</option>
           </select></div></div>
         </div>
-        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px">自动探测系统包管理器（apt/dnf/yum/apk/zypper/pacman · brew · choco/winget）。</div>
+        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px">${I18N.t("sre.pb_pkg_desc","自动探测系统包管理器（apt/dnf/yum/apk/zypper/pacman · brew · choco/winget）。")}</div>
       </div>
 
       <div class="pb-mod pb-mod-copy" style="display:none">
         <div class="grid2">
-          <div class="field"><label>目标路径</label><input type="text" class="pb-arg-copy-dest" value="${av('dest')}" placeholder="/etc/app/config.yml"></div>
-          <div class="field"><label>权限（八进制）</label><input type="text" class="pb-arg-copy-mode mono" value="${av('mode')}" placeholder="0644" style="width:110px"></div>
+          <div class="field"><label>${I18N.t("sre.label_dest_path","目标路径")}</label><input type="text" class="pb-arg-copy-dest" value="${av('dest')}" placeholder="/etc/app/config.yml"></div>
+          <div class="field"><label>${I18N.t("sre.label_mode_octal","权限（八进制）")}</label><input type="text" class="pb-arg-copy-mode mono" value="${av('mode')}" placeholder="0644" style="width:110px"></div>
         </div>
-        <div class="field"><label>文件内容</label><textarea class="pb-arg-copy-content" rows="4" spellcheck="false" style="resize:vertical;min-height:70px">${esc(a.content||"")}</textarea></div>
+        <div class="field"><label>${I18N.t("sre.label_file_content","文件内容")}</label><textarea class="pb-arg-copy-content" rows="4" spellcheck="false" style="resize:vertical;min-height:70px">${esc(a.content||"")}</textarea></div>
       </div>
 
-      <details class="pb-adv"${(s.when||s.register)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">条件与变量（选填）</summary>
+      <details class="pb-adv"${(s.when||s.register)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">${I18N.t("sre.pb_cond_vars","条件与变量（选填）")}</summary>
         <div class="grid2">
-          <div class="field"><label>when 条件</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="如 {{os}} == linux；结果空/false/0 则跳过本步"></div>
-          <div class="field"><label>保存输出到变量</label><input type="text" class="pb-step-register" value="${esc(s.register||"")}" placeholder="变量名 → 后续步骤用 {{变量名}} 引用"></div>
+          <div class="field"><label>${I18N.t("sre.label_when","when 条件")}</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="${I18N.t("sre.pb_when_ph","如 {{os}} == linux；结果空/false/0 则跳过本步")}"></div>
+          <div class="field"><label>${I18N.t("sre.label_register","保存输出到变量")}</label><input type="text" class="pb-step-register" value="${esc(s.register||"")}" placeholder="${I18N.t("sre.pb_register_ph","变量名 → 后续步骤用 {{变量名}} 引用")}"></div>
         </div>
       </details>
 
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
-        <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> 继续下一步</label></div>
+        <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> ${I18N.t("sre.pb_continue_next","继续下一步")}</label></div>
       </div>
-      <label class="switch" style="display:flex;margin:2px 0 10px"><input type="checkbox" class="pb-step-ignore" ${s.ignore_exit?"checked":""}> 忽略非零退出码（grep 无匹配、diff 有差异等也算成功）</label>
+      <label class="switch" style="display:flex;margin:2px 0 10px"><input type="checkbox" class="pb-step-ignore" ${s.ignore_exit?"checked":""}> ${I18N.t("sre.pb_ignore_exit","忽略非零退出码（grep 无匹配、diff 有差异等也算成功）")}</label>
       <button class="btn danger sm pb-step-del" type="button">${I18N.t("ui.delete_step")}</button>
     </div>`;
   }).join("");
@@ -450,10 +450,10 @@ function execResultToText(exec) {
 // AI 剧本预检：执行前审查命令的破坏性/幂等性/跨平台/防护缺失，给红黄绿评级
 safeAddEventListener("pbPrecheckBtn", "click", () => {
   const pb = collectPlaybook();
-  if (!pb.steps || !pb.steps.length) { toast("请先添加至少一个步骤再预检", "err"); return; }
+  if (!pb.steps || !pb.steps.length) { toast(I18N.t("sre.precheck_need_step","请先添加至少一个步骤再预检"), "err"); return; }
   openAIAssist({
     task: "playbook_precheck",
-    title: "AI 剧本预检 · 执行前风险审查",
+    title: I18N.t("sre.precheck_title","AI 剧本预检 · 执行前风险审查"),
     mode: "analyze",
     context: playbookToText(pb)
   });
@@ -461,10 +461,10 @@ safeAddEventListener("pbPrecheckBtn", "click", () => {
 // AI 执行复盘：对失败的执行定位根因 + 修复/重跑建议 + 剧本改进
 safeAddEventListener("execRetroBtn", "click", () => {
   const exec = window._lastExecResult;
-  if (!exec) { toast("暂无执行结果可复盘", "err"); return; }
+  if (!exec) { toast(I18N.t("sre.retro_no_result","暂无执行结果可复盘"), "err"); return; }
   openAIAssist({
     task: "execution_retro",
-    title: "AI 执行复盘 · 失败根因分析",
+    title: I18N.t("sre.retro_title","AI 执行复盘 · 失败根因分析"),
     mode: "analyze",
     context: execResultToText(exec)
   });
@@ -474,20 +474,20 @@ safeAddEventListener("execRetroBtn", "click", () => {
 safeAddEventListener("pbAIGenBtn", "click", () => {
   openAIAssist({
     task: "playbook",
-    title: "AI 生成运维剧本",
+    title: I18N.t("sre.pbgen_title","AI 生成运维剧本"),
     mode: "generate",
-    placeholder: "如：滚动重启所有 nginx 主机上的 nginx 服务，任一失败则停止",
+    placeholder: I18N.t("sre.pbgen_ph","如：滚动重启所有 nginx 主机上的 nginx 服务，任一失败则停止"),
     prefill: ($("pbDesc") && $("pbDesc").value.trim()) || ($("pbName") && $("pbName").value.trim()) || "",
-    applyLabel: "回填到编辑器",
+    applyLabel: I18N.t("sre.pbgen_apply","回填到编辑器"),
     applyTo: (text) => {
       try {
         const jsonText = extractFirstCodeBlock(text) || text;
         const pb = JSON.parse(jsonText);
         pb.id = ""; // 作为新剧本回填，保存时另建
         openPlaybookModal(pb);
-        if (typeof toast === "function") toast("已生成，请检查步骤与命令后保存", "ok");
+        if (typeof toast === "function") toast(I18N.t("sre.pbgen_done","已生成，请检查步骤与命令后保存"), "ok");
       } catch (e) {
-        if (typeof toast === "function") toast("AI 输出不是合法剧本 JSON，请查看后手动填写", "err");
+        if (typeof toast === "function") toast(I18N.t("sre.pbgen_bad_json","AI 输出不是合法剧本 JSON，请查看后手动填写"), "err");
       }
     }
   });
@@ -516,11 +516,11 @@ let SRE_TAB = "incidents";
 let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [];
 const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","conn","hardware","offline","check"];
 const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
-const _srcLabel = s => ({alert:"告警",slo:"SLO",manual:"手动"})[s]||esc(s);
-const _incStatus = s => ({open:"进行中",acknowledged:"已确认",resolved:"已解决"})[s]||esc(s);
+const _srcLabel = s => ({alert:I18N.t("sre.src_alert","告警"),slo:"SLO",manual:I18N.t("sre.src_manual","手动")})[s]||esc(s);
+const _incStatus = s => ({open:I18N.t("sre.inc_open","进行中"),acknowledged:I18N.t("sre.inc_acked","已确认"),resolved:I18N.t("sre.inc_resolved","已解决")})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
-const _tlKind = k => ({created:"创建",fired:"触发",recovered:"恢复",acked:"确认",resolved:"解决",remediation:"自动修复",comment:"评论",escalated:"升级工单",note:"备注",ai_diagnosis:"🤖 AI 诊断",correlation:"🔗 关联分析",ai_analysis:"🤖 AI 分析"})[k]||k;
-const _runStatus = s => ({running:"执行中",success:"成功",failed:"失败",pending_approval:"待审批",skipped_cooldown:"冷却跳过",skipped_ratelimit:"限频跳过",rejected:"已拒绝",no_playbook:"无剧本"})[s]||s;
+const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
+const _runStatus = s => ({running:I18N.t("sre.run_running","执行中"),success:I18N.t("sre.run_success","成功"),failed:I18N.t("sre.run_failed","失败"),pending_approval:I18N.t("sre.run_pending","待审批"),skipped_cooldown:I18N.t("sre.run_skip_cooldown","冷却跳过"),skipped_ratelimit:I18N.t("sre.run_skip_ratelimit","限频跳过"),rejected:I18N.t("sre.run_rejected","已拒绝"),no_playbook:I18N.t("sre.run_no_playbook","无剧本")})[s]||s;
 const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
 const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
 const _tkStatusCls = s => (s==="resolved"||s==="closed")?"ok":s==="in_progress"?"warn":"info";
@@ -562,14 +562,14 @@ async function loadIncidents(){
   try {
     const list = await fetch(`${API}/incidents`).then(r=>r.json());
     const el = $("incidentList");
-    if (!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无事件</div>`; return; }
+    if (!list||!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_incidents","暂无事件")}</div>`; return; }
     el.innerHTML = list.map(i=>`<div class="sre-row" data-incident="${i.id}">
       <span class="badge ${_sevCls(i.severity)}">${esc(i.severity)}</span>
       <div class="sre-row-main"><div class="sre-row-title">${esc(i.title)}</div>
         <div class="sre-row-sub">#${i.id} · ${_srcLabel(i.source)}${i.hostname?" · "+esc(i.hostname):""} · ${fmtDateTime(i.created_at)}</div></div>
       <span class="badge ${_incStatusCls(i.status)}">${_incStatus(i.status)}</span></div>`).join("");
     el.querySelectorAll("[data-incident]").forEach(r=>r.onclick=()=>openIncidentDetail(r.dataset.incident));
-  } catch(e){ toast("加载失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 async function openIncidentDetail(id){
   try {
@@ -582,28 +582,28 @@ async function openIncidentDetail(id){
       <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span>
       <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
       <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
-      ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 工单 #${inc.ticket_id}</span>`:""}</div>
-      <div class="subhead">时间线</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
-      <div class="subhead" style="margin-top:16px">🤖 AI 诊断对话</div>
+      ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 ${I18N.t("sre.ticket","工单")} #${inc.ticket_id}</span>`:""}</div>
+      <div class="subhead">${I18N.t("sre.timeline","时间线")}</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
+      <div class="subhead" style="margin-top:16px">🤖 ${I18N.t("sre.ai_diag_chat","AI 诊断对话")}</div>
       <div id="incDiagnosisChat" class="ai-diagnosis-chat"></div>
       <div id="incDiagAttach" style="display:none;flex-wrap:wrap;gap:4px;padding:4px 0"></div>
       <div class="ai-diagnosis-input">
-        <textarea id="incDiagInput" rows="2" placeholder="追问 AI 细节、反驳结论、要求进一步排查…"></textarea>
-        <button class="btn sm" id="incDiagAttachBtn" title="上传图片或文件" style="padding:4px 8px">📎</button>
-        <button class="btn primary" id="incDiagSendBtn">发送</button>
+        <textarea id="incDiagInput" rows="2" placeholder="${I18N.t("sre.diag_input_ph","追问 AI 细节、反驳结论、要求进一步排查…")}"></textarea>
+        <button class="btn sm" id="incDiagAttachBtn" title="${I18N.t("sre.upload_img_file","上传图片或文件")}" style="padding:4px 8px">📎</button>
+        <button class="btn primary" id="incDiagSendBtn">${I18N.t("sre.send","发送")}</button>
         <input type="file" id="incDiagFile" multiple hidden>
       </div>
-      <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> 包含终端操作上下文（分段摘要）</label>`;
+      <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> ${I18N.t("sre.include_term_ctx","包含终端操作上下文（分段摘要）")}</label>`;
     window._curIncident = inc; // 供「转自动化规则」等操作取用完整事件（含时间线诊断）
     const acts=[];
-    acts.push(`<button class="btn sm" data-iact="diagnose">🤖 AI 诊断</button>`);
+    acts.push(`<button class="btn sm" data-iact="diagnose">🤖 ${I18N.t("sre.ai_diagnose","AI 诊断")}</button>`);
     // 有 AI 诊断结论时，可一键把处置建议固化为「自动修复规则草稿」（停用态，需人工审核启用）
     if ((inc.timeline||[]).some(e=>e.kind==="ai_diagnosis" && e.text)) {
-      acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="把诊断建议转成自动修复规则草稿，人工审核后启用"><span class="ai-assist-btn-ic">🤖</span>转自动化规则</button>`);
+      acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="${I18N.t("sre.to_auto_rule_title","把诊断建议转成自动修复规则草稿，人工审核后启用")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.to_auto_rule","转自动化规则")}</button>`);
     }
-    if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">确认</button>`); acts.push(`<button class="btn sm" data-iact="resolve">解决</button>`); }
-    if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">升级工单</button>`);
-    acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="添加评论…" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">发送</button>`);
+    if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">${I18N.t("sre.inc_ack_btn","确认")}</button>`); acts.push(`<button class="btn sm" data-iact="resolve">${I18N.t("sre.inc_resolve_btn","解决")}</button>`); }
+    if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">${I18N.t("sre.inc_escalate_btn","升级工单")}</button>`);
+    acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="${I18N.t("sre.add_comment_ph","添加评论…")}" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">${I18N.t("sre.send","发送")}</button>`);
     const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
     foot.querySelectorAll("[data-iact]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.iact));
     // Wire up diagnosis chat
@@ -617,7 +617,7 @@ async function openIncidentDetail(id){
     $("incDiagFile").onchange = onDiagChatFiles;
     renderDiagAttachments();
     $("incidentDetailMask").classList.add("show");
-  } catch(e){ toast("加载失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 async function incidentAction(id, act){
   try {
@@ -626,10 +626,10 @@ async function incidentAction(id, act){
     else if (act==="escalate"){
       const r=await fetch(`${API}/incidents/${id}/ticket`,{method:"POST"});
       const tk=await r.json().catch(()=>({}));
-      toast(`已升级为工单 #${tk.id||"?"}`,"ok");
+      toast(`${I18N.t("sre.escalated_to_ticket","已升级为工单")} #${tk.id||"?"}`,"ok");
     }
     else if (act==="diagnose"){
-      toast("AI 诊断中，请稍候…","ok");
+      toast(I18N.t("sre.ai_diagnosing","AI 诊断中，请稍候…"),"ok");
       const r=await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream:true})});
       if(r.ok && r.headers.get("content-type")?.includes("event-stream")){
         // SSE 流式响应：等待完成后再刷新详情
@@ -639,25 +639,25 @@ async function incidentAction(id, act){
     else if (act==="draft-rule"){ draftRemediationFromIncident(window._curIncident); return; } // 不走末尾刷新
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
-  } catch(e){ toast("操作失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("toast.operation_failed","操作失败")+": "+e,"err"); }
 }
 
 // 闭环：把事件的 AI 诊断建议转成「自动修复规则草稿」。组织上下文（事件+最新诊断+可用剧本）后
 // 调用统一 /ai/assist（task=remediation_rule），AI 产出 {playbook?,rule} JSON 供人工确认后落地。
 function draftRemediationFromIncident(inc){
-  if(!inc){ toast("请重新打开事件详情后再试","err"); return; }
+  if(!inc){ toast(I18N.t("sre.reopen_incident","请重新打开事件详情后再试"),"err"); return; }
   let diag="";
   const tl=inc.timeline||[];
   for(let i=tl.length-1;i>=0;i--){ if(tl[i].kind==="ai_diagnosis" && tl[i].text){ diag=tl[i].text; break; } }
-  if(!diag){ toast("请先运行「🤖 AI 诊断」，有诊断结论后再转规则","err"); return; }
+  if(!diag){ toast(I18N.t("sre.need_diag_first","请先运行「🤖 AI 诊断」，有诊断结论后再转规则"),"err"); return; }
   const pbs=(SRE_PLAYBOOKS||[]).map(p=>`- id=${p.id} 名称=${p.name}${p.description?" 用途="+p.description:""}`).join("\n")||"（暂无已保存剧本，请新建）";
   const ctx=`事件：${inc.title}\n告警类型：${inc.type||"(未知)"}\n级别：${inc.severity}\n主机：${inc.hostname||"(未知)"}\n\nAI 诊断结论：\n${diag}\n\n【可用剧本】\n${pbs}`;
   openAIAssist({
     task:"remediation_rule",
-    title:"AI 转自动化规则 · 草稿（需人工审核后启用）",
+    title:I18N.t("sre.to_rule_title","AI 转自动化规则 · 草稿（需人工审核后启用）"),
     mode:"analyze",
     context:ctx,
-    applyLabel:"创建为草稿规则",
+    applyLabel:I18N.t("sre.to_rule_apply","创建为草稿规则"),
     applyTo:(text)=>applyRemediationDraft(text)
   });
 }
@@ -665,29 +665,29 @@ function draftRemediationFromIncident(inc){
 async function applyRemediationDraft(text){
   let draft;
   try { draft=JSON.parse(extractFirstCodeBlock(text)||text); }
-  catch(e){ toast("AI 输出不是合法 JSON，请到「自动修复」手动创建规则","err"); return; }
+  catch(e){ toast(I18N.t("sre.bad_json_rule","AI 输出不是合法 JSON，请到「自动修复」手动创建规则"),"err"); return; }
   try {
     let playbookId=(draft.existing_playbook_id||"").trim();
     if(!playbookId && draft.playbook){
       const pb=draft.playbook; pb.id="";
       const r=await fetch(`${API}/playbooks`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pb)});
       const j=await r.json().catch(()=>({}));
-      if(!r.ok||!j.id) throw new Error(j.error||"创建修复剧本失败");
+      if(!r.ok||!j.id) throw new Error(j.error||I18N.t("sre.create_fix_pb_failed","创建修复剧本失败"));
       playbookId=j.id;
     }
-    if(!playbookId) throw new Error("AI 未给出可用剧本");
+    if(!playbookId) throw new Error(I18N.t("sre.no_usable_pb","AI 未给出可用剧本"));
     const rule=draft.rule||{};
     rule.id=""; rule.playbook_id=playbookId;
     rule.enabled=false; // 关键：草稿默认「停用」，绝不自动触发；人工审核后手动启用即生效
     if(rule.require_approval===undefined) rule.require_approval=true; // 双保险：即便启用也先排队人工审批
     const rr=await fetch(`${API}/remediation/rules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(rule)});
     const rj=await rr.json().catch(()=>({}));
-    if(!rr.ok) throw new Error(rj.error||"创建规则失败");
-    toast("✅ 已创建『停用』草稿规则，请在「自动修复」审核命令与匹配条件后再启用","ok");
+    if(!rr.ok) throw new Error(rj.error||I18N.t("sre.create_rule_failed","创建规则失败"));
+    toast("✅ "+I18N.t("sre.draft_rule_created","已创建『停用』草稿规则，请在「自动修复」审核命令与匹配条件后再启用"),"ok");
     const m=$("incidentDetailMask"); if(m) m.classList.remove("show");
     if(typeof switchSRETab==="function"){ switchSRETab("remediation"); }
     else if(typeof loadRemediation==="function"){ loadRemediation(); }
-  } catch(e){ toast("落地草稿失败："+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.draft_apply_failed","落地草稿失败")+"："+e,"err"); }
 }
 // ---- AI 诊断多轮对话 ----
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
@@ -734,7 +734,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,
 function renderReasoningBlock(reasoning,streaming){
   if(!reasoning) return "";
   const cursor=streaming?'<span class="ai-stream-cursor">▍</span>':"";
-  return `<details class="ai-reasoning"${streaming?" open":""}><summary class="ai-reasoning-sum">🧠 思考过程</summary>`
+  return `<details class="ai-reasoning"${streaming?" open":""}><summary class="ai-reasoning-sum">🧠 ${I18N.t("sre.thinking_process","思考过程")}</summary>`
     +`<div class="ai-reasoning-body">${esc(reasoning)}${cursor}</div></details>`;
 }
 async function loadDiagnosisChatHistory(incidentId){
@@ -749,7 +749,7 @@ async function loadDiagnosisChatHistory(incidentId){
 function renderDiagnosisChat(){
   const el=$("incDiagnosisChat"); if(!el) return;
   const hist=window._incDiagHistory||[];
-  if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">点击下方「🤖 AI 诊断」获取初步研判，然后在此追问细节。</div>`; return; }
+  if(!hist.length){ el.innerHTML=`<div class="empty-line" style="padding:12px">${I18N.t("sre.diag_chat_empty","点击下方「🤖 AI 诊断」获取初步研判，然后在此追问细节。")}</div>`; return; }
   el.innerHTML=hist.map((m,i)=>{
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
     // 思维链折叠区（推理模型）：流式中展开、完成后收起；无思维链时返回空串
@@ -757,7 +757,7 @@ function renderDiagnosisChat(){
     let body;
     if(m.role==="assistant" && m._streaming && m._loading){
       // 等待 AI 响应：显示动态加载提示（此时可能已在流式接收思维链）
-      body=rb+`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||"正在分析…")}</span></div>`;
+      body=rb+`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||I18N.t("sre.analyzing","正在分析…"))}</span></div>`;
     } else if(m.role==="assistant" && m._streaming){
       // 流式中：显示纯文本 + 闪烁光标，避免未完成 Markdown 导致渲染抖动
       body=rb+`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`;
@@ -768,7 +768,7 @@ function renderDiagnosisChat(){
     }
     let fb="";
     if(m.role==="assistant" && m.content!=="思考中…" && !m._streaming){
-      fb=`<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="有用">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="无用">👎</button></div>`;
+      fb=`<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="${I18N.t("sre.helpful","有用")}">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="${I18N.t("sre.unhelpful","无用")}">👎</button></div>`;
     }
     return `<div class="ai-chat-msg ${cls}">${body}${fb}</div>`;
   }).join("");
@@ -784,7 +784,7 @@ async function sendDiagnosisFeedback(idx,helpful){
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({message_index:idx,helpful})
     });
-    toast(helpful?"已标记为有用 👍":"已标记为无用 👎","ok");
+    toast(helpful?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
   } catch(e){ /* ignore */ }
 }
 async function sendDiagnosisChatMsg(){
@@ -795,8 +795,8 @@ async function sendDiagnosisChatMsg(){
   const chat=$("incDiagnosisChat");
   // Show user message immediately (with attachment note)
   const imgN=atts.filter(a=>a.kind==="image").length, fileN=atts.filter(a=>a.kind==="file").length;
-  const attNote=atts.length?` 📎 ${imgN?imgN+" 图 ":""}${fileN?fileN+" 文件":""}`:"";
-  window._incDiagHistory.push({role:"user",content:msg||"（附件）"+attNote});
+  const attNote=atts.length?` 📎 ${imgN?imgN+" "+I18N.t("sre.unit_images","图")+" ":""}${fileN?fileN+" "+I18N.t("sre.unit_files","文件"):""}`:"";
+  window._incDiagHistory.push({role:"user",content:msg||(I18N.t("sre.attachment_only","（附件）")+attNote)});
   renderDiagnosisChat();
   el.value=""; el.disabled=true; $("incDiagSendBtn").disabled=true;
   window._INC_DIAG_ATTACHMENTS=[]; renderDiagAttachments();
@@ -805,7 +805,7 @@ async function sendDiagnosisChatMsg(){
   window._incDiagHistory.push(aiMsg);
   renderDiagnosisChat();
   // 动画加载提示
-  const loadingPhrases=["🔍 正在分析事件上下文…","📊 检索历史相似案例…","🤖 AI 正在思考…"];
+  const loadingPhrases=["🔍 "+I18N.t("sre.diag_phase_ctx","正在分析事件上下文…"),"📊 "+I18N.t("sre.diag_phase_similar","检索历史相似案例…"),"🤖 "+I18N.t("sre.diag_phase_think","AI 正在思考…")];
   let loadingIdx=0;
   const loadingTimer=setInterval(()=>{
     loadingIdx=(loadingIdx+1)%loadingPhrases.length;
@@ -840,7 +840,7 @@ async function sendDiagnosisChatMsg(){
       (fullText)=>{
         clearInterval(loadingTimer); aiMsg._loading=false;
         aiMsg._streaming=false;
-        aiMsg.content=fullText||aiMsg.content||"（空回复）";
+        aiMsg.content=fullText||aiMsg.content||I18N.t("sre.empty_reply","（空回复）");
         if(renderThrottle){ cancelAnimationFrame(renderThrottle); renderThrottle=null; }
         renderDiagnosisChat();
       },
@@ -856,7 +856,7 @@ async function sendDiagnosisChatMsg(){
   } catch(e){
     clearInterval(loadingTimer);
     aiMsg._loading=false; aiMsg._streaming=false;
-    aiMsg.content="❌ 网络错误: "+e;
+    aiMsg.content="❌ "+I18N.t("toast.network_error","网络错误")+": "+e;
     renderDiagnosisChat();
   }
   el.disabled=false; $("incDiagSendBtn").disabled=false; el.focus();
@@ -867,7 +867,7 @@ function renderDiagAttachments(){
   const atts=window._INC_DIAG_ATTACHMENTS||[];
   if(!atts.length){ box.innerHTML=""; box.style.display="none"; return; }
   box.style.display="flex";
-  box.innerHTML=atts.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-datt="${i}" title="移除">✕</button></span>`).join("");
+  box.innerHTML=atts.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-datt="${i}" title="${I18N.t("sre.remove","移除")}">✕</button></span>`).join("");
   box.querySelectorAll("[data-datt]").forEach(b=>b.onclick=()=>{ window._INC_DIAG_ATTACHMENTS.splice(parseInt(b.dataset.datt),1); renderDiagAttachments(); });
 }
 function onDiagChatFiles(ev){
@@ -875,16 +875,16 @@ function onDiagChatFiles(ev){
   if(!window._INC_DIAG_ATTACHMENTS) window._INC_DIAG_ATTACHMENTS=[];
   for(const f of files){
     if(f.type&&f.type.startsWith("image/")){
-      if(window._INC_DIAG_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast("最多 4 张图片","err"); continue; }
-      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`图片 ${f.name} 超过 4MB`,"err"); continue; }
+      if(window._INC_DIAG_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast(I18N.t("sre.max_4_images","最多 4 张图片"),"err"); continue; }
+      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.image","图片")} ${f.name} ${I18N.t("sre.exceeds_4mb","超过 4MB")}`,"err"); continue; }
       const rd=new FileReader();
       rd.onload=()=>{ const s=String(rd.result||""); const c=s.indexOf(","); window._INC_DIAG_ATTACHMENTS.push({kind:"image",name:f.name,mime:f.type||"image/png",data:c>=0?s.slice(c+1):s}); renderDiagAttachments(); };
       rd.readAsDataURL(f);
     } else if(_AI_PARSE_EXT.includes(_extOf(f.name))){
-      if(f.size>10*1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 10MB`,"err"); continue; }
+      if(f.size>10*1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.file","文件")} ${f.name} ${I18N.t("sre.exceeds_10mb","超过 10MB")}`,"err"); continue; }
       parseDiagFileAttachment(f);
     } else {
-      if(f.size>1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 1MB`,"err"); continue; }
+      if(f.size>1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.file","文件")} ${f.name} ${I18N.t("sre.exceeds_1mb","超过 1MB")}`,"err"); continue; }
       const rd=new FileReader();
       rd.onload=()=>{ window._INC_DIAG_ATTACHMENTS.push({kind:"file",name:f.name,text:String(rd.result||"")}); renderDiagAttachments(); };
       rd.readAsText(f);
@@ -896,16 +896,16 @@ function parseDiagFileAttachment(f){
   const rd=new FileReader();
   rd.onload=async()=>{
     const s=String(rd.result||""); const c=s.indexOf(","); const b64=c>=0?s.slice(c+1):s;
-    const ph={kind:"file",name:f.name,text:"（解析中…）"};
+    const ph={kind:"file",name:f.name,text:I18N.t("sre.parsing","（解析中…）")};
     if(!window._INC_DIAG_ATTACHMENTS) window._INC_DIAG_ATTACHMENTS=[];
     window._INC_DIAG_ATTACHMENTS.push(ph); renderDiagAttachments();
     try{
       const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:f.name,mime:f.type||"",data:b64})});
       const j=await r.json().catch(()=>({}));
-      if(!r.ok||j.error){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败`,"err"); renderDiagAttachments(); return; }
+      if(!r.ok||j.error){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}`,"err"); renderDiagAttachments(); return; }
       ph.text=j.text||""; renderDiagAttachments();
-      if(typeof toast==="function") toast(`已解析 ${f.name}（${j.chars||0} 字）`,"ok");
-    }catch(e){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败`,"err"); renderDiagAttachments(); }
+      if(typeof toast==="function") toast(`${I18N.t("sre.parsed_v","已解析")} ${f.name}（${j.chars||0} ${I18N.t("sre.chars_unit","字")}）`,"ok");
+    }catch(e){ window._INC_DIAG_ATTACHMENTS=window._INC_DIAG_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}`,"err"); renderDiagAttachments(); }
   };
   rd.readAsDataURL(f);
 }
@@ -915,9 +915,9 @@ function openNewIncident(){
   $("newIncidentMask").classList.add("show");
 }
 async function saveNewIncident(){
-  const title=$("niTitle").value.trim(); if(!title){ toast("请填写标题","err"); return; }
+  const title=$("niTitle").value.trim(); if(!title){ toast(I18N.t("sre.fill_title","请填写标题"),"err"); return; }
   await fetch(`${API}/incidents`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,severity:$("niSeverity").value,host_id:$("niHost").value})});
-  $("newIncidentMask").classList.remove("show"); loadIncidents(); loadSREBadge(); toast("已保存","ok");
+  $("newIncidentMask").classList.remove("show"); loadIncidents(); loadSREBadge(); toast(I18N.t("toast.saved","已保存"),"ok");
 }
 
 /* ---- 自动修复 ---- */
@@ -925,39 +925,39 @@ async function loadRemediation(){
   try {
     const [rules,runs] = await Promise.all([fetch(`${API}/remediation/rules`).then(r=>r.json()),fetch(`${API}/remediation/runs`).then(r=>r.json())]);
     SRE_RULES = rules||[]; renderRules(SRE_RULES); renderRuns(runs||[]);
-  } catch(e){ toast("加载失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 function renderRules(rules){
   const el=$("remediationRuleList");
-  if(!rules.length){ el.innerHTML=`<div class="empty-line">暂无修复规则</div>`; return; }
+  if(!rules.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_rules","暂无修复规则")}</div>`; return; }
   el.innerHTML = rules.map(r=>{
     const pb=SRE_PLAYBOOKS.find(p=>p.id===r.playbook_id);
-    const g=[]; if(r.require_approval)g.push("需审批"); if(r.cooldown_sec)g.push(`冷却${r.cooldown_sec}s`); if(r.max_per_hour)g.push(`≤${r.max_per_hour}/h`);
-    const match=(r.match_types&&r.match_types.length?r.match_types.join("/"):"任意类型")+(r.min_level?` ≥${r.min_level}`:"");
+    const g=[]; if(r.require_approval)g.push(I18N.t("sre.badge_need_approval","需审批")); if(r.cooldown_sec)g.push(`${I18N.t("sre.badge_cooldown","冷却")}${r.cooldown_sec}s`); if(r.max_per_hour)g.push(`≤${r.max_per_hour}/h`);
+    const match=(r.match_types&&r.match_types.length?r.match_types.join("/"):I18N.t("sre.any_type","任意类型"))+(r.min_level?` ≥${r.min_level}`:"");
     return `<div class="pb-card fwd-card ${r.enabled?"":"pb-off"}" data-rule="${esc(r.id)}">
       <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(r.name)}</strong><span class="pb-desc">${esc(match)} → ${esc(pb?pb.name:r.playbook_id)}</span></div>
-        <span class="fwd-status ${r.enabled?"on":"off"}">${r.enabled?"已启用":"已停用"}</span></div>
+        <span class="fwd-status ${r.enabled?"on":"off"}">${r.enabled?I18N.t("sre.enabled_state","已启用"):I18N.t("sre.disabled_state","已停用")}</span></div>
       <div class="pb-card-foot"><div class="pb-pills">${g.map(x=>`<span class="badge">${esc(x)}</span>`).join("")}</div>
-        <div class="fwd-actions"><button class="btn sm" data-rract="edit">编辑</button><button class="btn danger sm" data-rract="del">删除</button></div></div></div>`;
+        <div class="fwd-actions"><button class="btn sm" data-rract="edit">${I18N.t("ui.edit","编辑")}</button><button class="btn danger sm" data-rract="del">${I18N.t("ui.delete","删除")}</button></div></div></div>`;
   }).join("");
   el.querySelectorAll("[data-rule]").forEach(card=>card.querySelectorAll("[data-rract]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
     const id=card.dataset.rule;
     if(b.dataset.rract==="edit") openRuleModal(SRE_RULES.find(x=>x.id===id));
-    else if(confirm("确认删除该规则？")) fetch(`${API}/remediation/rules/${id}`,{method:"DELETE"}).then(()=>loadRemediation());
+    else if(confirm(I18N.t("sre.confirm_del_rule","确认删除该规则？"))) fetch(`${API}/remediation/rules/${id}`,{method:"DELETE"}).then(()=>loadRemediation());
   }));
 }
 function renderRuns(runs){
   const el=$("remediationRunList");
-  if(!runs.length){ el.innerHTML=`<div class="empty-line">暂无执行记录</div>`; return; }
+  if(!runs.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_runs","暂无执行记录")}</div>`; return; }
   el.innerHTML = runs.map(r=>`<div class="sre-row">
     <span class="badge ${_runCls(r.status)}">${_runStatus(r.status)}</span>
     <div class="sre-row-main"><div class="sre-row-title">${esc(r.rule_name)} → ${esc(r.playbook_name||r.playbook_id)}</div>
       <div class="sre-row-sub">${esc(r.hostname)} · ${esc(r.alert_type)} · ${fmtDateTime(r.created_at)}${r.reason?" · "+esc(r.reason):""}</div></div>
-    ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">批准</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">拒绝</button></div>`:""}</div>`).join("");
+    ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">${I18N.t("sre.approve","批准")}</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">${I18N.t("sre.reject","拒绝")}</button></div>`:""}</div>`).join("");
   el.querySelectorAll("[data-runact]").forEach(b=>b.onclick=async()=>{ await fetch(`${API}/remediation/runs/${b.dataset.run}/${b.dataset.runact}`,{method:"POST"}); loadRemediation(); loadSREBadge(); });
 }
 function openRuleModal(r){
-  $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?"编辑规则":"新建规则";
+  $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?I18N.t("sre.edit_rule","编辑规则"):I18N.t("sre.new_rule","新建规则");
   $("rrName").value=r?r.name:""; $("rrEnabled").checked=r?r.enabled:true;
   $("rrLevel").value=r?(r.min_level||""):"critical";
   { // 主机分类改为下拉选择：从当前纳管主机的分类去重生成选项（含已保存但当前无主机的分类）
@@ -966,11 +966,11 @@ function openRuleModal(r){
     // 包含所有主机分类 + 操作系统类型（去重）
     const cats=[...new Set([..._hs.map(h=>h.category).filter(Boolean), ..._hs.map(h=>h.os).filter(Boolean)])];
     if(cur&&!cats.includes(cur)) cats.push(cur);
-    $("rrCategory").innerHTML='<option value="">全部分类</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
+    $("rrCategory").innerHTML='<option value="">'+I18N.t("sre.all_categories","全部分类")+'</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
     $("rrCategory").value=cur;
   }
   $("rrCooldown").value=r?r.cooldown_sec:300; $("rrMaxPerHour").value=r?r.max_per_hour:6; $("rrApproval").checked=r?r.require_approval:false;
-  $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">（请先创建剧本）</option>`;
+  $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_pb_first","（请先创建剧本）")}</option>`;
   const sel=new Set(r?(r.match_types||[]):[]);
   $("rrTypes").innerHTML=SRE_ALERT_TYPES.map(t=>`<label class="chip-check"><input type="checkbox" value="${esc(t)}" ${sel.has(t)?"checked":""}> ${esc(t)}</label>`).join("");
   $("remediationRuleMask").classList.add("show");
@@ -980,32 +980,32 @@ async function saveRule(){
   const body={id:$("rrId").value,name:$("rrName").value.trim(),enabled:$("rrEnabled").checked,match_types:types,min_level:$("rrLevel").value,match_category:$("rrCategory").value.trim(),playbook_id:$("rrPlaybook").value,require_approval:$("rrApproval").checked,cooldown_sec:parseInt($("rrCooldown").value)||0,max_per_hour:parseInt($("rrMaxPerHour").value)||0};
   const r=await fetch(`${API}/remediation/rules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(r.ok){ $("remediationRuleMask").classList.remove("show"); loadRemediation(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+  if(r.ok){ $("remediationRuleMask").classList.remove("show"); loadRemediation(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
 
 /* ---- SLO ---- */
 async function loadSLOs(){
   try { SRE_SLOS = (await fetch(`${API}/slos`).then(r=>r.json()))||[]; renderSLOs(SRE_SLOS); }
-  catch(e){ toast("加载失败: "+e,"err"); }
+  catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 function renderSLOs(list){
   const el=$("sloList");
-  if(!list.length){ el.innerHTML=`<div class="empty-line">暂无 SLO</div>`; return; }
+  if(!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_slo","暂无 SLO")}</div>`; return; }
   el.innerHTML=list.map(s=>{
     const bCls=s.error_budget<=0?"crit":s.error_budget<30?"warn":"ok";
-    const src=s.source_type==="check"?"拨测 up 率":`${s.metric} ${s.comparator} ${s.threshold}`;
+    const src=s.source_type==="check"?I18N.t("sre.slo_check_up_rate","拨测 up 率"):`${s.metric} ${s.comparator} ${s.threshold}`;
     return `<div class="pb-card fwd-card ${s.enabled?"":"pb-off"}" data-slo="${esc(s.id)}">
-      <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(s.name)}</strong><span class="pb-desc">${esc(src)} · 目标 ${s.target}% · ${s.window_days}d</span></div>
+      <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(s.name)}</strong><span class="pb-desc">${esc(src)} · ${I18N.t("sre.slo_target","目标")} ${s.target}% · ${s.window_days}d</span></div>
         <span class="badge ${s.breaching?"crit":"ok"}">SLI ${s.sli.toFixed(2)}%</span></div>
       <div class="slo-budget"><div class="slo-budget-bar"><div class="slo-budget-fill ${bCls}" style="width:${Math.max(0,Math.min(100,s.error_budget))}%"></div></div>
-        <div class="slo-budget-txt">错误预算 ${s.error_budget.toFixed(0)}% · 燃尽 ${s.burn_rate.toFixed(2)}× · 达标 ${s.good_events}/${s.total_events}</div></div>
-      <div class="pb-card-foot"><div class="pb-pills">${s.breaching?`<span class="badge crit">超标</span>`:`<span class="badge ok">健康</span>`}${s.enabled?"":`<span class="badge">停用</span>`}</div>
-        <div class="fwd-actions"><button class="btn sm" data-sloact="edit">编辑</button><button class="btn danger sm" data-sloact="del">删除</button></div></div></div>`;
+        <div class="slo-budget-txt">${I18N.t("sre.slo_error_budget","错误预算")} ${s.error_budget.toFixed(0)}% · ${I18N.t("sre.slo_burn","燃尽")} ${s.burn_rate.toFixed(2)}× · ${I18N.t("sre.slo_good","达标")} ${s.good_events}/${s.total_events}</div></div>
+      <div class="pb-card-foot"><div class="pb-pills">${s.breaching?`<span class="badge crit">${I18N.t("sre.slo_breach","超标")}</span>`:`<span class="badge ok">${I18N.t("sre.slo_healthy","健康")}</span>`}${s.enabled?"":`<span class="badge">${I18N.t("sre.badge_disabled","停用")}</span>`}</div>
+        <div class="fwd-actions"><button class="btn sm" data-sloact="edit">${I18N.t("ui.edit","编辑")}</button><button class="btn danger sm" data-sloact="del">${I18N.t("ui.delete","删除")}</button></div></div></div>`;
   }).join("");
   el.querySelectorAll("[data-slo]").forEach(card=>card.querySelectorAll("[data-sloact]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
     const id=card.dataset.slo;
     if(b.dataset.sloact==="edit") openSloModal(SRE_SLOS.find(x=>x.id===id));
-    else if(confirm("确认删除该 SLO？")) fetch(`${API}/slos/${id}`,{method:"DELETE"}).then(()=>loadSLOs());
+    else if(confirm(I18N.t("sre.confirm_del_slo","确认删除该 SLO？"))) fetch(`${API}/slos/${id}`,{method:"DELETE"}).then(()=>loadSLOs());
   }));
 }
 function sloSourceChange(){
@@ -1014,9 +1014,9 @@ function sloSourceChange(){
   $("sloMetricFields").style.display=src==="metric"?"":"none";
 }
 function openSloModal(s){
-  $("sloId").value=s?s.id:""; $("sloModalTitle").textContent=s?"编辑 SLO":"新建 SLO";
+  $("sloId").value=s?s.id:""; $("sloModalTitle").textContent=s?I18N.t("sre.edit_slo","编辑 SLO"):I18N.t("sre.new_slo","新建 SLO");
   $("sloName").value=s?s.name:""; $("sloEnabled").checked=s?s.enabled:true; $("sloSource").value=s?s.source_type:"check";
-  $("sloCheck").innerHTML=SRE_CHECKS.map(c=>`<option value="${esc(c.id)}" ${s&&s.check_id===c.id?"selected":""}>${esc(c.name)}</option>`).join("")||`<option value="">（请先创建拨测）</option>`;
+  $("sloCheck").innerHTML=SRE_CHECKS.map(c=>`<option value="${esc(c.id)}" ${s&&s.check_id===c.id?"selected":""}>${esc(c.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_check_first","（请先创建拨测）")}</option>`;
   $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc(h.hostname)}</option>`).join("");
   if(s){ $("sloMetric").value=s.metric||"cpu_percent"; $("sloComparator").value=s.comparator||"<"; $("sloThreshold").value=s.threshold||90; } else { $("sloComparator").value="<"; $("sloThreshold").value=90; }
   $("sloTarget").value=s?s.target:99.9; $("sloWindow").value=s?s.window_days:30;
@@ -1029,50 +1029,50 @@ async function saveSlo(){
   else { body.host_id=$("sloHost").value; body.metric=$("sloMetric").value; body.comparator=$("sloComparator").value; body.threshold=parseFloat($("sloThreshold").value)||0; }
   const r=await fetch(`${API}/slos`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(r.ok){ $("sloMask").classList.remove("show"); loadSLOs(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+  if(r.ok){ $("sloMask").classList.remove("show"); loadSLOs(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
 
 /* ---- 工单 ---- */
 async function loadTickets(){
   try { SRE_TICKETS=(await fetch(`${API}/tickets`).then(r=>r.json()))||[]; renderTickets(SRE_TICKETS); }
-  catch(e){ toast("加载失败: "+e,"err"); }
+  catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 function renderTickets(list){
   const el=$("ticketList");
-  if(!list.length){ el.innerHTML=`<div class="empty-line">暂无工单</div>`; return; }
+  if(!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_tickets","暂无工单")}</div>`; return; }
   el.innerHTML=list.map(t=>`<div class="sre-row" data-ticket="${t.id}">
     <span class="badge ${_prioCls(t.priority)}">${esc((t.priority||"p3").toUpperCase())}</span>
     <div class="sre-row-main"><div class="sre-row-title">${esc(t.title)}</div>
-      <div class="sre-row-sub">#${t.id}${t.assignee?" · @"+esc(t.assignee):""}${t.incident_id?" · 🔗事件#"+t.incident_id:""} · ${fmtDateTime(t.updated_at)}</div></div>
+      <div class="sre-row-sub">#${t.id}${t.assignee?" · @"+esc(t.assignee):""}${t.incident_id?" · 🔗"+I18N.t("sre.event","事件")+"#"+t.incident_id:""} · ${fmtDateTime(t.updated_at)}</div></div>
     <span class="badge ${_tkStatusCls(t.status)}">${esc(t.status)}</span></div>`).join("");
   el.querySelectorAll("[data-ticket]").forEach(row=>row.onclick=()=>openTicketModal(SRE_TICKETS.find(x=>x.id==row.dataset.ticket)));
 }
 function openTicketModal(t){
-  $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:"新建工单";
+  $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:I18N.t("sre.new_ticket","新建工单");
   $("tkTitle").value=t?t.title:""; $("tkPriority").value=t?t.priority:"p3"; $("tkStatus").value=t?t.status:"open";
   $("tkAssignee").value=t?(t.assignee||""):""; $("tkDesc").value=t?(t.description||""):"";
   // Show linked incident info if present
   const incInfo=$("tkIncidentInfo");
   if(t && t.incident){
     const inc=t.incident;
-    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 关联事件：<a href="#" onclick="openIncidentDetail(${inc.id});return false" style="font-weight:600">#${inc.id} ${esc(inc.title)}</a> · <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span> · ${esc(inc.hostname||"")} · ${fmtDateTime(inc.created_at)}</div>`;
+    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 ${I18N.t("sre.linked_incident","关联事件")}：<a href="#" onclick="openIncidentDetail(${inc.id});return false" style="font-weight:600">#${inc.id} ${esc(inc.title)}</a> · <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span> · ${esc(inc.hostname||"")} · ${fmtDateTime(inc.created_at)}</div>`;
     incInfo.style.display="";
   } else if(t && t.incident_id){
-    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 关联事件：<a href="#" onclick="openIncidentDetail(${t.incident_id});return false" style="font-weight:600">#${t.incident_id}</a></div>`;
+    incInfo.innerHTML=`<div class="hint" style="margin-bottom:8px">🔗 ${I18N.t("sre.linked_incident","关联事件")}：<a href="#" onclick="openIncidentDetail(${t.incident_id});return false" style="font-weight:600">#${t.incident_id}</a></div>`;
     incInfo.style.display="";
   } else { incInfo.style.display="none"; }
   const cm=$("tkComments"),cf=$("tkCommentField");
-  if(t){ cm.innerHTML=`<div class="subhead">评论</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div></div>`).join("")||`<div class="empty-line">—</div>`); cf.style.display=""; }
+  if(t){ cm.innerHTML=`<div class="subhead">${I18N.t("sre.comments","评论")}</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div></div>`).join("")||`<div class="empty-line">—</div>`); cf.style.display=""; }
   else { cm.innerHTML=""; cf.style.display="none"; }
   $("ticketMask").classList.add("show");
 }
 async function saveTicket(){
   const id=$("ticketId").value;
   const body={title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,assignee:$("tkAssignee").value.trim(),description:$("tkDesc").value.trim()};
-  if(!body.title){ toast("请填写标题","err"); return; }
+  if(!body.title){ toast(I18N.t("sre.fill_title","请填写标题"),"err"); return; }
   const r=await fetch(id?`${API}/tickets/${id}`:`${API}/tickets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(r.ok){ $("ticketMask").classList.remove("show"); loadTickets(); loadSREBadge(); toast("已保存","ok"); } else toast(j.error||"保存失败","err");
+  if(r.ok){ $("ticketMask").classList.remove("show"); loadTickets(); loadSREBadge(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
 async function addTicketComment(){
   const id=$("ticketId").value,t=$("tkCommentInput").value.trim(); if(!id||!t)return;
@@ -1102,7 +1102,7 @@ let LAST_LOG_STATS = null; // 缓存上次搜索的统计数据
 async function loadLogs(){
   try { if (!SRE_HOSTS.length) SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; } catch(e){}
   const hs=$("logHost");
-  if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">全部主机</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">${I18N.t("ui.all_hosts","全部主机")}</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
   // 日志来源下拉：本地聚合 + 已接入且启用的 Loki 数据源
   const srcSel=$("logSource");
   if (srcSel) {
@@ -1110,7 +1110,7 @@ async function loadLogs(){
     try {
       const ds=await fetch(`${API}/datasources`).then(r=>r.json());
       const loki=(Array.isArray(ds)?ds:[]).filter(d=>d.type==="loki" && d.enabled!==false);
-      srcSel.innerHTML=`<option value="">本地聚合</option>`+loki.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}（Loki）</option>`).join("");
+      srcSel.innerHTML=`<option value="">${I18N.t("sre.log_local","本地聚合")}</option>`+loki.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}（Loki）</option>`).join("");
       if (cur && loki.some(d=>d.id===cur)) srcSel.value=cur;
     } catch(e){}
     onLogSourceChange();
@@ -1127,11 +1127,11 @@ function onLogSourceChange(){
   if (hw) hw.style.display=loki?"none":"";
   if (lw) lw.style.display=loki?"none":"";
   if (kw) {
-    if (loki) { kw.placeholder='LogQL，如 {job="nginx"} |= "error"'; kw.style.width="360px"; }
+    if (loki) { kw.placeholder=I18N.t("sre.logql_hint",'LogQL，如')+' {job="nginx"} |= "error"'; kw.style.width="360px"; }
     else {
       // I18N.t 在缺键时返回键名本身（真值），不能用 || 兜底，否则占位符会显示 "logs.keyword_ph"
       const ph=I18N.t("logs.keyword_ph");
-      kw.placeholder=(ph && ph!=="logs.keyword_ph")?ph:"关键字…";
+      kw.placeholder=(ph && ph!=="logs.keyword_ph")?ph:I18N.t("sre.keyword_ph","关键字…");
       kw.style.width="190px";
     }
   }
@@ -1155,14 +1155,14 @@ async function loadLogJobs(dsId){
   const js=$("logJob");
   if (!js || !dsId) return;
   const cur=js.value;
-  js.innerHTML='<option value="">全部 job</option><option value="">加载中…</option>';
+  js.innerHTML='<option value="">'+I18N.t("sre.all_jobs","全部 job")+'</option><option value="">'+I18N.t("sre.loading","加载中…")+'</option>';
   try {
     const resp=await fetch(`${API}/datasources/${encodeURIComponent(dsId)}/labels?label=job`).then(r=>r.json());
     const labels=(resp.ok && Array.isArray(resp.labels))?resp.labels:[];
-    js.innerHTML='<option value="">全部 job</option>'+labels.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    js.innerHTML='<option value="">'+I18N.t("sre.all_jobs","全部 job")+'</option>'+labels.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
     if (cur && labels.includes(cur)) js.value=cur;
   } catch(e) {
-    js.innerHTML='<option value="">全部 job</option><option value="">加载失败，请手动输入</option>';
+    js.innerHTML='<option value="">'+I18N.t("sre.all_jobs","全部 job")+'</option><option value="">'+I18N.t("sre.load_failed_manual","加载失败，请手动输入")+'</option>';
   }
 }
 
@@ -1185,16 +1185,16 @@ async function searchLokiLogs(dsId){
   const q=$("logKeyword").value.trim();
   const since=$("logSince").value;
   const el=$("logResults");
-  if (!q) { if (el) el.innerHTML=`<div class="empty-line">请输入 LogQL，如 {job="nginx"} |= "error"</div>`; return; }
-  if (el) el.innerHTML=`<div class="empty-line">检索中…</div>`;
+  if (!q) { if (el) el.innerHTML=`<div class="empty-line">${I18N.t("sre.enter_logql","请输入 LogQL，如")} {job="nginx"} |= "error"</div>`; return; }
+  if (el) el.innerHTML=`<div class="empty-line">${I18N.t("sre.searching","检索中…")}</div>`;
   const sp=$("logStatsPanel"); if (sp) sp.style.display="none";
   const pg=$("logsPager"); if (pg) pg.innerHTML="";
   try {
     const body={ query:q, limit:300, since_min:(since && since!=="0")?parseInt(since):720 };
     const resp=await fetch(`${API}/datasources/${encodeURIComponent(dsId)}/query`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
-    if (!resp.ok) { if (el) el.innerHTML=`<div class="empty-line">检索失败: ${esc(resp.error||"未知错误")}</div>`; return; }
+    if (!resp.ok) { if (el) el.innerHTML=`<div class="empty-line">${I18N.t("sre.search_failed","检索失败")}: ${esc(resp.error||I18N.t("sre.unknown_error","未知错误"))}</div>`; return; }
     const lines=(resp.result||"").split("\n").filter(x=>x.trim());
-    if (!lines.length || (lines.length===1 && lines[0].startsWith("（"))) { if (el) el.innerHTML=`<div class="empty-line">${esc(lines[0]||"无匹配日志")}</div>`; return; }
+    if (!lines.length || (lines.length===1 && lines[0].startsWith("（"))) { if (el) el.innerHTML=`<div class="empty-line">${esc(lines[0]||I18N.t("sre.no_match_logs","无匹配日志"))}</div>`; return; }
     el.innerHTML=lines.map(line=>{
       const m=line.match(/^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\s+([\s\S]*)$/);
       const ts=m?m[1]:"", msg=m?m[2]:line;
@@ -1205,7 +1205,7 @@ async function searchLokiLogs(dsId){
         <span class="log-msg">${esc(msg)}</span>
       </div>`;
     }).join("");
-  } catch(e){ if (el) el.innerHTML=`<div class="empty-line">检索失败: ${esc(e)}</div>`; }
+  } catch(e){ if (el) el.innerHTML=`<div class="empty-line">${I18N.t("sre.search_failed","检索失败")}: ${esc(e)}</div>`; }
 }
 
 async function searchLogs(page){
@@ -1228,13 +1228,13 @@ async function searchLogs(page){
 
     // 渲染日志列表
     const el=$("logResults");
-    if(!items.length){ el.innerHTML=`<div class="empty-line">无匹配日志（被控端需以 --log-paths 指定采集文件）</div>`; renderLogsPager(); return; }
+    if(!items.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_match_logs_hint","无匹配日志（被控端需以 --log-paths 指定采集文件）")}</div>`; renderLogsPager(); return; }
     el.innerHTML=items.map(l=>`<div class="log-line ${_logLvlCls(l.level)}">
       <span class="log-ts mono">${fmtDateTime(l.ts)}</span>
       <span class="log-lvl ${_logLvlCls(l.level)}">${esc(l.level)}</span>
       <span class="log-host">${esc(l.hostname)}</span>
       <span class="log-msg">${esc(l.message)}</span>
-      ${(l.level==="error"||l.level==="warn")?`<button class="log-diag-btn" data-log='${esc(JSON.stringify({ts:l.ts,hostname:l.hostname,host_id:l.host_id||"",level:l.level,message:l.message}))}' title="提交诊断">🔍</button>`:""}
+      ${(l.level==="error"||l.level==="warn")?`<button class="log-diag-btn" data-log='${esc(JSON.stringify({ts:l.ts,hostname:l.hostname,host_id:l.host_id||"",level:l.level,message:l.message}))}' title="${I18N.t("sre.submit_diag","提交诊断")}">🔍</button>`:""}
     </div>`).join("");
 
     // 绑定单条日志诊断按钮
@@ -1242,7 +1242,7 @@ async function searchLogs(page){
 
     // 渲染分页控件
     renderLogsPager();
-  } catch(e){ toast("检索失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.search_failed","检索失败")+": "+e,"err"); }
 }
 
 // 渲染日志统计面板
@@ -1253,7 +1253,7 @@ function renderLogStats(stats, total){
     // 空态也保留看板结构，避免用户以为功能缺失；并提示数据来源
     // 注意：.log-stats 默认 display:none，须显式设为可见值（""会回落到 CSS 的 none）
     panel.style.display="block";
-    panel.innerHTML=`<div class="log-stats-bar"><div class="log-stats-left"><span class="log-stat-total">共 <strong>0</strong> 条</span><span class="log-stat-empty">暂无匹配日志——被控端需在安装时以 --log-paths 指定采集文件；或放宽上方筛选条件后重试</span></div></div>`;
+    panel.innerHTML=`<div class="log-stats-bar"><div class="log-stats-left"><span class="log-stat-total">${I18N.t("sre.total_prefix","共")} <strong>0</strong> ${I18N.t("sre.count_unit","条")}</span><span class="log-stat-empty">${I18N.t("sre.log_empty_hint","暂无匹配日志——被控端需在安装时以 --log-paths 指定采集文件；或放宽上方筛选条件后重试")}</span></div></div>`;
     return;
   }
   panel.style.display="block"; // 显式可见（.log-stats 默认 display:none，""会回落到 none）
@@ -1275,11 +1275,11 @@ function renderLogStats(stats, total){
   if(topHosts.length){
     const maxCount=topHosts[0].count||1;
     const barColors=['#4c8dff','#06b6d4','#8b5cf6','#22c55e','#f59e0b'];
-    hostHTML='<div class="log-stat-row"><span class="log-stat-label">Top 主机：</span><div class="log-top-host-bars">';
+    hostHTML='<div class="log-stat-row"><span class="log-stat-label">'+I18N.t("sre.top_hosts_label","Top 主机：")+'</span><div class="log-top-host-bars">';
     topHosts.forEach((h,i)=>{
       const pct=Math.round((h.count/maxCount)*100);
       const color=barColors[i%barColors.length];
-      hostHTML+=`<div class="log-top-host-item" data-host="${esc(h.hostname)}" title="${esc(h.hostname)}：${h.count} 条日志">
+      hostHTML+=`<div class="log-top-host-item" data-host="${esc(h.hostname)}" title="${esc(h.hostname)}：${h.count} ${I18N.t("sre.logs_unit","条日志")}">
         <span class="log-top-host-name">${esc(h.hostname)}</span>
         <div class="log-top-host-track"><div class="log-top-host-fill" style="width:${pct}%;background:${color}"></div></div>
         <span class="log-top-host-count" style="color:${color}">${h.count}</span>
@@ -1290,23 +1290,23 @@ function renderLogStats(stats, total){
 
   // 时间分布
   const h1=timeDist["1h"]||0, h6=timeDist["6h"]||0, h24=timeDist["24h"]||0;
-  const timeHTML=`<span class="log-stat-chip time">近1h: <strong>${h1}</strong></span><span class="log-stat-chip time">近6h: <strong>${h6}</strong></span><span class="log-stat-chip time">近24h: <strong>${h24}</strong></span>`;
+  const timeHTML=`<span class="log-stat-chip time">${I18N.t("sre.recent","近")}1h: <strong>${h1}</strong></span><span class="log-stat-chip time">${I18N.t("sre.recent","近")}6h: <strong>${h6}</strong></span><span class="log-stat-chip time">${I18N.t("sre.recent","近")}24h: <strong>${h24}</strong></span>`;
 
   // 一键诊断按钮（error > 10 条且 since_min <= 30）
   const errCount=byLvl["error"]||0;
   const sinceVal=$("logSince").value;
   const showDiag=errCount>=10 && (sinceVal==="15"||sinceVal==="30"||sinceVal==="60"||!sinceVal||sinceVal==="0");
-  const diagBtn=showDiag ? `<button class="btn warn sm" id="logDiagBtn" style="margin-left:auto">⚡ 一键诊断（${errCount} 条错误）</button>` : "";
+  const diagBtn=showDiag ? `<button class="btn warn sm" id="logDiagBtn" style="margin-left:auto">⚡ ${I18N.t("sre.one_click_diag","一键诊断")}（${errCount} ${I18N.t("sre.errors_unit","条错误")}）</button>` : "";
 
   panel.innerHTML=`<div class="log-stats-bar">
     <div class="log-stats-left">
-      <span class="log-stat-total">共 <strong>${total}</strong> 条</span>
+      <span class="log-stat-total">${I18N.t("sre.total_prefix","共")} <strong>${total}</strong> ${I18N.t("sre.count_unit","条")}</span>
       ${levelHTML}
     </div>
     ${diagBtn}
   </div>
   ${hostHTML}
-  <div class="log-stat-row"><span class="log-stat-label">时间分布：</span>${timeHTML}</div>`;
+  <div class="log-stat-row"><span class="log-stat-label">${I18N.t("sre.time_dist","时间分布：")}</span>${timeHTML}</div>`;
 
   // 绑定 Top 主机点击筛选
   panel.querySelectorAll(".log-top-host-item").forEach(item=>{
@@ -1336,8 +1336,8 @@ function renderLogStats(stats, total){
 function renderLogsPager(){
   const pager=$("logsPager");
   if(!pager) return;
-  if(LOGS_TOTAL===0){ pager.innerHTML=`<span class="pinfo">共 0 条</span>`; return; }
-  if(LOGS_PAGES<=1){ pager.innerHTML=`<span class="pinfo">共 ${LOGS_TOTAL} 条</span>`; return; }
+  if(LOGS_TOTAL===0){ pager.innerHTML=`<span class="pinfo">${I18N.t("sre.total_prefix","共")} 0 ${I18N.t("sre.count_unit","条")}</span>`; return; }
+  if(LOGS_PAGES<=1){ pager.innerHTML=`<span class="pinfo">${I18N.t("sre.total_prefix","共")} ${LOGS_TOTAL} ${I18N.t("sre.count_unit","条")}</span>`; return; }
   let btns=`<button ${LOGS_PAGE===1?"disabled":""} data-lpg="prev">‹</button>`;
   for(let i=1;i<=LOGS_PAGES;i++){
     if(i===1||i===LOGS_PAGES||Math.abs(i-LOGS_PAGE)<=1){
@@ -1347,7 +1347,7 @@ function renderLogsPager(){
     }
   }
   btns+=`<button ${LOGS_PAGE===LOGS_PAGES?"disabled":""} data-lpg="next">›</button>`;
-  btns+=`<span class="pinfo">共 ${LOGS_TOTAL} 条 · ${LOGS_PAGE}/${LOGS_PAGES} 页</span>`;
+  btns+=`<span class="pinfo">${I18N.t("sre.total_prefix","共")} ${LOGS_TOTAL} ${I18N.t("sre.count_unit","条")} · ${LOGS_PAGE}/${LOGS_PAGES} ${I18N.t("sre.page_unit","页")}</span>`;
   pager.innerHTML=btns;
 
   // 绑定分页按钮事件
@@ -1363,23 +1363,23 @@ function renderLogsPager(){
 
 // 一键诊断：批量错误日志
 async function diagnoseBulkLogs(hostID, hostname, sinceMin){
-  toast("正在诊断…","ok");
+  toast(I18N.t("sre.diagnosing","正在诊断…"),"ok");
   try {
     const r=await fetch(`${API}/logs/diagnose`,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({host_id:hostID,hostname:hostname,since_min:sinceMin})
     });
-    if(!r.ok){ toast("诊断请求失败: "+r.status,"err"); return; }
+    if(!r.ok){ toast(I18N.t("sre.diag_req_failed","诊断请求失败")+": "+r.status,"err"); return; }
     const rep=await r.json();
     // 显示诊断结果
     showDiagnosisResult(rep);
-  } catch(e){ toast("诊断失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.diagnose_failed","诊断失败")+": "+e,"err"); }
 }
 
 // 单条日志诊断
 async function diagnoseLogLine(log){
-  toast("正在诊断…","ok");
+  toast(I18N.t("sre.diagnosing","正在诊断…"),"ok");
   try {
     const r=await fetch(`${API}/logs/diagnose`,{
       method:"POST",
@@ -1391,10 +1391,10 @@ async function diagnoseLogLine(log){
         single_log:`[${log.level}] ${log.hostname} ${fmtDateTime(log.ts)} ${log.message}`
       })
     });
-    if(!r.ok){ toast("诊断请求失败: "+r.status,"err"); return; }
+    if(!r.ok){ toast(I18N.t("sre.diag_req_failed","诊断请求失败")+": "+r.status,"err"); return; }
     const rep=await r.json();
     showDiagnosisResult(rep);
-  } catch(e){ toast("诊断失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.diagnose_failed","诊断失败")+": "+e,"err"); }
 }
 
 // 显示诊断结果
@@ -1403,7 +1403,7 @@ function showDiagnosisResult(rep){
   if(!panel) return;
   const findings=(rep.findings||[]).map(f=>`<div class="ai-finding"><span class="badge ${f.severity==="critical"?"crit":"warn"}">${esc(f.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(f.title)}</div>${f.detail?`<div class="ai-f-detail">${esc(f.detail)}</div>`:""}</div></div>`).join("");
   panel.innerHTML=`<div class="log-diag-card">
-    <div class="log-diag-head"><span>🔍 诊断结果</span><button class="log-diag-close" title="关闭">✕</button></div>
+    <div class="log-diag-head"><span>🔍 ${I18N.t("sre.diag_result","诊断结果")}</span><button class="log-diag-close" title="${I18N.t("assist.close","关闭")}">✕</button></div>
     <div class="log-diag-summary">${esc(rep.summary||"")}</div>
     ${findings?`<div class="ai-findings">${findings}</div>`:""}
     ${rep.context?`<div class="log-diag-ctx">${esc(rep.context)}</div>`:""}
@@ -1418,17 +1418,17 @@ async function loadInspections(){
   try {
     const list=await fetch(`${API}/ai/inspections`).then(r=>r.json());
     const el=$("aiReportList");
-    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无巡检报告，点「立即巡检」生成一次。</div>`; return; }
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_inspections","暂无巡检报告，点「立即巡检」生成一次。")}</div>`; return; }
     el.innerHTML=list.map(rep=>{
       const f=(rep.findings||[]).map(x=>`<div class="ai-finding"><span class="badge ${_sevCls(x.severity)}">${esc(x.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(x.title)}</div>${x.detail?`<div class="ai-f-detail">${esc(x.detail)}</div>`:""}</div></div>`).join("");
       const meta=[rep.model?esc(rep.model):"",(typeof rep.duration_ms==="number"&&rep.duration_ms>=0)?rep.duration_ms+"ms":""].filter(Boolean).join(" · ");
-      return `<div class="ai-report"><div class="ai-report-head"><span class="badge ${rep.source==="ai"?"info":""}">${rep.source==="ai"?"AI 研判":"启发式"}</span><span class="ai-report-trigger">${rep.trigger==="manual"?"手动":"定时"}</span>${meta?`<span class="mono" style="color:var(--muted2);font-size:11px">${meta}</span>`:""}<span class="mono" style="color:var(--muted);margin-left:auto">${fmtDateTime(rep.ts)}</span></div>
+      return `<div class="ai-report"><div class="ai-report-head"><span class="badge ${rep.source==="ai"?"info":""}">${rep.source==="ai"?I18N.t("sre.ai_verdict","AI 研判"):I18N.t("sre.heuristic","启发式")}</span><span class="ai-report-trigger">${rep.trigger==="manual"?I18N.t("sre.src_manual","手动"):I18N.t("sre.sched_scheduled","定时")}</span>${meta?`<span class="mono" style="color:var(--muted2);font-size:11px">${meta}</span>`:""}<span class="mono" style="color:var(--muted);margin-left:auto">${fmtDateTime(rep.ts)}</span></div>
         ${rep.context?`<div class="ai-report-ctx">${esc(rep.context)}</div>`:""}
         <div class="ai-summary">${esc(rep.summary)}</div>${f?`<div class="ai-findings">${f}</div>`:""}</div>`;
     }).join("");
-  } catch(e){ toast("加载失败: "+e,"err"); }
+  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
-async function runInspect(){ toast("巡检中…","ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast("巡检失败: "+e,"err"); } }
+async function runInspect(){ toast(I18N.t("sre.inspecting","巡检中…"),"ok"); try { await fetch(`${API}/ai/inspect`,{method:"POST"}); loadInspections(); } catch(e){ toast(I18N.t("sre.inspect_failed","巡检失败")+": "+e,"err"); } }
 // AI 技能库：查看/删除自进化提炼的技能，手动触发提炼
 async function openSkills(){
   const m=$("skillsMask"); if(m) m.classList.add("show");
@@ -1436,50 +1436,50 @@ async function openSkills(){
 }
 async function loadSkills(){
   const body=$("skillsBody"); if(!body) return;
-  body.innerHTML=`<div class="empty-line" style="padding:16px">加载中…</div>`;
+  body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.loading","加载中…")}</div>`;
   try{
     const skills=await fetch(`${API}/ai/skills`).then(r=>r.json());
     if(!skills||!skills.length){
-      body.innerHTML=`<div class="empty-line" style="padding:20px">还没有技能。随着 AI 诊断 / 剧本执行 / 事件解决 的经验积累，系统每日会自动从中提炼可复用技能；也可点右上角「立即提炼」。</div>`;
+      body.innerHTML=`<div class="empty-line" style="padding:20px">${I18N.t("sre.skills_empty","还没有技能。随着 AI 诊断 / 剧本执行 / 事件解决 的经验积累，系统每日会自动从中提炼可复用技能；也可点右上角「立即提炼」。")}</div>`;
       return;
     }
     body.innerHTML=`<div class="skill-list">`+skills.map(s=>{
       const succ=s.use_count>0?Math.min(100,Math.round((s.success_count/s.use_count)*100)):0;
       return `<div class="skill-card">
         <div class="skill-head"><b>${esc(s.name)}</b>
-          <span class="skill-meta">用 ${s.use_count} · 成功 ${succ}% · 权重 ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · 手工":""}</span>
-          <button class="btn danger sm" data-skill-del="${s.id}">删除</button></div>
-        <div class="skill-trigger">适用：${esc(s.trigger||"")}</div>
+          <span class="skill-meta">${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):""}</span>
+          <button class="btn danger sm" data-skill-del="${s.id}">${I18N.t("ui.delete","删除")}</button></div>
+        <div class="skill-trigger">${I18N.t("sre.skill_applies","适用：")}${esc(s.trigger||"")}</div>
         <pre class="skill-steps">${esc(s.steps||"")}</pre>
         ${s.tags?`<div class="skill-tags">🏷️ ${esc(s.tags)}</div>`:""}
       </div>`;
     }).join("")+`</div>`;
     body.querySelectorAll("[data-skill-del]").forEach(b=>b.onclick=async()=>{
-      if(!confirm("删除该技能？")) return;
+      if(!confirm(I18N.t("sre.confirm_del_skill","删除该技能？"))) return;
       await fetch(`${API}/ai/skills/${b.dataset.skillDel}`,{method:"DELETE"});
       loadSkills();
     });
-  }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">加载失败：${esc(String(e))}</div>`; }
+  }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
 }
 async function distillSkillsNow(){
-  toast("提炼中，请稍候…","ok");
+  toast(I18N.t("sre.distilling","提炼中，请稍候…"),"ok");
   try{
     const j=await fetch(`${API}/ai/skills/distill`,{method:"POST"}).then(r=>r.json());
-    if(j.ok) toast(`提炼完成，新增 ${j.created||0} 条技能`,"ok"); else toast("提炼失败："+(j.error||"未知"),"err");
+    if(j.ok) toast(`${I18N.t("sre.distill_done","提炼完成，新增")} ${j.created||0} ${I18N.t("sre.skills_unit","条技能")}`,"ok"); else toast(I18N.t("sre.distill_failed","提炼失败")+"："+(j.error||I18N.t("sre.unknown","未知")),"err");
     loadSkills();
-  }catch(e){ toast("提炼失败："+e,"err"); }
+  }catch(e){ toast(I18N.t("sre.distill_failed","提炼失败")+"："+e,"err"); }
 }
 // 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
 async function genDutyReport(){
   let j;
   try { j = await fetch(`${API}/ai/duty-context`).then(r=>r.json()); }
-  catch(e){ toast("获取运维态势失败："+e,"err"); return; }
+  catch(e){ toast(I18N.t("sre.duty_ctx_failed","获取运维态势失败")+"："+e,"err"); return; }
   openAIAssist({
     task:"duty_report",
-    title:"🌅 AI 值班晨报",
+    title:"🌅 "+I18N.t("sre.duty_report_title","AI 值班晨报"),
     mode:"analyze",
     context:(j&&j.context)?j.context:"（当前无态势数据）",
-    hint:(j&&j.notable===false)?"当前态势平静，无未决事件/SLO超标/待审批修复。":"正在汇总今日运维态势…"
+    hint:(j&&j.notable===false)?I18N.t("sre.duty_calm","当前态势平静，无未决事件/SLO超标/待审批修复。"):I18N.t("sre.duty_summarizing","正在汇总今日运维态势…")
   });
 }
 async function openAIConfig(){
@@ -1511,8 +1511,8 @@ async function openAIConfig(){
 let AI_TERM_ENABLED=false;
 function renderAITermState(){
   const lbl=$("aiTermStateLabel"), btn=$("aiTermToggleBtn"), row=$("aiTermPwRow"), msg=$("aiTermMsg");
-  if(lbl){ lbl.textContent=AI_TERM_ENABLED?"已开启":"未开启"; lbl.className="ai-term-state "+(AI_TERM_ENABLED?"on":"off"); }
-  if(btn){ btn.textContent=AI_TERM_ENABLED?"关闭":"开启"; }
+  if(lbl){ lbl.textContent=AI_TERM_ENABLED?I18N.t("sre.term_on","已开启"):I18N.t("sre.term_off","未开启"); lbl.className="ai-term-state "+(AI_TERM_ENABLED?"on":"off"); }
+  if(btn){ btn.textContent=AI_TERM_ENABLED?I18N.t("sre.term_disable","关闭"):I18N.t("sre.term_enable","开启"); }
   if(row) row.style.display="none";
   if(msg){ msg.textContent=""; msg.className="ai-term-msg"; }
 }
@@ -1523,7 +1523,7 @@ function toggleAITerm(){
 }
 function confirmAITerm(){
   const pw=$("aiTermPw"), msg=$("aiTermMsg"), password=pw?pw.value:"";
-  if(!password){ if(msg){ msg.textContent="请输入终端连接密码"; msg.className="ai-term-msg err"; } return; }
+  if(!password){ if(msg){ msg.textContent=I18N.t("sre.term_need_pw","请输入终端连接密码"); msg.className="ai-term-msg err"; } return; }
   aiTermSet(true,password);
 }
 async function aiTermSet(enabled,password){
@@ -1533,9 +1533,9 @@ async function aiTermSet(enabled,password){
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ if(msg){ msg.textContent="✗ "+(j.error||("HTTP "+r.status)); msg.className="ai-term-msg err"; } return; }
     AI_TERM_ENABLED=!!j.enabled; renderAITermState();
-    if(msg){ msg.textContent=AI_TERM_ENABLED?"✓ 已开启：AI 可执行只读终端巡检（仅查询，禁止任何增删改）":"已关闭 AI 终端巡检"; msg.className="ai-term-msg ok"; }
-    if(typeof toast==="function") toast(AI_TERM_ENABLED?"已开启 AI 终端只读巡检":"已关闭 AI 终端巡检","ok");
-  }catch(e){ if(msg){ msg.textContent="✗ 请求失败："+e; msg.className="ai-term-msg err"; } }
+    if(msg){ msg.textContent=AI_TERM_ENABLED?"✓ "+I18N.t("sre.term_enabled_msg","已开启：AI 可执行只读终端巡检（仅查询，禁止任何增删改）"):I18N.t("sre.term_disabled_msg","已关闭 AI 终端巡检"); msg.className="ai-term-msg ok"; }
+    if(typeof toast==="function") toast(AI_TERM_ENABLED?I18N.t("sre.term_toast_on","已开启 AI 终端只读巡检"):I18N.t("sre.term_disabled_msg","已关闭 AI 终端巡检"),"ok");
+  }catch(e){ if(msg){ msg.textContent="✗ "+I18N.t("sre.request_failed","请求失败")+"："+e; msg.className="ai-term-msg err"; } }
 }
 // 从当前表单 Endpoint+Key 自动获取该 Provider 的可用模型，填充自定义下拉（可搜索）；
 // 获取不到时保留手动输入。不再内置任何预设模型。
@@ -1545,8 +1545,8 @@ async function loadAIModels(){
   const info=$("aiModelInfo");
   const ep=($("aiEndpoint").value||"").trim();
   const myReq=++_aiModelsReq;
-  if(!ep){ AI_MODELS=[]; renderModelDropdown(); if(info) info.textContent="· 填入 Endpoint 后自动获取，或直接手动输入模型名"; return; }
-  if(info) info.textContent="· 获取中…";
+  if(!ep){ AI_MODELS=[]; renderModelDropdown(); if(info) info.textContent="· "+I18N.t("sre.model_hint_empty","填入 Endpoint 后自动获取，或直接手动输入模型名"); return; }
+  if(info) info.textContent="· "+I18N.t("sre.model_fetching","获取中…");
   try {
     const body={endpoint:ep,api_key:$("aiKey").value||""};
     const m=await fetch(`${API}/ai/models`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
@@ -1554,9 +1554,9 @@ async function loadAIModels(){
     AI_MODELS=(m&&Array.isArray(m.models))?m.models:[];
     renderModelDropdown();
     if(info) info.textContent=AI_MODELS.length
-      ? `· 已获取 ${AI_MODELS.length} 个模型，点输入框展开选择 / 搜索 / 手动输入`
-      : "· 未获取到模型，请检查 Endpoint/Key，或直接手动输入模型名";
-  } catch(e){ if(myReq!==_aiModelsReq) return; if(info) info.textContent="· 获取失败，可手动输入模型名"; }
+      ? `· ${I18N.t("sre.model_got_prefix","已获取")} ${AI_MODELS.length} ${I18N.t("sre.model_got_suffix","个模型，点输入框展开选择 / 搜索 / 手动输入")}`
+      : "· "+I18N.t("sre.model_none","未获取到模型，请检查 Endpoint/Key，或直接手动输入模型名");
+  } catch(e){ if(myReq!==_aiModelsReq) return; if(info) info.textContent="· "+I18N.t("sre.model_fetch_failed","获取失败，可手动输入模型名"); }
 }
 // 自定义模型下拉：始终显示全部已获取模型（可按输入内容过滤），点选填入输入框。
 // 替代原生 <datalist>——原生下拉会按输入框【已有值】过滤，导致“提示 N 个却只显示 1 个”。
@@ -1564,7 +1564,7 @@ function renderModelDropdown(filter){
   const dd=$("aiModelDropdown"); if(!dd) return;
   const f=(filter||"").trim().toLowerCase();
   const list=AI_MODELS.filter(x=>!f || String(x.value).toLowerCase().includes(f) || String(x.label||"").toLowerCase().includes(f));
-  if(!list.length){ dd.innerHTML=`<div class="ai-model-empty">${AI_MODELS.length?"无匹配模型":"暂无模型，填好 Endpoint+Key 后点刷新"}</div>`; return; }
+  if(!list.length){ dd.innerHTML=`<div class="ai-model-empty">${AI_MODELS.length?I18N.t("sre.model_no_match","无匹配模型"):I18N.t("sre.model_empty","暂无模型，填好 Endpoint+Key 后点刷新")}</div>`; return; }
   dd.innerHTML=list.map(x=>`<div class="ai-model-opt" data-val="${esc(x.value)}" title="${esc(x.value)}">${esc(x.label||x.value)}</div>`).join("");
   dd.querySelectorAll(".ai-model-opt").forEach(el=>el.onclick=()=>{ const t=$("aiModel"); if(t) t.value=el.dataset.val; hideModelDropdown(); });
 }
@@ -1575,28 +1575,28 @@ function toggleModelDropdown(){ const dd=$("aiModelDropdown"); if(dd&&dd.style.d
 // 取消默认预设模型：切换 Provider 后清空模型，改由自动获取 / 搜索 / 手动输入。
 function setAIPreset(type){
   const presets={
-    "bailian":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",label:"阿里云百炼（OpenAI 兼容）"},
+    "bailian":{endpoint:"https://dashscope.aliyuncs.com/compatible-mode/v1",label:I18N.t("sre.preset_bailian","阿里云百炼（OpenAI 兼容）")},
     "openai":{endpoint:"https://api.openai.com/v1",label:"OpenAI"},
     "deepseek":{endpoint:"https://api.deepseek.com/v1",label:"DeepSeek"},
-    "ollama":{endpoint:"http://localhost:11434/v1",label:"本地 Ollama"},
-    "claude":{endpoint:"https://dashscope.aliyuncs.com/apps/anthropic",label:"Claude（百炼 Anthropic）"},
+    "ollama":{endpoint:"http://localhost:11434/v1",label:I18N.t("sre.preset_ollama","本地 Ollama")},
+    "claude":{endpoint:"https://dashscope.aliyuncs.com/apps/anthropic",label:I18N.t("sre.preset_claude","Claude（百炼 Anthropic）")},
   };
   const p=presets[type]; if(!p) return;
   $("aiEndpoint").value=p.endpoint;
   $("aiModel").value=""; // 取消默认预设模型，切 Provider 后需重新获取/输入
-  toast(`已设为 ${p.label} · 正在获取模型…`,"ok");
+  toast(`${I18N.t("sre.preset_set","已设为")} ${p.label} · ${I18N.t("sre.fetching_models","正在获取模型…")}`,"ok");
   loadAIModels(); // 选预设后自动获取该 provider 的模型
 }
 async function saveAIConfig(){
   const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
-  if(enabled && (!endpoint || !model)){ toast("启用 AI 需填写 Endpoint 和模型","err"); return; } // 轻校验：启用却没填必填项
+  if(enabled && (!endpoint || !model)){ toast(I18N.t("sre.ai_need_endpoint_model","启用 AI 需填写 Endpoint 和模型"),"err"); return; } // 轻校验：启用却没填必填项
   const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30,
     embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0,
     rerank_endpoint:($("rerankEndpoint")?.value||"").trim(),rerank_api_key:$("rerankKey")?.value||"",rerank_model:($("rerankModel")?.value||"").trim(),
     self_verify:$("aiSelfVerify")?.checked||false,moa_models:($("aiMoAModels")?.value||"").trim(),
     mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim()};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(r.ok){ $("aiConfigMask").classList.remove("show"); toast("已保存","ok"); } else toast("保存失败","err");
+  if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
 // AI 对话模型连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
 let _aiTestBusy=false;
@@ -1604,10 +1604,10 @@ async function testAIChatConfig(){
   if(_aiTestBusy) return;
   const el=$("aiChatTestResult");
   const endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
-  if(!endpoint||!model){ if(el){ el.textContent="✗ 请先填写 Endpoint 和模型"; el.className="ai-test-result err"; } return; }
+  if(!endpoint||!model){ if(el){ el.textContent="✗ "+I18N.t("sre.fill_endpoint_model","请先填写 Endpoint 和模型"); el.className="ai-test-result err"; } return; }
   _aiTestBusy=true;
   const testBtn=$("aiChatTestBtn"); if(testBtn) testBtn.disabled=true;
-  if(el){ el.textContent="对话模型 测试中…"; el.className="ai-test-result testing"; }
+  if(el){ el.textContent=I18N.t("sre.ai_chat_model","对话模型")+" "+I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
   const body={enabled:true,endpoint,api_key:$("aiKey").value,model};
   try{
     const r=await fetch(`${API}/ai/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -1621,22 +1621,22 @@ async function testAIChatConfig(){
     );
     if(!el) return;
     if(error){
-      el.textContent="✗ 对话模型 "+error; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+      el.textContent="✗ "+I18N.t("sre.ai_chat_model","对话模型")+" "+error; el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
       return;
     }
     if(resultMeta && resultMeta.ok){
       let extra="";
       if(resultMeta.provider_hint){
-        const labels={openai:"OpenAI 兼容","bailian-compat":"百炼兼容",anthropic:"Anthropic"};
+        const labels={openai:I18N.t("sre.compat_openai","OpenAI 兼容"),"bailian-compat":I18N.t("sre.compat_bailian","百炼兼容"),anthropic:"Anthropic"};
         extra=` · ${labels[resultMeta.provider_hint]||resultMeta.provider_hint}`;
       }
-      el.textContent=`✓ 对话模型可用${extra} · ${resultMeta.latency_ms||0}ms · ${(resultMeta.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
+      el.textContent=`✓ ${I18N.t("sre.chat_model_ok","对话模型可用")}${extra} · ${resultMeta.latency_ms||0}ms · ${(resultMeta.reply||"").slice(0,48)}`; el.className="ai-test-result ok";
     } else if(reply){
-      el.textContent=`✓ 对话模型可用 · ${reply.slice(0,48)}`; el.className="ai-test-result ok";
+      el.textContent=`✓ ${I18N.t("sre.chat_model_ok","对话模型可用")} · ${reply.slice(0,48)}`; el.className="ai-test-result ok";
     } else {
-      el.textContent="✗ 对话模型 未收到有效回复"; el.className="ai-test-result err";
+      el.textContent="✗ "+I18N.t("sre.ai_chat_model","对话模型")+" "+I18N.t("sre.no_valid_reply","未收到有效回复"); el.className="ai-test-result err";
     }
-  }catch(e){ if(el){ el.textContent="✗ 对话模型 请求失败："+e; el.className="ai-test-result err"; } }
+  }catch(e){ if(el){ el.textContent="✗ "+I18N.t("sre.ai_chat_model","对话模型")+" "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
   finally{ _aiTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
@@ -1647,7 +1647,7 @@ async function testAIEmbedConfig(){
   const el=$("aiEmbedTestResult");
   _aiEmbedTestBusy=true;
   const testBtn=$("aiEmbedTestBtn"); if(testBtn) testBtn.disabled=true;
-  if(el){ el.textContent="向量化模型 测试中…"; el.className="ai-test-result testing"; }
+  if(el){ el.textContent=I18N.t("sre.ai_embed_model","向量化模型")+" "+I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
   const body={enabled:true,
     embed_endpoint:$("embedEndpoint").value.trim(),
     embed_api_key:$("embedKey").value,
@@ -1661,11 +1661,11 @@ async function testAIEmbedConfig(){
     const j=await r.json().catch(()=>({}));
     if(!el) return;
     if(j.ok){
-      el.textContent=`✓ 向量化模型可用 · ${j.latency_ms||0}ms · ${j.dimensions||0}维 · ${j.model||""}`; el.className="ai-test-result ok";
+      el.textContent=`✓ ${I18N.t("sre.embed_model_ok","向量化模型可用")} · ${j.latency_ms||0}ms · ${j.dimensions||0}${I18N.t("sre.dim_unit","维")} · ${j.model||""}`; el.className="ai-test-result ok";
     } else {
-      el.textContent="✗ 向量化模型 "+(j.error||"测试失败"); el.className="ai-test-result err";
+      el.textContent="✗ "+I18N.t("sre.ai_embed_model","向量化模型")+" "+(j.error||I18N.t("sre.test_failed","测试失败")); el.className="ai-test-result err";
     }
-  }catch(e){ if(el){ el.textContent="✗ 向量化模型 请求失败："+e; el.className="ai-test-result err"; } }
+  }catch(e){ if(el){ el.textContent="✗ "+I18N.t("sre.ai_embed_model","向量化模型")+" "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
   finally{ _aiEmbedTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
@@ -1682,7 +1682,7 @@ function toggleEmbedCard(){
 function updateEmbedCardSummary(){
   const summary=$("embedCardSummary"); if(!summary) return;
   const model=$("embedModel").value.trim();
-  if(model){ summary.textContent=` · 已配置：${model}`; }
+  if(model){ summary.textContent=` · ${I18N.t("sre.configured","已配置")}：${model}`; }
   else { summary.textContent=""; }
 }
 
@@ -1698,7 +1698,7 @@ function toggleRerankCard(){
 function updateRerankCardSummary(){
   const summary=$("rerankCardSummary"); if(!summary) return;
   const model=($("rerankModel")?.value||"").trim();
-  summary.textContent=model?` · 已启用：${model}`:" · 未启用";
+  summary.textContent=model?` · ${I18N.t("sre.enabled_state","已启用")}：${model}`:" · "+I18N.t("sre.not_enabled","未启用");
 }
 
 // 过滤 AI 输出中的敏感信息（密钥 / 密码 / token）。代码与命令予以保留、交由 Markdown 渲染
@@ -1707,8 +1707,8 @@ function filterDisplayContent(text){
   if(!text) return text;
   let t=text;
   t=t.replace(/\{\s*"tool_calls"[\s\S]*?\}\s*$/g,''); // 兜底：结尾残留的 tool_calls JSON
-  t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,'[已隐藏密钥]'); // API 密钥
-  t=t.replace(/\b(api_key|apikey|secret|password|passwd|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1=[已隐藏]');
+  t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,I18N.t("sre.redacted_key","[已隐藏密钥]")); // API 密钥
+  t=t.replace(/\b(api_key|apikey|secret|password|passwd|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1='+I18N.t("sre.redacted","[已隐藏]"));
   return t.trim();
 }
 // 轻量 Markdown 渲染：先转义 HTML 防 XSS，再套用有限格式（加粗/斜体/有序无序列表/换行）。
@@ -1801,8 +1801,8 @@ function renderAIMarkdown(raw){
     else { close(); html+=(line.trim()==="")?"":("<div>"+line+"</div>"); }
   }
   close();
-  html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>{ const b=blocks[+i]||{code:""}; const lang=b.lang||"代码"; // 6) 还原代码块：语言标签 + 独立复制按钮
-    return "<div class=\"ai-code-wrap\"><div class=\"ai-code-head\"><span class=\"ai-code-lang\">"+esc(lang)+"</span><button class=\"ai-code-copy\" type=\"button\" title=\"复制代码\">复制</button></div><pre class=\"ai-code\"><code>"+highlightCode(b.code,b.lang)+"</code></pre></div>"; });
+  html=html.replace(/SNTLCB(\d+)SNTL/g,(m,i)=>{ const b=blocks[+i]||{code:""}; const lang=b.lang||I18N.t("sre.code","代码"); // 6) 还原代码块：语言标签 + 独立复制按钮
+    return "<div class=\"ai-code-wrap\"><div class=\"ai-code-head\"><span class=\"ai-code-lang\">"+esc(lang)+"</span><button class=\"ai-code-copy\" type=\"button\" title=\""+I18N.t("sre.copy_code","复制代码")+"\">"+I18N.t("sre.copy","复制")+"</button></div><pre class=\"ai-code\"><code>"+highlightCode(b.code,b.lang)+"</code></pre></div>"; });
   return html;
 }
 // AI 对话消息区：判断是否贴底（供流式时决定要不要自动滚动）
@@ -1812,7 +1812,7 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">AI 运维助手已就绪</div><div class="ai-welcome-sub">描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。</div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。")}</div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 function openAIChat(){
   newAIChat();
   $("aiChatMask").classList.add("show");
@@ -1847,7 +1847,7 @@ function renderAISuggest(){
   const items=dyn.concat(cur);
   if(!items.length){ box.style.display="none"; return; }
   box.style.display="";
-  box.innerHTML=`<div class="ai-suggest-head"><span>💡 试试这些问题</span><button class="ai-suggest-refresh" title="换一批推荐">↻ 换一批</button></div>`+
+  box.innerHTML=`<div class="ai-suggest-head"><span>💡 ${I18N.t("sre.try_questions","试试这些问题")}</span><button class="ai-suggest-refresh" title="${I18N.t("sre.refresh_suggest_title","换一批推荐")}">↻ ${I18N.t("sre.refresh_batch","换一批")}</button></div>`+
     `<div class="ai-suggest-chips">`+items.map(q=>`<button class="ai-suggest-chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")+`</div>`;
   const rf=box.querySelector(".ai-suggest-refresh"); if(rf) rf.onclick=renderAISuggest;
   box.querySelectorAll(".ai-suggest-chip").forEach(b=>b.onclick=()=>{ const inp=$("aiChatInput"); if(inp) inp.value=b.dataset.q; sendAIChat(); });
@@ -1859,10 +1859,10 @@ async function loadAISessions(){
     const r=await fetch(`${API}/hermes/sessions`);
     if(!r.ok) return;
     const list=await r.json();
-    sel.innerHTML=`<option value="">＋ 新会话</option>`+
+    sel.innerHTML=`<option value="">＋ ${I18N.t("sre.new_session","新会话")}</option>`+
       (Array.isArray(list)?list:[]).map(s=>{
         const cnt=s.msg_count?` (${s.msg_count})`:"";
-        return `<option value="${s.id}">${esc((s.title||"会话")+cnt)}</option>`;
+        return `<option value="${s.id}">${esc((s.title||I18N.t("sre.session","会话"))+cnt)}</option>`;
       }).join("");
     sel.value=AI_CHAT_SESSION?String(AI_CHAT_SESSION):"";
   }catch(e){ /* 无 PG / 接口不可用时静默 */ }
@@ -1884,11 +1884,11 @@ async function switchAISession(id){
             ? `<div class="ai-chat-msg me">${esc(m.content||"")}</div>`
             : `<div class="ai-chat-msg ai">${renderAIMarkdown(filterDisplayContent(m.content||""))}</div>`
           ).join("")
-        : `<div class="ai-chat-msg sys">（空会话）</div>`;
+        : `<div class="ai-chat-msg sys">${I18N.t("sre.empty_session","（空会话）")}</div>`;
       log.querySelectorAll(".ai-chat-msg.ai").forEach(d=>addCopyTool(d,d.textContent));
       log.scrollTop=log.scrollHeight;
     }
-  }catch(e){ if(typeof toast==="function") toast("加载会话失败："+e,"err"); }
+  }catch(e){ if(typeof toast==="function") toast(I18N.t("sre.load_session_failed","加载会话失败")+"："+e,"err"); }
 }
 // 会话有更新后延迟刷新列表（合并短时间内多次更新）
 let _aiSessTimer=null;
@@ -1916,7 +1916,7 @@ function setAIChatBusyUI(busy){
 function autoGrowAIInput(){ const t=$("aiChatInput"); if(!t) return; t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,168)+"px"; }
 function renderQueueHint(){
   const el=$("aiChatQueue"); if(!el) return;
-  el.textContent=AI_CHAT_QUEUE.length?`⏳ 已排队 ${AI_CHAT_QUEUE.length} 条，将在当前回复完成后依次发送`:"";
+  el.textContent=AI_CHAT_QUEUE.length?`⏳ ${I18N.t("sre.queued","已排队")} ${AI_CHAT_QUEUE.length} ${I18N.t("sre.queued_suffix","条，将在当前回复完成后依次发送")}`:"";
 }
 async function sendAIChat(){
   const inp=$("aiChatInput"); if(!inp) return;
@@ -1933,13 +1933,13 @@ async function sendAIChat(){
   _aiChatBusy=true; _aiChatAborted=false; setAIChatBusyUI(true);
   _aiChatAbort=(typeof AbortController!=="undefined")?new AbortController():null;
   const imgN=atts.filter(a=>a.kind==="image").length, fileN=atts.filter(a=>a.kind==="file").length;
-  const attNote=atts.length?`　<span class="ai-att-note">📎 ${imgN?imgN+" 图 ":""}${fileN?fileN+" 文件":""}</span>`:"";
+  const attNote=atts.length?`　<span class="ai-att-note">📎 ${imgN?imgN+" "+I18N.t("sre.unit_images","图")+" ":""}${fileN?fileN+" "+I18N.t("sre.unit_files","文件"):""}</span>`:"";
   const log=$("aiChatLog");
-  if(log){ const d=document.createElement("div"); d.className="ai-chat-msg me"; d.innerHTML=esc(msg||"（附件）")+attNote; log.appendChild(d); log.scrollTop=log.scrollHeight; }
-  AI_CHAT_HISTORY.push({role:"user",content:msg||"（附件）"});
+  if(log){ const d=document.createElement("div"); d.className="ai-chat-msg me"; d.innerHTML=esc(msg||I18N.t("sre.attachment_only","（附件）"))+attNote; log.appendChild(d); log.scrollTop=log.scrollHeight; }
+  AI_CHAT_HISTORY.push({role:"user",content:msg||I18N.t("sre.attachment_only","（附件）")});
   AI_ATTACHMENTS=[]; renderAttachments();
   const pending=appendChatMsg("assistant","");
-  if(pending) pending.innerHTML='<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">正在思考…</span></div>';
+  if(pending) pending.innerHTML='<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">'+I18N.t("sre.thinking","正在思考…")+'</span></div>';
   let answer="";
   try{
     const images=atts.filter(a=>a.kind==="image").map(a=>({mime:a.mime,data:a.data}));
@@ -2009,8 +2009,8 @@ async function sendAIChat(){
     if(answer){ AI_CHAT_HISTORY.push({role:"assistant",content:answer}); addCopyTool(pending,answer); }
     refreshAISessionsSoon();
   }catch(e){
-    if(_aiChatAborted || (e&&e.name==="AbortError")){ if(pending){ pending.textContent="⏹ 已终止"; pending.className="ai-chat-msg sys"; } }
-    else if(pending){ pending.textContent="✗ 请求失败："+e; pending.classList.add("err"); }
+    if(_aiChatAborted || (e&&e.name==="AbortError")){ if(pending){ pending.textContent="⏹ "+I18N.t("sre.aborted","已终止"); pending.className="ai-chat-msg sys"; } }
+    else if(pending){ pending.textContent="✗ "+I18N.t("sre.request_failed","请求失败")+"："+e; pending.classList.add("err"); }
   }
   finally{
     _aiChatBusy=false; _aiChatAbort=null; setAIChatBusyUI(false);
@@ -2031,14 +2031,14 @@ function stopAIChat(){
 }
 // 撤销上一轮问答：移除末尾 user+assistant 气泡 + 本地历史 + 服务端会话截断，并回填到输入框
 async function undoAIChat(){
-  if(_aiChatBusy){ if(typeof toast==="function") toast("生成中，请先终止再撤销","err"); return; }
+  if(_aiChatBusy){ if(typeof toast==="function") toast(I18N.t("sre.gen_stop_first_undo","生成中，请先终止再撤销"),"err"); return; }
   const log=$("aiChatLog"); if(!log) return;
   let lastUser="";
   for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ lastUser=AI_CHAT_HISTORY[i].content; break; } }
   if(AI_CHAT_HISTORY.length && AI_CHAT_HISTORY[AI_CHAT_HISTORY.length-1].role==="assistant") AI_CHAT_HISTORY.pop();
   if(AI_CHAT_HISTORY.length && AI_CHAT_HISTORY[AI_CHAT_HISTORY.length-1].role==="user") AI_CHAT_HISTORY.pop();
   const bubbles=()=>Array.from(log.querySelectorAll(".ai-chat-msg")).filter(b=>!b.classList.contains("sys"));
-  if(!bubbles().length){ if(typeof toast==="function") toast("没有可撤销的对话","err"); return; }
+  if(!bubbles().length){ if(typeof toast==="function") toast(I18N.t("sre.no_undo","没有可撤销的对话"),"err"); return; }
   const lastAi=[...bubbles()].reverse().find(b=>b.classList.contains("ai")); if(lastAi) lastAi.remove();
   const lastMe=[...bubbles()].reverse().find(b=>b.classList.contains("me")); if(lastMe) lastMe.remove();
   if(AI_CHAT_SESSION){ try{ await fetch(`${API}/hermes/sessions/${AI_CHAT_SESSION}/undo`,{method:"POST"}); }catch(e){} refreshAISessionsSoon(); }
@@ -2054,22 +2054,22 @@ function addCopyTool(div,rawText){
   if(!div) return;
   // 代码块独立复制（复制对应 <pre> 内容）
   div.querySelectorAll(".ai-code-copy").forEach(b=>{
-    b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent="已复制"; setTimeout(()=>b.textContent="复制",1200); } };
+    b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>b.textContent=I18N.t("sre.copy","复制"),1200); } };
   });
   const bar=document.createElement("div"); bar.className="ai-msg-tools";
-  const btn=document.createElement("button"); btn.textContent="复制"; btn.title="复制回复";
-  btn.onclick=()=>{ copyText(rawText); btn.textContent="已复制"; setTimeout(()=>{ btn.textContent="复制"; },1200); };
+  const btn=document.createElement("button"); btn.textContent=I18N.t("sre.copy","复制"); btn.title=I18N.t("sre.copy_reply","复制回复");
+  btn.onclick=()=>{ copyText(rawText); btn.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>{ btn.textContent=I18N.t("sre.copy","复制"); },1200); };
   bar.appendChild(btn);
-  const rebtn=document.createElement("button"); rebtn.textContent="重答"; rebtn.title="用上一条问题重新回答";
+  const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
   rebtn.onclick=regenerateAIChat;
   bar.appendChild(rebtn);
   div.appendChild(bar);
 }
 // 重答：取最近一条用户提问重新发送（追加一轮新回答）
 function regenerateAIChat(){
-  if(_aiChatBusy){ if(typeof toast==="function") toast("生成中，请先终止再重答","err"); return; }
+  if(_aiChatBusy){ if(typeof toast==="function") toast(I18N.t("sre.gen_stop_first_regen","生成中，请先终止再重答"),"err"); return; }
   let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
-  if(!q){ if(typeof toast==="function") toast("暂无可重答的问题","err"); return; }
+  if(!q){ if(typeof toast==="function") toast(I18N.t("sre.no_regen","暂无可重答的问题"),"err"); return; }
   const inp=$("aiChatInput"); if(inp){ inp.value=q; if(typeof autoGrowAIInput==="function") autoGrowAIInput(); }
   sendAIChat();
 }
@@ -2078,7 +2078,7 @@ function renderAttachments(){
   const box=$("aiChatAttach"); if(!box) return;
   if(!AI_ATTACHMENTS.length){ box.innerHTML=""; box.style.display="none"; return; }
   box.style.display="flex";
-  box.innerHTML=AI_ATTACHMENTS.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-att="${i}" title="移除">✕</button></span>`).join("");
+  box.innerHTML=AI_ATTACHMENTS.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-att="${i}" title="${I18N.t("sre.remove","移除")}">✕</button></span>`).join("");
   box.querySelectorAll("[data-att]").forEach(b=>b.onclick=()=>{ AI_ATTACHMENTS.splice(parseInt(b.dataset.att),1); renderAttachments(); });
 }
 // 需服务端解析的二进制文档（其余文本文件前端直接读文本）
@@ -2089,16 +2089,16 @@ function onAIChatFiles(ev){
   const files=Array.from((ev.target&&ev.target.files)||[]);
   for(const f of files){
     if(f.type&&f.type.startsWith("image/")){
-      if(AI_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast("最多 4 张图片","err"); continue; }
-      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`图片 ${f.name} 超过 4MB`,"err"); continue; }
+      if(AI_ATTACHMENTS.filter(a=>a.kind==="image").length>=4){ if(typeof toast==="function") toast(I18N.t("sre.max_4_images","最多 4 张图片"),"err"); continue; }
+      if(f.size>4*1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.image","图片")} ${f.name} ${I18N.t("sre.exceeds_4mb","超过 4MB")}`,"err"); continue; }
       const rd=new FileReader();
       rd.onload=()=>{ const s=String(rd.result||""); const c=s.indexOf(","); AI_ATTACHMENTS.push({kind:"image",name:f.name,mime:f.type||"image/png",data:c>=0?s.slice(c+1):s}); renderAttachments(); };
       rd.readAsDataURL(f);
     } else if(_AI_PARSE_EXT.includes(_extOf(f.name))){
-      if(f.size>10*1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 10MB`,"err"); continue; }
+      if(f.size>10*1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.file","文件")} ${f.name} ${I18N.t("sre.exceeds_10mb","超过 10MB")}`,"err"); continue; }
       parseFileAttachment(f); // 二进制文档 → 服务端解析
     } else {
-      if(f.size>1024*1024){ if(typeof toast==="function") toast(`文件 ${f.name} 超过 1MB，请上传关键片段`,"err"); continue; }
+      if(f.size>1024*1024){ if(typeof toast==="function") toast(`${I18N.t("sre.file","文件")} ${f.name} ${I18N.t("sre.exceeds_1mb_hint","超过 1MB，请上传关键片段")}`,"err"); continue; }
       const rd=new FileReader();
       rd.onload=()=>{ AI_ATTACHMENTS.push({kind:"file",name:f.name,text:String(rd.result||"")}); renderAttachments(); };
       rd.readAsText(f);
@@ -2111,31 +2111,31 @@ function parseFileAttachment(f){
   const rd=new FileReader();
   rd.onload=async()=>{
     const s=String(rd.result||""); const c=s.indexOf(","); const b64=c>=0?s.slice(c+1):s;
-    const ph={kind:"file",name:f.name,text:"（解析中…）"};
+    const ph={kind:"file",name:f.name,text:I18N.t("sre.parsing","（解析中…）")};
     AI_ATTACHMENTS.push(ph); renderAttachments();
     try{
       const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:f.name,mime:f.type||"",data:b64})});
       const j=await r.json().catch(()=>({}));
-      if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
+      if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
       ph.text=j.text||""; renderAttachments();
-      if(typeof toast==="function") toast(`已解析 ${f.name}（${j.chars||0} 字${j.truncated?"，已截断":""}）`,"ok");
-    }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`解析 ${f.name} 失败`,"err"); renderAttachments(); }
+      if(typeof toast==="function") toast(`${I18N.t("sre.parsed_v","已解析")} ${f.name}（${j.chars||0} ${I18N.t("sre.chars_unit","字")}${j.truncated?I18N.t("sre.truncated","，已截断"):""}）`,"ok");
+    }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}`,"err"); renderAttachments(); }
   };
   rd.readAsDataURL(f);
 }
 // 识别 URL：抓取网页正文作为附件注入上下文
 async function attachURL(){
-  const u=(typeof prompt==="function")?prompt("输入要抓取的网页 URL（将提取正文注入对话）："):"";
+  const u=(typeof prompt==="function")?prompt(I18N.t("sre.url_prompt","输入要抓取的网页 URL（将提取正文注入对话）：")):"";
   if(!u||!u.trim()) return;
-  const ph={kind:"file",name:u.trim().slice(0,60),text:"（抓取中…）"};
+  const ph={kind:"file",name:u.trim().slice(0,60),text:I18N.t("sre.fetching_web","（抓取中…）")};
   AI_ATTACHMENTS.push(ph); renderAttachments();
   try{
     const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:u.trim()})});
     const j=await r.json().catch(()=>({}));
-    if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`抓取失败：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
+    if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.fetch_failed","抓取失败")}：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
     ph.text=`[来源 URL: ${u.trim()}]\n`+(j.text||""); renderAttachments();
-    if(typeof toast==="function") toast(`已抓取（${j.chars||0} 字${j.truncated?"，已截断":""}）`,"ok");
-  }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast("抓取失败","err"); renderAttachments(); }
+    if(typeof toast==="function") toast(`${I18N.t("sre.fetched","已抓取")}（${j.chars||0} ${I18N.t("sre.chars_unit","字")}${j.truncated?I18N.t("sre.truncated","，已截断"):""}）`,"ok");
+  }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(I18N.t("sre.fetch_failed","抓取失败"),"err"); renderAttachments(); }
 }
 safeAddEventListener("logSearchBtn","click",searchLogs);
 safeAddEventListener("logKeyword","keydown",e=>{ if(e.key==="Enter") searchLogs(); });
