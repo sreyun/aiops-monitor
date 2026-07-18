@@ -97,14 +97,20 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 }
 
 // serverURL returns the externally-reachable base URL for agent install scripts.
+// It "follows the browser": the generated install / uninstall command carries the
+// exact address the admin used to reach the panel, which is by definition reachable.
 //
 // Priority:
-//  1. public_url (explicit admin config or AIOPS_PUBLIC_URL env var)
-//  2. X-Forwarded-Host (reverse proxy)
-//  3. Auto-detected LAN IP when r.Host is loopback — fixes the case where the
-//     admin browses from localhost:8529 and remote agents inherit that
-//     unreachable address (connection refused)
-//  4. r.Host (request Host header, legacy fallback)
+//  1. public_url (explicit admin config or AIOPS_PUBLIC_URL env var) — the reliable
+//     override for reverse-proxy / stable-domain deployments.
+//  2. The request address the admin's browser used: X-Forwarded-Host/Proto behind a
+//     proxy, otherwise r.Host (and r.TLS for scheme).
+//
+// We deliberately do NOT guess a LAN IP by scanning interfaces. Inside a container
+// that resolves to the container's own docker-network address (e.g. 172.18.0.4),
+// which is unreachable from anywhere else — the #1 cause of "install command points
+// at the wrong address". Browsing the panel via a real address, or setting public_url,
+// is both correct and predictable.
 func (s *Server) serverURL(r *http.Request) string {
 	if u := s.cfg.PublicURL(); u != "" {
 		return u
@@ -113,30 +119,24 @@ func (s *Server) serverURL(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+	if p := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); p != "" {
 		scheme = p
 	}
 	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+	if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
 		host = h
 	}
-	// Loopback auto-detect: when the admin browses from localhost (typical for
-	// same-machine panel access), substitute the server's LAN IP so that remote
-	// agents don't inherit an unreachable localhost address. This eliminates the
-	// need to manually set public_url in the common case.
-	if ip := s.cfg.DetectedHostIP(); ip != "" {
-		hostname := host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			hostname = h
-		}
-		if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
-			if _, port, err := net.SplitHostPort(host); err == nil {
-				return scheme + "://" + ip + ":" + port
-			}
-			return scheme + "://" + ip
-		}
-	}
 	return scheme + "://" + host
+}
+
+// firstForwardedValue returns the first comma-separated token of an X-Forwarded-*
+// header, trimmed. Proxies may append a list (e.g. "https, http"); the first entry
+// is the value seen by the client-facing hop.
+func firstForwardedValue(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 // ---- secret masking helpers ----

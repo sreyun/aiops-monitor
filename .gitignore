@@ -50,7 +50,7 @@ docker/.env
 
 # 自动生成的检测/测试/日志文件（保留目录结构，忽略内容）
 # Agent go:embed 构建时复制的配置示例（源文件在项目根目录）
-cmd/agent/config_example.json
+cmd/agent/config_example.yaml
 generated/reports/*
 !generated/reports/.gitkeep
 generated/logs/*

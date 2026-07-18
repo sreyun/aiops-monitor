@@ -434,7 +434,8 @@ func newSNMPCollector(cfg SNMPConfig, hostID, fp string) *snmpCollector {
 // run 每 target 一个 goroutine，仿 redfishCollector.run。
 func (sc *snmpCollector) run(reporter func(shared.SNMPReport)) {
 	for _, t := range sc.cfg.Targets {
-		go sc.pollLoop(t, reporter)
+		// goroutine 层 recover 兜底（pollLoop 内另有每-tick recover）。
+		go runSafe("snmp-pollloop:"+t.Name, func() { sc.pollLoop(t, reporter) })
 	}
 }
 
@@ -460,9 +461,9 @@ func (sc *snmpCollector) pollLoop(t SNMPTarget, reporter func(shared.SNMPReport)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	sc.pollAndReport(t, reporter, &failCount)
+	runSafe("snmp-poll:"+t.Name, func() { sc.pollAndReport(t, reporter, &failCount) })
 	for range ticker.C {
-		sc.pollAndReport(t, reporter, &failCount)
+		runSafe("snmp-poll:"+t.Name, func() { sc.pollAndReport(t, reporter, &failCount) })
 	}
 }
 

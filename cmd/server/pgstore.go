@@ -2220,6 +2220,36 @@ func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string
 	return results, rows.Err()
 }
 
+// getFlowHosts returns the host_ids that actually have flow records in the window,
+// ranked by total bytes desc (packets as tiebreak so acct-off hosts with 0 bytes but
+// real connections still rank). Powers the "流量页只列有流量的主机" filter —— GROUP BY
+// host_id inherently excludes hosts with no traffic at all.
+func (p *pgStore) getFlowHosts(from, to int64, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := p.db.Query(`
+		SELECT host_id, SUM(bytes)::bigint AS b, SUM(packets)::bigint AS pk, COUNT(*)::bigint AS n
+		FROM flow_records
+		WHERE created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)
+		GROUP BY host_id
+		ORDER BY b DESC, pk DESC LIMIT $3`, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var hid string
+		var b, pk, n int64
+		if err := rows.Scan(&hid, &b, &pk, &n); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{"host_id": hid, "bytes": b, "packets": pk, "flows": n})
+	}
+	return out, rows.Err()
+}
+
 // ============================================================================
 // SNMP PG methods
 // ============================================================================

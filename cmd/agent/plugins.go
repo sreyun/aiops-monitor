@@ -117,6 +117,14 @@ func (p *PluginRunner) RunAll(logf func(string, ...any)) pluginResult {
 	for _, f := range files {
 		wg.Add(1)
 		go func(file string) {
+			// panic 兜底：pluginLoop 的 recover 只护自身栈，护不到这些子协程；一个插件
+			// 输出触发的 panic(如损坏的 map)会打崩整个 agent。defer LIFO 保证 wg.Done/
+			// 释放槽位仍先执行，wg.Wait() 不会因 panic 卡死。
+			defer func() {
+				if r := recover(); r != nil {
+					logf("插件 %s panic 已恢复: %v", pluginName(file), r)
+				}
+			}()
 			sem <- struct{}{}        // acquire slot
 			defer func() { <-sem }() // release slot
 			defer wg.Done()

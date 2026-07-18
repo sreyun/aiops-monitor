@@ -12,7 +12,7 @@ import (
 // falls back to the single server+token config.
 func renderScript(tmpl, server, token, category, serversJSON, logPaths string) string {
 	if strings.TrimSpace(logPaths) == "" {
-		logPaths = "[]" // 必须是合法 JSON 数组，否则生成的 config.json 语法错误
+		logPaths = "[]" // 必须是合法 JSON 数组（同时是合法 YAML flow 序列），否则生成的 config.yaml 语法错误
 	}
 	return strings.NewReplacer(
 		"__SERVER__", server,
@@ -24,7 +24,7 @@ func renderScript(tmpl, server, token, category, serversJSON, logPaths string) s
 }
 
 // sanitizeLogPaths 把用户填写的日志路径（换行或逗号分隔）清洗为一个【合法 JSON 数组字符串】，
-// 用于注入安装脚本生成的 config.json 的 log_paths 字段。
+// 用于注入安装脚本生成的 config.yaml 的 log_paths 字段（JSON 数组同时是合法 YAML flow 序列）。
 // 关键安全点：路径会被写进未加引号的 shell heredoc，若含 $ ` 等会被展开导致命令注入，
 // 因此逐字符白名单（仅保留路径合法字符），再用 json.Marshal 正确转义。
 func sanitizeLogPaths(raw string) string {
@@ -137,47 +137,48 @@ if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
-# config.example.json is written locally by the agent on first start
+# config.example.yaml is written locally by the agent on first start
 # (ensureConfigExample), so we don't fetch it here — that was a wasted 404.
+# YAML is now the default/recommended config format. The JSON arrays injected
+# below (servers / log_paths) are valid YAML flow syntax, so they drop straight in.
 SERVERS_JSON='__SERVERS_JSON__'
 if [ -n "$SERVERS_JSON" ]; then
-  cat > config.json <<EOF
-{
-  "servers": $SERVERS_JSON,
-  "category": "$CATEGORY",
-  "log_paths": __LOG_PATHS__,
-  "report_interval": 30,
-  "plugin_interval": 60,
-  "plugins_dir": "$DIR/plugins",
-  "state_file": "$DIR/agent_state.json"
-}
+  cat > config.yaml <<EOF
+servers: $SERVERS_JSON
+category: "$CATEGORY"
+log_paths: __LOG_PATHS__
+report_interval: 30
+plugin_interval: 60
+plugins_dir: "$DIR/plugins"
+state_file: "$DIR/agent_state.json"
 EOF
 else
-  cat > config.json <<EOF
-{
-  "server": "$SERVER",
-  "token": "$TOKEN",
-  "category": "$CATEGORY",
-  "log_paths": __LOG_PATHS__,
-  "report_interval": 30,
-  "plugin_interval": 60,
-  "plugins_dir": "$DIR/plugins",
-  "state_file": "$DIR/agent_state.json"
-}
+  cat > config.yaml <<EOF
+server: "$SERVER"
+token: "$TOKEN"
+category: "$CATEGORY"
+log_paths: __LOG_PATHS__
+report_interval: 30
+plugin_interval: 60
+plugins_dir: "$DIR/plugins"
+state_file: "$DIR/agent_state.json"
 EOF
 fi
-# Verify config.json was written correctly — on some systems set -e causes the
+# Verify config.yaml was written correctly — on some systems set -e causes the
 # script to exit partway (e.g. plugins download failure) BEFORE reaching here,
-# leaving config.json missing. The agent would then silently use the hardcoded
+# leaving config.yaml missing. The agent would then silently use the hardcoded
 # default (localhost:8529). Catch this early so the user sees the real error.
-if [ ! -s config.json ]; then
-  echo "[AIOps] ERROR: config.json was not created! Installation incomplete."
+if [ ! -s config.yaml ]; then
+  echo "[AIOps] ERROR: config.yaml was not created! Installation incomplete."
   echo "[AIOps] This usually means a download step failed. Re-run the install command."
   exit 1
 fi
-# Restrict config.json to owner-only (contains tokens/secrets).
-chmod 600 config.json 2>/dev/null || true
-echo "[AIOps] config written: $DIR/config.json (server: $SERVER)"
+# Restrict config.yaml to owner-only (contains tokens/secrets).
+chmod 600 config.yaml 2>/dev/null || true
+# Migrate: remove a stale config.json left by a pre-YAML install. The agent now
+# prefers config.yaml, but leaving both would be confusing — drop the old one.
+rm -f config.json 2>/dev/null || true
+echo "[AIOps] config written: $DIR/config.yaml (server: $SERVER)"
 
 if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   # Linux + root → systemd: auto-start on boot + auto-restart on crash/kill.
@@ -189,7 +190,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$DIR
-ExecStart=$DIR/aiops-agent --config $DIR/config.json
+ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5
 [Install]
@@ -224,7 +225,7 @@ elif [ "$OS" = "Darwin" ]; then
   <array>
     <string>$DIR/aiops-agent</string>
     <string>--config</string>
-    <string>$DIR/config.json</string>
+    <string>$DIR/config.yaml</string>
   </array>
   <key>WorkingDirectory</key><string>$DIR</string>
   <key>RunAtLoad</key><true/>
@@ -261,10 +262,10 @@ else
   # Fallback (non-root Linux without systemd): run now + a @reboot crontab entry
   # so it survives reboots. root+systemd is recommended for restart-on-crash too.
   pkill -f "$DIR/aiops-agent" 2>/dev/null || true
-  nohup "$DIR/aiops-agent" --config "$DIR/config.json" > "$DIR/agent.log" 2>&1 &
+  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/agent.log" 2>&1 &
   if command -v crontab >/dev/null 2>&1; then
     ( crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" ; \
-      echo "@reboot $DIR/aiops-agent --config $DIR/config.json >> $DIR/agent.log 2>&1" ) | crontab - 2>/dev/null || true
+      echo "@reboot $DIR/aiops-agent --config $DIR/config.yaml >> $DIR/agent.log 2>&1" ) | crontab - 2>/dev/null || true
     echo "[AIOps] started in background + @reboot autostart added (log: $DIR/agent.log)"
   else
     echo "[AIOps] started in background (log: $DIR/agent.log)"
@@ -282,7 +283,7 @@ echo "[AIOps] done. Check the dashboard for this host."
 //     (HKCU Run + 5-min keepalive), unchanged. No admin required, but it
 //     cannot collect Hyper-V guests — the script says so and points at the
 //     elevated re-run.
-// config.json is UTF-8 (no BOM); the agent is launched via a hidden VBS
+// config.yaml is UTF-8 (no BOM); the agent is launched via a hidden VBS
 // supervisor that only starts it when not already running (no duplicates).
 const installPs1Template = `$ErrorActionPreference = "Stop"
 # Force TLS 1.2 before any download. Windows Server 2012/2016 default Invoke-WebRequest
@@ -330,29 +331,31 @@ try {
 } catch { Write-Host "[AIOps] plugins skipped" }
 
 $ServersJson = '__SERVERS_JSON__'
+# YAML is the default config format. PowerShell has no YAML serializer, so build it
+# by hand: scalar values are single-quoted (backslash-safe for Windows paths; any
+# embedded single-quote is doubled per YAML rules), while the injected JSON arrays
+# (servers / log_paths) are already valid YAML flow syntax and drop in as-is.
+function Yq($s) { "'" + (([string]$s) -replace "'", "''") + "'" }
+$LogPathsYaml = if ($LogPaths -and $LogPaths.Trim() -ne "") { $LogPaths } else { "[]" }
+$PluginsDir = Join-Path $Dir "plugins"
+$StateFile  = Join-Path $Dir "agent_state.json"
+$lines = New-Object System.Collections.Generic.List[string]
 if ($ServersJson -ne "") {
-  $cfg = @{
-    servers = ($ServersJson | ConvertFrom-Json)
-    category = $Category
-    log_paths = @($LogPaths | ConvertFrom-Json)
-    report_interval = 30
-    plugin_interval = 60
-    plugins_dir = "$Dir\plugins"
-    state_file = "$Dir\agent_state.json"
-  } | ConvertTo-Json -Depth 3
+  $lines.Add("servers: $ServersJson")
 } else {
-  $cfg = @{
-    server = $Server
-    token = $Token
-    category = $Category
-    log_paths = @($LogPaths | ConvertFrom-Json)
-    report_interval = 30
-    plugin_interval = 60
-    plugins_dir = "$Dir\plugins"
-    state_file = "$Dir\agent_state.json"
-  } | ConvertTo-Json
+  $lines.Add("server: " + (Yq $Server))
+  $lines.Add("token: " + (Yq $Token))
 }
-[System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
+$lines.Add("category: " + (Yq $Category))
+$lines.Add("log_paths: $LogPathsYaml")
+$lines.Add("report_interval: 30")
+$lines.Add("plugin_interval: 60")
+$lines.Add("plugins_dir: " + (Yq $PluginsDir))
+$lines.Add("state_file: " + (Yq $StateFile))
+$cfg = ($lines -join ([char]10)) + ([char]10)
+[System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
+# Migrate: remove a stale config.json from a pre-YAML install (agent now prefers YAML).
+Remove-Item "$Dir\config.json" -Force -ErrorAction SilentlyContinue
 
 # User-level autostart + keepalive (no admin required).
 # start-agent.vbs is a *supervisor*: it launches the agent ONLY if it is not
@@ -360,7 +363,7 @@ if ($ServersJson -ne "") {
 # ever spawns a duplicate. Two triggers together mean the agent survives both a
 # reboot (Run key at logon) and being stopped/killed (task relaunches within 5m).
 $exe  = "$Dir\aiops-agent.exe"
-$conf = "$Dir\config.json"
+$conf = "$Dir\config.yaml"
 $vbs  = "$Dir\start-agent.vbs"
 $runLine = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $conf + '""", 0, False'
 $vbsBody = @"
@@ -443,18 +446,17 @@ cd "$DIR"
 curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent || curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
 chmod +x aiops-agent
 
-cat > config.json <<EOF
-{
-  "relay": true,
-  "listen": "$LISTEN",
-  "server": "$SERVER"
-}
+cat > config.yaml <<EOF
+relay: true
+listen: "$LISTEN"
+server: "$SERVER"
 EOF
-if [ ! -s config.json ]; then
-  echo "[AIOps] ERROR: config.json was not created! Installation incomplete."
+if [ ! -s config.yaml ]; then
+  echo "[AIOps] ERROR: config.yaml was not created! Installation incomplete."
   exit 1
 fi
-echo "[AIOps] config written: $DIR/config.json (upstream: $SERVER, listen: $LISTEN)"
+rm -f config.json 2>/dev/null || true
+echo "[AIOps] config written: $DIR/config.yaml (upstream: $SERVER, listen: $LISTEN)"
 
 if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
   cat > /etc/systemd/system/aiops-relay.service <<UNIT
@@ -465,7 +467,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$DIR
-ExecStart=$DIR/aiops-agent --config $DIR/config.json
+ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5
 [Install]
@@ -476,7 +478,7 @@ UNIT
   echo "[AIOps] relay systemd service started: aiops-relay (listen $LISTEN)"
 else
   pkill -f "$DIR/aiops-agent.*relay" 2>/dev/null || true
-  nohup "$DIR/aiops-agent" --config "$DIR/config.json" > "$DIR/relay.log" 2>&1 &
+  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/relay.log" 2>&1 &
   echo "[AIOps] relay started in background (log: $DIR/relay.log)"
 fi
 RELAY_PORT="${LISTEN##*:}"
@@ -501,15 +503,19 @@ Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -Err
 Start-Sleep -Milliseconds 800
 Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
 
-$cfg = @{
-  relay  = $true
-  listen = $Listen
-  server = $Server
-} | ConvertTo-Json
-[System.IO.File]::WriteAllText("$Dir\config.json", $cfg, (New-Object System.Text.UTF8Encoding $false))
+# YAML is the default config format (single-quoted scalars are backslash-safe; any
+# embedded single-quote is doubled per YAML rules). No YAML serializer in PowerShell.
+$RelayLines = New-Object System.Collections.Generic.List[string]
+$RelayLines.Add("relay: true")
+$RelayLines.Add("listen: '" + (([string]$Listen) -replace "'", "''") + "'")
+$RelayLines.Add("server: '" + (([string]$Server) -replace "'", "''") + "'")
+$cfg = ($RelayLines -join ([char]10)) + ([char]10)
+[System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
+# Migrate: remove a stale config.json from a pre-YAML install (agent now prefers YAML).
+Remove-Item "$Dir\config.json" -Force -ErrorAction SilentlyContinue
 
 $exe  = "$Dir\aiops-agent.exe"
-$conf = "$Dir\config.json"
+$conf = "$Dir\config.yaml"
 $vbs  = "$Dir\start-relay.vbs"
 $line = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $conf + '""", 0, False'
 [System.IO.File]::WriteAllText($vbs, $line, (New-Object System.Text.ASCIIEncoding))
@@ -602,7 +608,7 @@ Start-Sleep -Seconds 3
 # Step 5: Delete files with retry logic (handles stubborn file locks), for BOTH
 # install locations. Delete VBS files FIRST -- removing them prevents wscript.exe
 # from being relaunched by the Run registry.
-$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.json", "agent_state.json", "agent.log", "plugins.zip")
+$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.yaml", "config.json", "agent_state.json", "agent.log", "plugins.zip")
 foreach ($Dir in $Dirs) {
     foreach ($f in $files) {
         $path = Join-Path $Dir $f

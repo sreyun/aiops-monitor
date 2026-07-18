@@ -4,6 +4,7 @@ package main
 // 上报服务端。结构与 netflowReceiver 同构（UDP 监听 + 周期 flush + mutex 保护 batch）。
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -51,7 +52,7 @@ func (tr *snmpTrapReceiver) run(reporter func(shared.SNMPTrapReport)) {
 		ticker := time.NewTicker(snmpTrapFlushSec * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			tr.flush(reporter)
+			runSafe("snmp-trap-flush", func() { tr.flush(reporter) })
 		}
 	}()
 
@@ -59,8 +60,14 @@ func (tr *snmpTrapReceiver) run(reporter func(shared.SNMPTrapReport)) {
 	for {
 		n, src, err := conn.ReadFrom(buf)
 		if err != nil {
-			slog.Warn("SNMP Trap UDP 读取错误", "err", err)
-			return
+			// 仅连接关闭时退出。瞬时读错误必须 continue，否则接收器永久静默失效——
+			// Windows 上尤其危险：v3 inform 回包发给不可达主机后，ICMP port-unreachable
+			// 会让下一次 ReadFrom 返回 WSAECONNRESET(10054)，此前的 return 会直接杀死接收器。
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			slog.Warn("SNMP Trap UDP 读取错误，继续", "err", err)
+			continue
 		}
 		if n < 2 {
 			continue
@@ -71,7 +78,7 @@ func (tr *snmpTrapReceiver) run(reporter func(shared.SNMPTrapReport)) {
 		}
 		data := make([]byte, n)
 		copy(data, buf[:n])
-		tr.parseTrap(data, srcIP, src)
+		runSafe("snmp-trap-parse", func() { tr.parseTrap(data, srcIP, src) })
 	}
 }
 

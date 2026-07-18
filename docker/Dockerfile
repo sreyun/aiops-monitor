@@ -26,7 +26,7 @@ COPY vendor/ vendor/
 COPY shared/ shared/
 COPY cmd/ cmd/
 # 将配置示例复制到 cmd/agent/ 以供 go:embed 内嵌（.gitignore 排除，构建时复制）
-COPY config.example.json cmd/agent/config_example.json
+COPY config.example.yaml cmd/agent/config_example.yaml
 
 # Server + agent binaries for THIS image's target arch (native cross-compile).
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
@@ -63,7 +63,7 @@ WORKDIR /app
 
 COPY --from=builder /out/aiops-server /app/aiops-server
 COPY --from=builder /out/dist/ /app/dist/
-COPY config.example.json /app/dist/config.example.json
+COPY config.example.yaml /app/dist/config.example.yaml
 COPY plugins/ /tmp/plugins/
 RUN cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
 

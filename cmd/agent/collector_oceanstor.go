@@ -105,11 +105,13 @@ func (oc *oceanStorCollector) pollLoop(t OceanStorTarget, reporter func(shared.H
 	slog.Info("OceanStor 采集器启动", "target", t.Name, "url", t.URL, "interval", interval)
 
 	emit := func() {
-		snap := oc.collectOne(t)
-		if snap.Error != "" {
-			slog.Warn("OceanStor 采集失败", "target", t.Name, "err", snap.Error)
-		}
-		oc.storeAndReport(snap, reporter)
+		runSafe("oceanstor:"+t.Name, func() {
+			snap := oc.collectOne(t)
+			if snap.Error != "" {
+				slog.Warn("OceanStor 采集失败", "target", t.Name, "err", snap.Error)
+			}
+			oc.storeAndReport(snap, reporter)
+		})
 	}
 	emit()
 	ticker := time.NewTicker(interval)

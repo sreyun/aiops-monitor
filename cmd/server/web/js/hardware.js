@@ -222,8 +222,13 @@ function renderHardwarePanel() {
     const first = items.find(it => hwIsBad(it.snap.health)) || items[0];
     HW_SEL = first ? hwKeyOf(first) : null;
   }
+  const hwCol = window.treeCollapsed && window.treeCollapsed("aiops_hw_tree");
   container.innerHTML = hwToolbarHTML(items.length, HW_RESULTS.length) +
-    `<div class="hwx-wrap"><div class="hwx-tree" id="hwxTree">${hwTreeHTML()}</div><div class="hwx-detail" id="hwxDetail"></div></div>`;
+    `<div class="hwx-wrap tree-wrap${hwCol ? " tree-collapsed" : ""}">` +
+      `<div class="hwx-tree tree-pane" id="hwxTree">${hwTreeHTML()}</div>` +
+      `<button class="tree-toggle-btn" data-tree-toggle="aiops_hw_tree" title="收起/展开设备列表，给右侧腾空间" aria-expanded="${hwCol ? "false" : "true"}">${hwCol ? "›" : "‹"}</button>` +
+      `<div class="hwx-detail" id="hwxDetail"></div>` +
+    `</div>`;
   hwRenderDetail();
 }
 

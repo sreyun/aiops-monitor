@@ -1,6 +1,23 @@
 package main
 
-import "aiops-monitor/shared"
+import (
+	"log/slog"
+
+	"aiops-monitor/shared"
+)
+
+// runSafe 执行 fn 并捕获 panic，避免任一采集协程的单点 panic 打崩整个 agent（Go 里任一
+// 未捕获 panic 会杀死整个进程 → 被 keepalive 反复重启，表现为"安装后不稳定/频繁重启"）。
+// 用法：在【每轮迭代体】里调用（如 for range ticker.C { runSafe("xxx", work) }），
+// 这样单次崩溃被吞掉、循环继续，而不是整个采集器退出。解析不可信网络输入的采集器尤须如此。
+func runSafe(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("采集协程 panic 已恢复（不影响其它采集）", "collector", name, "panic", r)
+		}
+	}()
+	fn()
+}
 
 // Collector gathers base system metrics natively. Implementations are
 // platform-specific and selected at build time via build tags:

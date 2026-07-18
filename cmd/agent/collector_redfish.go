@@ -145,7 +145,9 @@ func newRedfishCollector(targets []RedfishTarget, hostID, fp string) *redfishCol
 // run starts one goroutine per target. Called from Agent.Run().
 func (rc *redfishCollector) run(reporter func(shared.HardwareReport)) {
 	for _, t := range rc.targets {
-		go rc.pollLoop(t, reporter)
+		// goroutine 层 recover：兜住首次采集/setup 的 panic，不让单个采集器崩溃拖垮整个
+		// agent（循环体内另有每-tick recover 保证 tick 崩溃后循环继续）。
+		go runSafe("redfish-pollloop:"+t.Name, func() { rc.pollLoop(t, reporter) })
 	}
 }
 
@@ -179,20 +181,22 @@ func (rc *redfishCollector) pollLoop(t RedfishTarget, reporter func(shared.Hardw
 	rc.storeAndReport(t, snap, reporter)
 
 	for range ticker.C {
-		snap := rc.collectOne(t)
-		if snap.Error != "" {
-			failCount++
-			slog.Warn("Redfish 采集失败", "target", t.Name, "err", snap.Error, "consecutive", failCount)
-			if failCount >= 3 {
-				// Backoff to 5 minutes on consecutive failures
-				slog.Error("Redfish 连续失败，退避 5 分钟", "target", t.Name)
-				time.Sleep(5 * time.Minute)
+		runSafe("redfish:"+t.Name, func() {
+			snap := rc.collectOne(t)
+			if snap.Error != "" {
+				failCount++
+				slog.Warn("Redfish 采集失败", "target", t.Name, "err", snap.Error, "consecutive", failCount)
+				if failCount >= 3 {
+					// Backoff to 5 minutes on consecutive failures
+					slog.Error("Redfish 连续失败，退避 5 分钟", "target", t.Name)
+					time.Sleep(5 * time.Minute)
+					failCount = 0
+				}
+			} else {
 				failCount = 0
 			}
-		} else {
-			failCount = 0
-		}
-		rc.storeAndReport(t, snap, reporter)
+			rc.storeAndReport(t, snap, reporter)
+		})
 	}
 }
 

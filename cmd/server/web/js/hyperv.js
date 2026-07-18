@@ -177,8 +177,8 @@ function hvHostNode(inv) {
 
 function hvToolbar(totalHosts, totalVMs, totalBad) {
   return `<div class="hw-toolbar" style="margin-bottom:10px">
-    <input id="hvSearch" class="input sm" type="text" placeholder="${esc(hvT("hyperv.search", "搜索 VM 名称 / IP / 状态…"))}" value="${esc(HV_FILTER.q)}" style="flex:1;min-width:120px">
-    <select id="hvStatusFilter" class="input sm" style="max-width:130px">
+    <input id="hvSearch" class="hw-search" type="search" placeholder="${esc(hvT("hyperv.search", "搜索 VM 名称 / IP / 状态…"))}" value="${esc(HV_FILTER.q)}">
+    <select id="hvStatusFilter" class="hw-sel" style="max-width:150px">
       <option value="">${esc(hvT("hyperv.f_all", "全部状态"))}</option>
       <option value="running"${HV_FILTER.status === "running" ? " selected" : ""}>${esc(hvT("hyperv.st_running", "运行中"))}</option>
       <option value="notrunning"${HV_FILTER.status === "notrunning" ? " selected" : ""}>${esc(hvT("hyperv.f_notrunning", "非运行"))}</option>
@@ -346,7 +346,12 @@ function renderHyperVPanel() {
     (b.guests || []).filter(hvAbnormal).length - (a.guests || []).filter(hvAbnormal).length);
   const tree = hvToolbar(HV_INVENTORIES.length, totalVMs, totalBad) +
     `<div class="hv-treebox">${hosts.map(hvHostNode).join("")}</div>`;
-  container.innerHTML = `<div class="hv-wrap"><div class="hv-tree" id="hvTree">${tree}</div><div class="hv-detail" id="hvDetail">${hvDetail()}</div></div>`;
+  const hvCol = window.treeCollapsed && window.treeCollapsed("aiops_hv_tree");
+  container.innerHTML = `<div class="hv-wrap tree-wrap${hvCol ? " tree-collapsed" : ""}">` +
+      `<div class="hv-tree tree-pane" id="hvTree">${tree}</div>` +
+      `<button class="tree-toggle-btn" data-tree-toggle="aiops_hv_tree" title="收起/展开虚拟机列表，给右侧腾空间" aria-expanded="${hvCol ? "false" : "true"}">${hvCol ? "›" : "‹"}</button>` +
+      `<div class="hv-detail" id="hvDetail">${hvDetail()}</div>` +
+    `</div>`;
 }
 
 /* ---------- 事件（全部委托） ---------- */

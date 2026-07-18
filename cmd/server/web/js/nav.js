@@ -324,10 +324,10 @@ const PAGE_META = {
   logs:     { title: "日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
-  hardware:  { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" },
-  hyperv:    { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" },
-  netflow:   { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
-  snmp:      { title: I18N.t("nav.snmp") || "网络设备", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
+  hardware:  { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
+  hyperv:    { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
+  netflow:   { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
+  snmp:      { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).
@@ -345,10 +345,10 @@ function rebuildPageMeta() {
   PAGE_META.logs       = { title: "日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
-  PAGE_META.hardware   = { title: I18N.t("nav.hardware") || "硬件", sub: I18N.t("section.hardware_desc") || "Redfish 服务器硬件状态" };
-  PAGE_META.hyperv     = { title: I18N.t("nav.hyperv") || "虚拟机", sub: I18N.t("section.hyperv_desc") || "Hyper-V 虚拟机状态与资源" };
-  PAGE_META.netflow    = { title: I18N.t("nav.netflow") || "流量", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
-  PAGE_META.snmp       = { title: I18N.t("nav.snmp") || "网络设备", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
+  PAGE_META.hardware   = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
+  PAGE_META.hyperv     = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
+  PAGE_META.netflow    = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
+  PAGE_META.snmp       = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
@@ -358,6 +358,13 @@ const VIEW_TAB_GROUPS = {
   alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
+  // 「网络」父导航：合并 流量(NetFlow) 与 网络设备(SNMP 接口 + Trap)。parent=netflow=第一个子标签。
+  netflow:    { parent: "netflow", tabs: [["netflow", I18N.t("net.tab_traffic") || "流量"], ["snmp", I18N.t("net.tab_devices") || "网络设备"]] },
+  snmp:       { parent: "netflow", tabs: [["netflow", I18N.t("net.tab_traffic") || "流量"], ["snmp", I18N.t("net.tab_devices") || "网络设备"]] },
+  // 「资源」父导航：合并 硬件(Redfish/OceanStor) 与 虚拟机(Hyper-V)。多数虚拟机来自硬件设备，
+  // 故归为同一入口。parent=hardware=第一个子标签，标签复用 nav.hardware / nav.hyperv 三语键。
+  hardware:   { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"]] },
+  hyperv:     { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"]] },
 };
 function renderViewTabs(view) {
   const bar = $("viewTabs"); if (!bar) return;

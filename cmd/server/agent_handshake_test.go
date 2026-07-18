@@ -166,11 +166,21 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		`elif [ "$OS" = "Darwin" ]`, "com.aiops.agent.plist",
 		"<key>RunAtLoad</key><true/>", "<key>KeepAlive</key><true/>",
 		"launchctl load", "Restart=always", "@reboot")
+	// YAML is the default config format now: the script must write config.yaml,
+	// point the service at it, and migrate away any stale config.json.
+	must("install.sh (yaml)", shIn,
+		"cat > config.yaml", "--config $DIR/config.yaml",
+		"rm -f config.json")
 	// Windows: supervisor VBS (no duplicates) + logon autostart + 5-min keepalive task.
 	must("install.ps1", ps1In,
 		"start-agent.vbs", "Win32_Process",
 		`schtasks /Create /TN "AIOpsAgent"`, "/SC MINUTE /MO 5",
 		`CurrentVersion\Run`)
+	// Windows must also write config.yaml (hand-built, no JSON serializer) and
+	// remove a stale config.json from a pre-YAML install.
+	must("install.ps1 (yaml)", ps1In,
+		`WriteAllText("$Dir\config.yaml"`, `$conf = "$Dir\config.yaml"`,
+		`Remove-Item "$Dir\config.json"`)
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")

@@ -1241,6 +1241,10 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 		Task    string `json:"task"`
 		Input   string `json:"input"`
 		Context string `json:"context,omitempty"`
+		History []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"history,omitempty"` // 多轮追问：前几轮 Q&A（基于同一份 context 的会话）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -1267,7 +1271,8 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	// 诊断/分析类任务注入历史记忆（跨会话复用既有排障经验）
 	memKind := "chat"
 	switch req.Task {
-	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis":
+	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis",
+		"hardware_diagnosis", "netflow_diagnosis", "checks_diagnosis", "forward_diagnosis", "apimon_diagnosis":
 		memKind = "diagnosis"
 	}
 	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
@@ -1276,10 +1281,22 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	if userMsg == "" {
 		userMsg = "请根据上述上下文进行分析并给出结论。"
 	}
-	reply, _ := streamChat(r.Context(), w, cfg, []map[string]string{
-		{"role": "system", "content": sys},
-		{"role": "user", "content": userMsg},
-	}, nil)
+	msgs := []map[string]string{{"role": "system", "content": sys}}
+	// 多轮追问：把前几轮 Q&A 拼进来（限长防膨胀）。系统提示词已带同一份数据上下文，
+	// 于是后续追问都基于同一份流量/设备/日志数据展开，实现「基于同一数据的会话交流」。
+	if n := len(req.History); n > 0 {
+		start := 0
+		if n > 20 {
+			start = n - 20
+		}
+		for _, h := range req.History[start:] {
+			if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
+				msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
+			}
+		}
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
+	reply, _ := streamChat(r.Context(), w, cfg, msgs, nil)
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI("assist", "assist:"+req.Task, "【AI 辅助·"+req.Task+"】\n"+userMsg+"\n\n【AI】\n"+reply)
 	}
@@ -1391,6 +1408,12 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"② 逐条列出异常或劣化接口（DOWN、可用率跌破阈值、P95 或平均时延偏高、吞吐异常），按业务影响排序并引用关键指标；\n" +
 			"③ 分析可能原因（后端故障 / 依赖变慢 / 限流 / 网络 / 证书或鉴权失败 等）；\n" +
 			"④ 给出可执行的排查与优化建议，并指出应优先处置的接口。用简洁中文分点作答，只依据给定快照，不臆造；全部达标时也要明确说明「未见异常」。" + ctxBlock
+	case "netflow_diagnosis":
+		return "你是资深网络流量分析与安全专家。以下是某主机在选定时间窗内的 NetFlow/流量快照（按维度的 Top Talkers 流量排行 + Top Flow 明细：源/目的 IP:端口、协议、字节、包数、平均包长、时长）。请：\n" +
+			"① 一句话总体研判该主机流量是否正常（正常/需关注/疑似异常）；\n" +
+			"② 指出异常或可疑模式：单点大流量/带宽打满、疑似端口扫描（同源大量不同目的端口或目的 IP）、疑似 DDoS 或反射放大（海量小包、UDP 突增）、异常外联（可疑目的 IP/端口、非业务端口外发）、数据外泄迹象（大流量上行到陌生外部地址）；\n" +
+			"③ 分析可能原因与风险；\n" +
+			"④ 给出可执行的排查与处置建议（抓包定位、封禁/限速、核实对应进程与业务等）。用简洁中文分点作答，只依据给定快照，不臆造；未见异常时也要明确说明「未见异常」。" + ctxBlock
 	default: // generic
 		return "你是资深 SRE / 运维助手，用简洁中文帮助运维人员处理监控、告警、排障、性能、日志与自动化相关问题；无关问题礼貌拒答。" + ctxBlock
 	}

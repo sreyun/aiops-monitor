@@ -94,9 +94,10 @@ func main() {
 	cfg := defaultConfig()
 
 	// resolve config file path (manual scan so we can load before flag defaults)。
-	// 默认自动探测 config.json / config.yaml / config.yml（第一个存在者）；
-	// --config 显式指定则优先，且按其扩展名决定 JSON/YAML 解析。
-	cfgPath := shared.ResolveConfigPath("config.json", "config.yaml", "config.yml")
+	// 默认自动探测 config.yaml / config.yml / config.json（第一个存在者）；YAML 为推荐格式，
+	// 优先级最高，故新旧安装并存时（迁移期）以 YAML 为准。--config 显式指定则优先，
+	// 且按其扩展名决定 JSON/YAML 解析。
+	cfgPath := shared.ResolveConfigPath("config.yaml", "config.yml", "config.json")
 	for i, a := range os.Args {
 		if a == "--config" && i+1 < len(os.Args) {
 			cfgPath = os.Args[i+1]
@@ -118,10 +119,10 @@ func main() {
 	} else {
 		slog.Warn("配置文件不存在，使用默认配置（localhost:8529）",
 			"path", cfgPath,
-			"hint", "请运行安装命令生成 config.json，或使用 --config 指定路径")
+			"hint", "请运行安装命令生成 config.yaml，或使用 --config 指定路径")
 	}
 
-	// 首次启动时在配置目录自动生成 config.example.json（已存在则跳过）
+	// 首次启动时在配置目录自动生成 config.example.yaml（已存在则跳过）
 	ensureConfigExample(cfgPath)
 
 	// flags override file/defaults
@@ -292,7 +293,7 @@ func main() {
 	}
 	// Guard: detect localhost target — a freshly-installed remote agent
 	// connecting to its OWN localhost is the most common misconfiguration.
-	// This typically means config.json was never written (install script failed
+	// This typically means the config file was never written (install script failed
 	// partway through, or the agent binary was copied without running the
 	// install command). Relay mode is exempt: it listens locally by design.
 	if !cfg.Relay {
@@ -301,7 +302,7 @@ func main() {
 				slog.Error("Agent 上报地址为本地回环地址，远程连接必然失败！",
 					"server", sc.Server,
 					"config_path", cfgPath,
-					"hint", "config.json 可能未正确生成。请在面板重新生成安装命令并执行，或手动编辑 config.json 的 server 字段为服务端实际可达地址")
+					"hint", "config.yaml 可能未正确生成。请在面板重新生成安装命令并执行，或手动编辑 config.yaml 的 server 字段为服务端实际可达地址")
 			}
 		}
 	}

@@ -15,6 +15,40 @@
    ============================================================ */
 "use strict";
 
+/* ===== 树折叠：硬件/虚拟机等「左树 + 右详情」布局，一键收起左树给右侧内容腾空间 =====
+   约定：容器加 .tree-wrap，左树加 .tree-pane，中间放一个 [data-tree-toggle="<存储键>"] 把手。
+   折叠态记忆到 localStorage，跨视图/刷新保持。样式与点击逻辑集中在此，各视图只需按约定出 DOM。*/
+(function(){
+  var st = document.createElement("style");
+  st.textContent =
+    ".tree-wrap{position:relative}" +
+    ".tree-toggle-btn{flex:0 0 16px;align-self:stretch;min-height:120px;border:1px solid var(--line);" +
+      "background:var(--panel);border-radius:8px;cursor:pointer;color:var(--muted);display:flex;" +
+      "align-items:center;justify-content:center;padding:0;font-size:13px;line-height:1;user-select:none;" +
+      "transition:background .15s,color .15s}" +
+    ".tree-toggle-btn:hover{color:var(--text);background:rgba(127,127,127,.12)}" +
+    ".tree-wrap.tree-collapsed .tree-pane{display:none}" +
+    // 窄屏单列布局折叠意义不大：隐藏把手并强制展开，避免出现难看的横条。
+    "@media(max-width:960px){.tree-toggle-btn{display:none}.tree-wrap.tree-collapsed .tree-pane{display:block}}";
+  (document.head || document.documentElement).appendChild(st);
+
+  document.addEventListener("click", function(e){
+    var btn = e.target && e.target.closest ? e.target.closest("[data-tree-toggle]") : null;
+    if (!btn) return;
+    var wrap = btn.closest(".tree-wrap");
+    if (!wrap) return;
+    var collapsed = wrap.classList.toggle("tree-collapsed");
+    btn.textContent = collapsed ? "›" : "‹";
+    btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    try { localStorage.setItem(btn.getAttribute("data-tree-toggle"), collapsed ? "1" : "0"); } catch(err){}
+  });
+
+  // 各视图渲染时读初始折叠态（避免首帧闪烁）。
+  window.treeCollapsed = function(key){
+    try { return localStorage.getItem(key) === "1"; } catch(err){ return false; }
+  };
+})();
+
 /* ===== UI/UX 审查修复（5.6 弹窗语义角色 / 6.4 全局加载指示） ===== */
 (function(){
   /* 6.4 全局请求加载指示：包装原生 fetch，任何请求进行中时显示顶部细进度条 */

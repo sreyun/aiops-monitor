@@ -284,6 +284,24 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "dimension": dimension})
 }
 
+// handleNetFlowHosts returns only the hosts that actually have flow data in the
+// window, ranked by traffic volume. The frontend uses this to filter the host
+// selector to "hosts with traffic" (large first), hiding idle hosts.
+func (s *Server) handleNetFlowHosts(w http.ResponseWriter, r *http.Request) {
+	from, to := parseTimeRange(r.URL.Query().Get("range"))
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"hosts": []any{}})
+		return
+	}
+	hosts, err := s.pg.getFlowHosts(from, to, 200)
+	if err != nil {
+		slog.Warn("查询有流量主机失败", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts})
+}
+
 // handleNetFlowFlows returns flow detail records from PG.
 func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")

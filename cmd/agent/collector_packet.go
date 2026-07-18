@@ -55,6 +55,26 @@ func newPacketCollector(cfg PacketConfig, hostID, fp string) *packetCollector {
 	}
 }
 
+// ensureConntrackAcct 尽力开启 nf_conntrack 的字节/包计数。默认关闭时 /proc/net/nf_conntrack
+// 的行不含 bytes=/packets=，flow 明细流量就无从统计。以 root 运行时写 sysctl 开启（可逆、
+// 低风险，是本采集器正常工作的前提）；无权限则打印手动命令，不报错中断。
+func ensureConntrackAcct() {
+	const path = "/proc/sys/net/netfilter/nf_conntrack_acct"
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		return // 内核未加载 conntrack 或路径不存在，静默跳过
+	}
+	if strings.TrimSpace(string(cur)) == "1" {
+		return // 已开启
+	}
+	if err := os.WriteFile(path, []byte("1"), 0o644); err == nil {
+		slog.Info("已开启 nf_conntrack_acct（字节/包计数），flow 明细流量统计生效")
+	} else {
+		slog.Warn("nf_conntrack_acct 未开启且无权限自动开启，flow 明细的字节/包将为 0",
+			"hint", "以 root 执行: sysctl -w net.netfilter.nf_conntrack_acct=1（可写入 /etc/sysctl.d/ 持久化）")
+	}
+}
+
 // run starts the periodic nf_conntrack polling loop.
 func (pc *packetCollector) run(reporter func(shared.NetFlowReport)) {
 	if runtime.GOOS != "linux" {
@@ -65,6 +85,7 @@ func (pc *packetCollector) run(reporter func(shared.NetFlowReport)) {
 		return
 	}
 	slog.Info("五元组包采集器启动 (nf_conntrack)", "interval", "30s")
+	ensureConntrackAcct()
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -203,9 +224,17 @@ func parseConntrackLine(line string) (conntrackEntry, bool) {
 				}
 			}
 		case "bytes":
-			// Not always present in conntrack; estimate from packets
+			// 真正解析！此前这里只有注释、没有代码，所以哪怕 conntrack 行里带了
+			// bytes=/packets=（开启 nf_conntrack_acct 时）也被直接丢弃，导致 flow 明细的
+			// 字节/包永远为 0。conntrack 每条有两组方向元组（orig + reply）各带一份，
+			// += 累加得到双向总量。
+			if b, err := strconv.ParseUint(v, 10, 64); err == nil {
+				e.bytes += b
+			}
 		case "packets":
-			// Same
+			if p, err := strconv.ParseUint(v, 10, 64); err == nil {
+				e.packets += p
+			}
 		}
 	}
 

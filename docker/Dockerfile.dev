@@ -13,7 +13,7 @@ COPY vendor/ vendor/
 COPY shared/ shared/
 COPY cmd/ cmd/
 # 将配置示例复制到 cmd/agent/ 以供 go:embed 内嵌（.gitignore 排除，构建时复制）
-COPY config.example.json cmd/agent/config_example.json
+COPY config.example.yaml cmd/agent/config_example.yaml
 
 # 仅构建当前平台 server + agent 二进制（跳过 dist 交叉编译）
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
@@ -30,7 +30,7 @@ COPY plugins/ /tmp/plugins/
 RUN mkdir -p /app/dist && cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
 # Agent 二进制 + 配置示例放入 dist，供 /dl/ 端点下载安装
 COPY --from=builder /out/aiops-agent /app/dist/aiops-agent-linux-amd64
-COPY config.example.json /app/dist/config.example.json
+COPY config.example.yaml /app/dist/config.example.yaml
 
 EXPOSE 8529
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8529/healthz || exit 1

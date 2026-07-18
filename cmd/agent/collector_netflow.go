@@ -172,9 +172,18 @@ type netflowReceiver struct {
 	agg     *flowAggregator
 	conn    net.PacketConn
 
-	// v9 template cache (sourceID+templateID → template)
-	v9Templates sync.Map
+	// v9 template cache (sourceID+templateID → template)。仅 read-loop 单协程访问，
+	// v9TemplateCount 用普通 int 计数即可（无需原子）。缓存有上限，防构造报文循环换
+	// sourceID/templateID 撑爆内存。
+	v9Templates     sync.Map
+	v9TemplateCount int
 }
+
+// v9 模板防护上限：正常设备模板字段数 <数十、模板数 <数十；远超即视为异常/构造报文。
+const (
+	maxV9Fields    = 512
+	maxV9Templates = 4096
+)
 
 // v9Template stores one NetFlow v9 template for decoding data flowsets.
 type v9Template struct {
@@ -230,20 +239,22 @@ func (nr *netflowReceiver) run(reporter func(shared.NetFlowReport)) {
 		ticker := time.NewTicker(time.Duration(windowSec) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			records, stats := nr.agg.flush()
-			if len(records) == 0 {
-				continue
-			}
-			reporter(shared.NetFlowReport{
-				HostID:      nr.hostID,
-				Fingerprint: nr.fp,
-				Source:      "netflow",
-				Timestamp:   time.Now().Unix(),
-				WindowSec:   windowSec,
-				Flows:       records,
-				Stats:       stats,
+			runSafe("netflow-flush", func() {
+				records, stats := nr.agg.flush()
+				if len(records) == 0 {
+					return
+				}
+				reporter(shared.NetFlowReport{
+					HostID:      nr.hostID,
+					Fingerprint: nr.fp,
+					Source:      "netflow",
+					Timestamp:   time.Now().Unix(),
+					WindowSec:   windowSec,
+					Flows:       records,
+					Stats:       stats,
+				})
+				slog.Info("NetFlow 聚合窗口刷新", "flows", stats.TotalFlows, "bytes", stats.TotalBytes, "dropped", stats.DroppedPackets)
 			})
-			slog.Info("NetFlow 聚合窗口刷新", "flows", stats.TotalFlows, "bytes", stats.TotalBytes, "dropped", stats.DroppedPackets)
 		}
 	}()
 
@@ -258,7 +269,7 @@ func (nr *netflowReceiver) run(reporter func(shared.NetFlowReport)) {
 		if n < 4 {
 			continue
 		}
-		nr.parsePacket(buf[:n])
+		runSafe("netflow-parse", func() { nr.parsePacket(buf[:n]) })
 	}
 }
 
@@ -380,17 +391,31 @@ func (nr *netflowReceiver) parseV9Template(data []byte, sourceID uint32) {
 		fieldCount := binary.BigEndian.Uint16(data[offset+2 : offset+4])
 		offset += 4
 
-		fields := make([]v9Field, fieldCount)
+		// 字段数上限：0 或 >512 视为异常/构造模板，停止解析（避免超大分配）。
+		if fieldCount == 0 || fieldCount > maxV9Fields {
+			return
+		}
+
+		// cap 用 fieldCount 但按实际读到的 append：报文被截断时不会留零值尾字段。
+		fields := make([]v9Field, 0, fieldCount)
 		recordLen := 0
 		for j := uint16(0); j < fieldCount && offset+4 <= len(data); j++ {
 			ft := binary.BigEndian.Uint16(data[offset : offset+2])
 			fl := binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			fields[j] = v9Field{fieldType: ft, fieldLen: fl}
+			fields = append(fields, v9Field{fieldType: ft, fieldLen: fl})
 			recordLen += int(fl)
 			offset += 4
 		}
 
 		tmplKey := fmt.Sprintf("%d_%d", sourceID, templateID)
+		// 缓存上限：新 key 且已达上限则忽略（防循环换 templateID 撑爆内存）；已存在则更新。
+		if _, exists := nr.v9Templates.Load(tmplKey); !exists {
+			if nr.v9TemplateCount >= maxV9Templates {
+				slog.Warn("NetFlow v9 模板缓存已达上限，忽略新模板", "source", sourceID, "template", templateID)
+				continue
+			}
+			nr.v9TemplateCount++
+		}
 		nr.v9Templates.Store(tmplKey, &v9Template{
 			templateID: templateID,
 			fieldCount: fieldCount,
@@ -464,7 +489,15 @@ func (nr *netflowReceiver) decodeV9Data(templateID uint16, data []byte, sourceID
 }
 
 // readUint reads a big-endian unsigned integer of variable width (1/2/4/8 bytes).
+//
+// 安全：字段长度来自 v9 模板，由报文发送方声明（NetFlow UDP 无认证，攻击者/异常 exporter
+// 可控）。此前 default 分支 copy(buf[8-len(data):], data) 在 len>8 时下标为负，一个把数值
+// 字段声明成 len=16 的构造模板即可触发 panic；读循环无 recover → 整个 agent 崩溃被 keepalive
+// 反复重启。这里先把超长数据钳到低 8 字节，杜绝越界。
 func readUint(data []byte) uint64 {
+	if len(data) > 8 {
+		data = data[len(data)-8:] // 取低 8 字节（大端最右有效）
+	}
 	switch len(data) {
 	case 1:
 		return uint64(data[0])
@@ -475,7 +508,7 @@ func readUint(data []byte) uint64 {
 	case 8:
 		return binary.BigEndian.Uint64(data)
 	default:
-		// Pad to 8 bytes
+		// len ∈ {0,3,5,6,7}：8-len(data) 恒为正，安全。
 		var buf [8]byte
 		copy(buf[8-len(data):], data)
 		return binary.BigEndian.Uint64(buf[:])

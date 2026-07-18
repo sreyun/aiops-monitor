@@ -1,55 +1,170 @@
-# Agent 配置文件示例（YAML 版）—— 与 config.example.json 等价，二选一即可。
-# 将本文件复制为 config.yaml（或 config.yml）放到 agent 同目录，或用 --config 指定路径。
-# Agent 按扩展名自动识别：.yaml/.yml 走 YAML，.json 走 JSON。修改后需重启 Agent。
-# 字段含义与 config.example.json 完全一致（复用同一套 json tag）。
+# ============================================================================
+# AIOps Monitor · Agent 配置示例（YAML · 推荐格式）
+# ----------------------------------------------------------------------------
+# 用法：复制本文件为 config.yaml（或 config.yml）放到 agent 同目录，按需修改。
+#       Agent 启动时自动探测 config.yaml → config.yml → config.json（取第一个存在者），
+#       也可用 --config <路径> 显式指定。修改后需重启 Agent（systemctl restart aiops-agent）。
+# 说明：字段与旧版 config.json 完全等价（复用同一套 json tag）。凡「可选采集器」默认注释掉，
+#       取消注释即启用；未配置的采集器不会启动，不占资源。密码类字段一律优先用 *_env 环境变量，
+#       避免明文落盘。本示例已覆盖【全部配置项】，不得漏项。
+# ============================================================================
 
-# ===== 基础配置 =====
-server: "http://localhost:8529"
-report_interval: 30        # 基础指标上报间隔(秒)，默认30；需更实时可下调如10
-plugin_interval: 60        # 插件执行周期(秒)，默认60
-disk_path: "/"
-plugins_dir: "plugins"
-python: "python3"
-state_file: "agent_state.json"
-category: ""
+# ========================== 基础配置（必填 / 常用）==========================
+server: "http://localhost:8529"   # 服务端地址，如 http://192.168.1.10:8529 或 https://aiops.example.com
+token: ""                          # 安装 Token（由服务端「安装命令」自动注入，可留空）
+category: ""                       # 主机分类标签，如 生产 / 测试 / DB / 办公终端（用于分组与告警路由）
 
-# ===== 多服务端（可选，配置后优先于 server/token）=====
+report_interval: 30                # 基础指标上报间隔(秒)，默认 30；需要更实时可下调如 10
+plugin_interval: 60                # Python 插件执行周期(秒)，默认 60
+disk_path: "/"                     # 监控的磁盘路径（Windows 用 "C:\\"）
+plugins_dir: "plugins"             # Python 插件目录（相对 Agent 工作目录或绝对路径）
+python: "python3"                  # 运行 .py 插件的解释器（Windows 通常为 "python"）
+state_file: "agent_state.json"     # 运行状态持久化文件（增量计数/游标），可用绝对路径
+
+# ========================== 多服务端上报（可选）============================
+# servers 非空时【覆盖】上方单个 server + token：采集一次，并发上报到所有服务端。
 # servers:
-#   - server: "https://aiops.example.com"
-#     token: "your-install-token"
+#   - server: "https://monitor-a:8529"
+#     token: "token-a"
+#   - server: "https://monitor-b:8529"
+#     token: "token-b"
 
-# ===== SNMP 网络设备纳管（轮询 + Trap 接收，可选）=====
-# snmp:
-#   default_interval_sec: 60
-#   targets:
+# ============================ 日志采集（可选）==============================
+# log_paths: 采集的日志文件或目录路径数组，支持通配符；目录会自动扫描 .log/.txt 等文件。
+# log_encrypt: 是否 gzip + AES-256-GCM 加密上报日志（默认 true，调试排障时可临时关闭）。
+log_encrypt: true
+log_paths: []
+# log_paths:
+#   - "/var/log/syslog"
+#   - "/var/log/nginx/access.log"
+#   - "/var/log/nginx/error.log"
+
+# ============================ TLS 安全配置（可选）==========================
+# tls_skip_verify: 跳过服务端证书校验（仅自签 / 内网临时使用，不安全，生产勿开）。
+# ca_cert: 指向 CA PEM 证书包路径，用于校验自签名服务端证书（比 skip_verify 安全）。
+tls_skip_verify: false
+ca_cert: ""
+
+# ====================== 网关中继模式 relay（可选）=========================
+# relay=true 时 Agent 变为网关：监听 listen 端口，反向代理内网机器的上报到 server，
+# 内网机器无需直连公网，只把上报指向本网关即可。relay_secret 用于上游服务端验证中继来源。
+relay: false
+listen: ":8529"
+relay_secret: ""
+
+# --------------------------------------------------------------------------
+# 端口转发（无需在 Agent 配置）：在 Server Web「转发」页创建规则即可，Agent 自动作为隧道。
+# 跳板模式：规则里「远程目标」填 IP:Port（如 192.168.30.220:3306），Agent 代连局域网其他服务，
+# 目标机无需装 Agent。⚠ 安全：跳板暂无目标白名单，建议 forward_listen 保持 127.0.0.1 并配合防火墙。
+# --------------------------------------------------------------------------
+
+# ==================== Hyper-V 虚拟机采集（Windows 宿主）====================
+# 在 Windows Hyper-V 宿主机上【自动探测启用】，通常无需配置。需管理员 / SYSTEM 权限才能 Get-VM。
+hyperv_interval_sec: 60            # 采集间隔(秒)，默认 60
+hyperv_disabled: false             # 置 true 显式关闭 Hyper-V 采集
+
+# ============ Redfish 硬件状态采集 BMC/iDRAC/iLO（可选，服务器带外）========
+# 配置后 Agent 作为 Redfish REST 客户端轮询 BMC，采集 CPU/内存/存储/温度/风扇/电源/固件。
+# password_env 指定密码所在环境变量名（推荐，不落盘）；password 为直接密码（备选，如 systemd 无法读 env）。
+# interval_sec 采集间隔秒(默认 60)；skip_tls_verify 跳过 BMC 证书校验。未配置不启动。
+# redfish_targets:
+#   - name: "Dell-R740"
+#     url: "https://192.168.1.100"
+#     username: "root"
+#     password_env: "REDFISH_DELL_PASSWORD"
+#     password: ""
+#     skip_tls_verify: true
+#     interval_sec: 60
+#   - name: "HP-DL380"
+#     url: "https://192.168.1.101"
+#     username: "Administrator"
+#     password_env: "REDFISH_HP_PASSWORD"
+#     password: ""
+#     skip_tls_verify: true
+#     interval_sec: 120
+
+# =========== 华为 OceanStor 存储/磁盘柜采集 DeviceManager REST（可选）======
+# ⚠ 重要：OceanStor 全系【不支持 Redfish】，华为存储必须配在【本段】——切勿填进 redfish_targets，
+#   否则每轮采集失败、设备永不显示。url 为 DeviceManager 管理地址，端口默认 8088（现场也见过 443）。
+# password_env 优先(不落盘)；password 备选。interval_sec 默认 120；skip_tls_verify 跳过证书校验。
+# oceanstor_targets:
+#   - name: "OceanStor-5500"
+#     url: "https://192.168.1.200:8088"
+#     username: "admin"
+#     password_env: "OCEANSTOR_PASSWORD"
+#     password: ""
+#     skip_tls_verify: true
+#     interval_sec: 120
+
+# ===================== NetFlow 网络流量接收（可选）========================
+# 配置后 Agent 作为 NetFlow UDP 接收器，接收交换机/防火墙推送的 Flow。listen 为 UDP 监听地址；
+# protocols 支持 v5(固定格式)/v9(模板化)；window_sec 聚合窗口(默认 300=5 分钟)；
+# max_flows_per_sec 限速；buffer_size UDP 接收缓冲区大小。active_targets 为主动轮询设备（可选）。
+# netflow:
+#   listen: ":2055"
+#   protocols: ["v5", "v9"]
+#   buffer_size: 65536
+#   window_sec: 300
+#   max_flows_per_sec: 10000
+#   active_targets:
 #     - name: "core-switch-01"
 #       ip: "10.0.0.1"
-#       version: "2c"
-#       community_env: "SNMP_COMMUNITY"   # 环境变量优先，密文不落盘
+#       protocol: "snmp"     # snmp | rest
+#       port: 161
 #       interval_sec: 60
-#       max_interfaces: 200
-#     - name: "edge-router-v3"
+
+# ============ 五元组包报文采集 nf_conntrack（可选，仅 Linux）=============
+# 通过 /proc/net/nf_conntrack 采集五元组连接，差值计算增量 Flow。enabled 控制启停；
+# max_packets_per_min 限速(默认 6000)。未配置或 enabled=false 不启动。
+# packet_capture:
+#   enabled: true
+#   interface: ""            # 空=全部网卡
+#   bpf_filter: ""           # 预留：BPF 过滤表达式
+#   sample_rate: 0           # 0=不采样(全量)
+#   max_packets_per_min: 6000
+
+# ============ SNMP 网络设备纳管：轮询 + Trap 接收（可选）================
+# 手写协议栈(v2c / v3 USM + v1/v2c/v3 Trap，零依赖)。配置后轮询交换机/路由器接口流量与状态，
+# 并可接收设备主动上报的 Trap 告警。密码/口令一律优先 *_env 环境变量（community_env / auth_pass_env / priv_pass_env）。
+# snmp:
+#   default_interval_sec: 60          # 未单独指定 interval_sec 的 target 默认轮询间隔
+#   targets:
+#     - name: "core-switch-01"        # v2c 示例
+#       ip: "10.0.0.1"
+#       port: 161                     # 默认 161
+#       version: "2c"                 # "2c" | "3"
+#       community_env: "SNMP_COMMUNITY"  # 优先环境变量；也可用 community 直配
+#       community: ""
+#       interval_sec: 60
+#       timeout_sec: 3                # 默认 3
+#       retries: 2                    # 默认 2
+#       max_repetitions: 10           # GETBULK 每次条数，默认 10
+#       interfaces: []                # 指定 ifIndex，空=全部
+#       include_down: false           # 是否采 admin-down 口（默认否，控噪+控基数）
+#       max_interfaces: 200           # 接口数上限，默认 200
+#     - name: "edge-router-v3"        # v3 USM 示例（authPriv）
 #       ip: "10.0.0.2"
 #       version: "3"
-#       sec_level: "authPriv"
+#       sec_level: "authPriv"         # noAuthNoPriv | authNoPriv | authPriv
 #       user: "monitor"
-#       auth_proto: "SHA"
+#       auth_proto: "SHA"             # MD5 | SHA | SHA256
 #       auth_pass_env: "SNMP_AUTH_PASS"
-#       priv_proto: "AES"
+#       auth_pass: ""
+#       priv_proto: "AES"             # DES | AES
 #       priv_pass_env: "SNMP_PRIV_PASS"
+#       priv_pass: ""
+#       context_name: ""
+#       interval_sec: 60
+#   # ---- Trap / Inform 接收（可选）----
 #   trap_enabled: false
-#   trap_listen: ":162"           # 特权端口需管理员/root
-#   trap_communities: []          # v1/v2c 白名单，空=全收
-#   trap_users:                   # v3 trap/inform USM 用户（验签/解密）
+#   trap_listen: ":162"               # 特权端口需管理员 / root
+#   trap_communities: []              # v1/v2c 社区白名单，空=全收
+#   trap_users:                       # v3 trap/inform 的 USM 用户（验签/解密）
 #     - user: "trapmon"
 #       sec_level: "authPriv"
 #       auth_proto: "SHA"
 #       auth_pass_env: "SNMP_TRAP_AUTH_PASS"
+#       auth_pass: ""
 #       priv_proto: "AES"
 #       priv_pass_env: "SNMP_TRAP_PRIV_PASS"
-
-# ===== NetFlow 网络流量接收（可选）=====
-# netflow:
-#   listen: ":2055"
-#   protocols: ["v5", "v9"]
-#   window_sec: 300
+#       priv_pass: ""

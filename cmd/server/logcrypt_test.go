@@ -68,22 +68,23 @@ func TestSanitizeLogPaths(t *testing.T) {
 	}
 }
 
-// TestInstallScriptEmbedsLogPaths 验证安装脚本把日志路径写进 config.json 的 log_paths。
+// TestInstallScriptEmbedsLogPaths 验证安装脚本把日志路径写进 config.yaml 的 log_paths。
+// YAML 用 flow 序列（沿用 JSON 数组字面量，YAML 是其超集），故键形如 `log_paths: [...]`。
 func TestInstallScriptEmbedsLogPaths(t *testing.T) {
 	lp := sanitizeLogPaths("/var/log/nginx/access.log\n/var/log/app/")
 	sh := renderScript(installShTemplate, "http://s:8529", "tok", "prod", "", lp)
 	if !strings.Contains(sh, "/var/log/nginx/access.log") {
 		t.Fatal("sh 脚本缺少日志路径")
 	}
-	if !strings.Contains(sh, `"log_paths":`) {
-		t.Fatal("config.json 缺少 log_paths 字段")
+	if !strings.Contains(sh, "log_paths:") {
+		t.Fatal("config.yaml 缺少 log_paths 字段")
 	}
 	if strings.Contains(sh, "__LOG_PATHS__") {
 		t.Fatal("占位符未被替换")
 	}
 	// 空 → log_paths: []（向后兼容，不影响现有安装）
 	sh2 := renderScript(installShTemplate, "http://s:8529", "tok", "prod", "", "")
-	if !strings.Contains(sh2, `"log_paths": []`) {
+	if !strings.Contains(sh2, "log_paths: []") {
 		t.Fatal("空日志路径应渲染为 log_paths: []")
 	}
 }

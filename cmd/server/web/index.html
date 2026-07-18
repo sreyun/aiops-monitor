@@ -62,21 +62,16 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg>
             <span data-i18n="nav.logs">日志</span>
           </a>
-          <a class="nav-item" data-view="hardware" data-i18n-title="nav.hardware" title="Redfish 硬件状态监控">
+          <!-- 「资源」父导航：合并 硬件(Redfish/OceanStor) 与 虚拟机(Hyper-V)。多数虚拟机来自硬件设备，
+               故归为同一「资源」入口，子标签由共享 #viewTabs 栏驱动（复用 VIEW_TAB_GROUPS，同网络/监控/告警）。
+               parent=hardware=第一个子标签。 -->
+          <a class="nav-item" data-view="hardware" data-i18n-title="nav.resources" title="硬件与虚拟机资源（Redfish / OceanStor / Hyper-V）">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M6 7V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v2"/><path d="M6 12h.01M10 12h.01"/></svg>
-            <span data-i18n="nav.hardware">硬件</span>
+            <span data-i18n="nav.resources">资源</span>
           </a>
-          <a class="nav-item" data-view="hyperv" data-i18n-title="nav.hyperv" title="Hyper-V 虚拟机监控">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-            <span data-i18n="nav.hyperv">虚拟机</span>
-          </a>
-          <a class="nav-item" data-view="netflow" data-i18n-title="nav.netflow" title="NetFlow 网络流量分析">
+          <a class="nav-item" data-view="netflow" data-i18n-title="nav.network" title="网络流量与设备（NetFlow / SNMP / Trap）">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 5-5"/></svg>
-            <span data-i18n="nav.netflow">流量</span>
-          </a>
-          <a class="nav-item" data-view="snmp" data-i18n-title="nav.snmp" title="SNMP 网络设备监控">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
-            <span data-i18n="nav.snmp">网络设备</span>
+            <span data-i18n="nav.network">网络</span>
           </a>
         </div>
       </div>
@@ -469,7 +464,7 @@
           <button class="chip-btn" data-kind="system" data-i18n="ui.system">系统</button>
           <button class="chip-btn" data-kind="plugin" data-i18n="section.op_sys_plugin_plugin">插件</button>
           <button class="chip-btn" data-kind="terminal">终端</button>
-          <input type="text" id="auditSearch" class="search" placeholder="搜索日志内容 / 操作者 / 主机…" style="max-width:300px">
+          <input type="search" id="auditSearch" class="search" data-i18n-placeholder="form.search_audit" placeholder="搜索日志内容 / 操作者 / 主机…" style="max-width:280px">
         </div>
         <div class="stack" id="log"></div>
         <div class="pager" id="logPager"></div>
@@ -479,7 +474,7 @@
       <section class="view" id="view-checks">
         <div class="section-title"><span data-i18n="section.custom_checks">自定义监控</span><span class="tag" data-i18n="section.check_types">网站 HTTP / 端口 TCP / 主机 Ping / 进程存活</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            <input type="text" id="checkSearch" class="search" placeholder="搜索名称 / 目标…" style="max-width:200px; margin-left:0">
+            <input type="search" id="checkSearch" class="search" data-i18n-placeholder="form.search_check" placeholder="搜索名称 / 目标…" style="width:240px; max-width:40vw; margin-left:0">
             <div class="view-toggle" id="checkViewToggle" title="切换卡片 / 列表视图">
               <button class="vt-btn active" data-cview="pill" title="卡片视图">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
@@ -542,7 +537,7 @@
       <section class="view" id="view-automation">
         <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            <input type="text" id="playbookSearch" class="search" placeholder="搜索剧本名称 / 描述…" style="max-width:200px; margin-left:0">
+            <input type="search" id="playbookSearch" class="search" data-i18n-placeholder="form.search_playbook" placeholder="搜索剧本名称 / 描述…" style="width:240px; max-width:40vw; margin-left:0">
             <div class="view-toggle" id="playbookViewToggle" role="group" aria-label="视图切换">
               <button class="vt-btn active" title="卡片" data-act="pb-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
               <button class="vt-btn" title="列表" data-act="pb-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
@@ -643,7 +638,7 @@
       <section class="view" id="view-forward">
         <div class="section-title"><span data-i18n="section.port_forward">端口转发</span><span class="tag" data-i18n="section.forward_desc">跨网络访问被监控主机内部服务</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            <input type="text" id="forwardSearch" class="search" placeholder="搜索主机 / 端口 / 监听地址…" style="max-width:220px; margin-left:0">
+            <input type="search" id="forwardSearch" class="search" data-i18n-placeholder="form.search_forward" placeholder="搜索主机 / 端口 / 监听地址…" style="width:240px; max-width:40vw; margin-left:0">
             <div class="view-toggle" id="forwardViewToggle" role="group" aria-label="视图切换">
               <button class="vt-btn active" title="卡片" data-act="fwd-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
               <button class="vt-btn" title="列表" data-act="fwd-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
@@ -684,13 +679,12 @@
         <div id="hypervPanel"></div>
       </section>
 
-      <!-- 网络流量 (NetFlow) -->
+      <!-- 网络：流量(NetFlow) + 网络设备(SNMP 接口 + Trap)。合并为单一「网络」入口，
+           子标签由共享 #viewTabs 栏驱动（复用 VIEW_TAB_GROUPS 机制，同监控/告警）。 -->
       <section class="view" id="view-netflow">
         <div class="section-title"><span data-i18n="section.netflow">网络流量</span><span class="tag" data-i18n="section.netflow_desc">NetFlow / 五元组包采集流量分析</span></div>
         <div id="netflowPanel"></div>
       </section>
-
-      <!-- SNMP 网络设备 (轮询 + Trap) -->
       <section class="view" id="view-snmp">
         <div class="section-title"><span data-i18n="section.snmp">网络设备</span><span class="tag" data-i18n="section.snmp_desc">SNMP 交换机/路由器接口流量与 Trap 事件</span></div>
         <div id="snmpPanel"></div>

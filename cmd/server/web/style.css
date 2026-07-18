@@ -2858,8 +2858,13 @@ select:focus {
    同理 background 曾用 var(--card) —— 该变量全项目从未定义，等于没有背景色。 */
 /* ── 硬件：工具栏（搜索 / 状态 / 更新时间筛选）── */
 .hw-toolbar{display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; padding-top:var(--sp-3)}
+/* 资源视图（硬件 + 虚拟机）工具栏搜索：与全局 .search 同一视觉标准 —— 内嵌放大镜图标、
+   同一 border/focus token；仅宽度策略不同（此处 flex 撑满工具栏，全局 .search 为定宽右对齐）。 */
 .hw-search{flex:1; min-width:200px; max-width:380px; background:var(--panel2); border:1px solid var(--line2);
-  border-radius:var(--r-sm); padding:7px 11px; font-size:13px; color:var(--txt); font-family:inherit}
+  border-radius:var(--r-sm); padding:7px 11px 7px 34px; font-size:13px; color:var(--txt); font-family:inherit;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238492a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:11px center}
+.hw-search::placeholder{color:var(--muted2)}
 .hw-search:hover{border-color:var(--hover-border)}
 .hw-search:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
 .hw-sel{background:var(--panel2); border:1px solid var(--line2); border-radius:var(--r-sm);
