@@ -413,14 +413,20 @@ func (oc *oceanStorCollector) collectOne(t OceanStorTarget) shared.HardwareSnaps
 		snap.Error = fmt.Sprintf("system: %v", err)
 		return snap
 	}
+	ver := osStr(sys, "PRODUCTVERSION", "pointRelease")
 	snap.System = shared.RedfishSystem{
-		Manufacturer: "Huawei",
-		Model:        osStr(sys, "PRODUCTMODESTRING", "productModeString", "PRODUCTMODE"),
-		SerialNumber: osStr(sys, "SN", "ID"),
-		HostName:     osStr(sys, "NAME"),
-		BMCModel:     "OceanStor DeviceManager",
-		BMCFirmware:  osStr(sys, "PRODUCTVERSION", "pointRelease"),
-		PowerState:   "On",
+		Manufacturer:    "Huawei",
+		Model:           osStr(sys, "PRODUCTMODESTRING", "productModeString", "productmodestring", "MODEL", "PRODUCTMODE"),
+		SerialNumber:    osStr(sys, "SN", "ID"),
+		HostName:        osStr(sys, "NAME"),
+		BMCModel:        "OceanStor DeviceManager",
+		BMCFirmware:     ver,
+		SoftwareVersion: ver, // 阵列软件版本，如 V300R003C20
+		PatchVersion:    osStr(sys, "PATCHVERSION", "patchVersion", "hotPatchVersion", "SPCVersion"),
+		Location:        osStr(sys, "LOCATION", "location"),
+		TotalCapacityGB: osCapacityGB(osNum(sys, "TOTALCAPACITY", "totalCapacity")),
+		UsedCapacityGB:  osCapacityGB(osNum(sys, "USEDCAPACITY", "usedCapacity", "USERCONSUMEDCAPACITY")),
+		PowerState:      "On",
 	}
 	snap.Health = osHealth(osStr(sys, "HEALTHSTATUS"))
 	snap.State = osRunning(osStr(sys, "RUNNINGSTATUS"))
@@ -482,34 +488,68 @@ func (oc *oceanStorCollector) collectOne(t OceanStorTarget) shared.HardwareSnaps
 		}
 	}
 
-	// 4. 控制器（复用 RAID/存储控制器区块）
+	// 4. 控制器（复用 RAID/存储控制器区块）；并把控制器的 CPU / 内存 提到 CPU / 内存段——
+	//    否则存储阵列在硬件页看不到 CPU / 内存（服务器 BMC 才有独立 Processor/Memory 资源，
+	//    OceanStor 把这些挂在控制器对象上）。
 	var ctrls []map[string]any
 	if err := oc.get(t, "controller", &ctrls); err == nil {
+		var totalMemMB float64
 		for _, c := range ctrls {
+			cname := osStr(c, "NAME", "LOCATION", "ID")
+			chealth := osHealth(osStr(c, "HEALTHSTATUS"))
 			snap.RAID = append(snap.RAID, shared.RedfishRAID{
-				Name:            osStr(c, "NAME", "LOCATION", "ID"),
+				Name:            cname,
 				Model:           osStr(c, "MODEL"),
 				Manufacturer:    "Huawei",
 				FirmwareVersion: osStr(c, "SOFTVER"),
 				SerialNumber:    osStr(c, "BARCODE", "ELABEL"),
-				Health:          osHealth(osStr(c, "HEALTHSTATUS")),
+				Health:          chealth,
 				State:           osRunning(osStr(c, "RUNNINGSTATUS")),
 				CacheMB:         osNum(c, "MEMORYSIZE"),
 			})
+			// 内存：每控制器一条（MEMORYSIZE 单位 MB）
+			if memMB := osNum(c, "MEMORYSIZE"); memMB > 0 {
+				snap.Memory.DIMMs = append(snap.Memory.DIMMs, shared.MemoryDIMM{
+					Name:       cname + " 内存",
+					Slot:       cname,
+					CapacityGB: memMB / 1024,
+					Health:     chealth,
+				})
+				totalMemMB += memMB
+			}
+			// CPU：控制器 CPU 信息，字段名随阵列型号/版本而异，尽力抓；抓不到就不显示，绝不编造。
+			if cpuModel := osStr(c, "CPUINFO", "cpuInfo", "CPUMODEL", "PROCESSOR"); cpuModel != "" {
+				snap.CPUs = append(snap.CPUs, shared.RedfishCPU{
+					Name:   cname + " CPU",
+					Model:  cpuModel,
+					Cores:  int(osNum(c, "CPUCORES", "cpuCores", "CORECOUNT")),
+					Health: chealth,
+				})
+			}
+		}
+		if totalMemMB > 0 {
+			snap.Memory.TotalGB = totalMemMB / 1024
 		}
 	}
 
-	// 5. 电源
+	// 5. 电源。额定功率优先取字段；DeviceManager 常不单列，则从华为型号(PAC900S12→900W)解析兜底。
 	var powers []map[string]any
 	if err := oc.get(t, "power", &powers); err == nil {
 		for _, p := range powers {
+			model := osStr(p, "MODEL")
+			rated := osNum(p, "MAXPOWER", "maxPower", "RATINGPOWER", "ratedPower")
+			if rated <= 0 {
+				rated = osPSUWatts(model)
+			}
 			snap.Power.PSUs = append(snap.Power.PSUs, shared.PSUReading{
-				Name:         osStr(p, "NAME", "LOCATION", "ID"),
-				Model:        osStr(p, "MODEL"),
-				Manufacturer: osStr(p, "MANUFACTURER"),
-				SerialNumber: osStr(p, "BARCODE", "ELABEL"),
-				Health:       osHealth(osStr(p, "HEALTHSTATUS")),
-				State:        osRunning(osStr(p, "RUNNINGSTATUS")),
+				Name:          osStr(p, "NAME", "LOCATION", "ID"),
+				Model:         model,
+				Manufacturer:  osStr(p, "MANUFACTURER"),
+				SerialNumber:  osStr(p, "BARCODE", "ELABEL"),
+				Health:        osHealth(osStr(p, "HEALTHSTATUS")),
+				State:         osRunning(osStr(p, "RUNNINGSTATUS")),
+				InputWatts:    osNum(p, "INPUTPOWER", "inputPower", "POWER"),
+				CapacityWatts: rated,
 			})
 		}
 	}
@@ -548,6 +588,36 @@ func (oc *oceanStorCollector) collectOne(t OceanStorTarget) shared.HardwareSnaps
 	}
 
 	return snap
+}
+
+// osCapacityGB 把 OceanStor 系统/池级容量（512B 扇区数）转为 GB。系统 TOTALCAPACITY 同样以扇区计。
+func osCapacityGB(sectors float64) float64 {
+	if sectors <= 0 {
+		return 0
+	}
+	return sectors * 512 / (1024 * 1024 * 1024)
+}
+
+// osPSUWatts 从华为电源型号解析额定功率（PAC900S12-B → 900W）：取型号里第一段 3~4 位连续数字。
+// DeviceManager 常不单列电源功率字段，用型号兜底总好过一片空白。取不到返回 0（前端显示 "-"）。
+func osPSUWatts(model string) float64 {
+	digits := ""
+	for _, r := range model {
+		if r >= '0' && r <= '9' {
+			digits += string(r)
+			if len(digits) >= 4 {
+				break
+			}
+		} else if digits != "" {
+			break // 只取第一段连续数字
+		}
+	}
+	if len(digits) >= 3 { // 3~4 位才像瓦数，避免把 "12" 之类小编号误当功率
+		if w, err := strconv.Atoi(digits); err == nil {
+			return float64(w)
+		}
+	}
+	return 0
 }
 
 // osDiskCapacityGB converts OceanStor's sector-count capacity to GB.

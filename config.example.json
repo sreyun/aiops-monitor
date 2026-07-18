@@ -107,5 +107,44 @@
     "bpf_filter": "",
     "sample_rate": 0,
     "max_packets_per_min": 6000
+  },
+
+  "__snmp__": "====== SNMP 网络设备纳管（轮询 + Trap 接收）======",
+  "_comment_snmp": "snmp: 配置后 Agent 作为 SNMP 采集探针，主动轮询交换机/路由器/防火墙等网络设备的接口流量/状态(IF-MIB)，并可监听 Trap(UDP:162)。targets 为轮询设备列表；version 支持 2c/3；v2c 用 community(或 community_env 环境变量优先，密文不落盘)；v3 用 user/auth_proto(MD5|SHA|SHA256)/auth_pass/priv_proto(DES|AES)/priv_pass 及 sec_level(noAuthNoPriv|authNoPriv|authPriv)。interval_sec 轮询间隔(默认60)；max_interfaces 接口数上限(默认200，控基数)；include_down 是否采 admin-down 口(默认否)。trap_enabled 开启 Trap 接收，trap_listen 监听地址(默认:162，特权端口需管理员/root)，trap_communities 白名单(空=全收)。未配置时不启动。",
+  "snmp": {
+    "default_interval_sec": 60,
+    "trap_enabled": false,
+    "trap_listen": ":162",
+    "trap_communities": [],
+    "targets": [
+      {
+        "name": "core-switch-01",
+        "ip": "10.0.0.1",
+        "port": 161,
+        "version": "2c",
+        "community": "public",
+        "community_env": "",
+        "interval_sec": 60,
+        "timeout_sec": 3,
+        "retries": 2,
+        "max_repetitions": 10,
+        "interfaces": [],
+        "include_down": false,
+        "max_interfaces": 200
+      },
+      {
+        "name": "edge-router-v3",
+        "ip": "10.0.0.2",
+        "version": "3",
+        "sec_level": "authPriv",
+        "user": "monitor",
+        "auth_proto": "SHA",
+        "auth_pass_env": "SNMP_AUTH_PASS",
+        "priv_proto": "AES",
+        "priv_pass_env": "SNMP_PRIV_PASS",
+        "context_name": "",
+        "interval_sec": 60
+      }
+    ]
   }
 }

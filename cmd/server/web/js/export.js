@@ -344,34 +344,58 @@ function expToDocx(model) {
 /* ============================ PDF（浏览器打印） ============================ */
 
 function expPrintHTML(model) {
+  // 按行内健康/状态文字给行着色，让导出接近网页的"红黄绿"观感（启发式，命中不到也无害）。
+  const rowClass = (row) => {
+    const t = (row || []).join(" ");
+    if (/严重|critical|故障|预测故障|失败|failed|fault|不可用|offline|离线/i.test(t)) return ' class="sev-crit"';
+    if (/警告|warning|降级|degraded|注意|偏低|将坏/i.test(t)) return ' class="sev-warn"';
+    return "";
+  };
   const tbl = (columns, rows) =>
     `<table><thead><tr>${columns.map(c => `<th>${expEscXml(c)}</th>`).join("")}</tr></thead>` +
-    `<tbody>${rows.map(r => `<tr>${columns.map((_, i) => `<td>${expEscXml(r[i])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    `<tbody>${rows.map(r => `<tr${rowClass(r)}>${columns.map((_, i) => `<td>${expEscXml(r[i])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 
-  let h = `<h1>${expEscXml(model.title || "")}</h1>`;
+  // 顶部 KPI 卡片：从 meta 里挑关键指标做成卡片，其余仍进"设备信息"表。
+  const metaMap = Object.fromEntries((model.meta || []).map(([k, v]) => [k, v]));
+  const kpis = ["整机健康", "异常部件", "最高温度", "总功耗", "电源冗余"]
+    .filter(k => metaMap[k] != null && metaMap[k] !== "")
+    .map(k => `<div class="kpi"><div class="kpi-v">${expEscXml(metaMap[k])}</div><div class="kpi-k">${expEscXml(k)}</div></div>`).join("");
+
+  let h = `<div class="rpt-head"><h1>${expEscXml(model.title || "")}</h1>`;
   if (model.subtitle) h += `<p class="sub">${expEscXml(model.subtitle)}</p>`;
+  h += `</div>`;
+  if (kpis) h += `<div class="kpis">${kpis}</div>`;
   if ((model.meta || []).length) {
     h += `<h2>设备信息</h2>` + tbl(["项", "值"], model.meta.map(([k, v]) => [k, v]));
   }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
-    h += `<h2>${expEscXml(sec.title)}</h2>` + tbl(sec.columns, sec.rows);
+    h += `<h2>${expEscXml(sec.title)} <span class="cnt">${sec.rows.length}</span></h2>` + tbl(sec.columns, sec.rows);
   });
 
-  // 打印一律用浅底黑字：深色主题直接打出来既费墨又难认。
+  // 打印一律用浅底黑字：深色主题直接打出来既费墨又难认。print-color-adjust:exact 让底色/健康色能打出来。
   return `<!doctype html><html><head><meta charset="utf-8"><title>${expEscXml(model.title || "")}</title>
 <style>
   @page { size: A4 landscape; margin: 12mm; }
-  body { font-family: "Microsoft YaHei","PingFang SC",-apple-system,sans-serif; color:#111; background:#fff; margin:0; }
-  h1 { font-size:18px; margin:0 0 4px; }
-  h2 { font-size:13px; margin:14px 0 6px; padding-bottom:3px; border-bottom:1px solid #999;
-       /* 标题不能单独留在页尾 */
-       break-after:avoid; page-break-after:avoid; }
-  p.sub { font-size:11px; color:#555; margin:0 0 10px; }
-  table { width:100%; border-collapse:collapse; font-size:10px; margin-bottom:6px; }
-  th, td { border:1px solid #bbb; padding:3px 5px; text-align:left; word-break:break-word; }
-  th { background:#eee; font-weight:600; }
-  /* 长表跨页时每页重复表头 */
+  body { font-family:"Microsoft YaHei","PingFang SC",-apple-system,sans-serif; color:#1a1a1a; background:#fff; margin:0;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .rpt-head { border-left:5px solid #2563eb; padding:1px 0 1px 12px; margin-bottom:12px; }
+  h1 { font-size:19px; margin:0 0 3px; color:#111; }
+  p.sub { font-size:11px; color:#666; margin:0; }
+  .kpis { display:flex; gap:10px; margin:0 0 14px; flex-wrap:wrap; }
+  .kpi { flex:1; min-width:110px; border:1px solid #e2e6ea; border-radius:6px; padding:8px 12px; background:#f7f9fc; }
+  .kpi-v { font-size:16px; font-weight:700; color:#111; }
+  .kpi-k { font-size:10px; color:#777; margin-top:2px; }
+  h2 { font-size:13px; margin:16px 0 6px; padding:4px 0 4px 8px; border-left:3px solid #2563eb;
+       background:#f1f5f9; color:#1e3a5f; break-after:avoid; page-break-after:avoid; }
+  h2 .cnt { font-size:10px; color:#8a94a0; font-weight:400; }
+  table { width:100%; border-collapse:collapse; font-size:10px; margin-bottom:8px; }
+  th, td { border:1px solid #d0d5db; padding:4px 6px; text-align:left; word-break:break-word; }
+  th { background:#eef2f7; font-weight:600; color:#334155; }
+  tbody tr:nth-child(even) { background:#fafbfc; }
+  tr.sev-warn { background:#fff8e6 !important; }
+  tr.sev-crit { background:#fdecec !important; }
+  tr.sev-crit td:last-child, tr.sev-warn td:last-child { font-weight:600; }
   thead { display:table-header-group; }
   tr { break-inside:avoid; page-break-inside:avoid; }
 </style></head><body>${h}</body></html>`;

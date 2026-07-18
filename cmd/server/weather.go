@@ -46,10 +46,13 @@ type weatherResult struct {
 	Text      string `json:"text"`
 	Humidity  string `json:"humidity,omitempty"`
 	AQI       string `json:"aqi,omitempty"`
-	TodayHigh int    `json:"today_high,omitempty"`
-	TodayLow  int    `json:"today_low,omitempty"`
-	Reason    string `json:"reason,omitempty"` // ok=false 时说明原因
-	Source    string `json:"source,omitempty"` // 定位 IP 来源：client/egress/default-env/override（调试用）
+	TodayHigh    int    `json:"today_high,omitempty"`
+	TodayLow     int    `json:"today_low,omitempty"`
+	TomorrowHigh int    `json:"tomorrow_high,omitempty"`
+	TomorrowLow  int    `json:"tomorrow_low,omitempty"`
+	TomorrowText string `json:"tomorrow_text,omitempty"` // 明天白天天气（按 code 映射，避免上游中文乱码）
+	Reason       string `json:"reason,omitempty"`        // ok=false 时说明原因
+	Source       string `json:"source,omitempty"`        // 定位 IP 来源：client/egress/default-env/override（调试用）
 }
 
 type weatherCacheEntry struct {
@@ -234,6 +237,11 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 				DayTemp   string `json:"day_air_temperature"`
 				NightTemp string `json:"night_air_temperature"`
 			} `json:"f1"`
+			F2 struct {
+				DayTemp   string `json:"day_air_temperature"`
+				NightTemp string `json:"night_air_temperature"`
+				DayCode   string `json:"day_weather_code"`
+			} `json:"f2"`
 		} `json:"showapi_res_body"`
 	}
 	if err := json.Unmarshal(raw, &up); err != nil {
@@ -249,9 +257,12 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 		Text:      weatherCodeText(up.Body.Now.WeatherCode),
 		Humidity:  up.Body.Now.SD,
 		AQI:       up.Body.Now.AQI,
-		Location:  cityCN(up.Body.CityInfo.C2),
-		TodayHigh: weatherAtoi(up.Body.F1.DayTemp),
-		TodayLow:  weatherAtoi(up.Body.F1.NightTemp),
+		Location:     cityCN(up.Body.CityInfo.C2),
+		TodayHigh:    weatherAtoi(up.Body.F1.DayTemp),
+		TodayLow:     weatherAtoi(up.Body.F1.NightTemp),
+		TomorrowHigh: weatherAtoi(up.Body.F2.DayTemp),
+		TomorrowLow:  weatherAtoi(up.Body.F2.NightTemp),
+		TomorrowText: weatherCodeText(up.Body.F2.DayCode),
 	}
 	return res, nil
 }

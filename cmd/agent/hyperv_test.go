@@ -65,6 +65,38 @@ func TestParseHyperV(t *testing.T) {
 	}
 }
 
+// TestParseHyperVDetail covers the expanded per-VM detail: nested Disks/Nics/
+// Checkpoints (with the single-element-collapses-to-object quirk) and nic IPs
+// arriving comma-joined.
+func TestParseHyperVDetail(t *testing.T) {
+	const in = `[{"Name":"web","Id":"g1","State":"Running",
+	  "MemStartupMB":2048,"MemMinMB":512,"IntegrationState":"Up to date",
+	  "Nics":{"Name":"NIC1","MAC":"00:15:5D:01:02:03","Switch":"vSwitch","Status":"Ok","Connected":true,"IP":"10.0.0.5,10.0.0.6"},
+	  "Disks":[{"Path":"C:\\vm\\web.vhdx","ControllerType":"SCSI","ControllerNumber":0,"ControllerLocation":0,"FileSizeGB":42.5},
+	           {"Path":"C:\\vm\\data.vhdx","ControllerType":"SCSI","FileSizeGB":100}],
+	  "Checkpoints":{"Name":"before-patch","Created":"2026-07-18T01:02:03","Parent":""}}]`
+	g, err := parseHyperV(in)
+	if err != nil || len(g) != 1 {
+		t.Fatalf("parse err=%v guests=%d", err, len(g))
+	}
+	v := g[0]
+	if v.MemStartupMB != 2048 || v.MemMinMB != 512 || v.IntegrationState != "Up to date" {
+		t.Errorf("mem/integration wrong: %+v", v)
+	}
+	if len(v.Nics) != 1 || v.Nics[0].MAC != "00:15:5D:01:02:03" || v.Nics[0].Switch != "vSwitch" || !v.Nics[0].Connected {
+		t.Fatalf("nic wrong: %+v", v.Nics)
+	}
+	if len(v.Nics[0].IPAddresses) != 2 {
+		t.Errorf("nic IPs = %v, want 2", v.Nics[0].IPAddresses)
+	}
+	if len(v.Disks) != 2 || v.Disks[0].ControllerType != "SCSI" || v.Disks[0].FileSizeGB != 42.5 || v.Disks[1].FileSizeGB != 100 {
+		t.Fatalf("disks wrong: %+v", v.Disks)
+	}
+	if len(v.Checkpoints) != 1 || v.Checkpoints[0].Name != "before-patch" {
+		t.Fatalf("checkpoints wrong: %+v", v.Checkpoints)
+	}
+}
+
 func TestSplitComma(t *testing.T) {
 	cases := map[string][]string{
 		"":            nil,

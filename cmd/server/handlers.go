@@ -34,6 +34,8 @@ type Server struct {
 	logs        *logStore           // aggregated agent logs
 	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
 	hv          *hypervStore        // latest Hyper-V guest inventory per host (feeds VM alerts)
+	snmp        *snmpStore          // latest SNMP device snapshots per host (feeds SNMP alerts)
+	nf          *nfStore            // per-host NetFlow window stats + baseline (feeds traffic-anomaly alerts)
 	ai          *aiManager          // AI inspection + diagnosis
 	vm          *vmWriter           // optional VictoriaMetrics remote-write
 	messages    *messageHub         // unified notification center (SRE/alert/AI feed)
@@ -63,6 +65,8 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		logs:        newLogStore(),
 		hw:          newHardwareStore(),
 		hv:          newHypervStore(),
+		snmp:        newSNMPStore(),
+		nf:          newNFStore(),
 		ai:          newAIManager(cfg),
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
@@ -308,6 +312,8 @@ func (s *Server) Routes() http.Handler {
 	// Hardware + NetFlow: agent ingest (fingerprint-gated)
 	mux.HandleFunc("POST /api/v1/agent/hardware", s.handleAgentHardware)
 	mux.HandleFunc("POST /api/v1/agent/netflow", s.handleAgentNetFlow)
+	// SNMP: agent ingest (fingerprint-gated)
+	mux.HandleFunc("POST /api/v1/agent/snmp", s.handleAgentSNMP)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
@@ -321,6 +327,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)
+	// SNMP: frontend query
+	mux.HandleFunc("GET /api/v1/snmp/list", s.handleSNMPList)
+	mux.HandleFunc("GET /api/v1/snmp/interface-history", s.handleSNMPInterfaceHistory)
+	mux.HandleFunc("GET /api/v1/snmp/traps", s.handleSNMPTraps)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)

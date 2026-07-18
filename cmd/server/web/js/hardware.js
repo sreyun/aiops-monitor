@@ -12,6 +12,7 @@ let HW_VIEW_MODE = localStorage.getItem("aiops_hw_view") || "card"; // card | li
 let HW_CHARTS = {};                                    // 详情弹窗内的图表实例
 let HW_CUR = null;                                     // 当前打开详情的项
 let HW_HIST_RANGE = "6h";
+let HW_HIST_SUMMARY = {};                              // 各指标历史概况（min/max/avg/最新），供导出补上"历史"数据
 let HW_LOCAL_EVENTS = [];                              // 平台侧记录的状态变化（异步载入，导出时一并带上）
 let HW_FILTER = { q: "", status: "all", fresh: "all" }; // 搜索 / 在线状态 / 数据新鲜度
 
@@ -337,6 +338,12 @@ const hwSevCls = s => s === "Critical" ? "crit" : s === "Warning" ? "warn" : s =
 const hwSevChip = s => `<span class="hw-sev hw-${hwSevCls(s)}">${esc(hwHealthText(s))}</span>`;
 const hwDash = v => (v === undefined || v === null || v === "") ? "-" : String(v);
 
+// 容量格式化：≥1024GB 显示 TB（保留 3 位，如 40.035 TB），否则 GB；0/空返回空串（不占格）。
+function hwFmtCap(gb) {
+  if (!gb || gb <= 0) return "";
+  return gb >= 1024 ? (gb / 1024).toFixed(3) + " TB" : gb.toFixed(0) + " GB";
+}
+
 function hwDetailHTML(it, sd, m) {
   const s = hwSummary(sd);
   const sys = sd.system || {};
@@ -355,6 +362,12 @@ function hwDetailHTML(it, sd, m) {
     // Dell 的 Service Tag 与序列号常常同值，同值就不重复占一格
     [hwT("hardware.service_tag", "服务标签"), (sys.sku && sys.sku !== sys.serial_number) ? sys.sku : ""],
     [hwT("hardware.asset_tag", "资产编号"), sys.asset_tag],
+    // 存储阵列（OceanStor 等）专有字段：软件版本/补丁/总容量/已用/位置（服务器为空不显示）
+    [hwT("hardware.sw_version", "软件版本"), sys.software_version],
+    [hwT("hardware.patch_version", "补丁版本"), sys.patch_version],
+    [hwT("hardware.total_capacity", "总容量"), hwFmtCap(sys.total_capacity_gb)],
+    [hwT("hardware.used_capacity", "已用容量"), hwFmtCap(sys.used_capacity_gb)],
+    [hwT("hardware.location", "设备位置"), sys.location],
     [hwT("hardware.os_hostname", "OS 主机名"), sys.host_name],
     [hwT("hardware.bios", "BIOS 版本"), sys.bios_version],
     [hwT("hardware.bmc", "BMC"), [sys.bmc_model, sys.bmc_firmware].filter(Boolean).join(" ")],
@@ -616,6 +629,11 @@ function hwExportModel(it) {
     [hwT("hardware.serial", "序列号"), sys.serial_number],
     [hwT("hardware.service_tag", "服务标签"), (sys.sku && sys.sku !== sys.serial_number) ? sys.sku : ""],
     [hwT("hardware.asset_tag", "资产编号"), sys.asset_tag],
+    [hwT("hardware.sw_version", "软件版本"), sys.software_version],
+    [hwT("hardware.patch_version", "补丁版本"), sys.patch_version],
+    [hwT("hardware.total_capacity", "总容量"), hwFmtCap(sys.total_capacity_gb)],
+    [hwT("hardware.used_capacity", "已用容量"), hwFmtCap(sys.used_capacity_gb)],
+    [hwT("hardware.location", "设备位置"), sys.location],
     [hwT("hardware.os_hostname", "OS 主机名"), sys.host_name],
     [hwT("hardware.bios", "BIOS 版本"), sys.bios_version],
     [hwT("hardware.bmc", "BMC"), [sys.bmc_model, sys.bmc_firmware].filter(Boolean).join(" ")],
@@ -641,6 +659,16 @@ function hwExportModel(it) {
     [hwT("hardware.event_time", "时间"), hwT("hardware.event_severity", "级别"),
      hwT("hardware.event_component", "触发部件"), hwT("hardware.event_message", "事件内容")],
     (sd.events || []).map(e => [hwFmtTime(e.created), hwHealthText(e.severity), D(e.component), e.message || ""]));
+
+  // 历史概况：网页有温度/风扇/功耗/健康的曲线图，导出此前完全没有——这里用 最小/最大/均值/最新
+  // 概括当前所选时间范围（HW_HIST_RANGE），把"历史"补进导出。
+  add(hwT("hardware.history_summary", "历史概况") + `（${HW_HIST_RANGE}）`,
+    [hwT("hardware.metric", "指标"), hwT("hardware.min", "最小值"), hwT("hardware.max", "最大值"),
+     hwT("hardware.avg", "均值"), hwT("hardware.latest", "最新")],
+    Object.values(HW_HIST_SUMMARY).map(h => {
+      const f = h.fmt || (v => v.toFixed(0));
+      return [h.label, f(h.min), f(h.max), f(h.avg), h.latest != null ? f(h.latest) : "-"];
+    }));
 
   add(hwT("hardware.cpu", "CPU"),
     [hwT("hardware.name", "名称"), hwT("hardware.model", "型号"), hwT("hardware.cores_threads", "核心/线程"),
@@ -730,6 +758,18 @@ function hwExportModel(it) {
   return model;
 }
 
+// 把导出模型拍平成纯文本，喂给 AI 诊断——与导出/网页同一份数据，保证"看到什么就分析什么"。
+function hwModelToText(model) {
+  let s = (model.title || "设备") + "\n";
+  (model.meta || []).forEach(([k, v]) => { s += `${k}: ${v}\n`; });
+  (model.sections || []).forEach(sec => {
+    s += `\n【${sec.title}】\n`;
+    if (sec.columns && sec.columns.length) s += sec.columns.join(" | ") + "\n";
+    (sec.rows || []).forEach(r => { s += r.join(" | ") + "\n"; });
+  });
+  return s;
+}
+
 function hwToggleExportMenu(show) {
   const menu = $("hwExportMenu"), btn = $("hwExportBtn");
   if (!menu || !btn) return;
@@ -764,6 +804,7 @@ async function loadHwHistory() {
   if (!HW_CUR) return;
   const hostID = HW_CUR.host.id, target = HW_CUR.snap.target_name || "";
   HW_CHARTS = {};
+  HW_HIST_SUMMARY = {};
   const specs = [
     ["hwChartTemp", "temperature", hwT("hardware.temperature", "温度传感器") + " (°C)", v => v.toFixed(0) + "°C"],
     ["hwChartFan", "fan_rpm", hwT("hardware.fans", "风扇") + " (RPM)", v => v.toFixed(0)],
@@ -776,6 +817,17 @@ async function loadHwHistory() {
       if (target) qs.set("target", target);
       const d = await fetch(`${API}/hardware/history?${qs}`).then(r => r.json());
       const series = hwParseSeries(d.points || []);
+      // 汇总该指标历史概况（min/max/avg/最新），供导出的「历史概况」段——补上导出此前缺失的历史数据
+      const allVals = series.flatMap(s => s.pts.map(p => p[1])).filter(v => !isNaN(v));
+      if (allVals.length) {
+        const lastVals = series.map(s => (s.pts.length ? s.pts[s.pts.length - 1][1] : null)).filter(v => v != null && !isNaN(v));
+        HW_HIST_SUMMARY[metric] = {
+          label: title, fmt,
+          min: Math.min(...allVals), max: Math.max(...allVals),
+          avg: allVals.reduce((a, b) => a + b, 0) / allVals.length,
+          latest: lastVals.length ? lastVals.reduce((a, b) => a + b, 0) / lastVals.length : null,
+        };
+      }
       if (!series.length) {
         const c = $(cid);
         if (c) drawChartEmpty(c.getContext("2d"), c.getBoundingClientRect().width || 1000, 200,
@@ -880,6 +932,18 @@ safeAddEventListener("hardwarePanel", "change", e => {
 dupBindPanel("hardwarePanel", loadHardwarePanel);
 
 // 导出下拉：按钮开合 + 选项点击 + 点外部/Esc 收起
+// AI 诊断：把该设备完整硬件快照喂给 AI 分析整体运行状态，走 /ai/assist 流式 + 自动沉淀记忆(闭环)
+safeAddEventListener("hwAIBtn", "click", () => {
+  if (!HW_CUR) return;
+  if (typeof openAIAssist !== "function") { toast(hwT("hardware.ai_unavailable", "AI 面板未就绪"), "err"); return; }
+  const model = hwExportModel(HW_CUR);
+  openAIAssist({
+    task: "hardware_diagnosis",
+    title: "🤖 AI 硬件诊断 · " + (model.title || "设备"),
+    mode: "analyze",
+    context: hwModelToText(model).slice(0, 14000)
+  });
+});
 safeAddEventListener("hwExportBtn", "click", e => { e.stopPropagation(); hwToggleExportMenu(); });
 safeAddEventListener("hwExportMenu", "click", e => {
   const o = e.target.closest("[data-hwexport]");

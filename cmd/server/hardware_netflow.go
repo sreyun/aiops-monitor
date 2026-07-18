@@ -122,6 +122,13 @@ func (s *Server) handleAgentNetFlow(w http.ResponseWriter, r *http.Request) {
 	// Write aggregated metrics to VM
 	s.vmNetFlowMetrics(rep.HostID, rep)
 
+	// 喂给流量异常告警的每主机基线（突增/丢包检测），不查 PG。
+	hostname, ip := rep.HostID, ""
+	if h := s.hostByID(rep.HostID); h != nil {
+		hostname, ip = h.Hostname, h.IP
+	}
+	s.nf.put(rep.HostID, hostname, ip, rep)
+
 	// Optionally store flow details in PG (for detailed queries + CSV export)
 	if s.pg != nil && len(rep.Flows) > 0 {
 		s.pg.insertFlowRecords(rep.HostID, rep.Source, rep.Flows)

@@ -34,9 +34,10 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}
-	// Agent-facing hardware/netflow/hyperv ingest are fingerprint-gated, not
+	// Agent-facing hardware/netflow/hyperv/snmp ingest are fingerprint-gated, not
 	// session-gated (the fingerprint is verified inside each handler).
-	if p == "/api/v1/agent/hardware" || p == "/api/v1/agent/netflow" || p == "/api/v1/agent/hyperv" {
+	if p == "/api/v1/agent/hardware" || p == "/api/v1/agent/netflow" || p == "/api/v1/agent/hyperv" ||
+		p == "/api/v1/agent/snmp" || p == "/api/v1/agent/snmp/trap" {
 		return true
 	}
 	// 拆分后的前端静态模块（/js/*.js、/css/*）与 /app.js、/style.css 同属登录前外壳，需放行。

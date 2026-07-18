@@ -319,6 +319,8 @@ func main() {
 	notifier.forward = server.forward
 	notifier.hw = server.hw // 硬件异常接入统一告警链路（去重/推送与 CPU、磁盘等一致）
 	notifier.hv = server.hv // Hyper-V 虚拟机异常接入统一告警链路
+	notifier.snmp = server.snmp // SNMP 网络设备异常接入统一告警链路
+	notifier.nf = server.nf     // NetFlow 流量异常接入统一告警链路
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
 	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）

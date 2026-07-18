@@ -62,7 +62,9 @@ func (f *fakeOceanStor) handler() http.Handler {
 func oceanStorRoutes() map[string]string {
 	return map[string]string{
 		"system/": `{"data":{"ID":"210235','","NAME":"OceanStor-5500","PRODUCTMODESTRING":"OceanStor 5500 V5",
-			"PRODUCTVERSION":"V500R007C60","HEALTHSTATUS":"1","RUNNINGSTATUS":"1","SN":"2102351NPQ10J8000012"},
+			"PRODUCTVERSION":"V500R007C60","PATCHVERSION":"SPC200 SPH216","LOCATION":"hcidc",
+			"TOTALCAPACITY":"85899345920","USEDCAPACITY":"42949672960",
+			"HEALTHSTATUS":"1","RUNNINGSTATUS":"1","SN":"2102351NPQ10J8000012"},
 			"error":{"code":0,"description":"0"}}`,
 		"enclosure": `{"data":[
 			{"ID":"0","NAME":"CTE0","MODEL":"OceanStor 5500 V5 Controller Enclosure","SERIALNUM":"021ABC",
@@ -81,7 +83,7 @@ func oceanStorRoutes() map[string]string {
 			"error":{"code":0,"description":"0"}}`,
 		"controller": `{"data":[
 			{"ID":"0A","NAME":"CTE0.A","LOCATION":"CTE0.A","HEALTHSTATUS":"1","RUNNINGSTATUS":"27",
-			 "SOFTVER":"V500R007C60","MEMORYSIZE":"65536","MODEL":"ARM"}],
+			 "SOFTVER":"V500R007C60","MEMORYSIZE":"65536","MODEL":"ARM","CPUINFO":"Kunpeng 920","CPUCORES":"32"}],
 			"error":{"code":0,"description":"0"}}`,
 		"power": `{"data":[
 			{"ID":"CTE0.PSU0","LOCATION":"CTE0.PSU0","HEALTHSTATUS":"1","RUNNINGSTATUS":"1","MODEL":"PAC900S12-B"},
@@ -156,6 +158,20 @@ func TestOceanStorEnclosureAndDisk(t *testing.T) {
 	if snap.System.SerialNumber != "2102351NPQ10J8000012" {
 		t.Errorf("SN = %q", snap.System.SerialNumber)
 	}
+	// 存储阵列专有字段：软件版本 / 补丁 / 位置 / 总容量（此前全丢，用户反馈缺失）
+	if snap.System.SoftwareVersion != "V500R007C60" {
+		t.Errorf("软件版本 = %q", snap.System.SoftwareVersion)
+	}
+	if snap.System.PatchVersion != "SPC200 SPH216" {
+		t.Errorf("补丁版本 = %q, want SPC200 SPH216", snap.System.PatchVersion)
+	}
+	if snap.System.Location != "hcidc" {
+		t.Errorf("设备位置 = %q, want hcidc", snap.System.Location)
+	}
+	// TOTALCAPACITY 是 512B 扇区数：85899345920 × 512 ÷ 1024³ = 40960 GB = 40 TB
+	if got := int(snap.System.TotalCapacityGB); got != 40960 {
+		t.Errorf("总容量 = %dGB, want 40960（TOTALCAPACITY 是扇区数）", got)
+	}
 
 	// 磁盘框：这是本次要解决的主角
 	if len(snap.Enclosures) != 2 {
@@ -219,6 +235,18 @@ func TestOceanStorPowerFanController(t *testing.T) {
 	}
 	if len(snap.RAID) != 1 || snap.RAID[0].FirmwareVersion != "V500R007C60" {
 		t.Errorf("控制器 = %+v", snap.RAID)
+	}
+	// 控制器内存提到"内存"段（MEMORYSIZE 65536MB = 64GB），否则存储阵列在硬件页看不到内存
+	if snap.Memory.TotalGB != 64 || len(snap.Memory.DIMMs) != 1 || int(snap.Memory.DIMMs[0].CapacityGB) != 64 {
+		t.Errorf("控制器内存未提到内存段: total=%v dimms=%d", snap.Memory.TotalGB, len(snap.Memory.DIMMs))
+	}
+	// 控制器 CPU 提到"CPU"段
+	if len(snap.CPUs) != 1 || snap.CPUs[0].Model != "Kunpeng 920" || snap.CPUs[0].Cores != 32 {
+		t.Errorf("控制器 CPU 未提到 CPU 段: %+v", snap.CPUs)
+	}
+	// 电源额定功率：DeviceManager 无功率字段时从型号 PAC900S12-B 解析 → 900W
+	if snap.Power.PSUs[0].CapacityWatts != 900 {
+		t.Errorf("电源额定功率 = %v, want 900（从型号 PAC900S12 解析）", snap.Power.PSUs[0].CapacityWatts)
 	}
 }
 

@@ -178,6 +178,12 @@ type RedfishSystem struct {
 	IndicatorLED string `json:"indicator_led,omitempty"`
 	BMCModel     string `json:"bmc_model,omitempty"`    // iDRAC9 / iBMC
 	BMCFirmware  string `json:"bmc_firmware,omitempty"` // Manager.FirmwareVersion
+	// 存储阵列（OceanStor 等）专有：服务器 BMC 不上报这些，故 omitempty。
+	SoftwareVersion string  `json:"software_version,omitempty"` // 阵列软件版本，如 V300R003C20
+	PatchVersion    string  `json:"patch_version,omitempty"`    // 补丁版本，如 SPC200 SPH216
+	Location        string  `json:"location,omitempty"`         // 设备位置（DeviceManager 里手填），如 hcidc
+	TotalCapacityGB float64 `json:"total_capacity_gb,omitempty"`// 阵列总容量
+	UsedCapacityGB  float64 `json:"used_capacity_gb,omitempty"` // 已用容量
 }
 
 // HardwareEvent is one BMC log entry (Dell iDRAC SEL/LC log, Huawei iBMC event
@@ -368,17 +374,50 @@ type HyperVGuest struct {
 	ProcessorCount   int      `json:"processor_count,omitempty"`
 	MemAssignedMB    float64  `json:"mem_assigned_mb,omitempty"`
 	MemDemandMB      float64  `json:"mem_demand_mb,omitempty"`
+	MemStartupMB     float64  `json:"mem_startup_mb,omitempty"`
+	MemMinMB         float64  `json:"mem_min_mb,omitempty"`
 	MemMaxMB         float64  `json:"mem_max_mb,omitempty"`
 	DynamicMemEnabled bool    `json:"dynamic_mem_enabled,omitempty"` // 内存压力(需求/分配)只对动态内存 VM 有意义
 	UptimeSec        int64    `json:"uptime_sec,omitempty"`
 	Generation       int      `json:"generation,omitempty"`
 	Version          string   `json:"version,omitempty"`
-	IPAddresses      []string `json:"ip_addresses,omitempty"` // 由集成服务上报，Guest 运行时才有
-	Switches         []string `json:"switches,omitempty"`     // 连接的虚拟交换机名
+	IntegrationState string   `json:"integration_state,omitempty"` // 集成服务状态（展示用，可能本地化）
+	IPAddresses      []string `json:"ip_addresses,omitempty"`      // 所有网卡 IP 汇总（由集成服务上报，Guest 运行时才有）
+	Switches         []string `json:"switches,omitempty"`          // 连接的虚拟交换机名
 	VHDCount         int      `json:"vhd_count,omitempty"`
 	CheckpointCount  int      `json:"checkpoint_count,omitempty"`
 	ReplState        string   `json:"repl_state,omitempty"`  // Disabled / Enabled / ...
 	ReplHealth       string   `json:"repl_health,omitempty"` // NotApplicable / Normal / Warning / Critical
+	// 明细（用于前端 VM 详情视图；老 Agent 不上报时为空，前端优雅降级）
+	Disks       []HyperVDisk       `json:"disks,omitempty"`
+	Nics        []HyperVNic        `json:"nics,omitempty"`
+	Checkpoints []HyperVCheckpoint `json:"checkpoints,omitempty"`
+}
+
+// HyperVDisk is one virtual hard disk attached to a guest.
+type HyperVDisk struct {
+	Path               string  `json:"path"`
+	ControllerType     string  `json:"controller_type,omitempty"` // IDE / SCSI
+	ControllerNumber   int     `json:"controller_number,omitempty"`
+	ControllerLocation int     `json:"controller_location,omitempty"`
+	FileSizeGB         float64 `json:"file_size_gb,omitempty"` // 实际占用（VHD 文件大小）
+}
+
+// HyperVNic is one virtual network adapter of a guest.
+type HyperVNic struct {
+	Name        string   `json:"name"`
+	MAC         string   `json:"mac,omitempty"`
+	Switch      string   `json:"switch,omitempty"`
+	Status      string   `json:"status,omitempty"` // Ok / Degraded / ...
+	Connected   bool     `json:"connected,omitempty"`
+	IPAddresses []string `json:"ip_addresses,omitempty"`
+}
+
+// HyperVCheckpoint is one checkpoint (snapshot) of a guest.
+type HyperVCheckpoint struct {
+	Name       string `json:"name"`
+	Created    string `json:"created,omitempty"` // RFC3339-ish
+	ParentName string `json:"parent,omitempty"`
 }
 
 // HyperVReport is the payload agents POST for the Hyper-V guest inventory of one
@@ -432,4 +471,112 @@ type NetFlowReport struct {
 	WindowSec   int          `json:"window_sec"`
 	Flows       []FlowRecord `json:"flows"`
 	Stats       NetFlowStats `json:"stats"`
+}
+
+// ============================================================================
+// SNMP 采集结构体（agent 周期轮询 IF-MIB + 系统组）
+//
+// 与 NetFlow 的关键区别：NetFlow 是设备 PUSH 的五元组流；SNMP 是 agent 主动 PULL
+// 的接口计数器。计数器单调递增（可能 32 位回绕），速率/利用率由 agent 在两次轮询间
+// 算好当 gauge 上报（RateValid 标注是否可信），原始 HC 计数器一并带上供 PG 取证。
+// 粒度对齐 HardwareSnapshot：Error 非空时 server 不覆盖上一份好数据。
+// ============================================================================
+
+// SNMPInterface 是一张接口一轮的采集结果。
+type SNMPInterface struct {
+	Index       uint32 `json:"index"`                  // ifIndex
+	Name        string `json:"name,omitempty"`         // ifName（做 VM label 首选，稳定）
+	Descr       string `json:"descr,omitempty"`        // ifDescr
+	Alias       string `json:"alias,omitempty"`        // ifAlias（运维口述描述）
+	Type        int    `json:"type,omitempty"`         // ifType(IANAifType)
+	MAC         string `json:"mac,omitempty"`          // ifPhysAddress
+	SpeedBps    uint64 `json:"speed_bps,omitempty"`    // ifHighSpeed*1e6 优先，否则 ifSpeed
+	AdminStatus int    `json:"admin_status,omitempty"` // 1 up 2 down 3 testing
+	OperStatus  int    `json:"oper_status,omitempty"`  // 1 up 2 down 3 testing 4 unknown 5 dormant 6 notPresent 7 lowerLayerDown
+	OperUp      bool   `json:"oper_up"`                // 归一：operStatus==1（告警 up/down 直接用）
+
+	// agent 端算好的速率（gauge，给 VM 写时序 + 告警评估）
+	InBps          float64 `json:"in_bps"`
+	OutBps         float64 `json:"out_bps"`
+	InPps          float64 `json:"in_pps,omitempty"`
+	OutPps         float64 `json:"out_pps,omitempty"`
+	InUtilPercent  float64 `json:"in_util_percent,omitempty"`
+	OutUtilPercent float64 `json:"out_util_percent,omitempty"`
+	InErrPps       float64 `json:"in_err_pps,omitempty"`
+	OutErrPps      float64 `json:"out_err_pps,omitempty"`
+	InDiscardPps   float64 `json:"in_discard_pps,omitempty"`
+	OutDiscardPps  float64 `json:"out_discard_pps,omitempty"`
+
+	// 最新原始计数器（给 PG 明细/取证；不推 VM）
+	InOctets  uint64 `json:"in_octets,omitempty"`
+	OutOctets uint64 `json:"out_octets,omitempty"`
+	InErrors  uint64 `json:"in_errors,omitempty"`
+	OutErrors uint64 `json:"out_errors,omitempty"`
+	Counter64 bool   `json:"counter64,omitempty"` // 是否用了 HC 计数器
+	RateValid bool   `json:"rate_valid"`          // 首轮/回绕/复位时为 false（速率不可信）
+}
+
+// SNMPSystem 是设备系统组（sysDescr/sysUpTime/sysName…）。
+type SNMPSystem struct {
+	Descr     string  `json:"descr,omitempty"`
+	ObjectID  string  `json:"object_id,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Location  string  `json:"location,omitempty"`
+	UptimeSec float64 `json:"uptime_sec,omitempty"` // sysUpTime/100
+}
+
+// SNMPSnapshot 是一个被轮询设备一轮的整体快照（一台设备一份，server 按 target upsert）。
+type SNMPSnapshot struct {
+	TargetName  string          `json:"target_name"`
+	TargetIP    string          `json:"target_ip"`
+	Timestamp   int64           `json:"timestamp"`       // Unix 秒（server push VM 时 *1000）
+	Version     string          `json:"version"`         // "2c" | "3"
+	IntervalSec int             `json:"interval_sec"`    // 本轮速率的 delta 基准
+	Reachable   bool            `json:"reachable"`       // 是否成功采到
+	Error       string          `json:"error,omitempty"` // 采集失败原因（失败时 server 不覆盖上次好数据）
+	System      SNMPSystem      `json:"system"`
+	Interfaces  []SNMPInterface `json:"interfaces"`
+}
+
+// SNMPReport 是 agent 周期上报的 SNMP 载荷（POST /api/v1/agent/snmp）。
+type SNMPReport struct {
+	HostID      string         `json:"host_id"`
+	Fingerprint string         `json:"fingerprint,omitempty"`
+	Timestamp   int64          `json:"timestamp"`
+	Snapshots   []SNMPSnapshot `json:"snapshots"` // 每轮通常一台设备一条
+}
+
+// ============================================================================
+// SNMP Trap 事件结构体（agent 监听 :162，v1+v2c）
+// ============================================================================
+
+// SNMPVarbind 是 trap 里一条 name=value（value 统一 stringify，JSON 安全）。
+type SNMPVarbind struct {
+	OID   string `json:"oid"`
+	Type  string `json:"type"`  // "OctetString"/"Integer"/"Counter32"/"TimeTicks"/"IpAddress"/"OID"/...
+	Value string `json:"value"` // 数值型十进制字符串，OctetString 尽量可读
+}
+
+// SNMPTrapEvent 是归一后的一条 trap 事件。
+type SNMPTrapEvent struct {
+	SourceIP     string        `json:"source_ip"`
+	Version      string        `json:"version"`              // "1" | "2c"
+	Community    string        `json:"community,omitempty"`
+	TrapOID      string        `json:"trap_oid"`             // v1 按 RFC3584 归一
+	Severity     string        `json:"severity"`             // info/warning/critical（启发式）
+	UptimeSec    float64       `json:"uptime_sec,omitempty"` // sysUpTime/100
+	Timestamp    int64         `json:"timestamp"`            // 接收时刻 Unix 秒
+	Enterprise   string        `json:"enterprise,omitempty"` // v1
+	AgentAddr    string        `json:"agent_addr,omitempty"` // v1
+	GenericTrap  int           `json:"generic_trap,omitempty"`
+	SpecificTrap int           `json:"specific_trap,omitempty"`
+	Varbinds     []SNMPVarbind `json:"varbinds,omitempty"`
+}
+
+// SNMPTrapReport 是 trap 批量上报载荷（POST /api/v1/agent/snmp/trap）。
+type SNMPTrapReport struct {
+	HostID      string          `json:"host_id"`
+	Fingerprint string          `json:"fingerprint,omitempty"`
+	Timestamp   int64           `json:"timestamp"`
+	Traps       []SNMPTrapEvent `json:"traps"`
 }

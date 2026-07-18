@@ -40,6 +40,8 @@ type Notifier struct {
 	forward     *forwardManager // set after server startup
 	hw          *hardwareStore  // set after server startup; feeds hardware alerts
 	hv          *hypervStore    // set after server startup; feeds Hyper-V VM alerts
+	snmp        *snmpStore      // set after server startup; feeds SNMP device alerts
+	nf          *nfStore        // set after server startup; feeds NetFlow traffic-anomaly alerts
 }
 
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
@@ -114,6 +116,14 @@ func (n *Notifier) tick() {
 	// Hyper-V 虚拟机异常同样并入：关机/暂停/健康/资源超阈值 → 推送 + critical 自动 AI 诊断。
 	if n.hv != nil {
 		alerts = append(alerts, EvaluateHyperV(n.hv)...)
+	}
+	// SNMP 网络设备异常并入：接口 up/down、带宽利用率、错误/丢包率、采集失败。
+	if n.snmp != nil {
+		alerts = append(alerts, EvaluateSNMP(n.snmp)...)
+	}
+	// NetFlow 流量异常并入：突增（EWMA 基线）、采集器丢包。
+	if n.nf != nil {
+		alerts = append(alerts, EvaluateNetFlow(n.nf)...)
 	}
 	cur := make(map[string]Alert, len(alerts))
 	for _, a := range alerts {
@@ -299,6 +309,7 @@ func formatAlert(a Alert, firing bool) string {
 		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
 		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
+		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -385,6 +396,7 @@ func alertEmailHTML(a Alert, firing bool) string {
 		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
 		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
+		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {

@@ -314,6 +314,31 @@ func (p *pgStore) migrate() error {
 		-- 兜底分区：任何月份分区没来得及建时，数据落这里而不是插入失败。
 		CREATE TABLE IF NOT EXISTS flow_records_default PARTITION OF flow_records DEFAULT;
 		CREATE INDEX IF NOT EXISTS idx_flow_host_time ON flow_records(host_id, created_at DESC);
+
+		-- SNMP 设备快照：一台设备一份，按 (host_id, device_name) upsert。
+		-- 与 hardware_snapshot 同构：采集失败（Error 非空）时上层不覆盖上一份好数据。
+		CREATE TABLE IF NOT EXISTS snmp_snapshot (
+			host_id     TEXT NOT NULL,
+			device_name TEXT NOT NULL,
+			device_ip   TEXT,
+			snapshot    JSONB NOT NULL,
+			reachable   BOOLEAN DEFAULT TRUE,
+			updated_at  TIMESTAMPTZ DEFAULT NOW(),
+			PRIMARY KEY (host_id, device_name)
+		);
+		-- SNMP Trap 事件：追加写，供告警联动/查询/取证。
+		CREATE TABLE IF NOT EXISTS snmp_traps (
+			id          BIGSERIAL PRIMARY KEY,
+			host_id     TEXT NOT NULL,
+			source_ip   TEXT,
+			version     TEXT,
+			trap_oid    TEXT,
+			severity    TEXT,
+			uptime_sec  DOUBLE PRECISION,
+			varbinds    JSONB,
+			received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_snmp_traps_host_time ON snmp_traps(host_id, received_at DESC);
 	`)
 	return err
 }
@@ -2191,6 +2216,105 @@ func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string
 	}
 	if results == nil {
 		results = []map[string]any{}
+	}
+	return results, rows.Err()
+}
+
+// ============================================================================
+// SNMP PG methods
+// ============================================================================
+
+// upsertSNMPSnapshot 按 (host_id, device_name) upsert 一台设备的最新快照。
+func (p *pgStore) upsertSNMPSnapshot(hostID string, snap shared.SNMPSnapshot) {
+	raw, _ := json.Marshal(snap)
+	_, err := p.db.Exec(`
+		INSERT INTO snmp_snapshot(host_id, device_name, device_ip, snapshot, reachable, updated_at)
+		VALUES($1, $2, $3, $4, $5, NOW())
+		ON CONFLICT (host_id, device_name) DO UPDATE
+		SET snapshot=$4, device_ip=$3, reachable=$5, updated_at=NOW()`,
+		hostID, snap.TargetName, snap.TargetIP, raw, snap.Reachable)
+	if err != nil {
+		slog.Warn("Upsert SNMP 快照失败", "host", hostID, "device", snap.TargetName, "err", err)
+	}
+}
+
+// getSNMPSnapshots 返回一台主机（agent）下所有被轮询设备的最新快照。
+func (p *pgStore) getSNMPSnapshots(hostID string) ([]map[string]any, error) {
+	rows, err := p.db.Query(`
+		SELECT device_name, device_ip, snapshot, reachable, updated_at
+		FROM snmp_snapshot WHERE host_id=$1 ORDER BY updated_at DESC`, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []map[string]any{}
+	for rows.Next() {
+		var deviceName, deviceIP string
+		var snapshot json.RawMessage
+		var reachable bool
+		var updatedAt time.Time
+		if err := rows.Scan(&deviceName, &deviceIP, &snapshot, &reachable, &updatedAt); err != nil {
+			continue
+		}
+		var snapData any
+		json.Unmarshal(snapshot, &snapData)
+		results = append(results, map[string]any{
+			"device_name": deviceName,
+			"device_ip":   deviceIP,
+			"reachable":   reachable,
+			"snapshot":    snapData,
+			"updated_at":  updatedAt,
+		})
+	}
+	return results, rows.Err()
+}
+
+// insertSNMPTrap 追加写一条 trap 事件。
+func (p *pgStore) insertSNMPTrap(hostID string, ev shared.SNMPTrapEvent) {
+	vb, _ := json.Marshal(ev.Varbinds)
+	_, err := p.db.Exec(`
+		INSERT INTO snmp_traps(host_id, source_ip, version, trap_oid, severity, uptime_sec, varbinds, received_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7, to_timestamp($8))`,
+		hostID, ev.SourceIP, ev.Version, ev.TrapOID, ev.Severity, ev.UptimeSec, vb, ev.Timestamp)
+	if err != nil {
+		slog.Warn("写入 SNMP Trap 失败", "host", hostID, "trap_oid", ev.TrapOID, "err", err)
+	}
+}
+
+// getSNMPTraps 返回一台主机最近的 trap 事件（倒序）。
+func (p *pgStore) getSNMPTraps(hostID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := p.db.Query(`
+		SELECT source_ip, version, trap_oid, severity, COALESCE(uptime_sec,0), varbinds, received_at
+		FROM snmp_traps WHERE host_id=$1 ORDER BY received_at DESC LIMIT $2`, hostID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []map[string]any{}
+	for rows.Next() {
+		var sourceIP, version, trapOID, severity string
+		var uptime float64
+		var varbinds json.RawMessage
+		var receivedAt time.Time
+		if err := rows.Scan(&sourceIP, &version, &trapOID, &severity, &uptime, &varbinds, &receivedAt); err != nil {
+			continue
+		}
+		var vbData any
+		json.Unmarshal(varbinds, &vbData)
+		results = append(results, map[string]any{
+			"source_ip":   sourceIP,
+			"version":     version,
+			"trap_oid":    trapOID,
+			"severity":    severity,
+			"uptime_sec":  uptime,
+			"varbinds":    vbData,
+			"received_at": receivedAt,
+		})
 	}
 	return results, rows.Err()
 }

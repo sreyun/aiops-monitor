@@ -35,17 +35,37 @@ type hypervRaw struct {
 	ProcessorCount  int
 	MemAssignedMB   float64
 	MemDemandMB     float64
+	MemStartupMB    float64
+	MemMinMB        float64
 	MemMaxMB        float64
 	DynamicMemoryEnabled bool
 	UptimeSec       int64
 	Generation      int
 	Version         string
+	IntegrationState string
 	IP              string
 	Switches        string
 	VHDCount        int
 	CheckpointCount int
 	ReplState       string
 	ReplHealth      string
+	// 嵌套集合：PS 单元素数组会折叠成对象，故用 RawMessage + unwrapArray 兜底。
+	Nics        json.RawMessage
+	Disks       json.RawMessage
+	Checkpoints json.RawMessage
+}
+
+// unwrapArray unmarshals a nested collection that PowerShell's ConvertTo-Json may
+// have emitted as a single object (1-element arrays collapse) or null/empty.
+func unwrapArray(raw json.RawMessage, out any) {
+	s := bytes.TrimSpace([]byte(raw))
+	if len(s) == 0 || string(s) == "null" || string(s) == "[]" {
+		return
+	}
+	if s[0] == '{' {
+		s = append(append([]byte{'['}, s...), ']')
+	}
+	_ = json.Unmarshal(s, out)
 }
 
 // parseHyperV parses hypervScript's JSON output into guests. It tolerates the
@@ -71,14 +91,51 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 		g := shared.HyperVGuest{
 			Name: r.Name, ID: r.Id, State: r.State, Status: r.Status,
 			CPUUsage: r.CPUUsage, ProcessorCount: r.ProcessorCount,
-			MemAssignedMB: r.MemAssignedMB, MemDemandMB: r.MemDemandMB, MemMaxMB: r.MemMaxMB,
+			MemAssignedMB: r.MemAssignedMB, MemDemandMB: r.MemDemandMB,
+			MemStartupMB: r.MemStartupMB, MemMinMB: r.MemMinMB, MemMaxMB: r.MemMaxMB,
 			DynamicMemEnabled: r.DynamicMemoryEnabled,
 			UptimeSec: r.UptimeSec, Generation: r.Generation, Version: r.Version,
-			IPAddresses: splitComma(r.IP), Switches: splitComma(r.Switches),
+			IntegrationState: r.IntegrationState,
+			IPAddresses:      splitComma(r.IP), Switches: splitComma(r.Switches),
 			VHDCount: r.VHDCount, CheckpointCount: r.CheckpointCount,
 			ReplState: r.ReplState, ReplHealth: r.ReplHealth,
 		}
 		g.Health = hypervHealth(r.State, r.ReplHealth)
+		// Nested collections use tag-less intermediate structs so Go matches the
+		// PowerShell PascalCase keys by FIELD NAME (the shared types carry
+		// snake_case tags for the frontend, which json only matches against the
+		// tag — so PascalCase input wouldn't bind directly).
+		var rawNics []struct {
+			Name, MAC, Switch, Status, IP string
+			Connected                     bool
+		}
+		unwrapArray(r.Nics, &rawNics)
+		for _, rn := range rawNics {
+			g.Nics = append(g.Nics, shared.HyperVNic{
+				Name: rn.Name, MAC: rn.MAC, Switch: rn.Switch, Status: rn.Status,
+				Connected: rn.Connected, IPAddresses: splitComma(rn.IP),
+			})
+		}
+		var rawDisks []struct {
+			Path, ControllerType                 string
+			ControllerNumber, ControllerLocation int
+			FileSizeGB                           float64
+		}
+		unwrapArray(r.Disks, &rawDisks)
+		for _, rd := range rawDisks {
+			g.Disks = append(g.Disks, shared.HyperVDisk{
+				Path: rd.Path, ControllerType: rd.ControllerType,
+				ControllerNumber: rd.ControllerNumber, ControllerLocation: rd.ControllerLocation,
+				FileSizeGB: rd.FileSizeGB,
+			})
+		}
+		var rawCps []struct{ Name, Created, Parent string }
+		unwrapArray(r.Checkpoints, &rawCps)
+		for _, rc := range rawCps {
+			g.Checkpoints = append(g.Checkpoints, shared.HyperVCheckpoint{
+				Name: rc.Name, Created: rc.Created, ParentName: rc.Parent,
+			})
+		}
 		guests = append(guests, g)
 	}
 	return guests, nil

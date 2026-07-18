@@ -24,16 +24,31 @@ const hypervProbeScript = `if (Get-Command Get-VM -ErrorAction SilentlyContinue)
 const hypervScript = `$ErrorActionPreference='SilentlyContinue'
 $ProgressPreference='SilentlyContinue'
 $vms=@(Get-VM)
-$net=@{}
-$sw=@{}
+$nicMap=@{}; $net=@{}; $sw=@{}
 foreach($a in ($vms | Get-VMNetworkAdapter)){
-  if($a.IPAddresses){ foreach($ip in $a.IPAddresses){ if($ip){ $net[$a.VMName]=@($net[$a.VMName])+$ip } } }
-  if($a.SwitchName){ $sw[$a.VMName]=@($sw[$a.VMName])+$a.SwitchName }
+  $vn=$a.VMName
+  $ipList=@($a.IPAddresses | Where-Object {$_})
+  if(-not $nicMap.ContainsKey($vn)){ $nicMap[$vn]=@() }
+  $nicMap[$vn]+=[PSCustomObject]@{ Name=[string]$a.Name; MAC=[string]$a.MacAddress; Switch=[string]$a.SwitchName; Status=[string]$a.Status; Connected=[bool]$a.SwitchName; IP=($ipList -join ',') }
+  foreach($ip in $ipList){ $net[$vn]=@($net[$vn])+$ip }
+  if($a.SwitchName){ $sw[$vn]=@($sw[$vn])+$a.SwitchName }
 }
-$cp=@{}
-foreach($s in ($vms | Get-VMSnapshot)){ $cp[$s.VMName]=[int]$cp[$s.VMName]+1 }
+$cpMap=@{}
+foreach($s in ($vms | Get-VMSnapshot)){
+  $vn=$s.VMName
+  if(-not $cpMap.ContainsKey($vn)){ $cpMap[$vn]=@() }
+  $ct=''
+  if($s.CreationTime){ $ct=$s.CreationTime.ToString('yyyy-MM-ddTHH:mm:ss') }
+  $cpMap[$vn]+=[PSCustomObject]@{ Name=[string]$s.Name; Created=$ct; Parent=[string]$s.ParentSnapshotName }
+}
 $out=foreach($vm in $vms){
   $n=$vm.Name
+  $disks=@()
+  foreach($d in @($vm.HardDrives)){
+    $fs=0
+    if($d.Path){ $fi=Get-Item -LiteralPath $d.Path -ErrorAction SilentlyContinue; if($fi){ $fs=[math]::Round($fi.Length/1GB,1) } }
+    $disks+=[PSCustomObject]@{ Path=[string]$d.Path; ControllerType=[string]$d.ControllerType; ControllerNumber=[int]$d.ControllerNumber; ControllerLocation=[int]$d.ControllerLocation; FileSizeGB=[double]$fs }
+  }
   [PSCustomObject]@{
     Name=$n
     Id=[string]$vm.Id.Guid
@@ -43,20 +58,26 @@ $out=foreach($vm in $vms){
     ProcessorCount=[int]$vm.ProcessorCount
     MemAssignedMB=[double]([math]::Round($vm.MemoryAssigned/1MB))
     MemDemandMB=[double]([math]::Round($vm.MemoryDemand/1MB))
+    MemStartupMB=[double]([math]::Round($vm.MemoryStartup/1MB))
+    MemMinMB=[double]([math]::Round($vm.MemoryMinimum/1MB))
     MemMaxMB=[double]([math]::Round($vm.MemoryMaximum/1MB))
     DynamicMemoryEnabled=[bool]$vm.DynamicMemoryEnabled
     UptimeSec=[int64]$vm.Uptime.TotalSeconds
     Generation=[int]$vm.Generation
     Version=[string]$vm.Version
+    IntegrationState=[string]$vm.IntegrationServicesState
     IP=(@($net[$n] | Where-Object {$_} | Select-Object -Unique) -join ',')
     Switches=(@($sw[$n] | Where-Object {$_} | Select-Object -Unique) -join ',')
     VHDCount=@($vm.HardDrives).Count
-    CheckpointCount=[int]$cp[$n]
+    CheckpointCount=@($cpMap[$n]).Count
     ReplState=[string]$vm.ReplicationState
     ReplHealth=[string]$vm.ReplicationHealth
+    Nics=@($nicMap[$n] | Where-Object {$_})
+    Disks=@($disks | Where-Object {$_})
+    Checkpoints=@($cpMap[$n] | Where-Object {$_})
   }
 }
-if($out){ ConvertTo-Json -InputObject @($out) -Depth 4 -Compress } else { '[]' }`
+if($out){ ConvertTo-Json -InputObject @($out) -Depth 6 -Compress } else { '[]' }`
 
 // hypervAvailable reports whether Hyper-V guest collection can run here.
 func hypervAvailable() bool {
