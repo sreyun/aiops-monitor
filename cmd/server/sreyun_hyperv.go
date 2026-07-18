@@ -9,7 +9,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Hermes Hyper-V 工具
+// Sreyun Hyper-V 工具
 //
 // 让 AI 能看到「某台物理宿主机下跑了哪些虚拟机、各自什么状态、吃多少资源」，并把
 // 虚拟机对应回已纳管主机——这正是"我的机器都跑在 Hyper-V 里"的排障闭环需要的视角。
@@ -17,7 +17,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // hypervResolve maps a host reference to (id, name, guests, errMsg).
-func (h *HermesCore) hypervResolve(args map[string]any) (string, string, []shared.HyperVGuest, string) {
+func (h *SreyunCore) hypervResolve(args map[string]any) (string, string, []shared.HyperVGuest, string) {
 	ref, _ := args["host_id"].(string)
 	if ref == "" {
 		return "", "", nil, "请指定 host_id（物理宿主机 ID）"
@@ -57,7 +57,7 @@ func hypervGuestAbnormal(g shared.HyperVGuest) bool {
 	return false
 }
 
-func (h *HermesCore) execQueryHyperV(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryHyperV(args map[string]any) (string, error) {
 	_, name, guests, errMsg := h.hypervResolve(args)
 	if errMsg != "" {
 		return errMsg, nil

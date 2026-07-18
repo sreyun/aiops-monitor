@@ -30,6 +30,11 @@ type hvHostEntry struct {
 	updatedAt int64
 	guests    []shared.HyperVGuest
 	lastError string // 最近一次采集失败原因（非空时 guests 为上一份好数据）
+	// 关机告警只在 Running→非运行的**跳变**时触发（并保持到恢复），避免为"故意长期
+	// 关机的模板机/备用机"刷屏。stateByVM 记录上一份各 VM 状态，alarmVM 记录"当前应
+	// 就其非运行状态告警"的 VM（sticky：直到该 VM 回到 Running 或消失才清除）。
+	stateByVM map[string]string
+	alarmVM   map[string]bool
 }
 
 // hypervStore holds the most recent Hyper-V guest inventory per physical host.
@@ -57,6 +62,21 @@ func (hs *hypervStore) put(hostID, hostname, ip string, guests []shared.HyperVGu
 		cp := make([]shared.HyperVGuest, len(guests))
 		copy(cp, guests)
 		e.guests = cp
+		// 计算跳变告警集：VM 非运行(关机/暂停/保存)且【上一份是 Running】=崩溃式停机→告警；
+		// 已在告警且仍未回到 Running 则保持(sticky)。回到 Running 或消失则自然清除(不在新集里)。
+		newState := make(map[string]string, len(guests))
+		newAlarm := make(map[string]bool)
+		for _, g := range guests {
+			k := hypervKey(g)
+			newState[k] = g.State
+			if g.State == "Off" || g.State == "Paused" || g.State == "Saved" {
+				if e.stateByVM[k] == "Running" || e.alarmVM[k] {
+					newAlarm[k] = true
+				}
+			}
+		}
+		e.stateByVM = newState
+		e.alarmVM = newAlarm
 	}
 	hs.byID[hostID] = e
 }
@@ -140,11 +160,14 @@ func EvaluateHyperV(hs *hypervStore) []Alert {
 				continue
 			}
 
-			// 状态：非运行（关机/暂停/保存）→ warning。notifier 去重：起止各推一次，
-			// 长期关机 = 一条 active 告警（可 acknowledge），不刷屏。
+			// 状态：非运行（关机/暂停/保存）→ warning，但**仅在由 Running 跳变而来**时报
+			// （见 put() 里的 alarmVM）。故意长期关机的模板机/备用机不会刷屏。notifier 去重：
+			// 起止各推一次，VM 恢复 Running 后 alarmVM 清除、告警自动 resolve。
 			switch g.State {
 			case "Off", "Paused", "Saved":
-				add("warning", name+"/power", Tz("alert.hyperv_state", name, g.State), 0)
+				if e.alarmVM[hypervKey(g)] {
+					add("warning", name+"/power", Tz("alert.hyperv_state", name, g.State), 0)
+				}
 			}
 
 			// 复制健康 Warning
@@ -157,7 +180,9 @@ func EvaluateHyperV(hs *hypervStore) []Alert {
 				if lv := classify(g.CPUUsage, hypervCPUWarn, hypervCPUCrit); lv != "" {
 					add(lv, name+"/cpu", Tz("alert.hyperv_cpu", name, g.CPUUsage), g.CPUUsage)
 				}
-				if g.MemAssignedMB > 0 && g.MemDemandMB > 0 {
+				// 内存压力(需求/分配)只对**动态内存** VM 有意义：静态内存 VM 的 demand
+				// 可能≈assigned，会误报接近 100%。非动态内存直接跳过。
+				if g.DynamicMemEnabled && g.MemAssignedMB > 0 && g.MemDemandMB > 0 {
 					memPct := g.MemDemandMB / g.MemAssignedMB * 100
 					if lv := classify(memPct, hypervMemWarn, hypervMemCrit); lv != "" {
 						add(lv, name+"/mem", Tz("alert.hyperv_mem", name, memPct), memPct)

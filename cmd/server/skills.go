@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,10 @@ const (
 	skillRelevantDist   = 0.55 // 注入提示词时的相关性阈值，超过则不注入（避免噪声）
 )
 
+// distillInProgress 防并发：每日维护与手动「立即提炼」可能同时触发，重入则跳过，
+// 避免"检查相似→插入"的 TOCTOU 竞争产生近重复技能。
+var distillInProgress atomic.Bool
+
 // distilledSkill 是 AI 提炼输出的单条技能。
 type distilledSkill struct {
 	Name    string `json:"name"`
@@ -36,6 +41,10 @@ func (s *Server) distillSkills(lookbackDays int) (int, error) {
 	if s.pg == nil {
 		return 0, fmt.Errorf("PG 不可用")
 	}
+	if !distillInProgress.CompareAndSwap(false, true) {
+		return 0, nil // 已有提炼在跑，跳过（防并发去重竞争）
+	}
+	defer distillInProgress.Store(false)
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.APIKey == "" {
 		return 0, fmt.Errorf("AI 未配置")
@@ -72,8 +81,11 @@ func (s *Server) distillSkills(lookbackDays int) (int, error) {
 			continue
 		}
 		if id, dup := s.pg.findSimilarSkill(emb, skillDistillDupDist); dup {
-			// 已有相似技能 → 用新版覆盖（视为「用中改进」）并强化，不新增
-			_ = s.pg.updateSkill(id, name, trigger, steps, emb)
+			// 已有相似技能：已被现实验证的优质技能(有成功记录/多次使用)只强化、保留其经过验证的步骤；
+			// 未验证的才用新一版「改进」覆盖——避免一次较差的新生成把优质 SOP 回退。
+			if !s.pg.skillProven(id) {
+				_ = s.pg.updateSkill(id, name, trigger, steps, emb)
+			}
 			s.pg.recordSkillUse(id, true)
 			continue
 		}
@@ -127,7 +139,7 @@ func (s *Server) retrieveSkillsForPrompt(query string, topK int) string {
 	if len(emb) == 0 {
 		return ""
 	}
-	skills, err := s.pg.searchSkills(emb, topK)
+	skills, err := s.pg.searchSkills(emb, topK, skillRelevantDist)
 	if err != nil || len(skills) == 0 {
 		return ""
 	}

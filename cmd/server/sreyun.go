@@ -16,7 +16,7 @@ import (
 )
 
 // ============================================================================
-// Hermes Agent — 自主运维 Agent 引擎
+// Sreyun Agent — 自主运维 Agent 引擎
 //
 // 三层解耦架构：
 //   Layer 1 (本文件): 引擎核心 — 观察→推理→行动循环 + Function Calling
@@ -27,16 +27,16 @@ import (
 // playbookManager (远程执行)、logStore (日志检索)、notifier (告警查询)
 // ============================================================================
 
-// HermesTool defines a callable function that the LLM can invoke.
-type HermesTool struct {
+// SreyunTool defines a callable function that the LLM can invoke.
+type SreyunTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
 	Execute     func(args map[string]any) (string, error)
 }
 
-// HermesSession represents one conversation session.
-type HermesSession struct {
+// SreyunSession represents one conversation session.
+type SreyunSession struct {
 	ID         int64
 	IncidentID int64
 	Messages   []map[string]string
@@ -47,15 +47,15 @@ type HermesSession struct {
 	SummarizedCount int
 }
 
-// HermesCore is the autonomous agent engine.
-type HermesCore struct {
+// SreyunCore is the autonomous agent engine.
+type SreyunCore struct {
 	s     *Server
-	tools map[string]HermesTool
+	tools map[string]SreyunTool
 	ctx   context.Context
 	// Cached config (hot-reloaded from PG)
 	configMu        sync.RWMutex
-	cachedRules     []hermesRule
-	cachedTemplates []hermesTemplate
+	cachedRules     []sreyunRule
+	cachedTemplates []sreyunTemplate
 	lastLoad        time.Time
 	// P1-2: 缓存工具定义 JSON，工具注册后不再变化，避免每轮重建
 	cachedToolPrompt string
@@ -63,16 +63,16 @@ type HermesCore struct {
 	cachedNativeToolDefs []map[string]any
 }
 
-// newHermesCore creates and initializes the Hermes engine.
-func newHermesCore(s *Server) *HermesCore {
-	h := &HermesCore{s: s, tools: make(map[string]HermesTool)}
+// newSreyunCore creates and initializes the Sreyun engine.
+func newSreyunCore(s *Server) *SreyunCore {
+	h := &SreyunCore{s: s, tools: make(map[string]SreyunTool)}
 	h.registerTools()
 	return h
 }
 
 // registerTools registers all built-in tools the LLM can call.
-func (h *HermesCore) registerTools() {
-	h.tools["query_metrics"] = HermesTool{
+func (h *SreyunCore) registerTools() {
+	h.tools["query_metrics"] = SreyunTool{
 		Name:        "query_metrics",
 		Description: "查询主机的实时性能指标，返回 CPU/内存/磁盘/负载/网络/IO 等",
 		Parameters: map[string]any{
@@ -85,7 +85,7 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execQueryMetrics,
 	}
-	h.tools["search_logs"] = HermesTool{
+	h.tools["search_logs"] = SreyunTool{
 		Name:        "search_logs",
 		Description: "搜索主机日志，支持按级别和关键词过滤",
 		Parameters: map[string]any{
@@ -100,7 +100,7 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execSearchLogs,
 	}
-	h.tools["list_alerts"] = HermesTool{
+	h.tools["list_alerts"] = SreyunTool{
 		Name:        "list_alerts",
 		Description: "获取当前活跃告警列表",
 		Parameters: map[string]any{
@@ -111,7 +111,7 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execListAlerts,
 	}
-	h.tools["search_similar_cases"] = HermesTool{
+	h.tools["search_similar_cases"] = SreyunTool{
 		Name:        "search_similar_cases",
 		Description: "在历史案例库中搜索相似故障（RAG 向量检索）",
 		Parameters: map[string]any{
@@ -123,7 +123,7 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execSearchCases,
 	}
-	h.tools["run_diagnostic"] = HermesTool{
+	h.tools["run_diagnostic"] = SreyunTool{
 		Name:        "run_diagnostic",
 		Description: "登录目标主机执行【只读】诊断命令做巡检排查（如 top/df/free/ps/ss/journalctl/cat 日志 等，可用管道过滤）。严格只读：禁止任何增、删、改、重启、写文件或隐藏操作，系统会强制拦截非白名单命令。需用户先在 AI 设置中开启「AI 终端巡检」权限。返回命令输出。",
 		Parameters: map[string]any{
@@ -136,13 +136,13 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execDiagnostic,
 	}
-	h.tools["run_python_action"] = HermesTool{
+	h.tools["run_python_action"] = SreyunTool{
 		Name:        "run_python_action",
 		Description: "执行 Python 插件中的自定义动作（如重启服务、清理缓存、扩缩容脚本等）",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action_name": map[string]string{"type": "string", "description": "动作名称，对应 plugins/ 下的 hermes_actions.py 中定义的函数"},
+				"action_name": map[string]string{"type": "string", "description": "动作名称，对应 plugins/ 下的 sreyun_actions.py 中定义的函数"},
 				"host_id":     map[string]string{"type": "string", "description": "目标主机 ID"},
 				"args":        map[string]string{"type": "string", "description": "传递给动作的参数（JSON 字符串）"},
 			},
@@ -150,13 +150,13 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execPythonAction,
 	}
-	h.tools["list_datasources"] = HermesTool{
+	h.tools["list_datasources"] = SreyunTool{
 		Name:        "list_datasources",
 		Description: "列出已接入的外部数据源（Loki 日志 / Prometheus 指标）及其 id/名称/类型。查询前先用它确认有哪些数据源可用。",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Execute:     h.execListDataSources,
 	}
-	h.tools["query_datasource"] = HermesTool{
+	h.tools["query_datasource"] = SreyunTool{
 		Name:        "query_datasource",
 		Description: "直接查询外部数据源做分析排查：Prometheus 传 PromQL（如 up、node_load1、rate(http_requests_total[5m])）；Loki 传 LogQL（如 {job=\"nginx\"} |= \"error\"）。先用 list_datasources 拿到数据源 id 或名称。",
 		Parameters: map[string]any{
@@ -172,7 +172,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryDataSource,
 	}
 	// --- New tools for enhanced AI capabilities ---
-	h.tools["list_recent_changes"] = HermesTool{
+	h.tools["list_recent_changes"] = SreyunTool{
 		Name:        "list_recent_changes",
 		Description: "查询主机最近 N 小时的指标变化趋势（CPU/内存/磁盘增长率），帮助判断是否恶化中。返回结构化 JSON 包含趋势方向（上升/下降/稳定）和变化幅度。",
 		Parameters: map[string]any{
@@ -185,7 +185,7 @@ func (h *HermesCore) registerTools() {
 		},
 		Execute: h.execListRecentChanges,
 	}
-	h.tools["check_host_health"] = HermesTool{
+	h.tools["check_host_health"] = SreyunTool{
 		Name:        "check_host_health",
 		Description: "综合评估主机健康状态：聚合当前指标、活跃告警、日志异常，返回 healthy/degraded/critical 分级结论和详细分析。",
 		Parameters: map[string]any{
@@ -200,7 +200,7 @@ func (h *HermesCore) registerTools() {
 
 	// ---- 硬件 / 流量：此前 AI 完全看不到这两块数据 ----
 
-	h.tools["query_hardware"] = HermesTool{
+	h.tools["query_hardware"] = SreyunTool{
 		Name: "query_hardware",
 		Description: "查询主机的服务器硬件状态（Redfish/BMC 或 OceanStor 存储）：整机健康、厂商型号序列号、" +
 			"CPU/内存/硬盘/RAID卡/GPU/电源/风扇/温度/磁盘框的逐部件明细，并列出当前所有异常部件。" +
@@ -217,7 +217,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryHardware,
 	}
 
-	h.tools["query_hardware_events"] = HermesTool{
+	h.tools["query_hardware_events"] = SreyunTool{
 		Name: "query_hardware_events",
 		Description: "查询 BMC 自身的硬件事件日志（Dell iDRAC 的 SEL / 华为 iBMC 事件 / OceanStor 当前告警）。" +
 			"**这是唯一能定位到「是哪个部件、什么时候出的问题」的数据源** —— 整机健康只说好坏，不说是谁。" +
@@ -233,7 +233,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryHardwareEvents,
 	}
 
-	h.tools["query_hardware_history"] = HermesTool{
+	h.tools["query_hardware_history"] = SreyunTool{
 		Name: "query_hardware_history",
 		Description: "查询硬件指标的历史趋势（温度/风扇转速/功耗/健康分），数据来自时序库，可长期回溯。" +
 			"判断「是不是一直这样」「什么时候开始变热的」「功耗有没有异常爬升」时用。",
@@ -249,7 +249,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryHardwareHistory,
 	}
 
-	h.tools["query_hardware_changes"] = HermesTool{
+	h.tools["query_hardware_changes"] = SreyunTool{
 		Name: "query_hardware_changes",
 		Description: "查询硬件资产变更历史：哪块盘/哪条内存/哪个电源什么时候被换过、加过、拔掉过，以及固件版本变更。" +
 			"排查「故障是不是换件之后开始的」「这台机器动过什么」时用。",
@@ -264,7 +264,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryHardwareChanges,
 	}
 
-	h.tools["query_netflow"] = HermesTool{
+	h.tools["query_netflow"] = SreyunTool{
 		Name: "query_netflow",
 		Description: "查询主机的网络流量 Top-N 排行（按对端 IP / 端口 / 协议聚合），数据来自永久保留的 Flow 明细。" +
 			"排查带宽被谁占了、有无异常外联、某个时间段在跟谁通信时用。",
@@ -281,7 +281,7 @@ func (h *HermesCore) registerTools() {
 		Execute: h.execQueryNetFlow,
 	}
 
-	h.tools["query_hyperv"] = HermesTool{
+	h.tools["query_hyperv"] = SreyunTool{
 		Name: "query_hyperv",
 		Description: "查询某台物理宿主机上的 Hyper-V 虚拟机清单与状态：每台 VM 的运行/关机/暂停、CPU/内存占用、" +
 			"IP 地址、运行时长、复制健康，异常 VM 摆在最前；并能识别 VM 是否对应到一台已纳管主机。" +
@@ -299,7 +299,7 @@ func (h *HermesCore) registerTools() {
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).
-func (h *HermesCore) resolveDataSource(ref string) (DataSource, bool) {
+func (h *SreyunCore) resolveDataSource(ref string) (DataSource, bool) {
 	ref = strings.TrimSpace(ref)
 	if ds, ok := h.s.cfg.GetDataSource(ref); ok {
 		return ds, true
@@ -313,7 +313,7 @@ func (h *HermesCore) resolveDataSource(ref string) (DataSource, bool) {
 	return DataSource{}, false
 }
 
-func (h *HermesCore) execListDataSources(args map[string]any) (string, error) {
+func (h *SreyunCore) execListDataSources(args map[string]any) (string, error) {
 	list := h.s.cfg.ListDataSources()
 	if len(list) == 0 {
 		return "（未接入任何数据源，请先在「数据源」页添加 Loki / Prometheus）", nil
@@ -329,7 +329,7 @@ func (h *HermesCore) execListDataSources(args map[string]any) (string, error) {
 	return sb.String(), nil
 }
 
-func (h *HermesCore) execQueryDataSource(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryDataSource(args map[string]any) (string, error) {
 	ref, _ := args["datasource"].(string)
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(ref) == "" || strings.TrimSpace(query) == "" {
@@ -356,7 +356,7 @@ func (h *HermesCore) execQueryDataSource(args map[string]any) (string, error) {
 
 // resolveHostRef 按 host_id 精确匹配主机；失败则回退到主机名 / IP（忽略大小写，再退化到
 // 主机名包含匹配），让 AI 即便把主机名或 IP 当作 host_id 传入也能命中正确主机。
-func (h *HermesCore) resolveHostRef(ref string) *Host {
+func (h *SreyunCore) resolveHostRef(ref string) *Host {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || h.s == nil {
 		return nil
@@ -382,7 +382,7 @@ func (h *HermesCore) resolveHostRef(ref string) *Host {
 	return nil
 }
 
-func (h *HermesCore) execQueryMetrics(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryMetrics(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	metric, _ := args["metric"].(string)
 	if metric == "" {
@@ -432,7 +432,7 @@ func (h *HermesCore) execQueryMetrics(args map[string]any) (string, error) {
 	return b.String(), nil
 }
 
-func (h *HermesCore) execSearchLogs(args map[string]any) (string, error) {
+func (h *SreyunCore) execSearchLogs(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	level, _ := args["level"].(string)
 	keyword, _ := args["keyword"].(string)
@@ -461,7 +461,7 @@ func (h *HermesCore) execSearchLogs(args map[string]any) (string, error) {
 	return b.String(), nil
 }
 
-func (h *HermesCore) execListAlerts(args map[string]any) (string, error) {
+func (h *SreyunCore) execListAlerts(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	if h.s.notifier == nil {
 		return "告警系统不可用", nil
@@ -494,7 +494,7 @@ func (h *HermesCore) execListAlerts(args map[string]any) (string, error) {
 	return "当前活跃告警：\n" + strings.Join(matched, "\n"), nil
 }
 
-func (h *HermesCore) execSearchCases(args map[string]any) (string, error) {
+func (h *SreyunCore) execSearchCases(args map[string]any) (string, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return "请输入故障描述", nil
@@ -598,14 +598,14 @@ func diagCommandAllowed(command string) (bool, string) {
 	return true, ""
 }
 
-func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
+func (h *SreyunCore) execDiagnostic(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	command, _ := args["command"].(string)
 	if command == "" {
 		return "请指定诊断命令", nil
 	}
 	// 门控：AI 终端只读巡检为独立高风险授权，需用户在 AI 设置中显式开启（并已校验终端密码）后才可执行主机命令。
-	if !h.s.cfg.AIConfig().HermesTerminalEnabled {
+	if !h.s.cfg.AIConfig().SreyunTerminalEnabled {
 		return "AI 终端只读巡检权限未开启。如需让我登录终端做只读排查，请在「AI 设置 → AI 终端巡检」中开启（需输入终端连接密码）。", nil
 	}
 	// Use playbook mechanism to execute read-only diagnostic commands
@@ -620,7 +620,7 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 	}
 	// Run via playbook executor (one-shot command)
 	pb := Playbook{
-		Name: "hermes-diagnostic",
+		Name: "sreyun-diagnostic",
 		Steps: []PlaybookStep{{
 			Name:       "diagnostic-cmd",
 			Command:    command,
@@ -629,9 +629,15 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 		}},
 	}
 	done := make(chan bool, 1)
-	execID := h.s.triggerPlaybookOnHost(pb, host, "hermes", func(ok bool) {
+	execID := h.s.triggerPlaybookOnHost(pb, host, "sreyun", func(ok bool) {
 		done <- ok
 	})
+	// h.ctx 是共享可变字段，仅 Chat() 内赋值；非会话路径调用时可能为 nil 或已取消，
+	// 这里取本地副本并兜底 Background()，避免对 nil ctx 调 Done() 引发 panic（与 execPythonAction 一致）。
+	dctx := h.ctx
+	if dctx == nil {
+		dctx = context.Background()
+	}
 	select {
 	case ok := <-done:
 		// Retrieve execution output
@@ -646,12 +652,12 @@ func (h *HermesCore) execDiagnostic(args map[string]any) (string, error) {
 		return "诊断命令执行失败", nil
 	case <-time.After(20 * time.Second):
 		return "诊断命令执行超时", nil
-	case <-h.ctx.Done():
+	case <-dctx.Done():
 		return "诊断命令已被客户端取消", nil
 	}
 }
 
-func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
+func (h *SreyunCore) execPythonAction(args map[string]any) (string, error) {
 	actionName, _ := args["action_name"].(string)
 	hostID, _ := args["host_id"].(string)
 	argStr, _ := args["args"].(string)
@@ -659,9 +665,9 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 		return "请指定动作名称", nil
 	}
 	// run_python_action 属于「写操作」（重启服务 / 清理缓存 / 扩缩容等）。仅在显式开启
-	// HermesAutoApprove（低风险自动执行）时才真正执行，否则挂起并返回需人工确认，
+	// SreyunAutoApprove（低风险自动执行）时才真正执行，否则挂起并返回需人工确认，
 	// 避免 AI 未经批准擅自变更主机（此前该配置从未在执行路径生效，属安全缺口）。
-	if !h.s.cfg.AIConfig().HermesAutoApprove {
+	if !h.s.cfg.AIConfig().SreyunAutoApprove {
 		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前未开启「自动执行」(hermes_auto_approve)，已阻止自动执行；请操作员手动处置，或在 AI 设置中开启后重试。", actionName), nil
 	}
 	// 加 30s 超时，避免插件脚本卡死导致请求 goroutine 永久阻塞
@@ -671,13 +677,13 @@ func (h *HermesCore) execPythonAction(args map[string]any) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", "plugins/hermes_actions.py", actionName, hostID, argStr)
+	cmd := exec.CommandContext(ctx, "python3", "plugins/sreyun_actions.py", actionName, hostID, argStr)
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Sprintf("动作 %q 执行超时（30s）", actionName), nil
 	}
 	if err != nil {
-		slog.Warn("hermes python action failed", "action", actionName, "err", err, "output", string(output))
+		slog.Warn("sreyun python action failed", "action", actionName, "err", err, "output", string(output))
 		return fmt.Sprintf("动作 %q 执行失败：%v\n输出：%s", actionName, err, string(output)), nil
 	}
 	return string(output), nil
@@ -695,7 +701,7 @@ func trendArrow(delta float64) string {
 }
 
 // execListRecentChanges queries historical samples and computes per-metric trends.
-func (h *HermesCore) execListRecentChanges(args map[string]any) (string, error) {
+func (h *SreyunCore) execListRecentChanges(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	hours := 6
 	if v, ok := args["hours"].(float64); ok && v > 0 {
@@ -770,7 +776,7 @@ func (h *HermesCore) execListRecentChanges(args map[string]any) (string, error) 
 }
 
 // execCheckHostHealth performs a comprehensive health assessment of a host.
-func (h *HermesCore) execCheckHostHealth(args map[string]any) (string, error) {
+func (h *SreyunCore) execCheckHostHealth(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)
 	if hostID == "" {
 		return "请指定 host_id", nil
@@ -887,9 +893,9 @@ func (h *HermesCore) execCheckHostHealth(args map[string]any) (string, error) {
 
 // --- Core loop: Observe → Reason → Act ---
 
-// Chat runs a Hermes conversation turn with Function Calling support.
+// Chat runs a Sreyun conversation turn with Function Calling support.
 // If stream is true, it writes SSE events to w; otherwise returns the reply.
-func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
+func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -943,14 +949,14 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 	// Persist to PG
 	if h.s.pg != nil {
 		raw, _ := json.Marshal(session.Messages)
-		newID, err := h.s.pg.saveHermesSession(session.ID, raw, session.IncidentID)
+		newID, err := h.s.pg.saveSreyunSession(session.ID, raw, session.IncidentID)
 		if err == nil && newID > 0 {
 			session.ID = newID
 		}
 	}
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
 	if strings.TrimSpace(fullReply) != "" {
-		go h.s.rememberAI("chat", fmt.Sprintf("hermes:%d", session.ID),
+		go h.s.rememberAI("chat", fmt.Sprintf("sreyun:%d", session.ID),
 			"【用户】\n"+userMsg+"\n\n【AI】\n"+fullReply)
 	}
 	return fullReply, nil
@@ -961,7 +967,7 @@ func (h *HermesCore) Chat(ctx context.Context, session *HermesSession, userMsg s
 // 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
 // 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
 // 工具调用的原始 JSON 绝不下发到前端。max 5 turns to prevent infinite loops.
-func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
+func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
 		if !stream || w == nil || text == "" {
@@ -1080,7 +1086,7 @@ func (h *HermesCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		// 逐个工具「执行中 → 完成/失败」以独立 tool 帧实时下发
 		var toolResults strings.Builder
 		for _, tc := range toolCalls {
-			slog.Info("hermes tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
+			slog.Info("sreyun tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
 			tool, ok := h.tools[tc.Name]
 			if !ok {
 				sendTool(tc.Name, "err", nil)
@@ -1147,7 +1153,7 @@ type toolCall struct {
 // injectTools adds tool definitions to the last system message.
 // P1-2: 工具定义 JSON 缓存于 h.cachedToolPrompt，仅首次调用时构建。
 // P3-1: 同时缓存原生 Function Calling 格式的工具定义。
-func (h *HermesCore) injectTools(msgs []map[string]string) []map[string]string {
+func (h *SreyunCore) injectTools(msgs []map[string]string) []map[string]string {
 	if h.cachedToolPrompt == "" {
 		// Build tool definitions JSON（按工具名排序，保证注入顺序稳定，利于 Provider prompt 缓存与可复现）
 		names := make([]string, 0, len(h.tools))
@@ -1189,7 +1195,7 @@ func (h *HermesCore) injectTools(msgs []map[string]string) []map[string]string {
 }
 
 // parseToolCalls extracts tool calls from the LLM response text.
-func (h *HermesCore) parseToolCalls(text string) []toolCall {
+func (h *SreyunCore) parseToolCalls(text string) []toolCall {
 	// Look for JSON tool_calls block in the response
 	text = strings.TrimSpace(text)
 	// Try to find ```json ... ``` block
@@ -1230,7 +1236,7 @@ func (h *HermesCore) parseToolCalls(text string) []toolCall {
 	return h.parseToolCallJSON(jsonStr)
 }
 
-func (h *HermesCore) parseToolCallJSON(jsonStr string) []toolCall {
+func (h *SreyunCore) parseToolCallJSON(jsonStr string) []toolCall {
 	var wrapper struct {
 		ToolCalls []struct {
 			Name string         `json:"name"`
@@ -1238,7 +1244,7 @@ func (h *HermesCore) parseToolCallJSON(jsonStr string) []toolCall {
 		} `json:"tool_calls"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &wrapper); err != nil {
-		slog.Warn("hermes failed to parse tool call JSON", "json", jsonStr, "err", err)
+		slog.Warn("sreyun failed to parse tool call JSON", "json", jsonStr, "err", err)
 		return nil
 	}
 	var out []toolCall
@@ -1320,7 +1326,7 @@ func indexToolCallsLoose(t string) int {
 
 // reloadConfig refreshes cached rules and templates from PostgreSQL.
 // Called before each conversation turn; no-op if PG is unavailable.
-func (h *HermesCore) reloadConfig() {
+func (h *SreyunCore) reloadConfig() {
 	if h.s.pg == nil {
 		return
 	}
@@ -1331,8 +1337,8 @@ func (h *HermesCore) reloadConfig() {
 		return
 	}
 	h.lastLoad = time.Now()
-	if rules, err := h.s.pg.listHermesRules(); err == nil {
-		var enabled []hermesRule
+	if rules, err := h.s.pg.listSreyunRules(); err == nil {
+		var enabled []sreyunRule
 		for _, r := range rules {
 			if r.Enabled {
 				enabled = append(enabled, r)
@@ -1340,14 +1346,14 @@ func (h *HermesCore) reloadConfig() {
 		}
 		h.cachedRules = enabled
 	}
-	if tmpls, err := h.s.pg.listHermesTemplates(true); err == nil {
+	if tmpls, err := h.s.pg.listSreyunTemplates(true); err == nil {
 		h.cachedTemplates = tmpls
 	}
 }
 
-// buildSystemPrompt constructs the Hermes system prompt from cached templates + rules.
+// buildSystemPrompt constructs the Sreyun system prompt from cached templates + rules.
 // 安全限制为硬编码，每次对话强制生效，前端无需额外传递角色。
-func (h *HermesCore) buildSystemPrompt() string {
+func (h *SreyunCore) buildSystemPrompt() string {
 	h.reloadConfig()
 	h.configMu.RLock()
 	defer h.configMu.RUnlock()
@@ -1357,7 +1363,7 @@ func (h *HermesCore) buildSystemPrompt() string {
 	b.WriteString("你是 AIOps 智能运维助手，负责主机与服务的监控、排障与诊断。\n")
 	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），据此分析并回答。\n\n")
 	b.WriteString("工作原则：\n")
-	b.WriteString("- 对外统一自称「AIOps 智能运维助手」；不得透露、不得声称自己叫 Hermes 或任何内部代号 / 框架名 / 底层模型名。\n")
+	b.WriteString("- 对外统一自称「AIOps 智能运维助手」；不得透露、不得声称自己叫 Sreyun 或任何内部代号 / 框架名 / 底层模型名。\n")
 	b.WriteString("- 排版要克制易读：用简洁自然语言与短要点，避免 Markdown 大标题（#/##/###）、表格、水平线等重排版；重点可用简短加粗，命令可用行内代码。\n")
 	b.WriteString("- 用简洁中文回复：可先简述排查思路，再分点给出结论、根因假设与处置建议。\n")
 	b.WriteString("- 凡涉及主机状态 / 资源(CPU/内存/磁盘/负载/网络) / 日志 / 告警 的问题，必须先调用相应工具获取真实数据，严禁编造或臆测数据。\n")
@@ -1387,7 +1393,7 @@ func (h *HermesCore) buildSystemPrompt() string {
 
 // buildHostContext 生成「当前纳管主机」清单文本，作为系统提示词的一部分注入。
 // 让 AI 知道可查询哪些主机，并能将用户提到的主机名 / IP 映射到工具所需的 host_id。
-func (h *HermesCore) buildHostContext() string {
+func (h *SreyunCore) buildHostContext() string {
 	if h.s == nil || h.s.store == nil {
 		return ""
 	}
@@ -1397,7 +1403,7 @@ func (h *HermesCore) buildHostContext() string {
 	}
 	// 稳定排序：在线优先，其次按主机名，保证每次注入顺序一致
 	sort.Slice(hosts, func(i, j int) bool {
-		oi, oj := hermesHostOnline(hosts[i]), hermesHostOnline(hosts[j])
+		oi, oj := sreyunHostOnline(hosts[i]), sreyunHostOnline(hosts[j])
 		if oi != oj {
 			return oi
 		}
@@ -1406,7 +1412,7 @@ func (h *HermesCore) buildHostContext() string {
 	now := time.Now().Unix()
 	online := 0
 	for _, hst := range hosts {
-		if hermesHostOnline(hst) {
+		if sreyunHostOnline(hst) {
 			online++
 		}
 	}
@@ -1419,10 +1425,10 @@ func (h *HermesCore) buildHostContext() string {
 			break
 		}
 		status := "离线"
-		if hermesHostOnline(hst) {
+		if sreyunHostOnline(hst) {
 			status = "在线"
 		}
-		fmt.Fprintf(&b, "- id=%s 主机名=%s IP=%s 状态=%s", hst.ID, hst.Hostname, hermesIPOr(hst.IP), status)
+		fmt.Fprintf(&b, "- id=%s 主机名=%s IP=%s 状态=%s", hst.ID, hst.Hostname, sreyunIPOr(hst.IP), status)
 		if hst.OS != "" {
 			fmt.Fprintf(&b, " 系统=%s", hst.OS)
 		}
@@ -1437,12 +1443,12 @@ func (h *HermesCore) buildHostContext() string {
 	return b.String()
 }
 
-// hermesHostOnline 判断主机是否在线（最近上报 ≤120s，与 forward.go 的离线判定一致）。
-func hermesHostOnline(h *Host) bool {
+// sreyunHostOnline 判断主机是否在线（最近上报 ≤120s，与 forward.go 的离线判定一致）。
+func sreyunHostOnline(h *Host) bool {
 	return h != nil && h.LastSeen > 0 && time.Now().Unix()-h.LastSeen <= 120
 }
 
-func hermesIPOr(ip string) string {
+func sreyunIPOr(ip string) string {
 	if strings.TrimSpace(ip) == "" {
 		return "未知"
 	}
@@ -1452,10 +1458,10 @@ func hermesIPOr(ip string) string {
 // resolveSession 按 session_id 解析会话，作为多轮记忆的权威来源：
 //   - sessionID>0：从 PostgreSQL 加载完整消息历史（刷新页面 / 切换会话后仍能延续）。
 //   - sessionID==0：新建会话；若 PG 不可用或加载失败，用前端传入的 history 兜底，保证前后端状态一致。
-func (h *HermesCore) resolveSession(sessionID int64, history []map[string]string) *HermesSession {
-	sess := &HermesSession{ID: sessionID}
+func (h *SreyunCore) resolveSession(sessionID int64, history []map[string]string) *SreyunSession {
+	sess := &SreyunSession{ID: sessionID}
 	if sessionID > 0 && h.s.pg != nil {
-		if raw, err := h.s.pg.loadHermesSession(sessionID); err == nil && raw != nil {
+		if raw, err := h.s.pg.loadSreyunSession(sessionID); err == nil && raw != nil {
 			var msgs []map[string]string
 			if json.Unmarshal(raw, &msgs) == nil {
 				sess.Messages = msgs

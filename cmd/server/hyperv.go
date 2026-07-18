@@ -139,6 +139,7 @@ func (s *Server) handleDeleteHyperV(w http.ResponseWriter, r *http.Request) {
 		s.pg.deleteHyperVInventory(hostID)
 	}
 	slog.Info("删除 Hyper-V 清单", "host", hostID, "actor", s.clientIP(r))
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hyperv", hostID)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

@@ -191,7 +191,7 @@ func (p *pgStore) migrate() error {
 			incident_id BIGINT,
 			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
-		-- Hermes Agent 规则库（诊断规则 + 行动策略）
+		-- Sreyun Agent 规则库（诊断规则 + 行动策略）
 		CREATE TABLE IF NOT EXISTS hermes_rules (
 			id          BIGSERIAL PRIMARY KEY,
 			name        TEXT NOT NULL,
@@ -203,7 +203,7 @@ func (p *pgStore) migrate() error {
 			updated_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS hermes_rules_enabled ON hermes_rules(enabled);
-		-- Hermes Agent 提示模板库（系统提示 + 场景模板）
+		-- Sreyun Agent 提示模板库（系统提示 + 场景模板）
 		CREATE TABLE IF NOT EXISTS hermes_templates (
 			id          BIGSERIAL PRIMARY KEY,
 			name        TEXT NOT NULL,
@@ -216,7 +216,7 @@ func (p *pgStore) migrate() error {
 			updated_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS hermes_templates_active ON hermes_templates(active);
-		-- Hermes Agent 会话记忆
+		-- Sreyun Agent 会话记忆
 		CREATE TABLE IF NOT EXISTS hermes_sessions (
 			id          BIGSERIAL PRIMARY KEY,
 			incident_id BIGINT DEFAULT 0,
@@ -1131,16 +1131,23 @@ func (p *pgStore) updateSkill(id int64, name, trigger, steps string, emb []float
 }
 
 // searchSkills 按 距离/优先级 检索最相关技能，供注入提示词。
-func (p *pgStore) searchSkills(emb []float64, limit int) ([]Skill, error) {
+// maxDist 是【原始余弦距离】上限：先用它在 WHERE 里筛掉真正不相关的技能，再对相关候选做
+// priority 加权排序取 Top-K。此顺序很关键——否则高 priority 的无关技能会凭加权分挤进 LIMIT、
+// 再被上层按原始距离过滤掉，把真正相关但 priority 低的技能挤出候选集（系统越学越严重）。
+func (p *pgStore) searchSkills(emb []float64, limit int, maxDist float64) ([]Skill, error) {
 	if limit <= 0 {
 		limit = 5
+	}
+	if maxDist <= 0 {
+		maxDist = skillRelevantDist
 	}
 	rows, err := p.db.Query(
 		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
 		        embedding <=> $1::vector AS distance
 		 FROM ai_skills
+		 WHERE embedding <=> $1::vector <= $3
 		 ORDER BY (embedding <=> $1::vector) / GREATEST(priority, 0.1) LIMIT $2`,
-		vecStr(emb), limit)
+		vecStr(emb), limit, maxDist)
 	if err != nil {
 		return nil, err
 	}
@@ -1191,13 +1198,24 @@ func (p *pgStore) recordSkillUse(id int64, success bool) {
 }
 
 // boostSkillNearest 语义定位最近技能并强化（事件解决 / 采纳时调用），实现技能层面的学习闭环。
+// 同步 use_count++（视强化为「一次被验证的使用」），保证 success_count ≤ use_count，前端成功率不越界。
 func (p *pgStore) boostSkillNearest(emb []float64, factor float64) {
 	var id int64
 	if err := p.db.QueryRow(`SELECT id FROM ai_skills ORDER BY embedding <=> $1::vector LIMIT 1`, vecStr(emb)).Scan(&id); err == nil {
 		_, _ = p.db.Exec(
-			`UPDATE ai_skills SET priority=LEAST(GREATEST(priority,0.1)*$2,5.0), success_count=success_count+1, updated_at=$3 WHERE id=$1`,
+			`UPDATE ai_skills SET priority=LEAST(GREATEST(priority,0.1)*$2,5.0), use_count=use_count+1, success_count=success_count+1, updated_at=$3 WHERE id=$1`,
 			id, factor, time.Now().Unix())
 	}
+}
+
+// skillProven 判断一条技能是否已被现实验证（有成功记录或被多次使用）——提炼去重时用它保护
+// 已验证的优质 SOP 不被一次较差的新生成覆盖。
+func (p *pgStore) skillProven(id int64) bool {
+	var uc, sc int
+	if err := p.db.QueryRow(`SELECT use_count, success_count FROM ai_skills WHERE id=$1`, id).Scan(&uc, &sc); err != nil {
+		return false
+	}
+	return sc > 0 || uc >= 3
 }
 
 func (p *pgStore) skillCount() int {
@@ -1354,9 +1372,9 @@ func (p *pgStore) deleteExperienceRule(id int64) error {
 	return err
 }
 
-// --- Hermes rules CRUD ---
+// --- Sreyun rules CRUD ---
 
-type hermesRule struct {
+type sreyunRule struct {
 	ID          int64           `json:"id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -1367,15 +1385,15 @@ type hermesRule struct {
 	UpdatedAt   string          `json:"updated_at,omitempty"`
 }
 
-func (p *pgStore) listHermesRules() ([]hermesRule, error) {
+func (p *pgStore) listSreyunRules() ([]sreyunRule, error) {
 	rows, err := p.db.Query(`SELECT id,name,description,priority,enabled,config,created_at,updated_at FROM hermes_rules ORDER BY priority DESC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []hermesRule
+	var out []sreyunRule
 	for rows.Next() {
-		var r hermesRule
+		var r sreyunRule
 		var ca, ua sql.NullTime
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &r.Enabled, &r.Config, &ca, &ua); err != nil {
 			continue
@@ -1391,7 +1409,7 @@ func (p *pgStore) listHermesRules() ([]hermesRule, error) {
 	return out, rows.Err()
 }
 
-func (p *pgStore) upsertHermesRule(r hermesRule) (int64, error) {
+func (p *pgStore) upsertSreyunRule(r sreyunRule) (int64, error) {
 	if r.ID > 0 {
 		_, err := p.db.Exec(`UPDATE hermes_rules SET name=$1,description=$2,priority=$3,enabled=$4,config=$5,updated_at=NOW() WHERE id=$6`,
 			r.Name, r.Description, r.Priority, r.Enabled, r.Config, r.ID)
@@ -1403,14 +1421,14 @@ func (p *pgStore) upsertHermesRule(r hermesRule) (int64, error) {
 	return id, err
 }
 
-func (p *pgStore) deleteHermesRule(id int64) error {
+func (p *pgStore) deleteSreyunRule(id int64) error {
 	_, err := p.db.Exec(`DELETE FROM hermes_rules WHERE id=$1`, id)
 	return err
 }
 
-// --- Hermes templates CRUD ---
+// --- Sreyun templates CRUD ---
 
-type hermesTemplate struct {
+type sreyunTemplate struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
@@ -1422,7 +1440,7 @@ type hermesTemplate struct {
 	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
-func (p *pgStore) listHermesTemplates(activeOnly bool) ([]hermesTemplate, error) {
+func (p *pgStore) listSreyunTemplates(activeOnly bool) ([]sreyunTemplate, error) {
 	q := `SELECT id,name,description,content,category,version,active,created_at,updated_at FROM hermes_templates`
 	if activeOnly {
 		q += ` WHERE active=true`
@@ -1433,9 +1451,9 @@ func (p *pgStore) listHermesTemplates(activeOnly bool) ([]hermesTemplate, error)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []hermesTemplate
+	var out []sreyunTemplate
 	for rows.Next() {
-		var t hermesTemplate
+		var t sreyunTemplate
 		var ca, ua sql.NullTime
 		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Content, &t.Category, &t.Version, &t.Active, &ca, &ua); err != nil {
 			continue
@@ -1451,7 +1469,7 @@ func (p *pgStore) listHermesTemplates(activeOnly bool) ([]hermesTemplate, error)
 	return out, rows.Err()
 }
 
-func (p *pgStore) upsertHermesTemplate(t hermesTemplate) (int64, error) {
+func (p *pgStore) upsertSreyunTemplate(t sreyunTemplate) (int64, error) {
 	if t.ID > 0 {
 		_, err := p.db.Exec(`UPDATE hermes_templates SET name=$1,description=$2,content=$3,category=$4,version=version+1,active=$5,updated_at=NOW() WHERE id=$6`,
 			t.Name, t.Description, t.Content, t.Category, t.Active, t.ID)
@@ -1463,14 +1481,14 @@ func (p *pgStore) upsertHermesTemplate(t hermesTemplate) (int64, error) {
 	return id, err
 }
 
-func (p *pgStore) deleteHermesTemplate(id int64) error {
+func (p *pgStore) deleteSreyunTemplate(id int64) error {
 	_, err := p.db.Exec(`DELETE FROM hermes_templates WHERE id=$1`, id)
 	return err
 }
 
-// --- Hermes sessions ---
+// --- Sreyun sessions ---
 
-func (p *pgStore) loadHermesSession(id int64) ([]byte, error) {
+func (p *pgStore) loadSreyunSession(id int64) ([]byte, error) {
 	var raw []byte
 	err := p.db.QueryRow(`SELECT messages FROM hermes_sessions WHERE id=$1`, id).Scan(&raw)
 	if err == sql.ErrNoRows {
@@ -1479,7 +1497,7 @@ func (p *pgStore) loadHermesSession(id int64) ([]byte, error) {
 	return raw, err
 }
 
-func (p *pgStore) saveHermesSession(id int64, messages []byte, incidentID int64) (int64, error) {
+func (p *pgStore) saveSreyunSession(id int64, messages []byte, incidentID int64) (int64, error) {
 	if id > 0 {
 		_, err := p.db.Exec(`UPDATE hermes_sessions SET messages=$1,updated_at=NOW() WHERE id=$2`, messages, id)
 		return id, err
@@ -1489,7 +1507,7 @@ func (p *pgStore) saveHermesSession(id int64, messages []byte, incidentID int64)
 	return newID, err
 }
 
-func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
+func (p *pgStore) listSreyunSessions(limit int) ([]map[string]any, error) {
 	rows, err := p.db.Query(`SELECT id,incident_id,status,created_at,updated_at,messages FROM hermes_sessions ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -1512,7 +1530,7 @@ func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
 			m["updated_at"] = ua.Time.Format(time.RFC3339)
 		}
 		// 从消息内容提取标题（首条用户消息）、摘要（末条消息）与条数，便于前端列表展示
-		title, summary, count := hermesSessionDigest(raw)
+		title, summary, count := sreyunSessionDigest(raw)
 		m["title"] = title
 		m["summary"] = summary
 		m["msg_count"] = count
@@ -1521,8 +1539,8 @@ func (p *pgStore) listHermesSessions(limit int) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
-// hermesSessionDigest 从会话 messages(JSON) 提取标题（首条 user 内容）、摘要（末条内容）与消息条数。
-func hermesSessionDigest(raw []byte) (title, summary string, count int) {
+// sreyunSessionDigest 从会话 messages(JSON) 提取标题（首条 user 内容）、摘要（末条内容）与消息条数。
+func sreyunSessionDigest(raw []byte) (title, summary string, count int) {
 	if len(raw) == 0 {
 		return "新会话", "", 0
 	}
@@ -1533,7 +1551,7 @@ func hermesSessionDigest(raw []byte) (title, summary string, count int) {
 	count = len(msgs)
 	for _, m := range msgs {
 		if m["role"] == "user" && strings.TrimSpace(m["content"]) != "" {
-			title = hermesTrunc(m["content"], 24)
+			title = sreyunTrunc(m["content"], 24)
 			break
 		}
 	}
@@ -1542,15 +1560,15 @@ func hermesSessionDigest(raw []byte) (title, summary string, count int) {
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if strings.TrimSpace(msgs[i]["content"]) != "" {
-			summary = hermesTrunc(msgs[i]["content"], 40)
+			summary = sreyunTrunc(msgs[i]["content"], 40)
 			break
 		}
 	}
 	return title, summary, count
 }
 
-// hermesTrunc 按 Unicode 字符（rune）截断字符串，避免中文被切成半个字符。
-func hermesTrunc(s string, n int) string {
+// sreyunTrunc 按 Unicode 字符（rune）截断字符串，避免中文被切成半个字符。
+func sreyunTrunc(s string, n int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
 	r := []rune(s)
 	if len(r) <= n {
@@ -1944,6 +1962,8 @@ func (p *pgStore) getAllHyperVInventories() ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
+const hypervEventsPerHostCap = 500
+
 func (p *pgStore) insertHyperVEvent(hostID, vmName, vmID, kind, severity, message string) {
 	_, err := p.db.Exec(`
 		INSERT INTO hyperv_events(host_id, vm_name, vm_id, kind, severity, message)
@@ -1951,7 +1971,13 @@ func (p *pgStore) insertHyperVEvent(hostID, vmName, vmID, kind, severity, messag
 		hostID, vmName, vmID, kind, severity, message)
 	if err != nil {
 		slog.Warn("插入 Hyper-V 事件失败", "host", hostID, "vm", vmName, "err", err)
+		return
 	}
+	// 保留每宿主最近 N 条，防止事件表无界增长。事件只在 VM 增删/状态跳变时写入，
+	// 频率很低，故随插入裁剪的开销可忽略。
+	_, _ = p.db.Exec(`DELETE FROM hyperv_events WHERE host_id=$1 AND id NOT IN (
+		SELECT id FROM hyperv_events WHERE host_id=$1 ORDER BY created_at DESC, id DESC LIMIT $2)`,
+		hostID, hypervEventsPerHostCap)
 }
 
 // getHyperVEvents returns a host's VM change/state events, newest first.

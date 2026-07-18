@@ -14,13 +14,13 @@ import (
 	"aiops-monitor/shared"
 )
 
-// TestHermesHostContextAndToolLoop 端到端验证 Hermes AI 对话的核心修复：
+// TestSreyunHostContextAndToolLoop 端到端验证 Sreyun AI 对话的核心修复：
 //  1. 系统提示词自动注入当前纳管主机（id/主机名/IP/状态），且不再"禁止 JSON"、允许 tool_calls 协议；
 //  2. 完整工具调用闭环：模型据主机清单发起 tool_call → query_metrics 执行 → 拿到真实指标 → 生成最终中文结论；
 //  3. 多轮记忆：会话消息（user+assistant）被正确追加。
 //
 // 用 httptest 模拟一个 OpenAI 兼容的 /chat/completions 端点，无需真实 LLM 或 Docker。
-func TestHermesHostContextAndToolLoop(t *testing.T) {
+func TestSreyunHostContextAndToolLoop(t *testing.T) {
 	var turn int
 	var firstReqBody string
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +55,7 @@ func TestHermesHostContextAndToolLoop(t *testing.T) {
 		t.Fatalf("SetAIConfig: %v", err)
 	}
 	s := &Server{store: store, cfg: cfg}
-	h := newHermesCore(s)
+	h := newSreyunCore(s)
 
 	// (1) 主机上下文注入 + JSON 禁令已移除
 	sys := h.buildSystemPrompt()
@@ -69,7 +69,7 @@ func TestHermesHostContextAndToolLoop(t *testing.T) {
 	}
 
 	// (2) 工具调用闭环
-	sess := &HermesSession{}
+	sess := &SreyunSession{}
 	reply, err := h.Chat(context.Background(), sess, "查询主机 web-01 的 CPU 使用率", nil, false, nil)
 	if err != nil {
 		t.Fatalf("Chat 出错: %v", err)
@@ -187,7 +187,7 @@ func TestResolveHostRef(t *testing.T) {
 	h1.IP = "10.0.0.11"
 	h2 := store.RegisterHost("h-db02", "db-02.prod", "fp2")
 	h2.IP = "10.0.0.22"
-	hc := newHermesCore(&Server{store: store})
+	hc := newSreyunCore(&Server{store: store})
 
 	cases := []struct{ ref, wantID string }{
 		{"h-web01", "h-web01"},  // 精确 ID
@@ -215,7 +215,7 @@ func TestExecQueryMetricsFuzzyHost(t *testing.T) {
 	h1 := store.RegisterHost("h-web01", "web-01", "fp")
 	h1.IP = "10.0.0.11"
 	h1.Latest = &shared.Sample{Metrics: shared.Metrics{CPUPercent: 55}}
-	hc := newHermesCore(&Server{store: store})
+	hc := newSreyunCore(&Server{store: store})
 
 	out, err := hc.execQueryMetrics(map[string]any{"host_id": "web-01", "metric": "cpu"})
 	if err != nil {
@@ -228,7 +228,7 @@ func TestExecQueryMetricsFuzzyHost(t *testing.T) {
 
 // TestResolveSessionHistoryFallback 验证 PG 不可用时用前端 history 兜底，保证多轮记忆。
 func TestResolveSessionHistoryFallback(t *testing.T) {
-	hc := newHermesCore(&Server{}) // pg == nil
+	hc := newSreyunCore(&Server{}) // pg == nil
 	hist := []map[string]string{
 		{"role": "user", "content": "hi"},
 		{"role": "assistant", "content": "hello"},
@@ -301,7 +301,7 @@ func TestExecDiagnosticGatedOnTerminalAccess(t *testing.T) {
 	store := NewStore()
 	store.RegisterHost("h1", "web-01", "fp")
 	cfg := newTestConfigStore(t)
-	hc := newHermesCore(&Server{store: store, cfg: cfg})
+	hc := newSreyunCore(&Server{store: store, cfg: cfg})
 
 	// 默认未开启 → 拒绝（且不解析主机、不执行）
 	out, _ := hc.execDiagnostic(map[string]any{"host_id": "web-01", "command": "df -h"})
@@ -309,7 +309,7 @@ func TestExecDiagnosticGatedOnTerminalAccess(t *testing.T) {
 		t.Fatalf("终端权限未开启时应拒绝，实际: %q", out)
 	}
 	// 开启后，危险命令仍被只读白名单拦截（不受权限开关影响）
-	if err := cfg.SetHermesTerminalEnabled(true); err != nil {
+	if err := cfg.SetSreyunTerminalEnabled(true); err != nil {
 		t.Fatal(err)
 	}
 	out2, _ := hc.execDiagnostic(map[string]any{"host_id": "web-01", "command": "rm -rf /"})

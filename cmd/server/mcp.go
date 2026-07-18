@@ -11,16 +11,19 @@ import (
 // MCP Server —— 把本平台的【只读】运维工具暴露为标准 Model Context Protocol，供外部 Agent
 // （如 Nous Hermes Agent、Claude Desktop、Cursor 等 MCP 客户端）连接调用。
 //
-// 这是「不换引擎、用 MCP 桥接对接外部 Agent」的可逆试水通道：复用 Hermes 引擎已注册的工具
+// 这是「不换引擎、用 MCP 桥接对接外部 Agent」的可逆试水通道：复用 Sreyun 引擎已注册的工具
 // 执行器，只导出一个只读白名单（排除会执行代码/变更的工具）。传输 = JSON-RPC over HTTP(POST)，
 // Bearer Token 鉴权。默认关闭。主干零绑定——随时关掉即完全撤除。
 // ============================================================================
 
-// mcpReadonlyTools 是允许经 MCP 暴露的只读工具白名单（排除 run_python_action 等执行/变更类）。
+// mcpReadonlyTools 是允许经 MCP 暴露的工具白名单。安全边界：「只读」= **只查平台自有数据、绝不
+// 触达被控主机**。故排除 run_python_action（执行代码）与 run_diagnostic（会登录主机执行 shell，
+// 且其命令过滤可被 dmesg -c / journalctl --vacuum / cat /etc//shadow / /proc/self/environ 等绕过）。
+// 若确需经 MCP 暴露主机诊断，应另加独立于 Web 面板的显式 opt-in，而非并入"只读"白名单。
 var mcpReadonlyTools = map[string]bool{
 	"query_metrics": true, "search_logs": true, "list_alerts": true,
 	"search_similar_cases": true, "list_datasources": true, "query_datasource": true,
-	"list_recent_changes": true, "check_host_health": true, "run_diagnostic": true,
+	"list_recent_changes": true, "check_host_health": true,
 	"query_hardware": true, "query_hardware_events": true, "query_hardware_history": true,
 	"query_hardware_changes": true, "query_netflow": true, "query_hyperv": true,
 }
@@ -98,13 +101,13 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// mcpToolList 把 Hermes 只读工具转成 MCP tool 定义（name/description/inputSchema）。
+// mcpToolList 把 Sreyun 只读工具转成 MCP tool 定义（name/description/inputSchema）。
 func (s *Server) mcpToolList() []map[string]any {
 	out := []map[string]any{}
-	if s.hermes == nil {
+	if s.sreyun == nil {
 		return out
 	}
-	for name, t := range s.hermes.tools {
+	for name, t := range s.sreyun.tools {
 		if !mcpReadonlyTools[name] {
 			continue
 		}
@@ -127,11 +130,11 @@ func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq) {
 		writeRPCError(w, req.ID, -32602, "invalid params")
 		return
 	}
-	if !mcpReadonlyTools[p.Name] || s.hermes == nil {
+	if !mcpReadonlyTools[p.Name] || s.sreyun == nil {
 		writeRPCError(w, req.ID, -32602, "unknown or not-exposed tool: "+p.Name)
 		return
 	}
-	tool, ok := s.hermes.tools[p.Name]
+	tool, ok := s.sreyun.tools[p.Name]
 	if !ok {
 		writeRPCError(w, req.ID, -32602, "unknown tool: "+p.Name)
 		return

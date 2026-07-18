@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// handleHermesSuggestions 返回「快捷问题 / 推荐 Prompt」池，供 AI 对话空态展示、用户一键提问。
-// 结合当前实际状态（活跃告警 / 纳管主机 / 近期错误日志）生成动态建议 + 覆盖 Hermes 各项
+// handleSreyunSuggestions 返回「快捷问题 / 推荐 Prompt」池，供 AI 对话空态展示、用户一键提问。
+// 结合当前实际状态（活跃告警 / 纳管主机 / 近期错误日志）生成动态建议 + 覆盖 Sreyun 各项
 // 能力（主机 / 指标 / 日志 / 告警 / 诊断 / 巡检）的精选示例。前端随机取若干条展示并可「换一批」。
-func (s *Server) handleHermesSuggestions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunSuggestions(w http.ResponseWriter, r *http.Request) {
 	var dyn []string // 依据当前状态的动态建议（前端优先展示）
 	now := time.Now().Unix()
 
@@ -52,7 +52,7 @@ func (s *Server) handleHermesSuggestions(w http.ResponseWriter, r *http.Request)
 		dyn = append(dyn, fmt.Sprintf("当前共纳管 %d 台主机（在线 %d），帮我总结整体运行状况", len(hosts), online))
 	}
 
-	// 精选能力示例（覆盖 Hermes 各工具，前端随机抽取补齐）
+	// 精选能力示例（覆盖 Sreyun 各工具，前端随机抽取补齐）
 	curated := []string{
 		"当前有哪些主机在线？各自负载如何？",
 		"最近 1 小时有哪些告警？按严重程度排序并解读",

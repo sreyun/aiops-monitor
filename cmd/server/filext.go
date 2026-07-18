@@ -31,8 +31,8 @@ import (
 
 const maxExtractChars = 200000 // 注入上下文的文本上限（约 200KB，防止拖垮模型上下文）
 
-// handleHermesParse 解析上传文件/URL 为纯文本。
-func (s *Server) handleHermesParse(w http.ResponseWriter, r *http.Request) {
+// handleSreyunParse 解析上传文件/URL 为纯文本。
+func (s *Server) handleSreyunParse(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 		Mime string `json:"mime"`

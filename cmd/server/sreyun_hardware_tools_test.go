@@ -4,7 +4,7 @@ import "testing"
 
 // 新工具必须真的注册进去，否则 LLM 根本看不到它们。
 func TestHardwareToolsRegistered(t *testing.T) {
-	h := &HermesCore{tools: map[string]HermesTool{}}
+	h := &SreyunCore{tools: map[string]SreyunTool{}}
 	h.registerTools()
 	want := []string{
 		"query_hardware", "query_hardware_events", "query_hardware_history",

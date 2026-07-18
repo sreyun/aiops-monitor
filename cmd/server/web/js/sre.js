@@ -1444,7 +1444,7 @@ async function loadSkills(){
       return;
     }
     body.innerHTML=`<div class="skill-list">`+skills.map(s=>{
-      const succ=s.use_count>0?Math.round((s.success_count/s.use_count)*100):0;
+      const succ=s.use_count>0?Math.min(100,Math.round((s.success_count/s.use_count)*100)):0;
       return `<div class="skill-card">
         <div class="skill-head"><b>${esc(s.name)}</b>
           <span class="skill-meta">用 ${s.use_count} · 成功 ${succ}% · 权重 ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · 手工":""}</span>
@@ -1808,9 +1808,9 @@ function renderAIMarkdown(raw){
 // AI 对话消息区：判断是否贴底（供流式时决定要不要自动滚动）
 function aiChatStick(){ const log=$("aiChatLog"); return log ? (log.scrollHeight-log.scrollTop-log.clientHeight<80) : true; }
 function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.scrollHeight; }
-// 统一「AI 对话」——单窗口,后端走 Hermes 自主运维 Agent（能对话 + 自动调用工具,
+// 统一「AI 对话」——单窗口,后端走 Sreyun 自主运维 Agent（能对话 + 自动调用工具,
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
-let AI_CHAT_SESSION=0;   // Hermes 服务端会话 id（0=新会话）
+let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
 const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">AI 运维助手已就绪</div><div class="ai-welcome-sub">描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。</div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 function openAIChat(){
@@ -2177,7 +2177,7 @@ safeAddEventListener("aiUndoBtn","click",undoAIChat);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
 safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));
 
-// （原独立的 Hermes 对话已并入上方统一的「AI 对话」——单窗口即走 Hermes Agent。）
+// （原独立的 Sreyun 对话已并入上方统一的「AI 对话」——单窗口即走 Sreyun Agent。）
 
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);

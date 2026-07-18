@@ -369,6 +369,7 @@ type HyperVGuest struct {
 	MemAssignedMB    float64  `json:"mem_assigned_mb,omitempty"`
 	MemDemandMB      float64  `json:"mem_demand_mb,omitempty"`
 	MemMaxMB         float64  `json:"mem_max_mb,omitempty"`
+	DynamicMemEnabled bool    `json:"dynamic_mem_enabled,omitempty"` // 内存压力(需求/分配)只对动态内存 VM 有意义
 	UptimeSec        int64    `json:"uptime_sec,omitempty"`
 	Generation       int      `json:"generation,omitempty"`
 	Version          string   `json:"version,omitempty"`

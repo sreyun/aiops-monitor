@@ -9,7 +9,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Hermes 硬件 / 流量工具
+// Sreyun 硬件 / 流量工具
 //
 // 此前 AI 的 10 个工具里没有一个能看到硬件或流量：机器硬件报错时，AI 只能看到
 // CPU/内存这类 OS 侧指标，看不到 BMC 说的"2 号电源掉了"。这几个工具把带外硬件
@@ -20,7 +20,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // hwResolve maps a user-supplied host reference to (id, name, snapshots).
-func (h *HermesCore) hwResolve(args map[string]any) (string, string, []shared.HardwareSnapshot, string) {
+func (h *SreyunCore) hwResolve(args map[string]any) (string, string, []shared.HardwareSnapshot, string) {
 	ref, _ := args["host_id"].(string)
 	if ref == "" {
 		return "", "", nil, "请指定 host_id"
@@ -159,7 +159,7 @@ func firstNonEmpty(ss ...string) string {
 	return "-"
 }
 
-func (h *HermesCore) execQueryHardware(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryHardware(args map[string]any) (string, error) {
 	_, name, snaps, errMsg := h.hwResolve(args)
 	if errMsg != "" {
 		return errMsg, nil
@@ -278,7 +278,7 @@ func hwWriteSection(b *strings.Builder, snap shared.HardwareSnapshot, section st
 	}
 }
 
-func (h *HermesCore) execQueryHardwareEvents(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryHardwareEvents(args map[string]any) (string, error) {
 	hostID, name, snaps, errMsg := h.hwResolve(args)
 	if errMsg != "" {
 		return errMsg, nil
@@ -320,7 +320,7 @@ func (h *HermesCore) execQueryHardwareEvents(args map[string]any) (string, error
 	return b.String(), nil
 }
 
-func (h *HermesCore) execQueryHardwareHistory(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryHardwareHistory(args map[string]any) (string, error) {
 	ref, _ := args["host_id"].(string)
 	metric, _ := args["metric"].(string)
 	if ref == "" || metric == "" {
@@ -393,7 +393,7 @@ func (h *HermesCore) execQueryHardwareHistory(args map[string]any) (string, erro
 	return b.String(), nil
 }
 
-func (h *HermesCore) execQueryHardwareChanges(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryHardwareChanges(args map[string]any) (string, error) {
 	ref, _ := args["host_id"].(string)
 	if ref == "" {
 		return "请指定 host_id", nil
@@ -426,7 +426,7 @@ func (h *HermesCore) execQueryHardwareChanges(args map[string]any) (string, erro
 	return b.String(), nil
 }
 
-func (h *HermesCore) execQueryNetFlow(args map[string]any) (string, error) {
+func (h *SreyunCore) execQueryNetFlow(args map[string]any) (string, error) {
 	ref, _ := args["host_id"].(string)
 	if ref == "" {
 		return "请指定 host_id", nil

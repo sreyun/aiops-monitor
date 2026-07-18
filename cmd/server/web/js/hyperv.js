@@ -10,6 +10,17 @@ const hvT = (k, fb) => I18N.t(k, fb);
 
 let HV_INVENTORIES = [];        // [{host_id, host_name, guest_count, guests:[...], updated_at}]
 const HV_FILTER = { q: "", status: "" };
+const HV_TOGGLED = new Set();   // host_ids where the user flipped the default expand state
+
+// hvExpanded decides whether a host section renders its VM table. Default: expand
+// hosts with abnormal VMs or when the fleet is small; collapse healthy hosts in a
+// large fleet (keeps the DOM light for hundreds of VMs). A user click flips that
+// default; an active filter forces every section open so matches stay visible.
+function hvExpanded(inv) {
+  if (HV_FILTER.q || HV_FILTER.status) return true;
+  const def = (inv.guests || []).some(hvAbnormal) || HV_INVENTORIES.length <= 6;
+  return HV_TOGGLED.has(inv.host_id) ? !def : def;
+}
 
 async function loadHyperVPanel() {
   const container = $("hypervPanel");
@@ -112,13 +123,18 @@ function hvHostSection(inv) {
   const bad = guests.filter(hvAbnormal).length;
   const hostName = inv.host_name || inv.host_id;
   const updated = inv.updated_at ? ago(Math.floor(new Date(inv.updated_at).getTime() / 1000)) : "";
+  const open = hvExpanded(inv);
 
   const head = `<div class="hv-host-head">
+    <button class="hv-caret" data-hvtoggle="${esc(inv.host_id)}" title="${esc(hvT("hyperv.toggle", "展开/收起"))}" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0 6px">${open ? "▾" : "▸"}</button>
     <a class="hv-link hv-host-name" data-hvjump="${esc(inv.host_id)}" data-hvname="${esc(hostName)}" title="${esc(hvT("hyperv.jump_title", "跳转到该主机监控详情"))}">🖥 ${esc(hostName)} ↗</a>
     <span class="hv-host-stat">${hvT("hyperv.total", "共")} ${guests.length} · ${hvT("hyperv.st_running", "运行中")} ${running}${bad ? ` · <span class="hv-bad">${hvT("hyperv.attention", "需关注")} ${bad}</span>` : ""}</span>
     ${updated ? `<span class="hv-host-upd muted">${esc(updated)}</span>` : ""}
   </div>`;
 
+  if (!open) {
+    return `<div class="hv-host">${head}</div>`; // collapsed: header only, table not built (DOM stays light)
+  }
   if (!shown.length) {
     return `<div class="hv-host">${head}<div class="empty-line">${esc(hvT("hyperv.no_match", "无匹配虚拟机"))}</div></div>`;
   }
@@ -147,6 +163,7 @@ function hvToolbar(totalHosts, totalVMs, totalBad) {
       <option value="notrunning"${HV_FILTER.status === "notrunning" ? " selected" : ""}>${esc(hvT("hyperv.f_notrunning", "非运行"))}</option>
       <option value="abnormal"${HV_FILTER.status === "abnormal" ? " selected" : ""}>${esc(hvT("hyperv.attention", "需关注"))}</option>
     </select>
+    <button data-hvrefresh="1" class="btn sm" title="${esc(hvT("hyperv.refresh", "刷新"))}">↻</button>
     <span class="hw-count muted">${hvT("hyperv.summary", "宿主机")} ${totalHosts} · ${hvT("hyperv.vm", "虚拟机")} ${totalVMs}${totalBad ? ` · <span class="hv-bad">${hvT("hyperv.attention", "需关注")} ${totalBad}</span>` : ""}</span>
   </div>`;
 }
@@ -173,6 +190,15 @@ function renderHyperVPanel() {
 /* ---------- 事件（全部委托） ---------- */
 
 safeAddEventListener("hypervPanel", "click", e => {
+  const refresh = e.target.closest("[data-hvrefresh]");
+  if (refresh) { loadHyperVPanel(); return; }
+  const toggle = e.target.closest("[data-hvtoggle]");
+  if (toggle) {
+    const id = toggle.dataset.hvtoggle;
+    if (HV_TOGGLED.has(id)) HV_TOGGLED.delete(id); else HV_TOGGLED.add(id);
+    renderHyperVPanel();
+    return;
+  }
   const j = e.target.closest("[data-hvjump]");
   if (j && typeof openDetail === "function") {
     openDetail(j.dataset.hvjump, j.dataset.hvname || j.dataset.hvjump);
@@ -194,7 +220,6 @@ safeAddEventListener("hypervPanel", "input", e => {
 safeAddEventListener("hypervPanel", "change", e => {
   if (e.target.id === "hvStatusFilter") { HV_FILTER.status = e.target.value; renderHyperVPanel(); }
 });
-safeAddEventListener("hvRefreshBtn2", "click", loadHyperVPanel);
 
 // 供 nav.js 的 _pageRenderers 调用
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};

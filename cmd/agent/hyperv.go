@@ -36,6 +36,7 @@ type hypervRaw struct {
 	MemAssignedMB   float64
 	MemDemandMB     float64
 	MemMaxMB        float64
+	DynamicMemoryEnabled bool
 	UptimeSec       int64
 	Generation      int
 	Version         string
@@ -71,6 +72,7 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 			Name: r.Name, ID: r.Id, State: r.State, Status: r.Status,
 			CPUUsage: r.CPUUsage, ProcessorCount: r.ProcessorCount,
 			MemAssignedMB: r.MemAssignedMB, MemDemandMB: r.MemDemandMB, MemMaxMB: r.MemMaxMB,
+			DynamicMemEnabled: r.DynamicMemoryEnabled,
 			UptimeSec: r.UptimeSec, Generation: r.Generation, Version: r.Version,
 			IPAddresses: splitComma(r.IP), Switches: splitComma(r.Switches),
 			VHDCount: r.VHDCount, CheckpointCount: r.CheckpointCount,

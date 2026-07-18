@@ -1245,20 +1245,24 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if a.RerankAPIKey == "" || strings.Contains(a.RerankAPIKey, "****") {
 		a.RerankAPIKey = cs.cfg.AI.RerankAPIKey
 	}
-	// AI 配置表单不含这些 Hermes 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
-	a.HermesEnabled = cs.cfg.AI.HermesEnabled
-	a.HermesAutoApprove = cs.cfg.AI.HermesAutoApprove
-	a.HermesTerminalEnabled = cs.cfg.AI.HermesTerminalEnabled
+	// MCP 令牌同样：表单提交脱敏值(****)时保留原值，避免脱敏值把真令牌覆盖掉。
+	if strings.Contains(a.MCPToken, "****") {
+		a.MCPToken = cs.cfg.AI.MCPToken
+	}
+	// AI 配置表单不含这些 Sreyun 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
+	a.SreyunEnabled = cs.cfg.AI.SreyunEnabled
+	a.SreyunAutoApprove = cs.cfg.AI.SreyunAutoApprove
+	a.SreyunTerminalEnabled = cs.cfg.AI.SreyunTerminalEnabled
 	cs.cfg.AI = a
 	cs.mu.Unlock()
 	return cs.save()
 }
 
-// SetHermesTerminalEnabled 单独设置「AI 终端只读巡检」开关
+// SetSreyunTerminalEnabled 单独设置「AI 终端只读巡检」开关
 // （由 handleAITerminalAccess 在校验终端密码后调用；不走上面的表单保存路径）。
-func (cs *ConfigStore) SetHermesTerminalEnabled(v bool) error {
+func (cs *ConfigStore) SetSreyunTerminalEnabled(v bool) error {
 	cs.mu.Lock()
-	cs.cfg.AI.HermesTerminalEnabled = v
+	cs.cfg.AI.SreyunTerminalEnabled = v
 	cs.mu.Unlock()
 	return cs.save()
 }

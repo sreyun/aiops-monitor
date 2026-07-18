@@ -51,13 +51,13 @@ type AIConfig struct {
 	// 提案 → 聚合模型综合成一份更稳的结论。默认空=关闭（成本可控）。这些模型复用主 Endpoint / Key。
 	MoAModels string `json:"moa_models,omitempty"`
 	// MCP Server：把本平台的只读运维工具（指标/日志/告警/硬件/流量等）暴露为标准 MCP，供外部
-	// Agent（如 Nous Hermes Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
+	// Agent（如 Nous Sreyun Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
 	MCPEnabled bool   `json:"mcp_enabled,omitempty"`
 	MCPToken   string `json:"mcp_token,omitempty"`
-	// Hermes Agent 配置
-	HermesEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Hermes 自主 Agent
-	HermesAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
-	HermesTerminalEnabled bool `json:"hermes_terminal_enabled,omitempty"` // AI 终端只读巡检权限（独立开关，开启需校验终端密码；仅允许只读诊断命令）
+	// Sreyun Agent 配置
+	SreyunEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Sreyun 自主 Agent
+	SreyunAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
+	SreyunTerminalEnabled bool `json:"hermes_terminal_enabled,omitempty"` // AI 终端只读巡检权限（独立开关，开启需校验终端密码；仅允许只读诊断命令）
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be
@@ -544,7 +544,7 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 // ---- 上下文压缩：长对话历史 → 「AI 摘要 + 最近若干轮 verbatim」，替代硬截断 ----
 //
 // 硬截断（只保留最近 N 轮）会丢掉早期关键上下文（如最初的现象、已确认结论、约束）。这里改为：
-// 超预算时把较旧轮次交给廉价模型摘成要点，保留最近轮次原文；摘要可增量缓存（见 HermesSession），
+// 超预算时把较旧轮次交给廉价模型摘成要点，保留最近轮次原文；摘要可增量缓存（见 SreyunSession），
 // 只对「新变旧」的那段做增量摘要，避免每轮全量重算。
 
 // summaryMsg 把摘要包装成一条注入消息。
@@ -573,6 +573,25 @@ func summarizeTurns(cfg AIConfig, priorSummary string, msgs []map[string]string)
 		return priorSummary
 	}
 	return strings.TrimSpace(out)
+}
+
+// compactHistory 是【无 LLM】的历史压缩：保留最早一轮（通常含最初现象/约束）+ 最近 keepRecentTurns
+// 轮，省略中间轮次。用于无会话缓存的入口（/ai/chat、diagnose-chat）——那里 compressHistory 会因
+// 每次都从 priorCount=0 起算而【每轮】同步做一次整段 LLM 摘要（成本/首字延迟翻倍）。带会话缓存的
+// Sreyun 主对话仍用 compressHistory 做增量 AI 摘要（只对新变旧的段落摘要一次，成本低）。
+func compactHistory(history []map[string]string, keepRecentTurns int) []map[string]string {
+	if keepRecentTurns < 2 {
+		keepRecentTurns = 2
+	}
+	keep := keepRecentTurns * 2 // 每轮 user+assistant = 2 条
+	if len(history) <= keep+2 {
+		return history
+	}
+	out := make([]map[string]string, 0, keep+3)
+	out = append(out, history[:2]...) // 最早一轮
+	out = append(out, map[string]string{"role": "user", "content": "（为控制长度，中间若干轮对话已省略）"})
+	out = append(out, history[len(history)-keep:]...)
+	return out
 }
 
 // compressHistory 返回压缩后的历史消息列表 + 新摘要 + 新的「已被摘要覆盖的消息数」。
@@ -625,7 +644,7 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 	// Anthropic-compatible endpoints don't support SSE streaming in the same way;
 	// fall back to a single-chunk response.
 	if prov == aiProvAnthropic {
-		reply, err := aiChat(cfg, messages)
+		reply, _, err := aiChatV(ctx, cfg, messages, nil, nil) // 透传 ctx：客户端断开时可取消到 Anthropic 的在途请求
 		if err != nil {
 			fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 			return "", nil
@@ -743,7 +762,7 @@ func streamChatNoDone(ctx context.Context, w http.ResponseWriter, cfg AIConfig, 
 }
 
 // streamSelfVerify 是「自我校验」的独立第二遍：对照 evidence 复核 answer，把审校意见【流式续写】
-// 到 w（不发 [DONE]，由调用方统一收尾），返回审校全文。借鉴 Hermes Agent 的 background review。
+// 到 w（不发 [DONE]，由调用方统一收尾），返回审校全文。借鉴 Sreyun Agent 的 background review。
 func streamSelfVerify(ctx context.Context, w http.ResponseWriter, cfg AIConfig, evidence, answer string) string {
 	if flusher, ok := w.(http.Flusher); ok {
 		fmt.Fprintf(w, "data: {\"delta\":%s}\n\n", jsonString("\n\n---\n🔎 **自我校验**（对照证据独立复核）\n\n"))
@@ -822,8 +841,11 @@ func jsonString(s string) string {
 // streamChatFiltered wraps streamChat with sensitive content filtering on the
 // accumulated reply. The streaming deltas are sent unfiltered (the frontend
 // applies its own display filter), but the returned full text is filtered.
+// 注意：用 streamChatNoDone（不发 [DONE]），以便调用方（AI 连通性测试）在正文之后还能再发一帧
+// {"result":...}（延迟/Provider 等元数据），最后由调用方统一发一次 [DONE]。若这里发 [DONE]，
+// 前端 readSSEStream 命中即 return，后续 result 帧会被丢弃。
 func streamChatFiltered(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string) (string, error) {
-	reply, err := streamChat(ctx, w, cfg, messages, nil)
+	reply, err := streamChatNoDone(ctx, w, cfg, messages, nil)
 	if err != nil {
 		return "", err
 	}

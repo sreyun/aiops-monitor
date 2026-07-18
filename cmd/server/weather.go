@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +24,16 @@ import (
 //  3. 上游返回的**中文城市/天气是双重编码乱码**（GBK 当 UTF-16），必须服务端清洗：
 //     只取干净的数字字段（温度、weather_code、湿度、AQI），中文由我们按 code 映射。
 //
+// 城市定位优先级（自动识别用户所在城市，不再写死杭州）：
+//  1. ?ip= 显式覆盖（调试用）。
+//  2. 客户端公网 IP：用户走公网访问时，clientIP 即其真实公网 IP → 其所在城市。
+//  3. 客户端是内网/环回 IP（本产品服务端与用户同处一个局域网/园区最常见）：
+//     自动探测**服务端出口公网 IP**——出口 IP 即园区所在城市的公网 IP，
+//     等价于用户所在城市。结果缓存，出口 IP 基本不变。
+//  4. 出口探测失败时才回退到 AIOPS_WEATHER_DEFAULT_IP（如配置，纯兜底/强制指定城市）。
+//
 // AppCode 从环境变量 AIOPS_WEATHER_APPCODE 读取；未配置则天气功能关闭（App 优雅降级）。
-// AIOPS_WEATHER_DEFAULT_IP 可选：客户端为内网/环回 IP（无法定位）时用它兜底。
+// AIOPS_WEATHER_DEFAULT_IP 可选：仅当出口探测失败时兜底，或云上部署强制指定城市时使用。
 // ---------------------------------------------------------------------------
 
 const weatherUpstream = "https://weather01.market.alicloudapi.com/ip-to-weather"
@@ -40,6 +49,7 @@ type weatherResult struct {
 	TodayHigh int    `json:"today_high,omitempty"`
 	TodayLow  int    `json:"today_low,omitempty"`
 	Reason    string `json:"reason,omitempty"` // ok=false 时说明原因
+	Source    string `json:"source,omitempty"` // 定位 IP 来源：client/egress/default-env/override（调试用）
 }
 
 type weatherCacheEntry struct {
@@ -66,15 +76,22 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := r.URL.Query().Get("ip") // 允许显式覆盖（调试用）
+	source := "override"
 	if ip == "" {
 		ip = s.clientIP(r)
+		source = "client"
 	}
-	// 内网/环回 IP 无法定位，用兜底 IP（如配置）
+	// 客户端是内网/环回 IP（服务端与用户同处局域网时最常见）：无法用它定位。
+	// 改为自动探测**服务端出口公网 IP**（园区出口=用户所在城市）；探测失败才回退默认 IP。
 	if isPrivateOrLoopback(ip) {
-		if def := strings.TrimSpace(os.Getenv("AIOPS_WEATHER_DEFAULT_IP")); def != "" {
+		if eip := serverEgressIP(); eip != "" {
+			ip = eip
+			source = "egress"
+		} else if def := strings.TrimSpace(os.Getenv("AIOPS_WEATHER_DEFAULT_IP")); def != "" {
 			ip = def
+			source = "default-env"
 		} else {
-			writeJSON(w, http.StatusOK, weatherResult{OK: false, Reason: "client ip not routable"})
+			writeJSON(w, http.StatusOK, weatherResult{OK: false, Reason: "client ip not routable; egress detect failed"})
 			return
 		}
 	}
@@ -83,7 +100,9 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	weatherMu.Lock()
 	if e, ok := weatherCache[ip]; ok && time.Since(e.at) < weatherCacheTTL {
 		weatherMu.Unlock()
-		writeJSON(w, http.StatusOK, e.res)
+		res := e.res
+		res.Source = source
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 	weatherMu.Unlock()
@@ -96,7 +115,93 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	weatherMu.Lock()
 	weatherCache[ip] = weatherCacheEntry{res: res, at: time.Now()}
 	weatherMu.Unlock()
+	res.Source = source
 	writeJSON(w, http.StatusOK, res)
+}
+
+// ---------------------------------------------------------------------------
+// 服务端出口公网 IP 探测
+//
+// 本产品多为内网/园区部署，服务端与用户同处一个局域网，出口公网 IP 即用户所在
+// 城市的公网 IP。依次尝试几个**国内可达**的 IP 回显服务，取第一个成功返回的公网
+// IPv4。结果缓存 6 小时（出口 IP 基本不变）；失败短暂缓存 1 分钟，避免离线时反复打。
+// ---------------------------------------------------------------------------
+
+const (
+	egressTTL     = 6 * time.Hour
+	egressFailTTL = 1 * time.Minute
+)
+
+var (
+	egressMu   sync.Mutex
+	egressIP   string
+	egressAt   time.Time
+	egressOK   bool
+	egressHTTP = &http.Client{Timeout: 4 * time.Second}
+	ipv4Re     = regexp.MustCompile(`(?:\d{1,3}\.){3}\d{1,3}`)
+
+	// 国内可达、返回体里含**调用方公网 IP** 的回显服务，任一成功即可。全部为国内节点：
+	// 国际线路（如 ipify）在国内常经不同出口，会解析出另一个 IP → 错误城市，故不用。
+	egressProviders = []string{
+		"https://myip.ipip.net",         // 文本：当前 IP：1.2.3.4 来自于：中国 上海 ...
+		"https://ip.3322.net",           // 纯文本 IP：1.2.3.4
+		"https://ddns.oray.com/checkip", // 文本：Current IP Address: 1.2.3.4
+		"https://cip.cc",                // 文本：IP : 1.2.3.4  地址 : 中国 ...
+	}
+)
+
+// serverEgressIP returns the server's public egress IPv4, cached. Empty on failure.
+func serverEgressIP() string {
+	egressMu.Lock()
+	if egressIP != "" && time.Since(egressAt) < egressTTL {
+		ip := egressIP
+		egressMu.Unlock()
+		return ip
+	}
+	if !egressOK && egressIP == "" && time.Since(egressAt) < egressFailTTL {
+		egressMu.Unlock() // 近期刚失败，先别重试
+		return ""
+	}
+	egressMu.Unlock()
+
+	found := probeEgressIP()
+
+	egressMu.Lock()
+	egressAt = time.Now()
+	if found != "" {
+		egressIP = found
+		egressOK = true
+	} else {
+		egressOK = false
+	}
+	egressMu.Unlock()
+	return found
+}
+
+func probeEgressIP() string {
+	for _, url := range egressProviders {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "curl/8.0") // 部分回显服务对无 UA 返回 HTML
+		resp, err := egressHTTP.Do(req)
+		if err != nil {
+			continue
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			continue
+		}
+		// 取返回体里第一个**公网** IPv4（跳过内网/环回，防回显服务把内网地址塞进来）。
+		for _, cand := range ipv4Re.FindAllString(string(raw), -1) {
+			if net.ParseIP(cand) != nil && !isPrivateOrLoopback(cand) {
+				return cand
+			}
+		}
+	}
+	return ""
 }
 
 func fetchWeather(appCode, ip string) (weatherResult, error) {

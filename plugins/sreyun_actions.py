@@ -1,18 +1,18 @@
-"""Hermes Agent 动作插件 —— 自定义运维动作库。
+"""Sreyun Agent 动作插件 —— 自定义运维动作库。
 
-每个函数 = 一个可被 Hermes 调用的动作。
-从命令行调用：python hermes_actions.py <action_name> [host_id] [args_json]
+每个函数 = 一个可被 Sreyun 调用的动作。
+从命令行调用：python sreyun_actions.py <action_name> [host_id] [args_json]
 
 约定：
 - 动作函数接受 (host_id: str, args: dict) 参数
-- 返回字符串结果（打印到 stdout，供 Hermes 引擎读取）
+- 返回字符串结果（打印到 stdout，供 Sreyun 引擎读取）
 - 动作应快速返回，不要长期阻塞
 - 异常会被引擎捕获并返回给 LLM
 
 用法示例：
-  python hermes_actions.py restart_service worker-01 '{"service":"nginx"}'
-  python hermes_actions.py clear_cache worker-01 '{"path":"/tmp/cache"}'
-  python hermes_actions.py scale_pods worker-01 '{"replicas":3,"deployment":"api-gateway"}'
+  python sreyun_actions.py restart_service worker-01 '{"service":"nginx"}'
+  python sreyun_actions.py clear_cache worker-01 '{"path":"/tmp/cache"}'
+  python sreyun_actions.py scale_pods worker-01 '{"replicas":3,"deployment":"api-gateway"}'
 """
 
 import json

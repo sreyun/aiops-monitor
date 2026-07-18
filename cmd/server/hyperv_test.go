@@ -1,10 +1,28 @@
 package main
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"aiops-monitor/shared"
 )
+
+// TestHyperVEndpointAuth locks in the auth posture: the agent ingest endpoint
+// MUST be public (fingerprint-gated in the handler, no session) — otherwise
+// authMiddleware 401s every agent report and no VM data is ever stored — while
+// the query/delete endpoints MUST stay session-gated.
+func TestHyperVEndpointAuth(t *testing.T) {
+	for _, p := range []string{"/api/v1/agent/hyperv", "/api/v1/agent/hardware", "/api/v1/agent/netflow"} {
+		if !isPublicPath(httptest.NewRequest("POST", p, nil)) {
+			t.Errorf("%s must be public (agent ingest is fingerprint-gated); otherwise agents get 401", p)
+		}
+	}
+	for _, p := range []string{"/api/v1/hyperv/list", "/api/v1/hyperv/events", "/api/v1/hyperv/h1"} {
+		if isPublicPath(httptest.NewRequest("GET", p, nil)) {
+			t.Errorf("%s must NOT be public — it exposes VM inventory to anonymous callers", p)
+		}
+	}
+}
 
 func TestHypervKey(t *testing.T) {
 	if got := hypervKey(shared.HyperVGuest{ID: "guid-1", Name: "web"}); got != "guid-1" {
@@ -87,14 +105,17 @@ func TestEvaluateHyperV(t *testing.T) {
 		t.Fatalf("collect error: %+v, want 1 warning/collect/hyperv", ea)
 	}
 
-	// mixed guests
+	// mixed guests. vmOff must first be seen Running so its stop is an alarming
+	// transition (Off since first seen would be a silent, intentionally-off VM).
 	hs := newHypervStore()
+	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "vmOff", State: "Running"}}, "")
 	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{
-		{Name: "vmCrit", State: "Running", Health: "Critical"},                                 // critical, scope=name, no further
-		{Name: "vmOff", State: "Off"},                                                          // warning /power
-		{Name: "vmCPU", State: "Running", CPUUsage: 96},                                        // critical /cpu
-		{Name: "vmMem", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 980}, // critical /mem (98%)
-		{Name: "vmOK", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 100},  // healthy → no alert
+		{Name: "vmCrit", State: "Running", Health: "Critical"},                                                          // critical, scope=name, no further
+		{Name: "vmOff", State: "Off"},                                                                                   // warning /power (Running→Off)
+		{Name: "vmCPU", State: "Running", CPUUsage: 96},                                                                 // critical /cpu
+		{Name: "vmMem", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 980, DynamicMemEnabled: true}, // critical /mem (98%)
+		{Name: "vmStatic", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 990},                       // static mem → NO mem alert
+		{Name: "vmOK", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 100, DynamicMemEnabled: true},  // healthy → no alert
 	}, "")
 	alerts := EvaluateHyperV(hs)
 
@@ -127,10 +148,49 @@ func TestEvaluateHyperV(t *testing.T) {
 	if _, ok := byScope["vmCrit/cpu"]; ok {
 		t.Errorf("vmCrit should short-circuit after Critical health, got extra alerts: %v", byScope)
 	}
-	// vmOK must be silent.
+	// Static-memory VM must not trigger a mem-pressure alert even at 99% demand.
+	if _, ok := byScope["vmStatic/mem"]; ok {
+		t.Errorf("static-memory VM must not trigger mem alert: %v", byScope)
+	}
+	// Healthy / silent VMs must produce nothing.
 	for scope := range byScope {
-		if scope == "vmOK" || scope == "vmOK/cpu" || scope == "vmOK/mem" {
-			t.Errorf("healthy VM produced alert %q", scope)
+		for _, silent := range []string{"vmOK", "vmOK/cpu", "vmOK/mem", "vmStatic", "vmStatic/cpu"} {
+			if scope == silent {
+				t.Errorf("VM expected silent produced alert %q", scope)
+			}
 		}
+	}
+}
+
+// TestEvaluateHyperVOffTransition verifies power alerts fire only on a
+// Running→non-running transition (not for VMs off since first seen) and clear on
+// recovery — the anti-noise rule for intentionally-stopped VMs.
+func TestEvaluateHyperVOffTransition(t *testing.T) {
+	hs := newHypervStore()
+
+	// Off since first seen (e.g. a template / cold spare) → no alarm.
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	if a := EvaluateHyperV(hs); len(a) != 0 {
+		t.Fatalf("always-off VM must not alarm: %+v", a)
+	}
+
+	// Runs, then stops → one power warning.
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "")
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	a := EvaluateHyperV(hs)
+	if len(a) != 1 || a[0].Scope != "tmpl/power" || a[0].Level != "warning" {
+		t.Fatalf("Running→Off must alarm once at tmpl/power: %+v", a)
+	}
+
+	// Stays off across another report → still one alarm (sticky), not cleared.
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	if a := EvaluateHyperV(hs); len(a) != 1 {
+		t.Fatalf("sticky while still off: %+v", a)
+	}
+
+	// Recovers to Running → alarm clears.
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "")
+	if a := EvaluateHyperV(hs); len(a) != 0 {
+		t.Fatalf("recovered VM must clear: %+v", a)
 	}
 }

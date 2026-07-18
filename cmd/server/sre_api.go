@@ -884,6 +884,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if c.RerankAPIKey != "" {
 		c.RerankAPIKey = "****" // rerank Key 同样不回显
 	}
+	if c.MCPToken != "" {
+		c.MCPToken = "****" // MCP 令牌是密钥，同样不回显
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -891,6 +894,12 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 	var c AIConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	// 启用 MCP Server 时强制强令牌：MCP 鉴权无登录节流，弱令牌可被在线暴力破解。脱敏占位(****)表示
+	// 沿用已保存的令牌（此前已校验），不重复校验。
+	if c.MCPEnabled && !strings.Contains(c.MCPToken, "****") && len(strings.TrimSpace(c.MCPToken)) < 16 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "启用 MCP Server 需设置至少 16 位的强随机访问令牌"})
 		return
 	}
 	if err := s.cfg.SetAIConfig(c); err != nil {
@@ -1013,7 +1022,7 @@ func (s *Server) handleAITerminalAccess(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !req.Enabled { // 关闭：安全方向，直接关
-		_ = s.cfg.SetHermesTerminalEnabled(false)
+		_ = s.cfg.SetSreyunTerminalEnabled(false)
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: "关闭 AI 终端只读巡检权限：" + acc.Username})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": false})
 		return
@@ -1034,7 +1043,7 @@ func (s *Server) handleAITerminalAccess(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auth.terminalAttemptReset(acc.Username)
-	if err := s.cfg.SetHermesTerminalEnabled(true); err != nil {
+	if err := s.cfg.SetSreyunTerminalEnabled(true); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存失败"})
 		return
 	}
@@ -1213,8 +1222,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 			histMsgs = append(histMsgs, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	compressed, _, _ := compressHistory(cfg, histMsgs, 8, "", 0)
-	msgs = append(msgs, compressed...)
+	msgs = append(msgs, compactHistory(histMsgs, 8)...) // 无会话缓存入口：用无 LLM 的廉价压缩，避免每轮同步摘要
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
 	reply, _ := streamChat(r.Context(), w, cfg, msgs, nil)
@@ -1469,8 +1477,14 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 ## 🛠️ 处置建议
 按优先级给出可执行步骤（编号列表）。`, inc.ID)
 		// RAG: 检索历史诊断记忆注入 system prompt（已在 SSE 连接建立后执行）
-		sys += s.retrieveMemoryForPrompt("diagnosis", userMsg, 8)
-		sys += s.retrieveSkillsForPrompt(userMsg+" "+inc.Title+" "+inc.Type, 4) // 注入已掌握技能(SOP)
+		// 用事件本身（标题/类型/主机）作为检索查询：既让记忆与技能两侧共用【同一次】embedding（命中
+		// LRU 缓存只嵌入一次），又让召回真正贴合本事件——而非贴合几乎固定的诊断模板 userMsg。
+		ragQuery := strings.TrimSpace(inc.Title + " " + inc.Type + " " + inc.Hostname)
+		if ragQuery == "" {
+			ragQuery = userMsg
+		}
+		sys += s.retrieveMemoryForPrompt("diagnosis", ragQuery, 8)
+		sys += s.retrieveSkillsForPrompt(ragQuery, 4) // 注入已掌握技能(SOP)
 
 		diagMsgs := []map[string]string{
 			{"role": "system", "content": sys},
@@ -1605,8 +1619,7 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 			histMsgs = append(histMsgs, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	compressed, _, _ := compressHistory(cfg, histMsgs, 10, "", 0)
-	msgs = append(msgs, compressed...)
+	msgs = append(msgs, compactHistory(histMsgs, 10)...) // 无会话缓存入口：用无 LLM 的廉价压缩
 	// Req1: 将上传文件文本注入用户消息，图片走多模态链路
 	userMsg := req.Message
 	for _, f := range req.Files {
@@ -1640,15 +1653,13 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// streamChat 成功时已发 [DONE]，失败时发 error 帧（前端 onError 即终止），故此处无需再补发 [DONE]
+	// ——与 handleAIChat / handleAIAssist 保持一致。
 	reply, _ := streamChat(r.Context(), w, cfg, msgs, images)
 	if reply != "" {
 		s.saveDiagnosisChatTurn(id, req.Message, reply)
 		go s.saveDiagnosisEmbedding(id, inc, reply)
 		go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断对话】"+req.Message+"\n【AI回复】"+reply)
-	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
 	}
 }
 
@@ -2318,15 +2329,15 @@ func (s *Server) handleDeleteExperienceRule(w http.ResponseWriter, r *http.Reque
 }
 
 // ============================================================================
-// Hermes Agent — 自主运维 Agent 对话 + 规则/模板管理
+// Sreyun Agent — 自主运维 Agent 对话 + 规则/模板管理
 // ============================================================================
 
-// handleHermesChat provides multi-turn Hermes Agent conversation with
+// handleSreyunChat provides multi-turn Sreyun Agent conversation with
 // Function Calling support. Supports SSE streaming via stream=true.
 // POST /api/v1/hermes/chat
-func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
-	if s.hermes == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Hermes Agent 未启用"})
+func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
+	if s.sreyun == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Sreyun Agent 未启用"})
 		return
 	}
 	var req struct {
@@ -2390,7 +2401,7 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 按 session_id 解析会话（多轮记忆 / 刷新恢复），前端 history 作为兜底
-	session := s.hermes.resolveSession(req.SessionID, req.History)
+	session := s.sreyun.resolveSession(req.SessionID, req.History)
 	session.IncidentID = req.IncidentID
 	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
@@ -2399,7 +2410,7 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	final, _ := s.hermes.Chat(r.Context(), session, msg, images, true, w)
+	final, _ := s.sreyun.Chat(r.Context(), session, msg, images, true, w)
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（对话 + 上传文件 / URL 正文均含在 msg 内；
 	// 附件再各存一条便于精确召回）。多轮历史随每轮持续累积。异步、尽力而为、不阻塞响应。
 	if strings.TrimSpace(final) != "" {
@@ -2418,14 +2429,14 @@ func (s *Server) handleHermesChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleHermesSessions lists recent Hermes sessions.
+// handleSreyunSessions lists recent Sreyun sessions.
 // GET /api/v1/hermes/sessions
-func (s *Server) handleHermesSessions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunSessions(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	sessions, err := s.pg.listHermesSessions(20)
+	sessions, err := s.pg.listSreyunSessions(20)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2436,9 +2447,9 @@ func (s *Server) handleHermesSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessions)
 }
 
-// handleHermesSession loads a single Hermes session.
+// handleSreyunSession loads a single Sreyun session.
 // GET /api/v1/hermes/sessions/{id}
-func (s *Server) handleHermesSession(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunSession(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "PostgreSQL 未配置"})
 		return
@@ -2449,7 +2460,7 @@ func (s *Server) handleHermesSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	raw, err := s.pg.loadHermesSession(id)
+	raw, err := s.pg.loadSreyunSession(id)
 	if err != nil || raw == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
 		return
@@ -2462,9 +2473,9 @@ func (s *Server) handleHermesSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": msgs})
 }
 
-// handleHermesSessionUndo 撤销会话最后一轮问答（删除末尾 assistant + user 各一条），
+// handleSreyunSessionUndo 撤销会话最后一轮问答（删除末尾 assistant + user 各一条），
 // 供前端「撤销」修正上次提问后重试。POST /api/v1/hermes/sessions/{id}/undo
-func (s *Server) handleHermesSessionUndo(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunSessionUndo(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
 		return
@@ -2474,7 +2485,7 @@ func (s *Server) handleHermesSessionUndo(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	raw, err := s.pg.loadHermesSession(id)
+	raw, err := s.pg.loadSreyunSession(id)
 	if err != nil || raw == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
 		return
@@ -2491,39 +2502,39 @@ func (s *Server) handleHermesSessionUndo(w http.ResponseWriter, r *http.Request)
 		msgs = msgs[:n-1]
 	}
 	out, _ := json.Marshal(msgs)
-	if _, err := s.pg.saveHermesSession(id, out, 0); err != nil {
+	if _, err := s.pg.saveSreyunSession(id, out, 0); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": msgs})
 }
 
-// handleHermesListRules returns all Hermes rules.
+// handleSreyunListRules returns all Sreyun rules.
 // GET /api/v1/hermes/rules
-func (s *Server) handleHermesListRules(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunListRules(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	rules, err := s.pg.listHermesRules()
+	rules, err := s.pg.listSreyunRules()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if rules == nil {
-		rules = []hermesRule{}
+		rules = []sreyunRule{}
 	}
 	writeJSON(w, http.StatusOK, rules)
 }
 
-// handleHermesUpsertRule creates or updates a Hermes rule.
+// handleSreyunUpsertRule creates or updates a Sreyun rule.
 // POST /api/v1/hermes/rules
-func (s *Server) handleHermesUpsertRule(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunUpsertRule(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
 		return
 	}
-	var rule hermesRule
+	var rule sreyunRule
 	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
@@ -2532,21 +2543,21 @@ func (s *Server) handleHermesUpsertRule(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "规则名称不能为空"})
 		return
 	}
-	id, err := s.pg.upsertHermesRule(rule)
+	id, err := s.pg.upsertSreyunRule(rule)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	// Trigger hot-reload
-	if s.hermes != nil {
-		s.hermes.reloadConfig()
+	if s.sreyun != nil {
+		s.sreyun.reloadConfig()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
 }
 
-// handleHermesDeleteRule deletes a Hermes rule.
+// handleSreyunDeleteRule deletes a Sreyun rule.
 // DELETE /api/v1/hermes/rules/{id}
-func (s *Server) handleHermesDeleteRule(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunDeleteRule(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
 		return
@@ -2557,42 +2568,42 @@ func (s *Server) handleHermesDeleteRule(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	if err := s.pg.deleteHermesRule(id); err != nil {
+	if err := s.pg.deleteSreyunRule(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if s.hermes != nil {
-		s.hermes.reloadConfig()
+	if s.sreyun != nil {
+		s.sreyun.reloadConfig()
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleHermesListTemplates returns all Hermes templates.
+// handleSreyunListTemplates returns all Sreyun templates.
 // GET /api/v1/hermes/templates
-func (s *Server) handleHermesListTemplates(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunListTemplates(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	tmpls, err := s.pg.listHermesTemplates(false)
+	tmpls, err := s.pg.listSreyunTemplates(false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if tmpls == nil {
-		tmpls = []hermesTemplate{}
+		tmpls = []sreyunTemplate{}
 	}
 	writeJSON(w, http.StatusOK, tmpls)
 }
 
-// handleHermesUpsertTemplate creates or updates a Hermes template.
+// handleSreyunUpsertTemplate creates or updates a Sreyun template.
 // POST /api/v1/hermes/templates
-func (s *Server) handleHermesUpsertTemplate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunUpsertTemplate(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
 		return
 	}
-	var tmpl hermesTemplate
+	var tmpl sreyunTemplate
 	if err := json.NewDecoder(r.Body).Decode(&tmpl); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
@@ -2601,20 +2612,20 @@ func (s *Server) handleHermesUpsertTemplate(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "模板名称和内容不能为空"})
 		return
 	}
-	id, err := s.pg.upsertHermesTemplate(tmpl)
+	id, err := s.pg.upsertSreyunTemplate(tmpl)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if s.hermes != nil {
-		s.hermes.reloadConfig()
+	if s.sreyun != nil {
+		s.sreyun.reloadConfig()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "ok"})
 }
 
-// handleHermesDeleteTemplate deletes a Hermes template.
+// handleSreyunDeleteTemplate deletes a Sreyun template.
 // DELETE /api/v1/hermes/templates/{id}
-func (s *Server) handleHermesDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSreyunDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
 		return
@@ -2625,12 +2636,12 @@ func (s *Server) handleHermesDeleteTemplate(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	if err := s.pg.deleteHermesTemplate(id); err != nil {
+	if err := s.pg.deleteSreyunTemplate(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if s.hermes != nil {
-		s.hermes.reloadConfig()
+	if s.sreyun != nil {
+		s.sreyun.reloadConfig()
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

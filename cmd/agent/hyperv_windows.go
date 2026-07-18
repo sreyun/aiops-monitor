@@ -44,6 +44,7 @@ $out=foreach($vm in $vms){
     MemAssignedMB=[double]([math]::Round($vm.MemoryAssigned/1MB))
     MemDemandMB=[double]([math]::Round($vm.MemoryDemand/1MB))
     MemMaxMB=[double]([math]::Round($vm.MemoryMaximum/1MB))
+    DynamicMemoryEnabled=[bool]$vm.DynamicMemoryEnabled
     UptimeSec=[int64]$vm.Uptime.TotalSeconds
     Generation=[int]$vm.Generation
     Version=[string]$vm.Version
