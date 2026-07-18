@@ -339,6 +339,23 @@ func (h *SreyunCore) registerTools() {
 		},
 		Execute: h.execQueryTraps,
 	}
+
+	h.tools["query_netflow_flows"] = SreyunTool{
+		Name: "query_netflow_flows",
+		Description: "钻取主机的原始 NetFlow 流明细（单条连接：源/目的 IP:端口、协议、字节、包数、末次时间），" +
+			"可按 src_ip/dst_ip/src_port/dst_port/protocol 过滤。在 query_netflow 看到某个对端/端口异常后，" +
+			"用它下钻到具体是哪些连接、在跟谁通信——追查异常外联/数据外泄/端口扫描的落地细节时用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID"},
+				"filter":  map[string]string{"type": "string", "description": "可选过滤，格式 字段:值，字段取 src_ip/dst_ip/src_port/dst_port/protocol，如 dst_port:443 或 dst_ip:10.0.0.5"},
+				"limit":   map[string]string{"type": "integer", "description": "返回最近 N 条，默认 50，最大 200"},
+			},
+			"required": []string{"host_id"},
+		},
+		Execute: h.execQueryNetFlowFlows,
+	}
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).

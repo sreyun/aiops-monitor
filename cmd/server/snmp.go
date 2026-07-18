@@ -236,6 +236,23 @@ func rollupSNMP(hostID string, snap shared.SNMPSnapshot) []string {
 // ============================================================================
 
 // handleSNMPList 返回一台主机（agent）下所有被轮询设备的最新快照。
+// handleSNMPHosts returns only the hosts that actually have SNMP network-device
+// data (polled devices and/or traps), ranked by device count. The frontend uses
+// this to filter the host selector to "hosts with network devices", hiding the rest.
+func (s *Server) handleSNMPHosts(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"hosts": []any{}})
+		return
+	}
+	hosts, err := s.pg.getSNMPHosts()
+	if err != nil {
+		slog.Warn("查询有网络设备的主机失败", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts})
+}
+
 func (s *Server) handleSNMPList(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")
 	if hostID == "" {

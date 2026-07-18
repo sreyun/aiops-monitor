@@ -279,6 +279,13 @@ let CUR_OS = "linux";
 let RELAY_MODE = false;
 let MULTI_SERVER_MODE = false;
 let TOKEN_REVEALED = false; // Token 脱敏状态
+// Windows Server 2012 R2 / 2016 default to TLS 1.0. The install.ps1 template enables
+// TLS 1.2 internally, but that runs too late: the outer `irm` that DOWNLOADS the
+// script fails first against a TLS1.2-only HTTPS server ("未能创建 SSL/TLS 安全通道").
+// So the one-liner must enable TLS 1.2 itself, before irm. Numeric 3072 = Tls12,
+// -bor keeps existing protocols; using the number avoids an enum-undefined error on
+// older .NET where the [Net.SecurityProtocolType]::Tls12 name isn't defined.
+const PS_TLS12 = "[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072; ";
 function maskToken(t) {
   if (!t) return "";
   if (TOKEN_REVEALED) return t;
@@ -345,9 +352,9 @@ function renderInstallCmd() {
     hint = I18N.t("install.multi_desc");
   }
   if (CUR_OS === "windows") {
-    cmd = `irm "${server}/install.ps1?${q}" | iex`;
+    cmd = `${PS_TLS12}irm "${server}/install.ps1?${q}" | iex`;
     label = I18N.t("install.powershell_cmd");
-    hint = "普通 PowerShell 即可；安装到 %LOCALAPPDATA%\\AIOps-agent 并注册用户级开机自启。";
+    hint = "普通 PowerShell 即可（命令已内置 TLS 1.2，兼容 Windows Server 2012 R2）；安装到 %LOCALAPPDATA%\\AIOps-agent 并注册用户级开机自启。";
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
     label = I18N.t("install.terminal_one_line");
@@ -361,7 +368,7 @@ function renderInstallCmd() {
   $("cmdLabel").textContent = label;
   $("cmdHint").textContent = hint;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
-    ? `irm "${server}/uninstall.ps1" | iex`
+    ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
     : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
 }
 function renderRelayCmd() {
@@ -373,8 +380,8 @@ function renderRelayCmd() {
   const relay = `http://${gwIP}:8529`;
   let gatewayCmd, internalCmd;
   if (CUR_OS === "windows") {
-    gatewayCmd = `irm "${server}/install-relay.ps1?${q}" | iex`;
-    internalCmd = `irm "${relay}/install.ps1?${q}" | iex`;
+    gatewayCmd = `${PS_TLS12}irm "${server}/install-relay.ps1?${q}" | iex`;
+    internalCmd = `${PS_TLS12}irm "${relay}/install.ps1?${q}" | iex`;
   } else if (CUR_OS === "macos") {
     gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sh`;
     internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
@@ -385,7 +392,7 @@ function renderRelayCmd() {
   $("relayGatewayCmd").textContent = gatewayCmd;
   $("relayInternalCmd").textContent = internalCmd;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
-    ? `irm "${server}/uninstall.ps1" | iex`
+    ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
     : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
 }
 async function resetToken() {

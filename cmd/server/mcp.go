@@ -27,6 +27,7 @@ var mcpReadonlyTools = map[string]bool{
 	"query_hardware": true, "query_hardware_events": true, "query_hardware_history": true,
 	"query_hardware_changes": true, "query_netflow": true, "query_hyperv": true,
 	"query_snmp": true, "query_interface_traffic": true, "query_traps": true,
+	"query_netflow_flows": true,
 }
 
 type jsonRPCReq struct {

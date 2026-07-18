@@ -334,6 +334,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)
 	// SNMP: frontend query
+	mux.HandleFunc("GET /api/v1/snmp/hosts", s.handleSNMPHosts)
 	mux.HandleFunc("GET /api/v1/snmp/list", s.handleSNMPList)
 	mux.HandleFunc("GET /api/v1/snmp/interface-history", s.handleSNMPInterfaceHistory)
 	mux.HandleFunc("GET /api/v1/snmp/traps", s.handleSNMPTraps)

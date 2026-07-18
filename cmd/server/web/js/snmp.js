@@ -11,6 +11,9 @@ let snTab = "devices"; // devices | traps
 let snSearchT = null;
 let snDevices = [];    // 最近一次加载的设备快照
 let snTraps = [];      // 最近一次加载的 trap
+// 「只列有网络设备的主机」：从 /api/v1/snmp/hosts 拉有 SNMP 设备快照或 trap 的主机，
+// 按设备数降序。null=未加载。刷新/进入视图时重新拉。
+let snSNMPHosts = null;
 
 function snFmtBps(bps) {
   bps = bps || 0;
@@ -31,29 +34,38 @@ function renderSNMPPanel() {
   const container = $("snmpPanel");
   if (!container) return;
 
-  const hosts = (window._cachedHosts || []);
-  if (hosts.length === 0) {
-    container.innerHTML = `<div class="empty-state">${I18N.t("netflow.no_hosts") || "暂无主机"}</div>`;
+  // 先拉「有网络设备数据的主机」，再渲染；避免把无 SNMP 数据的主机塞进下拉。
+  if (snSNMPHosts === null) {
+    container.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
+    fetch(`/api/v1/snmp/hosts`, { credentials: "same-origin" })
+      .then(r => r.json())
+      .then(d => { snSNMPHosts = d.hosts || []; renderSNMPPanel(); })
+      .catch(() => { snSNMPHosts = []; renderSNMPPanel(); });
     return;
   }
+
+  const q = snHostQuery.trim().toLowerCase();
+  // 有设备的主机只带 host_id，用 _cachedHosts 补 hostname/ip 展示。
+  const nameMap = {};
+  (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
   let html = `<div class="nf-toolbar">`;
   html += `<input type="search" id="snHostSearch" class="nf-input" value="${esc(snHostQuery)}"
     placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}">`;
   html += `<select id="snHostSelect" class="nf-select">`;
-  const q = snHostQuery.trim().toLowerCase();
   let shown = 0;
-  hosts.forEach(h => {
-    if (!h.online && !snShowOffline) return;
-    const hay = `${h.hostname || ""} ${h.id} ${h.ip || ""}`.toLowerCase();
+  snSNMPHosts.forEach(sh => {
+    const h = nameMap[sh.host_id] || {};
+    const name = h.hostname || sh.host_id;
+    const hay = `${name} ${sh.host_id} ${h.ip || ""}`.toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
     shown++;
-    const sel = h.id === snCurrentHost ? " selected" : "";
-    html += `<option value="${esc(h.id)}"${sel}>${h.online ? "" : "○ "}${esc(h.hostname || h.id)}</option>`;
+    const sel = sh.host_id === snCurrentHost ? " selected" : "";
+    const dev = Number(sh.devices) || 0;
+    // 下拉直接标出设备数，一眼看出哪些主机纳管了网络设备
+    html += `<option value="${esc(sh.host_id)}"${sel}>${esc(name)}${dev ? " · " + dev + " " + (I18N.t("snmp.dev_unit") || "设备") : ""}</option>`;
   });
   html += `</select>`;
-  html += `<label class="nf-chk"><input type="checkbox" id="snShowOffline"${snShowOffline ? " checked" : ""}>
-    ${esc(I18N.t("netflow.show_offline") || "含离线主机")}</label>`;
   // Tab: 设备 / Trap
   html += `<span class="sn-tabs">`;
   html += `<button class="nf-btn${snTab === "devices" ? " sn-active" : ""}" data-snact="tab-devices">${esc(I18N.t("snmp.tab_devices") || "设备与接口")}</button>`;
@@ -63,6 +75,11 @@ function renderSNMPPanel() {
   html += `<button class="nf-btn" data-snact="ai">${esc(I18N.t("snmp.ai_diagnose") || "🤖 AI 诊断")}</button>`;
   html += `</div>`;
 
+  if (snSNMPHosts.length === 0) {
+    container.innerHTML = html + `<div class="empty-state">${I18N.t("snmp.no_snmp_hosts") || "暂无纳管网络设备的主机（未配置 SNMP 轮询/Trap，或 Agent 未上报）"}</div>`;
+    snBindToolbar();
+    return;
+  }
   if (shown === 0) {
     container.innerHTML = html + `<div class="empty-state">${I18N.t("empty.no_host_match2") || "没有匹配的主机"}</div>`;
     snBindToolbar();
@@ -260,7 +277,8 @@ safeAddEventListener("snmpPanel", "click", e => {
   const b = e.target.closest("[data-snact]");
   if (!b) return;
   const act = b.dataset.snact;
-  if (act === "refresh") loadSNMPData();
+  // 刷新：连「有网络设备的主机」列表一起重拉（否则新纳管的设备/主机不会出现在下拉里）。
+  if (act === "refresh") { snSNMPHosts = null; renderSNMPPanel(); }
   else if (act === "ai") snAIDiagnose();
   else if (act === "tab-devices") { snTab = "devices"; renderSNMPPanel(); }
   else if (act === "tab-traps") { snTab = "traps"; renderSNMPPanel(); }

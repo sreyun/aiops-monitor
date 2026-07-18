@@ -2349,6 +2349,36 @@ func (p *pgStore) getSNMPTraps(hostID string, limit int) ([]map[string]any, erro
 	return results, rows.Err()
 }
 
+// getSNMPHosts returns the hosts (agents) that have SNMP network-device data —
+// polled device snapshots and/or received traps — ranked by device count desc.
+// Powers the "网络设备页只列有网络设备的主机" filter. UNION 让只有 trap 的主机也能被选到，
+// 其 traps 才在该页可见；DISTINCT 收敛 trap 侧，避免全表计数。
+func (p *pgStore) getSNMPHosts() ([]map[string]any, error) {
+	rows, err := p.db.Query(`
+		SELECT host_id, SUM(dev)::bigint AS devices, SUM(reach)::bigint AS reachable, SUM(trp)::bigint AS traps
+		FROM (
+			SELECT host_id, 1 AS dev, (CASE WHEN reachable THEN 1 ELSE 0 END) AS reach, 0 AS trp FROM snmp_snapshot
+			UNION ALL
+			SELECT DISTINCT host_id, 0 AS dev, 0 AS reach, 1 AS trp FROM snmp_traps
+		) u
+		GROUP BY host_id
+		ORDER BY devices DESC, traps DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var hid string
+		var devices, reachable, traps int64
+		if err := rows.Scan(&hid, &devices, &reachable, &traps); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{"host_id": hid, "devices": devices, "reachable": reachable, "traps": traps})
+	}
+	return out, rows.Err()
+}
+
 // cleanupFlowRecords deletes flow records older than 7 days (called periodically).
 func (p *pgStore) cleanupFlowRecords() {
 	// Flow 明细现在**永久保留**（分区表，归档靠 DROP/DETACH 某个月的分区）。
