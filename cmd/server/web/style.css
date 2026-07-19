@@ -128,17 +128,18 @@
      且仍浅于 --muted 以保留层级。 */
   --txt:#1a2332; --txt2:#4a5568; --muted:#6b7588; --muted2:#767f8e;
 
-  --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:rgba(37,99,235,.10);
+  /* 主色对齐 Ant Design / 夜莺蓝 #1677ff（较原 #2563eb 更清亮、少靛蓝），hover 用 antd active 深蓝 */
+  --accent:#1677ff; --accent-hover:#0958d9; --accent-soft:rgba(22,119,255,.10);
   --accent2:#7c3aed; --accent2-soft:rgba(124,58,237,.10);
   --ok:#16a34a; --ok-soft:rgba(22,163,74,.10);
   --warn:#d97706; --warn-soft:rgba(217,119,6,.10);
   --crit:#dc2626; --crit-soft:rgba(220,38,38,.10);
   --info:#0284c7; --info-soft:rgba(2,132,199,.10);
 
-  --accent-txt:#1e40af; --accent2-txt:#6d28d9;
+  --accent-txt:#0958d9; --accent2-txt:#6d28d9;
   --ok-txt:#15803d; --warn-txt:#b45309; --crit-txt:#b91c1c; --info-txt:#0369a1;
 
-  --accent-border:rgba(37,99,235,.25);
+  --accent-border:rgba(22,119,255,.28);
   --accent2-border:rgba(124,58,237,.25);
   --ok-border:rgba(22,163,74,.25);
   --warn-border:rgba(217,119,6,.25);
@@ -236,7 +237,7 @@ body{
 }
 .mono{font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
 
-::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-thumb:hover{background:var(--hover-border)}
 ::-webkit-scrollbar-track{background:transparent}
@@ -2490,12 +2491,12 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
    v5.5.0 增量美化 — 表格与列表（Task 14）
    ============================================================ */
 
-/* 表头 sticky 效果 */
+/* 表头 sticky 效果 + antd/夜莺式浅底表头（与卡片底色拉开细微对比） */
 table thead th{
   position:sticky;
   top:0;
   z-index:2;
-  background:var(--panel);
+  background:var(--panel2);
 }
 
 /* 行 hover 高亮 */

@@ -49,13 +49,13 @@ type DashPanel struct {
 	Type       string       `json:"type"`                 // timeseries | stat | gauge | bargauge | table | text | logs | unsupported
 	DataSource string       `json:"datasource,omitempty"` // 面板级数据源 id（覆盖看板默认；""=继承看板默认）
 	Targets    []DashTarget `json:"targets,omitempty"`
-	Grid     DashGrid     `json:"grid"`
-	Unit     string       `json:"unit,omitempty"` // percent|percentunit|bytes|Bps|s|ms|short|...（Grafana 单位串）
-	Min      *float64     `json:"min,omitempty"`  // gauge/bargauge 量程
-	Max      *float64     `json:"max,omitempty"`
-	Decimals int          `json:"decimals,omitempty"`
-	Text     string       `json:"text,omitempty"`     // type=text 的正文
-	RawType  string       `json:"raw_type,omitempty"` // type=unsupported 时保留原 Grafana 类型
+	Grid       DashGrid     `json:"grid"`
+	Unit       string       `json:"unit,omitempty"` // percent|percentunit|bytes|Bps|s|ms|short|...（Grafana 单位串）
+	Min        *float64     `json:"min,omitempty"`  // gauge/bargauge 量程
+	Max        *float64     `json:"max,omitempty"`
+	Decimals   int          `json:"decimals,omitempty"`
+	Text       string       `json:"text,omitempty"`     // type=text 的正文
+	RawType    string       `json:"raw_type,omitempty"` // type=unsupported 时保留原 Grafana 类型
 }
 
 // DashTarget 是面板的一条查询目标。

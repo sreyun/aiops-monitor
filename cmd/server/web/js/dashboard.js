@@ -559,17 +559,34 @@ async function saveCurDash() {
 }
 
 /* ---------- Grafana 导入 ---------- */
-safeAddEventListener("dashImportBtn", "click", () => { $("dashImportId").value = ""; $("dashImportJson").value = ""; $("dashImportName").value = ""; openMask("dashImportMask"); });
+safeAddEventListener("dashImportBtn", "click", () => {
+  $("dashImportId").value = ""; $("dashImportJson").value = ""; $("dashImportName").value = "";
+  const fn = $("dashImportFileName"); if (fn) fn.textContent = "";
+  const fmt = $("dashImportFormat"); if (fmt) fmt.value = "auto";
+  const fi = $("dashImportFile"); if (fi) fi.value = "";
+  openMask("dashImportMask");
+});
+safeAddEventListener("dashImportFileBtn", "click", () => { const fi = $("dashImportFile"); if (fi) fi.click(); });
+safeAddEventListener("dashImportFile", "change", e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  if (f.size > 8 * 1024 * 1024) { toast("文件过大（上限 8MB）", "err"); return; }
+  const reader = new FileReader();
+  reader.onload = () => { $("dashImportJson").value = reader.result || ""; const fn = $("dashImportFileName"); if (fn) fn.textContent = "已载入：" + f.name; };
+  reader.onerror = () => toast("读取文件失败", "err");
+  reader.readAsText(f);
+});
 safeAddEventListener("dashImportSave", "click", async () => {
-  const body = { grafana_id: $("dashImportId").value.trim(), json: $("dashImportJson").value.trim(), name: $("dashImportName").value.trim() };
-  if (!body.grafana_id && !body.json) { toast("请填写 grafana.com 看板 ID 或粘贴 JSON", "err"); return; }
+  const body = { grafana_id: $("dashImportId").value.trim(), json: $("dashImportJson").value.trim(), name: $("dashImportName").value.trim(), format: ($("dashImportFormat") || {}).value || "auto" };
+  if (!body.grafana_id && !body.json) { toast("请填写 grafana.com 看板 ID，或粘贴 / 上传 JSON", "err"); return; }
   await withLoading("dashImportSave", async () => {
     try {
       const r = await fetch(`${API}/dashboards/import-grafana`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) {
         closeMask($("dashImportMask"));
-        toast(`已导入「${j.name}」：${j.panels} 面板${j.unsupported ? "（" + j.unsupported + " 个类型不支持，已占位）" : ""}`, "ok");
+        const kind = j.format === "nightingale" ? "夜莺" : "Grafana";
+        toast(`已从 ${kind} 导入「${j.name}」：${j.panels} 面板${j.unsupported ? "（" + j.unsupported + " 个类型不支持，已占位）" : ""}`, "ok");
         openDashboard(j.id);
       } else toast("导入失败：" + (j.error || r.status), "err");
     } catch (e) { toast("导入失败：" + e, "err"); }

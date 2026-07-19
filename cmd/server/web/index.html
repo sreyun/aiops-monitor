@@ -1534,13 +1534,22 @@
 <!-- ===== 导入 Grafana 看板弹窗 ===== -->
 <div class="mask" id="dashImportMask" data-close>
   <div class="modal">
-    <div class="modal-head"><h3>导入 Grafana 看板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-head"><h3>导入看板模板（Grafana / 夜莺）</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <div class="field"><label>grafana.com 看板 ID</label><input type="text" id="dashImportId" class="mono" placeholder="如 1860（Node Exporter Full）"></div>
-      <div class="hint">在 grafana.com/grafana/dashboards 找到看板，填其数字 ID。服务端拉取并映射为 PromQL 面板（走 VictoriaMetrics）。</div>
-      <div class="field" style="margin-top:12px"><label>或直接粘贴看板 JSON（可选）</label><textarea id="dashImportJson" rows="4" placeholder="粘贴 Grafana 看板 JSON（填了则忽略上面的 ID）" style="font-family:monospace; font-size:12px"></textarea></div>
+      <div class="field"><label>grafana.com 看板 ID <span class="tag">仅 Grafana 官方库</span></label><input type="text" id="dashImportId" class="mono" placeholder="如 1860（Node Exporter Full）"></div>
+      <div class="hint">在 grafana.com/grafana/dashboards 找到看板填其数字 ID；夜莺无公共 ID 库，请用下方粘贴 / 上传。</div>
+      <div class="field" style="margin-top:12px"><label>或 粘贴 / 上传看板 JSON <span class="tag">Grafana 或 夜莺 · 自动识别</span></label>
+        <textarea id="dashImportJson" rows="5" placeholder="从 Grafana（看板设置 → JSON Model → 复制）或 夜莺（大盘 → 导出）导出的 JSON。填了则忽略上面的 ID。" style="font-family:monospace; font-size:12px"></textarea>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap">
+          <button class="btn sm" id="dashImportFileBtn" type="button">📁 选择文件…</button>
+          <span class="hint" id="dashImportFileName" style="margin:0"></span>
+          <input type="file" id="dashImportFile" accept=".json,application/json" hidden>
+          <span style="flex:1"></span>
+          <div class="select-wrap sm"><select id="dashImportFormat"><option value="auto">自动识别格式</option><option value="grafana">Grafana</option><option value="nightingale">夜莺 Nightingale</option></select></div>
+        </div>
+      </div>
       <div class="field"><label>名称（可选，覆盖看板标题）</label><input type="text" id="dashImportName"></div>
-      <div class="hint">务实子集：timeseries / stat / gauge / table / text + PromQL + 模板变量；无法映射的面板类型保留为占位（带原始查询）。导入后可继续编辑。</div>
+      <div class="hint">务实子集：timeseries / stat / gauge / table / text + PromQL + 模板变量；无法映射的面板类型保留为占位（带原始查询）。导入后可继续编辑、切数据源。</div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashImportSave">导入</button></div>
   </div>
