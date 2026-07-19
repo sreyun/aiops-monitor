@@ -1,106 +1,81 @@
-# HTTP 代理 "unexpected EOF" 问题修复部署指南
+# 部署与运维指南 · DEPLOY GUIDE
 
-## 问题描述
-HTTP 代理访问时出现"无法解析上游响应: unexpected EOF"错误，偶尔可以正常访问。
+> 面向生产环境的部署架构、韧性、备份与排障建议。基础安装见 [INSTALL.md](./INSTALL.md)。
 
-## 根本原因
-Agent 端连接目标服务时缺乏超时控制，导致：
-1. 连接可能挂起过久后被意外关闭
-2. 上游服务响应慢时连接超时
-3. 错误信息不够详细，难以诊断
+---
 
-## 修复内容
+## 一、生产部署参考架构
 
-### Agent 端修复 (`cmd/agent/forward.go`)
-- ✅ 添加 5 秒连接超时
-- ✅ 添加读写超时（HTTP: 60秒, TCP: 30秒）
-- ✅ 改进错误信息和诊断日志
-- ✅ 修复 Content-Length 计算错误
-
-### Server 端修复 (`cmd/server/forward.go`)
-- ✅ 改进超时错误信息
-- ✅ 添加友好的错误提示
-- ✅ 增强日志记录
-
-## 部署步骤
-
-### 1. 重新编译服务端
-```bash
-# 在开发机上执行
-cd D:\个人专用\工具开发\aiops-monitor
-go build -o aiops-server.exe cmd/server/*.go
+```
+                ┌─────────────────────────────────────┐
+                │           反向代理 (Nginx)            │  TLS 终止 / 限流
+                └───────────────┬───────────────────────┘
+                                │
+                ┌───────────────┴───────────────────────┐
+                │         AIOps Monitor 服务端           │
+                │  check/apimon · alerts · incidents     │
+                │  remediation · slos · tickets · AI 诊断 │
+                └───────┬───────────────────────┬───────┘
+                        │                        │
+              ┌─────────┴────────┐     ┌────────┴────────┐
+              │   PostgreSQL      │     │  VictoriaMetrics│
+              │ (关系+审计+JSONB   │     │   (指标时序)     │
+              │  +pgvector RAG)   │     │                 │
+              └──────────────────┘     └──────────────────┘
+                        ▲                        ▲
+                        │ 上报 (X-Agent-Fingerprint)
+                ┌───────┴────────────────────────┴───────┐
+                │  Agent（多服务端 servers[] 并发广播）   │
+                │  主机 / 进程 / 端口 / 磁盘 / 网络 / GPU  │
+                └────────────────────────────────────────┘
 ```
 
-### 2. 重新编译 Agent（所有被监控机器都需要更新）
-```bash
-# Windows Agent
-GOOS=windows GOARCH=amd64 go build -o aiops-agent.exe cmd/agent/*.go
+- **反向代理**：生产环境建议在服务端前放置 Nginx，由其终止 TLS、做访问限流与上游保护。
+- **防火墙**：服务端仅暴露必要端口；Agent 通过出站连接上报，无需在服务端开放 Agent 入站端口。
 
-# Linux Agent
-GOOS=linux GOARCH=amd64 go build -o aiops-agent cmd/agent/*.go
-```
+---
 
-### 3. 部署服务端
-```bash
-# 上传到远程服务器
-scp aiops-server.exe root@192.168.30.15:/opt/aiops-monitor/
+## 二、跨机房容灾
 
-# SSH 到服务器
-ssh root@192.168.30.15
+- **多服务端广播**：采集端 `servers[]` 可配置多个服务端地址，采集一次、并发广播上报；单个服务端不可达时自动断路、退避并以 gzip 降级重连，数据不丢。
+- **网关中继 (relay)**：跨网段 / 防火墙后的主机，可通过中继反向隧道纳管。`X-Relay-Secret` 用于中继与服务端之间的身份校验（防 Host 头注入）。中继与服务端须配置一致的中继密钥。
+- **数据韧性**：关系数据落在 PostgreSQL（建议开启流复制 / 定期备份）；指标落在 VictoriaMetrics（建议配置 `retention` 与远端存储）。
 
-# 停止旧服务
-systemctl stop aiops-monitor
-# 或者
-pkill -f aiops-server.exe
+> 容灾表述：平台支持**跨机房容灾**部署，而非双活 / 多活架构。
 
-# 替换二进制文件
-cd /opt/aiops-monitor
-mv aiops-server.exe aiops-server.exe.bak
-mv aiops-server.exe.new aiops-server.exe
-chmod +x aiops-server.exe
+---
 
-# 启动新服务
-systemctl start aiops-monitor
-```
+## 三、备份与升级
 
-### 4. 部署 Agent（每台被监控机器）
-```bash
-# 在被监控机器上
-cd /path/to/agent
-mv aiops-agent aiops-agent.bak
-# 上传新的 agent 并替换
-chmod +x aiops-agent
-systemctl restart aiops-agent
-```
+- **PostgreSQL**：定期 `pg_dump` 或流复制；备份包含审计、事件、工单与 RAG 向量。
+- **VictoriaMetrics**：按保留策略与存储容量规划；如需长期归档，配置远端对象存储。
+- **配置**：`AIOPS_SECRET_KEY`、`AIOPS_RELAY_SECRET` 等密钥请纳入密钥管理，升级时保持不变以避免数据不可解密。
+- **升级**：建议先在预发环境验证，再滚动升级服务端；采集端可分批灰度。
 
-### 5. 验证修复
-访问之前失败的 HTTP 代理链接，应该：
-- 要么正常显示页面
-- 要么显示友好的错误信息（如"上游服务未返回响应"、"读取上游响应超时"等）
-- 不再出现 "unexpected EOF"
+---
 
-## 临时解决方案（不重启服务）
+## 四、AI 巡检诊断与 RAG
 
-如果暂时无法部署，可以通过以下方式缓解：
-1. **增加重试**：浏览器遇到错误后手动刷新页面
-2. **检查目标服务**：确保被监控的 HTTP 服务响应正常、没有超时
-3. **调整网络配置**：检查网络延迟和丢包率
+- AI 巡检定时（约 30 分钟）对指标与事件做诊断，结论可回灌向量库（`diagnosis_embeddings`，维度需与所配嵌入模型一致）。
+- 检索相似历史案例时支持 **👍/👎 反馈重排**，形成「诊断 → 反馈 → 检索质量提升」的学习闭环。
+- 未配置 AI 能力时，系统以启发式诊断兜底，保证闭环不中断。
 
-## 监控和日志
+---
 
-修复后，服务端会记录详细的日志：
-```
-log: 2026-07-09 HTTP代理超时 host=xxx port=8080 path=/api/health err="上游服务响应超时（60秒）"
-```
+## 五、故障排查
 
-Agent 端也会记录：
-```
-log: 2026-07-09 HTTP转发读取上游响应失败 session=xxx target=localhost:8080 err="context deadline exceeded" detail="读取上游响应超时（服务响应过慢）"
-```
+| 现象 | 排查方向 |
+|---|---|
+| 服务端启动即退出 | 检查 PostgreSQL / VictoriaMetrics 是否都可达（双强制依赖）。 |
+| 指标缺失 | 确认 VM 写入地址、Agent 上报通道与防火墙出站策略。 |
+| 告警不触发 | 检查阈值预设档位、告警治理的静默 / 抑制规则是否误命中。 |
+| 远程终端连不上 | 确认账号角色为 `operator+`、终端二次密码正确、会话 Cookie 未过期。 |
+| 中继纳管失败 | 核对 `X-Relay-Secret` 中继与服务端是否一致、Host 头是否被正确转发。 |
 
-## 预期效果
+---
 
-✅ 不再出现 "unexpected EOF" 错误
-✅ 连接失败时有明确的错误提示
-✅ 慢速服务会超时而不是挂起
-✅ 日志中包含详细的诊断信息
+## 六、合规与安全边界
+
+- 平台提供完整的操作审计、终端录制审计与内容审计能力，可用于「**契合等保审计要求**」的运维追溯；正式等保测评请依你所在行业的规范执行，平台不宣称"满足等保 / 一键通过"。
+- 静态敏感数据（如终端录制）建议启用 `AIOPS_SECRET_KEY` 加密；传输层建议全程 TLS。
+- 角色权限遵循最小权限原则：`viewer` 仅查看，`operator` 可操作运维动作，`admin` 管理用户与全局策略。

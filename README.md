@@ -2,1669 +2,248 @@
 
 # AIOps Monitor
 
-**企业级全栈监控与 SRE 运维平台** —— Go 原生采集 + Redfish 硬件巡检 + NetFlow 流量分析 + Python 插件层 + Android 移动仪表盘 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本 + SRE 中枢（事件/自动修复/SLO/工单）+ 日志采集检索 + AI 巡检诊断
-
-[![Version](https://img.shields.io/badge/Version-v6.8.1-blue)](https://github.com/sreyun/aiops-monitor/releases)
-[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
-[![Docker](https://img.shields.io/badge/Docker-multi--arch-blue?logo=docker&logoColor=white)](docker-compose.yml)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20麒麟-lightgrey)]()
-[![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
-
-[中文](README.md) · [English](README_EN.md)
+**一个二进制，替代 5+ 套运维工具栈的开源全栈可观测与 SRE 平台。**
 
 </div>
 
-> 单二进制服务端、零第三方依赖 Agent、四平台原生采集（Linux / Windows / macOS / 麒麟，含 GPU）、Redfish 硬件巡检（含华为 iBMC 兼容）、NetFlow / 五元组流量分析、OceanStor 存储采集、Android 移动仪表盘、一条命令安装。内置交互式趋势图、自定义拨测、远程终端（免开端口 + 二次密码认证）、自动化剧本编排、SRE 中枢（事件/自动修复/SLO/工单）、日志采集与全文检索、AI 巡检与事件诊断、多用户 RBAC、MFA 两步验证、PWA 安装、端口转发与 HTTP 代理、i18n 国际化（中/英/繁中）。
->
-> **存储架构**：**PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据）**，内置 `aiops.db` 已彻底停用；配置密钥 **AES-256-GCM 静态加密**、可选 **TLS 加密传输**、首次登录 **强制安全初始化**、跨平台 **开机自启 + 保活**（systemd / launchd / 计划任务）。
+<div align="center">
 
-## 目录
+[![Version](https://img.shields.io/badge/Version-v6.8.1-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#开源与社区)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android-lightgrey)]()
+[![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
-- [平台与架构支持](#平台与架构支持)
-- [快速开始](#快速开始)
-- [核心特性](#核心特性)
-- [安装部署指南](#安装部署指南)
-- [配置参考](#配置参考)
-- [监控指标](#监控指标)
-- [硬件巡检（Redfish）](#硬件巡检redfish)
-- [NetFlow / 五元组流量分析](#netflow--五元组流量分析)
-- [OceanStor 存储采集](#oceanstor-存储采集)
-- [自定义监控（拨测）](#自定义监控拨测)
-- [自动化剧本（Playbook）](#自动化剧本playbook)
-- [端口转发与 HTTP 代理](#端口转发与-http-代理)
-- [远程终端](#远程终端)
-- [Android 移动端](#android-移动端)
-- [插件开发](#插件开发)
-- [告警配置](#告警配置)
-- [告警治理（静默/抑制/路由）](#告警治理静默抑制路由)
-- [API 监控（业务接口拨测）](#api-监控业务接口拨测)
-- [AI 运维助手](#ai-运维助手)
-- [统一消息中心](#统一消息中心)
-- [高级功能](#高级功能)
-- [安全机制](#安全机制)
-- [跨网络部署](#跨网络部署)
-- [FAQ / 故障排查](#faq--故障排查)
-- [技术栈与架构](#技术栈与架构)
-- [性能与规模](#性能与规模)
-- [API 参考](#api-参考)
-- [路线图](#路线图)
-- [License](#license)
+**[中文](README.md) · [English](README_EN.md)**
 
-## 平台与架构支持
+</div>
 
-| 处理器架构 | Linux | Windows | macOS | Android |
-|---|:---:|:---:|:---:|:---:|
-| **AMD64 / x86_64** | ✅ | ✅ | ✅ Intel Mac | — |
-| **ARM64 / aarch64** | ✅ | — | ✅ Apple Silicon (M1/M2/M3/M4) | ✅（Kotlin + Jetpack Compose） |
+> **单二进制服务端 + 零依赖 Agent**：一行命令拉起「可观测 · 告警治理 · 自动化自愈 · AI 巡检诊断 · SRE 闭环 · 安卓移动控制台」全套能力。100% 开源、私有化自托管、数据完全自持，不依赖任何 SaaS、不上送任何遥测。
 
-> **麒麟（Kylin）原生支持**：Agent 基于 Go 交叉编译，Linux ARM64 / AMD64 二进制可直接运行于银河麒麟 / 中标麒麟服务端版本，无需额外适配。  
-> **Android 移动端**：原生 Kotlin + Jetpack Compose 开发，独立 APK，非 WebView 套壳，详见 [Android 移动端](#android-移动端) 章节。  
-> **Apple Silicon 原生支持**：`GOARCH=arm64` + `GOOS=darwin`，无需 Rosetta 转译。  
-> **Intel Mac 原生支持**：`GOARCH=amd64` + `GOOS=darwin`。  
-> Docker 镜像已配置 `amd64` + `arm64` 多架构交叉编译，`docker pull` 自动获取匹配架构。
+---
 
-### Agent 交叉编译产物
+## 为什么需要 AIOps Monitor
 
-| 文件名 | 平台 | 架构 |
-|---|---|---|
-| `aiops-agent-linux-amd64` | Linux | AMD64 |
-| `aiops-agent-linux-arm64` | Linux | ARM64 |
-| `aiops-agent-darwin-amd64` | macOS | Intel |
-| `aiops-agent-darwin-arm64` | macOS | Apple Silicon |
-| `aiops-agent.exe` | Windows | AMD64 |
+监控工具越堆越多，问题反而越来越难查：指标在一个系统、日志在另一个、告警风暴刷屏、根因靠人肉翻。多数商业方案按主机数或功能模块收费，且数据必须留在厂商云上。
 
-安装脚本自动检测 CPU 架构并下载对应二进制，无需手动选择。
+AIOps Monitor 的思路不同——**把监控、告警、自动化、AI 诊断、SRE 工作流和移动端收敛进一个自托管平台**：
+
+- **少即是多**：一个 Go 二进制服务端 + 一个零依赖 Agent，覆盖 Zabbix / Prometheus / Grafana / Alertmanager / 自动化剧本 / 终端网关 的常用能力，少维护 5+ 套组件。
+- **一条命令部署**：`docker compose up -d` 即可起全栈；Agent 一键安装、跨平台原生采集。
+- **数据自持**：关系数据落 PostgreSQL，时序数据落 VictoriaMetrics，**两个都是你自己掌控的开源数据库**，可随时导出、可审计、可合规。
+- **AI 不绑架**：AI 巡检诊断是**可插拔**的增值层，接入任意 OpenAI 兼容大模型即「智能模式」，不接则自动回退「启发式兜底」——零外部依赖也能跑。
+- **移动优先**：配套企业级原生安卓控制台，手机上即可看指标、批告警、开终端、走 SRE 闭环。
+
+---
+
+## 核心能力全景
+
+### 1. 全栈可观测（Observe）
+
+- **四平台原生采集**：Linux / Windows / macOS / 麒麟（Kylin），Agent 纯 Go 标准库实现、**零第三方依赖**；含 GPU（NVIDIA / AMD / Apple）、CPU、内存、SWAP、磁盘、网络、TCP 连接、负载、进程、运行时长。
+- **主动拨测**：HTTP（状态码 / 延时 / TLS 证书剩余天数）、TCP、Ping（丢包率 / RTT）、UDP、进程存活、OpenAPI 业务拨测、分布式多点探测。
+- **硬件巡检（Redfish）**：标准 Redfish/DMTF 协议采集 CPU / 内存 / 磁盘 / RAID / 网卡 / 风扇 / 电源 / 温度，含华为 iBMC 深度兼容；无需在被采集设备装 Agent。
+- **流量分析**：NetFlow v5/v9/IPFIX 五元组采集与 TOP-N 排行、流量热力图。
+- **存储采集**：华为 OceanStor 存储池 / LUN / 控制器 / 告警纳管。
+- **交互式趋势图**：纯 Canvas 实现，悬停十字线、框选放大、双击还原、统一时间跨度（1h~30 天）。
+- **日志聚合**：Agent 增量采集日志 → 服务端按主机 / 级别 / 关键字 / 时间全文检索，AES-256-GCM 加密上报。
+
+### 2. 告警治理（Govern）
+
+完整的告警生命周期管理，从源头抑制告警风暴：
+
+- **三档阈值预设**：保守 / 标准 / 宽松，覆盖主机、拨测、API、编排任务、端口转发五大维度共 27 组 warn/crit 细粒度阈值。
+- **告警治理三板斧**：**静默**（时段 / 星期）→ **抑制**（主因告警抑制衍生告警）→ **路由**（按级别 · 主机分流渠道），让严重告警走电话、警告只走飞书。
+- **多通道推送**：飞书 / 钉钉 Webhook、邮件 SMTP、以及阿里云 / 华为云 / 腾讯云**多云短信 + 语音电话（TTS）**；触发 / 恢复各推一次，不刷屏。
+- **去重防抖**：仅在「新触发」与「恢复」时各推一次。
+
+### 3. 自动化与自愈（Remediate）
+
+- **自动化剧本**：多步骤 Shell 编排，按「全部 / 分类 / 系统 / 主机」批量并行执行，实时输出 + 历史报告。
+- **SRE 事件闭环**：告警 / SLO / 手动事件汇聚 → 时间线 → 认领 / 解决 / 升级工单，**自动去重与开合**。
+- **自动修复闸门**：告警自动触发剧本修复，内置**人工审批闸门 + 护栏（guardrails）**，高危操作不自动放行。
+- **SLO / 错误预算**：多窗口多燃烧率（multi-window multi-burn-rate）算法评估 SLO 突破。
+- **工单系统**：事件可一键升级为工单，状态 / 指派 / 评论闭环。
+
+### 4. AI 巡检诊断（Diagnose）
+
+- **定时 / 手动健康巡检**：综合在线 / 离线主机、活跃告警、SLO 突破、近期错误日志产出健康研判。
+- **事件根因诊断**：critical 事件自动触发 AI 根因研判并写入事件时间线。
+- **RAG 向量学习闭环**：基于 pgvector 的 `diagnosis_embeddings`，对诊断结果做**👍 上浮 / 👎 下沉的反馈重排学习**——越用越准，形成团队专属知识库。
+- **AI 运维助手**：多轮 SSE 流式对话 + Function Calling 工具调用（查指标 / 检日志 / 列告警 / 相似案例 / 只读终端巡检）。
+- **可插拔、零绑架**：接入任意 OpenAI 兼容 LLM 即智能模式；**未配置 AI 时自动回退内置启发式兜底**，零外部依赖也能跑。
+- **向量模型解耦**：embedding 模型与对话模型独立配置，可接任意 OpenAI 兼容 `/embeddings`（OpenAI / 百炼 / bge / m3e 等），维度可配 + 一键连通性自检。
+
+### 5. 安全合规（Secure）
+
+- **强会话鉴权**：会话 Cookie 基于 **PBKDF2-HMAC-SHA256（60 万次迭代）**；`HttpOnly` + `SameSite` + HTTPS 下 `Secure`。
+- **RBAC 路由矩阵**：admin / operator / viewer 三角色，路由级权限拦截。
+- **可选 TOTP MFA**：RFC 6238，单次使用防重放；Google Authenticator 兼容。
+- **终端二次密码**：敏感终端操作前二次认证，带限流保护。
+- **双维防暴破**：IP + 账户双维度滑动窗口限流。
+- **机器指纹防克隆**：`X-Agent-Fingerprint` 绑定设备，克隆镜像自动重生 host_id。
+- **配置静态加密**：MFA / SMTP / AI / webhook / 中继等密钥经 `AIOPS_SECRET_KEY` 派生 **AES-256-GCM** 落库。
+- **出站防护**：AI / Webhook 等出站请求经 SSRF 守卫，默认拒云元数据与链路本地地址；可选 `AIOPS_SSRF_STRICT` 拒私网。
+- **TLS 可选**：支持 `AIOPS_TLS_CERT/KEY` 启用 HTTPS 加密传输。
+
+### 6. 安卓移动控制台（Mobile）
+
+配套 **20+ 屏幕的企业级原生安卓控制台**（Kotlin + Jetpack Compose，minSdk 26 / targetSdk 34），非 WebView 套壳，详见下方「诚实边界」。核心屏幕包括：
+
+- **SRE 驾驶舱总览**：关键指标 + 主机 / 告警汇总，深浅色双主题。
+- **主机详情**：原生 Canvas 时序图（点选 / 平移 / 双指缩放），磁盘卷 / GPU 设备明细。
+- **告警**：级别 / 状态双维筛选 + 一键确认 / 静默 + AI 诊断。
+- **企业级 VT 终端**：VT100 / UTF-8 译码、指数退避重连、软键盘避让、横竖屏不重建。
+- **运维中心 SRE Hub**：事件闭环 / AI 诊断流式追问 / 剧本 / SLO / 修复审批 / 工单。
+- **监控拨测**、**AI 助手（SSE 流式）**、**硬件 / NetFlow / Hyper-V**、**终端会话回放**、**消息中心**、**重复主机清理**、**告警治理**、**终端密码**、**环境切换**等。
+- 鉴权：登录 `POST /api/v1/login` → Cookie，`DataStore` 双轨持久化；登录 MFA 动态口令弹窗、终端二次密码 UI；自建 `/ws/push` 长连接前台服务 + 系统通知。
+
+### 7. 部署韧性（Resilient）
+
+- **双强制存储**：PostgreSQL + VictoriaMetrics，**任一未配置即拒绝启动**，从架构上保证数据不丢。
+- **网关中继（Relay）**：内网仅一台联网机器代理所有请求到服务端，自动穿透二进制 / 上报 / 终端；`X-Relay-Secret` 防 Host 注入。
+- **多服务端并发广播**：Agent `servers[]` 采集一次广播所有，独立鉴权 / 重试 / 连接池；带**断路器 + 退避 + gzip 降级**容灾。
+- **安装令牌轮换 + 7 天宽限**：Token 轮换不影响已装 Agent 持续上报。
+- **远程终端 + 端口转发**：经 Agent 反向隧道免开端口访问远端服务；`/proxy` 无状态 HTTP 反向代理，支持 WebSocket 升级。
+- **一键安装 & 开机自启**：面板生成带 Token 命令，自动下载 + 配置 + 注册 systemd / launchd / 计划任务保活。
+- **跨平台多架构**：amd64 + arm64 预构建镜像，Docker 一行拉起。
+
+---
+
+## 架构概览
+
+```
+┌──────────── 采集端（零依赖 Go Agent） ────────────┐
+│ 四平台原生采集 → 指标 / GPU / 日志加密上报          │
+│ 主动拨测：HTTP/TCP/Ping/UDP/进程/OpenAPI/多点探测   │
+│ Redfish 硬件巡检 · NetFlow · OceanStor · 远程终端   │
+│ 机器指纹鉴权 · Relay 中继 · 多服务端广播          │
+└───────┬───────────────────────────┬───────────────┘
+        │ 上报 / 拨测 / 终端 / 转发    │ 并发广播 (servers[])
+        ▼                           ▼
+┌──────────────── 服务端（单 Go 二进制） ────────────────┐
+│ 告警引擎 → 告警治理(静默/抑制/路由) → 事件(去重/开合)  │
+│ → 自动修复(剧本+审批闸门+护栏) → SLO → 工单          │
+│ AI 巡检诊断 + RAG 向量反馈重排学习闭环（pgvector）     │
+│ 远程终端 · 端口转发 /proxy · 统一消息中心 · RBAC/MFA  │
+│                                                       │
+│  ┌─────────────── 双强制存储（缺一拒启动）──────────┐ │
+│  │ PostgreSQL：关系/审计/事件/工单/JSONB/AI规则/会话 │ │
+│  │ VictoriaMetrics：全部时序指标                     │ │
+│  └─────────────────────────────────────────────────┘  │
+└───────────────────────┬───────────────────────────────┘
+                         │ RESTful API + WebSocket (/ws/push)
+                         ▼
+            ┌──────── 安卓企业级移动控制台 ────────┐
+            │ Kotlin + Jetpack Compose（20+ 屏幕） │
+            │ 总览/主机/告警/终端/SRE Hub/AI/拨测  │
+            └──────────────────────────────────────┘
+```
+
+**分工原则**：高频、性能敏感的基础采集用 Go 单二进制（零依赖）；外部采集器（Redfish / NetFlow / OceanStor）走标准协议，由能连通目标设备的 Agent 远程轮询，被采集设备无需装 Agent。
 
 ---
 
 ## 快速开始
 
-### Docker 一键启动（推荐）
+### Docker Compose 一条命令（推荐）
 
 ```bash
-# 根据网络环境选择下载地址：
-#
-# 方式 A（极简，本地/测试）：使用仓库内置默认密钥，直接启动
-# -- 通过 GitHub 下载 --
+# 拉取编排文件并启动（PG + VictoriaMetrics + AIOps Server 三容器一键起全）
 curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
-# -- 通过 Gitee 镜像下载（GitHub 访问受限时推荐）--
-curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml
-docker compose up -d
-
-# 方式 B（推荐，生产）：下载并自动生成强随机密钥写入 compose 文件
-# -- 通过 GitHub 下载 --
-bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
-# -- 通过 Gitee 镜像下载（GitHub 访问受限时推荐）--
-bash <(curl -fsSL https://gitee.com/bigdatasafe/aiops-monitor/raw/master/scripts/secure-compose.sh) && docker compose up -d
-```
-
-> 三容器编排：`aiops-server`（Go 单二进制 + `//go:embed` 内嵌前端）+ `postgres` + `victoriametrics`，compose 一键起全。服务端强制依赖 PG + VM，缺一拒绝启动。
->
-> 镜像说明：**aiops-server / aiops-agent** 托管于华为云 SWR（`swr.cn-east-3.myhuaweicloud.com/sreyun/`），每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像并推送至 SWR，`docker pull` 自动匹配架构。**postgres / victoriametrics** 使用 Docker Hub 官方多架构镜像（ARM64 兼容），若镜像拉取受限请参考下方「Docker Hub 镜像加速器配置」。
-
-> **默认凭据**：`admin / admin`。**首次登录会强制弹出「安全初始化」，必须修改用户名 + 密码后方可进入**，建议随后启用 MFA。
->
-> **密钥安全**：采用「方式 B」会自动生成高强度随机密钥（PG 密码 20 位纯字母数字，SECRET_KEY 为 `aiops-` + 44 位随机字母数字共 50 位），并直接写入 `docker-compose.yml` 的 `AIOPS_SECRET_KEY` 与 `POSTGRES_PASSWORD`（含 `AIOPS_POSTGRES_DSN` 同步），执行后无需任何手动修改即可 `docker compose up -d`；若使用「方式 A」，请务必自行替换这两个值。该脚本同时兼容 Linux 与 macOS。
-
-### Docker Hub 镜像加速器配置
-
-`postgres` 和 `victoriametrics` 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）。若镜像拉取受限，有以下两种方案：
-
-**方案 1 · 推荐：配置 Docker 镜像加速器（一劳永逸，AMD64/ARM64 均可）**
-
-```bash
-sudo mkdir -p /etc/docker
-sudo tee /etc/docker/daemon.json <<-'EOF'
-{ "registry-mirrors": ["https://docker.1ms.run"] }
-EOF
-sudo systemctl daemon-reload && sudo systemctl restart docker
-```
-
-> macOS（Docker Desktop）：Settings → Docker Engine → 添加 `"registry-mirrors"` → Apply & Restart。
-
-**方案 2 · 仅限 AMD64：替换为 SWR 镜像**
-
-编辑 `docker-compose.yml`，将 postgres 和 victoriametrics 的 `image` 替换为注释中的 SWR 镜像地址。**注意：SWR 仅同步了 amd64 架构，Apple Silicon（M1/M2/M3/M4）及 ARM64 服务器不可用！**
-
-### 二进制直接运行
-
-```bash
-# 启动服务端（默认监听 :8529）
-./bin/aiops-server
-
-# 启动 Agent（从仓库根目录运行以找到 plugins/）
-./bin/aiops-agent --server http://<服务端IP>:8529 --category 生产
-```
-
-浏览器打开 `http://localhost:8529`，几秒后即可看到主机卡片与指标。
-
----
-
-## 核心特性
-
-| 能力 | 说明 |
-|---|---|
-| **三平台原生采集** | Linux（`/proc` + `syscall`）、Windows（Win32 API）、macOS（`sysctl`），均零第三方依赖；麒麟（Kylin）直接兼容 |
-| **全面指标** | CPU / 内存 / SWAP / 多磁盘 / 网络收发 / TCP 连接数 / 负载 / 进程数 / 运行时长 / **GPU** |
-| **硬件巡检（Redfish）** | 标准 Redfish 协议采集服务器硬件资产（CPU/内存/磁盘/RAID/网卡/风扇/电源/温度），含华为 iBMC 兼容性（ProcessorView/MemoryView） |
-| **GPU 监控** | NVIDIA（`nvidia-smi`）、AMD（Linux sysfs）、Apple（macOS `ioreg`），best-effort + 缓存 |
-| **交互式趋势图** | 纯 Canvas，悬停十字线 + 数值气泡、框选放大、双击还原、放大预览；渐变填充、统一时间跨度控件（1h~30天）、水平图例 |
-| **自定义拨测** | HTTP（状态码/延时/TLS 证书天数）/ TCP / Ping（丢包率/RTT）/ 进程存活；历史曲线回看 |
-| **远程终端** | 浏览器全 TTY，经 Agent 反向连接（免开端口）；多标签、会话录制回放、只读旁观、命令审计、二次认证 |
-| **自动化剧本** | 多步骤编排 + 按 全部/分类/系统/主机 选目标 → 批量并行执行 → 实时输出 + 历史报告 |
-| **告警推送** | 飞书 / 钉钉 Webhook + 邮件 SMTP + **多云短信 + 多云语音电话**（阿里云 / 华为云 / 腾讯云，TTS 语音通知），触发/恢复各推一次，不刷屏 |
-| **多用户 RBAC** | admin / operator / viewer 三角色，路由级权限拦截，用户管理界面 |
-| **MFA 两步验证** | TOTP（RFC 6238），Google Authenticator 兼容，扫码入网 |
-| **账户找回** | 未登录双重验证：邮箱验证码 + 可选 MFA（TOTP 动态口令）→ 找回用户名/重置密码 |
-| **多服务端推送** | 单 Agent 同时向多服务端推送，采集一次广播所有，独立鉴权/重试 |
-| **网关中继模式** | 内网仅一台联网机器代理所有请求到云端，二进制/上报/终端自动穿透 |
-| **机器指纹鉴权** | machine-id + MAC 哈希指纹绑定，Token 轮换不影响已装 Agent |
-| **SRE 中枢** | 事件（告警/SLO/手动汇聚 + 时间线）· 告警→剧本闭环自动修复（护栏 + 审批）· SLO/错误预算（长窗口查 VM）· 工单 |
-| **日志采集与检索** | Agent `--log-paths` 增量采集 → 服务端按主机/级别/关键字/时间全文检索；自动分级 error/warn/info |
-| **AI 巡检与诊断** | 定时健康巡检 + 事件根因研判；接入 AI Provider 时智能体级分析，未配置时启发式兜底；**错误/告警日志纳入分析上下文** |
-| **统一存储（PG + VM）** | 关系数据（配置/用户/审计/事件/工单/会话）落 PostgreSQL，时序数据（指标/趋势）落 VictoriaMetrics；内置 aiops.db 已彻底停用，二者缺一拒绝启动 |
-| **静态加密与 TLS** | 配置密钥（MFA/SMTP/AI/webhook/relay）AES-256-GCM 落库加密（`AIOPS_SECRET_KEY`）；可选 HTTPS/TLS 加密传输 |
-| **PWA 安装** | 可安装到桌面、Service Worker 离线缓存、独立窗口运行 |
-| **侧栏实时时钟** | 左侧导航栏底部显示当前日期与精确到秒的实时时间（`YYYY-MM-DD HH:mm:ss`），适配浅色/深色主题，侧栏折叠时竖排保持可见 |
-| **gzip 压缩** | API/静态资源自动 gzip，多主机轮询带宽 ~8-10 倍压缩 |
-| **端口转发（TCP / UDP / HTTP）** | 经 Agent 隧道将远端主机的 TCP / UDP 端口映射到服务端本地端口（HTTP 走无状态代理隧道直通 Web 服务）；支持端口范围批量转发（单批 ≤100 端口）+ 持久规则启停/编辑/复制 |
-| **HTTP 反向代理** | 无状态代理：`/proxy/{hostID}/{port}/{path}` 直通目标主机 Web 服务，支持 WebSocket 升级 |
-| **一键安装** | 面板生成带 Token 命令，自动下载 + 配置 + 注册开机自启 |
-| **告警阈值自定义** | 27 组细粒度 warn/crit 阈值（主机 / 拨测 / API / 任务 / 转发五大维度）逐项可调，主机维度另含保守/标准/宽松三档预设，零值自动兜底默认 |
-| **向量化模型配置** | RAG 嵌入模型与对话模型解耦，可接任意 OpenAI 兼容 `/embeddings`（OpenAI / 百炼 / bge / m3e 等），维度可配 + 一键连通性自检 |
-| **NetFlow / 五元组流量分析** | 支持 NetFlow v5/v9/IPFIX 采集，五元组（源IP/目的IP/源端口/目的端口/协议）流量统计与 TOP-N 排行，可视化流量热力图 |
-| **OceanStor 存储采集** | 华为 OceanStor RESTful API 采集存储池/LUN/控制器/告警等资产与性能数据，纳入统一监控面板 |
-| **Android 移动端** | 原生 Kotlin + Jetpack Compose 开发，主机总览/告警推送/远程终端/硬件报表，私有化自托管 |
-| **i18n 国际化** | 中文简体 / English / 中文繁体，全链路覆盖前端面板与后端 API |
-| **告警治理** | 静默（时段/星期）/ 抑制（主因抑衍生）/ 路由（按级别·主机分流渠道），抑制告警风暴 |
-| **API 监控** | 业务系统接口批量黑盒拨测：可用性 / 时延 / P95 / 吞吐，补齐「业务可用性」维度 |
-| **AI 运维助手** | 自主 Agent（Function Calling）+ AI 巡检诊断 + RAG 相似案例检索（可插拔 LLM，零依赖启发式兜底） |
-| **统一消息中心** | 事件 / 告警 / SLO / 自动修复 / AI / 工单 统一收件箱，未读计数 + 深链 |
-| **SSRF 出站防护** | AI / Webhook 等出站请求守卫，默认拒云元数据·链路本地，`AIOPS_SSRF_STRICT` 拒私网 |
-| **日志加密上报** | Agent 日志 `gzip + AES-256-GCM` 加密传输（`log_key` 注册阶段下发） |
-
----
-
-## 安装部署指南
-
-### 方式一：Docker 部署（预构建镜像·推荐）
-
-**一键部署（自动生成随机密码）：**
-
-```bash
-# 通过 GitHub 下载：
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml && \
-PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
-SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
-sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
-sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
-echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
-docker compose up -d
-
-# 通过 Gitee 镜像下载（GitHub 访问受限时推荐）：
-curl -O https://gitee.com/bigdatasafe/aiops-monitor/raw/master/docker-compose.yml && \
-PG_PWD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c20) && \
-SECRET_KEY="aiops-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44)" && \
-sed -i "s|h3Y7Vmb1CZBOApZM86D|${PG_PWD}|g" docker-compose.yml && \
-sed -i "s|aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026|${SECRET_KEY}|" docker-compose.yml && \
-echo "PG password: ${PG_PWD}" && echo "SECRET_KEY: ${SECRET_KEY}" && \
 docker compose up -d
 ```
 
-> 以上命令自动完成：下载编排文件 → 生成随机密码/密钥 → 写入配置 → 拉取镜像并启动。**请务必保存输出的密码和密钥！**
->
-> **镜像拉取提示**：`postgres` 和 `victoriametrics` 从 Docker Hub 拉取，若网络受限请先配置 Docker 镜像加速器（见上方「Docker Hub 镜像加速器配置」），或在 `docker-compose.yml` 中将这两个服务的 `image` 替换为注释中的 SWR 镜像（仅限 AMD64）。
+启动后浏览器打开 `http://localhost:8529`，默认凭据 `admin / admin`，**首次登录强制走安全初始化（必须修改用户名 + 密码）**，建议随后启用 MFA。
 
-**指定版本（推荐生产环境）：**
+> **生产建议**：使用安全编排脚本自动生成强随机密钥并写入 `docker-compose.yml`：
+> ```bash
+> bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
+> ```
+> 该脚本生成 20 位 PG 密码与 50 位 `AIOPS_SECRET_KEY`，并自动回填 `AIOPS_POSTGRES_DSN`，无需手动改配置。
 
-```bash
-# 编辑 docker-compose.yml，将 :latest 替换为具体版本号
-sed -i 's|aiops-server:latest|aiops-server:v6.8.1|' docker-compose.yml
-sed -i 's|aiops-agent:latest|aiops-agent:v6.8.1|' docker-compose.yml
-docker compose up -d
-```
+### 安装 Agent（被监控主机）
 
-- **aiops-server / aiops-agent** 镜像托管于华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest`
-- 每次打 tag 推送后 GitHub Actions 自动构建 `linux/amd64` + `linux/arm64` 双架构镜像
-- **postgres / victoriametrics** 使用 Docker Hub 官方镜像（多架构），若拉取失败请参考上方「Docker Hub 镜像加速器配置」
-- 服务端数据通过 volume 持久化（`/app/data`），配置文件在 `./data/server_config.json`
-- 默认端口 `8529`，可在 `docker-compose.yml` 中修改映射
-- 默认映射 TCP 转发端口范围 `10100-10300`，`forward_listen` 已通过 `AIOPS_FORWARD_LISTEN` 环境变量设为 `0.0.0.0`
-- Agent 容器默认不启动，取消注释 `docker-compose.yml` 中 `aiops-agent` 段即可启用
-- 如需本地构建，将 `docker-compose.yml` 中 `image:` 替换为注释的 `build:` 配置后执行 `docker compose up -d --build`
-
-### CI/CD 自动构建
-
-每次推送版本标签（`v*`）到 GitHub 后，GitHub Actions 自动执行以下流程：
-
-1. **检出代码** → 提取 Git tag 作为版本号
-2. **多架构交叉编译** → `linux/amd64` + `linux/arm64` 双架构 Go 二进制
-3. **构建 Docker 镜像** → 使用 `docker/build-push-action` 构建多架构镜像
-4. **HMAC-SHA256 认证** → 使用 `HW_ACCESS_KEY` / `HW_SECRET_KEY` 自动生成 SWR 登录凭证
-5. **推送至华为云 SWR** → `swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:{tag}` 和 `aiops-agent:{tag}`
-
-**镜像标签：**
-
-| 标签 | 说明 |
-|---|---|
-| `:latest` | 始终指向最新 Release |
-| `:v6.8.1` 等 | 锁定特定版本（推荐生产使用） |
-
-**所需 GitHub Secrets**（在仓库 Settings → Secrets and variables → Actions 配置）：
-
-| Secret | 说明 |
-|---|---|
-| `HW_ACCESS_KEY` | 华为云访问密钥 AK（IAM「我的凭证」获取） |
-| `HW_SECRET_KEY` | 华为云秘密密钥 SK（同上） |
-
-> 工作流定义见 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
-
-<details>
-<summary>Docker 手动构建</summary>
+面板右上角「安装 Agent」→ 选系统 → 复制命令到目标机执行：
 
 ```bash
-# 构建服务端镜像
-docker build --target server -t aiops-server .
-
-# 构建 Agent 镜像
-docker build --target agent -t aiops-agent .
-
-# 运行
-docker run -d -p 8529:8529 -v aiops-data:/app/data --name aiops-server aiops-server
-```
-</details>
-
-### 方式二：一键安装脚本（推荐生产使用）
-
-面板右上角点 **「安装 Agent」** → 选择目标系统 → 复制命令到被监控主机执行：
-
-```bash
-# Linux（root/sudo）— 自动检测 amd64/arm64
+# Linux（root）
 curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sudo sh
-
 # Windows（管理员 PowerShell）
 irm "http://<服务端>:8529/install.ps1?token=<TOKEN>" | iex
-
-# macOS — 自动检测 Intel/Apple Silicon
-curl -fsSL "http://<服务端>:8529/install.sh?token=<TOKEN>" | sh
 ```
 
-命令已内置服务端地址与 Token，自动下载对应架构的 Agent 二进制 + 插件、写好配置、注册开机自启。
-
-### 方式三：二进制直接运行
-
-**启动服务端**：
-
-```bash
-./bin/aiops-server                          # 默认监听 :8529
-./bin/aiops-server -addr 0.0.0.0:9000       # 指定地址/端口
-./bin/aiops-server -config /path/to/config  # 指定配置文件
-```
-
-**启动 Agent**（从仓库根目录运行以找到 `plugins/`）：
-
-```bash
-# Linux AMD64
-./bin/aiops-agent-linux-amd64 --server http://<IP>:8529 --category 生产
-
-# Linux ARM64
-./bin/aiops-agent-linux-arm64 --server http://<IP>:8529 --category 生产
-
-# macOS Apple Silicon
-./bin/aiops-agent-darwin-arm64 --server http://<IP>:8529 --category 生产
-
-# macOS Intel
-./bin/aiops-agent-darwin-amd64 --server http://<IP>:8529 --category 生产
-
-# Windows AMD64
-.\bin\aiops-agent.exe --server http://<IP>:8529 --category 生产
-```
-
-### 方式四：自行编译
-
-```bash
-# 需 Go 1.22+
-go build -o bin/aiops-server ./cmd/server
-go build -o bin/aiops-agent  ./cmd/agent
-
-# 交叉编译各架构 Agent
-GOOS=linux   GOARCH=amd64 go build -o bin/aiops-agent-linux-amd64   ./cmd/agent
-GOOS=linux   GOARCH=arm64 go build -o bin/aiops-agent-linux-arm64   ./cmd/agent
-GOOS=darwin  GOARCH=amd64 go build -o bin/aiops-agent-darwin-amd64  ./cmd/agent
-GOOS=darwin  GOARCH=arm64 go build -o bin/aiops-agent-darwin-arm64  ./cmd/agent
-GOOS=windows GOARCH=amd64 go build -o bin/aiops-agent.exe           ./cmd/agent
-```
-
-**Windows 一键构建**（自动注入 Git tag 版本号）：
-
-```powershell
-# 自动获取 git describe --tags 并通过 ldflags 注入版本号
-powershell -File build.ps1
-
-# 含交叉编译 Linux/macOS 产物
-powershell -File build.ps1 -CrossCompile
-```
-
-> 也可手动注入版本号：`go build -ldflags "-X main.appVersion=$(git describe --tags)" ./cmd/server ./cmd/agent`
-
-### 开机自启
-
-<details>
-<summary>Linux（systemd）</summary>
-
-```bash
-cp deploy/aiops-agent.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now aiops-agent
-```
-</details>
-
-<details>
-<summary>Windows（NSSM）</summary>
-
-```powershell
-nssm install AIOps-Agent C:\aiops-agent\aiops-agent.exe "--server http://<IP>:8529 --category 生产"
-nssm set AIOps-Agent AppDirectory C:\aiops-agent
-nssm start AIOps-Agent
-```
-</details>
-
-<details>
-<summary>Windows（任务计划）</summary>
-
-```powershell
-schtasks /Create /TN "AIOps-Agent" /TR "C:\aiops-agent\start-agent.bat" /SC ONSTART /RU SYSTEM /RL HIGHEST /F
-```
-</details>
-
-<details>
-<summary>macOS（launchd）</summary>
-
-```bash
-cp deploy/com.aiops.agent.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.aiops.agent.plist
-```
-</details>
-
-详细部署说明（含防火墙配置、升级卸载）见 [INSTALL.md](INSTALL.md)。
+> 服务端**强制依赖** PostgreSQL 与 VictoriaMetrics 两个存储，缺一拒绝启动。更多部署方式（二进制直跑 / 自编译 / 开机自启 / 跨网络 Nginx 反代 / 网关中继）见 [INSTALL.md](INSTALL.md)。
 
 ---
 
-## 配置参考
+## 典型场景
 
-### Agent 配置（`config.example.json`）
-
-```json
-{
-  "server": "http://localhost:8529",
-  "servers": [
-    {"server": "https://monitor-a:8529", "token": "token-a"},
-    {"server": "https://monitor-b:8529", "token": "token-b"}
-  ],
-  "report_interval": 10,
-  "plugin_interval": 15,
-  "disk_path": "/",
-  "plugins_dir": "plugins",
-  "python": "python3",
-  "state_file": "agent_state.json",
-  "category": "",
-  "token": ""
-}
-```
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `server` | string | `http://localhost:8529` | 单服务端地址（`servers` 为空时回退到此） |
-| `servers` | array | `[]` | 多服务端列表，每项含 `server` + `token`；非空时优先使用 |
-| `report_interval` | int | `10` | 基础指标上报间隔（秒） |
-| `plugin_interval` | int | `15` | 插件执行周期（秒） |
-| `disk_path` | string | `/` | 主磁盘路径（概览用，所有本地盘自动识别） |
-| `plugins_dir` | string | `plugins` | 插件目录（可用绝对路径） |
-| `python` | string | `python3` | Python 解释器（Windows 为 `python`） |
-| `state_file` | string | `agent_state.json` | Agent 状态文件（含 host_id） |
-| `category` | string | `""` | 主机分类（面板按此分组） |
-| `token` | string | `""` | 安装 Token（可选） |
-
-### Agent 命令行参数
-
-| 参数 | 说明 | 默认值 |
-|---|---|---|
-| `--server` | 服务端地址 | `http://localhost:8529` |
-| `--category` | 主机分类 | 空 |
-| `--interval` | 基础指标上报间隔（秒） | `10` |
-| `--plugin-interval` | 插件执行周期（秒） | `15` |
-| `--plugins-dir` | 插件目录 | `plugins` |
-| `--python` | Python 解释器 | `python3`（Win 为 `python`） |
-| `--disk-path` | 主磁盘路径 | `/`（Win 为系统盘） |
-| `--token` | 安装 Token | 空 |
-| `--relay` | 网关中继模式 | `false` |
-| `--listen` | Relay 监听地址 | `:8529` |
-| `--config` | 配置文件路径 | `config.json` |
-
-> Flag 覆盖配置文件，配置文件覆盖默认值。`servers` 数组非空时优先于 `server` + `token`。
-
-### 服务端配置（`server_config.example.json`）
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `alerts_enabled` | bool | `true` | 启用告警推送 |
-| `feishu.enabled` | bool | `false` | 飞书推送开关 |
-| `feishu.webhook` | string | `""` | 飞书机器人 Webhook |
-| `dingtalk.enabled` | bool | `false` | 钉钉推送开关 |
-| `dingtalk.webhook` | string | `""` | 钉钉机器人 Webhook |
-| `dingtalk.secret` | string | `""` | 钉钉加签 Secret |
-| `thresholds.cpu_warn` | float | `80` | CPU 警告阈值（%） |
-| `thresholds.cpu_crit` | float | `95` | CPU 严重阈值（%） |
-| `thresholds.mem_warn` | float | `85` | 内存警告阈值（%） |
-| `thresholds.mem_crit` | float | `95` | 内存严重阈值（%） |
-| `thresholds.disk_warn` | float | `80` | 磁盘警告阈值（%） |
-| `thresholds.disk_crit` | float | `90` | 磁盘严重阈值（%） |
-| `thresholds.diskio_warn` | float | `80` | 磁盘 IO 利用率警告阈值（%） |
-| `thresholds.diskio_crit` | float | `95` | 磁盘 IO 利用率严重阈值（%） |
-| `thresholds.iops_warn` | float | `50000` | IOPS 警告阈值（总读写 IOPS） |
-| `thresholds.iops_crit` | float | `100000` | IOPS 严重阈值 |
-| `thresholds.gpu_warn` | float | `80` | GPU 利用率警告阈值（%） |
-| `thresholds.gpu_crit` | float | `95` | GPU 利用率严重阈值（%） |
-| `thresholds.load_warn` | float | `4.0` | 系统负载警告倍率（× CPU 核心数） |
-| `thresholds.load_crit` | float | `8.0` | 系统负载严重倍率（× CPU 核心数） |
-| `thresholds.proc_warn` | float | `0.5` | 进程数异常变化比例（50% = 突增/突降一半） |
-| `thresholds.offline_after_sec` | int | `60` | 主机失联判定秒数 |
-| `thresholds.check_ping_loss_warn` / `_crit` | float | `10` / `30` | 拨测 Ping 丢包率 警告 / 严重（%） |
-| `thresholds.check_ping_latency_warn` / `_crit` | float | `100` / `500` | 拨测 Ping 平均延迟 警告 / 严重（ms） |
-| `thresholds.check_tcp_timeout_warn` / `_crit` | float | `1000` / `5000` | 拨测 TCP 连接超时 警告 / 严重（ms） |
-| `thresholds.check_http_resp_warn` / `_crit` | float | `1000` / `5000` | 拨测 HTTP 响应时间 警告 / 严重（ms） |
-| `thresholds.check_http_status_warn` / `_crit` | int | `1` / `5` | 拨测 HTTP 非 2xx 次数 警告 / 严重 |
-| `thresholds.check_proc_fail_warn` / `_crit` | int | `1` / `3` | 进程存活失败次数 警告 / 严重 |
-| `thresholds.api_avail_warn` / `_crit` | float | `99` / `95` | API 接口可用率 警告 / 严重（低于此值告警，%） |
-| `thresholds.api_avg_resp_warn` / `_crit` | float | `500` / `2000` | API 平均响应时间 警告 / 严重（ms） |
-| `thresholds.api_p95_resp_warn` / `_crit` | float | `1000` / `5000` | API P95 响应时间 警告 / 严重（ms） |
-| `thresholds.api_throughput_warn` / `_crit` | float | `100` / `10` | API 吞吐量 警告 / 严重（低于此值告警，req/s） |
-| `thresholds.task_fail_warn` / `_crit` | int | `1` / `5` | 编排定时任务失败次数 警告 / 严重 |
-| `thresholds.task_timeout_warn` / `_crit` | float | `60` / `300` | 编排定时任务超时时长 警告 / 严重（s） |
-| `thresholds.forward_conn_warn` / `_crit` | int | `200` / `280` | 端口转发活跃连接数 警告 / 严重 |
-| `thresholds.forward_bw_warn` / `_crit` | float | `80` / `95` | 端口转发带宽使用率 警告 / 严重（%） |
-| `thresholds.forward_err_warn` / `_crit` | float | `5` / `15` | 端口转发错误率 警告 / 严重（%） |
-| `thresholds.forward_lat_warn` / `_crit` | float | `1000` / `5000` | 端口转发平均延迟 警告 / 严重（ms） |
-| `require_token` | bool | `false` | 强制 Agent Token |
-| `allow_anonymous_agents` | bool | `false` | 允许无 Token Agent |
-| `terminal_disabled` | bool | `false` | 全局禁用远程终端 |
-| `install_token` | string | 自动生成 | Agent 安装 Token |
-| `trust_proxy` | bool | `false` | 反代后设 `true`：采信 `X-Real-IP` 做限流 |
-| `forward_disabled` | bool | `false` | 全局禁用端口转发与 HTTP 代理 |
-| `forward_listen` | string | `127.0.0.1` | TCP 转发监听地址（Docker 部署需设为 `0.0.0.0`） |
-| `forward_port_range` | string | `10100-10300` | TCP 转发端口范围（需与 Docker `ports` 映射一致） |
-| `relay_secret` | string | `""` | 中继节点共享密钥（v5.4.1，与 Agent 端 `-relay-secret` 一致） |
-| `smtp.smtp_enabled` | bool | `false` | 邮件推送开关 |
-| `smtp.smtp_host` | string | `""` | SMTP 服务器地址 |
-| `smtp.smtp_port` | int | `0` | SMTP 端口（465 隐式 TLS / 587 STARTTLS） |
-| `smtp.smtp_username` | string | `""` | 发件邮箱账号 |
-| `smtp.smtp_password` | string | `""` | SMTP 授权码/密码（脱敏回显） |
-| `smtp.smtp_from_name` | string | `"AIOps Monitor"` | 发件人显示名称 |
-| `smtp.smtp_use_tls` | bool | `false` | 启用隐式 TLS（465 选 `true`，587 选 `false`） |
-| `sms.enabled` | bool | `false` | 短信推送开关 |
-| `sms.provider` | string | `"aliyun"` | 短信服务商：`aliyun`（阿里云）/ `huawei`（华为云）/ `tencent`（腾讯云），三云均已支持 |
-| `sms.access_key` | string | `""` | 云账号 AccessKey（阿里云 AccessKeyId / 华为云 AppKey / 腾讯云 SecretId） |
-| `sms.secret_key` | string | `""` | 云账号 SecretKey（阿里云 AccessKeySecret / 华为云 AppSecret / 腾讯云 SecretKey；脱敏回显） |
-| `sms.app_id` | string | `""` | 应用/项目标识：**华为云** = 短信应用的 project_id；**腾讯云** = SmsSdkAppId；阿里云留空 |
-| `sms.sign_name` | string | `""` | 短信签名（SignName） |
-| `sms.template_code` | string | `""` | 短信模板 CODE（阿里云 TemplateCode / 华为云 templateId / 腾讯云 TemplateId） |
-| `sms.template_param` | string | `""` | 自定义模板参数（JSON，如 `{"code":"${code}"}`；留空时默认注入 `{"message":"告警文本"}`） |
-| `sms.phones` | []string | `[]` | 接收手机号列表（华为/腾讯自动补 `+86` 前缀） |
-| `voice_call.enabled` | bool | `false` | 语音电话推送开关 |
-| `voice_call.provider` | string | `"aliyun"` | 语音服务商：`aliyun`（阿里云）/ `huawei`（华为云）/ `tencent`（腾讯云），三云均已支持 |
-| `voice_call.access_key` | string | `""` | 云账号 AccessKey（同短信规则） |
-| `voice_call.secret_key` | string | `""` | 云账号 SecretKey（同短信规则；脱敏回显） |
-| `voice_call.app_id` | string | `""` | 应用/项目标识：**华为云** = project_id；**腾讯云** = VoiceSdkAppid；阿里云留空 |
-| `voice_call.called_numbers` | []string | `[]` | 被叫号码列表（华为/腾讯自动补 `+86` 前缀） |
-| `voice_call.tts_code` | string | `""` | 语音模板 TTS CODE（阿里云 TtsCode / 华为云 displayNbr 对应模板 / 腾讯云 TemplateId） |
-| `voice_call.tts_param` | string | `""` | 语音模板参数（JSON，默认 `{"message":"..."}`） |
-
-> **多云短信 / 语音鉴权说明**：阿里云走 ACS3-HMAC-SHA256 签名 V3（`dysmsapi` / `dyvmsapi`）；华为云走 X-WSSE（`smsapi.cn-north-4` / `rtc-api`，需填 `app_id` = project_id）；腾讯云走 TC3-HMAC-SHA256（`sms.tencentcloudapi.com` / `vms.tencentcloudapi.com`，需填 `app_id`）。切换服务商只需改 `provider` 并填写对应字段，无需改动部署。
-
-#### 报警阈值自定义配置
-
-系统提供 **27 组（warn / crit）细粒度阈值**，覆盖五大监控维度，全部可通过 `server_config.json` 的 `thresholds` 字段或面板「告警设置」逐项自定义，保存即生效：
-
-| 维度 | 覆盖指标 |
+| 场景 | AIOps Monitor 怎么用 |
 |---|---|
-| **主机资源** | CPU / 内存 / 磁盘 / 磁盘 IO / IOPS / GPU / 系统负载 / 进程数变化 / 离线判定 |
-| **拨测监控** | Ping 丢包率与延迟 / TCP 连接超时 / HTTP 响应时间与状态码 / 进程存活失败次数 |
-| **API 业务监控** | 接口可用率 / 平均响应 / P95 响应 / 吞吐量 |
-| **编排定时任务** | 执行失败次数 / 超时时长 |
-| **端口转发** | 活跃连接数 / 带宽使用率 / 错误率 / 平均延迟 |
-
-> **零值自动兜底（backfill）**：告警引擎按 `指标 ≥ 阈值` 触发，阈值 0 会导致持续误报，因此任何 0 值（未配置 / 表单留空 / 旧配置缺字段）都会被自动回退到标准默认值——**填多少用多少，不填自动用推荐默认**，无需担心漏配。
-
-##### 主机资源三档预设（快速起步）
-
-主机资源维度内置保守 / 标准 / 宽松三档，默认「标准」，可作为自定义的起点：
-
-| 指标 | 保守（敏感） | 标准（推荐·默认） | 宽松（低噪） |
-|---|---|---|---|
-| CPU 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
-| 内存 警告/严重 | 75 / 90 | 85 / 95 | 90 / 98 |
-| 磁盘 警告/严重 | 75 / 85 | 80 / 90 | 90 / 97 |
-| 磁盘 IO 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
-| IOPS 警告/严重 | 20K / 50K | 50K / 100K | 100K / 200K |
-| GPU 警告/严重 | 70 / 85 | 80 / 95 | 90 / 98 |
-| 负载 警告/严重 | 2.0× / 4.0× | 4.0× / 8.0× | 6.0× / 12.0× |
-| 进程数变化 | 0.3 (30%) | 0.5 (50%) | 0.8 (80%) |
-| 离线判定 | 30s | 60s | 120s |
-
-> **保守**：生产关键系统，尽早发现异常 → 误报较多。  
-> **标准**：多数场景推荐，平衡灵敏度与噪音 → 新安装默认值。  
-> **宽松**：开发/测试环境，减少告警疲劳 → 阈值最宽容。
-
-### 服务端命令行参数
-
-| 参数 | 说明 | 默认值 |
-|---|---|---|
-| `-addr` | 监听地址 | `:8529` |
-| `-config` | 配置文件路径 | `server_config.json` |
-| `-dist` | Agent 下载目录 | 自动探测 `./dist` 或程序所在目录 |
-
-### 环境变量覆盖（v5.4.1）
-
-以下环境变量可覆盖 `server_config.json` 中对应字段，Docker Compose 部署时无需修改配置文件即可调整安全策略：
-
-| 环境变量 | 对应配置项 | 类型 | 说明 |
-|---|---|---|---|
-| `AIOPS_POSTGRES_DSN` | —（**必填**） | string | PostgreSQL 连接串，如 `postgres://user:pwd@host:5432/db?sslmode=disable`。全部关系数据入 PG；**未配置将拒绝启动** |
-| `AIOPS_VM_URL` | —（**必填**） | string | VictoriaMetrics 地址，如 `http://victoriametrics:8428`。全部时序数据入 VM；**未配置将拒绝启动** |
-| `AIOPS_SECRET_KEY` | —（强烈建议） | string | 配置密钥落库主密钥：对 MFA/SMTP/AI/webhook/relay 做 AES-256-GCM 静态加密（**务必妥善备份，丢失将无法解密已存密钥**） |
-| `AIOPS_TLS_CERT` / `AIOPS_TLS_KEY` | —（可选） | string | TLS 证书 / 私钥路径，配置后以 HTTPS 加密对外服务；否则明文 HTTP（建议置于 TLS 终止代理之后） |
-| `AIOPS_FORWARD_LISTEN` | `forward_listen` | string | TCP 转发监听地址（Docker 部署必须设为 `0.0.0.0`） |
-| `AIOPS_FORWARD_PORT_RANGE` | `forward_port_range` | string | TCP 转发端口范围，如 `10100-10300` |
-| `AIOPS_RELAY_SECRET` | `relay_secret` | string | 中继节点共享密钥 |
-| `AIOPS_FORWARD_DISABLED` | `forward_disabled` | bool | 设为 `true` 全局禁用端口转发 |
-| `AIOPS_TERMINAL_DISABLED` | `terminal_disabled` | bool | 设为 `true` 全局禁用远程终端 |
-| `AIOPS_ALLOW_ANONYMOUS_AGENTS` | `allow_anonymous_agents` | bool | 设为 `true` 允许无 Token Agent |
-| `AIOPS_TRUST_PROXY` | `trust_proxy` | bool | 设为 `true` 采信反向代理客户端 IP 头 |
-| `AIOPS_REQUIRE_TOKEN` | `require_token` | bool | 设为 `true` 强制 Agent Token 校验 |
-
-> **优先级**：环境变量 > `server_config.json` 文件。布尔类型支持 `true`/`false` 或 `1`/`0`。
+| **中小型机房统一监控** | 单服务端纳管数百台 Linux/Windows/macOS/麒麟主机，原生采集 CPU/内存/磁盘/GPU，三档阈值预设开箱即用 |
+| **告警风暴治理** | 用「静默 + 抑制 + 路由」把夜间非关键告警静默、主因离线抑制衍生告警、严重告警走电话，恢复通知照发 |
+| **业务可用性 SLA** | API 监控对核心接口批量黑盒拨测，P95 时延 / 可用率 / 吞吐纳入 SLO 多窗口燃烧率评估 |
+| **故障自愈** | 告警触发剧本自动修复，高危动作卡人工审批闸门，修复过程全程审计 |
+| **智能根因定位** | 接入大模型后事件自动 AI 诊断，RAG 向量库沉淀历史相似案例，👍/👎 反馈让诊断越用越准 |
+| **外出应急** | 手机打开原生安卓控制台，看总览、批告警、开 VT 终端排障、走 SRE 事件闭环 |
+| **硬件资产合规** | Redfish 巡检 + OceanStor 采集统一硬件资产面板，变更漂移可查，支持导出 |
+| **跨网段 / 弱网采集** | 网关中继模式单点穿透；多服务端并发广播 + 断路器 + gzip 降级保障弱网下不丢数据 |
 
 ---
 
-## 监控指标
+## 企业服务
 
-| 指标 | Linux | Windows | macOS |
-|---|---|---|---|
-| CPU 使用率 / 核数 | `/proc/stat` | `GetSystemTimes` | `top -l 2` |
-| 内存 / SWAP | `/proc/meminfo` | `GlobalMemoryStatusEx` | `sysctl` + `vm_stat` |
-| 磁盘（全部本地盘） | `/proc/mounts` + `statfs` | `GetDiskFreeSpaceExW` | `syscall.Statfs` + `df` |
-| 网络收发速率 | `/proc/net/dev` | `GetIfTable` | `netstat -ibn` |
-| TCP 连接数 | `/proc/net/tcp` | `GetTcpTable` | `netstat -an` |
-| 负载 1/5/15 | `/proc/loadavg` | EWMA 近似 | `sysctl vm.loadavg` |
-| 进程数 | `/proc` 枚举 | `EnumProcesses` | `ps -A` |
-| 运行时长 | `/proc/uptime` | `GetTickCount64` | `sysctl kern.boottime` |
-| **GPU 使用率/显存/温度** | `nvidia-smi` / amdgpu sysfs | `nvidia-smi` | `ioreg`（IOAccelerator） |
+AIOps Monitor 本体 100% 开源（MIT），可自由自托管。对于企业级进阶需求，可基于开源版提供：
 
-**三平台均零第三方依赖**。GPU 为 best-effort：有对应厂商工具或 OS 接口时上报，结果缓存约 12s；无 GPU/无工具时不显示，不影响其他指标。
+- **私有化部署咨询**：大规模（万级主机）分片、VictoriaMetrics 外接、保留期调优。
+- **定制集成**：对接企业微信 / 钉钉 / 飞书深度能力、CMDB、工单系统、内部大模型网关。
+- **安全合规加固**：SSO / LDAP、审计留存、等保适配建议。
+- **安卓分发通道**：私有化应用分发与签名托管（见下方诚实边界）。
+
+> 有企业合作需求可在 GitHub 仓库提交 Issue 或联系维护者。
 
 ---
 
-## 硬件巡检（Redfish）
+## 诚实边界与已知限制
 
-通过标准 Redfish/DMTF 协议远程采集服务器硬件资产与状态，无需在目标主机安装任何 Agent：
+我们坚持如实描述能力，以下边界请在使用前知悉：
 
-| 采集项 | 说明 |
-|---|---|
-| **处理器** | 型号/核数/频率/健康状态 |
-| **内存** | 容量/类型/速度/插槽/健康状态 |
-| **磁盘** | 型号/容量/介质类型/健康状态/预测故障 |
-| **RAID 控制器** | 型号/固件版本/虚拟磁盘/物理磁盘 |
-| **网卡** | MAC/速率/链路状态 |
-| **风扇/电源/温度** | 转速/功率/进出风口温度 |
-| **Chassis** | 序列号/型号/固件版本 |
+**后端 / 平台**
 
-**华为 iBMC 兼容性**：针对华为 TaiShan / Kunpeng 系列服务器的 iBMC 做了深度适配：
-- 使用 `ProcessorView` / `MemoryView` 一次性采集全部处理器和内存（华为 iBMC 特有路径）
-- Chassis Links 解析 Thermal/Power 真实链接
-- 存储路径来自 System.Storage 的 `@odata.id`（华为使用 `/Storages` 复数形式）
-- URI 去重避免华为盘重复条目
-- 首次采集日志打印各部件条数便于确认
+- 服务端强制依赖 PostgreSQL 与 VictoriaMetrics 两个开源数据库；单机建议规模约 3000 台主机（超大规模建议外接 VictoriaMetrics）。
+- AI 巡检诊断为可插拔增值能力，未配置大模型时回退启发式兜底，不保证与 LLM 同等深度的语义分析。
 
-> 配置：面板「硬件巡检」页添加 BMC 地址 + 用户名/密码，支持批量导入。采集结果纳入统一硬件资产面板，支持导出。
+**安卓移动控制台**
+
+- **私有化自托管分发，未上架任何应用商店**；以 APK 方式安装，需自行签名与分发。
+- 仓库内置历史构建产物（如 `aiops-6193.apk`）证明该客户端**曾经可成功构建**；但当前源码**未在当前沙箱重新编译验证**，不保证零编译错误——请以你本地 Android Studio 实际构建结果为准。
+- **账号自服务仍在网页端**：MFA 自助绑定、忘记密码、首次登录强制改密等 UI 在 Web 端完成，安卓端复用同一套 RBAC 账户体系。
+- 会话 Cookie 使用**普通 DataStore 持久化（未加密）**。
+- 采用**固定轮询**拉取数据，主机 / 告警为**全量拉取**，非增量；**未接入系统级后台推送（FCM）**，依赖前台自动刷新。
+- 上述限制不影响其作为「企业级原生移动控制台」在自托管内网场景下的实用价值。
 
 ---
 
-## NetFlow / 五元组流量分析
+## 开源与社区
 
-内置 NetFlow 采集器，支持标准 NetFlow v5/v9 及 IPFIX 协议，将网络设备导出的流量流记录入库并提供可视化分析：
+AIOps Monitor 以 **MIT 协议 100% 开源**，无功能阉割、无用户数限制、无遥测上送。
 
-| 能力 | 说明 |
-|---|---|
-| **协议支持** | NetFlow v5 / v9 / IPFIX，UDP 监听可配置端口 |
-| **五元组统计** | 源 IP / 目的 IP / 源端口 / 目的端口 / 协议，按流量排序 TOP-N |
-| **流量热力图** | 按时间 × 主机/端口可视化流量分布，快速定位异常流量 |
-| **TOP-N 排行** | 按流量/包数/会话数排行，支持按源或目的维度切换 |
-| **flow_records 分区** | 按日自动分区，过期自动清理，避免单表膨胀 |
-
-> 适用场景：带宽滥用检测、异常流量定位、网络容量规划、安全事件溯源。配合交换机/路由器 NetFlow 导出即可，无需在服务器安装 Agent。
+- **代码规模**：服务端 `cmd/server` 约 126 个 Go 文件 / 4 万+ 行，Agent `cmd/agent` 约 69 文件 / 1.8 万+ 行，配套 64 个测试，生产级成熟度。
+- **全链路自托管**：关系数据（PostgreSQL）+ 时序数据（VictoriaMetrics）均在你自己掌控的环境。
+- **欢迎贡献**：Issue、PR、文档与插件均欢迎。
 
 ---
 
-## OceanStor 存储采集
-
-通过华为 OceanStor RESTful API 采集存储阵列的资产与性能数据，纳入统一监控面板：
-
-| 采集项 | 说明 |
-|---|---|
-| **存储池** | 容量/已用/可用/使用率/健康状态 |
-| **LUN** | 容量/分配主机/映射关系/IO 性能 |
-| **控制器** | 状态/CPU 使用率/缓存命中率 |
-| **告警** | 实时告警同步（级别/描述/发生时间） |
-| **磁盘** | 型号/容量/健康状态/所属存储池 |
-
-> 配置：在**能连通存储管理网的那台 Agent** 的 `config.json` 里添加 `oceanstor_targets`（DeviceManager 地址默认端口 8088、账号、密码/密码环境变量，采集间隔可配），改后重启 Agent。⚠ OceanStor **不支持 Redfish**，务必配在 `oceanstor_targets` 段，**不要**填进 `redfish_targets`（否则每轮采集失败、设备不显示）。Agent 首次运行会在配置目录写出含该段的 `config.example.json` 可直接照抄。数据统一存入 PostgreSQL，与主机/硬件资产同一面板查看。
-
----
-
-## 自定义监控（拨测）
-
-面板「监控」页可添加主动拨测，定时探测网站、端口、主机连通性、进程存活，异常时自动告警：
-
-| 类型 | 需要填写 | 判定为异常 |
-|---|---|---|
-| **HTTP 网站** | URL（如 `https://example.com`） | 状态码 ≥ 400，或超时/请求失败 |
-| **TCP 端口** | 主机:端口（如 `10.0.0.5:3306`） | 无法建立连接 |
-| **Ping 主机** | 主机地址 / IP（如 `8.8.8.8`） | 100% 丢包（不可达） |
-| **进程存活** | ① 目标主机 ＋ ② 进程名称 | 目标主机未上报该进程（或离线） |
-
-> 进程监控需先选目标主机再填进程名，因为服务端核对的是该主机 Agent 上报的进程列表。匹配规则为不区分大小写的子串匹配。每项支持列表/胶囊双视图 + 历史曲线回看。
-
----
-
-## 自动化剧本（Playbook）
-
-面板「自动化」页可编排剧本——一组按顺序在目标主机上批量执行的 shell 命令：
-
-**创建剧本**：填名称 + 若干步骤，每步包含：
-- **命令**：一行 shell 命令（Linux `sh -c`、Windows `cmd /c`）
-- **目标**：`全部` / `分类:xxx` / `系统:linux|windows|macos` / `主机:<ID>`
-- **超时**（秒）与**失败后是否继续**
-
-**执行原理**：命令经 Agent 反向通道下发，以一次性子进程执行、回传输出与退出码。所有匹配在线主机并行执行，每台按步骤顺序运行。执行历史保留最近 100 次。
-
-> 命令为非交互式，不要用 `vim`/`top`/`ssh` 等需交互的程序。每步是独立进程，`cd`/`export` 不跨步骤保留——连续操作写同一步内用 `&&` 串联。
-
----
-
-## 端口转发与 HTTP 代理
-
-通过 Agent 反向隧道，无需目标主机开放端口即可访问其内部服务。支持 TCP / UDP / HTTP 三种协议，其中 TCP 与 UDP 还支持端口范围批量转发：
-
-### TCP / UDP 端口映射
-
-将远端主机的 TCP 或 UDP 端口持久映射到服务端本地端口。TCP 适合数据库、SSH 等长连接协议；UDP 适合 DNS、游戏、音视频等基于数据报的服务：
-
-```bash
-# 例：将 Agent 所在主机的 MySQL 3306 映射到服务端 13306 端口（TCP）
-# 面板「转发」页创建规则，或 API：
-curl -X POST http://<服务端>:8529/api/v1/forward \
-  -d '{"host_id":"abc123","target_port":3306,"local_port":13306}'
-
-# UDP 示例：映射 DNS 53 到本地 1353
-curl -X POST http://<服务端>:8529/api/v1/forward \
-  -d '{"host_id":"abc123","target_port":53,"local_port":1353,"protocol":"udp"}'
-
-# 然后用本地客户端直连
-mysql -h 127.0.0.1 -P 13306 -u root -p
-```
-
-- 通过 `protocol` 指定 `tcp`（默认）或 `udp`
-- 支持自动分配端口（`local_port: 0`）或指定端口
-- 规则可启用/禁用/编辑/复制/删除
-- 监听地址可配置（`forward_listen`），默认 `127.0.0.1`（仅限本机），Docker 部署需设为 `0.0.0.0` 或通过 `AIOPS_FORWARD_LISTEN` 环境变量覆盖
-- 端口范围可配置（`forward_port_range`），Docker 部署需与 `ports` 映射一致
-
-### TCP / UDP 端口范围批量转发
-
-TCP 与 UDP 支持一次性映射整段连续端口：填写起始端口 `target_port` 与结束端口 `target_port_end`（**含端点**，且 `target_port_end > target_port`），系统为区间内每个端口各创建一条独立规则，同一批次共享组 ID，可整组启用 / 停用 / 删除，无需逐条操作。**单批最多 100 个端口**。
-
-```bash
-# 例：将 Agent 主机 abc123 的 UDP 5000–5010 整段映射（共 11 个端口，归为一组）
-curl -X POST http://<服务端>:8529/api/v1/forward \
-  -d '{"host_id":"abc123","target_port":5000,"target_port_end":5010,"protocol":"udp"}'
-```
-
-> 说明：端口范围批量转发仅适用于 TCP / UDP；HTTP 转发走下方无状态代理隧道，按需逐 URL 访问，不存在「整段端口」概念。
-
-### HTTP 反向代理
-
-无状态代理，无需创建规则，直接通过 URL 访问目标主机的 Web 服务：
-
-```bash
-# 访问 Agent 主机 abc123 上 8080 端口的 /api/health
-curl http://<服务端>:8529/proxy/abc123/8080/api/health
-
-# 支持所有 HTTP 方法 + WebSocket 升级
-ws://<服务端>:8529/proxy/abc123/8080/ws
-```
-
-- 支持 GET/POST/PUT/DELETE/PATCH 全方法
-- 支持 WebSocket 升级（需 Nginx 配置 Upgrade 头）
-- 面板可保存常用代理为快捷入口
-- `window.open()` 场景使用一次性 proxy_token 鉴权
-
-> 端口转发默认开启，可在告警设置中通过 `forward_disabled: true` 全局关闭。
-
----
-
-## 远程终端
-
-- **多标签**：主机卡片一键打开，可同时开多台主机/多个终端
-- **收起悬浮卡片**：点击「收起」按钮将终端最小化到右下角悬浮卡片，WebSocket 保持连接；支持多窗口并行收起、垂直堆叠；点击卡片即可展开恢复，不影响会话
-- **会话录制与回放**：自动录制（带时间戳帧 + 终端尺寸变化），支持进度条拖拽、倍速播放；回放时自动还原录制时的终端尺寸，避免排版错乱
-- **只读旁观**：多名管理员可同时旁观活跃会话，用于协作排障
-- **命令级审计**：执行的命令自动提取写入操作日志
-- **跨平台 TTY**：Windows ConPTY（chcp 65001 + GBK→UTF-8）、Linux/macOS openpty
-- **免开端口**：经 Agent 反向连接，被控端无需开放 22/入站端口
-
-> 终端/剧本共用 Agent 反向通道，同一主机同一时刻只服务一个会话。跨外网使用需按 [Nginx 配置](#跨网络部署) 放行 WebSocket。
-
----
-
-## Android 移动端
-
-基于 **Kotlin + Jetpack Compose** 开发的原生 Android 客户端，非 WebView 套壳，提供流畅的移动运维体验：
-
-| 功能 | 说明 |
-|---|---|
-| **主机总览** | CPU / 内存 / 磁盘 / 网络实时指标，多主机流畅切换，支持分类筛选与搜索 |
-| **告警推送** | 严重告警手机弹窗通知，点开即看详情与处置建议 |
-| **远程终端** | 内置安全终端，手机也能 SSH 排障，会话可回放审计 |
-| **硬件报表** | 硬件资产一览、Redfish 巡检结果查看 |
-| **私有化自托管** | 自定义服务器地址，数据始终留在内网，不经过任何第三方服务 |
-
-**技术栈**：
-- Kotlin 2.x + Jetpack Compose（Material 3 设计语言）
-- Retrofit + OkHttp 网络层，协程异步架构
-- Room 本地缓存，离线查看最近数据
-- 深色/浅色主题自适应
-
-**安装方式**：
-- 从项目 Releases 页下载 APK 直接安装
-- 首次启动配置服务端地址（内网 IP 或域名）
-- 登录凭据与 Web 端共用同一套 RBAC 账户体系
-
-> Android 客户端与服务端通过 RESTful API 通信，所有接口与 Web 面板相同，无需额外配置。
-
----
-
-## 插件开发
-
-插件 = 一个可执行脚本，向 stdout 打印 JSON 对象。用 SDK 只需几行：
-
-```python
-# plugins/my_check.py
-from plugin_sdk import Plugin
-
-p = Plugin()
-p.metric("mysql.connections", 42)          # 自定义指标（gauge）
-p.metric("mysql.qps", 1350.5)
-p.event("warning", "主从延迟 8s")           # 事件（info | warning | critical）
-p.emit()                                   # 输出 JSON
-```
-
-放进 `plugins/` 目录即自动发现并按 `--plugin-interval` 周期执行。插件崩溃/超时/坏 JSON 只记录跳过，不影响核心。非 `.py` 可执行文件也能作为插件，可用任意语言编写。
-
----
-
-## 告警配置
-
-告警在面板可视化配置，无需改文件：
-
-1. 面板右上角 **告警设置**
-2. 填飞书或钉钉 Webhook（钉钉加签需填 Secret），勾选启用
-3. **邮件推送**：展开 SMTP 区域，填服务器/端口/账号/授权码，465 端口选隐式 TLS，587 不选
-4. **短信推送**：展开「短信」区域，选服务商（**阿里云 / 华为云 / 腾讯云**），填 AccessKey / SecretKey / 短信签名 / 模板 CODE / 接收手机号；华为云 / 腾讯云还需填应用标识（`app_id`，华为=project_id、腾讯=SmsSdkAppId），可选自定义模板参数 JSON，勾选启用
-5. **语音电话推送**：展开「语音通知」区域，选服务商（阿里云 / 华为云 / 腾讯云），填 AccessKey / SecretKey / 被叫号码 / 语音模板 TTS CODE（可选 TTS 参数），华为 / 腾讯需填 `app_id`（华为=project_id、腾讯=VoiceSdkAppid），勾选启用；将告警文本转为语音（TTS）呼叫值班人
-6. 点 **发送测试** 确认通道连通（可单独验证短信 / 语音电话）
-7. 点 **保存** — 保存后立即补推当前未恢复告警
-
-| 告警类型 | 触发条件 | 级别 |
-|---|---|---|
-| CPU / 内存 / 磁盘 | 超过设定阈值 | 警告 / 严重 |
-| 主机失联 | 超过设定时长未上报 | 严重 |
-| GPU 使用率 | ≥ 80% 警告，≥ 90% 严重 | 警告 / 严重 |
-| 系统负载 | 5min 负载 ≥ 核数×2 | 警告 / 严重 |
-| HTTP / TCP / Ping / 进程 | 拨测异常 | 自定义 |
-
-> 飞书自定义机器人关键词设为 `AIOps` 或 `告警`。钉钉建议用"加签"安全设置。
-
----
-
-## 告警治理
-
-在通知真正下发前插入一层决策，对 firing 告警做**静默 / 抑制 / 路由**，从源头抑制告警风暴、降低夜间打扰、按业务分流：
-
-- **静默规则（Silence）**：按 `主机 / 类型 / 级别` 匹配，支持**时段**（起止 `HH:MM`，可跨天）+ **星期**临时静默。例如「每天 23:00–08:00 静默非关键告警」。
-- **抑制规则（Inhibit）**：主因告警抑制衍生告警。例如「主机离线」触发后，自动抑制该主机的 CPU/内存/磁盘告警，避免一条故障刷出几十条。
-- **通知路由（Route）**：按匹配分流到指定渠道（飞书 / 钉钉 / 邮件 / 自定义 Webhook）；可设 `Continue` 继续命中下一条规则。例如「严重告警走电话/钉钉，警告只走飞书」。
-- **恢复通知一律照发**，不受静默影响，确保故障解除可知。
-
-> 配置入口：面板「告警」→「告警治理」，整体提交后服务端清洗无名规则。
-
-## API 监控
-
-面向「一个业务系统的一批接口」做**批量健康 / 性能黑盒拨测**，补齐主机指标之外的「业务可用性」维度：
-
-- 面板「监控」→「API 监控」添加业务系统，下挂多个接口（URL / 方法 / Header / Body / 期望状态码 / 关键字 / JSONPath / JSON 断言 / 证书预警天数）。
-- 复用高级 HTTP 探测引擎（DNS / TCP / TLS / TTFB 分段计时），结果写入 VictoriaMetrics（`aiops_api_*` 指标族）。
-- 聚合现算：平均时延 / **P95 时延** / 1h·24h **可用率** / 吞吐。
-- 接口异常按业务系统级别走统一告警（与自定义拨测同源）。
-- 适用：网站 / OpenAPI / 微服务接口 SLA 监控、核心链路可用性看板。
-
-## AI 运维助手
-
-基于可插拔 LLM（OpenAI 兼容 / Anthropic / 百炼）的内置**自主运维 Agent 框架** + AI 巡检诊断，是监控数据的智能增值层：
-
-- **AI 巡检（aiops）**：定时 / 手动健康巡检，综合在线 / 离线主机、活跃告警、SLO 突破、近时段错误日志产出健康研判；**未配置 LLM 时自动启用内置启发式兜底，零外部依赖也能跑**。
-- **事件诊断 + RAG**：critical 事件自动触发 AI 根因研判并写入事件时间线；可选启用 **pgvector 诊断向量**检索历史相似案例（需配置向量化模型端点），越用越准。
-- **自主 Agent**：面板「AI 助手」多轮对话（SSE 流式 + 会话持久化），支持 **Function Calling 工具调用**——查询指标 / 检索日志 / 列出告警 / 检索相似案例 / 只读终端巡检；可配置 Agent 规则（rules / templates）与自动审批、终端只读开关。
-- 配置：在「AI 配置」中填写 LLM 端点、模型与密钥（经 `AIOPS_SECRET_KEY` AES 加密落库）并启用智能分析后，即可开启自主 Agent、RAG 诊断等能力。
-
-#### 向量化模型（RAG）配置
-
-RAG 诊断依赖的**向量化（embedding）模型已与对话模型解耦**，可指向任意 OpenAI 兼容的 `/embeddings` 服务（OpenAI text-embedding-3、阿里百炼 text-embedding-v2、以及自建 bge / m3e / gte / text2vec 等本地模型），不再绑定单一厂商：
-
-| 字段（`ai.*`） | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `ai.embed_endpoint` | string | `""` | 向量化端点，留空时**回退复用主对话模型 Endpoint** |
-| `ai.embed_api_key` | string | `""` | 向量化 API Key，留空时回退复用主 API Key（脱敏回显） |
-| `ai.embed_model` | string | `""` | 向量化模型名，如 `text-embedding-3-small` / `text-embedding-v2` / `bge-large-zh` |
-| `ai.embed_dimensions` | int | `1536` | 目标向量维度，**必须与 PostgreSQL `pgvector` 列维度一致** |
-
-- **解耦优势**：对话可用大模型、向量化用轻量嵌入模型，二者独立计费、独立限流，成本与性能各自最优。
-- **维度一致性**：`embed_dimensions` 决定写入 `diagnosis_embeddings` 表的向量长度，须与建表时的 `vector(N)` 列维度对齐（默认 1536），改动维度需同步迁移向量列。
-- **连通性自检**：「AI 配置」页点 **测试向量化配置**（`POST /api/v1/ai/test-embed`）即时校验端点 / 密钥 / 模型是否可用，并回显实际返回的向量维度，避免配置错位导致 RAG 写入失败。
-
-## 统一消息中心
-
-把 SRE 工作流与 AI 产生的通知汇聚为**统一收件箱**：事件 / 告警 / SLO 突破 / 自动修复 / AI 巡检 / 工单，带未读计数、深链跳转、一键已读/全部已读；持久化于 PostgreSQL `kv_state`，刷新不丢。入口：面板右上角铃铛图标。
-
----
-
-## 高级功能
-
-### 多服务端推送
-
-单 Agent 实例同时向多个监控服务端推送数据和建立终端通道。**采集只执行一次，结果广播到所有服务端**。
-
-**配置方法**：在 `config.json` 中使用 `servers` 数组（见上方配置参考），或面板「安装 Agent」弹窗勾选「多服务端推送」输入多个地址。
-
-| 维度 | 说明 |
-|---|---|
-| 采集 | 基础指标 + 插件指标只执行一次，结果广播所有服务端 |
-| 上报 | 各服务端并发推送，8s 超时隔离，互不阻塞 |
-| 鉴权 | 每个服务端独立校验指纹 |
-| 终端通道 | 每个服务端独立长轮询 |
-| 事件重试 | 所有服务端都失败才重新排队；至少一个成功即视为已投递 |
-| 连接池 | 每个服务端独立 `http.Client` + 连接池 |
-
-> 当 `servers` 非空时优先使用；为空时回退到 `server` + `token`（完全向后兼容）。
-
-### 网关中继模式（Relay）
-
-内网仅一台机器可联网时，在该机器以 Relay 模式安装 Agent：中继服务监听本地端口，将内网 Agent 的所有请求反向代理到云监控中心。
-
-```bash
-# ① 网关机器（能联网的机器）
-curl -fsSL "https://cloud-server/install-relay.sh?token=TOKEN" | sudo sh
-
-# ② 内网机器（经网关间接上报）
-curl -fsSL "http://<网关IP>:8529/install.sh?token=TOKEN" | sudo sh
-```
-
-> Relay 与多服务端推送互斥：Relay 是「一台机器代理所有请求到单一上游」，多服务端是「一台机器主动推送到多个上游」。
-
-### 机器指纹鉴权
-
-Agent 注册时将机器指纹（machine-id + 主 MAC 地址的 SHA-256 前 12 位）发送给服务端绑定。后续所有上报与终端通道请求均携带指纹鉴权，**不再依赖安装 Token**——Token 轮换后已装 Agent 无需更新配置。多服务端场景下每个服务端独立校验指纹。
-
----
-
-## 安全机制
-
-### 登录与认证
-
-- **登录鉴权**：用户名 + 密码（加盐 SHA-256）+ 会话 Cookie；登录框不预填默认 admin
-- **MFA 两步验证**：Google Authenticator 兼容 TOTP，启用后需密码 + 6 位动态码
-- **登录限流**：按 IP 滑动窗口限制失败次数（默认 5 分钟 8 次）
-- **会话安全**：`HttpOnly` + `SameSite=Lax`；HTTPS 下自动加 `Secure`；改密清除所有会话
-
-### 多用户 RBAC
-
-- **admin**：全部权限，含用户管理（创建/编辑/删除/重置密码/解绑 MFA）
-- **operator**：除用户管理外的所有操作（终端/剧本/配置/主机删除）
-- **viewer**：仅查看；可管理自己的资料/密码/MFA
-- 路由级拦截：每个 API 请求经 `authMiddleware` → `routeAllowed` 检查权限
-
-### 账户找回（双重验证）
-
-账户找回流程在**未登录**状态下即可完成，无需事先获得会话令牌，采用双重验证确保安全：
-
-| 步骤 | 说明 |
-|---|---|
-| **① 邮箱验证码** | 输入已绑定邮箱 → 系统发送 6 位验证码 → 输入验证码进行第一步验证 |
-| **② MFA 动态口令**（可选） | 若账户已启用 TOTP 两步验证，则进一步要求输入 Google Authenticator 生成的 6 位动态口令作为第二因素 |
-| **③ 获取结果** | 双重验证全部通过后方可显示用户名（找回用户名）或签发一次性重置令牌（重置密码） |
-
-**找回用户名流程**：登录页点击「忘记用户名」→ 输入绑定邮箱 → 收验证码 → 输入验证码 →（若启用 MFA）输入动态口令 → 显示用户名。
-
-**忘记密码流程**：登录页点击「忘记密码」→ 输入绑定邮箱 → 收验证码 → 输入验证码 →（若启用 MFA）输入动态口令 → 设置新密码。重置密码使用一次性令牌（15 分钟有效），无需知晓原密码。
-
-- 验证码安全：6 位随机数、10 分钟 TTL、单次使用、错误 5 次自动作废、60 秒发送间隔限制
-- 邮箱解除 MFA：已登录用户丢失手机时，通过绑定邮箱验证码解除 MFA 绑定
-- 防枚举：无论邮箱/用户名是否存在，服务端均返回统一响应
-
-### Agent 与数据安全
-
-- **强制 Agent Token**（默认开启）：`register`/`report` 必须携带有效 Token（常数时间比较）
-- **请求体上限**：100 MiB（覆盖端口转发文件传输），防超大 JSON 内存耗尽
-- **静态加密**：配置中的 MFA/SMTP/AI/webhook/relay/**短信与语音电话（AccessKey/SecretKey）** 密钥经 `AIOPS_SECRET_KEY` 派生 AES-256-GCM 落库加密
-- **日志加密上报**：Agent 采集的日志经 `gzip + AES-256-GCM` 加密传输（`log_key` 由注册阶段下发），服务端解密入库，传输链路不泄露日志内容
-- **SSRF 出站防护**：AI 端点与通知 Webhook 等「用户可影响 URL」的出站请求经 `safedial` 守卫，默认拒绝云元数据（`169.254.169.254` 等）与链路本地地址；设 `AIOPS_SSRF_STRICT=true` 额外拒绝环回与 RFC1918 私网（覆盖重定向与 DNS rebinding）
-- **加密传输**：可选 TLS（`AIOPS_TLS_CERT/KEY`）；Agent 支持自签 CA 信任（`--ca-cert` / `tls_skip_verify`）
-- **首次登录强制安全初始化**：默认 admin/admin 首登强制走「修改用户名 + 密码」弹窗，不可跳过
-- **安全响应头**：`nosniff`、`DENY`（防点击劫持）、`no-referrer`
-- **密钥脱敏**：Webhook/SMTP 密码掩码回显，空值保持原值
-- **主机身份防克隆**：克隆镜像导致 `agent_state.json` 被复制时自动重生 `host_id`
-- **远程终端双鉴权**：浏览器需登录会话 + Agent 需 Token；开关闭入审计日志
-- **面向公网请置于反向代理之后并启用 HTTPS**
-
----
-
-## 跨网络部署
-
-### 反向代理 / 域名接入（Nginx）
-
-用域名 + HTTPS 对外时走 Nginx 反代。普通监控走默认 HTTP 代理即可；**远程终端**用到 WebSocket 升级 + 长连接实时流，Nginx 默认不转发 `Upgrade` 头且会缓冲，导致「指标正常、终端连不上」。
-
-```nginx
-# http {} 层，全局一次
-map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-
-location / {
-    proxy_pass http://127.0.0.1:8529;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-Host  $host;         # 让安装命令自动用域名
-    proxy_set_header X-Real-IP         $remote_addr;  # 真实客户端 IP（配合 trust_proxy）
-
-    # —— 远程终端必需（缺一不可）——
-    proxy_set_header Upgrade    $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_buffering         off;
-    proxy_request_buffering off;
-    proxy_read_timeout  3600s;
-    proxy_send_timeout  3600s;
-}
-```
-
-> 完整示例见 [deploy/nginx-aiops.conf](deploy/nginx-aiops.conf)。改完 `nginx -t && nginx -s reload`。  
-> 反代后在 `server_config.json` 设 `"trust_proxy": true` 以采信 `X-Real-IP` 做登录限流。  
-> 云负载均衡（ALB/CLB/K8s Ingress）同理：需开启 WebSocket 支持、关闭响应缓冲、空闲超时 ≥1h。
-
-### 终端通道穿透
-
-Agent 采用**主动反向连接**：安装时把服务端地址固化到 `--server`。跨网络时 Agent 必须用**公网可达的域名或 IP**。面板「安装 Agent」弹窗的一键命令自动使用当前访问地址作为 Agent 的 `--server`——通过域名访问面板即可，无需手填。
-
----
-
-## FAQ / 故障排查
-
-<details>
-<summary><b>Agent 上报失败</b></summary>
-
-- 检查 `--server` 地址是否正确，确保服务端已启动
-- 检查防火墙/安全组是否放行了服务端端口（默认 8529）
-- 查看 Agent 日志中的错误信息（`上报失败: ...`）
-</details>
-
-<details>
-<summary><b>远程终端连不上</b></summary>
-
-- **Nginx 反代时**：必须配置 WebSocket 升级头和关闭缓冲（见上方 Nginx 配置）
-- **跨网络时**：安装 Agent 时务必填写公网可达的服务端地址
-- 确认服务端未设置 `terminal_disabled: true`
-</details>
-
-<details>
-<summary><b>终端中文乱码</b></summary>
-
-- Windows ConPTY 已自动 `chcp 65001` + GBK→UTF-8 转换
-- 剧本执行有三层编码保障：chcp 65001 + locale 环境变量 + GBK→UTF-8 API 兜底
-- Linux/macOS 终端默认 UTF-8，无需额外处理
-</details>
-
-<details>
-<summary><b>面板显示连接失败</b></summary>
-
-- 检查服务端是否运行：`curl http://localhost:8529/healthz`
-- 检查浏览器控制台是否有 CORS 或认证错误
-- 尝试强制刷新（Ctrl+Shift+R）
-</details>
-
-<details>
-<summary><b>主机显示离线</b></summary>
-
-- 默认 60 秒未上报即判离线，可在告警设置中调整 `offline_after_sec`
-- 检查 Agent 进程：`ps aux | grep aiops-agent`（Linux）或任务管理器（Windows）
-- 检查 Agent 到服务端的网络连通性
-</details>
-
-<details>
-<summary><b>GPU 信息不显示</b></summary>
-
-- NVIDIA GPU 需安装 `nvidia-smi` 工具
-- AMD GPU（Linux）需要 sysfs 权限
-- macOS 仅支持 Apple Silicon 的 GPU 监控
-- GPU 为 best-effort，无工具时不显示，不影响其他指标
-</details>
-
----
-
-## 技术栈与架构
-
-### 技术选型
-
-| 组件 | 技术 |
-|---|---|
-| **关系存储** | PostgreSQL（配置/用户/审计/事件/工单/会话/密钥） |
-| **时序存储** | VictoriaMetrics（指标/趋势/SLO） |
-| Agent 核心 | Go 1.22+，纯标准库，零第三方依赖 |
-| 服务端 | Go 1.22+，`net/http`（Go 1.22 路由），`embed` 内嵌面板 |
-| 前端面板 | 原生 HTML/CSS/JS，无框架依赖 |
-| Android 客户端 | Kotlin 2.x + Jetpack Compose（Material 3） |
-| 插件层 | Python 3 + psutil（可选） |
-| 告警推送 | 飞书/钉钉 Webhook + 邮件 SMTP + 多云短信 + 多云语音电话（`net/smtp` + 阿里云 / 华为云 / 腾讯云 SMS & TTS 语音） |
-| PWA | manifest.json + Service Worker + icon.svg |
-| 硬件巡检 | Redfish/DMTF 标准协议 + 华为 iBMC 兼容 |
-| 流量分析 | NetFlow v5/v9/IPFIX 内置采集 |
-
-### 架构图
-
-```
-                ┌─────────────── Go Agent 核心 ───────────────┐
-                │  Collector（三平台原生采集）→ 基础指标          │
-                │  PluginRunner → 并发调度 Python 插件           │
-                │  Reporter → 广播到所有服务端（独立连接池）      │
-  Report ─HTTP─►│  Terminal → 每服务端独立反向通道               │
-                │  与后端共享 shared/ 类型                       │
-                └──┬──────────────────────────┬─────────────────┘
-                   │                          │
-              ┌────┴────┐               ┌─────┴─────┐
-              │ 服务端 A │               │  服务端 B  │  （多服务端推送）
-              └─────────┘               └───────────┘
-
-┌──────────────────────────────┐    ┌──────────────────────────────┐
-│   外部采集器（无需 Agent）      │    │   Android 移动端              │
-│  • Redfish/BMC 硬件巡检       │    │  Kotlin + Jetpack Compose    │
-│  • NetFlow 流量采集           │    │  主机总览 / 告警 / 终端 / 报表 │
-│  • OceanStor 存储采集         │    │  私有化自托管                  │
-└──────────────┬───────────────┘    └──────────────┬───────────────┘
-               │ RESTful API / UDP                  │ RESTful API
-               ▼                                    ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                    AIOps Monitor 服务端                          │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │
-│  │告警引擎 │ │SRE 中枢 │ │AI 巡检  │ │远程终端 │ │剧本编排 │ │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ PostgreSQL（关系数据） + VictoriaMetrics（时序数据）          ││
-│  └─────────────────────────────────────────────────────────────┘│
-└──────────────────────────────────────────────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────┐
-│   Python 插件层              │
-│  • 自定义采集 (psutil 兜底) │
-│  • AI / 异常检测             │
-│  • 进程监控                  │
-└──────────────────────────────┘
-```
-
-**分工原则**：高频、通用、对性能敏感的基础采集用 Go（单二进制、无依赖）；多变、需要生态的自定义/AI 逻辑用 Python。外部采集器（Redfish/NetFlow/OceanStor）走标准协议、**由某台 Agent 远程轮询采集**——被采集设备（BMC/存储/交换机）本身无需安装 Agent，但需要一台能连通它的 Agent 运行采集器（在该 Agent 的 `config.json` 配置目标）。Android 移动端走 RESTful API 与服务端通信。进程边界隔离，各自演进。
-
-### 目录结构
-
-```
-aiops-monitor/
-├── go.mod                          # Go module
-├── shared/
-│   └── wire.go                     # ★ 共享类型（Agent ↔ Server 契约）
-├── cmd/
-│   ├── server/                     # Go 服务端
-│   │   ├── main.go                 # 入口、路由、中间件
-│   │   ├── handlers.go             # API 处理器（路由分发）
-│   │   ├── pgstore.go              # ★ PostgreSQL 持久化层
-│   │   ├── store.go                # 内存存储 + 多级降采样热缓存
-│   │   ├── db.go                   # ~~内嵌轻量库~~（已停用，保留兼容）
-│   │   ├── alerts.go               # 阈值告警引擎
-│   │   ├── auth.go                 # 登录认证 + MFA + RBAC
-│   │   ├── users.go                # 多用户管理
-│   │   ├── check.go                # 自定义监控（HTTP/TCP/Ping/进程）
-│   │   ├── ws.go                   # 手写 WebSocket（远程终端/转发）
-│   │   ├── terminal.go             # 远程终端中转 + 二次认证
-│   │   ├── forward.go              # TCP/UDP 端口转发 + HTTP 代理
-│   │   ├── notify.go               # 飞书/钉钉/邮件/短信/语音推送
-│   │   ├── email.go                # SMTP + 验证码管理
-│   │   ├── playbook.go             # 自动化剧本引擎
-│   │   ├── totp.go                 # TOTP 两步验证
-│   │   ├── config.go               # 配置持久化 + AES-256-GCM 加密
-│   │   ├── crypto.go               # 配置密钥 AES-256-GCM 静态加密
-│   │   ├── incident.go             # SRE 事件管理
-│   │   ├── remediation.go          # SRE 告警→剧本自动修复
-│   │   ├── slo.go                  # SLO / 错误预算
-│   │   ├── ticket.go               # 工单系统
-│   │   ├── alertgov.go             # 告警治理（静默/抑制/路由）
-│   │   ├── apimon.go               # API 监控（业务接口拨测）
-│   │   ├── logstore.go             # 日志聚合与检索
-│   │   ├── aiops.go                # AI 巡检诊断（可插拔 LLM + 启发式）
-│   │   ├── message.go              # 统一消息中心
-│   │   ├── safedial.go             # SSRF 出站防护
-│   │   ├── install.go              # 一键安装脚本生成
-│   │   ├── hardware.go             # 硬件资产统一面板（Redfish + OceanStor）
-│   │   ├── netflow.go              # NetFlow 流量采集与分析
-│   │   ├── export.go               # 通用文档导出（Markdown/Excel/Word/PDF）
-│   │   └── web/                    # 面板前端（编译时 embed）
-│   │       ├── index.html / app.js / style.css
-│   │       ├── manifest.json / sw.js / icon.svg
-│   │       ├── js/                     # 模块化 JS
-│   │       │   ├── hardware.js         # 硬件资产面板
-│   │       │   ├── netflow.js          # NetFlow 流量分析
-│   │       │   ├── export.js           # 通用文档导出
-│   │       │   └── ...
-│   └── agent/                      # ★ Go Agent 核心
-│       ├── main.go                 # 配置 / flag / 信号
-│       ├── collector.go            # Collector 接口
-│       ├── collector_linux.go      # Linux 原生采集
-│       ├── collector_windows.go    # Windows 原生采集
-│       ├── collector_darwin.go     # macOS 原生采集
-│       ├── collector_other.go      # 其他平台桩
-│       ├── gpu.go                  # GPU 采集（三平台共用）
-│       ├── terminal.go             # 远程终端 Agent 侧
-│       ├── pty_windows.go          # Windows ConPTY
-│       ├── pty_unix.go             # Linux/macOS openpty
-│       ├── pty_linux.go / pty_darwin.go
-│       ├── forward.go              # TCP/UDP 端口转发 + HTTP 代理
-│       ├── relay.go                # 网关中继模式
-│       ├── infra.go                # 韧性原语（退避/熔断器/脱敏）
-│       ├── plugins.go              # 插件运行器（Python/Shell）
-│       ├── identity.go             # 稳定 host_id / 指纹防克隆
-│       ├── logcollect.go           # 日志采集（增量 tail + 加密上报）
-│       ├── tls.go                  # Agent↔Server TLS CA 信任
-│       ├── zmodem.go               # 终端内 ZMODEM 文件传输
-│       ├── collector_redfish.go    # ★ Redfish 硬件巡检（含华为 iBMC）
-│       ├── collector_redfish_vendor_test.go  # 华为 iBMC 厂商路径单测
-│       ├── collector_oceanstor.go  # ★ OceanStor 存储采集
-│       └── reporter.go             # 双心跳上报 + 多服务端广播
-├── plugins/                        # ★ Python 插件层
-│   ├── plugin_sdk.py               # 插件 SDK
-│   ├── core_metrics.py             # psutil 兜底
-│   ├── example_service_check.py    # 示例：服务探活
-│   ├── example_ai_anomaly.py       # 示例：异常检测
-│   ├── process_monitor.py          # 进程监控
-│   └── requirements.txt
-├── android/                        # ★ Android 移动端（Kotlin + Jetpack Compose）
-├── website/                        # 营销网站（三语 i18n）
-├── deploy/
-│   └── nginx-aiops.conf            # Nginx 反代示例
-├── dist/                           # Agent 分发（各平台二进制）
-├── bin/                            # 预编译产物
-├── config.example.json             # Agent 配置示例
-├── server_config.example.json      # 服务端配置示例
-├── Dockerfile                      # 多阶段构建
-├── docker-compose.yml              # Docker Compose
-└── INSTALL.md                      # 详细安装指南
-```
-
-### 关键设计
-
-- **共享代码**：`shared/wire.go` 被 server 与 agent 同时 import，契约不会漂移
-- **双心跳上报**：基础指标高频上报；插件低频执行，结果随基础上报一并发送
-- **进程级隔离**：插件跑在子进程里，超时可强杀，一个坏插件不拖垮核心
-- **告警去重**：仅在"新触发"和"恢复"时各推一次，持久告警不刷屏
-- **多级降采样**：原始（≈1.5h）/ 1 分钟聚合（48h）/ 5 分钟聚合（30 天）三层
-- **统一存储**：关系数据（配置/用户/审计/事件/工单/会话）落 PostgreSQL，时序数据（指标/趋势/SLO）落 VictoriaMetrics；内置 aiops.db 已彻底停用（内存三级窗口仅作热缓存）
-- **gzip 压缩**：多主机轮询 JSON 可压 ~8-10 倍，WebSocket 升级自动跳过
-
----
-
-## 性能与规模
-
-- **带宽**：gzip 压缩 ~8-10 倍，3000 台每 3s 轮询 `/hosts` 下行从 MB/s 降到百 KB/s 级
-- **上报吞吐**：3000 台 × 每 10s ≈ 300 次/s，`Upsert` 仅短暂持写锁
-- **内存**：每台三层历史 ~1-2 MB，3000 台约需 4-7 GB（可下调保留常量换取更低内存）
-- **渲染**：主机列表分页（每页 9），DOM 只渲染当前页
-- **调优**：主机多时增大 `--interval`（如 10-15s）降低上报/带宽
-
-> **结论**：gzip + 分页 + 多级降采样 + 持久化使单实例可稳定支撑约 3000 台。万级建议历史外接 VictoriaMetrics 等时序库。
-
----
-
-## API 参考
-
-<details>
-<summary>展开完整 API 列表</summary>
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| **Agent 通信** | | |
-| POST | `/api/v1/agent/register` | Agent 注册 |
-| POST | `/api/v1/agent/report` | 上报（base + custom + events） |
-| **主机管理** | | |
-| GET | `/api/v1/hosts` | 主机列表（含最新指标、在线状态） |
-| GET | `/api/v1/hosts/meta` | 主机精简元数据 |
-| GET | `/api/v1/hosts/{id}/metrics` | 单主机基础指标历史 |
-| GET | `/api/v1/hosts/{id}/history` | 单主机时序历史（自动选层） |
-| POST | `/api/v1/hosts/{id}/category` | 设置主机分类 |
-| DELETE | `/api/v1/hosts/{id}` | 删除主机 |
-| **告警管理** | | |
-| GET | `/api/v1/alerts` | 阈值告警 + 自定义监控告警 |
-| POST | `/api/v1/alerts/ack` | 确认告警 |
-| POST | `/api/v1/alerts/silence` | 静默告警 |
-| POST | `/api/v1/alerts/clear` | 清除告警 |
-| GET | `/api/v1/events` | 插件事件 |
-| GET | `/api/v1/activity` | 操作与系统日志 |
-| GET | `/api/v1/summary` | 汇总统计 |
-| **自定义监控** | | |
-| GET | `/api/v1/checks` | 自定义监控列表 |
-| POST | `/api/v1/checks` | 添加/更新监控 |
-| POST | `/api/v1/checks/{id}/run` | 立即检测 |
-| GET | `/api/v1/checks/{id}/history` | 检查历史时序 |
-| DELETE | `/api/v1/checks/{id}` | 删除监控 |
-| **自动化运维** | | |
-| GET | `/api/v1/playbooks` | 剧本列表 |
-| POST | `/api/v1/playbooks` | 创建/更新剧本 |
-| DELETE | `/api/v1/playbooks/{id}` | 删除剧本 |
-| POST | `/api/v1/playbooks/{id}/execute` | 执行剧本 |
-| GET | `/api/v1/playbooks/executions` | 执行历史 |
-| GET | `/api/v1/playbooks/executions/{id}` | 执行详情 |
-| **终端** | | |
-| GET | `/api/v1/terminal/sessions` | 活跃会话列表 |
-| GET | `/api/v1/terminal/sessions/{id}/replay` | 会话录制回放 |
-| GET | `/api/v1/terminal/sessions/{id}/observe` | 只读旁观（WebSocket） |
-| GET | `/api/v1/hosts/{id}/terminal` | 浏览器 WebSocket 终端 |
-| GET | `/api/v1/agent/terminal/wait` | Agent 长轮询 |
-| GET | `/api/v1/agent/terminal/rx` | Server → Agent 帧流 |
-| POST | `/api/v1/agent/terminal/tx` | Agent → Server 输出流 |
-| **配置管理** | | |
-| GET | `/api/v1/config` | 获取告警配置（脱敏） |
-| POST | `/api/v1/config` | 更新告警配置 |
-| POST | `/api/v1/config/test` | 发送测试消息 |
-| **认证与账户** | | |
-| POST | `/api/v1/login` | 登录 |
-| POST | `/api/v1/logout` | 退出 |
-| GET | `/api/v1/me` | 当前用户信息 |
-| POST | `/api/v1/profile` | 更新个人资料 |
-| POST | `/api/v1/password` | 修改密码 |
-| POST | `/api/v1/mfa/setup` | 生成 MFA 密钥 + QR URI |
-| POST | `/api/v1/mfa/enable` | 启用 MFA |
-| POST | `/api/v1/mfa/disable` | 关闭 MFA |
-| POST | `/api/v1/mfa/unbind-via-email` | 邮箱解除 MFA |
-| **账户找回** | | |
-| POST | `/api/v1/account/recover-send-code` | 发送验证码（邮箱 + 目的：找回用户名/密码） |
-| POST | `/api/v1/account/recover-verify` | 验证邮箱验证码（若启用 MFA 返回 `mfa_required`） |
-| POST | `/api/v1/account/recover-verify-mfa` | 验证 TOTP 动态口令（MFA 第二因素） |
-| POST | `/api/v1/account/recover-username` | [兼容] 找回用户名 |
-| POST | `/api/v1/account/send-reset-code` | [兼容] 发送重置验证码 |
-| POST | `/api/v1/account/reset-password` | 重置密码（支持 `reset_token` 或 `username+email+code`） |
-| **用户管理（admin）** | | |
-| GET | `/api/v1/users` | 用户列表 |
-| POST | `/api/v1/users` | 创建用户 |
-| POST | `/api/v1/users/{username}` | 更新用户 |
-| DELETE | `/api/v1/users/{username}` | 删除用户 |
-| POST | `/api/v1/users/{username}/reset-password` | 重置密码 |
-| POST | `/api/v1/users/{username}/reset-mfa` | 解绑 MFA |
-| **安装分发** | | |
-| GET | `/api/v1/install/info` | 安装信息 |
-| POST | `/api/v1/install/reset-token` | 重置 Token |
-| GET | `/install.sh` / `/install.ps1` | 安装脚本 |
-| GET | `/uninstall.sh` / `/uninstall.ps1` | 卸载脚本 |
-| **端口转发** | | |
-| GET | `/api/v1/forward` | 转发规则列表 |
-| POST | `/api/v1/forward` | 创建 TCP 转发规则 |
-| DELETE | `/api/v1/forward/{id}` | 删除转发规则 |
-| PUT | `/api/v1/forward/{id}` | 编辑转发规则 |
-| PUT | `/api/v1/forward/{id}/toggle` | 启用/禁用规则 |
-| POST | `/api/v1/forward/{id}/copy` | 复制转发规则 |
-| GET | `/api/v1/forward/stats` | 转发统计 |
-| GET | `/api/v1/forward/health` | 转发健康检查 |
-| **HTTP 代理** | | |
-| GET | `/api/v1/http-proxy` | 代理快捷入口列表 |
-| POST | `/api/v1/http-proxy` | 创建代理快捷入口 |
-| DELETE | `/api/v1/http-proxy/{id}` | 删除代理快捷入口 |
-| PUT | `/api/v1/http-proxy/{id}` | 编辑代理快捷入口 |
-| PUT | `/api/v1/http-proxy/{id}/toggle` | 启用/禁用代理 |
-| POST | `/api/v1/http-proxy/{id}/copy` | 复制代理快捷入口 |
-| GET | `/api/v1/proxy-token` | 获取一次性代理鉴权 Token |
-| GET/POST/PUT/DELETE/PATCH | `/proxy/{hostID}/{port}/{path...}` | HTTP 反向代理（透传到目标主机） |
-| **Agent 转发通道** | | |
-| GET | `/api/v1/agent/forward/wait` | Agent 长轮询等待转发任务 |
-| GET | `/api/v1/agent/forward/rx` | Server → Agent 转发数据流 |
-| POST | `/api/v1/agent/forward/tx` | Agent → Server 转发数据流 |
-| **实时推送** | | |
-| GET | `/ws/push` | WebSocket 实时推送（主机状态/告警） |
-| **SRE · 事件** | | |
-| GET | `/api/v1/incidents` | 事件列表 |
-| POST | `/api/v1/incidents` | 手动创建事件 |
-| GET | `/api/v1/incidents/{id}` | 事件详情（含时间线） |
-| POST | `/api/v1/incidents/{id}/ack` | 认领事件 |
-| POST | `/api/v1/incidents/{id}/resolve` | 解决事件 |
-| POST | `/api/v1/incidents/{id}/comment` | 追加评论 |
-| POST | `/api/v1/incidents/{id}/ticket` | 升级为工单 |
-| POST | `/api/v1/incidents/{id}/diagnose` | AI / 启发式根因诊断 |
-| **SRE · 自动修复** | | |
-| GET | `/api/v1/remediation/rules` | 修复规则列表 |
-| POST | `/api/v1/remediation/rules` | 创建 / 更新规则 |
-| DELETE | `/api/v1/remediation/rules/{id}` | 删除规则 |
-| GET | `/api/v1/remediation/runs` | 执行记录 |
-| POST | `/api/v1/remediation/runs/{id}/approve` | 审批通过并执行 |
-| POST | `/api/v1/remediation/runs/{id}/reject` | 驳回待审批修复 |
-| **SRE · SLO** | | |
-| GET | `/api/v1/slos` | SLO 列表（含 SLI / 错误预算） |
-| POST | `/api/v1/slos` | 创建 / 更新 SLO |
-| DELETE | `/api/v1/slos/{id}` | 删除 SLO |
-| **SRE · 工单** | | |
-| GET | `/api/v1/tickets` | 工单列表 |
-| POST | `/api/v1/tickets` | 创建工单 |
-| GET | `/api/v1/tickets/{id}` | 工单详情 |
-| POST | `/api/v1/tickets/{id}` | 更新工单（状态 / 指派等） |
-| POST | `/api/v1/tickets/{id}/comment` | 追加评论 |
-| DELETE | `/api/v1/tickets/{id}` | 删除工单 |
-| **日志聚合** | | |
-| POST | `/api/v1/agent/logs` | Agent 日志上报（指纹鉴权） |
-| GET | `/api/v1/logs` | 日志检索（`host` / `level` / `q` / `since_min` / `limit`） |
-| **AI 巡检与诊断** | | |
-| GET | `/api/v1/ai/config` | 获取 AI Provider 配置 |
-| POST | `/api/v1/ai/config` | 保存 AI Provider 配置 |
-| GET | `/api/v1/ai/inspections` | 巡检报告列表 |
-| POST | `/api/v1/ai/inspect` | 立即执行一次巡检 |
-| **API 监控** | | |
-| GET | `/api/v1/apimon/systems` | 业务系统列表（实时状态 + VM 聚合） |
-| POST | `/api/v1/apimon/systems` | 添加 / 更新业务系统 |
-| POST | `/api/v1/apimon/systems/{id}/run` | 立即探测 |
-| DELETE | `/api/v1/apimon/systems/{id}` | 删除业务系统 |
-| GET | `/api/v1/apimon/endpoints/{id}/history` | 接口历史时序 |
-| **告警治理** | | |
-| GET | `/api/v1/alerts/governance` | 治理规则（静默/抑制/路由） |
-| POST | `/api/v1/alerts/governance` | 保存治理规则 |
-| **AI 运维助手** | | |
-| POST | `/api/v1/ai/chat` | AI 对话（SSE 流式） |
-| POST | `/api/v1/ai/diagnose` | 事件 AI 根因诊断 |
-| GET | `/api/v1/ai/inspections` | 巡检报告列表 |
-| **消息中心** | | |
-| GET | `/api/v1/messages` | 消息列表 + 未读数（事件 / AI / 自动修复 / 工单） |
-| POST | `/api/v1/messages/read` | 标记指定消息已读 |
-| POST | `/api/v1/messages/read-all` | 全部标记已读 |
-| **其他** | | |
-| GET | `/` | Web 面板 |
-| GET | `/healthz` | 健康检查 |
-| GET | `/dl/*` | Agent 二进制下载 |
-
-</details>
-
----
-
-## 路线图
-
-### 已实现
-
-- [x] Go Agent 核心：三平台原生采集 + 稳定身份 + 双心跳上报 + 断连重排队
-- [x] GPU 监控：NVIDIA / AMD / Apple，best-effort + 缓存
-- [x] Python 插件层 + SDK + 示例（服务探活 / 异常检测 / 进程监控 / psutil 兜底）
-- [x] Go 服务端：内存存储 + 多级降采样 + 内嵌持久化（重启不丢）
-- [x] 自定义监控：HTTP / TCP / Ping / 进程；列表·胶囊双视图 + 历史曲线
-- [x] 交互式趋势图：悬停十字线 + 框选放大 + 放大预览 + 渐变填充 + 30 天历史跨度
-- [x] 登录认证 + 安全加固：加盐口令 + 限流 + 强制 Token + 安全头 + 密钥脱敏 + 防克隆
-- [x] MFA 两步验证（TOTP）+ 账户找回双重验证（邮箱验证码 + 可选 MFA）+ 邮箱解除 MFA
-- [x] 邮件告警推送（SMTP）
-- [x] 实时面板：概览 + TOP10 + 分类分组/搜索/分页 + 卡片·列表双视图 + 宽屏切换
-- [x] 告警推送：飞书 / 钉钉 + 邮件，去重 + 状态转换 + 服务端防抖（连续 2 次才切换状态）
-- [x] gzip 压缩 + PWA 安装 + 移动端响应式 + 版本号自动注入（Git tag → ldflags）
-- [x] 分类多选筛选 + 折叠 + 键盘快捷键
-- [x] 远程终端：反向连接 + 全 TTY + 多标签 + 收起悬浮卡片 + 录制回放（含终端尺寸还原） + 只读旁观 + 命令审计
-- [x] 自动化剧本：多步骤编排 + 批量并行 + 专用执行通道 + 中文乱码三层修复
-- [x] 多用户 RBAC：三角色 + 用户管理界面 + 路由级拦截
-- [x] 多服务端推送：采集一次广播所有 + 独立鉴权/重试/连接池
-- [x] 网关中继模式：自动穿透二进制/上报/终端
-- [x] 机器指纹鉴权：Token 轮换不影响已装 Agent
-- [x] 一键安装：自动检测架构 + 下载 + 配置 + 开机自启
-- [x] 侧栏实时时钟：YYYY-MM-DD HH:mm:ss，每秒更新，适配浅色/深色主题
-- [x] 端口转发（TCP/UDP 映射 + 端口范围批量）+ HTTP 反向代理：经 Agent 隧道免开端口访问远端服务
-- [x] 告警确认/静默/清除 + WebSocket 实时推送
-- [x] 全局强制 MFA 策略 + 浅色主题
-- [x] 终端文件传输（ZMODEM/lrzsz）+ 终端悬浮卡片最小化
-- [x] 资源热力图仪表盘 + 全链路 i18n 国际化（中/英/繁中）
-- [x] 终端二次认证：访问终端前需再次验证密码或 MFA 动态口令
-- [x] 安全协议确认流程：终端/剧本使用前需阅读并同意安全协议
-- [x] 告警阈值三档预设：保守 / 标准 / 宽松，一键切换适配不同场景
-- [x] 管理员密码重置 CLI 子命令 + 环境变量覆盖配置（`AIOPS_*`）
-- [x] TCP 转发默认监听 127.0.0.1 + 可配置监听地址与端口范围
-- [x] 告警治理：静默（时段/星期）/ 抑制（主因抑衍生）/ 路由（按级别·主机分流渠道）
-- [x] 告警通知渠道扩展：**多云短信 + 多云语音电话**（阿里云 / 华为云 / 腾讯云，SMS & TTS 语音）推送，与飞书/钉钉/邮件协同
-- [x] 报警阈值自定义：27 组 warn/crit 细粒度阈值（主机 / 拨测 / API / 任务 / 转发五大维度），零值自动兜底默认
-- [x] 向量化模型解耦：RAG 嵌入模型独立配置（端点 / 密钥 / 模型 / 维度），支持任意 OpenAI 兼容 `/embeddings` + 一键连通性自检
-- [x] API 监控：业务系统接口批量黑盒拨测（可用性 / 时延 / P95 / 吞吐）
-- [x] AI 运维助手：可插拔 LLM 巡检诊断 + RAG 相似案例 + 自主 Agent（Function Calling）
-- [x] 统一消息中心：事件 / 告警 / SLO / 自动修复 / AI / 工单 统一收件箱
-- [x] 安全加固：SSRF 出站防护（safedial）、日志 AES-256-GCM 加密上报、pgvector RAG 诊断向量
-- [x] Agent 增强：日志采集（加密上报）、Agent↔Server TLS CA 信任、ZMODEM 文件传输、机器指纹防克隆
-- [x] 硬件巡检（Redfish）：标准 Redfish/DMTF 协议采集服务器硬件资产，含华为 iBMC 兼容性（ProcessorView/MemoryView）
-- [x] NetFlow / 五元组流量分析：NetFlow v5/v9/IPFIX 采集，五元组流量统计与 TOP-N 排行，flow_records 按日分区
-- [x] OceanStor 存储采集：华为 OceanStor RESTful API 采集存储池/LUN/控制器/告警等资产与性能数据
-- [x] Android 移动端：原生 Kotlin + Jetpack Compose 开发，主机总览/告警推送/远程终端/硬件报表
-- [x] 通用文档导出：Markdown / Excel(.xlsx) / Word(.docx) / PDF 四种格式，零第三方依赖
-- [x] 统一存储架构：PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据），内置 aiops.db 已彻底停用
-
-### 进行中 / 计划中
-
-- [ ] 超大规模（万级）：历史外接 VictoriaMetrics、`/hosts` 服务端分页/增量、保留期可配置
-- [ ] 插件增强：每插件独立周期、插件级配置、指标类型（counter/histogram）
-- [ ] AIOps 演进层：时序异常检测（Prophet / statsmodels）、告警降噪/关联、根因分析、容量预测
-- [ ] 智能运维助手：对接 RAGFlow + Dify + 本地 vLLM
-
----
-
-## 更新日志
-
-<details>
-<summary>v5.3.0 — 终端二次认证 · 安全协议 · 告警阈值分级</summary>
-
-- 终端二次认证：访问终端前需再次验证密码或 MFA 动态口令，提升敏感操作安全性
-- 安全协议确认流程：首次使用终端/剧本需阅读并同意安全协议，记录同意时间戳
-- 告警阈值三档预设：保守/标准/宽松，面板一键切换，适配不同部署场景
-- 管理员密码重置 CLI 子命令（`aiops-server reset-password`）
-- 环境变量覆盖配置：`AIOPS_FORWARD_LISTEN`、`AIOPS_TERMINAL_DISABLED` 等 8 个变量
-- TCP 转发默认监听地址改为 `127.0.0.1`（提升安全性），Docker 部署通过环境变量设为 `0.0.0.0`
-- i18n 国际化完善：补齐 en/zh-TW 缺失翻译，前端字典新增补充
-- 多项 UI/UX 修复与样式优化
-</details>
-
-<details>
-<summary>v5.2.7 — Windows Agent 卸载修复</summary>
-
-- 修复卸载脚本未终止 `wscript.exe` VBS 启动器导致文件删除失败
-- 清理 Relay 模式注册表残留（`AIOpsRelay`）
-- 文件删除增加重试机制（递增延迟），避免句柄未释放导致静默失败
-</details>
-
-<details>
-<summary>v5.2.6 — Agent 服务端重启后自动重连</summary>
-
-- 允许已知指纹主机免 Install Token 重注册（服务端 DB 恢复场景）
-- 禁用 HTTP/2 避免单连接死亡导致全部请求失败
-- 断路器打开时重置注册状态，半开时自动重注册
-</details>
-
-<details>
-<summary>v5.2.5 — HTTP 代理竞态修复</summary>
-
-- 新增 `pendingSessions` 队列解决 Agent 在 poll 间隙时通知丢失
-- 修复 `handleAgentForwardTx/Rx` select 竞态导致最后一帧丢失
-- 修复 HTTP 请求 Host 头重复 + 缺少 Content-Length
-</details>
-
-<details>
-<summary>v5.2.4 — 移动端登录修复</summary>
-
-- 修复移动端登录网络错误 + 表单红框 UI 问题
-</details>
-
-<details>
-<summary>v5.2.3 — 批量执行与 GPU 面板修复</summary>
-
-- 修复批量剧本执行不稳定问题
-- 修复 GPU 面板显示闪烁
-</details>
-
-<details>
-<summary>v5.2.2 — 外网 Agent 离线修复</summary>
-
-- 修复外网环境下 Agent 频繁离线问题
-</details>
-
-<details>
-<summary>v5.2.0 — GPU TOP10 + 告警设置重构</summary>
-
-- GPU TOP10 过滤（仅显示有 GPU 硬件的主机）
-- 告警设置重构：Tab 切换、自定义 Webhook、阈值扩展、i18n
-</details>
-
-<details>
-<summary>v5.1.0 — 深度性能/可靠性优化</summary>
-
-- Agent 深度性能优化、可靠性增强、网络优化、安全加固
-- 登录红框与 Ping 面板 i18n 修复
-</details>
-
-<details>
-<summary>v5.0.0 — 主题/图表/统计面板/告警/国际化</summary>
-
-- P0：主题系统 + 图表重绘（Canvas 渐变/十字线/框选放大）
-- P1：统计面板（KPI 卡片 + TOP10 横向条形图）
-- P2：告警确认/静默 + 告警去重防抖
-- P3：TOP10 i18n 中文化 + 视觉优化
-</details>
-
-<details>
-<summary>v3.10.x — 端口转发/i18n/终端增强</summary>
-
-- TCP/UDP 端口映射 + 端口范围批量转发 + HTTP 反向代理（经 Agent 隧道免开端口）
-- 全链路 i18n 国际化（中/英/繁中）
-- 终端 ZMODEM 文件传输、悬浮卡片最小化、右键菜单
-- 资源热力图仪表盘、全局强制 MFA、浅色主题
-- 可配置 TCP 转发监听地址与端口范围
-</details>
-
-<details>
-<summary>v3.9.x — 终端回放/版本注入/终端 UX</summary>
-
-- 终端录制回放（含终端尺寸还原）
-- 版本号自动注入（Git tag → ldflags）
-- 终端悬浮卡片最小化 + 主题切换顶栏
-</details>
-
-<details>
-<summary>v3.8.x — 浅色主题/推送/骨架屏/防闪烁</summary>
-
-- 浅色主题 + 模块拆分 + WebSocket 推送
-- 骨架屏加载 + 空状态 + 差分更新防闪烁
-- 告警延迟移除宽限期 + 淡出动画
-</details>
-
-<details>
-<summary>v3.7.x — 全局 MFA / 移动端终端 / UI 打磨</summary>
-
-- 全局强制 MFA 策略（管理员一键开关）
-- 移动端终端输入修复 + 深度 UI 审查打磨
-</details>
-
-<details>
-<summary>v3.6.x — MFA 二维码修复 / Docker 离线化</summary>
-
-- MFA 二维码服务端生成（QR 码格式修复）
-- Docker 构建离线化（go mod vendor）
-</details>
-
-<details>
-<summary>v3.5.x — 全局 MFA / 默认端口变更</summary>
-
-- 全局默认端口 8080 → 8529
-- MFA 二维码格式修复 + UI 优化
-</details>
-
-<details>
-<summary>v3.4.x — 剧本系统类型筛选</summary>
-
-- 剧本目标主机系统类型筛选（Linux/macOS/Windows）
-</details>
-
-<details>
-<summary>v3.3.x — 网关中继 / 剧本执行通道 / 中文编码</summary>
-
-- Agent 网关中继模式 + 机器指纹鉴权
-- 自动化剧本专用一次性执行通道
-- 剧本执行中文乱码三层编码修复
-</details>
-
-<details>
-<summary>v3.2.x — 单进程多服务端推送</summary>
-
-- 单 Agent 同时向多服务端推送，采集一次广播所有
-- 独立鉴权/重试/连接池隔离
-</details>
-
-<details>
-<summary>v3.1.x — 多用户 RBAC / 终端增强</summary>
-
-- 多用户账户与角色权限管理（admin/operator/viewer）
-- 远程终端：会话录制回放、多标签、只读旁观、命令审计
-- 自动化剧本编排 + 批量并行执行
-</details>
-
-<details>
-<summary>v3.0.x — 终端增强 / 自动化运维</summary>
-
-- 远程终端增强（录制回放 + 多标签 + 旁观模式）
-- 自动化剧本编排（多步骤 + 批量并行 + 执行历史）
-</details>
-
-<details>
-<summary>v2.x — PWA / 邮件 / 账户找回 / 移动端</summary>
-
-- PWA 安装 + Service Worker 离线缓存
-- 邮件 SMTP 推送 + 账户找回双重验证
-- MFA 两步验证（TOTP）+ 邮箱解除 MFA
-- 深度移动端响应式适配
-</details>
-
-<details>
-<summary>v1.x — 自定义监控 / 远程终端 / GPU</summary>
-
-- 自定义监控（HTTP/TCP/Ping/进程存活）
-- 远程终端（WebSocket + 全 TTY + 跨平台 PTY）
-- GPU 监控（NVIDIA/AMD/Apple）
-- 多平台采集器增强
-</details>
-
-<details>
-<summary>v0.x — 初始版本 → 主机监控平台</summary>
-
-- 基础指标采集（CPU/内存/磁盘/网络/负载）
-- 阈值告警 + 飞书/钉钉推送
-- 内存存储 + 多级降采样 + 内嵌持久化
-- 交互式趋势图 + 概览面板
-- Docker 部署 + 一键安装脚本
-</details>
+## 相关链接
+
+- **GitHub 仓库**：<https://github.com/sreyun/aiops-monitor>
+- **发布版本**：<https://github.com/sreyun/aiops-monitor/releases>
+- **安装部署指南**：[INSTALL.md](INSTALL.md)
+- **安卓客户端说明**：[android/README.md](android/README.md)
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)
