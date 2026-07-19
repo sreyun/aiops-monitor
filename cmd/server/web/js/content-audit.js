@@ -7,6 +7,8 @@
 let caHost = "";
 let caKw = "";
 let caSearchT = null;
+let caSensOnly = false;   // 只看命中敏感的
+let caLastEvents = null;  // 上次加载的事件（供 AI 研判 + 客户端敏感过滤）
 // 「只列有内容审计数据的主机」：从 /api/v1/content-audit/hosts 拉有审计记录的主机，
 // 无数据的主机不进下拉。null=未加载；刷新/进入视图时重拉。
 let caDataHosts = null;
@@ -49,7 +51,9 @@ function renderContentAuditPanel() {
   });
   html += `</select>`;
   html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索 域名 / 路径 / 内容关键字")}">`;
+  html += `<label class="nf-chk" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="caSensOnly"${caSensOnly ? " checked" : ""}> ${esc(I18N.t("ca.sens_only") || "只看敏感")}</label>`;
   html += `<button class="nf-btn" data-caact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
+  html += `<button class="nf-btn nf-ai-btn" data-caact="ai" title="${esc(I18N.t("ca.ai_hint") || "AI 研判：是否有敏感数据外泄到大模型")}">🤖 ${esc(I18N.t("ai.analyze") || "AI 分析")}</button>`;
   html += `</div>`;
   html += `<div id="caBody"></div>`;
   container.innerHTML = html;
@@ -72,6 +76,12 @@ function caBind() {
     const v = this.value;
     caSearchT = setTimeout(() => { caKw = v; loadContentAudit(); }, 300);
   });
+  const so = $("caSensOnly");
+  so && so.addEventListener("change", function() {
+    caSensOnly = this.checked;
+    // 客户端过滤即可（数据已在手），无需重查。
+    if (caLastEvents) renderCA($("caBody"), caLastEvents);
+  });
 }
 
 window.loadContentAudit = function() {
@@ -82,19 +92,21 @@ window.loadContentAudit = function() {
   const filter = caKw.trim() ? ("kw:" + caKw.trim()) : "";
   fetch(`/api/v1/content-audit?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=200`, { credentials: "same-origin" })
     .then(r => r.json())
-    .then(d => renderCA(body, d.events || []))
+    .then(d => { caLastEvents = d.events || []; renderCA(body, caLastEvents); })
     .catch(() => { if (body) body.innerHTML = `<div class="empty-state">${I18N.t("netflow.load_error") || "加载失败"}</div>`; });
 };
 
 function renderCA(container, events) {
   if (!container) return;
+  if (caSensOnly) events = events.filter(e => e.sensitive); // 客户端"只看敏感"过滤
   if (events.length === 0) {
-    container.innerHTML = `<div class="empty-state">${I18N.t("ca.empty") || "暂无内容审计记录（需在 agent 配置 content_audit: true，且目标为明文 HTTP 流量）"}</div>`;
+    container.innerHTML = `<div class="empty-state">${caSensOnly ? (I18N.t("ca.no_sens") || "无命中敏感数据的记录") : (I18N.t("ca.empty") || "暂无内容审计记录（需在 agent 配置 content_audit: true，且目标为明文 HTTP 流量）")}</div>`;
     return;
   }
   let html = `<div class="nf-table-wrap"><table class="nf-flow-table">`;
   html += `<thead><tr>`;
   html += `<th>${I18N.t("ca.time") || "时间"}</th>`;
+  html += `<th>${I18N.t("ca.sensitive") || "敏感"}</th>`;
   html += `<th>${I18N.t("netflow.src_ip") || "源IP"}</th>`;
   html += `<th>${I18N.t("ca.dest") || "目的（域名/端点）"}</th>`;
   html += `<th>${I18N.t("ca.method") || "方法"}</th>`;
@@ -108,8 +120,9 @@ function renderCA(container, events) {
     return `<div style="max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:var(--mono,ui-monospace,monospace);font-size:12px">${esc(s)}${(text || "").length > 2000 ? " …" : ""}${trunc ? `<span style="color:#e0a300"> [${esc(I18N.t("ca.truncated") || "已截断")}]</span>` : ""}</div>`;
   };
   events.forEach(e => {
-    html += `<tr>`;
+    html += `<tr${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""}>`;
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
+    html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
     html += `<td>${esc(e.src_ip || "")}</td>`;
     html += `<td>${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all">${esc(e.path)}</div>` : ""}</td>`;
     html += `<td>${esc(e.method || "")}</td>`;
@@ -128,12 +141,37 @@ function caTime(s) {
   return isNaN(d) ? "" : d.toLocaleString();
 }
 
+// caToText 把当前主机的内容审计记录汇成纯文本，供 AI 研判"是否有敏感数据外泄到大模型"。
+function caToText() {
+  const evs = caLastEvents || [];
+  if (!evs.length) return "（当前主机暂无内容审计记录）";
+  const nameMap = {};
+  (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
+  const hn = (nameMap[caHost] || {}).hostname || caHost || "?";
+  const sensN = evs.filter(e => e.sensitive).length;
+  const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中内置规则命中敏感 ${sensN} 条）。含用户向 HTTP 端点(多为大模型)发的请求 prompt 与响应 completion：`];
+  evs.slice(0, 30).forEach((e, i) => {
+    lines.push(`\n[${i + 1}] ${e.src_ip || "?"} → ${e.host || e.dst_ip || "?"}${e.path || ""} ${e.method || ""} ${e.status || ""}${e.sensitive ? `　⚠敏感命中: ${e.sensitive}` : ""}`);
+    if (e.body) lines.push(`  请求: ${String(e.body).slice(0, 800)}`);
+    if (e.resp_body) lines.push(`  响应: ${String(e.resp_body).slice(0, 800)}`);
+  });
+  return lines.join("\n").slice(0, 14000);
+}
+
+// caOpenAI 打开 AI 面板研判内容审计（学习闭环自动复用：/ai/assist 沉淀记忆 + 👍/👎）。
+function caOpenAI() {
+  if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
+  if (!caLastEvents || !caLastEvents.length) { if (typeof toast === "function") toast(I18N.t("ca.empty", "暂无数据"), "err"); return; }
+  openAIAssist({ task: "content_audit_diagnosis", mode: "analyze", title: I18N.t("ca.ai_title", "AI · 内容审计研判"), context: caToText() });
+}
+
 // 事件委托（CSP script-src 'self'，禁内联 onclick）。
 safeAddEventListener("contentAuditPanel", "click", e => {
   const b = e.target.closest("[data-caact]");
   if (!b) return;
   // 刷新：连「有数据的主机」列表一起重拉（否则新产生审计的主机不会出现在下拉里）。
   if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
+  else if (b.dataset.caact === "ai") caOpenAI();
 });
 
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};

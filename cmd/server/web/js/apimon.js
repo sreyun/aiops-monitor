@@ -31,7 +31,18 @@ function renderAPIMon(data) {
     wrap.innerHTML = `<div class="empty-box">还没有 API 性能监控。点右上角「添加业务系统」把一个系统的多个接口批量纳入监控——自动统计可用率、平均 / P95 响应时间与吞吐，异常时按配置级别自动告警。</div>`;
     return;
   }
-  wrap.innerHTML = systems.map(sys => {
+  // 顶部汇总条：业务系统 / 接口总数 / 当前异常 / 平均可用率(1h)
+  const allEps = systems.flatMap(s => s.endpoints || []);
+  const downCount = allEps.filter(e => e.down).length;
+  const withAvail = allEps.filter(e => e.avail_1h >= 0);
+  const avgAvail = withAvail.length ? withAvail.reduce((s, e) => s + e.avail_1h, 0) / withAvail.length : -1;
+  const summary = `<div class="api-summary">
+    <div class="card-stat"><div class="n">${systems.length}</div><div class="l">业务系统</div></div>
+    <div class="card-stat"><div class="n">${allEps.length}</div><div class="l">监控接口</div></div>
+    <div class="card-stat"><div class="n ${downCount ? "crit" : "ok"}">${downCount}</div><div class="l">当前异常</div></div>
+    <div class="card-stat"><div class="n ${avgAvail >= 0 ? apimonAvailClass(avgAvail) : ""}">${apiFmtPct(avgAvail)}</div><div class="l">平均可用率 (1h)</div></div>
+  </div>`;
+  wrap.innerHTML = summary + systems.map(sys => {
     const eps = sys.endpoints || [];
     const downCount = eps.filter(e => e.down).length;
     const rows = eps.length ? eps.map(ep => {
@@ -78,6 +89,8 @@ function openAPISystemModal(sys) {
     ? Object.entries(sys.common_headers).map(([k, v]) => `${k}: ${v}`).join("\n")
     : "";
   $("apiSysCommonHeaders").value = commonHeadersText;
+  // 回填公共请求体（必须回显，否则编辑保存会把公共体清零）
+  $("apiSysCommonBody").value = (sys && sys.common_body) || "";
   const rows = $("apiEndpointRows");
   rows.innerHTML = "";
   const eps = (sys && sys.endpoints) || [];
@@ -149,6 +162,7 @@ async function saveAPISystem() {
     level: $("apiSysLevel").value,
     enabled: $("apiSysEnabled").checked,
     common_headers: commonHeaders,
+    common_body: ($("apiSysCommonBody").value || "").trim(),
     endpoints: endpoints
   };
   if (!body.name) { toast("请填写业务系统名称", "err"); return; }
@@ -175,12 +189,82 @@ function runAPISystem(id) {
     .catch(e => toast("触发失败：" + e, "err"));
 }
 
-// 接口历史：复用自定义监控的历史曲线弹窗（同为 CheckPoint 序列），仅切换取数端点。
+// 接口性能历史：专用「组合曲线」弹窗——一屏三图：①响应时间分解(总/DNS/TCP/TLS/TTFB 同轴组合)
+// ②可用性 ③响应体量。数据从 VM 全量回读（重启不丢），复用交互式图表引擎(悬停/框选放大/双击还原)。
+let API_HIST = { id: "", name: "", range: 24 };
+let API_HIST_CHARTS = {};
+
 function openAPIHistory(id, name) {
-  CHK_HIST = { id, name, type: "http", range: 1, base: "apimon/endpoints" };
-  $("checkHistTitle").textContent = name + " · 接口性能历史";
-  $("checkHistMask").classList.add("show");
-  loadCheckHistory();
+  API_HIST = { id, name, range: 24 };
+  $("apiHistTitle").textContent = name + " · 接口性能历史";
+  $("apiHistMask").classList.add("show");
+  loadAPIHistory();
+}
+
+function apiHistP95(vals) {
+  if (!vals.length) return 0;
+  const a = vals.slice().sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] || 0;
+}
+
+async function loadAPIHistory() {
+  const { id, name, range } = API_HIST;
+  const body = $("apiHistBody");
+  body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading", "加载中…")}</div>`;
+  const now = Math.floor(Date.now() / 1000);
+  const from = range > 0 ? now - range * 3600 : 0;
+  const ctrl = renderChartControls(range, "arange");
+  try {
+    const sinceMin = range > 0 ? range * 60 : 43200; // 43200min=30d，range=0 视为「全部(近30天)」
+    const all = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}`).then(r => r.json());
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);
+    if (!pts.length) {
+      body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（接口探测运行一段时间后自动积累，数据入 VM）。</div>`;
+      return;
+    }
+    const samples = pts.map(p => ({
+      timestamp: p.timestamp,
+      latency_ms: p.latency_ms,
+      dns_ms: p.dns_ms, tcp_ms: p.tcp_ms, tls_ms: p.tls_ms, ttfb_ms: p.ttfb_ms,
+      online: p.ok ? 100 : 0,
+      resp_kb: (p.resp_bytes || 0) / 1024,
+    }));
+    const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(2);
+    const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
+    const p95 = apiHistP95(pts.map(p => p.latency_ms || 0)).toFixed(0);
+    const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now", "刚刚");
+    const wrap = (cid, title) => `<div class="chart-wrap"><div class="chart-sub-title">${title}</div><canvas id="${cid}" width="1000" height="220"></canvas>` +
+      `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t("ui.zoom_preview", "放大")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+    body.innerHTML = `<div class="chart-controls">${ctrl}</div>
+      <div class="api-hist-stat">
+        <span class="ahs"><b class="${apimonAvailClass(parseFloat(uptime))}">${uptime}%</b><i>可用率</i></span>
+        <span class="ahs"><b>${apiFmtMs(parseFloat(avgLat))}</b><i>平均延时</i></span>
+        <span class="ahs"><b>${apiFmtMs(parseFloat(p95))}</b><i>P95 延时</i></span>
+        <span class="ahs"><b>${pts.length}</b><i>采样 · 跨度 ${span}</i></span>
+      </div>
+      <div class="chart-container">
+        ${wrap("apiHLat", "响应时间分解 · 总 / DNS / TCP / TLS / TTFB（ms）")}
+        ${wrap("apiHAvail", "可用性 · 在线=100 / 离线=0")}
+        ${wrap("apiHBytes", "响应体大小（KB）")}
+      </div>
+      <div class="hint">数据从 VictoriaMetrics 回读，重启不丢；曲线可悬停查看数值、拖动框选放大、双击还原。</div>`;
+    API_HIST_CHARTS = {};
+    API_HIST_CHARTS.apiHLat = createChart("apiHLat", samples, [
+      { key: "latency_ms", label: "总延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
+      { key: "dns_ms", label: "DNS", color: "#22c55e", fmt: v => v.toFixed(1) + " ms" },
+      { key: "tcp_ms", label: "TCP", color: "#eab308", fmt: v => v.toFixed(1) + " ms" },
+      { key: "tls_ms", label: "TLS", color: "#a855f7", fmt: v => v.toFixed(1) + " ms" },
+      { key: "ttfb_ms", label: "TTFB", color: "#f97316", fmt: v => v.toFixed(1) + " ms" },
+    ], 0, null, { title: name + " · 响应时间分解(ms)" });
+    API_HIST_CHARTS.apiHAvail = createChart("apiHAvail", samples, [
+      { key: "online", label: "在线", color: "#22c55e", fmt: v => (v >= 50 ? "在线" : "离线") },
+    ], 0, 100, { title: name + " · 可用性" });
+    API_HIST_CHARTS.apiHBytes = createChart("apiHBytes", samples, [
+      { key: "resp_kb", label: "响应体", color: "#06b6d4", fmt: v => v.toFixed(1) + " KB" },
+    ], 0, null, { title: name + " · 响应体大小(KB)" });
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
+  }
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -201,6 +285,13 @@ safeAddEventListener("apimonSystems", "click", e => {
   if (act === "run") runAPISystem(id);
   else if (act === "edit") { const sys = (LAST_APIMON.systems || []).find(s => s.id === id); openAPISystemModal(sys); }
   else if (act === "del") delAPISystem(id);
+});
+// 接口历史弹窗：时间范围切换（快捷跨度）+ 图表放大委托
+safeAddEventListener("apiHistBody", "click", e => {
+  const rb = e.target.closest(".chip-btn[data-arange]");
+  if (rb) { API_HIST.range = parseInt(rb.dataset.arange); loadAPIHistory(); return; }
+  const en = e.target.closest(".chart-enlarge"); if (!en) return;
+  const ch = API_HIST_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });
 
 // 把当前 API 业务监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）

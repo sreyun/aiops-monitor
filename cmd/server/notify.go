@@ -310,6 +310,7 @@ func formatAlert(a Alert, firing bool) string {
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
 		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
 		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
+		"content_audit": Tz("notify.type_content_audit"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {
@@ -397,6 +398,7 @@ func alertEmailHTML(a Alert, firing bool) string {
 		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
 		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
 		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
+		"content_audit": Tz("notify.type_content_audit"),
 	}
 	typeLabel := typeMap[a.Type]
 	if typeLabel == "" {

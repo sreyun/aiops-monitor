@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -35,8 +36,9 @@ type APIEndpoint struct {
 }
 
 // toCheck 把接口适配成一个 HTTP 高级拨测，复用 probeHTTPAdvanced 的完整探测能力。
-// commonHeaders 为业务系统级公共请求头，接口级 Headers 会覆盖同名 key。
-func (e APIEndpoint) toCheck(commonHeaders map[string]string) CustomCheck {
+// commonHeaders 为业务系统级公共请求头，接口级 Headers 会覆盖同名 key；
+// commonBody 为业务系统级公共请求体，按 mergeAPIBody 的规则与接口级 Body 合并。
+func (e APIEndpoint) toCheck(commonHeaders map[string]string, commonBody string) CustomCheck {
 	// 合并：先复制公共头，再用接口级覆盖（接口级优先）
 	merged := make(map[string]string, len(commonHeaders)+len(e.Headers))
 	for k, v := range commonHeaders {
@@ -47,10 +49,50 @@ func (e APIEndpoint) toCheck(commonHeaders map[string]string) CustomCheck {
 	}
 	return CustomCheck{
 		ID: e.ID, Name: e.Name, Type: "http", Target: e.URL,
-		Advanced: true, Method: e.Method, Headers: merged, Body: e.Body,
+		Advanced: true, Method: e.Method, Headers: merged, Body: mergeAPIBody(commonBody, e.Body),
 		ExpectStatus: e.ExpectStatus, ExpectKeyword: e.ExpectKeyword,
 		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect,
 	}
+}
+
+// mergeAPIBody 合并系统级公共请求体与接口级请求体，规则（与公共请求头「接口级覆盖」精神一致）：
+//   - 接口体为空 → 用公共体；公共体为空 → 用接口体（完全向后兼容）
+//   - 两者皆为 JSON 对象 → 顶层字段浅合并，接口体同名字段覆盖公共体
+//     （典型场景：公共体放 appId/token/sign 等公共参数，接口体只写各自业务字段）
+//   - 否则（表单 / XML / 非对象 JSON，无法安全合并）→ 接口体整体覆盖公共体
+func mergeAPIBody(commonBody, epBody string) string {
+	cb, eb := strings.TrimSpace(commonBody), strings.TrimSpace(epBody)
+	if cb == "" {
+		return epBody
+	}
+	if eb == "" {
+		return commonBody
+	}
+	var cm, em map[string]json.RawMessage
+	if json.Unmarshal([]byte(cb), &cm) == nil && json.Unmarshal([]byte(eb), &em) == nil {
+		for k, v := range em {
+			cm[k] = v // 接口级字段覆盖同名公共字段
+		}
+		if out, err := json.Marshal(cm); err == nil {
+			return string(out)
+		}
+	}
+	return epBody // 非 JSON 对象：接口级整体优先
+}
+
+// APIHistPoint 是接口历史曲线的一个采样点。除总延时/状态外，携带响应时间分解
+// （DNS/TCP/TLS/TTFB，单位 ms）与响应体大小（字节），供前端画「响应时间分解组合曲线」
+// 与「响应体量」曲线——数据本就写入 VM，此前仅回读了总延时，现全量暴露。
+type APIHistPoint struct {
+	Ts         int64   `json:"timestamp"`
+	OK         bool    `json:"ok"`
+	LatencyMs  float64 `json:"latency_ms"`
+	StatusCode int     `json:"status_code,omitempty"`
+	DnsMs      float64 `json:"dns_ms"`
+	TcpMs      float64 `json:"tcp_ms"`
+	TlsMs      float64 `json:"tls_ms"`
+	TtfbMs     float64 `json:"ttfb_ms"`
+	RespBytes  float64 `json:"resp_bytes"`
 }
 
 // APISystem 是一个业务系统：一批接口 + 统一的探测周期与告警级别。
@@ -61,6 +103,7 @@ type APISystem struct {
 	Level         string            `json:"level"`          // warning | critical
 	Enabled       bool              `json:"enabled"`
 	CommonHeaders map[string]string `json:"common_headers,omitempty"` // 业务系统级公共请求头，所有接口共用
+	CommonBody    string            `json:"common_body,omitempty"`    // 业务系统级公共请求体，所有接口共用（JSON 对象则与接口体字段级合并）
 	Endpoints     []APIEndpoint     `json:"endpoints"`
 	CreatedAt     int64             `json:"created_at"`
 }
@@ -242,7 +285,7 @@ func (ar *apiRunner) gc() {
 }
 
 func (ar *apiRunner) probe(sys APISystem, ep APIEndpoint) {
-	res := ar.cr.probeHTTPAdvanced(ep.toCheck(sys.CommonHeaders))
+	res := ar.cr.probeHTTPAdvanced(ep.toCheck(sys.CommonHeaders, sys.CommonBody))
 	now := time.Now().Unix()
 
 	ar.mu.Lock()

@@ -342,8 +342,8 @@ func (v *vmWriter) pushAPI(url string, samples []vmAPISample) {
 	resp.Body.Close()
 }
 
-// queryAPIHistory 从 VM 读取某接口在 [from,to] 的探测序列，重组为 []CheckPoint（历史曲线）。
-func (v *vmWriter) queryAPIHistory(apiID string, from, to int64) []CheckPoint {
+// queryAPIHistory 从 VM 读取某接口在 [from,to] 的探测序列，重组为 []APIHistPoint（历史曲线）。
+func (v *vmWriter) queryAPIHistory(apiID string, from, to int64) []APIHistPoint {
 	c := v.cfg.VMConfig()
 	if !c.Enabled || c.URL == "" {
 		return nil
@@ -368,9 +368,10 @@ func (v *vmWriter) queryAPIHistory(apiID string, from, to int64) []CheckPoint {
 	return parseVMAPIExport(resp.Body)
 }
 
-// parseVMAPIExport 把 VM /export 的 NDJSON 按时间戳重组为 []CheckPoint（aiops_api_* 指标族）。
-func parseVMAPIExport(r io.Reader) []CheckPoint {
-	byTs := map[int64]*CheckPoint{}
+// parseVMAPIExport 把 VM /export 的 NDJSON 按时间戳重组为 []APIHistPoint（aiops_api_* 指标族）。
+// 除总延时/状态外，同时回读响应时间分解（DNS/TCP/TLS/TTFB）与响应体大小，供前端画组合曲线。
+func parseVMAPIExport(r io.Reader) []APIHistPoint {
+	byTs := map[int64]*APIHistPoint{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	for sc.Scan() {
@@ -390,7 +391,7 @@ func parseVMAPIExport(r io.Reader) []CheckPoint {
 			ts := line.Timestamps[i] / 1000
 			p := byTs[ts]
 			if p == nil {
-				p = &CheckPoint{Ts: ts, LossPct: -1}
+				p = &APIHistPoint{Ts: ts}
 				byTs[ts] = p
 			}
 			switch name {
@@ -400,10 +401,20 @@ func parseVMAPIExport(r io.Reader) []CheckPoint {
 				p.LatencyMs = line.Values[i]
 			case "aiops_api_status_code":
 				p.StatusCode = int(line.Values[i])
+			case "aiops_api_dns_ms":
+				p.DnsMs = line.Values[i]
+			case "aiops_api_tcp_ms":
+				p.TcpMs = line.Values[i]
+			case "aiops_api_tls_ms":
+				p.TlsMs = line.Values[i]
+			case "aiops_api_ttfb_ms":
+				p.TtfbMs = line.Values[i]
+			case "aiops_api_resp_bytes":
+				p.RespBytes = line.Values[i]
 			}
 		}
 	}
-	out := make([]CheckPoint, 0, len(byTs))
+	out := make([]APIHistPoint, 0, len(byTs))
 	for _, p := range byTs {
 		out = append(out, *p)
 	}

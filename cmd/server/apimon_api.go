@@ -53,7 +53,9 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": sys.ID, "name": sys.Name, "interval_sec": sys.IntervalSec,
 			"level": sys.Level, "enabled": sys.Enabled, "created_at": sys.CreatedAt,
-			"endpoints": eps,
+			"common_headers": sys.CommonHeaders, // 回显系统级公共请求头（此前遗漏→编辑时清空→保存被清零）
+			"common_body":    sys.CommonBody,    // 回显系统级公共请求体（同理必须回显，否则编辑即清零）
+			"endpoints":      eps,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"systems": out})
@@ -115,7 +117,7 @@ func (s *Server) handleRunAPISystem(w http.ResponseWriter, r *http.Request) {
 // handleAPIEndpointHistory 返回某接口从 VM 读取的历史序列（延迟/状态随时间）。
 func (s *Server) handleAPIEndpointHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var pts []CheckPoint
+	var pts []APIHistPoint
 	if s.vm != nil && s.vm.enabled() {
 		to := time.Now().Unix()
 		from := to - 24*3600 // 默认最近 24h
@@ -127,7 +129,7 @@ func (s *Server) handleAPIEndpointHistory(w http.ResponseWriter, r *http.Request
 		pts = s.vm.queryAPIHistory(id, from, to)
 	}
 	if pts == nil {
-		pts = []CheckPoint{}
+		pts = []APIHistPoint{}
 	}
 	writeJSON(w, http.StatusOK, pts)
 }

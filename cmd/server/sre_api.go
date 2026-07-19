@@ -1272,7 +1272,8 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	memKind := "chat"
 	switch req.Task {
 	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis",
-		"hardware_diagnosis", "netflow_diagnosis", "checks_diagnosis", "forward_diagnosis", "apimon_diagnosis":
+		"hardware_diagnosis", "netflow_diagnosis", "checks_diagnosis", "forward_diagnosis", "apimon_diagnosis",
+		"content_audit_diagnosis":
 		memKind = "diagnosis"
 	}
 	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
@@ -1365,6 +1366,17 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"⑤ 代码块之后，用中文简述：这条规则在什么条件下、对哪些主机、做什么，以及主要风险点与为何建议人工审批。" + ctxBlock
 	case "duty_report":
 		return dutyReportSystemPrompt + ctxBlock
+	case "content_audit_diagnosis":
+		return "你是资深数据安全(DLP)与合规审计专家。以下是从局域网被动抓取的明文 HTTP 内容审计记录——用户向各端点" +
+			"（多为大模型服务，如 OpenAI/内网 Ollama/vLLM）发送的请求 prompt 与收到的响应 completion，部分已被内置规则" +
+			"标注命中敏感数据。请：\n" +
+			"① 一句话研判整体数据外泄风险（低/中/高）；\n" +
+			"② 逐条指出【敏感数据外泄】风险：密钥/私钥/凭据/身份证/手机号等 PII、商业机密、源代码/内部文档被贴进大模型，" +
+			"标明是谁(源IP)、发给谁(端点)、泄露了什么，按严重度排序；\n" +
+			"③ 评估合规影响（等保/个人信息保护法/GDPR 视角）；\n" +
+			"④ 给出可执行处置建议（阻断/告警/教育/收敛敏感词规则/改用合规内网模型等）。" +
+			"用简洁中文分点作答，只依据给定记录、不臆造；未见敏感外泄时明确说明「未见明显敏感数据外泄」。" +
+			"注意：你分析的是审计数据本身，回答里【不要原样复述完整的密钥/密码等敏感值】，用脱敏描述。" + ctxBlock
 	case "hardware_diagnosis":
 		return "你是资深数据中心硬件运维专家。以下是一台设备（服务器 / 存储 / 磁盘柜等）的硬件快照（整机身份、健康、" +
 			"异常部件、BMC 事件、CPU/内存/存储/磁盘框/RAID/逻辑卷/电源/风扇/温度/固件等）。请：\n" +

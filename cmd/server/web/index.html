@@ -1329,6 +1329,11 @@
         <textarea id="apiSysCommonHeaders" rows="3" placeholder="每行 Key: Value，如&#10;Authorization: Bearer eyJh...&#10;Content-Type: application/json" style="font-family:monospace; font-size:12px"></textarea>
         <div class="hint">公共请求头自动应用于所有接口，接口级请求头会覆盖同名的公共头。</div>
       </div>
+      <div class="field">
+        <label>公共请求体 <span class="tag">该业务系统下所有接口共用</span></label>
+        <textarea id="apiSysCommonBody" rows="3" placeholder='JSON 对象会与接口体按字段合并，如&#10;{"appId":"1001","token":"abc","sign":"..."}' style="font-family:monospace; font-size:12px"></textarea>
+        <div class="hint">JSON 对象：与各接口的请求体按字段合并，接口体同名字段覆盖公共体（适合放 appId / token / 签名等公共参数）；非 JSON（表单/XML）时，接口体存在则以接口体为准。合并 JSON 通常需在「公共请求头」配 Content-Type: application/json。</div>
+      </div>
       <div class="subhead" style="display:flex; align-items:center">接口列表<button class="btn" id="apiAddEndpointBtn" type="button" style="margin-left:auto">+ 添加接口</button></div>
       <div id="apiEndpointRows" style="display:flex; flex-direction:column; gap:10px"></div>
       <div class="hint">每个接口按上面的间隔批量探测；支持自定义方法 / 请求头（含 Bearer / API-Key 鉴权）/ 请求体，以及期望状态码、响应关键字、JSON 断言校验。响应时间自动分解 DNS/TCP/TLS/TTFB 并入 VM，异常按级别自动告警。</div>
@@ -1337,6 +1342,17 @@
       <button class="btn" data-close-btn>取消</button>
       <button class="btn primary" id="apiSysSaveBtn">保存</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== API 接口性能历史弹窗（组合曲线：响应时间分解 / 可用性 / 响应体量） ===== -->
+<div class="mask" id="apiHistMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3 id="apiHistTitle">接口性能历史</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="apiHistBody"></div>
   </div>
 </div>
 

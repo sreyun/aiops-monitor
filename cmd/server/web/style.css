@@ -2598,6 +2598,19 @@ table tbody tr:hover{
 @media (max-width:720px){
   .api-ep-grid,.api-ep-grid2,.api-ep-grid3{grid-template-columns:1fr}
 }
+/* API 监控·总览汇总条（业务系统 / 接口 / 异常 / 平均可用率） */
+.api-summary{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px}
+.api-summary .card-stat{flex:1; min-width:120px; padding:12px 16px; background:var(--bg2); border:1px solid var(--line); border-radius:12px}
+.api-summary .card-stat .n{font-size:22px; font-weight:600; color:var(--txt); font-variant-numeric:tabular-nums; line-height:1.15}
+.api-summary .card-stat .n.ok{color:var(--ok)} .api-summary .card-stat .n.warn{color:var(--warn)} .api-summary .card-stat .n.crit{color:var(--crit)}
+.api-summary .card-stat .l{font-size:12px; color:var(--muted); margin-top:3px}
+/* API 接口历史·组合曲线弹窗 */
+.chart-sub-title{font-size:12px; font-weight:600; color:var(--txt2); margin:2px 2px 6px}
+.api-hist-stat{display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 4px}
+.api-hist-stat .ahs{display:flex; flex-direction:column; gap:2px; padding:8px 14px; background:var(--bg2); border:1px solid var(--line2); border-radius:10px; min-width:96px}
+.api-hist-stat .ahs b{font-size:17px; font-weight:600; color:var(--txt); font-variant-numeric:tabular-nums}
+.api-hist-stat .ahs b.ok{color:var(--ok)} .api-hist-stat .ahs b.warn{color:var(--warn)} .api-hist-stat .ahs b.crit{color:var(--crit)}
+.api-hist-stat .ahs i{font-size:11px; color:var(--muted); font-style:normal}
 
 /* ===== 告警治理 ===== */
 .gov-section{margin-bottom:18px}

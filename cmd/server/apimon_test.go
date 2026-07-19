@@ -14,7 +14,7 @@ func TestAPIEndpointToCheck(t *testing.T) {
 		Headers: map[string]string{"X-Api-Key": "k"}, Body: `{"u":"a"}`,
 		ExpectStatus: 200, ExpectKeyword: "ok", JSONPath: "code", JSONExpect: "0",
 	}
-	c := ep.toCheck(nil) // 无公共头
+	c := ep.toCheck(nil, "") // 无公共头/公共体
 	if !c.Advanced || c.Type != "http" {
 		t.Fatal("应为 http 高级拨测")
 	}
@@ -38,7 +38,7 @@ func TestAPIEndpointToCheckWithCommonHeaders(t *testing.T) {
 	c := ep.toCheck(map[string]string{
 		"Authorization": "Bearer shared",
 		"X-Override":    "sys-value",
-	})
+	}, "")
 	// 公共头应被继承
 	if c.Headers["Authorization"] != "Bearer shared" {
 		t.Fatal("公共头 Authorization 未被继承")
@@ -54,6 +54,26 @@ func TestAPIEndpointToCheckWithCommonHeaders(t *testing.T) {
 	// 合并后总共 3 个 key
 	if len(c.Headers) != 3 {
 		t.Fatalf("合并后应有 3 个 key，实际=%d", len(c.Headers))
+	}
+}
+
+// TestMergeAPIBody 验证系统级公共请求体与接口级请求体的合并规则。
+func TestMergeAPIBody(t *testing.T) {
+	// 接口体为空 → 用公共体
+	if got := mergeAPIBody(`{"appId":"a"}`, ""); got != `{"appId":"a"}` {
+		t.Fatalf("接口体空应回退公共体，实际=%s", got)
+	}
+	// 公共体为空 → 用接口体
+	if got := mergeAPIBody("", `{"u":"x"}`); got != `{"u":"x"}` {
+		t.Fatalf("公共体空应用接口体，实际=%s", got)
+	}
+	// 皆为 JSON 对象 → 字段级浅合并，接口体覆盖同名字段（Go 序列化 map 按 key 字母序）
+	if got := mergeAPIBody(`{"appId":"a","sign":"s"}`, `{"sign":"ep","user":"u"}`); got != `{"appId":"a","sign":"ep","user":"u"}` {
+		t.Fatalf("字段级合并/覆盖错误，实际=%s", got)
+	}
+	// 非 JSON 对象（表单串）→ 接口体整体覆盖，绝不破坏原文
+	if got := mergeAPIBody("a=1&b=2", "c=3"); got != "c=3" {
+		t.Fatalf("非 JSON 应接口体优先，实际=%s", got)
 	}
 }
 
