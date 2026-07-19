@@ -69,6 +69,39 @@ func TestGenTraceparent(t *testing.T) {
 	}
 }
 
+// TestGraphQLBody 验证 GraphQL 请求体包装：原始查询包成 {"query":...}，已是 JSON 则原样。
+func TestGraphQLBody(t *testing.T) {
+	if got := graphqlBody("{ user { id } }"); !strings.Contains(got, `"query"`) {
+		t.Fatalf("原始查询应包成 query: %s", got)
+	}
+	if got := graphqlBody(`{"query":"x","variables":{}}`); got != `{"query":"x","variables":{}}` {
+		t.Fatalf("已是 JSON 应原样: %s", got)
+	}
+}
+
+// TestGraphQLCheckErrors 验证 GraphQL 响应校验：有 errors/缺 data/非 JSON 均失败。
+func TestGraphQLCheckErrors(t *testing.T) {
+	if graphqlCheckErrors([]byte(`{"data":{"user":{"id":1}}}`)) != "" {
+		t.Error("正常响应应通过")
+	}
+	if graphqlCheckErrors([]byte(`{"errors":[{"message":"boom"}]}`)) == "" {
+		t.Error("含 errors 应失败")
+	}
+	if graphqlCheckErrors([]byte(`{"data":null}`)) == "" {
+		t.Error("data=null 应失败")
+	}
+	if graphqlCheckErrors([]byte(`not json`)) == "" {
+		t.Error("非 JSON 应失败")
+	}
+}
+
+// TestWSAcceptKey 用 RFC6455 官方示例验证 Sec-WebSocket-Accept 计算。
+func TestWSAcceptKey(t *testing.T) {
+	if got := wsAcceptKey("dGhlIHNhbXBsZSBub25jZQ=="); got != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
+		t.Fatalf("wsAcceptKey 与 RFC6455 示例不符: %s", got)
+	}
+}
+
 // TestMergeAPIBody 验证系统级公共请求体与接口级请求体的合并规则。
 func TestMergeAPIBody(t *testing.T) {
 	// 接口体为空 → 用公共体

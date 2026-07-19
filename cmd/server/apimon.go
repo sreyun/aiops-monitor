@@ -36,6 +36,7 @@ type APIEndpoint struct {
 	TimeoutSec    int               `json:"timeout_sec,omitempty"`    // 单次探测超时（秒，默认 10，可为慢接口调大，上限 60）
 	Retries       int               `json:"retries,omitempty"`        // 失败重试次数（默认 0，抑制瞬时抖动，上限 3）
 	Distributed   bool              `json:"distributed,omitempty"`    // 分布式多点探测：由各地 agent 作为探针执行（迭代 D）
+	Protocol      string            `json:"protocol,omitempty"`       // http(默认) | graphql | websocket（协议扩展 F）
 	Enabled       bool              `json:"enabled"`
 }
 
@@ -51,12 +52,39 @@ func (e APIEndpoint) toCheck(commonHeaders map[string]string, commonBody string)
 	for k, v := range e.Headers {
 		merged[k] = v
 	}
+	method := e.Method
+	body := mergeAPIBody(commonBody, e.Body)
+	graphql := e.Protocol == "graphql"
+	if graphql {
+		method = "POST"
+		if merged["Content-Type"] == "" && merged["content-type"] == "" {
+			merged["Content-Type"] = "application/json"
+		}
+		body = graphqlBody(body)
+	}
 	return CustomCheck{
 		ID: e.ID, Name: e.Name, Type: "http", Target: e.URL,
-		Advanced: true, Method: e.Method, Headers: merged, Body: mergeAPIBody(commonBody, e.Body),
+		Advanced: true, Method: method, Headers: merged, Body: body,
 		ExpectStatus: e.ExpectStatus, ExpectKeyword: e.ExpectKeyword,
-		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect, TimeoutSec: e.TimeoutSec, TraceParent: true,
+		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect, TimeoutSec: e.TimeoutSec, TraceParent: true, GraphQL: graphql,
 	}
+}
+
+// graphqlBody 把原始 GraphQL 查询包装成 {"query":"..."}；若 Body 已是含 query 键的 JSON 请求体则原样。
+// 注意：GraphQL 查询本身常以 { 开头（匿名查询），不能只按前缀判断——须真正解析出 query 键才算已包装。
+func graphqlBody(body string) string {
+	t := strings.TrimSpace(body)
+	if t == "" {
+		return body
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(t), &probe) == nil {
+		if _, ok := probe["query"]; ok {
+			return body // 已是 {"query":...} 形式，原样发送
+		}
+	}
+	b, _ := json.Marshal(map[string]string{"query": t})
+	return string(b)
 }
 
 // mergeAPIBody 合并系统级公共请求体与接口级请求体，规则（与公共请求头「接口级覆盖」精神一致）：
@@ -346,12 +374,18 @@ func (ar *apiRunner) probeLimited(sys APISystem, ep APIEndpoint) {
 }
 
 func (ar *apiRunner) probe(sys APISystem, ep APIEndpoint) {
-	check := ep.toCheck(sys.CommonHeaders, sys.CommonBody)
-	res := ar.cr.probeHTTPAdvanced(check)
+	// 按协议分发：websocket 走手写 WS 探测；http/graphql 走 probeHTTPAdvanced（graphql 在 toCheck 里变换请求体+校验）
+	probeOnce := func() httpProbeResult {
+		if ep.Protocol == "websocket" {
+			return probeWebSocket(ep, sys.CommonHeaders)
+		}
+		return ar.cr.probeHTTPAdvanced(ep.toCheck(sys.CommonHeaders, sys.CommonBody))
+	}
+	res := probeOnce()
 	// 失败重试：抑制瞬时抖动（网络毛刺 / 偶发 5xx），任一次成功即通过（默认 Retries=0 不重试）
 	for attempt := 0; !res.ok && attempt < ep.Retries; attempt++ {
 		time.Sleep(300 * time.Millisecond)
-		res = ar.cr.probeHTTPAdvanced(check)
+		res = probeOnce()
 	}
 	now := time.Now().Unix()
 

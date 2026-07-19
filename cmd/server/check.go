@@ -539,9 +539,40 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 		res.msg = fmt.Sprintf("证书剩余 %d 天 < 阈值 %d 天", res.certDays, c.CertWarnDays)
 		return res
 	}
+	// GraphQL 语义校验：响应须含 data 且 errors 为空
+	if c.GraphQL {
+		if gqlErr := graphqlCheckErrors(body); gqlErr != "" {
+			res.msg = gqlErr
+			return res
+		}
+	}
 	res.ok = true
 	res.msg = fmt.Sprintf("HTTP %s · TTFB %.0fms", resp.Status, res.ttfbMs)
 	return res
+}
+
+// graphqlCheckErrors 校验 GraphQL 响应：有 errors 则失败，缺 data 也失败。返回空串=通过。
+func graphqlCheckErrors(body []byte) string {
+	var resp struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "GraphQL 响应非合法 JSON"
+	}
+	if len(resp.Errors) > 0 {
+		msg := resp.Errors[0].Message
+		if msg == "" {
+			msg = "GraphQL 返回错误"
+		}
+		return "GraphQL 错误：" + msg
+	}
+	if len(resp.Data) == 0 || string(resp.Data) == "null" {
+		return "GraphQL 响应缺少 data"
+	}
+	return ""
 }
 
 // jsonPathValue 取 JSON 里点路径的值并转成字符串（用于断言比较）。支持对象逐级 key，如 code / data.token。

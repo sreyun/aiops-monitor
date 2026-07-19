@@ -30,7 +30,7 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 				"enabled": ep.Enabled, "headers": ep.Headers, "body": ep.Body,
 				"expect_status": ep.ExpectStatus, "expect_keyword": ep.ExpectKeyword,
 				"json_path": ep.JSONPath, "json_expect": ep.JSONExpect,
-				"timeout_sec": ep.TimeoutSec, "retries": ep.Retries, "distributed": ep.Distributed,
+				"timeout_sec": ep.TimeoutSec, "retries": ep.Retries, "distributed": ep.Distributed, "protocol": ep.Protocol,
 				// 实时状态（默认值 = 尚未探测）
 				"ok": true, "message": "", "latency_ms": 0.0, "status_code": 0,
 				"cert_days": -1, "resp_bytes": int64(0), "checked_at": int64(0),

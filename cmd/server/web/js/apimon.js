@@ -33,7 +33,7 @@ function renderAPIMon(data) {
   if (!systems.length) {
     wrap.innerHTML = allSystems.length
       ? `<div class="empty-box">环境筛选「${esc(envLabel(envF))}」下暂无业务系统。</div>`
-      : `<div class="empty-box">还没有 API 性能监控。点右上角「添加业务系统」把一个系统的多个接口批量纳入监控——自动统计可用率、平均 / P95 响应时间与吞吐，异常时按配置级别自动告警。</div>`;
+      : `<div class="empty-box">还没有可靠性保障监控。点右上角「添加业务系统」把一个系统的多个接口批量纳入监控——支持 HTTP / GraphQL / WebSocket，自动统计可用率、平均 / P95 / P99 响应时间与吞吐，异常时按配置级别自动告警。</div>`;
     return;
   }
   // 顶部汇总条：业务系统 / 接口总数 / 当前异常 / 平均可用率(1h)
@@ -54,7 +54,7 @@ function renderAPIMon(data) {
       const dot = !ep.checked_at ? '<span class="sdot idle"></span>' : (ep.ok ? '<span class="sdot ok"></span>' : '<span class="sdot crit"></span>');
       const statusText = !ep.checked_at ? "未探测" : (ep.ok ? "正常" : "异常");
       return `<tr class="${ep.down ? "row-down" : ""}">
-        <td><div class="api-ep-name">${esc(ep.name)}</div><div class="api-ep-url">${esc(ep.method || "GET")} ${esc(ep.url)}</div></td>
+        <td><div class="api-ep-name">${esc(ep.name)}${ep.protocol && ep.protocol !== "http" ? ` <span class="tag" style="font-size:10px">${ep.protocol === "graphql" ? "GraphQL" : "WS"}</span>` : ""}</div><div class="api-ep-url">${esc(ep.protocol === "websocket" ? "WS" : (ep.method || "GET"))} ${esc(ep.url)}</div></td>
         <td>${dot}${statusText}${ep.status_code ? ` <span class="muted">${ep.status_code}</span>` : ""}</td>
         <td>${apiFmtMs(ep.latency_ms)}</td>
         <td>${apiFmtMs(ep.avg_ms)}</td>
@@ -119,10 +119,16 @@ function addAPIEndpointRow(ep) {
   div.className = "api-ep-row";
   const m = (ep && ep.method) || "GET";
   const methods = ["GET", "POST", "PUT", "DELETE", "HEAD", "PATCH"].map(x => `<option ${x === m ? "selected" : ""}>${x}</option>`).join("");
+  const proto = (ep && ep.protocol) || "http";
+  const protoOpts = [["http", "HTTP"], ["graphql", "GraphQL"], ["websocket", "WebSocket (ws/wss)"]].map(([v, l]) => `<option value="${v}" ${v === proto ? "selected" : ""}>${l}</option>`).join("");
   const headersText = (ep && ep.headers) ? Object.entries(ep.headers).map(([k, v]) => `${k}: ${v}`).join("\n") : "";
   const commonHeaders = ($("apiSysCommonHeaders")?.value || "").trim();
   div.innerHTML = `
     <button class="api-ep-del" data-aact="ep-del" title="移除接口">✕</button>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; padding-right:26px">
+      <select class="ep-protocol sel" style="font-size:12px; max-width:190px">${protoOpts}</select>
+      <span class="hint" style="font-size:11px; margin:0">GraphQL：Body 填查询，自动包 {"query":…} 并校验 errors；WebSocket：填 ws/wss，Body 非空则发一帧读一帧（可配关键字断言）</span>
+    </div>
     <div class="api-ep-grid">
       <input class="ep-name" placeholder="接口名称，如 登录" value="${esc((ep && ep.name) || "")}">
       <select class="ep-method sel">${methods}</select>
@@ -158,6 +164,7 @@ async function saveAPISystem() {
       name: g(".ep-name").value.trim(),
       url: g(".ep-url").value.trim(),
       method: g(".ep-method").value,
+      protocol: g(".ep-protocol").value,
       expect_status: parseInt(g(".ep-status").value) || 0,
       expect_keyword: g(".ep-keyword").value.trim(),
       json_path: g(".ep-jsonpath").value.trim(),
@@ -251,7 +258,7 @@ let API_HIST = { id: "", name: "", range: 24 };
 let API_HIST_CHARTS = {};
 
 function openAPIHistory(id, name) {
-  API_HIST = { id, name, range: 24 };
+  API_HIST = { id, name, range: 24, custom: null };
   $("apiHistTitle").textContent = name + " · 接口性能历史";
   $("apiHistMask").classList.add("show");
   loadAPIHistory();
@@ -290,16 +297,24 @@ function apiHistHistogram(pts) {
 }
 
 async function loadAPIHistory() {
-  const { id, name, range } = API_HIST;
+  const { id, name, range, custom } = API_HIST;
   const body = $("apiHistBody");
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading", "加载中…")}</div>`;
   const now = Math.floor(Date.now() / 1000);
-  const from = range > 0 ? now - range * 3600 : 0;
-  const ctrl = renderChartControls(range, "arange");
+  const from = custom ? custom.from : (range > 0 ? now - range * 3600 : 0);
+  const to = custom ? custom.to : now;
+  const ctrl = `${renderChartControls(custom ? -1 : range, "arange")}
+    <button class="chip-btn ${custom ? "active" : ""}" data-ahist-custom-toggle title="${I18N.t("time.custom_range", "自定义时间范围")}">${I18N.t("time.custom", "自定义")}</button>
+    <span class="chart-custom-range" id="ahistCustomPanel"${custom ? "" : " hidden"}>
+      <input type="datetime-local" id="ahistCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from > 0 ? from : now - 3600)}">
+      <span class="dt-sep">→</span>
+      <input type="datetime-local" id="ahistCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
+      <button class="chip-btn primary" data-ahist-custom-apply>${I18N.t("time.custom_apply", "应用")}</button>
+    </span>`;
   try {
-    const sinceMin = range > 0 ? range * 60 : 43200; // 43200min=30d，range=0 视为「全部(近30天)」
+    const sinceMin = custom ? Math.max(1, Math.ceil((now - from) / 60)) : (range > 0 ? range * 60 : 43200); // 43200min=30d
     const all = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}`).then(r => r.json());
-    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from);
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && (custom ? p.timestamp <= to : true));
     if (!pts.length) {
       body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（接口探测运行一段时间后自动积累，数据入 VM）。</div>`;
       return;
@@ -444,11 +459,22 @@ safeAddEventListener("apimonSystems", "click", e => {
 });
 // 接口历史弹窗：时间范围切换（快捷跨度）+ 图表放大委托
 safeAddEventListener("apiHistBody", "click", e => {
+  const tog = e.target.closest("[data-ahist-custom-toggle]");
+  if (tog) { const p = $("ahistCustomPanel"); if (p) p.hidden = !p.hidden; return; }
+  if (e.target.closest("[data-ahist-custom-apply]")) { applyAhistCustomRange(); return; }
   const rb = e.target.closest(".chip-btn[data-arange]");
-  if (rb) { API_HIST.range = parseInt(rb.dataset.arange); loadAPIHistory(); return; }
+  if (rb) { API_HIST.custom = null; API_HIST.range = parseInt(rb.dataset.arange); loadAPIHistory(); return; }
   const en = e.target.closest(".chart-enlarge"); if (!en) return;
   const ch = API_HIST_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });
+function applyAhistCustomRange() {
+  const fEl = $("ahistCustomFrom"), tEl = $("ahistCustomTo");
+  if (!fEl || !tEl || !fEl.value || !tEl.value) { toast(I18N.t("time.custom_incomplete", "请选择开始和结束时间"), "warn"); return; }
+  const from = Math.floor(new Date(fEl.value).getTime() / 1000), to = Math.floor(new Date(tEl.value).getTime() / 1000);
+  if (!(to > from)) { toast(I18N.t("time.custom_order", "结束时间必须晚于开始时间"), "warn"); return; }
+  if (to - from < 60) { toast(I18N.t("time.custom_tooshort", "时间范围太短（至少 1 分钟）"), "warn"); return; }
+  API_HIST.custom = { from, to }; loadAPIHistory();
+}
 
 // 把当前 API 业务监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
 function apimonToText() {
@@ -473,7 +499,7 @@ function apimonToText() {
 // 「🤖 AI 分析」：对当前所有业务系统接口的可用率/时延/异常做整体研判，结果自动进入 RAG 记忆闭环
 safeAddEventListener("apimonAIBtn", "click", () => {
   if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
-  openAIAssist({ task: "apimon_diagnosis", mode: "analyze", title: I18N.t("assist.title_apimon", "AI · API 业务监控分析"), context: apimonToText() });
+  openAIAssist({ task: "apimon_diagnosis", mode: "analyze", title: I18N.t("assist.title_apimon", "AI · 可靠性保障分析"), context: apimonToText() });
 });
 
 /* ========== 合成事务监控（多步链式 + 变量提取/传递） ========== */

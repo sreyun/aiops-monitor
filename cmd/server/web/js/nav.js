@@ -363,8 +363,8 @@ function NET_TABS() {
   ];
 }
 const VIEW_TAB_GROUPS = {
-  checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
-  apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
+  checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"]] },
+  apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"]] },
   alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },

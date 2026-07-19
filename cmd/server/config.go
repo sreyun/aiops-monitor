@@ -395,6 +395,7 @@ type CustomCheck struct {
 	TimeoutSec     int               `json:"timeout_sec,omitempty"`      // 单次探测超时（秒，0=用全局默认；API 业务监控用它绕过 5s 全局上限，精确控制慢接口）
 	CaptureBody    bool              `json:"-"`                          // 内部：合成事务需要响应体做变量提取（不序列化）
 	TraceParent    bool              `json:"-"`                          // 内部：注入 W3C traceparent 头（apimon 探测用，后端可关联分布式 trace）
+	GraphQL        bool              `json:"-"`                          // 内部：GraphQL 语义校验（响应须含 data 且 errors 为空）
 }
 
 // HTTPProxyConfig is a saved HTTP proxy shortcut for quick access.
