@@ -85,6 +85,8 @@ async function openDashboard(id) {
   DASH_EDIT = false;
   $("dashHome").style.display = "none";
   $("dashDetail").style.display = "";
+  // 直接打开（AI 生成 / 消息中心 / 事件跳转）时也要确保数据源已加载，否则「数据源」下拉只有内置 VM，无法选择外部源。
+  if (!DASH_DATASOURCES.length) await loadDashDatasources();
   await resolveDashVars();
   renderDashDetail();
 }
@@ -246,7 +248,10 @@ async function loadTimeseriesPanel(p, body, from, to) {
   const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   const cid = "dashCanvas_" + p.id;
   body.innerHTML = `<div class="chart-wrap"><canvas id="${cid}"></canvas></div>`;
-  const args = [cid, samples, defs, null, unitYMax(p.unit), { title: p.title }];
+  // 图表高度随面板 gridPos.h（约 30px/行）自适应填满，去掉固定 210px 造成的大量空白；
+  // 不再传 title（面板头已有标题，避免画布内重复渲染标题）。
+  const chartH = Math.max(120, (p.grid.h || 8) * 30 - 62);
+  const args = [cid, samples, defs, null, unitYMax(p.unit), { cssH: chartH }];
   DASH_CHART_ARGS[p.id] = args;
   createChart.apply(null, args);
 }
@@ -355,7 +360,13 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (pa) { handlePanelAction(pa.dataset.pact, +pa.dataset.id); return; }
 });
 safeAddEventListener("dashDetail", "change", e => {
-  if (e.target.id === "dashDSSelect") { CUR_DASH.datasource = e.target.value; resolveDashVars().then(renderDashDetail); return; }
+  if (e.target.id === "dashDSSelect") {
+    CUR_DASH.datasource = e.target.value;
+    // 静默持久化数据源选择（否则刷新后回退），再重解析变量 + 重绘。
+    fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(CUR_DASH) }).catch(() => {});
+    resolveDashVars().then(renderDashDetail);
+    return;
+  }
   const sel = e.target.closest("[data-dvar]");
   if (sel) { DASH_VARVALS[sel.dataset.dvar] = sel.value; renderPanels(); }
 });
@@ -609,7 +620,19 @@ async function aiOptimizeDash() {
   const d = await dashDigest();
   if (!d || d.error) { toast("获取看板数据失败", "err"); return; }
   const ctx = (d.structure || "") + "\n\n【实时近况】\n" + (d.digest || "");
-  openAIAssist({ task: "dashboard_optimize", title: "✨ AI 优化 · " + CUR_DASH.name, mode: "analyze", context: ctx, hint: "AI 正在评审看板并给出优化建议…" });
+  const dashId = CUR_DASH.id;
+  openAIAssist({
+    task: "dashboard_optimize", title: "✨ AI 优化 · " + CUR_DASH.name, mode: "analyze",
+    context: ctx, hint: "AI 正在评审看板并给出优化建议…",
+    applyLabel: "应用优化到看板",
+    applyTo: async (code) => {
+      try {
+        const j = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ json: code }) }).then(r => r.json());
+        if (j.ok) { toast(`已应用优化：${j.panels} 面板`, "ok"); if (CUR_DASH && CUR_DASH.id === dashId) openDashboard(dashId); }
+        else toast("应用失败：" + (j.error || ""), "err");
+      } catch (e) { toast("应用失败：" + e, "err"); }
+    }
+  });
 }
 async function aiTicketDash() {
   if (!CUR_DASH) return;
@@ -626,16 +649,15 @@ safeAddEventListener("dashAIBtn", "click", () => { $("dashAIPrompt").value = "";
 safeAddEventListener("dashAICreate", "click", async () => {
   const prompt = $("dashAIPrompt").value.trim();
   if (!prompt) { toast("请描述你想要的看板", "err"); return; }
-  await withLoading("dashAICreate", async () => {
-    try {
-      const j = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name: $("dashAIName").value.trim() }) }).then(r => r.json());
-      if (j.ok) {
-        closeMask($("dashAIMask"));
-        toast(`已生成「${j.name}」：${j.panels} 面板` + ((j.warnings && j.warnings.length) ? `（${j.warnings.length} 处提示）` : ""), "ok");
-        openDashboard(j.id);
-      } else toast("生成失败：" + (j.error || ""), "err");
-    } catch (e) { toast("生成失败：" + e, "err"); }
-  });
+  const name = $("dashAIName").value.trim();
+  // 后台异步生成：立即返回，不阻塞 UI；完成后经消息中心（🔔）弹窗通知。
+  try {
+    const j = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name }) }).then(r => r.json());
+    if (j.ok && j.queued) {
+      closeMask($("dashAIMask"));
+      toast("已提交后台生成，完成后右上角 🔔 会通知并可点击查看", "ok");
+    } else toast("提交失败：" + (j.error || ""), "err");
+  } catch (e) { toast("提交失败：" + e, "err"); }
 });
 
 /* ---------- 列表事件 ---------- */

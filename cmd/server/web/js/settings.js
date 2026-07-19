@@ -826,6 +826,7 @@ async function initAuth() {
 }
 /* ---------- 消息中心（顶栏铃铛 + 未读徽标 + 下拉面板） ---------- */
 let MSG_POLL = null;
+let MSG_SEEN_MAX = -1; // 已见最大消息 id：首次加载只记基线不弹窗，之后新消息才弹 toast
 function msgEsc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function initMsgCenter() {
   const panel = $("notifPanel"), wrap = $("notifWrap");
@@ -856,6 +857,14 @@ async function loadMessages() {
       else badge.style.display = "none";
     }
     renderMessages(msgs);
+    // 新消息弹窗提醒（仅对仪表盘类消息，如 AI 后台生成完成）；首次加载只记基线，不刷屏。
+    const maxId = msgs.reduce((m, x) => Math.max(m, x.id || 0), 0);
+    if (MSG_SEEN_MAX >= 0) {
+      msgs.filter(x => (x.id || 0) > MSG_SEEN_MAX && !x.read && x.view === "dashboards")
+        .sort((a, b) => (a.id || 0) - (b.id || 0)).slice(-3)
+        .forEach(x => toast(x.title || "新消息", (x.level === "warning" || x.level === "critical") ? "err" : "ok"));
+    }
+    MSG_SEEN_MAX = Math.max(MSG_SEEN_MAX, maxId);
   } catch (_) {}
 }
 function renderMessages(msgs) {
@@ -866,7 +875,7 @@ function renderMessages(msgs) {
   list.innerHTML = msgs.map(m => {
     const t = new Date((m.ts || 0) * 1000);
     const ts = `${t.getMonth()+1}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
-    return `<div class="notif-item ${m.read ? "" : "unread"}" data-id="${m.id}" data-view="${msgEsc(m.view || "")}">
+    return `<div class="notif-item ${m.read ? "" : "unread"}" data-id="${m.id}" data-view="${msgEsc(m.view || "")}" data-ref="${msgEsc(m.ref || "")}">
       <span class="notif-dot ${msgEsc(m.level || "info")}"></span>
       <div class="notif-body">
         <div class="notif-title">${msgEsc(m.title || "")}</div>
@@ -877,10 +886,12 @@ function renderMessages(msgs) {
   list.querySelectorAll(".notif-item").forEach(el => {
     el.addEventListener("click", async () => {
       const id = parseInt(el.dataset.id, 10);
-      const view = el.dataset.view;
+      const view = el.dataset.view, ref = el.dataset.ref;
       try { await fetch(`${API}/messages/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [id] }) }); } catch (_) {}
       const p = $("notifPanel"); if (p) p.classList.remove("show");
       if (view && typeof switchView === "function") switchView(view);
+      // 仪表盘消息带看板 id：切到仪表盘视图后直接打开该看板。
+      if (view === "dashboards" && ref && typeof openDashboard === "function") setTimeout(() => openDashboard(ref), 60);
       loadMessages();
     });
   });

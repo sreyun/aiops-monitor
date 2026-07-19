@@ -588,7 +588,7 @@ window.addEventListener("resize", () => {
 function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opts = {}) {
   const canvas = $(canvasId);
   if (!canvas) return null;
-  const cssH = opts.isZoom ? 440 : 210;
+  const cssH = opts.cssH || (opts.isZoom ? 440 : 210);
   const dim = sizeChartCanvas(canvas, cssH);
   if (!allSamples || !allSamples.length) {
     drawChartEmpty(canvas.getContext("2d"), dim.W, dim.H, I18N.t("empty.no_trend_data") || "暂无趋势数据");

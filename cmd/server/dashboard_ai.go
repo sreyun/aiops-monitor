@@ -326,6 +326,8 @@ func fmtDigestVal(v float64, unit string) string {
 
 // ---- HTTP 端点 ----
 
+// handleAICreateDashboard 后台异步生成看板：立即返回 queued，生成过程（较慢的 LLM 调用）
+// 放到 goroutine，完成/失败后经消息中心（顶栏 🔔）推送弹窗反馈，避免前端长时间卡顿。
 func (s *Server) handleAICreateDashboard(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Prompt string `json:"prompt"`
@@ -335,21 +337,81 @@ func (s *Server) handleAICreateDashboard(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请描述你想要的看板内容"})
 		return
 	}
-	d, warns, err := s.generateDashboardViaAI(req.Prompt, "", "ai")
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
 		return
 	}
-	if req.Name != "" { // 用户指定名优先
-		d.Name = strings.TrimSpace(req.Name)
-		d, _ = s.cfg.UpsertDashboard(d)
+	name := strings.TrimSpace(req.Name)
+	actor := s.clientIP(r)
+	go func() {
+		defer func() { _ = recover() }()
+		d, warns, err := s.generateDashboardViaAI(prompt, "", "ai")
+		if err != nil {
+			s.messages.push("ai", "warning", "AI 看板生成失败", err.Error(), "dashboards", "")
+			return
+		}
+		if name != "" {
+			d.Name = name
+			d, _ = s.cfg.UpsertDashboard(d)
+		}
+		body := "共 " + itoa(len(d.Panels)) + " 面板，点击查看"
+		if len(warns) > 0 {
+			body += "（" + itoa(len(warns)) + " 处提示）"
+		}
+		s.messages.push("ai", "success", "AI 看板已生成："+d.Name, body, "dashboards", d.ID)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, Message: "AI 生成看板：" + d.Name + "（" + itoa(len(d.Panels)) + " 面板）"})
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": true})
+}
+
+// handleApplyDashOptimize 把 AI 优化产出的看板 JSON 应用到现有看板（保留 id / 数据源）。
+func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request) {
+	cur, ok := s.cfg.DashboardByID(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "仪表盘不存在"})
+		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "AI 生成看板：" + d.Name + "（" + itoa(len(d.Panels)) + " 面板）"})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": d.ID, "name": d.Name, "panels": len(d.Panels), "warnings": warns})
+	var req struct {
+		JSON string `json:"json"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	js := extractJSONObject(req.JSON)
+	if js == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未在 AI 回复中找到可应用的看板 JSON"})
+		return
+	}
+	var spec aiDashSpec
+	if json.Unmarshal([]byte(js), &spec) != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "解析 AI 看板 JSON 失败"})
+		return
+	}
+	d, warns := sanitizeAIDash(spec, cur.Name, cur.Source)
+	if len(d.Panels) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用"})
+		return
+	}
+	// 原地更新：保留 id / 数据源（AI 若给了名则用新名，否则保留原名）
+	d.ID = cur.ID
+	d.DataSource = cur.DataSource
+	if strings.TrimSpace(spec.Name) == "" {
+		d.Name = cur.Name
+	}
+	saved, err := s.cfg.UpsertDashboard(d)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "应用 AI 看板优化：" + saved.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID, "panels": len(saved.Panels), "warnings": warns})
 }
 
 func (s *Server) handleAIDashboardFromIncident(w http.ResponseWriter, r *http.Request) {

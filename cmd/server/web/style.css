@@ -3222,6 +3222,16 @@ select:focus {
 /* 编辑器行 */
 .panel-target-row, .var-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .mini-check { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* 行内裸 input 会被全局 reset 剥成无边框，显式补齐为与全局 .field input 一致的干净外观 */
+.panel-target-row input, .var-row input {
+  width: 100%; min-width: 0; font-family: inherit; font-size: 12px; color: var(--txt);
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 7px 10px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.panel-target-row input:focus, .var-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft) !important; }
+.panel-target-row input::placeholder, .var-row input::placeholder { color: var(--muted2); }
+/* 编辑器行内的 select 与输入同高，视觉统一 */
+.var-row .select-wrap.sm select { height: 32px; }
 
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: repeat(12, 1fr); } }
 @media (max-width: 720px) { .dash-grid { grid-template-columns: 1fr; } .dash-panel { grid-column: 1 / -1 !important; } .dash-bar-actions { width: 100%; margin-left: 0; } }
