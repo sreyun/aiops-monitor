@@ -673,6 +673,7 @@ window.DICT_EN = {
     "ca.notice": "⚠ Content audit includes users' plaintext requests (may contain PII / prompts). Enable only on networks you are authorized to monitor, with proper user disclosure; server records auto-purge after 30 days.",
     "ca.kw_ph": "Search domain / path / content keyword",
     "ca.empty": "No content-audit records (requires content_audit: true on the agent and plaintext HTTP traffic)",
+    "ca.no_hosts": "No hosts with content-audit data (requires content_audit: true on the agent and plaintext HTTP traffic)",
     "ca.time": "Time",
     "ca.dest": "Destination (domain/endpoint)",
     "ca.method": "Method",

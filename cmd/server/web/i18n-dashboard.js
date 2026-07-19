@@ -664,6 +664,7 @@
   "ca.notice": "⚠ 内容审计含用户明文请求（可能包含 PII / prompt）。仅可在你有授权的网络启用，并对用户履行告知义务；服务端记录保留 30 天后自动清理。",
   "ca.kw_ph": "搜索 域名 / 路径 / 内容关键字",
   "ca.empty": "暂无内容审计记录（需在 agent 配置 content_audit: true，且目标为明文 HTTP 流量）",
+  "ca.no_hosts": "暂无有内容审计数据的主机（需在 agent 配置 content_audit: true 并有明文 HTTP 流量）",
   "ca.time": "时间",
   "ca.dest": "目的（域名/端点）",
   "ca.method": "方法",

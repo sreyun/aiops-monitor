@@ -323,6 +323,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/snmp/trap", s.handleAgentSNMPTrap)
 	mux.HandleFunc("POST /api/v1/agent/dnsmap", s.handleAgentDNSMap)
 	mux.HandleFunc("POST /api/v1/agent/content-audit", s.handleAgentContentAudit)
+	mux.HandleFunc("GET /api/v1/content-audit/hosts", s.handleContentAuditHosts)
 	mux.HandleFunc("GET /api/v1/content-audit", s.handleContentAudit)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)

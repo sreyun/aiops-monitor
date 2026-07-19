@@ -442,6 +442,9 @@ type ServerConfig struct {
 	// FlowEnrichDisabled：关闭"流量目的地富化"（反向DNS + ASN归属 + 国家）。零值=启用（默认开）。
 	// 富化会对目的公网 IP 做外部 DNS 查询（隐私敏感），需要时可在此关闭。
 	FlowEnrichDisabled bool `json:"flow_enrich_disabled,omitempty"`
+	// ContentAuditSensitiveKeywords：内容审计的用户自定义敏感词（除内置密钥/身份证等规则外）。
+	// 命中即打标签 + 告警，用于"敏感数据外泄到大模型"的 DLP。
+	ContentAuditSensitiveKeywords []string `json:"content_audit_sensitive_keywords,omitempty"`
 	Categories       map[string]string `json:"categories"`
 	InstallToken  string              `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a

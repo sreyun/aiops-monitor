@@ -7,22 +7,45 @@
 let caHost = "";
 let caKw = "";
 let caSearchT = null;
+// 「只列有内容审计数据的主机」：从 /api/v1/content-audit/hosts 拉有审计记录的主机，
+// 无数据的主机不进下拉。null=未加载；刷新/进入视图时重拉。
+let caDataHosts = null;
+
+// 常驻合规提示（内容审计涉及用户明文请求，属隐私敏感）。
+function caNoticeHTML() {
+  return `<div style="margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #e0a300;border-radius:8px;background:rgba(224,163,0,.08);font-size:12px;color:var(--muted)">${esc(I18N.t("ca.notice") || "⚠ 内容审计含用户明文请求（可能包含 PII / prompt）。仅可在你有授权的网络启用，并对用户履行告知义务；服务端记录保留 30 天后自动清理。")}</div>`;
+}
 
 function renderContentAuditPanel() {
   const container = $("contentAuditPanel");
   if (!container) return;
-  const hosts = (window._cachedHosts || []);
-  if (hosts.length === 0) {
-    container.innerHTML = `<div class="empty-state">${I18N.t("netflow.no_hosts") || "暂无主机"}</div>`;
+
+  // 先拉「有审计数据的主机」，再渲染面板——无数据主机不列进下拉。
+  if (caDataHosts === null) {
+    container.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
+    fetch(`/api/v1/content-audit/hosts`, { credentials: "same-origin" })
+      .then(r => r.json())
+      .then(d => { caDataHosts = d.hosts || []; renderContentAuditPanel(); })
+      .catch(() => { caDataHosts = []; renderContentAuditPanel(); });
     return;
   }
-  // 合规提示（常驻）：内容审计涉及用户明文请求，属隐私敏感。
-  let html = `<div style="margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #e0a300;border-radius:8px;background:rgba(224,163,0,.08);font-size:12px;color:var(--muted)">${esc(I18N.t("ca.notice") || "⚠ 内容审计含用户明文请求（可能包含 PII / prompt）。仅可在你有授权的网络启用，并对用户履行告知义务；服务端记录保留 30 天后自动清理。")}</div>`;
+
+  // host_id → hostname 映射（有数据主机只带 host_id，用 _cachedHosts 补展示名）。
+  const nameMap = {};
+  (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
+
+  let html = caNoticeHTML();
+  if (caDataHosts.length === 0) {
+    container.innerHTML = html + `<div class="empty-state">${I18N.t("ca.no_hosts") || "暂无有内容审计数据的主机（需在 agent 配置 content_audit: true 并有明文 HTTP 流量）"}</div>`;
+    return;
+  }
   html += `<div class="nf-toolbar">`;
   html += `<select id="caHostSelect" class="nf-select">`;
-  hosts.forEach(h => {
-    const sel = h.id === caHost ? " selected" : "";
-    html += `<option value="${esc(h.id)}"${sel}>${h.online ? "" : "○ "}${esc(h.hostname || h.id)}</option>`;
+  caDataHosts.forEach(dh => {
+    const h = nameMap[dh.host_id] || {};
+    const name = h.hostname || dh.host_id;
+    const sel = dh.host_id === caHost ? " selected" : "";
+    html += `<option value="${esc(dh.host_id)}"${sel}>${esc(name)} · ${dh.events || 0}</option>`;
   });
   html += `</select>`;
   html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索 域名 / 路径 / 内容关键字")}">`;
@@ -109,10 +132,12 @@ function caTime(s) {
 safeAddEventListener("contentAuditPanel", "click", e => {
   const b = e.target.closest("[data-caact]");
   if (!b) return;
-  if (b.dataset.caact === "refresh") loadContentAudit();
+  // 刷新：连「有数据的主机」列表一起重拉（否则新产生审计的主机不会出现在下拉里）。
+  if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
 });
 
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};
-window._pageRenderers["content-audit"] = renderContentAuditPanel;
+// 每次进入「内容审计」子标签都重拉有数据的主机（数据集会随时间变化）。
+window._pageRenderers["content-audit"] = function() { caDataHosts = null; renderContentAuditPanel(); };
 
 })();

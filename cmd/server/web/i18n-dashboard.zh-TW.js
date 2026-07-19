@@ -673,6 +673,7 @@ window.DICT_TW = {
   "ca.notice": "⚠ 內容稽核含使用者明文請求（可能包含 PII / prompt）。僅可在你有授權的網路啟用，並對使用者履行告知義務；伺服器記錄保留 30 天後自動清理。",
   "ca.kw_ph": "搜尋 網域 / 路徑 / 內容關鍵字",
   "ca.empty": "暫無內容稽核記錄（需在 agent 設定 content_audit: true，且目標為明文 HTTP 流量）",
+  "ca.no_hosts": "暫無有內容稽核資料的主機（需在 agent 設定 content_audit: true 並有明文 HTTP 流量）",
   "ca.time": "時間",
   "ca.dest": "目的（網域/端點）",
   "ca.method": "方法",
