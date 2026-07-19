@@ -181,6 +181,11 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("install.ps1 (yaml)", ps1In,
 		`WriteAllText("$Dir\config.yaml"`, `$conf = "$Dir\config.yaml"`,
 		`Remove-Item "$Dir\config.json"`)
+	// Hyper-V auto-elevation: a non-elevated install on a Hyper-V host must relaunch
+	// itself via UAC (RunAs + EncodedCommand) so Get-VM (VM collection) works.
+	must("install.ps1 (uac)", ps1In,
+		"Get-Command Get-VM", "-Verb RunAs", "-EncodedCommand",
+		"SecurityProtocol")
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")

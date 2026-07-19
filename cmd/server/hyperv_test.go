@@ -99,7 +99,7 @@ func TestEvaluateHyperV(t *testing.T) {
 
 	// collection error → exactly one "collect" warning, guests not evaluated
 	errStore := newHypervStore()
-	errStore.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "x", State: "Off"}}, "get-vm failed")
+	errStore.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "x", State: "Off"}}, "get-vm failed", 0, 0)
 	ea := EvaluateHyperV(errStore)
 	if len(ea) != 1 || ea[0].Level != "warning" || ea[0].Scope != "collect" || ea[0].Type != "hyperv" {
 		t.Fatalf("collect error: %+v, want 1 warning/collect/hyperv", ea)
@@ -108,7 +108,7 @@ func TestEvaluateHyperV(t *testing.T) {
 	// mixed guests. vmOff must first be seen Running so its stop is an alarming
 	// transition (Off since first seen would be a silent, intentionally-off VM).
 	hs := newHypervStore()
-	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "vmOff", State: "Running"}}, "")
+	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "vmOff", State: "Running"}}, "", 0, 0)
 	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{
 		{Name: "vmCrit", State: "Running", Health: "Critical"},                                                          // critical, scope=name, no further
 		{Name: "vmOff", State: "Off"},                                                                                   // warning /power (Running→Off)
@@ -116,7 +116,7 @@ func TestEvaluateHyperV(t *testing.T) {
 		{Name: "vmMem", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 980, DynamicMemEnabled: true}, // critical /mem (98%)
 		{Name: "vmStatic", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 990},                       // static mem → NO mem alert
 		{Name: "vmOK", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 100, DynamicMemEnabled: true},  // healthy → no alert
-	}, "")
+	}, "", 0, 0)
 	alerts := EvaluateHyperV(hs)
 
 	byScope := map[string]string{}
@@ -169,27 +169,27 @@ func TestEvaluateHyperVOffTransition(t *testing.T) {
 	hs := newHypervStore()
 
 	// Off since first seen (e.g. a template / cold spare) → no alarm.
-	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "", 0, 0)
 	if a := EvaluateHyperV(hs); len(a) != 0 {
 		t.Fatalf("always-off VM must not alarm: %+v", a)
 	}
 
 	// Runs, then stops → one power warning.
-	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "")
-	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "", 0, 0)
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "", 0, 0)
 	a := EvaluateHyperV(hs)
 	if len(a) != 1 || a[0].Scope != "tmpl/power" || a[0].Level != "warning" {
 		t.Fatalf("Running→Off must alarm once at tmpl/power: %+v", a)
 	}
 
 	// Stays off across another report → still one alarm (sticky), not cleared.
-	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "")
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Off"}}, "", 0, 0)
 	if a := EvaluateHyperV(hs); len(a) != 1 {
 		t.Fatalf("sticky while still off: %+v", a)
 	}
 
 	// Recovers to Running → alarm clears.
-	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "")
+	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "", 0, 0)
 	if a := EvaluateHyperV(hs); len(a) != 0 {
 		t.Fatalf("recovered VM must clear: %+v", a)
 	}

@@ -143,24 +143,24 @@ type Report struct {
 
 // HardwareSnapshot is one point-in-time snapshot of a Redfish-managed server.
 type HardwareSnapshot struct {
-	TargetName string           `json:"target_name"`
-	TargetURL  string           `json:"target_url"`
-	Timestamp  int64            `json:"timestamp"`
-	Health     string           `json:"health"` // OK / Warning / Critical
-	State      string           `json:"state"`  // Enabled / Disabled / ...
-	System     RedfishSystem    `json:"system"` // 整机身份（厂商/型号/序列号/BIOS…）
-	CPUs       []RedfishCPU     `json:"cpus"`
-	GPUs       []RedfishGPU     `json:"gpus,omitempty"` // Processors 里 ProcessorType=GPU 的成员
-	Memory     RedfishMemory    `json:"memory"`
-	Storage    []RedfishStorage `json:"storage"`
-	RAID       []RedfishRAID    `json:"raid,omitempty"` // Storage 成员里的 StorageControllers（RAID 卡）
+	TargetName string             `json:"target_name"`
+	TargetURL  string             `json:"target_url"`
+	Timestamp  int64              `json:"timestamp"`
+	Health     string             `json:"health"` // OK / Warning / Critical
+	State      string             `json:"state"`  // Enabled / Disabled / ...
+	System     RedfishSystem      `json:"system"` // 整机身份（厂商/型号/序列号/BIOS…）
+	CPUs       []RedfishCPU       `json:"cpus"`
+	GPUs       []RedfishGPU       `json:"gpus,omitempty"` // Processors 里 ProcessorType=GPU 的成员
+	Memory     RedfishMemory      `json:"memory"`
+	Storage    []RedfishStorage   `json:"storage"`
+	RAID       []RedfishRAID      `json:"raid,omitempty"`       // Storage 成员里的 StorageControllers（RAID 卡）
 	Enclosures []StorageEnclosure `json:"enclosures,omitempty"` // 磁盘框（OceanStor 等外置存储）
-	Temps      []SensorReading  `json:"temps"`
-	Fans       []FanReading     `json:"fans"`
-	Power      RedfishPower     `json:"power"`
-	Firmware   []FirmwareInfo   `json:"firmware,omitempty"` // 降频采集
-	Events     []HardwareEvent  `json:"events,omitempty"`   // BMC SEL / 事件日志（最近若干条）
-	Error      string           `json:"error,omitempty"`
+	Temps      []SensorReading    `json:"temps"`
+	Fans       []FanReading       `json:"fans"`
+	Power      RedfishPower       `json:"power"`
+	Firmware   []FirmwareInfo     `json:"firmware,omitempty"` // 降频采集
+	Events     []HardwareEvent    `json:"events,omitempty"`   // BMC SEL / 事件日志（最近若干条）
+	Error      string             `json:"error,omitempty"`
 }
 
 // RedfishSystem is the chassis/system identity — who this machine actually is.
@@ -179,11 +179,11 @@ type RedfishSystem struct {
 	BMCModel     string `json:"bmc_model,omitempty"`    // iDRAC9 / iBMC
 	BMCFirmware  string `json:"bmc_firmware,omitempty"` // Manager.FirmwareVersion
 	// 存储阵列（OceanStor 等）专有：服务器 BMC 不上报这些，故 omitempty。
-	SoftwareVersion string  `json:"software_version,omitempty"` // 阵列软件版本，如 V300R003C20
-	PatchVersion    string  `json:"patch_version,omitempty"`    // 补丁版本，如 SPC200 SPH216
-	Location        string  `json:"location,omitempty"`         // 设备位置（DeviceManager 里手填），如 hcidc
-	TotalCapacityGB float64 `json:"total_capacity_gb,omitempty"`// 阵列总容量
-	UsedCapacityGB  float64 `json:"used_capacity_gb,omitempty"` // 已用容量
+	SoftwareVersion string  `json:"software_version,omitempty"`  // 阵列软件版本，如 V300R003C20
+	PatchVersion    string  `json:"patch_version,omitempty"`     // 补丁版本，如 SPC200 SPH216
+	Location        string  `json:"location,omitempty"`          // 设备位置（DeviceManager 里手填），如 hcidc
+	TotalCapacityGB float64 `json:"total_capacity_gb,omitempty"` // 阵列总容量
+	UsedCapacityGB  float64 `json:"used_capacity_gb,omitempty"`  // 已用容量
 }
 
 // HardwareEvent is one BMC log entry (Dell iDRAC SEL/LC log, Huawei iBMC event
@@ -365,29 +365,30 @@ type HardwareReport struct {
 // Health 由 agent 侧从 State/Status/ReplicationHealth 归一而来（OK/Warning/
 // Critical），让服务端告警评估无需重复解析厂商字符串。
 type HyperVGuest struct {
-	Name             string   `json:"name"`
-	ID               string   `json:"id"`                  // VM GUID：稳定身份，用于变更追踪（改名也认得出是同一台）
-	State            string   `json:"state"`               // Running / Off / Paused / Saved / Starting / ...
-	Status           string   `json:"status,omitempty"`    // "Operating normally" / 降级/故障描述
-	Health           string   `json:"health,omitempty"`    // OK / Warning / Critical（归一后）
-	CPUUsage         float64  `json:"cpu_usage"`           // 宿主视角 CPU 占用 %
-	ProcessorCount   int      `json:"processor_count,omitempty"`
-	MemAssignedMB    float64  `json:"mem_assigned_mb,omitempty"`
-	MemDemandMB      float64  `json:"mem_demand_mb,omitempty"`
-	MemStartupMB     float64  `json:"mem_startup_mb,omitempty"`
-	MemMinMB         float64  `json:"mem_min_mb,omitempty"`
-	MemMaxMB         float64  `json:"mem_max_mb,omitempty"`
-	DynamicMemEnabled bool    `json:"dynamic_mem_enabled,omitempty"` // 内存压力(需求/分配)只对动态内存 VM 有意义
-	UptimeSec        int64    `json:"uptime_sec,omitempty"`
-	Generation       int      `json:"generation,omitempty"`
-	Version          string   `json:"version,omitempty"`
-	IntegrationState string   `json:"integration_state,omitempty"` // 集成服务状态（展示用，可能本地化）
-	IPAddresses      []string `json:"ip_addresses,omitempty"`      // 所有网卡 IP 汇总（由集成服务上报，Guest 运行时才有）
-	Switches         []string `json:"switches,omitempty"`          // 连接的虚拟交换机名
-	VHDCount         int      `json:"vhd_count,omitempty"`
-	CheckpointCount  int      `json:"checkpoint_count,omitempty"`
-	ReplState        string   `json:"repl_state,omitempty"`  // Disabled / Enabled / ...
-	ReplHealth       string   `json:"repl_health,omitempty"` // NotApplicable / Normal / Warning / Critical
+	Name              string   `json:"name"`
+	ID                string   `json:"id"`                      // VM GUID：稳定身份，用于变更追踪（改名也认得出是同一台）
+	State             string   `json:"state"`                   // Running / Off / Paused / Saved / Starting / ...
+	Status            string   `json:"status,omitempty"`        // "Operating normally" / 降级/故障描述
+	Health            string   `json:"health,omitempty"`        // OK / Warning / Critical（归一后）
+	CPUUsage          float64  `json:"cpu_usage"`               // 宿主视角 CPU 占用 %（该 VM 占整机 CPU 的比例）
+	CPUGuestPct       float64  `json:"cpu_guest_pct,omitempty"` // 客户机视角 CPU 利用率 %（占该 VM 自身 vCPU 的比例，0~100）
+	ProcessorCount    int      `json:"processor_count,omitempty"`
+	MemAssignedMB     float64  `json:"mem_assigned_mb,omitempty"`
+	MemDemandMB       float64  `json:"mem_demand_mb,omitempty"`
+	MemStartupMB      float64  `json:"mem_startup_mb,omitempty"`
+	MemMinMB          float64  `json:"mem_min_mb,omitempty"`
+	MemMaxMB          float64  `json:"mem_max_mb,omitempty"`
+	DynamicMemEnabled bool     `json:"dynamic_mem_enabled,omitempty"` // 内存压力(需求/分配)只对动态内存 VM 有意义
+	UptimeSec         int64    `json:"uptime_sec,omitempty"`
+	Generation        int      `json:"generation,omitempty"`
+	Version           string   `json:"version,omitempty"`
+	IntegrationState  string   `json:"integration_state,omitempty"` // 集成服务状态（展示用，可能本地化）
+	IPAddresses       []string `json:"ip_addresses,omitempty"`      // 所有网卡 IP 汇总（由集成服务上报，Guest 运行时才有）
+	Switches          []string `json:"switches,omitempty"`          // 连接的虚拟交换机名
+	VHDCount          int      `json:"vhd_count,omitempty"`
+	CheckpointCount   int      `json:"checkpoint_count,omitempty"`
+	ReplState         string   `json:"repl_state,omitempty"`  // Disabled / Enabled / ...
+	ReplHealth        string   `json:"repl_health,omitempty"` // NotApplicable / Normal / Warning / Critical
 	// 明细（用于前端 VM 详情视图；老 Agent 不上报时为空，前端优雅降级）
 	Disks       []HyperVDisk       `json:"disks,omitempty"`
 	Nics        []HyperVNic        `json:"nics,omitempty"`
@@ -424,12 +425,16 @@ type HyperVCheckpoint struct {
 // physical host. Error carries a collection failure (e.g. Get-VM unavailable) so
 // the server can surface it without overwriting the last good inventory.
 type HyperVReport struct {
-	HostID      string        `json:"host_id"`
-	Fingerprint string        `json:"fingerprint,omitempty"`
-	Timestamp   int64         `json:"timestamp"`
-	HostName    string        `json:"host_name,omitempty"`
-	Error       string        `json:"error,omitempty"`
-	Guests      []HyperVGuest `json:"guests"`
+	HostID      string `json:"host_id"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Timestamp   int64  `json:"timestamp"`
+	HostName    string `json:"host_name,omitempty"`
+	Error       string `json:"error,omitempty"`
+	// 物理宿主机自身的内存（MB）。用于在虚拟机页的宿主机名后显示「可用/总内存」，
+	// 直观反映宿主机资源余量。0 表示未采到（老 Agent / 采集失败时不显示）。
+	HostTotalMemMB float64       `json:"host_total_mem_mb,omitempty"`
+	HostAvailMemMB float64       `json:"host_avail_mem_mb,omitempty"`
+	Guests         []HyperVGuest `json:"guests"`
 }
 
 // ============================================================================
@@ -560,7 +565,7 @@ type SNMPVarbind struct {
 // SNMPTrapEvent 是归一后的一条 trap 事件。
 type SNMPTrapEvent struct {
 	SourceIP     string        `json:"source_ip"`
-	Version      string        `json:"version"`              // "1" | "2c"
+	Version      string        `json:"version"` // "1" | "2c"
 	Community    string        `json:"community,omitempty"`
 	TrapOID      string        `json:"trap_oid"`             // v1 按 RFC3584 归一
 	Severity     string        `json:"severity"`             // info/warning/critical（启发式）
@@ -579,4 +584,45 @@ type SNMPTrapReport struct {
 	Fingerprint string          `json:"fingerprint,omitempty"`
 	Timestamp   int64           `json:"timestamp"`
 	Traps       []SNMPTrapEvent `json:"traps"`
+}
+
+// ============================================================================
+// SNI/DNS 域名观测（agent 抓包提取「目的 IP ↔ 真实域名」，明文，不解密内容）
+// ============================================================================
+
+// DNSMapEntry 是一条「IP → 域名」观测：来自 DNS 应答的 A/AAAA 记录，或 TLS ClientHello 的 SNI。
+type DNSMapEntry struct {
+	IP     string `json:"ip"`
+	Domain string `json:"domain"`
+	Source string `json:"source"` // "dns" | "sni"
+}
+
+// DNSMapReport 是 agent 周期上报的域名观测（POST /api/v1/agent/dnsmap）。
+type DNSMapReport struct {
+	HostID      string        `json:"host_id"`
+	Fingerprint string        `json:"fingerprint,omitempty"`
+	Timestamp   int64         `json:"timestamp"`
+	Entries     []DNSMapEntry `json:"entries"`
+}
+
+// ContentAuditEvent 是一条【明文 HTTP 请求】内容审计观测（增量1：单包取请求行+Host+body前缀）。
+// ⚠ 高敏感：可能含用户发给大模型的 prompt 等 PII。默认关闭、需授权，服务端加密存储 + 保留期。
+type ContentAuditEvent struct {
+	SrcIP   string `json:"src_ip"`
+	DstIP   string `json:"dst_ip"`
+	DstPort uint16 `json:"dst_port"`
+	Method  string `json:"method"`          // GET/POST/...
+	Host    string `json:"host,omitempty"`  // Host 头
+	Path    string `json:"path,omitempty"`  // 请求路径（如 /v1/chat/completions、/api/chat）
+	CType   string `json:"ctype,omitempty"` // Content-Type
+	Body    string `json:"body,omitempty"`  // 首包内的 body 前缀（截断，含 prompt 开头）
+	Ts      int64  `json:"ts"`              // 观测时刻 Unix 秒
+}
+
+// ContentAuditReport 是 agent 周期上报的内容审计载荷（POST /api/v1/agent/content-audit）。
+type ContentAuditReport struct {
+	HostID      string              `json:"host_id"`
+	Fingerprint string              `json:"fingerprint,omitempty"`
+	Timestamp   int64               `json:"timestamp"`
+	Events      []ContentAuditEvent `json:"events"`
 }

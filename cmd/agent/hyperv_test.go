@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -131,5 +132,40 @@ func TestHypervHealth(t *testing.T) {
 		if got := hypervHealth(c.state, c.repl); got != c.want {
 			t.Errorf("hypervHealth(%q,%q) = %q, want %q", c.state, c.repl, got, c.want)
 		}
+	}
+}
+
+// TestParseHyperVDiagnostic covers the Get-VM failure diagnostic: a non-elevated
+// agent (the #1 "Hyper-V shows nothing" cause) must yield an actionable
+// "reinstall as admin" error — NOT a silent empty inventory that looks identical
+// to a host with zero VMs.
+func TestParseHyperVDiagnostic(t *testing.T) {
+	// Non-elevated: Get-VM access-denied → must blame elevation + say reinstall as admin.
+	nonElevated := `{"__hyperv_error__":true,"elevated":false,"message":"You do not have the required permission to complete this task."}`
+	guests, err := parseHyperV(nonElevated)
+	if err == nil {
+		t.Fatal("non-elevated diagnostic: expected an error, got nil (silent empty is the bug)")
+	}
+	if guests != nil {
+		t.Errorf("non-elevated diagnostic: expected nil guests, got %d", len(guests))
+	}
+	if !strings.Contains(err.Error(), "管理员") {
+		t.Errorf("non-elevated error should tell the user to run as 管理员, got: %v", err)
+	}
+
+	// Elevated but Get-VM still failed → a different message (role/service), NOT elevation.
+	elevated := `{"__hyperv_error__":true,"elevated":true,"message":"The Virtual Machine Management Service is not running."}`
+	_, err2 := parseHyperV(elevated)
+	if err2 == nil {
+		t.Fatal("elevated failure: expected an error, got nil")
+	}
+	if strings.Contains(err2.Error(), "未以管理员") {
+		t.Errorf("elevated failure must NOT blame elevation, got: %v", err2)
+	}
+
+	// A genuine 0-VM host returns "[]" (Get-VM does not throw) → clean empty, no error.
+	g3, err3 := parseHyperV("[]")
+	if err3 != nil || len(g3) != 0 {
+		t.Errorf("0-VM host: want (nil,nil), got (%v, %v)", g3, err3)
 	}
 }

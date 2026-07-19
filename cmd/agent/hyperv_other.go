@@ -15,4 +15,6 @@ var errHypervUnsupported = errors.New("Hyper-V 采集仅支持 Windows 宿主机
 
 func hypervAvailable() bool { return false }
 
-func hypervCollect() ([]shared.HyperVGuest, error) { return nil, errHypervUnsupported }
+func hypervCollect() ([]shared.HyperVGuest, hypervHostStats, error) {
+	return nil, hypervHostStats{}, errHypervUnsupported
+}

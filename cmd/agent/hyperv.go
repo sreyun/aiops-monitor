@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,33 +23,41 @@ import (
 // parseHyperV / splitComma / hypervHealth live here (cross-platform, pure) so
 // they stay unit-testable on any OS; only the PowerShell exec is Windows-only.
 
+// hypervHostStats carries the physical host's own resource snapshot alongside the
+// guest inventory (currently RAM; populated by the Windows collector, zero elsewhere).
+type hypervHostStats struct {
+	TotalMemMB float64
+	AvailMemMB float64
+}
+
 // hypervRaw mirrors one object emitted by hypervScript's ConvertTo-Json. Field
 // names match the PowerShell property names (json is case-insensitive). IP and
 // Switches arrive comma-joined to dodge PS 5.1's "single-element array collapses
 // to a scalar" JSON quirk.
 type hypervRaw struct {
-	Name            string
-	Id              string
-	State           string
-	Status          string
-	CPUUsage        float64
-	ProcessorCount  int
-	MemAssignedMB   float64
-	MemDemandMB     float64
-	MemStartupMB    float64
-	MemMinMB        float64
-	MemMaxMB        float64
+	Name                 string
+	Id                   string
+	State                string
+	Status               string
+	CPUUsage             float64
+	CPUGuestPct          float64
+	ProcessorCount       int
+	MemAssignedMB        float64
+	MemDemandMB          float64
+	MemStartupMB         float64
+	MemMinMB             float64
+	MemMaxMB             float64
 	DynamicMemoryEnabled bool
-	UptimeSec       int64
-	Generation      int
-	Version         string
-	IntegrationState string
-	IP              string
-	Switches        string
-	VHDCount        int
-	CheckpointCount int
-	ReplState       string
-	ReplHealth      string
+	UptimeSec            int64
+	Generation           int
+	Version              string
+	IntegrationState     string
+	IP                   string
+	Switches             string
+	VHDCount             int
+	CheckpointCount      int
+	ReplState            string
+	ReplHealth           string
 	// 嵌套集合：PS 单元素数组会折叠成对象，故用 RawMessage + unwrapArray 兜底。
 	Nics        json.RawMessage
 	Disks       json.RawMessage
@@ -76,6 +85,22 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 	if s == "" || s == "null" || s == "[]" {
 		return nil, nil
 	}
+	// Diagnostic marker: Get-VM threw (it does NOT throw for a 0-VM host — that
+	// returns "[]" above — so this is a real failure, almost always access-denied
+	// because the agent isn't elevated). Surface a clear, actionable error instead
+	// of the silent empty inventory that made "0 VMs" and "can't read VMs" look alike.
+	if strings.Contains(s, `"__hyperv_error__"`) {
+		var diag struct {
+			Elevated bool   `json:"elevated"`
+			Message  string `json:"message"`
+		}
+		_ = json.Unmarshal([]byte(s), &diag)
+		msg := strings.TrimSpace(diag.Message)
+		if !diag.Elevated {
+			return nil, fmt.Errorf("无法枚举 Hyper-V 虚拟机：Agent 未以管理员/SYSTEM 身份运行。请在【以管理员身份运行的 PowerShell】中重新执行安装命令（Hyper-V 采集需要管理员权限）。原始错误: %s", msg)
+		}
+		return nil, fmt.Errorf("Get-VM 调用失败（Agent 已提权，请确认 Hyper-V 角色/管理服务正常）: %s", msg)
+	}
 	if strings.HasPrefix(s, "{") { // single VM: wrap back into an array
 		s = "[" + s + "]"
 	}
@@ -90,11 +115,11 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 		}
 		g := shared.HyperVGuest{
 			Name: r.Name, ID: r.Id, State: r.State, Status: r.Status,
-			CPUUsage: r.CPUUsage, ProcessorCount: r.ProcessorCount,
+			CPUUsage: r.CPUUsage, CPUGuestPct: r.CPUGuestPct, ProcessorCount: r.ProcessorCount,
 			MemAssignedMB: r.MemAssignedMB, MemDemandMB: r.MemDemandMB,
 			MemStartupMB: r.MemStartupMB, MemMinMB: r.MemMinMB, MemMaxMB: r.MemMaxMB,
 			DynamicMemEnabled: r.DynamicMemoryEnabled,
-			UptimeSec: r.UptimeSec, Generation: r.Generation, Version: r.Version,
+			UptimeSec:         r.UptimeSec, Generation: r.Generation, Version: r.Version,
 			IntegrationState: r.IntegrationState,
 			IPAddresses:      splitComma(r.IP), Switches: splitComma(r.Switches),
 			VHDCount: r.VHDCount, CheckpointCount: r.CheckpointCount,
@@ -197,13 +222,15 @@ func (a *Agent) runHyperVCollector() {
 				slog.Error("Hyper-V 采集 panic 已恢复", "panic", r)
 			}
 		}()
-		guests, err := hypervCollect()
+		guests, hstats, err := hypervCollect()
 		rep := shared.HyperVReport{
-			HostID:      a.identity.HostID,
-			Fingerprint: a.identity.Fingerprint,
-			Timestamp:   time.Now().Unix(),
-			HostName:    a.identity.Hostname,
-			Guests:      guests,
+			HostID:         a.identity.HostID,
+			Fingerprint:    a.identity.Fingerprint,
+			Timestamp:      time.Now().Unix(),
+			HostName:       a.identity.Hostname,
+			HostTotalMemMB: hstats.TotalMemMB,
+			HostAvailMemMB: hstats.AvailMemMB,
+			Guests:         guests,
 		}
 		if err != nil {
 			rep.Error = err.Error()

@@ -295,9 +295,36 @@ $Server   = "__SERVER__"
 $Token    = "__TOKEN__"
 $Category = "__CATEGORY__"
 $LogPaths = '__LOG_PATHS__'
+$ServersJson = '__SERVERS_JSON__'
 # Elevated installs run the agent as SYSTEM (needed for Hyper-V Get-VM) and live
 # machine-wide under ProgramData; non-elevated installs stay per-user as before.
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+
+# Hyper-V auto-elevation: Get-VM needs admin/SYSTEM, so a per-user install on a
+# Hyper-V host silently collects ZERO VMs. When NOT elevated AND this is a Hyper-V
+# host, relaunch the SAME install elevated via UAC — the elevated run installs as
+# SYSTEM and collects Hyper-V. Non-Hyper-V hosts keep the no-admin per-user install
+# untouched. The command is passed as -EncodedCommand (base64 UTF-16LE) to dodge all
+# quoting pitfalls. If UAC is declined or unavailable (headless), we fall through to
+# the per-user install below, so this can only help, never block.
+if (-not $IsAdmin -and (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
+  Write-Host "[AIOps] Hyper-V host detected but PowerShell is not elevated."
+  Write-Host "[AIOps] Requesting administrator rights (UAC) so Hyper-V VM collection works..."
+  try {
+    $q = "token=" + [Uri]::EscapeDataString([string]$Token)
+    if ($Category) { $q += "&category=" + [Uri]::EscapeDataString([string]$Category) }
+    if ($LogPaths -and $LogPaths -ne "[]") { $q += "&log_paths=" + [Uri]::EscapeDataString([string]$LogPaths) }
+    if ($ServersJson) { $q += "&servers_json=" + [Uri]::EscapeDataString([string]$ServersJson) }
+    $reinvoke = '[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072; irm "' + $Server + '/install.ps1?' + $q + '" | iex'
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($reinvoke))
+    Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$enc -ErrorAction Stop
+    Write-Host "[AIOps] Elevated installer launched in a new window (approve the UAC prompt). This non-admin window is done."
+    return
+  } catch {
+    Write-Host "[AIOps] Elevation declined or unavailable; continuing with a per-user install."
+    Write-Host "[AIOps] NOTE: Hyper-V VM collection stays OFF until you re-run this command in an ELEVATED PowerShell."
+  }
+}
 if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = Join-Path $env:LOCALAPPDATA "aiops-agent" }
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"

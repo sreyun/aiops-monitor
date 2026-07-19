@@ -162,9 +162,19 @@ function hvHostNode(inv) {
   const collapsed = HV_COLLAPSED.has(inv.host_id) && !filtering;
 
   const countTitle = `${guests.length} ${esc(hvT("hyperv.vm", "虚拟机"))} · ${running} ${esc(hvT("hyperv.st_running", "运行中"))}${bad ? ` · ${bad} ${esc(hvT("hyperv.attention", "需关注"))}` : ""}`;
+  // 宿主机自身内存：可用/总（GB）。着色随占用率——余量少时转警示色，一眼看出宿主吃紧。
+  const tMem = +inv.host_total_mem_mb || 0, aMem = +inv.host_avail_mem_mb || 0;
+  let memTxt = "";
+  if (tMem > 0) {
+    const usedPct = Math.round((tMem - aMem) / tMem * 100);
+    const cls = usedPct >= 90 ? " crit" : (usedPct >= 80 ? " warn" : "");
+    const memTitle = `${esc(hvT("hyperv.host_mem", "宿主机内存 可用/总"))} · ${esc(hvT("hyperv.mem_used", "已用"))} ${usedPct}%`;
+    memTxt = `<span class="hv-hostmem${cls}" title="${memTitle}">${(aMem / 1024).toFixed(1)}/${(tMem / 1024).toFixed(1)} GB</span>`;
+  }
   const head = `<div class="hv-hosthead" data-hvhosttoggle="${esc(inv.host_id)}">
     <span class="hv-caret2">${collapsed ? "▸" : "▾"}</span>
     <span class="name" title="${esc(hostName)}">🖥 ${esc(hostName)}</span>
+    ${memTxt}
     <span class="hv-hostcount${bad ? " bad" : ""}" title="${countTitle}">${guests.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
   </div>`;
 
@@ -213,9 +223,11 @@ function hvOverviewCard(inv, g) {
 
 function hvCpuCard(g) {
   const running = g.state === "Running";
-  const cpu = running ? Math.round(g.cpu_usage || 0) : 0;
+  const cpuHost = running ? (+g.cpu_usage || 0) : 0;              // 占整机 CPU 比例
+  const cpuGuest = running ? (+g.cpu_guest_pct || 0) : 0;         // 占该 VM 自身 vCPU 比例(0~100)
   return `<div class="hv-card"><h4>CPU</h4>
-    ${bar(hvT("hyperv.cpu_host", "占宿主 CPU"), cpu, running ? cpu + "%" : "—")}
+    ${bar(hvT("hyperv.cpu_guest", "客户机 CPU 利用率"), Math.round(cpuGuest), running ? cpuGuest.toFixed(1) + "%" : "—")}
+    ${hvKv(hvT("hyperv.cpu_host", "占宿主 CPU"), running ? cpuHost.toFixed(1) + "%" : "—")}
     ${hvKv(hvT("hyperv.vcpu", "vCPU 数"), g.processor_count || "—")}
   </div>`;
 }
@@ -288,7 +300,7 @@ function hvQuickStats(g) {
   const running = g.state === "Running";
   const chip = (k, v) => `<span class="hv-chip"><span class="ck">${k}</span><span class="cv">${v}</span></span>`;
   const chips = [
-    chip("CPU", running ? Math.round(g.cpu_usage || 0) + "%" : "—"),
+    chip("CPU", running ? Math.round(+g.cpu_guest_pct || +g.cpu_usage || 0) + "%" : "—"),
     chip(hvT("hyperv.memory", "内存"), running && g.mem_assigned_mb ? Math.round(g.mem_assigned_mb) + " MB" : "—"),
     chip("vCPU", g.processor_count || "—"),
     chip(hvT("hyperv.ov_uptime", "运行"), running && g.uptime_sec ? esc(fmtUptime(g.uptime_sec)) : "—"),
@@ -412,6 +424,10 @@ function hvInjectStyles() {
   .hv-hostcount{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt2);background:var(--panel3);border:1px solid var(--line);border-radius:20px;padding:1px 8px;font-variant-numeric:tabular-nums;flex:0 0 auto}
   .hv-hostcount .hc-bad{color:var(--warn-txt);font-weight:600}
   .hv-hostcount .hc-bad::before{content:"⚠ "}
+  .hv-hostmem{font-size:11px;color:var(--txt2);font-variant-numeric:tabular-nums;flex:0 0 auto;white-space:nowrap;opacity:.9}
+  .hv-hostmem::before{content:"🧠 ";opacity:.7}
+  .hv-hostmem.warn{color:var(--warn-txt);opacity:1}
+  .hv-hostmem.crit{color:var(--crit-txt);font-weight:600;opacity:1}
   .hv-caret2{color:var(--muted);font-size:11px;width:12px;text-align:center;flex:0 0 12px}
   .hv-vmlist{padding:2px 0 6px}
   .hv-vm{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 28px;cursor:pointer;border-left:2px solid transparent}

@@ -25,11 +25,13 @@ const (
 )
 
 type hvHostEntry struct {
-	hostname  string
-	ip        string
-	updatedAt int64
-	guests    []shared.HyperVGuest
-	lastError string // 最近一次采集失败原因（非空时 guests 为上一份好数据）
+	hostname   string
+	ip         string
+	updatedAt  int64
+	guests     []shared.HyperVGuest
+	totalMemMB float64 // 物理宿主机总内存(MB)，采集成功时更新，用于「可用/总内存」显示
+	availMemMB float64 // 物理宿主机可用内存(MB)
+	lastError  string  // 最近一次采集失败原因（非空时 guests 为上一份好数据）
 	// 关机告警只在 Running→非运行的**跳变**时触发（并保持到恢复），避免为"故意长期
 	// 关机的模板机/备用机"刷屏。stateByVM 记录上一份各 VM 状态，alarmVM 记录"当前应
 	// 就其非运行状态告警"的 VM（sticky：直到该 VM 回到 Running 或消失才清除）。
@@ -50,7 +52,7 @@ func newHypervStore() *hypervStore {
 // put records the newest inventory for a host. On a collection error the previous
 // guest list is PRESERVED (only lastError is updated) so a transient Get-VM
 // failure never wipes good data or fabricates "all VMs removed" changes.
-func (hs *hypervStore) put(hostID, hostname, ip string, guests []shared.HyperVGuest, errMsg string) {
+func (hs *hypervStore) put(hostID, hostname, ip string, guests []shared.HyperVGuest, errMsg string, totalMemMB, availMemMB float64) {
 	if hs == nil || hostID == "" {
 		return
 	}
@@ -62,6 +64,10 @@ func (hs *hypervStore) put(hostID, hostname, ip string, guests []shared.HyperVGu
 		cp := make([]shared.HyperVGuest, len(guests))
 		copy(cp, guests)
 		e.guests = cp
+		// 宿主机内存随成功采集更新；采集失败时保留上一份（同 guests 的保留策略）。
+		if totalMemMB > 0 {
+			e.totalMemMB, e.availMemMB = totalMemMB, availMemMB
+		}
 		// 计算跳变告警集：VM 非运行(关机/暂停/保存)且【上一份是 Running】=崩溃式停机→告警；
 		// 已在告警且仍未回到 Running 则保持(sticky)。回到 Running 或消失则自然清除(不在新集里)。
 		newState := make(map[string]string, len(guests))
@@ -79,6 +85,20 @@ func (hs *hypervStore) put(hostID, hostname, ip string, guests []shared.HyperVGu
 		e.alarmVM = newAlarm
 	}
 	hs.byID[hostID] = e
+}
+
+// hostMemOf returns the host's total/available RAM (MB) from the latest report,
+// (0,0) when unknown. Used to annotate the inventory list with "可用/总内存".
+func (hs *hypervStore) hostMemOf(hostID string) (total, avail float64) {
+	if hs == nil {
+		return 0, 0
+	}
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	if e, ok := hs.byID[hostID]; ok {
+		return e.totalMemMB, e.availMemMB
+	}
+	return 0, 0
 }
 
 // guestsOf returns the latest guests for one host (nil when none).

@@ -327,6 +327,7 @@ const PAGE_META = {
   hardware:  { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
   hyperv:    { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
   netflow:   { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
+  "content-audit": { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" },
   snmp:      { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
@@ -348,19 +349,30 @@ function rebuildPageMeta() {
   PAGE_META.hardware   = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
   PAGE_META.hyperv     = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
   PAGE_META.netflow    = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
+  PAGE_META["content-audit"] = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" };
   PAGE_META.snmp       = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
+// NET_TABS 返回「网络」父导航的三个子标签（流量/网络设备/内容审计），随语言就地取标签。
+function NET_TABS() {
+  return [
+    ["netflow", I18N.t("net.tab_traffic") || "流量"],
+    ["snmp", I18N.t("net.tab_devices") || "网络设备"],
+    ["content-audit", I18N.t("net.tab_content") || "内容审计"],
+  ];
+}
 const VIEW_TAB_GROUPS = {
   checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
   apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "API 业务监控"]] },
   alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
-  // 「网络」父导航：合并 流量(NetFlow) 与 网络设备(SNMP 接口 + Trap)。parent=netflow=第一个子标签。
-  netflow:    { parent: "netflow", tabs: [["netflow", I18N.t("net.tab_traffic") || "流量"], ["snmp", I18N.t("net.tab_devices") || "网络设备"]] },
-  snmp:       { parent: "netflow", tabs: [["netflow", I18N.t("net.tab_traffic") || "流量"], ["snmp", I18N.t("net.tab_devices") || "网络设备"]] },
+  // 「网络」父导航：合并 流量(NetFlow) / 网络设备(SNMP 接口 + Trap) / 内容审计(明文HTTP)。
+  // parent=netflow=第一个子标签。三个 view 共用同一组子标签。
+  netflow:         { parent: "netflow", tabs: NET_TABS() },
+  snmp:            { parent: "netflow", tabs: NET_TABS() },
+  "content-audit": { parent: "netflow", tabs: NET_TABS() },
   // 「资源」父导航：合并 硬件(Redfish/OceanStor) 与 虚拟机(Hyper-V)。多数虚拟机来自硬件设备，
   // 故归为同一入口。parent=hardware=第一个子标签，标签复用 nav.hardware / nav.hyperv 三语键。
   hardware:   { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"]] },
@@ -398,6 +410,7 @@ function switchView(view) {
   if (view === "hyperv" && window._pageRenderers && window._pageRenderers.hyperv) window._pageRenderers.hyperv();
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   if (view === "snmp" && window._pageRenderers && window._pageRenderers.snmp) window._pageRenderers.snmp();
+  if (view === "content-audit" && window._pageRenderers && window._pageRenderers["content-audit"]) window._pageRenderers["content-audit"]();
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

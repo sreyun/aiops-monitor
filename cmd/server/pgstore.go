@@ -339,6 +339,24 @@ func (p *pgStore) migrate() error {
 			received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS idx_snmp_traps_host_time ON snmp_traps(host_id, received_at DESC);
+
+		-- 明文 HTTP 内容审计（Phase 2）。高敏感：body 可能含用户发给大模型的 prompt。
+		-- 落 PG 是因为审计记录不可易失；保留期由 cleanup 定期清理（见 cleanupContentAudit）。
+		CREATE TABLE IF NOT EXISTS content_audit (
+			id          BIGSERIAL PRIMARY KEY,
+			host_id     TEXT NOT NULL,
+			src_ip      TEXT,
+			dst_ip      TEXT,
+			dst_port    INT,
+			method      TEXT,
+			host        TEXT,
+			path        TEXT,
+			ctype       TEXT,
+			body        TEXT,
+			observed_at TIMESTAMPTZ,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_content_audit_host_time ON content_audit(host_id, created_at DESC);
 	`)
 	return err
 }
@@ -2377,6 +2395,83 @@ func (p *pgStore) getSNMPHosts() ([]map[string]any, error) {
 		out = append(out, map[string]any{"host_id": hid, "devices": devices, "reachable": reachable, "traps": traps})
 	}
 	return out, rows.Err()
+}
+
+// insertContentAudit 批量写入明文 HTTP 内容审计事件。
+func (p *pgStore) insertContentAudit(hostID string, evs []shared.ContentAuditEvent) {
+	if len(evs) == 0 {
+		return
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO content_audit
+		(host_id, src_ip, dst_ip, dst_port, method, host, path, ctype, body, observed_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`)
+	if err != nil {
+		return
+	}
+	defer stmt.Close()
+	for _, e := range evs {
+		_, _ = stmt.Exec(hostID, e.SrcIP, e.DstIP, int(e.DstPort), e.Method, e.Host, e.Path, e.CType, e.Body, time.Unix(e.Ts, 0))
+	}
+	_ = tx.Commit()
+}
+
+// getContentAudit 查询内容审计记录，最新在前。filter 支持 "host:", "src_ip:", "path:", "kw:"(body/path 模糊)。
+func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	q := `SELECT src_ip, dst_ip, dst_port, method, host, path, ctype, body, observed_at
+	      FROM content_audit WHERE host_id=$1`
+	args := []any{hostID}
+	idx := 2
+	if filter != "" {
+		if col, val, ok := strings.Cut(filter, ":"); ok && val != "" {
+			switch col {
+			case "src_ip", "dst_ip", "host", "method":
+				q += fmt.Sprintf(" AND %s = $%d", col, idx)
+				args = append(args, val)
+				idx++
+			case "kw": // body/path/host 模糊匹配
+				q += fmt.Sprintf(" AND (body ILIKE $%d OR path ILIKE $%d OR host ILIKE $%d)", idx, idx, idx)
+				args = append(args, "%"+val+"%")
+				idx++
+			}
+		}
+	}
+	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", idx)
+	args = append(args, limit)
+	rows, err := p.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var srcIP, dstIP, method, host, path, ctype, body string
+		var dstPort int
+		var observedAt time.Time
+		if err := rows.Scan(&srcIP, &dstIP, &dstPort, &method, &host, &path, &ctype, &body, &observedAt); err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"src_ip": srcIP, "dst_ip": dstIP, "dst_port": dstPort, "method": method,
+			"host": host, "path": path, "ctype": ctype, "body": body, "observed_at": observedAt,
+		})
+	}
+	return out, rows.Err()
+}
+
+// cleanupContentAudit 按保留天数清理内容审计（默认 30 天）。审计数据高敏感，不宜永久留存。
+func (p *pgStore) cleanupContentAudit(retainDays int) {
+	if retainDays <= 0 {
+		retainDays = 30
+	}
+	_, _ = p.db.Exec(fmt.Sprintf("DELETE FROM content_audit WHERE created_at < NOW() - INTERVAL '%d days'", retainDays))
 }
 
 // cleanupFlowRecords deletes flow records older than 7 days (called periodically).

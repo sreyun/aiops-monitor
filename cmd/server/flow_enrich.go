@@ -29,6 +29,11 @@ type flowEnrichment struct {
 	Private bool   `json:"private,omitempty"` // 内网/保留地址（不富化）
 }
 
+// hasData 是否有可展示的富化内容（域名/归属/国家任一）。仅内网且无 PTR 时为 false。
+func (e flowEnrichment) hasData() bool {
+	return e.Host != "" || e.Org != "" || e.Country != ""
+}
+
 type enrichCacheEntry struct {
 	res flowEnrichment
 	at  time.Time
@@ -81,15 +86,19 @@ func (e *flowEnricher) enrichOne(ctx context.Context, ipStr string) flowEnrichme
 
 	ip := net.ParseIP(ipStr)
 	var res flowEnrichment
-	if isPrivateOrReserved(ip) {
-		res.Private = true
-		e.store(ipStr, res)
-		return res
-	}
+	priv := isPrivateOrReserved(ip)
+	res.Private = priv
 
-	// 反向 DNS（PTR）——公网 IP 也常有 PTR（如 CDN/云厂商）。
+	// 反向 DNS（PTR）对内外网都做：内网常有内部 PTR（如 workstation-01.corp.local / 内网自建
+	// 大模型主机名），一样有价值；公网 IP 的 PTR 多来自 CDN/云厂商。
 	if names, err := e.res.LookupAddr(ctx, ipStr); err == nil && len(names) > 0 {
 		res.Host = strings.TrimSuffix(names[0], ".")
+	}
+
+	// 内网/保留地址不做对外 ASN 查询（无意义），到此即可。
+	if priv {
+		e.store(ipStr, res)
+		return res
 	}
 
 	// ASN / 国家 / 组织：仅 IPv4 走 Cymru origin（IPv6 用 origin6，此处从简，PTR 已可用）。

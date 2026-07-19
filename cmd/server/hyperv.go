@@ -52,7 +52,7 @@ func (s *Server) handleAgentHyperV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 缓存最新清单（供告警评估每轮复用）。采集失败时 put 会保留上一份好数据、只记 lastError。
-	s.hv.put(rep.HostID, hostname, ip, rep.Guests, rep.Error)
+	s.hv.put(rep.HostID, hostname, ip, rep.Guests, rep.Error, rep.HostTotalMemMB, rep.HostAvailMemMB)
 
 	if rep.Error != "" {
 		slog.Warn("Hyper-V 采集失败，保留上一份清单不覆盖", "host_id", rep.HostID, "err", rep.Error)
@@ -103,6 +103,18 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.enrichHyperVLinks(rows)
+	// Annotate each host with its own RAM (from the in-memory store, latest report)
+	// so the frontend can show "宿主机名 · 可用/总内存" without a PG schema change.
+	for _, row := range rows {
+		hid, _ := row["host_id"].(string)
+		if hid == "" {
+			continue
+		}
+		if total, avail := s.hv.hostMemOf(hid); total > 0 {
+			row["host_total_mem_mb"] = total
+			row["host_avail_mem_mb"] = avail
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"inventories": rows})
 }
 
@@ -212,6 +224,9 @@ func (s *Server) pushHyperVMetrics(hostID string, guests []shared.HyperVGuest, t
 		}
 		fmt.Fprintf(&b, "aiops_hyperv_state{host=%q,vm=%q} %g %d\n", host, vm, stateVal, ms)
 		fmt.Fprintf(&b, "aiops_hyperv_cpu_percent{host=%q,vm=%q} %g %d\n", host, vm, g.CPUUsage, ms)
+		if g.CPUGuestPct > 0 {
+			fmt.Fprintf(&b, "aiops_hyperv_cpu_guest_percent{host=%q,vm=%q} %g %d\n", host, vm, g.CPUGuestPct, ms)
+		}
 		if g.MemAssignedMB > 0 {
 			fmt.Fprintf(&b, "aiops_hyperv_mem_assigned_mb{host=%q,vm=%q} %g %d\n", host, vm, g.MemAssignedMB, ms)
 		}

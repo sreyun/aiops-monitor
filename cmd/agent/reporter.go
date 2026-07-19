@@ -285,6 +285,7 @@ type Agent struct {
 	netflowCfg       *NetFlowConfig
 	packetCfg        *PacketConfig
 	snmpCfg          *SNMPConfig
+	sniCfg           *SNIConfig
 	hypervInterval   time.Duration // Hyper-V 虚拟机采集间隔（0 → 默认 60s）
 	hypervDisabled   bool          // 显式关闭 Hyper-V 采集（默认自动探测）
 
@@ -479,6 +480,14 @@ func (a *Agent) Run(ctx context.Context) {
 			go tr.run(a.postSNMPTrapReport)
 			slog.Info("SNMP Trap 接收器已启动", "listen", a.snmpCfg.TrapListen)
 		}
+	}
+
+	// Start SNI/DNS capture（目的 IP→真实域名；Linux 抓包，需 root，默认关）。run() 内含阻塞
+	// 读循环，独立 goroutine，不入 childWg（被动抓包无关键状态，进程退出即弃，关停快）。
+	if a.sniCfg != nil && a.sniCfg.Enabled {
+		sc := newSNICollector(*a.sniCfg, a.identity.HostID, a.identity.Fingerprint)
+		go sc.run(a.postDNSMapReport, a.postContentAuditReport)
+		slog.Info("SNI/DNS 抓取器已启动", "iface", a.sniCfg.Interface, "content_audit", a.sniCfg.ContentAudit)
 	}
 
 	// Start Hyper-V guest inventory collector
@@ -798,6 +807,68 @@ func (a *Agent) postNetFlowReport(rep shared.NetFlowReport) {
 }
 
 // postSNMPReport sends polled SNMP device metrics to all server targets.
+// postDNSMapReport 上报 SNI/DNS 域名观测到所有 server（与 postSNMPReport 同构）。
+func (a *Agent) postDNSMapReport(rep shared.DNSMapReport) {
+	body, err := json.Marshal(rep)
+	if err != nil {
+		slog.Warn("域名观测上报序列化失败", "err", err)
+		return
+	}
+	fp := a.identity.Fingerprint
+	for _, t := range a.targets {
+		go func(tgt *serverTarget) {
+			req, err := http.NewRequest("POST", tgt.server+"/api/v1/agent/dnsmap", bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if fp != "" {
+				req.Header.Set("X-Agent-Fingerprint", fp)
+			}
+			resp, err := tgt.httpc.Do(req)
+			if err != nil {
+				slog.Warn("域名观测上报失败", "server", tgt.server, "err", err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				slog.Warn("域名观测上报被拒", "server", tgt.server, "status", resp.StatusCode)
+			}
+		}(t)
+	}
+}
+
+// postContentAuditReport 上报明文 HTTP 内容审计事件（与 postDNSMapReport 同构）。
+func (a *Agent) postContentAuditReport(rep shared.ContentAuditReport) {
+	body, err := json.Marshal(rep)
+	if err != nil {
+		slog.Warn("内容审计上报序列化失败", "err", err)
+		return
+	}
+	fp := a.identity.Fingerprint
+	for _, t := range a.targets {
+		go func(tgt *serverTarget) {
+			req, err := http.NewRequest("POST", tgt.server+"/api/v1/agent/content-audit", bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if fp != "" {
+				req.Header.Set("X-Agent-Fingerprint", fp)
+			}
+			resp, err := tgt.httpc.Do(req)
+			if err != nil {
+				slog.Warn("内容审计上报失败", "server", tgt.server, "err", err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				slog.Warn("内容审计上报被拒", "server", tgt.server, "status", resp.StatusCode)
+			}
+		}(t)
+	}
+}
+
 func (a *Agent) postSNMPReport(rep shared.SNMPReport) {
 	body, err := json.Marshal(rep)
 	if err != nil {

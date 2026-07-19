@@ -50,6 +50,7 @@ type config struct {
 	NetFlow          *NetFlowConfig    `json:"netflow,omitempty"`           // NetFlow 网络流量接收
 	PacketCapture    *PacketConfig     `json:"packet_capture,omitempty"`    // 五元组包报文采集
 	SNMP             *SNMPConfig       `json:"snmp,omitempty"`              // SNMP 轮询 + Trap 接收（网络设备纳管）
+	SNI              *SNIConfig        `json:"sni_dns_capture,omitempty"`   // SNI/DNS 抓取：目的 IP→真实域名（Linux，需 root，默认关）
 	// Hyper-V 虚拟机采集：默认在 Windows Hyper-V 宿主机上自动探测启用，无需配置
 	HyperVIntervalSec int  `json:"hyperv_interval_sec,omitempty"` // 采集间隔(秒)，默认 60
 	HyperVDisabled    bool `json:"hyperv_disabled,omitempty"`     // 显式关闭 Hyper-V 采集
@@ -324,6 +325,7 @@ func main() {
 	agent.netflowCfg = cfg.NetFlow
 	agent.packetCfg = cfg.PacketCapture
 	agent.snmpCfg = cfg.SNMP
+	agent.sniCfg = cfg.SNI
 	agent.hypervInterval = time.Duration(cfg.HyperVIntervalSec) * time.Second
 	agent.hypervDisabled = cfg.HyperVDisabled
 

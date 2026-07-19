@@ -292,7 +292,11 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 		en := flowEnrich.enrichMany(ips, 3*time.Second)
 		for _, it := range summary {
 			if k, _ := it["key"].(string); k != "" {
-				if e, ok := en[k]; ok && !e.Private {
+				e := en[k]
+				if dom, _, ok := dnsObservations.lookup(hostID, k); ok {
+					e.Host = dom
+				}
+				if e.hasData() {
 					it["enrich"] = e
 				}
 			}
@@ -359,12 +363,21 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 		en := flowEnrich.enrichMany(ips, 3*time.Second)
 		for _, f := range flows {
 			if v, _ := f["dst_ip"].(string); v != "" {
-				if e, ok := en[v]; ok && !e.Private {
+				e := en[v]
+				// agent 观测到的真实域名(SNI/DNS)优先于反向 PTR——那是用户实际请求的域名。
+				if dom, _, ok := dnsObservations.lookup(hostID, v); ok {
+					e.Host = dom
+				}
+				if e.hasData() {
 					f["dst_enrich"] = e
 				}
 			}
 			if v, _ := f["src_ip"].(string); v != "" {
-				if e, ok := en[v]; ok && !e.Private {
+				e := en[v]
+				if dom, _, ok := dnsObservations.lookup(hostID, v); ok {
+					e.Host = dom
+				}
+				if e.hasData() {
 					f["src_enrich"] = e
 				}
 			}

@@ -95,8 +95,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			// 启动后立即执行一次
 			s.pg.decayOldMemories()
 			s.pg.cleanupExpiredMemories()
-			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
-			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
+			s.pg.capMemoriesByKind(2000)      // 每种 kind 最多 2000 条
+			s.pg.cleanupFlowRecords()         // 清理过期 Flow 记录
+			s.pg.cleanupContentAudit(30)      // 内容审计保留 30 天（高敏感，不永久留存）
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
@@ -105,6 +106,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.cleanupExpiredMemories()
 				s.pg.capMemoriesByKind(2000)
 				s.pg.cleanupFlowRecords()
+				s.pg.cleanupContentAudit(30)
 				// 自进化：把近期高价值经验提炼成可复用技能(SOP)。放在维护循环里而非启动时，
 				// 避免每次启动都触发 AI 调用；提炼失败/无新经验时静默跳过（distillSkills 内部已记日志）。
 				_, _ = s.distillSkills(14)
@@ -319,6 +321,9 @@ func (s *Server) Routes() http.Handler {
 	// SNMP: agent ingest (fingerprint-gated)
 	mux.HandleFunc("POST /api/v1/agent/snmp", s.handleAgentSNMP)
 	mux.HandleFunc("POST /api/v1/agent/snmp/trap", s.handleAgentSNMPTrap)
+	mux.HandleFunc("POST /api/v1/agent/dnsmap", s.handleAgentDNSMap)
+	mux.HandleFunc("POST /api/v1/agent/content-audit", s.handleAgentContentAudit)
+	mux.HandleFunc("GET /api/v1/content-audit", s.handleContentAudit)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
@@ -362,7 +367,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)
