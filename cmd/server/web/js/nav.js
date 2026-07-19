@@ -340,6 +340,7 @@ function rebuildPageMeta() {
   PAGE_META.thresholds = { title: "告警", sub: _SUB_ALT };
   PAGE_META.checks     = { title: "监控", sub: _SUB_MON };
   PAGE_META.apimon     = { title: "监控", sub: _SUB_MON };
+  PAGE_META.scrape     = { title: "监控", sub: _SUB_MON };
   PAGE_META.automation = { title: "编排", sub: I18N.t("section.automation_desc") };
   PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
   PAGE_META.sre        = { title: "诊断", sub: I18N.t("section.sre_desc") };
@@ -363,8 +364,9 @@ function NET_TABS() {
   ];
 }
 const VIEW_TAB_GROUPS = {
-  checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"]] },
-  apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"]] },
+  checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"], ["scrape", "指标抓取"]] },
+  apimon:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"], ["scrape", "指标抓取"]] },
+  scrape:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"], ["scrape", "指标抓取"]] },
   alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
@@ -403,6 +405,7 @@ function switchView(view) {
   if (view === "sre") loadSRE();
   if (view === "logs") loadLogs();
   if (view === "apimon") { loadAPIMon(); loadAPITxns(); loadDist(); }
+  if (view === "scrape") { loadScrapes(); loadPromWrite(); }
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();

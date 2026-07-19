@@ -222,6 +222,52 @@ func (v *vmWriter) pushChecks(url string, samples []vmCheckSample) {
 	resp.Body.Close()
 }
 
+// writeLabeled 把带标签样本以 Prometheus 文本格式写入 VM（/api/v1/import/prometheus）。
+// 供 exporter 抓取摄入使用；VM 原生按标签存储，与主机/拨测指标同库，可被阈值/SLO/AI 联合查询。
+func (v *vmWriter) writeLabeled(samples []shared.LabeledSample) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" || len(samples) == 0 {
+		return
+	}
+	var b strings.Builder
+	for _, s := range samples {
+		if s.Name == "" {
+			continue
+		}
+		b.WriteString(s.Name)
+		if len(s.Labels) > 0 {
+			b.WriteByte('{')
+			first := true
+			for k, val := range s.Labels {
+				if k == "" {
+					continue
+				}
+				if !first {
+					b.WriteByte(',')
+				}
+				first = false
+				b.WriteString(k)
+				b.WriteString(`="`)
+				b.WriteString(lblEsc(val))
+				b.WriteString(`"`)
+			}
+			b.WriteByte('}')
+		}
+		fmt.Fprintf(&b, " %g %d\n", s.Value, s.TsMs)
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(c.URL, "/")+"/api/v1/import/prometheus", strings.NewReader(b.String()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		slog.Warn("VictoriaMetrics 写入抓取指标失败", "err", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 // queryCheckHistory 从 VM 读取某拨测在 [from,to] 的结果序列，重组为 []CheckPoint（重启后仍可查历史）。
 func (v *vmWriter) queryCheckHistory(checkID string, from, to int64) []CheckPoint {
 	c := v.cfg.VMConfig()

@@ -31,6 +31,7 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/account/reset-password",
 		"/api/v1/agent/register", "/api/v1/agent/report",
 		"/api/v1/mcp", // MCP server：外部 Agent(如 Hermes Agent) 连接，在 handler 内做 Bearer Token 鉴权
+		"/api/v1/prom/write", // Prometheus remote_write 接收：外部 exporter/telegraf/OTel 推送，在 handler 内做 Bearer 令牌鉴权
 		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}

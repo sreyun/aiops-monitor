@@ -672,3 +672,14 @@ type ProbeResultReport struct {
 	Fingerprint string        `json:"fingerprint,omitempty"`
 	Results     []ProbeResult `json:"results"`
 }
+
+// LabeledSample 是一条带标签的时序样本（指标名 + 标签 + 值 + 毫秒时间戳）。用于摄入 Prometheus
+// 生态指标（exporter 抓取 / remote_write）——相比固定 struct 的主机指标或扁平 map 的插件 gauge，
+// 它保留 Prometheus 的多标签语义（如 mysql_global_status_threads{instance,...}），VictoriaMetrics
+// 原生按标签存储，与主机/拨测指标同库可联合查询。
+type LabeledSample struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Value  float64           `json:"value"`
+	TsMs   int64             `json:"ts_ms"` // Unix 毫秒（Prometheus 惯例）
+}

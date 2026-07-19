@@ -525,6 +525,16 @@
         <div id="apimonDistributed"></div>
       </section>
 
+      <!-- 指标抓取（agentless exporter 摄入 Prometheus 生态） -->
+      <section class="view" id="view-scrape">
+        <div class="section-title"><span>指标抓取</span><span class="tag">agentless 抓取 exporter / 应用 /metrics（JVM/MySQL/Redis/中间件…）→ VM · 或用 remote_write 接收推送</span>
+          <div style="margin-left:auto"><button class="btn primary" id="scrapeAddBtn">+ 添加抓取目标</button></div>
+        </div>
+        <div id="scrapeTargets"></div>
+        <div class="section-title" style="margin-top:24px"><span>remote_write 接收</span><span class="tag">任何 exporter/telegraf/categraf/OTel Collector 都能往这推送指标 → VM</span></div>
+        <div id="promWritePanel" class="api-sys-card" style="padding:14px 16px"></div>
+      </section>
+
       <!-- 告警治理 -->
       <section class="view" id="view-governance">
         <div class="section-title"><span>告警治理</span><span class="tag">静默 / 抑制 / 生效时段 / 通知路由 —— 保存后即时生效</span>
@@ -1451,6 +1461,35 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="apiHostsBody"></div>
+  </div>
+</div>
+
+<!-- ===== 指标抓取目标编辑弹窗 ===== -->
+<div class="mask" id="scrapeMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h3 id="scrapeModalTitle">添加抓取目标</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="scrapeId">
+      <div class="grid2">
+        <div class="field"><label>名称（作为 job 标签）</label><input type="text" id="scrapeName" placeholder="如 mysql-prod / jvm-order"></div>
+        <div class="field"><label>抓取间隔（秒）</label><input type="text" id="scrapeInterval" class="mono" value="30"></div>
+      </div>
+      <div class="field"><label>Exporter / /metrics 地址</label><input type="text" id="scrapeUrl" placeholder="http://10.0.0.5:9104/metrics"></div>
+      <div class="grid2">
+        <div class="field"><label>超时（秒）</label><input type="text" id="scrapeTimeout" class="mono" placeholder="10"></div>
+        <div class="field" style="display:flex; align-items:flex-end"><label class="switch"><input type="checkbox" id="scrapeEnabled" checked> <span>启用该抓取</span></label></div>
+      </div>
+      <div class="field"><label>附加标签 <span class="tag">合并进每条样本</span></label><textarea id="scrapeLabels" rows="2" placeholder="每行 Key: Value，如&#10;instance: db1&#10;env: prod" style="font-family:monospace; font-size:12px"></textarea></div>
+      <div class="field"><label>抓取请求头（可选鉴权，加密存储）</label><textarea id="scrapeHeaders" rows="2" placeholder="每行 Key: Value，如&#10;Authorization: Bearer xxx" style="font-family:monospace; font-size:12px"></textarea></div>
+      <div class="hint">服务端直接抓取（agentless，SSRF 守卫 + 请求头加密）：解析 Prometheus 文本 → 带标签样本 → VM，与主机/拨测指标同库，可接阈值/SLO/AI。JVM 用 jmx_exporter 或 Spring Actuator <code>/actuator/prometheus</code>；MySQL 用 mysqld_exporter；Redis 用 redis_exporter…</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close-btn>取消</button>
+      <button class="btn primary" id="scrapeSaveBtn">保存</button>
+    </div>
   </div>
 </div>
 

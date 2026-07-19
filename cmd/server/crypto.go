@@ -202,6 +202,13 @@ func encryptConfigSecrets(c *ServerConfig) {
 			c.APISystems[i].Endpoints[j].Body = encryptSecret(c.APISystems[i].Endpoints[j].Body)
 		}
 	}
+	// 指标抓取目标的请求头（含 Authorization）与 remote_write 令牌是密钥，静态加密
+	for i := range c.ScrapeTargets {
+		for k, v := range c.ScrapeTargets[i].Headers {
+			c.ScrapeTargets[i].Headers[k] = encryptSecret(v)
+		}
+	}
+	c.PromWriteToken = encryptSecret(c.PromWriteToken)
 }
 
 // decryptConfigSecrets reverses encryptConfigSecrets, restoring plaintext in the
@@ -232,4 +239,10 @@ func decryptConfigSecrets(c *ServerConfig) {
 			c.APISystems[i].Endpoints[j].Body = decryptSecret(c.APISystems[i].Endpoints[j].Body)
 		}
 	}
+	for i := range c.ScrapeTargets {
+		for k, v := range c.ScrapeTargets[i].Headers {
+			c.ScrapeTargets[i].Headers[k] = decryptSecret(v)
+		}
+	}
+	c.PromWriteToken = decryptSecret(c.PromWriteToken)
 }

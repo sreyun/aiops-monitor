@@ -471,6 +471,8 @@ type ServerConfig struct {
 	Checks             []CustomCheck   `json:"checks"`
 	APISystems         []APISystem      `json:"api_systems,omitempty"`      // API 性能监控：按业务系统分组的批量接口
 	APITransactions    []APITransaction `json:"api_transactions,omitempty"` // API 合成事务：多步链式监控（变量提取/传递）
+	ScrapeTargets      []ScrapeTarget   `json:"scrape_targets,omitempty"`   // 指标抓取目标（agentless exporter 抓取，摄入 Prometheus 生态）
+	PromWriteToken     string           `json:"prom_write_token,omitempty"` // remote_write 接收端点的 Bearer 令牌（加密存储）
 	Governance         AlertGovernance `json:"governance,omitempty"`  // 告警治理：静默/抑制/生效时段/通知路由
 	Playbooks          []Playbook      `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
@@ -1039,6 +1041,8 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Playbooks = cs.cfg.Playbooks               // playbooks managed via playbook endpoints
 	c.APISystems = cs.cfg.APISystems             // API 性能监控：由专用端点管理，保护不被表单清零
 	c.APITransactions = cs.cfg.APITransactions   // API 合成事务：由专用端点管理，保护不被表单清零
+	c.ScrapeTargets = cs.cfg.ScrapeTargets       // 指标抓取目标：由专用端点管理，保护不被表单清零
+	c.PromWriteToken = cs.cfg.PromWriteToken     // remote_write 令牌：由专用端点管理，保护不被表单清零
 	c.Governance = cs.cfg.Governance             // 告警治理：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
@@ -1133,6 +1137,9 @@ func (cs *ConfigStore) save() error {
 	// encryptConfigSecrets 加密，否则会就地污染内存中的明文实时配置。
 	if len(c.APISystems) > 0 {
 		c.APISystems = deepCopyAPISystems(c.APISystems)
+	}
+	if len(c.ScrapeTargets) > 0 {
+		c.ScrapeTargets = deepCopyScrapeTargets(c.ScrapeTargets)
 	}
 	pg := cs.pg
 	cs.mu.RUnlock()
