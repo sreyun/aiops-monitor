@@ -1569,9 +1569,10 @@
       <div class="grid2">
         <div class="field"><label>标题</label><input type="text" id="panelTitle" placeholder="如 CPU 使用率"></div>
         <div class="field"><label>类型</label><div class="select-wrap"><select id="panelType">
-          <option value="timeseries">时序曲线</option><option value="stat">数值 Stat</option><option value="gauge">仪表 Gauge</option><option value="bargauge">条形 BarGauge</option><option value="table">表格</option><option value="text">文本</option>
+          <option value="timeseries">时序曲线</option><option value="stat">数值 Stat</option><option value="gauge">仪表 Gauge</option><option value="bargauge">条形 BarGauge</option><option value="table">表格</option><option value="logs">日志 Logs</option><option value="text">文本</option>
         </select></div></div>
       </div>
+      <div class="field" id="panelDSRow"><label>数据源 <span class="tag">留空=继承看板默认</span></label><div class="select-wrap"><select id="panelDS"></select></div></div>
       <div class="grid2">
         <div class="field"><label>宽度（栏 1–24）</label><input type="text" id="panelW" class="mono" value="12"></div>
         <div class="field"><label>高度（行 ×30px）</label><input type="text" id="panelH" class="mono" value="8"></div>

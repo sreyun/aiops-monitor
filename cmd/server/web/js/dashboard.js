@@ -12,10 +12,29 @@ let DASH_VAR_OPTIONS = {};         // 变量名 → 候选值列表
 let DASH_CHART_ARGS = {};          // panelId → createChart 参数（供 resize 重绘）
 let PANEL_TARGETS_DRAFT = [];      // 面板编辑中的查询行
 let VARS_DRAFT = [];               // 变量编辑中的行
+let DASH_DATASOURCES = [];         // 已配置的外部数据源（Prometheus / Loki）
+
+// 数据源解析：面板级覆盖 > 看板级默认 > 内置 VM（""）
+function resolveDS(panel) { return (panel && panel.datasource) || (CUR_DASH && CUR_DASH.datasource) || ""; }
+function dsById(id) { return DASH_DATASOURCES.find(d => d.id === id); }
+function dsLabel(id) { if (!id || id === "vm") return "内置 VM"; const d = dsById(id); return d ? d.name : id; }
+// 生成数据源下拉 options（kinds: 指标面板=["prometheus"]含内置VM；日志面板=["loki"]）
+function dsOptions(selected, kinds, withVM) {
+  let html = withVM ? `<option value="" ${!selected || selected === "vm" ? "selected" : ""}>内置 VM（VictoriaMetrics）</option>` : "";
+  DASH_DATASOURCES.filter(d => kinds.includes(d.type) && d.enabled !== false).forEach(d => {
+    html += `<option value="${esc(d.id)}" ${d.id === selected ? "selected" : ""}>${esc(d.name)} · ${d.type}</option>`;
+  });
+  return html;
+}
+async function loadDashDatasources() {
+  try { const r = await fetch(`${API}/datasources`).then(r => r.json()); DASH_DATASOURCES = Array.isArray(r) ? r : []; }
+  catch (e) { DASH_DATASOURCES = []; }
+}
 
 /* ---------- 列表 ---------- */
 async function loadDashboards() {
   showDashHome();
+  await loadDashDatasources();
   try {
     const d = await fetch(`${API}/dashboards`).then(r => r.json());
     DASH_LIST = (d && d.dashboards) || [];
@@ -32,21 +51,29 @@ function renderDashList(list) {
   const wrap = $("dashList");
   if (!wrap) return;
   if (!list.length) {
-    wrap.innerHTML = `<div class="empty-box">还没有仪表盘。点右上角「新建仪表盘」自定义面板，或「导入 Grafana」按看板 ID 一键拉取社区看板（如 1860 Node Exporter Full）——面板查询直接走 VictoriaMetrics。</div>`;
+    wrap.innerHTML = `<div class="empty-box">还没有仪表盘。点右上角「✨ AI 生成」用一句话生成，「导入 Grafana」按看板 ID 一键拉取（如 1860 Node Exporter Full），或「新建仪表盘」自定义面板 —— 面板查询直接走所选数据源。</div>`;
     return;
   }
-  wrap.innerHTML = list.map(d => `
-    <div class="api-sys-card dash-card" data-dash="${esc(d.id)}">
-      <div class="api-sys-head">
-        <div class="api-sys-title">${esc(d.name)}${d.source && d.source.indexOf("grafana:") === 0 ? '<span class="tag">Grafana</span>' : ""}<span class="tag">${d.panels} 面板</span>${(d.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>
-        <div class="api-sys-actions">
-          <button class="mini-btn" data-dact="open" data-id="${esc(d.id)}" title="打开">▶</button>
+  wrap.innerHTML = `<div class="dash-cards">` + list.map(d => {
+    const isG = d.source && d.source.indexOf("grafana:") === 0;
+    const isAI = d.source === "ai" || (d.source || "").indexOf("ai-analysis") === 0;
+    return `<div class="dash-card" data-dash="${esc(d.id)}">
+      <div class="dash-card-hd">
+        <span class="dash-card-ic ${isAI ? "ai" : isG ? "gf" : ""}">${isAI ? "✨" : "▦"}</span>
+        <div class="dash-card-name" title="${esc(d.name)}">${esc(d.name)}</div>
+        <div class="dash-card-ops">
           <button class="mini-btn" data-dact="meta" data-id="${esc(d.id)}" title="编辑信息">✎</button>
           <button class="mini-btn del" data-dact="del" data-id="${esc(d.id)}" title="删除">✕</button>
         </div>
       </div>
-      ${d.description ? `<div style="padding:8px 16px; color:var(--muted); font-size:12px">${esc(d.description)}</div>` : ""}
-    </div>`).join("");
+      <div class="dash-card-desc ${d.description ? "" : "muted"}">${d.description ? esc(d.description) : "暂无描述"}</div>
+      <div class="dash-card-ft">
+        <span class="dash-card-badge">${d.panels} 面板</span>
+        ${isAI ? '<span class="dash-card-badge ai">AI</span>' : isG ? '<span class="dash-card-badge gf">Grafana</span>' : ""}
+        ${(d.tags || []).slice(0, 3).map(t => `<span class="dash-card-tag">${esc(t)}</span>`).join("")}
+      </div>
+    </div>`;
+  }).join("") + `</div>`;
 }
 
 /* ---------- 打开 / 详情渲染 ---------- */
@@ -67,7 +94,7 @@ async function resolveDashVars() {
   for (const v of (CUR_DASH.vars || [])) {
     let opts = [];
     try {
-      const r = await fetch(`${API}/dashboards/var-values`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v) }).then(r => r.json());
+      const r = await fetch(`${API}/dashboards/var-values`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, v, { datasource: (CUR_DASH && CUR_DASH.datasource) || "" })) }).then(r => r.json());
       opts = (r && r.values) || [];
     } catch (e) { /* ignore */ }
     if (v.include_all) opts = ["$__all", ...opts];
@@ -98,31 +125,35 @@ function renderDashDetail() {
     const optsHtml = opts.map(o => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${o === "$__all" ? "全部" : esc(o)}</option>`).join("");
     return `<span class="dash-var"><label>${esc(v.label || v.name)}</label><div class="select-wrap sm"><select data-dvar="${esc(v.name)}">${optsHtml || `<option value="">（无候选）</option>`}</select></div></span>`;
   }).join("");
+  const srcBadge = (d.source && d.source.indexOf("grafana:") === 0) ? '<span class="dash-badge">Grafana</span>'
+    : (d.source === "ai" || (d.source || "").indexOf("ai-analysis") === 0) ? '<span class="dash-badge ai">AI</span>' : "";
   wrap.innerHTML = `
-    <div class="dash-detail-head">
-      <button class="btn ghost sm" id="dashBack">← 返回</button>
-      <div class="dash-title">${esc(d.name)}${d.source && d.source.indexOf("grafana:") === 0 ? '<span class="tag">Grafana 导入</span>' : ""}</div>
-      <div class="dash-head-actions">
-        <button class="btn sm" id="dashAnalyzeBtn" title="AI 解读当前看板数据">🔍 解读</button>
-        <button class="btn sm" id="dashOptimizeBtn" title="AI 评审并给优化建议">✨ 优化</button>
-        <button class="btn sm" id="dashTicketBtn" title="AI 研判 → 生成工单">🎫 建工单</button>
-        ${DASH_EDIT
-          ? `<button class="btn sm" id="dashAddPanel">+ 面板</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn primary sm" id="dashSaveBtn">保存</button><button class="btn sm" id="dashCancelEdit">退出编辑</button>`
-          : `<button class="btn sm" id="dashEditBtn">编辑</button>`}
+    <div class="dash-bar">
+      <div class="dash-bar-main">
+        <button class="dash-icon-btn" id="dashBack" title="返回列表">←</button>
+        <div class="dash-title-wrap"><span class="dash-title">${esc(d.name)}</span>${srcBadge}</div>
+        <div class="dash-bar-actions">
+          <button class="btn ghost sm" id="dashAnalyzeBtn" title="AI 解读当前看板数据">🔍 解读</button>
+          <button class="btn ghost sm" id="dashOptimizeBtn" title="AI 评审并给优化建议">✨ 优化</button>
+          <button class="btn ghost sm" id="dashTicketBtn" title="AI 研判 → 生成工单">🎫 工单</button>
+          <span class="dash-sep"></span>
+          ${DASH_EDIT
+            ? `<button class="btn sm" id="dashAddPanel">+ 面板</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn sm" id="dashCancelEdit">退出</button><button class="btn primary sm" id="dashSaveBtn">保存</button>`
+            : `<button class="btn primary sm" id="dashEditBtn">✎ 编辑</button>`}
+        </div>
       </div>
-    </div>
-    <div class="dash-controls">
-      <div class="chart-controls">${rangeChips}
-        <button class="chip-btn ${DASH_RANGE.custom ? "active" : ""}" id="dashCustomToggle">自定义</button>
+      <div class="dash-bar-sub">
+        <div class="dash-range">${rangeChips}<button class="chip-btn ${DASH_RANGE.custom ? "active" : ""}" id="dashCustomToggle">自定义</button><button class="chip-btn dash-refresh" id="dashRefresh" title="刷新">↻</button></div>
         <span class="chart-custom-range" id="dashCustomPanel"${DASH_RANGE.custom ? "" : " hidden"}>
           <input type="datetime-local" id="dashCustomFrom" class="dt-input" value="${toLocalDatetimeValue(rng.from)}">
           <span class="dt-sep">→</span>
           <input type="datetime-local" id="dashCustomTo" class="dt-input" value="${toLocalDatetimeValue(rng.to)}">
           <button class="chip-btn primary" id="dashCustomApply">应用</button>
         </span>
-        <button class="chip-btn" id="dashRefresh" title="刷新">↻</button>
+        <span class="dash-spacer"></span>
+        <div class="dash-picker"><span class="dash-picker-lbl">数据源</span><div class="select-wrap sm"><select id="dashDSSelect">${dsOptions(d.datasource, ["prometheus"], true)}</select></div></div>
+        <div class="dash-vars">${varSel}</div>
       </div>
-      <div class="dash-vars">${varSel}</div>
     </div>
     <div class="dash-grid ${DASH_EDIT ? "editing" : ""}" id="dashGrid"></div>`;
   renderPanels();
@@ -137,14 +168,15 @@ function renderPanels() {
   }
   grid.innerHTML = panels.map(p => {
     const w = Math.max(1, Math.min(24, p.grid.w || 12));
+    const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
     const edit = DASH_EDIT ? `<div class="panel-edit-actions">
         <button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
         <button class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
         <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
         <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>
       </div>` : "";
-    return `<div class="dash-panel" style="grid-column:span ${w}" data-panel="${p.id}">
-      <div class="dash-panel-head"><span class="dash-panel-title">${esc(p.title || "")}</span>${edit}</div>
+    return `<div class="dash-panel dp-${esc(p.type)}" style="grid-column:span ${w}" data-panel="${p.id}">
+      <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${edit}</div>
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
     </div>`;
   }).join("");
@@ -164,21 +196,39 @@ async function loadPanel(p) {
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
   body.innerHTML = `<div class="dash-empty">加载中…</div>`;
   const { from, to } = dashRange();
-  if (p.type === "timeseries") {
+  if (p.type === "logs") {
+    await loadLogsPanel(p, body, from, to);
+  } else if (p.type === "timeseries") {
     await loadTimeseriesPanel(p, body, from, to);
   } else {
     await loadInstantPanel(p, body);
   }
 }
+async function loadLogsPanel(p, body, from, to) {
+  let res;
+  try {
+    res = await fetch(`${API}/dashboards/query-logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, from, to, limit: 200, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
+  } catch (e) { body.innerHTML = `<div class="dash-empty">日志查询失败</div>`; return; }
+  if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">该面板需选择一个 <b>Loki</b> 数据源</div>`; return; }
+  const lines = (res && res.lines) || [];
+  if (!lines.length) { body.innerHTML = `<div class="dash-empty">该范围无日志</div>`; return; }
+  body.innerHTML = `<div class="dash-logs">${lines.map(l => `<div class="dash-log-row"><span class="dash-log-ts">${fmtLogTs(l.ts_ms)}</span><span class="dash-log-line">${esc(l.line || "")}</span></div>`).join("")}</div>`;
+}
+function fmtLogTs(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const p2 = n => String(n).padStart(2, "0");
+  return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+}
 async function loadTimeseriesPanel(p, body, from, to) {
   const defs = [], tsMap = new Map();
-  let si = 0, vmOff = false;
+  let si = 0, naOff = false;
   for (const t of p.targets) {
     let res;
     try {
-      res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: t.expr, from, to, vars: panelVars() }) }).then(r => r.json());
+      res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
     } catch (e) { continue; }
-    if (res && res.vm === false) { vmOff = true; break; }
+    if (res && res.available === false) { naOff = true; break; }
     for (const s of (res && res.series || [])) {
       if (si >= 24) break; // 上限，避免图例爆炸
       const key = "s" + si;
@@ -191,7 +241,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
       si++;
     }
   }
-  if (vmOff) { body.innerHTML = `<div class="dash-empty">未启用 VictoriaMetrics（面板需要 VM 时序库）</div>`; return; }
+  if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
   if (!defs.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return; }
   const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   const cid = "dashCanvas_" + p.id;
@@ -203,9 +253,9 @@ async function loadTimeseriesPanel(p, body, from, to) {
 async function loadInstantPanel(p, body) {
   let res;
   try {
-    res = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, vars: panelVars() }) }).then(r => r.json());
+    res = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
   } catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
-  if (res && res.vm === false) { body.innerHTML = `<div class="dash-empty">未启用 VictoriaMetrics</div>`; return; }
+  if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return; }
   const series = (res && res.series) || [];
   if (!series.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
   if (p.type === "stat") {
@@ -219,7 +269,7 @@ async function loadInstantPanel(p, body) {
       const pct = max > min ? Math.max(0, Math.min(100, (v - min) / (max - min) * 100)) : 0;
       const col = pct >= 90 ? "var(--crit)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
       const lbl = legendFor(p.targets[0].legend, (s.Labels || s.labels || {}));
-      return `<div class="dash-bar"><div class="dash-bar-lbl">${esc(lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${fmtUnit(v, p.unit)}</div></div>`;
+      return `<div class="dash-bar-item"><div class="dash-bar-lbl">${esc(lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${fmtUnit(v, p.unit)}</div></div>`;
     }).join("");
   } else if (p.type === "table") {
     const rows = series.slice(0, 100).map(s => {
@@ -305,6 +355,7 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (pa) { handlePanelAction(pa.dataset.pact, +pa.dataset.id); return; }
 });
 safeAddEventListener("dashDetail", "change", e => {
+  if (e.target.id === "dashDSSelect") { CUR_DASH.datasource = e.target.value; resolveDashVars().then(renderDashDetail); return; }
   const sel = e.target.closest("[data-dvar]");
   if (sel) { DASH_VARVALS[sel.dataset.dvar] = sel.value; renderPanels(); }
 });
@@ -344,9 +395,16 @@ function openPanelEditor(p) {
   $("panelText").value = p ? (p.text || "") : "";
   PANEL_TARGETS_DRAFT = p && p.targets ? p.targets.map(t => ({ expr: t.expr, legend: t.legend || "" })) : [{ expr: "", legend: "" }];
   renderPanelTargets();
+  fillPanelDS(p ? p.type : "timeseries", p ? (p.datasource || "") : "");
   panelTypeToggle();
   $("panelEditTitle").textContent = p ? "编辑面板" : "添加面板";
   openMask("panelEditMask");
+}
+function fillPanelDS(type, selected) {
+  const sel = $("panelDS");
+  if (!sel) return;
+  if (type === "logs") sel.innerHTML = dsOptions(selected, ["loki"], false) || `<option value="">（请先在「数据源」配置 Loki）</option>`;
+  else sel.innerHTML = dsOptions(selected, ["prometheus"], true);
 }
 function renderPanelTargets() {
   const wrap = $("panelTargets");
@@ -362,7 +420,11 @@ function panelTypeToggle() {
   const ty = $("panelType").value;
   $("panelTextRow").style.display = ty === "text" ? "" : "none";
   $("panelTargetsWrap").style.display = ty === "text" ? "none" : "";
-  $("panelUnitRow").style.display = ty === "text" ? "none" : "";
+  $("panelUnitRow").style.display = (ty === "text" || ty === "logs") ? "none" : "";
+  const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = ty === "text" ? "none" : "";
+  fillPanelDS(ty, $("panelDS").value);
+  const lbl = document.querySelector("#panelTargetsWrap > label");
+  if (lbl) lbl.textContent = ty === "logs" ? "LogQL 查询（Loki 数据源）" : "查询（PromQL，可多条；支持 $变量 与 {{标签}} 图例）";
 }
 safeAddEventListener("panelType", "change", panelTypeToggle);
 safeAddEventListener("panelAddTarget", "click", () => { PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); });
@@ -379,11 +441,12 @@ safeAddEventListener("panelSave", "click", () => {
   const ty = $("panelType").value;
   const title = $("panelTitle").value.trim();
   const targets = ty === "text" ? [] : PANEL_TARGETS_DRAFT.filter(t => t.expr.trim()).map(t => ({ expr: t.expr.trim(), legend: t.legend.trim() }));
-  if (ty !== "text" && !targets.length) { toast("请至少填写一条 PromQL 查询", "err"); return; }
+  if (ty !== "text" && !targets.length) { toast(ty === "logs" ? "请填写 LogQL 查询" : "请至少填写一条 PromQL 查询", "err"); return; }
+  if (ty === "logs" && !$("panelDS").value) { toast("日志面板需选择一个 Loki 数据源", "err"); return; }
   const min = $("panelMin").value.trim(), max = $("panelMax").value.trim();
   const panel = {
     id: $("panelId").value ? +$("panelId").value : nextPanelId(),
-    title, type: ty,
+    title, type: ty, datasource: $("panelDS").value,
     grid: { x: 0, y: 9999, w: Math.max(1, Math.min(24, parseInt($("panelW").value) || 12)), h: Math.max(2, parseInt($("panelH").value) || 8) },
     unit: $("panelUnit").value,
     targets, text: $("panelText").value,

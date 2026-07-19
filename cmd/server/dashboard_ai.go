@@ -252,21 +252,21 @@ func tokenize(s string) []string {
 func (s *Server) buildDashboardDigest(d Dashboard) string {
 	var b strings.Builder
 	b.WriteString("看板：" + d.Name + "\n")
-	if s.vm == nil || !s.vm.enabled() {
-		b.WriteString("（未启用 VictoriaMetrics，无法读取实时数据）\n")
-		return b.String()
-	}
 	vars := dashVarMap(d.Vars)
 	n := 0
 	for _, p := range d.Panels {
 		if n >= 40 { // 面板数量上限，防上下文膨胀
 			break
 		}
-		if p.Type == "text" || len(p.Targets) == 0 {
+		if p.Type == "text" || p.Type == "logs" || len(p.Targets) == 0 {
 			continue
 		}
+		dsID := p.DataSource
+		if dsID == "" {
+			dsID = d.DataSource
+		}
 		expr := substituteVars(p.Targets[0].Expr, vars, 60, 3600)
-		vec, ok := s.vm.vmQueryVector(expr)
+		vec, ok := s.dashVector(dsID, expr)
 		title := p.Title
 		if title == "" {
 			title = p.Targets[0].Expr

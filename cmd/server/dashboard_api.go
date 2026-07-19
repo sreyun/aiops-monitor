@@ -71,10 +71,12 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 // panelQueryReq 是面板查询请求：表达式 + 时间范围 + 已选变量值。
 type panelQueryReq struct {
 	Expr string            `json:"expr"`
-	From int64             `json:"from"`
-	To   int64             `json:"to"`
-	Step int64             `json:"step"`
-	Vars map[string]string `json:"vars"`
+	From       int64             `json:"from"`
+	To         int64             `json:"to"`
+	Step       int64             `json:"step"`
+	Vars       map[string]string `json:"vars"`
+	DataSource string            `json:"datasource"` // 数据源 id（""=内置 VM）
+	Limit      int               `json:"limit"`      // 日志面板取行上限
 }
 
 func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
@@ -83,8 +85,8 @@ func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if s.vm == nil || !s.vm.enabled() {
-		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "vm": false})
+	if !s.dashBackendReady(req.DataSource) {
+		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
 		return
 	}
 	now := time.Now().Unix()
@@ -102,9 +104,9 @@ func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	expr := substituteVars(req.Expr, req.Vars, req.Step, rangeSec)
-	series, ok := s.vm.vmQueryRangeSeries(expr, req.From, req.To, req.Step)
+	series, ok := s.dashRangeSeries(req.DataSource, expr, req.From, req.To, req.Step)
 	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "vm": true, "error": "查询失败（表达式或 VM）"})
+		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": true, "error": "查询失败（表达式或数据源）"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"series": series, "step": req.Step})
@@ -117,31 +119,61 @@ func (s *Server) handleDashboardQueryInstant(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if s.vm == nil || !s.vm.enabled() {
-		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "vm": false})
+	if !s.dashBackendReady(req.DataSource) {
+		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
 		return
 	}
 	expr := substituteVars(req.Expr, req.Vars, 60, 3600)
-	vec, ok := s.vm.vmQueryVector(expr)
+	vec, ok := s.dashVector(req.DataSource, expr)
 	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "vm": true, "error": "查询失败（表达式或 VM）"})
+		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": true, "error": "查询失败（表达式或数据源）"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"series": vec})
 }
 
-// handleDashboardVarValues 解析一个模板变量的候选值（custom 直给 / query 走 label_values）。
-func (s *Server) handleDashboardVarValues(w http.ResponseWriter, r *http.Request) {
-	var v DashVar
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+// handleDashboardQueryLogs 日志面板查询（Loki 数据源，LogQL 区间）。
+func (s *Server) handleDashboardQueryLogs(w http.ResponseWriter, r *http.Request) {
+	var req panelQueryReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	var lv func(label, match string) ([]string, bool)
-	if s.vm != nil && s.vm.enabled() {
-		lv = s.vm.vmLabelValues
+	ds, ok := s.cfg.GetDataSource(req.DataSource)
+	if !ok || ds.Type != "loki" || !ds.Enabled {
+		writeJSON(w, http.StatusOK, map[string]any{"lines": []any{}, "available": false})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"values": resolveVarValues(v, lv)})
+	now := time.Now()
+	endNs := now.UnixNano()
+	if req.To > 0 {
+		endNs = req.To * 1e9
+	}
+	startNs := now.Add(-time.Hour).UnixNano()
+	if req.From > 0 {
+		startNs = req.From * 1e9
+	}
+	logql := substituteVars(req.Expr, req.Vars, 60, 3600)
+	lines, qok := dsLokiRange(ds, logql, startNs, endNs, req.Limit)
+	if !qok {
+		writeJSON(w, http.StatusOK, map[string]any{"lines": []any{}, "available": true, "error": "日志查询失败（LogQL 或 Loki）"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
+}
+
+// handleDashboardVarValues 解析一个模板变量的候选值（custom 直给 / query 走 label_values，按数据源）。
+func (s *Server) handleDashboardVarValues(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DashVar
+		DataSource string `json:"datasource"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	lv := func(label, match string) ([]string, bool) { return s.dashLabelValues(req.DataSource, label, match) }
+	writeJSON(w, http.StatusOK, map[string]any{"values": resolveVarValues(req.DashVar, lv)})
 }
 
 var grafanaIDRe = regexp.MustCompile(`^\d+$`)

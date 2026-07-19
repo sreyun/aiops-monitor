@@ -24,7 +24,8 @@ type Dashboard struct {
 	Tags        []string    `json:"tags,omitempty"`
 	Vars        []DashVar   `json:"vars,omitempty"`
 	Panels      []DashPanel `json:"panels"`
-	Source      string      `json:"source,omitempty"` // "" | "grafana:<id>" | "import"
+	DataSource  string      `json:"datasource,omitempty"` // 看板级默认数据源 id（""=内置 VictoriaMetrics）
+	Source      string      `json:"source,omitempty"`     // "" | "grafana:<id>" | "import" | "ai"
 	CreatedAt   int64       `json:"created_at"`
 	UpdatedAt   int64       `json:"updated_at"`
 }
@@ -43,10 +44,11 @@ type DashVar struct {
 
 // DashPanel 是一个面板。
 type DashPanel struct {
-	ID       int          `json:"id"`
-	Title    string       `json:"title"`
-	Type     string       `json:"type"` // timeseries | stat | gauge | bargauge | table | text | unsupported
-	Targets  []DashTarget `json:"targets,omitempty"`
+	ID         int          `json:"id"`
+	Title      string       `json:"title"`
+	Type       string       `json:"type"`                 // timeseries | stat | gauge | bargauge | table | text | logs | unsupported
+	DataSource string       `json:"datasource,omitempty"` // 面板级数据源 id（覆盖看板默认；""=继承看板默认）
+	Targets    []DashTarget `json:"targets,omitempty"`
 	Grid     DashGrid     `json:"grid"`
 	Unit     string       `json:"unit,omitempty"` // percent|percentunit|bytes|Bps|s|ms|short|...（Grafana 单位串）
 	Min      *float64     `json:"min,omitempty"`  // gauge/bargauge 量程

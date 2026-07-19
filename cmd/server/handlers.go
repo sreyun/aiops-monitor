@@ -225,6 +225,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", s.handleDeleteDashboard)
 	mux.HandleFunc("POST /api/v1/dashboards/query", s.handleDashboardQuery)
 	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
+	mux.HandleFunc("POST /api/v1/dashboards/query-logs", s.handleDashboardQueryLogs)
 	mux.HandleFunc("POST /api/v1/dashboards/var-values", s.handleDashboardVarValues)
 	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
 	// 仪表盘 AI 闭环：自然语言生成 / 按事件生成分析看板 / 实时摘要 / 研判转工单
