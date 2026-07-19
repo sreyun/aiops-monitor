@@ -665,6 +665,8 @@ window.DICT_EN = {
     "hardware.export_popup_blocked": "Export failed: please allow pop-ups for this site and retry",
     "nav.netflow": "Traffic",
     "nav.network": "Network",
+    "nav.dashboards": "Dashboards",
+    "section.dashboards_desc": "Custom dashboards · one-click Grafana import · panels query VictoriaMetrics",
     "net.tab_traffic": "Traffic",
     "net.tab_devices": "Devices",
     "net.tab_content": "Content Audit",

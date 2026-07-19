@@ -218,6 +218,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/prom-rules", s.handleUpsertPromRule)
 	mux.HandleFunc("DELETE /api/v1/prom-rules/{id}", s.handleDeletePromRule)
 	mux.HandleFunc("POST /api/v1/prom-rules/test", s.handleTestPromRule)
+	// 仪表盘：自定义 + 导入 Grafana，面板查询走 VM
+	mux.HandleFunc("GET /api/v1/dashboards", s.handleListDashboards)
+	mux.HandleFunc("POST /api/v1/dashboards", s.handleUpsertDashboard)
+	mux.HandleFunc("GET /api/v1/dashboards/{id}", s.handleGetDashboard)
+	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", s.handleDeleteDashboard)
+	mux.HandleFunc("POST /api/v1/dashboards/query", s.handleDashboardQuery)
+	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
+	mux.HandleFunc("POST /api/v1/dashboards/var-values", s.handleDashboardVarValues)
+	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
 	mux.HandleFunc("GET /api/v1/apimon/systems/{id}/hosts", s.handleAPISystemHosts)
 	mux.HandleFunc("POST /api/v1/agent/probe-results", s.handleProbeResults)
 	// Playbooks (automation)
@@ -397,7 +406,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

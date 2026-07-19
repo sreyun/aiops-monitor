@@ -22,10 +22,10 @@ import (
 type PromRule struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Expr      string `json:"expr"`               // PromQL 条件表达式（非空结果=告警）
-	ForSec    int    `json:"for_sec,omitempty"`  // 持续时长（秒），连续满足才触发，抑制抖动
-	Level     string `json:"level"`              // warning | critical
-	Message   string `json:"message,omitempty"`  // 告警文案，支持 {{label}} 与 {{value}} 模板；空=自动
+	Expr      string `json:"expr"`              // PromQL 条件表达式（非空结果=告警）
+	ForSec    int    `json:"for_sec,omitempty"` // 持续时长（秒），连续满足才触发，抑制抖动
+	Level     string `json:"level"`             // warning | critical
+	Message   string `json:"message,omitempty"` // 告警文案，支持 {{label}} 与 {{value}} 模板；空=自动
 	Enabled   bool   `json:"enabled"`
 	CreatedAt int64  `json:"created_at"`
 }

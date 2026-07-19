@@ -665,6 +665,8 @@ window.DICT_TW = {
   "hardware.export_popup_blocked": "匯出失敗：請允許本站彈出視窗後重試",
   "nav.netflow": "流量",
   "nav.network": "網路",
+  "nav.dashboards": "儀表板",
+  "section.dashboards_desc": "自訂儀表板 · 一鍵匯入 Grafana 看板 · 面板走 VictoriaMetrics",
   "net.tab_traffic": "流量",
   "net.tab_devices": "網路裝置",
   "net.tab_content": "內容稽核",

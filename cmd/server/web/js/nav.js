@@ -329,6 +329,7 @@ const PAGE_META = {
   netflow:   { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
   "content-audit": { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" },
   snmp:      { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
+  dashboards: { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
 // i18n:changed so titles/subtitles follow an in-place language switch).
@@ -352,6 +353,7 @@ function rebuildPageMeta() {
   PAGE_META.netflow    = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
   PAGE_META["content-audit"] = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" };
   PAGE_META.snmp       = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
+  PAGE_META.dashboards = { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
@@ -406,6 +408,7 @@ function switchView(view) {
   if (view === "logs") loadLogs();
   if (view === "apimon") { loadAPIMon(); loadAPITxns(); loadDist(); }
   if (view === "scrape") { loadScrapes(); loadPromWrite(); loadRules(); }
+  if (view === "dashboards") loadDashboards();
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();

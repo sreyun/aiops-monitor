@@ -615,6 +615,108 @@ func (v *vmWriter) vmQueryRange(promql string, startTs, endTs, stepSec int64) ([
 	return pts, true
 }
 
+// promMatrix 是区间查询返回的一条时间序列（标签集 + 点集）。供仪表盘多序列面板用。
+type promMatrix struct {
+	Labels map[string]string `json:"labels"`
+	Points [][2]float64      `json:"points"` // [[tsSec, val], ...]
+}
+
+// vmQueryRangeSeries 执行 PromQL 区间查询，逐序列返回（不聚合），供仪表盘时序面板绘多条曲线。
+func (v *vmWriter) vmQueryRangeSeries(promql string, startTs, endTs, stepSec int64) ([]promMatrix, bool) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil, false
+	}
+	if stepSec < 1 {
+		stepSec = 60
+	}
+	q := url.Values{
+		"query": {promql},
+		"start": {strconv.FormatInt(startTs, 10)},
+		"end":   {strconv.FormatInt(endTs, 10)},
+		"step":  {strconv.FormatInt(stepSec, 10)},
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/query_range?"+q.Encode(), nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var out struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Values [][]any           `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || out.Status != "success" {
+		return nil, false
+	}
+	series := make([]promMatrix, 0, len(out.Data.Result))
+	for _, r := range out.Data.Result {
+		pts := make([][2]float64, 0, len(r.Values))
+		for _, pair := range r.Values {
+			if len(pair) < 2 {
+				continue
+			}
+			tsF, _ := pair[0].(float64)
+			sv, _ := pair[1].(string)
+			f, err := strconv.ParseFloat(sv, 64)
+			if err != nil {
+				continue // 跳过 NaN/Inf
+			}
+			pts = append(pts, [2]float64{tsF, f})
+		}
+		series = append(series, promMatrix{Labels: r.Metric, Points: pts})
+	}
+	return series, true
+}
+
+// vmLabelValues 取某标签的全部取值（可选按 match[] 序列选择器过滤），供仪表盘模板变量 label_values(...) 解析。
+func (v *vmWriter) vmLabelValues(label, match string) ([]string, bool) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" || label == "" {
+		return nil, false
+	}
+	q := url.Values{}
+	if strings.TrimSpace(match) != "" {
+		q.Set("match[]", match)
+	}
+	u := strings.TrimRight(c.URL, "/") + "/api/v1/label/" + url.PathEscape(label) + "/values"
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var out struct {
+		Status string   `json:"status"`
+		Data   []string `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || out.Status != "success" {
+		return nil, false
+	}
+	sort.Strings(out.Data)
+	return out.Data, true
+}
+
 func (v *vmWriter) vmInstantByAPI(promql string) map[string]float64 {
 	c := v.cfg.VMConfig()
 	if !c.Enabled || c.URL == "" {

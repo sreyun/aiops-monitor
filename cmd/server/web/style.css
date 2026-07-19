@@ -3132,3 +3132,48 @@ select:focus {
 .sn-row-crit td { background: var(--crit-soft); }
 .sn-row-warn td { background: var(--warn-soft); }
 .sn-oid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--txt2); }
+
+/* ===== 仪表盘（自定义 + 导入 Grafana） ===== */
+.dash-card { cursor: pointer; }
+.dash-detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.dash-title { font-size: 16px; font-weight: 600; color: var(--txt); display: flex; align-items: center; gap: 8px; }
+.dash-head-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.dash-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.dash-vars { display: flex; gap: 12px; flex-wrap: wrap; }
+.dash-var { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dash-var label { font-size: 12px; color: var(--muted); }
+.select-wrap.sm select { padding: 4px 24px 4px 8px; font-size: 12px; }
+/* 24 栏网格：忠实还原 Grafana gridPos 的宽度占比 */
+.dash-grid { display: grid; grid-template-columns: repeat(24, 1fr); gap: 12px; align-items: start; }
+.dash-panel { grid-column: span 24; background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.dash-panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 20px; }
+.dash-panel-title { font-size: 13px; font-weight: 600; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-edit-actions { margin-left: auto; display: flex; gap: 4px; }
+.dash-grid.editing .dash-panel { border-style: dashed; }
+.dash-panel-body { padding: 8px 12px 10px; min-height: 40px; }
+.dash-panel-body .chart-wrap { box-shadow: none; }
+.dash-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 8px; }
+/* Stat */
+.dash-stat { display: flex; align-items: center; justify-content: center; min-height: 60px; }
+.dash-stat-val { font-size: 30px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+/* Gauge / BarGauge */
+.dash-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.dash-bar-lbl { width: 130px; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-bar-track { flex: 1; height: 14px; background: var(--panel3); border-radius: 7px; overflow: hidden; }
+.dash-bar-fill { height: 100%; border-radius: 7px; transition: width .3s; }
+.dash-bar-val { width: 84px; text-align: right; font-size: 12px; font-family: ui-monospace, monospace; color: var(--txt); }
+/* Table */
+.dash-table-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.dash-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dash-table th, .dash-table td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.dash-table th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--bg2); }
+.dash-table td.num, .dash-table th.num { text-align: right; font-family: ui-monospace, monospace; }
+/* Text / Unsupported */
+.dash-text { font-size: 13px; color: var(--txt2); line-height: 1.7; }
+.dash-unsupported { font-size: 12px; color: var(--warn); padding: 10px; }
+.dash-unsupported-q { margin-top: 6px; font-family: ui-monospace, monospace; color: var(--muted); font-size: 11px; word-break: break-all; }
+/* 编辑器：查询行 / 变量行 */
+.panel-target-row, .var-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.mini-check { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+@media (max-width: 1100px) { .dash-grid { grid-template-columns: repeat(12, 1fr); } }
+@media (max-width: 720px) { .dash-grid { grid-template-columns: 1fr; } .dash-panel { grid-column: 1 / -1 !important; } }

@@ -656,6 +656,8 @@
   "hardware.export_popup_blocked": "导出失败：请允许本站弹出窗口后重试",
   "nav.netflow": "流量",
   "nav.network": "网络",
+  "nav.dashboards": "仪表盘",
+  "section.dashboards_desc": "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics",
   "net.tab_traffic": "流量",
   "net.tab_devices": "网络设备",
   "net.tab_content": "内容审计",

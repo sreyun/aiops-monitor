@@ -474,6 +474,7 @@ type ServerConfig struct {
 	ScrapeTargets      []ScrapeTarget   `json:"scrape_targets,omitempty"`   // 指标抓取目标（agentless exporter 抓取，摄入 Prometheus 生态）
 	PromWriteToken     string           `json:"prom_write_token,omitempty"` // remote_write 接收端点的 Bearer 令牌（加密存储）
 	PromRules          []PromRule       `json:"prom_rules,omitempty"`       // 指标告警规则（PromQL）：抓取/推送来的指标接入告警
+	Dashboards         []Dashboard      `json:"dashboards,omitempty"`       // 仪表盘（自定义 + 导入 Grafana）
 	Governance         AlertGovernance `json:"governance,omitempty"`  // 告警治理：静默/抑制/生效时段/通知路由
 	Playbooks          []Playbook      `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
@@ -1045,6 +1046,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.ScrapeTargets = cs.cfg.ScrapeTargets       // 指标抓取目标：由专用端点管理，保护不被表单清零
 	c.PromWriteToken = cs.cfg.PromWriteToken     // remote_write 令牌：由专用端点管理，保护不被表单清零
 	c.PromRules = cs.cfg.PromRules               // 指标告警规则：由专用端点管理，保护不被表单清零
+	c.Dashboards = cs.cfg.Dashboards             // 仪表盘：由专用端点管理，保护不被表单清零
 	c.Governance = cs.cfg.Governance             // 告警治理：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
