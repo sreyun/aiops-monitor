@@ -513,7 +513,7 @@ safeAddEventListener("playbookList", "click", e => {
 
 // ============ SRE 中枢：事件 / 自动修复 / SLO / 工单 ============
 let SRE_TAB = "incidents";
-let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [];
+let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [], SRE_API_ENDPOINTS = [];
 const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","conn","hardware","offline","check"];
 const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:I18N.t("sre.src_alert","告警"),slo:"SLO",manual:I18N.t("sre.src_manual","手动")})[s]||esc(s);
@@ -985,7 +985,12 @@ async function saveRule(){
 
 /* ---- SLO ---- */
 async function loadSLOs(){
-  try { SRE_SLOS = (await fetch(`${API}/slos`).then(r=>r.json()))||[]; renderSLOs(SRE_SLOS); }
+  try {
+    SRE_SLOS = (await fetch(`${API}/slos`).then(r=>r.json()))||[];
+    // 顺带拉取 apimon 接口清单，供 SLO 表单选择 API 接口作为 SLI 源
+    try { const d=await fetch(`${API}/apimon/systems`).then(r=>r.json()); SRE_API_ENDPOINTS=((d&&d.systems)||[]).flatMap(sy=>(sy.endpoints||[]).map(e=>({id:e.id,name:sy.name+" / "+e.name}))); } catch(_){}
+    renderSLOs(SRE_SLOS);
+  }
   catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 function renderSLOs(list){
@@ -993,30 +998,33 @@ function renderSLOs(list){
   if(!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_slo","暂无 SLO")}</div>`; return; }
   el.innerHTML=list.map(s=>{
     const bCls=s.error_budget<=0?"crit":s.error_budget<30?"warn":"ok";
-    const src=s.source_type==="check"?I18N.t("sre.slo_check_up_rate","拨测 up 率"):`${s.metric} ${s.comparator} ${s.threshold}`;
+    const src=s.source_type==="check"?I18N.t("sre.slo_check_up_rate","拨测 up 率"):s.source_type==="api"?I18N.t("sre.slo_api_up_rate","API up 率"):`${s.metric} ${s.comparator} ${s.threshold}`;
     return `<div class="pb-card fwd-card ${s.enabled?"":"pb-off"}" data-slo="${esc(s.id)}">
       <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(s.name)}</strong><span class="pb-desc">${esc(src)} · ${I18N.t("sre.slo_target","目标")} ${s.target}% · ${s.window_days}d</span></div>
         <span class="badge ${s.breaching?"crit":"ok"}">SLI ${s.sli.toFixed(2)}%</span></div>
       <div class="slo-budget"><div class="slo-budget-bar"><div class="slo-budget-fill ${bCls}" style="width:${Math.max(0,Math.min(100,s.error_budget))}%"></div></div>
         <div class="slo-budget-txt">${I18N.t("sre.slo_error_budget","错误预算")} ${s.error_budget.toFixed(0)}% · ${I18N.t("sre.slo_burn","燃尽")} ${s.burn_rate.toFixed(2)}× · ${I18N.t("sre.slo_good","达标")} ${s.good_events}/${s.total_events}</div></div>
-      <div class="pb-card-foot"><div class="pb-pills">${s.breaching?`<span class="badge crit">${I18N.t("sre.slo_breach","超标")}</span>`:`<span class="badge ok">${I18N.t("sre.slo_healthy","健康")}</span>`}${s.enabled?"":`<span class="badge">${I18N.t("sre.badge_disabled","停用")}</span>`}</div>
-        <div class="fwd-actions"><button class="btn sm" data-sloact="edit">${I18N.t("ui.edit","编辑")}</button><button class="btn danger sm" data-sloact="del">${I18N.t("ui.delete","删除")}</button></div></div></div>`;
+      <div class="pb-card-foot"><div class="pb-pills">${s.breaching?`<span class="badge crit">${I18N.t("sre.slo_breach","超标")}</span>`:`<span class="badge ok">${I18N.t("sre.slo_healthy","健康")}</span>`}${s.burn_state==="fast"?`<span class="badge crit">🔥${I18N.t("sre.slo_burn_fast","快烧")}</span>`:s.burn_state==="slow"?`<span class="badge warn">${I18N.t("sre.slo_burn_slow","慢烧")}</span>`:""}${s.enabled?"":`<span class="badge">${I18N.t("sre.badge_disabled","停用")}</span>`}</div>
+        <div class="fwd-actions"><button class="btn sm" data-sloact="trend">${I18N.t("sre.slo_trend","趋势")}</button><button class="btn sm" data-sloact="edit">${I18N.t("ui.edit","编辑")}</button><button class="btn danger sm" data-sloact="del">${I18N.t("ui.delete","删除")}</button></div></div></div>`;
   }).join("");
   el.querySelectorAll("[data-slo]").forEach(card=>card.querySelectorAll("[data-sloact]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
-    const id=card.dataset.slo;
-    if(b.dataset.sloact==="edit") openSloModal(SRE_SLOS.find(x=>x.id===id));
-    else if(confirm(I18N.t("sre.confirm_del_slo","确认删除该 SLO？"))) fetch(`${API}/slos/${id}`,{method:"DELETE"}).then(()=>loadSLOs());
+    const id=card.dataset.slo, act=b.dataset.sloact;
+    if(act==="trend") openSloTrend(SRE_SLOS.find(x=>x.id===id));
+    else if(act==="edit") openSloModal(SRE_SLOS.find(x=>x.id===id));
+    else if(act==="del" && confirm(I18N.t("sre.confirm_del_slo","确认删除该 SLO？"))) fetch(`${API}/slos/${id}`,{method:"DELETE"}).then(()=>loadSLOs());
   }));
 }
 function sloSourceChange(){
   const src=$("sloSource").value;
   $("sloCheckField").style.display=src==="check"?"":"none";
+  $("sloApiField").style.display=src==="api"?"":"none";
   $("sloMetricFields").style.display=src==="metric"?"":"none";
 }
 function openSloModal(s){
   $("sloId").value=s?s.id:""; $("sloModalTitle").textContent=s?I18N.t("sre.edit_slo","编辑 SLO"):I18N.t("sre.new_slo","新建 SLO");
   $("sloName").value=s?s.name:""; $("sloEnabled").checked=s?s.enabled:true; $("sloSource").value=s?s.source_type:"check";
   $("sloCheck").innerHTML=SRE_CHECKS.map(c=>`<option value="${esc(c.id)}" ${s&&s.check_id===c.id?"selected":""}>${esc(c.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_check_first","（请先创建拨测）")}</option>`;
+  $("sloApi").innerHTML=SRE_API_ENDPOINTS.map(e=>`<option value="${esc(e.id)}" ${s&&s.api_id===e.id?"selected":""}>${esc(e.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_api_first","（请先创建 API 监控）")}</option>`;
   $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc(h.hostname)}</option>`).join("");
   if(s){ $("sloMetric").value=s.metric||"cpu_percent"; $("sloComparator").value=s.comparator||"<"; $("sloThreshold").value=s.threshold||90; } else { $("sloComparator").value="<"; $("sloThreshold").value=90; }
   $("sloTarget").value=s?s.target:99.9; $("sloWindow").value=s?s.window_days:30;
@@ -1026,11 +1034,76 @@ async function saveSlo(){
   const src=$("sloSource").value;
   const body={id:$("sloId").value,name:$("sloName").value.trim(),enabled:$("sloEnabled").checked,source_type:src,target:parseFloat($("sloTarget").value)||99,window_days:parseInt($("sloWindow").value)||30};
   if(src==="check") body.check_id=$("sloCheck").value;
+  else if(src==="api") body.api_id=$("sloApi").value;
   else { body.host_id=$("sloHost").value; body.metric=$("sloMetric").value; body.comparator=$("sloComparator").value; body.threshold=parseFloat($("sloThreshold").value)||0; }
   const r=await fetch(`${API}/slos`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
   if(r.ok){ $("sloMask").classList.remove("show"); loadSLOs(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
+
+/* ---- SLO 趋势（自定义时间范围，与主机趋势图一致） ---- */
+let SLO_TREND = { id:"", name:"", target:99.9, range:24, custom:null };
+let SLO_TREND_CHART = null;
+function openSloTrend(slo){
+  if(!slo) return;
+  SLO_TREND = { id:slo.id, name:slo.name, target:slo.target||99.9, range:24, custom:null };
+  $("sloTrendTitle").textContent = slo.name + " · SLO 趋势";
+  $("sloTrendMask").classList.add("show");
+  loadSloTrend();
+}
+async function loadSloTrend(){
+  const { id, name, target, range, custom } = SLO_TREND;
+  const body=$("sloTrendBody");
+  body.innerHTML=`<div class="empty-line">${I18N.t("ui.loading","加载中…")}</div>`;
+  const now=Math.floor(Date.now()/1000);
+  const from = custom ? custom.from : (range>0 ? now-range*3600 : now-30*86400);
+  const to = custom ? custom.to : now;
+  const ctrl = `${renderChartControls(custom?-1:range,"slorange")}
+    <button class="chip-btn ${custom?"active":""}" data-slo-custom-toggle title="${I18N.t("time.custom_range","自定义时间范围")}">${I18N.t("time.custom","自定义")}</button>
+    <span class="chart-custom-range" id="sloCustomPanel"${custom?"":" hidden"}>
+      <input type="datetime-local" id="sloCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from>0?from:now-86400)}">
+      <span class="dt-sep">→</span>
+      <input type="datetime-local" id="sloCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
+      <button class="chip-btn primary" data-slo-custom-apply>${I18N.t("time.custom_apply","应用")}</button>
+    </span>`;
+  try{
+    const d=await fetch(`${API}/slos/${encodeURIComponent(id)}/trend?from=${from}&to=${to}`).then(r=>r.json());
+    const trend=(d&&d.trend)||[], st=(d&&d.status)||{};
+    if(!trend.length){
+      body.innerHTML=`<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（SLO 数据源运行 / 积累后出现）。</div>`;
+      return;
+    }
+    const samples=trend.map(p=>({timestamp:p.timestamp, sli:p.sli}));
+    const bCls=(st.error_budget||0)<=0?"crit":((st.error_budget||0)<30?"warn":"ok");
+    body.innerHTML=`<div class="chart-controls">${ctrl}</div>
+      <div class="api-hist-stat">
+        <span class="ahs"><b class="${st.breaching?"crit":"ok"}">${(st.sli||0).toFixed(3)}%</b><i>区间 SLI（目标 ${target}%）</i></span>
+        <span class="ahs"><b class="${bCls}">${(st.error_budget||0).toFixed(0)}%</b><i>剩余错误预算</i></span>
+        <span class="ahs"><b>${(st.burn_rate||0).toFixed(2)}×</b><i>燃尽速率</i></span>
+        <span class="ahs"><b>${st.good_events||0}/${st.total_events||0}</b><i>达标 / 总</i></span>
+      </div>
+      <div class="chart-container"><div class="chart-wrap"><div class="chart-sub-title">SLI 趋势（每桶可用率 %）</div><canvas id="sloTrendCanvas" width="1000" height="240"></canvas></div></div>
+      <div class="hint">按所选时间范围分桶现算每段可用率；可切换快捷跨度或自定义绝对区间（与主机趋势图一致）。y 轴自适应放大以显现波动。</div>`;
+    SLO_TREND_CHART = createChart("sloTrendCanvas", samples, [
+      { key:"sli", label:I18N.t("sre.slo_sli","SLI"), color:"#4c8dff", fmt:v=>v.toFixed(3)+"%" },
+    ], null, 100, { title: name+" · SLI(%)" });
+  }catch(e){ body.innerHTML=`<div class="empty-line">加载失败：${esc(e)}</div>`; }
+}
+function applySloCustomRange(){
+  const fEl=$("sloCustomFrom"), tEl=$("sloCustomTo");
+  if(!fEl||!tEl||!fEl.value||!tEl.value){ toast(I18N.t("time.custom_incomplete","请选择开始和结束时间"),"warn"); return; }
+  const from=Math.floor(new Date(fEl.value).getTime()/1000), to=Math.floor(new Date(tEl.value).getTime()/1000);
+  if(!(to>from)){ toast(I18N.t("time.custom_order","结束时间必须晚于开始时间"),"warn"); return; }
+  if(to-from<60){ toast(I18N.t("time.custom_tooshort","时间范围太短（至少 1 分钟）"),"warn"); return; }
+  SLO_TREND.custom={from,to}; loadSloTrend();
+}
+safeAddEventListener("sloTrendBody","click",e=>{
+  const tog=e.target.closest("[data-slo-custom-toggle]");
+  if(tog){ const p=$("sloCustomPanel"); if(p) p.hidden=!p.hidden; return; }
+  if(e.target.closest("[data-slo-custom-apply]")){ applySloCustomRange(); return; }
+  const rb=e.target.closest(".chip-btn[data-slorange]");
+  if(rb){ SLO_TREND.custom=null; SLO_TREND.range=parseInt(rb.dataset.slorange); loadSloTrend(); return; }
+});
 
 /* ---- 工单 ---- */
 async function loadTickets(){
@@ -1495,7 +1568,7 @@ async function openAIConfig(){
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     // 更新向量化 / 重排模型卡片摘要
-    updateEmbedCardSummary(); updateRerankCardSummary();
+    updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary();
     // 向量化、重排模型默认折叠
     const body=$("embedCardBody"), arrow=$("embedCardArrow");
     if(body){ body.style.display="none"; }
@@ -1676,6 +1749,56 @@ function toggleEmbedCard(){
   const isOpen=body.style.display!=="none";
   body.style.display=isOpen?"none":"block";
   if(arrow){ arrow.classList.toggle("open",!isOpen); }
+}
+
+// AI 重排(rerank)模型连接测试
+let _aiRerankTestBusy=false;
+async function testAIRerankConfig(){
+  if(_aiRerankTestBusy) return;
+  const el=$("aiRerankTestResult");
+  _aiRerankTestBusy=true;
+  const testBtn=$("aiRerankTestBtn"); if(testBtn) testBtn.disabled=true;
+  if(el){ el.textContent=I18N.t("sre.ai_rerank_model","重排模型")+" "+I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
+  const body={enabled:true,
+    rerank_endpoint:$("rerankEndpoint").value.trim(),
+    rerank_api_key:$("rerankKey").value,
+    rerank_model:$("rerankModel").value.trim(),
+    embed_endpoint:$("embedEndpoint").value.trim(),
+    embed_api_key:$("embedKey").value,
+    endpoint:$("aiEndpoint").value.trim(),
+    api_key:$("aiKey").value
+  };
+  try{
+    const r=await fetch(`${API}/ai/test-rerank`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(j.ok){ el.textContent=`✓ ${I18N.t("sre.rerank_model_ok","重排模型可用")} · ${j.latency_ms||0}ms · ${j.model||""}`; el.className="ai-test-result ok"; }
+    else { el.textContent="✗ "+I18N.t("sre.ai_rerank_model","重排模型")+" "+(j.error||I18N.t("sre.test_failed","测试失败")); el.className="ai-test-result err"; }
+  }catch(e){ if(el){ el.textContent="✗ "+I18N.t("sre.ai_rerank_model","重排模型")+" "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
+  finally{ _aiRerankTestBusy=false; if(testBtn) testBtn.disabled=false; }
+}
+
+// 折叠/展开 MCP Server 卡片
+function toggleMcpCard(){
+  const body=$("mcpCardBody"), arrow=$("mcpCardArrow");
+  if(!body) return;
+  const isOpen=body.style.display!=="none";
+  body.style.display=isOpen?"none":"block";
+  if(arrow){ arrow.classList.toggle("open",!isOpen); }
+}
+// MCP 卡片折叠摘要：折叠态也能看出是否已启用
+function updateMcpCardSummary(){
+  const el=$("mcpCardSummary"); if(!el) return;
+  const on=$("mcpEnabled") && $("mcpEnabled").checked;
+  el.textContent = on ? " · 已启用" : "";
+  el.className = "ai-card-summary" + (on ? " on" : "");
+}
+// 生成高强度随机令牌（32 字节 CSPRNG → base64url）并自动填入
+function genStrongToken(nbytes){
+  const arr=new Uint8Array(nbytes||32);
+  (window.crypto||window.msCrypto).getRandomValues(arr);
+  let bin=""; for(let i=0;i<arr.length;i++) bin+=String.fromCharCode(arr[i]);
+  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
 
 // 更新向量化模型卡片折叠状态摘要
@@ -2149,8 +2272,19 @@ safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
+safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
 safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
 safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
+safeAddEventListener("mcpCardHeader","click",toggleMcpCard);
+safeAddEventListener("mcpEnabled","change",updateMcpCardSummary);
+safeAddEventListener("mcpGenTokenBtn","click",()=>{
+  const t=$("mcpToken"); if(!t) return;
+  t.type="text"; // 明文显示便于复制保存
+  t.value=genStrongToken(32);
+  if($("mcpEnabled")) $("mcpEnabled").checked=true; // 生成即视为要启用
+  updateMcpCardSummary();
+  if(typeof toast==="function") toast(I18N.t("sre.token_generated","已生成高强度随机令牌，请及时保存"),"ok");
+});
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
 safeAddEventListener("aiEndpoint","change",loadAIModels);
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型

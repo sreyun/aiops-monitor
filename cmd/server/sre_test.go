@@ -90,6 +90,81 @@ func TestSLOComputeCheck(t *testing.T) {
 	}
 }
 
+// TestSLOComputeAPI 验证 apimon 接口作为 SLI 源：OK 率即 SLI。
+func TestSLOComputeAPI(t *testing.T) {
+	m := newSLOManager(nil)
+	m.apiPoints = func(apiID string, fromTs int64) []APIHistPoint {
+		return []APIHistPoint{{Ts: 100, OK: true}, {Ts: 101, OK: false}, {Ts: 102, OK: true}, {Ts: 103, OK: true}}
+	}
+	slo := SLO{SourceType: "api", APIID: "ep1", Target: 99, WindowDays: 30}
+	st := m.computeStatus(slo, 120)
+	if st.TotalEvents != 4 || st.GoodEvents != 3 {
+		t.Fatalf("expected 3/4 good, got %d/%d", st.GoodEvents, st.TotalEvents)
+	}
+	if st.SLI != 75 {
+		t.Fatalf("expected SLI 75%%, got %.1f", st.SLI)
+	}
+}
+
+// TestSLOBurnLevel 验证多窗口多燃烧率判定：90%OK→快烧(burn 100)、99%OK→慢烧(burn 10)、100%OK→无。
+func TestSLOBurnLevel(t *testing.T) {
+	m := newSLOManager(nil)
+	slo := SLO{SourceType: "api", APIID: "ep1", Target: 99.9, WindowDays: 30}
+	set := func(okPct int) {
+		m.apiPoints = func(apiID string, fromTs int64) []APIHistPoint {
+			pts := make([]APIHistPoint, 100)
+			for i := range pts {
+				pts[i] = APIHistPoint{Ts: int64(i), OK: i >= (100 - okPct)}
+			}
+			return pts
+		}
+	}
+	set(90)
+	if lvl := m.burnLevel(slo, 1_000_000); lvl != "fast" {
+		t.Fatalf("90%% OK 应快烧，得 %q", lvl)
+	}
+	set(99)
+	if lvl := m.burnLevel(slo, 1_000_000); lvl != "slow" {
+		t.Fatalf("99%% OK 应慢烧，得 %q", lvl)
+	}
+	set(100)
+	if lvl := m.burnLevel(slo, 1_000_000); lvl != "" {
+		t.Fatalf("100%% OK 应无燃烧，得 %q", lvl)
+	}
+}
+
+// TestSLORangeAndTrend 验证自定义区间状态与趋势分桶：区间裁剪、SLI 计算、趋势点合法。
+func TestSLORangeAndTrend(t *testing.T) {
+	m := newSLOManager(nil)
+	// 10 个点 ts=100..109，前 2 个(100/101)失败，其余成功
+	m.apiPoints = func(apiID string, fromTs int64) []APIHistPoint {
+		pts := []APIHistPoint{}
+		for i := 0; i < 10; i++ {
+			pts = append(pts, APIHistPoint{Ts: int64(100 + i), OK: i >= 2})
+		}
+		return pts
+	}
+	slo := SLO{SourceType: "api", APIID: "ep1", Target: 99}
+	// 全区间 [100,109]：8/10 达标 → 80%
+	if st := m.computeStatusRange(slo, 100, 109); st.TotalEvents != 10 || st.GoodEvents != 8 || st.SLI != 80 {
+		t.Fatalf("全区间状态错误: %+v", st)
+	}
+	// 子区间 [102,109]：只含成功点 → 100%
+	if st := m.computeStatusRange(slo, 102, 109); st.TotalEvents != 8 || st.SLI != 100 {
+		t.Fatalf("子区间裁剪错误: %+v", st)
+	}
+	// 趋势分桶：非空、每桶 SLI 合法
+	tr := m.sloTrend(slo, 100, 110)
+	if len(tr) == 0 {
+		t.Fatal("趋势应非空")
+	}
+	for _, p := range tr {
+		if p.SLI < 0 || p.SLI > 100 || p.Total <= 0 {
+			t.Fatalf("趋势点非法: %+v", p)
+		}
+	}
+}
+
 // --- Remediation matching + guards ---
 
 func TestRemediationMatch(t *testing.T) {

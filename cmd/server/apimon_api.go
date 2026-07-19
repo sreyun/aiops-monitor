@@ -30,11 +30,12 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 				"enabled": ep.Enabled, "headers": ep.Headers, "body": ep.Body,
 				"expect_status": ep.ExpectStatus, "expect_keyword": ep.ExpectKeyword,
 				"json_path": ep.JSONPath, "json_expect": ep.JSONExpect,
+				"timeout_sec": ep.TimeoutSec, "retries": ep.Retries, "distributed": ep.Distributed,
 				// 实时状态（默认值 = 尚未探测）
 				"ok": true, "message": "", "latency_ms": 0.0, "status_code": 0,
 				"cert_days": -1, "resp_bytes": int64(0), "checked_at": int64(0),
 				// VM 聚合（-1 = 暂无数据）
-				"avg_ms": 0.0, "p95_ms": 0.0, "avail_1h": -1.0, "avail_24h": -1.0, "samples_1h": 0.0,
+				"avg_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "avail_1h": -1.0, "avail_24h": -1.0, "samples_1h": 0.0,
 				"down": false, "down_since": int64(0),
 			}
 			if s2, ok := st[ep.ID]; ok {
@@ -43,6 +44,7 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 			}
 			if a, ok := agg[ep.ID]; ok {
 				m["avg_ms"], m["p95_ms"], m["samples_1h"] = a.AvgMs, a.P95Ms, a.Samples1h
+				m["p99_ms"] = a.P99Ms
 				m["avail_1h"], m["avail_24h"] = a.Avail1h, a.Avail24h
 			}
 			if ds, ok := down[ep.ID]; ok {
@@ -52,9 +54,10 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{
 			"id": sys.ID, "name": sys.Name, "interval_sec": sys.IntervalSec,
-			"level": sys.Level, "enabled": sys.Enabled, "created_at": sys.CreatedAt,
+			"level": sys.Level, "env": sys.Env, "enabled": sys.Enabled, "created_at": sys.CreatedAt,
 			"common_headers": sys.CommonHeaders, // 回显系统级公共请求头（此前遗漏→编辑时清空→保存被清零）
 			"common_body":    sys.CommonBody,    // 回显系统级公共请求体（同理必须回显，否则编辑即清零）
+			"host_ids":       sys.HostIDs,       // 回显承载主机关联
 			"endpoints":      eps,
 		})
 	}
@@ -79,6 +82,7 @@ func (s *Server) handleUpsertAPISystem(w http.ResponseWriter, r *http.Request) {
 	if sys.Level != "warning" && sys.Level != "critical" {
 		sys.Level = "critical"
 	}
+	sys.Env = strings.ToLower(strings.TrimSpace(sys.Env)) // 环境标签规整（prod/staging/dev 或自定义）
 	// 清洗接口：去空名/空 URL，规整方法
 	cleaned := make([]APIEndpoint, 0, len(sys.Endpoints))
 	for _, ep := range sys.Endpoints {
@@ -88,6 +92,16 @@ func (s *Server) handleUpsertAPISystem(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		ep.Method = strings.ToUpper(strings.TrimSpace(ep.Method))
+		if ep.TimeoutSec <= 0 {
+			ep.TimeoutSec = 10 // 默认 10s（比拨测全局 5s 宽松，适配业务接口）
+		} else if ep.TimeoutSec > 60 {
+			ep.TimeoutSec = 60
+		}
+		if ep.Retries < 0 {
+			ep.Retries = 0
+		} else if ep.Retries > 3 {
+			ep.Retries = 3
+		}
 		cleaned = append(cleaned, ep)
 	}
 	sys.Endpoints = cleaned
@@ -132,4 +146,155 @@ func (s *Server) handleAPIEndpointHistory(w http.ResponseWriter, r *http.Request
 		pts = []APIHistPoint{}
 	}
 	writeJSON(w, http.StatusOK, pts)
+}
+
+// ---- API 合成事务（迭代 C）HTTP 端点 ----
+
+// handleAPITxnOverview 返回所有合成事务 + 每个事务的最新执行结果（含分步结果）。
+func (s *Server) handleAPITxnOverview(w http.ResponseWriter, r *http.Request) {
+	txns := s.cfg.APITransactions()
+	st := s.apimon.txnStatusSnapshot()
+	out := make([]map[string]any, 0, len(txns))
+	for _, t := range txns {
+		m := map[string]any{
+			"id": t.ID, "name": t.Name, "interval_sec": t.IntervalSec, "level": t.Level,
+			"enabled": t.Enabled, "vars": t.Vars, "steps": t.Steps, "created_at": t.CreatedAt,
+			// 最新执行结果（默认值 = 尚未执行）
+			"ok": true, "failed_step": -1, "total_ms": 0.0, "checked_at": int64(0), "step_results": []any{},
+		}
+		if res, ok := st[t.ID]; ok {
+			m["ok"], m["failed_step"], m["total_ms"], m["checked_at"] = res.OK, res.FailedStep, res.TotalMs, res.CheckedAt
+			m["step_results"] = res.Steps
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transactions": out})
+}
+
+// handleUpsertAPITransaction 新增/更新一个合成事务（含步骤列表），保存后立即执行一次。
+func (s *Server) handleUpsertAPITransaction(w http.ResponseWriter, r *http.Request) {
+	var t APITransaction
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	t.Name = strings.TrimSpace(t.Name)
+	if t.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "事务名称不能为空"})
+		return
+	}
+	if t.IntervalSec < 5 {
+		t.IntervalSec = 60
+	}
+	if t.Level != "warning" && t.Level != "critical" {
+		t.Level = "critical"
+	}
+	cleaned := make([]APIStep, 0, len(t.Steps))
+	for _, step := range t.Steps {
+		step.Name = strings.TrimSpace(step.Name)
+		step.URL = strings.TrimSpace(step.URL)
+		if step.Name == "" || step.URL == "" {
+			continue
+		}
+		step.Method = strings.ToUpper(strings.TrimSpace(step.Method))
+		if step.TimeoutSec <= 0 {
+			step.TimeoutSec = 10
+		} else if step.TimeoutSec > 60 {
+			step.TimeoutSec = 60
+		}
+		cleaned = append(cleaned, step)
+	}
+	if len(cleaned) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请至少添加一个步骤（需填步骤名与 URL）"})
+		return
+	}
+	t.Steps = cleaned
+	saved, err := s.cfg.UpsertAPITransaction(t)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.apimon.runTxnNow(saved.ID)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存 API 合成事务：" + saved.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
+}
+
+func (s *Server) handleDeleteAPITransaction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_ = s.cfg.DeleteAPITransaction(id)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除 API 合成事务：" + id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleRunAPITransaction 立即执行某合成事务（fire-and-forget）。
+func (s *Server) handleRunAPITransaction(w http.ResponseWriter, r *http.Request) {
+	s.apimon.runTxnNow(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleSLAReport 生成 SLA 报表：各接口近 N 天(默认30，上限90)的可用率 / 估算停机 / P95 / P99 /
+// 探测数，从 VM 现算。供前端表格展示与 CSV 导出（面向对外 SLA 承诺与月度汇报）。
+func (s *Server) handleSLAReport(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, _ := strconv.Atoi(d); v > 0 && v <= 90 {
+			days = v
+		}
+	}
+	rows := []map[string]any{}
+	if s.vm != nil && s.vm.enabled() {
+		win := strconv.Itoa(days) + "d"
+		avail := s.vm.vmInstantByAPI(`avg_over_time(aiops_api_up[` + win + `]) * 100`)
+		cnt := s.vm.vmInstantByAPI(`count_over_time(aiops_api_up[` + win + `])`)
+		p95 := s.vm.vmInstantByAPI(`quantile_over_time(0.95, aiops_api_latency_ms[` + win + `])`)
+		p99 := s.vm.vmInstantByAPI(`quantile_over_time(0.99, aiops_api_latency_ms[` + win + `])`)
+		for _, sys := range s.cfg.APISystems() {
+			for _, ep := range sys.Endpoints {
+				a, ok := avail[ep.ID]
+				if !ok {
+					continue // 无数据的接口不列入报表
+				}
+				rows = append(rows, map[string]any{
+					"system": sys.Name, "endpoint": ep.Name, "url": ep.URL,
+					"availability": a, "samples": cnt[ep.ID],
+					"p95_ms": p95[ep.ID], "p99_ms": p99[ep.ID],
+					"downtime_min": (100 - a) / 100 * float64(days) * 24 * 60, // 估算停机 = 不可用比例 × 窗口
+				})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "rows": rows})
+}
+
+// handleAPISystemHosts 返回某业务系统「承载主机」的实时指标快照，供异常下钻——把接口异常与承载
+// 主机的 CPU/内存/磁盘/网络关联。主机由 APISystem.HostIDs 显式关联（编辑业务系统时勾选）。
+func (s *Server) handleAPISystemHosts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var hostIDs []string
+	for _, sys := range s.cfg.APISystems() {
+		if sys.ID == id {
+			hostIDs = sys.HostIDs
+			break
+		}
+	}
+	now := time.Now().Unix()
+	out := []map[string]any{}
+	for _, hid := range hostIDs {
+		h, ok := s.store.GetHost(hid)
+		if !ok {
+			continue
+		}
+		m := map[string]any{
+			"id": h.ID, "hostname": h.Hostname, "ip": h.IP,
+			"last_seen": h.LastSeen, "online": now-h.LastSeen < 180,
+			"cpu": 0.0, "mem": 0.0, "disk": 0.0, "load1": 0.0, "net_recv": 0.0, "net_sent": 0.0,
+		}
+		if h.Latest != nil {
+			m["cpu"], m["mem"], m["disk"] = h.Latest.CPUPercent, h.Latest.MemPercent, h.Latest.DiskPercent
+			m["load1"] = h.Latest.Load1
+			m["net_recv"], m["net_sent"] = h.Latest.NetRecvRate, h.Latest.NetSentRate
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hosts": out})
 }

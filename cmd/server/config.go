@@ -392,6 +392,9 @@ type CustomCheck struct {
 	JSONPath       string            `json:"json_path,omitempty"`        // JSON 断言的点路径，如 code / data.token
 	JSONExpect     string            `json:"json_expect,omitempty"`      // JSON 断言期望值（字符串比较；留空=只要求路径存在）
 	CertWarnDays   int               `json:"cert_warn_days,omitempty"`   // 证书剩余天数低于此值即判失败告警（0=不检测）
+	TimeoutSec     int               `json:"timeout_sec,omitempty"`      // 单次探测超时（秒，0=用全局默认；API 业务监控用它绕过 5s 全局上限，精确控制慢接口）
+	CaptureBody    bool              `json:"-"`                          // 内部：合成事务需要响应体做变量提取（不序列化）
+	TraceParent    bool              `json:"-"`                          // 内部：注入 W3C traceparent 头（apimon 探测用，后端可关联分布式 trace）
 }
 
 // HTTPProxyConfig is a saved HTTP proxy shortcut for quick access.
@@ -455,7 +458,8 @@ type ServerConfig struct {
 	RequireToken       bool            `json:"require_token"`
 	Account            AccountConfig   `json:"account"`
 	Checks             []CustomCheck   `json:"checks"`
-	APISystems         []APISystem     `json:"api_systems,omitempty"` // API 性能监控：按业务系统分组的批量接口
+	APISystems         []APISystem      `json:"api_systems,omitempty"`      // API 性能监控：按业务系统分组的批量接口
+	APITransactions    []APITransaction `json:"api_transactions,omitempty"` // API 合成事务：多步链式监控（变量提取/传递）
 	Governance         AlertGovernance `json:"governance,omitempty"`  // 告警治理：静默/抑制/生效时段/通知路由
 	Playbooks          []Playbook      `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
@@ -698,6 +702,16 @@ func genToken() string {
 		return "aiops-token-fallback-0000000000000"
 	}
 	return hex.EncodeToString(b)
+}
+
+// genTraceparent 生成一个 W3C traceparent 头值：00-<32hex traceID>-<16hex spanID>-01。
+// 合成探测注入它，后端有分布式追踪(Jaeger/Tempo/SkyWalking 等)时可把探测请求关联进 trace。
+func genTraceparent() string {
+	b := make([]byte, 24) // 16B trace-id + 8B span-id
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return "00-" + hex.EncodeToString(b[:16]) + "-" + hex.EncodeToString(b[16:24]) + "-01"
 }
 
 func (cs *ConfigStore) Get() ServerConfig {
@@ -1013,6 +1027,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Checks = cs.cfg.Checks                     // checks managed via check endpoints
 	c.Playbooks = cs.cfg.Playbooks               // playbooks managed via playbook endpoints
 	c.APISystems = cs.cfg.APISystems             // API 性能监控：由专用端点管理，保护不被表单清零
+	c.APITransactions = cs.cfg.APITransactions   // API 合成事务：由专用端点管理，保护不被表单清零
 	c.Governance = cs.cfg.Governance             // 告警治理：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
@@ -1102,6 +1117,11 @@ func (cs *ConfigStore) save() error {
 		users := make([]AccountConfig, len(c.Users))
 		copy(users, c.Users)
 		c.Users = users
+	}
+	// API 业务监控的 headers/body 含引用类型（map/slice），必须深拷贝后再交给
+	// encryptConfigSecrets 加密，否则会就地污染内存中的明文实时配置。
+	if len(c.APISystems) > 0 {
+		c.APISystems = deepCopyAPISystems(c.APISystems)
 	}
 	pg := cs.pg
 	cs.mu.RUnlock()

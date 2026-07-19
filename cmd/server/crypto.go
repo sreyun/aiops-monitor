@@ -188,6 +188,20 @@ func encryptConfigSecrets(c *ServerConfig) {
 	for i := range c.Users {
 		c.Users[i].MFASecret = encryptSecret(c.Users[i].MFASecret)
 	}
+	// API 业务监控：公共/接口的请求头与请求体常含 Authorization / token / 签名等静态凭据，静态加密。
+	// 注意：调用方（ConfigStore.save）必须先深拷贝 APISystems，否则会污染内存中的明文实时配置。
+	for i := range c.APISystems {
+		for k, v := range c.APISystems[i].CommonHeaders {
+			c.APISystems[i].CommonHeaders[k] = encryptSecret(v)
+		}
+		c.APISystems[i].CommonBody = encryptSecret(c.APISystems[i].CommonBody)
+		for j := range c.APISystems[i].Endpoints {
+			for k, v := range c.APISystems[i].Endpoints[j].Headers {
+				c.APISystems[i].Endpoints[j].Headers[k] = encryptSecret(v)
+			}
+			c.APISystems[i].Endpoints[j].Body = encryptSecret(c.APISystems[i].Endpoints[j].Body)
+		}
+	}
 }
 
 // decryptConfigSecrets reverses encryptConfigSecrets, restoring plaintext in the
@@ -204,5 +218,18 @@ func decryptConfigSecrets(c *ServerConfig) {
 	c.Account.MFASecret = decryptSecret(c.Account.MFASecret)
 	for i := range c.Users {
 		c.Users[i].MFASecret = decryptSecret(c.Users[i].MFASecret)
+	}
+	// API 业务监控：与 encryptConfigSecrets 对称，load 后就地还原为明文（供探测与 UI 回显）
+	for i := range c.APISystems {
+		for k, v := range c.APISystems[i].CommonHeaders {
+			c.APISystems[i].CommonHeaders[k] = decryptSecret(v)
+		}
+		c.APISystems[i].CommonBody = decryptSecret(c.APISystems[i].CommonBody)
+		for j := range c.APISystems[i].Endpoints {
+			for k, v := range c.APISystems[i].Endpoints[j].Headers {
+				c.APISystems[i].Endpoints[j].Headers[k] = decryptSecret(v)
+			}
+			c.APISystems[i].Endpoints[j].Body = decryptSecret(c.APISystems[i].Endpoints[j].Body)
+		}
 	}
 }

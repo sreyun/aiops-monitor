@@ -632,3 +632,43 @@ type ContentAuditReport struct {
 	Timestamp   int64               `json:"timestamp"`
 	Events      []ContentAuditEvent `json:"events"`
 }
+
+// ---- 分布式多点探测（迭代 D）：agent 作为多地探针执行 HTTP 探测 ----
+
+// ProbeTask 是服务端在上报响应里下发给 agent 的一个探测任务（对应一个被标为「分布式」的 API 接口）。
+type ProbeTask struct {
+	ID           string            `json:"id"` // = APIEndpoint.ID
+	Name         string            `json:"name"`
+	URL          string            `json:"url"`
+	Method       string            `json:"method,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	ExpectStatus int               `json:"expect_status,omitempty"`
+	TimeoutSec   int               `json:"timeout_sec,omitempty"`
+}
+
+// ReportResponse 是 /api/v1/agent/report 的响应体：除认回的规范 host_id 外，可携带分布式探测任务。
+type ReportResponse struct {
+	Status     string      `json:"status"`
+	HostID     string      `json:"host_id,omitempty"`
+	ProbeTasks []ProbeTask `json:"probe_tasks,omitempty"`
+}
+
+// ProbeResult 是 agent 执行一个探测任务的结果。
+type ProbeResult struct {
+	TaskID    string  `json:"task_id"`
+	OK        bool    `json:"ok"`
+	LatencyMs float64 `json:"latency_ms"`
+	Code      int     `json:"code"`
+	Msg       string  `json:"msg,omitempty"`
+	Ts        int64   `json:"ts"`
+}
+
+// ProbeResultReport 是 agent 回报的一批探测结果（POST /api/v1/agent/probe-results）；
+// 服务端据 HostID 把每个 agent 归为一个「探测点/地域」，聚合出区域性 vs 全局故障。
+type ProbeResultReport struct {
+	HostID      string        `json:"host_id"`
+	Hostname    string        `json:"hostname,omitempty"`
+	Fingerprint string        `json:"fingerprint,omitempty"`
+	Results     []ProbeResult `json:"results"`
+}

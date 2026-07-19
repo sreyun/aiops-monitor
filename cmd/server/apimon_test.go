@@ -57,6 +57,18 @@ func TestAPIEndpointToCheckWithCommonHeaders(t *testing.T) {
 	}
 }
 
+// TestGenTraceparent 验证 W3C traceparent 头格式(00-<32hex>-<16hex>-01)与随机性。
+func TestGenTraceparent(t *testing.T) {
+	tp := genTraceparent()
+	parts := strings.Split(tp, "-")
+	if len(parts) != 4 || parts[0] != "00" || len(parts[1]) != 32 || len(parts[2]) != 16 || parts[3] != "01" {
+		t.Fatalf("traceparent 格式错误: %q", tp)
+	}
+	if tp == genTraceparent() {
+		t.Error("traceparent 应每次随机不同")
+	}
+}
+
 // TestMergeAPIBody 验证系统级公共请求体与接口级请求体的合并规则。
 func TestMergeAPIBody(t *testing.T) {
 	// 接口体为空 → 用公共体
@@ -74,6 +86,46 @@ func TestMergeAPIBody(t *testing.T) {
 	// 非 JSON 对象（表单串）→ 接口体整体覆盖，绝不破坏原文
 	if got := mergeAPIBody("a=1&b=2", "c=3"); got != "c=3" {
 		t.Fatalf("非 JSON 应接口体优先，实际=%s", got)
+	}
+}
+
+// TestAPISystemsSecretEncryption 验证 apimon 请求头/请求体的静态加密往返，
+// 且深拷贝隔离确保加密副本时绝不污染内存中的明文实时配置（save 路径的最高风险点）。
+func TestAPISystemsSecretEncryption(t *testing.T) {
+	t.Setenv("AIOPS_SECRET_KEY", "test-apimon-key")
+	systems := []APISystem{{
+		ID: "s1", Name: "订单",
+		CommonHeaders: map[string]string{"Authorization": "Bearer secret-token"},
+		CommonBody:    `{"appId":"1001"}`,
+		Endpoints: []APIEndpoint{{
+			ID: "ep1", Name: "下单", URL: "https://x/order",
+			Headers: map[string]string{"X-Api-Key": "ep-key"},
+			Body:    `{"sku":"A"}`,
+		}},
+	}}
+	// 模拟 save 路径：深拷贝后加密副本
+	c := ServerConfig{APISystems: deepCopyAPISystems(systems)}
+	encryptConfigSecrets(&c)
+	// ① 原始明文未被污染（深拷贝隔离生效）
+	if systems[0].CommonHeaders["Authorization"] != "Bearer secret-token" ||
+		systems[0].Endpoints[0].Headers["X-Api-Key"] != "ep-key" ||
+		systems[0].CommonBody != `{"appId":"1001"}` || systems[0].Endpoints[0].Body != `{"sku":"A"}` {
+		t.Fatal("深拷贝失败：加密污染了内存中的明文实时配置")
+	}
+	// ② 副本敏感字段已加密
+	if !strings.HasPrefix(c.APISystems[0].CommonHeaders["Authorization"], secretEncPrefix) ||
+		!strings.HasPrefix(c.APISystems[0].CommonBody, secretEncPrefix) ||
+		!strings.HasPrefix(c.APISystems[0].Endpoints[0].Headers["X-Api-Key"], secretEncPrefix) ||
+		!strings.HasPrefix(c.APISystems[0].Endpoints[0].Body, secretEncPrefix) {
+		t.Fatal("apimon 敏感字段未被加密")
+	}
+	// ③ 解密还原明文（load 路径）
+	decryptConfigSecrets(&c)
+	if c.APISystems[0].CommonHeaders["Authorization"] != "Bearer secret-token" ||
+		c.APISystems[0].CommonBody != `{"appId":"1001"}` ||
+		c.APISystems[0].Endpoints[0].Headers["X-Api-Key"] != "ep-key" ||
+		c.APISystems[0].Endpoints[0].Body != `{"sku":"A"}` {
+		t.Fatalf("解密未能还原明文: %+v", c.APISystems[0])
 	}
 }
 

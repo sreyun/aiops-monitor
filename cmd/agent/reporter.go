@@ -85,6 +85,8 @@ type serverTarget struct {
 	disableGzip bool
 
 	logKey []byte // 服务端注册时下发的日志加密密钥（32B AES-256）；空 = 明文上报
+
+	probeMu sync.Mutex // 分布式探测：确保同一 target 同时只跑一轮探测任务，避免慢探测堆积
 }
 
 // register sends the agent's identity (with this target's token) to the server.
@@ -205,6 +207,11 @@ func (t *serverTarget) send(rep shared.Report) error {
 	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("服务端返回状态码 %d", resp.StatusCode)
+	}
+	// 解析响应：服务端可能下发分布式探测任务（迭代 D）。解析失败不影响上报本身。
+	var rr shared.ReportResponse
+	if json.NewDecoder(io.LimitReader(resp.Body, 512<<10)).Decode(&rr) == nil && len(rr.ProbeTasks) > 0 {
+		go t.runProbeTasks(rep.HostID, rep.Hostname, rep.Fingerprint, rr.ProbeTasks)
 	}
 	return nil
 }

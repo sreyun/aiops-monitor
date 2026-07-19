@@ -26,8 +26,9 @@ type SLO struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
 	Enabled    bool    `json:"enabled"`
-	SourceType string  `json:"source_type"`          // check | metric
+	SourceType string  `json:"source_type"`          // check | api | metric
 	CheckID    string  `json:"check_id,omitempty"`   // source_type=check
+	APIID      string  `json:"api_id,omitempty"`     // source_type=api（apimon 接口 ID）
 	HostID     string  `json:"host_id,omitempty"`    // source_type=metric
 	Metric     string  `json:"metric,omitempty"`     // cpu_percent | mem_percent | disk_percent | load1 | ...
 	Comparator string  `json:"comparator,omitempty"` // < | <= | > | >=  (defines the "good" band)
@@ -48,6 +49,7 @@ type SLOStatus struct {
 	TotalEvents int64   `json:"total_events"`
 	Breaching   bool    `json:"breaching"` // SLI < target
 	Healthy     bool    `json:"healthy"`
+	BurnState   string  `json:"burn_state"` // "" | "fast" | "slow"（多窗口燃烧档，供看板即时呈现）
 }
 
 // sampleMetric extracts a named metric from a sample; ok=false if unknown.
@@ -122,6 +124,7 @@ type sloManager struct {
 	// data sources (injected during wiring)
 	metricSamples func(hostID string, fromTs int64) []shared.Sample
 	checkPoints   func(checkID string) []CheckPoint
+	apiPoints     func(apiID string, fromTs int64) []APIHistPoint
 	incidents     *incidentManager
 	burning       map[string]bool // sloID -> currently in a burn incident
 }
@@ -130,14 +133,14 @@ func newSLOManager(cfg *ConfigStore) *sloManager {
 	return &sloManager{cfg: cfg, burning: map[string]bool{}}
 }
 
-// computeStatus evaluates one SLO against its window.
-func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
-	win := s.WindowDays
-	if win < 1 {
-		win = 30
-	}
-	fromTs := now - int64(win)*86400
-	var good, total int64
+// 多窗口多燃烧率阈值（Google SRE Workbook）：长短窗口双双超阈才判定，避免瞬时抖动误报。
+const (
+	sloFastBurnThr = 14.4 // 快烧：约 1h 消耗 2% 的 30d 预算 → 紧急
+	sloSlowBurnThr = 6.0  // 慢烧：约 6h 消耗 5% 的 30d 预算 → 警告
+)
+
+// goodTotal 统计一个 SLO 在 [fromTs, now] 窗口内的达标/总事件数，覆盖全部 SLI 来源。
+func (m *sloManager) goodTotal(s SLO, fromTs int64) (good, total int64) {
 	switch s.SourceType {
 	case "check":
 		if m.checkPoints != nil {
@@ -145,6 +148,15 @@ func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
 				if p.Ts < fromTs {
 					continue
 				}
+				total++
+				if p.OK {
+					good++
+				}
+			}
+		}
+	case "api":
+		if m.apiPoints != nil {
+			for _, p := range m.apiPoints(s.APIID, fromTs) {
 				total++
 				if p.OK {
 					good++
@@ -165,6 +177,105 @@ func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
 			}
 		}
 	}
+	return
+}
+
+// burnLevel 判定当前燃烧档："fast"(快烧,紧急) | "slow"(慢烧,警告) | ""(正常)，长短窗口双确认。
+func (m *sloManager) burnLevel(s SLO, now int64) string {
+	burn := func(dur int64) (float64, bool) {
+		good, total := m.goodTotal(s, now-dur)
+		if total == 0 {
+			return 0, false
+		}
+		_, br := sloBudget(float64(good)/float64(total)*100, s.Target)
+		return br, true
+	}
+	b5, ok5 := burn(300)
+	b30, ok30 := burn(1800)
+	b1h, _ := burn(3600)
+	b6h, _ := burn(21600)
+	if ok5 && b1h >= sloFastBurnThr && b5 >= sloFastBurnThr {
+		return "fast"
+	}
+	if ok30 && b6h >= sloSlowBurnThr && b30 >= sloSlowBurnThr {
+		return "slow"
+	}
+	return ""
+}
+
+// computeStatus evaluates one SLO against its window.
+func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
+	win := s.WindowDays
+	if win < 1 {
+		win = 30
+	}
+	good, total := m.goodTotal(s, now-int64(win)*86400)
+	sli := 100.0
+	if total > 0 {
+		sli = float64(good) / float64(total) * 100
+	}
+	budget, burn := sloBudget(sli, s.Target)
+	return SLOStatus{
+		SLO: s, SLI: sli, ErrorBudget: budget, BurnRate: burn,
+		GoodEvents: good, TotalEvents: total,
+		Breaching: total > 0 && sli < s.Target,
+		Healthy:   total == 0 || sli >= s.Target,
+		BurnState: m.burnLevel(s, now),
+	}
+}
+
+// sloPoint 是 SLI 计算的一个原子事件点（时间 + 是否达标），统一各来源用于自定义区间与趋势。
+type sloPoint struct {
+	Ts int64
+	OK bool
+}
+
+// rangePoints 取一个 SLO 在 [fromTs, toTs] 内的全部事件点，覆盖 check/api/metric 三种来源。
+func (m *sloManager) rangePoints(s SLO, fromTs, toTs int64) []sloPoint {
+	var out []sloPoint
+	switch s.SourceType {
+	case "check":
+		if m.checkPoints != nil {
+			for _, p := range m.checkPoints(s.CheckID) {
+				if p.Ts >= fromTs && p.Ts <= toTs {
+					out = append(out, sloPoint{p.Ts, p.OK})
+				}
+			}
+		}
+	case "api":
+		if m.apiPoints != nil {
+			for _, p := range m.apiPoints(s.APIID, fromTs) {
+				if p.Ts >= fromTs && p.Ts <= toTs {
+					out = append(out, sloPoint{p.Ts, p.OK})
+				}
+			}
+		}
+	case "metric":
+		if m.metricSamples != nil {
+			for _, smp := range m.metricSamples(s.HostID, fromTs) {
+				if smp.Timestamp < fromTs || smp.Timestamp > toTs {
+					continue
+				}
+				v, ok := sampleMetric(smp, s.Metric)
+				if !ok {
+					continue
+				}
+				out = append(out, sloPoint{smp.Timestamp, satisfies(v, s.Comparator, s.Threshold)})
+			}
+		}
+	}
+	return out
+}
+
+// computeStatusRange 计算某 SLO 在任意 [fromTs, toTs] 区间的状态（供用户自定义时间范围查询）。
+func (m *sloManager) computeStatusRange(s SLO, fromTs, toTs int64) SLOStatus {
+	var good, total int64
+	for _, p := range m.rangePoints(s, fromTs, toTs) {
+		total++
+		if p.OK {
+			good++
+		}
+	}
 	sli := 100.0
 	if total > 0 {
 		sli = float64(good) / float64(total) * 100
@@ -176,6 +287,54 @@ func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
 		Breaching: total > 0 && sli < s.Target,
 		Healthy:   total == 0 || sli >= s.Target,
 	}
+}
+
+// sloTrendPoint 是趋势曲线的一个点：某时间桶内的可用率。
+type sloTrendPoint struct {
+	Ts    int64   `json:"timestamp"`
+	SLI   float64 `json:"sli"`
+	Good  int64   `json:"good"`
+	Total int64   `json:"total"`
+}
+
+// sloTrend 把 [fromTs, toTs] 均分为约 60 个桶，逐桶现算可用率，得到 SLI 随时间的趋势曲线。
+// 无数据的桶跳过（曲线自然断点），避免把空窗画成 0%。
+func (m *sloManager) sloTrend(s SLO, fromTs, toTs int64) []sloTrendPoint {
+	if toTs <= fromTs {
+		return nil
+	}
+	const buckets = 60
+	bw := (toTs - fromTs) / buckets
+	if bw < 1 {
+		bw = 1
+	}
+	good := make([]int64, buckets+1)
+	total := make([]int64, buckets+1)
+	for _, p := range m.rangePoints(s, fromTs, toTs) {
+		bi := int((p.Ts - fromTs) / bw)
+		if bi < 0 {
+			bi = 0
+		}
+		if bi > buckets {
+			bi = buckets
+		}
+		total[bi]++
+		if p.OK {
+			good[bi]++
+		}
+	}
+	out := []sloTrendPoint{}
+	for i := 0; i <= buckets; i++ {
+		if total[i] == 0 {
+			continue
+		}
+		out = append(out, sloTrendPoint{
+			Ts:  fromTs + int64(i)*bw + bw/2, // 桶中点
+			SLI: float64(good[i]) / float64(total[i]) * 100,
+			Good: good[i], Total: total[i],
+		})
+	}
+	return out
 }
 
 // Evaluate returns the current status of every SLO (for the API/UI).
@@ -220,6 +379,17 @@ func (m *sloManager) EvaluateAndAlert() {
 		} else {
 			m.mu.Unlock()
 		}
+		// 多窗口多燃烧率告警：早于「预算耗尽」的提前量（快烧=紧急 / 慢烧=警告）。
+		// raise / resolveByKey 按 key 幂等，故无需额外状态跟踪。
+		burnKey := "slo-burn/" + s.ID
+		switch st.BurnState {
+		case "fast":
+			m.incidents.raise(burnKey, Tz("slo.burn_fast", s.Name), "critical", "slo", "", "", "slo")
+		case "slow":
+			m.incidents.raise(burnKey, Tz("slo.burn_slow", s.Name), "warning", "slo", "", "", "slo")
+		default:
+			m.incidents.resolveByKey(burnKey, Tz("slo.burn_recovered", s.Name))
+		}
 	}
 }
 
@@ -259,6 +429,10 @@ func validateSLO(s *SLO) error {
 	case "check":
 		if s.CheckID == "" {
 			return fmt.Errorf("%s", Tz("slo.check_required"))
+		}
+	case "api":
+		if s.APIID == "" {
+			return fmt.Errorf("%s", Tz("slo.api_required"))
 		}
 	case "metric":
 		if s.HostID == "" || s.Metric == "" {

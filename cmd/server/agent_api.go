@@ -145,5 +145,6 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	s.vm.enqueue(rep.HostID, rep.Hostname, s.effectiveCategory(rep.HostID), time.Now().Unix(), rep.Metrics)
 	// Slow degradation detection: check if resources are trending upward near thresholds.
 	go s.checkSlowDegradation(rep.HostID)
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": h.ID})
+	// 响应体额外下发「分布式探测任务」：agent 作为多地探针执行并回报（迭代 D，additive/向后兼容）
+	writeJSON(w, http.StatusOK, shared.ReportResponse{Status: "ok", HostID: h.ID, ProbeTasks: s.distProbeTasks()})
 }

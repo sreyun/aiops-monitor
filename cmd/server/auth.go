@@ -38,7 +38,7 @@ func isPublicPath(r *http.Request) bool {
 	// session-gated (the fingerprint is verified inside each handler).
 	if p == "/api/v1/agent/hardware" || p == "/api/v1/agent/netflow" || p == "/api/v1/agent/hyperv" ||
 		p == "/api/v1/agent/snmp" || p == "/api/v1/agent/snmp/trap" || p == "/api/v1/agent/dnsmap" ||
-		p == "/api/v1/agent/content-audit" {
+		p == "/api/v1/agent/content-audit" || p == "/api/v1/agent/probe-results" {
 		return true
 	}
 	// 拆分后的前端静态模块（/js/*.js、/css/*）与 /app.js、/style.css 同属登录前外壳，需放行。

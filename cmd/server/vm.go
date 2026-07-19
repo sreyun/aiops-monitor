@@ -426,6 +426,7 @@ func parseVMAPIExport(r io.Reader) []APIHistPoint {
 type apiAggregate struct {
 	AvgMs     float64 `json:"avg_ms"`
 	P95Ms     float64 `json:"p95_ms"`
+	P99Ms     float64 `json:"p99_ms"`
 	Avail1h   float64 `json:"avail_1h"`  // 百分比
 	Avail24h  float64 `json:"avail_24h"` // 百分比
 	Samples1h float64 `json:"samples_1h"`
@@ -483,6 +484,7 @@ func (v *vmWriter) queryAPIAggregate() map[string]apiAggregate {
 	}
 	avg := v.vmInstantByAPI(`avg_over_time(aiops_api_latency_ms[1h])`)
 	p95 := v.vmInstantByAPI(`quantile_over_time(0.95, aiops_api_latency_ms[1h])`)
+	p99 := v.vmInstantByAPI(`quantile_over_time(0.99, aiops_api_latency_ms[1h])`)
 	a1 := v.vmInstantByAPI(`avg_over_time(aiops_api_up[1h]) * 100`)
 	a24 := v.vmInstantByAPI(`avg_over_time(aiops_api_up[24h]) * 100`)
 	cnt := v.vmInstantByAPI(`count_over_time(aiops_api_up[1h])`)
@@ -494,14 +496,14 @@ func (v *vmWriter) queryAPIAggregate() map[string]apiAggregate {
 		return m[id]
 	}
 	seen := map[string]bool{}
-	for _, m := range []map[string]float64{avg, p95, a1, a24, cnt} {
+	for _, m := range []map[string]float64{avg, p95, p99, a1, a24, cnt} {
 		for id := range m {
 			seen[id] = true
 		}
 	}
 	for id := range seen {
 		out[id] = apiAggregate{
-			AvgMs: get(avg, id), P95Ms: get(p95, id),
+			AvgMs: get(avg, id), P95Ms: get(p95, id), P99Ms: get(p99, id),
 			Avail1h: get(a1, id), Avail24h: get(a24, id), Samples1h: get(cnt, id),
 		}
 	}

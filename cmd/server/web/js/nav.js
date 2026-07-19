@@ -402,7 +402,7 @@ function switchView(view) {
   if (view === "forward") loadForwards();
   if (view === "sre") loadSRE();
   if (view === "logs") loadLogs();
-  if (view === "apimon") loadAPIMon();
+  if (view === "apimon") { loadAPIMon(); loadAPITxns(); loadDist(); }
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();

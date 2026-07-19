@@ -101,6 +101,13 @@ func (s *Server) wireSRE() {
 		return samples
 	}
 	s.slos.checkPoints = s.checks.HistoryOf
+	// API 业务监控接口作为 SLI 源：历史从 VM 回读（重启不丢），OK 率即 SLI。
+	s.slos.apiPoints = func(apiID string, fromTs int64) []APIHistPoint {
+		if s.vm != nil && s.vm.enabled() {
+			return s.vm.queryAPIHistory(apiID, fromTs, time.Now().Unix())
+		}
+		return nil
+	}
 
 	// The alert engine drives incidents + remediation on every fire/recover.
 	s.notifier.incidents = s.incidents
@@ -567,6 +574,52 @@ func (s *Server) handleDeleteSLO(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleSLOTrend 返回某 SLO 在自定义 [from,to] 区间的状态 + SLI 趋势曲线（分桶现算），
+// 使 SLO 在时间维度上与主机趋势图一致（快捷跨度 / 自定义绝对区间）。
+// GET /api/v1/slos/{id}/trend?from=&to=（Unix 秒；缺省用该 SLO 的窗口天数回看到现在）。
+func (s *Server) handleSLOTrend(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var slo *SLO
+	for _, x := range s.cfg.SLOs() {
+		if x.ID == id {
+			sx := x
+			slo = &sx
+			break
+		}
+	}
+	if slo == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "slo not found"})
+		return
+	}
+	now := time.Now().Unix()
+	win := slo.WindowDays
+	if win < 1 {
+		win = 30
+	}
+	from, to := now-int64(win)*86400, now
+	if v := r.URL.Query().Get("from"); v != "" {
+		if n, _ := strconv.ParseInt(v, 10, 64); n > 0 {
+			from = n
+		}
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		if n, _ := strconv.ParseInt(v, 10, 64); n > 0 {
+			to = n
+		}
+	}
+	if to <= from {
+		to = from + 3600
+	}
+	trend := s.slos.sloTrend(*slo, from, to)
+	if trend == nil {
+		trend = []sloTrendPoint{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": s.slos.computeStatusRange(*slo, from, to),
+		"trend":  trend, "from": from, "to": to,
+	})
+}
+
 // ----------------------------------------------------------------------------
 // Tickets (work orders)
 // ----------------------------------------------------------------------------
@@ -1001,6 +1054,43 @@ func (s *Server) handleTestEmbedConfig(w http.ResponseWriter, r *http.Request) {
 			modelLabel = "自动"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "dimensions": len(emb), "model": modelLabel})
+}
+
+// handleTestRerankConfig 测试重排(rerank)模型连通性。
+// POST /api/v1/ai/test-rerank — 用一条 query + 两条候选调用 rerankDocuments，返回 ok + 延迟。
+func (s *Server) handleTestRerankConfig(w http.ResponseWriter, r *http.Request) {
+	var c AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	saved := s.cfg.AIConfig()
+	// 脱敏/留空的 Key 用已保存值回填；Endpoint/Key 的「rerank→嵌入→主」兜底交给 rerankConfig。
+	if c.RerankAPIKey == "" || strings.Contains(c.RerankAPIKey, "****") {
+		c.RerankAPIKey = saved.RerankAPIKey
+	}
+	if c.EmbedAPIKey == "" || strings.Contains(c.EmbedAPIKey, "****") {
+		c.EmbedAPIKey = saved.EmbedAPIKey
+	}
+	if c.APIKey == "" || strings.Contains(c.APIKey, "****") {
+		c.APIKey = saved.APIKey
+	}
+	if strings.TrimSpace(c.RerankModel) == "" {
+		c.RerankModel = saved.RerankModel
+	}
+	c.Enabled = true
+	if _, _, _, ok := rerankConfig(c); !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 rerank 模型名称与 API Key（Endpoint / Key 可留空复用嵌入 / 主配置）"})
+		return
+	}
+	start := time.Now()
+	order := rerankDocuments(c, "数据库连接超时如何排查", []string{"数据库连接池耗尽导致超时", "今天午餐吃什么"}, 2)
+	latency := time.Since(start).Milliseconds()
+	if len(order) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "rerank 调用失败，请检查 Endpoint / Key / 模型名称", "latency_ms": latency})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "model": strings.TrimSpace(c.RerankModel)})
 }
 
 // handleAITerminalAccess 开启/关闭「AI 终端只读巡检」权限（独立开关）。

@@ -34,6 +34,7 @@ type Server struct {
 	incidents   *incidentManager    // incident hub (alert/SLO/manual)
 	remediation *remediationManager // closed-loop auto-remediation
 	slos        *sloManager         // SLO + error budgets
+	distProbes  *distProbeManager   // 分布式多点探测（迭代 D）
 	tickets     *ticketManager      // work orders
 	logs        *logStore           // aggregated agent logs
 	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
@@ -65,6 +66,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		incidents:   newIncidentManager(),
 		remediation: newRemediationManager(cfg),
 		slos:        newSLOManager(cfg),
+		distProbes:  newDistProbeManager(),
 		tickets:     newTicketManager(),
 		logs:        newLogStore(),
 		hw:          newHardwareStore(),
@@ -193,6 +195,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/apimon/systems/{id}/run", s.handleRunAPISystem)
 	mux.HandleFunc("DELETE /api/v1/apimon/systems/{id}", s.handleDeleteAPISystem)
 	mux.HandleFunc("GET /api/v1/apimon/endpoints/{id}/history", s.handleAPIEndpointHistory)
+	mux.HandleFunc("GET /api/v1/apimon/transactions", s.handleAPITxnOverview)
+	mux.HandleFunc("POST /api/v1/apimon/transactions", s.handleUpsertAPITransaction)
+	mux.HandleFunc("DELETE /api/v1/apimon/transactions/{id}", s.handleDeleteAPITransaction)
+	mux.HandleFunc("POST /api/v1/apimon/transactions/{id}/run", s.handleRunAPITransaction)
+	mux.HandleFunc("GET /api/v1/apimon/distributed", s.handleDistStatus)
+	mux.HandleFunc("POST /api/v1/apimon/import-openapi", s.handleImportOpenAPI)
+	mux.HandleFunc("GET /api/v1/apimon/sla", s.handleSLAReport)
+	mux.HandleFunc("GET /api/v1/apimon/systems/{id}/hosts", s.handleAPISystemHosts)
+	mux.HandleFunc("POST /api/v1/agent/probe-results", s.handleProbeResults)
 	// Playbooks (automation)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("POST /api/v1/playbooks", s.handleUpsertPlaybook)
@@ -218,6 +229,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/slos", s.handleListSLOs)
 	mux.HandleFunc("POST /api/v1/slos", s.handleUpsertSLO)
 	mux.HandleFunc("DELETE /api/v1/slos/{id}", s.handleDeleteSLO)
+	mux.HandleFunc("GET /api/v1/slos/{id}/trend", s.handleSLOTrend)
 	mux.HandleFunc("GET /api/v1/tickets", s.handleListTickets)
 	mux.HandleFunc("POST /api/v1/tickets", s.handleCreateTicket)
 	mux.HandleFunc("GET /api/v1/tickets/{id}", s.handleGetTicket)
@@ -237,6 +249,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
+	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                 // 全站「AI 辅助」按钮统一入口（任务化 SSE）

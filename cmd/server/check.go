@@ -52,7 +52,8 @@ type checkRunner struct {
 	store    *Store
 	notifier *Notifier
 	httpc    *http.Client
-	selfAddr string // e.g. "127.0.0.1:8529" — used for the built-in self health-check
+	httpcAPI *http.Client // API 业务监控专用：无全局超时，由 per-check TimeoutSec 经 context 精确控制（业务接口常慢于 5s）
+	selfAddr string       // e.g. "127.0.0.1:8529" — used for the built-in self health-check
 
 	mu        sync.Mutex
 	status    map[string]CheckStatus
@@ -70,6 +71,10 @@ func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr
 		cfg: cfg, store: store, notifier: notifier, selfAddr: selfAddr,
 		httpc: &http.Client{
 			Timeout:       5 * time.Second, // reduced from 8s; retry logic provides resilience
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		httpcAPI: &http.Client{
+			// 不设 Timeout：由 probeHTTPAdvanced 依 per-check TimeoutSec 用 context 控制上限（apimon 慢接口需 >5s）
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		status:    map[string]CheckStatus{},
@@ -393,7 +398,8 @@ type httpProbeResult struct {
 	msg                                  string
 	code, certDays                       int
 	dnsMs, tcpMs, tlsMs, ttfbMs, totalMs float64
-	bytes                                int64 // 响应体大小（读取上限内）
+	bytes                                int64  // 响应体大小（读取上限内）
+	body                                 []byte // 仅 CaptureBody=true 时填充（合成事务变量提取用）
 }
 
 // ms 把耗时转成毫秒，保留纳秒精度（亚毫秒的极快接口也不会被截断成 0）。
@@ -428,6 +434,11 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 	if c.Body != "" && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.TraceParent && req.Header.Get("traceparent") == "" {
+		if tp := genTraceparent(); tp != "" {
+			req.Header.Set("traceparent", tp) // 合成探测可被后端 trace 关联（W3C Trace Context）
+		}
+	}
 
 	var dnsStart, connStart, tlsStart, firstByte time.Time
 	trace := &httptrace.ClientTrace{
@@ -451,10 +462,18 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 		},
 		GotFirstResponseByte: func() { firstByte = time.Now() },
 	}
-	req = req.WithContext(httptrace.WithClientTrace(context.Background(), trace))
+	client := cr.httpc
+	ctx := context.Background()
+	if c.TimeoutSec > 0 {
+		client = cr.httpcAPI // 无全局 5s 上限，靠 context 精确控制
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(c.TimeoutSec)*time.Second)
+		defer cancel()
+	}
+	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
 	start := time.Now()
-	resp, err := cr.httpc.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		res.msg = Tz("check.request_failed", err.Error())
 		res.totalMs = ms(time.Since(start))
@@ -463,6 +482,9 @@ func (cr *checkRunner) probeHTTPAdvanced(c CustomCheck) httpProbeResult {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10)) // 最多读 256KB 用于校验
 	resp.Body.Close()
 	res.bytes = int64(len(body))
+	if c.CaptureBody {
+		res.body = body // 合成事务：留存响应体供 jsonPathValue 提取变量
+	}
 	res.totalMs = ms(time.Since(start))
 	if res.totalMs <= 0 {
 		res.totalMs = 0.01 // 时钟粒度下极快响应可能测得 0：钳到极小正值，避免"0=无数据"歧义

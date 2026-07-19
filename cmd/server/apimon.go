@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,9 @@ type APIEndpoint struct {
 	ExpectKeyword string            `json:"expect_keyword,omitempty"` // 响应体应包含的关键字
 	JSONPath      string            `json:"json_path,omitempty"`      // JSON 断言点路径，如 code / data.token
 	JSONExpect    string            `json:"json_expect,omitempty"`    // JSON 断言期望值（留空=只要求路径存在）
+	TimeoutSec    int               `json:"timeout_sec,omitempty"`    // 单次探测超时（秒，默认 10，可为慢接口调大，上限 60）
+	Retries       int               `json:"retries,omitempty"`        // 失败重试次数（默认 0，抑制瞬时抖动，上限 3）
+	Distributed   bool              `json:"distributed,omitempty"`    // 分布式多点探测：由各地 agent 作为探针执行（迭代 D）
 	Enabled       bool              `json:"enabled"`
 }
 
@@ -51,7 +55,7 @@ func (e APIEndpoint) toCheck(commonHeaders map[string]string, commonBody string)
 		ID: e.ID, Name: e.Name, Type: "http", Target: e.URL,
 		Advanced: true, Method: e.Method, Headers: merged, Body: mergeAPIBody(commonBody, e.Body),
 		ExpectStatus: e.ExpectStatus, ExpectKeyword: e.ExpectKeyword,
-		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect,
+		JSONPath: e.JSONPath, JSONExpect: e.JSONExpect, TimeoutSec: e.TimeoutSec, TraceParent: true,
 	}
 }
 
@@ -101,9 +105,11 @@ type APISystem struct {
 	Name          string            `json:"name"`
 	IntervalSec   int               `json:"interval_sec"`   // 批量探测周期（秒，最小 5）
 	Level         string            `json:"level"`          // warning | critical
+	Env           string            `json:"env,omitempty"`  // 环境标签：prod|staging|dev（分组/过滤，迭代 E）
 	Enabled       bool              `json:"enabled"`
 	CommonHeaders map[string]string `json:"common_headers,omitempty"` // 业务系统级公共请求头，所有接口共用
 	CommonBody    string            `json:"common_body,omitempty"`    // 业务系统级公共请求体，所有接口共用（JSON 对象则与接口体字段级合并）
+	HostIDs       []string          `json:"host_ids,omitempty"`       // 承载该业务系统的主机 ID（异常下钻主机指标用，迭代 E）
 	Endpoints     []APIEndpoint     `json:"endpoints"`
 	CreatedAt     int64             `json:"created_at"`
 }
@@ -115,6 +121,41 @@ func (cs *ConfigStore) APISystems() []APISystem {
 	defer cs.mu.RUnlock()
 	out := make([]APISystem, len(cs.cfg.APISystems))
 	copy(out, cs.cfg.APISystems)
+	return out
+}
+
+// deepCopyAPISystems 深拷贝业务系统切片（含每个系统的公共头 map、接口切片及接口头 map），
+// 供 ConfigStore.save 在加密前隔离出独立副本，避免 encryptConfigSecrets 就地把内存中的
+// 明文实时配置也加密了（headers/body 是引用类型，浅拷贝 slice 仍共享底层 map）。
+func deepCopyAPISystems(in []APISystem) []APISystem {
+	out := make([]APISystem, len(in))
+	for i, s := range in {
+		out[i] = s // 复制标量字段（含 CommonBody）
+		if s.CommonHeaders != nil {
+			m := make(map[string]string, len(s.CommonHeaders))
+			for k, v := range s.CommonHeaders {
+				m[k] = v
+			}
+			out[i].CommonHeaders = m
+		}
+		if s.HostIDs != nil {
+			out[i].HostIDs = append([]string(nil), s.HostIDs...)
+		}
+		if s.Endpoints != nil {
+			eps := make([]APIEndpoint, len(s.Endpoints))
+			for j, e := range s.Endpoints {
+				eps[j] = e
+				if e.Headers != nil {
+					hm := make(map[string]string, len(e.Headers))
+					for k, v := range e.Headers {
+						hm[k] = v
+					}
+					eps[j].Headers = hm
+				}
+			}
+			out[i].Endpoints = eps
+		}
+	}
 	return out
 }
 
@@ -210,6 +251,8 @@ type apiRunner struct {
 	lastRun   map[string]time.Time
 	failCount map[string]int
 	okCount   map[string]int
+	sem       chan struct{} // 并发探测限流：避免大量接口同时到期时打爆目标/本机 fd
+	txn       *txnState     // 合成事务的调度/状态（迭代 C）
 }
 
 func newAPIRunner(cr *checkRunner, cfg *ConfigStore, store *Store, notifier *Notifier, vm *vmWriter) *apiRunner {
@@ -221,6 +264,8 @@ func newAPIRunner(cr *checkRunner, cfg *ConfigStore, store *Store, notifier *Not
 		lastRun:   map[string]time.Time{},
 		failCount: map[string]int{},
 		okCount:   map[string]int{},
+		sem:       make(chan struct{}, 16), // 最多 16 个并发探测
+		txn:       newTxnState(),
 	}
 }
 
@@ -228,8 +273,10 @@ func (ar *apiRunner) Run(tick time.Duration) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	ar.sweep()
+	ar.sweepTxn()
 	for range t.C {
 		ar.sweep()
+		ar.sweepTxn()
 	}
 }
 
@@ -255,7 +302,7 @@ func (ar *apiRunner) sweep() {
 			}
 			ar.mu.Unlock()
 			if due {
-				go ar.probe(sys, ep) // 接口相互独立，并发探测避免慢接口拖慢整轮
+				go ar.probeLimited(sys, ep) // 接口独立并发；受 sem 限流 + panic 恢复
 			}
 		}
 	}
@@ -284,8 +331,28 @@ func (ar *apiRunner) gc() {
 	ar.mu.Unlock()
 }
 
+// probeLimited 是 probe 的受控入口：sem 并发限流 + panic 恢复，供 sweep/runNow 的 go 启动点复用，
+// 避免单接口 panic 拖垮整个 server，也避免海量接口同时到期时的 goroutine/连接风暴。
+func (ar *apiRunner) probeLimited(sys APISystem, ep APIEndpoint) {
+	ar.sem <- struct{}{}
+	defer func() { <-ar.sem }()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("apimon probe panic recovered", "system", sys.Name, "endpoint", ep.Name, "err", r)
+			ar.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: "API性能监控", Host: ep.Name, Message: fmt.Sprintf("接口探测发生 panic 已恢复：%v", r)})
+		}
+	}()
+	ar.probe(sys, ep)
+}
+
 func (ar *apiRunner) probe(sys APISystem, ep APIEndpoint) {
-	res := ar.cr.probeHTTPAdvanced(ep.toCheck(sys.CommonHeaders, sys.CommonBody))
+	check := ep.toCheck(sys.CommonHeaders, sys.CommonBody)
+	res := ar.cr.probeHTTPAdvanced(check)
+	// 失败重试：抑制瞬时抖动（网络毛刺 / 偶发 5xx），任一次成功即通过（默认 Retries=0 不重试）
+	for attempt := 0; !res.ok && attempt < ep.Retries; attempt++ {
+		time.Sleep(300 * time.Millisecond)
+		res = ar.cr.probeHTTPAdvanced(check)
+	}
 	now := time.Now().Unix()
 
 	ar.mu.Lock()
@@ -390,7 +457,7 @@ func (ar *apiRunner) runNow(systemID string) {
 			ar.mu.Lock()
 			ar.lastRun[ep.ID] = time.Now()
 			ar.mu.Unlock()
-			go ar.probe(sys, ep)
+			go ar.probeLimited(sys, ep)
 		}
 		return
 	}
