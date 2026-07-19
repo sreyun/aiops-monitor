@@ -63,18 +63,18 @@ function renderAPIMon(data) {
         <td class="${apimonAvailClass(ep.avail_1h)}">${apiFmtPct(ep.avail_1h)}</td>
         <td class="${apimonAvailClass(ep.avail_24h)}">${apiFmtPct(ep.avail_24h)}</td>
         <td>${ep.samples_1h > 0 ? ep.samples_1h.toFixed(0) : "—"}</td>
-        <td><button class="mini-btn" data-aact="hist" data-ep="${esc(ep.id)}" data-name="${esc(ep.name)}">历史</button></td>
+        <td><button class="mini-btn" data-aact="hist" data-ep="${esc(ep.id)}" data-name="${esc(ep.name)}" title="接口性能历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 13l3-3 3 2 5-6"/></svg></button></td>
       </tr>`;
     }).join("") : `<tr><td colspan="10" class="muted">该业务系统暂无接口，点「编辑」添加。</td></tr>`;
     return `<div class="api-sys-card" data-sys="${esc(sys.id)}">
       <div class="api-sys-head">
         <div class="api-sys-title">${esc(sys.name)} ${sys.env ? `<span class="tag env-${esc(sys.env)}">${esc(envLabel(sys.env))}</span>` : ""}${sys.maint_until && sys.maint_until * 1000 > Date.now() ? '<span class="tag warn">🔧 维护中</span>' : ""}<span class="tag">${eps.length} 接口 · 每 ${sys.interval_sec}s</span>${downCount ? `<span class="tag crit">${downCount} 异常</span>` : ""}${!sys.enabled ? '<span class="tag">已停用</span>' : ""}</div>
         <div class="api-sys-actions">
-          ${(sys.host_ids && sys.host_ids.length) ? `<button class="mini-btn" data-aact="hosts" data-sys="${esc(sys.id)}" data-name="${esc(sys.name)}">承载主机</button>` : ""}
-          <button class="mini-btn" data-aact="run" data-sys="${esc(sys.id)}">立即探测</button>
-          <button class="mini-btn" data-aact="maint" data-sys="${esc(sys.id)}">维护</button>
-          <button class="mini-btn" data-aact="edit" data-sys="${esc(sys.id)}">编辑</button>
-          <button class="mini-btn danger" data-aact="del" data-sys="${esc(sys.id)}">删除</button>
+          ${(sys.host_ids && sys.host_ids.length) ? `<button class="mini-btn" data-aact="hosts" data-sys="${esc(sys.id)}" data-name="${esc(sys.name)}" title="承载主机"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1"/><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></button>` : ""}
+          <button class="mini-btn" data-aact="run" data-sys="${esc(sys.id)}" title="立即探测">▶</button>
+          <button class="mini-btn" data-aact="maint" data-sys="${esc(sys.id)}" title="维护窗口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.8 2.8-2-2 2.8-2.8z"/></svg></button>
+          <button class="mini-btn" data-aact="edit" data-sys="${esc(sys.id)}" title="编辑">✎</button>
+          <button class="mini-btn del" data-aact="del" data-sys="${esc(sys.id)}" title="删除">✕</button>
         </div>
       </div>
       <div class="api-table-wrap"><table class="api-table">
@@ -546,9 +546,9 @@ function renderAPITxns(data) {
       <div class="api-sys-head">
         <div class="api-sys-title">${esc(t.name)} <span class="tag">${(t.steps || []).length} 步 · 每 ${t.interval_sec}s</span>${!t.enabled ? '<span class="tag">已停用</span>' : ""} <span style="font-weight:400; color:var(--muted)">${stat}${t.total_ms ? " · 总耗时 " + t.total_ms.toFixed(0) + "ms" : ""}</span></div>
         <div class="api-sys-actions">
-          <button class="mini-btn" data-txnact="run" data-txn="${esc(t.id)}">立即执行</button>
-          <button class="mini-btn" data-txnact="edit" data-txn="${esc(t.id)}">编辑</button>
-          <button class="mini-btn danger" data-txnact="del" data-txn="${esc(t.id)}">删除</button>
+          <button class="mini-btn" data-txnact="run" data-txn="${esc(t.id)}" title="立即执行">▶</button>
+          <button class="mini-btn" data-txnact="edit" data-txn="${esc(t.id)}" title="编辑">✎</button>
+          <button class="mini-btn del" data-txnact="del" data-txn="${esc(t.id)}" title="删除">✕</button>
         </div>
       </div>
       <div style="padding:12px 16px; display:flex; flex-wrap:wrap; gap:6px">${pills}</div>

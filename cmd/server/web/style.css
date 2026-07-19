@@ -2590,11 +2590,9 @@ table tbody tr:hover{
 .tag.env-prod{background:var(--crit-soft); color:var(--crit); border-color:transparent}
 .tag.env-staging{background:rgba(210,153,34,.15); color:var(--warn); border-color:transparent}
 .tag.env-dev{background:rgba(76,141,255,.15); color:var(--accent); border-color:transparent}
-.mini-btn{padding:4px 10px; font-size:12px; border:1px solid var(--line2); background:var(--bg3); color:var(--txt2); border-radius:6px; cursor:pointer; transition:all .15s; white-space:nowrap}
-/* 覆盖同名 26x26 图标按钮(另一处 .mini-btn 定义)的 width/height，避免可靠性保障页操作按钮被挤成竖排逐字换行 */
-#view-apimon .mini-btn{width:auto; height:auto; line-height:1.4}
-.mini-btn:hover{border-color:var(--accent); color:var(--accent)}
-.mini-btn.danger:hover{border-color:var(--crit); color:var(--crit)}
+/* 可靠性保障卡片的操作按钮复用全局 .mini-btn（26x26 图标按钮，见 style.css 上方定义），
+   与拨测监控保持统一图标元素；图标在 apimon.js 里以 ▶/✎/✕ + SVG 呈现。此前用文字按钮
+   (padding 版)会污染全局 .mini-btn 并在 26x26 里竖排逐字，故移除。 */
 /* 业务系统编辑弹窗·接口行 */
 .api-ep-row{position:relative; border:1px solid var(--line2); border-radius:8px; padding:12px; background:var(--bg2)}
 .api-ep-del{position:absolute; top:8px; right:8px; width:22px; height:22px; border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:14px; border-radius:5px}
