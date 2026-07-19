@@ -353,10 +353,21 @@ func (p *pgStore) migrate() error {
 			path        TEXT,
 			ctype       TEXT,
 			body        TEXT,
+			status         INT,
+			resp_ctype     TEXT,
+			resp_body      TEXT,
+			req_truncated  BOOLEAN,
+			resp_truncated BOOLEAN,
 			observed_at TIMESTAMPTZ,
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS idx_content_audit_host_time ON content_audit(host_id, created_at DESC);
+		-- 增量2 兼容：早期表可能没有响应列，幂等补齐。
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS status INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_ctype TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_body TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS req_truncated BOOLEAN;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_truncated BOOLEAN;
 	`)
 	return err
 }
@@ -2408,14 +2419,16 @@ func (p *pgStore) insertContentAudit(hostID string, evs []shared.ContentAuditEve
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT INTO content_audit
-		(host_id, src_ip, dst_ip, dst_port, method, host, path, ctype, body, observed_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`)
+		(host_id, src_ip, dst_ip, dst_port, method, host, path, ctype, body,
+		 status, resp_ctype, resp_body, req_truncated, resp_truncated, observed_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`)
 	if err != nil {
 		return
 	}
 	defer stmt.Close()
 	for _, e := range evs {
-		_, _ = stmt.Exec(hostID, e.SrcIP, e.DstIP, int(e.DstPort), e.Method, e.Host, e.Path, e.CType, e.Body, time.Unix(e.Ts, 0))
+		_, _ = stmt.Exec(hostID, e.SrcIP, e.DstIP, int(e.DstPort), e.Method, e.Host, e.Path, e.CType, e.Body,
+			e.Status, e.RespCType, e.RespBody, e.ReqTruncated, e.RespTruncated, time.Unix(e.Ts, 0))
 	}
 	_ = tx.Commit()
 }
@@ -2425,7 +2438,9 @@ func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[strin
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	q := `SELECT src_ip, dst_ip, dst_port, method, host, path, ctype, body, observed_at
+	q := `SELECT src_ip, dst_ip, dst_port, method, host, path, ctype, body,
+	             COALESCE(status,0), COALESCE(resp_ctype,''), COALESCE(resp_body,''),
+	             COALESCE(req_truncated,false), COALESCE(resp_truncated,false), observed_at
 	      FROM content_audit WHERE host_id=$1`
 	args := []any{hostID}
 	idx := 2
@@ -2452,15 +2467,19 @@ func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[strin
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var srcIP, dstIP, method, host, path, ctype, body string
-		var dstPort int
+		var srcIP, dstIP, method, host, path, ctype, body, respCType, respBody string
+		var dstPort, status int
+		var reqTrunc, respTrunc bool
 		var observedAt time.Time
-		if err := rows.Scan(&srcIP, &dstIP, &dstPort, &method, &host, &path, &ctype, &body, &observedAt); err != nil {
+		if err := rows.Scan(&srcIP, &dstIP, &dstPort, &method, &host, &path, &ctype, &body,
+			&status, &respCType, &respBody, &reqTrunc, &respTrunc, &observedAt); err != nil {
 			continue
 		}
 		out = append(out, map[string]any{
 			"src_ip": srcIP, "dst_ip": dstIP, "dst_port": dstPort, "method": method,
-			"host": host, "path": path, "ctype": ctype, "body": body, "observed_at": observedAt,
+			"host": host, "path": path, "ctype": ctype, "body": body,
+			"status": status, "resp_ctype": respCType, "resp_body": respBody,
+			"req_truncated": reqTrunc, "resp_truncated": respTrunc, "observed_at": observedAt,
 		})
 	}
 	return out, rows.Err()

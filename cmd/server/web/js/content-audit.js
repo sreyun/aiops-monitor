@@ -75,19 +75,24 @@ function renderCA(container, events) {
   html += `<th>${I18N.t("netflow.src_ip") || "源IP"}</th>`;
   html += `<th>${I18N.t("ca.dest") || "目的（域名/端点）"}</th>`;
   html += `<th>${I18N.t("ca.method") || "方法"}</th>`;
-  html += `<th>${I18N.t("ca.ctype") || "类型"}</th>`;
-  html += `<th>${I18N.t("ca.body") || "内容（prompt 等）"}</th>`;
+  html += `<th>${I18N.t("ca.status") || "状态"}</th>`;
+  html += `<th>${I18N.t("ca.req_body") || "请求（prompt）"}</th>`;
+  html += `<th>${I18N.t("ca.resp_body") || "响应（completion）"}</th>`;
   html += `</tr></thead><tbody>`;
+  const cell = (text, trunc) => {
+    const s = (text || "").slice(0, 2000);
+    if (!s) return `<span style="color:var(--muted)">—</span>`;
+    return `<div style="max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:var(--mono,ui-monospace,monospace);font-size:12px">${esc(s)}${(text || "").length > 2000 ? " …" : ""}${trunc ? `<span style="color:#e0a300"> [${esc(I18N.t("ca.truncated") || "已截断")}]</span>` : ""}</div>`;
+  };
   events.forEach(e => {
-    const body = e.body || "";
-    const bodyShort = body.slice(0, 600);
     html += `<tr>`;
-    html += `<td>${esc(caTime(e.observed_at))}</td>`;
+    html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
     html += `<td>${esc(e.src_ip || "")}</td>`;
     html += `<td>${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all">${esc(e.path)}</div>` : ""}</td>`;
     html += `<td>${esc(e.method || "")}</td>`;
-    html += `<td style="font-size:11px">${esc(e.ctype || "")}</td>`;
-    html += `<td><div style="max-height:140px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:var(--mono,ui-monospace,monospace);font-size:12px">${esc(bodyShort)}${body.length > 600 ? " …" : ""}</div></td>`;
+    html += `<td>${e.status ? esc(String(e.status)) : "—"}</td>`;
+    html += `<td>${cell(e.body, e.req_truncated)}</td>`;
+    html += `<td>${cell(e.resp_body, e.resp_truncated)}</td>`;
     html += `</tr>`;
   });
   html += `</tbody></table></div>`;

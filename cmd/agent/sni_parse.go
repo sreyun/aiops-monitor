@@ -20,12 +20,14 @@ type ipDomain struct {
 
 // l4Info 是解析出的四层信息。
 type l4Info struct {
-	proto   uint8
-	srcIP   string
-	dstIP   string
-	srcPort uint16
-	dstPort uint16
-	payload []byte
+	proto    uint8
+	srcIP    string
+	dstIP    string
+	srcPort  uint16
+	dstPort  uint16
+	seq      uint32 // TCP 序列号（流重组用）
+	tcpFlags uint8  // TCP 标志位（FIN=0x01/RST=0x04… 用于连接结束判定）
+	payload  []byte
 }
 
 // parseEthIPv4 从以太网帧解析出 IPv4 的四层信息（非 IPv4/非 TCP-UDP 返回 ok=false）。
@@ -71,6 +73,8 @@ func parseIPv4(pkt []byte) (l4Info, bool) {
 		}
 		info.srcPort = binary.BigEndian.Uint16(l4[0:2])
 		info.dstPort = binary.BigEndian.Uint16(l4[2:4])
+		info.seq = binary.BigEndian.Uint32(l4[4:8])
+		info.tcpFlags = l4[13]
 		dataOff := int(l4[12]>>4) * 4
 		if dataOff < 20 || len(l4) < dataOff {
 			return l4Info{}, false

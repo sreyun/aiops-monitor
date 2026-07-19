@@ -100,7 +100,8 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 		}
 	}
 
-	// 读/解析解耦：读循环只 recvfrom+拷贝+入队；一组 worker 并发解析，避免解析阻塞抓包导致丢包。
+	// 读/解析解耦 + 连接亲和：读循环只 recvfrom+拷贝+轻量解析(取四层)+按【规范连接键】哈希路由；
+	// 同一连接的所有包永远进同一 worker，故每 worker 独占的 reassembler(TCP 流重组)【无锁】。
 	workers := runtime.NumCPU()
 	if workers < 2 {
 		workers = 2
@@ -108,16 +109,34 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 	if workers > 8 {
 		workers = 8
 	}
-	frames := make(chan []byte, 4096)
+	chans := make([]chan l4Info, workers)
 	var dropped atomic.Uint64
 	for i := 0; i < workers; i++ {
+		chans[i] = make(chan l4Info, 4096)
+		ch := chans[i]
+		ras := newReassembler(sc.cfg, sc.addContent) // 每 worker 独占，无锁
 		go func() {
-			for f := range frames {
-				runSafe("sni-parse", func() { sc.handle(f) })
+			sweep := time.NewTicker(20 * time.Second)
+			defer sweep.Stop()
+			for {
+				select {
+				case info, ok := <-ch:
+					if !ok {
+						return
+					}
+					runSafe("sni-parse", func() { sc.handleL4(info) })
+					if sc.cfg.ContentAudit && info.proto == 6 {
+						runSafe("content-reasm", func() { ras.feed(info) })
+					}
+				case <-sweep.C:
+					if sc.cfg.ContentAudit {
+						runSafe("content-sweep", func() { ras.sweepIdle(60) })
+					}
+				}
 			}
 		}()
 	}
-	slog.Info("SNI/DNS 抓取器启动", "iface", ifaceName, "workers", workers)
+	slog.Info("SNI/DNS 抓取器启动", "iface", ifaceName, "workers", workers, "content_audit", sc.cfg.ContentAudit)
 
 	// 周期 flush（含 recover）；顺带把丢包计数打出来，便于判断是否需要指定网卡/收紧过滤。
 	go func() {
@@ -146,13 +165,40 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 		if n <= 0 {
 			continue
 		}
-		// 必须拷贝：buf 会被下一次 recvfrom 复用，而 worker 是异步处理。
+		// 必须拷贝：buf 会被下一次 recvfrom 复用，而 worker 异步处理（info.payload 指向此拷贝）。
 		frame := make([]byte, n)
 		copy(frame, buf[:n])
+		info, ok := parseEthIPv4(frame)
+		if !ok || len(info.payload) == 0 {
+			continue
+		}
+		wk := routeWorker(info, workers)
 		select {
-		case frames <- frame:
+		case chans[wk] <- info:
 		default:
 			dropped.Add(1) // 队列满：丢弃而非阻塞抓包（丢包好过卡死整条采集）
 		}
 	}
+}
+
+// routeWorker 按【规范连接键】(无向)哈希选 worker，保证 TCP 连接的两个方向落到同一 worker/reassembler。
+// 非 TCP 按源 IP 哈希即可。FNV-1a。
+func routeWorker(info l4Info, n int) int {
+	var h uint32 = 2166136261
+	mix := func(s string) {
+		for i := 0; i < len(s); i++ {
+			h ^= uint32(s[i])
+			h *= 16777619
+		}
+	}
+	if info.proto == 6 {
+		k := makeConnKey(info.srcIP, info.srcPort, info.dstIP, info.dstPort)
+		mix(k.ipA)
+		mix(k.ipB)
+		h = (h ^ uint32(k.portA)) * 16777619
+		h = (h ^ uint32(k.portB)) * 16777619
+	} else {
+		mix(info.srcIP)
+	}
+	return int(h % uint32(n))
 }

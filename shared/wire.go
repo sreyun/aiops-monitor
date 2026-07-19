@@ -614,9 +614,15 @@ type ContentAuditEvent struct {
 	Method  string `json:"method"`          // GET/POST/...
 	Host    string `json:"host,omitempty"`  // Host 头
 	Path    string `json:"path,omitempty"`  // 请求路径（如 /v1/chat/completions、/api/chat）
-	CType   string `json:"ctype,omitempty"` // Content-Type
-	Body    string `json:"body,omitempty"`  // 首包内的 body 前缀（截断，含 prompt 开头）
-	Ts      int64  `json:"ts"`              // 观测时刻 Unix 秒
+	CType   string `json:"ctype,omitempty"` // 请求 Content-Type
+	Body    string `json:"body,omitempty"`  // 请求体（增量2:TCP流重组后的完整 body，截断上限内）
+	// ---- 增量 2：响应(completion)。TCP 流重组后回填 ----
+	Status        int    `json:"status,omitempty"`         // 响应状态码
+	RespCType     string `json:"resp_ctype,omitempty"`     // 响应 Content-Type
+	RespBody      string `json:"resp_body,omitempty"`      // 响应体全文（含大模型 completion；SSE 为拼接后的数据流）
+	ReqTruncated  bool   `json:"req_truncated,omitempty"`  // 请求体达上限被截断
+	RespTruncated bool   `json:"resp_truncated,omitempty"` // 响应体达上限被截断
+	Ts            int64  `json:"ts"`                       // 观测时刻 Unix 秒
 }
 
 // ContentAuditReport 是 agent 周期上报的内容审计载荷（POST /api/v1/agent/content-audit）。

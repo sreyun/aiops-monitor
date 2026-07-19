@@ -68,10 +68,10 @@ func (sc *sniCollector) flushContent(reporter func(shared.ContentAuditReport)) {
 	slog.Info("内容审计上报", "count", len(evs))
 }
 
-// handle 处理一个以太网帧：DNS 应答(UDP:53) → A 记录；TLS ClientHello(TCP) → SNI。
-func (sc *sniCollector) handle(frame []byte) {
-	info, ok := parseEthIPv4(frame)
-	if !ok || len(info.payload) == 0 {
+// handleL4 处理一个已解析的四层信息：DNS 应答(UDP:53) → A 记录；TLS ClientHello(TCP) → SNI。
+// 明文 HTTP 内容审计不在此处——由每 worker 独占的 reassembler(TCP 流重组)负责，见 collector_sni_linux.go。
+func (sc *sniCollector) handleL4(info l4Info) {
+	if len(info.payload) == 0 {
 		return
 	}
 	// DNS 应答：UDP 源端口 53。
@@ -81,24 +81,10 @@ func (sc *sniCollector) handle(frame []byte) {
 		}
 		return
 	}
-	if info.proto == 6 {
-		// TLS ClientHello：载荷以 0x16(handshake) 开头，取 SNI，映射到目的 IP。
-		if len(info.payload) > 5 && info.payload[0] == 0x16 {
-			if sni := parseTLSClientHelloSNI(info.payload); sni != "" {
-				sc.add(ipDomain{ip: info.dstIP, domain: sni, source: "sni"})
-			}
-			return
-		}
-		// 明文 HTTP 请求 → 内容审计（默认关闭；开启后按端口白名单）。取请求行+Host+body 前缀，
-		// 主要用于审计"谁向哪个大模型端点发了什么 prompt"。加密流量到不了这里（那是 0x16 分支）。
-		if sc.cfg.ContentAudit && contentPortMatch(sc.cfg.ContentAuditPorts, info.dstPort) {
-			if ev, ok := parseHTTPRequest(info.payload, sc.cfg.ContentAuditMaxBody); ok {
-				ev.SrcIP = info.srcIP
-				ev.DstIP = info.dstIP
-				ev.DstPort = info.dstPort
-				ev.Ts = time.Now().Unix()
-				sc.addContent(ev)
-			}
+	// TLS ClientHello：TCP，载荷以 0x16(handshake) 开头，取 SNI，映射到目的 IP。
+	if info.proto == 6 && len(info.payload) > 5 && info.payload[0] == 0x16 {
+		if sni := parseTLSClientHelloSNI(info.payload); sni != "" {
+			sc.add(ipDomain{ip: info.dstIP, domain: sni, source: "sni"})
 		}
 	}
 }
