@@ -37,6 +37,7 @@ type Thresholds struct {
 	CheckHTTPStatusWarn, CheckHTTPStatusCrit   int     // 非 2xx 次数
 	CheckProcFailWarn, CheckProcFailCrit       int     // 进程存活失败次数
 	CheckUDPTimeoutWarn, CheckUDPTimeoutCrit   float64 // UDP 探测超时 ms
+	CheckDNSTimeoutWarn, CheckDNSTimeoutCrit   float64 // DNS 解析超时 ms
 	// ---- API 业务监控阈值 ----
 	APIAvailWarn, APIAvailCrit           float64 // 可用率 %（低于阈值告警）
 	APIAvgRespWarn, APIAvgRespCrit       float64 // 平均响应 ms
@@ -84,6 +85,7 @@ func ConservativeThresholds() Thresholds {
 		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 3,
 		CheckProcFailWarn: 1, CheckProcFailCrit: 2,
 		CheckUDPTimeoutWarn: 500, CheckUDPTimeoutCrit: 2000,
+		CheckDNSTimeoutWarn: 200, CheckDNSTimeoutCrit: 1000,
 		APIAvailWarn: 99.5, APIAvailCrit: 98.0,
 		APIAvgRespWarn: 300, APIAvgRespCrit: 1000,
 		APIP95RespWarn: 500, APIP95RespCrit: 2000,
@@ -120,6 +122,7 @@ func StandardThresholds() Thresholds {
 		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 5,
 		CheckProcFailWarn: 1, CheckProcFailCrit: 3,
 		CheckUDPTimeoutWarn: 1000, CheckUDPTimeoutCrit: 5000,
+		CheckDNSTimeoutWarn: 500, CheckDNSTimeoutCrit: 2000,
 		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
 		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
 		APIP95RespWarn: 1000, APIP95RespCrit: 5000,
@@ -156,6 +159,7 @@ func RelaxedThresholds() Thresholds {
 		CheckHTTPStatusWarn: 3, CheckHTTPStatusCrit: 10,
 		CheckProcFailWarn: 3, CheckProcFailCrit: 5,
 		CheckUDPTimeoutWarn: 3000, CheckUDPTimeoutCrit: 10000,
+		CheckDNSTimeoutWarn: 1000, CheckDNSTimeoutCrit: 5000,
 		APIAvailWarn: 95.0, APIAvailCrit: 90.0,
 		APIAvgRespWarn: 1000, APIAvgRespCrit: 5000,
 		APIP95RespWarn: 2000, APIP95RespCrit: 10000,

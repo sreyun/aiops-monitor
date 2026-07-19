@@ -72,6 +72,7 @@ async function openSettings() {
     $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
     $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
     $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
+    $("checkDNSTimeoutWarn").value = td(t.check_dns_timeout_warn, 500); $("checkDNSTimeoutCrit").value = td(t.check_dns_timeout_crit, 2000);
     // API 业务监控
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -125,6 +126,7 @@ async function loadThresholds() {
     $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
     $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
     $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
+    $("checkDNSTimeoutWarn").value = td(t.check_dns_timeout_warn, 500); $("checkDNSTimeoutCrit").value = td(t.check_dns_timeout_crit, 2000);
     // API 业务监控阈值
     $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
     $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
@@ -169,6 +171,7 @@ async function saveThresholds() {
         check_http_status_warn: Math.round(num("checkHTTPStatusWarn")), check_http_status_crit: Math.round(num("checkHTTPStatusCrit")),
         check_proc_fail_warn: Math.round(num("checkProcFailWarn")), check_proc_fail_crit: Math.round(num("checkProcFailCrit")),
         check_udp_timeout_warn: num("checkUDPTimeoutWarn"), check_udp_timeout_crit: num("checkUDPTimeoutCrit"),
+        check_dns_timeout_warn: num("checkDNSTimeoutWarn"), check_dns_timeout_crit: num("checkDNSTimeoutCrit"),
         // API 业务监控
         api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
         api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
@@ -651,6 +654,7 @@ async function loadHostsMeta() {
 function updateCkTargetLabel() {
   const t = $("ckType").value;
   const adv = $("ckAdvancedWrap"); if (adv) adv.style.display = (t === "http") ? "" : "none"; // 高级模式仅 HTTP
+  const dnsF = $("ckDnsFields"); if (dnsF) dnsF.style.display = (t === "dns") ? "" : "none"; // DNS 字段仅 DNS 类型
   if (t === "process") {
     $("ckHostField").style.display = "block";
     $("ckTargetLabel").textContent = I18N.t("form.process_name");
@@ -667,6 +671,9 @@ function updateCkTargetLabel() {
   } else if (t === "udp") {
     $("ckTargetLabel").textContent = I18N.t("form.host_port");
     $("ckTarget").placeholder = "127.0.0.1:53";
+  } else if (t === "dns") {
+    $("ckTargetLabel").textContent = I18N.t("form.domain", "域名");
+    $("ckTarget").placeholder = "example.com 或 example.com@8.8.8.8";
   } else {
     $("ckTargetLabel").textContent = I18N.t("form.host_port");
     $("ckTarget").placeholder = "127.0.0.1:3306";
@@ -698,6 +705,8 @@ function openCheckModal(check) {
   $("ckJsonPath").value = (check && check.json_path) || "";
   $("ckJsonExpect").value = (check && check.json_expect) || "";
   $("ckCertWarnDays").value = (check && check.cert_warn_days) ? check.cert_warn_days : "";
+  if ($("ckDnsType")) $("ckDnsType").value = (check && check.dns_type) || "A";
+  if ($("ckDnsExpect")) $("ckDnsExpect").value = (check && check.type === "dns") ? (check.expect_keyword || "") : "";
   $("ckAdvancedBody").style.display = $("ckAdvanced").checked ? "" : "none";
   // Populate host select for process type
   populateHostSelect(check);
@@ -741,6 +750,10 @@ async function saveCheck() {
     body.json_path = $("ckJsonPath").value.trim();
     body.json_expect = $("ckJsonExpect").value.trim();
     body.cert_warn_days = parseInt($("ckCertWarnDays").value) || 0;
+  }
+  if (type === "dns") { // DNS 拨测：记录类型 + 期望包含（复用 expect_keyword 字段）
+    body.dns_type = $("ckDnsType").value;
+    body.expect_keyword = $("ckDnsExpect").value.trim();
   }
   if (!body.name || !body.target) { toast(I18N.t("valid.fill_name_target"), "err"); return; }
   await withLoading("ckSaveBtn", async () => {

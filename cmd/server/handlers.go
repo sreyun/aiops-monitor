@@ -194,6 +194,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/apimon/systems", s.handleUpsertAPISystem)
 	mux.HandleFunc("POST /api/v1/apimon/systems/{id}/run", s.handleRunAPISystem)
 	mux.HandleFunc("DELETE /api/v1/apimon/systems/{id}", s.handleDeleteAPISystem)
+	mux.HandleFunc("POST /api/v1/apimon/systems/{id}/maintenance", s.handleAPISystemMaint)
 	mux.HandleFunc("GET /api/v1/apimon/endpoints/{id}/history", s.handleAPIEndpointHistory)
 	mux.HandleFunc("GET /api/v1/apimon/transactions", s.handleAPITxnOverview)
 	mux.HandleFunc("POST /api/v1/apimon/transactions", s.handleUpsertAPITransaction)

@@ -54,7 +54,7 @@ func (s *Server) handleAPIMonOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{
 			"id": sys.ID, "name": sys.Name, "interval_sec": sys.IntervalSec,
-			"level": sys.Level, "env": sys.Env, "enabled": sys.Enabled, "created_at": sys.CreatedAt,
+			"level": sys.Level, "env": sys.Env, "enabled": sys.Enabled, "created_at": sys.CreatedAt, "maint_until": sys.MaintUntil,
 			"common_headers": sys.CommonHeaders, // 回显系统级公共请求头（此前遗漏→编辑时清空→保存被清零）
 			"common_body":    sys.CommonBody,    // 回显系统级公共请求体（同理必须回显，否则编辑即清零）
 			"host_ids":       sys.HostIDs,       // 回显承载主机关联
@@ -120,6 +120,30 @@ func (s *Server) handleDeleteAPISystem(w http.ResponseWriter, r *http.Request) {
 	_ = s.cfg.DeleteAPISystem(id)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除 API 监控业务系统：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAPISystemMaint 设置/解除业务系统维护窗口。{minutes:N} 静音 N 分钟；0 或缺省=解除。
+// 窗口内探测照常进行（数据仍入 VM），仅抑制该系统的告警推送。
+func (s *Server) handleAPISystemMaint(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Minutes int `json:"minutes"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	var until int64
+	if req.Minutes > 0 {
+		until = time.Now().Unix() + int64(req.Minutes)*60
+	}
+	if err := s.cfg.SetAPISystemMaint(id, until); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	action := "解除维护窗口"
+	if until > 0 {
+		action = "进入维护窗口 " + strconv.Itoa(req.Minutes) + " 分钟"
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "API 业务系统" + action + "：" + id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "maint_until": until})
 }
 
 // handleRunAPISystem 立即探测某业务系统的全部接口（fire-and-forget）。

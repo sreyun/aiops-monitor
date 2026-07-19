@@ -197,9 +197,28 @@ func (s *Server) distAlert(taskID string, agg distAgg) {
 	}
 	a := Alert{Level: level, Type: "api_dist", Scope: taskID, Hostname: name, Message: msg, Timestamp: time.Now().Unix()}
 	s.store.AddLog(LogEntry{Kind: KindSystem, Level: level, Actor: "分布式探测", Host: name, Message: msg})
+	if s.endpointInMaintenance(taskID) {
+		return // 维护窗口内抑制分布式告警推送
+	}
 	if cfg := s.cfg.Get(); cfg.AlertsEnabled {
 		s.notifier.pushChannels(cfg, a, agg.Scope != "ok")
 	}
+}
+
+// endpointInMaintenance 判断某接口所属业务系统当前是否处于维护窗口（窗口内抑制告警）。
+func (s *Server) endpointInMaintenance(endpointID string) bool {
+	now := time.Now().Unix()
+	for _, sys := range s.cfg.APISystems() {
+		if sys.MaintUntil <= now {
+			continue
+		}
+		for _, ep := range sys.Endpoints {
+			if ep.ID == endpointID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // apiEndpointName 由接口 ID 找展示名（系统 / 接口）。

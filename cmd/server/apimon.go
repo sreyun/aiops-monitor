@@ -140,6 +140,7 @@ type APISystem struct {
 	HostIDs       []string          `json:"host_ids,omitempty"`       // 承载该业务系统的主机 ID（异常下钻主机指标用，迭代 E）
 	Endpoints     []APIEndpoint     `json:"endpoints"`
 	CreatedAt     int64             `json:"created_at"`
+	MaintUntil    int64             `json:"maint_until,omitempty"` // 维护窗口：此 Unix 时间前抑制该系统告警（探测继续，迭代 E）
 }
 
 // ---- ConfigStore：业务系统 CRUD（持久化到 PG/JSON，与 checks 同机制） ----
@@ -229,6 +230,24 @@ func (cs *ConfigStore) DeleteAPISystem(id string) error {
 	}
 	cs.cfg.APISystems = kept
 	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetAPISystemMaint 设置业务系统的维护窗口截止时间（until=0 解除）。窗口内探测继续、仅抑制告警。
+func (cs *ConfigStore) SetAPISystemMaint(id string, until int64) error {
+	cs.mu.Lock()
+	found := false
+	for i := range cs.cfg.APISystems {
+		if cs.cfg.APISystems[i].ID == id {
+			cs.cfg.APISystems[i].MaintUntil = until
+			found = true
+			break
+		}
+	}
+	cs.mu.Unlock()
+	if !found {
+		return fmt.Errorf("api system not found")
+	}
 	return cs.save()
 }
 
@@ -449,6 +468,9 @@ func (ar *apiRunner) transition(sys APISystem, ep APIEndpoint, up bool, msg stri
 		a.Message = fmt.Sprintf("接口异常：%s（%s）", label, msg)
 	}
 	ar.store.AddLog(LogEntry{Kind: KindSystem, Level: a.Level, Actor: "API性能监控", Host: ep.Name, Message: a.Message})
+	if sys.MaintUntil > time.Now().Unix() {
+		return // 维护窗口内：记录状态变化但抑制告警推送（探测继续，仅静音通知）
+	}
 	if cfg := ar.cfg.Get(); cfg.AlertsEnabled {
 		ar.notifier.pushChannels(cfg, a, !up)
 	}

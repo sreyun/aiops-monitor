@@ -68,10 +68,11 @@ function renderAPIMon(data) {
     }).join("") : `<tr><td colspan="10" class="muted">该业务系统暂无接口，点「编辑」添加。</td></tr>`;
     return `<div class="api-sys-card" data-sys="${esc(sys.id)}">
       <div class="api-sys-head">
-        <div class="api-sys-title">${esc(sys.name)} ${sys.env ? `<span class="tag env-${esc(sys.env)}">${esc(envLabel(sys.env))}</span>` : ""}<span class="tag">${eps.length} 接口 · 每 ${sys.interval_sec}s</span>${downCount ? `<span class="tag crit">${downCount} 异常</span>` : ""}${!sys.enabled ? '<span class="tag">已停用</span>' : ""}</div>
+        <div class="api-sys-title">${esc(sys.name)} ${sys.env ? `<span class="tag env-${esc(sys.env)}">${esc(envLabel(sys.env))}</span>` : ""}${sys.maint_until && sys.maint_until * 1000 > Date.now() ? '<span class="tag warn">🔧 维护中</span>' : ""}<span class="tag">${eps.length} 接口 · 每 ${sys.interval_sec}s</span>${downCount ? `<span class="tag crit">${downCount} 异常</span>` : ""}${!sys.enabled ? '<span class="tag">已停用</span>' : ""}</div>
         <div class="api-sys-actions">
           ${(sys.host_ids && sys.host_ids.length) ? `<button class="mini-btn" data-aact="hosts" data-sys="${esc(sys.id)}" data-name="${esc(sys.name)}">承载主机</button>` : ""}
           <button class="mini-btn" data-aact="run" data-sys="${esc(sys.id)}">立即探测</button>
+          <button class="mini-btn" data-aact="maint" data-sys="${esc(sys.id)}">维护</button>
           <button class="mini-btn" data-aact="edit" data-sys="${esc(sys.id)}">编辑</button>
           <button class="mini-btn danger" data-aact="del" data-sys="${esc(sys.id)}">删除</button>
         </div>
@@ -217,6 +218,18 @@ function runAPISystem(id) {
   fetch(`${API}/apimon/systems/${encodeURIComponent(id)}/run`, { method: "POST" })
     .then(() => { toast("已触发探测", "ok"); setTimeout(loadAPIMon, 1800); })
     .catch(e => toast("触发失败：" + e, "err"));
+}
+
+// 维护窗口：静音该业务系统告警 N 分钟（0=解除）。窗口内探测继续、仅抑制告警推送。
+function maintAPISystem(id) {
+  const sys = (LAST_APIMON.systems || []).find(s => s.id === id);
+  const active = sys && sys.maint_until && sys.maint_until * 1000 > Date.now();
+  const inp = prompt("维护窗口：静音该业务系统告警多少分钟？\n（0 或留空 = 解除维护；窗口内探测继续，仅抑制告警推送）", active ? "0" : "60");
+  if (inp === null) return;
+  const minutes = parseInt(inp) || 0;
+  fetch(`${API}/apimon/systems/${encodeURIComponent(id)}/maintenance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes }) })
+    .then(() => { toast(minutes > 0 ? `已进入维护 ${minutes} 分钟` : "已解除维护", "ok"); loadAPIMon(); })
+    .catch(e => toast("操作失败：" + e, "err"));
 }
 
 // 承载主机下钻：展示该业务系统关联主机的实时 CPU/内存/磁盘/网络水位，把接口异常与主机资源关联。
@@ -454,6 +467,7 @@ safeAddEventListener("apimonSystems", "click", e => {
   if (act === "hosts") { openSystemHosts(btn.dataset.sys, btn.dataset.name); return; }
   const id = btn.dataset.sys; if (!id) return;
   if (act === "run") runAPISystem(id);
+  else if (act === "maint") maintAPISystem(id);
   else if (act === "edit") { const sys = (LAST_APIMON.systems || []).find(s => s.id === id); openAPISystemModal(sys); }
   else if (act === "del") delAPISystem(id);
 });

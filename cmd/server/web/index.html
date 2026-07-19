@@ -262,6 +262,8 @@
                 <div class="th-input-row"><input type="text" id="checkProcFailWarn" class="mono" placeholder="1"><span class="unit">次</span><input type="text" id="checkProcFailCrit" class="mono" placeholder="3"><span class="unit">次</span></div></div>
               <div class="threshold-field"><label data-i18n="settings.check_udp_timeout_thresh">UDP 探测超时 警告 / 严重（ms）</label>
                 <div class="th-input-row"><input type="text" id="checkUDPTimeoutWarn" class="mono" placeholder="1000"><span class="unit">ms</span><input type="text" id="checkUDPTimeoutCrit" class="mono" placeholder="5000"><span class="unit">ms</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.check_dns_timeout_thresh">DNS 解析超时 警告 / 严重（ms）</label>
+                <div class="th-input-row"><input type="text" id="checkDNSTimeoutWarn" class="mono" placeholder="500"><span class="unit">ms</span><input type="text" id="checkDNSTimeoutCrit" class="mono" placeholder="2000"><span class="unit">ms</span></div></div>
             </div>
           </div>
           <!-- API 业务监控 -->
@@ -1468,6 +1470,7 @@
           <option value="tcp" data-i18n="check.type_tcp">TCP 端口探测</option>
           <option value="ping" data-i18n="check.type_ping">Ping 主机存活</option>
           <option value="udp" data-i18n="check.type_udp">UDP 端口探测</option>
+          <option value="dns" data-i18n="check.type_dns">DNS 解析探测</option>
           <option value="process" data-i18n="check.type_process">进程存活监控</option>
         </select></div>
       </div>
@@ -1475,6 +1478,13 @@
         <div class="select-wrap"><select id="ckHost"></select></div>
       </div>
       <div class="field"><label id="ckTargetLabel" data-i18n="form.url">URL 地址</label><input type="text" id="ckTarget" placeholder="https://example.com"></div>
+      <div id="ckDnsFields" style="display:none">
+        <div class="grid2">
+          <div class="field"><label>DNS 记录类型</label><div class="select-wrap"><select id="ckDnsType"><option value="A">A</option><option value="AAAA">AAAA</option><option value="CNAME">CNAME</option><option value="MX">MX</option><option value="TXT">TXT</option><option value="NS">NS</option></select></div></div>
+          <div class="field"><label>期望包含（可选）</label><input type="text" id="ckDnsExpect" placeholder="如某个 IP / 域名子串"></div>
+        </div>
+        <div class="hint" style="margin-top:-2px">目标填域名；可用 <code>域名@8.8.8.8</code> 指定 DNS 服务器。解析失败 / 无结果 / 不含期望值即告警；解析延迟计入历史曲线。</div>
+      </div>
       <div class="grid2">
         <div class="field"><label data-i18n="check.interval">检测间隔（秒）</label><input type="text" id="ckInterval" class="mono" value="30"></div>
         <div class="field"><label data-i18n="check.alert_level">告警级别</label>

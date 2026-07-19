@@ -268,13 +268,15 @@ func (cr *checkRunner) runCheck(c CustomCheck) {
 			ok, msg, code, certDays = cr.probeHTTP(c.Target)
 		}
 	case "tcp":
-		ok, msg = cr.probeTCP(c.Target)
+		ok, msg = cr.probeTCP(c.Target, checkTimeout(c, 5*time.Second))
 	case "ping":
 		ok, msg, pingRTT, lossPct = cr.probePing(c.Target)
 	case "process":
 		ok, msg = cr.probeProcess(c.Target)
 	case "udp":
-		ok, msg = cr.probeUDP(c.Target)
+		ok, msg = cr.probeUDP(c.Target, checkTimeout(c, 5*time.Second))
+	case "dns":
+		ok, msg = cr.probeDNS(c, checkTimeout(c, 5*time.Second))
 	default:
 		ok, msg = false, Tz("check.unknown_type", c.Type)
 	}
@@ -614,8 +616,17 @@ func jsonPathValue(body []byte, path string) (string, bool) {
 	}
 }
 
-func (cr *checkRunner) probeTCP(target string) (bool, string) {
-	conn, err := net.DialTimeout("tcp", target, 5*time.Second)
+// checkTimeout 返回该检查的探测超时：优先 c.TimeoutSec（秒），否则用 def（默认 5s）。
+// 让 TCP/UDP/DNS 拨测的超时可按检查配置，而非硬编码。
+func checkTimeout(c CustomCheck, def time.Duration) time.Duration {
+	if c.TimeoutSec > 0 {
+		return time.Duration(c.TimeoutSec) * time.Second
+	}
+	return def
+}
+
+func (cr *checkRunner) probeTCP(target string, timeout time.Duration) (bool, string) {
+	conn, err := net.DialTimeout("tcp", target, timeout)
 	if err != nil {
 		return false, Tz("check.connect_failed", err.Error())
 	}
@@ -629,13 +640,13 @@ func (cr *checkRunner) probeTCP(target string) (bool, string) {
 //   - Any UDP response received → service alive → ok
 //   - Read timeout (no response within 3s) → assumed ok (port may be open but
 //     service silent, e.g. DNS without a valid query); treated as "no reply"
-func (cr *checkRunner) probeUDP(target string) (bool, string) {
-	conn, err := net.DialTimeout("udp", target, 5*time.Second)
+func (cr *checkRunner) probeUDP(target string, timeout time.Duration) (bool, string) {
+	conn, err := net.DialTimeout("udp", target, timeout)
 	if err != nil {
 		return false, Tz("check.connect_failed", err.Error())
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	// Send a minimal probe payload (single byte)
 	_, err = conn.Write([]byte{0x00})
 	if err != nil {
@@ -655,6 +666,86 @@ func (cr *checkRunner) probeUDP(target string) (bool, string) {
 		return false, Tz("check.connect_failed", err.Error())
 	}
 	return true, Tz("check.connect_ok")
+}
+
+// probeDNS 解析一个域名并可选断言结果，支持记录类型(A/AAAA/CNAME/MX/TXT/NS)与自定义 DNS
+// 服务器（Target 形如 "example.com" 或 "example.com@8.8.8.8"）。相比通用 UDP 探测（发单字节靠超时
+// 猜活死），DNS 拨测发真正的查询、校验真实解析结果，是 DNS 健康的准确判据。
+func (cr *checkRunner) probeDNS(c CustomCheck, timeout time.Duration) (bool, string) {
+	host := strings.TrimSpace(c.Target)
+	server := ""
+	if i := strings.LastIndex(host, "@"); i >= 0 { // 域名@DNS服务器
+		server = strings.TrimSpace(host[i+1:])
+		host = strings.TrimSpace(host[:i])
+	}
+	if host == "" {
+		return false, Tz("check.invalid_host")
+	}
+	rtype := strings.ToUpper(strings.TrimSpace(c.DNSType))
+	if rtype == "" {
+		rtype = "A"
+	}
+	resolver := net.DefaultResolver
+	if server != "" {
+		if !strings.Contains(server, ":") {
+			server = net.JoinHostPort(server, "53")
+		}
+		resolver = &net.Resolver{
+			PreferGo: true, // 用 Go 内建解析器，Dial 指向自定义服务器
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: timeout}).DialContext(ctx, network, server)
+			},
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var answers []string
+	var err error
+	switch rtype {
+	case "A", "AAAA":
+		ipnet := "ip4"
+		if rtype == "AAAA" {
+			ipnet = "ip6"
+		}
+		var ips []net.IP
+		ips, err = resolver.LookupIP(ctx, ipnet, host)
+		for _, ip := range ips {
+			answers = append(answers, ip.String())
+		}
+	case "CNAME":
+		var cname string
+		if cname, err = resolver.LookupCNAME(ctx, host); cname != "" {
+			answers = append(answers, strings.TrimSuffix(cname, "."))
+		}
+	case "MX":
+		var mxs []*net.MX
+		mxs, err = resolver.LookupMX(ctx, host)
+		for _, mx := range mxs {
+			answers = append(answers, strings.TrimSuffix(mx.Host, "."))
+		}
+	case "TXT":
+		answers, err = resolver.LookupTXT(ctx, host)
+	case "NS":
+		var nss []*net.NS
+		nss, err = resolver.LookupNS(ctx, host)
+		for _, ns := range nss {
+			answers = append(answers, strings.TrimSuffix(ns.Host, "."))
+		}
+	default:
+		return false, Tz("check.dns_bad_type", rtype)
+	}
+	if err != nil {
+		return false, Tz("check.dns_failed", err.Error())
+	}
+	if len(answers) == 0 {
+		return false, Tz("check.dns_empty")
+	}
+	joined := strings.Join(answers, ", ")
+	if c.ExpectKeyword != "" && !strings.Contains(joined, c.ExpectKeyword) {
+		return false, Tz("check.dns_mismatch", c.ExpectKeyword, joined)
+	}
+	return true, rtype + " → " + joined
 }
 
 // probePing runs the system `ping` (zero-dependency, no raw-socket privilege
@@ -854,6 +945,18 @@ func (cr *checkRunner) DownAlerts() []Alert {
 					out = append(out, Alert{
 						Level: lv, Type: "check", Scope: c.ID + "/udp_timeout", Hostname: c.Name,
 						Message: Tz("alert.check_udp_timeout", st.LatencyMs),
+						Value: st.LatencyMs, Timestamp: now,
+					})
+				}
+			}
+		case "dns":
+			// DNS 解析超时（解析延迟超阈值即告警，与 up/down 告警并行）
+			if st.LatencyMs > 0 && th.CheckDNSTimeoutWarn > 0 {
+				lv := classify(st.LatencyMs, th.CheckDNSTimeoutWarn, th.CheckDNSTimeoutCrit)
+				if lv != "" {
+					out = append(out, Alert{
+						Level: lv, Type: "check", Scope: c.ID + "/dns_timeout", Hostname: c.Name,
+						Message: Tz("alert.check_dns_timeout", st.LatencyMs),
 						Value: st.LatencyMs, Timestamp: now,
 					})
 				}

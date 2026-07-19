@@ -113,6 +113,8 @@ type ThresholdConfig struct {
 	CheckProcFailCrit    int     `json:"check_proc_fail_crit"`    // 进程存活失败次数 严重
 	CheckUDPTimeoutWarn  float64 `json:"check_udp_timeout_warn"`  // UDP 探测超时 警告 ms
 	CheckUDPTimeoutCrit  float64 `json:"check_udp_timeout_crit"`  // UDP 探测超时 严重 ms
+	CheckDNSTimeoutWarn  float64 `json:"check_dns_timeout_warn"`  // DNS 解析超时 警告 ms
+	CheckDNSTimeoutCrit  float64 `json:"check_dns_timeout_crit"`  // DNS 解析超时 严重 ms
 	// ---- API 业务监控阈值 ----
 	APIAvailWarn      float64 `json:"api_avail_warn"`      // 接口可用率 警告 %（低于此值告警）
 	APIAvailCrit      float64 `json:"api_avail_crit"`      // 接口可用率 严重 %
@@ -164,6 +166,8 @@ func defaultThresholdConfig() ThresholdConfig {
 		CheckHTTPRespWarn: 1000, CheckHTTPRespCrit: 5000,
 		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 5,
 		CheckProcFailWarn: 1, CheckProcFailCrit: 3,
+		CheckUDPTimeoutWarn: 1000, CheckUDPTimeoutCrit: 5000, // 修复：此前默认档遗漏 UDP 阈值，导致 UDP 探测超时默认不告警
+		CheckDNSTimeoutWarn: 500, CheckDNSTimeoutCrit: 2000,
 		// API 业务监控默认阈值
 		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
 		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
@@ -250,6 +254,10 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 		t.CheckProcFailCrit = d.CheckProcFailCrit
 		changed = true
 	}
+	fix(&t.CheckUDPTimeoutWarn, d.CheckUDPTimeoutWarn) // 修复：此前遗漏 UDP 阈值补默认，老配置升级后 UDP 告警静默失效
+	fix(&t.CheckUDPTimeoutCrit, d.CheckUDPTimeoutCrit)
+	fix(&t.CheckDNSTimeoutWarn, d.CheckDNSTimeoutWarn)
+	fix(&t.CheckDNSTimeoutCrit, d.CheckDNSTimeoutCrit)
 	fix(&t.APIAvailWarn, d.APIAvailWarn)
 	fix(&t.APIAvailCrit, d.APIAvailCrit)
 	fix(&t.APIAvgRespWarn, d.APIAvgRespWarn)
@@ -315,6 +323,7 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		CheckHTTPStatusWarn: t.CheckHTTPStatusWarn, CheckHTTPStatusCrit: t.CheckHTTPStatusCrit,
 		CheckProcFailWarn: t.CheckProcFailWarn, CheckProcFailCrit: t.CheckProcFailCrit,
 		CheckUDPTimeoutWarn: t.CheckUDPTimeoutWarn, CheckUDPTimeoutCrit: t.CheckUDPTimeoutCrit,
+		CheckDNSTimeoutWarn: t.CheckDNSTimeoutWarn, CheckDNSTimeoutCrit: t.CheckDNSTimeoutCrit,
 		// API 业务监控
 		APIAvailWarn: t.APIAvailWarn, APIAvailCrit: t.APIAvailCrit,
 		APIAvgRespWarn: t.APIAvgRespWarn, APIAvgRespCrit: t.APIAvgRespCrit,
@@ -375,7 +384,7 @@ func defaultAccount() AccountConfig {
 type CustomCheck struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Type        string `json:"type"`   // http | tcp | ping | process
+	Type        string `json:"type"`   // http | tcp | udp | ping | process | dns
 	Target      string `json:"target"` // URL for http, host:port for tcp, hostID/procName for process
 	IntervalSec int    `json:"interval_sec"`
 	Level       string `json:"level"` // warning | critical
@@ -392,6 +401,7 @@ type CustomCheck struct {
 	JSONPath       string            `json:"json_path,omitempty"`        // JSON 断言的点路径，如 code / data.token
 	JSONExpect     string            `json:"json_expect,omitempty"`      // JSON 断言期望值（字符串比较；留空=只要求路径存在）
 	CertWarnDays   int               `json:"cert_warn_days,omitempty"`   // 证书剩余天数低于此值即判失败告警（0=不检测）
+	DNSType        string            `json:"dns_type,omitempty"`         // DNS 拨测记录类型：A/AAAA/CNAME/MX/TXT/NS（默认 A）
 	TimeoutSec     int               `json:"timeout_sec,omitempty"`      // 单次探测超时（秒，0=用全局默认；API 业务监控用它绕过 5s 全局上限，精确控制慢接口）
 	CaptureBody    bool              `json:"-"`                          // 内部：合成事务需要响应体做变量提取（不序列化）
 	TraceParent    bool              `json:"-"`                          // 内部：注入 W3C traceparent 头（apimon 探测用，后端可关联分布式 trace）

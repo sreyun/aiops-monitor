@@ -46,6 +46,9 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 			m["expect_status"], m["expect_keyword"], m["keyword_is_regex"] = c.ExpectStatus, c.ExpectKeyword, c.KeywordIsRegex
 			m["json_path"], m["json_expect"], m["cert_warn_days"] = c.JSONPath, c.JSONExpect, c.CertWarnDays
 		}
+		if c.Type == "dns" { // DNS 拨测配置回填（记录类型 + 期望值），否则编辑时会丢失
+			m["dns_type"], m["expect_keyword"] = c.DNSType, c.ExpectKeyword
+		}
 		out = append(out, m)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -59,7 +62,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	c.Target = strings.TrimSpace(c.Target)
-	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "udp" && c.Type != "process") {
+	if c.Name == "" || c.Target == "" || (c.Type != "http" && c.Type != "tcp" && c.Type != "ping" && c.Type != "udp" && c.Type != "process" && c.Type != "dns") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "check_api.invalid_params")})
 		return
 	}
