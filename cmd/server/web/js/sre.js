@@ -998,7 +998,7 @@ function renderSLOs(list){
   if(!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_slo","暂无 SLO")}</div>`; return; }
   el.innerHTML=list.map(s=>{
     const bCls=s.error_budget<=0?"crit":s.error_budget<30?"warn":"ok";
-    const src=s.source_type==="check"?I18N.t("sre.slo_check_up_rate","拨测 up 率"):s.source_type==="api"?I18N.t("sre.slo_api_up_rate","API up 率"):`${s.metric} ${s.comparator} ${s.threshold}`;
+    const src=s.source_type==="check"?I18N.t("sre.slo_check_up_rate","拨测 up 率"):s.source_type==="api"?I18N.t("sre.slo_api_up_rate","API up 率"):s.source_type==="promql"?"PromQL":`${s.metric} ${s.comparator} ${s.threshold}`;
     return `<div class="pb-card fwd-card ${s.enabled?"":"pb-off"}" data-slo="${esc(s.id)}">
       <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(s.name)}</strong><span class="pb-desc">${esc(src)} · ${I18N.t("sre.slo_target","目标")} ${s.target}% · ${s.window_days}d</span></div>
         <span class="badge ${s.breaching?"crit":"ok"}">SLI ${s.sli.toFixed(2)}%</span></div>
@@ -1019,6 +1019,7 @@ function sloSourceChange(){
   $("sloCheckField").style.display=src==="check"?"":"none";
   $("sloApiField").style.display=src==="api"?"":"none";
   $("sloMetricFields").style.display=src==="metric"?"":"none";
+  $("sloPromqlFields").style.display=src==="promql"?"":"none";
 }
 function openSloModal(s){
   $("sloId").value=s?s.id:""; $("sloModalTitle").textContent=s?I18N.t("sre.edit_slo","编辑 SLO"):I18N.t("sre.new_slo","新建 SLO");
@@ -1027,6 +1028,7 @@ function openSloModal(s){
   $("sloApi").innerHTML=SRE_API_ENDPOINTS.map(e=>`<option value="${esc(e.id)}" ${s&&s.api_id===e.id?"selected":""}>${esc(e.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_api_first","（请先创建 API 监控）")}</option>`;
   $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc(h.hostname)}</option>`).join("");
   if(s){ $("sloMetric").value=s.metric||"cpu_percent"; $("sloComparator").value=s.comparator||"<"; $("sloThreshold").value=s.threshold||90; } else { $("sloComparator").value="<"; $("sloThreshold").value=90; }
+  $("sloTotalQuery").value=s&&s.total_query?s.total_query:""; $("sloGoodQuery").value=s&&s.good_query?s.good_query:"";
   $("sloTarget").value=s?s.target:99.9; $("sloWindow").value=s?s.window_days:30;
   sloSourceChange(); $("sloMask").classList.add("show");
 }
@@ -1035,6 +1037,7 @@ async function saveSlo(){
   const body={id:$("sloId").value,name:$("sloName").value.trim(),enabled:$("sloEnabled").checked,source_type:src,target:parseFloat($("sloTarget").value)||99,window_days:parseInt($("sloWindow").value)||30};
   if(src==="check") body.check_id=$("sloCheck").value;
   else if(src==="api") body.api_id=$("sloApi").value;
+  else if(src==="promql"){ body.total_query=$("sloTotalQuery").value.trim(); body.good_query=$("sloGoodQuery").value.trim(); }
   else { body.host_id=$("sloHost").value; body.metric=$("sloMetric").value; body.comparator=$("sloComparator").value; body.threshold=parseFloat($("sloThreshold").value)||0; }
   const r=await fetch(`${API}/slos`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));

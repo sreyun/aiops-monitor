@@ -108,6 +108,19 @@ func (s *Server) wireSRE() {
 		}
 		return nil
 	}
+	// PromQL 源：把抓取/推送入 VM 的任意指标（JVM/DB/中间件…）作为 SLI，good/total 由 PromQL 现算。
+	s.slos.promScalar = func(q string) (float64, bool) {
+		if s.vm != nil && s.vm.enabled() {
+			return s.vm.vmQueryScalar(q)
+		}
+		return 0, false
+	}
+	s.slos.promRange = func(q string, from, to, step int64) ([]vmRangePoint, bool) {
+		if s.vm != nil && s.vm.enabled() {
+			return s.vm.vmQueryRange(q, from, to, step)
+		}
+		return nil, false
+	}
 
 	// The alert engine drives incidents + remediation on every fire/recover.
 	s.notifier.incidents = s.incidents

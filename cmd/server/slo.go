@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,13 +27,15 @@ type SLO struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
 	Enabled    bool    `json:"enabled"`
-	SourceType string  `json:"source_type"`          // check | api | metric
+	SourceType string  `json:"source_type"`          // check | api | metric | promql
 	CheckID    string  `json:"check_id,omitempty"`   // source_type=check
 	APIID      string  `json:"api_id,omitempty"`     // source_type=api（apimon 接口 ID）
 	HostID     string  `json:"host_id,omitempty"`    // source_type=metric
 	Metric     string  `json:"metric,omitempty"`     // cpu_percent | mem_percent | disk_percent | load1 | ...
 	Comparator string  `json:"comparator,omitempty"` // < | <= | > | >=  (defines the "good" band)
 	Threshold  float64 `json:"threshold,omitempty"`
+	GoodQuery  string  `json:"good_query,omitempty"`  // source_type=promql：达标(好)事件计数 PromQL，用 $window 占位滚动窗口
+	TotalQuery string  `json:"total_query,omitempty"` // source_type=promql：总事件计数 PromQL（$window 占位）
 	Target     float64 `json:"target"`      // objective %, e.g. 99.9
 	WindowDays int     `json:"window_days"` // rolling window
 	CreatedAt  int64   `json:"created_at"`
@@ -125,6 +128,8 @@ type sloManager struct {
 	metricSamples func(hostID string, fromTs int64) []shared.Sample
 	checkPoints   func(checkID string) []CheckPoint
 	apiPoints     func(apiID string, fromTs int64) []APIHistPoint
+	promScalar    func(query string) (float64, bool)                     // source_type=promql：即时标量查询（注入，内部走 VM）
+	promRange     func(query string, from, to, step int64) ([]vmRangePoint, bool) // source_type=promql：区间查询（趋势用）
 	incidents     *incidentManager
 	burning       map[string]bool // sloID -> currently in a burn incident
 }
@@ -140,7 +145,7 @@ const (
 )
 
 // goodTotal 统计一个 SLO 在 [fromTs, now] 窗口内的达标/总事件数，覆盖全部 SLI 来源。
-func (m *sloManager) goodTotal(s SLO, fromTs int64) (good, total int64) {
+func (m *sloManager) goodTotal(s SLO, now, fromTs int64) (good, total int64) {
 	switch s.SourceType {
 	case "check":
 		if m.checkPoints != nil {
@@ -176,6 +181,31 @@ func (m *sloManager) goodTotal(s SLO, fromTs int64) (good, total int64) {
 				}
 			}
 		}
+	case "promql":
+		// good/total 计数查询：把 $window 占位替换为当前窗口时长（如 "300s"），瞬时聚合。
+		if m.promScalar != nil && s.TotalQuery != "" {
+			win := now - fromTs
+			if win < 1 {
+				win = 1
+			}
+			winStr := strconv.FormatInt(win, 10) + "s"
+			tv, ok := m.promScalar(strings.ReplaceAll(s.TotalQuery, "$window", winStr))
+			if !ok || tv <= 0 {
+				return
+			}
+			gv := tv // GoodQuery 留空则视作全部达标（仅用总量衡量“有无数据”）
+			if s.GoodQuery != "" {
+				gv, _ = m.promScalar(strings.ReplaceAll(s.GoodQuery, "$window", winStr))
+			}
+			total = int64(tv + 0.5)
+			good = int64(gv + 0.5)
+			if good > total {
+				good = total
+			}
+			if good < 0 {
+				good = 0
+			}
+		}
 	}
 	return
 }
@@ -183,7 +213,7 @@ func (m *sloManager) goodTotal(s SLO, fromTs int64) (good, total int64) {
 // burnLevel 判定当前燃烧档："fast"(快烧,紧急) | "slow"(慢烧,警告) | ""(正常)，长短窗口双确认。
 func (m *sloManager) burnLevel(s SLO, now int64) string {
 	burn := func(dur int64) (float64, bool) {
-		good, total := m.goodTotal(s, now-dur)
+		good, total := m.goodTotal(s, now, now-dur)
 		if total == 0 {
 			return 0, false
 		}
@@ -209,7 +239,7 @@ func (m *sloManager) computeStatus(s SLO, now int64) SLOStatus {
 	if win < 1 {
 		win = 30
 	}
-	good, total := m.goodTotal(s, now-int64(win)*86400)
+	good, total := m.goodTotal(s, now, now-int64(win)*86400)
 	sli := 100.0
 	if total > 0 {
 		sli = float64(good) / float64(total) * 100
@@ -261,6 +291,39 @@ func (m *sloManager) rangePoints(s SLO, fromTs, toTs int64) []sloPoint {
 					continue
 				}
 				out = append(out, sloPoint{smp.Timestamp, satisfies(v, s.Comparator, s.Threshold)})
+			}
+		}
+	case "promql":
+		// 区间趋势：按 step 桶用 query_range 取 good/total，每桶达标率≥目标即记为达标点。
+		// （即时看板用 goodTotal 的按事件加权口径；此处为“每桶是否达标”的趋势视图。）
+		if m.promRange != nil && s.TotalQuery != "" {
+			step := (toTs - fromTs) / 120
+			if step < 30 {
+				step = 30
+			}
+			winStr := strconv.FormatInt(step, 10) + "s"
+			tot, ok := m.promRange(strings.ReplaceAll(s.TotalQuery, "$window", winStr), fromTs, toTs, step)
+			if !ok {
+				return out
+			}
+			goodMap := map[int64]float64{}
+			if s.GoodQuery != "" {
+				if gp, ok := m.promRange(strings.ReplaceAll(s.GoodQuery, "$window", winStr), fromTs, toTs, step); ok {
+					for _, p := range gp {
+						goodMap[p.Ts] = p.Val
+					}
+				}
+			} else {
+				for _, p := range tot {
+					goodMap[p.Ts] = p.Val
+				}
+			}
+			passRatio := s.Target / 100.0
+			for _, tp := range tot {
+				if tp.Val <= 0 {
+					continue // 该桶无事件，跳过（不把空窗画成 0%）
+				}
+				out = append(out, sloPoint{tp.Ts, goodMap[tp.Ts]/tp.Val >= passRatio-1e-9})
 			}
 		}
 	}
@@ -440,6 +503,12 @@ func validateSLO(s *SLO) error {
 		}
 		if !satisfiesValidComparator(s.Comparator) {
 			return fmt.Errorf("%s", Tz("slo.bad_comparator"))
+		}
+	case "promql":
+		s.TotalQuery = strings.TrimSpace(s.TotalQuery)
+		s.GoodQuery = strings.TrimSpace(s.GoodQuery)
+		if s.TotalQuery == "" {
+			return fmt.Errorf("%s", Tz("slo.total_query_required"))
 		}
 	default:
 		return fmt.Errorf("%s", Tz("slo.bad_source"))

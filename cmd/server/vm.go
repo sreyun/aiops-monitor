@@ -479,6 +479,142 @@ type apiAggregate struct {
 }
 
 // vmInstantByAPI 执行一次 PromQL 瞬时查询，返回 api_id -> 数值（VM 侧现算聚合）。
+// promSeries 是 PromQL 即时查询返回的一条结果（标签集 + 值）。
+type promSeries struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// vmQueryVector 对 VM 执行 PromQL 即时查询，返回结果向量（每条 = 一组标签 + 值）。
+// 供指标告警规则评估用：表达式已编码条件（如 mysql_up==0 / rate(errors[5m])>10），
+// 非空结果即表示这些标签集正处于告警状态（与 Prometheus 告警规则语义一致）。ok=false 表示 VM 未启用/查询失败。
+func (v *vmWriter) vmQueryVector(promql string) ([]promSeries, bool) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil, false
+	}
+	q := url.Values{"query": {promql}}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/query?"+q.Encode(), nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var out struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []any             `json:"value"` // [ts, "strval"]
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || out.Status != "success" {
+		return nil, false
+	}
+	series := make([]promSeries, 0, len(out.Data.Result))
+	for _, r := range out.Data.Result {
+		if len(r.Value) < 2 {
+			continue
+		}
+		s, _ := r.Value[1].(string)
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			continue
+		}
+		series = append(series, promSeries{Labels: r.Metric, Value: f})
+	}
+	return series, true
+}
+
+// vmQueryScalar 执行 PromQL 即时查询，把返回向量各序列求和为单一标量。
+// 供 SLO 的 promql 源用（good/total 计数查询，通常已 sum(...) 聚合）。ok=false 表示 VM 未启用/查询失败。
+func (v *vmWriter) vmQueryScalar(promql string) (float64, bool) {
+	series, ok := v.vmQueryVector(promql)
+	if !ok {
+		return 0, false
+	}
+	var sum float64
+	for _, s := range series {
+		sum += s.Value
+	}
+	return sum, true
+}
+
+// vmRangePoint 是区间查询在某时间点上的聚合值（各序列求和）。
+type vmRangePoint struct {
+	Ts  int64
+	Val float64
+}
+
+// vmQueryRange 执行 PromQL 区间查询（/api/v1/query_range），把每个时间点上各序列求和后按时间升序返回。
+// step 为秒。供 SLO promql 源的自定义区间趋势用。ok=false 表示 VM 未启用/查询失败。
+func (v *vmWriter) vmQueryRange(promql string, startTs, endTs, stepSec int64) ([]vmRangePoint, bool) {
+	c := v.cfg.VMConfig()
+	if !c.Enabled || c.URL == "" {
+		return nil, false
+	}
+	if stepSec < 1 {
+		stepSec = 60
+	}
+	q := url.Values{
+		"query": {promql},
+		"start": {strconv.FormatInt(startTs, 10)},
+		"end":   {strconv.FormatInt(endTs, 10)},
+		"step":  {strconv.FormatInt(stepSec, 10)},
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.URL, "/")+"/api/v1/query_range?"+q.Encode(), nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := v.httpc.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var out struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Values [][]any `json:"values"` // [[ts, "strval"], ...]
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil || out.Status != "success" {
+		return nil, false
+	}
+	agg := map[int64]float64{}
+	for _, r := range out.Data.Result {
+		for _, pair := range r.Values {
+			if len(pair) < 2 {
+				continue
+			}
+			tsF, _ := pair[0].(float64)
+			sv, _ := pair[1].(string)
+			f, err := strconv.ParseFloat(sv, 64)
+			if err != nil {
+				continue
+			}
+			agg[int64(tsF)] += f
+		}
+	}
+	pts := make([]vmRangePoint, 0, len(agg))
+	for ts, val := range agg {
+		pts = append(pts, vmRangePoint{Ts: ts, Val: val})
+	}
+	sort.Slice(pts, func(i, j int) bool { return pts[i].Ts < pts[j].Ts })
+	return pts, true
+}
+
 func (v *vmWriter) vmInstantByAPI(promql string) map[string]float64 {
 	c := v.cfg.VMConfig()
 	if !c.Enabled || c.URL == "" {

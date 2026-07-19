@@ -345,6 +345,7 @@ func main() {
 	go server.checks.Run(5 * time.Second)       // custom HTTP/TCP synthetic checks
 	go server.apimon.Run(5 * time.Second)       // API 性能监控：按业务系统批量探测接口
 	go server.scrapes.Run(15 * time.Second)     // 指标抓取：agentless 抓 exporter 摄入 VM
+	go server.promrules.Run(30 * time.Second)   // 指标告警规则：PromQL 评估 → 告警 → incident/AI
 	go server.runScheduler(30 * time.Second)    // timed playbook triggers (interval/daily/weekly)
 	go server.runSLOEvaluator(60 * time.Second) // SLO error-budget evaluation → burn incidents
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection

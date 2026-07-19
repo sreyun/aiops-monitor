@@ -533,6 +533,10 @@
         <div id="scrapeTargets"></div>
         <div class="section-title" style="margin-top:24px"><span>remote_write 接收</span><span class="tag">任何 exporter/telegraf/categraf/OTel Collector 都能往这推送指标 → VM</span></div>
         <div id="promWritePanel" class="api-sys-card" style="padding:14px 16px"></div>
+        <div class="section-title" style="margin-top:24px"><span>指标告警规则</span><span class="tag">PromQL 条件命中即告警 → 治理 / incident / AI 研判 · 支持 {{标签}} 文案模板</span>
+          <div style="margin-left:auto"><button class="btn primary" id="ruleAddBtn">+ 添加规则</button></div>
+        </div>
+        <div id="promRules"></div>
       </section>
 
       <!-- 告警治理 -->
@@ -1464,6 +1468,37 @@
   </div>
 </div>
 
+<!-- ===== 指标告警规则编辑弹窗 ===== -->
+<div class="mask" id="ruleMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h3 id="ruleModalTitle">添加指标告警规则</h3>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="ruleId">
+      <div class="grid2">
+        <div class="field"><label>规则名称</label><input type="text" id="ruleName" placeholder="如 MySQL 宕机 / JVM 堆过高"></div>
+        <div class="grid2">
+          <div class="field"><label>级别</label><div class="select-wrap"><select id="ruleLevel"><option value="critical">严重</option><option value="warning">警告</option></select></div></div>
+          <div class="field"><label>持续（秒）</label><input type="text" id="ruleFor" class="mono" placeholder="60"></div>
+        </div>
+      </div>
+      <div class="field"><label>PromQL 条件表达式 <span class="tag">非空结果即告警</span></label>
+        <textarea id="ruleExpr" rows="3" placeholder='如 mysql_up == 0&#10;或 rate(http_requests_total{code="500"}[5m]) > 10&#10;或 jvm_memory_used_bytes / jvm_memory_max_bytes > 0.9' style="font-family:monospace; font-size:12px"></textarea>
+        <div class="ai-card-test" style="margin-top:6px"><span class="ai-test-result" id="ruleTestResult"></span><button class="btn sm" id="ruleTestBtn" type="button">测试表达式</button></div>
+      </div>
+      <div class="field"><label>告警文案（可选，支持 {{标签}} 与 {{value}}）</label><input type="text" id="ruleMessage" placeholder="如 {{instance}} MySQL 已宕机；留空自动生成"></div>
+      <label class="switch"><input type="checkbox" id="ruleEnabled" checked> <span>启用该规则</span></label>
+      <div class="hint">表达式已编码条件，返回的每组标签即一个告警实例；持续满足 for 秒后触发，标签集消失即恢复。告警走统一通道（治理静默/抑制 + incident + AI 研判）。指标来自「指标抓取」或 remote_write 推送、入 VM。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close-btn>取消</button>
+      <button class="btn primary" id="ruleSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 指标抓取目标编辑弹窗 ===== -->
 <div class="mask" id="scrapeMask" data-close>
   <div class="modal modal-lg">
@@ -1701,7 +1736,7 @@
       <input type="hidden" id="sloId">
       <div class="field"><label data-i18n="sre.slo_name">名称</label><input type="text" id="sloName" data-i18n-placeholder="sre.slo_name_ph" placeholder="如 API 可用性"></div>
       <label class="switch" style="margin-bottom:4px"><input type="checkbox" id="sloEnabled" checked> <span data-i18n="sre.enabled">启用</span></label>
-      <div class="field"><label data-i18n="sre.sli_source">SLI 来源</label><div class="select-wrap"><select id="sloSource"><option value="check" data-i18n="sre.src_check">拨测 up 率</option><option value="api" data-i18n="sre.src_api">API 接口 up 率</option><option value="metric" data-i18n="sre.src_metric">指标达标率</option></select></div></div>
+      <div class="field"><label data-i18n="sre.sli_source">SLI 来源</label><div class="select-wrap"><select id="sloSource"><option value="check" data-i18n="sre.src_check">拨测 up 率</option><option value="api" data-i18n="sre.src_api">API 接口 up 率</option><option value="metric" data-i18n="sre.src_metric">指标达标率</option><option value="promql" data-i18n="sre.src_promql">指标查询（PromQL）</option></select></div></div>
       <div class="field" id="sloCheckField"><label data-i18n="sre.check">拨测项</label><div class="select-wrap"><select id="sloCheck"></select></div></div>
       <div class="field" id="sloApiField" style="display:none"><label data-i18n="sre.api_endpoint">API 接口</label><div class="select-wrap"><select id="sloApi"></select></div></div>
       <div id="sloMetricFields" style="display:none">
@@ -1713,6 +1748,11 @@
           <div class="field"><label data-i18n="sre.good_when">达标条件（指标）</label><div class="select-wrap"><select id="sloComparator"><option value="&lt;">&lt;</option><option value="&lt;=">&le;</option><option value="&gt;">&gt;</option><option value="&gt;=">&ge;</option></select></div></div>
           <div class="field"><label data-i18n="sre.threshold">阈值</label><input type="text" id="sloThreshold" class="mono" value="90"></div>
         </div>
+      </div>
+      <div id="sloPromqlFields" style="display:none">
+        <div class="field"><label data-i18n="sre.total_query">总量查询（PromQL） <span class="tag">$window 占位滚动窗口</span></label><textarea id="sloTotalQuery" rows="2" placeholder='如 sum(increase(http_requests_total[$window]))' style="font-family:monospace; font-size:12px"></textarea></div>
+        <div class="field"><label data-i18n="sre.good_query">达标（好）查询（PromQL）</label><textarea id="sloGoodQuery" rows="2" placeholder='如 sum(increase(http_requests_total{code!~&quot;5..&quot;}[$window]))；留空=全部达标' style="font-family:monospace; font-size:12px"></textarea></div>
+        <div class="hint" data-i18n="sre.promql_hint">SLI = 达标 / 总量。两条 PromQL 用 $window 占位窗口（引擎按 5m/30m/1h/6h 及滚动窗口自动替换），指标来自「指标抓取」或 remote_write 推送、入 VM。</div>
       </div>
       <div class="grid2">
         <div class="field"><label data-i18n="sre.target">目标（%）</label><input type="text" id="sloTarget" class="mono" value="99.9"></div>

@@ -133,6 +133,102 @@ safeAddEventListener("promWritePanel", "click", async e => {
   }
 });
 
+/* ========== 指标告警规则（PromQL 条件 → 统一告警通道 → incident/AI 研判） ========== */
+let LAST_RULES = [];
+
+async function loadRules() {
+  try {
+    const d = await fetch(`${API}/prom-rules`).then(r => r.json());
+    LAST_RULES = (d && d.rules) || [];
+    renderRules(LAST_RULES);
+  } catch (e) { /* ignore */ }
+}
+
+function renderRules(rules) {
+  const wrap = $("promRules");
+  if (!wrap) return;
+  if (!rules.length) {
+    wrap.innerHTML = `<div class="empty-box">还没有指标告警规则。写一条 PromQL 条件（如 <code>mysql_up == 0</code>）即可对抓取 / 推送来的指标告警——命中后走统一告警通道，自动进 incident 与 AI 研判。支持 <code>{{标签}}</code> 文案模板。</div>`;
+    return;
+  }
+  wrap.innerHTML = rules.map(r => `
+    <div class="api-sys-card">
+      <div class="api-sys-head">
+        <div class="api-sys-title">${esc(r.name)} <span class="tag ${r.level === "critical" ? "crit" : ""}">${r.level === "critical" ? "严重" : "警告"}</span>${r.for_sec ? `<span class="tag">for ${r.for_sec}s</span>` : ""}${!r.enabled ? '<span class="tag">已停用</span>' : ""}</div>
+        <div class="api-sys-actions">
+          <button class="mini-btn" data-ract="edit" data-id="${esc(r.id)}" title="编辑">✎</button>
+          <button class="mini-btn del" data-ract="del" data-id="${esc(r.id)}" title="删除">✕</button>
+        </div>
+      </div>
+      <div style="padding:10px 16px; color:var(--muted); font-size:12px; font-family:monospace; word-break:break-all">${esc(r.expr)}${r.message ? `<span style="color:var(--txt2)"> · 文案：${esc(r.message)}</span>` : ""}</div>
+    </div>`).join("");
+}
+
+function openRuleModal(r) {
+  $("ruleId").value = r ? r.id : "";
+  $("ruleName").value = r ? r.name : "";
+  $("ruleExpr").value = r ? r.expr : "";
+  $("ruleLevel").value = r ? r.level : "critical";
+  $("ruleFor").value = r && r.for_sec ? r.for_sec : "";
+  $("ruleMessage").value = r ? (r.message || "") : "";
+  $("ruleEnabled").checked = r ? r.enabled : true;
+  const tr = $("ruleTestResult"); if (tr) { tr.textContent = ""; tr.removeAttribute("style"); }
+  $("ruleModalTitle").textContent = r ? "编辑指标告警规则" : "添加指标告警规则";
+  $("ruleMask").classList.add("show");
+}
+
+async function saveRule() {
+  const body = {
+    id: $("ruleId").value,
+    name: $("ruleName").value.trim(),
+    expr: $("ruleExpr").value.trim(),
+    level: $("ruleLevel").value,
+    for_sec: Math.max(0, parseInt($("ruleFor").value) || 0),
+    message: $("ruleMessage").value.trim(),
+    enabled: $("ruleEnabled").checked
+  };
+  if (!body.name || !body.expr) { toast("请填写名称与表达式", "err"); return; }
+  await withLoading("ruleSaveBtn", async () => {
+    try {
+      const r = await fetch(`${API}/prom-rules`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) { toast("已保存", "ok"); $("ruleMask").classList.remove("show"); loadRules(); }
+      else { const j = await r.json().catch(() => ({})); toast("保存失败：" + (j.error || ""), "err"); }
+    } catch (e) { toast("保存失败：" + e, "err"); }
+  });
+}
+
+async function testRule() {
+  const expr = $("ruleExpr").value.trim();
+  const el = $("ruleTestResult");
+  if (!el) return;
+  if (!expr) { el.textContent = "请先填写表达式"; el.style.color = "var(--crit)"; return; }
+  el.textContent = "测试中…"; el.style.color = "var(--muted)";
+  try {
+    const j = await fetch(`${API}/prom-rules/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr }) }).then(r => r.json());
+    if (j.ok) {
+      el.style.color = "var(--ok)";
+      el.textContent = j.count > 0 ? `✓ 当前命中 ${j.count} 组：${(j.samples || []).slice(0, 2).join("；")}` : "✓ 表达式合法，当前无命中（暂不告警）";
+    } else { el.style.color = "var(--crit)"; el.textContent = "✗ " + (j.error || "测试失败"); }
+  } catch (e) { el.style.color = "var(--crit)"; el.textContent = "✗ 请求失败：" + e; }
+}
+
+async function delRule(id) {
+  const r = LAST_RULES.find(x => x.id === id);
+  if (!confirm(`确认删除规则「${r ? r.name : id}」？`)) return;
+  try { await fetch(`${API}/prom-rules/${encodeURIComponent(id)}`, { method: "DELETE" }); toast("已删除", "ok"); loadRules(); }
+  catch (e) { toast("删除失败：" + e, "err"); }
+}
+
+safeAddEventListener("ruleAddBtn", "click", () => openRuleModal(null));
+safeAddEventListener("ruleSaveBtn", "click", saveRule);
+safeAddEventListener("ruleTestBtn", "click", testRule);
+safeAddEventListener("promRules", "click", e => {
+  const btn = e.target.closest("[data-ract]"); if (!btn) return;
+  const id = btn.dataset.id, act = btn.dataset.ract;
+  if (act === "edit") openRuleModal(LAST_RULES.find(x => x.id === id));
+  else if (act === "del") delRule(id);
+});
+
 // 仅在指标抓取视图可见时每 15s 刷新一次
 function scrapeTick() {
   const v = document.getElementById("view-scrape");

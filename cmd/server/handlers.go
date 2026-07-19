@@ -26,6 +26,7 @@ type Server struct {
 	checks    *checkRunner
 	apimon    *apiRunner       // API 性能监控：按业务系统批量探测接口
 	scrapes   *scrapeManager   // 指标抓取（agentless exporter 摄入 Prometheus 生态）
+	promrules *promRuleManager // 指标告警规则（PromQL）
 	term      *termManager     // remote terminal relay
 	forward   *forwardManager  // port forwarding relay (TCP + HTTP proxy)
 	emailMgr  *emailManager    // verification codes + reset tokens
@@ -81,6 +82,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
 	s.scrapes = newScrapeManager(cfg, s.vm)                       // 指标抓取：agentless 抓 exporter → VM
+	s.promrules = newPromRuleManager(cfg, s.vm, notifier, store)  // 指标告警规则：PromQL → pushChannels → incident/AI
 	s.wireSRE()
 	// Restore persisted TCP forward rules (recreate listeners)
 	s.forward.restoreRules(s)
@@ -212,6 +214,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/prom/write-config", s.handleGetPromWrite)
 	mux.HandleFunc("POST /api/v1/prom/write-config", s.handleSetPromWriteToken)
 	mux.HandleFunc("POST /api/v1/prom/write", s.handlePromRemoteWrite)
+	mux.HandleFunc("GET /api/v1/prom-rules", s.handleListPromRules)
+	mux.HandleFunc("POST /api/v1/prom-rules", s.handleUpsertPromRule)
+	mux.HandleFunc("DELETE /api/v1/prom-rules/{id}", s.handleDeletePromRule)
+	mux.HandleFunc("POST /api/v1/prom-rules/test", s.handleTestPromRule)
 	mux.HandleFunc("GET /api/v1/apimon/systems/{id}/hosts", s.handleAPISystemHosts)
 	mux.HandleFunc("POST /api/v1/agent/probe-results", s.handleProbeResults)
 	// Playbooks (automation)
