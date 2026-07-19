@@ -597,6 +597,7 @@ async function openIncidentDetail(id){
     window._curIncident = inc; // 供「转自动化规则」等操作取用完整事件（含时间线诊断）
     const acts=[];
     acts.push(`<button class="btn sm" data-iact="diagnose">🤖 ${I18N.t("sre.ai_diagnose","AI 诊断")}</button>`);
+    acts.push(`<button class="btn sm" data-iact="analysis-board" title="${I18N.t("sre.gen_analysis_board_title","AI 按此事件生成排障分析看板")}">📊 ${I18N.t("sre.gen_analysis_board","AI 分析看板")}</button>`);
     // 有 AI 诊断结论时，可一键把处置建议固化为「自动修复规则草稿」（停用态，需人工审核启用）
     if ((inc.timeline||[]).some(e=>e.kind==="ai_diagnosis" && e.text)) {
       acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="${I18N.t("sre.to_auto_rule_title","把诊断建议转成自动修复规则草稿，人工审核后启用")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.to_auto_rule","转自动化规则")}</button>`);
@@ -637,6 +638,14 @@ async function incidentAction(id, act){
       }
     }
     else if (act==="draft-rule"){ draftRemediationFromIncident(window._curIncident); return; } // 不走末尾刷新
+    else if (act==="analysis-board"){
+      toast(I18N.t("sre.gen_board_ing","AI 生成分析看板中，请稍候…"),"ok");
+      const r=await fetch(`${API}/dashboards/ai-from-incident`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({incident_id:+id})});
+      const j=await r.json().catch(()=>({}));
+      if(j.ok){ $("incidentDetailMask").classList.remove("show"); toast(`${I18N.t("sre.board_generated","已生成分析看板")}：${j.name}`,"ok"); switchView("dashboards"); if(typeof openDashboard==="function") await openDashboard(j.id); }
+      else toast(j.error||I18N.t("toast.operation_failed","操作失败"),"err");
+      return; // 不走末尾刷新
+    }
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
   } catch(e){ toast(I18N.t("toast.operation_failed","操作失败")+": "+e,"err"); }

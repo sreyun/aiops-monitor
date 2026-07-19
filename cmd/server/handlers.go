@@ -227,6 +227,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
 	mux.HandleFunc("POST /api/v1/dashboards/var-values", s.handleDashboardVarValues)
 	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
+	// 仪表盘 AI 闭环：自然语言生成 / 按事件生成分析看板 / 实时摘要 / 研判转工单
+	mux.HandleFunc("POST /api/v1/dashboards/ai-create", s.handleAICreateDashboard)
+	mux.HandleFunc("POST /api/v1/dashboards/ai-from-incident", s.handleAIDashboardFromIncident)
+	mux.HandleFunc("GET /api/v1/dashboards/{id}/digest", s.handleDashboardDigest)
+	mux.HandleFunc("POST /api/v1/dashboards/{id}/ai-ticket", s.handleDashboardAITicket)
 	mux.HandleFunc("GET /api/v1/apimon/systems/{id}/hosts", s.handleAPISystemHosts)
 	mux.HandleFunc("POST /api/v1/agent/probe-results", s.handleProbeResults)
 	// Playbooks (automation)

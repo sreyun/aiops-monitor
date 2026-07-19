@@ -103,6 +103,9 @@ function renderDashDetail() {
       <button class="btn ghost sm" id="dashBack">← 返回</button>
       <div class="dash-title">${esc(d.name)}${d.source && d.source.indexOf("grafana:") === 0 ? '<span class="tag">Grafana 导入</span>' : ""}</div>
       <div class="dash-head-actions">
+        <button class="btn sm" id="dashAnalyzeBtn" title="AI 解读当前看板数据">🔍 解读</button>
+        <button class="btn sm" id="dashOptimizeBtn" title="AI 评审并给优化建议">✨ 优化</button>
+        <button class="btn sm" id="dashTicketBtn" title="AI 研判 → 生成工单">🎫 建工单</button>
         ${DASH_EDIT
           ? `<button class="btn sm" id="dashAddPanel">+ 面板</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn primary sm" id="dashSaveBtn">保存</button><button class="btn sm" id="dashCancelEdit">退出编辑</button>`
           : `<button class="btn sm" id="dashEditBtn">编辑</button>`}
@@ -286,6 +289,9 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (t.closest("#dashBack")) { showDashHome(); loadDashboards(); return; }
   if (t.closest("#dashRefresh")) { renderPanels(); return; }
   if (t.closest("#dashEditBtn")) { DASH_EDIT = true; renderDashDetail(); return; }
+  if (t.closest("#dashAnalyzeBtn")) { aiAnalyzeDash(); return; }
+  if (t.closest("#dashOptimizeBtn")) { aiOptimizeDash(); return; }
+  if (t.closest("#dashTicketBtn")) { aiTicketDash(); return; }
   if (t.closest("#dashCancelEdit")) { openDashboard(CUR_DASH.id); return; }
   if (t.closest("#dashSaveBtn")) { saveCurDash(); return; }
   if (t.closest("#dashAddPanel")) { openPanelEditor(null); return; }
@@ -504,6 +510,51 @@ safeAddEventListener("dashImportSave", "click", async () => {
         openDashboard(j.id);
       } else toast("导入失败：" + (j.error || r.status), "err");
     } catch (e) { toast("导入失败：" + e, "err"); }
+  });
+});
+
+/* ---------- AI 闭环：生成 / 解读 / 优化 / 建工单 ---------- */
+async function dashDigest() {
+  try { return await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/digest`).then(r => r.json()); }
+  catch (e) { return null; }
+}
+async function aiAnalyzeDash() {
+  if (!CUR_DASH) return;
+  const d = await dashDigest();
+  if (!d || d.error) { toast("获取看板数据失败", "err"); return; }
+  openAIAssist({ task: "dashboard_analysis", title: "🔍 AI 解读 · " + CUR_DASH.name, mode: "analyze", context: d.digest || "", hint: "AI 正在解读看板实时数据…" });
+}
+async function aiOptimizeDash() {
+  if (!CUR_DASH) return;
+  const d = await dashDigest();
+  if (!d || d.error) { toast("获取看板数据失败", "err"); return; }
+  const ctx = (d.structure || "") + "\n\n【实时近况】\n" + (d.digest || "");
+  openAIAssist({ task: "dashboard_optimize", title: "✨ AI 优化 · " + CUR_DASH.name, mode: "analyze", context: ctx, hint: "AI 正在评审看板并给出优化建议…" });
+}
+async function aiTicketDash() {
+  if (!CUR_DASH) return;
+  await withLoading("dashTicketBtn", async () => {
+    try {
+      const j = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST" }).then(r => r.json());
+      if (j.ok && j.needed) toast(`已建工单 #${j.ticket_id}（${j.priority}）：${j.title}`, "ok");
+      else if (j.ok && !j.needed) toast(j.message || "AI 研判当前无明显异常，未建工单", "ok");
+      else toast("建工单失败：" + (j.error || ""), "err");
+    } catch (e) { toast("建工单失败：" + e, "err"); }
+  });
+}
+safeAddEventListener("dashAIBtn", "click", () => { $("dashAIPrompt").value = ""; $("dashAIName").value = ""; openMask("dashAIMask"); });
+safeAddEventListener("dashAICreate", "click", async () => {
+  const prompt = $("dashAIPrompt").value.trim();
+  if (!prompt) { toast("请描述你想要的看板", "err"); return; }
+  await withLoading("dashAICreate", async () => {
+    try {
+      const j = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name: $("dashAIName").value.trim() }) }).then(r => r.json());
+      if (j.ok) {
+        closeMask($("dashAIMask"));
+        toast(`已生成「${j.name}」：${j.panels} 面板` + ((j.warnings && j.warnings.length) ? `（${j.warnings.length} 处提示）` : ""), "ok");
+        openDashboard(j.id);
+      } else toast("生成失败：" + (j.error || ""), "err");
+    } catch (e) { toast("生成失败：" + e, "err"); }
   });
 });
 

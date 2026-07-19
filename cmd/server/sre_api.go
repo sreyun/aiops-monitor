@@ -1376,7 +1376,7 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	switch req.Task {
 	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis",
 		"hardware_diagnosis", "netflow_diagnosis", "checks_diagnosis", "forward_diagnosis", "apimon_diagnosis",
-		"content_audit_diagnosis":
+		"content_audit_diagnosis", "dashboard_analysis", "dashboard_optimize":
 		memKind = "diagnosis"
 	}
 	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
@@ -1433,6 +1433,16 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 	case "chart_analysis":
 		return "你是资深 SRE。以下是监控图表/指标的数据摘要。请：① 概述整体趋势与当前水位；② 指出异常点、突变、持续高位或逼近阈值的项；" +
 			"③ 推断可能原因；④ 给出可执行的排查方向或处置建议。用简洁中文、分点作答，只依据给定数据，不要编造。" + ctxBlock
+	case "dashboard_analysis":
+		return "你是资深 SRE。以下是一个监控仪表盘的实时数据摘要（各面板当前值）。请对该看板做健康研判：" +
+			"① 总体健康结论（正常/需关注/告急）；② 逐项指出异常、逼近阈值、异常趋势的面板与数值；③ 推断可能根因与关联；" +
+			"④ 给出可执行的处置建议与后续观察项；⑤ 若存在需要立即跟进的问题，明确点出并建议是否建工单。" +
+			"用简洁中文分点作答，只依据给定数据，不臆测。" + ctxBlock
+	case "dashboard_optimize":
+		return "你是可观测性专家，正在评审一个监控仪表盘。以下是它的结构（面板/类型/PromQL/单位）与实时近况。请给出【持续优化建议】：" +
+			"① 缺失的关键面板或黄金信号指标（说明补什么，并给出可用的 PromQL）；② 现有查询/聚合/单位/图例的改进点；" +
+			"③ 建议配套的告警规则或 SLO（给出触发条件/表达式）；④ 布局与信息密度、下钻变量的改进。" +
+			"用简洁中文分点、务实可执行，PromQL 用代码块给出。" + ctxBlock
 	case "audit_diagnosis":
 		return "你是安全审计与运维合规专家。以下是平台审计日志片段。请：① 识别异常/高风险操作（越权、异常登录、批量删除、配置篡改、异地/异常时间访问等）；" +
 			"② 归纳可疑模式与关联行为；③ 评估风险等级；④ 给出处置与加固建议。用简洁中文分点作答，严格基于给定日志，不臆测。" + ctxBlock
