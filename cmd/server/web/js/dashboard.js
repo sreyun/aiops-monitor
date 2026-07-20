@@ -262,15 +262,23 @@ async function loadTimeseriesPanel(p, body, from, to) {
   const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   const cid = "dashCanvas_" + p.id;
   body.innerHTML = `<div class="chart-wrap"><canvas id="${cid}"></canvas></div>`;
-  // 图表填满面板正文（面板已按 gridPos.h 占满网格行高，正文的实测高度即真实可用高度）；
-  // 不再传 title（面板头已有标题，避免画布内重复渲染标题、也不再浪费顶部空间）。
-  const chartH = Math.max(90, panelBodyH(body));
-  // Y 轴自适应数据范围（不再强制 percent 面板 0~100），否则像 CPU 常年 3~7% 会贴底、曲线只占底部一条，
-  // 上方大片留白。与 Grafana/夜莺 时序面板默认一致：按数据 min/max 自动缩放填满。
-  const args = [cid, samples, defs, null, null, { cssH: chartH }];
-  DASH_CHART_ARGS[p.id] = args;
-  createChart.apply(null, args);
+  // Y 轴自适应数据范围（不再强制 percent 面板 0~100），否则像 CPU 常年 3~7% 会贴底、曲线只占底部一条。
+  // 高度：面板已按 gridPos.h 占满网格行高，图表填满正文。在 rAF 里测量——刚插入 DOM 时正文尚未完成
+  // 布局(clientHeight≈0)会导致高度落到 90px 下限、曲线只占容器一半，故等一帧布局稳定后再测；
+  // 测不到时按 gridPos.h 反推(行高24+间距8-头/内边距~52)兜底。不再传 title(面板头已有标题)。
+  const drawTs = () => {
+    if (!document.getElementById(cid)) return;
+    let chartH = panelBodyH(body);
+    if (chartH < 120) chartH = dashRowHeight(p.grid.h || 8);
+    chartH = Math.max(90, chartH);
+    const args = [cid, samples, defs, null, null, { cssH: chartH }];
+    DASH_CHART_ARGS[p.id] = args;
+    createChart.apply(null, args);
+  };
+  requestAnimationFrame(drawTs);
 }
+// dashRowHeight：按 gridPos 行数反推面板正文可用高度（网格行高 24 + 行间距 8，扣面板头+内边距 ~52）。
+function dashRowHeight(h) { const n = Math.max(3, Math.min(48, h || 8)); return n * 24 + (n - 1) * 8 - 52; }
 async function loadInstantPanel(p, body) {
   let res;
   try {
