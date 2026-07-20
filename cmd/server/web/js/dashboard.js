@@ -265,7 +265,9 @@ async function loadTimeseriesPanel(p, body, from, to) {
   // 图表填满面板正文（面板已按 gridPos.h 占满网格行高，正文的实测高度即真实可用高度）；
   // 不再传 title（面板头已有标题，避免画布内重复渲染标题、也不再浪费顶部空间）。
   const chartH = Math.max(90, panelBodyH(body));
-  const args = [cid, samples, defs, null, unitYMax(p.unit), { cssH: chartH }];
+  // Y 轴自适应数据范围（不再强制 percent 面板 0~100），否则像 CPU 常年 3~7% 会贴底、曲线只占底部一条，
+  // 上方大片留白。与 Grafana/夜莺 时序面板默认一致：按数据 min/max 自动缩放填满。
+  const args = [cid, samples, defs, null, null, { cssH: chartH }];
   DASH_CHART_ARGS[p.id] = args;
   createChart.apply(null, args);
 }
@@ -328,7 +330,6 @@ function autoMax(series) {
   for (const s of series) { const v = +(s.Value !== undefined ? s.Value : s.value); if (v > m) m = v; }
   return m > 0 ? m * 1.1 : 1;
 }
-function unitYMax(unit) { return unit === "percent" ? 100 : (unit === "percentunit" ? 1 : null); }
 
 /* ---------- 单位格式化 ---------- */
 function fmtShort(v) {

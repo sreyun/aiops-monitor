@@ -48,7 +48,8 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"}\n" +
 	"要求：① 只用【可用指标】里真实存在的指标名，不要臆造；② 计数器类指标配合 rate()/irate() 与时间窗口；" +
 	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps）；④ 每个面板给贴切标题；" +
-	"⑤ w 为 1-24 栏宽（半宽=12、整宽=24），h 为高度行数、统一用 8（含 stat/gauge 也用 8，保持整齐不留空白）；" +
+	"⑤ 布局：timeseries/table 用 w=12、h=8（两个一行）；stat/gauge 是单值小面板，用 w=6、h=3~4 并排放同一行，" +
+	"绝不要让单个 stat 占满整行或用大高度（否则会出现大片空白）；同一行的面板尽量同高，整齐排布；" +
 	"⑥ 若适合按实例/任务下钻，加一个 query 型模板变量并在表达式里用 $变量；⑦ 面板数量控制在 4-10 个，覆盖核心黄金信号。只输出 JSON，不要额外解释。"
 
 // extractJSONObject 从 AI 回复里抽出第一个 JSON 对象（优先 ```json 代码块，否则首个 { 到末个 }）。
@@ -108,7 +109,7 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 			typ = "timeseries"
 		}
 		panel := DashPanel{ID: id, Title: strings.TrimSpace(p.Title), Type: typ, Unit: p.Unit, Text: p.Text}
-		panel.Grid = DashGrid{W: p.W, H: p.H}
+		panel.Grid = DashGrid{W: p.W, H: aiPanelHeight(typ, p.H)}
 		for _, t := range p.Targets {
 			if strings.TrimSpace(t.Expr) == "" {
 				continue
@@ -126,40 +127,55 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 	return d, warns
 }
 
-// layoutAIDashPanels 把面板按 24 栏从左到右流式排布，超宽换行，生成 gridPos。
-// 关键：把同一行内所有面板的高度归一为该行最大高度，避免「矮面板(stat)紧邻高面板(timeseries)」
-// 时留下大片空白 —— 这是 AI 生成看板空白的主因。
-func layoutAIDashPanels(panels []DashPanel) {
-	x, y, rowH, rowStart := 0, 0, 0, 0
-	flush := func(end int) {
-		for j := rowStart; j < end; j++ {
-			panels[j].Grid.Y = y
-			panels[j].Grid.H = rowH // 整行统一高度
+// aiPanelHeight 按面板类型给出合理的行高（网格行数），避免 stat/gauge 等单值面板被撑成大空白框：
+// stat 单个数字只需很矮，timeseries/table 需要较高。同时钳制 AI 乱给的极端值。
+func aiPanelHeight(typ string, h int) int {
+	switch typ {
+	case "stat":
+		if h < 3 || h > 5 {
+			return 4
 		}
-		y += rowH
+	case "gauge", "bargauge":
+		if h < 3 || h > 6 {
+			return 4
+		}
+	case "text":
+		if h < 2 || h > 6 {
+			return 3
+		}
+	default: // timeseries / table
+		if h < 4 || h > 14 {
+			return 8
+		}
 	}
+	return h
+}
+
+// layoutAIDashPanels 把面板按 24 栏从左到右流式排布，超宽换行，生成 gridPos（x,y 供排序）。
+// 各面板保留自己的类型化高度（见 aiPanelHeight）：stat 矮、timeseries 高，不做整行拔高，
+// 避免把 stat 撑成大空白框；行内同高由 aiPanelHeight + 提示词「同类同高」保证。
+func layoutAIDashPanels(panels []DashPanel) {
+	x, y, rowH := 0, 0, 0
 	for i := range panels {
 		w := panels[i].Grid.W
 		if w < 1 || w > 24 {
 			w = 12
 		}
 		h := panels[i].Grid.H
-		if h < 3 {
+		if h < 2 {
 			h = 8
 		}
-		if i > rowStart && x+w > 24 { // 换行：先定稿上一行高度
-			flush(i)
-			x, rowH, rowStart = 0, 0, i
+		if x+w > 24 {
+			x = 0
+			y += rowH
+			rowH = 0
 		}
-		panels[i].Grid.X = x
-		panels[i].Grid.W = w
-		panels[i].Grid.H = h
+		panels[i].Grid = DashGrid{X: x, Y: y, W: w, H: h}
 		x += w
 		if h > rowH {
 			rowH = h
 		}
 	}
-	flush(len(panels)) // 最后一行
 }
 
 // generateDashboardViaAI 是生成主流程：汇集可用指标上下文 → aiComplete → 抽 JSON → 校验落盘。
