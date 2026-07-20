@@ -24,7 +24,7 @@ const sampleGrafanaJSON = `{
         "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}},
         "targets": [ {"expr": "disk_used_ratio"} ] }
     ]},
-    { "id": 5, "type": "heatmap", "title": "占比", "gridPos": {"x":6,"y":8,"w":6,"h":4},
+    { "id": 5, "type": "nodeGraph", "title": "占比", "gridPos": {"x":6,"y":8,"w":6,"h":4},
       "targets": [ {"expr": "sum by (job)(up)"} ] }
   ]
 }`
@@ -70,8 +70,8 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	if byID[4].Type != "gauge" || byID[4].Unit != "percentunit" || byID[4].Max == nil || *byID[4].Max != 1 {
 		t.Fatalf("嵌套 gauge 映射错误: %+v", byID[4])
 	}
-	if byID[5].Type != "unsupported" || byID[5].RawType != "heatmap" {
-		t.Fatalf("heatmap 应为 unsupported 占位: %+v", byID[5])
+	if byID[5].Type != "unsupported" || byID[5].RawType != "nodeGraph" {
+		t.Fatalf("nodeGraph 应为 unsupported 占位: %+v", byID[5])
 	}
 	if byID[1].Grid.W != 12 || byID[3].Grid.W != 6 {
 		t.Fatalf("gridPos 宽度未保留")

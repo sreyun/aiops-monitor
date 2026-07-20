@@ -3233,6 +3233,34 @@ select:focus {
 .dash-barcol-bar { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px; transition: height .4s ease; }
 .dash-barcol-lbl { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
+/* State timeline（状态色带：每序列一条，按值/阈值上色） */
+.dash-states { display: flex; flex-direction: column; justify-content: center; gap: 6px; width: 100%; height: 100%; }
+.dash-state-row { display: flex; align-items: center; gap: 10px; }
+.dash-state-lbl { width: 130px; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-state-track { flex: 1; display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: var(--bg3); }
+.dash-state-seg { flex: 1 1 0; min-width: 0; }
+.dash-state-seg:hover { filter: brightness(1.15); }
+
+/* Heatmap（时间×序列 密度色块） */
+.dash-heatmap { display: flex; flex-direction: column; gap: 3px; width: 100%; height: 100%; overflow: auto; justify-content: center; }
+.dash-heat-row { display: flex; align-items: center; gap: 10px; }
+.dash-heat-lbl { width: 120px; font-size: 11px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-heat-cells { flex: 1; display: flex; height: 15px; border-radius: 3px; overflow: hidden; gap: 1px; }
+.dash-heat-cell { flex: 1 1 0; min-width: 0; }
+.dash-heat-cell:hover { outline: 1px solid var(--txt); outline-offset: -1px; }
+
+/* Alert list（平台告警列表） */
+.dash-alerts { display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; overflow: auto; }
+.dash-alerts-ok { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--ok); font-size: 14px; font-weight: 600; }
+.dash-alert-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+.dash-alert-row:hover { background: var(--panel2); }
+.dash-alert-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dash-alert-row.crit .dash-alert-dot { background: var(--crit); }
+.dash-alert-row.warn .dash-alert-dot { background: var(--warn); }
+.dash-alert-row.info .dash-alert-dot { background: var(--accent); }
+.dash-alert-msg { flex: 1; min-width: 0; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-alert-host { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; white-space: nowrap; }
+
 /* Table（细边框 · 表头底色 · 行悬浮） */
 .dash-table-wrap { overflow: auto; max-height: 100%; height: 100%; border-radius: 6px; }
 .dash-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -3253,7 +3281,9 @@ select:focus {
 .dash-unsupported { font-size: 12px; color: var(--warn); padding: 8px 4px; }
 .dash-unsupported-q { margin-top: 6px; font-family: ui-monospace, monospace; color: var(--muted); font-size: 11px; word-break: break-all; }
 
-/* 编辑器行 */
+/* 编辑器：分区标题 + 查询/变量行 */
+.editor-sec { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .3px; margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.editor-sec:first-child { margin-top: 0; }
 .panel-target-row, .var-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .mini-check { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 /* 行内裸 input 会被全局 reset 剥成无边框，显式补齐为与全局 .field input 一致的干净外观 */

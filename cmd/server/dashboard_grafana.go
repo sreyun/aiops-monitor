@@ -207,6 +207,16 @@ func mapGrafanaPanelType(t string) string {
 		return "piechart"
 	case "barchart":
 		return "barchart"
+	case "histogram":
+		return "histogram"
+	case "state-timeline", "status-history":
+		return "state-timeline"
+	case "heatmap":
+		return "heatmap"
+	case "alertlist":
+		return "alertlist"
+	case "logs":
+		return "logs"
 	case "table", "table-old":
 		return "table"
 	case "text":

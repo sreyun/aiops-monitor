@@ -174,14 +174,14 @@ function renderPanels() {
     // 「矮面板(如 stat)紧邻高面板(timeseries)时下方大片空白」的根因（原来靠内容撑高会留缝）。
     const h = Math.max(3, Math.min(48, p.grid.h || 8));
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
-    const edit = DASH_EDIT ? `<div class="panel-edit-actions">
-        <button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
+    const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
+    const editBtns = DASH_EDIT ? `<button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
         <button class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
         <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
-        <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>
-      </div>` : "";
+        <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
+    const actions = (aiBtn || editBtns) ? `<div class="panel-edit-actions">${aiBtn}${editBtns}</div>` : "";
     return `<div class="dash-panel dp-${esc(p.type)}" style="grid-column:span ${w}; grid-row:span ${h}" data-panel="${p.id}">
-      <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${edit}</div>
+      <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${actions}</div>
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
     </div>`;
   }).join("");
@@ -205,6 +205,7 @@ async function loadPanel(p) {
     body.innerHTML = `<div class="dash-unsupported">⚠ 暂不支持的面板类型${p.raw_type ? "：" + esc(p.raw_type) : ""}<div class="dash-unsupported-q">${(p.targets || []).map(t => esc(t.expr)).join("<br>") || "（无查询）"}</div></div>`;
     return;
   }
+  if (p.type === "alertlist") { await loadAlertListPanel(p, body); return; } // 无需查询：读平台告警
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
   body.innerHTML = `<div class="dash-empty">加载中…</div>`;
   const { from, to } = dashRange();
@@ -214,6 +215,9 @@ async function loadPanel(p) {
   else if (p.type === "gauge") await loadGaugePanel(p, body);
   else if (p.type === "piechart" || p.type === "pie") await loadPiePanel(p, body);
   else if (p.type === "barchart" || p.type === "bar") await loadBarPanel(p, body);
+  else if (p.type === "histogram") await loadHistogramPanel(p, body);
+  else if (p.type === "state-timeline" || p.type === "statetimeline") await loadStateTimelinePanel(p, body, from, to);
+  else if (p.type === "heatmap") await loadHeatmapPanel(p, body, from, to);
   else await loadInstantPanel(p, body); // bargauge / table
 }
 // 即时查询公共入口：返回序列数组，出错/无数据时写占位并返回 null。
@@ -410,6 +414,83 @@ function svgDonut(items, total) {
   }).join("");
   return `<svg viewBox="0 0 100 100" class="pie-svg">${segs}</svg>`;
 }
+// rangeSeries：区间查询公共入口（取第一个 target 的多序列），出错/无数据写占位并返回 null。
+async function rangeSeries(p, body, from, to) {
+  let res;
+  try { res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, from, to, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json()); }
+  catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return null; }
+  if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return null; }
+  const series = (res && res.series) || [];
+  if (!series.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return null; }
+  return series;
+}
+// loadHistogramPanel：把各序列当前值分箱统计，画分布直方图（纵向柱）。
+async function loadHistogramPanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  const vals = series.map(seriesVal2).filter(v => isFinite(v));
+  if (!vals.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
+  const mn = Math.min(...vals), mx = Math.max(...vals);
+  const bins = Math.min(16, Math.max(4, Math.round(Math.sqrt(vals.length)) + 2));
+  const w = (mx - mn) / bins || 1;
+  const counts = new Array(bins).fill(0);
+  vals.forEach(v => { let i = Math.floor((v - mn) / w); if (i >= bins) i = bins - 1; if (i < 0) i = 0; counts[i]++; });
+  const mxc = Math.max(...counts, 1);
+  body.innerHTML = `<div class="dash-bars">` + counts.map((c, i) => {
+    const lo = mn + i * w;
+    return `<div class="dash-barcol" title="${fmtUnit(lo, p.unit)} ~ ${fmtUnit(lo + w, p.unit)}：${c}">
+        <div class="dash-barcol-v">${c}</div>
+        <div class="dash-barcol-track"><div class="dash-barcol-bar" style="height:${Math.max(1, c / mxc * 100)}%; background:var(--accent)"></div></div>
+        <div class="dash-barcol-lbl">${fmtShort(lo)}</div></div>`;
+  }).join("") + `</div>`;
+}
+// loadStateTimelinePanel：每序列一条状态色带，按值/阈值上色（可用/故障、达标/超标），适合可用性。
+async function loadStateTimelinePanel(p, body, from, to) {
+  const series = await rangeSeries(p, body, from, to);
+  if (!series) return;
+  const labels = dashLegends(series.map(s => ({ labels: s.labels || {}, legendFmt: p.targets[0].legend })));
+  body.innerHTML = `<div class="dash-states">` + series.slice(0, 16).map((s, idx) => {
+    const pts = s.points || [];
+    const segs = pts.map(pt => `<span class="dash-state-seg" style="background:${stateColor(pt[1], p.unit)}" title="${fmtLogTs(pt[0] * 1000)} · ${fmtUnit(pt[1], p.unit)}"></span>`).join("");
+    return `<div class="dash-state-row"><div class="dash-state-lbl" title="${esc(labels[idx])}">${esc(labels[idx])}</div><div class="dash-state-track">${segs}</div></div>`;
+  }).join("") + `</div>`;
+}
+function stateColor(v, unit) {
+  if (unit === "percent" || unit === "percentunit") return statColor(v, unit);
+  return v <= 0 ? "var(--crit)" : "var(--ok)";
+}
+// loadHeatmapPanel：时间×序列 的密度色块（蓝→黄→红映射数值高低），适合看多实例分布。
+async function loadHeatmapPanel(p, body, from, to) {
+  const series = await rangeSeries(p, body, from, to);
+  if (!series) return;
+  const rows = series.slice(0, 24);
+  const labels = dashLegends(rows.map(s => ({ labels: s.labels || {}, legendFmt: p.targets[0].legend })));
+  let mn = Infinity, mx = -Infinity;
+  rows.forEach(s => (s.points || []).forEach(pt => { if (pt[1] < mn) mn = pt[1]; if (pt[1] > mx) mx = pt[1]; }));
+  const rng = (mx - mn) || 1;
+  body.innerHTML = `<div class="dash-heatmap">` + rows.map((s, idx) => {
+    const pts = downsample(s.points || [], 80);
+    const cells = pts.map(pt => `<span class="dash-heat-cell" style="background:${heatColor((pt[1] - mn) / rng)}" title="${fmtLogTs(pt[0] * 1000)} · ${fmtUnit(pt[1], p.unit)}"></span>`).join("");
+    return `<div class="dash-heat-row"><div class="dash-heat-lbl" title="${esc(labels[idx])}">${esc(labels[idx])}</div><div class="dash-heat-cells">${cells}</div></div>`;
+  }).join("") + `</div>`;
+}
+function heatColor(t) { t = Math.max(0, Math.min(1, t)); const hue = (1 - t) * 220; return `hsl(${hue.toFixed(0)}, 72%, ${(46 + t * 8).toFixed(0)}%)`; }
+function downsample(pts, n) { if (pts.length <= n) return pts; const step = pts.length / n, out = []; for (let i = 0; i < n; i++) out.push(pts[Math.floor(i * step)]); return out; }
+// loadAlertListPanel：读平台当前告警（与告警/事件闭环打通），按级别上色。可选 label 过滤（面板查询里填关键词）。
+async function loadAlertListPanel(p, body) {
+  let alerts;
+  try { alerts = await fetch(`${API}/alerts`).then(r => r.json()); } catch (e) { body.innerHTML = `<div class="dash-empty">加载失败</div>`; return; }
+  alerts = Array.isArray(alerts) ? alerts : [];
+  const kw = ((p.targets && p.targets[0] && p.targets[0].expr) || "").trim().toLowerCase();
+  if (kw) alerts = alerts.filter(a => JSON.stringify(a).toLowerCase().includes(kw));
+  if (!alerts.length) { body.innerHTML = `<div class="dash-alerts-ok">✓ 当前无告警</div>`; return; }
+  const rank = { critical: 0, warning: 1, info: 2 };
+  alerts.sort((a, b) => (rank[a.level] ?? 3) - (rank[b.level] ?? 3));
+  body.innerHTML = `<div class="dash-alerts">` + alerts.slice(0, 200).map(a => {
+    const lv = a.level === "critical" ? "crit" : a.level === "warning" ? "warn" : "info";
+    return `<div class="dash-alert-row ${lv}"><span class="dash-alert-dot"></span><span class="dash-alert-msg" title="${esc(a.message || "")}">${esc(a.message || a.type || "告警")}</span>${a.hostname ? `<span class="dash-alert-host">${esc(a.hostname)}</span>` : ""}</div>`;
+  }).join("") + `</div>`;
+}
 function legendFor(fmt, labels) {
   if (fmt && fmt.trim()) return fmt.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (labels[k] !== undefined ? labels[k] : ""));
   const name = labels.__name__ || "";
@@ -532,6 +613,7 @@ function handlePanelAction(act, pid) {
   const panels = CUR_DASH.panels;
   const idx = panels.findIndex(p => p.id === pid);
   if (idx < 0) return;
+  if (act === "ai") { aiAnalyzePanel(panels[idx]); return; }
   if (act === "edit") { openPanelEditor(panels[idx]); return; }
   if (act === "del") { if (confirm("删除该面板？")) { panels.splice(idx, 1); renderPanels(); } return; }
   // 上/下移：交换网格 y（保序渲染）
@@ -580,13 +662,15 @@ function renderPanelTargets() {
 }
 function panelTypeToggle() {
   const ty = $("panelType").value;
+  const noTargets = ty === "text" || ty === "alertlist";
   $("panelTextRow").style.display = ty === "text" ? "" : "none";
-  $("panelTargetsWrap").style.display = ty === "text" ? "none" : "";
-  $("panelUnitRow").style.display = (ty === "text" || ty === "logs") ? "none" : "";
-  const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = ty === "text" ? "none" : "";
+  $("panelTargetsWrap").style.display = noTargets ? "none" : "";
+  const qsec = $("panelQuerySec"); if (qsec) qsec.style.display = (ty === "text") ? "none" : "";
+  $("panelUnitRow").style.display = (ty === "text" || ty === "logs" || ty === "alertlist") ? "none" : "";
+  const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = noTargets ? "none" : "";
   fillPanelDS(ty, $("panelDS").value);
-  const lbl = document.querySelector("#panelTargetsWrap > label");
-  if (lbl) lbl.textContent = ty === "logs" ? "LogQL 查询（Loki 数据源）" : "查询（PromQL，可多条；支持 $变量 与 {{标签}} 图例）";
+  const hint = $("panelQueryHint");
+  if (hint) hint.innerHTML = ty === "logs" ? "LogQL 查询（请选 Loki 数据源）" : ty === "alertlist" ? "告警列表读取平台当前告警，无需查询。" : "PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。";
 }
 safeAddEventListener("panelType", "change", panelTypeToggle);
 safeAddEventListener("panelAddTarget", "click", () => { PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); });
@@ -602,8 +686,9 @@ safeAddEventListener("panelSave", "click", () => {
   syncPanelTargets();
   const ty = $("panelType").value;
   const title = $("panelTitle").value.trim();
-  const targets = ty === "text" ? [] : PANEL_TARGETS_DRAFT.filter(t => t.expr.trim()).map(t => ({ expr: t.expr.trim(), legend: t.legend.trim() }));
-  if (ty !== "text" && !targets.length) { toast(ty === "logs" ? "请填写 LogQL 查询" : "请至少填写一条 PromQL 查询", "err"); return; }
+  const noTargets = ty === "text" || ty === "alertlist";
+  const targets = noTargets ? [] : PANEL_TARGETS_DRAFT.filter(t => t.expr.trim()).map(t => ({ expr: t.expr.trim(), legend: t.legend.trim() }));
+  if (!noTargets && !targets.length) { toast(ty === "logs" ? "请填写 LogQL 查询" : "请至少填写一条 PromQL 查询", "err"); return; }
   if (ty === "logs" && !$("panelDS").value) { toast("日志面板需选择一个 Loki 数据源", "err"); return; }
   const min = $("panelMin").value.trim(), max = $("panelMax").value.trim();
   const panel = {
@@ -756,22 +841,63 @@ safeAddEventListener("dashImportSave", "click", async () => {
 });
 
 /* ---------- AI 闭环：生成 / 解读 / 优化 / 建工单 ---------- */
-async function dashDigest() {
-  try { return await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/digest`).then(r => r.json()); }
-  catch (e) { return null; }
+// panelDigest：抓取单个面板当前数据并汇成文本（用当前选中的模板变量值，保证与所见一致）。
+async function panelDigest(p) {
+  let s = "面板：" + (p.title || "(未命名)") + "　类型：" + (p.type || "") + (p.unit ? "　单位：" + p.unit : "") + "\n";
+  if (p.type === "alertlist") {
+    try { const al = await fetch(`${API}/alerts`).then(r => r.json()); const arr = Array.isArray(al) ? al : []; s += "当前平台告警 " + arr.length + " 条：\n" + arr.slice(0, 30).map(a => `- [${a.level}] ${a.message || a.type || ""} ${a.hostname || ""}`).join("\n"); }
+    catch (e) { s += "（告警读取失败）"; }
+    return s;
+  }
+  if (!(p.targets || []).length) return s + "（无查询）";
+  try {
+    const r = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
+    if (r && r.available === false) return s + "（数据源不可用）";
+    const vec = (r && r.series) || [];
+    if (!vec.length) return s + "（当前无数据）";
+    s += vec.slice(0, 30).map(x => { const lbl = legendFor(p.targets[0].legend, seriesLabels(x)); return `- ${lbl || "value"}: ${fmtUnit(seriesVal2(x), p.unit)}`; }).join("\n");
+  } catch (e) { s += "（读取失败）"; }
+  return s;
+}
+// aiAnalyzePanel：对单个面板实时数据做 AI 解读（复用 /ai/assist chart_analysis）。
+async function aiAnalyzePanel(p) {
+  if (!p) return;
+  const digest = await panelDigest(p);
+  openAIAssist({ task: "chart_analysis", title: "🔍 AI 解读 · " + (p.title || "面板"), mode: "analyze", context: digest, hint: "AI 正在解读该面板数据…" });
+}
+// buildDashDigestClient：在前端逐面板抓取当前数据汇成看板级摘要——关键：用真实选中的变量值
+// （DASH_VARVALS），修复服务端摘要因 d.Vars.Current 为空、$变量被替换成空而查不到数据的问题。
+async function buildDashDigestClient() {
+  if (!CUR_DASH) return "";
+  const panels = (CUR_DASH.panels || []).filter(p => p.type !== "text" && p.type !== "unsupported").slice(0, 40);
+  let out = "看板：" + CUR_DASH.name + "\n";
+  const sel = (CUR_DASH.vars || []).map(v => v.name + "=" + (DASH_VARVALS[v.name] || "")).filter(x => !x.endsWith("=")).join(", ");
+  if (sel) out += "当前变量：" + sel + "\n";
+  const parts = await Promise.all(panels.map(p => panelDigest(p).catch(() => "")));
+  return out + "\n" + parts.filter(Boolean).join("\n\n");
+}
+// dashStructureClient：看板结构（面板类型/查询/单位），供 AI 优化审阅。
+function dashStructureClient() {
+  if (!CUR_DASH) return "";
+  let s = "看板结构：" + CUR_DASH.name + "\n";
+  if ((CUR_DASH.vars || []).length) s += "模板变量：" + CUR_DASH.vars.map(v => v.name + "(" + v.type + ")").join(", ") + "\n";
+  (CUR_DASH.panels || []).forEach(p => {
+    s += `- [${p.type}] ${p.title || ""}` + (p.unit ? " 单位=" + p.unit : "") + "\n";
+    (p.targets || []).forEach(t => { s += "    " + t.expr + "\n"; });
+  });
+  return s;
 }
 async function aiAnalyzeDash() {
   if (!CUR_DASH) return;
-  const d = await dashDigest();
-  if (!d || d.error) { toast("获取看板数据失败", "err"); return; }
-  openAIAssist({ task: "dashboard_analysis", title: "🔍 AI 解读 · " + CUR_DASH.name, mode: "analyze", context: d.digest || "", hint: "AI 正在解读看板实时数据…" });
+  toast("读取各面板数据…", "ok");
+  const digest = await buildDashDigestClient();
+  openAIAssist({ task: "dashboard_analysis", title: "🔍 AI 解读 · " + CUR_DASH.name, mode: "analyze", context: digest, hint: "AI 正在解读看板实时数据…" });
 }
 async function aiOptimizeDash() {
   if (!CUR_DASH) return;
-  const d = await dashDigest();
-  if (!d || d.error) { toast("获取看板数据失败", "err"); return; }
-  const ctx = (d.structure || "") + "\n\n【实时近况】\n" + (d.digest || "");
+  toast("读取各面板数据…", "ok");
   const dashId = CUR_DASH.id;
+  const ctx = dashStructureClient() + "\n\n【各面板实时数据】\n" + (await buildDashDigestClient());
   openAIAssist({
     task: "dashboard_optimize", title: "✨ AI 优化 · " + CUR_DASH.name, mode: "analyze",
     context: ctx, hint: "AI 正在评审看板并给出优化建议…",
@@ -793,8 +919,9 @@ async function aiOptimizeDash() {
 async function aiTicketDash() {
   if (!CUR_DASH) return;
   await withLoading("dashTicketBtn", async () => {
+    const digest = await buildDashDigestClient();
     try {
-      const j = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST" }).then(r => r.json());
+      const j = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ digest }) }).then(r => r.json());
       if (j.ok && j.needed) toast(`已建工单 #${j.ticket_id}（${j.priority}）：${j.title}`, "ok");
       else if (j.ok && !j.needed) toast(j.message || "AI 研判当前无明显异常，未建工单", "ok");
       else toast("建工单失败：" + (j.error || ""), "err");

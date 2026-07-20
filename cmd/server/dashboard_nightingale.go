@@ -176,6 +176,8 @@ func mapN9ePanelType(t string) string {
 		return "piechart"
 	case "barchart":
 		return "barchart"
+	case "heatmap":
+		return "heatmap"
 	case "table":
 		return "table"
 	case "text":

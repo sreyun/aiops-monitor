@@ -43,13 +43,14 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"{\n" +
 	`  "name": "看板名称",` + "\n" +
 	`  "vars": [{"name":"instance","type":"query","query":"label_values(<指标>, <标签>)"}],` + "\n" +
-	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|piechart|barchart|bargauge|table|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
+	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|piechart|barchart|bargauge|histogram|state-timeline|heatmap|table|alertlist|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
 	"要求：① 只用【可用指标】里真实存在的指标名，不要臆造；② 计数器类指标配合 rate()/irate() 与时间窗口；" +
 	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps）；④ 每个面板给贴切标题；" +
-	"⑤ 选型：随时间变化的指标用 timeseries；单个当前值(如运行时间/在线数)用 stat；占比/利用率(0-100%)可用 gauge(圆环)；" +
-	"构成占比(如各状态/各分区)用 piechart；类别排行 top-N 用 barchart；明细列表用 table；日志用 text 之外的说明。" +
+	"⑤ 选型：随时间变化的指标用 timeseries；单个当前值(运行时间/在线数)用 stat；占比/利用率(0-100%)用 gauge(圆环)；" +
+	"构成占比(各状态/各分区)用 piechart；类别排行 top-N 用 barchart；数值分布用 histogram；" +
+	"可用性/状态随时间(up/down)用 state-timeline；多实例密度对比用 heatmap；明细用 table；平台当前告警用 alertlist(无需查询)。" +
 	"⑥ 布局：timeseries/table/piechart/barchart 用 w=12、h=8（两个一行）；stat 用 w=6、h=4 并排放同一行，gauge 用 w=6~8、h=6；" +
 	"绝不要让单个 stat 占满整行或用大高度（否则会出现大片空白）；同一行的面板尽量同高，整齐排布；" +
 	"⑥ 若适合按实例/任务下钻，加一个 query 型模板变量并在表达式里用 $变量；⑦ 面板数量控制在 4-10 个，覆盖核心黄金信号。只输出 JSON，不要额外解释。"
@@ -106,11 +107,14 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 	for _, p := range spec.Panels {
 		typ := p.Type
 		switch typ {
-		case "timeseries", "stat", "gauge", "bargauge", "table", "text", "piechart", "barchart":
+		case "timeseries", "stat", "gauge", "bargauge", "table", "text", "piechart", "barchart",
+			"histogram", "state-timeline", "heatmap", "alertlist", "logs":
 		case "pie":
 			typ = "piechart"
 		case "bar":
 			typ = "barchart"
+		case "statetimeline":
+			typ = "state-timeline"
 		default:
 			typ = "timeseries"
 		}
@@ -122,7 +126,7 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 			}
 			panel.Targets = append(panel.Targets, DashTarget{Expr: strings.TrimSpace(t.Expr), Legend: strings.TrimSpace(t.Legend)})
 		}
-		if typ != "text" && len(panel.Targets) == 0 {
+		if typ != "text" && typ != "alertlist" && len(panel.Targets) == 0 {
 			warns = append(warns, "面板「"+panel.Title+"」无有效查询，已跳过")
 			continue
 		}
@@ -153,7 +157,11 @@ func aiPanelHeight(typ string, h int) int {
 		if h < 2 || h > 6 {
 			return 3
 		}
-	default: // timeseries / table / piechart / barchart
+	case "state-timeline", "histogram":
+		if h < 3 || h > 10 {
+			return 6
+		}
+	default: // timeseries / table / piechart / barchart / heatmap / alertlist / logs
 		if h < 4 || h > 14 {
 			return 8
 		}
@@ -538,7 +546,15 @@ func (s *Server) handleDashboardAITicket(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用"})
 		return
 	}
-	digest := s.buildDashboardDigest(d)
+	// 前端已带真实选中变量值的数据摘要优先（服务端摘要因 d.Vars.Current 为空、变量替换成空而查不到数据）。
+	var req struct {
+		Digest string `json:"digest"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	digest := strings.TrimSpace(req.Digest)
+	if digest == "" {
+		digest = s.buildDashboardDigest(d)
+	}
 	sys := "你是 SRE 值班工程师。基于以下监控看板的实时数据，判断是否存在需要跟进的问题，并产出一条【工单草案】。" +
 		"严格只输出一个 JSON 对象：{\"needed\":true/false,\"title\":\"简明工单标题\",\"priority\":\"p1|p2|p3|p4\",\"summary\":\"问题摘要+建议处置（中文，可分点）\"}。" +
 		"needed=false 表示当前无异常、无需建单。优先级：p1=严重故障影响服务，p2=重要异常需尽快处理，p3=一般问题，p4=优化项。只输出 JSON。"

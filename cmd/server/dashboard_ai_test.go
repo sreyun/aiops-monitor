@@ -25,7 +25,7 @@ func TestSanitizeAIDash(t *testing.T) {
       "vars": [{"name":"instance","type":"weird"}],
       "panels": [
         {"title":"A","type":"timeseries","w":12,"h":8,"targets":[{"expr":"up"}]},
-        {"title":"B","type":"heatmap","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
+        {"title":"B","type":"nodegraph","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
         {"title":"C","type":"stat","w":6,"h":4,"targets":[{"expr":"  "}]},
         {"title":"D","type":"text","w":24,"h":3,"text":"hi"},
         {"title":"E","type":"timeseries","w":18,"h":8,"targets":[{"expr":"y"}]}

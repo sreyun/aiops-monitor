@@ -1575,29 +1575,37 @@
     <div class="modal-head"><h3 id="panelEditTitle">编辑面板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <input type="hidden" id="panelId">
+      <div class="editor-sec">基本</div>
       <div class="grid2">
         <div class="field"><label>标题</label><input type="text" id="panelTitle" placeholder="如 CPU 使用率"></div>
         <div class="field"><label>类型</label><div class="select-wrap"><select id="panelType">
-          <option value="timeseries">时序曲线</option><option value="stat">数值 Stat</option><option value="gauge">仪表盘 Gauge</option><option value="piechart">饼图 Pie</option><option value="barchart">柱状图 Bar</option><option value="bargauge">条形 BarGauge</option><option value="table">表格 Table</option><option value="logs">日志 Logs</option><option value="text">文本 Text</option>
+          <optgroup label="趋势"><option value="timeseries">时序曲线</option><option value="state-timeline">状态时间线</option><option value="heatmap">热力图</option></optgroup>
+          <optgroup label="单值 / 分布"><option value="stat">数值 Stat</option><option value="gauge">仪表盘 Gauge</option><option value="histogram">直方图</option></optgroup>
+          <optgroup label="构成 / 排行"><option value="piechart">饼图 Pie</option><option value="barchart">柱状图 Bar</option><option value="bargauge">条形 BarGauge</option></optgroup>
+          <optgroup label="明细 / 平台"><option value="table">表格 Table</option><option value="logs">日志 Logs</option><option value="alertlist">告警列表</option><option value="text">文本 Text</option></optgroup>
         </select></div></div>
       </div>
       <div class="field" id="panelDSRow"><label>数据源 <span class="tag">留空=继承看板默认</span></label><div class="select-wrap"><select id="panelDS"></select></div></div>
-      <div class="grid2">
-        <div class="field"><label>宽度（栏 1–24）</label><input type="text" id="panelW" class="mono" value="12"></div>
-        <div class="field"><label>高度（行 ×30px）</label><input type="text" id="panelH" class="mono" value="8"></div>
-      </div>
-      <div class="grid2" id="panelUnitRow">
-        <div class="field"><label>单位</label><div class="select-wrap"><select id="panelUnit">
-          <option value="">无</option><option value="short">短数 K/M/G</option><option value="percent">百分比 0-100</option><option value="percentunit">百分比 0-1</option><option value="bytes">字节</option><option value="Bps">字节/秒</option><option value="s">秒</option><option value="ms">毫秒</option><option value="reqps">req/s</option>
-        </select></div></div>
-        <div class="field" id="panelRangeRow"><label>量程 min / max（gauge，可空）</label><div style="display:flex; gap:6px"><input type="text" id="panelMin" class="mono" placeholder="min"><input type="text" id="panelMax" class="mono" placeholder="max"></div></div>
-      </div>
+
+      <div class="editor-sec" id="panelQuerySec">查询</div>
       <div id="panelTargetsWrap">
-        <label>查询（PromQL，可多条；支持 $变量 与 {{标签}} 图例）</label>
         <div id="panelTargets"></div>
         <button class="btn sm" id="panelAddTarget" type="button">+ 添加查询</button>
+        <div class="hint" id="panelQueryHint" style="margin-top:6px">PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。</div>
       </div>
       <div class="field" id="panelTextRow" style="display:none"><label>文本内容（支持基本 HTML）</label><textarea id="panelText" rows="4"></textarea></div>
+
+      <div class="editor-sec">显示</div>
+      <div class="grid2" id="panelUnitRow">
+        <div class="field"><label>单位</label><div class="select-wrap"><select id="panelUnit">
+          <option value="">无</option><option value="short">短数 K/M/G</option><option value="percent">百分比 0-100</option><option value="percentunit">百分比 0-1</option><option value="bytes">字节</option><option value="Bps">字节/秒</option><option value="s">秒/时长</option><option value="ms">毫秒</option><option value="reqps">req/s</option>
+        </select></div></div>
+        <div class="field" id="panelRangeRow"><label>量程 min / max（gauge/bargauge，可空）</label><div style="display:flex; gap:6px"><input type="text" id="panelMin" class="mono" placeholder="min"><input type="text" id="panelMax" class="mono" placeholder="max"></div></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>宽度（栏 1–24）</label><input type="text" id="panelW" class="mono" value="12"></div>
+        <div class="field"><label>高度（行）</label><input type="text" id="panelH" class="mono" value="8"></div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="panelSave">保存面板</button></div>
   </div>
