@@ -43,12 +43,14 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"{\n" +
 	`  "name": "看板名称",` + "\n" +
 	`  "vars": [{"name":"instance","type":"query","query":"label_values(<指标>, <标签>)"}],` + "\n" +
-	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|table|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
+	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|piechart|barchart|bargauge|table|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
 	"要求：① 只用【可用指标】里真实存在的指标名，不要臆造；② 计数器类指标配合 rate()/irate() 与时间窗口；" +
 	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps）；④ 每个面板给贴切标题；" +
-	"⑤ 布局：timeseries/table 用 w=12、h=8（两个一行）；stat/gauge 是单值小面板，用 w=6、h=3~4 并排放同一行，" +
+	"⑤ 选型：随时间变化的指标用 timeseries；单个当前值(如运行时间/在线数)用 stat；占比/利用率(0-100%)可用 gauge(圆环)；" +
+	"构成占比(如各状态/各分区)用 piechart；类别排行 top-N 用 barchart；明细列表用 table；日志用 text 之外的说明。" +
+	"⑥ 布局：timeseries/table/piechart/barchart 用 w=12、h=8（两个一行）；stat 用 w=6、h=4 并排放同一行，gauge 用 w=6~8、h=6；" +
 	"绝不要让单个 stat 占满整行或用大高度（否则会出现大片空白）；同一行的面板尽量同高，整齐排布；" +
 	"⑥ 若适合按实例/任务下钻，加一个 query 型模板变量并在表达式里用 $变量；⑦ 面板数量控制在 4-10 个，覆盖核心黄金信号。只输出 JSON，不要额外解释。"
 
@@ -104,7 +106,11 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 	for _, p := range spec.Panels {
 		typ := p.Type
 		switch typ {
-		case "timeseries", "stat", "gauge", "bargauge", "table", "text":
+		case "timeseries", "stat", "gauge", "bargauge", "table", "text", "piechart", "barchart":
+		case "pie":
+			typ = "piechart"
+		case "bar":
+			typ = "barchart"
 		default:
 			typ = "timeseries"
 		}
@@ -135,15 +141,19 @@ func aiPanelHeight(typ string, h int) int {
 		if h < 3 || h > 5 {
 			return 4
 		}
-	case "gauge", "bargauge":
-		if h < 3 || h > 6 {
-			return 4
+	case "bargauge":
+		if h < 3 || h > 8 {
+			return 5
+		}
+	case "gauge":
+		if h < 4 || h > 8 {
+			return 6
 		}
 	case "text":
 		if h < 2 || h > 6 {
 			return 3
 		}
-	default: // timeseries / table
+	default: // timeseries / table / piechart / barchart
 		if h < 4 || h > 14 {
 			return 8
 		}

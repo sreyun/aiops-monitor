@@ -203,6 +203,10 @@ func mapGrafanaPanelType(t string) string {
 		return "gauge"
 	case "bargauge":
 		return "bargauge"
+	case "piechart", "grafana-piechart-panel", "piechart-old":
+		return "piechart"
+	case "barchart":
+		return "barchart"
 	case "table", "table-old":
 		return "table"
 	case "text":

@@ -208,13 +208,34 @@ async function loadPanel(p) {
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
   body.innerHTML = `<div class="dash-empty">加载中…</div>`;
   const { from, to } = dashRange();
-  if (p.type === "logs") {
-    await loadLogsPanel(p, body, from, to);
-  } else if (p.type === "timeseries") {
-    await loadTimeseriesPanel(p, body, from, to);
-  } else {
-    await loadInstantPanel(p, body);
-  }
+  if (p.type === "logs") await loadLogsPanel(p, body, from, to);
+  else if (p.type === "timeseries") await loadTimeseriesPanel(p, body, from, to);
+  else if (p.type === "stat") await loadStatPanel(p, body, from, to);
+  else if (p.type === "gauge") await loadGaugePanel(p, body);
+  else if (p.type === "piechart" || p.type === "pie") await loadPiePanel(p, body);
+  else if (p.type === "barchart" || p.type === "bar") await loadBarPanel(p, body);
+  else await loadInstantPanel(p, body); // bargauge / table
+}
+// 即时查询公共入口：返回序列数组，出错/无数据时写占位并返回 null。
+async function instantQuery(p, body) {
+  let res;
+  try { res = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json()); }
+  catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return null; }
+  if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return null; }
+  const series = (res && res.series) || [];
+  if (!series.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return null; }
+  return series;
+}
+function seriesVal2(s) { return +(s.Value !== undefined ? s.Value : s.value); }
+function seriesLabels(s) { return s.Labels || s.labels || {}; }
+// statColor：按阈值给颜色（percent / percentunit / 有量程的按占比；否则中性主色）。
+function statColor(v, unit, min, max) {
+  let pct = null;
+  if (unit === "percent") pct = v;
+  else if (unit === "percentunit") pct = v * 100;
+  else if (max != null && min != null && max > min) pct = (v - min) / (max - min) * 100;
+  if (pct == null) return "var(--accent)";
+  return pct >= 90 ? "var(--crit)" : pct >= 75 ? "var(--warn)" : "var(--ok)";
 }
 async function loadLogsPanel(p, body, from, to) {
   let res;
@@ -279,36 +300,115 @@ async function loadTimeseriesPanel(p, body, from, to) {
 }
 // dashRowHeight：按 gridPos 行数反推面板正文可用高度（网格行高 24 + 行间距 8，扣面板头+内边距 ~52）。
 function dashRowHeight(h) { const n = Math.max(3, Math.min(48, h || 8)); return n * 24 + (n - 1) * 8 - 52; }
+// loadInstantPanel 处理 bargauge（横向条）与 table。
 async function loadInstantPanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  if (p.type === "bargauge") {
+    const min = p.min != null ? p.min : 0;
+    const max = p.max != null ? p.max : (p.unit === "percent" ? 100 : (p.unit === "percentunit" ? 1 : autoMax(series)));
+    body.innerHTML = `<div class="dash-bars-h">` + series.slice(0, 16).map(s => {
+      const v = seriesVal2(s);
+      const pct = max > min ? Math.max(0, Math.min(100, (v - min) / (max - min) * 100)) : 0;
+      const col = statColor(v, p.unit, min, max);
+      const lbl = legendFor(p.targets[0].legend, seriesLabels(s));
+      return `<div class="dash-bar-item"><div class="dash-bar-lbl" title="${esc(lbl)}">${esc(lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${fmtUnit(v, p.unit)}</div></div>`;
+    }).join("") + `</div>`;
+  } else { // table
+    const rows = series.map(s => ({ lbl: legendFor(p.targets[0].legend, seriesLabels(s)), v: seriesVal2(s) }))
+      .sort((a, b) => b.v - a.v).slice(0, 200);
+    body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr><th>序列</th><th class="num">值</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td title="${esc(r.lbl)}">${esc(r.lbl)}</td><td class="num">${fmtUnit(r.v, p.unit)}</td></tr>`).join("") +
+      `</tbody></table></div>`;
+  }
+}
+// loadStatPanel：大数值（取区间最后一点）+ 阈值配色 + 迷你趋势 sparkline + 说明。
+async function loadStatPanel(p, body, from, to) {
+  const t = p.targets[0];
   let res;
-  try {
-    res = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
-  } catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
+  try { res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json()); }
+  catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return; }
   const series = (res && res.series) || [];
   if (!series.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
-  if (p.type === "stat") {
-    const v = series[0].Value !== undefined ? series[0].Value : series[0].value;
-    body.innerHTML = `<div class="dash-stat"><span class="dash-stat-val">${fmtUnit(+v, p.unit)}</span></div>`;
-  } else if (p.type === "gauge" || p.type === "bargauge") {
-    const min = p.min != null ? p.min : (p.unit === "percent" ? 0 : 0);
-    const max = p.max != null ? p.max : (p.unit === "percent" ? 100 : (p.unit === "percentunit" ? 1 : autoMax(series)));
-    body.innerHTML = series.slice(0, 12).map(s => {
-      const v = +(s.Value !== undefined ? s.Value : s.value);
-      const pct = max > min ? Math.max(0, Math.min(100, (v - min) / (max - min) * 100)) : 0;
-      const col = pct >= 90 ? "var(--crit)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
-      const lbl = legendFor(p.targets[0].legend, (s.Labels || s.labels || {}));
-      return `<div class="dash-bar-item"><div class="dash-bar-lbl">${esc(lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${fmtUnit(v, p.unit)}</div></div>`;
-    }).join("");
-  } else if (p.type === "table") {
-    const rows = series.slice(0, 100).map(s => {
-      const labels = s.Labels || s.labels || {};
-      const v = s.Value !== undefined ? s.Value : s.value;
-      const lblStr = Object.keys(labels).filter(k => k !== "__name__").map(k => `${k}=${labels[k]}`).join(", ");
-      return `<tr><td>${esc(lblStr || labels.__name__ || "-")}</td><td class="num">${fmtUnit(+v, p.unit)}</td></tr>`;
-    }).join("");
-    body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr><th>序列</th><th class="num">值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  }
+  const s0 = series[0], pts = s0.points || [];
+  const val = pts.length ? pts[pts.length - 1][1] : 0;
+  const col = statColor(val, p.unit, p.min, p.max);
+  const lbl = legendFor(t.legend, s0.labels || {});
+  const spark = pts.length > 1 ? svgSparkline(pts.map(pt => pt[1]), col) : "";
+  body.innerHTML = `<div class="dash-stat2">
+      <div class="dash-stat-num" style="color:${col}">${fmtUnit(+val, p.unit)}</div>
+      ${lbl ? `<div class="dash-stat-cap">${esc(lbl)}</div>` : ""}
+      ${spark ? `<div class="dash-stat-spark">${spark}</div>` : ""}
+    </div>`;
+}
+// loadGaugePanel：每个序列一个圆环仪表（径向进度），阈值配色，flex 自适应铺满。
+async function loadGaugePanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  const min = p.min != null ? p.min : 0;
+  const max = p.max != null ? p.max : (p.unit === "percent" ? 100 : (p.unit === "percentunit" ? 1 : autoMax(series)));
+  body.innerHTML = `<div class="dash-gauges">` + series.slice(0, 9).map(s => {
+    const v = seriesVal2(s);
+    const pct = max > min ? (v - min) / (max - min) * 100 : 0;
+    const col = statColor(v, p.unit, min, max);
+    const lbl = legendFor(p.targets[0].legend, seriesLabels(s));
+    return `<div class="dash-gauge-item">${svgGauge(pct, fmtUnit(v, p.unit), col)}<div class="dash-gauge-lbl" title="${esc(lbl)}">${esc(lbl)}</div></div>`;
+  }).join("") + `</div>`;
+}
+// loadPiePanel：环形图（每序列一片）+ 侧栏图例。
+async function loadPiePanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  const items = series.slice(0, 12).map((s, i) => ({ val: Math.max(0, seriesVal2(s)), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }));
+  const total = items.reduce((a, b) => a + b.val, 0) || 1;
+  body.innerHTML = `<div class="dash-pie"><div class="dash-pie-chart">${svgDonut(items, total)}</div>
+    <div class="dash-pie-legend">${items.map(it => `<div class="dash-pie-li"><span class="dash-pie-dot" style="background:${it.col}"></span><span class="dash-pie-name" title="${esc(it.lbl)}">${esc(it.lbl)}</span><span class="dash-pie-val">${fmtUnit(it.val, p.unit)}</span></div>`).join("")}</div></div>`;
+}
+// loadBarPanel：纵向柱状图（每序列一柱），适合 top-N。
+async function loadBarPanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  const items = series.map((s, i) => ({ val: seriesVal2(s), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }))
+    .sort((a, b) => b.val - a.val).slice(0, 16);
+  const mx = Math.max(...items.map(it => it.val), 0) || 1;
+  body.innerHTML = `<div class="dash-bars">` + items.map(it => {
+    const h = Math.max(2, it.val / mx * 100);
+    return `<div class="dash-barcol" title="${esc(it.lbl)}：${fmtUnit(it.val, p.unit)}">
+        <div class="dash-barcol-v">${fmtUnit(it.val, p.unit)}</div>
+        <div class="dash-barcol-track"><div class="dash-barcol-bar" style="height:${h}%; background:${it.col}"></div></div>
+        <div class="dash-barcol-lbl">${esc(it.lbl)}</div></div>`;
+  }).join("") + `</div>`;
+}
+/* ---------- SVG 组件 ---------- */
+// svgSparkline：迷你趋势线（填满宽度，用于 stat 背景趋势）。
+function svgSparkline(vals, color) {
+  const n = vals.length; if (n < 2) return "";
+  const mn = Math.min(...vals), mx = Math.max(...vals), rng = (mx - mn) || 1, W = 100, H = 28;
+  const pts = vals.map((v, i) => `${(i / (n - 1) * W).toFixed(2)},${(H - (v - mn) / rng * H).toFixed(2)}`).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="spark-svg"><polygon points="0,${H} ${pts} ${W},${H}" fill="${color}" opacity="0.12"/><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+// svgGauge：圆环径向进度仪表 + 中心数值。
+function svgGauge(pct, valueText, color) {
+  const r = 42, C = 2 * Math.PI * r;
+  const off = C * (1 - Math.max(0, Math.min(1, pct / 100)));
+  return `<svg viewBox="0 0 100 100" class="gauge-svg">
+    <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--line2)" stroke-width="9"/>
+    <circle cx="50" cy="50" r="${r}" fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 50 50)"/>
+    <text x="50" y="50" text-anchor="middle" dominant-baseline="central" class="gauge-txt" fill="var(--txt)">${esc(valueText)}</text>
+  </svg>`;
+}
+// svgDonut：环形图（各片按占比，rotate -90 从顶部起）。
+function svgDonut(items, total) {
+  const r = 34, sw = 22, C = 2 * Math.PI * r;
+  let off = 0;
+  const segs = items.filter(it => it.val > 0).map(it => {
+    const frac = it.val / total;
+    const seg = `<circle cx="50" cy="50" r="${r}" fill="none" stroke="${it.col}" stroke-width="${sw}" stroke-dasharray="${(frac * C).toFixed(2)} ${(C - frac * C).toFixed(2)}" stroke-dashoffset="${(-off * C).toFixed(2)}" transform="rotate(-90 50 50)"/>`;
+    off += frac;
+    return seg;
+  }).join("");
+  return `<svg viewBox="0 0 100 100" class="pie-svg">${segs}</svg>`;
 }
 function legendFor(fmt, labels) {
   if (fmt && fmt.trim()) return fmt.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (labels[k] !== undefined ? labels[k] : ""));

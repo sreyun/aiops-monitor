@@ -65,8 +65,8 @@ func TestMapNightingaleDashboard(t *testing.T) {
 	if by["Disk"].Type != "bargauge" {
 		t.Fatalf("barGauge 应映射 bargauge: %+v", by["Disk"])
 	}
-	if by["占比"].Type != "unsupported" || by["占比"].RawType != "pie" {
-		t.Fatalf("pie 应为 unsupported 占位: %+v", by["占比"])
+	if by["占比"].Type != "piechart" {
+		t.Fatalf("pie 应映射为 piechart: %+v", by["占比"])
 	}
 	if by["说明"].Type != "text" || by["说明"].Text != "# hello" {
 		t.Fatalf("text 面板正文错误: %+v", by["说明"])

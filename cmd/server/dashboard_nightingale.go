@@ -172,11 +172,15 @@ func mapN9ePanelType(t string) string {
 		return "gauge"
 	case "barGauge", "bargauge":
 		return "bargauge"
+	case "pie":
+		return "piechart"
+	case "barchart":
+		return "barchart"
 	case "table":
 		return "table"
 	case "text":
 		return "text"
-	default: // pie / hexbin / heatmap / iframe / ...
+	default: // hexbin / heatmap / iframe / ...
 		return "unsupported"
 	}
 }

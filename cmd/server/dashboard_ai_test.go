@@ -25,7 +25,7 @@ func TestSanitizeAIDash(t *testing.T) {
       "vars": [{"name":"instance","type":"weird"}],
       "panels": [
         {"title":"A","type":"timeseries","w":12,"h":8,"targets":[{"expr":"up"}]},
-        {"title":"B","type":"piechart","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
+        {"title":"B","type":"heatmap","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
         {"title":"C","type":"stat","w":6,"h":4,"targets":[{"expr":"  "}]},
         {"title":"D","type":"text","w":24,"h":3,"text":"hi"},
         {"title":"E","type":"timeseries","w":18,"h":8,"targets":[{"expr":"y"}]}
@@ -50,7 +50,7 @@ func TestSanitizeAIDash(t *testing.T) {
 		by[p.Title] = p
 	}
 	if by["B"].Type != "timeseries" {
-		t.Fatalf("piechart 应回退 timeseries，实为 %q", by["B"].Type)
+		t.Fatalf("未知类型(heatmap)应回退 timeseries，实为 %q", by["B"].Type)
 	}
 	if by["D"].Type != "text" {
 		t.Fatalf("text 面板应保留，实为 %q", by["D"].Type)
