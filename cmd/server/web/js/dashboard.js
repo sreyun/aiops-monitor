@@ -153,7 +153,7 @@ function renderDashDetail() {
           <button class="chip-btn primary" id="dashCustomApply">应用</button>
         </span>
         <span class="dash-spacer"></span>
-        <div class="dash-picker"><span class="dash-picker-lbl">数据源</span><div class="select-wrap sm"><select id="dashDSSelect">${dsOptions(d.datasource, ["prometheus"], true)}</select></div></div>
+        <div class="dash-picker"><span class="dash-picker-lbl">数据源</span><div class="select-wrap sm"><select id="dashDSSelect">${dsOptions(d.datasource, ["prometheus", "vm"], true)}</select></div></div>
         <div class="dash-vars">${varSel}</div>
       </div>
     </div>
@@ -648,7 +648,7 @@ function fillPanelDS(type, selected) {
   const sel = $("panelDS");
   if (!sel) return;
   if (type === "logs") sel.innerHTML = dsOptions(selected, ["loki"], false) || `<option value="">（请先在「数据源」配置 Loki）</option>`;
-  else sel.innerHTML = dsOptions(selected, ["prometheus"], true);
+  else sel.innerHTML = dsOptions(selected, ["prometheus", "vm"], true);
 }
 function renderPanelTargets() {
   const wrap = $("panelTargets");

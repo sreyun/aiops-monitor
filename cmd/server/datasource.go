@@ -18,7 +18,7 @@ import (
 type DataSource struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Type      string `json:"type"` // "loki" | "prometheus"
+	Type      string `json:"type"` // "prometheus" | "vm"(VictoriaMetrics,同 Prom API) | "loki"
 	URL       string `json:"url"`
 	AuthUser  string `json:"auth_user,omitempty"`
 	AuthPass  string `json:"auth_pass,omitempty"` // masked when read via the API
@@ -136,7 +136,7 @@ func dsTruncate(s string, n int) string {
 // queryDataSource dispatches a query to the right backend by data-source type.
 func queryDataSource(ds DataSource, query string, limit, sinceMin int) (string, error) {
 	switch ds.Type {
-	case "prometheus":
+	case "prometheus", "vm": // VictoriaMetrics 同为 Prometheus HTTP API
 		return queryPrometheus(ds, query)
 	case "loki":
 		return queryLoki(ds, query, limit, sinceMin)
@@ -280,7 +280,7 @@ func queryLoki(ds DataSource, logQL string, limit, sinceMin int) (string, error)
 // testDataSource pings the data source to validate URL + auth reachability.
 func testDataSource(ds DataSource) error {
 	switch ds.Type {
-	case "prometheus":
+	case "prometheus", "vm":
 		_, err := queryPrometheus(ds, "vector(1)")
 		return err
 	case "loki":

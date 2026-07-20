@@ -20,8 +20,8 @@ function renderDataSources() {
   }
   if (empty) empty.style.display = "none";
   list.innerHTML = LAST_DATASOURCES.map(d => {
-    const type = d.type === "loki" ? "loki" : "prom";
-    const typeLabel = d.type === "loki" ? "LOKI" : "PROM";
+    const type = d.type === "loki" ? "loki" : "prom"; // 图标配色：指标类(prom/vm)同色，日志类(loki)另色
+    const typeLabel = d.type === "loki" ? "LOKI" : d.type === "vm" ? "VM" : "PROM";
     const statusHTML = d.enabled !== false
       ? '<span class="ds-status on"><span class="ds-status-dot"></span>已启用</span>'
       : '<span class="ds-status off"><span class="ds-status-dot"></span>已停用</span>';

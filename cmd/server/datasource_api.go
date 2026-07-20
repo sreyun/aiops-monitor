@@ -35,8 +35,8 @@ func validateDataSource(ds *DataSource) string {
 	if !strings.HasPrefix(ds.URL, "http://") && !strings.HasPrefix(ds.URL, "https://") {
 		return "地址需以 http:// 或 https:// 开头"
 	}
-	if ds.Type != "loki" && ds.Type != "prometheus" {
-		return "类型仅支持 loki / prometheus"
+	if ds.Type != "loki" && ds.Type != "prometheus" && ds.Type != "vm" {
+		return "类型仅支持 prometheus / vm / loki"
 	}
 	return ""
 }

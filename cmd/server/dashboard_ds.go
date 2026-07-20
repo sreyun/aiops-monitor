@@ -172,13 +172,14 @@ func dsLokiRange(ds DataSource, logql string, startNs, endNs int64, limit int) (
 
 // ---- 数据源分发（Server 方法：按 dsID 路由 VM / 外部 Prometheus）----
 
-// lookupPromDS 返回可用于指标查询的数据源；dsID 为空/"vm" 或非 prometheus/未启用时 ok=false（回退 VM）。
+// lookupPromDS 返回可用于指标查询的数据源；dsID 为空/"vm"(内置) 或非 prometheus/vm、未启用时 ok=false（回退内置 VM）。
+// 外部 VictoriaMetrics 与 Prometheus 同为 Prometheus HTTP API，故 type=vm 与 type=prometheus 同路走。
 func (s *Server) lookupPromDS(dsID string) (DataSource, bool) {
 	if dsID == "" || dsID == "vm" {
-		return DataSource{}, false
+		return DataSource{}, false // 内置 VM
 	}
 	ds, exists := s.cfg.GetDataSource(dsID)
-	if !exists || ds.Type != "prometheus" || !ds.Enabled {
+	if !exists || (ds.Type != "prometheus" && ds.Type != "vm") || !ds.Enabled {
 		return DataSource{}, false
 	}
 	return ds, true
