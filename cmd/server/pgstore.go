@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -44,7 +45,15 @@ func pgFromEnv() *pgStore {
 // ============================================================================
 
 type pgStore struct {
-	db *sql.DB
+	db       *sql.DB
+	flowJobs chan flowJob // NetFlow 明细异步入库队列（解耦 agent POST 与 PG 写入，防连接池饿死）
+}
+
+// flowJob 是一批待入库的 Flow 明细。
+type flowJob struct {
+	hostID string
+	source string
+	flows  []shared.FlowRecord
 }
 
 // openPGStore connects, pings and migrates. A non-nil error means fall back to
@@ -54,8 +63,9 @@ func openPGStore(dsn string) (*pgStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(2)
+	// NetFlow 高峰时单次上报可含上万条 flow；连接池太小 + 同步逐行写会饿死其它请求，故适当放大。
+	db.SetMaxOpenConns(24)
+	db.SetMaxIdleConns(6)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	ctxPing := make(chan error, 1)
 	go func() { ctxPing <- db.Ping() }()
@@ -69,12 +79,35 @@ func openPGStore(dsn string) (*pgStore, error) {
 		db.Close()
 		return nil, sql.ErrConnDone
 	}
-	ps := &pgStore{db: db}
+	ps := &pgStore{db: db, flowJobs: make(chan flowJob, 512)}
 	if err := ps.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
+	// 2 个后台工作协程串行化 Flow 明细写入：HTTP 摄入只入队即返回，写库不再占住请求连接。
+	for i := 0; i < 2; i++ {
+		go ps.flowIngestWorker()
+	}
 	return ps, nil
+}
+
+// flowIngestWorker 从队列取批次并批量写库（见 insertFlowRecords）。
+func (p *pgStore) flowIngestWorker() {
+	for j := range p.flowJobs {
+		p.insertFlowRecords(j.hostID, j.source, j.flows)
+	}
+}
+
+// insertFlowRecordsAsync 非阻塞入队；队列满时丢弃本批并告警（背压优于把服务拖垮）。
+func (p *pgStore) insertFlowRecordsAsync(hostID, source string, flows []shared.FlowRecord) {
+	if p == nil || len(flows) == 0 {
+		return
+	}
+	select {
+	case p.flowJobs <- flowJob{hostID: hostID, source: source, flows: flows}:
+	default:
+		slog.Warn("Flow 入库队列已满，丢弃本批明细（写入跟不上摄入速率）", "host", hostID, "rows", len(flows))
+	}
 }
 
 func (p *pgStore) migrate() error {
@@ -2112,27 +2145,39 @@ func (p *pgStore) deleteHyperVInventory(hostID string) {
 	_, _ = p.db.Exec(`DELETE FROM hyperv_events WHERE host_id=$1`, hostID)
 }
 
+// insertFlowRecords 批量写入 Flow 明细：多行 VALUES 分批（每批 500 行），把上万条的逐行往返
+// 压缩到几十次，大幅缩短占用连接的时长（原来逐行 Exec 会拿住一条连接做上万次往返，饿死连接池）。
 func (p *pgStore) insertFlowRecords(hostID, source string, flows []shared.FlowRecord) {
-	tx, err := p.db.Begin()
-	if err != nil {
+	if len(flows) == 0 {
 		return
 	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`
-		INSERT INTO flow_records(host_id, source, src_ip, dst_ip, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
-	if err != nil {
-		return
+	const cols = 11
+	const batch = 500
+	base := `INSERT INTO flow_records(host_id, source, src_ip, dst_ip, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen) VALUES `
+	for start := 0; start < len(flows); start += batch {
+		end := start + batch
+		if end > len(flows) {
+			end = len(flows)
+		}
+		chunk := flows[start:end]
+		var sb strings.Builder
+		sb.WriteString(base)
+		args := make([]any, 0, len(chunk)*cols)
+		for i, f := range chunk {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			b := i * cols
+			fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11)
+			args = append(args, hostID, source, f.SrcIP, f.DstIP, f.SrcPort, f.DstPort, f.Protocol,
+				f.Bytes, f.Packets, time.Unix(f.FirstSeen, 0), time.Unix(f.LastSeen, 0))
+		}
+		if _, err := p.db.Exec(sb.String(), args...); err != nil {
+			slog.Warn("批量写入 flow_records 失败", "host", hostID, "rows", len(chunk), "err", err)
+			return
+		}
 	}
-	defer stmt.Close()
-
-	for _, f := range flows {
-		_, _ = stmt.Exec(hostID, source, f.SrcIP, f.DstIP, f.SrcPort, f.DstPort, f.Protocol,
-			f.Bytes, f.Packets,
-			time.Unix(f.FirstSeen, 0), time.Unix(f.LastSeen, 0))
-	}
-	_ = tx.Commit()
 }
 
 // flowSummaryDims whitelists the columns callers may GROUP BY.
@@ -2186,29 +2231,91 @@ func (p *pgStore) getFlowSummary(hostID, dimension string, from, to int64, limit
 	return out, rows.Err()
 }
 
+// ipIsh 判断字符串是否是可用于 inet 比较的 IP 或 CIDR（否则不加该条件，避免 SQL 报错）。
+func ipIsh(s string) bool {
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(s)
+	return err == nil
+}
+
+// protoToNum 把协议名/数字转为 IP 协议号（flow_records.protocol 存的是数字）。
+func protoToNum(s string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "tcp":
+		return 6, true
+	case "udp":
+		return 17, true
+	case "icmp":
+		return 1, true
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return n, true
+	}
+	return 0, false
+}
+
 func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string]any, error) {
 	query := `SELECT source, src_ip::text, dst_ip::text, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen
 		FROM flow_records WHERE host_id=$1`
 	args := []any{hostID}
 	argIdx := 2
 
-	if filter != "" {
-		// Parse filter: "src_ip:10.0.0.0/8" or "dst_port:443"
-		parts := strings.SplitN(filter, ":", 2)
-		if len(parts) == 2 {
-			col := parts[0]
-			val := parts[1]
-			switch col {
-			case "src_ip", "dst_ip":
-				query += fmt.Sprintf(` AND %s::text = $%d`, col, argIdx)
+	// 筛选：支持 src_ip:/dst_ip:（精确 IP 或 CIDR，用 inet 包含 <<=）、src_port:/dst_port:/port:、
+	// proto:（tcp/udp/icmp 或数字）、以及无前缀裸值（IP/CIDR→源或目的；纯数字→端口源或目的）。
+	// 关键修复：原来 IP 用 `::text =` 精确字符串比较，CIDR 与松散写法永远不匹配、且未识别的写法静默不加
+	// WHERE（返回全量，"筛选无效"）。现改为 inet 包含 + 裸值/别名兜底 + 去空格。
+	if f := strings.TrimSpace(filter); f != "" {
+		col, val := "", f
+		if i := strings.Index(f, ":"); i > 0 {
+			col = strings.ToLower(strings.TrimSpace(f[:i]))
+			val = strings.TrimSpace(f[i+1:])
+		}
+		ipCond := func(column string) {
+			if ipIsh(val) {
+				query += fmt.Sprintf(` AND %s <<= $%d::inet`, column, argIdx)
 				args = append(args, val)
 				argIdx++
-			case "src_port", "dst_port", "protocol":
-				if n, err := strconv.Atoi(val); err == nil {
-					query += fmt.Sprintf(` AND %s = $%d`, col, argIdx)
-					args = append(args, n)
-					argIdx++
-				}
+			}
+		}
+		portCond := func(column string) {
+			if n, err := strconv.Atoi(val); err == nil {
+				query += fmt.Sprintf(` AND %s = $%d`, column, argIdx)
+				args = append(args, n)
+				argIdx++
+			}
+		}
+		switch col {
+		case "src_ip", "src":
+			ipCond("src_ip")
+		case "dst_ip", "dst":
+			ipCond("dst_ip")
+		case "src_port":
+			portCond("src_port")
+		case "dst_port":
+			portCond("dst_port")
+		case "port":
+			if n, err := strconv.Atoi(val); err == nil {
+				query += fmt.Sprintf(` AND (src_port = $%d OR dst_port = $%d)`, argIdx, argIdx)
+				args = append(args, n)
+				argIdx++
+			}
+		case "proto", "protocol":
+			if n, ok := protoToNum(val); ok {
+				query += fmt.Sprintf(` AND protocol = $%d`, argIdx)
+				args = append(args, n)
+				argIdx++
+			}
+		case "ip", "": // 无前缀裸值兜底
+			if ipIsh(val) {
+				query += fmt.Sprintf(` AND (src_ip <<= $%d::inet OR dst_ip <<= $%d::inet)`, argIdx, argIdx)
+				args = append(args, val)
+				argIdx++
+			} else if n, err := strconv.Atoi(val); err == nil {
+				query += fmt.Sprintf(` AND (src_port = $%d OR dst_port = $%d)`, argIdx, argIdx)
+				args = append(args, n)
+				argIdx++
 			}
 		}
 	}

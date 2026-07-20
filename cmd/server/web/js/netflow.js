@@ -156,20 +156,19 @@ function renderNfSummary(container, summary, dimension) {
     return;
   }
 
-  // Render as horizontal bar chart
+  // 排行榜式：序号 + Key/域名 + 流量 + 底部占比条（比原来的三列扁平表更清晰、更商用）。
   const maxBytes = summary[0].bytes || 1;
-  let html = `<table class="nf-summary-table">`;
-  html += `<tr><th>${I18N.t("netflow." + dimension) || dimension}</th><th>${I18N.t("netflow.bytes") || "流量"}</th><th></th></tr>`;
-  summary.forEach(item => {
+  container.innerHTML = `<div class="nf-rank">` + summary.map((item, i) => {
     const pct = Math.max(2, (item.bytes / maxBytes) * 100);
-    html += `<tr>`;
-    html += `<td class="nf-label">${esc(item.key)}${item.enrich && nfEnrichText(item.enrich) ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(nfEnrichText(item.enrich))}</div>` : ""}</td>`;
-    html += `<td class="nf-value">${formatBytes(item.bytes)}</td>`;
-    html += `<td class="nf-bar-cell"><div class="nf-bar" style="width:${pct}%"></div></td>`;
-    html += `</tr>`;
-  });
-  html += `</table>`;
-  container.innerHTML = html;
+    const dom = item.enrich && nfEnrichText(item.enrich) ? nfEnrichText(item.enrich) : "";
+    return `<div class="nf-rank-row">
+      <span class="nf-rank-no">${i + 1}</span>
+      <div class="nf-rank-main">
+        <div class="nf-rank-head"><span class="nf-rank-key" title="${esc(item.key)}">${esc(item.key)}</span>${dom ? `<span class="nf-rank-dom" title="${esc(dom)}">${esc(dom)}</span>` : ""}<span class="nf-rank-bytes">${formatBytes(item.bytes)}</span></div>
+        <div class="nf-rank-bar"><div class="nf-rank-fill" style="width:${pct}%"></div></div>
+      </div>
+    </div>`;
+  }).join("") + `</div>`;
 }
 
 function renderNfFlows(container, flows) {
@@ -207,16 +206,16 @@ function renderNfFlows(container, flows) {
     const dur = nfDurationSec(f);
     html += `<tr>`;
     html += `<td><span class="nf-badge nf-badge-${f.source}">${f.source}</span></td>`;
-    html += `<td>${nfIPCell(f.src_ip, f.src_enrich)}</td>`;
-    html += `<td>${f.src_port || ""}</td>`;
-    html += `<td>${nfIPCell(f.dst_ip, f.dst_enrich)}</td>`;
-    html += `<td>${f.dst_port || ""}</td>`;
-    html += `<td>${protoName}</td>`;
-    html += `<td>${formatBytes(bytes)}</td>`;
-    html += `<td>${pkts}</td>`;
-    html += `<td>${avgPkt ? avgPkt + " B" : "-"}</td>`;
-    html += `<td>${dur === "" ? "-" : dur + " s"}</td>`;
-    html += `<td>${esc(nfShortTime(f.last_seen))}</td>`;
+    html += `<td class="nf-ipcell">${nfIPCell(f.src_ip, f.src_enrich)}</td>`;
+    html += `<td class="nf-mono">${f.src_port || ""}</td>`;
+    html += `<td class="nf-ipcell">${nfIPCell(f.dst_ip, f.dst_enrich)}</td>`;
+    html += `<td class="nf-mono">${f.dst_port || ""}</td>`;
+    html += `<td><span class="nf-proto nf-proto-${(protoName || "").toLowerCase()}">${protoName}</span></td>`;
+    html += `<td class="nf-num">${formatBytes(bytes)}</td>`;
+    html += `<td class="nf-num">${pkts}</td>`;
+    html += `<td class="nf-num">${avgPkt ? avgPkt + " B" : "-"}</td>`;
+    html += `<td class="nf-num">${dur === "" ? "-" : dur + " s"}</td>`;
+    html += `<td class="nf-mono">${esc(nfShortTime(f.last_seen))}</td>`;
     html += `</tr>`;
   });
   html += `</tbody></table></div>`;

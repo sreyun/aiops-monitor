@@ -3099,23 +3099,47 @@ select:focus {
 .nf-content { padding: 0; }
 .nf-section { margin-bottom: 24px; }
 .nf-section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+/* 旧摘要表（SNMP 面板仍复用），netflow 排行已改用 .nf-rank */
 .nf-summary-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .nf-summary-table th { text-align: left; padding: 6px 8px; color: var(--txt2); font-weight: 500; font-size: 12px; }
 .nf-summary-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .nf-label { font-weight: 500; white-space: nowrap; }
 .nf-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nf-bar-cell { width: 40%; }
-.nf-bar { height: 18px; background: var(--accent); border-radius: 3px; opacity: .7; transition: width .3s; }
-.nf-flows-toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.nf-table-wrap { overflow-x: auto; }
+.nf-bar { height: 16px; border-radius: 4px; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .35s ease; }
+
+/* 流量排行：序号 + Key/域名 + 流量 + 占比条（干净、商用） */
+.nf-rank { display: flex; flex-direction: column; }
+.nf-rank-row { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.nf-rank-row:hover { background: var(--panel2); }
+.nf-rank-no { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--bg3); }
+.nf-rank-row:nth-child(1) .nf-rank-no { background: var(--accent-soft); color: var(--accent); }
+.nf-rank-main { flex: 1; min-width: 0; }
+.nf-rank-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.nf-rank-key { font-size: 13px; font-weight: 600; color: var(--txt); font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nf-rank-dom { font-size: 12px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.nf-rank-bytes { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--txt2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nf-rank-bar { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; }
+.nf-rank-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .35s ease; }
+
+/* Flow 明细表 */
+.nf-flows-toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.nf-flows-toolbar .nf-input { flex: 1; min-width: 220px; max-width: 420px; }
+.nf-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
 .nf-flow-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.nf-flow-table th, .nf-flow-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); }
-/* sticky 表头必须是**不透明**的：var(--card) 未定义 → 表头透明 → 滚动时
-   数据行直接从表头文字底下穿过去，糊成一团。 */
-.nf-flow-table th { color: var(--txt2); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
-/* 与硬件卡片同批遗留：浅色糖果色硬编码在深色面板上又刺眼又不统一，
-   换成语义 token（accent=NetFlow 采集 / purple=抓包采集），深浅主题自适应。 */
-.nf-badge { padding: 1px 6px; border-radius: var(--r-xs); font-size: 11px; font-weight: 600; }
+.nf-flow-table th, .nf-flow-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.nf-flow-table tbody tr:last-child td { border-bottom: none; }
+.nf-flow-table tbody tr:hover td { background: var(--panel2); }
+.nf-flow-table th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--bg3); z-index: 1; }
+.nf-mono { font-family: ui-monospace, monospace; color: var(--txt2); }
+.nf-num { text-align: right; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--txt); }
+.nf-ipcell { font-family: ui-monospace, monospace; }
+/* 协议徽标：TCP/UDP/ICMP 语义配色 */
+.nf-proto { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.nf-proto-tcp { background: var(--accent-soft); color: var(--accent); }
+.nf-proto-udp { background: rgba(168,85,247,.14); color: #a855f7; }
+.nf-proto-icmp { background: var(--warn-soft); color: var(--warn); }
+.nf-badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .nf-badge-netflow { background: var(--accent-soft); color: var(--accent-txt); border: 1px solid var(--accent-border); }
 .nf-badge-packet { background: var(--accent2-soft); color: var(--accent2-txt); border: 1px solid var(--accent2-border); }
 .empty-state { padding: 40px; text-align: center; color: var(--txt2); font-size: 14px; }

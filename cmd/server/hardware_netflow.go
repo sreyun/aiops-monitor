@@ -129,9 +129,10 @@ func (s *Server) handleAgentNetFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	s.nf.put(rep.HostID, hostname, ip, rep)
 
-	// Optionally store flow details in PG (for detailed queries + CSV export)
+	// 存 Flow 明细到 PG（供明细查询/CSV 导出）——异步入队，HTTP 摄入立即返回，
+	// 不再在请求里同步写上万行、占住连接池导致其它请求（含 UI）断线。
 	if s.pg != nil && len(rep.Flows) > 0 {
-		s.pg.insertFlowRecords(rep.HostID, rep.Source, rep.Flows)
+		s.pg.insertFlowRecordsAsync(rep.HostID, rep.Source, rep.Flows)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -249,6 +250,14 @@ func (s *Server) handleHardwareHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNetFlowSummary returns Top-N aggregated flow data.
+// stripMask 去掉 IP 的 /掩码 后缀（PG inet::text 会带 /32），得到可供 net.ParseIP / 反查 / SNI 用的纯 IP。
+func stripMask(s string) string {
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")
 	rangeStr := r.URL.Query().Get("range")
@@ -286,7 +295,8 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 		ips := make([]string, 0, len(summary))
 		for _, it := range summary {
 			if k, _ := it["key"].(string); k != "" {
-				ips = append(ips, k)
+				it["key"] = stripMask(k) // 去 /32 掩码：既让富化能解析，也让排行里的 IP 更干净
+				ips = append(ips, stripMask(k))
 			}
 		}
 		en := flowEnrich.enrichMany(ips, 3*time.Second)
@@ -301,6 +311,7 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		go flowEnrich.enrichMany(ips, 20*time.Second) // 后台预热
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "dimension": dimension})
 }
@@ -351,13 +362,17 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 	// 目的地富化：把裸 IP 补上「域名 + 归属组织(ASN) + 国家」，让"IP 在访问什么"可读。
 	// 惰性 + 缓存，首次稍慢、之后秒回；内网/保留地址不富化。可用 flow_enrich_disabled 关闭。
 	if !s.cfg.Get().FlowEnrichDisabled && len(flows) > 0 {
+		// 关键修复：PG inet::text 带 /32 掩码（如 192.168.30.15/32），net.ParseIP 无法解析 → 富化/PTR/SNI
+		// 全部落空、域名永不显示。这里先去掉掩码再富化，同时把明细里的 IP 也规整为纯 IP（更干净）。
 		ips := make([]string, 0, len(flows)*2)
 		for _, f := range flows {
 			if v, _ := f["dst_ip"].(string); v != "" {
-				ips = append(ips, v)
+				f["dst_ip"] = stripMask(v)
+				ips = append(ips, stripMask(v))
 			}
 			if v, _ := f["src_ip"].(string); v != "" {
-				ips = append(ips, v)
+				f["src_ip"] = stripMask(v)
+				ips = append(ips, stripMask(v))
 			}
 		}
 		en := flowEnrich.enrichMany(ips, 3*time.Second)
@@ -382,6 +397,8 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// 后台预热缓存：本次 3s 内没解析完的 IP 继续在后台解析入缓存，下次刷新即可显示域名。
+		go flowEnrich.enrichMany(ips, 20*time.Second)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"flows": flows})
 }
