@@ -3157,6 +3157,23 @@ select:focus {
 .sn-row-crit td { background: var(--crit-soft); }
 .sn-row-warn td { background: var(--warn-soft); }
 .sn-oid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--txt2); }
+/* SNMP 设备卡片 + 统计 + 利用率条（网络设备页重构） */
+.sn-dev { margin-bottom: 22px; }
+.sn-dev-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sn-dev-title { font-size: 16px; font-weight: 650; color: var(--txt); display: flex; align-items: center; gap: 8px; }
+.sn-dev-sub { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+.sn-pill { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 10px; }
+.sn-pill.ok { background: var(--ok-soft); color: var(--ok); }
+.sn-pill.bad { background: var(--crit-soft); color: var(--crit); }
+.sn-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 12px; }
+.sn-stat { font-size: 12px; color: var(--muted); display: inline-flex; align-items: baseline; gap: 5px; }
+.sn-stat b { font-size: 15px; font-weight: 700; color: var(--txt); font-variant-numeric: tabular-nums; }
+.sn-stat.ok b { color: var(--ok); }
+.sn-stat.bad b { color: var(--crit); }
+.sn-util { display: flex; align-items: center; gap: 8px; min-width: 96px; }
+.sn-util-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; }
+.sn-util-fill { height: 100%; border-radius: 3px; transition: width .35s ease; }
+.sn-util-v { font-size: 12px; font-family: ui-monospace, monospace; color: var(--txt2); width: 34px; text-align: right; }
 
 /* ===== 仪表盘（clean 风：干净卡片 · 克制边框 · 充分留白 · 明暗自适应） ===== */
 /* 列表：卡片网格 */

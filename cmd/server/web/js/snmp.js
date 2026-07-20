@@ -29,6 +29,11 @@ function snFmtSpeed(bps) {
   while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
   return Math.round(v) + " " + u[i];
 }
+// snUtilCell：利用率迷你进度条 + 百分比（≥80 红 / ≥50 黄 / 其余蓝）。
+function snUtilCell(u) {
+  const col = u >= 80 ? "var(--crit)" : u >= 50 ? "var(--warn)" : "var(--accent)";
+  return `<div class="sn-util"><div class="sn-util-bar"><div class="sn-util-fill" style="width:${Math.min(100, u)}%;background:${col}"></div></div><span class="sn-util-v">${u.toFixed(0)}%</span></div>`;
+}
 
 function renderSNMPPanel() {
   const container = $("snmpPanel");
@@ -148,17 +153,23 @@ function renderSNDevices(container, devices) {
     const snap = d.snapshot || {};
     const sys = snap.system || {};
     const ifs = snap.interfaces || [];
-    const up = ifs.filter(i => i.oper_up).length;
+    const up = ifs.filter(i => i.oper_up).length, down = ifs.length - up;
     const reachable = d.reachable !== false;
-    html += `<div class="nf-section">`;
-    html += `<h3>${esc(d.device_name || "设备")} <span class="sn-dim">${esc(d.device_ip || "")}${sys.name ? " · " + esc(sys.name) : ""}</span>`;
-    html += reachable ? `<span class="sn-badge sn-up">${I18N.t("snmp.reachable") || "可达"}</span>` : `<span class="sn-badge sn-down">${I18N.t("snmp.unreachable") || "不可达"}</span>`;
-    html += `</h3>`;
+    html += `<div class="sn-dev">`;
+    html += `<div class="sn-dev-head">
+      <div class="sn-dev-title">${esc(d.device_name || "设备")}${reachable ? `<span class="sn-pill ok">${I18N.t("snmp.reachable") || "可达"}</span>` : `<span class="sn-pill bad">${I18N.t("snmp.unreachable") || "不可达"}</span>`}</div>
+      <div class="sn-dev-sub">${esc(d.device_ip || "")}${sys.name ? " · " + esc(sys.name) : ""}</div>
+    </div>`;
     if (snap.error) {
       html += `<div class="empty-state">${esc(I18N.t("snmp.poll_error") || "采集失败")}: ${esc(snap.error)}</div></div>`;
       return;
     }
-    html += `<div class="sn-meta">${I18N.t("snmp.interfaces") || "接口"}: ${ifs.length}（up ${up} / down ${ifs.length - up}）　${I18N.t("snmp.uptime") || "运行"}: ${snFmtUptime(sys.uptime_sec)}</div>`;
+    html += `<div class="sn-stats">
+      <span class="sn-stat"><b>${ifs.length}</b>${I18N.t("snmp.interfaces") || "接口"}</span>
+      <span class="sn-stat ok"><b>${up}</b>UP</span>
+      <span class="sn-stat ${down > 0 ? "bad" : ""}"><b>${down}</b>DOWN</span>
+      <span class="sn-stat"><b>${snFmtUptime(sys.uptime_sec)}</b>${I18N.t("snmp.uptime") || "运行"}</span>
+    </div>`;
     html += `<div class="nf-table-wrap"><table class="nf-flow-table"><thead><tr>`;
     ["snmp.if_name:接口", "snmp.if_status:状态", "snmp.if_speed:速率", "snmp.if_in:入向", "snmp.if_out:出向", "snmp.if_util:利用率", "snmp.if_err:错误/丢包"].forEach(kv => {
       const [k, fb] = kv.split(":");
@@ -170,16 +181,16 @@ function renderSNDevices(container, devices) {
     sorted.forEach(i => {
       const util = Math.max(i.in_util_percent || 0, i.out_util_percent || 0);
       const err = (i.in_err_pps || 0) + (i.out_err_pps || 0) + (i.in_discard_pps || 0) + (i.out_discard_pps || 0);
-      const down = i.admin_status === 1 && !i.oper_up;
-      const rowCls = down ? " sn-row-crit" : (util >= 80 ? " sn-row-warn" : "");
+      const isDown = i.admin_status === 1 && !i.oper_up;
+      const rowCls = isDown ? " sn-row-crit" : (util >= 80 ? " sn-row-warn" : "");
       html += `<tr class="${rowCls.trim()}">`;
       html += `<td>${esc(i.name || ("if" + i.index))}${i.alias ? ` <span class="sn-dim">${esc(i.alias)}</span>` : ""}</td>`;
       html += `<td>${i.oper_up ? `<span class="sn-badge sn-up">UP</span>` : `<span class="sn-badge sn-down">DOWN</span>`}</td>`;
-      html += `<td>${snFmtSpeed(i.speed_bps)}</td>`;
-      html += `<td>${i.rate_valid ? snFmtBps(i.in_bps) : "-"}</td>`;
-      html += `<td>${i.rate_valid ? snFmtBps(i.out_bps) : "-"}</td>`;
-      html += `<td>${i.rate_valid ? util.toFixed(0) + "%" : "-"}</td>`;
-      html += `<td>${i.rate_valid ? err.toFixed(1) : "-"}</td>`;
+      html += `<td class="nf-mono">${snFmtSpeed(i.speed_bps)}</td>`;
+      html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.in_bps) : "-"}</td>`;
+      html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.out_bps) : "-"}</td>`;
+      html += `<td>${i.rate_valid ? snUtilCell(util) : "-"}</td>`;
+      html += `<td class="nf-num">${i.rate_valid ? err.toFixed(1) : "-"}</td>`;
       html += `</tr>`;
     });
     html += `</tbody></table></div></div>`;

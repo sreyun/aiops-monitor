@@ -7,6 +7,10 @@ package main
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -212,8 +216,8 @@ type reqHead struct {
 	method, path, host, ctype, body string
 }
 type respHead struct {
-	status       int
-	ctype, body  string
+	status      int
+	ctype, body string
 }
 
 var crlfcrlf = []byte("\r\n\r\n")
@@ -252,6 +256,7 @@ func parseReqComplete(buf []byte) (reqHead, bool) {
 		return reqHead{}, false
 	}
 	h := reqHead{method: rl[0], path: rl[1], host: headerVal(lines[1:], "Host"), ctype: headerVal(lines[1:], "Content-Type")}
+	ce := headerVal(lines[1:], "Content-Encoding")
 	cl, hasCL := parseContentLength(lines[1:])
 	if !hasCL {
 		h.body = string(cleanUTF8(body)) // 无 CL（如 GET）：现有 body 即全部
@@ -260,7 +265,7 @@ func parseReqComplete(buf []byte) (reqHead, bool) {
 	if len(body) < cl {
 		return reqHead{}, false // body 未收全
 	}
-	h.body = string(cleanUTF8(body[:cl]))
+	h.body = string(cleanUTF8(decodeContentEncoding(body[:cl], ce)))
 	return h, true
 }
 
@@ -281,9 +286,13 @@ func parseRespComplete(buf []byte) (respHead, bool) {
 	}
 	h.ctype = headerVal(lines[1:], "Content-Type")
 	te := strings.ToLower(headerVal(lines[1:], "Transfer-Encoding"))
+	ce := headerVal(lines[1:], "Content-Encoding") // gzip/deflate：收全后需先解压再清洗
 
 	if strings.Contains(te, "chunked") {
 		dec, done := dechunk(body)
+		if done { // 只有整块收全才解压（gzip 半包解不出）
+			dec = decodeContentEncoding(dec, ce)
+		}
 		h.body = string(cleanUTF8(dec))
 		return h, done // chunked：收到 0\r\n\r\n 才算全
 	}
@@ -291,12 +300,12 @@ func parseRespComplete(buf []byte) (respHead, bool) {
 		if len(body) < cl {
 			return respHead{}, false
 		}
-		h.body = string(cleanUTF8(body[:cl]))
+		h.body = string(cleanUTF8(decodeContentEncoding(body[:cl], ce)))
 		return h, true
 	}
 	// SSE / 无长度：body 即已收部分；是否"收全"由调用方的 fin/idle 决定（这里返回 done=false，
 	// 让 tryEmit 在 fin/idle 时才落地）。但 SSE 见到 [DONE] 视为结束。
-	h.body = string(cleanUTF8(body))
+	h.body = string(cleanUTF8(decodeContentEncoding(body, ce)))
 	if strings.Contains(strings.ToLower(h.ctype), "event-stream") && strings.Contains(string(body), "[DONE]") {
 		return h, true
 	}
@@ -350,4 +359,39 @@ func dechunk(b []byte) ([]byte, bool) {
 // cleanUTF8 去除无效 UTF-8（body 可能非文本），保证 JSON 上报安全。
 func cleanUTF8(b []byte) []byte {
 	return []byte(strings.ToValidUTF8(string(b), ""))
+}
+
+const maxDecodedBody = 2 << 20 // 解压上限 2MB，防解压炸弹
+
+// decodeContentEncoding 按 Content-Encoding 解压 gzip / deflate（仅标准库，零依赖）。
+// 这是内容审计"看不到明文"的主因修复：绝大多数 HTTP API 响应是 gzip 压缩的，之前只解 chunked、
+// 不解 Content-Encoding，压缩字节被 cleanUTF8 直接抹成空，导致响应体全空。br 等未知编码或解压
+// 失败则原样返回（交给 cleanUTF8 兜底）。
+func decodeContentEncoding(b []byte, enc string) []byte {
+	enc = strings.ToLower(strings.TrimSpace(enc))
+	if enc == "" || len(b) == 0 {
+		return b
+	}
+	switch {
+	case strings.Contains(enc, "gzip"):
+		if r, err := gzip.NewReader(bytes.NewReader(b)); err == nil {
+			defer r.Close()
+			if out, err := io.ReadAll(io.LimitReader(r, maxDecodedBody)); err == nil && len(out) > 0 {
+				return out
+			}
+		}
+	case strings.Contains(enc, "deflate"):
+		if r, err := zlib.NewReader(bytes.NewReader(b)); err == nil { // deflate 常为 zlib 包裹
+			defer r.Close()
+			if out, err := io.ReadAll(io.LimitReader(r, maxDecodedBody)); err == nil && len(out) > 0 {
+				return out
+			}
+		}
+		fr := flate.NewReader(bytes.NewReader(b)) // 再试裸 flate
+		defer fr.Close()
+		if out, err := io.ReadAll(io.LimitReader(fr, maxDecodedBody)); err == nil && len(out) > 0 {
+			return out
+		}
+	}
+	return b
 }

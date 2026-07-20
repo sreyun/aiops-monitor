@@ -119,15 +119,21 @@ function renderCA(container, events) {
     if (!s) return `<span style="color:var(--muted)">—</span>`;
     return `<div style="max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:var(--mono,ui-monospace,monospace);font-size:12px">${esc(s)}${(text || "").length > 2000 ? " …" : ""}${trunc ? `<span style="color:#e0a300"> [${esc(I18N.t("ca.truncated") || "已截断")}]</span>` : ""}</div>`;
   };
+  // 仅响应行（抓包起于连接中途/请求丢包 → 只捕到响应）：方法/请求为空，标注清楚不是"没内容"的 bug。
+  const promptCell = (e) => {
+    if ((e.body || "").length) return cell(e.body, e.req_truncated);
+    if (!e.method && e.status) return `<span style="color:var(--muted)">（请求未捕获·仅响应）</span>`;
+    return `<span style="color:var(--muted)">—</span>`;
+  };
   events.forEach(e => {
     html += `<tr${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""}>`;
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
     html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
-    html += `<td>${esc(e.src_ip || "")}</td>`;
-    html += `<td>${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all">${esc(e.path)}</div>` : ""}</td>`;
-    html += `<td>${esc(e.method || "")}</td>`;
-    html += `<td>${e.status ? esc(String(e.status)) : "—"}</td>`;
-    html += `<td>${cell(e.body, e.req_truncated)}</td>`;
+    html += `<td class="nf-mono">${esc(e.src_ip || "")}</td>`;
+    html += `<td class="nf-mono">${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all;font-family:ui-monospace,monospace">${esc(e.path)}</div>` : ""}</td>`;
+    html += `<td>${e.method ? `<span class="nf-proto nf-proto-tcp">${esc(e.method)}</span>` : `<span class="nf-proto" style="background:var(--bg3);color:var(--muted)">仅响应</span>`}</td>`;
+    html += `<td class="nf-num">${e.status ? esc(String(e.status)) : "—"}</td>`;
+    html += `<td>${promptCell(e)}</td>`;
     html += `<td>${cell(e.resp_body, e.resp_truncated)}</td>`;
     html += `</tr>`;
   });
