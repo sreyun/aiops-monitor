@@ -170,6 +170,9 @@ function renderPanels() {
   }
   grid.innerHTML = panels.map(p => {
     const w = Math.max(1, Math.min(24, p.grid.w || 12));
+    // 面板按 gridPos.h 占满对应行数（网格行高固定），使卡片填满其矩形区域 —— 消除
+    // 「矮面板(如 stat)紧邻高面板(timeseries)时下方大片空白」的根因（原来靠内容撑高会留缝）。
+    const h = Math.max(3, Math.min(48, p.grid.h || 8));
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
     const edit = DASH_EDIT ? `<div class="panel-edit-actions">
         <button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
@@ -177,7 +180,7 @@ function renderPanels() {
         <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
         <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>
       </div>` : "";
-    return `<div class="dash-panel dp-${esc(p.type)}" style="grid-column:span ${w}" data-panel="${p.id}">
+    return `<div class="dash-panel dp-${esc(p.type)}" style="grid-column:span ${w}; grid-row:span ${h}" data-panel="${p.id}">
       <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${edit}</div>
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
     </div>`;
@@ -187,6 +190,13 @@ function renderPanels() {
 
 /* ---------- 面板查询与绘制 ---------- */
 function panelVars() { return DASH_VARVALS; }
+// panelBodyH：面板正文的实际内容高度（扣除内边距），供图表填满面板用。
+function panelBodyH(el) {
+  if (!el) return 160;
+  const cs = getComputedStyle(el);
+  const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  return Math.max(0, el.clientHeight - pad);
+}
 async function loadPanel(p) {
   const body = document.getElementById("panelBody_" + p.id);
   if (!body) return;
@@ -223,8 +233,8 @@ function fmtLogTs(ms) {
   return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }
 async function loadTimeseriesPanel(p, body, from, to) {
-  const defs = [], tsMap = new Map();
-  let si = 0, naOff = false;
+  const collected = []; // { labels, legendFmt, points }
+  let naOff = false;
   for (const t of p.targets) {
     let res;
     try {
@@ -232,25 +242,29 @@ async function loadTimeseriesPanel(p, body, from, to) {
     } catch (e) { continue; }
     if (res && res.available === false) { naOff = true; break; }
     for (const s of (res && res.series || [])) {
-      if (si >= 24) break; // 上限，避免图例爆炸
-      const key = "s" + si;
-      defs.push({ key, label: legendFor(t.legend, s.labels || {}), color: DASH_COLORS[si % DASH_COLORS.length], fmt: v => fmtUnit(v, p.unit) });
-      for (const pt of (s.points || [])) {
-        const ts = Math.round(pt[0]);
-        let row = tsMap.get(ts); if (!row) { row = { timestamp: ts }; tsMap.set(ts, row); }
-        row[key] = pt[1];
-      }
-      si++;
+      if (collected.length >= 24) break; // 上限，避免图例爆炸
+      collected.push({ labels: s.labels || {}, legendFmt: t.legend, points: s.points || [] });
     }
   }
   if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
-  if (!defs.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return; }
+  if (!collected.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return; }
+  const labels = dashLegends(collected);
+  const defs = [], tsMap = new Map();
+  collected.forEach((c, i) => {
+    const key = "s" + i;
+    defs.push({ key, label: labels[i], color: DASH_COLORS[i % DASH_COLORS.length], fmt: v => fmtUnit(v, p.unit) });
+    for (const pt of c.points) {
+      const ts = Math.round(pt[0]);
+      let row = tsMap.get(ts); if (!row) { row = { timestamp: ts }; tsMap.set(ts, row); }
+      row[key] = pt[1];
+    }
+  });
   const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   const cid = "dashCanvas_" + p.id;
   body.innerHTML = `<div class="chart-wrap"><canvas id="${cid}"></canvas></div>`;
-  // 图表高度随面板 gridPos.h（约 30px/行）自适应填满，去掉固定 210px 造成的大量空白；
-  // 不再传 title（面板头已有标题，避免画布内重复渲染标题）。
-  const chartH = Math.max(120, (p.grid.h || 8) * 30 - 62);
+  // 图表填满面板正文（面板已按 gridPos.h 占满网格行高，正文的实测高度即真实可用高度）；
+  // 不再传 title（面板头已有标题，避免画布内重复渲染标题、也不再浪费顶部空间）。
+  const chartH = Math.max(90, panelBodyH(body));
   const args = [cid, samples, defs, null, unitYMax(p.unit), { cssH: chartH }];
   DASH_CHART_ARGS[p.id] = args;
   createChart.apply(null, args);
@@ -292,6 +306,23 @@ function legendFor(fmt, labels) {
   const rest = Object.keys(labels).filter(k => k !== "__name__").map(k => `${k}=${labels[k]}`).join(",");
   return (name + (rest ? `{${rest}}` : "")) || "value";
 }
+// dashLegends：多序列图例去重可辨。若各序列图例已互不相同则原样用；否则改用「序列之间取值不同的
+// 标签」重建（如 state / mountpoint / device），避免像网络连接数那样 8 条都显示同一个 instance。
+function dashLegends(collected) {
+  const raw = collected.map(c => legendFor(c.legendFmt, c.labels));
+  if (new Set(raw).size === raw.length) return raw; // 已可区分
+  const keys = new Set();
+  collected.forEach(c => Object.keys(c.labels || {}).forEach(k => { if (k !== "__name__") keys.add(k); }));
+  const varying = [...keys].filter(k => new Set(collected.map(c => (c.labels || {})[k] || "")).size > 1);
+  return collected.map((c, i) => {
+    if (varying.length) {
+      const lbl = varying.map(k => (c.labels || {})[k]).filter(v => v !== undefined && v !== "").join(" · ");
+      if (lbl) return lbl;
+    }
+    const nm = (c.labels || {}).__name__;
+    return (nm || raw[i] || "series") + " #" + (i + 1);
+  });
+}
 function autoMax(series) {
   let m = 0;
   for (const s of series) { const v = +(s.Value !== undefined ? s.Value : s.value); if (v > m) m = v; }
@@ -313,6 +344,17 @@ function fmtBytes(v) {
   while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(i ? 2 : 0) + u[i];
 }
+// fmtDuration：秒 → 人类可读时长。>=1天显示 天+小时（运行时间等长时长换算为天），
+// 分钟级显示 分+秒，亚秒显示毫秒。
+function fmtDuration(v) {
+  const neg = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (a < 1) return neg + (a * 1000).toFixed(0) + "ms";
+  if (a < 60) return neg + (a < 10 ? a.toFixed(1) : a.toFixed(0)) + "s";
+  if (a < 3600) { const m = Math.floor(a / 60), s = Math.round(a % 60); return neg + m + "m" + (s ? " " + s + "s" : ""); }
+  if (a < 86400) { const h = Math.floor(a / 3600), m = Math.round((a % 3600) / 60); return neg + h + "h" + (m ? " " + m + "m" : ""); }
+  const d = Math.floor(a / 86400), h = Math.round((a % 86400) / 3600); return neg + d + "天" + (h ? " " + h + "h" : "");
+}
 function fmtUnit(v, unit) {
   if (v === undefined || v === null || isNaN(v)) return "-";
   switch (unit) {
@@ -320,8 +362,8 @@ function fmtUnit(v, unit) {
     case "percentunit": return (v * 100).toFixed(1) + "%";
     case "bytes": return fmtBytes(v);
     case "Bps": return fmtBytes(v) + "/s";
-    case "s": return v.toFixed(2) + "s";
-    case "ms": return v.toFixed(0) + "ms";
+    case "s": case "seconds": case "duration": return fmtDuration(v);
+    case "ms": return v >= 1000 ? fmtDuration(v / 1000) : v.toFixed(0) + "ms";
     case "reqps": return fmtShort(v) + "/s";
     default: return fmtShort(v);
   }
@@ -626,10 +668,15 @@ async function aiOptimizeDash() {
     context: ctx, hint: "AI 正在评审看板并给出优化建议…",
     applyLabel: "应用优化到看板",
     applyTo: async (code) => {
+      // 用完整回复（而非仅首个代码块）：AI 可能在 json 前先给了 PromQL 代码块，只取首块会拿错内容；
+      // 服务端 extractJSONObject 会优先定位 ```json 块，更稳。
+      const answer = (typeof _aiAssistState !== "undefined" && _aiAssistState.lastAnswer) || code || "";
+      if (!answer.trim()) { toast("请先等 AI 给出优化建议再应用", "err"); return; }
+      toast("正在应用优化…", "ok");
       try {
-        const j = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ json: code }) }).then(r => r.json());
+        const j = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ json: answer }) }).then(r => r.json());
         if (j.ok) { toast(`已应用优化：${j.panels} 面板`, "ok"); if (CUR_DASH && CUR_DASH.id === dashId) openDashboard(dashId); }
-        else toast("应用失败：" + (j.error || ""), "err");
+        else toast("应用失败：" + (j.error || "AI 未给出可应用的看板结构，请点「重新生成」重试"), "err");
       } catch (e) { toast("应用失败：" + e, "err"); }
     }
   });
