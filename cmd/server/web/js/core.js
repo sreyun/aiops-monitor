@@ -372,6 +372,24 @@ function openMask(mask) {
   setTimeout(() => trapFocus(mask), 50);
 }
 
+// ---- 明细表通用分页（客户端）----
+// tblClampPage：把页码夹到 [1, 总页数]。
+function tblClampPage(page, total, size) { return Math.min(Math.max(1, page || 1), Math.max(1, Math.ceil((total || 0) / (size || 20)))); }
+// tblPager：返回分页控件 HTML；点击「上一页/下一页」和切换「每页条数」由各表用 [data-pg] 事件委托处理。
+function tblPager(total, page, size) {
+  const pages = Math.max(1, Math.ceil((total || 0) / size));
+  page = Math.min(Math.max(1, page), pages);
+  const from = total ? (page - 1) * size + 1 : 0, to = Math.min(page * size, total);
+  return `<div class="tbl-pager">
+    <span class="tbl-pager-info">共 ${total} 条 · ${from}–${to}</span>
+    <span class="tbl-pager-spacer"></span>
+    <div class="select-wrap sm"><select class="tbl-pager-size" data-pg="size">${[10, 20, 50, 100].map(n => `<option value="${n}"${n === size ? " selected" : ""}>${n} 条/页</option>`).join("")}</select></div>
+    <button class="tbl-pager-btn" data-pg="prev"${page <= 1 ? " disabled" : ""}>‹</button>
+    <span class="tbl-pager-cur">${page} / ${pages}</span>
+    <button class="tbl-pager-btn" data-pg="next"${page >= pages ? " disabled" : ""}>›</button>
+  </div>`;
+}
+
 /* ============================================================
    P2-4: 骨架屏
    ============================================================ */

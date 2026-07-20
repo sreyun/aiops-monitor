@@ -3142,6 +3142,19 @@ select:focus {
 .nf-badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .nf-badge-netflow { background: var(--accent-soft); color: var(--accent-txt); border: 1px solid var(--accent-border); }
 .nf-badge-packet { background: var(--accent2-soft); color: var(--accent2-txt); border: 1px solid var(--accent2-border); }
+/* 内容审计 请求/响应 正文单元：限高可滚，压低行高（原来 160px 撑得每行很高） */
+.ca-body-cell { max-height: 84px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
+.nf-flow-table td { vertical-align: top; }
+
+/* 明细表通用分页控件 */
+.tbl-pager { display: flex; align-items: center; gap: 10px; padding: 10px 2px 2px; flex-wrap: wrap; }
+.tbl-pager-info { font-size: 12px; color: var(--muted); }
+.tbl-pager-spacer { flex: 1; min-width: 8px; }
+.tbl-pager-size { padding: 4px 22px 4px 8px; font-size: 12px; height: 28px; }
+.tbl-pager-cur { font-size: 12px; color: var(--txt2); font-variant-numeric: tabular-nums; min-width: 52px; text-align: center; }
+.tbl-pager-btn { width: 30px; height: 28px; border-radius: 6px; border: 1px solid var(--line2); background: var(--panel2); color: var(--txt2); cursor: pointer; font-size: 15px; line-height: 1; transition: border-color .15s, color .15s; }
+.tbl-pager-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tbl-pager-btn:disabled { opacity: .4; cursor: default; }
 .empty-state { padding: 40px; text-align: center; color: var(--txt2); font-size: 14px; }
 .loading-dots { padding: 40px; text-align: center; color: var(--txt2); }
 

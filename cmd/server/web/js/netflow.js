@@ -9,6 +9,7 @@ let nfCurrentRange = "1h";
 let nfHostQuery = "";       // 主机搜索词
 let nfDimension = "dst_ip"; // Top-N 聚合维度（后端支持多种，之前前端写死了）
 let nfSearchT = null;
+let nfFlowPage = 1, nfFlowSize = 20; // Flow 明细分页（客户端）
 // 「只列有流量的主机」：从 /api/v1/netflow/hosts 拉在所选时间窗内产生过 flow 的主机，
 // 按字节降序（大流量在前）。null=未加载。换时间范围/刷新/进入视图时重新拉。
 let nfTrafficHosts = null;
@@ -138,8 +139,9 @@ window.loadNetFlowData = function() {
   // Fetch Top-N summary
   Promise.all([
     fetch(`/api/v1/netflow/summary?host=${encodeURIComponent(host)}&range=${range}&dimension=${encodeURIComponent(nfDimension)}&top=10`, { credentials: "same-origin" }).then(r => r.json()),
-    fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&limit=100`, { credentials: "same-origin" }).then(r => r.json()),
+    fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&limit=500`, { credentials: "same-origin" }).then(r => r.json()),
   ]).then(([sumData, flowData]) => {
+    nfFlowPage = 1; // 新数据回到第一页
     nfLastSummary = { rows: sumData.summary || [], dimension: sumData.dimension || nfDimension };
     nfLastFlows = flowData.flows || [];
     renderNfSummary(summaryBody, sumData.summary || [], sumData.dimension || nfDimension);
@@ -173,10 +175,14 @@ function renderNfSummary(container, summary, dimension) {
 
 function renderNfFlows(container, flows) {
   if (!container) return;
+  window._nfFlowsCache = flows; // 存全量（供 CSV 导出 + 分页）
   if (flows.length === 0) {
     container.innerHTML = `<div class="empty-state">${I18N.t("netflow.no_flows") || "暂无 Flow 记录"}</div>`;
     return;
   }
+  const total = flows.length;
+  nfFlowPage = tblClampPage(nfFlowPage, total, nfFlowSize);
+  const pageFlows = flows.slice((nfFlowPage - 1) * nfFlowSize, nfFlowPage * nfFlowSize);
 
   let html = `<div class="nf-flows-toolbar">`;
   html += `<input id="nfFilterInput" type="text" class="nf-input" placeholder="${I18N.t("netflow.filter_placeholder") || "筛选: src_ip:10.0.0.1 或 dst_port:443"}">`;
@@ -199,7 +205,7 @@ function renderNfFlows(container, flows) {
   html += `<th>${I18N.t("netflow.last_seen") || "最后活跃"}</th>`;
   html += `</tr></thead><tbody>`;
 
-  flows.forEach(f => {
+  pageFlows.forEach(f => {
     const protoName = protoNameMap(f.protocol);
     const bytes = Number(f.bytes) || 0, pkts = Number(f.packets) || 0;
     const avgPkt = pkts > 0 ? Math.round(bytes / pkts) : 0; // 平均包长，辅助识别小包攻击/大流传输
@@ -219,10 +225,8 @@ function renderNfFlows(container, flows) {
     html += `</tr>`;
   });
   html += `</tbody></table></div>`;
+  html += tblPager(total, nfFlowPage, nfFlowSize);
   container.innerHTML = html;
-
-  // Store flows for CSV export
-  window._nfFlowsCache = flows;
 }
 
 window.applyNfFilter = function() {
@@ -231,7 +235,8 @@ window.applyNfFilter = function() {
   const host = nfCurrentHost || ($("nfHostSelect") || {}).value;
   if (!host) return;
 
-  fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=200`, { credentials: "same-origin" })
+  nfFlowPage = 1; // 筛选后回到第一页
+  fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=500`, { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => renderNfFlows($("nfFlowsBody"), data.flows || []))
     .catch(() => {});
@@ -349,6 +354,12 @@ function nfOpenAI() {
 // 事件委托：CSP 为 script-src 'self'，内联 onclick 会被浏览器拦截；且这些函数在 IIFE 内、
 // 不挂 window，内联写法即便没有 CSP 也会 ReferenceError。刷新/筛选/导出此前因此全是死按钮。
 safeAddEventListener("netflowPanel", "click", e => {
+  const pg = e.target.closest("[data-pg]"); // Flow 明细分页（客户端，用缓存不重查）
+  if (pg) {
+    if (pg.dataset.pg === "prev") nfFlowPage--; else if (pg.dataset.pg === "next") nfFlowPage++;
+    renderNfFlows($("nfFlowsBody"), window._nfFlowsCache || []);
+    return;
+  }
   const b = e.target.closest("[data-nfact]");
   if (!b) return;
   // 刷新：连「有流量的主机」列表一起重拉（否则新上流量的主机不会出现在下拉里）
@@ -356,6 +367,9 @@ safeAddEventListener("netflowPanel", "click", e => {
   else if (b.dataset.nfact === "filter") applyNfFilter();
   else if (b.dataset.nfact === "export") exportNfCSV();
   else if (b.dataset.nfact === "ai") nfOpenAI();
+});
+safeAddEventListener("netflowPanel", "change", e => {
+  if (e.target.dataset && e.target.dataset.pg === "size") { nfFlowSize = +e.target.value || 20; nfFlowPage = 1; renderNfFlows($("nfFlowsBody"), window._nfFlowsCache || []); }
 });
 
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};

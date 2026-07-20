@@ -299,7 +299,7 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 				ips = append(ips, stripMask(k))
 			}
 		}
-		en := flowEnrich.enrichMany(ips, 3*time.Second)
+		en := flowEnrich.enrichMany(ips, 600*time.Millisecond) // 内联只等已缓存/快解析的，避免整页卡 3s；未解析的由下方后台预热补
 		for _, it := range summary {
 			if k, _ := it["key"].(string); k != "" {
 				e := en[k]
@@ -375,7 +375,7 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 				ips = append(ips, stripMask(v))
 			}
 		}
-		en := flowEnrich.enrichMany(ips, 3*time.Second)
+		en := flowEnrich.enrichMany(ips, 600*time.Millisecond) // 内联只等已缓存/快解析的，避免整页卡 3s；未解析的由下方后台预热补
 		for _, f := range flows {
 			if v, _ := f["dst_ip"].(string); v != "" {
 				e := en[v]

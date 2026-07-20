@@ -9,6 +9,7 @@ let caKw = "";
 let caSearchT = null;
 let caSensOnly = false;   // 只看命中敏感的
 let caLastEvents = null;  // 上次加载的事件（供 AI 研判 + 客户端敏感过滤）
+let caPage = 1, caSize = 20; // 明细分页（客户端）
 // 「只列有内容审计数据的主机」：从 /api/v1/content-audit/hosts 拉有审计记录的主机，
 // 无数据的主机不进下拉。null=未加载；刷新/进入视图时重拉。
 let caDataHosts = null;
@@ -79,9 +80,22 @@ function caBind() {
   const so = $("caSensOnly");
   so && so.addEventListener("change", function() {
     caSensOnly = this.checked;
+    caPage = 1;
     // 客户端过滤即可（数据已在手），无需重查。
     if (caLastEvents) renderCA($("caBody"), caLastEvents);
   });
+  // 分页控件（客户端）：上一页/下一页 + 每页条数。委托在 #caBody 上，renderCA 只换其 innerHTML，监听器常驻。
+  const body = $("caBody");
+  if (body) {
+    body.addEventListener("click", function(e) {
+      const b = e.target.closest("[data-pg]"); if (!b) return;
+      if (b.dataset.pg === "prev") caPage--; else if (b.dataset.pg === "next") caPage++;
+      if (caLastEvents) renderCA(body, caLastEvents);
+    });
+    body.addEventListener("change", function(e) {
+      if (e.target.dataset && e.target.dataset.pg === "size") { caSize = +e.target.value || 20; caPage = 1; if (caLastEvents) renderCA(body, caLastEvents); }
+    });
+  }
 }
 
 window.loadContentAudit = function() {
@@ -90,7 +104,8 @@ window.loadContentAudit = function() {
   const body = $("caBody");
   if (body) body.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
   const filter = caKw.trim() ? ("kw:" + caKw.trim()) : "";
-  fetch(`/api/v1/content-audit?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=200`, { credentials: "same-origin" })
+  caPage = 1; // 新数据回到第一页
+  fetch(`/api/v1/content-audit?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=500`, { credentials: "same-origin" })
     .then(r => r.json())
     .then(d => { caLastEvents = d.events || []; renderCA(body, caLastEvents); })
     .catch(() => { if (body) body.innerHTML = `<div class="empty-state">${I18N.t("netflow.load_error") || "加载失败"}</div>`; });
@@ -103,6 +118,9 @@ function renderCA(container, events) {
     container.innerHTML = `<div class="empty-state">${caSensOnly ? (I18N.t("ca.no_sens") || "无命中敏感数据的记录") : (I18N.t("ca.empty") || "暂无内容审计记录（需在 agent 配置 content_audit: true，且目标为明文 HTTP 流量）")}</div>`;
     return;
   }
+  const total = events.length;
+  caPage = tblClampPage(caPage, total, caSize);
+  const pageEvents = events.slice((caPage - 1) * caSize, caPage * caSize);
   let html = `<div class="nf-table-wrap"><table class="nf-flow-table">`;
   html += `<thead><tr>`;
   html += `<th>${I18N.t("ca.time") || "时间"}</th>`;
@@ -117,7 +135,7 @@ function renderCA(container, events) {
   const cell = (text, trunc) => {
     const s = (text || "").slice(0, 2000);
     if (!s) return `<span style="color:var(--muted)">—</span>`;
-    return `<div style="max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:var(--mono,ui-monospace,monospace);font-size:12px">${esc(s)}${(text || "").length > 2000 ? " …" : ""}${trunc ? `<span style="color:#e0a300"> [${esc(I18N.t("ca.truncated") || "已截断")}]</span>` : ""}</div>`;
+    return `<div class="ca-body-cell">${esc(s)}${(text || "").length > 2000 ? " …" : ""}${trunc ? `<span style="color:#e0a300"> [${esc(I18N.t("ca.truncated") || "已截断")}]</span>` : ""}</div>`;
   };
   // 仅响应行（抓包起于连接中途/请求丢包 → 只捕到响应）：方法/请求为空，标注清楚不是"没内容"的 bug。
   const promptCell = (e) => {
@@ -125,7 +143,7 @@ function renderCA(container, events) {
     if (!e.method && e.status) return `<span style="color:var(--muted)">（请求未捕获·仅响应）</span>`;
     return `<span style="color:var(--muted)">—</span>`;
   };
-  events.forEach(e => {
+  pageEvents.forEach(e => {
     html += `<tr${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""}>`;
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
     html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
@@ -138,6 +156,7 @@ function renderCA(container, events) {
     html += `</tr>`;
   });
   html += `</tbody></table></div>`;
+  html += tblPager(total, caPage, caSize);
   container.innerHTML = html;
 }
 
