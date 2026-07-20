@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -39,6 +40,10 @@ func TestRollupSNMPBoundsCardinality(t *testing.T) {
 			t.Errorf("时间戳未转毫秒: %s", l)
 		}
 	}
+	if len(lines) < 3 || !strings.Contains(lines[2], `device_ip="10.0.0.1"`) ||
+		!strings.Contains(lines[2], `ifindex="1"`) {
+		t.Fatalf("接口时序缺少稳定身份标签 device_ip/ifindex: %v", lines[:min(3, len(lines))])
+	}
 }
 
 func TestRollupSNMPFailedSnapshotSkipped(t *testing.T) {
@@ -48,5 +53,13 @@ func TestRollupSNMPFailedSnapshotSkipped(t *testing.T) {
 	lines := rollupSNMP("h1", snap)
 	if len(lines) == 0 || !strings.Contains(lines[0], "aiops_snmp_reachable") || !strings.Contains(lines[0], "} 0 ") {
 		t.Errorf("unreachable 设备 reachable 序列应为 0: %v", lines)
+	}
+}
+
+func TestRequestTimeRangePrefersAbsoluteRange(t *testing.T) {
+	req := httptest.NewRequest("GET", "/?range=24h&from=1000&to=2000", nil)
+	from, to := requestTimeRange(req)
+	if from != 1000 || to != 2000 {
+		t.Fatalf("absolute range = (%d,%d), want (1000,2000)", from, to)
 	}
 }

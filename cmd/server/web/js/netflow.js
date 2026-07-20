@@ -15,6 +15,8 @@ let nfFlowPage = 1, nfFlowSize = 20; // Flow 明细分页（客户端）
 let nfTrafficHosts = null;
 let nfLastSummary = null;  // 上次加载的 Top-N 汇总（{rows,dimension}），供 AI 分析
 let nfLastFlows = null;    // 上次加载的 Flow 明细，供 AI 分析
+let nfIPHist = { host: "", ip: "", dimension: "dst_ip", label: "", range: 1, custom: null };
+let nfIPCharts = {};
 
 function renderNetFlowPanel() {
   const container = $("netflowPanel");
@@ -139,7 +141,7 @@ window.loadNetFlowData = function() {
   // Fetch Top-N summary
   Promise.all([
     fetch(`/api/v1/netflow/summary?host=${encodeURIComponent(host)}&range=${range}&dimension=${encodeURIComponent(nfDimension)}&top=10`, { credentials: "same-origin" }).then(r => r.json()),
-    fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&limit=500`, { credentials: "same-origin" }).then(r => r.json()),
+    fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&range=${encodeURIComponent(range)}&limit=500`, { credentials: "same-origin" }).then(r => r.json()),
   ]).then(([sumData, flowData]) => {
     nfFlowPage = 1; // 新数据回到第一页
     nfLastSummary = { rows: sumData.summary || [], dimension: sumData.dimension || nfDimension };
@@ -163,7 +165,8 @@ function renderNfSummary(container, summary, dimension) {
   container.innerHTML = `<div class="nf-rank">` + summary.map((item, i) => {
     const pct = Math.max(2, (item.bytes / maxBytes) * 100);
     const dom = item.enrich && nfEnrichText(item.enrich) ? nfEnrichText(item.enrich) : "";
-    return `<div class="nf-rank-row">
+    const clickable = dimension === "src_ip" || dimension === "dst_ip";
+    return `<div class="nf-rank-row${clickable ? " nf-rank-clickable" : ""}"${clickable ? ` data-nfip="${esc(item.key)}" data-nfdim="${esc(dimension)}"` : ""}>
       <span class="nf-rank-no">${i + 1}</span>
       <div class="nf-rank-main">
         <div class="nf-rank-head"><span class="nf-rank-key" title="${esc(item.key)}">${esc(item.key)}</span>${dom ? `<span class="nf-rank-dom" title="${esc(dom)}">${esc(dom)}</span>` : ""}<span class="nf-rank-bytes">${formatBytes(item.bytes)}</span></div>
@@ -212,9 +215,9 @@ function renderNfFlows(container, flows) {
     const dur = nfDurationSec(f);
     html += `<tr>`;
     html += `<td><span class="nf-badge nf-badge-${f.source}">${f.source}</span></td>`;
-    html += `<td class="nf-ipcell">${nfIPCell(f.src_ip, f.src_enrich)}</td>`;
+    html += `<td class="nf-ipcell">${nfIPCell(f.src_ip, f.src_enrich, "src_ip")}</td>`;
     html += `<td class="nf-mono">${f.src_port || ""}</td>`;
-    html += `<td class="nf-ipcell">${nfIPCell(f.dst_ip, f.dst_enrich)}</td>`;
+    html += `<td class="nf-ipcell">${nfIPCell(f.dst_ip, f.dst_enrich, "dst_ip")}</td>`;
     html += `<td class="nf-mono">${f.dst_port || ""}</td>`;
     html += `<td><span class="nf-proto nf-proto-${(protoName || "").toLowerCase()}">${protoName}</span></td>`;
     html += `<td class="nf-num">${formatBytes(bytes)}</td>`;
@@ -229,14 +232,17 @@ function renderNfFlows(container, flows) {
   container.innerHTML = html;
 }
 
-window.applyNfFilter = function() {
+window.applyNfFilter = function(customFrom, customTo) {
   const filter = ($("nfFilterInput") || {}).value || "";
   if (!filter) { loadNetFlowData(); return; }
   const host = nfCurrentHost || ($("nfHostSelect") || {}).value;
   if (!host) return;
 
   nfFlowPage = 1; // 筛选后回到第一页
-  fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=500`, { credentials: "same-origin" })
+  const timeQuery = Number.isFinite(customFrom) && Number.isFinite(customTo)
+    ? `from=${customFrom}&to=${customTo}`
+    : `range=${encodeURIComponent(nfCurrentRange || "1h")}`;
+  fetch(`/api/v1/netflow/flows?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&${timeQuery}&limit=500`, { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => renderNfFlows($("nfFlowsBody"), data.flows || []))
     .catch(() => {});
@@ -296,9 +302,9 @@ function nfEnrichText(e) {
   return parts.join(" · ");
 }
 // nfIPCell 渲染一个 IP 单元格：IP 在上，富化的域名/归属在下（小字）。
-function nfIPCell(ip, enrich) {
+function nfIPCell(ip, enrich, dimension) {
   const sub = nfEnrichText(enrich);
-  return `${esc(ip || "")}${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(sub)}</div>` : ""}`;
+  return `<button class="nf-ip-link" data-nfip="${esc(ip || "")}" data-nfdim="${esc(dimension || "dst_ip")}" title="${esc(I18N.t("netflow.view_ip_history") || "查看该 IP 历史趋势与下钻分析")}">${esc(ip || "")}</button>${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(sub)}</div>` : ""}`;
 }
 
 function formatBytes(bytes) {
@@ -350,10 +356,113 @@ function nfOpenAI() {
   openAIAssist({ task: "netflow_diagnosis", mode: "analyze", title: I18N.t("assist.title_netflow", "AI · 流量分析"), context: netflowToText() });
 }
 
+function nfHistoryControls(from, to) {
+  const custom = nfIPHist.custom;
+  return `${renderChartControls(custom ? -1 : nfIPHist.range, "nfhrange")}
+    <button class="chip-btn ${custom ? "active" : ""}" data-nfh-custom-toggle>${I18N.t("time.custom") || "自定义"}</button>
+    <span class="chart-custom-range" id="nfhCustomPanel"${custom ? "" : " hidden"}>
+      <input type="datetime-local" id="nfhCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
+      <span class="dt-sep">→</span>
+      <input type="datetime-local" id="nfhCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
+      <button class="chip-btn primary" data-nfh-custom-apply>${I18N.t("time.custom_apply") || "应用"}</button>
+    </span>`;
+}
+
+function nfOpenIPHistory(ip, dimension, keepRange) {
+  if (!ip) return;
+  const prev = nfIPHist;
+  nfIPHist = {
+    host: nfCurrentHost, ip, dimension: dimension === "src_ip" ? "src_ip" : "dst_ip",
+    label: ip, range: keepRange ? prev.range : 1, custom: keepRange ? prev.custom : null,
+  };
+  $("networkHistTitle").textContent = `${ip} · ${I18N.t("netflow.ip_history") || "IP 流量历史与下钻"}`;
+  $("networkHistMask").classList.add("show");
+  nfLoadIPHistory();
+}
+
+function nfDrillList(title, rows, kind) {
+  if (!rows || !rows.length) return `<div class="nf-drill-card"><h4>${esc(title)}</h4><div class="sn-dim">—</div></div>`;
+  const max = Number(rows[0].bytes) || 1;
+  return `<div class="nf-drill-card"><h4>${esc(title)}</h4>${rows.map(r => {
+    const key = kind === "protocol" ? protoNameMap(Number(r.key)) : r.key;
+    const en = r.enrich ? nfEnrichText(r.enrich) : "";
+    const attrs = kind === "peer" ? ` data-nf-peer="${esc(r.key)}"` : "";
+    return `<button class="nf-drill-row"${attrs}><span><b>${esc(key)}</b>${en ? `<small>${esc(en)}</small>` : ""}</span><span>${formatBytes(Number(r.bytes) || 0)} · ${Number(r.flows) || 0} Flow</span><i style="width:${Math.max(2, (Number(r.bytes) || 0) / max * 100)}%"></i></button>`;
+  }).join("")}</div>`;
+}
+
+async function nfLoadIPHistory() {
+  const body = $("networkHistBody");
+  if (!body) return;
+  body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading") || "加载中…"}</div>`;
+  const now = Math.floor(Date.now() / 1000);
+  const from = nfIPHist.custom ? nfIPHist.custom.from : now - nfIPHist.range * 3600;
+  const to = nfIPHist.custom ? nfIPHist.custom.to : now;
+  const q = new URLSearchParams({
+    host: nfIPHist.host, ip: nfIPHist.ip, dimension: nfIPHist.dimension,
+    from: String(from), to: String(to),
+  });
+  try {
+    const data = await fetch(`${API}/netflow/ip-history?${q}`, { credentials: "same-origin" }).then(r => {
+      if (!r.ok) throw new Error(r.statusText);
+      return r.json();
+    });
+    const samples = data.points || [];
+    const controls = nfHistoryControls(from, to);
+    if (!samples.length) {
+      body.innerHTML = `<div class="chart-controls">${controls}</div><div class="empty-line">${I18N.t("empty.no_trend_data") || "该时间范围暂无趋势数据"}</div>`;
+      return;
+    }
+    const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="240"></canvas><button class="chart-enlarge" data-nf-chart="${id}" title="${I18N.t("ui.zoom_preview") || "放大预览"}">⛶</button></div>`;
+    const totalBytes = samples.reduce((s, p) => s + (Number(p.bytes) || 0), 0);
+    const totalPackets = samples.reduce((s, p) => s + (Number(p.packets) || 0), 0);
+    const totalFlows = samples.reduce((s, p) => s + (Number(p.flows) || 0), 0);
+    body.innerHTML = `<div class="chart-controls">${controls}</div>
+      <div class="nf-ip-kpis"><span><b>${formatBytes(totalBytes)}</b>${I18N.t("netflow.bytes") || "流量"}</span><span><b>${totalPackets}</b>${I18N.t("netflow.packets") || "包"}</span><span><b>${totalFlows}</b>Flow</span><button class="nf-btn" data-nf-filter-ip="1">${I18N.t("netflow.related_flows") || "查看相关 Flow"}</button></div>
+      <div class="chart-container">${wrap("nfhTraffic")}${wrap("nfhPackets")}${wrap("nfhActivity")}${wrap("nfhPacketSize")}</div>
+      <div class="nf-drill-grid">
+        ${nfDrillList(I18N.t("netflow.top_peers") || "主要通信对端", data.peers, "peer")}
+        ${nfDrillList(I18N.t("netflow.protocol_breakdown") || "协议分布", data.protocols, "protocol")}
+        ${nfDrillList(I18N.t("netflow.dst_port_breakdown") || "目的端口", data.dst_ports, "port")}
+        ${nfDrillList(I18N.t("netflow.src_port_breakdown") || "源端口", data.src_ports, "port")}
+      </div><div class="hint">${I18N.t("netflow.drill_hint") || "点击通信对端可继续下钻；曲线按时间桶聚合，包含流量、包数、Flow 数、对端数和平均包长。"}</div>`;
+    nfIPCharts = {};
+    nfIPCharts.nfhTraffic = createChart("nfhTraffic", samples, [
+      { key: "bytes", label: I18N.t("netflow.bytes") || "字节", color: "#4c8dff", fmt: formatBytes },
+    ], 0, null, { title: I18N.t("netflow.traffic_history") || "分桶流量" });
+    nfIPCharts.nfhPackets = createChart("nfhPackets", samples, [
+      { key: "packets", label: I18N.t("netflow.packets") || "包", color: "#2fd07a", fmt: v => v.toFixed(0) },
+    ], 0, null, { title: I18N.t("netflow.packet_history") || "分桶包数" });
+    nfIPCharts.nfhActivity = createChart("nfhActivity", samples, [
+      { key: "flows", label: "Flow", color: "#8b5cf6", fmt: v => v.toFixed(0) },
+      { key: "peers", label: I18N.t("netflow.peers") || "通信对端", color: "#f7b23b", fmt: v => v.toFixed(0) },
+    ], 0, null, { title: I18N.t("netflow.activity_history") || "连接活跃度" });
+    nfIPCharts.nfhPacketSize = createChart("nfhPacketSize", samples, [
+      { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt") || "平均包长", color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
+    ], 0, null, { title: I18N.t("netflow.packet_size_history") || "平均包长" });
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
+  }
+}
+
+function nfApplyIPCustomRange() {
+  const f = $("nfhCustomFrom"), t = $("nfhCustomTo");
+  if (!f || !t || !f.value || !t.value) return;
+  const from = Math.floor(new Date(f.value).getTime() / 1000), to = Math.floor(new Date(t.value).getTime() / 1000);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || to - from < 60) {
+    toast(I18N.t("time.custom_order") || "请选择有效的时间范围（至少 1 分钟）", "warn");
+    return;
+  }
+  nfIPHist.custom = { from, to };
+  nfLoadIPHistory();
+}
+
 // Register with navigation
 // 事件委托：CSP 为 script-src 'self'，内联 onclick 会被浏览器拦截；且这些函数在 IIFE 内、
 // 不挂 window，内联写法即便没有 CSP 也会 ReferenceError。刷新/筛选/导出此前因此全是死按钮。
 safeAddEventListener("netflowPanel", "click", e => {
+  const ip = e.target.closest("[data-nfip]");
+  if (ip) { nfOpenIPHistory(ip.dataset.nfip, ip.dataset.nfdim, false); return; }
   const pg = e.target.closest("[data-pg]"); // Flow 明细分页（客户端，用缓存不重查）
   if (pg) {
     if (pg.dataset.pg === "prev") nfFlowPage--; else if (pg.dataset.pg === "next") nfFlowPage++;
@@ -367,6 +476,32 @@ safeAddEventListener("netflowPanel", "click", e => {
   else if (b.dataset.nfact === "filter") applyNfFilter();
   else if (b.dataset.nfact === "export") exportNfCSV();
   else if (b.dataset.nfact === "ai") nfOpenAI();
+});
+safeAddEventListener("networkHistBody", "click", e => {
+  const range = e.target.closest("[data-nfhrange]");
+  if (range) { nfIPHist.range = parseInt(range.dataset.nfhrange); nfIPHist.custom = null; nfLoadIPHistory(); return; }
+  if (e.target.closest("[data-nfh-custom-toggle]")) {
+    const p = $("nfhCustomPanel"); if (p) p.hidden = !p.hidden;
+    return;
+  }
+  if (e.target.closest("[data-nfh-custom-apply]")) { nfApplyIPCustomRange(); return; }
+  const en = e.target.closest("[data-nf-chart]");
+  if (en && nfIPCharts[en.dataset.nfChart]) { openChartZoom(nfIPCharts[en.dataset.nfChart]); return; }
+  const peer = e.target.closest("[data-nf-peer]");
+  if (peer) {
+    const opposite = nfIPHist.dimension === "src_ip" ? "dst_ip" : "src_ip";
+    nfOpenIPHistory(peer.dataset.nfPeer, opposite, true);
+    return;
+  }
+  if (e.target.closest("[data-nf-filter-ip]")) {
+    $("networkHistMask").classList.remove("show");
+    const input = $("nfFilterInput");
+    if (input) input.value = `${nfIPHist.dimension}:${nfIPHist.ip}`;
+    const now = Math.floor(Date.now() / 1000);
+    const from = nfIPHist.custom ? nfIPHist.custom.from : now - nfIPHist.range * 3600;
+    const to = nfIPHist.custom ? nfIPHist.custom.to : now;
+    applyNfFilter(from, to);
+  }
 });
 safeAddEventListener("netflowPanel", "change", e => {
   if (e.target.dataset && e.target.dataset.pg === "size") { nfFlowSize = +e.target.value || 20; nfFlowPage = 1; renderNfFlows($("nfFlowsBody"), window._nfFlowsCache || []); }

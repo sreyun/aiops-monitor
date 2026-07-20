@@ -3112,11 +3112,29 @@ select:focus {
 .nf-rank { display: flex; flex-direction: column; }
 .nf-rank-row { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
 .nf-rank-row:hover { background: var(--panel2); }
+.nf-rank-clickable { cursor: pointer; border-radius: var(--r-sm); }
+.nf-rank-clickable:hover .nf-rank-key { color: var(--accent); text-decoration: underline; }
 .nf-rank-no { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--bg3); }
 .nf-rank-row:nth-child(1) .nf-rank-no { background: var(--accent-soft); color: var(--accent); }
 .nf-rank-main { flex: 1; min-width: 0; }
 .nf-rank-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
 .nf-rank-key { font-size: 13px; font-weight: 600; color: var(--txt); font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nf-ip-link { border: 0; padding: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-family: ui-monospace, monospace; }
+.nf-ip-link:hover { text-decoration: underline; }
+.nf-ip-kpis { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; margin: 12px 0 18px; }
+.nf-ip-kpis > span { min-width: 120px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel2); color: var(--muted); font-size: 12px; }
+.nf-ip-kpis b { display: block; color: var(--txt); font-size: 18px; margin-bottom: 3px; }
+.nf-drill-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+.nf-drill-card { min-width: 0; border: 1px solid var(--line); border-radius: var(--r); padding: 12px; background: var(--panel2); }
+.nf-drill-card h4 { margin: 0 0 8px; font-size: 13px; color: var(--txt); }
+.nf-drill-row { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; overflow: hidden; border: 0; border-bottom: 1px solid var(--line); padding: 8px 4px; background: transparent; color: var(--txt); text-align: left; font: inherit; }
+.nf-drill-row[data-nf-peer] { cursor: pointer; }
+.nf-drill-row[data-nf-peer]:hover { color: var(--accent); }
+.nf-drill-row span { position: relative; z-index: 1; min-width: 0; font-size: 12px; }
+.nf-drill-row span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.nf-drill-row small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nf-drill-row i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); opacity: .55; }
+@media (max-width: 780px) { .nf-drill-grid { grid-template-columns: 1fr; } }
 .nf-rank-dom { font-size: 12px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .nf-rank-bytes { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--txt2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nf-rank-bar { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; }

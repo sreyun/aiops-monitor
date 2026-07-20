@@ -2249,6 +2249,114 @@ func (p *pgStore) getFlowSummary(hostID, dimension string, from, to int64, limit
 	return out, rows.Err()
 }
 
+// getFlowIPHistory returns bucketed traffic curves and drill-down dimensions for
+// one ranked source/destination IP. Aggregation stays in PostgreSQL because the
+// high-cardinality flow identity is intentionally not written to VictoriaMetrics.
+func (p *pgStore) getFlowIPHistory(hostID, dimension, ip string, from, to int64) (map[string]any, error) {
+	if dimension != "src_ip" && dimension != "dst_ip" {
+		dimension = "dst_ip"
+	}
+	if net.ParseIP(stripMask(ip)) == nil {
+		return nil, fmt.Errorf("invalid IP")
+	}
+	ip = stripMask(ip)
+	span := to - from
+	bucket := int64(60)
+	switch {
+	case span > 14*86400:
+		bucket = 3600
+	case span > 7*86400:
+		bucket = 1800
+	case span > 48*3600:
+		bucket = 600
+	case span > 12*3600:
+		bucket = 300
+	}
+	peerCol := "src_ip"
+	if dimension == "src_ip" {
+		peerCol = "dst_ip"
+	}
+	q := fmt.Sprintf(`
+		SELECT (floor(extract(epoch FROM created_at)/$5)*$5)::bigint AS ts,
+		       COALESCE(SUM(bytes),0)::bigint,
+		       COALESCE(SUM(packets),0)::bigint,
+		       COUNT(*)::bigint,
+		       COUNT(DISTINCT %s)::bigint
+		FROM flow_records
+		WHERE host_id=$1 AND created_at >= to_timestamp($2) AND created_at <= to_timestamp($3)
+		  AND %s = $4::inet
+		GROUP BY 1 ORDER BY 1`, peerCol, dimension)
+	rows, err := p.db.Query(q, hostID, from, to, ip, bucket)
+	if err != nil {
+		return nil, err
+	}
+	points := []map[string]any{}
+	for rows.Next() {
+		var ts, bytes, packets, flows, peers int64
+		if err := rows.Scan(&ts, &bytes, &packets, &flows, &peers); err != nil {
+			continue
+		}
+		avg := float64(0)
+		if packets > 0 {
+			avg = float64(bytes) / float64(packets)
+		}
+		points = append(points, map[string]any{
+			"timestamp": ts, "bytes": bytes, "packets": packets,
+			"flows": flows, "peers": peers, "avg_packet_bytes": avg,
+		})
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	top := func(expr string, limit int) ([]map[string]any, error) {
+		query := fmt.Sprintf(`
+			SELECT COALESCE(%s::text,''), COALESCE(SUM(bytes),0)::bigint,
+			       COALESCE(SUM(packets),0)::bigint, COUNT(*)::bigint
+			FROM flow_records
+			WHERE host_id=$1 AND created_at >= to_timestamp($2) AND created_at <= to_timestamp($3)
+			  AND %s = $4::inet
+			GROUP BY 1 ORDER BY 2 DESC LIMIT %d`, expr, dimension, limit)
+		rs, err := p.db.Query(query, hostID, from, to, ip)
+		if err != nil {
+			return nil, err
+		}
+		defer rs.Close()
+		out := []map[string]any{}
+		for rs.Next() {
+			var key string
+			var bytes, packets, flows int64
+			if err := rs.Scan(&key, &bytes, &packets, &flows); err == nil && key != "" {
+				out = append(out, map[string]any{
+					"key": stripMask(key), "bytes": bytes, "packets": packets, "flows": flows,
+				})
+			}
+		}
+		return out, rs.Err()
+	}
+
+	peers, err := top(peerCol, 12)
+	if err != nil {
+		return nil, err
+	}
+	protocols, err := top("protocol", 8)
+	if err != nil {
+		return nil, err
+	}
+	srcPorts, err := top("src_port", 10)
+	if err != nil {
+		return nil, err
+	}
+	dstPorts, err := top("dst_port", 10)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"points": points, "peers": peers, "protocols": protocols,
+		"src_ports": srcPorts, "dst_ports": dstPorts, "bucket_sec": bucket,
+	}, nil
+}
+
 // ipIsh 判断字符串是否是可用于 inet 比较的 IP 或 CIDR（否则不加该条件，避免 SQL 报错）。
 func ipIsh(s string) bool {
 	if net.ParseIP(s) != nil {
@@ -2275,10 +2383,21 @@ func protoToNum(s string) (int, bool) {
 }
 
 func (p *pgStore) getFlowRecords(hostID, filter string, limit int) ([]map[string]any, error) {
+	return p.getFlowRecordsRange(hostID, filter, limit, 0, 0)
+}
+
+// getFlowRecordsRange is getFlowRecords with an optional created_at window.
+// from/to <= 0 preserves the historical all-time behavior used by AI tools.
+func (p *pgStore) getFlowRecordsRange(hostID, filter string, limit int, from, to int64) ([]map[string]any, error) {
 	query := `SELECT source, src_ip::text, dst_ip::text, src_port, dst_port, protocol, bytes, packets, first_seen, last_seen
 		FROM flow_records WHERE host_id=$1`
 	args := []any{hostID}
 	argIdx := 2
+	if from > 0 && to > from {
+		query += fmt.Sprintf(` AND created_at >= to_timestamp($%d) AND created_at <= to_timestamp($%d)`, argIdx, argIdx+1)
+		args = append(args, from, to)
+		argIdx += 2
+	}
 
 	// 筛选：支持 src_ip:/dst_ip:（精确 IP 或 CIDR，用 inet 包含 <<=）、src_port:/dst_port:/port:、
 	// proto:（tcp/udp/icmp 或数字）、以及无前缀裸值（IP/CIDR→源或目的；纯数字→端口源或目的）。

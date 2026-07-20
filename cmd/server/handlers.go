@@ -101,9 +101,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			// 启动后立即执行一次
 			s.pg.decayOldMemories()
 			s.pg.cleanupExpiredMemories()
-			s.pg.capMemoriesByKind(2000)      // 每种 kind 最多 2000 条
-			s.pg.cleanupFlowRecords()         // 清理过期 Flow 记录
-			s.pg.cleanupContentAudit(30)      // 内容审计保留 30 天（高敏感，不永久留存）
+			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
+			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
+			s.pg.cleanupContentAudit(30) // 内容审计保留 30 天（高敏感，不永久留存）
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
@@ -284,7 +284,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
-	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                 // 全站「AI 辅助」按钮统一入口（任务化 SSE）
+	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）
 	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback) // 采纳/评价 AI 辅助结果 → 学习闭环强化
 	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)          // 值班晨报态势汇总（供前端流式生成）
 	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
@@ -382,6 +382,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/hyperv/{hostID}", s.handleDeleteHyperV)
 	mux.HandleFunc("GET /api/v1/netflow/hosts", s.handleNetFlowHosts)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
+	mux.HandleFunc("GET /api/v1/netflow/ip-history", s.handleNetFlowIPHistory)
 	mux.HandleFunc("GET /api/v1/netflow/flows", s.handleNetFlowFlows)
 	mux.HandleFunc("GET /api/v1/netflow/packets", s.handleNetFlowPackets)
 	// SNMP: frontend query
@@ -461,6 +462,7 @@ func (s *Server) Routes() http.Handler {
 //   - ETag=size-mtime 指纹：内容不变则客户端/CDN 命中 304，只回 header 不回 body。
 //   - Cache-Control: public,max-age —— 让 CDN/relay 边缘缓存；用 max-age+ETag 而非
 //     immutable，因为发版后同名 URL 内容会变，必须允许重新校验才能拿到新版 agent。
+//
 // gzip 中间件已对 /dl/ 前缀 bypass（二进制本就是压缩态，再 gzip 无益且破坏 Range）。
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/dl/")

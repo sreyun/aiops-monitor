@@ -211,6 +211,7 @@ func rollupSNMP(hostID string, snap shared.SNMPSnapshot) []string {
 	ts := snap.Timestamp * 1000
 	host := lblEsc(hostID)
 	device := lblEsc(snap.TargetName)
+	deviceIP := lblEsc(snap.TargetIP)
 
 	reach := 0.0
 	if snap.Reachable {
@@ -227,7 +228,11 @@ func rollupSNMP(hostID string, snap shared.SNMPSnapshot) []string {
 		ifaces = ifaces[:snmpMaxIfaces]
 	}
 	for _, iface := range ifaces {
-		lbl := fmt.Sprintf(`host="%s",device="%s",ifindex="%d",ifname="%s"`, host, device, iface.Index, lblEsc(iface.Name))
+		// device_ip + ifindex are stable identities. Keep device/ifname as display
+		// labels for compatibility, while history queries use the stable pair so
+		// device/interface renames don't make the curve disappear.
+		lbl := fmt.Sprintf(`host="%s",device="%s",device_ip="%s",ifindex="%d",ifname="%s"`,
+			host, device, deviceIP, iface.Index, lblEsc(iface.Name))
 		operUp := 0.0
 		if iface.OperUp {
 			operUp = 1
@@ -331,30 +336,84 @@ func (s *Server) handleSNMPTraps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"traps": traps})
 }
 
-// handleSNMPInterfaceHistory 返回某设备某接口某指标的 VM 时序（供前端画曲线）。
+var snmpHistoryMetrics = map[string]string{
+	"oper_up":      "aiops_snmp_if_oper_up",
+	"speed_bps":    "aiops_snmp_if_speed_bps",
+	"in_bps":       "aiops_snmp_if_in_bps",
+	"out_bps":      "aiops_snmp_if_out_bps",
+	"in_util":      "aiops_snmp_if_in_util",
+	"out_util":     "aiops_snmp_if_out_util",
+	"in_err_pps":   "aiops_snmp_if_in_err_pps",
+	"out_err_pps":  "aiops_snmp_if_out_err_pps",
+	"in_disc_pps":  "aiops_snmp_if_in_disc_pps",
+	"out_disc_pps": "aiops_snmp_if_out_disc_pps",
+}
+
+// requestTimeRange accepts the same absolute from/to model as host trends and
+// falls back to the legacy relative range query.
+func requestTimeRange(r *http.Request) (int64, int64) {
+	from, ferr := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+	to, terr := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+	if ferr == nil && terr == nil && from > 0 && to > from {
+		return from, to
+	}
+	return parseTimeRange(r.URL.Query().Get("range"))
+}
+
+// handleSNMPInterfaceHistory returns all important time series for one
+// interface. ifindex is the stable identity; device_ip keeps history available
+// across display-name changes. Legacy series are queried by device/ifname.
 func (s *Server) handleSNMPInterfaceHistory(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")
 	device := r.URL.Query().Get("device")
-	metric := r.URL.Query().Get("metric") // in_bps/out_bps/in_util/out_util/oper_up ...
+	deviceIP := r.URL.Query().Get("device_ip")
+	ifindex := r.URL.Query().Get("ifindex")
 	ifname := r.URL.Query().Get("ifname")
-	rangeStr := r.URL.Query().Get("range")
-	if hostID == "" || metric == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host and metric required"})
+	if hostID == "" || (ifindex == "" && ifname == "") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host and interface required"})
 		return
 	}
 	if !s.vm.enabled() {
-		writeJSON(w, http.StatusOK, map[string]any{"points": []any{}})
+		writeJSON(w, http.StatusOK, map[string]any{"series": map[string]any{}})
 		return
 	}
-	from, to := parseTimeRange(rangeStr)
-	promql := fmt.Sprintf(`aiops_snmp_if_%s{host="%s"`, metric, hostID)
-	if device != "" {
-		promql += fmt.Sprintf(`, device="%s"`, device)
+	from, to := requestTimeRange(r)
+	baseMatcher := fmt.Sprintf(`host="%s"`, lblEsc(hostID))
+	matchers := baseMatcher
+	if deviceIP != "" {
+		matchers += fmt.Sprintf(`,device_ip="%s"`, lblEsc(deviceIP))
+	} else if device != "" {
+		matchers += fmt.Sprintf(`,device="%s"`, lblEsc(device))
 	}
-	if ifname != "" {
-		promql += fmt.Sprintf(`, ifname="%s"`, ifname)
+	if ifindex != "" {
+		if _, err := strconv.Atoi(ifindex); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ifindex"})
+			return
+		}
+		matchers += fmt.Sprintf(`,ifindex="%s"`, ifindex)
+	} else {
+		matchers += fmt.Sprintf(`,ifname="%s"`, lblEsc(ifname))
 	}
-	promql += "}"
-	points := s.vm.queryRawRange(promql, from, to)
-	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+
+	series := make(map[string][]any, len(snmpHistoryMetrics))
+	for key, metric := range snmpHistoryMetrics {
+		promql := metric + "{" + matchers + "}"
+		// Series written before device_ip was introduced are still addressable by
+		// the old device label. Union them so upgrading doesn't hide old history.
+		if deviceIP != "" && device != "" {
+			legacy := baseMatcher + fmt.Sprintf(`,device="%s"`, lblEsc(device))
+			if ifindex != "" {
+				legacy += fmt.Sprintf(`,ifindex="%s"`, ifindex)
+			} else {
+				legacy += fmt.Sprintf(`,ifname="%s"`, lblEsc(ifname))
+			}
+			promql = "(" + promql + " or " + metric + "{" + legacy + "})"
+		}
+		series[key] = s.vm.queryRawRange(promql, from, to)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"series": series, "from": from, "to": to,
+		"host": hostID, "device": device, "device_ip": deviceIP,
+		"ifindex": ifindex, "ifname": ifname,
+	})
 }

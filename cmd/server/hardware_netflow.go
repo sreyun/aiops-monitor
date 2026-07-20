@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -317,6 +318,60 @@ func (s *Server) handleNetFlowSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "dimension": dimension})
 }
 
+// handleNetFlowIPHistory returns time-bucketed curves plus drill-down rankings
+// for a clicked IP in the traffic ranking/detail table.
+func (s *Server) handleNetFlowIPHistory(w http.ResponseWriter, r *http.Request) {
+	hostID := r.URL.Query().Get("host")
+	ip := stripMask(r.URL.Query().Get("ip"))
+	dimension := r.URL.Query().Get("dimension")
+	if hostID == "" || net.ParseIP(ip) == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid host and ip required"})
+		return
+	}
+	if dimension != "src_ip" && dimension != "dst_ip" {
+		dimension = "dst_ip"
+	}
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"points": []any{}})
+		return
+	}
+	from, to := requestTimeRange(r)
+	data, err := s.pg.getFlowIPHistory(hostID, dimension, ip, from, to)
+	if err != nil {
+		slog.Warn("查询 IP 流量历史失败", "host", hostID, "ip", ip, "dimension", dimension, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	data["host"] = hostID
+	data["ip"] = ip
+	data["dimension"] = dimension
+	data["from"] = from
+	data["to"] = to
+
+	// Enrich peer IPs so the drill-down answers “communicating with whom”.
+	if peers, ok := data["peers"].([]map[string]any); ok && len(peers) > 0 && !s.cfg.Get().FlowEnrichDisabled {
+		ips := make([]string, 0, len(peers))
+		for _, row := range peers {
+			if key, _ := row["key"].(string); key != "" {
+				ips = append(ips, key)
+			}
+		}
+		enriched := flowEnrich.enrichMany(ips, 600*time.Millisecond)
+		for _, row := range peers {
+			key, _ := row["key"].(string)
+			e := enriched[key]
+			if dom, _, found := dnsObservations.lookup(hostID, key); found {
+				e.Host = dom
+			}
+			if e.hasData() {
+				row["enrich"] = e
+			}
+		}
+		go flowEnrich.enrichMany(ips, 20*time.Second)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 // handleNetFlowHosts returns only the hosts that actually have flow data in the
 // window, ranked by traffic volume. The frontend uses this to filter the host
 // selector to "hosts with traffic" (large first), hiding idle hosts.
@@ -353,8 +408,13 @@ func (s *Server) handleNetFlowFlows(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 	filter := r.URL.Query().Get("filter") // e.g. "src_ip:10.0.0.0/8"
+	from, to := int64(0), int64(0)
+	q := r.URL.Query()
+	if q.Get("range") != "" || q.Get("from") != "" || q.Get("to") != "" {
+		from, to = requestTimeRange(r)
+	}
 
-	flows, err := s.pg.getFlowRecords(hostID, filter, limit)
+	flows, err := s.pg.getFlowRecordsRange(hostID, filter, limit, from, to)
 	if err != nil {
 		slog.Warn("查询 Flow 明细失败", "host", hostID, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
