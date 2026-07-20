@@ -655,10 +655,49 @@ function renderPanelTargets() {
   if (!wrap) return;
   wrap.innerHTML = PANEL_TARGETS_DRAFT.map((t, i) => `
     <div class="panel-target-row">
-      <input type="text" class="mono" data-tgt-expr="${i}" placeholder="PromQL，如 rate(node_cpu_seconds_total[$__interval])" value="${esc(t.expr)}" style="flex:2">
+      <input type="text" class="mono" data-tgt-expr="${i}" placeholder="PromQL，如 rate(node_cpu_seconds_total[$__interval])，不会写就点右侧 ✨" value="${esc(t.expr)}" style="flex:2">
       <input type="text" data-tgt-legend="${i}" placeholder="图例 {{instance}}（可空）" value="${esc(t.legend)}" style="flex:1">
+      <button class="mini-btn" data-tgt-ai="${i}" title="AI 生成查询（用大白话描述需求）">✨</button>
       <button class="mini-btn del" data-tgt-del="${i}" title="删除">✕</button>
     </div>`).join("");
+}
+// fetchMetricNames：从当前数据源取可用指标名（供 AI 生成查询做上下文，只用真实指标不臆造）。
+async function fetchMetricNames(dsID) {
+  try {
+    const r = await fetch(`${API}/dashboards/var-values`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "__m", type: "query", query: "label_values(__name__)", datasource: dsID }) }).then(r => r.json());
+    return (r && r.values) || [];
+  } catch (e) { return []; }
+}
+// aiGenPromQL：AI 辅助写查询——注入数据源真实指标名 + 面板类型，用户用大白话描述需求，AI 产出 PromQL/LogQL，一键填入。
+async function aiGenPromQL(i) {
+  syncPanelTargets();
+  const ty = $("panelType").value;
+  const dsID = ty === "logs" ? $("panelDS").value : ($("panelDS").value || (CUR_DASH && CUR_DASH.datasource) || "");
+  let ctx;
+  if (ty === "logs") {
+    ctx = "目标：为日志面板生成 LogQL（数据源为 Loki）。请用常见 Loki 标签选择器 + 过滤/解析。";
+  } else {
+    toast("读取可用指标…", "ok");
+    const metrics = (await fetchMetricNames(dsID)).slice(0, 200);
+    ctx = (metrics.length ? "【可用指标（节选，只能用这些真实指标名，不要臆造）】\n" + metrics.join(", ") : "（未取到指标列表，按常见 Prometheus / node_exporter / 各 exporter 命名生成）")
+      + "\n\n目标面板类型：" + ty + "（据此选合适的聚合与时间窗口）。";
+  }
+  openAIAssist({
+    task: ty === "logs" ? "logql" : "promql",
+    title: "✨ AI 生成" + (ty === "logs" ? " LogQL" : " PromQL"),
+    mode: "generate",
+    context: ctx,
+    placeholder: "用大白话描述你要查什么，如：这台主机CPU使用率 / MySQL每秒查询数 / 磁盘剩余空间百分比 / HTTP 5xx 错误率",
+    applyLabel: "填入此查询",
+    applyTo: (code) => {
+      const expr = (code || "").trim();
+      if (!expr) { toast("未生成有效查询", "err"); return; }
+      if (!PANEL_TARGETS_DRAFT[i]) PANEL_TARGETS_DRAFT[i] = { expr: "", legend: "" };
+      PANEL_TARGETS_DRAFT[i].expr = expr;
+      renderPanelTargets();
+      toast("已填入查询，可微调后保存", "ok");
+    }
+  });
 }
 function panelTypeToggle() {
   const ty = $("panelType").value;
@@ -675,6 +714,8 @@ function panelTypeToggle() {
 safeAddEventListener("panelType", "change", panelTypeToggle);
 safeAddEventListener("panelAddTarget", "click", () => { PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); });
 safeAddEventListener("panelTargets", "click", e => {
+  const ai = e.target.closest("[data-tgt-ai]");
+  if (ai) { aiGenPromQL(+ai.dataset.tgtAi); return; }
   const del = e.target.closest("[data-tgt-del]");
   if (del) { syncPanelTargets(); PANEL_TARGETS_DRAFT.splice(+del.dataset.tgtDel, 1); if (!PANEL_TARGETS_DRAFT.length) PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); }
 });
