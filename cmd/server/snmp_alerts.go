@@ -6,6 +6,7 @@ package main
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,16 +41,118 @@ func newSNMPStore() *snmpStore {
 	return &snmpStore{byID: map[string]snmpHostEntry{}, operSeen: map[string]bool{}}
 }
 
-// put replaces a host's SNMP snapshots with the newest report.
+// put merges incoming SNMP snapshots into the host's cache by stable device
+// identity (TargetIP, falling back to TargetName). Each agent poll reports one
+// device, so a blind replace would wipe siblings and leave EvaluateSNMP half-blind.
+// Same-IP different-name updates replace in place (rename), matching the PG path.
 func (ss *snmpStore) put(hostID, hostname, ip string, snaps []shared.SNMPSnapshot) {
 	if ss == nil || hostID == "" {
 		return
 	}
-	cp := make([]shared.SNMPSnapshot, len(snaps))
-	copy(cp, snaps)
 	ss.mu.Lock()
-	ss.byID[hostID] = snmpHostEntry{hostname: hostname, ip: ip, updatedAt: time.Now().Unix(), snaps: cp}
-	ss.mu.Unlock()
+	defer ss.mu.Unlock()
+	e := ss.byID[hostID]
+	e.hostname, e.ip, e.updatedAt = hostname, ip, time.Now().Unix()
+
+	idxOf := func(key string) int {
+		for i, s := range e.snaps {
+			if snmpDeviceKey(s) == key {
+				return i
+			}
+		}
+		return -1
+	}
+	idxByIP := func(deviceIP string) int {
+		if deviceIP == "" {
+			return -1
+		}
+		for i, s := range e.snaps {
+			if s.TargetIP == deviceIP {
+				return i
+			}
+		}
+		return -1
+	}
+
+	for _, snap := range snaps {
+		cp := snap
+		if i := idxByIP(snap.TargetIP); i >= 0 {
+			old := e.snaps[i]
+			e.snaps[i] = cp
+			if old.TargetName != "" && old.TargetName != snap.TargetName {
+				ss.migrateDeviceKeyLocked(hostID, old.TargetName, snap.TargetName)
+			}
+			continue
+		}
+		if i := idxOf(snmpDeviceKey(snap)); i >= 0 {
+			e.snaps[i] = cp
+			continue
+		}
+		e.snaps = append(e.snaps, cp)
+	}
+	ss.byID[hostID] = e
+}
+
+// snmpDeviceKey is the in-memory identity for one polled device.
+func snmpDeviceKey(s shared.SNMPSnapshot) string {
+	if s.TargetIP != "" {
+		return "ip:" + s.TargetIP
+	}
+	return "name:" + s.TargetName
+}
+
+// migrateDeviceKey moves operSeen entries from oldName to newName after a rename.
+func (ss *snmpStore) migrateDeviceKey(hostID, oldName, newName string) {
+	if ss == nil || oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.migrateDeviceKeyLocked(hostID, oldName, newName)
+}
+
+func (ss *snmpStore) migrateDeviceKeyLocked(hostID, oldName, newName string) {
+	prefix := hostID + "|" + oldName + "|"
+	newPrefix := hostID + "|" + newName + "|"
+	for k, v := range ss.operSeen {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		ss.operSeen[newPrefix+strings.TrimPrefix(k, prefix)] = v
+		delete(ss.operSeen, k)
+	}
+}
+
+// remove drops one device from the in-memory cache and clears its operSeen keys.
+func (ss *snmpStore) remove(hostID, deviceName string) {
+	if ss == nil || hostID == "" || deviceName == "" {
+		return
+	}
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	e, ok := ss.byID[hostID]
+	if !ok {
+		return
+	}
+	kept := e.snaps[:0]
+	for _, s := range e.snaps {
+		if s.TargetName == deviceName {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if len(kept) == 0 {
+		delete(ss.byID, hostID)
+	} else {
+		e.snaps = kept
+		ss.byID[hostID] = e
+	}
+	prefix := hostID + "|" + deviceName + "|"
+	for k := range ss.operSeen {
+		if strings.HasPrefix(k, prefix) {
+			delete(ss.operSeen, k)
+		}
+	}
 }
 
 // snapsOf returns the latest SNMP snapshots for one host (nil when none).

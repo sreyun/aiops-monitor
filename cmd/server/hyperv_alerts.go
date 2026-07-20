@@ -173,10 +173,12 @@ func EvaluateHyperV(hs *hypervStore) []Alert {
 			if name == "" {
 				continue
 			}
+			// Scope 用稳定身份（GUID 优先），改名不会拆成新旧两条告警互相并存。
+			scopeBase := hypervAlertScope(g)
 
 			// 健康严重（RunningCritical/存储掉线/复制 Critical）——最高优先，命中即不再评其余项。
 			if g.Health == "Critical" {
-				add("critical", name, Tz("alert.hyperv_health", name, g.State), 0)
+				add("critical", scopeBase, Tz("alert.hyperv_health", name, g.State), 0)
 				continue
 			}
 
@@ -186,26 +188,26 @@ func EvaluateHyperV(hs *hypervStore) []Alert {
 			switch g.State {
 			case "Off", "Paused", "Saved":
 				if e.alarmVM[hypervKey(g)] {
-					add("warning", name+"/power", Tz("alert.hyperv_state", name, g.State), 0)
+					add("warning", scopeBase+"/power", Tz("alert.hyperv_state", name, g.State), 0)
 				}
 			}
 
 			// 复制健康 Warning
 			if g.ReplHealth == "Warning" {
-				add("warning", name+"/repl", Tz("alert.hyperv_repl", name, g.ReplHealth), 0)
+				add("warning", scopeBase+"/repl", Tz("alert.hyperv_repl", name, g.ReplHealth), 0)
 			}
 
 			// 资源阈值——只对运行中的 VM 评估（关机 VM 的 0 值无意义）。
 			if g.State == "Running" {
 				if lv := classify(g.CPUUsage, hypervCPUWarn, hypervCPUCrit); lv != "" {
-					add(lv, name+"/cpu", Tz("alert.hyperv_cpu", name, g.CPUUsage), g.CPUUsage)
+					add(lv, scopeBase+"/cpu", Tz("alert.hyperv_cpu", name, g.CPUUsage), g.CPUUsage)
 				}
 				// 内存压力(需求/分配)只对**动态内存** VM 有意义：静态内存 VM 的 demand
 				// 可能≈assigned，会误报接近 100%。非动态内存直接跳过。
 				if g.DynamicMemEnabled && g.MemAssignedMB > 0 && g.MemDemandMB > 0 {
 					memPct := g.MemDemandMB / g.MemAssignedMB * 100
 					if lv := classify(memPct, hypervMemWarn, hypervMemCrit); lv != "" {
-						add(lv, name+"/mem", Tz("alert.hyperv_mem", name, memPct), memPct)
+						add(lv, scopeBase+"/mem", Tz("alert.hyperv_mem", name, memPct), memPct)
 					}
 				}
 			}

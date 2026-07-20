@@ -530,7 +530,8 @@ type SNMPSystem struct {
 	UptimeSec float64 `json:"uptime_sec,omitempty"` // sysUpTime/100
 }
 
-// SNMPSnapshot 是一个被轮询设备一轮的整体快照（一台设备一份，server 按 target upsert）。
+// SNMPSnapshot 是一个被轮询设备一轮的整体快照（一台设备一份）。
+// 服务端以 TargetIP 为稳定身份做改名迁移，再按 (host_id, device_name) upsert。
 type SNMPSnapshot struct {
 	TargetName  string          `json:"target_name"`
 	TargetIP    string          `json:"target_ip"`

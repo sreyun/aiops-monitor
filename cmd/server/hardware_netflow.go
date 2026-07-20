@@ -79,6 +79,7 @@ func (s *Server) handleAgentHardware(w http.ResponseWriter, r *http.Request) {
 			s.recordHardwareChanges(rep.HostID, snap)
 
 			s.pg.upsertHardwareSnapshot(rep.HostID, snap)
+			s.pg.purgeOtherHardwareByURL(rep.HostID, snap.TargetName, snap.TargetURL)
 
 			// Write numeric metrics to VM
 			s.vmHardwareMetrics(rep.HostID, snap)

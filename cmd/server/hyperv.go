@@ -52,7 +52,8 @@ func (s *Server) handleAgentHyperV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 缓存最新清单（供告警评估每轮复用）。采集失败时 put 会保留上一份好数据、只记 lastError。
-	s.hv.put(rep.HostID, hostname, ip, rep.Guests, rep.Error, rep.HostTotalMemMB, rep.HostAvailMemMB)
+	guests := normalizeHyperVGuests(rep.Guests)
+	s.hv.put(rep.HostID, hostname, ip, guests, rep.Error, rep.HostTotalMemMB, rep.HostAvailMemMB)
 
 	if rep.Error != "" {
 		slog.Warn("Hyper-V 采集失败，保留上一份清单不覆盖", "host_id", rep.HostID, "err", rep.Error)
@@ -67,14 +68,14 @@ func (s *Server) handleAgentHyperV(w http.ResponseWriter, r *http.Request) {
 
 	if s.pg != nil {
 		// 变更必须在 upsert **之前**比对：upsert 会覆盖上一份，之后就没有旧值可比了。
-		s.recordHyperVChanges(rep.HostID, rep.Guests)
-		s.pg.upsertHyperVInventory(rep.HostID, hostname, rep.Guests)
+		s.recordHyperVChanges(rep.HostID, guests)
+		s.pg.upsertHyperVInventory(rep.HostID, hostname, guests)
 	}
 
 	// 每 VM 数值指标写入 VictoriaMetrics（趋势曲线 + 历史）。
-	s.pushHyperVMetrics(rep.HostID, rep.Guests, ts)
+	s.pushHyperVMetrics(rep.HostID, guests, ts)
 
-	slog.Info("Hyper-V 上报已存储", "host_id", rep.HostID, "vms", len(rep.Guests))
+	slog.Info("Hyper-V 上报已存储", "host_id", rep.HostID, "vms", len(guests))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -204,8 +205,8 @@ func (s *Server) enrichHyperVLinks(rows []map[string]any) {
 }
 
 // pushHyperVMetrics writes per-VM numeric series to VictoriaMetrics. Labels are
-// host + vm; the timestamp is milliseconds (Prometheus import format — the same
-// ×1000 gotcha the hardware/netflow paths hit). All lines go out in a single POST.
+// host + vm_id (stable GUID, name fallback) + vm (display name). Using vm_id as
+// the series identity keeps charts continuous across renames; vm is for humans.
 func (s *Server) pushHyperVMetrics(hostID string, guests []shared.HyperVGuest, ts int64) {
 	if !s.vm.enabled() || len(guests) == 0 {
 		return
@@ -214,27 +215,36 @@ func (s *Server) pushHyperVMetrics(hostID string, guests []shared.HyperVGuest, t
 	host := lblEsc(hostID)
 	var b strings.Builder
 	for _, g := range guests {
-		if g.Name == "" {
+		if g.Name == "" && g.ID == "" {
 			continue
 		}
-		vm := lblEsc(g.Name)
+		vmName := g.Name
+		if vmName == "" {
+			vmName = g.ID
+		}
+		vmID := g.ID
+		if vmID == "" {
+			vmID = g.Name
+		}
+		vm := lblEsc(vmName)
+		vid := lblEsc(vmID)
 		stateVal := 0.0
 		if g.State == "Running" {
 			stateVal = 1
 		}
-		fmt.Fprintf(&b, "aiops_hyperv_state{host=%q,vm=%q} %g %d\n", host, vm, stateVal, ms)
-		fmt.Fprintf(&b, "aiops_hyperv_cpu_percent{host=%q,vm=%q} %g %d\n", host, vm, g.CPUUsage, ms)
+		fmt.Fprintf(&b, "aiops_hyperv_state{host=%q,vm_id=%q,vm=%q} %g %d\n", host, vid, vm, stateVal, ms)
+		fmt.Fprintf(&b, "aiops_hyperv_cpu_percent{host=%q,vm_id=%q,vm=%q} %g %d\n", host, vid, vm, g.CPUUsage, ms)
 		if g.CPUGuestPct > 0 {
-			fmt.Fprintf(&b, "aiops_hyperv_cpu_guest_percent{host=%q,vm=%q} %g %d\n", host, vm, g.CPUGuestPct, ms)
+			fmt.Fprintf(&b, "aiops_hyperv_cpu_guest_percent{host=%q,vm_id=%q,vm=%q} %g %d\n", host, vid, vm, g.CPUGuestPct, ms)
 		}
 		if g.MemAssignedMB > 0 {
-			fmt.Fprintf(&b, "aiops_hyperv_mem_assigned_mb{host=%q,vm=%q} %g %d\n", host, vm, g.MemAssignedMB, ms)
+			fmt.Fprintf(&b, "aiops_hyperv_mem_assigned_mb{host=%q,vm_id=%q,vm=%q} %g %d\n", host, vid, vm, g.MemAssignedMB, ms)
 		}
 		if g.MemDemandMB > 0 {
-			fmt.Fprintf(&b, "aiops_hyperv_mem_demand_mb{host=%q,vm=%q} %g %d\n", host, vm, g.MemDemandMB, ms)
+			fmt.Fprintf(&b, "aiops_hyperv_mem_demand_mb{host=%q,vm_id=%q,vm=%q} %g %d\n", host, vid, vm, g.MemDemandMB, ms)
 		}
 		if g.UptimeSec > 0 {
-			fmt.Fprintf(&b, "aiops_hyperv_uptime_sec{host=%q,vm=%q} %d %d\n", host, vm, g.UptimeSec, ms)
+			fmt.Fprintf(&b, "aiops_hyperv_uptime_sec{host=%q,vm_id=%q,vm=%q} %d %d\n", host, vid, vm, g.UptimeSec, ms)
 		}
 	}
 	if b.Len() > 0 {
@@ -318,4 +328,39 @@ func hypervKey(g shared.HyperVGuest) string {
 		return g.ID
 	}
 	return "name:" + g.Name
+}
+
+// hypervAlertScope is the alert Scope base for one guest. Prefer GUID so a rename
+// keeps the same alertKey (HostID/Type/Scope); fall back to display name when the
+// agent didn't report an ID (legacy / empty Id).
+func hypervAlertScope(g shared.HyperVGuest) string {
+	if g.ID != "" {
+		return g.ID
+	}
+	return g.Name
+}
+
+// normalizeHyperVGuests drops nameless entries and dedupes by hypervKey (last wins).
+// Guards against corrupted/legacy inventories that somehow accumulated rename twins.
+func normalizeHyperVGuests(guests []shared.HyperVGuest) []shared.HyperVGuest {
+	if len(guests) == 0 {
+		return guests
+	}
+	order := make([]string, 0, len(guests))
+	byKey := map[string]shared.HyperVGuest{}
+	for _, g := range guests {
+		if g.Name == "" && g.ID == "" {
+			continue
+		}
+		k := hypervKey(g)
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
+		}
+		byKey[k] = g
+	}
+	out := make([]shared.HyperVGuest, 0, len(order))
+	for _, k := range order {
+		out = append(out, byKey[k])
+	}
+	return out
 }

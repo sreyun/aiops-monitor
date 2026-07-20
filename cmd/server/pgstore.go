@@ -2002,6 +2002,24 @@ func (p *pgStore) renameHardwareTarget(hostID, oldName, newName string) {
 		hostID, oldName, newName)
 }
 
+// purgeOtherHardwareByURL deletes sibling snapshots that share the same
+// target_url but a different target_name — cleans any historical rename orphans.
+func (p *pgStore) purgeOtherHardwareByURL(hostID, keepName, targetURL string) {
+	if targetURL == "" || keepName == "" {
+		return
+	}
+	res, err := p.db.Exec(`
+		DELETE FROM hardware_snapshot
+		WHERE host_id=$1 AND target_url=$2 AND target_name<>$3`, hostID, targetURL, keepName)
+	if err != nil {
+		slog.Warn("清理硬件同 URL 重复行失败", "host", hostID, "url", targetURL, "err", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("已清理硬件同 URL 旧名残留", "host", hostID, "url", targetURL, "keep", keepName, "removed", n)
+	}
+}
+
 // ============================================================================
 // Hyper-V 虚拟机清单 PG methods（结构与 hardware_* 同构）
 // ============================================================================
@@ -2403,6 +2421,67 @@ func (p *pgStore) upsertSNMPSnapshot(hostID string, snap shared.SNMPSnapshot) {
 		hostID, snap.TargetName, snap.TargetIP, raw, snap.Reachable)
 	if err != nil {
 		slog.Warn("Upsert SNMP 快照失败", "host", hostID, "device", snap.TargetName, "err", err)
+	}
+}
+
+// findSNMPDeviceByIP returns the device_name of an existing snapshot that matches
+// the given device_ip (most recently updated wins), or "" if none. Used to detect
+// renames: config.json "name" changed but IP (the connection identity) is unchanged.
+func (p *pgStore) findSNMPDeviceByIP(hostID, deviceIP string) string {
+	if deviceIP == "" {
+		return ""
+	}
+	var name string
+	err := p.db.QueryRow(`
+		SELECT device_name FROM snmp_snapshot
+		WHERE host_id=$1 AND device_ip=$2
+		ORDER BY updated_at DESC LIMIT 1`, hostID, deviceIP).Scan(&name)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// renameSNMPDevice migrates a device row from oldName to newName for one agent
+// host. Mirrors renameHardwareTarget: without this, changing config "name" for the
+// same IP leaves the old row forever and the UI shows duplicates.
+func (p *pgStore) renameSNMPDevice(hostID, oldName, newName string) {
+	if oldName == newName || oldName == "" || newName == "" {
+		return
+	}
+	slog.Info("SNMP 设备改名迁移", "host", hostID, "old", oldName, "new", newName)
+	_, _ = p.db.Exec(`DELETE FROM snmp_snapshot WHERE host_id=$1 AND device_name=$2`, hostID, newName)
+	_, _ = p.db.Exec(`UPDATE snmp_snapshot SET device_name=$3 WHERE host_id=$1 AND device_name=$2`,
+		hostID, oldName, newName)
+}
+
+// purgeOtherSNMPByIP deletes sibling rows that share the same device_ip but a
+// different device_name. Cleans historical rename orphans in one shot after the
+// canonical name has been upserted.
+func (p *pgStore) purgeOtherSNMPByIP(hostID, keepName, deviceIP string) {
+	if deviceIP == "" || keepName == "" {
+		return
+	}
+	res, err := p.db.Exec(`
+		DELETE FROM snmp_snapshot
+		WHERE host_id=$1 AND device_ip=$2 AND device_name<>$3`, hostID, deviceIP, keepName)
+	if err != nil {
+		slog.Warn("清理 SNMP 同 IP 重复行失败", "host", hostID, "ip", deviceIP, "err", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("已清理 SNMP 同 IP 旧名残留", "host", hostID, "ip", deviceIP, "keep", keepName, "removed", n)
+	}
+}
+
+// deleteSNMPSnapshot removes one device's snapshot for an agent host.
+func (p *pgStore) deleteSNMPSnapshot(hostID, deviceName string) {
+	if hostID == "" || deviceName == "" {
+		return
+	}
+	_, err := p.db.Exec(`DELETE FROM snmp_snapshot WHERE host_id=$1 AND device_name=$2`, hostID, deviceName)
+	if err != nil {
+		slog.Warn("删除 SNMP 快照失败", "host", hostID, "device", deviceName, "err", err)
 	}
 }
 

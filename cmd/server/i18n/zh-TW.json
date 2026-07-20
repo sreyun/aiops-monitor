@@ -348,6 +348,7 @@
   "log.save_check": "儲存自訂監控：%s",
   "log.delete_check": "刪除自訂監控 %s",
   "log.delete_hardware": "刪除硬體資產記錄：%s / %s",
+  "log.delete_snmp": "刪除 SNMP 網路設備記錄：%s / %s",
   "log.delete_hyperv": "刪除 Hyper-V 虛擬機清單：%s",
   "log.set_category": "設定主機分類：%s → %s",
   "log.clear_category": "清除主機分類：%s",

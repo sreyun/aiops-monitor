@@ -350,6 +350,7 @@
   "log.save_check": "Saved custom check: %s",
   "log.delete_check": "Deleted custom check %s",
   "log.delete_hardware": "Deleted hardware asset record: %s / %s",
+  "log.delete_snmp": "Deleted SNMP network device record: %s / %s",
   "log.delete_hyperv": "Deleted Hyper-V VM inventory: %s",
   "log.set_category": "Set host category: %s → %s",
   "log.clear_category": "Cleared host category: %s",

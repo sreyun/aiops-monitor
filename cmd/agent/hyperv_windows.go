@@ -85,7 +85,7 @@ $out=foreach($vm in $vms){
   }
   [PSCustomObject]@{
     Name=$n
-    Id=[string]$vm.Id.Guid
+    Id=[string]$vm.Id
     State=[string]$vm.State
     Status=[string]$vm.Status
     CPUUsage=[double]$cpuHost

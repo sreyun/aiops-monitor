@@ -387,6 +387,7 @@ func (s *Server) Routes() http.Handler {
 	// SNMP: frontend query
 	mux.HandleFunc("GET /api/v1/snmp/hosts", s.handleSNMPHosts)
 	mux.HandleFunc("GET /api/v1/snmp/list", s.handleSNMPList)
+	mux.HandleFunc("DELETE /api/v1/snmp/{hostID}", s.handleDeleteSNMP)
 	mux.HandleFunc("GET /api/v1/snmp/interface-history", s.handleSNMPInterfaceHistory)
 	mux.HandleFunc("GET /api/v1/snmp/traps", s.handleSNMPTraps)
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)

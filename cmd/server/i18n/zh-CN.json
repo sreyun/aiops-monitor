@@ -350,6 +350,7 @@
   "log.save_check": "保存自定义监控：%s",
   "log.delete_check": "删除自定义监控 %s",
   "log.delete_hardware": "删除硬件资产记录：%s / %s",
+  "log.delete_snmp": "删除 SNMP 网络设备记录：%s / %s",
   "log.delete_hyperv": "删除 Hyper-V 虚拟机清单：%s",
   "log.set_category": "设置主机分类：%s → %s",
   "log.clear_category": "清除主机分类：%s",

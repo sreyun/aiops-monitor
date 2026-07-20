@@ -159,6 +159,10 @@ function renderSNDevices(container, devices) {
     html += `<div class="sn-dev-head">
       <div class="sn-dev-title">${esc(d.device_name || "设备")}${reachable ? `<span class="sn-pill ok">${I18N.t("snmp.reachable") || "可达"}</span>` : `<span class="sn-pill bad">${I18N.t("snmp.unreachable") || "不可达"}</span>`}</div>
       <div class="sn-dev-sub">${esc(d.device_ip || "")}${sys.name ? " · " + esc(sys.name) : ""}</div>
+      <span style="flex:1"></span>
+      <button class="icon-btn danger" data-sndel="${esc(d.device_name || "")}" data-snhost="${esc(snCurrentHost || "")}" title="${esc(I18N.t("snmp.delete") || "删除")}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>
+      </button>
     </div>`;
     if (snap.error) {
       html += `<div class="empty-state">${esc(I18N.t("snmp.poll_error") || "采集失败")}: ${esc(snap.error)}</div></div>`;
@@ -285,6 +289,28 @@ function snDevicesToText(devices) {
 
 // 事件委托（CSP: script-src 'self'，内联 onclick 会被拦）。
 safeAddEventListener("snmpPanel", "click", e => {
+  const delBtn = e.target.closest("[data-sndel]");
+  if (delBtn) {
+    e.stopPropagation();
+    const device = delBtn.dataset.sndel;
+    const hostID = delBtn.dataset.snhost || snCurrentHost;
+    if (!device || !hostID) return;
+    if (!confirm(I18N.t("snmp.confirm_delete") || "确定删除该网络设备记录？删除后不可恢复。")) return;
+    fetch(`/api/v1/snmp/${encodeURIComponent(hostID)}?device=${encodeURIComponent(device)}`, {
+      method: "DELETE", credentials: "same-origin",
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then(() => {
+        if (typeof toast === "function") toast(I18N.t("toast.deleted") || "已删除", "ok");
+        snSNMPHosts = null;
+        renderSNMPPanel();
+      })
+      .catch(err => {
+        if (typeof toast === "function") toast((I18N.t("snmp.delete_failed") || "删除失败") + ": " + err, "err");
+        else alert((I18N.t("snmp.delete_failed") || "删除失败") + ": " + err);
+      });
+    return;
+  }
   const b = e.target.closest("[data-snact]");
   if (!b) return;
   const act = b.dataset.snact;

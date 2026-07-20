@@ -3142,8 +3142,11 @@ select:focus {
 .nf-badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .nf-badge-netflow { background: var(--accent-soft); color: var(--accent-txt); border: 1px solid var(--accent-border); }
 .nf-badge-packet { background: var(--accent2-soft); color: var(--accent2-txt); border: 1px solid var(--accent2-border); }
-/* 内容审计 请求/响应 正文单元：限高可滚，压低行高（原来 160px 撑得每行很高） */
-.ca-body-cell { max-height: 84px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
+/* 内容审计 请求/响应 正文单元：默认单行截断（行高最小化），点击展开看全文。 */
+.ca-body-cell { max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer; }
+.ca-body-cell::after { content: " ⌄"; color: var(--muted); }
+.ca-body-cell.expanded { max-width: 480px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+.ca-body-cell.expanded::after { content: ""; }
 .nf-flow-table td { vertical-align: top; }
 
 /* 明细表通用分页控件 */
@@ -3172,7 +3175,7 @@ select:focus {
 .sn-oid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--txt2); }
 /* SNMP 设备卡片 + 统计 + 利用率条（网络设备页重构） */
 .sn-dev { margin-bottom: 22px; }
-.sn-dev-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sn-dev-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sn-dev-title { font-size: 16px; font-weight: 650; color: var(--txt); display: flex; align-items: center; gap: 8px; }
 .sn-dev-sub { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
 .sn-pill { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 10px; }

@@ -90,11 +90,29 @@ func (s *Server) handleAgentSNMP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 缓存最新快照供告警评估每轮复用（含采集失败的快照，用于报"采集失败"告警）。
+	// put 按 IP 合并，不会因「每轮只报一台设备」冲掉同 host 下其它设备。
 	hostname, ip := rep.HostID, ""
 	if h := s.hostByID(rep.HostID); h != nil {
 		hostname, ip = h.Hostname, h.IP
 	}
 	s.snmp.put(rep.HostID, hostname, ip, rep.Snapshots)
+
+	if s.pg != nil {
+		// Rename detection: config "name" changed for the same IP → migrate the
+		// old PG row (and operSeen keys) instead of inserting a duplicate.
+		seenRename := map[string]bool{}
+		for _, snap := range rep.Snapshots {
+			if snap.TargetIP == "" || snap.TargetName == "" {
+				continue
+			}
+			oldName := s.pg.findSNMPDeviceByIP(rep.HostID, snap.TargetIP)
+			if oldName != "" && oldName != snap.TargetName && !seenRename[oldName] {
+				s.pg.renameSNMPDevice(rep.HostID, oldName, snap.TargetName)
+				s.snmp.migrateDeviceKey(rep.HostID, oldName, snap.TargetName)
+				seenRename[oldName] = true
+			}
+		}
+	}
 
 	for _, snap := range rep.Snapshots {
 		// 采集失败（超时/认证失败）时快照各字段是零值：只报警不落库/不写时序，
@@ -106,6 +124,8 @@ func (s *Server) handleAgentSNMP(w http.ResponseWriter, r *http.Request) {
 		s.vmSNMPMetrics(rep.HostID, snap)
 		if s.pg != nil {
 			s.pg.upsertSNMPSnapshot(rep.HostID, snap)
+			// 历史改名残留：同 IP 下旧 device_name 行一并清掉。
+			s.pg.purgeOtherSNMPByIP(rep.HostID, snap.TargetName, snap.TargetIP)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -270,6 +290,24 @@ func (s *Server) handleSNMPList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+// handleDeleteSNMP removes one polled network device's snapshot (orphan cleanup
+// after a target is removed from agent config, or leftover rename rows).
+func (s *Server) handleDeleteSNMP(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("hostID")
+	device := r.URL.Query().Get("device")
+	if hostID == "" || device == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostID and device required"})
+		return
+	}
+	s.snmp.remove(hostID, device)
+	if s.pg != nil {
+		s.pg.deleteSNMPSnapshot(hostID, device)
+	}
+	slog.Info("删除 SNMP 设备记录", "host", hostID, "device", device, "actor", s.clientIP(r))
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_snmp", hostID, device)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleSNMPTraps 返回一台主机最近收到的 trap 事件。

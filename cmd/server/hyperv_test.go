@@ -33,6 +33,57 @@ func TestHypervKey(t *testing.T) {
 	}
 }
 
+func TestHypervAlertScope(t *testing.T) {
+	withID := shared.HyperVGuest{ID: "guid-1", Name: "web"}
+	if got := hypervAlertScope(withID); got != "guid-1" {
+		t.Errorf("with ID: got %q, want guid-1", got)
+	}
+	noID := shared.HyperVGuest{Name: "web"}
+	if got := hypervAlertScope(noID); got != "web" {
+		t.Errorf("no ID: got %q, want web", got)
+	}
+}
+
+func TestNormalizeHyperVGuests(t *testing.T) {
+	in := []shared.HyperVGuest{
+		{ID: "g1", Name: "old-name", State: "Off"},
+		{ID: "g1", Name: "new-name", State: "Running"}, // same GUID → keep last
+		{Name: "orphan"},
+		{Name: ""}, // drop
+	}
+	out := normalizeHyperVGuests(in)
+	if len(out) != 2 {
+		t.Fatalf("got %d guests, want 2: %+v", len(out), out)
+	}
+	if out[0].ID != "g1" || out[0].Name != "new-name" || out[0].State != "Running" {
+		t.Errorf("GUID dedupe kept wrong entry: %+v", out[0])
+	}
+	if out[1].Name != "orphan" {
+		t.Errorf("orphan missing: %+v", out)
+	}
+}
+
+// TestEvaluateHyperVRenameStableScope verifies that a rename with the same GUID
+// keeps the same alert Scope (no twin alerts under old+new names).
+func TestEvaluateHyperVRenameStableScope(t *testing.T) {
+	hs := newHypervStore()
+	hs.put("h1", "host1", "", []shared.HyperVGuest{
+		{ID: "guid-a", Name: "web-old", State: "Running", CPUUsage: 96},
+	}, "", 0, 0)
+	a1 := EvaluateHyperV(hs)
+	if len(a1) != 1 || a1[0].Scope != "guid-a/cpu" {
+		t.Fatalf("before rename: %+v, want scope guid-a/cpu", a1)
+	}
+
+	hs.put("h1", "host1", "", []shared.HyperVGuest{
+		{ID: "guid-a", Name: "web-new", State: "Running", CPUUsage: 96},
+	}, "", 0, 0)
+	a2 := EvaluateHyperV(hs)
+	if len(a2) != 1 || a2[0].Scope != "guid-a/cpu" {
+		t.Fatalf("after rename: %+v, want same scope guid-a/cpu", a2)
+	}
+}
+
 func TestDiffHyperVGuests(t *testing.T) {
 	base := []shared.HyperVGuest{
 		{ID: "a", Name: "web01", State: "Running"},
