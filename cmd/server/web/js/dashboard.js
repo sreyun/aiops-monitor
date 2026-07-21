@@ -360,14 +360,29 @@ async function loadGaugePanel(p, body) {
     return `<div class="dash-gauge-item">${svgGauge(pct, fmtUnit(v, p.unit), col)}<div class="dash-gauge-lbl" title="${esc(lbl)}">${esc(lbl)}</div></div>`;
   }).join("") + `</div>`;
 }
-// loadPiePanel：环形图（每序列一片）+ 侧栏图例。
+// loadPiePanel：环形图（每序列一片）+ 侧栏图例。只保留正值切片，图例与切片一致，
+// 图例含占比，环心显示总计，充分利用空间避免留白。
 async function loadPiePanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
-  const items = series.slice(0, 12).map((s, i) => ({ val: Math.max(0, seriesVal2(s)), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }));
+  const items = series
+    .map((s, i) => ({ val: Math.max(0, seriesVal2(s)), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }))
+    .filter(it => it.val > 0)
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 12);
+  if (!items.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
   const total = items.reduce((a, b) => a + b.val, 0) || 1;
-  body.innerHTML = `<div class="dash-pie"><div class="dash-pie-chart">${svgDonut(items, total)}</div>
-    <div class="dash-pie-legend">${items.map(it => `<div class="dash-pie-li"><span class="dash-pie-dot" style="background:${it.col}"></span><span class="dash-pie-name" title="${esc(it.lbl)}">${esc(it.lbl)}</span><span class="dash-pie-val">${fmtUnit(it.val, p.unit)}</span></div>`).join("")}</div></div>`;
+  const centerVal = fmtUnit(total, p.unit);
+  const legend = items.map(it => {
+    const pct = (it.val / total * 100);
+    const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+    return `<div class="dash-pie-li"><span class="dash-pie-dot" style="background:${it.col}"></span>` +
+      `<span class="dash-pie-name" title="${esc(it.lbl)}">${esc(it.lbl)}</span>` +
+      `<span class="dash-pie-val">${fmtUnit(it.val, p.unit)}</span>` +
+      `<span class="dash-pie-pct">${pctStr}%</span></div>`;
+  }).join("");
+  body.innerHTML = `<div class="dash-pie"><div class="dash-pie-chart">${svgDonut(items, total, centerVal)}</div>` +
+    `<div class="dash-pie-legend">${legend}</div></div>`;
 }
 // loadBarPanel：纵向柱状图（每序列一柱），适合 top-N。
 async function loadBarPanel(p, body) {
@@ -402,17 +417,20 @@ function svgGauge(pct, valueText, color) {
     <text x="50" y="50" text-anchor="middle" dominant-baseline="central" class="gauge-txt" fill="var(--txt)">${esc(valueText)}</text>
   </svg>`;
 }
-// svgDonut：环形图（各片按占比，rotate -90 从顶部起）。
-function svgDonut(items, total) {
-  const r = 34, sw = 22, C = 2 * Math.PI * r;
+// svgDonut：环形图（各片按占比，rotate -90 从顶部起）。更大半径 + 更粗环 + 环心总计，
+// 减少留白；带底色轨道让占比一目了然。centerText 为可选环心文案（如总计值）。
+function svgDonut(items, total, centerText) {
+  const r = 38, sw = 20, C = 2 * Math.PI * r; // 外径 48、内径 28，居中充满 100×100 视图
   let off = 0;
+  const track = `<circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--line2)" stroke-width="${sw}" opacity="0.35"/>`;
   const segs = items.filter(it => it.val > 0).map(it => {
     const frac = it.val / total;
     const seg = `<circle cx="50" cy="50" r="${r}" fill="none" stroke="${it.col}" stroke-width="${sw}" stroke-dasharray="${(frac * C).toFixed(2)} ${(C - frac * C).toFixed(2)}" stroke-dashoffset="${(-off * C).toFixed(2)}" transform="rotate(-90 50 50)"/>`;
     off += frac;
     return seg;
   }).join("");
-  return `<svg viewBox="0 0 100 100" class="pie-svg">${segs}</svg>`;
+  const center = centerText ? `<text x="50" y="50" text-anchor="middle" dominant-baseline="central" class="donut-center" fill="var(--txt)">${esc(String(centerText))}</text>` : "";
+  return `<svg viewBox="0 0 100 100" class="pie-svg">${track}${segs}${center}</svg>`;
 }
 // rangeSeries：区间查询公共入口（取第一个 target 的多序列），出错/无数据写占位并返回 null。
 async function rangeSeries(p, body, from, to) {
@@ -970,6 +988,31 @@ async function aiTicketDash() {
   });
 }
 safeAddEventListener("dashAIBtn", "click", () => { $("dashAIPrompt").value = ""; $("dashAIName").value = ""; openMask("dashAIMask"); });
+// 优化提示词：把用户的简短描述交给 AI 扩写为更完整、更专业的看板需求（覆盖指标/图型/布局/配色/下钻），回填输入框。
+safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
+  const cur = $("dashAIPrompt").value.trim();
+  if (!cur) { toast("请先简单描述你想要的看板", "err"); return; }
+  let ctx = "";
+  try {
+    const metrics = (await fetchMetricNames((CUR_DASH && CUR_DASH.datasource) || "")).slice(0, 200);
+    if (metrics.length) ctx = "【平台可用指标（节选，优先围绕这些真实指标组织）】\n" + metrics.join(", ");
+  } catch (e) {}
+  openAIAssist({
+    task: "dashboard_prompt_optimize",
+    title: "✨ 优化看板提示词",
+    mode: "generate",
+    context: ctx,
+    presetInput: cur, // 打开即以现有描述为输入直接生成
+    placeholder: "描述你想要的看板，AI 会扩写为更完整专业的需求",
+    applyLabel: "填入描述框",
+    applyTo: (text) => {
+      const t = (text || "").trim();
+      if (!t) { toast("未生成有效内容", "err"); return; }
+      $("dashAIPrompt").value = t;
+      toast("已优化并填入描述框，可继续微调后生成", "ok");
+    }
+  });
+});
 safeAddEventListener("dashAICreate", "click", async () => {
   const prompt = $("dashAIPrompt").value.trim();
   if (!prompt) { toast("请描述你想要的看板", "err"); return; }

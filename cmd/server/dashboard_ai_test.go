@@ -67,6 +67,45 @@ func TestSanitizeAIDash(t *testing.T) {
 	}
 }
 
+// TestDecodeAIDashSpecGrafanaAliases locks in the "应用优化后看板为空" fix: LLMs often
+// emit Grafana-native JSON (outer {"dashboard":{...}}, title instead of name, target
+// query/legendFormat instead of expr/legend, gridPos instead of w/h). These must still
+// produce populated panels rather than an empty dashboard.
+func TestDecodeAIDashSpecGrafanaAliases(t *testing.T) {
+	raw := "```json\n" + `{
+      "dashboard": {
+        "title": "Grafana 风格看板",
+        "panels": [
+          {"title":"CPU","type":"timeseries","gridPos":{"w":12,"h":8},
+           "targets":[{"query":"rate(cpu[5m])","legendFormat":"{{instance}}"}]},
+          {"title":"Mem","type":"stat","w":6,"h":4,
+           "targets":[{"expr":"mem_used"}]}
+        ]
+      }
+    }` + "\n```"
+	spec, ok := decodeAIDashSpec(raw)
+	if !ok {
+		t.Fatal("decodeAIDashSpec 应能解析 Grafana 包裹格式")
+	}
+	if spec.specName() != "Grafana 风格看板" {
+		t.Fatalf("title 别名应作为看板名，实为 %q", spec.specName())
+	}
+	d, _ := sanitizeAIDash(spec, "", "ai")
+	if len(d.Panels) != 2 {
+		t.Fatalf("应解析出 2 个面板（不再为空），实为 %d", len(d.Panels))
+	}
+	cpu := d.Panels[0]
+	if len(cpu.Targets) != 1 || cpu.Targets[0].Expr != "rate(cpu[5m])" {
+		t.Fatalf("query 别名应映射为 expr，实为 %+v", cpu.Targets)
+	}
+	if cpu.Targets[0].Legend != "{{instance}}" {
+		t.Fatalf("legendFormat 别名应映射为 legend，实为 %q", cpu.Targets[0].Legend)
+	}
+	if cpu.Grid.W != 12 {
+		t.Fatalf("gridPos.w 应映射为宽度 12，实为 %d", cpu.Grid.W)
+	}
+}
+
 func TestTokenize(t *testing.T) {
 	got := tokenize("MySQL 连接数 qps_total rate() a")
 	// 期望：mysql, qps_total, rate（"a" 单字符被丢，CJK 被分隔）

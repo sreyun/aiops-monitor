@@ -112,6 +112,14 @@ services:
     image: pgvector/pgvector:pg18
     # image: swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18
     container_name: aiops-pg
+    # 与 server 端 SetMaxOpenConns(200) 对齐：默认 max_connections=100 会在高并发下报
+    # "too many clients"。此处默认拉到 250（200 业务连接 + 超级用户/管理预留）。
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=250"
+      - "-c"
+      - "shared_buffers=256MB"
     environment:
       - POSTGRES_USER=aiops
       - POSTGRES_PASSWORD=h3Y7Vmb1CZBOApZM86D   # ⚠️ 生产环境务必修改，并同步上方 AIOPS_POSTGRES_DSN

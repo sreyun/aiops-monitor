@@ -318,6 +318,18 @@
                 <div class="th-input-row"><input type="text" id="snmpIfErrWarn" class="mono" placeholder="1"><span class="unit">pps</span><input type="text" id="snmpIfErrCrit" class="mono" placeholder="10"><span class="unit">pps</span></div></div>
             </div>
           </div>
+          <!-- NetFlow 流量异常 -->
+          <div class="threshold-card">
+            <div class="threshold-card-header tc-netflow"><span class="th-label" data-i18n="settings.group_netflow">NetFlow 流量异常</span></div>
+            <div class="threshold-grid">
+              <div class="threshold-field"><label data-i18n="settings.netflow_surge_ratio">流量突增倍数（当前超基线倍数）</label>
+                <div class="th-input-row"><input type="text" id="netflowSurgeRatio" class="mono" placeholder="3"><span class="unit">×</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.netflow_surge_min">突增最小流量地板（低于则不告警）</label>
+                <div class="th-input-row"><input type="text" id="netflowSurgeMinMbps" class="mono" placeholder="1"><span class="unit">Mbps</span></div></div>
+              <div class="threshold-field"><label data-i18n="settings.netflow_drop_warn">采集器单窗口丢包告警阈值</label>
+                <div class="th-input-row"><input type="text" id="netflowDropWarn" class="mono" placeholder="100"><span class="unit">包</span></div></div>
+            </div>
+          </div>
           <div class="hint" style="margin-top:10px">阈值留空或为 0 视为「未设置」，按标准默认值处理。修改后点「保存阈值」立即生效。</div>
         </div>
       </section>
@@ -1534,7 +1546,7 @@
   <div class="modal">
     <div class="modal-head"><h3>✨ AI 生成仪表盘</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <div class="field"><label>描述你想要的看板</label><textarea id="dashAIPrompt" rows="4" placeholder="如：给我一个 MySQL 概览看板，包含连接数、QPS、慢查询、缓冲池命中率、复制延迟；按实例下钻。&#10;或：监控这台主机的 CPU / 内存 / 磁盘 / 网络的黄金信号。"></textarea></div>
+      <div class="field"><label style="display:flex;align-items:center;gap:8px">描述你想要的看板<button class="btn ghost" id="dashAIOptimizePrompt" style="margin-left:auto;padding:2px 10px;font-size:12px" title="用 AI 把你的描述扩写为更完整、更专业的看板需求">✨ 优化提示词</button></label><textarea id="dashAIPrompt" rows="4" placeholder="如：给我一个 MySQL 概览看板，包含连接数、QPS、慢查询、缓冲池命中率、复制延迟；按实例下钻。&#10;或：监控这台主机的 CPU / 内存 / 磁盘 / 网络的黄金信号。"></textarea></div>
       <div class="field"><label>看板名称（可选）</label><input type="text" id="dashAIName" placeholder="留空由 AI 命名"></div>
       <div class="hint">AI 会读取 VictoriaMetrics 中的可用指标，据你的需求生成 PromQL 面板并落盘。生成后可继续编辑、解读、转工单。</div>
     </div>

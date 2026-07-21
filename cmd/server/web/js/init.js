@@ -89,14 +89,16 @@ function initPushWS() {
     PUSH_WS.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        // 与轮询一致地按当前活动视图渲染，避免推送触发隐藏视图的全量重建。
+        const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
         if (msg.type === "summary" && msg.data) {
-          renderCards(msg.data);
+          if (activeView === "overview") renderCards(msg.data);
           updateFavicon(msg.data.critical_alerts || 0);
           notifyCriticalAlerts(msg.data.critical_alerts || 0);
         } else if (msg.type === "alerts" && msg.data) {
-          renderAlerts(msg.data);
+          if (activeView === "overview" || activeView === "alerts") renderAlerts(msg.data);
         } else if (msg.type === "hosts" && msg.data) {
-          renderHosts(msg.data);
+          if (activeView === "hosts") renderHosts(msg.data);
         }
       } catch(err) {}
     };

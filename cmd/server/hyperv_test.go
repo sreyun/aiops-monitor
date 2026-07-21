@@ -63,6 +63,50 @@ func TestNormalizeHyperVGuests(t *testing.T) {
 	}
 }
 
+// TestNormalizeHyperVGuestsDropsNameOrphan covers the 资源→虚拟机 duplicate bug: a VM
+// reported once with its GUID and once name-only (legacy snapshot / rename ghost /
+// same name as a physical host) must collapse to the single GUID entry.
+func TestNormalizeHyperVGuestsDropsNameOrphan(t *testing.T) {
+	in := []shared.HyperVGuest{
+		{ID: "guid-a", Name: "SRV-01", State: "Running"},
+		{Name: "SRV-01", State: "Off"}, // name-only twin → drop
+		{Name: "solo"},                 // no GUID twin → keep
+	}
+	out := normalizeHyperVGuests(in)
+	if len(out) != 2 {
+		t.Fatalf("got %d guests, want 2: %+v", len(out), out)
+	}
+	if out[0].ID != "guid-a" || out[0].State != "Running" {
+		t.Errorf("GUID entry should survive: %+v", out[0])
+	}
+	if out[1].Name != "solo" {
+		t.Errorf("name-only without GUID twin should survive: %+v", out)
+	}
+}
+
+// TestDedupHyperVRowGuests verifies legacy PG rows self-heal on read.
+func TestDedupHyperVRowGuests(t *testing.T) {
+	rows := []map[string]any{{
+		"host_id": "h1",
+		"guests": []any{
+			map[string]any{"id": "guid-a", "name": "SRV-01"},
+			map[string]any{"name": "SRV-01"},                 // name-only orphan → drop
+			map[string]any{"id": "guid-a", "name": "SRV-01"}, // exact dup → drop
+			map[string]any{"name": "solo"},
+			map[string]any{"name": ""}, // empty → drop
+		},
+		"guest_count": 5,
+	}}
+	dedupHyperVRowGuests(rows)
+	guests, _ := rows[0]["guests"].([]any)
+	if len(guests) != 2 {
+		t.Fatalf("got %d guests after dedup, want 2: %+v", len(guests), guests)
+	}
+	if rows[0]["guest_count"].(int) != 2 {
+		t.Errorf("guest_count not updated: %v", rows[0]["guest_count"])
+	}
+}
+
 // TestEvaluateHyperVRenameStableScope verifies that a rename with the same GUID
 // keeps the same alert Scope (no twin alerts under old+new names).
 func TestEvaluateHyperVRenameStableScope(t *testing.T) {
@@ -161,9 +205,9 @@ func TestEvaluateHyperV(t *testing.T) {
 	hs := newHypervStore()
 	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{{Name: "vmOff", State: "Running"}}, "", 0, 0)
 	hs.put("h1", "host1", "10.0.0.1", []shared.HyperVGuest{
-		{Name: "vmCrit", State: "Running", Health: "Critical"},                                                          // critical, scope=name, no further
-		{Name: "vmOff", State: "Off"},                                                                                   // warning /power (Running→Off)
-		{Name: "vmCPU", State: "Running", CPUUsage: 96},                                                                 // critical /cpu
+		{Name: "vmCrit", State: "Running", Health: "Critical"}, // critical, scope=name, no further
+		{Name: "vmOff", State: "Off"},                          // warning /power (Running→Off)
+		{Name: "vmCPU", State: "Running", CPUUsage: 96},        // critical /cpu
 		{Name: "vmMem", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 980, DynamicMemEnabled: true}, // critical /mem (98%)
 		{Name: "vmStatic", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 990},                       // static mem → NO mem alert
 		{Name: "vmOK", State: "Running", CPUUsage: 10, MemAssignedMB: 1000, MemDemandMB: 100, DynamicMemEnabled: true},  // healthy → no alert

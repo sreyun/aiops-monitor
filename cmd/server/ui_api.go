@@ -13,10 +13,18 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	hosts := s.store.ListHosts()
 	now := time.Now().Unix()
 	offline := int64(s.cfg.Thresholds().OfflineAfter.Seconds())
+	// staleAfter 是"数据滞后但主机尚未判离线"的阈值。它必须高于正常上报节奏（默认 30s），
+	// 否则每个上报周期后半段都会误报 ⚠。取离线阈值的 2/3（默认 60s → 40s），既随阈值档位
+	// 自适应，又始终落在 [staleAfter, offline) 的告警带内，避免与正常节拍冲突而频繁闪烁。
+	staleAfter := offline * 2 / 3
+	if staleAfter < 1 {
+		staleAfter = 1
+	}
 
 	type hostView struct {
 		*Host
 		Online bool `json:"online"`
+		Stale  bool `json:"stale"`
 	}
 	views := make([]hostView, 0, len(hosts))
 	for _, h := range hosts {
@@ -29,7 +37,9 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		// hijack terminals or spoof host telemetry. h is a copy (hostMeta), so
 		// blanking it here does not affect the stored host.
 		h.Fingerprint = ""
-		views = append(views, hostView{Host: h, Online: now-h.LastSeen <= offline})
+		age := now - h.LastSeen
+		online := age <= offline
+		views = append(views, hostView{Host: h, Online: online, Stale: online && age > staleAfter})
 	}
 	sort.Slice(views, func(i, j int) bool {
 		if views[i].Category != views[j].Category {
@@ -146,7 +156,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	// SNMP 网络设备 + NetFlow 流量异常并入实时列表
 	alerts = append(alerts, EvaluateSNMP(s.snmp, s.cfg.Thresholds())...)
-	alerts = append(alerts, EvaluateNetFlow(s.nf)...)
+	alerts = append(alerts, EvaluateNetFlow(s.nf, s.cfg.Thresholds())...)
 	since := s.notifier.ActiveSince()
 	states := s.store.AlertStates()
 	for i := range alerts {
@@ -272,7 +282,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	summ := append(append(Evaluate(hosts, th), s.checks.DownAlerts()...), EvaluateForward(s.forward.Snapshot(), th)...)
 	summ = append(summ, EvaluateHyperV(s.hv)...)
 	summ = append(summ, EvaluateSNMP(s.snmp, th)...)
-	summ = append(summ, EvaluateNetFlow(s.nf)...)
+	summ = append(summ, EvaluateNetFlow(s.nf, th)...)
 	for _, a := range summ {
 		if a.Level == "critical" {
 			crit++

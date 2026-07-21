@@ -15,28 +15,103 @@ import (
 // （流式 + RAG + 👍👎 学习闭环，见 buildAssistSystemPrompt 的 dashboard_analysis / _optimize）。
 // ============================================================================
 
-// aiDashSpec 是 AI 产出的看板结构（宽松版，供校验前反序列化）。
+// aiDashSpec 是 AI 产出的看板结构（宽松版，供校验前反序列化）。字段刻意接受多种别名
+// （expr/query、legend/legendFormat、w-h/gridPos、name/title），因为 LLM 常混入 Grafana
+// 原生 JSON 的写法——若只认单一字段，别名写法会被整段忽略，导致「应用优化后看板为空」。
 type aiDashSpec struct {
-	Name string `json:"name"`
-	Vars []struct {
-		Name    string   `json:"name"`
-		Label   string   `json:"label"`
-		Type    string   `json:"type"`
-		Query   string   `json:"query"`
-		Options []string `json:"options"`
-	} `json:"vars"`
-	Panels []struct {
-		Title   string `json:"title"`
-		Type    string `json:"type"`
-		Unit    string `json:"unit"`
-		W       int    `json:"w"`
-		H       int    `json:"h"`
-		Text    string `json:"text"`
-		Targets []struct {
-			Expr   string `json:"expr"`
-			Legend string `json:"legend"`
-		} `json:"targets"`
-	} `json:"panels"`
+	Name   string        `json:"name"`
+	Title  string        `json:"title"` // Grafana 顶层用 title
+	Vars   []aiDashVar   `json:"vars"`
+	Panels []aiDashPanel `json:"panels"`
+}
+
+type aiDashVar struct {
+	Name    string   `json:"name"`
+	Label   string   `json:"label"`
+	Type    string   `json:"type"`
+	Query   string   `json:"query"`
+	Options []string `json:"options"`
+}
+
+type aiDashPanel struct {
+	Title   string   `json:"title"`
+	Type    string   `json:"type"`
+	Unit    string   `json:"unit"`
+	W       int      `json:"w"`
+	H       int      `json:"h"`
+	GridPos struct { // Grafana 原生布局
+		W int `json:"w"`
+		H int `json:"h"`
+	} `json:"gridPos"`
+	Text    string         `json:"text"`
+	Targets []aiDashTarget `json:"targets"`
+}
+
+type aiDashTarget struct {
+	Expr         string `json:"expr"`
+	Query        string `json:"query"` // Grafana 目标常用 query 存 PromQL
+	Legend       string `json:"legend"`
+	LegendFormat string `json:"legendFormat"` // Grafana 图例字段
+}
+
+// specName 返回看板名（兼容 name / title）。
+func (s aiDashSpec) specName() string {
+	if n := strings.TrimSpace(s.Name); n != "" {
+		return n
+	}
+	return strings.TrimSpace(s.Title)
+}
+
+// targetExpr / targetLegend 合并别名字段。
+func (t aiDashTarget) targetExpr() string {
+	if e := strings.TrimSpace(t.Expr); e != "" {
+		return e
+	}
+	return strings.TrimSpace(t.Query)
+}
+
+func (t aiDashTarget) targetLegend() string {
+	if l := strings.TrimSpace(t.Legend); l != "" {
+		return l
+	}
+	return strings.TrimSpace(t.LegendFormat)
+}
+
+// unwrapDashboardJSON 解开 Grafana 导出格式的外层 {"dashboard":{...}}，只在内层含 panels、
+// 而外层不含 panels 时才下钻，避免误伤本平台原生结构。
+func unwrapDashboardJSON(js string) string {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(js), &probe) != nil {
+		return js
+	}
+	if _, hasPanels := probe["panels"]; hasPanels {
+		return js
+	}
+	inner, ok := probe["dashboard"]
+	if !ok {
+		return js
+	}
+	var innerProbe map[string]json.RawMessage
+	if json.Unmarshal(inner, &innerProbe) == nil {
+		if _, ok := innerProbe["panels"]; ok {
+			return string(inner)
+		}
+	}
+	return js
+}
+
+// decodeAIDashSpec 从 AI 回复原文解析看板规格：抽 JSON → 解外层 dashboard → 反序列化。
+func decodeAIDashSpec(raw string) (aiDashSpec, bool) {
+	js := extractJSONObject(raw)
+	if js == "" {
+		return aiDashSpec{}, false
+	}
+	js = unwrapDashboardJSON(js)
+	var spec aiDashSpec
+	if json.Unmarshal([]byte(js), &spec) != nil {
+		return aiDashSpec{}, false
+	}
+	return spec, true
 }
 
 const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 代码块里），结构如下：\n" +
@@ -47,13 +122,15 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
 	"要求：① 只用【可用指标】里真实存在的指标名，不要臆造；② 计数器类指标配合 rate()/irate() 与时间窗口；" +
-	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps）；④ 每个面板给贴切标题；" +
-	"⑤ 选型：随时间变化的指标用 timeseries；单个当前值(运行时间/在线数)用 stat；占比/利用率(0-100%)用 gauge(圆环)；" +
-	"构成占比(各状态/各分区)用 piechart；类别排行 top-N 用 barchart；数值分布用 histogram；" +
-	"可用性/状态随时间(up/down)用 state-timeline；多实例密度对比用 heatmap；明细用 table；平台当前告警用 alertlist(无需查询)。" +
-	"⑥ 布局：timeseries/table/piechart/barchart 用 w=12、h=8（两个一行）；stat 用 w=6、h=4 并排放同一行，gauge 用 w=6~8、h=6；" +
-	"绝不要让单个 stat 占满整行或用大高度（否则会出现大片空白）；同一行的面板尽量同高，整齐排布；" +
-	"⑥ 若适合按实例/任务下钻，加一个 query 型模板变量并在表达式里用 $变量；⑦ 面板数量控制在 4-10 个，覆盖核心黄金信号。只输出 JSON，不要额外解释。"
+	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps，请求率用 reqps，比率用 percentunit）；④ 每个面板给贴切标题；" +
+	"⑤ 【充分利用组件库、避免千篇一律的 timeseries】：随时间变化的趋势用 timeseries；单个关键当前值(运行时间/在线数/总量)用 stat；" +
+	"占比/利用率(0-100%)用 gauge(圆环)；构成占比(各状态/各分区/各类型)用 piechart；类别排行 top-N 用 barchart；" +
+	"多实例同一指标横向对比用 bargauge；数值分布用 histogram；可用性/状态随时间(up/down)用 state-timeline；" +
+	"多实例密度对比用 heatmap；明细清单用 table；平台当前告警用 alertlist(无需查询)。一个高质量看板应混用至少 4 种不同 type，切忌全是 timeseries。" +
+	"⑥ 【美观布局】：整体按黄金信号分区，从上到下 = 顶部一行 stat 概览(每个 w=6、h=4，2~4 个并排铺满一行) → 中部 timeseries 趋势(w=12、h=8，两个一行) → " +
+	"底部 piechart/barchart/gauge/table 等构成与明细(piechart/barchart/table 用 w=12、h=8；gauge 用 w=8、h=7；bargauge 用 w=12、h=6)；" +
+	"绝不要让单个 stat/gauge 占满整行或使用过大高度(会出现大片空白)；同一行面板保持等高，栅格每行合计 w=24 铺满不留缝；piechart 的切片控制在 3~8 个(过多切片改用 barchart)；" +
+	"⑦ 若适合按实例/任务/接口下钻，加一个 query 型模板变量并在表达式里用 $变量；⑧ 面板数量控制在 6-12 个，覆盖核心黄金信号且类型丰富。只输出 JSON，不要额外解释。"
 
 // extractJSONObject 从 AI 回复里抽出第一个 JSON 对象（优先 ```json 代码块，否则首个 { 到末个 }）。
 func extractJSONObject(s string) string {
@@ -86,7 +163,7 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 	d := Dashboard{Source: source}
 	d.Name = strings.TrimSpace(name)
 	if d.Name == "" {
-		d.Name = strings.TrimSpace(spec.Name)
+		d.Name = spec.specName()
 	}
 	if d.Name == "" {
 		d.Name = "AI 生成看板"
@@ -119,12 +196,20 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 			typ = "timeseries"
 		}
 		panel := DashPanel{ID: id, Title: strings.TrimSpace(p.Title), Type: typ, Unit: p.Unit, Text: p.Text}
-		panel.Grid = DashGrid{W: p.W, H: aiPanelHeight(typ, p.H)}
+		w, h := p.W, p.H
+		if w == 0 {
+			w = p.GridPos.W
+		}
+		if h == 0 {
+			h = p.GridPos.H
+		}
+		panel.Grid = DashGrid{W: aiPanelWidth(typ, w), H: aiPanelHeight(typ, h)}
 		for _, t := range p.Targets {
-			if strings.TrimSpace(t.Expr) == "" {
+			expr := t.targetExpr()
+			if expr == "" {
 				continue
 			}
-			panel.Targets = append(panel.Targets, DashTarget{Expr: strings.TrimSpace(t.Expr), Legend: strings.TrimSpace(t.Legend)})
+			panel.Targets = append(panel.Targets, DashTarget{Expr: expr, Legend: t.targetLegend()})
 		}
 		if typ != "text" && typ != "alertlist" && len(panel.Targets) == 0 {
 			warns = append(warns, "面板「"+panel.Title+"」无有效查询，已跳过")
@@ -167,6 +252,32 @@ func aiPanelHeight(typ string, h int) int {
 		}
 	}
 	return h
+}
+
+// aiPanelWidth 按面板类型给出合理的栅格宽度（1-24），避免 piechart/barchart/table 等被 AI 给成
+// 过窄导致图例/切片被挤压：单值 stat 允许窄（并排铺一行），可视化类保证足够宽度。
+func aiPanelWidth(typ string, w int) int {
+	if w < 1 || w > 24 {
+		switch typ {
+		case "stat", "gauge":
+			return 6
+		case "bargauge", "text":
+			return 12
+		default:
+			return 12
+		}
+	}
+	switch typ {
+	case "piechart", "barchart", "table", "heatmap", "timeseries", "state-timeline", "histogram":
+		if w < 8 { // 可视化面板过窄会挤压图例/坐标轴，最低给到 8 栏（1/3 行）
+			return 8
+		}
+	case "gauge":
+		if w < 6 {
+			return 6
+		}
+	}
+	return w
 }
 
 // layoutAIDashPanels 把面板按 24 栏从左到右流式排布，超宽换行，生成 gridPos（x,y 供排序）。
@@ -216,16 +327,11 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source string) (Dashb
 	if err != nil {
 		return Dashboard{}, nil, fmt.Errorf("AI 生成失败：%v", err)
 	}
-	js := extractJSONObject(out)
-	if js == "" {
+	spec, ok := decodeAIDashSpec(out)
+	if !ok {
 		return Dashboard{}, nil, fmt.Errorf("AI 未返回可解析的看板 JSON")
 	}
-	var spec aiDashSpec
-	if err := json.Unmarshal([]byte(js), &spec); err != nil {
-		return Dashboard{}, nil, fmt.Errorf("解析 AI 看板 JSON 失败：%v", err)
-	}
-	name := ""
-	d, warns := sanitizeAIDash(spec, name, source)
+	d, warns := sanitizeAIDash(spec, "", source)
 	if len(d.Panels) == 0 {
 		return Dashboard{}, warns, fmt.Errorf("AI 未生成任何有效面板")
 	}
@@ -430,14 +536,9 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	js := extractJSONObject(req.JSON)
-	if js == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未在 AI 回复中找到可应用的看板 JSON"})
-		return
-	}
-	var spec aiDashSpec
-	if json.Unmarshal([]byte(js), &spec) != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "解析 AI 看板 JSON 失败"})
+	spec, ok := decodeAIDashSpec(req.JSON)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未在 AI 回复中找到可解析的看板 JSON"})
 		return
 	}
 	d, warns := sanitizeAIDash(spec, cur.Name, cur.Source)
@@ -445,10 +546,12 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用"})
 		return
 	}
-	// 原地更新：保留 id / 数据源（AI 若给了名则用新名，否则保留原名）
+	// 原地更新：保留 id / 数据源 / 描述 / 标签（AI 若给了名则用新名，否则保留原名）
 	d.ID = cur.ID
 	d.DataSource = cur.DataSource
-	if strings.TrimSpace(spec.Name) == "" {
+	d.Description = cur.Description
+	d.Tags = cur.Tags
+	if spec.specName() == "" {
 		d.Name = cur.Name
 	}
 	saved, err := s.cfg.UpsertDashboard(d)

@@ -7,7 +7,7 @@ function hostCard(h) {
   const disks = (Array.isArray(m.disks) ? m.disks : []).filter(d => !isSystemMount(d.path));
   const disksHtml = disks.length
     ? disks.map(d => bar(I18N.t("ui.disk_label") + " " + esc(d.path) + (d.percent >= 90 ? " ⚠" : ""), d.percent, d.percent.toFixed(1) + "% · " + fmtGB(d.used) + "/" + fmtGB(d.total) + I18N.t("unit.gb"))).join("")
-    : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + I18N.t("unit.gb"));
+    : bar(I18N.t("ui.disk"), m.disk_percent || 0, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + I18N.t("unit.gb"), "disk");
   const gpus = Array.isArray(m.gpus) ? m.gpus : [];
   const gpusHtml = gpus.map(g => {
     const util = Math.max(0, Math.min(g.util_percent || 0, 100));
@@ -28,10 +28,9 @@ function hostCard(h) {
   }
   const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
   const loadTitle = I18N.t("section.load_avg") + (h.os === "windows" ? I18N.t("misc.windows_approx") : "");
-  const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
   const lastCell = !h.online
     ? `<span class="g offline-tag" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
-    : staleSec > 15
+    : h.stale
       ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.data")} ${ago(h.last_seen)}</span>`
       : `<span class="g">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
   return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
@@ -52,8 +51,8 @@ function hostCard(h) {
         <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
       </div>
     </div>
-    ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + I18N.t("ui.cores"))}
-    ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + I18N.t("unit.gb"))}
+    ${bar("CPU", m.cpu_percent || 0, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + I18N.t("ui.cores"), "cpu")}
+    ${bar(I18N.t("ui.memory"), m.mem_percent || 0, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + I18N.t("unit.gb"), "mem")}
     ${swap}
     ${disksHtml}
     ${gpusHtml}
@@ -91,8 +90,7 @@ function hostRow(h) {
       <span class="hm-v mono" style="color:${color}">${pct.toFixed(0)}%</span>
     </div>`;
   };
-  const staleSec = Math.floor(Date.now() / 1000) - (h.last_seen || 0);
-  const isStale = h.online && staleSec > 15;
+  const isStale = h.online && h.stale;
   const statusCls = !h.online ? "offline" : isStale ? "stale" : "online";
   const last = !h.online
     ? `<span class="hrow-status offline" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
@@ -308,6 +306,10 @@ async function loadAndRenderCharts() {
   const from = DETAIL_CUSTOM ? DETAIL_CUSTOM.from : now - DETAIL_TIME_RANGE * 3600;
   const spanH = Math.max(0, (to - from) / 3600); // effective window in hours
 
+  // 取消上一轮懒加载观察，避免切时间范围后旧回调继续触发。
+  if (DETAIL_CHART_IO) { try { DETAIL_CHART_IO.disconnect(); } catch (_) {} DETAIL_CHART_IO = null; }
+  DETAIL_CHART_PENDING = {};
+
   try {
     const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`).then(r => r.json());
     if (!Array.isArray(samples) || !samples.length) {
@@ -315,13 +317,13 @@ async function loadAndRenderCharts() {
       return;
     }
 
-    // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮
+    // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮；真正绘制延后到可见时（懒加载）。
     DETAIL_CHARTS = {};
     const gran = spanH <= 2 ? I18N.t("time.raw") : spanH <= 48 ? I18N.t("time.1m_agg") : I18N.t("time.5m_agg");
     const hasGPU = samples.some(s => Array.isArray(s.gpus) && s.gpus.length);
     const hasConns = samples.some(s => Array.isArray(s.conns) && s.conns.length);
     const pct = v => v.toFixed(1) + '%';
-    const wrap = id => `<div class="chart-wrap"><canvas id="${id}" width="1000" height="240"></canvas>` +
+    const wrap = id => `<div class="chart-wrap" data-lazy-chart="${id}"><canvas id="${id}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${id}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     body.innerHTML = `
       <div class="chart-controls">
@@ -340,20 +342,20 @@ async function loadAndRenderCharts() {
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
 
-    DETAIL_CHARTS.chartCPU = createChart('chartCPU', samples,
-      [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, { title: I18N.t("section.cpu_usage") });
-    DETAIL_CHARTS.chartMem = createChart('chartMem', samples,
-      [{ key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct }], 0, 100, { title: I18N.t("section.mem_usage") });
-
-    // 系统负载组合曲线：load1 / load5 / load15 三条折线同一坐标系
-    DETAIL_CHARTS.chartLoad = createChart('chartLoad', samples, [
+    // 先只登记「如何画」；进入视口后再 createChart，避免一次同步创建十多张 Canvas 卡顿。
+    const lazy = (id, series, yMin, yMax, title) => {
+      DETAIL_CHART_PENDING[id] = { samples, series, yMin, yMax, title };
+    };
+    lazy('chartCPU',
+      [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, I18N.t("section.cpu_usage"));
+    lazy('chartMem',
+      [{ key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct }], 0, 100, I18N.t("section.mem_usage"));
+    lazy('chartLoad', [
       { key: 'load1', label: I18N.t("section.load_1m_label"), color: '#4c8dff', fmt: v => v.toFixed(1) },
       { key: 'load5', label: I18N.t("section.load_5m_label"), color: '#f7b23b', fmt: v => v.toFixed(1) },
       { key: 'load15', label: I18N.t("section.load_15m_label"), color: '#f2545b', fmt: v => v.toFixed(1) },
-    ], null, null, { title: I18N.t("section.load_avg") });
+    ], null, null, I18N.t("section.load_avg"));
 
-    // 磁盘：每个分区一条线（按 path 匹配，稳健于分区数/顺序变化）。以「磁盘数最多」的样本
-    // 为准建分区列表；并用最近一个含容量的样本给每个分区标注「已用 / 共 / 剩余」明细。
     let diskProto = [];
     samples.forEach(s => { if (Array.isArray(s.disks) && s.disks.length > diskProto.length) diskProto = s.disks; });
     const diskKeys = diskProto.map(d => d.path);
@@ -373,12 +375,10 @@ async function loadAndRenderCharts() {
       color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0', '#8b5cf6', '#e06c9a'][idx % 6], fmt: pct,
       transform: (s) => { const d = (s.disks || []).find(x => x.path === path); return d ? d.percent : null; }
     }));
-    DETAIL_CHARTS.chartDisk = createChart('chartDisk', samples,
+    lazy('chartDisk',
       diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: I18N.t("section.root_partition"), color: '#f7b23b', fmt: pct }],
-      0, 100, { title: I18N.t("section.disk_usage") });
+      0, 100, I18N.t("section.disk_usage"));
 
-    // GPU：每块显卡一组曲线（存在时才有这些图）。核心算力使用率 / 显卡温度 / 显存占用率 /
-    // 显存已用·空闲 —— 覆盖 GPU 深度指标。
     if (hasGPU) {
       const gpuNames = [];
       samples.forEach(s => (s.gpus || []).forEach((g, i) => { if (!gpuNames[i]) gpuNames[i] = g.name || ('GPU' + i); }));
@@ -387,46 +387,34 @@ async function loadAndRenderCharts() {
       const gpuVal = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) : null; };
       const gbUnit = I18N.t("unit.gb");
       const gpuBytesGB = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) / 1073741824 : null; };
-
-      // 核心算力使用率 %
-      DETAIL_CHARTS.chartGPU = createChart('chartGPU', samples, gpuNames.map((nm, idx) => ({
+      lazy('chartGPU', gpuNames.map((nm, idx) => ({
         key: `gpu_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'util_percent')
-      })), 0, 100, { title: I18N.t("section.gpu_usage") });
-
-      // 显卡温度 ℃
-      DETAIL_CHARTS.chartGPUTemp = createChart('chartGPUTemp', samples, gpuNames.map((nm, idx) => ({
+      })), 0, 100, I18N.t("section.gpu_usage"));
+      lazy('chartGPUTemp', gpuNames.map((nm, idx) => ({
         key: `gput_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '℃', transform: gpuVal(idx, 'temp')
-      })), null, null, { title: I18N.t("section.gpu_temp") });
-
-      // 显存占用率 %
-      DETAIL_CHARTS.chartGPUMemPct = createChart('chartGPUMemPct', samples, gpuNames.map((nm, idx) => ({
+      })), null, null, I18N.t("section.gpu_temp"));
+      lazy('chartGPUMemPct', gpuNames.map((nm, idx) => ({
         key: `gpump_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'mem_percent')
-      })), 0, 100, { title: I18N.t("section.gpu_mem_pct") });
-
-      // 显存已用 / 空闲（GB），每卡两条
+      })), 0, 100, I18N.t("section.gpu_mem_pct"));
       const gpuMemSeries = [];
       gpuNames.forEach((nm, idx) => {
         gpuMemSeries.push({ key: `gpumu_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_used")}`, color: gcolor(idx * 2), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_used') });
         gpuMemSeries.push({ key: `gpumf_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_free")}`, color: gcolor(idx * 2 + 1), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_free') });
       });
-      DETAIL_CHARTS.chartGPUMem = createChart('chartGPUMem', samples, gpuMemSeries, null, null, { title: I18N.t("section.gpu_vram") });
+      lazy('chartGPUMem', gpuMemSeries, null, null, I18N.t("section.gpu_vram"));
     }
 
-    DETAIL_CHARTS.chartNet = createChart('chartNet', samples, [
+    lazy('chartNet', [
       { key: 'net_recv_rate', label: I18N.t("section.net_recv"), color: '#2fd07a', fmt: fmtRate },
       { key: 'net_sent_rate', label: I18N.t("section.net_send"), color: '#43b6f0', fmt: fmtRate },
-    ], null, null, { title: I18N.t("section.net_throughput") });
+    ], null, null, I18N.t("section.net_throughput"));
 
-    // 连接数（TCP/UDP 总数）+ 会话状态（TCP 各状态一条线）
     if (hasConns) {
       const sumProto = (s, proto) => Array.isArray(s.conns) ? s.conns.reduce((a, c) => c.proto === proto ? a + (c.count || 0) : a, 0) : null;
-      DETAIL_CHARTS.chartConns = createChart('chartConns', samples, [
+      lazy('chartConns', [
         { key: 'conn_tcp', label: 'TCP', color: '#43b6f0', fmt: v => v.toFixed(0), transform: (s) => sumProto(s, 'tcp') },
         { key: 'conn_udp', label: 'UDP', color: '#2fd07a', fmt: v => v.toFixed(0), transform: (s) => sumProto(s, 'udp') },
-      ], null, null, { title: I18N.t("section.conn_count") });
-
-      // 会话状态：只画关键状态（ESTABLISHED / TIME_WAIT / LISTEN / CLOSE_WAIT），其余细分状态
-      // 一般无运维意义且会把图例塞满，故不单独成线，保持图例仅显示关键指标。
+      ], null, null, I18N.t("section.conn_count"));
       const KEY_STATES = ['ESTABLISHED', 'TIME_WAIT', 'LISTEN', 'CLOSE_WAIT'];
       const stateSet = KEY_STATES.filter(st => samples.some(s => (s.conns || []).some(c => c.proto === 'tcp' && c.state === st)));
       const stateColors = { ESTABLISHED: '#4c8dff', TIME_WAIT: '#f7b23b', LISTEN: '#2fd07a', CLOSE_WAIT: '#f2545b' };
@@ -434,26 +422,59 @@ async function loadAndRenderCharts() {
         key: `cst_${idx}`, label: st, color: stateColors[st] || '#8b5cf6', fmt: v => v.toFixed(0),
         transform: (s) => { if (!Array.isArray(s.conns)) return null; const c = s.conns.find(x => x.proto === 'tcp' && x.state === st); return c ? c.count : 0; }
       }));
-      if (stateSeries.length) DETAIL_CHARTS.chartConnStates = createChart('chartConnStates', samples, stateSeries, null, null, { title: I18N.t("section.conn_states") });
+      if (stateSeries.length) lazy('chartConnStates', stateSeries, null, null, I18N.t("section.conn_states"));
     }
 
-    DETAIL_CHARTS.chartDiskIO = createChart('chartDiskIO', samples, [
+    lazy('chartDiskIO', [
       { key: 'disk_read_rate', label: I18N.t("ui.disk_read"), color: '#2fd07a', fmt: fmtIORate },
       { key: 'disk_write_rate', label: I18N.t("ui.disk_write"), color: '#f7b23b', fmt: fmtIORate },
-    ], null, null, { title: I18N.t("ui.disk_io") });
-
-    DETAIL_CHARTS.chartIOPS = createChart('chartIOPS', samples, [
+    ], null, null, I18N.t("ui.disk_io"));
+    lazy('chartIOPS', [
       { key: 'disk_read_iops', label: I18N.t("ui.disk_read_iops"), color: '#2fd07a', fmt: fmtIOPS },
       { key: 'disk_write_iops', label: I18N.t("ui.disk_write_iops"), color: '#f7b23b', fmt: fmtIOPS },
-    ], null, null, { title: I18N.t("ui.disk_iops_title") });
-
-    DETAIL_CHARTS.chartProc = createChart('chartProc', samples, [
+    ], null, null, I18N.t("ui.disk_iops_title"));
+    lazy('chartProc', [
       { key: 'proc_count', label: '进程数', color: '#8b5cf6', fmt: v => v.toFixed(0) },
-    ], null, null, { title: '进程数趋势' });
+    ], null, null, '进程数趋势');
 
+    mountDetailLazyCharts(body);
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
+}
+
+let DETAIL_CHART_IO = null;
+let DETAIL_CHART_PENDING = {};
+
+/** 视口进入时才 createChart；首屏可见的图表立即绘制（无入场动画）。 */
+function mountDetailLazyCharts(root) {
+  const mountOne = (id) => {
+    const spec = DETAIL_CHART_PENDING[id];
+    if (!spec || DETAIL_CHARTS[id]) return;
+    DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, {
+      title: spec.title, noEntrance: true
+    });
+    delete DETAIL_CHART_PENDING[id];
+  };
+  const wraps = root.querySelectorAll("[data-lazy-chart]");
+  if (!("IntersectionObserver" in window)) {
+    wraps.forEach(el => mountOne(el.dataset.lazyChart));
+    return;
+  }
+  DETAIL_CHART_IO = new IntersectionObserver((entries) => {
+    entries.forEach(en => {
+      if (!en.isIntersecting) return;
+      const id = en.target.dataset.lazyChart;
+      mountOne(id);
+      DETAIL_CHART_IO.unobserve(en.target);
+    });
+  }, { root: null, rootMargin: "120px 0px", threshold: 0.01 });
+  wraps.forEach(el => {
+    // 首屏已在视口内的直接绘制，其余交给观察器（滚动时再画）。
+    const rect = el.getBoundingClientRect();
+    if (rect.top < window.innerHeight + 80 && rect.bottom > -40) mountOne(el.dataset.lazyChart);
+    else DETAIL_CHART_IO.observe(el);
+  });
 }
 
 // 详情弹窗事件委托：放大按钮 + 时间范围切换
@@ -468,7 +489,18 @@ loadDuplicates(() => {
 
 safeAddEventListener("detailBody", "click", e => {
   const en = e.target.closest(".chart-enlarge");
-  if (en) { const ch = DETAIL_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch); return; }
+  if (en) {
+    const id = en.dataset.chart;
+    // 懒加载尚未触发时，放大前先强制挂载该图。
+    if (!DETAIL_CHARTS[id] && DETAIL_CHART_PENDING[id]) {
+      const spec = DETAIL_CHART_PENDING[id];
+      DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, { title: spec.title, noEntrance: true });
+      delete DETAIL_CHART_PENDING[id];
+    }
+    const ch = DETAIL_CHARTS[id];
+    if (ch) openChartZoom(ch);
+    return;
+  }
   // 自定义时间范围：展开/收起面板
   const tog = e.target.closest("[data-custom-toggle]");
   if (tog) {
@@ -605,15 +637,17 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
   };
   canvas._chart = state;
 
-  // 入场动画：首帧绘制后启动渐进揭示
+  // 默认直接绘制；详情弹窗等场景传 noEntrance 跳过入场动画，避免一次打开十多张图连环重绘卡顿。
   drawChart(state);
-  state._entranceStart = performance.now();
-  state._entranceDur = 400;
-  requestAnimationFrame(function entranceStep(now) {
-    state._entranceP = Math.min(1, (now - state._entranceStart) / state._entranceDur);
-    drawChart(state);
-    if (state._entranceP < 1) requestAnimationFrame(entranceStep);
-  });
+  if (!opts.noEntrance) {
+    state._entranceStart = performance.now();
+    state._entranceDur = 400;
+    requestAnimationFrame(function entranceStep(now) {
+      state._entranceP = Math.min(1, (now - state._entranceStart) / state._entranceDur);
+      drawChart(state);
+      if (state._entranceP < 1) requestAnimationFrame(entranceStep);
+    });
+  }
 
   attachChartEvents(canvas);
   return state;

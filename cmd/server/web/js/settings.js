@@ -143,6 +143,10 @@ async function loadThresholds() {
     // SNMP 网络设备
     $("snmpIfUtilWarn").value = td(t.snmp_if_util_warn, 80); $("snmpIfUtilCrit").value = td(t.snmp_if_util_crit, 95);
     $("snmpIfErrWarn").value = td(t.snmp_if_err_warn, 1); $("snmpIfErrCrit").value = td(t.snmp_if_err_crit, 10);
+    // NetFlow 流量异常
+    if ($("netflowSurgeRatio")) $("netflowSurgeRatio").value = td(t.netflow_surge_ratio, 3);
+    if ($("netflowSurgeMinMbps")) $("netflowSurgeMinMbps").value = td(t.netflow_surge_min_mbps, 1);
+    if ($("netflowDropWarn")) $("netflowDropWarn").value = td(t.netflow_drop_warn, 100);
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
 }
 async function saveThresholds() {
@@ -187,7 +191,10 @@ async function saveThresholds() {
         forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit"),
         // SNMP 网络设备
         snmp_if_util_warn: num("snmpIfUtilWarn"), snmp_if_util_crit: num("snmpIfUtilCrit"),
-        snmp_if_err_warn: num("snmpIfErrWarn"), snmp_if_err_crit: num("snmpIfErrCrit")
+        snmp_if_err_warn: num("snmpIfErrWarn"), snmp_if_err_crit: num("snmpIfErrCrit"),
+        // NetFlow 流量异常
+        netflow_surge_ratio: num("netflowSurgeRatio"), netflow_surge_min_mbps: num("netflowSurgeMinMbps"),
+        netflow_drop_warn: Math.round(num("netflowDropWarn"))
       };
       const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
       if (r.ok) toast("告警阈值已保存，即时生效", "ok");
@@ -914,7 +921,13 @@ function startApp() {
     let interval = intervals[view] || POLL_BASE;
     // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
     if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);
-    pollTimer = setTimeout(() => { refresh(); loadChecks(); if (document.querySelector("#view-forward.active")) loadForwards(); schedulePoll(); }, interval);
+    pollTimer = setTimeout(() => {
+      refresh();
+      // 只在拨测视图激活时轮询/重建拨测网格，避免其它页面每个周期都全量重建隐藏的 check 卡片。
+      if (document.querySelector("#view-checks.active")) loadChecks();
+      if (document.querySelector("#view-forward.active")) loadForwards();
+      schedulePoll();
+    }, interval);
   }
   schedulePoll();
   // 视图切换时立即调整轮询频率

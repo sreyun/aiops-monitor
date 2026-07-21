@@ -31,9 +31,13 @@ type Notifier struct {
 	cfg       *ConfigStore
 	httpc     *http.Client
 	mu        sync.Mutex
-	active    map[string]Alert // alertKey -> alert currently firing
+	active    map[string]Alert // alertKey -> alert currently firing (已确认并通知)
 	since     map[string]int64 // alertKey -> unix time the alert first fired
 	recordIDs map[string]int64 // alertKey -> PG record ID (for resolve update)
+	// 抖动抑制（flapping debounce）：候选告警需连续出现 alertConfirmTicks 次才真正触发通知；
+	// 已触发的告警需连续消失 alertClearTicks 次才判恢复。避免阈值边界反复抖动造成"触发/恢复"刷屏。
+	pending map[string]int // 候选告警连续出现计数（未达确认阈值前不通知）
+	missing map[string]int // 已触发告警连续消失计数（未达清除阈值前不恢复）
 	// SRE hooks (set during server wiring; nil-safe).
 	incidents   *incidentManager
 	remediation *remediationManager
@@ -44,6 +48,12 @@ type Notifier struct {
 	nf          *nfStore        // set after server startup; feeds NetFlow traffic-anomaly alerts
 }
 
+// 抖动抑制阈值（tick 间隔 10s）：连续 2 次（~20s 持续）才触发/恢复，压制阈值边界抖动刷屏。
+const (
+	alertConfirmTicks = 2
+	alertClearTicks   = 2
+)
+
 func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
 	return &Notifier{
 		store:     store,
@@ -52,6 +62,8 @@ func NewNotifier(store *Store, cfg *ConfigStore) *Notifier {
 		active:    map[string]Alert{},
 		since:     map[string]int64{},
 		recordIDs: map[string]int64{},
+		pending:   map[string]int{},
+		missing:   map[string]int{},
 	}
 }
 
@@ -74,6 +86,8 @@ func (n *Notifier) Run(interval time.Duration) {
 func (n *Notifier) ResetState() {
 	n.mu.Lock()
 	n.active = map[string]Alert{}
+	n.pending = map[string]int{}
+	n.missing = map[string]int{}
 	n.mu.Unlock()
 }
 
@@ -123,7 +137,7 @@ func (n *Notifier) tick() {
 	}
 	// NetFlow 流量异常并入：突增（EWMA 基线）、采集器丢包。
 	if n.nf != nil {
-		alerts = append(alerts, EvaluateNetFlow(n.nf)...)
+		alerts = append(alerts, EvaluateNetFlow(n.nf, n.cfg.Thresholds())...)
 	}
 	cur := make(map[string]Alert, len(alerts))
 	for _, a := range alerts {
@@ -135,34 +149,16 @@ func (n *Notifier) tick() {
 		firing bool
 	}
 	var todo []transition
-	now := time.Now().Unix()
-	n.mu.Lock()
+	fires, resolves := n.reconcile(cur)
+	// 状态始终维护（即便告警关闭），re-enable 不会重放；仅在启用时才真正派发通知。
 	if cfg.AlertsEnabled {
-		for k, a := range cur { // newly fired
-			if _, ok := n.active[k]; !ok {
-				todo = append(todo, transition{a, true})
-			}
+		for _, a := range fires {
+			todo = append(todo, transition{a, true})
 		}
-		for k, a := range n.active { // resolved
-			if _, ok := cur[k]; !ok {
-				todo = append(todo, transition{a, false})
-			}
+		for _, a := range resolves {
+			todo = append(todo, transition{a, false})
 		}
 	}
-	// first-fired bookkeeping (kept across ResetState so durations survive
-	// config saves; only set when absent, cleared when the alert resolves)
-	for k := range cur {
-		if _, ok := n.since[k]; !ok {
-			n.since[k] = now
-		}
-	}
-	for k := range n.since {
-		if _, ok := cur[k]; !ok {
-			delete(n.since, k)
-		}
-	}
-	n.active = cur // track state even while disabled, so re-enabling won't replay
-	n.mu.Unlock()
 
 	for _, t := range todo {
 		n.dispatch(cfg, t.a, t.firing)
@@ -175,6 +171,57 @@ func (n *Notifier) tick() {
 			}
 		}
 	}
+}
+
+// reconcile 把本轮评估得到的告警集合 cur 与已确认的 active 集合对账，返回本轮需要「触发通知」与
+// 「恢复通知」的告警。核心是抖动抑制（flapping debounce）：候选需连续出现 alertConfirmTicks 次才
+// 真正触发；已触发的需连续消失 alertClearTicks 次才判恢复。阈值边界的瞬时抖动因此不会刷屏。
+// 该方法自带加锁，且始终维护内部状态（即便本轮不派发），从而保证「触发一次 / 恢复一次」语义。
+func (n *Notifier) reconcile(cur map[string]Alert) (fires, resolves []Alert) {
+	now := time.Now().Unix()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.pending == nil {
+		n.pending = map[string]int{}
+	}
+	if n.missing == nil {
+		n.missing = map[string]int{}
+	}
+	// 触发确认：候选需连续出现 alertConfirmTicks 次才升级为已触发并通知；已触发的刷新其最新值。
+	for k, a := range cur {
+		if _, ok := n.active[k]; ok {
+			n.active[k] = a // 持续告警：更新最新数值/消息，但不重复通知
+			delete(n.missing, k)
+			continue
+		}
+		n.pending[k]++
+		if n.pending[k] >= alertConfirmTicks {
+			n.active[k] = a
+			n.since[k] = now
+			delete(n.pending, k)
+			fires = append(fires, a)
+		}
+	}
+	// 候选在确认前消失：清掉其计数（抖动被吸收，不产生任何通知）。
+	for k := range n.pending {
+		if _, ok := cur[k]; !ok {
+			delete(n.pending, k)
+		}
+	}
+	// 恢复确认：已触发告警需连续消失 alertClearTicks 次才判恢复并通知恢复。
+	for k, a := range n.active {
+		if _, ok := cur[k]; ok {
+			continue
+		}
+		n.missing[k]++
+		if n.missing[k] >= alertClearTicks {
+			resolves = append(resolves, a)
+			delete(n.active, k)
+			delete(n.missing, k)
+			delete(n.since, k)
+		}
+	}
+	return fires, resolves
 }
 
 func (n *Notifier) dispatch(cfg ServerConfig, a Alert, firing bool) {

@@ -54,6 +54,10 @@ type Thresholds struct {
 	// ---- SNMP 网络设备阈值 ----
 	SNMPIfUtilWarn, SNMPIfUtilCrit float64 // 接口带宽利用率 %
 	SNMPIfErrWarn, SNMPIfErrCrit   float64 // 接口错误+丢包率 pps
+	// ---- NetFlow 流量异常阈值 ----
+	NetFlowSurgeRatio   float64 // 突增判定倍数（当前 bps 超基线的倍数），默认 3.0
+	NetFlowSurgeMinMbps float64 // 突增最小流量地板（Mbps），低于此值不告警（避免小流量噪声），默认 1
+	NetFlowDropWarn     float64 // 采集器单窗口丢包告警阈值（包），默认 100
 }
 
 // DefaultThresholds returns the Standard profile (recommended defaults).

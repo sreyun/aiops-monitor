@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -56,17 +57,56 @@ type flowJob struct {
 	flows  []shared.FlowRecord
 }
 
+// applyPGSafetyTimeouts 向 DSN 注入连接级安全超时（作为运行时 GUC，随连接建立生效）：
+//   - lock_timeout：单条语句等待锁不超过 15s，避免锁等待堆积拖垮连接池；
+//   - idle_in_transaction_session_timeout：事务内空闲超 60s 即断开，回收泄漏/挂起的连接。
+//
+// 刻意不设全局 statement_timeout —— 迁移、分区重建、大聚合等合法长查询不应被硬杀；上面两项
+// 已能防止"长时间阻塞耗尽连接池"这一核心风险。若用户已在 DSN 里显式配置同名参数则尊重之。
+func applyPGSafetyTimeouts(dsn string) string {
+	params := map[string]string{
+		"lock_timeout":                        "15000",
+		"idle_in_transaction_session_timeout": "60000",
+	}
+	lower := strings.ToLower(dsn)
+	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return dsn
+		}
+		q := u.Query()
+		for k, v := range params {
+			if q.Get(k) == "" {
+				q.Set(k, v)
+			}
+		}
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	// keyword/value 形式：只追加未出现过的参数
+	out := dsn
+	for k, v := range params {
+		if !strings.Contains(lower, k) {
+			out += fmt.Sprintf(" %s=%s", k, v)
+		}
+	}
+	return out
+}
+
 // openPGStore connects, pings and migrates. A non-nil error means fall back to
 // the embedded snapshot.
 func openPGStore(dsn string) (*pgStore, error) {
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("postgres", applyPGSafetyTimeouts(dsn))
 	if err != nil {
 		return nil, err
 	}
-	// NetFlow 高峰时单次上报可含上万条 flow；连接池太小 + 同步逐行写会饿死其它请求，故适当放大。
-	db.SetMaxOpenConns(24)
-	db.SetMaxIdleConns(6)
+	// 面向 500+ 并发用户/多机上报的连接池：放大到 200 上限，空闲保留 50 以摊薄高峰突发的建连开销。
+	// 注意：PostgreSQL 的 max_connections 需 ≥ 200（外加 superuser 预留），否则会出现 "too many clients"；
+	// 若 PG 端上限较低，请相应下调此值或在 PG 前置 PgBouncer 做连接复用。
+	db.SetMaxOpenConns(200)
+	db.SetMaxIdleConns(50)
 	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute) // 回收长期空闲连接，避免占满 PG 侧会话
 	ctxPing := make(chan error, 1)
 	go func() { ctxPing <- db.Ping() }()
 	select {
@@ -484,6 +524,25 @@ func (p *pgStore) migrateFlowRecordsToPartitioned() error {
 	return nil
 }
 
+// isSafeFlowPartitionName 校验分区表标识符只能是 flow_records_ 前缀 + 6 位数字（YYYYMM），
+// 作为拼接进 DDL 前的最后一道防线。
+func isSafeFlowPartitionName(name string) bool {
+	const prefix = "flow_records_"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	suffix := name[len(prefix):]
+	if len(suffix) != 6 {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // ensureFlowPartitions creates monthly partitions for the current and next
 // months. Idempotent; safe to call on every tick.
 //
@@ -496,6 +555,12 @@ func (p *pgStore) ensureFlowPartitions() {
 		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, i, 0)
 		end := start.AddDate(0, 1, 0)
 		name := fmt.Sprintf("flow_records_%04d%02d", start.Year(), start.Month())
+		// 防御性白名单：分区表名由 time.Now() 生成，理应恒为 flow_records_YYYYMM。这里再校验一次，
+		// 万一上游逻辑被篡改产生异常标识符也不会拼进 DDL 执行（SQL 注入面归零）。
+		if !isSafeFlowPartitionName(name) {
+			slog.Warn("跳过异常分区名（疑似被篡改）", "partition", name)
+			continue
+		}
 		q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s PARTITION OF flow_records
 			FOR VALUES FROM ('%s') TO ('%s')`,
 			name, start.Format("2006-01-02"), end.Format("2006-01-02"))
@@ -2409,14 +2474,20 @@ func (p *pgStore) getFlowRecordsRange(hostID, filter string, limit int, from, to
 			col = strings.ToLower(strings.TrimSpace(f[:i]))
 			val = strings.TrimSpace(f[i+1:])
 		}
+		// 列名白名单：column 始终来自下方 switch 的硬编码字面量，绝不来自用户输入（val 才是用户值，
+		// 已全部走 $N 参数化）。这里再做一次白名单断言作为纵深防御，防止未来误传入非受控列名。
+		allowedFlowCols := map[string]bool{"src_ip": true, "dst_ip": true, "src_port": true, "dst_port": true}
 		ipCond := func(column string) {
-			if ipIsh(val) {
+			if allowedFlowCols[column] && ipIsh(val) {
 				query += fmt.Sprintf(` AND %s <<= $%d::inet`, column, argIdx)
 				args = append(args, val)
 				argIdx++
 			}
 		}
 		portCond := func(column string) {
+			if !allowedFlowCols[column] {
+				return
+			}
 			if n, err := strconv.Atoi(val); err == nil {
 				query += fmt.Sprintf(` AND %s = $%d`, column, argIdx)
 				args = append(args, n)
@@ -2828,7 +2899,8 @@ func (p *pgStore) cleanupContentAudit(retainDays int) {
 	if retainDays <= 0 {
 		retainDays = 30
 	}
-	_, _ = p.db.Exec(fmt.Sprintf("DELETE FROM content_audit WHERE created_at < NOW() - INTERVAL '%d days'", retainDays))
+	// 参数化天数（make_interval），杜绝任何字符串拼接进 SQL —— 即便 retainDays 未来来源变化也安全。
+	_, _ = p.db.Exec("DELETE FROM content_audit WHERE created_at < NOW() - make_interval(days => $1)", retainDays)
 }
 
 // cleanupFlowRecords deletes flow records older than 7 days (called periodically).

@@ -401,6 +401,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /uninstall.sh", s.handleUninstallScript)
 	mux.HandleFunc("GET /uninstall.ps1", s.handleUninstallScript)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	// robots.txt：监控控制台不应被搜索引擎索引（内容需鉴权，索引 URL 也徒增暴露面）。
+	mux.HandleFunc("GET /robots.txt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write([]byte("User-agent: *\nDisallow: /\n"))
+	})
 	// P3-1: WebSocket push endpoint for real-time updates
 	mux.HandleFunc("GET /ws/push", s.handlePushWS)
 	mux.HandleFunc("GET /", s.handleDashboard)

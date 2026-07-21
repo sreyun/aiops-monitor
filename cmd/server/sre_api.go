@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"encoding/base64"
@@ -1063,10 +1063,10 @@ func (s *Server) handleTestEmbedConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelLabel := c.EmbedModel
-		if modelLabel == "" {
-			modelLabel = "自动"
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "dimensions": len(emb), "model": modelLabel})
+	if modelLabel == "" {
+		modelLabel = "自动"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "dimensions": len(emb), "model": modelLabel})
 }
 
 // handleTestRerankConfig 测试重排(rerank)模型连通性。
@@ -1433,6 +1433,14 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 	case "chart_analysis":
 		return "你是资深 SRE。以下是监控图表/指标的数据摘要。请：① 概述整体趋势与当前水位；② 指出异常点、突变、持续高位或逼近阈值的项；" +
 			"③ 推断可能原因；④ 给出可执行的排查方向或处置建议。用简洁中文、分点作答，只依据给定数据，不要编造。" + ctxBlock
+	case "dashboard_prompt_optimize":
+		return "你是可观测性与监控看板设计专家。运维人员想用 AI 生成一个监控仪表盘，下面给出他的原始需求描述（可能只有寥寥数语）。" +
+			"请把它改写成一段高质量、可直接用于生成看板的需求 prompt，使产出的看板在数据完整度、布局与配色上都更专业美观。要求：\n" +
+			"① 明确看板主题与监控对象；② 列出应覆盖的关键指标/黄金信号（如资源用量、吞吐、延迟、错误率、饱和度、可用性等，按对象补全常见维度）；" +
+			"③ 说明每类指标建议的可视化类型（趋势用 timeseries、当前值用 stat、占比/利用率用 gauge、构成用 piechart、排行用 barchart、状态用 state-timeline、明细用 table）；" +
+			"④ 建议合理的分区/分组与布局顺序（概览在上、明细在下，同类并排），以及配色/单位规范（百分比、bytes、Bps、ms 等）；" +
+			"⑤ 如适合按实例/任务/接口下钻，提示加入模板变量。\n" +
+			"直接输出改写后的需求描述正文（一段或分点的自然语言，不要输出 JSON、不要代码块、不要额外解释），可直接粘贴回生成框使用。若上下文给了可用指标，优先围绕真实指标组织。" + ctxBlock
 	case "dashboard_analysis":
 		return "你是资深 SRE。以下是一个监控仪表盘的实时数据摘要（各面板当前值）。请对该看板做健康研判：" +
 			"① 总体健康结论（正常/需关注/告急）；② 逐项指出异常、逼近阈值、异常趋势的面板与数值；③ 推断可能根因与关联；" +

@@ -1,5 +1,9 @@
 /* ---------- 主循环 ---------- */
+let LAST_FAVICON_CRIT = -1;
 function updateFavicon(critCount) {
+  // 仅在严重告警数变化时重绘图标：避免每次轮询/推送都做 canvas 分配 + toDataURL 编码占用主线程。
+  if (critCount === LAST_FAVICON_CRIT) return;
+  LAST_FAVICON_CRIT = critCount;
   const canvas = document.createElement("canvas");
   canvas.width = 16; canvas.height = 16;
   const ctx = canvas.getContext("2d");
@@ -45,7 +49,20 @@ async function refresh(force) {
       s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
       s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
     }
-    renderCards(s); renderStatsHealth(s); renderAlerts(alerts); renderLog(activity); renderHosts(hosts); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts);
+    // 性能优化：按当前活动视图只渲染其拥有的 DOM，避免每 5s 全量重建隐藏视图（主机网格/TOP/日志/告警列表）
+    // 抢占主线程，导致新建/查看/编辑时卡顿。汇总计数、图标、通知与主机元数据仍全局保持最新。
+    const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
+    const onOverview = activeView === "overview";
+    HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname })); // 供进程监控/主机下拉等使用，与网格渲染解耦
+    // 侧栏计数徽标需跨所有视图保持最新（其原本在被门控的 render* 里更新），用已取数据全局轻量刷新。
+    const setTxt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    setTxt("navHosts", hosts.length); setTxt("hostsCount", hosts.length);
+    setTxt("navAlerts", alerts.length); setTxt("alertsCount", alerts.length); setTxt("ovAlertsCount", alerts.length);
+    setTxt("navLog", activity.length);
+    if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts); }
+    if (onOverview || activeView === "alerts") renderAlerts(alerts);
+    if (onOverview || activeView === "log") renderLog(activity);
+    if (activeView === "hosts") renderHosts(hosts);
     updateFavicon(s.critical_alerts || 0);
     notifyCriticalAlerts(s.critical_alerts || 0);
     const pulseEl = $("pulse"); if (pulseEl) pulseEl.className = "pulse";
@@ -402,6 +419,7 @@ function switchView(view) {
     if (t) t.textContent = meta.title;
     if (s) s.textContent = meta.sub;
   }
+  if (view === "checks") loadChecks();
   if (view === "automation") loadPlaybooks();
   if (view === "forward") loadForwards();
   if (view === "sre") loadSRE();
@@ -417,6 +435,8 @@ function switchView(view) {
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   if (view === "snmp" && window._pageRenderers && window._pageRenderers.snmp) window._pageRenderers.snmp();
   if (view === "content-audit" && window._pageRenderers && window._pageRenderers["content-audit"]) window._pageRenderers["content-audit"]();
+  // 这些视图的 DOM 由全局轮询按活动视图渲染；切换过来时立即刷新一次，避免等到下个轮询周期(最多5s)才更新。
+  if (view === "overview" || view === "hosts" || view === "alerts" || view === "log") refresh(true);
   window.scrollTo(0, 0);
 }
 navItems.forEach(n => n.addEventListener("click", () => {

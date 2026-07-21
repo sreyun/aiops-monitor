@@ -74,7 +74,7 @@ func (s *Server) pushPush(c *pushClient) {
 	alerts = append(alerts, EvaluateForward(s.forward.Snapshot(), th)...)
 	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	alerts = append(alerts, EvaluateSNMP(s.snmp, th)...)
-	alerts = append(alerts, EvaluateNetFlow(s.nf)...)
+	alerts = append(alerts, EvaluateNetFlow(s.nf, th)...)
 	crit, warn := 0, 0
 	for _, a := range alerts {
 		if a.Level == "critical" {

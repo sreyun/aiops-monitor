@@ -68,13 +68,13 @@ func TestEvaluateNetFlowSurge(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		ns.put("h1", "h1", "", base)
 	}
-	if EvaluateNetFlow(ns) != nil && len(EvaluateNetFlow(ns)) > 0 {
+	if EvaluateNetFlow(ns, Thresholds{}) != nil && len(EvaluateNetFlow(ns, Thresholds{})) > 0 {
 		t.Fatal("稳定基线不应突增告警")
 	}
 	// 10x 突增
 	surge := shared.NetFlowReport{WindowSec: 60, Stats: shared.NetFlowStats{TotalBytes: 60 * 10_000_000 / 8}}
 	ns.put("h1", "h1", "", surge)
-	a := findAlert(EvaluateNetFlow(ns), "traffic/surge")
+	a := findAlert(EvaluateNetFlow(ns, Thresholds{}), "traffic/surge")
 	if a == nil || a.Type != "netflow" {
 		t.Fatalf("10x 突增应告警: %+v", a)
 	}
@@ -83,8 +83,23 @@ func TestEvaluateNetFlowSurge(t *testing.T) {
 func TestEvaluateNetFlowDrops(t *testing.T) {
 	ns := newNFStore()
 	ns.put("h1", "h1", "", shared.NetFlowReport{WindowSec: 60, Stats: shared.NetFlowStats{DroppedPackets: 500}})
-	if a := findAlert(EvaluateNetFlow(ns), "collector/drops"); a == nil {
+	if a := findAlert(EvaluateNetFlow(ns, Thresholds{}), "collector/drops"); a == nil {
 		t.Error("采集丢包 500 应告警")
+	}
+}
+
+// TestEvaluateNetFlowConfigurableThreshold 验证突增地板可通过阈值配置调整：把最小流量地板
+// 抬高到 100Mbps 后，10Mbps 的突增不再告警。
+func TestEvaluateNetFlowConfigurableThreshold(t *testing.T) {
+	ns := newNFStore()
+	base := shared.NetFlowReport{WindowSec: 60, Stats: shared.NetFlowStats{TotalBytes: 60 * 1_000_000 / 8}}
+	for i := 0; i < 6; i++ {
+		ns.put("h1", "h1", "", base)
+	}
+	ns.put("h1", "h1", "", shared.NetFlowReport{WindowSec: 60, Stats: shared.NetFlowStats{TotalBytes: 60 * 10_000_000 / 8}})
+	th := Thresholds{NetFlowSurgeRatio: 3.0, NetFlowSurgeMinMbps: 100, NetFlowDropWarn: 100}
+	if a := findAlert(EvaluateNetFlow(ns, th), "traffic/surge"); a != nil {
+		t.Fatalf("地板抬到 100Mbps 后 10Mbps 突增不应告警: %+v", a)
 	}
 }
 

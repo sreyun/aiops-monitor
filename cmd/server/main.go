@@ -118,6 +118,11 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		// HSTS：仅在 HTTPS 下发送，强制浏览器后续始终走 TLS，防降级/中间人。HTTP-only 部署不发，
+		// 避免把无 TLS 的环境锁死到 https。r.TLS 非空即当前连接为 TLS（含前置于 TLS 反代直连时）。
+		if r.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		// Content-Security-Policy: defense-in-depth. script-src is 'self' ONLY —
 		// all inline on*= handlers were refactored to delegated listeners and the
 		// theme-init inline script was externalised (/theme-init.js), so even a
@@ -332,8 +337,8 @@ func main() {
 	notifier := NewNotifier(store, cfg)
 	server := NewServer(store, cfg, notifier, dist, *addr)
 	notifier.forward = server.forward
-	notifier.hw = server.hw // 硬件异常接入统一告警链路（去重/推送与 CPU、磁盘等一致）
-	notifier.hv = server.hv // Hyper-V 虚拟机异常接入统一告警链路
+	notifier.hw = server.hw     // 硬件异常接入统一告警链路（去重/推送与 CPU、磁盘等一致）
+	notifier.hv = server.hv     // Hyper-V 虚拟机异常接入统一告警链路
 	notifier.snmp = server.snmp // SNMP 网络设备异常接入统一告警链路
 	notifier.nf = server.nf     // NetFlow 流量异常接入统一告警链路
 

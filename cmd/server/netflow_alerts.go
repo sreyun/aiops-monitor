@@ -13,21 +13,21 @@ import (
 )
 
 const (
-	nfSurgeRatio      = 3.0       // 当前 bps 超基线倍数即视为突增
-	nfSurgeMinBps     = 1_000_000 // 低于 1Mbps 的不算突增（避免小流量噪声）
-	nfSurgeMinSamples = 5         // 需先积累基线样本
-	nfDropWarn        = 100       // 单窗口采集丢包阈值
+	nfSurgeRatioDefault  = 3.0       // 当前 bps 超基线倍数即视为突增（阈值可配，缺省回退此值）
+	nfSurgeMinBpsDefault = 1_000_000 // 低于 1Mbps 的不算突增（避免小流量噪声）
+	nfSurgeMinSamples    = 5         // 需先积累基线样本
+	nfDropWarnDefault    = 100       // 单窗口采集丢包阈值
 )
 
 type nfHostStat struct {
-	hostname    string
-	ip          string
-	updatedAt   int64
-	curBps      float64
-	baselineBps float64
-	samples     int
-	surge       bool
-	dropped     uint64
+	hostname      string
+	ip            string
+	updatedAt     int64
+	curBps        float64
+	baselineBps   float64
+	surgeBaseline float64 // 并入当前样本之前的基线，供 EvaluateNetFlow 按可配阈值判定突增
+	samples       int
+	dropped       uint64
 }
 
 // nfStore 缓存每主机 NetFlow 窗口统计与 EWMA 基线。
@@ -58,9 +58,8 @@ func (ns *nfStore) put(hostID, hostname, ip string, rep shared.NetFlowReport) {
 	st.updatedAt = time.Now().Unix()
 	st.curBps = bps
 	st.dropped = rep.Stats.DroppedPackets
-	// surge 用"并入本样本之前"的基线判定，避免突增被自身稀释。
-	st.surge = st.samples >= nfSurgeMinSamples && st.baselineBps > 0 &&
-		bps > nfSurgeRatio*st.baselineBps && bps > nfSurgeMinBps
+	// 记录"并入本样本之前"的基线，突增判定在 EvaluateNetFlow 按可配阈值进行，避免突增被自身稀释。
+	st.surgeBaseline = st.baselineBps
 	if st.samples == 0 {
 		st.baselineBps = bps
 	} else {
@@ -83,15 +82,30 @@ func (ns *nfStore) snapshot() map[string]nfHostStat {
 	return out
 }
 
-// EvaluateNetFlow 把流量突增/采集丢包转成标准 Alert。
-func EvaluateNetFlow(ns *nfStore) []Alert {
+// EvaluateNetFlow 把流量突增/采集丢包转成标准 Alert。突增倍数/最小流量地板/丢包阈值均来自
+// 可配置的告警阈值（Thresholds），缺省回退内置默认，从而在「告警阈值」页面即可调整。
+func EvaluateNetFlow(ns *nfStore, th Thresholds) []Alert {
 	if ns == nil {
 		return nil
+	}
+	ratio := th.NetFlowSurgeRatio
+	if ratio <= 0 {
+		ratio = nfSurgeRatioDefault
+	}
+	minBps := th.NetFlowSurgeMinMbps * 1_000_000
+	if minBps <= 0 {
+		minBps = nfSurgeMinBpsDefault
+	}
+	dropWarn := th.NetFlowDropWarn
+	if dropWarn <= 0 {
+		dropWarn = nfDropWarnDefault
 	}
 	var alerts []Alert
 	now := time.Now().Unix()
 	for hostID, st := range ns.snapshot() {
-		if st.surge {
+		surge := st.samples >= nfSurgeMinSamples && st.surgeBaseline > 0 &&
+			st.curBps > ratio*st.surgeBaseline && st.curBps > minBps
+		if surge {
 			alerts = append(alerts, Alert{
 				HostID: hostID, Hostname: st.hostname, IP: st.ip,
 				Level: "warning", Type: "netflow", Scope: "traffic/surge",
@@ -100,7 +114,7 @@ func EvaluateNetFlow(ns *nfStore) []Alert {
 				Timestamp: now,
 			})
 		}
-		if st.dropped >= nfDropWarn {
+		if float64(st.dropped) >= dropWarn {
 			alerts = append(alerts, Alert{
 				HostID: hostID, Hostname: st.hostname, IP: st.ip,
 				Level: "warning", Type: "netflow", Scope: "collector/drops",

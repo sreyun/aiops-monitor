@@ -421,25 +421,22 @@ function updateHostCard(h) {
   el.classList.toggle("offline", !h.online);
   const dot = el.querySelector(".dot");
   if (dot) dot.className = "dot " + (h.online ? "on" : "off");
-  // 更新指标数值
+  // 更新指标数值（文本与 hostCard 保持一致，避免差量更新丢失核数/容量等信息）
   const m = h.latest || {};
+  const patch = (key, pct, detail) => {
+    const vEl = el.querySelector(`[data-metric=${key}]`);
+    if (vEl) vEl.textContent = detail;
+    const bEl = el.querySelector(`[data-bar=${key}]`);
+    if (bEl) { bEl.style.width = Math.max(0, Math.min(pct || 0, 100)) + "%"; bEl.style.background = usageColor(pct); }
+  };
   if (m.cpu_percent !== undefined) {
-    const cpuEl = el.querySelector("[data-metric=cpu]");
-    if (cpuEl) cpuEl.textContent = (m.cpu_percent || 0).toFixed(1) + "%";
-    const cpuBar = el.querySelector("[data-bar=cpu]");
-    if (cpuBar) { cpuBar.style.width = (m.cpu_percent || 0) + "%"; cpuBar.style.background = usageColor(m.cpu_percent); }
+    patch("cpu", m.cpu_percent, (m.cpu_percent || 0).toFixed(1) + "% · " + (m.cpu_cores || 0) + I18N.t("ui.cores"));
   }
   if (m.mem_percent !== undefined) {
-    const memEl = el.querySelector("[data-metric=mem]");
-    if (memEl) memEl.textContent = (m.mem_percent || 0).toFixed(1) + "%";
-    const memBar = el.querySelector("[data-bar=mem]");
-    if (memBar) { memBar.style.width = (m.mem_percent || 0) + "%"; memBar.style.background = usageColor(m.mem_percent); }
+    patch("mem", m.mem_percent, (m.mem_percent || 0).toFixed(1) + "% · " + fmtGB(m.mem_used || 0) + "/" + fmtGB(m.mem_total || 0) + I18N.t("unit.gb"));
   }
   if (m.disk_percent !== undefined) {
-    const diskEl = el.querySelector("[data-metric=disk]");
-    if (diskEl) diskEl.textContent = (m.disk_percent || 0).toFixed(1) + "%";
-    const diskBar = el.querySelector("[data-bar=disk]");
-    if (diskBar) { diskBar.style.width = (m.disk_percent || 0) + "%"; diskBar.style.background = usageColor(m.disk_percent); }
+    patch("disk", m.disk_percent, (m.disk_percent || 0).toFixed(1) + "% · " + fmtGB(m.disk_used || 0) + "/" + fmtGB(m.disk_total || 0) + I18N.t("unit.gb"));
   }
   existing.data = h;
   return true;
@@ -472,10 +469,13 @@ function icon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 }
 
-function bar(label, percent, detail) {
+function bar(label, percent, detail, key) {
   const p = Math.max(0, Math.min(percent || 0, 100));
-  return `<div class="metric"><div class="row"><span class="label">${label}</span><span class="val mono">${detail}</span></div>
-    <div class="bar"><div class="fill" style="width:${p}%;background:${usageColor(percent)}"></div></div></div>`;
+  // key（cpu/mem/disk）用于差量更新时定位数值与进度条，避免每轮询全量重建主机卡片。
+  const vAttr = key ? ` data-metric="${key}"` : "";
+  const bAttr = key ? ` data-bar="${key}"` : "";
+  return `<div class="metric"><div class="row"><span class="label">${label}</span><span class="val mono"${vAttr}>${detail}</span></div>
+    <div class="bar"><div class="fill"${bAttr} style="width:${p}%;background:${usageColor(percent)}"></div></div></div>`;
 }
 
 /* ---------- 数字滚动动画 ---------- */

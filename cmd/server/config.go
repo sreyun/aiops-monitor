@@ -143,6 +143,10 @@ type ThresholdConfig struct {
 	SNMPIfUtilCrit float64 `json:"snmp_if_util_crit"` // 接口带宽利用率 严重 %
 	SNMPIfErrWarn  float64 `json:"snmp_if_err_warn"`  // 接口错误+丢包率 警告 pps
 	SNMPIfErrCrit  float64 `json:"snmp_if_err_crit"`  // 接口错误+丢包率 严重 pps
+	// ---- NetFlow 流量异常阈值 ----
+	NetFlowSurgeRatio   float64 `json:"netflow_surge_ratio"`    // 突增判定倍数（当前 bps 超基线倍数）
+	NetFlowSurgeMinMbps float64 `json:"netflow_surge_min_mbps"` // 突增最小流量地板 Mbps（低于此值不告警）
+	NetFlowDropWarn     float64 `json:"netflow_drop_warn"`      // 采集器单窗口丢包告警阈值（包）
 }
 
 func defaultThresholdConfig() ThresholdConfig {
@@ -184,6 +188,8 @@ func defaultThresholdConfig() ThresholdConfig {
 		// SNMP 网络设备默认阈值
 		SNMPIfUtilWarn: 80, SNMPIfUtilCrit: 95,
 		SNMPIfErrWarn: 1, SNMPIfErrCrit: 10,
+		// NetFlow 流量异常默认阈值：突增 = 超基线 3 倍且 ≥ 1Mbps；采集器丢包 ≥ 100 包/窗口
+		NetFlowSurgeRatio: 3.0, NetFlowSurgeMinMbps: 1.0, NetFlowDropWarn: 100,
 	}
 }
 
@@ -294,6 +300,9 @@ func backfillThresholdDefaults(t *ThresholdConfig) bool {
 	fix(&t.SNMPIfUtilCrit, d.SNMPIfUtilCrit)
 	fix(&t.SNMPIfErrWarn, d.SNMPIfErrWarn)
 	fix(&t.SNMPIfErrCrit, d.SNMPIfErrCrit)
+	fix(&t.NetFlowSurgeRatio, d.NetFlowSurgeRatio)
+	fix(&t.NetFlowSurgeMinMbps, d.NetFlowSurgeMinMbps)
+	fix(&t.NetFlowDropWarn, d.NetFlowDropWarn)
 	if t.OfflineAfterSec == 0 {
 		t.OfflineAfterSec = d.OfflineAfterSec
 		changed = true
@@ -340,6 +349,9 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 		// SNMP 网络设备监控
 		SNMPIfUtilWarn: t.SNMPIfUtilWarn, SNMPIfUtilCrit: t.SNMPIfUtilCrit,
 		SNMPIfErrWarn: t.SNMPIfErrWarn, SNMPIfErrCrit: t.SNMPIfErrCrit,
+		// NetFlow 流量异常
+		NetFlowSurgeRatio: t.NetFlowSurgeRatio, NetFlowSurgeMinMbps: t.NetFlowSurgeMinMbps,
+		NetFlowDropWarn: t.NetFlowDropWarn,
 	}
 }
 
@@ -458,25 +470,25 @@ type ServerConfig struct {
 	FlowEnrichDisabled bool `json:"flow_enrich_disabled,omitempty"`
 	// ContentAuditSensitiveKeywords：内容审计的用户自定义敏感词（除内置密钥/身份证等规则外）。
 	// 命中即打标签 + 告警，用于"敏感数据外泄到大模型"的 DLP。
-	ContentAuditSensitiveKeywords []string `json:"content_audit_sensitive_keywords,omitempty"`
-	Categories       map[string]string `json:"categories"`
-	InstallToken  string              `json:"install_token"`
+	ContentAuditSensitiveKeywords []string          `json:"content_audit_sensitive_keywords,omitempty"`
+	Categories                    map[string]string `json:"categories"`
+	InstallToken                  string            `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
 	// grace period, so existing agents don't drop offline the instant the token is
 	// rotated. Managed by ResetToken (rotate).
-	PrevInstallToken   string          `json:"prev_install_token,omitempty"`
-	PrevTokenExpiresAt int64           `json:"prev_token_expires_at,omitempty"`
-	RequireToken       bool            `json:"require_token"`
-	Account            AccountConfig   `json:"account"`
-	Checks             []CustomCheck   `json:"checks"`
+	PrevInstallToken   string           `json:"prev_install_token,omitempty"`
+	PrevTokenExpiresAt int64            `json:"prev_token_expires_at,omitempty"`
+	RequireToken       bool             `json:"require_token"`
+	Account            AccountConfig    `json:"account"`
+	Checks             []CustomCheck    `json:"checks"`
 	APISystems         []APISystem      `json:"api_systems,omitempty"`      // API 性能监控：按业务系统分组的批量接口
 	APITransactions    []APITransaction `json:"api_transactions,omitempty"` // API 合成事务：多步链式监控（变量提取/传递）
 	ScrapeTargets      []ScrapeTarget   `json:"scrape_targets,omitempty"`   // 指标抓取目标（agentless exporter 抓取，摄入 Prometheus 生态）
 	PromWriteToken     string           `json:"prom_write_token,omitempty"` // remote_write 接收端点的 Bearer 令牌（加密存储）
 	PromRules          []PromRule       `json:"prom_rules,omitempty"`       // 指标告警规则（PromQL）：抓取/推送来的指标接入告警
 	Dashboards         []Dashboard      `json:"dashboards,omitempty"`       // 仪表盘（自定义 + 导入 Grafana）
-	Governance         AlertGovernance `json:"governance,omitempty"`  // 告警治理：静默/抑制/生效时段/通知路由
-	Playbooks          []Playbook      `json:"playbooks,omitempty"`
+	Governance         AlertGovernance  `json:"governance,omitempty"`       // 告警治理：静默/抑制/生效时段/通知路由
+	Playbooks          []Playbook       `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
 	SLOs             []SLO             `json:"slos,omitempty"`
@@ -1083,7 +1095,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
 	c.CORSOrigins = cs.cfg.CORSOrigins // CORS 白名单：前端表单不含此字段，必须保留现有值
-	c.Users = cs.cfg.Users // 保护多用户列表：前端表单不含 Users，必须保留现有值
+	c.Users = cs.cfg.Users             // 保护多用户列表：前端表单不含 Users，必须保留现有值
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()

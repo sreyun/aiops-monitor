@@ -3275,9 +3275,10 @@ select:focus {
 
 /* Gauge（圆环径向仪表，多序列自适应铺满） */
 .dp-gauge .dash-panel-body { display: flex; align-items: center; }
-.dash-gauges { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 14px; width: 100%; }
-.dash-gauge-item { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 78px; flex: 0 1 auto; }
-.gauge-svg { width: 100%; max-width: 118px; height: auto; aspect-ratio: 1 / 1; }
+.dash-gauges { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 18px; width: 100%; height: 100%; }
+.dash-gauge-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 96px; flex: 1 1 auto; max-height: 100%; }
+/* 单个仪表时可放大到 180px 充满面板；多个时自适应换行 */
+.gauge-svg { width: 100%; max-width: 180px; height: auto; max-height: 100%; aspect-ratio: 1 / 1; }
 .gauge-txt { font-size: 15px; font-weight: 650; font-family: ui-monospace, monospace; }
 .dash-gauge-lbl { font-size: 11px; color: var(--muted); text-align: center; max-width: 118px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -3289,16 +3290,21 @@ select:focus {
 .dash-bar-fill { height: 100%; border-radius: 5px; transition: width .4s ease; }
 .dash-bar-val { width: 90px; text-align: right; font-size: 12px; font-family: ui-monospace, monospace; color: var(--txt); font-variant-numeric: tabular-nums; }
 
-/* Pie / Donut（环形图 + 侧栏图例） */
-.dp-piechart .dash-panel-body { display: flex; align-items: center; }
-.dash-pie { display: flex; align-items: center; gap: 16px; width: 100%; height: 100%; }
-.dash-pie-chart { flex: 0 0 auto; height: 100%; display: flex; align-items: center; }
-.pie-svg { height: 100%; max-height: 100%; width: auto; max-width: 46%; aspect-ratio: 1 / 1; }
-.dash-pie-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow: auto; max-height: 100%; }
+/* Pie / Donut（环形图 + 侧栏图例）—— 同时匹配 dp-piechart 与导入的 dp-pie */
+.dp-piechart .dash-panel-body, .dp-pie .dash-panel-body { display: flex; align-items: center; }
+.dash-pie { display: flex; align-items: center; gap: 14px; width: 100%; height: 100%; }
+.dash-pie-chart { flex: 1 1 55%; min-width: 0; height: 100%; display: flex; align-items: center; justify-content: center; }
+/* 环图充满图表列（正方形，取宽高较小者），不再被硬性限制在 46% 宽而留白 */
+.pie-svg { height: 100%; max-height: 100%; width: 100%; max-width: 100%; aspect-ratio: 1 / 1; object-fit: contain; }
+.donut-center { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dash-pie-legend { flex: 1 1 45%; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow: auto; max-height: 100%; }
 .dash-pie-li { display: flex; align-items: center; gap: 7px; font-size: 12px; }
 .dash-pie-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .dash-pie-name { flex: 1; min-width: 0; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-pie-val { font-family: ui-monospace, monospace; color: var(--txt); font-variant-numeric: tabular-nums; }
+.dash-pie-pct { font-family: ui-monospace, monospace; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
+/* 窄面板（单列栅格或手机）改为上下布局，环图在上、图例在下，避免挤压 */
+@media (max-width: 720px) { .dash-pie { flex-direction: column; } .dash-pie-chart, .dash-pie-legend { flex: 1 1 auto; width: 100%; } .dash-pie-chart { max-height: 60%; } }
 
 /* Bar chart（纵向柱状，top-N） */
 .dash-bars { display: flex; align-items: flex-end; gap: 8px; width: 100%; height: 100%; padding-top: 6px; }

@@ -103,6 +103,7 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	dedupHyperVRowGuests(rows) // heal legacy twins on read (GUID + name-only orphans)
 	s.enrichHyperVLinks(rows)
 	// Annotate each host with its own RAM (from the in-memory store, latest report)
 	// so the frontend can show "宿主机名 · 可用/总内存" without a PG schema change.
@@ -342,6 +343,12 @@ func hypervAlertScope(g shared.HyperVGuest) string {
 
 // normalizeHyperVGuests drops nameless entries and dedupes by hypervKey (last wins).
 // Guards against corrupted/legacy inventories that somehow accumulated rename twins.
+//
+// It also removes "name-only orphans": a guest with an empty ID whose Name is already
+// covered by a GUID-bearing guest is a stale ghost (legacy pre-GUID snapshot, a rename
+// that left a "name:<old>" twin, or a VM sharing a physical host's display name). Since
+// the GUID entry is the stable identity, the name-only twin is dropped so the same VM —
+// and same-name-as-host VMs — appear exactly once in 资源→虚拟机.
 func normalizeHyperVGuests(guests []shared.HyperVGuest) []shared.HyperVGuest {
 	if len(guests) == 0 {
 		return guests
@@ -358,9 +365,70 @@ func normalizeHyperVGuests(guests []shared.HyperVGuest) []shared.HyperVGuest {
 		}
 		byKey[k] = g
 	}
+	guidNames := map[string]bool{}
+	for _, k := range order {
+		if g := byKey[k]; g.ID != "" && g.Name != "" {
+			guidNames[g.Name] = true
+		}
+	}
 	out := make([]shared.HyperVGuest, 0, len(order))
 	for _, k := range order {
-		out = append(out, byKey[k])
+		g := byKey[k]
+		if g.ID == "" && guidNames[g.Name] {
+			continue // name-only orphan superseded by its GUID entry
+		}
+		out = append(out, g)
 	}
 	return out
+}
+
+// dedupHyperVRowGuests heals legacy PG inventories on read: it removes duplicate and
+// name-only-orphan guests from the decoded map rows returned to the UI, so twins that
+// were persisted before the write-path fix stop showing without needing a fresh report.
+func dedupHyperVRowGuests(rows []map[string]any) {
+	for _, row := range rows {
+		guests, ok := row["guests"].([]any)
+		if !ok || len(guests) == 0 {
+			continue
+		}
+		guidNames := map[string]bool{}
+		for _, gi := range guests {
+			g, _ := gi.(map[string]any)
+			if g == nil {
+				continue
+			}
+			id, _ := g["id"].(string)
+			name, _ := g["name"].(string)
+			if id != "" && name != "" {
+				guidNames[name] = true
+			}
+		}
+		seen := map[string]bool{}
+		out := make([]any, 0, len(guests))
+		for _, gi := range guests {
+			g, _ := gi.(map[string]any)
+			if g == nil {
+				continue
+			}
+			id, _ := g["id"].(string)
+			name, _ := g["name"].(string)
+			if id == "" && name == "" {
+				continue
+			}
+			if id == "" && guidNames[name] {
+				continue
+			}
+			key := id
+			if key == "" {
+				key = "name:" + name
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, gi)
+		}
+		row["guests"] = out
+		row["guest_count"] = len(out)
+	}
 }
