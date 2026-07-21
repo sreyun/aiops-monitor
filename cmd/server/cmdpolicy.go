@@ -177,32 +177,4 @@ func firstShellWord(cmd string) string {
 	}
 }
 
-// validatePlaybookCommands returns an error if any step fails the policy in a blocking way.
-func validatePlaybookCommands(steps []PlaybookStep, pol CmdPolicyConfig) error {
-	for i, st := range steps {
-		ok, _, reason := evaluatePlaybookCommand(st.Command, pol)
-		if !ok {
-			name := st.Name
-			if name == "" {
-				name = fmt.Sprintf("#%d", i+1)
-			}
-			return fmt.Errorf("步骤 %s: %s", name, reason)
-		}
-	}
-	return nil
-}
-
-// playbookNeedsForcedApproval reports whether any step suggests forcing approval.
-func playbookNeedsForcedApproval(steps []PlaybookStep, pol CmdPolicyConfig) bool {
-	for _, st := range steps {
-		_, force, _ := evaluatePlaybookCommand(st.Command, pol)
-		if force {
-			return true
-		}
-		ok, _, _ := evaluatePlaybookCommand(st.Command, pol)
-		if !ok {
-			return true
-		}
-	}
-	return false
-}
+// validatePlaybookCommands / playbookNeedsForcedApproval → playbook_modules.go

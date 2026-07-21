@@ -1870,6 +1870,14 @@
       <div class="field"><label data-i18n="playbook.name">剧本名称</label><input type="text" id="pbName" data-i18n-placeholder="playbook.name_placeholder" placeholder="如 重启 Nginx 服务"></div>
       <div class="field"><label data-i18n="playbook.desc">描述（可选）</label><input type="text" id="pbDesc" data-i18n-placeholder="playbook.desc_placeholder" placeholder="剧本用途说明"></div>
       <button type="button" class="btn sm ai-assist-btn" id="pbAIGenBtn" style="margin:0 0 6px"><span class="ai-assist-btn-ic">🤖</span>AI 生成剧本（描述需求，自动生成步骤）</button>
+      <div id="pbTemplateBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px">
+        <span style="font-size:12px;color:var(--muted);align-self:center">只读模板：</span>
+        <button type="button" class="btn sm" data-pb-tpl="sys">系统巡检</button>
+        <button type="button" class="btn sm" data-pb-tpl="net">网络巡检</button>
+        <button type="button" class="btn sm" data-pb-tpl="sre">SRE 可观测</button>
+        <button type="button" class="btn sm" data-pb-tpl="sec">安全巡检</button>
+        <button type="button" class="btn sm" data-pb-tpl="bigdata">大数据巡检</button>
+      </div>
       <div class="subhead" data-i18n="playbook.steps">步骤列表</div>
       <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
       <button class="btn" id="pbAddStep" type="button" style="margin-top:8px" data-i18n="playbook.add_step">+ 添加步骤</button>

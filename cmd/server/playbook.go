@@ -46,7 +46,9 @@ type PlaybookStep struct {
 	IgnoreExit  bool   `json:"ignore_exit,omitempty"` // 非零退出码也算成功（grep/diff 等过滤命令）
 	Register    string `json:"register,omitempty"`    // 把本步输出存入该变量名，供后续步骤 {{名}} 引用
 	When        string `json:"when,omitempty"`        // 条件：求值为空/false/0/no 则跳过本步
-	// 内置模块（非空则走模块、忽略上面的 Command）：gather_facts / service / package / copy
+	// 内置模块（非空则走模块、忽略上面的 Command）：
+	// 只读：gather_facts / disk_usage / mem_info / net_* / docker_* / ...
+	// 变更：service / package / copy
 	Module string            `json:"module,omitempty"`
 	Args   map[string]string `json:"args,omitempty"`
 }

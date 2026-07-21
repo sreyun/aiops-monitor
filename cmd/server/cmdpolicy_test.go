@@ -46,3 +46,41 @@ func TestValidatePlaybookCommands(t *testing.T) {
 		t.Fatal("expected error for dangerous step")
 	}
 }
+
+func TestValidatePlaybookCommands_ModuleNoShell(t *testing.T) {
+	err := validatePlaybookCommands([]PlaybookStep{
+		{Name: "系统信息", Module: "gather_facts"},
+		{Name: "磁盘", Module: "disk_usage"},
+	}, CmdPolicyConfig{Mode: "strict"})
+	if err != nil {
+		t.Fatalf("readonly modules should pass without shell command: %v", err)
+	}
+}
+
+func TestValidatePlaybookModule_RequiredArgs(t *testing.T) {
+	err := validatePlaybookCommands([]PlaybookStep{
+		{Name: "svc", Module: "service_status"},
+	}, CmdPolicyConfig{Mode: "strict"})
+	if err == nil {
+		t.Fatal("service_status without name should fail")
+	}
+	err = validatePlaybookCommands([]PlaybookStep{
+		{Name: "svc", Module: "service_status", Args: map[string]string{"name": "nginx"}},
+	}, CmdPolicyConfig{Mode: "strict"})
+	if err != nil {
+		t.Fatalf("service_status with name should pass: %v", err)
+	}
+}
+
+func TestPlaybookNeedsForcedApproval_WriteModule(t *testing.T) {
+	if !playbookNeedsForcedApproval([]PlaybookStep{
+		{Module: "service", Args: map[string]string{"name": "nginx", "state": "restarted"}},
+	}, CmdPolicyConfig{Mode: "strict"}) {
+		t.Fatal("write module should force approval")
+	}
+	if playbookNeedsForcedApproval([]PlaybookStep{
+		{Module: "gather_facts"},
+	}, CmdPolicyConfig{Mode: "strict"}) {
+		t.Fatal("readonly module should not force approval")
+	}
+}

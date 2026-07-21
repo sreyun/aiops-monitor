@@ -35,6 +35,56 @@ func (a *Agent) runModule(payload string) ([]byte, int) {
 	switch mc.Module {
 	case "gather_facts":
 		return moduleGatherFacts()
+	case "disk_usage":
+		return moduleDiskUsage()
+	case "mem_info":
+		return moduleMemInfo()
+	case "cpu_load":
+		return moduleCPULoad()
+	case "process_top":
+		return moduleProcessTop()
+	case "uptime_info":
+		return moduleUptimeInfo()
+	case "pkg_list":
+		return modulePkgList()
+	case "file_stat":
+		return moduleFileStat(mc.Args)
+	case "file_head":
+		return moduleFileHead(mc.Args)
+	case "service_status":
+		return moduleServiceStatus(mc.Args)
+	case "journal_recent":
+		return moduleJournalRecent(mc.Args)
+	case "dmesg_recent":
+		return moduleDmesgRecent()
+	case "net_ifaces":
+		return moduleNetIfaces()
+	case "net_listen":
+		return moduleNetListen()
+	case "net_routes":
+		return moduleNetRoutes()
+	case "net_sockets":
+		return moduleNetSockets()
+	case "dns_resolve":
+		return moduleDNSResolve(mc.Args)
+	case "docker_ps":
+		return moduleDockerPS()
+	case "docker_stats":
+		return moduleDockerStats()
+	case "kube_get":
+		return moduleKubeGet(mc.Args)
+	case "time_sync":
+		return moduleTimeSync()
+	case "users_logged":
+		return moduleUsersLogged()
+	case "security_listen":
+		return moduleSecurityListen()
+	case "auth_failures":
+		return moduleAuthFailures()
+	case "bigdata_jps":
+		return moduleBigdataJPS()
+	case "bigdata_ports":
+		return moduleBigdataPorts()
 	case "service":
 		return moduleService(mc.Args)
 	case "package":
@@ -46,8 +96,7 @@ func (a *Agent) runModule(payload string) ([]byte, int) {
 	}
 }
 
-// moduleGatherFacts 采集本机基础信息（跨系统一致）。它专治「获取 IP 地址」这类痛点：
-// 运维不必再为 Linux 写 `ip a|grep`、为 macOS 写 `ifconfig`、为 Windows 写 `ipconfig`。
+// moduleGatherFacts 采集本机基础信息（跨系统一致，只读）。
 func moduleGatherFacts() ([]byte, int) {
 	var b strings.Builder
 	host, _ := os.Hostname()
@@ -62,6 +111,18 @@ func moduleGatherFacts() ([]byte, int) {
 	fmt.Fprintf(&b, "cpus=%d\n", runtime.NumCPU())
 	fmt.Fprintf(&b, "ip=%s\n", first)
 	fmt.Fprintf(&b, "ips=%s\n", strings.Join(ips, ", "))
+	fmt.Fprintf(&b, "now=%s\n", time.Now().Format(time.RFC3339))
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	fmt.Fprintf(&b, "go_alloc_mb=%.1f\n", float64(ms.Alloc)/1024/1024)
+	if runtime.GOOS == "linux" {
+		if raw, err := os.ReadFile("/proc/loadavg"); err == nil {
+			fmt.Fprintf(&b, "loadavg=%s", string(raw))
+		}
+		if raw, err := os.ReadFile("/proc/uptime"); err == nil {
+			fmt.Fprintf(&b, "uptime_sec_raw=%s", string(raw))
+		}
+	}
 	return []byte(b.String()), 0
 }
 

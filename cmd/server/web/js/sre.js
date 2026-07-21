@@ -69,7 +69,10 @@ function openPlaybookModal(pb) {
   $("pbName").value = pb ? pb.name : "";
   $("pbDesc").value = pb ? (pb.description || "") : "";
   const steps = pb ? pb.steps : [];
-  renderPbSteps(steps.length > 0 ? steps : [{name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false}]);
+  renderPbSteps(steps.length > 0 ? steps : [{
+    name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30,
+    continue_on_error: false, register: "facts"
+  }]);
   // Populate the timed-trigger fields from the playbook's schedule (if any).
   const sc = (pb && pb.schedule) ? pb.schedule : null;
   $("pbSchedEnabled").checked = !!(sc && sc.enabled);
@@ -116,10 +119,47 @@ function renderPbSteps(steps) {
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
       <div class="field"><label>${I18N.t("sre.label_type","类型")}</label><div class="select-wrap"><select class="pb-step-module" data-act-change="pb-module-change">
         <option value="" ${optSel("",mod)}>${I18N.t("sre.mod_shell","Shell 命令")}</option>
-        <option value="gather_facts" ${optSel("gather_facts",mod)}>${I18N.t("sre.mod_gather","采集主机信息")} · gather_facts</option>
-        <option value="service" ${optSel("service",mod)}>${I18N.t("sre.mod_service","服务管理")} · service</option>
-        <option value="package" ${optSel("package",mod)}>${I18N.t("sre.mod_package","软件包")} · package</option>
-        <option value="copy" ${optSel("copy",mod)}>${I18N.t("sre.mod_copy","写入文件")} · copy</option>
+        <optgroup label="${I18N.t("sre.mod_g_system","系统运维 · 只读")}">
+          <option value="gather_facts" ${optSel("gather_facts",mod)}>采集主机信息 · gather_facts</option>
+          <option value="disk_usage" ${optSel("disk_usage",mod)}>磁盘用量 · disk_usage</option>
+          <option value="mem_info" ${optSel("mem_info",mod)}>内存概况 · mem_info</option>
+          <option value="cpu_load" ${optSel("cpu_load",mod)}>CPU/负载 · cpu_load</option>
+          <option value="process_top" ${optSel("process_top",mod)}>进程占用 · process_top</option>
+          <option value="uptime_info" ${optSel("uptime_info",mod)}>运行时长 · uptime_info</option>
+          <option value="pkg_list" ${optSel("pkg_list",mod)}>已装软件包 · pkg_list</option>
+          <option value="service_status" ${optSel("service_status",mod)}>服务状态查询 · service_status</option>
+          <option value="file_stat" ${optSel("file_stat",mod)}>文件元数据 · file_stat</option>
+          <option value="file_head" ${optSel("file_head",mod)}>读文件开头 · file_head</option>
+        </optgroup>
+        <optgroup label="${I18N.t("sre.mod_g_network","网络运维 · 只读")}">
+          <option value="net_ifaces" ${optSel("net_ifaces",mod)}>网卡地址 · net_ifaces</option>
+          <option value="net_listen" ${optSel("net_listen",mod)}>监听端口 · net_listen</option>
+          <option value="net_routes" ${optSel("net_routes",mod)}>路由表 · net_routes</option>
+          <option value="net_sockets" ${optSel("net_sockets",mod)}>连接摘要 · net_sockets</option>
+          <option value="dns_resolve" ${optSel("dns_resolve",mod)}>DNS 解析 · dns_resolve</option>
+        </optgroup>
+        <optgroup label="${I18N.t("sre.mod_g_sre","SRE / 可观测 · 只读")}">
+          <option value="journal_recent" ${optSel("journal_recent",mod)}>最近系统日志 · journal_recent</option>
+          <option value="dmesg_recent" ${optSel("dmesg_recent",mod)}>内核消息 · dmesg_recent</option>
+          <option value="docker_ps" ${optSel("docker_ps",mod)}>容器列表 · docker_ps</option>
+          <option value="docker_stats" ${optSel("docker_stats",mod)}>容器资源 · docker_stats</option>
+          <option value="kube_get" ${optSel("kube_get",mod)}>K8s 资源 · kube_get</option>
+          <option value="time_sync" ${optSel("time_sync",mod)}>时间/时区 · time_sync</option>
+        </optgroup>
+        <optgroup label="${I18N.t("sre.mod_g_security","安全运维 · 只读")}">
+          <option value="users_logged" ${optSel("users_logged",mod)}>登录会话 · users_logged</option>
+          <option value="security_listen" ${optSel("security_listen",mod)}>对外监听 · security_listen</option>
+          <option value="auth_failures" ${optSel("auth_failures",mod)}>认证失败摘要 · auth_failures</option>
+        </optgroup>
+        <optgroup label="${I18N.t("sre.mod_g_bigdata","大数据运维 · 只读")}">
+          <option value="bigdata_jps" ${optSel("bigdata_jps",mod)}>Java 进程 · bigdata_jps</option>
+          <option value="bigdata_ports" ${optSel("bigdata_ports",mod)}>大数据端口 · bigdata_ports</option>
+        </optgroup>
+        <optgroup label="${I18N.t("sre.mod_g_change","变更操作 · 会修改系统")}">
+          <option value="service" ${optSel("service",mod)}>服务启停 · service</option>
+          <option value="package" ${optSel("package",mod)}>软件包 · package</option>
+          <option value="copy" ${optSel("copy",mod)}>写入文件 · copy</option>
+        </optgroup>
       </select></div></div>
 
       <div class="pb-mod pb-mod-shell" style="display:none">
@@ -131,10 +171,33 @@ function renderPbSteps(steps) {
       </div>
 
       <div class="pb-mod pb-mod-gather_facts" style="display:none">
-        <div style="font-size:12px;color:var(--muted2);margin:2px 0 8px;line-height:1.6">${I18N.t("sre.pb_gather_desc","采集主机名、IP、架构、CPU 数（跨系统一致，替代 <code>ip a</code> / <code>ipconfig</code>）。建议配合下方「保存输出到变量」在后续步骤引用。")}</div>
+        <div class="pb-mod-hint">${I18N.t("sre.pb_gather_desc","采集主机名、IP、架构、CPU、内存摘要与负载（跨系统一致，只读）。建议「保存输出到变量」。")}</div>
+      </div>
+      <div class="pb-mod pb-mod-disk_usage pb-mod-mem_info pb-mod-cpu_load pb-mod-process_top pb-mod-uptime_info pb-mod-pkg_list pb-mod-net_ifaces pb-mod-net_listen pb-mod-net_routes pb-mod-net_sockets pb-mod-docker_ps pb-mod-docker_stats pb-mod-dmesg_recent pb-mod-time_sync pb-mod-users_logged pb-mod-security_listen pb-mod-auth_failures pb-mod-bigdata_jps pb-mod-bigdata_ports" style="display:none">
+        <div class="pb-mod-hint">${I18N.t("sre.pb_readonly_hint","只读采集模块：不会修改系统配置、不会启停服务、不会写入文件。")}</div>
+      </div>
+      <div class="pb-mod pb-mod-service_status" style="display:none">
+        <div class="pb-mod-hint">只读查询服务状态（systemctl status / sc query），不会启停。</div>
+        <div class="field"><label>${I18N.t("sre.label_service_name","服务名")}</label><input type="text" class="pb-arg-svcstatus-name" value="${av('name')}" placeholder="nginx"></div>
+      </div>
+      <div class="pb-mod pb-mod-file_stat pb-mod-file_head" style="display:none">
+        <div class="pb-mod-hint">只读文件访问；敏感路径（shadow、.ssh 等）会被拦截。</div>
+        <div class="field"><label>路径 path</label><input type="text" class="pb-arg-filepath" value="${av('path')}" placeholder="/var/log/messages"></div>
+      </div>
+      <div class="pb-mod pb-mod-dns_resolve" style="display:none">
+        <div class="field"><label>主机名 host</label><input type="text" class="pb-arg-dns-host" value="${av('host')}" placeholder="example.com"></div>
+      </div>
+      <div class="pb-mod pb-mod-journal_recent" style="display:none">
+        <div class="pb-mod-hint">只读拉取最近日志行。</div>
+        <div class="field"><label>行数 lines</label><input type="text" class="pb-arg-journal-lines mono" value="${av('lines')||'80'}" style="width:100px"></div>
+      </div>
+      <div class="pb-mod pb-mod-kube_get" style="display:none">
+        <div class="pb-mod-hint">只读 kubectl get（默认 pods -A）。</div>
+        <div class="field"><label>resource</label><input type="text" class="pb-arg-kube-resource" value="${av('resource')||'pods'}" placeholder="pods"></div>
       </div>
 
       <div class="pb-mod pb-mod-service" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ 变更类：会启停/重载服务，可能影响业务。</div>
         <div class="grid2">
           <div class="field"><label>${I18N.t("sre.label_service_name","服务名")}</label><input type="text" class="pb-arg-service-name" value="${av('name')}" placeholder="nginx"></div>
           <div class="field"><label>${I18N.t("sre.label_target_state","目标状态")}</label><div class="select-wrap"><select class="pb-arg-service-state">
@@ -152,6 +215,7 @@ function renderPbSteps(steps) {
       </div>
 
       <div class="pb-mod pb-mod-package" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ 变更类：会安装/卸载软件包。</div>
         <div class="grid2">
           <div class="field"><label>${I18N.t("sre.label_pkg_name","包名")}</label><input type="text" class="pb-arg-package-name" value="${av('name')}" placeholder="nginx"></div>
           <div class="field"><label>${I18N.t("sre.label_action","操作")}</label><div class="select-wrap"><select class="pb-arg-package-state">
@@ -164,6 +228,7 @@ function renderPbSteps(steps) {
       </div>
 
       <div class="pb-mod pb-mod-copy" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ 变更类：会写入目标文件。</div>
         <div class="grid2">
           <div class="field"><label>${I18N.t("sre.label_dest_path","目标路径")}</label><input type="text" class="pb-arg-copy-dest" value="${av('dest')}" placeholder="/etc/app/config.yml"></div>
           <div class="field"><label>${I18N.t("sre.label_mode_octal","权限（八进制）")}</label><input type="text" class="pb-arg-copy-mode mono" value="${av('mode')}" placeholder="0644" style="width:110px"></div>
@@ -199,8 +264,39 @@ function pbModuleChange(sel) {
   const step = sel.closest(".pb-step");
   if (!step) return;
   step.querySelectorAll(".pb-mod").forEach(m => { m.style.display = "none"; });
-  const show = step.querySelector(".pb-mod-" + (sel.value === "" ? "shell" : sel.value));
+  const key = sel.value === "" ? "shell" : sel.value;
+  const show = step.querySelector(".pb-mod-" + key);
   if (show) show.style.display = "";
+}
+
+// Gather module-specific arguments from a step's form into an args object.
+function collectModuleArgs(el, mod) {
+  const args = {};
+  const g = (cls) => { const n = el.querySelector(cls); return n ? n.value.trim() : ""; };
+  if (mod === "service") {
+    args.name = g(".pb-arg-service-name");
+    args.state = g(".pb-arg-service-state");
+    const en = g(".pb-arg-service-enabled"); if (en) args.enabled = en;
+  } else if (mod === "package") {
+    args.name = g(".pb-arg-package-name");
+    args.state = g(".pb-arg-package-state");
+  } else if (mod === "copy") {
+    args.dest = g(".pb-arg-copy-dest");
+    const cont = el.querySelector(".pb-arg-copy-content");
+    args.content = cont ? cont.value : "";
+    const mode = g(".pb-arg-copy-mode"); if (mode) args.mode = mode;
+  } else if (mod === "service_status") {
+    args.name = g(".pb-arg-svcstatus-name");
+  } else if (mod === "file_stat" || mod === "file_head") {
+    args.path = g(".pb-arg-filepath");
+  } else if (mod === "dns_resolve") {
+    args.host = g(".pb-arg-dns-host");
+  } else if (mod === "journal_recent") {
+    const lines = g(".pb-arg-journal-lines"); if (lines) args.lines = lines;
+  } else if (mod === "kube_get") {
+    const res = g(".pb-arg-kube-resource"); if (res) args.resource = res;
+  }
+  return args;
 }
 
 // Build <option> list for target select: all / by category / by system / per host
@@ -296,27 +392,6 @@ function collectPlaybook() {
   return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps, schedule };
 }
 
-// Gather module-specific arguments from a step's form into an args object.
-function collectModuleArgs(el, mod) {
-  const args = {};
-  const g = (cls) => { const n = el.querySelector(cls); return n ? n.value.trim() : ""; };
-  if (mod === "service") {
-    args.name = g(".pb-arg-service-name");
-    args.state = g(".pb-arg-service-state");
-    const en = g(".pb-arg-service-enabled"); if (en) args.enabled = en;
-  } else if (mod === "package") {
-    args.name = g(".pb-arg-package-name");
-    args.state = g(".pb-arg-package-state");
-  } else if (mod === "copy") {
-    args.dest = g(".pb-arg-copy-dest");
-    const cont = el.querySelector(".pb-arg-copy-content");
-    args.content = cont ? cont.value : ""; // preserve exact content (no trim)
-    const mode = g(".pb-arg-copy-mode"); if (mode) args.mode = mode;
-  }
-  // gather_facts takes no args
-  return args;
-}
-
 async function savePlaybook() {
   const pb = collectPlaybook();
   if (!pb.name) { toast(I18N.t("valid.fill_playbook_name"), "err"); return; }
@@ -409,14 +484,81 @@ async function loadExecHistory() {
 // Playbook event listeners
 safeAddEventListener("addPlaybookBtn", "click", () => openPlaybookModal(null));
 safeAddEventListener("pbAddStep", "click", () => {
-  const c = $("pbSteps");
-  const existing = Array.from(c.querySelectorAll(".pb-step")).map(el => ({
-    name: el.querySelector(".pb-step-name").value, command: el.querySelector(".pb-step-cmd").value,
-    target: el.querySelector(".pb-step-target").value, timeout_sec: parseInt(el.querySelector(".pb-step-timeout").value)||30,
-    continue_on_error: el.querySelector(".pb-step-cont").checked
-  }));
-  existing.push({name:"",command:"",target:"all",timeout_sec:30,continue_on_error:false});
-  renderPbSteps(existing);
+  const pb = collectPlaybook();
+  const steps = pb.steps || [];
+  steps.push({ name: "", module: "gather_facts", target: "all", timeout_sec: 30, continue_on_error: false });
+  renderPbSteps(steps);
+});
+
+// 只读运维模板：一键填充多步骤巡检剧本（不修改系统）
+const PB_READONLY_TEMPLATES = {
+  sys: {
+    name: "系统巡检（只读）",
+    description: "采集主机基础信息、磁盘/内存/负载/进程（只读，不变更系统）",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
+      { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 30 },
+      { name: "内存概况", module: "mem_info", target: "all", timeout_sec: 30 },
+      { name: "CPU负载", module: "cpu_load", target: "all", timeout_sec: 30 },
+      { name: "进程占用", module: "process_top", target: "all", timeout_sec: 45 },
+      { name: "运行时长", module: "uptime_info", target: "all", timeout_sec: 20 },
+    ]
+  },
+  net: {
+    name: "网络巡检（只读）",
+    description: "网卡、监听端口、路由与连接摘要（只读）",
+    steps: [
+      { name: "网卡地址", module: "net_ifaces", target: "all", timeout_sec: 20 },
+      { name: "监听端口", module: "net_listen", target: "all", timeout_sec: 30 },
+      { name: "路由表", module: "net_routes", target: "all", timeout_sec: 20 },
+      { name: "连接摘要", module: "net_sockets", target: "all", timeout_sec: 30 },
+    ]
+  },
+  sre: {
+    name: "SRE可观测巡检（只读）",
+    description: "日志、容器、时间同步等只读巡检",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30 },
+      { name: "最近日志", module: "journal_recent", target: "all", timeout_sec: 45, args: { lines: "80" } },
+      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 30, continue_on_error: true },
+      { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 45, continue_on_error: true },
+      { name: "时间时区", module: "time_sync", target: "all", timeout_sec: 15 },
+    ]
+  },
+  sec: {
+    name: "安全巡检（只读）",
+    description: "登录会话、对外监听、认证失败摘要（只读）",
+    steps: [
+      { name: "登录会话", module: "users_logged", target: "all", timeout_sec: 20 },
+      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30 },
+      { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 45, continue_on_error: true },
+    ]
+  },
+  bigdata: {
+    name: "大数据巡检（只读）",
+    description: "Java 进程与常见大数据端口监听检查（只读）",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30 },
+      { name: "Java进程", module: "bigdata_jps", target: "all", timeout_sec: 30, continue_on_error: true },
+      { name: "大数据端口", module: "bigdata_ports", target: "all", timeout_sec: 30 },
+      { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 30 },
+    ]
+  }
+};
+
+function applyPbTemplate(key) {
+  const tpl = PB_READONLY_TEMPLATES[key];
+  if (!tpl) return;
+  if (!confirm(`将用「${tpl.name}」替换当前步骤列表，是否继续？`)) return;
+  $("pbName").value = tpl.name;
+  $("pbDesc").value = tpl.description;
+  renderPbSteps(tpl.steps.map(s => Object.assign({ target: "all", timeout_sec: 30, continue_on_error: false }, s)));
+  toast("已套用只读模板：" + tpl.name, "ok");
+}
+
+safeAddEventListener("pbTemplateBar", "click", e => {
+  const b = e.target.closest("[data-pb-tpl]");
+  if (b) applyPbTemplate(b.dataset.pbTpl);
 });
 
 // 把编辑器中的剧本对象整理为可读文本，供 AI 预检
