@@ -679,6 +679,7 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
     W: dim.W, H: dim.H, dpr: dim.dpr, cssH,
     all: allSamples, series, yMin, yMax,
     title: opts.title || "", isZoom: !!opts.isZoom,
+    legendMode: opts.legendMode || "full", // full=主机详情；dash=看板精简图例
     i0: 0, i1: allSamples.length - 1,
     hover: -1, drag: false, downX: null, curX: null, moved: false,
     pad: { top: 22, right: 18, bottom: 28, left: 56 },
@@ -811,65 +812,80 @@ function drawChart(state) {
     }
   });
 
-  // 图例：水平排列在图表右上角区域，带半透明背景
-  const legendY = pad.top + 4;
+  // 图例：主机详情用「名称 + 当前/峰值」；看板用短名单行，避免多序列把曲线区挤没。
+  const dashLegend = state.legendMode === "dash";
+  const maxLegendItems = dashLegend ? 8 : series.length;
+  const legendY = pad.top + 2;
   let legendX = pad.left + 8;
-  const legendItemWidth = 160; // 每个图例条目预估宽度
+  const legendItemWidth = dashLegend ? 96 : 160;
 
-  // 图例分组半透明背景
   let legendBgW = 0, legendBgX0 = legendX;
   const legendLines = [];
   let curLine = { x: legendX, items: [] };
+  const truncLeg = (s, n) => {
+    s = String(s || "");
+    if (s.length <= n) return s;
+    return s.slice(0, Math.max(1, n - 1)) + "…";
+  };
   series.forEach((s, sIdx) => {
+    if (sIdx >= maxLegendItems) return;
     const pts = [];
     vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
     const vals = pts.map(p => p.val);
     const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
     const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
-    const labelText = `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
+    let labelText;
+    if (dashLegend) {
+      labelText = truncLeg(s.label || ("#" + (sIdx + 1)), 18);
+    } else {
+      labelText = `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
+    }
 
-    if (curLine.x + legendItemWidth > w - pad.right && sIdx > 0) {
+    // 看板：只排一行，放不下就停（后面用 +N）
+    if (dashLegend && curLine.x + legendItemWidth > w - pad.right && curLine.items.length) {
+      return;
+    }
+    if (!dashLegend && curLine.x + legendItemWidth > w - pad.right && sIdx > 0) {
       legendLines.push(curLine);
       curLine = { x: pad.left + 8, items: [] };
     }
     curLine.items.push({ color: s.color, labelText, x: curLine.x });
     ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
     curLine.x += ctx.measureText(labelText).width + 28;
-    if (curLine.x + legendItemWidth > w - pad.right) {
+    if (!dashLegend && curLine.x + legendItemWidth > w - pad.right) {
       legendLines.push(curLine);
       curLine = { x: pad.left + 8, items: [] };
     }
   });
+  if (dashLegend && series.length > curLine.items.length) {
+    const more = `+${series.length - curLine.items.length}`;
+    curLine.items.push({ color: labelColor, labelText: more, x: curLine.x });
+    curLine.x += ctx.measureText(more).width + 20;
+  }
   if (curLine.items.length) legendLines.push(curLine);
 
-  // 计算背景矩形宽度
   legendLines.forEach(line => {
     legendBgW = Math.max(legendBgW, line.x - legendBgX0);
   });
 
-  // 绘制图例背景
   if (legendLines.length) {
-    const bgH = legendLines.length * 18 + 8;
+    const bgH = legendLines.length * (dashLegend ? 15 : 18) + (dashLegend ? 2 : 8);
     ctx.fillStyle = cssVar("--panel") + "99" || "rgba(17,22,33,.6)";
     const bgR = 6;
-    ctx.beginPath(); ctx.roundRect(legendBgX0 - 4, legendY - 2, legendBgW + 20, bgH, bgR); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(legendBgX0 - 4, legendY - 2, Math.min(legendBgW + 20, cw + 8), bgH, bgR); ctx.fill();
   }
 
-  // 逐行绘制图例条目
   let ly = legendY;
   legendLines.forEach(line => {
-    let lx = line.x_start || legendBgX0;
-    // reset lx to where this line started
-    lx = line.items.length ? line.items[0].x : lx;
+    let lx = line.items.length ? line.items[0].x : legendBgX0;
     line.items.forEach(item => {
       lx = item.x;
-      // 10×10 圆角色块
       ctx.fillStyle = item.color;
       ctx.beginPath(); ctx.roundRect(lx, ly, 10, 10, 3); ctx.fill();
       ctx.fillStyle = txtColor; ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "left";
       ctx.fillText(item.labelText, lx + 14, ly + 9);
     });
-    ly += 18;
+    ly += dashLegend ? 15 : 18;
   });
 
   // 框选矩形

@@ -229,6 +229,19 @@ func TestRouteAllowed(t *testing.T) {
 		// terminal: operator+
 		{"viewer cannot open terminal", "GET", "/api/v1/hosts/h1/terminal", RoleViewer, false},
 		{"operator can open terminal", "GET", "/api/v1/hosts/h1/terminal", RoleOperator, true},
+		// sensitive settings: admin only (writes)
+		{"operator cannot POST config", "POST", "/api/v1/config", RoleOperator, false},
+		{"admin can POST config", "POST", "/api/v1/config", RoleAdmin, true},
+		{"operator can GET config", "GET", "/api/v1/config", RoleOperator, true},
+		{"operator cannot test config", "POST", "/api/v1/config/test", RoleOperator, false},
+		{"admin can test config", "POST", "/api/v1/config/test", RoleAdmin, true},
+		{"operator cannot POST ai config", "POST", "/api/v1/ai/config", RoleOperator, false},
+		{"admin can POST ai config", "POST", "/api/v1/ai/config", RoleAdmin, true},
+		{"operator can GET ai config", "GET", "/api/v1/ai/config", RoleOperator, true},
+		{"operator cannot ai test", "POST", "/api/v1/ai/test", RoleOperator, false},
+		{"admin can ai test", "POST", "/api/v1/ai/test", RoleAdmin, true},
+		{"admin can list backups", "GET", "/api/v1/admin/backups", RoleAdmin, true},
+		{"operator cannot list backups", "GET", "/api/v1/admin/backups", RoleOperator, false},
 		// unknown role
 		{"unknown role denied", "GET", "/api/v1/hosts", "weird", false},
 	}

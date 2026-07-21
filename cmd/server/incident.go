@@ -154,6 +154,19 @@ func (m *incidentManager) OnAlertTransition(a Alert, key string, firing bool) in
 	return m.resolveByKey(key, a.Message)
 }
 
+// SetAssignee updates the incident assignee (on-call auto-assign / manual).
+func (m *incidentManager) SetAssignee(id int64, assignee, actor string) (Incident, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inc := m.find(id)
+	if inc == nil {
+		return Incident{}, false
+	}
+	inc.Assignee = strings.TrimSpace(assignee)
+	addEventLocked(inc, "note", actor, "指派给 "+inc.Assignee)
+	return *inc, true
+}
+
 // AddEvent appends a timeline entry to an incident by id (used by remediation).
 func (m *incidentManager) AddEvent(id int64, kind, actor, text string) {
 	m.mu.Lock()

@@ -1,5 +1,6 @@
 /* ---------- 告警设置 ---------- */
 async function openSettings() {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
   try {
     const c = await fetch(`${API}/config`).then(r => r.json());
     const t = c.thresholds || {};
@@ -148,8 +149,12 @@ async function loadThresholds() {
     if ($("netflowSurgeMinMbps")) $("netflowSurgeMinMbps").value = td(t.netflow_surge_min_mbps, 1);
     if ($("netflowDropWarn")) $("netflowDropWarn").value = td(t.netflow_drop_warn, 100);
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
+  // 非管理员只读：保存按钮已用 admin-only 隐藏，输入框一并禁用避免误操作
+  const editable = isAdmin();
+  document.querySelectorAll("#view-thresholds input").forEach(el => { el.disabled = !editable; });
 }
 async function saveThresholds() {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
   await withLoading("saveThresholdsBtn", async () => {
     try {
       const c = await fetch(`${API}/config`).then(r => r.json()); // 全量配置（密钥已脱敏，回存时后端按原值保留）
@@ -262,6 +267,7 @@ function collectSettings() {
   };
 }
 async function saveSettings() {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
   await withLoading("saveBtn", async () => {
     try {
       // 拉全量配置，仅覆盖告警通知字段后回存，避免清空 thresholds 等由其它 Tab 管理的设置。
@@ -273,6 +279,7 @@ async function saveSettings() {
   });
 }
 async function testSettings() {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
   await withLoading("testBtn", async () => {
     try {
       const r = await fetch(`${API}/config/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectSettings()) });
@@ -997,13 +1004,15 @@ async function openProfile(tab) {
     // v5.3.0: 加载终端密码状态
     loadTermPwdStatus();
     $("profileMask").classList.add("show");
-    // 切换到底层请求指定的 Tab（默认「个人信息」）；非管理员无法进入用户管理
-    const target = (tab === "users" && !isAdmin()) ? "info" : (tab || "info");
+    // 切换到底层请求指定的 Tab（默认「个人信息」）；非管理员无法进入用户管理 / 数据与备份
+    const adminTabs = { users:1, ops:1 };
+    const target = (adminTabs[tab] && !isAdmin()) ? "info" : (tab || "info");
     switchProfileTab(target);
   } catch (e) { toast(I18N.t("toast.read_failed2") + e, "err"); }
 }
 let PROFILE_TAB = "info";
 let PROFILE_USERS_LOADED = false;
+let PROFILE_OPS_LOADED = false;
 async function switchProfileTab(tab) {
   PROFILE_TAB = tab;
   document.querySelectorAll("#profileTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.ptab === tab));
@@ -1012,6 +1021,10 @@ async function switchProfileTab(tab) {
   if (tab === "users" && isAdmin() && !PROFILE_USERS_LOADED) {
     PROFILE_USERS_LOADED = true;
     await loadUsers();
+  }
+  if (tab === "ops" && isAdmin()) {
+    await loadOpsAdmin();
+    PROFILE_OPS_LOADED = true;
   }
 }
 async function saveProfile() {
@@ -1503,4 +1516,99 @@ async function logout() {
   try { await fetch(`${API}/logout`, { method: "POST" }); } catch (e) {}
   location.reload();
 }
+
+/* ---------- 管理员：数据保留 / 命令策略 / PG 备份 ---------- */
+async function loadOpsAdmin() {
+  if (!isAdmin()) return;
+  try {
+    const [ret, pol, bak] = await Promise.all([
+      fetch(`${API}/admin/retention`).then(r => r.json()),
+      fetch(`${API}/admin/cmd-policy`).then(r => r.json()),
+      fetch(`${API}/admin/backup-config`).then(r => r.json())
+    ]);
+    if ($("retAuditDays")) $("retAuditDays").value = ret.audit_days || 180;
+    if ($("retAlertDays")) $("retAlertDays").value = ret.alert_history_days || 90;
+    if ($("retContentDays")) $("retContentDays").value = ret.content_audit_days || 30;
+    if ($("retNetflowMonths")) $("retNetflowMonths").value = ret.netflow_months || 12;
+    if ($("cmdPolMode")) $("cmdPolMode").value = pol.mode || "strict";
+    if ($("cmdPolAllow")) $("cmdPolAllow").value = (pol.allow_prefixes || []).join(",");
+    if ($("cmdPolDeny")) $("cmdPolDeny").value = (pol.deny_patterns || []).join("\n");
+    if ($("bakEnabled")) $("bakEnabled").checked = !!bak.enabled;
+    if ($("bakDailyAt")) $("bakDailyAt").value = bak.daily_at || "02:30";
+    if ($("bakRetain")) $("bakRetain").value = bak.retain_count || 14;
+    if ($("bakDir")) $("bakDir").value = bak.dir || "";
+  } catch (e) { /* non-admin or API missing */ }
+  await loadBackupList();
+}
+async function loadBackupList() {
+  const el = $("backupList"); if (!el) return;
+  try {
+    const list = await fetch(`${API}/admin/backups`).then(r => r.json());
+    if (!list || !list.length) { el.innerHTML = `<div class="empty-line">暂无备份文件</div>`; return; }
+    el.innerHTML = list.map(b => {
+      const mb = ((b.size_bytes || 0) / 1048576).toFixed(2);
+      return `<div class="sre-row"><div class="sre-row-main"><div class="sre-row-title mono">${esc(b.id)}</div>
+        <div class="sre-row-sub">${fmtDateTime(b.created_at)} · ${mb} MB · ${esc(b.operator || "")}${b.sha256 ? " · " + esc(b.sha256.slice(0, 12)) + "…" : ""}</div></div>
+        <div class="user-acts">
+          <a class="btn sm" href="${API}/admin/backups/${encodeURIComponent(b.id)}/download">下载</a>
+          <button class="btn danger sm" data-bak="restore" data-id="${esc(b.id)}">还原</button>
+        </div></div>`;
+    }).join("");
+    el.querySelectorAll("[data-bak=restore]").forEach(btn => btn.onclick = () => restoreBackup(btn.dataset.id));
+  } catch (e) { el.innerHTML = `<div class="empty-line">加载失败（需管理员）</div>`; }
+}
+async function saveRetentionCfg() {
+  const body = {
+    audit_days: parseInt($("retAuditDays").value, 10) || 180,
+    alert_history_days: parseInt($("retAlertDays").value, 10) || 90,
+    content_audit_days: parseInt($("retContentDays").value, 10) || 30,
+    netflow_months: parseInt($("retNetflowMonths").value, 10) || 12
+  };
+  const r = await fetch(`${API}/admin/retention`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast("保留期已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+async function saveCmdPolicyCfg() {
+  const body = {
+    mode: $("cmdPolMode").value || "strict",
+    allow_prefixes: ($("cmdPolAllow").value || "").split(",").map(s => s.trim()).filter(Boolean),
+    deny_patterns: ($("cmdPolDeny").value || "").split("\n").map(s => s.trim()).filter(Boolean)
+  };
+  const r = await fetch(`${API}/admin/cmd-policy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast("命令策略已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+async function saveBackupCfg() {
+  const body = {
+    enabled: $("bakEnabled").checked,
+    daily_at: ($("bakDailyAt").value || "02:30").trim(),
+    retain_count: parseInt($("bakRetain").value, 10) || 14,
+    dir: ($("bakDir").value || "").trim()
+  };
+  const r = await fetch(`${API}/admin/backup-config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast("备份计划已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+async function createBackupNow() {
+  await withLoading("bakNowBtn", async () => {
+    const r = await fetch(`${API}/admin/backups`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { toast("备份完成：" + (j.id || ""), "ok"); await loadBackupList(); }
+    else toast(j.error || "备份失败（请确认 pg_dump 在 PATH）", "err");
+  });
+}
+async function restoreBackup(id) {
+  const conf = prompt(`⚠ 还原将覆盖当前 PostgreSQL 数据！\n请输入 RESTORE 或备份 ID 确认：\n${id}`);
+  if (!conf) return;
+  const r = await fetch(`${API}/admin/backups/${encodeURIComponent(id)}/restore`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: conf })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast(j.hint || "还原完成，请重启服务端", "ok");
+  else toast(j.error || "还原失败", "err");
+}
+safeAddEventListener("retSaveBtn", "click", saveRetentionCfg);
+safeAddEventListener("cmdPolSaveBtn", "click", saveCmdPolicyCfg);
+safeAddEventListener("bakCfgSaveBtn", "click", saveBackupCfg);
+safeAddEventListener("bakNowBtn", "click", createBackupNow);
 

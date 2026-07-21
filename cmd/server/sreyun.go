@@ -607,56 +607,7 @@ func (h *SreyunCore) execSearchCases(args map[string]any) (string, error) {
 	return b.String(), nil
 }
 
-// diagCommandAllowed 校验诊断命令是否为「只读命令 + 只读管道过滤」。
-// 命令在被控端经 shell 执行，故：
-//  1. 拒绝可用于注入 / 破坏 / 外联 / 重定向 / 子shell 的元字符（; & $ < > ` \ 换行 () {}）；
-//  2. 允许用管道 | 串联，但逐段校验每段命令首词必须精确命中白名单（非松散前缀，dfoo 不算 df）。
-//
-// 返回 (是否放行, 拒绝原因)。
-func diagCommandAllowed(command string) (bool, string) {
-	cmdTrim := strings.TrimSpace(command)
-	if cmdTrim == "" {
-		return false, "请指定诊断命令"
-	}
-	if strings.ContainsAny(cmdTrim, ";&$<>\n\r\\(){}" + "`") {
-		return false, "诊断命令含被禁止的字符（; & $ < > ` 等），仅允许只读命令与管道过滤"
-	}
-	allow := []string{
-		"top", "df", "iostat", "vmstat", "mpstat", "sar", "pidstat", "netstat", "ss", "free",
-		"ps", "uptime", "cat", "head", "tail", "grep", "egrep", "ls", "du", "lsof", "dmesg",
-		"journalctl", "systemctl status", "docker ps", "docker logs", "docker stats",
-		"kubectl get", "kubectl describe", "wc", "sort", "uniq", "cut", "tr", "nl", "tac",
-		"column", "date", "hostname", "uname", "who", "w",
-	}
-	// P2-6: 敏感路径黑名单，防止通过 cat/grep 等读取敏感文件
-	deniedPaths := []string{
-		"/etc/shadow", "/etc/gshadow", "/etc/master.passwd",
-		".ssh/", ".gnupg/", ".aws/", ".kube/config",
-		"/etc/sudoers", "/root/.bash_history",
-	}
-	segOK := func(seg string) bool {
-		seg = strings.ToLower(strings.TrimSpace(seg))
-		for _, p := range allow {
-			if seg == p || strings.HasPrefix(seg, p+" ") {
-				return true
-			}
-		}
-		return false
-	}
-	for _, seg := range strings.Split(cmdTrim, "|") {
-		if !segOK(seg) {
-			return false, fmt.Sprintf("诊断命令 %q 含非白名单命令，仅允许只读诊断命令（top/df/free/ps/ss/cat/grep/journalctl 等）及其管道过滤", command)
-		}
-		// P2-6: 检查管道每段是否访问敏感路径
-		segLower := strings.ToLower(seg)
-		for _, dp := range deniedPaths {
-			if strings.Contains(segLower, dp) {
-				return false, fmt.Sprintf("诊断命令包含敏感路径 %q，已拦截", dp)
-			}
-		}
-	}
-	return true, ""
-}
+// diagCommandAllowed 已迁移至 cmdpolicy.go（与剧本命令策略共用安全校验入口）。
 
 func (h *SreyunCore) execDiagnostic(args map[string]any) (string, error) {
 	hostID, _ := args["host_id"].(string)

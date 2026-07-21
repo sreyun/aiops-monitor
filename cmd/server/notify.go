@@ -94,6 +94,44 @@ func (n *Notifier) ResetState() {
 // Trigger runs one evaluation immediately (used right after a config save).
 func (n *Notifier) Trigger() { n.tick() }
 
+// PushAdhoc sends a free-form notification to selected channels (empty = all enabled).
+func (n *Notifier) PushAdhoc(level, title, body string, channels []string) {
+	if n == nil || n.cfg == nil {
+		return
+	}
+	cfg := n.cfg.Get()
+	text := title
+	if body != "" {
+		text = title + "\n" + body
+	}
+	allow := map[string]bool{}
+	for _, c := range channels {
+		allow[strings.ToLower(strings.TrimSpace(c))] = true
+	}
+	use := func(name string) bool { return len(allow) == 0 || allow[name] }
+	a := Alert{Level: level, Message: text, Timestamp: time.Now().Unix()}
+	if use("feishu") && cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
+		_ = n.sendFeishu(cfg.Feishu, text)
+	}
+	if use("dingtalk") && cfg.Dingtalk.Enabled && cfg.Dingtalk.Webhook != "" {
+		_ = n.sendDingtalk(cfg.Dingtalk, text)
+	}
+	if use("email") && cfg.SMTP.Enabled && cfg.SMTP.Host != "" {
+		for _, to := range n.cfg.AlertEmails() {
+			_ = sendEmail(cfg.SMTP, to, "["+level+"] "+title, "<pre>"+strings.ReplaceAll(text, "<", "&lt;")+"</pre>")
+		}
+	}
+	if use("webhook") && cfg.CustomWebhook.Enabled && cfg.CustomWebhook.URL != "" {
+		_ = sendCustomWebhook(cfg.CustomWebhook, text, a, true)
+	}
+	if use("sms") && cfg.SMS.Enabled {
+		_ = n.sendSMS(cfg.SMS, text)
+	}
+	if use("voicecall") && cfg.VoiceCall.Enabled {
+		_ = n.sendVoiceCall(cfg.VoiceCall, text)
+	}
+}
+
 // ActiveAlerts returns a copy of the alerts currently firing (for AI inspection).
 func (n *Notifier) ActiveAlerts() []Alert {
 	n.mu.Lock()

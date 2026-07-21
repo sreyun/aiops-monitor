@@ -519,7 +519,7 @@ const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:I18N.t("sre.src_alert","告警"),slo:"SLO",manual:I18N.t("sre.src_manual","手动")})[s]||esc(s);
 const _incStatus = s => ({open:I18N.t("sre.inc_open","进行中"),acknowledged:I18N.t("sre.inc_acked","已确认"),resolved:I18N.t("sre.inc_resolved","已解决")})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
-const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),topology_rca:I18N.t("sre.tl_topology_rca","🧭 拓扑 RCA"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
+const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),change_correlation:I18N.t("sre.tl_change_corr","📦 关联变更"),topology_rca:I18N.t("sre.tl_topology_rca","🧭 拓扑 RCA"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
 const _runStatus = s => ({running:I18N.t("sre.run_running","执行中"),success:I18N.t("sre.run_success","成功"),failed:I18N.t("sre.run_failed","失败"),pending_approval:I18N.t("sre.run_pending","待审批"),skipped_cooldown:I18N.t("sre.run_skip_cooldown","冷却跳过"),skipped_ratelimit:I18N.t("sre.run_skip_ratelimit","限频跳过"),rejected:I18N.t("sre.run_rejected","已拒绝"),no_playbook:I18N.t("sre.run_no_playbook","无剧本")})[s]||s;
 const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
 const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
@@ -555,6 +555,8 @@ function loadSRETab(tab){
   else if (tab==="topology") loadTopology();
   else if (tab==="slo") loadSLOs();
   else if (tab==="tickets") loadTickets();
+  else if (tab==="oncall") loadOnCall();
+  else if (tab==="changes") loadChanges();
   else if (tab==="ai") loadInspections();
 }
 
@@ -585,6 +587,8 @@ async function openIncidentDetail(id){
       <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
       ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 ${I18N.t("sre.ticket","工单")} #${inc.ticket_id}</span>`:""}</div>
       <div class="subhead">${I18N.t("sre.timeline","时间线")}</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
+      <div class="subhead" style="margin-top:12px">📦 ${I18N.t("sre.related_changes","关联变更")}</div>
+      <div id="incRelatedChanges" class="sre-list"><div class="empty-line">加载中…</div></div>
       <div class="subhead" style="margin-top:16px">🤖 ${I18N.t("sre.ai_diag_chat","AI 诊断对话")}</div>
       <div id="incDiagnosisChat" class="ai-diagnosis-chat"></div>
       <div id="incDiagAttach" style="display:none;flex-wrap:wrap;gap:4px;padding:4px 0"></div>
@@ -633,7 +637,17 @@ async function openIncidentDetail(id){
     $("incDiagFile").onchange = onDiagChatFiles;
     renderDiagAttachments();
     $("incidentDetailMask").classList.add("show");
+    loadIncidentRelatedChanges(inc.id);
   } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
+}
+async function loadIncidentRelatedChanges(id){
+  const el=$("incRelatedChanges"); if(!el) return;
+  try{
+    const list=await fetch(`${API}/incidents/${id}/related-changes`).then(r=>r.json());
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_related_changes","近 14 天无关联变更")}</div>`; return; }
+    el.innerHTML=list.map(c=>`<div class="sre-row"><div class="sre-row-main"><div class="sre-row-title">#${c.id} ${esc(c.title)}</div>
+      <div class="sre-row-sub">${esc(c.kind)} · ${esc(c.status)} · ${esc(c.risk)} · ${fmtDateTime(c.started_at)}${c.author?" · "+esc(c.author):""}</div></div></div>`).join("");
+  }catch(e){ el.innerHTML=`<div class="empty-line">—</div>`; }
 }
 async function incidentAction(id, act){
   try {
@@ -1451,6 +1465,217 @@ safeAddEventListener("tkAttachBtn","click",()=>{ const f=$("tkAttachFile"); if(f
 safeAddEventListener("tkCommentAttachBtn","click",()=>{ const f=$("tkCommentFile"); if(f) f.click(); });
 const _tkAf=$("tkAttachFile"); if(_tkAf) _tkAf.onchange=async()=>{ await ingestFilesIntoAttachments(_tkAf.files, TK_CREATE_ATTACHMENTS, {onChange:refreshTkCreateAtt}); refreshTkCreateAtt(); _tkAf.value=""; };
 const _tkCf=$("tkCommentFile"); if(_tkCf) _tkCf.onchange=async()=>{ await ingestFilesIntoAttachments(_tkCf.files, TK_COMMENT_ATTACHMENTS, {onChange:refreshTkCommentAtt}); refreshTkCommentAtt(); _tkCf.value=""; };
+safeAddEventListener("ocRefreshWhoBtn","click",loadOnCall);
+safeAddEventListener("newOnCallSchedBtn","click",()=>openOnCallSchedModal(null));
+safeAddEventListener("newEscPolicyBtn","click",()=>openEscPolicyModal(null));
+safeAddEventListener("newChangeWinBtn","click",()=>openChangeWinModal(null));
+safeAddEventListener("newChangeRecBtn","click",()=>openChangeRecModal(null));
+
+/* ---- On-call ---- */
+async function loadOnCall(){
+  try{
+    const [who, schs, pols, pages]=await Promise.all([
+      fetch(`${API}/oncall/who`).then(r=>r.json()),
+      fetch(`${API}/oncall/schedules`).then(r=>r.json()),
+      fetch(`${API}/oncall/policies`).then(r=>r.json()),
+      fetch(`${API}/oncall/pages?open=1`).then(r=>r.json())
+    ]);
+    const wh=$("oncallWhoList");
+    if(!who||!who.length) wh.innerHTML=`<div class="empty-line">暂无排班</div>`;
+    else wh.innerHTML=who.map(w=>`<div class="sre-row"><div class="sre-row-main"><div class="sre-row-title">${esc(w.name||w.id)}</div>
+      <div class="sre-row-sub">主值班：<b>${esc(w.primary||"—")}</b>${(w.layers||[]).map(l=>` · ${esc(l.name||"")}=${esc(l.current||"—")}`).join("")}</div></div></div>`).join("");
+    const sl=$("oncallSchedList");
+    if(!schs||!schs.length) sl.innerHTML=`<div class="empty-line">暂无排班表</div>`;
+    else sl.innerHTML=schs.map(s=>{
+      const mem=((s.layers||[])[0]||{}).members||[];
+      return `<div class="fwd-card"><div class="fwd-card-title">${esc(s.name||s.id)}</div>
+        <div class="fwd-card-sub mono">${esc(s.timezone||"Asia/Shanghai")} · ${mem.length} 人</div>
+        <div class="fwd-card-acts"><button class="btn sm" data-oc="edit-sched" data-id="${esc(s.id)}">编辑</button>
+        <button class="btn danger sm" data-oc="del-sched" data-id="${esc(s.id)}">删除</button></div></div>`;
+    }).join("");
+    sl.querySelectorAll("[data-oc]").forEach(b=>b.onclick=()=>oncallAct(b.dataset.oc,b.dataset.id));
+    const pl=$("oncallPolicyList");
+    if(!pols||!pols.length) pl.innerHTML=`<div class="empty-line">暂无升级策略</div>`;
+    else pl.innerHTML=pols.map(p=>`<div class="fwd-card"><div class="fwd-card-title">${esc(p.name||p.id)} ${p.enabled?"":"(停用)"}</div>
+      <div class="fwd-card-sub">${(p.steps||[]).length} 级升级</div>
+      <div class="fwd-card-acts"><button class="btn sm" data-oc="edit-pol" data-id="${esc(p.id)}">编辑</button>
+      <button class="btn danger sm" data-oc="del-pol" data-id="${esc(p.id)}">删除</button></div></div>`).join("");
+    pl.querySelectorAll("[data-oc]").forEach(b=>b.onclick=()=>oncallAct(b.dataset.oc,b.dataset.id));
+    const pg=$("oncallPageList");
+    if(!pages||!pages.length) pg.innerHTML=`<div class="empty-line">无进行中的 Page</div>`;
+    else pg.innerHTML=pages.map(p=>`<div class="sre-row"><div class="sre-row-main"><div class="sre-row-title">Page #${p.id} · 事件 #${p.incident_id}</div>
+      <div class="sre-row-sub">${esc(p.status)} · step ${p.step}${(p.notified||[]).length?" · "+esc((p.notified||[]).join(",")):""}${p.next_escalate_at?" · 下次升级 "+fmtDateTime(p.next_escalate_at):""}</div></div></div>`).join("");
+  }catch(e){ toast("加载 On-call 失败: "+e,"err"); }
+}
+async function oncallAct(act,id){
+  if(act==="del-sched"){
+    if(!confirm("删除排班表？")) return;
+    await fetch(`${API}/oncall/schedules/${encodeURIComponent(id)}`,{method:"DELETE"});
+    loadOnCall(); return;
+  }
+  if(act==="del-pol"){
+    if(!confirm("删除升级策略？")) return;
+    await fetch(`${API}/oncall/policies/${encodeURIComponent(id)}`,{method:"DELETE"});
+    loadOnCall(); return;
+  }
+  if(act==="edit-sched"){
+    const list=await fetch(`${API}/oncall/schedules`).then(r=>r.json());
+    openOnCallSchedModal((list||[]).find(x=>x.id===id)||null); return;
+  }
+  if(act==="edit-pol"){
+    const list=await fetch(`${API}/oncall/policies`).then(r=>r.json());
+    openEscPolicyModal((list||[]).find(x=>x.id===id)||null); return;
+  }
+}
+function openOnCallSchedModal(sch){
+  $("oncallEditTitle").textContent=sch?"编辑排班":"新建排班";
+  const layer=(sch&&sch.layers&&sch.layers[0])||{name:"primary",rotation:"weekly",handoff_at:"10:00",members:[]};
+  $("oncallEditBody").innerHTML=`
+    <div class="field"><label>名称</label><input id="ocName" value="${esc(sch&&sch.name||"")}"></div>
+    <div class="field"><label>时区</label><input id="ocTz" value="${esc(sch&&sch.timezone||"Asia/Shanghai")}"></div>
+    <div class="field"><label>轮值</label><div class="select-wrap"><select id="ocRot"><option value="weekly"${layer.rotation==="weekly"?" selected":""}>weekly</option><option value="daily"${layer.rotation==="daily"?" selected":""}>daily</option></select></div></div>
+    <div class="field"><label>交接时刻 HH:MM</label><input id="ocHandoff" value="${esc(layer.handoff_at||"10:00")}"></div>
+    <div class="field"><label>成员用户名（逗号分隔）</label><input id="ocMembers" value="${esc((layer.members||[]).join(","))}"></div>
+    <input type="hidden" id="ocId" value="${esc(sch&&sch.id||"")}">`;
+  $("oncallEditMask").classList.add("show");
+  $("oncallEditSave").onclick=async()=>{
+    const members=($("ocMembers").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const body={id:$("ocId").value||undefined,name:$("ocName").value.trim(),timezone:$("ocTz").value.trim()||"Asia/Shanghai",
+      layers:[{name:"primary",rotation:$("ocRot").value,handoff_at:$("ocHandoff").value.trim()||"10:00",members}]};
+    const r=await fetch(`${API}/oncall/schedules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ $("oncallEditMask").classList.remove("show"); loadOnCall(); toast("已保存","ok"); }
+    else toast(j.error||"保存失败","err");
+  };
+}
+function openEscPolicyModal(pol){
+  $("oncallEditTitle").textContent=pol?"编辑升级策略":"新建升级策略";
+  const steps=pol&&pol.steps&&pol.steps.length?pol.steps:[{after_sec:0,target:{users:[]},channels:["feishu"]},{after_sec:900,target:{users:[]},channels:["feishu","sms"]}];
+  $("oncallEditBody").innerHTML=`
+    <div class="field"><label>名称</label><input id="epName" value="${esc(pol&&pol.name||"")}"></div>
+    <label class="switch mb"><input type="checkbox" id="epEnabled" ${!pol||pol.enabled?"checked":""}> 启用</label>
+    <div class="field"><label>排班 ID（可选，绑定 schedule）</label><input id="epSched" value="${esc((steps[0]&&steps[0].target&&steps[0].target.schedule_id)||"")}" placeholder="留空则用成员列表"></div>
+    <div class="field"><label>第 1 级成员（逗号）</label><input id="epU0" value="${esc((((steps[0]||{}).target||{}).users||[]).join(","))}"></div>
+    <div class="field"><label>第 1 级渠道</label><input id="epC0" value="${esc(((steps[0]||{}).channels||["feishu"]).join(","))}"></div>
+    <div class="field"><label>升级等待秒数（到第 2 级）</label><input type="number" id="epAfter1" value="${(steps[1]&&steps[1].after_sec)||900}"></div>
+    <div class="field"><label>第 2 级成员（逗号）</label><input id="epU1" value="${esc((((steps[1]||{}).target||{}).users||[]).join(","))}"></div>
+    <div class="field"><label>第 2 级渠道</label><input id="epC1" value="${esc(((steps[1]||{}).channels||["feishu"]).join(","))}"></div>
+    <input type="hidden" id="epId" value="${esc(pol&&pol.id||"")}">`;
+  $("oncallEditMask").classList.add("show");
+  $("oncallEditSave").onclick=async()=>{
+    const sid=($("epSched").value||"").trim();
+    const mk=(users,channels,after,layer)=>({after_sec:after|0,target:{schedule_id:sid||undefined,layer:layer|0,users:users},channels});
+    const u0=($("epU0").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const u1=($("epU1").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const c0=($("epC0").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const c1=($("epC1").value||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const body={id:$("epId").value||undefined,name:$("epName").value.trim(),enabled:$("epEnabled").checked,
+      steps:[mk(u0,c0,0,0),mk(u1,c1,parseInt($("epAfter1").value,10)||900,0)]};
+    const r=await fetch(`${API}/oncall/policies`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ $("oncallEditMask").classList.remove("show"); loadOnCall(); toast("已保存","ok"); }
+    else toast(j.error||"保存失败","err");
+  };
+}
+
+/* ---- 变更窗 / 变更记录 ---- */
+async function loadChanges(){
+  try{
+    const [wins, recs]=await Promise.all([
+      fetch(`${API}/changes/windows`).then(r=>r.json()),
+      fetch(`${API}/changes`).then(r=>r.json())
+    ]);
+    const wl=$("changeWinList");
+    if(!wins||!wins.length) wl.innerHTML=`<div class="empty-line">暂无变更窗</div>`;
+    else wl.innerHTML=wins.map(w=>`<div class="fwd-card"><div class="fwd-card-title">${esc(w.name||w.id)} ${w.freeze?'<span class="badge warn">freeze</span>':""}</div>
+      <div class="fwd-card-sub">${fmtDateTime(w.start)} → ${fmtDateTime(w.end)}${(w.host_ids||[]).length?" · hosts "+(w.host_ids||[]).length:""}</div>
+      <div class="fwd-card-acts"><button class="btn sm" data-ch="edit-win" data-id="${esc(w.id)}">编辑</button>
+      <button class="btn danger sm" data-ch="del-win" data-id="${esc(w.id)}">删除</button></div></div>`).join("");
+    wl.querySelectorAll("[data-ch]").forEach(b=>b.onclick=()=>changeAct(b.dataset.ch,b.dataset.id));
+    const rl=$("changeRecList");
+    if(!recs||!recs.length) rl.innerHTML=`<div class="empty-line">暂无变更记录</div>`;
+    else rl.innerHTML=recs.map(c=>`<div class="sre-row" data-ch="edit-rec" data-id="${c.id}"><div class="sre-row-main"><div class="sre-row-title">#${c.id} ${esc(c.title)}</div>
+      <div class="sre-row-sub">${esc(c.kind)} · ${esc(c.status)} · ${esc(c.risk)} · ${fmtDateTime(c.started_at)}${(c.host_ids||[]).length?" · "+esc((c.host_ids||[]).slice(0,3).join(",")):""}</div></div></div>`).join("");
+    rl.querySelectorAll("[data-ch]").forEach(b=>b.onclick=()=>changeAct(b.dataset.ch,b.dataset.id));
+  }catch(e){ toast("加载变更失败: "+e,"err"); }
+}
+async function changeAct(act,id){
+  if(act==="del-win"){
+    if(!confirm("删除变更窗？")) return;
+    await fetch(`${API}/changes/windows/${encodeURIComponent(id)}`,{method:"DELETE"});
+    loadChanges(); return;
+  }
+  if(act==="edit-win"){
+    const list=await fetch(`${API}/changes/windows`).then(r=>r.json());
+    openChangeWinModal((list||[]).find(x=>x.id===id)||null); return;
+  }
+  if(act==="edit-rec"){
+    const list=await fetch(`${API}/changes`).then(r=>r.json());
+    openChangeRecModal((list||[]).find(x=>String(x.id)===String(id))||null); return;
+  }
+}
+function _dtLocal(ts){
+  if(!ts) return "";
+  const d=new Date(ts*1000);
+  const p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function openChangeWinModal(w){
+  $("changeEditTitle").textContent=w?"编辑变更窗":"新建变更窗";
+  const now=Math.floor(Date.now()/1000);
+  $("changeEditBody").innerHTML=`
+    <div class="field"><label>名称</label><input id="cwName" value="${esc(w&&w.name||"")}"></div>
+    <div class="grid2">
+      <div class="field"><label>开始</label><input type="datetime-local" id="cwStart" value="${_dtLocal(w&&w.start||now)}"></div>
+      <div class="field"><label>结束</label><input type="datetime-local" id="cwEnd" value="${_dtLocal(w&&w.end||now+3600)}"></div>
+    </div>
+    <div class="field"><label>主机 ID（逗号，空=全局）</label><input id="cwHosts" value="${esc((w&&w.host_ids||[]).join(","))}"></div>
+    <div class="field"><label>分类（逗号）</label><input id="cwCats" value="${esc((w&&w.categories||[]).join(","))}"></div>
+    <label class="switch mb"><input type="checkbox" id="cwFreeze" ${!w||w.freeze?"checked":""}> 冻结期（禁止未审批自愈）</label>
+    <div class="field"><label>备注</label><input id="cwNote" value="${esc(w&&w.note||"")}"></div>
+    <input type="hidden" id="cwId" value="${esc(w&&w.id||"")}">`;
+  $("changeEditMask").classList.add("show");
+  $("changeEditSave").onclick=async()=>{
+    const toUnix=v=>{ const t=Date.parse(v); return isNaN(t)?0:Math.floor(t/1000); };
+    const body={id:$("cwId").value||undefined,name:$("cwName").value.trim(),start:toUnix($("cwStart").value),end:toUnix($("cwEnd").value),
+      host_ids:($("cwHosts").value||"").split(",").map(s=>s.trim()).filter(Boolean),
+      categories:($("cwCats").value||"").split(",").map(s=>s.trim()).filter(Boolean),
+      freeze:$("cwFreeze").checked,note:$("cwNote").value.trim()};
+    const r=await fetch(`${API}/changes/windows`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok"); }
+    else toast(j.error||"保存失败","err");
+  };
+}
+function openChangeRecModal(c){
+  $("changeEditTitle").textContent=c?"编辑变更记录":"新建变更记录";
+  const now=Math.floor(Date.now()/1000);
+  $("changeEditBody").innerHTML=`
+    <div class="field"><label>标题</label><input id="crTitle" value="${esc(c&&c.title||"")}"></div>
+    <div class="field"><label>摘要</label><textarea id="crSum" rows="2">${esc(c&&c.summary||"")}</textarea></div>
+    <div class="grid2">
+      <div class="field"><label>类型</label><div class="select-wrap"><select id="crKind">${["deploy","config","infra","emergency","other"].map(k=>`<option value="${k}"${(c&&c.kind||"other")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
+      <div class="field"><label>风险</label><div class="select-wrap"><select id="crRisk">${["low","medium","high"].map(k=>`<option value="${k}"${(c&&c.risk||"medium")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>状态</label><div class="select-wrap"><select id="crStatus">${["planned","in_progress","completed","rolled_back","cancelled"].map(k=>`<option value="${k}"${(c&&c.status||"planned")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
+      <div class="field"><label>开始</label><input type="datetime-local" id="crStart" value="${_dtLocal(c&&c.started_at||now)}"></div>
+    </div>
+    <div class="field"><label>主机 ID（逗号）</label><input id="crHosts" value="${esc((c&&c.host_ids||[]).join(","))}"></div>
+    <div class="field"><label>外链</label><input id="crRef" value="${esc(c&&c.external_ref||"")}"></div>
+    <input type="hidden" id="crId" value="${c&&c.id||0}">`;
+  $("changeEditMask").classList.add("show");
+  $("changeEditSave").onclick=async()=>{
+    const toUnix=v=>{ const t=Date.parse(v); return isNaN(t)?0:Math.floor(t/1000); };
+    const body={id:parseInt($("crId").value,10)||0,title:$("crTitle").value.trim(),summary:$("crSum").value.trim(),
+      kind:$("crKind").value,risk:$("crRisk").value,status:$("crStatus").value,started_at:toUnix($("crStart").value),
+      host_ids:($("crHosts").value||"").split(",").map(s=>s.trim()).filter(Boolean),external_ref:$("crRef").value.trim()};
+    const r=await fetch(`${API}/changes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok"); }
+    else toast(j.error||"保存失败","err");
+  };
+}
 
 /* ---- 日志检索 ---- */
 const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
@@ -1917,6 +2142,7 @@ async function genDutyReport(){
   });
 }
 async function openAIConfig(){
+  if(typeof isAdmin==="function" && !isAdmin()){ toast(I18N.t("toast.admin_only","仅管理员可操作"),"err"); return; }
   const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
   const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
@@ -2023,6 +2249,7 @@ function setAIPreset(type){
   loadAIModels(); // 选预设后自动获取该 provider 的模型
 }
 async function saveAIConfig(){
+  if(typeof isAdmin==="function" && !isAdmin()){ toast(I18N.t("toast.admin_only","仅管理员可操作"),"err"); return; }
   const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
   if(enabled && (!endpoint || !model)){ toast(I18N.t("sre.ai_need_endpoint_model","启用 AI 需填写 Endpoint 和模型"),"err"); return; } // 轻校验：启用却没填必填项
   const body={enabled,endpoint,api_key:$("aiKey").value,model,inspect_interval_min:parseInt($("aiInterval").value)||30,
@@ -2541,7 +2768,7 @@ function copyText(t){
   _fallbackCopy(t);
 }
 function _fallbackCopy(t){ const ta=document.createElement("textarea"); ta.value=t; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(e){} ta.remove(); }
-// 给一条 AI 回复挂上「复制 / 重答 / 👍👎」操作栏
+// 给一条 AI 回复挂上「朗读 / 复制 / 重答 / 👍👎」操作栏（朗读紧贴本条消息下方）
 function addCopyTool(div,rawText){
   if(!div) return;
   // 代码块独立复制（复制对应 <pre> 内容）
@@ -2549,6 +2776,12 @@ function addCopyTool(div,rawText){
     b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>b.textContent=I18N.t("sre.copy","复制"),1200); } };
   });
   const bar=document.createElement("div"); bar.className="ai-msg-tools";
+  const speakBtn=document.createElement("button");
+  speakBtn.className="ai-speak-btn";
+  speakBtn.textContent=I18N.t("sre.speak","朗读");
+  speakBtn.title=I18N.t("sre.speak_title","朗读本条回复");
+  speakBtn.onclick=()=>speakAIText(rawText, speakBtn);
+  bar.appendChild(speakBtn);
   const btn=document.createElement("button"); btn.textContent=I18N.t("sre.copy","复制"); btn.title=I18N.t("sre.copy_reply","复制回复");
   btn.onclick=()=>{ copyText(rawText); btn.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>{ btn.textContent=I18N.t("sre.copy","复制"); },1200); };
   bar.appendChild(btn);
@@ -2691,7 +2924,6 @@ safeAddEventListener("aiChatAttachBtn","click",()=>{ const f=$("aiChatFile"); if
 safeAddEventListener("aiChatUrlBtn","click",attachURL);
 safeAddEventListener("aiChatFile","change",onAIChatFiles);
 safeAddEventListener("aiChatMicBtn","click",toggleAIVoiceInput);
-safeAddEventListener("aiChatSpeakBtn","click",speakLastAIReply);
 safeAddEventListener("aiChatStopBtn","click",stopAIChat);
 safeAddEventListener("aiUndoBtn","click",undoAIChat);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
@@ -2699,6 +2931,7 @@ safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.valu
 
 /* ---- Web Speech：语音输入 / 朗读回复 ---- */
 let _aiVoiceRec=null, _aiVoiceOn=false;
+let _aiSpeakBtn=null;
 function toggleAIVoiceInput(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   const btn=$("aiChatMicBtn");
@@ -2724,22 +2957,93 @@ function toggleAIVoiceInput(){
     _aiVoiceRec.start(); _aiVoiceOn=true; if(btn) btn.classList.add("active");
   }catch(e){ toast(I18N.t("sre.voice_start_failed","无法启动语音输入"),"err"); }
 }
-function speakLastAIReply(){
+
+// 挑选更「稳重 / 自然」的中文女声（或稳重男声），避免系统默认机械音。
+function pickPreferredAIVoice(){
+  if(!window.speechSynthesis) return null;
+  const voices=speechSynthesis.getVoices()||[];
+  if(!voices.length) return null;
+  const zh=voices.filter(v=>/zh|chinese|中文|普通话|国语/i.test((v.lang||"")+" "+(v.name||"")));
+  const pool=zh.length?zh:voices;
+  const prefer=/xiaoxiao|xiaoyi|xiaohan|yaoyao|huihui|yaoyao|yunxi|yunyang|xiaochen|xiaoxuan|neural|natural|premium|enhanced|google.*普通话|microsoft.*(xiaoxiao|xiaoyi|huihui)/i;
+  const softFemale=/female|女|xiaoxiao|xiaoyi|yaoyao|huihui|xiaochen|xiaoxuan/i;
+  const steadyMale=/yunyang|yunxi|kangkang|male|男/i;
+  let best=pool.find(v=>prefer.test(v.name))||pool.find(v=>softFemale.test(v.name+" "+(v.voiceURI||"")));
+  if(!best) best=pool.find(v=>/zh-CN|zh_CN|cmn-Hans/i.test(v.lang));
+  if(!best) best=pool.find(v=>steadyMale.test(v.name));
+  return best||pool[0]||null;
+}
+function normalizeSpeakText(raw){
+  return String(raw||"")
+    .replace(/```[\s\S]*?```/g," ")
+    .replace(/`[^`]+`/g," ")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g," ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g,"$1")
+    .replace(/[#>*_~|]/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+function speakAIText(rawText, btn){
   if(!window.speechSynthesis){ toast(I18N.t("sre.tts_unsupported","当前浏览器不支持语音朗读"),"err"); return; }
+  const text=normalizeSpeakText(rawText).slice(0,1600);
+  if(!text){ toast(I18N.t("sre.no_ai_reply","暂无可朗读的 AI 回复"),"err"); return; }
+  // 再次点击同一按钮 → 停止
+  if(btn && btn.classList.contains("speaking")){
+    try{ speechSynthesis.cancel(); }catch(e){}
+    btn.classList.remove("speaking");
+    btn.textContent=I18N.t("sre.speak","朗读");
+    _aiSpeakBtn=null;
+    return;
+  }
+  document.querySelectorAll(".ai-speak-btn.speaking").forEach(b=>{
+    b.classList.remove("speaking"); b.textContent=I18N.t("sre.speak","朗读");
+  });
+  try{ speechSynthesis.cancel(); }catch(e){}
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang="zh-CN";
+  // 略慢、略柔：更稳重，减少机械感
+  u.rate=0.92;
+  u.pitch=1.08;
+  u.volume=1;
+  const voice=pickPreferredAIVoice();
+  if(voice){ u.voice=voice; if(voice.lang) u.lang=voice.lang; }
+  if(btn){
+    btn.classList.add("speaking");
+    btn.textContent=I18N.t("sre.speaking","朗读中…");
+    _aiSpeakBtn=btn;
+  }
+  u.onend=u.onerror=()=>{
+    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn.textContent=I18N.t("sre.speak","朗读"); _aiSpeakBtn=null; }
+  };
+  // 部分浏览器 voices 异步加载，稍后再试一次绑定
+  const speakNow=()=>speechSynthesis.speak(u);
+  if(!voice && speechSynthesis.getVoices().length===0){
+    speechSynthesis.onvoiceschanged=()=>{
+      const v=pickPreferredAIVoice();
+      if(v){ u.voice=v; if(v.lang) u.lang=v.lang; }
+      speechSynthesis.onvoiceschanged=null;
+      speakNow();
+    };
+    setTimeout(speakNow, 250);
+  } else speakNow();
+}
+function speakLastAIReply(){
   const log=$("aiChatLog"); if(!log) return;
-  const bubbles=[...log.querySelectorAll(".ai-msg.assistant, .msg.assistant, [data-role='assistant']")];
+  const bubbles=[...log.querySelectorAll(".ai-chat-msg.ai")];
   let text="";
+  let btn=null;
   if(bubbles.length){
-    text=(bubbles[bubbles.length-1].innerText||bubbles[bubbles.length-1].textContent||"").trim();
+    const last=bubbles[bubbles.length-1];
+    btn=last.querySelector(".ai-speak-btn");
+    text=(last.innerText||last.textContent||"").trim();
   } else if(typeof AI_CHAT_HISTORY!=="undefined"){
     for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="assistant"&&AI_CHAT_HISTORY[i].content){ text=AI_CHAT_HISTORY[i].content; break; } }
   }
-  text=String(text||"").replace(/```[\s\S]*?```/g," ").replace(/[#>*_`]/g," ").replace(/\s+/g," ").trim();
-  if(!text){ toast(I18N.t("sre.no_ai_reply","暂无可朗读的 AI 回复"),"err"); return; }
-  try{ speechSynthesis.cancel(); }catch(e){}
-  const u=new SpeechSynthesisUtterance(text.slice(0,1200));
-  u.lang="zh-CN"; u.rate=1.05;
-  speechSynthesis.speak(u);
+  speakAIText(text, btn);
+}
+// 预热 voices 列表（Chrome 首次 getVoices 常为空）
+if(typeof window!=="undefined" && window.speechSynthesis){
+  try{ speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged=()=>{ speechSynthesis.getVoices(); }; }catch(e){}
 }
 
 // （原独立的 Sreyun 对话已并入上方统一的「AI 对话」——单窗口即走 Sreyun Agent。）

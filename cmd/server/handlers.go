@@ -38,6 +38,8 @@ type Server struct {
 	slos        *sloManager         // SLO + error budgets
 	distProbes  *distProbeManager   // 分布式多点探测（迭代 D）
 	tickets     *ticketManager      // work orders
+	oncall      *onCallManager      // on-call escalation pages
+	changes     *changeManager      // change records
 	logs        *logStore           // aggregated agent logs
 	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
 	hv          *hypervStore        // latest Hyper-V guest inventory per host (feeds VM alerts)
@@ -71,6 +73,8 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		slos:        newSLOManager(cfg),
 		distProbes:  newDistProbeManager(),
 		tickets:     newTicketManager(),
+		oncall:      newOnCallManager(),
+		changes:     newChangeManager(),
 		logs:        newLogStore(),
 		hw:          newHardwareStore(),
 		hv:          newHypervStore(),
@@ -105,7 +109,11 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			s.pg.cleanupExpiredMemories()
 			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
 			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
-			s.pg.cleanupContentAudit(30) // 内容审计保留 30 天（高敏感，不永久留存）
+			s.pg.cleanupContentAudit(s.cfg.Retention().ContentAuditDays)
+			s.pg.cleanupAuditAndEvents(s.cfg.Retention().AuditDays)
+			s.pg.cleanupAlertHistory(s.cfg.Retention().AlertHistoryDays)
+			s.pg.cleanupOldFlowPartitions(s.cfg.Retention().NetFlowMonths)
+			s.startBackupScheduler()
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
@@ -114,7 +122,11 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.cleanupExpiredMemories()
 				s.pg.capMemoriesByKind(2000)
 				s.pg.cleanupFlowRecords()
-				s.pg.cleanupContentAudit(30)
+				ret := s.cfg.Retention()
+				s.pg.cleanupContentAudit(ret.ContentAuditDays)
+				s.pg.cleanupAuditAndEvents(ret.AuditDays)
+				s.pg.cleanupAlertHistory(ret.AlertHistoryDays)
+				s.pg.cleanupOldFlowPartitions(ret.NetFlowMonths)
 				// 自进化：把近期高价值经验提炼成可复用技能(SOP)。放在维护循环里而非启动时，
 				// 避免每次启动都触发 AI 调用；提炼失败/无新经验时静默跳过（distillSkills 内部已记日志）。
 				_, _ = s.distillSkills(14)
@@ -274,6 +286,36 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/tickets", s.handleListTickets)
 	mux.HandleFunc("POST /api/v1/tickets", s.handleCreateTicket)
 	mux.HandleFunc("GET /api/v1/tickets/{id}", s.handleGetTicket)
+	// On-call
+	mux.HandleFunc("GET /api/v1/oncall/who", s.handleOnCallWho)
+	mux.HandleFunc("GET /api/v1/oncall/schedules", s.handleListOnCallSchedules)
+	mux.HandleFunc("POST /api/v1/oncall/schedules", s.handleUpsertOnCallSchedule)
+	mux.HandleFunc("DELETE /api/v1/oncall/schedules/{id}", s.handleDeleteOnCallSchedule)
+	mux.HandleFunc("GET /api/v1/oncall/policies", s.handleListEscalationPolicies)
+	mux.HandleFunc("POST /api/v1/oncall/policies", s.handleUpsertEscalationPolicy)
+	mux.HandleFunc("DELETE /api/v1/oncall/policies/{id}", s.handleDeleteEscalationPolicy)
+	mux.HandleFunc("GET /api/v1/oncall/pages", s.handleListOnCallPages)
+	// Changes
+	mux.HandleFunc("GET /api/v1/changes/windows", s.handleListChangeWindows)
+	mux.HandleFunc("POST /api/v1/changes/windows", s.handleUpsertChangeWindow)
+	mux.HandleFunc("DELETE /api/v1/changes/windows/{id}", s.handleDeleteChangeWindow)
+	mux.HandleFunc("GET /api/v1/changes", s.handleListChanges)
+	mux.HandleFunc("POST /api/v1/changes", s.handleUpsertChange)
+	mux.HandleFunc("GET /api/v1/changes/{id}", s.handleGetChange)
+	mux.HandleFunc("POST /api/v1/changes/{id}/link-incident", s.handleLinkChangeIncident)
+	mux.HandleFunc("GET /api/v1/incidents/{id}/related-changes", s.handleIncidentRelatedChanges)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/assign", s.handleAssignIncident)
+	// Admin: backup / retention / cmd policy
+	mux.HandleFunc("GET /api/v1/admin/backups", s.handleListBackups)
+	mux.HandleFunc("POST /api/v1/admin/backups", s.handleCreateBackup)
+	mux.HandleFunc("GET /api/v1/admin/backups/{id}/download", s.handleDownloadBackup)
+	mux.HandleFunc("POST /api/v1/admin/backups/{id}/restore", s.handleRestoreBackup)
+	mux.HandleFunc("GET /api/v1/admin/retention", s.handleGetRetention)
+	mux.HandleFunc("POST /api/v1/admin/retention", s.handleSetRetention)
+	mux.HandleFunc("GET /api/v1/admin/backup-config", s.handleGetBackupCfg)
+	mux.HandleFunc("POST /api/v1/admin/backup-config", s.handleSetBackupCfg)
+	mux.HandleFunc("GET /api/v1/admin/cmd-policy", s.handleGetCmdPolicy)
+	mux.HandleFunc("POST /api/v1/admin/cmd-policy", s.handleSetCmdPolicy)
 	mux.HandleFunc("POST /api/v1/tickets/{id}", s.handleUpdateTicket)
 	mux.HandleFunc("POST /api/v1/tickets/{id}/comment", s.handleCommentTicket)
 	mux.HandleFunc("DELETE /api/v1/tickets/{id}", s.handleDeleteTicket)

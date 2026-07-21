@@ -235,6 +235,9 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 	if len(p.Steps) == 0 {
 		return Playbook{}, fmt.Errorf("%s", Tz("playbook.step_required"))
 	}
+	if err := validatePlaybookCommands(p.Steps, pm.cfg.CmdPolicy()); err != nil {
+		return Playbook{}, err
+	}
 	if err := sanitizeSchedule(p.Schedule); err != nil {
 		return Playbook{}, err
 	}

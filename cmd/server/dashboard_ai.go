@@ -499,11 +499,43 @@ func aiPanelWidth(typ string, w int) int {
 	return w
 }
 
-// layoutAIDashPanels 把面板按 24 栏从左到右流式排布，超宽换行，生成 gridPos（x,y 供排序）。
-// 各面板保留自己的类型化高度（见 aiPanelHeight）：stat 矮、timeseries 高，不做整行拔高，
-// 避免把 stat 撑成大空白框；行内同高由 aiPanelHeight + 提示词「同类同高」保证。
+// layoutAIDashPanels 按「黄金信号分区」重排并紧凑落位，避免 AI 随意顺序导致 stat/趋势混杂、行内留白。
+// 分区：stat 概览 → gauge → 趋势类 → 构成/排行 → 明细/其它；同行等高；每行尽量铺满 24 栏。
 func layoutAIDashPanels(panels []DashPanel) {
-	x, y, rowH := 0, 0, 0
+	if len(panels) == 0 {
+		return
+	}
+	sectionRank := func(t string) int {
+		switch t {
+		case "stat":
+			return 0
+		case "gauge":
+			return 1
+		case "timeseries", "state-timeline", "histogram", "heatmap":
+			return 2
+		case "piechart", "barchart", "bargauge":
+			return 3
+		default:
+			return 4
+		}
+	}
+	sort.SliceStable(panels, func(i, j int) bool {
+		return sectionRank(panels[i].Type) < sectionRank(panels[j].Type)
+	})
+	normalizeAISectionWidths(panels)
+
+	x, y, rowStart, rowH := 0, 0, 0, 0
+	flushRow := func(end int) {
+		if end <= rowStart {
+			return
+		}
+		for j := rowStart; j < end; j++ {
+			panels[j].Grid.H = rowH
+			panels[j].Grid.Y = y
+		}
+		y += rowH
+		x, rowH, rowStart = 0, 0, end
+	}
 	for i := range panels {
 		w := panels[i].Grid.W
 		if w < 1 || w > 24 {
@@ -514,15 +546,70 @@ func layoutAIDashPanels(panels []DashPanel) {
 			h = 8
 		}
 		if x+w > 24 {
-			x = 0
-			y += rowH
-			rowH = 0
+			flushRow(i)
 		}
 		panels[i].Grid = DashGrid{X: x, Y: y, W: w, H: h}
 		x += w
 		if h > rowH {
 			rowH = h
 		}
+	}
+	flushRow(len(panels))
+}
+
+// normalizeAISectionWidths 让同类型连续段的宽度更整齐（如 3 个 stat → 各 8；4 个 → 各 6）。
+func normalizeAISectionWidths(panels []DashPanel) {
+	i := 0
+	for i < len(panels) {
+		typ := panels[i].Type
+		j := i + 1
+		for j < len(panels) && panels[j].Type == typ {
+			j++
+		}
+		n := j - i
+		if n >= 2 && (typ == "stat" || typ == "gauge") {
+			// 优先整除 24：2→12、3→8、4→6；超过 4 个用 6 并由外层换行。
+			w := 24 / n
+			if n > 4 {
+				w = 6
+			}
+			if w < 4 {
+				w = 4
+			}
+			if typ == "gauge" && w > 12 {
+				w = 8
+			}
+			extra := 24 - w*n
+			if n > 4 || extra < 0 {
+				extra = 0
+			}
+			for k := i; k < j; k++ {
+				ww := w
+				if extra > 0 {
+					ww++
+					extra--
+				}
+				if ww > 24 {
+					ww = 24
+				}
+				panels[k].Grid.W = ww
+				if typ == "stat" {
+					panels[k].Grid.H = 4
+				} else {
+					panels[k].Grid.H = 6
+				}
+			}
+		} else if typ == "timeseries" || typ == "piechart" || typ == "barchart" || typ == "table" {
+			for k := i; k < j; k++ {
+				if panels[k].Grid.W < 8 {
+					panels[k].Grid.W = 12
+				}
+				if panels[k].Grid.H < 6 {
+					panels[k].Grid.H = 7
+				}
+			}
+		}
+		i = j
 	}
 }
 

@@ -94,13 +94,14 @@ A companion **20+ screen enterprise-grade native Android console** (Kotlin + Jet
 - **Host detail**: native Canvas time-series (tap / pan / pinch-zoom), disk volumes / GPU device detail.
 - **Alerts**: severity / status dual-dimension filtering + one-tap ack / silence + AI diagnosis.
 - **Enterprise VT terminal**: VT100 / UTF-8 decode, exponential-backoff reconnect, soft-keyboard avoidance, no rebuild on rotation.
-- **SRE Hub**: incident loop / streaming AI diagnosis follow-up / runbooks / SLO / remediation approval / tickets.
+- **SRE Hub**: incident loop / streaming AI diagnosis follow-up / runbooks / SLO / remediation approval / tickets / **on-call schedules & escalation** / **change windows & correlation**.
 - **Probe monitoring**, **AI assistant (SSE streaming)**, **hardware / NetFlow / Hyper-V**, **terminal session replay**, **message center**, **duplicate-host cleanup**, **alert governance**, **terminal password**, **environment switch**, and more.
 - Auth: login `POST /api/v1/login` → cookie, `DataStore` dual-track persistence; login MFA OTP dialog, terminal second-password UI; self-hosted `/ws/push` long-connection foreground service + system notifications.
 
 ### 7. Deployment Resilience
 
 - **Two mandatory stores**: PostgreSQL + VictoriaMetrics — **missing either refuses to start**, guaranteeing data integrity by design.
+- **Versioned schema migrations** (`schema_migrations`) plus admin PG backup/restore UI; retention cleanup and remediation command allowlists for enterprise ops.
 - **Gateway relay**: a single internet-facing machine proxies all requests, transparently穿透 binary / reporting / terminal; `X-Relay-Secret` prevents Host injection.
 - **Multi-server fan-out**: agent `servers[]` collects once and broadcasts to all, with independent auth / retry / connection pools; **circuit breaker + backoff + gzip degradation** for resilience.
 - **Install-token rotation + 7-day grace**: rotating tokens never disrupt already-installed agents.

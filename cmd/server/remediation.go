@@ -148,6 +148,30 @@ func (m *remediationManager) OnAlert(a Alert, incidentID int64) {
 
 func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID int64) {
 	now := time.Now().Unix()
+	// Freeze window: force approval or skip auto-run.
+	if m.cfg != nil {
+		cat := ""
+		if m.category != nil {
+			cat = m.category(a.HostID)
+		}
+		if w, ok := m.cfg.activeFreezeWindow(a.HostID, cat, now); ok && !r.RequireApproval {
+			r.RequireApproval = true
+			_ = w
+		}
+	}
+	pb, okPB := m.getPlaybookSafe(r.PlaybookID)
+	if okPB && m.cfg != nil {
+		pol := m.cfg.CmdPolicy()
+		if err := validatePlaybookCommands(pb.Steps, pol); err != nil {
+			m.mu.Lock()
+			m.recordLocked(r, a, incidentID, "skipped_policy", err.Error())
+			m.mu.Unlock()
+			return
+		}
+		if !r.RequireApproval && playbookNeedsForcedApproval(pb.Steps, pol) {
+			r.RequireApproval = true
+		}
+	}
 	m.mu.Lock()
 	// Cooldown: same rule + host within the window.
 	ck := r.ID + "|" + a.HostID
@@ -172,9 +196,8 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 			return
 		}
 	}
-	pb, ok := m.getPlaybookSafe(r.PlaybookID)
 	pbName := pb.Name
-	if !ok {
+	if !okPB {
 		m.recordLocked(r, a, incidentID, "no_playbook", Tz("remediation.reason_no_playbook"))
 		m.mu.Unlock()
 		return

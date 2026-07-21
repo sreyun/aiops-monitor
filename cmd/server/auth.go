@@ -91,7 +91,7 @@ func validatePasswordStrength(pw string) bool {
 
 // routeAllowed enforces RBAC: any logged-in role may manage its own account;
 // viewer is otherwise read-only; the remote terminal needs operator+; user
-// management needs admin; every other write needs operator+.
+// management, admin ops, alert/AI settings writes need admin; every other write needs operator+.
 func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	rank := roleRank(role)
 	if rank == 0 {
@@ -104,8 +104,26 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		"/api/v1/mfa/unbind-via-email":
 		return true
 	}
-	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" { // user management + global MFA: admin only
+	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" || strings.HasPrefix(p, "/api/v1/admin/") { // user mgmt + admin ops: admin only
 		return rank >= roleRank(RoleAdmin)
+	}
+	// 敏感系统配置：告警通道/阈值、AI Provider 设置及其连通性测试 —— 仅管理员可写。
+	// GET 仍按下方 viewer+ 放行（密钥已脱敏），供界面回填与能力探测。
+	switch p {
+	case "/api/v1/config":
+		if r.Method != http.MethodGet {
+			return rank >= roleRank(RoleAdmin)
+		}
+	case "/api/v1/config/test",
+		"/api/v1/ai/config",
+		"/api/v1/ai/test",
+		"/api/v1/ai/test-embed",
+		"/api/v1/ai/test-rerank",
+		"/api/v1/ai/models",
+		"/api/v1/ai/terminal-access":
+		if r.Method != http.MethodGet {
+			return rank >= roleRank(RoleAdmin)
+		}
 	}
 	if strings.Contains(p, "/terminal") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") || p == "/api/v1/proxy-token" { // remote shell + port forwarding: operator+
 		return rank >= roleRank(RoleOperator)

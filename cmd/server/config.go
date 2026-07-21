@@ -493,9 +493,16 @@ type ServerConfig struct {
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
 	TopologyEdges    []TopologyEdge    `json:"topology_edges,omitempty"` // 轻量服务依赖边（host/cat/svc）
 	SLOs             []SLO             `json:"slos,omitempty"`
-	AI               AIConfig          `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
-	VM               VMConfig          `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
-	PostgresDSN      string            `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
+	// Enterprise ops
+	OnCallSchedules    []OnCallSchedule    `json:"oncall_schedules,omitempty"`
+	EscalationPolicies []EscalationPolicy  `json:"escalation_policies,omitempty"`
+	ChangeWindows      []ChangeWindow      `json:"change_windows,omitempty"`
+	Retention          RetentionConfig     `json:"retention,omitempty"`
+	Backup             BackupConfig        `json:"backup,omitempty"`
+	CmdPolicy          CmdPolicyConfig     `json:"cmd_policy,omitempty"`
+	AI                 AIConfig            `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
+	VM                 VMConfig            `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
+	PostgresDSN        string              `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
 	// TerminalDisabled is an inverted flag so remote terminal defaults ON for
 	// existing configs (zero value = enabled); set true to globally disable it.
 	TerminalDisabled bool `json:"terminal_disabled"`
@@ -1064,6 +1071,12 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
 	c.TopologyEdges = cs.cfg.TopologyEdges       // managed via topology endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
+	c.OnCallSchedules = cs.cfg.OnCallSchedules
+	c.EscalationPolicies = cs.cfg.EscalationPolicies
+	c.ChangeWindows = cs.cfg.ChangeWindows
+	c.Retention = cs.cfg.Retention
+	c.Backup = cs.cfg.Backup
+	c.CmdPolicy = cs.cfg.CmdPolicy
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint
 	c.VM = cs.cfg.VM                             // managed via env / storage config
 	c.PostgresDSN = cs.cfg.PostgresDSN           // managed via env / storage config

@@ -9,18 +9,28 @@ import (
 // ---- user management (admin-only; enforced by routeAllowed) ----
 
 // userView is the browser-safe projection of an account (no salt/hash/secret).
-func userView(u AccountConfig) map[string]any {
+// Non-admin callers get email/phone masked.
+func userView(u AccountConfig, maskPII bool) map[string]any {
+	email, phone := u.Email, u.Phone
+	if maskPII {
+		email = maskEmail(email)
+		phone = maskPhone(phone)
+	}
 	return map[string]any{
 		"username": u.Username, "display_name": u.DisplayName,
-		"email": u.Email, "phone": u.Phone, "role": u.Role, "mfa_enabled": u.MFAEnabled,
+		"email": email, "phone": phone, "role": u.Role, "mfa_enabled": u.MFAEnabled,
 	}
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	mask := true
+	if u, ok := s.currentUser(r); ok && s.cfg.RoleOf(u.Username) == RoleAdmin {
+		mask = false
+	}
 	users := s.cfg.UsersList()
 	out := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		out = append(out, userView(u))
+		out = append(out, userView(u, mask))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

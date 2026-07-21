@@ -375,9 +375,39 @@ func resolvePanelOverlaps(panels []DashPanel) {
 	}
 }
 
+// compactPanelGrid 消除垂直空洞（Grafana 折叠行展平后常见「断层」）：
+// 按 y,x 顺序，把每个面板在保持 x/w/h 的前提下尽量上移到不与上方水平相交面板冲突的最低 y。
+// 与 resolvePanelOverlaps 互补：后者只处理重叠下推，本函数关闭非重叠空洞。
+func compactPanelGrid(panels []DashPanel) bool {
+	if len(panels) == 0 {
+		return false
+	}
+	sortPanels(panels)
+	changed := false
+	for i := range panels {
+		g := &panels[i].Grid
+		minY := 0
+		for j := 0; j < i; j++ {
+			o := panels[j].Grid
+			// 水平方向有交集时，必须落在对方底边之下
+			if g.X < o.X+o.W && g.X+g.W > o.X {
+				if bottom := o.Y + o.H; bottom > minY {
+					minY = bottom
+				}
+			}
+		}
+		if g.Y != minY {
+			g.Y = minY
+			changed = true
+		}
+	}
+	return changed
+}
+
 var hostLegendRe = regexp.MustCompile(`\{\{\s*host\s*\}\}`)
 
-// healImportedDashboard 固化看板常见缺陷：=~ 提升、经典变量语法、去掉图例中的主机 ID、网格重叠。
+// healImportedDashboard 固化看板常见缺陷：=~ 提升、经典变量语法、去掉图例中的主机 ID、
+// 网格重叠下推、纵向空洞紧凑、unsupported 占位缩高。
 // 返回是否发生了修改（供 GET 时惰性回写）。
 func healImportedDashboard(d *Dashboard) bool {
 	if d == nil {
@@ -409,6 +439,11 @@ func healImportedDashboard(d *Dashboard) bool {
 			p.Grid.W = 24
 			changed = true
 		}
+		// 不支持的面板仍保留查询信息，但缩成矮条，避免 1860 类看板里大块「空壳」占位造成断层感。
+		if p.Type == "unsupported" && p.Grid.H > 3 {
+			p.Grid.H = 3
+			changed = true
+		}
 		for j := range p.Targets {
 			expr := p.Targets[j].Expr
 			neu := promoteTemplateVarEq(expandGrafanaClassicVars(expr), varNames)
@@ -429,6 +464,9 @@ func healImportedDashboard(d *Dashboard) bool {
 	sortPanels(d.Panels)
 	if panelsGridOverlap(d.Panels) {
 		resolvePanelOverlaps(d.Panels)
+		changed = true
+	}
+	if compactPanelGrid(d.Panels) {
 		changed = true
 	}
 	return changed

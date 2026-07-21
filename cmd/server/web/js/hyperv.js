@@ -11,7 +11,7 @@ const hvT = (k, fb) => I18N.t(k, fb);
 
 let HV_INVENTORIES = [];               // [{host_id, host_name, guest_count, guests:[...], updated_at}]
 let HV_STALE_TOTAL = 0;                // orphan host inventories (Agent reinstall twins)
-const HV_FILTER = { q: "", status: "" };
+const HV_FILTER = { q: "", status: "running" }; // 默认「运行中」，与资产管理常用视角一致
 const HV_COLLAPSED = new Set();        // host_ids collapsed in the tree (default expanded)
 let HV_SELECTED = null;                // { host, vm } currently shown in the detail panel
 
@@ -139,16 +139,19 @@ function hvFindSelected() {
   return g ? { inv, g } : null;
 }
 
-// 默认选中第一台异常 VM（否则第一台 VM），让详情不空。
+// 默认选中：当前筛选内的异常 VM → 筛选内第一台 → 任意第一台，让详情不空。
 function hvFirstSelectable() {
-  let firstAny = null;
+  let firstAny = null, firstVisible = null, firstAbnormalVisible = null;
   for (const inv of HV_INVENTORIES) {
     for (const g of (inv.guests || [])) {
-      if (!firstAny) firstAny = { host: inv.host_id, vm: hvVmKey(g) };
-      if (hvAbnormal(g)) return { host: inv.host_id, vm: hvVmKey(g) };
+      const key = { host: inv.host_id, vm: hvVmKey(g) };
+      if (!firstAny) firstAny = key;
+      if (!hvGuestVisible(g)) continue;
+      if (!firstVisible) firstVisible = key;
+      if (!firstAbnormalVisible && hvAbnormal(g)) firstAbnormalVisible = key;
     }
   }
-  return firstAny;
+  return firstAbnormalVisible || firstVisible || firstAny;
 }
 
 function hvSelect(host, vm) {
@@ -460,6 +463,196 @@ function hvOpenFleetAI() {
   });
 }
 
+/* ---------- 导出（资产管理） ---------- */
+
+function hvFilterLabel() {
+  switch (HV_FILTER.status) {
+    case "running": return hvT("hyperv.st_running", "运行中");
+    case "notrunning": return hvT("hyperv.f_notrunning", "非运行");
+    case "abnormal": return hvT("hyperv.attention", "需关注");
+    default: return hvT("hyperv.f_all", "全部状态");
+  }
+}
+
+function hvExportModel() {
+  let totalVMs = 0, totalRunning = 0, totalBad = 0;
+  const vmRows = [], diskRows = [], nicRows = [], cpRows = [], hostRows = [];
+
+  HV_INVENTORIES.forEach(inv => {
+    const hostName = inv.host_name || inv.host_id || "";
+    const guests = inv.guests || [];
+    const running = guests.filter(g => g.state === "Running").length;
+    const bad = guests.filter(hvAbnormal).length;
+    totalVMs += guests.length;
+    totalRunning += running;
+    totalBad += bad;
+
+    const tMem = +inv.host_total_mem_mb || 0, aMem = +inv.host_avail_mem_mb || 0;
+    const hostMem = tMem > 0 ? `${(aMem / 1024).toFixed(1)}/${(tMem / 1024).toFixed(1)}` : "";
+    hostRows.push([
+      hostName, inv.host_id || "", String(guests.length), String(running), String(bad),
+      hostMem, inv.updated_at || "",
+    ]);
+
+    guests.forEach(g => {
+      const runningG = g.state === "Running";
+      const memType = g.dynamic_mem_enabled
+        ? hvT("hyperv.mem_dynamic", "动态")
+        : hvT("hyperv.mem_static", "静态");
+      const memRange = g.dynamic_mem_enabled
+        ? `${Math.round(g.mem_min_mb || 0)} ~ ${Math.round(g.mem_max_mb || 0)}`
+        : "";
+      const disks = g.disks || [];
+      const nics = g.nics || [];
+      const cps = g.checkpoints || [];
+      const ips = (g.ip_addresses || []).join(", ")
+        || nics.flatMap(n => n.ip_addresses || []).filter(Boolean).join(", ");
+
+      vmRows.push([
+        hostName,
+        g.name || "",
+        hvStateText(g),
+        g.health || "OK",
+        (runningG && g.uptime_sec) ? fmtUptime(g.uptime_sec) : "",
+        g.processor_count || "",
+        runningG ? ((+g.cpu_guest_pct || +g.cpu_usage || 0).toFixed(1)) : "",
+        runningG ? ((+g.cpu_usage || 0).toFixed(1)) : "",
+        runningG && g.mem_assigned_mb ? Math.round(g.mem_assigned_mb) : "",
+        runningG && g.mem_demand_mb != null ? Math.round(g.mem_demand_mb) : "",
+        g.mem_startup_mb ? Math.round(g.mem_startup_mb) : "",
+        memType,
+        memRange,
+        g.generation ? ("Gen" + g.generation) : "",
+        g.version || "",
+        g.integration_state || "",
+        (g.repl_state && g.repl_state !== "Disabled")
+          ? `${g.repl_state}${g.repl_health ? " / " + g.repl_health : ""}` : "",
+        ips,
+        g.linked_host_name || g.linked_host_id || "",
+        disks.length || g.vhd_count || 0,
+        nics.length || ((g.ip_addresses || []).length ? 1 : 0),
+        cps.length || g.checkpoint_count || 0,
+        g.id || "",
+      ]);
+
+      disks.forEach(d => {
+        diskRows.push([
+          hostName, g.name || "",
+          d.path || "",
+          ((d.controller_type || "") + (d.controller_number != null ? ` ${d.controller_number}:${d.controller_location || 0}` : "")).trim(),
+          d.file_size_gb ? hvFmtGB(d.file_size_gb) : "",
+        ]);
+      });
+      nics.forEach(n => {
+        nicRows.push([
+          hostName, g.name || "",
+          n.name || "",
+          hvMac(n.mac),
+          n.switch || "",
+          n.status || (n.connected ? "Connected" : ""),
+          (n.ip_addresses || []).join(", "),
+        ]);
+      });
+      cps.forEach(c => {
+        cpRows.push([
+          hostName, g.name || "",
+          c.name || "",
+          (c.created || "").replace("T", " "),
+        ]);
+      });
+    });
+  });
+
+  const model = {
+    title: hvT("hyperv.export_title", "Hyper-V 虚拟机资产清单"),
+    subtitle: `${hvT("hyperv.meta_exported_at", "导出时间")}: ${new Date().toLocaleString()}`,
+    meta: [
+      [hvT("hyperv.meta_hosts", "宿主机数"), String(HV_INVENTORIES.length)],
+      [hvT("hyperv.meta_vms", "虚拟机数"), String(totalVMs)],
+      [hvT("hyperv.meta_running", "运行中"), String(totalRunning)],
+      [hvT("hyperv.meta_attention", "需关注"), String(totalBad)],
+      [hvT("hyperv.meta_filter", "当前筛选"),
+        [hvFilterLabel(), HV_FILTER.q ? (`q=${HV_FILTER.q}`) : ""].filter(Boolean).join(" · ")],
+    ],
+    sections: [],
+  };
+
+  const add = (title, columns, rows) => { if (rows.length) model.sections.push({ title, columns, rows }); };
+
+  add(hvT("hyperv.export_sec_hosts", "宿主机汇总"),
+    [hvT("hyperv.col_host", "物理机名称"), "Host ID",
+     hvT("hyperv.col_host_vm_count", "虚拟机数"), hvT("hyperv.col_host_running", "运行中"),
+     hvT("hyperv.attention", "需关注"), hvT("hyperv.col_host_mem", "宿主机可用/总内存(GB)"),
+     hvT("hyperv.col_updated", "清单更新时间")],
+    hostRows);
+
+  add(hvT("hyperv.export_sec_vms", "虚拟机清单"),
+    [hvT("hyperv.col_host", "物理机名称"), hvT("hyperv.col_vm", "虚拟机名称"),
+     hvT("hyperv.col_state", "运行状态"), hvT("hyperv.col_health", "健康"),
+     hvT("hyperv.col_uptime", "运行时长"), hvT("hyperv.col_vcpu", "vCPU"),
+     hvT("hyperv.col_cpu_guest", "客户机CPU%"), hvT("hyperv.col_cpu_host", "占宿主CPU%"),
+     hvT("hyperv.col_mem_assigned", "内存已分配(MB)"), hvT("hyperv.col_mem_demand", "内存需求(MB)"),
+     hvT("hyperv.col_mem_startup", "启动内存(MB)"), hvT("hyperv.col_mem_type", "内存类型"),
+     hvT("hyperv.col_mem_range", "动态范围(MB)"), hvT("hyperv.col_gen", "世代"),
+     hvT("hyperv.col_version", "配置版本"), hvT("hyperv.col_integration", "集成服务"),
+     hvT("hyperv.col_repl", "复制状态"), hvT("hyperv.col_ips", "IP地址"),
+     hvT("hyperv.col_linked", "关联纳管主机"), hvT("hyperv.col_disk_count", "硬盘数"),
+     hvT("hyperv.col_nic_count", "网卡数"), hvT("hyperv.col_cp_count", "检查点数"),
+     hvT("hyperv.col_vm_id", "虚拟机ID")],
+    vmRows);
+
+  add(hvT("hyperv.export_sec_disks", "虚拟硬盘明细"),
+    [hvT("hyperv.col_host", "物理机名称"), hvT("hyperv.col_vm", "虚拟机名称"),
+     hvT("hyperv.col_disk_path", "磁盘路径"), hvT("hyperv.col_disk_ctrl", "控制器"),
+     hvT("hyperv.col_disk_size", "占用空间")],
+    diskRows);
+
+  add(hvT("hyperv.export_sec_nics", "网卡明细"),
+    [hvT("hyperv.col_host", "物理机名称"), hvT("hyperv.col_vm", "虚拟机名称"),
+     hvT("hyperv.col_nic_name", "网卡名称"), hvT("hyperv.col_nic_mac", "MAC"),
+     hvT("hyperv.col_nic_switch", "虚拟交换机"), hvT("hyperv.col_nic_status", "网卡状态"),
+     hvT("hyperv.col_ips", "IP地址")],
+    nicRows);
+
+  add(hvT("hyperv.export_sec_cps", "检查点明细"),
+    [hvT("hyperv.col_host", "物理机名称"), hvT("hyperv.col_vm", "虚拟机名称"),
+     hvT("hyperv.col_cp_name", "检查点名称"), hvT("hyperv.col_cp_created", "创建时间")],
+    cpRows);
+
+  return model;
+}
+
+function hvToggleExportMenu(show) {
+  const menu = $("hvExportMenu"), btn = $("hvExportBtn");
+  if (!menu || !btn) return;
+  const open = show === undefined ? !menu.classList.contains("show") : show;
+  menu.classList.toggle("show", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function hvDoExport(fmt) {
+  hvToggleExportMenu(false);
+  if (!HV_INVENTORIES.length) {
+    toast(hvT("hyperv.export_empty", "暂无虚拟机数据可导出"), "err");
+    return;
+  }
+  try {
+    const model = hvExportModel();
+    if (!model.sections.length) {
+      toast(hvT("hyperv.export_empty", "暂无虚拟机数据可导出"), "err");
+      return;
+    }
+    const ok = exportModel(model, fmt, hvT("hyperv.export_prefix", "HyperV虚拟机资产"));
+    if (!ok) {
+      toast(hvT("hyperv.export_popup_blocked", "导出失败：请允许本站弹出窗口后重试"), "err");
+      return;
+    }
+    if (fmt !== "pdf") toast(hvT("toast.exported", "已导出"), "ok");
+  } catch (e) {
+    toast(hvT("hyperv.export_failed", "导出失败") + "：" + (e.message || e), "err");
+  }
+}
+
 /* ---------- 事件（全部委托） ---------- */
 
 safeAddEventListener("hypervPanel", "click", e => {
@@ -501,6 +694,16 @@ safeAddEventListener("hypervPanel", "input", e => {
 });
 safeAddEventListener("hypervPanel", "change", e => {
   if (e.target.id === "hvStatusFilter") { HV_FILTER.status = e.target.value; renderHyperVPanel(); }
+});
+
+safeAddEventListener("hvRefreshBtn2", "click", () => loadHyperVPanel());
+safeAddEventListener("hvExportBtn", "click", e => { e.stopPropagation(); hvToggleExportMenu(); });
+safeAddEventListener("hvExportMenu", "click", e => {
+  const o = e.target.closest("[data-hvexport]");
+  if (o) hvDoExport(o.dataset.hvexport);
+});
+document.addEventListener("click", e => {
+  if (!e.target.closest("#hvExportDD")) hvToggleExportMenu(false);
 });
 
 /* ---------- 样式（注入一次） ---------- */

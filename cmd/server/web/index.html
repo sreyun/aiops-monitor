@@ -192,7 +192,7 @@
               <span data-i18n="ui.theme_toggle">主题切换</span>
             </button>
             <div class="user-dropdown-sep"></div>
-            <button class="user-dropdown-item" id="ddSettings">
+            <button class="user-dropdown-item admin-only" id="ddSettings">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               <span data-i18n="config.title">告警设置</span>
             </button>
@@ -215,7 +215,7 @@
       <!-- 告警阈值（从「告警设置」独立出的 Tab，隶属「告警」模块；tab 由 nav.js VIEW_TAB_GROUPS 渲染） -->
       <section class="view" id="view-thresholds">
         <div class="section-title"><span data-i18n="settings.thresholds">告警阈值</span><span class="tag">基础指标（CPU / 内存 / 磁盘 / 负载 …）触发 警告 / 严重 的判定阈值 —— 保存后即时生效</span>
-          <div style="margin-left:auto"><button class="btn primary" id="saveThresholdsBtn">保存阈值</button></div>
+          <div style="margin-left:auto"><button class="btn primary admin-only" id="saveThresholdsBtn">保存阈值</button></div>
         </div>
         <div class="gov-section">
           <!-- 系统监控 -->
@@ -619,6 +619,8 @@
             <button class="chip-btn" data-sretab="topology" data-i18n="sre.tab_topology">依赖拓扑</button>
             <button class="chip-btn" data-sretab="slo" data-i18n="sre.tab_slo">SLO</button>
             <button class="chip-btn" data-sretab="tickets" data-i18n="sre.tab_tickets">工单</button>
+            <button class="chip-btn" data-sretab="oncall" data-i18n="sre.tab_oncall">On-call</button>
+            <button class="chip-btn" data-sretab="changes" data-i18n="sre.tab_changes">变更</button>
             <button class="chip-btn" data-sretab="ai" data-i18n="sre.tab_ai">AI 巡检</button>
           </div>
         </div>
@@ -672,10 +674,39 @@
           <div id="ticketList" class="sre-list"></div>
         </div>
 
+        <div class="sre-panel" id="srePanel-oncall">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.oncall_hint">排班轮值 + 升级策略：未确认超时自动通知下一层；事件确认/解决后停止升级。</span>
+            <button class="btn sm" id="ocRefreshWhoBtn">当前值班</button>
+            <button class="btn primary sm" id="newOnCallSchedBtn">+ 排班</button>
+            <button class="btn primary sm" id="newEscPolicyBtn">+ 升级策略</button>
+          </div>
+          <div class="subhead">当前值班</div>
+          <div id="oncallWhoList" class="sre-list"></div>
+          <div class="subhead">排班表</div>
+          <div id="oncallSchedList" class="fwd-list fwd-grid"></div>
+          <div class="subhead">升级策略</div>
+          <div id="oncallPolicyList" class="fwd-list fwd-grid"></div>
+          <div class="subhead">进行中的 Page</div>
+          <div id="oncallPageList" class="sre-list"></div>
+        </div>
+
+        <div class="sre-panel" id="srePanel-changes">
+          <div class="sre-toolbar">
+            <span class="hint" data-i18n="sre.changes_hint">登记变更与冻结窗：关联主机事件 RCA；冻结期内未审批自愈将被拦截或强制审批。</span>
+            <button class="btn primary sm" id="newChangeWinBtn">+ 变更窗</button>
+            <button class="btn primary sm" id="newChangeRecBtn">+ 变更记录</button>
+          </div>
+          <div class="subhead">变更窗口 / 冻结期</div>
+          <div id="changeWinList" class="fwd-list fwd-grid"></div>
+          <div class="subhead">变更记录</div>
+          <div id="changeRecList" class="sre-list"></div>
+        </div>
+
         <div class="sre-panel" id="srePanel-ai">
           <div class="sre-toolbar">
             <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
-            <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
+            <button class="btn sm admin-only" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
             <button class="btn sm" id="aiChatBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n="sre.ai_chat">🤖 AI 对话</button>
             <button type="button" class="btn sm ai-assist-btn" id="skillsBtn" title="查看 AI 从经验中自动提炼的可复用技能(SOP)"><span class="ai-assist-btn-ic">🧠</span>技能库</button>
             <button type="button" class="btn sm ai-assist-btn" id="memoryBtn" title="浏览 AI 沉淀的历史记忆（诊断/对话/经验）"><span class="ai-assist-btn-ic">📚</span>记忆库</button>
@@ -745,6 +776,13 @@
       <section class="view" id="view-hyperv">
         <div class="section-title"><span data-i18n="section.hyperv">Hyper-V 虚拟机</span><span class="tag" data-i18n="section.hyperv_desc">物理宿主机上的 Hyper-V 虚拟机状态与资源 · 异常优先 · 可关联到已纳管主机</span>
           <div style="margin-left:auto; display:flex; gap:8px; align-items:center">
+            <div class="exp-dd" id="hvExportDD">
+              <button class="btn sm" id="hvExportBtn" aria-haspopup="true" aria-expanded="false" data-i18n="hyperv.export">导出</button>
+              <div class="exp-dd-menu" id="hvExportMenu" role="menu">
+                <button class="exp-dd-opt" role="menuitem" data-hvexport="excel"><span data-i18n="hyperv.export_excel">Excel 表格</span><span class="exp-dd-ext">.xlsx</span></button>
+                <button class="exp-dd-opt" role="menuitem" data-hvexport="pdf"><span data-i18n="hyperv.export_pdf">PDF</span><span class="exp-dd-ext" data-i18n="hyperv.export_pdf_ext">打印</span></button>
+              </div>
+            </div>
             <button class="btn sm" id="hvRefreshBtn2" title="刷新" data-i18n-title="hyperv.refresh" data-i18n="hyperv.refresh">刷新</button>
           </div>
         </div>
@@ -1289,6 +1327,7 @@
         <button class="tab" role="tab" data-ptab="password" data-i18n="profile.tab_password">密码修改</button>
         <button class="tab" role="tab" data-ptab="mfa" data-i18n="profile.tab_mfa">MFA 管理</button>
         <button class="tab admin-only" role="tab" data-ptab="users" data-i18n="profile.tab_users">用户管理</button>
+        <button class="tab admin-only" role="tab" data-ptab="ops" data-i18n="profile.tab_ops">数据与备份</button>
       </div>
 
       <!-- Tab 1：个人信息 -->
@@ -1359,10 +1398,62 @@
         </div>
         <div id="usersList"></div>
       </div>
+
+      <!-- Tab 5：数据保留 / 命令策略 / PG 备份（仅管理员） -->
+      <div class="tab-panel" id="tab-profile-ops" role="tabpanel">
+        <div class="subhead subhead-first">数据保留</div>
+        <div class="hint">缩短天数后由每日任务清理旧审计 / 告警历史 / 内容审计 / NetFlow 分区。VictoriaMetrics 与录音目录需外部备份，不在本界面还原。</div>
+        <div class="grid2">
+          <div class="field"><label>审计/事件（天）</label><input type="number" id="retAuditDays" min="7" placeholder="180"></div>
+          <div class="field"><label>告警历史（天）</label><input type="number" id="retAlertDays" min="7" placeholder="90"></div>
+          <div class="field"><label>内容审计（天）</label><input type="number" id="retContentDays" min="1" placeholder="30"></div>
+          <div class="field"><label>NetFlow 分区（月）</label><input type="number" id="retNetflowMonths" min="1" placeholder="12"></div>
+        </div>
+        <div class="mfa-foot"><button class="btn primary sm" id="retSaveBtn" type="button">保存保留期</button></div>
+
+        <div class="subhead">自愈命令策略</div>
+        <div class="hint">strict：非白名单命令拒绝；advisory：危险命令仍拦截，其余仅提示。危险模式（rm -rf / mkfs / dd / shutdown 等）默认拒绝或强制审批。</div>
+        <div class="grid2">
+          <div class="field"><label>模式</label><div class="select-wrap"><select id="cmdPolMode"><option value="strict">strict</option><option value="advisory">advisory</option></select></div></div>
+          <div class="field"><label>额外允许前缀（逗号分隔）</label><input type="text" id="cmdPolAllow" placeholder="systemctl restart,docker restart"></div>
+        </div>
+        <div class="field"><label>额外拒绝正则（每行一条）</label><textarea id="cmdPolDeny" rows="2" placeholder="(?i)\bformat\b"></textarea></div>
+        <div class="mfa-foot"><button class="btn primary sm" id="cmdPolSaveBtn" type="button">保存命令策略</button></div>
+
+        <div class="subhead">PostgreSQL 自动备份</div>
+        <div class="hint">依赖主机 PATH 中的 <code>pg_dump</code> / <code>pg_restore</code>。备份目录默认 <code>./backups</code>（可用环境变量 AIOPS_BACKUP_DIR）。还原会覆盖当前库，需二次确认并建议随后重启服务。</div>
+        <div class="grid2">
+          <div class="field"><label class="switch"><input type="checkbox" id="bakEnabled"> 启用每日自动备份</label></div>
+          <div class="field"><label>每日时刻（HH:MM）</label><input type="text" id="bakDailyAt" placeholder="02:30"></div>
+          <div class="field"><label>保留份数</label><input type="number" id="bakRetain" min="1" placeholder="14"></div>
+          <div class="field"><label>目录（可选）</label><input type="text" id="bakDir" placeholder="./backups"></div>
+        </div>
+        <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap">
+          <button class="btn primary sm" id="bakCfgSaveBtn" type="button">保存备份计划</button>
+          <button class="btn sm" id="bakNowBtn" type="button">立即备份</button>
+        </div>
+        <div id="backupList" class="sre-list" style="margin-top:10px"></div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn danger" id="logoutBtn" data-i18n="profile.logout">退出登录</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== On-call / 变更 简易编辑弹窗 ===== -->
+<div class="mask" id="oncallEditMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3 id="oncallEditTitle">编辑</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body" id="oncallEditBody"></div>
+    <div class="modal-foot"><button class="btn primary" id="oncallEditSave">保存</button></div>
+  </div>
+</div>
+<div class="mask" id="changeEditMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3 id="changeEditTitle">编辑</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body" id="changeEditBody"></div>
+    <div class="modal-foot"><button class="btn primary" id="changeEditSave">保存</button></div>
   </div>
 </div>
 
@@ -2173,16 +2264,17 @@
       <button id="aiChatScrollBtn" class="ai-scroll-btn" type="button" title="回到底部" style="display:none">↓</button>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
       <div class="ai-chat-input">
-        <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档（含 Word / Excel / PDF），辅助 AI 深入排查">📎</button>
-        <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页 URL，提取正文注入对话">🔗</button>
-        <button class="ai-attach-btn" id="aiChatMicBtn" type="button" title="语音输入（浏览器 SpeechRecognition）">🎤</button>
-        <button class="ai-attach-btn" id="aiChatSpeakBtn" type="button" title="朗读最近一条 AI 回复">🔊</button>
+        <div class="ai-composer-tools">
+          <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档" aria-label="上传附件">📎</button>
+          <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页" aria-label="抓取网页">🔗</button>
+          <button class="ai-attach-btn" id="aiChatMicBtn" type="button" title="语音输入" aria-label="语音输入">🎤</button>
+        </div>
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
-        <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行 · 可语音"></textarea>
-        <button class="btn primary ai-send-btn" id="aiChatSendBtn" title="发送 (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
-        <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹</button>
+        <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行"></textarea>
+        <button class="btn primary ai-send-btn" id="aiChatSendBtn" title="发送 (Enter)" aria-label="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="停止生成" aria-label="停止">⏹</button>
       </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action · 支持语音输入/朗读</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action</div>
     </div>
   </div>
 </div>

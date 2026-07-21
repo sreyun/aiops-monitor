@@ -46,6 +46,10 @@ func (s *Server) wireSRE() {
 			go s.correlateIncident(inc)
 			// 轻量拓扑 RCA：依赖边扩散 + 关联未决事件 + 近期资产变更
 			go s.appendTopologyRCAToIncident(inc)
+			// On-call：自动指派值班人并启动升级计时
+			go s.startOnCallForIncident(inc)
+			// 变更关联：写入时间线
+			go s.appendChangeCorrelation(inc)
 			// 新事件存入 AI 记忆库，供跨会话 RAG 检索复用
 			go s.rememberAI("alert", fmt.Sprintf("incident:%d", inc.ID),
 				fmt.Sprintf("【新告警事件】%s\n严重程度：%s | 类型：%s | 主机：%s | 来源：%s",
@@ -63,6 +67,8 @@ func (s *Server) wireSRE() {
 		}
 		s.messages.push("remediation", level, title, body, "sre", ref)
 	}
+	s.startOnCallEscalationLoop()
+
 	// AI inspection: only surface a message when the round actually found risks,
 	// so the scheduled healthy inspections don't spam the inbox.
 	s.ai.onReport = func(rep InspectionReport) {
@@ -429,6 +435,7 @@ func (s *Server) handleAckIncident(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
+	s.oncall.AckByIncident(id, s.actorName(r))
 	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, inc)
 }
@@ -449,6 +456,7 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
+	s.oncall.CancelByIncident(id)
 	s.store.MarkDirty()
 	// 学习闭环 C：事件解决 → 沉淀「解决经验」记忆 + 强化促成解决的诊断记忆。异步、尽力而为。
 	go s.learnFromResolution(inc, strings.TrimSpace(body.Note))

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -207,6 +208,12 @@ const (
 // (bounded by playbookMaxParallel). Each host gets a one-shot terminal session
 // per step; infrastructure-class failures are retried automatically.
 func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, hosts []*Host) {
+	// Defense in depth: re-check command policy at execution time (Upsert already validates).
+	if err := validatePlaybookCommands(pb.Steps, s.cfg.CmdPolicy()); err != nil {
+		s.playbooks.FinishExecution(exec.ID, "failed")
+		slog.Warn("playbook blocked by cmd policy", "exec", exec.ID, "err", err)
+		return
+	}
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, playbookMaxParallel) // bound concurrent hosts (anti thundering-herd)
 	for _, h := range hosts {

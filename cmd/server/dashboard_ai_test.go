@@ -56,15 +56,21 @@ func TestSanitizeAIDash(t *testing.T) {
 	if by["D"].Type != "text" {
 		t.Fatalf("text 面板应保留，实为 %q", by["D"].Type)
 	}
-	// 布局：A(0,0) B(12,0) 同行；D 超宽换到 y=8；E 再换行
+	// 分区布局：timeseries (A/B/E) 在前，text (D) 在后；A/B 同行 y=0，E 换行，D 更后。
 	if by["A"].Grid.X != 0 || by["A"].Grid.Y != 0 {
 		t.Fatalf("A 应在 (0,0)，实为 (%d,%d)", by["A"].Grid.X, by["A"].Grid.Y)
 	}
 	if by["B"].Grid.X != 12 || by["B"].Grid.Y != 0 {
 		t.Fatalf("B 应在 (12,0)，实为 (%d,%d)", by["B"].Grid.X, by["B"].Grid.Y)
 	}
-	if by["D"].Grid.Y != 8 {
-		t.Fatalf("D 应换行到 y=8，实为 y=%d", by["D"].Grid.Y)
+	if by["E"].Grid.Y != by["A"].Grid.H {
+		t.Fatalf("E 应在 timeseries 首行下方 y=%d，实为 y=%d", by["A"].Grid.H, by["E"].Grid.Y)
+	}
+	if by["D"].Grid.Y < by["E"].Grid.Y {
+		t.Fatalf("text 面板 D 应排在趋势区之后，D.y=%d E.y=%d", by["D"].Grid.Y, by["E"].Grid.Y)
+	}
+	if panelsGridOverlap(d.Panels) {
+		t.Fatal("sanitize 布局不应重叠")
 	}
 }
 
@@ -95,7 +101,11 @@ func TestDecodeAIDashSpecGrafanaAliases(t *testing.T) {
 	if len(d.Panels) != 2 {
 		t.Fatalf("应解析出 2 个面板（不再为空），实为 %d", len(d.Panels))
 	}
-	cpu := d.Panels[0]
+	by := map[string]DashPanel{}
+	for _, p := range d.Panels {
+		by[p.Title] = p
+	}
+	cpu := by["CPU"]
 	if len(cpu.Targets) != 1 || cpu.Targets[0].Expr != "rate(cpu[5m])" {
 		t.Fatalf("query 别名应映射为 expr，实为 %+v", cpu.Targets)
 	}
@@ -104,6 +114,9 @@ func TestDecodeAIDashSpecGrafanaAliases(t *testing.T) {
 	}
 	if cpu.Grid.W != 12 {
 		t.Fatalf("gridPos.w 应映射为宽度 12，实为 %d", cpu.Grid.W)
+	}
+	if by["Mem"].Type != "stat" {
+		t.Fatalf("Mem 应为 stat，实为 %q", by["Mem"].Type)
 	}
 }
 

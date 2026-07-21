@@ -381,7 +381,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
     let chartH = panelBodyH(body);
     if (chartH < 120) chartH = dashRowHeight(p.grid.h || 8);
     chartH = Math.max(90, chartH);
-    const args = [cid, samples, defs, null, null, { cssH: chartH }];
+    const args = [cid, samples, defs, null, null, { cssH: chartH, legendMode: "dash" }];
     DASH_CHART_ARGS[p.id] = args;
     createChart.apply(null, args);
   };

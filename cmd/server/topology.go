@@ -299,6 +299,24 @@ func (s *Server) computeTopologyRCA(hostID string, lookbackDays int) TopologyRCA
 		}
 	}
 
+	// Merge ops change records for related hosts.
+	if s.changes != nil {
+		hostIDs := []string{hostID}
+		for _, h := range out.RelatedHosts {
+			hostIDs = append(hostIDs, h.HostID)
+		}
+		for _, c := range s.changes.RelatedToHosts(hostIDs, cutoff) {
+			out.RecentChanges = append(out.RecentChanges, TopologyChangeHit{
+				HostID: strings.Join(c.HostIDs, ","), Hostname: "", Kind: "change:" + c.Kind,
+				Component: c.Title, Action: c.Status, Detail: trimLine(c.Summary, 120), At: c.StartedAt,
+			})
+		}
+		sort.Slice(out.RecentChanges, func(i, j int) bool { return out.RecentChanges[i].At > out.RecentChanges[j].At })
+		if len(out.RecentChanges) > 20 {
+			out.RecentChanges = out.RecentChanges[:20]
+		}
+	}
+
 	out.Summary = formatTopologyRCASummary(out)
 	if len(edges) == 0 {
 		out.Hints = append(out.Hints, "尚未配置服务依赖边：可在 SRE「依赖拓扑」页添加 host/cat/svc 边，以增强 RCA。")

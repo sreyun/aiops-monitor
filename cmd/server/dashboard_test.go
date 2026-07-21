@@ -109,6 +109,87 @@ func TestHealImportedDashboardOverlap(t *testing.T) {
 	}
 }
 
+func TestCompactPanelGridRemovesGaps(t *testing.T) {
+	// 模拟 Grafana 折叠行：顶部面板 y=0，折叠区内嵌面板仍保留绝对 y=80 → 大片断层
+	panels := []DashPanel{
+		{ID: 1, Title: "top-a", Grid: DashGrid{X: 0, Y: 0, W: 12, H: 8}},
+		{ID: 2, Title: "top-b", Grid: DashGrid{X: 12, Y: 0, W: 12, H: 8}},
+		{ID: 3, Title: "nested", Grid: DashGrid{X: 0, Y: 80, W: 24, H: 8}},
+		{ID: 4, Title: "far", Grid: DashGrid{X: 0, Y: 200, W: 12, H: 6}},
+		{ID: 5, Title: "far-b", Grid: DashGrid{X: 12, Y: 200, W: 12, H: 6}},
+	}
+	if !compactPanelGrid(panels) {
+		t.Fatal("应消除垂直空洞")
+	}
+	byID := map[int]DashPanel{}
+	for _, p := range panels {
+		byID[p.ID] = p
+	}
+	if byID[1].Grid.Y != 0 || byID[2].Grid.Y != 0 {
+		t.Fatalf("顶部行应留在 y=0: %+v %+v", byID[1].Grid, byID[2].Grid)
+	}
+	if byID[3].Grid.Y != 8 {
+		t.Fatalf("嵌套面板应上移到 y=8，实为 %d", byID[3].Grid.Y)
+	}
+	if byID[4].Grid.Y != 16 || byID[5].Grid.Y != 16 {
+		t.Fatalf("远端行应紧贴上一行: %+v %+v", byID[4].Grid, byID[5].Grid)
+	}
+	if panelsGridOverlap(panels) {
+		t.Fatal("紧凑后不应重叠")
+	}
+}
+
+func TestHealImportedDashboardShrinksUnsupported(t *testing.T) {
+	d := Dashboard{
+		Panels: []DashPanel{
+			{ID: 1, Type: "timeseries", Grid: DashGrid{X: 0, Y: 0, W: 12, H: 8}},
+			{ID: 2, Type: "unsupported", RawType: "nodeGraph", Grid: DashGrid{X: 0, Y: 40, W: 12, H: 10}},
+		},
+	}
+	if !healImportedDashboard(&d) {
+		t.Fatal("应标记 changed（缩高 + 紧凑）")
+	}
+	var u DashPanel
+	for _, p := range d.Panels {
+		if p.ID == 2 {
+			u = p
+		}
+	}
+	if u.Grid.H != 3 {
+		t.Fatalf("unsupported 高度应缩为 3，实为 %d", u.Grid.H)
+	}
+	if u.Grid.Y != 8 {
+		t.Fatalf("紧凑后 unsupported 应在 timeseries 下方 y=8，实为 %d", u.Grid.Y)
+	}
+}
+
+func TestLayoutAIDashPanelsSections(t *testing.T) {
+	panels := []DashPanel{
+		{ID: 1, Type: "timeseries", Title: "cpu", Grid: DashGrid{W: 12, H: 7}},
+		{ID: 2, Type: "stat", Title: "up", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 3, Type: "stat", Title: "procs", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 4, Type: "gauge", Title: "mem", Grid: DashGrid{W: 8, H: 6}},
+		{ID: 5, Type: "table", Title: "disk", Grid: DashGrid{W: 12, H: 7}},
+	}
+	layoutAIDashPanels(panels)
+	if panels[0].Type != "stat" || panels[1].Type != "stat" {
+		t.Fatalf("stat 应排在最前: %s %s", panels[0].Type, panels[1].Type)
+	}
+	if panels[0].Grid.Y != 0 || panels[1].Grid.Y != 0 {
+		t.Fatalf("两个 stat 应同行: %+v %+v", panels[0].Grid, panels[1].Grid)
+	}
+	if panels[0].Grid.W+panels[1].Grid.W != 24 {
+		t.Fatalf("stat 行应铺满 24，实为 %d+%d", panels[0].Grid.W, panels[1].Grid.W)
+	}
+	// gauge 在第二行
+	if panels[2].Type != "gauge" || panels[2].Grid.Y != panels[0].Grid.H {
+		t.Fatalf("gauge 应在 stat 行下方: %+v", panels[2].Grid)
+	}
+	if panelsGridOverlap(panels) {
+		t.Fatal("AI 布局不应重叠")
+	}
+}
+
 func TestPromoteTemplateVarEq(t *testing.T) {
 	got := promoteTemplateVarEq(`up{job="$job",instance="${instance}"}`, []string{"job", "instance"})
 	want := `up{job=~"$job",instance=~"${instance}"}`

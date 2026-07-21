@@ -211,22 +211,14 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled{
   opacity:.45; cursor:not-allowed; filter:none;
 }
 
-/* ===== 全局 select 下拉选择框（v5.3.1 可见性修复）===== */
-/* 下拉选项：确保深/浅主题下选项文字/背景对比度充足 */
-select option{
-  background:var(--panel); color:var(--txt);
-  padding:6px 10px;
-}
+/* ===== 全局 select 下拉选择框 =====
+ * 关闭态由下方 .select-wrap / select 规则美化；打开态走操作系统原生弹出层。
+ * 切勿给 option/optgroup 设置 background/color（尤其是 CSS 变量）——
+ * Windows Chromium 下会导致弹出层 1–2 秒空白灰底（添加面板「单位」、数据源「类型」等均会触发）。
+ * 主题色由 :root / [data-theme] 的 color-scheme 交给 OS 处理。 */
+select option,
 select optgroup{
-  background:var(--panel2); color:var(--muted);
-  font-weight:600; font-style:normal;
-}
-/* 浅色主题下 select 选项 highlight 覆盖 */
-[data-theme="light"] select option:checked{
-  background:var(--accent); color:#fff;
-}
-[data-theme="dark"] select option:checked{
-  background:var(--accent); color:#fff;
+  /* intentionally unstyled — native OS popup */
 }
 html,body{margin:0;padding:0}
 body{
@@ -598,8 +590,8 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 
 /* ---------- 弹窗 ---------- */
 .mask{
-  position:fixed; inset:0; background:rgba(4,6,10,.62);
-  backdrop-filter:var(--blur-sm);
+  position:fixed; inset:0; background:rgba(4,6,10,.72);
+  /* 不用 backdrop-filter：与原生 <select> 弹出层叠加时，Windows 上会出现空白灰底闪烁 */
   display:none; align-items:flex-start; justify-content:center;
   z-index:400; padding:44px 16px; overflow:auto; animation:fadeIn .16s ease;
 }
@@ -1599,8 +1591,9 @@ svg.sparkline{width:100%; height:46px; display:block}
   /* 触摸设备上移除 hover-only 的过渡，避免"粘性悬停" */
   .host:hover, .card:hover, .row-item:hover, .check-card:hover, .nav-item:hover{background:var(--panel); border-color:var(--line)}
 }
-/* 性能优化：动画元素启用 GPU 加速 */
-.modal, .toast, .pulse, .mfa-thumb, .fill, .term-cursor{will-change:transform, opacity}
+/* 性能优化：动画元素启用 GPU 加速。
+ * 不给 .modal 常驻 will-change——会把弹窗提升为独立合成层，加重 Windows 原生 select 弹出层灰闪。 */
+.toast, .pulse, .mfa-thumb, .fill, .term-cursor{will-change:transform, opacity}
 .chart-wrap canvas{will-change:transform}
 /* 全局 focus-visible 可达性（排除表单元素，它们使用项目自定义样式） */
 :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
@@ -1755,8 +1748,10 @@ select:focus-visible, input:focus-visible{outline:none !important}
 .btn.ghost.sm{padding:3px 10px; font-size:12px}
 
 /* ===== 多用户 / RBAC ===== */
-.admin-only{display:none}
-body[data-role="admin"] .admin-only{display:inline-flex}
+.admin-only{display:none !important}
+body[data-role="admin"] .admin-only{display:inline-flex !important}
+body[data-role="admin"] .user-dropdown-item.admin-only{display:flex !important}
+body[data-role="admin"] .tab.admin-only{display:inline-flex !important}
 /* 只读角色：隐藏最明显的写操作入口（后端 routeAllowed 才是真正的安全边界）*/
 body[data-role="viewer"] .x-btn,
 body[data-role="viewer"] .term-btn,
@@ -2184,10 +2179,11 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .skill-steps{font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--txt);background:var(--panel);border:1px solid var(--line2);border-radius:6px;padding:7px 9px;margin:0;max-height:200px;overflow:auto}
 .skill-tags{font-size:11.5px;color:var(--muted);margin-top:5px}
 /* 每条 AI 回复的操作栏（复制），hover 显示 */
-.ai-msg-tools{display:none; justify-content:flex-end; gap:6px; margin-top:6px}
-.ai-chat-msg.ai:hover .ai-msg-tools{display:flex}
-.ai-msg-tools button{background:var(--panel); border:1px solid var(--line2); border-radius:5px; color:var(--muted); cursor:pointer; font-size:11px; padding:1px 8px; font-family:inherit}
+.ai-msg-tools{display:none; justify-content:flex-start; gap:6px; margin-top:8px; flex-wrap:wrap}
+.ai-chat-msg.ai:hover .ai-msg-tools,.ai-chat-modal .ai-msg-tools{display:flex}
+.ai-msg-tools button{background:var(--panel); border:1px solid var(--line2); border-radius:5px; color:var(--muted); cursor:pointer; font-size:11px; padding:2px 8px; font-family:inherit}
 .ai-msg-tools button:hover{color:var(--txt); background:var(--panel3)}
+.ai-msg-tools button.ai-speak-btn.speaking{color:var(--accent); border-color:var(--accent); background:var(--accent-soft)}
 /* 终止按钮 + 排队提示 */
 .ai-stop-btn{flex:none; align-self:flex-end; height:40px; padding:0 14px; background:rgba(242,84,91,.14); color:var(--danger-txt,#f2545b); border:1px solid var(--danger-txt,#f2545b); border-radius:var(--r-sm); cursor:pointer; font-size:13px; font-family:inherit}
 .ai-stop-btn:hover{background:var(--danger-txt,#f2545b); color:#fff}
@@ -2865,24 +2861,39 @@ select:focus {
 
 /* 组合输入区：统一圆角容器 + focus 光晕，内部控件无边框（Claude composer 观感） */
 .ai-chat-modal .ai-chat-input {
-  align-items: flex-end; gap: 4px; background: var(--bg2); border: 1px solid var(--line2);
-  border-radius: 14px; padding: 5px 6px;
+  align-items: flex-end; gap: 6px; background: var(--bg2); border: 1px solid var(--line2);
+  border-radius: 14px; padding: 6px 8px;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 .ai-chat-modal .ai-chat-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ai-chat-modal .ai-composer-tools { display: inline-flex; align-items: center; gap: 1px; flex: none; align-self: flex-end; }
 .ai-chat-modal .ai-chat-input textarea {
   border: none !important; background: transparent !important; box-shadow: none !important;
-  min-height: 30px; max-height: 168px; padding: 7px 6px; resize: none; line-height: 1.6;
+  min-height: 30px; max-height: 168px; padding: 6px 4px; resize: none; line-height: 1.55;
 }
 .ai-chat-modal .ai-attach-btn {
-  width: 34px; height: 34px; border: none; background: transparent; border-radius: 9px;
-  color: var(--muted); align-self: flex-end;
+  width: 28px; height: 28px; border: none; background: transparent; border-radius: 8px;
+  color: var(--muted); align-self: center; font-size: 14px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .ai-chat-modal .ai-attach-btn:hover { background: var(--panel3); color: var(--accent); }
-/* 圆形发送箭头 + 圆形终止（Claude/ChatGPT composer 观感） */
-.ai-chat-modal #aiChatSendBtn { width: 36px; height: 36px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; align-self: flex-end; }
-.ai-chat-modal #aiChatSendBtn svg { width: 18px; height: 18px; }
-.ai-chat-modal .ai-stop-btn { width: 36px; height: 36px; padding: 0; border-radius: 50%; align-self: flex-end; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+.ai-chat-modal .ai-attach-btn.active { background: var(--crit-soft); color: var(--crit-txt); }
+/* 发送 / 停止：小一号圆形，避免喧宾夺主 */
+.ai-chat-modal #aiChatSendBtn {
+  width: 28px; height: 28px; min-width: 28px; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; align-self: flex-end;
+  box-shadow: none;
+}
+.ai-chat-modal #aiChatSendBtn:hover:not(:disabled) { transform: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.ai-chat-modal #aiChatSendBtn svg { width: 14px; height: 14px; }
+.ai-chat-modal .ai-stop-btn {
+  width: 28px; height: 28px; min-width: 28px; padding: 0; border-radius: 50%;
+  align-self: flex-end; display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
+}
+.ai-chat-modal .ai-msg-tools { display: flex; justify-content: flex-start; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+.ai-chat-modal .ai-chat-msg.ai .ai-msg-tools { opacity: .72; }
+.ai-chat-modal .ai-chat-msg.ai:hover .ai-msg-tools { opacity: 1; }
+.ai-chat-modal .ai-msg-tools button.ai-speak-btn.speaking { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 /* 流式打字光标：生成中在最后一条助手消息末尾闪烁 */
 .ai-chat-modal .ai-chat-log.ai-streaming .ai-chat-msg.ai:last-child::after { content: "▋"; color: var(--accent); margin-left: 1px; animation: aiTypeBlink 1s steps(2, start) infinite; }
 @keyframes aiTypeBlink { 50% { opacity: 0; } }
@@ -3276,22 +3287,24 @@ select:focus {
 .dash-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 22px 8px; }
 .dash-empty-hint { margin-top: 6px; font-size: 11px; line-height: 1.45; opacity: .85; max-width: 28em; margin-left: auto; margin-right: auto; }
 
-/* Stat（大数值 + 阈值配色 + 迷你趋势） */
-.dp-stat .dash-panel-body { display: flex; align-items: center; }
-.dash-stat2 { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; position: relative; }
-.dash-stat-num { font-size: clamp(24px, 6vw, 40px); font-weight: 750; letter-spacing: -.5px; font-variant-numeric: tabular-nums; line-height: 1.05; }
-.dash-stat-cap { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.dash-stat-spark { width: 100%; height: 30px; margin-top: 4px; }
-.dash-stat-spark .spark-svg { width: 100%; height: 100%; display: block; }
-
 /* Gauge（圆环径向仪表，多序列自适应铺满） */
-.dp-gauge .dash-panel-body { display: flex; align-items: center; }
-.dash-gauges { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 18px; width: 100%; height: 100%; }
-.dash-gauge-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 96px; flex: 1 1 auto; max-height: 100%; }
-/* 单个仪表时可放大到 180px 充满面板；多个时自适应换行 */
+.dp-gauge .dash-panel-body { display: flex; align-items: center; justify-content: center; padding: 4px 8px; }
+.dash-gauges { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 14px; width: 100%; height: 100%; }
+.dash-gauge-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; flex: 1 1 40%; max-width: 100%; max-height: 100%; }
+/* 单个仪表尽量占满面板高度；多个时按可用空间等比缩小 */
+.dp-gauge .gauge-svg { width: min(100%, 220px); max-width: 100%; height: auto; max-height: calc(100% - 18px); aspect-ratio: 1 / 1; }
 .gauge-svg { width: 100%; max-width: 180px; height: auto; max-height: 100%; aspect-ratio: 1 / 1; }
-.gauge-txt { font-size: 15px; font-weight: 650; font-family: ui-monospace, monospace; }
-.dash-gauge-lbl { font-size: 11px; color: var(--muted); text-align: center; max-width: 118px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dp-gauge .dash-gauges:has(.dash-gauge-item:only-child) .gauge-svg { width: min(100%, 260px); max-height: calc(100% - 14px); }
+.gauge-txt { font-size: clamp(13px, 2.2vw, 18px); font-weight: 650; font-family: ui-monospace, monospace; }
+.dash-gauge-lbl { font-size: 11px; color: var(--muted); text-align: center; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Stat（大数值 + 阈值配色 + 迷你趋势） */
+.dp-stat .dash-panel-body { display: flex; align-items: center; justify-content: center; }
+.dash-stat2 { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 100%; position: relative; }
+.dash-stat-num { font-size: clamp(26px, 5.5vw, 42px); font-weight: 750; letter-spacing: -.5px; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.dash-stat-cap { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.dash-stat-spark { width: 100%; height: 28px; margin-top: 2px; }
+.dash-stat-spark .spark-svg { width: 100%; height: 100%; display: block; }
 
 /* BarGauge（横向条） */
 .dash-bars-h { display: flex; flex-direction: column; justify-content: center; gap: 8px; width: 100%; height: 100%; }

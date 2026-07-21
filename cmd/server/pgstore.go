@@ -444,7 +444,10 @@ func (p *pgStore) migrate() error {
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_truncated BOOLEAN;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS sensitive TEXT;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return p.runVersionedMigrations()
 }
 
 // migrateFlowRecordsToPartitioned converts a pre-existing non-partitioned
@@ -1835,6 +1838,12 @@ func (s *Server) bindPG(ps *pgStore) {
 	if tks, err := ps.loadTickets(); err == nil && len(tks) > 0 {
 		s.tickets.Import(tks)
 	}
+	if pages, err := ps.loadOnCallPages(); err == nil && len(pages) > 0 {
+		s.oncall.Import(pages)
+	}
+	if chgs, err := ps.loadChangeRecords(); err == nil && len(chgs) > 0 {
+		s.changes.Import(chgs)
+	}
 	// Login sessions survive restart (no forced re-login in dual-DB mode).
 	if raw, _ := ps.loadKV("sessions"); raw != nil {
 		var sess map[string]dbSession
@@ -1904,6 +1913,12 @@ func (s *Server) pgFlush(ps *pgStore, withLogs bool) {
 	}
 	if err := ps.saveTickets(s.tickets.Export()); err != nil {
 		slog.Warn("PG 同步工单失败", "err", err)
+	}
+	if err := ps.saveOnCallPages(s.oncall.Export()); err != nil {
+		slog.Warn("PG 同步 On-call pages 失败", "err", err)
+	}
+	if err := ps.saveChangeRecords(s.changes.Export()); err != nil {
+		slog.Warn("PG 同步变更记录失败", "err", err)
 	}
 	if err := ps.saveHosts(s.store.exportHosts()); err != nil {
 		slog.Warn("PG 同步主机失败", "err", err)
@@ -2977,13 +2992,150 @@ func (p *pgStore) getContentAuditHosts() ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
-// cleanupContentAudit 按保留天数清理内容审计（默认 30 天）。审计数据高敏感，不宜永久留存。
+// cleanupContentAudit deletes content_audit rows older than retainDays.
 func (p *pgStore) cleanupContentAudit(retainDays int) {
 	if retainDays <= 0 {
 		retainDays = 30
 	}
-	// 参数化天数（make_interval），杜绝任何字符串拼接进 SQL —— 即便 retainDays 未来来源变化也安全。
-	_, _ = p.db.Exec("DELETE FROM content_audit WHERE created_at < NOW() - make_interval(days => $1)", retainDays)
+	cut := time.Now().AddDate(0, 0, -retainDays)
+	_, _ = p.db.Exec(`DELETE FROM content_audit WHERE created_at < $1`, cut)
+}
+
+// cleanupAuditAndEvents deletes old audit_log / events rows by unix ts.
+func (p *pgStore) cleanupAuditAndEvents(retainDays int) {
+	if retainDays <= 0 {
+		retainDays = 180
+	}
+	cut := time.Now().AddDate(0, 0, -retainDays).Unix()
+	_, _ = p.db.Exec(`DELETE FROM audit_log WHERE ts > 0 AND ts < $1`, cut)
+	_, _ = p.db.Exec(`DELETE FROM events WHERE ts > 0 AND ts < $1`, cut)
+}
+
+// cleanupAlertHistory removes old alert_history rows when the table uses ts column.
+func (p *pgStore) cleanupAlertHistory(retainDays int) {
+	if retainDays <= 0 {
+		retainDays = 90
+	}
+	cut := time.Now().AddDate(0, 0, -retainDays).Unix()
+	// alert_history schema varies; try common shapes
+	_, _ = p.db.Exec(`DELETE FROM alert_history WHERE ts > 0 AND ts < $1`, cut)
+	_, _ = p.db.Exec(`DELETE FROM alert_history WHERE created_at < to_timestamp($1)`, cut)
+}
+
+// cleanupOldFlowPartitions drops monthly partitions older than retainMonths.
+func (p *pgStore) cleanupOldFlowPartitions(retainMonths int) {
+	if retainMonths <= 0 {
+		retainMonths = 12
+	}
+	p.ensureFlowPartitions()
+	cut := time.Now().AddDate(0, -retainMonths, 0)
+	rows, err := p.db.Query(`
+SELECT c.relname FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'flow_records' AND c.relkind = 'r'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		// expect flow_records_YYYY_MM
+		var y, m int
+		if _, err := fmt.Sscanf(name, "flow_records_%d_%d", &y, &m); err != nil {
+			continue
+		}
+		partStart := time.Date(y, time.Month(m), 1, 0, 0, 0, 0, time.UTC)
+		if partStart.Before(cut) {
+			_, _ = p.db.Exec(`DROP TABLE IF EXISTS ` + quoteIdent(name))
+			slog.Info("dropped old flow partition", "table", name)
+		}
+	}
+}
+
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func (p *pgStore) loadOnCallPages() ([]OnCallPage, error) {
+	rows, err := p.db.Query(`SELECT data FROM oncall_pages ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OnCallPage
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return out, err
+		}
+		var page OnCallPage
+		if json.Unmarshal(raw, &page) == nil {
+			out = append(out, page)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) saveOnCallPages(list []OnCallPage) error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM oncall_pages`); err != nil {
+		return err
+	}
+	for _, page := range list {
+		b, _ := json.Marshal(page)
+		if _, err := tx.Exec(`INSERT INTO oncall_pages(id, incident_id, status, created_at, data) VALUES($1,$2,$3,$4,$5)`,
+			page.ID, page.IncidentID, page.Status, page.CreatedAt, b); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (p *pgStore) loadChangeRecords() ([]ChangeRecord, error) {
+	rows, err := p.db.Query(`SELECT data FROM change_records ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChangeRecord
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return out, err
+		}
+		var rec ChangeRecord
+		if json.Unmarshal(raw, &rec) == nil {
+			out = append(out, rec)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) saveChangeRecords(list []ChangeRecord) error {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM change_records`); err != nil {
+		return err
+	}
+	for _, rec := range list {
+		b, _ := json.Marshal(rec)
+		if _, err := tx.Exec(`INSERT INTO change_records(id, status, started_at, data) VALUES($1,$2,$3,$4)`,
+			rec.ID, rec.Status, rec.StartedAt, b); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // cleanupFlowRecords deletes flow records older than 7 days (called periodically).
