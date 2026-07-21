@@ -2271,21 +2271,21 @@ async function loadAIStats(){
     const users=(byUser.users||[]).map(u=>
       `<tr><td>${esc(u.actor||"")}</td><td>${u.calls||0}</td><td>${u.tokens||0}</td><td>${(u.cost||0).toFixed(4)} ${esc(cur)}</td></tr>`
     ).join("");
-    el.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
-      <div><div class="hint">调用次数</div><b>${total}</b></div>
-      <div><div class="hint">失败率</div><b>${rate}%</b> <span class="hint">(${fail})</span></div>
-      <div><div class="hint">平均延迟</div><b>${avg} ms</b></div>
-      <div><div class="hint">Token 累计</div><b>${tok}</b></div>
-      <div><div class="hint">估算费用</div><b>${cost.toFixed(4)} ${esc(cur)}</b></div>
-      <div><div class="hint">存储</div><b>${persisted?"PostgreSQL 永久":"进程内（无 PG）"}</b></div>
+    el.innerHTML=`<div class="ai-metric-grid">
+      <div class="ai-metric"><div class="hint">调用次数</div><b>${total}</b></div>
+      <div class="ai-metric"><div class="hint">失败率</div><b>${rate}%</b></div>
+      <div class="ai-metric"><div class="hint">平均延迟</div><b>${avg}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ms</span></b></div>
+      <div class="ai-metric"><div class="hint">Token</div><b>${tok}</b></div>
+      <div class="ai-metric"><div class="hint">估算费用</div><b>${cost.toFixed(4)}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ${esc(cur)}</span></b></div>
+      <div class="ai-metric"><div class="hint">存储</div><b style="font-size:13px">${persisted?"PostgreSQL":"进程内"}</b></div>
     </div>
-    <div class="chart-container" style="margin:8px 0">
-      <div class="hint" style="margin-bottom:4px">历史组合曲线 · 调用 / Token / 费用</div>
+    <div class="chart-container" style="margin:4px 0 12px">
+      <div class="hint" style="margin-bottom:6px">历史组合曲线 · 调用 / Token / 费用</div>
       <canvas id="aiUsageComboChart" height="210"></canvas>
     </div>
-    ${users?`<div class="hint">用户成本排行</div><table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>用户</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${users}</tbody></table>`:""}
+    ${users?`<div class="hint">用户成本排行</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>用户</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${users}</tbody></table>`:""}
     ${taskRows?`<table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>次数</th><th>失败</th><th>均延迟</th></tr></thead><tbody>${taskRows}</tbody></table>`:`<div class="hint">尚无按任务统计（完成若干 AI 调用后出现）</div>`}
-    ${recent?`<div class="hint" style="margin-top:6px">最近调用</div>${recent}`:""}`;
+    ${recent?`<div class="hint" style="margin-top:8px">最近调用</div>${recent}`:""}`;
     // 组合曲线：把多指标归一到同一时间轴（calls / tokens / cost）
     const pts=hist.points||[];
     const samples=pts.map(p=>({
@@ -2336,19 +2336,25 @@ async function openAIConfig(){
     if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
-    // 更新向量化 / 重排模型卡片摘要
     updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary();
+    // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
+    ["embedCardBody","rerankCardBody","mcpCardBody"].forEach(id=>{ const el=$(id); if(el) el.style.display=""; });
+    switchAISettingsTab("provider");
     loadAIStats();
-    // 向量化、重排模型默认折叠
-    const body=$("embedCardBody"), arrow=$("embedCardArrow");
-    if(body){ body.style.display="none"; }
-    if(arrow){ arrow.classList.remove("open"); }
-    const rbody=$("rerankCardBody"), rarrow=$("rerankCardArrow");
-    if(rbody){ rbody.style.display="none"; }
-    if(rarrow){ rarrow.classList.remove("open"); }
   } catch(e){}
   loadAIModels();
   $("aiConfigMask").classList.add("show");
+}
+
+function switchAISettingsTab(tab){
+  const name=tab||"provider";
+  document.querySelectorAll(".ai-nav-item").forEach(b=>{
+    b.classList.toggle("active", b.getAttribute("data-ai-tab")===name);
+  });
+  document.querySelectorAll(".ai-panel").forEach(p=>{
+    p.classList.toggle("active", p.getAttribute("data-ai-panel")===name);
+  });
+  if(name==="observe") loadAIStats();
 }
 // ===== AI 终端只读巡检权限：独立开关，开启需终端连接密码 =====
 let AI_TERM_ENABLED=false;
@@ -2516,13 +2522,16 @@ async function testAIEmbedConfig(){
   finally{ _aiEmbedTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
-// 折叠/展开向量化模型卡片
-function toggleEmbedCard(){
-  const body=$("embedCardBody"), arrow=$("embedCardArrow");
-  if(!body) return;
-  const isOpen=body.style.display!=="none";
-  body.style.display=isOpen?"none":"block";
-  if(arrow){ arrow.classList.toggle("open",!isOpen); }
+// 侧栏布局下 RAG / MCP 内容始终展开，保留函数以免旧绑定报错
+function toggleEmbedCard(){ /* no-op: panel layout */ }
+function toggleRerankCard(){ /* no-op: panel layout */ }
+function toggleMcpCard(){ /* no-op: panel layout */ }
+// MCP 摘要：面板标题旁状态
+function updateMcpCardSummary(){
+  const el=$("mcpCardSummary"); if(!el) return;
+  const on=$("mcpEnabled") && $("mcpEnabled").checked;
+  el.textContent = on ? "已启用" : "未启用";
+  el.className = "ai-card-summary" + (on ? " on" : "");
 }
 
 // AI 重排(rerank)模型连接测试
@@ -2552,21 +2561,6 @@ async function testAIRerankConfig(){
   finally{ _aiRerankTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
-// 折叠/展开 MCP Server 卡片
-function toggleMcpCard(){
-  const body=$("mcpCardBody"), arrow=$("mcpCardArrow");
-  if(!body) return;
-  const isOpen=body.style.display!=="none";
-  body.style.display=isOpen?"none":"block";
-  if(arrow){ arrow.classList.toggle("open",!isOpen); }
-}
-// MCP 卡片折叠摘要：折叠态也能看出是否已启用
-function updateMcpCardSummary(){
-  const el=$("mcpCardSummary"); if(!el) return;
-  const on=$("mcpEnabled") && $("mcpEnabled").checked;
-  el.textContent = on ? " · 已启用" : "";
-  el.className = "ai-card-summary" + (on ? " on" : "");
-}
 // 生成高强度随机令牌（32 字节 CSPRNG → base64url）并自动填入
 function genStrongToken(nbytes){
   const arr=new Uint8Array(nbytes||32);
@@ -2575,7 +2569,7 @@ function genStrongToken(nbytes){
   return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
 
-// 更新向量化模型卡片折叠状态摘要
+// 更新向量化模型卡片摘要
 function updateEmbedCardSummary(){
   const summary=$("embedCardSummary"); if(!summary) return;
   const model=$("embedModel").value.trim();
@@ -2583,15 +2577,7 @@ function updateEmbedCardSummary(){
   else { summary.textContent=""; }
 }
 
-// 折叠/展开重排模型卡片
-function toggleRerankCard(){
-  const body=$("rerankCardBody"), arrow=$("rerankCardArrow");
-  if(!body) return;
-  const isOpen=body.style.display!=="none";
-  body.style.display=isOpen?"none":"block";
-  if(arrow){ arrow.classList.toggle("open",!isOpen); }
-}
-// 更新重排模型卡片折叠状态摘要
+// 更新重排模型卡片摘要
 function updateRerankCardSummary(){
   const summary=$("rerankCardSummary"); if(!summary) return;
   const model=($("rerankModel")?.value||"").trim();
@@ -3073,6 +3059,9 @@ safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
 safeAddEventListener("aiStatsRange","change",loadAIStats);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
+document.querySelectorAll(".ai-nav-item").forEach(btn=>{
+  btn.addEventListener("click",()=>switchAISettingsTab(btn.getAttribute("data-ai-tab")));
+});
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
