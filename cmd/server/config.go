@@ -491,6 +491,7 @@ type ServerConfig struct {
 	Playbooks          []Playbook       `json:"playbooks,omitempty"`
 	// SRE workflow definitions (runtime state lives in the DB snapshot).
 	RemediationRules []RemediationRule `json:"remediation_rules,omitempty"`
+	TopologyEdges    []TopologyEdge    `json:"topology_edges,omitempty"` // 轻量服务依赖边（host/cat/svc）
 	SLOs             []SLO             `json:"slos,omitempty"`
 	AI               AIConfig          `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
 	VM               VMConfig          `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
@@ -1061,6 +1062,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.Dashboards = cs.cfg.Dashboards             // 仪表盘：由专用端点管理，保护不被表单清零
 	c.Governance = cs.cfg.Governance             // 告警治理：由专用端点管理，保护不被表单清零
 	c.RemediationRules = cs.cfg.RemediationRules // managed via remediation endpoints
+	c.TopologyEdges = cs.cfg.TopologyEdges       // managed via topology endpoints
 	c.SLOs = cs.cfg.SLOs                         // managed via SLO endpoints
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint
 	c.VM = cs.cfg.VM                             // managed via env / storage config
@@ -1269,6 +1271,60 @@ func (cs *ConfigStore) DeleteRemediationRule(id string) error {
 		}
 	}
 	cs.cfg.RemediationRules = kept
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// ---- topology edges（轻量服务依赖）----
+
+func (cs *ConfigStore) TopologyEdges() []TopologyEdge {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]TopologyEdge, len(cs.cfg.TopologyEdges))
+	copy(out, cs.cfg.TopologyEdges)
+	return out
+}
+
+func (cs *ConfigStore) UpsertTopologyEdge(e TopologyEdge) (TopologyEdge, error) {
+	e.From = normalizeTopoRef(e.From)
+	e.To = normalizeTopoRef(e.To)
+	e.Kind = normalizeTopoKind(e.Kind)
+	if e.From == "" || e.To == "" {
+		return e, fmt.Errorf("from/to 不能为空")
+	}
+	if e.From == e.To {
+		return e, fmt.Errorf("from 与 to 不能相同")
+	}
+	cs.mu.Lock()
+	if e.ID == "" {
+		e.ID = genToken()[:8]
+		cs.cfg.TopologyEdges = append(cs.cfg.TopologyEdges, e)
+	} else {
+		found := false
+		for i := range cs.cfg.TopologyEdges {
+			if cs.cfg.TopologyEdges[i].ID == e.ID {
+				cs.cfg.TopologyEdges[i] = e
+				found = true
+				break
+			}
+		}
+		if !found {
+			cs.cfg.TopologyEdges = append(cs.cfg.TopologyEdges, e)
+		}
+	}
+	cs.mu.Unlock()
+	return e, cs.save()
+}
+
+func (cs *ConfigStore) DeleteTopologyEdge(id string) error {
+	cs.mu.Lock()
+	kept := cs.cfg.TopologyEdges[:0]
+	for _, e := range cs.cfg.TopologyEdges {
+		if e.ID != id {
+			kept = append(kept, e)
+		}
+	}
+	cs.cfg.TopologyEdges = kept
 	cs.mu.Unlock()
 	return cs.save()
 }

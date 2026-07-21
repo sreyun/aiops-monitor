@@ -13,18 +13,20 @@ const sampleGrafanaJSON = `{
   "panels": [
     { "id": 1, "type": "timeseries", "title": "CPU", "gridPos": {"x":0,"y":0,"w":12,"h":8},
       "fieldConfig": {"defaults": {"unit": "percent"}},
-      "targets": [ {"expr": "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))*100", "legendFormat": "{{instance}}"} ] },
+      "targets": [ {"expr": "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\",instance=\"$instance\"}[5m]))*100", "legendFormat": "{{instance}}"} ] },
     { "id": 2, "type": "graph", "title": "内存", "gridPos": {"x":12,"y":0,"w":12,"h":8},
       "yaxes": [ {"format": "bytes"} ],
-      "targets": [ {"expr": "node_memory_MemAvailable_bytes"} ] },
-    { "id": 3, "type": "stat", "title": "在线", "gridPos": {"x":0,"y":8,"w":6,"h":4},
-      "targets": [ {"expr": "up"} ] },
+      "targets": [ {"expr": "node_memory_MemAvailable_bytes{instance=\"$instance\"}"} ] },
+    { "id": 3, "type": "stat", "title": "在线", "gridPos": {"x":0,"y":8,"w":6,"h":2},
+      "targets": [ {"expr": "up{instance=\"$instance\"}"} ] },
+    { "id": 6, "type": "stat", "title": "负载", "gridPos": {"x":6,"y":8,"w":6,"h":2},
+      "targets": [ {"expr": "node_load1{instance=\"[[instance]]\"}"} ] },
     { "id": 10, "type": "row", "title": "分组", "panels": [
-      { "id": 4, "type": "gauge", "title": "磁盘", "gridPos": {"x":0,"y":12,"w":6,"h":6},
+      { "id": 4, "type": "gauge", "title": "磁盘", "gridPos": {"x":0,"y":10,"w":6,"h":6},
         "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}},
         "targets": [ {"expr": "disk_used_ratio"} ] }
     ]},
-    { "id": 5, "type": "nodeGraph", "title": "占比", "gridPos": {"x":6,"y":8,"w":6,"h":4},
+    { "id": 5, "type": "nodeGraph", "title": "占比", "gridPos": {"x":6,"y":10,"w":6,"h":4},
       "targets": [ {"expr": "sum by (job)(up)"} ] }
   ]
 }`
@@ -53,9 +55,9 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	if d.Vars[1].Type != "custom" || len(d.Vars[1].Options) != 2 { // $__all 被剔除
 		t.Fatalf("custom 变量映射错误: %+v", d.Vars[1])
 	}
-	// 面板：row 展平 → 5 个（timeseries/graph/stat/gauge/piechart）
-	if len(d.Panels) != 5 {
-		t.Fatalf("面板数应为 5（row 展平），实为 %d", len(d.Panels))
+	// 面板：row 展平 → 6 个（含新增 load stat）
+	if len(d.Panels) != 6 {
+		t.Fatalf("面板数应为 6（row 展平），实为 %d", len(d.Panels))
 	}
 	byID := map[int]DashPanel{}
 	for _, p := range d.Panels {
@@ -67,6 +69,13 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	if byID[1].Type != "timeseries" || byID[1].Unit != "percent" || len(byID[1].Targets) != 1 || byID[1].Targets[0].Legend != "{{instance}}" {
 		t.Fatalf("timeseries 面板映射错误: %+v", byID[1])
 	}
+	// 导入时固化 =~（含经典 [[instance]]）
+	if byID[1].Targets[0].Expr != `100 - avg(rate(node_cpu_seconds_total{mode="idle",instance=~"$instance"}[5m]))*100` {
+		t.Fatalf("导入应把 instance=\"$instance\" 提升为 =~: %q", byID[1].Targets[0].Expr)
+	}
+	if byID[6].Targets[0].Expr != `node_load1{instance=~"$instance"}` {
+		t.Fatalf("经典 [[instance]] 应展开并提升 =~: %q", byID[6].Targets[0].Expr)
+	}
 	if byID[4].Type != "gauge" || byID[4].Unit != "percentunit" || byID[4].Max == nil || *byID[4].Max != 1 {
 		t.Fatalf("嵌套 gauge 映射错误: %+v", byID[4])
 	}
@@ -75,6 +84,39 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	}
 	if byID[1].Grid.W != 12 || byID[3].Grid.W != 6 {
 		t.Fatalf("gridPos 宽度未保留")
+	}
+	// 短面板 h=2 应保留（勿在导入时抬高）
+	if byID[3].Grid.H != 2 {
+		t.Fatalf("stat 高度应保留为 2，实为 %d", byID[3].Grid.H)
+	}
+}
+
+func TestHealImportedDashboardOverlap(t *testing.T) {
+	d := Dashboard{
+		Panels: []DashPanel{
+			{ID: 1, Title: "A", Grid: DashGrid{X: 0, Y: 0, W: 12, H: 3}},
+			{ID: 2, Title: "B", Grid: DashGrid{X: 0, Y: 2, W: 12, H: 3}}, // 与 A 重叠
+		},
+	}
+	if !healImportedDashboard(&d) {
+		t.Fatal("重叠布局应被修复并标记 changed")
+	}
+	if panelsGridOverlap(d.Panels) {
+		t.Fatalf("修复后仍重叠: %+v %+v", d.Panels[0].Grid, d.Panels[1].Grid)
+	}
+	if d.Panels[1].Grid.Y < d.Panels[0].Grid.Y+d.Panels[0].Grid.H {
+		t.Fatalf("B 应被下推到 A 下方: A=%+v B=%+v", d.Panels[0].Grid, d.Panels[1].Grid)
+	}
+}
+
+func TestPromoteTemplateVarEq(t *testing.T) {
+	got := promoteTemplateVarEq(`up{job="$job",instance="${instance}"}`, []string{"job", "instance"})
+	want := `up{job=~"$job",instance=~"${instance}"}`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if promoteTemplateVarEq(`up{instance=~"$instance"}`, []string{"instance"}) != `up{instance=~"$instance"}` {
+		t.Fatal("已是 =~ 应保持不变")
 	}
 }
 

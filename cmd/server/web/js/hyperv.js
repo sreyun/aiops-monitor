@@ -221,6 +221,7 @@ function hvToolbar(totalHosts, totalVMs, totalBad) {
       <option value="abnormal"${HV_FILTER.status === "abnormal" ? " selected" : ""}>${esc(hvT("hyperv.attention", "需关注"))}</option>
     </select>
     <button data-hvrefresh="1" class="btn sm" title="${esc(hvT("hyperv.refresh", "刷新"))}">↻</button>
+    <button type="button" class="btn sm ai-assist-btn" data-hvai-fleet="1" title="${esc(hvT("hyperv.ai_fleet_title", "AI 分析整体 Hyper-V 清单"))}"><span class="ai-assist-btn-ic">🤖</span>${esc(hvT("hyperv.ai_diag", "AI 诊断"))}</button>
   </div>
   ${hvDupBannerHTML()}
   <div class="hv-summary muted">${hvT("hyperv.summary", "宿主机")} ${totalHosts} · ${hvT("hyperv.vm", "虚拟机")} ${totalVMs}${totalBad ? ` · <span style="color:var(--warn-txt)">${hvT("hyperv.attention", "需关注")} ${totalBad}</span>` : ""}</div>`;
@@ -344,6 +345,7 @@ function hvDetailFor(inv, g) {
     <span class="hv-dot ${hvDotClass(g)}"></span>
     <span class="title">${esc(g.name)}</span>
     ${hvStateBadge(g)}
+    <button type="button" class="btn sm ai-assist-btn" data-hvai="1" title="${esc(hvT("hyperv.ai_vm_title", "AI 分析该虚拟机运行状态"))}" style="margin-left:8px"><span class="ai-assist-btn-ic">🤖</span>${esc(hvT("hyperv.ai_diag", "AI 诊断"))}</button>
     ${g.linked_host_id ? `<a class="hv-link" data-hvjump="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}" style="margin-left:auto">${esc(hvT("hyperv.open_host", "打开纳管主机"))} ↗</a>` : ""}
   </div>`;
   const cards = [
@@ -393,6 +395,71 @@ function renderHyperVPanel() {
     `</div>`;
 }
 
+/* ---------- AI 诊断 ---------- */
+
+function hvVmToText(inv, g) {
+  let s = `虚拟机：${g.name || "?"}\n宿主机：${(inv && (inv.host_name || inv.host_id)) || "?"}\n`;
+  s += `状态：${g.state || "?"}  健康：${g.health || "OK"}\n`;
+  if (g.uptime_sec) s += `运行时长(秒)：${g.uptime_sec}\n`;
+  s += `vCPU：${g.processor_count || "—"}  客户机CPU%：${g.cpu_guest_pct || g.cpu_usage || 0}  占宿主CPU%：${g.cpu_usage || 0}\n`;
+  s += `内存分配MB：${g.mem_assigned_mb || 0}  需求MB：${g.mem_demand_mb || 0}  动态内存：${g.dynamic_mem_enabled ? "是" : "否"}\n`;
+  if (g.mem_min_mb || g.mem_max_mb) s += `动态范围MB：${g.mem_min_mb || 0} ~ ${g.mem_max_mb || 0}\n`;
+  if (g.linked_host_name || g.linked_host_id) s += `关联纳管主机：${g.linked_host_name || g.linked_host_id}\n`;
+  if (g.integration_state) s += `集成服务：${g.integration_state}\n`;
+  if (g.repl_state) s += `复制：${g.repl_state} / ${g.repl_health || ""}\n`;
+  const ips = (g.ip_addresses || []).join(", ");
+  if (ips) s += `IP：${ips}\n`;
+  (g.disks || []).forEach((d, i) => {
+    s += `磁盘${i + 1}：${d.path || d.name || "?"} 大小GB=${d.size_gb || d.vhd_size_gb || "?"} 类型=${d.type || d.vhd_type || "?"}\n`;
+  });
+  (g.nics || []).forEach((n, i) => {
+    s += `网卡${i + 1}：${n.name || "?"} MAC=${n.mac || "?"} 交换机=${n.switch_name || n.switch || "?"}\n`;
+  });
+  const cps = g.checkpoints || g.snapshots || [];
+  if (cps.length) s += `检查点数量：${cps.length}\n`;
+  return s;
+}
+
+function hvFleetToText() {
+  let s = `Hyper-V 清单摘要（宿主机 ${HV_INVENTORIES.length} 台）\n`;
+  HV_INVENTORIES.forEach(inv => {
+    const guests = inv.guests || [];
+    const bad = guests.filter(hvAbnormal);
+    s += `\n【宿主机 ${inv.host_name || inv.host_id}】VM ${guests.length}，需关注 ${bad.length}\n`;
+    guests.slice(0, 40).forEach(g => {
+      const mark = hvAbnormal(g) ? "!" : " ";
+      s += ` ${mark} ${g.name || "?"}  ${g.state || "?"}  CPU%=${Math.round(+g.cpu_guest_pct || +g.cpu_usage || 0)}  memMB=${Math.round(g.mem_assigned_mb || 0)}\n`;
+    });
+    if (guests.length > 40) s += `  …另有 ${guests.length - 40} 台省略\n`;
+  });
+  return s.slice(0, 14000);
+}
+
+function hvOpenSelectedAI() {
+  const sel = hvFindSelected();
+  if (!sel) { toast(hvT("hyperv.pick", "请先选择一台虚拟机"), "err"); return; }
+  if (typeof openAIAssist !== "function") { toast(hvT("hyperv.ai_unavailable", "AI 面板未就绪"), "err"); return; }
+  openAIAssist({
+    task: "hyperv_diagnosis",
+    title: "🤖 AI Hyper-V 诊断 · " + (sel.g.name || "VM"),
+    mode: "analyze",
+    context: hvVmToText(sel.inv, sel.g).slice(0, 14000),
+    hint: hvT("hyperv.ai_hint", "正在分析该虚拟机运行状态…")
+  });
+}
+
+function hvOpenFleetAI() {
+  if (!HV_INVENTORIES.length) { toast(hvT("hyperv.empty", "暂无 Hyper-V 数据"), "err"); return; }
+  if (typeof openAIAssist !== "function") { toast(hvT("hyperv.ai_unavailable", "AI 面板未就绪"), "err"); return; }
+  openAIAssist({
+    task: "hyperv_diagnosis",
+    title: "🤖 AI Hyper-V 清单诊断",
+    mode: "analyze",
+    context: hvFleetToText(),
+    hint: hvT("hyperv.ai_fleet_hint", "正在分析整体虚拟化面…")
+  });
+}
+
 /* ---------- 事件（全部委托） ---------- */
 
 safeAddEventListener("hypervPanel", "click", e => {
@@ -400,6 +467,10 @@ safeAddEventListener("hypervPanel", "click", e => {
   if (refresh) { loadHyperVPanel(); return; }
   const clean = e.target.closest("[data-hvcleanup]");
   if (clean) { hvCleanupDuplicates(); return; }
+  const fleetAI = e.target.closest("[data-hvai-fleet]");
+  if (fleetAI) { hvOpenFleetAI(); return; }
+  const vmAI = e.target.closest("[data-hvai]");
+  if (vmAI) { hvOpenSelectedAI(); return; }
   const jump = e.target.closest("[data-hvjump]");
   if (jump && typeof openDetail === "function") {
     openDetail(jump.dataset.hvjump, jump.dataset.hvname || jump.dataset.hvjump);

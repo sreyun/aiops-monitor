@@ -267,8 +267,10 @@ async function editCategory(id, cur) {
 
 /* ---------- 主机趋势弹窗 ---------- */
 let DETAIL_HOST_ID = '';
+let DETAIL_HOST_NAME = '';
 let DETAIL_TIME_RANGE = 1; // hours: 1/3/6/12/24/72/168/336（默认 1 小时）
 let DETAIL_CUSTOM = null;   // {from,to} unix seconds — set when a custom range is active
+let DETAIL_SAMPLES = [];
 
 // 把 unix 秒格式化为 <input type="datetime-local"> 需要的本地时间字符串 YYYY-MM-DDTHH:mm
 function toLocalDatetimeValue(unixSec) {
@@ -290,6 +292,7 @@ function renderChartControls(currentRange, prefix) {
 }
 async function openDetail(id, name) {
   DETAIL_HOST_ID = id;
+  DETAIL_HOST_NAME = name || id;
   DETAIL_TIME_RANGE = 1;
   DETAIL_CUSTOM = null;
   $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
@@ -313,9 +316,11 @@ async function loadAndRenderCharts() {
   try {
     const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`).then(r => r.json());
     if (!Array.isArray(samples) || !samples.length) {
+      DETAIL_SAMPLES = [];
       body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
       return;
     }
+    DETAIL_SAMPLES = samples;
 
     // 组织图表：每个图表包裹在 .chart-wrap 内，右上角提供放大按钮；真正绘制延后到可见时（懒加载）。
     DETAIL_CHARTS = {};
@@ -329,6 +334,7 @@ async function loadAndRenderCharts() {
       <div class="chart-controls">
         ${renderChartControls(DETAIL_CUSTOM ? -1 : DETAIL_TIME_RANGE, "range")}
         <button class="chip-btn ${DETAIL_CUSTOM ? "active" : ""}" data-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
+        <button class="chip-btn ai-assist-btn" id="detailAIBtn" title="${I18N.t("hosts.ai_analyze_title","用 AI 解读该主机近期指标趋势")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("hosts.ai_analyze","AI 分析")}</button>
         <span class="chart-custom-range" id="detailCustomPanel"${DETAIL_CUSTOM ? "" : " hidden"}>
           <input type="datetime-local" id="detailCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
           <span class="dt-sep">→</span>
@@ -501,6 +507,11 @@ safeAddEventListener("detailBody", "click", e => {
     if (ch) openChartZoom(ch);
     return;
   }
+  // AI 分析主机趋势
+  if (e.target.closest("#detailAIBtn")) {
+    analyzeHostDetailAI();
+    return;
+  }
   // 自定义时间范围：展开/收起面板
   const tog = e.target.closest("[data-custom-toggle]");
   if (tog) {
@@ -516,6 +527,43 @@ safeAddEventListener("detailBody", "click", e => {
   DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
   loadAndRenderCharts();
 });
+
+function analyzeHostDetailAI() {
+  if (typeof openAIAssist !== "function") {
+    if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err");
+    return;
+  }
+  const samples = DETAIL_SAMPLES || [];
+  if (!samples.length) {
+    if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
+    return;
+  }
+  const first = samples[0], last = samples[samples.length - 1];
+  const avg = (key) => {
+    let s = 0, n = 0;
+    samples.forEach(x => { if (typeof x[key] === "number") { s += x[key]; n++; } });
+    return n ? (s / n) : 0;
+  };
+  const max = (key) => samples.reduce((m, x) => Math.max(m, typeof x[key] === "number" ? x[key] : 0), 0);
+  const lines = [
+    `主机：${DETAIL_HOST_NAME || DETAIL_HOST_ID}（id=${DETAIL_HOST_ID}）`,
+    `样本数：${samples.length}，时间范围：约 ${((last.ts || last.timestamp || 0) - (first.ts || first.timestamp || 0)) / 3600} 小时`,
+    `CPU：均值 ${avg("cpu_percent").toFixed(1)}% · 峰值 ${max("cpu_percent").toFixed(1)}% · 当前 ${(last.cpu_percent || 0).toFixed(1)}%`,
+    `内存：均值 ${avg("mem_percent").toFixed(1)}% · 峰值 ${max("mem_percent").toFixed(1)}% · 当前 ${(last.mem_percent || 0).toFixed(1)}%`,
+    `磁盘：均值 ${avg("disk_percent").toFixed(1)}% · 峰值 ${max("disk_percent").toFixed(1)}% · 当前 ${(last.disk_percent || 0).toFixed(1)}%`,
+    `负载：当前 load1=${(last.load1 || 0).toFixed(2)} load5=${(last.load5 || 0).toFixed(2)} load15=${(last.load15 || 0).toFixed(2)}`,
+  ];
+  if (Array.isArray(last.gpus) && last.gpus.length) {
+    lines.push("GPU：" + last.gpus.map(g => `${g.name || "GPU"} util=${(g.util_percent || 0).toFixed(0)}% mem=${(g.mem_percent || 0).toFixed(0)}%`).join("；"));
+  }
+  openAIAssist({
+    task: "chart_analysis",
+    title: "🤖 AI 主机分析 · " + (DETAIL_HOST_NAME || DETAIL_HOST_ID),
+    mode: "analyze",
+    context: lines.join("\n"),
+    hint: I18N.t("hosts.ai_analyzing", "AI 正在解读主机近期指标…"),
+  });
+}
 
 // 读取两个 datetime-local 输入，校验后按自定义绝对时间范围重新拉取并渲染
 function applyDetailCustomRange() {

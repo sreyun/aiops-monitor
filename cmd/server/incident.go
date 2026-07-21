@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,10 +18,11 @@ import (
 
 // IncidentEvent is one entry on an incident's timeline.
 type IncidentEvent struct {
-	Ts    int64  `json:"ts"`
-	Kind  string `json:"kind"` // created|fired|recovered|acked|resolved|remediation|comment|escalated|note
-	Actor string `json:"actor,omitempty"`
-	Text  string `json:"text"`
+	Ts          int64        `json:"ts"`
+	Kind        string       `json:"kind"` // created|fired|recovered|acked|resolved|remediation|comment|escalated|note
+	Actor       string       `json:"actor,omitempty"`
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Incident is a tracked problem with a lifecycle and timeline.
@@ -70,16 +72,6 @@ func (m *incidentManager) find(id int64) *Incident {
 		}
 	}
 	return nil
-}
-
-// addEventLocked appends a timeline entry (caller holds mu).
-func addEventLocked(inc *Incident, kind, actor, text string) {
-	inc.Timeline = append(inc.Timeline, IncidentEvent{
-		Ts: time.Now().Unix(), Kind: kind, Actor: actor, Text: text,
-	})
-	if len(inc.Timeline) > 200 {
-		inc.Timeline = inc.Timeline[len(inc.Timeline)-200:]
-	}
 }
 
 // raise opens (or reuses) an incident for a dedup key. When an open incident with
@@ -206,15 +198,37 @@ func (m *incidentManager) Resolve(id int64, actor string) (Incident, bool) {
 	return *inc, true
 }
 
-// Comment appends an operator note to the timeline.
-func (m *incidentManager) Comment(id int64, actor, text string) (Incident, bool) {
+// addEventLocked appends a timeline entry (caller holds mu).
+func addEventLocked(inc *Incident, kind, actor, text string, atts ...[]Attachment) {
+	ev := IncidentEvent{
+		Ts: time.Now().Unix(), Kind: kind, Actor: actor, Text: text,
+	}
+	if len(atts) > 0 {
+		ev.Attachments = sanitizeAttachments(atts[0])
+	}
+	inc.Timeline = append(inc.Timeline, ev)
+	if len(inc.Timeline) > 200 {
+		inc.Timeline = inc.Timeline[len(inc.Timeline)-200:]
+	}
+}
+
+// Comment appends an operator note to the timeline（允许纯附件、无正文）。
+func (m *incidentManager) Comment(id int64, actor, text string, atts []Attachment) (Incident, bool) {
+	text = strings.TrimSpace(text)
+	atts = sanitizeAttachments(atts)
+	if text == "" && len(atts) == 0 {
+		return Incident{}, false
+	}
+	if text == "" && len(atts) > 0 {
+		text = Tz("ticket.evt_attach", len(atts))
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inc := m.find(id)
 	if inc == nil {
 		return Incident{}, false
 	}
-	addEventLocked(inc, "comment", actor, text)
+	addEventLocked(inc, "comment", actor, text, atts)
 	return *inc, true
 }
 

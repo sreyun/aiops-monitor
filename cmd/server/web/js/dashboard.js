@@ -227,18 +227,19 @@ function dashBreakpoint() {
 // 平板勿再把 x/2，否则非整齐半行布局会叠层；改为仅 span 宽度走自动流式排布。
 function dashPanelGridStyle(p) {
   let w = Math.max(1, Math.min(24, (p.grid && p.grid.w) || 12));
-  let h = Math.max(3, Math.min(48, (p.grid && p.grid.h) || 8));
+  // 桌面必须尊重原始 h：禁止抬到 ≥3，否则 Grafana 常见 h=2/3 的 stat 行会与下一行 y 重叠，挤成细条。
+  const hStored = Math.max(1, Math.min(48, (p.grid && p.grid.h) || 8));
   let x = (p.grid && p.grid.x) || 0;
   let y = (p.grid && p.grid.y) || 0;
   const bp = dashBreakpoint();
   if (bp === "m") {
-    return `grid-column:1/-1;grid-row:span ${h}`;
+    return `grid-column:1/-1;grid-row:span ${Math.max(3, hStored)}`;
   }
   if (bp === "t") {
     w = Math.max(1, Math.min(12, Math.ceil(w / 2)));
-    return `grid-column:span ${w};grid-row:span ${h}`;
+    return `grid-column:span ${w};grid-row:span ${Math.max(2, hStored)}`;
   }
-  return `grid-column:${x + 1} / span ${w};grid-row:${y + 1} / span ${h}`;
+  return `grid-column:${x + 1} / span ${w};grid-row:${y + 1} / span ${hStored}`;
 }
 
 // reflowDashLayout：按视觉顺序流式重排 24 栏，避免 ↑↓ 只交换 x/y 造成重叠空洞。
@@ -255,12 +256,20 @@ function reflowDashLayout(ordered) {
   }
 }
 
-// dashEmptyHint：无数据时给一句可操作提示（变量「全部」+ 等值过滤是常见空图原因）。
+// dashEmptyHint：无数据时给可操作提示；仅当面板表达式仍残留 label="$var"（等值）时才强调 =~。
 function dashEmptyHint(extra) {
   const hasAll = Object.values(DASH_VARVALS || {}).some(v => v === "$__all" || v === "All" || v === "" || v === ".*");
-  const hint = hasAll
-    ? `<div class="dash-empty-hint">模板变量为「全部」时，查询需用 instance=~"$instance"（勿用 =）</div>`
-    : "";
+  let hint = "";
+  if (hasAll) {
+    const eqVar = /\b[a-zA-Z_][\w]*\s*=\s*"\$/;
+    const stillEq = !!(CUR_DASH && Array.isArray(CUR_DASH.panels) && CUR_DASH.panels.some(p =>
+      (p.targets || []).some(t => eqVar.test(String(t.expr || "")))));
+    if (stillEq) {
+      hint = `<div class="dash-empty-hint">模板变量为「全部」时，查询需用 instance=~"$instance"（勿用 =）</div>`;
+    } else {
+      hint = `<div class="dash-empty-hint">当前为「全部」；若持续无数据请检查数据源是否含该指标（Grafana 社区看板多为 node_*）</div>`;
+    }
+  }
   return `<div class="dash-empty">${extra || "该范围无数据"}${hint}</div>`;
 }
 
@@ -585,27 +594,70 @@ async function loadAlertListPanel(p, body) {
     return `<div class="dash-alert-row ${lv}"><span class="dash-alert-dot"></span><span class="dash-alert-msg" title="${esc(a.message || "")}">${esc(a.message || a.type || "告警")}</span>${a.hostname ? `<span class="dash-alert-host">${esc(a.hostname)}</span>` : ""}</div>`;
   }).join("") + `</div>`;
 }
+function isHostIDLabel(v) {
+  return typeof v === "string" && /^[a-f0-9]{16,64}$/i.test(v.trim());
+}
+// 去掉图例文本里的主机 ID 段，并折叠多余分隔符（AI 常写 {{category}} - {{host}} - {{instance}}）。
+function cleanLegendText(s) {
+  if (!s) return s;
+  let out = String(s).replace(/\b[a-f0-9]{16,64}\b/gi, "");
+  out = out.replace(/\s*[-–—|/]+\s*/g, " · ");
+  out = out.replace(/(\s*·\s*)+/g, " · ").replace(/^\s*·\s*|\s*·\s*$/g, "").trim();
+  return out || String(s).trim();
+}
+function humanSeriesLabel(labels) {
+  labels = labels || {};
+  const cat = labels.category || "";
+  const inst = labels.instance || labels.hostname || labels.node || labels.ident || "";
+  const parts = [];
+  if (cat) parts.push(cat);
+  if (inst && !isHostIDLabel(inst)) parts.push(inst);
+  if (parts.length) return parts.join(" · ");
+  for (const k of Object.keys(labels)) {
+    if (k === "__name__" || k === "host") continue;
+    const v = labels[k];
+    if (v && !isHostIDLabel(v)) return v;
+  }
+  return labels.__name__ || "value";
+}
 function legendFor(fmt, labels) {
-  if (fmt && fmt.trim()) return fmt.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (labels[k] !== undefined ? labels[k] : ""));
-  const name = labels.__name__ || "";
-  const rest = Object.keys(labels).filter(k => k !== "__name__").map(k => `${k}=${labels[k]}`).join(",");
-  return (name + (rest ? `{${rest}}` : "")) || "value";
+  labels = labels || {};
+  if (fmt && fmt.trim()) {
+    // 展开前先丢掉会变成主机 ID 的 {{host}}
+    let f = fmt;
+    if (isHostIDLabel(labels.host || "")) {
+      f = f.replace(/\{\{\s*host\s*\}\}/gi, "");
+    }
+    const raw = f.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => {
+      const v = labels[k];
+      if (v === undefined || v === null) return "";
+      if (k === "host" && isHostIDLabel(v)) return "";
+      return v;
+    });
+    return cleanLegendText(raw) || humanSeriesLabel(labels);
+  }
+  return humanSeriesLabel(labels);
 }
 // dashLegends：多序列图例去重可辨。若各序列图例已互不相同则原样用；否则改用「序列之间取值不同的
 // 标签」重建（如 state / mountpoint / device），避免像网络连接数那样 8 条都显示同一个 instance。
 function dashLegends(collected) {
   const raw = collected.map(c => legendFor(c.legendFmt, c.labels));
-  if (new Set(raw).size === raw.length) return raw; // 已可区分
+  if (new Set(raw).size === raw.length) return raw.map(cleanLegendText); // 已可区分
+  const prefer = ["instance", "hostname", "category", "job", "device", "mountpoint", "path", "state", "mode", "name"];
   const keys = new Set();
-  collected.forEach(c => Object.keys(c.labels || {}).forEach(k => { if (k !== "__name__") keys.add(k); }));
-  const varying = [...keys].filter(k => new Set(collected.map(c => (c.labels || {})[k] || "")).size > 1);
+  collected.forEach(c => Object.keys(c.labels || {}).forEach(k => {
+    if (k === "__name__" || k === "host") return; // 永不把主机 ID 拼进图例
+    keys.add(k);
+  }));
+  const varying = prefer.filter(k => keys.has(k) && new Set(collected.map(c => (c.labels || {})[k] || "")).size > 1);
+  const extra = [...keys].filter(k => !prefer.includes(k) && new Set(collected.map(c => (c.labels || {})[k] || "")).size > 1);
+  const useKeys = varying.length ? varying : extra;
   return collected.map((c, i) => {
-    if (varying.length) {
-      const lbl = varying.map(k => (c.labels || {})[k]).filter(v => v !== undefined && v !== "").join(" · ");
+    if (useKeys.length) {
+      const lbl = useKeys.map(k => (c.labels || {})[k]).filter(v => v && !isHostIDLabel(v)).join(" · ");
       if (lbl) return lbl;
     }
-    const nm = (c.labels || {}).__name__;
-    return (nm || raw[i] || "series") + " #" + (i + 1);
+    return humanSeriesLabel(c.labels) || ((c.labels || {}).__name__ || raw[i] || "series") + " #" + (i + 1);
   });
 }
 function autoMax(series) {

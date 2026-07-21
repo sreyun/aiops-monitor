@@ -286,6 +286,8 @@
   "ticket.comment_required": "Comment cannot be empty",
   "ticket.evt_status": "Status changed to %s",
   "ticket.evt_assign": "Assigned to %s",
+  "ticket.evt_attach": "Attached %d file(s)",
+  "ticket.unassigned": "Unassigned",
   "ticket.unassigned": "unassigned",
   "ticket.from_incident": "Escalated from incident #%d",
   "log.remediation_saved": "Saved auto-remediation rule \"%s\"",

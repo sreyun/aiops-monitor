@@ -49,6 +49,7 @@ type Server struct {
 	distDir     string              // directory of downloadable agent binaries + plugins.zip
 	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
 	sreyun      *SreyunCore         // Sreyun Agent (autonomous SRE agent)
+	aiStats     *aiStatsHub         // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
 	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
@@ -78,6 +79,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		ai:          newAIManager(cfg),
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
+		aiStats:     newAIStatsHub(),
 	}
 	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
@@ -188,6 +190,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/users/{username}", s.handleDeleteUser)
 	mux.HandleFunc("POST /api/v1/users/{username}/reset-password", s.handleResetUserPassword)
 	mux.HandleFunc("POST /api/v1/users/{username}/reset-mfa", s.handleResetUserMFA)
+	// 用户目录（viewer+）：工单指派等场景，不含敏感字段
+	mux.HandleFunc("GET /api/v1/directory/users", s.handleDirectoryUsers)
 	mux.HandleFunc("GET /api/v1/checks", s.handleGetChecks)
 	mux.HandleFunc("POST /api/v1/checks", s.handleUpsertCheck)
 	mux.HandleFunc("POST /api/v1/checks/{id}/run", s.handleRunCheck)
@@ -258,6 +262,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/remediation/runs", s.handleListRemediationRuns)
 	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/approve", s.handleApproveRemediation)
 	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/reject", s.handleRejectRemediation)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/remediation-propose", s.handleProposeRemediation) // L4：事件剧本草稿→待审批
+	mux.HandleFunc("GET /api/v1/topology/edges", s.handleListTopologyEdges)
+	mux.HandleFunc("POST /api/v1/topology/edges", s.handleUpsertTopologyEdge)
+	mux.HandleFunc("DELETE /api/v1/topology/edges/{id}", s.handleDeleteTopologyEdge)
+	mux.HandleFunc("GET /api/v1/topology/rca", s.handleTopologyRCA)
 	mux.HandleFunc("GET /api/v1/slos", s.handleListSLOs)
 	mux.HandleFunc("POST /api/v1/slos", s.handleUpsertSLO)
 	mux.HandleFunc("DELETE /api/v1/slos/{id}", s.handleDeleteSLO)
@@ -290,7 +299,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
 	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
-	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                         // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
+	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）
+	mux.HandleFunc("DELETE /api/v1/ai/memories/{id}", s.handleDeleteMemory)
+	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats) // AI 调用延迟/失败率/粗估 token 仪表
+	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)         // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
@@ -422,7 +434,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "attachments", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

@@ -18,9 +18,10 @@ import (
 
 // TicketComment is one note on a ticket's thread.
 type TicketComment struct {
-	Ts     int64  `json:"ts"`
-	Author string `json:"author"`
-	Text   string `json:"text"`
+	Ts          int64        `json:"ts"`
+	Author      string       `json:"author"`
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Ticket is a tracked unit of work.
@@ -33,6 +34,7 @@ type Ticket struct {
 	Assignee    string          `json:"assignee,omitempty"`
 	Reporter    string          `json:"reporter,omitempty"`
 	IncidentID  int64           `json:"incident_id,omitempty"`
+	Attachments []Attachment    `json:"attachments,omitempty"` // 创建时附带的证据
 	Comments    []TicketComment `json:"comments,omitempty"`
 	CreatedAt   int64           `json:"created_at"`
 	UpdatedAt   int64           `json:"updated_at"`
@@ -76,9 +78,17 @@ func (m *ticketManager) Create(t Ticket, reporter string) (Ticket, error) {
 	t.ID = m.nextID
 	t.Status = "open"
 	t.Reporter = reporter
+	t.Attachments = sanitizeAttachments(t.Attachments)
 	t.Comments = nil
 	now := time.Now().Unix()
 	t.CreatedAt, t.UpdatedAt = now, now
+	// 创建时附件同时落到首条系统评论，便于时间线统一展示
+	if len(t.Attachments) > 0 {
+		t.Comments = append(t.Comments, TicketComment{
+			Ts: now, Author: reporter, Text: Tz("ticket.evt_attach", len(t.Attachments)),
+			Attachments: t.Attachments,
+		})
+	}
 	m.tickets = append(m.tickets, t)
 	return t, nil
 }
@@ -117,10 +127,11 @@ func (m *ticketManager) Update(id int64, in Ticket, actor string) (Ticket, error
 	return *t, nil
 }
 
-// Comment appends a note to a ticket.
-func (m *ticketManager) Comment(id int64, author, text string) (Ticket, error) {
+// Comment appends a note to a ticket（允许纯附件、无正文）。
+func (m *ticketManager) Comment(id int64, author, text string, atts []Attachment) (Ticket, error) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	atts = sanitizeAttachments(atts)
+	if text == "" && len(atts) == 0 {
 		return Ticket{}, fmt.Errorf("%s", Tz("ticket.comment_required"))
 	}
 	m.mu.Lock()
@@ -129,7 +140,10 @@ func (m *ticketManager) Comment(id int64, author, text string) (Ticket, error) {
 	if t == nil {
 		return Ticket{}, fmt.Errorf("%s", Tz("ticket.not_found"))
 	}
-	t.Comments = append(t.Comments, TicketComment{Ts: time.Now().Unix(), Author: author, Text: text})
+	if text == "" && len(atts) > 0 {
+		text = Tz("ticket.evt_attach", len(atts))
+	}
+	t.Comments = append(t.Comments, TicketComment{Ts: time.Now().Unix(), Author: author, Text: text, Attachments: atts})
 	t.UpdatedAt = time.Now().Unix()
 	return *t, nil
 }

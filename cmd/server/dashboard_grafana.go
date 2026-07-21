@@ -120,6 +120,7 @@ func mapGrafanaDashboard(raw []byte, nameOverride, source string) (Dashboard, er
 		return Dashboard{}, fmt.Errorf("未从该看板解析到任何面板")
 	}
 	sortPanels(d.Panels)
+	healImportedDashboard(&d)
 	return d, nil
 }
 

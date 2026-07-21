@@ -616,6 +616,7 @@
           <div class="sre-tabs" id="sreTabs" style="margin-left:auto; display:flex; gap:4px; flex-wrap:wrap">
             <button class="chip-btn active" data-sretab="incidents" data-i18n="sre.tab_incidents">事件</button>
             <button class="chip-btn" data-sretab="remediation" data-i18n="sre.tab_remediation">自动修复</button>
+            <button class="chip-btn" data-sretab="topology" data-i18n="sre.tab_topology">依赖拓扑</button>
             <button class="chip-btn" data-sretab="slo" data-i18n="sre.tab_slo">SLO</button>
             <button class="chip-btn" data-sretab="tickets" data-i18n="sre.tab_tickets">工单</button>
             <button class="chip-btn" data-sretab="ai" data-i18n="sre.tab_ai">AI 巡检</button>
@@ -641,6 +642,20 @@
           <div id="remediationRunList" class="sre-list"></div>
         </div>
 
+        <div class="sre-panel" id="srePanel-topology">
+          <div class="sre-toolbar">
+            <span class="hint">轻量服务依赖：用 host / cat / svc 边描述依赖。事件创建时自动做拓扑 RCA（上游根因 · 下游影响 · 关联未决事件 · 近期资产变更）。</span>
+            <button class="btn primary sm" id="topoAddBtn">+ 添加依赖边</button>
+          </div>
+          <div id="topoEdgeList" class="fwd-list fwd-grid"></div>
+          <div class="subhead" style="margin-top:14px">试算 RCA</div>
+          <div class="sre-toolbar" style="margin-bottom:8px">
+            <div class="select-wrap" style="min-width:220px"><select id="topoRcaHost"><option value="">选择主机…</option></select></div>
+            <button class="btn sm" id="topoRcaBtn">计算 RCA</button>
+          </div>
+          <pre id="topoRcaOut" class="skill-steps" style="min-height:80px;white-space:pre-wrap"></pre>
+        </div>
+
         <div class="sre-panel" id="srePanel-slo">
           <div class="sre-toolbar">
             <span class="hint" data-i18n="sre.slo_hint">以拨测 up 率或指标达标率衡量 SLI，跟踪错误预算与燃尽率，预算耗尽自动开事件。</span>
@@ -663,6 +678,7 @@
             <button class="btn sm" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
             <button class="btn sm" id="aiChatBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n="sre.ai_chat">🤖 AI 对话</button>
             <button type="button" class="btn sm ai-assist-btn" id="skillsBtn" title="查看 AI 从经验中自动提炼的可复用技能(SOP)"><span class="ai-assist-btn-ic">🧠</span>技能库</button>
+            <button type="button" class="btn sm ai-assist-btn" id="memoryBtn" title="浏览 AI 沉淀的历史记忆（诊断/对话/经验）"><span class="ai-assist-btn-ic">📚</span>记忆库</button>
             <button type="button" class="btn sm ai-assist-btn" id="dutyReportBtn" title="汇总未决事件/SLO/待审批修复/巡检，AI 生成值班晨报"><span class="ai-assist-btn-ic">🌅</span>值班晨报</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
           </div>
@@ -1824,6 +1840,30 @@
   </div>
 </div>
 
+<div class="mask" id="memoryMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>📚 AI 记忆库</h3>
+      <span class="hint" style="margin-left:8px">诊断 / 对话 / 经验沉淀；检索命中时注入提示词。只读浏览，可删除无效条目</span>
+      <div class="select-wrap" style="margin-left:auto;min-width:140px">
+        <select id="memoryKindFilter">
+          <option value="">全部 kind</option>
+          <option value="diagnosis">diagnosis</option>
+          <option value="chat">chat</option>
+          <option value="assist">assist</option>
+          <option value="experience">experience</option>
+          <option value="resolution">resolution</option>
+        </select>
+      </div>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="memoryStats" class="hint" style="margin-bottom:10px"></div>
+      <div id="memoryBody"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 事件详情弹窗 ===== -->
 <div class="mask" id="incidentDetailMask" data-close>
   <div class="modal modal-wide">
@@ -1934,10 +1974,26 @@
         <div class="field"><label data-i18n="sre.priority">优先级</label><div class="select-wrap"><select id="tkPriority"><option value="p1">P1 · 紧急</option><option value="p2">P2 · 高</option><option value="p3" selected>P3 · 中</option><option value="p4">P4 · 低</option></select></div></div>
         <div class="field"><label data-i18n="sre.status">状态</label><div class="select-wrap"><select id="tkStatus"><option value="open">open</option><option value="in_progress">in_progress</option><option value="resolved">resolved</option><option value="closed">closed</option></select></div></div>
       </div>
-      <div class="field"><label data-i18n="sre.assignee">指派给</label><input type="text" id="tkAssignee"></div>
+      <div class="field"><label data-i18n="sre.assignee">指派给</label><div class="select-wrap"><select id="tkAssignee"><option value="">未指派</option></select></div></div>
       <div class="field"><label data-i18n="sre.description">描述</label><textarea id="tkDesc" rows="3" style="resize:vertical;min-height:60px"></textarea></div>
+      <div class="field" id="tkAttachField">
+        <label>附件（图片 / 文档）</label>
+        <div id="tkCreateAttach" class="attach-chips" style="display:none;margin-bottom:6px"></div>
+        <div class="attach-bar">
+          <button type="button" class="btn sm" id="tkAttachBtn" title="上传图片或文件">📎 添加附件</button>
+          <input type="file" id="tkAttachFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" hidden>
+        </div>
+      </div>
       <div id="tkComments"></div>
-      <div class="field" id="tkCommentField" style="display:none"><label data-i18n="sre.add_comment">添加评论</label><div style="display:flex;gap:6px"><input type="text" id="tkCommentInput" style="flex:1"><button class="btn sm" id="tkCommentBtn" data-i18n="sre.send">发送</button></div></div>
+      <div class="field" id="tkCommentField" style="display:none">
+        <label data-i18n="sre.add_comment">添加评论</label>
+        <div id="tkCommentAttach" class="attach-chips" style="display:none;margin-bottom:6px"></div>
+        <div class="attach-bar" style="margin-bottom:6px">
+          <button type="button" class="btn sm" id="tkCommentAttachBtn" title="评论附件">📎</button>
+          <input type="file" id="tkCommentFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" hidden>
+        </div>
+        <div style="display:flex;gap:6px"><input type="text" id="tkCommentInput" style="flex:1" placeholder="补充说明…"><button class="btn sm primary" id="tkCommentBtn" data-i18n="sre.send">发送</button></div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn primary" id="tkSaveBtn" data-i18n="ui.save">保存</button></div>
   </div>
@@ -2059,6 +2115,21 @@
 
       <div class="hint" style="margin-top:8px">按 Endpoint 自动识别两类接口：<b>OpenAI 兼容</b>（OpenAI / DeepSeek / Ollama / 百炼等）与 <b>Anthropic</b>（Claude）。填好 Endpoint + Key 后自动拉取可用模型（下拉 / 搜索），也可手动输入。未启用时用内置启发式引擎，开箱即用。</div>
 
+      <!-- AI 运行时观测（进程内累计，重启清零） -->
+      <div class="ai-card" id="aiStatsCard" style="margin-top:10px">
+        <div class="ai-card-header">
+          <span class="ai-card-icon">📈</span>
+          <div class="ai-card-header-text">
+            <span class="ai-card-title">AI 调用观测</span>
+            <span class="ai-card-desc">延迟 / 失败率 / 粗估 Token（本进程累计）</span>
+          </div>
+          <button class="btn sm" id="aiStatsRefreshBtn" type="button" style="margin-left:auto">刷新</button>
+        </div>
+        <div class="ai-card-body" id="aiStatsBody">
+          <div class="hint">打开设置时自动加载…</div>
+        </div>
+      </div>
+
       <!-- AI 终端只读巡检权限（独立开关，开启需终端连接密码） -->
       <div class="ai-term-access">
         <div class="ai-term-head">
@@ -2104,12 +2175,14 @@
       <div class="ai-chat-input">
         <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档（含 Word / Excel / PDF），辅助 AI 深入排查">📎</button>
         <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页 URL，提取正文注入对话">🔗</button>
+        <button class="ai-attach-btn" id="aiChatMicBtn" type="button" title="语音输入（浏览器 SpeechRecognition）">🎤</button>
+        <button class="ai-attach-btn" id="aiChatSpeakBtn" type="button" title="朗读最近一条 AI 回复">🔊</button>
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
-        <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行"></textarea>
+        <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行 · 可语音"></textarea>
         <button class="btn primary ai-send-btn" id="aiChatSendBtn" title="发送 (Enter)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
         <button class="ai-stop-btn" id="aiChatStopBtn" type="button" style="display:none" title="终止 AI，立即停止当前任务">⏹</button>
       </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--muted)">可用工具：query_metrics · search_logs · list_alerts · search_similar_cases · run_diagnostic · run_python_action · 支持语音输入/朗读</div>
     </div>
   </div>
 </div>

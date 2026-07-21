@@ -300,3 +300,136 @@ func sortPanels(panels []DashPanel) {
 		return panels[i].Grid.X < panels[j].Grid.X
 	})
 }
+
+// expandGrafanaClassicVars 把 Grafana 旧式 [[var]] 写成 $var，便于后续统一替换与 =~ 提升。
+func expandGrafanaClassicVars(expr string) string {
+	if expr == "" || !strings.Contains(expr, "[[") {
+		return expr
+	}
+	re := regexp.MustCompile(`\[\[([a-zA-Z_][a-zA-Z0-9_]*)\]\]`)
+	return re.ReplaceAllString(expr, `$$$1`)
+}
+
+// promoteTemplateVarEq 把 label="$var" / label="${var}" 提升为 =~。
+// 「全部」时服务端会把变量换成 .*，若仍用 = 则永远匹配不到序列——这是 Grafana 导入看板空图的首要原因。
+func promoteTemplateVarEq(expr string, varNames []string) string {
+	if expr == "" {
+		return expr
+	}
+	names := varNames
+	if len(names) == 0 {
+		names = []string{"instance", "host", "job", "node", "ident", "category", "device", "ifname"}
+	}
+	out := expr
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.HasPrefix(name, "__") {
+			continue
+		}
+		// label="$name" 或 label="${name}"（允许标签与 = 之间空白）
+		re := regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"(\$\{` + regexp.QuoteMeta(name) + `\}|\$` + regexp.QuoteMeta(name) + `)"`)
+		out = re.ReplaceAllString(out, `${1}=~"${2}"`)
+	}
+	return out
+}
+
+func dashGridOverlap(a, b DashGrid) bool {
+	if a.W <= 0 || a.H <= 0 || b.W <= 0 || b.H <= 0 {
+		return false
+	}
+	return a.X < b.X+b.W && a.X+a.W > b.X && a.Y < b.Y+b.H && a.Y+a.H > b.Y
+}
+
+func panelsGridOverlap(panels []DashPanel) bool {
+	for i := 0; i < len(panels); i++ {
+		for j := i + 1; j < len(panels); j++ {
+			if dashGridOverlap(panels[i].Grid, panels[j].Grid) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolvePanelOverlaps 在尽量保留原 x/w/h 的前提下，把重叠面板下推，修复 Grafana 折叠行展平或
+// 短面板被前端抬高 h 后留下的叠层（表现为中间一排「挤成细条」）。
+func resolvePanelOverlaps(panels []DashPanel) {
+	sortPanels(panels)
+	for i := range panels {
+		for {
+			moved := false
+			for j := 0; j < i; j++ {
+				if !dashGridOverlap(panels[i].Grid, panels[j].Grid) {
+					continue
+				}
+				newY := panels[j].Grid.Y + panels[j].Grid.H
+				if panels[i].Grid.Y < newY {
+					panels[i].Grid.Y = newY
+					moved = true
+				}
+			}
+			if !moved {
+				break
+			}
+		}
+	}
+}
+
+var hostLegendRe = regexp.MustCompile(`\{\{\s*host\s*\}\}`)
+
+// healImportedDashboard 固化看板常见缺陷：=~ 提升、经典变量语法、去掉图例中的主机 ID、网格重叠。
+// 返回是否发生了修改（供 GET 时惰性回写）。
+func healImportedDashboard(d *Dashboard) bool {
+	if d == nil {
+		return false
+	}
+	changed := false
+	varNames := make([]string, 0, len(d.Vars))
+	for i := range d.Vars {
+		v := &d.Vars[i]
+		if v.Name != "" {
+			varNames = append(varNames, v.Name)
+		}
+		if v.IncludeAll && (v.Current == "" || v.Current == "All") {
+			v.Current = "$__all"
+			changed = true
+		}
+	}
+	for i := range d.Panels {
+		p := &d.Panels[i]
+		if p.Grid.W <= 0 {
+			p.Grid.W = 12
+			changed = true
+		}
+		if p.Grid.H <= 0 {
+			p.Grid.H = 8
+			changed = true
+		}
+		if p.Grid.W > 24 {
+			p.Grid.W = 24
+			changed = true
+		}
+		for j := range p.Targets {
+			expr := p.Targets[j].Expr
+			neu := promoteTemplateVarEq(expandGrafanaClassicVars(expr), varNames)
+			if neu != expr {
+				p.Targets[j].Expr = neu
+				changed = true
+			}
+			// 去掉图例中的 {{host}}（主机 ID），已有 AI 看板打开时惰性修复
+			leg := p.Targets[j].Legend
+			if hostLegendRe.MatchString(leg) {
+				if neuLeg := healAIDashLegend(leg); neuLeg != leg {
+					p.Targets[j].Legend = neuLeg
+					changed = true
+				}
+			}
+		}
+	}
+	sortPanels(d.Panels)
+	if panelsGridOverlap(d.Panels) {
+		resolvePanelOverlaps(d.Panels)
+		changed = true
+	}
+	return changed
+}

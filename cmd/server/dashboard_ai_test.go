@@ -180,6 +180,21 @@ func TestHealAIDashExpr(t *testing.T) {
 	}
 }
 
+func TestHealAIDashLegend(t *testing.T) {
+	cases := map[string]string{
+		"":                                      "{{instance}}",
+		"{{host}}":                              "{{instance}}",
+		"{{category}} - {{host}} - {{instance}}": "{{category}} · {{instance}}",
+		"{{category}} · {{instance}}":           "{{category}} · {{instance}}",
+		"{{instance}}":                          "{{instance}}",
+	}
+	for in, want := range cases {
+		if got := healAIDashLegend(in); got != want {
+			t.Fatalf("healAIDashLegend(%q)=%q，want %q", in, got, want)
+		}
+	}
+}
+
 func TestWithNoThinkHint(t *testing.T) {
 	cfg := AIConfig{Model: "qwen3-max", Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"}
 	msgs := []map[string]string{

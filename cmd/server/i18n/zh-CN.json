@@ -286,6 +286,8 @@
   "ticket.comment_required": "评论内容不能为空",
   "ticket.evt_status": "状态变更为 %s",
   "ticket.evt_assign": "指派给 %s",
+  "ticket.evt_attach": "上传了 %d 个附件",
+  "ticket.unassigned": "未指派",
   "ticket.unassigned": "未指派",
   "ticket.from_incident": "由事件 #%d 升级生成",
   "log.remediation_saved": "保存自动修复规则「%s」",

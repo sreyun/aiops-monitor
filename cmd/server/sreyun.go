@@ -970,7 +970,7 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 
 	// RAG: 检索历史记忆注入 system prompt，让 Agent 能跨会话复用已有知识
 	// Token 预算管理：动态裁剪 RAG 记忆，确保 system prompt 不超过 8000 token
-	ragText := h.s.retrieveMemoryForPrompt("chat", userMsg, 8)
+	ragText, memHits, degM := h.s.retrieveMemoryDetailed("chat", userMsg, 8)
 	sysBudget := 8000 - estimateTokens(sys)
 	if sysBudget < 500 {
 		sysBudget = 500 // 最低保留 500 token 给 RAG
@@ -985,7 +985,15 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 		ragText = string(ragRunes) + "\n…(RAG 记忆已截断以符合 token 预算)"
 	}
 	sys += ragText
-	sys += h.s.retrieveSkillsForPrompt(userMsg, 4) // 注入已提炼的可复用技能(SOP)，让 Agent 直接套用被验证的做法
+	skillText, skillNames, skillHits, degS := h.s.retrieveSkillsDetailed(userMsg, 4)
+	sys += skillText
+	if stream && w != nil {
+		deg := degM
+		if deg == "" {
+			deg = degS
+		}
+		writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+	}
 
 	// Build messages
 	msgs := []map[string]string{{"role": "system", "content": sys}}

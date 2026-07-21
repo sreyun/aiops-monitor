@@ -59,6 +59,9 @@ func TestMapNightingaleDashboard(t *testing.T) {
 	if by["CPU"].Targets[0].Legend != "{{ident}}" {
 		t.Fatalf("图例未保留: %+v", by["CPU"].Targets)
 	}
+	if by["CPU"].Targets[0].Expr != `cpu_usage_active{ident=~"$ident"}` {
+		t.Fatalf("导入应把 ident=\"$ident\" 提升为 =~: %q", by["CPU"].Targets[0].Expr)
+	}
 	if by["Mem"].Type != "stat" || by["Mem"].Unit != "bytes" || by["Mem"].Grid.X != 12 {
 		t.Fatalf("Mem 面板映射错误: %+v", by["Mem"])
 	}

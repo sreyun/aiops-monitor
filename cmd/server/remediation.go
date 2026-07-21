@@ -261,6 +261,45 @@ func (m *remediationManager) finish(runID int64, ok bool, reason string) {
 	}
 }
 
+// ProposeManual 事件级 L4 一键提案：不依赖规则，直接把剧本挂到 pending_approval，
+// 人工批准后在该主机执行。RuleID 为空以区分自动规则触发的 runs。
+func (m *remediationManager) ProposeManual(pb Playbook, hostID, hostname string, incidentID int64, title, actor string) (RemediationRun, error) {
+	if strings.TrimSpace(pb.ID) == "" || len(pb.Steps) == 0 {
+		return RemediationRun{}, fmt.Errorf("%s", Tz("remediation.reason_no_playbook"))
+	}
+	if strings.TrimSpace(hostID) == "" {
+		return RemediationRun{}, fmt.Errorf("缺少目标主机")
+	}
+	if title == "" {
+		title = "事件修复提案"
+	}
+	m.mu.Lock()
+	m.nextID++
+	run := RemediationRun{
+		ID: m.nextID, RuleID: "", RuleName: title,
+		AlertKey: fmt.Sprintf("proposal/%d", incidentID), AlertType: "proposal",
+		HostID: hostID, Hostname: hostname,
+		PlaybookID: pb.ID, PlaybookName: pb.Name,
+		Status: "pending_approval", IncidentID: incidentID,
+		CreatedAt: time.Now().Unix(), Reason: "proposed_by:" + actor,
+	}
+	m.runs = append(m.runs, run)
+	if len(m.runs) > remediationRunCap {
+		m.runs = m.runs[len(m.runs)-remediationRunCap:]
+	}
+	out := *m.findRun(run.ID)
+	m.mu.Unlock()
+	if m.onIncident != nil && incidentID > 0 {
+		m.onIncident(incidentID, "remediation", actor,
+			Tz("remediation.evt_pending", title, pb.Name))
+	}
+	if m.onNotify != nil {
+		m.onNotify("warning", "修复提案待审批："+title,
+			"剧本「"+pb.Name+"」已挂到事件，等待人工审批后在主机 "+hostname+" 执行。", incidentID)
+	}
+	return out, nil
+}
+
 // Approve runs a pending remediation; Reject discards it.
 func (m *remediationManager) Approve(runID int64, actor string) error {
 	m.mu.Lock()
@@ -282,9 +321,11 @@ func (m *remediationManager) Approve(runID int64, actor string) error {
 	run.Status = "running"
 	run.DecidedAt = time.Now().Unix()
 	run.DecidedBy = actor
-	// reserve guard slots on approval
-	m.lastRun[run.RuleID+"|"+run.HostID] = time.Now().Unix()
-	m.hourly[run.RuleID] = append(m.hourly[run.RuleID], time.Now().Unix())
+	// 规则触发的 runs 才占冷却/限频槽；一键提案（RuleID 空）不占用
+	if run.RuleID != "" {
+		m.lastRun[run.RuleID+"|"+run.HostID] = time.Now().Unix()
+		m.hourly[run.RuleID] = append(m.hourly[run.RuleID], time.Now().Unix())
+	}
 	runID, hostID, incID, ruleName := run.ID, run.HostID, run.IncidentID, run.RuleName
 	m.mu.Unlock()
 	m.launch(runID, pb, hostID, incID, ruleName)

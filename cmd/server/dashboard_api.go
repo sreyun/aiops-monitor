@@ -36,6 +36,12 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "仪表盘不存在"})
 		return
 	}
+	// 惰性修复历史导入：=~ 与布局重叠，回写一次后下次不再变。
+	if healImportedDashboard(&d) {
+		if saved, err := s.cfg.UpsertDashboard(d); err == nil {
+			d = saved
+		}
+	}
 	writeJSON(w, http.StatusOK, d)
 }
 

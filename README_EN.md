@@ -63,16 +63,16 @@ A complete alert lifecycle that suppresses storming at the source:
 - **SRE incident loop**: alerts / SLO / manual incidents converge → timeline → acknowledge / resolve / escalate to ticket, with **automatic dedup and open/close**.
 - **Remediation gate**: alerts auto-trigger runbook fixes behind a **human-approval gate + guardrails** — risky actions never auto-run.
 - **SLO / error budget**: multi-window multi-burn-rate evaluation of SLO breaches.
-- **Ticketing**: incidents escalate to tickets with status / assignment / comments.
+- **Ticketing closed-loop**: escalate from incidents; assign **real directory users** via `GET /api/v1/directory/users` (viewer+); attach images/files on create & comments (shared with incident comments); Android SRE Hub stays in sync.
 
 ### 4. AI Diagnosis
 
 - **Scheduled / on-demand health inspection**: synthesizes online / offline hosts, active alerts, SLO breaches and recent error logs into a health verdict.
-- **Incident root-cause**: critical incidents auto-trigger AI root-cause analysis written into the incident timeline.
-- **RAG vector learning loop**: pgvector-backed `diagnosis_embeddings` apply **👍 up-rank / 👎 down-rank feedback reranking** — it learns from your team and gets sharper over time.
-- **AI assistant**: multi-turn SSE streaming chat + Function Calling tools (query metrics / search logs / list alerts / similar cases / read-only terminal inspection).
-- **Pluggable, never binding**: any OpenAI-compatible LLM enables smart mode; **without an LLM it falls back to built-in heuristic diagnosis**, running with zero external dependencies.
-- **Decoupled embedding model**: embedding model configured independently from the chat model, pointing at any OpenAI-compatible `/embeddings` (OpenAI / BaiLian / bge / m3e etc.), with configurable dimensions + one-click connectivity self-test.
+- **Incident root-cause**: critical incidents auto-trigger AI analysis on the timeline; topology RCA + streaming follow-ups.
+- **RAG vector learning loop**: pgvector-backed memory/skills with **👍 / 👎 feedback reranking**.
+- **AI assistant (multimodal + voice)**: SSE streaming + Function Calling; Web supports image/file/URL attach, **speech input & TTS read-back**; Android Copilot/diagnosis can send images and parsed files.
+- **Pluggable, never binding**: any OpenAI-compatible LLM enables smart mode; **without an LLM it falls back to built-in heuristic diagnosis**.
+- **Decoupled embedding model**: chat / embed / optional rerank configured independently, with connectivity self-tests and AI call stats.
 
 ### 5. Security & Compliance
 

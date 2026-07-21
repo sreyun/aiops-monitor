@@ -519,7 +519,7 @@ const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:I18N.t("sre.src_alert","告警"),slo:"SLO",manual:I18N.t("sre.src_manual","手动")})[s]||esc(s);
 const _incStatus = s => ({open:I18N.t("sre.inc_open","进行中"),acknowledged:I18N.t("sre.inc_acked","已确认"),resolved:I18N.t("sre.inc_resolved","已解决")})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
-const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
+const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),topology_rca:I18N.t("sre.tl_topology_rca","🧭 拓扑 RCA"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
 const _runStatus = s => ({running:I18N.t("sre.run_running","执行中"),success:I18N.t("sre.run_success","成功"),failed:I18N.t("sre.run_failed","失败"),pending_approval:I18N.t("sre.run_pending","待审批"),skipped_cooldown:I18N.t("sre.run_skip_cooldown","冷却跳过"),skipped_ratelimit:I18N.t("sre.run_skip_ratelimit","限频跳过"),rejected:I18N.t("sre.run_rejected","已拒绝"),no_playbook:I18N.t("sre.run_no_playbook","无剧本")})[s]||s;
 const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
 const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
@@ -552,6 +552,7 @@ function switchSRETab(tab){
 function loadSRETab(tab){
   if (tab==="incidents") loadIncidents();
   else if (tab==="remediation") loadRemediation();
+  else if (tab==="topology") loadTopology();
   else if (tab==="slo") loadSLOs();
   else if (tab==="tickets") loadTickets();
   else if (tab==="ai") loadInspections();
@@ -577,7 +578,7 @@ async function openIncidentDetail(id){
     $("incidentDetailTitle").textContent = `#${inc.id} ${inc.title}`;
     const tl = (inc.timeline||[]).slice().reverse().map(e=>`<div class="tl-item">
       <div class="tl-dot ${_sevCls(inc.severity)}"></div>
-      <div class="tl-body"><div class="tl-head"><b>${_tlKind(e.kind)}</b> <span class="tl-time">${fmtDateTime(e.ts)}</span>${e.actor?` · <span class="tl-actor">${esc(e.actor)}</span>`:""}</div>${e.text?`<div class="tl-text">${esc(e.text)}</div>`:""}</div></div>`).join("");
+      <div class="tl-body"><div class="tl-head"><b>${_tlKind(e.kind)}</b> <span class="tl-time">${fmtDateTime(e.ts)}</span>${e.actor?` · <span class="tl-actor">${esc(e.actor)}</span>`:""}</div>${e.text?`<div class="tl-text">${esc(e.text)}</div>`:""}${typeof attachChipsHTML==="function"?attachChipsHTML(e.attachments):""}</div></div>`).join("");
     $("incidentDetailBody").innerHTML = `<div class="sre-meta">
       <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span>
       <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
@@ -598,15 +599,29 @@ async function openIncidentDetail(id){
     const acts=[];
     acts.push(`<button class="btn sm" data-iact="diagnose">🤖 ${I18N.t("sre.ai_diagnose","AI 诊断")}</button>`);
     acts.push(`<button class="btn sm" data-iact="analysis-board" title="${I18N.t("sre.gen_analysis_board_title","AI 按此事件生成排障分析看板")}">📊 ${I18N.t("sre.gen_analysis_board","AI 分析看板")}</button>`);
-    // 有 AI 诊断结论时，可一键把处置建议固化为「自动修复规则草稿」（停用态，需人工审核启用）
+    // 有 AI 诊断结论时：一键提案（本事件审批执行）或转长期自动化规则草稿
     if ((inc.timeline||[]).some(e=>e.kind==="ai_diagnosis" && e.text)) {
+      acts.push(`<button class="btn sm ai-assist-btn" data-iact="propose-fix" title="${I18N.t("sre.propose_fix_title","根据诊断生成一次性修复剧本草稿，审批后在本事件主机执行")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.propose_fix","生成修复提案")}</button>`);
       acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="${I18N.t("sre.to_auto_rule_title","把诊断建议转成自动修复规则草稿，人工审核后启用")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.to_auto_rule","转自动化规则")}</button>`);
+    }
+    if (inc.host_id) {
+      acts.push(`<button class="btn sm" data-iact="topo-rca" title="查看依赖拓扑与变更关联 RCA">🧭 RCA</button>`);
     }
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">${I18N.t("sre.inc_ack_btn","确认")}</button>`); acts.push(`<button class="btn sm" data-iact="resolve">${I18N.t("sre.inc_resolve_btn","解决")}</button>`); }
     if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">${I18N.t("sre.inc_escalate_btn","升级工单")}</button>`);
-    acts.push(`<div style="flex:1"></div><input type="text" id="incCommentInput" placeholder="${I18N.t("sre.add_comment_ph","添加评论…")}" style="flex:2;min-width:120px"><button class="btn primary sm" data-iact="comment">${I18N.t("sre.send","发送")}</button>`);
+    acts.push(`<div class="inc-comment-bar"><div id="incCommentAttach" class="attach-chips" style="display:none"></div><button type="button" class="btn sm" data-iact="comment-attach" title="${I18N.t("sre.upload_img_file","上传图片或文件")}">📎</button><input type="file" id="incCommentFile" multiple hidden accept="${typeof ATTACH_FILE_ACCEPT!=="undefined"?ATTACH_FILE_ACCEPT:"image/*,.txt,.log,.pdf,.docx,.xlsx"}"><input type="text" id="incCommentInput" placeholder="${I18N.t("sre.add_comment_ph","添加评论…")}"><button class="btn primary sm" data-iact="comment">${I18N.t("sre.send","发送")}</button></div>`);
     const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
+    window._INC_COMMENT_ATTACHMENTS = [];
+    const refreshIncCommentAtt = ()=>renderAttachBox($("incCommentAttach"), window._INC_COMMENT_ATTACHMENTS, i=>{
+      window._INC_COMMENT_ATTACHMENTS.splice(i,1); refreshIncCommentAtt();
+    });
     foot.querySelectorAll("[data-iact]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.iact));
+    const incCf=$("incCommentFile");
+    if (incCf) incCf.onchange = async ()=>{
+      await ingestFilesIntoAttachments(incCf.files, window._INC_COMMENT_ATTACHMENTS, {onChange: refreshIncCommentAtt});
+      refreshIncCommentAtt();
+      incCf.value="";
+    };
     // Wire up diagnosis chat
     window._incDiagId = inc.id;
     window._incDiagHistory = [];
@@ -622,22 +637,28 @@ async function openIncidentDetail(id){
 }
 async function incidentAction(id, act){
   try {
-    if (act==="comment"){ const t=$("incCommentInput").value.trim(); if(!t)return;
-      await fetch(`${API}/incidents/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t})}); }
+    if (act==="comment-attach"){ const f=$("incCommentFile"); if(f) f.click(); return; }
+    if (act==="comment"){
+      const t=($("incCommentInput")&&$("incCommentInput").value||"").trim();
+      const atts=window._INC_COMMENT_ATTACHMENTS||[];
+      if(!t && !atts.length) return;
+      await fetch(`${API}/incidents/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t,attachments:attachmentsToAPI(atts)})});
+      window._INC_COMMENT_ATTACHMENTS=[];
+    }
     else if (act==="escalate"){
       const r=await fetch(`${API}/incidents/${id}/ticket`,{method:"POST"});
       const tk=await r.json().catch(()=>({}));
       toast(`${I18N.t("sre.escalated_to_ticket","已升级为工单")} #${tk.id||"?"}`,"ok");
+      if (tk && tk.id){ openTicketModal(tk); return; }
     }
     else if (act==="diagnose"){
-      toast(I18N.t("sre.ai_diagnosing","AI 诊断中，请稍候…"),"ok");
-      const r=await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream:true})});
-      if(r.ok && r.headers.get("content-type")?.includes("event-stream")){
-        // SSE 流式响应：等待完成后再刷新详情
-        await readSSEStream(r,()=>{},()=>{},()=>{});
-      }
+      // 流式写入诊断会话（与追问同源 UI），不再丢弃 SSE
+      await streamIncidentDiagnose(id);
+      return; // 诊断会话已就地更新，勿再 openIncidentDetail 以免清掉流式内容
     }
     else if (act==="draft-rule"){ draftRemediationFromIncident(window._curIncident); return; } // 不走末尾刷新
+    else if (act==="propose-fix"){ proposeRemediationFromIncident(window._curIncident); return; }
+    else if (act==="topo-rca"){ showIncidentTopoRCA(window._curIncident); return; }
     else if (act==="analysis-board"){
       toast(I18N.t("sre.gen_board_ing","AI 生成分析看板中，请稍候…"),"ok");
       const r=await fetch(`${API}/dashboards/ai-from-incident`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({incident_id:+id})});
@@ -649,6 +670,113 @@ async function incidentAction(id, act){
     else await fetch(`${API}/incidents/${id}/${act}`,{method:"POST"});
     openIncidentDetail(id); loadIncidents(); loadSREBadge();
   } catch(e){ toast(I18N.t("toast.operation_failed","操作失败")+": "+e,"err"); }
+}
+
+// 一键诊断：SSE 写入 #incDiagnosisChat，与诊断追问共用渲染逻辑。
+async function streamIncidentDiagnose(id){
+  window._incDiagId = id;
+  if(!Array.isArray(window._incDiagHistory)) window._incDiagHistory = [];
+  const aiMsg={role:"assistant",content:"",_streaming:true,_loading:true};
+  window._incDiagHistory.push(aiMsg);
+  renderDiagnosisChat();
+  const loadingPhrases=["🔍 "+I18N.t("sre.diag_phase_ctx","正在分析事件上下文…"),"📊 "+I18N.t("sre.diag_phase_similar","检索历史相似案例…"),"🤖 "+I18N.t("sre.diag_phase_think","AI 正在思考…")];
+  let loadingIdx=0;
+  const loadingTimer=setInterval(()=>{
+    loadingIdx=(loadingIdx+1)%loadingPhrases.length;
+    if(aiMsg._loading){ aiMsg.content=loadingPhrases[loadingIdx]; renderDiagnosisChat(); }
+  },2000);
+  let renderThrottle=null;
+  const throttledRender=()=>{
+    if(renderThrottle) return;
+    renderThrottle=requestAnimationFrame(()=>{ renderThrottle=null; renderDiagnosisChat(); });
+  };
+  try {
+    const r=await fetch(`${API}/incidents/${id}/diagnose`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream:true})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const ct=r.headers.get("content-type")||"";
+    if(!ct.includes("event-stream")){
+      // 启发式 JSON 回退
+      clearInterval(loadingTimer);
+      const j=await r.json().catch(()=>({}));
+      aiMsg._loading=false; aiMsg._streaming=false;
+      const text=j.diagnosis||j.summary||j.reply||"";
+      const src=j.source==="heuristic"?I18N.t("sre.heuristic","启发式"):"AI";
+      aiMsg.content=text?`【${src}】\n${text}`:(j.error||I18N.t("sre.empty_reply","（空回复）"));
+      if(/AI 未配置|未启用/.test(String(j.error||""))) promptOpenAIConfig(j.error);
+      renderDiagnosisChat();
+      loadIncidents(); loadSREBadge();
+      return;
+    }
+    await readSSEStream(r,
+      (delta,fullText)=>{
+        if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
+        aiMsg.content=fullText;
+        throttledRender();
+      },
+      (err)=>{
+        clearInterval(loadingTimer); aiMsg._loading=false; aiMsg._streaming=false;
+        aiMsg.content="❌ "+err;
+        if(/AI 未配置|未启用/.test(String(err||""))) promptOpenAIConfig(err);
+        renderDiagnosisChat();
+      },
+      (fullText)=>{
+        clearInterval(loadingTimer); aiMsg._loading=false; aiMsg._streaming=false;
+        aiMsg.content=fullText||aiMsg.content||I18N.t("sre.empty_reply","（空回复）");
+        if(renderThrottle){ cancelAnimationFrame(renderThrottle); renderThrottle=null; }
+        renderDiagnosisChat();
+      },
+      null,
+      (meta)=>{ applyRAGMetaHint(meta, "incDiagnosisChat"); },
+      null,
+      (rd,fullReasoning)=>{
+        if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
+        aiMsg._reasoning=fullReasoning;
+        throttledRender();
+      }
+    );
+  } catch(e){
+    clearInterval(loadingTimer);
+    aiMsg._loading=false; aiMsg._streaming=false;
+    aiMsg.content="❌ "+I18N.t("toast.network_error","网络错误")+": "+e;
+    renderDiagnosisChat();
+  }
+  // 保留本地流式会话内容；仅刷新列表/角标（勿 openIncidentDetail，否则会清掉刚写入的聊天）
+  loadIncidents(); loadSREBadge();
+}
+
+// AI 未配置时引导打开设置
+function promptOpenAIConfig(err){
+  const tip=String(err||I18N.t("sre.ai_not_configured","AI 未配置或未启用"));
+  if(typeof toast==="function") toast(tip,"err");
+  if(typeof openAIConfig!=="function") return;
+  setTimeout(()=>{ try{ openAIConfig(); }catch(e){} }, 200);
+}
+
+// RAG 降级 / 命中提示（挂到目标容器顶部）
+function applyRAGMetaHint(meta, containerId){
+  if(!meta) return;
+  const tip=meta.degraded_tip||"";
+  const hits=[];
+  if(typeof meta.memory_hits==="number" && meta.memory_hits>0) hits.push(I18N.t("sre.rag_mem","记忆")+" ×"+meta.memory_hits);
+  if(typeof meta.skill_hits==="number" && meta.skill_hits>0){
+    let sk=I18N.t("sre.rag_skill","技能")+" ×"+meta.skill_hits;
+    if(Array.isArray(meta.skill_names) && meta.skill_names.length){
+      sk+="（"+meta.skill_names.slice(0,4).join("、")+(meta.skill_names.length>4?"…":"")+"）";
+    }
+    hits.push(sk);
+  }
+  let text=tip;
+  if(!text && hits.length) text="📚 "+hits.join(" · ");
+  if(!text) return;
+  const host=containerId?document.getElementById(containerId):null;
+  if(host){
+    let bar=host.querySelector(".ai-rag-hint");
+    if(!bar){ bar=document.createElement("div"); bar.className="ai-rag-hint"; host.prepend(bar); }
+    bar.textContent=text;
+    bar.title=tip||text;
+  } else if(typeof toast==="function" && tip){
+    toast(tip,"ok");
+  }
 }
 
 // 闭环：把事件的 AI 诊断建议转成「自动修复规则草稿」。组织上下文（事件+最新诊断+可用剧本）后
@@ -670,6 +798,64 @@ function draftRemediationFromIncident(inc){
     applyTo:(text)=>applyRemediationDraft(text)
   });
 }
+
+// L4：本事件一次性修复提案 → 待审批 → 批准执行
+function proposeRemediationFromIncident(inc){
+  if(!inc){ toast(I18N.t("sre.reopen_incident","请重新打开事件详情后再试"),"err"); return; }
+  if(!inc.host_id){ toast(I18N.t("sre.propose_need_host","事件未关联主机，无法挂修复提案"),"err"); return; }
+  let diag="";
+  const tl=inc.timeline||[];
+  for(let i=tl.length-1;i>=0;i--){ if(tl[i].kind==="ai_diagnosis" && tl[i].text){ diag=tl[i].text; break; } }
+  if(!diag){ toast(I18N.t("sre.need_diag_first","请先运行「🤖 AI 诊断」，有诊断结论后再生成提案"),"err"); return; }
+  const pbs=(SRE_PLAYBOOKS||[]).map(p=>`- id=${p.id} 名称=${p.name}${p.description?" 用途="+p.description:""}`).join("\n")||"（暂无已保存剧本，请新建）";
+  const ctx=`事件ID：${inc.id}\n事件：${inc.title}\n告警类型：${inc.type||"(未知)"}\n级别：${inc.severity}\n主机ID：${inc.host_id}\n主机：${inc.hostname||"(未知)"}\n\nAI 诊断结论：\n${diag}\n\n【可用剧本】\n${pbs}`;
+  openAIAssist({
+    task:"remediation_proposal",
+    title:I18N.t("sre.propose_fix_ai_title","AI 生成修复提案 · 审批后执行"),
+    mode:"analyze",
+    context:ctx,
+    applyLabel:I18N.t("sre.propose_fix_apply","提交待审批"),
+    applyTo:(text)=>applyRemediationProposal(inc.id, text)
+  });
+}
+async function applyRemediationProposal(incidentId, text){
+  let draft;
+  try { draft=JSON.parse(extractFirstCodeBlock(text)||text); }
+  catch(e){ toast(I18N.t("sre.bad_json_proposal","AI 输出不是合法 JSON，请重试或手工编写剧本"),"err"); return; }
+  try {
+    const body={
+      title: draft.title||"",
+      existing_playbook_id: (draft.existing_playbook_id||"").trim(),
+      playbook: draft.playbook||null
+    };
+    if(!body.existing_playbook_id && !body.playbook) throw new Error(I18N.t("sre.no_usable_pb","AI 未给出可用剧本"));
+    const r=await fetch(`${API}/incidents/${incidentId}/remediation-propose`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.ok) throw new Error(j.error||I18N.t("sre.propose_failed","提交提案失败"));
+    toast("✅ "+I18N.t("sre.propose_ok","已提交修复提案，请在「自动修复」执行记录中批准后执行"),"ok");
+    try{ SRE_PLAYBOOKS=(await fetch(`${API}/playbooks`).then(r=>r.json()))||SRE_PLAYBOOKS; }catch(e){}
+    const m=$("incidentDetailMask"); if(m) m.classList.remove("show");
+    if(typeof closeAIAssist==="function") closeAIAssist();
+    if(typeof switchSRETab==="function") switchSRETab("remediation");
+    else if(typeof loadRemediation==="function") loadRemediation();
+    loadSREBadge();
+  } catch(e){ toast(I18N.t("sre.propose_failed","提交提案失败")+"："+e,"err"); }
+}
+async function showIncidentTopoRCA(inc){
+  if(!inc||!inc.host_id){ toast("事件未关联主机","err"); return; }
+  try{
+    const j=await fetch(`${API}/topology/rca?incident_id=${inc.id}`).then(r=>r.json());
+    const text=j.summary||JSON.stringify(j,null,2);
+    const body=$("incidentDetailBody");
+    if(body){
+      let box=body.querySelector(".topo-rca-box");
+      if(!box){ box=document.createElement("div"); box.className="topo-rca-box"; body.prepend(box); }
+      box.innerHTML=`<div class="subhead">🧭 ${I18N.t("sre.topo_rca","拓扑 RCA")}</div><pre class="skill-steps" style="white-space:pre-wrap;margin:0 0 12px">${esc(text)}</pre>`;
+      box.scrollIntoView({behavior:"smooth",block:"nearest"});
+    } else toast(text.slice(0,200),"ok");
+  }catch(e){ toast("加载 RCA 失败："+e,"err"); }
+}
+
 // 落地草稿：新建剧本(若需要) + 建「停用」规则(require_approval 默认 true)，双保险，绝不自动生效。
 async function applyRemediationDraft(text){
   let draft;
@@ -725,6 +911,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,
           try {
             const j=JSON.parse(data);
             if(j.error){ if(onError) onError(j.error); return fullText; }
+            if(j.meta!==undefined){ if(onMeta) onMeta(Object.assign({}, j.meta, j.session_id!==undefined?{session_id:j.session_id}:{})); continue; }
             if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.tool){ if(onTool) onTool(j.tool); continue; } // 工具执行状态帧（run/ok/err）
@@ -844,6 +1031,7 @@ async function sendDiagnosisChatMsg(){
       (err)=>{
         clearInterval(loadingTimer); aiMsg._loading=false; aiMsg._streaming=false;
         aiMsg.content="❌ "+err;
+        if(/AI 未配置|未启用/.test(String(err||""))) promptOpenAIConfig(err);
         renderDiagnosisChat();
       },
       (fullText)=>{
@@ -854,7 +1042,7 @@ async function sendDiagnosisChatMsg(){
         renderDiagnosisChat();
       },
       null, // onResult
-      null, // onMeta
+      (meta)=>{ applyRAGMetaHint(meta, "incDiagnosisChat"); }, // onMeta
       null, // onTool
       (rd,fullReasoning)=>{ // 思维链增量：累积到 aiMsg._reasoning 并实时渲染
         if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
@@ -958,13 +1146,80 @@ function renderRules(rules){
 function renderRuns(runs){
   const el=$("remediationRunList");
   if(!runs.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_runs","暂无执行记录")}</div>`; return; }
-  el.innerHTML = runs.map(r=>`<div class="sre-row">
+  el.innerHTML = runs.map(r=>{
+    const isProposal=!r.rule_id || r.alert_type==="proposal";
+    const title=isProposal?(`${esc(r.rule_name||I18N.t("sre.proposal","修复提案"))} → ${esc(r.playbook_name||r.playbook_id)}`):(`${esc(r.rule_name)} → ${esc(r.playbook_name||r.playbook_id)}`);
+    const subBits=[esc(r.hostname), isProposal?I18N.t("sre.proposal_once","一次性提案"):esc(r.alert_type), fmtDateTime(r.created_at)];
+    if(r.reason && !String(r.reason).startsWith("proposed_by:")) subBits.push(esc(r.reason));
+    return `<div class="sre-row">
     <span class="badge ${_runCls(r.status)}">${_runStatus(r.status)}</span>
-    <div class="sre-row-main"><div class="sre-row-title">${esc(r.rule_name)} → ${esc(r.playbook_name||r.playbook_id)}</div>
-      <div class="sre-row-sub">${esc(r.hostname)} · ${esc(r.alert_type)} · ${fmtDateTime(r.created_at)}${r.reason?" · "+esc(r.reason):""}</div></div>
-    ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">${I18N.t("sre.approve","批准")}</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">${I18N.t("sre.reject","拒绝")}</button></div>`:""}</div>`).join("");
+    <div class="sre-row-main"><div class="sre-row-title">${title}${isProposal?` <span class="badge info">${I18N.t("sre.proposal","提案")}</span>`:""}</div>
+      <div class="sre-row-sub">${subBits.join(" · ")}</div></div>
+    ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">${I18N.t("sre.approve","批准")}</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">${I18N.t("sre.reject","拒绝")}</button></div>`:""}</div>`;
+  }).join("");
   el.querySelectorAll("[data-runact]").forEach(b=>b.onclick=async()=>{ await fetch(`${API}/remediation/runs/${b.dataset.run}/${b.dataset.runact}`,{method:"POST"}); loadRemediation(); loadSREBadge(); });
 }
+
+/* ---- 依赖拓扑 ---- */
+async function loadTopology(){
+  const el=$("topoEdgeList");
+  if(!el) return;
+  try{
+    if(!SRE_HOSTS.length){
+      try{ SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; }catch(e){}
+    }
+    const edges=await fetch(`${API}/topology/edges`).then(r=>r.json());
+    if(!edges||!edges.length){
+      el.innerHTML=`<div class="empty-line">暂无依赖边。示例：<code>svc:api</code> depends_on <code>host:&lt;id&gt;</code>，或 <code>cat:DB</code> talks_to <code>cat:App</code>。</div>`;
+    } else {
+      el.innerHTML=edges.map(e=>`<div class="pb-card fwd-card" data-topo="${esc(e.id)}">
+        <div class="pb-card-top"><div class="pb-card-title"><strong class="mono">${esc(e.from)}</strong>
+          <span class="pb-desc">— ${esc(e.kind||"depends_on")} →</span>
+          <strong class="mono">${esc(e.to)}</strong></div></div>
+        <div class="pb-card-foot"><div class="pb-pills">${e.note?`<span class="badge">${esc(e.note)}</span>`:""}</div>
+          <div class="fwd-actions"><button class="btn danger sm" data-topo-del="${esc(e.id)}">${I18N.t("ui.delete","删除")}</button></div></div></div>`).join("");
+      el.querySelectorAll("[data-topo-del]").forEach(b=>b.onclick=async()=>{
+        if(!confirm("删除该依赖边？")) return;
+        await fetch(`${API}/topology/edges/${b.dataset.topoDel}`,{method:"DELETE"});
+        loadTopology();
+      });
+    }
+    const sel=$("topoRcaHost");
+    if(sel){
+      const hosts=SRE_HOSTS||[];
+      const cur=sel.value;
+      sel.innerHTML=`<option value="">选择主机…</option>`+hosts.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname||h.id)}</option>`).join("");
+      if(cur) sel.value=cur;
+    }
+  }catch(e){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
+}
+async function addTopologyEdge(){
+  const from=prompt("From 节点（host:<id> / cat:<分类> / svc:<服务名>）","");
+  if(from===null) return;
+  const to=prompt("To 节点（host:<id> / cat:<分类> / svc:<服务名>）","");
+  if(to===null) return;
+  const kind=prompt("边类型：depends_on | runs_on | talks_to","depends_on")||"depends_on";
+  const note=prompt("备注（可选）","")||"";
+  try{
+    const r=await fetch(`${API}/topology/edges`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from,to,kind,note})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.ok) throw new Error(j.error||"保存失败");
+    toast("已添加依赖边","ok");
+    loadTopology();
+  }catch(e){ toast("添加失败："+e,"err"); }
+}
+async function runTopologyRcaDemo(){
+  const hostId=($("topoRcaHost")&&$("topoRcaHost").value)||"";
+  if(!hostId){ toast("请先选择主机","err"); return; }
+  const out=$("topoRcaOut"); if(out) out.textContent="计算中…";
+  try{
+    const j=await fetch(`${API}/topology/rca?host_id=${encodeURIComponent(hostId)}`).then(r=>r.json());
+    if(out) out.textContent=j.summary||JSON.stringify(j,null,2);
+  }catch(e){ if(out) out.textContent="失败："+e; }
+}
+safeAddEventListener("topoAddBtn","click",addTopologyEdge);
+safeAddEventListener("topoRcaBtn","click",runTopologyRcaDemo);
+
 function openRuleModal(r){
   $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?I18N.t("sre.edit_rule","编辑规则"):I18N.t("sre.new_rule","新建规则");
   $("rrName").value=r?r.name:""; $("rrEnabled").checked=r?r.enabled:true;
@@ -1132,10 +1387,19 @@ function renderTickets(list){
     <span class="badge ${_tkStatusCls(t.status)}">${esc(t.status)}</span></div>`).join("");
   el.querySelectorAll("[data-ticket]").forEach(row=>row.onclick=()=>openTicketModal(SRE_TICKETS.find(x=>x.id==row.dataset.ticket)));
 }
-function openTicketModal(t){
+let TK_CREATE_ATTACHMENTS=[];
+let TK_COMMENT_ATTACHMENTS=[];
+function refreshTkCreateAtt(){ renderAttachBox($("tkCreateAttach"), TK_CREATE_ATTACHMENTS, i=>{ TK_CREATE_ATTACHMENTS.splice(i,1); refreshTkCreateAtt(); }); }
+function refreshTkCommentAtt(){ renderAttachBox($("tkCommentAttach"), TK_COMMENT_ATTACHMENTS, i=>{ TK_COMMENT_ATTACHMENTS.splice(i,1); refreshTkCommentAtt(); }); }
+
+async function openTicketModal(t){
   $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:I18N.t("sre.new_ticket","新建工单");
   $("tkTitle").value=t?t.title:""; $("tkPriority").value=t?t.priority:"p3"; $("tkStatus").value=t?t.status:"open";
-  $("tkAssignee").value=t?(t.assignee||""):""; $("tkDesc").value=t?(t.description||""):"";
+  $("tkDesc").value=t?(t.description||""):"";
+  await fillUserSelect($("tkAssignee"), t?(t.assignee||""):"");
+  TK_CREATE_ATTACHMENTS=[]; TK_COMMENT_ATTACHMENTS=[]; refreshTkCreateAtt(); refreshTkCommentAtt();
+  const attachField=$("tkAttachField");
+  if (attachField) attachField.style.display = t ? "none" : "";
   // Show linked incident info if present
   const incInfo=$("tkIncidentInfo");
   if(t && t.incident){
@@ -1147,22 +1411,29 @@ function openTicketModal(t){
     incInfo.style.display="";
   } else { incInfo.style.display="none"; }
   const cm=$("tkComments"),cf=$("tkCommentField");
-  if(t){ cm.innerHTML=`<div class="subhead">${I18N.t("sre.comments","评论")}</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div></div>`).join("")||`<div class="empty-line">—</div>`); cf.style.display=""; }
-  else { cm.innerHTML=""; cf.style.display="none"; }
+  if(t){
+    const createAtts = (t.attachments&&t.attachments.length)?`<div class="hint" style="margin-bottom:8px">创建附件</div>${attachChipsHTML(t.attachments)}`:"";
+    cm.innerHTML=`${createAtts}<div class="subhead">${I18N.t("sre.comments","评论")}</div>`+((t.comments||[]).map(c=>`<div class="tk-comment"><span class="tk-c-author">${esc(c.author)}</span> <span class="tk-c-time">${fmtDateTime(c.ts)}</span><div>${esc(c.text)}</div>${attachChipsHTML(c.attachments)}</div>`).join("")||`<div class="empty-line">—</div>`);
+    cf.style.display="";
+  } else { cm.innerHTML=""; cf.style.display="none"; }
   $("ticketMask").classList.add("show");
 }
 async function saveTicket(){
   const id=$("ticketId").value;
-  const body={title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,assignee:$("tkAssignee").value.trim(),description:$("tkDesc").value.trim()};
+  const body={title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,assignee:($("tkAssignee").value||"").trim(),description:$("tkDesc").value.trim()};
+  if(!id && TK_CREATE_ATTACHMENTS.length) body.attachments = attachmentsToAPI(TK_CREATE_ATTACHMENTS);
   if(!body.title){ toast(I18N.t("sre.fill_title","请填写标题"),"err"); return; }
   const r=await fetch(id?`${API}/tickets/${id}`:`${API}/tickets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(r.ok){ $("ticketMask").classList.remove("show"); loadTickets(); loadSREBadge(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
+  if(r.ok){ $("ticketMask").classList.remove("show"); TK_CREATE_ATTACHMENTS=[]; loadTickets(); loadSREBadge(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
 async function addTicketComment(){
-  const id=$("ticketId").value,t=$("tkCommentInput").value.trim(); if(!id||!t)return;
-  await fetch(`${API}/tickets/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t})});
-  $("tkCommentInput").value=""; const tk=await fetch(`${API}/tickets/${id}`).then(r=>r.json()); openTicketModal(tk); loadTickets();
+  const id=$("ticketId").value,t=$("tkCommentInput").value.trim();
+  const atts=TK_COMMENT_ATTACHMENTS.slice();
+  if(!id||(!t && !atts.length))return;
+  await fetch(`${API}/tickets/${id}/comment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:t,attachments:attachmentsToAPI(atts)})});
+  $("tkCommentInput").value=""; TK_COMMENT_ATTACHMENTS=[]; refreshTkCommentAtt();
+  const tk=await fetch(`${API}/tickets/${id}`).then(r=>r.json()); openTicketModal(tk); loadTickets();
 }
 
 document.querySelectorAll("#sreTabs .chip-btn").forEach(b=>b.addEventListener("click",()=>switchSRETab(b.dataset.sretab)));
@@ -1176,6 +1447,10 @@ safeAddEventListener("sloSource","change",sloSourceChange);
 safeAddEventListener("newTicketBtn","click",()=>openTicketModal(null));
 safeAddEventListener("tkSaveBtn","click",saveTicket);
 safeAddEventListener("tkCommentBtn","click",addTicketComment);
+safeAddEventListener("tkAttachBtn","click",()=>{ const f=$("tkAttachFile"); if(f) f.click(); });
+safeAddEventListener("tkCommentAttachBtn","click",()=>{ const f=$("tkCommentFile"); if(f) f.click(); });
+const _tkAf=$("tkAttachFile"); if(_tkAf) _tkAf.onchange=async()=>{ await ingestFilesIntoAttachments(_tkAf.files, TK_CREATE_ATTACHMENTS, {onChange:refreshTkCreateAtt}); refreshTkCreateAtt(); _tkAf.value=""; };
+const _tkCf=$("tkCommentFile"); if(_tkCf) _tkCf.onchange=async()=>{ await ingestFilesIntoAttachments(_tkCf.files, TK_COMMENT_ATTACHMENTS, {onChange:refreshTkCommentAtt}); refreshTkCommentAtt(); _tkCf.value=""; };
 
 /* ---- 日志检索 ---- */
 const _logLvlCls = l => l==="error"?"crit":l==="warn"?"warn":"info";
@@ -1486,9 +1761,11 @@ async function diagnoseLogLine(log){
 function showDiagnosisResult(rep){
   const panel=$("logDiagResult");
   if(!panel) return;
+  const src=rep.source==="ai"?I18N.t("sre.ai_verdict","AI 研判"):I18N.t("sre.rule_diag","规则诊断");
+  const srcCls=rep.source==="ai"?"info":"";
   const findings=(rep.findings||[]).map(f=>`<div class="ai-finding"><span class="badge ${f.severity==="critical"?"crit":"warn"}">${esc(f.severity)}</span><div class="ai-f-body"><div class="ai-f-title">${esc(f.title)}</div>${f.detail?`<div class="ai-f-detail">${esc(f.detail)}</div>`:""}</div></div>`).join("");
   panel.innerHTML=`<div class="log-diag-card">
-    <div class="log-diag-head"><span>🔍 ${I18N.t("sre.diag_result","诊断结果")}</span><button class="log-diag-close" title="${I18N.t("assist.close","关闭")}">✕</button></div>
+    <div class="log-diag-head"><span>🔍 ${I18N.t("sre.diag_result","诊断结果")}</span><span class="badge ${srcCls}" style="margin-left:8px">${esc(src)}${rep.model?" · "+esc(rep.model):""}</span><button class="log-diag-close" title="${I18N.t("assist.close","关闭")}">✕</button></div>
     <div class="log-diag-summary">${esc(rep.summary||"")}</div>
     ${findings?`<div class="ai-findings">${findings}</div>`:""}
     ${rep.context?`<div class="log-diag-ctx">${esc(rep.context)}</div>`:""}
@@ -1554,6 +1831,78 @@ async function distillSkillsNow(){
     loadSkills();
   }catch(e){ toast(I18N.t("sre.distill_failed","提炼失败")+"："+e,"err"); }
 }
+
+// AI 记忆浏览器：只读列表 + 按 kind 过滤 + 删除
+async function openMemories(){
+  const m=$("memoryMask"); if(m) m.classList.add("show");
+  await loadMemories();
+}
+async function loadMemories(){
+  const body=$("memoryBody"), statsEl=$("memoryStats");
+  if(!body) return;
+  body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.loading","加载中…")}</div>`;
+  const kind=($("memoryKindFilter")&&$("memoryKindFilter").value)||"";
+  try{
+    const q=new URLSearchParams({limit:"50"});
+    if(kind) q.set("kind",kind);
+    const j=await fetch(`${API}/ai/memories?${q}`).then(r=>r.json());
+    const items=j.items||[];
+    const stats=j.stats||{};
+    if(statsEl){
+      const parts=Object.keys(stats).sort().map(k=>`${k} ${stats[k]}`);
+      statsEl.textContent=parts.length?`共 ${j.total||0} 条 · ${parts.join(" · ")}`:`共 ${j.total||0} 条（需 PostgreSQL）`;
+    }
+    if(!items.length){
+      body.innerHTML=`<div class="empty-line" style="padding:20px">${I18N.t("sre.memory_empty","还没有记忆。启用 AI 并完成若干诊断/对话后，经验会沉淀到此；未配置 PostgreSQL 时不可用。")}</div>`;
+      return;
+    }
+    body.innerHTML=`<div class="skill-list">`+items.map(m=>{
+      const when=m.created_at?fmtDateTime(m.created_at):"";
+      return `<div class="skill-card">
+        <div class="skill-head"><b>${esc(m.kind||"?")}</b>
+          <span class="skill-meta">${esc(m.source||"")} · 权重 ${(m.priority||1).toFixed(1)}${when?" · "+when:""}</span>
+          <button class="btn danger sm" data-mem-del="${m.id}">${I18N.t("ui.delete","删除")}</button></div>
+        <pre class="skill-steps">${esc(m.content||"")}</pre>
+      </div>`;
+    }).join("")+`</div>`;
+    body.querySelectorAll("[data-mem-del]").forEach(b=>b.onclick=async()=>{
+      if(!confirm(I18N.t("sre.confirm_del_memory","删除该记忆？"))) return;
+      await fetch(`${API}/ai/memories/${b.dataset.memDel}`,{method:"DELETE"});
+      loadMemories();
+    });
+  }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
+}
+
+async function loadAIStats(){
+  const el=$("aiStatsBody"); if(!el) return;
+  try{
+    const j=await fetch(`${API}/ai/stats`).then(r=>r.json());
+    const total=j.total||0, fail=j.fail||0;
+    const rate=total?((j.fail_rate||0)*100).toFixed(1):"0.0";
+    const avg=j.avg_latency_ms||0;
+    const tok=j.approx_tokens_total||0;
+    const by=j.by_task||{};
+    const taskRows=Object.keys(by).sort().map(k=>{
+      const t=by[k];
+      return `<tr><td class="mono">${esc(k)}</td><td>${t.count||0}</td><td>${t.fail||0}</td><td>${t.avg_ms||0} ms</td></tr>`;
+    }).join("");
+    const recent=(j.recent||[]).slice(0,8).map(r=>{
+      const st=r.ok?"ok":"err";
+      return `<div class="mono" style="font-size:11px;color:var(--muted);margin:2px 0"><span class="badge ${st}">${r.ok?"OK":"FAIL"}</span> ${esc(r.task||"")} · ${r.latency_ms||0}ms · ≈${r.approx_tokens||0} tok${r.error?" · "+esc(r.error):""}</div>`;
+    }).join("");
+    el.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+      <div><div class="hint">调用次数</div><b>${total}</b></div>
+      <div><div class="hint">失败率</div><b>${rate}%</b> <span class="hint">(${fail})</span></div>
+      <div><div class="hint">平均延迟</div><b>${avg} ms</b></div>
+      <div><div class="hint">粗估 Token 累计</div><b>${tok}</b></div>
+    </div>
+    ${taskRows?`<table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>次数</th><th>失败</th><th>均延迟</th></tr></thead><tbody>${taskRows}</tbody></table>`:`<div class="hint">尚无按任务统计（完成若干 AI 调用后出现）</div>`}
+    ${recent?`<div class="hint" style="margin-top:6px">最近调用</div>${recent}`:""}`;
+  }catch(e){
+    el.innerHTML=`<div class="hint">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`;
+  }
+}
+
 // 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
 async function genDutyReport(){
   let j;
@@ -1581,6 +1930,7 @@ async function openAIConfig(){
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     // 更新向量化 / 重排模型卡片摘要
     updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary();
+    loadAIStats();
     // 向量化、重排模型默认折叠
     const body=$("embedCardBody"), arrow=$("embedCardArrow");
     if(body){ body.style.display="none"; }
@@ -2116,7 +2466,7 @@ async function sendAIChat(){
         schedulePaint();
         if(stick) aiChatToBottom();
       },
-      (err)=>{ if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; } if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } },
+      (err)=>{ if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; } if(pending){ pending.textContent="✗ "+err; pending.classList.add("err"); } if(/AI 未配置|未启用/.test(String(err||""))) promptOpenAIConfig(err); },
       (fullText)=>{
         if(pending){
           answer=filterDisplayContent(fullText||answer||"");
@@ -2125,7 +2475,10 @@ async function sendAIChat(){
         aiChatToBottom();
       },
       null,
-      (meta)=>{ if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); } },
+      (meta)=>{
+        if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); }
+        applyRAGMetaHint(meta, "aiChatLog");
+      },
       (t)=>{ // 工具状态帧：run 追加 chip，ok/err 更新最近的同名 run chip
         if(!t||!t.name) return;
         if(t.state==="run") toolStates.push({name:t.name,state:"run"});
@@ -2145,7 +2498,11 @@ async function sendAIChat(){
     refreshAISessionsSoon();
   }catch(e){
     if(_aiChatAborted || (e&&e.name==="AbortError")){ if(pending){ pending.textContent="⏹ "+I18N.t("sre.aborted","已终止"); pending.className="ai-chat-msg sys"; } }
-    else if(pending){ pending.textContent="✗ "+I18N.t("sre.request_failed","请求失败")+"："+e; pending.classList.add("err"); }
+    else {
+      const msg=String(e);
+      if(pending){ pending.textContent="✗ "+I18N.t("sre.request_failed","请求失败")+"："+msg; pending.classList.add("err"); }
+      if(/AI 未配置|未启用/.test(msg)) promptOpenAIConfig(msg);
+    }
   }
   finally{
     _aiChatBusy=false; _aiChatAbort=null; setAIChatBusyUI(false);
@@ -2184,7 +2541,7 @@ function copyText(t){
   _fallbackCopy(t);
 }
 function _fallbackCopy(t){ const ta=document.createElement("textarea"); ta.value=t; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(e){} ta.remove(); }
-// 给一条 AI 回复挂上「复制」操作栏
+// 给一条 AI 回复挂上「复制 / 重答 / 👍👎」操作栏
 function addCopyTool(div,rawText){
   if(!div) return;
   // 代码块独立复制（复制对应 <pre> 内容）
@@ -2198,6 +2555,18 @@ function addCopyTool(div,rawText){
   const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
   rebtn.onclick=regenerateAIChat;
   bar.appendChild(rebtn);
+  const up=document.createElement("button"); up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
+  const down=document.createElement("button"); down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
+  const sendFb=(action)=>{
+    let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
+    fetch(`${API}/ai/assist/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({task:"chat",input:q,answer:rawText,action})}).catch(()=>{});
+    up.style.display="none"; down.style.display="none";
+    if(typeof toast==="function") toast(action==="helpful"?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
+  };
+  up.onclick=()=>sendFb("helpful");
+  down.onclick=()=>sendFb("unhelpful");
+  bar.appendChild(up); bar.appendChild(down);
   div.appendChild(bar);
 }
 // 重答：取最近一条用户提问重新发送（追加一轮新回答）
@@ -2280,6 +2649,9 @@ safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("dutyReportBtn","click",genDutyReport);
 safeAddEventListener("skillsBtn","click",openSkills);
 safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
+safeAddEventListener("memoryBtn","click",openMemories);
+safeAddEventListener("memoryKindFilter","change",loadMemories);
+safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
@@ -2318,10 +2690,57 @@ safeAddEventListener("aiChatScrollBtn","click",()=>{ aiChatToBottom(); const b=$
 safeAddEventListener("aiChatAttachBtn","click",()=>{ const f=$("aiChatFile"); if(f) f.click(); });
 safeAddEventListener("aiChatUrlBtn","click",attachURL);
 safeAddEventListener("aiChatFile","change",onAIChatFiles);
+safeAddEventListener("aiChatMicBtn","click",toggleAIVoiceInput);
+safeAddEventListener("aiChatSpeakBtn","click",speakLastAIReply);
 safeAddEventListener("aiChatStopBtn","click",stopAIChat);
 safeAddEventListener("aiUndoBtn","click",undoAIChat);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
 safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));
+
+/* ---- Web Speech：语音输入 / 朗读回复 ---- */
+let _aiVoiceRec=null, _aiVoiceOn=false;
+function toggleAIVoiceInput(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const btn=$("aiChatMicBtn");
+  if(!SR){ toast(I18N.t("sre.voice_unsupported","当前浏览器不支持语音输入（建议 Chrome / Edge）"),"err"); return; }
+  if(_aiVoiceOn && _aiVoiceRec){ try{_aiVoiceRec.stop();}catch(e){} _aiVoiceOn=false; if(btn) btn.classList.remove("active"); return; }
+  try{
+    _aiVoiceRec=new SR();
+    _aiVoiceRec.lang="zh-CN";
+    _aiVoiceRec.interimResults=true;
+    _aiVoiceRec.continuous=false;
+    _aiVoiceRec.onresult=e=>{
+      let final="", interim="";
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        const t=e.results[i][0].transcript;
+        if(e.results[i].isFinal) final+=t; else interim+=t;
+      }
+      const inp=$("aiChatInput"); if(!inp) return;
+      if(final){ inp.value=(inp.value?inp.value+" ":"")+final.trim(); autoGrowAIInput({target:inp}); }
+      else if(interim){ /* 预览不写入，避免抖动 */ }
+    };
+    _aiVoiceRec.onerror=()=>{ _aiVoiceOn=false; if(btn) btn.classList.remove("active"); };
+    _aiVoiceRec.onend=()=>{ _aiVoiceOn=false; if(btn) btn.classList.remove("active"); };
+    _aiVoiceRec.start(); _aiVoiceOn=true; if(btn) btn.classList.add("active");
+  }catch(e){ toast(I18N.t("sre.voice_start_failed","无法启动语音输入"),"err"); }
+}
+function speakLastAIReply(){
+  if(!window.speechSynthesis){ toast(I18N.t("sre.tts_unsupported","当前浏览器不支持语音朗读"),"err"); return; }
+  const log=$("aiChatLog"); if(!log) return;
+  const bubbles=[...log.querySelectorAll(".ai-msg.assistant, .msg.assistant, [data-role='assistant']")];
+  let text="";
+  if(bubbles.length){
+    text=(bubbles[bubbles.length-1].innerText||bubbles[bubbles.length-1].textContent||"").trim();
+  } else if(typeof AI_CHAT_HISTORY!=="undefined"){
+    for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="assistant"&&AI_CHAT_HISTORY[i].content){ text=AI_CHAT_HISTORY[i].content; break; } }
+  }
+  text=String(text||"").replace(/```[\s\S]*?```/g," ").replace(/[#>*_`]/g," ").replace(/\s+/g," ").trim();
+  if(!text){ toast(I18N.t("sre.no_ai_reply","暂无可朗读的 AI 回复"),"err"); return; }
+  try{ speechSynthesis.cancel(); }catch(e){}
+  const u=new SpeechSynthesisUtterance(text.slice(0,1200));
+  u.lang="zh-CN"; u.rate=1.05;
+  speechSynthesis.speak(u);
+}
 
 // （原独立的 Sreyun 对话已并入上方统一的「AI 对话」——单窗口即走 Sreyun Agent。）
 

@@ -25,6 +25,27 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleDirectoryUsers 返回可指派的轻量用户列表（viewer+ 可读，不含邮箱手机等敏感字段）。
+func (s *Server) handleDirectoryUsers(w http.ResponseWriter, r *http.Request) {
+	users := s.cfg.UsersList()
+	out := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		label := strings.TrimSpace(u.DisplayName)
+		if label == "" {
+			label = u.Username
+		} else if label != u.Username {
+			label = label + " (" + u.Username + ")"
+		}
+		out = append(out, map[string]any{
+			"username":     u.Username,
+			"display_name": u.DisplayName,
+			"role":         u.Role,
+			"label":        label,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username    string `json:"username"`

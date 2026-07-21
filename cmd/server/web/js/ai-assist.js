@@ -35,6 +35,7 @@ function ensureAIAssistPanel() {
       </div>
       <div class="ai-assist-body" id="aiAssistBody"></div>
       <div class="ai-assist-actions" id="aiAssistActions">
+        <button class="btn sm danger" id="aiAssistStop" data-i18n="assist.stop" style="display:none" title="停止生成">⏹ 停止</button>
         <button class="btn sm ai-assist-fb" id="aiAssistUp" data-i18n-title="assist.fb_up" title="这次结果有用（强化记忆）" style="display:none">👍</button>
         <button class="btn sm ai-assist-fb" id="aiAssistDown" data-i18n-title="assist.fb_down" title="这次结果没用" style="display:none">👎</button>
         <button class="btn primary sm" id="aiAssistApply" data-i18n="assist.apply_to_input" style="display:none">应用</button>
@@ -57,6 +58,7 @@ function ensureAIAssistPanel() {
   });
   document.getElementById("aiAssistUp").addEventListener("click", () => { sendAssistFeedback("helpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_helpful", "已标记为有用 👍，AI 会记住"), "ok"); markAssistFeedbackDone(); });
   document.getElementById("aiAssistDown").addEventListener("click", () => { sendAssistFeedback("unhelpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_unhelpful", "已标记为无用 👎"), "ok"); markAssistFeedbackDone(); });
+  document.getElementById("aiAssistStop").addEventListener("click", () => stopAIAssist());
   document.getElementById("aiAssistInput").addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitAIAssist(); }
   });
@@ -115,12 +117,14 @@ async function runAIAssist() {
   document.getElementById("aiAssistRegen").style.display = "none";
   document.getElementById("aiAssistUp").style.display = "none";
   document.getElementById("aiAssistDown").style.display = "none";
-  document.getElementById("aiAssistActions").style.display = "none";
+  document.getElementById("aiAssistActions").style.display = "flex";
+  document.getElementById("aiAssistStop").style.display = "";
   document.getElementById("aiAssistRun").disabled = true;
   body.innerHTML = `<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(tA("assist.thinking", "正在思考…"))}</span></div>`;
-  let answer = "", reasoning = "", raf = null;
+  let answer = "", reasoning = "", raf = null, ragHint = "";
   const paint = (streaming) => {
-    body.innerHTML = renderReasoningBlock(reasoning, streaming) +
+    const hint = ragHint ? `<div class="ai-rag-hint">${esc(ragHint)}</div>` : "";
+    body.innerHTML = hint + renderReasoningBlock(reasoning, streaming) +
       (streaming
         ? `<div class="ai-stream-body"><span class="ai-stream-text">${esc(answer)}</span><span class="ai-stream-cursor">▍</span></div>`
         : (renderAIMarkdown(answer) || `<div class='ai-assist-hint'>${esc(tA("assist.empty_reply", "（空回复）"))}</div>`));
@@ -129,26 +133,65 @@ async function runAIAssist() {
   const schedule = () => { if (raf) return; raf = requestAnimationFrame(() => { raf = null; paint(true); }); };
   try {
     _aiAssistState.abort = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    const timer = setTimeout(() => { try { _aiAssistState.abort && _aiAssistState.abort.abort(); } catch (e) {} }, 180000); // 3min 超时
     const r = await fetch(`${API}/ai/assist`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       signal: _aiAssistState.abort ? _aiAssistState.abort.signal : undefined,
       body: JSON.stringify({ task: _aiAssistState.task, input: userInput, context: _aiAssistState.context })
     });
+    clearTimeout(timer);
     if (!r.ok) throw new Error("HTTP " + r.status);
     await readSSEStream(r,
       (d, full) => { answer = full; schedule(); },
-      (err) => { if (raf) { cancelAnimationFrame(raf); raf = null; } body.innerHTML = `<div class="ai-assist-err">✗ ${esc(err)}</div>`; },
+      (err) => {
+        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        body.innerHTML = `<div class="ai-assist-err">✗ ${esc(err)}</div>`;
+        if (/AI 未配置|未启用/.test(String(err || "")) && typeof promptOpenAIConfig === "function") promptOpenAIConfig(err);
+      },
       (full) => { if (raf) { cancelAnimationFrame(raf); raf = null; } answer = full || answer; _aiAssistState.lastAnswer = answer; paint(false); onAIAssistDone(); },
-      null, null, null,
+      null,
+      (meta) => {
+        if (!meta) return;
+        const parts = [];
+        if (meta.degraded_tip) parts.push(meta.degraded_tip);
+        else {
+          if (meta.memory_hits > 0) parts.push("记忆 ×" + meta.memory_hits);
+          if (meta.skill_hits > 0) {
+            let sk = "技能 ×" + meta.skill_hits;
+            if (Array.isArray(meta.skill_names) && meta.skill_names.length) {
+              sk += "（" + meta.skill_names.slice(0, 4).join("、") + (meta.skill_names.length > 4 ? "…" : "") + "）";
+            }
+            parts.push(sk);
+          }
+        }
+        if (parts.length) { ragHint = parts.join(" · "); schedule(); }
+      },
+      null,
       (rd, fullR) => { reasoning = fullR; schedule(); }
     );
   } catch (e) {
     if (raf) { cancelAnimationFrame(raf); raf = null; }
-    if (!(_aiAssistState.abort && e && e.name === "AbortError")) body.innerHTML = `<div class="ai-assist-err">✗ ${esc(tA("assist.request_failed", "请求失败"))}：${esc(String(e))}</div>`;
+    if (_aiAssistState.abort && e && e.name === "AbortError") {
+      body.innerHTML = `<div class="ai-assist-hint">⏹ ${esc(tA("assist.stopped", "已停止生成"))}${answer ? "<br><br>" + esc(answer) : ""}</div>`;
+      if (answer) { _aiAssistState.lastAnswer = answer; onAIAssistDone(); }
+    } else {
+      const msg = String(e);
+      const tip = /abort|timeout|Timeout|Failed to fetch|network/i.test(msg)
+        ? tA("assist.timeout_hint", "请求超时或网络中断，请检查 AI 服务后重试")
+        : tA("assist.request_failed", "请求失败") + "：" + msg;
+      body.innerHTML = `<div class="ai-assist-err">✗ ${esc(tip)}</div>`;
+      if (/AI 未配置|未启用/.test(msg) && typeof promptOpenAIConfig === "function") promptOpenAIConfig(msg);
+    }
   } finally {
     _aiAssistState.busy = false; _aiAssistState.abort = null;
     document.getElementById("aiAssistRun").disabled = false;
+    const stopBtn = document.getElementById("aiAssistStop");
+    if (stopBtn) stopBtn.style.display = "none";
   }
+}
+
+function stopAIAssist() {
+  if (_aiAssistState.abort) { try { _aiAssistState.abort.abort(); } catch (e) {} }
 }
 
 function onAIAssistDone() {
@@ -204,7 +247,11 @@ async function runAIFollowup() {
   inputEl.value = "";
   _aiAssistState.busy = true;
   runBtn.disabled = true;
-  document.getElementById("aiAssistActions").style.display = "none";
+  document.getElementById("aiAssistActions").style.display = "flex";
+  const stopBtn = document.getElementById("aiAssistStop");
+  if (stopBtn) stopBtn.style.display = "";
+  document.getElementById("aiAssistUp").style.display = "none";
+  document.getElementById("aiAssistDown").style.display = "none";
   const turn = document.createElement("div");
   turn.className = "ai-fu-turn";
   turn.style.cssText = "margin-top:14px;padding-top:12px;border-top:1px dashed var(--border,rgba(127,127,127,.28))";
@@ -256,6 +303,8 @@ async function runAIFollowup() {
   } finally {
     _aiAssistState.busy = false; _aiAssistState.abort = null;
     runBtn.disabled = false;
+    const stopBtn = document.getElementById("aiAssistStop");
+    if (stopBtn) stopBtn.style.display = "none";
     setTimeout(() => inputEl.focus(), 30);
   }
 }

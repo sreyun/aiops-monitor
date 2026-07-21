@@ -284,6 +284,8 @@
   "ticket.comment_required": "留言內容不能為空",
   "ticket.evt_status": "狀態變更為 %s",
   "ticket.evt_assign": "指派給 %s",
+  "ticket.evt_attach": "上傳了 %d 個附件",
+  "ticket.unassigned": "未指派",
   "ticket.unassigned": "未指派",
   "ticket.from_incident": "由事件 #%d 升級生成",
   "log.remediation_saved": "儲存自動修復規則「%s」",

@@ -111,6 +111,7 @@ func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard
 		return Dashboard{}, fmt.Errorf("未从该夜莺看板解析到可渲染面板")
 	}
 	sortPanels(d.Panels)
+	healImportedDashboard(&d)
 	return d, nil
 }
 

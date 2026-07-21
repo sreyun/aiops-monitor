@@ -7,28 +7,28 @@
    此处内联而非 @import：面板经 Go embed 嵌入，静态路由仅精确匹配 /style.css，
    无 /aiops-design-tokens.css 路由，@import 会 404 导致全局 token 缺失。 */
 :root{
-  /* 品牌主色（统一为同一蓝色家族，消除割裂感） */
+  /* 品牌主色（统一蓝色家族 + 紫色辅色，消除割裂） */
   --accent:#4c8dff; --accent-hover:#6aa1ff; --accent-soft:rgba(76,141,255,.13);
-  --accent2:#06b6d4; --accent2-soft:rgba(6,182,212,.12);
-  /* 语义状态色（统一色相） */
-  --ok:#10b981; --ok-soft:rgba(16,185,129,.12);
-  --warn:#f59e0b; --warn-soft:rgba(245,158,11,.12);
-  --crit:#ef4444; --crit-soft:rgba(239,68,68,.12);
+  --accent2:#7c6bff; --accent2-soft:rgba(124,107,255,.13);
+  /* 语义状态色 */
+  --ok:#31c46b; --ok-soft:rgba(49,196,107,.12);
+  --warn:#e8a13c; --warn-soft:rgba(232,161,60,.12);
+  --crit:#ef4d5a; --crit-soft:rgba(239,77,90,.12);
   --info:#3fb5ef; --info-soft:rgba(63,181,239,.12);
   --purple:#8b5cf6; --purple-soft:rgba(139,92,246,.12);
   /* 圆角 / 阴影 / 过渡 / 间距 / 字体 / 渐变（统一） */
   --r-xs:6px; --r-sm:8px; --r:12px; --r-lg:16px; --r-xl:24px; --r-2xl:28px;
-  --shadow-sm:0 2px 8px rgba(0,0,0,.28);
-  --shadow:0 4px 24px rgba(0,0,0,.32);
-  --shadow-lg:0 12px 48px rgba(0,0,0,.42);
-  --transition-fast:140ms cubic-bezier(.4,0,.2,1);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --shadow:0 4px 14px rgba(0,0,0,.30);
+  --shadow-lg:0 12px 32px rgba(0,0,0,.42);
+  --transition-fast:120ms cubic-bezier(.4,0,.2,1);
   --transition:200ms cubic-bezier(.4,0,.2,1);
   --transition-slow:320ms cubic-bezier(.4,0,.2,1);
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
   --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px; --sp-16:64px;
   --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
   --gradient:linear-gradient(135deg,var(--accent),var(--accent2));
-  --gradient-soft:linear-gradient(135deg,var(--accent-soft),rgba(6,182,212,.08));
+  --gradient-soft:linear-gradient(135deg,var(--accent-soft),var(--accent2-soft));
   --max-w:1200px;
 }
 :root{
@@ -2170,6 +2170,7 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-assist-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:13px;line-height:1.6;min-height:120px}
 .ai-assist-hint{color:var(--muted);font-size:12.5px}
 .ai-assist-err{color:#ef4d5a;font-size:13px;white-space:pre-wrap;word-break:break-word}
+.ai-rag-hint{font-size:11px;color:var(--muted2,#889);margin:0 0 8px;padding:6px 10px;border-radius:6px;background:rgba(127,127,127,.08);line-height:1.4}
 .ai-assist-actions{display:flex;gap:8px;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--line2)}
 .ai-assist-actions:empty{display:none}
 /* ===== AI 技能库 ===== */
@@ -3390,3 +3391,23 @@ select:focus {
 
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: repeat(12, 1fr); } }
 @media (max-width: 720px) { .dash-grid { grid-template-columns: 1fr; } .dash-panel { grid-column: 1 / -1 !important; } .dash-bar-actions { width: 100%; margin-left: 0; } }
+
+/* ---- 统一附件条 / 评论条 / 语音态 ---- */
+.attach-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.attach-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;font-size:12px;background:var(--panel2);border:1px solid var(--line2);color:var(--txt2);text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attach-chip.img{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-txt)}
+.attach-chip.file{border-color:var(--accent2-border);background:var(--accent2-soft);color:var(--accent2-txt)}
+.attach-chip button{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;opacity:.7;font-size:12px;line-height:1}
+.attach-chip button:hover{opacity:1}
+.attach-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inc-comment-bar{display:flex;flex:1;align-items:center;gap:6px;flex-wrap:wrap;min-width:220px;margin-left:auto}
+.inc-comment-bar input[type=text]{flex:1;min-width:140px}
+.inc-comment-bar .attach-chips{width:100%;order:-1}
+.ai-attach-btn.active{background:var(--crit-soft);color:var(--crit-txt);border-color:var(--crit-border);box-shadow:0 0 0 2px var(--crit-soft)}
+.tk-comment{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel2);margin-bottom:8px}
+.tk-comment .tk-c-author{font-weight:600;color:var(--accent-txt);font-size:12px}
+.tk-comment .tk-c-time{color:var(--muted);font-size:11px;margin-left:6px}
+.modal .field label{font-size:12px;color:var(--muted);margin-bottom:4px;display:block}
+.modal .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:640px){.modal .grid2{grid-template-columns:1fr}.inc-comment-bar{margin-left:0;width:100%}}
+

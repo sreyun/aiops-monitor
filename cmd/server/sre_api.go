@@ -44,6 +44,8 @@ func (s *Server) wireSRE() {
 			}
 			// 事件自动串联：RAG 召回相似历史事件 + 已验证处置 + 匹配的自动修复规则，挂到时间线
 			go s.correlateIncident(inc)
+			// 轻量拓扑 RCA：依赖边扩散 + 关联未决事件 + 近期资产变更
+			go s.appendTopologyRCAToIncident(inc)
 			// 新事件存入 AI 记忆库，供跨会话 RAG 检索复用
 			go s.rememberAI("alert", fmt.Sprintf("incident:%d", inc.ID),
 				fmt.Sprintf("【新告警事件】%s\n严重程度：%s | 类型：%s | 主机：%s | 来源：%s",
@@ -252,24 +254,23 @@ func incidentMsgBody(inc Incident) string {
 	return b
 }
 
-// autoDiagnose runs an AI (or heuristic) diagnosis for a freshly-raised critical
-// incident, appends the result to its timeline, and surfaces it as a message —
-// so serious incidents arrive pre-analysed without any operator action. This
-// broadens AI coverage from on-demand to automatic. Best-effort: a panic in the
-// provider path never affects the caller (runs in its own goroutine).
+// autoDiagnose runs a lightweight AI (or heuristic) diagnosis for a freshly-raised
+// critical incident. Labeled「快速诊断」to distinguish from the richer on-demand
+// stream diagnose (RAG + structured sections). Best-effort: panic never affects caller.
 func (s *Server) autoDiagnose(inc Incident) {
 	defer func() { _ = recover() }()
 	out, kind := s.ai.Diagnose(inc)
 	if out == "" {
 		return
 	}
-	s.incidents.AddEvent(inc.ID, "note", "ai-"+kind, out)
-	s.messages.push("ai", "info", "AI 诊断 · "+inc.Title, trimLine(out, 220), "sre", strconv.FormatInt(inc.ID, 10))
+	labeled := "【快速诊断】\n" + out
+	s.incidents.AddEvent(inc.ID, "note", "ai-"+kind+"-quick", labeled)
+	s.messages.push("ai", "info", "AI 快速诊断 · "+inc.Title, trimLine(out, 220), "sre", strconv.FormatInt(inc.ID, 10))
 	s.store.MarkDirty()
 	// 事件自动诊断结果同样向量化入库，供后续 RAG 相似案例检索（此前仅手动诊断/诊断对话会向量化）。
-	go s.saveDiagnosisEmbedding(inc.ID, inc, out)
+	go s.saveDiagnosisEmbedding(inc.ID, inc, labeled)
 	// 同时存入通用 AI 记忆库，供跨会话 RAG 检索复用
-	go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【自动诊断】"+out)
+	go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【快速诊断】"+out)
 }
 
 func (s *Server) effectiveCategory(hostID string) string {
@@ -461,14 +462,19 @@ func (s *Server) handleCommentIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Text string `json:"text"`
+		Text        string       `json:"text"`
+		Attachments []Attachment `json:"attachments"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Text == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "incident.comment_required")})
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	inc, found := s.incidents.Comment(id, s.actorName(r), in.Text)
+	inc, found := s.incidents.Comment(id, s.actorName(r), in.Text, in.Attachments)
 	if !found {
+		if strings.TrimSpace(in.Text) == "" && len(sanitizeAttachments(in.Attachments)) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "incident.comment_required")})
+			return
+		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
@@ -573,6 +579,123 @@ func (s *Server) handleRejectRemediation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleProposeRemediation 事件 L4 闭环：把 AI/人工剧本草稿挂为 pending_approval，批准后执行。
+// POST /api/v1/incidents/{id}/remediation-propose
+// body: {playbook?:{...}, existing_playbook_id?:"" , title?:""}
+func (s *Server) handleProposeRemediation(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	inc, found := s.incidents.Get(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "事件不存在"})
+		return
+	}
+	if strings.TrimSpace(inc.HostID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "事件未关联主机，无法挂修复提案"})
+		return
+	}
+	var req struct {
+		Title              string   `json:"title"`
+		ExistingPlaybookID string   `json:"existing_playbook_id"`
+		Playbook           Playbook `json:"playbook"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	actor := s.actorName(r)
+	pbID := strings.TrimSpace(req.ExistingPlaybookID)
+	var pb Playbook
+	if pbID != "" {
+		var okPB bool
+		pb, okPB = s.playbooks.Get(pbID)
+		if !okPB {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "指定剧本不存在"})
+			return
+		}
+	} else {
+		pb = req.Playbook
+		pb.ID = ""
+		if strings.TrimSpace(pb.Name) == "" {
+			pb.Name = "[提案] " + trimLine(inc.Title, 40)
+		} else if !strings.HasPrefix(pb.Name, "[提案]") {
+			pb.Name = "[提案] " + pb.Name
+		}
+		if len(pb.Steps) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "剧本缺少步骤"})
+			return
+		}
+		for i := range pb.Steps {
+			pb.Steps[i].Target = "host:" + inc.HostID
+		}
+		saved, err := s.playbooks.Upsert(pb)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		pb = saved
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "修复提案 · " + trimLine(inc.Title, 48)
+	}
+	run, err := s.remediation.ProposeManual(pb, inc.HostID, inc.Hostname, inc.ID, title, actor)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: actor, IP: s.clientIP(r),
+		Message: fmt.Sprintf("事件#%d 挂修复提案「%s」→ 剧本 %s（待审批）", inc.ID, title, pb.Name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "run": run, "playbook_id": pb.ID})
+}
+
+// ---- 依赖拓扑 ----
+
+func (s *Server) handleListTopologyEdges(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.cfg.TopologyEdges())
+}
+
+func (s *Server) handleUpsertTopologyEdge(w http.ResponseWriter, r *http.Request) {
+	var e TopologyEdge
+	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	saved, err := s.cfg.UpsertTopologyEdge(e)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "edge": saved})
+}
+
+func (s *Server) handleDeleteTopologyEdge(w http.ResponseWriter, r *http.Request) {
+	_ = s.cfg.DeleteTopologyEdge(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleTopologyRCA(w http.ResponseWriter, r *http.Request) {
+	hostID := strings.TrimSpace(r.URL.Query().Get("host_id"))
+	if hostID == "" {
+		if raw := strings.TrimSpace(r.URL.Query().Get("incident_id")); raw != "" {
+			if iid, err := strconv.ParseInt(raw, 10, 64); err == nil && iid > 0 {
+				if inc, found := s.incidents.Get(iid); found {
+					hostID = inc.HostID
+				}
+			}
+		}
+	}
+	if hostID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请提供 host_id 或 incident_id"})
+		return
+	}
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	writeJSON(w, http.StatusOK, s.computeTopologyRCA(hostID, days))
 }
 
 // ----------------------------------------------------------------------------
@@ -762,13 +885,14 @@ func (s *Server) handleCommentTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Text string `json:"text"`
+		Text        string       `json:"text"`
+		Attachments []Attachment `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	tk, err := s.tickets.Comment(id, s.actorName(r), in.Text)
+	tk, err := s.tickets.Comment(id, s.actorName(r), in.Text, in.Attachments)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -869,7 +993,8 @@ func (s *Server) handleSearchLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleLogDiagnose runs heuristic inspection against current log search context.
+// handleLogDiagnose diagnoses current log search context. Prefers LLM when AI is
+// configured; otherwise falls back to heuristic rules and labels source accordingly.
 func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HostID    string   `json:"host_id"`
@@ -893,6 +1018,7 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().Unix() - int64(req.SinceMin)*60
 	} else {
 		since = time.Now().Unix() - 1800 // default 30 min
+		req.SinceMin = 30
 	}
 
 	// Build inspection context from log search
@@ -909,26 +1035,65 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 	ctx.RecentErrors = s.logs.recentErrors(since, 50)
 	ctx.ErrorCount = s.logs.errorCount(since)
 
-	// Run heuristic inspection
-	summary, findings := heuristicInspect(ctx)
-
-	// Build a report
-	report := InspectionReport{
-		ID:       atomic.AddInt64(&s.ai.nextID, 1),
-		Ts:       time.Now().Unix(),
-		Source:   "heuristic",
-		Trigger:  "manual",
-		Summary:  summary,
-		Findings: findings,
-		Context:  fmt.Sprintf("日志诊断：主机 %s，时间范围 %d 分钟", req.Hostname, req.SinceMin),
-	}
-
-	// If single log line provided, prepend it to the summary
-	if req.SingleLog != "" {
-		report.Summary = "单条日志诊断：" + req.SingleLog + "\n" + report.Summary
-	}
+	reportCtx := fmt.Sprintf("日志诊断：主机 %s，时间范围 %d 分钟", req.Hostname, req.SinceMin)
 	if len(req.ErrorLogs) > 0 {
-		report.Context += fmt.Sprintf("，错误日志 %d 条", len(req.ErrorLogs))
+		reportCtx += fmt.Sprintf("，错误日志 %d 条", len(req.ErrorLogs))
+	}
+
+	report := InspectionReport{
+		ID:      atomic.AddInt64(&s.ai.nextID, 1),
+		Ts:      time.Now().Unix(),
+		Trigger: "manual",
+		Context: reportCtx,
+	}
+
+	// Prefer real LLM when AI is enabled; fall back to heuristic with clear labeling.
+	cfg := s.cfg.AIConfig()
+	if cfg.Enabled && cfg.Endpoint != "" && cfg.Model != "" {
+		var b strings.Builder
+		b.WriteString(reportCtx + "\n")
+		if req.SingleLog != "" {
+			b.WriteString("【待诊单条日志】\n" + req.SingleLog + "\n")
+		}
+		if len(req.ErrorLogs) > 0 {
+			b.WriteString("【错误日志样本】\n")
+			for i, line := range req.ErrorLogs {
+				if i >= 30 {
+					b.WriteString("…\n")
+					break
+				}
+				b.WriteString(line + "\n")
+			}
+		}
+		if len(ctx.HighUsage) > 0 {
+			b.WriteString("【主机资源】\n" + strings.Join(ctx.HighUsage, "\n") + "\n")
+		}
+		b.WriteString(fmt.Sprintf("【近期错误数】%d\n", ctx.ErrorCount))
+		for i, e := range ctx.RecentErrors {
+			if i >= 20 {
+				break
+			}
+			fmt.Fprintf(&b, "- [%s] %s\n", e.Level, trimLine(e.Message, 240))
+		}
+		sys := "你是资深 SRE。根据日志与主机上下文，给出：1) 根因假设（按可能性）；2) 关键证据；3) 可执行处置步骤。简洁中文，分点。不要编造未见过的日志。"
+		if out, err := aiComplete(cfg, sys, b.String()); err == nil && strings.TrimSpace(out) != "" {
+			report.Source = "ai"
+			report.Model = cfg.Model
+			report.Summary = strings.TrimSpace(out)
+			report.Findings = nil
+		}
+	}
+	if report.Summary == "" {
+		summary, findings := heuristicInspect(ctx)
+		report.Source = "heuristic"
+		report.Model = "规则诊断"
+		report.Summary = summary
+		report.Findings = findings
+		if req.SingleLog != "" {
+			report.Summary = "【规则诊断】单条日志：" + req.SingleLog + "\n" + report.Summary
+		} else {
+			report.Summary = "【规则诊断】" + report.Summary
+		}
 	}
 
 	s.ai.mu.Lock()
@@ -938,7 +1103,6 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ai.mu.Unlock()
 
-	// Also notify via message hub
 	if s.ai.onReport != nil {
 		s.ai.onReport(report)
 	}
@@ -949,7 +1113,7 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 		Level:   "info",
 		Actor:   actor,
 		IP:      ip,
-		Message: fmt.Sprintf("日志诊断：主机 %s，结论 %s", req.Hostname, summary),
+		Message: fmt.Sprintf("日志诊断（%s）：主机 %s，结论 %s", report.Source, req.Hostname, trimLine(report.Summary, 120)),
 	})
 
 	writeJSON(w, http.StatusOK, report)
@@ -1334,8 +1498,14 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if req.IncidentID > 0 {
 		memKind = "diagnosis"
 	}
-	sys += s.retrieveMemoryForPrompt(memKind, req.Message, 8)
-	sys += s.retrieveSkillsForPrompt(req.Message, 4) // 注入已掌握技能(SOP)
+	memText, memHits, degM := s.retrieveMemoryDetailed(memKind, req.Message, 8)
+	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(req.Message, 4)
+	sys += memText + skillText
+	deg := degM
+	if deg == "" {
+		deg = degS
+	}
+	writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
 
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 10 轮"（无状态：每次基于全量历史）
@@ -1348,7 +1518,13 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	msgs = append(msgs, compactHistory(histMsgs, 8)...) // 无会话缓存入口：用无 LLM 的廉价压缩，避免每轮同步摘要
 	msgs = append(msgs, map[string]string{"role": "user", "content": req.Message})
 
-	reply, _ := streamChat(r.Context(), w, cfg, msgs, nil)
+	start := time.Now()
+	reply, err := streamChat(r.Context(), w, cfg, msgs, nil)
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	s.recordAICall("chat", cfg.Model, time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
@@ -1390,47 +1566,13 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	sys := buildAssistSystemPrompt(req.Task, req.Context)
-	// 诊断/分析类任务注入历史记忆（跨会话复用既有排障经验）
-	memKind := "chat"
-	switch req.Task {
-	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis",
-		"hardware_diagnosis", "netflow_diagnosis", "checks_diagnosis", "forward_diagnosis", "apimon_diagnosis",
-		"content_audit_diagnosis", "dashboard_analysis", "dashboard_optimize":
-		memKind = "diagnosis"
-	}
-	sys += s.retrieveMemoryForPrompt(memKind, strings.TrimSpace(req.Input+" "+req.Context), 6)
-	sys += s.retrieveSkillsForPrompt(strings.TrimSpace(req.Input+" "+req.Context), 4) // 注入已掌握技能(SOP)
-	userMsg := strings.TrimSpace(req.Input)
-	if userMsg == "" {
-		userMsg = "请根据上述上下文进行分析并给出结论。"
-	}
-	msgs := []map[string]string{{"role": "system", "content": sys}}
-	// 多轮追问：把前几轮 Q&A 拼进来（限长防膨胀）。系统提示词已带同一份数据上下文，
-	// 于是后续追问都基于同一份流量/设备/日志数据展开，实现「基于同一数据的会话交流」。
-	if n := len(req.History); n > 0 {
-		start := 0
-		if n > 20 {
-			start = n - 20
-		}
-		for _, h := range req.History[start:] {
-			if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
-				msgs = append(msgs, map[string]string{"role": h.Role, "content": h.Content})
-			}
+	hist := make([]map[string]string, 0, len(req.History))
+	for _, h := range req.History {
+		if (h.Role == "user" || h.Role == "assistant") && strings.TrimSpace(h.Content) != "" {
+			hist = append(hist, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
-	// 看板相关任务：关闭深度思考，避免推理模型长时间「想」导致超时。
-	var reply string
-	switch req.Task {
-	case "dashboard_prompt_optimize", "dashboard_optimize", "dashboard_analysis":
-		reply, _ = streamChatOpts(r.Context(), w, cfg, msgs, nil, aiCallOpts{DisableThinking: true})
-	default:
-		reply, _ = streamChat(r.Context(), w, cfg, msgs, nil)
-	}
-	if strings.TrimSpace(reply) != "" {
-		go s.rememberAI("assist", "assist:"+req.Task, "【AI 辅助·"+req.Task+"】\n"+userMsg+"\n\n【AI】\n"+reply)
-	}
+	_ = s.streamOrchestratedAssist(r.Context(), w, cfg, req.Task, req.Input, req.Context, hist)
 }
 
 // buildAssistSystemPrompt 为各类「AI 辅助」任务构造专用系统提示词。ctxText 是调用方（前端）
@@ -1514,6 +1656,15 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"并在 description 明确标注风险。③ match_types 用事件的真实告警类型，min_level 不低于事件级别；" +
 			"target 用 \"all\"（自动修复引擎会把剧本限定在触发告警的那台主机上执行）。④ 给合理的 cooldown_sec 与 max_per_hour 防止告警抖动引发修复风暴。" +
 			"⑤ 代码块之后，用中文简述：这条规则在什么条件下、对哪些主机、做什么，以及主要风险点与为何建议人工审批。" + ctxBlock
+	case "remediation_proposal":
+		return "你是 SRE 自动化编排专家。请把给定【事件 + AI 诊断结论】里的处置建议，固化为【仅针对本事件】的一次性修复剧本草稿。" +
+			"严格只输出一个 ```json 代码块，结构如下：\n" +
+			"{\"title\":\"提案标题\",\"playbook\":{\"name\":\"修复剧本名\",\"description\":\"用途与风险说明\",\"steps\":[{\"name\":\"步骤名\"," +
+			"\"command\":\"Linux/通用命令\",\"command_win\":\"Windows 覆盖命令(可选)\",\"target\":\"host:事件主机ID\"," +
+			"\"timeout_sec\":30,\"continue_on_error\":false}]},\"existing_playbook_id\":\"\"}\n" +
+			"要求：① 这是一次性提案，批准后只在本事件主机执行，不要写自动修复规则；② 若【可用剧本】已有合适的，填 existing_playbook_id 并省略 playbook；" +
+			"③ 命令安全、幂等，优先只读确认再处置；破坏性操作须在 description 标明风险；④ 步骤 target 用 host:<事件主机ID>；" +
+			"⑤ 代码块后用中文简述将执行什么、风险与为何需要人工审批。" + ctxBlock
 	case "duty_report":
 		return dutyReportSystemPrompt + ctxBlock
 	case "content_audit_diagnosis":
@@ -1536,6 +1687,13 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"③ 分析可能原因与潜在风险（如某盘将坏、散热不足、电源冗余丢失）；\n" +
 			"④ 给出可执行的处置与维护建议（更换/巡检/固件升级/散热整改等）。" +
 			"用简洁中文分点作答，只依据给定快照数据，不臆造；数据正常时也要明确说明「未见异常」。" + ctxBlock
+	case "hyperv_diagnosis":
+		return "你是资深 Windows Hyper-V 虚拟化运维专家。以下是 Hyper-V 宿主机与/或虚拟机快照（状态、健康、" +
+			"CPU/内存压力、硬盘、网卡、检查点、复制健康、关联纳管主机等）。请：\n" +
+			"① 一句话总体研判当前虚拟化面健康度（正常/需关注/有故障）；\n" +
+			"② 逐条指出异常或劣化项（非 Running、Critical 健康、CPU/内存压力偏高、复制告警、检查点堆积、磁盘/网卡异常），按紧急程度排序；\n" +
+			"③ 分析可能原因（资源争用、动态内存配置、存储瓶颈、集成服务、复制链路等）；\n" +
+			"④ 给出可执行的排查与处置建议。用简洁中文分点作答，只依据给定数据，不臆造；正常时明确说明「未见异常」。" + ctxBlock
 	case "snmp_diagnosis":
 		return "你是资深网络运维专家。以下是通过 SNMP 轮询到的网络设备（交换机/路由器/防火墙）快照：系统信息、" +
 			"各接口的 up/down 状态、带宽利用率、进出速率、错误率与丢包率。请：\n" +
@@ -1603,9 +1761,13 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 	case "unhelpful":
 		factor = penalizeUnhelpful
 	}
-	// 用「需求 + 回答」语义定位最相近的一条 assist 记忆并调整其优先级
+	// 用「需求 + 回答」语义定位最相近的一条记忆并调整其优先级
 	if text := strings.TrimSpace(req.Input + " " + req.Answer); text != "" {
-		s.reinforceMemory("assist", text, factor)
+		kind := "assist"
+		if req.Task == "chat" {
+			kind = "chat"
+		}
+		s.reinforceMemory(kind, text, factor)
 		// 采纳/好评时，同步强化最相关技能(SOP)；差评不惩罚技能（技能来自多经验提炼，单次差评不足为据）
 		if factor > 1.0 {
 			s.reinforceSkill(text, factor)
@@ -1643,6 +1805,39 @@ func (s *Server) handleDistillSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "created": n})
+}
+
+// handleListMemories 浏览 AI 记忆库（只读列表，可按 kind 过滤）。GET /api/v1/ai/memories?kind=&limit=&offset=
+func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []memoryBrowseItem{}, "total": 0, "stats": map[string]int{}})
+		return
+	}
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	items, total, err := s.pg.listMemories(kind, limit, offset)
+	if err != nil || items == nil {
+		items = []memoryBrowseItem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+		"stats": s.pg.memoryKindStats(),
+	})
+}
+
+// handleDeleteMemory 删除一条记忆。DELETE /api/v1/ai/memories/{id}
+func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
+	if id, ok := sreParseID(r); ok && s.pg != nil {
+		_ = s.pg.deleteMemory(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAIStats AI 调用观测仪表（进程内累计，重启清零）。GET /api/v1/ai/stats
+func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.aiStats.snapshot())
 }
 
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
@@ -1711,8 +1906,14 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if ragQuery == "" {
 			ragQuery = userMsg
 		}
-		sys += s.retrieveMemoryForPrompt("diagnosis", ragQuery, 8)
-		sys += s.retrieveSkillsForPrompt(ragQuery, 4) // 注入已掌握技能(SOP)
+		memText, memHits, degM := s.retrieveMemoryDetailed("diagnosis", ragQuery, 8)
+		skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQuery, 4)
+		sys += memText + skillText
+		deg := degM
+		if deg == "" {
+			deg = degS
+		}
+		writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
 
 		diagMsgs := []map[string]string{
 			{"role": "system", "content": sys},
@@ -1836,9 +2037,15 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 			sys += "\n\n【终端操作记录（分段摘要）】\n" + termSummary
 		}
 	}
-	// RAG: 检索历史诊断记忆注入 system prompt
-	sys += s.retrieveMemoryForPrompt("diagnosis", req.Message, 8)
-	sys += s.retrieveSkillsForPrompt(req.Message, 4) // 注入已掌握技能(SOP)
+	// RAG: 检索历史记忆注入 system prompt
+	memText, memHits, degM := s.retrieveMemoryDetailed("diagnosis", req.Message, 8)
+	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(req.Message, 4)
+	sys += memText + skillText
+	deg := degM
+	if deg == "" {
+		deg = degS
+	}
+	writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 20 轮"
 	histMsgs := make([]map[string]string, 0, len(req.History))
@@ -2046,6 +2253,16 @@ func (s *Server) buildIncidentDiagnosisPrompt(inc Incident) string {
 					b.WriteString(m + "\n")
 				}
 			}
+		}
+	}
+
+	// --- 6. 轻量拓扑 RCA（服务依赖 + 变更关联）---
+	if inc.HostID != "" {
+		rca := s.computeTopologyRCA(inc.HostID, 7)
+		if strings.TrimSpace(rca.Summary) != "" {
+			b.WriteString("\n【🔗 拓扑 RCA / 变更关联】\n")
+			b.WriteString(rca.Summary)
+			b.WriteString("\n")
 		}
 	}
 
@@ -2392,75 +2609,107 @@ func (s *Server) generateMemorySummary(kind, content string) string {
 	return "【摘要】" + summary + "\n【原文】" + truncated
 }
 
-// retrieveMemoryForPrompt 根据用户当前消息检索语义最相关的 Top-K 历史记忆，
-// 返回可拼入 system prompt 的文本片段。无 pg / 无 embedding 配置时返回空串。
-// preferKind 指定优先召回的记忆类型（如 "chat"、"diagnosis"），
-// 检索策略为 2/3 优先 kind + 1/3 其他 kind，兼顾场景相关性与跨域知识。
-func (s *Server) retrieveMemoryForPrompt(preferKind, userMsg string, topK int) string {
+// writeRAGMetaSSE 向前端下发 RAG 注入状态（命中数 / 技能名 / 降级原因），便于 UI 提示「记忆未启用」或解释命中了哪些技能。
+func writeRAGMetaSSE(w http.ResponseWriter, memoryHits, skillHits int, degraded string, skillNames []string) {
+	if w == nil {
+		return
+	}
+	meta := map[string]any{
+		"memory_hits": memoryHits,
+		"skill_hits":  skillHits,
+	}
+	if len(skillNames) > 0 {
+		meta["skill_names"] = skillNames
+	}
+	if degraded != "" {
+		meta["degraded"] = degraded
+		switch degraded {
+		case "no_pg":
+			meta["degraded_tip"] = "记忆库未启用（需 PostgreSQL），本次未注入历史记忆/技能"
+		case "no_embed":
+			meta["degraded_tip"] = "嵌入模型未就绪，本次未检索历史记忆/技能"
+		}
+	}
+	b, err := json.Marshal(map[string]any{"meta": meta})
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// retrieveMemoryDetailed 同 retrieveMemoryForPrompt，额外返回命中数与降级原因（no_pg / no_embed）。
+func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (text string, hits int, degraded string) {
 	if s.pg == nil {
-		return ""
+		return "", 0, "no_pg"
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.APIKey == "" {
-		return ""
+		return "", 0, "no_embed"
 	}
 	if topK <= 0 {
 		topK = 8
 	}
-	// 对用户消息做向量化（截断至 8000 字符，与 embedText 保持一致）
 	query := userMsg
 	if len([]rune(query)) > 8000 {
 		query = string([]rune(query)[:8000])
 	}
 	emb := embedText(cfg, query)
 	if len(emb) == 0 {
-		return ""
+		return "", 0, "no_embed"
 	}
-	// 配置了 rerank 时按 3×K 过取候选，交给 rerank 精排 —— 向量召回负责“找全”，rerank 负责“排准”。
 	fetch := topK
 	if _, _, _, ok := rerankConfig(cfg); ok {
 		fetch = topK * 3
 	}
-	hits, err := s.pg.searchMemoryByKind(emb, preferKind, fetch)
-	if err != nil || len(hits) == 0 {
-		return ""
+	found, err := s.pg.searchMemoryByKind(emb, preferKind, fetch)
+	if err != nil || len(found) == 0 {
+		return "", 0, ""
 	}
-	// rerank 精排：失败 / 未配置时静默回退到原向量顺序，仅取前 topK。
-	if len(hits) > topK {
-		docs := make([]string, len(hits))
-		for i, h := range hits {
+	if len(found) > topK {
+		docs := make([]string, len(found))
+		for i, h := range found {
 			docs[i] = h.Content
 		}
 		if order := rerankDocuments(cfg, query, docs, topK); len(order) > 0 {
 			reordered := make([]memoryHit, 0, len(order))
 			for _, i := range order {
-				reordered = append(reordered, hits[i])
+				reordered = append(reordered, found[i])
 			}
-			hits = reordered
+			found = reordered
 		}
 	}
-	// 异步更新命中记忆的 last_hit_at（用于衰减策略判断）
 	go func() {
-		ids := make([]int64, len(hits))
-		for i, h := range hits {
+		ids := make([]int64, len(found))
+		for i, h := range found {
 			ids[i] = h.ID
 		}
 		s.pg.touchMemoryHits(ids)
 	}()
 	var b strings.Builder
 	b.WriteString("\n\n【历史记忆参考（RAG 检索，仅供参考，以实际数据为准）】\n")
-	for i, h := range hits {
+	n := 0
+	for i, h := range found {
 		if i >= topK {
 			break
 		}
-		// 截断过长内容，避免撑爆 prompt token
 		content := h.Content
 		if len([]rune(content)) > 1500 {
 			content = string([]rune(content)[:1500]) + "…"
 		}
 		fmt.Fprintf(&b, "[%d] (%s) %s\n", i+1, h.Kind, content)
+		n++
 	}
-	return b.String()
+	return b.String(), n, ""
+}
+
+// retrieveMemoryForPrompt 根据用户当前消息检索语义最相关的 Top-K 历史记忆，
+// 返回可拼入 system prompt 的文本片段。无 pg / 无 embedding 配置时返回空串。
+func (s *Server) retrieveMemoryForPrompt(preferKind, userMsg string, topK int) string {
+	t, _, _ := s.retrieveMemoryDetailed(preferKind, userMsg, topK)
+	return t
 }
 
 // handleDiagnosisFeedback records user feedback on an AI diagnosis.

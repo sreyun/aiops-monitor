@@ -1378,6 +1378,89 @@ func (p *pgStore) skillCount() int {
 	return n
 }
 
+// memoryBrowseItem 记忆浏览器列表项（不含 embedding）。
+type memoryBrowseItem struct {
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"`
+	Source    string  `json:"source"`
+	Content   string  `json:"content"`
+	CreatedAt int64   `json:"created_at"`
+	LastHitAt int64   `json:"last_hit_at"`
+	Priority  float64 `json:"priority"`
+}
+
+// listMemories 按时间倒序列出记忆，可选 kind 过滤。limit 默认 50、上限 200。
+func (p *pgStore) listMemories(kind string, limit, offset int) ([]memoryBrowseItem, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	var err error
+	if kind != "" {
+		err = p.db.QueryRow(`SELECT COUNT(*) FROM ai_memory_embeddings WHERE kind = $1`, kind).Scan(&total)
+	} else {
+		err = p.db.QueryRow(`SELECT COUNT(*) FROM ai_memory_embeddings`).Scan(&total)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var rows *sql.Rows
+	if kind != "" {
+		rows, err = p.db.Query(
+			`SELECT id, kind, source, content, created_at, COALESCE(last_hit_at,0), COALESCE(priority,1)
+			 FROM ai_memory_embeddings WHERE kind = $1
+			 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, kind, limit, offset)
+	} else {
+		rows, err = p.db.Query(
+			`SELECT id, kind, source, content, created_at, COALESCE(last_hit_at,0), COALESCE(priority,1)
+			 FROM ai_memory_embeddings
+			 ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []memoryBrowseItem
+	for rows.Next() {
+		var m memoryBrowseItem
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.CreatedAt, &m.LastHitAt, &m.Priority); err == nil {
+			if len([]rune(m.Content)) > 800 {
+				m.Content = string([]rune(m.Content)[:800]) + "…"
+			}
+			out = append(out, m)
+		}
+	}
+	return out, total, rows.Err()
+}
+
+func (p *pgStore) deleteMemory(id int64) error {
+	_, err := p.db.Exec(`DELETE FROM ai_memory_embeddings WHERE id = $1`, id)
+	return err
+}
+
+func (p *pgStore) memoryKindStats() map[string]int {
+	out := map[string]int{}
+	rows, err := p.db.Query(`SELECT kind, COUNT(*) FROM ai_memory_embeddings GROUP BY kind`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err == nil {
+			out[k] = n
+		}
+	}
+	return out
+}
+
 // memoriesForDistill 取用于技能提炼的候选记忆：experience/resolution/diagnosis 类、较新、
 // 按优先级(被强化程度)优先。这些是"被验证有价值"的经验，最适合提炼成可复用技能。
 func (p *pgStore) memoriesForDistill(sinceTs int64, limit int) []memoryHit {

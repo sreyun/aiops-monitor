@@ -122,46 +122,56 @@ func parseDistilledSkills(text string) []distilledSkill {
 	return arr
 }
 
-// retrieveSkillsForPrompt 检索与当前任务最相关的技能，格式化为可注入提示词的文本，
-// 同时异步记录一次使用（use_count++）。无技能 / 无相关匹配时返回空串。
-func (s *Server) retrieveSkillsForPrompt(query string, topK int) string {
+// retrieveSkillsDetailed 同 retrieveSkillsForPrompt，额外返回命中技能名、命中数与降级原因。
+func (s *Server) retrieveSkillsDetailed(query string, topK int) (text string, names []string, hits int, degraded string) {
 	if s.pg == nil {
-		return ""
+		return "", nil, 0, "no_pg"
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.APIKey == "" || strings.TrimSpace(query) == "" {
-		return ""
+		return "", nil, 0, "no_embed"
 	}
 	if topK <= 0 {
 		topK = 4
 	}
 	emb := embedText(cfg, query)
 	if len(emb) == 0 {
-		return ""
+		return "", nil, 0, "no_embed"
 	}
 	skills, err := s.pg.searchSkills(emb, topK, skillRelevantDist)
 	if err != nil || len(skills) == 0 {
-		return ""
+		return "", nil, 0, ""
 	}
 	var b strings.Builder
 	b.WriteString("\n\n【已掌握技能（历史提炼的可复用 SOP，相关时优先套用）】\n")
 	ids := make([]int64, 0, len(skills))
+	names = make([]string, 0, len(skills))
 	for _, sk := range skills {
-		if sk.Distance > skillRelevantDist { // 只注入足够相关的
+		if sk.Distance > skillRelevantDist {
 			continue
 		}
 		fmt.Fprintf(&b, "- 【%s】适用：%s\n  步骤：%s\n", sk.Name, trimLine(sk.Trigger, 120), trimLine(sk.Steps, 500))
 		ids = append(ids, sk.ID)
+		if n := strings.TrimSpace(sk.Name); n != "" {
+			names = append(names, n)
+		}
 	}
 	if len(ids) == 0 {
-		return ""
+		return "", nil, 0, ""
 	}
 	go func() {
 		for _, id := range ids {
 			s.pg.recordSkillUse(id, false)
 		}
 	}()
-	return b.String()
+	return b.String(), names, len(ids), ""
+}
+
+// retrieveSkillsForPrompt 检索与当前任务最相关的技能，格式化为可注入提示词的文本，
+// 同时异步记录一次使用（use_count++）。无技能 / 无相关匹配时返回空串。
+func (s *Server) retrieveSkillsForPrompt(query string, topK int) string {
+	t, _, _, _ := s.retrieveSkillsDetailed(query, topK)
+	return t
 }
 
 // reinforceSkill 在事件解决 / 建议被采纳时，语义定位并强化最相关技能——技能层的学习闭环。异步。
