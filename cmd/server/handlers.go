@@ -379,6 +379,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/hyperv", s.handleAgentHyperV)
 	mux.HandleFunc("GET /api/v1/hyperv/list", s.handleHyperVList)
 	mux.HandleFunc("GET /api/v1/hyperv/events", s.handleHyperVEvents)
+	mux.HandleFunc("POST /api/v1/hyperv/cleanup-duplicates", s.handleCleanupHyperVDuplicates)
 	mux.HandleFunc("DELETE /api/v1/hyperv/{hostID}", s.handleDeleteHyperV)
 	mux.HandleFunc("GET /api/v1/netflow/hosts", s.handleNetFlowHosts)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)

@@ -145,6 +145,8 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
 	}
+	// 主机删了，连带清掉该 host_id 下的 Hyper-V 清单，避免虚拟机树留下幽灵宿主机。
+	s.removeHyperVForHost(id)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "host_id": id})
 }

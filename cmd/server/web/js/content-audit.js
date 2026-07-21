@@ -33,7 +33,7 @@ function renderContentAuditPanel() {
     return;
   }
 
-  // host_id → hostname 映射（有数据主机只带 host_id，用 _cachedHosts 补展示名）。
+  // host_id → hostname 映射（API 已 annotate；_cachedHosts 仅兜底）。
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
@@ -46,7 +46,7 @@ function renderContentAuditPanel() {
   html += `<select id="caHostSelect" class="nf-select">`;
   caDataHosts.forEach(dh => {
     const h = nameMap[dh.host_id] || {};
-    const name = h.hostname || dh.host_id;
+    const name = dh.hostname || h.hostname || dh.host_id;
     const sel = dh.host_id === caHost ? " selected" : "";
     html += `<option value="${esc(dh.host_id)}"${sel}>${esc(name)} · ${dh.events || 0}</option>`;
   });
@@ -172,7 +172,8 @@ function caToText() {
   if (!evs.length) return "（当前主机暂无内容审计记录）";
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
-  const hn = (nameMap[caHost] || {}).hostname || caHost || "?";
+  const fromAPI = (caDataHosts || []).find(h => h.host_id === caHost);
+  const hn = (fromAPI && fromAPI.hostname) || (nameMap[caHost] || {}).hostname || caHost || "?";
   const sensN = evs.filter(e => e.sensitive).length;
   const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中内置规则命中敏感 ${sensN} 条）。含用户向 HTTP 端点(多为大模型)发的请求 prompt 与响应 completion：`];
   evs.slice(0, 30).forEach((e, i) => {

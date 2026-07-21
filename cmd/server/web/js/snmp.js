@@ -6,7 +6,7 @@
 
 let snCurrentHost = "";
 let snHostQuery = "";
-let snShowOffline = false;
+let snIfFilter = "up"; // all | up | down — 交换机多数端口闲置，默认只看在线
 let snTab = "devices"; // devices | traps
 let snSearchT = null;
 let snDevices = [];    // 最近一次加载的设备快照
@@ -52,7 +52,7 @@ function renderSNMPPanel() {
   }
 
   const q = snHostQuery.trim().toLowerCase();
-  // 有设备的主机只带 host_id，用 _cachedHosts 补 hostname/ip 展示。
+  // 优先用 API 返回的 hostname；_cachedHosts 仅作兜底。
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
@@ -63,8 +63,9 @@ function renderSNMPPanel() {
   let shown = 0;
   snSNMPHosts.forEach(sh => {
     const h = nameMap[sh.host_id] || {};
-    const name = h.hostname || sh.host_id;
-    const hay = `${name} ${sh.host_id} ${h.ip || ""}`.toLowerCase();
+    const name = sh.hostname || h.hostname || sh.host_id;
+    const ip = sh.ip || h.ip || "";
+    const hay = `${name} ${sh.host_id} ${ip}`.toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
     shown++;
     const sel = sh.host_id === snCurrentHost ? " selected" : "";
@@ -108,8 +109,6 @@ function renderSNMPPanel() {
 function snBindToolbar() {
   const sel = $("snHostSelect");
   sel && sel.addEventListener("change", function() { snCurrentHost = this.value; loadSNMPData(); });
-  const off = $("snShowOffline");
-  off && off.addEventListener("change", function() { snShowOffline = this.checked; renderSNMPPanel(); });
   const search = $("snHostSearch");
   if (search) {
     search.addEventListener("input", function() {
@@ -144,18 +143,37 @@ window.loadSNMPData = function() {
   }
 };
 
+function snIfMatchesFilter(i) {
+  if (snIfFilter === "up") return !!i.oper_up;
+  if (snIfFilter === "down") return !i.oper_up;
+  return true;
+}
+
+function snIfFilterChips() {
+  const opts = [
+    ["all", "snmp.if_all", "全部"],
+    ["up", "snmp.if_up", "在线"],
+    ["down", "snmp.if_down", "离线"],
+  ];
+  return `<span class="sn-if-filter" title="${esc(I18N.t("snmp.if_filter", "端口状态"))}">` +
+    opts.map(([v, k, fb]) =>
+      `<button type="button" class="nf-btn sm${snIfFilter === v ? " sn-active" : ""}" data-snifilter="${v}">${esc(I18N.t(k, fb))}</button>`
+    ).join("") + `</span>`;
+}
+
 function renderSNDevices(container, devices) {
   if (!container) return;
   if (devices.length === 0) {
     container.innerHTML = `<div class="empty-state">${I18N.t("snmp.no_devices") || "暂无 SNMP 设备数据（未配置轮询目标或 Agent 未上报）"}</div>`;
     return;
   }
-  let html = "";
+  let html = `<div class="sn-toolbar-row">${snIfFilterChips()}</div>`;
   devices.forEach(d => {
     const snap = d.snapshot || {};
     const sys = snap.system || {};
     const ifs = snap.interfaces || [];
     const up = ifs.filter(i => i.oper_up).length, down = ifs.length - up;
+    const visible = ifs.filter(snIfMatchesFilter);
     const reachable = d.reachable !== false;
     html += `<div class="sn-dev">`;
     html += `<div class="sn-dev-head">
@@ -171,9 +189,9 @@ function renderSNDevices(container, devices) {
       return;
     }
     html += `<div class="sn-stats">
-      <span class="sn-stat"><b>${ifs.length}</b>${I18N.t("snmp.interfaces") || "接口"}</span>
-      <span class="sn-stat ok"><b>${up}</b>UP</span>
-      <span class="sn-stat ${down > 0 ? "bad" : ""}"><b>${down}</b>DOWN</span>
+      <span class="sn-stat" data-snifilter="all" style="cursor:pointer" title="${esc(I18N.t("snmp.if_all", "全部"))}"><b>${ifs.length}</b>${I18N.t("snmp.interfaces") || "接口"}</span>
+      <span class="sn-stat ok" data-snifilter="up" style="cursor:pointer" title="${esc(I18N.t("snmp.if_up", "在线"))}"><b>${up}</b>UP</span>
+      <span class="sn-stat ${down > 0 ? "bad" : ""}" data-snifilter="down" style="cursor:pointer" title="${esc(I18N.t("snmp.if_down", "离线"))}"><b>${down}</b>DOWN</span>
       <span class="sn-stat"><b>${snFmtUptime(sys.uptime_sec)}</b>${I18N.t("snmp.uptime") || "运行"}</span>
     </div>`;
     html += `<div class="nf-table-wrap"><table class="nf-flow-table"><thead><tr>`;
@@ -182,24 +200,28 @@ function renderSNDevices(container, devices) {
       html += `<th>${esc(I18N.t(k) || fb)}</th>`;
     });
     html += `</tr></thead><tbody>`;
-    // 异常接口排前面
-    const sorted = ifs.slice().sort((a, b) => snIfBad(b) - snIfBad(a));
-    sorted.forEach(i => {
-      const util = Math.max(i.in_util_percent || 0, i.out_util_percent || 0);
-      const err = (i.in_err_pps || 0) + (i.out_err_pps || 0) + (i.in_discard_pps || 0) + (i.out_discard_pps || 0);
-      const isDown = i.admin_status === 1 && !i.oper_up;
-      const rowCls = isDown ? " sn-row-crit" : (util >= 80 ? " sn-row-warn" : "");
-      html += `<tr class="${rowCls.trim()}">`;
-      html += `<td>${esc(i.name || ("if" + i.index))}${i.alias ? ` <span class="sn-dim">${esc(i.alias)}</span>` : ""}</td>`;
-      html += `<td>${i.oper_up ? `<span class="sn-badge sn-up">UP</span>` : `<span class="sn-badge sn-down">DOWN</span>`}</td>`;
-      html += `<td class="nf-mono">${snFmtSpeed(i.speed_bps)}</td>`;
-      html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.in_bps) : "-"}</td>`;
-      html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.out_bps) : "-"}</td>`;
-      html += `<td>${i.rate_valid ? snUtilCell(util) : "-"}</td>`;
-      html += `<td class="nf-num">${i.rate_valid ? err.toFixed(1) : "-"}</td>`;
-      html += `<td><button class="nf-btn sm" data-snhist="1" data-device="${esc(d.device_name || "")}" data-device-ip="${esc(d.device_ip || "")}" data-ifindex="${esc(i.index)}" data-ifname="${esc(i.name || "")}">${esc(I18N.t("snmp.view_history") || "查看曲线")}</button></td>`;
-      html += `</tr>`;
-    });
+    if (!visible.length) {
+      html += `<tr><td colspan="8" class="sn-dim" style="text-align:center;padding:16px">${esc(I18N.t("snmp.if_none", "无匹配接口"))}</td></tr>`;
+    } else {
+      // 异常接口排前面
+      const sorted = visible.slice().sort((a, b) => snIfBad(b) - snIfBad(a));
+      sorted.forEach(i => {
+        const util = Math.max(i.in_util_percent || 0, i.out_util_percent || 0);
+        const err = (i.in_err_pps || 0) + (i.out_err_pps || 0) + (i.in_discard_pps || 0) + (i.out_discard_pps || 0);
+        const isDown = i.admin_status === 1 && !i.oper_up;
+        const rowCls = isDown ? " sn-row-crit" : (util >= 80 ? " sn-row-warn" : "");
+        html += `<tr class="${rowCls.trim()}">`;
+        html += `<td>${esc(i.name || ("if" + i.index))}${i.alias ? ` <span class="sn-dim">${esc(i.alias)}</span>` : ""}</td>`;
+        html += `<td>${i.oper_up ? `<span class="sn-badge sn-up">UP</span>` : `<span class="sn-badge sn-down">DOWN</span>`}</td>`;
+        html += `<td class="nf-mono">${snFmtSpeed(i.speed_bps)}</td>`;
+        html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.in_bps) : "-"}</td>`;
+        html += `<td class="nf-num">${i.rate_valid ? snFmtBps(i.out_bps) : "-"}</td>`;
+        html += `<td>${i.rate_valid ? snUtilCell(util) : "-"}</td>`;
+        html += `<td class="nf-num">${i.rate_valid ? err.toFixed(1) : "-"}</td>`;
+        html += `<td><button class="nf-btn sm" data-snhist="1" data-device="${esc(d.device_name || "")}" data-device-ip="${esc(d.device_ip || "")}" data-ifindex="${esc(i.index)}" data-ifname="${esc(i.name || "")}">${esc(I18N.t("snmp.view_history") || "查看曲线")}</button></td>`;
+        html += `</tr>`;
+      });
+    }
     html += `</tbody></table></div></div>`;
   });
   container.innerHTML = html;
@@ -253,20 +275,28 @@ function snFmtTime(t) {
   try { return new Date(t).toLocaleString(); } catch (e) { return String(t); }
 }
 
+function snHostDisplayName(hostID) {
+  const row = (snSNMPHosts || []).find(h => h.host_id === hostID);
+  if (row && row.hostname) return row.hostname;
+  const cached = (window._cachedHosts || []).find(h => h.id === hostID);
+  return (cached && cached.hostname) || hostID || "?";
+}
+
 // AI 诊断：把当前设备/Trap 数据整理成文本塞进 openAIAssist 的 context。
 function snAIDiagnose() {
   const host = snCurrentHost || ($("snHostSelect") || {}).value;
   if (!host) return;
+  const hn = snHostDisplayName(host);
   if (snTab === "traps") {
     if (!snTraps.length) { alert(I18N.t("snmp.no_traps") || "暂无 Trap 事件"); return; }
-    let ctx = `主机 ${host} 最近 SNMP Trap 事件（${snTraps.length} 条）:\n`;
+    let ctx = `主机 ${hn} 最近 SNMP Trap 事件（${snTraps.length} 条）:\n`;
     snTraps.slice(0, 80).forEach((t, i) => {
       ctx += `${i + 1}. [${t.severity}] 来自 ${t.source_ip} trapOID=${t.trap_oid} @ ${snFmtTime(t.received_at)}\n`;
     });
     openAIAssist({ task: "trap_diagnosis", title: I18N.t("snmp.ai_trap_title") || "🤖 AI Trap 诊断", mode: "analyze", context: ctx.slice(0, 14000) });
   } else {
     if (!snDevices.length) { alert(I18N.t("snmp.no_devices") || "暂无设备数据"); return; }
-    let ctx = snDevicesToText(snDevices);
+    let ctx = `主机 ${hn}\n` + snDevicesToText(snDevices);
     openAIAssist({ task: "snmp_diagnosis", title: I18N.t("snmp.ai_dev_title") || "🤖 AI 网络设备诊断", mode: "analyze", context: ctx.slice(0, 14000) });
   }
 }
@@ -356,25 +386,25 @@ async function snLoadInterfaceHistory() {
     </div><div class="hint">${I18N.t("snmp.history_hint") || "包含收发速率、利用率、错误/丢包、链路状态和接口速率；悬停查看数值，拖动框选放大，双击还原。"}</div>`;
     snHistCharts = {};
     snHistCharts.snhThroughput = createChart("snhThroughput", samples, [
-      { key: "in_bps", label: I18N.t("snmp.if_in") || "入向", color: "#2fd07a", fmt: fmtRate },
-      { key: "out_bps", label: I18N.t("snmp.if_out") || "出向", color: "#43b6f0", fmt: fmtRate },
-    ], 0, null, { title: I18N.t("snmp.throughput_history") || "接口吞吐速率" });
+      { key: "in_bps", label: I18N.t("snmp.if_in", "入向"), color: "#2fd07a", fmt: fmtRate },
+      { key: "out_bps", label: I18N.t("snmp.if_out", "出向"), color: "#43b6f0", fmt: fmtRate },
+    ], 0, null, { title: I18N.t("snmp.throughput_history", "接口吞吐速率") });
     snHistCharts.snhUtil = createChart("snhUtil", samples, [
-      { key: "in_util", label: I18N.t("snmp.in_util") || "入向利用率", color: "#8b5cf6", fmt: v => v.toFixed(1) + "%" },
-      { key: "out_util", label: I18N.t("snmp.out_util") || "出向利用率", color: "#f7b23b", fmt: v => v.toFixed(1) + "%" },
-    ], 0, 100, { title: I18N.t("snmp.util_history") || "接口利用率" });
+      { key: "in_util", label: I18N.t("snmp.in_util", "入向利用率"), color: "#8b5cf6", fmt: v => v.toFixed(1) + "%" },
+      { key: "out_util", label: I18N.t("snmp.out_util", "出向利用率"), color: "#f7b23b", fmt: v => v.toFixed(1) + "%" },
+    ], 0, 100, { title: I18N.t("snmp.util_history", "接口利用率") });
     snHistCharts.snhErrors = createChart("snhErrors", samples, [
-      { key: "in_err_pps", label: I18N.t("snmp.in_errors") || "入向错误", color: "#f2545b", fmt: v => v.toFixed(1) + " pps" },
-      { key: "out_err_pps", label: I18N.t("snmp.out_errors") || "出向错误", color: "#e06c9a", fmt: v => v.toFixed(1) + " pps" },
-      { key: "in_disc_pps", label: I18N.t("snmp.in_discards") || "入向丢包", color: "#f7b23b", fmt: v => v.toFixed(1) + " pps" },
-      { key: "out_disc_pps", label: I18N.t("snmp.out_discards") || "出向丢包", color: "#ff8f5a", fmt: v => v.toFixed(1) + " pps" },
-    ], 0, null, { title: I18N.t("snmp.error_history") || "接口错误与丢包" });
+      { key: "in_err_pps", label: I18N.t("snmp.in_errors", "入向错误"), color: "#f2545b", fmt: v => v.toFixed(1) + " pps" },
+      { key: "out_err_pps", label: I18N.t("snmp.out_errors", "出向错误"), color: "#e06c9a", fmt: v => v.toFixed(1) + " pps" },
+      { key: "in_disc_pps", label: I18N.t("snmp.in_discards", "入向丢包"), color: "#f7b23b", fmt: v => v.toFixed(1) + " pps" },
+      { key: "out_disc_pps", label: I18N.t("snmp.out_discards", "出向丢包"), color: "#ff8f5a", fmt: v => v.toFixed(1) + " pps" },
+    ], 0, null, { title: I18N.t("snmp.error_history", "接口错误与丢包") });
     snHistCharts.snhState = createChart("snhState", samples, [
-      { key: "oper_up", label: I18N.t("snmp.if_status") || "链路状态", color: "#2fd07a", fmt: v => v >= .5 ? "UP" : "DOWN" },
-    ], 0, 1, { title: I18N.t("snmp.state_history") || "链路状态（UP / DOWN）" });
+      { key: "oper_up", label: I18N.t("snmp.if_status", "链路状态"), color: "#2fd07a", fmt: v => v >= .5 ? "UP" : "DOWN" },
+    ], 0, 1, { title: I18N.t("snmp.state_history", "链路状态（UP / DOWN）") });
     snHistCharts.snhSpeed = createChart("snhSpeed", samples, [
-      { key: "speed_bps", label: I18N.t("snmp.if_speed") || "接口速率", color: "#4c8dff", fmt: fmtRate },
-    ], 0, null, { title: I18N.t("snmp.speed_history") || "接口协商速率" });
+      { key: "speed_bps", label: I18N.t("snmp.if_speed", "接口速率"), color: "#4c8dff", fmt: fmtRate },
+    ], 0, null, { title: I18N.t("snmp.speed_history", "接口协商速率") });
   } catch (e) {
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }
@@ -394,6 +424,15 @@ function snApplyCustomRange() {
 
 // 事件委托（CSP: script-src 'self'，内联 onclick 会被拦）。
 safeAddEventListener("snmpPanel", "click", e => {
+  const ifFilter = e.target.closest("[data-snifilter]");
+  if (ifFilter) {
+    const v = ifFilter.dataset.snifilter;
+    if (v && v !== snIfFilter) {
+      snIfFilter = v;
+      renderSNDevices($("snBody"), snDevices);
+    }
+    return;
+  }
   const histBtn = e.target.closest("[data-snhist]");
   if (histBtn) { snOpenInterfaceHistory(histBtn); return; }
   const delBtn = e.target.closest("[data-sndel]");

@@ -3182,6 +3182,8 @@ select:focus {
 /* SNMP 网络设备面板：复用 nf-* 结构，仅补状态徽标与异常行高亮（语义 token，深浅主题自适应）。 */
 .sn-tabs { display: inline-flex; gap: 4px; }
 .nf-btn.sn-active { background: var(--accent-soft); color: var(--accent-txt); border-color: var(--accent-border); }
+.sn-toolbar-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
+.sn-if-filter { display: inline-flex; gap: 4px; align-items: center; }
 .sn-dim { color: var(--muted); font-weight: 400; font-size: 12px; }
 .sn-meta { font-size: 12px; color: var(--txt2); margin: 4px 0 10px; }
 .sn-badge { padding: 1px 7px; border-radius: var(--r-xs); font-size: 11px; font-weight: 600; margin-left: 6px; }
@@ -3200,6 +3202,8 @@ select:focus {
 .sn-pill.ok { background: var(--ok-soft); color: var(--ok); }
 .sn-pill.bad { background: var(--crit-soft); color: var(--crit); }
 .sn-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 12px; }
+.sn-stats .sn-stat[data-snifilter] { cursor: pointer; }
+.sn-stats .sn-stat[data-snifilter]:hover { opacity: .85; text-decoration: underline; }
 .sn-stat { font-size: 12px; color: var(--muted); display: inline-flex; align-items: baseline; gap: 5px; }
 .sn-stat b { font-size: 15px; font-weight: 700; color: var(--txt); font-variant-numeric: tabular-nums; }
 .sn-stat.ok b { color: var(--ok); }

@@ -275,6 +275,7 @@ func (s *Server) handleSNMPHosts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
 	}
+	s.annotateHostNames(hosts)
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts})
 }
 

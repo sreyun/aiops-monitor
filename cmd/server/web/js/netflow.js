@@ -33,7 +33,7 @@ function renderNetFlowPanel() {
   }
 
   const q = nfHostQuery.trim().toLowerCase();
-  // 主机名/IP 映射：有流量主机只带 host_id，用 _cachedHosts 补 hostname/ip 展示。
+  // 优先用 API 返回的 hostname（服务端已 annotate）；_cachedHosts 仅作兜底。
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
@@ -44,8 +44,9 @@ function renderNetFlowPanel() {
   let shown = 0;
   nfTrafficHosts.forEach(th => {
     const h = nameMap[th.host_id] || {};
-    const name = h.hostname || th.host_id;
-    const hay = `${name} ${th.host_id} ${h.ip || ""}`.toLowerCase();
+    const name = th.hostname || h.hostname || th.host_id;
+    const ip = th.ip || h.ip || "";
+    const hay = `${name} ${th.host_id} ${ip}`.toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
     shown++;
     const sel = th.host_id === nfCurrentHost ? " selected" : "";
@@ -428,18 +429,18 @@ async function nfLoadIPHistory() {
       </div><div class="hint">${I18N.t("netflow.drill_hint") || "点击通信对端可继续下钻；曲线按时间桶聚合，包含流量、包数、Flow 数、对端数和平均包长。"}</div>`;
     nfIPCharts = {};
     nfIPCharts.nfhTraffic = createChart("nfhTraffic", samples, [
-      { key: "bytes", label: I18N.t("netflow.bytes") || "字节", color: "#4c8dff", fmt: formatBytes },
-    ], 0, null, { title: I18N.t("netflow.traffic_history") || "分桶流量" });
+      { key: "bytes", label: I18N.t("netflow.bytes", "字节"), color: "#4c8dff", fmt: formatBytes },
+    ], 0, null, { title: I18N.t("netflow.traffic_history", "分桶流量") });
     nfIPCharts.nfhPackets = createChart("nfhPackets", samples, [
-      { key: "packets", label: I18N.t("netflow.packets") || "包", color: "#2fd07a", fmt: v => v.toFixed(0) },
-    ], 0, null, { title: I18N.t("netflow.packet_history") || "分桶包数" });
+      { key: "packets", label: I18N.t("netflow.packets", "包"), color: "#2fd07a", fmt: v => v.toFixed(0) },
+    ], 0, null, { title: I18N.t("netflow.packet_history", "分桶包数") });
     nfIPCharts.nfhActivity = createChart("nfhActivity", samples, [
       { key: "flows", label: "Flow", color: "#8b5cf6", fmt: v => v.toFixed(0) },
-      { key: "peers", label: I18N.t("netflow.peers") || "通信对端", color: "#f7b23b", fmt: v => v.toFixed(0) },
-    ], 0, null, { title: I18N.t("netflow.activity_history") || "连接活跃度" });
+      { key: "peers", label: I18N.t("netflow.peers", "通信对端"), color: "#f7b23b", fmt: v => v.toFixed(0) },
+    ], 0, null, { title: I18N.t("netflow.activity_history", "连接活跃度") });
     nfIPCharts.nfhPacketSize = createChart("nfhPacketSize", samples, [
-      { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt") || "平均包长", color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
-    ], 0, null, { title: I18N.t("netflow.packet_size_history") || "平均包长" });
+      { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt", "平均包长"), color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
+    ], 0, null, { title: I18N.t("netflow.packet_size_history", "平均包长") });
   } catch (e) {
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }

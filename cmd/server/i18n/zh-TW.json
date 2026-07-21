@@ -350,6 +350,7 @@
   "log.delete_hardware": "刪除硬體資產記錄：%s / %s",
   "log.delete_snmp": "刪除 SNMP 網路設備記錄：%s / %s",
   "log.delete_hyperv": "刪除 Hyper-V 虛擬機清單：%s",
+  "log.cleanup_hyperv_duplicates": "清理重複 Hyper-V 主機清單 %d 條",
   "log.set_category": "設定主機分類：%s → %s",
   "log.clear_category": "清除主機分類：%s",
   "log.delete_host": "刪除主機 %s",

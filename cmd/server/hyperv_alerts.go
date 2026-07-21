@@ -101,6 +101,19 @@ func (hs *hypervStore) hostMemOf(hostID string) (total, avail float64) {
 	return 0, 0
 }
 
+// has reports whether this host currently has an in-memory Hyper-V entry
+// (i.e. Agent has reported since process start). Used to prefer the live
+// identity when collapsing reinstall twins.
+func (hs *hypervStore) has(hostID string) bool {
+	if hs == nil || hostID == "" {
+		return false
+	}
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	_, ok := hs.byID[hostID]
+	return ok
+}
+
 // guestsOf returns the latest guests for one host (nil when none).
 func (hs *hypervStore) guestsOf(hostID string) []shared.HyperVGuest {
 	if hs == nil {

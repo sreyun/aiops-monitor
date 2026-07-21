@@ -3,6 +3,7 @@ package main
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"aiops-monitor/shared"
 )
@@ -17,7 +18,7 @@ func TestHyperVEndpointAuth(t *testing.T) {
 			t.Errorf("%s must be public (agent ingest is fingerprint-gated); otherwise agents get 401", p)
 		}
 	}
-	for _, p := range []string{"/api/v1/hyperv/list", "/api/v1/hyperv/events", "/api/v1/hyperv/h1"} {
+	for _, p := range []string{"/api/v1/hyperv/list", "/api/v1/hyperv/events", "/api/v1/hyperv/h1", "/api/v1/hyperv/cleanup-duplicates"} {
 		if isPublicPath(httptest.NewRequest("GET", p, nil)) {
 			t.Errorf("%s must NOT be public — it exposes VM inventory to anonymous callers", p)
 		}
@@ -287,5 +288,75 @@ func TestEvaluateHyperVOffTransition(t *testing.T) {
 	hs.put("h1", "host1", "", []shared.HyperVGuest{{Name: "tmpl", State: "Running"}}, "", 0, 0)
 	if a := EvaluateHyperV(hs); len(a) != 0 {
 		t.Fatalf("recovered VM must clear: %+v", a)
+	}
+}
+
+// TestSplitHyperVInventoriesPrefersLive covers Agent-reinstall twins: same
+// hostname, two host_ids — keep the one still reporting Hyper-V, mark the other stale.
+func TestSplitHyperVInventoriesPrefersLive(t *testing.T) {
+	now := time.Now().Unix()
+	s := dupTestServer(t,
+		&Host{ID: "new-id", Hostname: "hmsrv18", Fingerprint: "fp-hv", LastSeen: now},
+		&Host{ID: "old-id", Hostname: "hmsrv18", Fingerprint: "fp-hv", LastSeen: now - 86400},
+	)
+	s.hv = newHypervStore()
+	s.hv.put("new-id", "hmsrv18", "", []shared.HyperVGuest{{ID: "g1", Name: "vm1", State: "Running"}}, "", 96000, 43000)
+
+	rows := []map[string]any{
+		{"host_id": "old-id", "host_name": "hmsrv18", "guest_count": 4, "guests": []any{}, "updated_at": time.Now().Add(-time.Hour)},
+		{"host_id": "new-id", "host_name": "hmsrv18", "guest_count": 4, "guests": []any{}, "updated_at": time.Now()},
+	}
+	kept, stale := s.splitHyperVInventories(rows)
+	if len(kept) != 1 {
+		t.Fatalf("kept=%d want 1: %+v", len(kept), kept)
+	}
+	if hid, _ := kept[0]["host_id"].(string); hid != "new-id" {
+		t.Errorf("winner=%q want new-id", hid)
+	}
+	if len(stale) != 1 || stale[0] != "old-id" {
+		t.Errorf("stale=%v want [old-id]", stale)
+	}
+}
+
+// Orphan inventory whose managed host was deleted still merges by hostname when
+// exactly one fingerprinted host uses that name.
+func TestSplitHyperVInventoriesOrphanByHostname(t *testing.T) {
+	now := time.Now().Unix()
+	s := dupTestServer(t,
+		&Host{ID: "live", Hostname: "hmsrv18", Fingerprint: "fp-hv", LastSeen: now},
+	)
+	s.hv = newHypervStore()
+	s.hv.put("live", "hmsrv18", "", nil, "", 1, 1)
+
+	rows := []map[string]any{
+		{"host_id": "ghost", "host_name": "hmsrv18", "guest_count": 2, "guests": []any{}, "updated_at": time.Now().Add(-time.Hour)},
+		{"host_id": "live", "host_name": "hmsrv18", "guest_count": 2, "guests": []any{}, "updated_at": time.Now()},
+	}
+	kept, stale := s.splitHyperVInventories(rows)
+	if len(kept) != 1 || kept[0]["host_id"] != "live" {
+		t.Fatalf("kept=%+v", kept)
+	}
+	if len(stale) != 1 || stale[0] != "ghost" {
+		t.Errorf("stale=%v want [ghost]", stale)
+	}
+}
+
+func TestSplitHyperVInventoriesDifferentHostsStaySeparate(t *testing.T) {
+	now := time.Now().Unix()
+	s := dupTestServer(t,
+		&Host{ID: "a", Hostname: "hv-a", Fingerprint: "fp-a", LastSeen: now},
+		&Host{ID: "b", Hostname: "hv-b", Fingerprint: "fp-b", LastSeen: now},
+	)
+	s.hv = newHypervStore()
+	rows := []map[string]any{
+		{"host_id": "a", "host_name": "hv-a", "guest_count": 1, "guests": []any{}, "updated_at": time.Now()},
+		{"host_id": "b", "host_name": "hv-b", "guest_count": 1, "guests": []any{}, "updated_at": time.Now()},
+	}
+	kept, stale := s.splitHyperVInventories(rows)
+	if len(kept) != 2 {
+		t.Fatalf("kept=%d want 2", len(kept))
+	}
+	if len(stale) != 0 {
+		t.Errorf("stale=%v want empty", stale)
 	}
 }

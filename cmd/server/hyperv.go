@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,9 @@ func (s *Server) handleAgentHyperV(w http.ResponseWriter, r *http.Request) {
 		// 变更必须在 upsert **之前**比对：upsert 会覆盖上一份，之后就没有旧值可比了。
 		s.recordHyperVChanges(rep.HostID, guests)
 		s.pg.upsertHyperVInventory(rep.HostID, hostname, guests)
+		// Agent 重装会换 host_id：同机旧清单会残留并在树里并排出现。上报成功后顺手清掉
+		// 同指纹/同名的孤儿行，避免等用户点清理。
+		s.purgeStaleHyperVDuplicates(rep.HostID)
 	}
 
 	// 每 VM 数值指标写入 VictoriaMetrics（趋势曲线 + 历史）。
@@ -104,6 +108,14 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	dedupHyperVRowGuests(rows) // heal legacy twins on read (GUID + name-only orphans)
+	// Agent 重装换 host_id 后，同机可能留下多份宿主机清单（同名、无内存标注的那条就是孤儿）。
+	// 读路径只展示赢家，并把可清理数量返回给前端做横幅。
+	var staleTotal int
+	if host == "" {
+		kept, stale := s.splitHyperVInventories(rows)
+		rows = kept
+		staleTotal = len(stale)
+	}
 	s.enrichHyperVLinks(rows)
 	// Annotate each host with its own RAM (from the in-memory store, latest report)
 	// so the frontend can show "宿主机名 · 可用/总内存" without a PG schema change.
@@ -117,7 +129,10 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 			row["host_avail_mem_mb"] = avail
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"inventories": rows})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"inventories": rows,
+		"stale_total": staleTotal,
+	})
 }
 
 // handleHyperVEvents returns a host's VM change/state events, newest first.
@@ -148,13 +163,91 @@ func (s *Server) handleDeleteHyperV(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostID required"})
 		return
 	}
+	s.removeHyperVForHost(hostID)
+	slog.Info("删除 Hyper-V 清单", "host", hostID, "actor", s.clientIP(r))
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hyperv", hostID)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleCleanupHyperVDuplicates permanently deletes orphan Hyper-V inventories
+// (same physical host, old host_id after Agent reinstall). Only non-live losers
+// are removed; the currently reporting identity is kept.
+func (s *Server) handleCleanupHyperVDuplicates(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": []string{}, "count": 0})
+		return
+	}
+	rows, err := s.pg.getAllHyperVInventories()
+	if err != nil {
+		slog.Warn("查询 Hyper-V 清单失败", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	_, stale := s.splitHyperVInventories(rows)
+	deleted := make([]string, 0, len(stale))
+	for _, id := range stale {
+		s.removeHyperVForHost(id)
+		deleted = append(deleted, id)
+	}
+	if len(deleted) > 0 {
+		s.store.AddLog(LogEntry{
+			Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
+			Message: Tz("log.cleanup_hyperv_duplicates", len(deleted)),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "count": len(deleted)})
+}
+
+// removeHyperVForHost drops one host's Hyper-V inventory from memory and PG.
+func (s *Server) removeHyperVForHost(hostID string) {
+	if hostID == "" {
+		return
+	}
 	s.hv.remove(hostID)
 	if s.pg != nil {
 		s.pg.deleteHyperVInventory(hostID)
 	}
-	slog.Info("删除 Hyper-V 清单", "host", hostID, "actor", s.clientIP(r))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hyperv", hostID)})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// purgeStaleHyperVDuplicates deletes orphan inventories that share a group with
+// keepHostID (same fingerprint / hostname). Called after a successful agent report.
+func (s *Server) purgeStaleHyperVDuplicates(keepHostID string) {
+	if s.pg == nil || keepHostID == "" {
+		return
+	}
+	rows, err := s.pg.getAllHyperVInventories()
+	if err != nil || len(rows) < 2 {
+		return
+	}
+	_, stale := s.splitHyperVInventories(rows)
+	if len(stale) == 0 {
+		return
+	}
+	keepKey := ""
+	for _, row := range rows {
+		if hid, _ := row["host_id"].(string); hid == keepHostID {
+			name, _ := row["host_name"].(string)
+			keepKey = s.hypervDedupKey(hid, name)
+			break
+		}
+	}
+	if keepKey == "" || strings.HasPrefix(keepKey, "id:") {
+		return
+	}
+	for _, id := range stale {
+		name := ""
+		for _, row := range rows {
+			if hid, _ := row["host_id"].(string); hid == id {
+				name, _ = row["host_name"].(string)
+				break
+			}
+		}
+		if s.hypervDedupKey(id, name) != keepKey {
+			continue
+		}
+		s.removeHyperVForHost(id)
+		slog.Info("已清理同机旧 Hyper-V 清单", "keep", keepHostID, "removed", id)
+	}
 }
 
 // enrichHyperVLinks annotates each guest in the rows with linked_host_id /
@@ -431,4 +524,147 @@ func dedupHyperVRowGuests(rows []map[string]any) {
 		row["guests"] = out
 		row["guest_count"] = len(out)
 	}
+}
+
+// hypervDedupKey groups inventory rows that belong to the same physical Hyper-V
+// host. Prefer machine fingerprint (stable across Agent reinstall); fall back to
+// hostname when the managed host is gone but the inventory row remains.
+func (s *Server) hypervDedupKey(hostID, hostName string) string {
+	if h := s.hostByID(hostID); h != nil && h.Fingerprint != "" {
+		return "fp:" + h.Fingerprint
+	}
+	name := strings.ToLower(strings.TrimSpace(hostName))
+	if name == "" || name == strings.ToLower(hostID) {
+		return "id:" + hostID
+	}
+	// Orphan inventory (host record deleted / never linked): if exactly one
+	// managed host uses this hostname and has a fingerprint, attach to that
+	// group so the twin collapses with the live reporter.
+	var fps []string
+	seen := map[string]bool{}
+	for _, h := range s.store.ListHosts() {
+		if strings.ToLower(h.Hostname) != name || h.Fingerprint == "" {
+			continue
+		}
+		if !seen[h.Fingerprint] {
+			seen[h.Fingerprint] = true
+			fps = append(fps, h.Fingerprint)
+		}
+	}
+	if len(fps) == 1 {
+		return "fp:" + fps[0]
+	}
+	return "name:" + name
+}
+
+func hypervRowUpdatedAt(row map[string]any) time.Time {
+	switch v := row["updated_at"].(type) {
+	case time.Time:
+		return v
+	case string:
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func hypervRowGuestCount(row map[string]any) int {
+	switch v := row["guest_count"].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	}
+	if guests, ok := row["guests"].([]any); ok {
+		return len(guests)
+	}
+	return 0
+}
+
+// splitHyperVInventories collapses same-machine host twins (reinstall → new
+// host_id). Returns the rows to show and the orphan host_ids safe to delete.
+func (s *Server) splitHyperVInventories(rows []map[string]any) (kept []map[string]any, staleIDs []string) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	offlineAfter := int64(300)
+	if s.cfg != nil {
+		offlineAfter = int64(s.cfg.Thresholds().OfflineAfter.Seconds())
+	}
+	now := time.Now().Unix()
+
+	type scored struct {
+		row    map[string]any
+		hostID string
+		live   bool
+		online bool
+		updated time.Time
+		guests int
+	}
+	groups := map[string][]scored{}
+	order := []string{}
+	for _, row := range rows {
+		hid, _ := row["host_id"].(string)
+		if hid == "" {
+			continue
+		}
+		name, _ := row["host_name"].(string)
+		key := s.hypervDedupKey(hid, name)
+		online := false
+		if h := s.hostByID(hid); h != nil {
+			online = now-h.LastSeen <= offlineAfter
+		}
+		sc := scored{
+			row:     row,
+			hostID:  hid,
+			live:    s.hv.has(hid),
+			online:  online,
+			updated: hypervRowUpdatedAt(row),
+			guests:  hypervRowGuestCount(row),
+		}
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], sc)
+	}
+
+	better := func(a, b scored) bool {
+		if a.live != b.live {
+			return a.live
+		}
+		if a.online != b.online {
+			return a.online
+		}
+		if !a.updated.Equal(b.updated) {
+			return a.updated.After(b.updated)
+		}
+		if a.guests != b.guests {
+			return a.guests > b.guests
+		}
+		return a.hostID < b.hostID
+	}
+
+	kept = make([]map[string]any, 0, len(groups))
+	for _, key := range order {
+		g := groups[key]
+		if len(g) == 1 {
+			kept = append(kept, g[0].row)
+			continue
+		}
+		sort.Slice(g, func(i, j int) bool { return better(g[i], g[j]) })
+		kept = append(kept, g[0].row)
+		for _, loser := range g[1:] {
+			// Never mark a still-live reporter as stale (clone / dual-agent edge case).
+			if loser.live {
+				kept = append(kept, loser.row)
+				continue
+			}
+			staleIDs = append(staleIDs, loser.hostID)
+		}
+	}
+	return kept, staleIDs
 }

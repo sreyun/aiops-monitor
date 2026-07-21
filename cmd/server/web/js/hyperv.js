@@ -10,6 +10,7 @@
 const hvT = (k, fb) => I18N.t(k, fb);
 
 let HV_INVENTORIES = [];               // [{host_id, host_name, guest_count, guests:[...], updated_at}]
+let HV_STALE_TOTAL = 0;                // orphan host inventories (Agent reinstall twins)
 const HV_FILTER = { q: "", status: "" };
 const HV_COLLAPSED = new Set();        // host_ids collapsed in the tree (default expanded)
 let HV_SELECTED = null;                // { host, vm } currently shown in the detail panel
@@ -97,10 +98,35 @@ async function loadHyperVPanel() {
   try {
     const d = await fetch(`${API}/hyperv/list`).then(r => r.json());
     HV_INVENTORIES = (d && d.inventories) ? d.inventories : [];
+    HV_STALE_TOTAL = (d && d.stale_total) ? (+d.stale_total || 0) : 0;
   } catch (e) {
     HV_INVENTORIES = [];
+    HV_STALE_TOTAL = 0;
   }
   renderHyperVPanel();
+}
+
+function hvDupBannerHTML() {
+  if (!HV_STALE_TOTAL) return "";
+  return `<div class="hw-dup-bar">
+    <span>⚠ ${esc(hvT("hyperv.dup_found", "检测到重复宿主机清单"))}
+      ${HV_STALE_TOTAL} ${esc(hvT("hyperv.dup_stale_hint", "条可清理（Agent 重装会换主机 ID，旧 Hyper-V 清单会残留）"))}</span>
+    <button class="btn sm danger" data-hvcleanup="1">${esc(hvT("hyperv.dup_clean", "清理"))}</button>
+  </div>`;
+}
+
+async function hvCleanupDuplicates() {
+  const msg = hvT("hyperv.dup_confirm", "将删除已离线的重复宿主机 Hyper-V 清单（保留当前在上报的那条）。该操作不可撤销，确定继续？");
+  if (!confirm(msg)) return;
+  try {
+    const r = await fetch(`${API}/hyperv/cleanup-duplicates`, {
+      method: "POST", credentials: "same-origin",
+    }).then(r => r.json());
+    toast(`${hvT("hyperv.dup_cleaned", "已清理重复宿主机清单")} ${r.count || 0}`, "ok");
+    loadHyperVPanel();
+  } catch (e) {
+    toast(hvT("hyperv.dup_clean_failed", "清理失败") + "：" + (e.message || e), "err");
+  }
 }
 
 /* ---------- 选中态 ---------- */
@@ -196,6 +222,7 @@ function hvToolbar(totalHosts, totalVMs, totalBad) {
     </select>
     <button data-hvrefresh="1" class="btn sm" title="${esc(hvT("hyperv.refresh", "刷新"))}">↻</button>
   </div>
+  ${hvDupBannerHTML()}
   <div class="hv-summary muted">${hvT("hyperv.summary", "宿主机")} ${totalHosts} · ${hvT("hyperv.vm", "虚拟机")} ${totalVMs}${totalBad ? ` · <span style="color:var(--warn-txt)">${hvT("hyperv.attention", "需关注")} ${totalBad}</span>` : ""}</div>`;
 }
 
@@ -371,6 +398,8 @@ function renderHyperVPanel() {
 safeAddEventListener("hypervPanel", "click", e => {
   const refresh = e.target.closest("[data-hvrefresh]");
   if (refresh) { loadHyperVPanel(); return; }
+  const clean = e.target.closest("[data-hvcleanup]");
+  if (clean) { hvCleanupDuplicates(); return; }
   const jump = e.target.closest("[data-hvjump]");
   if (jump && typeof openDetail === "function") {
     openDetail(jump.dataset.hvjump, jump.dataset.hvname || jump.dataset.hvjump);

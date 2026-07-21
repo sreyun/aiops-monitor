@@ -223,6 +223,26 @@ func (s *Server) hostByID(id string) *Host {
 	return nil
 }
 
+// annotateHostNames fills hostname/ip from the managed-host store onto list rows
+// that only carry host_id (NetFlow / SNMP / content-audit host selectors). Without
+// this the UI falls back to raw IDs whenever _cachedHosts hasn't been loaded yet.
+func (s *Server) annotateHostNames(rows []map[string]any) {
+	for _, row := range rows {
+		id, _ := row["host_id"].(string)
+		if id == "" {
+			continue
+		}
+		if h := s.hostByID(id); h != nil {
+			if h.Hostname != "" {
+				row["hostname"] = h.Hostname
+			}
+			if h.IP != "" {
+				row["ip"] = h.IP
+			}
+		}
+	}
+}
+
 // incidentMsgBody renders a compact one-line body for an incident notification.
 func incidentMsgBody(inc Incident) string {
 	b := "级别 " + inc.Severity + " · 来源 " + inc.Source

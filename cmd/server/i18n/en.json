@@ -352,6 +352,7 @@
   "log.delete_hardware": "Deleted hardware asset record: %s / %s",
   "log.delete_snmp": "Deleted SNMP network device record: %s / %s",
   "log.delete_hyperv": "Deleted Hyper-V VM inventory: %s",
+  "log.cleanup_hyperv_duplicates": "Cleaned up %d duplicate Hyper-V host inventories",
   "log.set_category": "Set host category: %s → %s",
   "log.clear_category": "Cleared host category: %s",
   "log.delete_host": "Deleted host %s",
