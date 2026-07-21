@@ -3133,20 +3133,31 @@ function toggleAIVoiceInput(){
   }catch(e){ toast(I18N.t("sre.voice_start_failed","无法启动语音输入"),"err"); }
 }
 
-// 挑选更「稳重 / 自然」的中文女声（或稳重男声），避免系统默认机械音。
+// 挑选「成熟稳重」的中文女声，明确排除男声；语速/音调在 speakAIText 中配合下调。
 function pickPreferredAIVoice(){
   if(!window.speechSynthesis) return null;
   const voices=speechSynthesis.getVoices()||[];
   if(!voices.length) return null;
-  const zh=voices.filter(v=>/zh|chinese|中文|普通话|国语/i.test((v.lang||"")+" "+(v.name||"")));
-  const pool=zh.length?zh:voices;
-  const prefer=/xiaoxiao|xiaoyi|xiaohan|yaoyao|huihui|yaoyao|yunxi|yunyang|xiaochen|xiaoxuan|neural|natural|premium|enhanced|google.*普通话|microsoft.*(xiaoxiao|xiaoyi|huihui)/i;
-  const softFemale=/female|女|xiaoxiao|xiaoyi|yaoyao|huihui|xiaochen|xiaoxuan/i;
-  const steadyMale=/yunyang|yunxi|kangkang|male|男/i;
-  let best=pool.find(v=>prefer.test(v.name))||pool.find(v=>softFemale.test(v.name+" "+(v.voiceURI||"")));
-  if(!best) best=pool.find(v=>/zh-CN|zh_CN|cmn-Hans/i.test(v.lang));
-  if(!best) best=pool.find(v=>steadyMale.test(v.name));
-  return best||pool[0]||null;
+  const label=v=>((v.name||"")+" "+(v.voiceURI||"")+" "+(v.lang||"")).toLowerCase();
+  const isMale=v=>/yunyang|yunxi|yunjian|yunhao|yunfeng|kangkang|male|\bman\b|男声|男/.test(label(v));
+  const isZh=v=>/zh|chinese|中文|普通话|国语|cmn/.test(label(v));
+  const zh=voices.filter(isZh);
+  const pool=(zh.length?zh:voices).filter(v=>!isMale(v));
+  const fallback=zh.length?zh:voices;
+  // 成熟稳重优先：晓萱/晓涵/慧慧/晓伊；避免偏幼的瑶瑶等排在最前
+  const mature=/xiaoxuan|xiaohan|huihui|xiaoyi|xiaoqiu|xiaorou|xiaoyan|xiaomeng|xiaoshuang/;
+  const female=/xiaoxiao|xiaochen|female|女声|女|\bwoman\b/;
+  const quality=/neural|natural|premium|enhanced|online/;
+  let best=pool.find(v=>mature.test(label(v)))
+    ||pool.find(v=>female.test(label(v))&&quality.test(label(v)))
+    ||pool.find(v=>female.test(label(v)))
+    ||pool.find(v=>quality.test(label(v)))
+    ||pool.find(v=>/zh-CN|zh_CN|cmn-Hans/i.test(v.lang||""))
+    ||pool[0]
+    ||fallback.find(v=>!isMale(v))
+    ||fallback[0]
+    ||null;
+  return best;
 }
 function normalizeSpeakText(raw){
   return String(raw||"")
@@ -3176,9 +3187,9 @@ function speakAIText(rawText, btn){
   try{ speechSynthesis.cancel(); }catch(e){}
   const u=new SpeechSynthesisUtterance(text);
   u.lang="zh-CN";
-  // 略慢、略柔：更稳重，减少机械感
-  u.rate=0.92;
-  u.pitch=1.08;
+  // 成熟稳重女声：略慢、音调略低（偏高易显幼声）
+  u.rate=0.88;
+  u.pitch=0.96;
   u.volume=1;
   const voice=pickPreferredAIVoice();
   if(voice){ u.voice=voice; if(voice.lang) u.lang=voice.lang; }
