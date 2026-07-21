@@ -1083,29 +1083,42 @@ async function aiTicketDash() {
   });
 }
 safeAddEventListener("dashAIBtn", "click", () => { $("dashAIPrompt").value = ""; $("dashAIName").value = ""; openMask("dashAIMask"); });
-// 优化提示词：把用户的简短描述交给 AI 扩写为更完整、更专业的看板需求（覆盖指标/图型/布局/配色/下钻），回填输入框。
+// 优化提示词：就地调用 AI，完成后直接覆盖描述框，不再弹辅助窗、无需点「应用」。
 safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
-  const cur = $("dashAIPrompt").value.trim();
+  const ta = $("dashAIPrompt");
+  const cur = (ta && ta.value || "").trim();
   if (!cur) { toast("请先简单描述你想要的看板", "err"); return; }
-  let ctx = "";
-  try {
-    const metrics = (await fetchMetricNames((CUR_DASH && CUR_DASH.datasource) || "")).slice(0, 200);
-    if (metrics.length) ctx = "【平台可用指标（节选，优先围绕这些真实指标组织）】\n" + metrics.join(", ");
-  } catch (e) {}
-  openAIAssist({
-    task: "dashboard_prompt_optimize",
-    title: "✨ 优化看板提示词",
-    mode: "generate",
-    context: ctx,
-    presetInput: cur, // 打开即以现有描述为输入直接生成
-    placeholder: "描述你想要的看板，AI 会扩写为更完整专业的需求",
-    applyLabel: "填入描述框",
-    applyTo: (text) => {
-      const t = (text || "").trim();
-      if (!t) { toast("未生成有效内容", "err"); return; }
-      $("dashAIPrompt").value = t;
-      toast("已优化并填入描述框，可继续微调后生成", "ok");
+  await withLoading("dashAIOptimizePrompt", async () => {
+    let ctx = "";
+    try {
+      const metrics = (await fetchMetricNames((CUR_DASH && CUR_DASH.datasource) || "")).slice(0, 200);
+      if (metrics.length) ctx = "【平台可用指标（节选，优先围绕这些真实指标组织）】\n" + metrics.join(", ");
+    } catch (e) {}
+    toast("正在优化提示词…", "ok");
+    let answer = "", streamErr = "";
+    try {
+      const r = await fetch(`${API}/ai/assist`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: "dashboard_prompt_optimize", input: cur, context: ctx })
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      await readSSEStream(r,
+        (_d, full) => { answer = full; },
+        (err) => { streamErr = String(err || "流式失败"); },
+        (full) => { answer = full || answer; }
+      );
+    } catch (e) {
+      toast("优化失败：" + e, "err");
+      return;
     }
+    if (streamErr) { toast("优化失败：" + streamErr, "err"); return; }
+    let text = (answer || "").trim();
+    const fence = text.match(/^```(?:\w+)?\s*([\s\S]*?)```\s*$/);
+    if (fence) text = fence[1].trim();
+    if (!text) { toast("未生成有效内容", "err"); return; }
+    ta.value = text;
+    try { ta.focus(); ta.setSelectionRange(text.length, text.length); } catch (e) {}
+    toast("已优化并覆盖描述，可继续微调后生成", "ok");
   });
 });
 safeAddEventListener("dashAICreate", "click", async () => {

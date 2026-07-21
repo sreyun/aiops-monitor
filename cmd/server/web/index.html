@@ -1546,7 +1546,7 @@
   <div class="modal">
     <div class="modal-head"><h3>✨ AI 生成仪表盘</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <div class="field"><label style="display:flex;align-items:center;gap:8px">描述你想要的看板<button class="btn ghost" id="dashAIOptimizePrompt" style="margin-left:auto;padding:2px 10px;font-size:12px" title="用 AI 把你的描述扩写为更完整、更专业的看板需求">✨ 优化提示词</button></label><textarea id="dashAIPrompt" rows="4" placeholder="如：给我一个 MySQL 概览看板，包含连接数、QPS、慢查询、缓冲池命中率、复制延迟；按实例下钻。&#10;或：监控这台主机的 CPU / 内存 / 磁盘 / 网络的黄金信号。"></textarea></div>
+      <div class="field"><label style="display:flex;align-items:center;gap:8px">描述你想要的看板<button class="btn ghost" id="dashAIOptimizePrompt" style="margin-left:auto;padding:2px 10px;font-size:12px" title="用 AI 优化当前描述并直接覆盖输入框">✨ 优化提示词</button></label><textarea id="dashAIPrompt" rows="4" placeholder="如：给我一个 MySQL 概览看板，包含连接数、QPS、慢查询、缓冲池命中率、复制延迟；按实例下钻。&#10;或：监控这台主机的 CPU / 内存 / 磁盘 / 网络的黄金信号。"></textarea></div>
       <div class="field"><label>看板名称（可选）</label><input type="text" id="dashAIName" placeholder="留空由 AI 命名"></div>
       <div class="hint">AI 会读取 VictoriaMetrics 中的可用指标，据你的需求生成 PromQL 面板并落盘。生成后可继续编辑、解读、转工单。</div>
     </div>
