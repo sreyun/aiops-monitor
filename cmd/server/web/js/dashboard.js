@@ -14,6 +14,35 @@ let PANEL_TARGETS_DRAFT = [];      // 面板编辑中的查询行
 let VARS_DRAFT = [];               // 变量编辑中的行
 let DASH_DATASOURCES = [];         // 已配置的外部数据源（Prometheus / Loki）
 
+/** 模板变量筛选按钮显示名：优先自定义 label，否则常见英文名映射为中文。 */
+function dashVarDisplayLabel(v) {
+  const custom = (v && v.label || "").trim();
+  if (custom) return custom;
+  const name = (v && v.name || "").trim();
+  switch (name.toLowerCase()) {
+    case "instance": return "实例";
+    case "device": case "device_name": return "设备";
+    case "interface": case "ifname": case "ifdescr": return "接口";
+    case "host": case "hostname": case "node": return "主机";
+    case "job": return "任务";
+    case "pod": return "Pod";
+    case "service": return "服务";
+    case "container": return "容器";
+    case "namespace": return "命名空间";
+    case "cluster": return "集群";
+    case "region": case "zone": return "区域";
+    case "mountpoint": case "mount": return "挂载点";
+    case "disk": return "磁盘";
+    case "cpu": return "CPU";
+    case "gpu": return "GPU";
+    case "env": case "environment": return "环境";
+    case "system": return "系统";
+    case "endpoint": return "接口";
+    case "app": case "application": return "应用";
+    default: return name || "变量";
+  }
+}
+
 // 数据源解析：面板级覆盖 > 看板级默认 > 内置 VM（""）
 function resolveDS(panel) { return (panel && panel.datasource) || (CUR_DASH && CUR_DASH.datasource) || ""; }
 function dsById(id) { return DASH_DATASOURCES.find(d => d.id === id); }
@@ -121,11 +150,12 @@ function renderDashDetail() {
   const varSel = (d.vars || []).map(v => {
     const opts = DASH_VAR_OPTIONS[v.name] || [];
     const cur = DASH_VARVALS[v.name];
+    const vLabel = dashVarDisplayLabel(v);
     if (v.type === "textbox" || v.type === "constant") {
-      return `<span class="dash-var"><label>${esc(v.label || v.name)}</label><input type="text" class="dt-input" data-dvar="${esc(v.name)}" value="${esc(cur || "")}" style="width:120px"></span>`;
+      return `<span class="dash-var"><label>${esc(vLabel)}</label><input type="text" class="dt-input" data-dvar="${esc(v.name)}" value="${esc(cur || "")}" style="width:120px"></span>`;
     }
     const optsHtml = opts.map(o => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${o === "$__all" ? "全部" : esc(o)}</option>`).join("");
-    return `<span class="dash-var"><label>${esc(v.label || v.name)}</label><div class="select-wrap sm"><select data-dvar="${esc(v.name)}">${optsHtml || `<option value="">（无候选）</option>`}</select></div></span>`;
+    return `<span class="dash-var"><label>${esc(vLabel)}</label><div class="select-wrap sm"><select data-dvar="${esc(v.name)}">${optsHtml || `<option value="">（无候选）</option>`}</select></div></span>`;
   }).join("");
   const srcBadge = (d.source && d.source.indexOf("grafana:") === 0) ? '<span class="dash-badge">Grafana</span>'
     : (d.source === "ai" || (d.source || "").indexOf("ai-analysis") === 0) ? '<span class="dash-badge ai">AI</span>' : "";
@@ -783,7 +813,8 @@ function renderVarRows() {
   if (!wrap) return;
   wrap.innerHTML = VARS_DRAFT.map((v, i) => `
     <div class="var-row">
-      <input type="text" data-v-name="${i}" placeholder="变量名（不含$）" value="${esc(v.name || "")}" style="width:120px">
+      <input type="text" data-v-name="${i}" placeholder="变量名（不含$）" value="${esc(v.name || "")}" style="width:110px" title="PromQL 中使用的 $name">
+      <input type="text" data-v-label="${i}" placeholder="显示名（可选）" value="${esc(v.label || "")}" style="width:110px" title="筛选按钮上显示的中文名">
       <div class="select-wrap sm"><select data-v-type="${i}">
         <option value="query" ${v.type === "query" ? "selected" : ""}>query</option>
         <option value="custom" ${v.type === "custom" ? "selected" : ""}>custom</option>
@@ -805,6 +836,7 @@ safeAddEventListener("varList", "change", e => { if (e.target.closest("[data-v-t
 function syncVarRows() {
   VARS_DRAFT.forEach((v, i) => {
     const nm = document.querySelector(`[data-v-name="${i}"]`); if (nm) v.name = nm.value.trim();
+    const lb = document.querySelector(`[data-v-label="${i}"]`); if (lb) v.label = lb.value.trim();
     const ty = document.querySelector(`[data-v-type="${i}"]`); if (ty) v.type = ty.value;
     const q = document.querySelector(`[data-v-query="${i}"]`);
     if (q) { if (v.type === "custom") { v.options = q.value.split(",").map(s => s.trim()).filter(Boolean); v.query = ""; } else if (v.type === "query") { v.query = q.value.trim(); } else { v.current = q.value.trim(); } }
