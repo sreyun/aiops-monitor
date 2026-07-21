@@ -3253,7 +3253,7 @@ select:focus {
 .select-wrap.sm select { padding: 5px 26px 5px 9px; font-size: 12px; height: 30px; }
 
 /* 24 栏网格 + 面板卡片 */
-.dash-grid { display: grid; grid-template-columns: repeat(24, 1fr); grid-auto-rows: 24px; grid-auto-flow: row dense; gap: 8px; align-items: stretch; }
+.dash-grid { display: grid; grid-template-columns: repeat(24, 1fr); grid-auto-rows: 24px; grid-auto-flow: row; gap: 8px; align-items: stretch; }
 .dash-panel { grid-column: span 24; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; transition: box-shadow .15s, border-color .15s; }
 .dash-panel:hover { box-shadow: 0 2px 12px rgba(0, 0, 0, .07); }
 .dash-panel-head { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--line); }
@@ -3261,6 +3261,11 @@ select:focus {
 .dash-panel-ds { font-size: 10px; padding: 1px 7px; border-radius: 9px; background: var(--bg3); color: var(--muted); white-space: nowrap; }
 .panel-edit-actions { display: flex; gap: 3px; opacity: .35; transition: opacity .15s; }
 .dash-panel:hover .panel-edit-actions { opacity: 1; }
+.dash-grid.editing .panel-edit-actions { opacity: 1; }
+@media (hover: none) {
+  .panel-edit-actions { opacity: 1; }
+  .dash-card-ops { opacity: 1; }
+}
 .dash-grid.editing .dash-panel { border-style: dashed; }
 .dash-panel-body { flex: 1; min-height: 0; padding: 8px 12px; overflow: hidden; }
 .dash-panel-body .chart-wrap { box-shadow: none; border-radius: 6px; height: 100%; width: 100%; }
@@ -3268,6 +3273,7 @@ select:focus {
    否则 canvas 用固有 ~300px 宽 → 右侧大片空白。曲线类图表宽度靠这条。 */
 .dash-panel-body .chart-wrap canvas { width: 100%; display: block; }
 .dash-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 22px 8px; }
+.dash-empty-hint { margin-top: 6px; font-size: 11px; line-height: 1.45; opacity: .85; max-width: 28em; margin-left: auto; margin-right: auto; }
 
 /* Stat（大数值 + 阈值配色 + 迷你趋势） */
 .dp-stat .dash-panel-body { display: flex; align-items: center; }

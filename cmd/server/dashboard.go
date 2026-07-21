@@ -138,13 +138,50 @@ func (cs *ConfigStore) DeleteDashboard(id string) error {
 
 var dashVarRe = regexp.MustCompile(`\$(?:\{(\w+)\}|(\w+))`)
 
+// normalizeDashQueryVars 把前端传来的变量值规范成可安全替换的 PromQL 片段：
+// 「全部」/$__all/空 → .* ；逗号多值 → a|b。
+func normalizeDashQueryVars(vars map[string]string) map[string]string {
+	if len(vars) == 0 {
+		return vars
+	}
+	out := make(map[string]string, len(vars))
+	for k, v := range vars {
+		v = strings.TrimSpace(v)
+		switch {
+		case v == "" || v == "$__all" || v == "All" || v == ".*":
+			out[k] = ".*"
+		case strings.Contains(v, ","):
+			parts := strings.Split(v, ",")
+			for i := range parts {
+				parts[i] = strings.TrimSpace(parts[i])
+			}
+			out[k] = strings.Join(parts, "|")
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// promoteLabelEqToRegex 把 label="a|b" / label=".*" 提升为 label=~"..."，
+// 否则「全部」替换成 .* 后仍用 = 会匹配不到任何序列。
+var labelEqNeedsRegex = regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*(?:\||\.\*)[^"]*)"`)
+
+func promoteLabelEqToRegex(expr string) string {
+	if expr == "" || (!strings.Contains(expr, "|") && !strings.Contains(expr, ".*")) {
+		return expr
+	}
+	return labelEqNeedsRegex.ReplaceAllString(expr, `${1}=~"${2}"`)
+}
+
 // substituteVars 把表达式里的 $var / ${var} 替换为选中值，并处理 $__interval / $__range 内建量。
-// vars 是「变量名 → 值」。多值变量的值应已由调用方组成 PromQL 正则（如 "a|b"）。
+// vars 是「变量名 → 值」。多值 / 全选会规范为正则并自动把 = 提升为 =~。
 func substituteVars(expr string, vars map[string]string, stepSec, rangeSec int64) string {
 	if expr == "" {
 		return expr
 	}
-	return dashVarRe.ReplaceAllStringFunc(expr, func(m string) string {
+	vars = normalizeDashQueryVars(vars)
+	out := dashVarRe.ReplaceAllStringFunc(expr, func(m string) string {
 		sub := dashVarRe.FindStringSubmatch(m)
 		name := sub[1]
 		if name == "" {
@@ -163,6 +200,7 @@ func substituteVars(expr string, vars map[string]string, stepSec, rangeSec int64
 		}
 		return m // 未知变量原样保留（避免破坏含 $ 的合法表达式）
 	})
+	return promoteLabelEqToRegex(out)
 }
 
 // durLabel 把秒转成 Prometheus 时长串（如 90 → "90s"，600 → "10m"，7200 → "2h"）。

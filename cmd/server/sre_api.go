@@ -1463,9 +1463,9 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 	case "dashboard_prompt_optimize":
 		return "你是可观测性与监控看板设计专家。把运维人员的简短需求改写成【简洁、可直接用于生成看板】的需求描述。" +
 			"禁止深度思考与长篇铺陈。要求（控制在 400 字以内）：\n" +
-			"① 一句话点明主题与对象；② 用短列表给出 6~10 个关键指标/黄金信号；" +
+			"① 一句话点明主题与对象；② 用短列表给出 6~10 个关键指标/黄金信号（优先本平台 aiops_*，不要写 node_*）；" +
 			"③ 各用一词标注建议图型（timeseries/stat/gauge/piechart/barchart/table）；" +
-			"④ 一句布局顺序（概览在上、明细在下）；⑤ 若需下钻，点名一个模板变量即可。\n" +
+			"④ 一句布局顺序（概览在上、明细在下）；⑤ 若需下钻，点名模板变量 instance（英文名）并用 =~。\n" +
 			"直接输出改写正文，不要 JSON、不要代码块、不要解释。若上下文有可用指标，优先用真实指标名。" + ctxBlock
 	case "dashboard_analysis":
 		return "你是资深 SRE。以下是一个监控仪表盘的实时数据摘要（各面板当前值）。请对该看板做健康研判：" +
@@ -1474,12 +1474,12 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"用简洁中文分点作答，只依据给定数据，不臆测。" + ctxBlock
 	case "dashboard_optimize":
 		return "你是可观测性专家，正在评审并优化一个监控仪表盘。禁止深度思考与思维链，直接作答。下面给出现有结构与实时近况。请：\n" +
-			"① 先用简洁中文分点说明优化要点（补哪些黄金信号面板、修正哪些查询/单位/图例、建议的告警或 SLO、布局改进；PromQL 用行内反引号，不要用代码块）；\n" +
-			"② 然后输出【优化后的完整看板】为唯一的一个 ```json 代码块（供用户一键应用），结构：" +
-			"{\"name\":\"看板名\",\"vars\":[{\"name\":\"实例\",\"type\":\"query|custom\",\"query\":\"label_values(<指标>,<标签>)\"}]," +
-			"\"panels\":[{\"title\":\"标题\",\"type\":\"timeseries|stat|gauge|table|text\",\"unit\":\"percent|percentunit|bytes|Bps|s|ms|reqps|short|\"," +
-			"\"w\":12,\"h\":8,\"targets\":[{\"expr\":\"<PromQL>\",\"legend\":\"{{标签}}\"}]}]}。\n" +
-			"要求：保留仍合理的原面板并改进、补齐缺失的关键面板；只用现有指标名不臆造；w 为 1-24 栏宽、h 约 6-9；除该 json 块外不要出现其它代码块。" + ctxBlock
+			"① 先用简洁中文分点说明优化要点（补哪些黄金信号、修正哪些查询/单位/图例、布局改进；PromQL 用行内反引号）；\n" +
+			"② 然后输出【优化后的完整看板】为唯一的一个 ```json 代码块（供一键应用）。\n" +
+			aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint + "\n" +
+			"额外：尽量保留原看板中【已有且正确】的 aiops_* 查询，只改布局/补面板/修错误表达式；" +
+			"不要把全网趋势改成强制 {instance=\"$instance\"}（会在选中单机时滤空）；排行/概览用 avg()/topk() 不要带实例过滤。" +
+			ctxBlock
 	case "audit_diagnosis":
 		return "你是安全审计与运维合规专家。以下是平台审计日志片段。请：① 识别异常/高风险操作（越权、异常登录、批量删除、配置篡改、异地/异常时间访问等）；" +
 			"② 归纳可疑模式与关联行为；③ 评估风险等级；④ 给出处置与加固建议。用简洁中文分点作答，严格基于给定日志，不臆测。" + ctxBlock

@@ -89,6 +89,15 @@ func TestSubstituteVarsAndDur(t *testing.T) {
 	if substituteVars("a$unknown", vars, 60, 3600) != "a$unknown" {
 		t.Fatal("未知变量应原样保留")
 	}
+	// 「全部」/$__all → .*，并把 = 提升为 =~
+	all := substituteVars(`aiops_cpu_percent{instance="$instance"}`, map[string]string{"instance": "$__all"}, 60, 3600)
+	if all != `aiops_cpu_percent{instance=~".*"}` {
+		t.Fatalf("$__all 应规范为 =~\".*\"，实为 %q", all)
+	}
+	empty := substituteVars(`aiops_cpu_percent{instance="$instance"}`, map[string]string{"instance": ""}, 60, 3600)
+	if empty != `aiops_cpu_percent{instance=~".*"}` {
+		t.Fatalf("空变量应规范为 =~\".*\"，实为 %q", empty)
+	}
 	for sec, exp := range map[int64]string{60: "1m", 90: "90s", 3600: "1h", 7200: "2h"} {
 		if durLabel(sec) != exp {
 			t.Fatalf("durLabel(%d)=%q，应为 %q", sec, durLabel(sec), exp)

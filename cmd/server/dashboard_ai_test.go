@@ -121,6 +121,65 @@ func TestTokenize(t *testing.T) {
 	}
 }
 
+func TestSanitizeAIDashNormalizesChineseVarAndHealsExpr(t *testing.T) {
+	spec := aiDashSpec{
+		Name: "t",
+		Vars: []aiDashVar{{Name: "实例", Type: "query", Query: "label_values(node_uname_info, instance)"}},
+		Panels: []aiDashPanel{
+			{Title: "CPU趋势", Type: "timeseries", W: 12, H: 12, Targets: []aiDashTarget{
+				{Expr: `rate(node_load5{instance="$实例"}[5m])`},
+			}},
+			{Title: "CPU均值", Type: "stat", W: 6, H: 4, Targets: []aiDashTarget{
+				{Expr: "avg(aiops_cpu_percent)"},
+			}},
+		},
+	}
+	d, warns := sanitizeAIDash(spec, "", "ai")
+	if len(d.Vars) != 1 || d.Vars[0].Name != "instance" {
+		t.Fatalf("变量应规范为 instance: %+v warns=%v", d.Vars, warns)
+	}
+	if !strings.Contains(d.Vars[0].Query, "aiops_cpu_percent") {
+		t.Fatalf("变量查询应改为平台指标: %q", d.Vars[0].Query)
+	}
+	var trend DashPanel
+	for _, p := range d.Panels {
+		if p.Title == "CPU趋势" {
+			trend = p
+		}
+	}
+	if trend.Title == "" {
+		t.Fatal("缺少趋势面板")
+	}
+	expr := trend.Targets[0].Expr
+	if strings.Contains(expr, "node_load") || strings.Contains(expr, "rate(") || strings.Contains(expr, "$实例") {
+		t.Fatalf("趋势表达式应被治愈: %q", expr)
+	}
+	if !strings.Contains(expr, "aiops_load5") || !strings.Contains(expr, "$instance") {
+		t.Fatalf("趋势表达式应含 aiops_load5 与 $instance: %q", expr)
+	}
+	if !strings.Contains(expr, `instance=~"$instance"`) {
+		t.Fatalf("趋势表达式应使用 =~ 过滤: %q", expr)
+	}
+	if !d.Vars[0].IncludeAll {
+		t.Fatal("instance 变量应默认 IncludeAll")
+	}
+	if trend.Grid.H < 5 || trend.Grid.H > 10 {
+		t.Fatalf("timeseries 高度应在 5~10，实为 %d", trend.Grid.H)
+	}
+}
+
+func TestHealAIDashExpr(t *testing.T) {
+	if got := healAIDashExpr(`rate(aiops_cpu_percent[5m])`); got != "aiops_cpu_percent" {
+		t.Fatalf("gauge rate 应剥离: %q", got)
+	}
+	if got := healAIDashExpr(`rate(aiops_load5{instance="$instance"}[5m])`); got != `aiops_load5{instance=~"$instance"}` {
+		t.Fatalf("带标签的 gauge rate 应剥离并提升 =~: %q", got)
+	}
+	if got := healAIDashExpr(`aiops_cpu_percent{instance="$instance"}`); got != `aiops_cpu_percent{instance=~"$instance"}` {
+		t.Fatalf("等值变量过滤应提升为 =~: %q", got)
+	}
+}
+
 func TestWithNoThinkHint(t *testing.T) {
 	cfg := AIConfig{Model: "qwen3-max", Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"}
 	msgs := []map[string]string{

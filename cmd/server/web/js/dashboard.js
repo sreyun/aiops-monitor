@@ -199,10 +199,7 @@ function renderPanels() {
     return;
   }
   grid.innerHTML = panels.map(p => {
-    const w = Math.max(1, Math.min(24, p.grid.w || 12));
-    // 面板按 gridPos.h 占满对应行数（网格行高固定），使卡片填满其矩形区域 —— 消除
-    // 「矮面板(如 stat)紧邻高面板(timeseries)时下方大片空白」的根因（原来靠内容撑高会留缝）。
-    const h = Math.max(3, Math.min(48, p.grid.h || 8));
+    const style = dashPanelGridStyle(p);
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
     const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
     const editBtns = DASH_EDIT ? `<button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
@@ -210,12 +207,61 @@ function renderPanels() {
         <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
         <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
     const actions = (aiBtn || editBtns) ? `<div class="panel-edit-actions">${aiBtn}${editBtns}</div>` : "";
-    return `<div class="dash-panel dp-${esc(p.type)}" style="grid-column:span ${w}; grid-row:span ${h}" data-panel="${p.id}">
+    return `<div class="dash-panel dp-${esc(p.type)}" style="${style}" data-panel="${p.id}">
       <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${actions}</div>
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
     </div>`;
   }).join("");
   panels.forEach(loadPanel);
+}
+
+// dashBreakpoint：与 CSS 媒体查询对齐，供 resize 时判断是否需重排面板。
+function dashBreakpoint() {
+  if (typeof window.matchMedia !== "function") return "d";
+  if (window.matchMedia("(max-width: 720px)").matches) return "m";
+  if (window.matchMedia("(max-width: 1100px)").matches) return "t";
+  return "d";
+}
+
+// dashPanelGridStyle：桌面按 x/y/w/h 绝对落位，避免 CSS dense 把矮面板塞进空洞；
+// 平板勿再把 x/2，否则非整齐半行布局会叠层；改为仅 span 宽度走自动流式排布。
+function dashPanelGridStyle(p) {
+  let w = Math.max(1, Math.min(24, (p.grid && p.grid.w) || 12));
+  let h = Math.max(3, Math.min(48, (p.grid && p.grid.h) || 8));
+  let x = (p.grid && p.grid.x) || 0;
+  let y = (p.grid && p.grid.y) || 0;
+  const bp = dashBreakpoint();
+  if (bp === "m") {
+    return `grid-column:1/-1;grid-row:span ${h}`;
+  }
+  if (bp === "t") {
+    w = Math.max(1, Math.min(12, Math.ceil(w / 2)));
+    return `grid-column:span ${w};grid-row:span ${h}`;
+  }
+  return `grid-column:${x + 1} / span ${w};grid-row:${y + 1} / span ${h}`;
+}
+
+// reflowDashLayout：按视觉顺序流式重排 24 栏，避免 ↑↓ 只交换 x/y 造成重叠空洞。
+function reflowDashLayout(ordered) {
+  let x = 0, y = 0, rowH = 0;
+  for (const p of ordered) {
+    if (!p.grid) p.grid = {};
+    const w = Math.max(1, Math.min(24, p.grid.w || 12));
+    const h = Math.max(2, Math.min(48, p.grid.h || 8));
+    if (x + w > 24) { x = 0; y += rowH; rowH = 0; }
+    p.grid.x = x; p.grid.y = y; p.grid.w = w; p.grid.h = h;
+    x += w;
+    if (h > rowH) rowH = h;
+  }
+}
+
+// dashEmptyHint：无数据时给一句可操作提示（变量「全部」+ 等值过滤是常见空图原因）。
+function dashEmptyHint(extra) {
+  const hasAll = Object.values(DASH_VARVALS || {}).some(v => v === "$__all" || v === "All" || v === "" || v === ".*");
+  const hint = hasAll
+    ? `<div class="dash-empty-hint">模板变量为「全部」时，查询需用 instance=~"$instance"（勿用 =）</div>`
+    : "";
+  return `<div class="dash-empty">${extra || "该范围无数据"}${hint}</div>`;
 }
 
 /* ---------- 面板查询与绘制 ---------- */
@@ -257,7 +303,7 @@ async function instantQuery(p, body) {
   catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return null; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return null; }
   const series = (res && res.series) || [];
-  if (!series.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return null; }
+  if (!series.length) { body.innerHTML = dashEmptyHint("无数据"); return null; }
   return series;
 }
 function seriesVal2(s) { return +(s.Value !== undefined ? s.Value : s.value); }
@@ -302,7 +348,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
     }
   }
   if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
-  if (!collected.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return; }
+  if (!collected.length) { body.innerHTML = dashEmptyHint("该范围无数据"); return; }
   const labels = dashLegends(collected);
   const defs = [], tsMap = new Map();
   collected.forEach((c, i) => {
@@ -364,7 +410,7 @@ async function loadStatPanel(p, body, from, to) {
   catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return; }
   const series = (res && res.series) || [];
-  if (!series.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
+  if (!series.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
   const s0 = series[0], pts = s0.points || [];
   const val = pts.length ? pts[pts.length - 1][1] : 0;
   const col = statColor(val, p.unit, p.min, p.max);
@@ -400,7 +446,7 @@ async function loadPiePanel(p, body) {
     .filter(it => it.val > 0)
     .sort((a, b) => b.val - a.val)
     .slice(0, 12);
-  if (!items.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
+  if (!items.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
   const total = items.reduce((a, b) => a + b.val, 0) || 1;
   const centerVal = fmtUnit(total, p.unit);
   const legend = items.map(it => {
@@ -469,7 +515,7 @@ async function rangeSeries(p, body, from, to) {
   catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return null; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return null; }
   const series = (res && res.series) || [];
-  if (!series.length) { body.innerHTML = `<div class="dash-empty">该范围无数据</div>`; return null; }
+  if (!series.length) { body.innerHTML = dashEmptyHint("该范围无数据"); return null; }
   return series;
 }
 // loadHistogramPanel：把各序列当前值分箱统计，画分布直方图（纵向柱）。
@@ -477,7 +523,7 @@ async function loadHistogramPanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
   const vals = series.map(seriesVal2).filter(v => isFinite(v));
-  if (!vals.length) { body.innerHTML = `<div class="dash-empty">无数据</div>`; return; }
+  if (!vals.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
   const mn = Math.min(...vals), mx = Math.max(...vals);
   const bins = Math.min(16, Math.max(4, Math.round(Math.sqrt(vals.length)) + 2));
   const w = (mx - mn) / bins || 1;
@@ -609,11 +655,19 @@ function fmtUnit(v, unit) {
 
 /* ---------- resize 重绘 ---------- */
 let DASH_RESIZE_T = null;
+let DASH_LAST_BP = typeof dashBreakpoint === "function" ? dashBreakpoint() : "d";
 window.addEventListener("resize", () => {
   const v = document.getElementById("view-dashboards");
   if (!v || !v.classList.contains("active") || !CUR_DASH) return;
   clearTimeout(DASH_RESIZE_T);
   DASH_RESIZE_T = setTimeout(() => {
+    const bp = dashBreakpoint();
+    // 跨断点时内联 grid 样式需整页重排，仅 recreateChart 不够
+    if (bp !== DASH_LAST_BP) {
+      DASH_LAST_BP = bp;
+      renderPanels();
+      return;
+    }
     for (const id in DASH_CHART_ARGS) { try { createChart.apply(null, DASH_CHART_ARGS[id]); } catch (e) {} }
   }, 250);
 });
@@ -664,13 +718,13 @@ function handlePanelAction(act, pid) {
   if (act === "ai") { aiAnalyzePanel(panels[idx]); return; }
   if (act === "edit") { openPanelEditor(panels[idx]); return; }
   if (act === "del") { if (confirm("删除该面板？")) { panels.splice(idx, 1); renderPanels(); } return; }
-  // 上/下移：交换网格 y（保序渲染）
+  // 上/下移：交换视觉顺序后流式重排，避免只换 x/y 造成重叠
   const sorted = panels.slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
   const si = sorted.findIndex(p => p.id === pid);
   const swap = act === "up" ? si - 1 : si + 1;
   if (swap < 0 || swap >= sorted.length) return;
-  const a = sorted[si], b = sorted[swap];
-  const ty = a.grid.y, tx = a.grid.x; a.grid.y = b.grid.y; a.grid.x = b.grid.x; b.grid.y = ty; b.grid.x = tx;
+  const tmp = sorted[si]; sorted[si] = sorted[swap]; sorted[swap] = tmp;
+  reflowDashLayout(sorted);
   renderPanels();
 }
 
@@ -988,7 +1042,12 @@ async function aiOptimizeDash() {
   if (!CUR_DASH) return;
   toast("读取各面板数据…", "ok");
   const dashId = CUR_DASH.id;
-  const ctx = dashStructureClient() + "\n\n【各面板实时数据】\n" + (await buildDashDigestClient());
+  let metricsHint = "";
+  try {
+    const metrics = (await fetchMetricNames(CUR_DASH.datasource || "")).slice(0, 200);
+    if (metrics.length) metricsHint = "\n\n【平台可用指标（节选，只能用这些真实指标，不要臆造 node_*）】\n" + metrics.join(", ");
+  } catch (e) {}
+  const ctx = dashStructureClient() + "\n\n【各面板实时数据】\n" + (await buildDashDigestClient()) + metricsHint;
   openAIAssist({
     task: "dashboard_optimize", title: "✨ AI 优化 · " + CUR_DASH.name, mode: "analyze",
     context: ctx, hint: "AI 正在评审看板并给出优化建议…",
@@ -1001,7 +1060,11 @@ async function aiOptimizeDash() {
       toast("正在应用优化…", "ok");
       try {
         const j = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ json: answer }) }).then(r => r.json());
-        if (j.ok) { toast(`已应用优化：${j.panels} 面板`, "ok"); if (CUR_DASH && CUR_DASH.id === dashId) openDashboard(dashId); }
+        if (j.ok) {
+          const w = (j.warnings && j.warnings.length) ? "（" + j.warnings.slice(0, 2).join("；") + "）" : "";
+          toast(`已应用优化：${j.panels} 面板${w}`, "ok");
+          if (CUR_DASH && CUR_DASH.id === dashId) openDashboard(dashId);
+        }
         else toast("应用失败：" + (j.error || "AI 未给出可应用的看板结构，请点「重新生成」重试"), "err");
       } catch (e) { toast("应用失败：" + e, "err"); }
     }
