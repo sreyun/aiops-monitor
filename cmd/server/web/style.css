@@ -3172,11 +3172,24 @@ select:focus {
 .nf-badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .nf-badge-netflow { background: var(--accent-soft); color: var(--accent-txt); border: 1px solid var(--accent-border); }
 .nf-badge-packet { background: var(--accent2-soft); color: var(--accent2-txt); border: 1px solid var(--accent2-border); }
-/* 内容审计 请求/响应 正文单元：默认单行截断（行高最小化），点击展开看全文。 */
-.ca-body-cell { max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer; }
-.ca-body-cell::after { content: " ⌄"; color: var(--muted); }
-.ca-body-cell.expanded { max-width: 480px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
-.ca-body-cell.expanded::after { content: ""; }
+/* 内容审计：列表行可点进详情弹窗；单元格仅预览截断。 */
+.ca-row { cursor: pointer; }
+.ca-row:hover { background: var(--panel2); }
+.ca-body-cell { max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; font-size: 12px; }
+.ca-detail-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 16px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.ca-detail-kv { display: flex; gap: 8px; font-size: 13px; min-width: 0; }
+.ca-detail-kv .k { color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
+.ca-detail-kv .v { color: var(--txt); word-break: break-all; min-width: 0; }
+.ca-detail-sec { margin-bottom: 14px; }
+.ca-detail-sec-h { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.ca-detail-trunc { color: #e0a300; font-weight: 500; }
+.ca-detail-pre {
+  margin: 0; padding: 12px; max-height: 320px; overflow: auto;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.ca-detail-empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
+.ca-sens-pill { display: inline-block; padding: 1px 8px; border-radius: 6px; background: #e04d5a; color: #fff; font-size: 11px; }
 .nf-flow-table td { vertical-align: top; }
 
 /* 明细表通用分页控件 */

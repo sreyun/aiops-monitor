@@ -143,8 +143,11 @@ function renderCA(container, events) {
     if (!e.method && e.status) return `<span style="color:var(--muted)">（请求未捕获·仅响应）</span>`;
     return `<span style="color:var(--muted)">—</span>`;
   };
-  pageEvents.forEach(e => {
-    html += `<tr${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""}>`;
+  // data-ca-idx 指向「过滤后」列表下标，与 openCADetail 取数一致。
+  const baseIdx = (caPage - 1) * caSize;
+  pageEvents.forEach((e, i) => {
+    const idx = baseIdx + i;
+    html += `<tr class="ca-row"${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""} data-ca-idx="${idx}" title="${esc(I18N.t("ca.click_detail") || "点击查看详情")}">`;
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
     html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
     html += `<td class="nf-mono">${esc(e.src_ip || "")}</td>`;
@@ -158,6 +161,61 @@ function renderCA(container, events) {
   html += `</tbody></table></div>`;
   html += tblPager(total, caPage, caSize);
   container.innerHTML = html;
+}
+
+function caFilteredEvents() {
+  const evs = caLastEvents || [];
+  return caSensOnly ? evs.filter(e => e.sensitive) : evs;
+}
+
+function caKv(k, v) {
+  return `<div class="ca-detail-kv"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+}
+
+function caPreBlock(label, text, truncated) {
+  const body = (text || "").length
+    ? `<pre class="ca-detail-pre mono">${esc(text)}</pre>`
+    : `<div class="ca-detail-empty">${esc(I18N.t("ca.no_content") || "无内容")}</div>`;
+  const truncHint = truncated
+    ? `<span class="ca-detail-trunc">[${esc(I18N.t("ca.truncated") || "已截断")}]</span>`
+    : "";
+  return `<div class="ca-detail-sec"><div class="ca-detail-sec-h">${esc(label)}${truncHint}</div>${body}</div>`;
+}
+
+// 打开内容审计详情弹窗：用列表缓存的完整字段，不再 2000 字截断。
+function openCADetail(e) {
+  if (!e) return;
+  const titleEl = $("caDetailTitle");
+  const bodyEl = $("caDetailBody");
+  const mask = $("caDetailMask");
+  if (!bodyEl || !mask) return;
+
+  const dest = (e.host || e.dst_ip || "") + (e.dst_port ? (":" + e.dst_port) : "");
+  const titleParts = [e.method || (I18N.t("ca.resp_only") || "仅响应"), dest || "—", e.path || ""].filter(Boolean);
+  if (titleEl) titleEl.textContent = titleParts.join(" ") || (I18N.t("ca.detail_title") || "内容审计详情");
+
+  const endpoint = dest
+    ? (e.path ? `http://${dest}${e.path}` : dest)
+    : (e.path || "—");
+
+  let meta = "";
+  meta += caKv(I18N.t("ca.time") || "时间", esc(caTime(e.observed_at) || "—"));
+  meta += caKv(I18N.t("netflow.src_ip") || "源IP", `<span class="nf-mono">${esc(e.src_ip || "—")}</span>`);
+  meta += caKv(I18N.t("ca.dest") || "目的（域名/端点）", `<span class="nf-mono">${esc(endpoint)}</span>`);
+  meta += caKv(I18N.t("ca.method") || "方法", e.method ? esc(e.method) : esc(I18N.t("ca.resp_only") || "仅响应"));
+  meta += caKv(I18N.t("ca.status") || "状态", e.status ? esc(String(e.status)) : "—");
+  meta += caKv(I18N.t("ca.sensitive") || "敏感", e.sensitive
+    ? `<span class="ca-sens-pill">⚠ ${esc(e.sensitive)}</span>`
+    : `<span style="color:var(--muted)">—</span>`);
+  meta += caKv(I18N.t("ca.ctype") || "类型", esc(e.ctype || "—"));
+  meta += caKv(I18N.t("ca.resp_ctype") || "响应类型", esc(e.resp_ctype || "—"));
+
+  bodyEl.innerHTML =
+    `<div class="ca-detail-meta">${meta}</div>` +
+    caPreBlock(I18N.t("ca.req_full") || "请求全文", e.body, e.req_truncated) +
+    caPreBlock(I18N.t("ca.resp_full") || "响应全文", e.resp_body, e.resp_truncated);
+
+  mask.classList.add("show");
 }
 
 function caTime(s) {
@@ -194,10 +252,20 @@ function caOpenAI() {
 // 事件委托（CSP script-src 'self'，禁内联 onclick）。
 safeAddEventListener("contentAuditPanel", "click", e => {
   const b = e.target.closest("[data-caact]");
-  if (!b) return;
-  // 刷新：连「有数据的主机」列表一起重拉（否则新产生审计的主机不会出现在下拉里）。
-  if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
-  else if (b.dataset.caact === "ai") caOpenAI();
+  if (b) {
+    // 刷新：连「有数据的主机」列表一起重拉（否则新产生审计的主机不会出现在下拉里）。
+    if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
+    else if (b.dataset.caact === "ai") caOpenAI();
+    return;
+  }
+  // 分页控件不打开详情
+  if (e.target.closest(".tbl-pager")) return;
+  const row = e.target.closest("tr.ca-row[data-ca-idx]");
+  if (!row) return;
+  const idx = parseInt(row.dataset.caIdx, 10);
+  if (isNaN(idx)) return;
+  const list = caFilteredEvents();
+  openCADetail(list[idx]);
 });
 
 if (typeof window._pageRenderers === "undefined") window._pageRenderers = {};
