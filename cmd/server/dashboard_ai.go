@@ -315,7 +315,7 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source string) (Dashb
 	}
 	metricsCtx := s.metricContextFor(userNeed + " " + seedCtx)
 	sys := "你是可观测性与 Prometheus 专家，为运维平台生成监控仪表盘。平台指标存于 VictoriaMetrics（Prometheus 兼容），" +
-		"面板用 PromQL 查询。\n" + aiDashSchemaHint
+		"面板用 PromQL 查询。禁止深度思考与思维链，直接输出最终 JSON。\n" + aiDashSchemaHint
 	if metricsCtx != "" {
 		sys += "\n\n【可用指标（节选）】\n" + metricsCtx
 	}
@@ -323,7 +323,8 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source string) (Dashb
 	if seedCtx != "" {
 		user += "\n\n【补充上下文】\n" + seedCtx
 	}
-	out, err := aiComplete(cfg, sys, user)
+	// 看板生成是结构化 JSON 任务：关掉深度思考，避免 Qwen3/R1 等先「想」两分钟再超时。
+	out, err := aiCompleteOpts(cfg, sys, user, aiCallOpts{DisableThinking: true})
 	if err != nil {
 		return Dashboard{}, nil, fmt.Errorf("AI 生成失败：%v", err)
 	}

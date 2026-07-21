@@ -198,6 +198,66 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	return text, err
 }
 
+// aiCallOpts 控制单次 LLM 调用的行为覆盖。看板 JSON 生成等结构化任务应关掉深度思考，
+// 否则 Qwen3/R1 等推理模型会先长时间「想」再输出，轻易超过 120s 超时。
+type aiCallOpts struct {
+	DisableThinking bool          // 关闭深度思考 / 思维链（API 开关 + 提示词约束）
+	Timeout         time.Duration // 请求超时，0 = 默认 120s
+}
+
+// thinkingModelOrGateway reports whether this model/endpoint is likely to run
+// extended chain-of-thought by default (Qwen3 / QwQ / DeepSeek-R1 / Bailian…).
+func thinkingModelOrGateway(cfg AIConfig) bool {
+	m := strings.ToLower(cfg.Model)
+	ep := strings.ToLower(cfg.Endpoint)
+	if isBailianEndpoint(cfg.Endpoint) || strings.Contains(ep, "dashscope") || strings.Contains(ep, "siliconflow") {
+		return true
+	}
+	for _, k := range []string{"qwen3", "qwen-3", "qwq", "thinking", "deepseek-r1", "reasoner", "-r1", "o1-", "o3-"} {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyDisableThinking injects provider knobs that turn off extended thinking.
+// Only applied for gateways/models known to honor them — unknown fields can
+// make strict OpenAI endpoints return 400.
+func applyDisableThinking(reqBody map[string]any, cfg AIConfig, prov aiProviderType) {
+	if prov == aiProvAnthropic || !thinkingModelOrGateway(cfg) {
+		return
+	}
+	reqBody["enable_thinking"] = false
+	reqBody["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+}
+
+// withNoThinkHint prepends a hard constraint so models that ignore API knobs
+// still skip chain-of-thought (and appends /no_think for Qwen-style templates).
+func withNoThinkHint(messages []map[string]string, cfg AIConfig) []map[string]string {
+	out := make([]map[string]string, len(messages))
+	copy(out, messages)
+	const ban = "【重要】本任务禁止深度思考与思维链输出，不要逐步推理，直接给出最终答案。"
+	for i := range out {
+		if out[i]["role"] == "system" {
+			out[i] = map[string]string{"role": "system", "content": ban + "\n" + out[i]["content"]}
+			break
+		}
+	}
+	if thinkingModelOrGateway(cfg) {
+		for i := len(out) - 1; i >= 0; i-- {
+			if out[i]["role"] == "user" {
+				c := out[i]["content"]
+				if !strings.Contains(c, "/no_think") {
+					out[i] = map[string]string{"role": "user", "content": c + "\n/no_think"}
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
 // nativeToolCall represents a tool call parsed from the LLM's native function calling response.
 // P3-1: 使用 LLM 原生 Function Calling 替代文本解析，更可靠地提取工具调用。
 type nativeToolCall struct {
@@ -210,11 +270,18 @@ type nativeToolCall struct {
 // P3-1: 新增 tools 参数，当非 nil 且为 OpenAI 兼容 Provider 时，使用原生 Function Calling。
 // 返回 (文本回复, 原生工具调用列表, error)。无工具调用时 toolCalls 为 nil。
 func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any) (string, []nativeToolCall, error) {
+	return aiChatVOpts(ctx, cfg, messages, images, tools, aiCallOpts{})
+}
+
+func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, opts aiCallOpts) (string, []nativeToolCall, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
+	}
+	if opts.DisableThinking {
+		messages = withNoThinkHint(messages, cfg)
 	}
 
 	ep, prov := normalizeEndpoint(cfg.Endpoint)
@@ -262,6 +329,9 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 			reqBody["tool_choice"] = "auto"
 		}
 	}
+	if opts.DisableThinking {
+		applyDisableThinking(reqBody, cfg, prov)
+	}
 
 	// 输出长度默认按所选模型的最大值：OpenAI 兼容不指定 max_tokens（由服务商按模型上限输出，
 	// 现多为很大的上下文/输出窗口）；Anthropic 该字段必填，给一个安全的较大默认。
@@ -274,9 +344,13 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 		delete(reqBody, "max_tokens")
 	}
 
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	b, _ := json.Marshal(reqBody)
-	// 请求级 ctx：既受客户端「终止」影响、又设 120s 上限（模型慢时不至于过早断开）
-	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	// 请求级 ctx：既受客户端「终止」影响、又设超时上限（模型慢时不至于过早断开）
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
@@ -291,14 +365,18 @@ func aiChatV(ctx context.Context, cfg AIConfig, messages []map[string]string, im
 	} else if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
-	client := newGuardedHTTPClient(125 * time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
+	client := newGuardedHTTPClient(timeout + 5*time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil { // 用户主动终止
 			return "", nil, fmt.Errorf("已终止")
 		}
 		if reqCtx.Err() == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "Client.Timeout") {
-			return "", nil, fmt.Errorf("AI 响应超时（>120 秒）。可能是模型较慢、网络不稳或 Endpoint 不正确——请重试、换更快的模型，或检查 Endpoint / 网络。")
+			sec := int(timeout.Seconds())
+			if sec <= 0 {
+				sec = 120
+			}
+			return "", nil, fmt.Errorf("AI 响应超时（>%d 秒）。若使用带深度思考的模型，看板生成已尝试关闭思考；也可重试、换更快模型，或检查 Endpoint / 网络。", sec)
 		}
 		return "", nil, fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
 	}
@@ -535,10 +613,16 @@ func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]stri
 
 // aiComplete is the single-turn (system + user) convenience wrapper around aiChat.
 func aiComplete(cfg AIConfig, system, user string) (string, error) {
-	return aiChat(cfg, []map[string]string{
+	return aiCompleteOpts(cfg, system, user, aiCallOpts{})
+}
+
+// aiCompleteOpts is aiComplete with per-call overrides (e.g. disable thinking for JSON tasks).
+func aiCompleteOpts(cfg AIConfig, system, user string, opts aiCallOpts) (string, error) {
+	text, _, err := aiChatVOpts(context.Background(), cfg, []map[string]string{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
-	})
+	}, nil, nil, opts)
+	return text, err
 }
 
 // ---- 上下文压缩：长对话历史 → 「AI 摘要 + 最近若干轮 verbatim」，替代硬截断 ----
@@ -634,9 +718,16 @@ func compressHistory(cfg AIConfig, history []map[string]string, keepRecentTurns 
 // Cache-Control: no-cache, Connection: keep-alive) before calling this function.
 // ctx 用于客户端断开时取消到 LLM provider 的在途请求，防止资源泄漏。
 func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool) (string, error) {
+	return streamChatInnerOpts(ctx, w, cfg, messages, images, sendDone, aiCallOpts{})
+}
+
+func streamChatInnerOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool, opts aiCallOpts) (string, error) {
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
 		return "", nil
+	}
+	if opts.DisableThinking {
+		messages = withNoThinkHint(messages, cfg)
 	}
 
 	ep, prov := normalizeEndpoint(cfg.Endpoint)
@@ -644,7 +735,7 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 	// Anthropic-compatible endpoints don't support SSE streaming in the same way;
 	// fall back to a single-chunk response.
 	if prov == aiProvAnthropic {
-		reply, _, err := aiChatV(ctx, cfg, messages, nil, nil) // 透传 ctx：客户端断开时可取消到 Anthropic 的在途请求
+		reply, _, err := aiChatVOpts(ctx, cfg, messages, nil, nil, opts) // 透传 ctx：客户端断开时可取消到 Anthropic 的在途请求
 		if err != nil {
 			fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 			return "", nil
@@ -668,12 +759,21 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 		"temperature": 0.2,
 		"stream":      true,
 	}
+	if opts.DisableThinking {
+		applyDisableThinking(reqBody, cfg, prov)
+	}
 
 	b, _ := json.Marshal(reqBody)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep, bytes.NewReader(b))
 	if err != nil {
 		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
 		return "", nil
@@ -683,7 +783,7 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
 
-	client := newGuardedHTTPClient(120 * time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
+	client := newGuardedHTTPClient(timeout + 5*time.Second) // SSRF：用户可配 AI Endpoint，拦元数据/链路本地
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(w, "data: {\"error\":%s}\n\n", jsonString(err.Error()))
@@ -703,8 +803,8 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 4*1024), 1024*1024)
 	for scanner.Scan() {
-		if ctx.Err() != nil { // 客户端已断开：中止读取 LLM 流，释放 provider 连接
-			return fullReply.String(), ctx.Err()
+		if reqCtx.Err() != nil { // 客户端已断开或超时：中止读取 LLM 流
+			return fullReply.String(), reqCtx.Err()
 		}
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -753,6 +853,11 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 // streamChat 保持原签名（自动发送结尾 [DONE]），既有调用方无需改动。
 func streamChat(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage) (string, error) {
 	return streamChatInner(ctx, w, cfg, messages, images, true)
+}
+
+// streamChatOpts is streamChat with per-call overrides (disable thinking for dashboard JSON tasks).
+func streamChatOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, opts aiCallOpts) (string, error) {
+	return streamChatInnerOpts(ctx, w, cfg, messages, images, true, opts)
 }
 
 // streamChatNoDone 与 streamChat 相同但【不发】结尾 [DONE]——用于把多段流式内容（诊断正文 +

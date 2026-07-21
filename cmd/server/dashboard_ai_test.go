@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -117,5 +118,29 @@ func TestTokenize(t *testing.T) {
 		if !want[tok] {
 			t.Fatalf("意外的词元 %q（全部：%v）", tok, got)
 		}
+	}
+}
+
+func TestWithNoThinkHint(t *testing.T) {
+	cfg := AIConfig{Model: "qwen3-max", Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"}
+	msgs := []map[string]string{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "生成看板"},
+	}
+	out := withNoThinkHint(msgs, cfg)
+	if !strings.Contains(out[0]["content"], "禁止深度思考") {
+		t.Fatalf("system 应注入禁止深度思考：%q", out[0]["content"])
+	}
+	if !strings.Contains(out[1]["content"], "/no_think") {
+		t.Fatalf("user 应对 Qwen 追加 /no_think：%q", out[1]["content"])
+	}
+}
+
+func TestThinkingModelOrGateway(t *testing.T) {
+	if !thinkingModelOrGateway(AIConfig{Model: "qwen3-32b", Endpoint: "http://x"}) {
+		t.Fatal("qwen3 应判定为思考模型")
+	}
+	if thinkingModelOrGateway(AIConfig{Model: "gpt-4o-mini", Endpoint: "https://api.openai.com/v1"}) {
+		t.Fatal("gpt-4o-mini 不应注入 enable_thinking（避免 OpenAI 400）")
 	}
 }
