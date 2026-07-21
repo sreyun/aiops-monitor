@@ -44,18 +44,22 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 	return p
 }
 
-// aiCallStat 单次 AI 调用观测样本（内存环形缓冲，供管理页仪表）。
+// aiCallStat 单次 AI 调用观测样本（内存环形 + PG 永久落库）。
 type aiCallStat struct {
-	Ts           int64  `json:"ts"`
-	Task         string `json:"task"`
-	Model        string `json:"model"`
-	LatencyMs    int64  `json:"latency_ms"`
-	OK           bool   `json:"ok"`
-	Error        string `json:"error,omitempty"`
-	MemHits      int    `json:"memory_hits"`
-	SkillHits    int    `json:"skill_hits"`
-	ReplyChars   int    `json:"reply_chars"`
-	ApproxTokens int    `json:"approx_tokens"` // 按字符粗估，非 Provider 精确账单
+	Ts               int64   `json:"ts"`
+	Task             string  `json:"task"`
+	Model            string  `json:"model"`
+	Actor            string  `json:"actor,omitempty"`
+	LatencyMs        int64   `json:"latency_ms"`
+	OK               bool    `json:"ok"`
+	Error            string  `json:"error,omitempty"`
+	MemHits          int     `json:"memory_hits"`
+	SkillHits        int     `json:"skill_hits"`
+	ReplyChars       int     `json:"reply_chars"`
+	ApproxTokens     int     `json:"approx_tokens"`               // 按字符粗估，非 Provider 精确账单
+	PromptTokens     int     `json:"prompt_tokens,omitempty"`     // Provider usage（若有）
+	CompletionTokens int     `json:"completion_tokens,omitempty"` // Provider usage（若有）
+	CostEstimate     float64 `json:"cost_estimate,omitempty"`     // 按配置单价估算
 }
 
 type aiTaskAgg struct {
@@ -155,24 +159,39 @@ func (h *aiStatsHub) snapshot() map[string]any {
 
 // recordAICall 统一观测入口（assist / chat / diagnose 等均可调用）。
 func (s *Server) recordAICall(task, model string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
+	s.recordAICallActor(task, model, "", latencyMs, ok, errStr, memHits, skillHits, reply)
+}
+
+// recordAICallActor 同上，附带操作者（用于成本/用户分析）。
+func (s *Server) recordAICallActor(task, model, actor string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
 	if s == nil || s.aiStats == nil {
 		return
 	}
 	approx := estimateTokens(reply)
-	s.aiStats.record(aiCallStat{
-		Ts: time.Now().Unix(), Task: task, Model: model,
+	cfg := AIConfig{}
+	if s.cfg != nil {
+		cfg = s.cfg.AIConfig()
+	}
+	st := aiCallStat{
+		Ts: time.Now().Unix(), Task: task, Model: model, Actor: actor,
 		LatencyMs: latencyMs, OK: ok, Error: trimLine(errStr, 200),
 		MemHits: memHits, SkillHits: skillHits,
 		ReplyChars: len([]rune(reply)), ApproxTokens: approx,
-	})
+		CompletionTokens: approx,
+		CostEstimate:     estimateAICost(cfg, 0, approx, approx),
+	}
+	s.aiStats.record(st)
+	if s.pg != nil {
+		go s.pg.insertAICallEvent(st)
+	}
 	slog.Info("ai.call",
-		"task", task, "model", model, "latency_ms", latencyMs,
+		"task", task, "model", model, "actor", actor, "latency_ms", latencyMs,
 		"ok", ok, "memory_hits", memHits, "skill_hits", skillHits,
-		"approx_tokens", approx, "err", errStr)
+		"approx_tokens", approx, "cost", st.CostEstimate, "err", errStr)
 }
 
 // streamOrchestratedAssist：assist 统一编排 —— RAG 注入、策略应用、流式调用、统计与记忆沉淀。
-func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWriter, cfg AIConfig, task, userMsg, contextText string, history []map[string]string) string {
+func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWriter, cfg AIConfig, task, userMsg, contextText string, history []map[string]string, actor string) string {
 	policy := assistTaskPolicy(task)
 	sys := buildAssistSystemPrompt(task, contextText)
 	ragQ := strings.TrimSpace(userMsg + " " + contextText)
@@ -211,7 +230,7 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	if err != nil {
 		errStr = err.Error()
 	}
-	s.recordAICall(task, cfg.Model, latency, err == nil, errStr, memHits, skillHits, reply)
+	s.recordAICallActor(task, cfg.Model, actor, latency, err == nil, errStr, memHits, skillHits, reply)
 
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI(policy.RememberKind, policy.RememberSource,

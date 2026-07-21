@@ -30,6 +30,11 @@ func (s *Server) wireSRE() {
 	s.remediation.category = s.effectiveCategory
 	s.remediation.trigger = s.triggerPlaybookOnHost
 	s.remediation.onIncident = s.incidents.AddEvent
+	s.remediation.onPersist = func(run RemediationRun) {
+		if s.pg != nil {
+			s.pg.upsertRemediationRun(run)
+		}
+	}
 
 	// Notification center: every raised / recovered incident becomes a message
 	// with a deep-link into the SRE hub. New CRITICAL incidents also trigger an
@@ -355,6 +360,7 @@ func (s *Server) actorName(r *http.Request) string {
 func (s *Server) triggerPlaybookOnHost(pb Playbook, host *Host, operator string, onDone func(ok bool)) int64 {
 	hosts := []*Host{host}
 	exec := s.playbooks.StartExecution(pb, operator, hosts)
+	s.persistPlaybookExecution(exec.ID)
 	go func() {
 		s.runPlaybookExecution(pb, exec, hosts)
 		ok := false
@@ -560,6 +566,12 @@ func (s *Server) handleDeleteRemediationRule(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleListRemediationRuns(w http.ResponseWriter, r *http.Request) {
+	if s.pg != nil {
+		if list := s.pg.listRemediationRuns(1000); len(list) > 0 {
+			writeJSON(w, http.StatusOK, list)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, s.remediation.Runs())
 }
 
@@ -1532,7 +1544,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errStr = err.Error()
 	}
-	s.recordAICall("chat", cfg.Model, time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
+	s.recordAICallActor("chat", cfg.Model, s.actorName(r), time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
 	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
 	if strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
@@ -1580,7 +1592,7 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 			hist = append(hist, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	_ = s.streamOrchestratedAssist(r.Context(), w, cfg, req.Task, req.Input, req.Context, hist)
+	_ = s.streamOrchestratedAssist(r.Context(), w, cfg, req.Task, req.Input, req.Context, hist, s.actorName(r))
 }
 
 // buildAssistSystemPrompt 为各类「AI 辅助」任务构造专用系统提示词。ctxText 是调用方（前端）
@@ -1843,11 +1855,7 @@ func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleAIStats AI 调用观测仪表（进程内累计，重启清零）。GET /api/v1/ai/stats
-func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.aiStats.snapshot())
-}
-
+// handleListInspections returns AI inspection reports.
 func (s *Server) handleListInspections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ai.Reports())
 }
@@ -1929,6 +1937,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		}
 		// 诊断生成：配置了 MoA 则多模型集成研判，否则单模型；两者都流式且不发 [DONE]（末尾统一发）。
 		var diag string
+		diagStart := time.Now()
 		if len(moaModelList(cfg)) > 1 {
 			diag = aiChatMoAStream(r.Context(), w, cfg, diagMsgs)
 		} else {
@@ -1944,11 +1953,13 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+		full := diag
+		if strings.TrimSpace(verify) != "" {
+			full += "\n\n🔎 自我校验：\n" + verify
+		}
+		s.recordAICallActor("diagnose", cfg.Model, s.actorName(r), time.Since(diagStart).Milliseconds(),
+			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
 		if diag != "" {
-			full := diag
-			if strings.TrimSpace(verify) != "" {
-				full += "\n\n🔎 自我校验：\n" + verify
-			}
 			s.incidents.AddEvent(id, "ai_diagnosis", "AI", full)
 			s.store.MarkDirty()
 			go s.saveDiagnosisEmbedding(id, inc, full)

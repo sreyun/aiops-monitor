@@ -1221,7 +1221,12 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="hint" style="margin-bottom:12px" data-i18n="term.sessions_hint">活跃的远程终端会话列表。可回放录制内容或以只读模式旁观活跃会话。</div>
+      <div class="hint" style="margin-bottom:12px" data-i18n="term.sessions_hint">活跃与历史终端会话。可回放录制或以只读旁观。下方「命令历史」从 PostgreSQL 永久审计读取，容器重启不丢。</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="chip-btn active" id="termTabSessions" type="button">会话录制</button>
+        <button class="chip-btn" id="termTabCommands" type="button">命令历史</button>
+      </div>
+      <div id="termSessionsPane">
       <div class="term-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
         <input type="text" id="termSessionSearch" class="search" style="margin-left:0" data-i18n-placeholder="term.sessions_search" placeholder="搜索：用户名 / 主机名 / IP 地址"
           style="flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 12px;color:var(--txt);font-size:13px;font-family:inherit"
@@ -1229,6 +1234,17 @@
         <span style="font-size:12px;color:var(--muted)" id="termSessionCount"></span>
       </div>
       <div id="termSessionsList"></div>
+      </div>
+      <div id="termCommandsPane" style="display:none">
+        <div class="term-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="termCmdHost" class="search" style="margin-left:0;flex:1;min-width:120px" placeholder="主机过滤">
+          <input type="text" id="termCmdActor" class="search" style="margin-left:0;flex:1;min-width:100px" placeholder="操作者">
+          <input type="text" id="termCmdQ" class="search" style="margin-left:0;flex:1;min-width:140px" placeholder="命令关键词">
+          <button class="btn sm" id="termCmdSearchBtn" type="button">查询</button>
+          <span style="font-size:12px;color:var(--muted)" id="termCmdCount"></span>
+        </div>
+        <div id="termCommandsList"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1418,6 +1434,7 @@
           <div class="field"><label>审计/事件（天）</label><input type="number" id="retAuditDays" min="7" placeholder="180"></div>
           <div class="field"><label>告警历史（天）</label><input type="number" id="retAlertDays" min="7" placeholder="90"></div>
           <div class="field"><label>内容审计（天）</label><input type="number" id="retContentDays" min="1" placeholder="30"></div>
+          <div class="field"><label>AI 调用观测（天）</label><input type="number" id="retAICallDays" min="30" placeholder="365"></div>
           <div class="field"><label>NetFlow 分区（月）</label><input type="number" id="retNetflowMonths" min="1" placeholder="12"></div>
         </div>
         <div class="mfa-foot"><button class="btn primary sm" id="retSaveBtn" type="button">保存保留期</button></div>
@@ -2204,6 +2221,14 @@
       <div class="field"><label>集成研判模型（MoA · 选填）</label><input type="text" id="aiMoAModels" placeholder="逗号分隔额外模型名，如 deepseek-chat, qwen-max；填了则诊断走多模型并行提案→综合。留空=关闭"></div>
       <div class="hint" style="margin:-4px 0 4px">开启后仅作用于「AI 诊断」（低频高价值），成本随模型数增长；日常对话不受影响。</div>
 
+      <div class="subhead" style="margin-top:10px">成本估算单价（选填）</div>
+      <div class="hint" style="margin-bottom:6px">用于 AI 调用观测与历史组合曲线的费用估算。单位：每 100 万 Token。留空=只统计 Token、不估算费用。重启后数据永久保留在 PostgreSQL。</div>
+      <div class="grid2">
+        <div class="field"><label>输入单价 / 1M Token</label><input type="number" id="aiInputPrice" step="0.01" min="0" placeholder="如 1.00"></div>
+        <div class="field"><label>输出单价 / 1M Token</label><input type="number" id="aiOutputPrice" step="0.01" min="0" placeholder="如 2.00"></div>
+        <div class="field"><label>币种</label><input type="text" id="aiCostCurrency" placeholder="CNY" value="CNY"></div>
+      </div>
+
       <!-- MCP Server（可折叠）：把只读运维工具暴露给外部 Agent -->
       <div class="ai-card ai-card-collapsible" id="mcpCard">
         <div class="ai-card-header ai-card-header-clickable" id="mcpCardHeader">
@@ -2225,15 +2250,23 @@
 
       <div class="hint" style="margin-top:8px">按 Endpoint 自动识别两类接口：<b>OpenAI 兼容</b>（OpenAI / DeepSeek / Ollama / 百炼等）与 <b>Anthropic</b>（Claude）。填好 Endpoint + Key 后自动拉取可用模型（下拉 / 搜索），也可手动输入。未启用时用内置启发式引擎，开箱即用。</div>
 
-      <!-- AI 运行时观测（进程内累计，重启清零） -->
+      <!-- AI 运行时观测（PostgreSQL 永久落库 + 成本组合曲线） -->
       <div class="ai-card" id="aiStatsCard" style="margin-top:10px">
         <div class="ai-card-header">
           <span class="ai-card-icon">📈</span>
           <div class="ai-card-header-text">
-            <span class="ai-card-title">AI 调用观测</span>
-            <span class="ai-card-desc">延迟 / 失败率 / 粗估 Token（本进程累计）</span>
+            <span class="ai-card-title">AI 调用观测与成本</span>
+            <span class="ai-card-desc">永久落库 · 历史组合曲线 · 用户成本分析</span>
           </div>
-          <button class="btn sm" id="aiStatsRefreshBtn" type="button" style="margin-left:auto">刷新</button>
+          <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+            <div class="select-wrap"><select id="aiStatsRange" style="min-width:90px">
+              <option value="1">近 24h</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select></div>
+            <button class="btn sm" id="aiStatsRefreshBtn" type="button">刷新</button>
+          </div>
         </div>
         <div class="ai-card-body" id="aiStatsBody">
           <div class="hint">打开设置时自动加载…</div>

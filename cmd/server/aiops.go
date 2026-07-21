@@ -58,6 +58,10 @@ type AIConfig struct {
 	SreyunEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Sreyun 自主 Agent
 	SreyunAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
 	SreyunTerminalEnabled bool `json:"hermes_terminal_enabled,omitempty"` // AI 终端只读巡检权限（独立开关，开启需校验终端密码；仅允许只读诊断命令）
+	// 成本估算单价（每 100 万 token）；用于 AI 调用观测与历史组合曲线。0=不估算费用（仍记 token）。
+	InputPricePer1M  float64 `json:"input_price_per_1m,omitempty"`
+	OutputPricePer1M float64 `json:"output_price_per_1m,omitempty"`
+	CostCurrency     string  `json:"cost_currency,omitempty"` // CNY | USD …
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be

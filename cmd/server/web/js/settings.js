@@ -1529,6 +1529,7 @@ async function loadOpsAdmin() {
     if ($("retAuditDays")) $("retAuditDays").value = ret.audit_days || 180;
     if ($("retAlertDays")) $("retAlertDays").value = ret.alert_history_days || 90;
     if ($("retContentDays")) $("retContentDays").value = ret.content_audit_days || 30;
+    if ($("retAICallDays")) $("retAICallDays").value = ret.ai_call_days || 365;
     if ($("retNetflowMonths")) $("retNetflowMonths").value = ret.netflow_months || 12;
     if ($("cmdPolMode")) $("cmdPolMode").value = pol.mode || "strict";
     if ($("cmdPolAllow")) $("cmdPolAllow").value = (pol.allow_prefixes || []).join(",");
@@ -1562,6 +1563,7 @@ async function saveRetentionCfg() {
     audit_days: parseInt($("retAuditDays").value, 10) || 180,
     alert_history_days: parseInt($("retAlertDays").value, 10) || 90,
     content_audit_days: parseInt($("retContentDays").value, 10) || 30,
+    ai_call_days: parseInt(($("retAICallDays") && $("retAICallDays").value) || "365", 10) || 365,
     netflow_months: parseInt($("retNetflowMonths").value, 10) || 12
   };
   const r = await fetch(`${API}/admin/retention`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

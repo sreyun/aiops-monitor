@@ -308,6 +308,34 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	return result
 }
 
+// exportLastRun returns schedule fire times for PG persistence (survives restart).
+func (pm *playbookManager) exportLastRun() map[string]int64 {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	out := make(map[string]int64, len(pm.lastRun))
+	for k, t := range pm.lastRun {
+		out[k] = t.Unix()
+	}
+	return out
+}
+
+// importLastRun restores schedule baselines so interval/daily fires do not reset on restart.
+func (pm *playbookManager) importLastRun(m map[string]int64) {
+	if len(m) == 0 {
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.lastRun == nil {
+		pm.lastRun = map[string]time.Time{}
+	}
+	for k, ts := range m {
+		if ts > 0 {
+			pm.lastRun[k] = time.Unix(ts, 0)
+		}
+	}
+}
+
 // ExecutionHistory returns recent playbook executions.
 func (pm *playbookManager) ExecutionHistory() []PlaybookExecution {
 	pm.mu.Lock()
@@ -366,7 +394,7 @@ func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []
 		}
 	}
 	pm.executions = append(pm.executions, exec)
-	// Trim history to last 100 executions
+	// Trim in-memory ring (PG table keeps full history via upsertPlaybookExecution).
 	if len(pm.executions) > 100 {
 		pm.executions = pm.executions[len(pm.executions)-100:]
 	}

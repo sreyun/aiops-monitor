@@ -208,6 +208,45 @@ func (p *pgStore) migrate() error {
 		-- 兼容早期把整段录制塞进 PG 的版本：删掉重列，回归「内容存文件、PG 只存元数据」。
 		ALTER TABLE terminal_recordings DROP COLUMN IF EXISTS recording;
 		CREATE INDEX IF NOT EXISTS terminal_recordings_ts ON terminal_recordings(ts DESC);
+		-- AI 调用观测 / 成本分析（永久落库，容器重启不丢）
+		CREATE TABLE IF NOT EXISTS ai_call_events (
+			id                 BIGSERIAL PRIMARY KEY,
+			ts                 BIGINT NOT NULL,
+			task               TEXT NOT NULL DEFAULT '',
+			model              TEXT NOT NULL DEFAULT '',
+			actor              TEXT NOT NULL DEFAULT '',
+			latency_ms         BIGINT NOT NULL DEFAULT 0,
+			ok                 BOOLEAN NOT NULL DEFAULT TRUE,
+			error              TEXT DEFAULT '',
+			memory_hits        INT DEFAULT 0,
+			skill_hits         INT DEFAULT 0,
+			reply_chars        INT DEFAULT 0,
+			approx_tokens      INT DEFAULT 0,
+			prompt_tokens      INT DEFAULT 0,
+			completion_tokens  INT DEFAULT 0,
+			cost_estimate      DOUBLE PRECISION DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS ai_call_events_ts ON ai_call_events(ts DESC);
+		CREATE INDEX IF NOT EXISTS ai_call_events_actor_ts ON ai_call_events(actor, ts DESC);
+		CREATE INDEX IF NOT EXISTS ai_call_events_task_ts ON ai_call_events(task, ts DESC);
+		-- 剧本执行历史（专用表，无环形上限丢失）
+		CREATE TABLE IF NOT EXISTS playbook_executions (
+			id          BIGINT PRIMARY KEY,
+			ts          BIGINT NOT NULL,
+			playbook_id TEXT,
+			status      TEXT,
+			data        JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS playbook_executions_ts ON playbook_executions(ts DESC);
+		-- 自动修复执行历史（专用表）
+		CREATE TABLE IF NOT EXISTS remediation_runs (
+			id      BIGINT PRIMARY KEY,
+			ts      BIGINT NOT NULL,
+			rule_id TEXT,
+			status  TEXT,
+			data    JSONB NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS remediation_runs_ts ON remediation_runs(ts DESC);
 		-- AI 诊断向量记忆（RAG 相似案例检索）
 		CREATE TABLE IF NOT EXISTS diagnosis_embeddings (
 			id          BIGSERIAL PRIMARY KEY,
@@ -1870,6 +1909,9 @@ func (s *Server) bindPG(ps *pgStore) {
 		var runs []RemediationRun
 		if json.Unmarshal(raw, &runs) == nil {
 			s.remediation.Import(runs)
+			for _, run := range runs {
+				ps.upsertRemediationRun(run)
+			}
 		}
 	}
 	// SLO burning state survives restart (SLO 燃烧状态).
@@ -1891,6 +1933,32 @@ func (s *Server) bindPG(ps *pgStore) {
 		var execs []PlaybookExecution
 		if json.Unmarshal(raw, &execs) == nil {
 			s.playbooks.importExecutions(execs)
+			// Migrate KV blob into dedicated table (idempotent upsert).
+			for _, e := range execs {
+				ps.upsertPlaybookExecution(e)
+			}
+		}
+	}
+	if list := ps.listPlaybookExecutions(500); len(list) > 0 {
+		s.playbooks.importExecutions(list)
+	}
+	if list := ps.listRemediationRuns(1000); len(list) > 0 {
+		s.remediation.Import(list)
+	}
+	// Schedule / cooldown clocks survive restart (禁止临时存储).
+	if raw, _ := ps.loadKV("playbook_last_run"); raw != nil {
+		var m map[string]int64
+		if json.Unmarshal(raw, &m) == nil {
+			s.playbooks.importLastRun(m)
+		}
+	}
+	if raw, _ := ps.loadKV("remediation_guards"); raw != nil {
+		var g struct {
+			LastRun map[string]int64   `json:"last_run"`
+			Hourly  map[string][]int64 `json:"hourly"`
+		}
+		if json.Unmarshal(raw, &g) == nil {
+			s.remediation.ImportGuards(g.LastRun, g.Hourly)
 		}
 	}
 	go func() {
@@ -1953,6 +2021,15 @@ func (s *Server) pgFlush(ps *pgStore, withLogs bool) {
 	// Playbook execution history is small (≤ 100 records) — persist every flush.
 	if raw, err := json.Marshal(s.playbooks.exportExecutions()); err == nil {
 		_ = ps.saveKV("playbook_executions", raw)
+	}
+	if raw, err := json.Marshal(s.playbooks.exportLastRun()); err == nil {
+		_ = ps.saveKV("playbook_last_run", raw)
+	}
+	{
+		last, hourly := s.remediation.ExportGuards()
+		if raw, err := json.Marshal(map[string]any{"last_run": last, "hourly": hourly}); err == nil {
+			_ = ps.saveKV("remediation_guards", raw)
+		}
 	}
 }
 

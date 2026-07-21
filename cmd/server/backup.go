@@ -24,6 +24,7 @@ type RetentionConfig struct {
 	ContentAuditDays  int `json:"content_audit_days,omitempty"`  // content_audit
 	MemoryDays        int `json:"memory_days,omitempty"`         // soft age for memory cleanup
 	NetFlowMonths     int `json:"netflow_months,omitempty"`      // drop partitions older than N months
+	AICallDays        int `json:"ai_call_days,omitempty"`        // ai_call_events 成本/观测
 }
 
 func (r RetentionConfig) withDefaults() RetentionConfig {
@@ -41,6 +42,9 @@ func (r RetentionConfig) withDefaults() RetentionConfig {
 	}
 	if r.NetFlowMonths <= 0 {
 		r.NetFlowMonths = 12
+	}
+	if r.AICallDays <= 0 {
+		r.AICallDays = 365
 	}
 	return r
 }

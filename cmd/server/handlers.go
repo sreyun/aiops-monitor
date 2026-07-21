@@ -113,6 +113,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			s.pg.cleanupAuditAndEvents(s.cfg.Retention().AuditDays)
 			s.pg.cleanupAlertHistory(s.cfg.Retention().AlertHistoryDays)
 			s.pg.cleanupOldFlowPartitions(s.cfg.Retention().NetFlowMonths)
+			s.pg.cleanupAICallEvents(s.cfg.Retention().AICallDays)
 			s.startBackupScheduler()
 			// 每 24 小时执行一次
 			ticker := time.NewTicker(24 * time.Hour)
@@ -127,6 +128,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.cleanupAuditAndEvents(ret.AuditDays)
 				s.pg.cleanupAlertHistory(ret.AlertHistoryDays)
 				s.pg.cleanupOldFlowPartitions(ret.NetFlowMonths)
+				s.pg.cleanupAICallEvents(ret.AICallDays)
 				// 自进化：把近期高价值经验提炼成可复用技能(SOP)。放在维护循环里而非启动时，
 				// 避免每次启动都触发 AI 调用；提炼失败/无新经验时静默跳过（distillSkills 内部已记日志）。
 				_, _ = s.distillSkills(14)
@@ -343,7 +345,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
 	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）
 	mux.HandleFunc("DELETE /api/v1/ai/memories/{id}", s.handleDeleteMemory)
-	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats) // AI 调用延迟/失败率/粗估 token 仪表
+	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                 // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
+	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory)  // 成本/Token 历史组合曲线
+	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)   // 按用户成本分析
+	mux.HandleFunc("GET /api/v1/terminal/commands", s.handleTerminalCommands) // 终端命令永久历史（audit_log）
 	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)         // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)

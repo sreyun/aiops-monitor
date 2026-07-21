@@ -1028,6 +1028,59 @@ function renderTerminalSessions(sessions) {
   }).join("");
 }
 
+function showTermSessionsTab() {
+  const sp = $("termSessionsPane"), cp = $("termCommandsPane");
+  const ts = $("termTabSessions"), tc = $("termTabCommands");
+  if (sp) sp.style.display = "";
+  if (cp) cp.style.display = "none";
+  if (ts) ts.classList.add("active");
+  if (tc) tc.classList.remove("active");
+}
+function showTermCommandsTab() {
+  const sp = $("termSessionsPane"), cp = $("termCommandsPane");
+  const ts = $("termTabSessions"), tc = $("termTabCommands");
+  if (sp) sp.style.display = "none";
+  if (cp) cp.style.display = "";
+  if (ts) ts.classList.remove("active");
+  if (tc) tc.classList.add("active");
+  loadTerminalCommands();
+}
+async function loadTerminalCommands() {
+  const list = $("termCommandsList"); if (!list) return;
+  const host = ($("termCmdHost") && $("termCmdHost").value || "").trim();
+  const actor = ($("termCmdActor") && $("termCmdActor").value || "").trim();
+  const q = ($("termCmdQ") && $("termCmdQ").value || "").trim();
+  const params = new URLSearchParams({ limit: "100", offset: "0" });
+  if (host) params.set("host", host);
+  if (actor) params.set("actor", actor);
+  if (q) params.set("q", q);
+  try {
+    const j = await fetch(`${API}/terminal/commands?${params}`).then(r => r.json());
+    const items = j.items || [];
+    const cnt = $("termCmdCount");
+    if (cnt) cnt.textContent = `共 ${j.total || items.length} 条（永久审计）`;
+    if (!items.length) {
+      list.innerHTML = `<div style="text-align:center;color:var(--muted2);padding:24px 0">暂无终端命令记录</div>`;
+      return;
+    }
+    list.innerHTML = items.map(it => {
+      const t = new Date((it.timestamp || 0) * 1000);
+      const time = isNaN(t.getTime()) ? "-" : t.toLocaleString();
+      return `<div class="term-session-item" style="align-items:flex-start">
+        <div class="term-session-info" style="flex:1">
+          <div class="term-session-host mono" style="font-size:12px;white-space:pre-wrap;word-break:break-all">${esc(it.message || "")}</div>
+          <div class="term-session-meta">${esc(it.actor || "-")} · ${esc(it.host || "-")}${it.ip ? " · " + esc(it.ip) : ""} · ${time}</div>
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    list.innerHTML = `<div class="empty-line">加载失败：${esc(String(e))}</div>`;
+  }
+}
+safeAddEventListener("termTabSessions", "click", showTermSessionsTab);
+safeAddEventListener("termTabCommands", "click", showTermCommandsTab);
+safeAddEventListener("termCmdSearchBtn", "click", loadTerminalCommands);
+
 /* ---------- 终端回放 ---------- */
 let REPLAY = null; // {frames, idx, vt, timer, playing, speed}
 

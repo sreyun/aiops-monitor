@@ -90,6 +90,8 @@ type remediationManager struct {
 	// onNotify surfaces a remediation transition (awaiting approval / success /
 	// failure) to the message center so operators are alerted out-of-band.
 	onNotify func(level, title, body string, incidentID int64)
+	// onPersist writes each run to PG permanently (no ring-buffer loss).
+	onPersist func(run RemediationRun)
 }
 
 func newRemediationManager(cfg *ConfigStore) *remediationManager {
@@ -265,9 +267,11 @@ func (m *remediationManager) finish(runID int64, ok bool, reason string) {
 		run.Status = "failed"
 		run.Reason = reason
 	}
+	cp := *run
 	incID := run.IncidentID
 	name, host := run.PlaybookName, run.Hostname
 	m.mu.Unlock()
+	m.persistRun(cp)
 	if m.onIncident != nil && incID > 0 {
 		key := "remediation.evt_success"
 		if !ok {
@@ -312,6 +316,7 @@ func (m *remediationManager) ProposeManual(pb Playbook, hostID, hostname string,
 	}
 	out := *m.findRun(run.ID)
 	m.mu.Unlock()
+	m.persistRun(out)
 	if m.onIncident != nil && incidentID > 0 {
 		m.onIncident(incidentID, "remediation", actor,
 			Tz("remediation.evt_pending", title, pb.Name))
@@ -338,7 +343,9 @@ func (m *remediationManager) Approve(runID int64, actor string) error {
 	pb, ok := m.getPlaybookSafe(run.PlaybookID)
 	if !ok {
 		run.Status = "no_playbook"
+		cp := *run
 		m.mu.Unlock()
+		m.persistRun(cp)
 		return fmt.Errorf("%s", Tz("remediation.reason_no_playbook"))
 	}
 	run.Status = "running"
@@ -349,27 +356,35 @@ func (m *remediationManager) Approve(runID int64, actor string) error {
 		m.lastRun[run.RuleID+"|"+run.HostID] = time.Now().Unix()
 		m.hourly[run.RuleID] = append(m.hourly[run.RuleID], time.Now().Unix())
 	}
+	cp := *run
 	runID, hostID, incID, ruleName := run.ID, run.HostID, run.IncidentID, run.RuleName
 	m.mu.Unlock()
+	m.persistRun(cp)
 	m.launch(runID, pb, hostID, incID, ruleName)
 	return nil
 }
 
 func (m *remediationManager) Reject(runID int64, actor string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	run := m.findRun(runID)
 	if run == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("%s", Tz("remediation.run_not_found"))
 	}
 	if run.Status != "pending_approval" {
+		m.mu.Unlock()
 		return fmt.Errorf("%s", Tz("remediation.not_pending"))
 	}
 	run.Status = "rejected"
 	run.DecidedAt = time.Now().Unix()
 	run.DecidedBy = actor
-	if m.onIncident != nil && run.IncidentID > 0 {
-		m.onIncident(run.IncidentID, "remediation", actor, Tz("remediation.evt_rejected", run.RuleName))
+	cp := *run
+	incID := run.IncidentID
+	ruleName := run.RuleName
+	m.mu.Unlock()
+	m.persistRun(cp)
+	if m.onIncident != nil && incID > 0 {
+		m.onIncident(incID, "remediation", actor, Tz("remediation.evt_rejected", ruleName))
 	}
 	return nil
 }
@@ -398,6 +413,12 @@ func (m *remediationManager) setPlaybookNameLocked(runID int64, name string) {
 	}
 }
 
+func (m *remediationManager) persistRun(run RemediationRun) {
+	if m.onPersist != nil {
+		m.onPersist(run)
+	}
+}
+
 func (m *remediationManager) recordLocked(r RemediationRule, a Alert, incidentID int64, status, reason string) *RemediationRun {
 	m.nextID++
 	run := RemediationRun{
@@ -408,10 +429,18 @@ func (m *remediationManager) recordLocked(r RemediationRule, a Alert, incidentID
 		IncidentID: incidentID, CreatedAt: time.Now().Unix(),
 	}
 	m.runs = append(m.runs, run)
+	// In-memory ring only; PG table keeps full history via onPersist.
 	if len(m.runs) > remediationRunCap {
 		m.runs = m.runs[len(m.runs)-remediationRunCap:]
 	}
-	return m.findRun(run.ID)
+	found := m.findRun(run.ID)
+	if found != nil {
+		// Persist asynchronously after unlock is preferred; call with copy here is OK
+		// because insert is idempotent upsert by id.
+		cp := *found
+		go m.persistRun(cp)
+	}
+	return found
 }
 
 // Runs returns run history newest-first.
@@ -435,6 +464,35 @@ func (m *remediationManager) PendingCount() int {
 		}
 	}
 	return n
+}
+
+// ExportGuards returns cooldown / rate-limit clocks for PG persistence.
+func (m *remediationManager) ExportGuards() (lastRun map[string]int64, hourly map[string][]int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lastRun = make(map[string]int64, len(m.lastRun))
+	for k, v := range m.lastRun {
+		lastRun[k] = v
+	}
+	hourly = make(map[string][]int64, len(m.hourly))
+	for k, v := range m.hourly {
+		cp := make([]int64, len(v))
+		copy(cp, v)
+		hourly[k] = cp
+	}
+	return lastRun, hourly
+}
+
+// ImportGuards restores cooldown / rate-limit clocks after restart.
+func (m *remediationManager) ImportGuards(lastRun map[string]int64, hourly map[string][]int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if lastRun != nil {
+		m.lastRun = lastRun
+	}
+	if hourly != nil {
+		m.hourly = hourly
+	}
 }
 
 // Export/Import bridge the manager to PostgreSQL.

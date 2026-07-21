@@ -128,6 +128,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exec := s.playbooks.StartExecution(pb, s.actorName(r), targetList)
+	s.persistPlaybookExecution(exec.ID)
 	// Run each step on each host sequentially via the agent reverse terminal channel
 	go s.runPlaybookExecution(pb, exec, targetList)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.execute_playbook", pb.Name, len(targetList))})
@@ -181,6 +182,7 @@ func (s *Server) fireScheduledPlaybook(pb Playbook) {
 		return
 	}
 	exec := s.playbooks.StartExecution(pb, Tz("playbook.scheduler_actor"), hosts)
+	s.persistPlaybookExecution(exec.ID)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: "scheduler", Message: Tz("log.sched_fire", pb.Name, len(hosts))})
 	go func() {
 		s.runPlaybookExecution(pb, exec, hosts)
@@ -211,6 +213,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 	// Defense in depth: re-check command policy at execution time (Upsert already validates).
 	if err := validatePlaybookCommands(pb.Steps, s.cfg.CmdPolicy()); err != nil {
 		s.playbooks.FinishExecution(exec.ID, "failed")
+		s.persistPlaybookExecution(exec.ID)
 		slog.Warn("playbook blocked by cmd policy", "exec", exec.ID, "err", err)
 		return
 	}
@@ -315,6 +318,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		status = "failed"
 	}
 	s.playbooks.FinishExecution(exec.ID, status)
+	s.persistPlaybookExecution(exec.ID)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, status)})
 	// 学习闭环 B：把执行结果沉淀为经验记忆，全成功则强化——让后续「AI 生成剧本 / 事件诊断」
 	// 复用被现实验证有效的自动化做法。异步、尽力而为。
@@ -433,6 +437,12 @@ func parseExecOutput(output []byte, timedOut bool) (string, execKind, error) {
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	if s.pg != nil {
+		if list := s.pg.listPlaybookExecutions(500); len(list) > 0 {
+			writeJSON(w, http.StatusOK, list)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, s.playbooks.ExecutionHistory())
 }
 
@@ -444,9 +454,23 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exec, ok := s.playbooks.GetExecution(id)
+	if !ok && s.pg != nil {
+		if e, found := s.pg.getPlaybookExecution(id); found {
+			exec, ok = e, true
+		}
+	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.exec_not_found")})
 		return
 	}
 	writeJSON(w, http.StatusOK, exec)
+}
+
+func (s *Server) persistPlaybookExecution(id int64) {
+	if s == nil || s.pg == nil {
+		return
+	}
+	if e, ok := s.playbooks.GetExecution(id); ok {
+		s.pg.upsertPlaybookExecution(e)
+	}
 }

@@ -2242,12 +2242,22 @@ async function loadMemories(){
 
 async function loadAIStats(){
   const el=$("aiStatsBody"); if(!el) return;
+  const days=parseInt(($("aiStatsRange")&&$("aiStatsRange").value)||"7",10)||7;
   try{
-    const j=await fetch(`${API}/ai/stats`).then(r=>r.json());
+    const from=Math.floor(Date.now()/1000)-days*86400;
+    const to=Math.floor(Date.now()/1000);
+    const [j, hist, byUser]=await Promise.all([
+      fetch(`${API}/ai/stats?days=${days}`).then(r=>r.json()),
+      fetch(`${API}/ai/usage/history?from=${from}&to=${to}`).then(r=>r.json()).catch(()=>({points:[]})),
+      fetch(`${API}/ai/usage/by-user?from=${from}&to=${to}&limit=15`).then(r=>r.json()).catch(()=>({users:[]})),
+    ]);
     const total=j.total||0, fail=j.fail||0;
     const rate=total?((j.fail_rate||0)*100).toFixed(1):"0.0";
     const avg=j.avg_latency_ms||0;
     const tok=j.approx_tokens_total||0;
+    const cost=j.cost_total||0;
+    const cur=j.cost_currency||hist.cost_currency||"CNY";
+    const persisted=j.persisted!==false;
     const by=j.by_task||{};
     const taskRows=Object.keys(by).sort().map(k=>{
       const t=by[k];
@@ -2255,16 +2265,43 @@ async function loadAIStats(){
     }).join("");
     const recent=(j.recent||[]).slice(0,8).map(r=>{
       const st=r.ok?"ok":"err";
-      return `<div class="mono" style="font-size:11px;color:var(--muted);margin:2px 0"><span class="badge ${st}">${r.ok?"OK":"FAIL"}</span> ${esc(r.task||"")} · ${r.latency_ms||0}ms · ≈${r.approx_tokens||0} tok${r.error?" · "+esc(r.error):""}</div>`;
+      const who=r.actor?` · ${esc(r.actor)}`:"";
+      return `<div class="mono" style="font-size:11px;color:var(--muted);margin:2px 0"><span class="badge ${st}">${r.ok?"OK":"FAIL"}</span> ${esc(r.task||"")} · ${r.latency_ms||0}ms · ≈${r.approx_tokens||0} tok${who}${r.error?" · "+esc(r.error):""}</div>`;
     }).join("");
+    const users=(byUser.users||[]).map(u=>
+      `<tr><td>${esc(u.actor||"")}</td><td>${u.calls||0}</td><td>${u.tokens||0}</td><td>${(u.cost||0).toFixed(4)} ${esc(cur)}</td></tr>`
+    ).join("");
     el.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
       <div><div class="hint">调用次数</div><b>${total}</b></div>
       <div><div class="hint">失败率</div><b>${rate}%</b> <span class="hint">(${fail})</span></div>
       <div><div class="hint">平均延迟</div><b>${avg} ms</b></div>
-      <div><div class="hint">粗估 Token 累计</div><b>${tok}</b></div>
+      <div><div class="hint">Token 累计</div><b>${tok}</b></div>
+      <div><div class="hint">估算费用</div><b>${cost.toFixed(4)} ${esc(cur)}</b></div>
+      <div><div class="hint">存储</div><b>${persisted?"PostgreSQL 永久":"进程内（无 PG）"}</b></div>
     </div>
+    <div class="chart-container" style="margin:8px 0">
+      <div class="hint" style="margin-bottom:4px">历史组合曲线 · 调用 / Token / 费用</div>
+      <canvas id="aiUsageComboChart" height="210"></canvas>
+    </div>
+    ${users?`<div class="hint">用户成本排行</div><table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>用户</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${users}</tbody></table>`:""}
     ${taskRows?`<table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>次数</th><th>失败</th><th>均延迟</th></tr></thead><tbody>${taskRows}</tbody></table>`:`<div class="hint">尚无按任务统计（完成若干 AI 调用后出现）</div>`}
     ${recent?`<div class="hint" style="margin-top:6px">最近调用</div>${recent}`:""}`;
+    // 组合曲线：把多指标归一到同一时间轴（calls / tokens / cost）
+    const pts=hist.points||[];
+    const samples=pts.map(p=>({
+      timestamp: p.timestamp,
+      calls: p.calls||0,
+      tokens: p.tokens||0,
+      cost: p.cost||0,
+      avg_latency_ms: p.avg_latency_ms||0,
+    }));
+    if(typeof createChart==="function"){
+      createChart("aiUsageComboChart", samples, [
+        { key:"calls", label:"调用次数", color:"#4c8dff", fmt:v=>v.toFixed(0) },
+        { key:"tokens", label:"Token", color:"#22c55e", fmt:v=>v.toFixed(0) },
+        { key:"cost", label:`费用(${cur})`, color:"#f97316", fmt:v=>v.toFixed(4) },
+      ], 0, null, { title:`AI 用量 · 近 ${days} 天`, noEntrance:true, cssH:200 });
+    }
   }catch(e){
     el.innerHTML=`<div class="hint">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`;
   }
@@ -2293,6 +2330,9 @@ async function openAIConfig(){
     if($("rerankEndpoint")){ $("rerankEndpoint").value=c.rerank_endpoint||""; $("rerankKey").value=c.rerank_api_key||""; $("rerankModel").value=c.rerank_model||""; }
     if($("aiSelfVerify")) $("aiSelfVerify").checked=!!c.self_verify;
     if($("aiMoAModels")) $("aiMoAModels").value=c.moa_models||"";
+    if($("aiInputPrice")) $("aiInputPrice").value=c.input_price_per_1m||"";
+    if($("aiOutputPrice")) $("aiOutputPrice").value=c.output_price_per_1m||"";
+    if($("aiCostCurrency")) $("aiCostCurrency").value=c.cost_currency||"CNY";
     if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
@@ -2398,6 +2438,9 @@ async function saveAIConfig(){
     embed_endpoint:$("embedEndpoint").value.trim(),embed_api_key:$("embedKey").value,embed_model:$("embedModel").value.trim(),embed_dimensions:parseInt($("embedDim").value)||0,
     rerank_endpoint:($("rerankEndpoint")?.value||"").trim(),rerank_api_key:$("rerankKey")?.value||"",rerank_model:($("rerankModel")?.value||"").trim(),
     self_verify:$("aiSelfVerify")?.checked||false,moa_models:($("aiMoAModels")?.value||"").trim(),
+    input_price_per_1m:parseFloat($("aiInputPrice")?.value)||0,
+    output_price_per_1m:parseFloat($("aiOutputPrice")?.value)||0,
+    cost_currency:($("aiCostCurrency")?.value||"CNY").trim()||"CNY",
     mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim()};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
@@ -3027,6 +3070,7 @@ safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
 safeAddEventListener("memoryBtn","click",openMemories);
 safeAddEventListener("memoryKindFilter","change",loadMemories);
 safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
+safeAddEventListener("aiStatsRange","change",loadAIStats);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
