@@ -2247,15 +2247,17 @@
                 </div>
               </div>
               <div class="ai-card-body" id="weknoraCardBody">
-                <div class="hint">文档入库与解析在 <a href="https://github.com/Tencent/WeKnora" target="_blank" rel="noopener">WeKnora</a> 完成；本平台仅通过 <code>POST /api/v1/knowledge-search</code>（头 <code>X-API-Key</code>）检索，供 AI 工具 <code>search_knowledge</code> 调用。</div>
+                <div class="hint">文档入库与解析在 <a href="https://github.com/Tencent/WeKnora" target="_blank" rel="noopener">WeKnora</a> 完成；本平台通过 <code>GET /knowledge-bases</code> 枚举可见库，再调用 <code>POST /knowledge-search</code>（必要时按库 <code>hybrid-search</code> 回退），供 AI 工具 <code>search_knowledge</code> 使用。认证头 <code>X-API-Key</code>。</div>
                 <div class="field"><label class="switch"><input type="checkbox" id="weknoraEnabled"> <span>启用 WeKnora 文档检索</span></label></div>
                 <div class="field"><label>API URL</label><input type="text" id="weknoraURL" placeholder="http://weknora-host:8080 或 …/api/v1"></div>
                 <div class="field"><label>API Key</label><input type="password" id="weknoraKey" autocomplete="off" placeholder="WeKnora 账户信息页获取的 X-API-Key"></div>
-                <div class="field"><label>默认知识库 ID（可选）</label><input type="text" id="weknoraKBIDs" placeholder="kb-00000001, kb-00000002 — 逗号分隔，可空"></div>
+                <div class="field"><label>限定知识库 ID</label><input type="text" id="weknoraKBIDs" placeholder="留空 = 自动检索全部可见库；也可填 kb-xxx, kb-yyy"></div>
+                <p class="ai-footnote">WeKnora 未传库 ID 时通常不会搜全库。留空后本平台会先拉取可见知识库列表再跨库检索；填写则只搜指定库。</p>
                 <div class="field"><label class="switch"><input type="checkbox" id="disablePublicChatMemory"> <span>敏感模式：对话不写入公共向量记忆</span></label></div>
                 <p class="ai-footnote">开启后聊天/助手闲聊不再进公共库；结案、诊断采纳、避坑沉淀仍会写入。</p>
                 <div class="ai-card-test">
                   <span class="ai-test-result" id="aiWeKnoraTestResult"></span>
+                  <button class="btn sm ghost" id="aiWeKnoraListBtn" type="button">拉取知识库列表</button>
                   <button class="btn sm" id="aiWeKnoraTestBtn" type="button">测试 WeKnora 检索</button>
                 </div>
               </div>

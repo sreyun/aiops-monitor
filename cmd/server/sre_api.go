@@ -1326,6 +1326,7 @@ func (s *Server) handleTestRerankConfig(w http.ResponseWriter, r *http.Request) 
 
 // handleTestWeKnoraConfig 测试 WeKnora knowledge-search 连通性。
 // POST /api/v1/ai/test-weknora — 脱敏/空 Key 回填已保存值；用短查询验证 X-API-Key + URL。
+// 知识库 ID 留空时会自动枚举全部可见库再检索。
 func (s *Server) handleTestWeKnoraConfig(w http.ResponseWriter, r *http.Request) {
 	var c AIConfig
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
@@ -1339,16 +1340,64 @@ func (s *Server) handleTestWeKnoraConfig(w http.ResponseWriter, r *http.Request)
 	if strings.TrimSpace(c.WeKnoraURL) == "" {
 		c.WeKnoraURL = saved.WeKnoraURL
 	}
-	if strings.TrimSpace(c.WeKnoraKnowledgeBaseIDs) == "" {
-		c.WeKnoraKnowledgeBaseIDs = saved.WeKnoraKnowledgeBaseIDs
-	}
+	// 测试时：请求体显式留空则尊重「自动全库」；仅当字段未传且前端未覆盖时才回填已保存值。
+	// 前端总会传 weknora_knowledge_base_ids（可为空串），空串表示自动枚举全部可见库。
 	c.WeKnoraEnabled = true
 	if strings.TrimSpace(c.WeKnoraURL) == "" || strings.TrimSpace(c.WeKnoraAPIKey) == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 WeKnora API URL 与 API Key"})
 		return
 	}
 	start := time.Now()
-	out, err := weknoraSearch(c, "连通性测试", 3, nil)
+	chunks, meta, err := weknoraSearchChunksMeta(c, "连通性测试", 3, nil)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "latency_ms": latency,
+			"kb_count": meta.KBCount, "kb_ids": meta.KBIDs, "auto_listed": meta.AutoListed,
+		})
+		return
+	}
+	out := formatWeKnoraChunks(chunks)
+	scope := fmt.Sprintf("%d 个知识库", meta.KBCount)
+	if meta.AutoListed {
+		scope += "（自动枚举全部可见库）"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "latency_ms": latency,
+		"preview":    trimLine(out, 220),
+		"endpoint":   normalizeWeKnoraBaseURL(c.WeKnoraURL) + weknoraSearchPath,
+		"kb_count":   meta.KBCount,
+		"kb_ids":     meta.KBIDs,
+		"auto_listed": meta.AutoListed,
+		"strategy":   meta.Strategy,
+		"hit_count":  meta.HitCount,
+		"scope":      scope,
+	})
+}
+
+// handleListWeKnoraKBs 拉取 WeKnora 可见知识库列表（供设置页预览 / 勾选）。
+// POST /api/v1/ai/list-weknora-kbs
+func (s *Server) handleListWeKnoraKBs(w http.ResponseWriter, r *http.Request) {
+	var c AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	saved := s.cfg.AIConfig()
+	if c.WeKnoraAPIKey == "" || strings.Contains(c.WeKnoraAPIKey, "****") {
+		c.WeKnoraAPIKey = saved.WeKnoraAPIKey
+	}
+	if strings.TrimSpace(c.WeKnoraURL) == "" {
+		c.WeKnoraURL = saved.WeKnoraURL
+	}
+	base := normalizeWeKnoraBaseURL(c.WeKnoraURL)
+	key := strings.TrimSpace(c.WeKnoraAPIKey)
+	if base == "" || key == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 WeKnora API URL 与 API Key"})
+		return
+	}
+	start := time.Now()
+	kbs, err := weknoraListKnowledgeBases(base, key, true)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency})
@@ -1356,8 +1405,8 @@ func (s *Server) handleTestWeKnoraConfig(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "latency_ms": latency,
-		"preview": trimLine(out, 180),
-		"endpoint": normalizeWeKnoraBaseURL(c.WeKnoraURL) + weknoraSearchPath,
+		"count": len(kbs), "knowledge_bases": kbs,
+		"ids": weknoraKBInfoIDs(kbs),
 	})
 }
 

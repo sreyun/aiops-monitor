@@ -343,6 +343,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-weknora", s.handleTestWeKnoraConfig)
+	mux.HandleFunc("POST /api/v1/ai/list-weknora-kbs", s.handleListWeKnoraKBs)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）

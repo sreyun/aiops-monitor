@@ -136,7 +136,7 @@ func (h *SreyunCore) registerTools() {
 				"top_k": map[string]any{"type": "integer", "description": "返回条数，默认 5，最大 20"},
 				"knowledge_base_ids": map[string]string{
 					"type":        "string",
-					"description": "可选，逗号分隔知识库 ID；不传则用 AI 设置中的默认知识库列表",
+					"description": "可选，逗号分隔知识库 ID；不传则用 AI 设置中的限定列表，若仍为空则自动检索全部可见知识库",
 				},
 			},
 			"required": []string{"query"},
