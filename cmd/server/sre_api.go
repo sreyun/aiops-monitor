@@ -61,6 +61,8 @@ func (s *Server) wireSRE() {
 					inc.Title, inc.Severity, inc.Type, inc.Hostname, inc.Source))
 		} else {
 			s.messages.push("incident", "success", "事件已恢复："+inc.Title, "", "sre", ref)
+			// 学习闭环 C：人工解决 / 告警恢复 / 工单联动解决均走此路径，沉淀结构化结案卡
+			go s.learnFromResolution(inc, resolutionNoteFromIncident(inc))
 		}
 	}
 	// Auto-remediation transitions (awaiting approval / success / failure) → message
@@ -452,11 +454,15 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
-	// 可选解决说明（用于沉淀解决经验；缺省留空，向后兼容旧前端）
+	// 可选解决说明（写入时间线并传入结案卡；缺省留空，向后兼容旧前端）
 	var body struct {
 		Note string `json:"note,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
+	note := strings.TrimSpace(body.Note)
+	if note != "" {
+		s.incidents.AddEvent(id, "note", s.actorName(r), "解决说明："+note)
+	}
 	inc, found := s.incidents.Resolve(id, s.actorName(r))
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
@@ -464,8 +470,8 @@ func (s *Server) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	s.oncall.CancelByIncident(id)
 	s.store.MarkDirty()
-	// 学习闭环 C：事件解决 → 沉淀「解决经验」记忆 + 强化促成解决的诊断记忆。异步、尽力而为。
-	go s.learnFromResolution(inc, strings.TrimSpace(body.Note))
+	// Resolve() 不触发 onChange，需在此显式沉淀结案卡
+	go s.learnFromResolution(inc, note)
 	writeJSON(w, http.StatusOK, inc)
 }
 
@@ -889,9 +895,14 @@ func (s *Server) handleUpdateTicket(w http.ResponseWriter, r *http.Request) {
 		// Auto-resolve the linked incident when the ticket is resolved/closed.
 		if tk.IncidentID > 0 {
 			if inc, found := s.incidents.Get(tk.IncidentID); found && inc.Status != "resolved" {
-				s.incidents.Resolve(tk.IncidentID, "工单 #"+strconv.FormatInt(tk.ID, 10)+" 已"+label)
-				s.incidents.AddEvent(tk.IncidentID, "note", "system",
-					fmt.Sprintf("关联工单 #%d 已%s，事件自动标记为已解决", tk.ID, label))
+				note := "关联工单 #" + strconv.FormatInt(tk.ID, 10) + " 已" + label + "：" + tk.Title
+				s.incidents.AddEvent(tk.IncidentID, "note", "system", "解决说明："+note)
+				resolved, ok := s.incidents.Resolve(tk.IncidentID, "工单 #"+strconv.FormatInt(tk.ID, 10)+" 已"+label)
+				if ok {
+					s.incidents.AddEvent(tk.IncidentID, "note", "system",
+						fmt.Sprintf("关联工单 #%d 已%s，事件自动标记为已解决", tk.ID, label))
+					go s.learnFromResolution(resolved, note)
+				}
 			}
 		}
 	}
@@ -1157,6 +1168,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if c.MCPToken != "" {
 		c.MCPToken = "****" // MCP 令牌是密钥，同样不回显
 	}
+	if c.WeKnoraAPIKey != "" {
+		c.WeKnoraAPIKey = "****"
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -1308,6 +1322,43 @@ func (s *Server) handleTestRerankConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency, "model": strings.TrimSpace(c.RerankModel)})
+}
+
+// handleTestWeKnoraConfig 测试 WeKnora knowledge-search 连通性。
+// POST /api/v1/ai/test-weknora — 脱敏/空 Key 回填已保存值；用短查询验证 X-API-Key + URL。
+func (s *Server) handleTestWeKnoraConfig(w http.ResponseWriter, r *http.Request) {
+	var c AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	saved := s.cfg.AIConfig()
+	if c.WeKnoraAPIKey == "" || strings.Contains(c.WeKnoraAPIKey, "****") {
+		c.WeKnoraAPIKey = saved.WeKnoraAPIKey
+	}
+	if strings.TrimSpace(c.WeKnoraURL) == "" {
+		c.WeKnoraURL = saved.WeKnoraURL
+	}
+	if strings.TrimSpace(c.WeKnoraKnowledgeBaseIDs) == "" {
+		c.WeKnoraKnowledgeBaseIDs = saved.WeKnoraKnowledgeBaseIDs
+	}
+	c.WeKnoraEnabled = true
+	if strings.TrimSpace(c.WeKnoraURL) == "" || strings.TrimSpace(c.WeKnoraAPIKey) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "请先填写 WeKnora API URL 与 API Key"})
+		return
+	}
+	start := time.Now()
+	out, err := weknoraSearch(c, "连通性测试", 3, nil)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "latency_ms": latency,
+		"preview": trimLine(out, 180),
+		"endpoint": normalizeWeKnoraBaseURL(c.WeKnoraURL) + weknoraSearchPath,
+	})
 }
 
 // handleAITerminalAccess 开启/关闭「AI 终端只读巡检」权限（独立开关）。
@@ -1518,14 +1569,23 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if req.IncidentID > 0 {
 		memKind = "diagnosis"
 	}
-	memText, memHits, degM := s.retrieveMemoryDetailed(memKind, req.Message, 8)
+	memText, memHits, degM, memCites := s.retrieveMemoryWithCitations(memKind, req.Message, 8)
 	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(req.Message, 4)
 	sys += memText + skillText
+	if memKind == "diagnosis" {
+		wkText, wkCites := s.prefetchWeKnoraForDiagnosis(req.Message)
+		sys += diagnosisOrchestrationHint() + wkText
+		memCites = append(memCites, wkCites...)
+	}
 	deg := degM
 	if deg == "" {
 		deg = degS
 	}
-	writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+	cites := append([]RAGCitation{}, memCites...)
+	for _, n := range skillNames {
+		cites = append(cites, RAGCitation{Kind: "skill", Title: n})
+	}
+	writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 10 轮"（无状态：每次基于全量历史）
@@ -1545,8 +1605,8 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		errStr = err.Error()
 	}
 	s.recordAICallActor("chat", cfg.Model, s.actorName(r), time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
-	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
-	if strings.TrimSpace(reply) != "" {
+	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（敏感模式可关闭）
+	if s.shouldRememberPublicChat() && strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
 	}
 }
@@ -1762,16 +1822,21 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 // handleAIAssistFeedback 闭环 A：运维人员对某次 AI 辅助结果的处置（采纳/👍/👎）回流为记忆强化
 // 信号——「用了才算数」。语义定位该次 assist 记忆并强化或惩罚，使被反复采纳的生成/建议在后续
 // RAG 检索中上浮、被否定的下沉，实现自我进化。
-// POST /api/v1/ai/assist/feedback  {task, input, answer, action: applied|helpful|unhelpful}
+// POST /api/v1/ai/assist/feedback  {task, input, answer, action: applied|helpful|unhelpful, reason?}
 func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Task   string `json:"task"`
 		Input  string `json:"input"`
 		Answer string `json:"answer"`
 		Action string `json:"action"`
+		Reason string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.Action == "unhelpful" && strings.TrimSpace(req.Reason) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "差评请填写简短原因，便于后续避坑"})
 		return
 	}
 	factor := reinforceHelpful
@@ -1788,21 +1853,27 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 			kind = "chat"
 		}
 		s.reinforceMemory(kind, text, factor)
-		// 采纳/好评时，同步强化最相关技能(SOP)；差评不惩罚技能（技能来自多经验提炼，单次差评不足为据）
-		if factor > 1.0 {
-			s.reinforceSkill(text, factor)
-		}
+		s.reinforceSkill(text, factor)
+	}
+	src := "assist:" + req.Task
+	switch req.Action {
+	case "helpful", "applied":
+		titles := extractDocTitlesFromText(req.Answer)
+		s.persistAdoptedKnowledge(req.Input, req.Answer, src, titles)
+	case "unhelpful":
+		s.rememberPitfall(req.Input, req.Answer, req.Reason, src)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleListSkills 列出已提炼的可复用技能(SOP)。GET /api/v1/ai/skills
+// handleListSkills 列出已提炼的可复用技能(SOP)。GET /api/v1/ai/skills?archived=1
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, []Skill{})
 		return
 	}
-	skills, err := s.pg.listSkills()
+	includeArchived := r.URL.Query().Get("archived") == "1" || r.URL.Query().Get("archived") == "true"
+	skills, err := s.pg.listSkillsFiltered(includeArchived)
 	if err != nil || skills == nil {
 		skills = []Skill{}
 	}
@@ -1813,6 +1884,48 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	if id, ok := sreParseID(r); ok && s.pg != nil {
 		_ = s.pg.deleteSkill(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleArchiveSkill 归档/恢复技能。POST /api/v1/ai/skills/{id}/archive  {status:active|archived}
+func (s *Server) handleArchiveSkill(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok || s.pg == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Status == "" {
+		req.Status = "archived"
+	}
+	if err := s.pg.setSkillStatus(id, req.Status); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleMergeSkills 合并两条技能。POST /api/v1/ai/skills/merge  {keep_id, drop_id}
+func (s *Server) handleMergeSkills(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PostgreSQL 未配置"})
+		return
+	}
+	var req struct {
+		KeepID int64 `json:"keep_id"`
+		DropID int64 `json:"drop_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if err := s.pg.mergeSkills(req.KeepID, req.DropID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -1922,14 +2035,20 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if ragQuery == "" {
 			ragQuery = userMsg
 		}
-		memText, memHits, degM := s.retrieveMemoryDetailed("diagnosis", ragQuery, 8)
+		memText, memHits, degM, memCites := s.retrieveMemoryWithCitations("diagnosis", ragQuery, 8)
 		skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQuery, 4)
-		sys += memText + skillText
+		wkText, wkCites := s.prefetchWeKnoraForDiagnosis(ragQuery)
+		sys += diagnosisOrchestrationHint() + memText + skillText + wkText
 		deg := degM
 		if deg == "" {
 			deg = degS
 		}
-		writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+		cites := append([]RAGCitation{}, memCites...)
+		cites = append(cites, wkCites...)
+		for _, n := range skillNames {
+			cites = append(cites, RAGCitation{Kind: "skill", Title: n})
+		}
+		writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 
 		diagMsgs := []map[string]string{
 			{"role": "system", "content": sys},
@@ -1963,7 +2082,10 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			s.incidents.AddEvent(id, "ai_diagnosis", "AI", full)
 			s.store.MarkDirty()
 			go s.saveDiagnosisEmbedding(id, inc, full)
-			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断结论】"+full)
+			// 诊断结论带场景标签，便于后续与结案卡一起被故障排查召回
+			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID),
+				fmt.Sprintf("【诊断】事件#%d %s\n标签：类型:%s · 级别:%s · 主机:%s\n%s",
+					inc.ID, inc.Title, inc.Type, inc.Severity, firstNonEmpty(inc.Hostname, inc.HostID), full))
 		}
 		return
 	}
@@ -2057,14 +2179,20 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	// RAG: 检索历史记忆注入 system prompt
-	memText, memHits, degM := s.retrieveMemoryDetailed("diagnosis", req.Message, 8)
+	memText, memHits, degM, memCites := s.retrieveMemoryWithCitations("diagnosis", req.Message, 8)
 	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(req.Message, 4)
-	sys += memText + skillText
+	wkText, wkCites := s.prefetchWeKnoraForDiagnosis(req.Message)
+	sys += diagnosisOrchestrationHint() + memText + skillText + wkText
 	deg := degM
 	if deg == "" {
 		deg = degS
 	}
-	writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+	cites := append([]RAGCitation{}, memCites...)
+	cites = append(cites, wkCites...)
+	for _, n := range skillNames {
+		cites = append(cites, RAGCitation{Kind: "skill", Title: n})
+	}
+	writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	// 上下文压缩：长历史摘要化 + 保留最近轮次，替代此前"硬截断最近 20 轮"
 	histMsgs := make([]map[string]string, 0, len(req.History))
@@ -2628,45 +2756,21 @@ func (s *Server) generateMemorySummary(kind, content string) string {
 	return "【摘要】" + summary + "\n【原文】" + truncated
 }
 
-// writeRAGMetaSSE 向前端下发 RAG 注入状态（命中数 / 技能名 / 降级原因），便于 UI 提示「记忆未启用」或解释命中了哪些技能。
-func writeRAGMetaSSE(w http.ResponseWriter, memoryHits, skillHits int, degraded string, skillNames []string) {
-	if w == nil {
-		return
-	}
-	meta := map[string]any{
-		"memory_hits": memoryHits,
-		"skill_hits":  skillHits,
-	}
-	if len(skillNames) > 0 {
-		meta["skill_names"] = skillNames
-	}
-	if degraded != "" {
-		meta["degraded"] = degraded
-		switch degraded {
-		case "no_pg":
-			meta["degraded_tip"] = "记忆库未启用（需 PostgreSQL），本次未注入历史记忆/技能"
-		case "no_embed":
-			meta["degraded_tip"] = "嵌入模型未就绪，本次未检索历史记忆/技能"
-		}
-	}
-	b, err := json.Marshal(map[string]any{"meta": meta})
-	if err != nil {
-		return
-	}
-	fmt.Fprintf(w, "data: %s\n\n", b)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
+// retrieveMemoryDetailed 同 retrieveMemoryForPrompt，额外返回命中数与降级原因（no_pg / no_embed）。
+// preferKind=diagnosis 时优先召回 resolution/diagnosis/experience/knowledge/pitfall，并在片段中带上可读来源标签。
+func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (text string, hits int, degraded string) {
+	t, hits, deg, _ := s.retrieveMemoryWithCitations(preferKind, userMsg, topK)
+	return t, hits, deg
 }
 
-// retrieveMemoryDetailed 同 retrieveMemoryForPrompt，额外返回命中数与降级原因（no_pg / no_embed）。
-func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (text string, hits int, degraded string) {
+// retrieveMemoryWithCitations 同 retrieveMemoryDetailed，额外返回可溯源引用列表供 SSE/UI。
+func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK int) (text string, hits int, degraded string, citations []RAGCitation) {
 	if s.pg == nil {
-		return "", 0, "no_pg"
+		return "", 0, "no_pg", nil
 	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.APIKey == "" {
-		return "", 0, "no_embed"
+		return "", 0, "no_embed", nil
 	}
 	if topK <= 0 {
 		topK = 8
@@ -2677,15 +2781,21 @@ func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (t
 	}
 	emb := embedText(cfg, query)
 	if len(emb) == 0 {
-		return "", 0, "no_embed"
+		return "", 0, "no_embed", nil
 	}
 	fetch := topK
 	if _, _, _, ok := rerankConfig(cfg); ok {
 		fetch = topK * 3
 	}
-	found, err := s.pg.searchMemoryByKind(emb, preferKind, fetch)
+	var found []memoryHit
+	var err error
+	if preferKind == "diagnosis" {
+		found, err = s.pg.searchMemoryByKinds(emb, []string{"resolution", "diagnosis", "experience", "knowledge", "pitfall"}, fetch)
+	} else {
+		found, err = s.pg.searchMemoryByKind(emb, preferKind, fetch)
+	}
 	if err != nil || len(found) == 0 {
-		return "", 0, ""
+		return "", 0, "", nil
 	}
 	if len(found) > topK {
 		docs := make([]string, len(found))
@@ -2708,7 +2818,7 @@ func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (t
 		s.pg.touchMemoryHits(ids)
 	}()
 	var b strings.Builder
-	b.WriteString("\n\n【历史记忆参考（RAG 检索，仅供参考，以实际数据为准）】\n")
+	b.WriteString("\n\n【历史运维经验（RAG 检索；回答时请标注依据来源：结案/诊断/已验证文档/避坑/技能）】\n")
 	n := 0
 	for i, h := range found {
 		if i >= topK {
@@ -2718,10 +2828,22 @@ func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (t
 		if len([]rune(content)) > 1500 {
 			content = string([]rune(content)[:1500]) + "…"
 		}
-		fmt.Fprintf(&b, "[%d] (%s) %s\n", i+1, h.Kind, content)
+		src := h.Source
+		if src == "" {
+			src = "-"
+		}
+		label := memoryKindLabel(h.Kind)
+		fmt.Fprintf(&b, "[%d] (%s · %s) %s\n", i+1, label, src, content)
+		title := trimLine(content, 60)
+		if h.Kind == "knowledge" || h.Kind == "pitfall" {
+			if ts := extractDocTitlesFromText(content); len(ts) > 0 {
+				title = ts[0]
+			}
+		}
+		citations = append(citations, RAGCitation{Kind: h.Kind, Source: src, Title: label + "：" + title})
 		n++
 	}
-	return b.String(), n, ""
+	return b.String(), n, "", citations
 }
 
 // retrieveMemoryForPrompt 根据用户当前消息检索语义最相关的 Top-K 历史记忆，
@@ -2732,7 +2854,7 @@ func (s *Server) retrieveMemoryForPrompt(preferKind, userMsg string, topK int) s
 }
 
 // handleDiagnosisFeedback records user feedback on an AI diagnosis.
-// POST /api/v1/incidents/{id}/diagnosis-feedback  {message_index, helpful}
+// POST /api/v1/incidents/{id}/diagnosis-feedback  {message_index, helpful, reason?}
 func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request) {
 	id, ok := sreParseID(r)
 	if !ok {
@@ -2740,11 +2862,16 @@ func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		MessageIndex int  `json:"message_index"`
-		Helpful      bool `json:"helpful"`
+		MessageIndex int    `json:"message_index"`
+		Helpful      bool   `json:"helpful"`
+		Reason       string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if !req.Helpful && strings.TrimSpace(req.Reason) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "差评请填写简短原因，便于后续避坑"})
 		return
 	}
 	fb := "unhelpful"
@@ -2756,13 +2883,34 @@ func (s *Server) handleDiagnosisFeedback(w http.ResponseWriter, r *http.Request)
 			slog.Warn("保存诊断反馈失败", "incident", id, "err", err)
 		}
 	}
-	// 学习闭环：👍/👎 同步强化/惩罚该事件的诊断记忆（ai_memory），与 diagnosis_embeddings 双库一致，
-	// 让反馈既影响相似案例检索、也影响通用记忆检索。
 	factor := reinforceHelpful
 	if !req.Helpful {
 		factor = penalizeUnhelpful
 	}
 	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", id), factor)
+	inc, found := s.incidents.Get(id)
+	diag, query := "", ""
+	if found {
+		diag = latestTimelineText(inc, "ai_diagnosis")
+		query = strings.TrimSpace(inc.Title + " " + inc.Type + " " + diag)
+	}
+	srcRef := fmt.Sprintf("incident:%d", id)
+	if req.Helpful {
+		if query != "" {
+			s.reinforceSkill(query, reinforceHelpful)
+		}
+		if found && diag != "" {
+			s.promoteTextToSkill("diagnosis_feedback", srcRef,
+				fmt.Sprintf("事件：%s\n类型：%s\n主机：%s\n%s", inc.Title, inc.Type, inc.Hostname, diag))
+			titles := extractDocTitlesFromText(diag)
+			s.persistAdoptedKnowledge(inc.Title+" "+inc.Type, diag, "knowledge:"+srcRef, titles)
+		}
+	} else if found {
+		if query != "" {
+			s.reinforceSkill(query, penalizeUnhelpful)
+		}
+		s.rememberPitfall(inc.Title+" "+inc.Type, diag, req.Reason, "pitfall:"+srcRef)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -2906,15 +3054,13 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	final, _ := s.sreyun.Chat(r.Context(), session, msg, images, true, w)
-	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（对话 + 上传文件 / URL 正文均含在 msg 内；
-	// 附件再各存一条便于精确召回）。多轮历史随每轮持续累积。异步、尽力而为、不阻塞响应。
-	if strings.TrimSpace(final) != "" {
-		go s.rememberAI("chat", fmt.Sprintf("session:%d", session.ID), "【用户】\n"+msg+"\n\n【AI】\n"+final)
-	}
-	for _, f := range req.Files {
-		if strings.TrimSpace(f.Text) != "" {
-			go s.rememberAI("file", f.Name, f.Text)
+	_, _ = s.sreyun.Chat(r.Context(), session, msg, images, true, w)
+	// 对话正文已由 SreyunCore.Chat 写入记忆（含 WeKnora 引用）；此处仅补存上传文件正文便于精确召回。
+	if s.shouldRememberPublicChat() {
+		for _, f := range req.Files {
+			if strings.TrimSpace(f.Text) != "" {
+				go s.rememberAI("file", f.Name, f.Text)
+			}
 		}
 	}
 	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]

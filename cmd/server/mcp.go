@@ -22,7 +22,7 @@ import (
 // 若确需经 MCP 暴露主机诊断，应另加独立于 Web 面板的显式 opt-in，而非并入"只读"白名单。
 var mcpReadonlyTools = map[string]bool{
 	"query_metrics": true, "search_logs": true, "list_alerts": true,
-	"search_similar_cases": true, "list_datasources": true, "query_datasource": true,
+	"search_similar_cases": true, "search_knowledge": true, "list_datasources": true, "query_datasource": true,
 	"list_recent_changes": true, "check_host_health": true,
 	"query_hardware": true, "query_hardware_events": true, "query_hardware_history": true,
 	"query_hardware_changes": true, "query_netflow": true, "query_hyperv": true,

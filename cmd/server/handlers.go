@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -108,6 +109,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			s.pg.decayOldMemories()
 			s.pg.cleanupExpiredMemories()
 			s.pg.capMemoriesByKind(2000) // 每种 kind 最多 2000 条
+			if n := s.pg.archiveStaleSkills(); n > 0 {
+				slog.Info("已归档低质/过时技能", "count", n)
+			}
 			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
 			s.pg.cleanupContentAudit(s.cfg.Retention().ContentAuditDays)
 			s.pg.cleanupAuditAndEvents(s.cfg.Retention().AuditDays)
@@ -122,6 +126,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.decayOldMemories()
 				s.pg.cleanupExpiredMemories()
 				s.pg.capMemoriesByKind(2000)
+				if n := s.pg.archiveStaleSkills(); n > 0 {
+					slog.Info("已归档低质/过时技能", "count", n)
+				}
 				s.pg.cleanupFlowRecords()
 				ret := s.cfg.Retention()
 				s.pg.cleanupContentAudit(ret.ContentAuditDays)
@@ -335,6 +342,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
+	mux.HandleFunc("POST /api/v1/ai/test-weknora", s.handleTestWeKnoraConfig)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）
@@ -342,6 +350,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)          // 值班晨报态势汇总（供前端流式生成）
 	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
 	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
+	mux.HandleFunc("POST /api/v1/ai/skills/{id}/archive", s.handleArchiveSkill)
+	mux.HandleFunc("POST /api/v1/ai/skills/merge", s.handleMergeSkills)
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
 	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）
 	mux.HandleFunc("DELETE /api/v1/ai/memories/{id}", s.handleDeleteMemory)

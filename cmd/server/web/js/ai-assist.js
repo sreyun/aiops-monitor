@@ -56,8 +56,16 @@ function ensureAIAssistPanel() {
     _aiAssistState.applyTo(code);
     closeAIAssist();
   });
-  document.getElementById("aiAssistUp").addEventListener("click", () => { sendAssistFeedback("helpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_helpful", "已标记为有用 👍，AI 会记住"), "ok"); markAssistFeedbackDone(); });
-  document.getElementById("aiAssistDown").addEventListener("click", () => { sendAssistFeedback("unhelpful"); if (typeof toast === "function") toast(tA("assist.fb_marked_unhelpful", "已标记为无用 👎"), "ok"); markAssistFeedbackDone(); });
+  document.getElementById("aiAssistUp").addEventListener("click", async () => {
+    if (await sendAssistFeedback("helpful") === false) return;
+    if (typeof toast === "function") toast(tA("assist.fb_marked_helpful", "已标记为有用 👍，AI 会记住"), "ok");
+    markAssistFeedbackDone();
+  });
+  document.getElementById("aiAssistDown").addEventListener("click", async () => {
+    if (await sendAssistFeedback("unhelpful") === false) return;
+    if (typeof toast === "function") toast(tA("assist.fb_marked_unhelpful", "已标记为无用 👎"), "ok");
+    markAssistFeedbackDone();
+  });
   document.getElementById("aiAssistStop").addEventListener("click", () => stopAIAssist());
   document.getElementById("aiAssistInput").addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitAIAssist(); }
@@ -323,15 +331,31 @@ function onFollowupDone(aEl) {
 }
 
 // 采纳/评价反馈回传后端 → 学习闭环强化/惩罚对应记忆。尽力而为，失败静默。
-function sendAssistFeedback(action) {
+async function sendAssistFeedback(action) {
   const st = _aiAssistState;
-  if (!st.lastAnswer) return;
+  if (!st.lastAnswer) return false;
+  let reason = "";
+  if (action === "unhelpful") {
+    reason = prompt(typeof I18N !== "undefined" ? I18N.t("sre.unhelpful_reason", "请简要说明为何无用（将写入避坑记忆）：") : "请简要说明为何无用（将写入避坑记忆）：", "");
+    if (reason === null) return false;
+    reason = (reason || "").trim();
+    if (!reason) {
+      if (typeof toast === "function") toast(typeof I18N !== "undefined" ? I18N.t("sre.need_unhelpful_reason", "差评需填写原因") : "差评需填写原因", "err");
+      return false;
+    }
+  }
   try {
-    fetch(`${API}/ai/assist/feedback`, {
+    const r = await fetch(`${API}/ai/assist/feedback`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task: st.task, input: st.lastInput || "", answer: st.lastAnswer || "", action })
+      body: JSON.stringify({ task: st.task, input: st.lastInput || "", answer: st.lastAnswer || "", action, reason })
     });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (typeof toast === "function") toast(j.error || "反馈失败", "err");
+      return false;
+    }
   } catch (e) { /* 忽略：反馈非关键路径 */ }
+  return true;
 }
 // 评价一次后隐藏 👍/👎，避免重复提交
 function markAssistFeedbackDone() {

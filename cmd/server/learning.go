@@ -110,32 +110,50 @@ func summarizePlaybookOutcome(pb Playbook, exec *PlaybookExecution, status strin
 	return b.String(), okN, failN
 }
 
-// learnFromResolution 闭环 C：事件解决后，把「解决经验」沉淀为可复用记忆，并强化促成解决的诊断
-// 记忆（被现实验证有价值）。note 为可选的解决说明。为避免注入噪声，此处只做温和的 priority 强化，
-// 不擅自把诊断向量标记为 👍（显式好评仍交给用户）。
+func resolutionNoteFromIncident(inc Incident) string {
+	for i := len(inc.Timeline) - 1; i >= 0; i-- {
+		t := inc.Timeline[i]
+		text := strings.TrimSpace(t.Text)
+		if text == "" {
+			continue
+		}
+		if strings.HasPrefix(text, "解决说明：") {
+			return strings.TrimSpace(strings.TrimPrefix(text, "解决说明："))
+		}
+	}
+	for i := len(inc.Timeline) - 1; i >= 0; i-- {
+		t := inc.Timeline[i]
+		if (t.Kind == "recovered" || t.Kind == "resolved") && strings.TrimSpace(t.Text) != "" {
+			return strings.TrimSpace(t.Text)
+		}
+	}
+	return ""
+}
+
+// learnFromResolution 闭环 C：事件解决后，沉淀结构化「结案经验」卡片，并强化促成解决的诊断记忆。
+// note 为可选的解决说明（也可由 resolutionNoteFromIncident 从时间线提取）。
 func (s *Server) learnFromResolution(inc Incident, note string) {
 	if s.pg == nil {
 		return
 	}
-	var diag string
-	for i := len(inc.Timeline) - 1; i >= 0; i-- {
-		if inc.Timeline[i].Kind == "ai_diagnosis" && strings.TrimSpace(inc.Timeline[i].Text) != "" {
-			diag = inc.Timeline[i].Text
-			break
-		}
+	if strings.TrimSpace(note) == "" {
+		note = resolutionNoteFromIncident(inc)
 	}
-	parts := []string{fmt.Sprintf("事件「%s」（类型 %s，严重度 %s）已解决。", inc.Title, inc.Type, inc.Severity)}
-	if note != "" {
-		parts = append(parts, "解决方式："+note)
+	diag := latestTimelineText(inc, "ai_diagnosis")
+	card := buildResolutionCardFromIncident(inc, note)
+	card = s.enrichResolutionCardWithAI(card, diag)
+	text := formatResolutionCard(card)
+	if strings.TrimSpace(text) == "" {
+		return
 	}
-	if diag != "" {
-		parts = append(parts, "诊断结论："+trimLine(diag, 400))
-	}
-	s.rememberAI("resolution", fmt.Sprintf("incident:%d", inc.ID), strings.Join(parts, "\n"))
-	// 事件被解决 → 强化其诊断记忆，使同类事件下次更快召回这条被验证过的诊断脉络
+	s.rememberAI("resolution", fmt.Sprintf("incident:%d", inc.ID), text)
 	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", inc.ID), reinforceResolved)
-	// 同时强化最相关的技能(SOP)——被现实验证有效的技能应在后续检索中上浮
 	s.reinforceSkill(inc.Title+" "+inc.Type+" "+note, reinforceResolved)
+	// 反馈驱动：被解决验证的结案卡尝试升格为可复用 Skill（去重合并，异步）
+	s.promoteTextToSkill("resolution", fmt.Sprintf("incident:%d", inc.ID), text)
+	// 结案时沉淀「问题+结论+文档标题」为已验证文档引用（非整库镜像）
+	titles := extractDocTitlesFromText(text)
+	s.persistAdoptedKnowledge(inc.Title+" "+inc.Type, text, fmt.Sprintf("knowledge:incident:%d", inc.ID), titles)
 }
 
 // correlateIncident 事件自动串联（知识复用闭环）：新事件创建时用 RAG 召回相似历史事件、已验证的
