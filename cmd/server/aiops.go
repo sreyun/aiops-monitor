@@ -59,7 +59,7 @@ type AIConfig struct {
 	WeKnoraEnabled          bool   `json:"weknora_enabled,omitempty"`
 	WeKnoraURL              string `json:"weknora_url,omitempty"`                // 如 http://weknora:8080 或 …/api/v1
 	WeKnoraAPIKey           string `json:"weknora_api_key,omitempty"`            // X-API-Key
-	WeKnoraKnowledgeBaseIDs string `json:"weknora_knowledge_base_ids,omitempty"` // 逗号分隔知识库 ID，可空=按 WeKnora 默认范围
+	WeKnoraKnowledgeBaseIDs string `json:"weknora_knowledge_base_ids,omitempty"` // 逗号分隔；可空=自动枚举全部可见库再检索
 	// DisablePublicChatMemory：开启后对话/助手回复不再写入公共向量记忆（敏感场景）；结案/诊断/采纳沉淀不受影响。
 	DisablePublicChatMemory bool `json:"disable_public_chat_memory,omitempty"`
 	// Sreyun Agent 配置

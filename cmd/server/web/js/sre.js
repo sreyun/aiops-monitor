@@ -2599,10 +2599,47 @@ async function testAIWeKnoraConfig(){
     const r=await fetch(`${API}/ai/test-weknora`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
     if(!el) return;
-    if(j.ok){ el.textContent=`✓ WeKnora 可用 · ${j.latency_ms||0}ms · ${j.preview||""}`; el.className="ai-test-result ok"; el.style.whiteSpace="pre-wrap"; }
-    else { el.textContent="✗ WeKnora "+(j.error||I18N.t("sre.test_failed","测试失败")); el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap"; }
+    if(j.ok){
+      const scope=j.scope||((j.kb_count!=null)?(`${j.kb_count} 个知识库`):"");
+      const strat=j.strategy?` · ${j.strategy}`:"";
+      el.textContent=`✓ WeKnora 可用 · ${j.latency_ms||0}ms · ${scope}${strat}\n${j.preview||""}`;
+      el.className="ai-test-result ok"; el.style.whiteSpace="pre-wrap";
+    } else {
+      el.textContent="✗ WeKnora "+(j.error||I18N.t("sre.test_failed","测试失败"));
+      el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+    }
   }catch(e){ if(el){ el.textContent="✗ WeKnora "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
   finally{ _aiWeKnoraTestBusy=false; if(testBtn) testBtn.disabled=false; }
+}
+
+let _aiWeKnoraListBusy=false;
+async function listAIWeKnoraKBs(){
+  if(_aiWeKnoraListBusy) return;
+  const el=$("aiWeKnoraTestResult");
+  _aiWeKnoraListBusy=true;
+  const btn=$("aiWeKnoraListBtn"); if(btn) btn.disabled=true;
+  if(el){ el.textContent="正在拉取知识库列表…"; el.className="ai-test-result testing"; }
+  const body={
+    weknora_url:($("weknoraURL")?.value||"").trim(),
+    weknora_api_key:$("weknoraKey")?.value||""
+  };
+  try{
+    const r=await fetch(`${API}/ai/list-weknora-kbs`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(j.ok){
+      const rows=(j.knowledge_bases||[]).map(kb=>{
+        const n=kb.name||kb.id;
+        const cnt=(kb.knowledge_count!=null)?` · 文档 ${kb.knowledge_count}`:"";
+        return `• ${n} (${kb.id})${cnt}`;
+      });
+      el.textContent=`✓ 可见知识库 ${j.count||0} 个 · ${j.latency_ms||0}ms\n`+(rows.join("\n")||"（空）")+"\n提示：限定 ID 留空即可自动跨上述全部库检索；也可复制 ID 填入限定框。";
+      el.className="ai-test-result ok"; el.style.whiteSpace="pre-wrap";
+    } else {
+      el.textContent="✗ "+(j.error||"拉取失败"); el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap";
+    }
+  }catch(e){ if(el){ el.textContent="✗ 请求失败："+e; el.className="ai-test-result err"; } }
+  finally{ _aiWeKnoraListBusy=false; if(btn) btn.disabled=false; }
 }
 
 // AI 重排(rerank)模型连接测试
@@ -3149,6 +3186,7 @@ safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
 safeAddEventListener("aiWeKnoraTestBtn","click",testAIWeKnoraConfig);
+safeAddEventListener("aiWeKnoraListBtn","click",listAIWeKnoraKBs);
 safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
 safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
 safeAddEventListener("mcpCardHeader","click",toggleMcpCard);

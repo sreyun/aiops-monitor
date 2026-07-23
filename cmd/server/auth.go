@@ -120,6 +120,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		"/api/v1/ai/test-embed",
 		"/api/v1/ai/test-rerank",
 		"/api/v1/ai/test-weknora",
+		"/api/v1/ai/list-weknora-kbs",
 		"/api/v1/ai/models",
 		"/api/v1/ai/terminal-access":
 		if r.Method != http.MethodGet {
