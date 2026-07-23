@@ -54,6 +54,14 @@ type AIConfig struct {
 	// Agent（如 Nous Sreyun Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
 	MCPEnabled bool   `json:"mcp_enabled,omitempty"`
 	MCPToken   string `json:"mcp_token,omitempty"`
+	// WeKnora：外部文档知识库（腾讯开源 RAG）。本平台不建文档入库，仅通过 API URL + API Key
+	// 调用 knowledge-search，供 search_knowledge 工具在诊断/对话时检索手册类知识。
+	WeKnoraEnabled          bool   `json:"weknora_enabled,omitempty"`
+	WeKnoraURL              string `json:"weknora_url,omitempty"`                // 如 http://weknora:8080 或 …/api/v1
+	WeKnoraAPIKey           string `json:"weknora_api_key,omitempty"`            // X-API-Key
+	WeKnoraKnowledgeBaseIDs string `json:"weknora_knowledge_base_ids,omitempty"` // 逗号分隔知识库 ID，可空=按 WeKnora 默认范围
+	// DisablePublicChatMemory：开启后对话/助手回复不再写入公共向量记忆（敏感场景）；结案/诊断/采纳沉淀不受影响。
+	DisablePublicChatMemory bool `json:"disable_public_chat_memory,omitempty"`
 	// Sreyun Agent 配置
 	SreyunEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Sreyun 自主 Agent
 	SreyunAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行

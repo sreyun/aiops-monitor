@@ -195,14 +195,18 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	policy := assistTaskPolicy(task)
 	sys := buildAssistSystemPrompt(task, contextText)
 	ragQ := strings.TrimSpace(userMsg + " " + contextText)
-	memText, memHits, degM := s.retrieveMemoryDetailed(policy.MemKind, ragQ, 6)
+	memText, memHits, degM, memCites := s.retrieveMemoryWithCitations(policy.MemKind, ragQ, 6)
 	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQ, 4)
 	sys += memText + skillText
 	deg := degM
 	if deg == "" {
 		deg = degS
 	}
-	writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+	cites := append([]RAGCitation{}, memCites...)
+	for _, n := range skillNames {
+		cites = append(cites, RAGCitation{Kind: "skill", Title: n})
+	}
+	writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 
 	if strings.TrimSpace(userMsg) == "" {
 		userMsg = "请根据上述上下文进行分析并给出结论。"
@@ -233,8 +237,14 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	s.recordAICallActor(task, cfg.Model, actor, latency, err == nil, errStr, memHits, skillHits, reply)
 
 	if strings.TrimSpace(reply) != "" {
-		go s.rememberAI(policy.RememberKind, policy.RememberSource,
-			fmt.Sprintf("【AI 辅助·%s】\n%s\n\n【AI】\n%s", task, userMsg, reply))
+		rememberOK := true
+		if policy.RememberKind == "chat" || policy.RememberKind == "assist" {
+			rememberOK = s.shouldRememberPublicChat()
+		}
+		if rememberOK {
+			go s.rememberAI(policy.RememberKind, policy.RememberSource,
+				fmt.Sprintf("【AI 辅助·%s】\n%s\n\n【AI】\n%s", task, userMsg, reply))
+		}
 	}
 	return reply
 }

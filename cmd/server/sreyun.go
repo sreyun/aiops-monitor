@@ -61,6 +61,8 @@ type SreyunCore struct {
 	cachedToolPrompt string
 	// P3-1: 缓存原生 Function Calling 工具定义数组
 	cachedNativeToolDefs []map[string]any
+	// 本轮对话中 search_knowledge 命中的文档引用（供记忆沉淀与 SSE）
+	turnCites citationBuf
 }
 
 // newSreyunCore creates and initializes the Sreyun engine.
@@ -122,6 +124,24 @@ func (h *SreyunCore) registerTools() {
 			"required": []string{"query"},
 		},
 		Execute: h.execSearchCases,
+	}
+	h.tools["search_knowledge"] = SreyunTool{
+		Name: "search_knowledge",
+		Description: "在外部 WeKnora 文档知识库中检索运维手册、规范、Wiki 等正式文档片段（非本平台历史案例）。" +
+			"排查需对照官方流程/配置说明时用；需先在 AI 设置 → RAG 中启用 WeKnora 并填写 API URL / API Key。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]string{"type": "string", "description": "检索问题或关键词，如「磁盘清理规范」「Nginx 502 排查流程」"},
+				"top_k": map[string]any{"type": "integer", "description": "返回条数，默认 5，最大 20"},
+				"knowledge_base_ids": map[string]string{
+					"type":        "string",
+					"description": "可选，逗号分隔知识库 ID；不传则用 AI 设置中的默认知识库列表",
+				},
+			},
+			"required": []string{"query"},
+		},
+		Execute: h.execSearchKnowledge,
 	}
 	h.tools["run_diagnostic"] = SreyunTool{
 		Name:        "run_diagnostic",
@@ -607,6 +627,42 @@ func (h *SreyunCore) execSearchCases(args map[string]any) (string, error) {
 	return b.String(), nil
 }
 
+// execSearchKnowledge 调用外部 WeKnora knowledge-search（文档 RAG），与本地案例库互补。
+func (h *SreyunCore) execSearchKnowledge(args map[string]any) (string, error) {
+	query, _ := args["query"].(string)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "请输入检索关键词或问题", nil
+	}
+	cfg := h.s.cfg.AIConfig()
+	if !weknoraConfigured(cfg) {
+		return "WeKnora 未启用或未配置。请在「AI 设置 → RAG → WeKnora」填写 API URL 与 API Key 并开启。", nil
+	}
+	topK := 5
+	switch v := args["top_k"].(type) {
+	case float64:
+		topK = int(v)
+	case int:
+		topK = v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			topK = int(n)
+		}
+	}
+	var override []string
+	if raw, _ := args["knowledge_base_ids"].(string); strings.TrimSpace(raw) != "" {
+		override = parseWeKnoraKBIDs(raw)
+	}
+	out, err := weknoraSearch(cfg, query, topK, override)
+	if err != nil {
+		return "WeKnora 检索失败（已降级）：" + err.Error() + "。请改用 search_similar_cases 与现场指标/日志继续排查。", nil
+	}
+	for _, t := range extractDocTitlesFromText(out) {
+		h.turnCites.add(RAGCitation{Kind: "weknora", Source: "weknora", Title: t})
+	}
+	return out, nil
+}
+
 // diagCommandAllowed 已迁移至 cmdpolicy.go（与剧本命令策略共用安全校验入口）。
 
 func (h *SreyunCore) execDiagnostic(args map[string]any) (string, error) {
@@ -919,9 +975,11 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 	// Build system prompt from cached templates + rules
 	sys := h.buildSystemPrompt()
 
+	h.turnCites.reset()
+
 	// RAG: 检索历史记忆注入 system prompt，让 Agent 能跨会话复用已有知识
 	// Token 预算管理：动态裁剪 RAG 记忆，确保 system prompt 不超过 8000 token
-	ragText, memHits, degM := h.s.retrieveMemoryDetailed("chat", userMsg, 8)
+	ragText, memHits, degM, memCites := h.s.retrieveMemoryWithCitations("chat", userMsg, 8)
 	sysBudget := 8000 - estimateTokens(sys)
 	if sysBudget < 500 {
 		sysBudget = 500 // 最低保留 500 token 给 RAG
@@ -938,12 +996,16 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 	sys += ragText
 	skillText, skillNames, skillHits, degS := h.s.retrieveSkillsDetailed(userMsg, 4)
 	sys += skillText
+	cites := append([]RAGCitation{}, memCites...)
+	for _, n := range skillNames {
+		cites = append(cites, RAGCitation{Kind: "skill", Title: n})
+	}
 	if stream && w != nil {
 		deg := degM
 		if deg == "" {
 			deg = degS
 		}
-		writeRAGMetaSSE(w, memHits, skillHits, deg, skillNames)
+		writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 	}
 
 	// Build messages
@@ -973,10 +1035,17 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 			session.ID = newID
 		}
 	}
-	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆
-	if strings.TrimSpace(fullReply) != "" {
-		go h.s.rememberAI("chat", fmt.Sprintf("sreyun:%d", session.ID),
-			"【用户】\n"+userMsg+"\n\n【AI】\n"+fullReply)
+	// 向量化本轮交互 → 永久入库沉淀为 RAG 记忆（敏感模式关闭公共对话记忆时跳过）
+	if h.s.shouldRememberPublicChat() && strings.TrimSpace(fullReply) != "" {
+		mem := "【用户】\n" + userMsg + "\n\n【AI】\n" + fullReply
+		if wk := h.turnCites.snapshot(); len(wk) > 0 {
+			var titles []string
+			for _, c := range wk {
+				titles = append(titles, c.Title)
+			}
+			mem += "\n【依据文档】" + strings.Join(uniqNonEmpty(titles), "、")
+		}
+		go h.s.rememberAI("chat", fmt.Sprintf("sreyun:%d", session.ID), mem)
 	}
 	return fullReply, nil
 }
@@ -1389,6 +1458,12 @@ func (h *SreyunCore) buildSystemPrompt() string {
 	b.WriteString("- 需要调用工具时，输出如下 JSON（可写在思考文字之后）：{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}；系统会执行并把真实结果回传给你，你再据此继续。\n")
 	b.WriteString("- 该 tool_calls JSON 仅用于系统内部调用、对用户不可见；面向用户的最终回复只用自然语言，不要贴出工具调用的 JSON、代码块，也不要输出任何密钥/密码/token 等敏感信息。\n")
 	b.WriteString("- 高危操作（删除文件、修改配置、重启服务、扩缩容等）只能给出建议并说明风险等级，绝不擅自执行。\n")
+	b.WriteString("\n排查编排（按优先级，可跳过但勿颠倒）：\n")
+	b.WriteString("1) 先用 search_similar_cases，并优先套用已注入的历史记忆与【已掌握技能】；\n")
+	b.WriteString("2) 需要手册/规范/Wiki 时用 search_knowledge（WeKnora）；不可用则明确说明并改用本地经验；\n")
+	b.WriteString("3) 再用 query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
+	b.WriteString("4) 仅在需要主机侧证据时使用 run_diagnostic（只读）。\n")
+	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据。\n")
 
 	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，
 	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。
