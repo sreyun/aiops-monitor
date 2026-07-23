@@ -8,10 +8,10 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-v6.8.1-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v6.28.8-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#open-source--community)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android-lightgrey)]()
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
 **[中文](README.md) · [English](README_EN.md)**
@@ -69,7 +69,8 @@ A complete alert lifecycle that suppresses storming at the source:
 
 - **Scheduled / on-demand health inspection**: synthesizes online / offline hosts, active alerts, SLO breaches and recent error logs into a health verdict.
 - **Incident root-cause**: critical incidents auto-trigger AI analysis on the timeline; topology RCA + streaming follow-ups.
-- **RAG vector learning loop**: pgvector-backed memory/skills with **👍 / 👎 feedback reranking**.
+- **RAG vector learning loop**: pgvector-backed memory/skills with **👍 / 👎 feedback reranking**; verified resolutions can promote into reusable Skills.
+- **WeKnora external document RAG**: manuals / Wiki / PDF stay in [WeKnora](https://github.com/Tencent/WeKnora); configure **AI Settings → RAG → WeKnora** (API URL + API Key, optional KB IDs) for the `search_knowledge` tool, with automatic fallback to local memory/skills when unavailable.
 - **AI assistant (multimodal + voice)**: SSE streaming + Function Calling; Web supports image/file/URL attach, **speech input & TTS read-back**; Android Copilot/diagnosis can send images and parsed files.
 - **Pluggable, never binding**: any OpenAI-compatible LLM enables smart mode; **without an LLM it falls back to built-in heuristic diagnosis**.
 - **Decoupled embedding model**: chat / embed / optional rerank configured independently, with connectivity self-tests and AI call stats.
