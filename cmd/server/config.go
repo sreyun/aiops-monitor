@@ -1418,6 +1418,10 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if strings.Contains(a.MCPToken, "****") {
 		a.MCPToken = cs.cfg.AI.MCPToken
 	}
+	// WeKnora API Key：空或脱敏占位时保留原值。
+	if a.WeKnoraAPIKey == "" || strings.Contains(a.WeKnoraAPIKey, "****") {
+		a.WeKnoraAPIKey = cs.cfg.AI.WeKnoraAPIKey
+	}
 	// AI 配置表单不含这些 Sreyun 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
 	a.SreyunEnabled = cs.cfg.AI.SreyunEnabled
 	a.SreyunAutoApprove = cs.cfg.AI.SreyunAutoApprove

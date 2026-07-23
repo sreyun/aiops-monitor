@@ -294,6 +294,8 @@ func (p *pgStore) migrate() error {
 			updated_at    BIGINT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS ai_skills_priority ON ai_skills(priority DESC);
+		ALTER TABLE ai_skills ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+		CREATE INDEX IF NOT EXISTS ai_skills_status ON ai_skills(status);
 		-- 经验规则库（高频问题 best practice）
 		CREATE TABLE IF NOT EXISTS experience_rules (
 			id          BIGSERIAL PRIMARY KEY,
@@ -1174,6 +1176,53 @@ func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int
 	return out, rows.Err()
 }
 
+// searchMemoryByKinds 在指定 kind 集合内检索并按距离粗排，诊断场景优先 resolution > diagnosis > experience。
+func (p *pgStore) searchMemoryByKinds(emb []float64, kinds []string, limit int) ([]memoryHit, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if len(kinds) == 0 {
+		return p.searchMemory(emb, limit)
+	}
+	kindBoost := map[string]float64{
+		"resolution": 0.85, // 乘到 distance 上：更小 → 更靠前
+		"knowledge":  0.88, // 已验证文档引用
+		"diagnosis":  0.92,
+		"experience": 0.96,
+		"pitfall":    0.90, // 避坑需可见，略优先于普通经验
+	}
+	var out []memoryHit
+	seen := make(map[string]bool)
+	per := (limit*2)/len(kinds) + 1
+	if per < 2 {
+		per = 2
+	}
+	for _, k := range kinds {
+		hits, err := p.searchMemoryByKind(emb, k, per)
+		if err != nil {
+			continue
+		}
+		boost := kindBoost[k]
+		if boost == 0 {
+			boost = 1
+		}
+		for _, h := range hits {
+			key := h.Kind + ":" + h.Source
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			h.Distance = h.Distance * boost
+			out = append(out, h)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Distance < out[j].Distance })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // memoryContentHash 计算内容哈希用于去重判断（SHA256 前 16 位）。
 func memoryContentHash(content string) string {
 	h := sha256.Sum256([]byte(content))
@@ -1291,6 +1340,7 @@ type Skill struct {
 	SuccessCount int     `json:"success_count"`
 	Priority     float64 `json:"priority"`
 	Source       string  `json:"source"`
+	Status       string  `json:"status"` // active | archived
 	CreatedAt    int64   `json:"created_at"`
 	UpdatedAt    int64   `json:"updated_at"`
 	Distance     float64 `json:"distance,omitempty"`
@@ -1306,12 +1356,14 @@ func (p *pgStore) insertSkill(name, trigger, steps, tags, source string, emb []f
 	return id, err
 }
 
-// findSimilarSkill 返回与 emb 语义最近的技能 id（若距离 ≤ maxDist），用于提炼时去重/合并。
+// findSimilarSkill 返回与 emb 语义最近的【活跃】技能 id（若距离 ≤ maxDist），用于提炼时去重/合并。
 func (p *pgStore) findSimilarSkill(emb []float64, maxDist float64) (int64, bool) {
 	var id int64
 	var dist float64
 	if err := p.db.QueryRow(
-		`SELECT id, embedding <=> $1::vector AS d FROM ai_skills ORDER BY embedding <=> $1::vector LIMIT 1`,
+		`SELECT id, embedding <=> $1::vector AS d FROM ai_skills
+		 WHERE COALESCE(status,'active')='active'
+		 ORDER BY embedding <=> $1::vector LIMIT 1`,
 		vecStr(emb)).Scan(&id, &dist); err != nil || dist > maxDist {
 		return 0, false
 	}
@@ -1341,7 +1393,7 @@ func (p *pgStore) searchSkills(emb []float64, limit int, maxDist float64) ([]Ski
 		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
 		        embedding <=> $1::vector AS distance
 		 FROM ai_skills
-		 WHERE embedding <=> $1::vector <= $3
+		 WHERE COALESCE(status,'active')='active' AND embedding <=> $1::vector <= $3
 		 ORDER BY (embedding <=> $1::vector) / GREATEST(priority, 0.1) LIMIT $2`,
 		vecStr(emb), limit, maxDist)
 	if err != nil {
@@ -1359,9 +1411,19 @@ func (p *pgStore) searchSkills(emb []float64, limit int, maxDist float64) ([]Ski
 }
 
 func (p *pgStore) listSkills() ([]Skill, error) {
-	rows, err := p.db.Query(
-		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source, created_at, updated_at
-		 FROM ai_skills ORDER BY priority DESC, updated_at DESC LIMIT 500`)
+	return p.listSkillsFiltered(false)
+}
+
+// listSkillsFiltered includeArchived=true 时含已归档技能（管理审阅用）。
+func (p *pgStore) listSkillsFiltered(includeArchived bool) ([]Skill, error) {
+	q := `SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
+	             COALESCE(status,'active'), created_at, updated_at
+	      FROM ai_skills`
+	if !includeArchived {
+		q += ` WHERE COALESCE(status,'active')='active'`
+	}
+	q += ` ORDER BY CASE WHEN COALESCE(status,'active')='active' THEN 0 ELSE 1 END, priority DESC, updated_at DESC LIMIT 500`
+	rows, err := p.db.Query(q)
 	if err != nil {
 		return nil, err
 	}
@@ -1369,11 +1431,64 @@ func (p *pgStore) listSkills() ([]Skill, error) {
 	var out []Skill
 	for rows.Next() {
 		var s Skill
-		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.CreatedAt, &s.UpdatedAt); err == nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.Status, &s.CreatedAt, &s.UpdatedAt); err == nil {
 			out = append(out, s)
 		}
 	}
 	return out, rows.Err()
+}
+
+func (p *pgStore) setSkillStatus(id int64, status string) error {
+	status = strings.TrimSpace(status)
+	if status != "active" && status != "archived" {
+		return fmt.Errorf("invalid status")
+	}
+	_, err := p.db.Exec(`UPDATE ai_skills SET status=$2, updated_at=$3 WHERE id=$1`, id, status, time.Now().Unix())
+	return err
+}
+
+// mergeSkills 将 dropID 合并进 keepID：累加使用计数后删除 drop；保留 keep 的步骤（已验证优先）。
+func (p *pgStore) mergeSkills(keepID, dropID int64) error {
+	if keepID == 0 || dropID == 0 || keepID == dropID {
+		return fmt.Errorf("invalid merge ids")
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var uc, sc int
+	if err := tx.QueryRow(`SELECT use_count, success_count FROM ai_skills WHERE id=$1`, dropID).Scan(&uc, &sc); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE ai_skills SET use_count=use_count+$2, success_count=success_count+$3, updated_at=$4 WHERE id=$1`,
+		keepID, uc, sc, time.Now().Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM ai_skills WHERE id=$1`, dropID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// archiveStaleSkills 归档低质/过时技能：权重过低、或使用多次且成功率极低、或长期未更新且几乎无成功。
+func (p *pgStore) archiveStaleSkills() int {
+	now := time.Now().Unix()
+	cutoff := now - 90*24*3600
+	res, err := p.db.Exec(
+		`UPDATE ai_skills SET status='archived', updated_at=$1
+		 WHERE COALESCE(status,'active')='active' AND (
+		   priority < 0.25
+		   OR (use_count >= 5 AND success_count*1.0/GREATEST(use_count,1) < 0.15)
+		   OR (updated_at < $2 AND success_count = 0 AND use_count >= 3)
+		 )`, now, cutoff)
+	if err != nil {
+		slog.Warn("技能归档失败", "err", err)
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
 }
 
 func (p *pgStore) deleteSkill(id int64) error {
@@ -1397,9 +1512,26 @@ func (p *pgStore) recordSkillUse(id int64, success bool) {
 // 同步 use_count++（视强化为「一次被验证的使用」），保证 success_count ≤ use_count，前端成功率不越界。
 func (p *pgStore) boostSkillNearest(emb []float64, factor float64) {
 	var id int64
-	if err := p.db.QueryRow(`SELECT id FROM ai_skills ORDER BY embedding <=> $1::vector LIMIT 1`, vecStr(emb)).Scan(&id); err == nil {
+	if err := p.db.QueryRow(
+		`SELECT id FROM ai_skills WHERE COALESCE(status,'active')='active'
+		 ORDER BY embedding <=> $1::vector LIMIT 1`, vecStr(emb)).Scan(&id); err == nil {
 		_, _ = p.db.Exec(
 			`UPDATE ai_skills SET priority=LEAST(GREATEST(priority,0.1)*$2,5.0), use_count=use_count+1, success_count=success_count+1, updated_at=$3 WHERE id=$1`,
+			id, factor, time.Now().Unix())
+	}
+}
+
+// penalizeSkillNearest 差评时下调最近技能权重（不增加 success_count）。
+func (p *pgStore) penalizeSkillNearest(emb []float64, factor float64) {
+	if factor <= 0 || factor >= 1 {
+		factor = 0.6
+	}
+	var id int64
+	if err := p.db.QueryRow(
+		`SELECT id FROM ai_skills WHERE COALESCE(status,'active')='active'
+		 ORDER BY embedding <=> $1::vector LIMIT 1`, vecStr(emb)).Scan(&id); err == nil {
+		_, _ = p.db.Exec(
+			`UPDATE ai_skills SET priority=GREATEST(priority*$2, 0.1), updated_at=$3 WHERE id=$1`,
 			id, factor, time.Now().Unix())
 	}
 }

@@ -100,6 +100,7 @@ func (s *Server) distillSkills(lookbackDays int) (int, error) {
 }
 
 // parseDistilledSkills 容错解析 AI 输出的技能 JSON 数组（可能含代码块围栏或前后噪声）。
+// 亦接受单对象 {"name",...}，方便升格路径偶发只返回一条对象。
 func parseDistilledSkills(text string) []distilledSkill {
 	text = strings.TrimSpace(text)
 	if i := strings.Index(text, "```"); i >= 0 { // 去代码块围栏
@@ -112,14 +113,22 @@ func parseDistilledSkills(text string) []distilledSkill {
 		}
 	}
 	l, r := strings.IndexByte(text, '['), strings.LastIndexByte(text, ']')
-	if l < 0 || r <= l {
-		return nil
+	if l >= 0 && r > l {
+		var arr []distilledSkill
+		if err := json.Unmarshal([]byte(text[l:r+1]), &arr); err == nil {
+			return arr
+		}
 	}
-	var arr []distilledSkill
-	if err := json.Unmarshal([]byte(text[l:r+1]), &arr); err != nil {
-		return nil
+	// 单对象兜底
+	ol, or := strings.IndexByte(text, '{'), strings.LastIndexByte(text, '}')
+	if ol >= 0 && or > ol {
+		var one distilledSkill
+		if err := json.Unmarshal([]byte(text[ol:or+1]), &one); err == nil &&
+			(strings.TrimSpace(one.Name) != "" || strings.TrimSpace(one.Steps) != "") {
+			return []distilledSkill{one}
+		}
 	}
-	return arr
+	return nil
 }
 
 // retrieveSkillsDetailed 同 retrieveSkillsForPrompt，额外返回命中技能名、命中数与降级原因。
@@ -185,7 +194,80 @@ func (s *Server) reinforceSkill(text string, factor float64) {
 	}
 	go func() {
 		if emb := embedText(cfg, text); len(emb) > 0 {
-			s.pg.boostSkillNearest(emb, factor)
+			if factor < 1.0 {
+				s.pg.penalizeSkillNearest(emb, factor)
+			} else {
+				s.pg.boostSkillNearest(emb, factor)
+			}
 		}
 	}()
+}
+
+// promoteTextToSkill 把一段被验证的经验（结案卡 / 好评诊断）异步升格为一条可复用 Skill。
+// reason 如 resolution / diagnosis_feedback；sourceRef 如 incident:12。
+func (s *Server) promoteTextToSkill(reason, sourceRef, corpus string) {
+	if s.pg == nil {
+		return
+	}
+	corpus = strings.TrimSpace(corpus)
+	if corpus == "" {
+		return
+	}
+	go func() {
+		created, updated, err := s.promoteTextToSkillSync(reason, sourceRef, corpus)
+		if err != nil {
+			slog.Debug("经验升格技能跳过", "reason", reason, "source", sourceRef, "err", err)
+			return
+		}
+		if created || updated {
+			slog.Info("经验已升格为技能", "reason", reason, "source", sourceRef, "created", created, "updated", updated)
+		}
+	}()
+}
+
+// promoteTextToSkillSync 同步升格：LLM 抽 1 条 SOP → 去重合并 → 入库。
+func (s *Server) promoteTextToSkillSync(reason, sourceRef, corpus string) (created, updated bool, err error) {
+	cfg := s.cfg.AIConfig()
+	if !cfg.Enabled || cfg.APIKey == "" {
+		return false, false, fmt.Errorf("AI 未配置")
+	}
+	sys := "你是资深 SRE 知识工程师。请把下面这段【已验证】的运维经验，提炼成 1 条可复用技能(SOP)。" +
+		"技能不要绑定具体事件号/一次性主机名；触发条件写清症状与场景；步骤可执行。" +
+		"若内容不足以形成可复用技能，输出空数组 []。" +
+		"严格只输出 JSON 数组，元素为 {\"name\",\"trigger\",\"steps\",\"tags\"}，最多 1 条。"
+	out, err := aiComplete(cfg, sys, "经验来源："+reason+"/"+sourceRef+"\n\n"+trimLine(corpus, 3500))
+	if err != nil {
+		return false, false, err
+	}
+	skills := parseDistilledSkills(out)
+	if len(skills) == 0 {
+		return false, false, nil
+	}
+	sk := skills[0]
+	name, trigger, steps := strings.TrimSpace(sk.Name), strings.TrimSpace(sk.Trigger), strings.TrimSpace(sk.Steps)
+	if name == "" || steps == "" {
+		return false, false, nil
+	}
+	emb := embedText(cfg, name+" "+trigger)
+	if len(emb) == 0 {
+		return false, false, fmt.Errorf("embed 失败")
+	}
+	src := "auto:" + reason
+	if sourceRef != "" {
+		src = src + ":" + sourceRef
+	}
+	if id, dup := s.pg.findSimilarSkill(emb, skillDistillDupDist); dup {
+		if !s.pg.skillProven(id) {
+			if err := s.pg.updateSkill(id, name, trigger, steps, emb); err != nil {
+				return false, false, err
+			}
+			updated = true
+		}
+		s.pg.recordSkillUse(id, true)
+		return false, updated, nil
+	}
+	if _, err := s.pg.insertSkill(name, trigger, steps, sk.Tags, src, emb); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
 }

@@ -1961,6 +1961,7 @@
       <h3>🧠 AI 技能库</h3>
       <span class="hint" style="margin-left:8px">系统从诊断/剧本/解决事件的经验中每日自动提炼可复用技能，检索时注入 AI 提示词</span>
       <button type="button" class="btn sm ai-assist-btn" id="skillsDistillBtn" style="margin-left:auto"><span class="ai-assist-btn-ic">✨</span>立即提炼</button>
+      <label class="switch" style="margin-left:8px;font-size:12px"><input type="checkbox" id="skillsShowArchived"> <span>含已归档</span></label>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="skillsBody"></div>
@@ -1980,6 +1981,8 @@
           <option value="assist">assist</option>
           <option value="experience">experience</option>
           <option value="resolution">resolution</option>
+          <option value="knowledge">knowledge（已验证文档引用）</option>
+          <option value="pitfall">pitfall（避坑）</option>
         </select>
       </div>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
@@ -2142,7 +2145,7 @@
     <div class="ai-settings-shell">
       <nav class="ai-settings-nav" aria-label="AI 设置分区">
         <button type="button" class="ai-nav-item active" data-ai-tab="provider"><span class="ai-nav-k">01</span><span class="ai-nav-t">Provider</span><span class="ai-nav-d">对话模型</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="rag"><span class="ai-nav-k">02</span><span class="ai-nav-t">RAG</span><span class="ai-nav-d">向量 / 重排</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="rag"><span class="ai-nav-k">02</span><span class="ai-nav-t">RAG</span><span class="ai-nav-d">向量 / WeKnora</span></button>
         <button type="button" class="ai-nav-item" data-ai-tab="quality"><span class="ai-nav-k">03</span><span class="ai-nav-t">研判与成本</span><span class="ai-nav-d">MoA / 单价</span></button>
         <button type="button" class="ai-nav-item" data-ai-tab="integrate"><span class="ai-nav-k">04</span><span class="ai-nav-t">集成</span><span class="ai-nav-d">MCP Server</span></button>
         <button type="button" class="ai-nav-item" data-ai-tab="observe"><span class="ai-nav-k">05</span><span class="ai-nav-t">调用观测</span><span class="ai-nav-d">用量 / 费用</span></button>
@@ -2193,7 +2196,7 @@
           <header class="ai-panel-head">
             <div>
               <h4>RAG 检索</h4>
-              <p>向量记忆与可选重排。留空字段将复用 Provider 的 Endpoint / Key。</p>
+              <p>本地向量记忆 / 可选重排，以及外部 WeKnora 文档知识库。留空的嵌入字段将复用 Provider。</p>
             </div>
           </header>
           <div class="ai-panel-body">
@@ -2233,6 +2236,27 @@
                 <div class="ai-card-test">
                   <span class="ai-test-result" id="aiRerankTestResult"></span>
                   <button class="btn sm" id="aiRerankTestBtn" type="button" data-i18n="sre.ai_test_rerank">测试重排模型</button>
+                </div>
+              </div>
+            </div>
+            <div class="ai-card" id="weknoraCard">
+              <div class="ai-card-header" id="weknoraCardHeader">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">WeKnora 文档知识库</span>
+                  <span class="ai-card-desc">外部文档 RAG（手册 / Wiki / PDF）<span class="ai-card-summary" id="weknoraCardSummary"></span></span>
+                </div>
+              </div>
+              <div class="ai-card-body" id="weknoraCardBody">
+                <div class="hint">文档入库与解析在 <a href="https://github.com/Tencent/WeKnora" target="_blank" rel="noopener">WeKnora</a> 完成；本平台仅通过 <code>POST /api/v1/knowledge-search</code>（头 <code>X-API-Key</code>）检索，供 AI 工具 <code>search_knowledge</code> 调用。</div>
+                <div class="field"><label class="switch"><input type="checkbox" id="weknoraEnabled"> <span>启用 WeKnora 文档检索</span></label></div>
+                <div class="field"><label>API URL</label><input type="text" id="weknoraURL" placeholder="http://weknora-host:8080 或 …/api/v1"></div>
+                <div class="field"><label>API Key</label><input type="password" id="weknoraKey" autocomplete="off" placeholder="WeKnora 账户信息页获取的 X-API-Key"></div>
+                <div class="field"><label>默认知识库 ID（可选）</label><input type="text" id="weknoraKBIDs" placeholder="kb-00000001, kb-00000002 — 逗号分隔，可空"></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="disablePublicChatMemory"> <span>敏感模式：对话不写入公共向量记忆</span></label></div>
+                <p class="ai-footnote">开启后聊天/助手闲聊不再进公共库；结案、诊断采纳、避坑沉淀仍会写入。</p>
+                <div class="ai-card-test">
+                  <span class="ai-test-result" id="aiWeKnoraTestResult"></span>
+                  <button class="btn sm" id="aiWeKnoraTestBtn" type="button">测试 WeKnora 检索</button>
                 </div>
               </div>
             </div>

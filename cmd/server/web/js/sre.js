@@ -921,17 +921,24 @@ function applyRAGMetaHint(meta, containerId){
     }
     hits.push(sk);
   }
+  if(Array.isArray(meta.citations) && meta.citations.length){
+    const titles=meta.citations.slice(0,4).map(c=>c.title||c.kind).filter(Boolean);
+    if(titles.length) hits.push("依据 "+titles.join("、")+(meta.citations.length>4?"…":""));
+  }
   let text=tip;
-  if(!text && hits.length) text="📚 "+hits.join(" · ");
+  if(meta.weknora_degraded && meta.weknora_tip){
+    text = text ? (text+" · "+meta.weknora_tip) : meta.weknora_tip;
+  }
+  if(hits.length) text = (text? text+" · ":"") + "📚 "+hits.join(" · ");
   if(!text) return;
   const host=containerId?document.getElementById(containerId):null;
   if(host){
     let bar=host.querySelector(".ai-rag-hint");
     if(!bar){ bar=document.createElement("div"); bar.className="ai-rag-hint"; host.prepend(bar); }
     bar.textContent=text;
-    bar.title=tip||text;
-  } else if(typeof toast==="function" && tip){
-    toast(tip,"ok");
+    bar.title=tip||meta.weknora_tip||text;
+  } else if(typeof toast==="function" && (tip||meta.weknora_tip)){
+    toast(tip||meta.weknora_tip,"ok");
   }
 }
 
@@ -1131,11 +1138,20 @@ function renderDiagnosisChat(){
 }
 async function sendDiagnosisFeedback(idx,helpful){
   if(!window._incDiagId) return;
+  let reason="";
+  if(!helpful){
+    reason=prompt(I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）："),"");
+    if(reason===null) return;
+    reason=(reason||"").trim();
+    if(!reason){ toast(I18N.t("sre.need_unhelpful_reason","差评需填写原因"),"err"); return; }
+  }
   try {
-    await fetch(`${API}/incidents/${window._incDiagId}/diagnosis-feedback`,{
+    const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnosis-feedback`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message_index:idx,helpful})
+      body:JSON.stringify({message_index:idx,helpful,reason})
     });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||I18N.t("sre.feedback_failed","反馈失败"),"err"); return; }
     toast(helpful?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
   } catch(e){ /* ignore */ }
 }
@@ -2167,16 +2183,21 @@ async function loadSkills(){
   const body=$("skillsBody"); if(!body) return;
   body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.loading","加载中…")}</div>`;
   try{
-    const skills=await fetch(`${API}/ai/skills`).then(r=>r.json());
+    const showArchived=!!$("skillsShowArchived")?.checked;
+    const skills=await fetch(`${API}/ai/skills?archived=${showArchived?1:0}`).then(r=>r.json());
     if(!skills||!skills.length){
       body.innerHTML=`<div class="empty-line" style="padding:20px">${I18N.t("sre.skills_empty","还没有技能。随着 AI 诊断 / 剧本执行 / 事件解决 的经验积累，系统每日会自动从中提炼可复用技能；也可点右上角「立即提炼」。")}</div>`;
       return;
     }
     body.innerHTML=`<div class="skill-list">`+skills.map(s=>{
       const succ=s.use_count>0?Math.min(100,Math.round((s.success_count/s.use_count)*100)):0;
-      return `<div class="skill-card">
+      const archived=s.status==="archived";
+      return `<div class="skill-card${archived?" skill-archived":""}">
         <div class="skill-head"><b>${esc(s.name)}</b>
-          <span class="skill-meta">${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):""}</span>
+          <span class="skill-meta">${archived?"已归档 · ":""}${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):""}</span>
+          ${archived
+            ?`<button class="btn sm" data-skill-restore="${s.id}">恢复</button>`
+            :`<button class="btn sm" data-skill-archive="${s.id}">归档</button>`}
           <button class="btn danger sm" data-skill-del="${s.id}">${I18N.t("ui.delete","删除")}</button></div>
         <div class="skill-trigger">${I18N.t("sre.skill_applies","适用：")}${esc(s.trigger||"")}</div>
         <pre class="skill-steps">${esc(s.steps||"")}</pre>
@@ -2186,6 +2207,14 @@ async function loadSkills(){
     body.querySelectorAll("[data-skill-del]").forEach(b=>b.onclick=async()=>{
       if(!confirm(I18N.t("sre.confirm_del_skill","删除该技能？"))) return;
       await fetch(`${API}/ai/skills/${b.dataset.skillDel}`,{method:"DELETE"});
+      loadSkills();
+    });
+    body.querySelectorAll("[data-skill-archive]").forEach(b=>b.onclick=async()=>{
+      await fetch(`${API}/ai/skills/${b.dataset.skillArchive}/archive`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"archived"})});
+      loadSkills();
+    });
+    body.querySelectorAll("[data-skill-restore]").forEach(b=>b.onclick=async()=>{
+      await fetch(`${API}/ai/skills/${b.dataset.skillRestore}/archive`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"active"})});
       loadSkills();
     });
   }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
@@ -2324,6 +2353,7 @@ async function openAIConfig(){
   if(typeof isAdmin==="function" && !isAdmin()){ toast(I18N.t("toast.admin_only","仅管理员可操作"),"err"); return; }
   const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
   const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
+  const wr=$("aiWeKnoraTestResult"); if(wr){ wr.textContent=""; wr.className="ai-test-result"; }
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
     $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
@@ -2335,10 +2365,15 @@ async function openAIConfig(){
     if($("aiCostCurrency")) $("aiCostCurrency").value=c.cost_currency||"CNY";
     if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
+    if($("weknoraEnabled")) $("weknoraEnabled").checked=!!c.weknora_enabled;
+    if($("weknoraURL")) $("weknoraURL").value=c.weknora_url||"";
+    if($("weknoraKey")) $("weknoraKey").value=c.weknora_api_key||"";
+    if($("weknoraKBIDs")) $("weknoraKBIDs").value=c.weknora_knowledge_base_ids||"";
+    if($("disablePublicChatMemory")) $("disablePublicChatMemory").checked=!!c.disable_public_chat_memory;
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
-    updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary();
+    updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary(); updateWeKnoraCardSummary();
     // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
-    ["embedCardBody","rerankCardBody","mcpCardBody"].forEach(id=>{ const el=$(id); if(el) el.style.display=""; });
+    ["embedCardBody","rerankCardBody","mcpCardBody","weknoraCardBody"].forEach(id=>{ const el=$(id); if(el) el.style.display=""; });
     switchAISettingsTab("provider");
     loadAIStats();
   } catch(e){}
@@ -2447,7 +2482,12 @@ async function saveAIConfig(){
     input_price_per_1m:parseFloat($("aiInputPrice")?.value)||0,
     output_price_per_1m:parseFloat($("aiOutputPrice")?.value)||0,
     cost_currency:($("aiCostCurrency")?.value||"CNY").trim()||"CNY",
-    mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim()};
+    mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim(),
+    weknora_enabled:$("weknoraEnabled")?.checked||false,
+    weknora_url:($("weknoraURL")?.value||"").trim(),
+    weknora_api_key:$("weknoraKey")?.value||"",
+    weknora_knowledge_base_ids:($("weknoraKBIDs")?.value||"").trim(),
+    disable_public_chat_memory:$("disablePublicChatMemory")?.checked||false};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
@@ -2532,6 +2572,37 @@ function updateMcpCardSummary(){
   const on=$("mcpEnabled") && $("mcpEnabled").checked;
   el.textContent = on ? "已启用" : "未启用";
   el.className = "ai-card-summary" + (on ? " on" : "");
+}
+function updateWeKnoraCardSummary(){
+  const el=$("weknoraCardSummary"); if(!el) return;
+  const on=$("weknoraEnabled") && $("weknoraEnabled").checked;
+  const url=($("weknoraURL")?.value||"").trim();
+  el.textContent = on ? (url ? "已启用" : "已启用·待填 URL") : "未启用";
+  el.className = "ai-card-summary" + (on ? " on" : "");
+}
+
+// WeKnora knowledge-search 连通性测试
+let _aiWeKnoraTestBusy=false;
+async function testAIWeKnoraConfig(){
+  if(_aiWeKnoraTestBusy) return;
+  const el=$("aiWeKnoraTestResult");
+  _aiWeKnoraTestBusy=true;
+  const testBtn=$("aiWeKnoraTestBtn"); if(testBtn) testBtn.disabled=true;
+  if(el){ el.textContent="WeKnora "+I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
+  const body={
+    weknora_enabled:true,
+    weknora_url:($("weknoraURL")?.value||"").trim(),
+    weknora_api_key:$("weknoraKey")?.value||"",
+    weknora_knowledge_base_ids:($("weknoraKBIDs")?.value||"").trim()
+  };
+  try{
+    const r=await fetch(`${API}/ai/test-weknora`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(j.ok){ el.textContent=`✓ WeKnora 可用 · ${j.latency_ms||0}ms · ${j.preview||""}`; el.className="ai-test-result ok"; el.style.whiteSpace="pre-wrap"; }
+    else { el.textContent="✗ WeKnora "+(j.error||I18N.t("sre.test_failed","测试失败")); el.className="ai-test-result err"; el.style.whiteSpace="pre-wrap"; }
+  }catch(e){ if(el){ el.textContent="✗ WeKnora "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
+  finally{ _aiWeKnoraTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
 // AI 重排(rerank)模型连接测试
@@ -2961,10 +3032,21 @@ function addCopyTool(div,rawText){
   bar.appendChild(rebtn);
   const up=document.createElement("button"); up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
   const down=document.createElement("button"); down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
-  const sendFb=(action)=>{
+  const sendFb=async (action)=>{
     let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
-    fetch(`${API}/ai/assist/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({task:"chat",input:q,answer:rawText,action})}).catch(()=>{});
+    let reason="";
+    if(action==="unhelpful"){
+      reason=prompt(I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）："),"");
+      if(reason===null) return;
+      reason=(reason||"").trim();
+      if(!reason){ if(typeof toast==="function") toast(I18N.t("sre.need_unhelpful_reason","差评需填写原因"),"err"); return; }
+    }
+    try{
+      const r=await fetch(`${API}/ai/assist/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({task:"chat",input:q,answer:rawText,action,reason})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ if(typeof toast==="function") toast(j.error||I18N.t("sre.feedback_failed","反馈失败"),"err"); return; }
+    }catch(e){}
     up.style.display="none"; down.style.display="none";
     if(typeof toast==="function") toast(action==="helpful"?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
   };
@@ -3053,6 +3135,7 @@ safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("dutyReportBtn","click",genDutyReport);
 safeAddEventListener("skillsBtn","click",openSkills);
 safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
+safeAddEventListener("skillsShowArchived","change",loadSkills);
 safeAddEventListener("memoryBtn","click",openMemories);
 safeAddEventListener("memoryKindFilter","change",loadMemories);
 safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
@@ -3065,10 +3148,13 @@ document.querySelectorAll(".ai-nav-item").forEach(btn=>{
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
+safeAddEventListener("aiWeKnoraTestBtn","click",testAIWeKnoraConfig);
 safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
 safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
 safeAddEventListener("mcpCardHeader","click",toggleMcpCard);
 safeAddEventListener("mcpEnabled","change",updateMcpCardSummary);
+safeAddEventListener("weknoraEnabled","change",updateWeKnoraCardSummary);
+safeAddEventListener("weknoraURL","change",updateWeKnoraCardSummary);
 safeAddEventListener("mcpGenTokenBtn","click",()=>{
   const t=$("mcpToken"); if(!t) return;
   t.type="text"; // 明文显示便于复制保存
