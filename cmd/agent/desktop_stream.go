@@ -294,6 +294,13 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		// of consecutive failures (~4s) before giving up.
 		capFails := 0
 		const maxCapFails = 60
+		// Blank-frame diagnostic: if capture SUCCEEDS but every frame is pure black
+		// (a non-rendering target desktop — headless host, nobody logged in, or a
+		// disconnected console), warn the operator ONCE with actionable guidance
+		// instead of leaving them staring at an unexplained black screen.
+		blankFrames := 0
+		blankWarned := false
+		const blankWarnAt = 40
 		for !stop.Load() {
 			qMu.Lock()
 			cq := q
@@ -373,6 +380,20 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				return
 			}
 			capFails = 0
+			if !blankWarned {
+				if isLikelyBlank(img) {
+					if blankFrames++; blankFrames >= blankWarnAt {
+						blankWarned = true
+						msg, _ := json.Marshal(map[string]string{
+							"error": "画面为纯黑：目标会话未渲染桌面（无显示器的服务器 / 无人登录 / 控制台会话已断开）。请通过 RDP 登录该主机后重试，或为无头服务器安装虚拟显示驱动。 (Captured desktop is all black: the target session isn't rendering — headless host, nobody logged in, or a disconnected console. Log in via RDP and retry, or install a virtual display driver.)",
+							"level": "warn",
+						})
+						_ = writeTx(deskTxFrame('E', msg))
+					}
+				} else {
+					blankFrames = 0
+				}
+			}
 			scaled := scaleImage(img, cq.Scale)
 			var jbuf bytes.Buffer
 			qual := cq.Quality
@@ -461,6 +482,36 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	<-reqDone
 	closeAll()
 	slog.Info("远程桌面会话结束", "session", sid)
+}
+
+// isLikelyBlank reports whether a captured frame is entirely (near) black. On
+// Windows a successful BitBlt of a non-rendering desktop returns pure #000000, so
+// an all-black frame indicates a dead/headless target session rather than a
+// legitimately dark screen (which almost always has a non-black taskbar/wallpaper).
+// Samples a sparse grid so the check is cheap.
+func isLikelyBlank(img image.Image) bool {
+	b := img.Bounds()
+	if b.Dx() < 8 || b.Dy() < 8 {
+		return false
+	}
+	const steps = 32
+	sx := b.Dx() / steps
+	sy := b.Dy() / steps
+	if sx < 1 {
+		sx = 1
+	}
+	if sy < 1 {
+		sy = 1
+	}
+	for y := b.Min.Y; y < b.Max.Y; y += sy {
+		for x := b.Min.X; x < b.Max.X; x += sx {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			if r>>8 > 8 || g>>8 > 8 || bl>>8 > 8 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (a *Agent) deskSendError(server, sid, msg string) {

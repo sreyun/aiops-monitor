@@ -20,12 +20,16 @@ import (
 var (
 	modKernel32Svc = syscall.NewLazyDLL("kernel32.dll")
 	modAdvapi32Svc = syscall.NewLazyDLL("advapi32.dll")
+	modWtsapi32Svc = syscall.NewLazyDLL("wtsapi32.dll")
 
 	procWTSGetActiveConsoleSessionId = modKernel32Svc.NewProc("WTSGetActiveConsoleSessionId")
 	procGetCurrentProcessSvc         = modKernel32Svc.NewProc("GetCurrentProcess")
 	procCloseHandleSvc               = modKernel32Svc.NewProc("CloseHandle")
 	procTerminateProcessSvc          = modKernel32Svc.NewProc("TerminateProcess")
 	procWaitForSingleObjectSvc       = modKernel32Svc.NewProc("WaitForSingleObject")
+
+	procWTSEnumerateSessionsWSvc = modWtsapi32Svc.NewProc("WTSEnumerateSessionsW")
+	procWTSFreeMemorySvc         = modWtsapi32Svc.NewProc("WTSFreeMemory")
 
 	procOpenProcessTokenSvc     = modAdvapi32Svc.NewProc("OpenProcessToken")
 	procDuplicateTokenExSvc     = modAdvapi32Svc.NewProc("DuplicateTokenEx")
@@ -136,6 +140,63 @@ type processInformationW struct {
 func activeConsoleSession() uint32 {
 	r, _, _ := procWTSGetActiveConsoleSessionId.Call()
 	return uint32(r)
+}
+
+type wtsSessionInfoW struct {
+	SessionID      uint32
+	WinStationName *uint16
+	State          uint32
+}
+
+const (
+	wtsActiveState       = 0 // WTSActive — connected + interactive
+	wtsDisconnectedState = 4 // WTSDisconnected — RDP window closed but desktop still renders
+)
+
+// activeUserSession returns the session whose desktop is actually being rendered,
+// which is what remote-desktop capture must target. The physical console
+// (WTSGetActiveConsoleSessionId) is the WRONG target on a server: when you RDP in,
+// the active desktop moves to your RDP session and the console session stops
+// compositing — capturing it then yields solid BLACK frames even though BitBlt
+// "succeeds". We therefore prefer, in order: an Active (connected) session, then a
+// Disconnected RDP session (its virtual desktop keeps rendering), then the console.
+// Session 0 (services, no desktop) is always skipped.
+func activeUserSession() uint32 {
+	var pInfo unsafe.Pointer
+	var count uint32
+	r, _, _ := procWTSEnumerateSessionsWSvc.Call(0, 0, 1,
+		uintptr(unsafe.Pointer(&pInfo)), uintptr(unsafe.Pointer(&count)))
+	if r == 0 || pInfo == nil {
+		return activeConsoleSession()
+	}
+	defer procWTSFreeMemorySvc.Call(uintptr(pInfo))
+
+	size := unsafe.Sizeof(wtsSessionInfoW{})
+	active := uint32(invalidSession)
+	disconnected := uint32(invalidSession)
+	for i := uint32(0); i < count; i++ {
+		si := (*wtsSessionInfoW)(unsafe.Add(pInfo, uintptr(i)*size))
+		if si.SessionID == 0 {
+			continue // Session 0: services, no interactive desktop
+		}
+		switch si.State {
+		case wtsActiveState:
+			if active == invalidSession {
+				active = si.SessionID
+			}
+		case wtsDisconnectedState:
+			if disconnected == invalidSession {
+				disconnected = si.SessionID
+			}
+		}
+	}
+	if active != invalidSession {
+		return active
+	}
+	if disconnected != invalidSession {
+		return disconnected
+	}
+	return activeConsoleSession()
 }
 
 // deskWorkerProc is a spawned worker process bound to a specific session.

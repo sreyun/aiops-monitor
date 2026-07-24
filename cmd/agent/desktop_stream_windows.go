@@ -44,6 +44,7 @@ var (
 	procSetThreadDesktop          = modUser32.NewProc("SetThreadDesktop")
 	procCloseDesktop              = modUser32.NewProc("CloseDesktop")
 	procGetUserObjectInformationW = modUser32.NewProc("GetUserObjectInformationW")
+	procSetProcessDPIAware        = modUser32.NewProc("SetProcessDPIAware")
 )
 
 const (
@@ -80,6 +81,10 @@ func desktopNameOf(h uintptr) string {
 func runDesktopWorker(agent *Agent) error {
 	deskWorkerMode = true
 	deskFollowSecureDesktop = true
+	// Become DPI-aware so GetSystemMetrics / BitBlt see real (unscaled) pixels. A
+	// DPI-virtualized process on a scaled display captures only the top-left region
+	// and letterboxes the rest black.
+	_, _, _ = procSetProcessDPIAware.Call()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {

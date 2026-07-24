@@ -344,7 +344,10 @@ func svcRunSupervisor(stop <-chan struct{}) {
 	defer ticker.Stop()
 
 	for {
-		active := activeConsoleSession()
+		// Target the session whose desktop is actually rendered (an RDP session
+		// when someone is connected), not just the physical console — capturing a
+		// disconnected console session produces black frames.
+		active := activeUserSession()
 		if active != invalidSession && active != 0 {
 			if worker == nil || !worker.alive() || worker.session != active {
 				if worker != nil {
