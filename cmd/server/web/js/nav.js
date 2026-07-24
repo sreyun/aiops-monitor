@@ -804,20 +804,23 @@ safeAddEventListener("loginForm", "submit", async e => {
     let fetched = false; // fetch 是否已成功返回（用于区分"网络失败" vs "登录后处理出错"）
     try {
       const codeEl = $("loginCode");
+      // 去掉自动填充可能带入的空格/短横线，只提交 6 位数字
+      const totpCode = codeEl ? String(codeEl.value || "").replace(/\D/g, "").slice(0, 6) : "";
+      if (codeEl && totpCode) codeEl.value = totpCode;
       const r = await fetchWithTimeout(`${API}/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: $("loginUser").value.trim(),
           password: $("loginPass").value,
           login_type: LOGIN_TYPE,
-          code: codeEl ? codeEl.value.trim() : ""
+          code: totpCode
         })
       }, 15000);
       fetched = true; // 请求已成功返回——之后任何错误都不是"网络连接失败"
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.mfa_required) {
         const f = $("loginCodeField"); if (f) f.style.display = "";
-        if (codeEl) codeEl.focus();
+        if (codeEl) { codeEl.value = ""; codeEl.focus(); }
         if (loginErrEl) loginErrEl.textContent = I18N.t("mfa.login_totp");
       }
       else if (r.ok && j.require_mfa_setup) {
@@ -856,13 +859,23 @@ safeAddEventListener("loginForm", "submit", async e => {
         startApp();
       }
       else {
+        // MFA 失败：清空口令框，避免用户用同一码反复提交触发「已使用」假阴性
+        if (j.code === "totp_replay" || j.code === "totp_invalid" || (codeEl && codeEl.value)) {
+          if (codeEl) { codeEl.value = ""; setTimeout(() => codeEl.focus(), 30); }
+        }
         if (loginErrEl) loginErrEl.textContent = j.error || I18N.t("toast.login_failed");
       }
     } catch (err) {
       if (!fetched) {
         // 网络层失败（fetch 未成功返回）：区分超时 vs 一般网络错误。
+        // 超时后口令可能已在服务端消费，清空输入避免立刻用同一码重试。
+        const codeEl = $("loginCode");
+        if (codeEl && codeEl.value) {
+          codeEl.value = "";
+          setTimeout(() => codeEl.focus(), 30);
+        }
         const msg = err.name === "AbortError"
-          ? I18N.t("toast.login_timeout")
+          ? I18N.t("toast.login_timeout_mfa")
           : I18N.t("toast.login_network_error");
         if (loginErrEl) loginErrEl.textContent = msg;
       } else {

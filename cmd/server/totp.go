@@ -54,10 +54,29 @@ func totpAt(secret string, unix int64) string {
 	return fmt.Sprintf("%0*d", totpDigits, bin%1_000_000)
 }
 
+// normalizeTOTPCode strips spaces/dashes from autofill paste and keeps digits only.
+func normalizeTOTPCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(totpDigits)
+	for _, r := range code {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			if b.Len() >= totpDigits {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
 // totpVerify checks code for the current 30s step and the two adjacent steps
 // (±1) to tolerate clock skew between server and phone. Constant-time compare.
 func totpVerify(secret, code string) bool {
-	code = strings.TrimSpace(code)
+	code = normalizeTOTPCode(code)
 	if secret == "" || len(code) != totpDigits {
 		return false
 	}
@@ -75,7 +94,7 @@ func totpVerify(secret, code string) bool {
 // matched time-step index (unix/period) so callers can enforce single-use
 // (record the consumed step per user). ok is false if no step matched.
 func totpMatchStep(secret, code string) (step int64, ok bool) {
-	code = strings.TrimSpace(code)
+	code = normalizeTOTPCode(code)
 	if secret == "" || len(code) != totpDigits {
 		return 0, false
 	}

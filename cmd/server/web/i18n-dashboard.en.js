@@ -413,6 +413,7 @@ window.DICT_EN = {
   "toast.read_failed2": "Read failed: ",
   "toast.login_failed2": "Login failed: ",
   "toast.login_timeout": "Request timed out, check network and retry",
+  "toast.login_timeout_mfa": "Request timed out. If 2FA is enabled, wait for a fresh authenticator code before retrying",
   "toast.login_network_error": "Network connection failed, check network settings and retry",
   "toast.network_check_failed": "Network connection abnormal, check network and refresh",
   "toast.trigger_failed2": "Trigger failed: ",

@@ -259,17 +259,27 @@ func (a *Auth) loginAccountReset(user string) {
 	a.limMu.Unlock()
 }
 
-// verifyTOTPOnce verifies a TOTP code AND enforces single-use: a code (identified
-// by its 30s time-step) accepted once for a user can't be replayed within the
-// ±1-step skew window. Blunts reuse of a phished/observed code across login,
-// account recovery and terminal-password changes.
-func (a *Auth) verifyTOTPOnce(user, secret, code string) bool {
+// totpResult is the outcome of a single-use TOTP check. Callers MUST distinguish
+// Replay from Invalid — replaying a still-visible authenticator code is a common
+// UX path and must not be reported as "wrong code" or count toward lockout.
+type totpResult int
+
+const (
+	totpOK totpResult = iota
+	totpInvalid
+	totpReplay
+)
+
+// verifyAndConsumeTOTP verifies a TOTP code and enforces single-use: a code
+// (identified by its 30s time-step) accepted once for a user can't be replayed
+// within the ±1-step skew window. Distinguishes invalid vs already-used.
+func (a *Auth) verifyAndConsumeTOTP(user, secret, code string) totpResult {
 	step, ok := totpMatchStep(secret, code)
 	if !ok {
-		return false
+		return totpInvalid
 	}
 	now := time.Now().Unix()
-	key := strings.ToLower(user) + ":" + strconv.FormatInt(step, 10)
+	key := strings.ToLower(strings.TrimSpace(user)) + ":" + strconv.FormatInt(step, 10)
 	a.totpMu.Lock()
 	defer a.totpMu.Unlock()
 	for k, exp := range a.totpUsed { // prune expired entries
@@ -278,10 +288,67 @@ func (a *Auth) verifyTOTPOnce(user, secret, code string) bool {
 		}
 	}
 	if _, used := a.totpUsed[key]; used {
-		return false // replay within the skew window
+		return totpReplay
 	}
 	a.totpUsed[key] = now + 2*totpPeriod
-	return true
+	return totpOK
+}
+
+// checkTOTP validates the code and reports replay without consuming the step.
+// Use with consumeTOTPStep when other factors must succeed first (e.g. recovery).
+func (a *Auth) checkTOTP(user, secret, code string) (totpResult, int64) {
+	step, ok := totpMatchStep(secret, code)
+	if !ok {
+		return totpInvalid, 0
+	}
+	now := time.Now().Unix()
+	key := strings.ToLower(strings.TrimSpace(user)) + ":" + strconv.FormatInt(step, 10)
+	a.totpMu.Lock()
+	defer a.totpMu.Unlock()
+	for k, exp := range a.totpUsed {
+		if now > exp {
+			delete(a.totpUsed, k)
+		}
+	}
+	if _, used := a.totpUsed[key]; used {
+		return totpReplay, step
+	}
+	return totpOK, step
+}
+
+// consumeTOTPStep marks a previously-checked step as used. Returns totpReplay if
+// another request consumed it in the meantime.
+func (a *Auth) consumeTOTPStep(user string, step int64) totpResult {
+	now := time.Now().Unix()
+	key := strings.ToLower(strings.TrimSpace(user)) + ":" + strconv.FormatInt(step, 10)
+	a.totpMu.Lock()
+	defer a.totpMu.Unlock()
+	for k, exp := range a.totpUsed {
+		if now > exp {
+			delete(a.totpUsed, k)
+		}
+	}
+	if _, used := a.totpUsed[key]; used {
+		return totpReplay
+	}
+	a.totpUsed[key] = now + 2*totpPeriod
+	return totpOK
+}
+
+// writeTOTPFailure writes a TOTP failure response with a distinct machine code so
+// clients can clear the input and show the right hint (replay vs wrong code).
+func (s *Server) writeTOTPFailure(w http.ResponseWriter, r *http.Request, res totpResult, status int) {
+	if res == totpReplay {
+		writeJSON(w, status, map[string]string{
+			"error": Tr(r, "auth.totp_replay"),
+			"code":  "totp_replay",
+		})
+		return
+	}
+	writeJSON(w, status, map[string]string{
+		"error": Tr(r, "auth.totp_error"),
+		"code":  "totp_invalid",
+	})
 }
 
 func newSessionToken() string {
