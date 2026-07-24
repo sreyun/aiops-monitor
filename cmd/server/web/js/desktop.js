@@ -1,134 +1,539 @@
-/* ---------- 远程桌面（RDP / VNC 反向隧道 + 本机客户端） ---------- */
-let DESKTOP_AUTH_PENDING = null; // unused; action lives on TERM_AUTH_PENDING
+/* ---------- 远程桌面 P2：推流 · 多屏 · 剪贴板 · H264 · 拖拽 · 回放 ---------- */
+let DESK_WS = null;
+let DESK_HOST = null;
+let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false };
+let DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
+let DESK_DOWNLOAD = null;
+let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video }
 
 function openDesktop(id, name) {
-  if (!DESKTOP_ENABLED) {
-    toast(I18N.t("desktop.disabled"), "err");
-    return;
-  }
+  if (!DESKTOP_ENABLED) { toast(I18N.t("desktop.disabled"), "err"); return; }
   if (TERM_AUTH_CHECKING) return;
-  // Reuse terminal secondary auth; branch in proceedToTerminal via action flag.
   TERM_AUTH_PENDING = { id, name, action: "desktop" };
   checkTerminalAccess();
 }
 
 async function doOpenDesktop(id, name) {
   const mask = $("desktopMask");
-  const body = $("desktopBody");
   const title = $("desktopTitle");
   if (title) title.textContent = (name || id) + " · " + I18N.t("desktop.title");
-  if (body) body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading")}</div>`;
   if (mask) mask.classList.add("show");
+  renderDesktopShell(id, name);
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: "{}"
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: "{}"
     });
     const data = await r.json().catch(() => ({}));
     if (r.status === 403 && data.code === "terminal_verify_required") {
-      if (mask) mask.classList.remove("show");
+      closeDesktopMask();
       TERM_AUTH_PENDING = { id, name, action: "desktop" };
       TERM_AUTH_VERIFIED = false;
       showTermVerify();
       return;
     }
-    if (!r.ok) {
-      if (body) body.innerHTML = `<div class="empty-line err">${esc(data.error || I18N.t("toast.update_failed2"))}</div>`;
-      return;
-    }
-    renderDesktopPanel(data);
-  } catch (e) {
-    if (body) body.innerHTML = `<div class="empty-line err">${esc(String(e))}</div>`;
-  }
+    if (!r.ok) { setDesktopStatus(esc(data.error || I18N.t("toast.update_failed2")), true); return; }
+    connectDesktopWS(id, name);
+  } catch (e) { setDesktopStatus(esc(String(e)), true); }
 }
 
-function renderDesktopPanel(d) {
+function renderDesktopShell(id, name) {
   const body = $("desktopBody");
   if (!body) return;
-  const proto = (d.protocol || "vnc").toUpperCase();
-  const listenHint = d.service_listening
-    ? I18N.t("desktop.service_up")
-    : I18N.t("desktop.service_maybe_down");
-  const steps = d.protocol === "rdp"
-    ? `<ol class="desktop-steps">
-        <li>${I18N.t("desktop.step_rdp_1")}</li>
-        <li>${I18N.t("desktop.step_rdp_2")}</li>
-        <li>${I18N.t("desktop.step_rdp_3")}</li>
-      </ol>`
-    : `<ol class="desktop-steps">
-        <li>${I18N.t("desktop.step_vnc_1")}</li>
-        <li>${I18N.t("desktop.step_vnc_2")}</li>
-        <li>${I18N.t("desktop.step_vnc_3")}</li>
-      </ol>`;
-  const actions = d.protocol === "rdp"
-    ? `<button class="btn primary" type="button" data-desktop-act="rdp">${I18N.t("desktop.download_rdp")}</button>
-       <button class="btn" type="button" data-desktop-act="copy">${I18N.t("desktop.copy_addr")}</button>`
-    : `<button class="btn primary" type="button" data-desktop-act="vnc">${I18N.t("desktop.open_vnc")}</button>
-       <button class="btn" type="button" data-desktop-act="copy">${I18N.t("desktop.copy_addr")}</button>`;
   body.innerHTML = `
-    <div class="desktop-panel">
-      <div class="desktop-badge">${esc(proto)} · :${d.target_port} → ${esc(d.connect_addr || "")}</div>
-      <div class="desktop-meta">
-        <div><span class="k">${I18N.t("desktop.connect_addr")}</span><code class="mono" id="desktopAddr">${esc(d.connect_addr || "")}</code></div>
-        <div><span class="k">${I18N.t("desktop.listen_addr")}</span><code class="mono">${esc(d.listen_addr || "")}</code></div>
-        <div class="desktop-hint">${esc(listenHint)}</div>
+    <div class="desk-layout">
+      <div class="desk-main">
+        <div class="desk-toolbar">
+          <span class="desk-status" id="deskStatus">${esc(I18N.t("desktop.connecting"))}</span>
+          <div class="desk-tools">
+            <label class="desk-q-label">${esc(I18N.t("desktop.monitor"))}
+              <select id="deskMonitor"><option value="0">—</option></select>
+            </label>
+            <label class="desk-q-label">${esc(I18N.t("desktop.quality"))}
+              <select id="deskQuality">
+                <option value="fast">${esc(I18N.t("desktop.q_fast"))}</option>
+                <option value="balanced" selected>${esc(I18N.t("desktop.q_balanced"))}</option>
+                <option value="clear">${esc(I18N.t("desktop.q_clear"))}</option>
+              </select>
+            </label>
+            <label class="desk-q-label">${esc(I18N.t("desktop.codec"))}
+              <select id="deskCodec">
+                <option value="jpeg" selected>JPEG</option>
+                <option value="h264">H.264</option>
+              </select>
+            </label>
+            <button type="button" class="btn sm" id="deskClipSend" title="${esc(I18N.t("desktop.clip_send"))}">📋↑</button>
+            <button type="button" class="btn sm" id="deskFullscreen" title="${esc(I18N.t("desktop.fullscreen"))}">⛶</button>
+            <button type="button" class="btn sm" id="deskSessions">${esc(I18N.t("desktop.sessions"))}</button>
+            <button type="button" class="btn sm" id="deskDisconnect">${esc(I18N.t("desktop.disconnect"))}</button>
+          </div>
+        </div>
+        <div class="desk-stage" id="deskStage">
+          <canvas id="deskCanvas" tabindex="0"></canvas>
+          <video id="deskVideo" playsinline autoplay muted style="display:none;max-width:100%;max-height:100%;background:#000"></video>
+          <div class="desk-drop-hint" id="deskDropHint">${esc(I18N.t("desktop.drop_hint"))}</div>
+        </div>
       </div>
-      ${steps}
-      <div class="desktop-actions">${actions}
-        <button class="btn" type="button" data-desktop-act="close-fwd" title="${I18N.t("desktop.close_fwd")}">${I18N.t("desktop.close_fwd")}</button>
+      <aside class="desk-side" id="deskSide">
+        <div class="desk-side-title">${esc(I18N.t("desktop.files"))}</div>
+        <div class="desk-side-hint">${esc(I18N.t("desktop.files_hint"))}</div>
+        <label class="desk-field">${esc(I18N.t("desktop.upload_path"))}
+          <input type="text" id="deskUploadPath" class="desk-input" placeholder="C:\\\\Temp\\\\ 或 /tmp/" autocomplete="off">
+        </label>
+        <div class="desk-row">
+          <input type="file" id="deskFileInput" hidden>
+          <button type="button" class="btn primary sm" id="deskUploadBtn">${esc(I18N.t("desktop.upload"))}</button>
+        </div>
+        <label class="desk-field">${esc(I18N.t("desktop.download_path"))}
+          <input type="text" id="deskDownloadPath" class="desk-input" placeholder="${esc(I18N.t("desktop.download_ph"))}" autocomplete="off">
+        </label>
+        <button type="button" class="btn sm" id="deskDownloadBtn">${esc(I18N.t("desktop.download"))}</button>
+        <div class="desk-xfer" id="deskXferLog"></div>
+        <div class="desk-side-title" style="margin-top:12px">${esc(I18N.t("desktop.clipboard"))}</div>
+        <textarea id="deskClipBox" class="desk-clip" rows="4" placeholder="${esc(I18N.t("desktop.clip_ph"))}"></textarea>
+        <button type="button" class="btn sm" id="deskClipApply">${esc(I18N.t("desktop.clip_to_remote"))}</button>
+      </aside>
+    </div>
+    <div class="desk-replay" id="deskReplayPane" hidden>
+      <div class="desk-replay-bar">
+        <span id="deskReplayTitle">${esc(I18N.t("desktop.sessions"))}</span>
+        <button type="button" class="btn sm" id="deskReplayClose">${esc(I18N.t("ui.close","关闭"))}</button>
       </div>
-      <div class="desktop-note">${I18N.t("desktop.note")}</div>
+      <div id="deskSessionsList" class="desk-sessions-list"></div>
+      <canvas id="deskReplayCanvas" style="max-width:100%;background:#000;display:none"></canvas>
     </div>`;
-  body._desktopData = d;
-  if (!body.dataset.bound) {
-    body.dataset.bound = "1";
-    body.addEventListener("click", onDesktopAction);
+  if (!body.dataset.deskBound) {
+    body.dataset.deskBound = "1";
+    body.addEventListener("click", onDesktopUIClick);
+    body.addEventListener("change", onDesktopUIChange);
+  }
+  const stage = $("deskStage");
+  if (stage && !stage.dataset.dnd) {
+    stage.dataset.dnd = "1";
+    stage.addEventListener("dragover", e => { e.preventDefault(); stage.classList.add("drag"); });
+    stage.addEventListener("dragleave", () => stage.classList.remove("drag"));
+    stage.addEventListener("drop", onDeskDrop);
+  }
+  DESK_HOST = { id, name };
+}
+
+function setDesktopStatus(msg, isErr) {
+  const el = $("deskStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle("err", !!isErr);
+}
+
+function qualityPreset(name) {
+  if (name === "fast") return { scale: 0.35, quality: 40, fps: 10 };
+  if (name === "clear") return { scale: 0.75, quality: 75, fps: 6 };
+  return { scale: 0.5, quality: 55, fps: 8 };
+}
+
+function sendDeskQuality() {
+  if (!DESK_WS || DESK_WS.readyState !== 1) return;
+  const payload = new TextEncoder().encode(JSON.stringify(DESK_QUALITY));
+  const buf = new Uint8Array(1 + payload.length);
+  buf[0] = "Q".charCodeAt(0);
+  buf.set(payload, 1);
+  DESK_WS.send(buf);
+}
+
+function fillMonitorSelect(mons) {
+  const sel = $("deskMonitor");
+  if (!sel) return;
+  const cur = String(DESK_QUALITY.monitor || 0);
+  sel.innerHTML = (mons || []).map(m =>
+    `<option value="${m.id}">${esc(m.name || ("#" + m.id))} (${m.width}×${m.height})${m.primary ? " ★" : ""}</option>`
+  ).join("") || `<option value="0">—</option>`;
+  if (mons && mons.length && (!DESK_QUALITY.monitor || !mons.some(m => m.id === DESK_QUALITY.monitor))) {
+    const p = mons.find(m => m.primary) || mons[0];
+    DESK_QUALITY.monitor = p.id;
+  }
+  sel.value = String(DESK_QUALITY.monitor || (mons[0] && mons[0].id) || 0);
+}
+
+function connectDesktopWS(id, name) {
+  closeDesktopWS();
+  setDesktopStatus(I18N.t("desktop.connecting"), false);
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/desktop/ws`);
+  ws.binaryType = "arraybuffer";
+  DESK_WS = ws;
+  const canvas = $("deskCanvas");
+  const video = $("deskVideo");
+  const ctx = canvas ? canvas.getContext("2d") : null;
+  let imgURL = null;
+
+  ws.onopen = () => {
+    setDesktopStatus(I18N.t("desktop.connected"), false);
+    sendDeskQuality();
+    if (canvas) { canvas.focus(); bindDesktopInput(canvas); }
+  };
+  ws.onclose = () => { setDesktopStatus(I18N.t("desktop.disconnected"), true); unbindDesktopInput(canvas); closeDeskMSE(); };
+  ws.onerror = () => setDesktopStatus(I18N.t("desktop.error"), true);
+  ws.onmessage = (ev) => {
+    if (!(ev.data instanceof ArrayBuffer) || ev.data.byteLength < 1) return;
+    const u8 = new Uint8Array(ev.data);
+    const typ = String.fromCharCode(u8[0]);
+    const payload = u8.subarray(1);
+    if (typ === "S") {
+      try {
+        const meta = JSON.parse(new TextDecoder().decode(payload));
+        DESK_META.w = meta.w || DESK_META.w;
+        DESK_META.h = meta.h || DESK_META.h;
+        DESK_META.h264 = !!meta.h264;
+        if (Array.isArray(meta.monitors)) {
+          DESK_META.monitors = meta.monitors;
+          fillMonitorSelect(meta.monitors);
+        }
+        const codecSel = $("deskCodec");
+        if (codecSel) codecSel.disabled = !DESK_META.h264 && DESK_QUALITY.codec === "jpeg";
+        if (meta.os === "darwin" && meta.error) setDesktopStatus(meta.error, true);
+      } catch (e) {}
+      return;
+    }
+    if (typ === "K" && ctx && canvas) {
+      showDeskCanvas(true);
+      const blob = new Blob([payload], { type: "image/jpeg" });
+      if (imgURL) URL.revokeObjectURL(imgURL);
+      imgURL = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        if (canvas.width !== img.width || canvas.height !== img.height) {
+          canvas.width = img.width; canvas.height = img.height;
+        }
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(imgURL); imgURL = null;
+      };
+      img.src = imgURL;
+      return;
+    }
+    if (typ === "H") {
+      showDeskCanvas(false);
+      appendDeskH264(payload);
+      return;
+    }
+    if (typ === "C") {
+      try {
+        const j = JSON.parse(new TextDecoder().decode(payload));
+        const box = $("deskClipBox");
+        if (box && j.text != null) box.value = j.text;
+        if (j.text && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(j.text).catch(() => {});
+        }
+      } catch (e) {}
+      return;
+    }
+    if (typ === "F") { handleDeskFileInfo(payload); return; }
+    if (typ === "D") { if (DESK_DOWNLOAD) DESK_DOWNLOAD.chunks.push(payload.slice(0)); return; }
+    if (typ === "E") {
+      if (payload.length > 0) {
+        try {
+          const j = JSON.parse(new TextDecoder().decode(payload));
+          if (j.error) { setDesktopStatus(j.error, true); return; }
+        } catch (e) {
+          setDesktopStatus(new TextDecoder().decode(payload), true); return;
+        }
+      }
+      if (DESK_DOWNLOAD) finishDeskDownload();
+    }
+  };
+}
+
+function showDeskCanvas(useCanvas) {
+  const canvas = $("deskCanvas");
+  const video = $("deskVideo");
+  if (canvas) canvas.style.display = useCanvas ? "block" : "none";
+  if (video) video.style.display = useCanvas ? "none" : "block";
+}
+
+function closeDeskMSE() {
+  if (DESK_MSE && DESK_MSE.mediaSource && DESK_MSE.mediaSource.readyState === "open") {
+    try { DESK_MSE.mediaSource.endOfStream(); } catch (e) {}
+  }
+  DESK_MSE = null;
+  const video = $("deskVideo");
+  if (video) { video.removeAttribute("src"); video.load(); }
+}
+
+function appendDeskH264(chunk) {
+  const video = $("deskVideo");
+  if (!video || typeof MediaSource === "undefined") return;
+  if (!DESK_MSE) {
+    const ms = new MediaSource();
+    DESK_MSE = { mediaSource: ms, sourceBuffer: null, queue: [], video };
+    video.src = URL.createObjectURL(ms);
+    ms.addEventListener("sourceopen", () => {
+      try {
+        const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
+        DESK_MSE.sourceBuffer = sb;
+        sb.mode = "sequence";
+        sb.addEventListener("updateend", flushDeskMSE);
+        flushDeskMSE();
+      } catch (e) {
+        setDesktopStatus(I18N.t("desktop.h264_unsupported") + ": " + e, true);
+        DESK_QUALITY.codec = "jpeg";
+        const cs = $("deskCodec"); if (cs) cs.value = "jpeg";
+        sendDeskQuality();
+      }
+    });
+  }
+  DESK_MSE.queue.push(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
+  flushDeskMSE();
+}
+
+function flushDeskMSE() {
+  const m = DESK_MSE;
+  if (!m || !m.sourceBuffer || m.sourceBuffer.updating || !m.queue.length) return;
+  try { m.sourceBuffer.appendBuffer(m.queue.shift()); } catch (e) { m.queue = []; }
+}
+
+function handleDeskFileInfo(payload) {
+  let meta = {};
+  try { meta = JSON.parse(new TextDecoder().decode(payload)); } catch (e) { return; }
+  const log = $("deskXferLog");
+  if (meta.type === "upload_ack") {
+    const ok = meta.status === "ok";
+    toast((ok ? I18N.t("desktop.upload_ok") : I18N.t("desktop.upload_fail")) + (meta.filename ? ": " + meta.filename : "") + (meta.message ? " — " + meta.message : ""), ok ? "ok" : "err");
+    if (log) log.textContent = (ok ? "↑ OK " : "↑ ERR ") + (meta.filename || "");
+    return;
+  }
+  if (meta.type === "download_meta" || meta.type === "download_start") {
+    DESK_DOWNLOAD = { filename: meta.filename || "download.bin", size: meta.size || 0, chunks: [] };
+    toast(I18N.t("desktop.downloading") + ": " + DESK_DOWNLOAD.filename, "info");
+    if (log) log.textContent = "↓ " + DESK_DOWNLOAD.filename;
+    return;
+  }
+  if (meta.type === "download_error") {
+    toast(I18N.t("desktop.download_fail") + (meta.message ? ": " + meta.message : ""), "err");
+    DESK_DOWNLOAD = null;
   }
 }
 
-async function onDesktopAction(e) {
-  const btn = e.target.closest("[data-desktop-act]");
-  if (!btn) return;
-  const act = btn.getAttribute("data-desktop-act");
-  const d = $("desktopBody") && $("desktopBody")._desktopData;
-  if (!d) return;
-  if (act === "copy") {
-    copyToClipboard(d.connect_addr || "").then(
-      () => toast(I18N.t("toast.copied"), "ok"),
-      () => toast(I18N.t("toast.copy_failed"), "err")
-    );
-    return;
+function finishDeskDownload() {
+  const dl = DESK_DOWNLOAD; DESK_DOWNLOAD = null;
+  if (!dl) return;
+  const blob = new Blob(dl.chunks);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = dl.filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast(I18N.t("desktop.download_ok") + ": " + dl.filename, "ok");
+}
+
+let _deskInputBound = false;
+function bindDesktopInput(canvas) {
+  if (!canvas || _deskInputBound) return;
+  _deskInputBound = true;
+  canvas.addEventListener("mousemove", onDeskMouseMove);
+  canvas.addEventListener("mousedown", onDeskMouseDown);
+  canvas.addEventListener("mouseup", onDeskMouseUp);
+  canvas.addEventListener("contextmenu", onDeskContext);
+  canvas.addEventListener("wheel", onDeskWheel, { passive: false });
+  canvas.addEventListener("keydown", onDeskKeyDown);
+  canvas.addEventListener("keyup", onDeskKeyUp);
+}
+function unbindDesktopInput(canvas) {
+  if (!canvas || !_deskInputBound) return;
+  _deskInputBound = false;
+  canvas.removeEventListener("mousemove", onDeskMouseMove);
+  canvas.removeEventListener("mousedown", onDeskMouseDown);
+  canvas.removeEventListener("mouseup", onDeskMouseUp);
+  canvas.removeEventListener("contextmenu", onDeskContext);
+  canvas.removeEventListener("wheel", onDeskWheel);
+  canvas.removeEventListener("keydown", onDeskKeyDown);
+  canvas.removeEventListener("keyup", onDeskKeyUp);
+}
+
+function deskNormXY(ev, el) {
+  const rect = el.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) / rect.width;
+  const y = (ev.clientY - rect.top) / rect.height;
+  return {
+    x: Math.min(1, Math.max(0, x)) * (DESK_META.w || rect.width),
+    y: Math.min(1, Math.max(0, y)) * (DESK_META.h || rect.height)
+  };
+}
+function deskSendJSON(typ, obj) {
+  if (!DESK_WS || DESK_WS.readyState !== 1) return;
+  const payload = new TextEncoder().encode(JSON.stringify(obj));
+  const buf = new Uint8Array(1 + payload.length);
+  buf[0] = typ.charCodeAt(0); buf.set(payload, 1); DESK_WS.send(buf);
+}
+let _deskLastMove = 0;
+function onDeskMouseMove(ev) {
+  const now = Date.now(); if (now - _deskLastMove < 33) return; _deskLastMove = now;
+  const p = deskNormXY(ev, ev.currentTarget);
+  deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0 });
+}
+function onDeskMouseDown(ev) {
+  ev.preventDefault(); ev.currentTarget.focus();
+  const p = deskNormXY(ev, ev.currentTarget);
+  const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
+  deskSendJSON("M", { x: p.x, y: p.y, action: "down", btn });
+}
+function onDeskMouseUp(ev) {
+  ev.preventDefault();
+  const p = deskNormXY(ev, ev.currentTarget);
+  const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
+  deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn });
+}
+function onDeskContext(ev) { ev.preventDefault(); }
+function onDeskWheel(ev) { ev.preventDefault(); deskSendJSON("W", { delta: ev.deltaY > 0 ? -1 : 1 }); }
+function onDeskKeyDown(ev) { ev.preventDefault(); deskSendJSON("B", { down: true, key: ev.key, code: ev.code, vk: 0 }); }
+function onDeskKeyUp(ev) { ev.preventDefault(); deskSendJSON("B", { down: false, key: ev.key, code: ev.code, vk: 0 }); }
+
+function onDesktopUIClick(e) {
+  const t = e.target;
+  if (t.id === "deskDisconnect" || t.closest("#deskDisconnect")) { closeDesktopMask(); return; }
+  if (t.id === "deskFullscreen" || t.closest("#deskFullscreen")) {
+    const stage = $("deskStage"); if (stage && stage.requestFullscreen) stage.requestFullscreen().catch(() => {}); return;
   }
-  if (act === "rdp" && d.rdp_file) {
-    const blob = new Blob([d.rdp_file], { type: "application/x-rdp" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = d.rdp_filename || "remote.rdp";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    toast(I18N.t("desktop.rdp_saved"), "ok");
-    return;
+  if (t.id === "deskUploadBtn" || t.closest("#deskUploadBtn")) { const inp = $("deskFileInput"); if (inp) inp.click(); return; }
+  if (t.id === "deskDownloadBtn" || t.closest("#deskDownloadBtn")) { deskStartDownload(); return; }
+  if (t.id === "deskClipApply" || t.closest("#deskClipApply") || t.id === "deskClipSend" || t.closest("#deskClipSend")) {
+    deskPushClipboard(); return;
   }
-  if (act === "vnc" && d.vnc_url) {
-    window.location.href = d.vnc_url;
-    return;
+  if (t.id === "deskSessions" || t.closest("#deskSessions")) { openDeskSessions(); return; }
+  if (t.id === "deskReplayClose" || t.closest("#deskReplayClose")) {
+    const p = $("deskReplayPane"); if (p) p.hidden = true; return;
   }
-  if (act === "close-fwd" && d.forward_id) {
-    try {
-      const r = await fetch(`${API}/forward/${encodeURIComponent(d.forward_id)}`, { method: "DELETE", credentials: "include" });
-      if (r.ok) {
-        toast(I18N.t("desktop.fwd_closed"), "ok");
-        const mask = $("desktopMask");
-        if (mask) mask.classList.remove("show");
-      } else toast(I18N.t("toast.delete_failed"), "err");
-    } catch (err) { toast(String(err), "err"); }
+  const play = t.closest("[data-desk-replay]");
+  if (play) { playDeskReplay(play.getAttribute("data-desk-replay")); }
+}
+
+function onDesktopUIChange(e) {
+  if (e.target && e.target.id === "deskQuality") {
+    const p = qualityPreset(e.target.value);
+    DESK_QUALITY = { ...DESK_QUALITY, ...p };
+    sendDeskQuality(); return;
   }
+  if (e.target && e.target.id === "deskCodec") {
+    DESK_QUALITY.codec = e.target.value === "h264" ? "h264" : "jpeg";
+    if (DESK_QUALITY.codec === "jpeg") closeDeskMSE();
+    sendDeskQuality(); return;
+  }
+  if (e.target && e.target.id === "deskMonitor") {
+    DESK_QUALITY.monitor = parseInt(e.target.value, 10) || 0;
+    deskSendJSON("N", { id: DESK_QUALITY.monitor });
+    sendDeskQuality(); return;
+  }
+  if (e.target && e.target.id === "deskFileInput" && e.target.files && e.target.files[0]) {
+    deskStartUpload(e.target.files[0]); e.target.value = "";
+  }
+}
+
+function onDeskDrop(e) {
+  e.preventDefault();
+  const stage = $("deskStage"); if (stage) stage.classList.remove("drag");
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) deskStartUpload(f);
+}
+
+function deskPushClipboard() {
+  const box = $("deskClipBox");
+  const send = (text) => {
+    if (!text) return;
+    if (box) box.value = text;
+    deskSendJSON("C", { text });
+    toast(I18N.t("desktop.clip_sent"), "ok");
+  };
+  if (box && box.value) { send(box.value); return; }
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(send).catch(() => toast(I18N.t("desktop.clip_fail"), "err"));
+  }
+}
+
+async function deskStartUpload(file) {
+  if (!DESK_WS || DESK_WS.readyState !== 1) { toast(I18N.t("desktop.not_connected"), "err"); return; }
+  if (file.size > 100 * 1024 * 1024) { toast(I18N.t("term.file_too_large"), "err"); return; }
+  let path = (($("deskUploadPath") && $("deskUploadPath").value) || "").trim();
+  if (!path) path = file.name;
+  else if (path.endsWith("/") || path.endsWith("\\")) path = path + file.name;
+  const meta = new TextEncoder().encode(JSON.stringify({ filename: file.name, size: file.size, target_path: path }));
+  const fbuf = new Uint8Array(1 + meta.length); fbuf[0] = "f".charCodeAt(0); fbuf.set(meta, 1); DESK_WS.send(fbuf);
+  const chunkSize = 48 * 1024; let offset = 0;
+  while (offset < file.size) {
+    if (DESK_WS.readyState !== 1) { toast(I18N.t("desktop.upload_fail"), "err"); return; }
+    const slice = file.slice(offset, offset + chunkSize);
+    const ab = await slice.arrayBuffer();
+    const u = new Uint8Array(ab);
+    const buf = new Uint8Array(1 + u.length); buf[0] = "u".charCodeAt(0); buf.set(u, 1); DESK_WS.send(buf);
+    offset += u.length;
+  }
+  DESK_WS.send(new Uint8Array(["e".charCodeAt(0)]));
+  toast(I18N.t("desktop.uploading") + ": " + file.name, "info");
+}
+
+function deskStartDownload() {
+  if (!DESK_WS || DESK_WS.readyState !== 1) { toast(I18N.t("desktop.not_connected"), "err"); return; }
+  const path = (($("deskDownloadPath") && $("deskDownloadPath").value) || "").trim();
+  if (!path) { toast(I18N.t("desktop.download_ph"), "err"); return; }
+  const meta = new TextEncoder().encode(JSON.stringify({ remote_path: path }));
+  const buf = new Uint8Array(1 + meta.length); buf[0] = "d".charCodeAt(0); buf.set(meta, 1); DESK_WS.send(buf);
+}
+
+async function openDeskSessions() {
+  const pane = $("deskReplayPane");
+  const list = $("deskSessionsList");
+  if (!pane || !list) return;
+  pane.hidden = false;
+  list.innerHTML = I18N.t("ui.loading");
+  try {
+    const sessions = await fetch(`${API}/desktop/sessions`, { credentials: "include" }).then(r => r.json());
+    if (!Array.isArray(sessions) || !sessions.length) {
+      list.innerHTML = `<div class="empty-line">${esc(I18N.t("desktop.no_sessions"))}</div>`;
+      return;
+    }
+    list.innerHTML = sessions.map(s => `
+      <div class="desk-sess-row">
+        <div><b>${esc(s.hostname || s.host_id)}</b> · ${esc(s.operator || "")} · ${s.frames || 0} ${esc(I18N.t("desktop.frames"))}
+          ${s.active ? `<span class="tag">${esc(I18N.t("desktop.live"))}</span>` : ""}</div>
+        <button type="button" class="btn sm" data-desk-replay="${esc(s.id)}">${esc(I18N.t("desktop.replay"))}</button>
+      </div>`).join("");
+  } catch (e) { list.innerHTML = `<div class="empty-line err">${esc(String(e))}</div>`; }
+}
+
+async function playDeskReplay(id) {
+  const canvas = $("deskReplayCanvas");
+  if (!canvas) return;
+  canvas.style.display = "block";
+  const ctx = canvas.getContext("2d");
+  try {
+    const data = await fetch(`${API}/desktop/sessions/${encodeURIComponent(id)}/replay`, { credentials: "include" }).then(r => r.json());
+    const frames = data.frames || [];
+    let i = 0;
+    const tick = () => {
+      if (i >= frames.length) return;
+      const f = frames[i++];
+      if (f.type === "jpeg" && f.data) {
+        const bin = atob(f.data);
+        const u8 = new Uint8Array(bin.length);
+        for (let j = 0; j < bin.length; j++) u8[j] = bin.charCodeAt(j);
+        const blob = new Blob([u8], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width; canvas.height = img.height;
+          ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url);
+          setTimeout(tick, 120);
+        };
+        img.src = url;
+      } else setTimeout(tick, 40);
+    };
+    tick();
+  } catch (e) { toast(String(e), "err"); }
+}
+
+function closeDesktopWS() {
+  if (DESK_WS) { try { DESK_WS.close(); } catch (e) {} DESK_WS = null; }
+  unbindDesktopInput($("deskCanvas"));
+  closeDeskMSE();
 }
 
 function closeDesktopMask() {
+  closeDesktopWS();
   const mask = $("desktopMask");
   if (mask) mask.classList.remove("show");
 }

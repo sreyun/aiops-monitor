@@ -238,6 +238,8 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
 			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") ||
 			strings.Contains(r.URL.Path, "/terminal") || // WS upgrade + streaming relays must not be buffered
+			strings.Contains(r.URL.Path, "/desktop") ||
+			strings.Contains(r.URL.Path, "/agent/desktop/") ||
 			strings.Contains(r.URL.Path, "/forward") || // port forwarding streams must not be buffered
 			strings.HasPrefix(r.URL.Path, "/proxy/") || // HTTP proxy tunnels must not be buffered
 			strings.HasPrefix(r.URL.Path, "/dl/") { // 二进制/zip 已是压缩态，再 gzip 无益且会破坏 Range 断点续传
@@ -350,6 +352,7 @@ func main() {
 	notifier.nf = server.nf     // NetFlow 流量异常接入统一告警链路
 
 	server.term.loadRecordings(recordingsDirFor(*cfgPath)) // terminal replays survive restart (file-backed)
+	server.desk.setRecDir(filepath.Join(filepath.Dir(recordingsDirFor(*cfgPath)), "desktop-recordings"))
 	server.term.pg = pg                                    // 终端会话录制永久留存到 PG（入库审计，不受内存 100 条上限影响）
 	server.bindPG(pg)                                      // load + periodically persist incidents / work orders / sessions
 
