@@ -60,7 +60,11 @@ document.addEventListener("i18n:changed", () => {
   // 当前视图专属的动态列表按需重载（模块级筛选/分页状态保持不变）
   try {
     if (view === "checks") loadChecks();
-    else if (view === "automation") loadPlaybooks();
+    else if (view === "automation") {
+      const active = document.querySelector("#autoTabs .chip-btn.active");
+      const tab = active && active.dataset.autotab ? active.dataset.autotab : "playbooks";
+      if (tab === "inspect") loadHostInspect(); else loadPlaybooks();
+    }
     else if (view === "forward") { loadForwards(); loadHttpProxies(); }
     else if (view === "hosts") loadHostsMeta();
   } catch (e) {}
