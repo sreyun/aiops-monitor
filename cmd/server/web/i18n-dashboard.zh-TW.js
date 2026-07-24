@@ -340,6 +340,7 @@ window.DICT_TW = {
   "desktop.view_only": "唯讀畫面 · 鍵鼠不可用（缺少 xdotool / 輔助功能權限）",
   "desktop.error": "桌面會話出錯",
   "desktop.warn": "桌面提示",
+  "desktop.jpeg_decode_failed": "連續收到無法解碼的 JPEG 畫面，請重新整理頁面並確認服務端與 Agent 均為最新版本",
   "desktop.not_connected": "桌面未連線",
   "desktop.disconnect": "斷開",
   "desktop.fullscreen": "全螢幕",
