@@ -21,6 +21,7 @@ func isPublicPath(r *http.Request) bool {
 	case "/", "/healthz", "/style.css", "/app.js", "/theme-init.js", "/i18n-dashboard.js", "/i18n-dashboard.en.js", "/i18n-dashboard.zh-TW.js",
 		"/sw.js", "/manifest.json", "/icon.svg", // PWA shell: SW must register on the pre-login page too
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
+		"/install-relay.sh", "/install-relay.ps1",
 		"/api/v1/login", "/api/v1/me",
 		"/api/v1/forward/health",
 		"/api/v1/account/recover-send-code",
