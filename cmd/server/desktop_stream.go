@@ -70,6 +70,11 @@ func deskID() string {
 	return hex.EncodeToString(b)
 }
 
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
 func deskFrame(typ byte, payload []byte) []byte {
 	if len(payload) > 0xffff {
 		payload = payload[:0xffff]
@@ -246,15 +251,25 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: h.Hostname, Message: Tz("log.close_desktop", h.Hostname)})
 
 	if !s.desk.notifyAgent(hostID, sess.id) {
-		_ = ws.WriteBinary([]byte("E" + Tz("desktop.no_channel")))
+		_ = ws.WriteBinary(append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.no_channel")})...))
 		return
+	}
+	select {
+	case sess.toBrowser <- append([]byte{'S'}, mustJSON(map[string]any{"phase": "waiting_agent", "w": 1280, "h": 720})...):
+	default:
 	}
 	go func() {
 		select {
 		case <-sess.agentUp:
+			select {
+			case sess.toBrowser <- append([]byte{'S'}, mustJSON(map[string]any{"phase": "agent_up"})...):
+			case <-sess.done:
+			}
 		case <-time.After(35 * time.Second):
-			msg, _ := json.Marshal(map[string]string{"error": Tz("desktop.timeout")})
-			_ = ws.WriteBinary(append([]byte{'E'}, msg...))
+			select {
+			case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.timeout")})...):
+			case <-sess.done:
+			}
 			sess.close()
 		case <-sess.done:
 		}
@@ -493,6 +508,27 @@ func (s *Server) handleAgentDeskTx(w http.ResponseWriter, r *http.Request) {
 		out := make([]byte, 1+len(payload))
 		out[0] = typ
 		copy(out[1:], payload)
+		// Video frames: drop if browser is slow (prefer latest). Control frames: block briefly.
+		if typ == 'K' || typ == 'H' {
+			select {
+			case sess.toBrowser <- out:
+			case <-sess.done:
+				return
+			default:
+				// drop oldest by draining one slot then push
+				select {
+				case <-sess.toBrowser:
+				default:
+				}
+				select {
+				case sess.toBrowser <- out:
+				case <-sess.done:
+					return
+				default:
+				}
+			}
+			continue
+		}
 		select {
 		case sess.toBrowser <- out:
 		case <-sess.done:

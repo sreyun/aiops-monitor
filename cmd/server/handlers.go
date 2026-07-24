@@ -35,6 +35,7 @@ type Server struct {
 	forward   *forwardManager  // port forwarding relay (TCP + HTTP proxy)
 	emailMgr  *emailManager    // verification codes + reset tokens
 	playbooks *playbookManager // automation playbooks + execution history
+	inspect   *hostInspectManager // deep host inspect batches (host_inspect)
 	push      *pushHub         // P3-1: WebSocket push hub for real-time updates
 	// --- SRE workflow layer ---
 	incidents   *incidentManager    // incident hub (alert/SLO/manual)
@@ -72,6 +73,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		forward:     newForwardManager(cfg),
 		emailMgr:    newEmailManager(),
 		playbooks:   newPlaybookManager(cfg),
+		inspect:     newHostInspectManager(),
 		push:        newPushHub(),
 		incidents:   newIncidentManager(),
 		remediation: newRemediationManager(cfg),
@@ -289,6 +291,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
 	// 使用 executions/by-id（多一段字面量），避免与 {id}/preflight 在 ServeMux 下交叉冲突
 	mux.HandleFunc("GET /api/v1/playbooks/executions/by-id/{id}", s.handleGetExecution)
+	// Host deep inspect (linux_inspect-style, agent module host_inspect)
+	mux.HandleFunc("GET /api/v1/host-inspect", s.handleListHostInspect)
+	mux.HandleFunc("GET /api/v1/host-inspect/{id}", s.handleGetHostInspect)
+	mux.HandleFunc("POST /api/v1/host-inspect/run", s.handleRunHostInspect)
 	// SRE workflow: incidents / auto-remediation / SLOs / work orders
 	mux.HandleFunc("GET /api/v1/sre/overview", s.handleSREOverview)
 	mux.HandleFunc("GET /api/v1/incidents", s.handleListIncidents)
@@ -514,7 +520,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

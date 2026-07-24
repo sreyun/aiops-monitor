@@ -1,10 +1,12 @@
-/* ---------- 远程桌面 P2：推流 · 多屏 · 剪贴板 · H264 · 拖拽 · 回放 ---------- */
+/* ---------- 远程桌面：推流 · 多屏 · 剪贴板 · H264 · 拖拽 · 回放 ---------- */
 let DESK_WS = null;
 let DESK_HOST = null;
-let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false };
+let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
 let DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
 let DESK_DOWNLOAD = null;
 let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video }
+let DESK_GOT_FRAME = false;
+let DESK_PHASE = "idle"; // idle|connecting|waiting_agent|streaming|error|closed
 
 function openDesktop(id, name) {
   if (!DESKTOP_ENABLED) { toast(I18N.t("desktop.disabled"), "err"); return; }
@@ -18,6 +20,10 @@ async function doOpenDesktop(id, name) {
   const title = $("desktopTitle");
   if (title) title.textContent = (name || id) + " · " + I18N.t("desktop.title");
   if (mask) mask.classList.add("show");
+  DESK_GOT_FRAME = false;
+  DESK_PHASE = "connecting";
+  DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
+  DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
   renderDesktopShell(id, name);
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop`, {
@@ -32,9 +38,16 @@ async function doOpenDesktop(id, name) {
       showTermVerify();
       return;
     }
-    if (!r.ok) { setDesktopStatus(esc(data.error || I18N.t("toast.update_failed2")), true); return; }
+    if (!r.ok) {
+      setDesktopStatus(esc(data.error || I18N.t("toast.update_failed2")), true);
+      setDeskPlaceholder(I18N.t("desktop.error"), data.error || "");
+      return;
+    }
     connectDesktopWS(id, name);
-  } catch (e) { setDesktopStatus(esc(String(e)), true); }
+  } catch (e) {
+    setDesktopStatus(esc(String(e)), true);
+    setDeskPlaceholder(I18N.t("desktop.error"), String(e));
+  }
 }
 
 function renderDesktopShell(id, name) {
@@ -44,33 +57,41 @@ function renderDesktopShell(id, name) {
     <div class="desk-layout">
       <div class="desk-main">
         <div class="desk-toolbar">
-          <span class="desk-status" id="deskStatus">${esc(I18N.t("desktop.connecting"))}</span>
+          <div class="desk-status-wrap">
+            <span class="desk-dot" id="deskDot"></span>
+            <span class="desk-status" id="deskStatus">${esc(I18N.t("desktop.connecting"))}</span>
+          </div>
           <div class="desk-tools">
-            <label class="desk-q-label">${esc(I18N.t("desktop.monitor"))}
-              <select id="deskMonitor"><option value="0">—</option></select>
+            <label class="desk-q-label"><span>${esc(I18N.t("desktop.monitor"))}</span>
+              <select id="deskMonitor" class="desk-select"><option value="0">—</option></select>
             </label>
-            <label class="desk-q-label">${esc(I18N.t("desktop.quality"))}
-              <select id="deskQuality">
+            <label class="desk-q-label"><span>${esc(I18N.t("desktop.quality"))}</span>
+              <select id="deskQuality" class="desk-select">
                 <option value="fast">${esc(I18N.t("desktop.q_fast"))}</option>
                 <option value="balanced" selected>${esc(I18N.t("desktop.q_balanced"))}</option>
                 <option value="clear">${esc(I18N.t("desktop.q_clear"))}</option>
               </select>
             </label>
-            <label class="desk-q-label">${esc(I18N.t("desktop.codec"))}
-              <select id="deskCodec">
+            <label class="desk-q-label"><span>${esc(I18N.t("desktop.codec"))}</span>
+              <select id="deskCodec" class="desk-select">
                 <option value="jpeg" selected>JPEG</option>
                 <option value="h264">H.264</option>
               </select>
             </label>
-            <button type="button" class="btn sm" id="deskClipSend" title="${esc(I18N.t("desktop.clip_send"))}">📋↑</button>
+            <button type="button" class="btn sm" id="deskClipSend" title="${esc(I18N.t("desktop.clip_send"))}">📋</button>
             <button type="button" class="btn sm" id="deskFullscreen" title="${esc(I18N.t("desktop.fullscreen"))}">⛶</button>
             <button type="button" class="btn sm" id="deskSessions">${esc(I18N.t("desktop.sessions"))}</button>
             <button type="button" class="btn sm" id="deskDisconnect">${esc(I18N.t("desktop.disconnect"))}</button>
           </div>
         </div>
         <div class="desk-stage" id="deskStage">
-          <canvas id="deskCanvas" tabindex="0"></canvas>
-          <video id="deskVideo" playsinline autoplay muted style="display:none;max-width:100%;max-height:100%;background:#000"></video>
+          <div class="desk-placeholder" id="deskPlaceholder">
+            <div class="desk-spinner" aria-hidden="true"></div>
+            <div class="desk-ph-title" id="deskPhTitle">${esc(I18N.t("desktop.connecting"))}</div>
+            <div class="desk-ph-sub" id="deskPhSub">${esc(I18N.t("desktop.wait_hint"))}</div>
+          </div>
+          <canvas id="deskCanvas" tabindex="0" style="display:none"></canvas>
+          <video id="deskVideo" playsinline autoplay muted style="display:none"></video>
           <div class="desk-drop-hint" id="deskDropHint">${esc(I18N.t("desktop.drop_hint"))}</div>
         </div>
       </div>
@@ -78,7 +99,7 @@ function renderDesktopShell(id, name) {
         <div class="desk-side-title">${esc(I18N.t("desktop.files"))}</div>
         <div class="desk-side-hint">${esc(I18N.t("desktop.files_hint"))}</div>
         <label class="desk-field">${esc(I18N.t("desktop.upload_path"))}
-          <input type="text" id="deskUploadPath" class="desk-input" placeholder="C:\\\\Temp\\\\ 或 /tmp/" autocomplete="off">
+          <input type="text" id="deskUploadPath" class="desk-input" placeholder="C:\\Temp\\ 或 /tmp/" autocomplete="off">
         </label>
         <div class="desk-row">
           <input type="file" id="deskFileInput" hidden>
@@ -108,13 +129,34 @@ function renderDesktopShell(id, name) {
     body.addEventListener("change", onDesktopUIChange);
   }
   const stage = $("deskStage");
-  if (stage && !stage.dataset.dnd) {
+  if (stage) {
     stage.dataset.dnd = "1";
-    stage.addEventListener("dragover", e => { e.preventDefault(); stage.classList.add("drag"); });
-    stage.addEventListener("dragleave", () => stage.classList.remove("drag"));
-    stage.addEventListener("drop", onDeskDrop);
+    stage.ondragover = e => { e.preventDefault(); stage.classList.add("drag"); };
+    stage.ondragleave = () => stage.classList.remove("drag");
+    stage.ondrop = onDeskDrop;
   }
   DESK_HOST = { id, name };
+  setDeskDot("connecting");
+}
+
+function setDeskDot(phase) {
+  const dot = $("deskDot");
+  if (!dot) return;
+  dot.className = "desk-dot " + (phase || "");
+}
+
+function setDeskPlaceholder(title, sub) {
+  const ph = $("deskPlaceholder");
+  const t = $("deskPhTitle");
+  const s = $("deskPhSub");
+  if (ph) ph.style.display = "";
+  if (t) t.textContent = title || "";
+  if (s) s.textContent = sub || "";
+}
+
+function hideDeskPlaceholder() {
+  const ph = $("deskPlaceholder");
+  if (ph) ph.style.display = "none";
 }
 
 function setDesktopStatus(msg, isErr) {
@@ -122,6 +164,7 @@ function setDesktopStatus(msg, isErr) {
   if (!el) return;
   el.textContent = msg;
   el.classList.toggle("err", !!isErr);
+  if (isErr) setDeskDot("error");
 }
 
 function qualityPreset(name) {
@@ -142,7 +185,6 @@ function sendDeskQuality() {
 function fillMonitorSelect(mons) {
   const sel = $("deskMonitor");
   if (!sel) return;
-  const cur = String(DESK_QUALITY.monitor || 0);
   sel.innerHTML = (mons || []).map(m =>
     `<option value="${m.id}">${esc(m.name || ("#" + m.id))} (${m.width}×${m.height})${m.primary ? " ★" : ""}</option>`
   ).join("") || `<option value="0">—</option>`;
@@ -150,28 +192,41 @@ function fillMonitorSelect(mons) {
     const p = mons.find(m => m.primary) || mons[0];
     DESK_QUALITY.monitor = p.id;
   }
-  sel.value = String(DESK_QUALITY.monitor || (mons[0] && mons[0].id) || 0);
+  sel.value = String(DESK_QUALITY.monitor || (mons && mons[0] && mons[0].id) || 0);
 }
 
 function connectDesktopWS(id, name) {
   closeDesktopWS();
-  setDesktopStatus(I18N.t("desktop.connecting"), false);
+  DESK_GOT_FRAME = false;
+  DESK_PHASE = "waiting_agent";
+  setDesktopStatus(I18N.t("desktop.waiting_agent"), false);
+  setDeskPlaceholder(I18N.t("desktop.waiting_agent"), I18N.t("desktop.wait_hint"));
+  setDeskDot("waiting");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/desktop/ws`);
   ws.binaryType = "arraybuffer";
   DESK_WS = ws;
   const canvas = $("deskCanvas");
-  const video = $("deskVideo");
-  const ctx = canvas ? canvas.getContext("2d") : null;
   let imgURL = null;
 
   ws.onopen = () => {
-    setDesktopStatus(I18N.t("desktop.connected"), false);
+    // Do NOT claim fully connected until we get agent meta / first frame.
+    setDesktopStatus(I18N.t("desktop.waiting_agent"), false);
     sendDeskQuality();
-    if (canvas) { canvas.focus(); bindDesktopInput(canvas); }
   };
-  ws.onclose = () => { setDesktopStatus(I18N.t("desktop.disconnected"), true); unbindDesktopInput(canvas); closeDeskMSE(); };
-  ws.onerror = () => setDesktopStatus(I18N.t("desktop.error"), true);
+  ws.onclose = () => {
+    DESK_PHASE = "closed";
+    setDesktopStatus(I18N.t("desktop.disconnected"), true);
+    setDeskDot("error");
+    if (!DESK_GOT_FRAME) setDeskPlaceholder(I18N.t("desktop.disconnected"), I18N.t("desktop.wait_hint"));
+    unbindDesktopInput(canvas);
+    closeDeskMSE();
+  };
+  ws.onerror = () => {
+    setDesktopStatus(I18N.t("desktop.error"), true);
+    setDeskDot("error");
+    setDeskPlaceholder(I18N.t("desktop.error"), I18N.t("desktop.wait_hint"));
+  };
   ws.onmessage = (ev) => {
     if (!(ev.data instanceof ArrayBuffer) || ev.data.byteLength < 1) return;
     const u8 = new Uint8Array(ev.data);
@@ -180,20 +235,45 @@ function connectDesktopWS(id, name) {
     if (typ === "S") {
       try {
         const meta = JSON.parse(new TextDecoder().decode(payload));
-        DESK_META.w = meta.w || DESK_META.w;
-        DESK_META.h = meta.h || DESK_META.h;
-        DESK_META.h264 = !!meta.h264;
+        if (meta.phase === "waiting_agent") {
+          DESK_PHASE = "waiting_agent";
+          setDesktopStatus(I18N.t("desktop.waiting_agent"), false);
+          setDeskPlaceholder(I18N.t("desktop.waiting_agent"), I18N.t("desktop.wait_hint"));
+          setDeskDot("waiting");
+          return;
+        }
+        if (meta.phase === "agent_up" && !DESK_GOT_FRAME) {
+          setDesktopStatus(I18N.t("desktop.agent_up"), false);
+          setDeskPlaceholder(I18N.t("desktop.agent_up"), I18N.t("desktop.streaming_hint"));
+          setDeskDot("waiting");
+        }
+        if (meta.w) DESK_META.w = meta.w;
+        if (meta.h) DESK_META.h = meta.h;
+        if (meta.h264 != null) DESK_META.h264 = !!meta.h264;
+        if (meta.view_only != null) DESK_META.viewOnly = !!meta.view_only;
         if (Array.isArray(meta.monitors)) {
           DESK_META.monitors = meta.monitors;
           fillMonitorSelect(meta.monitors);
         }
         const codecSel = $("deskCodec");
-        if (codecSel) codecSel.disabled = !DESK_META.h264 && DESK_QUALITY.codec === "jpeg";
-        if (meta.os === "darwin" && meta.error) setDesktopStatus(meta.error, true);
+        if (codecSel && meta.h264 === false) {
+          codecSel.value = "jpeg";
+          DESK_QUALITY.codec = "jpeg";
+        }
+        if (meta.os === "darwin" && meta.error) {
+          setDesktopStatus(meta.error, true);
+          setDeskPlaceholder(I18N.t("desktop.error"), meta.error);
+        }
+        if (DESK_META.viewOnly) {
+          setDesktopStatus(I18N.t("desktop.view_only"), false);
+        }
       } catch (e) {}
       return;
     }
-    if (typ === "K" && ctx && canvas) {
+    if (typ === "K" && canvas) {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      markDeskStreaming();
       showDeskCanvas(true);
       const blob = new Blob([payload], { type: "image/jpeg" });
       if (imgURL) URL.revokeObjectURL(imgURL);
@@ -206,10 +286,12 @@ function connectDesktopWS(id, name) {
         ctx.drawImage(img, 0, 0);
         URL.revokeObjectURL(imgURL); imgURL = null;
       };
+      img.onerror = () => { if (imgURL) { URL.revokeObjectURL(imgURL); imgURL = null; } };
       img.src = imgURL;
       return;
     }
     if (typ === "H") {
+      markDeskStreaming();
       showDeskCanvas(false);
       appendDeskH264(payload);
       return;
@@ -231,14 +313,41 @@ function connectDesktopWS(id, name) {
       if (payload.length > 0) {
         try {
           const j = JSON.parse(new TextDecoder().decode(payload));
-          if (j.error) { setDesktopStatus(j.error, true); return; }
+          if (j.error) {
+            const isWarn = j.level === "warn";
+            setDesktopStatus(j.error, !isWarn);
+            if (!isWarn && !DESK_GOT_FRAME) {
+              setDeskPlaceholder(I18N.t("desktop.error"), j.error);
+              setDeskDot("error");
+              DESK_PHASE = "error";
+            }
+            return;
+          }
         } catch (e) {
-          setDesktopStatus(new TextDecoder().decode(payload), true); return;
+          const msg = new TextDecoder().decode(payload);
+          setDesktopStatus(msg, true);
+          if (!DESK_GOT_FRAME) setDeskPlaceholder(I18N.t("desktop.error"), msg);
+          return;
         }
       }
       if (DESK_DOWNLOAD) finishDeskDownload();
     }
   };
+}
+
+function markDeskStreaming() {
+  if (!DESK_GOT_FRAME) {
+    DESK_GOT_FRAME = true;
+    DESK_PHASE = "streaming";
+    hideDeskPlaceholder();
+    setDeskDot("on");
+    const msg = DESK_META.viewOnly
+      ? I18N.t("desktop.view_only")
+      : I18N.t("desktop.connected");
+    setDesktopStatus(msg, false);
+    const canvas = $("deskCanvas");
+    if (canvas) { canvas.focus(); bindDesktopInput(canvas); }
+  }
 }
 
 function showDeskCanvas(useCanvas) {
@@ -348,8 +457,8 @@ function unbindDesktopInput(canvas) {
 
 function deskNormXY(ev, el) {
   const rect = el.getBoundingClientRect();
-  const x = (ev.clientX - rect.left) / rect.width;
-  const y = (ev.clientY - rect.top) / rect.height;
+  const x = (ev.clientX - rect.left) / Math.max(1, rect.width);
+  const y = (ev.clientY - rect.top) / Math.max(1, rect.height);
   return {
     x: Math.min(1, Math.max(0, x)) * (DESK_META.w || rect.width),
     y: Math.min(1, Math.max(0, y)) * (DESK_META.h || rect.height)
@@ -534,6 +643,8 @@ function closeDesktopWS() {
 
 function closeDesktopMask() {
   closeDesktopWS();
+  DESK_PHASE = "idle";
+  DESK_GOT_FRAME = false;
   const mask = $("desktopMask");
   if (mask) mask.classList.remove("show");
 }

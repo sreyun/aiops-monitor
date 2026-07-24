@@ -125,10 +125,11 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	defer cap.Close()
 
 	inp, err := openDeskInput()
+	viewOnly := false
 	if err != nil {
-		slog.Warn("桌面键鼠注入不可用", "session", sid, "err", err)
-		a.deskSendError(server, sid, err.Error())
-		return
+		slog.Warn("桌面键鼠注入不可用，将以只读画面模式继续", "session", sid, "err", err)
+		inp = &noopDeskInput{}
+		viewOnly = true
 	}
 	defer inp.Close()
 
@@ -209,12 +210,20 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		"scale": q.Scale, "quality": q.Quality, "fps": q.FPS,
 		"codec": q.Codec, "codecs": codecs,
 		"h264": h264OK, "clipboard": true, "monitors": mons,
-		"features": map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK},
+		"view_only": viewOnly,
+		"features": map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK, "input": !viewOnly},
 	})
 	if err := writeTx(deskTxFrame('S', meta)); err != nil {
 		pw.Close()
 		<-reqDone
 		return
+	}
+	if viewOnly {
+		warn, _ := json.Marshal(map[string]string{
+			"error": "键鼠注入不可用，当前为只读画面（Linux 需安装 xdotool；macOS 需辅助功能权限）",
+			"level": "warn",
+		})
+		_ = writeTx(deskTxFrame('E', warn))
 	}
 
 	var h264Mu sync.Mutex
@@ -415,6 +424,15 @@ func (a *Agent) deskSendError(server, sid, msg string) {
 func runtimeGOOS() string {
 	return deskGOOS()
 }
+
+// noopDeskInput keeps the session streaming when OS input tools are missing.
+type noopDeskInput struct{}
+
+func (noopDeskInput) MouseMove(x, y int) error      { return nil }
+func (noopDeskInput) MouseButton(button int, down bool) error { return nil }
+func (noopDeskInput) MouseWheel(delta int) error    { return nil }
+func (noopDeskInput) Key(vk int, down bool) error   { return nil }
+func (noopDeskInput) Close() error                  { return nil }
 
 func scaleImage(src image.Image, scale float64) image.Image {
 	if scale <= 0 || scale >= 0.99 {
