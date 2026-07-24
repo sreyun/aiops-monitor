@@ -46,7 +46,7 @@ func TestRenderInstallAuditConfig(t *testing.T) {
 		SNIEnabled: true, SNIInterface: "eth0", ContentAudit: true,
 		CaptureBackend: "tshark", ContentAuditPorts: "[11434,8000]", ContentAuditMaxBody: 8192,
 		ContentAuditBodyMode: "redacted", ContentAuditIncludeHosts: `["*.example.com"]`,
-		ContentAuditExcludePaths: `["/health*"]`, ContentAuditMaxEventsPerMin: 1200,
+		ContentAuditExcludePaths: `["/health*","/metrics*","/ready*","/live*"]`, ContentAuditMaxEventsPerMin: 1200,
 	}
 	for name, tmpl := range map[string]string{"sh": installShTemplate, "ps1": installPs1Template} {
 		out := renderScriptWithAudit(tmpl, "https://monitor.example", "tok", "prod", "", "[]", opts)
@@ -64,5 +64,17 @@ func TestRenderInstallAuditConfig(t *testing.T) {
 		if strings.Contains(out, "__CONTENT_AUDIT") || strings.Contains(out, "__SNI_") || strings.Contains(out, "__CAPTURE_") {
 			t.Errorf("%s installer has unresolved placeholders", name)
 		}
+	}
+	// Windows: JSON arrays with embedded " must sit inside single-quoted Add() args,
+	// or iex fails with ExpectedValueExpression on /health*.
+	ps1 := renderScriptWithAudit(installPs1Template, "https://monitor.example", "tok", "prod", "", "[]", opts)
+	if strings.Contains(ps1, `$lines.Add("  content_audit_exclude_paths:`) {
+		t.Fatal("ps1 exclude_paths must use single-quoted Add() to avoid nested double-quote parse errors")
+	}
+	if !strings.Contains(ps1, `$lines.Add('  content_audit_exclude_paths: ["/health*","/metrics*","/ready*","/live*"]')`) {
+		t.Fatalf("ps1 exclude_paths line malformed:\n%s", ps1)
+	}
+	if !strings.Contains(ps1, `$lines.Add('  content_audit_include_hosts: ["*.example.com"]')`) {
+		t.Fatal("ps1 include_hosts must use single-quoted Add()")
 	}
 }

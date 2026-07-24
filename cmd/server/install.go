@@ -632,8 +632,10 @@ $lines.Add("  content_audit: __CONTENT_AUDIT__")
 $lines.Add("  content_audit_ports: __CONTENT_AUDIT_PORTS__")
 $lines.Add("  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__")
 $lines.Add("  content_audit_body_mode: " + (Yq "__CONTENT_AUDIT_BODY_MODE__"))
-$lines.Add("  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__")
-$lines.Add("  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__")
+# JSON arrays contain double quotes — MUST use single-quoted PowerShell strings here,
+# otherwise iex parses ["/health*"] as nested quotes and fails with ExpectedValueExpression.
+$lines.Add('  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__')
+$lines.Add('  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__')
 $lines.Add("  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__")
 $cfg = ($lines -join ([char]10)) + ([char]10)
 [System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
