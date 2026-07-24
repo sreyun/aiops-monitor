@@ -627,6 +627,56 @@ catch {
   if (Test-Path $AgentBak) { Move-Item $AgentBak $AgentExe -Force }
   throw
 }
+# Clear Mark-of-the-Web / Zone.Identifier from HTTP downloads. This helps
+# SmartScreen; WDAC/AppLocker still needs an explicit allow rule (see below).
+try { Unblock-File -Path $AgentExe -ErrorAction SilentlyContinue } catch {}
+try { Remove-Item -LiteralPath ($AgentExe + ':Zone.Identifier') -Force -ErrorAction SilentlyContinue } catch {}
+
+# Preflight: confirm Windows will let us execute the binary BEFORE we claim
+# service install succeeded. "Application Control policy has blocked this file"
+# (WDAC / AppLocker / Smart App Control) otherwise surfaces as a cryptic
+# NativeCommandFailed at --install-service, and the Session-0 schtasks fallback
+# would fail the same way.
+function Test-AiopsAgentRunnable([string]$Exe) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $psi.Arguments = '-h'
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  try {
+    $p = [Diagnostics.Process]::Start($psi)
+    if (-not $p) { return @{ Ok = $false; Detail = 'Start returned null' } }
+    $null = $p.StandardOutput.ReadToEnd()
+    $errOut = $p.StandardError.ReadToEnd()
+    $p.WaitForExit(15000) | Out-Null
+    # Go flag -h exits 2 after printing usage — that still proves the image ran.
+    return @{ Ok = $true; ExitCode = $p.ExitCode; Detail = $errOut }
+  } catch {
+    return @{ Ok = $false; Detail = $_.Exception.Message }
+  }
+}
+$Probe = Test-AiopsAgentRunnable $AgentExe
+if (-not $Probe.Ok) {
+  $Blocked = ($Probe.Detail -match 'Application Control|AppLocker|Smart App Control|被策略|无法运行|cannot run|0x8007065')
+  Write-Host ""
+  Write-Host "[AIOps] FATAL: cannot execute $AgentExe" -ForegroundColor Red
+  Write-Host ("[AIOps] " + $Probe.Detail) -ForegroundColor Red
+  if ($Blocked) {
+    Write-Host ""
+    Write-Host "[AIOps] Windows Application Control (WDAC / AppLocker / Smart App Control) blocked this binary." -ForegroundColor Yellow
+    Write-Host "[AIOps] 本机应用程序控制策略拦截了 aiops-agent.exe，服务安装与保活任务都会失败。" -ForegroundColor Yellow
+    Write-Host "[AIOps] Fix options / 处理办法:" -ForegroundColor Yellow
+    Write-Host "  1) WDAC/AppLocker: allow Publisher/Path/Hash for $AgentExe (IT / GPO)."
+    Write-Host "     用组策略或 WDAC 允许规则放行该路径或文件 SHA-256。"
+    Write-Host "  2) Consumer Smart App Control: Settings → Privacy & security → Windows Security → App & browser control → Smart App Control → Off"
+    Write-Host "     （家庭版智能应用控制）关闭后重试安装。"
+    Write-Host "  3) Verify hash matches server: $Server/dl/aiops-agent.exe.sha256"
+    Write-Host ("     local SHA-256 = " + $Actual)
+  }
+  throw "Agent binary blocked by OS policy; install aborted (no Session-0 fallback — it would also be blocked)."
+}
 try {
   Invoke-WebRequest "$Server/dl/plugins.zip" -OutFile "$Dir\plugins.zip" -UseBasicParsing
   Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
@@ -725,8 +775,15 @@ if ($IsAdmin) {
   # Do not pipe native stderr through ForEach-Object: Windows PowerShell 5.1
   # decodes redirected native output using its legacy code page before the
   # pipeline sees it. Let the UTF-8 Agent write directly to the UTF-8 console.
-  & $AgentExe --install-service --config $conf
-  $AgentInstallExit = $LASTEXITCODE
+  $InstallErr = $null
+  try {
+    & $AgentExe --install-service --config $conf
+    $AgentInstallExit = $LASTEXITCODE
+  } catch {
+    $InstallErr = $_.Exception.Message
+    $AgentInstallExit = 1
+    Write-Host ("[AIOps] " + $InstallErr) -ForegroundColor Red
+  }
   if ($AgentInstallExit -ne 0) {
     Write-Warning "[AIOps] Agent service installer exited with code $AgentInstallExit"
   }
@@ -757,7 +814,14 @@ if ($IsAdmin) {
       Write-Host "[AIOps] Windows service registered (status=$($svc.Status)); SCM recovery / next boot will start it. Not falling back to Session-0 keepalive (that breaks remote desktop)."
     }
   } else {
+    $PolicyBlocked = ($InstallErr -and ($InstallErr -match 'Application Control|AppLocker|Smart App Control|被策略|无法运行'))
+    if ($PolicyBlocked) {
+      Write-Host "[AIOps] FATAL: Windows Application Control blocked aiops-agent.exe — refusing Session-0 keepalive fallback (it would also be blocked)." -ForegroundColor Red
+      Write-Host "[AIOps] Ask IT to allowlist $AgentExe (WDAC/AppLocker path or hash), or temporarily turn off Smart App Control, then re-run this installer." -ForegroundColor Yellow
+      throw "Agent blocked by Application Control policy"
+    }
     Write-Host "[AIOps] service registration unavailable; falling back to SYSTEM keepalive task."
+    Write-Host "[AIOps] WARNING: Session-0 keepalive cannot drive interactive remote desktop (lock screen / console capture). Prefer fixing service install." -ForegroundColor Yellow
     $trTask = 'wscript.exe \"' + $vbs + '\"'
     schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
     schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
