@@ -176,6 +176,17 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"start-agent.vbs", "Win32_Process",
 		`schtasks /Create /TN "AIOpsAgent"`, "/SC MINUTE /MO 5",
 		`CurrentVersion\Run`)
+	// PowerShell 5.1 defaults to a legacy console code page. The installer must
+	// switch both console and native pipeline encodings to UTF-8, and must not
+	// pipe Agent stderr through ForEach-Object (which caused Chinese mojibake).
+	must("install.ps1 (utf8)", ps1In,
+		`[Console]::InputEncoding = $Utf8NoBom`,
+		`[Console]::OutputEncoding = $Utf8NoBom`,
+		`$global:OutputEncoding = $Utf8NoBom`,
+		`chcp.com 65001`)
+	if strings.Contains(ps1In, `2>&1 | ForEach-Object`) {
+		t.Error("install.ps1 (utf8): Agent output must not pass through the PowerShell 5.1 native-output decoding pipeline")
+	}
 	// Windows must also write config.yaml (hand-built, no JSON serializer) and
 	// remove a stale config.json from a pre-YAML install.
 	must("install.ps1 (yaml)", ps1In,
