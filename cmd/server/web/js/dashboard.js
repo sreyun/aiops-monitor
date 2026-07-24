@@ -1592,7 +1592,7 @@ async function pollDashboardAIJob(jobID, seq) {
     await new Promise(resolve => setTimeout(resolve, 1200));
     let job;
     try {
-      const r = await fetch(`${API}/dashboards/ai-jobs/${encodeURIComponent(jobID)}`);
+      const r = await fetch(`${API}/dashboards/ai/jobs/${encodeURIComponent(jobID)}`);
       job = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(job.error || ("HTTP " + r.status));
     } catch (e) {
