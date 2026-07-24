@@ -512,7 +512,20 @@ func (s *Server) Routes() http.Handler {
 	// static assets served from the embedded web/ dir
 	if sub, err := fs.Sub(webFS, "web"); err == nil {
 		fsrv := http.FileServer(http.FS(sub))
-		mux.Handle("GET /style.css", fsrv)
+		// Serve style.css with no-cache (like /app.js). The raw FileServer set no
+		// Cache-Control, so browsers HTTP-cached the CSS and kept showing an old
+		// layout for a full deploy cycle after every UI tweak. no-cache forces a
+		// revalidation so a redeploy is visible on the next load.
+		mux.HandleFunc("GET /style.css", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			data, err := webFS.ReadFile("web/style.css")
+			if err != nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(data)
+		})
 		// /app.js: 把 web/js/ 下的 8 个源模块按依赖顺序拼成【单个脚本】返回。
 		// 必须作为单脚本加载——整文件函数提升(hoisting)才生效；若用 8 个独立
 		// <script> 标签，早模块顶层调用晚模块里定义的 helper/handler 会因
