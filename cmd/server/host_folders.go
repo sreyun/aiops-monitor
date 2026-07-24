@@ -13,8 +13,10 @@ import (
 // HostFolderUngroupedID is the virtual folder for hosts with no assignment.
 const HostFolderUngroupedID = "__ungrouped__"
 
-// MaxHostFolderDepth is the maximum nesting level (root = 1).
-const MaxHostFolderDepth = 4
+// MaxHostFolderDepth is the maximum nesting level (root = 1). It is a high
+// safety cap only (guards against pathological/abusive trees and deep
+// recursion) — operators can nest folders as deeply as they need in practice.
+const MaxHostFolderDepth = 32
 
 // HostFolderNode is one folder in the host organization tree.
 type HostFolderNode struct {

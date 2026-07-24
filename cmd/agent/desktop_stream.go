@@ -287,6 +287,13 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	go func() {
 		defer closeAll()
 		defer pw.Close()
+		// Desktop switches (lock↔unlock, UAC secure desktop, fast-user-switch)
+		// make GDI BitBlt transiently fail for a frame or two while the worker
+		// re-attaches to the new input desktop. Tearing the session down on the
+		// first error would surface as a spurious "已断开". Tolerate a short burst
+		// of consecutive failures (~4s) before giving up.
+		capFails := 0
+		const maxCapFails = 60
 		for !stop.Load() {
 			qMu.Lock()
 			cq := q
@@ -353,10 +360,19 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 
 			img, err := cap.Capture()
 			if err != nil {
+				capFails++
+				if capFails < maxCapFails {
+					// Likely a desktop switch in progress; the next Capture()
+					// re-attaches to the input desktop. Back off briefly and retry
+					// instead of dropping the whole session.
+					time.Sleep(interval)
+					continue
+				}
 				msg, _ := json.Marshal(map[string]string{"error": err.Error()})
 				_ = writeTx(deskTxFrame('E', msg))
 				return
 			}
+			capFails = 0
 			scaled := scaleImage(img, cq.Scale)
 			var jbuf bytes.Buffer
 			qual := cq.Quality
