@@ -48,6 +48,24 @@ func loadOrCreateHostID(path string) string {
 	return id
 }
 
+// readHostIDFromState returns the host_id stored in the state file, or "" when
+// the file is missing/unreadable/empty. Unlike loadOrCreateHostID it never
+// generates a new id — used by the desktop worker to pick up an id the service
+// may have just reconciled, without racing a fresh id into existence.
+func readHostIDFromState(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var s struct {
+		HostID string `json:"host_id"`
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return ""
+	}
+	return s.HostID
+}
+
 // persistHostID atomically writes the identity state file.
 //
 // Atomic write: temp file + rename to prevent partial writes on crash.
