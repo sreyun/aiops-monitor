@@ -149,21 +149,40 @@ A companion **20+ screen enterprise-grade native Android console** (Kotlin + Jet
 
 ## Quick Start
 
-### Docker Compose in one command (recommended)
+### Docker Compose (production / development)
+
+Two compose files ship in the repo:
+
+| File | Use case | Notes |
+|---|---|---|
+| `docker-compose.yml` | **Production (default)** | Pulls prebuilt Huawei SWR images; Agent optional via `--profile agent` |
+| `docker-compose.dev.yml` | **Development overlay** | Local build via `docker/Dockerfile.dev`; PG/VM from Docker Hub; Agent on by default |
+
+**Production (recommended)**
 
 ```bash
-# Pull the compose file and start (PG + VictoriaMetrics + AIOps Server in one go)
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
+# One-shot: download compose + write strong random secrets to .env, then start
+bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh)
 docker compose up -d
+
+# Or manually:
+# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
+# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/.env.example
+# cp .env.example .env   # change POSTGRES_PASSWORD / AIOPS_SECRET_KEY
+# docker compose up -d
 ```
 
-Open `http://localhost:8529` in a browser. Default credentials `admin / admin` — **first login forces a security initialization (must change username + password)**; enabling MFA afterward is recommended.
+**Development (from a source checkout)**
 
-> **For production**: use the secure compose script to auto-generate strong random keys and write them into `docker-compose.yml`:
-> ```bash
-> bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
-> ```
-> It generates a 20-char PG password and a 50-char `AIOPS_SECRET_KEY`, auto-filling `AIOPS_POSTGRES_DSN` — no manual config edits needed.
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Optional: set COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml in .env, then docker compose up -d --build
+```
+
+Open `http://localhost:8529`. Default credentials `admin / admin` — **first login forces security initialization (must change username + password)**; enabling MFA afterward is recommended.
+
+> `secure-compose.sh` writes a 20-char PG password and a 50-char `AIOPS_SECRET_KEY` into `.env` (do not commit it). If SWR pulls fail locally, point `POSTGRES_IMAGE` / `VM_IMAGE` at Docker Hub in `.env`, or use the development overlay.
 
 ### Install the Agent (monitored host)
 

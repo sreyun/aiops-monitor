@@ -58,23 +58,27 @@ AIOps Monitor uses a **mandatory dual-storage architecture** — **neither can b
 The repo ships `docker-compose.yml` with a 3-container stack: `aiops-server` + `postgres` + `victoriametrics`.
 
 ```bash
-# 1) Prepare env (adjust passwords/keys as needed)
+# 1) Prepare env (change passwords/keys for production)
 cp .env.example .env
 
-# 2) Bring up (pull prebuilt images) or build locally
-docker compose up -d            # recommended: pull prebuilt images
-# docker compose up -d --build  # dev/custom: build locally
+# 2) Production: pull prebuilt images
+docker compose up -d
+# Optional local agent: docker compose --profile agent up -d
+
+# Development (local Dockerfile.dev build + Docker Hub PG/VM):
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # 3) Logs & status
 docker compose logs -f
 docker compose ps
 ```
 
-`docker-compose.yml` already sets the key env vars (`AIOPS_VM_URL`, `AIOPS_POSTGRES_DSN`,
-`AIOPS_FORWARD_LISTEN=0.0.0.0`, `AIOPS_SECRET_KEY`). **In production, be sure to**:
+`docker-compose.yml` reads secrets from `.env` (`POSTGRES_PASSWORD`, `AIOPS_SECRET_KEY`, …) and wires
+`AIOPS_VM_URL` / `AIOPS_POSTGRES_DSN` / `AIOPS_FORWARD_LISTEN`. **In production, be sure to**:
 
-- Change `POSTGRES_PASSWORD` and the password inside `AIOPS_POSTGRES_DSN` (they must match);
+- Change `POSTGRES_PASSWORD` (compose builds the DSN from it);
 - Replace `AIOPS_SECRET_KEY` with your own long random string and back it up;
+- Or run `bash scripts/secure-compose.sh` (with `SKIP_DOWNLOAD=1` in a checkout) to generate them;
 - To enable HTTPS, mount certs into `./data/tls` and uncomment `AIOPS_TLS_CERT` / `AIOPS_TLS_KEY`.
 
 Stop (data retained; add `-v` to also remove volumes):

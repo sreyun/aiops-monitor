@@ -21,17 +21,33 @@
 
 ## 二、方式一：Docker Compose 一键部署（推荐）
 
-1. 准备 `docker-compose.yml` 与 `.env`（示例见仓库 `deploy/` 或发布包）。
-2. 在 `.env` 中填好两个存储连接串：
-   ```bash
-   AIOPS_POSTGRES_DSN="postgres://aiops:你的密码@postgres:5432/aiops?sslmode=disable"
-   AIOPS_VM_URL="http://victoriametrics:8428"
-   ```
-3. 启动：
-   ```bash
-   docker compose up -d
-   ```
-4. 浏览器打开 `http://<服务器IP>:8529`，使用初始管理员账号登录（首次登录后请尽快修改密码并启用 MFA）。
+仓库根目录提供：
+
+- `docker-compose.yml` — **正式环境**（拉取 SWR 预构建镜像）
+- `docker-compose.dev.yml` — **开发 overlay**（本地 `Dockerfile.dev` 构建）
+- `.env.example` — 密钥与端口模板（复制为 `.env`，勿提交）
+
+**正式环境**
+
+```bash
+# 推荐：自动下载编排并生成强随机密钥到 .env
+bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh)
+docker compose up -d
+
+# 或在已克隆仓库内：
+cp .env.example .env          # 修改 POSTGRES_PASSWORD / AIOPS_SECRET_KEY
+docker compose up -d
+# 可选本机 Agent：docker compose --profile agent up -d
+```
+
+**开发环境**
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+`AIOPS_POSTGRES_DSN` 由 compose 根据 `POSTGRES_PASSWORD` 自动拼接；`AIOPS_VM_URL` 默认指向编排内 VictoriaMetrics。浏览器打开 `http://<服务器IP>:8529`，首次登录后请尽快修改密码并启用 MFA。
 
 ---
 
