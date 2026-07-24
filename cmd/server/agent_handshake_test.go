@@ -220,7 +220,8 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("install.ps1 (app-control)", ps1In,
 		"Unblock-File", "Test-AiopsAgentRunnable",
 		"Application Control", "Zone.Identifier",
-		"allow-aiops-agent.ps1", "New-CIPolicy")
+		"allow-aiops-agent.ps1", "New-CIPolicy",
+		"group policy", `Join-Path $env:ProgramFiles "AIOps Agent"`)
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")
