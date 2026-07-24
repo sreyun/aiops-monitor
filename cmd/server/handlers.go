@@ -257,7 +257,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
 	// 仪表盘 AI 闭环：自然语言生成 / 按事件生成分析看板 / 实时摘要 / 研判转工单
 	mux.HandleFunc("POST /api/v1/dashboards/ai-create", s.handleAICreateDashboard)
-	mux.HandleFunc("GET /api/v1/dashboards/ai-jobs/{id}", s.handleGetDashboardAIJob)
+	// 使用 ai/jobs（多一段字面量），避免与 {id}/digest 在 ServeMux 下交叉冲突
+	mux.HandleFunc("GET /api/v1/dashboards/ai/jobs/{id}", s.handleGetDashboardAIJob)
 	mux.HandleFunc("POST /api/v1/dashboards/ai-from-incident", s.handleAIDashboardFromIncident)
 	mux.HandleFunc("GET /api/v1/dashboards/{id}/digest", s.handleDashboardDigest)
 	mux.HandleFunc("POST /api/v1/dashboards/{id}/ai-ticket", s.handleDashboardAITicket)
