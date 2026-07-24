@@ -302,11 +302,20 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 			writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true})
 			return
 		}
-		if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, code) {
+		switch res := s.auth.verifyAndConsumeTOTP(acc.Username, acc.MFASecret, code); res {
+		case totpOK:
+			// continue to session issuance
+		case totpReplay:
+			// Valid code already spent — do NOT count toward lockout (common when
+			// the authenticator still shows the same digits and the user retries).
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: ip, IP: ip, Message: Tz("log.totp_replay", acc.Username)})
+			s.writeTOTPFailure(w, r, totpReplay, http.StatusUnauthorized)
+			return
+		default:
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(acc.Username)
 			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.totp_failed", acc.Username)})
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
+			s.writeTOTPFailure(w, r, totpInvalid, http.StatusUnauthorized)
 			return
 		}
 	}

@@ -1,6 +1,7 @@
 {
   "auth.invalid_credentials": "使用者名稱或密碼錯誤",
-  "auth.totp_error": "動態驗證碼錯誤",
+  "auth.totp_error": "動態驗證碼錯誤，請輸入 Authenticator 目前顯示的新口令",
+  "auth.totp_replay": "該動態口令已使用，請等待 Authenticator 重新整理後再輸入新口令",
   "auth.too_many_attempts": "登入嘗試過於頻繁，請 5 分鐘後再試",
   "auth.mfa_required_first": "請先完成兩步驗證綁定",
   "auth.insufficient_permission": "權限不足，該操作需要更高權限",
@@ -331,6 +332,7 @@
   "log.login_failed": "登入失敗：%s",
   "log.login_success": "登入成功：%s",
   "log.totp_failed": "動態驗證碼錯誤：%s",
+  "log.totp_replay": "動態口令重複使用（已消費）：%s",
   "log.update_profile": "更新個人資訊：%s",
   "log.change_password": "修改登入密碼：%s",
   "log.enable_mfa": "啟用兩步驗證：%s",

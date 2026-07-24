@@ -1,6 +1,7 @@
 {
   "auth.invalid_credentials": "用户名或密码错误",
-  "auth.totp_error": "动态验证码错误",
+  "auth.totp_error": "动态验证码错误，请输入 Authenticator 当前显示的新口令",
+  "auth.totp_replay": "该动态口令已使用，请等待 Authenticator 刷新后再输入新口令",
   "auth.too_many_attempts": "登录尝试过于频繁，请 5 分钟后再试",
   "auth.mfa_required_first": "请先完成两步验证绑定",
   "auth.insufficient_permission": "权限不足，该操作需要更高权限",
@@ -333,6 +334,7 @@
   "log.login_failed": "登录失败：%s",
   "log.login_success": "登录成功：%s",
   "log.totp_failed": "动态验证码错误：%s",
+  "log.totp_replay": "动态口令重复使用（已消费）：%s",
   "log.update_profile": "更新个人信息：%s",
   "log.change_password": "修改登录密码：%s",
   "log.enable_mfa": "启用两步验证：%s",

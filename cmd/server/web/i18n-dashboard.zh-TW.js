@@ -413,6 +413,7 @@ window.DICT_TW = {
   "toast.read_failed2": "讀取失敗: ",
   "toast.login_failed2": "登入失敗: ",
   "toast.login_timeout": "請求超時，請檢查網路後重試",
+  "toast.login_timeout_mfa": "請求超時。若已開啟兩步驗證，請等待 Authenticator 重新整理後輸入新口令再試",
   "toast.login_network_error": "網路連線失敗，請檢查網路設定後重試",
   "toast.network_check_failed": "網路連線異常，請檢查網路後重新整理頁面",
   "toast.trigger_failed2": "觸發失敗: ",

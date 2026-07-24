@@ -94,8 +94,8 @@ func (s *Server) handleTerminalPasswordSet(w http.ResponseWriter, r *http.Reques
 				writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true})
 				return
 			}
-			if !s.auth.verifyTOTPOnce(acc.Username, acc.MFASecret, req.Code) {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.totp_error")})
+			if res := s.auth.verifyAndConsumeTOTP(acc.Username, acc.MFASecret, req.Code); res != totpOK {
+				s.writeTOTPFailure(w, r, res, http.StatusBadRequest)
 				return
 			}
 		} else {
