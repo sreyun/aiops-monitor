@@ -296,6 +296,13 @@ type Agent struct {
 	hypervInterval   time.Duration // Hyper-V 虚拟机采集间隔（0 → 默认 60s）
 	hypervDisabled   bool          // 显式关闭 Hyper-V 采集（默认自动探测）
 
+	// desktopDisabled skips the in-process web-desktop channel. Set by the
+	// Windows service, which delegates screen capture/input to a helper worker
+	// spawned into the active console session (so it can follow the secure
+	// desktop, i.e. lock/login screens). Exactly one process must own the
+	// desktop channel per host to avoid double-registration on the server.
+	desktopDisabled bool
+
 	mu            sync.Mutex
 	latestCustom  map[string]float64
 	pendingEvents []shared.Event
@@ -373,6 +380,42 @@ func (a *Agent) reconcileIdentity() {
 	}
 }
 
+// RunDesktopOnly runs ONLY the web-desktop channel for every target and nothing
+// else (no metrics, plugins, terminal, forward…). It is the entry point for the
+// Windows desktop worker process, which the service spawns into the active
+// console session so screen capture/input can follow the secure desktop
+// (lock/login screens). It blocks until ctx is cancelled.
+func (a *Agent) RunDesktopOnly(ctx context.Context) {
+	// The worker does not register (the service does), so reconcileIdentity would
+	// be a no-op. Instead re-read the canonical host id the service may have just
+	// persisted, so deskWait's host param matches the server's host record.
+	if a.stateFile != "" {
+		if id := readHostIDFromState(a.stateFile); id != "" {
+			a.identity.HostID = id
+		}
+	}
+	slog.Info("桌面 worker 启动",
+		"host", a.identity.Hostname,
+		"id", short(a.identity.HostID),
+		"servers", len(a.targets))
+	if a.identity.Fingerprint == "" {
+		slog.Error("桌面 worker 无机器指纹，无法通过服务端鉴权，退出")
+		return
+	}
+	var wg sync.WaitGroup
+	for _, t := range a.targets {
+		wg.Add(1)
+		tgt := t
+		go func() {
+			defer wg.Done()
+			a.runDesktopChannelFor(tgt)
+		}()
+	}
+	<-ctx.Done()
+	slog.Info("桌面 worker 收到退出信号")
+	// runDesktopChannelFor loops on deskWait; process exit tears it down.
+}
+
 func (a *Agent) Run(ctx context.Context) {
 	// 认回规范身份必须先于一切上报与采集器启动
 	a.reconcileIdentity()
@@ -421,14 +464,16 @@ func (a *Agent) Run(ctx context.Context) {
 		}()
 	}
 
-	// Start one web-desktop channel per target
-	for _, t := range a.targets {
-		childWg.Add(1)
-		tgt := t
-		go func() {
-			defer childWg.Done()
-			a.runDesktopChannelFor(tgt)
-		}()
+	// Start one web-desktop channel per target (unless delegated to a worker).
+	if !a.desktopDisabled {
+		for _, t := range a.targets {
+			childWg.Add(1)
+			tgt := t
+			go func() {
+				defer childWg.Done()
+				a.runDesktopChannelFor(tgt)
+			}()
+		}
 	}
 
 	// Start one forward channel per target
