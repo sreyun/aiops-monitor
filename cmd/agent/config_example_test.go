@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"os"
 	"testing"
 
 	"aiops-monitor/shared"
@@ -31,5 +33,15 @@ func TestEmbeddedConfigExampleDecodes(t *testing.T) {
 	}
 	if !cfg.LogEncrypt {
 		t.Error("log_encrypt should decode to true")
+	}
+}
+
+func TestEmbeddedConfigExampleIsInSync(t *testing.T) {
+	root, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("read root config example: %v", err)
+	}
+	if !bytes.Equal(root, configExampleYAML) {
+		t.Fatal("cmd/agent/config_example.yaml is stale; run `go generate ./cmd/agent`")
 	}
 }

@@ -912,6 +912,33 @@
           <textarea id="installLogPaths" rows="3" style="width:100%;font-family:monospace;font-size:12px" placeholder="/var/log/nginx/access.log&#10;/var/log/nginx/error.log&#10;/var/log/myapp/"></textarea>
         </div>
       </div>
+      <div class="field log-collect" id="networkAuditInstallSection">
+        <div class="log-collect-head" id="networkAuditToggle" role="button" tabindex="0">
+          <span>🛡 网络与大模型内容审计（跨平台，可选）</span>
+          <span class="lc-caret" id="networkAuditCaret">▸</span>
+        </div>
+        <div id="networkAuditBody" style="display:none">
+          <div class="hint" style="margin-bottom:8px">
+            HTTPS 正文已被 TLS 加密，本功能不会也不能通过被动抓包解密；可采集 DNS/SNI 目的域名元数据，以及指定端口的<b>明文 HTTP</b> 请求/响应。
+            大模型 HTTPS prompt/completion 审计建议部署在 LLM API 网关或应用 SDK 层。Linux 默认使用 AF_PACKET；Windows/macOS 使用 TShark（需 Wireshark，Windows 还需 Npcap，macOS 建议安装 ChmodBPF）。请确保已获授权并履行告知义务。
+          </div>
+          <label class="switch" style="display:flex;margin:4px 0"><input type="checkbox" id="installSNIEnabled"> 启用 DNS/SNI 元数据观测</label>
+          <div class="grid2">
+            <div class="field"><label>采集后端</label><select id="installCaptureBackend"><option value="auto">自动（推荐）</option><option value="native">Linux 原生 AF_PACKET</option><option value="tshark">TShark</option></select></div>
+            <div class="field"><label>抓包网卡/编号（留空=自动）</label><input type="text" id="installSNIInterface" class="mono" placeholder="eth0 / en0 / 1"></div>
+          </div>
+          <label class="switch" style="display:flex;margin:4px 0;color:var(--warn-txt)"><input type="checkbox" id="installContentAudit"> 启用高敏感明文 HTTP 内容审计</label>
+          <div class="grid2">
+            <div class="field"><label>明文服务端口白名单</label><input type="text" id="installContentAuditPorts" class="mono" value="11434,8000,8080" placeholder="11434,8000,8080"></div>
+            <div class="field"><label>单请求正文上限（字节）</label><input type="number" id="installContentAuditMaxBody" class="mono" value="4096" min="1024" max="65536" step="1024"></div>
+            <div class="field"><label>正文策略</label><select id="installContentAuditBodyMode"><option value="redacted">端侧脱敏（推荐）</option><option value="metadata">仅元数据/哈希</option><option value="full">完整正文（高风险）</option></select></div>
+            <div class="field"><label>每分钟事件上限</label><input type="number" id="installContentAuditMaxEvents" class="mono" value="2000" min="1" max="100000" step="100"></div>
+          </div>
+          <div class="field"><label>目标域名白名单（逗号分隔，支持 *.example.com；留空仅按端口）</label><input type="text" id="installContentAuditHosts" class="mono" placeholder="localhost,*.internal.example.com"></div>
+          <div class="field"><label>排除路径（逗号分隔）</label><input type="text" id="installContentAuditExcludePaths" class="mono" value="/health*,/metrics*,/ready*,/live*"></div>
+          <div class="hint">内容审计默认关闭；建议使用域名+端口双重白名单及“端侧脱敏”。完整正文属于 break-glass 模式，服务端默认保留 30 天。</div>
+        </div>
+      </div>
       <div class="tabs" id="osTabs">
         <button class="tab active" data-os="linux">Linux</button>
         <button class="tab" data-os="windows">Windows</button>
@@ -1681,11 +1708,70 @@
   <div class="modal">
     <div class="modal-head"><h3>✨ AI 生成仪表盘</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
+      <div class="dash-ai-presets" id="dashAIPresets">
+        <button type="button" data-dash-ai-preset="host">主机黄金信号</button>
+        <button type="button" data-dash-ai-preset="service">服务 SLI/SLO</button>
+        <button type="button" data-dash-ai-preset="database">数据库性能</button>
+        <button type="button" data-dash-ai-preset="network">网络与流量</button>
+        <button type="button" data-dash-ai-preset="capacity">容量与成本</button>
+      </div>
       <div class="field"><label style="display:flex;align-items:center;gap:8px">描述你想要的看板<button class="btn ghost" id="dashAIOptimizePrompt" style="margin-left:auto;padding:2px 10px;font-size:12px" title="用 AI 优化当前描述并直接覆盖输入框">✨ 优化提示词</button></label><textarea id="dashAIPrompt" rows="4" placeholder="如：给我一个 MySQL 概览看板，包含连接数、QPS、慢查询、缓冲池命中率、复制延迟；按实例下钻。&#10;或：监控这台主机的 CPU / 内存 / 磁盘 / 网络的黄金信号。"></textarea></div>
       <div class="field"><label>看板名称（可选）</label><input type="text" id="dashAIName" placeholder="留空由 AI 命名"></div>
       <div class="hint">AI 会读取 VictoriaMetrics 中的可用指标，据你的需求生成 PromQL 面板并落盘。生成后可继续编辑、解读、转工单。</div>
+      <div class="dash-ai-progress" id="dashAIProgress" style="display:none" role="status" aria-live="polite">
+        <div class="dash-ai-progress-head"><span id="dashAIProgressStage">准备生成…</span><b id="dashAIProgressPct">0%</b></div>
+        <div class="dash-ai-progress-track"><span id="dashAIProgressBar"></span></div>
+        <div class="hint" id="dashAIProgressHint">正在读取真实指标并构建组件、查询与布局。</div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashAICreate">生成</button></div>
+  </div>
+</div>
+
+<!-- ===== AI 看板优化：查询干跑 + 差异预览 + 人工确认 ===== -->
+<div class="mask dash-ai-review-mask" id="dashAIReviewMask">
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3>✨ 审阅 AI 优化方案</h3><button class="btn ghost close" id="dashAIReviewClose" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="hint">AI 输出已在服务端完成结构校验与查询干跑。应用前请重点检查删除项、无数据查询和业务语义；确认后才会写入。</div>
+      <div id="dashAIReviewSummary"></div>
+      <div class="dash-review-grid">
+        <section><h4 class="add">新增</h4><div id="dashAIReviewAdded"></div></section>
+        <section><h4 class="change">调整</h4><div id="dashAIReviewChanged"></div></section>
+        <section><h4 class="remove">删除</h4><div id="dashAIReviewRemoved"></div></section>
+      </div>
+      <div id="dashAIReviewWarnings" class="dash-review-warnings" role="status" aria-live="polite"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="dashAIReviewCancel">返回修改</button><button class="btn primary" id="dashAIReviewApply">确认应用</button></div>
+  </div>
+</div>
+
+<!-- ===== AI 工单草案：人工编辑确认后创建 ===== -->
+<div class="mask" id="dashTicketPreviewMask" data-close>
+  <div class="modal modal-lg">
+    <div class="modal-head"><h3>🎫 审阅 AI 工单草案</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="hint">AI 只负责生成草案，不会自动建单。请核对影响范围、证据、优先级和处置建议后确认。</div>
+      <div class="grid2">
+        <div class="field"><label>工单标题</label><input type="text" id="dashTicketTitle" maxlength="200"></div>
+        <div class="field"><label>优先级</label><div class="select-wrap"><select id="dashTicketPriority"><option value="p1">P1 · 严重故障</option><option value="p2">P2 · 重要异常</option><option value="p3">P3 · 一般问题</option><option value="p4">P4 · 优化项</option></select></div></div>
+      </div>
+      <div class="field"><label>问题摘要、证据与建议处置</label><textarea id="dashTicketSummary" rows="10" maxlength="65536"></textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashTicketConfirm">确认创建工单</button></div>
+  </div>
+</div>
+
+<!-- ===== 看板与诊断报告导出 ===== -->
+<div class="mask" id="dashExportMask" data-close>
+  <div class="modal">
+    <div class="modal-head"><h3>⇩ 导出诊断报告</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="field"><label>输出格式</label><div class="select-wrap"><select id="dashExportFormat"><option value="markdown">Markdown 报告</option><option value="excel">Excel 表格</option><option value="word">Word 文档</option><option value="pdf">PDF（浏览器打印）</option></select></div></div>
+      <label class="switch"><input type="checkbox" id="dashExportLive" checked> <span>包含当前时间范围的实时诊断快照</span></label>
+      <div class="hint">Word / PDF 使用统一报告封面、概览、组件配置、实时快照与风险声明；Excel 按摘要、结论、数据表分工作表输出。</div>
+    </div>
+    <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashExportRun">生成报告</button></div>
   </div>
 </div>
 
@@ -1733,6 +1819,17 @@
     <div class="modal-head"><h3 id="panelEditTitle">编辑面板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <input type="hidden" id="panelId">
+      <div class="editor-sec">组件模板</div>
+      <div class="panel-template-palette" id="panelTemplatePalette">
+        <button type="button" data-panel-template="trend"><b>⌁ 趋势</b><span>时序与变化</span></button>
+        <button type="button" data-panel-template="kpi"><b>123 KPI</b><span>关键单值</span></button>
+        <button type="button" data-panel-template="gauge"><b>◔ 仪表</b><span>阈值水位</span></button>
+        <button type="button" data-panel-template="ranking"><b>☷ 排行</b><span>Top-N 对比</span></button>
+        <button type="button" data-panel-template="table"><b>▤ 表格</b><span>结构化明细</span></button>
+        <button type="button" data-panel-template="logs"><b>≡ 日志</b><span>Loki 日志流</span></button>
+        <button type="button" data-panel-template="alerts"><b>⚠ 告警</b><span>当前告警</span></button>
+        <button type="button" data-panel-template="text"><b>¶ 说明</b><span>安全 Markdown</span></button>
+      </div>
       <div class="editor-sec">基本</div>
       <div class="grid2">
         <div class="field"><label>标题</label><input type="text" id="panelTitle" placeholder="如 CPU 使用率"></div>
@@ -1748,10 +1845,10 @@
       <div class="editor-sec" id="panelQuerySec">查询</div>
       <div id="panelTargetsWrap">
         <div id="panelTargets"></div>
-        <button class="btn sm" id="panelAddTarget" type="button">+ 添加查询</button>
+        <div class="panel-query-tools"><button class="btn sm" id="panelAddTarget" type="button">+ 添加查询</button><button class="btn sm" id="panelTestQuery" type="button">▶ 测试查询</button><span class="panel-query-test-result" id="panelQueryTestResult" role="status" aria-live="polite"></span></div>
         <div class="hint" id="panelQueryHint" style="margin-top:6px">PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。</div>
       </div>
-      <div class="field" id="panelTextRow" style="display:none"><label>文本内容（支持基本 HTML）</label><textarea id="panelText" rows="4"></textarea></div>
+      <div class="field" id="panelTextRow" style="display:none"><label>文本内容（安全 Markdown，不执行 HTML / 外链）</label><textarea id="panelText" rows="6" placeholder="支持标题、列表、加粗、行内代码和代码块；原始 HTML 会按文本显示。"></textarea></div>
 
       <div class="editor-sec">显示</div>
       <div class="grid2" id="panelUnitRow">
@@ -1895,6 +1992,14 @@
         <button type="button" class="btn sm" data-pb-tpl="sec">安全巡检</button>
         <button type="button" class="btn sm" data-pb-tpl="bigdata">大数据巡检</button>
       </div>
+      <details class="pb-adv" style="margin-bottom:10px">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 8px">专家执行策略（并发、重试与失败回滚）</summary>
+        <div class="grid2">
+          <div class="field"><label>最大并发主机数</label><input type="number" id="pbMaxParallel" class="mono" value="30" min="1" max="100"><div class="hint">限制单个剧本同时执行的主机，避免惊群。</div></div>
+          <div class="field"><label>失败补偿</label><label class="switch"><input type="checkbox" id="pbAutoRollback"> 失败时按成功步骤的逆序执行显式回滚</label></div>
+        </div>
+        <div class="hint">自动回滚只执行每一步明确配置的回滚命令，不会猜测逆操作；回滚自身也会进入执行审计。</div>
+      </details>
       <div class="subhead" data-i18n="playbook.steps">步骤列表</div>
       <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
       <button class="btn" id="pbAddStep" type="button" style="margin-top:8px" data-i18n="playbook.add_step">+ 添加步骤</button>
@@ -2255,6 +2360,8 @@
                 <p class="ai-footnote">WeKnora 未传库 ID 时通常不会搜全库。留空后本平台会先拉取可见知识库列表再跨库检索；填写则只搜指定库。</p>
                 <div class="field"><label class="switch"><input type="checkbox" id="disablePublicChatMemory"> <span>敏感模式：对话不写入公共向量记忆</span></label></div>
                 <p class="ai-footnote">开启后聊天/助手闲聊不再进公共库；结案、诊断采纳、避坑沉淀仍会写入。</p>
+                <div class="field"><label class="switch"><input type="checkbox" id="allowUnverifiedAIOutputLearning"> <span>高级：允许未采纳的 AI 对话输出参与长期学习（不推荐）</span></label></div>
+                <p class="ai-footnote">默认关闭以防提示注入或幻觉污染长期记忆。推荐仅让人工采纳、点赞、真实执行成功和结案结果进入学习闭环。</p>
                 <div class="ai-card-test">
                   <span class="ai-test-result" id="aiWeKnoraTestResult"></span>
                   <button class="btn sm ghost" id="aiWeKnoraListBtn" type="button">拉取知识库列表</button>

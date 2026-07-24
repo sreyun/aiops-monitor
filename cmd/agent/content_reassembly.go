@@ -35,54 +35,174 @@ func makeConnKey(sIP string, sPort uint16, dIP string, dPort uint16) connKey {
 	return connKey{dIP, sIP, dPort, sPort}
 }
 
-// dirStream 是连接一个方向的重组缓冲（去重后按序追加）。
+// dirStream 是连接一个方向的有界重组缓冲。前向乱序段先进入 pending，只有填平
+// sequence gap 后才追加；首个载荷段之后到达的紧邻前段可安全 prepend。
 type dirStream struct {
-	haveBase  bool
-	maxEnd    uint32 // 已收到的最高 seq+len（去重重传/重叠）
-	buf       []byte
-	truncated bool
+	haveBase   bool
+	startSeq   uint32
+	nextSeq    uint32
+	buf        []byte
+	pending    map[uint32][]byte
+	pendingLen int
+	truncated  bool
 }
 
-// appendSeg 去重后追加一个 TCP 段的 payload（cap 封顶）。
-func (d *dirStream) appendSeg(seq uint32, payload []byte, cap int) {
+// appendSeg 去重/处理重叠并按序追加。内存总量（连续缓冲+乱序等待）不超过 cap。
+func (d *dirStream) appendSeg(seq uint32, payload []byte, capacity int) {
 	if len(payload) == 0 {
 		return
 	}
 	end := seq + uint32(len(payload))
 	if !d.haveBase {
 		d.haveBase = true
-		d.maxEnd = seq // 基准 = 首段 seq
+		d.startSeq = seq
+		d.nextSeq = seq
 	}
-	if seqLE(end, d.maxEnd) {
-		return // 完全重传
+	// 首次看到的 payload 可能不是该方向的首段；紧邻或重叠的更早段可 prepend。
+	if seqLT(seq, d.startSeq) {
+		if seqLT(end, d.startSeq) {
+			d.truncated = true // 前方仍有 gap，不能伪造连续字节流
+			return
+		}
+		prefixLen := int(d.startSeq - seq)
+		if prefixLen > len(payload) {
+			prefixLen = len(payload)
+		}
+		if n := d.prepend(payload[:prefixLen], capacity); n > 0 {
+			d.startSeq -= uint32(n)
+		}
+		if seqLT(d.nextSeq, end) {
+			skip := int(d.nextSeq - seq)
+			d.appendContiguous(payload[skip:], capacity)
+			d.drainPending(capacity)
+		}
+		return
 	}
-	if seqLT(seq, d.maxEnd) { // 部分重叠：只取超出的尾部
-		skip := d.maxEnd - seq
+
+	if seqLT(seq, d.nextSeq) {
+		if seqLE(end, d.nextSeq) {
+			return // 完全重传
+		}
+		skip := d.nextSeq - seq
 		if int(skip) < len(payload) {
 			payload = payload[skip:]
 		} else {
-			payload = nil
+			return
 		}
+		seq = d.nextSeq
 	}
-	if len(payload) > 0 && len(d.buf) < cap {
-		if room := cap - len(d.buf); len(payload) > room {
-			payload = payload[:room]
-			d.truncated = true
+
+	if seq != d.nextSeq {
+		d.storePending(seq, payload, capacity)
+		return
+	}
+	d.appendContiguous(payload, capacity)
+	d.drainPending(capacity)
+}
+
+func (d *dirStream) appendContiguous(payload []byte, capacity int) {
+	originalLen := len(payload)
+	room := capacity - len(d.buf) - d.pendingLen
+	if room < len(payload) {
+		if room < 0 {
+			room = 0
 		}
-		d.buf = append(d.buf, payload...)
-	} else if len(payload) > 0 {
+		payload = payload[:room]
 		d.truncated = true
 	}
-	d.maxEnd = end
+	d.buf = append(d.buf, payload...)
+	// Advance over the observed segment even when storage is truncated; otherwise
+	// every following packet would be retained as an artificial gap.
+	d.nextSeq += uint32(originalLen)
+}
+
+func (d *dirStream) prepend(payload []byte, capacity int) int {
+	if len(payload) == 0 {
+		return 0
+	}
+	room := capacity - len(d.buf) - d.pendingLen
+	if room < len(payload) {
+		payload = payload[len(payload)-maxInt(room, 0):]
+		d.truncated = true
+	}
+	if len(payload) == 0 {
+		return 0
+	}
+	next := make([]byte, 0, len(payload)+len(d.buf))
+	next = append(next, payload...)
+	next = append(next, d.buf...)
+	d.buf = next
+	return len(payload)
+}
+
+func (d *dirStream) storePending(seq uint32, payload []byte, capacity int) {
+	if d.pending == nil {
+		d.pending = map[uint32][]byte{}
+	}
+	if existing, ok := d.pending[seq]; ok && len(existing) >= len(payload) {
+		return
+	}
+	if old := d.pending[seq]; old != nil {
+		d.pendingLen -= len(old)
+		delete(d.pending, seq)
+	}
+	room := capacity - len(d.buf) - d.pendingLen
+	if room <= 0 {
+		d.truncated = true
+		return
+	}
+	copyLen := len(payload)
+	if copyLen > room {
+		copyLen = room
+		d.truncated = true
+	}
+	d.pending[seq] = append([]byte(nil), payload[:copyLen]...)
+	d.pendingLen += copyLen
+}
+
+func (d *dirStream) drainPending(capacity int) {
+	for {
+		progressed := false
+		for seq, payload := range d.pending {
+			end := seq + uint32(len(payload))
+			if seqLE(end, d.nextSeq) {
+				delete(d.pending, seq)
+				d.pendingLen -= len(payload)
+				progressed = true
+				break
+			}
+			if seqLT(d.nextSeq, seq) {
+				continue
+			}
+			delete(d.pending, seq)
+			d.pendingLen -= len(payload)
+			skip := int(d.nextSeq - seq)
+			d.appendContiguous(payload[skip:], capacity)
+			progressed = true
+			break
+		}
+		if !progressed {
+			return
+		}
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // httpStream 是一条连接的 HTTP 请求/响应重组状态。
 type httpStream struct {
-	req, resp dirStream
-	srcIP     string // 客户端
-	dstIP     string
-	dstPort   uint16
-	lastSeen  int64
+	req, resp      dirStream
+	srcIP          string // 客户端
+	srcPort        uint16
+	dstIP          string
+	dstPort        uint16
+	endpointsKnown bool
+	lastSeen       int64
 }
 
 // reassembler 是一个 worker 独占的重组器（无锁）。
@@ -125,16 +245,26 @@ func (ra *reassembler) feed(info l4Info) {
 	if !reqDir && !respDir {
 		return
 	}
+	key := makeConnKey(info.srcIP, info.srcPort, info.dstIP, info.dstPort)
+	s := ra.conns[key]
+	if s != nil && s.endpointsKnown {
+		switch {
+		case info.srcIP == s.srcIP && info.srcPort == s.srcPort:
+			reqDir, respDir = true, false
+		case info.srcIP == s.dstIP && info.srcPort == s.dstPort:
+			reqDir, respDir = false, true
+		}
+	}
 	// 端口白名单为空时两个方向都可能 true：以"载荷像 HTTP 请求"或"像响应"再分一次（尽力）。
 	if reqDir && respDir {
 		if bytes.HasPrefix(info.payload, []byte("HTTP/")) {
 			reqDir = false
-		} else {
+		} else if looksLikeHTTPRequest(info.payload) {
 			respDir = false
+		} else {
+			return // 尚无方向证据，避免把响应续包拼进请求
 		}
 	}
-	key := makeConnKey(info.srcIP, info.srcPort, info.dstIP, info.dstPort)
-	s := ra.conns[key]
 	if s == nil {
 		if len(ra.conns) >= ra.maxConn {
 			ra.evictOldest()
@@ -144,9 +274,14 @@ func (ra *reassembler) feed(info l4Info) {
 	}
 	s.lastSeen = time.Now().Unix()
 	if reqDir {
-		s.srcIP, s.dstIP, s.dstPort = info.srcIP, info.dstIP, info.dstPort
+		s.srcIP, s.srcPort, s.dstIP, s.dstPort, s.endpointsKnown =
+			info.srcIP, info.srcPort, info.dstIP, info.dstPort, true
 		s.req.appendSeg(info.seq, info.payload, ra.reqCap)
 	} else {
+		if !s.endpointsKnown {
+			s.srcIP, s.srcPort, s.dstIP, s.dstPort, s.endpointsKnown =
+				info.dstIP, info.dstPort, info.srcIP, info.srcPort, true
+		}
 		s.resp.appendSeg(info.seq, info.payload, ra.respCap)
 	}
 
@@ -170,7 +305,8 @@ func (ra *reassembler) tryEmit(key connKey, s *httpStream, fin bool) bool {
 	// 到这：请求 OK 且（响应收全 或 fin）。构造事件。
 	ev := shared.ContentAuditEvent{
 		SrcIP: s.srcIP, DstIP: s.dstIP, DstPort: s.dstPort,
-		Method: rh.method, Host: rh.host, Path: rh.path, CType: rh.ctype,
+		Protocol: "http",
+		Method:   rh.method, Host: rh.host, Path: rh.path, CType: rh.ctype,
 		Body:          rh.body,
 		Status:        sh.status,
 		RespCType:     sh.ctype,
@@ -257,6 +393,15 @@ func parseReqComplete(buf []byte) (reqHead, bool) {
 	}
 	h := reqHead{method: rl[0], path: rl[1], host: headerVal(lines[1:], "Host"), ctype: headerVal(lines[1:], "Content-Type")}
 	ce := headerVal(lines[1:], "Content-Encoding")
+	te := strings.ToLower(headerVal(lines[1:], "Transfer-Encoding"))
+	if strings.Contains(te, "chunked") {
+		dec, done := dechunk(body)
+		if done {
+			dec = decodeContentEncoding(dec, ce)
+		}
+		h.body = string(cleanUTF8(dec))
+		return h, done
+	}
 	cl, hasCL := parseContentLength(lines[1:])
 	if !hasCL {
 		h.body = string(cleanUTF8(body)) // 无 CL（如 GET）：现有 body 即全部
@@ -284,7 +429,16 @@ func parseRespComplete(buf []byte) (respHead, bool) {
 	if len(sl) >= 2 {
 		h.status, _ = strconv.Atoi(sl[1])
 	}
+	if h.status >= 100 && h.status < 200 && h.status != 101 {
+		if len(body) == 0 {
+			return respHead{}, false
+		}
+		return parseRespComplete(body) // skip 100 Continue / 103 Early Hints
+	}
 	h.ctype = headerVal(lines[1:], "Content-Type")
+	if h.status == 101 || h.status == 204 || h.status == 304 {
+		return h, true // RFC-defined no-body responses
+	}
 	te := strings.ToLower(headerVal(lines[1:], "Transfer-Encoding"))
 	ce := headerVal(lines[1:], "Content-Encoding") // gzip/deflate：收全后需先解压再清洗
 

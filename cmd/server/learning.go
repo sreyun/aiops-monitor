@@ -147,6 +147,10 @@ func (s *Server) learnFromResolution(inc Incident, note string) {
 		return
 	}
 	s.rememberAI("resolution", fmt.Sprintf("incident:%d", inc.ID), text)
+	// 真实结案是比单次点赞更强的现实验证信号：提升该事件最新诊断案例。
+	if s.pg != nil {
+		_ = s.pg.updateDiagnosisFeedback(inc.ID, "helpful")
+	}
 	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", inc.ID), reinforceResolved)
 	s.reinforceSkill(inc.Title+" "+inc.Type+" "+note, reinforceResolved)
 	// 反馈驱动：被解决验证的结案卡尝试升格为可复用 Skill（去重合并，异步）

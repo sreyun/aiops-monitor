@@ -14,9 +14,18 @@ type Playbook struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description,omitempty"`
 	Steps       []PlaybookStep    `json:"steps"`
+	Strategy    PlaybookStrategy  `json:"strategy,omitempty"`
 	Schedule    *PlaybookSchedule `json:"schedule,omitempty"` // optional timed trigger
 	CreatedAt   int64             `json:"created_at"`
 	UpdatedAt   int64             `json:"updated_at"`
+}
+
+// PlaybookStrategy contains fleet-wide execution controls. MaxParallel is
+// bounded server-side to avoid a thundering herd; AutoRollback runs explicit
+// successful-step rollback commands in reverse order after a terminal failure.
+type PlaybookStrategy struct {
+	MaxParallel  int  `json:"max_parallel,omitempty"` // default 30, max 100
+	AutoRollback bool `json:"auto_rollback,omitempty"`
 }
 
 // PlaybookSchedule defines an optional timed trigger for a playbook. A minimal,
@@ -36,16 +45,22 @@ type PlaybookSchedule struct {
 // "all" = every online host; "category:xxx" = hosts in category xxx;
 // "host:ID" = a single host by ID.
 type PlaybookStep struct {
-	Name        string `json:"name"`
-	Command     string `json:"command"`
-	CommandWin  string `json:"command_win,omitempty"` // Windows 覆盖命令（留空=用 Command）
-	CommandMac  string `json:"command_mac,omitempty"` // macOS 覆盖命令（留空=用 Command）
-	Target      string `json:"target"`                // "all" | "category:xxx" | "system:os" | "host:ID"
-	TimeoutSec  int    `json:"timeout_sec"`
-	ContinueErr bool   `json:"continue_on_error"`
-	IgnoreExit  bool   `json:"ignore_exit,omitempty"` // 非零退出码也算成功（grep/diff 等过滤命令）
-	Register    string `json:"register,omitempty"`    // 把本步输出存入该变量名，供后续步骤 {{名}} 引用
-	When        string `json:"when,omitempty"`        // 条件：求值为空/false/0/no 则跳过本步
+	Name          string `json:"name"`
+	Command       string `json:"command"`
+	CommandWin    string `json:"command_win,omitempty"` // Windows 覆盖命令（留空=用 Command）
+	CommandMac    string `json:"command_mac,omitempty"` // macOS 覆盖命令（留空=用 Command）
+	Target        string `json:"target"`                // "all" | "category:xxx" | "system:os" | "host:ID"
+	TimeoutSec    int    `json:"timeout_sec"`
+	ContinueErr   bool   `json:"continue_on_error"`
+	IgnoreExit    bool   `json:"ignore_exit,omitempty"`     // 非零退出码也算成功（grep/diff 等过滤命令）
+	Register      string `json:"register,omitempty"`        // 把本步输出存入该变量名，供后续步骤 {{名}} 引用
+	When          string `json:"when,omitempty"`            // 条件：求值为空/false/0/no 则跳过本步
+	MaxAttempts   int    `json:"max_attempts,omitempty"`    // 基础设施失败最大尝试次数（默认3，最大6）
+	RetryDelaySec int    `json:"retry_delay_sec,omitempty"` // 线性退避基数（默认2秒，最大60）
+	RetryOnExit   bool   `json:"retry_on_exit,omitempty"`   // 显式允许重试命令非零退出（仅幂等步骤）
+	Rollback      string `json:"rollback,omitempty"`        // 本步成功后，后续失败时的 Linux/默认回滚命令
+	RollbackWin   string `json:"rollback_win,omitempty"`    // Windows 回滚覆盖
+	RollbackMac   string `json:"rollback_mac,omitempty"`    // macOS 回滚覆盖
 	// 内置模块（非空则走模块、忽略上面的 Command）：
 	// 只读：gather_facts / disk_usage / mem_info / net_* / docker_* / ...
 	// 变更：service / package / copy
@@ -79,6 +94,8 @@ type StepResult struct {
 	Status   string `json:"status"`
 	Output   string `json:"output"`
 	Duration int64  `json:"duration_ms"`
+	Attempts int    `json:"attempts,omitempty"`
+	Rollback bool   `json:"rollback,omitempty"`
 }
 
 // playbookManager stores playbooks and execution history in memory + config.
@@ -233,12 +250,36 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 		if p.Steps[i].TimeoutSec < 5 {
 			p.Steps[i].TimeoutSec = 30
 		}
+		if p.Steps[i].MaxAttempts <= 0 {
+			p.Steps[i].MaxAttempts = 3
+		}
+		if p.Steps[i].MaxAttempts > 6 {
+			return Playbook{}, fmt.Errorf("步骤 %s: max_attempts 最大为 6", p.Steps[i].Name)
+		}
+		if p.Steps[i].RetryDelaySec <= 0 {
+			p.Steps[i].RetryDelaySec = 2
+		}
+		if p.Steps[i].RetryDelaySec > 60 {
+			return Playbook{}, fmt.Errorf("步骤 %s: retry_delay_sec 最大为 60", p.Steps[i].Name)
+		}
+		if !validPlaybookTarget(p.Steps[i].Target) {
+			return Playbook{}, fmt.Errorf("步骤 %s: 无效目标选择器 %q", p.Steps[i].Name, p.Steps[i].Target)
+		}
 	}
 	if len(p.Steps) == 0 {
 		return Playbook{}, fmt.Errorf("%s", Tz("playbook.step_required"))
 	}
 	if err := validatePlaybookCommands(p.Steps, pm.cfg.CmdPolicy()); err != nil {
 		return Playbook{}, err
+	}
+	if err := validatePlaybookVariables(p.Steps); err != nil {
+		return Playbook{}, err
+	}
+	if p.Strategy.MaxParallel <= 0 {
+		p.Strategy.MaxParallel = 30
+	}
+	if p.Strategy.MaxParallel > 100 {
+		return Playbook{}, fmt.Errorf("strategy.max_parallel 最大为 100")
 	}
 	if err := sanitizeSchedule(p.Schedule); err != nil {
 		return Playbook{}, err
@@ -250,6 +291,31 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 		p.CreatedAt = now
 	}
 	return pm.cfg.UpsertPlaybook(p)
+}
+
+func validPlaybookTarget(target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" || target == "all" {
+		return true
+	}
+	for _, prefix := range []string{"category:", "system:", "host:"} {
+		if strings.HasPrefix(target, prefix) {
+			value := strings.TrimSpace(strings.TrimPrefix(target, prefix))
+			if value == "" {
+				return false
+			}
+			if prefix == "system:" {
+				switch strings.ToLower(value) {
+				case "linux", "windows", "macos", "darwin":
+					return true
+				default:
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // Delete removes a playbook by ID.

@@ -68,6 +68,9 @@ function openPlaybookModal(pb) {
   $("pbId").value = pb ? pb.id : "";
   $("pbName").value = pb ? pb.name : "";
   $("pbDesc").value = pb ? (pb.description || "") : "";
+  const strategy = (pb && pb.strategy) || {};
+  $("pbMaxParallel").value = strategy.max_parallel || 30;
+  $("pbAutoRollback").checked = !!strategy.auto_rollback;
   const steps = pb ? pb.steps : [];
   renderPbSteps(steps.length > 0 ? steps : [{
     name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30,
@@ -243,6 +246,19 @@ function renderPbSteps(steps) {
         </div>
       </details>
 
+      <details class="pb-adv"${(s.rollback||s.rollback_win||s.rollback_mac||s.retry_on_exit)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">可靠性控制（重试与显式回滚）</summary>
+        <div class="grid2">
+          <div class="field"><label>最大尝试次数（1-6）</label><input type="number" class="pb-step-attempts mono" value="${s.max_attempts||3}" min="1" max="6"></div>
+          <div class="field"><label>重试退避基数（秒）</label><input type="number" class="pb-step-retry-delay mono" value="${s.retry_delay_sec||2}" min="1" max="60"></div>
+        </div>
+        <label class="switch" style="display:flex;margin:2px 0 8px"><input type="checkbox" class="pb-step-retry-exit" ${s.retry_on_exit?"checked":""}> 非零退出码也重试（仅适用于幂等步骤）</label>
+        <div class="field"><label>Linux / 默认回滚命令</label><textarea class="pb-step-rollback" rows="2" spellcheck="false" placeholder="仅在本步成功、后续步骤失败且剧本开启自动回滚时执行">${esc(s.rollback||"")}</textarea></div>
+        <div class="grid2">
+          <div class="field"><label>Windows 回滚覆盖</label><textarea class="pb-step-rollback-win" rows="2" spellcheck="false">${esc(s.rollback_win||"")}</textarea></div>
+          <div class="field"><label>macOS 回滚覆盖</label><textarea class="pb-step-rollback-mac" rows="2" spellcheck="false">${esc(s.rollback_mac||"")}</textarea></div>
+        </div>
+      </details>
+
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.timeout")}</label><input type="text" class="pb-step-timeout mono" value="${s.timeout_sec||30}" style="width:80px"></div>
         <div class="field"><label>${I18N.t("form.continue_err")}</label><label class="switch"><input type="checkbox" class="pb-step-cont" ${s.continue_on_error?"checked":""}> ${I18N.t("sre.pb_continue_next","继续下一步")}</label></div>
@@ -369,7 +385,13 @@ function collectPlaybook() {
       continue_on_error: el.querySelector(".pb-step-cont").checked,
       ignore_exit: el.querySelector(".pb-step-ignore").checked,
       when: el.querySelector(".pb-step-when").value.trim(),
-      register: el.querySelector(".pb-step-register").value.trim()
+      register: el.querySelector(".pb-step-register").value.trim(),
+      max_attempts: parseInt(el.querySelector(".pb-step-attempts").value) || 3,
+      retry_delay_sec: parseInt(el.querySelector(".pb-step-retry-delay").value) || 2,
+      retry_on_exit: el.querySelector(".pb-step-retry-exit").checked,
+      rollback: el.querySelector(".pb-step-rollback").value.trim(),
+      rollback_win: el.querySelector(".pb-step-rollback-win").value.trim(),
+      rollback_mac: el.querySelector(".pb-step-rollback-mac").value.trim()
     };
     if (mod) {
       step.module = mod;
@@ -389,7 +411,11 @@ function collectPlaybook() {
     if (kind === "daily" || kind === "weekly") schedule.at = $("pbSchedAt").value.trim();
     if (kind === "weekly") schedule.weekday = parseInt($("pbSchedWeekday").value) || 0;
   }
-  return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps, schedule };
+  const strategy = {
+    max_parallel: Math.max(1, Math.min(100, parseInt($("pbMaxParallel").value) || 30)),
+    auto_rollback: $("pbAutoRollback").checked
+  };
+  return { id: $("pbId").value, name: $("pbName").value.trim(), description: $("pbDesc").value.trim(), steps, strategy, schedule };
 }
 
 async function savePlaybook() {
@@ -408,7 +434,25 @@ async function savePlaybook() {
 
 async function executePlaybook(id) {
   try {
-    const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/execute`, { method: "POST" });
+    let riskAccepted = false;
+    const pfResp = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/preflight`);
+    const pf = await pfResp.json().catch(()=>({}));
+    if (!pfResp.ok || !pf.valid) {
+      toast((pf.warnings || []).join("；") || pf.error || "剧本确定性预检未通过", "err");
+      return;
+    }
+    if (pf.risk_level !== "low" || pf.requires_approval || (pf.warnings || []).length) {
+      const risk = pf.risk_level === "high" ? "高" : pf.risk_level === "medium" ? "中" : "低";
+      const detail = [
+        `确定性预检：风险 ${risk}；在线 ${pf.online_targets} 台；离线跳过 ${pf.offline_targets} 台；最大并发 ${pf.max_parallel}。`,
+        pf.auto_rollback ? "失败自动回滚：已启用（仅执行显式回滚命令）。" : "失败自动回滚：未启用。",
+        ...(pf.warnings || [])
+      ].join("\n");
+      if (!confirm(detail + "\n\n确认继续执行？")) return;
+      riskAccepted = !!pf.requires_approval;
+    }
+    const headers = riskAccepted ? {"X-AIOps-Risk-Accepted": "true"} : {};
+    const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/execute`, { method: "POST", headers });
     const j = await r.json().catch(()=>({}));
     if (r.ok) {
       toast(I18N.t("toast.playbook_started"), "ok");
@@ -1051,15 +1095,29 @@ async function applyRemediationDraft(text){
 // readSSEStream reads a Server-Sent Events stream from a fetch response and
 // calls onDelta for each token chunk, onError for errors, onResult for result
 // metadata, and onDone when complete. Returns the accumulated full text.
-async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,onReasoning){
+async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,onReasoning,options){
   const reader=resp.body.getReader();
   const decoder=new TextDecoder();
+  const idleTimeoutMs=Math.max(10000,Number(options&&options.idleTimeoutMs)||180000);
   let buf="";
   let fullText="";
   let fullReasoning="";
+  const readNext=async()=>{
+    let timer=null;
+    try{
+      return await Promise.race([
+        reader.read(),
+        new Promise((_,reject)=>{
+          timer=setTimeout(()=>reject(new Error(I18N.t("sre.stream_idle_timeout","AI 流式响应超时，请重试"))),idleTimeoutMs);
+        })
+      ]);
+    }finally{
+      if(timer) clearTimeout(timer);
+    }
+  };
   try {
     while(true){
-      const {done,value}=await reader.read();
+      const {done,value}=await readNext();
       if(done) break;
       buf+=decoder.decode(value,{stream:true});
       // Split by double newlines to get SSE events
@@ -1084,6 +1142,9 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,
         }
       }
     }
+  } catch(e) {
+    try { await reader.cancel(String(e||"stream cancelled")); } catch(_e) {}
+    throw e;
   } finally { reader.releaseLock(); }
   if(onDone) onDone(fullText);
   return fullText;
@@ -1127,33 +1188,49 @@ function renderDiagnosisChat(){
     }
     let fb="";
     if(m.role==="assistant" && m.content!=="思考中…" && !m._streaming){
-      fb=`<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="${I18N.t("sre.helpful","有用")}">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="${I18N.t("sre.unhelpful","无用")}">👎</button></div>`;
+      fb=m._feedback
+        ? `<div class="ai-chat-fb"><span class="badge ok">${m._feedback==="helpful"?"👍 "+I18N.t("sre.helpful","有用"):"👎 "+I18N.t("sre.unhelpful","无用")}</span></div>`
+        : `<div class="ai-chat-fb"><button class="btn-tiny" data-fb="helpful" data-idx="${i}" title="${I18N.t("sre.helpful","有用")}">👍</button><button class="btn-tiny" data-fb="unhelpful" data-idx="${i}" title="${I18N.t("sre.unhelpful","无用")}">👎</button></div>`;
     }
     return `<div class="ai-chat-msg ${cls}">${body}${fb}</div>`;
   }).join("");
   // Wire feedback buttons
   el.querySelectorAll("[data-fb]").forEach(b=>b.onclick=()=>sendDiagnosisFeedback(parseInt(b.dataset.idx),b.dataset.fb==="helpful"));
-  el.querySelectorAll(".ai-chat-msg.ai").forEach(d=>addCopyTool(d,d.textContent));
+  el.querySelectorAll(".ai-chat-msg.ai").forEach(d=>addCopyTool(d,d.textContent,{feedback:false,regenerate:false}));
   el.scrollTop=el.scrollHeight;
 }
 async function sendDiagnosisFeedback(idx,helpful){
   if(!window._incDiagId) return;
   let reason="";
   if(!helpful){
-    reason=prompt(I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）："),"");
+    reason=await requestAIFeedbackReason({
+      title:I18N.t("sre.improve_ai","帮助 AI 改进"),
+      message:I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）：")
+    });
     if(reason===null) return;
     reason=(reason||"").trim();
     if(!reason){ toast(I18N.t("sre.need_unhelpful_reason","差评需填写原因"),"err"); return; }
   }
   try {
+    const history=window._incDiagHistory||[];
+    const answer=(history[idx]&&history[idx].content)||"";
+    let input="";
+    for(let i=idx-1;i>=0;i--){ if(history[i]&&history[i].role==="user"){ input=history[i].content||""; break; } }
     const r=await fetch(`${API}/incidents/${window._incDiagId}/diagnosis-feedback`,{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message_index:idx,helpful,reason})
+      body:JSON.stringify({message_index:idx,helpful,reason,input,answer})
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ toast(j.error||I18N.t("sre.feedback_failed","反馈失败"),"err"); return; }
-    toast(helpful?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
-  } catch(e){ /* ignore */ }
+    if(history[idx]) history[idx]._feedback=helpful?"helpful":"unhelpful";
+    renderDiagnosisChat();
+    const learned=j.learning_queued!==false;
+    toast(learned
+      ? (helpful?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"))
+      : I18N.t("assist.fb_recorded_no_memory","反馈已记录；持久记忆不可用，本次未进入跨会话学习"), learned?"ok":"warn");
+  } catch(e){
+    toast(I18N.t("sre.feedback_not_saved","反馈未保存，请检查网络后重试"),"err");
+  }
 }
 async function sendDiagnosisChatMsg(){
   const el=$("incDiagInput"); if(!el) return;
@@ -1366,12 +1443,34 @@ async function loadTopology(){
   }catch(e){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
 }
 async function addTopologyEdge(){
-  const from=prompt("From 节点（host:<id> / cat:<分类> / svc:<服务名>）","");
+  const from=await requestAITextInput({
+    title:"添加拓扑依赖",message:"定义依赖起点，支持主机、分类或服务节点。",
+    label:"From 节点",placeholder:"host:<id> / cat:<分类> / svc:<服务名>",
+    submitLabel:"下一步",danger:false,rows:2,maxLength:300,requiredMessage:"请输入 From 节点"
+  });
   if(from===null) return;
-  const to=prompt("To 节点（host:<id> / cat:<分类> / svc:<服务名>）","");
+  const to=await requestAITextInput({
+    title:"添加拓扑依赖",message:`起点：${from}`,
+    label:"To 节点",placeholder:"host:<id> / cat:<分类> / svc:<服务名>",
+    submitLabel:"下一步",danger:false,rows:2,maxLength:300,requiredMessage:"请输入 To 节点"
+  });
   if(to===null) return;
-  const kind=prompt("边类型：depends_on | runs_on | talks_to","depends_on")||"depends_on";
-  const note=prompt("备注（可选）","")||"";
+  const kind=await requestAITextInput({
+    title:"选择依赖类型",message:`${from} → ${to}`,
+    label:"边类型",placeholder:"depends_on | runs_on | talks_to",defaultValue:"depends_on",
+    submitLabel:"下一步",danger:false,rows:1,maxLength:32
+  });
+  if(kind===null) return;
+  if(!["depends_on","runs_on","talks_to"].includes(kind)){
+    toast("边类型仅支持 depends_on、runs_on 或 talks_to","err");
+    return;
+  }
+  const note=await requestAITextInput({
+    title:"补充依赖说明",message:`${from} — ${kind} → ${to}`,
+    label:"备注（可选）",placeholder:"例如：API 读取订单数据库",
+    submitLabel:"保存依赖",danger:false,rows:3,maxLength:500,required:false
+  });
+  if(note===null) return;
   try{
     const r=await fetch(`${API}/topology/edges`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from,to,kind,note})});
     const j=await r.json().catch(()=>({}));
@@ -2287,6 +2386,11 @@ async function loadAIStats(){
     const cost=j.cost_total||0;
     const cur=j.cost_currency||hist.cost_currency||"CNY";
     const persisted=j.persisted!==false;
+    const fbTotal=Number(j.feedback_total)||0;
+    const fbApplied=Number(j.feedback_applied)||0;
+    const fbHelpful=Number(j.feedback_helpful)||0;
+    const fbUnhelpful=Number(j.feedback_unhelpful)||0;
+    const fbPositive=fbTotal?((Number(j.feedback_positive_rate)||0)*100).toFixed(1):"0.0";
     const by=j.by_task||{};
     const taskRows=Object.keys(by).sort().map(k=>{
       const t=by[k];
@@ -2300,6 +2404,13 @@ async function loadAIStats(){
     const users=(byUser.users||[]).map(u=>
       `<tr><td>${esc(u.actor||"")}</td><td>${u.calls||0}</td><td>${u.tokens||0}</td><td>${(u.cost||0).toFixed(4)} ${esc(cur)}</td></tr>`
     ).join("");
+    const feedbackRows=Object.entries(j.feedback_by_task||{})
+      .sort((a,b)=>(b[1].total||0)-(a[1].total||0))
+      .map(([task,f])=>{
+        const n=Number(f.total)||0;
+        const pos=n?(((Number(f.applied)||0)+(Number(f.helpful)||0))*100/n).toFixed(1):"0.0";
+        return `<tr><td class="mono">${esc(task)}</td><td>${n}</td><td>${f.applied||0}</td><td>${f.helpful||0}</td><td>${f.unhelpful||0}</td><td>${pos}%</td></tr>`;
+      }).join("");
     el.innerHTML=`<div class="ai-metric-grid">
       <div class="ai-metric"><div class="hint">调用次数</div><b>${total}</b></div>
       <div class="ai-metric"><div class="hint">失败率</div><b>${rate}%</b></div>
@@ -2307,6 +2418,10 @@ async function loadAIStats(){
       <div class="ai-metric"><div class="hint">Token</div><b>${tok}</b></div>
       <div class="ai-metric"><div class="hint">估算费用</div><b>${cost.toFixed(4)}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ${esc(cur)}</span></b></div>
       <div class="ai-metric"><div class="hint">存储</div><b style="font-size:13px">${persisted?"PostgreSQL":"进程内"}</b></div>
+      <div class="ai-metric" title="采纳、点赞与差评的人工质量信号"><div class="hint">人工反馈</div><b>${fbTotal}</b></div>
+      <div class="ai-metric" title="（实际应用 + 有用）/ 全部人工反馈"><div class="hint">正向反馈率</div><b>${fbPositive}%</b></div>
+      <div class="ai-metric" title="真正应用到配置或输入框的结果"><div class="hint">实际采纳</div><b>${fbApplied}</b></div>
+      <div class="ai-metric" title="将形成避坑经验，不直接污染已验证知识"><div class="hint">需改进</div><b>${fbUnhelpful}</b></div>
     </div>
     <div class="chart-container" style="margin:4px 0 12px">
       <div class="hint" style="margin-bottom:6px">历史组合曲线 · 调用 / Token / 费用</div>
@@ -2314,6 +2429,7 @@ async function loadAIStats(){
     </div>
     ${users?`<div class="hint">用户成本排行</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>用户</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${users}</tbody></table>`:""}
     ${taskRows?`<table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>次数</th><th>失败</th><th>均延迟</th></tr></thead><tbody>${taskRows}</tbody></table>`:`<div class="hint">尚无按任务统计（完成若干 AI 调用后出现）</div>`}
+    ${feedbackRows?`<div class="hint" style="margin-top:10px">人工反馈闭环 · 正向率 = 实际采纳 + 有用</div><table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>反馈</th><th>采纳</th><th>有用</th><th>需改进</th><th>正向率</th></tr></thead><tbody>${feedbackRows}</tbody></table>`:`<div class="hint" style="margin-top:8px">尚无人工反馈；采纳/点赞/差评后将展示学习质量。</div>`}
     ${recent?`<div class="hint" style="margin-top:8px">最近调用</div>${recent}`:""}`;
     // 组合曲线：把多指标归一到同一时间轴（calls / tokens / cost）
     const pts=hist.points||[];
@@ -2370,6 +2486,7 @@ async function openAIConfig(){
     if($("weknoraKey")) $("weknoraKey").value=c.weknora_api_key||"";
     if($("weknoraKBIDs")) $("weknoraKBIDs").value=c.weknora_knowledge_base_ids||"";
     if($("disablePublicChatMemory")) $("disablePublicChatMemory").checked=!!c.disable_public_chat_memory;
+    if($("allowUnverifiedAIOutputLearning")) $("allowUnverifiedAIOutputLearning").checked=!!c.allow_unverified_ai_output_learning;
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary(); updateWeKnoraCardSummary();
     // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
@@ -2487,7 +2604,8 @@ async function saveAIConfig(){
     weknora_url:($("weknoraURL")?.value||"").trim(),
     weknora_api_key:$("weknoraKey")?.value||"",
     weknora_knowledge_base_ids:($("weknoraKBIDs")?.value||"").trim(),
-    disable_public_chat_memory:$("disablePublicChatMemory")?.checked||false};
+    disable_public_chat_memory:$("disablePublicChatMemory")?.checked||false,
+    allow_unverified_ai_output_learning:$("allowUnverifiedAIOutputLearning")?.checked||false};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
@@ -3048,8 +3166,9 @@ function copyText(t){
 }
 function _fallbackCopy(t){ const ta=document.createElement("textarea"); ta.value=t; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(e){} ta.remove(); }
 // 给一条 AI 回复挂上「朗读 / 复制 / 重答 / 👍👎」操作栏（朗读紧贴本条消息下方）
-function addCopyTool(div,rawText){
+function addCopyTool(div,rawText,opts){
   if(!div) return;
+  opts=opts||{};
   // 代码块独立复制（复制对应 <pre> 内容）
   div.querySelectorAll(".ai-code-copy").forEach(b=>{
     b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>b.textContent=I18N.t("sre.copy","复制"),1200); } };
@@ -3064,28 +3183,44 @@ function addCopyTool(div,rawText){
   const btn=document.createElement("button"); btn.textContent=I18N.t("sre.copy","复制"); btn.title=I18N.t("sre.copy_reply","复制回复");
   btn.onclick=()=>{ copyText(rawText); btn.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>{ btn.textContent=I18N.t("sre.copy","复制"); },1200); };
   bar.appendChild(btn);
-  const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
-  rebtn.onclick=regenerateAIChat;
-  bar.appendChild(rebtn);
+  if(opts.regenerate!==false){
+    const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
+    rebtn.onclick=regenerateAIChat;
+    bar.appendChild(rebtn);
+  }
+  if(opts.feedback===false){ div.appendChild(bar); return; }
   const up=document.createElement("button"); up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
   const down=document.createElement("button"); down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
   const sendFb=async (action)=>{
     let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
     let reason="";
     if(action==="unhelpful"){
-      reason=prompt(I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）："),"");
+      reason=await requestAIFeedbackReason({
+        title:I18N.t("sre.improve_ai","帮助 AI 改进"),
+        message:I18N.t("sre.unhelpful_reason","请简要说明为何无用（将写入避坑记忆）：")
+      });
       if(reason===null) return;
       reason=(reason||"").trim();
       if(!reason){ if(typeof toast==="function") toast(I18N.t("sre.need_unhelpful_reason","差评需填写原因"),"err"); return; }
     }
+    let feedbackResult=null;
     try{
       const r=await fetch(`${API}/ai/assist/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({task:"chat",input:q,answer:rawText,action,reason})});
       const j=await r.json().catch(()=>({}));
       if(!r.ok){ if(typeof toast==="function") toast(j.error||I18N.t("sre.feedback_failed","反馈失败"),"err"); return; }
-    }catch(e){}
+      feedbackResult=j;
+    }catch(e){
+      if(typeof toast==="function") toast(I18N.t("sre.feedback_not_saved","反馈未保存，请检查网络后重试"),"err");
+      return;
+    }
     up.style.display="none"; down.style.display="none";
-    if(typeof toast==="function") toast(action==="helpful"?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"),"ok");
+    if(typeof toast==="function"){
+      const learned=!!(feedbackResult&&feedbackResult.learning_queued);
+      toast(learned
+        ? (action==="helpful"?I18N.t("sre.marked_helpful","已标记为有用 👍"):I18N.t("sre.marked_unhelpful","已标记为无用 👎"))
+        : I18N.t("assist.fb_recorded_no_memory","反馈已记录；持久记忆不可用，本次未进入跨会话学习"),learned?"ok":"warn");
+    }
   };
   up.onclick=()=>sendFb("helpful");
   down.onclick=()=>sendFb("unhelpful");
@@ -3152,15 +3287,30 @@ function parseFileAttachment(f){
 }
 // 识别 URL：抓取网页正文作为附件注入上下文
 async function attachURL(){
-  const u=(typeof prompt==="function")?prompt(I18N.t("sre.url_prompt","输入要抓取的网页 URL（将提取正文注入对话）：")):"";
+  const u=await requestAITextInput({
+    title:I18N.t("sre.import_web_title","导入网页知识"),
+    message:I18N.t("sre.url_prompt","输入要抓取的网页 URL（将提取正文注入对话）："),
+    label:"URL",placeholder:"https://example.com/runbook",
+    submitLabel:I18N.t("sre.fetch_web","读取网页"),danger:false,rows:2,maxLength:2048,
+    requiredMessage:I18N.t("sre.url_required","请输入有效的 HTTP(S) URL")
+  });
   if(!u||!u.trim()) return;
-  const ph={kind:"file",name:u.trim().slice(0,60),text:I18N.t("sre.fetching_web","（抓取中…）")};
+  let parsedURL;
+  try{
+    parsedURL=new URL(u.trim());
+    if(!["http:","https:"].includes(parsedURL.protocol)) throw new Error("unsupported protocol");
+  }catch(e){
+    if(typeof toast==="function") toast(I18N.t("sre.url_required","请输入有效的 HTTP(S) URL"),"err");
+    return;
+  }
+  const normalizedURL=parsedURL.toString();
+  const ph={kind:"file",name:normalizedURL.slice(0,60),text:I18N.t("sre.fetching_web","（抓取中…）")};
   AI_ATTACHMENTS.push(ph); renderAttachments();
   try{
-    const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:u.trim()})});
+    const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:normalizedURL})});
     const j=await r.json().catch(()=>({}));
     if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.fetch_failed","抓取失败")}：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
-    ph.text=`[来源 URL: ${u.trim()}]\n`+(j.text||""); renderAttachments();
+    ph.text=`[来源 URL: ${normalizedURL}]\n`+(j.text||""); renderAttachments();
     if(typeof toast==="function") toast(`${I18N.t("sre.fetched","已抓取")}（${j.chars||0} ${I18N.t("sre.chars_unit","字")}${j.truncated?I18N.t("sre.truncated","，已截断"):""}）`,"ok");
   }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(I18N.t("sre.fetch_failed","抓取失败"),"err"); renderAttachments(); }
 }

@@ -19,12 +19,12 @@ import (
 
 // RetentionConfig controls daily cleanup windows (days). Zero = use defaults.
 type RetentionConfig struct {
-	AuditDays         int `json:"audit_days,omitempty"`          // audit_log + events
-	AlertHistoryDays  int `json:"alert_history_days,omitempty"`  // alert_history
-	ContentAuditDays  int `json:"content_audit_days,omitempty"`  // content_audit
-	MemoryDays        int `json:"memory_days,omitempty"`         // soft age for memory cleanup
-	NetFlowMonths     int `json:"netflow_months,omitempty"`      // drop partitions older than N months
-	AICallDays        int `json:"ai_call_days,omitempty"`        // ai_call_events 成本/观测
+	AuditDays        int `json:"audit_days,omitempty"`         // audit_log + events
+	AlertHistoryDays int `json:"alert_history_days,omitempty"` // alert_history
+	ContentAuditDays int `json:"content_audit_days,omitempty"` // content_audit
+	MemoryDays       int `json:"memory_days,omitempty"`        // soft age for memory cleanup
+	NetFlowMonths    int `json:"netflow_months,omitempty"`     // drop partitions older than N months
+	AICallDays       int `json:"ai_call_days,omitempty"`       // AI 调用与人工反馈观测
 }
 
 func (r RetentionConfig) withDefaults() RetentionConfig {
@@ -51,10 +51,10 @@ func (r RetentionConfig) withDefaults() RetentionConfig {
 
 // BackupConfig schedules PostgreSQL dumps via pg_dump.
 type BackupConfig struct {
-	Enabled      bool   `json:"enabled"`
-	DailyAt      string `json:"daily_at,omitempty"` // HH:MM local, default 02:30
-	RetainCount  int    `json:"retain_count,omitempty"`
-	Dir          string `json:"dir,omitempty"` // override AIOPS_BACKUP_DIR
+	Enabled     bool   `json:"enabled"`
+	DailyAt     string `json:"daily_at,omitempty"` // HH:MM local, default 02:30
+	RetainCount int    `json:"retain_count,omitempty"`
+	Dir         string `json:"dir,omitempty"` // override AIOPS_BACKUP_DIR
 }
 
 func (b BackupConfig) withDefaults() BackupConfig {

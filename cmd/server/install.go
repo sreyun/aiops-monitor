@@ -2,8 +2,25 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
+
+// installAuditOptions controls the cross-platform packet-observation block
+// written by the one-line installer. Linux supports the native AF_PACKET
+// backend; Windows/macOS use TShark over Npcap/libpcap/BPF.
+type installAuditOptions struct {
+	SNIEnabled                  bool
+	SNIInterface                string
+	CaptureBackend              string
+	ContentAudit                bool
+	ContentAuditPorts           string
+	ContentAuditMaxBody         int
+	ContentAuditBodyMode        string
+	ContentAuditIncludeHosts    string
+	ContentAuditExcludePaths    string
+	ContentAuditMaxEventsPerMin int
+}
 
 // renderScript injects the server URL / token / category / serversJSON into an
 // install template. Placeholders are used (not fmt) so the shell/PowerShell '%'
@@ -11,8 +28,33 @@ import (
 // array string (e.g. [{"server":"...","token":"..."}]); when empty the template
 // falls back to the single server+token config.
 func renderScript(tmpl, server, token, category, serversJSON, logPaths string) string {
+	return renderScriptWithAudit(tmpl, server, token, category, serversJSON, logPaths, installAuditOptions{})
+}
+
+func renderScriptWithAudit(tmpl, server, token, category, serversJSON, logPaths string, audit installAuditOptions) string {
 	if strings.TrimSpace(logPaths) == "" {
 		logPaths = "[]" // 必须是合法 JSON 数组（同时是合法 YAML flow 序列），否则生成的 config.yaml 语法错误
+	}
+	if strings.TrimSpace(audit.ContentAuditPorts) == "" {
+		audit.ContentAuditPorts = "[11434,8000,8080]"
+	}
+	if audit.ContentAuditMaxBody <= 0 {
+		audit.ContentAuditMaxBody = 4096
+	}
+	if audit.CaptureBackend == "" {
+		audit.CaptureBackend = "auto"
+	}
+	if audit.ContentAuditBodyMode == "" {
+		audit.ContentAuditBodyMode = "redacted"
+	}
+	if audit.ContentAuditIncludeHosts == "" {
+		audit.ContentAuditIncludeHosts = "[]"
+	}
+	if audit.ContentAuditExcludePaths == "" {
+		audit.ContentAuditExcludePaths = `["/health*","/metrics*","/ready*","/live*"]`
+	}
+	if audit.ContentAuditMaxEventsPerMin <= 0 {
+		audit.ContentAuditMaxEventsPerMin = 2000
 	}
 	return strings.NewReplacer(
 		"__SERVER__", server,
@@ -20,6 +62,16 @@ func renderScript(tmpl, server, token, category, serversJSON, logPaths string) s
 		"__CATEGORY__", category,
 		"__SERVERS_JSON__", serversJSON,
 		"__LOG_PATHS__", logPaths,
+		"__SNI_ENABLED__", strconv.FormatBool(audit.SNIEnabled || audit.ContentAudit),
+		"__SNI_INTERFACE__", audit.SNIInterface,
+		"__CAPTURE_BACKEND__", audit.CaptureBackend,
+		"__CONTENT_AUDIT__", strconv.FormatBool(audit.ContentAudit),
+		"__CONTENT_AUDIT_PORTS__", audit.ContentAuditPorts,
+		"__CONTENT_AUDIT_MAX_BODY__", strconv.Itoa(audit.ContentAuditMaxBody),
+		"__CONTENT_AUDIT_BODY_MODE__", audit.ContentAuditBodyMode,
+		"__CONTENT_AUDIT_INCLUDE_HOSTS__", audit.ContentAuditIncludeHosts,
+		"__CONTENT_AUDIT_EXCLUDE_PATHS__", audit.ContentAuditExcludePaths,
+		"__CONTENT_AUDIT_MAX_EVENTS__", strconv.Itoa(audit.ContentAuditMaxEventsPerMin),
 	).Replace(tmpl)
 }
 
@@ -95,6 +147,126 @@ func sanitizeServersJSON(raw string) string {
 	return string(b)
 }
 
+// sanitizeAuditInstallOptions turns public install-script query parameters into
+// a bounded, injection-safe configuration. Content capture implies the shared
+// DNS/SNI collector on both native and TShark backends.
+func sanitizeAuditInstallOptions(r map[string]string) installAuditOptions {
+	on := func(v string) bool {
+		v = strings.ToLower(strings.TrimSpace(v))
+		return v == "1" || v == "true" || v == "yes" || v == "on"
+	}
+	iface := strings.Map(func(ch rune) rune {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+			return ch
+		case ch == '-', ch == '_', ch == '.', ch == ':':
+			return ch
+		default:
+			return -1
+		}
+	}, strings.TrimSpace(r["sni_interface"]))
+	if len(iface) > 128 {
+		iface = iface[:128]
+	}
+
+	seen := map[int]bool{}
+	ports := make([]int, 0, 16)
+	for _, raw := range strings.FieldsFunc(r["content_audit_ports"], func(ch rune) bool {
+		return ch == ',' || ch == ';' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
+	}) {
+		p, err := strconv.Atoi(raw)
+		if err != nil || p < 1 || p > 65535 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		ports = append(ports, p)
+		if len(ports) >= 32 {
+			break
+		}
+	}
+	if len(ports) == 0 {
+		ports = []int{11434, 8000, 8080}
+	}
+	portJSON, _ := json.Marshal(ports)
+
+	maxBody, _ := strconv.Atoi(strings.TrimSpace(r["content_audit_max_body"]))
+	if maxBody == 0 {
+		maxBody = 4096
+	}
+	if maxBody < 1024 {
+		maxBody = 1024
+	}
+	if maxBody > 65536 {
+		maxBody = 65536
+	}
+	backend := strings.ToLower(strings.TrimSpace(r["capture_backend"]))
+	if backend != "native" && backend != "tshark" {
+		backend = "auto"
+	}
+	bodyMode := strings.ToLower(strings.TrimSpace(r["content_audit_body_mode"]))
+	if bodyMode != "metadata" && bodyMode != "full" {
+		bodyMode = "redacted"
+	}
+	maxEvents, _ := strconv.Atoi(strings.TrimSpace(r["content_audit_max_events_per_min"]))
+	if maxEvents <= 0 {
+		maxEvents = 2000
+	}
+	if maxEvents > 100000 {
+		maxEvents = 100000
+	}
+	includeHosts := sanitizeAuditPatternList(r["content_audit_include_hosts"], 64, 253)
+	excludePaths := sanitizeAuditPatternList(r["content_audit_exclude_paths"], 64, 512)
+	if strings.TrimSpace(r["content_audit_exclude_paths"]) == "" {
+		excludePaths = `["/health*","/metrics*","/ready*","/live*"]`
+	}
+	contentAudit := on(r["content_audit"])
+	return installAuditOptions{
+		SNIEnabled:                  on(r["sni_enabled"]) || contentAudit,
+		SNIInterface:                iface,
+		CaptureBackend:              backend,
+		ContentAudit:                contentAudit,
+		ContentAuditPorts:           string(portJSON),
+		ContentAuditMaxBody:         maxBody,
+		ContentAuditBodyMode:        bodyMode,
+		ContentAuditIncludeHosts:    includeHosts,
+		ContentAuditExcludePaths:    excludePaths,
+		ContentAuditMaxEventsPerMin: maxEvents,
+	}
+}
+
+func sanitizeAuditPatternList(raw string, maxCount, maxLen int) string {
+	fields := strings.FieldsFunc(raw, func(ch rune) bool {
+		return ch == ',' || ch == ';' || ch == '\n' || ch == '\r'
+	})
+	out := make([]string, 0, len(fields))
+	seen := map[string]bool{}
+	for _, field := range fields {
+		clean := strings.ToLower(strings.TrimSpace(strings.Map(func(ch rune) rune {
+			switch {
+			case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+				return ch
+			case ch == '.', ch == '-', ch == '_', ch == '*', ch == '/', ch == ':', ch == '?', ch == '=':
+				return ch
+			default:
+				return -1
+			}
+		}, field)))
+		if clean == "" || seen[clean] {
+			continue
+		}
+		if len(clean) > maxLen {
+			clean = clean[:maxLen]
+		}
+		seen[clean] = true
+		out = append(out, clean)
+		if len(out) >= maxCount {
+			break
+		}
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
 // installShTemplate installs the agent on Linux / macOS. It works without root:
 // as root it registers a systemd service, otherwise it installs under $HOME and
 // starts in the background.
@@ -128,10 +300,28 @@ esac
 echo "[AIOps] installing to $DIR (server $SERVER)"
 mkdir -p "$DIR"
 cd "$DIR"
-# resumable + retried download: on flaky/cross-border links, don't re-fetch the
-# whole 7.5MB from scratch. -C - resumes a partial; on a complete file the server
-# returns 416, so fall back to a plain full GET.
-curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent || curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
+# Download to a staging file, verify the server-published SHA-256, then replace
+# atomically. A truncated/corrupted/mismatched download must never overwrite a
+# working agent binary.
+NEW=".aiops-agent.new"
+curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o "$NEW" || curl -fsSL "$SERVER/dl/$BIN" -o "$NEW"
+EXPECTED=$(curl -fsSL "$SERVER/dl/$BIN.sha256" | awk '{print $1}')
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "$NEW" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL=$(shasum -a 256 "$NEW" | awk '{print $1}')
+else
+  echo "[AIOps] ERROR: sha256sum/shasum not found; refusing an unverified install."
+  rm -f "$NEW"
+  exit 1
+fi
+if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "[AIOps] ERROR: agent SHA-256 verification failed."
+  rm -f "$NEW"
+  exit 1
+fi
+[ -f aiops-agent ] && cp -f aiops-agent aiops-agent.bak 2>/dev/null || true
+mv -f "$NEW" aiops-agent
 chmod +x aiops-agent
 if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
@@ -151,6 +341,19 @@ report_interval: 30
 plugin_interval: 60
 plugins_dir: "$DIR/plugins"
 state_file: "$DIR/agent_state.json"
+sni_dns_capture:
+  enabled: __SNI_ENABLED__
+  interface: "__SNI_INTERFACE__"
+  capture_backend: "__CAPTURE_BACKEND__"
+  max_entries_per_min: 5000
+  tls_metadata_ports: [443,8443,9443]
+  content_audit: __CONTENT_AUDIT__
+  content_audit_ports: __CONTENT_AUDIT_PORTS__
+  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__
+  content_audit_body_mode: "__CONTENT_AUDIT_BODY_MODE__"
+  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__
+  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__
+  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__
 EOF
 else
   cat > config.yaml <<EOF
@@ -162,6 +365,19 @@ report_interval: 30
 plugin_interval: 60
 plugins_dir: "$DIR/plugins"
 state_file: "$DIR/agent_state.json"
+sni_dns_capture:
+  enabled: __SNI_ENABLED__
+  interface: "__SNI_INTERFACE__"
+  capture_backend: "__CAPTURE_BACKEND__"
+  max_entries_per_min: 5000
+  tls_metadata_ports: [443,8443,9443]
+  content_audit: __CONTENT_AUDIT__
+  content_audit_ports: __CONTENT_AUDIT_PORTS__
+  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__
+  content_audit_body_mode: "__CONTENT_AUDIT_BODY_MODE__"
+  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__
+  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__
+  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__
 EOF
 fi
 # Verify config.yaml was written correctly — on some systems set -e causes the
@@ -175,6 +391,14 @@ if [ ! -s config.yaml ]; then
 fi
 # Restrict config.yaml to owner-only (contains tokens/secrets).
 chmod 600 config.yaml 2>/dev/null || true
+if [ "__SNI_ENABLED__" = "true" ] && { [ "__CAPTURE_BACKEND__" = "tshark" ] || [ "$OS" = "Darwin" ]; }; then
+  if ! command -v tshark >/dev/null 2>&1 && [ ! -x /Applications/Wireshark.app/Contents/MacOS/tshark ]; then
+    echo "[AIOps] WARNING: network content audit needs TShark on $OS."
+    echo "[AIOps] Install Wireshark first; on macOS also install its ChmodBPF package."
+  else
+    echo "[AIOps] TShark dependency detected for cross-platform network audit."
+  fi
+fi
 # Migrate: remove a stale config.json left by a pre-YAML install. The agent now
 # prefers config.yaml, but leaving both would be confusing — drop the old one.
 rm -f config.json 2>/dev/null || true
@@ -283,6 +507,7 @@ echo "[AIOps] done. Check the dashboard for this host."
 //     (HKCU Run + 5-min keepalive), unchanged. No admin required, but it
 //     cannot collect Hyper-V guests — the script says so and points at the
 //     elevated re-run.
+//
 // config.yaml is UTF-8 (no BOM); the agent is launched via a hidden VBS
 // supervisor that only starts it when not already running (no duplicates).
 const installPs1Template = `$ErrorActionPreference = "Stop"
@@ -344,12 +569,30 @@ Start-Sleep -Milliseconds 800
 # Prefer curl.exe (bundled on Win10+): supports resume (-C -) + retry so a flaky
 # link doesn't restart the whole 7.5MB. Fall back to Invoke-WebRequest on older OS.
 $AgentExe = Join-Path $Dir "aiops-agent.exe"
+$AgentNew = Join-Path $Dir ".aiops-agent.new.exe"
+$AgentBak = Join-Path $Dir "aiops-agent.exe.bak"
 $Curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($Curl) {
-  & curl.exe -fSL --retry 3 --retry-delay 2 -C - "$Server/dl/aiops-agent.exe" -o $AgentExe
-  if ($LASTEXITCODE -ne 0) { & curl.exe -fsSL "$Server/dl/aiops-agent.exe" -o $AgentExe }
+  & curl.exe -fSL --retry 3 --retry-delay 2 -C - "$Server/dl/aiops-agent.exe" -o $AgentNew
+  if ($LASTEXITCODE -ne 0) { & curl.exe -fsSL "$Server/dl/aiops-agent.exe" -o $AgentNew }
 } else {
-  Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile $AgentExe -UseBasicParsing
+  Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile $AgentNew -UseBasicParsing
+}
+$Expected = ((Invoke-WebRequest "$Server/dl/aiops-agent.exe.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
+$Sha = [Security.Cryptography.SHA256]::Create()
+$Stream = [IO.File]::OpenRead($AgentNew)
+try { $Actual = ([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace("-","").ToLowerInvariant() }
+finally { $Stream.Dispose(); $Sha.Dispose() }
+if (-not $Expected -or $Expected -ne $Actual) {
+  Remove-Item $AgentNew -Force -ErrorAction SilentlyContinue
+  throw "Agent SHA-256 verification failed; existing binary was not replaced."
+}
+if (Test-Path $AgentBak) { Remove-Item $AgentBak -Force -ErrorAction SilentlyContinue }
+if (Test-Path $AgentExe) { Move-Item $AgentExe $AgentBak -Force }
+try { Move-Item $AgentNew $AgentExe -Force }
+catch {
+  if (Test-Path $AgentBak) { Move-Item $AgentBak $AgentExe -Force }
+  throw
 }
 try {
   Invoke-WebRequest "$Server/dl/plugins.zip" -OutFile "$Dir\plugins.zip" -UseBasicParsing
@@ -379,8 +622,32 @@ $lines.Add("report_interval: 30")
 $lines.Add("plugin_interval: 60")
 $lines.Add("plugins_dir: " + (Yq $PluginsDir))
 $lines.Add("state_file: " + (Yq $StateFile))
+$lines.Add("sni_dns_capture:")
+$lines.Add("  enabled: __SNI_ENABLED__")
+$lines.Add("  interface: " + (Yq "__SNI_INTERFACE__"))
+$lines.Add("  capture_backend: " + (Yq "__CAPTURE_BACKEND__"))
+$lines.Add("  max_entries_per_min: 5000")
+$lines.Add("  tls_metadata_ports: [443,8443,9443]")
+$lines.Add("  content_audit: __CONTENT_AUDIT__")
+$lines.Add("  content_audit_ports: __CONTENT_AUDIT_PORTS__")
+$lines.Add("  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__")
+$lines.Add("  content_audit_body_mode: " + (Yq "__CONTENT_AUDIT_BODY_MODE__"))
+$lines.Add("  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__")
+$lines.Add("  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__")
+$lines.Add("  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__")
 $cfg = ($lines -join ([char]10)) + ([char]10)
 [System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
+if ("__SNI_ENABLED__" -eq "true") {
+  $TSharkCandidates = @(
+    (Get-Command tshark.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+    (Join-Path $env:ProgramFiles "Wireshark\tshark.exe")
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  if (-not $TSharkCandidates) {
+    Write-Warning "Network content audit needs Wireshark TShark and Npcap. Install both, then restart aiops-agent."
+  } else {
+    Write-Host "[AIOps] TShark/Npcap audit dependency detected." -ForegroundColor Green
+  }
+}
 # Migrate: remove a stale config.json from a pre-YAML install (agent now prefers YAML).
 Remove-Item "$Dir\config.json" -Force -ErrorAction SilentlyContinue
 
@@ -583,12 +850,12 @@ echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 // uninstallPs1Template stops + removes the agent on Windows (user-level).
 // v5.2.6: Comprehensive rewrite to fix multiple uninstall failures.
 // v5.2.9: Regression fixes:
-//   1. Replace Get-CimInstance (unreliable CommandLine) with taskkill / Get-Process
-//   2. Kill ALL wscript.exe instances (safe on uninstall — no other apps use it)
-//   3. Kill ALL aiops-agent.exe instances by name
-//   4. Add $ErrorActionPreference = "Continue" for error visibility
-//   5. Longer retry delays (2/4/8s) and MoveFileEx for stubborn files
-//   6. Explicitly delete VBS files before EXE to release Run registry triggers
+//  1. Replace Get-CimInstance (unreliable CommandLine) with taskkill / Get-Process
+//  2. Kill ALL wscript.exe instances (safe on uninstall — no other apps use it)
+//  3. Kill ALL aiops-agent.exe instances by name
+//  4. Add $ErrorActionPreference = "Continue" for error visibility
+//  5. Longer retry delays (2/4/8s) and MoveFileEx for stubborn files
+//  6. Explicitly delete VBS files before EXE to release Run registry triggers
 const uninstallPs1Template = `$ErrorActionPreference = "Continue"
 # Clean both install locations: per-user (%LOCALAPPDATA%) and elevated
 # (%ProgramData%). Removing a SYSTEM install's task/dir needs an elevated shell.

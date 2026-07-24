@@ -216,6 +216,8 @@ func TestRouteAllowed(t *testing.T) {
 		// reads: viewer+
 		{"viewer can read hosts", "GET", "/api/v1/hosts", RoleViewer, true},
 		{"viewer can read alerts", "GET", "/api/v1/alerts", RoleViewer, true},
+		{"viewer cannot read content audit", "GET", "/api/v1/content-audit?host=h1", RoleViewer, false},
+		{"operator can read content audit", "GET", "/api/v1/content-audit?host=h1", RoleOperator, true},
 		// writes (non-users): operator+
 		{"viewer cannot set category", "POST", "/api/v1/hosts/h1/category", RoleViewer, false},
 		{"operator can set category", "POST", "/api/v1/hosts/h1/category", RoleOperator, true},

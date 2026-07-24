@@ -1,6 +1,6 @@
 package main
 
-// SNI + DNS 抓取的纯解析层（与原始套接字解耦，可单测）：从以太网帧里取 IPv4/TCP/UDP，
+// SNI + DNS 抓取的纯解析层（与原始套接字解耦，可单测）：从以太网帧里取 IPv4/IPv6 TCP/UDP，
 // 再从 DNS 应答提取「A 记录 → 查询域名」、从 TLS ClientHello 提取 SNI 域名。
 // 目的：把"某目的 IP 对应的真实域名"抓出来（用户实际请求的域名，比反向 DNS 更准），
 // 不解密任何内容——SNI 与 DNS 本就是明文。全部手写字节解析，零依赖。
@@ -30,22 +30,46 @@ type l4Info struct {
 	payload  []byte
 }
 
-// parseEthIPv4 从以太网帧解析出 IPv4 的四层信息（非 IPv4/非 TCP-UDP 返回 ok=false）。
-// 兼容带 802.1Q VLAN 标签(0x8100)的帧。
+// parseEthernetFrame 支持 IPv4/IPv6、802.1Q 与 QinQ。IPv6 扩展头被有界跳过；
+// 非首分片没有 L4 头，安全丢弃。
+func parseEthernetFrame(frame []byte) (l4Info, bool) {
+	if len(frame) < 14 {
+		return l4Info{}, false
+	}
+	etherType := binary.BigEndian.Uint16(frame[12:14])
+	off := 14
+	for tags := 0; (etherType == 0x8100 || etherType == 0x88a8) && tags < 2; tags++ {
+		if len(frame) < off+4 {
+			return l4Info{}, false
+		}
+		etherType = binary.BigEndian.Uint16(frame[off+2 : off+4])
+		off += 4
+	}
+	switch etherType {
+	case 0x0800:
+		return parseIPv4(frame[off:])
+	case 0x86dd:
+		return parseIPv6(frame[off:])
+	default:
+		return l4Info{}, false
+	}
+}
+
+// parseEthIPv4 保留给旧调用/测试；IPv6 请使用 parseEthernetFrame。
 func parseEthIPv4(frame []byte) (l4Info, bool) {
 	if len(frame) < 14 {
 		return l4Info{}, false
 	}
 	etherType := binary.BigEndian.Uint16(frame[12:14])
 	off := 14
-	if etherType == 0x8100 { // VLAN 标签，跳过 4 字节再读真正的 etherType
-		if len(frame) < 18 {
+	for tags := 0; (etherType == 0x8100 || etherType == 0x88a8) && tags < 2; tags++ {
+		if len(frame) < off+4 {
 			return l4Info{}, false
 		}
-		etherType = binary.BigEndian.Uint16(frame[16:18])
-		off = 18
+		etherType = binary.BigEndian.Uint16(frame[off+2 : off+4])
+		off += 4
 	}
-	if etherType != 0x0800 { // 只处理 IPv4
+	if etherType != 0x0800 {
 		return l4Info{}, false
 	}
 	return parseIPv4(frame[off:])
@@ -60,12 +84,76 @@ func parseIPv4(pkt []byte) (l4Info, bool) {
 	if ihl < 20 || len(pkt) < ihl {
 		return l4Info{}, false
 	}
+	if total := int(binary.BigEndian.Uint16(pkt[2:4])); total >= ihl && total < len(pkt) {
+		pkt = pkt[:total]
+	}
+	frag := binary.BigEndian.Uint16(pkt[6:8])
+	if frag&0x1fff != 0 { // 非首分片不含 TCP/UDP 头
+		return l4Info{}, false
+	}
 	info := l4Info{
 		proto: pkt[9],
 		srcIP: net.IP(pkt[12:16]).String(),
 		dstIP: net.IP(pkt[16:20]).String(),
 	}
-	l4 := pkt[ihl:]
+	return parseTransport(info, pkt[ihl:])
+}
+
+// parseIPv6 跳过常见扩展头（Hop-by-Hop、Routing、Fragment、AH、Destination）。
+func parseIPv6(pkt []byte) (l4Info, bool) {
+	if len(pkt) < 40 || pkt[0]>>4 != 6 {
+		return l4Info{}, false
+	}
+	if payloadLen := int(binary.BigEndian.Uint16(pkt[4:6])); payloadLen > 0 && 40+payloadLen < len(pkt) {
+		pkt = pkt[:40+payloadLen]
+	}
+	next := pkt[6]
+	off := 40
+	for extensions := 0; extensions < 8; extensions++ {
+		switch next {
+		case 0, 43, 60: // Hop-by-Hop, Routing, Destination Options
+			if len(pkt) < off+2 {
+				return l4Info{}, false
+			}
+			hdrLen := (int(pkt[off+1]) + 1) * 8
+			if hdrLen < 8 || len(pkt) < off+hdrLen {
+				return l4Info{}, false
+			}
+			next, off = pkt[off], off+hdrLen
+		case 44: // Fragment
+			if len(pkt) < off+8 {
+				return l4Info{}, false
+			}
+			fragment := binary.BigEndian.Uint16(pkt[off+2 : off+4])
+			if fragment&0xfff8 != 0 {
+				return l4Info{}, false // 非首分片
+			}
+			next, off = pkt[off], off+8
+		case 51: // Authentication Header
+			if len(pkt) < off+2 {
+				return l4Info{}, false
+			}
+			hdrLen := (int(pkt[off+1]) + 2) * 4
+			if hdrLen < 8 || len(pkt) < off+hdrLen {
+				return l4Info{}, false
+			}
+			next, off = pkt[off], off+hdrLen
+		default:
+			info := l4Info{
+				proto: next,
+				srcIP: net.IP(pkt[8:24]).String(),
+				dstIP: net.IP(pkt[24:40]).String(),
+			}
+			if off > len(pkt) {
+				return l4Info{}, false
+			}
+			return parseTransport(info, pkt[off:])
+		}
+	}
+	return l4Info{}, false
+}
+
+func parseTransport(info l4Info, l4 []byte) (l4Info, bool) {
 	switch info.proto {
 	case 6: // TCP
 		if len(l4) < 20 {
@@ -182,8 +270,8 @@ func parseDNSResponse(payload []byte) []ipDomain {
 	return out
 }
 
-// parseTLSClientHelloSNI 从 TLS ClientHello 提取 SNI(server_name)。SNI 在 TLS1.2/1.3 里
-// 都是明文（除非用了极少见的 ECH），抓握手首包即可，无需解密。解析失败返回 ""。
+// parseTLSClientHelloSNI 从可见的 TLS ClientHello 提取 SNI(server_name)。启用 ECH 时真实
+// SNI 会被加密，因此空结果是合法边界，不应当被解释为“没有访问域名”。
 func parseTLSClientHelloSNI(payload []byte) string {
 	// TLS record: type(1)=0x16 handshake, version(2), length(2)
 	if len(payload) < 6 || payload[0] != 0x16 {

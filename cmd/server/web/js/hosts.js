@@ -254,7 +254,13 @@ async function delHost(id, name) {
   } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
 }
 async function editCategory(id, cur) {
-  const cat = prompt(I18N.t("section.set_category_desc"), cur || "");
+  const cat = await requestAITextInput({
+    title:I18N.t("section.set_category","设置主机分类"),
+    message:I18N.t("section.set_category_desc"),
+    label:I18N.t("section.category","分类"),defaultValue:cur||"",
+    submitLabel:I18N.t("ui.save","保存"),singleLine:true,maxLength:128,danger:false,
+    required:false
+  });
   if (cat === null) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
@@ -1009,4 +1015,3 @@ function sparkline(series, color) {
     <polygon points="0,${h} ${pts} ${w},${h}" fill="url(#${gid})"/>
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
 }
-
