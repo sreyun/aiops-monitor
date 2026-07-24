@@ -472,6 +472,11 @@ type ServerConfig struct {
 	// 命中即打标签 + 告警，用于"敏感数据外泄到大模型"的 DLP。
 	ContentAuditSensitiveKeywords []string          `json:"content_audit_sensitive_keywords,omitempty"`
 	Categories                    map[string]string `json:"categories"`
+	// HostFolders is the operator-managed host organization tree (max depth 4).
+	// nil means "never migrated"; empty slice means an intentional empty tree.
+	HostFolders []HostFolderNode `json:"host_folders"`
+	// HostFolderAssign maps host id -> folder id (missing = ungrouped).
+	HostFolderAssign map[string]string `json:"host_folder_assign"`
 	InstallToken                  string            `json:"install_token"`
 	// PrevInstallToken + PrevTokenExpiresAt keep a rotated-out token valid during a
 	// grace period, so existing agents don't drop offline the instant the token is
@@ -1057,6 +1062,8 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	cs.prev = cs.cfg // snapshot for potential rollback
 	cs.hasPrev = true
 	c.Categories = cs.cfg.Categories             // categories managed via SetCategory
+	c.HostFolders = cs.cfg.HostFolders           // host folder tree managed via folder endpoints
+	c.HostFolderAssign = cs.cfg.HostFolderAssign // host→folder assignments
 	c.InstallToken = cs.cfg.InstallToken         // token managed via install endpoints
 	c.Account = cs.cfg.Account                   // account managed via auth endpoints
 	c.Checks = cs.cfg.Checks                     // checks managed via check endpoints
@@ -1132,19 +1139,10 @@ func (cs *ConfigStore) Revert() error {
 	return cs.save()
 }
 
-// SetCategory records (or clears, when cat is empty) a manual category override.
+// SetCategory records (or clears, when cat is empty) a manual category override and
+// syncs the host into a matching L1 folder (find-or-create).
 func (cs *ConfigStore) SetCategory(hostID, cat string) error {
-	cs.mu.Lock()
-	if cs.cfg.Categories == nil {
-		cs.cfg.Categories = map[string]string{}
-	}
-	if cat == "" {
-		delete(cs.cfg.Categories, hostID)
-	} else {
-		cs.cfg.Categories[hostID] = cat
-	}
-	cs.mu.Unlock()
-	return cs.save()
+	return cs.setCategoryWithFolder(hostID, cat)
 }
 
 func (cs *ConfigStore) CategoryOverride(hostID string) (string, bool) {

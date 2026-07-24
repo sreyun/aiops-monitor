@@ -26,26 +26,28 @@ function hostCard(h) {
       return `<span class="chip ${isDown ? "crit" : ""}">${esc(k)} <b>${num}</b></span>`;
     }).join("") + `<span class="chip-label">${I18N.t("section.custom_metrics")}</span></div>`;
   }
-  const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
+  const catLabel = (h.folder_path || h.category)
+    ? esc(h.folder_path || h.category)
+    : I18N.t("section.uncategorized");
   const loadTitle = I18N.t("section.load_avg") + (h.os === "windows" ? I18N.t("misc.windows_approx") : "");
   const lastCell = !h.online
     ? `<span class="g offline-tag" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
     : h.stale
       ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.data")} ${ago(h.last_seen)}</span>`
       : `<span class="g">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
-  return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+  return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
     <div class="host-head">
       <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
         <div style="min-width:0; flex:1; overflow:hidden">
           <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
           <div class="host-info">
-            <div class="hi-row"><span class="hi-k">${I18N.t("section.host_info")}</span><span class="hi-v">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
+            <div class="hi-row"><span class="hi-k">${I18N.t("section.host_info")}</span><span class="hi-v hi-ip" title="${h.ip ? esc(h.ip) : ""}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : "—"}</span></div>
             <div class="hi-row"><span class="hi-k">${I18N.t("section.os")}</span><span class="hi-v" title="${esc(h.platform || "")}${h.arch ? " · " + esc(h.arch) : ""}">${esc(h.platform || "—")}${h.arch ? " <span class=\"hi-sep\">·</span> " + esc(h.arch) : ""}</span></div>
           </div>
         </div>
       </div>
       <div class="host-tags">
-        <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_category')}">${cat}</span>
+        <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
         ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="${I18N.t('section.terminal_desc')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
         <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
@@ -97,19 +99,22 @@ function hostRow(h) {
     : isStale
       ? `<span class="hrow-status stale" title="${I18N.t('section.data_stale')}">⚠ ${ago(h.last_seen)}</span>`
       : `<span class="hrow-status online">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
-  const cat = h.category ? esc(h.category) : I18N.t("section.uncategorized");
+  const catLabel = (h.folder_path || h.category)
+    ? esc(h.folder_path || h.category)
+    : I18N.t("section.uncategorized");
   const termBtn = (h.online && TERMINAL_ENABLED)
     ? `<button class="term-btn" data-act="term" title="${I18N.t('ui.remote_terminal')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
   const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
-  return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}">
+  const ipTitle = h.ip ? esc(h.ip) : "";
+  return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
     <span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
       <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
-      <div class="hrow-sub">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
+      <div class="hrow-sub" title="${ipTitle}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-    <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_category')}">${cat}</span>
+    <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
     <div class="hrow-metrics">
       ${miniBar("CPU", m.cpu_percent)}${miniBar(I18N.t("ui.memory"), m.mem_percent)}${miniBar(I18N.t("ui.disk"), diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
@@ -120,27 +125,246 @@ function hostRow(h) {
   </div>`;
 }
 
+function setCurFolder(id) {
+  CUR_FOLDER = id || "";
+  try { localStorage.setItem("aiops_host_folder", CUR_FOLDER); } catch (e) {}
+  HOST_PAGE = 1;
+}
+
+function persistHostTreeCollapsed() {
+  try { localStorage.setItem("aiops_host_tree_collapsed", JSON.stringify([...HOST_TREE_COLLAPSED])); } catch (e) {}
+}
+
+function hostFolderMatchSet(folderId) {
+  if (!folderId) return null;
+  if (folderId === "__ungrouped__") return new Set(["__ungrouped__"]);
+  const ids = new Set();
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.id === folderId) {
+        const collect = (x) => { ids.add(x.id); (x.children || []).forEach(collect); };
+        collect(n);
+        return true;
+      }
+      if (walk(n.children)) return true;
+    }
+    return false;
+  };
+  walk(HOST_FOLDERS.folders || []);
+  return ids;
+}
+
+function flattenHostFolders(folders, prefix) {
+  const out = [];
+  (folders || []).forEach(n => {
+    const path = prefix ? prefix + " / " + n.name : n.name;
+    out.push({ id: n.id, name: n.name, path });
+    out.push(...flattenHostFolders(n.children || [], path));
+  });
+  return out;
+}
+
+function hostInFolderFilter(h, matchSet) {
+  if (!matchSet) return true;
+  const fid = h.folder_id || "__ungrouped__";
+  return matchSet.has(fid);
+}
+
+async function loadHostFolders() {
+  try {
+    const r = await fetch(`${API}/host-folders`);
+    if (!r.ok) return;
+    const data = await r.json();
+    HOST_FOLDERS = {
+      folders: data.folders || [],
+      assign: data.assign || {},
+      paths: data.paths || {},
+      counts: data.counts || {}
+    };
+  } catch (e) {}
+}
+
+function hostTreeNodeHTML(n, depth) {
+  const cnt = (HOST_FOLDERS.counts && HOST_FOLDERS.counts[n.id]) || { total: 0, online: 0 };
+  const sel = CUR_FOLDER === n.id;
+  const hasKids = (n.children || []).length > 0;
+  const collapsed = HOST_TREE_COLLAPSED.has(n.id);
+  const canAdd = depth < 4;
+  let kids = "";
+  if (hasKids && !collapsed) {
+    kids = `<div class="htx-children">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1)).join("")}</div>`;
+  }
+  return `<div class="htx-folder" data-depth="${depth}">
+    <div class="htx-node${sel ? " selected" : ""}" data-folder-sel="${esc(n.id)}" role="button" tabindex="0">
+      <span class="htx-caret${hasKids ? "" : " empty"}" data-folder-toggle="${esc(n.id)}">${hasKids ? (collapsed ? "▸" : "▾") : "·"}</span>
+      <span class="htx-name" title="${esc(n.name)}">${esc(n.name)}</span>
+      <span class="htx-count" title="${cnt.online || 0}/${cnt.total || 0}">${cnt.total || 0}</span>
+      <span class="htx-acts">
+        ${canAdd ? `<button type="button" class="htx-act" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>` : ""}
+        <button type="button" class="htx-act" data-folder-ren="${esc(n.id)}" title="${I18N.t("section.folder_rename")}">✎</button>
+        <button type="button" class="htx-act danger" data-folder-del="${esc(n.id)}" title="${I18N.t("section.folder_delete")}">✕</button>
+      </span>
+    </div>
+    ${kids}
+  </div>`;
+}
+
+function hostTreeHTML() {
+  const allCnt = (LAST_HOSTS || []).length;
+  const ug = (HOST_FOLDERS.counts && HOST_FOLDERS.counts.__ungrouped__) || { total: 0, online: 0 };
+  const folders = HOST_FOLDERS.folders || [];
+  return `<div class="htx-head">
+      <span class="htx-title">${I18N.t("section.host_folders")}</span>
+      <button type="button" class="htx-act" data-folder-add="" title="${I18N.t("section.folder_add_root")}">+</button>
+    </div>
+    <div class="htx-node${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0">
+      <span class="htx-caret empty">·</span>
+      <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
+      <span class="htx-count">${allCnt}</span>
+    </div>
+    <div class="htx-node${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" role="button" tabindex="0">
+      <span class="htx-caret empty">·</span>
+      <span class="htx-name">${I18N.t("section.uncategorized")}</span>
+      <span class="htx-count">${ug.total || 0}</span>
+    </div>
+    <div class="htx-sep"></div>
+    ${folders.map(n => hostTreeNodeHTML(n, 1)).join("") || `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`}`;
+}
+
+function renderHostTree() {
+  const el = $("hostTree");
+  if (!el) return;
+  el.innerHTML = hostTreeHTML();
+  const layout = $("hostsLayout");
+  if (layout && window.treeCollapsed) {
+    const col = window.treeCollapsed("aiops_host_tree");
+    layout.classList.toggle("tree-collapsed", !!col);
+    const btn = layout.querySelector("[data-tree-toggle]");
+    if (btn) {
+      btn.textContent = col ? "›" : "‹";
+      btn.setAttribute("aria-expanded", col ? "false" : "true");
+    }
+  }
+}
+
+async function hostFolderAdd(parentId) {
+  const name = await requestAITextInput({
+    title: parentId ? I18N.t("section.folder_add_child") : I18N.t("section.folder_add_root"),
+    message: I18N.t("section.folder_name_hint"),
+    label: I18N.t("section.folder_name"),
+    defaultValue: "",
+    submitLabel: I18N.t("ui.save", "保存"),
+    singleLine: true, maxLength: 48, danger: false, required: true
+  });
+  if (name === null || !String(name).trim()) return;
+  try {
+    const r = await fetch(`${API}/host-folders`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parent_id: parentId || "", name: String(name).trim() })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || I18N.t("toast.update_failed2"), "err");
+      return;
+    }
+    toast(I18N.t("toast.folder_saved"), "ok");
+    await loadHostFolders();
+    renderHosts(LAST_HOSTS);
+  } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
+}
+
+async function hostFolderRename(id) {
+  const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
+  const cur = flat.find(x => x.id === id);
+  const name = await requestAITextInput({
+    title: I18N.t("section.folder_rename"),
+    message: I18N.t("section.folder_name_hint"),
+    label: I18N.t("section.folder_name"),
+    defaultValue: cur ? cur.name : "",
+    submitLabel: I18N.t("ui.save", "保存"),
+    singleLine: true, maxLength: 48, danger: false, required: true
+  });
+  if (name === null || !String(name).trim()) return;
+  try {
+    const r = await fetch(`${API}/host-folders/${encodeURIComponent(id)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: String(name).trim() })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || I18N.t("toast.update_failed2"), "err");
+      return;
+    }
+    toast(I18N.t("toast.folder_saved"), "ok");
+    await loadHostFolders();
+    refresh();
+  } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
+}
+
+async function hostFolderDelete(id) {
+  const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
+  const cur = flat.find(x => x.id === id);
+  if (!confirm(I18N.t("section.folder_delete_confirm") + (cur ? cur.path : id))) return;
+  try {
+    const r = await fetch(`${API}/host-folders/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || I18N.t("toast.delete_failed"), "err");
+      return;
+    }
+    if (CUR_FOLDER === id) setCurFolder("");
+    toast(I18N.t("toast.folder_deleted"), "ok");
+    await loadHostFolders();
+    refresh();
+  } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
+}
+
+function bindHostTreeOnce() {
+  const tree = $("hostTree");
+  if (!tree || tree.dataset.bound) return;
+  tree.dataset.bound = "1";
+  tree.addEventListener("click", async (e) => {
+    const add = e.target.closest("[data-folder-add]");
+    if (add) { e.stopPropagation(); await hostFolderAdd(add.getAttribute("data-folder-add")); return; }
+    const ren = e.target.closest("[data-folder-ren]");
+    if (ren) { e.stopPropagation(); await hostFolderRename(ren.getAttribute("data-folder-ren")); return; }
+    const del = e.target.closest("[data-folder-del]");
+    if (del) { e.stopPropagation(); await hostFolderDelete(del.getAttribute("data-folder-del")); return; }
+    const tog = e.target.closest("[data-folder-toggle]");
+    if (tog && !tog.classList.contains("empty")) {
+      e.stopPropagation();
+      const id = tog.getAttribute("data-folder-toggle");
+      if (HOST_TREE_COLLAPSED.has(id)) HOST_TREE_COLLAPSED.delete(id);
+      else HOST_TREE_COLLAPSED.add(id);
+      persistHostTreeCollapsed();
+      renderHostTree();
+      return;
+    }
+    const sel = e.target.closest("[data-folder-sel]");
+    if (sel) {
+      setCurFolder(sel.getAttribute("data-folder-sel") || "");
+      renderHosts(LAST_HOSTS);
+    }
+  });
+}
+
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
   HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
-  // 跨模块共享主机列表（硬件监控、NetFlow 等页面依赖此缓存）
   window._cachedHosts = hosts;
   if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
   $("hostsCount").textContent = hosts.length;
   $("navHosts").textContent = hosts.length;
 
-  // Refresh multi-select category dropdown (preserve current selection)
-  const cats = [...new Set(hosts.map(h => h.category || I18N.t("section.uncategorized")))].sort();
-  renderCatDropdown(cats);
+  bindHostTreeOnce();
+  renderHostTree();
 
-  // 安全网：仅在首次渲染时检查（LAST_RENDER_KEY 未设置），
-  // 防止 localStorage 残留导致页面打开即全隐藏。
-  // 用户交互时的折叠操作不受此限制。
   if (!LAST_RENDER_KEY) {
     try {
       const s = localStorage.getItem("aiops_collapsed");
       if (s) {
         const arr = JSON.parse(s);
+        const cats = [...new Set(hosts.map(h => h.category || I18N.t("section.uncategorized")))];
         if (Array.isArray(arr) && arr.length > 0 && cats.length > 0 && cats.every(c => arr.includes(c))) {
           localStorage.removeItem("aiops_collapsed");
         }
@@ -149,25 +373,21 @@ function renderHosts(hosts) {
   }
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
-
-  // 重复主机提示：主机页是管理主机的地方，这个入口理应在这里
-  // （硬件页也有一个，共用 duplicates.js 的同一份逻辑）。
   const dupBar = $("hostDupBar");
   if (dupBar) dupBar.innerHTML = dupBannerHTML();
-  
-  // Filter: multi-category + online status + search
+
+  const matchSet = hostFolderMatchSet(CUR_FOLDER);
   let shown = hosts.filter(h => {
-    if (CUR_CATS.length > 0 && !CUR_CATS.includes(h.category || I18N.t("section.uncategorized"))) return false;
+    if (!hostInFolderFilter(h, matchSet)) return false;
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
     if (HOST_SEARCH) {
-      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.kernel || "") + " " + (h.category || "")).toLowerCase();
+      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.kernel || "") + " " + (h.category || "") + " " + (h.folder_path || "")).toLowerCase();
       if (!hay.includes(HOST_SEARCH.toLowerCase())) return false;
     }
     return true;
   });
-  
-  // Sort
+
   if (HOST_SORT === "cpu") {
     shown.sort((a, b) => (b.latest?.cpu_percent || 0) - (a.latest?.cpu_percent || 0));
   } else if (HOST_SORT === "mem") {
@@ -182,7 +402,6 @@ function renderHosts(hosts) {
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = I18N.t("empty.no_host_match"); return; }
   empty.style.display = "none";
 
-  // Pagination: lower threshold on mobile to reduce DOM nodes
   const isList = HOST_VIEW === "list";
   const isMobile = window.innerWidth <= 480;
   const PAGINATION_THRESHOLD = isMobile ? (isList ? 20 : 10) : (isList ? 50 : 30);
@@ -199,22 +418,23 @@ function renderHosts(hosts) {
     pageHosts = shown;
   }
 
-  // Group by category on current page
   const byCat = {};
-  pageHosts.forEach(h => { const c = h.category || I18N.t("section.uncategorized"); (byCat[c] = byCat[c] || []).push(h); });
+  pageHosts.forEach(h => {
+    const c = h.folder_path || h.category || I18N.t("section.uncategorized");
+    (byCat[c] = byCat[c] || []).push(h);
+  });
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
 
-  // P0-3: 差量更新 — 如果主机集合未变，仅更新卡片数据而非重建 DOM
-  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + Object.keys(byCat).sort().join(",");
+  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + CUR_FOLDER + "|" + Object.keys(byCat).sort().join(",");
   if (LAST_RENDER_KEY === newKey && Object.keys(HOST_DOM_CACHE).length > 0) {
     pageHosts.forEach(h => updateHostCard(h));
     renderPager(pages, shown.length);
+    renderHostTree();
     return;
   }
   LAST_RENDER_KEY = newKey;
 
-  // 折叠功能已临时停用：所有分组始终展开渲染
   groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => {
     return `<div class="group">
       <div class="group-head" data-cat="${esc(cat)}">
@@ -253,21 +473,49 @@ async function delHost(id, name) {
     if (r.ok) { toast(I18N.t("toast.host_deleted"), "ok"); refresh(); } else { toast(I18N.t("toast.delete_failed"), "err"); }
   } catch (e) { toast(I18N.t("toast.deleted") + ": " + e, "err"); }
 }
+
 async function editCategory(id, cur) {
-  const cat = await requestAITextInput({
-    title:I18N.t("section.set_category","设置主机分类"),
-    message:I18N.t("section.set_category_desc"),
-    label:I18N.t("section.category","分类"),defaultValue:cur||"",
-    submitLabel:I18N.t("ui.save","保存"),singleLine:true,maxLength:128,danger:false,
-    required:false
+  const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
+  const options = [{ id: "__ungrouped__", path: I18N.t("section.uncategorized") }]
+    .concat(flat.map(f => ({ id: f.id, path: f.path })));
+  const host = (LAST_HOSTS || []).find(h => h.id === id);
+  const curFid = (host && host.folder_id) || "__ungrouped__";
+  const choice = await requestAITextInput({
+    title: I18N.t("section.set_folder", "移动到分组"),
+    message: I18N.t("section.set_folder_desc"),
+    label: I18N.t("section.folder_name"),
+    defaultValue: (options.find(o => o.id === curFid) || options[0]).path,
+    submitLabel: I18N.t("ui.save", "保存"),
+    singleLine: true, maxLength: 128, danger: false, required: false,
+    // fallback: free-text path match; empty = ungrouped
   });
-  if (cat === null) return;
+  if (choice === null) return;
+  const trimmed = String(choice).trim();
+  let folderId = "__ungrouped__";
+  if (trimmed) {
+    const hit = options.find(o => o.path === trimmed || o.id === trimmed)
+      || flat.find(f => f.name === trimmed);
+    if (hit) folderId = hit.id;
+    else {
+      // create L1 via legacy category API
+      try {
+        const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category: trimmed })
+        });
+        if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); await loadHostFolders(); refresh(); }
+        else toast(I18N.t("toast.update_failed2"), "err");
+      } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
+      return;
+    }
+  }
   try {
-    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
+    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/folder`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category: cat.trim() })
+      body: JSON.stringify({ folder_id: folderId })
     });
-    if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); refresh(); } else { toast(I18N.t("toast.update_failed2"), "err"); }
+    if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); await loadHostFolders(); refresh(); }
+    else toast(I18N.t("toast.update_failed2"), "err");
   } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
 }
 
