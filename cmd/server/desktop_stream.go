@@ -265,11 +265,29 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 	case sess.toBrowser <- append([]byte{'S'}, mustJSON(map[string]any{"phase": "waiting_agent", "w": 1280, "h": 720})...):
 	default:
 	}
+	var gotVideo atomic.Bool
 	go func() {
 		select {
 		case <-sess.agentUp:
 			select {
 			case sess.toBrowser <- append([]byte{'S'}, mustJSON(map[string]any{"phase": "agent_up"})...):
+			case <-sess.done:
+				return
+			}
+			// The agent's tx stream is up, but if no video frame arrives shortly the
+			// UI would spin on "正在推送画面" forever. Surface an actionable
+			// diagnostic instead of an infinite spinner.
+			select {
+			case <-time.After(15 * time.Second):
+				if !gotVideo.Load() {
+					select {
+					case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{
+						"error": Tz("desktop.no_frame"),
+						"level": "warn",
+					})...):
+					case <-sess.done:
+					}
+				}
 			case <-sess.done:
 			}
 		case <-time.After(35 * time.Second):
@@ -358,10 +376,12 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 				case 'S':
 					sess.recordFrame("meta", b[1:])
 				case 'K':
+					gotVideo.Store(true)
 					if time.Now().UnixMilli()%500 < 120 {
 						sess.recordFrame("jpeg", b[1:])
 					}
 				case 'H':
+					gotVideo.Store(true)
 					sess.recordFrame("h264", b[1:])
 				}
 			}

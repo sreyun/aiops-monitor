@@ -109,6 +109,33 @@ func deskTxFrame(typ byte, payload []byte) []byte {
 	return b
 }
 
+// streamTxHTTP is a dedicated client for the *continuous* agent→server upload
+// streams (desktop/terminal tx). The shared termHTTP buffers request-body writes
+// in a 4KB bufio.Writer that only flushes when full — fine for report POSTs and
+// for write-then-close streams (exec output, deskSendError), but fatal for a
+// long-lived stream of small frames: the first meta ('S' ~500B) and low-detail
+// JPEG/H264 frames sat in the buffer forever, so the browser reached "agent已接入"
+// (tx headers arrived) but never got a single frame. WriteBufferSize=1 makes
+// every frame (≥5B header) exceed the buffer and go straight to the socket.
+var (
+	streamTxOnce sync.Once
+	streamTxHTTP *http.Client
+)
+
+func deskStreamClient() *http.Client {
+	streamTxOnce.Do(func() {
+		var tr *http.Transport
+		if base, ok := termHTTP.Transport.(*http.Transport); ok && base != nil {
+			tr = base.Clone() // inherit TLS/CA/proxy config applied at startup
+		} else {
+			tr = &http.Transport{}
+		}
+		tr.WriteBufferSize = 1
+		streamTxHTTP = &http.Client{Transport: tr}
+	})
+	return streamTxHTTP
+}
+
 func (a *Agent) runDesktopSession(server, sid, lang string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -191,7 +218,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
-		resp, doErr := termHTTP.Do(req)
+		resp, doErr := deskStreamClient().Do(req)
 		if doErr == nil {
 			resp.Body.Close()
 		}
