@@ -555,14 +555,38 @@ func (a *Agent) Run(ctx context.Context) {
 			"iface", a.sniCfg.Interface, "content_audit", a.sniCfg.ContentAudit)
 	}
 
-	// Start Hyper-V guest inventory collector
+	// Start Hyper-V guest inventory collector.
+	//
+	// The Hyper-V PowerShell module autoloads lazily: on a slow host (notably
+	// Windows Server 2012) the FIRST probe right after boot can exceed the probe
+	// timeout and wrongly report "not a Hyper-V host". A single startup probe would
+	// then disable guest collection for the whole process lifetime — the exact
+	// "Server 2012 Hyper-V 依然采集不到虚拟机" symptom, persisting across reboots
+	// because every boot loses the race. Re-probe with exponential backoff so a
+	// slow first autoload (or Hyper-V enabled later) is eventually picked up, while
+	// a genuine non-Hyper-V host is polled only occasionally.
 	if !a.hypervDisabled {
 		childWg.Add(1)
 		go func() {
 			defer childWg.Done()
-			if hypervAvailable() {
-				slog.Info("Hyper-V 虚拟机采集器已启动")
-				a.runHyperVCollector()
+			backoff := 15 * time.Second
+			const maxBackoff = 10 * time.Minute
+			for {
+				if hypervAvailable() {
+					slog.Info("Hyper-V 虚拟机采集器已启动")
+					a.runHyperVCollector(ctx) // blocks until ctx is cancelled
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < maxBackoff {
+					if backoff *= 2; backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+				}
 			}
 		}()
 	}
