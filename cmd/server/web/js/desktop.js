@@ -218,8 +218,12 @@ function ensureDeskHeartbeatWorker() {
 
 function onDeskFullscreenChange() {
   const modal = document.querySelector("#desktopMask .desk-modal");
+  const stage = $("deskStage");
   if (!modal) return;
-  if (!deskFullscreenElement()) modal.classList.remove("is-max");
+  if (!deskFullscreenElement()) {
+    modal.classList.remove("is-max");
+    if (stage) stage.classList.remove("is-fullscreen-fallback");
+  }
 }
 
 function setDeskDot(phase) {
@@ -841,6 +845,13 @@ function deskSessionActive() {
 }
 
 function onDeskGlobalKeyDown(ev) {
+  const stage = $("deskStage");
+  if (ev.key === "Escape" && stage && stage.classList.contains("is-fullscreen-fallback")) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    stage.classList.remove("is-fullscreen-fallback");
+    return;
+  }
   if (!deskSessionActive() || DESK_META.viewOnly) return;
   if (deskIsEditableTarget(ev.target)) return;
   // Ignore browser chord that closes the tab / reloads — still forward most keys.
@@ -1008,23 +1019,22 @@ function exitDeskFullscreen() {
 }
 
 function toggleDeskFullscreen() {
-  const modal = document.querySelector("#desktopMask .desk-modal");
   const stage = $("deskStage");
   const active = deskFullscreenElement();
   if (active) {
-    exitDeskFullscreen().then(() => { if (modal) modal.classList.remove("is-max"); });
+    exitDeskFullscreen();
     return;
   }
-  // Prefer the whole modal (toolbar stays visible). Fall back to stage, then CSS maximize.
-  const tryEls = [modal, stage].filter(Boolean);
-  const attempt = (i) => {
-    if (i >= tryEls.length) {
-      if (modal) modal.classList.toggle("is-max");
-      return;
-    }
-    requestDeskFullscreen(tryEls[i]).catch(() => attempt(i + 1));
-  };
-  attempt(0);
+  if (!stage) return;
+  if (stage.classList.contains("is-fullscreen-fallback")) {
+    stage.classList.remove("is-fullscreen-fallback");
+    return;
+  }
+  // Fullscreen only the stream stage: title, toolbar and file-transfer sidebar
+  // must disappear so the remote desktop occupies the entire display.
+  requestDeskFullscreen(stage).catch(() => {
+    stage.classList.add("is-fullscreen-fallback");
+  });
 }
 
 function onDesktopUIChange(e) {

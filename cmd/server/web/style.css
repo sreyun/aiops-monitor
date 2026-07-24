@@ -1213,6 +1213,10 @@ svg.sparkline{width:100%; height:46px; display:block}
 .desk-stage:-webkit-full-screen{
   width:100vw; height:100vh; background:#000;
 }
+.desk-stage.is-fullscreen-fallback{
+  position:fixed!important; inset:0!important; z-index:100000!important;
+  width:100vw!important; height:100vh!important; background:#000;
+}
 .desk-modal.is-max{
   width:96vw!important; height:92vh!important; max-width:none!important;
 }
