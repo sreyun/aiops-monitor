@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -35,6 +36,7 @@ var (
 	procCreateDIBSection       = modGdi32.NewProc("CreateDIBSection")
 	procSelectObject           = modGdi32.NewProc("SelectObject")
 	procBitBlt                 = modGdi32.NewProc("BitBlt")
+	procStretchBlt             = modGdi32.NewProc("StretchBlt")
 	procDeleteObject           = modGdi32.NewProc("DeleteObject")
 	procDeleteDC               = modGdi32.NewProc("DeleteDC")
 	procGetDIBits              = modGdi32.NewProc("GetDIBits")
@@ -48,11 +50,21 @@ var (
 	procCloseDesktop              = modUser32.NewProc("CloseDesktop")
 	procGetUserObjectInformationW = modUser32.NewProc("GetUserObjectInformationW")
 	procSetProcessDPIAware        = modUser32.NewProc("SetProcessDPIAware")
+
+	modKernel32Desk          = syscall.NewLazyDLL("kernel32.dll")
+	procGetCurrentProcessId  = modKernel32Desk.NewProc("GetCurrentProcessId")
+	procProcessIdToSessionId = modKernel32Desk.NewProc("ProcessIdToSessionId")
+	procGetLastError         = modKernel32Desk.NewProc("GetLastError")
 )
 
 const (
 	uoiName           = 2          // UOI_NAME
 	deskDesiredAccess = 0x10000000 // GENERIC_ALL — capture + input on the desktop
+	// Asking for GENERIC_ALL can be rejected by hardened desktop ACLs even when
+	// SYSTEM has every right capture/input actually needs. Try the least-privilege
+	// mask first, then retain the old and MAXIMUM_ALLOWED compatibility paths.
+	deskOperationalAccess = 0x00000181 // READOBJECTS | WRITEOBJECTS | SWITCHDESKTOP
+	maximumAllowedAccess  = 0x02000000
 )
 
 // deskFollowSecureDesktop enables input-desktop following (worker mode only, so
@@ -63,6 +75,30 @@ var (
 	deskFollowSecureDesktop bool
 	deskWorkerMode          bool
 )
+
+var deskDPIOnce sync.Once
+
+func win32LastError() uint32 {
+	r, _, _ := procGetLastError.Call()
+	return uint32(r)
+}
+
+func currentSessionID() uint32 {
+	pid, _, _ := procGetCurrentProcessId.Call()
+	var sid uint32
+	r, _, _ := procProcessIdToSessionId.Call(pid, uintptr(unsafe.Pointer(&sid)))
+	if r == 0 {
+		return 0xFFFFFFFF
+	}
+	return sid
+}
+
+func setDeskDPIAware() {
+	deskDPIOnce.Do(func() {
+		// Become DPI-aware so GetSystemMetrics / BitBlt see real (unscaled) pixels.
+		_, _, _ = procSetProcessDPIAware.Call()
+	})
+}
 
 func desktopNameOf(h uintptr) string {
 	var buf [256]uint16
@@ -78,16 +114,28 @@ func desktopNameOf(h uintptr) string {
 	return syscall.UTF16ToString(buf[:])
 }
 
+func openInputDesktop() (uintptr, error) {
+	var lastErr uint32
+	for _, access := range []uintptr{deskOperationalAccess, deskDesiredAccess, maximumAllowedAccess} {
+		h, _, callErr := procOpenInputDesktop.Call(0, 0, access)
+		if h != 0 {
+			return h, nil
+		}
+		if errno, ok := callErr.(syscall.Errno); ok {
+			lastErr = uint32(errno)
+		} else {
+			lastErr = win32LastError()
+		}
+	}
+	return 0, fmt.Errorf("OpenInputDesktop failed: win32=%d", lastErr)
+}
+
 // runDesktopWorker is the Windows entry point for the secure-desktop worker
 // process (spawned by the service into the active console session). It runs ONLY
 // the remote-desktop channel, with capture/input following the input desktop.
 func runDesktopWorker(agent *Agent) error {
 	deskWorkerMode = true
 	deskFollowSecureDesktop = true
-	// Become DPI-aware so GetSystemMetrics / BitBlt see real (unscaled) pixels. A
-	// DPI-virtualized process on a scaled display captures only the top-left region
-	// and letterboxes the rest black.
-	_, _, _ = procSetProcessDPIAware.Call()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -101,25 +149,25 @@ func runDesktopWorker(agent *Agent) error {
 }
 
 const (
-	smCXScreen         = 0
-	smCYScreen         = 1
-	smCXVirtualScreen  = 78
-	smCYVirtualScreen  = 79
-	smXVVirtualScreen  = 76
-	smYVVirtualScreen  = 77
-	srcCopy            = 0x00CC0020
-	captureBLT         = 0x40000000 // include layered windows
-	biRGB              = 0
-	dibRGBColors       = 0
-	mouseeventfMove    = 0x0001
-	mouseeventfLeftDown = 0x0002
-	mouseeventfLeftUp  = 0x0004
-	mouseeventfRightDown = 0x0008
-	mouseeventfRightUp = 0x0010
+	smCXScreen            = 0
+	smCYScreen            = 1
+	smCXVirtualScreen     = 78
+	smCYVirtualScreen     = 79
+	smXVVirtualScreen     = 76
+	smYVVirtualScreen     = 77
+	srcCopy               = 0x00CC0020
+	captureBLT            = 0x40000000 // include layered windows
+	biRGB                 = 0
+	dibRGBColors          = 0
+	mouseeventfMove       = 0x0001
+	mouseeventfLeftDown   = 0x0002
+	mouseeventfLeftUp     = 0x0004
+	mouseeventfRightDown  = 0x0008
+	mouseeventfRightUp    = 0x0010
 	mouseeventfMiddleDown = 0x0020
-	mouseeventfMiddleUp = 0x0040
-	mouseeventfWheel   = 0x0800
-	keyeventfKeyUp     = 0x0002
+	mouseeventfMiddleUp   = 0x0040
+	mouseeventfWheel      = 0x0800
+	keyeventfKeyUp        = 0x0002
 )
 
 type bitmapInfoHeader struct {
@@ -149,26 +197,33 @@ type winCapture struct {
 // currently receives input. It re-attaches whenever the input desktop switches
 // (Default ↔ Winlogon ↔ Screen-saver), which is what makes lock/logon screens
 // visible. No-op unless running as the SYSTEM worker.
-func (c *winCapture) ensureInputDesktop() {
+func (c *winCapture) ensureInputDesktop() error {
 	if !deskFollowSecureDesktop {
-		return
+		return nil
 	}
 	if !c.locked {
 		runtime.LockOSThread()
 		c.locked = true
 	}
-	h, _, _ := procOpenInputDesktop.Call(0, 0, uintptr(deskDesiredAccess))
-	if h == 0 {
-		return // not permitted (not SYSTEM) — keep current desktop
+	h, err := openInputDesktop()
+	if err != nil {
+		if deskWorkerMode {
+			slog.Warn("无法打开输入桌面", "err", err)
+		}
+		return err
 	}
 	name := desktopNameOf(h)
 	if c.curDesk != 0 && name == c.curDeskName {
 		_, _, _ = procCloseDesktop.Call(h)
-		return
+		return nil
 	}
 	if r, _, _ := procSetThreadDesktop.Call(h); r == 0 {
+		err := fmt.Errorf("SetThreadDesktop(%q) failed: win32=%d", name, win32LastError())
 		_, _, _ = procCloseDesktop.Call(h)
-		return
+		if deskWorkerMode {
+			slog.Warn("无法附着输入桌面", "desktop", name, "err", err)
+		}
+		return err
 	}
 	old := c.curDesk
 	c.curDesk = h
@@ -177,9 +232,14 @@ func (c *winCapture) ensureInputDesktop() {
 		_, _, _ = procCloseDesktop.Call(old)
 	}
 	slog.Info("桌面 worker 已附着输入桌面", "desktop", name)
+	return nil
 }
 
 func openDeskCapture() (deskCapture, error) {
+	setDeskDPIAware()
+	if sid := currentSessionID(); sid == 0 {
+		return nil, fmt.Errorf("screen capture unavailable in Session 0 (win32 session=0); install the Agent as a Windows service: aiops-agent --install-service")
+	}
 	w, _, _ := procGetSystemMetrics.Call(smCXScreen)
 	h, _, _ := procGetSystemMetrics.Call(smCYScreen)
 	if w == 0 || h == 0 {
@@ -216,7 +276,12 @@ func (c *winCapture) Close() error {
 }
 
 func (c *winCapture) Capture() (image.Image, error) {
-	c.ensureInputDesktop()
+	if err := c.ensureInputDesktop(); err != nil {
+		if deskWorkerMode {
+			// Do not BitBlt on the wrong desktop — surface attach failure instead.
+			return nil, err
+		}
+	}
 	// RDP / DPI / monitor hotplug can change geometry between frames; stale
 	// buffers against a resized desktop make BitBlt fail.
 	c.refreshGeometry()
@@ -224,7 +289,9 @@ func (c *winCapture) Capture() (image.Image, error) {
 	if err != nil {
 		// One hard retry: re-attach input desktop and re-query geometry (session
 		// switches / RDP resize race with the first attempt).
-		c.ensureInputDesktop()
+		if attachErr := c.ensureInputDesktop(); attachErr != nil && deskWorkerMode {
+			return nil, attachErr
+		}
 		c.refreshGeometry()
 		img, err = c.captureGDI()
 	}
@@ -264,9 +331,9 @@ func (c *winCapture) refreshGeometry() {
 }
 
 type bltSrc struct {
-	hdc    uintptr
-	x, y   int
-	w, h   int
+	hdc     uintptr
+	x, y    int
+	w, h    int
 	release func()
 }
 
@@ -353,7 +420,7 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("BitBlt failed")
+		lastErr = fmt.Errorf("BitBlt failed: all capture rects exhausted")
 	}
 	return nil, lastErr
 }
@@ -370,33 +437,62 @@ func bltToImage(srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) {
 	}
 	defer procDeleteDC.Call(memDC)
 
+	var lastErr error
 	// --- Path A: device-dependent bitmap + GetDIBits (deselect first) ---
 	if img, err := bltViaDDB(memDC, srcDC, srcX, srcY, w, h); err == nil {
 		return img, nil
+	} else {
+		lastErr = err
 	}
 
 	// --- Path B: bottom-up DIB section (positive height; top-down often breaks BitBlt) ---
 	if img, err := bltViaDIB(memDC, srcDC, srcX, srcY, w, h, false); err == nil {
 		return img, nil
+	} else {
+		lastErr = err
 	}
 
 	// --- Path C: top-down DIB section ---
 	if img, err := bltViaDIB(memDC, srcDC, srcX, srcY, w, h, true); err == nil {
 		return img, nil
+	} else {
+		lastErr = err
 	}
 
-	return nil, fmt.Errorf("BitBlt failed")
+	return nil, lastErr
 }
 
-func tryBitBlt(memDC, srcDC uintptr, srcX, srcY, w, h int) bool {
+func tryBitBlt(memDC, srcDC uintptr, srcX, srcY, w, h int) error {
+	var lastCode uint32
 	for _, rop := range []uintptr{srcCopy | captureBLT, srcCopy} {
-		ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(w), uintptr(h), srcDC,
+		ret, _, callErr := procBitBlt.Call(memDC, 0, 0, uintptr(w), uintptr(h), srcDC,
 			uintptr(int32(srcX)), uintptr(int32(srcY)), rop)
 		if ret != 0 {
-			return true
+			return nil
+		}
+		if errno, ok := callErr.(syscall.Errno); ok {
+			lastCode = uint32(errno)
+		} else {
+			lastCode = win32LastError()
+		}
+		// Some RDP/mirror display drivers reject BitBlt but implement the same
+		// SRCCOPY through StretchBlt. Use an equal-size stretch as a real second
+		// capture backend before giving up.
+		ret, _, callErr = procStretchBlt.Call(
+			memDC, 0, 0, uintptr(w), uintptr(h),
+			srcDC, uintptr(int32(srcX)), uintptr(int32(srcY)), uintptr(w), uintptr(h),
+			rop,
+		)
+		if ret != 0 {
+			return nil
+		}
+		if errno, ok := callErr.(syscall.Errno); ok {
+			lastCode = uint32(errno)
+		} else {
+			lastCode = win32LastError()
 		}
 	}
-	return false
+	return fmt.Errorf("BitBlt/StretchBlt failed at %dx%d@%d,%d: win32=%d", w, h, srcX, srcY, lastCode)
 }
 
 func bltViaDDB(memDC, srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) {
@@ -407,11 +503,11 @@ func bltViaDDB(memDC, srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) 
 	defer procDeleteObject.Call(bmp)
 
 	old, _, _ := procSelectObject.Call(memDC, bmp)
-	ok := tryBitBlt(memDC, srcDC, srcX, srcY, w, h)
-	_, _, _ = procSelectObject.Call(memDC, old) // MUST deselect before GetDIBits
-	if !ok {
-		return nil, fmt.Errorf("BitBlt failed")
+	if err := tryBitBlt(memDC, srcDC, srcX, srcY, w, h); err != nil {
+		_, _, _ = procSelectObject.Call(memDC, old)
+		return nil, err
 	}
+	_, _, _ = procSelectObject.Call(memDC, old) // MUST deselect before GetDIBits
 
 	bi := bitmapInfoHeader{
 		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
@@ -456,11 +552,11 @@ func bltViaDIB(memDC, srcDC uintptr, srcX, srcY, w, h int, topDown bool) (image.
 	defer procDeleteObject.Call(bmp)
 
 	old, _, _ := procSelectObject.Call(memDC, bmp)
-	ok := tryBitBlt(memDC, srcDC, srcX, srcY, w, h)
-	_, _, _ = procSelectObject.Call(memDC, old)
-	if !ok {
-		return nil, fmt.Errorf("BitBlt failed")
+	if err := tryBitBlt(memDC, srcDC, srcX, srcY, w, h); err != nil {
+		_, _, _ = procSelectObject.Call(memDC, old)
+		return nil, err
 	}
+	_, _, _ = procSelectObject.Call(memDC, old)
 
 	nPix := w * h
 	src := unsafe.Slice((*byte)(bits), nPix*4)
@@ -532,8 +628,11 @@ func (i *winInput) ensureInputDesktop() {
 		runtime.LockOSThread()
 		i.locked = true
 	}
-	h, _, _ := procOpenInputDesktop.Call(0, 0, uintptr(deskDesiredAccess))
-	if h == 0 {
+	h, err := openInputDesktop()
+	if err != nil {
+		if deskWorkerMode {
+			slog.Warn("输入线程无法打开输入桌面", "err", err)
+		}
 		return
 	}
 	name := desktopNameOf(h)
@@ -542,6 +641,9 @@ func (i *winInput) ensureInputDesktop() {
 		return
 	}
 	if r, _, _ := procSetThreadDesktop.Call(h); r == 0 {
+		if deskWorkerMode {
+			slog.Warn("输入线程无法附着输入桌面", "desktop", name, "win32", win32LastError())
+		}
 		_, _, _ = procCloseDesktop.Call(h)
 		return
 	}
