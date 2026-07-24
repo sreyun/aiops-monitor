@@ -165,6 +165,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.handleHostMetrics)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
+	mux.HandleFunc("POST /api/v1/hosts/{id}/folder", s.handleSetHostFolder)
+	mux.HandleFunc("GET /api/v1/host-folders", s.handleGetHostFolders)
+	mux.HandleFunc("PUT /api/v1/host-folders", s.handlePutHostFolders)
+	mux.HandleFunc("POST /api/v1/host-folders", s.handlePostHostFolder)
+	mux.HandleFunc("PATCH /api/v1/host-folders/{id}", s.handlePatchHostFolder)
+	mux.HandleFunc("DELETE /api/v1/host-folders/{id}", s.handleDeleteHostFolder)
 	mux.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleDeleteHost)
 	// 重复主机（Agent 重装导致同一台机器出现多条记录）识别与清理
 	mux.HandleFunc("GET /api/v1/hosts/duplicates", s.handleHostDuplicates)

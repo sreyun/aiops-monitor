@@ -28,18 +28,20 @@ async function refresh(force) {
       fetch(`${API}/alerts`).then(r => r.json()),
       fetch(`${API}/activity`).then(r => r.json())
     ]);
+    await loadHostFolders();
     // P0-#2: Connection state feedback
     if (FIRST_LOAD) { FIRST_LOAD = false; }
     if (CONN_STATE !== "connected") {
       if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
       CONN_STATE = "connected";
     }
-    // Filter hosts by category for overview
-    const filteredHosts = CUR_CATS.length > 0
-      ? hosts.filter(h => CUR_CATS.includes(h.category || I18N.t("section.uncategorized")))
+    // Filter hosts by selected folder for overview
+    const matchSet = typeof hostFolderMatchSet === "function" ? hostFolderMatchSet(CUR_FOLDER) : null;
+    const filteredHosts = matchSet
+      ? hosts.filter(h => hostInFolderFilter(h, matchSet))
       : hosts;
     // Compute overview stats from filtered hosts
-    if (CUR_CATS.length > 0) {
+    if (matchSet) {
       let online = 0;
       filteredHosts.forEach(h => { if (h.online) online++; });
       const filteredAlerts = alerts.filter(a => !a.host_id || filteredHosts.some(h => h.id === a.host_id));
@@ -59,7 +61,7 @@ async function refresh(force) {
     setTxt("navHosts", hosts.length); setTxt("hostsCount", hosts.length);
     setTxt("navAlerts", alerts.length); setTxt("alertsCount", alerts.length); setTxt("ovAlertsCount", alerts.length);
     setTxt("navLog", activity.length);
-    if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(CUR_CATS.length > 0 ? filteredHosts : hosts); }
+    if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(matchSet ? filteredHosts : hosts); }
     if (onOverview || activeView === "alerts") renderAlerts(alerts);
     if (onOverview || activeView === "log") renderLog(activity);
     if (activeView === "hosts") renderHosts(hosts);

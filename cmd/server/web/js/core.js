@@ -128,7 +128,15 @@ function copyWithFeedback(btn, text, okMsg) {
     () => toast(I18N.t("toast.copy_failed"), "err")
   );
 }
-let CUR_CATS = [];    // 当前分类多选筛选（空数组=全部）
+let CUR_CATS = [];    // legacy（树筛选用 CUR_FOLDER）
+let CUR_FOLDER = "";  // ""=全部, "__ungrouped__"=未分组, else folder id
+try { CUR_FOLDER = localStorage.getItem("aiops_host_folder") || ""; } catch (e) {}
+let HOST_FOLDERS = { folders: [], assign: {}, paths: {}, counts: {} };
+let HOST_TREE_COLLAPSED = new Set();
+try {
+  const _htc = localStorage.getItem("aiops_host_tree_collapsed");
+  if (_htc) JSON.parse(_htc).forEach(id => HOST_TREE_COLLAPSED.add(id));
+} catch (e) {}
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LOG_LEVEL = "";   // 日志级别筛选

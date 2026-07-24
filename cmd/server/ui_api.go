@@ -11,6 +11,9 @@ import (
 
 func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	hosts := s.store.ListHosts()
+	if s.cfg.ensureHostFoldersMigrated(hosts) {
+		_ = s.cfg.save()
+	}
 	now := time.Now().Unix()
 	offline := int64(s.cfg.Thresholds().OfflineAfter.Seconds())
 	// staleAfter 是"数据滞后但主机尚未判离线"的阈值。它必须高于正常上报节奏（默认 30s），
@@ -21,10 +24,15 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		staleAfter = 1
 	}
 
+	folders, assign := s.cfg.hostFoldersSnapshot()
+	paths := folderPathMap(folders)
+
 	type hostView struct {
 		*Host
-		Online bool `json:"online"`
-		Stale  bool `json:"stale"`
+		Online     bool   `json:"online"`
+		Stale      bool   `json:"stale"`
+		FolderID   string `json:"folder_id"`
+		FolderPath string `json:"folder_path,omitempty"`
 	}
 	views := make([]hostView, 0, len(hosts))
 	for _, h := range hosts {
@@ -39,9 +47,17 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		h.Fingerprint = ""
 		age := now - h.LastSeen
 		online := age <= offline
-		views = append(views, hostView{Host: h, Online: online, Stale: online && age > staleAfter})
+		fid := assign[h.ID]
+		if fid == "" {
+			fid = HostFolderUngroupedID
+		}
+		fpath := paths[fid]
+		views = append(views, hostView{Host: h, Online: online, Stale: online && age > staleAfter, FolderID: fid, FolderPath: fpath})
 	}
 	sort.Slice(views, func(i, j int) bool {
+		if views[i].FolderPath != views[j].FolderPath {
+			return views[i].FolderPath < views[j].FolderPath
+		}
 		if views[i].Category != views[j].Category {
 			return views[i].Category < views[j].Category
 		}
@@ -140,7 +156,7 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ok := s.store.DeleteHost(id)
-	_ = s.cfg.SetCategory(id, "") // drop any override for the removed host
+	_ = s.cfg.SetCategory(id, "") // drop override + folder assign for the removed host
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
 		return
