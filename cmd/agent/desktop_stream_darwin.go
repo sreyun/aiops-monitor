@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,64 +156,72 @@ func (c *darwinCapture) Capture() (image.Image, error) {
 	return img, nil
 }
 
+// darwinInput drives the mouse via cliclick (osascript cannot move the cursor to
+// absolute coordinates reliably) and the keyboard via osascript System Events
+// (reliable, no external dependency, and honours modifier chords). Modifier
+// state is tracked in Go because the browser sends discrete key up/down events
+// while cliclick/osascript invocations are stateless one-shots.
 type darwinInput struct {
-	hasCliclick bool
+	mu           sync.Mutex
+	hasCliclick  bool
+	lastX, lastY int
+	mods         map[string]bool // command / shift / control / option
+	warnedMouse  bool
 }
 
 func openDeskInput() (deskInput, error) {
 	_, err := exec.LookPath("cliclick")
-	return &darwinInput{hasCliclick: err == nil}, nil
+	di := &darwinInput{hasCliclick: err == nil, mods: map[string]bool{}}
+	if err != nil {
+		slog.Warn("macOS 未找到 cliclick，远程鼠标控制不可用（键盘仍可用）；建议安装: brew install cliclick")
+	}
+	return di, nil
 }
 
 func (i *darwinInput) Close() error { return nil }
 
 func (i *darwinInput) MouseMove(x, y int) error {
-	if i.hasCliclick {
+	i.mu.Lock()
+	i.lastX, i.lastY = x, y
+	hc := i.hasCliclick
+	i.mu.Unlock()
+	if hc {
 		return exec.Command("cliclick", fmt.Sprintf("m:%d,%d", x, y)).Run()
 	}
-	script := fmt.Sprintf(`tell application "System Events" to set position of mouse to {%d, %d}`, x, y)
-	// System Events may not support set position; try cliclick-less AppleScript via CG via python — fallback no-op warn
-	return exec.Command("osascript", "-e", script).Run()
+	return nil
 }
 
 func (i *darwinInput) MouseButton(button int, down bool) error {
-	if i.hasCliclick {
-		cmd := "dd"
+	i.mu.Lock()
+	x, y := i.lastX, i.lastY
+	hc := i.hasCliclick
+	warned := i.warnedMouse
+	i.warnedMouse = true
+	i.mu.Unlock()
+	if !hc {
+		if !warned {
+			slog.Warn("忽略鼠标点击：未安装 cliclick（brew install cliclick）")
+		}
+		return nil
+	}
+	switch button {
+	case 2: // right — cliclick lacks down/up; emulate a click on release
 		if !down {
-			cmd = "du"
+			return exec.Command("cliclick", fmt.Sprintf("rc:%d,%d", x, y)).Run()
 		}
-		if button == 2 {
-			if down {
-				cmd = "kd:ctrl"
-			} else {
-				cmd = "ku:ctrl"
-			}
-			// right click: c:x,y with right — cliclick rc:x,y
+		return nil
+	case 3: // middle — unsupported by cliclick
+		return nil
+	default: // left: honour explicit down/up so drag works
+		verb := "dd"
+		if !down {
+			verb = "du"
 		}
-		if button == 2 && down {
-			return exec.Command("cliclick", "rc:.").Run()
-		}
-		if button == 2 {
-			return nil
-		}
-		return exec.Command("cliclick", cmd+":.").Run()
+		return exec.Command("cliclick", fmt.Sprintf("%s:%d,%d", verb, x, y)).Run()
 	}
-	btn := "left"
-	if button == 2 {
-		btn = "right"
-	}
-	ev := "mouse down"
-	if !down {
-		ev = "mouse up"
-	}
-	script := fmt.Sprintf(`tell application "System Events" to %s %s`, ev, btn)
-	return exec.Command("osascript", "-e", script).Run()
 }
 
 func (i *darwinInput) MouseWheel(delta int) error {
-	if i.hasCliclick {
-		// cliclick doesn't scroll well; use osascript
-	}
 	n := delta
 	if n < 0 {
 		n = -n
@@ -233,24 +242,126 @@ end repeat`, n, dir)
 	return exec.Command("osascript", "-e", script).Run()
 }
 
+func (i *darwinInput) setMod(name string, down bool) error {
+	i.mu.Lock()
+	i.mods[name] = down
+	i.mu.Unlock()
+	return nil
+}
+
+// usingClause renders the currently-held modifiers as an AppleScript
+// `using {command down, ...}` suffix (empty when none held).
+func (i *darwinInput) usingClause() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var parts []string
+	for _, m := range []string{"command", "control", "option", "shift"} {
+		if i.mods[m] {
+			parts = append(parts, m+" down")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " using {" + strings.Join(parts, ", ") + "}"
+}
+
 func (i *darwinInput) Key(vk int, down bool) error {
+	// Modifiers only update state; the chord is applied when the base key fires.
+	switch vk {
+	case 0x10:
+		return i.setMod("shift", down)
+	case 0x11:
+		return i.setMod("control", down)
+	case 0x12:
+		return i.setMod("option", down)
+	case 0x5B, 0x5C:
+		return i.setMod("command", down)
+	}
+	if !down {
+		return nil // keystroke/key code is an atomic press; fire on key-down
+	}
 	name := darwinVKName(vk)
 	if name == "" {
 		return nil
 	}
-	if !down {
-		return nil // osascript keystroke is press; key down/up limited
-	}
-	script := fmt.Sprintf(`tell application "System Events" to keystroke %s`, name)
-	if len(name) == 1 {
-		script = fmt.Sprintf(`tell application "System Events" to keystroke %q`, name)
+	using := i.usingClause()
+	var script string
+	if len(name) == 1 || name == " " {
+		script = fmt.Sprintf(`tell application "System Events" to keystroke %q%s`, name, using)
 	} else {
-		script = fmt.Sprintf(`tell application "System Events" to key code %s`, name)
+		script = fmt.Sprintf(`tell application "System Events" to key code %s%s`, name, using)
 	}
 	return exec.Command("osascript", "-e", script).Run()
 }
 
 func deskGOOS() string { return "darwin" }
+
+var (
+	darwinScrIdxOnce sync.Once
+	darwinScrIdx     = -1
+)
+
+// darwinScreenCaptureIndex resolves the avfoundation device index of
+// "Capture screen 0". This MUST be detected — on most Macs device 0 is the
+// FaceTime camera, so a naive index would stream the webcam instead of the
+// screen. Returns -1 when ffmpeg is missing or no screen device is found.
+func darwinScreenCaptureIndex() int {
+	darwinScrIdxOnce.Do(func() {
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			return
+		}
+		// list_devices prints to stderr; exits non-zero by design.
+		out, _ := exec.Command("ffmpeg", "-hide_banner", "-f", "avfoundation",
+			"-list_devices", "true", "-i", "").CombinedOutput()
+		inVideo := false
+		for _, ln := range strings.Split(string(out), "\n") {
+			low := strings.ToLower(ln)
+			if strings.Contains(low, "avfoundation video devices") {
+				inVideo = true
+				continue
+			}
+			if strings.Contains(low, "avfoundation audio devices") {
+				inVideo = false
+				continue
+			}
+			if !inVideo {
+				continue
+			}
+			// e.g. "[AVFoundation ...] [1] Capture screen 0"
+			if strings.Contains(low, "capture screen 0") {
+				if l := strings.Index(ln, "["); l >= 0 {
+					// find the last "[N]" token before the name
+					rest := ln
+					for {
+						a := strings.Index(rest, "[")
+						b := strings.Index(rest, "]")
+						if a < 0 || b < a {
+							break
+						}
+						tok := strings.TrimSpace(rest[a+1 : b])
+						if n, err := strconv.Atoi(tok); err == nil {
+							darwinScrIdx = n
+						}
+						rest = rest[b+1:]
+					}
+				}
+			}
+		}
+	})
+	return darwinScrIdx
+}
+
+func deskAVFScreenIndex() int { return darwinScreenCaptureIndex() }
+
+func deskH264Usable() bool { return darwinScreenCaptureIndex() >= 0 }
+
+func deskPreferredCodec() string {
+	if deskH264Usable() {
+		return "h264"
+	}
+	return ""
+}
 
 func deskKeyToVK(key, code string) int {
 	switch code {
@@ -274,6 +385,14 @@ func deskKeyToVK(key, code string) int {
 		return 0x28
 	case "Delete":
 		return 0x2E
+	case "ShiftLeft", "ShiftRight":
+		return 0x10
+	case "ControlLeft", "ControlRight":
+		return 0x11
+	case "AltLeft", "AltRight":
+		return 0x12
+	case "MetaLeft", "MetaRight":
+		return 0x5B
 	}
 	if len(code) == 4 && code[:3] == "Key" {
 		return int(code[3])

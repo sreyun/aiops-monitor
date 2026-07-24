@@ -269,6 +269,13 @@ function connectDesktopWS(id, name) {
           codecSel.value = "jpeg";
           DESK_QUALITY.codec = "jpeg";
         }
+        // Agent-preferred codec (e.g. macOS: continuous H.264 vastly outperforms
+        // per-frame screencapture). Auto-switch once, before the first frame.
+        if (meta.prefer === "h264" && meta.h264 && !DESK_GOT_FRAME && DESK_QUALITY.codec !== "h264") {
+          DESK_QUALITY.codec = "h264";
+          if (codecSel) codecSel.value = "h264";
+          sendDeskQuality();
+        }
         if (meta.error) {
           DESK_PHASE = "error";
           setDesktopStatus(meta.error, true);

@@ -18,6 +18,10 @@ func openDeskInput() (deskInput, error) {
 
 func deskGOOS() string { return runtime.GOOS }
 
+func deskH264Usable() bool       { return false }
+func deskPreferredCodec() string { return "" }
+func deskAVFScreenIndex() int    { return -1 }
+
 func deskKeyToVK(key, code string) int { return 0 }
 
 func deskClipboardGet() (string, error) {

@@ -358,6 +358,10 @@ func (i *winInput) Key(vk int, down bool) error {
 
 func deskGOOS() string { return "windows" }
 
+func deskH264Usable() bool       { return ffmpegAvailable() }
+func deskPreferredCodec() string { return "" } // GDI JPEG is fast on Windows
+func deskAVFScreenIndex() int    { return -1 }
+
 func deskKeyToVK(key, code string) int {
 	switch code {
 	case "Backspace":

@@ -200,15 +200,19 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 
 	sw, sh := cap.Size()
 	mons := cap.Monitors()
-	h264OK := ffmpegAvailable()
+	h264OK := deskH264Usable()
 	codecs := []string{"jpeg"}
 	if h264OK {
 		codecs = append(codecs, "h264")
 	}
+	// prefer hints the browser to auto-select a codec. On macOS per-frame
+	// screencapture is very slow, so continuous H.264 (avfoundation) is strongly
+	// preferred when the screen-capture device is resolvable.
+	prefer := deskPreferredCodec()
 	meta, _ := json.Marshal(map[string]any{
 		"w": sw, "h": sh, "os": runtimeGOOS(),
 		"scale": q.Scale, "quality": q.Quality, "fps": q.FPS,
-		"codec": q.Codec, "codecs": codecs,
+		"codec": q.Codec, "codecs": codecs, "prefer": prefer,
 		"h264": h264OK, "clipboard": true, "monitors": mons,
 		"view_only": viewOnly,
 		"features": map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK, "input": !viewOnly},
@@ -238,6 +242,9 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	}
 	defer stopH264()
 
+	// currentMon is read by the encoder goroutine and written by applyMonitor
+	// (rx goroutine); guard it to avoid a data race on monitor switch.
+	var monMu sync.Mutex
 	currentMon := deskMonitorInfo{ID: 1, Width: sw, Height: sh, Primary: true}
 	if len(mons) > 0 {
 		currentMon = mons[0]
@@ -253,7 +260,6 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	go func() {
 		defer closeAll()
 		defer pw.Close()
-		buf := make([]byte, 64*1024)
 		for !stop.Load() {
 			qMu.Lock()
 			cq := q
@@ -277,24 +283,33 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				h264Mu.Unlock()
 				if needStart {
 					stopH264()
-					p, err := startH264Pipe(currentMon, cq.Scale, fps)
+					monMu.Lock()
+					mon := currentMon
+					monMu.Unlock()
+					p, err := startH264Pipe(mon, cq.Scale, fps)
 					if err != nil {
 						codec = "jpeg"
 					} else {
 						h264Mu.Lock()
 						h264 = p
 						h264Mu.Unlock()
+						// Each reader owns its buffer — a shared buffer raced when the
+						// codec/monitor switched and two readers briefly overlapped.
 						go func(pipe *h264Pipe) {
+							rbuf := make([]byte, 64*1024)
 							for !stop.Load() {
-								n, err := pipe.Read(buf)
+								n, err := pipe.Read(rbuf)
 								if n > 0 {
 									chunk := make([]byte, n)
-									copy(chunk, buf[:n])
+									copy(chunk, rbuf[:n])
 									if writeTx(deskTxFrame('H', chunk)) != nil {
 										return
 									}
 								}
 								if err != nil {
+									// ffmpeg exited/crashed — clear the pipe so the next
+									// loop iteration restarts it (or falls back to JPEG).
+									stopH264()
 									return
 								}
 							}
@@ -376,7 +391,9 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		_ = cap.SetMonitor(id)
 		for _, m := range cap.Monitors() {
 			if m.ID == id {
+				monMu.Lock()
 				currentMon = m
+				monMu.Unlock()
 				sw, sh = m.Width, m.Height
 				break
 			}
