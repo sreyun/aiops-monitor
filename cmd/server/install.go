@@ -709,13 +709,33 @@ if ($IsAdmin) {
   cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   & $AgentExe --install-service --config $conf 2>&1 | ForEach-Object { Write-Host "[AIOps] $_" }
-  Start-Sleep -Milliseconds 1500
-  $svc = Get-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
-  if ($svc -and $svc.Status -eq 'Running') {
-    Write-Host "[AIOps] installed as Windows service (LocalSystem, boot autostart + crash-restart + desktop worker)."
+  # Poll for the service: CreateService+Start can take >1.5s on a busy 2012 host.
+  # IMPORTANT: if the service EXISTS we must NOT fall back to a SYSTEM schtasks
+  # keepalive — that Session-0 agent fights the service worker for deskWait and
+  # produces black / "connected" remote desktop. Only fall back when SCM refused
+  # to register the service at all.
+  $svc = $null
+  for ($i = 0; $i -lt 30; $i++) {
+    $svc = Get-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
+    if ($svc) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  if ($svc) {
+    for ($i = 0; $i -lt 20; $i++) {
+      $svc.Refresh()
+      if ($svc.Status -eq 'Running') { break }
+      if ($svc.Status -eq 'Stopped') {
+        Start-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
+      }
+      Start-Sleep -Milliseconds 500
+    }
+    $svc.Refresh()
+    if ($svc.Status -eq 'Running') {
+      Write-Host "[AIOps] installed as Windows service (LocalSystem, boot autostart + crash-restart + desktop worker)."
+    } else {
+      Write-Host "[AIOps] Windows service registered (status=$($svc.Status)); SCM recovery / next boot will start it. Not falling back to Session-0 keepalive (that breaks remote desktop)."
+    }
   } else {
-    # SCM may be locked down by policy on some hardened builds; keep the host
-    # online via the proven SYSTEM keepalive task so metrics never regress.
     Write-Host "[AIOps] service registration unavailable; falling back to SYSTEM keepalive task."
     $trTask = 'wscript.exe \"' + $vbs + '\"'
     schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null

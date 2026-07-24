@@ -31,6 +31,23 @@ type deskCapture interface {
 	SetMonitor(id int) error
 }
 
+// Optional: capture reports its current monitor origin in virtual-screen coords
+// so input can convert image-local clicks to absolute SetCursorPos targets.
+type deskOriginAware interface {
+	Origin() (x, y int)
+}
+type deskOriginSink interface {
+	SetOrigin(x, y int)
+}
+
+func syncDeskOrigin(cap deskCapture, inp deskInput) {
+	g, okG := cap.(deskOriginAware)
+	s, okS := inp.(deskOriginSink)
+	if okG && okS {
+		s.SetOrigin(g.Origin())
+	}
+}
+
 type deskMonitorInfo struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name"`
@@ -69,6 +86,15 @@ func (a *Agent) runDesktopChannelFor(t *serverTarget) {
 	slog.Info("远程桌面通道已就绪，等待服务端呼叫…", "server", t.server)
 	backoff := newBackoffTimer(1*time.Second, 60*time.Second)
 	for {
+		// Desktop workers don't register; the service may reconcile the canonical
+		// host id after we started. Re-read before every wait so we never sit on
+		// a stale id for the process lifetime.
+		if a.stateFile != "" {
+			if id := readHostIDFromState(a.stateFile); id != "" && id != a.identity.HostID {
+				slog.Info("桌面通道刷新 HostID", "old", short(a.identity.HostID), "new", short(id))
+				a.identity.HostID = id
+			}
+		}
 		sid, lang, ok := a.deskWait(t.server)
 		if !ok {
 			d := backoff.next()
@@ -380,6 +406,12 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				return
 			}
 			capFails = 0
+			// Keep mouse mapping in sync when RDP/DPI resizes the desktop mid-session.
+			if nw, nh := cap.Size(); nw > 0 && nh > 0 && (nw != sw || nh != sh) {
+				sw, sh = nw, nh
+				js, _ := json.Marshal(map[string]any{"w": sw, "h": sh, "monitors": cap.Monitors()})
+				_ = writeTx(deskTxFrame('S', js))
+			}
 			if !blankWarned {
 				if isLikelyBlank(img) {
 					if blankFrames++; blankFrames >= blankWarnAt {
@@ -453,6 +485,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 			return
 		}
 		_ = cap.SetMonitor(id)
+		syncDeskOrigin(cap, inp)
 		for _, m := range cap.Monitors() {
 			if m.ID == id {
 				monMu.Lock()
@@ -466,6 +499,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		js, _ := json.Marshal(map[string]any{"w": sw, "h": sh, "monitors": cap.Monitors(), "monitor": id})
 		_ = writeTx(deskTxFrame('S', js))
 	}
+	syncDeskOrigin(cap, inp)
 
 	// rx: input + files + clipboard + monitor
 	go func() {

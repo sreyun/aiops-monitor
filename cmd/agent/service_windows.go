@@ -281,6 +281,10 @@ func serviceMain(argc uintptr, argv uintptr) uintptr {
 
 	// Delegate the desktop channel to a per-session worker; run everything else.
 	svcAgent.desktopDisabled = true
+	// Reconcile the canonical host id BEFORE spawning the desktop worker.
+	// Otherwise the supervisor can race ahead of Run's reconcileIdentity and the
+	// worker permanently deskWaits on a stale id (UI rings the new host → timeout).
+	svcAgent.reconcileIdentity()
 	go svcAgent.Run(ctx)
 	go svcRunSupervisor(ctx.Done())
 
