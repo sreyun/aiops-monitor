@@ -247,6 +247,11 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		pwMu.Lock()
 		defer pwMu.Unlock()
 		_, err := pw.Write(b)
+		if err == nil && len(b) > 0 && (b[0] == 'K' || b[0] == 'H' || b[0] == 'S') {
+			// Video / meta traffic counts as activity so view-only monitoring
+			// sessions are not torn down by the idle watchdog.
+			touch()
+		}
 		return err
 	}
 	reqDone := make(chan error, 1)
@@ -269,6 +274,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	sw, sh := cap.Size()
 	mons := cap.Monitors()
 	h264OK := deskH264Usable()
+	clipOK := deskClipboardSupported()
 	codecs := []string{"jpeg"}
 	if h264OK {
 		codecs = append(codecs, "h264")
@@ -281,9 +287,9 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		"w": sw, "h": sh, "os": runtimeGOOS(),
 		"scale": q.Scale, "quality": q.Quality, "fps": q.FPS,
 		"codec": q.Codec, "codecs": codecs, "prefer": prefer,
-		"h264": h264OK, "clipboard": true, "monitors": mons,
+		"h264": h264OK, "clipboard": clipOK, "monitors": mons,
 		"view_only": viewOnly,
-		"features":  map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK, "input": !viewOnly},
+		"features":  map[string]bool{"dnd": true, "clipboard": clipOK, "monitors": true, "h264": h264OK, "input": !viewOnly},
 	})
 	if err := writeTx(deskTxFrame('S', meta)); err != nil {
 		pw.Close()
@@ -292,7 +298,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	}
 	if viewOnly {
 		warn, _ := json.Marshal(map[string]string{
-			"error": "键鼠注入不可用，当前为只读画面（Linux 需安装 xdotool；macOS 需辅助功能权限）",
+			"error": "键鼠注入不可用，当前为只读画面（Windows：确认以服务方式安装并已派生桌面 worker；Linux：安装 xdotool/ydotool；macOS：授予辅助功能权限或安装 cliclick）",
 			"level": "warn",
 		})
 		_ = writeTx(deskTxFrame('E', warn))
@@ -300,12 +306,17 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 
 	var h264Mu sync.Mutex
 	var h264 *h264Pipe
+	var h264Scale float64
+	var h264FPS int
+	var h264MonID int
+	var h264JPEGAt time.Time // occasional JPEG while on H.264 for session replay
 	stopH264 := func() {
 		h264Mu.Lock()
 		if h264 != nil {
 			_ = h264.Close()
 			h264 = nil
 		}
+		h264Scale, h264FPS, h264MonID = 0, 0, 0
 		h264Mu.Unlock()
 	}
 	defer stopH264()
@@ -360,20 +371,24 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 			}
 
 			if codec == "h264" {
+				monMu.Lock()
+				mon := currentMon
+				monMu.Unlock()
 				h264Mu.Lock()
-				needStart := h264 == nil
+				needRestart := h264 != nil && (h264Scale != cq.Scale || h264FPS != fps || h264MonID != mon.ID)
+				needStart := h264 == nil || needRestart
 				h264Mu.Unlock()
-				if needStart {
+				if needRestart {
 					stopH264()
-					monMu.Lock()
-					mon := currentMon
-					monMu.Unlock()
+				}
+				if needStart {
 					p, err := startH264Pipe(mon, cq.Scale, fps)
 					if err != nil {
 						codec = "jpeg"
 					} else {
 						h264Mu.Lock()
 						h264 = p
+						h264Scale, h264FPS, h264MonID = cq.Scale, fps, mon.ID
 						h264Mu.Unlock()
 						// Each reader owns its buffer — a shared buffer raced when the
 						// codec/monitor switched and two readers briefly overlapped.
@@ -399,6 +414,27 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 					}
 				}
 				if codec == "h264" {
+					// Keep mouse origin / size meta fresh during long H.264 sessions
+					// (JPEG path does this every frame; H.264 would otherwise drift
+					// after DPI/monitor layout changes).
+					syncDeskOrigin(cap, inp)
+					if nw, nh := cap.Size(); nw > 0 && nh > 0 && (nw != sw || nh != sh) {
+						sw, sh = nw, nh
+						js, _ := json.Marshal(map[string]any{"w": sw, "h": sh, "monitors": cap.Monitors()})
+						_ = writeTx(deskTxFrame('S', js))
+					}
+					// Emit a sparse JPEG keyframe so session replay still works
+					// when the live stream is H.264-only.
+					if time.Since(h264JPEGAt) > 2*time.Second {
+						if img, err := cap.Capture(); err == nil {
+							scaled := scaleImage(img, cq.Scale)
+							var jbuf bytes.Buffer
+							if jpeg.Encode(&jbuf, scaled, &jpeg.Options{Quality: 40}) == nil && jbuf.Len() < 2<<20 {
+								_ = writeTx(deskTxFrame('K', jbuf.Bytes()))
+								h264JPEGAt = time.Now()
+							}
+						}
+					}
 					time.Sleep(interval)
 					continue
 				}
@@ -421,6 +457,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				return
 			}
 			capFails = 0
+			syncDeskOrigin(cap, inp)
 			// Keep mouse mapping in sync when RDP/DPI resizes the desktop mid-session.
 			if nw, nh := cap.Size(); nw > 0 && nh > 0 && (nw != sw || nh != sh) {
 				sw, sh = nw, nh
@@ -479,21 +516,27 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 	}()
 
 	// Periodic clipboard push (agent → browser), every 2s when text changes
-	go func() {
-		var last string
-		t := time.NewTicker(2 * time.Second)
-		defer t.Stop()
-		for !stop.Load() {
-			<-t.C
-			txt, err := deskClipboardGet()
-			if err != nil || txt == last || txt == "" {
-				continue
+	if clipOK {
+		go func() {
+			var last string
+			t := time.NewTicker(2 * time.Second)
+			defer t.Stop()
+			const maxClip = 512 << 10 // 512 KiB — keep the tx stream healthy
+			for !stop.Load() {
+				<-t.C
+				txt, err := deskClipboardGet()
+				if err != nil || txt == last || txt == "" {
+					continue
+				}
+				if len(txt) > maxClip {
+					txt = txt[:maxClip]
+				}
+				last = txt
+				js, _ := json.Marshal(map[string]string{"text": txt, "dir": "to_browser"})
+				_ = writeTx(deskTxFrame('C', js))
 			}
-			last = txt
-			js, _ := json.Marshal(map[string]string{"text": txt, "dir": "to_browser"})
-			_ = writeTx(deskTxFrame('C', js))
-		}
-	}()
+		}()
+	}
 
 	applyMonitor := func(id int) {
 		if id <= 0 {
@@ -690,7 +733,11 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 				Text string `json:"text"`
 			}
 			if json.Unmarshal(payload, &ev) == nil && ev.Text != "" {
-				_ = deskClipboardSet(ev.Text)
+				txt := ev.Text
+				if len(txt) > 512<<10 {
+					txt = txt[:512<<10]
+				}
+				_ = deskClipboardSet(txt)
 			}
 		case 'M':
 			var ev struct {
@@ -699,6 +746,7 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 				Btn    int     `json:"btn"`
 				Down   *bool   `json:"down"`
 				Action string  `json:"action"`
+				Norm   *bool   `json:"norm"` // true = [0,1] fractions; false/omit = pixel coords (modern UI)
 			}
 			if json.Unmarshal(payload, &ev) != nil {
 				continue
@@ -712,21 +760,44 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			}
 			x := int(ev.X)
 			y := int(ev.Y)
-			if sw > 0 && ev.X <= 1 && ev.Y <= 1 {
+			useNorm := false
+			if ev.Norm != nil {
+				useNorm = *ev.Norm
+			} else if sw > 2 && sh > 2 && ev.X >= 0 && ev.X <= 1 && ev.Y >= 0 && ev.Y <= 1 {
+				// Legacy clients only: avoid treating pixel (0,0)/(1,1) as normalized.
+				useNorm = (ev.X > 0 && ev.X < 1) || (ev.Y > 0 && ev.Y < 1)
+			}
+			if useNorm && sw > 0 {
 				x = int(ev.X * float64(sw))
 				y = int(ev.Y * float64(sh))
 			}
-			_ = inp.MouseMove(x, y)
-			switch ev.Action {
-			case "down":
-				_ = inp.MouseButton(ev.Btn, true)
-			case "up":
-				_ = inp.MouseButton(ev.Btn, false)
-			case "click":
-				_ = inp.MouseButton(ev.Btn, true)
-				_ = inp.MouseButton(ev.Btn, false)
+			if sw > 0 {
+				if x < 0 {
+					x = 0
+				} else if x >= sw {
+					x = sw - 1
+				}
 			}
-			if ev.Down != nil {
+			if sh > 0 {
+				if y < 0 {
+					y = 0
+				} else if y >= sh {
+					y = sh - 1
+				}
+			}
+			_ = inp.MouseMove(x, y)
+			// Prefer Action; ignore Down when Action is set to avoid double button events.
+			if ev.Action != "" {
+				switch ev.Action {
+				case "down":
+					_ = inp.MouseButton(ev.Btn, true)
+				case "up":
+					_ = inp.MouseButton(ev.Btn, false)
+				case "click":
+					_ = inp.MouseButton(ev.Btn, true)
+					_ = inp.MouseButton(ev.Btn, false)
+				}
+			} else if ev.Down != nil {
 				_ = inp.MouseButton(ev.Btn, *ev.Down)
 			}
 		case 'W':
@@ -749,6 +820,17 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			vk := ev.VK
 			if vk == 0 {
 				vk = deskKeyToVK(ev.Key, ev.Code)
+			}
+			if vk == 0 && len(ev.Key) == 1 {
+				// Last-chance: printable Unicode BMP as latin1 byte for A–Z/0–9 already
+				// covered; punctuation without a KeyboardEvent.code still maps via rune.
+				r := []rune(ev.Key)[0]
+				if r > 0 && r < 0x7f {
+					vk = int(r)
+					if vk >= 'a' && vk <= 'z' {
+						vk -= 32
+					}
+				}
 			}
 			if vk != 0 {
 				_ = inp.Key(vk, ev.Down)
@@ -794,6 +876,9 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 				if _, err := upload.file.Write(payload); err != nil {
 					upload.file.Close()
 					os.Remove(upload.file.Name())
+					sendFileInfo("upload_ack", map[string]interface{}{
+						"status": "error", "message": agentT(lang, "agent.file.write_failed", err),
+					})
 					upload = nil
 					continue
 				}

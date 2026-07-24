@@ -71,13 +71,44 @@ func (c *linuxCapture) SetMonitor(id int) error {
 			c.cropX, c.cropY = m.X, m.Y
 			c.w, c.h = m.Width, m.Height
 			c.monID = id
+			c.outputName = m.Name
 			return nil
 		}
 	}
 	return fmt.Errorf("monitor %d not found", id)
 }
 
+func (c *linuxCapture) Origin() (x, y int) { return c.cropX, c.cropY }
+
+func linuxWaylandSession() bool {
+	return os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland"
+}
+
+func deskClipboardSupported() bool {
+	if linuxWaylandSession() {
+		if _, err := exec.LookPath("wl-paste"); err == nil {
+			return true
+		}
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			return true
+		}
+	}
+	if _, err := exec.LookPath("xclip"); err == nil {
+		return true
+	}
+	if _, err := exec.LookPath("xsel"); err == nil {
+		return true
+	}
+	return false
+}
+
 func deskClipboardGet() (string, error) {
+	if linuxWaylandSession() {
+		if _, err := exec.LookPath("wl-paste"); err == nil {
+			out, err := exec.Command("wl-paste", "-n").Output()
+			return string(out), err
+		}
+	}
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		display = ":0"
@@ -94,10 +125,17 @@ func deskClipboardGet() (string, error) {
 		out, err := cmd.Output()
 		return string(out), err
 	}
-	return "", fmt.Errorf("need xclip or xsel for clipboard")
+	return "", fmt.Errorf("need wl-clipboard (Wayland) or xclip/xsel (X11)")
 }
 
 func deskClipboardSet(text string) error {
+	if linuxWaylandSession() {
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd := exec.Command("wl-copy")
+			cmd.Stdin = strings.NewReader(text)
+			return cmd.Run()
+		}
+	}
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		display = ":0"
@@ -114,5 +152,5 @@ func deskClipboardSet(text string) error {
 		cmd.Stdin = strings.NewReader(text)
 		return cmd.Run()
 	}
-	return fmt.Errorf("need xclip or xsel for clipboard")
+	return fmt.Errorf("need wl-clipboard (Wayland) or xclip/xsel (X11)")
 }

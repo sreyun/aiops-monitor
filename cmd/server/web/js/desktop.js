@@ -4,9 +4,16 @@ let DESK_HOST = null;
 let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
 let DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
 let DESK_DOWNLOAD = null;
-let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video }
+let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video, gen }
 let DESK_GOT_FRAME = false;
 let DESK_PHASE = "idle"; // idle|connecting|waiting_agent|streaming|error|closed
+let DESK_INTENTIONAL_CLOSE = false;
+let DESK_RETRY = 0;
+let DESK_MAX_RETRY = 30;
+let DESK_CLIP_AUTOSYNC = false; // auto-write remote clipboard into local OS clipboard
+let DESK_LAST_PTR = null; // last mapped remote coords for drag-off mouseup
+let _deskHeartbeatWorker = null;
+let _deskMSEGen = 0;
 
 function openDesktop(id, name) {
   if (!DESKTOP_ENABLED) { toast(I18N.t("desktop.disabled"), "err"); return; }
@@ -22,8 +29,11 @@ async function doOpenDesktop(id, name) {
   if (mask) mask.classList.add("show");
   DESK_GOT_FRAME = false;
   DESK_PHASE = "connecting";
+  DESK_INTENTIONAL_CLOSE = false;
+  DESK_RETRY = 0;
   DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
   DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
+  DESK_HOST = { id, name };
   renderDesktopShell(id, name);
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop`, {
@@ -96,6 +106,8 @@ function renderDesktopShell(id, name) {
         </div>
       </div>
       <aside class="desk-side" id="deskSide">
+        <button type="button" class="desk-side-toggle" id="deskSideToggle" aria-expanded="true">${esc(I18N.t("desktop.side_toggle"))}</button>
+        <div class="desk-side-body" id="deskSideBody">
         <div class="desk-side-title">${esc(I18N.t("desktop.files"))}</div>
         <div class="desk-side-hint">${esc(I18N.t("desktop.files_hint"))}</div>
         <label class="desk-field">${esc(I18N.t("desktop.upload_path"))}
@@ -111,8 +123,13 @@ function renderDesktopShell(id, name) {
         <button type="button" class="btn sm" id="deskDownloadBtn">${esc(I18N.t("desktop.download"))}</button>
         <div class="desk-xfer" id="deskXferLog"></div>
         <div class="desk-side-title" style="margin-top:12px">${esc(I18N.t("desktop.clipboard"))}</div>
+        <label class="desk-field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="deskClipAutoSync" ${DESK_CLIP_AUTOSYNC ? "checked" : ""}/>
+          <span>${esc(I18N.t("desktop.clip_autosync"))}</span>
+        </label>
         <textarea id="deskClipBox" class="desk-clip" rows="4" placeholder="${esc(I18N.t("desktop.clip_ph"))}"></textarea>
         <button type="button" class="btn sm" id="deskClipApply">${esc(I18N.t("desktop.clip_to_remote"))}</button>
+        </div>
       </aside>
     </div>
     <div class="desk-replay" id="deskReplayPane" hidden>
@@ -134,9 +151,66 @@ function renderDesktopShell(id, name) {
     stage.ondragover = e => { e.preventDefault(); stage.classList.add("drag"); };
     stage.ondragleave = () => stage.classList.remove("drag");
     stage.ondrop = onDeskDrop;
+    // Click empty stage chrome to focus the stream surface for immediate typing.
+    stage.addEventListener("pointerdown", () => {
+      const canvas = $("deskCanvas");
+      const video = $("deskVideo");
+      const target = (video && video.style.display !== "none") ? video : canvas;
+      if (target) target.focus();
+    });
   }
-  DESK_HOST = { id, name };
+	DESK_HOST = { id, name };
   setDeskDot("connecting");
+  ensureDeskHeartbeatWorker();
+  // Mobile: collapse the side panel so the stream gets the first viewport.
+  try {
+    if (window.matchMedia && window.matchMedia("(max-width:900px)").matches) {
+      const side = $("deskSide");
+      if (side) {
+        side.classList.add("is-collapsed");
+        const btn = $("deskSideToggle");
+        if (btn) btn.setAttribute("aria-expanded", "false");
+      }
+    }
+  } catch (e) {}
+  if (!document._deskFsBound) {
+    document._deskFsBound = true;
+    document.addEventListener("fullscreenchange", onDeskFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", onDeskFullscreenChange);
+  }
+}
+
+function ensureDeskHeartbeatWorker() {
+  if (_deskHeartbeatWorker) return;
+  try {
+    const blob = new Blob([`
+      let t=null;
+      onmessage=function(e){
+        if(e.data==="start"){ if(t) clearInterval(t); t=setInterval(function(){ postMessage("tick"); }, 15000); }
+        if(e.data==="stop"){ if(t) clearInterval(t); t=null; }
+      };
+    `], { type: "application/javascript" });
+    _deskHeartbeatWorker = new Worker(URL.createObjectURL(blob));
+    _deskHeartbeatWorker.onmessage = () => {
+      if (DESK_WS && DESK_WS.readyState === 1) {
+        try { DESK_WS.send(new Uint8Array(["P".charCodeAt(0)])); } catch (e) {}
+      }
+    };
+    _deskHeartbeatWorker.postMessage("start");
+  } catch (e) {
+    // Fallback: throttled in background tabs, better than nothing.
+    setInterval(() => {
+      if (DESK_WS && DESK_WS.readyState === 1) {
+        try { DESK_WS.send(new Uint8Array(["P".charCodeAt(0)])); } catch (err) {}
+      }
+    }, 15000);
+  }
+}
+
+function onDeskFullscreenChange() {
+  const modal = document.querySelector("#desktopMask .desk-modal");
+  if (!modal) return;
+  if (!deskFullscreenElement()) modal.classList.remove("is-max");
 }
 
 function setDeskDot(phase) {
@@ -273,14 +347,36 @@ function connectDesktopWS(id, name) {
   };
 
   ws.onopen = () => {
-    // Do NOT claim fully connected until we get agent meta / first frame.
+    DESK_RETRY = 0;
     setDesktopStatus(I18N.t("desktop.waiting_agent"), false);
     sendDeskQuality();
+    bindDeskSessionKeys();
   };
   ws.onclose = () => {
     const prev = DESK_PHASE;
     DESK_PHASE = "closed";
-    // Keep the real agent/server error — do not overwrite with bare "已断开".
+    closeDeskMSE();
+    unbindDesktopInput(canvas);
+    if (DESK_INTENTIONAL_CLOSE) {
+      setDesktopStatus(I18N.t("desktop.disconnected"), true);
+      setDeskDot("error");
+      return;
+    }
+    // Auto-reconnect with backoff (commercial RD clients always do this).
+    if (DESK_HOST && DESK_RETRY < DESK_MAX_RETRY) {
+      DESK_RETRY++;
+      const delay = Math.min(15000, 800 * Math.pow(1.35, DESK_RETRY));
+      setDesktopStatus(`${I18N.t("misc.reconnecting")}(${DESK_RETRY}/${DESK_MAX_RETRY})`, false);
+      setDeskDot("waiting");
+      setDeskPlaceholder(I18N.t("misc.reconnecting"), I18N.t("desktop.wait_hint"));
+      setTimeout(() => {
+        if (DESK_INTENTIONAL_CLOSE || !DESK_HOST) return;
+        const mask = $("desktopMask");
+        if (!mask || !mask.classList.contains("show")) return;
+        connectDesktopWS(DESK_HOST.id, DESK_HOST.name);
+      }, delay);
+      return;
+    }
     if (prev !== "error" && prev !== "streaming") {
       setDesktopStatus(I18N.t("desktop.disconnected"), true);
       if (!DESK_GOT_FRAME) {
@@ -290,8 +386,6 @@ function connectDesktopWS(id, name) {
       setDesktopStatus(I18N.t("desktop.disconnected"), true);
     }
     setDeskDot("error");
-    unbindDesktopInput(canvas);
-    closeDeskMSE();
   };
   ws.onerror = () => {
     DESK_PHASE = "error";
@@ -322,6 +416,16 @@ function connectDesktopWS(id, name) {
         if (meta.w) DESK_META.w = meta.w;
         if (meta.h) DESK_META.h = meta.h;
         if (meta.h264 != null) DESK_META.h264 = !!meta.h264;
+        if (meta.clipboard != null || (meta.features && meta.features.clipboard != null)) {
+          const clipOK = meta.clipboard != null ? !!meta.clipboard : !!(meta.features && meta.features.clipboard);
+          const clipBox = $("deskClipBox");
+          const clipApply = $("deskClipApply");
+          const clipSend = $("deskClipSend");
+          const clipAuto = $("deskClipAutoSync");
+          [clipBox, clipApply, clipSend, clipAuto].forEach(el => {
+            if (el) el.disabled = !clipOK;
+          });
+        }
         if (meta.view_only != null) DESK_META.viewOnly = !!meta.view_only;
         if (Array.isArray(meta.monitors)) {
           DESK_META.monitors = meta.monitors;
@@ -362,11 +466,17 @@ function connectDesktopWS(id, name) {
       return;
     }
     if (typ === "K" && canvas) {
-      // Blob copies the frame out of the WebSocket event buffer. Replacing the
-      // pending blob intentionally drops stale frames so decode latency cannot
-      // grow without bound on a busy/high-DPI desktop.
+      // Sparse JPEG keyframes may arrive while live-viewing H.264 (for replay).
+      // Don't interrupt the video surface once H.264 is showing.
+      if (DESK_QUALITY.codec === "h264" && $("deskVideo") && $("deskVideo").style.display !== "none") {
+        return;
+      }
       jpegPending = new Blob([payload.slice()], { type: "image/jpeg" });
       drawNextJPEG();
+      return;
+    }
+    if (typ === "P") {
+      // keepalive pong — ignore
       return;
     }
     if (typ === "H") {
@@ -378,10 +488,12 @@ function connectDesktopWS(id, name) {
     if (typ === "C") {
       try {
         const j = JSON.parse(new TextDecoder().decode(payload));
-        const box = $("deskClipBox");
-        if (box && j.text != null) box.value = j.text;
-        if (j.text && navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(j.text).catch(() => {});
+        if (j.text != null) {
+          const box = $("deskClipBox");
+          if (box) box.value = j.text;
+          if (DESK_CLIP_AUTOSYNC && j.text && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(j.text).catch(() => {});
+          }
         }
       } catch (e) {}
       return;
@@ -433,8 +545,15 @@ function markDeskStreaming() {
       ? I18N.t("desktop.view_only")
       : I18N.t("desktop.connected");
     setDesktopStatus(msg, false);
-    const canvas = $("deskCanvas");
-    if (canvas) { canvas.focus(); bindDesktopInput(canvas); }
+  }
+  const canvas = $("deskCanvas");
+  const video = $("deskVideo");
+  const useVideo = video && video.style.display !== "none";
+  const target = useVideo ? video : canvas;
+  if (target) {
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "0");
+    target.focus();
+    bindDesktopInput(target);
   }
 }
 
@@ -446,6 +565,7 @@ function showDeskCanvas(useCanvas) {
 }
 
 function closeDeskMSE() {
+  _deskMSEGen++;
   if (DESK_MSE && DESK_MSE.mediaSource && DESK_MSE.mediaSource.readyState === "open") {
     try { DESK_MSE.mediaSource.endOfStream(); } catch (e) {}
   }
@@ -454,14 +574,28 @@ function closeDeskMSE() {
   if (video) { video.removeAttribute("src"); video.load(); }
 }
 
+function fallBackDeskToJPEG(reason) {
+  closeDeskMSE();
+  DESK_QUALITY.codec = "jpeg";
+  const cs = $("deskCodec"); if (cs) cs.value = "jpeg";
+  sendDeskQuality();
+  showDeskCanvas(true);
+  if (reason) setDesktopStatus(I18N.t("desktop.h264_unsupported") + (reason ? ": " + reason : ""), true);
+}
+
 function appendDeskH264(chunk) {
   const video = $("deskVideo");
-  if (!video || typeof MediaSource === "undefined") return;
+  if (!video || typeof MediaSource === "undefined") {
+    fallBackDeskToJPEG("MediaSource");
+    return;
+  }
   if (!DESK_MSE) {
+    const gen = ++_deskMSEGen;
     const ms = new MediaSource();
-    DESK_MSE = { mediaSource: ms, sourceBuffer: null, queue: [], video };
+    DESK_MSE = { mediaSource: ms, sourceBuffer: null, queue: [], video, gen };
     video.src = URL.createObjectURL(ms);
     ms.addEventListener("sourceopen", () => {
+      if (!DESK_MSE || DESK_MSE.gen !== gen) return;
       try {
         const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
         DESK_MSE.sourceBuffer = sb;
@@ -469,21 +603,25 @@ function appendDeskH264(chunk) {
         sb.addEventListener("updateend", flushDeskMSE);
         flushDeskMSE();
       } catch (e) {
-        setDesktopStatus(I18N.t("desktop.h264_unsupported") + ": " + e, true);
-        DESK_QUALITY.codec = "jpeg";
-        const cs = $("deskCodec"); if (cs) cs.value = "jpeg";
-        sendDeskQuality();
+        fallBackDeskToJPEG(String(e && e.message || e));
       }
     });
   }
   DESK_MSE.queue.push(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
+  // Cap queue to avoid unbounded memory if decode stalls.
+  if (DESK_MSE.queue.length > 120) DESK_MSE.queue.splice(0, DESK_MSE.queue.length - 60);
   flushDeskMSE();
 }
 
 function flushDeskMSE() {
   const m = DESK_MSE;
   if (!m || !m.sourceBuffer || m.sourceBuffer.updating || !m.queue.length) return;
-  try { m.sourceBuffer.appendBuffer(m.queue.shift()); } catch (e) { m.queue = []; }
+  try {
+    m.sourceBuffer.appendBuffer(m.queue.shift());
+  } catch (e) {
+    m.queue = [];
+    fallBackDeskToJPEG(String(e && e.name || e));
+  }
 }
 
 function handleDeskFileInfo(payload) {
@@ -511,6 +649,18 @@ function handleDeskFileInfo(payload) {
 function finishDeskDownload() {
   const dl = DESK_DOWNLOAD; DESK_DOWNLOAD = null;
   if (!dl) return;
+  let total = 0;
+  for (const c of dl.chunks) total += (c && c.byteLength) || (c && c.length) || 0;
+  if (dl.size > 0 && total !== dl.size) {
+    toast(I18N.t("desktop.download_incomplete") + ` (${total}/${dl.size})`, "err");
+    const log = $("deskXferLog");
+    if (log) log.textContent = "↓ ERR size mismatch";
+    return;
+  }
+  if (total === 0) {
+    toast(I18N.t("desktop.download_fail"), "err");
+    return;
+  }
   const blob = new Blob(dl.chunks);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = dl.filename;
@@ -520,40 +670,154 @@ function finishDeskDownload() {
 }
 
 let _deskInputBound = false;
-function bindDesktopInput(canvas) {
-  if (!canvas || _deskInputBound) return;
-  _deskInputBound = true;
-  canvas.addEventListener("mousemove", onDeskMouseMove);
-  canvas.addEventListener("mousedown", onDeskMouseDown);
-  canvas.addEventListener("mouseup", onDeskMouseUp);
-  canvas.addEventListener("contextmenu", onDeskContext);
-  canvas.addEventListener("wheel", onDeskWheel, { passive: false });
-  canvas.addEventListener("keydown", onDeskKeyDown);
-  canvas.addEventListener("keyup", onDeskKeyUp);
-}
-function unbindDesktopInput(canvas) {
-  if (!canvas || !_deskInputBound) return;
-  _deskInputBound = false;
-  canvas.removeEventListener("mousemove", onDeskMouseMove);
-  canvas.removeEventListener("mousedown", onDeskMouseDown);
-  canvas.removeEventListener("mouseup", onDeskMouseUp);
-  canvas.removeEventListener("contextmenu", onDeskContext);
-  canvas.removeEventListener("wheel", onDeskWheel);
-  canvas.removeEventListener("keydown", onDeskKeyDown);
-  canvas.removeEventListener("keyup", onDeskKeyUp);
+let _deskInputEl = null;
+let _deskKeysBound = false;
+let _deskPressed = new Set(); // codes currently down — released on blur to avoid stuck remote keys
+
+function deskIsEditableTarget(t) {
+  if (!t || !t.tagName) return false;
+  const tag = t.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (t.isContentEditable) return true;
+  return false;
 }
 
+function bindDesktopInput(el) {
+  if (!el) return;
+  if (_deskInputEl === el && _deskInputBound) return;
+  if (_deskInputEl && _deskInputEl !== el) unbindDesktopInput(_deskInputEl);
+  _deskInputBound = true;
+  _deskInputEl = el;
+  if (window.PointerEvent) {
+    el.addEventListener("pointermove", onDeskMouseMove);
+    el.addEventListener("pointerdown", onDeskMouseDown);
+    el.addEventListener("pointerup", onDeskMouseUp);
+    el.addEventListener("pointercancel", onDeskMouseUp);
+  } else {
+    el.addEventListener("mousemove", onDeskMouseMove);
+    el.addEventListener("mousedown", onDeskMouseDown);
+    el.addEventListener("mouseup", onDeskMouseUp);
+  }
+  el.addEventListener("contextmenu", onDeskContext);
+  el.addEventListener("wheel", onDeskWheel, { passive: false });
+  // Keyboard is captured at document level (bindDeskSessionKeys) so typing works
+  // even when focus is not on the canvas — commercial RD clients behave this way.
+  bindDeskSessionKeys();
+}
+
+function unbindDesktopInput(el) {
+  el = el || _deskInputEl;
+  if (!el || !_deskInputBound) return;
+  _deskInputBound = false;
+  _deskInputEl = null;
+  el.removeEventListener("pointermove", onDeskMouseMove);
+  el.removeEventListener("pointerdown", onDeskMouseDown);
+  el.removeEventListener("pointerup", onDeskMouseUp);
+  el.removeEventListener("pointercancel", onDeskMouseUp);
+  el.removeEventListener("mousemove", onDeskMouseMove);
+  el.removeEventListener("mousedown", onDeskMouseDown);
+  el.removeEventListener("mouseup", onDeskMouseUp);
+  el.removeEventListener("contextmenu", onDeskContext);
+  el.removeEventListener("wheel", onDeskWheel);
+}
+
+function bindDeskSessionKeys() {
+  if (_deskKeysBound) return;
+  _deskKeysBound = true;
+  document.addEventListener("keydown", onDeskGlobalKeyDown, true);
+  document.addEventListener("keyup", onDeskGlobalKeyUp, true);
+  window.addEventListener("blur", onDeskWindowBlur);
+  document.addEventListener("visibilitychange", onDeskVisibility);
+  window.addEventListener("pointerup", onDeskWindowPointerUp, true);
+}
+
+function unbindDeskSessionKeys() {
+  if (!_deskKeysBound) return;
+  _deskKeysBound = false;
+  deskReleaseAllKeys();
+  document.removeEventListener("keydown", onDeskGlobalKeyDown, true);
+  document.removeEventListener("keyup", onDeskGlobalKeyUp, true);
+  window.removeEventListener("blur", onDeskWindowBlur);
+  document.removeEventListener("visibilitychange", onDeskVisibility);
+  window.removeEventListener("pointerup", onDeskWindowPointerUp, true);
+}
+
+function deskSessionActive() {
+  return !!(DESK_WS && DESK_WS.readyState === 1 &&
+    DESK_PHASE !== "error" && DESK_PHASE !== "closed" && DESK_PHASE !== "idle");
+}
+
+function onDeskGlobalKeyDown(ev) {
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
+  if (deskIsEditableTarget(ev.target)) return;
+  // Ignore browser chord that closes the tab / reloads — still forward most keys.
+  if (ev.key === "F5" || (ev.metaKey || ev.ctrlKey) && (ev.key === "r" || ev.key === "R" || ev.key === "w" || ev.key === "W")) {
+    // Allow native browser shortcuts; do not forward.
+    return;
+  }
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (ev.repeat && _deskPressed.has(ev.code)) {
+    // Still forward repeats — remote apps expect key repeat for arrows/backspace.
+  }
+  _deskPressed.add(ev.code);
+  deskSendJSON("B", { down: true, key: ev.key, code: ev.code, vk: 0 });
+}
+
+function onDeskGlobalKeyUp(ev) {
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
+  if (deskIsEditableTarget(ev.target)) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  _deskPressed.delete(ev.code);
+  deskSendJSON("B", { down: false, key: ev.key, code: ev.code, vk: 0 });
+}
+
+function deskReleaseAllKeys() {
+  if (!_deskPressed.size || !DESK_WS || DESK_WS.readyState !== 1) {
+    _deskPressed.clear();
+    return;
+  }
+  for (const code of Array.from(_deskPressed)) {
+    deskSendJSON("B", { down: false, key: "", code, vk: 0 });
+  }
+  _deskPressed.clear();
+}
+
+function onDeskWindowBlur() { deskReleaseAllKeys(); }
+function onDeskVisibility() {
+  if (document.hidden) deskReleaseAllKeys();
+}
+function onDeskWindowPointerUp(ev) {
+  if (!deskSessionActive() || !_deskInputEl || !DESK_LAST_PTR) return;
+  if (ev.target === _deskInputEl || (_deskInputEl.contains && _deskInputEl.contains(ev.target))) return;
+  // Release buttons if the pointer left the stream surface mid-drag.
+  const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
+  deskSendJSON("M", { x: DESK_LAST_PTR.x, y: DESK_LAST_PTR.y, action: "up", btn, norm: false });
+}
+
+// Map pointer position onto the remote desktop, accounting for object-fit:contain
+// letterboxing inside the canvas/video element (CSS size ≠ bitmap size).
+// Returns null when the pointer is over the letterbox (not the image).
 function deskNormXY(ev, el) {
   const rect = el.getBoundingClientRect();
-  const x = (ev.clientX - rect.left) / Math.max(1, rect.width);
-  const y = (ev.clientY - rect.top) / Math.max(1, rect.height);
-  return {
-    x: Math.min(1, Math.max(0, x)) * (DESK_META.w || rect.width),
-    y: Math.min(1, Math.max(0, y)) * (DESK_META.h || rect.height)
-  };
+  const bw = el.videoWidth || el.width || DESK_META.w || rect.width;
+  const bh = el.videoHeight || el.height || DESK_META.h || rect.height;
+  const scale = Math.min(rect.width / Math.max(1, bw), rect.height / Math.max(1, bh));
+  const dispW = bw * scale;
+  const dispH = bh * scale;
+  const offX = (rect.width - dispW) / 2;
+  const offY = (rect.height - dispH) / 2;
+  const nx = (ev.clientX - rect.left - offX) / Math.max(1, dispW);
+  const ny = (ev.clientY - rect.top - offY) / Math.max(1, dispH);
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+  const deskW = DESK_META.w || bw;
+  const deskH = DESK_META.h || bh;
+  return { x: nx * deskW, y: ny * deskH };
 }
 function deskSendJSON(typ, obj) {
   if (!DESK_WS || DESK_WS.readyState !== 1) return;
+  if (DESK_META.viewOnly && (typ === "M" || typ === "W" || typ === "B")) return;
   const payload = new TextEncoder().encode(JSON.stringify(obj));
   const buf = new Uint8Array(1 + payload.length);
   buf[0] = typ.charCodeAt(0); buf.set(payload, 1); DESK_WS.send(buf);
@@ -562,30 +826,56 @@ let _deskLastMove = 0;
 function onDeskMouseMove(ev) {
   const now = Date.now(); if (now - _deskLastMove < 33) return; _deskLastMove = now;
   const p = deskNormXY(ev, ev.currentTarget);
-  deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0 });
+  if (!p) return;
+  DESK_LAST_PTR = p;
+  deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0, norm: false });
 }
 function onDeskMouseDown(ev) {
-  ev.preventDefault(); ev.currentTarget.focus();
-  const p = deskNormXY(ev, ev.currentTarget);
+  ev.preventDefault();
+  const el = ev.currentTarget;
+  el.focus();
+  try { if (el.setPointerCapture && ev.pointerId != null) el.setPointerCapture(ev.pointerId); } catch (e) {}
+  const p = deskNormXY(ev, el);
+  if (!p) return;
+  DESK_LAST_PTR = p;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
-  deskSendJSON("M", { x: p.x, y: p.y, action: "down", btn });
+  deskSendJSON("M", { x: p.x, y: p.y, action: "down", btn, norm: false });
 }
 function onDeskMouseUp(ev) {
   ev.preventDefault();
-  const p = deskNormXY(ev, ev.currentTarget);
+  const el = ev.currentTarget;
+  try { if (el.releasePointerCapture && ev.pointerId != null) el.releasePointerCapture(ev.pointerId); } catch (e) {}
+  const p = deskNormXY(ev, el) || DESK_LAST_PTR;
+  if (!p) return;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
-  deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn });
+  deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn, norm: false });
 }
 function onDeskContext(ev) { ev.preventDefault(); }
-function onDeskWheel(ev) { ev.preventDefault(); deskSendJSON("W", { delta: ev.deltaY > 0 ? -1 : 1 }); }
-function onDeskKeyDown(ev) { ev.preventDefault(); deskSendJSON("B", { down: true, key: ev.key, code: ev.code, vk: 0 }); }
-function onDeskKeyUp(ev) { ev.preventDefault(); deskSendJSON("B", { down: false, key: ev.key, code: ev.code, vk: 0 }); }
+function onDeskWheel(ev) {
+  ev.preventDefault();
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
+  deskSendJSON("W", { delta: ev.deltaY > 0 ? -1 : 1 });
+}
 
 function onDesktopUIClick(e) {
   const t = e.target;
-  if (t.id === "deskDisconnect" || t.closest("#deskDisconnect")) { closeDesktopMask(); return; }
+  if (t.id === "deskSideToggle" || t.closest("#deskSideToggle")) {
+    const side = $("deskSide");
+    if (side) {
+      const collapsed = side.classList.toggle("is-collapsed");
+      const btn = $("deskSideToggle");
+      if (btn) btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+    return;
+  }
+  if (t.id === "deskDisconnect" || t.closest("#deskDisconnect")) {
+    DESK_INTENTIONAL_CLOSE = true;
+    closeDesktopMask();
+    return;
+  }
   if (t.id === "deskFullscreen" || t.closest("#deskFullscreen")) {
-    const stage = $("deskStage"); if (stage && stage.requestFullscreen) stage.requestFullscreen().catch(() => {}); return;
+    toggleDeskFullscreen();
+    return;
   }
   if (t.id === "deskUploadBtn" || t.closest("#deskUploadBtn")) { const inp = $("deskFileInput"); if (inp) inp.click(); return; }
   if (t.id === "deskDownloadBtn" || t.closest("#deskDownloadBtn")) { deskStartDownload(); return; }
@@ -598,6 +888,43 @@ function onDesktopUIClick(e) {
   }
   const play = t.closest("[data-desk-replay]");
   if (play) { playDeskReplay(play.getAttribute("data-desk-replay")); }
+}
+
+function deskFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || null;
+}
+
+function requestDeskFullscreen(el) {
+  if (!el) return Promise.reject(new Error("no element"));
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (!req) return Promise.reject(new Error("fullscreen unsupported"));
+  return Promise.resolve(req.call(el));
+}
+
+function exitDeskFullscreen() {
+  const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+  if (!exit) return Promise.resolve();
+  return Promise.resolve(exit.call(document)).catch(() => {});
+}
+
+function toggleDeskFullscreen() {
+  const modal = document.querySelector("#desktopMask .desk-modal");
+  const stage = $("deskStage");
+  const active = deskFullscreenElement();
+  if (active) {
+    exitDeskFullscreen().then(() => { if (modal) modal.classList.remove("is-max"); });
+    return;
+  }
+  // Prefer the whole modal (toolbar stays visible). Fall back to stage, then CSS maximize.
+  const tryEls = [modal, stage].filter(Boolean);
+  const attempt = (i) => {
+    if (i >= tryEls.length) {
+      if (modal) modal.classList.toggle("is-max");
+      return;
+    }
+    requestDeskFullscreen(tryEls[i]).catch(() => attempt(i + 1));
+  };
+  attempt(0);
 }
 
 function onDesktopUIChange(e) {
@@ -615,6 +942,10 @@ function onDesktopUIChange(e) {
     DESK_QUALITY.monitor = parseInt(e.target.value, 10) || 0;
     deskSendJSON("N", { id: DESK_QUALITY.monitor });
     sendDeskQuality(); return;
+  }
+  if (e.target && e.target.id === "deskClipAutoSync") {
+    DESK_CLIP_AUTOSYNC = !!e.target.checked;
+    return;
   }
   if (e.target && e.target.id === "deskFileInput" && e.target.files && e.target.files[0]) {
     deskStartUpload(e.target.files[0]); e.target.value = "";
@@ -651,16 +982,24 @@ async function deskStartUpload(file) {
   const meta = new TextEncoder().encode(JSON.stringify({ filename: file.name, size: file.size, target_path: path }));
   const fbuf = new Uint8Array(1 + meta.length); fbuf[0] = "f".charCodeAt(0); fbuf.set(meta, 1); DESK_WS.send(fbuf);
   const chunkSize = 48 * 1024; let offset = 0;
+  const log = $("deskXferLog");
+  toast(I18N.t("desktop.uploading") + ": " + file.name, "info");
   while (offset < file.size) {
     if (DESK_WS.readyState !== 1) { toast(I18N.t("desktop.upload_fail"), "err"); return; }
+    // Backpressure: wait until the browser WS buffer drains so we don't stall the
+    // input/control relay behind a multi-MB upload.
+    while (DESK_WS.bufferedAmount > 512 * 1024) {
+      await new Promise(r => setTimeout(r, 20));
+      if (DESK_WS.readyState !== 1) { toast(I18N.t("desktop.upload_fail"), "err"); return; }
+    }
     const slice = file.slice(offset, offset + chunkSize);
     const ab = await slice.arrayBuffer();
     const u = new Uint8Array(ab);
     const buf = new Uint8Array(1 + u.length); buf[0] = "u".charCodeAt(0); buf.set(u, 1); DESK_WS.send(buf);
     offset += u.length;
+    if (log) log.textContent = `↑ ${Math.min(100, Math.round(offset / file.size * 100))}% ${file.name}`;
   }
   DESK_WS.send(new Uint8Array(["e".charCodeAt(0)]));
-  toast(I18N.t("desktop.uploading") + ": " + file.name, "info");
 }
 
 function deskStartDownload() {
@@ -724,15 +1063,22 @@ async function playDeskReplay(id) {
 }
 
 function closeDesktopWS() {
+  unbindDeskSessionKeys();
   if (DESK_WS) { try { DESK_WS.close(); } catch (e) {} DESK_WS = null; }
   unbindDesktopInput($("deskCanvas"));
+  unbindDesktopInput($("deskVideo"));
   closeDeskMSE();
 }
 
 function closeDesktopMask() {
+  DESK_INTENTIONAL_CLOSE = true;
   closeDesktopWS();
   DESK_PHASE = "idle";
   DESK_GOT_FRAME = false;
+  DESK_RETRY = 0;
+  exitDeskFullscreen().catch(() => {});
+  const modal = document.querySelector("#desktopMask .desk-modal");
+  if (modal) modal.classList.remove("is-max");
   const mask = $("desktopMask");
   if (mask) mask.classList.remove("show");
 }

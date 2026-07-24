@@ -44,6 +44,7 @@ var (
 	procSetCursorPos           = modUser32.NewProc("SetCursorPos")
 	procMouseEvent             = modUser32.NewProc("mouse_event")
 	procKeybdEvent             = modUser32.NewProc("keybd_event")
+	procMapVirtualKeyW         = modUser32.NewProc("MapVirtualKeyW")
 
 	procOpenInputDesktop          = modUser32.NewProc("OpenInputDesktop")
 	procSetThreadDesktop          = modUser32.NewProc("SetThreadDesktop")
@@ -159,6 +160,8 @@ const (
 	captureBLT            = 0x40000000 // include layered windows
 	biRGB                 = 0
 	dibRGBColors          = 0
+	inputMouse            = 0
+	inputKeyboard         = 1
 	mouseeventfMove       = 0x0001
 	mouseeventfLeftDown   = 0x0002
 	mouseeventfLeftUp     = 0x0004
@@ -167,7 +170,11 @@ const (
 	mouseeventfMiddleDown = 0x0020
 	mouseeventfMiddleUp   = 0x0040
 	mouseeventfWheel      = 0x0800
-	keyeventfKeyUp        = 0x0002
+	mouseeventfAbsolute    = 0x8000
+	mouseeventfVirtualDesk = 0x4000
+	keyeventfKeyUp         = 0x0002
+	keyeventfExtendedKey   = 0x0001
+	mapVKToVSC             = 0 // MAPVK_VK_TO_VSC
 )
 
 type bitmapInfoHeader struct {
@@ -605,6 +612,8 @@ type winInput struct {
 	curDeskName string
 	locked      bool
 	monX, monY  int // current monitor origin in virtual-screen coords
+	lastAX      int // last absolute cursor position (virtual-screen)
+	lastAY      int
 }
 
 func (i *winInput) SetOrigin(x, y int) { i.monX, i.monY = x, y }
@@ -655,16 +664,93 @@ func (i *winInput) ensureInputDesktop() {
 	}
 }
 
+// winMouseInput matches the Windows INPUT/MOUSEINPUT layout on amd64/arm64
+// (4-byte type + 4-byte pad + MOUSEINPUT with 8-byte ExtraInfo alignment).
+type winMouseInput struct {
+	Type      uint32
+	_         uint32
+	Dx        int32
+	Dy        int32
+	MouseData uint32
+	Flags     uint32
+	Time      uint32
+	_         uint32
+	ExtraInfo uintptr
+}
+
+type winKeyInput struct {
+	Type      uint32
+	_         uint32
+	Vk        uint16
+	Scan      uint16
+	Flags     uint32
+	Time      uint32
+	_         uint32
+	ExtraInfo uintptr
+	_         [8]byte // pad to sizeof(INPUT) matching mouse variant (40 on amd64)
+}
+
+func (i *winInput) sendMouseAbsolute(ax, ay int, btnFlags, data uint32) bool {
+	vx, _, _ := procGetSystemMetrics.Call(smXVVirtualScreen)
+	vy, _, _ := procGetSystemMetrics.Call(smYVVirtualScreen)
+	vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
+	vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
+	if int(vw) < 2 {
+		vw = 2
+	}
+	if int(vh) < 2 {
+		vh = 2
+	}
+	nx := int32((int64(ax-int(vx)) * 65535) / int64(int(vw)-1))
+	ny := int32((int64(ay-int(vy)) * 65535) / int64(int(vh)-1))
+	if nx < 0 {
+		nx = 0
+	}
+	if ny < 0 {
+		ny = 0
+	}
+	if nx > 65535 {
+		nx = 65535
+	}
+	if ny > 65535 {
+		ny = 65535
+	}
+	inp := winMouseInput{
+		Type:      inputMouse,
+		Dx:        nx,
+		Dy:        ny,
+		MouseData: data,
+		Flags:     mouseeventfMove | mouseeventfAbsolute | mouseeventfVirtualDesk | btnFlags,
+	}
+	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+	return n != 0
+}
+
+func (i *winInput) sendMouseButton(flags, data uint32) bool {
+	inp := winMouseInput{
+		Type:      inputMouse,
+		MouseData: data,
+		Flags:     flags,
+	}
+	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+	return n != 0
+}
+
 func (i *winInput) MouseMove(x, y int) error {
 	i.ensureInputDesktop()
 	ax, ay := i.monX+x, i.monY+y
+	i.lastAX, i.lastAY = ax, ay
 	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
+	if !i.sendMouseAbsolute(ax, ay, 0, 0) {
+		// Last-resort legacy path when SendInput is blocked.
+		_, _, _ = procMouseEvent.Call(mouseeventfMove, 0, 0, 0, 0)
+	}
 	return nil
 }
 
 func (i *winInput) MouseButton(button int, down bool) error {
 	i.ensureInputDesktop()
-	var flags uintptr
+	var flags uint32
 	switch button {
 	case 2:
 		if down {
@@ -685,23 +771,52 @@ func (i *winInput) MouseButton(button int, down bool) error {
 			flags = mouseeventfLeftUp
 		}
 	}
-	_, _, _ = procMouseEvent.Call(flags, 0, 0, 0, 0)
+	// Re-assert absolute position then click — SetCursorPos + mouse_event alone
+	// often fails to deliver clicks into RDP / secure-desktop sessions.
+	ax, ay := i.lastAX, i.lastAY
+	if ax == 0 && ay == 0 {
+		ax, ay = i.monX, i.monY
+	}
+	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
+	if !i.sendMouseAbsolute(ax, ay, flags, 0) {
+		if !i.sendMouseButton(flags, 0) {
+			_, _, _ = procMouseEvent.Call(uintptr(flags), 0, 0, 0, 0)
+		}
+	}
 	return nil
 }
 
 func (i *winInput) MouseWheel(delta int) error {
 	i.ensureInputDesktop()
-	_, _, _ = procMouseEvent.Call(mouseeventfWheel, 0, 0, uintptr(int32(delta)*120), 0)
+	data := uint32(int32(delta) * 120)
+	if !i.sendMouseButton(mouseeventfWheel, data) {
+		_, _, _ = procMouseEvent.Call(mouseeventfWheel, 0, 0, uintptr(data), 0)
+	}
 	return nil
 }
 
 func (i *winInput) Key(vk int, down bool) error {
 	i.ensureInputDesktop()
-	var flags uintptr
+	var flags uint32
 	if !down {
 		flags = keyeventfKeyUp
 	}
-	_, _, _ = procKeybdEvent.Call(uintptr(vk), 0, flags, 0)
+	if deskVKExtended(vk) {
+		flags |= keyeventfExtendedKey
+	}
+	scan, _, _ := procMapVirtualKeyW.Call(uintptr(vk), mapVKToVSC)
+	inp := winKeyInput{
+		Type:  inputKeyboard,
+		Vk:    uint16(vk),
+		Scan:  uint16(scan),
+		Flags: flags,
+	}
+	// cbSize must be sizeof(INPUT); use the mouse variant size (canonical INPUT).
+	cb := unsafe.Sizeof(winMouseInput{})
+	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), cb)
+	if n == 0 {
+		_, _, _ = procKeybdEvent.Call(uintptr(vk), scan, uintptr(flags), 0)
+	}
 	return nil
 }
 
@@ -718,66 +833,3 @@ func deskGOOS() string { return "windows" }
 func deskH264Usable() bool       { return !deskWorkerMode && ffmpegAvailable() }
 func deskPreferredCodec() string { return "" } // GDI JPEG is fast + desktop-following on Windows
 func deskAVFScreenIndex() int    { return -1 }
-
-func deskKeyToVK(key, code string) int {
-	switch code {
-	case "Backspace":
-		return 0x08
-	case "Tab":
-		return 0x09
-	case "Enter":
-		return 0x0D
-	case "Escape":
-		return 0x1B
-	case "Space":
-		return 0x20
-	case "PageUp":
-		return 0x21
-	case "PageDown":
-		return 0x22
-	case "End":
-		return 0x23
-	case "Home":
-		return 0x24
-	case "ArrowLeft":
-		return 0x25
-	case "ArrowUp":
-		return 0x26
-	case "ArrowRight":
-		return 0x27
-	case "ArrowDown":
-		return 0x28
-	case "Delete":
-		return 0x2E
-	case "ShiftLeft", "ShiftRight":
-		return 0x10
-	case "ControlLeft", "ControlRight":
-		return 0x11
-	case "AltLeft", "AltRight":
-		return 0x12
-	case "MetaLeft", "MetaRight":
-		return 0x5B
-	}
-	if len(code) == 4 && code[:3] == "Key" {
-		c := code[3]
-		if c >= 'A' && c <= 'Z' {
-			return int(c)
-		}
-	}
-	if len(code) == 6 && code[:5] == "Digit" {
-		return int(code[5])
-	}
-	if len(key) == 1 {
-		r := key[0]
-		if r >= 'a' && r <= 'z' {
-			return int(r - 32)
-		}
-		if r >= 'A' && r <= 'Z' {
-			return int(r)
-		}
-		if r >= '0' && r <= '9' {
-			return int(r)
-		}
-	}
-	return 0
-}

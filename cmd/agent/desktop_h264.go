@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -69,7 +70,10 @@ func startH264Pipe(mon deskMonitorInfo, scale float64, fps int) (*h264Pipe, erro
 		}
 		args = append(args, "avfoundation", "-capture_cursor", "1", "-framerate", strconv.Itoa(fps), "-i", fmt.Sprintf("%d:none", idx))
 	default:
-		disp := ":0"
+		disp := os.Getenv("DISPLAY")
+		if disp == "" {
+			disp = ":0"
+		}
 		grab := fmt.Sprintf("%s+%d,%d", disp, mon.X, mon.Y)
 		args = append(args, "x11grab", "-framerate", strconv.Itoa(fps), "-video_size", fmt.Sprintf("%dx%d", mon.Width, mon.Height), "-i", grab)
 	}
