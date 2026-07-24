@@ -512,7 +512,7 @@ echo "[AIOps] done. Check the dashboard for this host."
 `
 
 // installPs1Template installs the agent on Windows, privilege-adaptive:
-//   - Run ELEVATED (admin): installs under %ProgramData% and registers a
+//   - Run ELEVATED (admin): installs under %ProgramFiles%\AIOps Agent and registers a
 //     scheduled task running as SYSTEM at Highest run level (boot + 5-min
 //     keepalive). SYSTEM has the privileges Get-VM needs, so Hyper-V guest
 //     collection works. This is the mode Hyper-V hosts must use.
@@ -577,7 +577,13 @@ if (-not $IsAdmin -and (Get-Service -Name vmms -ErrorAction SilentlyContinue)) {
     Write-Host "[AIOps] NOTE: Hyper-V VM collection stays OFF until you re-run this command in an ELEVATED PowerShell."
   }
 }
-if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = Join-Path $env:LOCALAPPDATA "aiops-agent" }
+if ($IsAdmin) {
+  # ProgramData is commonly denied by AppLocker/SRP default-deny policies.
+  # Program Files is the standard trusted executable location on managed Windows.
+  $Dir = Join-Path $env:ProgramFiles "AIOps Agent"
+} else {
+  $Dir = Join-Path $env:LOCALAPPDATA "aiops-agent"
+}
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
@@ -760,14 +766,16 @@ function Try-AiopsAppLockerAllow([string]$Exe) {
 }
 $Probe = Test-AiopsAgentRunnable $AgentExe
 if (-not $Probe.Ok) {
-  $Blocked = ($Probe.Detail -match 'Application Control|AppLocker|Smart App Control|被策略|无法运行|cannot run|0x8007065|blocked this file')
+  # Covers WDAC, AppLocker and Software Restriction Policies (SRP). English
+  # Windows commonly says exactly "This program is blocked by group policy".
+  $Blocked = ($Probe.Detail -match 'Application Control|AppLocker|Smart App Control|Software Restriction|group policy|blocked by policy|blocked this (file|program)|被策略|组策略|無法執行|无法运行|cannot run|0x8007065')
   Write-Host ""
   Write-Host "[AIOps] FATAL: cannot execute $AgentExe" -ForegroundColor Red
   Write-Host ("[AIOps] " + $Probe.Detail) -ForegroundColor Red
   if ($Blocked) {
     Write-Host ""
-    Write-Host "[AIOps] Windows Application Control blocked aiops-agent.exe." -ForegroundColor Yellow
-    Write-Host "[AIOps] 本机应用程序控制策略拦截了 Agent。" -ForegroundColor Yellow
+    Write-Host "[AIOps] Windows Application Control / Group Policy blocked aiops-agent.exe." -ForegroundColor Yellow
+    Write-Host "[AIOps] 本机应用程序控制或组策略拦截了 Agent。" -ForegroundColor Yellow
 
     $SacOn = $false
     try {
@@ -821,9 +829,10 @@ if (-not $Probe.Ok) {
         Write-Host "  1) 管理员运行放行脚本后重装:"
         Write-Host ('     powershell -ExecutionPolicy Bypass -File "' + $AllowPs1 + '"')
       }
-      Write-Host "  2) 关闭 Smart App Control（设置 → Windows 安全中心 → 应用和浏览器控制），或让 IT 按哈希放行"
-      Write-Host ("  3) SHA-256 = " + $Actual)
-      Write-Host ("     Path: " + $AgentExe)
+      Write-Host "  2) 让 IT 在 AppLocker / SRP / WDAC 中按路径、哈希或发布者放行（域策略无法由本机覆盖）"
+      Write-Host "     Path: $AgentExe"
+      Write-Host "  3) 个人设备可关闭 Smart App Control 后重装；企业设备请勿尝试绕过域策略"
+      Write-Host ("     SHA-256 = " + $Actual)
       throw "Agent binary blocked by OS policy; install aborted (no Session-0 fallback)."
     }
   } else {
@@ -967,7 +976,7 @@ if ($IsAdmin) {
       Write-Host "[AIOps] Windows service registered (status=$($svc.Status)); SCM recovery / next boot will start it. Not falling back to Session-0 keepalive (that breaks remote desktop)."
     }
   } else {
-    $PolicyBlocked = ($InstallErr -and ($InstallErr -match 'Application Control|AppLocker|Smart App Control|被策略|无法运行'))
+    $PolicyBlocked = ($InstallErr -and ($InstallErr -match 'Application Control|AppLocker|Smart App Control|Software Restriction|group policy|blocked by policy|被策略|组策略|无法运行'))
     if ($PolicyBlocked) {
       Write-Host "[AIOps] FATAL: Windows Application Control blocked aiops-agent.exe — refusing Session-0 keepalive fallback (it would also be blocked)." -ForegroundColor Red
       Write-Host "[AIOps] Ask IT to allowlist $AgentExe (WDAC/AppLocker path or hash), or temporarily turn off Smart App Control, then re-run this installer." -ForegroundColor Yellow
@@ -1154,19 +1163,24 @@ echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 //  5. Longer retry delays (2/4/8s) and MoveFileEx for stubborn files
 //  6. Explicitly delete VBS files before EXE to release Run registry triggers
 const uninstallPs1Template = `$ErrorActionPreference = "Continue"
-# Clean both install locations: per-user (%LOCALAPPDATA%) and elevated
-# (%ProgramData%). Removing a SYSTEM install's task/dir needs an elevated shell.
-$Dirs = @((Join-Path $env:LOCALAPPDATA "aiops-agent"), (Join-Path $env:ProgramData "aiops-agent"))
+# Clean all install locations: per-user, current elevated Program Files path,
+# and the legacy ProgramData path used before hardened-GPO compatibility.
+$Dirs = @(
+  (Join-Path $env:LOCALAPPDATA "aiops-agent"),
+  (Join-Path $env:ProgramFiles "AIOps Agent"),
+  (Join-Path $env:ProgramData "aiops-agent")
+)
 Write-Host "[AIOps] uninstalling ($($Dirs -join '; '))"
 
-# An elevated (SYSTEM) install registers its keepalive task + files machine-wide.
-# Removing a SYSTEM task and %ProgramData% needs admin: without it, schtasks /Delete
+# An elevated (SYSTEM) install registers its service + files machine-wide.
+# Removing the service and Program Files/legacy ProgramData needs admin: without it,
 # is access-denied (silently), the task relaunches the agent within 5 min, and the
 # file deletion below fails — the classic "uninstall didn't work". Warn up front.
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
-$ProgramDataDir = Join-Path $env:ProgramData "aiops-agent"
-if (-not $IsAdmin -and (Test-Path $ProgramDataDir)) {
-    Write-Host "[AIOps] WARNING: an elevated (SYSTEM) install exists at $ProgramDataDir."
+$SystemDirs = @((Join-Path $env:ProgramFiles "AIOps Agent"), (Join-Path $env:ProgramData "aiops-agent"))
+$SystemInstall = $SystemDirs | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $IsAdmin -and $SystemInstall) {
+    Write-Host "[AIOps] WARNING: an elevated (SYSTEM) install exists at $SystemInstall."
     Write-Host "[AIOps] Its Windows service / SYSTEM scheduled task CANNOT be removed without admin"
     Write-Host "[AIOps] and will keep the agent running. Re-run this uninstall in an ELEVATED PowerShell"
     Write-Host "[AIOps] (Run as Administrator) to fully remove it."
