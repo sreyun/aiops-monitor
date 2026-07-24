@@ -25,13 +25,14 @@ import (
 //     只取干净的数字字段（温度、weather_code、湿度、AQI），中文由我们按 code 映射。
 //
 // 城市定位优先级（自动识别用户所在城市，不再写死杭州）：
-//  1. ?ip= 显式覆盖（调试用）。
+//  1. ?ip= 显式覆盖（调试用；Android App 会传入手机自身公网 IP，避免落到服务器出口城市）。
 //  2. 客户端公网 IP：用户走公网访问时，clientIP 即其真实公网 IP → 其所在城市。
 //  3. 客户端是内网/环回 IP（本产品服务端与用户同处一个局域网/园区最常见）：
 //     自动探测**服务端出口公网 IP**——出口 IP 即园区所在城市的公网 IP，
 //     等价于用户所在城市。结果缓存，出口 IP 基本不变。
 //  4. 出口探测失败时才回退到 AIOPS_WEATHER_DEFAULT_IP（如配置，纯兜底/强制指定城市）。
 //
+// 城市中文名：优先取上游合法汉字字段；否则用 c2 拼音经 weatherCityCN 大表映射。
 // AppCode 从环境变量 AIOPS_WEATHER_APPCODE 读取；未配置则天气功能关闭（App 优雅降级）。
 // AIOPS_WEATHER_DEFAULT_IP 可选：仅当出口探测失败时兜底，或云上部署强制指定城市时使用。
 // ---------------------------------------------------------------------------
@@ -220,12 +221,16 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 		return weatherResult{}, fmt.Errorf("weather upstream HTTP %d", resp.StatusCode)
 	}
 
-	// 只解析**干净**字段。中文城市/天气名在上游是乱码，一律不取，改由 code 映射。
+	// 中文城市名在部分上游响应里是乱码，但偶发已是合法 UTF-8；优先取含汉字的字段，
+	// 否则用干净的 c2 拼音走 cityCN 映射表。
 	var up struct {
 		Code int `json:"showapi_res_code"`
 		Body struct {
 			CityInfo struct {
 				C2 string `json:"c2"` // 城市拼音（干净）
+				C3 string `json:"c3"` // 城市中文（可能乱码或合法 UTF-8）
+				C5 string `json:"c5"` // 省份中文（备用）
+				C7 string `json:"c7"` // 部分产品线的别名字段
 			} `json:"cityInfo"`
 			Now struct {
 				Temperature string `json:"temperature"`
@@ -252,12 +257,12 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 	}
 
 	res := weatherResult{
-		OK:        true,
-		TempC:     weatherAtoi(up.Body.Now.Temperature),
-		Text:      weatherCodeText(up.Body.Now.WeatherCode),
-		Humidity:  up.Body.Now.SD,
-		AQI:       up.Body.Now.AQI,
-		Location:     cityCN(up.Body.CityInfo.C2),
+		OK:           true,
+		TempC:        weatherAtoi(up.Body.Now.Temperature),
+		Text:         weatherCodeText(up.Body.Now.WeatherCode),
+		Humidity:     up.Body.Now.SD,
+		AQI:          up.Body.Now.AQI,
+		Location:     resolveWeatherCity(up.Body.CityInfo.C2, up.Body.CityInfo.C3, up.Body.CityInfo.C5, up.Body.CityInfo.C7),
 		TodayHigh:    weatherAtoi(up.Body.F1.DayTemp),
 		TodayLow:     weatherAtoi(up.Body.F1.NightTemp),
 		TomorrowHigh: weatherAtoi(up.Body.F2.DayTemp),
@@ -339,22 +344,175 @@ func weatherCodeText(code string) string {
 	}
 }
 
-// cityCN maps a handful of common city pinyin to Chinese; falls back to
-// Title-cased pinyin so we never surface the upstream mojibake.
+// resolveWeatherCity prefers a clean Chinese name from upstream when present,
+// otherwise maps the pinyin city code through cityCN.
+func resolveWeatherCity(pinyin string, chineseCandidates ...string) string {
+	for _, c := range chineseCandidates {
+		if loc := normalizeChineseCity(c); loc != "" {
+			return loc
+		}
+	}
+	return cityCN(pinyin)
+}
+
+func containsHan(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeChineseCity keeps strings that already contain Han characters and
+// strips common administrative suffixes for compact UI display.
+func normalizeChineseCity(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || !containsHan(s) {
+		return ""
+	}
+	// Reject obvious mojibake that mixes Han with many Latin/control junk.
+	latin := 0
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			latin++
+		}
+	}
+	if latin > 2 {
+		return ""
+	}
+	for _, suf := range []string{"市", "地区", "盟", "州", "县", "区"} {
+		if strings.HasSuffix(s, suf) && len([]rune(s)) > len([]rune(suf))+1 {
+			s = strings.TrimSuffix(s, suf)
+			break
+		}
+	}
+	return s
+}
+
+// cityCN maps city pinyin (ShowAPI c2) to Chinese. Falls back to Title-cased
+// pinyin only when unknown — expand this table rather than showing Latin names
+// to end users. Keys are lowercase, no spaces; optional trailing "shi" is stripped.
 func cityCN(pinyin string) string {
 	p := strings.ToLower(strings.TrimSpace(pinyin))
-	m := map[string]string{
-		"shanghai": "上海", "beijing": "北京", "guangzhou": "广州", "shenzhen": "深圳",
-		"nanjing": "南京", "hangzhou": "杭州", "suzhou": "苏州", "chengdu": "成都",
-		"wuhan": "武汉", "xian": "西安", "chongqing": "重庆", "tianjin": "天津",
-		"hefei": "合肥", "zhengzhou": "郑州", "changsha": "长沙", "qingdao": "青岛",
-		"fengxian": "奉贤", "shenyang": "沈阳", "dalian": "大连", "xiamen": "厦门",
-	}
-	if cn, ok := m[p]; ok {
-		return cn
-	}
+	p = strings.ReplaceAll(p, " ", "")
+	p = strings.ReplaceAll(p, "-", "")
+	p = strings.TrimSuffix(p, "shi")
 	if p == "" {
 		return ""
 	}
+	if cn, ok := weatherCityCN[p]; ok {
+		return cn
+	}
+	// District / county often arrives as "xxxqu" / "xxx县" pinyin variants.
+	for _, suf := range []string{"qu", "xian", "zhou", "meng"} {
+		if strings.HasSuffix(p, suf) && len(p) > len(suf)+2 {
+			if cn, ok := weatherCityCN[strings.TrimSuffix(p, suf)]; ok {
+				return cn
+			}
+		}
+	}
 	return strings.ToUpper(p[:1]) + p[1:]
+}
+
+// weatherCityCN: major PRC cities + common districts seen in IP geo (non-exhaustive).
+var weatherCityCN = map[string]string{
+	// 直辖市
+	"beijing": "北京", "shanghai": "上海", "tianjin": "天津", "chongqing": "重庆",
+	// 省会 / 副省级 / 热门地级市
+	"guangzhou": "广州", "shenzhen": "深圳", "dongguan": "东莞", "foshan": "佛山",
+	"zhuhai": "珠海", "huizhou": "惠州", "zhongshan": "中山", "jiangmen": "江门",
+	"zhanjiang": "湛江", "maoming": "茂名", "zhaoqing": "肇庆", "shantou": "汕头",
+	"hangzhou": "杭州", "ningbo": "宁波", "wenzhou": "温州", "jiaxing": "嘉兴",
+	"huzhou": "湖州", "shaoxing": "绍兴", "jinhua": "金华", "quzhou": "衢州",
+	"zhoushan": "舟山", "taizhou": "台州", "lishui": "丽水", "yiwu": "义乌",
+	"nanjing": "南京", "wuxi": "无锡", "xuzhou": "徐州", "changzhou": "常州",
+	"suzhou": "苏州", "nantong": "南通", "lianyungang": "连云港", "huaian": "淮安",
+	"yancheng": "盐城", "yangzhou": "扬州", "zhenjiang": "镇江", "suqian": "宿迁",
+	"hefei": "合肥", "wuhu": "芜湖", "bengbu": "蚌埠", "huainan": "淮南",
+	"maanshan": "马鞍山", "huaibei": "淮北", "tongling": "铜陵", "anqing": "安庆",
+	"huangshan": "黄山", "chuzhou": "滁州", "fuyang": "阜阳", "suzhouanhui": "宿州",
+	"luan": "六安", "bozhou": "亳州", "chizhou": "池州", "xuancheng": "宣城",
+	"fuzhou": "福州", "xiamen": "厦门", "putian": "莆田", "sanming": "三明",
+	"quanzhou": "泉州", "zhangzhou": "漳州", "nanping": "南平", "longyan": "龙岩",
+	"ningde": "宁德",
+	"nanchang": "南昌", "jingdezhen": "景德镇", "pingxiang": "萍乡", "jiujiang": "九江",
+	"xinyu": "新余", "yingtan": "鹰潭", "ganzhou": "赣州", "jian": "吉安",
+	"yichun": "宜春", "fuzhoujx": "抚州", "shangrao": "上饶",
+	"jinan": "济南", "qingdao": "青岛", "zibo": "淄博", "zaozhuang": "枣庄",
+	"dongying": "东营", "yantai": "烟台", "weifang": "潍坊", "jining": "济宁",
+	"taian": "泰安", "weihai": "威海", "rizhao": "日照", "linyi": "临沂",
+	"dezhou": "德州", "liaocheng": "聊城", "binzhou": "滨州", "heze": "菏泽",
+	"zhengzhou": "郑州", "kaifeng": "开封", "luoyang": "洛阳", "pingdingshan": "平顶山",
+	"anyang": "安阳", "hebi": "鹤壁", "xinxiang": "新乡", "jiaozuo": "焦作",
+	"puyang": "濮阳", "xuchang": "许昌", "luohe": "漯河", "sanmenxia": "三门峡",
+	"nanyang": "南阳", "shangqiu": "商丘", "xinyang": "信阳", "zhoukou": "周口",
+	"zhumadian": "驻马店",
+	"wuhan": "武汉", "huangshi": "黄石", "shiyan": "十堰", "yichang": "宜昌",
+	"xiangyang": "襄阳", "ezhou": "鄂州", "jingmen": "荆门", "xiaogan": "孝感",
+	"jingzhou": "荆州", "huanggang": "黄冈", "xianning": "咸宁", "suizhou": "随州",
+	"changsha": "长沙", "zhuzhou": "株洲", "xiangtan": "湘潭", "hengyang": "衡阳",
+	"shaoyang": "邵阳", "yueyang": "岳阳", "changde": "常德", "zhangjiajie": "张家界",
+	"yiyang": "益阳", "chenzhou": "郴州", "yongzhou": "永州", "huaihua": "怀化",
+	"loudi": "娄底",
+	"guangyuan": "广元", "chengdu": "成都", "mianyang": "绵阳", "deyang": "德阳",
+	"nanchong": "南充", "yibin": "宜宾", "luzhou": "泸州", "leshan": "乐山",
+	"meishan": "眉山", "zigong": "自贡", "panzhihua": "攀枝花", "suining": "遂宁",
+	"neijiang": "内江", "guangan": "广安", "dazhou": "达州", "yaan": "雅安",
+	"bazhong": "巴中", "ziyang": "资阳",
+	"guiyang": "贵阳", "zunyi": "遵义", "liupanshui": "六盘水", "anshun": "安顺",
+	"kunming": "昆明", "qujing": "曲靖", "yuxi": "玉溪", "baoshan": "保山",
+	"zhaotong": "昭通", "lijiang": "丽江", "puer": "普洱", "lincang": "临沧",
+	"xian": "西安", "xianyang": "咸阳", "baoji": "宝鸡", "weinan": "渭南",
+	"tongchuan": "铜川", "yanan": "延安", "hanzhong": "汉中", "yulin": "榆林",
+	"ankang": "安康", "shangluo": "商洛",
+	"lanzhou": "兰州", "jiayuguan": "嘉峪关", "jinchang": "金昌", "baiyin": "白银",
+	"tianshui": "天水", "wuwei": "武威", "zhangye": "张掖", "pingliang": "平凉",
+	"jiuquan": "酒泉", "qingyang": "庆阳", "dingxi": "定西", "longnan": "陇南",
+	"xining": "西宁", "haikou": "海口", "sanya": "三亚", "danzhou": "儋州",
+	"nanning": "南宁", "liuzhou": "柳州", "guilin": "桂林", "wuzhou": "梧州",
+	"beihai": "北海", "fangchenggang": "防城港", "qinzhou": "钦州", "guigang": "贵港",
+	"yulin_gx": "玉林", "baise": "百色", "hezhou": "贺州", "hechi": "河池", "laibin": "来宾", "chongzuo": "崇左",
+	"harbin": "哈尔滨", "qiqihaer": "齐齐哈尔", "jixi": "鸡西", "hegang": "鹤岗",
+	"shuangyashan": "双鸭山", "daqing": "大庆", "yichunhlj": "伊春", "jiamusi": "佳木斯",
+	"qitaihe": "七台河", "mudanjiang": "牡丹江", "heihe": "黑河", "suihua": "绥化",
+	"changchun": "长春", "jilin": "吉林", "siping": "四平", "liaoyuan": "辽源",
+	"tonghua": "通化", "baishan": "白山", "songyuan": "松原", "baicheng": "白城",
+	"shenyang": "沈阳", "dalian": "大连", "anshan": "鞍山", "fushun": "抚顺",
+	"benxi": "本溪", "dandong": "丹东", "jinzhou": "锦州", "yingkou": "营口",
+	"fuxin": "阜新", "liaoyang": "辽阳", "panjin": "盘锦", "tieling": "铁岭",
+	"chaoyang": "朝阳", "huludao": "葫芦岛",
+	"hohhot": "呼和浩特", "huhehaote": "呼和浩特", "baotou": "包头", "wuhai": "乌海",
+	"chifeng": "赤峰", "tongliao": "通辽", "ordos": "鄂尔多斯", "eerduosi": "鄂尔多斯",
+	"hulunbuir": "呼伦贝尔", "bayannur": "巴彦淖尔", "ulanqab": "乌兰察布",
+	"yinchuan": "银川", "shizuishan": "石嘴山", "wuzhong": "吴忠", "guyuan": "固原", "zhongwei": "中卫",
+	"urumqi": "乌鲁木齐", "wulumuqi": "乌鲁木齐", "karamay": "克拉玛依", "kelamayi": "克拉玛依",
+	"turpan": "吐鲁番", "hami": "哈密",
+	"lhasa": "拉萨", "lasa": "拉萨",
+	"taipei": "台北", "taichung": "台中", "kaohsiung": "高雄", "gaoxiong": "高雄",
+	"hongkong": "香港", "xianggang": "香港", "macau": "澳门", "aomen": "澳门",
+	// 常见区县（IP 库常落到区级）
+	"fengxian": "奉贤", "pudong": "浦东", "minhang": "闵行", "baoshan_sh": "宝山",
+	"jiading": "嘉定", "songjiang": "松江", "qingpu": "青浦", "jinshan": "金山",
+	"chongming": "崇明", "xuhui": "徐汇", "changning": "长宁", "jingan": "静安",
+	"putuo": "普陀", "hongkou": "虹口", "yangpu": "杨浦", "huangpu": "黄埔",
+	"chaoyang_bj": "朝阳", "haidian": "海淀", "fengtai": "丰台", "shijingshan": "石景山",
+	"tongzhou": "通州", "changping": "昌平", "daxing": "大兴", "shunyi": "顺义",
+	"huairou": "怀柔", "pinggu": "平谷", "miyun": "密云", "yanqing": "延庆",
+	"nanshan": "南山", "futian": "福田", "luohu": "罗湖", "baoan": "宝安",
+	"longgang": "龙岗", "yantian": "盐田", "longhua": "龙华", "pingshan": "坪山",
+	"yuhang": "余杭", "xiaoshan": "萧山", "binjiang": "滨江", "linping": "临平",
+	"qiantang": "钱塘", "fuyanghangzhou": "富阳", "linan": "临安",
+	"jiangning": "江宁", "pukou": "浦口", "qixia": "栖霞", "yuhuatai": "雨花台",
+	"wuhou": "武侯", "jinjiang_cd": "锦江", "qingyang_cd": "青羊", "jinniu": "金牛",
+	"chenghua": "成华", "pidu": "郫都", "xindu": "新都", "wenjiang": "温江",
+	"shuangliu": "双流", "longquanyi": "龙泉驿",
+	"jianghan": "江汉", "wuchang": "武昌", "hankou": "汉口", "hanyang": "汉阳",
+	"hongshan": "洪山", "dongxihu": "东西湖", "jiangxia": "江夏", "huangpi": "黄陂",
+	"xinbei": "新北", "tianhe": "天河", "yuexiu": "越秀", "haizhu": "海珠",
+	"liwan": "荔湾", "baiyun": "白云", "huangpugz": "黄埔", "panyu": "番禺",
+	"huadu": "花都", "nansha": "南沙", "conghua": "从化", "zengcheng": "增城",
+	"yubei": "渝北", "yuzhong": "渝中", "jiangbei": "江北", "nanan": "南岸",
+	"shapingba": "沙坪坝", "jiulongpo": "九龙坡", "dadukou": "大渡口", "banan": "巴南",
+	"beibei": "北碚",
 }
