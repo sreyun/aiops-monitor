@@ -730,15 +730,23 @@ func (i *winInput) sendMouseAbsolute(ax, ay int, btnFlags, data uint32) bool {
 	if ny > 65535 {
 		ny = 65535
 	}
-	inp := winMouseInput{
-		Type:      inputMouse,
-		Dx:        nx,
-		Dy:        ny,
-		MouseData: data,
-		Flags:     mouseeventfMove | mouseeventfAbsolute | mouseeventfVirtualDesk | btnFlags,
+	try := func(flags uint32) bool {
+		inp := winMouseInput{
+			Type:      inputMouse,
+			Dx:        nx,
+			Dy:        ny,
+			MouseData: data,
+			Flags:     flags,
+		}
+		n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+		return n != 0
 	}
-	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
-	return n != 0
+	// Prefer virtual-desktop absolute; fall back without VIRTUALDESK (some RDP /
+	// hardened sessions accept only the primary-monitor absolute form).
+	if try(mouseeventfMove | mouseeventfAbsolute | mouseeventfVirtualDesk | btnFlags) {
+		return true
+	}
+	return try(mouseeventfMove | mouseeventfAbsolute | btnFlags)
 }
 
 func (i *winInput) sendMouseButton(flags, data uint32) bool {
@@ -757,7 +765,8 @@ func (i *winInput) MouseMove(x, y int) error {
 	i.lastAX, i.lastAY = ax, ay
 	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
 	if !i.sendMouseAbsolute(ax, ay, 0, 0) {
-		// Last-resort legacy path when SendInput is blocked.
+		// Legacy absolute via mouse_event (coords already 0..65535 style not used —
+		// SetCursorPos above is the real fallback positioning).
 		_, _, _ = procMouseEvent.Call(mouseeventfMove, 0, 0, 0, 0)
 	}
 	return nil
@@ -786,18 +795,20 @@ func (i *winInput) MouseButton(button int, down bool) error {
 			flags = mouseeventfLeftUp
 		}
 	}
-	// Re-assert absolute position then click — SetCursorPos + mouse_event alone
-	// often fails to deliver clicks into RDP / secure-desktop sessions.
 	ax, ay := i.lastAX, i.lastAY
 	if ax == 0 && ay == 0 {
 		ax, ay = i.monX, i.monY
 	}
 	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
-	if !i.sendMouseAbsolute(ax, ay, flags, 0) {
-		if !i.sendMouseButton(flags, 0) {
-			_, _, _ = procMouseEvent.Call(uintptr(flags), 0, 0, 0, 0)
-		}
+	// Combined move+button in one SendInput is more reliable than separate calls
+	// under UIPI / RDP (button-only events often land at the wrong cursor).
+	if i.sendMouseAbsolute(ax, ay, flags, 0) {
+		return nil
 	}
+	if i.sendMouseButton(flags, 0) {
+		return nil
+	}
+	_, _, _ = procMouseEvent.Call(uintptr(flags), 0, 0, 0, 0)
 	return nil
 }
 
