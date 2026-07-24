@@ -1253,7 +1253,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 #deskCanvas,#deskVideo{
   position:absolute; inset:0; display:block;
   width:100%; height:100%; max-width:none; max-height:none;
-  background:#000; cursor:crosshair; outline:none; touch-action:none;
+  background:#000; cursor:default; outline:none; touch-action:none;
   object-fit:contain; box-shadow:none;
 }
 .desk-placeholder{
