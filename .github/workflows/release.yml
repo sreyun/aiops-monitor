@@ -53,6 +53,10 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "构建版本: $VERSION"
 
+      - name: Generate embedded files
+        run: |
+          go generate ./...
+
       - name: Build binaries
         run: |
           VERSION=${{ steps.meta.outputs.version }}
