@@ -56,12 +56,18 @@ func startH264Pipe(mon deskMonitorInfo, scale float64, fps int) (*h264Pipe, erro
 		args = append(args, "gdigrab", "-framerate", strconv.Itoa(fps), "-offset_x", strconv.Itoa(mon.X), "-offset_y", strconv.Itoa(mon.Y),
 			"-video_size", fmt.Sprintf("%dx%d", mon.Width, mon.Height), "-i", "desktop")
 	case "darwin":
-		// avfoundation: "Capture screen 0"
-		idx := mon.ID - 1
-		if idx < 0 {
-			idx = 0
+		// avfoundation screen device index MUST be resolved — device 0 is usually
+		// the FaceTime camera. base = index of "Capture screen 0"; add (ID-1) for
+		// additional displays.
+		base := deskAVFScreenIndex()
+		if base < 0 {
+			return nil, fmt.Errorf("avfoundation screen-capture device not found")
 		}
-		args = append(args, "avfoundation", "-framerate", strconv.Itoa(fps), "-i", fmt.Sprintf("%d:none", idx))
+		idx := base
+		if mon.ID > 1 {
+			idx = base + (mon.ID - 1)
+		}
+		args = append(args, "avfoundation", "-capture_cursor", "1", "-framerate", strconv.Itoa(fps), "-i", fmt.Sprintf("%d:none", idx))
 	default:
 		disp := ":0"
 		grab := fmt.Sprintf("%s+%d,%d", disp, mon.X, mon.Y)

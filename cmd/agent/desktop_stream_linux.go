@@ -261,6 +261,10 @@ func (i *linuxInput) Key(vk int, down bool) error {
 
 func deskGOOS() string { return "linux" }
 
+func deskH264Usable() bool       { return ffmpegAvailable() }
+func deskPreferredCodec() string { return "" } // x11grab JPEG is acceptable
+func deskAVFScreenIndex() int    { return -1 }
+
 func deskKeyToVK(key, code string) int {
 	switch code {
 	case "Backspace":
