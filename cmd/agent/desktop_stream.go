@@ -90,7 +90,7 @@ type deskQuality struct {
 }
 
 func defaultDeskQuality() deskQuality {
-	return deskQuality{Scale: 0.5, Quality: 55, FPS: 8, Codec: "jpeg"}
+	return deskQuality{Scale: 1.0, Quality: 88, FPS: 8, Codec: "jpeg"}
 }
 
 func (a *Agent) runDesktopChannelFor(t *serverTarget) {
@@ -757,10 +757,24 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 				if nq.Codec != "" {
 					q.Codec = nq.Codec
 				}
+				applied := *q
 				mon := nq.Monitor
 				qMu.Unlock()
 				if mon > 0 && applyMonitor != nil {
 					applyMonitor(mon)
+				}
+				// Ack so the browser can confirm the encoder accepted the preset
+				// (previously operators could not tell "UI changed" from "agent applied").
+				ack, _ := json.Marshal(map[string]any{
+					"quality_ack": true,
+					"scale":       applied.Scale,
+					"quality":     applied.Quality,
+					"fps":         applied.FPS,
+					"codec":       applied.Codec,
+				})
+				select {
+				case fileTxChan <- deskTxFrame('S', ack):
+				default:
 				}
 			}
 		case 'N':

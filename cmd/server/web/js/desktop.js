@@ -2,7 +2,7 @@
 let DESK_WS = null;
 let DESK_HOST = null;
 let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
-let DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
+let DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
 let DESK_DOWNLOAD = null;
 let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video, gen }
 let DESK_GOT_FRAME = false;
@@ -32,7 +32,7 @@ async function doOpenDesktop(id, name) {
   DESK_INTENTIONAL_CLOSE = false;
   DESK_RETRY = 0;
   DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
-  DESK_QUALITY = { scale: 0.5, quality: 55, fps: 8, codec: "jpeg", monitor: 0 };
+  DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
   DESK_HOST = { id, name };
   renderDesktopShell(id, name);
   try {
@@ -78,8 +78,8 @@ function renderDesktopShell(id, name) {
             <label class="desk-q-label"><span>${esc(I18N.t("desktop.quality"))}</span>
               <select id="deskQuality" class="desk-select">
                 <option value="fast">${esc(I18N.t("desktop.q_fast"))}</option>
-                <option value="balanced" selected>${esc(I18N.t("desktop.q_balanced"))}</option>
-                <option value="clear">${esc(I18N.t("desktop.q_clear"))}</option>
+                <option value="balanced">${esc(I18N.t("desktop.q_balanced"))}</option>
+                <option value="clear" selected>${esc(I18N.t("desktop.q_clear"))}</option>
               </select>
             </label>
             <label class="desk-q-label"><span>${esc(I18N.t("desktop.codec"))}</span>
@@ -143,8 +143,14 @@ function renderDesktopShell(id, name) {
   if (!body.dataset.deskBound) {
     body.dataset.deskBound = "1";
     body.addEventListener("click", onDesktopUIClick);
-    body.addEventListener("change", onDesktopUIChange);
   }
+  // Bind selects every render — innerHTML recreates nodes; do not rely on
+  // bubbling alone (fullscreen / some WebKit paths drop delegated change).
+  ["deskQuality", "deskCodec", "deskMonitor", "deskClipAutoSync", "deskFileInput"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.onchange = onDesktopUIChange;
+  });
   const stage = $("deskStage");
   if (stage) {
     stage.dataset.dnd = "1";
@@ -152,11 +158,13 @@ function renderDesktopShell(id, name) {
     stage.ondragleave = () => stage.classList.remove("drag");
     stage.ondrop = onDeskDrop;
     // Click empty stage chrome to focus the stream surface for immediate typing.
-    stage.addEventListener("pointerdown", () => {
+    stage.addEventListener("pointerdown", (ev) => {
+      // Ignore toolbar / side-panel targets that bubble incorrectly.
+      if (ev.target && ev.target.closest && ev.target.closest(".desk-tools, .desk-side, select, button, input, textarea")) return;
       const canvas = $("deskCanvas");
       const video = $("deskVideo");
       const target = (video && video.style.display !== "none") ? video : canvas;
-      if (target) target.focus();
+      if (target) try { target.focus({ preventScroll: true }); } catch (e) { try { target.focus(); } catch (e2) {} }
     });
   }
   DESK_HOST = { id, name };
@@ -273,9 +281,9 @@ function setDesktopStatus(msg, isErr) {
 }
 
 function qualityPreset(name) {
-  if (name === "fast") return { scale: 0.35, quality: 40, fps: 10 };
-  if (name === "clear") return { scale: 0.75, quality: 75, fps: 6 };
-  return { scale: 0.5, quality: 55, fps: 8 };
+  if (name === "fast") return { scale: 0.4, quality: 45, fps: 12 };
+  if (name === "clear") return { scale: 1.0, quality: 88, fps: 8 };
+  return { scale: 0.65, quality: 70, fps: 8 };
 }
 
 function sendDeskQuality() {
@@ -468,6 +476,15 @@ function connectDesktopWS(id, name) {
           [clipBox, clipApply, clipSend, clipAuto].forEach(el => {
             if (el) el.disabled = !clipOK;
           });
+        }
+        if (meta.quality_ack) {
+          clearTimeout(window._deskQToastTimer);
+          const qLabel = ($("deskQuality") && $("deskQuality").selectedOptions[0])
+            ? $("deskQuality").selectedOptions[0].text
+            : "";
+          const detail = `${Math.round((meta.scale || 0) * 100)}% · q${meta.quality || "?"} · ${meta.fps || "?"}fps`;
+          toast(I18N.t("desktop.quality_applied") + (qLabel ? ": " + qLabel : "") + ` (${detail})`, "ok");
+          setDesktopStatus(I18N.t("desktop.connected") + " · " + detail, false);
         }
         if (meta.view_only != null) DESK_META.viewOnly = !!meta.view_only;
         if (Array.isArray(meta.monitors)) {
@@ -869,27 +886,31 @@ function onDeskWindowPointerUp(ev) {
   if (ev.target === _deskInputEl || (_deskInputEl.contains && _deskInputEl.contains(ev.target))) return;
   // Release buttons if the pointer left the stream surface mid-drag.
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
-  deskSendJSON("M", { x: DESK_LAST_PTR.x, y: DESK_LAST_PTR.y, action: "up", btn, norm: false });
+  deskSendJSON("M", { x: DESK_LAST_PTR.x, y: DESK_LAST_PTR.y, action: "up", btn, norm: true });
 }
 
-// Map pointer position onto the remote desktop, accounting for object-fit:contain
-// letterboxing inside the canvas/video element (CSS size ≠ bitmap size).
-// Returns null when the pointer is over the letterbox (not the image).
+// Map pointer → remote desktop [0,1] fractions (object-fit:contain letterbox).
+// Prefer the stage rect + DESK_META aspect so JPEG scale changes never skew hits.
+// Clamps instead of returning null so edge / subpixel misses still inject.
 function deskNormXY(ev, el) {
-  const rect = el.getBoundingClientRect();
-  const bw = el.videoWidth || el.width || DESK_META.w || rect.width;
-  const bh = el.videoHeight || el.height || DESK_META.h || rect.height;
+  const stage = $("deskStage");
+  const rectEl = stage || el;
+  if (!rectEl) return null;
+  const rect = rectEl.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return null;
+  const bw = DESK_META.w || (el && (el.videoWidth || el.width)) || rect.width;
+  const bh = DESK_META.h || (el && (el.videoHeight || el.height)) || rect.height;
   const scale = Math.min(rect.width / Math.max(1, bw), rect.height / Math.max(1, bh));
-  const dispW = bw * scale;
-  const dispH = bh * scale;
+  const dispW = Math.max(1, bw * scale);
+  const dispH = Math.max(1, bh * scale);
   const offX = (rect.width - dispW) / 2;
   const offY = (rect.height - dispH) / 2;
-  const nx = (ev.clientX - rect.left - offX) / Math.max(1, dispW);
-  const ny = (ev.clientY - rect.top - offY) / Math.max(1, dispH);
-  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
-  const deskW = DESK_META.w || bw;
-  const deskH = DESK_META.h || bh;
-  return { x: nx * deskW, y: ny * deskH };
+  let nx = (ev.clientX - rect.left - offX) / dispW;
+  let ny = (ev.clientY - rect.top - offY) / dispH;
+  if (nx < -0.02 || nx > 1.02 || ny < -0.02 || ny > 1.02) return null;
+  nx = Math.min(1, Math.max(0, nx));
+  ny = Math.min(1, Math.max(0, ny));
+  return { x: nx, y: ny };
 }
 function deskSendJSON(typ, obj) {
   if (!DESK_WS || DESK_WS.readyState !== 1) return;
@@ -900,32 +921,34 @@ function deskSendJSON(typ, obj) {
 }
 let _deskLastMove = 0;
 function onDeskMouseMove(ev) {
-  const now = Date.now(); if (now - _deskLastMove < 33) return; _deskLastMove = now;
-  const surf = deskActiveSurface() || ev.currentTarget;
-  const p = deskNormXY(ev, surf);
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
+  const now = Date.now(); if (now - _deskLastMove < 16) return; _deskLastMove = now;
+  const p = deskNormXY(ev, deskActiveSurface() || ev.currentTarget);
   if (!p) return;
   DESK_LAST_PTR = p;
-  deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0, norm: false });
+  deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0, norm: true });
 }
 function onDeskMouseDown(ev) {
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
   ev.preventDefault();
   const surf = deskActiveSurface() || ev.currentTarget;
   try { if (surf && surf.focus) surf.focus({ preventScroll: true }); } catch (e) {}
-  try { if (ev.currentTarget.setPointerCapture && ev.pointerId != null) ev.currentTarget.setPointerCapture(ev.pointerId); } catch (e) {}
+  // Do NOT setPointerCapture on the stage — a stuck capture steals clicks from
+  // the quality/codec selects and makes the toolbar look "dead".
   const p = deskNormXY(ev, surf);
   if (!p) return;
   DESK_LAST_PTR = p;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
-  deskSendJSON("M", { x: p.x, y: p.y, action: "down", btn, norm: false });
+  deskSendJSON("M", { x: p.x, y: p.y, action: "down", btn, norm: true });
 }
 function onDeskMouseUp(ev) {
+  if (!deskSessionActive() || DESK_META.viewOnly) return;
   ev.preventDefault();
-  try { if (ev.currentTarget.releasePointerCapture && ev.pointerId != null) ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) {}
   const surf = deskActiveSurface() || ev.currentTarget;
   const p = deskNormXY(ev, surf) || DESK_LAST_PTR;
   if (!p) return;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
-  deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn, norm: false });
+  deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn, norm: true });
 }
 function onDeskContext(ev) { ev.preventDefault(); }
 function onDeskWheel(ev) {
@@ -1009,11 +1032,17 @@ function onDesktopUIChange(e) {
     const p = qualityPreset(e.target.value);
     DESK_QUALITY = { ...DESK_QUALITY, ...p };
     sendDeskQuality();
-    if (DESK_WS && DESK_WS.readyState === 1) {
-      toast(I18N.t("desktop.quality_applied") + ": " + (e.target.selectedOptions[0] && e.target.selectedOptions[0].text || e.target.value), "ok");
-    } else {
+    if (!(DESK_WS && DESK_WS.readyState === 1)) {
       toast(I18N.t("desktop.not_connected"), "err");
+      return;
     }
+    // Prefer agent quality_ack; if Agent is old / Q dropped, still give feedback.
+    const label = (e.target.selectedOptions[0] && e.target.selectedOptions[0].text) || e.target.value;
+    clearTimeout(window._deskQToastTimer);
+    window._deskQToastTimer = setTimeout(() => {
+      toast(I18N.t("desktop.quality_applied") + ": " + label
+        + ` (${Math.round(p.scale * 100)}% · q${p.quality})`, "ok");
+    }, 1200);
     return;
   }
   if (e.target && e.target.id === "deskCodec") {
