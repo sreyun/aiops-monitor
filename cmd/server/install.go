@@ -615,8 +615,7 @@ function Remove-AiopsServiceQuiet {
   $ErrorActionPreference = $prev
 }
 
-# Prefer curl.exe (bundled on Win10+): supports resume (-C -) + retry so a flaky
-# link doesn't restart the whole 7.5MB. Fall back to Invoke-WebRequest on older OS.
+# Prefer Invoke-WebRequest for downloads (curl.exe is often GPO-blocked).
 # Stop leftovers quietly (no service → ignore; never use cmd.exe).
 Remove-AiopsScheduledTask 'AIOpsAgent'
 Stop-AiopsServiceQuiet
@@ -627,13 +626,30 @@ Start-Sleep -Milliseconds 800
 $AgentExe = Join-Path $Dir "aiops-agent.exe"
 $AgentNew = Join-Path $Dir ".aiops-agent.new.exe"
 $AgentBak = Join-Path $Dir "aiops-agent.exe.bak"
-$Curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-if ($Curl) {
-  & curl.exe -fSL --retry 3 --retry-delay 2 -C - "$Server/dl/aiops-agent.exe" -o $AgentNew
-  if ($LASTEXITCODE -ne 0) { & curl.exe -fsSL "$Server/dl/aiops-agent.exe" -o $AgentNew }
-} else {
-  Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile $AgentNew -UseBasicParsing
+# Download helper: NEVER call curl.exe/cmd.exe — hardened GPO hosts block them
+# ("This program is blocked by group policy") and with $ErrorActionPreference=Stop
+# that aborts the whole install. Invoke-WebRequest / WebClient are enough.
+function Get-AiopsRemoteFile([string]$Url, [string]$OutFile) {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Stop'
+  Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+  try {
+    Invoke-WebRequest $Url -OutFile $OutFile -UseBasicParsing
+    if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
+      $ErrorActionPreference = $prev
+      return
+    }
+  } catch {}
+  try {
+    (New-Object System.Net.WebClient).DownloadFile($Url, $OutFile)
+    if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
+      $ErrorActionPreference = $prev
+      return
+    }
+  } catch {}
+  $ErrorActionPreference = $prev
+  throw ("download failed: " + $Url)
 }
+Get-AiopsRemoteFile "$Server/dl/aiops-agent.exe" $AgentNew
 $Expected = ((Invoke-WebRequest "$Server/dl/aiops-agent.exe.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
 $Sha = [Security.Cryptography.SHA256]::Create()
 $Stream = [IO.File]::OpenRead($AgentNew)
@@ -815,9 +831,9 @@ if (-not $Probe.Ok) {
   }
 }
 try {
-  Invoke-WebRequest "$Server/dl/plugins.zip" -OutFile "$Dir\plugins.zip" -UseBasicParsing
+  Get-AiopsRemoteFile "$Server/dl/plugins.zip" "$Dir\plugins.zip"
   Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
-  Remove-Item "$Dir\plugins.zip" -Force
+  Remove-Item "$Dir\plugins.zip" -Force -ErrorAction SilentlyContinue
 } catch { Write-Host "[AIOps] plugins skipped" }
 
 $ServersJson = '__SERVERS_JSON__'
@@ -1192,15 +1208,9 @@ Stop-AiopsServiceQuiet
 Start-Sleep -Milliseconds 1200
 try { & "$env:SystemRoot\System32\sc.exe" delete AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
 
-# Step 3: Kill ALL related processes — agent + VBS launcher
-# v5.2.9: Use taskkill + Get-Process instead of Get-CimInstance.
-# Get-CimInstance Win32_Process.CommandLine is unreliable (may be null)
-# and silently fails to match, leaving wscript.exe running.
-# On uninstall it is safe to kill ALL wscript.exe instances — no other
-# common Windows application uses wscript.exe for persistent launchers.
-& taskkill /F /IM aiops-agent.exe 2>$null | Out-Null
+# Step 3: Kill related processes via PowerShell only — taskkill.exe is also
+# frequently GPO-blocked on the same hosts that block cmd.exe / curl.exe.
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-& taskkill /F /IM wscript.exe 2>$null | Out-Null
 Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 # Step 4: Wait for process handles to release (increased to 3s)
