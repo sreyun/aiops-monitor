@@ -377,50 +377,69 @@
         </div>
       </section>
 
-      <!-- 主机 -->
+      <!-- 主机：左资产/类型树 + 右工具栏与卡片/列表 -->
       <section class="view" id="view-hosts">
-        <div class="section-title"><span data-i18n="section.host_list">主机列表</span><span class="count-pill" id="hostsCount">0</span>
-          <input type="text" id="hostSearch" class="search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / 系统 / 分类…">
-          <div class="select-wrap" style="margin-left:12px;">
-            <select id="hostFilter" data-act-change="filter-hosts" data-i18n-title="filter.by_status" title="按状态筛选">
-              <option value="all" data-i18n="filter.all_hosts">全部主机</option>
-              <option value="online" data-i18n="ui.online">在线</option>
-              <option value="offline" data-i18n="ui.offline">离线</option>
-            </select>
-          </div>
-          <div class="select-wrap" style="margin-left:12px;">
-            <select id="hostSort" data-act-change="sort-hosts" title="排序方式">
-              <option value="name" data-i18n="sort.by_name">按名称</option>
-              <option value="cpu" data-i18n="sort.by_cpu">按 CPU</option>
-              <option value="mem" data-i18n="sort.by_mem">按内存</option>
-              <option value="recent" data-i18n="sort.by_recent">最近活跃</option>
-            </select>
-          </div>
-          <div class="view-toggle" id="hostViewToggle" title="切换卡片 / 列表视图" style="margin-left:12px">
-            <button class="vt-btn active" data-hview="card" title="卡片视图">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-            </button>
-            <button class="vt-btn" data-hview="list" title="列表视图">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-            </button>
-          </div>
-          <button class="btn" id="purgeOfflineBtn" style="margin-left:12px" data-i18n-title="ui.purge_offline_title" data-i18n="ui.purge_offline" title="删除所有离线主机">清理离线</button>
-        </div>
-        <!-- 重复主机（Agent 重装换 ID）提示条；无可清理项时由 JS 置空 -->
         <div id="hostDupBar"></div>
-        <div class="htx-wrap tree-wrap" id="hostsLayout">
+        <div class="htx-wrap tree-wrap htx-js" id="hostsLayout">
           <div class="htx-tree tree-pane" id="hostTree"></div>
           <button type="button" class="tree-toggle-btn" data-tree-toggle="aiops_host_tree" title="收起/展开分组树" aria-expanded="true">‹</button>
           <div class="htx-main">
-            <div id="groups"></div>
-            <div class="pager" id="pager"></div>
-            <div class="empty" id="empty">
-          暂无主机上报。点右侧 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
-          <code>AIOps-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
-            <button class="btn primary icon" data-act="install">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
-              <span data-i18n="ui.install_agent_btn">安装 Agent</span>
-            </button>
+            <div class="htx-toolbar">
+              <div class="htx-tb-left">
+                <button type="button" class="btn primary icon htx-create" data-act="install">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                  <span data-i18n="ui.install_agent_btn">安装 Agent</span>
+                </button>
+                <div class="htx-more" id="htxMoreWrap">
+                  <button type="button" class="btn" id="htxMoreBtn" data-i18n="section.host_more_actions">更多操作</button>
+                  <div class="htx-more-menu" id="htxMoreMenu" hidden>
+                    <button type="button" class="htx-more-item" id="purgeOfflineBtn" data-i18n-title="ui.purge_offline_title" data-i18n="ui.purge_offline" title="删除所有离线主机">清理离线</button>
+                  </div>
+                </div>
+                <span class="htx-crumb" id="hostsCrumb"></span>
+                <span class="count-pill" id="hostsCount">0</span>
+              </div>
+              <div class="htx-tb-right">
+                <input type="text" id="hostSearch" class="search htx-search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / 系统 / 分类…">
+                <div class="select-wrap">
+                  <select id="hostFilter" data-act-change="filter-hosts" data-i18n-title="filter.by_status" title="按状态筛选">
+                    <option value="all" data-i18n="filter.all_hosts">全部主机</option>
+                    <option value="online" data-i18n="ui.online">在线</option>
+                    <option value="offline" data-i18n="ui.offline">离线</option>
+                  </select>
+                </div>
+                <div class="select-wrap">
+                  <select id="hostSort" data-act-change="sort-hosts" title="排序方式">
+                    <option value="name" data-i18n="sort.by_name">按名称</option>
+                    <option value="cpu" data-i18n="sort.by_cpu">按 CPU</option>
+                    <option value="mem" data-i18n="sort.by_mem">按内存</option>
+                    <option value="recent" data-i18n="sort.by_recent">最近活跃</option>
+                  </select>
+                </div>
+                <div class="view-toggle" id="hostViewToggle" title="切换卡片 / 列表视图">
+                  <button class="vt-btn active" data-hview="card" title="卡片视图">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+                  </button>
+                  <button class="vt-btn" data-hview="list" title="列表视图">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                  </button>
+                </div>
+                <button type="button" class="htx-tool-btn" id="hostRefreshBtn" data-i18n-title="section.host_refresh" title="刷新">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="htx-content">
+              <div id="groups"></div>
+              <div class="pager" id="pager"></div>
+              <div class="empty" id="empty">
+                暂无主机上报。点上方 <b>「安装 Agent」</b> 复制一条命令到被监控主机执行，或手动启动：<br><br>
+                <code>AIOps-agent --server http://&lt;本机IP&gt;:8529 --category 生产</code><br><br>
+                <button class="btn primary icon" data-act="install">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+                  <span data-i18n="ui.install_agent_btn">安装 Agent</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

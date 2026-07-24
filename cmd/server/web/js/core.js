@@ -137,6 +137,14 @@ try {
   const _htc = localStorage.getItem("aiops_host_tree_collapsed");
   if (_htc) JSON.parse(_htc).forEach(id => HOST_TREE_COLLAPSED.add(id));
 } catch (e) {}
+let HOST_TREE_MODE = "folder"; // folder=资产树 | type=类型树
+try {
+  const _htm = localStorage.getItem("aiops_host_tree_mode");
+  if (_htm === "folder" || _htm === "type") HOST_TREE_MODE = _htm;
+} catch (e) {}
+let CUR_TYPE = ""; // 类型树选中：""=全部，否则为 platform/os 归类键
+try { CUR_TYPE = localStorage.getItem("aiops_host_type") || ""; } catch (e) {}
+let HOST_TREE_Q = ""; // 左侧树内搜索
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LOG_LEVEL = "";   // 日志级别筛选
@@ -148,7 +156,7 @@ let LAST_LOG = [];    // 最近一次日志数据
 let HOST_SEARCH = ""; // 主机搜索关键词
 let HOST_FILTER = "all"; // 主机状态筛选 all|online|offline
 let HOST_PAGE = 1;    // 主机分页当前页
-const HOST_PAGE_SIZE = 9;
+const HOST_PAGE_SIZE = 12;
 let LAST_CHECKS = []; // 最近一次自定义监控数据
 let CHECK_SEARCH = "";   // 监控（拨测）搜索关键字
 let PB_SEARCH = "";      // 编排（剧本）搜索关键字

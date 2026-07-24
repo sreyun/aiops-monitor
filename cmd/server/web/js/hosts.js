@@ -134,6 +134,18 @@ function setCurFolder(id) {
   HOST_PAGE = 1;
 }
 
+function setCurType(key) {
+  CUR_TYPE = key || "";
+  try { localStorage.setItem("aiops_host_type", CUR_TYPE); } catch (e) {}
+  HOST_PAGE = 1;
+}
+
+function setHostTreeMode(mode) {
+  HOST_TREE_MODE = mode === "type" ? "type" : "folder";
+  try { localStorage.setItem("aiops_host_tree_mode", HOST_TREE_MODE); } catch (e) {}
+  HOST_PAGE = 1;
+}
+
 function persistHostTreeCollapsed() {
   try { localStorage.setItem("aiops_host_tree_collapsed", JSON.stringify([...HOST_TREE_COLLAPSED])); } catch (e) {}
 }
@@ -167,10 +179,38 @@ function flattenHostFolders(folders, prefix) {
   return out;
 }
 
+function hostTypeKey(h) {
+  const p = (h.platform || "").trim();
+  if (p) return p;
+  const os = (h.os || "").trim().toLowerCase();
+  if (os === "windows") return "Windows";
+  if (os === "darwin" || os === "macos") return "macOS";
+  if (os === "linux") return "Linux";
+  return os ? os : I18N.t("section.type_unknown");
+}
+
 function hostInFolderFilter(h, matchSet) {
   if (!matchSet) return true;
   const fid = h.folder_id || "__ungrouped__";
   return matchSet.has(fid);
+}
+
+function hostInTypeFilter(h) {
+  if (!CUR_TYPE) return true;
+  return hostTypeKey(h) === CUR_TYPE;
+}
+
+function currentHostsCrumb() {
+  if (HOST_TREE_MODE === "type") {
+    return CUR_TYPE
+      ? I18N.t("section.type_tree") + " / " + CUR_TYPE
+      : I18N.t("section.all_hosts_tree");
+  }
+  if (!CUR_FOLDER) return I18N.t("section.all_hosts_tree");
+  if (CUR_FOLDER === "__ungrouped__") return I18N.t("section.uncategorized");
+  const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
+  const cur = flat.find(x => x.id === CUR_FOLDER);
+  return cur ? cur.path : CUR_FOLDER;
 }
 
 async function loadHostFolders() {
@@ -187,25 +227,32 @@ async function loadHostFolders() {
   } catch (e) {}
 }
 
-function hostTreeNodeHTML(n, depth) {
+function folderMatchesTreeQ(n, q) {
+  if (!q) return true;
+  if ((n.name || "").toLowerCase().includes(q)) return true;
+  return (n.children || []).some(c => folderMatchesTreeQ(c, q));
+}
+
+function hostTreeNodeHTML(n, depth, q) {
+  if (q && !folderMatchesTreeQ(n, q)) return "";
   const cnt = (HOST_FOLDERS.counts && HOST_FOLDERS.counts[n.id]) || { total: 0, online: 0 };
-  const sel = CUR_FOLDER === n.id;
+  const sel = HOST_TREE_MODE === "folder" && CUR_FOLDER === n.id;
   const hasKids = (n.children || []).length > 0;
-  const collapsed = HOST_TREE_COLLAPSED.has(n.id);
+  const collapsed = !q && HOST_TREE_COLLAPSED.has(n.id);
   const canAdd = depth < 4;
-  const pad = 6 + (depth - 1) * 14;
+  const pad = 8 + (depth - 1) * 16;
   let kids = "";
   if (hasKids && !collapsed) {
-    kids = `<div class="htx-children">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1)).join("")}</div>`;
+    kids = `<div class="htx-children">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1, q)).join("")}</div>`;
   }
   return `<div class="htx-folder" data-depth="${depth}">
-    <div class="htx-node${sel ? " selected" : ""}${hasKids ? " has-kids" : ""}" data-folder-sel="${esc(n.id)}" role="button" tabindex="0" style="padding-left:${pad}px">
+    <div class="htx-node${sel ? " selected" : ""}${hasKids ? " has-kids" : ""}" data-folder-sel="${esc(n.id)}" data-ctx-folder="${esc(n.id)}" role="button" tabindex="0" style="padding-left:${pad}px">
       <span class="htx-caret${hasKids ? "" : " empty"}" data-folder-toggle="${esc(n.id)}" title="${hasKids ? I18N.t("section.folder_toggle") : ""}">${hasKids ? (collapsed ? "▸" : "▾") : ""}</span>
       <span class="htx-ico" aria-hidden="true"></span>
       <span class="htx-name" title="${esc(n.name)}">${esc(n.name)}</span>
-      <span class="htx-count" title="${(cnt.online || 0) + "/" + (cnt.total || 0)}">${cnt.total || 0}</span>
-      ${canAdd ? `<button type="button" class="htx-act htx-add" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>` : `<span class="htx-depth-cap" title="${I18N.t("section.folder_max_depth")}">L4</span>`}
+      <span class="htx-count">(${cnt.total || 0})</span>
       <span class="htx-acts">
+        ${canAdd ? `<button type="button" class="htx-act htx-add" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>` : ""}
         <button type="button" class="htx-act" data-folder-ren="${esc(n.id)}" title="${I18N.t("section.folder_rename")}">✎</button>
         <button type="button" class="htx-act danger" data-folder-del="${esc(n.id)}" title="${I18N.t("section.folder_delete")}">✕</button>
       </span>
@@ -214,36 +261,85 @@ function hostTreeNodeHTML(n, depth) {
   </div>`;
 }
 
-function hostTreeHTML() {
+function hostTypeTreeHTML(q) {
+  const hosts = LAST_HOSTS || [];
+  const map = {};
+  hosts.forEach(h => {
+    const k = hostTypeKey(h);
+    if (!map[k]) map[k] = { total: 0, online: 0 };
+    map[k].total++;
+    if (h.online) map[k].online++;
+  });
+  const keys = Object.keys(map).sort((a, b) => a.localeCompare(b));
+  const filtered = q ? keys.filter(k => k.toLowerCase().includes(q)) : keys;
+  const allCnt = hosts.length;
+  const rows = filtered.map(k => {
+    const sel = CUR_TYPE === k;
+    return `<div class="htx-node${sel ? " selected" : ""}" data-type-sel="${esc(k)}" role="button" tabindex="0" style="padding-left:8px">
+      <span class="htx-caret empty"></span>
+      <span class="htx-ico htx-ico-type" aria-hidden="true"></span>
+      <span class="htx-name" title="${esc(k)}">${esc(k)}</span>
+      <span class="htx-count">(${map[k].total})</span>
+    </div>`;
+  }).join("");
+  return `<div class="htx-node htx-special${CUR_TYPE === "" ? " selected" : ""}" data-type-sel="" role="button" tabindex="0">
+      <span class="htx-caret empty"></span>
+      <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
+      <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
+      <span class="htx-count">(${allCnt})</span>
+    </div>
+    <div class="htx-sep"></div>
+    ${rows || `<div class="htx-empty">${I18N.t("section.type_empty_hint")}</div>`}`;
+}
+
+function hostAssetTreeHTML(q) {
   const allCnt = (LAST_HOSTS || []).length;
   const ug = (HOST_FOLDERS.counts && HOST_FOLDERS.counts.__ungrouped__) || { total: 0, online: 0 };
   const folders = HOST_FOLDERS.folders || [];
-  return `<div class="htx-head">
-      <span class="htx-title">${I18N.t("section.host_folders")}</span>
-      <button type="button" class="htx-act htx-add" data-folder-add="" title="${I18N.t("section.folder_add_root")}">+</button>
-    </div>
-    <div class="htx-scroll">
-      <div class="htx-node htx-special${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0">
+  const showSpecial = !q || I18N.t("section.all_hosts_tree").toLowerCase().includes(q)
+    || I18N.t("section.uncategorized").toLowerCase().includes(q);
+  return `${showSpecial ? `<div class="htx-node htx-special${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0">
         <span class="htx-caret empty"></span>
         <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
         <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
-        <span class="htx-count">${allCnt}</span>
+        <span class="htx-count">(${allCnt})</span>
       </div>
-      <div class="htx-node htx-special${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" role="button" tabindex="0">
+      <div class="htx-node htx-special${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" data-ctx-folder="__ungrouped__" role="button" tabindex="0">
         <span class="htx-caret empty"></span>
         <span class="htx-ico htx-ico-none" aria-hidden="true"></span>
         <span class="htx-name">${I18N.t("section.uncategorized")}</span>
-        <span class="htx-count">${ug.total || 0}</span>
+        <span class="htx-count">(${ug.total || 0})</span>
       </div>
-      <div class="htx-sep"></div>
-      <div class="htx-hint">${I18N.t("section.folder_tree_hint")}</div>
-      ${folders.map(n => hostTreeNodeHTML(n, 1)).join("") || `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`}
-    </div>`;
+      <div class="htx-sep"></div>` : ""}
+      ${folders.map(n => hostTreeNodeHTML(n, 1, q)).join("") || `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`}`;
+}
+
+function hostTreeHTML() {
+  const mode = HOST_TREE_MODE === "type" ? "type" : "folder";
+  const q = (HOST_TREE_Q || "").trim().toLowerCase();
+  const body = mode === "type" ? hostTypeTreeHTML(q) : hostAssetTreeHTML(q);
+  return `<div class="htx-tabs">
+      <button type="button" class="htx-tab${mode === "folder" ? " active" : ""}" data-tree-mode="folder">${I18N.t("section.asset_tree")}</button>
+      <button type="button" class="htx-tab${mode === "type" ? " active" : ""}" data-tree-mode="type">${I18N.t("section.type_tree")}</button>
+      <span class="htx-tab-tools">
+        <button type="button" class="htx-tool-btn" data-folder-refresh title="${I18N.t("section.host_refresh")}">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        ${mode === "folder" ? `<button type="button" class="htx-tool-btn htx-add-root" data-folder-add="" title="${I18N.t("section.folder_add_root")}">+</button>` : ""}
+      </span>
+    </div>
+    <div class="htx-tree-search">
+      <input type="search" id="hostTreeSearch" class="htx-tree-q" value="${esc(HOST_TREE_Q || "")}"
+        placeholder="${esc(mode === "type" ? I18N.t("section.type_search_ph") : I18N.t("section.folder_search_ph"))}" autocomplete="off">
+    </div>
+    <div class="htx-scroll">${body}</div>`;
 }
 
 function renderHostTree() {
   const el = $("hostTree");
   if (!el) return;
+  const focusId = document.activeElement && document.activeElement.id === "hostTreeSearch";
+  const caret = focusId ? document.activeElement.selectionStart : null;
   el.innerHTML = hostTreeHTML();
   const layout = $("hostsLayout");
   if (layout && window.treeCollapsed) {
@@ -255,16 +351,63 @@ function renderHostTree() {
       btn.setAttribute("aria-expanded", col ? "false" : "true");
     }
   }
+  if (focusId) {
+    const inp = el.querySelector("#hostTreeSearch");
+    if (inp) {
+      inp.focus();
+      try { inp.setSelectionRange(caret, caret); } catch (e) {}
+    }
+  }
+}
+
+function hideHostTreeCtx() {
+  const m = document.getElementById("htxCtxMenu");
+  if (m) m.remove();
+}
+
+function showHostTreeCtx(x, y, folderId) {
+  hideHostTreeCtx();
+  if (HOST_TREE_MODE !== "folder") return;
+  if (folderId === "__ungrouped__") return;
+  const menu = document.createElement("div");
+  menu.id = "htxCtxMenu";
+  menu.className = "htx-ctx";
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  menu.innerHTML = `
+    <button type="button" class="htx-ctx-item" data-ctx="add" data-id="${esc(folderId || "")}">${I18N.t("section.ctx_create_node")}</button>
+    ${folderId ? `<button type="button" class="htx-ctx-item" data-ctx="ren" data-id="${esc(folderId)}">${I18N.t("section.ctx_rename_node")}</button>
+    <button type="button" class="htx-ctx-item danger" data-ctx="del" data-id="${esc(folderId)}">${I18N.t("section.ctx_delete_node")}</button>` : ""}`;
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth - 8) menu.style.left = Math.max(8, window.innerWidth - rect.width - 8) + "px";
+  if (rect.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - rect.height - 8) + "px";
+  const close = (e) => {
+    if (e && menu.contains(e.target)) return;
+    hideHostTreeCtx();
+    document.removeEventListener("mousedown", close, true);
+  };
+  setTimeout(() => document.addEventListener("mousedown", close, true), 0);
+  menu.addEventListener("click", async (e) => {
+    const item = e.target.closest("[data-ctx]");
+    if (!item) return;
+    const act = item.getAttribute("data-ctx");
+    const id = item.getAttribute("data-id") || "";
+    hideHostTreeCtx();
+    if (act === "add") await hostFolderAdd(id);
+    else if (act === "ren") await hostFolderRename(id);
+    else if (act === "del") await hostFolderDelete(id);
+  });
 }
 
 async function hostFolderAdd(parentId) {
-  const name = await requestAITextInput({
+  const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
+  const parent = parentId ? flat.find(x => x.id === parentId) : null;
+  const name = await promptFolderName({
     title: parentId ? I18N.t("section.folder_add_child") : I18N.t("section.folder_add_root"),
-    message: I18N.t("section.folder_name_hint"),
-    label: I18N.t("section.folder_name"),
+    parentPath: parent ? parent.path : "",
     defaultValue: "",
-    submitLabel: I18N.t("ui.save", "保存"),
-    singleLine: true, maxLength: 48, danger: false, required: true
+    placeholder: I18N.t("section.folder_name_ph")
   });
   if (name === null || !String(name).trim()) return;
   try {
@@ -288,13 +431,14 @@ async function hostFolderAdd(parentId) {
 async function hostFolderRename(id) {
   const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
   const cur = flat.find(x => x.id === id);
-  const name = await requestAITextInput({
+  const parentPath = cur && cur.path.includes(" / ")
+    ? cur.path.slice(0, cur.path.lastIndexOf(" / "))
+    : "";
+  const name = await promptFolderName({
     title: I18N.t("section.folder_rename"),
-    message: I18N.t("section.folder_name_hint"),
-    label: I18N.t("section.folder_name"),
+    parentPath,
     defaultValue: cur ? cur.name : "",
-    submitLabel: I18N.t("ui.save", "保存"),
-    singleLine: true, maxLength: 48, danger: false, required: true
+    placeholder: I18N.t("section.folder_name_ph")
   });
   if (name === null || !String(name).trim()) return;
   try {
@@ -311,6 +455,81 @@ async function hostFolderRename(id) {
     await loadHostFolders();
     refresh();
   } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
+}
+
+/** 主机分组专用轻量弹窗（不用 AI 反馈那套大弹层） */
+function promptFolderName(opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    const existing = document.getElementById("htxFolderDlgMask");
+    if (existing) existing.remove();
+    const mask = document.createElement("div");
+    mask.id = "htxFolderDlgMask";
+    mask.className = "mask htx-dlg-mask show";
+    const parentPath = opts.parentPath || "";
+    mask.innerHTML = `
+      <div class="htx-dlg" role="dialog" aria-modal="true" aria-labelledby="htxDlgTitle">
+        <div class="htx-dlg-head">
+          <h3 id="htxDlgTitle">${esc(opts.title || I18N.t("section.folder_add_root"))}</h3>
+          <button type="button" class="htx-dlg-x" data-htx-dlg="cancel" aria-label="${esc(I18N.t("ui.close","关闭"))}">✕</button>
+        </div>
+        <div class="htx-dlg-body">
+          ${parentPath ? `<div class="htx-dlg-path" title="${esc(parentPath)}"><span class="htx-dlg-path-k">${esc(I18N.t("section.folder_parent"))}</span><span class="htx-dlg-path-v">${esc(parentPath)}</span></div>` : ""}
+          <label class="htx-dlg-label" for="htxDlgInput">${esc(I18N.t("section.folder_name"))}</label>
+          <input type="text" id="htxDlgInput" class="htx-dlg-input" maxlength="48"
+            placeholder="${esc(opts.placeholder || I18N.t("section.folder_name_ph"))}"
+            value="${esc(opts.defaultValue || "")}" autocomplete="off" spellcheck="false">
+          <div class="htx-dlg-hint">${esc(I18N.t("section.folder_name_hint"))}</div>
+          <div class="htx-dlg-err" id="htxDlgErr" hidden></div>
+        </div>
+        <div class="htx-dlg-foot">
+          <button type="button" class="btn" data-htx-dlg="cancel">${esc(I18N.t("ui.cancel","取消"))}</button>
+          <button type="button" class="btn primary" data-htx-dlg="ok">${esc(I18N.t("ui.save","保存"))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const input = mask.querySelector("#htxDlgInput");
+    const err = mask.querySelector("#htxDlgErr");
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      mask.remove();
+      resolve(v);
+    };
+    const submit = () => {
+      const v = (input.value || "").trim();
+      if (!v) {
+        err.hidden = false;
+        err.textContent = I18N.t("section.folder_name_required");
+        input.focus();
+        return;
+      }
+      if (/[\\/]/.test(v)) {
+        err.hidden = false;
+        err.textContent = I18N.t("section.folder_name_slash");
+        input.focus();
+        return;
+      }
+      finish(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(null); }
+      else if (e.key === "Enter") { e.preventDefault(); submit(); }
+    };
+    mask.addEventListener("click", (e) => {
+      const act = e.target.closest("[data-htx-dlg]");
+      if (!act) {
+        if (e.target === mask) finish(null);
+        return;
+      }
+      if (act.getAttribute("data-htx-dlg") === "ok") submit();
+      else finish(null);
+    });
+    document.addEventListener("keydown", onKey, true);
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
 }
 
 async function hostFolderDelete(id) {
@@ -335,7 +554,31 @@ function bindHostTreeOnce() {
   const tree = $("hostTree");
   if (!tree || tree.dataset.bound) return;
   tree.dataset.bound = "1";
+  tree.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "hostTreeSearch") {
+      HOST_TREE_Q = e.target.value || "";
+      renderHostTree();
+    }
+  });
+  tree.addEventListener("contextmenu", (e) => {
+    const node = e.target.closest("[data-ctx-folder]");
+    if (!node || HOST_TREE_MODE !== "folder") return;
+    e.preventDefault();
+    showHostTreeCtx(e.clientX, e.clientY, node.getAttribute("data-ctx-folder") || "");
+  });
   tree.addEventListener("click", async (e) => {
+    const modeBtn = e.target.closest("[data-tree-mode]");
+    if (modeBtn) {
+      setHostTreeMode(modeBtn.getAttribute("data-tree-mode"));
+      HOST_TREE_Q = "";
+      renderHosts(LAST_HOSTS);
+      return;
+    }
+    if (e.target.closest("[data-folder-refresh]")) {
+      e.stopPropagation();
+      if (typeof refresh === "function") refresh();
+      return;
+    }
     const add = e.target.closest("[data-folder-add]");
     if (add) { e.stopPropagation(); await hostFolderAdd(add.getAttribute("data-folder-add")); return; }
     const ren = e.target.closest("[data-folder-ren]");
@@ -352,6 +595,12 @@ function bindHostTreeOnce() {
       renderHostTree();
       return;
     }
+    const typeSel = e.target.closest("[data-type-sel]");
+    if (typeSel) {
+      setCurType(typeSel.getAttribute("data-type-sel") || "");
+      renderHosts(LAST_HOSTS);
+      return;
+    }
     const sel = e.target.closest("[data-folder-sel]");
     if (sel) {
       setCurFolder(sel.getAttribute("data-folder-sel") || "");
@@ -360,15 +609,33 @@ function bindHostTreeOnce() {
   });
 }
 
+function bindHostsToolbarOnce() {
+  if (window._htxToolbarBound) return;
+  window._htxToolbarBound = true;
+  document.addEventListener("click", (e) => {
+    const moreBtn = e.target.closest("#htxMoreBtn");
+    const menu = $("htxMoreMenu");
+    const wrap = $("htxMoreWrap");
+    if (moreBtn && menu) {
+      menu.hidden = !menu.hidden;
+      return;
+    }
+    if (menu && wrap && !wrap.contains(e.target)) menu.hidden = true;
+  });
+}
+
 function renderHosts(hosts) {
   LAST_HOSTS = hosts;
   HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
   window._cachedHosts = hosts;
-  if (DEFAULT_EMPTY === null) DEFAULT_EMPTY = $("empty").innerHTML;
-  $("hostsCount").textContent = hosts.length;
-  $("navHosts").textContent = hosts.length;
+  if (DEFAULT_EMPTY === null && $("empty")) DEFAULT_EMPTY = $("empty").innerHTML;
+  const countEl = $("hostsCount");
+  if (countEl) countEl.textContent = hosts.length;
+  const navHosts = $("navHosts");
+  if (navHosts) navHosts.textContent = hosts.length;
 
   bindHostTreeOnce();
+  bindHostsToolbarOnce();
   renderHostTree();
 
   if (!LAST_RENDER_KEY) {
@@ -385,12 +652,19 @@ function renderHosts(hosts) {
   }
 
   const groupsEl = $("groups"), empty = $("empty"), pager = $("pager");
+  if (!groupsEl || !empty || !pager) return;
   const dupBar = $("hostDupBar");
   if (dupBar) dupBar.innerHTML = dupBannerHTML();
+  const crumb = $("hostsCrumb");
+  if (crumb) crumb.textContent = currentHostsCrumb();
 
-  const matchSet = hostFolderMatchSet(CUR_FOLDER);
+  const matchSet = HOST_TREE_MODE === "folder" ? hostFolderMatchSet(CUR_FOLDER) : null;
   let shown = hosts.filter(h => {
-    if (!hostInFolderFilter(h, matchSet)) return false;
+    if (HOST_TREE_MODE === "type") {
+      if (!hostInTypeFilter(h)) return false;
+    } else if (!hostInFolderFilter(h, matchSet)) {
+      return false;
+    }
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
     if (HOST_SEARCH) {
@@ -409,6 +683,8 @@ function renderHosts(hosts) {
   } else {
     shown.sort((a, b) => (a.hostname || a.id).localeCompare(b.hostname || b.id));
   }
+
+  if (countEl) countEl.textContent = shown.length;
 
   if (!hosts.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY; return; }
   if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = I18N.t("empty.no_host_match"); return; }
@@ -430,15 +706,10 @@ function renderHosts(hosts) {
     pageHosts = shown;
   }
 
-  const byCat = {};
-  pageHosts.forEach(h => {
-    const c = h.folder_path || h.category || I18N.t("section.uncategorized");
-    (byCat[c] = byCat[c] || []).push(h);
-  });
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
-
-  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + CUR_FOLDER + "|" + Object.keys(byCat).sort().join(",");
+  const filterKey = HOST_TREE_MODE === "type" ? ("t:" + CUR_TYPE) : ("f:" + CUR_FOLDER);
+  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + filterKey + "|" + HOST_TREE_MODE;
   if (LAST_RENDER_KEY === newKey && Object.keys(HOST_DOM_CACHE).length > 0) {
     pageHosts.forEach(h => updateHostCard(h));
     renderPager(pages, shown.length);
@@ -447,23 +718,16 @@ function renderHosts(hosts) {
   }
   LAST_RENDER_KEY = newKey;
 
-  groupsEl.innerHTML = Object.keys(byCat).sort().map(cat => {
-    return `<div class="group">
-      <div class="group-head" data-cat="${esc(cat)}">
-        <span class="cat-toggle">▼</span>
-        <span class="dot-cat"></span><span class="cat">${esc(cat)}</span>
-        <span class="count-pill">${byCat[cat].length}</span><span class="line"></span>
-      </div>
-      <div class="${wrapCls}">${byCat[cat].map(render).join("")}</div>
-    </div>`;
-  }).join("");
+  // 选中节点下扁平展示（卡片/列表），不再按路径二次分组
+  groupsEl.innerHTML = `<div class="group htx-flat"><div class="${wrapCls}">${pageHosts.map(render).join("")}</div></div>`;
   buildHostCache();
   renderPager(pages, shown.length);
 }
 
 function renderPager(pages, total) {
   const pager = $("pager");
-  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">共 ${total} 台</span>`; return; }
+  if (!pager) return;
+  if (pages <= 1) { pager.innerHTML = `<span class="pinfo">${I18N.t("section.pager_total", "共")} ${total} ${I18N.t("section.pager_hosts", "台")}</span>`; return; }
   let btns = `<button ${HOST_PAGE === 1 ? "disabled" : ""} data-pg="prev">‹</button>`;
   for (let i = 1; i <= pages; i++) {
     if (i === 1 || i === pages || Math.abs(i - HOST_PAGE) <= 1) {
@@ -473,7 +737,7 @@ function renderPager(pages, total) {
     }
   }
   btns += `<button ${HOST_PAGE === pages ? "disabled" : ""} data-pg="next">›</button>`;
-  btns += `<span class="pinfo">共 ${total} 台 · ${HOST_PAGE}/${pages} 页</span>`;
+  btns += `<span class="pinfo">${I18N.t("section.pager_total", "共")} ${total} ${I18N.t("section.pager_hosts", "台")} · ${HOST_PAGE}/${pages}</span>`;
   pager.innerHTML = btns;
 }
 
@@ -492,35 +756,12 @@ async function editCategory(id, cur) {
     .concat(flat.map(f => ({ id: f.id, path: f.path })));
   const host = (LAST_HOSTS || []).find(h => h.id === id);
   const curFid = (host && host.folder_id) || "__ungrouped__";
-  const choice = await requestAITextInput({
-    title: I18N.t("section.set_folder", "移动到分组"),
-    message: I18N.t("section.set_folder_desc"),
-    label: I18N.t("section.folder_name"),
-    defaultValue: (options.find(o => o.id === curFid) || options[0]).path,
-    submitLabel: I18N.t("ui.save", "保存"),
-    singleLine: true, maxLength: 128, danger: false, required: false,
-    // fallback: free-text path match; empty = ungrouped
+  const folderId = await promptMoveFolder({
+    hostname: (host && host.hostname) || id,
+    options,
+    currentId: curFid
   });
-  if (choice === null) return;
-  const trimmed = String(choice).trim();
-  let folderId = "__ungrouped__";
-  if (trimmed) {
-    const hit = options.find(o => o.path === trimmed || o.id === trimmed)
-      || flat.find(f => f.name === trimmed);
-    if (hit) folderId = hit.id;
-    else {
-      // create L1 via legacy category API
-      try {
-        const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/category`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ category: trimmed })
-        });
-        if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); await loadHostFolders(); refresh(); }
-        else toast(I18N.t("toast.update_failed2"), "err");
-      } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
-      return;
-    }
-  }
+  if (folderId === null) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/folder`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -529,6 +770,63 @@ async function editCategory(id, cur) {
     if (r.ok) { toast(I18N.t("toast.category_updated"), "ok"); await loadHostFolders(); refresh(); }
     else toast(I18N.t("toast.update_failed2"), "err");
   } catch (e) { toast(I18N.t("toast.update_failed") + e, "err"); }
+}
+
+function promptMoveFolder(opts) {
+  opts = opts || {};
+  const options = opts.options || [];
+  return new Promise(resolve => {
+    const existing = document.getElementById("htxFolderDlgMask");
+    if (existing) existing.remove();
+    const mask = document.createElement("div");
+    mask.id = "htxFolderDlgMask";
+    mask.className = "mask htx-dlg-mask show";
+    const optsHtml = options.map(o =>
+      `<option value="${esc(o.id)}"${o.id === opts.currentId ? " selected" : ""}>${esc(o.path)}</option>`
+    ).join("");
+    mask.innerHTML = `
+      <div class="htx-dlg" role="dialog" aria-modal="true" aria-labelledby="htxDlgTitle">
+        <div class="htx-dlg-head">
+          <h3 id="htxDlgTitle">${esc(I18N.t("section.set_folder"))}</h3>
+          <button type="button" class="htx-dlg-x" data-htx-dlg="cancel" aria-label="${esc(I18N.t("ui.close","关闭"))}">✕</button>
+        </div>
+        <div class="htx-dlg-body">
+          <div class="htx-dlg-path"><span class="htx-dlg-path-k">${esc(I18N.t("section.host_short"))}</span><span class="htx-dlg-path-v">${esc(opts.hostname || "")}</span></div>
+          <label class="htx-dlg-label" for="htxDlgSelect">${esc(I18N.t("section.folder_name"))}</label>
+          <select id="htxDlgSelect" class="htx-dlg-input htx-dlg-select">${optsHtml}</select>
+          <div class="htx-dlg-hint">${esc(I18N.t("section.set_folder_hint"))}</div>
+        </div>
+        <div class="htx-dlg-foot">
+          <button type="button" class="btn" data-htx-dlg="cancel">${esc(I18N.t("ui.cancel","取消"))}</button>
+          <button type="button" class="btn primary" data-htx-dlg="ok">${esc(I18N.t("ui.save","保存"))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const sel = mask.querySelector("#htxDlgSelect");
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      mask.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(null); }
+      else if (e.key === "Enter") { e.preventDefault(); finish(sel.value); }
+    };
+    mask.addEventListener("click", (e) => {
+      const act = e.target.closest("[data-htx-dlg]");
+      if (!act) {
+        if (e.target === mask) finish(null);
+        return;
+      }
+      if (act.getAttribute("data-htx-dlg") === "ok") finish(sel.value);
+      else finish(null);
+    });
+    document.addEventListener("keydown", onKey, true);
+    setTimeout(() => sel.focus(), 30);
+  });
 }
 
 /* ---------- 主机趋势弹窗 ---------- */
