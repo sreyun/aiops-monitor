@@ -420,9 +420,22 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+  # A prior NON-root install may have left a background (nohup) instance and an
+  # @reboot crontab entry. Remove them so switching to the root/systemd install
+  # doesn't end up running two agents (duplicate reports for the same host).
+  if command -v crontab >/dev/null 2>&1; then
+    crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" | crontab - 2>/dev/null || true
+  fi
   systemctl daemon-reload
-  systemctl enable --now aiops-agent
-  echo "[AIOps] systemd service started: aiops-agent (boot autostart + auto-restart)"
+  systemctl stop aiops-agent 2>/dev/null || true
+  pkill -f "$DIR/aiops-agent --config" 2>/dev/null || true
+  systemctl enable aiops-agent >/dev/null 2>&1 || true
+  # Use restart (not "enable --now"): on an UPGRADE the service is already running
+  # the OLD binary, and "enable --now" is a no-op for a running unit — the new
+  # binary wouldn't take effect until the next reboot. restart re-execs the freshly
+  # downloaded binary immediately (and still starts it if it was stopped).
+  systemctl restart aiops-agent
+  echo "[AIOps] systemd service (re)started: aiops-agent (boot autostart + auto-restart)"
   # 麒麟/UOS 系统自动检测并配置 kysec 白名单
   if command -v kysec_adm &>/dev/null; then
     kysec_adm -a $DIR/aiops-agent 2>/dev/null && echo "[AIOps] kysec whitelist added: $DIR/aiops-agent" || true
@@ -532,7 +545,7 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 # untouched. The command is passed as -EncodedCommand (base64 UTF-16LE) to dodge all
 # quoting pitfalls. If UAC is declined or unavailable (headless), we fall through to
 # the per-user install below, so this can only help, never block.
-if (-not $IsAdmin -and (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
+if (-not $IsAdmin -and (Get-Service -Name vmms -ErrorAction SilentlyContinue)) {
   Write-Host "[AIOps] Hyper-V host detected but PowerShell is not elevated."
   Write-Host "[AIOps] Requesting administrator rights (UAC) so Hyper-V VM collection works..."
   try {
@@ -790,8 +803,11 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now aiops-relay
-  echo "[AIOps] relay systemd service started: aiops-relay (listen $LISTEN)"
+  systemctl enable aiops-relay >/dev/null 2>&1 || true
+  # restart (not "enable --now") so an upgrade re-execs the new binary instead of
+  # leaving the already-running old one until reboot.
+  systemctl restart aiops-relay
+  echo "[AIOps] relay systemd service (re)started: aiops-relay (listen $LISTEN)"
 else
   pkill -f "$DIR/aiops-agent.*relay" 2>/dev/null || true
   nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/relay.log" 2>&1 &

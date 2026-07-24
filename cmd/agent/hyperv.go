@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -209,7 +210,7 @@ func hypervHealth(state, replHealth string) string {
 // all servers. On collection failure it still posts a report carrying Error so
 // the server can surface "collection failed" without discarding the last good
 // inventory.
-func (a *Agent) runHyperVCollector() {
+func (a *Agent) runHyperVCollector(ctx context.Context) {
 	interval := a.hypervInterval
 	if interval < 30*time.Second {
 		interval = 60 * time.Second
@@ -244,8 +245,13 @@ func (a *Agent) runHyperVCollector() {
 	collectAndPost() // report immediately on start
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for range ticker.C {
-		collectAndPost()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			collectAndPost()
+		}
 	}
 }
 

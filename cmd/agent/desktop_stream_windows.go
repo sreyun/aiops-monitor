@@ -358,8 +358,16 @@ func (i *winInput) Key(vk int, down bool) error {
 
 func deskGOOS() string { return "windows" }
 
-func deskH264Usable() bool       { return ffmpegAvailable() }
-func deskPreferredCodec() string { return "" } // GDI JPEG is fast on Windows
+// deskH264Usable gates the ffmpeg H.264 path. It is DISABLED in the secure-desktop
+// worker: ffmpeg gdigrab captures the desktop bound to its own process and cannot
+// follow our per-thread SetThreadDesktop(input desktop). So on the lock/login
+// (Winlogon) secure desktop — or whenever the input desktop switches — ffmpeg
+// keeps grabbing the now-unrendered Default desktop and streams solid BLACK frames
+// even though the connection is "up". The GDI capture path (Capture → ensureInput
+// Desktop → BitBlt) DOES follow the input desktop, so the worker must always use it.
+// Foreground mode (the user's own logged-in session) keeps H.264 for performance.
+func deskH264Usable() bool       { return !deskWorkerMode && ffmpegAvailable() }
+func deskPreferredCodec() string { return "" } // GDI JPEG is fast + desktop-following on Windows
 func deskAVFScreenIndex() int    { return -1 }
 
 func deskKeyToVK(key, code string) int {

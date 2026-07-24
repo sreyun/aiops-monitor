@@ -265,9 +265,19 @@ function connectDesktopWS(id, name) {
           fillMonitorSelect(meta.monitors);
         }
         const codecSel = $("deskCodec");
-        if (codecSel && meta.h264 === false) {
-          codecSel.value = "jpeg";
-          DESK_QUALITY.codec = "jpeg";
+        if (codecSel) {
+          // Reflect the agent's capability: when H.264 is unavailable (e.g. the
+          // Windows secure-desktop worker forces GDI capture so the lock screen
+          // isn't a black ffmpeg frame), force JPEG and disable the option so it
+          // can't be re-selected back into a black stream.
+          const h264opt = codecSel.querySelector('option[value="h264"]');
+          if (meta.h264 === false) {
+            codecSel.value = "jpeg";
+            DESK_QUALITY.codec = "jpeg";
+            if (h264opt) h264opt.disabled = true;
+          } else if (h264opt) {
+            h264opt.disabled = false;
+          }
         }
         // Agent-preferred codec (e.g. macOS: continuous H.264 vastly outperforms
         // per-frame screencapture). Auto-switch once, before the first frame.

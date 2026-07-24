@@ -106,24 +106,18 @@ func TestDeleteHostFolderMovesUp(t *testing.T) {
 func TestAddChildDepthLimit(t *testing.T) {
 	cs := testConfigStore(t)
 	cs.cfg.HostFolders = []HostFolderNode{}
-	n1, err := cs.addHostFolder("", "L1")
-	if err != nil {
-		t.Fatal(err)
+	// Build a chain exactly MaxHostFolderDepth deep — every level must succeed.
+	parent := ""
+	for i := 1; i <= MaxHostFolderDepth; i++ {
+		n, err := cs.addHostFolder(parent, fmt.Sprintf("L%d", i))
+		if err != nil {
+			t.Fatalf("L%d should be allowed (<= MaxHostFolderDepth=%d): %v", i, MaxHostFolderDepth, err)
+		}
+		parent = n.ID
 	}
-	n2, err := cs.addHostFolder(n1.ID, "L2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	n3, err := cs.addHostFolder(n2.ID, "L3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	n4, err := cs.addHostFolder(n3.ID, "L4")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cs.addHostFolder(n4.ID, "L5"); err == nil {
-		t.Fatal("L5 should be rejected")
+	// One level beyond the cap must be rejected.
+	if _, err := cs.addHostFolder(parent, fmt.Sprintf("L%d", MaxHostFolderDepth+1)); err == nil {
+		t.Fatalf("L%d should be rejected (exceeds MaxHostFolderDepth=%d)", MaxHostFolderDepth+1, MaxHostFolderDepth)
 	}
 }
 

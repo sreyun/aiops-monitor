@@ -400,7 +400,7 @@ function renderInstallCmd() {
   if (CUR_OS === "windows") {
     cmd = `${PS_TLS12}irm "${server}/install.ps1?${q}" | iex`;
     label = I18N.t("install.powershell_cmd");
-    hint = "普通 PowerShell 即可（命令已内置 TLS 1.2，兼容 Windows Server 2012 R2）；安装到 %LOCALAPPDATA%\\AIOps-agent 并注册用户级开机自启。";
+    hint = "命令已内置 TLS 1.2（兼容 Windows Server 2012/2012 R2）。推荐【以管理员身份运行 PowerShell】：将安装为 Windows 服务（LocalSystem，开机自启+崩溃自恢复，装到 %ProgramData%\\aiops-agent），远程桌面可在锁屏/登录界面工作、Hyper-V 虚拟机可正常采集；Hyper-V 主机即使在普通窗口运行也会自动弹 UAC 提权。非管理员运行则为用户级安装（%LOCALAPPDATA%\\aiops-agent，仅登录后自启，不支持锁屏远程桌面与 Hyper-V）。";
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
     label = I18N.t("install.terminal_one_line");

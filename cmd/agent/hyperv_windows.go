@@ -12,9 +12,15 @@ import (
 
 const hypervCollectTimeout = 30 * time.Second
 
-// hypervProbeScript reports whether this host is a Hyper-V host (the Get-VM
-// cmdlet exists). Printed "yes" ⇒ available.
-const hypervProbeScript = `if (Get-Command Get-VM -ErrorAction SilentlyContinue) { 'yes' }`
+// hypervProbeScript reports whether this host is a Hyper-V HOST. It checks for
+// the vmms (Hyper-V Virtual Machine Management) service rather than the Get-VM
+// cmdlet: Get-Command Get-VM triggers a lazy Hyper-V-module autoload that is slow
+// on cold boot (esp. Windows Server 2012) and runs fresh in every probe process,
+// so it kept losing a boot-time race and reporting "not a Hyper-V host". Querying
+// the service is instant, autoloads nothing, and is only present on an actual
+// Hyper-V host (a management-tools-only box has Get-VM but no vmms and no local
+// VMs to collect). Printed "yes" ⇒ available.
+const hypervProbeScript = `if (Get-Service -Name vmms -ErrorAction SilentlyContinue) { 'yes' }`
 
 // hypervScript collects every guest in a SINGLE powershell process: Get-VM once,
 // then network adapters and checkpoints each fetched with one pipeline and
@@ -114,12 +120,12 @@ $out=foreach($vm in $vms){
 }
 if($out){ ConvertTo-Json -InputObject @($out) -Depth 6 -Compress } else { '[]' }`
 
-// hypervAvailable reports whether Hyper-V guest collection can run here.
-// Timeout is generous (20s): on an older / slow Hyper-V host (e.g. Windows Server
-// 2012 R2) the FIRST Get-Command triggers the Hyper-V PowerShell module autoload,
-// which can take >8s — too short a probe would wrongly conclude "not a Hyper-V host".
+// hypervAvailable reports whether Hyper-V guest collection can run here. The probe
+// (a vmms service lookup) is instant, but keep a modest timeout so a momentarily
+// wedged PowerShell at boot just fails this attempt; the caller re-probes with
+// backoff so a transient failure never permanently disables collection.
 func hypervAvailable() bool {
-	out, _ := runCmdTimeout(20*time.Second, "powershell", "-NoProfile", "-NonInteractive", "-Command", hypervProbeScript)
+	out, _ := runCmdTimeout(15*time.Second, "powershell", "-NoProfile", "-NonInteractive", "-Command", hypervProbeScript)
 	return strings.Contains(out, "yes")
 }
 

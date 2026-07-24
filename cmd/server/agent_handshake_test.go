@@ -182,10 +182,17 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		`WriteAllText("$Dir\config.yaml"`, `$conf = "$Dir\config.yaml"`,
 		`Remove-Item "$Dir\config.json"`)
 	// Hyper-V auto-elevation: a non-elevated install on a Hyper-V host must relaunch
-	// itself via UAC (RunAs + EncodedCommand) so Get-VM (VM collection) works.
+	// itself via UAC (RunAs + EncodedCommand) so Get-VM (VM collection) works. Host
+	// detection uses the vmms service (instant, no slow module autoload race) rather
+	// than Get-Command Get-VM.
 	must("install.ps1 (uac)", ps1In,
-		"Get-Command Get-VM", "-Verb RunAs", "-EncodedCommand",
+		"Get-Service -Name vmms", "-Verb RunAs", "-EncodedCommand",
 		"SecurityProtocol")
+	// Elevated installs must register the real Windows service (boot autostart +
+	// crash-recovery + interactive desktop worker), which is what makes Hyper-V
+	// collection, reboot persistence, and lock-screen remote desktop all work.
+	must("install.ps1 (service)", ps1In,
+		"--install-service", "AiopsMonitorAgent")
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")
