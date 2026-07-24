@@ -176,11 +176,17 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"start-agent.vbs", "Win32_Process",
 		`schtasks.exe`, "/SC MINUTE /MO 5",
 		`CurrentVersion\Run`,
-		"Remove-AiopsScheduledTask", "Stop-AiopsServiceQuiet")
-	// Locked-down GPO hosts often block cmd.exe; installers must never call it.
+		"Remove-AiopsScheduledTask", "Stop-AiopsServiceQuiet",
+		"Get-AiopsRemoteFile", "Invoke-WebRequest")
+	// Locked-down GPO hosts often block cmd.exe / curl.exe / taskkill.exe.
 	if strings.Contains(ps1In, "cmd /c") || strings.Contains(ps1Un, "cmd /c") {
 		t.Error("install/uninstall.ps1 must not invoke cmd.exe (GPO blocks it on hardened hosts)")
 	}
+	if strings.Contains(ps1Un, "& taskkill") || strings.Contains(ps1Un, "taskkill /") {
+		t.Error("uninstall.ps1 must not invoke taskkill.exe (GPO blocks it; use Stop-Process)")
+	}
+	// Agent download must not require curl.exe as the only path.
+	must("install.ps1 (download)", ps1In, "Get-AiopsRemoteFile", "WebClient")
 	// PowerShell 5.1 defaults to a legacy console code page. The installer must
 	// switch both console and native pipeline encodings to UTF-8, and must not
 	// pipe Agent stderr through ForEach-Object (which caused Chinese mojibake).
