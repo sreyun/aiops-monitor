@@ -421,6 +421,16 @@ func (a *Agent) Run(ctx context.Context) {
 		}()
 	}
 
+	// Start one web-desktop channel per target
+	for _, t := range a.targets {
+		childWg.Add(1)
+		tgt := t
+		go func() {
+			defer childWg.Done()
+			a.runDesktopChannelFor(tgt)
+		}()
+	}
+
 	// Start one forward channel per target
 	for _, t := range a.targets {
 		childWg.Add(1)
