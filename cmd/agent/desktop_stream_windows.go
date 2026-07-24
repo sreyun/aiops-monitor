@@ -71,7 +71,7 @@ func openDeskCapture() (deskCapture, error) {
 	w, _, _ := procGetSystemMetrics.Call(smCXScreen)
 	h, _, _ := procGetSystemMetrics.Call(smCYScreen)
 	if w == 0 || h == 0 {
-		return nil, fmt.Errorf("cannot read screen size")
+		return nil, fmt.Errorf("cannot read screen size (no interactive desktop? run Agent in a logged-on user session, not Session 0)")
 	}
 	c := &winCapture{w: int(w), h: int(h), monID: 1}
 	mons := c.Monitors()
@@ -80,6 +80,10 @@ func openDeskCapture() (deskCapture, error) {
 			_ = c.SetMonitor(m.ID)
 			break
 		}
+	}
+	// Fail fast so the browser gets a real error instead of an empty black stream then disconnect.
+	if _, err := c.Capture(); err != nil {
+		return nil, fmt.Errorf("screen capture failed: %w (Agent must run in an interactive user session with an unlocked desktop)", err)
 	}
 	return c, nil
 }

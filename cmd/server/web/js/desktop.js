@@ -215,14 +215,23 @@ function connectDesktopWS(id, name) {
     sendDeskQuality();
   };
   ws.onclose = () => {
+    const prev = DESK_PHASE;
     DESK_PHASE = "closed";
-    setDesktopStatus(I18N.t("desktop.disconnected"), true);
+    // Keep the real agent/server error — do not overwrite with bare "已断开".
+    if (prev !== "error" && prev !== "streaming") {
+      setDesktopStatus(I18N.t("desktop.disconnected"), true);
+      if (!DESK_GOT_FRAME) {
+        setDeskPlaceholder(I18N.t("desktop.disconnected"), I18N.t("desktop.wait_hint"));
+      }
+    } else if (prev === "streaming") {
+      setDesktopStatus(I18N.t("desktop.disconnected"), true);
+    }
     setDeskDot("error");
-    if (!DESK_GOT_FRAME) setDeskPlaceholder(I18N.t("desktop.disconnected"), I18N.t("desktop.wait_hint"));
     unbindDesktopInput(canvas);
     closeDeskMSE();
   };
   ws.onerror = () => {
+    DESK_PHASE = "error";
     setDesktopStatus(I18N.t("desktop.error"), true);
     setDeskDot("error");
     setDeskPlaceholder(I18N.t("desktop.error"), I18N.t("desktop.wait_hint"));
@@ -260,11 +269,13 @@ function connectDesktopWS(id, name) {
           codecSel.value = "jpeg";
           DESK_QUALITY.codec = "jpeg";
         }
-        if (meta.os === "darwin" && meta.error) {
+        if (meta.error) {
+          DESK_PHASE = "error";
           setDesktopStatus(meta.error, true);
           setDeskPlaceholder(I18N.t("desktop.error"), meta.error);
+          setDeskDot("error");
         }
-        if (DESK_META.viewOnly) {
+        if (DESK_META.viewOnly && DESK_PHASE !== "error") {
           setDesktopStatus(I18N.t("desktop.view_only"), false);
         }
       } catch (e) {}
@@ -325,7 +336,9 @@ function connectDesktopWS(id, name) {
           }
         } catch (e) {
           const msg = new TextDecoder().decode(payload);
+          DESK_PHASE = "error";
           setDesktopStatus(msg, true);
+          setDeskDot("error");
           if (!DESK_GOT_FRAME) setDeskPlaceholder(I18N.t("desktop.error"), msg);
           return;
         }

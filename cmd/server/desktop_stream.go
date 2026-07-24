@@ -89,7 +89,7 @@ func deskFrame(typ byte, payload []byte) []byte {
 func (m *deskManager) create(hostID, hostname, operator, ip, lang string) *deskSession {
 	s := &deskSession{
 		id: deskID(), hostID: hostID, hostname: hostname, operator: operator, ip: ip, lang: lang,
-		toAgent: make(chan []byte, 128), toBrowser: make(chan []byte, 64),
+		toAgent: make(chan []byte, 128), toBrowser: make(chan []byte, 256),
 		agentUp: make(chan struct{}), done: make(chan struct{}),
 		createdAt: time.Now().Unix(),
 	}
@@ -214,6 +214,12 @@ func (s *Server) handleOpenDesktop(w http.ResponseWriter, r *http.Request) {
 
 // handleDesktopWS upgrades to WebSocket and relays screen/input/file frames.
 // GET /api/v1/hosts/{id}/desktop/ws
+//
+// Session lifetime mirrors the terminal channel:
+//   - browser disconnect closes the session
+//   - agent TX end closes after a short drain so the last error/meta frames
+//     still reach the browser (avoids "已断开" wiping the real cause)
+//   - idle / hard timeout / agent-wait timeout also close
 func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.TerminalEnabled() {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "desktop.disabled")})
@@ -254,6 +260,7 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 		_ = ws.WriteBinary(append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.no_channel")})...))
 		return
 	}
+	// Queue "waiting" before any agent frames so the UI does not flash "connected".
 	select {
 	case sess.toBrowser <- append([]byte{'S'}, mustJSON(map[string]any{"phase": "waiting_agent", "w": 1280, "h": 720})...):
 	default:
@@ -270,6 +277,8 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.timeout")})...):
 			case <-sess.done:
 			}
+			// Let the writer flush the error frame before tearing the socket down.
+			time.Sleep(300 * time.Millisecond)
 			sess.close()
 		case <-sess.done:
 		}
@@ -285,6 +294,11 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			case <-t.C:
 				last := time.Unix(0, sess.lastActive.Load())
 				if time.Since(last) > deskIdleTimeout || time.Now().After(deadline) {
+					select {
+					case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.timeout")})...):
+					default:
+					}
+					time.Sleep(200 * time.Millisecond)
 					sess.close()
 					return
 				}
@@ -309,11 +323,11 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			typ := data[0]
 			payload := data[1:]
 			switch typ {
-			case 'P': // ping → pong to browser
+			case 'P': // app-level ping → pong
 				_ = ws.WriteBinary([]byte{'P'})
 				continue
-				case 'M', 'W', 'B', 'Q', 'N', 'C', 'f', 'u', 'e', 'd':
-				// framed to agent
+			case 'M', 'W', 'B', 'Q', 'N', 'C', 'f', 'u', 'e', 'd':
+				// framed to agent below
 			default:
 				continue
 			}
@@ -335,31 +349,40 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// agent → browser (already browser-ready: [type:1][payload])
+	// agent → browser. Drain remaining frames when done so error/meta is not lost.
 	go func() {
-		defer sess.close()
+		write := func(b []byte) bool {
+			sess.touch()
+			if len(b) > 0 {
+				switch b[0] {
+				case 'S':
+					sess.recordFrame("meta", b[1:])
+				case 'K':
+					if time.Now().UnixMilli()%500 < 120 {
+						sess.recordFrame("jpeg", b[1:])
+					}
+				case 'H':
+					sess.recordFrame("h264", b[1:])
+				}
+			}
+			return ws.WriteBinary(b) == nil
+		}
 		for {
 			select {
 			case b := <-sess.toBrowser:
-				sess.touch()
-				if len(b) > 0 {
-					switch b[0] {
-					case 'S':
-						sess.recordFrame("meta", b[1:])
-					case 'K':
-						// sample ~2 fps into recording to bound size
-						if time.Now().UnixMilli()%500 < 120 {
-							sess.recordFrame("jpeg", b[1:])
-						}
-					case 'H':
-						sess.recordFrame("h264", b[1:])
-					}
-				}
-				if err := ws.WriteBinary(b); err != nil {
+				if !write(b) {
+					sess.close()
 					return
 				}
 			case <-sess.done:
-				return
+				for {
+					select {
+					case b := <-sess.toBrowser:
+						_ = write(b)
+					default:
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -371,6 +394,7 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-t.C:
 				if err := ws.WritePing(nil); err != nil {
+					sess.close()
 					return
 				}
 			case <-sess.done:
@@ -476,6 +500,9 @@ func (s *Server) handleAgentDeskRx(w http.ResponseWriter, r *http.Request) {
 }
 
 // Agent tx frames: [type:1][len:4 BE][payload] — relayed to browser as [type][payload].
+// Unlike a naive "defer sess.close()", we give the browser writer a short grace
+// period to flush the last meta/error/jpeg frames. Otherwise a one-shot
+// deskSendError TX races with sess.done and the UI only sees "已断开".
 func (s *Server) handleAgentDeskTx(w http.ResponseWriter, r *http.Request) {
 	sess := s.desk.get(r.URL.Query().Get("session"))
 	if sess == nil {
@@ -487,7 +514,20 @@ func (s *Server) handleAgentDeskTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.markAgentUp()
-	defer sess.close()
+	defer func() {
+		deadline := time.Now().Add(1500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if len(sess.toBrowser) == 0 {
+				time.Sleep(50 * time.Millisecond)
+				if len(sess.toBrowser) == 0 {
+					break
+				}
+				continue
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		sess.close()
+	}()
 
 	var hdr [5]byte
 	for {
@@ -508,31 +548,58 @@ func (s *Server) handleAgentDeskTx(w http.ResponseWriter, r *http.Request) {
 		out := make([]byte, 1+len(payload))
 		out[0] = typ
 		copy(out[1:], payload)
-		// Video frames: drop if browser is slow (prefer latest). Control frames: block briefly.
-		if typ == 'K' || typ == 'H' {
-			select {
-			case sess.toBrowser <- out:
-			case <-sess.done:
-				return
-			default:
-				// drop oldest by draining one slot then push
-				select {
-				case <-sess.toBrowser:
-				default:
-				}
-				select {
-				case sess.toBrowser <- out:
-				case <-sess.done:
-					return
-				default:
-				}
-			}
-			continue
-		}
-		select {
-		case sess.toBrowser <- out:
-		case <-sess.done:
+		if !sess.enqueueBrowser(out) {
 			return
 		}
 	}
+}
+
+// enqueueBrowser forwards an agent frame to the browser writer.
+//
+// Video frames ('K' JPEG / 'H' H264) are lossy: if the browser is slow and the
+// queue is full we prefer the newest frame, but we ONLY ever drop a *stale video*
+// frame to make room. Control/meta/error frames ('S','E','C','F','D',…) are never
+// evicted — dropping them raced with deskSendError and left the UI with a bare
+// WebSocket close ("已断开") instead of the real cause.
+//
+// Returns false only when the session is done (caller should stop relaying).
+func (s *deskSession) enqueueBrowser(out []byte) bool {
+	isVideo := len(out) > 0 && (out[0] == 'K' || out[0] == 'H')
+	if !isVideo {
+		// Control frames block until delivered (or session ends).
+		select {
+		case s.toBrowser <- out:
+			return true
+		case <-s.done:
+			return false
+		}
+	}
+	select {
+	case s.toBrowser <- out:
+		return true
+	case <-s.done:
+		return false
+	default:
+	}
+	// Queue full: make room by discarding at most one *stale video* frame.
+	select {
+	case old := <-s.toBrowser:
+		if len(old) > 0 && (old[0] == 'K' || old[0] == 'H') {
+			select {
+			case s.toBrowser <- out:
+			case <-s.done:
+				return false
+			default:
+			}
+		} else {
+			// Head was a control frame — put it back, drop the incoming video.
+			select {
+			case s.toBrowser <- old:
+			case <-s.done:
+				return false
+			}
+		}
+	default:
+	}
+	return true
 }

@@ -534,7 +534,8 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			}
 		case 'M':
 			var ev struct {
-				X, Y   float64 `json:"x"`
+				X      float64 `json:"x"`
+				Y      float64 `json:"y"`
 				Btn    int     `json:"btn"`
 				Down   *bool   `json:"down"`
 				Action string  `json:"action"`
