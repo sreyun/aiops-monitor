@@ -388,7 +388,10 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 		// Fire off the HTTP request in a goroutine; write to pw in the main goroutine.
 		reqDone := make(chan error, 1)
 		go func() {
-			resp, doErr := termHTTP.Do(req)
+			// deskStreamClient forces per-frame flushing (WriteBufferSize=1); the
+			// shared termHTTP would hold small PTY output in its 4KB buffer, so
+			// keystroke echo / prompts could stall until enough bytes accumulated.
+			resp, doErr := deskStreamClient().Do(req)
 			if doErr == nil {
 				resp.Body.Close()
 			}
