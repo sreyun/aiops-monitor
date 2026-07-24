@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -145,7 +146,39 @@ func main() {
 	flag.StringVar(&cfg.CACert, "ca-cert", cfg.CACert, "信任的 CA 证书路径（PEM），用于校验自签名服务端证书")
 	var securityMode string
 	flag.StringVar(&securityMode, "security-mode", "auto", "安全模块模式: auto(自动诊断输出修复命令)/permissive(自动切换宽容模式,2h后恢复)/enforcing(恢复强制模式)")
+	// Windows privileged-service / secure-desktop worker controls.
+	var svcInstall, svcUninstall, svcRun, desktopWorker bool
+	flag.BoolVar(&svcInstall, "install-service", false, "[Windows] 以 SYSTEM 权限安装并启动 Agent 服务（远程桌面支持锁屏/登录界面所必需）")
+	flag.BoolVar(&svcUninstall, "uninstall-service", false, "[Windows] 停止并卸载 Agent 服务")
+	flag.BoolVar(&svcRun, "service", false, "[Windows] 内部使用：由服务控制管理器以服务方式启动")
+	flag.BoolVar(&desktopWorker, "desktop-worker", false, "[Windows] 内部使用：由服务派生、运行于活动会话的远程桌面 worker")
 	flag.Parse()
+
+	// Service install/uninstall are one-shot admin actions handled before the
+	// (config-heavy) agent bootstrap. Install embeds the resolved absolute config
+	// path so the SYSTEM service — whose CWD is system32 — finds it.
+	if svcInstall || svcUninstall {
+		if svcUninstall {
+			if err := uninstallAgentService(); err != nil {
+				log.Fatalf("卸载服务失败: %v", err)
+			}
+			slog.Info("Agent 服务已卸载")
+			return
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatalf("无法解析可执行文件路径: %v", err)
+		}
+		absCfg := cfgPath
+		if p, e := filepath.Abs(cfgPath); e == nil {
+			absCfg = p
+		}
+		if err := installAgentService(exe, absCfg); err != nil {
+			log.Fatalf("安装服务失败: %v", err)
+		}
+		slog.Info("Agent 服务已安装并启动（LocalSystem，开机自启）", "config", absCfg)
+		return
+	}
 	explicitFlags := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
 	// An explicit single-server flag is an override, not a no-op behind a
@@ -337,6 +370,24 @@ func main() {
 	agent.sniCfg = cfg.SNI
 	agent.hypervInterval = time.Duration(cfg.HyperVIntervalSec) * time.Second
 	agent.hypervDisabled = cfg.HyperVDisabled
+
+	// Windows secure-desktop worker: run ONLY the remote-desktop channel, with
+	// capture/input following the input desktop (lock/login screens). Spawned by
+	// the service into the active console session.
+	if desktopWorker {
+		if err := runDesktopWorker(agent); err != nil {
+			log.Fatalf("桌面 worker 运行失败: %v", err)
+		}
+		return
+	}
+	// Windows service mode: run the full agent (desktop channel delegated to a
+	// worker) under the Service Control Manager.
+	if svcRun {
+		if err := runAgentAsService(agent, cfgPath); err != nil {
+			log.Fatalf("服务运行失败: %v", err)
+		}
+		return
+	}
 
 	// Graceful shutdown: cancel context on SIGTERM/SIGINT, then wait for all
 	// goroutines (report loop, plugin loop, terminal/forward channels, hardware
