@@ -336,7 +336,7 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 		uintptr(unsafe.Pointer(appW)),
 		uintptr(unsafe.Pointer(cmdW)),
 		0, 0, 0,
-		uintptr(createUnicodeEnv|createNoWindow),
+		uintptr(createUnicodeEnv|createNoWindow|createBreakawayJob),
 		0, 0,
 		uintptr(unsafe.Pointer(&si)),
 		uintptr(unsafe.Pointer(&pi)),

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -59,13 +60,27 @@ var (
 )
 
 const (
-	uoiName           = 2          // UOI_NAME
-	deskDesiredAccess = 0x10000000 // GENERIC_ALL — capture + input on the desktop
-	// Asking for GENERIC_ALL can be rejected by hardened desktop ACLs even when
-	// SYSTEM has every right capture/input actually needs. Try the least-privilege
-	// mask first, then retain the old and MAXIMUM_ALLOWED compatibility paths.
-	deskOperationalAccess = 0x00000181 // READOBJECTS | WRITEOBJECTS | SWITCHDESKTOP
-	maximumAllowedAccess  = 0x02000000
+	uoiName = 2 // UOI_NAME
+
+	desktopReadObjects     = 0x0001
+	desktopCreateWindow    = 0x0002
+	desktopCreateMenu      = 0x0004
+	desktopHookControl     = 0x0008
+	desktopJournalRecord   = 0x0010
+	desktopJournalPlayback = 0x0020 // REQUIRED for SendInput to inject into this desktop
+	desktopEnumerate       = 0x0040
+	desktopWriteObjects    = 0x0080
+	desktopSwitchDesktop   = 0x0100
+
+	deskDesiredAccess = 0x10000000 // GENERIC_ALL
+	// Capture needs READOBJECTS; SendInput needs JOURNALPLAYBACK. The previous
+	// mask (0x181 = READ|WRITE|SWITCH) let OpenInputDesktop succeed without
+	// JOURNALPLAYBACK, so JPEG capture worked while mouse/keyboard silently died
+	// in the LocalSystem desktop worker.
+	deskOperationalAccess = desktopReadObjects | desktopCreateWindow | desktopCreateMenu |
+		desktopHookControl | desktopJournalPlayback | desktopEnumerate |
+		desktopWriteObjects | desktopSwitchDesktop // 0x01EF
+	maximumAllowedAccess = 0x02000000
 )
 
 // deskFollowSecureDesktop enables input-desktop following (worker mode only, so
@@ -117,9 +132,17 @@ func desktopNameOf(h uintptr) string {
 
 func openInputDesktop() (uintptr, error) {
 	var lastErr uint32
+	// Prefer the operational mask (includes JOURNALPLAYBACK). Fall back to
+	// GENERIC_ALL / MAXIMUM_ALLOWED on hardened ACLs that reject the explicit set.
 	for _, access := range []uintptr{deskOperationalAccess, deskDesiredAccess, maximumAllowedAccess} {
 		h, _, callErr := procOpenInputDesktop.Call(0, 0, access)
 		if h != 0 {
+			if deskWorkerMode {
+				slog.Info("OpenInputDesktop ok",
+					"access", fmt.Sprintf("0x%X", access),
+					"desktop", desktopNameOf(h),
+					"session", currentSessionID())
+			}
 			return h, nil
 		}
 		if errno, ok := callErr.(syscall.Errno); ok {
@@ -629,11 +652,21 @@ type winInput struct {
 	monX, monY  int // current monitor origin in virtual-screen coords
 	lastAX      int // last absolute cursor position (virtual-screen)
 	lastAY      int
+	failLogAt   time.Time // rate-limit SendInput failure logs
+	probed      bool
 }
 
 func (i *winInput) SetOrigin(x, y int) { i.monX, i.monY = x, y }
 
-func openDeskInput() (deskInput, error) { return &winInput{}, nil }
+func openDeskInput() (deskInput, error) {
+	i := &winInput{}
+	// Attach + SendInput probe up front in worker mode so failures show in the
+	// agent log before the operator clicks (capture can succeed while input cannot).
+	if deskFollowSecureDesktop {
+		_ = i.ensureInputDesktop()
+	}
+	return i, nil
+}
 func (i *winInput) Close() error {
 	if i.curDesk != 0 {
 		_, _, _ = procCloseDesktop.Call(i.curDesk)
@@ -642,11 +675,22 @@ func (i *winInput) Close() error {
 	return nil
 }
 
+func (i *winInput) logSendFail(kind string, errno uint32, extra ...any) {
+	now := time.Now()
+	if !i.failLogAt.IsZero() && now.Sub(i.failLogAt) < 5*time.Second {
+		return
+	}
+	i.failLogAt = now
+	args := []any{"kind", kind, "win32", errno, "desktop", i.curDeskName, "session", currentSessionID()}
+	args = append(args, extra...)
+	slog.Warn("SendInput/键鼠注入失败", args...)
+}
+
 // ensureInputDesktop attaches the calling (input) thread to the current input
 // desktop so SendInput/SetCursorPos reach the lock/logon/secure desktop.
-func (i *winInput) ensureInputDesktop() {
+func (i *winInput) ensureInputDesktop() error {
 	if !deskFollowSecureDesktop {
-		return
+		return nil
 	}
 	if !i.locked {
 		runtime.LockOSThread()
@@ -657,19 +701,21 @@ func (i *winInput) ensureInputDesktop() {
 		if deskWorkerMode {
 			slog.Warn("输入线程无法打开输入桌面", "err", err)
 		}
-		return
+		return err
 	}
 	name := desktopNameOf(h)
 	if i.curDesk != 0 && name == i.curDeskName {
 		_, _, _ = procCloseDesktop.Call(h)
-		return
+		i.probeSendInputOnce()
+		return nil
 	}
 	if r, _, _ := procSetThreadDesktop.Call(h); r == 0 {
+		err := fmt.Errorf("SetThreadDesktop(%q) failed: win32=%d", name, win32LastError())
 		if deskWorkerMode {
-			slog.Warn("输入线程无法附着输入桌面", "desktop", name, "win32", win32LastError())
+			slog.Warn("输入线程无法附着输入桌面", "desktop", name, "err", err)
 		}
 		_, _, _ = procCloseDesktop.Call(h)
-		return
+		return err
 	}
 	old := i.curDesk
 	i.curDesk = h
@@ -677,6 +723,33 @@ func (i *winInput) ensureInputDesktop() {
 	if old != 0 {
 		_, _, _ = procCloseDesktop.Call(old)
 	}
+	slog.Info("输入线程已附着输入桌面", "desktop", name, "session", currentSessionID())
+	i.probeSendInputOnce()
+	return nil
+}
+
+// probeSendInputOnce verifies JOURNALPLAYBACK actually works after attach.
+func (i *winInput) probeSendInputOnce() {
+	if i.probed || !deskWorkerMode {
+		return
+	}
+	i.probed = true
+	inp := winMouseInput{
+		Type:  inputMouse,
+		Flags: mouseeventfMove, // relative 0,0 — no visible motion
+	}
+	n, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+	if n != 0 {
+		slog.Info("SendInput 探测成功（键鼠注入可用）", "desktop", i.curDeskName)
+		return
+	}
+	errno := win32LastError()
+	if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+		errno = uint32(e)
+	}
+	slog.Warn("SendInput 探测失败：键鼠可能不可用",
+		"win32", errno, "desktop", i.curDeskName, "session", currentSessionID(),
+		"hint", "OpenInputDesktop 需含 DESKTOP_JOURNALPLAYBACK；检查 AppLocker/会话桌面 ACL")
 }
 
 // winMouseInput matches the Windows INPUT/MOUSEINPUT layout on amd64/arm64
@@ -730,7 +803,7 @@ func (i *winInput) sendMouseAbsolute(ax, ay int, btnFlags, data uint32) bool {
 	if ny > 65535 {
 		ny = 65535
 	}
-	try := func(flags uint32) bool {
+	try := func(flags uint32) (bool, uint32) {
 		inp := winMouseInput{
 			Type:      inputMouse,
 			Dx:        nx,
@@ -738,15 +811,27 @@ func (i *winInput) sendMouseAbsolute(ax, ay int, btnFlags, data uint32) bool {
 			MouseData: data,
 			Flags:     flags,
 		}
-		n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
-		return n != 0
+		n, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+		if n != 0 {
+			return true, 0
+		}
+		errno := win32LastError()
+		if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+			errno = uint32(e)
+		}
+		return false, errno
 	}
 	// Prefer virtual-desktop absolute; fall back without VIRTUALDESK (some RDP /
 	// hardened sessions accept only the primary-monitor absolute form).
-	if try(mouseeventfMove | mouseeventfAbsolute | mouseeventfVirtualDesk | btnFlags) {
+	if ok, _ := try(mouseeventfMove | mouseeventfAbsolute | mouseeventfVirtualDesk | btnFlags); ok {
 		return true
 	}
-	return try(mouseeventfMove | mouseeventfAbsolute | btnFlags)
+	if ok, errno := try(mouseeventfMove | mouseeventfAbsolute | btnFlags); ok {
+		return true
+	} else {
+		i.logSendFail("mouse", errno, "ax", ax, "ay", ay)
+		return false
+	}
 }
 
 func (i *winInput) sendMouseButton(flags, data uint32) bool {
@@ -755,25 +840,35 @@ func (i *winInput) sendMouseButton(flags, data uint32) bool {
 		MouseData: data,
 		Flags:     flags,
 	}
-	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
-	return n != 0
+	n, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), uintptr(unsafe.Sizeof(inp)))
+	if n != 0 {
+		return true
+	}
+	errno := win32LastError()
+	if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+		errno = uint32(e)
+	}
+	i.logSendFail("mouse_btn", errno, "flags", flags)
+	return false
 }
 
 func (i *winInput) MouseMove(x, y int) error {
-	i.ensureInputDesktop()
+	if err := i.ensureInputDesktop(); err != nil {
+		return err
+	}
 	ax, ay := i.monX+x, i.monY+y
 	i.lastAX, i.lastAY = ax, ay
-	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
-	if !i.sendMouseAbsolute(ax, ay, 0, 0) {
-		// Legacy absolute via mouse_event (coords already 0..65535 style not used —
-		// SetCursorPos above is the real fallback positioning).
-		_, _, _ = procMouseEvent.Call(mouseeventfMove, 0, 0, 0, 0)
+	if r, _, _ := procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay))); r == 0 {
+		i.logSendFail("SetCursorPos", win32LastError(), "ax", ax, "ay", ay)
 	}
+	_ = i.sendMouseAbsolute(ax, ay, 0, 0)
 	return nil
 }
 
 func (i *winInput) MouseButton(button int, down bool) error {
-	i.ensureInputDesktop()
+	if err := i.ensureInputDesktop(); err != nil {
+		return err
+	}
 	var flags uint32
 	switch button {
 	case 2:
@@ -813,7 +908,9 @@ func (i *winInput) MouseButton(button int, down bool) error {
 }
 
 func (i *winInput) MouseWheel(delta int) error {
-	i.ensureInputDesktop()
+	if err := i.ensureInputDesktop(); err != nil {
+		return err
+	}
 	data := uint32(int32(delta) * 120)
 	if !i.sendMouseButton(mouseeventfWheel, data) {
 		_, _, _ = procMouseEvent.Call(mouseeventfWheel, 0, 0, uintptr(data), 0)
@@ -822,7 +919,9 @@ func (i *winInput) MouseWheel(delta int) error {
 }
 
 func (i *winInput) Key(vk int, down bool) error {
-	i.ensureInputDesktop()
+	if err := i.ensureInputDesktop(); err != nil {
+		return err
+	}
 	var flags uint32
 	if !down {
 		flags = keyeventfKeyUp
@@ -839,8 +938,13 @@ func (i *winInput) Key(vk int, down bool) error {
 	}
 	// cbSize must be sizeof(INPUT); use the mouse variant size (canonical INPUT).
 	cb := unsafe.Sizeof(winMouseInput{})
-	n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), cb)
+	n, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), cb)
 	if n == 0 {
+		errno := win32LastError()
+		if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+			errno = uint32(e)
+		}
+		i.logSendFail("key", errno, "vk", vk, "down", down)
 		_, _, _ = procKeybdEvent.Call(uintptr(vk), scan, uintptr(flags), 0)
 	}
 	return nil
