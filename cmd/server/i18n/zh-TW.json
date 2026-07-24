@@ -372,6 +372,7 @@
   "desktop.disabled": "遠端終端功能已關閉，無法使用遠端桌面",
   "desktop.host_offline": "主機離線，無法開啟遠端桌面",
   "desktop.no_channel": "無法建立桌面會話——Agent 桌面通道未就緒",
+  "desktop.no_frame": "Agent 已接入但未推送畫面：目標可能處於鎖屏/登入介面、Session 0 或無互動式桌面。鎖屏/登入場景請在目標上以服務方式安裝 Agent（Windows: --install-service；Linux/macOS: sudo 安裝守護行程）",
   "desktop.timeout": "等待 Agent 接入桌面通道逾時",
   "log.terminal_cmd": "終端命令 [%s %s]: %s",
   "log.alert_fired": "告警觸發：%s",

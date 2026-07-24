@@ -374,6 +374,7 @@
   "desktop.disabled": "Remote terminal is disabled; desktop unavailable",
   "desktop.host_offline": "Host is offline; cannot open desktop",
   "desktop.no_channel": "Cannot open desktop — agent desktop channel not ready",
+  "desktop.no_frame": "Agent connected but sent no frames: the target may be at a lock/login screen, in Session 0, or has no interactive desktop. For lock/login screens install the Agent as a service (Windows: --install-service; Linux/macOS: install the root daemon with sudo)",
   "desktop.timeout": "Timed out waiting for agent desktop channel",
   "log.terminal_cmd": "Terminal command [%s %s]: %s",
   "log.alert_fired": "Alert fired: %s",

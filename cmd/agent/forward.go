@@ -277,7 +277,9 @@ func (a *Agent) runForwardSessionUDP(server, sid string, targetPort int, remoteT
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
-		if resp, e := termHTTP.Do(req); e == nil {
+		// Per-frame flush (see deskStreamClient): UDP datagrams must not linger in
+		// the shared client's 4KB write buffer.
+		if resp, e := deskStreamClient().Do(req); e == nil {
 			resp.Body.Close()
 		}
 	}()

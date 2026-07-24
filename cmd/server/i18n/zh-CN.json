@@ -374,6 +374,7 @@
   "desktop.disabled": "远程终端功能已关闭，无法使用远程桌面",
   "desktop.host_offline": "主机离线，无法开启远程桌面",
   "desktop.no_channel": "无法建立桌面会话——Agent 桌面通道未就绪",
+  "desktop.no_frame": "Agent 已接入但未推送画面：目标可能处于锁屏/登录界面、Session 0 或无交互式桌面。锁屏/登录场景请在目标上以服务方式安装 Agent（Windows: --install-service；Linux/macOS: sudo 安装守护进程）",
   "desktop.timeout": "等待 Agent 接入桌面通道超时",
   "log.terminal_cmd": "终端命令 [%s %s]: %s",
   "log.alert_fired": "告警触发：%s",
