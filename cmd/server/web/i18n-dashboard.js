@@ -396,6 +396,7 @@
   "toast.read_failed2": "读取失败: ",
   "toast.login_failed2": "登录失败: ",
   "toast.login_timeout": "请求超时，请检查网络后重试",
+  "toast.login_timeout_mfa": "请求超时。若已开启两步验证，请等待 Authenticator 刷新后输入新口令再试",
   "toast.login_network_error": "网络连接失败，请检查网络设置后重试",
   "toast.network_check_failed": "网络连接异常，请检查网络后刷新页面",
   "toast.trigger_failed2": "触发失败: ",

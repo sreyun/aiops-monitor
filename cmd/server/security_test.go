@@ -29,7 +29,7 @@ func TestLoginAccountLockout(t *testing.T) {
 }
 
 // TestTOTPSingleUse verifies a valid TOTP code is accepted once and its replay
-// (same code/time-step) is rejected within the skew window.
+// (same code/time-step) is rejected as totpReplay (not totpInvalid) within the skew window.
 func TestTOTPSingleUse(t *testing.T) {
 	a := NewAuth(newTestConfigStore(t))
 	secret := genTOTPSecret()
@@ -37,11 +37,30 @@ func TestTOTPSingleUse(t *testing.T) {
 		t.Fatal("genTOTPSecret failed")
 	}
 	code := totpAt(secret, time.Now().Unix())
-	if !a.verifyTOTPOnce("alice", secret, code) {
-		t.Fatal("first use of a valid TOTP code should succeed")
+	if got := a.verifyAndConsumeTOTP("alice", secret, code); got != totpOK {
+		t.Fatalf("first use of a valid TOTP code should succeed, got %v", got)
 	}
-	if a.verifyTOTPOnce("alice", secret, code) {
-		t.Error("replay of the same TOTP code must be rejected")
+	if got := a.verifyAndConsumeTOTP("alice", secret, code); got != totpReplay {
+		t.Errorf("replay of the same TOTP code must be totpReplay, got %v", got)
+	}
+	if got := a.verifyAndConsumeTOTP("alice", secret, "000000"); got != totpInvalid {
+		t.Errorf("wrong code must be totpInvalid, got %v", got)
+	}
+}
+
+func TestNormalizeTOTPCode(t *testing.T) {
+	if got := normalizeTOTPCode(" 123 456 "); got != "123456" {
+		t.Errorf("normalize spaced code: got %q", got)
+	}
+	if got := normalizeTOTPCode("12-34-56"); got != "123456" {
+		t.Errorf("normalize dashed code: got %q", got)
+	}
+	a := NewAuth(newTestConfigStore(t))
+	secret := genTOTPSecret()
+	code := totpAt(secret, time.Now().Unix())
+	spaced := code[:3] + " " + code[3:]
+	if got := a.verifyAndConsumeTOTP("bob", secret, spaced); got != totpOK {
+		t.Fatalf("spaced autofill code should verify, got %v", got)
 	}
 }
 

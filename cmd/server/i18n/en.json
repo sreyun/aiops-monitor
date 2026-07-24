@@ -1,6 +1,7 @@
 {
   "auth.invalid_credentials": "Invalid username or password",
-  "auth.totp_error": "Invalid verification code",
+  "auth.totp_error": "Invalid verification code — enter the current code from your authenticator",
+  "auth.totp_replay": "This code was already used — wait for the authenticator to refresh, then enter the new code",
   "auth.too_many_attempts": "Too many login attempts, please try again in 5 minutes",
   "auth.mfa_required_first": "Please complete two-factor authentication first",
   "auth.insufficient_permission": "Insufficient permissions, this operation requires a higher privilege",
@@ -333,6 +334,7 @@
   "log.login_failed": "Login failed: %s",
   "log.login_success": "Login succeeded: %s",
   "log.totp_failed": "TOTP verification failed: %s",
+  "log.totp_replay": "TOTP code reused (already consumed): %s",
   "log.update_profile": "Updated profile: %s",
   "log.change_password": "Changed password: %s",
   "log.enable_mfa": "Enabled MFA: %s",

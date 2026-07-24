@@ -157,7 +157,7 @@ func (s *Server) handleRecoverVerifyMFA(w http.ResponseWriter, r *http.Request) 
 	req.Email = strings.TrimSpace(req.Email)
 	req.Code = strings.TrimSpace(req.Code)
 	req.TOTPCode = strings.TrimSpace(req.TOTPCode)
-	if !validEmail(req.Email) || len(req.Code) != 6 || len(req.TOTPCode) != 6 {
+	if !validEmail(req.Email) || len(req.Code) != 6 || len(normalizeTOTPCode(req.TOTPCode)) != 6 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.invalid_params")})
 		return
 	}
@@ -170,15 +170,23 @@ func (s *Server) handleRecoverVerifyMFA(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.mfa_not_configured")})
 		return
 	}
-	// Verify TOTP
-	if !s.auth.verifyTOTPOnce(user.Username, user.MFASecret, req.TOTPCode) {
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
+	// Verify TOTP without consuming first — email code must succeed too, otherwise
+	// a mistyped email code would burn a still-valid authenticator digit.
+	totpRes, totpStep := s.auth.checkTOTP(user.Username, user.MFASecret, req.TOTPCode)
+	if totpRes != totpOK {
+		if totpRes == totpInvalid {
+			s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
+		}
+		s.writeTOTPFailure(w, r, totpRes, http.StatusUnauthorized)
 		return
 	}
-	// TOTP valid — consume the previously-verified email code
+	// Consume the previously-verified email code, then mark the TOTP step used.
 	if consumedEmail := s.emailMgr.consumeVerifiedCode(user.Email, req.Purpose, req.Code); consumedEmail == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.code_invalid")})
+		return
+	}
+	if res := s.auth.consumeTOTPStep(user.Username, totpStep); res != totpOK {
+		s.writeTOTPFailure(w, r, res, http.StatusUnauthorized)
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_success", user.Username)})
@@ -270,9 +278,11 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "recovery.mfa_required_for_reset")})
 			return
 		}
-		if !s.auth.verifyTOTPOnce(user.Username, user.MFASecret, totpCode) {
-			s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.totp_error")})
+		if res := s.auth.verifyAndConsumeTOTP(user.Username, user.MFASecret, totpCode); res != totpOK {
+			if res == totpInvalid {
+				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_failed", user.Username)})
+			}
+			s.writeTOTPFailure(w, r, res, http.StatusUnauthorized)
 			return
 		}
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.totp_recovery_success", user.Username)})

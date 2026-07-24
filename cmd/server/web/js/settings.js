@@ -1152,7 +1152,9 @@ async function submitTermPwdChange() {
     toggleTermPwdChange();
     return;
   }
-  const code = $("pfTermPwdAuth").value.trim();
+  const code = MFA_ENABLED
+    ? String($("pfTermPwdAuth").value || "").replace(/\D/g, "").slice(0, 6)
+    : $("pfTermPwdAuth").value.trim();
   const newPwd = $("pfTermPwdNew").value.trim();
   const errEl = $("pfTermPwdErr");
 
@@ -1178,6 +1180,10 @@ async function submitTermPwdChange() {
         // 修改时需要 MFA，但未提供
         if (errEl) { errEl.textContent = I18N.t("term_auth.enter_mfa_code"); errEl.style.display = "block"; }
         return;
+      }
+      if (j.code === "totp_replay" || j.code === "totp_invalid") {
+        const authEl = $("pfTermPwdAuth");
+        if (authEl) { authEl.value = ""; authEl.focus(); }
       }
       if (errEl) { errEl.textContent = j.error || I18N.t("toast.update_failed"); errEl.style.display = "block"; }
     }
@@ -1472,7 +1478,7 @@ function showRecoverStepMFA(purpose, email, code) {
   const body = $("recoverBody");
   body.innerHTML = `
     <div class="mfa-desc" style="margin-bottom:14px">${I18N.t("recover.enter_totp_desc")}</div>
-    <div class="field"><label>${I18N.t("recover.totp_code")}</label><input type="text" id="rcTOTP" inputmode="numeric" maxlength="6" placeholder="${I18N.t('recover.totp_placeholder')}" autocomplete="one-time-code"></div>
+    <div class="field"><label>${I18N.t("recover.totp_code")}</label><input type="text" id="rcTOTP" inputmode="numeric" maxlength="8" placeholder="${I18N.t('recover.totp_placeholder')}" autocomplete="one-time-code"></div>
     <div class="login-err" id="rcErr"></div>
     <div class="mfa-foot" style="justify-content:space-between">
       <button class="btn" id="rcBack" type="button">${I18N.t("ui.back")}</button>
@@ -1482,7 +1488,9 @@ function showRecoverStepMFA(purpose, email, code) {
   $("rcBack").onclick = () => showRecoverStep2(purpose, email);
   $("rcAction").onclick = async () => {
     const errEl = $("rcErr"); errEl.textContent = "";
-    const totp = $("rcTOTP").value.trim();
+    const totpEl = $("rcTOTP");
+    const totp = String(totpEl && totpEl.value || "").replace(/\D/g, "").slice(0, 6);
+    if (totpEl) totpEl.value = totp;
     if (totp.length !== 6) { errEl.textContent = I18N.t("valid.enter_totp"); return; }
     try {
       const r = await fetch(`${API}/account/recover-verify-mfa`, {
@@ -1490,7 +1498,13 @@ function showRecoverStepMFA(purpose, email, code) {
         body: JSON.stringify({ email, code, totp_code: totp, purpose })
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { errEl.textContent = j.error || I18N.t("toast.verify_failed"); return; }
+      if (!r.ok) {
+        if (j.code === "totp_replay" || j.code === "totp_invalid") {
+          if (totpEl) { totpEl.value = ""; totpEl.focus(); }
+        }
+        errEl.textContent = j.error || I18N.t("toast.verify_failed");
+        return;
+      }
       showRecoverResult(purpose, j);
     } catch (e) { errEl.textContent = I18N.t("toast.send_failed2") + e; }
   };
