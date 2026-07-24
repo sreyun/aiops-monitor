@@ -166,6 +166,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/folder", s.handleSetHostFolder)
+	mux.HandleFunc("POST /api/v1/hosts/{id}/desktop", s.handleOpenDesktop)
 	mux.HandleFunc("GET /api/v1/host-folders", s.handleGetHostFolders)
 	mux.HandleFunc("PUT /api/v1/host-folders", s.handlePutHostFolders)
 	mux.HandleFunc("POST /api/v1/host-folders", s.handlePostHostFolder)
@@ -505,7 +506,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "settings", "nav", "attachments", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

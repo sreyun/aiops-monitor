@@ -324,13 +324,14 @@ function showTermVerify() {
   setTimeout(() => { const el = $("termVerifyPwd"); if (el) el.focus(); }, 100);
 }
 
-// 密码设置/验证完成后打开终端
+// 密码设置/验证完成后打开终端或桌面
 function proceedToTerminal() {
   TERM_AUTH_CHECKING = false;
   if (!TERM_AUTH_PENDING) return;
-  const { id, name } = TERM_AUTH_PENDING;
+  const { id, name, action } = TERM_AUTH_PENDING;
   TERM_AUTH_PENDING = null;
-  doOpenTerminal(id, name);
+  if (action === "desktop") doOpenDesktop(id, name);
+  else doOpenTerminal(id, name);
 }
 
 // 取消终端认证流程
