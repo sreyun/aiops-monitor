@@ -563,6 +563,12 @@ New-Item -ItemType Directory -Force $Dir | Out-Null
 # kill the process, then wait for the file handle to release. cmd /c avoids the PS 5.1
 # NativeCommandError when the task doesn't exist yet.
 cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
+# Gracefully stop the service (if this host was installed as a service). A clean
+# SCM stop does NOT trigger the crash-recovery restart, and it tears down the
+# desktop worker too, so the exe unlocks for replacement. Only if that leaves
+# stragglers do we force-kill.
+cmd /c 'sc stop AiopsMonitorAgent 2>nul'
+Start-Sleep -Milliseconds 1500
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 
@@ -676,19 +682,33 @@ If Not running Then $runLine
 
 # (Prior instance already stopped + task deleted before the download above.)
 if ($IsAdmin) {
-  # Elevated: run the keepalive task as SYSTEM at Highest run level so Get-VM
-  # (Hyper-V guest collection) has the privileges it needs. Same proven 5-minute
-  # schtasks keepalive as per-user mode, just under the SYSTEM account; schtasks
-  # /Run starts it immediately. The HKCU Run key is irrelevant to SYSTEM, drop it.
+  # Elevated: install a real Windows service (LocalSystem, SERVICE_AUTO_START +
+  # crash-recovery). This is strictly better than the SYSTEM keepalive task:
+  #   1. Boot autostart — the host reports metrics after a reboot BEFORE anyone
+  #      logs in (a per-user/Session-0 keepalive left the host offline until login).
+  #   2. Remote desktop actually works. A Session-0 task CANNOT capture the screen
+  #      (GDI BitBlt fails with "must run in an interactive session"); the service
+  #      spawns a desktop worker into the active console session and follows the
+  #      secure desktop, so capture works even on the lock/login screen.
+  # A SYSTEM service has the same privileges the keepalive task had, so Hyper-V
+  # Get-VM collection still works.
   Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
-  $trTask = 'wscript.exe \"' + $vbs + '\"'
-  # Continue-guard: schtasks writing to stderr can raise a NativeCommandError under
-  # $ErrorActionPreference=Stop (PS 5.1) and abort the install even on success.
+  cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
-  schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
+  & $AgentExe --install-service --config $conf 2>&1 | ForEach-Object { Write-Host "[AIOps] $_" }
+  Start-Sleep -Milliseconds 1500
+  $svc = Get-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
+  if ($svc -and $svc.Status -eq 'Running') {
+    Write-Host "[AIOps] installed as Windows service (LocalSystem, boot autostart + crash-restart + desktop worker)."
+  } else {
+    # SCM may be locked down by policy on some hardened builds; keep the host
+    # online via the proven SYSTEM keepalive task so metrics never regress.
+    Write-Host "[AIOps] service registration unavailable; falling back to SYSTEM keepalive task."
+    $trTask = 'wscript.exe \"' + $vbs + '\"'
+    schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
+    schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
+  }
   $ErrorActionPreference = $eap
-  Write-Host "[AIOps] installed as SYSTEM (elevated), 5-min keepalive. Hyper-V collection enabled."
 } else {
   # Non-elevated: classic per-user autostart (unchanged). Works without admin but
   # CANNOT collect Hyper-V guests -- Get-VM needs elevation.
@@ -872,8 +892,8 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 $ProgramDataDir = Join-Path $env:ProgramData "aiops-agent"
 if (-not $IsAdmin -and (Test-Path $ProgramDataDir)) {
     Write-Host "[AIOps] WARNING: an elevated (SYSTEM) install exists at $ProgramDataDir."
-    Write-Host "[AIOps] Its SYSTEM scheduled task CANNOT be removed without admin and will relaunch"
-    Write-Host "[AIOps] the agent within 5 minutes. Re-run this uninstall in an ELEVATED PowerShell"
+    Write-Host "[AIOps] Its Windows service / SYSTEM scheduled task CANNOT be removed without admin"
+    Write-Host "[AIOps] and will keep the agent running. Re-run this uninstall in an ELEVATED PowerShell"
     Write-Host "[AIOps] (Run as Administrator) to fully remove it."
 }
 
@@ -886,6 +906,13 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 # Delete both the current name and the legacy hyphenated one.
 cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
 cmd /c 'schtasks /Delete /TN "AIOps-Agent" /F 2>nul'
+
+# Step 2b: Stop + remove the Windows service (elevated installs since v6.35).
+# Stop FIRST (clean stop won't trigger crash-recovery), then delete. Deleting
+# needs admin; without it the service keeps the exe locked and restarts the host.
+cmd /c 'sc stop AiopsMonitorAgent 2>nul'
+Start-Sleep -Milliseconds 1200
+cmd /c 'sc delete AiopsMonitorAgent 2>nul'
 
 # Step 3: Kill ALL related processes — agent + VBS launcher
 # v5.2.9: Use taskkill + Get-Process instead of Get-CimInstance.
