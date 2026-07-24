@@ -27,6 +27,7 @@ var (
 	procCloseServiceHandle            = modAdvapi32Ctl.NewProc("CloseServiceHandle")
 	procStartServiceW                 = modAdvapi32Ctl.NewProc("StartServiceW")
 	procControlServiceCtl             = modAdvapi32Ctl.NewProc("ControlService")
+	procChangeServiceConfigW          = modAdvapi32Ctl.NewProc("ChangeServiceConfigW")
 	procChangeServiceConfig2W         = modAdvapi32Ctl.NewProc("ChangeServiceConfig2W")
 	procStartServiceCtrlDispatcherW   = modAdvapi32Ctl.NewProc("StartServiceCtrlDispatcherW")
 	procRegisterServiceCtrlHandlerExW = modAdvapi32Ctl.NewProc("RegisterServiceCtrlHandlerExW")
@@ -54,7 +55,10 @@ const (
 	serviceAcceptShutdown      = 0x00000004
 	serviceAcceptSessionChange = 0x00000080
 
-	serviceConfigDescription = 1
+	serviceConfigDescription    = 1
+	serviceConfigFailureActions = 2
+	serviceNoChange             = 0xFFFFFFFF
+	scActionRestart             = 1
 )
 
 type serviceStatus struct {
@@ -74,6 +78,19 @@ type serviceTableEntry struct {
 
 type serviceDescription struct {
 	LpDescription *uint16
+}
+
+type scAction struct {
+	Type  uint32
+	Delay uint32 // milliseconds
+}
+
+type serviceFailureActions struct {
+	ResetPeriod  uint32 // seconds; counter resets after this idle window
+	RebootMsg    *uint16
+	Command      *uint16
+	ActionsCount uint32
+	Actions      *scAction
 }
 
 // ---- install / uninstall ------------------------------------------------
@@ -107,7 +124,7 @@ func installAgentService(exePath, cfgPath string) error {
 		0,
 	)
 	if svc == 0 {
-		// ERROR_SERVICE_EXISTS = 1073 → reopen and update binPath.
+		// ERROR_SERVICE_EXISTS = 1073 → reopen and update binPath (upgrade path).
 		svc = reopenAndUpdate(scm, namePtr, binPtr)
 		if svc == 0 {
 			return fmt.Errorf("CreateService 失败: %v", e)
@@ -121,6 +138,11 @@ func installAgentService(exePath, cfgPath string) error {
 		_, _, _ = procChangeServiceConfig2W.Call(svc, uintptr(serviceConfigDescription), uintptr(unsafe.Pointer(&sd)))
 	}
 
+	// Crash recovery: auto-restart the service after 5s/5s/10s and reset the
+	// failure counter after a day. Without this a crash leaves the host offline
+	// until the next reboot — the exact "重启/崩溃后掉线" symptom.
+	setServiceRecovery(svc)
+
 	// Start it now.
 	if r, _, e3 := procStartServiceW.Call(svc, 0, 0); r == 0 {
 		// ERROR_SERVICE_ALREADY_RUNNING = 1056 is fine.
@@ -131,9 +153,38 @@ func installAgentService(exePath, cfgPath string) error {
 	return nil
 }
 
+// reopenAndUpdate reopens an existing service and rewrites its binary path so an
+// in-place upgrade (new exe location / config) takes effect without delete+create
+// (which races with ERROR_SERVICE_MARKED_FOR_DELETE).
 func reopenAndUpdate(scm uintptr, namePtr, binPtr *uint16) uintptr {
 	svc, _, _ := procOpenServiceW.Call(scm, uintptr(unsafe.Pointer(namePtr)), uintptr(serviceAllAccess))
+	if svc == 0 {
+		return 0
+	}
+	_, _, _ = procChangeServiceConfigW.Call(
+		svc,
+		uintptr(serviceWin32OwnProcess),
+		uintptr(serviceAutoStart),
+		uintptr(serviceErrorNormal),
+		uintptr(unsafe.Pointer(binPtr)),
+		0, 0, 0, 0, 0, 0,
+	)
 	return svc
+}
+
+// setServiceRecovery configures SCM to restart the service on failure.
+func setServiceRecovery(svc uintptr) {
+	actions := [3]scAction{
+		{Type: scActionRestart, Delay: 5000},
+		{Type: scActionRestart, Delay: 5000},
+		{Type: scActionRestart, Delay: 10000},
+	}
+	fa := serviceFailureActions{
+		ResetPeriod:  86400,
+		ActionsCount: uint32(len(actions)),
+		Actions:      &actions[0],
+	}
+	_, _, _ = procChangeServiceConfig2W.Call(svc, uintptr(serviceConfigFailureActions), uintptr(unsafe.Pointer(&fa)))
 }
 
 func uninstallAgentService() error {

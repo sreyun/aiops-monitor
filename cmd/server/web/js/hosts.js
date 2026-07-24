@@ -239,11 +239,12 @@ function hostTreeNodeHTML(n, depth, q) {
   const sel = HOST_TREE_MODE === "folder" && CUR_FOLDER === n.id;
   const hasKids = (n.children || []).length > 0;
   const collapsed = !q && HOST_TREE_COLLAPSED.has(n.id);
-  const canAdd = depth < 4;
-  const pad = 8 + (depth - 1) * 16;
+  const canAdd = true; // nesting is unlimited (bounded only by a high safety cap)
+  const pad = 6 + (depth - 1) * 14;
   let kids = "";
   if (hasKids && !collapsed) {
-    kids = `<div class="htx-children">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1, q)).join("")}</div>`;
+    // --gx positions the vertical guide line under this node's caret centre.
+    kids = `<div class="htx-children" style="--gx:${pad + 6}px">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1, q)).join("")}</div>`;
   }
   return `<div class="htx-folder" data-depth="${depth}">
     <div class="htx-node${sel ? " selected" : ""}${hasKids ? " has-kids" : ""}" data-folder-sel="${esc(n.id)}" data-ctx-folder="${esc(n.id)}" role="button" tabindex="0" style="padding-left:${pad}px">

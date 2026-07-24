@@ -1,36 +1,32 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
 
 func TestValidateFolderTreeDepth(t *testing.T) {
-	ok := []HostFolderNode{{
-		ID: "a", Name: "L1", Children: []HostFolderNode{{
-			ID: "b", Name: "L2", Children: []HostFolderNode{{
-				ID: "c", Name: "L3", Children: []HostFolderNode{{
-					ID: "d", Name: "L4",
-				}},
-			}},
-		}},
-	}}
-	if err := validateFolderTree(ok); err != nil {
-		t.Fatalf("depth 4 should be ok: %v", err)
+	// chain builds a single linear branch n levels deep.
+	chain := func(n int) []HostFolderNode {
+		var build func(level int) []HostFolderNode
+		build = func(level int) []HostFolderNode {
+			if level > n {
+				return nil
+			}
+			return []HostFolderNode{{
+				ID:       fmt.Sprintf("n%d", level),
+				Name:     fmt.Sprintf("L%d", level),
+				Children: build(level + 1),
+			}}
+		}
+		return build(1)
 	}
-	bad := []HostFolderNode{{
-		ID: "a", Name: "L1", Children: []HostFolderNode{{
-			ID: "b", Name: "L2", Children: []HostFolderNode{{
-				ID: "c", Name: "L3", Children: []HostFolderNode{{
-					ID: "d", Name: "L4", Children: []HostFolderNode{{
-						ID: "e", Name: "L5",
-					}},
-				}},
-			}},
-		}},
-	}}
-	if err := validateFolderTree(bad); err == nil {
-		t.Fatal("depth 5 should fail")
+	if err := validateFolderTree(chain(MaxHostFolderDepth)); err != nil {
+		t.Fatalf("depth %d should be ok: %v", MaxHostFolderDepth, err)
+	}
+	if err := validateFolderTree(chain(MaxHostFolderDepth + 1)); err == nil {
+		t.Fatalf("depth %d should fail", MaxHostFolderDepth+1)
 	}
 }
 

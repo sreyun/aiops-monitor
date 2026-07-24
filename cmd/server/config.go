@@ -472,7 +472,8 @@ type ServerConfig struct {
 	// 命中即打标签 + 告警，用于"敏感数据外泄到大模型"的 DLP。
 	ContentAuditSensitiveKeywords []string          `json:"content_audit_sensitive_keywords,omitempty"`
 	Categories                    map[string]string `json:"categories"`
-	// HostFolders is the operator-managed host organization tree (max depth 4).
+	// HostFolders is the operator-managed host organization tree (nesting bounded
+	// only by the MaxHostFolderDepth safety cap).
 	// nil means "never migrated"; empty slice means an intentional empty tree.
 	HostFolders []HostFolderNode `json:"host_folders"`
 	// HostFolderAssign maps host id -> folder id (missing = ungrouped).
