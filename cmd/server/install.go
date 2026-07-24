@@ -524,6 +524,20 @@ echo "[AIOps] done. Check the dashboard for this host."
 // config.yaml is UTF-8 (no BOM); the agent is launched via a hidden VBS
 // supervisor that only starts it when not already running (no duplicates).
 const installPs1Template = `$ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 inherits the legacy console code page (commonly GBK
+# 936). The Go Agent writes UTF-8; when its stderr is captured by PowerShell the
+# bytes were decoded as GBK and every Chinese installation log became mojibake.
+# Align the console, native-command decoder, and pipeline encoder before invoking
+# curl.exe or aiops-agent.exe. All assignments are best-effort for headless hosts.
+try {
+  $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [Console]::InputEncoding = $Utf8NoBom
+  [Console]::OutputEncoding = $Utf8NoBom
+  $global:OutputEncoding = $Utf8NoBom
+  if (Get-Command chcp.com -ErrorAction SilentlyContinue) {
+    & chcp.com 65001 | Out-Null
+  }
+} catch {}
 # Force TLS 1.2 before any download. Windows Server 2012/2016 default Invoke-WebRequest
 # to TLS 1.0, which fails against a TLS1.2-only HTTPS server ("Could not create SSL/TLS
 # secure channel") — a very common Windows install failure. Numeric 3072 = Tls12 avoids
@@ -708,7 +722,14 @@ if ($IsAdmin) {
   Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
   cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  & $AgentExe --install-service --config $conf 2>&1 | ForEach-Object { Write-Host "[AIOps] $_" }
+  # Do not pipe native stderr through ForEach-Object: Windows PowerShell 5.1
+  # decodes redirected native output using its legacy code page before the
+  # pipeline sees it. Let the UTF-8 Agent write directly to the UTF-8 console.
+  & $AgentExe --install-service --config $conf
+  $AgentInstallExit = $LASTEXITCODE
+  if ($AgentInstallExit -ne 0) {
+    Write-Warning "[AIOps] Agent service installer exited with code $AgentInstallExit"
+  }
   # Poll for the service: CreateService+Start can take >1.5s on a busy 2012 host.
   # IMPORTANT: if the service EXISTS we must NOT fall back to a SYSTEM schtasks
   # keepalive — that Session-0 agent fights the service worker for deskWait and
