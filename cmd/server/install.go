@@ -582,12 +582,44 @@ if ($IsAdmin) { $Dir = Join-Path $env:ProgramData "aiops-agent" } else { $Dir = 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
 
+# Never call cmd.exe — locked-down hosts often block it via GPO ("This program is
+# blocked by group policy") while still allowing PowerShell + schtasks.exe/sc.exe.
+# With $ErrorActionPreference=Stop that used to abort the whole install on line 1.
+function Remove-AiopsScheduledTask([string]$Name) {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try {
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+      $t = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+      if ($t) { Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue }
+    }
+  } catch {}
+  try { & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $Name /F 1>$null 2>$null | Out-Null } catch {}
+  $ErrorActionPreference = $prev
+}
+function Stop-AiopsServiceQuiet {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try {
+    $svc = Get-Service -Name 'AiopsMonitorAgent' -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+      Stop-Service -Name 'AiopsMonitorAgent' -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
+  try { & "$env:SystemRoot\System32\sc.exe" stop AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
+  $ErrorActionPreference = $prev
+}
+function Remove-AiopsServiceQuiet {
+  Stop-AiopsServiceQuiet
+  Start-Sleep -Milliseconds 800
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & "$env:SystemRoot\System32\sc.exe" delete AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
+  $ErrorActionPreference = $prev
+}
+
 # Prefer curl.exe (bundled on Win10+): supports resume (-C -) + retry so a flaky
 # link doesn't restart the whole 7.5MB. Fall back to Invoke-WebRequest on older OS.
-# Stop leftovers quietly (sc writes "OpenService FAILED 1060" to stdout when the
-# service was never installed — hide both streams so a clean install looks clean).
-cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F >nul 2>&1'
-cmd /c 'sc stop AiopsMonitorAgent >nul 2>&1'
+# Stop leftovers quietly (no service → ignore; never use cmd.exe).
+Remove-AiopsScheduledTask 'AIOpsAgent'
+Stop-AiopsServiceQuiet
 Start-Sleep -Milliseconds 1500
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
@@ -875,7 +907,7 @@ if ($IsAdmin) {
   # A SYSTEM service has the same privileges the keepalive task had, so Hyper-V
   # Get-VM collection still works.
   Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
-  cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
+  Remove-AiopsScheduledTask 'AIOpsAgent'
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   # Do not pipe native stderr through ForEach-Object: Windows PowerShell 5.1
   # decodes redirected native output using its legacy code page before the
@@ -928,8 +960,9 @@ if ($IsAdmin) {
     Write-Host "[AIOps] service registration unavailable; falling back to SYSTEM keepalive task."
     Write-Host "[AIOps] WARNING: Session-0 keepalive cannot drive interactive remote desktop (lock screen / console capture). Prefer fixing service install." -ForegroundColor Yellow
     $trTask = 'wscript.exe \"' + $vbs + '\"'
-    schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
-    schtasks /Run /TN "AIOpsAgent" 2>$null | Out-Null
+    $ErrorActionPreference = 'Continue'
+    & "$env:SystemRoot\System32\schtasks.exe" /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F 1>$null 2>$null | Out-Null
+    & "$env:SystemRoot\System32\schtasks.exe" /Run /TN "AIOpsAgent" 1>$null 2>$null | Out-Null
   }
   $ErrorActionPreference = $eap
 } else {
@@ -938,7 +971,7 @@ if ($IsAdmin) {
   New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
   $trTask = 'wscript.exe \"' + $vbs + '\"'
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  schtasks /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 2>$null | Out-Null
+  & "$env:SystemRoot\System32\schtasks.exe" /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 1>$null 2>$null | Out-Null
   $ErrorActionPreference = $eap
   Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
   Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
@@ -1130,15 +1163,34 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 # Step 2: Remove the keepalive scheduled task FIRST — otherwise it relaunches the
 # agent within 5 minutes and the file deletion below fails ("can't uninstall").
 # Delete both the current name and the legacy hyphenated one.
-cmd /c 'schtasks /Delete /TN "AIOpsAgent" /F 2>nul'
-cmd /c 'schtasks /Delete /TN "AIOps-Agent" /F 2>nul'
+# Never use cmd.exe (GPO often blocks it); prefer ScheduledTasks cmdlets + schtasks.exe.
+function Remove-AiopsScheduledTask([string]$Name) {
+  try {
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+      $t = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+      if ($t) { Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue }
+    }
+  } catch {}
+  try { & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $Name /F 1>$null 2>$null | Out-Null } catch {}
+}
+function Stop-AiopsServiceQuiet {
+  try {
+    $svc = Get-Service -Name 'AiopsMonitorAgent' -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+      Stop-Service -Name 'AiopsMonitorAgent' -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
+  try { & "$env:SystemRoot\System32\sc.exe" stop AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
+}
+Remove-AiopsScheduledTask 'AIOpsAgent'
+Remove-AiopsScheduledTask 'AIOps-Agent'
 
 # Step 2b: Stop + remove the Windows service (elevated installs since v6.35).
 # Stop FIRST (clean stop won't trigger crash-recovery), then delete. Deleting
 # needs admin; without it the service keeps the exe locked and restarts the host.
-cmd /c 'sc stop AiopsMonitorAgent 2>nul'
+Stop-AiopsServiceQuiet
 Start-Sleep -Milliseconds 1200
-cmd /c 'sc delete AiopsMonitorAgent 2>nul'
+try { & "$env:SystemRoot\System32\sc.exe" delete AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
 
 # Step 3: Kill ALL related processes — agent + VBS launcher
 # v5.2.9: Use taskkill + Get-Process instead of Get-CimInstance.

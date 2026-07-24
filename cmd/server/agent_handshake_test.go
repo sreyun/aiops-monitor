@@ -174,8 +174,13 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	// Windows: supervisor VBS (no duplicates) + logon autostart + 5-min keepalive task.
 	must("install.ps1", ps1In,
 		"start-agent.vbs", "Win32_Process",
-		`schtasks /Create /TN "AIOpsAgent"`, "/SC MINUTE /MO 5",
-		`CurrentVersion\Run`)
+		`schtasks.exe`, "/SC MINUTE /MO 5",
+		`CurrentVersion\Run`,
+		"Remove-AiopsScheduledTask", "Stop-AiopsServiceQuiet")
+	// Locked-down GPO hosts often block cmd.exe; installers must never call it.
+	if strings.Contains(ps1In, "cmd /c") || strings.Contains(ps1Un, "cmd /c") {
+		t.Error("install/uninstall.ps1 must not invoke cmd.exe (GPO blocks it on hardened hosts)")
+	}
 	// PowerShell 5.1 defaults to a legacy console code page. The installer must
 	// switch both console and native pipeline encodings to UTF-8, and must not
 	// pipe Agent stderr through ForEach-Object (which caused Chinese mojibake).
@@ -214,7 +219,7 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")
 	must("uninstall.ps1", ps1Un,
-		`schtasks /Delete /TN "AIOpsAgent"`, "AIOpsAgent", "AIOpsRelay")
+		"Remove-AiopsScheduledTask", "AIOpsAgent", "AIOpsRelay", "sc.exe")
 
 	if dir := os.Getenv("AIOPS_RENDER_DIR"); dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
