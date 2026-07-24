@@ -32,6 +32,24 @@ func TestResolveWeatherCityPrefersChinese(t *testing.T) {
 	}
 }
 
+func TestResolveWeatherPlaceCityDistrict(t *testing.T) {
+	// 区县定位：c3=区，c7=市
+	city, district, loc := resolveWeatherPlace("fengxian", "奉贤区", "shanghai", "上海", "shanghai", "上海市")
+	if city != "上海" || district != "奉贤" || loc != "上海 · 奉贤" {
+		t.Errorf("district geo: city=%q district=%q loc=%q", city, district, loc)
+	}
+	// 直辖市区：仅有省 + 区
+	city, district, loc = resolveWeatherPlace("pudong", "浦东新区", "shanghai", "上海", "", "")
+	if city != "上海" || district != "浦东新区" || loc != "上海 · 浦东新区" {
+		t.Errorf("municipality district: city=%q district=%q loc=%q", city, district, loc)
+	}
+	// 纯地级市
+	city, district, loc = resolveWeatherPlace("hangzhou", "杭州市", "zhejiang", "浙江", "", "")
+	if city != "杭州" || district != "" || loc != "杭州" {
+		t.Errorf("city only: city=%q district=%q loc=%q", city, district, loc)
+	}
+}
+
 func TestNormalizeChineseCity(t *testing.T) {
 	if got := normalizeChineseCity("杭州市"); got != "杭州" {
 		t.Errorf("strip 市: got %q", got)

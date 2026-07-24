@@ -41,12 +41,14 @@ const weatherUpstream = "https://weather01.market.alicloudapi.com/ip-to-weather"
 const weatherCacheTTL = 20 * time.Minute
 
 type weatherResult struct {
-	OK        bool   `json:"ok"`
-	Location  string `json:"location"`
-	TempC     int    `json:"temp_c"`
-	Text      string `json:"text"`
-	Humidity  string `json:"humidity,omitempty"`
-	AQI       string `json:"aqi,omitempty"`
+	OK           bool   `json:"ok"`
+	Location     string `json:"location"`               // 展示用：优先「市 · 区县」，与上游 IP 定位粒度一致
+	City         string `json:"city,omitempty"`          // 地级市 / 直辖市
+	District     string `json:"district,omitempty"`      // 区 / 县（IP 落到区县时有值）
+	TempC        int    `json:"temp_c"`
+	Text         string `json:"text"`
+	Humidity     string `json:"humidity,omitempty"`
+	AQI          string `json:"aqi,omitempty"`
 	TodayHigh    int    `json:"today_high,omitempty"`
 	TodayLow     int    `json:"today_low,omitempty"`
 	TomorrowHigh int    `json:"tomorrow_high,omitempty"`
@@ -221,16 +223,21 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 		return weatherResult{}, fmt.Errorf("weather upstream HTTP %d", resp.StatusCode)
 	}
 
-	// 中文城市名在部分上游响应里是乱码，但偶发已是合法 UTF-8；优先取含汉字的字段，
-	// 否则用干净的 c2 拼音走 cityCN 映射表。
+	// ShowAPI cityInfo：
+	//   c2/c3 = 本次定位点（常为区县）拼音/中文
+	//   c4/c5 = 省拼音/中文
+	//   c6/c7 = 所属地级市拼音/中文（区县定位时有值）
+	// 中文偶发乱码；有合法汉字则用，否则走拼音映射表。
 	var up struct {
 		Code int `json:"showapi_res_code"`
 		Body struct {
 			CityInfo struct {
-				C2 string `json:"c2"` // 城市拼音（干净）
-				C3 string `json:"c3"` // 城市中文（可能乱码或合法 UTF-8）
-				C5 string `json:"c5"` // 省份中文（备用）
-				C7 string `json:"c7"` // 部分产品线的别名字段
+				C2 string `json:"c2"`
+				C3 string `json:"c3"`
+				C4 string `json:"c4"`
+				C5 string `json:"c5"`
+				C6 string `json:"c6"`
+				C7 string `json:"c7"`
 			} `json:"cityInfo"`
 			Now struct {
 				Temperature string `json:"temperature"`
@@ -256,13 +263,16 @@ func fetchWeather(appCode, ip string) (weatherResult, error) {
 		return weatherResult{}, fmt.Errorf("weather upstream code %d", up.Code)
 	}
 
+	city, district, location := resolveWeatherPlace(up.Body.CityInfo.C2, up.Body.CityInfo.C3, up.Body.CityInfo.C4, up.Body.CityInfo.C5, up.Body.CityInfo.C6, up.Body.CityInfo.C7)
 	res := weatherResult{
 		OK:           true,
 		TempC:        weatherAtoi(up.Body.Now.Temperature),
 		Text:         weatherCodeText(up.Body.Now.WeatherCode),
 		Humidity:     up.Body.Now.SD,
 		AQI:          up.Body.Now.AQI,
-		Location:     resolveWeatherCity(up.Body.CityInfo.C2, up.Body.CityInfo.C3, up.Body.CityInfo.C5, up.Body.CityInfo.C7),
+		Location:     location,
+		City:         city,
+		District:     district,
 		TodayHigh:    weatherAtoi(up.Body.F1.DayTemp),
 		TodayLow:     weatherAtoi(up.Body.F1.NightTemp),
 		TomorrowHigh: weatherAtoi(up.Body.F2.DayTemp),
@@ -344,15 +354,61 @@ func weatherCodeText(code string) string {
 	}
 }
 
-// resolveWeatherCity prefers a clean Chinese name from upstream when present,
-// otherwise maps the pinyin city code through cityCN.
-func resolveWeatherCity(pinyin string, chineseCandidates ...string) string {
-	for _, c := range chineseCandidates {
-		if loc := normalizeChineseCity(c); loc != "" {
-			return loc
-		}
+// resolveWeatherPlace builds city / district / display location from ShowAPI
+// cityInfo, matching upstream IP granularity (市 + 区县 when both exist).
+//
+//	c2/c3 — point of IP geo (city or district)
+//	c4/c5 — province
+//	c6/c7 — parent prefecture city when c2/c3 is a district
+func resolveWeatherPlace(c2, c3, c4, c5, c6, c7 string) (city, district, location string) {
+	point := pickChineseOrPinyin(c3, c2)
+	parent := pickChineseOrPinyin(c7, c6)
+	province := pickChineseOrPinyin(c5, c4)
+
+	point = normalizeChinesePlace(point, true)
+	parent = normalizeChinesePlace(parent, false)
+	province = normalizeChinesePlace(province, false)
+
+	switch {
+	case parent != "" && point != "" && parent != point:
+		// 区县定位：市 · 区县
+		city, district = parent, point
+		location = city + " · " + district
+	case point != "" && province != "" && province != point && isMunicipality(province):
+		// 直辖市下的区：上海 · 奉贤
+		city, district = province, point
+		location = city + " · " + district
+	case point != "" && parent == "" && province != "" && province != point && !isMunicipality(province):
+		// 仅有省 + 市（无区）：仍显示市级点
+		city = point
+		location = city
+	case point != "":
+		city = point
+		location = city
+	case parent != "":
+		city = parent
+		location = city
+	case province != "":
+		city = province
+		location = city
+	}
+	return city, district, location
+}
+
+func pickChineseOrPinyin(chinese, pinyin string) string {
+	if loc := normalizeChinesePlace(chinese, true); loc != "" {
+		return loc
 	}
 	return cityCN(pinyin)
+}
+
+func isMunicipality(name string) bool {
+	switch name {
+	case "北京", "上海", "天津", "重庆":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsHan(s string) bool {
@@ -364,14 +420,13 @@ func containsHan(s string) bool {
 	return false
 }
 
-// normalizeChineseCity keeps strings that already contain Han characters and
-// strips common administrative suffixes for compact UI display.
-func normalizeChineseCity(s string) string {
+// normalizeChinesePlace keeps Han strings; keepDistrictSuffix controls whether
+// 「区/县/旗」are preserved (区县展示) or stripped (市级名「杭州市」→「杭州」).
+func normalizeChinesePlace(s string, keepDistrictSuffix bool) string {
 	s = strings.TrimSpace(s)
 	if s == "" || !containsHan(s) {
 		return ""
 	}
-	// Reject obvious mojibake that mixes Han with many Latin/control junk.
 	latin := 0
 	for _, r := range s {
 		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
@@ -381,13 +436,45 @@ func normalizeChineseCity(s string) string {
 	if latin > 2 {
 		return ""
 	}
-	for _, suf := range []string{"市", "地区", "盟", "州", "县", "区"} {
-		if strings.HasSuffix(s, suf) && len([]rune(s)) > len([]rune(suf))+1 {
-			s = strings.TrimSuffix(s, suf)
-			break
+	runes := []rune(s)
+	if keepDistrictSuffix {
+		// 保留「浦东新区」；「奉贤区」「余杭区」去掉「区」更利展示
+		if strings.HasSuffix(s, "新区") || strings.HasSuffix(s, "矿区") || strings.HasSuffix(s, "自治区") {
+			return s
+		}
+		for _, suf := range []string{"市", "地区", "盟"} {
+			if strings.HasSuffix(s, suf) && len(runes) > len([]rune(suf))+1 {
+				return strings.TrimSuffix(s, suf)
+			}
+		}
+		for _, suf := range []string{"区", "县", "旗"} {
+			if strings.HasSuffix(s, suf) && len(runes) <= 4 && len(runes) > len([]rune(suf))+1 {
+				return strings.TrimSuffix(s, suf)
+			}
+		}
+		return s
+	}
+	for _, suf := range []string{"市", "地区", "盟", "壮族自治区", "回族自治区", "维吾尔自治区", "自治区"} {
+		if strings.HasSuffix(s, suf) && len(runes) > len([]rune(suf))+1 {
+			return strings.TrimSuffix(s, suf)
 		}
 	}
 	return s
+}
+
+// resolveWeatherCity is kept for older call sites / tests — single-label fallback.
+func resolveWeatherCity(pinyin string, chineseCandidates ...string) string {
+	for _, c := range chineseCandidates {
+		if loc := normalizeChinesePlace(c, true); loc != "" {
+			return loc
+		}
+	}
+	return cityCN(pinyin)
+}
+
+// normalizeChineseCity wraps normalizeChinesePlace for city-level stripping.
+func normalizeChineseCity(s string) string {
+	return normalizeChinesePlace(s, false)
 }
 
 // cityCN maps city pinyin (ShowAPI c2) to Chinese. Falls back to Title-cased
