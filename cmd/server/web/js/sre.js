@@ -470,7 +470,7 @@ async function pollExecution(execId, pbId) {
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2000));
     try {
-      const exec = await fetch(`${API}/playbooks/executions/${execId}`).then(r => r.json());
+      const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}`).then(r => r.json());
       renderExecResult(exec);
       if (exec.status !== "running") break;
     } catch (e) {}
@@ -515,7 +515,7 @@ async function loadExecHistory() {
     $("execHistBody").innerHTML = rows || `<div class="empty-line">${I18N.t("empty.no_executions")}</div>`;
     $("execHistBody").querySelectorAll("[data-exec-id]").forEach(el => {
       el.onclick = async () => {
-        const exec = await fetch(`${API}/playbooks/executions/${el.dataset.execId}`).then(r => r.json());
+        const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(el.dataset.execId)}`).then(r => r.json());
         renderExecResult(exec);
         $("execHistMask").classList.remove("show");
         $("execResultMask").classList.add("show");

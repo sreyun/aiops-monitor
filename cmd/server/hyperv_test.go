@@ -25,6 +25,16 @@ func TestHyperVEndpointAuth(t *testing.T) {
 	}
 }
 
+// TestInstallRelayPublicPath locks in unauthenticated curl|sh install for relay gateways
+// (same posture as /install.sh); without this, authMiddleware 401s the bootstrap scripts.
+func TestInstallRelayPublicPath(t *testing.T) {
+	for _, p := range []string{"/install.sh", "/install.ps1", "/install-relay.sh", "/install-relay.ps1"} {
+		if !isPublicPath(httptest.NewRequest("GET", p, nil)) {
+			t.Errorf("%s must be public so unauthenticated curl|sh bootstrap works", p)
+		}
+	}
+}
+
 func TestHypervKey(t *testing.T) {
 	if got := hypervKey(shared.HyperVGuest{ID: "guid-1", Name: "web"}); got != "guid-1" {
 		t.Errorf("with ID: got %q, want guid-1", got)

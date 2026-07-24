@@ -1457,7 +1457,9 @@ async function aiTicketDash() {
   await withLoading("dashTicketBtn", async () => {
     const digest = await buildDashDigestClient();
     try {
-      const j = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ digest }) }).then(r => r.json());
+      const r = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ digest }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast("工单草案生成失败：" + (j.error || r.status), "err"); return; }
       if (j.ok && j.needed && j.preview && j.draft) {
         DASH_TICKET_DRAFT = { dashId: CUR_DASH.id, digest };
         $("dashTicketTitle").value = j.draft.title || "";
@@ -1556,6 +1558,7 @@ safeAddEventListener("dashExportRun", "click", async () => {
   });
 });
 let DASH_AI_CREATE_SEQ = 0;
+let DASH_AI_LAST_JOB_ID = "";
 const DASH_AI_PRESETS = {
   host: "构建主机黄金信号看板：顶部展示在线数、CPU、内存、磁盘总体水位；中部展示 CPU/负载、内存/交换、磁盘 IO、网络吞吐趋势；底部展示高水位主机排行、磁盘卷明细和当前告警。支持 instance 下钻。",
   service: "构建服务 SLI/SLO 看板：覆盖流量、错误率、P50/P95/P99 延迟、可用性、饱和度、SLO 燃烧率和当前告警；顶部 KPI 概览，中部趋势，底部服务/实例排行与明细。",
@@ -1564,11 +1567,14 @@ const DASH_AI_PRESETS = {
   capacity: "构建容量与成本看板：覆盖 CPU/内存/存储利用率、增长趋势、剩余天数预测、闲置与高水位资源、Top 消耗对象、容量风险和优化机会。"
 };
 safeAddEventListener("dashAIBtn", "click", () => {
-  DASH_AI_CREATE_SEQ++;
+  // 不递增 SEQ：避免仅打开弹窗就取消后台轮询
   $("dashAIPrompt").value = ""; $("dashAIName").value = "";
-  $("dashAIProgress").style.display = "none";
-  $("dashAICreate").disabled = false;
-  $("dashAICreate").textContent = "生成";
+  const btn = $("dashAICreate");
+  const resuming = DASH_AI_LAST_JOB_ID && btn && (btn.textContent === "查询状态" || btn.textContent === "生成中…");
+  if (!resuming) {
+    $("dashAIProgress").style.display = "none";
+    if (btn) { btn.disabled = false; btn.textContent = "生成"; }
+  }
   openMask("dashAIMask");
 });
 safeAddEventListener("dashAIPresets", "click", e => {
@@ -1594,6 +1600,14 @@ async function pollDashboardAIJob(jobID, seq) {
     try {
       const r = await fetch(`${API}/dashboards/ai/jobs/${encodeURIComponent(jobID)}`);
       job = await r.json().catch(() => ({}));
+      if (r.status === 404 || r.status === 403) {
+        $("dashAICreate").disabled = false;
+        $("dashAICreate").textContent = "重试";
+        DASH_AI_LAST_JOB_ID = "";
+        setDashAIProgress(r.status === 403 ? "无权查看任务" : "任务已过期", 100, job.error || "请重新生成。");
+        toast((job.error || (r.status === 403 ? "无权查看该任务" : "AI 看板任务不存在或已过期")), "err");
+        return;
+      }
       if (!r.ok) throw new Error(job.error || ("HTTP " + r.status));
     } catch (e) {
       setDashAIProgress("正在等待生成服务…", 10, "网络暂时不可用，任务仍可能在后台继续。");
@@ -1604,6 +1618,7 @@ async function pollDashboardAIJob(jobID, seq) {
     if (job.status === "done") {
       $("dashAICreate").disabled = false;
       $("dashAICreate").textContent = "生成";
+      DASH_AI_LAST_JOB_ID = "";
       closeMask($("dashAIMask"));
       toast(`AI 看板「${job.name}」已生成：${job.panels} 个组件`, "ok");
       if (job.dashboard_id) await openDashboard(job.dashboard_id);
@@ -1612,6 +1627,7 @@ async function pollDashboardAIJob(jobID, seq) {
     if (job.status === "failed") {
       $("dashAICreate").disabled = false;
       $("dashAICreate").textContent = "重试";
+      DASH_AI_LAST_JOB_ID = "";
       setDashAIProgress("生成失败", 100, job.error || "请调整需求或检查 AI 配置后重试。");
       toast("AI 看板生成失败：" + (job.error || ""), "err");
       return;
@@ -1620,7 +1636,7 @@ async function pollDashboardAIJob(jobID, seq) {
   if (seq === DASH_AI_CREATE_SEQ) {
     $("dashAICreate").disabled = false;
     $("dashAICreate").textContent = "查询状态";
-    setDashAIProgress("任务仍在后台运行", 90, "生成耗时超出前端等待窗口，完成后消息中心仍会通知。");
+    setDashAIProgress("任务仍在后台运行", 90, "生成耗时超出前端等待窗口，完成后消息中心仍会通知。可点「查询状态」继续轮询。");
   }
 }
 // 优化提示词：就地调用 AI，完成后直接覆盖描述框，不再弹辅助窗、无需点「应用」。
@@ -1668,6 +1684,15 @@ safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
   });
 });
 safeAddEventListener("dashAICreate", "click", async () => {
+  // 「查询状态」：继续轮询已有任务，不重新提交
+  if ($("dashAICreate").textContent === "查询状态" && DASH_AI_LAST_JOB_ID) {
+    const seq = ++DASH_AI_CREATE_SEQ;
+    $("dashAICreate").disabled = true;
+    $("dashAICreate").textContent = "生成中…";
+    setDashAIProgress("继续查询生成状态", 50, "正在恢复轮询…");
+    pollDashboardAIJob(DASH_AI_LAST_JOB_ID, seq);
+    return;
+  }
   const prompt = $("dashAIPrompt").value.trim();
   if (!prompt) { toast("请描述你想要的看板", "err"); return; }
   const name = $("dashAIName").value.trim();
@@ -1679,6 +1704,7 @@ safeAddEventListener("dashAICreate", "click", async () => {
     const r = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok && j.queued && j.job_id) {
+      DASH_AI_LAST_JOB_ID = j.job_id;
       setDashAIProgress("已进入生成队列", 8, "可继续等待实时状态；关闭弹窗后任务仍会在后台完成。");
       pollDashboardAIJob(j.job_id, seq);
     } else {

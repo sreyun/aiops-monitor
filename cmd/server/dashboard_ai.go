@@ -617,7 +617,8 @@ func normalizeAISectionWidths(panels []DashPanel) {
 }
 
 // generateDashboardViaAI 是生成主流程：汇集可用指标上下文 → aiComplete → 抽 JSON → 校验落盘。
-func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source string) (Dashboard, []string, error) {
+// preferredName 非空时作为看板名称（避免先落盘再二次改名失败导致「假失败」）。
+func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName string) (Dashboard, []string, error) {
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		return Dashboard{}, nil, fmt.Errorf("AI 未配置或未启用，请先在「AI 设置」填写并保存")
@@ -641,7 +642,7 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source string) (Dashb
 	if !ok {
 		return Dashboard{}, nil, fmt.Errorf("AI 未返回可解析的看板 JSON")
 	}
-	d, warns := sanitizeAIDash(spec, "", source)
+	d, warns := sanitizeAIDash(spec, preferredName, source)
 	if len(d.Panels) == 0 {
 		return Dashboard{}, warns, fmt.Errorf("AI 未生成任何有效面板")
 	}
@@ -803,6 +804,7 @@ func fmtDigestVal(v float64, unit string) string {
 // 放到 goroutine，完成/失败后经消息中心（顶栏 🔔）推送弹窗反馈，避免前端长时间卡顿。
 type dashboardAIJob struct {
 	ID          string   `json:"id"`
+	Owner       string   `json:"-"` // 创建者用户名；GET 仅本人或 admin 可见
 	Status      string   `json:"status"` // queued|running|done|failed
 	Stage       string   `json:"stage"`
 	Progress    int      `json:"progress"`
@@ -820,6 +822,9 @@ var dashboardAIJobStore = struct {
 	jobs map[string]dashboardAIJob
 }{jobs: map[string]dashboardAIJob{}}
 
+// 限制并发 AI 看板生成，避免 operator 连点打爆 LLM 配额。
+var dashboardAIJobSem = make(chan struct{}, 3)
+
 func putDashboardAIJob(job dashboardAIJob) {
 	dashboardAIJobStore.Lock()
 	defer dashboardAIJobStore.Unlock()
@@ -830,6 +835,10 @@ func putDashboardAIJob(job dashboardAIJob) {
 	}
 	dashboardAIJobStore.jobs[job.ID] = job
 	for id, old := range dashboardAIJobStore.jobs {
+		// 进行中的任务不可因长时间 LLM 调用未心跳而被误删
+		if old.Status == "queued" || old.Status == "running" {
+			continue
+		}
 		if now-old.UpdatedAt > 3600 {
 			delete(dashboardAIJobStore.jobs, id)
 		}
@@ -849,12 +858,25 @@ func updateDashboardAIJob(id string, mutate func(*dashboardAIJob)) {
 }
 
 func (s *Server) handleGetDashboardAIJob(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少任务 ID"})
+		return
+	}
 	dashboardAIJobStore.Lock()
-	job, ok := dashboardAIJobStore.jobs[r.PathValue("id")]
+	job, ok := dashboardAIJobStore.jobs[id]
 	dashboardAIJobStore.Unlock()
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "AI 看板任务不存在或已过期"})
 		return
+	}
+	actor := s.actorName(r)
+	if job.Owner != "" && job.Owner != actor {
+		isAdmin := s.cfg != nil && s.cfg.RoleOf(actor) == RoleAdmin
+		if !isAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "无权查看该 AI 看板任务"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, job)
 }
@@ -882,43 +904,37 @@ func (s *Server) handleAICreateDashboard(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未配置或未启用，请先在「AI 设置」填写并保存"})
 		return
 	}
+	select {
+	case dashboardAIJobSem <- struct{}{}:
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "当前 AI 看板生成任务较多，请稍后再试"})
+		return
+	}
 	name := strings.TrimSpace(req.Name)
-	actor := s.clientIP(r)
+	actor := s.actorName(r)
 	jobID := genToken()[:16]
-	putDashboardAIJob(dashboardAIJob{ID: jobID, Status: "queued", Stage: "已进入生成队列", Progress: 5})
+	putDashboardAIJob(dashboardAIJob{ID: jobID, Owner: actor, Status: "queued", Stage: "已进入生成队列", Progress: 5})
 	go func() {
+		defer func() { <-dashboardAIJobSem }()
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("AI 看板生成任务异常", "job_id", jobID, "panic", rec)
 				updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
 					j.Status, j.Stage, j.Progress, j.Error = "failed", "生成任务异常终止", 100, "生成任务异常终止"
 				})
+				s.messages.push("ai", "warning", "AI 看板生成失败", "生成任务异常终止", "dashboards", "")
 			}
 		}()
 		updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
 			j.Status, j.Stage, j.Progress = "running", "正在发现指标并生成组件与 PromQL", 25
 		})
-		d, warns, err := s.generateDashboardViaAI(prompt, "", "ai")
+		d, warns, err := s.generateDashboardViaAI(prompt, "", "ai", name)
 		if err != nil {
 			updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
 				j.Status, j.Stage, j.Progress, j.Error = "failed", "生成失败", 100, err.Error()
 			})
 			s.messages.push("ai", "warning", "AI 看板生成失败", err.Error(), "dashboards", "")
 			return
-		}
-		updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
-			j.Stage, j.Progress = "正在校验布局、查询与组件配置", 80
-		})
-		if name != "" {
-			d.Name = name
-			saved, saveErr := s.cfg.UpsertDashboard(d)
-			if saveErr != nil {
-				updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
-					j.Status, j.Stage, j.Progress, j.Error = "failed", "保存失败", 100, saveErr.Error()
-				})
-				return
-			}
-			d = saved
 		}
 		updateDashboardAIJob(jobID, func(j *dashboardAIJob) {
 			j.Status, j.Stage, j.Progress = "done", "已完成，可继续人工编辑、AI 诊断或优化", 100
@@ -1125,21 +1141,20 @@ func (s *Server) handleAIDashboardFromIncident(w http.ResponseWriter, r *http.Re
 	if hostID != "" {
 		seed += "\n主机ID：" + hostID
 	}
-	d, warns, err := s.generateDashboardViaAI(need, seed, "ai-analysis:incident:"+itoa64(req.IncidentID))
+	preferredName := "🔎 事件分析：" + title
+	d, warns, err := s.generateDashboardViaAI(need, seed, "ai-analysis:incident:"+itoa64(req.IncidentID), preferredName)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	// 命名 + 事件时间线留痕
-	d.Name = "🔎 事件分析：" + title
-	d, _ = s.cfg.UpsertDashboard(d)
 	s.incidents.AddEvent(req.IncidentID, "note", "AI", "已生成分析看板「"+d.Name+"」用于排障")
 	s.store.MarkDirty()
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "AI 按事件生成分析看板：" + d.Name})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), Message: "AI 按事件生成分析看板：" + d.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": d.ID, "name": d.Name, "panels": len(d.Panels), "warnings": warns})
 }
 
-// handleDashboardDigest 返回看板实时数据摘要，供前端作为 /ai/assist 解读/优化的上下文。
+// handleDashboardDigest 返回看板结构 + 服务端侧数据摘要（变量 Current 为空时偏弱）。
+// Web UI 解读/优化走客户端 digest；本接口供 API 调用方与工单草案服务端回退使用。
 func (s *Server) handleDashboardDigest(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.cfg.DashboardByID(r.PathValue("id"))
 	if !ok {

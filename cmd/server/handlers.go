@@ -272,7 +272,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks/{id}/preflight", s.handlePlaybookPreflight)
 	mux.HandleFunc("POST /api/v1/playbooks/{id}/execute", s.handleExecutePlaybook)
 	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
-	mux.HandleFunc("GET /api/v1/playbooks/executions/{id}", s.handleGetExecution)
+	// 使用 executions/by-id（多一段字面量），避免与 {id}/preflight 在 ServeMux 下交叉冲突
+	mux.HandleFunc("GET /api/v1/playbooks/executions/by-id/{id}", s.handleGetExecution)
 	// SRE workflow: incidents / auto-remediation / SLOs / work orders
 	mux.HandleFunc("GET /api/v1/sre/overview", s.handleSREOverview)
 	mux.HandleFunc("GET /api/v1/incidents", s.handleListIncidents)
