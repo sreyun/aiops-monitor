@@ -1,0 +1,44 @@
+# ============================================================
+# AIOps Monitor · 开发环境 overlay
+# ------------------------------------------------------------
+# 与正式编排叠加使用（本地源码构建，依赖 Docker Hub 基础镜像）：
+#
+#   cp .env.example .env
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# 等价简写（可写入 .env）：
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+#   docker compose up -d --build
+#
+# 特点：
+#   - aiops-server / aiops-agent 用 docker/Dockerfile.dev 本地构建（跳过全平台交叉编译）
+#   - postgres / VictoriaMetrics 改用 Docker Hub（无需登录 SWR，Apple Silicon 友好）
+#   - 默认启用本机 Agent（覆盖正式环境的 agent profile）
+# ============================================================
+
+services:
+  aiops-server:
+    image: aiops-server:dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: server
+      args:
+        VERSION: ${AIOPS_DEV_VERSION:-dev}
+
+  victoriametrics:
+    image: ${VM_IMAGE:-victoriametrics/victoria-metrics:latest}
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg18}
+
+  aiops-agent:
+    # 清除正式编排的 agent profile，开发环境默认启用本机 Agent
+    profiles: !reset
+    image: aiops-agent:dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: agent
+      args:
+        VERSION: ${AIOPS_DEV_VERSION:-dev}

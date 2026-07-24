@@ -166,21 +166,40 @@ AIOps Monitor 的思路不同——**把监控、告警、自动化、AI 诊断�
 
 ## 快速开始
 
-### Docker Compose 一条命令（推荐）
+### Docker Compose（正式 / 开发）
+
+仓库提供两套编排：
+
+| 文件 | 场景 | 说明 |
+|---|---|---|
+| `docker-compose.yml` | **正式环境（默认）** | 拉取华为云 SWR 预构建镜像；Agent 可选（`--profile agent`） |
+| `docker-compose.dev.yml` | **开发环境 overlay** | 本地 `docker/Dockerfile.dev` 构建；PG/VM 改用 Docker Hub；默认启 Agent |
+
+**正式环境（推荐）**
 
 ```bash
-# 拉取编排文件并启动（PG + VictoriaMetrics + AIOps Server 三容器一键起全）
-curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
+# 一键：下载编排 + 生成强随机密钥到 .env，再启动
+bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh)
 docker compose up -d
+
+# 或手动：
+# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
+# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/.env.example
+# cp .env.example .env   # 务必修改 POSTGRES_PASSWORD / AIOPS_SECRET_KEY
+# docker compose up -d
+```
+
+**开发环境（源码目录）**
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 可选：在 .env 写入 COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml 后直接 docker compose up -d --build
 ```
 
 启动后浏览器打开 `http://localhost:8529`，默认凭据 `admin / admin`，**首次登录强制走安全初始化（必须修改用户名 + 密码）**，建议随后启用 MFA。
 
-> **生产建议**：使用安全编排脚本自动生成强随机密钥并写入 `docker-compose.yml`：
-> ```bash
-> bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh) && docker compose up -d
-> ```
-> 该脚本生成 20 位 PG 密码与 50 位 `AIOPS_SECRET_KEY`，并自动回填 `AIOPS_POSTGRES_DSN`，无需手动改配置。
+> `secure-compose.sh` 生成 20 位 PG 密码与 50 位 `AIOPS_SECRET_KEY` 写入 `.env`（勿提交 Git）。本机拉不到 SWR 时，在 `.env` 将 `POSTGRES_IMAGE` / `VM_IMAGE` 改为 Docker Hub 镜像，或直接用开发 overlay。
 
 ### 安装 Agent（被监控主机）
 

@@ -1,86 +1,63 @@
 # ============================================================
-# AIOps Monitor · Docker Compose
+# AIOps Monitor · Docker Compose（正式环境默认）
 # ------------------------------------------------------------
 # 服务组成：
 #   - aiops-server      : Go 单容器（内嵌前端），Web/API 端口 8529
-#   - victoriametrics   : 时序指标库（全部指标/趋势，server 通过 remote-write 写入）
-#   - postgres          : 关系库（配置/用户/审计/事件/工单/会话统一持久化）
+#   - victoriametrics   : 时序指标库（remote-write）
+#   - postgres          : 关系库（配置/用户/审计/事件/工单/会话 + pgvector）
+#   - aiops-agent       : 可选本机 Agent（需 --profile agent）
 #
-# 存储说明：内置 aiops.db 已彻底停用；server 强制要求 PostgreSQL + VictoriaMetrics，
-#          未配置二者之一将拒绝启动（不再回落本地单文件库）。
+# 存储说明：内置 aiops.db 已停用；server 强制要求 PostgreSQL + VictoriaMetrics。
 #
-# 数据持久化：
-#   - ./data            : 本地目录映射，仅存放 recordings/（终端会话录制，重启不丢）
-#                         及可选 TLS 证书；配置/关系数据已全部落 PG
-#   - ./vm-data / ./pg-data : 本地目录映射，存放 VM / PostgreSQL 数据
-#
-# 使用方式：
-#   # 推荐：直接拉取预构建镜像启动（每次打 tag 自动构建推送至华为云 SWR）
+# ------------------------------------------------------------
+# 正式环境（拉取华为云 SWR 预构建镜像）
+#   cp .env.example .env          # 务必改密码与 AIOPS_SECRET_KEY
 #   docker compose up -d
+#   # 或一键生成强随机密钥：
+#   bash scripts/secure-compose.sh && docker compose up -d
 #
-#   # 开发/自定义：本地构建镜像
-#   docker compose up -d --build
+# 开发环境（本地 Dockerfile.dev 构建，见 docker-compose.dev.yml）
+#   cp .env.example .env
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
-#   docker compose logs -f           # 查看日志
-#   docker compose down              # 停止（数据保留；加 -v 才会删卷）
+# 附带本机 Agent：
+#   docker compose --profile agent up -d
+#   # 开发环境已默认启用 agent，无需再加 profile
 #
-# 镜像仓库策略：
-#   - aiops-server / aiops-agent : 华为云 SWR（CI/CD 自动构建 linux/amd64 + linux/arm64 双架构）
+# 常用：
+#   docker compose logs -f
+#   docker compose down           # 停服务，数据保留；加 -v 删卷
 #
-#   - postgres / victoriametrics : 默认使用 Docker Hub 官方镜像（原生多架构，ARM64 兼容）
-#     国内用户若无法拉取 Docker Hub，有两种方案：
-#     【方案 1 · 推荐】配置 Docker 镜像加速器（一劳永逸，AMD64/ARM64 均可用）：
-#       sudo mkdir -p /etc/docker
-#       sudo tee /etc/docker/daemon.json <<-'EOF'
-#       { "registry-mirrors": ["https://docker.1ms.run"] }
-#       EOF
-#       sudo systemctl daemon-reload && sudo systemctl restart docker
-#     【方案 2 · 仅限 AMD64】将下方 postgres/victoriametrics 的 image 替换为注释中的 SWR 镜像
-#       （SWR 仅同步了 amd64 架构，Apple Silicon / ARM64 服务器不可用）
-#
-#     swr.cn-east-3.myhuaweicloud.com/sreyun/
-#
-# 端口：
-#   - 8529            : Web UI / API
-#   - 8428            : VictoriaMetrics UI / PromQL（可选，仅内网建议）
-#   - 10100-10300     : TCP 端口转发监听范围
+# 镜像说明：
+#   - aiops-server / aiops-agent : 默认华为云 SWR（CI 推送 linux/amd64+arm64）
+#   - postgres / victoriametrics : 默认 SWR 同步镜像；本机无法拉 SWR 时在 .env 改：
+#       POSTGRES_IMAGE=pgvector/pgvector:pg18
+#       VM_IMAGE=victoriametrics/victoria-metrics:latest
+#     或使用 docker-compose.dev.yml（开发 overlay 已切到 Docker Hub）
 # ============================================================
 
 services:
   aiops-server:
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server:latest
-    # 如需拉取预构建镜像启动（每次打 tag 自动构建推送至华为云 SWR）
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.dev
-      target: server
+    image: ${AIOPS_SERVER_IMAGE:-swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-server}:${AIOPS_IMAGE_TAG:-latest}
     container_name: aiops-server
     ports:
-      - "8529:8529"
-      - "10100-10300:10100-10300"
+      - "${AIOPS_HTTP_PORT:-8529}:8529"
+      - "${AIOPS_FORWARD_PORT_RANGE:-10100-10300}:10100-10300"
     volumes:
-      # 本地目录映射：配置 / 内嵌库 / 终端录制(recordings/) 均落此目录 → 重启不丢
       - ./data:/app/data
     environment:
-      - TZ=Asia/Shanghai
-      # Docker 部署下 TCP 转发需监听 0.0.0.0 才能被宿主机/其它容器访问
+      - TZ=${TZ:-Asia/Shanghai}
       - AIOPS_FORWARD_LISTEN=0.0.0.0
-      # 时序指标写入 VictoriaMetrics（remote-write / Prometheus import）
-      - AIOPS_VM_URL=http://victoriametrics:8428
-      # 关系数据（配置/用户/审计/事件/工单/会话）持久化到 PostgreSQL
-      # ⚠️ 生产请改密码，并与 postgres 服务保持一致；如需服务端↔PG 加密可改 sslmode=require（需 PG 侧配置证书）
-      - AIOPS_POSTGRES_DSN=postgres://aiops:h3Y7Vmb1CZBOApZM86D@postgres:5432/aiops?sslmode=disable
-      # 可选：启用 HTTPS/TLS 加密传输（把证书/私钥挂到 ./data/tls 后取消注释；否则明文 HTTP，建议置于 TLS 终止代理之后）
+      - AIOPS_VM_URL=${AIOPS_VM_URL:-http://victoriametrics:8428}
+      # ⚠️ 生产请改 POSTGRES_PASSWORD / AIOPS_SECRET_KEY（见 .env.example）
+      - AIOPS_POSTGRES_DSN=postgres://aiops:${POSTGRES_PASSWORD:-h3Y7Vmb1CZBOApZM86D}@postgres:5432/aiops?sslmode=disable
+      - AIOPS_SECRET_KEY=${AIOPS_SECRET_KEY:-aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026}
+      - AIOPS_CONTENT_AUDIT_INGEST_TOKEN=${AIOPS_CONTENT_AUDIT_INGEST_TOKEN:-}
+      # 可选 HTTPS（证书放到 ./data/tls 后取消注释）
       # - AIOPS_TLS_CERT=/app/data/tls/server.crt
       # - AIOPS_TLS_KEY=/app/data/tls/server.key
-      # 配置落库主密钥：对 MFA/SMTP/AI/webhook/relay 等敏感密钥做 AES-256-GCM 静态加密（已默认启用）
-      # ⚠️ 生产务必改成你自己的长随机串，并妥善备份——丢失此密钥将无法解密库中已加密的凭据！
-      - AIOPS_SECRET_KEY=aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026
-      # 可选：LLM Gateway/SDK 结构化审计摄入；留空时入口返回 503。
-      - AIOPS_CONTENT_AUDIT_INGEST_TOKEN=${AIOPS_CONTENT_AUDIT_INGEST_TOKEN:-}
-      # 可选：App 首页天气头。填阿里云市场 ip-to-weather 的 AppCode 即启用（服务端代理，
-      # 密钥不入 APK）。内网/环回客户端定位不到时用 DEFAULT_IP 兜底（填任意公网 IP）。
-      # - AIOPS_WEATHER_APPCODE=你的AppCode
+      # 可选天气头（阿里云市场 AppCode）
+      # - AIOPS_WEATHER_APPCODE=
       # - AIOPS_WEATHER_DEFAULT_IP=114.114.114.114
     depends_on:
       victoriametrics:
@@ -90,32 +67,23 @@ services:
     restart: unless-stopped
 
   victoriametrics:
-    image: swr.cn-east-3.myhuaweicloud.com/sreyun/victoria-metrics:latest
-    # image: victoriametrics/victoria-metrics:latest
+    image: ${VM_IMAGE:-swr.cn-east-3.myhuaweicloud.com/sreyun/victoria-metrics:latest}
     container_name: aiops-vm
     command:
       - "-storageDataPath=/vmdata"
-      # 100y = 永久保留（VM 没有"无限"选项，100 年即等效）。
-      # 之所以敢这么设：NetFlow 已改为只写基数可控的聚合序列（总量/对端 Top-N/
-      # 服务端口 Top-N），不再按五元组开序列——时序库的成本取决于**序列数**而非
-      # 时间跨度，基数封住了，拉长保留期才是安全的。
-      # 磁盘吃紧时可改回 -retentionPeriod=36（36 个月）。
+      # 100y ≈ 永久保留；磁盘吃紧可改 -retentionPeriod=36（月）
       - "-retentionPeriod=100y"
       - "-httpListenAddr=:8428"
     #ports:
-    #  - "8428:8428"                  # 可选：直接访问 VM 的 UI / PromQL（仅内网建议）
+    #  - "8428:8428"   # 可选：直接访问 VM UI / PromQL（仅内网）
     volumes:
       - ./vm-data:/vmdata
     restart: unless-stopped
 
   postgres:
-    # 本地用 docker.io 官方 pgvector（SWR 需登录，本机未登录会拉取失败）。
-    # 你在已登录 SWR 的环境部署时，改用下面注释的 SWR 镜像即可。
-    image: pgvector/pgvector:pg18
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18
+    image: ${POSTGRES_IMAGE:-swr.cn-east-3.myhuaweicloud.com/sreyun/pgvector:pg18}
     container_name: aiops-pg
-    # 与 server 端 SetMaxOpenConns(200) 对齐：默认 max_connections=100 会在高并发下报
-    # "too many clients"。此处默认拉到 250（200 业务连接 + 超级用户/管理预留）。
+    # 与 server SetMaxOpenConns(200) 对齐：默认 100 会在高并发下报 too many clients
     command:
       - "postgres"
       - "-c"
@@ -124,13 +92,12 @@ services:
       - "shared_buffers=256MB"
     environment:
       - POSTGRES_USER=aiops
-      - POSTGRES_PASSWORD=h3Y7Vmb1CZBOApZM86D   # ⚠️ 生产环境务必修改，并同步上方 AIOPS_POSTGRES_DSN
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-h3Y7Vmb1CZBOApZM86D}
       - POSTGRES_DB=aiops
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
     volumes:
-      # 具名卷：Windows/Mac 上 Docker 绑定挂载(./pg-data)对 PG 的 fsync 不可靠，
-      # 会导致 WAL 损坏/启动崩溃。改用 Docker 具名卷（在 VM 内，可靠）。
-      # Linux 服务器可改回 - ./pg-data:/var/lib/postgresql（原生 fs 无此问题）。
+      # 具名卷：Windows/Mac 绑定挂载对 PG fsync 不可靠，易 WAL 损坏。
+      # Linux 服务器可改：- ./pgdata:/var/lib/postgresql
       - aiops-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
@@ -139,21 +106,19 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # 取消注释即可启用本机 Agent（采集本容器/宿主指标）
+  # 可选：采集本容器/宿主指标。正式环境默认关闭；启用：
+  #   docker compose --profile agent up -d
   aiops-agent:
-    # image: swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-agent:latest
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.dev
-      target: agent
+    profiles: ["agent"]
+    image: ${AIOPS_AGENT_IMAGE:-swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-agent}:${AIOPS_IMAGE_TAG:-latest}
     container_name: aiops-agent
     depends_on:
       - aiops-server
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
     restart: unless-stopped
 
-# 具名卷：PostgreSQL 数据（Windows/Mac 上比绑定挂载可靠，避免 WAL 损坏）。
-# 备份用 `docker exec aiops-pg pg_dump ...`；删除数据用 `docker volume rm aiops-monitor_aiops-pgdata`。
 volumes:
   aiops-pgdata:
+    # 备份：docker exec aiops-pg pg_dump -U aiops aiops > backup.sql
+    # 删数据：docker compose down -v  或  docker volume rm <project>_aiops-pgdata
