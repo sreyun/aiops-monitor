@@ -1185,34 +1185,88 @@ svg.sparkline{width:100%; height:46px; display:block}
 .htx-dlg-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px 14px}
 
 /* ---------- 远程桌面（Web 推流） ---------- */
-.desk-modal{width:min(1100px,96vw);max-height:92vh;display:flex;flex-direction:column}
-.desk-modal-body{padding:0!important;overflow:hidden;flex:1;min-height:0}
-.desk-layout{display:flex;min-height:min(70vh,640px);max-height:calc(92vh - 56px)}
-.desk-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;background:#0b0e14}
-.desk-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--panel);flex:none}
-.desk-status{font-size:12px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.desk-status.err{color:var(--crit)}
-.desk-tools{display:flex;align-items:center;gap:6px;flex:none}
-.desk-q-label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px}
-.desk-q-label select{height:28px;font:inherit;font-size:12px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);color:var(--txt)}
-.desk-stage{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:8px}
-#deskCanvas{max-width:100%;max-height:100%;background:#000;cursor:crosshair;outline:none;box-shadow:0 0 0 1px rgba(255,255,255,.08)}
-.desk-side{flex:0 0 220px;border-left:1px solid var(--line);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:8px;overflow:auto}
-.desk-side-title{font-size:13px;font-weight:650;color:var(--txt)}
-.desk-side-hint{font-size:11px;color:var(--muted2);line-height:1.4}
-.desk-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--txt2)}
-.desk-input{height:32px;padding:0 8px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);color:var(--txt);font:inherit;font-size:12px}
-.desk-row{display:flex;gap:6px}
-.desk-clip{width:100%;box-sizing:border-box;resize:vertical;padding:8px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);color:var(--txt);font:inherit;font-size:12px}
-.desk-drop-hint{position:absolute;inset:auto 12px 12px 12px;font-size:11px;color:rgba(255,255,255,.45);pointer-events:none;text-align:center}
-.desk-stage{position:relative}
-.desk-stage.drag{outline:2px dashed var(--accent);outline-offset:-4px}
+#desktopMask.mask{align-items:center;padding:16px}
+.desk-modal{
+  width:min(1280px,96vw); max-width:none; height:min(88vh,900px);
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.desk-modal .modal-head{flex:none; padding:12px 16px}
+.desk-modal-body{
+  padding:0!important; overflow:hidden!important; flex:1 1 auto; min-height:0;
+  max-height:none!important; display:flex; flex-direction:column;
+}
+.desk-layout{display:flex; flex:1; min-height:0; height:100%}
+.desk-main{flex:1 1 auto; min-width:0; display:flex; flex-direction:column; background:#0b0e14}
+.desk-toolbar{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:10px 16px;
+  padding:8px 12px; border-bottom:1px solid var(--line); background:var(--panel);
+  flex:none; flex-wrap:wrap;
+}
+.desk-status-wrap{display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 180px}
+.desk-dot{width:8px; height:8px; border-radius:50%; background:var(--muted2); flex:none}
+.desk-dot.connecting,.desk-dot.waiting{background:var(--warn,#c9891a); box-shadow:0 0 0 3px rgba(201,137,26,.18); animation:deskPulse 1.2s ease-in-out infinite}
+.desk-dot.on{background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft)}
+.desk-dot.error{background:var(--crit); box-shadow:0 0 0 3px var(--crit-soft)}
+@keyframes deskPulse{0%,100%{opacity:1}50%{opacity:.45}}
+.desk-status{font-size:12px; color:var(--muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.desk-status.err{color:var(--crit-txt)}
+.desk-tools{display:flex; align-items:center; gap:8px; flex:1 1 auto; flex-wrap:wrap; justify-content:flex-end}
+.desk-q-label{font-size:12px; color:var(--muted); display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
+.desk-q-label > span{flex:none}
+.desk-select,.desk-q-label select.desk-select{
+  height:30px; min-width:96px; max-width:180px; box-sizing:border-box;
+  font:inherit; font-size:12px; padding:0 28px 0 10px;
+  border:1px solid var(--line2); border-radius:6px; background:var(--bg2); color:var(--txt);
+  appearance:none; -webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239aa3b2'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center;
+}
+#deskMonitor.desk-select{min-width:140px; max-width:220px}
+.desk-stage{
+  position:relative; flex:1 1 auto; min-height:0; overflow:hidden;
+  display:flex; align-items:center; justify-content:center; padding:0; background:#05070c;
+}
+#deskCanvas,#deskVideo{
+  display:block; max-width:100%; max-height:100%; width:auto; height:auto;
+  background:#000; cursor:crosshair; outline:none;
+  object-fit:contain; box-shadow:0 0 0 1px rgba(255,255,255,.06);
+}
+.desk-placeholder{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:10px; padding:24px; text-align:center; z-index:2; pointer-events:none;
+  background:radial-gradient(ellipse at center, rgba(20,28,44,.92), rgba(5,7,12,.98));
+}
+.desk-spinner{
+  width:28px; height:28px; border-radius:50%;
+  border:2px solid rgba(255,255,255,.15); border-top-color:var(--accent);
+  animation:spin .8s linear infinite;
+}
+.desk-ph-title{font-size:14px; font-weight:600; color:var(--txt)}
+.desk-ph-sub{font-size:12px; color:var(--muted); max-width:420px; line-height:1.5}
+.desk-side{
+  flex:0 0 260px; border-left:1px solid var(--line); background:var(--panel);
+  padding:14px; display:flex; flex-direction:column; gap:8px; overflow:auto; min-height:0;
+}
+.desk-side-title{font-size:13px; font-weight:650; color:var(--txt)}
+.desk-side-hint{font-size:11px; color:var(--muted2); line-height:1.4}
+.desk-field{display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--txt2)}
+.desk-input{height:32px; padding:0 8px; border:1px solid var(--line2); border-radius:6px; background:var(--bg2); color:var(--txt); font:inherit; font-size:12px; box-sizing:border-box; width:100%}
+.desk-row{display:flex; gap:6px}
+.desk-clip{width:100%; box-sizing:border-box; resize:vertical; padding:8px; border:1px solid var(--line2); border-radius:6px; background:var(--bg2); color:var(--txt); font:inherit; font-size:12px}
+.desk-xfer{font-size:11px; color:var(--muted); min-height:16px}
+.desk-drop-hint{position:absolute; inset:auto 12px 12px 12px; font-size:11px; color:rgba(255,255,255,.35); pointer-events:none; text-align:center; z-index:1}
+.desk-stage.drag{outline:2px dashed var(--accent); outline-offset:-4px}
 .desk-stage.drag .desk-drop-hint{color:var(--accent-txt)}
-.desk-replay{border-top:1px solid var(--line);padding:10px 12px;background:var(--panel2)}
-.desk-replay-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.desk-sessions-list{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto;margin-bottom:8px}
-.desk-sess-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:6px;font-size:12px}
-@media(max-width:800px){.desk-layout{flex-direction:column}.desk-side{flex:none;border-left:none;border-top:1px solid var(--line);max-height:200px}}
+.desk-replay{border-top:1px solid var(--line); padding:10px 12px; background:var(--panel2); flex:none; max-height:40%}
+.desk-replay-bar{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px}
+.desk-sessions-list{display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto; margin-bottom:8px}
+.desk-sess-row{display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px}
+@media(max-width:900px){
+  .desk-modal{height:min(94vh,100%); width:96vw}
+  .desk-layout{flex-direction:column}
+  .desk-side{flex:0 0 auto; border-left:none; border-top:1px solid var(--line); max-height:220px}
+  .desk-tools{justify-content:flex-start}
+}
 
 .desktop-btn svg{width:14px;height:14px}
 
