@@ -286,6 +286,9 @@ func main() {
 	// v5.4.0: admin password reset
 	resetAdmin := flag.Bool("reset-admin", false, "Reset the first admin user's password to a random value and print it to console, then exit")
 	resetAdminAPI := flag.String("reset-admin-api", "", "Start a local HTTP API on 127.0.0.1:PORT for admin password reset (e.g. -reset-admin-api=:9999)")
+	// Emergency MFA unlock when authenticator is lost/desynced (password login still works after this).
+	resetAdminMFA := flag.Bool("reset-admin-mfa", false, "Clear MFA/TOTP for the first admin (or -reset-mfa-user), then exit — restart server afterwards")
+	resetMFAUser := flag.String("reset-mfa-user", "", "Username for -reset-admin-mfa (default: first admin)")
 	flag.Parse()
 
 	// 配置文件支持 JSON 或 YAML/YML：优先用给定路径（存在即用，其扩展名决定解析格式），
@@ -299,6 +302,10 @@ func main() {
 	}
 	if *resetAdminAPI != "" {
 		runResetAdminAPI(*cfgPath, *resetAdminAPI)
+		return
+	}
+	if *resetAdminMFA {
+		runResetAdminMFA(*cfgPath, *resetMFAUser)
 		return
 	}
 

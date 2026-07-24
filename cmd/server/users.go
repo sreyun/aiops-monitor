@@ -370,6 +370,43 @@ func (cs *ConfigStore) DeleteUser(username string) error {
 	return cs.save()
 }
 
+// ResetAdminMFA clears TOTP for the first admin (or the named user). Used when
+// the authenticator is lost/desynced and login is blocked. Returns the username.
+func (cs *ConfigStore) ResetAdminMFA(username string) (string, error) {
+	cs.mu.Lock()
+	idx := -1
+	want := strings.TrimSpace(username)
+	for i := range cs.cfg.Users {
+		u := cs.cfg.Users[i]
+		if want != "" {
+			if strings.EqualFold(u.Username, want) {
+				idx = i
+				break
+			}
+			continue
+		}
+		if u.Role == RoleAdmin {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		cs.mu.Unlock()
+		if want != "" {
+			return "", fmt.Errorf("user %q not found", want)
+		}
+		return "", fmt.Errorf("no admin user found in config")
+	}
+	name := cs.cfg.Users[idx].Username
+	cs.cfg.Users[idx].MFAEnabled = false
+	cs.cfg.Users[idx].MFASecret = ""
+	cs.mu.Unlock()
+	if err := cs.save(); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 // ResetAdminPassword resets the password of the first admin user to a random
 // value, forces a password change on next login, and returns the username and
 // new plaintext password. Returns an error when no admin user exists.
