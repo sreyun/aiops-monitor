@@ -71,6 +71,24 @@ func resolvePlaybookCommand(step PlaybookStep, h *Host, vars map[string]string) 
 	return substitutePlaybookVars(cmd, vars)
 }
 
+// resolvePlaybookRollback returns an explicit rollback command for the host OS.
+// There is no inferred rollback: operators must define a deterministic inverse
+// for each step that is safe to compensate.
+func resolvePlaybookRollback(step PlaybookStep, h *Host, vars map[string]string) string {
+	cmd := step.Rollback
+	switch strings.ToLower(h.OS) {
+	case "windows":
+		if strings.TrimSpace(step.RollbackWin) != "" {
+			cmd = step.RollbackWin
+		}
+	case "darwin":
+		if strings.TrimSpace(step.RollbackMac) != "" {
+			cmd = step.RollbackMac
+		}
+	}
+	return substitutePlaybookVars(cmd, vars)
+}
+
 // buildModuleCommand 把模块调用编码成 Agent 可识别的封套命令：
 //
 //	__AIOPS_MODULE__ {"module":"...","args":{...}}
@@ -122,6 +140,17 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.not_found")})
 		return
 	}
+	preflight := s.buildPlaybookPreflight(pb)
+	if !preflight.Valid {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "剧本确定性预检未通过", "preflight": preflight})
+		return
+	}
+	if preflight.RequiresApproval && !strings.EqualFold(r.Header.Get("X-AIOps-Risk-Accepted"), "true") {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "高风险剧本需要显式确认", "preflight": preflight,
+		})
+		return
+	}
 	targetList := s.onlinePlaybookTargets(pb)
 	if len(targetList) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
@@ -133,6 +162,122 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 	go s.runPlaybookExecution(pb, exec, targetList)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.execute_playbook", pb.Name, len(targetList))})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": exec.ID})
+}
+
+type playbookPreflightStep struct {
+	Name           string `json:"name"`
+	Target         string `json:"target"`
+	OnlineTargets  int    `json:"online_targets"`
+	OfflineTargets int    `json:"offline_targets"`
+	Risk           string `json:"risk"` // read_only | command | change
+	HasRollback    bool   `json:"has_rollback"`
+}
+
+type playbookPreflight struct {
+	Valid            bool                    `json:"valid"`
+	RiskLevel        string                  `json:"risk_level"` // low | medium | high
+	RequiresApproval bool                    `json:"requires_approval"`
+	OnlineTargets    int                     `json:"online_targets"`
+	OfflineTargets   int                     `json:"offline_targets"`
+	MaxParallel      int                     `json:"max_parallel"`
+	AutoRollback     bool                    `json:"auto_rollback"`
+	Warnings         []string                `json:"warnings"`
+	Steps            []playbookPreflightStep `json:"steps"`
+}
+
+// handlePlaybookPreflight provides a deterministic, non-AI execution plan:
+// target reachability, policy risk, concurrency and rollback coverage.
+func (s *Server) handlePlaybookPreflight(w http.ResponseWriter, r *http.Request) {
+	pb, ok := s.playbooks.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.not_found")})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildPlaybookPreflight(pb))
+}
+
+func (s *Server) buildPlaybookPreflight(pb Playbook) playbookPreflight {
+	out := playbookPreflight{
+		Valid: true, RiskLevel: "low", MaxParallel: pb.Strategy.MaxParallel,
+		AutoRollback: pb.Strategy.AutoRollback, Warnings: []string{},
+	}
+	if out.MaxParallel <= 0 {
+		out.MaxParallel = playbookMaxParallel
+	}
+	if err := validatePlaybookCommands(pb.Steps, s.cfg.CmdPolicy()); err != nil {
+		out.Valid = false
+		out.Warnings = append(out.Warnings, err.Error())
+	}
+	if err := validatePlaybookVariables(pb.Steps); err != nil {
+		out.Valid = false
+		out.Warnings = append(out.Warnings, err.Error())
+	}
+
+	allHosts := s.store.ListHosts()
+	offlineSec := int64(s.cfg.Thresholds().OfflineAfter.Seconds())
+	now := time.Now().Unix()
+	onlineHosts := make([]*Host, 0, len(allHosts))
+	for _, h := range allHosts {
+		if now-h.LastSeen <= offlineSec {
+			onlineHosts = append(onlineHosts, h)
+		}
+	}
+	onlineUnion := map[string]bool{}
+	offlineUnion := map[string]bool{}
+	for _, st := range pb.Steps {
+		allMatched := s.playbooks.ResolveTargets(st.Target, allHosts)
+		onlineMatched := s.playbooks.ResolveTargets(st.Target, onlineHosts)
+		onlineSet := map[string]bool{}
+		for _, h := range onlineMatched {
+			onlineSet[h.ID] = true
+			onlineUnion[h.ID] = true
+		}
+		for _, h := range allMatched {
+			if !onlineSet[h.ID] {
+				offlineUnion[h.ID] = true
+			}
+		}
+		risk := "read_only"
+		if st.Module == "" {
+			risk = "command"
+			if out.RiskLevel == "low" {
+				out.RiskLevel = "medium"
+			}
+		} else if meta, ok := knownPlaybookModules[st.Module]; !ok || !meta.ReadOnly {
+			risk = "change"
+			out.RiskLevel = "high"
+		}
+		for _, cmd := range []string{st.Command, st.CommandWin, st.CommandMac} {
+			if strings.TrimSpace(cmd) == "" {
+				continue
+			}
+			_, force, _ := evaluatePlaybookCommand(cmd, s.cfg.CmdPolicy())
+			if force {
+				risk = "change"
+				out.RiskLevel = "high"
+			}
+		}
+		hasRollback := strings.TrimSpace(st.Rollback) != "" ||
+			strings.TrimSpace(st.RollbackWin) != "" || strings.TrimSpace(st.RollbackMac) != ""
+		if pb.Strategy.AutoRollback && risk == "change" && !hasRollback {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("变更步骤 %q 未配置显式回滚", st.Name))
+		}
+		out.Steps = append(out.Steps, playbookPreflightStep{
+			Name: st.Name, Target: st.Target, OnlineTargets: len(onlineMatched),
+			OfflineTargets: len(allMatched) - len(onlineMatched), Risk: risk, HasRollback: hasRollback,
+		})
+	}
+	out.OnlineTargets = len(onlineUnion)
+	out.OfflineTargets = len(offlineUnion)
+	out.RequiresApproval = out.RiskLevel == "high" || playbookNeedsForcedApproval(pb.Steps, s.cfg.CmdPolicy())
+	if out.OnlineTargets == 0 {
+		out.Valid = false
+		out.Warnings = append(out.Warnings, "当前没有可执行的在线目标")
+	}
+	if out.OfflineTargets > 0 {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("%d 台离线目标将在执行时跳过", out.OfflineTargets))
+	}
+	return out
 }
 
 // onlinePlaybookTargets resolves the unique set of ONLINE target hosts across all
@@ -218,7 +363,14 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		return
 	}
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, playbookMaxParallel) // bound concurrent hosts (anti thundering-herd)
+	maxParallel := pb.Strategy.MaxParallel
+	if maxParallel <= 0 {
+		maxParallel = playbookMaxParallel
+	}
+	if maxParallel > 100 {
+		maxParallel = 100
+	}
+	sem := make(chan struct{}, maxParallel) // per-playbook bounded fleet concurrency
 	for _, h := range hosts {
 		wg.Add(1)
 		go func(h *Host) {
@@ -227,6 +379,11 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 			defer func() { <-sem }()
 			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
 			vars := playbookHostVars(h) // 变量存储：预置主机 facts，register 逐步累加
+			type rollbackAction struct {
+				step PlaybookStep
+				cmd  string
+			}
+			var rollbacks []rollbackAction
 			for _, step := range pb.Steps {
 				sr := StepResult{Name: step.Name, Status: "running"}
 				start := time.Now()
@@ -253,7 +410,20 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				var output string
 				var kind execKind
 				var err error
-				for attempt := 1; attempt <= playbookMaxAttempts; attempt++ {
+				maxAttempts := step.MaxAttempts
+				if maxAttempts <= 0 {
+					maxAttempts = playbookMaxAttempts
+				}
+				if maxAttempts > 6 {
+					maxAttempts = 6
+				}
+				retryDelay := step.RetryDelaySec
+				if retryDelay <= 0 {
+					retryDelay = int(playbookRetryBackoff / time.Second)
+				}
+				attemptsUsed := 0
+				for attempt := 1; attempt <= maxAttempts; attempt++ {
+					attemptsUsed = attempt
 					output, kind, err = s.execCommandOnHost(h, cmd, step.TimeoutSec)
 					if err == nil {
 						if attempt > 1 {
@@ -261,16 +431,17 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 						}
 						break
 					}
-					if !kind.retryable() {
+					if !kind.retryable() && !(step.RetryOnExit && kind == execExit) {
 						break // real command failure — retrying is pointless
 					}
-					if attempt < playbookMaxAttempts {
-						time.Sleep(time.Duration(attempt) * playbookRetryBackoff)
+					if attempt < maxAttempts {
+						time.Sleep(time.Duration(attempt*retryDelay) * time.Second)
 						continue
 					}
 					output += "\n" + Tz("playbook.attempts_failed", attempt)
 				}
 				sr.Duration = time.Since(start).Milliseconds()
+				sr.Attempts = attemptsUsed
 				// ignore_exit：仅「命令跑完但退出码非零」可被忽略（no-pickup/超时等基础设施失败不忽略）
 				failed := err != nil
 				if failed && step.IgnoreExit && kind == execExit {
@@ -296,6 +467,45 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Output = output
 					result.Output += output + "\n"
 					result.Steps = append(result.Steps, sr)
+					if rb := strings.TrimSpace(resolvePlaybookRollback(step, h, vars)); rb != "" {
+						rollbacks = append(rollbacks, rollbackAction{step: step, cmd: rb})
+					}
+				}
+			}
+			if result.Status == "failed" && pb.Strategy.AutoRollback && len(rollbacks) > 0 {
+				for i := len(rollbacks) - 1; i >= 0; i-- {
+					action := rollbacks[i]
+					start := time.Now()
+					var out string
+					var rbKind execKind
+					var rbErr error
+					rbAttempts := 0
+					maxAttempts := action.step.MaxAttempts
+					if maxAttempts <= 0 {
+						maxAttempts = playbookMaxAttempts
+					}
+					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						rbAttempts = attempt
+						out, rbKind, rbErr = s.execCommandOnHost(h, action.cmd, action.step.TimeoutSec)
+						if rbErr == nil || !rbKind.retryable() || attempt == maxAttempts {
+							break
+						}
+						delay := action.step.RetryDelaySec
+						if delay <= 0 {
+							delay = int(playbookRetryBackoff / time.Second)
+						}
+						time.Sleep(time.Duration(attempt*delay) * time.Second)
+					}
+					rb := StepResult{
+						Name: "回滚 · " + action.step.Name, Status: "rollback_success",
+						Output: out, Duration: time.Since(start).Milliseconds(), Attempts: rbAttempts, Rollback: true,
+					}
+					if rbErr != nil {
+						rb.Status = "rollback_failed"
+						rb.Output = strings.TrimSpace(out + "\n[error] " + rbErr.Error())
+					}
+					result.Steps = append(result.Steps, rb)
+					result.Output += rb.Output + "\n"
 				}
 			}
 			if result.Status != "failed" {

@@ -734,12 +734,17 @@ function reconnectTermTab(tab) {
 }
 
 /* ---------- 文件上传/下载（按钮交互） ---------- */
-function startTermFileUpload() {
+async function startTermFileUpload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
   if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
   // 先弹出目标目录输入（默认 /tmp/），文件名将在选择文件后自动拼接
-  const targetDir = prompt("请输入远程目标目录（如 /tmp/ 或 /home/user/）：", "/tmp/");
+  const targetDir = await requestAITextInput({
+    title:"上传文件到远程主机",message:"选择文件前，请先指定远程目标目录。",
+    label:"远程目标目录",placeholder:"/tmp/",defaultValue:"/tmp/",
+    submitLabel:"选择文件",singleLine:true,maxLength:4096,danger:false,
+    requiredMessage:"请输入远程目标目录"
+  });
   if (!targetDir || !targetDir.trim()) return;
   // 确保目录以 / 结尾
   const dir = targetDir.trim().replace(/\/+$/, "") + "/";
@@ -793,15 +798,20 @@ function startTermFileUpload() {
       toast(I18N.t("term.upload_failed") + ": " + err.message, "err");
     }
   };
-  // 使用 setTimeout 确保 prompt 关闭后浏览器恢复用户手势上下文
-  setTimeout(() => input.click(), 150);
+  // 对话框提交仍在用户手势链内，立即打开文件选择器，避免浏览器拦截。
+  input.click();
 }
 
-function startTermFileDownload() {
+async function startTermFileDownload() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
   if (!tab.ws || tab.ws.readyState !== 1) { toast(I18N.t("term.not_connected"), "err"); return; }
-  const remotePath = prompt("请输入远程文件路径（如 /var/log/syslog）：", "/tmp/");
+  const remotePath = await requestAITextInput({
+    title:"从远程主机下载文件",message:"请输入要下载的远程文件完整路径。",
+    label:"远程文件路径",placeholder:"/var/log/syslog",defaultValue:"/tmp/",
+    submitLabel:"开始下载",singleLine:true,maxLength:4096,danger:false,
+    requiredMessage:"请输入远程文件路径"
+  });
   if (!remotePath || !remotePath.trim()) return;
   toast(`正在请求下载: ${remotePath.trim()}`, "info");
   // 发送下载请求 'd' 帧
@@ -1981,4 +1991,3 @@ function makeVT(screen) {
   vt.render = render;
   return vt;
 }
-

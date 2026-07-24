@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // TestFeedbackAdjustedDistance 验证反馈→有效距离的折算：👍 减距（上浮）、👎 加距（下沉）、
-// 空/未知反馈按中性处理（不调整）。有效距离只用于排序，不改动展示用的原始距离。
+// 未验证反馈轻微下沉、未知反馈按中性处理。有效距离只用于排序，不改动展示用的原始距离。
 func TestFeedbackAdjustedDistance(t *testing.T) {
 	const eps = 1e-9
 	cases := []struct {
@@ -13,7 +13,8 @@ func TestFeedbackAdjustedDistance(t *testing.T) {
 	}{
 		{0.30, "helpful", 0.30 - feedbackHelpfulBonus},
 		{0.30, "unhelpful", 0.30 + feedbackUnhelpfulPenalty},
-		{0.30, "", 0.30},
+		{0.30, "", 0.30 + feedbackPendingPenalty},
+		{0.30, "pending", 0.30 + feedbackPendingPenalty},
 		{0.30, "garbage", 0.30}, // 未知反馈按中性处理
 	}
 	for _, c := range cases {
@@ -27,22 +28,22 @@ func TestFeedbackAdjustedDistance(t *testing.T) {
 // TestRerankByFeedback 验证反馈驱动的检索重排闭环：👍 案例上浮、👎 案例下沉并可被挤出 Top-N，
 // 无反馈时保持纯距离升序（回归保护），且原始 Distance 永不被修改。
 func TestRerankByFeedback(t *testing.T) {
-	// 场景1：👎 案例即便原始距离最近，也被惩罚挤到最后（低于中性案例）。
+	// 场景1：👎 案例即便原始距离最近，也被惩罚挤到最后（低于待验证案例）。
 	t.Run("unhelpful_demoted", func(t *testing.T) {
 		in := []similarCase{
 			{ID: 1, Distance: 0.10, Feedback: "unhelpful"}, // 有效 0.30
-			{ID: 2, Distance: 0.20, Feedback: ""},          // 有效 0.20
-			{ID: 3, Distance: 0.25, Feedback: ""},          // 有效 0.25
+			{ID: 2, Distance: 0.20, Feedback: ""},          // 有效 0.24
+			{ID: 3, Distance: 0.25, Feedback: ""},          // 有效 0.29
 		}
 		assertOrder(t, rerankByFeedback(in, 3), []int64{2, 3, 1})
 	})
 
-	// 场景2：👎 案例被挤出 Top-N（limit=2 → 只剩两个中性案例）。
+	// 场景2：👎 案例被挤出 Top-N（limit=2 → 只剩两个待验证案例）。
 	t.Run("unhelpful_filtered_out_of_topN", func(t *testing.T) {
 		in := []similarCase{
 			{ID: 1, Distance: 0.10, Feedback: "unhelpful"}, // 有效 0.30
-			{ID: 2, Distance: 0.20, Feedback: ""},          // 有效 0.20
-			{ID: 3, Distance: 0.25, Feedback: ""},          // 有效 0.25
+			{ID: 2, Distance: 0.20, Feedback: ""},          // 有效 0.24
+			{ID: 3, Distance: 0.25, Feedback: ""},          // 有效 0.29
 		}
 		got := rerankByFeedback(in, 2)
 		if len(got) != 2 {

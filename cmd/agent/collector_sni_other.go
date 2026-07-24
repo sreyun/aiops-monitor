@@ -3,13 +3,15 @@
 package main
 
 import (
-	"log/slog"
+	"context"
+	"fmt"
 	"runtime"
 
 	"aiops-monitor/shared"
 )
 
-// run: SNI/DNS 抓取依赖 Linux AF_PACKET 原始套接字，其它平台暂不支持（Windows 需 Npcap 驱动）。
-func (sc *sniCollector) run(_ func(shared.DNSMapReport), _ func(shared.ContentAuditReport)) {
-	slog.Info("SNI/DNS 抓取: 仅支持 Linux(AF_PACKET)，当前平台跳过", "os", runtime.GOOS)
+// Non-Linux systems use the TShark backend. Keeping an explicit native stub
+// makes capture_backend=native fail clearly instead of silently doing nothing.
+func (sc *sniCollector) runNative(_ context.Context, _ func(shared.DNSMapReport), _ func(shared.ContentAuditReport)) error {
+	return fmt.Errorf("native 抓包后端不支持 %s；请使用 capture_backend: tshark", runtime.GOOS)
 }

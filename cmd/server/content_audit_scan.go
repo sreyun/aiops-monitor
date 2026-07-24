@@ -58,8 +58,12 @@ func scanSensitive(text string, keywords []string) []string {
 // sensitiveSeverity：命中密钥/私钥/凭据 → critical(密钥外泄很严重)；其余(PII/关键词) → warning。
 func sensitiveSeverity(hits []string) string {
 	for _, h := range hits {
+		lower := strings.ToLower(h)
 		if strings.Contains(h, "密钥") || strings.Contains(h, "私钥") || strings.Contains(h, "凭据") ||
-			strings.Contains(h, "Key") || strings.Contains(h, "JWT") {
+			strings.Contains(h, "Key") || strings.Contains(h, "JWT") ||
+			strings.Contains(lower, "api_key") || strings.Contains(lower, "access_key") ||
+			strings.Contains(lower, "private_key") || strings.Contains(lower, "credential") ||
+			strings.Contains(lower, "bearer_token") || strings.Contains(lower, "jwt") {
 			return "critical"
 		}
 	}

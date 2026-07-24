@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -51,21 +52,25 @@ func (s *Server) handleUpsertDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	d.Name = strings.TrimSpace(d.Name)
-	if d.Name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "仪表盘名称不能为空"})
-		return
-	}
-	if d.Panels == nil {
-		d.Panels = []DashPanel{}
+	if d.ID != "" && d.Revision > 0 {
+		if current, ok := s.cfg.DashboardByID(d.ID); ok && current.Revision > 0 && current.Revision != d.Revision {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":            "该仪表盘已被其他操作更新，请刷新后合并修改",
+				"current_revision": current.Revision,
+				"updated_at":       current.UpdatedAt,
+			})
+			return
+		}
 	}
 	saved, err := s.cfg.UpsertDashboard(d)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存仪表盘：" + saved.Name})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "id": saved.ID, "revision": saved.Revision, "updated_at": saved.UpdatedAt,
+	})
 }
 
 func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
@@ -85,15 +90,30 @@ type panelQueryReq struct {
 	Limit      int               `json:"limit"`      // 日志面板取行上限
 }
 
-func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
-	var req panelQueryReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
-		return
+func validatePanelQueryReq(req *panelQueryReq, withRange, logs bool) error {
+	if req == nil {
+		return fmt.Errorf("查询请求不能为空")
 	}
-	if !s.dashBackendReady(req.DataSource) {
-		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
-		return
+	req.Expr = strings.TrimSpace(req.Expr)
+	if req.Expr == "" {
+		return fmt.Errorf("查询表达式不能为空")
+	}
+	if len(req.Expr) > maxDashboardExpr {
+		return fmt.Errorf("查询表达式不能超过 16 KiB")
+	}
+	if len(req.DataSource) > 128 {
+		return fmt.Errorf("数据源 ID 过长")
+	}
+	if len(req.Vars) > maxDashboardVars {
+		return fmt.Errorf("模板变量不能超过 %d 个", maxDashboardVars)
+	}
+	for k, v := range req.Vars {
+		if !dashVarNameValid.MatchString(k) || len(v) > 4096 {
+			return fmt.Errorf("模板变量 %q 无效或值过长", k)
+		}
+	}
+	if !withRange {
+		return nil
 	}
 	now := time.Now().Unix()
 	if req.To <= 0 {
@@ -101,6 +121,47 @@ func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.From <= 0 {
 		req.From = req.To - 3600
+	}
+	if req.To <= req.From {
+		return fmt.Errorf("查询结束时间必须晚于开始时间")
+	}
+	maxRange := int64(90 * 24 * 3600)
+	if logs {
+		maxRange = 7 * 24 * 3600
+	}
+	if req.To-req.From > maxRange {
+		return fmt.Errorf("查询时间范围过大，最大允许 %d 天", maxRange/(24*3600))
+	}
+	if req.To > now+300 {
+		return fmt.Errorf("查询结束时间不能超过当前时间 5 分钟")
+	}
+	if req.Step < 0 {
+		return fmt.Errorf("查询步长不能为负数")
+	}
+	if logs {
+		if req.Limit <= 0 {
+			req.Limit = 200
+		}
+		if req.Limit > 2000 {
+			req.Limit = 2000
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
+	var req panelQueryReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if err := validatePanelQueryReq(&req, true, false); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.dashBackendReady(req.DataSource) {
+		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
+		return
 	}
 	rangeSec := req.To - req.From
 	if req.Step <= 0 {
@@ -125,6 +186,10 @@ func (s *Server) handleDashboardQueryInstant(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	if err := validatePanelQueryReq(&req, false, false); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if !s.dashBackendReady(req.DataSource) {
 		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
 		return
@@ -143,6 +208,10 @@ func (s *Server) handleDashboardQueryLogs(w http.ResponseWriter, r *http.Request
 	var req panelQueryReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if err := validatePanelQueryReq(&req, true, true); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	ds, ok := s.cfg.GetDataSource(req.DataSource)
@@ -176,6 +245,10 @@ func (s *Server) handleDashboardVarValues(w http.ResponseWriter, r *http.Request
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if len(req.DataSource) > 128 || len(req.Query) > maxDashboardExpr || len(req.Options) > 500 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "模板变量请求过大或字段无效"})
 		return
 	}
 	lv := func(label, match string) ([]string, bool) { return s.dashLabelValues(req.DataSource, label, match) }

@@ -169,19 +169,29 @@ hyperv_disabled: false             # 置 true 显式关闭 Hyper-V 采集
 #       priv_pass_env: "SNMP_TRAP_PRIV_PASS"
 #       priv_pass: ""
 
-# ====== SNI/DNS 抓取：目的 IP → 真实域名（可选，仅 Linux，需 root/CAP_NET_RAW）======
+# ====== 跨平台 DNS/SNI 与内容审计（可选）======
 # 被动抓取【明文】的 TLS SNI 与 DNS 应答，把流量里的裸目的 IP 显示成用户实际访问的域名
 # （如 api.openai.com / 内网 ollama），用于"谁在访问哪个大模型/网站"的可见性。不解密任何内容。
 # ⚠ 合规：属流量审计范畴，只在你有授权的自有/企业网络启用，并对用户履行告知义务。默认关闭。
-# ⚠ 资源：ETH_P_ALL 抓全部包，高流量网关建议指定 interface；后续会加 BPF 过滤降 CPU。
+# Linux auto 使用 AF_PACKET（需 root/CAP_NET_RAW）；Windows/macOS auto 使用 TShark。
+# Windows 需安装 Wireshark+Npcap；macOS 需 Wireshark，非 root 建议安装随包提供的 ChmodBPF。
 # sni_dns_capture:
 #   enabled: false
-#   interface: ""            # 空=所有网卡；高流量建议指定，如 "eth0"
+#   capture_backend: "auto"  # auto | native(Linux) | tshark(Windows/macOS/Linux)
+#   tshark_path: ""          # 留空自动发现；也可填写 tshark/tshark.exe 的绝对路径
+#   interface: ""            # native 空=全部；TShark 空=首个非 loopback，可填 tshark -D 的接口名/编号
 #   max_entries_per_min: 5000
-#   # ---- Phase 2 · 明文 HTTP 内容审计（⚠ 高敏感，默认关闭）----
-#   # 抓【明文】HTTP 请求的 请求行/Host/body 前缀，用于审计"谁向哪个大模型端点发了什么 prompt"。
+#   tls_metadata_ports: [443, 8443, 9443]
+#   # ---- 明文 HTTP 内容审计（⚠ 高敏感，默认关闭）----
+#   # 抓【明文】HTTP 请求/响应，用于受控内网 Ollama/vLLM 等服务。
 #   # 只对未加密 HTTP 有效（内网自建大模型 Ollama/vLLM 常是明文）；云端 HTTPS 到不了这里。
-#   # ⚠ 合规：body 可能含用户 PII，仅在你有授权的网络启用并履行告知义务；服务端保留 30 天后自动清理。
+#   # HTTPS 大模型审计应在 LLM API 网关/反向代理终止 TLS 后做结构化采集，不建议在终端做通用 MITM。
 #   content_audit: false
-#   content_audit_ports: [11434, 8000, 8080]   # 目的端口白名单；空=对所有 TCP 试探 HTTP
-#   content_audit_max_body: 4096               # body 截断上限(字节)
+#   content_audit_ports: [11434, 8000, 8080]   # 强制最小权限端口白名单；空值启动时也会归一化为此安全默认
+#   content_audit_max_body: 4096               # body 截断上限 1024..65536 字节
+#   content_audit_body_mode: "redacted"        # metadata(仅元数据/hash) | redacted(推荐) | full(break-glass)
+#   content_audit_include_hosts: []             # 推荐生产填写，如 ["localhost", "*.corp.example"]
+#   content_audit_exclude_hosts: []
+#   content_audit_exclude_paths: ["/health*", "/metrics*", "/ready*", "/live*"]
+#   content_audit_redact_keys: []               # 额外 JSON 敏感字段，如 ["employee_no", "tenant_secret"]
+#   content_audit_max_events_per_min: 2000      # 端侧硬限流；上报同时自动按 128 条/8MiB 分批

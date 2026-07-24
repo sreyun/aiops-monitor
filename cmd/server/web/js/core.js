@@ -254,6 +254,10 @@ const translateStepStatus = s => {
   if (s === "failed") return I18N.t("exec.step.failed");
   if (s === "timeout") return I18N.t("exec.step.timeout");
   if (s === "pending") return I18N.t("exec.step.pending");
+  if (s === "success") return I18N.t("exec.status.success");
+  if (s === "skipped") return I18N.t("ui.skipped", "已跳过");
+  if (s === "rollback_success") return I18N.t("exec.step.rollback_success", "回滚成功");
+  if (s === "rollback_failed") return I18N.t("exec.step.rollback_failed", "回滚失败");
   return s;
 };
 // 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）
@@ -490,4 +494,3 @@ function animateValue(el, from, to, duration = 400) {
   };
   requestAnimationFrame(step);
 }
-

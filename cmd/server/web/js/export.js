@@ -7,6 +7,8 @@
 //     title:    "标题",
 //     subtitle: "副标题（可选）",
 //     meta:     [[键, 值], ...],                      // 摘要键值对
+//     narrative:"分析正文（可选，支持 Markdown 原文留存）",
+//     kpis:     [[键, 值], ...],                      // PDF 顶部 KPI（可选）
 //     sections: [{ title, columns:[...], rows:[[...]] }, ...]
 //   }
 //
@@ -149,6 +151,9 @@ function expToMarkdown(model) {
     model.meta.forEach(([k, v]) => L.push(`| ${expEscMd(k)} | ${expEscMd(v)} |`));
     L.push("");
   }
+  if (model.narrative) {
+    L.push("## " + (model.narrativeTitle || "分析结论"), "", expClean(model.narrative), "");
+  }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
     L.push("## " + sec.title, "");
@@ -222,7 +227,11 @@ function expToXlsx(model) {
   // 摘要单独一页，其余每个区块一页 —— 资产管理通常按部件类型筛选
   const sheets = [];
   if ((model.meta || []).length) {
-    sheets.push({ title: "设备信息", columns: ["项", "值"], rows: model.meta.map(([k, v]) => [k, v]) });
+    sheets.push({ title: model.summaryTitle || "摘要信息", columns: ["项", "值"], rows: model.meta.map(([k, v]) => [k, v]) });
+  }
+  if (model.narrative) {
+    const rows = expClean(model.narrative).split(/\r?\n/).map((line, i) => [i + 1, line]);
+    sheets.push({ title: model.narrativeTitle || "分析结论", columns: ["行", "内容"], rows });
   }
   (model.sections || []).forEach(sec => {
     if (sec.rows && sec.rows.length) sheets.push(sec);
@@ -293,13 +302,13 @@ const expWP = (text, opts) => {
 
 function expDocxTable(columns, rows) {
   const cellXml = (t, bold) =>
-    `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>${expWP(t, { bold, size: 18 })}</w:tc>`;
+    `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>${bold ? '<w:shd w:val="clear" w:color="auto" w:fill="EAF1FB"/>' : ""}</w:tcPr>${expWP(t, { bold, size: 18 })}</w:tc>`;
   const borders = `<w:tblBorders>` +
     ["top", "left", "bottom", "right", "insideH", "insideV"]
       .map(s => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join("") +
     `</w:tblBorders>`;
   return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}</w:tblPr>` +
-    `<w:tr>${columns.map(c => cellXml(c, true)).join("")}</w:tr>` +
+    `<w:tr><w:trPr><w:tblHeader/></w:trPr>${columns.map(c => cellXml(c, true)).join("")}</w:tr>` +
     rows.map(r => `<w:tr>${columns.map((_, i) => cellXml(r[i], false)).join("")}</w:tr>`).join("") +
     `</w:tbl>`;
 }
@@ -309,14 +318,29 @@ function expToDocx(model) {
   body += expWP(model.title || "", { bold: true, size: 32 });
   if (model.subtitle) body += expWP(model.subtitle, { size: 18 });
   if ((model.meta || []).length) {
-    body += expWP("设备信息", { bold: true, size: 24, spacing: 200 });
+    body += expWP(model.summaryTitle || "摘要信息", { bold: true, size: 24, spacing: 200 });
     body += expDocxTable(["项", "值"], model.meta.map(([k, v]) => [k, v]));
+  }
+  if (model.narrative) {
+    body += expWP(model.narrativeTitle || "分析结论", { bold: true, size: 24, spacing: 200 });
+    expClean(model.narrative).split(/\r?\n/).forEach(line => {
+      const heading = line.match(/^\s*#{1,6}\s+(.+)$/);
+      body += expWP(heading ? heading[1] : line.replace(/^\s*[-*]\s+/, "• "), {
+        bold: !!heading, size: heading ? 22 : 19
+      });
+    });
   }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
     body += expWP(sec.title, { bold: true, size: 24, spacing: 200 });
     body += expDocxTable(sec.columns, sec.rows);
   });
+  if (model.footer) body += expWP(model.footer, { size: 16, spacing: 240 });
+  const landscape = model.orientation === "landscape" ||
+    (model.orientation !== "portrait" && (model.sections || []).some(sec => (sec.columns || []).length > 4));
+  const page = landscape
+    ? `<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>`
+    : `<w:pgSz w:w="11906" w:h="16838"/>`;
 
   const files = [
     expXmlFile("[Content_Types].xml",
@@ -331,8 +355,7 @@ function expToDocx(model) {
       `</Relationships>`),
     expXmlFile("word/document.xml",
       `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
-      // 横向 A4：部件表列多，纵向会被压扁
-      `<w:body>${body}<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>` +
+      `<w:body>${body}<w:sectPr>${page}` +
       `<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>`),
   ];
 
@@ -355,28 +378,50 @@ function expPrintHTML(model) {
     `<table><thead><tr>${columns.map(c => `<th>${expEscXml(c)}</th>`).join("")}</tr></thead>` +
     `<tbody>${rows.map(r => `<tr${rowClass(r)}>${columns.map((_, i) => `<td>${expEscXml(r[i])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 
-  // 顶部 KPI 卡片：从 meta 里挑关键指标做成卡片，其余仍进"设备信息"表。
+  // 顶部 KPI 卡片：优先使用调用方显式 kpis；兼容旧硬件报告时再从 meta 挑关键指标。
   const metaMap = Object.fromEntries((model.meta || []).map(([k, v]) => [k, v]));
-  const kpis = ["整机健康", "异常部件", "最高温度", "总功耗", "电源冗余"]
-    .filter(k => metaMap[k] != null && metaMap[k] !== "")
-    .map(k => `<div class="kpi"><div class="kpi-v">${expEscXml(metaMap[k])}</div><div class="kpi-k">${expEscXml(k)}</div></div>`).join("");
+  const kpiPairs = (model.kpis || []).length ? model.kpis :
+    ["整机健康", "异常部件", "最高温度", "总功耗", "电源冗余"]
+      .filter(k => metaMap[k] != null && metaMap[k] !== "").map(k => [k, metaMap[k]]);
+  const kpis = kpiPairs.map(([k, v]) =>
+    `<div class="kpi"><div class="kpi-v">${expEscXml(v)}</div><div class="kpi-k">${expEscXml(k)}</div></div>`).join("");
+
+  const narrativeHTML = (text) => {
+    let inCode = false;
+    return expClean(text).split(/\r?\n/).map(line => {
+      if (/^\s*```/.test(line)) { inCode = !inCode; return ""; }
+      if (inCode) return `<pre>${expEscXml(line)}</pre>`;
+      const heading = line.match(/^\s*(#{1,6})\s+(.+)$/);
+      if (heading) return `<h3>${expEscXml(heading[2])}</h3>`;
+      const li = line.match(/^\s*[-*]\s+(.+)$/);
+      if (li) return `<div class="n-li">• ${expEscXml(li[1])}</div>`;
+      return line.trim() ? `<p>${expEscXml(line)}</p>` : "";
+    }).join("");
+  };
 
   let h = `<div class="rpt-head"><h1>${expEscXml(model.title || "")}</h1>`;
   if (model.subtitle) h += `<p class="sub">${expEscXml(model.subtitle)}</p>`;
   h += `</div>`;
   if (kpis) h += `<div class="kpis">${kpis}</div>`;
   if ((model.meta || []).length) {
-    h += `<h2>设备信息</h2>` + tbl(["项", "值"], model.meta.map(([k, v]) => [k, v]));
+    h += `<h2>${expEscXml(model.summaryTitle || "摘要信息")}</h2>` + tbl(["项", "值"], model.meta.map(([k, v]) => [k, v]));
+  }
+  if (model.narrative) {
+    h += `<h2>${expEscXml(model.narrativeTitle || "分析结论")}</h2><div class="narrative">${narrativeHTML(model.narrative)}</div>`;
   }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
     h += `<h2>${expEscXml(sec.title)} <span class="cnt">${sec.rows.length}</span></h2>` + tbl(sec.columns, sec.rows);
   });
+  if (model.footer) h += `<div class="rpt-footer">${expEscXml(model.footer)}</div>`;
+  const orientation = model.orientation === "portrait" ? "portrait" :
+    (model.orientation === "landscape" ? "landscape" :
+      ((model.sections || []).some(sec => (sec.columns || []).length > 4) ? "landscape" : "portrait"));
 
   // 打印一律用浅底黑字：深色主题直接打出来既费墨又难认。print-color-adjust:exact 让底色/健康色能打出来。
   return `<!doctype html><html><head><meta charset="utf-8"><title>${expEscXml(model.title || "")}</title>
 <style>
-  @page { size: A4 landscape; margin: 12mm; }
+  @page { size: A4 ${orientation}; margin: 12mm; }
   body { font-family:"Microsoft YaHei","PingFang SC",-apple-system,sans-serif; color:#1a1a1a; background:#fff; margin:0;
          -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .rpt-head { border-left:5px solid #2563eb; padding:1px 0 1px 12px; margin-bottom:12px; }
@@ -389,6 +434,11 @@ function expPrintHTML(model) {
   h2 { font-size:13px; margin:16px 0 6px; padding:4px 0 4px 8px; border-left:3px solid #2563eb;
        background:#f1f5f9; color:#1e3a5f; break-after:avoid; page-break-after:avoid; }
   h2 .cnt { font-size:10px; color:#8a94a0; font-weight:400; }
+  .narrative { font-size:10.5px; line-height:1.65; color:#263449; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; }
+  .narrative p { margin:0 0 5px; white-space:pre-wrap; }
+  .narrative h3 { font-size:11.5px; margin:9px 0 4px; color:#1e3a5f; }
+  .narrative pre { margin:0; padding:2px 6px; background:#f1f5f9; white-space:pre-wrap; font-family:ui-monospace,monospace; }
+  .n-li { margin:2px 0 2px 8px; }
   table { width:100%; border-collapse:collapse; font-size:10px; margin-bottom:8px; }
   th, td { border:1px solid #d0d5db; padding:4px 6px; text-align:left; word-break:break-word; }
   th { background:#eef2f7; font-weight:600; color:#334155; }
@@ -398,11 +448,12 @@ function expPrintHTML(model) {
   tr.sev-crit td:last-child, tr.sev-warn td:last-child { font-weight:600; }
   thead { display:table-header-group; }
   tr { break-inside:avoid; page-break-inside:avoid; }
+  .rpt-footer { margin-top:14px; padding-top:8px; border-top:1px solid #d9dee5; color:#7a8491; font-size:9px; }
 </style></head><body>${h}</body></html>`;
 }
 
 function expPrintPDF(model) {
-  const w = window.open("", "_blank");
+  const w = model && model._printWindow ? model._printWindow : window.open("", "_blank");
   if (!w) return false; // 被拦截 → 调用方给提示
   w.document.write(expPrintHTML(model));
   w.document.close();

@@ -34,6 +34,7 @@ func parseHTTPRequest(payload []byte, maxBody int) (shared.ContentAuditEvent, bo
 		return shared.ContentAuditEvent{}, false
 	}
 	var ev shared.ContentAuditEvent
+	ev.Protocol = "http"
 	head := payload
 	var body []byte
 	if sep := bytes.Index(payload, []byte("\r\n\r\n")); sep >= 0 {

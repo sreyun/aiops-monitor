@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sampleGrafanaJSON = `{
   "title": "Node 概览",
@@ -238,5 +241,70 @@ func TestDashVarMap(t *testing.T) {
 	}
 	if m["b"] != ".*" {
 		t.Fatalf("全选应为 .*，实为 %q", m["b"])
+	}
+}
+
+func TestNormalizeDashboardTrustBoundary(t *testing.T) {
+	d := Dashboard{
+		Name: "  专家看板  ",
+		Vars: []DashVar{{Name: "instance", Type: "query", Query: "label_values(up, instance)"}},
+		Panels: []DashPanel{
+			{ID: 1, Title: "A", Type: "timeseries", Grid: DashGrid{X: 22, Y: -5, W: 12, H: 99}, Targets: []DashTarget{{Expr: " up "}}},
+			{ID: 1, Title: "B", Type: "text", Grid: DashGrid{}, Text: "<img src=x onerror=alert(1)>"},
+		},
+	}
+	if err := normalizeDashboard(&d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Name != "专家看板" {
+		t.Fatalf("名称应去空白，实为 %q", d.Name)
+	}
+	if d.Panels[0].Grid.X+d.Panels[0].Grid.W > 24 || d.Panels[0].Grid.Y < 0 || d.Panels[0].Grid.H > 48 {
+		t.Fatalf("网格应被钳制: %+v", d.Panels[0].Grid)
+	}
+	if d.Panels[0].Targets[0].Expr != "up" {
+		t.Fatalf("查询应去空白: %q", d.Panels[0].Targets[0].Expr)
+	}
+	if d.Panels[0].ID == d.Panels[1].ID || d.Panels[1].ID <= 0 {
+		t.Fatalf("重复面板 ID 应被修复: %d %d", d.Panels[0].ID, d.Panels[1].ID)
+	}
+	// 服务端保留 Markdown 原文；真正 HTML 渲染由前端安全 Markdown 编码，不能在这里破坏用户文本。
+	if d.Panels[1].Text == "" {
+		t.Fatal("文本内容不应被静默丢弃")
+	}
+}
+
+func TestNormalizeDashboardRejectsInvalidShape(t *testing.T) {
+	d := Dashboard{Name: "x", Panels: []DashPanel{{ID: 1, Type: "shell", Grid: DashGrid{W: 12, H: 6}}}}
+	if err := normalizeDashboard(&d); err == nil {
+		t.Fatal("未知面板类型必须拒绝")
+	}
+	d = Dashboard{Name: "x", Vars: []DashVar{{Name: "实例", Type: "query"}}, Panels: []DashPanel{}}
+	if err := normalizeDashboard(&d); err == nil {
+		t.Fatal("非 ASCII 模板变量名必须拒绝")
+	}
+}
+
+func TestDashboardTextPanelUsesSafeMarkdownRenderer(t *testing.T) {
+	dashboardJS, err := webFS.ReadFile("web/js/dashboard.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(dashboardJS)
+	if !strings.Contains(src, `renderAIMarkdown(p.text || "")`) {
+		t.Fatal("文本组件必须经过安全 Markdown 渲染器")
+	}
+	if strings.Contains(src, `innerHTML = p.text`) || strings.Contains(src, `innerHTML=p.text`) {
+		t.Fatal("文本组件不得把未可信内容直接写入 innerHTML")
+	}
+
+	sreJS, err := webFS.ReadFile("web/js/sre.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(sreJS)
+	renderAt := strings.Index(md, "function renderAIMarkdown")
+	if renderAt < 0 || !strings.Contains(md[renderAt:], "t=esc(t);") {
+		t.Fatal("AI Markdown 必须在插入格式标签前先转义原始 HTML")
 	}
 }

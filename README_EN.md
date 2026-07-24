@@ -85,6 +85,7 @@ A complete alert lifecycle that suppresses storming at the source:
 - **Machine fingerprint anti-clone**: `X-Agent-Fingerprint` binds the device; cloned images auto-regenerate host_id.
 - **Static config encryption**: MFA / SMTP / AI / webhook / relay secrets persisted with **AES-256-GCM** derived from `AIOPS_SECRET_KEY`.
 - **Egress hardening**: AI / webhook outbound requests guarded by SSRF protection (denies cloud metadata & link-local by default; optional `AIOPS_SSRF_STRICT` denies private networks).
+- **Cross-platform LLM content audit**: native AF_PACKET on Linux and optional TShark on Windows/macOS (Npcap/libpcap/BPF), with IPv4/IPv6 DNS/SNI metadata, bounded cleartext HTTP reassembly, endpoint redaction/metadata-only modes, allowlists, hashing, and rate limits. HTTPS payload audit is intentionally handled after TLS termination at an LLM Gateway/SDK integration point.
 - **Optional TLS**: `AIOPS_TLS_CERT/KEY` enables HTTPS.
 
 ### 6. Android Console
@@ -176,6 +177,8 @@ irm "http://<server>:8529/install.ps1?token=<TOKEN>" | iex
 ```
 
 > The server **mandatorily depends** on both PostgreSQL and VictoriaMetrics; missing either refuses to start. More deployment options (binary run / self-build / autostart / cross-network Nginx reverse proxy / gateway relay) are in [INSTALL.md](INSTALL.md).
+
+> For capability boundaries, cross-platform packet-capture prerequisites, structured HTTPS/LLM ingestion, and production policy, see the [Content Audit, Agent Installation, and Runbook Expert Guide](CONTENT_AUDIT_AND_PLAYBOOK_EXPERT_GUIDE.md).
 
 ---
 

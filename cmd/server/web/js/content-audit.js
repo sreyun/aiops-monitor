@@ -1,6 +1,5 @@
-// content-audit.js — 明文 HTTP 内容审计面板（Phase 2）。并入「网络」父菜单的「内容审计」子标签。
-// 展示 agent 抓到的明文 HTTP 请求：谁(源IP) 向 哪个端点(域名+路径) 发了什么(方法/内容/prompt)。
-// ⚠ 高敏感：仅在 agent 显式开启 content_audit 时才有数据；面板顶部常驻合规提示。
+// content-audit.js — 跨平台 HTTP/LLM 内容审计面板。
+// 支持端侧 metadata/redacted/full 数据策略；HTTPS 仅展示可见元数据，不暗示已解密。
 (function() {
 "use strict";
 
@@ -16,7 +15,7 @@ let caDataHosts = null;
 
 // 常驻合规提示（内容审计涉及用户明文请求，属隐私敏感）。
 function caNoticeHTML() {
-  return `<div style="margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #e0a300;border-radius:8px;background:rgba(224,163,0,.08);font-size:12px;color:var(--muted)">${esc(I18N.t("ca.notice") || "⚠ 内容审计含用户明文请求（可能包含 PII / prompt）。仅可在你有授权的网络启用，并对用户履行告知义务；服务端记录保留 30 天后自动清理。")}</div>`;
+  return `<div style="margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #e0a300;border-radius:8px;background:rgba(224,163,0,.08);font-size:12px;color:var(--muted)">${esc(I18N.t("ca.notice") || "⚠ 内容审计仅可在已授权网络启用。推荐使用端侧脱敏或仅元数据模式；完整正文可能包含 PII / prompt。HTTPS 正文仍需在 LLM Gateway/SDK 层审计；服务端记录按保留策略自动清理。")}</div>`;
 }
 
 function renderContentAuditPanel() {
@@ -39,7 +38,7 @@ function renderContentAuditPanel() {
 
   let html = caNoticeHTML();
   if (caDataHosts.length === 0) {
-    container.innerHTML = html + `<div class="empty-state">${I18N.t("ca.no_hosts") || "暂无有内容审计数据的主机（需在 agent 配置 content_audit: true 并有明文 HTTP 流量）"}</div>`;
+    container.innerHTML = html + `<div class="empty-state">${I18N.t("ca.no_hosts") || "暂无有内容审计数据的主机（需启用 Agent 内容审计并产生匹配白名单的 HTTP 流量）"}</div>`;
     return;
   }
   html += `<div class="nf-toolbar">`;
@@ -51,7 +50,7 @@ function renderContentAuditPanel() {
     html += `<option value="${esc(dh.host_id)}"${sel}>${esc(name)} · ${dh.events || 0}</option>`;
   });
   html += `</select>`;
-  html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索 域名 / 路径 / 内容关键字")}">`;
+  html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索关键字，或 provider:/model:/principal:/risk:")}">`;
   html += `<label class="nf-chk" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="caSensOnly"${caSensOnly ? " checked" : ""}> ${esc(I18N.t("ca.sens_only") || "只看敏感")}</label>`;
   html += `<button class="nf-btn" data-caact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
   html += `<button class="nf-btn nf-ai-btn" data-caact="ai" title="${esc(I18N.t("ca.ai_hint") || "AI 研判：是否有敏感数据外泄到大模型")}">🤖 ${esc(I18N.t("ai.analyze") || "AI 分析")}</button>`;
@@ -103,7 +102,9 @@ window.loadContentAudit = function() {
   if (!host) return;
   const body = $("caBody");
   if (body) body.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
-  const filter = caKw.trim() ? ("kw:" + caKw.trim()) : "";
+  const rawFilter = caKw.trim();
+  const advanced = /^(src_ip|dst_ip|host|method|protocol|backend|body_mode|provider|model|principal|decision|risk|sens):/i.test(rawFilter);
+  const filter = rawFilter ? (advanced ? rawFilter : ("kw:" + rawFilter)) : "";
   caPage = 1; // 新数据回到第一页
   fetch(`/api/v1/content-audit?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=500`, { credentials: "same-origin" })
     .then(r => r.json())
@@ -115,13 +116,22 @@ function renderCA(container, events) {
   if (!container) return;
   if (caSensOnly) events = events.filter(e => e.sensitive); // 客户端"只看敏感"过滤
   if (events.length === 0) {
-    container.innerHTML = `<div class="empty-state">${caSensOnly ? (I18N.t("ca.no_sens") || "无命中敏感数据的记录") : (I18N.t("ca.empty") || "暂无内容审计记录（需在 agent 配置 content_audit: true，且目标为明文 HTTP 流量）")}</div>`;
+    container.innerHTML = `<div class="empty-state">${caSensOnly ? (I18N.t("ca.no_sens") || "无命中敏感数据的记录") : (I18N.t("ca.empty") || "暂无内容审计记录（请检查采集后端、权限、端口及域名白名单）")}</div>`;
     return;
   }
   const total = events.length;
+  const llmCount = events.filter(e => e.is_llm).length;
+  const sensitiveCount = events.filter(e => e.sensitive).length;
+  const blockedCount = events.filter(e => /^(deny|block)$/i.test(e.policy_decision || "")).length;
+  const tokenTotal = events.reduce((n, e) => n + Number(e.llm_input_tokens || 0) + Number(e.llm_output_tokens || 0), 0);
   caPage = tblClampPage(caPage, total, caSize);
   const pageEvents = events.slice((caPage - 1) * caSize, caPage * caSize);
-  let html = `<div class="nf-table-wrap"><table class="nf-flow-table">`;
+  let html = `<div class="stats-grid" style="margin-bottom:12px">`;
+  html += `<div class="stat-card"><div class="sv">${esc(String(total))}</div><div class="sk">${esc(I18N.t("ca.audit_events") || "审计事件")}</div><div class="sh">${esc(I18N.t("ca.query_window") || "当前查询窗口")}</div></div>`;
+  html += `<div class="stat-card"><div class="sv ok">${esc(String(llmCount))}</div><div class="sk">${esc(I18N.t("ca.llm_calls") || "LLM 调用")}</div><div class="sh">${esc(I18N.t("ca.identified") || "结构化或端点识别")}</div></div>`;
+  html += `<div class="stat-card"><div class="sv ${sensitiveCount ? "crit" : "ok"}">${esc(String(sensitiveCount))}</div><div class="sk">${esc(I18N.t("ca.sensitive_hits") || "敏感命中")}</div><div class="sh">${esc(I18N.t("ca.blocked") || "策略阻断")} ${esc(String(blockedCount))}</div></div>`;
+  html += `<div class="stat-card"><div class="sv">${esc(tokenTotal.toLocaleString())}</div><div class="sk">${esc(I18N.t("ca.token_total") || "Token 总量")}</div><div class="sh">input + output</div></div>`;
+  html += `</div><div class="nf-table-wrap"><table class="nf-flow-table">`;
   html += `<thead><tr>`;
   html += `<th>${I18N.t("ca.time") || "时间"}</th>`;
   html += `<th>${I18N.t("ca.sensitive") || "敏感"}</th>`;
@@ -140,7 +150,13 @@ function renderCA(container, events) {
   // 仅响应行（抓包起于连接中途/请求丢包 → 只捕到响应）：方法/请求为空，标注清楚不是"没内容"的 bug。
   const promptCell = (e) => {
     if ((e.body || "").length) return cell(e.body, e.req_truncated);
+    if (e.body_mode === "metadata") return `<span style="color:var(--muted)">仅元数据 · ${esc(String(e.req_bytes || 0))} B${e.req_sha256 ? " · SHA-256 " + esc(e.req_sha256.slice(0, 10)) + "…" : ""}</span>`;
     if (!e.method && e.status) return `<span style="color:var(--muted)">（请求未捕获·仅响应）</span>`;
+    return `<span style="color:var(--muted)">—</span>`;
+  };
+  const responseCell = (e) => {
+    if ((e.resp_body || "").length) return cell(e.resp_body, e.resp_truncated);
+    if (e.body_mode === "metadata") return `<span style="color:var(--muted)">仅元数据 · ${esc(String(e.resp_bytes || 0))} B${e.resp_sha256 ? " · SHA-256 " + esc(e.resp_sha256.slice(0, 10)) + "…" : ""}</span>`;
     return `<span style="color:var(--muted)">—</span>`;
   };
   // data-ca-idx 指向「过滤后」列表下标，与 openCADetail 取数一致。
@@ -151,11 +167,16 @@ function renderCA(container, events) {
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
     html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
     html += `<td class="nf-mono">${esc(e.src_ip || "")}</td>`;
-    html += `<td class="nf-mono">${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all;font-family:ui-monospace,monospace">${esc(e.path)}</div>` : ""}</td>`;
-    html += `<td>${e.method ? `<span class="nf-proto nf-proto-tcp">${esc(e.method)}</span>` : `<span class="nf-proto" style="background:var(--bg3);color:var(--muted)">仅响应</span>`}</td>`;
+    const decisionBadge = e.policy_decision ? ` · ${esc(e.policy_decision)}` : "";
+    const llmBadge = e.is_llm ? `<div style="margin-top:3px"><span class="nf-proto nf-proto-tcp">LLM · ${esc(e.llm_provider || "compatible")}${e.llm_model ? " · " + esc(e.llm_model) : ""}${decisionBadge}</span></div>` : "";
+    html += `<td class="nf-mono">${esc(e.host || e.dst_ip || "")}${e.dst_port ? `<span style="color:var(--muted)">:${e.dst_port}</span>` : ""}${e.path ? `<div style="color:var(--muted);font-size:11px;word-break:break-all;font-family:ui-monospace,monospace">${esc(e.path)}</div>` : ""}${llmBadge}</td>`;
+    const methodBadge = e.protocol === "tls"
+      ? `<span class="nf-proto" style="background:var(--bg3);color:var(--muted)">TLS 元数据</span>`
+      : (e.method ? `<span class="nf-proto nf-proto-tcp">${esc(e.method)}</span>` : `<span class="nf-proto" style="background:var(--bg3);color:var(--muted)">仅响应</span>`);
+    html += `<td>${methodBadge}<div style="margin-top:3px;color:var(--muted);font-size:10px">${esc(e.capture_backend || "legacy")} · ${esc(e.body_mode || "legacy")}</div></td>`;
     html += `<td class="nf-num">${e.status ? esc(String(e.status)) : "—"}</td>`;
     html += `<td>${promptCell(e)}</td>`;
-    html += `<td>${cell(e.resp_body, e.resp_truncated)}</td>`;
+    html += `<td>${responseCell(e)}</td>`;
     html += `</tr>`;
   });
   html += `</tbody></table></div>`;
@@ -191,24 +212,49 @@ function openCADetail(e) {
   if (!bodyEl || !mask) return;
 
   const dest = (e.host || e.dst_ip || "") + (e.dst_port ? (":" + e.dst_port) : "");
-  const titleParts = [e.method || (I18N.t("ca.resp_only") || "仅响应"), dest || "—", e.path || ""].filter(Boolean);
+  const titleParts = [e.protocol === "tls" ? "TLS" : (e.method || (I18N.t("ca.resp_only") || "仅响应")), dest || "—", e.path || ""].filter(Boolean);
   if (titleEl) titleEl.textContent = titleParts.join(" ") || (I18N.t("ca.detail_title") || "内容审计详情");
 
   const endpoint = dest
-    ? (e.path ? `http://${dest}${e.path}` : dest)
+    ? (e.path ? `${e.protocol === "tls" ? "https" : "http"}://${dest}${e.path}` : dest)
     : (e.path || "—");
 
   let meta = "";
   meta += caKv(I18N.t("ca.time") || "时间", esc(caTime(e.observed_at) || "—"));
   meta += caKv(I18N.t("netflow.src_ip") || "源IP", `<span class="nf-mono">${esc(e.src_ip || "—")}</span>`);
   meta += caKv(I18N.t("ca.dest") || "目的（域名/端点）", `<span class="nf-mono">${esc(endpoint)}</span>`);
-  meta += caKv(I18N.t("ca.method") || "方法", e.method ? esc(e.method) : esc(I18N.t("ca.resp_only") || "仅响应"));
+  meta += caKv(I18N.t("ca.method") || "方法", e.protocol === "tls" ? "TLS ClientHello" : (e.method ? esc(e.method) : esc(I18N.t("ca.resp_only") || "仅响应")));
+  meta += caKv("协议", esc(e.protocol || "unknown"));
   meta += caKv(I18N.t("ca.status") || "状态", e.status ? esc(String(e.status)) : "—");
   meta += caKv(I18N.t("ca.sensitive") || "敏感", e.sensitive
     ? `<span class="ca-sens-pill">⚠ ${esc(e.sensitive)}</span>`
     : `<span style="color:var(--muted)">—</span>`);
   meta += caKv(I18N.t("ca.ctype") || "类型", esc(e.ctype || "—"));
   meta += caKv(I18N.t("ca.resp_ctype") || "响应类型", esc(e.resp_ctype || "—"));
+  meta += caKv("采集来源 / 正文策略", esc((e.capture_backend || "legacy") + " / " + (e.body_mode || "legacy")));
+  meta += caKv("正文规模", `request ${esc(String(e.req_bytes || 0))} B · response ${esc(String(e.resp_bytes || 0))} B`);
+  if (e.req_sha256 || e.resp_sha256) {
+    meta += caKv("内容哈希", `<span class="nf-mono">req ${esc(e.req_sha256 || "—")}<br>resp ${esc(e.resp_sha256 || "—")}</span>`);
+  }
+  if (e.redaction_count) {
+    meta += caKv("端侧脱敏", `${esc(String(e.redaction_count))} 处 · ${esc(e.redaction_labels || "—")}`);
+  }
+  if (e.principal_id || e.application_id) {
+    meta += caKv("调用身份 / 应用", `${esc(e.principal_id || "—")} / ${esc(e.application_id || "—")}`);
+  }
+  if (e.request_id || e.trace_id) {
+    meta += caKv("Request / Trace", `<span class="nf-mono">${esc(e.request_id || "—")}<br>${esc(e.trace_id || "—")}</span>`);
+  }
+  if (e.policy_decision || e.risk_labels) {
+    meta += caKv("治理决策 / 风险", `${esc(e.policy_decision || "—")} / ${esc(e.risk_labels || "—")}`);
+  }
+  if (e.is_llm) {
+    meta += caKv("LLM 提供方 / 模型", esc((e.llm_provider || "compatible") + (e.llm_model ? (" / " + e.llm_model) : "")));
+    meta += caKv("LLM 操作", esc(e.llm_operation || "—") + (e.llm_stream ? " · stream" : ""));
+    meta += caKv("内容规模", `prompt ${esc(String(e.llm_prompt_chars || 0))} chars · completion ${esc(String(e.llm_completion_chars || 0))} chars`);
+    meta += caKv("Token 用量", `input ${esc(String(e.llm_input_tokens || 0))} · output ${esc(String(e.llm_output_tokens || 0))} · tool calls ${esc(String(e.llm_tool_calls || 0))}`);
+    meta += caKv("端到端延迟", e.latency_ms ? `${esc(String(e.latency_ms))} ms` : "—");
+  }
 
   bodyEl.innerHTML =
     `<div class="ca-detail-meta">${meta}</div>` +
@@ -233,7 +279,7 @@ function caToText() {
   const fromAPI = (caDataHosts || []).find(h => h.host_id === caHost);
   const hn = (fromAPI && fromAPI.hostname) || (nameMap[caHost] || {}).hostname || caHost || "?";
   const sensN = evs.filter(e => e.sensitive).length;
-  const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中内置规则命中敏感 ${sensN} 条）。含用户向 HTTP 端点(多为大模型)发的请求 prompt 与响应 completion：`];
+  const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中敏感命中 ${sensN} 条）。记录可能采用仅元数据、端侧脱敏或完整正文策略：`];
   evs.slice(0, 30).forEach((e, i) => {
     lines.push(`\n[${i + 1}] ${e.src_ip || "?"} → ${e.host || e.dst_ip || "?"}${e.path || ""} ${e.method || ""} ${e.status || ""}${e.sensitive ? `　⚠敏感命中: ${e.sensitive}` : ""}`);
     if (e.body) lines.push(`  请求: ${String(e.body).slice(0, 800)}`);
@@ -242,7 +288,7 @@ function caToText() {
   return lines.join("\n").slice(0, 14000);
 }
 
-// caOpenAI 打开 AI 面板研判内容审计（学习闭环自动复用：/ai/assist 沉淀记忆 + 👍/👎）。
+// caOpenAI 打开 AI 面板研判内容审计；仅人工采纳/反馈后的结果进入学习闭环。
 function caOpenAI() {
   if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
   if (!caLastEvents || !caLastEvents.length) { if (typeof toast === "function") toast(I18N.t("ca.empty", "暂无数据"), "err"); return; }

@@ -136,7 +136,9 @@ func (s *Server) runDutyReportLoop() {
 			continue // 平静或失败：不推送
 		}
 		s.messages.push("ai", "info", "🌅 值班晨报", trimLine(report, 400), "sre", "")
-		go s.rememberAI("duty_report", "duty:daily", report)
+		if s.shouldRememberUnverifiedAIOutput() {
+			go s.rememberAI("duty_report", "duty:daily", report)
+		}
 	}
 }
 

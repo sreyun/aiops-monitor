@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -18,9 +21,9 @@ const ethPAll = 0x0003 // ETH_P_ALL
 
 func htonsU16(v uint16) uint16 { return v<<8 | v>>8 }
 
-// ---- 经典 BPF(cBPF)：内核侧只放行 IPv4 的 TCP/UDP（含 802.1Q VLAN），其余(ARP/IPv6/ICMP/
-// STP…)在内核直接丢弃，userspace 根本收不到，大幅降 CPU 与 syscall/拷贝开销。这是高流量网关
-// 的关键降载手段。过滤【保守】——只丢明确无关的，绝不丢 IPv4 TCP/UDP，避免误伤 SNI/DNS/HTTP。
+// ---- 经典 BPF(cBPF)：内核侧放行 IPv4 TCP/UDP 与 IPv6（含 VLAN），其余在内核直接丢弃，
+// 大幅降低 CPU 与 syscall/拷贝开销。IPv6 扩展头使内核短过滤很容易误杀，所以保守地放行
+// 所有 IPv6，再由用户态严格解析 TCP/UDP。
 // 端口级精细过滤(只留 53/443/http)留待现场压测后再收紧（错误的端口过滤会静默丢目标流量）。
 type sockFilter struct {
 	code uint16
@@ -39,21 +42,22 @@ const (
 	soAttachFilter = 26
 )
 
-// ipv4TCPUDPFilter：accept(IPv4 && proto∈{TCP,UDP})，含 VLAN 内层；否则 drop。见文末逐条注释。
-var ipv4TCPUDPFilter = []sockFilter{
-	{0x28, 0, 0, 12},      // 0: ldh [12]  ethertype
-	{0x15, 0, 3, 0x0800},  // 1: jeq 0x0800 → i2(非VLAN取proto) else i5(查VLAN)
-	{0x30, 0, 0, 23},      // 2: ldb [23]  非VLAN IP proto
-	{0x15, 7, 0, 6},       // 3: jeq TCP → ACCEPT(i11)
-	{0x15, 6, 7, 17},      // 4: jeq UDP → ACCEPT(i11) else DROP(i12)
-	{0x15, 0, 6, 0x8100},  // 5: jeq 0x8100(VLAN) → i6 else DROP(i12)
-	{0x28, 0, 0, 16},      // 6: ldh [16]  VLAN 内层 ethertype
-	{0x15, 0, 4, 0x0800},  // 7: jeq 0x0800 → i8 else DROP(i12)
-	{0x30, 0, 0, 27},      // 8: ldb [27]  VLAN IP proto
-	{0x15, 1, 0, 6},       // 9: jeq TCP → ACCEPT(i11)
-	{0x15, 0, 1, 17},      // 10: jeq UDP → ACCEPT(i11) else DROP(i12)
-	{0x06, 0, 0, 0xffff},  // 11: ret 65535 (accept)
-	{0x06, 0, 0, 0},       // 12: ret 0     (drop)
+var ipTCPUDPFilter = []sockFilter{
+	{0x28, 0, 0, 12},     // 0  ldh [12] ethertype
+	{0x15, 0, 3, 0x0800}, // 1  IPv4 → 2，否则 → 5
+	{0x30, 0, 0, 23},     // 2  IPv4 next protocol
+	{0x15, 9, 0, 6},      // 3  TCP → ACCEPT(13)
+	{0x15, 8, 9, 17},     // 4  UDP → ACCEPT，否则 DROP(14)
+	{0x15, 7, 0, 0x86dd}, // 5  IPv6 → ACCEPT，否则 → 6
+	{0x15, 0, 7, 0x8100}, // 6  802.1Q VLAN → 7，否则 DROP
+	{0x28, 0, 0, 16},     // 7  VLAN 内层 ethertype
+	{0x15, 0, 3, 0x0800}, // 8  内层 IPv4 → 9，否则 → 12
+	{0x30, 0, 0, 27},     // 9  VLAN IPv4 next protocol
+	{0x15, 2, 0, 6},      // 10 TCP → ACCEPT
+	{0x15, 1, 2, 17},     // 11 UDP → ACCEPT，否则 DROP
+	{0x15, 0, 1, 0x86dd}, // 12 内层 IPv6 → ACCEPT，否则 DROP
+	{0x06, 0, 0, 0xffff}, // 13 ACCEPT
+	{0x06, 0, 0, 0},      // 14 DROP
 }
 
 // attachBPF 尽力给 AF_PACKET fd 挂 cBPF 过滤器。失败不致命——退回 ETH_P_ALL 全收 + userspace 过滤。
@@ -68,22 +72,29 @@ func attachBPF(fd int, filter []sockFilter) error {
 	return nil
 }
 
-// run 开一个 AF_PACKET 原始套接字抓包，内核 BPF 过滤 + 读/解析解耦(worker 池)，解析 DNS/SNI，
-// 周期 flush 上报。需 root/CAP_NET_RAW。opt-in（配置 enabled=true 才启动）。
-func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter func(shared.ContentAuditReport)) {
+// runNative 开一个 AF_PACKET 原始套接字抓包，内核 BPF 过滤 + 读/解析解耦(worker 池)，
+// 解析 DNS/SNI/明文 HTTP。需 root/CAP_NET_RAW。
+func (sc *sniCollector) runNative(ctx context.Context, reporter func(shared.DNSMapReport), contentReporter func(shared.ContentAuditReport)) error {
 	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htonsU16(ethPAll)))
 	if err != nil {
-		slog.Error("SNI/DNS 抓取: 打开 AF_PACKET 失败（需 root/CAP_NET_RAW）", "err", err)
-		return
+		return fmt.Errorf("打开 AF_PACKET 失败（需 root/CAP_NET_RAW）: %w", err)
 	}
-	defer syscall.Close(fd)
+	var closeOnce sync.Once
+	closeFD := func() { closeOnce.Do(func() { _ = syscall.Close(fd) }) }
+	defer closeFD()
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeFD() // 解除阻塞中的 Recvfrom
+		}
+	}()
 
 	// 内核 BPF 过滤（best-effort）。必须在 bind 之前挂：bind 前的短暂窗口即使漏几个包也无所谓，
 	// 但挂上后能立刻少收无关包。
-	if err := attachBPF(fd, ipv4TCPUDPFilter); err != nil {
+	if err := attachBPF(fd, ipTCPUDPFilter); err != nil {
 		slog.Warn("SNI/DNS 抓取: BPF 过滤挂载失败，退回全收+用户态过滤（CPU 略高）", "err", err)
 	} else {
-		slog.Info("SNI/DNS 抓取: 已挂 BPF 内核过滤（仅 IPv4 TCP/UDP）")
+		slog.Info("SNI/DNS 抓取: 已挂 BPF 内核过滤（IPv4 TCP/UDP + IPv6）")
 	}
 
 	ifaceName := "all"
@@ -111,6 +122,11 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 	}
 	chans := make([]chan l4Info, workers)
 	var dropped atomic.Uint64
+	defer func() {
+		for _, ch := range chans {
+			close(ch)
+		}
+	}()
 	for i := 0; i < workers; i++ {
 		chans[i] = make(chan l4Info, 4096)
 		ch := chans[i]
@@ -142,11 +158,19 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			runSafe("sni-flush", func() { sc.flush(reporter) })
-			runSafe("content-flush", func() { sc.flushContent(contentReporter) })
-			if d := dropped.Swap(0); d > 0 {
-				slog.Warn("SNI/DNS 抓取: 解析队列满导致丢包（考虑指定 interface 或收紧过滤）", "dropped_30s", d)
+		for {
+			select {
+			case <-ctx.Done():
+				runSafe("sni-final-flush", func() { sc.flush(reporter) })
+				runSafe("content-final-flush", func() { sc.flushContent(contentReporter) })
+				return
+			case <-ticker.C:
+				runSafe("sni-flush", func() { sc.flush(reporter) })
+				runSafe("content-flush", func() { sc.flushContent(contentReporter) })
+				sc.logContentDrops()
+				if d := dropped.Swap(0); d > 0 {
+					slog.Warn("SNI/DNS 抓取: 解析队列满导致丢包（考虑指定 interface 或收紧过滤）", "dropped_30s", d)
+				}
 			}
 		}
 	}()
@@ -155,6 +179,9 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 	for {
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if err == syscall.EINTR {
 				continue
 			}
@@ -168,7 +195,7 @@ func (sc *sniCollector) run(reporter func(shared.DNSMapReport), contentReporter 
 		// 必须拷贝：buf 会被下一次 recvfrom 复用，而 worker 异步处理（info.payload 指向此拷贝）。
 		frame := make([]byte, n)
 		copy(frame, buf[:n])
-		info, ok := parseEthIPv4(frame)
+		info, ok := parseEthernetFrame(frame)
 		if !ok || len(info.payload) == 0 {
 			continue
 		}

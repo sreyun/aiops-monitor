@@ -117,6 +117,21 @@ func TestAIStatsHub_RecordAndSnapshot(t *testing.T) {
 	if by["logql"].AvgMs != 150 {
 		t.Fatalf("avg=%d", by["logql"].AvgMs)
 	}
+	h.recordFeedback("logql", "applied")
+	h.recordFeedback("logql", "helpful")
+	h.recordFeedback("chat", "unhelpful")
+	snap = h.snapshot()
+	if snap["feedback_total"].(int64) != 3 || snap["feedback_applied"].(int64) != 1 ||
+		snap["feedback_helpful"].(int64) != 1 || snap["feedback_unhelpful"].(int64) != 1 {
+		t.Fatalf("feedback aggregate=%v", snap)
+	}
+	if got := snap["feedback_positive_rate"].(float64); got < 0.66 || got > 0.67 {
+		t.Fatalf("positive rate=%v", got)
+	}
+	fbBy := snap["feedback_by_task"].(map[string]aiFeedbackAgg)
+	if fbBy["logql"].Total != 2 || fbBy["chat"].Unhelpful != 1 {
+		t.Fatalf("feedback by task=%+v", fbBy)
+	}
 }
 
 func TestEstimateTokens_Smoke(t *testing.T) {
@@ -126,5 +141,18 @@ func TestEstimateTokens_Smoke(t *testing.T) {
 	n := estimateTokens("你好世界 hello world")
 	if n <= 0 {
 		t.Fatal("expected positive estimate")
+	}
+}
+
+func TestAllowedAIImageMIME(t *testing.T) {
+	for _, mime := range []string{"image/png", "image/jpeg", "image/webp", "IMAGE/GIF"} {
+		if !allowedAIImageMIME(mime) {
+			t.Fatalf("expected %q to be allowed", mime)
+		}
+	}
+	for _, mime := range []string{"", "image/svg+xml", "text/html", "application/octet-stream"} {
+		if allowedAIImageMIME(mime) {
+			t.Fatalf("expected %q to be rejected", mime)
+		}
 	}
 }

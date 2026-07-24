@@ -262,8 +262,17 @@ safeAddEventListener("installCmd", "click", function() {
 });
 safeAddEventListener("installCategory", "input", renderInstallCmd);
 safeAddEventListener("installLogPaths", "input", renderInstallCmd); // 日志路径变化即时更新安装命令
+["installSNIEnabled", "installContentAudit", "installCaptureBackend", "installContentAuditBodyMode"].forEach(id => safeAddEventListener(id, "change", renderInstallCmd));
+["installSNIInterface", "installContentAuditPorts", "installContentAuditMaxBody", "installContentAuditMaxEvents", "installContentAuditHosts", "installContentAuditExcludePaths"].forEach(id => safeAddEventListener(id, "input", renderInstallCmd));
 safeAddEventListener("logCollectToggle", "click", () => { // 折叠/展开「日志采集」
   const b = document.getElementById("logCollectBody"), c = document.getElementById("lcCaret");
+  if (!b) return;
+  const hidden = b.style.display === "none";
+  b.style.display = hidden ? "" : "none";
+  if (c) c.textContent = hidden ? "▾" : "▸";
+});
+safeAddEventListener("networkAuditToggle", "click", () => {
+  const b = document.getElementById("networkAuditBody"), c = document.getElementById("networkAuditCaret");
   if (!b) return;
   const hidden = b.style.display === "none";
   b.style.display = hidden ? "" : "none";
@@ -403,11 +412,17 @@ function renderViewTabs(view) {
   const bar = $("viewTabs"); if (!bar) return;
   const g = VIEW_TAB_GROUPS[view];
   if (!g) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+  const tabs = (typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer")
+    ? g.tabs.filter(([v]) => v !== "content-audit")
+    : g.tabs;
   bar.style.display = "";
-  bar.innerHTML = g.tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
+  bar.innerHTML = tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
   bar.querySelectorAll("[data-vtab]").forEach(b => b.addEventListener("click", () => switchView(b.dataset.vtab)));
 }
 function switchView(view) {
+  if (view === "content-audit" && typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer") {
+    view = "netflow";
+  }
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   const g = VIEW_TAB_GROUPS[view];
   const activeNav = g ? g.parent : view; // 子视图(性能/治理)时高亮父导航(监控/告警)
@@ -905,4 +920,3 @@ function filterAlertsByType(type) {
   renderAlerts(LAST_ALERTS);
 }
 let LAST_ALERTS = [];
-

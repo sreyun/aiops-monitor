@@ -195,11 +195,11 @@ func TestHealAIDashExpr(t *testing.T) {
 
 func TestHealAIDashLegend(t *testing.T) {
 	cases := map[string]string{
-		"":                                      "{{instance}}",
-		"{{host}}":                              "{{instance}}",
+		"":                                       "{{instance}}",
+		"{{host}}":                               "{{instance}}",
 		"{{category}} - {{host}} - {{instance}}": "{{category}} · {{instance}}",
-		"{{category}} · {{instance}}":           "{{category}} · {{instance}}",
-		"{{instance}}":                          "{{instance}}",
+		"{{category}} · {{instance}}":            "{{category}} · {{instance}}",
+		"{{instance}}":                           "{{instance}}",
 	}
 	for in, want := range cases {
 		if got := healAIDashLegend(in); got != want {
@@ -229,5 +229,31 @@ func TestThinkingModelOrGateway(t *testing.T) {
 	}
 	if thinkingModelOrGateway(AIConfig{Model: "gpt-4o-mini", Endpoint: "https://api.openai.com/v1"}) {
 		t.Fatal("gpt-4o-mini 不应注入 enable_thinking（避免 OpenAI 400）")
+	}
+}
+
+func TestDiffDashboardsForHumanReview(t *testing.T) {
+	before := Dashboard{Panels: []DashPanel{
+		{ID: 1, Title: "CPU", Type: "timeseries", Grid: DashGrid{W: 12, H: 7}, Targets: []DashTarget{{Expr: "cpu_old"}}},
+		{ID: 2, Title: "旧面板", Type: "stat", Grid: DashGrid{W: 6, H: 4}, Targets: []DashTarget{{Expr: "old"}}},
+		{ID: 3, Title: "保持", Type: "stat", Grid: DashGrid{W: 6, H: 4}, Targets: []DashTarget{{Expr: "same"}}},
+	}}
+	after := Dashboard{Panels: []DashPanel{
+		{ID: 10, Title: "CPU", Type: "timeseries", Grid: DashGrid{W: 12, H: 7}, Targets: []DashTarget{{Expr: "cpu_new"}}},
+		{ID: 11, Title: "保持", Type: "stat", Grid: DashGrid{W: 6, H: 4}, Targets: []DashTarget{{Expr: "same"}}},
+		{ID: 12, Title: "新增", Type: "gauge", Grid: DashGrid{W: 8, H: 6}, Targets: []DashTarget{{Expr: "new"}}},
+	}}
+	got := diffDashboards(before, after)
+	if got.Before != 3 || got.After != 3 || got.Unchanged != 1 {
+		t.Fatalf("摘要错误: %+v", got)
+	}
+	if len(got.Added) != 1 || got.Added[0] != "新增" {
+		t.Fatalf("新增错误: %+v", got.Added)
+	}
+	if len(got.Removed) != 1 || got.Removed[0] != "旧面板" {
+		t.Fatalf("删除错误: %+v", got.Removed)
+	}
+	if len(got.Changed) != 1 || got.Changed[0] != "CPU" {
+		t.Fatalf("调整错误: %+v", got.Changed)
 	}
 }

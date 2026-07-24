@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -112,7 +114,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 			if n := s.pg.archiveStaleSkills(); n > 0 {
 				slog.Info("已归档低质/过时技能", "count", n)
 			}
-			s.pg.cleanupFlowRecords()    // 清理过期 Flow 记录
+			s.pg.cleanupFlowRecords() // 清理过期 Flow 记录
 			s.pg.cleanupContentAudit(s.cfg.Retention().ContentAuditDays)
 			s.pg.cleanupAuditAndEvents(s.cfg.Retention().AuditDays)
 			s.pg.cleanupAlertHistory(s.cfg.Retention().AlertHistoryDays)
@@ -255,6 +257,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
 	// 仪表盘 AI 闭环：自然语言生成 / 按事件生成分析看板 / 实时摘要 / 研判转工单
 	mux.HandleFunc("POST /api/v1/dashboards/ai-create", s.handleAICreateDashboard)
+	mux.HandleFunc("GET /api/v1/dashboards/ai-jobs/{id}", s.handleGetDashboardAIJob)
 	mux.HandleFunc("POST /api/v1/dashboards/ai-from-incident", s.handleAIDashboardFromIncident)
 	mux.HandleFunc("GET /api/v1/dashboards/{id}/digest", s.handleDashboardDigest)
 	mux.HandleFunc("POST /api/v1/dashboards/{id}/ai-ticket", s.handleDashboardAITicket)
@@ -265,6 +268,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("POST /api/v1/playbooks", s.handleUpsertPlaybook)
 	mux.HandleFunc("DELETE /api/v1/playbooks/{id}", s.handleDeletePlaybook)
+	mux.HandleFunc("GET /api/v1/playbooks/{id}/preflight", s.handlePlaybookPreflight)
 	mux.HandleFunc("POST /api/v1/playbooks/{id}/execute", s.handleExecutePlaybook)
 	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
 	mux.HandleFunc("GET /api/v1/playbooks/executions/{id}", s.handleGetExecution)
@@ -356,11 +360,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
 	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）
 	mux.HandleFunc("DELETE /api/v1/ai/memories/{id}", s.handleDeleteMemory)
-	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                 // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
-	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory)  // 成本/Token 历史组合曲线
-	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)   // 按用户成本分析
+	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                   // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
+	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory)    // 成本/Token 历史组合曲线
+	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)     // 按用户成本分析
 	mux.HandleFunc("GET /api/v1/terminal/commands", s.handleTerminalCommands) // 终端命令永久历史（audit_log）
-	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)         // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
+	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                           // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
@@ -438,6 +442,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/snmp/trap", s.handleAgentSNMPTrap)
 	mux.HandleFunc("POST /api/v1/agent/dnsmap", s.handleAgentDNSMap)
 	mux.HandleFunc("POST /api/v1/agent/content-audit", s.handleAgentContentAudit)
+	mux.HandleFunc("POST /api/v1/integrations/content-audit", s.handleGatewayContentAudit)
 	mux.HandleFunc("GET /api/v1/content-audit/hosts", s.handleContentAuditHosts)
 	mux.HandleFunc("GET /api/v1/content-audit", s.handleContentAudit)
 	// Hardware + NetFlow: frontend query
@@ -547,6 +552,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	checksumOnly := strings.HasSuffix(name, ".sha256")
+	if checksumOnly {
+		name = strings.TrimSuffix(name, ".sha256")
+		if name == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
 	// 防目录穿越：Clean("/"+name) 消解 ../，再 Join 到 distDir。
 	full := filepath.Join(s.distDir, filepath.Clean("/"+name))
 	f, err := os.Open(full)
@@ -558,6 +571,19 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	fi, err := f.Stat()
 	if err != nil || fi.IsDir() {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if checksumOnly {
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			http.Error(w, "checksum failed", http.StatusInternalServerError)
+			return
+		}
+		sum := fmt.Sprintf("%x", h.Sum(nil))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("ETag", `"`+sum+`"`)
+		_, _ = fmt.Fprintf(w, "%s  %s\n", sum, filepath.Base(name))
 		return
 	}
 	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))

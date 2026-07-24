@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +70,16 @@ func TestHandleDownload(t *testing.T) {
 	s.handleDownload(rw4, req4)
 	if rw4.Code != http.StatusNotFound {
 		t.Fatalf("穿越路径应 404，得 %d", rw4.Code)
+	}
+
+	// 5) 动态 SHA-256 清单与二进制严格对应，供安装器下载后校验。
+	rw5 := httptest.NewRecorder()
+	s.handleDownload(rw5, httptest.NewRequest("GET", "/dl/aiops-agent.exe.sha256", nil))
+	if rw5.Code != http.StatusOK {
+		t.Fatalf("checksum GET 应 200，得 %d", rw5.Code)
+	}
+	wantSum := fmt.Sprintf("%x", sha256.Sum256(content))
+	if !strings.HasPrefix(rw5.Body.String(), wantSum+"  aiops-agent.exe") {
+		t.Fatalf("checksum 内容错: %q", rw5.Body.String())
 	}
 }

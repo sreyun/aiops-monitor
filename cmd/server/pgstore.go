@@ -229,6 +229,19 @@ func (p *pgStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS ai_call_events_ts ON ai_call_events(ts DESC);
 		CREATE INDEX IF NOT EXISTS ai_call_events_actor_ts ON ai_call_events(actor, ts DESC);
 		CREATE INDEX IF NOT EXISTS ai_call_events_task_ts ON ai_call_events(task, ts DESC);
+		-- AI 人工反馈质量信号：只保存任务、动作与内容哈希，不落原始提示词/回答。
+		-- 用于衡量采纳率/有用率并审计自学习是否真的产生正向效果。
+		CREATE TABLE IF NOT EXISTS ai_feedback_events (
+			id          BIGSERIAL PRIMARY KEY,
+			ts          BIGINT NOT NULL,
+			task        TEXT NOT NULL DEFAULT '',
+			actor       TEXT NOT NULL DEFAULT '',
+			action      TEXT NOT NULL,
+			source_hash TEXT NOT NULL DEFAULT '',
+			CONSTRAINT ai_feedback_action_valid CHECK (action IN ('applied','helpful','unhelpful'))
+		);
+		CREATE INDEX IF NOT EXISTS ai_feedback_events_ts ON ai_feedback_events(ts DESC);
+		CREATE INDEX IF NOT EXISTS ai_feedback_events_task_ts ON ai_feedback_events(task, ts DESC);
 		-- 剧本执行历史（专用表，无环形上限丢失）
 		CREATE TABLE IF NOT EXISTS playbook_executions (
 			id          BIGINT PRIMARY KEY,
@@ -462,6 +475,7 @@ func (p *pgStore) migrate() error {
 			src_ip      TEXT,
 			dst_ip      TEXT,
 			dst_port    INT,
+			protocol    TEXT,
 			method      TEXT,
 			host        TEXT,
 			path        TEXT,
@@ -472,6 +486,29 @@ func (p *pgStore) migrate() error {
 			resp_body      TEXT,
 			req_truncated  BOOLEAN,
 			resp_truncated BOOLEAN,
+			capture_backend TEXT,
+			body_mode       TEXT,
+			req_bytes       BIGINT,
+			resp_bytes      BIGINT,
+			req_sha256      TEXT,
+			resp_sha256     TEXT,
+			redaction_count INT,
+			redaction_labels TEXT,
+			principal_id    TEXT,
+			application_id  TEXT,
+			event_id        TEXT,
+			request_id      TEXT,
+			trace_id        TEXT,
+			llm_provider    TEXT,
+			llm_model       TEXT,
+			llm_operation   TEXT,
+			llm_stream      BOOLEAN,
+			input_tokens    INT,
+			output_tokens   INT,
+			tool_calls      INT,
+			latency_ms      BIGINT,
+			policy_decision TEXT,
+			risk_labels     TEXT,
 			sensitive   TEXT,
 			observed_at TIMESTAMPTZ,
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -479,11 +516,43 @@ func (p *pgStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_content_audit_host_time ON content_audit(host_id, created_at DESC);
 		-- 兼容：早期表可能缺响应/敏感列，幂等补齐。
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS status INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS protocol TEXT;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_ctype TEXT;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_body TEXT;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS req_truncated BOOLEAN;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_truncated BOOLEAN;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS capture_backend TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS body_mode TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS req_bytes BIGINT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_bytes BIGINT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS req_sha256 TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS resp_sha256 TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS redaction_count INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS redaction_labels TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS principal_id TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS application_id TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS event_id TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS request_id TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS trace_id TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS llm_provider TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS llm_model TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS llm_operation TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS llm_stream BOOLEAN;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS input_tokens INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS output_tokens INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS tool_calls INT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS latency_ms BIGINT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS policy_decision TEXT;
+		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS risk_labels TEXT;
 		ALTER TABLE content_audit ADD COLUMN IF NOT EXISTS sensitive TEXT;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_content_audit_event_id
+			ON content_audit(host_id, event_id) WHERE event_id IS NOT NULL AND event_id <> '';
+		CREATE INDEX IF NOT EXISTS idx_content_audit_llm_time
+			ON content_audit(host_id, llm_provider, llm_model, created_at DESC)
+			WHERE llm_provider IS NOT NULL AND llm_provider <> '';
+		CREATE INDEX IF NOT EXISTS idx_content_audit_sensitive_time
+			ON content_audit(host_id, created_at DESC)
+			WHERE sensitive IS NOT NULL AND sensitive <> '';
 	`)
 	if err != nil {
 		return err
@@ -976,17 +1045,20 @@ func (p *pgStore) insertDiagnosisEmbedding(incidentID int64, emb []float64, summ
 // 展示的相似度% 依旧真实，不会被反馈"注水"。
 const (
 	feedbackHelpfulBonus     = 0.05 // 👍 案例：有效距离 -0.05，轻微提前
+	feedbackPendingPenalty   = 0.04 // 未验证案例：轻微下沉，让现实验证案例优先
 	feedbackUnhelpfulPenalty = 0.20 // 👎 案例：有效距离 +0.20，显著靠后（通常被挤出 Top-N）
 )
 
 // feedbackAdjustedDistance 返回用于排序的「有效距离」：在原始余弦距离上叠加反馈增减。
-// 空 / 未知反馈按中性处理（不调整）。
+// 空 / pending 表示未验证，轻微下沉；未知值保持中性。
 func feedbackAdjustedDistance(rawDistance float64, feedback string) float64 {
 	switch feedback {
 	case "helpful":
 		return rawDistance - feedbackHelpfulBonus
 	case "unhelpful":
 		return rawDistance + feedbackUnhelpfulPenalty
+	case "", "pending":
+		return rawDistance + feedbackPendingPenalty
 	default:
 		return rawDistance
 	}
@@ -1044,10 +1116,13 @@ func (p *pgStore) searchSimilarCases(emb []float64, limit int) ([]similarCase, e
 	return rerankByFeedback(out, limit), nil
 }
 
-// updateDiagnosisFeedback records user feedback on a diagnosis embedding.
+// updateDiagnosisFeedback records feedback on the newest diagnosis for the
+// incident. Updating every historical diagnosis would incorrectly punish or
+// reward otherwise unrelated turns from the same incident.
 func (p *pgStore) updateDiagnosisFeedback(incidentID int64, feedback string) error {
 	_, err := p.db.Exec(
-		`UPDATE diagnosis_embeddings SET feedback=$1 WHERE incident_id=$2`,
+		`UPDATE diagnosis_embeddings SET feedback=$1
+		 WHERE id=(SELECT id FROM diagnosis_embeddings WHERE incident_id=$2 ORDER BY id DESC LIMIT 1)`,
 		feedback, incidentID,
 	)
 	return err
@@ -3105,9 +3180,16 @@ func (p *pgStore) insertContentAudit(hostID string, evs []shared.ContentAuditEve
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT INTO content_audit
-		(host_id, src_ip, dst_ip, dst_port, method, host, path, ctype, body,
-		 status, resp_ctype, resp_body, req_truncated, resp_truncated, sensitive, observed_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`)
+		(host_id, src_ip, dst_ip, dst_port, protocol, method, host, path, ctype, body,
+		 status, resp_ctype, resp_body, req_truncated, resp_truncated,
+		 capture_backend, body_mode, req_bytes, resp_bytes, req_sha256, resp_sha256,
+		 redaction_count, redaction_labels,
+		 principal_id, application_id, event_id, request_id, trace_id, llm_provider, llm_model,
+		 llm_operation, llm_stream, input_tokens, output_tokens, tool_calls, latency_ms,
+		 policy_decision, risk_labels, sensitive, observed_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+		       $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40)
+		ON CONFLICT DO NOTHING`)
 	if err != nil {
 		return
 	}
@@ -3117,20 +3199,36 @@ func (p *pgStore) insertContentAudit(hostID string, evs []shared.ContentAuditEve
 		if i < len(labels) {
 			sens = labels[i]
 		}
-		_, _ = stmt.Exec(hostID, e.SrcIP, e.DstIP, int(e.DstPort), e.Method, e.Host, e.Path, e.CType, e.Body,
-			e.Status, e.RespCType, e.RespBody, e.ReqTruncated, e.RespTruncated, sens, time.Unix(e.Ts, 0))
+		_, _ = stmt.Exec(hostID, e.SrcIP, e.DstIP, int(e.DstPort), e.Protocol, e.Method, e.Host, e.Path, e.CType, e.Body,
+			e.Status, e.RespCType, e.RespBody, e.ReqTruncated, e.RespTruncated,
+			e.CaptureBackend, e.BodyMode, e.ReqBytes, e.RespBytes, e.ReqSHA256, e.RespSHA256,
+			e.RedactionCount, strings.Join(e.RedactionLabels, ","),
+			e.PrincipalID, e.ApplicationID, e.EventID, e.RequestID, e.TraceID, e.LLMProvider, e.LLMModel,
+			e.LLMOperation, e.LLMStream, e.InputTokens, e.OutputTokens, e.ToolCalls, e.LatencyMS,
+			e.PolicyDecision, strings.Join(e.RiskLabels, ","), sens, time.Unix(e.Ts, 0))
 	}
 	_ = tx.Commit()
 }
 
-// getContentAudit 查询内容审计记录，最新在前。filter 支持 "host:", "src_ip:", "path:", "kw:"(body/path 模糊)。
+// getContentAudit 查询内容审计记录，最新在前。filter 支持网络、采集来源以及
+// provider/model/principal/decision/risk 等结构化治理维度。
 func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[string]any, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	q := `SELECT src_ip, dst_ip, dst_port, method, host, path, ctype, body,
+	q := `SELECT src_ip, dst_ip, dst_port, COALESCE(protocol,''), method, host, path, ctype, body,
 	             COALESCE(status,0), COALESCE(resp_ctype,''), COALESCE(resp_body,''),
 	             COALESCE(req_truncated,false), COALESCE(resp_truncated,false),
+	             COALESCE(capture_backend,''), COALESCE(body_mode,''),
+	             COALESCE(req_bytes,0), COALESCE(resp_bytes,0),
+	             COALESCE(req_sha256,''), COALESCE(resp_sha256,''),
+	             COALESCE(redaction_count,0), COALESCE(redaction_labels,''),
+	             COALESCE(principal_id,''), COALESCE(application_id,''), COALESCE(event_id,''),
+	             COALESCE(request_id,''), COALESCE(trace_id,''),
+	             COALESCE(llm_provider,''), COALESCE(llm_model,''), COALESCE(llm_operation,''),
+	             COALESCE(llm_stream,false), COALESCE(input_tokens,0), COALESCE(output_tokens,0),
+	             COALESCE(tool_calls,0), COALESCE(latency_ms,0),
+	             COALESCE(policy_decision,''), COALESCE(risk_labels,''),
 	             COALESCE(sensitive,''), observed_at
 	      FROM content_audit WHERE host_id=$1`
 	args := []any{hostID}
@@ -3138,9 +3236,37 @@ func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[strin
 	if filter != "" {
 		if col, val, ok := strings.Cut(filter, ":"); ok && val != "" {
 			switch col {
-			case "src_ip", "dst_ip", "host", "method":
+			case "src_ip", "dst_ip", "host", "method", "protocol":
 				q += fmt.Sprintf(" AND %s = $%d", col, idx)
 				args = append(args, val)
+				idx++
+			case "backend":
+				q += fmt.Sprintf(" AND capture_backend = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "body_mode":
+				q += fmt.Sprintf(" AND body_mode = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "provider":
+				q += fmt.Sprintf(" AND llm_provider = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "model":
+				q += fmt.Sprintf(" AND llm_model = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "principal":
+				q += fmt.Sprintf(" AND principal_id = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "decision":
+				q += fmt.Sprintf(" AND policy_decision = $%d", idx)
+				args = append(args, val)
+				idx++
+			case "risk":
+				q += fmt.Sprintf(" AND risk_labels ILIKE $%d", idx)
+				args = append(args, "%"+val+"%")
 				idx++
 			case "kw": // body/resp_body/path/host 模糊匹配
 				q += fmt.Sprintf(" AND (body ILIKE $%d OR resp_body ILIKE $%d OR path ILIKE $%d OR host ILIKE $%d)", idx, idx, idx, idx)
@@ -3160,19 +3286,40 @@ func (p *pgStore) getContentAudit(hostID, filter string, limit int) ([]map[strin
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var srcIP, dstIP, method, host, path, ctype, body, respCType, respBody, sensitive string
-		var dstPort, status int
-		var reqTrunc, respTrunc bool
+		var srcIP, dstIP, protocol, method, host, path, ctype, body, respCType, respBody, sensitive string
+		var captureBackend, bodyMode, reqSHA256, respSHA256, redactionLabels string
+		var principalID, applicationID, eventID, requestID, traceID, llmProvider, llmModel, llmOperation string
+		var policyDecision, riskLabels string
+		var dstPort, status, reqBytes, respBytes, redactionCount, inputTokens, outputTokens, toolCalls int
+		var latencyMS int64
+		var reqTrunc, respTrunc, llmStream bool
 		var observedAt time.Time
-		if err := rows.Scan(&srcIP, &dstIP, &dstPort, &method, &host, &path, &ctype, &body,
-			&status, &respCType, &respBody, &reqTrunc, &respTrunc, &sensitive, &observedAt); err != nil {
+		if err := rows.Scan(&srcIP, &dstIP, &dstPort, &protocol, &method, &host, &path, &ctype, &body,
+			&status, &respCType, &respBody, &reqTrunc, &respTrunc,
+			&captureBackend, &bodyMode, &reqBytes, &respBytes, &reqSHA256, &respSHA256,
+			&redactionCount, &redactionLabels,
+			&principalID, &applicationID, &eventID, &requestID, &traceID,
+			&llmProvider, &llmModel, &llmOperation, &llmStream,
+			&inputTokens, &outputTokens, &toolCalls, &latencyMS,
+			&policyDecision, &riskLabels, &sensitive, &observedAt); err != nil {
 			continue
 		}
 		out = append(out, map[string]any{
-			"src_ip": srcIP, "dst_ip": dstIP, "dst_port": dstPort, "method": method,
+			"src_ip": srcIP, "dst_ip": dstIP, "dst_port": dstPort, "protocol": protocol, "method": method,
 			"host": host, "path": path, "ctype": ctype, "body": body,
 			"status": status, "resp_ctype": respCType, "resp_body": respBody,
-			"req_truncated": reqTrunc, "resp_truncated": respTrunc, "sensitive": sensitive, "observed_at": observedAt,
+			"req_truncated": reqTrunc, "resp_truncated": respTrunc,
+			"capture_backend": captureBackend, "body_mode": bodyMode,
+			"req_bytes": reqBytes, "resp_bytes": respBytes,
+			"req_sha256": reqSHA256, "resp_sha256": respSHA256,
+			"redaction_count": redactionCount, "redaction_labels": redactionLabels,
+			"principal_id": principalID, "application_id": applicationID, "event_id": eventID,
+			"request_id": requestID, "trace_id": traceID,
+			"llm_provider": llmProvider, "llm_model": llmModel, "llm_operation": llmOperation,
+			"llm_stream": llmStream, "llm_input_tokens": inputTokens, "llm_output_tokens": outputTokens,
+			"llm_tool_calls": toolCalls, "latency_ms": latencyMS,
+			"policy_decision": policyDecision, "risk_labels": riskLabels,
+			"sensitive": sensitive, "observed_at": observedAt,
 		})
 	}
 	return out, rows.Err()

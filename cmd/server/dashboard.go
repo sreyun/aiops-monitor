@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -26,6 +28,7 @@ type Dashboard struct {
 	Panels      []DashPanel `json:"panels"`
 	DataSource  string      `json:"datasource,omitempty"` // 看板级默认数据源 id（""=内置 VictoriaMetrics）
 	Source      string      `json:"source,omitempty"`     // "" | "grafana:<id>" | "import" | "ai"
+	Revision    int64       `json:"revision,omitempty"`   // 乐观锁版本；每次成功保存递增
 	CreatedAt   int64       `json:"created_at"`
 	UpdatedAt   int64       `json:"updated_at"`
 }
@@ -95,11 +98,15 @@ func (cs *ConfigStore) DashboardByID(id string) (Dashboard, bool) {
 }
 
 func (cs *ConfigStore) UpsertDashboard(d Dashboard) (Dashboard, error) {
+	if err := normalizeDashboard(&d); err != nil {
+		return Dashboard{}, err
+	}
 	cs.mu.Lock()
 	now := time.Now().Unix()
 	d.UpdatedAt = now
 	if d.ID == "" {
 		d.ID = genToken()[:8]
+		d.Revision = 1
 		d.CreatedAt = now
 		cs.cfg.Dashboards = append(cs.cfg.Dashboards, d)
 	} else {
@@ -107,18 +114,181 @@ func (cs *ConfigStore) UpsertDashboard(d Dashboard) (Dashboard, error) {
 		for i := range cs.cfg.Dashboards {
 			if cs.cfg.Dashboards[i].ID == d.ID {
 				d.CreatedAt = cs.cfg.Dashboards[i].CreatedAt
+				d.Revision = cs.cfg.Dashboards[i].Revision + 1
+				if d.Revision < 1 {
+					d.Revision = 1
+				}
 				cs.cfg.Dashboards[i] = d
 				found = true
 				break
 			}
 		}
 		if !found {
+			d.Revision = 1
 			d.CreatedAt = now
 			cs.cfg.Dashboards = append(cs.cfg.Dashboards, d)
 		}
 	}
 	cs.mu.Unlock()
 	return d, cs.save()
+}
+
+const (
+	maxDashboardPanels  = 120
+	maxDashboardTargets = 12
+	maxDashboardVars    = 30
+	maxDashboardText    = 64 << 10
+	maxDashboardExpr    = 16 << 10
+)
+
+var dashVarNameValid = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// normalizeDashboard 是所有手工编辑、导入和 AI 生成看板共同经过的信任边界。
+// 它既限制载荷/查询规模，也把网格与标识规整到前端可安全渲染的范围。
+func normalizeDashboard(d *Dashboard) error {
+	if d == nil {
+		return fmt.Errorf("仪表盘不能为空")
+	}
+	d.Name = strings.TrimSpace(d.Name)
+	if d.Name == "" {
+		return fmt.Errorf("仪表盘名称不能为空")
+	}
+	if len([]rune(d.Name)) > 120 {
+		return fmt.Errorf("仪表盘名称不能超过 120 个字符")
+	}
+	d.Description = strings.TrimSpace(d.Description)
+	if len([]rune(d.Description)) > 2000 {
+		return fmt.Errorf("仪表盘描述不能超过 2000 个字符")
+	}
+	if len(d.Tags) > 20 {
+		return fmt.Errorf("仪表盘标签不能超过 20 个")
+	}
+	tagSeen := map[string]bool{}
+	tags := d.Tags[:0]
+	for _, tag := range d.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || tagSeen[tag] {
+			continue
+		}
+		if len([]rune(tag)) > 40 {
+			return fmt.Errorf("仪表盘标签不能超过 40 个字符")
+		}
+		tagSeen[tag] = true
+		tags = append(tags, tag)
+	}
+	d.Tags = tags
+	if len(d.DataSource) > 128 || len(d.Source) > 256 {
+		return fmt.Errorf("仪表盘数据源或来源字段过长")
+	}
+	if len(d.Vars) > maxDashboardVars {
+		return fmt.Errorf("模板变量不能超过 %d 个", maxDashboardVars)
+	}
+	varSeen := map[string]bool{}
+	for i := range d.Vars {
+		v := &d.Vars[i]
+		v.Name = strings.TrimSpace(v.Name)
+		if !dashVarNameValid.MatchString(v.Name) {
+			return fmt.Errorf("模板变量名 %q 无效：仅支持英文、数字和下划线，且不能以数字开头", v.Name)
+		}
+		if varSeen[v.Name] {
+			return fmt.Errorf("模板变量名 %q 重复", v.Name)
+		}
+		varSeen[v.Name] = true
+		switch v.Type {
+		case "query", "custom", "constant", "textbox":
+		default:
+			return fmt.Errorf("模板变量 %q 的类型无效", v.Name)
+		}
+		if len(v.Query) > maxDashboardExpr || len(v.Current) > 4096 || len([]rune(v.Label)) > 80 {
+			return fmt.Errorf("模板变量 %q 的内容过长", v.Name)
+		}
+		if len(v.Options) > 500 {
+			return fmt.Errorf("模板变量 %q 的候选值不能超过 500 个", v.Name)
+		}
+		for _, option := range v.Options {
+			if len(option) > 4096 {
+				return fmt.Errorf("模板变量 %q 的候选值过长", v.Name)
+			}
+		}
+	}
+	if d.Panels == nil {
+		d.Panels = []DashPanel{}
+	}
+	if len(d.Panels) > maxDashboardPanels {
+		return fmt.Errorf("面板不能超过 %d 个", maxDashboardPanels)
+	}
+	allowedTypes := map[string]bool{
+		"timeseries": true, "stat": true, "gauge": true, "bargauge": true,
+		"table": true, "text": true, "logs": true, "unsupported": true,
+		"piechart": true, "pie": true, "barchart": true, "bar": true,
+		"histogram": true, "state-timeline": true, "statetimeline": true,
+		"heatmap": true, "alertlist": true,
+	}
+	panelIDs := map[int]bool{}
+	nextID := 1
+	for _, p := range d.Panels {
+		if p.ID >= nextID {
+			nextID = p.ID + 1
+		}
+	}
+	for i := range d.Panels {
+		p := &d.Panels[i]
+		if !allowedTypes[p.Type] {
+			return fmt.Errorf("面板 %q 的类型 %q 不受支持", p.Title, p.Type)
+		}
+		if p.ID <= 0 || panelIDs[p.ID] {
+			for panelIDs[nextID] {
+				nextID++
+			}
+			p.ID = nextID
+			nextID++
+		}
+		panelIDs[p.ID] = true
+		p.Title = strings.TrimSpace(p.Title)
+		if len([]rune(p.Title)) > 160 {
+			return fmt.Errorf("面板标题不能超过 160 个字符")
+		}
+		if len(p.DataSource) > 128 || len(p.Unit) > 64 || len(p.RawType) > 128 {
+			return fmt.Errorf("面板 %q 的配置字段过长", p.Title)
+		}
+		if len(p.Text) > maxDashboardText {
+			return fmt.Errorf("文本面板 %q 不能超过 64 KiB", p.Title)
+		}
+		if len(p.Targets) > maxDashboardTargets {
+			return fmt.Errorf("面板 %q 的查询不能超过 %d 条", p.Title, maxDashboardTargets)
+		}
+		for j := range p.Targets {
+			t := &p.Targets[j]
+			t.Expr = strings.TrimSpace(t.Expr)
+			t.Legend = strings.TrimSpace(t.Legend)
+			if len(t.Expr) > maxDashboardExpr {
+				return fmt.Errorf("面板 %q 的查询表达式不能超过 16 KiB", p.Title)
+			}
+			if len([]rune(t.Legend)) > 256 || len(t.RefID) > 32 {
+				return fmt.Errorf("面板 %q 的图例或引用 ID 过长", p.Title)
+			}
+		}
+		if p.Type != "text" && p.Type != "alertlist" && p.Type != "unsupported" && len(p.Targets) == 0 {
+			return fmt.Errorf("面板 %q 至少需要一条查询", p.Title)
+		}
+		p.Grid.X = max(0, min(23, p.Grid.X))
+		p.Grid.Y = max(0, min(10000, p.Grid.Y))
+		p.Grid.W = max(1, min(24, p.Grid.W))
+		if p.Grid.X+p.Grid.W > 24 {
+			p.Grid.X = 24 - p.Grid.W
+		}
+		p.Grid.H = max(1, min(48, p.Grid.H))
+		if p.Min != nil && (math.IsNaN(*p.Min) || math.IsInf(*p.Min, 0)) {
+			return fmt.Errorf("面板 %q 的最小值无效", p.Title)
+		}
+		if p.Max != nil && (math.IsNaN(*p.Max) || math.IsInf(*p.Max, 0)) {
+			return fmt.Errorf("面板 %q 的最大值无效", p.Title)
+		}
+		if p.Min != nil && p.Max != nil && *p.Min >= *p.Max {
+			return fmt.Errorf("面板 %q 的最小值必须小于最大值", p.Title)
+		}
+	}
+	return nil
 }
 
 func (cs *ConfigStore) DeleteDashboard(id string) error {

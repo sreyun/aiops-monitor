@@ -49,7 +49,7 @@ func (e errString) Error() string { return string(e) }
 
 func TestDiagnosisOrchestrationHint(t *testing.T) {
 	h := diagnosisOrchestrationHint()
-	for _, want := range []string{"排查编排", "WeKnora", "现场"} {
+	for _, want := range []string{"排查编排", "WeKnora", "现场", "不可信", "人工确认"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("missing %q in %s", want, h)
 		}

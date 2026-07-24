@@ -35,9 +35,9 @@ func buildClientHelloSNI(sni string) []byte {
 	ext := []byte{0x00, 0x00, byte(len(sniData) >> 8), byte(len(sniData))}
 	ext = append(ext, sniData...)
 
-	body := []byte{0x03, 0x03}          // client_version
-	body = append(body, make([]byte, 32)...) // random
-	body = append(body, 0x00)                // session id len
+	body := []byte{0x03, 0x03}                  // client_version
+	body = append(body, make([]byte, 32)...)    // random
+	body = append(body, 0x00)                   // session id len
 	body = append(body, 0x00, 0x02, 0x13, 0x01) // cipher suites (len + 1 suite)
 	body = append(body, 0x01, 0x00)             // compression methods (len + null)
 	body = append(body, byte(len(ext)>>8), byte(len(ext)))
@@ -84,5 +84,32 @@ func TestParseEthIPv4UDP(t *testing.T) {
 	}
 	if len(info.payload) != len(udpPayload) || info.payload[0] != 0xDE {
 		t.Errorf("UDP 载荷错: %v", info.payload)
+	}
+}
+
+func TestParseEthernetIPv6TCPWithExtensionHeader(t *testing.T) {
+	payload := []byte("GET /api/chat HTTP/1.1\r\n\r\n")
+	tcp := make([]byte, 20)
+	tcp[0], tcp[1] = 0xC3, 0x50 // 50000
+	tcp[2], tcp[3] = 0x1F, 0x40 // 8000
+	tcp[12], tcp[13] = 0x50, 0x18
+	tcp = append(tcp, payload...)
+	destOpts := []byte{6, 0, 0, 0, 0, 0, 0, 0} // next=TCP, 8-byte header
+	ip := make([]byte, 40)
+	ip[0] = 0x60
+	ip[4], ip[5] = byte((len(destOpts)+len(tcp))>>8), byte(len(destOpts)+len(tcp))
+	ip[6], ip[7] = 60, 64 // Destination Options, hop limit
+	copy(ip[8:24], []byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1})
+	copy(ip[24:40], []byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2})
+	ip = append(ip, destOpts...)
+	ip = append(ip, tcp...)
+	eth := append([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x86, 0xdd}, ip...)
+
+	info, ok := parseEthernetFrame(eth)
+	if !ok || info.proto != 6 || info.dstPort != 8000 || info.dstIP != "2001:db8::2" {
+		t.Fatalf("Ethernet/IPv6/TCP parse failed: %+v ok=%v", info, ok)
+	}
+	if string(info.payload) != string(payload) {
+		t.Fatalf("IPv6 TCP payload = %q", info.payload)
 	}
 }

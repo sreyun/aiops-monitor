@@ -26,8 +26,8 @@ type ServerConfig struct {
 }
 
 type config struct {
-	Server         string         `json:"server"`               // legacy single-server field
-	Servers        []ServerConfig `json:"servers,omitempty"`     // multi-server: when non-empty, takes precedence over Server+Token
+	Server         string         `json:"server"`            // legacy single-server field
+	Servers        []ServerConfig `json:"servers,omitempty"` // multi-server: when non-empty, takes precedence over Server+Token
 	ReportInterval int            `json:"report_interval"`
 	PluginInterval int            `json:"plugin_interval"`
 	DiskPath       string         `json:"disk_path"`
@@ -35,14 +35,14 @@ type config struct {
 	Python         string         `json:"python"`
 	StateFile      string         `json:"state_file"`
 	Category       string         `json:"category"`
-	Token          string         `json:"token"`               // legacy single-server token
-	Relay          bool           `json:"relay"`               // gateway relay mode: proxy all requests to --server
-	Listen         string         `json:"listen,omitempty"`     // relay listen address (e.g. ":8529")
-	RelaySecret    string         `json:"relay_secret,omitempty"` // v5.4.1: shared secret for relay auth
-	LogPaths       []string       `json:"log_paths,omitempty"`  // log files/dirs to tail and forward to the server
-	LogEncrypt     bool           `json:"log_encrypt"`          // gzip+AES-256-GCM encrypt log uploads (default true)
+	Token          string         `json:"token"`                     // legacy single-server token
+	Relay          bool           `json:"relay"`                     // gateway relay mode: proxy all requests to --server
+	Listen         string         `json:"listen,omitempty"`          // relay listen address (e.g. ":8529")
+	RelaySecret    string         `json:"relay_secret,omitempty"`    // v5.4.1: shared secret for relay auth
+	LogPaths       []string       `json:"log_paths,omitempty"`       // log files/dirs to tail and forward to the server
+	LogEncrypt     bool           `json:"log_encrypt"`               // gzip+AES-256-GCM encrypt log uploads (default true)
 	TLSSkipVerify  bool           `json:"tls_skip_verify,omitempty"` // skip server TLS cert verification (insecure; self-signed/lab only)
-	CACert         string         `json:"ca_cert,omitempty"`          // path to a CA PEM bundle to trust (proper self-signed support)
+	CACert         string         `json:"ca_cert,omitempty"`         // path to a CA PEM bundle to trust (proper self-signed support)
 	// ---- 新增采集器配置（可选，未配置时不启动）----
 	RedfishTargets []RedfishTarget `json:"redfish_targets,omitempty"` // Redfish 硬件状态采集（服务器 BMC/iDRAC/iBMC）
 	// OceanStor 不支持 Redfish，必须走 DeviceManager REST，因此是独立配置项
@@ -50,7 +50,7 @@ type config struct {
 	NetFlow          *NetFlowConfig    `json:"netflow,omitempty"`           // NetFlow 网络流量接收
 	PacketCapture    *PacketConfig     `json:"packet_capture,omitempty"`    // 五元组包报文采集
 	SNMP             *SNMPConfig       `json:"snmp,omitempty"`              // SNMP 轮询 + Trap 接收（网络设备纳管）
-	SNI              *SNIConfig        `json:"sni_dns_capture,omitempty"`   // SNI/DNS 抓取：目的 IP→真实域名（Linux，需 root，默认关）
+	SNI              *SNIConfig        `json:"sni_dns_capture,omitempty"`   // 跨平台 DNS/SNI + 受控明文 HTTP 审计（默认关）
 	// Hyper-V 虚拟机采集：默认在 Windows Hyper-V 宿主机上自动探测启用，无需配置
 	HyperVIntervalSec int  `json:"hyperv_interval_sec,omitempty"` // 采集间隔(秒)，默认 60
 	HyperVDisabled    bool `json:"hyperv_disabled,omitempty"`     // 显式关闭 Hyper-V 采集
@@ -111,9 +111,7 @@ func main() {
 	// where the install script exited before writing config.
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		if err := shared.DecodeConfig(cfgPath, b, &cfg); err != nil {
-			slog.Error("配置文件解析失败，将使用默认值（localhost:8529）",
-				"path", cfgPath, "err", err,
-				"hint", "请检查配置文件 JSON/YAML 格式是否正确，或重新运行安装命令")
+			log.Fatalf("配置文件解析失败，已拒绝使用默认 localhost 配置继续运行: path=%s err=%v", cfgPath, err)
 		} else {
 			slog.Info("已加载配置文件", "path", cfgPath)
 		}
@@ -148,6 +146,13 @@ func main() {
 	var securityMode string
 	flag.StringVar(&securityMode, "security-mode", "auto", "安全模块模式: auto(自动诊断输出修复命令)/permissive(自动切换宽容模式,2h后恢复)/enforcing(恢复强制模式)")
 	flag.Parse()
+	explicitFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+	// An explicit single-server flag is an override, not a no-op behind a
+	// servers[] value loaded from the file.
+	if explicitFlags["server"] {
+		cfg.Servers = nil
+	}
 	_ = cfgFlag
 	if logPathsFlag != "" {
 		for _, p := range strings.Split(logPathsFlag, ",") {
@@ -159,40 +164,44 @@ func main() {
 
 	// Environment variable overrides (lowest priority: flag > env > config file > default).
 	// Enables container / Kubernetes deployments where secrets are injected via env.
-	if v := os.Getenv("AIOPS_SERVER"); v != "" {
+	if v := os.Getenv("AIOPS_SERVER"); v != "" && !explicitFlags["server"] {
 		cfg.Server = v
+		cfg.Servers = nil
 	}
-	if v := os.Getenv("AIOPS_TOKEN"); v != "" {
+	if v := os.Getenv("AIOPS_TOKEN"); v != "" && !explicitFlags["token"] {
 		cfg.Token = v
 	}
-	if v := os.Getenv("AIOPS_INTERVAL"); v != "" {
+	if v := os.Getenv("AIOPS_INTERVAL"); v != "" && !explicitFlags["interval"] {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.ReportInterval = n
 		}
 	}
-	if v := os.Getenv("AIOPS_CATEGORY"); v != "" {
+	if v := os.Getenv("AIOPS_CATEGORY"); v != "" && !explicitFlags["category"] {
 		cfg.Category = v
 	}
-	if v := os.Getenv("AIOPS_PLUGINS_DIR"); v != "" {
+	if v := os.Getenv("AIOPS_PLUGINS_DIR"); v != "" && !explicitFlags["plugins-dir"] {
 		cfg.PluginsDir = v
 	}
 	if v := os.Getenv("AIOPS_STATE_FILE"); v != "" {
 		cfg.StateFile = v
 	}
-	if v := os.Getenv("AIOPS_LOG_ENCRYPT"); v != "" {
+	if v := os.Getenv("AIOPS_LOG_ENCRYPT"); v != "" && !explicitFlags["log-encrypt"] {
 		cfg.LogEncrypt = strings.EqualFold(v, "true") || v == "1"
 	}
-	if v := os.Getenv("AIOPS_TLS_SKIP_VERIFY"); v != "" {
+	if v := os.Getenv("AIOPS_TLS_SKIP_VERIFY"); v != "" && !explicitFlags["tls-skip-verify"] {
 		cfg.TLSSkipVerify = strings.EqualFold(v, "true") || v == "1"
 	}
-	if v := os.Getenv("AIOPS_CA_CERT"); v != "" {
+	if v := os.Getenv("AIOPS_CA_CERT"); v != "" && !explicitFlags["ca-cert"] {
 		cfg.CACert = v
 	}
-	if v := os.Getenv("AIOPS_LISTEN"); v != "" {
+	if v := os.Getenv("AIOPS_LISTEN"); v != "" && !explicitFlags["listen"] {
 		cfg.Listen = v
 	}
-	if v := os.Getenv("AIOPS_RELAY_SECRET"); v != "" {
+	if v := os.Getenv("AIOPS_RELAY_SECRET"); v != "" && !explicitFlags["relay-secret"] {
 		cfg.RelaySecret = v
+	}
+	if err := normalizeAndValidateConfig(&cfg); err != nil {
+		log.Fatalf("Agent 配置校验失败: path=%s err=%v", cfgPath, err)
 	}
 
 	// Apply server TLS trust (self-signed CA / skip-verify) to every agent→server

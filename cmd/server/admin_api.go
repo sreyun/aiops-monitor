@@ -111,11 +111,28 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	serversJSON := sanitizeServersJSON(r.URL.Query().Get("servers_json"))
 	// 日志采集路径（可选）：清洗为合法 JSON 数组注入生成的 config.json 的 log_paths
 	logPaths := sanitizeLogPaths(r.URL.Query().Get("log_paths"))
+	audit := sanitizeAuditInstallOptions(map[string]string{
+		"sni_enabled":                      r.URL.Query().Get("sni_enabled"),
+		"sni_interface":                    r.URL.Query().Get("sni_interface"),
+		"capture_backend":                  r.URL.Query().Get("capture_backend"),
+		"content_audit":                    r.URL.Query().Get("content_audit"),
+		"content_audit_ports":              r.URL.Query().Get("content_audit_ports"),
+		"content_audit_max_body":           r.URL.Query().Get("content_audit_max_body"),
+		"content_audit_body_mode":          r.URL.Query().Get("content_audit_body_mode"),
+		"content_audit_include_hosts":      r.URL.Query().Get("content_audit_include_hosts"),
+		"content_audit_exclude_paths":      r.URL.Query().Get("content_audit_exclude_paths"),
+		"content_audit_max_events_per_min": r.URL.Query().Get("content_audit_max_events_per_min"),
+	})
 	var body string
 	if strings.HasSuffix(r.URL.Path, ".ps1") {
-		body = renderScript(installPs1Template, server, token, category, serversJSON, logPaths)
+		// Windows uses the cross-platform TShark/Npcap backend. Keep explicit
+		// native requests safe by normalizing them to auto.
+		if audit.CaptureBackend == "native" {
+			audit.CaptureBackend = "auto"
+		}
+		body = renderScriptWithAudit(installPs1Template, server, token, category, serversJSON, logPaths, audit)
 	} else {
-		body = renderScript(installShTemplate, server, token, category, serversJSON, logPaths)
+		body = renderScriptWithAudit(installShTemplate, server, token, category, serversJSON, logPaths, audit)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, body)

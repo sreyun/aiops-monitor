@@ -3524,6 +3524,98 @@ select:focus {
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: repeat(12, 1fr); } }
 @media (max-width: 720px) { .dash-grid { grid-template-columns: 1fr; } .dash-panel { grid-column: 1 / -1 !important; } .dash-bar-actions { width: 100%; margin-left: 0; } }
 
+/* ===== 仪表盘专家工作台：AI 闭环、人工编排、审阅与导出 ===== */
+.dash-ai-actions { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.dash-ai-actions .btn { border-color: transparent; }
+.dash-ai-actions .btn:hover { border-color: rgba(168, 85, 247, .3); background: rgba(168, 85, 247, .09); color: #a855f7; }
+.dash-edit-state { flex: none; font-size: 10px; line-height: 1; padding: 4px 7px; border-radius: 999px; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); }
+.dash-edit-state.dirty { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border, var(--warn)); }
+.dash-grid.editing .dash-panel { box-shadow: inset 0 0 0 1px transparent; }
+.dash-grid.editing .dash-panel:hover { border-color: var(--accent); box-shadow: 0 4px 18px rgba(0, 0, 0, .1); }
+.dash-panel.dragging { opacity: .45; border-color: var(--accent); }
+.dash-drag-handle { cursor: grab; touch-action: none; }
+.dash-drag-handle:active { cursor: grabbing; }
+.panel-template-palette { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.panel-template-palette button { min-width: 0; padding: 9px 10px; text-align: left; color: var(--txt2); background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
+.panel-template-palette button:hover, .panel-template-palette button.active { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+.panel-template-palette b, .panel-template-palette span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-template-palette b { color: var(--txt); font-size: 12px; }
+.panel-template-palette span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.dash-ai-presets { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 2px; }
+.dash-ai-presets button { flex: none; padding: 5px 9px; color: var(--txt2); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 11px; }
+.dash-ai-presets button:hover { color: #a855f7; border-color: rgba(168,85,247,.4); background: rgba(168,85,247,.08); }
+.dash-ai-progress { margin-top: 12px; padding: 10px 12px; border: 1px solid rgba(168,85,247,.28); border-radius: 9px; background: rgba(168,85,247,.06); }
+.dash-ai-progress-head { display: flex; justify-content: space-between; gap: 12px; color: var(--txt2); font-size: 12px; }
+.dash-ai-progress-head b { color: #a855f7; font-variant-numeric: tabular-nums; }
+.dash-ai-progress-track { height: 5px; margin: 8px 0; overflow: hidden; border-radius: 999px; background: var(--bg3); }
+.dash-ai-progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#7c3aed,#a855f7,#4c8dff); transition: width .3s ease; }
+.panel-query-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.panel-query-test-result { min-height: 18px; font-size: 11px; color: var(--muted); }
+.panel-query-test-result.ok { color: var(--ok); }
+.panel-query-test-result.warn { color: var(--warn); }
+.panel-query-test-result.err { color: var(--crit); }
+.dash-ai-review-mask { z-index: 1305; }
+.dash-review-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+.dash-review-kpis > div { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.dash-review-kpis b, .dash-review-kpis span { display: block; }
+.dash-review-kpis b { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--txt); }
+.dash-review-kpis span { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.dash-review-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.dash-review-grid section { min-width: 0; min-height: 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); }
+.dash-review-grid h4 { margin: 0 0 8px; font-size: 12px; }
+.dash-review-grid h4.add { color: var(--ok); }
+.dash-review-grid h4.change { color: var(--warn); }
+.dash-review-grid h4.remove { color: var(--crit); }
+.dash-review-grid ul { margin: 0; padding-left: 18px; color: var(--txt2); font-size: 12px; line-height: 1.65; }
+.dash-review-warnings { margin-top: 12px; padding: 9px 11px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.dash-review-warnings.ok { color: var(--ok); background: var(--ok-soft); border: 1px solid var(--ok-border, var(--ok)); }
+.dash-review-warnings.warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-border, var(--warn)); }
+
+/* AI 辅助是可交付报告工作台：明确状态、依据、反馈与格式化导出。 */
+.ai-assist-panel { width: min(820px, 96vw); max-height: 88vh; margin-top: 5vh; }
+.ai-assist-head { background: linear-gradient(90deg, rgba(168,85,247,.10), transparent 48%); }
+.ai-assist-status { padding: 6px 16px; min-height: 27px; border-bottom: 1px solid var(--line); background: var(--panel2); color: var(--muted); font-size: 11px; }
+.ai-assist-body { min-height: 220px; font-size: 13px; line-height: 1.7; }
+.ai-stream-body > div, .ai-stream-body > ul, .ai-stream-body > ol { animation: aiStreamIn .12s ease-out; }
+@keyframes aiStreamIn { from { opacity: .72; } to { opacity: 1; } }
+.ai-evidence { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--line2); }
+.ai-evidence summary { cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; }
+.ai-evidence-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ai-evidence-item { display: inline-flex; gap: 5px; align-items: center; max-width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); color: var(--txt2); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-evidence-item b { color: var(--accent); font-weight: 600; }
+.ai-assist-feedback { padding: 10px 16px; border-top: 1px solid var(--line); background: var(--crit-soft); }
+.ai-assist-feedback label { display: block; margin-bottom: 5px; color: var(--crit-txt, var(--crit)); font-size: 11px; font-weight: 600; }
+.ai-assist-feedback textarea { width: 100%; resize: vertical; min-height: 54px; padding: 8px 9px; color: var(--txt); background: var(--panel); border: 1px solid var(--line2); border-radius: 7px; font-family: inherit; font-size: 12px; }
+.ai-assist-feedback-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
+.ai-assist-actions { align-items: center; flex-wrap: wrap; }
+.ai-assist-export { display: inline-flex; align-items: center; gap: 4px; }
+.ai-assist-export select { height: 29px; max-width: 112px; padding: 3px 22px 3px 7px; color: var(--txt2); background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; font-size: 11px; }
+.ai-assist-actions #aiAssistStop { margin-right: auto; }
+.ai-feedback-prompt-mask { z-index: 1510; align-items: center; }
+.ai-feedback-prompt-panel { width: min(520px, 94vw); overflow: hidden; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 22px 64px rgba(0,0,0,.48); }
+.ai-feedback-prompt-body { padding: 15px 17px 4px; }
+.ai-feedback-prompt-body p { margin: 0 0 12px; color: var(--txt2); font-size: 12px; line-height: 1.65; }
+.ai-feedback-prompt-body label { display: block; margin-bottom: 5px; color: var(--txt); font-size: 11px; font-weight: 600; }
+.ai-feedback-prompt-body textarea { width: 100%; min-height: 92px; resize: vertical; padding: 9px 10px; color: var(--txt); background: var(--bg2); border: 1px solid var(--line2); border-radius: 8px; font: inherit; font-size: 12px; line-height: 1.55; }
+.ai-feedback-prompt-body textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: 0; }
+.ai-feedback-prompt-error { min-height: 20px; padding-top: 4px; color: var(--crit); font-size: 11px; }
+.ai-feedback-prompt-panel .ai-assist-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 10px 17px 14px; }
+.ai-assist-panel :focus-visible, .dash-bar :focus-visible, .dash-panel :focus-visible,
+.panel-template-palette button:focus-visible, .dash-review-grid :focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+@media (max-width: 800px) {
+  .panel-template-palette { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-review-grid { grid-template-columns: 1fr; }
+  .dash-review-kpis { grid-template-columns: repeat(2, 1fr); }
+  .dash-ai-actions { width: 100%; overflow-x: auto; justify-content: flex-start; }
+  .dash-ai-actions .btn { white-space: nowrap; }
+  .ai-assist-panel { width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dash-card, .dash-panel, .panel-template-palette button, .dash-bar .btn, .ai-stream-body > * { transition: none !important; animation: none !important; }
+}
+
 /* ---- 统一附件条 / 评论条 / 语音态 ---- */
 .attach-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .attach-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;font-size:12px;background:var(--panel2);border:1px solid var(--line2);color:var(--txt2);text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -18,18 +19,18 @@ type playbookModuleMeta struct {
 // knownPlaybookModules is the server-side catalog. Agent must implement the same names.
 var knownPlaybookModules = map[string]playbookModuleMeta{
 	// —— 系统运维（只读）——
-	"gather_facts":    {Name: "gather_facts", ReadOnly: true, Domain: "system", Desc: "采集主机名/OS/架构/CPU/IP/内存摘要"},
-	"disk_usage":      {Name: "disk_usage", ReadOnly: true, Domain: "system", Desc: "文件系统用量（df）"},
-	"mem_info":        {Name: "mem_info", ReadOnly: true, Domain: "system", Desc: "内存与交换区概况"},
-	"cpu_load":        {Name: "cpu_load", ReadOnly: true, Domain: "system", Desc: "负载与 CPU 概况"},
-	"process_top":     {Name: "process_top", ReadOnly: true, Domain: "system", Desc: "占用最高的进程列表"},
-	"uptime_info":     {Name: "uptime_info", ReadOnly: true, Domain: "system", Desc: "运行时长与登录用户数"},
-	"pkg_list":        {Name: "pkg_list", ReadOnly: true, Domain: "system", Desc: "已安装软件包摘要（只读查询）"},
-	"file_stat":       {Name: "file_stat", ReadOnly: true, Domain: "system", RequiredArg: "path", Desc: "查看文件/目录元数据（不读内容）"},
-	"file_head":       {Name: "file_head", ReadOnly: true, Domain: "system", RequiredArg: "path", Desc: "读取文本文件开头（敏感路径拦截）"},
-	"service_status":  {Name: "service_status", ReadOnly: true, Domain: "system", RequiredArg: "name", Desc: "查询服务状态（不启停）"},
-	"journal_recent":  {Name: "journal_recent", ReadOnly: true, Domain: "sre", Desc: "最近系统日志（journalctl/事件）"},
-	"dmesg_recent":    {Name: "dmesg_recent", ReadOnly: true, Domain: "sre", Desc: "最近内核消息"},
+	"gather_facts":   {Name: "gather_facts", ReadOnly: true, Domain: "system", Desc: "采集主机名/OS/架构/CPU/IP/内存摘要"},
+	"disk_usage":     {Name: "disk_usage", ReadOnly: true, Domain: "system", Desc: "文件系统用量（df）"},
+	"mem_info":       {Name: "mem_info", ReadOnly: true, Domain: "system", Desc: "内存与交换区概况"},
+	"cpu_load":       {Name: "cpu_load", ReadOnly: true, Domain: "system", Desc: "负载与 CPU 概况"},
+	"process_top":    {Name: "process_top", ReadOnly: true, Domain: "system", Desc: "占用最高的进程列表"},
+	"uptime_info":    {Name: "uptime_info", ReadOnly: true, Domain: "system", Desc: "运行时长与登录用户数"},
+	"pkg_list":       {Name: "pkg_list", ReadOnly: true, Domain: "system", Desc: "已安装软件包摘要（只读查询）"},
+	"file_stat":      {Name: "file_stat", ReadOnly: true, Domain: "system", RequiredArg: "path", Desc: "查看文件/目录元数据（不读内容）"},
+	"file_head":      {Name: "file_head", ReadOnly: true, Domain: "system", RequiredArg: "path", Desc: "读取文本文件开头（敏感路径拦截）"},
+	"service_status": {Name: "service_status", ReadOnly: true, Domain: "system", RequiredArg: "name", Desc: "查询服务状态（不启停）"},
+	"journal_recent": {Name: "journal_recent", ReadOnly: true, Domain: "sre", Desc: "最近系统日志（journalctl/事件）"},
+	"dmesg_recent":   {Name: "dmesg_recent", ReadOnly: true, Domain: "sre", Desc: "最近内核消息"},
 
 	// —— 网络运维（只读）——
 	"net_ifaces":  {Name: "net_ifaces", ReadOnly: true, Domain: "network", Desc: "网卡与 IPv4 地址"},
@@ -45,9 +46,9 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 	"time_sync":    {Name: "time_sync", ReadOnly: true, Domain: "sre", Desc: "系统时间与时区"},
 
 	// —— 安全运维（只读）——
-	"users_logged":   {Name: "users_logged", ReadOnly: true, Domain: "security", Desc: "当前登录会话"},
+	"users_logged":    {Name: "users_logged", ReadOnly: true, Domain: "security", Desc: "当前登录会话"},
 	"security_listen": {Name: "security_listen", ReadOnly: true, Domain: "security", Desc: "对外监听端口（安全视角）"},
-	"auth_failures":  {Name: "auth_failures", ReadOnly: true, Domain: "security", Desc: "近期认证失败摘要（若可得）"},
+	"auth_failures":   {Name: "auth_failures", ReadOnly: true, Domain: "security", Desc: "近期认证失败摘要（若可得）"},
 
 	// —— 大数据运维（只读）——
 	"bigdata_jps":   {Name: "bigdata_jps", ReadOnly: true, Domain: "bigdata", Desc: "Java 进程列表（jps）"},
@@ -121,32 +122,100 @@ func validatePlaybookCommands(steps []PlaybookStep, pol CmdPolicyConfig) error {
 			if err := validatePlaybookModule(st); err != nil {
 				return fmt.Errorf("步骤 %s: %s", name, err.Error())
 			}
-			continue
+		} else {
+			cmds := []struct {
+				label string
+				cmd   string
+			}{
+				{"", st.Command},
+				{"Windows 覆盖", st.CommandWin},
+				{"macOS 覆盖", st.CommandMac},
+			}
+			any := false
+			for _, c := range cmds {
+				if strings.TrimSpace(c.cmd) == "" {
+					continue
+				}
+				any = true
+				ok, _, reason := evaluatePlaybookCommand(c.cmd, pol)
+				if !ok {
+					if c.label != "" {
+						return fmt.Errorf("步骤 %s (%s): %s", name, c.label, reason)
+					}
+					return fmt.Errorf("步骤 %s: %s", name, reason)
+				}
+			}
+			if !any {
+				return fmt.Errorf("步骤 %s: 命令不能为空", name)
+			}
 		}
-		cmds := []struct {
+
+		// Rollback is executable code too; validate every OS variant with the
+		// same command policy at save time and again at execution time.
+		for _, rb := range []struct {
 			label string
 			cmd   string
 		}{
-			{"", st.Command},
-			{"Windows 覆盖", st.CommandWin},
-			{"macOS 覆盖", st.CommandMac},
-		}
-		any := false
-		for _, c := range cmds {
-			if strings.TrimSpace(c.cmd) == "" {
+			{"回滚", st.Rollback},
+			{"Windows 回滚", st.RollbackWin},
+			{"macOS 回滚", st.RollbackMac},
+		} {
+			if strings.TrimSpace(rb.cmd) == "" {
 				continue
 			}
-			any = true
-			ok, _, reason := evaluatePlaybookCommand(c.cmd, pol)
+			ok, _, reason := evaluatePlaybookCommand(rb.cmd, pol)
 			if !ok {
-				if c.label != "" {
-					return fmt.Errorf("步骤 %s (%s): %s", name, c.label, reason)
-				}
-				return fmt.Errorf("步骤 %s: %s", name, reason)
+				return fmt.Errorf("步骤 %s (%s): %s", name, rb.label, reason)
 			}
 		}
-		if !any {
-			return fmt.Errorf("步骤 %s: 命令不能为空", name)
+	}
+	return nil
+}
+
+// validatePlaybookVariables rejects typoed/forward-referenced variables rather
+// than silently replacing them with an empty string at execution time.
+func validatePlaybookVariables(steps []PlaybookStep) error {
+	known := map[string]bool{
+		"host_id": true, "hostname": true, "ip": true, "os": true, "category": true,
+	}
+	check := func(stepName, field, value string) error {
+		for _, match := range pbVarRE.FindAllStringSubmatch(value, -1) {
+			if len(match) > 1 && !known[match[1]] {
+				return fmt.Errorf("步骤 %s: %s 引用了未知或尚未注册的变量 %q", stepName, field, match[1])
+			}
+		}
+		return nil
+	}
+	for i, st := range steps {
+		name := strings.TrimSpace(st.Name)
+		if name == "" {
+			name = fmt.Sprintf("#%d", i+1)
+		}
+		values := []struct {
+			field string
+			value string
+		}{
+			{"command", st.Command}, {"command_win", st.CommandWin}, {"command_mac", st.CommandMac},
+			{"when", st.When}, {"rollback", st.Rollback}, {"rollback_win", st.RollbackWin},
+			{"rollback_mac", st.RollbackMac},
+		}
+		for k, v := range st.Args {
+			values = append(values, struct {
+				field string
+				value string
+			}{"args." + k, v})
+		}
+		for _, v := range values {
+			if err := check(name, v.field, v.value); err != nil {
+				return err
+			}
+		}
+		if st.Register != "" {
+			reg := strings.TrimSpace(st.Register)
+			if !regexp.MustCompile(`^[a-zA-Z_]\w*$`).MatchString(reg) {
+				return fmt.Errorf("步骤 %s: register 变量名 %q 无效", name, st.Register)
+			}
+			known[reg] = true
 		}
 	}
 	return nil
@@ -163,6 +232,15 @@ func playbookNeedsForcedApproval(steps []PlaybookStep, pol CmdPolicyConfig) bool
 			continue
 		}
 		for _, cmd := range []string{st.Command, st.CommandWin, st.CommandMac} {
+			if strings.TrimSpace(cmd) == "" {
+				continue
+			}
+			_, force, _ := evaluatePlaybookCommand(cmd, pol)
+			if force {
+				return true
+			}
+		}
+		for _, cmd := range []string{st.Rollback, st.RollbackWin, st.RollbackMac} {
 			if strings.TrimSpace(cmd) == "" {
 				continue
 			}

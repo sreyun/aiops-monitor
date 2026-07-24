@@ -30,6 +30,23 @@ INSERT INTO ai_call_events(
 	}
 }
 
+// insertAIFeedbackEvent persists a privacy-minimized quality signal. sourceHash
+// is one-way metadata; raw prompts and replies stay out of observability tables.
+func (p *pgStore) insertAIFeedbackEvent(task, actor, action, sourceHash string) bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	_, err := p.db.Exec(`
+INSERT INTO ai_feedback_events(ts, task, actor, action, source_hash)
+VALUES ($1,$2,$3,$4,$5)`,
+		time.Now().Unix(), task, actor, action, sourceHash)
+	if err != nil {
+		slog.Warn("PG 写 AI 反馈观测失败", "err", err)
+		return false
+	}
+	return true
+}
+
 func nullStr(s string) string { return s }
 
 // aiCallStatsFromPG aggregates durable AI call events for the stats dashboard.
@@ -117,6 +134,63 @@ ORDER BY id DESC LIMIT $2`, sinceTs, recentLimit)
 		}
 		out["recent"] = recent
 	}
+	return out
+}
+
+func (p *pgStore) aiFeedbackStatsFromPG(sinceTs int64) map[string]any {
+	out := map[string]any{
+		"feedback_total": 0, "feedback_applied": 0, "feedback_helpful": 0,
+		"feedback_unhelpful": 0, "feedback_positive_rate": 0.0, "feedback_apply_rate": 0.0,
+		"feedback_by_task": map[string]aiFeedbackAgg{}, "feedback_persisted": true,
+	}
+	if p == nil || p.db == nil {
+		out["feedback_persisted"] = false
+		return out
+	}
+	var a aiFeedbackAgg
+	err := p.db.QueryRow(`
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN action='applied' THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN action='helpful' THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN action='unhelpful' THEN 1 ELSE 0 END),0)
+FROM ai_feedback_events WHERE ts >= $1`, sinceTs).
+		Scan(&a.Total, &a.Applied, &a.Helpful, &a.Unhelpful)
+	if err != nil {
+		slog.Warn("PG 聚合 AI 反馈失败", "err", err)
+		out["feedback_persisted"] = false
+		return out
+	}
+	positiveRate, applyRate := feedbackRates(a)
+	out["feedback_total"] = a.Total
+	out["feedback_applied"] = a.Applied
+	out["feedback_helpful"] = a.Helpful
+	out["feedback_unhelpful"] = a.Unhelpful
+	out["feedback_positive_rate"] = positiveRate
+	out["feedback_apply_rate"] = applyRate
+
+	byTask := map[string]aiFeedbackAgg{}
+	rows, err := p.db.Query(`
+SELECT task, COUNT(*),
+       COALESCE(SUM(CASE WHEN action='applied' THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN action='helpful' THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN action='unhelpful' THEN 1 ELSE 0 END),0)
+FROM ai_feedback_events WHERE ts >= $1
+GROUP BY task ORDER BY COUNT(*) DESC`, sinceTs)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var task string
+			var row aiFeedbackAgg
+			if rows.Scan(&task, &row.Total, &row.Applied, &row.Helpful, &row.Unhelpful) != nil {
+				continue
+			}
+			if task == "" {
+				task = "(unknown)"
+			}
+			byTask[task] = row
+		}
+	}
+	out["feedback_by_task"] = byTask
 	return out
 }
 
@@ -221,6 +295,7 @@ func (p *pgStore) cleanupAICallEvents(retainDays int) {
 	}
 	cut := time.Now().AddDate(0, 0, -retainDays).Unix()
 	_, _ = p.db.Exec(`DELETE FROM ai_call_events WHERE ts > 0 AND ts < $1`, cut)
+	_, _ = p.db.Exec(`DELETE FROM ai_feedback_events WHERE ts > 0 AND ts < $1`, cut)
 }
 
 // estimateAICost returns cost in configured currency for approx completion tokens.
@@ -260,6 +335,9 @@ func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().AddDate(0, 0, -days).Unix()
 	if s.pg != nil {
 		out := s.pg.aiCallStatsFromPG(since, 30)
+		for k, v := range s.pg.aiFeedbackStatsFromPG(since) {
+			out[k] = v
+		}
 		out["days"] = days
 		cfg := s.cfg.AIConfig()
 		out["cost_currency"] = cfg.CostCurrency
