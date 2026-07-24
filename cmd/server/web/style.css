@@ -1189,9 +1189,14 @@ svg.sparkline{width:100%; height:46px; display:block}
 /* ---------- 远程桌面（Web 推流） ---------- */
 #desktopMask.mask{align-items:center;padding:16px}
 .desk-modal{
-  width:min(1280px,96vw); max-width:none; height:min(88vh,900px);
+  /* Prefer nearly full viewport; "fullscreen" also targets this element. */
+  width:min(96vw,1600px); max-width:none; height:min(92vh,1080px);
   display:flex; flex-direction:column; overflow:hidden;
+  /* Avoid leftover transform from .modal animation — it blocks Fullscreen API. */
+  animation:deskModalIn .18s cubic-bezier(.4,0,.2,1);
+  transform:none;
 }
+@keyframes deskModalIn{from{opacity:0}to{opacity:1}}
 .desk-modal .modal-head{flex:none; padding:12px 16px}
 .desk-modal-body{
   padding:0!important; overflow:hidden!important; flex:1 1 auto; min-height:0;
@@ -1199,6 +1204,18 @@ svg.sparkline{width:100%; height:46px; display:block}
 }
 .desk-layout{display:flex; flex:1; min-height:0; height:100%}
 .desk-main{flex:1 1 auto; min-width:0; display:flex; flex-direction:column; background:#0b0e14}
+/* Browser fullscreen: fill the display; keep toolbar usable. */
+.desk-modal:fullscreen,
+.desk-modal:-webkit-full-screen{
+  width:100vw; height:100vh; max-width:none; max-height:none; border-radius:0; border:0;
+}
+.desk-stage:fullscreen,
+.desk-stage:-webkit-full-screen{
+  width:100vw; height:100vh; background:#000;
+}
+.desk-modal.is-max{
+  width:96vw!important; height:92vh!important; max-width:none!important;
+}
 .desk-toolbar{
   display:flex; align-items:flex-start; justify-content:space-between; gap:10px 16px;
   padding:8px 12px; border-bottom:1px solid var(--line); background:var(--panel);
@@ -1229,9 +1246,11 @@ svg.sparkline{width:100%; height:46px; display:block}
   position:relative; flex:1 1 auto; min-height:0; overflow:hidden;
   display:flex; align-items:center; justify-content:center; padding:0; background:#05070c;
 }
+/* Fill the stage and scale the bitmap up/down (old width:auto capped at
+   intrinsic JPEG size, so "fullscreen" looked unchanged on large monitors). */
 #deskCanvas,#deskVideo{
-  display:block; max-width:100%; max-height:100%; width:auto; height:auto;
-  background:#000; cursor:crosshair; outline:none;
+  display:block; width:100%; height:100%; max-width:100%; max-height:100%;
+  background:#000; cursor:crosshair; outline:none; touch-action:none;
   object-fit:contain; box-shadow:0 0 0 1px rgba(255,255,255,.06);
 }
 .desk-placeholder{
@@ -1250,6 +1269,11 @@ svg.sparkline{width:100%; height:46px; display:block}
   flex:0 0 260px; border-left:1px solid var(--line); background:var(--panel);
   padding:14px; display:flex; flex-direction:column; gap:8px; overflow:auto; min-height:0;
 }
+.desk-side-toggle{
+  display:none; width:100%; height:34px; border:1px solid var(--line2); border-radius:6px;
+  background:var(--bg2); color:var(--txt); font:inherit; font-size:12px; cursor:pointer;
+}
+.desk-side-body{display:flex; flex-direction:column; gap:8px; min-height:0}
 .desk-side-title{font-size:13px; font-weight:650; color:var(--txt)}
 .desk-side-hint{font-size:11px; color:var(--muted2); line-height:1.4}
 .desk-field{display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--txt2)}
@@ -1265,10 +1289,15 @@ svg.sparkline{width:100%; height:46px; display:block}
 .desk-sessions-list{display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto; margin-bottom:8px}
 .desk-sess-row{display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px}
 @media(max-width:900px){
-  .desk-modal{height:min(94vh,100%); width:96vw}
+  .desk-modal{height:min(96vh,100%); width:96vw}
   .desk-layout{flex-direction:column}
-  .desk-side{flex:0 0 auto; border-left:none; border-top:1px solid var(--line); max-height:220px}
+  .desk-side{flex:0 0 auto; border-left:none; border-top:1px solid var(--line); max-height:none; padding-top:10px}
+  .desk-side-toggle{display:block}
+  .desk-side.is-collapsed .desk-side-body{display:none}
+  .desk-side:not(.is-collapsed){max-height:40vh}
   .desk-tools{justify-content:flex-start}
+  .desk-q-label{font-size:11px}
+  .desk-select,.desk-q-label select.desk-select{min-width:72px; max-width:140px}
 }
 
 .desktop-btn svg{width:14px;height:14px}

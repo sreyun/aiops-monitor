@@ -70,6 +70,8 @@ func (c *winCapture) SetMonitor(id int) error {
 
 func (c *winCapture) Origin() (int, int) { return c.monX, c.monY }
 
+func deskClipboardSupported() bool { return true }
+
 func deskClipboardGet() (string, error) {
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
 	if err != nil {

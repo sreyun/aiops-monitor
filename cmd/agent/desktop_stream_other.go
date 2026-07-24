@@ -22,7 +22,7 @@ func deskH264Usable() bool       { return false }
 func deskPreferredCodec() string { return "" }
 func deskAVFScreenIndex() int    { return -1 }
 
-func deskKeyToVK(key, code string) int { return 0 }
+func deskClipboardSupported() bool { return false }
 
 func deskClipboardGet() (string, error) {
 	return "", fmt.Errorf("clipboard unsupported on %s", runtime.GOOS)

@@ -23,6 +23,7 @@ type darwinCapture struct {
 	mu       sync.Mutex
 	monitor  int // 1-based display id for screencapture -D; 0 = main
 	w, h     int
+	monX, monY int
 	monitors []deskMonitorInfo
 }
 
@@ -44,9 +45,9 @@ func (c *darwinCapture) CaptureProbe() error {
 }
 
 func (c *darwinCapture) refreshMonitors() {
-	// system_profiler SPDisplaysDataType is heavy; use screencapture -l listing windows is wrong.
-	// Fallback: probe displays 1..8 with a tiny capture, keep those that work.
+	// Probe displays 1..8 with a tiny capture, keep those that work.
 	c.monitors = nil
+	origins := darwinDisplayOrigins()
 	for id := 1; id <= 8; id++ {
 		tmp := filepath.Join(os.TempDir(), fmt.Sprintf("aiops-desk-probe-%d.jpg", id))
 		cmd := exec.Command("screencapture", "-x", "-D", strconv.Itoa(id), "-t", "jpg", tmp)
@@ -65,9 +66,15 @@ func (c *darwinCapture) refreshMonitors() {
 			continue
 		}
 		b := img.Bounds()
+		ox, oy := 0, 0
+		// Match CGDisplay bounds by size (screencapture -D order ≈ active display list).
+		idx := len(c.monitors)
+		if idx < len(origins) {
+			ox, oy = origins[idx].x, origins[idx].y
+		}
 		c.monitors = append(c.monitors, deskMonitorInfo{
 			ID: id, Name: fmt.Sprintf("Display %d", id),
-			Width: b.Dx(), Height: b.Dy(), Primary: id == 1,
+			Width: b.Dx(), Height: b.Dy(), X: ox, Y: oy, Primary: id == 1,
 		})
 	}
 	if len(c.monitors) == 0 {
@@ -76,7 +83,47 @@ func (c *darwinCapture) refreshMonitors() {
 	if c.monitor == 0 && len(c.monitors) > 0 {
 		c.monitor = c.monitors[0].ID
 		c.w, c.h = c.monitors[0].Width, c.monitors[0].Height
+		c.monX, c.monY = c.monitors[0].X, c.monitors[0].Y
 	}
+}
+
+type cgOrigin struct{ x, y, w, h int }
+
+func darwinDisplayOrigins() []cgOrigin {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		return nil
+	}
+	script := `
+from Quartz import CGGetActiveDisplayList, CGDisplayBounds, CGMainDisplayID
+max_n = 16
+err, ids, count = CGGetActiveDisplayList(max_n, None, None)
+if err != 0:
+    raise SystemExit(0)
+main = CGMainDisplayID()
+# Primary first, then remaining in system order.
+ordered = [d for d in ids[:count] if d == main] + [d for d in ids[:count] if d != main]
+for d in ordered:
+    b = CGDisplayBounds(d)
+    print("%d,%d,%d,%d" % (int(b.origin.x), int(b.origin.y), int(b.size.width), int(b.size.height)))
+`
+	out, err := exec.Command(py, "-c", script).Output()
+	if err != nil {
+		return nil
+	}
+	var list []cgOrigin
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Split(strings.TrimSpace(line), ",")
+		if len(parts) != 4 {
+			continue
+		}
+		x, _ := strconv.Atoi(parts[0])
+		y, _ := strconv.Atoi(parts[1])
+		w, _ := strconv.Atoi(parts[2])
+		h, _ := strconv.Atoi(parts[3])
+		list = append(list, cgOrigin{x, y, w, h})
+	}
+	return list
 }
 
 func (c *darwinCapture) Size() (int, int) {
@@ -105,11 +152,18 @@ func (c *darwinCapture) SetMonitor(id int) error {
 		if m.ID == id {
 			c.monitor = id
 			c.w, c.h = m.Width, m.Height
+			c.monX, c.monY = m.X, m.Y
 			return nil
 		}
 	}
 	c.monitor = id
 	return nil
+}
+
+func (c *darwinCapture) Origin() (x, y int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.monX, c.monY
 }
 
 func (c *darwinCapture) Capture() (image.Image, error) {
@@ -165,6 +219,7 @@ type darwinInput struct {
 	mu           sync.Mutex
 	hasCliclick  bool
 	lastX, lastY int
+	monX, monY   int
 	mods         map[string]bool // command / shift / control / option
 	warnedMouse  bool
 }
@@ -173,22 +228,84 @@ func openDeskInput() (deskInput, error) {
 	_, err := exec.LookPath("cliclick")
 	di := &darwinInput{hasCliclick: err == nil, mods: map[string]bool{}}
 	if err != nil {
-		slog.Warn("macOS 未找到 cliclick，远程鼠标控制不可用（键盘仍可用）；建议安装: brew install cliclick")
+		// Quartz via python3 is a no-extra-deps fallback on most Macs.
+		if quartzMouseAvailable() {
+			slog.Info("macOS 未找到 cliclick，将使用 Python/Quartz 注入鼠标（仍建议: brew install cliclick）")
+		} else {
+			slog.Warn("macOS 未找到 cliclick 且 Quartz 不可用，远程鼠标控制受限（键盘仍可用）；建议: brew install cliclick")
+		}
 	}
 	return di, nil
 }
 
 func (i *darwinInput) Close() error { return nil }
 
+func (i *darwinInput) SetOrigin(x, y int) {
+	i.mu.Lock()
+	i.monX, i.monY = x, y
+	i.mu.Unlock()
+}
+
+func quartzMouseAvailable() bool {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(py, "-c", "import Quartz")
+	return cmd.Run() == nil
+}
+
+func quartzMouse(action string, x, y, button int) error {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		return err
+	}
+	// action: move | down | up | click
+	script := `
+import sys
+from Quartz.CoreGraphics import (
+    CGEventCreateMouseEvent, CGEventPost, CGEventCreateScrollWheelEvent,
+    kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp,
+    kCGEventRightMouseDown, kCGEventRightMouseUp,
+    kCGEventOtherMouseDown, kCGEventOtherMouseUp,
+    kCGMouseButtonLeft, kCGMouseButtonRight, kCGMouseButtonCenter,
+    kCGHIDEventTap, kCGScrollEventUnitLine,
+)
+action, x, y, button = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+btn = kCGMouseButtonLeft
+down_t, up_t = kCGEventLeftMouseDown, kCGEventLeftMouseUp
+if button == 2:
+    btn = kCGMouseButtonRight
+    down_t, up_t = kCGEventRightMouseDown, kCGEventRightMouseUp
+elif button == 3:
+    btn = kCGMouseButtonCenter
+    down_t, up_t = kCGEventOtherMouseDown, kCGEventOtherMouseUp
+if action == "move":
+    e = CGEventCreateMouseEvent(None, kCGEventMouseMoved, (x, y), btn)
+    CGEventPost(kCGHIDEventTap, e)
+elif action == "down":
+    e = CGEventCreateMouseEvent(None, down_t, (x, y), btn)
+    CGEventPost(kCGHIDEventTap, e)
+elif action == "up":
+    e = CGEventCreateMouseEvent(None, up_t, (x, y), btn)
+    CGEventPost(kCGHIDEventTap, e)
+elif action == "wheel":
+    e = CGEventCreateScrollWheelEvent(None, kCGScrollEventUnitLine, 1, y)
+    CGEventPost(kCGHIDEventTap, e)
+`
+	return exec.Command(py, "-c", script, action, fmt.Sprintf("%d", x), fmt.Sprintf("%d", y), fmt.Sprintf("%d", button)).Run()
+}
+
 func (i *darwinInput) MouseMove(x, y int) error {
 	i.mu.Lock()
-	i.lastX, i.lastY = x, y
+	ax, ay := i.monX+x, i.monY+y
+	i.lastX, i.lastY = ax, ay
 	hc := i.hasCliclick
 	i.mu.Unlock()
 	if hc {
-		return exec.Command("cliclick", fmt.Sprintf("m:%d,%d", x, y)).Run()
+		return exec.Command("cliclick", fmt.Sprintf("m:%d,%d", ax, ay)).Run()
 	}
-	return nil
+	return quartzMouse("move", ax, ay, 1)
 }
 
 func (i *darwinInput) MouseButton(button int, down bool) error {
@@ -198,27 +315,31 @@ func (i *darwinInput) MouseButton(button int, down bool) error {
 	warned := i.warnedMouse
 	i.warnedMouse = true
 	i.mu.Unlock()
-	if !hc {
+	if hc {
+		switch button {
+		case 2:
+			if !down {
+				return exec.Command("cliclick", fmt.Sprintf("rc:%d,%d", x, y)).Run()
+			}
+			return nil
+		case 3:
+			// cliclick has no middle-click; use Quartz when available.
+			return quartzMouse(map[bool]string{true: "down", false: "up"}[down], x, y, 3)
+		default:
+			verb := "dd"
+			if !down {
+				verb = "du"
+			}
+			return exec.Command("cliclick", fmt.Sprintf("%s:%d,%d", verb, x, y)).Run()
+		}
+	}
+	if err := quartzMouse(map[bool]string{true: "down", false: "up"}[down], x, y, button); err != nil {
 		if !warned {
-			slog.Warn("忽略鼠标点击：未安装 cliclick（brew install cliclick）")
+			slog.Warn("忽略鼠标点击：未安装 cliclick 且 Quartz 注入失败（需辅助功能权限）", "err", err)
 		}
-		return nil
+		return err
 	}
-	switch button {
-	case 2: // right — cliclick lacks down/up; emulate a click on release
-		if !down {
-			return exec.Command("cliclick", fmt.Sprintf("rc:%d,%d", x, y)).Run()
-		}
-		return nil
-	case 3: // middle — unsupported by cliclick
-		return nil
-	default: // left: honour explicit down/up so drag works
-		verb := "dd"
-		if !down {
-			verb = "du"
-		}
-		return exec.Command("cliclick", fmt.Sprintf("%s:%d,%d", verb, x, y)).Run()
-	}
+	return nil
 }
 
 func (i *darwinInput) MouseWheel(delta int) error {
@@ -235,6 +356,9 @@ func (i *darwinInput) MouseWheel(delta int) error {
 	dir := 1
 	if delta < 0 {
 		dir = -1
+	}
+	if err := quartzMouse("wheel", 0, dir*n, 0); err == nil {
+		return nil
 	}
 	script := fmt.Sprintf(`tell application "System Events" to repeat %d times
 scroll %d
@@ -269,11 +393,11 @@ func (i *darwinInput) usingClause() string {
 func (i *darwinInput) Key(vk int, down bool) error {
 	// Modifiers only update state; the chord is applied when the base key fires.
 	switch vk {
-	case 0x10:
+	case 0x10, 0xA0, 0xA1:
 		return i.setMod("shift", down)
-	case 0x11:
+	case 0x11, 0xA2, 0xA3:
 		return i.setMod("control", down)
-	case 0x12:
+	case 0x12, 0xA4, 0xA5:
 		return i.setMod("option", down)
 	case 0x5B, 0x5C:
 		return i.setMod("command", down)
@@ -363,50 +487,6 @@ func deskPreferredCodec() string {
 	return ""
 }
 
-func deskKeyToVK(key, code string) int {
-	switch code {
-	case "Backspace":
-		return 0x08
-	case "Tab":
-		return 0x09
-	case "Enter":
-		return 0x0D
-	case "Escape":
-		return 0x1B
-	case "Space":
-		return 0x20
-	case "ArrowLeft":
-		return 0x25
-	case "ArrowUp":
-		return 0x26
-	case "ArrowRight":
-		return 0x27
-	case "ArrowDown":
-		return 0x28
-	case "Delete":
-		return 0x2E
-	case "ShiftLeft", "ShiftRight":
-		return 0x10
-	case "ControlLeft", "ControlRight":
-		return 0x11
-	case "AltLeft", "AltRight":
-		return 0x12
-	case "MetaLeft", "MetaRight":
-		return 0x5B
-	}
-	if len(code) == 4 && code[:3] == "Key" {
-		return int(code[3])
-	}
-	if len(key) == 1 {
-		r := key[0]
-		if r >= 'a' && r <= 'z' {
-			return int(r - 32)
-		}
-		return int(r)
-	}
-	return 0
-}
-
 // darwinVKName returns either a single character or a macOS key code number string.
 func darwinVKName(vk int) string {
 	switch vk {
@@ -420,6 +500,14 @@ func darwinVKName(vk int) string {
 		return "53"
 	case 0x20:
 		return " "
+	case 0x21:
+		return "116" // page up
+	case 0x22:
+		return "121" // page down
+	case 0x23:
+		return "119" // end
+	case 0x24:
+		return "115" // home
 	case 0x25:
 		return "123"
 	case 0x26:
@@ -428,8 +516,56 @@ func darwinVKName(vk int) string {
 		return "124"
 	case 0x28:
 		return "125"
+	case 0x2D:
+		return "114" // help/insert
 	case 0x2E:
 		return "117"
+	case 0x70:
+		return "122" // F1
+	case 0x71:
+		return "120"
+	case 0x72:
+		return "99"
+	case 0x73:
+		return "118"
+	case 0x74:
+		return "96"
+	case 0x75:
+		return "97"
+	case 0x76:
+		return "98"
+	case 0x77:
+		return "100"
+	case 0x78:
+		return "101"
+	case 0x79:
+		return "109"
+	case 0x7A:
+		return "103"
+	case 0x7B:
+		return "111"
+	case 0xBD:
+		return "-"
+	case 0xBB:
+		return "="
+	case 0xDB:
+		return "["
+	case 0xDD:
+		return "]"
+	case 0xDC:
+		return "\\"
+	case 0xBA:
+		return ";"
+	case 0xDE:
+		return "'"
+	case 0xC0:
+		return "`"
+	case 0xBC:
+		return ","
+	case 0xBE:
+		return "."
+	case 0xBF:
+		return "/"
 	}
 	if vk >= 'A' && vk <= 'Z' {
 		return string(rune(vk + 32))
@@ -438,6 +574,11 @@ func darwinVKName(vk int) string {
 		return string(rune(vk))
 	}
 	return ""
+}
+
+func deskClipboardSupported() bool {
+	_, err := exec.LookPath("pbpaste")
+	return err == nil
 }
 
 func deskClipboardGet() (string, error) {
