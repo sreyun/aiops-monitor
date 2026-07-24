@@ -12,10 +12,25 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// isDeskCaptureFatal reports capture errors that will not self-heal with retries
+// (Session 0, missing interactive desktop, …). Transient BitBlt / attach failures
+// during desktop switches are NOT fatal and keep the existing capFails budget.
+func isDeskCaptureFatal(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Session 0") ||
+		strings.Contains(msg, "GetDC/GetWindowDC failed") ||
+		strings.Contains(msg, "cannot read screen size") ||
+		strings.Contains(msg, "screen capture unavailable")
+}
 
 // Agent-side web desktop channel (screen stream + input + file xfer).
 // Mirrors terminal reverse channel: wait → rx + tx.
@@ -268,7 +283,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		"codec": q.Codec, "codecs": codecs, "prefer": prefer,
 		"h264": h264OK, "clipboard": true, "monitors": mons,
 		"view_only": viewOnly,
-		"features": map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK, "input": !viewOnly},
+		"features":  map[string]bool{"dnd": true, "clipboard": true, "monitors": true, "h264": h264OK, "input": !viewOnly},
 	})
 	if err := writeTx(deskTxFrame('S', meta)); err != nil {
 		pw.Close()
@@ -394,7 +409,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 			img, err := cap.Capture()
 			if err != nil {
 				capFails++
-				if capFails < maxCapFails {
+				if !isDeskCaptureFatal(err) && capFails < maxCapFails {
 					// Likely a desktop switch in progress; the next Capture()
 					// re-attaches to the input desktop. Back off briefly and retry
 					// instead of dropping the whole session.
@@ -573,11 +588,11 @@ func runtimeGOOS() string {
 // noopDeskInput keeps the session streaming when OS input tools are missing.
 type noopDeskInput struct{}
 
-func (noopDeskInput) MouseMove(x, y int) error      { return nil }
+func (noopDeskInput) MouseMove(x, y int) error                { return nil }
 func (noopDeskInput) MouseButton(button int, down bool) error { return nil }
-func (noopDeskInput) MouseWheel(delta int) error    { return nil }
-func (noopDeskInput) Key(vk int, down bool) error   { return nil }
-func (noopDeskInput) Close() error                  { return nil }
+func (noopDeskInput) MouseWheel(delta int) error              { return nil }
+func (noopDeskInput) Key(vk int, down bool) error             { return nil }
+func (noopDeskInput) Close() error                            { return nil }
 
 func scaleImage(src image.Image, scale float64) image.Image {
 	if scale <= 0 || scale >= 0.99 {
