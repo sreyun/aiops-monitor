@@ -62,6 +62,31 @@ func runResetAdmin(cfgPath string) {
 	fmt.Println()
 }
 
+// runResetAdminMFA clears MFA/TOTP for the first admin (or -reset-mfa-user) so
+// operators locked out by a lost/desynced authenticator can sign in with
+// password only, then re-enroll 2FA from the profile page.
+func runResetAdminMFA(cfgPath, username string) {
+	cfg, err := NewConfigStore(cfgPath, pgFromEnv())
+	if err != nil {
+		log.Fatalf("Failed to load config %q: %v", cfgPath, err)
+	}
+	name, err := cfg.ResetAdminMFA(username)
+	if err != nil {
+		log.Fatalf("Admin MFA reset failed: %v", err)
+	}
+	fmt.Println()
+	fmt.Println("==============================================")
+	fmt.Println("  MFA (TOTP) has been cleared")
+	fmt.Println("==============================================")
+	fmt.Printf("  User: %s\n", name)
+	fmt.Println("  MFAEnabled=false, MFASecret cleared")
+	fmt.Println("==============================================")
+	fmt.Println("  Next: restart aiops-server, login with password,")
+	fmt.Println("  then re-enable 2FA under Profile → MFA.")
+	fmt.Println("==============================================")
+	fmt.Println()
+}
+
 // runResetAdminAPI starts a temporary HTTP server on 127.0.0.1 only, serving
 // a two-step admin password reset flow. The server generates a one-time token
 // (printed to console) and accepts authenticated reset requests.
