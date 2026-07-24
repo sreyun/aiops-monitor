@@ -165,7 +165,11 @@ function hostFolderMatchSet(folderId) {
     }
     return false;
   };
-  walk(HOST_FOLDERS.folders || []);
+  if (!walk(HOST_FOLDERS.folders || []) || ids.size === 0) {
+    // Stale localStorage / deleted folder — clear filter instead of emptying the list.
+    if (CUR_FOLDER === folderId) setCurFolder("");
+    return null;
+  }
   return ids;
 }
 
@@ -240,7 +244,7 @@ function hostTreeNodeHTML(n, depth, q) {
   const hasKids = (n.children || []).length > 0;
   const collapsed = !q && HOST_TREE_COLLAPSED.has(n.id);
   const canAdd = true; // nesting is unlimited (bounded only by a high safety cap)
-  const pad = 6 + (depth - 1) * 14;
+  const pad = 4 + (depth - 1) * 10;
   let kids = "";
   if (hasKids && !collapsed) {
     // --gx positions the vertical guide line under this node's caret centre.
@@ -251,7 +255,7 @@ function hostTreeNodeHTML(n, depth, q) {
       <span class="htx-caret${hasKids ? "" : " empty"}" data-folder-toggle="${esc(n.id)}" title="${hasKids ? I18N.t("section.folder_toggle") : ""}">${hasKids ? (collapsed ? "▸" : "▾") : ""}</span>
       <span class="htx-ico" aria-hidden="true"></span>
       <span class="htx-name" title="${esc(n.name)}">${esc(n.name)}</span>
-      <span class="htx-count">(${cnt.total || 0})</span>
+      <span class="htx-count">${cnt.total || 0}</span>
       <span class="htx-acts">
         ${canAdd ? `<button type="button" class="htx-act htx-add" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>` : ""}
         <button type="button" class="htx-act" data-folder-ren="${esc(n.id)}" title="${I18N.t("section.folder_rename")}">✎</button>
@@ -276,18 +280,18 @@ function hostTypeTreeHTML(q) {
   const allCnt = hosts.length;
   const rows = filtered.map(k => {
     const sel = CUR_TYPE === k;
-    return `<div class="htx-node${sel ? " selected" : ""}" data-type-sel="${esc(k)}" role="button" tabindex="0" style="padding-left:8px">
+    return `<div class="htx-node${sel ? " selected" : ""}" data-type-sel="${esc(k)}" role="button" tabindex="0" style="padding-left:4px">
       <span class="htx-caret empty"></span>
       <span class="htx-ico htx-ico-type" aria-hidden="true"></span>
       <span class="htx-name" title="${esc(k)}">${esc(k)}</span>
-      <span class="htx-count">(${map[k].total})</span>
+      <span class="htx-count">${map[k].total}</span>
     </div>`;
   }).join("");
-  return `<div class="htx-node htx-special${CUR_TYPE === "" ? " selected" : ""}" data-type-sel="" role="button" tabindex="0">
+  return `<div class="htx-node htx-special${CUR_TYPE === "" ? " selected" : ""}" data-type-sel="" role="button" tabindex="0" style="padding-left:4px">
       <span class="htx-caret empty"></span>
       <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
       <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
-      <span class="htx-count">(${allCnt})</span>
+      <span class="htx-count">${allCnt}</span>
     </div>
     <div class="htx-sep"></div>
     ${rows || `<div class="htx-empty">${I18N.t("section.type_empty_hint")}</div>`}`;
@@ -299,17 +303,17 @@ function hostAssetTreeHTML(q) {
   const folders = HOST_FOLDERS.folders || [];
   const showSpecial = !q || I18N.t("section.all_hosts_tree").toLowerCase().includes(q)
     || I18N.t("section.uncategorized").toLowerCase().includes(q);
-  return `${showSpecial ? `<div class="htx-node htx-special${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0">
+  return `${showSpecial ? `<div class="htx-node htx-special${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0" style="padding-left:4px">
         <span class="htx-caret empty"></span>
         <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
         <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
-        <span class="htx-count">(${allCnt})</span>
+        <span class="htx-count">${allCnt}</span>
       </div>
-      <div class="htx-node htx-special${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" data-ctx-folder="__ungrouped__" role="button" tabindex="0">
+      <div class="htx-node htx-special${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" data-ctx-folder="__ungrouped__" role="button" tabindex="0" style="padding-left:4px">
         <span class="htx-caret empty"></span>
         <span class="htx-ico htx-ico-none" aria-hidden="true"></span>
         <span class="htx-name">${I18N.t("section.uncategorized")}</span>
-        <span class="htx-count">(${ug.total || 0})</span>
+        <span class="htx-count">${ug.total || 0}</span>
       </div>
       <div class="htx-sep"></div>` : ""}
       ${folders.map(n => hostTreeNodeHTML(n, 1, q)).join("") || `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`}`;
@@ -544,7 +548,9 @@ async function hostFolderDelete(id) {
       toast(e.error || I18N.t("toast.delete_failed"), "err");
       return;
     }
-    if (CUR_FOLDER === id) setCurFolder("");
+    // Clear selection if the current folder is the deleted node or under it.
+    const match = hostFolderMatchSet(id);
+    if (CUR_FOLDER === id || (match && match.has(CUR_FOLDER))) setCurFolder("");
     toast(I18N.t("toast.folder_deleted"), "ok");
     await loadHostFolders();
     refresh();

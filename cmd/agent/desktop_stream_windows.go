@@ -30,6 +30,7 @@ var (
 	procReleaseDC              = modUser32.NewProc("ReleaseDC")
 	procCreateCompatibleDC     = modGdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = modGdi32.NewProc("CreateCompatibleBitmap")
+	procCreateDIBSection       = modGdi32.NewProc("CreateDIBSection")
 	procSelectObject           = modGdi32.NewProc("SelectObject")
 	procBitBlt                 = modGdi32.NewProc("BitBlt")
 	procDeleteObject           = modGdi32.NewProc("DeleteObject")
@@ -101,6 +102,7 @@ const (
 	smCXScreen     = 0
 	smCYScreen     = 1
 	srcCopy        = 0x00CC0020
+	captureBLT     = 0x40000000 // include layered windows
 	biRGB          = 0
 	dibRGBColors   = 0
 	mouseeventfMove = 0x0001
@@ -209,10 +211,54 @@ func (c *winCapture) Close() error {
 
 func (c *winCapture) Capture() (image.Image, error) {
 	c.ensureInputDesktop()
+	// RDP / DPI / monitor hotplug can change geometry between frames; stale
+	// 2880×1920 buffers against a resized desktop make BitBlt/GetDIBits fail.
+	c.refreshGeometry()
 	return c.captureGDI()
 }
 
+// refreshGeometry re-reads the selected monitor's virtual-screen rect.
+func (c *winCapture) refreshGeometry() {
+	mons := c.Monitors()
+	if len(mons) == 0 {
+		return
+	}
+	for _, m := range mons {
+		if m.ID == c.monID || (c.monID == 0 && m.Primary) {
+			if m.Width > 0 && m.Height > 0 {
+				c.monX, c.monY = m.X, m.Y
+				c.w, c.h = m.Width, m.Height
+				c.monID = m.ID
+			}
+			return
+		}
+	}
+	// Selected monitor disappeared — fall back to primary.
+	for _, m := range mons {
+		if m.Primary && m.Width > 0 && m.Height > 0 {
+			c.monX, c.monY = m.X, m.Y
+			c.w, c.h = m.Width, m.Height
+			c.monID = m.ID
+			return
+		}
+	}
+	m := mons[0]
+	if m.Width > 0 && m.Height > 0 {
+		c.monX, c.monY = m.X, m.Y
+		c.w, c.h = m.Width, m.Height
+		c.monID = m.ID
+	}
+}
+
 func (c *winCapture) captureGDI() (image.Image, error) {
+	if c.w < 1 || c.h < 1 {
+		return nil, fmt.Errorf("invalid capture size %dx%d", c.w, c.h)
+	}
+	// Soft cap: absurd sizes (mis-read metrics) exhaust GDI and look like GetDIBits failures.
+	if c.w > 7680 || c.h > 4320 {
+		return nil, fmt.Errorf("capture size too large: %dx%d", c.w, c.h)
+	}
+
 	hwnd := uintptr(0)
 	hdc, _, _ := procGetDC.Call(hwnd)
 	if hdc == 0 {
@@ -226,30 +272,83 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 	}
 	defer procDeleteDC.Call(memDC)
 
-	bmp, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(c.w), uintptr(c.h))
-	if bmp == 0 {
-		return nil, fmt.Errorf("CreateCompatibleBitmap failed")
-	}
-	defer procDeleteObject.Call(bmp)
-
-	old, _, _ := procSelectObject.Call(memDC, bmp)
-	defer procSelectObject.Call(memDC, old)
-
-	ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc, uintptr(c.monX), uintptr(c.monY), srcCopy)
-	if ret == 0 {
-		return nil, fmt.Errorf("BitBlt failed")
-	}
-
+	// Prefer CreateDIBSection: pixels are mapped directly — no GetDIBits, and no
+	// "bitmap still selected into a DC" failure mode that broke 2880×1920 captures.
 	bi := bitmapInfoHeader{
 		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
 		Width:       int32(c.w),
-		Height:      -int32(c.h),
+		Height:      -int32(c.h), // top-down
 		Planes:      1,
 		BitCount:    32,
 		Compression: biRGB,
 	}
+	var bits unsafe.Pointer
+	bmp, _, errDIB := procCreateDIBSection.Call(
+		hdc,
+		uintptr(unsafe.Pointer(&bi)),
+		dibRGBColors,
+		uintptr(unsafe.Pointer(&bits)),
+		0, 0,
+	)
+	if bmp != 0 && bits != nil {
+		defer procDeleteObject.Call(bmp)
+		old, _, _ := procSelectObject.Call(memDC, bmp)
+		ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
+			uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy|captureBLT)
+		_, _, _ = procSelectObject.Call(memDC, old) // deselect before touching bits/free
+		if ret == 0 {
+			// Retry without CAPTUREBLT (some Session/secure-desktop DCs reject it).
+			old2, _, _ := procSelectObject.Call(memDC, bmp)
+			ret, _, _ = procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
+				uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy)
+			_, _, _ = procSelectObject.Call(memDC, old2)
+			if ret == 0 {
+				return nil, fmt.Errorf("BitBlt failed")
+			}
+		}
+		nPix := c.w * c.h
+		src := unsafe.Slice((*byte)(bits), nPix*4)
+		img := image.NewRGBA(image.Rect(0, 0, c.w, c.h))
+		for i := 0; i < nPix; i++ {
+			off := i * 4
+			img.Pix[off+0] = src[off+2] // BGRA → RGBA
+			img.Pix[off+1] = src[off+1]
+			img.Pix[off+2] = src[off+0]
+			img.Pix[off+3] = 255
+		}
+		return img, nil
+	}
+
+	// Fallback: device-dependent bitmap + GetDIBits. Must DESELECT the bitmap
+	// before GetDIBits — calling GetDIBits while it is selected into memDC is a
+	// classic GDI failure (exactly the "GetDIBits failed" seen at 2880×1920).
+	_ = errDIB
+	bmp2, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(c.w), uintptr(c.h))
+	if bmp2 == 0 {
+		return nil, fmt.Errorf("CreateCompatibleBitmap failed")
+	}
+	defer procDeleteObject.Call(bmp2)
+
+	old, _, _ := procSelectObject.Call(memDC, bmp2)
+	ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
+		uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy|captureBLT)
+	if ret == 0 {
+		ret, _, _ = procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
+			uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy)
+	}
+	_, _, _ = procSelectObject.Call(memDC, old) // CRITICAL: deselect before GetDIBits
+	if ret == 0 {
+		return nil, fmt.Errorf("BitBlt failed")
+	}
+
 	buf := make([]byte, c.w*c.h*4)
-	n, _, _ := procGetDIBits.Call(hdc, bmp, 0, uintptr(c.h), uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	n, _, _ := procGetDIBits.Call(hdc, bmp2, 0, uintptr(c.h),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	if n == 0 {
+		// Second try with memDC (some drivers want a memory DC).
+		n, _, _ = procGetDIBits.Call(memDC, bmp2, 0, uintptr(c.h),
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	}
 	if n == 0 {
 		return nil, fmt.Errorf("GetDIBits failed")
 	}
@@ -262,7 +361,6 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 		img.Pix[off+2] = buf[off+0]
 		img.Pix[off+3] = 255
 	}
-	_ = procSendInput // keep linked for future absolute mouse
 	return img, nil
 }
 
@@ -270,7 +368,10 @@ type winInput struct {
 	curDesk     uintptr
 	curDeskName string
 	locked      bool
+	monX, monY  int // current monitor origin in virtual-screen coords
 }
+
+func (i *winInput) SetOrigin(x, y int) { i.monX, i.monY = x, y }
 
 func openDeskInput() (deskInput, error) { return &winInput{}, nil }
 func (i *winInput) Close() error {
@@ -314,7 +415,8 @@ func (i *winInput) ensureInputDesktop() {
 
 func (i *winInput) MouseMove(x, y int) error {
 	i.ensureInputDesktop()
-	_, _, _ = procSetCursorPos.Call(uintptr(x), uintptr(y))
+	ax, ay := i.monX+x, i.monY+y
+	_, _, _ = procSetCursorPos.Call(uintptr(int32(ax)), uintptr(int32(ay)))
 	return nil
 }
 

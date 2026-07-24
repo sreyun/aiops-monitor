@@ -68,6 +68,8 @@ func (c *winCapture) SetMonitor(id int) error {
 	return fmt.Errorf("monitor %d not found", id)
 }
 
+func (c *winCapture) Origin() (int, int) { return c.monX, c.monY }
+
 func deskClipboardGet() (string, error) {
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
 	if err != nil {

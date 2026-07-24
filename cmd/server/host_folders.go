@@ -523,6 +523,31 @@ func (s *Server) handleGetHostFolders(w http.ResponseWriter, r *http.Request) {
 			c.Online++
 		}
 	}
+	// Roll up: selection includes descendants, so badge counts must too —
+	// otherwise a parent shows (0) while the right pane lists child hosts.
+	direct := make(map[string]folderCountView, len(counts))
+	for id, c := range counts {
+		if c != nil {
+			direct[id] = *c
+		}
+	}
+	var rollupNode func(HostFolderNode) (int, int)
+	rollupNode = func(n HostFolderNode) (int, int) {
+		t, o := 0, 0
+		if d, ok := direct[n.ID]; ok {
+			t, o = d.Total, d.Online
+		}
+		for _, ch := range n.Children {
+			ct, co := rollupNode(ch)
+			t += ct
+			o += co
+		}
+		counts[n.ID] = &folderCountView{Total: t, Online: o}
+		return t, o
+	}
+	for _, n := range folders {
+		rollupNode(n)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"folders": folders,
 		"assign":  assign,

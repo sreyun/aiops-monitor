@@ -339,6 +339,7 @@ window.DICT_EN = {
   "desktop.streaming_hint": "Receiving the first frame…",
   "desktop.view_only": "View-only · input unavailable (missing xdotool / accessibility)",
   "desktop.error": "Desktop session error",
+  "desktop.warn": "Desktop notice",
   "desktop.not_connected": "Desktop not connected",
   "desktop.disconnect": "Disconnect",
   "desktop.fullscreen": "Fullscreen",
