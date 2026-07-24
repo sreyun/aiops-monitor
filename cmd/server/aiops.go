@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bufio"
@@ -62,6 +62,9 @@ type AIConfig struct {
 	WeKnoraKnowledgeBaseIDs string `json:"weknora_knowledge_base_ids,omitempty"` // 逗号分隔；可空=自动枚举全部可见库再检索
 	// DisablePublicChatMemory：开启后对话/助手回复不再写入公共向量记忆（敏感场景）；结案/诊断/采纳沉淀不受影响。
 	DisablePublicChatMemory bool `json:"disable_public_chat_memory,omitempty"`
+	// AllowUnverifiedAIOutputLearning：显式允许把尚未被人工采纳的普通对话输出写入 RAG。
+	// 默认关闭，防止提示注入或模型幻觉污染长期记忆；推荐依赖采纳/反馈/执行结果学习。
+	AllowUnverifiedAIOutputLearning bool `json:"allow_unverified_ai_output_learning,omitempty"`
 	// Sreyun Agent 配置
 	SreyunEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Sreyun 自主 Agent
 	SreyunAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
@@ -432,8 +435,8 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 				Message struct {
 					Content   string `json:"content"`
 					ToolCalls []struct {
-						ID   string `json:"id"`
-						Type string `json:"type"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
 						Function struct {
 							Name      string `json:"name"`
 							Arguments string `json:"arguments"` // JSON 字符串

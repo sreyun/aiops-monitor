@@ -343,6 +343,8 @@ function renderInstallCmd() {
   // Multi-server section visibility
   const msSection = $("multiServerSection");
   if (msSection) msSection.style.display = (MULTI_SERVER_MODE && !RELAY_MODE) ? "" : "none";
+  const auditSection = $("networkAuditInstallSection");
+  if (auditSection) auditSection.style.display = !RELAY_MODE ? "" : "none";
   // Relay mode: show gateway + internal commands, hide normal install
   if (RELAY_MODE) {
     $("normalInstallSection").style.display = "none";
@@ -359,6 +361,33 @@ function renderInstallCmd() {
   // 日志采集（可选）：把用户填写的路径（换行/逗号分隔）拼进安装命令，服务端写入 config.json 的 log_paths
   const lp = (($("installLogPaths") && $("installLogPaths").value) || "").trim();
   if (lp) q += "&log_paths=" + encodeURIComponent(lp);
+  // Cross-platform network visibility. Linux auto-selects AF_PACKET;
+  // Windows/macOS auto-select TShark over Npcap/libpcap/BPF.
+  if (!RELAY_MODE) {
+    const contentAudit = !!($("installContentAudit") && $("installContentAudit").checked);
+    const sniEnabled = contentAudit || !!($("installSNIEnabled") && $("installSNIEnabled").checked);
+    if (sniEnabled) q += "&sni_enabled=1";
+    let backend = (($("installCaptureBackend") || {}).value || "auto").trim();
+    if (CUR_OS !== "linux" && backend === "native") backend = "auto";
+    q += "&capture_backend=" + encodeURIComponent(backend);
+    const iface = (($("installSNIInterface") || {}).value || "").trim();
+    if (iface) q += "&sni_interface=" + encodeURIComponent(iface);
+    if (contentAudit) {
+      q += "&content_audit=1";
+      const ports = (($("installContentAuditPorts") || {}).value || "").trim();
+      if (ports) q += "&content_audit_ports=" + encodeURIComponent(ports);
+      const maxBody = parseInt((($("installContentAuditMaxBody") || {}).value || "4096"), 10) || 4096;
+      q += "&content_audit_max_body=" + encodeURIComponent(String(maxBody));
+      const bodyMode = (($("installContentAuditBodyMode") || {}).value || "redacted").trim();
+      q += "&content_audit_body_mode=" + encodeURIComponent(bodyMode);
+      const maxEvents = parseInt((($("installContentAuditMaxEvents") || {}).value || "2000"), 10) || 2000;
+      q += "&content_audit_max_events_per_min=" + encodeURIComponent(String(maxEvents));
+      const hosts = (($("installContentAuditHosts") || {}).value || "").trim();
+      if (hosts) q += "&content_audit_include_hosts=" + encodeURIComponent(hosts);
+      const excluded = (($("installContentAuditExcludePaths") || {}).value || "").trim();
+      if (excluded) q += "&content_audit_exclude_paths=" + encodeURIComponent(excluded);
+    }
+  }
   // Multi-server: append servers_json so the generated config.json uses a
   // servers array instead of a single server+token.
   let cmd, label, hint;
@@ -558,7 +587,7 @@ async function loadChecks() {
   try { renderChecks(await fetch(`${API}/checks`).then(r => r.json())); } catch (e) { /* ignore */ }
 }
 
-// 把当前拨测监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+// 把当前拨测监控快照汇总为纯文本供 AI 分析；仅人工采纳/反馈后的结果进入学习闭环。
 function checksToText() {
   const checks = LAST_CHECKS || [];
   if (!checks.length) return "（当前没有任何拨测监控项）";
@@ -1349,7 +1378,12 @@ async function usersAction(name, act) {
     const j = await r.json().catch(() => ({}));
     if (r.ok) { toast(I18N.t("toast.user_deleted"), "ok"); loadUsers(); } else toast(j.error || I18N.t("toast.delete_failed"), "err");
   } else if (act === "pwd") {
-    const pass = prompt(`为「${name}」设置新密码（至少 8 位）：`);
+    const pass = await requestAITextInput({
+      title:"重置用户密码",message:`为「${name}」设置新密码。`,
+      label:"新密码（至少 8 位）",placeholder:"输入符合安全策略的新密码",
+      submitLabel:"重置密码",inputType:"password",singleLine:true,autocomplete:"new-password",
+      maxLength:256,danger:false,requiredMessage:"请输入新密码"
+    });
     if (pass == null) return;
     if (!pwPolicyOK(pass.trim())) { toast(I18N.t("auth.password_policy"), "err"); return; }
     const r = await fetch(`${API}/users/${encodeURIComponent(name)}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pass }) });
@@ -1600,7 +1634,11 @@ async function createBackupNow() {
   });
 }
 async function restoreBackup(id) {
-  const conf = prompt(`⚠ 还原将覆盖当前 PostgreSQL 数据！\n请输入 RESTORE 或备份 ID 确认：\n${id}`);
+  const conf = await requestAITextInput({
+    title:"确认还原数据库",message:`还原会覆盖当前 PostgreSQL 数据。请输入 RESTORE 或备份 ID 确认：${id}`,
+    label:"确认文本",placeholder:"RESTORE",submitLabel:"确认还原",
+    singleLine:true,maxLength:256,danger:true,requiredMessage:"请输入 RESTORE 或备份 ID"
+  });
   if (!conf) return;
   const r = await fetch(`${API}/admin/backups/${encodeURIComponent(id)}/restore`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: conf })
@@ -1613,4 +1651,3 @@ safeAddEventListener("retSaveBtn", "click", saveRetentionCfg);
 safeAddEventListener("cmdPolSaveBtn", "click", saveCmdPolicyCfg);
 safeAddEventListener("bakCfgSaveBtn", "click", saveBackupCfg);
 safeAddEventListener("bakNowBtn", "click", createBackupNow);
-

@@ -30,9 +30,10 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/account/send-reset-code",
 		"/api/v1/account/reset-password",
 		"/api/v1/agent/register", "/api/v1/agent/report",
-		"/api/v1/mcp", // MCP server：外部 Agent(如 Hermes Agent) 连接，在 handler 内做 Bearer Token 鉴权
-		"/api/v1/prom/write", // Prometheus remote_write 接收：外部 exporter/telegraf/OTel 推送，在 handler 内做 Bearer 令牌鉴权
-		"/api/v1/agent/logs": // fingerprint-gated log ingest (checked in the handler)
+		"/api/v1/mcp",                        // MCP server：外部 Agent(如 Hermes Agent) 连接，在 handler 内做 Bearer Token 鉴权
+		"/api/v1/prom/write",                 // Prometheus remote_write 接收：外部 exporter/telegraf/OTel 推送，在 handler 内做 Bearer 令牌鉴权
+		"/api/v1/integrations/content-audit", // LLM Gateway/SDK structured audit ingest; dedicated Bearer token in handler
+		"/api/v1/agent/logs":                 // fingerprint-gated log ingest (checked in the handler)
 		return true
 	}
 	// Agent-facing hardware/netflow/hyperv/snmp ingest are fingerprint-gated, not
@@ -106,6 +107,11 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	}
 	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" || strings.HasPrefix(p, "/api/v1/admin/") { // user mgmt + admin ops: admin only
 		return rank >= roleRank(RoleAdmin)
+	}
+	// Content audit can contain prompts, completions, identities and DLP hits.
+	// A generic read-only viewer must not receive this high-sensitivity dataset.
+	if strings.HasPrefix(p, "/api/v1/content-audit") {
+		return rank >= roleRank(RoleOperator)
 	}
 	// 敏感系统配置：告警通道/阈值、AI Provider 设置及其连通性测试 —— 仅管理员可写。
 	// GET 仍按下方 viewer+ 放行（密钥已脱敏），供界面回填与能力探测。

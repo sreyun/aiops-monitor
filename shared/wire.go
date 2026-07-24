@@ -606,24 +606,50 @@ type DNSMapReport struct {
 	Entries     []DNSMapEntry `json:"entries"`
 }
 
-// ContentAuditEvent 是一条【明文 HTTP 请求】内容审计观测（增量1：单包取请求行+Host+body前缀）。
-// ⚠ 高敏感：可能含用户发给大模型的 prompt 等 PII。默认关闭、需授权，服务端加密存储 + 保留期。
+// ContentAuditEvent 是一条明文 HTTP 交换或 HTTPS 元数据审计观测。
+// ⚠ 高敏感：Body/RespBody 可能含 prompt、completion 与 PII。Agent 默认在上报前
+// 执行 redacted 策略；只有显式 body_mode=full 才保留未经脱敏的正文。
 type ContentAuditEvent struct {
-	SrcIP   string `json:"src_ip"`
-	DstIP   string `json:"dst_ip"`
-	DstPort uint16 `json:"dst_port"`
-	Method  string `json:"method"`          // GET/POST/...
-	Host    string `json:"host,omitempty"`  // Host 头
-	Path    string `json:"path,omitempty"`  // 请求路径（如 /v1/chat/completions、/api/chat）
-	CType   string `json:"ctype,omitempty"` // 请求 Content-Type
-	Body    string `json:"body,omitempty"`  // 请求体（增量2:TCP流重组后的完整 body，截断上限内）
+	SrcIP    string `json:"src_ip"`
+	DstIP    string `json:"dst_ip"`
+	DstPort  uint16 `json:"dst_port"`
+	Protocol string `json:"protocol,omitempty"` // http | tls | gateway
+	Method   string `json:"method"`             // GET/POST/...
+	Host     string `json:"host,omitempty"`     // Host 头
+	Path     string `json:"path,omitempty"`     // 请求路径（如 /v1/chat/completions、/api/chat）
+	CType    string `json:"ctype,omitempty"`    // 请求 Content-Type
+	Body     string `json:"body,omitempty"`     // 请求体（增量2:TCP流重组后的完整 body，截断上限内）
 	// ---- 增量 2：响应(completion)。TCP 流重组后回填 ----
-	Status        int    `json:"status,omitempty"`         // 响应状态码
-	RespCType     string `json:"resp_ctype,omitempty"`     // 响应 Content-Type
-	RespBody      string `json:"resp_body,omitempty"`      // 响应体全文（含大模型 completion；SSE 为拼接后的数据流）
-	ReqTruncated  bool   `json:"req_truncated,omitempty"`  // 请求体达上限被截断
-	RespTruncated bool   `json:"resp_truncated,omitempty"` // 响应体达上限被截断
-	Ts            int64  `json:"ts"`                       // 观测时刻 Unix 秒
+	Status          int      `json:"status,omitempty"`          // 响应状态码
+	RespCType       string   `json:"resp_ctype,omitempty"`      // 响应 Content-Type
+	RespBody        string   `json:"resp_body,omitempty"`       // 响应体全文（含大模型 completion；SSE 为拼接后的数据流）
+	ReqTruncated    bool     `json:"req_truncated,omitempty"`   // 请求体达上限被截断
+	RespTruncated   bool     `json:"resp_truncated,omitempty"`  // 响应体达上限被截断
+	CaptureBackend  string   `json:"capture_backend,omitempty"` // native | tshark | gateway
+	BodyMode        string   `json:"body_mode,omitempty"`       // metadata | redacted | full
+	ReqBytes        int      `json:"req_bytes,omitempty"`       // 策略处理前的可见请求正文大小
+	RespBytes       int      `json:"resp_bytes,omitempty"`      // 策略处理前的可见响应正文大小
+	ReqSHA256       string   `json:"req_sha256,omitempty"`      // 原始可见请求正文哈希（关联分析）
+	RespSHA256      string   `json:"resp_sha256,omitempty"`     // 原始可见响应正文哈希
+	RedactionCount  int      `json:"redaction_count,omitempty"`
+	RedactionLabels []string `json:"redaction_labels,omitempty"` // Agent 端已发现并遮蔽的类别
+	// Gateway/SDK 结构化治理字段；被动抓包可留空，应用层集成应尽量提供。
+	PrincipalID    string   `json:"principal_id,omitempty"`
+	ApplicationID  string   `json:"application_id,omitempty"`
+	EventID        string   `json:"event_id,omitempty"` // integration retry idempotency key
+	RequestID      string   `json:"request_id,omitempty"`
+	TraceID        string   `json:"trace_id,omitempty"`
+	LLMProvider    string   `json:"llm_provider,omitempty"`
+	LLMModel       string   `json:"llm_model,omitempty"`
+	LLMOperation   string   `json:"llm_operation,omitempty"`
+	LLMStream      bool     `json:"llm_stream,omitempty"`
+	InputTokens    int      `json:"input_tokens,omitempty"`
+	OutputTokens   int      `json:"output_tokens,omitempty"`
+	ToolCalls      int      `json:"tool_calls,omitempty"`
+	LatencyMS      int64    `json:"latency_ms,omitempty"`
+	PolicyDecision string   `json:"policy_decision,omitempty"`
+	RiskLabels     []string `json:"risk_labels,omitempty"`
+	Ts             int64    `json:"ts"` // 观测时刻 Unix 秒
 }
 
 // ContentAuditReport 是 agent 周期上报的内容审计载荷（POST /api/v1/agent/content-audit）。

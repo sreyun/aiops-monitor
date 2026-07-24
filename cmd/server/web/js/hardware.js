@@ -331,7 +331,7 @@ function hwDetailHeadHTML(it, m) {
     </div>
     <span class="badge ${badgeCls}">${esc(m.label)}</span>
     <span style="flex:1"></span>
-    <button class="btn sm ai-assist-btn" data-hwai="1" title="${esc(hwT("hardware.ai_diag_title", "AI 分析该设备整体运行状态并沉淀记忆"))}"><span class="ai-assist-btn-ic">🤖</span>${esc(hwT("hardware.ai_diag", "AI 诊断"))}</button>
+    <button class="btn sm ai-assist-btn" data-hwai="1" title="${esc(hwT("hardware.ai_diag_title", "AI 分析设备运行状态；人工反馈或采纳后再学习"))}"><span class="ai-assist-btn-ic">🤖</span>${esc(hwT("hardware.ai_diag", "AI 诊断"))}</button>
     <div class="exp-dd hwx-dd">
       <button class="btn sm" data-hwexpbtn="1" aria-haspopup="true">${esc(hwT("hardware.export", "导出"))}</button>
       <div class="exp-dd-menu" data-hwexpmenu="1" role="menu">
@@ -1007,7 +1007,7 @@ safeAddEventListener("hardwarePanel", "change", e => {
 dupBindPanel("hardwarePanel", loadHardwarePanel);
 
 // 导出下拉：按钮开合 + 选项点击 + 点外部/Esc 收起
-// AI 诊断：把该设备完整硬件快照喂给 AI 分析整体运行状态，走 /ai/assist 流式 + 自动沉淀记忆(闭环)
+// AI 诊断：把该设备硬件快照交给 /ai/assist 流式分析；仅人工采纳/反馈后沉淀记忆。
 safeAddEventListener("hwAIBtn", "click", () => {
   if (!HW_CUR) return;
   if (typeof openAIAssist !== "function") { toast(hwT("hardware.ai_unavailable", "AI 面板未就绪"), "err"); return; }

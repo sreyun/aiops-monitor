@@ -146,7 +146,7 @@ async function loadForwards() {
   } catch(e) {}
 }
 
-// 把当前端口转发/代理快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+// 把当前端口转发/代理快照汇总为纯文本供 AI 分析；仅人工采纳/反馈后的结果进入学习闭环。
 function forwardsToText() {
   const tcp = LAST_FORWARDS || [];
   const http = LAST_HTTP_PROXIES || [];

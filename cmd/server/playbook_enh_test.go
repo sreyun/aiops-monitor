@@ -97,3 +97,58 @@ func TestResolvePlaybookCommand_ModuleTakesPriority(t *testing.T) {
 		t.Errorf("module step resolved to %q, want module envelope", got)
 	}
 }
+
+func TestResolvePlaybookRollbackPerOS(t *testing.T) {
+	step := PlaybookStep{
+		Rollback: "systemctl start {{svc}}", RollbackWin: "sc start {{svc}}",
+		RollbackMac: "brew services start {{svc}}",
+	}
+	vars := map[string]string{"svc": "nginx"}
+	cases := map[string]string{
+		"linux": "systemctl start nginx", "windows": "sc start nginx",
+		"darwin": "brew services start nginx",
+	}
+	for osName, want := range cases {
+		if got := resolvePlaybookRollback(step, &Host{OS: osName}, vars); got != want {
+			t.Errorf("rollback(%s)=%q want %q", osName, got, want)
+		}
+	}
+}
+
+func TestValidatePlaybookVariablesRejectsUnknownAndForwardReference(t *testing.T) {
+	if err := validatePlaybookVariables([]PlaybookStep{{Name: "bad", Command: "echo {{typo}}"}}); err == nil {
+		t.Fatal("unknown variable must be rejected")
+	}
+	steps := []PlaybookStep{
+		{Name: "first", Command: "echo ok", Register: "result"},
+		{Name: "second", Command: "echo {{result}}"},
+	}
+	if err := validatePlaybookVariables(steps); err != nil {
+		t.Fatalf("registered variable should be accepted: %v", err)
+	}
+	if err := validatePlaybookVariables([]PlaybookStep{
+		{Name: "first", Command: "echo {{later}}"},
+		{Name: "second", Command: "echo ok", Register: "later"},
+	}); err == nil {
+		t.Fatal("forward reference must be rejected")
+	}
+}
+
+func TestPlaybookUpsertNormalizesExecutionControls(t *testing.T) {
+	pm := newTestPM(t)
+	pb, err := pm.Upsert(Playbook{
+		Name: "controlled",
+		Steps: []PlaybookStep{{
+			Name: "read", Module: "gather_facts", Target: "all", TimeoutSec: 30,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if pb.Strategy.MaxParallel != 30 {
+		t.Fatalf("default max_parallel=%d", pb.Strategy.MaxParallel)
+	}
+	if pb.Steps[0].MaxAttempts != 3 || pb.Steps[0].RetryDelaySec != 2 {
+		t.Fatalf("retry defaults not normalized: %+v", pb.Steps[0])
+	}
+}

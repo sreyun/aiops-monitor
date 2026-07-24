@@ -282,9 +282,9 @@ type Agent struct {
 	identity       shared.Report // template with host fields pre-filled (Token is per-target)
 	httpc          *http.Client  // used for non-report HTTP (e.g. plugin downloads)
 
-	logPaths      []string // log files/dirs to tail and forward (empty = collector disabled)
-	logEncrypt    bool     // 加密上报日志（gzip+AES-GCM），有服务端下发密钥时生效；--log-encrypt=false 可关
-	stateFile     string   // 身份状态文件路径；认回规范 host_id 后要写回这里
+	logPaths   []string // log files/dirs to tail and forward (empty = collector disabled)
+	logEncrypt bool     // 加密上报日志（gzip+AES-GCM），有服务端下发密钥时生效；--log-encrypt=false 可关
+	stateFile  string   // 身份状态文件路径；认回规范 host_id 后要写回这里
 
 	// 新增采集器配置（可选，未配置时不启动）
 	redfishTargets   []RedfishTarget
@@ -489,12 +489,15 @@ func (a *Agent) Run(ctx context.Context) {
 		}
 	}
 
-	// Start SNI/DNS capture（目的 IP→真实域名；Linux 抓包，需 root，默认关）。run() 内含阻塞
-	// 读循环，独立 goroutine，不入 childWg（被动抓包无关键状态，进程退出即弃，关停快）。
+	// Start DNS/SNI/content capture. Linux defaults to AF_PACKET; Windows/macOS
+	// use TShark over Npcap/libpcap/BPF. Context cancellation also terminates the
+	// external capture process, avoiding orphan tshark children after Agent stop.
 	if a.sniCfg != nil && a.sniCfg.Enabled {
 		sc := newSNICollector(*a.sniCfg, a.identity.HostID, a.identity.Fingerprint)
-		go sc.run(a.postDNSMapReport, a.postContentAuditReport)
-		slog.Info("SNI/DNS 抓取器已启动", "iface", a.sniCfg.Interface, "content_audit", a.sniCfg.ContentAudit)
+		go sc.run(ctx, a.postDNSMapReport, a.postContentAuditReport)
+		slog.Info("SNI/DNS 抓取器已启动",
+			"backend", effectiveCaptureBackend(a.sniCfg.CaptureBackend),
+			"iface", a.sniCfg.Interface, "content_audit", a.sniCfg.ContentAudit)
 	}
 
 	// Start Hyper-V guest inventory collector

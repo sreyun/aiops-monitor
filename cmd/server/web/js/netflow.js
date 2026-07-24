@@ -350,7 +350,7 @@ function netflowToText() {
   return lines.join("\n").slice(0, 12000);
 }
 
-// nfOpenAI 打开 AI 面板对当前主机流量做整体研判（学习闭环自动复用：/ai/assist 沉淀记忆 + 👍/👎）。
+// nfOpenAI 打开 AI 面板研判主机流量；仅人工采纳/反馈后的结果进入学习闭环。
 function nfOpenAI() {
   if (typeof openAIAssist !== "function") { if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err"); return; }
   if (!nfCurrentHost) { if (typeof toast === "function") toast(I18N.t("netflow.no_data", "暂无流量数据"), "err"); return; }

@@ -13,6 +13,37 @@ let DASH_CHART_ARGS = {};          // panelId → createChart 参数（供 resiz
 let PANEL_TARGETS_DRAFT = [];      // 面板编辑中的查询行
 let VARS_DRAFT = [];               // 变量编辑中的行
 let DASH_DATASOURCES = [];         // 已配置的外部数据源（Prometheus / Loki）
+let DASH_UNDO = [];                // 人工编辑撤销栈
+let DASH_REDO = [];                // 人工编辑重做栈
+let DASH_DIRTY = false;            // 尚未保存的人工修改
+let DASH_DRAG_ID = 0;              // 拖拽排序中的面板 ID
+let DASH_AI_REVIEW = null;         // AI 优化预览等待中的请求
+let DASH_AI_REVIEW_RESOLVE = null;
+let DASH_TICKET_DRAFT = null;
+
+function cloneDashboard(d) { return d ? JSON.parse(JSON.stringify(d)) : null; }
+function resetDashEditHistory() { DASH_UNDO = []; DASH_REDO = []; DASH_DIRTY = false; }
+function rememberDashMutation() {
+  if (!CUR_DASH || !DASH_EDIT) return;
+  DASH_UNDO.push(cloneDashboard(CUR_DASH));
+  if (DASH_UNDO.length > 50) DASH_UNDO.shift();
+  DASH_REDO = [];
+  DASH_DIRTY = true;
+}
+function undoDashEdit() {
+  if (!DASH_EDIT || !DASH_UNDO.length) return;
+  DASH_REDO.push(cloneDashboard(CUR_DASH));
+  CUR_DASH = DASH_UNDO.pop();
+  DASH_DIRTY = true;
+  resolveDashVars().then(renderDashDetail);
+}
+function redoDashEdit() {
+  if (!DASH_EDIT || !DASH_REDO.length) return;
+  DASH_UNDO.push(cloneDashboard(CUR_DASH));
+  CUR_DASH = DASH_REDO.pop();
+  DASH_DIRTY = true;
+  resolveDashVars().then(renderDashDetail);
+}
 
 /** 模板变量筛选按钮显示名：优先自定义 label，否则常见英文名映射为中文。 */
 function dashVarDisplayLabel(v) {
@@ -75,6 +106,7 @@ function showDashHome() {
   if (h) h.style.display = "";
   if (d) { d.style.display = "none"; d.innerHTML = ""; }
   CUR_DASH = null; DASH_EDIT = false; DASH_CHART_ARGS = {};
+  resetDashEditHistory();
 }
 function renderDashList(list) {
   const wrap = $("dashList");
@@ -112,6 +144,7 @@ async function openDashboard(id) {
   } catch (e) { toast("加载失败：" + e, "err"); return; }
   if (!CUR_DASH || !CUR_DASH.id) { toast("仪表盘不存在", "err"); return; }
   DASH_EDIT = false;
+  resetDashEditHistory();
   $("dashHome").style.display = "none";
   $("dashDetail").style.display = "";
   // 直接打开（AI 生成 / 消息中心 / 事件跳转）时也要确保数据源已加载，否则「数据源」下拉只有内置 VM，无法选择外部源。
@@ -163,14 +196,17 @@ function renderDashDetail() {
     <div class="dash-bar">
       <div class="dash-bar-main">
         <button class="dash-icon-btn" id="dashBack" title="返回列表">←</button>
-        <div class="dash-title-wrap"><span class="dash-title">${esc(d.name)}</span>${srcBadge}</div>
+        <div class="dash-title-wrap"><span class="dash-title">${esc(d.name)}</span>${srcBadge}${DASH_EDIT ? `<span class="dash-edit-state ${DASH_DIRTY ? "dirty" : ""}" role="status" aria-live="polite">${DASH_DIRTY ? "有未保存修改" : "编辑中"}</span>` : ""}</div>
         <div class="dash-bar-actions">
-          <button class="btn ghost sm" id="dashAnalyzeBtn" title="AI 解读当前看板数据">🔍 解读</button>
-          <button class="btn ghost sm" id="dashOptimizeBtn" title="AI 评审并给优化建议">✨ 优化</button>
-          <button class="btn ghost sm" id="dashTicketBtn" title="AI 研判 → 生成工单">🎫 工单</button>
+          <span class="dash-ai-actions">
+            <button class="btn ghost sm" id="dashAnalyzeBtn" title="基于当前时间范围生成可追问、可导出的 AI 诊断报告">✦ AI 诊断</button>
+            <button class="btn ghost sm" id="dashOptimizeBtn" title="AI 评审 → 查询干跑 → 差异预览 → 人工确认">✨ AI 优化</button>
+            <button class="btn ghost sm" id="dashTicketBtn" title="AI 研判 → 可编辑工单草案 → 人工确认">🎫 AI 建单</button>
+          </span>
+          <button class="btn ghost sm" id="dashExportBtn" title="导出看板快照、表格、Word 或 PDF 报告">⇩ 导出</button>
           <span class="dash-sep"></span>
           ${DASH_EDIT
-            ? `<button class="btn sm" id="dashAddPanel">+ 面板</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn sm" id="dashCancelEdit">退出</button><button class="btn primary sm" id="dashSaveBtn">保存</button>`
+            ? `<button class="btn sm" id="dashUndoBtn" ${DASH_UNDO.length ? "" : "disabled"} title="撤销（⌘/Ctrl+Z）">↶</button><button class="btn sm" id="dashRedoBtn" ${DASH_REDO.length ? "" : "disabled"} title="重做（⌘/Ctrl+Shift+Z）">↷</button><button class="btn sm" id="dashAddPanel">+ 组件</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn sm" id="dashCancelEdit">退出</button><button class="btn primary sm" id="dashSaveBtn">${DASH_DIRTY ? "保存修改" : "保存"}</button>`
             : `<button class="btn primary sm" id="dashEditBtn">✎ 编辑</button>`}
         </div>
       </div>
@@ -202,12 +238,14 @@ function renderPanels() {
     const style = dashPanelGridStyle(p);
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
     const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
-    const editBtns = DASH_EDIT ? `<button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
+    const editBtns = DASH_EDIT ? `<button class="mini-btn dash-drag-handle" data-drag-handle data-id="${p.id}" draggable="true" title="拖动排序" aria-label="拖动排序">⠿</button>
+        <button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
         <button class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
+        <button class="mini-btn" data-pact="dup" data-id="${p.id}" title="复制组件">⧉</button>
         <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
         <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
     const actions = (aiBtn || editBtns) ? `<div class="panel-edit-actions">${aiBtn}${editBtns}</div>` : "";
-    return `<div class="dash-panel dp-${esc(p.type)}" style="${style}" data-panel="${p.id}">
+    return `<div class="dash-panel dp-${esc(p.type)}" style="${style}" data-panel="${p.id}" role="article" aria-label="${esc(p.title || "未命名面板")}">
       <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${actions}</div>
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
     </div>`;
@@ -285,7 +323,11 @@ function panelBodyH(el) {
 async function loadPanel(p) {
   const body = document.getElementById("panelBody_" + p.id);
   if (!body) return;
-  if (p.type === "text") { body.innerHTML = `<div class="dash-text">${p.text || ""}</div>`; return; }
+  if (p.type === "text") {
+    // 文本来自用户、导入或模型，必须先转义再渲染；renderAIMarkdown 内部不允许原始 HTML/外链。
+    body.innerHTML = `<div class="dash-text">${renderAIMarkdown(p.text || "")}</div>`;
+    return;
+  }
   if (p.type === "unsupported") {
     body.innerHTML = `<div class="dash-unsupported">⚠ 暂不支持的面板类型${p.raw_type ? "：" + esc(p.raw_type) : ""}<div class="dash-unsupported-q">${(p.targets || []).map(t => esc(t.expr)).join("<br>") || "（无查询）"}</div></div>`;
     return;
@@ -727,13 +769,22 @@ window.addEventListener("resize", () => {
 /* ---------- 详情事件委托 ---------- */
 safeAddEventListener("dashDetail", "click", async e => {
   const t = e.target;
-  if (t.closest("#dashBack")) { showDashHome(); loadDashboards(); return; }
+  if (t.closest("#dashBack")) {
+    if (DASH_EDIT && DASH_DIRTY && !confirm("仍有未保存修改，确认放弃并返回列表？")) return;
+    showDashHome(); loadDashboards(); return;
+  }
   if (t.closest("#dashRefresh")) { renderPanels(); return; }
-  if (t.closest("#dashEditBtn")) { DASH_EDIT = true; renderDashDetail(); return; }
+  if (t.closest("#dashEditBtn")) { DASH_EDIT = true; resetDashEditHistory(); renderDashDetail(); return; }
   if (t.closest("#dashAnalyzeBtn")) { aiAnalyzeDash(); return; }
   if (t.closest("#dashOptimizeBtn")) { aiOptimizeDash(); return; }
   if (t.closest("#dashTicketBtn")) { aiTicketDash(); return; }
-  if (t.closest("#dashCancelEdit")) { openDashboard(CUR_DASH.id); return; }
+  if (t.closest("#dashExportBtn")) { openMask("dashExportMask"); return; }
+  if (t.closest("#dashUndoBtn")) { undoDashEdit(); return; }
+  if (t.closest("#dashRedoBtn")) { redoDashEdit(); return; }
+  if (t.closest("#dashCancelEdit")) {
+    if (DASH_DIRTY && !confirm("确认放弃所有未保存修改？")) return;
+    openDashboard(CUR_DASH.id); return;
+  }
   if (t.closest("#dashSaveBtn")) { saveCurDash(); return; }
   if (t.closest("#dashAddPanel")) { openPanelEditor(null); return; }
   if (t.closest("#dashEditVars")) { openVarsEditor(); return; }
@@ -747,14 +798,80 @@ safeAddEventListener("dashDetail", "click", async e => {
 });
 safeAddEventListener("dashDetail", "change", e => {
   if (e.target.id === "dashDSSelect") {
+    if (DASH_EDIT) rememberDashMutation();
     CUR_DASH.datasource = e.target.value;
-    // 静默持久化数据源选择（否则刷新后回退），再重解析变量 + 重绘。
-    fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(CUR_DASH) }).catch(() => {});
-    resolveDashVars().then(renderDashDetail);
+    if (DASH_EDIT) {
+      resolveDashVars().then(renderDashDetail);
+    } else {
+      // 浏览态切换仍持久化，但同步更新 revision，避免下一次人工保存误判为版本冲突。
+      fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(CUR_DASH) })
+        .then(async r => {
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+          if (j.revision) CUR_DASH.revision = j.revision;
+          if (j.updated_at) CUR_DASH.updated_at = j.updated_at;
+          return resolveDashVars();
+        })
+        .then(renderDashDetail)
+        .catch(err => { toast("数据源切换保存失败：" + err, "err"); openDashboard(CUR_DASH.id); });
+    }
     return;
   }
   const sel = e.target.closest("[data-dvar]");
   if (sel) { DASH_VARVALS[sel.dataset.dvar] = sel.value; renderPanels(); }
+});
+safeAddEventListener("dashDetail", "dragstart", e => {
+  const handle = e.target.closest("[data-drag-handle]");
+  if (!DASH_EDIT || !handle) { e.preventDefault(); return; }
+  DASH_DRAG_ID = +handle.dataset.id;
+  const panel = handle.closest("[data-panel]");
+  if (panel) panel.classList.add("dragging");
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(DASH_DRAG_ID));
+  }
+});
+safeAddEventListener("dashDetail", "dragover", e => {
+  if (!DASH_EDIT || !DASH_DRAG_ID || !e.target.closest("[data-panel]")) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+});
+safeAddEventListener("dashDetail", "drop", e => {
+  const target = e.target.closest("[data-panel]");
+  if (!DASH_EDIT || !DASH_DRAG_ID || !target) return;
+  e.preventDefault();
+  const targetID = +target.dataset.panel;
+  if (!targetID || targetID === DASH_DRAG_ID) return;
+  const ordered = (CUR_DASH.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+  const from = ordered.findIndex(p => p.id === DASH_DRAG_ID);
+  let to = ordered.findIndex(p => p.id === targetID);
+  if (from < 0 || to < 0) return;
+  rememberDashMutation();
+  const moved = ordered.splice(from, 1)[0];
+  if (from < to) to--;
+  const rect = target.getBoundingClientRect();
+  if (e.clientY > rect.top + rect.height / 2) to++;
+  ordered.splice(Math.max(0, Math.min(ordered.length, to)), 0, moved);
+  reflowDashLayout(ordered);
+  CUR_DASH.panels = ordered;
+  DASH_DRAG_ID = 0;
+  renderDashDetail();
+});
+safeAddEventListener("dashDetail", "dragend", () => {
+  DASH_DRAG_ID = 0;
+  document.querySelectorAll(".dash-panel.dragging").forEach(el => el.classList.remove("dragging"));
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && DASH_AI_REVIEW_RESOLVE) {
+    e.preventDefault();
+    finishDashAIReview(false);
+    return;
+  }
+  if (!DASH_EDIT || !CUR_DASH || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (e.target && e.target.closest && e.target.closest("input,textarea,select,[contenteditable=true]")) return;
+  if (String(e.key).toLowerCase() !== "z") return;
+  e.preventDefault();
+  if (e.shiftKey) redoDashEdit(); else undoDashEdit();
 });
 function applyDashCustom() {
   const f = $("dashCustomFrom"), tt = $("dashCustomTo");
@@ -769,15 +886,29 @@ function handlePanelAction(act, pid) {
   if (idx < 0) return;
   if (act === "ai") { aiAnalyzePanel(panels[idx]); return; }
   if (act === "edit") { openPanelEditor(panels[idx]); return; }
-  if (act === "del") { if (confirm("删除该面板？")) { panels.splice(idx, 1); renderPanels(); } return; }
+  if (act === "dup") {
+    rememberDashMutation();
+    const copy = cloneDashboard(panels[idx]);
+    copy.id = nextPanelId();
+    copy.title = (copy.title || "未命名组件") + " · 副本";
+    placeNewPanel(copy, panels);
+    panels.push(copy);
+    renderDashDetail();
+    return;
+  }
+  if (act === "del") {
+    if (confirm("删除该组件？")) { rememberDashMutation(); panels.splice(idx, 1); renderDashDetail(); }
+    return;
+  }
   // 上/下移：交换视觉顺序后流式重排，避免只换 x/y 造成重叠
   const sorted = panels.slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
   const si = sorted.findIndex(p => p.id === pid);
   const swap = act === "up" ? si - 1 : si + 1;
   if (swap < 0 || swap >= sorted.length) return;
+  rememberDashMutation();
   const tmp = sorted[si]; sorted[si] = sorted[swap]; sorted[swap] = tmp;
   reflowDashLayout(sorted);
-  renderPanels();
+  renderDashDetail();
 }
 
 /* ---------- 面板编辑器 ---------- */
@@ -796,8 +927,34 @@ function openPanelEditor(p) {
   fillPanelDS(p ? p.type : "timeseries", p ? (p.datasource || "") : "");
   panelTypeToggle();
   $("panelEditTitle").textContent = p ? "编辑面板" : "添加面板";
+  const status = $("panelQueryTestResult"); if (status) { status.textContent = ""; status.className = "panel-query-test-result"; }
   openMask("panelEditMask");
 }
+const PANEL_TEMPLATES = {
+  trend: { type: "timeseries", title: "趋势", unit: "", w: 12, h: 7 },
+  kpi: { type: "stat", title: "关键指标", unit: "short", w: 6, h: 4 },
+  gauge: { type: "gauge", title: "利用率", unit: "percent", w: 8, h: 6, min: 0, max: 100 },
+  ranking: { type: "bargauge", title: "Top 排行", unit: "short", w: 12, h: 6 },
+  table: { type: "table", title: "明细", unit: "", w: 12, h: 7 },
+  logs: { type: "logs", title: "实时日志", unit: "", w: 24, h: 8 },
+  alerts: { type: "alertlist", title: "当前告警", unit: "", w: 12, h: 7 },
+  text: { type: "text", title: "说明", unit: "", w: 24, h: 4 }
+};
+safeAddEventListener("panelTemplatePalette", "click", e => {
+  const btn = e.target.closest("[data-panel-template]");
+  if (!btn) return;
+  const tpl = PANEL_TEMPLATES[btn.dataset.panelTemplate];
+  if (!tpl) return;
+  $("panelType").value = tpl.type;
+  if (!$("panelTitle").value.trim()) $("panelTitle").value = tpl.title;
+  $("panelUnit").value = tpl.unit || "";
+  $("panelW").value = tpl.w;
+  $("panelH").value = tpl.h;
+  $("panelMin").value = tpl.min == null ? "" : tpl.min;
+  $("panelMax").value = tpl.max == null ? "" : tpl.max;
+  panelTypeToggle();
+  document.querySelectorAll("[data-panel-template]").forEach(x => x.classList.toggle("active", x === btn));
+});
 function fillPanelDS(type, selected) {
   const sel = $("panelDS");
   if (!sel) return;
@@ -873,6 +1030,42 @@ safeAddEventListener("panelTargets", "click", e => {
   const del = e.target.closest("[data-tgt-del]");
   if (del) { syncPanelTargets(); PANEL_TARGETS_DRAFT.splice(+del.dataset.tgtDel, 1); if (!PANEL_TARGETS_DRAFT.length) PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); }
 });
+safeAddEventListener("panelTestQuery", "click", async () => {
+  syncPanelTargets();
+  const ty = $("panelType").value;
+  const result = $("panelQueryTestResult");
+  const expr = PANEL_TARGETS_DRAFT.find(t => (t.expr || "").trim());
+  if (!expr || (ty !== "alertlist" && ty !== "text" && !expr.expr.trim())) {
+    if (result) { result.textContent = "请先填写查询"; result.className = "panel-query-test-result err"; }
+    return;
+  }
+  const started = performance.now();
+  if (result) { result.textContent = "正在验证…"; result.className = "panel-query-test-result"; }
+  try {
+    const ds = $("panelDS").value || (CUR_DASH && CUR_DASH.datasource) || "";
+    let endpoint = "query-instant";
+    let payload = { expr: expr.expr.trim(), datasource: ds, vars: panelVars() };
+    if (ty === "logs") {
+      endpoint = "query-logs";
+      const now = Math.floor(Date.now() / 1000);
+      payload = Object.assign(payload, { from: now - 900, to: now, limit: 3 });
+    }
+    const r = await fetch(`${API}/dashboards/${endpoint}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    if (j.available === false) throw new Error("所选数据源不可用或类型不匹配");
+    const count = ty === "logs" ? ((j.lines || []).length) : ((j.series || []).length);
+    const ms = Math.round(performance.now() - started);
+    if (result) {
+      result.textContent = count ? `验证通过 · ${count} 组结果 · ${ms}ms` : `表达式有效，但当前无数据 · ${ms}ms`;
+      result.className = "panel-query-test-result " + (count ? "ok" : "warn");
+    }
+  } catch (e) {
+    if (result) { result.textContent = "验证失败：" + String(e); result.className = "panel-query-test-result err"; }
+  }
+});
 function syncPanelTargets() {
   document.querySelectorAll("[data-tgt-expr]").forEach(el => { const i = +el.dataset.tgtExpr; if (PANEL_TARGETS_DRAFT[i]) PANEL_TARGETS_DRAFT[i].expr = el.value; });
   document.querySelectorAll("[data-tgt-legend]").forEach(el => { const i = +el.dataset.tgtLegend; if (PANEL_TARGETS_DRAFT[i]) PANEL_TARGETS_DRAFT[i].legend = el.value; });
@@ -886,6 +1079,7 @@ safeAddEventListener("panelSave", "click", () => {
   if (!noTargets && !targets.length) { toast(ty === "logs" ? "请填写 LogQL 查询" : "请至少填写一条 PromQL 查询", "err"); return; }
   if (ty === "logs" && !$("panelDS").value) { toast("日志面板需选择一个 Loki 数据源", "err"); return; }
   const min = $("panelMin").value.trim(), max = $("panelMax").value.trim();
+  if (min !== "" && max !== "" && parseFloat(min) >= parseFloat(max)) { toast("量程最小值必须小于最大值", "err"); return; }
   const panel = {
     id: $("panelId").value ? +$("panelId").value : nextPanelId(),
     title, type: ty, datasource: $("panelDS").value,
@@ -896,11 +1090,12 @@ safeAddEventListener("panelSave", "click", () => {
   if (min !== "") panel.min = parseFloat(min);
   if (max !== "") panel.max = parseFloat(max);
   const panels = CUR_DASH.panels;
+  rememberDashMutation();
   const existing = panels.findIndex(p => p.id === panel.id);
   if (existing >= 0) { panel.grid = panels[existing].grid; panel.grid.w = Math.max(1, Math.min(24, parseInt($("panelW").value) || 12)); panel.grid.h = Math.max(2, parseInt($("panelH").value) || 8); panels[existing] = panel; }
   else { placeNewPanel(panel, panels); panels.push(panel); }
   closeMask($("panelEditMask"));
-  renderPanels();
+  renderDashDetail();
 });
 function nextPanelId() { let m = 0; (CUR_DASH.panels || []).forEach(p => { if (p.id > m) m = p.id; }); return m + 1; }
 function placeNewPanel(panel, panels) {
@@ -952,6 +1147,7 @@ function syncVarRows() {
 }
 safeAddEventListener("varSave", "click", async () => {
   syncVarRows();
+  rememberDashMutation();
   CUR_DASH.vars = VARS_DRAFT.filter(v => v.name);
   closeMask($("varEditMask"));
   await resolveDashVars();
@@ -975,6 +1171,7 @@ safeAddEventListener("dashMetaSave", "click", async () => {
   const desc = $("dashMetaDesc").value.trim();
   // 编辑当前打开的仪表盘元信息（在内存里改，随保存落盘）
   if (CUR_DASH && CUR_DASH.id === id && id) {
+    if (DASH_EDIT) rememberDashMutation();
     CUR_DASH.name = name; CUR_DASH.description = desc; CUR_DASH.tags = tags;
     closeMask($("dashMetaMask"));
     if (DASH_EDIT) renderDashDetail(); else saveCurDash();
@@ -996,8 +1193,16 @@ async function saveCurDash() {
   await withLoading("dashSaveBtn", async () => {
     try {
       const r = await fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(CUR_DASH) });
-      if (r.ok) { toast("已保存", "ok"); DASH_EDIT = false; renderDashDetail(); }
-      else { const j = await r.json().catch(() => ({})); toast("保存失败：" + (j.error || ""), "err"); }
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        if (j.revision) CUR_DASH.revision = j.revision;
+        if (j.updated_at) CUR_DASH.updated_at = j.updated_at;
+        toast("已保存", "ok"); DASH_EDIT = false; resetDashEditHistory(); renderDashDetail();
+      } else if (r.status === 409) {
+        toast("保存冲突：远端版本已更新。当前修改仍保留，请先另存或刷新后合并。", "err");
+      } else {
+        toast("保存失败：" + (j.error || r.status), "err");
+      }
     } catch (e) { toast("保存失败：" + e, "err"); }
   });
 }
@@ -1047,13 +1252,57 @@ async function panelDigest(p) {
     return s;
   }
   if (!(p.targets || []).length) return s + "（无查询）";
-  try {
-    const r = await fetch(`${API}/dashboards/query-instant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
-    if (r && r.available === false) return s + "（数据源不可用）";
-    const vec = (r && r.series) || [];
-    if (!vec.length) return s + "（当前无数据）";
-    s += vec.slice(0, 30).map(x => { const lbl = legendFor(p.targets[0].legend, seriesLabels(x)); return `- ${lbl || "value"}: ${fmtUnit(seriesVal2(x), p.unit)}`; }).join("\n");
-  } catch (e) { s += "（读取失败）"; }
+  if (p.type === "logs") {
+    try {
+      const range = dashRange();
+      const r = await fetch(`${API}/dashboards/query-logs`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expr: p.targets[0].expr, from: range.from, to: range.to, limit: 20, datasource: resolveDS(p), vars: panelVars() })
+      }).then(r => r.json());
+      if (r && r.available === false) return s + "（日志数据源不可用）";
+      s += `当前范围命中 ${(r.lines || []).length} 条（为防敏感信息外发，AI 摘要不自动携带日志正文）`;
+    } catch (e) { s += "（日志统计读取失败）"; }
+    return s;
+  }
+  const temporal = ["timeseries", "state-timeline", "statetimeline", "heatmap", "histogram"].includes(p.type);
+  const targets = (p.targets || []).slice(0, 3);
+  for (let ti = 0; ti < targets.length; ti++) {
+    const target = targets[ti];
+    try {
+      if (temporal) {
+        const range = dashRange();
+        const r = await fetch(`${API}/dashboards/query`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expr: target.expr, from: range.from, to: range.to, datasource: resolveDS(p), vars: panelVars() })
+        }).then(r => r.json());
+        if (r && r.available === false) return s + "（数据源不可用）";
+        const vec = (r && r.series) || [];
+        if (!vec.length) { s += `- 查询 ${ti + 1}：当前范围无数据\n`; continue; }
+        s += vec.slice(0, 12).map(x => {
+          const pts = (x.points || []).map(pt => +pt[1]).filter(Number.isFinite);
+          const lbl = legendFor(target.legend, x.labels || {}) || "value";
+          if (!pts.length) return `- ${lbl}：无有效样本`;
+          const first = pts[0], last = pts[pts.length - 1];
+          const minV = Math.min(...pts), maxV = Math.max(...pts), avg = pts.reduce((a, b) => a + b, 0) / pts.length;
+          const delta = last - first;
+          const trend = Math.abs(first) > 1e-9 ? `${delta >= 0 ? "+" : ""}${(delta / Math.abs(first) * 100).toFixed(1)}%` : `${delta >= 0 ? "+" : ""}${fmtUnit(delta, p.unit)}`;
+          return `- ${lbl}：当前 ${fmtUnit(last, p.unit)}；均值 ${fmtUnit(avg, p.unit)}；范围 ${fmtUnit(minV, p.unit)} ~ ${fmtUnit(maxV, p.unit)}；区间变化 ${trend}；样本 ${pts.length}`;
+        }).join("\n") + "\n";
+      } else {
+        const r = await fetch(`${API}/dashboards/query-instant`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expr: target.expr, datasource: resolveDS(p), vars: panelVars() })
+        }).then(r => r.json());
+        if (r && r.available === false) return s + "（数据源不可用）";
+        const vec = (r && r.series) || [];
+        if (!vec.length) { s += `- 查询 ${ti + 1}：当前无数据\n`; continue; }
+        s += vec.slice(0, 20).map(x => {
+          const lbl = legendFor(target.legend, seriesLabels(x));
+          return `- ${lbl || "value"}：${fmtUnit(seriesVal2(x), p.unit)}`;
+        }).join("\n") + "\n";
+      }
+    } catch (e) { s += `- 查询 ${ti + 1}：读取失败\n`; }
+  }
   return s;
 }
 // aiAnalyzePanel：对单个面板实时数据做 AI 解读（复用 /ai/assist chart_analysis）。
@@ -1070,8 +1319,21 @@ async function buildDashDigestClient() {
   let out = "看板：" + CUR_DASH.name + "\n";
   const sel = (CUR_DASH.vars || []).map(v => v.name + "=" + (DASH_VARVALS[v.name] || "")).filter(x => !x.endsWith("=")).join(", ");
   if (sel) out += "当前变量：" + sel + "\n";
-  const parts = await Promise.all(panels.map(p => panelDigest(p).catch(() => "")));
+  const parts = await dashMapLimit(panels, 6, p => panelDigest(p).catch(() => ""));
   return out + "\n" + parts.filter(Boolean).join("\n\n");
+}
+async function dashMapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit || 1, items.length || 1)) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 // dashStructureClient：看板结构（面板类型/查询/单位），供 AI 优化审阅。
 function dashStructureClient() {
@@ -1088,10 +1350,14 @@ async function aiAnalyzeDash() {
   if (!CUR_DASH) return;
   toast("读取各面板数据…", "ok");
   const digest = await buildDashDigestClient();
-  openAIAssist({ task: "dashboard_analysis", title: "🔍 AI 解读 · " + CUR_DASH.name, mode: "analyze", context: digest, hint: "AI 正在解读看板实时数据…" });
+  openAIAssist({ task: "dashboard_analysis", title: "AI 诊断报告 · " + CUR_DASH.name, mode: "analyze", context: digest, hint: "正在结合趋势、当前水位与历史经验生成诊断报告…" });
 }
 async function aiOptimizeDash() {
   if (!CUR_DASH) return;
+  if (DASH_EDIT && DASH_DIRTY) {
+    toast("请先保存当前人工修改，再运行 AI 优化，避免覆盖未保存内容。", "warn");
+    return;
+  }
   toast("读取各面板数据…", "ok");
   const dashId = CUR_DASH.id;
   let metricsHint = "";
@@ -1109,32 +1375,254 @@ async function aiOptimizeDash() {
       // 服务端 extractJSONObject 会优先定位 ```json 块，更稳。
       const answer = (typeof _aiAssistState !== "undefined" && _aiAssistState.lastAnswer) || code || "";
       if (!answer.trim()) { toast("请先等 AI 给出优化建议再应用", "err"); return; }
-      toast("正在应用优化…", "ok");
+      toast("正在校验查询并生成差异预览…", "ok");
       try {
-        const j = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ json: answer }) }).then(r => r.json());
-        if (j.ok) {
-          const w = (j.warnings && j.warnings.length) ? "（" + j.warnings.slice(0, 2).join("；") + "）" : "";
-          toast(`已应用优化：${j.panels} 面板${w}`, "ok");
-          if (CUR_DASH && CUR_DASH.id === dashId) openDashboard(dashId);
+        const r = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ json: answer, preview_only: true })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          toast("预览失败：" + (j.error || "AI 未给出可应用的看板结构，请重新生成"), "err");
+          return false;
         }
-        else toast("应用失败：" + (j.error || "AI 未给出可应用的看板结构，请点「重新生成」重试"), "err");
-      } catch (e) { toast("应用失败：" + e, "err"); }
+        return await reviewAndApplyDashAI({
+          dashId, answer, expectedRevision: j.current_revision || 0, preview: j
+        });
+      } catch (e) { toast("预览失败：" + e, "err"); return false; }
     }
   });
 }
+
+function renderDashDiffList(items, emptyText) {
+  const arr = Array.isArray(items) ? items : [];
+  return arr.length ? `<ul>${arr.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<span class="muted">${esc(emptyText || "无")}</span>`;
+}
+function reviewAndApplyDashAI(review) {
+  DASH_AI_REVIEW = review;
+  const d = review.preview.diff || {};
+  $("dashAIReviewSummary").innerHTML = `
+    <div class="dash-review-kpis">
+      <div><b>${d.before == null ? "—" : d.before}</b><span>原组件</span></div>
+      <div><b>${d.after == null ? "—" : d.after}</b><span>优化后</span></div>
+      <div><b>${(d.changed || []).length}</b><span>调整</span></div>
+      <div><b>${(review.preview.dry_run_empty || []).length}</b><span>当前无数据</span></div>
+    </div>`;
+  $("dashAIReviewAdded").innerHTML = renderDashDiffList(d.added, "无新增组件");
+  $("dashAIReviewChanged").innerHTML = renderDashDiffList(d.changed, "无结构调整");
+  $("dashAIReviewRemoved").innerHTML = renderDashDiffList(d.removed, "无删除组件");
+  const warnings = [...(review.preview.warnings || [])];
+  if ((review.preview.dry_run_empty || []).length) warnings.push("无数据组件：" + review.preview.dry_run_empty.join("、"));
+  const warn = $("dashAIReviewWarnings");
+  warn.innerHTML = warnings.length ? warnings.map(x => `<div>⚠ ${esc(x)}</div>`).join("") : "✓ 查询干跑通过，未发现阻断项";
+  warn.className = "dash-review-warnings " + (warnings.length ? "warn" : "ok");
+  openMask("dashAIReviewMask");
+  return new Promise(resolve => { DASH_AI_REVIEW_RESOLVE = resolve; });
+}
+function finishDashAIReview(value) {
+  closeMask($("dashAIReviewMask"));
+  const resolve = DASH_AI_REVIEW_RESOLVE;
+  DASH_AI_REVIEW_RESOLVE = null;
+  DASH_AI_REVIEW = null;
+  if (resolve) resolve(value);
+}
+safeAddEventListener("dashAIReviewCancel", "click", () => finishDashAIReview(false));
+safeAddEventListener("dashAIReviewClose", "click", () => finishDashAIReview(false));
+safeAddEventListener("dashAIReviewMask", "click", e => {
+  if (e.target && e.target.id === "dashAIReviewMask") finishDashAIReview(false);
+});
+safeAddEventListener("dashAIReviewApply", "click", async () => {
+  const review = DASH_AI_REVIEW;
+  if (!review) return;
+  await withLoading("dashAIReviewApply", async () => {
+    try {
+      const r = await fetch(`${API}/dashboards/${encodeURIComponent(review.dashId)}/ai-apply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ json: review.answer, expected_revision: review.expectedRevision })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) {
+        toast("应用失败：" + (j.error || r.status), "err");
+        return;
+      }
+      const w = (j.warnings && j.warnings.length) ? "（" + j.warnings.slice(0, 2).join("；") + "）" : "";
+      toast(`已应用优化：${j.panels} 个组件${w}`, "ok");
+      finishDashAIReview(true);
+      if (CUR_DASH && CUR_DASH.id === review.dashId) await openDashboard(review.dashId);
+    } catch (e) { toast("应用失败：" + e, "err"); }
+  });
+});
 async function aiTicketDash() {
   if (!CUR_DASH) return;
   await withLoading("dashTicketBtn", async () => {
     const digest = await buildDashDigestClient();
     try {
       const j = await fetch(`${API}/dashboards/${encodeURIComponent(CUR_DASH.id)}/ai-ticket`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ digest }) }).then(r => r.json());
-      if (j.ok && j.needed) toast(`已建工单 #${j.ticket_id}（${j.priority}）：${j.title}`, "ok");
+      if (j.ok && j.needed && j.preview && j.draft) {
+        DASH_TICKET_DRAFT = { dashId: CUR_DASH.id, digest };
+        $("dashTicketTitle").value = j.draft.title || "";
+        $("dashTicketPriority").value = j.draft.priority || "p3";
+        $("dashTicketSummary").value = j.draft.summary || "";
+        openMask("dashTicketPreviewMask");
+      }
       else if (j.ok && !j.needed) toast(j.message || "AI 研判当前无明显异常，未建工单", "ok");
-      else toast("建工单失败：" + (j.error || ""), "err");
+      else toast("工单草案生成失败：" + (j.error || ""), "err");
     } catch (e) { toast("建工单失败：" + e, "err"); }
   });
 }
-safeAddEventListener("dashAIBtn", "click", () => { $("dashAIPrompt").value = ""; $("dashAIName").value = ""; openMask("dashAIMask"); });
+safeAddEventListener("dashTicketConfirm", "click", async () => {
+  if (!DASH_TICKET_DRAFT) return;
+  const title = $("dashTicketTitle").value.trim();
+  const priority = $("dashTicketPriority").value;
+  const summary = $("dashTicketSummary").value.trim();
+  if (!title) { toast("请填写工单标题", "err"); $("dashTicketTitle").focus(); return; }
+  await withLoading("dashTicketConfirm", async () => {
+    try {
+      const r = await fetch(`${API}/dashboards/${encodeURIComponent(DASH_TICKET_DRAFT.dashId)}/ai-ticket`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true, title, priority, summary, digest: DASH_TICKET_DRAFT.digest })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { toast("建单失败：" + (j.error || r.status), "err"); return; }
+      closeMask($("dashTicketPreviewMask"));
+      DASH_TICKET_DRAFT = null;
+      toast(`已建工单 #${j.ticket_id}（${j.priority}）：${j.title}`, "ok");
+    } catch (e) { toast("建单失败：" + e, "err"); }
+  });
+});
+
+function dashboardReportModel(liveRows) {
+  const d = CUR_DASH;
+  const range = dashRange();
+  const vars = Object.entries(DASH_VARVALS || {}).map(([k, v]) => `${k}=${v || "（空）"}`).join("；") || "无";
+  const panels = (d.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+  const sections = [{
+    title: "组件与查询配置",
+    columns: ["组件", "类型", "数据源", "单位", "查询"],
+    rows: panels.map(p => [
+      p.title || "（未命名）", p.type || "", dsLabel(resolveDS(p)), p.unit || "",
+      (p.targets || []).map(t => t.expr).join("\n") || (p.type === "text" ? "文本内容" : "无查询")
+    ])
+  }];
+  if (liveRows && liveRows.length) {
+    sections.unshift({
+      title: "实时诊断快照", columns: ["组件", "诊断摘要"],
+      rows: liveRows.map(x => [x.title, x.digest.replace(/\s*\n\s*/g, " · ").replace(/\s+/g, " ").trim()])
+    });
+  }
+  return {
+    title: "可观测性诊断报告 · " + d.name,
+    subtitle: "AIOps Monitor · " + new Date().toLocaleString(),
+    summaryTitle: "报告概览",
+    meta: [
+      ["看板", d.name], ["数据源", dsLabel(d.datasource || "")],
+      ["时间范围", `${new Date(range.from * 1000).toLocaleString()} — ${new Date(range.to * 1000).toLocaleString()}`],
+      ["模板变量", vars], ["组件数量", String(panels.length)],
+      ["版本", String(d.revision || 0)], ["生成时间", new Date().toLocaleString()]
+    ],
+    kpis: [["组件", String(panels.length)], ["数据源", dsLabel(d.datasource || "")], ["实时快照", liveRows ? liveRows.length + " 项" : "未包含"]],
+    narrativeTitle: "看板说明",
+    narrative: d.description || "该报告由当前看板配置与所选时间范围的数据快照生成。可在看板中运行“AI 诊断”获得可追问的根因分析与处置建议。",
+    sections,
+    orientation: "landscape",
+    footer: "数据快照受采集延迟、数据源可用性和当前模板变量影响；AI 诊断结论需结合变更记录、日志与业务影响人工复核。"
+  };
+}
+safeAddEventListener("dashExportRun", "click", async () => {
+  if (!CUR_DASH) return;
+  const fmt = $("dashExportFormat").value;
+  const includeLive = $("dashExportLive").checked;
+  // PDF 的窗口必须在用户点击事件内打开，异步抓取快照后再写入，避免被浏览器拦截。
+  const popup = fmt === "pdf" ? window.open("", "_blank") : null;
+  if (fmt === "pdf" && !popup) { toast("浏览器拦截了 PDF 窗口，请允许弹窗后重试", "warn"); return; }
+  await withLoading("dashExportRun", async () => {
+    try {
+      let rows = null;
+      if (includeLive) {
+        const panels = (CUR_DASH.panels || []).filter(p => p.type !== "text" && p.type !== "unsupported").slice(0, 40);
+        const digests = await dashMapLimit(panels, 6, p => panelDigest(p).catch(() => "读取失败"));
+        rows = panels.map((p, i) => ({ title: p.title || "（未命名）", digest: digests[i] || "无数据" }));
+      }
+      const model = dashboardReportModel(rows);
+      if (popup) model._printWindow = popup;
+      const ok = exportModel(model, fmt, "诊断报告_" + CUR_DASH.name);
+      if (ok === false) throw new Error("导出窗口不可用");
+      closeMask($("dashExportMask"));
+      toast("报告已生成", "ok");
+    } catch (e) {
+      if (popup) try { popup.close(); } catch (_) {}
+      toast("导出失败：" + e, "err");
+    }
+  });
+});
+let DASH_AI_CREATE_SEQ = 0;
+const DASH_AI_PRESETS = {
+  host: "构建主机黄金信号看板：顶部展示在线数、CPU、内存、磁盘总体水位；中部展示 CPU/负载、内存/交换、磁盘 IO、网络吞吐趋势；底部展示高水位主机排行、磁盘卷明细和当前告警。支持 instance 下钻。",
+  service: "构建服务 SLI/SLO 看板：覆盖流量、错误率、P50/P95/P99 延迟、可用性、饱和度、SLO 燃烧率和当前告警；顶部 KPI 概览，中部趋势，底部服务/实例排行与明细。",
+  database: "构建数据库性能看板：覆盖连接、QPS/TPS、慢查询、错误、缓存命中率、锁等待、复制延迟、存储与资源水位；按实例下钻，并突出容量和故障风险。",
+  network: "构建网络与流量看板：覆盖吞吐、包速率、连接数、丢包、错误、时延、Top Talkers、异常端口与设备告警；趋势、排行、表格和状态组件混合布局。",
+  capacity: "构建容量与成本看板：覆盖 CPU/内存/存储利用率、增长趋势、剩余天数预测、闲置与高水位资源、Top 消耗对象、容量风险和优化机会。"
+};
+safeAddEventListener("dashAIBtn", "click", () => {
+  DASH_AI_CREATE_SEQ++;
+  $("dashAIPrompt").value = ""; $("dashAIName").value = "";
+  $("dashAIProgress").style.display = "none";
+  $("dashAICreate").disabled = false;
+  $("dashAICreate").textContent = "生成";
+  openMask("dashAIMask");
+});
+safeAddEventListener("dashAIPresets", "click", e => {
+  const btn = e.target.closest("[data-dash-ai-preset]");
+  if (!btn) return;
+  $("dashAIPrompt").value = DASH_AI_PRESETS[btn.dataset.dashAiPreset] || "";
+  $("dashAIPrompt").focus();
+});
+function setDashAIProgress(stage, progress, hint) {
+  const box = $("dashAIProgress");
+  if (!box) return;
+  box.style.display = "";
+  $("dashAIProgressStage").textContent = stage || "处理中…";
+  $("dashAIProgressPct").textContent = Math.max(0, Math.min(100, progress || 0)) + "%";
+  $("dashAIProgressBar").style.width = Math.max(0, Math.min(100, progress || 0)) + "%";
+  if (hint) $("dashAIProgressHint").textContent = hint;
+}
+async function pollDashboardAIJob(jobID, seq) {
+  const deadline = Date.now() + 4 * 60 * 1000;
+  while (seq === DASH_AI_CREATE_SEQ && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    let job;
+    try {
+      const r = await fetch(`${API}/dashboards/ai-jobs/${encodeURIComponent(jobID)}`);
+      job = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(job.error || ("HTTP " + r.status));
+    } catch (e) {
+      setDashAIProgress("正在等待生成服务…", 10, "网络暂时不可用，任务仍可能在后台继续。");
+      continue;
+    }
+    setDashAIProgress(job.stage || job.status, job.progress || 0,
+      job.status === "running" ? "正在使用真实指标构建组件、PromQL、变量与布局，请勿重复提交。" : "");
+    if (job.status === "done") {
+      $("dashAICreate").disabled = false;
+      $("dashAICreate").textContent = "生成";
+      closeMask($("dashAIMask"));
+      toast(`AI 看板「${job.name}」已生成：${job.panels} 个组件`, "ok");
+      if (job.dashboard_id) await openDashboard(job.dashboard_id);
+      return;
+    }
+    if (job.status === "failed") {
+      $("dashAICreate").disabled = false;
+      $("dashAICreate").textContent = "重试";
+      setDashAIProgress("生成失败", 100, job.error || "请调整需求或检查 AI 配置后重试。");
+      toast("AI 看板生成失败：" + (job.error || ""), "err");
+      return;
+    }
+  }
+  if (seq === DASH_AI_CREATE_SEQ) {
+    $("dashAICreate").disabled = false;
+    $("dashAICreate").textContent = "查询状态";
+    setDashAIProgress("任务仍在后台运行", 90, "生成耗时超出前端等待窗口，完成后消息中心仍会通知。");
+  }
+}
 // 优化提示词：就地调用 AI，完成后直接覆盖描述框，不再弹辅助窗、无需点「应用」。
 safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
   const ta = $("dashAIPrompt");
@@ -1148,9 +1636,12 @@ safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
     } catch (e) {}
     toast("正在优化提示词…", "ok");
     let answer = "", streamErr = "";
+    const controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    const timeout = setTimeout(() => { try { if (controller) controller.abort(); } catch (e) {} }, 120000);
     try {
       const r = await fetch(`${API}/ai/assist`, {
         method: "POST", headers: { "Content-Type": "application/json" },
+        signal: controller ? controller.signal : undefined,
         body: JSON.stringify({ task: "dashboard_prompt_optimize", input: cur, context: ctx })
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1160,8 +1651,11 @@ safeAddEventListener("dashAIOptimizePrompt", "click", async () => {
         (full) => { answer = full || answer; }
       );
     } catch (e) {
-      toast("优化失败：" + e, "err");
+      const msg = e && e.name === "AbortError" ? "请求超时，请检查 AI 服务后重试" : String(e);
+      toast("优化失败：" + msg, "err");
       return;
+    } finally {
+      clearTimeout(timeout);
     }
     if (streamErr) { toast("优化失败：" + streamErr, "err"); return; }
     let text = (answer || "").trim();
@@ -1177,14 +1671,26 @@ safeAddEventListener("dashAICreate", "click", async () => {
   const prompt = $("dashAIPrompt").value.trim();
   if (!prompt) { toast("请描述你想要的看板", "err"); return; }
   const name = $("dashAIName").value.trim();
-  // 后台异步生成：立即返回，不阻塞 UI；完成后经消息中心（🔔）弹窗通知。
+  const seq = ++DASH_AI_CREATE_SEQ;
+  $("dashAICreate").disabled = true;
+  $("dashAICreate").textContent = "生成中…";
+  setDashAIProgress("正在提交生成任务", 5, "AI 将基于当前数据源真实指标生成，不会臆造并直接执行运维操作。");
   try {
-    const j = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name }) }).then(r => r.json());
-    if (j.ok && j.queued) {
-      closeMask($("dashAIMask"));
-      toast("已提交后台生成，完成后右上角 🔔 会通知并可点击查看", "ok");
-    } else toast("提交失败：" + (j.error || ""), "err");
-  } catch (e) { toast("提交失败：" + e, "err"); }
+    const r = await fetch(`${API}/dashboards/ai-create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, name }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok && j.queued && j.job_id) {
+      setDashAIProgress("已进入生成队列", 8, "可继续等待实时状态；关闭弹窗后任务仍会在后台完成。");
+      pollDashboardAIJob(j.job_id, seq);
+    } else {
+      $("dashAICreate").disabled = false;
+      $("dashAICreate").textContent = "重试";
+      toast("提交失败：" + (j.error || r.status), "err");
+    }
+  } catch (e) {
+    $("dashAICreate").disabled = false;
+    $("dashAICreate").textContent = "重试";
+    toast("提交失败：" + e, "err");
+  }
 });
 
 /* ---------- 列表事件 ---------- */

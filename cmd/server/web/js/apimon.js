@@ -221,15 +221,26 @@ function runAPISystem(id) {
 }
 
 // 维护窗口：静音该业务系统告警 N 分钟（0=解除）。窗口内探测继续、仅抑制告警推送。
-function maintAPISystem(id) {
+async function maintAPISystem(id) {
   const sys = (LAST_APIMON.systems || []).find(s => s.id === id);
   const active = sys && sys.maint_until && sys.maint_until * 1000 > Date.now();
-  const inp = prompt("维护窗口：静音该业务系统告警多少分钟？\n（0 或留空 = 解除维护；窗口内探测继续，仅抑制告警推送）", active ? "0" : "60");
+  const inp = await requestAITextInput({
+    title:"设置维护窗口",
+    message:"窗口内探测继续运行，仅抑制告警推送；输入 0 可解除维护。",
+    label:"静音分钟数",defaultValue:active?"0":"60",submitLabel:"应用维护窗口",
+    inputType:"number",singleLine:true,min:0,max:525600,step:1,maxLength:8,danger:false,
+    requiredMessage:"请输入 0 或正整数分钟数"
+  });
   if (inp === null) return;
-  const minutes = parseInt(inp) || 0;
-  fetch(`${API}/apimon/systems/${encodeURIComponent(id)}/maintenance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes }) })
-    .then(() => { toast(minutes > 0 ? `已进入维护 ${minutes} 分钟` : "已解除维护", "ok"); loadAPIMon(); })
-    .catch(e => toast("操作失败：" + e, "err"));
+  const minutes = Number(inp);
+  if(!Number.isInteger(minutes)||minutes<0||minutes>525600){ toast("维护时长须为 0–525600 的整数","err"); return; }
+  try{
+    const r=await fetch(`${API}/apimon/systems/${encodeURIComponent(id)}/maintenance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minutes }) });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||`HTTP ${r.status}`);
+    toast(minutes > 0 ? `已进入维护 ${minutes} 分钟` : "已解除维护", "ok");
+    loadAPIMon();
+  }catch(e){ toast("操作失败：" + e, "err"); }
 }
 
 // 承载主机下钻：展示该业务系统关联主机的实时 CPU/内存/磁盘/网络水位，把接口异常与主机资源关联。
@@ -490,7 +501,7 @@ function applyAhistCustomRange() {
   API_HIST.custom = { from, to }; loadAPIHistory();
 }
 
-// 把当前 API 业务监控快照汇总为纯文本，供 AI 分析（学习闭环：/ai/assist 自动沉淀记忆 + 👍/👎 强化）
+// 把当前 API 业务监控快照汇总为纯文本供 AI 分析；仅人工采纳/反馈后的结果进入学习闭环。
 function apimonToText() {
   const systems = (LAST_APIMON && LAST_APIMON.systems) || [];
   if (!systems.length) return "（当前没有任何 API 业务监控系统）";

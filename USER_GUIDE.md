@@ -380,17 +380,28 @@ CPU 使用率/核数、内存/SWAP、全部本地磁盘、网络收发速率、T
 
 **操作日志与审计**：全量操作日志（操作 / 系统 / 插件三类），支持筛选与 CSV 导出；与终端录制、命令审计共同构成完整审计闭环，可直接作为等保测评材料。
 
+**网络与大模型内容审计**：
+
+- Linux 默认使用原生 `AF_PACKET`；Windows/macOS 使用 Wireshark TShark（Windows 需 Npcap，macOS 普通用户建议安装 ChmodBPF）。
+- 被动采集可获得 DNS/SNI 与指定端口的明文 HTTP 请求/响应，支持 IPv4/IPv6、TCP 乱序/重传、chunked、gzip/deflate 与 SSE；不会解密 HTTPS。
+- 正文策略包括 `metadata`、`redacted`（默认）和 `full`。建议同时配置端口、域名白名单、排除路径与事件限流。
+- 云端大模型 HTTPS 审计使用 `POST /api/v1/integrations/content-audit`：在 LLM Gateway/SDK 完成 TLS 终止后，上报 principal、application、model、token、tool call、策略决策、hash 等结构化字段。服务端需设置独立的 `AIOPS_CONTENT_AUDIT_INGEST_TOKEN`。
+
+完整配置、权限和接入示例见 [内容审计专家指南](CONTENT_AUDIT_AND_PLAYBOOK_EXPERT_GUIDE.md)。
+
 ### 4.4 自动化运维（剧本）
 
 对应官网分组 **04 自动化运维**。面板「自动化」页可编排剧本——一组按顺序在目标主机上批量执行的 shell 命令：
 
 **创建剧本**：填名称 + 若干步骤，每步包含：
 
-- **命令**：一行 shell 命令（Linux `sh -c`、Windows `cmd /c`）
+- **类型**：优先使用跨平台内置只读/变更模块，也可使用 Shell（Linux `sh -c`、Windows `cmd /c`）
 - **目标**：`全部` / `分类:xxx` / `系统:linux|windows|macos` / `主机:<ID>`
-- **超时**（秒）与**失败后是否继续**
+- **可靠性**：超时、最大尝试次数、退避、是否继续；仅幂等步骤才开启非零退出码重试
+- **条件与变量**：`when` 条件、`register` 输出变量与 `{{变量}}` 引用；未知/前向引用会在保存时拒绝
+- **显式回滚**：剧本开启自动回滚后，失败时按成功步骤逆序执行各步明确配置的回滚命令
 
-**执行原理**：命令经 Agent 反向通道下发，以一次性子进程执行、回传输出与退出码。所有匹配的在线主机并行执行，每台按步骤顺序运行。执行历史保留最近 100 次（操作者、时间、结果全部可追溯）。
+**执行原理**：执行前先做确定性 preflight（在线/离线目标、风险、并发、回滚覆盖）；命令经 Agent 反向通道下发，以一次性子进程执行、回传输出与退出码。在线主机按剧本 `max_parallel` 限流并行，每台按步骤顺序运行；高风险手工执行必须显式确认。执行历史保留最近 100 次（操作者、尝试次数、回滚与结果全部可追溯）。
 
 > 命令为非交互式，不要用 `vim`/`top`/`ssh` 等需交互的程序。每步是独立进程，`cd`/`export` 不跨步骤保留——连续操作写同一步内用 `&&` 串联。
 
@@ -468,37 +479,47 @@ p.emit()                                   # 输出 JSON
 
 ## 五、配置参考
 
-### Agent 配置（`config.example.json`）
+### Agent 配置（`config.example.yaml`）
 
-```json
-{
-  "server": "http://localhost:8529",
-  "servers": [
-    {"server": "https://monitor-a:8529", "token": "token-a"},
-    {"server": "https://monitor-b:8529", "token": "token-b"}
-  ],
-  "report_interval": 10,
-  "plugin_interval": 15,
-  "disk_path": "/",
-  "plugins_dir": "plugins",
-  "python": "python3",
-  "state_file": "agent_state.json",
-  "category": "",
-  "token": ""
-}
+```yaml
+server: "http://localhost:8529"
+servers:
+  - server: "https://monitor-a:8529"
+    token: "token-a"
+report_interval: 30
+plugin_interval: 60
+disk_path: "/"
+plugins_dir: "plugins"
+python: "python3"
+state_file: "agent_state.json"
+category: ""
+token: ""
+sni_dns_capture:
+  enabled: false
+  capture_backend: "auto"
+  interface: ""
+  tls_metadata_ports: [443, 8443, 9443]
+  content_audit: false
+  content_audit_ports: [11434, 8000, 8080]
+  content_audit_max_body: 4096
+  content_audit_body_mode: "redacted"
+  content_audit_include_hosts: []
+  content_audit_exclude_paths: ["/health*", "/metrics*"]
+  content_audit_max_events_per_min: 2000
 ```
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `server` | `http://localhost:8529` | 单服务端地址（`servers` 为空时回退到此） |
 | `servers` | `[]` | 多服务端列表，每项含 `server`+`token`；非空时优先 |
-| `report_interval` | `10` | 基础指标上报间隔（秒） |
-| `plugin_interval` | `15` | 插件执行周期（秒） |
+| `report_interval` | `30` | 基础指标上报间隔（秒） |
+| `plugin_interval` | `60` | 插件执行周期（秒） |
 | `disk_path` | `/` | 主磁盘路径（所有本地盘自动识别） |
 | `plugins_dir` | `plugins` | 插件目录（可用绝对路径） |
 | `python` | `python3` | Python 解释器（Windows 为 `python`） |
 | `category` | `""` | 主机分类（面板按此分组） |
 | `token` | `""` | 安装 Token（可选） |
+| `sni_dns_capture` | 未启用 | DNS/SNI 与受控 HTTP 内容审计；跨平台后端及数据策略见上文 |
 
 ### Agent 命令行参数
 
