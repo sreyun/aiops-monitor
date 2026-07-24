@@ -95,6 +95,7 @@ func (s *Server) pushPush(c *pushClient) {
 			"server_time_unix": now,
 			"version":          appVersion,
 			"terminal_enabled": s.cfg.TerminalEnabled(),
+			"desktop_enabled":  s.cfg.ForwardEnabled(),
 		},
 	}
 	if data, err := json.Marshal(summary); err == nil {

@@ -135,6 +135,19 @@ type Report struct {
 	Metrics     Metrics            `json:"metrics"`
 	Custom      map[string]float64 `json:"custom,omitempty"`
 	Events      []Event            `json:"events,omitempty"`
+	// Desktop is optional probe of local RDP/VNC listeners for remote desktop mode.
+	Desktop *DesktopInfo `json:"desktop,omitempty"`
+}
+
+// DesktopInfo describes whether the agent host appears to offer a GUI remote
+// protocol (RDP / VNC) and which port the dashboard should tunnel to.
+type DesktopInfo struct {
+	OS            string `json:"os,omitempty"`
+	RDP           bool   `json:"rdp"`
+	VNC           bool   `json:"vnc"`
+	Ports         []int  `json:"ports,omitempty"`
+	Preferred     string `json:"preferred,omitempty"`      // "rdp" | "vnc"
+	PreferredPort int    `json:"preferred_port,omitempty"`
 }
 
 // ============================================================================
