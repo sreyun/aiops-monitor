@@ -41,6 +41,7 @@ type Host struct {
 	LastSeen    int64              `json:"last_seen"`
 	Latest      *shared.Sample     `json:"latest"`
 	Custom      map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
+	Desktop     *shared.DesktopInfo `json:"desktop,omitempty"`
 
 	// Time-series history (multi-tier downsampling; persisted via the embedded DB)
 	histRaw  []shared.Sample // raw samples (5s interval, ~1.5h)
@@ -300,6 +301,10 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 	h.Kernel = r.Kernel
 	h.Category = r.Category
 	h.LastSeen = now
+	if r.Desktop != nil {
+		cp := *r.Desktop
+		h.Desktop = &cp
+	}
 
 	sample := shared.Sample{Timestamp: now, Metrics: r.Metrics}
 	sample.ProcessNames = nil // history never stores process lists (only Latest keeps them)

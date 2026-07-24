@@ -318,6 +318,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		"server_time_unix": now,
 		"version":          appVersion,
 		"terminal_enabled": s.cfg.TerminalEnabled(),
+		"desktop_enabled":  s.cfg.ForwardEnabled(),
 	})
 }
 

@@ -653,6 +653,7 @@ func (a *Agent) reportOnce() {
 		rep.Custom = custom
 	}
 	rep.Events = events
+	rep.Desktop = probeDesktopServices()
 
 	// Broadcast to all targets concurrently — each gets its own goroutine so
 	// a slow/unreachable server can't block the others (30s timeout isolation).

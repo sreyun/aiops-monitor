@@ -45,6 +45,7 @@ function renderCards(s) {
     verSpan.textContent = s.version;
   }
   TERMINAL_ENABLED = s.terminal_enabled !== false;
+  if (typeof DESKTOP_ENABLED !== "undefined") DESKTOP_ENABLED = s.desktop_enabled !== false;
 }
 
 /* ---------- 渲染：统计与健康小结 ---------- */

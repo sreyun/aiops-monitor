@@ -162,6 +162,7 @@ let LOG_PAGE_SIZE = 50; // 日志每页条数（10/30/50/100）
 let CHECK_VIEW = "pill"; // 自定义监控视图：pill(卡片,默认) | list(列表)
 let HOST_VIEW = "card";  // 主机视图：card | list
 let TERMINAL_ENABLED = true; // 服务端是否开启远程终端
+let DESKTOP_ENABLED = true;  // 远程桌面（依赖端口转发）
 let TERM_WS = null;   // 当前终端 WebSocket
 let CONN_STATE = "connecting"; // connecting | connected | disconnected
 let FIRST_LOAD = true;

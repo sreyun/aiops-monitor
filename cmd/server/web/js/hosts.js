@@ -50,6 +50,7 @@ function hostCard(h) {
         <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
         ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="${I18N.t('section.terminal_desc')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
+        ${(h.online && DESKTOP_ENABLED) ? `<button class="term-btn desktop-btn" data-act="desktop" title="${I18N.t('desktop.btn_title')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>` : ""}
         <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
       </div>
     </div>
@@ -105,6 +106,9 @@ function hostRow(h) {
   const termBtn = (h.online && TERMINAL_ENABLED)
     ? `<button class="term-btn" data-act="term" title="${I18N.t('ui.remote_terminal')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
+  const deskBtn = (h.online && DESKTOP_ENABLED)
+    ? `<button class="term-btn desktop-btn" data-act="desktop" title="${I18N.t('desktop.btn_title')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>`
+    : "";
   const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
   const ipTitle = h.ip ? esc(h.ip) : "";
   return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
@@ -121,7 +125,7 @@ function hostRow(h) {
     <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
     ${loadStr ? `<span class="hrow-load mono">${loadStr}</span>` : ""}
     <span class="hrow-last">${last}</span>
-    <span class="ch-actions hrow-actions">${termBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}">✕</button></span>
+    <span class="ch-actions hrow-actions">${termBtn}${deskBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}">✕</button></span>
   </div>`;
 }
 
