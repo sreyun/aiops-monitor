@@ -159,9 +159,10 @@ function renderDesktopShell(id, name) {
       if (target) target.focus();
     });
   }
-	DESK_HOST = { id, name };
+  DESK_HOST = { id, name };
   setDeskDot("connecting");
   ensureDeskHeartbeatWorker();
+  ensureDeskStageResizeObserver();
   // Mobile: collapse the side panel so the stream gets the first viewport.
   try {
     if (window.matchMedia && window.matchMedia("(max-width:900px)").matches) {
@@ -231,6 +232,36 @@ function setDeskPlaceholder(title, sub) {
 function hideDeskPlaceholder() {
   const ph = $("deskPlaceholder");
   if (ph) ph.style.display = "none";
+}
+
+// Surface is CSS-absolutely filled (object-fit:contain). Clear leftover inline
+// sizes from older builds that used width:auto fit (those made mouse miss).
+function fitDeskSurface(el) {
+  if (!el) return;
+  el.style.width = "";
+  el.style.height = "";
+}
+
+function deskActiveSurface() {
+  const video = $("deskVideo");
+  if (video && video.style.display !== "none") return video;
+  return $("deskCanvas");
+}
+
+function onDeskStageResize() {
+  fitDeskSurface(deskActiveSurface());
+}
+
+function ensureDeskStageResizeObserver() {
+  const stage = $("deskStage");
+  if (!stage || stage._deskRO) return;
+  stage._deskRO = true;
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => onDeskStageResize());
+    ro.observe(stage);
+  } else {
+    window.addEventListener("resize", onDeskStageResize);
+  }
 }
 
 function setDesktopStatus(msg, isErr) {
@@ -326,6 +357,17 @@ function connectDesktopWS(id, name) {
         jpegDecodeFailures = 0;
         markDeskStreaming();
         showDeskCanvas(true);
+        fitDeskSurface(canvas);
+        // Client-side solid-frame guard: if paint succeeded but pixels are a
+        // flat fill, keep/re-show the diagnostic placeholder instead of a
+        // silent dark-blue "connected" viewport.
+        if (deskCanvasLooksUniform(ctx, w, h)) {
+          setDeskPlaceholder(I18N.t("desktop.warn"), I18N.t("desktop.solid_frame_hint"));
+          setDeskDot("warn");
+        } else {
+          hideDeskPlaceholder();
+          setDeskDot("on");
+        }
       }
       finish();
     };
@@ -356,6 +398,7 @@ function connectDesktopWS(id, name) {
     const prev = DESK_PHASE;
     DESK_PHASE = "closed";
     closeDeskMSE();
+    unbindDesktopInput($("deskStage"));
     unbindDesktopInput(canvas);
     if (DESK_INTENTIONAL_CLOSE) {
       setDesktopStatus(I18N.t("desktop.disconnected"), true);
@@ -546,15 +589,17 @@ function markDeskStreaming() {
       : I18N.t("desktop.connected");
     setDesktopStatus(msg, false);
   }
+  const stage = $("deskStage");
+  if (stage) bindDesktopInput(stage);
   const canvas = $("deskCanvas");
   const video = $("deskVideo");
   const useVideo = video && video.style.display !== "none";
   const target = useVideo ? video : canvas;
   if (target) {
     if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "0");
-    target.focus();
-    bindDesktopInput(target);
+    try { target.focus({ preventScroll: true }); } catch (e) { try { target.focus(); } catch (e2) {} }
   }
+  bindDeskSessionKeys();
 }
 
 function showDeskCanvas(useCanvas) {
@@ -562,6 +607,37 @@ function showDeskCanvas(useCanvas) {
   const video = $("deskVideo");
   if (canvas) canvas.style.display = useCanvas ? "block" : "none";
   if (video) video.style.display = useCanvas ? "none" : "block";
+  ensureDeskStageResizeObserver();
+  fitDeskSurface(useCanvas ? canvas : video);
+  // Bind to the stage so the full viewport receives pointer events (letterbox
+  // areas of object-fit:contain still map via deskNormXY).
+  const stage = $("deskStage");
+  if (stage) bindDesktopInput(stage);
+  const surf = useCanvas ? canvas : video;
+  if (surf) {
+    if (!surf.hasAttribute("tabindex")) surf.setAttribute("tabindex", "0");
+    try { surf.focus({ preventScroll: true }); } catch (e) { try { surf.focus(); } catch (e2) {} }
+  }
+}
+
+// Sparse sample: true when the painted frame is essentially one solid color
+// (disconnected console / wrong desktop / empty Session-0 capture).
+function deskCanvasLooksUniform(ctx, w, h) {
+  try {
+    const sw = Math.min(48, w);
+    const sh = Math.min(48, h);
+    const data = ctx.getImageData(0, 0, sw, sh).data;
+    let minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0, n = 0;
+    for (let i = 0; i < data.length; i += 16) { // every 4th pixel
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (r < minR) minR = r; if (g < minG) minG = g; if (b < minB) minB = b;
+      if (r > maxR) maxR = r; if (g > maxG) maxG = g; if (b > maxB) maxB = b;
+      n++;
+    }
+    return n > 8 && (maxR - minR) <= 8 && (maxG - minG) <= 8 && (maxB - minB) <= 8;
+  } catch (e) {
+    return false;
+  }
 }
 
 function closeDeskMSE() {
@@ -825,17 +901,18 @@ function deskSendJSON(typ, obj) {
 let _deskLastMove = 0;
 function onDeskMouseMove(ev) {
   const now = Date.now(); if (now - _deskLastMove < 33) return; _deskLastMove = now;
-  const p = deskNormXY(ev, ev.currentTarget);
+  const surf = deskActiveSurface() || ev.currentTarget;
+  const p = deskNormXY(ev, surf);
   if (!p) return;
   DESK_LAST_PTR = p;
   deskSendJSON("M", { x: p.x, y: p.y, action: "move", btn: 0, norm: false });
 }
 function onDeskMouseDown(ev) {
   ev.preventDefault();
-  const el = ev.currentTarget;
-  el.focus();
-  try { if (el.setPointerCapture && ev.pointerId != null) el.setPointerCapture(ev.pointerId); } catch (e) {}
-  const p = deskNormXY(ev, el);
+  const surf = deskActiveSurface() || ev.currentTarget;
+  try { if (surf && surf.focus) surf.focus({ preventScroll: true }); } catch (e) {}
+  try { if (ev.currentTarget.setPointerCapture && ev.pointerId != null) ev.currentTarget.setPointerCapture(ev.pointerId); } catch (e) {}
+  const p = deskNormXY(ev, surf);
   if (!p) return;
   DESK_LAST_PTR = p;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
@@ -843,9 +920,9 @@ function onDeskMouseDown(ev) {
 }
 function onDeskMouseUp(ev) {
   ev.preventDefault();
-  const el = ev.currentTarget;
-  try { if (el.releasePointerCapture && ev.pointerId != null) el.releasePointerCapture(ev.pointerId); } catch (e) {}
-  const p = deskNormXY(ev, el) || DESK_LAST_PTR;
+  try { if (ev.currentTarget.releasePointerCapture && ev.pointerId != null) ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) {}
+  const surf = deskActiveSurface() || ev.currentTarget;
+  const p = deskNormXY(ev, surf) || DESK_LAST_PTR;
   if (!p) return;
   const btn = ev.button === 2 ? 2 : ev.button === 1 ? 3 : 1;
   deskSendJSON("M", { x: p.x, y: p.y, action: "up", btn, norm: false });
@@ -931,12 +1008,22 @@ function onDesktopUIChange(e) {
   if (e.target && e.target.id === "deskQuality") {
     const p = qualityPreset(e.target.value);
     DESK_QUALITY = { ...DESK_QUALITY, ...p };
-    sendDeskQuality(); return;
+    sendDeskQuality();
+    if (DESK_WS && DESK_WS.readyState === 1) {
+      toast(I18N.t("desktop.quality_applied") + ": " + (e.target.selectedOptions[0] && e.target.selectedOptions[0].text || e.target.value), "ok");
+    } else {
+      toast(I18N.t("desktop.not_connected"), "err");
+    }
+    return;
   }
   if (e.target && e.target.id === "deskCodec") {
     DESK_QUALITY.codec = e.target.value === "h264" ? "h264" : "jpeg";
     if (DESK_QUALITY.codec === "jpeg") closeDeskMSE();
-    sendDeskQuality(); return;
+    sendDeskQuality();
+    if (DESK_WS && DESK_WS.readyState === 1) {
+      toast(I18N.t("desktop.codec") + ": " + DESK_QUALITY.codec.toUpperCase(), "ok");
+    }
+    return;
   }
   if (e.target && e.target.id === "deskMonitor") {
     DESK_QUALITY.monitor = parseInt(e.target.value, 10) || 0;
@@ -1065,6 +1152,7 @@ async function playDeskReplay(id) {
 function closeDesktopWS() {
   unbindDeskSessionKeys();
   if (DESK_WS) { try { DESK_WS.close(); } catch (e) {} DESK_WS = null; }
+  unbindDesktopInput($("deskStage"));
   unbindDesktopInput($("deskCanvas"));
   unbindDesktopInput($("deskVideo"));
   closeDeskMSE();

@@ -411,20 +411,35 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 	}()
 
 	var lastErr error
+	var lastUniform image.Image
 	for _, src := range srcs {
 		if src.w < 1 || src.h < 1 {
 			continue
 		}
 		img, err := bltToImage(src.hdc, src.x, src.y, src.w, src.h)
-		if err == nil {
-			// If we fell back to a different rect, keep capture size in sync.
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// Some DCs succeed BitBlt but return a flat fill (classic blue / grey
+		// "dead" desktop). Prefer a later DC that has real content.
+		if isLikelyUniform(img, false) {
+			lastUniform = img
 			if src.w != c.w || src.h != c.h {
+				// Keep geometry candidate in case every source is uniform.
 				c.w, c.h = src.w, src.h
 				c.monX, c.monY = src.x, src.y
 			}
-			return img, nil
+			continue
 		}
-		lastErr = err
+		if src.w != c.w || src.h != c.h {
+			c.w, c.h = src.w, src.h
+			c.monX, c.monY = src.x, src.y
+		}
+		return img, nil
+	}
+	if lastUniform != nil {
+		return lastUniform, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("BitBlt failed: all capture rects exhausted")
