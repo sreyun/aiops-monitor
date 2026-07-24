@@ -1,6 +1,6 @@
 name: Release · Build Binaries & Docker
 
-# 每次推送 v* 标签（如 v6.34.0）→ 自动构建多平台二进制 + 创建 GitHub Release + 构建 Docker 镜像推送到华为云 SWR。
+# 每次推送 v* 标签（如 v0.1.0）→ 自动构建多平台二进制 + 创建 GitHub Release + 构建 Docker 镜像推送到华为云 SWR。
 #
 # ── 需要在 仓库 Settings → Secrets and variables → Actions 配置 ──
 #   HW_ACCESS_KEY  =  <华为云访问密钥 AK>
