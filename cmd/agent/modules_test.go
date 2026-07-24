@@ -1,11 +1,45 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestModuleHostInspect(t *testing.T) {
+	out, exit := moduleHostInspect(nil)
+	if exit < 0 || exit > 2 {
+		t.Fatalf("host_inspect exit = %d, want 0..2", exit)
+	}
+	var rep struct {
+		Version  string `json:"version"`
+		Host     struct {
+			Hostname string `json:"hostname"`
+			OSFamily string `json:"os_family"`
+			GOOS     string `json:"goos"`
+		} `json:"host"`
+		Sections []struct {
+			ID string `json:"id"`
+		} `json:"sections"`
+		Result struct {
+			ExitCode int `json:"exit_code"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &rep); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if rep.Version == "" || rep.Host.Hostname == "" || rep.Host.OSFamily == "" {
+		t.Fatalf("incomplete report: %+v", rep)
+	}
+	if len(rep.Sections) < 3 {
+		t.Fatalf("expected multiple sections, got %d", len(rep.Sections))
+	}
+	if rep.Result.ExitCode != exit {
+		t.Fatalf("result.exit_code=%d != process exit=%d", rep.Result.ExitCode, exit)
+	}
+}
 
 func TestModuleGatherFacts(t *testing.T) {
 	out, exit := moduleGatherFacts()

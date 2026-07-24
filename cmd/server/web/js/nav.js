@@ -438,7 +438,11 @@ function switchView(view) {
     if (s) s.textContent = meta.sub;
   }
   if (view === "checks") loadChecks();
-  if (view === "automation") loadPlaybooks();
+  if (view === "automation") {
+    const active = document.querySelector("#autoTabs .chip-btn.active");
+    const tab = active && active.dataset.autotab ? active.dataset.autotab : "playbooks";
+    if (tab === "inspect") loadHostInspect(); else loadPlaybooks();
+  }
   if (view === "forward") loadForwards();
   if (view === "sre") loadSRE();
   if (view === "logs") loadLogs();

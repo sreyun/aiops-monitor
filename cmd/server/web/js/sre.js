@@ -124,6 +124,7 @@ function renderPbSteps(steps) {
         <option value="" ${optSel("",mod)}>${I18N.t("sre.mod_shell","Shell 命令")}</option>
         <optgroup label="${I18N.t("sre.mod_g_system","系统运维 · 只读")}">
           <option value="gather_facts" ${optSel("gather_facts",mod)}>采集主机信息 · gather_facts</option>
+          <option value="host_inspect" ${optSel("host_inspect",mod)}>深度主机巡检 · host_inspect</option>
           <option value="disk_usage" ${optSel("disk_usage",mod)}>磁盘用量 · disk_usage</option>
           <option value="mem_info" ${optSel("mem_info",mod)}>内存概况 · mem_info</option>
           <option value="cpu_load" ${optSel("cpu_load",mod)}>CPU/负载 · cpu_load</option>
@@ -175,6 +176,9 @@ function renderPbSteps(steps) {
 
       <div class="pb-mod pb-mod-gather_facts" style="display:none">
         <div class="pb-mod-hint">${I18N.t("sre.pb_gather_desc","采集主机名、IP、架构、CPU、内存摘要与负载（跨系统一致，只读）。建议「保存输出到变量」。")}</div>
+      </div>
+      <div class="pb-mod pb-mod-host_inspect" style="display:none">
+        <div class="pb-mod-hint">${I18N.t("sre.pb_host_inspect_desc","深度主机巡检（Windows/Linux/macOS/麒麟），输出结构化 JSON 报告。推荐在「主机巡检」Tab 一键发起并查看 Web 报告。")}</div>
       </div>
       <div class="pb-mod pb-mod-disk_usage pb-mod-mem_info pb-mod-cpu_load pb-mod-process_top pb-mod-uptime_info pb-mod-pkg_list pb-mod-net_ifaces pb-mod-net_listen pb-mod-net_routes pb-mod-net_sockets pb-mod-docker_ps pb-mod-docker_stats pb-mod-dmesg_recent pb-mod-time_sync pb-mod-users_logged pb-mod-security_listen pb-mod-auth_failures pb-mod-bigdata_jps pb-mod-bigdata_ports" style="display:none">
         <div class="pb-mod-hint">${I18N.t("sre.pb_readonly_hint","只读采集模块：不会修改系统配置、不会启停服务、不会写入文件。")}</div>
@@ -536,6 +540,13 @@ safeAddEventListener("pbAddStep", "click", () => {
 
 // 只读运维模板：一键填充多步骤巡检剧本（不修改系统）
 const PB_READONLY_TEMPLATES = {
+  deep: {
+    name: "深度主机巡检（只读）",
+    description: "一键 host_inspect：跨 Windows/Linux/macOS/麒麟生成结构化巡检报告",
+    steps: [
+      { name: "深度主机巡检", module: "host_inspect", target: "all", timeout_sec: 120, register: "inspect" },
+    ]
+  },
   sys: {
     name: "系统巡检（只读）",
     description: "采集主机基础信息、磁盘/内存/负载/进程（只读，不变更系统）",

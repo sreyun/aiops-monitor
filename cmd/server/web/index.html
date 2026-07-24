@@ -614,10 +614,19 @@
         </div>
       </section>
 
-      <!-- 自动化运维 -->
+      <!-- 自动化运维：剧本编排 + 主机巡检 -->
       <section class="view" id="view-automation">
-        <div class="section-title"><span data-i18n="section.playbook">剧本编排</span><span class="tag" data-i18n="section.batch_exec">批量执行 · 自动化运维</span>
-          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <div class="section-title">
+          <span data-i18n="section.automation">自动化运维</span>
+          <span class="tag" data-i18n="section.automation_desc">剧本编排 · 主机巡检</span>
+          <div class="sre-tabs" id="autoTabs" style="margin-left:auto; display:flex; gap:4px; flex-wrap:wrap">
+            <button class="chip-btn active" data-autotab="playbooks" data-i18n="auto.tab_playbooks">剧本编排</button>
+            <button class="chip-btn" data-autotab="inspect" data-i18n="auto.tab_inspect">主机巡检</button>
+          </div>
+        </div>
+
+        <div class="sre-panel active" id="autoPanel-playbooks">
+          <div class="sre-toolbar" style="justify-content:flex-end; gap:8px; flex-wrap:wrap">
             <input type="search" id="playbookSearch" class="search" data-i18n-placeholder="form.search_playbook" placeholder="搜索剧本名称 / 描述…" style="width:240px; max-width:40vw; margin-left:0">
             <div class="view-toggle" id="playbookViewToggle" role="group" aria-label="视图切换">
               <button class="vt-btn active" title="卡片" data-act="pb-view" data-view="card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
@@ -626,12 +635,40 @@
             <button class="btn" id="pbHistoryBtn" data-i18n-title="ui.exec_history_title" data-i18n="ui.exec_history" title="查看执行历史">执行历史</button>
             <button class="btn primary" id="addPlaybookBtn" data-i18n="ui.new_playbook">+ 新建剧本</button>
           </div>
+          <div id="playbookList"></div>
+          <div class="empty pb-empty" id="playbookEmpty">
+            <div class="pb-empty-icon">⚙</div>
+            <div class="pb-empty-title" data-i18n="empty.no_playbooks_title">还没有自动化剧本</div>
+            <div class="pb-empty-sub" data-i18n="empty.no_playbooks">点「+ 新建剧本」创建批量执行流程——选择目标主机、编写命令步骤、可选设置定时触发，一键并行下发执行。</div>
+          </div>
         </div>
-        <div id="playbookList"></div>
-        <div class="empty pb-empty" id="playbookEmpty">
-          <div class="pb-empty-icon">⚙</div>
-          <div class="pb-empty-title">还没有自动化剧本</div>
-          <div class="pb-empty-sub">点「+ 新建剧本」创建批量执行流程——选择目标主机、编写命令步骤、可选设置定时触发，一键并行下发执行。</div>
+
+        <div class="sre-panel" id="autoPanel-inspect">
+          <div class="sre-toolbar" style="flex-wrap:wrap; gap:10px">
+            <span class="hint" data-i18n="inspect.hint">对 Windows / Linux / macOS / 麒麟主机执行深度巡检（CPU、内存、磁盘、网络、进程、安全等），结果以 Web 报告展示。</span>
+            <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+              <button class="btn" id="inspRefreshBtn" data-i18n="inspect.refresh">刷新</button>
+              <button class="btn primary" id="inspRunBtn" data-i18n="inspect.run">发起巡检</button>
+            </div>
+          </div>
+          <div class="insp-layout">
+            <div class="insp-hosts-pane">
+              <div class="insp-pane-head">
+                <span data-i18n="inspect.select_hosts">选择主机</span>
+                <label class="insp-check-all"><input type="checkbox" id="inspSelectAll"> <span data-i18n="inspect.select_online">全选在线</span></label>
+              </div>
+              <div id="inspHostList" class="insp-host-list"></div>
+            </div>
+            <div class="insp-main-pane">
+              <div class="insp-stats" id="inspStats"></div>
+              <div id="inspBatchList" class="insp-batch-list"></div>
+              <div class="empty" id="inspEmpty" style="display:none">
+                <div class="pb-empty-title" data-i18n="inspect.empty_title">暂无巡检报告</div>
+                <div class="pb-empty-sub" data-i18n="inspect.empty_sub">勾选左侧主机后点击「发起巡检」，报告将展示在此处。</div>
+              </div>
+              <div id="inspReportView" class="insp-report" style="display:none"></div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -2022,6 +2059,7 @@
       <button type="button" class="btn sm ai-assist-btn" id="pbAIGenBtn" style="margin:0 0 6px"><span class="ai-assist-btn-ic">🤖</span>AI 生成剧本（描述需求，自动生成步骤）</button>
       <div id="pbTemplateBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px">
         <span style="font-size:12px;color:var(--muted);align-self:center">只读模板：</span>
+        <button type="button" class="btn sm" data-pb-tpl="deep">深度主机巡检</button>
         <button type="button" class="btn sm" data-pb-tpl="sys">系统巡检</button>
         <button type="button" class="btn sm" data-pb-tpl="net">网络巡检</button>
         <button type="button" class="btn sm" data-pb-tpl="sre">SRE 可观测</button>
