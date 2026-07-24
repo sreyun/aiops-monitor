@@ -204,6 +204,11 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	// collection, reboot persistence, and lock-screen remote desktop all work.
 	must("install.ps1 (service)", ps1In,
 		"--install-service", "AiopsMonitorAgent")
+	// Downloaded binaries carry MOTW; Application Control (WDAC/AppLocker) must
+	// be detected early — Session-0 keepalive fallback cannot run a blocked exe.
+	must("install.ps1 (app-control)", ps1In,
+		"Unblock-File", "Test-AiopsAgentRunnable",
+		"Application Control", "Zone.Identifier")
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")
