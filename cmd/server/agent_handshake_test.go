@@ -208,7 +208,8 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	// be detected early — Session-0 keepalive fallback cannot run a blocked exe.
 	must("install.ps1 (app-control)", ps1In,
 		"Unblock-File", "Test-AiopsAgentRunnable",
-		"Application Control", "Zone.Identifier")
+		"Application Control", "Zone.Identifier",
+		"allow-aiops-agent.ps1", "New-CIPolicy")
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")
