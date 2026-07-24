@@ -340,6 +340,7 @@ window.DICT_EN = {
   "desktop.view_only": "View-only · input unavailable (missing xdotool / accessibility)",
   "desktop.error": "Desktop session error",
   "desktop.warn": "Desktop notice",
+  "desktop.jpeg_decode_failed": "Received JPEG frames that could not be decoded. Refresh the page and ensure both server and agent are up to date.",
   "desktop.not_connected": "Desktop not connected",
   "desktop.disconnect": "Disconnect",
   "desktop.fullscreen": "Fullscreen",

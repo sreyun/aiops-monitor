@@ -337,6 +337,7 @@
   "desktop.view_only": "只读画面 · 键鼠不可用（缺少 xdotool / 辅助功能权限）",
   "desktop.error": "桌面会话出错",
   "desktop.warn": "桌面提示",
+  "desktop.jpeg_decode_failed": "连续收到无法解码的 JPEG 画面，请刷新页面并确认服务端与 Agent 均为最新版本",
   "desktop.not_connected": "桌面未连接",
   "desktop.disconnect": "断开",
   "desktop.fullscreen": "全屏",
