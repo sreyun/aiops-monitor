@@ -35,6 +35,8 @@ func (a *Agent) runModule(payload string) ([]byte, int) {
 	switch mc.Module {
 	case "gather_facts":
 		return moduleGatherFacts()
+	case "host_inspect":
+		return moduleHostInspect(mc.Args)
 	case "disk_usage":
 		return moduleDiskUsage()
 	case "mem_info":
