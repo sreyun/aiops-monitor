@@ -465,11 +465,11 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				_ = writeTx(deskTxFrame('S', js))
 			}
 			if !blankWarned {
-				if isLikelyBlank(img) {
+				if isLikelyUniform(img, false) {
 					if blankFrames++; blankFrames >= blankWarnAt {
 						blankWarned = true
 						msg, _ := json.Marshal(map[string]string{
-							"error": "画面为纯黑：目标会话未渲染桌面（无显示器的服务器 / 无人登录 / 控制台会话已断开）。请通过 RDP 登录该主机后重试，或为无头服务器安装虚拟显示驱动。 (Captured desktop is all black: the target session isn't rendering — headless host, nobody logged in, or a disconnected console. Log in via RDP and retry, or install a virtual display driver.)",
+							"error": "画面为纯色/无内容：目标会话未真正渲染桌面（无人登录、控制台断开、Session 0 抓屏、或 Windows 应用程序控制导致桌面 worker 未启动）。请：1) 用 RDP/控制台登录并解锁桌面；2) 以管理员安装 Agent 服务（aiops-agent --install-service）；3) 若安装时报 Application Control 拦截，先放行后再装。 (Solid-color capture: session isn't rendering — nobody logged in, disconnected console, Session 0 capture, or desktop worker blocked by Application Control. Log in via RDP and unlock; install Agent as a Windows service; allowlist the binary if App Control blocked it.)",
 							"level": "warn",
 						})
 						_ = writeTx(deskTxFrame('E', msg))
@@ -582,11 +582,19 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 // legitimately dark screen (which almost always has a non-black taskbar/wallpaper).
 // Samples a sparse grid so the check is cheap.
 func isLikelyBlank(img image.Image) bool {
+	return isLikelyUniform(img, true)
+}
+
+// isLikelyUniform reports near-solid frames (any color). BitBlt of a disconnected
+// console / wrong desktop often yields a flat blue or grey fill that is NOT black,
+// so the old black-only check let those through as a "successful" stream.
+// When blackOnly is true, only near-black fills match (legacy blank warning).
+func isLikelyUniform(img image.Image, blackOnly bool) bool {
 	b := img.Bounds()
 	if b.Dx() < 8 || b.Dy() < 8 {
 		return false
 	}
-	const steps = 32
+	const steps = 24
 	sx := b.Dx() / steps
 	sy := b.Dy() / steps
 	if sx < 1 {
@@ -595,15 +603,49 @@ func isLikelyBlank(img image.Image) bool {
 	if sy < 1 {
 		sy = 1
 	}
+	var n int
+	var sumR, sumG, sumB int64
+	var minR, minG, minB uint32 = 255, 255, 255
+	var maxR, maxG, maxB uint32
 	for y := b.Min.Y; y < b.Max.Y; y += sy {
 		for x := b.Min.X; x < b.Max.X; x += sx {
-			r, g, bl, _ := img.At(x, y).RGBA()
-			if r>>8 > 8 || g>>8 > 8 || bl>>8 > 8 {
-				return false
+			r16, g16, b16, _ := img.At(x, y).RGBA()
+			r, g, bl := r16>>8, g16>>8, b16>>8
+			sumR += int64(r)
+			sumG += int64(g)
+			sumB += int64(bl)
+			if r < minR {
+				minR = r
 			}
+			if g < minG {
+				minG = g
+			}
+			if bl < minB {
+				minB = bl
+			}
+			if r > maxR {
+				maxR = r
+			}
+			if g > maxG {
+				maxG = g
+			}
+			if bl > maxB {
+				maxB = bl
+			}
+			n++
 		}
 	}
-	return true
+	if n < 8 {
+		return false
+	}
+	// Range across samples is tiny → solid fill.
+	if maxR-minR <= 6 && maxG-minG <= 6 && maxB-minB <= 6 {
+		if blackOnly {
+			return maxR <= 8 && maxG <= 8 && maxB <= 8
+		}
+		return true
+	}
+	return false
 }
 
 func (a *Agent) deskSendError(server, sid, msg string) {
