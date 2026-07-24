@@ -1085,21 +1085,51 @@ svg.sparkline{width:100%; height:46px; display:block}
 .hi-sep{color:var(--muted2); margin:0 1px}
 .metric.gpu .row .label{color:var(--accent2-txt)}
 
-/* ---------- 主机分组树：高密度资源树 ---------- */
-.htx-wrap{display:flex;gap:10px;align-items:stretch;margin-top:8px}
-.htx-tree{flex:0 0 240px;max-width:260px;min-width:200px;background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;max-height:calc(100vh - 160px);overflow:hidden}
-.htx-main{flex:1 1 auto;min-width:0}
-@media(max-width:960px){.htx-wrap{flex-direction:column}.htx-tree{flex:none;max-width:none;width:100%;max-height:220px}}
+/* ---------- 主机分组树：JumpServer 风格左树 + 右工具栏/卡片 ---------- */
+.htx-wrap{display:flex;gap:0;align-items:stretch;margin-top:0;min-height:calc(100vh - 120px);background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.htx-tree{flex:0 0 260px;max-width:280px;min-width:220px;background:var(--bg2);border-right:1px solid var(--line);border-radius:0;display:flex;flex-direction:column;max-height:none;overflow:hidden}
+.htx-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;background:var(--panel)}
+.htx-content{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 14px 8px}
+.htx-flat{margin:0}
+.htx-flat .group-head{display:none}
+@media(max-width:960px){.htx-wrap{flex-direction:column;min-height:0}.htx-tree{flex:none;max-width:none;width:100%;max-height:240px;border-right:none;border-bottom:1px solid var(--line)}}
+
+.htx-tabs{display:flex;align-items:center;gap:0;padding:0 6px;border-bottom:1px solid var(--line);flex:none;min-height:40px}
+.htx-tab{appearance:none;border:none;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:550;padding:10px 12px 9px;cursor:pointer;position:relative;border-radius:0}
+.htx-tab:hover{color:var(--txt)}
+.htx-tab.active{color:var(--accent-txt);font-weight:650}
+.htx-tab.active::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;background:var(--accent);border-radius:2px 2px 0 0}
+.htx-tab-tools{margin-left:auto;display:inline-flex;align-items:center;gap:2px;padding-right:4px}
+.htx-tree-search{padding:8px 10px 6px;flex:none}
+.htx-tree-q{width:100%;box-sizing:border-box;height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);color:var(--txt);font:inherit;font-size:12px}
+.htx-tree-q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.htx-tool-btn{width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.htx-tool-btn:hover{background:rgba(127,127,127,.12);color:var(--txt)}
+.htx-tool-btn svg{width:14px;height:14px}
+.htx-add-root{font-size:18px;font-weight:600;color:var(--accent);line-height:1}
+
+.htx-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);flex:none;background:var(--panel)}
+.htx-tb-left,.htx-tb-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.htx-tb-right{margin-left:auto}
+.htx-create{height:32px;padding:0 12px;font-size:13px}
+.htx-create svg{width:14px;height:14px}
+.htx-crumb{font-size:12.5px;color:var(--txt2);font-weight:550;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.htx-search{width:200px;max-width:28vw;margin:0}
+.htx-more{position:relative}
+.htx-more-menu{position:absolute;top:calc(100% + 4px);left:0;min-width:140px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:4px;z-index:40}
+.htx-more-item{display:block;width:100%;text-align:left;border:none;background:transparent;padding:8px 10px;border-radius:6px;font:inherit;font-size:13px;color:var(--txt);cursor:pointer}
+.htx-more-item:hover{background:var(--accent-soft);color:var(--accent-txt)}
+
 .htx-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 8px 6px;border-bottom:1px solid var(--line);flex:none}
 .htx-title{font-size:11px;font-weight:650;color:var(--muted);letter-spacing:.04em}
-.htx-scroll{flex:1 1 auto;overflow:auto;padding:4px 4px 8px;min-height:0}
+.htx-scroll{flex:1 1 auto;overflow:auto;padding:4px 6px 10px;min-height:0}
 .htx-sep{height:1px;background:var(--line);margin:4px 6px}
 .htx-hint{padding:2px 8px 6px;font-size:10px;color:var(--muted2);line-height:1.35}
 .htx-empty{padding:8px 10px;font-size:11.5px;color:var(--muted2)}
-.htx-node{display:flex;align-items:center;gap:4px;min-height:28px;padding:2px 6px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--txt2);line-height:1.2}
+.htx-node{display:flex;align-items:center;gap:5px;min-height:30px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12.5px;color:var(--txt2);line-height:1.2}
 .htx-node:hover{background:rgba(127,127,127,.08)}
 .htx-node.selected{background:var(--accent-soft);color:var(--accent-txt)}
-.htx-node.selected .htx-count{color:var(--accent-txt);opacity:.85}
+.htx-node.selected .htx-count{color:var(--accent-txt);opacity:.9}
 .htx-caret{width:12px;flex:none;color:var(--muted);font-size:10px;text-align:center;user-select:none;line-height:1}
 .htx-caret.empty{visibility:hidden}
 .htx-ico{width:12px;height:10px;flex:none;border:1.5px solid var(--muted2);border-radius:1px 2px 2px 2px;opacity:.65;position:relative;box-sizing:border-box;margin-top:1px}
@@ -1109,8 +1139,10 @@ svg.sparkline{width:100%; height:46px; display:block}
 .htx-ico-all::after{content:"";position:absolute;left:2px;right:2px;top:50%;border-top:1.5px solid var(--muted2);transform:translateY(-50%)}
 .htx-ico-none{border-style:dashed;opacity:.5;height:12px}
 .htx-ico-none::before{display:none}
+.htx-ico-type{border-radius:2px;height:12px;width:12px}
+.htx-ico-type::before{display:none;content:none}
 .htx-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.htx-count{flex:none;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:1.2em;text-align:right;padding:0 2px}
+.htx-count{flex:none;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;padding:0 2px;letter-spacing:-.01em}
 .htx-acts{display:inline-flex;gap:1px;flex:none;opacity:0;pointer-events:none;transition:opacity .12s}
 .htx-node:hover .htx-acts,.htx-node.selected .htx-acts{opacity:1;pointer-events:auto}
 .htx-act{border:none;background:transparent;color:var(--muted);cursor:pointer;width:18px;height:18px;border-radius:4px;line-height:1;padding:0;font-size:12px;display:inline-flex;align-items:center;justify-content:center;flex:none}
@@ -1123,6 +1155,34 @@ svg.sparkline{width:100%; height:46px; display:block}
 .htx-children{position:relative}
 .htx-folder{margin:0}
 .htx-head .htx-act{opacity:1;pointer-events:auto;width:22px;height:22px;border:1px solid var(--line2);background:var(--panel2);border-radius:5px}
+
+.htx-ctx{position:fixed;z-index:1600;min-width:168px;padding:4px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.2)}
+.htx-ctx-item{display:block;width:100%;text-align:left;border:none;background:transparent;padding:8px 12px;border-radius:6px;font:inherit;font-size:12.5px;color:var(--txt);cursor:pointer}
+.htx-ctx-item:hover{background:var(--accent-soft);color:var(--accent-txt)}
+.htx-ctx-item.danger:hover{background:rgba(239,77,90,.12);color:var(--crit)}
+
+#view-hosts .tree-toggle-btn{border-radius:0;border-top:none;border-bottom:none;min-height:auto;align-self:stretch;background:var(--bg2)}
+#view-hosts.view{padding-bottom:8px}
+
+/* ---------- 主机分组命名弹窗（紧凑、无 AI 反馈样式） ---------- */
+.htx-dlg-mask{z-index:1520;align-items:center;justify-content:center;background:rgba(8,10,16,.45);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.htx-dlg{width:min(380px,92vw);background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden}
+.htx-dlg-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.htx-dlg-head h3{margin:0;font-size:14px;font-weight:650;color:var(--txt);letter-spacing:.01em}
+.htx-dlg-x{width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1}
+.htx-dlg-x:hover{background:var(--panel2);color:var(--txt)}
+.htx-dlg-body{padding:14px 14px 6px;display:flex;flex-direction:column;gap:6px}
+.htx-dlg-path{display:flex;align-items:baseline;gap:8px;padding:7px 9px;background:var(--bg2);border:1px solid var(--line);border-radius:7px;font-size:12px;min-width:0}
+.htx-dlg-path-k{flex:none;color:var(--muted);font-size:11px}
+.htx-dlg-path-v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt2);font-weight:550}
+.htx-dlg-label{font-size:12px;font-weight:600;color:var(--txt);margin-top:2px}
+.htx-dlg-input{width:100%;box-sizing:border-box;height:36px;padding:0 11px;border:1px solid var(--line2);border-radius:7px;background:var(--bg2);color:var(--txt);font:inherit;font-size:13px}
+.htx-dlg-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.htx-dlg-input::placeholder{color:var(--muted2)}
+.htx-dlg-select{appearance:auto;cursor:pointer}
+.htx-dlg-hint{font-size:11px;color:var(--muted2);line-height:1.4;margin-top:1px}
+.htx-dlg-err{font-size:11.5px;color:var(--crit);min-height:16px;margin-top:2px}
+.htx-dlg-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px 14px}
 
 /* ---------- 远程桌面面板 ---------- */
 .desktop-btn svg{width:14px;height:14px}

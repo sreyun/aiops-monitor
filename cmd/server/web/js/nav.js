@@ -899,6 +899,7 @@ safeAddEventListener("checkViewToggle", "click", e => {
   const b = e.target.closest(".vt-btn"); if (!b) return;
   setCheckView(b.dataset.cview);
 });
+safeAddEventListener("hostRefreshBtn", "click", () => { if (typeof refresh === "function") refresh(); });
 safeAddEventListener("hostViewToggle", "click", e => {
   const b = e.target.closest(".vt-btn"); if (!b) return;
   setHostView(b.dataset.hview);
