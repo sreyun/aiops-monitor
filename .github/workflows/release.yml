@@ -1,16 +1,10 @@
-name: Release · Build & Push to Huawei SWR
+name: Release · Build Binaries & Docker
 
-# 每次推送 v* 标签（如 v5.5.0）→ 自动构建多架构镜像并推送到华为云 SWR。
-# 也可在 Actions 页手动触发（workflow_dispatch）并指定 tag 做补推。
+# 每次推送 v* 标签（如 v6.34.0）→ 自动构建多平台二进制 + 创建 GitHub Release + 构建 Docker 镜像推送到华为云 SWR。
 #
-# ── 需要在 仓库 Settings → Secrets and variables → Actions 配置两个 Secret ──
-#   HW_ACCESS_KEY  =  <华为云访问密钥 AK>           （IAM「我的凭证」获取）
-#   HW_SECRET_KEY  =  <华为云秘密密钥 SK>           （同上）
-#
-#   登录密钥由 AK/SK 在 CI 中通过 HMAC-SHA256 自动生成。
-#
-#   另需在 SWR 控制台的 sreyun 组织下预先创建镜像仓库 aiops-server 与 aiops-agent
-#   （或将组织设为允许自动创建）。
+# ── 需要在 仓库 Settings → Secrets and variables → Actions 配置 ──
+#   HW_ACCESS_KEY  =  <华为云访问密钥 AK>
+#   HW_SECRET_KEY  =  <华为云秘密密钥 SK>
 
 on:
   push:
@@ -32,6 +26,72 @@ env:
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
+  # ──────────────────────────────────────────────────────────
+  # Job 1: 构建多平台二进制 + 创建 GitHub Release
+  # ──────────────────────────────────────────────────────────
+  build-binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Resolve version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "构建版本: $VERSION"
+
+      - name: Build binaries
+        run: |
+          VERSION=${{ steps.meta.outputs.version }}
+          mkdir -p dist
+
+          # linux/amd64
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-linux-amd64 ./cmd/server
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-linux-amd64 ./cmd/agent
+
+          # linux/arm64
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-linux-arm64 ./cmd/server
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-linux-arm64 ./cmd/agent
+
+          # windows/amd64
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-windows-amd64.exe ./cmd/server
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-windows-amd64.exe ./cmd/agent
+
+          echo "构建完成:"
+          ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: ${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/aiops-server-linux-amd64
+            dist/aiops-agent-linux-amd64
+            dist/aiops-server-linux-arm64
+            dist/aiops-agent-linux-arm64
+            dist/aiops-server-windows-amd64.exe
+            dist/aiops-agent-windows-amd64.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ──────────────────────────────────────────────────────────
+  # Job 2: 构建 Docker 镜像并推送到华为云 SWR
+  # ──────────────────────────────────────────────────────────
   build-push:
     runs-on: ubuntu-latest
     permissions:

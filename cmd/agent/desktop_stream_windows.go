@@ -27,6 +27,8 @@ var (
 	modGdi32                   = syscall.NewLazyDLL("gdi32.dll")
 	procGetSystemMetrics       = modUser32.NewProc("GetSystemMetrics")
 	procGetDC                  = modUser32.NewProc("GetDC")
+	procGetWindowDC            = modUser32.NewProc("GetWindowDC")
+	procGetDesktopWindow       = modUser32.NewProc("GetDesktopWindow")
 	procReleaseDC              = modUser32.NewProc("ReleaseDC")
 	procCreateCompatibleDC     = modGdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = modGdi32.NewProc("CreateCompatibleBitmap")
@@ -99,21 +101,25 @@ func runDesktopWorker(agent *Agent) error {
 }
 
 const (
-	smCXScreen     = 0
-	smCYScreen     = 1
-	srcCopy        = 0x00CC0020
-	captureBLT     = 0x40000000 // include layered windows
-	biRGB          = 0
-	dibRGBColors   = 0
-	mouseeventfMove = 0x0001
+	smCXScreen         = 0
+	smCYScreen         = 1
+	smCXVirtualScreen  = 78
+	smCYVirtualScreen  = 79
+	smXVVirtualScreen  = 76
+	smYVVirtualScreen  = 77
+	srcCopy            = 0x00CC0020
+	captureBLT         = 0x40000000 // include layered windows
+	biRGB              = 0
+	dibRGBColors       = 0
+	mouseeventfMove    = 0x0001
 	mouseeventfLeftDown = 0x0002
-	mouseeventfLeftUp = 0x0004
+	mouseeventfLeftUp  = 0x0004
 	mouseeventfRightDown = 0x0008
 	mouseeventfRightUp = 0x0010
 	mouseeventfMiddleDown = 0x0020
 	mouseeventfMiddleUp = 0x0040
-	mouseeventfWheel = 0x0800
-	keyeventfKeyUp = 0x0002
+	mouseeventfWheel   = 0x0800
+	keyeventfKeyUp     = 0x0002
 )
 
 type bitmapInfoHeader struct {
@@ -212,9 +218,17 @@ func (c *winCapture) Close() error {
 func (c *winCapture) Capture() (image.Image, error) {
 	c.ensureInputDesktop()
 	// RDP / DPI / monitor hotplug can change geometry between frames; stale
-	// 2880×1920 buffers against a resized desktop make BitBlt/GetDIBits fail.
+	// buffers against a resized desktop make BitBlt fail.
 	c.refreshGeometry()
-	return c.captureGDI()
+	img, err := c.captureGDI()
+	if err != nil {
+		// One hard retry: re-attach input desktop and re-query geometry (session
+		// switches / RDP resize race with the first attempt).
+		c.ensureInputDesktop()
+		c.refreshGeometry()
+		img, err = c.captureGDI()
+	}
+	return img, err
 }
 
 // refreshGeometry re-reads the selected monitor's virtual-screen rect.
@@ -233,7 +247,6 @@ func (c *winCapture) refreshGeometry() {
 			return
 		}
 	}
-	// Selected monitor disappeared — fall back to primary.
 	for _, m := range mons {
 		if m.Primary && m.Width > 0 && m.Height > 0 {
 			c.monX, c.monY = m.X, m.Y
@@ -250,118 +263,245 @@ func (c *winCapture) refreshGeometry() {
 	}
 }
 
+type bltSrc struct {
+	hdc    uintptr
+	x, y   int
+	w, h   int
+	release func()
+}
+
+func (c *winCapture) openScreenDCs() []bltSrc {
+	var out []bltSrc
+	// 1) Desktop window DC — most reliable inside an interactive / RDP session.
+	desk, _, _ := procGetDesktopWindow.Call()
+	if desk != 0 {
+		if hdc, _, _ := procGetWindowDC.Call(desk); hdc != 0 {
+			d := desk
+			out = append(out, bltSrc{
+				hdc: hdc, x: c.monX, y: c.monY, w: c.w, h: c.h,
+				release: func() { _, _, _ = procReleaseDC.Call(d, hdc) },
+			})
+		}
+	}
+	// 2) Screen DC (GetDC NULL) with monitor origin.
+	if hdc, _, _ := procGetDC.Call(0); hdc != 0 {
+		out = append(out, bltSrc{
+			hdc: hdc, x: c.monX, y: c.monY, w: c.w, h: c.h,
+			release: func() { _, _, _ = procReleaseDC.Call(0, hdc) },
+		})
+		// 3) Same screen DC but full virtual desktop at (vx,vy) — rescues bad
+		//    EnumDisplayMonitors offsets under DPI / mirror-driver RDP.
+		vx, _, _ := procGetSystemMetrics.Call(smXVVirtualScreen)
+		vy, _, _ := procGetSystemMetrics.Call(smYVVirtualScreen)
+		vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
+		vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
+		if int(vw) > 0 && int(vh) > 0 && (int(vx) != c.monX || int(vy) != c.monY || int(vw) != c.w || int(vh) != c.h) {
+			out = append(out, bltSrc{
+				hdc: hdc, x: int(vx), y: int(vy), w: int(vw), h: int(vh),
+				release: nil, // shared with #2; released once
+			})
+		}
+		// 4) Primary metrics at (0,0).
+		sw, _, _ := procGetSystemMetrics.Call(smCXScreen)
+		sh, _, _ := procGetSystemMetrics.Call(smCYScreen)
+		if int(sw) > 0 && int(sh) > 0 {
+			out = append(out, bltSrc{
+				hdc: hdc, x: 0, y: 0, w: int(sw), h: int(sh),
+				release: nil,
+			})
+		}
+	}
+	return out
+}
+
 func (c *winCapture) captureGDI() (image.Image, error) {
 	if c.w < 1 || c.h < 1 {
 		return nil, fmt.Errorf("invalid capture size %dx%d", c.w, c.h)
 	}
-	// Soft cap: absurd sizes (mis-read metrics) exhaust GDI and look like GetDIBits failures.
 	if c.w > 7680 || c.h > 4320 {
 		return nil, fmt.Errorf("capture size too large: %dx%d", c.w, c.h)
 	}
 
-	hwnd := uintptr(0)
-	hdc, _, _ := procGetDC.Call(hwnd)
-	if hdc == 0 {
-		return nil, fmt.Errorf("GetDC failed")
+	srcs := c.openScreenDCs()
+	if len(srcs) == 0 {
+		return nil, fmt.Errorf("GetDC/GetWindowDC failed (no interactive desktop?)")
 	}
-	defer procReleaseDC.Call(hwnd, hdc)
+	defer func() {
+		seen := map[uintptr]bool{}
+		for _, s := range srcs {
+			if s.release != nil && !seen[s.hdc] {
+				seen[s.hdc] = true
+				s.release()
+			}
+		}
+	}()
 
-	memDC, _, _ := procCreateCompatibleDC.Call(hdc)
+	var lastErr error
+	for _, src := range srcs {
+		if src.w < 1 || src.h < 1 {
+			continue
+		}
+		img, err := bltToImage(src.hdc, src.x, src.y, src.w, src.h)
+		if err == nil {
+			// If we fell back to a different rect, keep capture size in sync.
+			if src.w != c.w || src.h != c.h {
+				c.w, c.h = src.w, src.h
+				c.monX, c.monY = src.x, src.y
+			}
+			return img, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("BitBlt failed")
+	}
+	return nil, lastErr
+}
+
+// bltToImage copies a screen rectangle into an RGBA image.
+// Primary path: CreateCompatibleBitmap (device-dependent) — BitBlt into a DDB is
+// far more reliable than into a top-down DIB section on Server 2012 / some RDP
+// mirror drivers (those return BitBlt=0 even when CreateDIBSection succeeded,
+// which previously short-circuited before any fallback).
+func bltToImage(srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) {
+	memDC, _, _ := procCreateCompatibleDC.Call(srcDC)
 	if memDC == 0 {
 		return nil, fmt.Errorf("CreateCompatibleDC failed")
 	}
 	defer procDeleteDC.Call(memDC)
 
-	// Prefer CreateDIBSection: pixels are mapped directly — no GetDIBits, and no
-	// "bitmap still selected into a DC" failure mode that broke 2880×1920 captures.
+	// --- Path A: device-dependent bitmap + GetDIBits (deselect first) ---
+	if img, err := bltViaDDB(memDC, srcDC, srcX, srcY, w, h); err == nil {
+		return img, nil
+	}
+
+	// --- Path B: bottom-up DIB section (positive height; top-down often breaks BitBlt) ---
+	if img, err := bltViaDIB(memDC, srcDC, srcX, srcY, w, h, false); err == nil {
+		return img, nil
+	}
+
+	// --- Path C: top-down DIB section ---
+	if img, err := bltViaDIB(memDC, srcDC, srcX, srcY, w, h, true); err == nil {
+		return img, nil
+	}
+
+	return nil, fmt.Errorf("BitBlt failed")
+}
+
+func tryBitBlt(memDC, srcDC uintptr, srcX, srcY, w, h int) bool {
+	for _, rop := range []uintptr{srcCopy | captureBLT, srcCopy} {
+		ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(w), uintptr(h), srcDC,
+			uintptr(int32(srcX)), uintptr(int32(srcY)), rop)
+		if ret != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func bltViaDDB(memDC, srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) {
+	bmp, _, _ := procCreateCompatibleBitmap.Call(srcDC, uintptr(w), uintptr(h))
+	if bmp == 0 {
+		return nil, fmt.Errorf("CreateCompatibleBitmap failed")
+	}
+	defer procDeleteObject.Call(bmp)
+
+	old, _, _ := procSelectObject.Call(memDC, bmp)
+	ok := tryBitBlt(memDC, srcDC, srcX, srcY, w, h)
+	_, _, _ = procSelectObject.Call(memDC, old) // MUST deselect before GetDIBits
+	if !ok {
+		return nil, fmt.Errorf("BitBlt failed")
+	}
+
 	bi := bitmapInfoHeader{
 		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-		Width:       int32(c.w),
-		Height:      -int32(c.h), // top-down
+		Width:       int32(w),
+		Height:      -int32(h),
+		Planes:      1,
+		BitCount:    32,
+		Compression: biRGB,
+	}
+	buf := make([]byte, w*h*4)
+	n, _, _ := procGetDIBits.Call(srcDC, bmp, 0, uintptr(h),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	if n == 0 {
+		n, _, _ = procGetDIBits.Call(memDC, bmp, 0, uintptr(h),
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("GetDIBits failed")
+	}
+	return bgraBufToRGBA(buf, w, h), nil
+}
+
+func bltViaDIB(memDC, srcDC uintptr, srcX, srcY, w, h int, topDown bool) (image.Image, error) {
+	height := int32(h)
+	if topDown {
+		height = -height
+	}
+	bi := bitmapInfoHeader{
+		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
+		Width:       int32(w),
+		Height:      height,
 		Planes:      1,
 		BitCount:    32,
 		Compression: biRGB,
 	}
 	var bits unsafe.Pointer
-	bmp, _, errDIB := procCreateDIBSection.Call(
-		hdc,
-		uintptr(unsafe.Pointer(&bi)),
-		dibRGBColors,
-		uintptr(unsafe.Pointer(&bits)),
-		0, 0,
-	)
-	if bmp != 0 && bits != nil {
-		defer procDeleteObject.Call(bmp)
-		old, _, _ := procSelectObject.Call(memDC, bmp)
-		ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
-			uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy|captureBLT)
-		_, _, _ = procSelectObject.Call(memDC, old) // deselect before touching bits/free
-		if ret == 0 {
-			// Retry without CAPTUREBLT (some Session/secure-desktop DCs reject it).
-			old2, _, _ := procSelectObject.Call(memDC, bmp)
-			ret, _, _ = procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
-				uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy)
-			_, _, _ = procSelectObject.Call(memDC, old2)
-			if ret == 0 {
-				return nil, fmt.Errorf("BitBlt failed")
-			}
-		}
-		nPix := c.w * c.h
-		src := unsafe.Slice((*byte)(bits), nPix*4)
-		img := image.NewRGBA(image.Rect(0, 0, c.w, c.h))
+	bmp, _, _ := procCreateDIBSection.Call(srcDC, uintptr(unsafe.Pointer(&bi)), dibRGBColors,
+		uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if bmp == 0 || bits == nil {
+		return nil, fmt.Errorf("CreateDIBSection failed")
+	}
+	defer procDeleteObject.Call(bmp)
+
+	old, _, _ := procSelectObject.Call(memDC, bmp)
+	ok := tryBitBlt(memDC, srcDC, srcX, srcY, w, h)
+	_, _, _ = procSelectObject.Call(memDC, old)
+	if !ok {
+		return nil, fmt.Errorf("BitBlt failed")
+	}
+
+	nPix := w * h
+	src := unsafe.Slice((*byte)(bits), nPix*4)
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	if topDown {
 		for i := 0; i < nPix; i++ {
 			off := i * 4
-			img.Pix[off+0] = src[off+2] // BGRA → RGBA
+			img.Pix[off+0] = src[off+2]
 			img.Pix[off+1] = src[off+1]
 			img.Pix[off+2] = src[off+0]
 			img.Pix[off+3] = 255
 		}
 		return img, nil
 	}
+	// Bottom-up DIB: flip rows.
+	stride := w * 4
+	for y := 0; y < h; y++ {
+		srcOff := (h - 1 - y) * stride
+		dstOff := y * stride
+		for x := 0; x < w; x++ {
+			s := srcOff + x*4
+			d := dstOff + x*4
+			img.Pix[d+0] = src[s+2]
+			img.Pix[d+1] = src[s+1]
+			img.Pix[d+2] = src[s+0]
+			img.Pix[d+3] = 255
+		}
+	}
+	return img, nil
+}
 
-	// Fallback: device-dependent bitmap + GetDIBits. Must DESELECT the bitmap
-	// before GetDIBits — calling GetDIBits while it is selected into memDC is a
-	// classic GDI failure (exactly the "GetDIBits failed" seen at 2880×1920).
-	_ = errDIB
-	bmp2, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(c.w), uintptr(c.h))
-	if bmp2 == 0 {
-		return nil, fmt.Errorf("CreateCompatibleBitmap failed")
-	}
-	defer procDeleteObject.Call(bmp2)
-
-	old, _, _ := procSelectObject.Call(memDC, bmp2)
-	ret, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
-		uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy|captureBLT)
-	if ret == 0 {
-		ret, _, _ = procBitBlt.Call(memDC, 0, 0, uintptr(c.w), uintptr(c.h), hdc,
-			uintptr(int32(c.monX)), uintptr(int32(c.monY)), srcCopy)
-	}
-	_, _, _ = procSelectObject.Call(memDC, old) // CRITICAL: deselect before GetDIBits
-	if ret == 0 {
-		return nil, fmt.Errorf("BitBlt failed")
-	}
-
-	buf := make([]byte, c.w*c.h*4)
-	n, _, _ := procGetDIBits.Call(hdc, bmp2, 0, uintptr(c.h),
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
-	if n == 0 {
-		// Second try with memDC (some drivers want a memory DC).
-		n, _, _ = procGetDIBits.Call(memDC, bmp2, 0, uintptr(c.h),
-			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
-	}
-	if n == 0 {
-		return nil, fmt.Errorf("GetDIBits failed")
-	}
-
-	img := image.NewRGBA(image.Rect(0, 0, c.w, c.h))
-	for i := 0; i < c.w*c.h; i++ {
+func bgraBufToRGBA(buf []byte, w, h int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := 0; i < w*h; i++ {
 		off := i * 4
 		img.Pix[off+0] = buf[off+2]
 		img.Pix[off+1] = buf[off+1]
 		img.Pix[off+2] = buf[off+0]
 		img.Pix[off+3] = 255
 	}
-	return img, nil
+	return img
 }
 
 type winInput struct {
