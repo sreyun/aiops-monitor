@@ -130,12 +130,15 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		// (inline style= attributes are pervasive and low-risk — no script execution).
 		// The policy also blocks plugins, base-tag/form hijacking, framing
 		// (clickjacking), and cross-origin exfiltration (connect/img/font = self).
+		// blob: is required for remote-desktop JPEG/H.264 (createObjectURL frames /
+		// MediaSource) and in-browser file download/replay links — without it the
+		// browser fires Image.onerror and the UI reports "无法解码的 JPEG 画面".
 		// Skipped for /proxy/ — those responses are arbitrary target-host web apps
 		// that must keep their own CSP/resources.
 		if !strings.HasPrefix(r.URL.Path, "/proxy/") {
 			h.Set("Content-Security-Policy",
 				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
-					"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "+
+					"img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; "+
 					"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 		}
 		next.ServeHTTP(w, r)

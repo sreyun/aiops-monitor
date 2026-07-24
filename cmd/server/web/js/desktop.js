@@ -212,6 +212,9 @@ function connectDesktopWS(id, name) {
   // frame revoked the URL still being decoded, while an older onload could revoke
   // the newer URL. At normal frame rates that race left the canvas at its default
   // 300×150 black surface even though the UI reported "Connected".
+  // Prefer createImageBitmap(Blob) so decode does not depend on blob: URLs
+  // (a CSP img-src without blob: previously blocked every frame and surfaced as
+  // "无法解码的 JPEG 画面"). Fall back to Image + object URL when unavailable.
   let jpegPending = null;
   let jpegDecoding = false;
   let jpegDecodeFailures = 0;
@@ -221,28 +224,11 @@ function connectDesktopWS(id, name) {
     const blob = jpegPending;
     jpegPending = null;
     jpegDecoding = true;
-    const frameURL = URL.createObjectURL(blob);
-    const img = new Image();
     const finish = () => {
-      URL.revokeObjectURL(frameURL);
       jpegDecoding = false;
       if (jpegPending && DESK_WS === ws) drawNextJPEG();
     };
-    img.onload = () => {
-      const ctx = canvas && canvas.getContext("2d");
-      if (ctx && img.naturalWidth > 0 && img.naturalHeight > 0 && DESK_WS === ws) {
-        if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-        }
-        ctx.drawImage(img, 0, 0);
-        jpegDecodeFailures = 0;
-        markDeskStreaming();
-        showDeskCanvas(true);
-      }
-      finish();
-    };
-    img.onerror = () => {
+    const fail = () => {
       jpegDecodeFailures++;
       if (jpegDecodeFailures === 3 && DESK_WS === ws) {
         DESK_PHASE = "error";
@@ -251,6 +237,37 @@ function connectDesktopWS(id, name) {
         setDeskDot("error");
       }
       finish();
+    };
+    const paint = (src, w, h) => {
+      const ctx = canvas && canvas.getContext("2d");
+      if (ctx && w > 0 && h > 0 && DESK_WS === ws) {
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        ctx.drawImage(src, 0, 0);
+        if (typeof src.close === "function") {
+          try { src.close(); } catch (e) {}
+        }
+        jpegDecodeFailures = 0;
+        markDeskStreaming();
+        showDeskCanvas(true);
+      }
+      finish();
+    };
+    if (typeof createImageBitmap === "function") {
+      createImageBitmap(blob).then((bmp) => paint(bmp, bmp.width, bmp.height), fail);
+      return;
+    }
+    const frameURL = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(frameURL);
+      paint(img, img.naturalWidth, img.naturalHeight);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(frameURL);
+      fail();
     };
     img.src = frameURL;
   };
