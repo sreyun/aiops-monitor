@@ -31,6 +31,7 @@ type Server struct {
 	scrapes   *scrapeManager   // 指标抓取（agentless exporter 摄入 Prometheus 生态）
 	promrules *promRuleManager // 指标告警规则（PromQL）
 	term      *termManager     // remote terminal relay
+	desk      *deskManager     // web remote desktop (agent screen stream)
 	forward   *forwardManager  // port forwarding relay (TCP + HTTP proxy)
 	emailMgr  *emailManager    // verification codes + reset tokens
 	playbooks *playbookManager // automation playbooks + execution history
@@ -67,6 +68,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		auth:        NewAuth(cfg),
 		checks:      newCheckRunner(cfg, store, notifier, selfAddr),
 		term:        newTermManager(),
+		desk:        newDeskManager(),
 		forward:     newForwardManager(cfg),
 		emailMgr:    newEmailManager(),
 		playbooks:   newPlaybookManager(cfg),
@@ -167,6 +169,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/folder", s.handleSetHostFolder)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/desktop", s.handleOpenDesktop)
+	mux.HandleFunc("GET /api/v1/hosts/{id}/desktop/ws", s.handleDesktopWS)
+	mux.HandleFunc("GET /api/v1/agent/desktop/wait", s.handleAgentDeskWait)
+	mux.HandleFunc("GET /api/v1/agent/desktop/rx", s.handleAgentDeskRx)
+	mux.HandleFunc("POST /api/v1/agent/desktop/tx", s.handleAgentDeskTx)
+	mux.HandleFunc("GET /api/v1/desktop/sessions", s.handleListDesktopSessions)
+	mux.HandleFunc("GET /api/v1/desktop/sessions/{id}/replay", s.handleDesktopReplay)
 	mux.HandleFunc("GET /api/v1/host-folders", s.handleGetHostFolders)
 	mux.HandleFunc("PUT /api/v1/host-folders", s.handlePutHostFolders)
 	mux.HandleFunc("POST /api/v1/host-folders", s.handlePostHostFolder)

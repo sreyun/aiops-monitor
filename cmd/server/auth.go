@@ -52,6 +52,9 @@ func isPublicPath(r *http.Request) bool {
 	if strings.HasPrefix(p, "/api/v1/agent/terminal/") {
 		return true
 	}
+	if strings.HasPrefix(p, "/api/v1/agent/desktop/") {
+		return true
+	}
 	// Agent-facing port forwarding reverse channels are fingerprint-gated.
 	if strings.HasPrefix(p, "/api/v1/agent/forward/") {
 		return true
@@ -134,7 +137,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 			return rank >= roleRank(RoleAdmin)
 		}
 	}
-	if strings.Contains(p, "/terminal") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") || p == "/api/v1/proxy-token" { // remote shell + port forwarding: operator+
+	if strings.Contains(p, "/terminal") || strings.Contains(p, "/desktop") || strings.HasPrefix(p, "/api/v1/forward") || strings.HasPrefix(p, "/proxy/") || p == "/api/v1/proxy-token" { // remote shell + desktop + port forwarding: operator+
 		return rank >= roleRank(RoleOperator)
 	}
 	if r.Method == http.MethodGet { // reads: viewer+

@@ -568,6 +568,7 @@ document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e 
     if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
     mk.classList.remove("show"); hideChartTip();
     if (mk.id === "termMask") { closeTerminalWS(); }
+    if (mk.id === "desktopMask") { closeDesktopWS(); }
     if (mk.id === "termReplayMask") { closeReplay(); }
     if (mk.id === "termObserveMask") { closeObserveWS(); }
     if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
@@ -578,12 +579,14 @@ document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e 
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     const hadTerm = $("termMask") && $("termMask").classList.contains("show");
+    const hadDesktop = $("desktopMask") && $("desktopMask").classList.contains("show");
     const hadReplay = $("termReplayMask") && $("termReplayMask").classList.contains("show");
     const hadObserve = $("termObserveMask") && $("termObserveMask").classList.contains("show");
     const hadSessions = $("termSessionsMask") && $("termSessionsMask").classList.contains("show");
     document.querySelectorAll(".mask.show:not([data-forced])").forEach(mk => mk.classList.remove("show"));
     hideChartTip();
     if (hadTerm) closeTerminalWS();
+    if (hadDesktop) closeDesktopWS();
     if (hadReplay) closeReplay();
     if (hadObserve) closeObserveWS();
     if (hadSessions && TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; }
