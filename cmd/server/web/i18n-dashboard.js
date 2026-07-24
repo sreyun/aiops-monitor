@@ -336,6 +336,7 @@
   "desktop.streaming_hint": "正在接收第一帧画面…",
   "desktop.view_only": "只读画面 · 键鼠不可用（缺少 xdotool / 辅助功能权限）",
   "desktop.error": "桌面会话出错",
+  "desktop.warn": "桌面提示",
   "desktop.not_connected": "桌面未连接",
   "desktop.disconnect": "断开",
   "desktop.fullscreen": "全屏",

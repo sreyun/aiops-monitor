@@ -150,17 +150,33 @@ type wtsSessionInfoW struct {
 
 const (
 	wtsActiveState       = 0 // WTSActive — connected + interactive
-	wtsDisconnectedState = 4 // WTSDisconnected — RDP window closed but desktop still renders
+	wtsConnectedState    = 1 // WTSConnected — connected, may still be at logon UI
+	wtsDisconnectedState = 4 // WTSDisconnected — RDP closed; virtual desktop may still render
 )
 
-// activeUserSession returns the session whose desktop is actually being rendered,
-// which is what remote-desktop capture must target. The physical console
-// (WTSGetActiveConsoleSessionId) is the WRONG target on a server: when you RDP in,
-// the active desktop moves to your RDP session and the console session stops
-// compositing — capturing it then yields solid BLACK frames even though BitBlt
-// "succeeds". We therefore prefer, in order: an Active (connected) session, then a
-// Disconnected RDP session (its virtual desktop keeps rendering), then the console.
-// Session 0 (services, no desktop) is always skipped.
+func wtsStationName(p *uint16) string {
+	if p == nil {
+		return ""
+	}
+	return syscall.UTF16ToString((*[256]uint16)(unsafe.Pointer(p))[:])
+}
+
+func isRDPStation(name string) bool {
+	// RDP-Tcp#0, RDP-Tcp#1, … — anything else is Console / Services / etc.
+	return len(name) >= 3 && (name[0] == 'R' || name[0] == 'r') &&
+		(name[1] == 'D' || name[1] == 'd') && (name[2] == 'P' || name[2] == 'p')
+}
+
+// activeUserSession returns the session whose desktop is actually being rendered.
+// Prefer RDP over Console: on headless/Hyper-V hosts the Console session is often
+// "Active" but not compositing, while an RDP session holds the real desktop —
+// capturing Console then yields solid black frames. Order:
+//  1. Active/Connected RDP session
+//  2. Active/Connected non-console (any)
+//  3. Disconnected RDP (virtual desktop may still render)
+//  4. Any disconnected session
+//  5. Physical console / fallback
+// Session 0 is always skipped.
 func activeUserSession() uint32 {
 	var pInfo unsafe.Pointer
 	var count uint32
@@ -172,29 +188,38 @@ func activeUserSession() uint32 {
 	defer procWTSFreeMemorySvc.Call(uintptr(pInfo))
 
 	size := unsafe.Sizeof(wtsSessionInfoW{})
-	active := uint32(invalidSession)
-	disconnected := uint32(invalidSession)
+	liveRDP, liveOther := uint32(invalidSession), uint32(invalidSession)
+	discRDP, discOther := uint32(invalidSession), uint32(invalidSession)
 	for i := uint32(0); i < count; i++ {
 		si := (*wtsSessionInfoW)(unsafe.Add(pInfo, uintptr(i)*size))
 		if si.SessionID == 0 {
-			continue // Session 0: services, no interactive desktop
+			continue
 		}
+		name := wtsStationName(si.WinStationName)
+		rdp := isRDPStation(name)
 		switch si.State {
-		case wtsActiveState:
-			if active == invalidSession {
-				active = si.SessionID
+		case wtsActiveState, wtsConnectedState:
+			if rdp {
+				if liveRDP == invalidSession {
+					liveRDP = si.SessionID
+				}
+			} else if liveOther == invalidSession {
+				liveOther = si.SessionID
 			}
 		case wtsDisconnectedState:
-			if disconnected == invalidSession {
-				disconnected = si.SessionID
+			if rdp {
+				if discRDP == invalidSession {
+					discRDP = si.SessionID
+				}
+			} else if discOther == invalidSession {
+				discOther = si.SessionID
 			}
 		}
 	}
-	if active != invalidSession {
-		return active
-	}
-	if disconnected != invalidSession {
-		return disconnected
+	for _, id := range []uint32{liveRDP, liveOther, discRDP, discOther} {
+		if id != invalidSession {
+			return id
+		}
 	}
 	return activeConsoleSession()
 }
@@ -219,6 +244,10 @@ func (p *deskWorkerProc) kill() {
 		return
 	}
 	_, _, _ = procTerminateProcessSvc.Call(p.handle, 1)
+	// Wait for the process to actually exit before spawning a replacement —
+	// otherwise two workers briefly race on deskWait and the dying one can
+	// steal the session slot (black / "connected" with no usable frames).
+	_, _, _ = procWaitForSingleObjectSvc.Call(p.handle, 3000)
 	_, _, _ = procCloseHandleSvc.Call(p.handle)
 	p.handle = 0
 }

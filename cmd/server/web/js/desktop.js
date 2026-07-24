@@ -344,10 +344,17 @@ function connectDesktopWS(id, name) {
           if (j.error) {
             const isWarn = j.level === "warn";
             setDesktopStatus(j.error, !isWarn);
-            if (!isWarn && !DESK_GOT_FRAME) {
-              setDeskPlaceholder(I18N.t("desktop.error"), j.error);
+            // Warn diagnostics (blank capture / no_frame watchdog) must still be
+            // visible on the canvas — otherwise a black JPEG stream looks like a
+            // successful connection with no explanation.
+            if (!DESK_GOT_FRAME || isWarn) {
+              setDeskPlaceholder(isWarn ? I18N.t("desktop.warn") : I18N.t("desktop.error"), j.error);
+            }
+            if (!isWarn) {
               setDeskDot("error");
               DESK_PHASE = "error";
+            } else {
+              setDeskDot("warn");
             }
             return;
           }

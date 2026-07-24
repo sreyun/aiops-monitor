@@ -339,6 +339,7 @@ window.DICT_TW = {
   "desktop.streaming_hint": "正在接收第一幀畫面…",
   "desktop.view_only": "唯讀畫面 · 鍵鼠不可用（缺少 xdotool / 輔助功能權限）",
   "desktop.error": "桌面會話出錯",
+  "desktop.warn": "桌面提示",
   "desktop.not_connected": "桌面未連線",
   "desktop.disconnect": "斷開",
   "desktop.fullscreen": "全螢幕",
