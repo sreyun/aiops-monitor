@@ -21,6 +21,7 @@ agent.log
 *.log
 
 # IDE
+.cursor/
 .idea/
 .vscode/
 *.swp
