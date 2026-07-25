@@ -473,7 +473,7 @@
   "desktop.view_only": "只读画面 · 键鼠不可用（Windows 请确认 Agent 服务/桌面 worker；Linux 需 xdotool/ydotool；macOS 需辅助功能权限或 cliclick）",
   "desktop.error": "桌面会话出错",
   "desktop.warn": "桌面提示",
-  "desktop.solid_frame_hint": "已连通但画面为纯色：目标可能未登录/未解锁，或 Agent 未以服务+桌面 worker 运行（Windows 若安装时报 Application Control 拦截需先放行）。请 RDP 登录该主机后重试，并确认 Agent 为最新版服务安装。",
+  "desktop.solid_frame_hint": "已连通但画面为纯色：目标可能未登录/未解锁，或 Agent 未以服务+桌面 worker 运行（Windows 若安装时报 Application Control 拦截需先放行）。锁屏时请先点「Ctrl+Alt+Del」再「解锁」；若仍纯色请升级 Agent 并以服务方式重装后重试。",
   "desktop.jpeg_decode_failed": "连续收到无法解码的 JPEG 画面，请刷新页面并确认服务端与 Agent 均为最新版本",
   "desktop.not_connected": "桌面未连接",
   "desktop.disconnect": "断开",

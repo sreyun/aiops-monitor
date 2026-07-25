@@ -433,7 +433,7 @@ window.DICT_TW = {
   "desktop.view_only": "唯讀畫面 · 鍵鼠不可用（Windows 請確認 Agent 服務/桌面 worker；Linux 需 xdotool/ydotool；macOS 需輔助功能權限或 cliclick）",
   "desktop.error": "桌面會話出錯",
   "desktop.warn": "桌面提示",
-  "desktop.solid_frame_hint": "已連通但畫面為純色：目標可能未登入/未解鎖，或 Agent 未以服務+桌面 worker 運行（Windows 若安裝時 Application Control 攔截需先放行）。請以 RDP 登入後重試，並確認 Agent 為最新版服務安裝。",
+  "desktop.solid_frame_hint": "已連通但畫面為純色：目標可能未登入/未解鎖，或 Agent 未以服務+桌面 worker 運行（Windows 若安裝時 Application Control 攔截需先放行）。鎖屏時請先點「Ctrl+Alt+Del」再「解鎖」；若仍純色請升級 Agent 並以服務方式重裝後重試。",
   "desktop.jpeg_decode_failed": "連續收到無法解碼的 JPEG 畫面，請重新整理頁面並確認服務端與 Agent 均為最新版本",
   "desktop.not_connected": "桌面未連線",
   "desktop.disconnect": "斷開",

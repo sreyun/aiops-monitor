@@ -151,7 +151,10 @@ type wtsSessionInfoW struct {
 const (
 	wtsActiveState       = 0 // WTSActive — connected + interactive
 	wtsConnectedState    = 1 // WTSConnected — connected, may still be at logon UI
+	wtsConnectQueryState = 2 // WTSConnectQuery — in transition
 	wtsDisconnectedState = 4 // WTSDisconnected — RDP closed; virtual desktop may still render
+	wtsIdleState         = 5 // WTSIdle — console waiting at logon (common after logoff)
+	wtsListenState       = 6 // WTSListen — listener / pre-logon
 )
 
 func wtsStationName(p *uint16) string {
@@ -173,9 +176,10 @@ func isRDPStation(name string) bool {
 // capturing Console then yields solid black frames. Order:
 //  1. Active/Connected RDP session
 //  2. Active/Connected non-console (any)
-//  3. Disconnected RDP (virtual desktop may still render)
-//  4. Any disconnected session
-//  5. Physical console / fallback
+//  3. Idle/Listen/ConnectQuery console (logoff / pre-logon Winlogon UI)
+//  4. Disconnected RDP (virtual desktop may still render)
+//  5. Any disconnected session
+//  6. Physical console / fallback
 // Session 0 is always skipped.
 func activeUserSession() uint32 {
 	var pInfo unsafe.Pointer
@@ -189,6 +193,7 @@ func activeUserSession() uint32 {
 
 	size := unsafe.Sizeof(wtsSessionInfoW{})
 	liveRDP, liveOther := uint32(invalidSession), uint32(invalidSession)
+	preLogon := uint32(invalidSession)
 	discRDP, discOther := uint32(invalidSession), uint32(invalidSession)
 	for i := uint32(0); i < count; i++ {
 		si := (*wtsSessionInfoW)(unsafe.Add(pInfo, uintptr(i)*size))
@@ -206,6 +211,11 @@ func activeUserSession() uint32 {
 			} else if liveOther == invalidSession {
 				liveOther = si.SessionID
 			}
+		case wtsIdleState, wtsListenState, wtsConnectQueryState:
+			// After logoff the console often sits in Idle/Listen with only Winlogon.
+			if preLogon == invalidSession {
+				preLogon = si.SessionID
+			}
 		case wtsDisconnectedState:
 			if rdp {
 				if discRDP == invalidSession {
@@ -216,7 +226,7 @@ func activeUserSession() uint32 {
 			}
 		}
 	}
-	for _, id := range []uint32{liveRDP, liveOther, discRDP, discOther} {
+	for _, id := range []uint32{liveRDP, liveOther, preLogon, discRDP, discOther} {
 		if id != invalidSession {
 			return id
 		}
@@ -321,30 +331,39 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 	if err != nil {
 		return nil, err
 	}
-	deskW, err := syscall.UTF16PtrFromString(`winsta0\default`)
-	if err != nil {
-		return nil, err
-	}
+	// At the logon UI (user logged off) winsta0\default often does not exist —
+	// CreateProcessAsUser then fails. Fall back to winsta0\Winlogon so the
+	// worker can still attach and follow OpenInputDesktop.
+	var lastCreateErr error
+	for _, deskName := range []string{`winsta0\default`, `winsta0\Winlogon`} {
+		deskW, err := syscall.UTF16PtrFromString(deskName)
+		if err != nil {
+			return nil, err
+		}
+		si := startupInfoW{}
+		si.Cb = uint32(unsafe.Sizeof(si))
+		si.LpDesktop = deskW
+		var pi processInformationW
 
-	si := startupInfoW{}
-	si.Cb = uint32(unsafe.Sizeof(si))
-	si.LpDesktop = deskW
-	var pi processInformationW
-
-	r, _, e = procCreateProcessAsUserWSvc.Call(
-		dupTok,
-		uintptr(unsafe.Pointer(appW)),
-		uintptr(unsafe.Pointer(cmdW)),
-		0, 0, 0,
-		uintptr(createUnicodeEnv|createNoWindow|createBreakawayJob),
-		0, 0,
-		uintptr(unsafe.Pointer(&si)),
-		uintptr(unsafe.Pointer(&pi)),
-	)
-	if r == 0 {
-		return nil, fmt.Errorf("CreateProcessAsUser 失败(session=%d): %v", session, e)
+		r, _, e = procCreateProcessAsUserWSvc.Call(
+			dupTok,
+			uintptr(unsafe.Pointer(appW)),
+			uintptr(unsafe.Pointer(cmdW)),
+			0, 0, 0,
+			uintptr(createUnicodeEnv|createNoWindow|createBreakawayJob),
+			0, 0,
+			uintptr(unsafe.Pointer(&si)),
+			uintptr(unsafe.Pointer(&pi)),
+		)
+		if r != 0 {
+			_, _, _ = procCloseHandleSvc.Call(pi.HThread)
+			slog.Info("已在活动会话派生远程桌面 worker",
+				"session", session, "pid", pi.DwProcessID, "desktop", deskName)
+			return &deskWorkerProc{handle: pi.HProcess, pid: pi.DwProcessID, session: session}, nil
+		}
+		lastCreateErr = e
+		slog.Warn("CreateProcessAsUser 失败，尝试下一桌面",
+			"session", session, "desktop", deskName, "err", e)
 	}
-	_, _, _ = procCloseHandleSvc.Call(pi.HThread)
-	slog.Info("已在活动会话派生远程桌面 worker", "session", session, "pid", pi.DwProcessID)
-	return &deskWorkerProc{handle: pi.HProcess, pid: pi.DwProcessID, session: session}, nil
+	return nil, fmt.Errorf("CreateProcessAsUser 失败(session=%d): %v", session, lastCreateErr)
 }

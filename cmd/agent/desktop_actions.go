@@ -71,6 +71,32 @@ func deskDefaultLockHint() string {
 	}
 }
 
+type deskDesktopNamer interface {
+	CurrentDesktop() string
+}
+
+func deskCurrentDesktop(cap deskCapture) string {
+	if n, ok := cap.(deskDesktopNamer); ok {
+		return n.CurrentDesktop()
+	}
+	return ""
+}
+
+func deskIsSecureName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "winlogon" || strings.HasPrefix(n, "winlogon") || n == "screensaver"
+}
+
+func deskLockHintForDesktop(name string) string {
+	if deskIsSecureName(name) {
+		return "当前输入桌面: " + name + "。锁屏/注销请先点「Ctrl+Alt+Del」，再点「解锁」输入密码（或点「唤醒」后直接键入）。"
+	}
+	if name != "" {
+		return "当前输入桌面: " + name
+	}
+	return deskDefaultLockHint()
+}
+
 func deskMetaExtras(inp deskInput, viewOnly bool) map[string]any {
 	m := deskInputMetaFrom(inp)
 	out := map[string]any{

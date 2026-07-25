@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,15 +50,29 @@ var (
 	procMapVirtualKeyW         = modUser32.NewProc("MapVirtualKeyW")
 
 	procOpenInputDesktop          = modUser32.NewProc("OpenInputDesktop")
+	procOpenDesktopW              = modUser32.NewProc("OpenDesktopW")
 	procSetThreadDesktop          = modUser32.NewProc("SetThreadDesktop")
+	procGetThreadDesktop          = modUser32.NewProc("GetThreadDesktop")
 	procCloseDesktop              = modUser32.NewProc("CloseDesktop")
 	procGetUserObjectInformationW = modUser32.NewProc("GetUserObjectInformationW")
 	procSetProcessDPIAware        = modUser32.NewProc("SetProcessDPIAware")
+	procEnumWindows              = modUser32.NewProc("EnumWindows")
+	procEnumDesktopWindows       = modUser32.NewProc("EnumDesktopWindows")
+	procIsWindowVisible          = modUser32.NewProc("IsWindowVisible")
+	procGetWindowRect            = modUser32.NewProc("GetWindowRect")
+	procGetWindowTextW           = modUser32.NewProc("GetWindowTextW")
+	procGetClassNameW            = modUser32.NewProc("GetClassNameW")
+	procPrintWindow              = modUser32.NewProc("PrintWindow")
+	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
 
 	modKernel32Desk          = syscall.NewLazyDLL("kernel32.dll")
 	procGetCurrentProcessId  = modKernel32Desk.NewProc("GetCurrentProcessId")
 	procProcessIdToSessionId = modKernel32Desk.NewProc("ProcessIdToSessionId")
 	procGetLastError         = modKernel32Desk.NewProc("GetLastError")
+	procOpenProcess                = modKernel32Desk.NewProc("OpenProcess")
+	procQueryFullProcessImageNameW = modKernel32Desk.NewProc("QueryFullProcessImageNameW")
+	procCloseHandleDesk            = modKernel32Desk.NewProc("CloseHandle")
+	procGetCurrentThreadId         = modKernel32Desk.NewProc("GetCurrentThreadId")
 )
 
 const (
@@ -151,7 +167,49 @@ func openInputDesktop() (uintptr, error) {
 			lastErr = win32LastError()
 		}
 	}
+	// Lock / logoff often lands on Winlogon; OpenInputDesktop can fail briefly
+	// while the secure desktop is switching — try it by name as a fallback.
+	if h, err := openNamedDesktop("Winlogon"); err == nil && h != 0 {
+		if deskWorkerMode {
+			slog.Info("OpenDesktop(Winlogon) fallback ok", "session", currentSessionID())
+		}
+		return h, nil
+	}
 	return 0, fmt.Errorf("OpenInputDesktop failed: win32=%d", lastErr)
+}
+
+func openNamedDesktop(name string) (uintptr, error) {
+	ptr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, err
+	}
+	var lastErr uint32
+	for _, access := range []uintptr{deskOperationalAccess, deskDesiredAccess, maximumAllowedAccess} {
+		h, _, callErr := procOpenDesktopW.Call(uintptr(unsafe.Pointer(ptr)), 0, 0, access)
+		if h != 0 {
+			return h, nil
+		}
+		if errno, ok := callErr.(syscall.Errno); ok {
+			lastErr = uint32(errno)
+		} else {
+			lastErr = win32LastError()
+		}
+	}
+	return 0, fmt.Errorf("OpenDesktop(%s) failed: win32=%d", name, lastErr)
+}
+
+func threadDesktopName() string {
+	h, _, _ := procGetThreadDesktop.Call(uintptr(currentThreadID()))
+	if h == 0 {
+		return ""
+	}
+	// Do not CloseDesktop — GetThreadDesktop returns a borrow, not an owned handle.
+	return desktopNameOf(h)
+}
+
+func currentThreadID() uint32 {
+	r, _, _ := procGetCurrentThreadId.Call()
+	return uint32(r)
 }
 
 // runDesktopWorker is the Windows entry point for the secure-desktop worker
@@ -244,7 +302,9 @@ func (c *winCapture) ensureInputDesktop() error {
 		return err
 	}
 	name := desktopNameOf(h)
-	if c.curDesk != 0 && name == c.curDeskName {
+	// Skip SetThreadDesktop only when we are already on the same desktop
+	// (verify via GetThreadDesktop — name cache alone can lie after session switch).
+	if c.curDesk != 0 && name == c.curDeskName && threadDesktopName() == name {
 		_, _, _ = procCloseDesktop.Call(h)
 		return nil
 	}
@@ -262,8 +322,16 @@ func (c *winCapture) ensureInputDesktop() error {
 	if old != 0 {
 		_, _, _ = procCloseDesktop.Call(old)
 	}
-	slog.Info("桌面 worker 已附着输入桌面", "desktop", name)
+	slog.Info("桌面 worker 已附着输入桌面", "desktop", name, "session", currentSessionID())
 	return nil
+}
+
+// CurrentDesktop exposes the attached input-desktop name for session meta.
+func (c *winCapture) CurrentDesktop() string {
+	if c == nil {
+		return ""
+	}
+	return c.curDeskName
 }
 
 func openDeskCapture() (deskCapture, error) {
@@ -368,11 +436,44 @@ type bltSrc struct {
 	release func()
 }
 
+func (c *winCapture) onSecureDesktop() bool {
+	n := strings.ToLower(c.curDeskName)
+	return n == "winlogon" || strings.HasPrefix(n, "winlogon") || n == "screensaver"
+}
+
 func (c *winCapture) openScreenDCs() []bltSrc {
 	var out []bltSrc
-	// 1) Desktop window DC — most reliable inside an interactive / RDP session.
-	desk, _, _ := procGetDesktopWindow.Call()
-	if desk != 0 {
+	appendScreenDC := func() {
+		if hdc, _, _ := procGetDC.Call(0); hdc != 0 {
+			out = append(out, bltSrc{
+				hdc: hdc, x: c.monX, y: c.monY, w: c.w, h: c.h,
+				release: func() { _, _, _ = procReleaseDC.Call(0, hdc) },
+			})
+			vx, _, _ := procGetSystemMetrics.Call(smXVVirtualScreen)
+			vy, _, _ := procGetSystemMetrics.Call(smYVVirtualScreen)
+			vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
+			vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
+			if int(vw) > 0 && int(vh) > 0 && (int(vx) != c.monX || int(vy) != c.monY || int(vw) != c.w || int(vh) != c.h) {
+				out = append(out, bltSrc{
+					hdc: hdc, x: int(vx), y: int(vy), w: int(vw), h: int(vh),
+					release: nil,
+				})
+			}
+			sw, _, _ := procGetSystemMetrics.Call(smCXScreen)
+			sh, _, _ := procGetSystemMetrics.Call(smCYScreen)
+			if int(sw) > 0 && int(sh) > 0 {
+				out = append(out, bltSrc{
+					hdc: hdc, x: 0, y: 0, w: int(sw), h: int(sh),
+					release: nil,
+				})
+			}
+		}
+	}
+	appendWindowDC := func() {
+		desk, _, _ := procGetDesktopWindow.Call()
+		if desk == 0 {
+			return
+		}
 		if hdc, _, _ := procGetWindowDC.Call(desk); hdc != 0 {
 			d := desk
 			out = append(out, bltSrc{
@@ -381,33 +482,14 @@ func (c *winCapture) openScreenDCs() []bltSrc {
 			})
 		}
 	}
-	// 2) Screen DC (GetDC NULL) with monitor origin.
-	if hdc, _, _ := procGetDC.Call(0); hdc != 0 {
-		out = append(out, bltSrc{
-			hdc: hdc, x: c.monX, y: c.monY, w: c.w, h: c.h,
-			release: func() { _, _, _ = procReleaseDC.Call(0, hdc) },
-		})
-		// 3) Same screen DC but full virtual desktop at (vx,vy) — rescues bad
-		//    EnumDisplayMonitors offsets under DPI / mirror-driver RDP.
-		vx, _, _ := procGetSystemMetrics.Call(smXVVirtualScreen)
-		vy, _, _ := procGetSystemMetrics.Call(smYVVirtualScreen)
-		vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
-		vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
-		if int(vw) > 0 && int(vh) > 0 && (int(vx) != c.monX || int(vy) != c.monY || int(vw) != c.w || int(vh) != c.h) {
-			out = append(out, bltSrc{
-				hdc: hdc, x: int(vx), y: int(vy), w: int(vw), h: int(vh),
-				release: nil, // shared with #2; released once
-			})
-		}
-		// 4) Primary metrics at (0,0).
-		sw, _, _ := procGetSystemMetrics.Call(smCXScreen)
-		sh, _, _ := procGetSystemMetrics.Call(smCYScreen)
-		if int(sw) > 0 && int(sh) > 0 {
-			out = append(out, bltSrc{
-				hdc: hdc, x: 0, y: 0, w: int(sw), h: int(sh),
-				release: nil,
-			})
-		}
+	// On Winlogon/secure desktop, GetDC(NULL) usually beats GetWindowDC(desktop)
+	// (LogonUI is often not in the desktop-window GDI surface).
+	if c.onSecureDesktop() {
+		appendScreenDC()
+		appendWindowDC()
+	} else {
+		appendWindowDC()
+		appendScreenDC()
 	}
 	return out
 }
@@ -435,7 +517,9 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 	}()
 
 	var lastErr error
-	var lastUniform image.Image
+	var bestImg image.Image
+	var bestScore int
+	var bestSrc bltSrc
 	for _, src := range srcs {
 		if src.w < 1 || src.h < 1 {
 			continue
@@ -445,25 +529,41 @@ func (c *winCapture) captureGDI() (image.Image, error) {
 			lastErr = err
 			continue
 		}
-		// Some DCs succeed BitBlt but return a flat fill (classic blue / grey
-		// "dead" desktop). Prefer a later DC that has real content.
-		if isLikelyUniform(img, false) {
-			lastUniform = img
-			if src.w != c.w || src.h != c.h {
-				// Keep geometry candidate in case every source is uniform.
-				c.w, c.h = src.w, src.h
-				c.monX, c.monY = src.x, src.y
+		score := deskContentScore(img)
+		// Skip pure flat fills unless we have nothing better (Winlogon dark UI
+		// still scores above pure #000 / solid blue).
+		if score < 8 && isLikelyUniform(img, false) && !c.onSecureDesktop() {
+			if bestImg == nil || score > bestScore {
+				bestImg, bestScore, bestSrc = img, score, src
 			}
 			continue
 		}
-		if src.w != c.w || src.h != c.h {
-			c.w, c.h = src.w, src.h
-			c.monX, c.monY = src.x, src.y
+		if score > bestScore {
+			bestImg, bestScore, bestSrc = img, score, src
 		}
-		return img, nil
+		// Good enough — stop early on interactive Default desktop.
+		if score >= 80 && !c.onSecureDesktop() {
+			break
+		}
 	}
-	if lastUniform != nil {
-		return lastUniform, nil
+
+	// Prefer PrintWindow of LogonUI / credential UI when on the secure desktop —
+	// classic BitBlt often returns near-black wallpaper while CAD chrome is DWM.
+	if c.onSecureDesktop() {
+		if img, err := captureSecureDesktopWindows(c.curDesk, c.w, c.h); err == nil && img != nil {
+			pwScore := deskContentScore(img)
+			if pwScore > bestScore || (pwScore >= 12 && bestScore < 25) {
+				return img, nil
+			}
+		}
+	}
+
+	if bestImg != nil {
+		if bestSrc.w > 0 && bestSrc.h > 0 {
+			c.w, c.h = bestSrc.w, bestSrc.h
+			c.monX, c.monY = bestSrc.x, bestSrc.y
+		}
+		return bestImg, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("BitBlt failed: all capture rects exhausted")
@@ -539,6 +639,237 @@ func tryBitBlt(memDC, srcDC uintptr, srcX, srcY, w, h int) error {
 		}
 	}
 	return fmt.Errorf("BitBlt/StretchBlt failed at %dx%d@%d,%d: win32=%d", w, h, srcX, srcY, lastCode)
+}
+
+type winRECT struct {
+	Left, Top, Right, Bottom int32
+}
+
+const (
+	processQueryLimitedInfo = 0x1000
+	pwRenderFullContent     = 0x00000002
+)
+
+type enumWinCandidate struct {
+	hwnd   uintptr
+	score  int
+	w, h   int
+	title  string
+	class  string
+	exe    string
+}
+
+var (
+	enumWinMu   sync.Mutex
+	enumWinList []enumWinCandidate
+)
+
+// captureSecureDesktopWindows tries PrintWindow on LogonUI / credential UI
+// windows visible on the currently attached desktop (Winlogon).
+func captureSecureDesktopWindows(deskHandle uintptr, targetW, targetH int) (image.Image, error) {
+	enumWinMu.Lock()
+	enumWinList = enumWinList[:0]
+	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		vis, _, _ := procIsWindowVisible.Call(hwnd)
+		if vis == 0 {
+			return 1
+		}
+		var rc winRECT
+		if r, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); r == 0 {
+			return 1
+		}
+		ww := int(rc.Right - rc.Left)
+		hh := int(rc.Bottom - rc.Top)
+		if ww < 120 || hh < 80 {
+			return 1
+		}
+		title := windowTextOf(hwnd)
+		class := windowClassOf(hwnd)
+		exe := windowExeOf(hwnd)
+		lowTitle := strings.ToLower(title)
+		lowClass := strings.ToLower(class)
+		lowExe := strings.ToLower(exe)
+		score := 0
+		switch {
+		case strings.Contains(lowExe, "logonui"):
+			score += 100
+		case strings.Contains(lowExe, "authhost"), strings.Contains(lowExe, "credential"):
+			score += 80
+		case strings.Contains(lowExe, "lockapp"), strings.Contains(lowExe, "lockapphost"):
+			score += 70
+		}
+		if strings.Contains(lowClass, "credential") || strings.Contains(lowClass, "logon") {
+			score += 50
+		}
+		if strings.Contains(lowTitle, "windows security") || strings.Contains(lowTitle, "windows 安全") ||
+			strings.Contains(lowTitle, "sign in") || strings.Contains(lowTitle, "登录") {
+			score += 40
+		}
+		if strings.Contains(lowClass, "immersive") || strings.Contains(lowClass, "applicationframe") {
+			score += 15
+		}
+		// Prefer near-fullscreen windows on the secure desktop.
+		if targetW > 0 && targetH > 0 {
+			area := ww * hh
+			screen := targetW * targetH
+			if screen > 0 {
+				pct := area * 100 / screen
+				if pct >= 70 {
+					score += 40
+				} else if pct >= 35 {
+					score += 25
+				} else if pct >= 10 {
+					score += 10
+				}
+			}
+		}
+		// On Winlogon, even unnamed large windows are worth trying (DWM chrome).
+		if score == 0 && ww >= 400 && hh >= 300 {
+			score = 5
+		}
+		if score > 0 {
+			enumWinList = append(enumWinList, enumWinCandidate{
+				hwnd: hwnd, score: score, w: ww, h: hh, title: title, class: class, exe: exe,
+			})
+		}
+		return 1
+	})
+	// Prefer EnumDesktopWindows so we only see the attached Winlogon desktop.
+	if deskHandle != 0 {
+		_, _, _ = procEnumDesktopWindows.Call(deskHandle, cb, 0)
+	}
+	if len(enumWinList) == 0 {
+		_, _, _ = procEnumWindows.Call(cb, 0)
+	}
+	cands := append([]enumWinCandidate(nil), enumWinList...)
+	enumWinMu.Unlock()
+
+	if len(cands) == 0 {
+		return nil, fmt.Errorf("no secure-desktop UI windows")
+	}
+	// Highest score first; try several in case PrintWindow fails on the top hit.
+	for i := 0; i < len(cands); i++ {
+		for j := i + 1; j < len(cands); j++ {
+			if cands[j].score > cands[i].score {
+				cands[i], cands[j] = cands[j], cands[i]
+			}
+		}
+	}
+	var lastErr error
+	limit := len(cands)
+	if limit > 6 {
+		limit = 6
+	}
+	for _, cand := range cands[:limit] {
+		img, err := printWindowToImage(cand.hwnd, cand.w, cand.h)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if deskContentScore(img) < 8 && isLikelyUniform(img, false) {
+			lastErr = fmt.Errorf("PrintWindow returned flat frame")
+			continue
+		}
+		slog.Info("Winlogon UI PrintWindow 成功",
+			"exe", filepath.Base(cand.exe), "class", cand.class,
+			"size", fmt.Sprintf("%dx%d", cand.w, cand.h), "score", cand.score)
+		return img, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("PrintWindow exhausted candidates")
+	}
+	return nil, lastErr
+}
+
+func windowTextOf(hwnd uintptr) string {
+	var buf [256]uint16
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:n])
+}
+
+func windowClassOf(hwnd uintptr) string {
+	var buf [256]uint16
+	n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:n])
+}
+
+func windowExeOf(hwnd uintptr) string {
+	var pid uint32
+	_, _, _ = procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if pid == 0 {
+		return ""
+	}
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInfo, 0, uintptr(pid))
+	if h == 0 {
+		return ""
+	}
+	defer procCloseHandleDesk.Call(h)
+	var buf [syscall.MAX_PATH]uint16
+	size := uint32(len(buf))
+	r, _, _ := procQueryFullProcessImageNameW.Call(h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:size])
+}
+
+func printWindowToImage(hwnd uintptr, w, h int) (image.Image, error) {
+	if w < 1 || h < 1 {
+		return nil, fmt.Errorf("invalid PrintWindow size")
+	}
+	if w > 7680 {
+		w = 7680
+	}
+	if h > 4320 {
+		h = 4320
+	}
+	hdcWin, _, _ := procGetWindowDC.Call(hwnd)
+	if hdcWin == 0 {
+		return nil, fmt.Errorf("GetWindowDC failed")
+	}
+	defer procReleaseDC.Call(hwnd, hdcWin)
+	memDC, _, _ := procCreateCompatibleDC.Call(hdcWin)
+	if memDC == 0 {
+		return nil, fmt.Errorf("CreateCompatibleDC failed")
+	}
+	defer procDeleteDC.Call(memDC)
+	bmp, _, _ := procCreateCompatibleBitmap.Call(hdcWin, uintptr(w), uintptr(h))
+	if bmp == 0 {
+		return nil, fmt.Errorf("CreateCompatibleBitmap failed")
+	}
+	defer procDeleteObject.Call(bmp)
+	old, _, _ := procSelectObject.Call(memDC, bmp)
+	// PW_RENDERFULLCONTENT (0x2) captures DWM-composited content when available.
+	r, _, _ := procPrintWindow.Call(hwnd, memDC, pwRenderFullContent)
+	if r == 0 {
+		r, _, _ = procPrintWindow.Call(hwnd, memDC, 0)
+	}
+	if r == 0 {
+		_, _, _ = procSelectObject.Call(memDC, old)
+		return nil, fmt.Errorf("PrintWindow failed")
+	}
+	_, _, _ = procSelectObject.Call(memDC, old) // deselect before GetDIBits
+	bi := bitmapInfoHeader{
+		Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(w), Height: -int32(h),
+		Planes: 1, BitCount: 32, Compression: biRGB,
+	}
+	buf := make([]byte, w*h*4)
+	n, _, _ := procGetDIBits.Call(memDC, bmp, 0, uintptr(h),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	if n == 0 {
+		n, _, _ = procGetDIBits.Call(hdcWin, bmp, 0, uintptr(h),
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&bi)), dibRGBColors)
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("GetDIBits after PrintWindow failed")
+	}
+	return bgraBufToRGBA(buf, w, h), nil
 }
 
 func bltViaDDB(memDC, srcDC uintptr, srcX, srcY, w, h int) (image.Image, error) {
@@ -705,7 +1036,7 @@ func (i *winInput) ensureInputDesktop() error {
 		return err
 	}
 	name := desktopNameOf(h)
-	if i.curDesk != 0 && name == i.curDeskName {
+	if i.curDesk != 0 && name == i.curDeskName && threadDesktopName() == name {
 		_, _, _ = procCloseDesktop.Call(h)
 		i.probeSendInputOnce()
 		return nil
@@ -1026,10 +1357,8 @@ func (i *winInput) DeskInputMeta() deskInputMeta {
 			ok = false
 		}
 	}
-	hint := deskDefaultLockHint()
-	if deskWorkerMode && i.curDeskName != "" {
-		hint = "当前输入桌面: " + i.curDeskName + "。锁屏请先「Ctrl+Alt+Del」，再点「解锁」输入密码。"
-	} else if !deskWorkerMode {
+	hint := deskLockHintForDesktop(i.curDeskName)
+	if !deskWorkerMode {
 		hint = "当前非桌面 worker：锁屏键鼠可能无效。请以管理员安装 Agent 服务（--install-service）。"
 		ok = i.curDeskName != "" || !deskFollowSecureDesktop
 	}
@@ -1038,7 +1367,7 @@ func (i *winInput) DeskInputMeta() deskInputMeta {
 		InputDesktopOK: ok,
 		CAD:            deskWorkerMode || deskFollowSecureDesktop,
 		TypeText:       true,
-		SecureDesktop:  deskFollowSecureDesktop,
+		SecureDesktop:  deskIsSecureName(i.curDeskName),
 		LockHint:       hint,
 	}
 }
