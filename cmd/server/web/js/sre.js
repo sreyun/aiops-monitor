@@ -5,10 +5,13 @@ let PB_CATS = []; // cached unique categories
 async function loadPlaybooks() {
   try {
     const [pbs, hosts] = await Promise.all([
-      fetch(`${API}/playbooks`).then(r => r.json()),
-      fetch(`${API}/hosts`).then(r => r.json())
+      fetch(`${API}/playbooks`, { credentials: "same-origin" }).then(r => r.json()),
+      typeof fetchHostsList === "function"
+        ? fetchHostsList({ force: true })
+        : fetch(`${API}/hosts`, { credentials: "same-origin" }).then(r => r.json()).then(j =>
+            typeof syncHostCache === "function" ? syncHostCache(j) : (Array.isArray(j) ? j : []))
     ]);
-    PB_HOSTS = hosts || [];
+    PB_HOSTS = Array.isArray(hosts) ? hosts : [];
     // Extract unique categories for target dropdown
     PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || I18N.t("section.uncategorized")))].sort();
     // System types are hardcoded (linux/macos/windows) — do NOT extract from
@@ -152,6 +155,8 @@ function renderPbSteps(steps) {
           <option value="dmesg_recent" ${optSel("dmesg_recent",mod)}>内核消息 · dmesg_recent</option>
           <option value="docker_ps" ${optSel("docker_ps",mod)}>容器列表 · docker_ps</option>
           <option value="docker_stats" ${optSel("docker_stats",mod)}>容器资源 · docker_stats</option>
+          <option value="container_logs" ${optSel("container_logs",mod)}>容器日志 · container_logs</option>
+          <option value="container_compose_ls" ${optSel("container_compose_ls",mod)}>Compose 项目 · container_compose_ls</option>
           <option value="kube_get" ${optSel("kube_get",mod)}>K8s 资源 · kube_get</option>
           <option value="time_sync" ${optSel("time_sync",mod)}>时间/时区 · time_sync</option>
         </optgroup>
@@ -159,6 +164,7 @@ function renderPbSteps(steps) {
           <option value="users_logged" ${optSel("users_logged",mod)}>登录会话 · users_logged</option>
           <option value="security_listen" ${optSel("security_listen",mod)}>对外监听 · security_listen</option>
           <option value="auth_failures" ${optSel("auth_failures",mod)}>认证失败摘要 · auth_failures</option>
+          <option value="host_security_scan" ${optSel("host_security_scan",mod)}>主机安全扫描 · host_security_scan</option>
         </optgroup>
         <optgroup label="${I18N.t("sre.mod_g_bigdata","大数据运维 · 只读")}">
           <option value="bigdata_jps" ${optSel("bigdata_jps",mod)}>Java 进程 · bigdata_jps</option>
@@ -168,6 +174,10 @@ function renderPbSteps(steps) {
           <option value="service" ${optSel("service",mod)}>服务启停 · service</option>
           <option value="package" ${optSel("package",mod)}>软件包 · package</option>
           <option value="copy" ${optSel("copy",mod)}>写入文件 · copy</option>
+          <option value="container_action" ${optSel("container_action",mod)}>容器启停 · container_action</option>
+          <option value="container_compose" ${optSel("container_compose",mod)}>Compose 操作 · container_compose</option>
+          <option value="hyperv_power" ${optSel("hyperv_power",mod)}>Hyper-V 电源 · hyperv_power</option>
+          <option value="hyperv_set" ${optSel("hyperv_set",mod)}>Hyper-V 配置 · hyperv_set</option>
         </optgroup>
       </select></div></div>
 
@@ -190,8 +200,59 @@ function renderPbSteps(steps) {
           <option value="deep" ${optSel("deep", a.profile||"standard")}>${I18N.t("sre.pb_inspect_deep","深度")} deep</option>
         </select></div></div>
       </div>
-      <div class="pb-mod pb-mod-disk_usage pb-mod-mem_info pb-mod-cpu_load pb-mod-process_top pb-mod-uptime_info pb-mod-pkg_list pb-mod-net_ifaces pb-mod-net_listen pb-mod-net_routes pb-mod-net_sockets pb-mod-docker_ps pb-mod-docker_stats pb-mod-dmesg_recent pb-mod-time_sync pb-mod-users_logged pb-mod-security_listen pb-mod-auth_failures pb-mod-bigdata_jps pb-mod-bigdata_ports" style="display:none">
+      <div class="pb-mod pb-mod-disk_usage pb-mod-mem_info pb-mod-cpu_load pb-mod-process_top pb-mod-uptime_info pb-mod-pkg_list pb-mod-net_ifaces pb-mod-net_listen pb-mod-net_routes pb-mod-net_sockets pb-mod-docker_ps pb-mod-docker_stats pb-mod-container_compose_ls pb-mod-dmesg_recent pb-mod-time_sync pb-mod-users_logged pb-mod-security_listen pb-mod-auth_failures pb-mod-host_security_scan pb-mod-bigdata_jps pb-mod-bigdata_ports" style="display:none">
         <div class="pb-mod-hint">${I18N.t("sre.pb_readonly_hint","只读采集模块：不会修改系统配置、不会启停服务、不会写入文件。")}</div>
+      </div>
+      <div class="pb-mod pb-mod-container_logs" style="display:none">
+        <div class="pb-mod-hint">只读拉取容器日志（docker/podman logs）。</div>
+        <div class="grid2">
+          <div class="field"><label>容器 id/name</label><input type="text" class="pb-arg-ctr-id" value="${av('id')||av('name')}" placeholder="my-app"></div>
+          <div class="field"><label>tail 行数</label><input type="text" class="pb-arg-ctr-tail mono" value="${av('tail')||'100'}" style="width:100px"></div>
+        </div>
+      </div>
+      <div class="pb-mod pb-mod-container_action" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ 变更类：启停/重启容器。</div>
+        <div class="grid2">
+          <div class="field"><label>容器 id/name</label><input type="text" class="pb-arg-ctr-act-id" value="${av('id')||av('name')}" placeholder="my-app"></div>
+          <div class="field"><label>action</label><div class="select-wrap"><select class="pb-arg-ctr-act">
+            <option value="restart" ${optSel('restart',a.action||'restart')}>restart</option>
+            <option value="start" ${optSel('start',a.action)}>start</option>
+            <option value="stop" ${optSel('stop',a.action)}>stop</option>
+          </select></div></div>
+        </div>
+      </div>
+      <div class="pb-mod pb-mod-container_compose" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ Compose up/down/pull 等会变更运行态。</div>
+        <div class="grid2">
+          <div class="field"><label>project / file</label><input type="text" class="pb-arg-compose-project" value="${av('project')||av('file')}" placeholder="myproject 或 /path/compose.yml"></div>
+          <div class="field"><label>action</label><div class="select-wrap"><select class="pb-arg-compose-act">
+            <option value="ps" ${optSel('ps',a.action||'ps')}>ps</option>
+            <option value="up" ${optSel('up',a.action)}>up</option>
+            <option value="down" ${optSel('down',a.action)}>down</option>
+            <option value="pull" ${optSel('pull',a.action)}>pull</option>
+            <option value="logs" ${optSel('logs',a.action)}>logs</option>
+          </select></div></div>
+        </div>
+      </div>
+      <div class="pb-mod pb-mod-hyperv_power" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ Hyper-V 电源操作（建议 when: {{os}} == windows）。</div>
+        <div class="grid2">
+          <div class="field"><label>vm_id / name</label><input type="text" class="pb-arg-hv-name" value="${av('vm_id')||av('name')}" placeholder="VM 名称或 GUID"></div>
+          <div class="field"><label>action</label><div class="select-wrap"><select class="pb-arg-hv-power">
+            <option value="start" ${optSel('start',a.action||'start')}>start</option>
+            <option value="stop" ${optSel('stop',a.action)}>stop</option>
+            <option value="restart" ${optSel('restart',a.action)}>restart</option>
+            <option value="force_stop" ${optSel('force_stop',a.action)}>force_stop</option>
+          </select></div></div>
+        </div>
+      </div>
+      <div class="pb-mod pb-mod-hyperv_set" style="display:none">
+        <div class="pb-mod-hint" style="color:var(--warn-txt)">⚠ 调整 Hyper-V CPU/内存（虚拟机宜关机）。</div>
+        <div class="field"><label>vm_id / name</label><input type="text" class="pb-arg-hvset-name" value="${av('vm_id')||av('name')}" placeholder="VM 名称或 GUID"></div>
+        <div class="grid2">
+          <div class="field"><label>processor_count</label><input type="text" class="pb-arg-hvset-cpu mono" value="${av('processor_count')}" placeholder="4"></div>
+          <div class="field"><label>memory_mb</label><input type="text" class="pb-arg-hvset-mem mono" value="${av('memory_mb')}" placeholder="4096"></div>
+        </div>
       </div>
       <div class="pb-mod pb-mod-service_status" style="display:none">
         <div class="pb-mod-hint">只读查询服务状态（systemctl status / sc query），不会启停。</div>
@@ -255,7 +316,7 @@ function renderPbSteps(steps) {
 
       <details class="pb-adv"${(s.when||s.register)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">${I18N.t("sre.pb_cond_vars","条件与变量（选填）")}</summary>
         <div class="grid2">
-          <div class="field"><label>${I18N.t("sre.label_when","when 条件")}</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="${I18N.t("sre.pb_when_ph","如 {{os}} == linux；结果空/false/0 则跳过本步")}"></div>
+          <div class="field"><label>${I18N.t("sre.label_when","when 条件")}</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="${I18N.t("sre.pb_when_ph","{{os}} == linux | {{os}} == macos | {{category}} contains db | {{n}} >= 1")}"></div>
           <div class="field"><label>${I18N.t("sre.label_register","保存输出到变量")}</label><input type="text" class="pb-step-register" value="${esc(s.register||"")}" placeholder="${I18N.t("sre.pb_register_ph","变量名 → 后续步骤用 {{变量名}} 引用")}"></div>
         </div>
       </details>
@@ -328,6 +389,23 @@ function collectModuleArgs(el, mod) {
   } else if (mod === "host_inspect") {
     const profile = g(".pb-arg-inspect-profile");
     args.profile = profile || "standard";
+  } else if (mod === "container_logs") {
+    const id = g(".pb-arg-ctr-id"); if (id) args.id = id;
+    const tail = g(".pb-arg-ctr-tail"); if (tail) args.tail = tail;
+  } else if (mod === "container_action") {
+    const id = g(".pb-arg-ctr-act-id"); if (id) args.id = id;
+    args.action = g(".pb-arg-ctr-act") || "restart";
+  } else if (mod === "container_compose") {
+    const p = g(".pb-arg-compose-project");
+    if (p) { if (p.includes("/") || p.endsWith(".yml") || p.endsWith(".yaml")) args.file = p; else args.project = p; }
+    args.action = g(".pb-arg-compose-act") || "ps";
+  } else if (mod === "hyperv_power") {
+    const n = g(".pb-arg-hv-name"); if (n) args.name = n;
+    args.action = g(".pb-arg-hv-power") || "start";
+  } else if (mod === "hyperv_set") {
+    const n = g(".pb-arg-hvset-name"); if (n) args.name = n;
+    const cpu = g(".pb-arg-hvset-cpu"); if (cpu) args.processor_count = cpu;
+    const mem = g(".pb-arg-hvset-mem"); if (mem) args.memory_mb = mem;
   }
   return args;
 }
@@ -498,23 +576,57 @@ async function pollExecution(execId, pbId) {
 
 function renderExecResult(exec) {
   window._lastExecResult = exec; // 供「AI 复盘」按钮取用
-  $("execResultTitle").textContent = `${I18N.t("ui.execute")}${exec.status === "completed" ? I18N.t("ui.completed") : exec.status === "failed" ? I18N.t("ui.failed") : I18N.t("ui.running")}`;
+  $("execResultTitle").textContent = `${I18N.t("ui.execute")}${translateExecStatus(exec.status)}`;
   // 有任何主机未成功 → 显示「AI 复盘」按钮（执行中不显示）
   const rb = $("execRetroBtn");
   if (rb) {
-    const done = exec.status !== "running";
-    const hasFail = exec.status === "failed" || Object.values(exec.host_results || {}).some(r => r.status !== "success");
+    const done = exec.status !== "running" && exec.status !== "pending_approval";
+    const hasFail = exec.status === "failed" || exec.status === "partial" || Object.values(exec.host_results || {}).some(r => r.status !== "success");
     rb.style.display = (done && hasFail) ? "" : "none";
   }
+  const pending = exec.status === "pending_approval";
+  const approveBar = pending ? `<div class="exec-approve-bar" style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap;align-items:center">
+      <span class="badge warn">${esc(exec.risk_note || "定时高风险剧本待审批")}</span>
+      <button type="button" class="btn sm primary" id="execApproveBtn">批准执行</button>
+      <button type="button" class="btn sm danger" id="execRejectBtn">拒绝</button>
+    </div>` : "";
   const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
-    const statusCls = r.status === "success" ? "ok" : r.status === "failed" ? "crit" : "warn";
+    const statusCls = r.status === "success" ? "ok" : (r.status === "failed" || r.status === "timeout") ? "crit" : "warn";
+    const reason = r.reason ? ` <span class="mono muted">(${esc(r.reason)})</span>` : "";
     const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${translateStepStatus(s.status)}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
     return `<div class="exec-row">
-      <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${translateExecStatus(r.status)}</span></div>
+      <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${translateExecStatus(r.status)}</span>${reason}</div>
       <div class="exec-steps">${steps}</div>
     </div>`;
   }).join("");
-  $("execResultBody").innerHTML = `<div class="exec-meta">${I18N.t("exec.operator")}: ${esc(exec.operator)} · ${I18N.t("exec.start_time")}: ${fmtDateTime(exec.start_time)}${exec.end_time?" · "+I18N.t("exec.end_time")+": "+fmtDateTime(exec.end_time):""} · ${I18N.t("exec.status_label")}: ${translateExecStatus(exec.status)}</div>${rows}`;
+  const failAgg = (() => {
+    const counts = {};
+    Object.values(exec.host_results || {}).forEach(r => {
+      if (r.status === "success") return;
+      const k = r.reason || r.status || "unknown";
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const parts = Object.entries(counts).map(([k, n]) => `${k}:${n}`);
+    return parts.length ? `<div class="hint" style="margin:6px 0">失败聚合：${esc(parts.join(" · "))}</div>` : "";
+  })();
+  $("execResultBody").innerHTML = `<div class="exec-meta">${I18N.t("exec.operator")}: ${esc(exec.operator)} · ${I18N.t("exec.start_time")}: ${fmtDateTime(exec.start_time)}${exec.end_time?" · "+I18N.t("exec.end_time")+": "+fmtDateTime(exec.end_time):""} · ${I18N.t("exec.status_label")}: ${translateExecStatus(exec.status)}${exec.trigger ? " · " + esc(exec.trigger) : ""}</div>${approveBar}${failAgg}${rows}`;
+  const ab = $("execApproveBtn"), rj = $("execRejectBtn");
+  if (ab) ab.onclick = async () => {
+    const r = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}/approve`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.error || "批准失败", "err"); return; }
+    toast("已批准，开始执行", "ok");
+    pollExecution(exec.id, exec.playbook_id);
+  };
+  if (rj) rj.onclick = async () => {
+    if (!confirm("确认拒绝该定时剧本执行？")) return;
+    const r = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}/reject`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.error || "拒绝失败", "err"); return; }
+    toast("已拒绝", "ok");
+    const exec2 = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}`).then(x => x.json());
+    renderExecResult(exec2);
+  };
 }
 
 async function loadExecHistory() {
@@ -523,12 +635,13 @@ async function loadExecHistory() {
     const rows = (list || []).map(e => {
       const success = Object.values(e.host_results || {}).filter(r => r.status === "success").length;
       const total = Object.keys(e.host_results || {}).length;
+      const badge = e.status === "completed" ? "ok" : (e.status === "failed" || e.status === "rejected") ? "crit" : "warn";
       return `<div class="exec-hist-row" data-exec-id="${e.id}">
         <strong>${esc(e.playbook_name)}</strong>
-        <span class="badge ${e.status === "completed" ? "ok" : e.status === "failed" ? "crit" : "warn"}">${translateExecStatus(e.status)}</span>
+        <span class="badge ${badge}">${translateExecStatus(e.status)}</span>
         <span class="mono" style="color:var(--muted)">${success}/${total} ${I18N.t("exec.success_count")}</span>
         <span class="mono" style="color:var(--muted)">${fmtDateTime(e.start_time)}</span>
-        <span class="mono" style="color:var(--muted)">${esc(e.operator)}</span>
+        <span class="mono" style="color:var(--muted)">${esc(e.operator)}${e.trigger === "schedule" ? " · 定时" : ""}</span>
       </div>`;
     }).join("");
     $("execHistBody").innerHTML = rows || `<div class="empty-line">${I18N.t("empty.no_executions")}</div>`;
@@ -608,11 +721,45 @@ const PB_READONLY_TEMPLATES = {
   },
   sec: {
     name: "安全巡检（只读）",
-    description: "登录会话、对外监听、认证失败摘要（只读）",
+    description: "登录会话、对外监听、认证失败与主机安全扫描（只读）",
     steps: [
       { name: "登录会话", module: "users_logged", target: "all", timeout_sec: 20 },
       { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30 },
       { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 45, continue_on_error: true, ignore_exit: true },
+      { name: "主机安全扫描", module: "host_security_scan", target: "all", timeout_sec: 180, continue_on_error: true, ignore_exit: true },
+    ]
+  },
+  container: {
+    name: "容器/Compose 巡检（只读）",
+    description: "Docker/Podman 容器列表、资源与 Compose 项目（无运行时时软跳过）",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
+      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 30, continue_on_error: true },
+      { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 45, continue_on_error: true },
+      { name: "Compose 项目", module: "container_compose_ls", target: "all", timeout_sec: 45, continue_on_error: true, ignore_exit: true },
+    ]
+  },
+  k8s: {
+    name: "Kubernetes 巡检（只读）",
+    description: "kubectl get pods -A（需节点已配置 kubeconfig）",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
+      { name: "Pods 一览", module: "kube_get", target: "all", timeout_sec: 60, args: { resource: "pods" }, continue_on_error: true, ignore_exit: true },
+      { name: "Nodes", module: "kube_get", target: "all", timeout_sec: 45, args: { resource: "nodes" }, continue_on_error: true, ignore_exit: true },
+      { name: "Deployments", module: "kube_get", target: "all", timeout_sec: 45, args: { resource: "deployments" }, continue_on_error: true, ignore_exit: true },
+    ]
+  },
+  hyperv: {
+    name: "Hyper-V 宿主巡检（只读+条件）",
+    description: "仅 Windows 宿主：系统信息 + 深度巡检；电源类步骤需手工加模块",
+    steps: [
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts", when: "{{os}} == windows" },
+      {
+        name: "深度巡检", module: "host_inspect", target: "all",
+        timeout_sec: 180, register: "inspect", ignore_exit: true, continue_on_error: true,
+        when: "{{os}} == windows", args: { profile: "standard" },
+      },
+      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30, when: "{{os}} == windows" },
     ]
   },
   bigdata: {
@@ -1631,7 +1778,18 @@ async function runTopologyRcaDemo(){
     if(out) out.textContent=j.summary||JSON.stringify(j,null,2);
   }catch(e){ if(out) out.textContent="失败："+e; }
 }
+async function applyAutoTopology(){
+  if(!confirm("从 K8s / Hyper-V / Compose 库存自动发现依赖边并合并？已有同向手工边不会被覆盖。")) return;
+  try{
+    const r=await fetch(`${API}/topology/auto-discover?apply=1`,{method:"POST"});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||"发现失败");
+    toast(`自动拓扑：候选 ${j.count||0}，新增 ${j.added||0}`,"ok");
+    loadTopology();
+  }catch(e){ toast("自动拓扑失败："+e,"err"); }
+}
 safeAddEventListener("topoAddBtn","click",addTopologyEdge);
+safeAddEventListener("topoAutoBtn","click",applyAutoTopology);
 safeAddEventListener("topoRcaBtn","click",runTopologyRcaDemo);
 
 function openRuleModal(r){

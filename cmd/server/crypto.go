@@ -219,6 +219,9 @@ func encryptConfigSecrets(c *ServerConfig) {
 		c.K8sClusters[i].Token = encryptSecret(c.K8sClusters[i].Token)
 		c.K8sClusters[i].KubeconfigYAML = encryptSecret(c.K8sClusters[i].KubeconfigYAML)
 	}
+	for i := range c.MySQLConnections {
+		c.MySQLConnections[i].Password = encryptSecret(c.MySQLConnections[i].Password)
+	}
 }
 
 // decryptConfigSecrets reverses encryptConfigSecrets, restoring plaintext in the
@@ -264,5 +267,8 @@ func decryptConfigSecrets(c *ServerConfig) {
 	for i := range c.K8sClusters {
 		c.K8sClusters[i].Token = decryptSecret(c.K8sClusters[i].Token)
 		c.K8sClusters[i].KubeconfigYAML = decryptSecret(c.K8sClusters[i].KubeconfigYAML)
+	}
+	for i := range c.MySQLConnections {
+		c.MySQLConnections[i].Password = decryptSecret(c.MySQLConnections[i].Password)
 	}
 }

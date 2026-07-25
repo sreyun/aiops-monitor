@@ -167,6 +167,7 @@ let CUR_TYPE = ""; // 类型树选中：""=全部，否则为 platform/os 归类
 try { CUR_TYPE = localStorage.getItem("aiops_host_type") || ""; } catch (e) {}
 let HOST_TREE_Q = ""; // 左侧树内搜索
 let LAST_HOSTS = [];  // 最近一次主机数据（供筛选切换时本地重渲染）
+let HOST_CACHE_AT = 0; // LAST_HOSTS 最近一次成功同步的时间戳（ms）
 let LOG_KIND = "";    // 日志类型筛选（操作/系统/插件）
 let LOG_LEVEL = "";   // 日志级别筛选
 let LOG_SEARCH = ""; // 审计日志关键字搜索（内容/操作者/主机）
@@ -204,6 +205,67 @@ let ALERT_SEARCH = ""; // 告警主机搜索
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** Normalize /hosts API payload (array or {hosts:[]}) into a host array. */
+function normalizeHostsPayload(j) {
+  if (Array.isArray(j)) return j;
+  if (j && Array.isArray(j.hosts)) return j.hosts;
+  return [];
+}
+
+/**
+ * Keep all host caches in sync. Previously LAST_HOSTS / _cachedHosts were only
+ * written inside renderHosts() (hosts page), so Automation / Inspect / Security
+ * often saw an empty list until the user opened「主机」— or raced a failed fetch.
+ */
+function syncHostCache(hosts) {
+  const list = normalizeHostsPayload(hosts);
+  LAST_HOSTS = list;
+  window._cachedHosts = list;
+  HOST_META = list.map(h => ({ id: h.id, hostname: h.hostname }));
+  HOST_CACHE_AT = Date.now();
+  try {
+    if (typeof PB_HOSTS !== "undefined") PB_HOSTS = list;
+  } catch (_) {}
+  try {
+    document.dispatchEvent(new CustomEvent("aiops:hosts-updated", { detail: { hosts: list } }));
+  } catch (_) {}
+  return list;
+}
+
+/**
+ * Fetch hosts with shared cache. opts.force bypasses TTL; opts.maxAgeMs defaults to 20s.
+ * Retries once on network/5xx. Always updates LAST_HOSTS on success.
+ */
+async function fetchHostsList(opts) {
+  const o = opts || {};
+  const force = !!o.force;
+  const maxAge = o.maxAgeMs != null ? o.maxAgeMs : 20000;
+  const now = Date.now();
+  if (!force && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length && (now - HOST_CACHE_AT) < maxAge) {
+    return LAST_HOSTS;
+  }
+  if (!force && (!LAST_HOSTS || !LAST_HOSTS.length) && Array.isArray(window._cachedHosts) && window._cachedHosts.length) {
+    return syncHostCache(window._cachedHosts);
+  }
+  if (typeof API === "undefined") return Array.isArray(LAST_HOSTS) ? LAST_HOSTS : [];
+
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(`${API}/hosts`, { credentials: "same-origin" });
+      if (r.status === 401) throw new Error("unauthorized");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      return syncHostCache(j);
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0) await new Promise(res => setTimeout(res, 300));
+    }
+  }
+  if (Array.isArray(LAST_HOSTS) && LAST_HOSTS.length) return LAST_HOSTS;
+  throw lastErr || new Error("hosts fetch failed");
+}
 // withLoading: disable button + show spinner during async operation, prevent duplicate submits
 const _loadingBtns = new WeakSet();
 function withLoading(btnId, fn) {
@@ -283,6 +345,10 @@ const translateExecStatus = s => {
   if (s === "success") return I18N.t("exec.status.success");
   if (s === "timeout") return I18N.t("exec.status.timeout");
   if (s === "pending") return I18N.t("exec.status.pending");
+  if (s === "pending_approval") return I18N.t("exec.status.pending_approval", "待审批");
+  if (s === "rejected") return I18N.t("exec.status.rejected", "已拒绝");
+  if (s === "partial") return I18N.t("exec.status.partial", "部分成功");
+  if (s === "skipped") return I18N.t("ui.skipped", "已跳过");
   return s;
 };
 // Translate step status from English enum to display text

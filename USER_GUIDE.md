@@ -317,6 +317,33 @@ CPU 使用率/核数、内存/SWAP、全部本地磁盘、网络收发速率、T
 
 > 进程监控需先选目标主机再填进程名（服务端核对该主机 Agent 上报的进程列表），匹配规则为不区分大小写的子串匹配。每项支持列表/胶囊双视图 + 历史曲线回看。
 
+#### 4.1.0 SQL 工具（MySQL 美化 / 审核 / 优化 + EXPLAIN）
+
+面板 **运维工具 → SQL 工具**：面向 MySQL **5.7 / 8.x** 的 DBA 辅助，与观测「数据源」（Prometheus / Loki）分离。
+
+| 能力 | 说明 |
+|---|---|
+| **全面分析** | Vitess AST 解析 + 静态规则 +（可选）`information_schema` 元数据索引建议 + `EXPLAIN FORMAT=JSON` 复合打分 |
+| **离线美化** | 关键字大写、缩进与换行；无需连库 |
+| **离线审核** | AST 优先；解析失败回退正则（`SELECT *`、无 WHERE 的 UPDATE/DELETE、`LIKE '%x'`、函数包列、缺 LIMIT 等） |
+| **离线优化** | 静态改写建议；有连接时按 SQLAdvisor 理论（等值→范围→ORDER/GROUP，过滤已有覆盖索引）给出 DDL |
+| **EXPLAIN** | 可选只读连接；解析索引命中 / 全表扫描 / filesort / temporary，并计入综合分 |
+| **AI 深度** | 「AI 美化 / 审核 / 深度优化」注入综合分、breakdown、index_hints 与 EXPLAIN 摘要 |
+
+**综合分**：`100 − 静态惩罚 − 元数据惩罚 − EXPLAIN 惩罚`（crit/warn/info 权重不同）。选择 MySQL 连接后点「全面分析」会自动拉元数据并跑 EXPLAIN（仅 SELECT/WITH）。
+
+**只读账号建议（最小权限）**
+
+```sql
+CREATE USER 'aiops_ro'@'%' IDENTIFIED BY '...';
+GRANT SELECT, SHOW VIEW ON app.* TO 'aiops_ro'@'%';
+-- 全面分析还需读取 information_schema（TABLES / COLUMNS / STATISTICS）
+-- 多数环境对 information_schema 默认可读；若收紧权限请显式授予
+FLUSH PRIVILEGES;
+```
+
+连接由管理员在 **连接管理** 中配置（密码加密存储）；工具侧拒绝多语句与 DDL/DML/`INTO OUTFILE`，查询超时默认 10s。配置示例见 `server_config.example.json` 的 `mysql_connections`。
+
 #### 4.1.1 Kubernetes 集群（服务端直连）
 
 面板 **资源 → K8s**：由**服务端**直连 kube-apiserver（不依赖某台 Agent）。支持只读浏览（Namespaces / Nodes / Pods / Deployments / Events / Pod 日志）与受控变更（Deployment **Scale** / **Restart**，二次确认，写入操作审计）。
@@ -459,6 +486,22 @@ subjects:
 - 云端大模型 HTTPS 审计使用 `POST /api/v1/integrations/content-audit`：在 LLM Gateway/SDK 完成 TLS 终止后，上报 principal、application、model、token、tool call、策略决策、hash 等结构化字段。服务端需设置独立的 `AIOPS_CONTENT_AUDIT_INGEST_TOKEN`。
 
 完整配置、权限和接入示例见 [内容审计专家指南](CONTENT_AUDIT_AND_PLAYBOOK_EXPERT_GUIDE.md)。
+
+**主机安全扫描（安全中心 → 主机安全）**
+
+- Agent 模块 `host_security_scan` 采集：OS/包清单/监听与进程/加固基线/关键路径哈希/IOC 启发式，以及可选 **ClamAV**（`clamscan`）。
+- 主机侧建议安装：`apt install clamav` / `yum install clamav` / `apk add clamav`；未安装时报告字段 `clamav: unavailable`，扫描仍可用（加固 + 包 CVE）。
+- 服务端用 [OSV](https://osv.dev) `querybatch` 匹配包 CVE，计算 0–100 安全分与修复建议；结果落在 `data/security/host_scans.json`（有 PG 时配置仍走 ConfigStore）。
+- 定时：`host_security.enabled` + `schedule`（`interval` / `daily` / `weekly`，与剧本调度相同）。配置 API：`GET/POST /api/v1/security/host/config`（写入需 admin）。
+- 权限：查看与一键扫描 **operator+**；viewer 不可见安全中心。
+
+**Web 漏洞扫描（安全中心 → Web 扫描）**
+
+- 纯服务端 **Nuclei**（Docker 镜像已内置 `nuclei` 二进制）。配置 `web_security.nuclei_path`（默认 `nuclei`）、`templates_dir`、`severity`、`rate_limit`、`concurrency`、`timeout_sec`。
+- 首次/可选启动更新模板：`web_security.update_templates: true`（执行 `nuclei -update-templates`）；也可手工更新后把模板目录挂到容器。
+- 目标 CRUD：`/api/v1/security/web/targets`；立即扫 `POST .../targets/{id}/scan`。仅 `http`/`https`；默认禁止私网/保留地址，需 admin 将 `allow_private: true`。
+- Tags 白名单：`cves,misconfig,exposures,default-logins,...`。单目标超时与全局并发信号量（默认 1）防止打爆站点。
+- 扫描完成后生成结构化报告（摘要、风险分布、修复建议），前端可导出 Markdown / Excel / Word / PDF；AI Assist 任务：`host_security_diagnosis` / `web_vuln_diagnosis`。
 
 ### 4.4 自动化运维（剧本）
 

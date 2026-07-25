@@ -707,9 +707,13 @@ function bindHostsToolbarOnce() {
 }
 
 function renderHosts(hosts) {
-  LAST_HOSTS = hosts;
-  HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
-  window._cachedHosts = hosts;
+  // Keep LAST_HOSTS / _cachedHosts / HOST_META coherent for Automation & other pages.
+  if (typeof syncHostCache === "function") syncHostCache(hosts);
+  else {
+    LAST_HOSTS = hosts;
+    HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname }));
+    window._cachedHosts = hosts;
+  }
   if (DEFAULT_EMPTY === null && $("empty")) DEFAULT_EMPTY = $("empty").innerHTML;
   const countEl = $("hostsCount");
   if (countEl) countEl.textContent = hosts.length;

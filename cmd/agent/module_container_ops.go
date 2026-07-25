@@ -96,3 +96,63 @@ func moduleContainerLogs(args map[string]string) ([]byte, int) {
 	}
 	return out, 0
 }
+
+// moduleContainerExec runs a non-interactive short command inside a container.
+// Args: id|name, command (shell string), optional timeout_sec (5~60, default 20).
+func moduleContainerExec(args map[string]string) ([]byte, int) {
+	cli := containerCLI()
+	if cli == "" {
+		return []byte("未找到 docker 或 podman"), 1
+	}
+	id := strings.TrimSpace(args["id"])
+	if id == "" {
+		id = strings.TrimSpace(args["name"])
+	}
+	if id == "" {
+		return []byte("container_exec 缺少 id/name"), 1
+	}
+	cmdStr := strings.TrimSpace(args["command"])
+	if cmdStr == "" {
+		return []byte("container_exec 缺少 command"), 1
+	}
+	if len(cmdStr) > 2000 {
+		return []byte("command 过长（≤2000）"), 1
+	}
+	timeoutSec := 20
+	if t := strings.TrimSpace(args["timeout_sec"]); t != "" {
+		if n, err := strconv.Atoi(t); err == nil && n >= 5 && n <= 60 {
+			timeoutSec = n
+		}
+	}
+	// Non-interactive: docker exec -i is not needed; avoid -t (TTY).
+	cmd := exec.Command(cli, "exec", id, "sh", "-c", cmdStr)
+	done := make(chan struct {
+		out []byte
+		err error
+	}, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		done <- struct {
+			out []byte
+			err error
+		}{out, err}
+	}()
+	select {
+	case r := <-done:
+		out := r.out
+		if len(out) > 256*1024 {
+			out = append(out[:256*1024], []byte("\n…[truncated]")...)
+		}
+		if r.err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg == "" {
+				msg = r.err.Error()
+			}
+			return []byte(msg), 1
+		}
+		return out, 0
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		_ = cmd.Process.Kill()
+		return []byte("container_exec 超时"), 1
+	}
+}

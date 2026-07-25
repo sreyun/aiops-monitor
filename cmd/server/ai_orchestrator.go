@@ -35,10 +35,18 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 	case "audit_diagnosis", "result_diagnosis", "chart_analysis", "snmp_diagnosis", "trap_diagnosis",
 		"hardware_diagnosis", "hyperv_diagnosis", "netflow_diagnosis", "checks_diagnosis",
 		"forward_diagnosis", "apimon_diagnosis", "content_audit_diagnosis",
-		"dashboard_analysis", "dashboard_optimize":
+		"host_security_diagnosis", "web_vuln_diagnosis",
+		"host_security_remediation", "web_vuln_remediation",
+		"hyperv_ops_plan", "container_ops_plan", "k8s_ops_plan", "sql_remediation",
+		"dashboard_analysis", "dashboard_optimize",
+		"sql_audit", "sql_optimize":
 		p.MemKind = "diagnosis"
 	}
 	switch task {
+	case "sql_beautify", "sql_audit", "sql_optimize", "sql_remediation",
+		"hyperv_ops_plan", "container_ops_plan", "k8s_ops_plan",
+		"host_security_remediation", "web_vuln_remediation":
+		p.Timeout = 90 * time.Second
 	case "dashboard_optimize":
 		// 开启思考但严格限预算：过长思维链会占满超时，最终 JSON 出不来。
 		p.EnableThink = true

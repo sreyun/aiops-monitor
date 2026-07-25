@@ -31,6 +31,9 @@ func TestEmbeddedConfigExampleDecodes(t *testing.T) {
 	if cfg.HyperVIntervalSec != 60 {
 		t.Errorf("hyperv_interval_sec = %d, want 60", cfg.HyperVIntervalSec)
 	}
+	if cfg.ContainerIntervalSec != 60 {
+		t.Errorf("container_interval_sec = %d, want 60", cfg.ContainerIntervalSec)
+	}
 	if !cfg.LogEncrypt {
 		t.Error("log_encrypt should decode to true")
 	}

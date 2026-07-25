@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -347,6 +348,14 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			case 'P': // app-level ping → pong
 				_ = ws.WriteBinary([]byte{'P'})
 				continue
+			case 'A':
+				// Lock-screen actions (CAD / chords / type_text). Audit type_text
+				// without logging the plaintext credential.
+				if auditDeskAction(s, operator, clientIP, h.Hostname, payload) {
+					// framed below
+				} else {
+					continue
+				}
 			case 'M', 'W', 'B', 'Q', 'N', 'C', 'f', 'u', 'e', 'd':
 				// framed to agent below
 			default:
@@ -426,6 +435,43 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	<-sess.done
+}
+
+// auditDeskAction logs lock-screen control actions. Returns false if the frame
+// should be dropped (invalid JSON / unknown action). Never logs type_text body.
+func auditDeskAction(s *Server, operator, clientIP, hostname string, payload []byte) bool {
+	var req struct {
+		Action string `json:"action"`
+		Chord  string `json:"chord"`
+		Text   string `json:"text"`
+		Enter  bool   `json:"enter"`
+	}
+	if json.Unmarshal(payload, &req) != nil {
+		return false
+	}
+	act := strings.ToLower(strings.TrimSpace(req.Action))
+	switch act {
+	case "cad", "chord", "type_text", "wake":
+	default:
+		return false
+	}
+	msg := "远程桌面动作 " + act
+	switch act {
+	case "chord":
+		msg += " (" + req.Chord + ")"
+	case "type_text":
+		n := len([]rune(req.Text))
+		msg += "（凭据文本已发送，长度=" + itoa(n)
+		if req.Enter {
+			msg += "+Enter"
+		}
+		msg += "，内容未记录）"
+	}
+	s.store.AddLog(LogEntry{
+		Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: hostname,
+		Message: msg,
+	})
+	return true
 }
 
 func (s *Server) handleAgentDeskWait(w http.ResponseWriter, r *http.Request) {

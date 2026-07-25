@@ -405,11 +405,16 @@ function hvDetailFor(inv, g) {
     <button type="button" class="btn sm" data-hvpower="stop">${esc(hvT("hyperv.power_stop", "关机"))}</button>
     <button type="button" class="btn sm" data-hvpower="restart">${esc(hvT("hyperv.power_restart", "重启"))}</button>
     <button type="button" class="btn sm" data-hvpower="force_stop">${esc(hvT("hyperv.power_force", "强制关机"))}</button>
-    <button type="button" class="btn sm" data-hvconfig="1">${esc(hvT("hyperv.edit_config", "编辑配置"))}</button>
+    <button type="button" class="btn sm primary" data-hvconfig="1">${esc(hvT("hyperv.edit_config", "编辑配置"))}</button>
   </div>` : "";
-  const termBtn = g.linked_host_id
-    ? `<button type="button" class="btn sm" data-hvterm="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}">${esc(hvT("hyperv.open_term", "打开终端"))}</button>`
-    : `<span class="hint" style="margin-left:8px">${esc(hvT("hyperv.no_linked_term", "未关联纳管主机，无法打开终端（请在 Guest 安装 Agent）"))}</span>`;
+  let termBtn;
+  if (g.linked_host_id) {
+    termBtn = `<button type="button" class="btn sm" data-hvterm="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}">${esc(hvT("hyperv.open_term", "打开终端"))}</button>
+      <span class="badge ok" style="margin-left:6px">${esc(hvT("hyperv.linked", "已关联 Agent"))}</span>`;
+  } else {
+    termBtn = `<button type="button" class="btn sm" data-hvinstall="${esc(g.name || "")}">${esc(hvT("hyperv.copy_install", "复制 Guest 安装命令"))}</button>
+      <span class="hint" style="margin-left:8px">${esc(hvT("hyperv.no_linked_term", "未关联纳管主机：请在 Guest 内安装 Agent 后即可打开终端"))}</span>`;
+  }
   const head = `<div class="hv-dhead">
     <span class="hv-dot ${hvDotClass(g)}"></span>
     <span class="title">${esc(g.name)}</span>
@@ -443,18 +448,90 @@ async function hvDoPower(action) {
   } catch (e) { toast(String(e.message || e), "err"); }
 }
 
-async function hvDoConfig() {
+function hvCloseConfigModal() {
+  const m = document.getElementById("hvConfigMask");
+  if (m) m.classList.remove("show");
+}
+
+function hvOpenConfigModal() {
   const sel = hvFindSelected();
   if (!sel) return;
-  const cpu = prompt(hvT("hyperv.prompt_cpu", "vCPU 数量（留空不改）"), String(sel.g.processor_count || ""));
-  if (cpu === null) return;
-  const mem = prompt(hvT("hyperv.prompt_mem", "启动内存 MB（留空不改）"), String(sel.g.mem_startup_mb || sel.g.mem_assigned_mb || ""));
-  if (mem === null) return;
+  const g = sel.g;
+  const running = g.state === "Running" || g.state === "Paused";
+  let mask = document.getElementById("hvConfigMask");
+  if (!mask) {
+    mask = document.createElement("div");
+    mask.id = "hvConfigMask";
+    mask.className = "mask";
+    mask.setAttribute("data-close", "");
+    document.body.appendChild(mask);
+    mask.addEventListener("click", e => {
+      if (e.target === mask || e.target.closest("[data-close-btn]")) hvCloseConfigModal();
+    });
+  }
+  const dyn = !!g.dynamic_mem_enabled;
+  mask.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h3>${esc(hvT("hyperv.cfg_title", "编辑虚拟机配置"))} · ${esc(g.name || "")}</h3>
+      <button type="button" class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">${running
+        ? esc(hvT("hyperv.cfg_need_off", "当前虚拟机未关机。修改 vCPU/内存通常需要先关机（Off）或已保存（Saved），否则操作会失败。"))
+        : esc(hvT("hyperv.cfg_hint", "可同时调整 vCPU 与内存（含动态内存范围）。留空表示该项不改。"))}</p>
+      <div class="cfg-form-row">
+        <div class="field"><label>${esc(hvT("hyperv.vcpu", "vCPU 数"))}</label>
+          <input id="hvCfgCPU" type="number" min="1" max="256" value="${esc(String(g.processor_count || 1))}"></div>
+        <div class="field"><label>${esc(hvT("hyperv.mem_startup", "启动内存 MB"))}</label>
+          <input id="hvCfgMem" type="number" min="32" value="${esc(String(Math.round(g.mem_startup_mb || g.mem_assigned_mb || 1024)))}"></div>
+      </div>
+      <label class="switch cfg-enable"><input type="checkbox" id="hvCfgDyn"${dyn ? " checked" : ""}>
+        <span>${esc(hvT("hyperv.mem_dynamic", "启用动态内存"))}</span></label>
+      <div class="cfg-form-row" id="hvCfgDynRow" style="${dyn ? "" : "opacity:.55"}">
+        <div class="field"><label>${esc(hvT("hyperv.mem_min", "最小内存 MB"))}</label>
+          <input id="hvCfgMin" type="number" min="32" value="${esc(String(Math.round(g.mem_min_mb || g.mem_startup_mb || 512)))}"></div>
+        <div class="field"><label>${esc(hvT("hyperv.mem_max", "最大内存 MB"))}</label>
+          <input id="hvCfgMax" type="number" min="32" value="${esc(String(Math.round(g.mem_max_mb || Math.max(g.mem_startup_mb || 0, 2048))))}"></div>
+      </div>
+      <p class="hint mono muted" id="hvCfgStatus"></p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-btn>${esc(hvT("ui.cancel", "取消"))}</button>
+      <button type="button" class="btn primary" id="hvCfgSave">${esc(hvT("common.save", "保存"))}</button>
+    </div>
+  </div>`;
+  mask.classList.add("show");
+  const dynCb = document.getElementById("hvCfgDyn");
+  const dynRow = document.getElementById("hvCfgDynRow");
+  if (dynCb && dynRow) dynCb.onchange = () => { dynRow.style.opacity = dynCb.checked ? "1" : ".55"; };
+  document.getElementById("hvCfgSave").onclick = () => hvSubmitConfig(sel);
+}
+
+async function hvSubmitConfig(sel) {
+  const cpuEl = document.getElementById("hvCfgCPU");
+  const memEl = document.getElementById("hvCfgMem");
+  const minEl = document.getElementById("hvCfgMin");
+  const maxEl = document.getElementById("hvCfgMax");
+  const dynEl = document.getElementById("hvCfgDyn");
+  const status = document.getElementById("hvCfgStatus");
   const body = { name: sel.g.name || "" };
-  if (String(cpu).trim()) body.processor_count = parseInt(cpu, 10);
-  if (String(mem).trim()) body.memory_mb = parseInt(mem, 10);
-  if (!body.processor_count && !body.memory_mb) { toast(hvT("hyperv.config_empty", "未填写变更项"), "err"); return; }
+  const cpu = parseInt(cpuEl && cpuEl.value, 10);
+  const mem = parseInt(memEl && memEl.value, 10);
+  const min = parseInt(minEl && minEl.value, 10);
+  const max = parseInt(maxEl && maxEl.value, 10);
+  if (cpu > 0) body.processor_count = cpu;
+  if (mem > 0) body.memory_mb = mem;
+  body.dynamic_memory = !!(dynEl && dynEl.checked);
+  if (body.dynamic_memory) {
+    if (min > 0) body.memory_min_mb = min;
+    if (max > 0) body.memory_max_mb = max;
+  }
+  if (!body.processor_count && !body.memory_mb && body.dynamic_memory === undefined) {
+    toast(hvT("hyperv.config_empty", "未填写变更项"), "err");
+    return;
+  }
   if (!confirm(hvT("hyperv.config_confirm", "确认修改虚拟机「{name}」配置？").replace("{name}", sel.g.name || ""))) return;
+  if (status) status.textContent = hvT("ui.loading", "提交中…");
   try {
     const r = await fetch(`${API}/hyperv/${encodeURIComponent(sel.inv.host_id)}/guests/${encodeURIComponent(sel.g.id || sel.g.name)}/config`, {
       method: "POST", credentials: "same-origin",
@@ -462,11 +539,37 @@ async function hvDoConfig() {
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(j.error || j.output || `HTTP ${r.status}`);
     toast(hvT("toast.saved", "已保存"), "ok");
+    hvCloseConfigModal();
     setTimeout(() => loadHyperVPanel(), 1500);
-  } catch (e) { toast(String(e.message || e), "err"); }
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (status) status.textContent = msg;
+    toast(msg, "err");
+  }
 }
+
+async function hvCopyGuestInstall(guestName) {
+  try {
+    const info = await fetch(`${API}/install/info`, { credentials: "same-origin" }).then(r => r.json());
+    const server = info.server_url || location.origin;
+    const token = info.token || "";
+    const cat = encodeURIComponent(guestName || "hyperv-guest");
+    const cmd = `curl -fsSL "${server}/install.sh?token=${encodeURIComponent(token)}&category=${cat}" | sh`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(cmd);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = cmd; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    }
+    toast(hvT("hyperv.install_copied", "已复制 Guest 安装命令，请在虚拟机内以管理员/root 执行"), "ok");
+  } catch (e) {
+    toast(String(e.message || e), "err");
+  }
+}
+
+function hvDoConfig() { hvOpenConfigModal(); }
 
 function hvDetail() {
   const sel = hvFindSelected();
@@ -562,11 +665,16 @@ function hvOpenSelectedAI() {
   if (!sel) { toast(hvT("hyperv.pick", "请先选择一台虚拟机"), "err"); return; }
   if (typeof openAIAssist !== "function") { toast(hvT("hyperv.ai_unavailable", "AI 面板未就绪"), "err"); return; }
   openAIAssist({
-    task: "hyperv_diagnosis",
-    title: "🤖 AI Hyper-V 诊断 · " + (sel.g.name || "VM"),
+    task: "hyperv_ops_plan",
+    title: "🤖 AI Hyper-V 运维 · " + (sel.g.name || "VM"),
     mode: "analyze",
     context: hvVmToText(sel.inv, sel.g).slice(0, 14000),
-    hint: hvT("hyperv.ai_hint", "正在分析该虚拟机运行状态…")
+    hint: hvT("hyperv.ai_hint", "正在分析该虚拟机并生成可执行动作…"),
+    applyLabel: hvT("ai.apply_actions", "应用建议动作"),
+    applyTo: async (text) => {
+      if (typeof window.applyOpsActionPlan !== "function") return false;
+      return window.applyOpsActionPlan(text, { source: "hyperv", refresh: () => loadHyperVPanel() });
+    },
   });
 }
 
@@ -574,11 +682,16 @@ function hvOpenFleetAI() {
   if (!HV_INVENTORIES.length) { toast(hvT("hyperv.empty", "暂无 Hyper-V 数据"), "err"); return; }
   if (typeof openAIAssist !== "function") { toast(hvT("hyperv.ai_unavailable", "AI 面板未就绪"), "err"); return; }
   openAIAssist({
-    task: "hyperv_diagnosis",
-    title: "🤖 AI Hyper-V 清单诊断",
+    task: "hyperv_ops_plan",
+    title: "🤖 AI Hyper-V 清单运维",
     mode: "analyze",
     context: hvFleetToText(),
-    hint: hvT("hyperv.ai_fleet_hint", "正在分析整体虚拟化面…")
+    hint: hvT("hyperv.ai_fleet_hint", "正在分析整体虚拟化面并生成可执行动作…"),
+    applyLabel: hvT("ai.apply_actions", "应用建议动作"),
+    applyTo: async (text) => {
+      if (typeof window.applyOpsActionPlan !== "function") return false;
+      return window.applyOpsActionPlan(text, { source: "hyperv", refresh: () => loadHyperVPanel() });
+    },
   });
 }
 
@@ -787,6 +900,8 @@ safeAddEventListener("hypervPanel", "click", e => {
   if (power) { hvDoPower(power.dataset.hvpower); return; }
   const cfgBtn = e.target.closest("[data-hvconfig]");
   if (cfgBtn) { hvDoConfig(); return; }
+  const installBtn = e.target.closest("[data-hvinstall]");
+  if (installBtn) { hvCopyGuestInstall(installBtn.dataset.hvinstall || ""); return; }
   const term = e.target.closest("[data-hvterm]");
   if (term && typeof openTerminal === "function") {
     openTerminal(term.dataset.hvterm, term.dataset.hvname || term.dataset.hvterm);

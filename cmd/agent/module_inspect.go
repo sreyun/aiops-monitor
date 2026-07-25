@@ -15,6 +15,9 @@ import (
 
 // host_inspect：跨平台深度主机巡检（对齐 linux_inspect.sh 的结构化报告思路）。
 // 输出纯 JSON，供服务端存储与 Web 渲染。覆盖 Windows / Linux（含麒麟/UOS）/ macOS。
+//
+// Windows 中文环境：cmdOut 经 ensureUTF8（GBK→UTF-8）；FQDN/系统/内核走专用采集，
+// 不再使用 hostname -f / 本地化 ver 文案填内核。修复乱码需升级目标机 Agent 后重跑巡检。
 
 type inspectReport struct {
 	Version        string            `json:"version"`
@@ -205,10 +208,7 @@ func (b *inspectBuilder) finalize(start time.Time) {
 
 func (b *inspectBuilder) collectHost() {
 	hn, _ := os.Hostname()
-	fqdn := hn
-	if out := cmdOut(2, "hostname", "-f"); out != "" {
-		fqdn = strings.TrimSpace(out)
-	}
+	fqdn := inspectResolveFQDN(hn)
 	ips := localIPv4s()
 	ip := ""
 	if len(ips) > 0 {
@@ -264,13 +264,7 @@ func detectOSFamily() (family, pretty, kernel string) {
 	switch runtime.GOOS {
 	case "windows":
 		family = "windows"
-		pretty = "Windows"
-		if out := cmdOut(3, "cmd", "/c", "ver"); out != "" {
-			pretty = strings.TrimSpace(strings.ReplaceAll(out, "\r\n", " "))
-		}
-		if out := cmdOut(3, "cmd", "/c", "ver"); out != "" {
-			kernel = strings.TrimSpace(out)
-		}
+		pretty, kernel = inspectWindowsOSIdentity()
 		return
 	case "darwin":
 		family = "darwin"
@@ -1247,7 +1241,90 @@ func cmdOut(timeoutSec int, name string, args ...string) string {
 	if err != nil && len(out) == 0 {
 		return ""
 	}
-	return string(out)
+	return decodeCmdOut(out)
+}
+
+// decodeCmdOut converts console bytes (e.g. GBK on Chinese Windows) to UTF-8
+// and strips NULs / control noise so JSON reports stay valid.
+func decodeCmdOut(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return sanitizeInspectField(string(ensureUTF8(b)))
+}
+
+// cmdOutRaw returns UTF-8 command output without whitespace collapsing (newlines kept).
+func cmdOutRaw(timeoutSec int, name string, args ...string) []byte {
+	if timeoutSec <= 0 {
+		timeoutSec = 5
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	return ensureUTF8(out)
+}
+
+func sanitizeInspectField(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		switch {
+		case r == 0 || r == '\uFFFD':
+			continue
+		case r == '\r':
+			continue
+		case r == '\n' || r == '\t':
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+		case r < 0x20:
+			continue
+		case r == ' ':
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+		default:
+			b.WriteRune(r)
+			prevSpace = false
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// looksLikeCommandUsage rejects MSYS/Git "hostname" help fragments and similar junk.
+func looksLikeCommandUsage(s string) bool {
+	low := strings.ToLower(s)
+	for _, bad := range []string{
+		"sethostname", "usage:", "hostname -s", "hostname -f",
+		"invalid option", "unrecognized option", "try `hostname",
+		"command not found", "is not recognized",
+	} {
+		if strings.Contains(low, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// inspectResolveFQDN picks a platform-safe FQDN. Never runs Linux-only hostname -f on Windows.
+func inspectResolveFQDN(fallback string) string {
+	if runtime.GOOS == "windows" {
+		return inspectWindowsFQDN(fallback)
+	}
+	if out := cmdOut(2, "hostname", "-f"); out != "" && !looksLikeCommandUsage(out) {
+		return out
+	}
+	return fallback
 }
 
 func humanBytes(n uint64) string {

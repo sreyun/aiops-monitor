@@ -197,6 +197,7 @@ const (
 	mouseeventfVirtualDesk = 0x4000
 	keyeventfKeyUp         = 0x0002
 	keyeventfExtendedKey   = 0x0001
+	keyeventfUnicode       = 0x0004
 	mapVKToVSC             = 0 // MAPVK_VK_TO_VSC
 )
 
@@ -951,6 +952,96 @@ func (i *winInput) Key(vk int, down bool) error {
 }
 
 func deskGOOS() string { return "windows" }
+
+var (
+	modSas      = syscall.NewLazyDLL("sas.dll")
+	procSendSAS = modSas.NewProc("SendSAS")
+)
+
+// SendCAD triggers Ctrl+Alt+Del (Secure Attention Sequence) via sas.dll SendSAS.
+// Requires LocalSystem desktop worker (or SoftwareSASGeneration policy for services).
+func (i *winInput) SendCAD() error {
+	if err := i.ensureInputDesktop(); err != nil {
+		slog.Warn("SendCAD: 附着输入桌面失败，仍尝试 SendSAS", "err", err)
+	}
+	if err := modSas.Load(); err != nil {
+		return fmt.Errorf("加载 sas.dll 失败（需 Windows 服务会话）: %w", err)
+	}
+	// SendSAS(FALSE) — as system / service context
+	r, _, callErr := procSendSAS.Call(0)
+	if r == 0 {
+		errno := win32LastError()
+		if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+			errno = uint32(e)
+		}
+		if errno != 0 {
+			return fmt.Errorf("SendSAS 失败 win32=%d（确认以服务安装 Agent，且策略允许 SoftwareSASGeneration）", errno)
+		}
+	}
+	slog.Info("已发送 SAS (Ctrl+Alt+Del)", "desktop", i.curDeskName, "session", currentSessionID())
+	return nil
+}
+
+// TypeText injects Unicode text via KEYEVENTF_UNICODE (works on lock screen password boxes).
+func (i *winInput) TypeText(text string) error {
+	if err := i.ensureInputDesktop(); err != nil {
+		return err
+	}
+	cb := unsafe.Sizeof(winMouseInput{})
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			_ = i.Key(0x0D, true)
+			_ = i.Key(0x0D, false)
+			continue
+		}
+		if r == '\t' {
+			_ = i.Key(0x09, true)
+			_ = i.Key(0x09, false)
+			continue
+		}
+		send := func(flags uint32) bool {
+			inp := winKeyInput{
+				Type:  inputKeyboard,
+				Vk:    0,
+				Scan:  uint16(r),
+				Flags: flags | keyeventfUnicode,
+			}
+			n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), cb)
+			return n != 0
+		}
+		if !send(0) {
+			i.logSendFail("type_text", win32LastError(), "rune", r)
+			return fmt.Errorf("UNICODE 注入失败（desktop=%s）", i.curDeskName)
+		}
+		_ = send(keyeventfKeyUp)
+		time.Sleep(8 * time.Millisecond)
+	}
+	return nil
+}
+
+func (i *winInput) DeskInputMeta() deskInputMeta {
+	ok := true
+	if deskFollowSecureDesktop {
+		if err := i.ensureInputDesktop(); err != nil {
+			ok = false
+		}
+	}
+	hint := deskDefaultLockHint()
+	if deskWorkerMode && i.curDeskName != "" {
+		hint = "当前输入桌面: " + i.curDeskName + "。锁屏请先「Ctrl+Alt+Del」，再点「解锁」输入密码。"
+	} else if !deskWorkerMode {
+		hint = "当前非桌面 worker：锁屏键鼠可能无效。请以管理员安装 Agent 服务（--install-service）。"
+		ok = i.curDeskName != "" || !deskFollowSecureDesktop
+	}
+	return deskInputMeta{
+		Desktop:        i.curDeskName,
+		InputDesktopOK: ok,
+		CAD:            deskWorkerMode || deskFollowSecureDesktop,
+		TypeText:       true,
+		SecureDesktop:  deskFollowSecureDesktop,
+		LockHint:       hint,
+	}
+}
 
 // deskH264Usable gates the ffmpeg H.264 path. It is DISABLED in the secure-desktop
 // worker: ffmpeg gdigrab captures the desktop bound to its own process and cannot

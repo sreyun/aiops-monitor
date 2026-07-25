@@ -562,6 +562,8 @@ type ServerConfig struct {
 	// K8sClusters is the list of Kubernetes clusters the server talks to
 	// directly (API Server + Token or pasted kubeconfig). Secrets are encrypted at rest.
 	K8sClusters []K8sClusterConfig `json:"k8s_clusters,omitempty"`
+	// MySQLConnections is the list of read-only MySQL endpoints for SQL toolkit EXPLAIN/schema.
+	MySQLConnections []MySQLConnection `json:"mysql_connections,omitempty"`
 	// ForwardRules is the list of persisted TCP forwarding rules.
 	// Listeners are recreated on startup from these persisted fields.
 	ForwardRules []PersistedForwardRule `json:"forward_rules,omitempty"`
@@ -600,6 +602,10 @@ type ServerConfig struct {
 	CORSOrigins []string `json:"cors_origins,omitempty"`
 	// AuditExport forwards operation audit entries to SIEM (Webhook / Syslog).
 	AuditExport AuditExportConfig `json:"audit_export,omitempty"`
+	// HostSecurity: Agent host_security_scan + OSV CVE + optional ClamAV schedule.
+	HostSecurity HostSecurityConfig `json:"host_security,omitempty"`
+	// WebSecurity: server-side Nuclei web vulnerability scanning.
+	WebSecurity WebSecurityConfig `json:"web_security,omitempty"`
 	// OIDC enables enterprise SSO (authorization code + userinfo + group→role).
 	OIDC OIDCConfig `json:"oidc,omitempty"`
 	// SSO holds OAuth login apps for Feishu / DingTalk / WeChat / WeCom
@@ -617,6 +623,11 @@ func defaultServerConfig() ServerConfig {
 		Categories:    map[string]string{},
 		SMTP: SMTPConfig{
 			FromName: "AIOps Monitor",
+		},
+		HostSecurity: HostSecurityConfig{
+			EnableClamAV: true,
+			OSVURL:       defaultOSVURL,
+			TimeoutSec:   180,
 		},
 	}
 }
@@ -1263,8 +1274,10 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.CORSOrigins = cs.cfg.CORSOrigins // CORS 白名单：前端表单不含此字段，必须保留现有值
 	c.Users = cs.cfg.Users             // 保护多用户列表：前端表单不含 Users，必须保留现有值
 	c.AuditExport = cs.cfg.AuditExport // 审计外发：独立 API 管理
-	c.OIDC = cs.cfg.OIDC               // OIDC SSO：独立 API 管理
-	c.SSO = cs.cfg.SSO                 // 飞书/钉钉/微信登录：独立 API 管理
+	c.HostSecurity = cs.cfg.HostSecurity
+	c.WebSecurity = cs.cfg.WebSecurity
+	c.OIDC = cs.cfg.OIDC // OIDC SSO：独立 API 管理
+	c.SSO = cs.cfg.SSO   // 飞书/钉钉/微信登录：独立 API 管理
 	c.InstallTokenMaxUses = cs.cfg.InstallTokenMaxUses
 	c.InstallTokenUseCount = cs.cfg.InstallTokenUseCount
 	c.InstallTokenExpiresAt = cs.cfg.InstallTokenExpiresAt
@@ -1317,6 +1330,11 @@ func (cs *ConfigStore) save() error {
 		clusters := make([]K8sClusterConfig, len(c.K8sClusters))
 		copy(clusters, c.K8sClusters)
 		c.K8sClusters = clusters
+	}
+	if len(c.MySQLConnections) > 0 {
+		conns := make([]MySQLConnection, len(c.MySQLConnections))
+		copy(conns, c.MySQLConnections)
+		c.MySQLConnections = conns
 	}
 	// API 业务监控的 headers/body 含引用类型（map/slice），必须深拷贝后再交给
 	// encryptConfigSecrets 加密，否则会就地污染内存中的明文实时配置。

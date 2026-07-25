@@ -225,10 +225,13 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 		if sid == "" {
 			continue // long-poll timeout, re-poll immediately
 		}
-		if mode == "exec" {
+		switch mode {
+		case "exec":
 			go a.runExecSession(t.server, sid, command) // one-shot playbook command (no PTY)
-		} else {
-			go a.runTerminalSession(t.server, sid, lang) // interactive terminal
+		case "container_exec":
+			go a.runContainerTerminalSession(t.server, sid, command, lang)
+		default:
+			go a.runTerminalSession(t.server, sid, lang) // interactive host shell
 		}
 	}
 }
@@ -338,6 +341,57 @@ func runShellCommand(command string) ([]byte, int) {
 	return out, exit
 }
 
+// runContainerTerminalSession opens an interactive docker/podman exec -it session.
+// command format: "<containerID>|<shell>" (shell optional, default sh).
+func (a *Agent) runContainerTerminalSession(server, sid, command, lang string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("容器终端会话异常已恢复", "session", sid, "panic", r)
+		}
+	}()
+	parts := strings.SplitN(strings.TrimSpace(command), "|", 2)
+	cid := strings.TrimSpace(parts[0])
+	shell := "sh"
+	if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+		shell = strings.TrimSpace(parts[1])
+	}
+	cli := containerCLI()
+	if cli == "" || cid == "" {
+		a.termSendPlain(server, sid, "\r\n\x1b[31m未找到 docker/podman 或容器 ID 无效\x1b[0m\r\n")
+		return
+	}
+	sh := newContainerExecPTY(cli, cid, shell, 120, 30)
+	if sh == nil {
+		a.termSendPlain(server, sid, "\r\n\x1b[31m无法启动容器交互终端（需 Linux/macOS Agent 与可用 PTY）\x1b[0m\r\n")
+		return
+	}
+	slog.Info("容器终端会话开始", "session", sid, "container", cid, "cli", cli)
+	a.streamInteractiveShell(server, sid, sh, lang)
+}
+
+// termSendPlain posts a short framed PTY output message (container_exec startup errors).
+func (a *Agent) termSendPlain(server, sid, msg string) {
+	payload := []byte(msg)
+	frame := make([]byte, 5+len(payload))
+	frame[0] = 'O'
+	binary.BigEndian.PutUint32(frame[1:], uint32(len(payload)))
+	copy(frame[5:], payload)
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write(frame)
+		_ = pw.Close()
+	}()
+	req, err := http.NewRequest("POST", server+"/api/v1/agent/terminal/tx?session="+sid, pr)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Agent-Fingerprint", a.identity.Fingerprint)
+	if resp, err := termHTTP.Do(req); err == nil {
+		resp.Body.Close()
+	}
+}
+
 func (a *Agent) runTerminalSession(server, sid, lang string) {
 	// A terminal/playbook session must never crash the whole agent: recover any
 	// panic so metrics reporting and future sessions keep working.
@@ -351,6 +405,10 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 		return
 	}
 	slog.Info("远程终端会话开始", "session", sid)
+	a.streamInteractiveShell(server, sid, sh, lang)
+}
+
+func (a *Agent) streamInteractiveShell(server, sid string, sh termShell, lang string) {
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
 

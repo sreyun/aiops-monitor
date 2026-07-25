@@ -9,10 +9,9 @@
 # ============================================================================
 ARG BASE_REGISTRY=swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io
 # GO_VERSION 默认 1.22（SWR 镜像仓现只有此版本，保证本地构建可用）。
-# ⚠️ 安全：Go 1.22 已 EOL，含 crypto/tls CVE(GO-2026-5856)。发布版应升级：
-#   先把 golang:1.26-alpine 同步到 SWR，再改此默认；或用官方源构建：
-#   docker build --build-arg BASE_REGISTRY=docker.io --build-arg GO_VERSION=1.26 ...
-ARG GO_VERSION=1.22
+# Vitess sqlparser（SQL 工具）与安全修复需要 Go ≥1.26。
+# SWR 若无对应标签：docker build --build-arg BASE_REGISTRY=docker.io --build-arg GO_VERSION=1.26 ...
+ARG GO_VERSION=1.26
 
 # ---- Build stage (always runs on the native BUILDPLATFORM) ----
 FROM --platform=$BUILDPLATFORM ${BASE_REGISTRY}/golang:${GO_VERSION}-alpine AS builder
@@ -58,7 +57,14 @@ RUN if [ "$UPX" = "1" ]; then \
 
 # ---- Server image ----
 FROM ${BASE_REGISTRY}/alpine:3.20 AS server
-RUN apk add --no-cache ca-certificates tzdata zip
+ARG TARGETARCH
+ARG NUCLEI_VERSION=3.3.9
+RUN apk add --no-cache ca-certificates tzdata zip curl unzip \
+ && curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/nuclei.zip \
+ && unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin \
+ && chmod +x /usr/local/bin/nuclei \
+ && rm -f /tmp/nuclei.zip \
+ && nuclei -version || true
 WORKDIR /app
 
 COPY --from=builder /out/aiops-server /app/aiops-server

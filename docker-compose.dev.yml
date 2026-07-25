@@ -26,6 +26,8 @@ services:
       target: server
       args:
         VERSION: ${AIOPS_DEV_VERSION:-dev}
+        BASE_REGISTRY: ${BASE_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.26}
 
   victoriametrics:
     image: ${VM_IMAGE:-victoriametrics/victoria-metrics:latest}
@@ -43,3 +45,5 @@ services:
       target: agent
       args:
         VERSION: ${AIOPS_DEV_VERSION:-dev}
+        BASE_REGISTRY: ${BASE_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.26}

@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 # 本地开发构建：server 仅编目标平台；agent 仍交叉编译全平台到 /dist，
 # 保证 macOS / Windows / Linux 一键安装（/dl/）在开发镜像里也能用。
-ARG BASE_REGISTRY=swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io
-ARG GO_VERSION=1.22
+# 开发默认走 Docker Hub；生产 Dockerfile 仍可用 SWR 镜像仓。
+ARG BASE_REGISTRY=docker.io
+ARG GO_VERSION=1.26
 
 FROM --platform=$BUILDPLATFORM ${BASE_REGISTRY}/golang:${GO_VERSION}-alpine AS builder
 WORKDIR /src
@@ -32,7 +33,14 @@ RUN set -e; LD="-s -w -X main.appVersion=${VERSION}"; \
 
 # ---- Server image ----
 FROM ${BASE_REGISTRY}/alpine:3.20 AS server
-RUN apk add --no-cache ca-certificates tzdata zip
+ARG TARGETARCH
+ARG NUCLEI_VERSION=3.3.9
+RUN apk add --no-cache ca-certificates tzdata zip curl unzip \
+ && curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/nuclei.zip \
+ && unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin \
+ && chmod +x /usr/local/bin/nuclei \
+ && rm -f /tmp/nuclei.zip \
+ && nuclei -version || true
 WORKDIR /app
 COPY --from=builder /out/aiops-server /app/aiops-server
 COPY --from=builder /out/dist/ /app/dist/

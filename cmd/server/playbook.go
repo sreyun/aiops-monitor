@@ -76,14 +76,17 @@ type PlaybookExecution struct {
 	Operator     string                    `json:"operator"`
 	StartTime    int64                     `json:"start_time"`
 	EndTime      int64                     `json:"end_time,omitempty"`
-	Status       string                    `json:"status"` // running | completed | failed | cancelled
+	Status       string                    `json:"status"` // pending_approval | running | completed | failed | partial | cancelled | rejected
 	HostResults  map[string]HostExecResult `json:"host_results"`
+	Trigger      string                    `json:"trigger,omitempty"` // manual | schedule
+	RiskNote     string                    `json:"risk_note,omitempty"`
 }
 
 // HostExecResult tracks one host's execution outcome.
 type HostExecResult struct {
 	Hostname string       `json:"hostname"`
-	Status   string       `json:"status"` // pending | running | success | failed | timeout
+	Status   string       `json:"status"` // pending | running | success | failed | timeout | skipped
+	Reason   string       `json:"reason,omitempty"` // no_pickup | timeout | exit | skipped_when | cancelled | error
 	Output   string       `json:"output"`
 	Steps    []StepResult `json:"steps"`
 }
@@ -442,6 +445,20 @@ func (pm *playbookManager) importExecutions(execs []PlaybookExecution) {
 
 // StartExecution creates a new execution record and returns it.
 func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []*Host) *PlaybookExecution {
+	return pm.startExecution(pb, operator, hosts, "running", "manual", "")
+}
+
+// StartScheduledExecution starts a readonly scheduled run immediately.
+func (pm *playbookManager) StartScheduledExecution(pb Playbook, operator string, hosts []*Host) *PlaybookExecution {
+	return pm.startExecution(pb, operator, hosts, "running", "schedule", "")
+}
+
+// StartPendingExecution records a scheduled high-risk run awaiting human approval.
+func (pm *playbookManager) StartPendingExecution(pb Playbook, operator string, hosts []*Host, riskNote string) *PlaybookExecution {
+	return pm.startExecution(pb, operator, hosts, "pending_approval", "schedule", riskNote)
+}
+
+func (pm *playbookManager) startExecution(pb Playbook, operator string, hosts []*Host, status, trigger, riskNote string) *PlaybookExecution {
 	pm.mu.Lock()
 	pm.nextExecID++
 	exec := PlaybookExecution{
@@ -450,7 +467,9 @@ func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []
 		PlaybookName: pb.Name,
 		Operator:     operator,
 		StartTime:    time.Now().Unix(),
-		Status:       "running",
+		Status:       status,
+		Trigger:      trigger,
+		RiskNote:     riskNote,
 		HostResults:  map[string]HostExecResult{},
 	}
 	for _, h := range hosts {
@@ -466,6 +485,23 @@ func (pm *playbookManager) StartExecution(pb Playbook, operator string, hosts []
 	}
 	pm.mu.Unlock()
 	return &exec
+}
+
+// SetExecutionStatus updates status (and optionally end time for terminal states).
+func (pm *playbookManager) SetExecutionStatus(execID int64, status string, finished bool) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	for i := range pm.executions {
+		if pm.executions[i].ID != execID {
+			continue
+		}
+		pm.executions[i].Status = status
+		if finished {
+			pm.executions[i].EndTime = time.Now().Unix()
+		}
+		return true
+	}
+	return false
 }
 
 // UpdateHostResult updates one host's result in an execution.

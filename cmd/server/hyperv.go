@@ -252,7 +252,7 @@ func (s *Server) purgeStaleHyperVDuplicates(keepHostID string) {
 
 // enrichHyperVLinks annotates each guest in the rows with linked_host_id /
 // linked_host_name when it corresponds to a managed host. Matches by hostname
-// (case-insensitive) first, then by any of the guest's reported IPs.
+// (case-insensitive, FQDN short name), then by any of the guest's reported IPs.
 func (s *Server) enrichHyperVLinks(rows []map[string]any) {
 	if len(rows) == 0 {
 		return
@@ -261,11 +261,16 @@ func (s *Server) enrichHyperVLinks(rows []map[string]any) {
 	byIP := map[string]*Host{}
 	for _, h := range s.store.ListHosts() {
 		if h.Hostname != "" {
-			byName[strings.ToLower(h.Hostname)] = h
+			hn := strings.ToLower(strings.TrimSpace(h.Hostname))
+			byName[hn] = h
+			if i := strings.IndexByte(hn, '.'); i > 0 {
+				byName[hn[:i]] = h
+			}
 		}
 		if h.IP != "" {
-			byIP[h.IP] = h
+			byIP[strings.TrimSpace(h.IP)] = h
 		}
+		// Also index secondary IPs if present on host metrics/labels later — primary IP is enough for most guests.
 	}
 	for _, row := range rows {
 		guests, _ := row["guests"].([]any)
@@ -276,16 +281,25 @@ func (s *Server) enrichHyperVLinks(rows []map[string]any) {
 			}
 			var match *Host
 			if name, _ := g["name"].(string); name != "" {
-				match = byName[strings.ToLower(name)]
+				key := strings.ToLower(strings.TrimSpace(name))
+				match = byName[key]
+				if match == nil {
+					if i := strings.IndexByte(key, '.'); i > 0 {
+						match = byName[key[:i]]
+					}
+				}
 			}
 			if match == nil {
 				if ips, ok := g["ip_addresses"].([]any); ok {
 					for _, ipi := range ips {
-						if ip, _ := ipi.(string); ip != "" {
-							if h := byIP[ip]; h != nil {
-								match = h
-								break
-							}
+						ip, _ := ipi.(string)
+						ip = strings.TrimSpace(ip)
+						if ip == "" {
+							continue
+						}
+						if h := byIP[ip]; h != nil {
+							match = h
+							break
 						}
 					}
 				}
@@ -293,6 +307,9 @@ func (s *Server) enrichHyperVLinks(rows []map[string]any) {
 			if match != nil {
 				g["linked_host_id"] = match.ID
 				g["linked_host_name"] = match.Hostname
+				g["link_match"] = "agent"
+			} else {
+				g["link_match"] = "none"
 			}
 		}
 	}

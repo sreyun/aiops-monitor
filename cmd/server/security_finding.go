@@ -1,0 +1,255 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+)
+
+const (
+	findingStatusOpen         = "open"
+	findingStatusAck          = "ack"
+	findingStatusFalsePositive = "false_positive"
+	findingStatusResolved     = "resolved"
+)
+
+var validFindingStatuses = map[string]bool{
+	findingStatusOpen: true, findingStatusAck: true,
+	findingStatusFalsePositive: true, findingStatusResolved: true,
+}
+
+// SecurityFindingState tracks operator disposition for a stable finding key.
+type SecurityFindingState struct {
+	Key       string `json:"key"`
+	Scope     string `json:"scope"` // host|web
+	Status    string `json:"status"`
+	Note      string `json:"note,omitempty"`
+	UpdatedAt int64  `json:"updated_at"`
+	UpdatedBy string `json:"updated_by,omitempty"`
+}
+
+type securityFindingManager struct {
+	mu     sync.Mutex
+	states map[string]SecurityFindingState
+	dir    string
+}
+
+func newSecurityFindingManager(dir string) *securityFindingManager {
+	m := &securityFindingManager{states: map[string]SecurityFindingState{}, dir: dir}
+	m.load()
+	return m
+}
+
+func (m *securityFindingManager) path() string {
+	return filepath.Join(m.dir, "finding_states.json")
+}
+
+func (m *securityFindingManager) load() {
+	if m.dir == "" {
+		return
+	}
+	b, err := os.ReadFile(m.path())
+	if err != nil {
+		return
+	}
+	var list []SecurityFindingState
+	if json.Unmarshal(b, &list) != nil {
+		return
+	}
+	for _, st := range list {
+		if st.Key != "" {
+			m.states[st.Key] = st
+		}
+	}
+}
+
+func (m *securityFindingManager) saveLocked() {
+	if m.dir == "" {
+		return
+	}
+	list := make([]SecurityFindingState, 0, len(m.states))
+	for _, st := range m.states {
+		list = append(list, st)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Key < list[j].Key })
+	b, err := json.Marshal(list)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(m.dir, 0o750)
+	tmp := m.path() + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, m.path())
+}
+
+func hostFindingKey(hostID string, f HostFinding) string {
+	hostID = strings.TrimSpace(hostID)
+	id := strings.TrimSpace(f.ID)
+	if id == "" {
+		id = strings.TrimSpace(f.CVE)
+	}
+	if id == "" {
+		id = strings.TrimSpace(f.Title)
+	}
+	return fmt.Sprintf("host:%s:%s:%s", hostID, strings.TrimSpace(f.Category), id)
+}
+
+func webFindingKey(targetID, templateID, url string) string {
+	targetID = strings.TrimSpace(targetID)
+	templateID = strings.TrimSpace(templateID)
+	url = strings.ToLower(strings.TrimSpace(url))
+	sum := sha256.Sum256([]byte(url))
+	return fmt.Sprintf("web:%s:%s:%s", targetID, templateID, hex.EncodeToString(sum[:6]))
+}
+
+func (m *securityFindingManager) get(key string) (SecurityFindingState, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.states[key]
+	return st, ok
+}
+
+func (m *securityFindingManager) list(scope string) []SecurityFindingState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]SecurityFindingState, 0, len(m.states))
+	for _, st := range m.states {
+		if scope == "" || st.Scope == scope {
+			out = append(out, st)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	return out
+}
+
+func (m *securityFindingManager) upsert(key, scope, status, note, actor string) (SecurityFindingState, error) {
+	key = strings.TrimSpace(key)
+	status = strings.TrimSpace(status)
+	if key == "" {
+		return SecurityFindingState{}, fmt.Errorf("key required")
+	}
+	if !validFindingStatuses[status] {
+		return SecurityFindingState{}, fmt.Errorf("invalid status")
+	}
+	st := SecurityFindingState{
+		Key: key, Scope: scope, Status: status, Note: strings.TrimSpace(note),
+		UpdatedAt: time.Now().Unix(), UpdatedBy: actor,
+	}
+	m.mu.Lock()
+	m.states[key] = st
+	m.saveLocked()
+	m.mu.Unlock()
+	return st, nil
+}
+
+func mergeHostFindingStatus(m *securityFindingManager, hostID string, findings []HostFinding) []HostFinding {
+	if m == nil || len(findings) == 0 {
+		return findings
+	}
+	out := make([]HostFinding, len(findings))
+	copy(out, findings)
+	for i := range out {
+		key := hostFindingKey(hostID, out[i])
+		if st, ok := m.get(key); ok {
+			out[i].Status = st.Status
+			if st.Note != "" {
+				out[i].StatusNote = st.Note
+			}
+		} else {
+			out[i].Status = findingStatusOpen
+		}
+	}
+	return out
+}
+
+func mergeWebFindingStatus(m *securityFindingManager, targetID string, findings []WebFinding) []WebFinding {
+	if m == nil || len(findings) == 0 {
+		return findings
+	}
+	out := make([]WebFinding, len(findings))
+	copy(out, findings)
+	for i := range out {
+		key := webFindingKey(targetID, out[i].TemplateID, out[i].URL)
+		if st, ok := m.get(key); ok {
+			out[i].Status = st.Status
+			if st.Note != "" {
+				out[i].StatusNote = st.Note
+			}
+		} else {
+			out[i].Status = findingStatusOpen
+		}
+	}
+	return out
+}
+
+func (s *Server) handleListSecurityFindingStates(w http.ResponseWriter, r *http.Request) {
+	if s.secFindings == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"states": []SecurityFindingState{}})
+		return
+	}
+	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	writeJSON(w, http.StatusOK, map[string]any{"states": s.secFindings.list(scope)})
+}
+
+func (s *Server) handleUpdateSecurityFindingState(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Key      string `json:"key"`
+		Scope    string `json:"scope"`
+		Status   string `json:"status"`
+		Note     string `json:"note"`
+		HostID   string `json:"host_id"`
+		TargetID string `json:"target_id"`
+		Finding  struct {
+			ID         string `json:"id"`
+			Category   string `json:"category"`
+			CVE        string `json:"cve"`
+			Title      string `json:"title"`
+			TemplateID string `json:"template_id"`
+			URL        string `json:"url"`
+		} `json:"finding"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSecErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if s.secFindings == nil {
+		writeSecErr(w, http.StatusServiceUnavailable, "finding store unavailable")
+		return
+	}
+	key := strings.TrimSpace(req.Key)
+	if key == "" {
+		switch strings.TrimSpace(req.Scope) {
+		case "host":
+			key = hostFindingKey(req.HostID, HostFinding{
+				ID: req.Finding.ID, Category: req.Finding.Category,
+				CVE: req.Finding.CVE, Title: req.Finding.Title,
+			})
+		case "web":
+			key = webFindingKey(req.TargetID, req.Finding.TemplateID, req.Finding.URL)
+		default:
+			writeSecErr(w, http.StatusBadRequest, "scope or key required")
+			return
+		}
+	}
+	st, err := s.secFindings.upsert(key, req.Scope, req.Status, req.Note, s.actorName(r))
+	if err != nil {
+		writeSecErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.store.AddLog(LogEntry{
+		Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("security finding %s → %s", key, st.Status),
+	})
+	writeJSON(w, http.StatusOK, st)
+}

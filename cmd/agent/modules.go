@@ -27,7 +27,13 @@ type moduleCall struct {
 }
 
 // runModule 解析封套并分派到对应内置模块，返回合并输出与退出码（0=成功）。
-func (a *Agent) runModule(payload string) ([]byte, int) {
+func (a *Agent) runModule(payload string) (out []byte, code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = []byte(fmt.Sprintf("模块执行异常(已隔离): %v", r))
+			code = 1
+		}
+	}()
 	var mc moduleCall
 	if err := json.Unmarshal([]byte(payload), &mc); err != nil {
 		return []byte("模块参数解析失败: " + err.Error()), 1
@@ -83,12 +89,20 @@ func (a *Agent) runModule(payload string) ([]byte, int) {
 		return moduleContainerAction(mc.Args)
 	case "container_logs":
 		return moduleContainerLogs(mc.Args)
+	case "container_exec":
+		return moduleContainerExec(mc.Args)
+	case "container_compose_ls":
+		return moduleComposeList(mc.Args)
+	case "container_compose":
+		return moduleComposeAction(mc.Args)
 	case "time_sync":
 		return moduleTimeSync()
 	case "users_logged":
 		return moduleUsersLogged()
 	case "security_listen":
 		return moduleSecurityListen()
+	case "host_security_scan":
+		return moduleHostSecurityScan(mc.Args)
 	case "auth_failures":
 		return moduleAuthFailures()
 	case "bigdata_jps":

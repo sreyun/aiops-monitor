@@ -116,26 +116,40 @@ let TERM_AUTH_VERIFIED = false;    // 当前会话是否已验证终端密码
 let TERM_AUTH_CHECKING = false;    // 是否正在执行认证流程
 let TERM_AUTH_PENDING = null;      // 待处理的终端打开请求 {id, name}
 
-function openTerminal(id, name) {
+function openTerminal(id, name, opts) {
+  opts = opts || {};
   // 多会话支持：同一 hostID 可创建多个标签页，每个标签页拥有独立的 WebSocket 连接。
-  // 如果已有该主机的标签页且处于 dock 收起状态，优先恢复而不是新建。
-  const dockedIdx = TERM_TABS.findIndex(t => t.id === id && TERM_DOCK_IDS.has(t.id));
-  if (dockedIdx >= 0) {
-    TERM_DOCK_IDS.delete(id);
-    const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
-    if (dockItem) dockItem.remove();
-    updateTermDock();
-    switchTermTab(dockedIdx);
-    $("termMask").classList.add("show");
-    requestAnimationFrame(() => requestAnimationFrame(termRefit));
-    return;
+  // 容器终端每次新建（不同 containerId）；宿主机终端可从 dock 恢复。
+  if (!opts.containerId) {
+    const dockedIdx = TERM_TABS.findIndex(t => t.id === id && !t.containerId && TERM_DOCK_IDS.has(t.id));
+    if (dockedIdx >= 0) {
+      TERM_DOCK_IDS.delete(id);
+      const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(id)}"]`);
+      if (dockItem) dockItem.remove();
+      updateTermDock();
+      switchTermTab(dockedIdx);
+      $("termMask").classList.add("show");
+      requestAnimationFrame(() => requestAnimationFrame(termRefit));
+      return;
+    }
   }
 
   // v5.3.0: 终端二次认证流程
   if (TERM_AUTH_CHECKING) return; // 避免重复触发
-  TERM_AUTH_PENDING = { id, name };
+  TERM_AUTH_PENDING = {
+    id, name,
+    containerId: opts.containerId || "",
+    containerName: opts.containerName || "",
+    shell: opts.shell || "sh",
+  };
   checkTerminalAccess();
 }
+
+window.openContainerTerminal = function (hostId, hostName, containerId, containerName, shell) {
+  openTerminal(hostId, hostName || hostId, {
+    containerId, containerName: containerName || containerId, shell: shell || "sh",
+  });
+};
 
 /* ---------- 终端右键菜单 ---------- */
 let TERM_CMENU_EL = null;
@@ -244,10 +258,16 @@ function showTermContextMenu(tab, e) {
 const TERM_PROTOCOL_KEY = "aiops_term_protocol_agreed";
 
 // 实际执行终端打开（原 openTerminal 后半部分逻辑）
-function doOpenTerminal(id, name) {
-  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id);
-  const tabName = sameHostTabs.length > 0 ? `${name} (${sameHostTabs.length + 1})` : name;
-  createTermTab(id, name, tabName);
+function doOpenTerminal(id, name, opts) {
+  opts = opts || {};
+  const sameHostTabs = TERM_TABS.filter(t => t.hostId === id && !!t.containerId === !!opts.containerId);
+  let tabName = name;
+  if (opts.containerId) {
+    tabName = (opts.containerName || opts.containerId.slice(0, 12)) + "@" + (name || id);
+  } else if (sameHostTabs.length > 0) {
+    tabName = `${name} (${sameHostTabs.length + 1})`;
+  }
+  createTermTab(id, name, tabName, opts);
 }
 
 // 终端访问权限检查：协议 → 密码状态 → 验证
@@ -328,10 +348,11 @@ function showTermVerify() {
 function proceedToTerminal() {
   TERM_AUTH_CHECKING = false;
   if (!TERM_AUTH_PENDING) return;
-  const { id, name, action } = TERM_AUTH_PENDING;
+  const pending = TERM_AUTH_PENDING;
   TERM_AUTH_PENDING = null;
+  const { id, name, action } = pending;
   if (action === "desktop") doOpenDesktop(id, name);
-  else doOpenTerminal(id, name);
+  else doOpenTerminal(id, name, pending);
 }
 
 // 取消终端认证流程
@@ -448,7 +469,8 @@ function toggleTermPwdVisibility(inputId, btnId) {
     : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
 }
 
-function createTermTab(id, name, tabName) {
+function createTermTab(id, name, tabName, opts) {
+  opts = opts || {};
   tabName = tabName || name;
   const screens = $("termScreens"), tabbar = $("termTabbar");
   const screen = document.createElement("pre");
@@ -475,7 +497,12 @@ function createTermTab(id, name, tabName) {
   input.setAttribute("wrap", "off");
   input.readOnly = false;
   screen.appendChild(input);
-  const tabObj = {id, hostId: id, name, tabName, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false};
+  const tabObj = {
+    id, hostId: id, name, tabName, ws: null, vt, screenEl: screen, tabEl: tab, inputEl: input, retry: 0, composing: false,
+    containerId: opts.containerId || "",
+    containerName: opts.containerName || "",
+    shell: opts.shell || "sh",
+  };
   TERM_TABS.push(tabObj);
   const idx = TERM_TABS.length - 1;
   tab.onclick = (e) => {
@@ -606,7 +633,14 @@ function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
   setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry})` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.id)}/terminal`);
+  let url = `${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.hostId || tab.id)}/terminal`;
+  if (tab.containerId) {
+    const q = new URLSearchParams();
+    if (tab.shell) q.set("shell", tab.shell);
+    if (tab.containerName) q.set("name", tab.containerName);
+    url = `${proto}//${location.host}/api/v1/containers/${encodeURIComponent(tab.hostId || tab.id)}/${encodeURIComponent(tab.containerId)}/terminal?${q}`;
+  }
+  const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
   const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };

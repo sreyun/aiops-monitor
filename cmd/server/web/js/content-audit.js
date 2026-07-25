@@ -26,9 +26,16 @@ function renderContentAuditPanel() {
   if (caDataHosts === null) {
     container.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
     fetch(`/api/v1/content-audit/hosts`, { credentials: "same-origin" })
-      .then(r => r.json())
-      .then(d => { caDataHosts = d.hosts || []; renderContentAuditPanel(); })
-      .catch(() => { caDataHosts = []; renderContentAuditPanel(); });
+      .then(async r => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        caDataHosts = d.hosts || [];
+        renderContentAuditPanel();
+      })
+      .catch(e => {
+        caDataHosts = [];
+        container.innerHTML = caNoticeHTML() + `<div class="empty-state">${esc(String(e.message || e))}</div>`;
+      });
     return;
   }
 
@@ -53,6 +60,7 @@ function renderContentAuditPanel() {
   html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索关键字，或 provider:/model:/principal:/risk:")}">`;
   html += `<label class="nf-chk" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="caSensOnly"${caSensOnly ? " checked" : ""}> ${esc(I18N.t("ca.sens_only") || "只看敏感")}</label>`;
   html += `<button class="nf-btn" data-caact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
+  html += `<button class="nf-btn" data-caact="export">${esc(I18N.t("common.export") || "导出")}</button>`;
   html += `<button class="nf-btn nf-ai-btn" data-caact="ai" title="${esc(I18N.t("ca.ai_hint") || "AI 研判：是否有敏感数据外泄到大模型")}">🤖 ${esc(I18N.t("ai.analyze") || "AI 分析")}</button>`;
   html += `</div>`;
   html += `<div id="caBody"></div>`;
@@ -107,9 +115,13 @@ window.loadContentAudit = function() {
   const filter = rawFilter ? (advanced ? rawFilter : ("kw:" + rawFilter)) : "";
   caPage = 1; // 新数据回到第一页
   fetch(`/api/v1/content-audit?host=${encodeURIComponent(host)}&filter=${encodeURIComponent(filter)}&limit=500`, { credentials: "same-origin" })
-    .then(r => r.json())
-    .then(d => { caLastEvents = d.events || []; renderCA(body, caLastEvents); })
-    .catch(() => { if (body) body.innerHTML = `<div class="empty-state">${I18N.t("netflow.load_error") || "加载失败"}</div>`; });
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      caLastEvents = d.events || [];
+      renderCA(body, caLastEvents);
+    })
+    .catch(e => { if (body) body.innerHTML = `<div class="empty-state">${esc(String(e.message || I18N.t("netflow.load_error") || "加载失败"))}</div>`; });
 };
 
 function renderCA(container, events) {
@@ -271,6 +283,7 @@ function caTime(s) {
 }
 
 // caToText 把当前主机的内容审计记录汇成纯文本，供 AI 研判"是否有敏感数据外泄到大模型"。
+// 非管理员默认只送元数据/脱敏摘要，避免完整 prompt 进入 LLM。
 function caToText() {
   const evs = caLastEvents || [];
   if (!evs.length) return "（当前主机暂无内容审计记录）";
@@ -279,13 +292,51 @@ function caToText() {
   const fromAPI = (caDataHosts || []).find(h => h.host_id === caHost);
   const hn = (fromAPI && fromAPI.hostname) || (nameMap[caHost] || {}).hostname || caHost || "?";
   const sensN = evs.filter(e => e.sensitive).length;
-  const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中敏感命中 ${sensN} 条）。记录可能采用仅元数据、端侧脱敏或完整正文策略：`];
+  const fullBody = typeof isAdmin === "function" && isAdmin();
+  const lines = [`主机：${hn}　内容审计记录 ${evs.length} 条（其中敏感命中 ${sensN} 条）。${fullBody ? "含正文摘要。" : "正文已脱敏（仅元数据）。"}`];
   evs.slice(0, 30).forEach((e, i) => {
     lines.push(`\n[${i + 1}] ${e.src_ip || "?"} → ${e.host || e.dst_ip || "?"}${e.path || ""} ${e.method || ""} ${e.status || ""}${e.sensitive ? `　⚠敏感命中: ${e.sensitive}` : ""}`);
-    if (e.body) lines.push(`  请求: ${String(e.body).slice(0, 800)}`);
-    if (e.resp_body) lines.push(`  响应: ${String(e.resp_body).slice(0, 800)}`);
+    if (fullBody) {
+      if (e.body) lines.push(`  请求: ${String(e.body).slice(0, 400)}`);
+      if (e.resp_body) lines.push(`  响应: ${String(e.resp_body).slice(0, 400)}`);
+    } else {
+      lines.push(`  规模: req ${e.req_bytes || 0}B / resp ${e.resp_bytes || 0}B · mode=${e.body_mode || "?"} · backend=${e.capture_backend || "?"}`);
+    }
   });
   return lines.join("\n").slice(0, 14000);
+}
+
+async function caExport() {
+  const evs = caFilteredEvents();
+  if (!evs.length) { if (typeof toast === "function") toast(I18N.t("ca.empty", "暂无数据"), "err"); return; }
+  if (typeof exportModel !== "function") { toast("导出组件未就绪", "err"); return; }
+  const fullBody = typeof isAdmin === "function" && isAdmin();
+  const rows = evs.slice(0, 500).map(e => [
+    caTime(e.observed_at),
+    e.sensitive || "",
+    e.src_ip || "",
+    (e.host || e.dst_ip || "") + (e.dst_port ? ":" + e.dst_port : ""),
+    e.method || "",
+    e.status || "",
+    e.path || "",
+    fullBody ? String(e.body || "").slice(0, 500) : `(${e.req_bytes || 0}B)`,
+    fullBody ? String(e.resp_body || "").slice(0, 500) : `(${e.resp_bytes || 0}B)`,
+  ]);
+  const model = {
+    title: I18N.t("ca.export_title", "内容审计导出"),
+    subtitle: caHost + " · " + rows.length + " 条",
+    sections: [{
+      title: "事件",
+      columns: ["时间", "敏感", "源IP", "目的", "方法", "状态", "路径", "请求", "响应"],
+      rows,
+    }],
+  };
+  try {
+    await exportModel(model, "excel", "内容审计_" + (caHost || "host"));
+    if (typeof toast === "function") toast(I18N.t("toast.exported", "已导出"), "ok");
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  }
 }
 
 // caOpenAI 打开 AI 面板研判内容审计；仅人工采纳/反馈后的结果进入学习闭环。
@@ -302,6 +353,7 @@ safeAddEventListener("contentAuditPanel", "click", e => {
     // 刷新：连「有数据的主机」列表一起重拉（否则新产生审计的主机不会出现在下拉里）。
     if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
     else if (b.dataset.caact === "ai") caOpenAI();
+    else if (b.dataset.caact === "export") caExport();
     return;
   }
   // 分页控件不打开详情

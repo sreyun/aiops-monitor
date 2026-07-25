@@ -23,9 +23,17 @@ func TestSubstitutePlaybookVars(t *testing.T) {
 }
 
 func TestEvalPlaybookWhen(t *testing.T) {
-	vars := map[string]string{"os": "linux", "flag": "false", "empty": ""}
-	truthy := []string{"{{os}} == linux", "{{os}} != windows", "yes", "1", "anything"}
-	falsy := []string{"{{os}} == windows", "{{os}} != linux", "{{flag}}", "{{empty}}", "false", "0", "no", "off", ""}
+	vars := map[string]string{
+		"os": "linux", "flag": "false", "empty": "", "category": "prod-db", "n": "3",
+	}
+	truthy := []string{
+		"{{os}} == linux", "{{os}} != windows", "yes", "1", "anything",
+		"{{category}} contains db", "{{n}} >= 2", "{{n}} > 1", "{{n}} <= 3",
+	}
+	falsy := []string{
+		"{{os}} == windows", "{{os}} != linux", "{{flag}}", "{{empty}}",
+		"false", "0", "no", "off", "", "{{n}} < 1", "{{category}} contains cache",
+	}
 	for _, w := range truthy {
 		if !evalPlaybookWhen(w, vars) {
 			t.Errorf("evalPlaybookWhen(%q) = false, want true", w)
@@ -35,6 +43,13 @@ func TestEvalPlaybookWhen(t *testing.T) {
 		if evalPlaybookWhen(w, vars) {
 			t.Errorf("evalPlaybookWhen(%q) = true, want false", w)
 		}
+	}
+	mac := map[string]string{"os": "darwin"}
+	if !evalPlaybookWhen("{{os}} == macos", mac) {
+		t.Error("darwin should match macos")
+	}
+	if !evalPlaybookWhen("{{os}} == darwin", map[string]string{"os": "macos"}) {
+		t.Error("macos should match darwin")
 	}
 }
 
