@@ -476,7 +476,7 @@ window.DICT_EN = {
   "desktop.view_only": "View-only · input unavailable (Windows: Agent service/desktop worker; Linux: xdotool/ydotool; macOS: Accessibility / cliclick)",
   "desktop.error": "Desktop session error",
   "desktop.warn": "Desktop notice",
-  "desktop.solid_frame_hint": "Connected but the frame is a solid color: the host may be logged out/locked, or the Agent is not running as a Windows service with a desktop worker (Application Control may have blocked install). Log in via RDP, unlock the desktop, and reinstall the Agent as a service.",
+  "desktop.solid_frame_hint": "Connected but the frame is a solid color: the host may be logged out/locked, or the Agent is not running as a Windows service with a desktop worker (Application Control may have blocked install). On the lock screen use Ctrl+Alt+Del then Unlock; if still solid, upgrade the Agent and reinstall it as a service.",
   "desktop.jpeg_decode_failed": "Received JPEG frames that could not be decoded. Refresh the page and ensure both server and agent are up to date.",
   "desktop.not_connected": "Desktop not connected",
   "desktop.disconnect": "Disconnect",

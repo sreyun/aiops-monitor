@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestDeskIsSecureName(t *testing.T) {
+	if !deskIsSecureName("Winlogon") || !deskIsSecureName("winlogon") || !deskIsSecureName("ScreenSaver") {
+		t.Fatal("expected secure desktop names")
+	}
+	if deskIsSecureName("Default") || deskIsSecureName("") {
+		t.Fatal("Default/empty must not be secure")
+	}
+	hint := deskLockHintForDesktop("Winlogon")
+	if hint == "" || indexOf(hint, "Ctrl+Alt+Del") < 0 {
+		t.Fatalf("lock hint missing CAD guidance: %q", hint)
+	}
+}
+
 func TestChordVKSequence(t *testing.T) {
 	cases := map[string][]int{
 		"win_l":           {0x5B, 0x4C},

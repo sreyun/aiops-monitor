@@ -1451,6 +1451,10 @@ svg.sparkline{width:100%; height:46px; display:block}
 .desk-status.err{color:var(--crit-txt)}
 .desk-lock-tools{display:flex; align-items:center; gap:4px; flex-wrap:wrap}
 .desk-lock-hint{font-size:11px; color:var(--muted); padding:4px 12px 0; line-height:1.4}
+.desk-lock-hint.secure{
+  color:var(--warn, #c9a227); background:rgba(201,162,39,.08);
+  border-bottom:1px solid rgba(201,162,39,.25); padding:6px 12px;
+}
 .desk-unlock-panel{
   margin:6px 12px 0; padding:10px 12px; border:1px solid var(--border);
   border-radius:8px; background:var(--panel-2, var(--bg)); max-width:420px;

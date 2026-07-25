@@ -3,10 +3,10 @@ let DESK_WS = null;
 let DESK_HOST = null;
 let DESK_META = {
   w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false,
-  os: "", desktop: "", inputDesktopOk: true, lockHint: "",
+  os: "", desktop: "", secureDesktop: false, inputDesktopOk: true, lockHint: "",
   features: { cad: false, type_text: false, chords: false, wake: false, input: true }
 };
-let DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
+let DESK_QUALITY = { scale: 1.0, quality: 88, fps: 15, codec: "jpeg", monitor: 0 };
 let DESK_DOWNLOAD = null;
 let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video, gen }
 let DESK_GOT_FRAME = false;
@@ -39,10 +39,10 @@ async function doOpenDesktop(id, name) {
   DESK_NO_RETRY = false;
   DESK_META = {
     w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false,
-    os: "", desktop: "", inputDesktopOk: true, lockHint: "",
+    os: "", desktop: "", secureDesktop: false, inputDesktopOk: true, lockHint: "",
     features: { cad: false, type_text: false, chords: false, wake: false, input: true }
   };
-  DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
+  DESK_QUALITY = { scale: 1.0, quality: 88, fps: 15, codec: "jpeg", monitor: 0 };
   DESK_HOST = { id, name };
   renderDesktopShell(id, name);
   try {
@@ -329,9 +329,11 @@ function setDesktopStatus(msg, isErr) {
 }
 
 function qualityPreset(name) {
-  if (name === "fast") return { scale: 0.4, quality: 45, fps: 12 };
-  if (name === "clear") return { scale: 1.0, quality: 88, fps: 8 };
-  return { scale: 0.65, quality: 70, fps: 8 };
+  // FPS tuned for interactive remote ops (mouse/keyboard). Full-res JPEG at 15fps
+  // is fine on LAN; use「流畅」when WAN/bandwidth is tight.
+  if (name === "fast") return { scale: 0.45, quality: 50, fps: 20 };
+  if (name === "clear") return { scale: 1.0, quality: 88, fps: 15 };
+  return { scale: 0.7, quality: 72, fps: 12 };
 }
 
 function sendDeskQuality() {
@@ -416,8 +418,12 @@ function connectDesktopWS(id, name) {
         fitDeskSurface(canvas);
         // Client-side solid-frame guard: if paint succeeded but pixels are a
         // flat fill, keep/re-show the diagnostic placeholder instead of a
-        // silent dark-blue "connected" viewport.
-        if (deskCanvasLooksUniform(ctx, w, h)) {
+        // silent dark-blue "connected" viewport. Winlogon/lock UI is often
+        // near-dark — never cover real frames with the solid-color overlay.
+        if (deskOnSecureDesktop()) {
+          hideDeskPlaceholder();
+          setDeskDot("on");
+        } else if (deskCanvasLooksUniform(ctx, w, h)) {
           setDeskPlaceholder(I18N.t("desktop.warn"), I18N.t("desktop.solid_frame_hint"));
           setDeskDot("warn");
         } else {
@@ -706,21 +712,38 @@ function showDeskCanvas(useCanvas) {
   }
 }
 
-// Sparse sample: true when the painted frame is essentially one solid color
-// (disconnected console / wrong desktop / empty Session-0 capture).
+function deskOnSecureDesktop() {
+  if (DESK_META && DESK_META.secureDesktop) return true;
+  const d = String((DESK_META && DESK_META.desktop) || "").toLowerCase();
+  return d === "winlogon" || d.indexOf("winlogon") === 0 || d === "screensaver";
+}
+
+// Sparse multi-region sample: true when the painted frame is essentially one
+// solid color (disconnected console / wrong desktop / empty Session-0 capture).
+// Must NOT only sample the top-left — Winlogon lock chrome often lives elsewhere.
 function deskCanvasLooksUniform(ctx, w, h) {
   try {
-    const sw = Math.min(48, w);
-    const sh = Math.min(48, h);
-    const data = ctx.getImageData(0, 0, sw, sh).data;
+    if (w < 8 || h < 8) return false;
+    const rw = Math.min(40, w);
+    const rh = Math.min(40, h);
+    const origins = [
+      [0, 0],
+      [Math.max(0, w - rw), 0],
+      [0, Math.max(0, h - rh)],
+      [Math.max(0, w - rw), Math.max(0, h - rh)],
+      [Math.max(0, Math.floor((w - rw) / 2)), Math.max(0, Math.floor((h - rh) / 2))]
+    ];
     let minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0, n = 0;
-    for (let i = 0; i < data.length; i += 16) { // every 4th pixel
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      if (r < minR) minR = r; if (g < minG) minG = g; if (b < minB) minB = b;
-      if (r > maxR) maxR = r; if (g > maxG) maxG = g; if (b > maxB) maxB = b;
-      n++;
+    for (const [ox, oy] of origins) {
+      const data = ctx.getImageData(ox, oy, rw, rh).data;
+      for (let i = 0; i < data.length; i += 32) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if (r < minR) minR = r; if (g < minG) minG = g; if (b < minB) minB = b;
+        if (r > maxR) maxR = r; if (g > maxG) maxG = g; if (b > maxB) maxB = b;
+        n++;
+      }
     }
-    return n > 8 && (maxR - minR) <= 8 && (maxG - minG) <= 8 && (maxB - minB) <= 8;
+    return n > 8 && (maxR - minR) <= 10 && (maxG - minG) <= 10 && (maxB - minB) <= 10;
   } catch (e) {
     return false;
   }
@@ -1037,6 +1060,8 @@ function applyDeskInputMeta(meta) {
   if (!meta || typeof meta !== "object") return;
   if (meta.os) DESK_META.os = meta.os;
   if (meta.desktop != null) DESK_META.desktop = meta.desktop || "";
+  if (meta.secure_desktop != null) DESK_META.secureDesktop = !!meta.secure_desktop;
+  else if (meta.desktop != null) DESK_META.secureDesktop = deskOnSecureDesktop();
   if (meta.input_desktop_ok != null) DESK_META.inputDesktopOk = !!meta.input_desktop_ok;
   if (meta.lock_hint) DESK_META.lockHint = meta.lock_hint;
   if (meta.features && typeof meta.features === "object") {
@@ -1046,6 +1071,7 @@ function applyDeskInputMeta(meta) {
   if (hint && DESK_META.lockHint) {
     hint.hidden = false;
     hint.textContent = DESK_META.lockHint;
+    hint.classList.toggle("secure", deskOnSecureDesktop());
   }
   const cadBtn = $("deskCadBtn");
   if (cadBtn) {

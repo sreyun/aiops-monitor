@@ -86,13 +86,13 @@ type deskInput interface {
 type deskQuality struct {
 	Scale   float64 `json:"scale"`   // 0.25–1.0
 	Quality int     `json:"quality"` // JPEG 1–100
-	FPS     int     `json:"fps"`     // 1–15
+	FPS     int     `json:"fps"`     // 1–24
 	Codec   string  `json:"codec"`   // jpeg | h264
 	Monitor int     `json:"monitor"` // display id
 }
 
 func defaultDeskQuality() deskQuality {
-	return deskQuality{Scale: 1.0, Quality: 88, FPS: 8, Codec: "jpeg"}
+	return deskQuality{Scale: 1.0, Quality: 88, FPS: 15, Codec: "jpeg"}
 }
 
 func (a *Agent) runDesktopChannelFor(t *serverTarget) {
@@ -367,6 +367,7 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 		blankFrames := 0
 		blankWarned := false
 		const blankWarnAt = 40
+		var deskMetaAt time.Time
 		for !stop.Load() {
 			qMu.Lock()
 			cq := q
@@ -375,8 +376,8 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 			if fps < 1 {
 				fps = 1
 			}
-			if fps > 15 {
-				fps = 15
+			if fps > 24 {
+				fps = 24
 			}
 			interval := time.Second / time.Duration(fps)
 			codec := cq.Codec
@@ -478,8 +479,25 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				js, _ := json.Marshal(map[string]any{"w": sw, "h": sh, "monitors": cap.Monitors()})
 				_ = writeTx(deskTxFrame('S', js))
 			}
+			// Push desktop name so UI can suppress false "solid frame" on Winlogon.
+			if deskName := deskCurrentDesktop(cap); deskName != "" && time.Since(deskMetaAt) > 2*time.Second {
+				deskMetaAt = time.Now()
+				js, _ := json.Marshal(map[string]any{
+					"desktop": deskName, "input_desktop_ok": true,
+					"secure_desktop": deskIsSecureName(deskName),
+					"lock_hint":      deskLockHintForDesktop(deskName),
+				})
+				_ = writeTx(deskTxFrame('S', js))
+			}
 			if !blankWarned {
-				if isLikelyUniform(img, false) {
+				// Dark Winlogon / lock UI is often near-uniform; don't scare the operator
+				// when we are correctly attached to the secure desktop — UI shows lock_hint.
+				deskName := deskCurrentDesktop(cap)
+				score := deskContentScore(img)
+				uniform := isLikelyUniform(img, false)
+				if deskIsSecureName(deskName) {
+					blankFrames = 0
+				} else if uniform && score < 8 {
 					if blankFrames++; blankFrames >= blankWarnAt {
 						blankWarned = true
 						msg, _ := json.Marshal(map[string]string{
@@ -597,6 +615,70 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 // Samples a sparse grid so the check is cheap.
 func isLikelyBlank(img image.Image) bool {
 	return isLikelyUniform(img, true)
+}
+
+// deskContentScore ranks how much "real UI" a frame has (0–100+). Pure black /
+// flat fills score near 0; lock screens with faint CAD chrome still score > 0.
+func deskContentScore(img image.Image) int {
+	if img == nil {
+		return 0
+	}
+	b := img.Bounds()
+	if b.Dx() < 8 || b.Dy() < 8 {
+		return 0
+	}
+	const steps = 32
+	sx := b.Dx() / steps
+	sy := b.Dy() / steps
+	if sx < 1 {
+		sx = 1
+	}
+	if sy < 1 {
+		sy = 1
+	}
+	var n, nonBlack, bright, edges int
+	var prevR, prevG, prevB int = -1, -1, -1
+	var minL, maxL = 255, 0
+	for y := b.Min.Y; y < b.Max.Y; y += sy {
+		for x := b.Min.X; x < b.Max.X; x += sx {
+			r16, g16, b16, _ := img.At(x, y).RGBA()
+			r, g, bl := int(r16>>8), int(g16>>8), int(b16>>8)
+			lum := (r*3 + g*6 + bl) / 10
+			if lum < minL {
+				minL = lum
+			}
+			if lum > maxL {
+				maxL = lum
+			}
+			if lum > 12 {
+				nonBlack++
+			}
+			if lum > 40 {
+				bright++
+			}
+			if prevR >= 0 {
+				d := absInt(r-prevR) + absInt(g-prevG) + absInt(bl-prevB)
+				if d > 28 {
+					edges++
+				}
+			}
+			prevR, prevG, prevB = r, g, bl
+			n++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	// Weighted: edges (UI chrome) matter most; luminance range catches dark lock UI.
+	score := edges*4 + bright*2 + nonBlack + (maxL - minL)
+	return score
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // isLikelyUniform reports near-solid frames (any color). BitBlt of a disconnected
