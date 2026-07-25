@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -112,11 +113,17 @@ func TestDecodeAIDashSpecGrafanaAliases(t *testing.T) {
 	if cpu.Targets[0].Legend != "{{instance}}" {
 		t.Fatalf("legendFormat 别名应映射为 legend，实为 %q", cpu.Targets[0].Legend)
 	}
-	if cpu.Grid.W != 12 {
-		t.Fatalf("gridPos.w 应映射为宽度 12，实为 %d", cpu.Grid.W)
+	// sanitize 会按分区重排并铺满 24 栏：单独 timeseries 行宽为 24（不再保留 gridPos 原值）。
+	// 此处锁定「别名可解析且面板非空」；宽度由 layoutAIDashPanels 决定。
+	if cpu.Grid.W < 8 || cpu.Grid.W > 24 {
+		t.Fatalf("CPU 面板宽度异常：%d", cpu.Grid.W)
 	}
 	if by["Mem"].Type != "stat" {
 		t.Fatalf("Mem 应为 stat，实为 %q", by["Mem"].Type)
+	}
+	// 仍验证 gridPos 在装箱前被正确读入：仅含 gridPos、无顶层 w 时不应被当成 0 宽丢弃。
+	if len(spec.Panels) < 1 || spec.Panels[0].GridPos.W != 12 {
+		t.Fatalf("decode 后 gridPos.w 应为 12，实为 %+v", spec.Panels)
 	}
 }
 
@@ -181,6 +188,37 @@ func TestSanitizeAIDashNormalizesChineseVarAndHealsExpr(t *testing.T) {
 	}
 }
 
+func TestAIPanelHeightStatFitsContent(t *testing.T) {
+	// h=4 会被面板头+大数字+sparkline 裁切；生成路径必须抬到 ≥6
+	if got := aiPanelHeight("stat", 0); got != 6 {
+		t.Fatalf("缺省 stat 高度应为 6，实为 %d", got)
+	}
+	if got := aiPanelHeight("stat", 4); got != 6 {
+		t.Fatalf("过矮 stat 应抬到 6，实为 %d", got)
+	}
+	if got := aiPanelHeight("stat", 6); got != 6 {
+		t.Fatalf("合法 h=6 应保留，实为 %d", got)
+	}
+	if got := aiPanelHeight("stat", 10); got != 6 {
+		t.Fatalf("过高 stat 应钳回 6，实为 %d", got)
+	}
+	spec := aiDashSpec{Name: "kpi", Panels: []aiDashPanel{
+		{Title: "A", Type: "stat", W: 6, H: 4, Targets: []aiDashTarget{{Expr: "aiops_cpu_percent"}}},
+		{Title: "B", Type: "stat", W: 6, H: 4, Targets: []aiDashTarget{{Expr: "aiops_mem_percent"}}},
+		{Title: "C", Type: "stat", W: 6, H: 3, Targets: []aiDashTarget{{Expr: "aiops_disk_percent"}}},
+		{Title: "D", Type: "stat", W: 6, H: 8, Targets: []aiDashTarget{{Expr: "aiops_load1"}}},
+	}}
+	d, _ := sanitizeAIDash(spec, "", "ai")
+	if len(d.Panels) != 4 {
+		t.Fatalf("panels=%d", len(d.Panels))
+	}
+	for _, p := range d.Panels {
+		if p.Grid.H != 6 {
+			t.Fatalf("KPI「%s」高度应为 6（完整显示），实为 %d", p.Title, p.Grid.H)
+		}
+	}
+}
+
 func TestHealAIDashExpr(t *testing.T) {
 	if got := healAIDashExpr(`rate(aiops_cpu_percent[5m])`); got != "aiops_cpu_percent" {
 		t.Fatalf("gauge rate 应剥离: %q", got)
@@ -229,6 +267,39 @@ func TestThinkingModelOrGateway(t *testing.T) {
 	}
 	if thinkingModelOrGateway(AIConfig{Model: "gpt-4o-mini", Endpoint: "https://api.openai.com/v1"}) {
 		t.Fatal("gpt-4o-mini 不应注入 enable_thinking（避免 OpenAI 400）")
+	}
+}
+
+func TestApplyThinkingKnobsNeverSendsFalse(t *testing.T) {
+	cfg := AIConfig{Model: "qwen3-max", Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"}
+	body := map[string]any{}
+	applyThinkingKnobs(body, cfg, aiProvOpenAI, aiCallOpts{DisableThinking: true})
+	if _, ok := body["enable_thinking"]; ok {
+		t.Fatalf("DisableThinking 不得写入 enable_thinking（部分网关仅允许 true）：%v", body)
+	}
+	body2 := map[string]any{}
+	applyThinkingKnobs(body2, cfg, aiProvOpenAI, aiCallOpts{EnableThinking: true, ThinkingBudget: 512})
+	if body2["enable_thinking"] != true {
+		t.Fatalf("EnableThinking 应写入 true，got %v", body2["enable_thinking"])
+	}
+	if body2["thinking_budget"] != 512 {
+		t.Fatalf("应写入 thinking_budget=512，got %v", body2["thinking_budget"])
+	}
+	// 未显式预算时也应有安全默认，防止思维链拖死生成
+	body3 := map[string]any{}
+	applyThinkingKnobs(body3, cfg, aiProvOpenAI, aiCallOpts{EnableThinking: true})
+	if body3["thinking_budget"] == nil || body3["thinking_budget"].(int) <= 0 {
+		t.Fatalf("EnableThinking 缺省应带 thinking_budget，got %v", body3["thinking_budget"])
+	}
+}
+
+func TestThinkingParamForcedTrueError(t *testing.T) {
+	err := fmt.Errorf(`HTTP 400：请求参数错误 — {"error":{"message":"The value of the enable_thinking parameter is restricted to True."}}`)
+	if !thinkingParamForcedTrueError(err) {
+		t.Fatal("应识别 enable_thinking restricted to True")
+	}
+	if thinkingParamForcedTrueError(fmt.Errorf("timeout")) {
+		t.Fatal("无关错误不应匹配")
 	}
 }
 

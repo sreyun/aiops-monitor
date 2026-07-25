@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
-	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -13,6 +11,15 @@ import (
 var (
 	procEnumDisplayMonitors = modUser32.NewProc("EnumDisplayMonitors")
 	procGetMonitorInfoW     = modUser32.NewProc("GetMonitorInfoW")
+	procOpenClipboard       = modUser32.NewProc("OpenClipboard")
+	procCloseClipboard      = modUser32.NewProc("CloseClipboard")
+	procEmptyClipboard      = modUser32.NewProc("EmptyClipboard")
+	procGetClipboardData    = modUser32.NewProc("GetClipboardData")
+	procSetClipboardData    = modUser32.NewProc("SetClipboardData")
+	procIsClipboardFormatAvailable = modUser32.NewProc("IsClipboardFormatAvailable")
+	procGlobalAlloc         = modkernel32.NewProc("GlobalAlloc")
+	procGlobalLock          = modkernel32.NewProc("GlobalLock")
+	procGlobalUnlock        = modkernel32.NewProc("GlobalUnlock")
 )
 
 type rectWin struct {
@@ -72,16 +79,66 @@ func (c *winCapture) Origin() (int, int) { return c.monX, c.monY }
 
 func deskClipboardSupported() bool { return true }
 
+const (
+	cfUnicodeText = 13
+	gmemMoveable  = 0x0002
+)
+
+// deskClipboardGet uses Win32 OpenClipboard (works on Server 2012 without PS5 Get-Clipboard).
 func deskClipboardGet() (string, error) {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
-	if err != nil {
-		return "", err
+	r, _, err := procOpenClipboard.Call(0)
+	if r == 0 {
+		return "", fmt.Errorf("OpenClipboard: %v", err)
 	}
-	return strings.TrimRight(string(out), "\r\n"), nil
+	defer procCloseClipboard.Call()
+	if avail, _, _ := procIsClipboardFormatAvailable.Call(cfUnicodeText); avail == 0 {
+		return "", nil
+	}
+	h, _, err := procGetClipboardData.Call(cfUnicodeText)
+	if h == 0 {
+		return "", fmt.Errorf("GetClipboardData: %v", err)
+	}
+	ptr, _, err := procGlobalLock.Call(h)
+	if ptr == 0 {
+		return "", fmt.Errorf("GlobalLock: %v", err)
+	}
+	defer procGlobalUnlock.Call(h)
+	// UTF-16 NUL-terminated
+	u16 := (*[1 << 20]uint16)(unsafe.Pointer(ptr))
+	n := 0
+	for n < len(u16) && u16[n] != 0 {
+		n++
+	}
+	return syscall.UTF16ToString(u16[:n]), nil
 }
 
 func deskClipboardSet(text string) error {
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input")
-	cmd.Stdin = strings.NewReader(text)
-	return cmd.Run()
+	u16, err := syscall.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	bytes := len(u16) * 2
+	h, _, err := procGlobalAlloc.Call(gmemMoveable, uintptr(bytes))
+	if h == 0 {
+		return fmt.Errorf("GlobalAlloc: %v", err)
+	}
+	ptr, _, err := procGlobalLock.Call(h)
+	if ptr == 0 {
+		return fmt.Errorf("GlobalLock: %v", err)
+	}
+	dst := (*[1 << 20]uint16)(unsafe.Pointer(ptr))
+	copy(dst[:len(u16)], u16)
+	procGlobalUnlock.Call(h)
+
+	r, _, err := procOpenClipboard.Call(0)
+	if r == 0 {
+		return fmt.Errorf("OpenClipboard: %v", err)
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	if r, _, err = procSetClipboardData.Call(cfUnicodeText, h); r == 0 {
+		return fmt.Errorf("SetClipboardData: %v", err)
+	}
+	// Ownership of h transferred to the system on success — do not free.
+	return nil
 }

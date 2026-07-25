@@ -152,3 +152,28 @@ func TestPlaybookUpsertNormalizesExecutionControls(t *testing.T) {
 		t.Fatalf("retry defaults not normalized: %+v", pb.Steps[0])
 	}
 }
+
+func TestValidatePlaybookModuleHostInspect(t *testing.T) {
+	if err := validatePlaybookModule(PlaybookStep{Module: "host_inspect"}); err != nil {
+		t.Fatalf("host_inspect should be allowed: %v", err)
+	}
+	if err := validatePlaybookModule(PlaybookStep{
+		Module: "host_inspect",
+		Args:   map[string]string{"profile": "deep"},
+	}); err != nil {
+		t.Fatalf("profile=deep ok: %v", err)
+	}
+	if err := validatePlaybookModule(PlaybookStep{
+		Module: "host_inspect",
+		Args:   map[string]string{"profile": "turbo"},
+	}); err == nil {
+		t.Fatal("invalid profile must fail")
+	}
+	if err := validatePlaybookCommands([]PlaybookStep{{
+		Name: "深度主机巡检", Module: "host_inspect", Target: "all",
+		TimeoutSec: 180, IgnoreExit: true,
+		Args: map[string]string{"profile": "standard"},
+	}}, CmdPolicyConfig{}); err != nil {
+		t.Fatalf("deep inspect template step: %v", err)
+	}
+}

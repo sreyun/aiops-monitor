@@ -150,15 +150,19 @@ func (m *remediationManager) OnAlert(a Alert, incidentID int64) {
 
 func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID int64) {
 	now := time.Now().Unix()
-	// Freeze window: force approval or skip auto-run.
+	// Freeze window: force approval (never auto-run during freeze).
+	freezeReason := ""
 	if m.cfg != nil {
 		cat := ""
 		if m.category != nil {
 			cat = m.category(a.HostID)
 		}
-		if w, ok := m.cfg.activeFreezeWindow(a.HostID, cat, now); ok && !r.RequireApproval {
+		if w, ok := m.cfg.activeFreezeWindow(a.HostID, cat, now); ok {
 			r.RequireApproval = true
-			_ = w
+			freezeReason = "变更冻结"
+			if name := strings.TrimSpace(w.Name); name != "" {
+				freezeReason = "变更冻结：" + name
+			}
 		}
 	}
 	pb, okPB := m.getPlaybookSafe(r.PlaybookID)
@@ -205,17 +209,24 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 		return
 	}
 	if r.RequireApproval {
-		run := m.recordLocked(r, a, incidentID, "pending_approval", "")
+		reason := freezeReason
+		run := m.recordLocked(r, a, incidentID, "pending_approval", reason)
 		run.PlaybookName = pbName
 		m.setPlaybookNameLocked(run.ID, pbName)
 		m.mu.Unlock()
 		if m.onIncident != nil && incidentID > 0 {
-			m.onIncident(incidentID, "remediation", "auto",
-				Tz("remediation.evt_pending", r.Name, pbName))
+			msg := Tz("remediation.evt_pending", r.Name, pbName)
+			if freezeReason != "" {
+				msg = freezeReason + " · " + msg
+			}
+			m.onIncident(incidentID, "remediation", "auto", msg)
 		}
 		if m.onNotify != nil {
-			m.onNotify("warning", "自动修复待审批："+r.Name,
-				"修复剧本「"+pbName+"」已排队，等待人工审批，请在 SRE · 自动修复 页处理。", incidentID)
+			tip := "修复剧本「" + pbName + "」已排队，等待人工审批，请在 SRE · 自动修复 页处理。"
+			if freezeReason != "" {
+				tip = freezeReason + "。" + tip
+			}
+			m.onNotify("warning", "自动修复待审批："+r.Name, tip, incidentID)
 		}
 		return
 	}

@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-# 本地开发构建（跳过 dist 交叉编译，加速构建）
+# 本地开发构建：server 仅编目标平台；agent 仍交叉编译全平台到 /dist，
+# 保证 macOS / Windows / Linux 一键安装（/dl/）在开发镜像里也能用。
 ARG BASE_REGISTRY=swr.cn-east-3.myhuaweicloud.com/sreyun/docker.io
 ARG GO_VERSION=1.22
 
@@ -15,22 +16,29 @@ COPY cmd/ cmd/
 # 将配置示例复制到 cmd/agent/ 以供 go:embed 内嵌（.gitignore 排除，构建时复制）
 COPY config.example.yaml cmd/agent/config_example.yaml
 
-# 仅构建当前平台 server + agent 二进制（跳过 dist 交叉编译）
+# Server：仅当前镜像目标平台
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
     go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/aiops-server ./cmd/server
+
+# Agent：运行时容器内用的本机二进制 + /dl 一键安装所需全平台产物
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=vendor \
-    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/aiops-agent  ./cmd/agent
+    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /out/aiops-agent ./cmd/agent
+RUN set -e; LD="-s -w -X main.appVersion=${VERSION}"; \
+    GOOS=linux   GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-linux-amd64  ./cmd/agent; \
+    GOOS=linux   GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-linux-arm64  ./cmd/agent; \
+    GOOS=darwin  GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-darwin-amd64 ./cmd/agent; \
+    GOOS=darwin  GOARCH=arm64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent-darwin-arm64 ./cmd/agent; \
+    GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor go build -ldflags="$LD" -o /out/dist/aiops-agent.exe          ./cmd/agent
 
 # ---- Server image ----
 FROM ${BASE_REGISTRY}/alpine:3.20 AS server
 RUN apk add --no-cache ca-certificates tzdata zip
 WORKDIR /app
 COPY --from=builder /out/aiops-server /app/aiops-server
+COPY --from=builder /out/dist/ /app/dist/
+COPY config.example.yaml /app/dist/config.example.yaml
 COPY plugins/ /tmp/plugins/
 RUN mkdir -p /app/dist && cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
-# Agent 二进制 + 配置示例放入 dist，供 /dl/ 端点下载安装
-COPY --from=builder /out/aiops-agent /app/dist/aiops-agent-linux-amd64
-COPY config.example.yaml /app/dist/config.example.yaml
 
 EXPOSE 8529
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8529/healthz || exit 1
@@ -39,11 +47,19 @@ ENTRYPOINT ["/app/aiops-server"]
 CMD ["-addr", ":8529", "-config", "/app/data/server_config.json", "-dist", "/app/dist"]
 
 # ---- Agent image ----
+# Demo-safe default: long-running process is unprivileged uid 10001 (aiops).
 FROM ${BASE_REGISTRY}/alpine:3.20 AS agent
-RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
+RUN apk add --no-cache ca-certificates tzdata python3 py3-pip su-exec \
+ && addgroup -S -g 10001 aiops \
+ && adduser -S -u 10001 -G aiops -H -s /sbin/nologin aiops
 WORKDIR /app
 COPY --from=builder /out/aiops-agent /app/aiops-agent
 COPY plugins/ /app/plugins/
-RUN pip3 install --no-cache-dir --break-system-packages psutil 2>/dev/null || true
-ENTRYPOINT ["/app/aiops-agent"]
-CMD ["--server", "http://aiops-server:8529"]
+COPY docker/agent-entrypoint.sh /entrypoint.sh
+RUN pip3 install --no-cache-dir --break-system-packages psutil 2>/dev/null || true \
+ && mkdir -p /app/data \
+ && chown -R aiops:aiops /app \
+ && chmod 0755 /entrypoint.sh /app/aiops-agent
+ENTRYPOINT ["/entrypoint.sh"]
+# Server/token 由 compose 注入 AIOPS_SERVER / AIOPS_TOKEN / AIOPS_TOKEN_FILE
+CMD []

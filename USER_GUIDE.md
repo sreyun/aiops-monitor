@@ -44,6 +44,8 @@
   - [3.4 安装验证](#34-安装验证)
 - [四、功能使用说明](#四功能使用说明)
   - [4.1 监控与指标](#41-监控与指标)
+  - [4.1.1 Kubernetes 集群（服务端直连）](#411-kubernetes-集群服务端直连)
+  - [4.1.2 虚拟机管控与主机容器](#412-虚拟机管控与主机容器)
   - [4.2 告警与通知](#42-告警与通知)
   - [4.3 远程访问与审计](#43-远程访问与审计)
   - [4.4 自动化运维（剧本）](#44-自动化运维剧本)
@@ -315,6 +317,75 @@ CPU 使用率/核数、内存/SWAP、全部本地磁盘、网络收发速率、T
 
 > 进程监控需先选目标主机再填进程名（服务端核对该主机 Agent 上报的进程列表），匹配规则为不区分大小写的子串匹配。每项支持列表/胶囊双视图 + 历史曲线回看。
 
+#### 4.1.1 Kubernetes 集群（服务端直连）
+
+面板 **资源 → K8s**：由**服务端**直连 kube-apiserver（不依赖某台 Agent）。支持只读浏览（Namespaces / Nodes / Pods / Deployments / Events / Pod 日志）与受控变更（Deployment **Scale** / **Restart**，二次确认，写入操作审计）。
+
+**接入步骤（推荐 ServiceAccount Token）**
+
+1. 在目标集群创建只读（或按需加 patch）ServiceAccount，例如：
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-monitor
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-monitor
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes", "pods", "pods/log", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "patch"]   # 仅查看可去掉 patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-monitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-monitor
+subjects:
+  - kind: ServiceAccount
+    name: aiops-monitor
+    namespace: kube-system
+```
+
+2. 创建长期 Token（或粘贴 kubeconfig），在面板 **资源 → K8s → 集群配置**（管理员）填写 API Server + Token + CA，或粘贴 kubeconfig；点**连通测试**。
+3. Token / kubeconfig 在服务端加密存储；列表回显为 `****`，保存时留空表示保持原值。
+
+**权限**
+
+| 操作 | 角色 |
+|---|---|
+| 查看集群资源 / 日志 | viewer+ |
+| Scale / Restart Deployment | operator+（需二次确认） |
+| 增删改集群配置、连通测试 | admin |
+
+变更会写入操作审计（含集群名、命名空间、资源、Scale 新旧副本数）。本阶段不支持删 Pod、编辑 YAML、Helm，也不引入完整 `client-go`。
+
+#### 4.1.2 虚拟机管控与主机容器
+
+**资源 → 虚拟机（Hyper-V）**（需 Windows 宿主机 Agent）：
+
+- 启停 / 关机 / 重启 / 强制关机（operator+，二次确认，审计）
+- 编辑 vCPU / 启动内存（Running 中部分改配可能失败，按 Hyper-V 限制）
+- 已关联纳管 Guest 时可「打开终端」；未关联时请在 Guest 安装 Agent
+
+**资源 → 容器**（Docker / Podman）：
+
+- Agent 自动采集 `docker ps -a` / `podman` 清单并上报
+- 列表查看、Start/Stop/Restart、查看日志（operator+ 变更）
+
+**AI 闭环定位**：Sreyun 工具 `locate_resource` / `query_containers` / `query_k8s` / `k8s_scale` / `k8s_restart`，可将容器/Pod 问题映射到纳管主机、Hyper-V 父机与硬件变更线索。K8s Node 按主机名/IP 自动关联纳管主机。
+
 ### 4.2 告警与通知
 
 对应官网分组 **02 告警与通知**。告警在面板可视化配置，无需改文件：
@@ -405,6 +476,16 @@ CPU 使用率/核数、内存/SWAP、全部本地磁盘、网络收发速率、T
 
 > 命令为非交互式，不要用 `vim`/`top`/`ssh` 等需交互的程序。每步是独立进程，`cd`/`export` 不跨步骤保留——连续操作写同一步内用 `&&` 串联。
 
+**故障闭环演示清单（约 15 分钟）**
+
+1. 构造告警或手动开事件 → 打开事件详情  
+2. 「AI 诊断」→ 对话区顶部出现**诊断证据链**卡片（来源类型 / 标题 / 摘要）  
+3. 「生成修复提案」→ 待审修复出现在详情闭环条与「自动修复」列表  
+4. （可选）开一条**变更冻结窗**覆盖该主机 → 自愈/剧本预检显示「冻结中」，未确认不可直跑  
+5. 在事件详情或自动修复页**批准**执行  
+6. 「升级工单」→ 闭环条显示工单状态 → **关闭工单**后事件回写为已解决  
+7. 另测：主机巡检报告页点「AI 分析」，Assist 带入 findings 上下文  
+
 ### 4.5 安全与权限
 
 对应官网分组 **05 安全与权限**。
@@ -416,7 +497,22 @@ CPU 使用率/核数、内存/SWAP、全部本地磁盘、网络收发速率、T
 - **viewer**：仅查看；可管理自己的资料/密码/MFA
 - 路由级拦截：每个 API 请求经 `authMiddleware` → `routeAllowed` 检查权限
 
-**MFA 两步验证**：TOTP（RFC 6238，兼容 Google Authenticator），启用后登录与敏感操作需密码 + 6 位动态码。
+**MFA 两步验证**：TOTP（RFC 6238，兼容 Google Authenticator），启用后登录与敏感操作需密码 + 6 位动态码。经 OIDC / 飞书 / 钉钉 / 微信 / 企业微信 SSO 登录时**跳过本地 TOTP**（信任 IdP 侧认证）。
+
+**多提供商 SSO（安全中心 → 单点登录，Tab 切换）**
+
+| 提供商 | 说明 | 回调 URL |
+|---|---|---|
+| OIDC | Keycloak / Azure AD / Okta 等；回调校验 ID Token（JWKS / iss / aud / exp / nonce） | `{PublicURL}/api/v1/auth/oidc/callback` |
+| 飞书 | 开放平台网页应用 OAuth | `{PublicURL}/api/v1/auth/feishu/callback` |
+| 钉钉 | 应用 Client ID/Secret OAuth | `{PublicURL}/api/v1/auth/dingtalk/callback` |
+| 微信 | **开放平台网站应用**扫码（`snsapi_login`） | `{PublicURL}/api/v1/auth/wechat/callback` |
+| 企业微信 | 自建应用扫码（CorpID + Secret + AgentId） | `{PublicURL}/api/v1/auth/wecom/callback` |
+
+- 首次登录可按配置自动建本地用户，并以 `(provider, open_id/union_id/userid/sub)` 永久绑定（有 union_id 时优先）。
+- **手动绑定已有账号**：个人信息 →「单点绑定」Tab，对已登录用户走 `?bind=1` 授权后写入身份，无需依赖自动建号。
+- 各提供商独立默认角色与可选部门→角色映射；与告警用的飞书/钉钉 Webhook **凭证分离**。
+- 登录页根据已启用提供商显示对应按钮。
 
 **账户找回（未登录即可完成，双重验证防枚举）**
 
@@ -550,6 +646,7 @@ sni_dns_capture:
 | `thresholds.mem_warn` / `mem_crit` | `80` / `90` | 内存警告 / 严重阈值（%） |
 | `thresholds.disk_warn` / `disk_crit` | `85` / `95` | 磁盘警告 / 严重阈值（%） |
 | `thresholds.offline_after_sec` | `30` | 主机失联判定秒数 |
+| `k8s_clusters` | `[]` | Kubernetes 集群列表（`id`/`name`/`api_server`+`token`+`ca_cert` 或 `kubeconfig_yaml`；密钥落盘加密） |
 
 ### 服务端命令行参数
 

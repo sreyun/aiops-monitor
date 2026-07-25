@@ -23,6 +23,12 @@ func isPublicPath(r *http.Request) bool {
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/install-relay.sh", "/install-relay.ps1",
 		"/api/v1/login", "/api/v1/me",
+		"/api/v1/auth/oidc/info", "/api/v1/auth/oidc/login", "/api/v1/auth/oidc/callback",
+		"/api/v1/auth/sso/info",
+		"/api/v1/auth/feishu/login", "/api/v1/auth/feishu/callback",
+		"/api/v1/auth/dingtalk/login", "/api/v1/auth/dingtalk/callback",
+		"/api/v1/auth/wechat/login", "/api/v1/auth/wechat/callback",
+		"/api/v1/auth/wecom/login", "/api/v1/auth/wecom/callback",
 		"/api/v1/forward/health",
 		"/api/v1/account/recover-send-code",
 		"/api/v1/account/recover-verify",
@@ -40,6 +46,7 @@ func isPublicPath(r *http.Request) bool {
 	// Agent-facing hardware/netflow/hyperv/snmp ingest are fingerprint-gated, not
 	// session-gated (the fingerprint is verified inside each handler).
 	if p == "/api/v1/agent/hardware" || p == "/api/v1/agent/netflow" || p == "/api/v1/agent/hyperv" ||
+		p == "/api/v1/agent/containers" ||
 		p == "/api/v1/agent/snmp" || p == "/api/v1/agent/snmp/trap" || p == "/api/v1/agent/dnsmap" ||
 		p == "/api/v1/agent/content-audit" || p == "/api/v1/agent/probe-results" {
 		return true
@@ -106,16 +113,43 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	switch p { // own-account self-service: any logged-in role
 	case "/api/v1/logout", "/api/v1/password", "/api/v1/profile", "/api/v1/account/init",
 		"/api/v1/mfa/setup", "/api/v1/mfa/enable", "/api/v1/mfa/disable",
-		"/api/v1/mfa/unbind-via-email":
+		"/api/v1/mfa/unbind-via-email",
+		"/api/v1/auth/sso/identities":
+		return true
+	}
+	if strings.HasPrefix(p, "/api/v1/auth/sso/identities/") {
 		return true
 	}
 	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" || strings.HasPrefix(p, "/api/v1/admin/") { // user mgmt + admin ops: admin only
 		return rank >= roleRank(RoleAdmin)
 	}
-	// Content audit can contain prompts, completions, identities and DLP hits.
-	// A generic read-only viewer must not receive this high-sensitivity dataset.
-	if strings.HasPrefix(p, "/api/v1/content-audit") {
+	// Content audit / AI tool audit / audit export: high-sensitivity security data.
+	if strings.HasPrefix(p, "/api/v1/content-audit") || p == "/api/v1/ai/tool-audit" {
 		return rank >= roleRank(RoleOperator)
+	}
+	if p == "/api/v1/audit-export" || strings.HasPrefix(p, "/api/v1/auth/oidc/config") ||
+		strings.HasPrefix(p, "/api/v1/auth/sso/config") ||
+		p == "/api/v1/install/revoke-token" || p == "/api/v1/install/token-policy" {
+		return rank >= roleRank(RoleAdmin)
+	}
+	// K8s: cluster config writes + connectivity test → admin; scale/restart → operator+; GET → viewer+.
+	if strings.HasPrefix(p, "/api/v1/k8s/") {
+		if r.Method == http.MethodGet {
+			return rank >= roleRank(RoleViewer)
+		}
+		if strings.HasSuffix(p, "/scale") || strings.HasSuffix(p, "/restart") {
+			return rank >= roleRank(RoleOperator)
+		}
+		return rank >= roleRank(RoleAdmin)
+	}
+	// Hyper-V / 容器写操作：operator+（路径须限定前缀，避免误匹配 /api/v1/config、/ai/config）。
+	if r.Method != http.MethodGet {
+		if strings.HasPrefix(p, "/api/v1/hyperv/") && (strings.HasSuffix(p, "/power") || strings.HasSuffix(p, "/config")) {
+			return rank >= roleRank(RoleOperator)
+		}
+		if strings.HasPrefix(p, "/api/v1/containers/") && strings.HasSuffix(p, "/action") {
+			return rank >= roleRank(RoleOperator)
+		}
 	}
 	// 敏感系统配置：告警通道/阈值、AI Provider 设置及其连通性测试 —— 仅管理员可写。
 	// GET 仍按下方 viewer+ 放行（密钥已脱敏），供界面回填与能力探测。

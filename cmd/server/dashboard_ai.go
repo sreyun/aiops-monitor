@@ -125,21 +125,23 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|piechart|barchart|bargauge|histogram|state-timeline|heatmap|table|alertlist|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
+	"【角色】按专业 BI 产品经理 + BI 设计师 + SRE 可观测性专家水准设计看板，信息架构清晰、视觉节奏稳定、查询可落地。\n" +
 	"要求：① 只用【可用指标】/【本平台内置指标】里真实存在的指标名，不要臆造 node_* / node_exporter 指标；" +
 	"② 计数器类指标配合 rate()/irate()；本平台 aiops_*_percent、aiops_load1/5/15 已是水位/瞬时值，【禁止】再套 rate()/irate()；" +
-	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps，请求率用 reqps，比率用 percentunit）；④ 每个面板给贴切标题；" +
-	"⑤ 【充分利用组件库、避免千篇一律的 timeseries】：随时间变化的趋势用 timeseries；单个关键当前值(运行时间/在线数/总量)用 stat；" +
-	"占比/利用率(0-100%)用 gauge(圆环)；构成占比(各状态/各分区/各类型)用 piechart；类别排行 top-N 用 barchart；" +
-	"多实例同一指标横向对比用 bargauge；数值分布用 histogram；可用性/状态随时间(up/down)用 state-timeline；" +
-	"多实例密度对比用 heatmap；明细清单用 table；平台当前告警用 alertlist(无需查询)。一个高质量看板应混用至少 4 种不同 type，切忌全是 timeseries。" +
-	"⑥ 【美观布局】：整体按黄金信号分区，从上到下 = 顶部一行 stat 概览(每个 w=6、h=4，2~4 个并排铺满一行) → 中部 timeseries 趋势(w=12、h=7，两个一行) → " +
-	"底部 piechart/barchart/gauge/table 等构成与明细(piechart/barchart/table 用 w=12、h=7；gauge 用 w=8、h=6；bargauge 用 w=12、h=6)；" +
-	"绝不要让单个 stat/gauge 占满整行或使用过大高度(会出现大片空白)；同一行面板保持等高，栅格每行合计 w=24 铺满不留缝；piechart 的切片控制在 3~8 个(过多切片改用 barchart)；" +
-	"⑦ 模板变量名必须用英文 ASCII（如 instance），中文只写在 label；表达式里用 $instance，标签值 instance=主机名、host=主机ID；" +
-	"全局概览/排行类面板不要强制带实例过滤；按实例下钻的面板用 instance=~\"$instance\"（必须 =~，兼容「全部」）；" +
-	"⑧ 【图例可读性】legend 只用人类可读标签：优先 \"{{instance}}\"（主机名）；多分类时用 \"{{category}} · {{instance}}\"；" +
-	"严禁使用 \"{{host}}\"（主机 ID 为 32 位十六进制，图例/悬浮提示会刷屏且不可读）。无合适标签时 legend 可留空；" +
-	"⑨ 面板数量控制在 6-12 个，覆盖核心黄金信号且类型丰富。只输出 JSON，不要额外解释。"
+	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps，请求率用 reqps，比率用 percentunit）；④ 每个面板给贴切、可行动的标题（避免「面板1」「CPU」这类过泛命名，宜「集群 CPU 均值」「主机内存 Top10」）；" +
+	"⑤ 【组件选型·叙事节奏】先回答「是否健康」再回答「哪里差、为何差」：顶部 KPI(stat) → 趋势(timeseries) → 对比/构成(gauge/pie/bar/bargauge) → 明细(table/heatmap/state-timeline) → 告警(alertlist)。" +
+	"随时间变化用 timeseries；关键当前值用 stat；利用率水位用 gauge；构成占比用 piechart；Top-N 用 barchart；多实例横向对比用 bargauge；" +
+	"分布用 histogram；可用性时段用 state-timeline；密度对比用 heatmap；清单用 table；当前告警用 alertlist。" +
+	"高质量看板须混用至少 5 种不同 type，且至少包含 1 个 text 说明区（简述看板用途与解读方式，Markdown 安全文本）。切忌全是 timeseries。" +
+	"⑥ 【专业布局·24 栏栅格】黄金信号分区、自上而下、同行等高、每行合计 w=24 铺满：" +
+	"首行 3~4 个 stat（w=6 或 8，h=6，须完整容纳大数字+说明+迷你趋势）→ 次区 timeseries（w=12、h=7~8，两列）→ " +
+	"再区 piechart/barchart/gauge/bargauge（pie/bar/table w=12 h=7；gauge w=8 h=6；bargauge w=12 h=6）→ 底部 table/alertlist；" +
+	"禁止单 panel 独占整板或过大空白；pie 切片 3~8（过多改 barchart）；同类 KPI 连续成组。" +
+	"⑦ 模板变量名必须英文 ASCII（如 instance），中文只写 label；表达式用 $instance；instance=主机名、host=主机ID；" +
+	"全局概览/排行不要强制实例过滤；下钻面板用 instance=~\"$instance\"（必须 =~，兼容「全部」）；" +
+	"⑧ 【图例】优先 \"{{instance}}\" 或 \"{{category}} · {{instance}}\"；严禁 \"{{host}}\"；" +
+	"⑨ 面板 8~14 个，覆盖 Latency/Traffic/Errors/Saturation（或主机黄金信号）且类型丰富；" +
+	"⑩ 最终只输出 JSON（可 ```json），思考过程不要写入最终答案正文。"
 
 // aiopsBuiltinMetricsHint 给「优化看板」等未注入 VM 全量指标的路径用：避免 LLM 臆造 node_*。
 const aiopsBuiltinMetricsHint = "【本平台内置主机指标（优先使用）】\n" +
@@ -436,20 +438,21 @@ func healAIDashUnit(u string) string {
 	}
 }
 
-// aiPanelHeight 按面板类型给出合理的行高（网格行数），避免 stat/gauge 等单值面板被撑成大空白框：
-// stat 单个数字只需很矮，timeseries/table 需要较高。同时钳制 AI 乱给的极端值。
+// aiPanelHeight 按面板类型给出合理的行高（网格行数）。
+// stat 含标题栏 + 大数字 + 说明 + sparkline，h=4（约 120px）会裁切内容；专业 KPI 行用 h=6。
+// timeseries/table 需要更高。同时钳制 AI 乱给的极端值。
 func aiPanelHeight(typ string, h int) int {
 	switch typ {
 	case "stat":
-		if h < 3 || h > 5 {
-			return 4
+		if h < 6 || h > 8 {
+			return 6
 		}
 	case "bargauge":
-		if h < 3 || h > 8 {
-			return 5
+		if h < 4 || h > 8 {
+			return 6
 		}
 	case "gauge":
-		if h < 4 || h > 8 {
+		if h < 5 || h > 8 {
 			return 6
 		}
 	case "text":
@@ -502,117 +505,229 @@ func aiPanelWidth(typ string, w int) int {
 	return w
 }
 
-// layoutAIDashPanels 按「黄金信号分区」重排并紧凑落位，避免 AI 随意顺序导致 stat/趋势混杂、行内留白。
-// 分区：stat 概览 → gauge → 趋势类 → 构成/排行 → 明细/其它；同行等高；每行尽量铺满 24 栏。
+// aiDashSectionRank 看板分区顺序：KPI → 水位仪 → 趋势 → 对比/排行 → 明细/其它。
+// 分区边界必须整行断开，禁止跨区塞进同一行（否则半行空白被下一区组件填满，观感错乱）。
+func aiDashSectionRank(t string) int {
+	switch t {
+	case "stat":
+		return 0
+	case "gauge":
+		return 1
+	case "timeseries", "state-timeline", "histogram", "heatmap":
+		return 2
+	case "piechart", "barchart", "bargauge":
+		return 3
+	default: // table / text / alertlist / logs / unsupported
+		return 4
+	}
+}
+
+func aiDashSectionMaxPerRow(t string) int {
+	switch t {
+	case "stat", "gauge":
+		return 4
+	case "timeseries", "state-timeline", "histogram", "heatmap",
+		"piechart", "barchart", "bargauge", "table":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func aiDashSectionRowHeight(t string) int {
+	switch t {
+	case "stat":
+		return 6
+	case "gauge":
+		return 6
+	case "text":
+		return 3
+	case "alertlist", "logs":
+		return 8
+	case "bargauge":
+		return 7
+	default:
+		return 8
+	}
+}
+
+// aiSplitRowCounts 把 n 个同区组件拆成若干整行，避免「4+1」孤儿行（改为 3+2）。
+func aiSplitRowCounts(n, maxPerRow int) []int {
+	if n <= 0 {
+		return nil
+	}
+	if maxPerRow < 1 {
+		maxPerRow = 1
+	}
+	var rows []int
+	left := n
+	for left > 0 {
+		k := maxPerRow
+		if left < k {
+			k = left
+		}
+		// KPI 类（max≥3）：避免 4+1 孤儿行，改为 3+2。趋势双列（max=2）保留 2+1，末行整宽。
+		if maxPerRow >= 3 && left > maxPerRow && left-maxPerRow == 1 {
+			k = maxPerRow - 1
+		}
+		rows = append(rows, k)
+		left -= k
+	}
+	return rows
+}
+
+// aiEqualWidths 生成 count 个宽度，总和恰为 24（余数分给前几列，保证铺满无缝）。
+func aiEqualWidths(count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	if count == 1 {
+		return []int{24}
+	}
+	if count > 24 {
+		count = 24
+	}
+	base := 24 / count
+	if base < 1 {
+		base = 1
+	}
+	extra := 24 - base*count
+	out := make([]int, count)
+	for i := 0; i < count; i++ {
+		out[i] = base
+		if extra > 0 {
+			out[i]++
+			extra--
+		}
+	}
+	return out
+}
+
+// layoutAIDashPanels 专业 BI 栅格落位：
+// 1) 按分区排序；2) 分区内按推荐每行数量切行；3) 每行宽度均分铺满 24；4) 同行等高、区间无空洞。
 func layoutAIDashPanels(panels []DashPanel) {
 	if len(panels) == 0 {
 		return
 	}
-	sectionRank := func(t string) int {
-		switch t {
-		case "stat":
-			return 0
-		case "gauge":
-			return 1
-		case "timeseries", "state-timeline", "histogram", "heatmap":
-			return 2
-		case "piechart", "barchart", "bargauge":
-			return 3
-		default:
-			return 4
-		}
-	}
 	sort.SliceStable(panels, func(i, j int) bool {
-		return sectionRank(panels[i].Type) < sectionRank(panels[j].Type)
+		ri, rj := aiDashSectionRank(panels[i].Type), aiDashSectionRank(panels[j].Type)
+		if ri != rj {
+			return ri < rj
+		}
+		// 同区内保持相对稳定；table/text 等明细靠后已由分区保证
+		return false
 	})
-	normalizeAISectionWidths(panels)
 
-	x, y, rowStart, rowH := 0, 0, 0, 0
-	flushRow := func(end int) {
-		if end <= rowStart {
-			return
-		}
-		for j := rowStart; j < end; j++ {
-			panels[j].Grid.H = rowH
-			panels[j].Grid.Y = y
-		}
-		y += rowH
-		x, rowH, rowStart = 0, 0, end
-	}
-	for i := range panels {
-		w := panels[i].Grid.W
-		if w < 1 || w > 24 {
-			w = 12
-		}
-		h := panels[i].Grid.H
-		if h < 2 {
-			h = 8
-		}
-		if x+w > 24 {
-			flushRow(i)
-		}
-		panels[i].Grid = DashGrid{X: x, Y: y, W: w, H: h}
-		x += w
-		if h > rowH {
-			rowH = h
-		}
-	}
-	flushRow(len(panels))
-}
-
-// normalizeAISectionWidths 让同类型连续段的宽度更整齐（如 3 个 stat → 各 8；4 个 → 各 6）。
-func normalizeAISectionWidths(panels []DashPanel) {
+	y := 0
 	i := 0
 	for i < len(panels) {
-		typ := panels[i].Type
+		rank := aiDashSectionRank(panels[i].Type)
 		j := i + 1
-		for j < len(panels) && panels[j].Type == typ {
+		for j < len(panels) && aiDashSectionRank(panels[j].Type) == rank {
 			j++
 		}
-		n := j - i
-		if n >= 2 && (typ == "stat" || typ == "gauge") {
-			// 优先整除 24：2→12、3→8、4→6；超过 4 个用 6 并由外层换行。
-			w := 24 / n
-			if n > 4 {
-				w = 6
-			}
-			if w < 4 {
-				w = 4
-			}
-			if typ == "gauge" && w > 12 {
-				w = 8
-			}
-			extra := 24 - w*n
-			if n > 4 || extra < 0 {
-				extra = 0
-			}
-			for k := i; k < j; k++ {
-				ww := w
-				if extra > 0 {
-					ww++
-					extra--
-				}
-				if ww > 24 {
-					ww = 24
-				}
-				panels[k].Grid.W = ww
-				if typ == "stat" {
-					panels[k].Grid.H = 4
-				} else {
-					panels[k].Grid.H = 6
-				}
-			}
-		} else if typ == "timeseries" || typ == "piechart" || typ == "barchart" || typ == "table" {
-			for k := i; k < j; k++ {
-				if panels[k].Grid.W < 8 {
-					panels[k].Grid.W = 12
-				}
-				if panels[k].Grid.H < 6 {
-					panels[k].Grid.H = 7
-				}
+		y = packAIDashSection(panels[i:j], y)
+		i = j
+	}
+}
+
+// packAIDashSection 将同一分区面板排成若干铺满 24 栏的行，返回下一分区起始 y。
+func packAIDashSection(panels []DashPanel, startY int) int {
+	if len(panels) == 0 {
+		return startY
+	}
+	// 分区内可能混有同 rank 不同类型（如 pie+bar）；行容量取更保守的一侧，避免 text 与 table 硬拼半行。
+	maxPer := aiDashSectionMaxPerRow(panels[0].Type)
+	for k := 1; k < len(panels); k++ {
+		if m := aiDashSectionMaxPerRow(panels[k].Type); m < maxPer {
+			maxPer = m
+		}
+	}
+	counts := aiSplitRowCounts(len(panels), maxPer)
+	y := startY
+	cursor := 0
+	for _, n := range counts {
+		widths := aiEqualWidths(n)
+		rowH := 0
+		for k := 0; k < n; k++ {
+			h := aiDashSectionRowHeight(panels[cursor+k].Type)
+			if h > rowH {
+				rowH = h
 			}
 		}
-		i = j
+		if rowH < 2 {
+			rowH = 8
+		}
+		x := 0
+		for k := 0; k < n; k++ {
+			panels[cursor+k].Grid = DashGrid{X: x, Y: y, W: widths[k], H: rowH}
+			x += widths[k]
+		}
+		y += rowH
+		cursor += n
+	}
+	return y
+}
+
+// aiDashLayoutNeedsTidy 检测明显的布局缺陷：同行未铺满、跨区混行、垂直断层。
+func aiDashLayoutNeedsTidy(panels []DashPanel) bool {
+	if len(panels) == 0 {
+		return false
+	}
+	rows := map[int][]DashPanel{}
+	for _, p := range panels {
+		rows[p.Grid.Y] = append(rows[p.Grid.Y], p)
+	}
+	for _, list := range rows {
+		sumW := 0
+		rank := -1
+		h0 := -1
+		for _, p := range list {
+			sumW += p.Grid.W
+			r := aiDashSectionRank(p.Type)
+			if rank < 0 {
+				rank = r
+			} else if r != rank {
+				return true // 跨区混行
+			}
+			if h0 < 0 {
+				h0 = p.Grid.H
+			} else if p.Grid.H != h0 {
+				return true // 同行不等高
+			}
+		}
+		if sumW != 24 {
+			return true // 未铺满或溢出
+		}
+	}
+	// 垂直断层：按 y 排序的行之间应首尾相接
+	ys := make([]int, 0, len(rows))
+	for y := range rows {
+		ys = append(ys, y)
+	}
+	sort.Ints(ys)
+	expect := 0
+	for _, y := range ys {
+		if y > expect {
+			return true
+		}
+		expect = y + rows[y][0].Grid.H
+	}
+	return panelsGridOverlap(panels)
+}
+
+// isAIDashboardSource 识别 AI 生成/优化过的看板，供打开时惰性重排。
+func isAIDashboardSource(source string) bool {
+	s := strings.ToLower(strings.TrimSpace(source))
+	return s == "ai" || strings.HasPrefix(s, "ai-") || strings.HasPrefix(s, "ai:")
+}
+
+// normalizeAISectionWidths 保留给测试/兼容调用；新布局器不再依赖它做装箱。
+func normalizeAISectionWidths(panels []DashPanel) {
+	for i := range panels {
+		t := panels[i].Type
+		panels[i].Grid.W = aiPanelWidth(t, panels[i].Grid.W)
+		panels[i].Grid.H = aiPanelHeight(t, panels[i].Grid.H)
 	}
 }
 
@@ -624,8 +739,10 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 		return Dashboard{}, nil, fmt.Errorf("AI 未配置或未启用，请先在「AI 设置」填写并保存")
 	}
 	metricsCtx := s.metricContextFor(userNeed + " " + seedCtx)
-	sys := "你是可观测性与 Prometheus 专家，为运维平台生成监控仪表盘。平台指标存于 VictoriaMetrics（Prometheus 兼容），" +
-		"面板用 PromQL 查询。禁止深度思考与思维链，直接输出最终 JSON。\n" + aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint
+	sys := "你是资深可观测性架构师、专业 BI 产品经理与看板设计师，为运维平台生成可落地的监控仪表盘。" +
+		"平台指标存于 VictoriaMetrics（Prometheus 兼容），面板用 PromQL。" +
+		"请充分规划信息架构、组件选型与 24 栏布局；最终回复只输出一个合法看板 JSON（可放在 ```json 代码块），不要输出解释性长文。\n" +
+		aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint
 	if metricsCtx != "" {
 		sys += "\n\n【可用指标（节选）】\n" + metricsCtx
 	}
@@ -633,8 +750,14 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	if seedCtx != "" {
 		user += "\n\n【补充上下文】\n" + seedCtx
 	}
-	// 看板生成是结构化 JSON 任务：关掉深度思考，避免 Qwen3/R1 等先「想」两分钟再超时。
-	out, err := aiCompleteOpts(cfg, sys, user, aiCallOpts{DisableThinking: true})
+	user += "\n\n请按专业 BI 水准生成完整看板 JSON。思考从简，尽快输出最终 JSON。"
+	// 开启思考但限制 thinking_budget，避免思维链耗尽超时导致「想完没内容」。
+	out, err := aiCompleteOpts(cfg, sys, user, aiCallOpts{
+		EnableThinking: true,
+		ThinkingBudget: 768,
+		MaxTokens:      8192,
+		Timeout:        180 * time.Second,
+	})
 	if err != nil {
 		return Dashboard{}, nil, fmt.Errorf("AI 生成失败：%v", err)
 	}

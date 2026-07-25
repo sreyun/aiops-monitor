@@ -19,6 +19,9 @@ func userView(u AccountConfig, maskPII bool) map[string]any {
 	return map[string]any{
 		"username": u.Username, "display_name": u.DisplayName,
 		"email": email, "phone": phone, "role": u.Role, "mfa_enabled": u.MFAEnabled,
+		"allowed_folder_ids": u.AllowedFolderIDs,
+		"allowed_host_ids":   u.AllowedHostIDs,
+		"allowed_tags":       u.AllowedTags,
 	}
 }
 
@@ -97,9 +100,13 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	var req struct {
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
-		Role        string `json:"role"`
+		DisplayName      string   `json:"display_name"`
+		Email            string   `json:"email"`
+		Role             string   `json:"role"`
+		AllowedFolderIDs []string `json:"allowed_folder_ids"`
+		AllowedHostIDs   []string `json:"allowed_host_ids"`
+		AllowedTags      []string `json:"allowed_tags"`
+		ScopeSet         bool     `json:"scope_set"` // true when client intends to update host scope
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -117,6 +124,9 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.cfg.UpdateUserMeta(username, strings.TrimSpace(req.DisplayName), email, req.Role); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if req.ScopeSet || len(req.AllowedFolderIDs) > 0 || len(req.AllowedHostIDs) > 0 || len(req.AllowedTags) > 0 {
+		_ = s.cfg.UpdateUserHostScope(username, req.AllowedFolderIDs, req.AllowedHostIDs, req.AllowedTags)
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.update_user", username, req.Role)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

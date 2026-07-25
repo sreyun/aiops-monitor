@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
-	hosts := s.store.ListHosts()
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
 	if s.cfg.ensureHostFoldersMigrated(hosts) {
 		_ = s.cfg.save()
 	}

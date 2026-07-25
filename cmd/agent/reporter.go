@@ -13,7 +13,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,7 +68,10 @@ const gzipCompressThreshold = 512
 type serverTarget struct {
 	server string
 	token  string
-	httpc  *http.Client // isolated connection pool + 30s timeout
+	// tokenFile, when set, is re-read before each register attempt so a compose
+	// sidecar can pick up /app/server-data/.install_token once the server writes it.
+	tokenFile string
+	httpc     *http.Client // isolated connection pool + 30s timeout
 
 	regMu      sync.Mutex
 	registered bool
@@ -89,11 +94,28 @@ type serverTarget struct {
 	probeMu sync.Mutex // 分布式探测：确保同一 target 同时只跑一轮探测任务，避免慢探测堆积
 }
 
+// refreshToken loads AIOPS_TOKEN_FILE (or the path stored on this target) when
+// present. Safe to call repeatedly — used while waiting for the server to
+// publish .install_token on first boot.
+func (t *serverTarget) refreshToken() {
+	if t.tokenFile == "" {
+		return
+	}
+	b, err := os.ReadFile(t.tokenFile)
+	if err != nil {
+		return
+	}
+	if tok := strings.TrimSpace(string(b)); tok != "" {
+		t.token = tok
+	}
+}
+
 // register sends the agent's identity (with this target's token) to the server.
 // On success the target is marked registered; 403 or network errors return false
 // but don't crash — the agent keeps retrying on subsequent report cycles.
 // Token is never logged in full — only the first 4 chars for debugging.
 func (t *serverTarget) register(base shared.Report) bool {
+	t.refreshToken()
 	body, _ := json.Marshal(map[string]string{
 		"host_id":     base.HostID,
 		"hostname":    base.Hostname,
@@ -293,8 +315,10 @@ type Agent struct {
 	packetCfg        *PacketConfig
 	snmpCfg          *SNMPConfig
 	sniCfg           *SNIConfig
-	hypervInterval   time.Duration // Hyper-V 虚拟机采集间隔（0 → 默认 60s）
-	hypervDisabled   bool          // 显式关闭 Hyper-V 采集（默认自动探测）
+	hypervInterval     time.Duration // Hyper-V 虚拟机采集间隔（0 → 默认 60s）
+	hypervDisabled     bool          // 显式关闭 Hyper-V 采集（默认自动探测）
+	containerInterval  time.Duration
+	containerDisabled  bool
 
 	// desktopDisabled skips the in-process web-desktop channel. Set by the
 	// Windows service, which delegates screen capture/input to a helper worker
@@ -311,11 +335,13 @@ type Agent struct {
 
 func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Duration,
 	collector Collector, plugins *PluginRunner, hostID, category string) *Agent {
+	tokenFile := strings.TrimSpace(os.Getenv("AIOPS_TOKEN_FILE"))
 	targets := make([]*serverTarget, len(servers))
 	for i, s := range servers {
 		targets[i] = &serverTarget{
-			server: s.Server,
-			token:  s.Token,
+			server:    s.Server,
+			token:     s.Token,
+			tokenFile: tokenFile,
 			httpc: &http.Client{
 				Timeout:   30 * time.Second, // raised from 8s: gzip + multi-disk reports need more headroom
 				Transport: reportTransport,
@@ -323,6 +349,7 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 			bo: newBackoff(1*time.Second, 60*time.Second),
 			cb: newCircuitBreaker(8, 15*time.Second), // open after 8 consecutive failures, cooldown 15s — tuned for external networks where transient errors are common
 		}
+		targets[i].refreshToken()
 	}
 	return &Agent{
 		targets:        targets,
@@ -591,6 +618,32 @@ func (a *Agent) Run(ctx context.Context) {
 		}()
 	}
 
+	if !a.containerDisabled {
+		childWg.Add(1)
+		go func() {
+			defer childWg.Done()
+			backoff := 15 * time.Second
+			const maxBackoff = 10 * time.Minute
+			for {
+				if containersAvailable() {
+					slog.Info("主机容器采集器已启动")
+					a.runContainerCollector(ctx)
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < maxBackoff {
+					if backoff *= 2; backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+				}
+			}
+		}()
+	}
+
 	// base-metric report loop with context-aware ticker.
 	a.reportOnceSafe()
 	ticker := time.NewTicker(a.reportInterval)
@@ -632,17 +685,17 @@ func (a *Agent) reportOnceSafe() {
 // registerTarget tries to register to one server with exponential backoff.
 // Best-effort: failures are logged but don't block startup — the agent will
 // retry registration on the next 403 during reporting.
+//
+// Always attempts a real /register call (including empty token for anonymous
+// mode). Compose sidecars may start before the server publishes .install_token;
+// refreshToken inside register() picks it up on later attempts.
 func (a *Agent) registerTarget(t *serverTarget) {
-	if t.token == "" {
-		t.registered = true // no-token servers accept any host
-		return
-	}
-	// Try up to 3 times with backoff.
-	for attempt := 0; attempt < 3; attempt++ {
+	const maxAttempts = 12
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if t.register(a.identity) {
 			return
 		}
-		if attempt < 2 {
+		if attempt < maxAttempts-1 {
 			d := t.bo.next()
 			slog.Info("注册失败，等待后重试", "server", t.server, "wait", d.Round(time.Second))
 			time.Sleep(d)
@@ -768,7 +821,7 @@ func (a *Agent) reportOnce() {
 
 			// v5.2.6: If not registered (e.g. after circuit breaker reset),
 			// try to register before sending the report.
-			if !tgt.isRegistered() && tgt.token != "" {
+			if !tgt.isRegistered() {
 				if tgt.register(rep) {
 					slog.Info("断路器恢复后重新注册成功", "server", tgt.server)
 				}

@@ -19,6 +19,9 @@ import (
 type aiTaskPolicy struct {
 	MemKind        string
 	DisableThink   bool
+	EnableThink    bool          // 显式开启深度思考（看板等质量任务）
+	ThinkingBudget int           // 思考 token 上限；0=不传（由 applyThinkingKnobs 默认）
+	MaxTokens      int           // 输出 token 上限；0=默认策略
 	Timeout        time.Duration // 0 = 用 streamChat 默认 120s
 	RememberKind   string
 	RememberSource string
@@ -36,9 +39,25 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 		p.MemKind = "diagnosis"
 	}
 	switch task {
-	case "dashboard_prompt_optimize", "dashboard_optimize", "dashboard_analysis":
-		p.DisableThink = true
+	case "dashboard_optimize":
+		// 开启思考但严格限预算：过长思维链会占满超时，最终 JSON 出不来。
+		p.EnableThink = true
+		p.DisableThink = false
+		p.ThinkingBudget = 512
+		p.MaxTokens = 8192
+		p.Timeout = 180 * time.Second
+	case "dashboard_prompt_optimize":
+		p.EnableThink = true
+		p.DisableThink = false
+		p.ThinkingBudget = 256
+		p.MaxTokens = 2048
 		p.Timeout = 90 * time.Second
+	case "dashboard_analysis":
+		p.EnableThink = true
+		p.DisableThink = false
+		p.ThinkingBudget = 384
+		p.MaxTokens = 4096
+		p.Timeout = 120 * time.Second
 	case "logql", "promql", "playbook", "remediation_rule", "remediation_proposal":
 		p.Timeout = 90 * time.Second
 	}
@@ -291,9 +310,29 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
-	opts := aiCallOpts{DisableThinking: policy.DisableThink, Timeout: policy.Timeout}
+	opts := aiCallOpts{
+		DisableThinking: policy.DisableThink,
+		EnableThinking:  policy.EnableThink,
+		ThinkingBudget:  policy.ThinkingBudget,
+		MaxTokens:       policy.MaxTokens,
+		Timeout:         policy.Timeout,
+	}
 	start := time.Now()
 	reply, err := streamChatOpts(ctx, w, cfg, msgs, nil, opts)
+	if err != nil && thinkingParamForcedTrueError(err) && !opts.EnableThinking {
+		retry := opts
+		retry.EnableThinking = true
+		retry.DisableThinking = false
+		if retry.ThinkingBudget <= 0 {
+			retry.ThinkingBudget = 512
+		}
+		if retry.Timeout < 180*time.Second {
+			retry.Timeout = 180 * time.Second
+		}
+		slog.Info("assist retry with enable_thinking=true", "task", task, "model", cfg.Model, "budget", retry.ThinkingBudget)
+		start = time.Now()
+		reply, err = streamChatOpts(ctx, w, cfg, msgs, nil, retry)
+	}
 	latency := time.Since(start).Milliseconds()
 	errStr := ""
 	if err != nil {

@@ -234,17 +234,41 @@ func splitN9eTags(s string) []string {
 	return out
 }
 
-// detectTemplateFormat 自动识别粘贴/上传的模板是 Grafana 还是夜莺格式。
+// detectTemplateFormat 自动识别粘贴/上传的模板：AIOps 原生 / Grafana / 夜莺。
 func detectTemplateFormat(raw []byte) string {
 	var probe struct {
+		Format     string                       `json:"format"`
 		Configs    json.RawMessage              `json:"configs"`
 		Var        json.RawMessage              `json:"var"`
 		Templating json.RawMessage              `json:"templating"`
 		Dashboard  json.RawMessage              `json:"dashboard"`
 		SchemaVer  json.RawMessage              `json:"schemaVersion"`
 		Panels     []map[string]json.RawMessage `json:"panels"`
+		Name       string                       `json:"name"`
+		ID         string                       `json:"id"`
 	}
 	_ = json.Unmarshal(raw, &probe)
+	if strings.EqualFold(strings.TrimSpace(probe.Format), "aiops") {
+		return "aiops"
+	}
+	// 原生导出：顶层有 panels[].grid + targets[].expr，且无 Grafana gridPos / 夜莺 layout
+	if len(probe.Panels) > 0 && (probe.Name != "" || probe.ID != "") {
+		hasGrid, hasGridPos, hasLayout := false, false, false
+		for _, p := range probe.Panels {
+			if _, ok := p["grid"]; ok {
+				hasGrid = true
+			}
+			if _, ok := p["gridPos"]; ok {
+				hasGridPos = true
+			}
+			if _, ok := p["layout"]; ok {
+				hasLayout = true
+			}
+		}
+		if hasGrid && !hasGridPos && !hasLayout {
+			return "aiops"
+		}
+	}
 	if len(probe.Configs) > 0 || len(probe.Var) > 0 {
 		return "nightingale"
 	}
@@ -260,4 +284,42 @@ func detectTemplateFormat(raw []byte) string {
 		}
 	}
 	return "grafana"
+}
+
+// mapAIOpsDashboard 导入本平台原生看板模板（导出 JSON 可原样回灌）。
+func mapAIOpsDashboard(raw []byte, name, source string) (Dashboard, error) {
+	var wrap struct {
+		Format    string          `json:"format"`
+		Dashboard json.RawMessage `json:"dashboard"`
+	}
+	_ = json.Unmarshal(raw, &wrap)
+	payload := raw
+	if len(wrap.Dashboard) > 0 && strings.EqualFold(strings.TrimSpace(wrap.Format), "aiops") {
+		payload = wrap.Dashboard
+	}
+	var d Dashboard
+	if err := json.Unmarshal(payload, &d); err != nil {
+		return Dashboard{}, fmt.Errorf("解析 AIOps 看板模板失败：%v", err)
+	}
+	if strings.TrimSpace(name) != "" {
+		d.Name = strings.TrimSpace(name)
+	}
+	if strings.TrimSpace(d.Name) == "" {
+		return Dashboard{}, fmt.Errorf("看板模板缺少名称")
+	}
+	d.ID = "" // 作为新看板导入
+	d.Revision = 0
+	d.CreatedAt = 0
+	d.UpdatedAt = 0
+	if source == "" {
+		source = "aiops-template"
+	}
+	d.Source = source
+	// 模板跨环境不携带图片 URL（死链）；保留配色 / fit / 透明度。
+	d.Appearance.LogoURL = ""
+	d.Appearance.BackgroundURL = ""
+	if err := normalizeDashboard(&d); err != nil {
+		return Dashboard{}, err
+	}
+	return d, nil
 }

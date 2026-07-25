@@ -146,8 +146,15 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if preflight.RequiresApproval && !strings.EqualFold(r.Header.Get("X-AIOps-Risk-Accepted"), "true") {
+		errMsg := "高风险剧本需要显式确认"
+		if preflight.FreezeActive {
+			errMsg = "变更冻结期内执行剧本需要显式确认"
+			if preflight.FreezeWindow != nil && strings.TrimSpace(preflight.FreezeWindow.Name) != "" {
+				errMsg = "变更冻结「" + strings.TrimSpace(preflight.FreezeWindow.Name) + "」期内执行剧本需要显式确认"
+			}
+		}
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "高风险剧本需要显式确认", "preflight": preflight,
+			"error": errMsg, "preflight": preflight,
 		})
 		return
 	}
@@ -183,6 +190,8 @@ type playbookPreflight struct {
 	AutoRollback     bool                    `json:"auto_rollback"`
 	Warnings         []string                `json:"warnings"`
 	Steps            []playbookPreflightStep `json:"steps"`
+	FreezeActive     bool                    `json:"freeze_active,omitempty"`
+	FreezeWindow     *ChangeWindow           `json:"freeze_window,omitempty"`
 }
 
 // handlePlaybookPreflight provides a deterministic, non-AI execution plan:
@@ -270,6 +279,31 @@ func (s *Server) buildPlaybookPreflight(pb Playbook) playbookPreflight {
 	out.OnlineTargets = len(onlineUnion)
 	out.OfflineTargets = len(offlineUnion)
 	out.RequiresApproval = out.RiskLevel == "high" || playbookNeedsForcedApproval(pb.Steps, s.cfg.CmdPolicy())
+	// Change freeze: any online target under an active freeze window requires explicit ack.
+	if s.cfg != nil {
+		nowFreeze := time.Now().Unix()
+		for id := range onlineUnion {
+			cat := ""
+			for _, h := range allHosts {
+				if h.ID == id {
+					cat = h.Category
+					break
+				}
+			}
+			if w, ok := s.cfg.activeFreezeWindow(id, cat, nowFreeze); ok {
+				out.FreezeActive = true
+				cp := w
+				out.FreezeWindow = &cp
+				out.RequiresApproval = true
+				name := strings.TrimSpace(w.Name)
+				if name == "" {
+					name = w.ID
+				}
+				out.Warnings = append(out.Warnings, "变更冻结中："+name+"（禁止未确认直跑）")
+				break
+			}
+		}
+	}
 	if out.OnlineTargets == 0 {
 		out.Valid = false
 		out.Warnings = append(out.Warnings, "当前没有可执行的在线目标")
@@ -325,6 +359,22 @@ func (s *Server) fireScheduledPlaybook(pb Playbook) {
 		s.playbooks.clearSchedBusy(pb.ID)
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler", Message: Tz("log.sched_no_target", pb.Name)})
 		return
+	}
+	// Scheduled runs have no human ack token — skip entirely during freeze.
+	if s.cfg != nil {
+		now := time.Now().Unix()
+		for _, h := range hosts {
+			if w, ok := s.cfg.activeFreezeWindow(h.ID, h.Category, now); ok {
+				s.playbooks.clearSchedBusy(pb.ID)
+				name := strings.TrimSpace(w.Name)
+				if name == "" {
+					name = w.ID
+				}
+				s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler",
+					Message: fmt.Sprintf("定时剧本「%s」因变更冻结「%s」跳过", pb.Name, name)})
+				return
+			}
+		}
 	}
 	exec := s.playbooks.StartExecution(pb, Tz("playbook.scheduler_actor"), hosts)
 	s.persistPlaybookExecution(exec.ID)
@@ -422,9 +472,13 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					retryDelay = int(playbookRetryBackoff / time.Second)
 				}
 				attemptsUsed := 0
+				outCap := 512 * 1024
+				if strings.TrimSpace(step.Module) == "host_inspect" {
+					outCap = hostInspectOutCap
+				}
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
 					attemptsUsed = attempt
-					output, kind, err = s.execCommandOnHost(h, cmd, step.TimeoutSec)
+					output, kind, err = s.execCommandOnHostSized(h, cmd, step.TimeoutSec, outCap)
 					if err == nil {
 						if attempt > 1 {
 							output += "\n" + Tz("playbook.retry_recovered", attempt)

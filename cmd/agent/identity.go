@@ -90,7 +90,14 @@ func persistHostID(path, id, fp string) {
 // the OS machine id and the primary MAC address, hashed. Returns "" when nothing
 // machine-unique can be read (then clone detection is skipped, never a false
 // positive). Zero third-party dependency.
+//
+// Containers: set AIOPS_MACHINE_ID to a stable string (compose/K8s) so the
+// fingerprint does not change when the container MAC is reassigned on recreate.
 func machineFingerprint() string {
+	if v := strings.TrimSpace(os.Getenv("AIOPS_MACHINE_ID")); v != "" {
+		sum := sha256.Sum256([]byte("env:" + v))
+		return hex.EncodeToString(sum[:12])
+	}
 	parts := []string{machineID(), primaryMAC()}
 	joined := strings.TrimSpace(strings.Trim(strings.Join(parts, "|"), "|"))
 	if joined == "" || joined == "|" {
@@ -102,6 +109,9 @@ func machineFingerprint() string {
 
 // machineID reads the OS-provided stable machine identifier.
 func machineID() string {
+	if v := strings.TrimSpace(os.Getenv("AIOPS_MACHINE_ID")); v != "" {
+		return v
+	}
 	switch runtime.GOOS {
 	case "linux":
 		for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {

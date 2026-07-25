@@ -376,6 +376,8 @@ func (h *SreyunCore) registerTools() {
 		},
 		Execute: h.execQueryNetFlowFlows,
 	}
+
+	h.registerResourceTools()
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).
@@ -732,10 +734,17 @@ func (h *SreyunCore) execPythonAction(args map[string]any) (string, error) {
 		return "请指定动作名称", nil
 	}
 	// run_python_action 属于「写操作」（重启服务 / 清理缓存 / 扩缩容等）。仅在显式开启
-	// SreyunAutoApprove（低风险自动执行）时才真正执行，否则挂起并返回需人工确认，
-	// 避免 AI 未经批准擅自变更主机（此前该配置从未在执行路径生效，属安全缺口）。
-	if !h.s.cfg.AIConfig().SreyunAutoApprove {
-		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前未开启「自动执行」(hermes_auto_approve)，已阻止自动执行；请操作员手动处置，或在 AI 设置中开启后重试。", actionName), nil
+	// SreyunAutoApprove 且未强制「写工具需审批」时才真正执行，否则挂起并返回需人工确认。
+	aiCfg := h.s.cfg.AIConfig()
+	blocked := aiCfg.WriteToolsRequireApproval || !aiCfg.SreyunAutoApprove
+	if h.s.aiGov != nil {
+		h.s.aiGov.recordTool(aiToolAuditEntry{
+			Actor: "sreyun", Tool: "run_python_action", Action: actionName, HostID: hostID,
+			Approved: !blocked, Blocked: blocked, Detail: argStr,
+		})
+	}
+	if blocked {
+		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前写工具审批策略已阻止自动执行；请操作员手动处置，或在 AI 治理中关闭「写工具需审批」并开启自动执行后重试。", actionName), nil
 	}
 	// 加 30s 超时，避免插件脚本卡死导致请求 goroutine 永久阻塞
 	parentCtx := h.ctx
@@ -1464,7 +1473,8 @@ func (h *SreyunCore) buildSystemPrompt() string {
 	b.WriteString("1) 先用 search_similar_cases，并优先套用已注入的历史记忆与【已掌握技能】；\n")
 	b.WriteString("2) 需要手册/规范/Wiki 时用 search_knowledge（WeKnora）；不可用则明确说明并改用本地经验；\n")
 	b.WriteString("3) 再用 query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
-	b.WriteString("4) 仅在需要主机侧证据时使用 run_diagnostic（只读）。\n")
+	b.WriteString("4) 容器/K8s/虚拟机问题：先 locate_resource 定位硬件→VM→主机→容器/Pod，再用 query_containers / query_k8s / query_hyperv / query_hardware；\n")
+	b.WriteString("5) 仅在需要主机侧证据时使用 run_diagnostic（只读）。K8s 扩缩容用 k8s_scale（需 cluster_id），勿用服务端本机 kubectl。\n")
 	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据。\n")
 
 	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，

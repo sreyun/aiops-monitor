@@ -173,18 +173,13 @@ func (s *Server) handleForwardGroupCopy(w http.ResponseWriter, r *http.Request) 
 		if orig == nil {
 			continue
 		}
-		newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget)
+		wlOn, wlList, _ := orig.whitelistSnapshot()
+		newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget, wlOn, wlList)
 		if err != nil {
 			continue
 		}
 		go s.serveRule(newRule)
-		created = append(created, forwardInfo{
-			ID: newRule.id, HostID: newRule.hostID, Hostname: newRule.hostname,
-			TargetPort: newRule.targetPort, LocalPort: newRule.localPort,
-			ListenAddr: newRule.listenAddr, Status: "active",
-			CreatedAt: newRule.createdAt, Operator: newRule.operator,
-			Enabled: newRule.enabled, Protocol: newRule.protocol,
-		})
+		created = append(created, infoFromRule(newRule, 0, 0))
 	}
 	if len(created) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "forward.rule_not_found")})
@@ -217,6 +212,8 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 		target           int
 		hostID, hostname string
 		protocol         string
+		wlEnabled        bool
+		whitelist        []string
 	}
 	var olds []oldRule
 	oldStart := 0
@@ -225,7 +222,8 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 		if rule == nil {
 			continue
 		}
-		olds = append(olds, oldRule{rule.targetPort, rule.hostID, rule.hostname, rule.protocol})
+		wlOn, wlList, _ := rule.whitelistSnapshot()
+		olds = append(olds, oldRule{rule.targetPort, rule.hostID, rule.hostname, rule.protocol, wlOn, wlList})
 		if oldStart == 0 || rule.targetPort < oldStart {
 			oldStart = rule.targetPort
 		}
@@ -272,18 +270,12 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 		if nt < 1 || nt > 65535 {
 			continue
 		}
-		rule, err := s.forward.createRule(host, hostname, nt, nt, listenHost, o.protocol, gid, operator, "")
+		rule, err := s.forward.createRule(host, hostname, nt, nt, listenHost, o.protocol, gid, operator, "", o.wlEnabled, o.whitelist)
 		if err != nil {
 			continue
 		}
 		go s.serveRule(rule)
-		created = append(created, forwardInfo{
-			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
-			TargetPort: rule.targetPort, LocalPort: rule.localPort,
-			ListenAddr: rule.listenAddr, Status: "active",
-			CreatedAt: rule.createdAt, Operator: rule.operator,
-			Enabled: rule.enabled, Protocol: rule.protocol, GroupID: rule.groupID,
-		})
+		created = append(created, infoFromRule(rule, 0, 0))
 	}
 	if len(created) == 0 {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "整组编辑失败"})
@@ -462,13 +454,7 @@ func (s *Server) handleForwardToggle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.forward.mu.Unlock()
-	writeJSON(w, http.StatusOK, forwardInfo{
-		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
-		TargetPort: rule.targetPort, LocalPort: rule.localPort,
-		ListenAddr: rule.listenAddr, Status: "active",
-		CreatedAt: rule.createdAt, Operator: rule.operator,
-		Sessions: sessions, Enabled: rule.enabled,
-	})
+	writeJSON(w, http.StatusOK, infoFromRule(rule, sessions, 0))
 }
 
 // handleForwardEdit updates a TCP forwarding rule (host, target port, local port).
@@ -480,10 +466,12 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HostID       string `json:"host_id"`
-		TargetPort   int    `json:"target_port"`
-		LocalPort    int    `json:"local_port"`
-		RemoteTarget string `json:"remote_target"` // 跳板目标
+		HostID           string   `json:"host_id"`
+		TargetPort       int      `json:"target_port"`
+		LocalPort        int      `json:"local_port"`
+		RemoteTarget     string   `json:"remote_target"` // 跳板目标
+		WhitelistEnabled *bool    `json:"whitelist_enabled"`
+		Whitelist        []string `json:"whitelist"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -508,6 +496,22 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
+	}
+	if req.WhitelistEnabled != nil || req.Whitelist != nil {
+		wlOn := rule.whitelistEnabled
+		if req.WhitelistEnabled != nil {
+			wlOn = *req.WhitelistEnabled
+		}
+		wlIn := req.Whitelist
+		if wlIn == nil {
+			_, wlIn, _ = rule.whitelistSnapshot()
+		}
+		wl, wlErr := normalizeWhitelist(wlOn, wlIn)
+		if wlErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": wlErr.Error()})
+			return
+		}
+		rule, _ = s.forward.updateRuleWhitelist(id, wlOn, wl)
 	}
 	// v5.4.1: when localPort changed, the old listener was closed — rebind
 	// v5.5.76: handle both TCP and UDP re-listen after edit
@@ -547,13 +551,7 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.forward.mu.Unlock()
-	writeJSON(w, http.StatusOK, forwardInfo{
-		ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
-		TargetPort: rule.targetPort, LocalPort: rule.localPort,
-		ListenAddr: rule.listenAddr, Status: "active",
-		CreatedAt: rule.createdAt, Operator: rule.operator,
-		Sessions: sessions, Enabled: rule.enabled,
-	})
+	writeJSON(w, http.StatusOK, infoFromRule(rule, sessions, 0))
 }
 
 // handleForwardCopy duplicates a TCP forwarding rule.
@@ -578,7 +576,8 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 	// v5.4.1: use createRule (which creates a real listener) instead of
 	// copyRule (which leaves listener=nil, causing a panic in serveForwardListener).
 	listenHost := s.cfg.ForwardListenAddr()
-	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget)
+	wlOn, wlList, _ := orig.whitelistSnapshot()
+	newRule, err := s.forward.createRule(orig.hostID, orig.hostname, orig.targetPort, 0, listenHost, orig.protocol, "", operator, orig.remoteTarget, wlOn, wlList)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -593,13 +592,7 @@ func (s *Server) handleForwardCopy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.forward.mu.Unlock()
-	writeJSON(w, http.StatusOK, forwardInfo{
-		ID: newRule.id, HostID: newRule.hostID, Hostname: newRule.hostname,
-		TargetPort: newRule.targetPort, LocalPort: newRule.localPort,
-		ListenAddr: newRule.listenAddr, Status: "active",
-		CreatedAt: newRule.createdAt, Operator: newRule.operator,
-		Sessions: sessions, Enabled: newRule.enabled,
-	})
+	writeJSON(w, http.StatusOK, infoFromRule(newRule, sessions, 0))
 }
 
 // --- HTTP Proxy Enhanced API ---

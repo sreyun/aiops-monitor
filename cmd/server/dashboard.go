@@ -18,19 +18,29 @@ import (
 // 模板变量（$job/$instance…）在查询前于服务端替换，label_values(...) 经 VM 标签 API 解析。
 // ============================================================================
 
+// DashAppearance 是看板级外观（Logo / 背景图 / 背景色）；图片只存站内资产 URL。
+type DashAppearance struct {
+	LogoURL         string  `json:"logo_url,omitempty"`
+	BackgroundURL   string  `json:"background_url,omitempty"`
+	BackgroundColor string  `json:"background_color,omitempty"` // #RGB / #RRGGBB / #RRGGBBAA / rgb() / rgba()
+	BackgroundFit   string  `json:"background_fit,omitempty"`   // cover | contain | repeat
+	PanelOpacity    float64 `json:"panel_opacity,omitempty"`    // 0.55–1；0 表示未设置
+}
+
 // Dashboard 是一个仪表盘。
 type Dashboard struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Vars        []DashVar   `json:"vars,omitempty"`
-	Panels      []DashPanel `json:"panels"`
-	DataSource  string      `json:"datasource,omitempty"` // 看板级默认数据源 id（""=内置 VictoriaMetrics）
-	Source      string      `json:"source,omitempty"`     // "" | "grafana:<id>" | "import" | "ai"
-	Revision    int64       `json:"revision,omitempty"`   // 乐观锁版本；每次成功保存递增
-	CreatedAt   int64       `json:"created_at"`
-	UpdatedAt   int64       `json:"updated_at"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Vars        []DashVar      `json:"vars,omitempty"`
+	Panels      []DashPanel    `json:"panels"`
+	DataSource  string         `json:"datasource,omitempty"` // 看板级默认数据源 id（""=内置 VictoriaMetrics）
+	Source      string         `json:"source,omitempty"`     // "" | "grafana:<id>" | "import" | "ai"
+	Appearance  DashAppearance `json:"appearance,omitempty"`
+	Revision    int64          `json:"revision,omitempty"` // 乐观锁版本；每次成功保存递增
+	CreatedAt   int64          `json:"created_at"`
+	UpdatedAt   int64          `json:"updated_at"`
 }
 
 // DashVar 是一个模板变量。
@@ -141,7 +151,51 @@ const (
 	maxDashboardExpr    = 16 << 10
 )
 
-var dashVarNameValid = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+var (
+	dashVarNameValid    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	dashColorValid      = regexp.MustCompile(`(?i)^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$|^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$`)
+	dashAssetURLValid   = regexp.MustCompile(`^/api/v1/dashboards/assets/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9._-]{1,128}$`)
+	dashAssetNameValid  = regexp.MustCompile(`^[a-f0-9]{8,32}\.(png|jpe?g|webp|svg)$`)
+	dashAssetDashIDRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+)
+
+// normalizeDashAppearance 校验并规整看板外观字段。
+func normalizeDashAppearance(a *DashAppearance) error {
+	if a == nil {
+		return nil
+	}
+	a.LogoURL = strings.TrimSpace(a.LogoURL)
+	a.BackgroundURL = strings.TrimSpace(a.BackgroundURL)
+	a.BackgroundColor = strings.TrimSpace(a.BackgroundColor)
+	a.BackgroundFit = strings.ToLower(strings.TrimSpace(a.BackgroundFit))
+	if a.LogoURL != "" && !dashAssetURLValid.MatchString(a.LogoURL) {
+		return fmt.Errorf("Logo 地址无效：仅支持本站看板资产路径")
+	}
+	if a.BackgroundURL != "" && !dashAssetURLValid.MatchString(a.BackgroundURL) {
+		return fmt.Errorf("背景图地址无效：仅支持本站看板资产路径")
+	}
+	if a.BackgroundColor != "" {
+		if len(a.BackgroundColor) > 64 || !dashColorValid.MatchString(a.BackgroundColor) {
+			return fmt.Errorf("背景色格式无效：请使用 #RGB / #RRGGBB / #RRGGBBAA 或 rgb()/rgba()")
+		}
+	}
+	switch a.BackgroundFit {
+	case "", "cover", "contain", "repeat":
+		if a.BackgroundFit == "" && a.BackgroundURL != "" {
+			a.BackgroundFit = "cover"
+		}
+	default:
+		return fmt.Errorf("背景图适配方式无效：仅支持 cover / contain / repeat")
+	}
+	if a.PanelOpacity != 0 {
+		if a.PanelOpacity < 0.55 || a.PanelOpacity > 1 {
+			return fmt.Errorf("面板不透明度须在 0.55–1 之间")
+		}
+		// 保留两位小数，避免浮点噪声
+		a.PanelOpacity = math.Round(a.PanelOpacity*100) / 100
+	}
+	return nil
+}
 
 // normalizeDashboard 是所有手工编辑、导入和 AI 生成看板共同经过的信任边界。
 // 它既限制载荷/查询规模，也把网格与标识规整到前端可安全渲染的范围。
@@ -159,6 +213,9 @@ func normalizeDashboard(d *Dashboard) error {
 	d.Description = strings.TrimSpace(d.Description)
 	if len([]rune(d.Description)) > 2000 {
 		return fmt.Errorf("仪表盘描述不能超过 2000 个字符")
+	}
+	if err := normalizeDashAppearance(&d.Appearance); err != nil {
+		return err
 	}
 	if len(d.Tags) > 20 {
 		return fmt.Errorf("仪表盘标签不能超过 20 个")
@@ -614,6 +671,11 @@ func healImportedDashboard(d *Dashboard) bool {
 			p.Grid.H = 3
 			changed = true
 		}
+		// KPI/stat：h≤5 装不下「大数字+说明+sparkline」，会被 overflow 裁切；抬到 6 后由下方重叠消解下推。
+		if p.Type == "stat" && p.Grid.H > 0 && p.Grid.H < 6 {
+			p.Grid.H = 6
+			changed = true
+		}
 		for j := range p.Targets {
 			expr := p.Targets[j].Expr
 			neu := promoteTemplateVarEq(expandGrafanaClassicVars(expr), varNames)
@@ -632,12 +694,18 @@ func healImportedDashboard(d *Dashboard) bool {
 		}
 	}
 	sortPanels(d.Panels)
-	if panelsGridOverlap(d.Panels) {
-		resolvePanelOverlaps(d.Panels)
+	// AI 看板：若存在半行空白、跨区混行或垂直断层，按分区整行重排（与「应用优化」同源布局器）。
+	if isAIDashboardSource(d.Source) && aiDashLayoutNeedsTidy(d.Panels) {
+		layoutAIDashPanels(d.Panels)
 		changed = true
-	}
-	if compactPanelGrid(d.Panels) {
-		changed = true
+	} else {
+		if panelsGridOverlap(d.Panels) {
+			resolvePanelOverlaps(d.Panels)
+			changed = true
+		}
+		if compactPanelGrid(d.Panels) {
+			changed = true
+		}
 	}
 	return changed
 }

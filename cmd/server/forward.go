@@ -197,6 +197,10 @@ type forwardRule struct {
 	createdAt    int64
 	enabled      bool   // whether this rule is currently active
 	remoteTarget string // 跳板目标，如 "192.168.30.220:3306"（为空时走 Agent 本机 localhost）
+	// Source IP whitelist (hot-updated via setWhitelist / atomic snapshot).
+	whitelistEnabled bool
+	whitelist        []string
+	wl               atomic.Value // *wlSnap
 }
 
 // forwardWaitInfo is what the agent receives from the long-poll.
@@ -218,12 +222,14 @@ type forwardInfo struct {
 	Status        string `json:"status"`
 	CreatedAt     int64  `json:"created_at"`
 	Operator      string `json:"operator"`
-	Sessions      int    `json:"sessions"`        // 当前活跃连接（会话）数
-	TotalSessions int64  `json:"total_sessions"`  // 累计总连接（会话）数
+	Sessions      int    `json:"sessions"`       // 当前活跃连接（会话）数
+	TotalSessions int64  `json:"total_sessions"` // 累计总连接（会话）数
 	Enabled       bool   `json:"enabled"`
-	Protocol      string `json:"protocol,omitempty"`      // "tcp" | "udp"
+	Protocol      string `json:"protocol,omitempty"`       // "tcp" | "udp"
 	GroupID       string `json:"group_id,omitempty"`       // 端口范围批量组（同组共享），供整组操作
 	RemoteTarget  string `json:"remote_target,omitempty"` // 跳板目标地址
+	WhitelistEnabled bool     `json:"whitelist_enabled,omitempty"`
+	Whitelist        []string `json:"whitelist,omitempty"`
 }
 
 // fwdCounter tracks per-rule / per-http-proxy connection counts. active is the
@@ -567,7 +573,33 @@ func (m *forwardManager) unregisterWaiter(hostID string, ch chan forwardWaitInfo
 
 // ---- rule management ----
 
-func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, groupID, operator, remoteTarget string) (*forwardRule, error) {
+func persistedFromRule(r *forwardRule) PersistedForwardRule {
+	enabled, list, _ := r.whitelistSnapshot()
+	return PersistedForwardRule{
+		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
+		TargetPort: r.targetPort, LocalPort: r.localPort,
+		ListenAddr: r.listenAddr, Operator: r.operator,
+		CreatedAt: r.createdAt, Enabled: r.enabled,
+		Protocol: r.protocol, GroupID: r.groupID, RemoteTarget: r.remoteTarget,
+		WhitelistEnabled: enabled, Whitelist: append([]string(nil), list...),
+	}
+}
+
+func infoFromRule(r *forwardRule, sessions int, total int64) forwardInfo {
+	enabled, list, _ := r.whitelistSnapshot()
+	return forwardInfo{
+		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
+		TargetPort: r.targetPort, LocalPort: r.localPort,
+		ListenAddr: r.listenAddr, Status: "active",
+		CreatedAt: r.createdAt, Operator: r.operator,
+		Sessions: sessions, TotalSessions: total,
+		Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
+		RemoteTarget: r.remoteTarget,
+		WhitelistEnabled: enabled, Whitelist: append([]string(nil), list...),
+	}
+}
+
+func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPort int, listenHost, protocol, groupID, operator, remoteTarget string, wlEnabled bool, wl []string) (*forwardRule, error) {
 	if protocol != "udp" {
 		protocol = "tcp"
 	}
@@ -630,17 +662,12 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 		operator: operator, createdAt: now,
 		enabled: true, remoteTarget: remoteTarget,
 	}
+	r.setWhitelist(wlEnabled, wl)
 	m.mu.Lock()
 	m.rules[r.id] = r
 	m.mu.Unlock()
 	// Persist to config (PostgreSQL)
-	_ = m.cfg.AddForwardRule(PersistedForwardRule{
-		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
-		TargetPort: r.targetPort, LocalPort: r.localPort,
-		ListenAddr: r.listenAddr, Operator: r.operator,
-		CreatedAt: now, Enabled: true, Protocol: protocol, GroupID: groupID,
-		RemoteTarget: remoteTarget,
-	})
+	_ = m.cfg.AddForwardRule(persistedFromRule(r))
 	return r, nil
 }
 
@@ -809,13 +836,21 @@ func (m *forwardManager) updateRule(id, hostID, hostname string, targetPort, loc
 		}
 	}
 	// Persist update to config (PostgreSQL)
-	_ = m.cfg.UpdateForwardRule(id, PersistedForwardRule{
-		ID: r.id, HostID: r.hostID, Hostname: r.hostname,
-		TargetPort: r.targetPort, LocalPort: r.localPort,
-		ListenAddr: r.listenAddr, Operator: r.operator,
-		CreatedAt: r.createdAt, Enabled: r.enabled,
-		RemoteTarget: r.remoteTarget,
-	})
+	_ = m.cfg.UpdateForwardRule(id, persistedFromRule(r))
+	return r, nil
+}
+
+// updateRuleWhitelist hot-updates the source IP whitelist without rebinding the listener.
+func (m *forwardManager) updateRuleWhitelist(id string, enabled bool, list []string) (*forwardRule, error) {
+	m.mu.Lock()
+	r, ok := m.rules[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("rule not found")
+	}
+	r.setWhitelist(enabled, list)
+	m.mu.Unlock()
+	_ = m.cfg.UpdateForwardRule(id, persistedFromRule(r))
 	return r, nil
 }
 
@@ -827,6 +862,7 @@ func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
 	if !ok {
 		return nil, fmt.Errorf("rule not found")
 	}
+	wlOn, wlList, _ := r.whitelistSnapshot()
 	newRule := &forwardRule{
 		id:           termID()[:8],
 		hostID:       r.hostID,
@@ -843,6 +879,7 @@ func (m *forwardManager) copyRule(id string) (*forwardRule, error) {
 		enabled:      true,
 		remoteTarget: r.remoteTarget,
 	}
+	newRule.setWhitelist(wlOn, wlList)
 	m.rules[newRule.id] = newRule
 	return newRule, nil
 }
@@ -858,14 +895,16 @@ func (m *forwardManager) restoreRules(srv *Server) {
 	for _, pr := range rules {
 		if !pr.Enabled {
 			// Store disabled rules without a listener
-			m.mu.Lock()
-			m.rules[pr.ID] = &forwardRule{
+			dr := &forwardRule{
 				id: pr.ID, hostID: pr.HostID, hostname: pr.Hostname,
 				targetPort: pr.TargetPort, localPort: pr.LocalPort,
 				listenAddr: pr.ListenAddr, operator: pr.Operator,
 				createdAt: pr.CreatedAt, enabled: false, protocol: pr.Protocol, groupID: pr.GroupID,
 				remoteTarget: pr.RemoteTarget,
 			}
+			dr.setWhitelist(pr.WhitelistEnabled, pr.Whitelist)
+			m.mu.Lock()
+			m.rules[pr.ID] = dr
 			m.mu.Unlock()
 			continue
 		}
@@ -908,15 +947,10 @@ func (m *forwardManager) restoreRules(srv *Server) {
 			operator: pr.Operator, createdAt: pr.CreatedAt, enabled: true,
 			remoteTarget: pr.RemoteTarget,
 		}
+		r.setWhitelist(pr.WhitelistEnabled, pr.Whitelist)
 		// If the port changed, update the persisted config
 		if actualPort != pr.LocalPort {
-			_ = m.cfg.UpdateForwardRule(pr.ID, PersistedForwardRule{
-				ID: r.id, HostID: r.hostID, Hostname: r.hostname,
-				TargetPort: r.targetPort, LocalPort: r.localPort,
-				ListenAddr: r.listenAddr, Operator: r.operator,
-				CreatedAt: r.createdAt, Enabled: r.enabled, Protocol: proto, GroupID: pr.GroupID,
-				RemoteTarget: r.remoteTarget,
-			})
+			_ = m.cfg.UpdateForwardRule(pr.ID, persistedFromRule(r))
 		}
 		m.mu.Lock()
 		m.rules[r.id] = r
@@ -937,15 +971,7 @@ func (m *forwardManager) listRules() []forwardInfo {
 			}
 		}
 		_, total := m.counts("rule:" + r.id)
-		out = append(out, forwardInfo{
-			ID: r.id, HostID: r.hostID, Hostname: r.hostname,
-			TargetPort: r.targetPort, LocalPort: r.localPort,
-			ListenAddr: r.listenAddr, Status: "active",
-			CreatedAt: r.createdAt, Operator: r.operator,
-			Sessions: sessions, TotalSessions: total,
-			Enabled: r.enabled, Protocol: r.protocol, GroupID: r.groupID,
-			RemoteTarget: r.remoteTarget,
-		})
+		out = append(out, infoFromRule(r, sessions, total))
 	}
 	return out
 }
@@ -959,12 +985,14 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HostID        string `json:"host_id"`
-		TargetPort    int    `json:"target_port"`
-		TargetPortEnd int    `json:"target_port_end"` // > target_port：端口范围批量转发（含端点）
-		LocalPort     int    `json:"local_port"`      // 0 = auto-allocate
-		Protocol      string `json:"protocol"`        // "tcp"(默认) | "udp"
-		RemoteTarget  string `json:"remote_target"`   // 跳板目标，如 "192.168.30.220:3306"
+		HostID           string   `json:"host_id"`
+		TargetPort       int      `json:"target_port"`
+		TargetPortEnd    int      `json:"target_port_end"` // > target_port：端口范围批量转发（含端点）
+		LocalPort        int      `json:"local_port"`      // 0 = auto-allocate
+		Protocol         string   `json:"protocol"`        // "tcp"(默认) | "udp"
+		RemoteTarget     string   `json:"remote_target"`   // 跳板目标，如 "192.168.30.220:3306"
+		WhitelistEnabled bool     `json:"whitelist_enabled"`
+		Whitelist        []string `json:"whitelist"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -972,6 +1000,11 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.HostID == "" || req.TargetPort < 1 || req.TargetPort > 65535 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
+		return
+	}
+	wl, wlErr := normalizeWhitelist(req.WhitelistEnabled, req.Whitelist)
+	if wlErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": wlErr.Error()})
 		return
 	}
 	// look up hostname
@@ -1012,7 +1045,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		if isRange {
 			lp = p // 范围：本地端口镜像目标端口
 		}
-		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, groupID, operator, req.RemoteTarget)
+		rule, err := s.forward.createRule(req.HostID, hostname, p, lp, listenHost, req.Protocol, groupID, operator, req.RemoteTarget, req.WhitelistEnabled, wl)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -1022,12 +1055,7 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		go s.serveRule(rule)
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: hostname,
 			Message: Tz("log.forward_create", rule.id, hostname, p, rule.listenAddr)})
-		created = append(created, forwardInfo{
-			ID: rule.id, HostID: rule.hostID, Hostname: rule.hostname,
-			TargetPort: rule.targetPort, LocalPort: rule.localPort,
-			ListenAddr: rule.listenAddr, Status: "active",
-			CreatedAt: rule.createdAt, Operator: operator, Protocol: rule.protocol, GroupID: rule.groupID,
-		})
+		created = append(created, infoFromRule(rule, 0, 0))
 	}
 	if len(created) == 0 {
 		msg := "创建转发失败"
@@ -1074,6 +1102,12 @@ func (s *Server) serveForwardListener(rule *forwardRule) {
 		conn, err := rule.listener.Accept()
 		if err != nil {
 			return // listener closed
+		}
+		enabled, _, nets := rule.whitelistSnapshot()
+		if !clientAllowed(enabled, nets, conn.RemoteAddr()) {
+			slog.Debug("转发 TCP 来源 IP 被白名单拒绝", "rule", rule.id, "remote", conn.RemoteAddr().String(), "listen", rule.listenAddr)
+			_ = conn.Close()
+			continue
 		}
 		// P1: set TCP keepalive on accepted connections
 		if tc, ok := conn.(*net.TCPConn); ok {

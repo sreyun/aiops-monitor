@@ -28,7 +28,12 @@ function switchAutomationView(mode) {
 function renderPlaybooks(pbs) {
   const list = $("playbookList"), empty = $("playbookEmpty");
   if (!list) return;
-  if (PB_SEARCH) { const q = PB_SEARCH.toLowerCase(); pbs = (pbs || []).filter(p => ((p.name || "") + " " + (p.description || "") + " " + (p.id || "")).toLowerCase().includes(q)); }
+  if (PB_SEARCH) {
+    pbs = (pbs || []).filter(p => matchesSearchTokens(
+      [p.name, p.description, p.id].filter(Boolean).join(" "),
+      PB_SEARCH
+    ));
+  }
   if (empty) empty.style.display = pbs.length === 0 ? "" : "none";
   // 视图模式：卡片(默认) / 列表——复用同一 .pb-card 结构，列表态仅由 CSS 重排为紧凑单行，
   // 从而不改动 data-pbact 委托对 .pb-card[data-id] 的依赖。
@@ -178,7 +183,12 @@ function renderPbSteps(steps) {
         <div class="pb-mod-hint">${I18N.t("sre.pb_gather_desc","采集主机名、IP、架构、CPU、内存摘要与负载（跨系统一致，只读）。建议「保存输出到变量」。")}</div>
       </div>
       <div class="pb-mod pb-mod-host_inspect" style="display:none">
-        <div class="pb-mod-hint">${I18N.t("sre.pb_host_inspect_desc","深度主机巡检（Windows/Linux/macOS/麒麟），输出结构化 JSON 报告。推荐在「主机巡检」Tab 一键发起并查看 Web 报告。")}</div>
+        <div class="pb-mod-hint">${I18N.t("sre.pb_host_inspect_desc","深度主机巡检（Windows/Linux/macOS/麒麟），输出结构化 JSON 报告。告警级发现会以非零退出码返回，模板默认「忽略非零退出码」以免阻断后续步骤；完整 Web 报告也可在「主机巡检」Tab 查看。")}</div>
+        <div class="field"><label>${I18N.t("sre.pb_inspect_profile","巡检档位 profile")}</label><div class="select-wrap"><select class="pb-arg-inspect-profile">
+          <option value="quick" ${optSel("quick", a.profile||"standard")}>${I18N.t("sre.pb_inspect_quick","快速")} quick</option>
+          <option value="standard" ${optSel("standard", a.profile||"standard")}>${I18N.t("sre.pb_inspect_standard","标准")} standard</option>
+          <option value="deep" ${optSel("deep", a.profile||"standard")}>${I18N.t("sre.pb_inspect_deep","深度")} deep</option>
+        </select></div></div>
       </div>
       <div class="pb-mod pb-mod-disk_usage pb-mod-mem_info pb-mod-cpu_load pb-mod-process_top pb-mod-uptime_info pb-mod-pkg_list pb-mod-net_ifaces pb-mod-net_listen pb-mod-net_routes pb-mod-net_sockets pb-mod-docker_ps pb-mod-docker_stats pb-mod-dmesg_recent pb-mod-time_sync pb-mod-users_logged pb-mod-security_listen pb-mod-auth_failures pb-mod-bigdata_jps pb-mod-bigdata_ports" style="display:none">
         <div class="pb-mod-hint">${I18N.t("sre.pb_readonly_hint","只读采集模块：不会修改系统配置、不会启停服务、不会写入文件。")}</div>
@@ -315,6 +325,9 @@ function collectModuleArgs(el, mod) {
     const lines = g(".pb-arg-journal-lines"); if (lines) args.lines = lines;
   } else if (mod === "kube_get") {
     const res = g(".pb-arg-kube-resource"); if (res) args.resource = res;
+  } else if (mod === "host_inspect") {
+    const profile = g(".pb-arg-inspect-profile");
+    args.profile = profile || "standard";
   }
   return args;
 }
@@ -445,15 +458,17 @@ async function executePlaybook(id) {
       toast((pf.warnings || []).join("；") || pf.error || "剧本确定性预检未通过", "err");
       return;
     }
-    if (pf.risk_level !== "low" || pf.requires_approval || (pf.warnings || []).length) {
+    if (pf.risk_level !== "low" || pf.requires_approval || pf.freeze_active || (pf.warnings || []).length) {
       const risk = pf.risk_level === "high" ? "高" : pf.risk_level === "medium" ? "中" : "低";
+      const freezeName = pf.freeze_window && pf.freeze_window.name ? pf.freeze_window.name : "";
       const detail = [
         `确定性预检：风险 ${risk}；在线 ${pf.online_targets} 台；离线跳过 ${pf.offline_targets} 台；最大并发 ${pf.max_parallel}。`,
+        pf.freeze_active ? (`❄ 变更冻结中${freezeName ? "：「"+freezeName+"」" : ""}——禁止未确认直跑，继续即视为人工确认。`) : "",
         pf.auto_rollback ? "失败自动回滚：已启用（仅执行显式回滚命令）。" : "失败自动回滚：未启用。",
         ...(pf.warnings || [])
-      ].join("\n");
+      ].filter(Boolean).join("\n");
       if (!confirm(detail + "\n\n确认继续执行？")) return;
-      riskAccepted = !!pf.requires_approval;
+      riskAccepted = !!(pf.requires_approval || pf.freeze_active);
     }
     const headers = riskAccepted ? {"X-AIOps-Risk-Accepted": "true"} : {};
     const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/execute`, { method: "POST", headers });
@@ -542,9 +557,13 @@ safeAddEventListener("pbAddStep", "click", () => {
 const PB_READONLY_TEMPLATES = {
   deep: {
     name: "深度主机巡检（只读）",
-    description: "一键 host_inspect：跨 Windows/Linux/macOS/麒麟生成结构化巡检报告",
+    description: "一键 host_inspect：跨 Windows/Linux/macOS/麒麟生成结构化巡检报告（standard 档；告警发现不阻断剧本）",
     steps: [
-      { name: "深度主机巡检", module: "host_inspect", target: "all", timeout_sec: 120, register: "inspect" },
+      {
+        name: "深度主机巡检", module: "host_inspect", target: "all",
+        timeout_sec: 180, register: "inspect", ignore_exit: true,
+        args: { profile: "standard" },
+      },
     ]
   },
   sys: {
@@ -557,6 +576,11 @@ const PB_READONLY_TEMPLATES = {
       { name: "CPU负载", module: "cpu_load", target: "all", timeout_sec: 30 },
       { name: "进程占用", module: "process_top", target: "all", timeout_sec: 45 },
       { name: "运行时长", module: "uptime_info", target: "all", timeout_sec: 20 },
+      {
+        name: "深度巡检摘要", module: "host_inspect", target: "all",
+        timeout_sec: 180, register: "inspect", ignore_exit: true, continue_on_error: true,
+        args: { profile: "quick" },
+      },
     ]
   },
   net: {
@@ -567,14 +591,16 @@ const PB_READONLY_TEMPLATES = {
       { name: "监听端口", module: "net_listen", target: "all", timeout_sec: 30 },
       { name: "路由表", module: "net_routes", target: "all", timeout_sec: 20 },
       { name: "连接摘要", module: "net_sockets", target: "all", timeout_sec: 30 },
+      { name: "DNS 解析探测", module: "dns_resolve", target: "all", timeout_sec: 20, args: { host: "www.baidu.com" }, continue_on_error: true },
     ]
   },
   sre: {
     name: "SRE可观测巡检（只读）",
     description: "日志、容器、时间同步等只读巡检",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30 },
-      { name: "最近日志", module: "journal_recent", target: "all", timeout_sec: 45, args: { lines: "80" } },
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
+      { name: "最近日志", module: "journal_recent", target: "all", timeout_sec: 45, args: { lines: "80" }, continue_on_error: true },
+      { name: "内核消息", module: "dmesg_recent", target: "all", timeout_sec: 30, continue_on_error: true },
       { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 30, continue_on_error: true },
       { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 45, continue_on_error: true },
       { name: "时间时区", module: "time_sync", target: "all", timeout_sec: 15 },
@@ -586,17 +612,18 @@ const PB_READONLY_TEMPLATES = {
     steps: [
       { name: "登录会话", module: "users_logged", target: "all", timeout_sec: 20 },
       { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30 },
-      { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 45, continue_on_error: true },
+      { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 45, continue_on_error: true, ignore_exit: true },
     ]
   },
   bigdata: {
     name: "大数据巡检（只读）",
     description: "Java 进程与常见大数据端口监听检查（只读）",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30 },
-      { name: "Java进程", module: "bigdata_jps", target: "all", timeout_sec: 30, continue_on_error: true },
-      { name: "大数据端口", module: "bigdata_ports", target: "all", timeout_sec: 30 },
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
+      { name: "Java进程", module: "bigdata_jps", target: "all", timeout_sec: 30, continue_on_error: true, ignore_exit: true },
+      { name: "大数据端口", module: "bigdata_ports", target: "all", timeout_sec: 30, continue_on_error: true },
       { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 30 },
+      { name: "内存概况", module: "mem_info", target: "all", timeout_sec: 30 },
     ]
   }
 };
@@ -607,7 +634,9 @@ function applyPbTemplate(key) {
   if (!confirm(`将用「${tpl.name}」替换当前步骤列表，是否继续？`)) return;
   $("pbName").value = tpl.name;
   $("pbDesc").value = tpl.description;
-  renderPbSteps(tpl.steps.map(s => Object.assign({ target: "all", timeout_sec: 30, continue_on_error: false }, s)));
+  renderPbSteps(tpl.steps.map(s => Object.assign({
+    target: "all", timeout_sec: 30, continue_on_error: false, ignore_exit: false, args: {},
+  }, s)));
   toast("已套用只读模板：" + tpl.name, "ok");
 }
 
@@ -775,14 +804,19 @@ async function openIncidentDetail(id){
   try {
     const inc = await fetch(`${API}/incidents/${id}`).then(r=>r.json());
     $("incidentDetailTitle").textContent = `#${inc.id} ${inc.title}`;
-    const tl = (inc.timeline||[]).slice().reverse().map(e=>`<div class="tl-item">
+    const tl = (inc.timeline||[]).slice().reverse().map(e=>{
+      const cites=(e.kind==="ai_diagnosis"&&e.citations&&e.citations.length&&typeof renderAssistCitations==="function")
+        ? renderAssistCitations(e.citations,{open:false}) : "";
+      return `<div class="tl-item">
       <div class="tl-dot ${_sevCls(inc.severity)}"></div>
-      <div class="tl-body"><div class="tl-head"><b>${_tlKind(e.kind)}</b> <span class="tl-time">${fmtDateTime(e.ts)}</span>${e.actor?` · <span class="tl-actor">${esc(e.actor)}</span>`:""}</div>${e.text?`<div class="tl-text">${esc(e.text)}</div>`:""}${typeof attachChipsHTML==="function"?attachChipsHTML(e.attachments):""}</div></div>`).join("");
+      <div class="tl-body"><div class="tl-head"><b>${_tlKind(e.kind)}</b> <span class="tl-time">${fmtDateTime(e.ts)}</span>${e.actor?` · <span class="tl-actor">${esc(e.actor)}</span>`:""}</div>${e.text?`<div class="tl-text">${esc(e.text)}</div>`:""}${cites}${typeof attachChipsHTML==="function"?attachChipsHTML(e.attachments):""}</div></div>`;
+    }).join("");
     $("incidentDetailBody").innerHTML = `<div class="sre-meta">
       <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span>
       <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
       <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
       ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 ${I18N.t("sre.ticket","工单")} #${inc.ticket_id}</span>`:""}</div>
+      <div id="incLoopStrip" class="inc-loop-strip"><div class="empty-line">${I18N.t("sre.loop_loading","加载闭环状态…")}</div></div>
       <div class="subhead">${I18N.t("sre.timeline","时间线")}</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
       <div class="subhead" style="margin-top:12px">📦 ${I18N.t("sre.related_changes","关联变更")}</div>
       <div id="incRelatedChanges" class="sre-list"><div class="empty-line">加载中…</div></div>
@@ -810,6 +844,7 @@ async function openIncidentDetail(id){
     }
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">${I18N.t("sre.inc_ack_btn","确认")}</button>`); acts.push(`<button class="btn sm" data-iact="resolve">${I18N.t("sre.inc_resolve_btn","解决")}</button>`); }
     if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">${I18N.t("sre.inc_escalate_btn","升级工单")}</button>`);
+    else acts.push(`<button class="btn sm" data-iact="open-ticket">🎫 ${I18N.t("sre.open_ticket","打开工单")} #${inc.ticket_id}</button>`);
     acts.push(`<div class="inc-comment-bar"><div id="incCommentAttach" class="attach-chips" style="display:none"></div><button type="button" class="btn sm" data-iact="comment-attach" title="${I18N.t("sre.upload_img_file","上传图片或文件")}">📎</button><input type="file" id="incCommentFile" multiple hidden accept="${typeof ATTACH_FILE_ACCEPT!=="undefined"?ATTACH_FILE_ACCEPT:"image/*,.txt,.log,.pdf,.docx,.xlsx"}"><input type="text" id="incCommentInput" placeholder="${I18N.t("sre.add_comment_ph","添加评论…")}"><button class="btn primary sm" data-iact="comment">${I18N.t("sre.send","发送")}</button></div>`);
     const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
     window._INC_COMMENT_ATTACHMENTS = [];
@@ -835,7 +870,67 @@ async function openIncidentDetail(id){
     renderDiagAttachments();
     $("incidentDetailMask").classList.add("show");
     loadIncidentRelatedChanges(inc.id);
+    loadIncidentLoopStrip(inc);
   } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
+}
+async function loadIncidentLoopStrip(inc){
+  const el=$("incLoopStrip"); if(!el||!inc) return;
+  try{
+    const [pages, runs, tk]=await Promise.all([
+      fetch(`${API}/oncall/pages?open=1`).then(r=>r.json()).catch(()=>[]),
+      fetch(`${API}/remediation/runs`).then(r=>r.json()).catch(()=>[]),
+      inc.ticket_id ? fetch(`${API}/tickets/${inc.ticket_id}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null)
+    ]);
+    const page=(pages||[]).find(p=>Number(p.incident_id)===Number(inc.id));
+    const pending=(runs||[]).filter(r=>Number(r.incident_id)===Number(inc.id)&&r.status==="pending_approval");
+    const rows=[];
+    if(page){
+      const next=page.next_escalate_at?fmtDateTime(page.next_escalate_at):"—";
+      const notified=(page.notified||[]).slice(0,6).join(", ")||"—";
+      rows.push(`<div class="inc-loop-row"><b>📞 ${I18N.t("sre.oncall_page","值班升级")}</b>
+        <span>${I18N.t("sre.oncall_step","阶梯")} ${Number(page.step)||0}</span>
+        <span class="badge info">${esc(page.status||"pending")}</span>
+        <span>${I18N.t("sre.oncall_notified","已通知")}：${esc(notified)}</span>
+        <span>${I18N.t("sre.oncall_next","下次升级")}：${esc(next)}</span></div>`);
+    } else {
+      rows.push(`<div class="inc-loop-row"><b>📞 ${I18N.t("sre.oncall_page","值班升级")}</b><span class="hint">${I18N.t("sre.oncall_none","暂无进行中的升级页")}</span></div>`);
+    }
+    if(tk){
+      rows.push(`<div class="inc-loop-row"><b>🎫 ${I18N.t("sre.ticket","工单")}</b>
+        <span>#${tk.id}</span><span class="badge ${_tkStatusCls(tk.status)}">${esc(tk.status)}</span>
+        ${tk.assignee?`<span>@${esc(tk.assignee)}</span>`:""}
+        <div class="inc-loop-acts"><button class="btn sm" data-loop="open-ticket">${I18N.t("sre.open_ticket","打开工单")}</button>
+        ${(tk.status!=="resolved"&&tk.status!=="closed")?`<button class="btn sm primary" data-loop="close-ticket">${I18N.t("sre.close_ticket","关闭工单")}</button>`:""}</div></div>`);
+    } else {
+      rows.push(`<div class="inc-loop-row"><b>🎫 ${I18N.t("sre.ticket","工单")}</b><span class="hint">${I18N.t("sre.ticket_none","尚未升级工单")}</span>
+        <div class="inc-loop-acts"><button class="btn sm" data-loop="escalate">${I18N.t("sre.inc_escalate_btn","升级工单")}</button></div></div>`);
+    }
+    if(pending.length){
+      rows.push(`<div class="inc-loop-row"><b>🛠 ${I18N.t("sre.pending_fix","待审修复")}</b>
+        ${pending.map(r=>{
+          const freeze=/变更冻结/.test(String(r.reason||""));
+          return `<span>${esc(r.rule_name||r.playbook_name||r.id)}${freeze?` <span class="badge freeze">${I18N.t("sre.freeze_badge","冻结中")}</span>`:""}
+            <button class="btn primary sm" data-loop-approve="${r.id}">${I18N.t("sre.approve","批准")}</button>
+            <button class="btn danger sm" data-loop-reject="${r.id}">${I18N.t("sre.reject","拒绝")}</button></span>`;
+        }).join(" · ")}</div>`);
+    } else {
+      rows.push(`<div class="inc-loop-row"><b>🛠 ${I18N.t("sre.pending_fix","待审修复")}</b><span class="hint">${I18N.t("sre.pending_fix_none","无待审批项（可先生成修复提案）")}</span></div>`);
+    }
+    el.innerHTML=rows.join("");
+    el.querySelectorAll("[data-loop]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.loop));
+    el.querySelectorAll("[data-loop-approve]").forEach(b=>b.onclick=async()=>{
+      await fetch(`${API}/remediation/runs/${b.dataset.loopApprove}/approve`,{method:"POST"});
+      toast(I18N.t("sre.approved_ok","已批准执行"),"ok");
+      loadIncidentLoopStrip(inc); loadRemediation(); loadSREBadge();
+    });
+    el.querySelectorAll("[data-loop-reject]").forEach(b=>b.onclick=async()=>{
+      await fetch(`${API}/remediation/runs/${b.dataset.loopReject}/reject`,{method:"POST"});
+      toast(I18N.t("sre.rejected_ok","已拒绝"),"ok");
+      loadIncidentLoopStrip(inc); loadRemediation(); loadSREBadge();
+    });
+  }catch(e){
+    el.innerHTML=`<div class="empty-line">${I18N.t("sre.loop_load_failed","闭环状态加载失败")}</div>`;
+  }
 }
 async function loadIncidentRelatedChanges(id){
   const el=$("incRelatedChanges"); if(!el) return;
@@ -861,6 +956,24 @@ async function incidentAction(id, act){
       const tk=await r.json().catch(()=>({}));
       toast(`${I18N.t("sre.escalated_to_ticket","已升级为工单")} #${tk.id||"?"}`,"ok");
       if (tk && tk.id){ openTicketModal(tk); return; }
+    }
+    else if (act==="open-ticket"){
+      const tid=(window._curIncident&&window._curIncident.ticket_id)||0;
+      if(!tid){ toast(I18N.t("sre.ticket_none","尚未升级工单"),"err"); return; }
+      const tk=await fetch(`${API}/tickets/${tid}`).then(r=>r.json());
+      openTicketModal(tk); return;
+    }
+    else if (act==="close-ticket"){
+      const tid=(window._curIncident&&window._curIncident.ticket_id)||0;
+      if(!tid){ toast(I18N.t("sre.ticket_none","尚未升级工单"),"err"); return; }
+      if(!confirm(I18N.t("sre.confirm_close_ticket","关闭工单并回写事件为已解决？"))) return;
+      const cur=await fetch(`${API}/tickets/${tid}`).then(r=>r.json());
+      const body={title:cur.title,priority:cur.priority||"p3",status:"closed",assignee:cur.assignee||"",description:cur.description||""};
+      const r=await fetch(`${API}/tickets/${tid}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ toast(j.error||I18N.t("toast.operation_failed","操作失败"),"err"); return; }
+      toast(I18N.t("sre.ticket_closed_inc","工单已关闭，关联事件已标记解决"),"ok");
+      openIncidentDetail(id); loadIncidents(); loadTickets(); loadSREBadge(); return;
     }
     else if (act==="diagnose"){
       // 流式写入诊断会话（与追问同源 UI），不再丢弃 SSE
@@ -963,7 +1076,7 @@ function promptOpenAIConfig(err){
   setTimeout(()=>{ try{ openAIConfig(); }catch(e){} }, 200);
 }
 
-// RAG 降级 / 命中提示（挂到目标容器顶部）
+// RAG 降级 / 命中提示 + 证据链卡片（挂到目标容器顶部）
 function applyRAGMetaHint(meta, containerId){
   if(!meta) return;
   const tip=meta.degraded_tip||"";
@@ -976,22 +1089,38 @@ function applyRAGMetaHint(meta, containerId){
     }
     hits.push(sk);
   }
-  if(Array.isArray(meta.citations) && meta.citations.length){
-    const titles=meta.citations.slice(0,4).map(c=>c.title||c.kind).filter(Boolean);
-    if(titles.length) hits.push("依据 "+titles.join("、")+(meta.citations.length>4?"…":""));
-  }
   let text=tip;
   if(meta.weknora_degraded && meta.weknora_tip){
     text = text ? (text+" · "+meta.weknora_tip) : meta.weknora_tip;
   }
   if(hits.length) text = (text? text+" · ":"") + "📚 "+hits.join(" · ");
-  if(!text) return;
   const host=containerId?document.getElementById(containerId):null;
   if(host){
-    let bar=host.querySelector(".ai-rag-hint");
-    if(!bar){ bar=document.createElement("div"); bar.className="ai-rag-hint"; host.prepend(bar); }
-    bar.textContent=text;
-    bar.title=tip||meta.weknora_tip||text;
+    if(text){
+      let bar=host.querySelector(".ai-rag-hint");
+      if(!bar){ bar=document.createElement("div"); bar.className="ai-rag-hint"; host.prepend(bar); }
+      bar.textContent=text;
+      bar.title=tip||meta.weknora_tip||text;
+    }
+    if(Array.isArray(meta.citations) && meta.citations.length && typeof renderAssistCitations==="function"){
+      let wrap=host.querySelector(".ai-evidence-host");
+      if(!wrap){
+        wrap=document.createElement("div");
+        wrap.className="ai-evidence-host";
+        const bar=host.querySelector(".ai-rag-hint");
+        if(bar&&bar.nextSibling) host.insertBefore(wrap, bar.nextSibling);
+        else if(bar) bar.after(wrap);
+        else host.prepend(wrap);
+      }
+      wrap.innerHTML=renderAssistCitations(meta.citations,{open:true});
+      // Keep on the latest assistant bubble for chat re-renders
+      const hist=window._incDiagHistory;
+      if(Array.isArray(hist)){
+        for(let i=hist.length-1;i>=0;i--){
+          if(hist[i]&&hist[i].role==="assistant"){ hist[i]._citations=meta.citations.slice(0,12); break; }
+        }
+      }
+    }
   } else if(typeof toast==="function" && (tip||meta.weknora_tip)){
     toast(tip||meta.weknora_tip,"ok");
   }
@@ -1185,17 +1314,19 @@ function renderDiagnosisChat(){
     const cls=m.role==="user"?"me":m.role==="assistant"?"ai":"sys";
     // 思维链折叠区（推理模型）：流式中展开、完成后收起；无思维链时返回空串
     const rb=(m.role==="assistant")?renderReasoningBlock(m._reasoning,!!m._streaming):"";
+    const cites=(m.role==="assistant"&&m._citations&&typeof renderAssistCitations==="function")
+      ? renderAssistCitations(m._citations,{open:!m._streaming}) : "";
     let body;
     if(m.role==="assistant" && m._streaming && m._loading){
       // 等待 AI 响应：显示动态加载提示（此时可能已在流式接收思维链）
-      body=rb+`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||I18N.t("sre.analyzing","正在分析…"))}</span></div>`;
+      body=rb+`<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">${esc(m.content||I18N.t("sre.analyzing","正在分析…"))}</span></div>`+cites;
     } else if(m.role==="assistant" && m._streaming){
       // 流式中：显示纯文本 + 闪烁光标，避免未完成 Markdown 导致渲染抖动
-      body=rb+`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`;
+      body=rb+`<span class="ai-stream-text">${esc(m.content||"")}</span><span class="ai-stream-cursor">▍</span>`+cites;
     } else if(m.role==="assistant" && m.content!=="思考中…" && !m.content.startsWith("❌")){
-      body=rb+renderAIMarkdown(filterDisplayContent(m.content||""));
+      body=rb+renderAIMarkdown(filterDisplayContent(m.content||""))+cites;
     } else {
-      body=esc(m.content);
+      body=esc(m.content)+cites;
     }
     let fb="";
     if(m.role==="assistant" && m.content!=="思考中…" && !m._streaming){
@@ -1408,12 +1539,13 @@ function renderRuns(runs){
   if(!runs.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_runs","暂无执行记录")}</div>`; return; }
   el.innerHTML = runs.map(r=>{
     const isProposal=!r.rule_id || r.alert_type==="proposal";
+    const freeze=/变更冻结/.test(String(r.reason||""));
     const title=isProposal?(`${esc(r.rule_name||I18N.t("sre.proposal","修复提案"))} → ${esc(r.playbook_name||r.playbook_id)}`):(`${esc(r.rule_name)} → ${esc(r.playbook_name||r.playbook_id)}`);
     const subBits=[esc(r.hostname), isProposal?I18N.t("sre.proposal_once","一次性提案"):esc(r.alert_type), fmtDateTime(r.created_at)];
     if(r.reason && !String(r.reason).startsWith("proposed_by:")) subBits.push(esc(r.reason));
     return `<div class="sre-row">
     <span class="badge ${_runCls(r.status)}">${_runStatus(r.status)}</span>
-    <div class="sre-row-main"><div class="sre-row-title">${title}${isProposal?` <span class="badge info">${I18N.t("sre.proposal","提案")}</span>`:""}</div>
+    <div class="sre-row-main"><div class="sre-row-title">${title}${isProposal?` <span class="badge info">${I18N.t("sre.proposal","提案")}</span>`:""}${freeze?` <span class="badge freeze" title="${esc(r.reason||"")}">${I18N.t("sre.freeze_badge","冻结中")}</span>`:""}</div>
       <div class="sre-row-sub">${subBits.join(" · ")}</div></div>
     ${r.status==="pending_approval"?`<div class="fwd-actions"><button class="btn primary sm" data-run="${r.id}" data-runact="approve">${I18N.t("sre.approve","批准")}</button><button class="btn danger sm" data-run="${r.id}" data-runact="reject">${I18N.t("sre.reject","拒绝")}</button></div>`:""}</div>`;
   }).join("");
@@ -1707,7 +1839,16 @@ async function saveTicket(){
   if(!body.title){ toast(I18N.t("sre.fill_title","请填写标题"),"err"); return; }
   const r=await fetch(id?`${API}/tickets/${id}`:`${API}/tickets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(r.ok){ $("ticketMask").classList.remove("show"); TK_CREATE_ATTACHMENTS=[]; loadTickets(); loadSREBadge(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
+  if(r.ok){
+    $("ticketMask").classList.remove("show"); TK_CREATE_ATTACHMENTS=[]; loadTickets(); loadSREBadge(); loadIncidents();
+    const closed = body.status==="resolved" || body.status==="closed";
+    const linked = (j&&j.incident_id) || (window._curIncident&&window._curIncident.ticket_id==id&&window._curIncident.id);
+    if(id && closed && linked) toast(I18N.t("sre.ticket_closed_inc","工单已关闭，关联事件已标记解决"),"ok");
+    else toast(I18N.t("toast.saved","已保存"),"ok");
+    if(window._curIncident && Number(window._curIncident.id)===Number(j.incident_id||window._curIncident.id)){
+      openIncidentDetail(window._curIncident.id);
+    }
+  } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
 }
 async function addTicketComment(){
   const id=$("ticketId").value,t=$("tkCommentInput").value.trim();
@@ -1855,10 +1996,16 @@ async function loadChanges(){
     ]);
     const wl=$("changeWinList");
     if(!wins||!wins.length) wl.innerHTML=`<div class="empty-line">暂无变更窗</div>`;
-    else wl.innerHTML=wins.map(w=>`<div class="fwd-card"><div class="fwd-card-title">${esc(w.name||w.id)} ${w.freeze?'<span class="badge warn">freeze</span>':""}</div>
+    else {
+      const now=Math.floor(Date.now()/1000);
+      wl.innerHTML=wins.map(w=>{
+        const active=w.freeze && now>=(w.start||0) && (!w.end || now<=w.end);
+        return `<div class="fwd-card"><div class="fwd-card-title">${esc(w.name||w.id)} ${w.freeze?'<span class="badge warn">freeze</span>':""}${active?` <span class="badge freeze">${I18N.t("sre.freeze_active","冻结中")}</span>`:""}</div>
       <div class="fwd-card-sub">${fmtDateTime(w.start)} → ${fmtDateTime(w.end)}${(w.host_ids||[]).length?" · hosts "+(w.host_ids||[]).length:""}</div>
       <div class="fwd-card-acts"><button class="btn sm" data-ch="edit-win" data-id="${esc(w.id)}">编辑</button>
-      <button class="btn danger sm" data-ch="del-win" data-id="${esc(w.id)}">删除</button></div></div>`).join("");
+      <button class="btn danger sm" data-ch="del-win" data-id="${esc(w.id)}">删除</button></div></div>`;
+      }).join("");
+    }
     wl.querySelectorAll("[data-ch]").forEach(b=>b.onclick=()=>changeAct(b.dataset.ch,b.dataset.id));
     const rl=$("changeRecList");
     if(!recs||!recs.length) rl.innerHTML=`<div class="empty-line">暂无变更记录</div>`;
@@ -2498,6 +2645,9 @@ async function openAIConfig(){
     if($("weknoraKBIDs")) $("weknoraKBIDs").value=c.weknora_knowledge_base_ids||"";
     if($("disablePublicChatMemory")) $("disablePublicChatMemory").checked=!!c.disable_public_chat_memory;
     if($("allowUnverifiedAIOutputLearning")) $("allowUnverifiedAIOutputLearning").checked=!!c.allow_unverified_ai_output_learning;
+    if($("aiDailyQuota")) $("aiDailyQuota").value=c.daily_quota_per_user||0;
+    if($("aiWriteToolsApproval")) $("aiWriteToolsApproval").checked=c.write_tools_require_approval!==false;
+    if($("aiRedactSensitive")) $("aiRedactSensitive").checked=!!c.redact_sensitive_fields;
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary(); updateWeKnoraCardSummary();
     // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
@@ -2616,7 +2766,10 @@ async function saveAIConfig(){
     weknora_api_key:$("weknoraKey")?.value||"",
     weknora_knowledge_base_ids:($("weknoraKBIDs")?.value||"").trim(),
     disable_public_chat_memory:$("disablePublicChatMemory")?.checked||false,
-    allow_unverified_ai_output_learning:$("allowUnverifiedAIOutputLearning")?.checked||false};
+    allow_unverified_ai_output_learning:$("allowUnverifiedAIOutputLearning")?.checked||false,
+    daily_quota_per_user:$("aiDailyQuota")? (parseInt($("aiDailyQuota").value,10)||0) : 0,
+    write_tools_require_approval:$("aiWriteToolsApproval")? !!$("aiWriteToolsApproval").checked : false,
+    redact_sensitive_fields:$("aiRedactSensitive")? !!$("aiRedactSensitive").checked : false};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
@@ -3522,10 +3675,12 @@ if(typeof window!=="undefined" && window.speechSynthesis){
 // 终端会话管理 + 回放 + 旁观
 safeAddEventListener("termSessionsBtn", "click", openTerminalSessions);
 // 终端会话搜索
-safeAddEventListener("termSessionSearch", "input", e => {
-  TERM_SEARCH = e.target.value;
+function onTermSessionSearch(e) {
+  TERM_SEARCH = (e && e.target && e.target.value) || "";
   renderTerminalSessions(LAST_TERM_SESSIONS);
-});
+}
+safeAddEventListener("termSessionSearch", "input", onTermSessionSearch);
+safeAddEventListener("termSessionSearch", "search", onTermSessionSearch);
 safeAddEventListener("replayPlayBtn", "click", () => { if (REPLAY && REPLAY.playing) pauseReplay(); else playReplay(); });
 safeAddEventListener("replayProgressBg", "click", e => {
   const rect = e.currentTarget.getBoundingClientRect();

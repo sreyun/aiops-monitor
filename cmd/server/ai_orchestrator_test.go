@@ -35,9 +35,9 @@ func TestAssistTaskPolicy_Golden(t *testing.T) {
 		{name: "apimon", task: "apimon_diagnosis", wantMemKind: "diagnosis", promptMustHave: []string{"API"}},
 		{name: "audit", task: "audit_diagnosis", wantMemKind: "diagnosis"},
 		{name: "content", task: "content_audit_diagnosis", wantMemKind: "diagnosis", promptMustHave: []string{"敏感"}},
-		{name: "dash_opt", task: "dashboard_optimize", wantMemKind: "diagnosis", wantNoThink: true, wantTimeout: true, promptMustHave: []string{"看板"}},
-		{name: "dash_ana", task: "dashboard_analysis", wantMemKind: "diagnosis", wantNoThink: true, wantTimeout: true},
-		{name: "dash_prompt", task: "dashboard_prompt_optimize", wantMemKind: "chat", wantNoThink: true, wantTimeout: true, promptMustHave: []string{"看板"}},
+		{name: "dash_opt", task: "dashboard_optimize", wantMemKind: "diagnosis", wantNoThink: false, wantTimeout: true, promptMustHave: []string{"看板", "BI"}},
+		{name: "dash_ana", task: "dashboard_analysis", wantMemKind: "diagnosis", wantNoThink: false, wantTimeout: true},
+		{name: "dash_prompt", task: "dashboard_prompt_optimize", wantMemKind: "chat", wantNoThink: false, wantTimeout: true, promptMustHave: []string{"看板", "BI"}},
 		{name: "remediation", task: "remediation_rule", wantMemKind: "chat", wantTimeout: true, promptMustHave: []string{"规则"}},
 		{name: "duty", task: "duty_report", wantMemKind: "chat", promptMustHave: []string{"值班"}},
 		{name: "generic", task: "generic", wantMemKind: "chat"},
@@ -53,6 +53,20 @@ func TestAssistTaskPolicy_Golden(t *testing.T) {
 			}
 			if p.DisableThink != c.wantNoThink {
 				t.Errorf("DisableThink=%v want %v", p.DisableThink, c.wantNoThink)
+			}
+			if strings.HasPrefix(c.task, "dashboard_") && !p.EnableThink {
+				t.Errorf("dashboard task should EnableThink")
+			}
+			if c.task == "dashboard_optimize" {
+				if p.ThinkingBudget <= 0 || p.ThinkingBudget > 1024 {
+					t.Errorf("dashboard_optimize ThinkingBudget 应在 1~1024，got %d", p.ThinkingBudget)
+				}
+				if p.MaxTokens < 4096 {
+					t.Errorf("dashboard_optimize MaxTokens 应足够容纳完整 JSON，got %d", p.MaxTokens)
+				}
+				if p.Timeout < 120*time.Second {
+					t.Errorf("dashboard_optimize timeout too short: %v", p.Timeout)
+				}
 			}
 			if c.wantTimeout && p.Timeout <= 0 {
 				t.Errorf("expected Timeout > 0")

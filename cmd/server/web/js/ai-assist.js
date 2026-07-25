@@ -577,11 +577,47 @@ function requestAITextInput(opts) {
   return requestAIFeedbackReason(opts || {});
 }
 
-function renderAssistCitations(citations) {
-  const items = Array.isArray(citations) ? citations.filter(c => c && c.title).slice(0, 12) : [];
+function assistCitationKindLabel(kind) {
+  const k = String(kind || "").toLowerCase();
+  const map = {
+    metric: "指标", metrics: "指标", log: "日志", logs: "日志",
+    alert: "告警", alerts: "告警", inspect: "巡检", host_inspect: "巡检",
+    resolution: "结案", diagnosis: "诊断", knowledge: "知识", skill: "技能",
+    pitfall: "避坑", weknora: "知识库", memory: "记忆", change: "变更"
+  };
+  return map[k] || (kind || "来源");
+}
+
+function assistCitationHref(c) {
+  if (!c || !c.source) return "";
+  const src = String(c.source);
+  let m = src.match(/^incident:(\d+)/i);
+  if (m) return `#incident=${m[1]}`;
+  m = src.match(/^host:([^\s]+)/i);
+  if (m) return `#host=${encodeURIComponent(m[1])}`;
+  m = src.match(/^alert:([^\s]+)/i);
+  if (m) return `#alerts`;
+  return "";
+}
+
+/** 证据链卡片：供 Assist 面板与事件诊断对话复用 */
+function renderAssistCitations(citations, opts) {
+  const open = opts && opts.open;
+  const items = Array.isArray(citations) ? citations.filter(c => c && (c.title || c.summary)).slice(0, 12) : [];
   if (!items.length) return "";
-  return `<details class="ai-evidence"><summary>依据与记忆来源 · ${items.length}</summary><div class="ai-evidence-list">` +
-    items.map(c => `<span class="ai-evidence-item"><b>${esc(c.kind || "source")}</b>${esc(c.title || "")}</span>`).join("") +
+  const title = (typeof I18N !== "undefined" && I18N.t)
+    ? I18N.t("sre.evidence_title", "诊断证据链")
+    : "诊断证据链";
+  return `<details class="ai-evidence"${open ? " open" : ""}><summary>${esc(title)} · ${items.length}</summary><div class="ai-evidence-cards">` +
+    items.map(c => {
+      const kind = assistCitationKindLabel(c.kind);
+      const href = assistCitationHref(c);
+      const head = href
+        ? `<a class="ai-evidence-link" href="${esc(href)}" data-cite-src="${esc(c.source || "")}">${esc(c.title || kind)}</a>`
+        : `<span class="ai-evidence-title">${esc(c.title || kind)}</span>`;
+      const sum = c.summary ? `<div class="ai-evidence-sum">${esc(c.summary)}</div>` : "";
+      return `<div class="ai-evidence-card"><span class="ai-evidence-kind">${esc(kind)}</span>${head}${sum}</div>`;
+    }).join("") +
     `</div></details>`;
 }
 
@@ -667,7 +703,7 @@ function parseAssistMarkdownTables(text) {
   return sections;
 }
 
-function exportCurrentAIAssist() {
+async function exportCurrentAIAssist() {
   if (!_aiAssistState.lastAnswer || typeof exportModel !== "function") {
     if (typeof toast === "function") toast(tA("assist.no_export", "暂无可导出的 AI 结果"), "warn");
     return;
@@ -697,7 +733,7 @@ function exportCurrentAIAssist() {
     orientation: sections.some(s => (s.columns || []).length > 4) ? "landscape" : "portrait",
     footer: "AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
   };
-  const ok = exportModel(model, fmt, _aiAssistState.title || "AI诊断报告");
+  const ok = await exportModel(model, fmt, _aiAssistState.title || "AI诊断报告");
   if (ok === false && typeof toast === "function") toast(tA("assist.popup_blocked", "浏览器拦截了导出窗口，请允许弹窗后重试"), "warn");
 }
 

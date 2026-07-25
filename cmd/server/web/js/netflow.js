@@ -32,22 +32,22 @@ function renderNetFlowPanel() {
     return;
   }
 
-  const q = nfHostQuery.trim().toLowerCase();
+  const q = normalizeSearchText(nfHostQuery);
   // 优先用 API 返回的 hostname（服务端已 annotate）；_cachedHosts 仅作兜底。
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
   let html = `<div class="nf-toolbar">`;
   html += `<input type="search" id="nfHostSearch" class="nf-input" value="${esc(nfHostQuery)}"
-    placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}">`;
+    placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}" autocomplete="off">`;
   html += `<select id="nfHostSelect" class="nf-select">`;
   let shown = 0;
   nfTrafficHosts.forEach(th => {
     const h = nameMap[th.host_id] || {};
     const name = th.hostname || h.hostname || th.host_id;
     const ip = th.ip || h.ip || "";
-    const hay = `${name} ${th.host_id} ${ip}`.toLowerCase();
-    if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
+    const hay = `${name} ${th.host_id} ${ip}`;
+    if (q && !matchesSearchTokens(hay, nfHostQuery)) return;
     shown++;
     const sel = th.host_id === nfCurrentHost ? " selected" : "";
     // 下拉直接标出流量量级，一眼看出谁是大流量主机
@@ -115,8 +115,7 @@ function nfBindToolbar() {
 
   const search = $("nfHostSearch");
   if (search) {
-    search.addEventListener("input", function() {
-      // 防抖 + 还原焦点：重渲染会让输入框失焦，否则一次只能敲一个字
+    const onNfSearch = function() {
       clearTimeout(nfSearchT);
       const v = this.value;
       nfSearchT = setTimeout(() => {
@@ -125,7 +124,9 @@ function nfBindToolbar() {
         const s = $("nfHostSearch");
         if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
       }, 200);
-    });
+    };
+    search.addEventListener("input", onNfSearch);
+    search.addEventListener("search", onNfSearch);
   }
 }
 

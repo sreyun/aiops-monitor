@@ -443,6 +443,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal.disabled")})
 		return
 	}
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	// v5.3.0: terminal secondary verification — check before WebSocket upgrade
 	// so the frontend can show the password dialog before trying to open a WS.
 	verified, hasPassword := s.auth.isTerminalVerified(r)

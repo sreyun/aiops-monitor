@@ -14,8 +14,8 @@ func TestModuleHostInspect(t *testing.T) {
 		t.Fatalf("host_inspect exit = %d, want 0..2", exit)
 	}
 	var rep struct {
-		Version  string `json:"version"`
-		Host     struct {
+		Version string `json:"version"`
+		Host    struct {
 			Hostname string `json:"hostname"`
 			OSFamily string `json:"os_family"`
 			GOOS     string `json:"goos"`
@@ -33,8 +33,11 @@ func TestModuleHostInspect(t *testing.T) {
 	if rep.Version == "" || rep.Host.Hostname == "" || rep.Host.OSFamily == "" {
 		t.Fatalf("incomplete report: %+v", rep)
 	}
-	if len(rep.Sections) < 3 {
+	if len(rep.Sections) < 5 {
 		t.Fatalf("expected multiple sections, got %d", len(rep.Sections))
+	}
+	if rep.Version != "2.0" {
+		t.Fatalf("host_inspect version=%q want 2.0", rep.Version)
 	}
 	if rep.Result.ExitCode != exit {
 		t.Fatalf("result.exit_code=%d != process exit=%d", rep.Result.ExitCode, exit)

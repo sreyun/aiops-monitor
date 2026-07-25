@@ -53,6 +53,8 @@ services:
       - AIOPS_POSTGRES_DSN=postgres://aiops:${POSTGRES_PASSWORD:-h3Y7Vmb1CZBOApZM86D}@postgres:5432/aiops?sslmode=disable
       - AIOPS_SECRET_KEY=${AIOPS_SECRET_KEY:-aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026}
       - AIOPS_CONTENT_AUDIT_INGEST_TOKEN=${AIOPS_CONTENT_AUDIT_INGEST_TOKEN:-}
+      # 可选：固定安装 Token（与 aiops-agent 的 AIOPS_TOKEN 同步；留空则服务端首次启动自动生成，并写入 ./data/.install_token）
+      - AIOPS_INSTALL_TOKEN=${AIOPS_INSTALL_TOKEN:-}
       # 可选 HTTPS（证书放到 ./data/tls 后取消注释）
       # - AIOPS_TLS_CERT=/app/data/tls/server.crt
       # - AIOPS_TLS_KEY=/app/data/tls/server.key
@@ -108,17 +110,45 @@ services:
 
   # 可选：采集本容器/宿主指标。正式环境默认关闭；启用：
   #   docker compose --profile agent up -d
+  # 自动加入主机列表：挂载 ./data 读取服务端发布的 .install_token，无需手工拷贝 Token。
+  # Demo 安全默认：进程以非 root(aiops/10001) 运行；不挂宿主根盘、不 privileged、降权能力。
   aiops-agent:
     profiles: ["agent"]
     image: ${AIOPS_AGENT_IMAGE:-swr.cn-east-3.myhuaweicloud.com/sreyun/aiops-agent}:${AIOPS_IMAGE_TAG:-latest}
     container_name: aiops-agent
     depends_on:
-      - aiops-server
+      aiops-server:
+        condition: service_healthy
     environment:
       - TZ=${TZ:-Asia/Shanghai}
+      - AIOPS_SERVER=http://aiops-server:8529
+      # 优先用 .env 中的 AIOPS_INSTALL_TOKEN；未设置时读服务端写入的 Token 文件
+      - AIOPS_TOKEN=${AIOPS_INSTALL_TOKEN:-}
+      - AIOPS_TOKEN_FILE=/app/server-data/.install_token
+      - AIOPS_STATE_FILE=/app/data/agent_state.json
+      - AIOPS_CATEGORY=${AIOPS_AGENT_CATEGORY:-Docker}
+      # 稳定指纹：避免容器重建后 MAC 变化导致重复主机
+      - AIOPS_MACHINE_ID=${AIOPS_AGENT_MACHINE_ID:-aiops-compose-agent}
+    volumes:
+      - aiops-agent-data:/app/data
+      - ./data:/app/server-data:ro
+    # 入口仅短暂用 root 修正卷属主后 su-exec 降权；运行态无特权。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
     restart: unless-stopped
 
 volumes:
   aiops-pgdata:
+  aiops-agent-data:
     # 备份：docker exec aiops-pg pg_dump -U aiops aiops > backup.sql
     # 删数据：docker compose down -v  或  docker volume rm <project>_aiops-pgdata

@@ -205,6 +205,10 @@ function hostInTypeFilter(h) {
 }
 
 function currentHostsCrumb() {
+  const q = String(HOST_SEARCH || "").trim();
+  if (q) {
+    return I18N.t("section.host_search_results", "搜索结果") + " · " + q;
+  }
   if (HOST_TREE_MODE === "type") {
     return CUR_TYPE
       ? I18N.t("section.type_tree") + " / " + CUR_TYPE
@@ -215,6 +219,35 @@ function currentHostsCrumb() {
   const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
   const cur = flat.find(x => x.id === CUR_FOLDER);
   return cur ? cur.path : CUR_FOLDER;
+}
+
+/** Build searchable haystack for a host (id / name / IP / OS / folder…). */
+function hostSearchHaystack(h) {
+  if (!h) return "";
+  const parts = [
+    h.id, h.hostname, h.ip, h.os, h.platform, h.arch, h.kernel,
+    h.category, h.folder_path, h.folder_id,
+  ];
+  return parts.filter(Boolean).join(" ");
+}
+
+/**
+ * Match host against search query.
+ * - Multi-token (space-separated): every token must match.
+ * - Scoped to current tree folder/type only when query is empty;
+ *   active search always matches across all hosts (see renderHosts).
+ */
+function hostMatchesSearch(h, query) {
+  return matchesSearchTokens(hostSearchHaystack(h), query);
+}
+
+function normalizeHostSearchText(s) {
+  return normalizeSearchText(s);
+}
+
+function invalidateHostRenderCache() {
+  LAST_RENDER_KEY = "";
+  HOST_DOM_CACHE = {};
 }
 
 async function loadHostFolders() {
@@ -237,27 +270,30 @@ function folderMatchesTreeQ(n, q) {
   return (n.children || []).some(c => folderMatchesTreeQ(c, q));
 }
 
+/** 统一树节点：固定「展开列 + 图标列」，叶子也占位，保证层级与图标对齐 */
+function hostTreeCaretHTML(id, hasKids, collapsed) {
+  if (!hasKids) return `<span class="htx-caret htx-caret-gap" aria-hidden="true"></span>`;
+  return `<button type="button" class="htx-caret" data-folder-toggle="${esc(id)}" title="${I18N.t("section.folder_toggle")}" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "▸" : "▾"}</button>`;
+}
+
 function hostTreeNodeHTML(n, depth, q) {
   if (q && !folderMatchesTreeQ(n, q)) return "";
   const cnt = (HOST_FOLDERS.counts && HOST_FOLDERS.counts[n.id]) || { total: 0, online: 0 };
   const sel = HOST_TREE_MODE === "folder" && CUR_FOLDER === n.id;
   const hasKids = (n.children || []).length > 0;
   const collapsed = !q && HOST_TREE_COLLAPSED.has(n.id);
-  const canAdd = true; // nesting is unlimited (bounded only by a high safety cap)
-  const pad = 4 + (depth - 1) * 10;
   let kids = "";
   if (hasKids && !collapsed) {
-    // --gx positions the vertical guide line under this node's caret centre.
-    kids = `<div class="htx-children" style="--gx:${pad + 6}px">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1, q)).join("")}</div>`;
+    kids = `<div class="htx-children" role="group">${(n.children || []).map(c => hostTreeNodeHTML(c, depth + 1, q)).join("")}</div>`;
   }
   return `<div class="htx-folder" data-depth="${depth}">
-    <div class="htx-node${sel ? " selected" : ""}${hasKids ? " has-kids" : ""}" data-folder-sel="${esc(n.id)}" data-ctx-folder="${esc(n.id)}" role="button" tabindex="0" style="padding-left:${pad}px">
-      <span class="htx-caret${hasKids ? "" : " empty"}" data-folder-toggle="${esc(n.id)}" title="${hasKids ? I18N.t("section.folder_toggle") : ""}">${hasKids ? (collapsed ? "▸" : "▾") : ""}</span>
-      <span class="htx-ico" aria-hidden="true"></span>
+    <div class="htx-node${sel ? " selected" : ""}${hasKids ? " has-kids" : " is-leaf"}" data-folder-sel="${esc(n.id)}" data-ctx-folder="${esc(n.id)}" role="treeitem" aria-selected="${sel ? "true" : "false"}" tabindex="0">
+      ${hostTreeCaretHTML(n.id, hasKids, collapsed)}
+      <span class="htx-ico htx-ico-folder" aria-hidden="true"></span>
       <span class="htx-name" title="${esc(n.name)}">${esc(n.name)}</span>
-      <span class="htx-count">${cnt.total || 0}</span>
+      <span class="htx-count" title="${cnt.online || 0}/${cnt.total || 0}">${cnt.total || 0}</span>
       <span class="htx-acts">
-        ${canAdd ? `<button type="button" class="htx-act htx-add" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>` : ""}
+        <button type="button" class="htx-act htx-add" data-folder-add="${esc(n.id)}" title="${I18N.t("section.folder_add_child")}">+</button>
         <button type="button" class="htx-act" data-folder-ren="${esc(n.id)}" title="${I18N.t("section.folder_rename")}">✎</button>
         <button type="button" class="htx-act danger" data-folder-del="${esc(n.id)}" title="${I18N.t("section.folder_delete")}">✕</button>
       </span>
@@ -278,45 +314,81 @@ function hostTypeTreeHTML(q) {
   const keys = Object.keys(map).sort((a, b) => a.localeCompare(b));
   const filtered = q ? keys.filter(k => k.toLowerCase().includes(q)) : keys;
   const allCnt = hosts.length;
+  const rootId = "__all__";
+  const collapsed = !q && HOST_TREE_COLLAPSED.has(rootId);
+  const hasKids = filtered.length > 0;
   const rows = filtered.map(k => {
     const sel = CUR_TYPE === k;
-    return `<div class="htx-node${sel ? " selected" : ""}" data-type-sel="${esc(k)}" role="button" tabindex="0" style="padding-left:4px">
-      <span class="htx-caret empty"></span>
+    return `<div class="htx-node is-leaf${sel ? " selected" : ""}" data-type-sel="${esc(k)}" role="treeitem" aria-selected="${sel ? "true" : "false"}" tabindex="0">
+      ${hostTreeCaretHTML("", false, false)}
       <span class="htx-ico htx-ico-type" aria-hidden="true"></span>
       <span class="htx-name" title="${esc(k)}">${esc(k)}</span>
       <span class="htx-count">${map[k].total}</span>
+      <span class="htx-acts" aria-hidden="true"></span>
     </div>`;
   }).join("");
-  return `<div class="htx-node htx-special${CUR_TYPE === "" ? " selected" : ""}" data-type-sel="" role="button" tabindex="0" style="padding-left:4px">
-      <span class="htx-caret empty"></span>
+  const kids = (!collapsed && hasKids)
+    ? `<div class="htx-children" role="group">${rows}</div>`
+    : "";
+  return `<div class="htx-folder htx-root" data-depth="0" role="tree">
+    <div class="htx-node htx-root-node${CUR_TYPE === "" ? " selected" : ""}${hasKids ? " has-kids" : " is-leaf"}" data-type-sel="" role="treeitem" aria-selected="${CUR_TYPE === "" ? "true" : "false"}" tabindex="0">
+      ${hostTreeCaretHTML(rootId, hasKids, collapsed)}
       <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
       <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
       <span class="htx-count">${allCnt}</span>
+      <span class="htx-acts" aria-hidden="true"></span>
     </div>
-    <div class="htx-sep"></div>
-    ${rows || `<div class="htx-empty">${I18N.t("section.type_empty_hint")}</div>`}`;
+    ${kids || (q ? `<div class="htx-empty">${I18N.t("section.type_empty_hint")}</div>` : "")}
+  </div>`;
 }
 
 function hostAssetTreeHTML(q) {
   const allCnt = (LAST_HOSTS || []).length;
   const ug = (HOST_FOLDERS.counts && HOST_FOLDERS.counts.__ungrouped__) || { total: 0, online: 0 };
   const folders = HOST_FOLDERS.folders || [];
-  const showSpecial = !q || I18N.t("section.all_hosts_tree").toLowerCase().includes(q)
-    || I18N.t("section.uncategorized").toLowerCase().includes(q);
-  return `${showSpecial ? `<div class="htx-node htx-special${CUR_FOLDER === "" ? " selected" : ""}" data-folder-sel="" role="button" tabindex="0" style="padding-left:4px">
-        <span class="htx-caret empty"></span>
-        <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
-        <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
-        <span class="htx-count">${allCnt}</span>
-      </div>
-      <div class="htx-node htx-special${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" data-ctx-folder="__ungrouped__" role="button" tabindex="0" style="padding-left:4px">
-        <span class="htx-caret empty"></span>
-        <span class="htx-ico htx-ico-none" aria-hidden="true"></span>
+  const rootId = "__all__";
+  const showRoot = !q || I18N.t("section.all_hosts_tree").toLowerCase().includes(q)
+    || I18N.t("section.uncategorized").toLowerCase().includes(q)
+    || folders.some(n => folderMatchesTreeQ(n, q));
+  if (!showRoot) return `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`;
+
+  const showUngrouped = !q || I18N.t("section.uncategorized").toLowerCase().includes(q);
+  const folderHTML = folders.map(n => hostTreeNodeHTML(n, 1, q)).join("");
+  const hasKids = showUngrouped || !!folderHTML;
+  const collapsed = !q && HOST_TREE_COLLAPSED.has(rootId);
+  let kids = "";
+  if (!collapsed && hasKids) {
+    // 未分类：系统节点，固定 caret 占位与分组图标列对齐，并与自定义分组用分隔线区分
+    const ungrouped = showUngrouped
+      ? `<div class="htx-node htx-ungrouped is-leaf${CUR_FOLDER === "__ungrouped__" ? " selected" : ""}" data-folder-sel="__ungrouped__" data-ctx-folder="__ungrouped__" role="treeitem" aria-selected="${CUR_FOLDER === "__ungrouped__" ? "true" : "false"}" tabindex="0">
+        ${hostTreeCaretHTML("", false, false)}
+        <span class="htx-ico htx-ico-ungrouped" aria-hidden="true"></span>
         <span class="htx-name">${I18N.t("section.uncategorized")}</span>
         <span class="htx-count">${ug.total || 0}</span>
-      </div>
-      <div class="htx-sep"></div>` : ""}
-      ${folders.map(n => hostTreeNodeHTML(n, 1, q)).join("") || `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>`}`;
+        <span class="htx-acts" aria-hidden="true"></span>
+      </div>`
+      : "";
+    const sep = (showUngrouped && folderHTML)
+      ? `<div class="htx-branch-sep" role="separator" aria-hidden="true"></div>`
+      : "";
+    kids = `<div class="htx-children" role="group">
+      ${ungrouped}
+      ${sep}
+      ${folderHTML || (!showUngrouped ? `<div class="htx-empty">${I18N.t("section.folder_empty_hint")}</div>` : "")}
+    </div>`;
+  }
+  return `<div class="htx-folder htx-root" data-depth="0" role="tree">
+    <div class="htx-node htx-root-node${CUR_FOLDER === "" ? " selected" : ""}${hasKids ? " has-kids" : " is-leaf"}" data-folder-sel="" data-ctx-folder="" role="treeitem" aria-selected="${CUR_FOLDER === "" ? "true" : "false"}" tabindex="0">
+      ${hostTreeCaretHTML(rootId, hasKids, collapsed)}
+      <span class="htx-ico htx-ico-all" aria-hidden="true"></span>
+      <span class="htx-name">${I18N.t("section.all_hosts_tree")}</span>
+      <span class="htx-count">${allCnt}</span>
+      <span class="htx-acts">
+        <button type="button" class="htx-act htx-add" data-folder-add="" title="${I18N.t("section.folder_add_root")}">+</button>
+      </span>
+    </div>
+    ${kids}
+  </div>`;
 }
 
 function hostTreeHTML() {
@@ -426,7 +498,8 @@ async function hostFolderAdd(parentId) {
       return;
     }
     toast(I18N.t("toast.folder_saved"), "ok");
-    if (parentId) HOST_TREE_COLLAPSED.delete(parentId);
+    // 新建节点时展开父级；根节点挂在「全部主机」下
+    HOST_TREE_COLLAPSED.delete(parentId || "__all__");
     persistHostTreeCollapsed();
     await loadHostFolders();
     renderHosts(LAST_HOSTS);
@@ -593,9 +666,11 @@ function bindHostTreeOnce() {
     const del = e.target.closest("[data-folder-del]");
     if (del) { e.stopPropagation(); await hostFolderDelete(del.getAttribute("data-folder-del")); return; }
     const tog = e.target.closest("[data-folder-toggle]");
-    if (tog && !tog.classList.contains("empty")) {
+    if (tog) {
+      e.preventDefault();
       e.stopPropagation();
       const id = tog.getAttribute("data-folder-toggle");
+      if (!id) return;
       if (HOST_TREE_COLLAPSED.has(id)) HOST_TREE_COLLAPSED.delete(id);
       else HOST_TREE_COLLAPSED.add(id);
       persistHostTreeCollapsed();
@@ -665,19 +740,22 @@ function renderHosts(hosts) {
   const crumb = $("hostsCrumb");
   if (crumb) crumb.textContent = currentHostsCrumb();
 
-  const matchSet = HOST_TREE_MODE === "folder" ? hostFolderMatchSet(CUR_FOLDER) : null;
+  // Active keyword searches all hosts (ignore left-tree folder/type scope).
+  // Empty query keeps the current tree selection. Status filter still applies.
+  const searchQ = normalizeHostSearchText(HOST_SEARCH);
+  const searchActive = !!searchQ;
+  const matchSet = (!searchActive && HOST_TREE_MODE === "folder") ? hostFolderMatchSet(CUR_FOLDER) : null;
   let shown = hosts.filter(h => {
-    if (HOST_TREE_MODE === "type") {
-      if (!hostInTypeFilter(h)) return false;
-    } else if (!hostInFolderFilter(h, matchSet)) {
-      return false;
+    if (!searchActive) {
+      if (HOST_TREE_MODE === "type") {
+        if (!hostInTypeFilter(h)) return false;
+      } else if (!hostInFolderFilter(h, matchSet)) {
+        return false;
+      }
     }
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
-    if (HOST_SEARCH) {
-      const hay = ((h.hostname || "") + " " + (h.ip || "") + " " + (h.platform || "") + " " + (h.kernel || "") + " " + (h.category || "") + " " + (h.folder_path || "")).toLowerCase();
-      if (!hay.includes(HOST_SEARCH.toLowerCase())) return false;
-    }
+    if (!hostMatchesSearch(h, searchQ)) return false;
     return true;
   });
 
@@ -693,8 +771,18 @@ function renderHosts(hosts) {
 
   if (countEl) countEl.textContent = shown.length;
 
-  if (!hosts.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY; return; }
-  if (!shown.length) { groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = I18N.t("empty.no_host_match"); return; }
+  if (!hosts.length) {
+    invalidateHostRenderCache();
+    groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.innerHTML = DEFAULT_EMPTY;
+    return;
+  }
+  if (!shown.length) {
+    // Must invalidate: otherwise clearing search can early-return on a stale
+    // LAST_RENDER_KEY while #groups is still empty from this no-match path.
+    invalidateHostRenderCache();
+    groupsEl.innerHTML = ""; pager.innerHTML = ""; empty.style.display = "block"; empty.textContent = I18N.t("empty.no_host_match");
+    return;
+  }
   empty.style.display = "none";
 
   const isList = HOST_VIEW === "list";
@@ -715,8 +803,11 @@ function renderHosts(hosts) {
 
   const render = isList ? hostRow : hostCard;
   const wrapCls = isList ? "host-list" : "grid";
-  const filterKey = HOST_TREE_MODE === "type" ? ("t:" + CUR_TYPE) : ("f:" + CUR_FOLDER);
-  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + filterKey + "|" + HOST_TREE_MODE;
+  const filterKey = searchActive
+    ? ("q:" + searchQ)
+    : (HOST_TREE_MODE === "type" ? ("t:" + CUR_TYPE) : ("f:" + CUR_FOLDER));
+  // Include filter/sort/search so incremental update never skips a real list change.
+  const newKey = pageHosts.map(h => h.id).join(",") + "|" + HOST_VIEW + "|" + HOST_PAGE + "|" + filterKey + "|" + HOST_TREE_MODE + "|" + HOST_FILTER + "|" + HOST_SORT;
   if (LAST_RENDER_KEY === newKey && Object.keys(HOST_DOM_CACHE).length > 0) {
     pageHosts.forEach(h => updateHostCard(h));
     renderPager(pages, shown.length);

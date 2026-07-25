@@ -1006,12 +1006,11 @@ function renderTerminalSessions(sessions) {
   const c = $("termSessionsList");
   if (!c) return;
   // 按搜索关键词过滤
-  const q = TERM_SEARCH.trim().toLowerCase();
-  const filtered = q ? sessions.filter(s => {
-    return (s.operator || "").toLowerCase().includes(q) ||
-           (s.hostname || "").toLowerCase().includes(q) ||
-           (s.ip || "").toLowerCase().includes(q);
-  }) : sessions;
+  const q = normalizeSearchText(TERM_SEARCH);
+  const filtered = q ? sessions.filter(s => matchesSearchTokens(
+    [s.operator, s.hostname, s.ip, s.host_id, s.id].filter(Boolean).join(" "),
+    TERM_SEARCH
+  )) : sessions;
   // 更新计数
   const cnt = $("termSessionCount");
   if (cnt) {

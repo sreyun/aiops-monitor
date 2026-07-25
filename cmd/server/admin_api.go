@@ -61,6 +61,15 @@ func (s *Server) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleThresholdPresets returns the three recommended threshold profiles for one-click apply in UI.
+func (s *Server) handleThresholdPresets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"conservative": thresholdConfigFromThresholds(ConservativeThresholds()),
+		"standard":     thresholdConfigFromThresholds(StandardThresholds()),
+		"relaxed":      thresholdConfigFromThresholds(RelaxedThresholds()),
+	})
+}
+
 func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	var in ServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -79,10 +88,22 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 // handleInstallInfo returns the data the panel needs to render one-line install
 // commands: the reachable server URL and the current install token.
 func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
+	cs := s.cfg
+	cs.mu.RLock()
+	maxUses := cs.cfg.InstallTokenMaxUses
+	useCount := cs.cfg.InstallTokenUseCount
+	expiresAt := cs.cfg.InstallTokenExpiresAt
+	revoked := cs.cfg.InstallTokenRevoked
+	cs.mu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"server_url":    s.serverURL(r),
-		"token":         s.cfg.InstallToken(),
-		"require_token": s.cfg.AgentTokenRequired(),
+		"server_url":       s.serverURL(r),
+		"token":            s.cfg.InstallToken(),
+		"require_token":    s.cfg.AgentTokenRequired(),
+		"max_uses":         maxUses,
+		"use_count":        useCount,
+		"expires_at":       expiresAt,
+		"revoked":          revoked,
+		"prev_valid_until": s.cfg.PrevTokenValidUntil(),
 	})
 }
 
@@ -90,6 +111,32 @@ func (s *Server) handleResetToken(w http.ResponseWriter, r *http.Request) {
 	tok := s.cfg.ResetToken()
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.reset_token")})
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+func (s *Server) handleRevokeInstallToken(w http.ResponseWriter, r *http.Request) {
+	if err := s.cfg.RevokeInstallToken(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: "吊销安装 Token（已注册 Agent 不受影响）"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSetInstallTokenPolicy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxUses   int   `json:"max_uses"`
+		ExpiresAt int64 `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if err := s.cfg.SetInstallTokenPolicy(req.MaxUses, req.ExpiresAt); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: "更新安装 Token 策略"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleInstallScript serves the platform install script (install.sh /

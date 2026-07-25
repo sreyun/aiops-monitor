@@ -62,10 +62,12 @@ safeAddEventListener("inspRunBtn", "click", async () => {
     return;
   }
   try {
+    const profile = ($("inspProfile") && $("inspProfile").value) || "standard";
+    const timeout = profile === "deep" ? 300 : profile === "quick" ? 90 : 180;
     const r = await fetch(`${API}/host-inspect/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ host_ids: ids, timeout_sec: 120 })
+      body: JSON.stringify({ host_ids: ids, timeout_sec: timeout, profile })
     });
     const data = await r.json();
     if (!r.ok) {
@@ -200,30 +202,22 @@ function showInspReport(batch, item) {
     `<li class="insp-finding ${f.level}"><b>${esc(f.level)}</b> ${esc(f.message)}</li>`
   ).join("") || `<li class="hint">${I18N.t("inspect.no_findings", "无告警项")}</li>`;
 
-  const sections = (rep.sections || []).map(sec => {
-    const rows = (sec.items || []).map(it =>
-      `<tr class="${esc(it.status || "")}"><td>${esc(it.label)}</td><td>${esc(it.value)}</td></tr>`
-    ).join("");
-    return `<div class="insp-sec ${esc(sec.status || "ok")}">
-      <div class="insp-sec-head"><span class="insp-badge ${esc(sec.status || "ok")}">${esc(sec.status || "ok")}</span>
-        <h4>${esc(sec.title)}</h4>
-        ${sec.summary ? `<span class="hint">${esc(sec.summary)}</span>` : ""}
-      </div>
-      <table class="insp-table"><tbody>${rows}</tbody></table>
-    </div>`;
-  }).join("");
+  const toc = (rep.sections || []).map(sec =>
+    `<a href="#insp-sec-${esc(sec.id)}" class="insp-toc-a ${esc(sec.status || "ok")}">${esc(sec.title)}</a>`
+  ).join("");
 
   view.innerHTML = `
     <div class="insp-report-head">
       <div>
         <h3>${esc(item.hostname || h.hostname || "")}</h3>
-        <div class="hint">${esc(h.os || "")} · ${esc(h.os_family || "")} · ${esc(h.ip || item.ip || "")} · ${esc(h.kernel || "")}</div>
+        <div class="hint">${esc(h.os || "")} · ${esc(h.os_family || "")} · ${esc(h.ip || item.ip || "")} · ${esc(h.kernel || "")}${h.fqdn ? " · " + esc(h.fqdn) : ""} · v${esc(rep.version || "")}</div>
       </div>
       <div class="insp-report-result">
         <span class="insp-badge ${item.status}">${inspStatusLabel(item.status)}</span>
         <span>${I18N.t("inspect.warnings", "警告")} ${res.warnings || 0}</span>
         <span>${I18N.t("inspect.critical", "严重")} ${res.critical || 0}</span>
-        <span class="hint">${esc(rep.timestamp || "")}</span>
+        <span class="hint">${esc(rep.timestamp || "")}${rep.elapsed_seconds != null ? " · " + Number(rep.elapsed_seconds).toFixed(1) + "s" : ""}</span>
+        <button type="button" class="btn sm ai-assist-btn" id="inspAIAnalyzeBtn" title="${I18N.t("inspect.ai_analyze_title", "把体检发现喂给 AI Assist 做研判")}">🤖 ${I18N.t("inspect.ai_analyze", "AI 分析")}</button>
       </div>
     </div>
     <div class="insp-metrics">
@@ -232,12 +226,72 @@ function showInspReport(batch, item) {
       <div><b>${m.swap_usage_pct ?? "—"}%</b><span>SWAP</span></div>
       <div><b>${m.load_1m ?? "—"}</b><span>Load1</span></div>
       <div><b>${m.disk_alert_count ?? 0}</b><span>Disk⚠</span></div>
+      <div><b>${m.inode_alert_count ?? 0}</b><span>Inode⚠</span></div>
+      <div><b>${m.fd_usage_pct != null ? m.fd_usage_pct + "%" : "—"}</b><span>FD</span></div>
       <div><b>${m.process_count ?? "—"}</b><span>Procs</span></div>
       <div><b>${m.zombie_count ?? 0}</b><span>Zombie</span></div>
+      <div><b>${m.d_state_count ?? 0}</b><span>D-State</span></div>
       <div><b>${m.tcp_listen ?? "—"}</b><span>Listen</span></div>
+      <div><b>${m.tcp_close_wait ?? 0}</b><span>CloseWait</span></div>
+      <div><b>${m.oom_count ?? 0}</b><span>OOM</span></div>
+      <div><b>${m.container_count ?? 0}</b><span>Ctr</span></div>
+      <div><b>${(m.ssl_expired || 0) + (m.ssl_expiring || 0)}</b><span>SSL⚠</span></div>
     </div>
+    <div class="insp-toc">${toc}</div>
     <div class="insp-findings"><h4>${I18N.t("inspect.findings", "发现问题")}</h4><ul>${findings}</ul></div>
-    <div class="insp-sections">${sections}</div>
+    <div class="insp-sections">${(rep.sections || []).map(sec => {
+      const rows = (sec.items || []).map(it =>
+        `<tr class="${esc(it.status || "")}"><td>${esc(it.label)}</td><td>${esc(it.value)}</td></tr>`
+      ).join("");
+      return `<div class="insp-sec ${esc(sec.status || "ok")}" id="insp-sec-${esc(sec.id)}">
+        <div class="insp-sec-head"><span class="insp-badge ${esc(sec.status || "ok")}">${esc(sec.status || "ok")}</span>
+          <h4>${esc(sec.title)}</h4>
+          ${sec.summary ? `<span class="hint">${esc(sec.summary)}</span>` : ""}
+        </div>
+        <table class="insp-table"><tbody>${rows}</tbody></table>
+      </div>`;
+    }).join("")}</div>
   `;
+  const aiBtn = view.querySelector("#inspAIAnalyzeBtn");
+  if (aiBtn) {
+    aiBtn.onclick = () => openInspectAIAssist(batch, item, rep);
+  }
   view.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function openInspectAIAssist(batch, item, rep) {
+  if (typeof openAIAssist !== "function") {
+    if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err");
+    return;
+  }
+  const h = (rep && rep.host) || {};
+  const m = (rep && rep.metrics) || {};
+  const res = (rep && rep.result) || {};
+  const findings = Array.isArray(rep && rep.findings) ? rep.findings.slice() : [];
+  const rank = { critical: 0, error: 1, warn: 2, warning: 2, info: 3 };
+  findings.sort((a, b) => (rank[String(a.level || "").toLowerCase()] ?? 9) - (rank[String(b.level || "").toLowerCase()] ?? 9));
+  const findingLines = findings.slice(0, 24).map(f =>
+    `- [${f.level || "?"}] ${f.message || f.title || ""}`
+  ).join("\n") || "（无 findings）";
+  const hostName = item.hostname || h.hostname || item.host_id || "";
+  let ctx = [
+    `主机：${hostName}`,
+    `主机ID：${item.host_id || h.id || ""}`,
+    `系统：${h.os || ""} ${h.os_family || ""} ${h.kernel || ""}`,
+    `IP：${h.ip || item.ip || ""}`,
+    `批次：${batch && batch.id ? batch.id : ""} · 状态：${item.status || ""}`,
+    `结果：警告 ${res.warnings || 0} · 严重 ${res.critical || 0}`,
+    `指标：CPU ${m.cpu_usage_pct ?? "—"}% · MEM ${m.mem_usage_pct ?? "—"}% · Load1 ${m.load_1m ?? "—"} · Disk⚠ ${m.disk_alert_count ?? 0} · OOM ${m.oom_count ?? 0}`,
+    "",
+    "【发现问题（优先严重项）】",
+    findingLines
+  ].join("\n");
+  if (ctx.length > 12000) ctx = ctx.slice(0, 12000) + "\n…（已截断）";
+  openAIAssist({
+    task: "host_inspect_analysis",
+    title: I18N.t("inspect.ai_title", "AI · 主机体检分析") + " · " + hostName,
+    mode: "analyze",
+    context: ctx,
+    hint: I18N.t("inspect.ai_hint", "正在结合体检 findings 与指标生成研判…")
+  });
 }

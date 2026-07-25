@@ -20,6 +20,7 @@ type playbookModuleMeta struct {
 var knownPlaybookModules = map[string]playbookModuleMeta{
 	// —— 系统运维（只读）——
 	"gather_facts":   {Name: "gather_facts", ReadOnly: true, Domain: "system", Desc: "采集主机名/OS/架构/CPU/IP/内存摘要"},
+	"host_inspect":   {Name: "host_inspect", ReadOnly: true, Domain: "system", Desc: "深度主机巡检（结构化 JSON 报告；args.profile=quick|standard|deep）"},
 	"disk_usage":     {Name: "disk_usage", ReadOnly: true, Domain: "system", Desc: "文件系统用量（df）"},
 	"mem_info":       {Name: "mem_info", ReadOnly: true, Domain: "system", Desc: "内存与交换区概况"},
 	"cpu_load":       {Name: "cpu_load", ReadOnly: true, Domain: "system", Desc: "负载与 CPU 概况"},
@@ -58,6 +59,12 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 	"service": {Name: "service", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "启停/重启服务"},
 	"package": {Name: "package", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "安装/卸载软件包"},
 	"copy":    {Name: "copy", ReadOnly: false, Domain: "change", RequiredArg: "dest", Desc: "写入文件"},
+
+	// —— 资源管控（虚拟机 / 容器）——
+	"hyperv_power":     {Name: "hyperv_power", ReadOnly: false, Domain: "change", Desc: "Hyper-V 虚拟机启停/重启（args.action + vm_id|name）"},
+	"hyperv_set":       {Name: "hyperv_set", ReadOnly: false, Domain: "change", Desc: "Hyper-V 调整 CPU/内存（processor_count / memory_mb）"},
+	"container_action": {Name: "container_action", ReadOnly: false, Domain: "change", Desc: "Docker/Podman 容器启停/重启"},
+	"container_logs":   {Name: "container_logs", ReadOnly: true, Domain: "sre", Desc: "Docker/Podman 容器日志"},
 }
 
 func validatePlaybookModule(st PlaybookStep) error {
@@ -87,6 +94,12 @@ func validatePlaybookModule(st PlaybookStep) error {
 		}
 		if deniedSensitivePath(dest) {
 			return fmt.Errorf("copy 拒绝写入敏感路径")
+		}
+	}
+	if mod == "host_inspect" && st.Args != nil {
+		p := strings.ToLower(strings.TrimSpace(st.Args["profile"]))
+		if p != "" && p != "quick" && p != "standard" && p != "deep" {
+			return fmt.Errorf("host_inspect profile 须为 quick / standard / deep")
 		}
 	}
 	return nil

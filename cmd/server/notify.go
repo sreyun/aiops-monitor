@@ -315,6 +315,7 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	send := func(ch string) bool { return !routed || routeSel[ch] }
 
 	text := formatAlert(a, firing)
+	smsText := formatAlertSMS(a, firing)
 	var sent []string
 	if send("feishu") && cfg.Feishu.Enabled && cfg.Feishu.Webhook != "" {
 		if err := n.sendFeishu(cfg.Feishu, text); err != nil {
@@ -357,18 +358,18 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 			sent = append(sent, Tz("notify.custom_webhook"))
 		}
 	}
-	// SMS notification
+	// SMS notification — use compact SMS text so host/IP/detail are not truncated mid-message.
 	if send("sms") && cfg.SMS.Enabled && cfg.SMS.AccessKey != "" {
-		if err := n.sendSMS(cfg.SMS, text); err != nil {
+		if err := n.sendSMS(cfg.SMS, smsText); err != nil {
 			slog.Error("sms send failed", "err", err)
 			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "短信发送失败: " + err.Error()})
 		} else {
 			sent = append(sent, "短信")
 		}
 	}
-	// Voice call notification
+	// Voice call notification — same compact body as SMS (TTS templates also prefer one line).
 	if send("voicecall") && cfg.VoiceCall.Enabled && cfg.VoiceCall.AccessKey != "" {
-		if err := n.sendVoiceCall(cfg.VoiceCall, text); err != nil {
+		if err := n.sendVoiceCall(cfg.VoiceCall, smsText); err != nil {
 			slog.Error("voice call send failed", "err", err)
 			n.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: Tz("notify.notification"), Host: a.Hostname, Message: "电话通知失败: " + err.Error()})
 		} else {
@@ -380,6 +381,23 @@ func (n *Notifier) pushChannels(cfg ServerConfig, a Alert, firing bool) {
 	}
 }
 
+func alertTypeLabel(typ string) string {
+	typeMap := map[string]string{
+		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "diskio": Tz("notify.type_diskio"),
+		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
+		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
+		"conn": Tz("notify.type_conn"), "hardware": Tz("notify.type_hardware"),
+		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
+		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
+		"content_audit": Tz("notify.type_content_audit"),
+		"promrule":      Tz("notify.type_promrule"),
+	}
+	if label := typeMap[typ]; label != "" {
+		return label
+	}
+	return typ
+}
+
 func formatAlert(a Alert, firing bool) string {
 	status := Tz("notify.fire")
 	if !firing {
@@ -389,27 +407,68 @@ func formatAlert(a Alert, firing bool) string {
 	if a.Level == "critical" {
 		lv = Tz("notify.critical")
 	}
-	typeMap := map[string]string{
-		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "diskio": Tz("notify.type_diskio"),
-		"iops": Tz("notify.type_iops"), "offline": Tz("notify.type_offline"),
-		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "proc": Tz("notify.type_proc"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
-		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
-		"content_audit": Tz("notify.type_content_audit"),
-		"promrule":      Tz("notify.type_promrule"),
-	}
-	typeLabel := typeMap[a.Type]
-	if typeLabel == "" {
-		typeLabel = a.Type
+	typeLabel := alertTypeLabel(a.Type)
+	host := a.Hostname
+	if host == "" {
+		host = a.HostID
 	}
 	ipLine := ""
 	if a.IP != "" {
 		ipLine = fmt.Sprintf("\n%s: %s", Tz("notify.ip"), a.IP)
 	}
 	return fmt.Sprintf("%s\n%s: %s%s\n%s: %s\n%s: %s\n%s: %s\n%s: %s",
-		Tz("notify.title", status), Tz("notify.host"), a.Hostname, ipLine,
+		Tz("notify.title", status), Tz("notify.host"), host, ipLine,
 		Tz("notify.level"), lv, Tz("notify.type"), typeLabel,
 		Tz("notify.detail"), a.Message, Tz("notify.time"), time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05"))
+}
+
+// formatAlertSMS builds a single-line alert for SMS/TTS templates.
+// Priority: brand + status, host, IP, type, full anomaly detail, time — so truncation
+// (if any provider limit remains) still keeps machine identity and the exception body.
+func formatAlertSMS(a Alert, firing bool) string {
+	status := Tz("notify.sms_fire")
+	if !firing {
+		status = Tz("notify.sms_recover")
+	}
+	lv := Tz("notify.warn")
+	if a.Level == "critical" {
+		lv = Tz("notify.critical")
+	}
+	host := strings.TrimSpace(a.Hostname)
+	if host == "" {
+		host = strings.TrimSpace(a.HostID)
+	}
+	typeLabel := alertTypeLabel(a.Type)
+	detail := strings.TrimSpace(a.Message)
+	ts := time.Unix(a.Timestamp, 0).Format("2006-01-02 15:04:05")
+	// 标签与值之间用冒号分隔，避免英文 locale 下出现 Hostweb01 / TypeCPU 粘连。
+	joinKV := func(k, v string) string {
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if k == "" {
+			return v
+		}
+		if v == "" {
+			return k
+		}
+		return k + ":" + v
+	}
+	var parts []string
+	parts = append(parts, "AIOps"+status)
+	parts = append(parts, lv)
+	if host != "" {
+		parts = append(parts, joinKV(Tz("notify.host"), host))
+	}
+	if ip := strings.TrimSpace(a.IP); ip != "" {
+		parts = append(parts, joinKV("IP", ip))
+	}
+	if typeLabel != "" {
+		parts = append(parts, joinKV(Tz("notify.type"), typeLabel))
+	}
+	if detail != "" {
+		parts = append(parts, joinKV(Tz("notify.detail"), detail))
+	}
+	parts = append(parts, joinKV(Tz("notify.time"), ts))
+	return strings.Join(parts, " ")
 }
 
 // SendTest pushes a one-off test message on the enabled channels of the given
@@ -432,7 +491,7 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 		if len(emails) == 0 {
 			errs = append(errs, Tz("notify.email")+": "+Tz("notify.no_email"))
 		} else {
-			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps Monitor</h2><p>` + Tz("notify.test_email_body") + `</p><p>` + Tz("notify.time") + ": " + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
+			html := `<div style="font-family:sans-serif;padding:20px"><h2>AIOps</h2><p>` + Tz("notify.test_email_body") + `</p><p>` + Tz("notify.time") + ": " + time.Now().Format("2006-01-02 15:04:05") + `</p></div>`
 			for _, to := range emails {
 				if err := sendEmail(cfg.SMTP, to, Tz("notify.test_email_subject"), html); err != nil {
 					errs = append(errs, Tz("notify.email")+": "+err.Error())
@@ -447,12 +506,12 @@ func (n *Notifier) SendTest(cfg ServerConfig) []string {
 		}
 	}
 	if cfg.SMS.Enabled && cfg.SMS.AccessKey != "" {
-		if err := n.sendSMS(cfg.SMS, msg); err != nil {
+		if err := n.sendSMS(cfg.SMS, Tz("notify.test_msg_sms", time.Now().Format("2006-01-02 15:04:05"))); err != nil {
 			errs = append(errs, "短信: "+err.Error())
 		}
 	}
 	if cfg.VoiceCall.Enabled && cfg.VoiceCall.AccessKey != "" {
-		if err := n.sendVoiceCall(cfg.VoiceCall, msg); err != nil {
+		if err := n.sendVoiceCall(cfg.VoiceCall, Tz("notify.test_msg_sms", time.Now().Format("2006-01-02 15:04:05"))); err != nil {
 			errs = append(errs, "电话: "+err.Error())
 		}
 	}
@@ -479,34 +538,28 @@ func alertEmailHTML(a Alert, firing bool) string {
 	if a.Level == "critical" {
 		lv = Tz("notify.critical")
 	}
-	typeMap := map[string]string{
-		"cpu": Tz("notify.type_cpu"), "memory": Tz("notify.type_memory"), "disk": Tz("notify.type_disk"), "offline": Tz("notify.type_offline"),
-		"load": Tz("notify.type_load"), "gpu": Tz("notify.type_gpu"), "check": Tz("notify.type_check"),
-		"api": Tz("notify.type_api"), "task": Tz("notify.type_task"), "forward": Tz("notify.type_forward"), "hyperv": Tz("notify.type_hyperv"),
-		"snmp": Tz("notify.type_snmp"), "trap": Tz("notify.type_trap"), "netflow": Tz("notify.type_netflow"),
-		"content_audit": Tz("notify.type_content_audit"),
-		"promrule":      Tz("notify.type_promrule"),
-	}
-	typeLabel := typeMap[a.Type]
-	if typeLabel == "" {
-		typeLabel = a.Type
+	typeLabel := alertTypeLabel(a.Type)
+	host := a.Hostname
+	if host == "" {
+		host = a.HostID
 	}
 	ipLine := ""
 	if a.IP != "" {
 		ipLine = `<tr><td style="color:#888;padding:4px 0">` + Tz("notify.ip") + `</td><td style="padding:4px 0">` + a.IP + `</td></tr>`
 	}
 	return fmt.Sprintf(`<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+  <div style="color:#888;font-size:12px;margin-bottom:4px">AIOps</div>
   <h2 style="color:%s">%s</h2>
   <table style="width:100%%;border-collapse:collapse">
     <tr><td style="color:#888;padding:4px 0;width:80px">%s</td><td style="padding:4px 0;font-weight:bold">%s</td></tr>
     %s
     <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0;color:%s">%s</td></tr>
     <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
-    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
+    <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0;word-break:break-all">%s</td></tr>
     <tr><td style="color:#888;padding:4px 0">%s</td><td style="padding:4px 0">%s</td></tr>
   </table>
 </div>`,
-		headColor, status, Tz("notify.host"), a.Hostname, ipLine,
+		headColor, status, Tz("notify.host"), host, ipLine,
 		Tz("notify.level"), lvlColor, lv,
 		Tz("notify.type"), typeLabel,
 		Tz("notify.detail"), a.Message,
@@ -789,7 +842,7 @@ func (n *Notifier) sendAliyunVoiceCall(cfg VoiceCallConfig, text string) error {
 	}
 	// Build TTS params — 与短信一致：清洗告警文本，空模板默认 {"message":...}；含 ${...} 占位符
 	// 则整体替换为告警内容（JSON 转义），从而适配任意变量名的 TTS 模板。
-	safe := smsSafeVar(text)
+	safe := smsSafeVarN(text, voiceSafeVarMax)
 	jsonEsc := func(s string) string { b, _ := json.Marshal(s); return string(b[1 : len(b)-1]) }
 	tsParam := cfg.TTSParam
 	if tsParam == "" {
@@ -884,15 +937,16 @@ func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
 		return fmt.Errorf("华为云短信需配置通道号（Sender/from）")
 	}
 
-	// 构建模板参数：优先用用户自定义 JSON 数组，否则兜底
+	// 构建模板参数：优先用用户自定义 JSON 数组，否则用清洗后的告警正文（保证主机/IP/详情完整且可过审）。
+	safe := smsSafeVar(text)
 	var templateParas []string
 	tp := strings.TrimSpace(cfg.TemplateParam)
 	if tp != "" {
 		if err := json.Unmarshal([]byte(tp), &templateParas); err != nil {
-			templateParas = []string{text}
+			templateParas = []string{safe}
 		}
 	} else {
-		templateParas = []string{text}
+		templateParas = []string{safe}
 	}
 
 	// 国际号码格式：不加前缀的默认 +86
@@ -967,15 +1021,16 @@ func (n *Notifier) sendTencentSMS(cfg SMSConfig, text string) error {
 		return fmt.Errorf("Tencent Cloud SMS requires SmsSdkAppId (AppID)")
 	}
 
-	// 构建模板参数：优先用用户自定义 JSON 数组，否则兜底
+	// 构建模板参数：优先用用户自定义 JSON 数组，否则用清洗后的告警正文（保证主机/IP/详情完整且可过审）。
+	safe := smsSafeVar(text)
 	var templateParamSet []string
 	tp := strings.TrimSpace(cfg.TemplateParam)
 	if tp != "" {
 		if err := json.Unmarshal([]byte(tp), &templateParamSet); err != nil {
-			templateParamSet = []string{text}
+			templateParamSet = []string{safe}
 		}
 	} else {
-		templateParamSet = []string{text}
+		templateParamSet = []string{safe}
 	}
 
 	// 国际号码格式：腾讯云要求 +86 前缀

@@ -25,6 +25,54 @@
   "mfa_required": false,
   "forward_listen": "127.0.0.1",
   "forward_port_range": "10100-10300",
+  "oidc": {
+    "enabled": false,
+    "issuer": "",
+    "client_id": "",
+    "client_secret": "",
+    "redirect_url": "",
+    "group_claim": "groups",
+    "group_role_map": {},
+    "default_role": "viewer",
+    "auto_create": true
+  },
+  "sso": {
+    "feishu": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "redirect_url": "",
+      "default_role": "viewer",
+      "auto_create": true,
+      "dept_role_map": {}
+    },
+    "dingtalk": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "redirect_url": "",
+      "default_role": "viewer",
+      "auto_create": true,
+      "dept_role_map": {}
+    },
+    "wechat": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "redirect_url": "",
+      "default_role": "viewer",
+      "auto_create": true
+    },
+    "wecom": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "agent_id": "",
+      "redirect_url": "",
+      "default_role": "viewer",
+      "auto_create": true
+    }
+  },
   "account": {
     "username": "admin",
     "display_name": "管理员",
@@ -32,5 +80,18 @@
     "salt": "",
     "hash": ""
   },
-  "checks": []
+  "checks": [],
+  "k8s_clusters": [
+    {
+      "id": "prod",
+      "name": "生产集群",
+      "enabled": true,
+      "api_server": "https://kubernetes.example.com:6443",
+      "token": "",
+      "ca_cert": "",
+      "kubeconfig_yaml": "",
+      "default_namespace": "",
+      "insecure_skip_tls": false
+    }
+  ]
 }

@@ -84,7 +84,7 @@ func normalizeTopoRef(ref string) string {
 			return ""
 		}
 		switch kind {
-		case "host", "cat", "svc":
+		case "host", "cat", "svc", "vm", "container", "pod":
 			return kind + ":" + val
 		default:
 			return "svc:" + ref
@@ -244,7 +244,11 @@ func (s *Server) computeTopologyRCA(hostID string, lookbackDays int) TopologyRCA
 	for _, rh := range out.RelatedHosts {
 		relatedIDs[rh.HostID] = true
 	}
-	for _, inc := range s.incidents.List() {
+	var openIncs []Incident
+	if s.incidents != nil {
+		openIncs = s.incidents.List()
+	}
+	for _, inc := range openIncs {
 		if inc.Status == "resolved" || inc.HostID == "" || !relatedIDs[inc.HostID] {
 			continue
 		}

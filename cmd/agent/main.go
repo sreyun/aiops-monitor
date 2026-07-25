@@ -55,6 +55,9 @@ type config struct {
 	// Hyper-V 虚拟机采集：默认在 Windows Hyper-V 宿主机上自动探测启用，无需配置
 	HyperVIntervalSec int  `json:"hyperv_interval_sec,omitempty"` // 采集间隔(秒)，默认 60
 	HyperVDisabled    bool `json:"hyperv_disabled,omitempty"`     // 显式关闭 Hyper-V 采集
+	// Docker/Podman 容器清单：有 CLI 时自动采集
+	ContainerIntervalSec int  `json:"container_interval_sec,omitempty"`
+	ContainerDisabled    bool `json:"container_disabled,omitempty"`
 }
 
 func defaultConfig() config {
@@ -116,10 +119,12 @@ func main() {
 		} else {
 			slog.Info("已加载配置文件", "path", cfgPath)
 		}
-	} else {
+	} else if os.Getenv("AIOPS_SERVER") == "" {
 		slog.Warn("配置文件不存在，使用默认配置（localhost:8529）",
 			"path", cfgPath,
-			"hint", "请运行安装命令生成 config.yaml，或使用 --config 指定路径")
+			"hint", "请运行安装命令生成 config.yaml，或使用 --config / AIOPS_SERVER 指定服务端")
+	} else {
+		slog.Info("配置文件不存在，使用环境变量 AIOPS_SERVER", "path", cfgPath)
 	}
 
 	// 首次启动时在配置目录自动生成 config.example.yaml（已存在则跳过）
@@ -204,6 +209,17 @@ func main() {
 	}
 	if v := os.Getenv("AIOPS_TOKEN"); v != "" && !explicitFlags["token"] {
 		cfg.Token = v
+	}
+	// Compose/K8s: read install token from a file the server publishes
+	// (e.g. /app/server-data/.install_token). Env AIOPS_TOKEN still wins when set.
+	if cfg.Token == "" && !explicitFlags["token"] {
+		if fp := strings.TrimSpace(os.Getenv("AIOPS_TOKEN_FILE")); fp != "" {
+			if b, err := os.ReadFile(fp); err == nil {
+				if tok := strings.TrimSpace(string(b)); tok != "" {
+					cfg.Token = tok
+				}
+			}
+		}
 	}
 	if v := os.Getenv("AIOPS_INTERVAL"); v != "" && !explicitFlags["interval"] {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -371,6 +387,8 @@ func main() {
 	agent.sniCfg = cfg.SNI
 	agent.hypervInterval = time.Duration(cfg.HyperVIntervalSec) * time.Second
 	agent.hypervDisabled = cfg.HyperVDisabled
+	agent.containerInterval = time.Duration(cfg.ContainerIntervalSec) * time.Second
+	agent.containerDisabled = cfg.ContainerDisabled
 
 	// Windows secure-desktop worker: run ONLY the remote-desktop channel, with
 	// capture/input following the input desktop (lock/login screens). Spawned by

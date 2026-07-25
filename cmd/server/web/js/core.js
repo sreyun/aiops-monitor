@@ -128,6 +128,27 @@ function copyWithFeedback(btn, text, okMsg) {
     () => toast(I18N.t("toast.copy_failed"), "err")
   );
 }
+
+/** Normalize search text: trim, NFKC, lowercase, collapse whitespace. */
+function normalizeSearchText(s) {
+  try {
+    return String(s || "")
+      .normalize("NFKC")
+      .replace(/[\u3000\s]+/g, " ")
+      .trim()
+      .toLowerCase();
+  } catch (e) {
+    return String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+}
+
+/** Multi-token AND match against a haystack string (already or will be normalized). */
+function matchesSearchTokens(haystack, query) {
+  const q = normalizeSearchText(query);
+  if (!q) return true;
+  const hay = normalizeSearchText(haystack);
+  return q.split(" ").filter(Boolean).every(t => hay.includes(t));
+}
 let CUR_CATS = [];    // legacy（树筛选用 CUR_FOLDER）
 let CUR_FOLDER = "";  // ""=全部, "__ungrouped__"=未分组, else folder id
 try { CUR_FOLDER = localStorage.getItem("aiops_host_folder") || ""; } catch (e) {}
@@ -137,7 +158,7 @@ try {
   const _htc = localStorage.getItem("aiops_host_tree_collapsed");
   if (_htc) JSON.parse(_htc).forEach(id => HOST_TREE_COLLAPSED.add(id));
 } catch (e) {}
-let HOST_TREE_MODE = "folder"; // folder=资产树 | type=类型树
+let HOST_TREE_MODE = "folder"; // folder=主机树 | type=类型树
 try {
   const _htm = localStorage.getItem("aiops_host_tree_mode");
   if (_htm === "folder" || _htm === "type") HOST_TREE_MODE = _htm;
@@ -284,30 +305,58 @@ const isSystemMount = p => {
 };
 
 /* ============================================================
-   P1-1: 主题切换
+   P1-1: 主题切换（默认浅色；meta theme-color / color-scheme 跟随应用主题）
    ============================================================ */
+const THEME_COLOR_LIGHT = "#f5f7fa";
+const THEME_COLOR_DARK = "#0a0d13";
+
+function normalizeTheme(t) {
+  return t === "dark" ? "dark" : "light";
+}
+function applyThemeChrome(theme) {
+  const t = normalizeTheme(theme);
+  document.documentElement.setAttribute("data-theme", t);
+  document.documentElement.style.colorScheme = t;
+  const meta = document.querySelector('meta[name="theme-color"][data-aiops-theme]');
+  if (meta) meta.setAttribute("content", t === "light" ? THEME_COLOR_LIGHT : THEME_COLOR_DARK);
+  const status = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (status) status.setAttribute("content", t === "light" ? "default" : "black-translucent");
+}
 function initTheme() {
-  const saved = localStorage.getItem("aiops_theme") || "dark";
-  document.documentElement.setAttribute("data-theme", saved);
+  let saved = "light";
+  try { saved = normalizeTheme(localStorage.getItem("aiops_theme") || "light"); } catch (_) {}
+  applyThemeChrome(saved);
   syncThemeIcons(saved);
 }
 function toggleTheme() {
-  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  const cur = normalizeTheme(document.documentElement.getAttribute("data-theme") || "light");
   const next = cur === "dark" ? "light" : "dark";
-  document.documentElement.setAttribute("data-theme", next);
-  localStorage.setItem("aiops_theme", next);
+  try { localStorage.setItem("aiops_theme", next); } catch (_) {}
+  applyThemeChrome(next);
   syncThemeIcons(next);
   // 重绘所有已存在的 Canvas 图表，使其使用新的 CSS 变量颜色
   for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
   for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
 }
-/* 同步当前主题图标 */
+/* 菜单展示「即将切换到」的图标与文案（浅色时显示月亮=切深色，深色时显示太阳=切浅色） */
 function syncThemeIcons(theme) {
+  const t = normalizeTheme(theme);
   const ddDark = document.querySelector(".user-dropdown .icon-theme-dark");
   const ddLight = document.querySelector(".user-dropdown .icon-theme-light");
   if (ddDark && ddLight) {
-    ddDark.style.display = theme === "dark" ? "" : "none";
-    ddLight.style.display = theme === "light" ? "" : "none";
+    ddDark.style.display = t === "light" ? "" : "none";
+    ddLight.style.display = t === "dark" ? "" : "none";
+  }
+  const label = document.querySelector("#ddThemeToggle .theme-toggle-label");
+  if (label) {
+    label.textContent = t === "dark"
+      ? (typeof I18N !== "undefined" ? I18N.t("ui.theme_to_light", "切换到浅色") : "切换到浅色")
+      : (typeof I18N !== "undefined" ? I18N.t("ui.theme_to_dark", "切换到深色") : "切换到深色");
+  }
+  const btn = $("ddThemeToggle");
+  if (btn) {
+    btn.setAttribute("aria-label", label ? label.textContent : "theme");
+    btn.title = label ? label.textContent : "";
   }
 }
 

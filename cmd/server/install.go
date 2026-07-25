@@ -284,28 +284,76 @@ case "$OS" in
     case "$ARCH" in
       x86_64|amd64)   BIN="aiops-agent-linux-amd64" ;;
       aarch64|arm64)   BIN="aiops-agent-linux-arm64" ;;
-      *)               BIN="aiops-agent-linux-amd64" ;;
+      *)
+        echo "[AIOps] ERROR: unsupported architecture: $ARCH (supported: x86_64/amd64, aarch64/arm64)"
+        exit 1
+        ;;
     esac
     ;;
   Darwin)
     case "$ARCH" in
       arm64)           BIN="aiops-agent-darwin-arm64" ;;
       x86_64)          BIN="aiops-agent-darwin-amd64" ;;
-      *)               BIN="aiops-agent-darwin-amd64" ;;
+      *)
+        echo "[AIOps] ERROR: unsupported architecture: $ARCH (supported: arm64, x86_64)"
+        exit 1
+        ;;
     esac
     ;;
   *) echo "unsupported OS: $OS"; exit 1 ;;
 esac
 
+# Download helper: curl preferred, wget fallback (Alpine/minimal images).
+aiops_fetch() {
+  # $1=url $2=out
+  _url="$1"; _out="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL --retry 3 --retry-delay 2 -C - "$_url" -o "$_out"
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q --tries=3 -O "$_out" "$_url"
+    return $?
+  fi
+  echo "[AIOps] ERROR: need curl or wget to download $_url"
+  return 1
+}
+
+# True only when systemd is the real init (not a container that merely has systemctl on PATH).
+aiops_has_systemd() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  if [ -r /proc/1/comm ] && [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
+    return 0
+  fi
+  _st=$(systemctl is-system-running 2>/dev/null || true)
+  case "$_st" in
+    running|degraded|maintenance|starting) return 0 ;;
+  esac
+  return 1
+}
+
 echo "[AIOps] installing to $DIR (server $SERVER)"
+echo "[AIOps] platform $OS/$ARCH → $BIN"
 mkdir -p "$DIR"
 cd "$DIR"
 # Download to a staging file, verify the server-published SHA-256, then replace
 # atomically. A truncated/corrupted/mismatched download must never overwrite a
 # working agent binary.
 NEW=".aiops-agent.new"
-curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o "$NEW" || curl -fsSL "$SERVER/dl/$BIN" -o "$NEW"
-EXPECTED=$(curl -fsSL "$SERVER/dl/$BIN.sha256" | awk '{print $1}')
+if ! aiops_fetch "$SERVER/dl/$BIN" "$NEW"; then
+  rm -f "$NEW"
+  echo "[AIOps] ERROR: failed to download $SERVER/dl/$BIN (HTTP 404 usually means the server image was built without this platform binary)."
+  echo "[AIOps] Fix: rebuild server with full agent dist (production Dockerfile, or updated Dockerfile.dev that cross-compiles darwin/linux/windows agents)."
+  echo "[AIOps] Probe: curl -fsSI \"$SERVER/dl/$BIN\"   # or: wget -S --spider \"$SERVER/dl/$BIN\""
+  exit 1
+fi
+if ! aiops_fetch "$SERVER/dl/$BIN.sha256" ".aiops-agent.sha256"; then
+  rm -f "$NEW" ".aiops-agent.sha256"
+  echo "[AIOps] ERROR: failed to download checksum $SERVER/dl/$BIN.sha256"
+  exit 1
+fi
+EXPECTED=$(awk '{print $1}' ".aiops-agent.sha256")
+rm -f ".aiops-agent.sha256"
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL=$(sha256sum "$NEW" | awk '{print $1}')
 elif command -v shasum >/dev/null 2>&1; then
@@ -323,7 +371,7 @@ fi
 [ -f aiops-agent ] && cp -f aiops-agent aiops-agent.bak 2>/dev/null || true
 mv -f "$NEW" aiops-agent
 chmod +x aiops-agent
-if curl -fsSL "$SERVER/dl/plugins.zip" -o plugins.zip 2>/dev/null; then
+if aiops_fetch "$SERVER/dl/plugins.zip" plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
@@ -404,8 +452,37 @@ fi
 rm -f config.json 2>/dev/null || true
 echo "[AIOps] config written: $DIR/config.yaml (server: $SERVER)"
 
-if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
-  # Linux + root → systemd: auto-start on boot + auto-restart on crash/kill.
+if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
+  # Linux + root + real systemd → unit file, but the agent PROCESS runs as
+  # unprivileged system user "aiops" (never root). Containers that only ship
+  # a systemctl binary fall through to the nohup path below.
+  AIOPS_USER="${AIOPS_USER:-aiops}"
+  NOLOGIN="/usr/sbin/nologin"
+  [ -x /sbin/nologin ] && NOLOGIN="/sbin/nologin"
+  [ -x /usr/sbin/nologin ] && NOLOGIN="/usr/sbin/nologin"
+  if ! id "$AIOPS_USER" >/dev/null 2>&1; then
+    if command -v useradd >/dev/null 2>&1; then
+      useradd --system --home-dir "$DIR" --shell "$NOLOGIN" --comment "AIOps Monitor Agent" "$AIOPS_USER" 2>/dev/null \
+        || useradd -r -d "$DIR" -s "$NOLOGIN" "$AIOPS_USER" 2>/dev/null || true
+    elif command -v adduser >/dev/null 2>&1; then
+      adduser --system --home "$DIR" --shell "$NOLOGIN" --disabled-password --gecos "AIOps Monitor Agent" "$AIOPS_USER" 2>/dev/null || true
+    fi
+  fi
+  if ! id "$AIOPS_USER" >/dev/null 2>&1; then
+    echo "[AIOps] ERROR: could not create system user '$AIOPS_USER'; aborting root install."
+    echo "[AIOps] Re-run without sudo for a per-user (~/.aiops-agent) install, or create the user manually."
+    exit 1
+  fi
+  chown -R "$AIOPS_USER:$AIOPS_USER" "$DIR"
+  # SNI / content audit needs packet capture as non-root → ambient capabilities.
+  UNIT_CAPS=""
+  UNIT_NNP="NoNewPrivileges=true"
+  if [ "__SNI_ENABLED__" = "true" ] || [ "__CONTENT_AUDIT__" = "true" ]; then
+    UNIT_CAPS="AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+"
+    UNIT_NNP="NoNewPrivileges=false"
+  fi
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
 Description=AIOps Monitor Agent
@@ -413,29 +490,46 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
+User=$AIOPS_USER
+Group=$AIOPS_USER
 WorkingDirectory=$DIR
 ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5
+$UNIT_NNP
+$UNIT_CAPS
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=$DIR
 [Install]
 WantedBy=multi-user.target
 UNIT
   # A prior NON-root install may have left a background (nohup) instance and an
-  # @reboot crontab entry. Remove them so switching to the root/systemd install
+  # @reboot crontab entry. Remove them so switching to the systemd install
   # doesn't end up running two agents (duplicate reports for the same host).
   if command -v crontab >/dev/null 2>&1; then
     crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" | crontab - 2>/dev/null || true
   fi
+  # Best-effort: scrub other users' @reboot lines that point at this binary.
+  if [ -d /var/spool/cron/crontabs ]; then
+    for _cf in /var/spool/cron/crontabs/*; do
+      [ -f "$_cf" ] || continue
+      if grep -q "$DIR/aiops-agent --config" "$_cf" 2>/dev/null; then
+        grep -v "$DIR/aiops-agent --config" "$_cf" > "$_cf.aiops.tmp" 2>/dev/null && mv "$_cf.aiops.tmp" "$_cf" || rm -f "$_cf.aiops.tmp"
+      fi
+    done
+  fi
   systemctl daemon-reload
   systemctl stop aiops-agent 2>/dev/null || true
-  pkill -f "$DIR/aiops-agent --config" 2>/dev/null || true
+  pkill -f "$DIR/aiops-agent --config" 2>/dev/null || pkill -x aiops-agent 2>/dev/null || true
   systemctl enable aiops-agent >/dev/null 2>&1 || true
   # Use restart (not "enable --now"): on an UPGRADE the service is already running
   # the OLD binary, and "enable --now" is a no-op for a running unit — the new
   # binary wouldn't take effect until the next reboot. restart re-execs the freshly
   # downloaded binary immediately (and still starts it if it was stopped).
   systemctl restart aiops-agent
-  echo "[AIOps] systemd service (re)started: aiops-agent (boot autostart + auto-restart)"
+  echo "[AIOps] systemd service (re)started: aiops-agent (user=$AIOPS_USER, boot autostart + auto-restart)"
   # 麒麟/UOS 系统自动检测并配置 kysec 白名单
   if command -v kysec_adm &>/dev/null; then
     kysec_adm -a $DIR/aiops-agent 2>/dev/null && echo "[AIOps] kysec whitelist added: $DIR/aiops-agent" || true
@@ -443,7 +537,7 @@ UNIT
   # SELinux: check and warn if enforcing
   if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
     echo "[AIOps] WARNING: SELinux is enforcing. If agent data collection is blocked, run:"
-    echo "  sudo setenforce 0  (temporary) or load a custom SELinux policy module."
+    echo "  sudo setenforce 0  (temporary) then inspect AVC denials with ausearch."
   fi
 elif [ "$OS" = "Darwin" ]; then
   # macOS → launchd. RunAtLoad starts it on boot/login; KeepAlive relaunches it
@@ -841,9 +935,29 @@ if (-not $Probe.Ok) {
 }
 try {
   Get-AiopsRemoteFile "$Server/dl/plugins.zip" "$Dir\plugins.zip"
-  Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
+  # Expand-Archive needs PowerShell 5+; Server 2012 often ships PS 3/4 — use .NET ZipFile.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+  $zip = [System.IO.Compression.ZipFile]::OpenRead("$Dir\plugins.zip")
+  try {
+    foreach ($entry in $zip.Entries) {
+      if ($entry.FullName -match '[\\/]$') { continue }
+      $out = Join-Path $Dir $entry.FullName
+      $parent = Split-Path -Parent $out
+      if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $out, $true)
+    }
+  } finally { $zip.Dispose() }
   Remove-Item "$Dir\plugins.zip" -Force -ErrorAction SilentlyContinue
-} catch { Write-Host "[AIOps] plugins skipped" }
+  Write-Host "[AIOps] plugins extracted"
+} catch {
+  try {
+    if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
+      Expand-Archive -Path "$Dir\plugins.zip" -DestinationPath $Dir -Force
+      Remove-Item "$Dir\plugins.zip" -Force -ErrorAction SilentlyContinue
+      Write-Host "[AIOps] plugins extracted (Expand-Archive)"
+    } else { throw $_ }
+  } catch { Write-Host "[AIOps] plugins skipped: $_" }
+}
 
 $ServersJson = '__SERVERS_JSON__'
 # YAML is the default config format. PowerShell has no YAML serializer, so build it
@@ -1002,6 +1116,16 @@ if ($IsAdmin) {
   Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
   Write-Host "[AIOps] NOTE: Hyper-V VM collection needs admin. On a Hyper-V host, re-run this install command in an ELEVATED PowerShell."
 }
+Write-Host "[AIOps] --- capability summary ---"
+Write-Host ("[AIOps] elevated   : " + $IsAdmin)
+Write-Host ("[AIOps] install dir: " + $Dir)
+$svcOk = $false
+try { $svcOk = [bool](Get-Service -Name 'AiopsMonitorAgent' -ErrorAction SilentlyContinue) } catch {}
+Write-Host ("[AIOps] win service: " + $svcOk + " (SYSTEM service => disk IO + Hyper-V)")
+$hv = $false
+try { $hv = [bool](Get-Service -Name 'vmms' -ErrorAction SilentlyContinue) } catch {}
+Write-Host ("[AIOps] Hyper-V role: " + $hv + $(if ($hv -and -not $IsAdmin) { " (needs elevated reinstall)" } else { "" }))
+Write-Host "[AIOps] done. Check the dashboard for this host."
 `
 
 // relayInstallShTemplate installs the agent in GATEWAY RELAY mode on Linux /
@@ -1035,12 +1159,19 @@ case "$OS" in
 esac
 
 echo "[AIOps] installing relay to $DIR (upstream $SERVER)"
+echo "[AIOps] platform $OS/$ARCH → $BIN"
 mkdir -p "$DIR"
 cd "$DIR"
 # resumable + retried download: on flaky/cross-border links, don't re-fetch the
 # whole 7.5MB from scratch. -C - resumes a partial; on a complete file the server
 # returns 416, so fall back to a plain full GET.
-curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent || curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent
+if ! curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent; then
+  if ! curl -fsSL "$SERVER/dl/$BIN" -o aiops-agent; then
+    echo "[AIOps] ERROR: failed to download $SERVER/dl/$BIN (HTTP 404 usually means the server image lacks this platform binary)."
+    echo "[AIOps] Fix: rebuild server with full agent dist (production Dockerfile or updated Dockerfile.dev)."
+    exit 1
+  fi
+fi
 chmod +x aiops-agent
 
 cat > config.yaml <<EOF

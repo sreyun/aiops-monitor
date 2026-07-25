@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -150,46 +152,51 @@ type ThresholdConfig struct {
 }
 
 func defaultThresholdConfig() ThresholdConfig {
+	// Keep a single source of truth with StandardThresholds (includes SNMP/NetFlow).
+	return thresholdConfigFromThresholds(StandardThresholds())
+}
+
+// thresholdConfigFromThresholds converts runtime Thresholds into the JSON-editable config shape.
+func thresholdConfigFromThresholds(t Thresholds) ThresholdConfig {
+	sec := int(t.OfflineAfter / time.Second)
+	if sec <= 0 && t.OfflineAfter > 0 {
+		sec = 1
+	}
 	return ThresholdConfig{
-		CPUWarn: 80, CPUCrit: 95,
-		MemWarn: 85, MemCrit: 95,
-		DiskWarn: 80, DiskCrit: 90,
-		DiskIOWarn: 80, DiskIOCrit: 95,
-		IOPSWarn: 50000, IOPSCrit: 100000,
-		GPUWarn: 80, GPUCrit: 95,
-		GPUTempWarn: 85, GPUTempCrit: 95,
-		GPUMemWarn: 90, GPUMemCrit: 97,
-		LoadWarn: 4.0, LoadCrit: 8.0,
-		ProcWarn: 0.5,
-		ConnWarn: 5000, ConnCrit: 10000,
-		OfflineAfterSec: 60,
-		// 拨测监控默认阈值
-		CheckPingLossWarn: 10, CheckPingLossCrit: 30,
-		CheckPingLatencyWarn: 100, CheckPingLatencyCrit: 500,
-		CheckTCPTimeoutWarn: 1000, CheckTCPTimeoutCrit: 5000,
-		CheckHTTPRespWarn: 1000, CheckHTTPRespCrit: 5000,
-		CheckHTTPStatusWarn: 1, CheckHTTPStatusCrit: 5,
-		CheckProcFailWarn: 1, CheckProcFailCrit: 3,
-		CheckUDPTimeoutWarn: 1000, CheckUDPTimeoutCrit: 5000, // 修复：此前默认档遗漏 UDP 阈值，导致 UDP 探测超时默认不告警
-		CheckDNSTimeoutWarn: 500, CheckDNSTimeoutCrit: 2000,
-		// API 业务监控默认阈值
-		APIAvailWarn: 99.0, APIAvailCrit: 95.0,
-		APIAvgRespWarn: 500, APIAvgRespCrit: 2000,
-		APIP95RespWarn: 1000, APIP95RespCrit: 5000,
-		APIThroughputWarn: 100, APIThroughputCrit: 10,
-		// 编排定时任务默认阈值
-		TaskFailWarn: 1, TaskFailCrit: 5,
-		TaskTimeoutWarn: 60, TaskTimeoutCrit: 300,
-		// 端口转发监控默认阈值
-		ForwardConnWarn: 200, ForwardConnCrit: 280,
-		ForwardBwWarn: 80, ForwardBwCrit: 95,
-		ForwardErrWarn: 5, ForwardErrCrit: 15,
-		ForwardLatWarn: 1000, ForwardLatCrit: 5000,
-		// SNMP 网络设备默认阈值
-		SNMPIfUtilWarn: 80, SNMPIfUtilCrit: 95,
-		SNMPIfErrWarn: 1, SNMPIfErrCrit: 10,
-		// NetFlow 流量异常默认阈值：突增 = 超基线 3 倍且 ≥ 1Mbps；采集器丢包 ≥ 100 包/窗口
-		NetFlowSurgeRatio: 3.0, NetFlowSurgeMinMbps: 1.0, NetFlowDropWarn: 100,
+		CPUWarn: t.CPUWarn, CPUCrit: t.CPUCrit,
+		MemWarn: t.MemWarn, MemCrit: t.MemCrit,
+		DiskWarn: t.DiskWarn, DiskCrit: t.DiskCrit,
+		DiskIOWarn: t.DiskIOWarn, DiskIOCrit: t.DiskIOCrit,
+		IOPSWarn: t.IOPSWarn, IOPSCrit: t.IOPSCrit,
+		GPUWarn: t.GPUWarn, GPUCrit: t.GPUCrit,
+		GPUTempWarn: t.GPUTempWarn, GPUTempCrit: t.GPUTempCrit,
+		GPUMemWarn: t.GPUMemWarn, GPUMemCrit: t.GPUMemCrit,
+		LoadWarn: t.LoadWarn, LoadCrit: t.LoadCrit,
+		ProcWarn: t.ProcWarn,
+		ConnWarn: int(t.ConnWarn), ConnCrit: int(t.ConnCrit),
+		OfflineAfterSec: sec,
+		CheckPingLossWarn: t.CheckPingLossWarn, CheckPingLossCrit: t.CheckPingLossCrit,
+		CheckPingLatencyWarn: t.CheckPingLatencyWarn, CheckPingLatencyCrit: t.CheckPingLatencyCrit,
+		CheckTCPTimeoutWarn: t.CheckTCPTimeoutWarn, CheckTCPTimeoutCrit: t.CheckTCPTimeoutCrit,
+		CheckHTTPRespWarn: t.CheckHTTPRespWarn, CheckHTTPRespCrit: t.CheckHTTPRespCrit,
+		CheckHTTPStatusWarn: t.CheckHTTPStatusWarn, CheckHTTPStatusCrit: t.CheckHTTPStatusCrit,
+		CheckProcFailWarn: t.CheckProcFailWarn, CheckProcFailCrit: t.CheckProcFailCrit,
+		CheckUDPTimeoutWarn: t.CheckUDPTimeoutWarn, CheckUDPTimeoutCrit: t.CheckUDPTimeoutCrit,
+		CheckDNSTimeoutWarn: t.CheckDNSTimeoutWarn, CheckDNSTimeoutCrit: t.CheckDNSTimeoutCrit,
+		APIAvailWarn: t.APIAvailWarn, APIAvailCrit: t.APIAvailCrit,
+		APIAvgRespWarn: t.APIAvgRespWarn, APIAvgRespCrit: t.APIAvgRespCrit,
+		APIP95RespWarn: t.APIP95RespWarn, APIP95RespCrit: t.APIP95RespCrit,
+		APIThroughputWarn: t.APIThroughputWarn, APIThroughputCrit: t.APIThroughputCrit,
+		TaskFailWarn: t.TaskFailWarn, TaskFailCrit: t.TaskFailCrit,
+		TaskTimeoutWarn: t.TaskTimeoutWarn, TaskTimeoutCrit: t.TaskTimeoutCrit,
+		ForwardConnWarn: t.ForwardConnWarn, ForwardConnCrit: t.ForwardConnCrit,
+		ForwardBwWarn: t.ForwardBwWarn, ForwardBwCrit: t.ForwardBwCrit,
+		ForwardErrWarn: t.ForwardErrWarn, ForwardErrCrit: t.ForwardErrCrit,
+		ForwardLatWarn: t.ForwardLatWarn, ForwardLatCrit: t.ForwardLatCrit,
+		SNMPIfUtilWarn: t.SNMPIfUtilWarn, SNMPIfUtilCrit: t.SNMPIfUtilCrit,
+		SNMPIfErrWarn: t.SNMPIfErrWarn, SNMPIfErrCrit: t.SNMPIfErrCrit,
+		NetFlowSurgeRatio: t.NetFlowSurgeRatio, NetFlowSurgeMinMbps: t.NetFlowSurgeMinMbps,
+		NetFlowDropWarn: t.NetFlowDropWarn,
 	}
 }
 
@@ -355,6 +362,13 @@ func (t ThresholdConfig) toThresholds() Thresholds {
 	}
 }
 
+// ExternalIdentity binds a local account to an SSO subject (OIDC sub / open_id / union_id).
+type ExternalIdentity struct {
+	Provider string `json:"provider"`           // oidc | feishu | dingtalk | wechat | wecom
+	Subject  string `json:"subject"`            // stable IdP subject
+	BoundAt  int64  `json:"bound_at,omitempty"` // unix seconds
+}
+
 // AccountConfig is the dashboard login account + profile. The password is
 // stored salted+hashed (never plaintext).
 type AccountConfig struct {
@@ -377,6 +391,12 @@ type AccountConfig struct {
 	// MustChangePassword forces the user to change their password on next login.
 	// Set by the admin password reset tool (v5.4.0).
 	MustChangePassword bool `json:"must_change_password,omitempty"`
+	// Host-scoped RBAC (empty = unrestricted). Folder IDs include descendants.
+	AllowedFolderIDs []string `json:"allowed_folder_ids,omitempty"`
+	AllowedHostIDs   []string `json:"allowed_host_ids,omitempty"`
+	AllowedTags      []string `json:"allowed_tags,omitempty"` // match Host.Category
+	// Identities links SSO providers (open_id / union_id / OIDC sub) to this account.
+	Identities []ExternalIdentity `json:"identities,omitempty"`
 }
 
 func defaultAccount() AccountConfig {
@@ -449,6 +469,10 @@ type PersistedForwardRule struct {
 	Protocol     string `json:"protocol,omitempty"`      // "tcp"(默认/空) | "udp"
 	GroupID      string `json:"group_id,omitempty"`      // 端口范围批量组 ID（同组共享）
 	RemoteTarget string `json:"remote_target,omitempty"` // 跳板目标，如 "192.168.30.220:3306"（为空时走 Agent 本机 localhost）
+	// Source IP whitelist (optional). When WhitelistEnabled is false (default),
+	// any client may connect. When true, only listed IPs/CIDRs are accepted.
+	WhitelistEnabled bool     `json:"whitelist_enabled,omitempty"`
+	Whitelist        []string `json:"whitelist,omitempty"`
 }
 
 // ServerConfig is the operator-editable server configuration persisted to disk.
@@ -484,7 +508,12 @@ type ServerConfig struct {
 	// rotated. Managed by ResetToken (rotate).
 	PrevInstallToken   string           `json:"prev_install_token,omitempty"`
 	PrevTokenExpiresAt int64            `json:"prev_token_expires_at,omitempty"`
-	RequireToken       bool             `json:"require_token"`
+	// Install token hardening: optional max uses / expiry / revoke without rotating.
+	InstallTokenMaxUses   int   `json:"install_token_max_uses,omitempty"`   // 0 = unlimited
+	InstallTokenUseCount  int   `json:"install_token_use_count,omitempty"`  // successful new registrations
+	InstallTokenExpiresAt int64 `json:"install_token_expires_at,omitempty"` // unix; 0 = never
+	InstallTokenRevoked   bool  `json:"install_token_revoked,omitempty"`
+	RequireToken          bool  `json:"require_token"`
 	Account            AccountConfig    `json:"account"`
 	Checks             []CustomCheck    `json:"checks"`
 	APISystems         []APISystem      `json:"api_systems,omitempty"`      // API 性能监控：按业务系统分组的批量接口
@@ -530,6 +559,9 @@ type ServerConfig struct {
 	// DataSources is the list of external observability data sources (Loki /
 	// Prometheus) operators connect for AI query, log search and alert queries.
 	DataSources []DataSource `json:"data_sources,omitempty"`
+	// K8sClusters is the list of Kubernetes clusters the server talks to
+	// directly (API Server + Token or pasted kubeconfig). Secrets are encrypted at rest.
+	K8sClusters []K8sClusterConfig `json:"k8s_clusters,omitempty"`
 	// ForwardRules is the list of persisted TCP forwarding rules.
 	// Listeners are recreated on startup from these persisted fields.
 	ForwardRules []PersistedForwardRule `json:"forward_rules,omitempty"`
@@ -561,11 +593,18 @@ type ServerConfig struct {
 	// they can access the dashboard. Managed by admin via /api/v1/mfa/global.
 	MFARequired bool `json:"mfa_required"`
 	// CORSOrigins restricts the Access-Control-Allow-Origin header. When empty
-	// (default), the server responds with "*" for backward compatibility. When
+	// (default), no CORS headers are emitted (same-origin dashboard only). When
 	// set to one or more origins (e.g. ["https://ops.example.com"]), only
 	// matching Origin request headers are echoed; non-matching cross-origin
 	// requests receive no CORS headers and are therefore blocked by the browser.
 	CORSOrigins []string `json:"cors_origins,omitempty"`
+	// AuditExport forwards operation audit entries to SIEM (Webhook / Syslog).
+	AuditExport AuditExportConfig `json:"audit_export,omitempty"`
+	// OIDC enables enterprise SSO (authorization code + userinfo + group→role).
+	OIDC OIDCConfig `json:"oidc,omitempty"`
+	// SSO holds OAuth login apps for Feishu / DingTalk / WeChat / WeCom
+	// (separate from alert webhooks under Feishu / Dingtalk).
+	SSO SSOConfig `json:"sso,omitempty"`
 	// Users is the multi-account list (RBAC). The legacy single Account above is
 	// migrated into this list on load and then cleared.
 	Users []AccountConfig `json:"users"`
@@ -671,13 +710,18 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 	}
 	// Apply environment variable overrides (v5.4.1): Docker Compose users can
 	// set AIOPS_* env vars to override config file values without editing JSON.
-	cs.applyEnvOverrides()
+	if cs.applyEnvOverrides() {
+		dirty = true
+	}
 	// Validate the loaded config — refuse to start with an obviously broken one.
 	if err := cs.cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if dirty {
 		_ = cs.save()
+	} else {
+		// Even when config is unchanged, publish the enroll token for compose agents.
+		cs.writeInstallTokenFile()
 	}
 	return cs, nil
 }
@@ -697,7 +741,11 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 //	AIOPS_ALLOW_ANONYMOUS_AGENTS  → allow_anonymous_agents (true/false)
 //	AIOPS_TRUST_PROXY             → trust_proxy (true/false)
 //	AIOPS_REQUIRE_TOKEN           → require_token (true/false)
-func (cs *ConfigStore) applyEnvOverrides() {
+//	AIOPS_INSTALL_TOKEN           → install_token (compose agent auto-enroll)
+//
+// Returns true when a field was mutated and should be persisted.
+func (cs *ConfigStore) applyEnvOverrides() bool {
+	dirty := false
 	// External storage (Docker Compose points these at the VM / Postgres services):
 	//   AIOPS_VM_URL         → enable VictoriaMetrics remote-write to this URL
 	//   AIOPS_POSTGRES_DSN   → enable PostgreSQL persistence with this DSN
@@ -735,6 +783,50 @@ func (cs *ConfigStore) applyEnvOverrides() {
 	if v, ok := os.LookupEnv("AIOPS_REQUIRE_TOKEN"); ok && v != "" {
 		cs.cfg.RequireToken = v == "true" || v == "1"
 	}
+	// Optional seed/override so compose can keep server + sidecar agent in sync.
+	// When set and different from the current token, rotate with a grace window
+	// so already-installed agents keep working.
+	if v, ok := os.LookupEnv("AIOPS_INSTALL_TOKEN"); ok {
+		v = strings.TrimSpace(v)
+		if v != "" && v != cs.cfg.InstallToken {
+			if cs.cfg.InstallToken != "" {
+				cs.cfg.PrevInstallToken = cs.cfg.InstallToken
+				cs.cfg.PrevTokenExpiresAt = time.Now().Add(tokenGracePeriod).Unix()
+			}
+			cs.cfg.InstallToken = v
+			dirty = true
+		}
+	}
+	return dirty
+}
+
+// writeInstallTokenFile publishes the current install token next to the config
+// path (e.g. /app/data/.install_token) so a compose-sidecar agent can enroll
+// by mounting the same data volume read-only — no manual token copy needed.
+func (cs *ConfigStore) writeInstallTokenFile() {
+	cs.mu.RLock()
+	tok := strings.TrimSpace(cs.cfg.InstallToken)
+	cfgPath := cs.path
+	cs.mu.RUnlock()
+	if tok == "" || cfgPath == "" {
+		return
+	}
+	out := filepath.Join(filepath.Dir(cfgPath), ".install_token")
+	tmp := out + ".tmp"
+	payload := []byte(tok + "\n")
+	// 0644: compose sidecar agent runs as non-root and must read this enroll
+	// file from the shared data volume. Keep the volume private to the host.
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+		slog.Warn("写入安装 Token 文件失败", "path", out, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, out); err != nil {
+		if err2 := os.WriteFile(out, payload, 0o644); err2 != nil {
+			slog.Warn("写入安装 Token 文件失败", "path", out, "err", err2)
+			return
+		}
+	}
+	_ = os.Chmod(out, 0o644)
 }
 
 func genToken() string {
@@ -912,7 +1004,7 @@ const tokenGracePeriod = 7 * 24 * time.Hour
 // ResetToken ROTATES the install token: the current token becomes the previous
 // token (valid for tokenGracePeriod), then a fresh token is generated and
 // returned. Existing agents keep working during the grace window — a rotation is
-// no longer an instant "all agents offline" event.
+// no longer an instant "all agents offline" event. Use counters / revoke flags reset.
 func (cs *ConfigStore) ResetToken() string {
 	cs.mu.Lock()
 	if cs.cfg.InstallToken != "" {
@@ -920,10 +1012,34 @@ func (cs *ConfigStore) ResetToken() string {
 		cs.cfg.PrevTokenExpiresAt = time.Now().Add(tokenGracePeriod).Unix()
 	}
 	cs.cfg.InstallToken = genToken()
+	cs.cfg.InstallTokenUseCount = 0
+	cs.cfg.InstallTokenRevoked = false
+	// Keep MaxUses / ExpiresAt as operator policy across rotations unless cleared via API.
 	tok := cs.cfg.InstallToken
 	cs.mu.Unlock()
 	_ = cs.save()
 	return tok
+}
+
+// RevokeInstallToken invalidates the current install token without issuing a new one.
+// Already-registered agents (fingerprint auth) are unaffected.
+func (cs *ConfigStore) RevokeInstallToken() error {
+	cs.mu.Lock()
+	cs.cfg.InstallTokenRevoked = true
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// SetInstallTokenPolicy updates max-uses / expiry (0 = unlimited / never).
+func (cs *ConfigStore) SetInstallTokenPolicy(maxUses int, expiresAt int64) error {
+	cs.mu.Lock()
+	if maxUses < 0 {
+		maxUses = 0
+	}
+	cs.cfg.InstallTokenMaxUses = maxUses
+	cs.cfg.InstallTokenExpiresAt = expiresAt
+	cs.mu.Unlock()
+	return cs.save()
 }
 
 // PrevTokenValidUntil returns the unix expiry of the grace-period token, or 0 if
@@ -938,21 +1054,48 @@ func (cs *ConfigStore) PrevTokenValidUntil() int64 {
 }
 
 // ValidInstallToken reports whether got matches the current token, or the
-// previous token during its grace period. Constant-time.
+// previous token during its grace period. Constant-time. Honors revoke / expiry / max-uses.
 func (cs *ConfigStore) ValidInstallToken(got string) bool {
 	cs.mu.RLock()
 	cur := cs.cfg.InstallToken
 	prev := cs.cfg.PrevInstallToken
 	prevExp := cs.cfg.PrevTokenExpiresAt
+	revoked := cs.cfg.InstallTokenRevoked
+	maxUses := cs.cfg.InstallTokenMaxUses
+	useCount := cs.cfg.InstallTokenUseCount
+	expiresAt := cs.cfg.InstallTokenExpiresAt
 	cs.mu.RUnlock()
+	now := time.Now().Unix()
 	if cur != "" && subtle.ConstantTimeCompare([]byte(got), []byte(cur)) == 1 {
+		if revoked {
+			return false
+		}
+		if expiresAt > 0 && now >= expiresAt {
+			return false
+		}
+		if maxUses > 0 && useCount >= maxUses {
+			return false
+		}
 		return true
 	}
-	if prev != "" && time.Now().Unix() < prevExp &&
+	if prev != "" && now < prevExp &&
 		subtle.ConstantTimeCompare([]byte(got), []byte(prev)) == 1 {
 		return true
 	}
 	return false
+}
+
+// ConsumeInstallTokenUse increments the use counter after a successful NEW agent
+// registration that presented the current (not grace) token.
+func (cs *ConfigStore) ConsumeInstallTokenUse(got string) {
+	cs.mu.Lock()
+	if cs.cfg.InstallToken == "" || subtle.ConstantTimeCompare([]byte(got), []byte(cs.cfg.InstallToken)) != 1 {
+		cs.mu.Unlock()
+		return
+	}
+	cs.cfg.InstallTokenUseCount++
+	cs.mu.Unlock()
+	_ = cs.save()
 }
 
 // ---- account ----
@@ -1119,6 +1262,13 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.MFARequired = cs.cfg.MFARequired
 	c.CORSOrigins = cs.cfg.CORSOrigins // CORS 白名单：前端表单不含此字段，必须保留现有值
 	c.Users = cs.cfg.Users             // 保护多用户列表：前端表单不含 Users，必须保留现有值
+	c.AuditExport = cs.cfg.AuditExport // 审计外发：独立 API 管理
+	c.OIDC = cs.cfg.OIDC               // OIDC SSO：独立 API 管理
+	c.SSO = cs.cfg.SSO                 // 飞书/钉钉/微信登录：独立 API 管理
+	c.InstallTokenMaxUses = cs.cfg.InstallTokenMaxUses
+	c.InstallTokenUseCount = cs.cfg.InstallTokenUseCount
+	c.InstallTokenExpiresAt = cs.cfg.InstallTokenExpiresAt
+	c.InstallTokenRevoked = cs.cfg.InstallTokenRevoked
 	cs.cfg = c
 	cs.mu.Unlock()
 	return cs.save()
@@ -1163,6 +1313,11 @@ func (cs *ConfigStore) save() error {
 		copy(users, c.Users)
 		c.Users = users
 	}
+	if len(c.K8sClusters) > 0 {
+		clusters := make([]K8sClusterConfig, len(c.K8sClusters))
+		copy(clusters, c.K8sClusters)
+		c.K8sClusters = clusters
+	}
 	// API 业务监控的 headers/body 含引用类型（map/slice），必须深拷贝后再交给
 	// encryptConfigSecrets 加密，否则会就地污染内存中的明文实时配置。
 	if len(c.APISystems) > 0 {
@@ -1180,7 +1335,11 @@ func (cs *ConfigStore) save() error {
 		return err
 	}
 	if pg != nil { // PostgreSQL-backed: persist the whole config as one JSONB row
-		return pg.saveConfigBlob(b)
+		if err := pg.saveConfigBlob(b); err != nil {
+			return err
+		}
+		cs.writeInstallTokenFile()
+		return nil
 	}
 	// 0o600: this file holds password hashes, MFA secrets and the install token —
 	// it must not be world-readable on a shared host.
@@ -1190,6 +1349,7 @@ func (cs *ConfigStore) save() error {
 	// WriteFile keeps the existing mode when the file already exists, so force
 	// 0o600 to also tighten configs written by earlier (0o644) versions.
 	_ = os.Chmod(cs.path, 0o600)
+	cs.writeInstallTokenFile()
 	return nil
 }
 

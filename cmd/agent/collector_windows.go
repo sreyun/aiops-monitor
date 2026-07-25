@@ -33,8 +33,12 @@ var (
 	procDeviceIoControl      = modkernel32.NewProc("DeviceIoControl")
 	procEnumProcesses        = modpsapi.NewProc("EnumProcesses")
 	procGetIfTable           = modiphlpapi.NewProc("GetIfTable")
+	procGetIfTable2          = modiphlpapi.NewProc("GetIfTable2")
+	procFreeMibTable         = modiphlpapi.NewProc("FreeMibTable")
 	procGetTcpTable          = modiphlpapi.NewProc("GetTcpTable")
 	procGetUdpTable          = modiphlpapi.NewProc("GetUdpTable")
+	procGetTcp6Table         = modiphlpapi.NewProc("GetTcp6Table")
+	procGetUdp6Table         = modiphlpapi.NewProc("GetUdp6Table")
 	procRtlGetVersion        = syscall.NewLazyDLL("ntdll.dll").NewProc("RtlGetVersion")
 
 	modkernel32x                 = syscall.NewLazyDLL("kernel32.dll")
@@ -284,20 +288,105 @@ func ewma(prev, x, dt, tau float64) float64 {
 	return prev + alpha*(x-prev)
 }
 
-// readIfTable sums per-interface byte counters from the classic MIB_IFTABLE,
-// skipping the software loopback. Fields are read at fixed offsets to avoid
-// any struct-layout ambiguity. Counters are 32-bit; rate() tolerates wrap.
+// mibIfRow2 mirrors Windows MIB_IF_ROW2 (netioapi.h) for 64-bit octet counters.
+// Layout matches golang.org/x/sys/windows.MibIfRow2.
+type mibIfRow2 struct {
+	InterfaceLuid               uint64
+	InterfaceIndex              uint32
+	InterfaceGuid               [16]byte
+	Alias                       [257]uint16
+	Description                 [257]uint16
+	PhysicalAddressLength       uint32
+	PhysicalAddress             [32]byte
+	PermanentPhysicalAddress    [32]byte
+	Mtu                         uint32
+	Type                        uint32
+	TunnelType                  uint32
+	MediaType                   uint32
+	PhysicalMediumType          uint32
+	AccessType                  uint32
+	DirectionType               uint32
+	InterfaceAndOperStatusFlags uint8
+	OperStatus                  uint32
+	AdminStatus                 uint32
+	MediaConnectState           uint32
+	NetworkGuid                 [16]byte
+	ConnectionType              uint32
+	TransmitLinkSpeed           uint64
+	ReceiveLinkSpeed            uint64
+	InOctets                    uint64
+	InUcastPkts                 uint64
+	InNUcastPkts                uint64
+	InDiscards                  uint64
+	InErrors                    uint64
+	InUnknownProtos             uint64
+	InUcastOctets               uint64
+	InMulticastOctets           uint64
+	InBroadcastOctets           uint64
+	OutOctets                   uint64
+	OutUcastPkts                uint64
+	OutNUcastPkts               uint64
+	OutDiscards                 uint64
+	OutErrors                   uint64
+	OutUcastOctets              uint64
+	OutMulticastOctets          uint64
+	OutBroadcastOctets          uint64
+	OutQLen                     uint64
+}
+
+type mibIfTable2 struct {
+	NumEntries uint32
+	Table      [1]mibIfRow2
+}
+
+// readIfTable prefers GetIfTable2 (64-bit counters, Vista+/Server 2008+) and
+// falls back to classic GetIfTable (32-bit) when unavailable.
 func readIfTable() (rx, tx uint64, ok bool) {
+	if rx, tx, ok = readIfTable2(); ok {
+		return rx, tx, true
+	}
+	return readIfTableLegacy()
+}
+
+func readIfTable2() (rx, tx uint64, ok bool) {
+	if err := procGetIfTable2.Find(); err != nil {
+		return 0, 0, false
+	}
+	var table *mibIfTable2
+	r, _, _ := procGetIfTable2.Call(uintptr(unsafe.Pointer(&table)))
+	if r != 0 || table == nil {
+		return 0, 0, false
+	}
+	defer procFreeMibTable.Call(uintptr(unsafe.Pointer(table)))
+	const ifTypeLoopback = 24
+	n := int(table.NumEntries)
+	if n <= 0 || n > 4096 {
+		return 0, 0, false
+	}
+	rowSize := unsafe.Sizeof(mibIfRow2{})
+	base := uintptr(unsafe.Pointer(&table.Table[0]))
+	for i := 0; i < n; i++ {
+		row := (*mibIfRow2)(unsafe.Pointer(base + uintptr(i)*rowSize))
+		if row.Type == ifTypeLoopback {
+			continue
+		}
+		rx += row.InOctets
+		tx += row.OutOctets
+	}
+	return rx, tx, true
+}
+
+// readIfTableLegacy sums per-interface byte counters from the classic MIB_IFTABLE,
+// skipping the software loopback. Counters are 32-bit; rate() tolerates wrap.
+func readIfTableLegacy() (rx, tx uint64, ok bool) {
 	var size uint32
 	procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0) // size probe
 	if size == 0 || size > 1<<20 {                            // sanity cap: ifTable >1MB is impossible
 		return 0, 0, false
 	}
-	// Reuse pooled buffer for the MIB_IFTABLE to avoid large alloc per cycle.
 	buf := getBuf32K()
 	defer putBuf32K(buf)
 	if uint32(len(buf)) < size {
-		// Rare case: >32KB ifTable, fall back to a one-off alloc.
 		buf = make([]byte, size)
 	}
 	if r, _, _ := procGetIfTable.Call(
@@ -307,13 +396,8 @@ func readIfTable() (rx, tx uint64, ok bool) {
 	); r != 0 { // NO_ERROR == 0
 		return 0, 0, false
 	}
-	// MIB_IFROW 布局：wszName[256]WCHAR=512B → dwIndex@512、dwType@516、…、
-	// dwInOctets@552、dwOutOctets@576、…、bDescr[256]@604 → 共 860B。
-	// 注意 offType 曾误写为 512（那是 dwIndex）：导致① 真正的回环网卡(dwType=24)从未被跳过，
-	// 本机 localhost 流量被并入网卡收发速率；② 恰好 ifIndex==24 的真实网卡被静默丢弃。
 	const (
 		rowSize        = 860
-		offIndex       = 512
 		offType        = 516
 		offInOctets    = 552
 		offOutOctets   = 576
@@ -342,54 +426,55 @@ var winTCPStateNames = map[uint32]string{
 	10: "LAST_ACK", 11: "TIME_WAIT", 12: "DELETE_TCB",
 }
 
-// collectConnStats enumerates IPv4 TCP connections per state via GetTcpTable
-// (MIB_TCPROW, 20 bytes, dwState first) and IPv4 UDP sockets via GetUdpTable.
-// IPv6 tables are not enumerated (the classic Win32 table APIs are IPv4-only),
-// matching the prior established-count behavior. Returns per-proto/state counts
-// plus the established-TCP count for the legacy NetConns field.
+// collectConnStats enumerates IPv4+IPv6 TCP/UDP via GetTcp(6)Table / GetUdp(6)Table.
 func collectConnStats() ([]shared.ConnStat, int) {
 	tcpStates := map[string]int{}
-	// --- IPv4 TCP ---
-	var size uint32
-	procGetTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
-	if size > 0 && size <= 1<<20 {
-		pooled := getBuf32K()
-		buf := pooled
-		if uint32(len(buf)) < size {
-			buf = make([]byte, size)
+	countTCPTable := func(get *syscall.LazyProc, rowSize int) {
+		if err := get.Find(); err != nil {
+			return
 		}
-		if r, _, _ := procGetTcpTable.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0); r == 0 {
-			const rowSize = 20
-			n := binary.LittleEndian.Uint32(buf[0:])
-			for i := 0; i < int(n); i++ {
-				base := 4 + i*rowSize
-				if base+4 > len(buf) {
-					break
-				}
-				st := winTCPStateNames[binary.LittleEndian.Uint32(buf[base:])]
-				if st == "" {
-					st = "OTHER"
-				}
-				tcpStates[st]++
+		var size uint32
+		get.Call(0, uintptr(unsafe.Pointer(&size)), 0)
+		if size == 0 || size > 1<<20 {
+			return
+		}
+		buf := make([]byte, size)
+		if r, _, _ := get.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0); r != 0 {
+			return
+		}
+		n := binary.LittleEndian.Uint32(buf[0:])
+		for i := 0; i < int(n); i++ {
+			base := 4 + i*rowSize
+			if base+4 > len(buf) {
+				break
 			}
+			st := winTCPStateNames[binary.LittleEndian.Uint32(buf[base:])]
+			if st == "" {
+				st = "OTHER"
+			}
+			tcpStates[st]++
 		}
-		putBuf32K(pooled)
 	}
-	// --- IPv4 UDP (MIB_UDPTABLE: dwNumEntries then MIB_UDPROW rows) ---
-	udpTotal := 0
-	var usize uint32
-	procGetUdpTable.Call(0, uintptr(unsafe.Pointer(&usize)), 0)
-	if usize > 0 && usize <= 1<<20 {
-		pooled := getBuf32K()
-		buf := pooled
-		if uint32(len(buf)) < usize {
-			buf = make([]byte, usize)
+	countTCPTable(procGetTcpTable, 20)  // MIB_TCPROW
+	countTCPTable(procGetTcp6Table, 52) // MIB_TCP6ROW
+
+	countUDPTable := func(get *syscall.LazyProc) int {
+		if err := get.Find(); err != nil {
+			return 0
 		}
-		if r, _, _ := procGetUdpTable.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&usize)), 0); r == 0 && len(buf) >= 4 {
-			udpTotal = int(binary.LittleEndian.Uint32(buf[0:]))
+		var size uint32
+		get.Call(0, uintptr(unsafe.Pointer(&size)), 0)
+		if size == 0 || size > 1<<20 {
+			return 0
 		}
-		putBuf32K(pooled)
+		buf := make([]byte, size)
+		if r, _, _ := get.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0); r != 0 || len(buf) < 4 {
+			return 0
+		}
+		return int(binary.LittleEndian.Uint32(buf[0:]))
 	}
+	udpTotal := countUDPTable(procGetUdpTable) + countUDPTable(procGetUdp6Table)
+
 	out := make([]shared.ConnStat, 0, len(tcpStates)+1)
 	for st, cnt := range tcpStates {
 		out = append(out, shared.ConnStat{Proto: "tcp", State: st, Count: cnt})
@@ -470,36 +555,38 @@ func winDiskUsage(rootPtr *uint16, label string) (shared.DiskInfo, bool) {
 	}, true
 }
 
-// osVersionInfo mirrors Win32 RTL_OSVERSIONINFOW.
-type osVersionInfo struct {
+// osVersionInfoEx mirrors Win32 RTL_OSVERSIONINFOEXW (includes ProductType).
+type osVersionInfoEx struct {
 	dwOSVersionInfoSize uint32
 	dwMajorVersion      uint32
 	dwMinorVersion      uint32
 	dwBuildNumber       uint32
 	dwPlatformId        uint32
 	szCSDVersion        [128]uint16
+	wServicePackMajor   uint16
+	wServicePackMinor   uint16
+	wSuiteMask          uint16
+	wProductType        byte
+	wReserved           byte
 }
 
-func winVersion() (major, minor, build uint32) {
-	var vi osVersionInfo
+func winVersion() (major, minor, build uint32, productType byte) {
+	var vi osVersionInfoEx
 	vi.dwOSVersionInfoSize = uint32(unsafe.Sizeof(vi))
 	procRtlGetVersion.Call(uintptr(unsafe.Pointer(&vi)))
-	return vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber
+	return vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber, vi.wProductType
 }
 
 func osVersion() string {
-	maj, _, build := winVersion()
-	name := "Windows"
-	if maj == 10 && build >= 22000 {
-		name = "Windows 11"
-	} else if maj == 10 {
-		name = "Windows 10"
+	maj, min, build, pt := winVersion()
+	if pt == 0 {
+		pt = verNTWorkstation // best-effort if EX layout rejected
 	}
-	return fmt.Sprintf("%s (Build %d)", name, build)
+	return formatWindowsOSName(maj, min, build, pt)
 }
 
 func kernelVersion() string {
-	maj, min, build := winVersion()
+	maj, min, build, _ := winVersion()
 	return fmt.Sprintf("%d.%d.%d", maj, min, build)
 }
 

@@ -10,6 +10,8 @@
 
 let HW_RESULTS = [];                                   // [{host, snap}]
 let HW_SEL = null;                                     // 树中选中的目标 key（host.id|target_name）
+let HW_HOST_FILTER = "";                               // ""=全部宿主机，否则 host.id
+let HW_TREE_Q = "";                                    // 左树内搜索（宿主名）
 const HW_TREE_COLLAPSED = new Set();                   // 折叠的宿主机 id
 let HW_CHARTS = {};                                    // 详情面板内的图表实例
 let HW_CUR = null;                                     // 当前选中详情的项
@@ -153,23 +155,24 @@ function hwUpdatedAt(it) {
   return t || 0;
 }
 
-// 搜索匹配范围覆盖运维实际会输入的东西：主机名、BMC 名/地址、厂商型号、序列号。
+// 搜索匹配范围覆盖运维实际会输入的东西：主机名、BMC 名/地址、厂商型号、序列号、资产标签。
 function hwMatchesQuery(it, q) {
   if (!q) return true;
   const sd = it.snap.snapshot || {}, sys = sd.system || {};
   const hay = [
     it.host.hostname, it.host.id, it.host.ip,
     it.snap.target_name, it.snap.target_url,
-    sys.manufacturer, sys.model, sys.serial_number, sys.sku, sys.host_name,
-  ].filter(Boolean).join(" ").toLowerCase();
-  // 空格分隔的多个词按 AND 匹配，"dell r740" 才能精确缩小范围
-  return q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+    sys.manufacturer, sys.model, sys.serial_number, sys.sku, sys.host_name, sys.asset_tag,
+  ].filter(Boolean).join(" ");
+  return matchesSearchTokens(hay, q);
 }
 
 function hwFilteredItems() {
   const now = Date.now() / 1000;
   const freshWindow = { "1h": 3600, "24h": 86400, "7d": 604800 }[HW_FILTER.fresh] || 0;
+  const searchActive = !!normalizeSearchText(HW_FILTER.q);
   return hwSortedItems().filter(it => {
+    if (!searchActive && HW_HOST_FILTER && it.host.id !== HW_HOST_FILTER) return false;
     if (HW_FILTER.status === "online" && !it.online) return false;
     if (HW_FILTER.status === "offline" && it.online) return false;
     if (freshWindow) {
@@ -182,9 +185,9 @@ function hwFilteredItems() {
 
 function hwToolbarHTML(shown, total) {
   const opt = (v, cur, label) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(label)}</option>`;
-  let h = `<div class="hw-toolbar">
+  let h = `<div class="rtx-toolbar">
     <input type="search" id="hwSearch" class="hw-search" value="${esc(HW_FILTER.q)}"
-      placeholder="${esc(hwT("hardware.search_ph", "搜索主机名 / 型号 / 序列号 / BMC 地址"))}">
+      placeholder="${esc(hwT("hardware.search_ph", "搜索主机名 / 型号 / 序列号 / BMC 地址"))}" autocomplete="off" spellcheck="false">
     <select id="hwStatusFilter" class="hw-sel">
       ${opt("all", HW_FILTER.status, hwT("hardware.status_all", "全部状态"))}
       ${opt("online", HW_FILTER.status, hwT("hardware.status_online", "仅在线"))}
@@ -196,17 +199,18 @@ function hwToolbarHTML(shown, total) {
       ${opt("24h", HW_FILTER.fresh, hwT("hardware.fresh_24h", "24 小时内更新"))}
       ${opt("7d", HW_FILTER.fresh, hwT("hardware.fresh_7d", "7 天内更新"))}
     </select>
-    <span class="hw-count" id="hwCountSpan">${shown}/${total}</span>
+    <span class="rtx-count" id="hwCountSpan">${shown}/${total}</span>
   </div>`;
-
-  // 重复主机提示（仅在确有可清理项时出现，避免常态化噪音横幅）
   h += dupBannerHTML();
   return h;
 }
 
+function hwTreeCaret(id, hasKids, collapsed) {
+  if (!hasKids) return `<span class="rtx-caret rtx-caret-gap" aria-hidden="true"></span>`;
+  return `<button type="button" class="rtx-caret" data-hwhtoggle="${esc(id)}" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "▸" : "▾"}</button>`;
+}
+
 function renderHardwarePanel() {
-  hwInjectTreeStyles();
-  // 视图切换按钮属于旧的卡片/列表模式，树形布局下隐藏（保留 DOM 兼容旧引用）
   const vt = $("hwViewToggle");
   if (vt) vt.style.display = "none";
   const container = $("hardwarePanel");
@@ -217,27 +221,41 @@ function renderHardwarePanel() {
     return;
   }
   const items = hwFilteredItems();
-  // 默认选中第一台异常设备（否则第一台），详情不留白
   if (!hwSelItem()) {
     const first = items.find(it => hwIsBad(it.snap.health)) || items[0];
     HW_SEL = first ? hwKeyOf(first) : null;
   }
   const hwCol = window.treeCollapsed && window.treeCollapsed("aiops_hw_tree");
-  container.innerHTML = hwToolbarHTML(items.length, HW_RESULTS.length) +
-    `<div class="hwx-wrap tree-wrap${hwCol ? " tree-collapsed" : ""}">` +
-      `<div class="hwx-tree tree-pane" id="hwxTree">${hwTreeHTML()}</div>` +
+  const focusTree = document.activeElement && document.activeElement.id === "hwTreeSearch";
+  const focusQ = focusTree ? document.activeElement.selectionStart : -1;
+  container.innerHTML =
+    `<div class="rtx-wrap tree-wrap${hwCol ? " tree-collapsed" : ""}">` +
+      `<div class="rtx-tree tree-pane" id="hwxTree">${hwTreeHTML()}</div>` +
       `<button class="tree-toggle-btn" data-tree-toggle="aiops_hw_tree" title="收起/展开设备列表，给右侧腾空间" aria-expanded="${hwCol ? "false" : "true"}">${hwCol ? "›" : "‹"}</button>` +
-      `<div class="hwx-detail" id="hwxDetail"></div>` +
+      `<div class="rtx-main">` +
+        hwToolbarHTML(items.length, HW_RESULTS.length) +
+        `<div class="rtx-main-scroll" id="hwxDetail"></div>` +
+      `</div>` +
     `</div>`;
   hwRenderDetail();
+  if (focusTree) {
+    const inp = $("hwTreeSearch");
+    if (inp) { inp.focus(); if (focusQ >= 0) try { inp.setSelectionRange(focusQ, focusQ); } catch (e) {} }
+  }
 }
 
 // 筛选变化只重建树（详情里挂着 canvas 图表，整面板重绘会把曲线清掉还丢焦点）
 function hwRefreshTree() {
+  const focusTree = document.activeElement && document.activeElement.id === "hwTreeSearch";
+  const focusQ = focusTree ? document.activeElement.selectionStart : -1;
   const t = $("hwxTree");
   if (t) t.innerHTML = hwTreeHTML();
   const c = $("hwCountSpan");
   if (c) c.textContent = `${hwFilteredItems().length}/${HW_RESULTS.length}`;
+  if (focusTree) {
+    const inp = $("hwTreeSearch");
+    if (inp) { inp.focus(); if (focusQ >= 0) try { inp.setSelectionRange(focusQ, focusQ); } catch (e) {} }
+  }
 }
 
 // 机型一行：厂商 · 型号 · 序列号。Dell 的 Service Tag 落在 SKU，华为落在
@@ -265,46 +283,101 @@ function hwTreeNode(it) {
   const model = (sd.system || {}).model || "";
   const dotCls = m.cls === "ok" ? "ok" : m.cls === "warn" ? "warn" : m.cls === "crit" ? "crit" : "na";
   const mini = [
-    s.bad ? `<span class="hwx-badn">${s.bad}</span>` : "",
+    s.bad ? String(s.bad) : "",
     s.maxTemp ? Math.round(s.maxTemp) + "°C" : "",
-  ].filter(Boolean).join(" ");
-  return `<div class="hwx-node${sel ? " selected" : ""}${hwIsBad(snap.health) ? " bad" : ""}" data-hwsel="${esc(key)}" role="button" tabindex="0">
-    <span class="hwx-tdot ${dotCls}"></span>
-    <div class="nid">
-      <div class="nname" title="${esc(snap.target_name || snap.target_url)}">${esc(snap.target_name || snap.target_url)}</div>
-      ${model ? `<div class="nmodel" title="${esc(model)}">${esc(model)}</div>` : ""}
-    </div>
-    <span class="nmini">${mini}</span>
+  ].filter(Boolean).join(" · ");
+  return `<div class="rtx-node is-leaf${sel ? " selected" : ""}${hwIsBad(snap.health) ? " bad" : ""}" data-hwsel="${esc(key)}" role="treeitem" aria-selected="${sel ? "true" : "false"}" tabindex="0">
+    ${hwTreeCaret("", false, false)}
+    <span class="rtx-dot ${dotCls}" aria-hidden="true"></span>
+    <span class="rtx-name" title="${esc(snap.target_name || snap.target_url)}">${esc(snap.target_name || snap.target_url)}</span>
+    ${model || mini ? `<span class="rtx-sub" title="${esc([model, mini].filter(Boolean).join(" · "))}">${esc(model || mini)}</span>` : ""}
   </div>`;
 }
 
+function hwHostMatchesTreeQ(host, q) {
+  if (!q) return true;
+  return matchesSearchTokens([host.hostname, host.id, host.ip].filter(Boolean).join(" "), q);
+}
+
 function hwTreeHTML() {
-  const items = hwFilteredItems();
-  if (!items.length) {
-    return `<div class="empty-line">${esc(hwT("hardware.no_match", "没有匹配的设备，试试放宽筛选条件"))}</div>`;
-  }
-  // 按宿主机分组；items 已按严重度排序，Map 保持插入序 = 异常宿主靠前
+  const treeQ = normalizeSearchText(HW_TREE_Q);
+  const searchActive = !!normalizeSearchText(HW_FILTER.q);
+  // 左树始终展示全部宿主机（仅树搜过滤）；右栏/设备节点再受工具栏与 HOST_FILTER 约束
+  const base = hwSortedItems().filter(it => {
+    const now = Date.now() / 1000;
+    const freshWindow = { "1h": 3600, "24h": 86400, "7d": 604800 }[HW_FILTER.fresh] || 0;
+    if (HW_FILTER.status === "online" && !it.online) return false;
+    if (HW_FILTER.status === "offline" && it.online) return false;
+    if (freshWindow) {
+      const t = hwUpdatedAt(it);
+      if (!t || now - t > freshWindow) return false;
+    }
+    if (!hwMatchesQuery(it, HW_FILTER.q)) return false;
+    return true;
+  });
   const byHost = new Map();
-  items.forEach(it => {
+  base.forEach(it => {
     const k = it.host.id;
     if (!byHost.has(k)) byHost.set(k, { host: it.host, online: it.online, items: [] });
     byHost.get(k).items.push(it);
   });
-  const filtering = HW_FILTER.q || HW_FILTER.status !== "all" || HW_FILTER.fresh !== "all";
-  let h = "";
-  byHost.forEach(g => {
-    const bad = g.items.reduce((n, it) => n + (hwIsBad(it.snap.health) ? 1 : 0), 0);
-    const collapsed = HW_TREE_COLLAPSED.has(g.host.id) && !filtering;
-    h += `<div class="hwx-hostnode"><div class="hwx-hosthead" data-hwhtoggle="${esc(g.host.id)}">
-      <span class="hwx-caret">${collapsed ? "▸" : "▾"}</span>
-      <span class="hw-dot ${g.online ? "on" : "off"}" title="${esc(g.online ? hwT("hardware.host_online", "主机在线") : hwT("hardware.host_offline", "主机离线"))}"></span>
-      <span class="hname" title="${esc(g.host.hostname || g.host.id)}">${esc(g.host.hostname || g.host.id)}</span>
-      <span class="hwx-count${bad ? " bad" : ""}">${g.items.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
+  // 无匹配设备的宿主机：树搜时仍可按主机名出现（空子树）
+  if (treeQ) {
+    hwSortedItems().forEach(it => {
+      if (byHost.has(it.host.id)) return;
+      if (hwHostMatchesTreeQ(it.host, treeQ)) {
+        byHost.set(it.host.id, { host: it.host, online: it.online, items: [] });
+      }
+    });
+  }
+  const groups = [...byHost.values()].filter(g => hwHostMatchesTreeQ(g.host, treeQ));
+  const allCnt = HW_RESULTS.length;
+  const filtering = searchActive || HW_FILTER.status !== "all" || HW_FILTER.fresh !== "all" || !!treeQ;
+  const rootId = "__all__";
+  const rootCollapsed = !filtering && HW_TREE_COLLAPSED.has(rootId);
+  const hasKids = groups.length > 0;
+  let kids = "";
+  if (!rootCollapsed && hasKids) {
+    kids = `<div class="rtx-children" role="group">` + groups.map(g => {
+      const bad = g.items.reduce((n, it) => n + (hwIsBad(it.snap.health) ? 1 : 0), 0);
+      const collapsed = HW_TREE_COLLAPSED.has(g.host.id) && !filtering;
+      const hostSel = !searchActive && HW_HOST_FILTER === g.host.id;
+      // 选中某宿主机时，树内只展开其设备；未选中宿主仍展示全部匹配设备
+      const showItems = searchActive || !HW_HOST_FILTER || HW_HOST_FILTER === g.host.id ? g.items : g.items;
+      let body = "";
+      if (!collapsed) {
+        body = showItems.length
+          ? `<div class="rtx-children" role="group">${showItems.map(hwTreeNode).join("")}</div>`
+          : `<div class="rtx-children"><div class="rtx-empty">${esc(hwT("hardware.no_match", "没有匹配的设备，试试放宽筛选条件"))}</div></div>`;
+      }
+      return `<div class="rtx-folder">
+        <div class="rtx-node${hostSel ? " selected" : ""}${g.items.length || hostSel ? " has-kids" : " is-leaf"}" data-hwhost="${esc(g.host.id)}" role="treeitem" aria-selected="${hostSel ? "true" : "false"}" tabindex="0" title="${esc(g.online ? hwT("hardware.host_online", "主机在线") : hwT("hardware.host_offline", "主机离线"))}">
+          ${hwTreeCaret(g.host.id, true, collapsed)}
+          <span class="rtx-ico rtx-ico-host" aria-hidden="true"></span>
+          <span class="rtx-name" title="${esc(g.host.hostname || g.host.id)}">${esc(g.host.hostname || g.host.id)}</span>
+          <span class="rtx-count${bad ? " bad" : ""}">${g.items.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
+        </div>
+        ${body}
+      </div>`;
+    }).join("") + `</div>`;
+  } else if (treeQ || searchActive) {
+    kids = `<div class="rtx-empty">${esc(hwT("hardware.no_match", "没有匹配的设备，试试放宽筛选条件"))}</div>`;
+  }
+  return `<div class="rtx-tree-search">
+      <input type="search" id="hwTreeSearch" class="rtx-tree-q" value="${esc(HW_TREE_Q || "")}"
+        placeholder="${esc(hwT("hardware.tree_search_ph", "搜索宿主机…"))}" autocomplete="off">
+    </div>
+    <div class="rtx-scroll">
+      <div class="rtx-folder" role="tree">
+        <div class="rtx-node rtx-root-node${!HW_HOST_FILTER || searchActive ? " selected" : ""}${hasKids ? " has-kids" : " is-leaf"}" data-hwhost="" role="treeitem" aria-selected="${!HW_HOST_FILTER || searchActive ? "true" : "false"}" tabindex="0">
+          ${hwTreeCaret(rootId, hasKids, rootCollapsed)}
+          <span class="rtx-ico rtx-ico-all" aria-hidden="true"></span>
+          <span class="rtx-name">${esc(hwT("hardware.all_devices", "全部设备"))}</span>
+          <span class="rtx-count">${allCnt}</span>
+        </div>
+        ${kids}
+      </div>
     </div>`;
-    if (!collapsed) h += `<div class="hwx-list">${g.items.map(hwTreeNode).join("")}</div>`;
-    h += `</div>`;
-  });
-  return h;
 }
 
 /* ---------- 右侧内联详情（复用原弹窗的 hwDetailHTML 全量渲染） ---------- */
@@ -312,8 +385,21 @@ function hwTreeHTML() {
 function hwSelect(key) {
   HW_SEL = key;
   const tree = $("hwxTree");
-  if (tree) tree.querySelectorAll(".hwx-node").forEach(n =>
-    n.classList.toggle("selected", n.dataset.hwsel === key));
+  if (tree) {
+    tree.querySelectorAll("[data-hwsel]").forEach(n =>
+      n.classList.toggle("selected", n.dataset.hwsel === key));
+  }
+  hwRenderDetail();
+}
+
+function hwSelectHost(hostId) {
+  HW_HOST_FILTER = hostId || "";
+  const items = hwFilteredItems();
+  if (items.length) {
+    const first = items.find(it => hwIsBad(it.snap.health)) || items[0];
+    HW_SEL = first ? hwKeyOf(first) : null;
+  }
+  hwRefreshTree();
   hwRenderDetail();
 }
 
@@ -348,6 +434,7 @@ function hwDetailHeadHTML(it, m) {
 }
 
 function hwRenderDetail() {
+  hwInjectTreeStyles();
   const box = $("hwxDetail");
   if (!box) return;
   const it = hwSelItem();
@@ -824,7 +911,7 @@ function hwToggleExportMenu(show) {
   btn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-function hwDoExport(fmt) {
+async function hwDoExport(fmt) {
   if (!HW_CUR) return;
   hwToggleExportMenu(false);
   try {
@@ -832,7 +919,7 @@ function hwDoExport(fmt) {
     const sys = (HW_CUR.snap.snapshot || {}).system || {};
     const base = [hwT("hardware.export_prefix", "硬件资产"),
                   HW_CUR.snap.target_name || HW_CUR.host.id, sys.model].filter(Boolean).join("_");
-    const ok = exportModel(model, fmt, base);
+    const ok = await exportModel(model, fmt, base);
     if (!ok) {
       // PDF 走 window.open，被浏览器拦了必须说清楚，否则用户以为按钮坏了
       toast(hwT("hardware.export_popup_blocked", "导出失败：请允许本站弹出窗口后重试"), "err");
@@ -970,12 +1057,21 @@ safeAddEventListener("hardwarePanel", "click", e => {
   }
   const z = e.target.closest("[data-hwchart]");
   if (z) { const ch = HW_CHARTS[z.dataset.hwchart]; if (ch) openChartZoom(ch); return; }
-  // 树：宿主机折叠/展开
+  // 树：宿主机折叠/展开（caret）
   const tg = e.target.closest("[data-hwhtoggle]");
   if (tg) {
+    e.preventDefault();
+    e.stopPropagation();
     const id = tg.dataset.hwhtoggle;
+    if (!id) return;
     if (HW_TREE_COLLAPSED.has(id)) HW_TREE_COLLAPSED.delete(id); else HW_TREE_COLLAPSED.add(id);
     hwRefreshTree();
+    return;
+  }
+  // 树：选中宿主机 / 全部
+  const hostNode = e.target.closest("[data-hwhost]");
+  if (hostNode && !e.target.closest("[data-hwsel]")) {
+    hwSelectHost(hostNode.dataset.hwhost || "");
     return;
   }
   // 树：选中目标
@@ -985,19 +1081,28 @@ safeAddEventListener("hardwarePanel", "click", e => {
 safeAddEventListener("hardwarePanel", "keydown", e => {
   if (e.key !== "Enter" && e.key !== " ") return;
   const node = e.target.closest("[data-hwsel]");
-  if (node) { e.preventDefault(); hwSelect(node.dataset.hwsel); }
+  if (node) { e.preventDefault(); hwSelect(node.dataset.hwsel); return; }
+  const hostNode = e.target.closest("[data-hwhost]");
+  if (hostNode) { e.preventDefault(); hwSelectHost(hostNode.dataset.hwhost || ""); }
 });
 
 /* ---------- 筛选 / 搜索 / 重复主机清理（工具栏是重渲染出来的，一律事件委托） ---------- */
 
 let HW_SEARCH_T = null;
-safeAddEventListener("hardwarePanel", "input", e => {
+function onHwSearchInput(e) {
+  if (!e.target) return;
+  if (e.target.id === "hwTreeSearch") {
+    HW_TREE_Q = e.target.value || "";
+    hwRefreshTree();
+    return;
+  }
   if (e.target.id !== "hwSearch") return;
-  // 防抖 + 只重建树：详情面板挂着图表，且不重建搜索框本身就不会丢焦点
   clearTimeout(HW_SEARCH_T);
   const v = e.target.value;
   HW_SEARCH_T = setTimeout(() => { HW_FILTER.q = v; hwRefreshTree(); }, 200);
-});
+}
+safeAddEventListener("hardwarePanel", "input", onHwSearchInput);
+safeAddEventListener("hardwarePanel", "search", onHwSearchInput);
 safeAddEventListener("hardwarePanel", "change", e => {
   if (e.target.id === "hwStatusFilter") { HW_FILTER.status = e.target.value; hwRefreshTree(); }
   else if (e.target.id === "hwFreshFilter") { HW_FILTER.fresh = e.target.value; hwRefreshTree(); }
@@ -1037,41 +1142,13 @@ document.addEventListener("keydown", e => {
   document.querySelectorAll("[data-hwexpmenu].show").forEach(m => m.classList.remove("show"));
 });
 
-/* ---------- 树形布局样式（注入一次；部件表/KPI 等沿用 style.css 既有类） ---------- */
-
+/* 详情头/空态样式（树布局已迁入 style.css .rtx-*） */
 function hwInjectTreeStyles() {
   if (document.getElementById("hwx-css")) return;
   const s = document.createElement("style");
   s.id = "hwx-css";
   s.textContent = `
-  .hwx-wrap{display:flex;gap:14px;align-items:flex-start;margin-top:10px}
-  .hwx-tree{flex:0 0 320px;max-width:320px;min-width:240px}
-  .hwx-detail{flex:1 1 auto;min-width:0}
-  @media(max-width:960px){.hwx-wrap{flex-direction:column}.hwx-tree{flex-basis:auto;max-width:none;width:100%}}
-  .hwx-tree{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .hwx-hostnode{border-bottom:1px solid var(--line)}
-  .hwx-hostnode:last-child{border-bottom:none}
-  .hwx-hosthead{display:flex;align-items:center;gap:8px;padding:9px 10px;cursor:pointer;user-select:none}
-  .hwx-hosthead:hover{background:var(--panel2)}
-  .hwx-hosthead .hname{font-weight:600;color:var(--txt);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hwx-caret{color:var(--muted);font-size:11px;width:12px;text-align:center;flex:0 0 12px}
-  .hwx-count{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt2);background:var(--panel3);border:1px solid var(--line);border-radius:20px;padding:1px 8px;font-variant-numeric:tabular-nums;flex:0 0 auto}
-  .hwx-count .hc-bad{color:var(--warn-txt);font-weight:600}
-  .hwx-count .hc-bad::before{content:"⚠ "}
-  .hwx-list{padding:2px 0 6px}
-  .hwx-node{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 26px;cursor:pointer;border-left:2px solid transparent}
-  .hwx-node:hover{background:var(--panel2)}
-  .hwx-node.selected{background:var(--accent-soft);border-left-color:var(--accent)}
-  .hwx-node .nid{flex:1;min-width:0}
-  .hwx-node .nname{color:var(--txt2);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hwx-node.selected .nname{color:var(--txt);font-weight:600}
-  .hwx-node.bad .nname{color:var(--warn-txt)}
-  .hwx-node .nmodel{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hwx-node .nmini{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
-  .hwx-badn{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--crit-soft);color:var(--crit-txt);border:1px solid var(--crit-border);font-weight:600}
-  .hwx-tdot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
-  .hwx-tdot.ok{background:var(--ok)}.hwx-tdot.warn{background:var(--warn)}.hwx-tdot.crit{background:var(--crit)}.hwx-tdot.na{background:var(--muted)}
-  .hwx-detailbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-height:200px}
+  .hwx-detailbox{min-height:160px}
   .hwx-dhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--line)}
   .hwx-dtitle{min-width:0}
   .hwx-dtitle .t{font-size:16px;font-weight:600;color:var(--txt)}

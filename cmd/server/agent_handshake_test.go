@@ -161,11 +161,15 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		}
 	}
 	// macOS now gets a real launchd job (autostart on boot + keepalive), and Linux
-	// root keeps systemd auto-restart.
+	// root install uses systemd with Restart=always — but the agent process runs
+	// as unprivileged system user "aiops" (demo-safe, not root).
 	must("install.sh", shIn,
 		`elif [ "$OS" = "Darwin" ]`, "com.aiops.agent.plist",
 		"<key>RunAtLoad</key><true/>", "<key>KeepAlive</key><true/>",
-		"launchctl load", "Restart=always", "@reboot")
+		"launchctl load", "Restart=always", "@reboot",
+		"User=$AIOPS_USER", "NoNewPrivileges=true", `AIOPS_USER="${AIOPS_USER:-aiops}"`,
+		"aiops_has_systemd", "aiops_fetch", "unsupported architecture",
+		"AmbientCapabilities=CAP_NET_RAW", "/sbin/nologin")
 	// YAML is the default config format now: the script must write config.yaml,
 	// point the service at it, and migrate away any stale config.json.
 	must("install.sh (yaml)", shIn,
@@ -203,6 +207,9 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("install.ps1 (yaml)", ps1In,
 		`WriteAllText("$Dir\config.yaml"`, `$conf = "$Dir\config.yaml"`,
 		`Remove-Item "$Dir\config.json"`)
+	// Server 2012 / PS<5: ZipFile extract, not Expand-Archive-only.
+	must("install.ps1 (zip)", ps1In,
+		"System.IO.Compression.ZipFile", "ZipFileExtensions", "capability summary")
 	// Hyper-V auto-elevation: a non-elevated install on a Hyper-V host must relaunch
 	// itself via UAC (RunAs + EncodedCommand) so Get-VM (VM collection) works. Host
 	// detection uses the vmms service (instant, no slow module autoload race) rather

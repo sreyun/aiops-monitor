@@ -52,18 +52,29 @@ type inspectMetrics struct {
 	MemUsagePct    float64 `json:"mem_usage_pct"`
 	SwapUsagePct   float64 `json:"swap_usage_pct"`
 	DiskAlertCount int     `json:"disk_alert_count"`
+	InodeAlertCnt  int     `json:"inode_alert_count,omitempty"`
+	FDUsagePct     float64 `json:"fd_usage_pct,omitempty"`
 	TCPConnections int     `json:"tcp_connections"`
 	TCPListen      int     `json:"tcp_listen"`
+	TCPCloseWait   int     `json:"tcp_close_wait,omitempty"`
 	ProcessCount   int     `json:"process_count"`
 	ZombieCount    int     `json:"zombie_count"`
+	DStateCount    int     `json:"d_state_count,omitempty"`
+	OOMCount       int     `json:"oom_count,omitempty"`
+	SSLExpiring    int     `json:"ssl_expiring,omitempty"`
+	SSLExpired     int     `json:"ssl_expired,omitempty"`
+	ContainerCount int     `json:"container_count,omitempty"`
 }
 
 type inspectThresholds struct {
-	CPUWarn  float64 `json:"cpu_warn"`
-	MemWarn  float64 `json:"mem_warn"`
-	DiskWarn float64 `json:"disk_warn"`
-	SwapWarn float64 `json:"swap_warn"`
-	LoadMult float64 `json:"load_mult"`
+	CPUWarn   float64 `json:"cpu_warn"`
+	MemWarn   float64 `json:"mem_warn"`
+	DiskWarn  float64 `json:"disk_warn"`
+	InodeWarn float64 `json:"inode_warn"`
+	SwapWarn  float64 `json:"swap_warn"`
+	FDWarn    float64 `json:"fd_warn"`
+	LoadMult  float64 `json:"load_mult"`
+	SSLDays   int     `json:"ssl_days_warn"`
 }
 
 type inspectSection struct {
@@ -93,18 +104,37 @@ type inspectResult struct {
 }
 
 type inspectBuilder struct {
-	rep inspectReport
+	rep     inspectReport
+	profile string // quick | standard | deep
 }
 
-func moduleHostInspect(_ map[string]string) ([]byte, int) {
+func moduleHostInspect(args map[string]string) ([]byte, int) {
 	start := time.Now()
-	b := &inspectBuilder{rep: inspectReport{
-		Version:   "1.0",
-		Timestamp: time.Now().Format(time.RFC3339),
-		Thresholds: inspectThresholds{
-			CPUWarn: 80, MemWarn: 85, DiskWarn: 80, SwapWarn: 50, LoadMult: 1.5,
+	profile := "standard"
+	if args != nil {
+		switch strings.ToLower(strings.TrimSpace(args["profile"])) {
+		case "quick", "fast":
+			profile = "quick"
+		case "deep", "full":
+			profile = "deep"
+		case "standard", "std", "":
+			profile = "standard"
+		default:
+			profile = "standard"
+		}
+	}
+	b := &inspectBuilder{
+		profile: profile,
+		rep: inspectReport{
+			Version:   "2.0",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Thresholds: inspectThresholds{
+				CPUWarn: 80, MemWarn: 85, DiskWarn: 85, InodeWarn: 85,
+				SwapWarn: 50, FDWarn: 80, LoadMult: 2.0, SSLDays: 30,
+			},
 		},
-	}}
+	}
+	// 基础（全平台）
 	b.collectHost()
 	b.collectCPU()
 	b.collectMem()
@@ -114,6 +144,25 @@ func moduleHostInspect(_ map[string]string) ([]byte, int) {
 	b.collectServices()
 	b.collectSecurity()
 	b.collectTime()
+	// 深度（Linux 为主；其它 OS 返回 skip）
+	if profile != "quick" {
+		b.collectInode()
+		b.collectFD()
+		b.collectDiskIO()
+		b.collectContainers()
+		b.collectCron()
+		b.collectKernel()
+		b.collectLogs()
+		b.collectSSL()
+	}
+	if profile == "deep" {
+		b.collectLargeFiles()
+		b.collectUpdates()
+	} else if profile == "standard" {
+		// standard：轻量更新探测（仅本地缓存，不联网 apt update / yum check-update）
+		b.collectUpdatesLight()
+	}
+	b.collectRecommend()
 	b.finalize(start)
 	out, err := json.Marshal(b.rep)
 	if err != nil {
@@ -156,6 +205,10 @@ func (b *inspectBuilder) finalize(start time.Time) {
 
 func (b *inspectBuilder) collectHost() {
 	hn, _ := os.Hostname()
+	fqdn := hn
+	if out := cmdOut(2, "hostname", "-f"); out != "" {
+		fqdn = strings.TrimSpace(out)
+	}
 	ips := localIPv4s()
 	ip := ""
 	if len(ips) > 0 {
@@ -167,13 +220,14 @@ func (b *inspectBuilder) collectHost() {
 	virt := detectVirt()
 	fw := detectFirewall()
 	b.rep.Host = inspectHost{
-		Hostname: hn, IP: ip, OS: pretty, OSFamily: family, GOOS: runtime.GOOS,
+		Hostname: hn, FQDN: fqdn, IP: ip, OS: pretty, OSFamily: family, GOOS: runtime.GOOS,
 		Kernel: kernel, Arch: runtime.GOARCH, UptimeDays: uptimeDays,
 		VirtType: virt, Firewall: fw, Timezone: tz,
 	}
 	items := []inspectItem{
 		{Label: "主机名", Value: hn},
-		{Label: "IP", Value: ip},
+		{Label: "FQDN", Value: fqdn},
+		{Label: "IP", Value: strings.Join(ips, " ")},
 		{Label: "系统", Value: pretty},
 		{Label: "系统族", Value: family},
 		{Label: "内核", Value: kernel},
@@ -182,10 +236,27 @@ func (b *inspectBuilder) collectHost() {
 		{Label: "虚拟化", Value: virt},
 		{Label: "防火墙", Value: fw},
 		{Label: "时区", Value: tz},
+		{Label: "巡检档位", Value: b.profile},
+	}
+	if runtime.GOOS == "linux" {
+		if v := strings.TrimSpace(readFileTrim("/sys/class/dmi/id/sys_vendor")); v != "" {
+			items = append(items, inspectItem{Label: "厂商", Value: v})
+		}
+		if p := strings.TrimSpace(readFileTrim("/sys/class/dmi/id/product_name")); p != "" {
+			items = append(items, inspectItem{Label: "型号", Value: p})
+		}
 	}
 	b.rep.Sections = append(b.rep.Sections, inspectSection{
-		ID: "host", Title: "主机概览", Status: "ok", Summary: pretty + " · " + family, Items: items,
+		ID: "host", Title: "主机概览", Status: "ok", Summary: pretty + " · " + family + " · " + b.profile, Items: items,
 	})
+}
+
+func readFileTrim(p string) string {
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func detectOSFamily() (family, pretty, kernel string) {
@@ -364,11 +435,10 @@ func detectVirt() string {
 func detectFirewall() string {
 	switch runtime.GOOS {
 	case "linux":
-		if out := cmdOut(2, "systemctl", "is-active", "firewalld"); strings.TrimSpace(out) == "active" {
-			return "firewalld:active"
-		}
-		if out := cmdOut(2, "systemctl", "is-active", "ufw"); strings.TrimSpace(out) == "active" {
-			return "ufw:active"
+		for _, fw := range []string{"firewalld", "ufw", "nftables", "iptables", "SuSEfirewall2"} {
+			if out := cmdOut(2, "systemctl", "is-active", fw); strings.TrimSpace(out) == "active" {
+				return fw + ":active"
+			}
 		}
 		if out := cmdOut(2, "ufw", "status"); strings.Contains(out, "Status: active") {
 			return "ufw:active"
@@ -376,7 +446,7 @@ func detectFirewall() string {
 		if fileExists("/usr/sbin/iptables") || fileExists("/sbin/iptables") {
 			return "iptables:present"
 		}
-		return "unknown"
+		return "inactive"
 	case "windows":
 		out := cmdOut(4, "cmd", "/c", "netsh advfirewall show allprofiles state")
 		if strings.Contains(strings.ToLower(out), "on") {
@@ -708,8 +778,7 @@ func skipMount(mount, fstype string) bool {
 func (b *inspectBuilder) collectNet() {
 	st := "ok"
 	items := []inspectItem{}
-	listen := 0
-	conns := 0
+	listen, estab, closeWait, timeWait, synRecv := 0, 0, 0, 0, 0
 
 	ifaces, _ := net.Interfaces()
 	for _, iface := range ifaces {
@@ -721,10 +790,22 @@ func (b *inspectBuilder) collectNet() {
 		for _, a := range addrs {
 			ips = append(ips, a.String())
 		}
-		if len(ips) == 0 {
+		extra := ""
+		if runtime.GOOS == "linux" {
+			if oper := readFileTrim("/sys/class/net/" + iface.Name + "/operstate"); oper != "" {
+				extra = " · " + oper
+			}
+			if rx := readFileTrim("/sys/class/net/" + iface.Name + "/statistics/rx_errors"); rx != "" && rx != "0" {
+				extra += " · rx_err=" + rx
+			}
+			if tx := readFileTrim("/sys/class/net/" + iface.Name + "/statistics/tx_errors"); tx != "" && tx != "0" {
+				extra += " · tx_err=" + tx
+			}
+		}
+		if len(ips) == 0 && extra == "" {
 			continue
 		}
-		items = append(items, inspectItem{Label: iface.Name, Value: strings.Join(ips, ", ")})
+		items = append(items, inspectItem{Label: iface.Name, Value: strings.Join(ips, ", ") + extra})
 	}
 
 	switch runtime.GOOS {
@@ -735,43 +816,95 @@ func (b *inspectBuilder) collectNet() {
 			if strings.Contains(u, "LISTENING") {
 				listen++
 			}
-			if strings.Contains(u, "TCP") {
-				conns++
+			if strings.Contains(u, "ESTABLISHED") {
+				estab++
+			}
+			if strings.Contains(u, "CLOSE_WAIT") {
+				closeWait++
+			}
+			if strings.Contains(u, "TIME_WAIT") {
+				timeWait++
 			}
 		}
 	default:
-		out := cmdOut(5, "ss", "-s")
-		if out == "" {
-			out = cmdOut(5, "netstat", "-an")
-		}
-		for _, ln := range strings.Split(out, "\n") {
-			l := strings.ToLower(ln)
-			if strings.Contains(l, "listen") {
-				listen++
+		countState := func(state string) int {
+			out := cmdOut(4, "ss", "-tn", "state", state)
+			if out == "" {
+				return 0
 			}
-			if strings.Contains(l, "estab") || strings.Contains(l, "established") {
-				conns++
+			return maxInt(0, strings.Count(out, "\n")-1)
+		}
+		estab = countState("established")
+		closeWait = countState("close-wait")
+		timeWait = countState("time-wait")
+		synRecv = countState("syn-recv")
+		if lo := cmdOut(5, "ss", "-tln"); lo != "" {
+			listen = maxInt(0, strings.Count(lo, "\n")-1)
+		}
+		// 监听端口样例（前 15）
+		if lo := cmdOut(5, "ss", "-tlnp"); lo != "" {
+			n := 0
+			for i, ln := range strings.Split(lo, "\n") {
+				if i == 0 || strings.TrimSpace(ln) == "" {
+					continue
+				}
+				n++
+				if n > 15 {
+					break
+				}
+				items = append(items, inspectItem{Label: fmt.Sprintf("监听#%d", n), Value: strings.Join(strings.Fields(ln), " ")})
 			}
 		}
-		if listen == 0 {
-			if lo := cmdOut(5, "ss", "-lnt"); lo != "" {
-				listen = maxInt(0, strings.Count(lo, "\n")-1)
+		if gw := cmdOut(2, "ip", "route"); gw != "" {
+			for _, ln := range strings.Split(gw, "\n") {
+				if strings.HasPrefix(ln, "default") {
+					items = append(items, inspectItem{Label: "默认路由", Value: strings.TrimSpace(ln)})
+					break
+				}
+			}
+		}
+		if dns := cmdOut(2, "grep", "^nameserver", "/etc/resolv.conf"); dns != "" {
+			var ns []string
+			for _, ln := range strings.Split(dns, "\n") {
+				f := strings.Fields(ln)
+				if len(f) >= 2 {
+					ns = append(ns, f[1])
+				}
+			}
+			if len(ns) > 0 {
+				items = append(items, inspectItem{Label: "DNS", Value: strings.Join(ns, " ")})
 			}
 		}
 	}
+	conns := estab + closeWait + timeWait + synRecv
 	b.rep.Metrics.TCPListen = listen
 	b.rep.Metrics.TCPConnections = conns
+	b.rep.Metrics.TCPCloseWait = closeWait
 	items = append(items,
-		inspectItem{Label: "监听端口数(估)", Value: fmt.Sprintf("%d", listen)},
-		inspectItem{Label: "TCP 连接(估)", Value: fmt.Sprintf("%d", conns)},
+		inspectItem{Label: "LISTEN", Value: fmt.Sprintf("%d", listen)},
+		inspectItem{Label: "ESTAB", Value: fmt.Sprintf("%d", estab)},
+		inspectItem{Label: "TIME_WAIT", Value: fmt.Sprintf("%d", timeWait)},
+		inspectItem{Label: "CLOSE_WAIT", Value: fmt.Sprintf("%d", closeWait), Status: ternary(closeWait > 50, "warn", "ok")},
+		inspectItem{Label: "SYN_RECV", Value: fmt.Sprintf("%d", synRecv)},
 	)
+	if closeWait > 50 {
+		st = "warn"
+		b.addFinding("warn", "net", fmt.Sprintf("CLOSE_WAIT 连接偏高: %d", closeWait))
+	}
 	b.rep.Sections = append(b.rep.Sections, inspectSection{ID: "net", Title: "网络", Status: st, Items: items})
+}
+
+func ternary(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
 }
 
 func (b *inspectBuilder) collectProcess() {
 	st := "ok"
 	items := []inspectItem{}
-	procs, zombies := 0, 0
+	procs, zombies, dstate := 0, 0, 0
 	switch runtime.GOOS {
 	case "windows":
 		out := cmdOut(8, "cmd", "/c", "tasklist /FO CSV /NH")
@@ -799,12 +932,47 @@ func (b *inspectBuilder) collectProcess() {
 			if strings.Contains(ln, "Z") {
 				zombies++
 			}
+			if strings.HasPrefix(ln, "D") {
+				dstate++
+			}
 		}
+		// CPU / MEM TOP 5
+		appendTop := func(sortKey, label string) {
+			out := cmdOut(5, "ps", "aux", "--sort="+sortKey)
+			n := 0
+			for i, ln := range strings.Split(out, "\n") {
+				if i == 0 || strings.TrimSpace(ln) == "" {
+					continue
+				}
+				f := strings.Fields(ln)
+				if len(f) < 11 {
+					continue
+				}
+				n++
+				cmd := strings.Join(f[10:], " ")
+				if len(cmd) > 80 {
+					cmd = cmd[:80] + "…"
+				}
+				items = append(items, inspectItem{
+					Label: fmt.Sprintf("%s#%d", label, n),
+					Value: fmt.Sprintf("pid=%s cpu=%s%% mem=%s%% %s", f[1], f[2], f[3], cmd),
+				})
+				if n >= 5 {
+					break
+				}
+			}
+		}
+		appendTop("-%cpu", "CPU")
+		appendTop("-%mem", "MEM")
 	}
 	b.rep.Metrics.ProcessCount = procs
 	b.rep.Metrics.ZombieCount = zombies
-	items = append(items, inspectItem{Label: "进程数", Value: fmt.Sprintf("%d", procs)})
-	items = append(items, inspectItem{Label: "僵尸进程", Value: fmt.Sprintf("%d", zombies)})
+	b.rep.Metrics.DStateCount = dstate
+	items = append([]inspectItem{
+		{Label: "进程数", Value: fmt.Sprintf("%d", procs)},
+		{Label: "僵尸进程(Z)", Value: fmt.Sprintf("%d", zombies)},
+		{Label: "D 状态进程", Value: fmt.Sprintf("%d", dstate)},
+	}, items...)
 	if zombies > 20 {
 		st = "crit"
 		b.addFinding("crit", "proc", fmt.Sprintf("僵尸进程过多: %d", zombies))
@@ -812,16 +980,27 @@ func (b *inspectBuilder) collectProcess() {
 		st = "warn"
 		b.addFinding("warn", "proc", fmt.Sprintf("存在僵尸进程: %d", zombies))
 	}
+	if dstate > 0 {
+		st = b.worst(st, "warn")
+		b.addFinding("warn", "proc", fmt.Sprintf("存在 D 状态(不可中断)进程: %d", dstate))
+	}
 	b.rep.Sections = append(b.rep.Sections, inspectSection{ID: "proc", Title: "进程", Status: st, Items: items})
 }
 
 func (b *inspectBuilder) collectServices() {
 	st := "info"
 	items := []inspectItem{}
-	names := []string{"sshd", "ssh", "cron", "crond", "docker", "containerd", "nginx", "httpd", "mysqld", "postgresql"}
+	names := []string{
+		"sshd", "ssh", "crond", "cron", "rsyslog", "syslog-ng",
+		"firewalld", "ufw", "nftables", "chronyd", "chrony", "ntpd", "ntp", "systemd-timesyncd",
+		"docker", "podman", "containerd", "kubelet",
+		"nginx", "httpd", "apache2", "mysqld", "mariadb", "postgresql",
+		"redis", "redis-server", "mongod", "php-fpm", "haproxy", "keepalived",
+		"zabbix-agent", "zabbix-agent2", "node_exporter", "NetworkManager",
+	}
 	switch runtime.GOOS {
 	case "windows":
-		for _, n := range []string{"Wuauserv", "EventLog", "Winmgmt", "Schedule"} {
+		for _, n := range []string{"Wuauserv", "EventLog", "Winmgmt", "Schedule", "Themes", "Dnscache"} {
 			out := cmdOut(3, "sc", "query", n)
 			status := "unknown"
 			if strings.Contains(out, "RUNNING") {
@@ -830,6 +1009,9 @@ func (b *inspectBuilder) collectServices() {
 				status = "stopped"
 			} else if strings.Contains(out, "1060") {
 				status = "notfound"
+			}
+			if status == "notfound" {
+				continue
 			}
 			items = append(items, inspectItem{Label: n, Value: status})
 		}
@@ -843,15 +1025,39 @@ func (b *inspectBuilder) collectServices() {
 			items = append(items, inspectItem{Label: n, Value: val})
 		}
 	default:
+		failedN := 0
 		for _, n := range names {
-			val := "notfound"
-			if out := cmdOut(2, "systemctl", "is-active", n); out != "" {
-				val = strings.TrimSpace(out)
+			val := strings.TrimSpace(cmdOut(2, "systemctl", "is-active", n))
+			if val == "" || val == "not-found" || strings.Contains(val, "could not be found") {
+				// 二次确认 unit 是否存在
+				if uf := cmdOut(2, "systemctl", "list-unit-files", n+".service", "--no-pager", "--no-legend"); !strings.Contains(uf, n+".service") {
+					continue
+				}
+				val = "inactive"
 			}
-			if val == "notfound" || val == "" {
-				continue
+			ist := "ok"
+			if val != "active" && val != "activating" {
+				ist = "warn"
 			}
-			items = append(items, inspectItem{Label: n, Value: val})
+			items = append(items, inspectItem{Label: n, Value: val, Status: ist})
+		}
+		if out := cmdOut(4, "systemctl", "--failed", "--no-pager", "--no-legend"); out != "" {
+			for _, ln := range strings.Split(out, "\n") {
+				ln = strings.TrimSpace(ln)
+				if ln == "" || strings.HasPrefix(ln, "UNIT") {
+					continue
+				}
+				f := strings.Fields(ln)
+				if len(f) == 0 {
+					continue
+				}
+				failedN++
+				items = append(items, inspectItem{Label: "FAILED", Value: f[0], Status: "crit"})
+			}
+		}
+		if failedN > 0 {
+			st = "crit"
+			b.addFinding("crit", "svc", fmt.Sprintf("存在 %d 个失败 systemd 服务", failedN))
 		}
 	}
 	if len(items) == 0 {
@@ -868,23 +1074,122 @@ func (b *inspectBuilder) collectSecurity() {
 	switch runtime.GOOS {
 	case "linux":
 		if out := cmdOut(3, "getenforce"); out != "" {
-			items = append(items, inspectItem{Label: "SELinux", Value: strings.TrimSpace(out)})
+			sel := strings.TrimSpace(out)
+			items = append(items, inspectItem{Label: "SELinux", Value: sel})
+			if strings.EqualFold(sel, "Disabled") || strings.EqualFold(sel, "Permissive") {
+				st = b.worst(st, "warn")
+			}
+		}
+		// SSH 关键配置
+		sshCfg := "/etc/ssh/sshd_config"
+		if fileExists(sshCfg) {
+			rootLogin := sshCfgValue(sshCfg, "PermitRootLogin", "默认(yes)")
+			sshPort := sshCfgValue(sshCfg, "Port", "22")
+			maxAuth := sshCfgValue(sshCfg, "MaxAuthTries", "默认(6)")
+			pubkey := sshCfgValue(sshCfg, "PubkeyAuthentication", "默认(yes)")
+			items = append(items,
+				inspectItem{Label: "SSH Root登录", Value: rootLogin, Status: ternary(strings.EqualFold(rootLogin, "yes"), "warn", "ok")},
+				inspectItem{Label: "SSH 端口", Value: sshPort},
+				inspectItem{Label: "MaxAuthTries", Value: maxAuth},
+				inspectItem{Label: "PubkeyAuthentication", Value: pubkey},
+			)
+			if strings.EqualFold(rootLogin, "yes") {
+				st = b.worst(st, "warn")
+				b.addFinding("warn", "sec", "SSH 允许 root 密码/登录（PermitRootLogin=yes），建议收紧")
+			}
+		}
+		// UID=0 账户
+		if raw, err := os.ReadFile("/etc/passwd"); err == nil {
+			var roots []string
+			loginN := 0
+			for _, ln := range strings.Split(string(raw), "\n") {
+				f := strings.Split(ln, ":")
+				if len(f) < 7 {
+					continue
+				}
+				if f[2] == "0" {
+					roots = append(roots, f[0])
+				}
+				sh := f[6]
+				if !strings.Contains(sh, "nologin") && !strings.Contains(sh, "false") && sh != "/bin/sync" {
+					loginN++
+				}
+			}
+			items = append(items,
+				inspectItem{Label: "UID=0 账户", Value: strings.Join(roots, " ")},
+				inspectItem{Label: "可登录账户数", Value: fmt.Sprintf("%d", loginN)},
+			)
+			if len(roots) > 1 {
+				st = b.worst(st, "warn")
+				b.addFinding("warn", "sec", "存在多个 UID=0 账户: "+strings.Join(roots, ","))
+			}
+		}
+		// SUID 样例（限路径、限数量）
+		if out := cmdOut(8, "find", "/usr/local", "/opt", "/home", "/tmp", "-xdev", "-type", "f", "-perm", "-4000", "-printf", "%p\n"); out != "" {
+			n := 0
+			var sample []string
+			for _, ln := range strings.Split(out, "\n") {
+				ln = strings.TrimSpace(ln)
+				if ln == "" {
+					continue
+				}
+				n++
+				if len(sample) < 8 {
+					sample = append(sample, ln)
+				}
+			}
+			items = append(items, inspectItem{Label: "可疑 SUID(样例)", Value: fmt.Sprintf("%d 个；%s", n, strings.Join(sample, "; "))})
 		}
 		failed := 0
-		if out := cmdOut(5, "journalctl", "-n", "100", "--no-pager", "-u", "sshd"); out != "" {
-			failed = strings.Count(strings.ToLower(out), "failed") + strings.Count(out, "Invalid user")
+		if out := cmdOut(5, "journalctl", "-n", "200", "--no-pager", "-u", "sshd"); out != "" {
+			low := strings.ToLower(out)
+			failed = strings.Count(low, "failed") + strings.Count(out, "Invalid user")
+		} else if fileExists("/var/log/secure") {
+			out := cmdOut(4, "tail", "-n", "200", "/var/log/secure")
+			low := strings.ToLower(out)
+			failed = strings.Count(low, "failed") + strings.Count(out, "Invalid user")
+		} else if fileExists("/var/log/auth.log") {
+			out := cmdOut(4, "tail", "-n", "200", "/var/log/auth.log")
+			low := strings.ToLower(out)
+			failed = strings.Count(low, "failed") + strings.Count(out, "Invalid user")
 		}
 		items = append(items, inspectItem{Label: "近期 SSH 失败关键词(估)", Value: fmt.Sprintf("%d", failed)})
 		if failed > 30 {
-			st = "warn"
+			st = b.worst(st, "warn")
 			b.addFinding("warn", "sec", fmt.Sprintf("近期 SSH 认证失败较多: %d", failed))
 		}
+		if b.rep.Host.Firewall == "inactive" || b.rep.Host.Firewall == "unknown" {
+			st = b.worst(st, "warn")
+			b.addFinding("warn", "sec", "未检测到活跃防火墙服务")
+		}
 	case "windows":
-		items = append(items, inspectItem{Label: "说明", Value: "请结合 Windows 安全事件日志复核"})
+		items = append(items, inspectItem{Label: "说明", Value: "请结合 Windows 安全事件日志 / 组策略复核"})
 	case "darwin":
 		items = append(items, inspectItem{Label: "说明", Value: "请结合 Console 认证日志复核"})
 	}
 	b.rep.Sections = append(b.rep.Sections, inspectSection{ID: "sec", Title: "安全", Status: st, Items: items})
+}
+
+func sshCfgValue(path, key, def string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return def
+	}
+	prefix := strings.ToLower(key)
+	for _, ln := range strings.Split(string(raw), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		f := strings.Fields(ln)
+		if len(f) < 2 {
+			continue
+		}
+		if strings.EqualFold(f[0], key) || strings.ToLower(f[0]) == prefix {
+			return f[1]
+		}
+	}
+	return def
 }
 
 func (b *inspectBuilder) collectTime() {
@@ -899,10 +1204,26 @@ func (b *inspectBuilder) collectTime() {
 	case "linux":
 		if out := cmdOut(2, "timedatectl", "show", "-p", "NTPSynchronized", "--value"); out != "" {
 			synced = strings.TrimSpace(out)
-			if synced == "no" {
+			if synced == "yes" {
+				synced = "已同步 (systemd)"
+			} else if synced == "no" {
 				st = "warn"
 				b.addFinding("warn", "time", "NTP 未同步")
+				synced = "未同步"
 			}
+		}
+		if chron := cmdOut(3, "chronyc", "tracking"); chron != "" {
+			for _, ln := range strings.Split(chron, "\n") {
+				if strings.Contains(ln, "Leap status") {
+					items = append(items, inspectItem{Label: "chronyd", Value: strings.TrimSpace(ln)})
+					if strings.Contains(ln, "Normal") {
+						synced = "已同步 (chronyd)"
+						st = "ok"
+					}
+				}
+			}
+		} else if ntpq := cmdOut(3, "ntpq", "-pn"); strings.Contains(ntpq, "*") {
+			synced = "已同步 (ntpd)"
 		}
 	case "darwin":
 		synced = "sntp/check"

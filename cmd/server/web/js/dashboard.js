@@ -16,10 +16,21 @@ let DASH_DATASOURCES = [];         // 已配置的外部数据源（Prometheus /
 let DASH_UNDO = [];                // 人工编辑撤销栈
 let DASH_REDO = [];                // 人工编辑重做栈
 let DASH_DIRTY = false;            // 尚未保存的人工修改
-let DASH_DRAG_ID = 0;              // 拖拽排序中的面板 ID
+let DASH_DRAG_ID = 0;              // legacy drag id (unused by pointer layout)
+let DASH_AUTO_FILL = true;         // 松手后自动补位（填空洞 + 碰撞吸附）
+try {
+  const af = localStorage.getItem("aiops_dash_auto_fill");
+  if (af === "0") DASH_AUTO_FILL = false;
+  if (af === "1") DASH_AUTO_FILL = true;
+} catch (e) {}
 let DASH_AI_REVIEW = null;         // AI 优化预览等待中的请求
 let DASH_AI_REVIEW_RESOLVE = null;
 let DASH_TICKET_DRAFT = null;
+let DASH_TREE_SEL = "";            // ""=全部 | custom | grafana | ai
+try { DASH_TREE_SEL = localStorage.getItem("aiops_dash_tree_sel") || ""; } catch (e) {}
+let DASH_SEARCH = "";
+let DASH_TREE_Q = "";
+let DASH_TREE_BOUND = false;
 
 function cloneDashboard(d) { return d ? JSON.parse(JSON.stringify(d)) : null; }
 function resetDashEditHistory() { DASH_UNDO = []; DASH_REDO = []; DASH_DIRTY = false; }
@@ -91,38 +102,212 @@ async function loadDashDatasources() {
   catch (e) { DASH_DATASOURCES = []; }
 }
 
-/* ---------- 列表 ---------- */
+/* ---------- 列表 / 来源树 / 搜索 ---------- */
+function dashSourceKind(d) {
+  const s = (d && d.source) || "";
+  if (s.indexOf("grafana:") === 0) return "grafana";
+  if (s === "ai" || s.indexOf("ai-analysis") === 0) return "ai";
+  return "custom";
+}
+
+function dashMatchesSearch(d, q) {
+  if (!q) return true;
+  const hay = [d.id, d.name, d.description, d.source, ...(d.tags || [])].filter(Boolean).join(" ");
+  return matchesSearchTokens(hay, q);
+}
+
+function dashFilteredList() {
+  const q = normalizeSearchText(DASH_SEARCH);
+  const searchActive = !!q;
+  return (DASH_LIST || []).filter(d => {
+    if (!dashMatchesSearch(d, q)) return false;
+    if (!searchActive && DASH_TREE_SEL && dashSourceKind(d) !== DASH_TREE_SEL) return false;
+    return true;
+  });
+}
+
+function dashTreeCaret(id, hasKids, collapsed) {
+  if (!hasKids) return `<span class="rtx-caret rtx-caret-gap" aria-hidden="true"></span>`;
+  return `<button type="button" class="rtx-caret" data-dashtoggle="${esc(id)}" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "▸" : "▾"}</button>`;
+}
+
+function renderDashTree() {
+  const el = $("dashTree");
+  if (!el) return;
+  const q = normalizeSearchText(DASH_TREE_Q);
+  const searchActive = !!normalizeSearchText(DASH_SEARCH);
+  const counts = { all: DASH_LIST.length, custom: 0, grafana: 0, ai: 0 };
+  DASH_LIST.forEach(d => { counts[dashSourceKind(d)]++; });
+  const nodes = [
+    { id: "custom", label: I18N.t("section.dash_custom", "自定义"), n: counts.custom },
+    { id: "grafana", label: "Grafana", n: counts.grafana },
+    { id: "ai", label: "AI", n: counts.ai },
+  ].filter(n => !q || matchesSearchTokens(n.label + " " + n.id, q));
+  const rootCollapsed = false;
+  const kids = nodes.length
+    ? `<div class="rtx-children" role="group">` + nodes.map(n => {
+        const sel = !searchActive && DASH_TREE_SEL === n.id;
+        return `<div class="rtx-node is-leaf${sel ? " selected" : ""}" data-dashsrc="${esc(n.id)}" role="treeitem" aria-selected="${sel ? "true" : "false"}" tabindex="0">
+          ${dashTreeCaret("", false, false)}
+          <span class="rtx-ico rtx-ico-leaf" aria-hidden="true"></span>
+          <span class="rtx-name">${esc(n.label)}</span>
+          <span class="rtx-count">${n.n}</span>
+        </div>`;
+      }).join("") + `</div>`
+    : (q ? `<div class="rtx-empty">${esc(I18N.t("section.folder_empty_hint", "无匹配分组"))}</div>` : "");
+  el.innerHTML = `<div class="rtx-tree-search">
+      <input type="search" id="dashTreeSearch" class="rtx-tree-q" value="${esc(DASH_TREE_Q || "")}"
+        placeholder="${esc(I18N.t("section.dash_tree_search_ph", "搜索来源…"))}" autocomplete="off">
+    </div>
+    <div class="rtx-scroll">
+      <div class="rtx-folder" role="tree">
+        <div class="rtx-node rtx-root-node${!DASH_TREE_SEL || searchActive ? " selected" : ""} has-kids" data-dashsrc="" role="treeitem" tabindex="0">
+          ${dashTreeCaret("__all__", true, rootCollapsed)}
+          <span class="rtx-ico rtx-ico-all" aria-hidden="true"></span>
+          <span class="rtx-name">${esc(I18N.t("section.dash_all", "全部仪表盘"))}</span>
+          <span class="rtx-count">${counts.all}</span>
+        </div>
+        ${kids}
+      </div>
+    </div>`;
+}
+
+function bindDashTreeOnce() {
+  if (DASH_TREE_BOUND) return;
+  DASH_TREE_BOUND = true;
+  const home = $("dashHome");
+  if (!home) return;
+  home.addEventListener("click", e => {
+    const src = e.target.closest("[data-dashsrc]");
+    if (src && !e.target.closest("[data-dashtoggle]")) {
+      DASH_TREE_SEL = src.dataset.dashsrc || "";
+      try { localStorage.setItem("aiops_dash_tree_sel", DASH_TREE_SEL); } catch (err) {}
+      renderDashHome();
+      return;
+    }
+  });
+  home.addEventListener("input", e => {
+    if (e.target.id === "dashTreeSearch") {
+      DASH_TREE_Q = e.target.value || "";
+      const focusPos = e.target.selectionStart;
+      renderDashTree();
+      const inp = $("dashTreeSearch");
+      if (inp) { inp.focus(); try { inp.setSelectionRange(focusPos, focusPos); } catch (err) {} }
+      return;
+    }
+    if (e.target.id === "dashSearch") {
+      DASH_SEARCH = e.target.value || "";
+      renderDashList(dashFilteredList());
+      renderDashTree();
+      const c = $("dashCountSpan");
+      if (c) c.textContent = `${dashFilteredList().length}/${DASH_LIST.length}`;
+    }
+  });
+  home.addEventListener("search", e => {
+    if (e.target.id === "dashSearch" || e.target.id === "dashTreeSearch") {
+      e.target.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  const layout = $("dashLayout");
+  if (layout && window.treeCollapsed && window.treeCollapsed("aiops_dash_tree")) {
+    layout.classList.add("tree-collapsed");
+    const btn = layout.querySelector("[data-tree-toggle]");
+    if (btn) { btn.textContent = "›"; btn.setAttribute("aria-expanded", "false"); }
+  }
+}
+
+function renderDashHome() {
+  bindDashTreeOnce();
+  renderDashTree();
+  const list = dashFilteredList();
+  const c = $("dashCountSpan");
+  if (c) c.textContent = `${list.length}/${DASH_LIST.length}`;
+  const searchEl = $("dashSearch");
+  if (searchEl && searchEl.value !== DASH_SEARCH) searchEl.value = DASH_SEARCH;
+  renderDashList(list);
+}
+
 async function loadDashboards() {
   showDashHome();
   await loadDashDatasources();
   try {
     const d = await fetch(`${API}/dashboards`).then(r => r.json());
     DASH_LIST = (d && d.dashboards) || [];
-    renderDashList(DASH_LIST);
+    renderDashHome();
   } catch (e) { /* ignore */ }
 }
 function showDashHome() {
+  setDashFullscreen(false);
   const h = $("dashHome"), d = $("dashDetail");
   if (h) h.style.display = "";
   if (d) { d.style.display = "none"; d.innerHTML = ""; }
   CUR_DASH = null; DASH_EDIT = false; DASH_CHART_ARGS = {};
   resetDashEditHistory();
 }
+
+let DASH_FULLSCREEN = false;
+function setDashFullscreen(on) {
+  DASH_FULLSCREEN = !!on;
+  document.body.classList.toggle("dash-fullscreen", DASH_FULLSCREEN);
+  const btn = $("dashFullscreenBtn");
+  if (btn) {
+    btn.textContent = DASH_FULLSCREEN ? "⤓ 退出全屏" : "⛶ 全屏";
+    btn.classList.toggle("active", DASH_FULLSCREEN);
+    btn.title = DASH_FULLSCREEN ? "退出全屏预览（Esc）" : "全屏预览看板（Esc 退出）";
+  }
+  if (DASH_FULLSCREEN) {
+    // 退出编辑态控件干扰，专注预览
+    document.body.classList.add("dash-exporting");
+  } else {
+    document.body.classList.remove("dash-exporting");
+  }
+  requestAnimationFrame(() => {
+    for (const id in DASH_CHART_ARGS) {
+      try { createChart.apply(null, DASH_CHART_ARGS[id]); } catch (e) {}
+    }
+  });
+}
+function toggleDashFullscreen() {
+  if (!CUR_DASH) return;
+  setDashFullscreen(!DASH_FULLSCREEN);
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && DASH_FULLSCREEN) {
+    e.preventDefault();
+    setDashFullscreen(false);
+  }
+  if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey && CUR_DASH) {
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target && e.target.isContentEditable)) return;
+    if ($("view-dashboards") && $("view-dashboards").classList.contains("active")) {
+      e.preventDefault();
+      toggleDashFullscreen();
+    }
+  }
+});
 function renderDashList(list) {
   const wrap = $("dashList");
   if (!wrap) return;
   if (!list.length) {
-    wrap.innerHTML = `<div class="empty-box">还没有仪表盘。点右上角「✨ AI 生成」用一句话生成，「导入 Grafana」按看板 ID 一键拉取（如 1860 Node Exporter Full），或「新建仪表盘」自定义面板 —— 面板查询直接走所选数据源。</div>`;
+    const emptyMsg = DASH_LIST.length
+      ? I18N.t("empty.no_dash_match", "没有匹配的仪表盘。")
+      : "还没有仪表盘。点右上角「✨ AI 生成」用一句话生成，「导入 Grafana」按看板 ID 一键拉取（如 1860 Node Exporter Full），或「新建仪表盘」自定义面板 —— 面板查询直接走所选数据源。";
+    wrap.innerHTML = `<div class="empty-box">${esc(emptyMsg)}</div>`;
     return;
   }
   wrap.innerHTML = `<div class="dash-cards">` + list.map(d => {
-    const isG = d.source && d.source.indexOf("grafana:") === 0;
-    const isAI = d.source === "ai" || (d.source || "").indexOf("ai-analysis") === 0;
+    const kind = dashSourceKind(d);
+    const isG = kind === "grafana", isAI = kind === "ai";
+    const logo = d.logo_url || (d.appearance && d.appearance.logo_url) || "";
+    const ic = logo
+      ? `<img class="dash-card-logo" src="${esc(logo)}" alt="" loading="lazy">`
+      : `<span class="dash-card-ic ${isAI ? "ai" : isG ? "gf" : ""}">${isAI ? "✨" : "▦"}</span>`;
     return `<div class="dash-card" data-dash="${esc(d.id)}">
       <div class="dash-card-hd">
-        <span class="dash-card-ic ${isAI ? "ai" : isG ? "gf" : ""}">${isAI ? "✨" : "▦"}</span>
+        ${ic}
         <div class="dash-card-name" title="${esc(d.name)}">${esc(d.name)}</div>
         <div class="dash-card-ops">
+          <button class="mini-btn" data-dact="tpl" data-id="${esc(d.id)}" title="导出 JSON 模板">⇩</button>
           <button class="mini-btn" data-dact="meta" data-id="${esc(d.id)}" title="编辑信息">✎</button>
           <button class="mini-btn del" data-dact="del" data-id="${esc(d.id)}" title="删除">✕</button>
         </div>
@@ -173,6 +358,40 @@ function dashRange() {
   const now = Math.floor(Date.now() / 1000);
   return { from: now - DASH_RANGE.hours * 3600, to: now };
 }
+function dashAppearance(d) {
+  const a = (d && d.appearance) || {};
+  return {
+    logo_url: a.logo_url || "",
+    background_url: a.background_url || "",
+    background_color: a.background_color || "",
+    background_fit: a.background_fit || "cover",
+    panel_opacity: (typeof a.panel_opacity === "number" && a.panel_opacity > 0) ? a.panel_opacity : 0
+  };
+}
+function dashHasCustomBg(a) {
+  return !!(a && (a.background_url || a.background_color));
+}
+function applyDashAppearanceStyles(wrap, d) {
+  if (!wrap) return;
+  const a = dashAppearance(d);
+  const custom = dashHasCustomBg(a);
+  wrap.classList.toggle("dash-has-appear", custom || !!a.logo_url);
+  wrap.classList.toggle("dash-has-custom-bg", custom);
+  if (a.background_color) wrap.style.setProperty("--dash-bg-color", a.background_color);
+  else wrap.style.removeProperty("--dash-bg-color");
+  if (a.background_url) {
+    wrap.style.setProperty("--dash-bg-image", `url("${a.background_url.replace(/"/g, "")}")`);
+    wrap.style.setProperty("--dash-bg-fit", a.background_fit === "contain" ? "contain" : a.background_fit === "repeat" ? "auto" : "cover");
+    wrap.style.setProperty("--dash-bg-repeat", a.background_fit === "repeat" ? "repeat" : "no-repeat");
+  } else {
+    wrap.style.removeProperty("--dash-bg-image");
+    wrap.style.removeProperty("--dash-bg-fit");
+    wrap.style.removeProperty("--dash-bg-repeat");
+  }
+  const alpha = custom ? (a.panel_opacity || 0.92) : 1;
+  wrap.style.setProperty("--dash-panel-alpha", String(alpha));
+}
+
 function renderDashDetail() {
   const d = CUR_DASH, wrap = $("dashDetail");
   if (!wrap) return;
@@ -192,21 +411,26 @@ function renderDashDetail() {
   }).join("");
   const srcBadge = (d.source && d.source.indexOf("grafana:") === 0) ? '<span class="dash-badge">Grafana</span>'
     : (d.source === "ai" || (d.source || "").indexOf("ai-analysis") === 0) ? '<span class="dash-badge ai">AI</span>' : "";
+  const appear = dashAppearance(d);
+  const logoHtml = appear.logo_url
+    ? `<img class="dash-brand-logo" src="${esc(appear.logo_url)}" alt="" draggable="false">`
+    : "";
   wrap.innerHTML = `
     <div class="dash-bar">
       <div class="dash-bar-main">
         <button class="dash-icon-btn" id="dashBack" title="返回列表">←</button>
-        <div class="dash-title-wrap"><span class="dash-title">${esc(d.name)}</span>${srcBadge}${DASH_EDIT ? `<span class="dash-edit-state ${DASH_DIRTY ? "dirty" : ""}" role="status" aria-live="polite">${DASH_DIRTY ? "有未保存修改" : "编辑中"}</span>` : ""}</div>
+        <div class="dash-title-wrap">${logoHtml}<span class="dash-title">${esc(d.name)}</span>${srcBadge}${DASH_EDIT ? `<span class="dash-edit-state ${DASH_DIRTY ? "dirty" : ""}" role="status" aria-live="polite">${DASH_DIRTY ? "有未保存修改" : "编辑中"}</span>` : ""}</div>
         <div class="dash-bar-actions">
           <span class="dash-ai-actions">
             <button class="btn ghost sm" id="dashAnalyzeBtn" title="基于当前时间范围生成可追问、可导出的 AI 诊断报告">✦ AI 诊断</button>
             <button class="btn ghost sm" id="dashOptimizeBtn" title="AI 评审 → 查询干跑 → 差异预览 → 人工确认">✨ AI 优化</button>
             <button class="btn ghost sm" id="dashTicketBtn" title="AI 研判 → 可编辑工单草案 → 人工确认">🎫 AI 建单</button>
           </span>
-          <button class="btn ghost sm" id="dashExportBtn" title="导出看板快照、表格、Word 或 PDF 报告">⇩ 导出</button>
+          <button class="btn ghost sm" id="dashFullscreenBtn" title="全屏预览看板（Esc 退出）">⛶ 全屏</button>
+          <button class="btn ghost sm" id="dashExportBtn" title="导出看板视觉 / 数据 / JSON 模板">⇩ 导出</button>
           <span class="dash-sep"></span>
           ${DASH_EDIT
-            ? `<button class="btn sm" id="dashUndoBtn" ${DASH_UNDO.length ? "" : "disabled"} title="撤销（⌘/Ctrl+Z）">↶</button><button class="btn sm" id="dashRedoBtn" ${DASH_REDO.length ? "" : "disabled"} title="重做（⌘/Ctrl+Shift+Z）">↷</button><button class="btn sm" id="dashAddPanel">+ 组件</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn sm" id="dashCancelEdit">退出</button><button class="btn primary sm" id="dashSaveBtn">${DASH_DIRTY ? "保存修改" : "保存"}</button>`
+            ? `<button class="btn sm" id="dashUndoBtn" ${DASH_UNDO.length ? "" : "disabled"} title="撤销（⌘/Ctrl+Z）">↶</button><button class="btn sm" id="dashRedoBtn" ${DASH_REDO.length ? "" : "disabled"} title="重做（⌘/Ctrl+Shift+Z）">↷</button><button class="btn sm ${DASH_AUTO_FILL ? "active" : ""}" id="dashAutoFillBtn" title="松手后自动吸附空位并填补空洞（专业 BI 补位）">${DASH_AUTO_FILL ? "◉ 自动补位" : "○ 自动补位"}</button><button class="btn sm" id="dashCompactBtn" title="立即消除空洞，向上向左紧凑">⊞ 紧凑</button><button class="btn sm" id="dashTidyBtn" title="按顺序流式重排 24 栏">▦ 整齐</button><button class="btn sm" id="dashAddPanel">+ 组件</button><button class="btn sm" id="dashEditVars">变量</button><button class="btn sm" id="dashEditMeta">信息</button><button class="btn sm" id="dashCancelEdit">退出</button><button class="btn primary sm" id="dashSaveBtn">${DASH_DIRTY ? "保存修改" : "保存"}</button>`
             : `<button class="btn primary sm" id="dashEditBtn">✎ 编辑</button>`}
         </div>
       </div>
@@ -223,7 +447,11 @@ function renderDashDetail() {
         <div class="dash-vars">${varSel}</div>
       </div>
     </div>
-    <div class="dash-grid ${DASH_EDIT ? "editing" : ""}" id="dashGrid"></div>`;
+    <div class="dash-canvas-shell ${DASH_EDIT ? "editing" : ""}">
+      <div class="dash-grid ${DASH_EDIT ? "editing" : ""}" id="dashGrid"></div>
+      ${DASH_EDIT && dashBreakpoint() === "d" ? `<div class="dash-layout-hud" id="dashLayoutHud" hidden></div>` : ""}
+    </div>`;
+  applyDashAppearanceStyles(wrap, d);
   renderPanels();
 }
 function renderPanels() {
@@ -231,26 +459,61 @@ function renderPanels() {
   if (!grid || !CUR_DASH) return;
   const panels = (CUR_DASH.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
   if (!panels.length) {
+    grid.style.removeProperty("--dash-canvas-rows");
     grid.innerHTML = `<div class="empty-box" style="grid-column:span 24">还没有面板。${DASH_EDIT ? "点上方「+ 面板」添加。" : "点「编辑」进入编辑模式后添加面板。"}</div>`;
     return;
   }
-  grid.innerHTML = panels.map(p => {
+  const canvasRows = dashCanvasRows(panels);
+  grid.style.setProperty("--dash-canvas-rows", String(canvasRows));
+  const canvasHTML = (DASH_EDIT && dashBreakpoint() === "d")
+    ? `<div class="dash-grid-canvas" id="dashGridCanvas" aria-hidden="true" style="grid-column:1/-1;grid-row:1 / span ${canvasRows}">${dashCanvasCellsHTML(canvasRows)}</div>
+       <div class="dash-align-guides" id="dashAlignGuides" aria-hidden="true"></div>`
+    : "";
+  grid.innerHTML = canvasHTML + panels.map(p => {
     const style = dashPanelGridStyle(p);
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
     const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
-    const editBtns = DASH_EDIT ? `<button class="mini-btn dash-drag-handle" data-drag-handle data-id="${p.id}" draggable="true" title="拖动排序" aria-label="拖动排序">⠿</button>
-        <button class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
-        <button class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
-        <button class="mini-btn" data-pact="dup" data-id="${p.id}" title="复制组件">⧉</button>
-        <button class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
-        <button class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
+    const editBtns = DASH_EDIT ? `<button type="button" class="mini-btn dash-drag-handle" data-drag-handle data-id="${p.id}" title="拖动到任意格点（幕布吸附）" aria-label="拖动面板">⠿</button>
+        <button type="button" class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
+        <button type="button" class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
+        <button type="button" class="mini-btn" data-pact="dup" data-id="${p.id}" title="复制组件">⧉</button>
+        <button type="button" class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
+        <button type="button" class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
     const actions = (aiBtn || editBtns) ? `<div class="panel-edit-actions">${aiBtn}${editBtns}</div>` : "";
-    return `<div class="dash-panel dp-${esc(p.type)}" style="${style}" data-panel="${p.id}" role="article" aria-label="${esc(p.title || "未命名面板")}">
-      <div class="dash-panel-head"><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${actions}</div>
+    const resizeHandles = DASH_EDIT && dashBreakpoint() === "d"
+      ? `<span class="dash-resize dash-resize-e" data-resize="e" data-id="${p.id}" title="调整宽度"></span>
+         <span class="dash-resize dash-resize-s" data-resize="s" data-id="${p.id}" title="调整高度"></span>
+         <span class="dash-resize dash-resize-se" data-resize="se" data-id="${p.id}" title="调整大小"></span>`
+      : "";
+    const g = dashGridBox(p);
+    return `<div class="dash-panel dp-${esc(p.type)}${DASH_EDIT ? " dash-panel-editable" : ""}" style="${style}" data-panel="${p.id}" role="article" aria-label="${esc(p.title || "未命名面板")}">
+      <div class="dash-panel-head"${DASH_EDIT ? ` data-drag-surface data-id="${p.id}"` : ""}><span class="dash-panel-title" title="${esc(p.title || "")}">${esc(p.title || "")}</span>${dsTag}${actions}</div>
+      ${DASH_EDIT ? `<span class="dash-panel-coord">${g.x},${g.y} · ${g.w}×${g.h}</span>` : ""}
       <div class="dash-panel-body" id="panelBody_${p.id}"></div>
+      ${resizeHandles}
     </div>`;
   }).join("");
   panels.forEach(loadPanel);
+}
+
+function dashCanvasRows(panels) {
+  let maxY = 16;
+  (panels || []).forEach(p => {
+    const b = dashGridBox(p);
+    maxY = Math.max(maxY, b.y + b.h);
+  });
+  return Math.min(120, Math.max(24, maxY + 12));
+}
+
+function dashCanvasCellsHTML(rows) {
+  const cols = 24;
+  let html = "";
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      html += `<i class="dash-cell" data-gx="${x}" data-gy="${y}"></i>`;
+    }
+  }
+  return html;
 }
 
 // dashBreakpoint：与 CSS 媒体查询对齐，供 resize 时判断是否需重排面板。
@@ -280,18 +543,288 @@ function dashPanelGridStyle(p) {
   return `grid-column:${x + 1} / span ${w};grid-row:${y + 1} / span ${hStored}`;
 }
 
-// reflowDashLayout：按视觉顺序流式重排 24 栏，避免 ↑↓ 只交换 x/y 造成重叠空洞。
+// reflowDashLayout：按视觉顺序流式重排 24 栏（「整齐」布局）。
 function reflowDashLayout(ordered) {
   let x = 0, y = 0, rowH = 0;
   for (const p of ordered) {
     if (!p.grid) p.grid = {};
     const w = Math.max(1, Math.min(24, p.grid.w || 12));
-    const h = Math.max(2, Math.min(48, p.grid.h || 8));
+    const h = Math.max(1, Math.min(48, p.grid.h || 8));
     if (x + w > 24) { x = 0; y += rowH; rowH = 0; }
     p.grid.x = x; p.grid.y = y; p.grid.w = w; p.grid.h = h;
     x += w;
     if (h > rowH) rowH = h;
   }
+}
+
+function dashGridBox(p) {
+  const g = p.grid || {};
+  return {
+    id: p.id,
+    x: Math.max(0, Math.min(23, g.x || 0)),
+    y: Math.max(0, g.y || 0),
+    w: Math.max(1, Math.min(24, g.w || 12)),
+    h: Math.max(1, Math.min(48, g.h || 8)),
+  };
+}
+
+function dashBoxesOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// compactDashLayout：消除空洞，向上 / 向左紧凑（保留各面板 w/h）。
+function compactDashLayout(panels) {
+  const ordered = panels.slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+  const placed = [];
+  for (const p of ordered) {
+    if (!p.grid) p.grid = {};
+    const w = Math.max(1, Math.min(24, p.grid.w || 12));
+    const h = Math.max(1, Math.min(48, p.grid.h || 8));
+    let best = { x: 0, y: 1e9 };
+    const maxY = placed.reduce((m, b) => Math.max(m, b.y + b.h), 0) + 1;
+    for (let y = 0; y <= maxY; y++) {
+      for (let x = 0; x <= 24 - w; x++) {
+        const cand = { x, y, w, h };
+        if (placed.some(b => dashBoxesOverlap(cand, b))) continue;
+        if (y < best.y || (y === best.y && x < best.x)) best = { x, y };
+      }
+    }
+    p.grid.x = best.x; p.grid.y = best.y; p.grid.w = w; p.grid.h = h;
+    placed.push({ x: best.x, y: best.y, w, h });
+  }
+}
+
+// pushOverlappingPanels：移动/拉伸后把与 moved 重叠的面板下推（Grafana 风格）。
+function pushOverlappingPanels(movedId) {
+  const panels = CUR_DASH && CUR_DASH.panels;
+  if (!panels) return;
+  const moved = panels.find(p => p.id === movedId);
+  if (!moved) return;
+  let guard = 0;
+  while (guard++ < 96) {
+    const mb = dashGridBox(moved);
+    let changed = false;
+    const others = panels.filter(p => p.id !== movedId).sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+    for (const p of others) {
+      const ob = dashGridBox(p);
+      if (!dashBoxesOverlap(mb, ob)) continue;
+      p.grid.y = mb.y + mb.h;
+      changed = true;
+    }
+    // cascade: also resolve overlaps among others
+    for (let i = 0; i < others.length; i++) {
+      for (let j = i + 1; j < others.length; j++) {
+        const a = dashGridBox(others[i]), b = dashGridBox(others[j]);
+        if (!dashBoxesOverlap(a, b)) continue;
+        others[j].grid.y = a.y + a.h;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+}
+
+// findNearestFreeSlot：在目标附近寻找可放入 w×h 的空位（自动吸附补位）。
+function findNearestFreeSlot(x, y, w, h, excludeId, panelList) {
+  const panels = panelList || (CUR_DASH && CUR_DASH.panels) || [];
+  const boxes = panels.filter(p => p.id !== excludeId).map(dashGridBox);
+  const fits = (cx, cy) => {
+    if (cx < 0 || cy < 0 || cx + w > 24) return false;
+    const cand = { x: cx, y: cy, w, h };
+    return !boxes.some(b => dashBoxesOverlap(cand, b));
+  };
+  if (fits(x, y)) return { x, y };
+  const maxY = boxes.reduce((m, b) => Math.max(m, b.y + b.h), y) + 24;
+  let best = null, bestDist = Infinity;
+  for (let radius = 1; radius <= Math.max(24, maxY); radius++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+        const cx = x + dx, cy = Math.max(0, y + dy);
+        if (!fits(cx, cy)) continue;
+        const dist = Math.abs(dx) + Math.abs(dy) * 1.01;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = { x: cx, y: cy };
+        }
+      }
+    }
+    if (best) return best;
+  }
+  return { x: 0, y: boxes.reduce((m, b) => Math.max(m, b.y + b.h), 0) };
+}
+
+// fillHolesKeepAnchor：锚面板位置不动，其余面板尽量上移/左移填补空洞（BI 自动补位）。
+function fillHolesKeepAnchor(anchorId) {
+  const panels = (CUR_DASH && CUR_DASH.panels) || [];
+  let changed = true, guard = 0;
+  while (changed && guard++ < 80) {
+    changed = false;
+    const ordered = panels
+      .filter(p => p.id !== anchorId)
+      .sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+    for (const p of ordered) {
+      const b = dashGridBox(p);
+      let ny = b.y;
+      while (ny > 0) {
+        const cand = { x: b.x, y: ny - 1, w: b.w, h: b.h };
+        if (panels.some(o => o.id !== p.id && dashBoxesOverlap(cand, dashGridBox(o)))) break;
+        ny--;
+        changed = true;
+      }
+      let nx = b.x;
+      while (nx > 0) {
+        const cand = { x: nx - 1, y: ny, w: b.w, h: b.h };
+        if (panels.some(o => o.id !== p.id && dashBoxesOverlap(cand, dashGridBox(o)))) break;
+        nx--;
+        changed = true;
+      }
+      p.grid.x = nx;
+      p.grid.y = ny;
+    }
+  }
+}
+
+// resolveDropLayout：松手后吸附空位 + 碰撞下推 + 可选自动补位填空洞（锚点不漂）。
+function resolveDropLayout(id, desired) {
+  const p = CUR_DASH.panels.find(x => x.id === id);
+  if (!p) return;
+  let { x, y, w, h } = desired;
+  w = Math.max(1, Math.min(24, w));
+  h = Math.max(1, Math.min(48, h));
+  x = Math.max(0, Math.min(24 - w, x));
+  y = Math.max(0, y);
+  if (DASH_AUTO_FILL && layoutTargetConflicts({ x, y, w, h }, id)) {
+    const free = findNearestFreeSlot(x, y, w, h, id);
+    x = free.x;
+    y = free.y;
+  }
+  p.grid = { ...(p.grid || {}), x, y, w, h };
+  pushOverlappingPanels(id);
+  if (DASH_AUTO_FILL) fillHolesKeepAnchor(id);
+}
+
+function dashGridMetrics(gridEl) {
+  const rect = gridEl.getBoundingClientRect();
+  const styles = getComputedStyle(gridEl);
+  const gap = parseFloat(styles.columnGap || styles.gap) || 8;
+  const cols = dashBreakpoint() === "t" ? 12 : 24;
+  const colW = (rect.width - gap * (cols - 1)) / cols;
+  const rowH = 24; // matches CSS grid-auto-rows
+  return { left: rect.left, top: rect.top, gap, colW, rowH, cols, width: rect.width, height: rect.height };
+}
+
+function clientToGrid(mx, gridEl) {
+  const m = dashGridMetrics(gridEl);
+  const stepX = m.colW + m.gap;
+  const stepY = m.rowH + m.gap;
+  const x = Math.max(0, Math.min(m.cols - 1, Math.floor((mx.clientX - m.left) / stepX)));
+  const y = Math.max(0, Math.floor((mx.clientY - m.top) / stepY));
+  return { x, y, metrics: m };
+}
+
+// DASH_LAYOUT_DRAG：自由拖放 / 拉伸交互状态（仅桌面编辑态）。
+let DASH_LAYOUT_DRAG = null;
+
+function applyPanelGridStyle(el, g) {
+  if (!el || !g) return;
+  el.style.gridColumn = `${(g.x || 0) + 1} / span ${g.w || 12}`;
+  el.style.gridRow = `${(g.y || 0) + 1} / span ${g.h || 8}`;
+}
+
+function ensureDashGhost(grid) {
+  let ghost = grid.querySelector(".dash-layout-ghost");
+  if (!ghost) {
+    ghost = document.createElement("div");
+    ghost.className = "dash-layout-ghost";
+    ghost.innerHTML = `<span class="dash-layout-ghost-label"></span>`;
+    grid.appendChild(ghost);
+  }
+  return ghost;
+}
+
+function updateDashLayoutHUD(g, conflict) {
+  const hud = $("dashLayoutHud");
+  if (!hud || !g) return;
+  hud.hidden = false;
+  hud.textContent = conflict
+    ? `格点 ${g.x},${g.y} · ${g.w}×${g.h} → 将自动吸附空位`
+    : `格点 ${g.x},${g.y} · ${g.w}×${g.h}`;
+  hud.classList.toggle("conflict", !!conflict);
+}
+
+function highlightDashCells(g) {
+  const canvas = $("dashGridCanvas");
+  if (!canvas || !g) return;
+  canvas.querySelectorAll(".dash-cell.hot").forEach(el => el.classList.remove("hot"));
+  for (let yy = g.y; yy < g.y + g.h; yy++) {
+    for (let xx = g.x; xx < g.x + g.w; xx++) {
+      const cell = canvas.querySelector(`[data-gx="${xx}"][data-gy="${yy}"]`);
+      if (cell) cell.classList.add("hot");
+    }
+  }
+}
+
+function updateDashAlignGuides(g, excludeId) {
+  const wrap = $("dashAlignGuides");
+  const grid = $("dashGrid");
+  if (!wrap || !grid || !g) return;
+  const m = dashGridMetrics(grid);
+  const lines = [];
+  const boxes = ((CUR_DASH && CUR_DASH.panels) || []).filter(p => p.id !== excludeId).map(dashGridBox);
+  const xs = new Set(), ys = new Set();
+  boxes.forEach(b => {
+    xs.add(b.x); xs.add(b.x + b.w);
+    ys.add(b.y); ys.add(b.y + b.h);
+  });
+  const stepX = m.colW + m.gap, stepY = m.rowH + m.gap;
+  [g.x, g.x + g.w].forEach(vx => {
+    if (!xs.has(vx)) return;
+    const left = vx * stepX;
+    lines.push(`<i class="dash-guide-v" style="left:${left}px"></i>`);
+  });
+  [g.y, g.y + g.h].forEach(vy => {
+    if (!ys.has(vy)) return;
+    const top = vy * stepY;
+    lines.push(`<i class="dash-guide-h" style="top:${top}px"></i>`);
+  });
+  wrap.innerHTML = lines.join("");
+}
+
+function clearDashLayoutChrome() {
+  const hud = $("dashLayoutHud");
+  if (hud) { hud.hidden = true; hud.classList.remove("conflict"); }
+  const canvas = $("dashGridCanvas");
+  if (canvas) canvas.querySelectorAll(".dash-cell.hot").forEach(el => el.classList.remove("hot"));
+  const guides = $("dashAlignGuides");
+  if (guides) guides.innerHTML = "";
+}
+
+function layoutTargetConflicts(g, excludeId) {
+  const boxes = ((CUR_DASH && CUR_DASH.panels) || []).filter(p => p.id !== excludeId).map(dashGridBox);
+  return boxes.some(b => dashBoxesOverlap(g, b));
+}
+
+function endDashLayoutDrag(commit) {
+  if (!DASH_LAYOUT_DRAG) return;
+  const { panelEl, ghost, id } = DASH_LAYOUT_DRAG;
+  document.body.classList.remove("dash-layout-dragging");
+  if (panelEl) panelEl.classList.remove("dragging", "resizing");
+  if (ghost) ghost.remove();
+  clearDashLayoutChrome();
+  if (commit && CUR_DASH && id != null) {
+    const cur = DASH_LAYOUT_DRAG.cur;
+    const orig = DASH_LAYOUT_DRAG.orig;
+    const changed = !orig || cur.x !== orig.x || cur.y !== orig.y || cur.w !== orig.w || cur.h !== orig.h;
+    if (changed) {
+      rememberDashMutation();
+      resolveDropLayout(id, cur);
+    }
+    renderPanels();
+  } else if (panelEl && DASH_LAYOUT_DRAG.orig) {
+    applyPanelGridStyle(panelEl, DASH_LAYOUT_DRAG.orig);
+  }
+  DASH_LAYOUT_DRAG = null;
 }
 
 // dashEmptyHint：无数据时给可操作提示；仅当面板表达式仍残留 label="$var"（等值）时才强调 =~。
@@ -778,9 +1311,39 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (t.closest("#dashAnalyzeBtn")) { aiAnalyzeDash(); return; }
   if (t.closest("#dashOptimizeBtn")) { aiOptimizeDash(); return; }
   if (t.closest("#dashTicketBtn")) { aiTicketDash(); return; }
-  if (t.closest("#dashExportBtn")) { openMask("dashExportMask"); return; }
+  if (t.closest("#dashFullscreenBtn")) { toggleDashFullscreen(); return; }
+  if (t.closest("#dashExportBtn")) { openMask("dashExportMask"); syncDashExportUI(); return; }
   if (t.closest("#dashUndoBtn")) { undoDashEdit(); return; }
   if (t.closest("#dashRedoBtn")) { redoDashEdit(); return; }
+  if (t.closest("#dashAutoFillBtn")) {
+    DASH_AUTO_FILL = !DASH_AUTO_FILL;
+    try { localStorage.setItem("aiops_dash_auto_fill", DASH_AUTO_FILL ? "1" : "0"); } catch (e) {}
+    const btn = $("dashAutoFillBtn");
+    if (btn) {
+      btn.classList.toggle("active", DASH_AUTO_FILL);
+      btn.textContent = DASH_AUTO_FILL ? "◉ 自动补位" : "○ 自动补位";
+    }
+    toast(DASH_AUTO_FILL ? "已开启自动补位：松手后吸附空位并填补空洞" : "已关闭自动补位：仅下推重叠面板", "ok");
+    return;
+  }
+  if (t.closest("#dashCompactBtn")) {
+    if (!CUR_DASH || !DASH_EDIT) return;
+    rememberDashMutation();
+    compactDashLayout(CUR_DASH.panels || []);
+    renderDashDetail();
+    toast("已紧凑布局", "ok");
+    return;
+  }
+  if (t.closest("#dashTidyBtn")) {
+    if (!CUR_DASH || !DASH_EDIT) return;
+    rememberDashMutation();
+    const ordered = (CUR_DASH.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+    reflowDashLayout(ordered);
+    CUR_DASH.panels = ordered;
+    renderDashDetail();
+    toast("已整齐重排", "ok");
+    return;
+  }
   if (t.closest("#dashCancelEdit")) {
     if (DASH_DIRTY && !confirm("确认放弃所有未保存修改？")) return;
     openDashboard(CUR_DASH.id); return;
@@ -820,46 +1383,97 @@ safeAddEventListener("dashDetail", "change", e => {
   const sel = e.target.closest("[data-dvar]");
   if (sel) { DASH_VARVALS[sel.dataset.dvar] = sel.value; renderPanels(); }
 });
-safeAddEventListener("dashDetail", "dragstart", e => {
-  const handle = e.target.closest("[data-drag-handle]");
-  if (!DASH_EDIT || !handle) { e.preventDefault(); return; }
-  DASH_DRAG_ID = +handle.dataset.id;
-  const panel = handle.closest("[data-panel]");
-  if (panel) panel.classList.add("dragging");
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", String(DASH_DRAG_ID));
+// Pointer-based free drag / resize with BI grid canvas snap + guides.
+safeAddEventListener("dashDetail", "pointerdown", e => {
+  if (!DASH_EDIT || !CUR_DASH || dashBreakpoint() !== "d") return;
+  if (e.button != null && e.button !== 0) return;
+  const grid = $("dashGrid");
+  if (!grid) return;
+  const resize = e.target.closest("[data-resize]");
+  const dragStart = e.target.closest("[data-drag-handle], [data-drag-surface]");
+  if (!resize && !dragStart) return;
+  if (e.target.closest("[data-pact]") && !e.target.closest("[data-drag-handle]")) return;
+  const id = +(resize || dragStart).dataset.id;
+  const panel = (CUR_DASH.panels || []).find(p => p.id === id);
+  const panelEl = grid.querySelector(`[data-panel="${id}"]`);
+  if (!panel || !panelEl) return;
+  e.preventDefault();
+  try { e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId); } catch (_) {}
+  const orig = dashGridBox(panel);
+  const ghost = ensureDashGhost(grid);
+  applyPanelGridStyle(ghost, orig);
+  ghost.classList.add("visible");
+  const gl = ghost.querySelector(".dash-layout-ghost-label");
+  if (gl) gl.textContent = `${orig.w}×${orig.h}`;
+  panelEl.classList.add(resize ? "resizing" : "dragging");
+  document.body.classList.add("dash-layout-dragging");
+  const grab = clientToGrid(e, grid);
+  DASH_LAYOUT_DRAG = {
+    mode: resize ? ("resize-" + resize.dataset.resize) : "move",
+    id, panelEl, ghost, orig,
+    cur: { x: orig.x, y: orig.y, w: orig.w, h: orig.h },
+    grabOffX: grab.x - orig.x,
+    grabOffY: grab.y - orig.y,
+    startX: e.clientX, startY: e.clientY,
+    pointerId: e.pointerId,
+  };
+  highlightDashCells(orig);
+  updateDashLayoutHUD(orig, false);
+  updateDashAlignGuides(orig, id);
+});
+document.addEventListener("pointermove", e => {
+  if (!DASH_LAYOUT_DRAG) return;
+  const grid = $("dashGrid");
+  if (!grid) return;
+  const d = DASH_LAYOUT_DRAG;
+  const m = dashGridMetrics(grid);
+  let { x, y, w, h } = d.orig;
+  if (d.mode === "move") {
+    const gpos = clientToGrid(e, grid);
+    x = Math.max(0, Math.min(m.cols - w, gpos.x - (d.grabOffX || 0)));
+    y = Math.max(0, gpos.y - (d.grabOffY || 0));
+  } else {
+    const dx = Math.round((e.clientX - d.startX) / (m.colW + m.gap));
+    const dy = Math.round((e.clientY - d.startY) / (m.rowH + m.gap));
+    if (d.mode === "resize-e" || d.mode === "resize-se") {
+      w = Math.max(1, Math.min(m.cols - x, d.orig.w + dx));
+    }
+    if (d.mode === "resize-s" || d.mode === "resize-se") {
+      h = Math.max(1, Math.min(48, d.orig.h + dy));
+    }
   }
+  d.cur = { x, y, w, h };
+  // Preview snapped free slot when auto-fill on and current cell occupied
+  let preview = d.cur;
+  let conflict = layoutTargetConflicts(d.cur, d.id);
+  if (DASH_AUTO_FILL && conflict && d.mode === "move") {
+    const free = findNearestFreeSlot(x, y, w, h, d.id);
+    preview = { x: free.x, y: free.y, w, h };
+  }
+  applyPanelGridStyle(d.panelEl, d.cur);
+  applyPanelGridStyle(d.ghost, preview);
+  const gl = d.ghost && d.ghost.querySelector(".dash-layout-ghost-label");
+  if (gl) gl.textContent = conflict && DASH_AUTO_FILL ? `→ ${preview.x},${preview.y}` : `${preview.w}×${preview.h}`;
+  d.ghost.classList.toggle("snap-preview", !!(conflict && DASH_AUTO_FILL));
+  highlightDashCells(preview);
+  updateDashLayoutHUD(preview, conflict && DASH_AUTO_FILL);
+  updateDashAlignGuides(preview, d.id);
 });
-safeAddEventListener("dashDetail", "dragover", e => {
-  if (!DASH_EDIT || !DASH_DRAG_ID || !e.target.closest("[data-panel]")) return;
-  e.preventDefault();
-  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+document.addEventListener("pointerup", () => {
+  if (!DASH_LAYOUT_DRAG) return;
+  // Commit using preview snap position when auto-fill resolved a conflict
+  if (DASH_AUTO_FILL && DASH_LAYOUT_DRAG.mode === "move") {
+    const cur = DASH_LAYOUT_DRAG.cur;
+    if (layoutTargetConflicts(cur, DASH_LAYOUT_DRAG.id)) {
+      const free = findNearestFreeSlot(cur.x, cur.y, cur.w, cur.h, DASH_LAYOUT_DRAG.id);
+      DASH_LAYOUT_DRAG.cur = { ...cur, x: free.x, y: free.y };
+    }
+  }
+  endDashLayoutDrag(true);
 });
-safeAddEventListener("dashDetail", "drop", e => {
-  const target = e.target.closest("[data-panel]");
-  if (!DASH_EDIT || !DASH_DRAG_ID || !target) return;
-  e.preventDefault();
-  const targetID = +target.dataset.panel;
-  if (!targetID || targetID === DASH_DRAG_ID) return;
-  const ordered = (CUR_DASH.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
-  const from = ordered.findIndex(p => p.id === DASH_DRAG_ID);
-  let to = ordered.findIndex(p => p.id === targetID);
-  if (from < 0 || to < 0) return;
-  rememberDashMutation();
-  const moved = ordered.splice(from, 1)[0];
-  if (from < to) to--;
-  const rect = target.getBoundingClientRect();
-  if (e.clientY > rect.top + rect.height / 2) to++;
-  ordered.splice(Math.max(0, Math.min(ordered.length, to)), 0, moved);
-  reflowDashLayout(ordered);
-  CUR_DASH.panels = ordered;
-  DASH_DRAG_ID = 0;
-  renderDashDetail();
-});
-safeAddEventListener("dashDetail", "dragend", () => {
-  DASH_DRAG_ID = 0;
-  document.querySelectorAll(".dash-panel.dragging").forEach(el => el.classList.remove("dragging"));
+document.addEventListener("pointercancel", () => {
+  if (!DASH_LAYOUT_DRAG) return;
+  endDashLayoutDrag(false);
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && DASH_AI_REVIEW_RESOLVE) {
@@ -932,7 +1546,7 @@ function openPanelEditor(p) {
 }
 const PANEL_TEMPLATES = {
   trend: { type: "timeseries", title: "趋势", unit: "", w: 12, h: 7 },
-  kpi: { type: "stat", title: "关键指标", unit: "short", w: 6, h: 4 },
+  kpi: { type: "stat", title: "关键指标", unit: "short", w: 6, h: 6 },
   gauge: { type: "gauge", title: "利用率", unit: "percent", w: 8, h: 6, min: 0, max: 100 },
   ranking: { type: "bargauge", title: "Top 排行", unit: "short", w: 12, h: 6 },
   table: { type: "table", title: "明细", unit: "", w: 12, h: 7 },
@@ -1099,8 +1713,14 @@ safeAddEventListener("panelSave", "click", () => {
 });
 function nextPanelId() { let m = 0; (CUR_DASH.panels || []).forEach(p => { if (p.id > m) m = p.id; }); return m + 1; }
 function placeNewPanel(panel, panels) {
-  let maxY = 0; panels.forEach(p => { const b = p.grid.y + p.grid.h; if (b > maxY) maxY = b; });
-  panel.grid.y = maxY; panel.grid.x = 0;
+  if (!panel.grid) panel.grid = {};
+  const w = Math.max(1, Math.min(24, panel.grid.w || 12));
+  const h = Math.max(1, Math.min(48, panel.grid.h || 8));
+  const free = findNearestFreeSlot(0, 0, w, h, panel.id, panels);
+  panel.grid.x = free.x;
+  panel.grid.y = free.y;
+  panel.grid.w = w;
+  panel.grid.h = h;
 }
 
 /* ---------- 变量编辑器 ---------- */
@@ -1154,13 +1774,155 @@ safeAddEventListener("varSave", "click", async () => {
   renderDashDetail();
 });
 
-/* ---------- 仪表盘信息（新建 / 编辑元信息） ---------- */
+/* ---------- 仪表盘信息（新建 / 编辑元信息 + 外观） ---------- */
+let DASH_META_APPEAR = { logo_url: "", background_url: "", background_color: "", background_fit: "cover", panel_opacity: 0 };
+
+function readDashMetaAppearanceFromForm() {
+  const color = ($("dashAppearBgColor") && $("dashAppearBgColor").value || "").trim();
+  const fit = ($("dashAppearBgFit") && $("dashAppearBgFit").value) || "cover";
+  const opEl = $("dashAppearOpacity");
+  const opacity = opEl ? (Number(opEl.value) / 100) : 0.92;
+  return {
+    logo_url: DASH_META_APPEAR.logo_url || "",
+    background_url: DASH_META_APPEAR.background_url || "",
+    background_color: color,
+    background_fit: fit,
+    panel_opacity: dashHasCustomBg({ background_url: DASH_META_APPEAR.background_url, background_color: color }) ? opacity : 0
+  };
+}
+function setDashAppearThumb(el, url, wide) {
+  if (!el) return;
+  if (url) {
+    el.innerHTML = `<img src="${esc(url)}" alt="">`;
+    el.classList.add("has-img");
+  } else {
+    el.innerHTML = `<span class="muted">未设置</span>`;
+    el.classList.remove("has-img");
+  }
+  if (wide) el.classList.add("wide");
+}
+function refreshDashAppearPreview() {
+  const a = readDashMetaAppearanceFromForm();
+  const title = ($("dashMetaName") && $("dashMetaName").value.trim()) || "看板预览";
+  const prevTitle = $("dashAppearPrevTitle");
+  if (prevTitle) prevTitle.textContent = title;
+  const logo = $("dashAppearPrevLogo");
+  if (logo) {
+    if (a.logo_url) { logo.src = a.logo_url; logo.hidden = false; }
+    else { logo.removeAttribute("src"); logo.hidden = true; }
+  }
+  const canvas = $("dashAppearPrevCanvas");
+  if (canvas) {
+    canvas.style.backgroundColor = a.background_color || "var(--bg2)";
+    if (a.background_url) {
+      canvas.style.backgroundImage = `url("${a.background_url.replace(/"/g, "")}")`;
+      canvas.style.backgroundSize = a.background_fit === "contain" ? "contain" : a.background_fit === "repeat" ? "auto" : "cover";
+      canvas.style.backgroundRepeat = a.background_fit === "repeat" ? "repeat" : "no-repeat";
+      canvas.style.backgroundPosition = "center";
+    } else {
+      canvas.style.backgroundImage = "none";
+    }
+  }
+  const opField = $("dashAppearOpacityField");
+  if (opField) opField.style.display = dashHasCustomBg(a) ? "" : "none";
+  const opVal = $("dashAppearOpacityVal");
+  const opEl = $("dashAppearOpacity");
+  if (opVal && opEl) opVal.textContent = (Number(opEl.value) / 100).toFixed(2);
+  setDashAppearThumb($("dashAppearLogoThumb"), a.logo_url, false);
+  setDashAppearThumb($("dashAppearBgThumb"), a.background_url, true);
+}
+function setDashMetaUploadEnabled(enabled) {
+  ["dashAppearLogoPick", "dashAppearBgPick"].forEach(id => {
+    const b = $(id); if (b) b.disabled = !enabled;
+  });
+  const hint = $("dashAppearUploadHint");
+  if (hint) hint.style.display = enabled ? "none" : "";
+}
+async function uploadDashAppearAsset(kind, file) {
+  const id = ($("dashMetaId") && $("dashMetaId").value) || "";
+  if (!id) { toast("请先保存看板后再上传图片", "err"); return null; }
+  if (!file) return null;
+  const max = kind === "logo" ? 512 * 1024 : 2 * 1024 * 1024;
+  if (file.size > max) { toast(kind === "logo" ? "Logo 不能超过 512KB" : "背景图不能超过 2MB", "err"); return null; }
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("kind", kind);
+  try {
+    const r = await fetch(`${API}/dashboards/${encodeURIComponent(id)}/assets`, { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.url) { toast("上传失败：" + ((j && j.error) || r.status), "err"); return null; }
+    return j.url;
+  } catch (e) {
+    toast("上传失败：" + e, "err");
+    return null;
+  }
+}
+function bindDashAppearMetaOnce() {
+  if (bindDashAppearMetaOnce.bound) return;
+  bindDashAppearMetaOnce.bound = true;
+  const syncColorPick = () => {
+    const t = $("dashAppearBgColor");
+    const p = $("dashAppearBgColorPick");
+    if (!t || !p) return;
+    const v = (t.value || "").trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) p.value = v;
+    refreshDashAppearPreview();
+  };
+  safeAddEventListener("dashAppearBgColor", "input", syncColorPick);
+  safeAddEventListener("dashAppearBgColorPick", "input", () => {
+    const t = $("dashAppearBgColor");
+    const p = $("dashAppearBgColorPick");
+    if (t && p) t.value = p.value;
+    refreshDashAppearPreview();
+  });
+  safeAddEventListener("dashAppearBgColorClear", "click", () => {
+    if ($("dashAppearBgColor")) $("dashAppearBgColor").value = "";
+    refreshDashAppearPreview();
+  });
+  safeAddEventListener("dashAppearBgFit", "change", refreshDashAppearPreview);
+  safeAddEventListener("dashAppearOpacity", "input", refreshDashAppearPreview);
+  safeAddEventListener("dashMetaName", "input", refreshDashAppearPreview);
+  safeAddEventListener("dashAppearLogoPick", "click", () => { const f = $("dashAppearLogoFile"); if (f) f.click(); });
+  safeAddEventListener("dashAppearBgPick", "click", () => { const f = $("dashAppearBgFile"); if (f) f.click(); });
+  safeAddEventListener("dashAppearLogoFile", "change", async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    const url = await uploadDashAppearAsset("logo", file);
+    if (url) { DASH_META_APPEAR.logo_url = url; refreshDashAppearPreview(); toast("Logo 已上传", "ok"); }
+  });
+  safeAddEventListener("dashAppearBgFile", "change", async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    const url = await uploadDashAppearAsset("background", file);
+    if (url) { DASH_META_APPEAR.background_url = url; refreshDashAppearPreview(); toast("背景图已上传", "ok"); }
+  });
+  safeAddEventListener("dashAppearLogoClear", "click", () => {
+    DASH_META_APPEAR.logo_url = "";
+    refreshDashAppearPreview();
+  });
+  safeAddEventListener("dashAppearBgClear", "click", () => {
+    DASH_META_APPEAR.background_url = "";
+    refreshDashAppearPreview();
+  });
+}
 function openDashMeta(d) {
+  bindDashAppearMetaOnce();
   $("dashMetaId").value = d ? d.id : "";
   $("dashMetaName").value = d ? d.name : "";
   $("dashMetaDesc").value = d ? (d.description || "") : "";
   $("dashMetaTags").value = d && d.tags ? d.tags.join(",") : "";
   $("dashMetaTitle").textContent = d ? "编辑仪表盘信息" : "新建仪表盘";
+  const a = dashAppearance(d);
+  DASH_META_APPEAR = { ...a };
+  if ($("dashAppearBgColor")) $("dashAppearBgColor").value = a.background_color || "";
+  if ($("dashAppearBgColorPick")) {
+    const hex = /^#[0-9a-fA-F]{6}$/.test(a.background_color || "") ? a.background_color : "#1a1f2e";
+    $("dashAppearBgColorPick").value = hex;
+  }
+  if ($("dashAppearBgFit")) $("dashAppearBgFit").value = a.background_fit || "cover";
+  if ($("dashAppearOpacity")) $("dashAppearOpacity").value = String(Math.round((a.panel_opacity || 0.92) * 100));
+  setDashMetaUploadEnabled(!!(d && d.id));
+  refreshDashAppearPreview();
   openMask("dashMetaMask");
 }
 safeAddEventListener("dashMetaSave", "click", async () => {
@@ -1169,23 +1931,36 @@ safeAddEventListener("dashMetaSave", "click", async () => {
   if (!name) { toast("请填写名称", "err"); return; }
   const tags = $("dashMetaTags").value.split(",").map(s => s.trim()).filter(Boolean);
   const desc = $("dashMetaDesc").value.trim();
+  const appearance = readDashMetaAppearanceFromForm();
   // 编辑当前打开的仪表盘元信息（在内存里改，随保存落盘）
   if (CUR_DASH && CUR_DASH.id === id && id) {
     if (DASH_EDIT) rememberDashMutation();
     CUR_DASH.name = name; CUR_DASH.description = desc; CUR_DASH.tags = tags;
+    CUR_DASH.appearance = appearance;
     closeMask($("dashMetaMask"));
     if (DASH_EDIT) renderDashDetail(); else saveCurDash();
     return;
   }
   // 从列表编辑信息：合并进已存的完整对象后保存
-  let base = { id, name, description: desc, tags, panels: [] };
-  if (id) { try { base = await fetch(`${API}/dashboards/${encodeURIComponent(id)}`).then(r => r.json()); base.name = name; base.description = desc; base.tags = tags; } catch (e) {} }
+  let base = { id, name, description: desc, tags, panels: [], appearance };
+  if (id) {
+    try {
+      base = await fetch(`${API}/dashboards/${encodeURIComponent(id)}`).then(r => r.json());
+      base.name = name; base.description = desc; base.tags = tags; base.appearance = appearance;
+    } catch (e) {}
+  }
   const r = await fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(base) }).then(r => r.json());
   closeMask($("dashMetaMask"));
   if (r && r.ok) {
     toast("已保存", "ok");
     if (!id) { openDashboard(r.id).then(() => { DASH_EDIT = true; renderDashDetail(); }); }
-    else loadDashboards();
+    else {
+      if (CUR_DASH && CUR_DASH.id === id) {
+        CUR_DASH.name = name; CUR_DASH.description = desc; CUR_DASH.tags = tags; CUR_DASH.appearance = appearance;
+        renderDashDetail();
+      }
+      loadDashboards();
+    }
   } else toast("保存失败：" + ((r && r.error) || ""), "err");
 });
 async function saveCurDash() {
@@ -1234,7 +2009,7 @@ safeAddEventListener("dashImportSave", "click", async () => {
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) {
         closeMask($("dashImportMask"));
-        const kind = j.format === "nightingale" ? "夜莺" : "Grafana";
+        const kind = j.format === "nightingale" ? "夜莺" : (j.format === "aiops" ? "AIOps 模板" : "Grafana");
         toast(`已从 ${kind} 导入「${j.name}」：${j.panels} 面板${j.unsupported ? "（" + j.unsupported + " 个类型不支持，已占位）" : ""}`, "ok");
         openDashboard(j.id);
       } else toast("导入失败：" + (j.error || r.status), "err");
@@ -1530,27 +2305,381 @@ function dashboardReportModel(liveRows) {
     footer: "数据快照受采集延迟、数据源可用性和当前模板变量影响；AI 诊断结论需结合变更记录、日志与业务影响人工复核。"
   };
 }
+
+function dashExportMeta() {
+  const d = CUR_DASH;
+  const range = dashRange();
+  const vars = Object.entries(DASH_VARVALS || {}).map(([k, v]) => `${k}=${v || "（空）"}`).join("；") || "无";
+  return [
+    ["看板", d.name],
+    ["数据源", dsLabel(d.datasource || "")],
+    ["时间范围", `${new Date(range.from * 1000).toLocaleString()} — ${new Date(range.to * 1000).toLocaleString()}`],
+    ["模板变量", vars],
+    ["组件数量", String((d.panels || []).length)],
+    ["导出时间", new Date().toLocaleString()]
+  ];
+}
+
+// 导出前静止图表入场动画，避免截到半截曲线。
+async function prepareDashChartsForExport() {
+  for (const id in DASH_CHART_ARGS) {
+    try {
+      const args = DASH_CHART_ARGS[id].slice();
+      const opts = Object.assign({}, args[5] || {}, { noEntrance: true });
+      args[5] = opts;
+      createChart.apply(null, args);
+    } catch (e) {}
+  }
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 60));
+}
+
+async function captureDashVisualPanels() {
+  await prepareDashChartsForExport();
+  const panels = (CUR_DASH.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x));
+  document.body.classList.add("dash-exporting");
+  try {
+    const out = [];
+    for (const p of panels) {
+      const g = dashGridBox(p);
+      const el = document.querySelector(`[data-panel="${CSS.escape ? CSS.escape(p.id) : p.id}"]`)
+        || document.querySelector(`[data-panel="${p.id}"]`);
+      let dataUrl = "";
+      if (el && typeof expCaptureElement === "function") {
+        try { dataUrl = await expCaptureElement(el, 2); } catch (e) { dataUrl = ""; }
+      }
+      if (!dataUrl) {
+        const body = document.getElementById("panelBody_" + p.id);
+        const canvas = body && body.querySelector("canvas");
+        if (canvas && canvas.width) {
+          try { dataUrl = canvas.toDataURL("image/png"); } catch (e) {}
+        }
+      }
+      out.push({
+        id: p.id, title: p.title || "（未命名）", type: p.type || "",
+        x: g.x, y: g.y, w: g.w, h: g.h,
+        dataUrl, empty: dataUrl ? "" : "面板暂无可截取内容"
+      });
+    }
+    return out;
+  } finally {
+    document.body.classList.remove("dash-exporting");
+  }
+}
+
+async function buildDashVisualModel() {
+  const d = CUR_DASH;
+  const grid = $("dashGrid");
+  const m = grid ? dashGridMetrics(grid) : { colW: 48, rowH: 28, gap: 6, cols: 24 };
+  const visualPanels = await captureDashVisualPanels();
+  return {
+    kind: "visual",
+    title: d.name,
+    subtitle: "看板视觉导出 · " + new Date().toLocaleString(),
+    summaryTitle: "看板信息",
+    meta: dashExportMeta(),
+    visualPanels,
+    cols: m.cols || 24,
+    colW: Math.max(28, Math.round(m.colW || 48)),
+    rowH: Math.max(20, Math.round(m.rowH || 28)),
+    gap: Math.max(2, Math.round(m.gap || 6)),
+    scale: 2,
+    orientation: "landscape",
+    footer: "本文件为看板视觉成品截图；数值以导出时刻界面渲染为准。如需原始时序/表格数据请改用 Excel 导出。"
+  };
+}
+
+function dashIsTemporalType(t) {
+  return ["timeseries", "state-timeline", "statetimeline", "heatmap", "histogram", "stat"].includes(t);
+}
+
+function dashFmtTs(sec) {
+  if (sec == null || !Number.isFinite(+sec)) return "";
+  const d = new Date((+sec) * (sec > 1e12 ? 1 : 1000));
+  if (sec > 1e12) return new Date(+sec).toLocaleString();
+  return d.toLocaleString();
+}
+
+// 单面板 → Excel 工作表（原始数据，而非诊断摘要）。
+async function panelDataSheet(p) {
+  if (!p || p.type === "unsupported") return null;
+  const title = (p.title || p.type || "面板").slice(0, 28);
+  if (p.type === "text") {
+    const lines = String(p.text || "").split(/\r?\n/);
+    return { title, columns: ["行", "内容"], rows: lines.map((line, i) => [i + 1, line]) };
+  }
+  if (p.type === "alertlist") {
+    try {
+      let alerts = await fetch(`${API}/alerts`).then(r => r.json());
+      alerts = Array.isArray(alerts) ? alerts : [];
+      const kw = ((p.targets && p.targets[0] && p.targets[0].expr) || "").trim().toLowerCase();
+      if (kw) alerts = alerts.filter(a => JSON.stringify(a).toLowerCase().includes(kw));
+      return {
+        title,
+        columns: ["级别", "消息", "主机", "类型"],
+        rows: alerts.slice(0, 2000).map(a => [a.level || "", a.message || "", a.hostname || "", a.type || ""])
+      };
+    } catch (e) {
+      return { title, columns: ["错误"], rows: [["告警读取失败"]] };
+    }
+  }
+  if (!(p.targets || []).length) {
+    return { title, columns: ["提示"], rows: [["未配置查询"]] };
+  }
+  if (p.type === "logs") {
+    try {
+      const range = dashRange();
+      const r = await fetch(`${API}/dashboards/query-logs`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expr: p.targets[0].expr, from: range.from, to: range.to, limit: 2000, datasource: resolveDS(p), vars: panelVars() })
+      }).then(r => r.json());
+      if (r && r.available === false) return { title, columns: ["提示"], rows: [["日志数据源不可用"]] };
+      const lines = r.lines || [];
+      return {
+        title,
+        columns: ["时间", "日志"],
+        rows: lines.map(l => [fmtLogTs(l.ts_ms), l.line || ""])
+      };
+    } catch (e) {
+      return { title, columns: ["错误"], rows: [["日志查询失败"]] };
+    }
+  }
+
+  const range = dashRange();
+  const temporal = dashIsTemporalType(p.type) || p.type === "timeseries";
+  const collected = []; // { legend, points: [[ts,v]] } or instant { legend, value, labels }
+
+  for (let ti = 0; ti < (p.targets || []).length; ti++) {
+    const target = p.targets[ti];
+    try {
+      if (temporal && p.type !== "histogram") {
+        const r = await fetch(`${API}/dashboards/query`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expr: target.expr, from: range.from, to: range.to, datasource: resolveDS(p), vars: panelVars() })
+        }).then(r => r.json());
+        if (r && r.available === false) {
+          return { title, columns: ["提示"], rows: [["数据源不可用：" + dsLabel(resolveDS(p))]] };
+        }
+        for (const s of (r && r.series) || []) {
+          if (collected.length >= 48) break;
+          const lbl = legendFor(target.legend, s.labels || {}) || ("series_" + (collected.length + 1));
+          collected.push({ legend: lbl, points: s.points || [] });
+        }
+      } else {
+        const r = await fetch(`${API}/dashboards/query-instant`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expr: target.expr, datasource: resolveDS(p), vars: panelVars() })
+        }).then(r => r.json());
+        if (r && r.available === false) {
+          return { title, columns: ["提示"], rows: [["数据源不可用：" + dsLabel(resolveDS(p))]] };
+        }
+        for (const s of (r && r.series) || []) {
+          if (collected.length >= 500) break;
+          const labels = seriesLabels(s);
+          const lbl = legendFor(target.legend, labels) || ("series_" + (collected.length + 1));
+          collected.push({ legend: lbl, value: seriesVal2(s), labels });
+        }
+      }
+    } catch (e) { /* skip target */ }
+  }
+
+  if (!collected.length) return { title, columns: ["提示"], rows: [["当前范围无数据"]] };
+
+  // 即时值：序列 | 原始值 | 格式化值 | 标签
+  if (!collected[0].points) {
+    return {
+      title,
+      columns: ["序列", "原始值", "显示值", "标签"],
+      rows: collected.map(c => [
+        c.legend,
+        Number.isFinite(c.value) ? String(c.value) : "",
+        fmtUnit(c.value, p.unit),
+        Object.entries(c.labels || {}).map(([k, v]) => k + "=" + v).join(", ")
+      ])
+    };
+  }
+
+  // 时序：宽表 时间 | s1 | s2 ...（点数过多时均匀降采样，保证 Excel 可打开）
+  const maxPts = 4000;
+  const tsMap = new Map();
+  collected.forEach((c, i) => {
+    const key = "s" + i;
+    for (const pt of c.points) {
+      const ts = Math.round(pt[0]);
+      let row = tsMap.get(ts);
+      if (!row) { row = { ts }; tsMap.set(ts, row); }
+      row[key] = pt[1];
+    }
+  });
+  let stamps = [...tsMap.keys()].sort((a, b) => a - b);
+  if (stamps.length > maxPts) {
+    const step = stamps.length / maxPts;
+    const kept = [];
+    for (let i = 0; i < maxPts; i++) kept.push(stamps[Math.floor(i * step)]);
+    stamps = kept;
+  }
+  const columns = ["时间", ...collected.map(c => c.legend)];
+  const rows = stamps.map(ts => {
+    const row = tsMap.get(ts) || { ts };
+    return [dashFmtTs(ts), ...collected.map((_, i) => {
+      const v = row["s" + i];
+      return v == null || !Number.isFinite(+v) ? "" : String(v);
+    })];
+  });
+  return { title, columns, rows };
+}
+
+async function buildDashDataModel() {
+  const d = CUR_DASH;
+  const panels = (d.panels || []).slice().sort((a, b) => (a.grid.y - b.grid.y) || (a.grid.x - b.grid.x)).slice(0, 60);
+  const sheets = await dashMapLimit(panels, 4, p => panelDataSheet(p).catch(() => ({
+    title: (p.title || "面板").slice(0, 28), columns: ["错误"], rows: [["读取失败"]]
+  })));
+  const sections = sheets.filter(Boolean);
+  // 目录页
+  sections.unshift({
+    title: "面板目录",
+    columns: ["组件", "类型", "数据源", "单位", "查询"],
+    rows: panels.map(p => [
+      p.title || "（未命名）", p.type || "", dsLabel(resolveDS(p)), p.unit || "",
+      (p.targets || []).map(t => t.expr).join(" | ") || ""
+    ])
+  });
+  return {
+    title: "看板数据 · " + d.name,
+    subtitle: "面板原始数据导出 · " + new Date().toLocaleString(),
+    summaryTitle: "导出信息",
+    meta: dashExportMeta(),
+    sections,
+    orientation: "landscape",
+    footer: "本文件为查询原始数据；看板视觉布局请使用 PNG / PDF / Word 导出。"
+  };
+}
+
+function buildDashTemplatePayload(d) {
+  if (!d) return null;
+  const panels = (d.panels || []).map(p => ({
+    id: p.id, title: p.title, type: p.type, unit: p.unit,
+    datasource: p.datasource || "", text: p.text || "",
+    min: p.min, max: p.max, decimals: p.decimals,
+    grid: p.grid || {}, targets: (p.targets || []).map(t => ({ expr: t.expr, legend: t.legend || "", ref_id: t.ref_id || "" })),
+    raw_type: p.raw_type || ""
+  }));
+  const a = dashAppearance(d);
+  // 模板只导出配色与透明度；图片 URL 跨环境无效，导入端也会清空。
+  const appearance = {};
+  if (a.background_color) appearance.background_color = a.background_color;
+  if (a.background_fit && a.background_fit !== "cover") appearance.background_fit = a.background_fit;
+  if (a.panel_opacity) appearance.panel_opacity = a.panel_opacity;
+  return {
+    format: "aiops",
+    version: 1,
+    exported_at: new Date().toISOString(),
+    dashboard: {
+      name: d.name,
+      description: d.description || "",
+      tags: d.tags || [],
+      datasource: d.datasource || "",
+      appearance,
+      vars: (d.vars || []).map(v => ({
+        name: v.name, label: v.label || "", type: v.type || "query",
+        query: v.query || "", options: v.options || [], multi: !!v.multi, include_all: !!v.include_all
+      })),
+      panels
+    }
+  };
+}
+function downloadDashTemplate(d) {
+  const payload = buildDashTemplatePayload(d);
+  if (!payload) { toast("无可导出的看板", "err"); return; }
+  const name = (typeof expSafeName === "function" ? expSafeName(d.name) : String(d.name || "dashboard").replace(/\s+/g, "_")) + "_template";
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  if (typeof expDownload === "function") expDownload(blob, name + ".json");
+  else {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  toast("模板已导出", "ok");
+}
+async function exportDashTemplateById(id) {
+  try {
+    const d = await fetch(`${API}/dashboards/${encodeURIComponent(id)}`).then(r => r.json());
+    if (!d || !d.id) { toast("读取看板失败", "err"); return; }
+    downloadDashTemplate(d);
+  } catch (e) { toast("导出模板失败：" + e, "err"); }
+}
+
+function syncDashExportUI() {
+  const fmt = ($("dashExportFormat") && $("dashExportFormat").value) || "png";
+  const liveWrap = $("dashExportLiveWrap");
+  const hint = $("dashExportHint");
+  const run = $("dashExportRun");
+  const isReport = fmt === "markdown" || fmt === "pdf-report";
+  if (liveWrap) liveWrap.hidden = !isReport;
+  if (run) {
+    run.textContent = fmt === "excel" ? "导出数据"
+      : (fmt === "template" ? "导出模板"
+        : (isReport ? "生成报告" : "导出视觉"));
+  }
+  if (!hint) return;
+  const tips = {
+    png: "导出整板 PNG：按当前布局拼接各面板截图（图表为最终渲染效果，非数据表）。",
+    pdf: "导出视觉 PDF：打开打印预览，页面为看板布局与图表截图；请选择「另存为 PDF」。",
+    word: "导出 Word：每页/每段嵌入面板截图，保留看板视觉成品。",
+    excel: "导出 Excel：每个面板一个工作表，写入时序点或即时值等原始数据（非截图）。",
+    template: "导出 AIOps JSON 模板：可跨环境通过「导入模板」完整回灌（含变量、布局、查询）。",
+    markdown: "导出 Markdown 诊断报告：配置说明 + 可选实时诊断摘要（文本，非视觉）。",
+    "pdf-report": "导出诊断报告 PDF：封面/配置/快照表格（非看板截图）。需要视觉成品请选「PDF · 看板视觉」。"
+  };
+  hint.textContent = tips[fmt] || tips.png;
+}
+safeAddEventListener("dashExportFormat", "change", syncDashExportUI);
+
 safeAddEventListener("dashExportRun", "click", async () => {
   if (!CUR_DASH) return;
   const fmt = $("dashExportFormat").value;
-  const includeLive = $("dashExportLive").checked;
-  // PDF 的窗口必须在用户点击事件内打开，异步抓取快照后再写入，避免被浏览器拦截。
-  const popup = fmt === "pdf" ? window.open("", "_blank") : null;
-  if (fmt === "pdf" && !popup) { toast("浏览器拦截了 PDF 窗口，请允许弹窗后重试", "warn"); return; }
+  if (fmt === "template") {
+    downloadDashTemplate(CUR_DASH);
+    closeMask($("dashExportMask"));
+    return;
+  }
+  const includeLive = $("dashExportLive") && $("dashExportLive").checked;
+  const isVisual = fmt === "png" || fmt === "pdf" || fmt === "word";
+  const isData = fmt === "excel";
+  const isReport = fmt === "markdown" || fmt === "pdf-report";
+  // PDF 窗口必须在用户手势内打开，避免异步截图后被拦截。
+  const needsPopup = fmt === "pdf" || fmt === "pdf-report";
+  const popup = needsPopup ? window.open("", "_blank") : null;
+  if (needsPopup && !popup) { toast("浏览器拦截了 PDF 窗口，请允许弹窗后重试", "warn"); return; }
   await withLoading("dashExportRun", async () => {
     try {
-      let rows = null;
-      if (includeLive) {
-        const panels = (CUR_DASH.panels || []).filter(p => p.type !== "text" && p.type !== "unsupported").slice(0, 40);
-        const digests = await dashMapLimit(panels, 6, p => panelDigest(p).catch(() => "读取失败"));
-        rows = panels.map((p, i) => ({ title: p.title || "（未命名）", digest: digests[i] || "无数据" }));
+      let model;
+      let baseName = CUR_DASH.name;
+      if (isVisual) {
+        toast("正在截取看板视觉…", "ok");
+        model = await buildDashVisualModel();
+        baseName = "看板_" + CUR_DASH.name;
+      } else if (isData) {
+        toast("正在拉取面板数据…", "ok");
+        model = await buildDashDataModel();
+        baseName = "看板数据_" + CUR_DASH.name;
+      } else {
+        let rows = null;
+        if (includeLive) {
+          const panels = (CUR_DASH.panels || []).filter(p => p.type !== "text" && p.type !== "unsupported").slice(0, 40);
+          const digests = await dashMapLimit(panels, 6, p => panelDigest(p).catch(() => "读取失败"));
+          rows = panels.map((p, i) => ({ title: p.title || "（未命名）", digest: digests[i] || "无数据" }));
+        }
+        model = dashboardReportModel(rows);
+        baseName = "诊断报告_" + CUR_DASH.name;
       }
-      const model = dashboardReportModel(rows);
       if (popup) model._printWindow = popup;
-      const ok = exportModel(model, fmt, "诊断报告_" + CUR_DASH.name);
+      const ok = await exportModel(model, fmt, baseName);
       if (ok === false) throw new Error("导出窗口不可用");
       closeMask($("dashExportMask"));
-      toast("报告已生成", "ok");
+      toast(isData ? "数据已导出" : (isReport ? "报告已生成" : "视觉导出完成"), "ok");
     } catch (e) {
       if (popup) try { popup.close(); } catch (_) {}
       toast("导出失败：" + e, "err");
@@ -1728,6 +2857,7 @@ safeAddEventListener("dashList", "click", e => {
     const id = btn.dataset.id, act = btn.dataset.dact;
     if (act === "open") openDashboard(id);
     else if (act === "meta") { const d = DASH_LIST.find(x => x.id === id); openDashMeta(d); }
+    else if (act === "tpl") exportDashTemplateById(id);
     else if (act === "del") delDashboard(id);
     return;
   }
