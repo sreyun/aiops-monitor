@@ -143,6 +143,11 @@ func installAgentService(exePath, cfgPath string) error {
 	// until the next reboot — the exact "重启/崩溃后掉线" symptom.
 	setServiceRecovery(svc)
 
+	// Allow software Ctrl+Alt+Del (SendSAS) from the service / desktop worker.
+	if err := ensureSoftwareSASPolicy(); err != nil {
+		slog.Warn("启用 SoftwareSASGeneration 失败（锁屏 Ctrl+Alt+Del 可能无效）", "err", err)
+	}
+
 	// Start it now.
 	if r, _, e3 := procStartServiceW.Call(svc, 0, 0); r == 0 {
 		// ERROR_SERVICE_ALREADY_RUNNING = 1056 is fine.
@@ -287,6 +292,7 @@ func serviceMain(argc uintptr, argv uintptr) uintptr {
 	svcAgent.reconcileIdentity()
 	go svcAgent.Run(ctx)
 	go svcRunSupervisor(ctx.Done())
+	go serveSASPipe(ctx.Done())
 
 	setSvcStatus(serviceRunning, serviceAcceptStop|serviceAcceptShutdown|serviceAcceptSessionChange, 0)
 	slog.Info("Agent 服务已启动(LocalSystem)")

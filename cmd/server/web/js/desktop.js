@@ -1075,7 +1075,12 @@ function applyDeskInputMeta(meta) {
   }
   const cadBtn = $("deskCadBtn");
   if (cadBtn) {
-    const cadOK = !DESK_META.viewOnly && DESK_META.features && DESK_META.features.cad;
+    // On Winlogon always enable CAD — older agents may omit features.cad.
+    const cadOK = !DESK_META.viewOnly && (
+      (DESK_META.features && DESK_META.features.cad) ||
+      deskOnSecureDesktop() ||
+      String(DESK_META.os || "").toLowerCase() === "windows"
+    );
     cadBtn.disabled = !cadOK;
     cadBtn.title = cadOK
       ? I18N.t("desktop.cad", "Ctrl+Alt+Del")
@@ -1117,6 +1122,11 @@ function deskSendAction(obj) {
     return false;
   }
   const body = { ...obj, screen_w: DESK_META.w || 0, screen_h: DESK_META.h || 0 };
+  // Immediate feedback — do not wait for agent ack (CAD used to look like a no-op).
+  const act = String((obj && obj.action) || "").toLowerCase();
+  if (act === "cad") toast(I18N.t("desktop.cad_sending", "正在发送 Ctrl+Alt+Del…"), "ok");
+  else if (act === "wake") toast(I18N.t("desktop.wake_sending", "正在唤醒…"), "ok");
+  else if (act === "chord") toast(I18N.t("desktop.chord_sending", "正在发送快捷键…"), "ok");
   deskSendJSON("A", body);
   return true;
 }
@@ -1162,6 +1172,12 @@ function onDesktopUIClick(e) {
   const t = e.target;
   const actBtn = t.closest("[data-desk-act]");
   if (actBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (actBtn.disabled) {
+      toast(actBtn.title || I18N.t("desktop.cad_unsupported", "当前不支持该操作"), "err");
+      return;
+    }
     const act = actBtn.getAttribute("data-desk-act");
     if (act === "cad") deskSendAction({ action: "cad" });
     else if (act === "wake") deskSendAction({ action: "wake" });
