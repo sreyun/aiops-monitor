@@ -8,7 +8,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-v0.16.8-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v0.18.2-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#open-source--community)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -18,7 +18,9 @@
 
 </div>
 
-> **Single-binary server + zero-dependency agent**: one command stands up the full stack of *observability · alert governance · automated remediation · AI diagnosis · SRE closed-loop · Android console*. 100% open source, self-hosted, data fully owned — no SaaS dependency, no telemetry uplink.
+> **Single-binary server + zero-dependency agent**: one command stands up *observability · alert governance · automated remediation · AI diagnosis · SRE closed-loop · remote desktop · SQL toolkit · security center · Android console*. 100% open source, self-hosted, data fully owned — no SaaS dependency, no telemetry uplink.
+
+**Current release [v0.18.2](https://github.com/sreyun/aiops-monitor/releases/tag/v0.18.2)** · Mirrors: GitHub / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -26,13 +28,26 @@
 
 Monitoring tools keep piling up, yet incidents get harder to diagnose: metrics in one system, logs in another, alert storms flooding the inbox, root cause found by hand. Most commercial offerings meter by host count or feature module — and keep your data in their cloud.
 
-AIOps Monitor takes a different path — **consolidating monitoring, alerting, automation, AI diagnosis, the SRE workflow and a mobile console into one self-hosted platform**:
+AIOps Monitor takes a different path — **consolidating monitoring, alerting, automation, AI diagnosis, the SRE workflow, remote control, and a mobile console into one self-hosted platform**:
 
-- **Less is more**: one Go server binary + one dependency-free agent covers the common ground of Zabbix / Prometheus / Grafana / Alertmanager / runbook automation / terminal gateway — five fewer components to maintain.
+- **Less is more**: one Go server binary + one dependency-free agent covers the common ground of Zabbix / Prometheus / Grafana / Alertmanager / runbook automation / terminal gateway / remote desktop — five fewer components to maintain.
 - **Deploy in one command**: `docker compose up -d` brings up the full stack; agent installs in one click with native cross-platform collection.
-- **Data ownership**: relational data lands in PostgreSQL, time-series in VictoriaMetrics — **both open-source databases you control**, exportable, auditable, compliant.
+- **Data ownership**: relational data lands in PostgreSQL, time-series in VictoriaMetrics — **both open-source databases you control**.
 - **AI without lock-in**: AI diagnosis is a *pluggable* value-add — wire in any OpenAI-compatible model for "smart mode", or fall back to built-in heuristic diagnosis with **zero external dependency**.
-- **Mobile first**: a companion enterprise-grade native Android console lets you check metrics, triage alerts, open a terminal, and run the SRE loop from your phone.
+- **Mobile first**: a companion enterprise-grade native Android console (plus HarmonyOS NEXT under `harmony/`).
+
+---
+
+## What's New (v0.17 → v0.18)
+
+| Release | Highlights |
+|---|---|
+| **v0.18.2** | Windows lock-screen **Ctrl+Alt+Del**: Session-0 service injects SAS via named pipe; auto-enables `SoftwareSASGeneration` |
+| **v0.18.1** | Winlogon / logoff capture fixes (PrintWindow + session attach); **Clear** quality preset defaults to **15fps** |
+| **v0.18.0** | Controllable security loop (playbook approval / SQL change gate / security overview); resource search; host inspect; lock-screen desktop toolbar |
+| **v0.17.x** | Hyper-V / containers / Kubernetes resource layer and cross-layer AI localization |
+
+See [Releases](https://github.com/sreyun/aiops-monitor/releases) for full notes.
 
 ---
 
@@ -40,110 +55,113 @@ AIOps Monitor takes a different path — **consolidating monitoring, alerting, a
 
 ### 1. Full-Stack Observability
 
-- **Four-platform native collection**: Linux / Windows / macOS / Kylin, collected by a pure-Go standard-library agent with **zero third-party dependencies**; covers GPU (NVIDIA / AMD / Apple), CPU, memory, SWAP, disk, network, TCP connections, load, processes, uptime.
-- **Active probes**: HTTP (status code / latency / TLS certificate expiry), TCP, Ping (loss / RTT), UDP, process liveness, OpenAPI business probing, distributed multi-point probing.
-- **Hardware inspection (Redfish)**: standard Redfish/DMTF gathering of CPU / memory / disk / RAID / NIC / fan / PSU / temperature, with deep Huawei iBMC compatibility — no agent needed on the inspected device.
-- **Traffic analysis**: NetFlow v5/v9/IPFIX 5-tuple collection with TOP-N ranking and flow heatmaps.
-- **Storage collection**: Huawei OceanStor pools / LUNs / controllers / alerts onboarding.
-- **Interactive charts**: pure Canvas with hover crosshair, box-zoom, double-click reset, unified 1h–30d time range.
-- **Log aggregation**: agent tail-collects logs → server-side full-text search by host / level / keyword / time, AES-256-GCM encrypted in transit.
+- **Four-platform native collection**: Linux / Windows / macOS / Kylin; pure-Go standard-library agent with **zero third-party dependencies**; GPU (NVIDIA / AMD / Apple), CPU, memory, SWAP, disk, network, TCP, load, processes, uptime.
+- **Active probes**: HTTP / TCP / Ping / UDP / process / OpenAPI / multi-point probing.
+- **Hardware inspection (Redfish)**: DMTF Redfish with deep Huawei iBMC support — no agent on the BMC-managed host.
+- **Traffic analysis**: NetFlow v5/v9/IPFIX TOP-N and heatmaps.
+- **Storage**: Huawei OceanStor pools / LUNs / controllers / alerts.
+- **Interactive charts**: Canvas hover / box-zoom / 1h–30d ranges.
+- **Log aggregation**: agent tail → encrypted (AES-256-GCM) full-text search.
+- **Deep host inspect (`host_inspect`)**: OS / kernel / NICs / disks / services; playbook steps can persist results; Windows Chinese locale encoding fixes.
 
-### 2. Alert Governance
+### 2. Resource Closed Loop
 
-A complete alert lifecycle that suppresses storming at the source:
+- **Hyper-V**: auto-detect on Windows hosts; VM inventory & resource summary.
+- **Containers**: auto-enable when Docker / Podman CLI is present.
+- **Kubernetes**: nodes / pods / deployments / events with cross-layer search.
+- **Global resource search**: hosts / VMs / containers / K8s objects in one place.
+- **Topology**: edge CRUD + **auto-discover** (`POST /api/v1/topology/auto-discover`) for blast-radius / RCA.
 
-- **Three preset tiers**: Conservative / Standard / Relaxed, across 27 groups of warn/crit thresholds spanning hosts, probes, API, scheduled tasks and port forwarding.
-- **The three governance tools**: **Silence** (time window / weekday) → **Inhibit** (a root-cause alert suppresses its derivatives) → **Route** (split by severity · host to channels) — critical alerts to phone, warnings to Feishu only.
-- **Multi-channel delivery**: Feishu / DingTalk webhooks, email SMTP, plus **multi-cloud SMS + voice call (TTS)** on Alibaba Cloud / Huawei Cloud / Tencent Cloud; one fire + one resolve, no spam.
-- **Dedup & debounce**: pushed only on first trigger and on recovery.
+### 3. Alert Governance
 
-### 3. Automation & Self-Healing
+- **Three preset tiers**: Conservative / Standard / Relaxed across host, probe, API, playbook, and forwarding dimensions.
+- **Silence → Inhibit → Route**: criticals to phone, warnings to IM only.
+- **Multi-channel**: Feishu / DingTalk / SMTP / multi-cloud SMS + TTS voice; one fire + one resolve.
+- **Security finding lifecycle**: host / web scan findings are trackable; scans support watchdog + cancel.
 
-- **Runbook automation**: multi-step shell orchestration, batched parallel execution by "all / category / OS / host", with live output + history reports.
-- **SRE incident loop**: alerts / SLO / manual incidents converge → timeline → acknowledge / resolve / escalate to ticket, with **automatic dedup and open/close**.
-- **Remediation gate**: alerts auto-trigger runbook fixes behind a **human-approval gate + guardrails** — risky actions never auto-run.
-- **SLO / error budget**: multi-window multi-burn-rate evaluation of SLO breaches.
-- **Ticketing closed-loop**: escalate from incidents; assign **real directory users** via `GET /api/v1/directory/users` (viewer+); attach images/files on create & comments (shared with incident comments); Android SRE Hub stays in sync.
+### 4. Automation & Self-Healing
 
-### 4. AI Diagnosis
+- **Runbooks**: shell + built-in modules, preflight, concurrency, when/vars, retry, reverse rollback, live output + audit.
+- **High-risk gate**: scheduled high-risk runs enter `pending_approval`; results support `partial` + failure reasons.
+- **SRE incident loop**: alerts / SLO / manual → timeline → ack / resolve / escalate; **on-call** + escalation.
+- **Change management**: freeze windows; RCA correlates recent changes; unapproved remediation blocked in freeze.
+- **Remediation gate**: human approval + command allowlists / dangerous-command blocks + guardrails.
+- **SLO / error budget**: multi-window multi-burn-rate.
+- **Ticketing**: escalate from incidents; assign **real directory users**; image/file attachments on create & comments.
 
-- **Scheduled / on-demand health inspection**: synthesizes online / offline hosts, active alerts, SLO breaches and recent error logs into a health verdict.
-- **Incident root-cause**: critical incidents auto-trigger AI analysis on the timeline; topology RCA + streaming follow-ups.
-- **RAG vector learning loop**: pgvector-backed memory/skills with **👍 / 👎 feedback reranking**; verified resolutions can promote into reusable Skills.
-- **WeKnora external document RAG**: manuals / Wiki / PDF stay in [WeKnora](https://github.com/Tencent/WeKnora); configure **AI Settings → RAG → WeKnora** (API URL + API Key, optional KB IDs) for the `search_knowledge` tool, with automatic fallback to local memory/skills when unavailable.
-- **AI assistant (multimodal + voice)**: SSE streaming + Function Calling; Web supports image/file/URL attach, **speech input & TTS read-back**; Android Copilot/diagnosis can send images and parsed files.
-- **Pluggable, never binding**: any OpenAI-compatible LLM enables smart mode; **without an LLM it falls back to built-in heuristic diagnosis**.
-- **Decoupled embedding model**: chat / embed / optional rerank configured independently, with connectivity self-tests and AI call stats.
+### 5. AI Diagnosis
 
-### 5. Security & Compliance
+- Scheduled / on-demand health inspection; critical incidents auto-diagnose on the timeline.
+- Topology RCA + streaming follow-ups.
+- **RAG learning loop** (pgvector) with 👍 / 👎 feedback rerank; verified resolutions promote to Skills.
+- **WeKnora** external document RAG with automatic local fallback.
+- Multimodal assistant (SSE + tools); Web speech I/O; Android Copilot attachments.
+- Pluggable LLM; heuristic fallback when none configured.
 
-- **Strong session auth**: session cookies on **PBKDF2-HMAC-SHA256 (600k iterations)**; `HttpOnly` + `SameSite`, `Secure` under HTTPS.
-- **RBAC route matrix**: admin / operator / viewer roles with route-level interception.
-- **Optional TOTP MFA**: RFC 6238, single-use to prevent replay; Google Authenticator compatible.
-- **Terminal second-factor**: re-auth before sensitive terminal sessions, rate-limited.
-- **Dual anti-bruteforce**: IP + account sliding-window rate limits.
-- **Machine fingerprint anti-clone**: `X-Agent-Fingerprint` binds the device; cloned images auto-regenerate host_id.
-- **Static config encryption**: MFA / SMTP / AI / webhook / relay secrets persisted with **AES-256-GCM** derived from `AIOPS_SECRET_KEY`.
-- **Egress hardening**: AI / webhook outbound requests guarded by SSRF protection (denies cloud metadata & link-local by default; optional `AIOPS_SSRF_STRICT` denies private networks).
-- **Cross-platform LLM content audit**: native AF_PACKET on Linux and optional TShark on Windows/macOS (Npcap/libpcap/BPF), with IPv4/IPv6 DNS/SNI metadata, bounded cleartext HTTP reassembly, endpoint redaction/metadata-only modes, allowlists, hashing, and rate limits. HTTPS payload audit is intentionally handled after TLS termination at an LLM Gateway/SDK integration point.
-- **Optional TLS**: `AIOPS_TLS_CERT/KEY` enables HTTPS.
+### 6. Remote Desktop & Terminal
 
-### 6. Android Console
+- **Remote terminal** via agent reverse tunnel (no inbound ports) + session replay.
+- **Web remote desktop**:
+  - JPEG / H.264 (when available); multi-monitor; quality presets (Fast / Balanced / **Clear @ 15fps**).
+  - File transfer (~100MB via agent channel) and clipboard sync.
+  - **Windows lock / logoff**: with **Windows service + desktop worker**, follows Winlogon; toolbar: Ctrl+Alt+Del / Wake / Unlock credentials / Esc / Win+L / Task Manager.
+  - Ctrl+Alt+Del is injected by the **Session-0 service over a named pipe** (Agent ≥ v0.18.2 + `--install-service`).
+- **Port forward / `/proxy`**: HTTP reverse proxy with WebSocket upgrade; jump-host to other LAN services.
 
-A companion **20+ screen enterprise-grade native Android console** (Kotlin + Jetpack Compose, minSdk 26 / targetSdk 34), not a WebView wrapper. Core screens:
+### 7. SQL Toolkit
 
-- **SRE cockpit overview**: key metrics + host / alert summary, dark & light themes.
-- **Host detail**: native Canvas time-series (tap / pan / pinch-zoom), disk volumes / GPU device detail.
-- **Alerts**: severity / status dual-dimension filtering + one-tap ack / silence + AI diagnosis.
-- **Enterprise VT terminal**: VT100 / UTF-8 decode, exponential-backoff reconnect, soft-keyboard avoidance, no rebuild on rotation.
-- **SRE Hub**: incident loop / streaming AI diagnosis follow-up / runbooks / SLO / remediation approval / tickets / **on-call schedules & escalation** / **change windows & correlation**.
-- **Probe monitoring**, **AI assistant (SSE streaming)**, **hardware / NetFlow / Hyper-V**, **terminal session replay**, **message center**, **duplicate-host cleanup**, **alert governance**, **terminal password**, **environment switch**, and more.
-- Auth: login `POST /api/v1/login` → cookie, `DataStore` dual-track persistence; login MFA OTP dialog, terminal second-password UI; self-hosted `/ws/push` long-connection foreground service + system notifications.
+- Multi-datasource connections, schema / history, **EXPLAIN diff**.
+- **High-risk SQL change ticket gate** aligned with the SRE change system.
 
-### 7. Deployment Resilience
+### 8. Security & Compliance
 
-- **Two mandatory stores**: PostgreSQL + VictoriaMetrics — **missing either refuses to start**, guaranteeing data integrity by design.
-- **Versioned schema migrations** (`schema_migrations`) plus admin PG backup/restore UI; retention cleanup and remediation command allowlists for enterprise ops.
-- **Gateway relay**: a single internet-facing machine proxies all requests, transparently穿透 binary / reporting / terminal; `X-Relay-Secret` prevents Host injection.
-- **Multi-server fan-out**: agent `servers[]` collects once and broadcasts to all, with independent auth / retry / connection pools; **circuit breaker + backoff + gzip degradation** for resilience.
-- **Install-token rotation + 7-day grace**: rotating tokens never disrupt already-installed agents.
-- **Remote terminal + port forwarding**: reverse-tunnel terminal with no inbound ports; `/proxy` stateless HTTP reverse proxy with WebSocket upgrade.
-- **One-click install & autostart**: panel-generated tokenized command downloads + configures + registers systemd / launchd / Task Scheduler keepalive.
-- **Cross-platform multi-arch**: amd64 + arm64 prebuilt images, one-line Docker pull.
+- Strong session cookies (**PBKDF2-HMAC-SHA256, 600k**); RBAC (admin / operator / viewer); optional TOTP MFA.
+- Terminal / desktop second-factor; IP + account anti-bruteforce; machine fingerprint anti-clone.
+- **Security center**: overview + host / web security tabs; finding lifecycle.
+- Cross-platform LLM content audit (AF_PACKET / optional TShark); SSRF egress guards; `AIOPS_SECRET_KEY` AES-GCM at rest; optional TLS.
+
+### 9. Android Console
+
+20+ native Compose screens: SRE cockpit, host charts, alerts, VT terminal, SRE Hub (incidents / AI / runbooks / SLO / tickets / on-call / changes), probes, AI assistant, hardware / NetFlow / Hyper-V, replay, message center, and more.
+
+### 10. Web Console UX
+
+Unified design tokens; global AI entry; Web Speech where supported; admin **Data & Backup** (retention, allowlists, PG backup/restore).
+
+### 11. Deployment Resilience
+
+Mandatory PostgreSQL + VictoriaMetrics; versioned migrations; gateway relay; multi-server fan-out with circuit breaker; install-token rotation + 7-day grace; one-click install & autostart (Windows service recommended for lock-screen desktop); amd64 + arm64 images.
 
 ---
 
 ## Architecture Overview
 
 ```
-┌──────────── Collection端 (zero-dep Go Agent) ────────────┐
-│ Native collection → metrics / GPU / encrypted logs        │
-│ Probes: HTTP/TCP/Ping/UDP/process/OpenAPI/multi-point     │
-│ Redfish HW · NetFlow · OceanStor · remote terminal        │
-│ Fingerprint auth · Relay · multi-server fan-out          │
-└───────┬───────────────────────────┬──────────────────────┘
-        │ report / probe / terminal / forward   │ fan-out (servers[])
-        ▼                                       ▼
-┌──────────────── Server (single Go binary) ────────────────┐
-│ Alert engine → governance(silence/inhibit/route) → incidents│
-│ → remediation(runbook+approval gate+guardrails) → SLO → tickets│
-│ AI diagnosis + RAG feedback rerank loop (pgvector)        │
-│ Remote terminal · port forward /proxy · message center · RBAC/MFA │
-│                                                            │
-│  ┌────────── Two mandatory stores (missing either = no boot) ─┐│
-│  │ PostgreSQL: relations/audit/incidents/tickets/JSONB/AI/sessions│
-│  │ VictoriaMetrics: all time-series metrics                ││
-│  └────────────────────────────────────────────────────────┘ │
-└───────────────────────┬───────────────────────────────────┘
-                         │ RESTful API + WebSocket (/ws/push)
-                         ▼
-            ┌──────── Android enterprise console ────────┐
-            │ Kotlin + Jetpack Compose (20+ screens)     │
-            │ overview/host/alerts/terminal/SRE Hub/AI   │
-            └────────────────────────────────────────────┘
+┌──────────────── Collection (zero-dep Go Agent) ────────────────┐
+│ Native metrics / GPU / encrypted logs · probes · Redfish       │
+│ NetFlow · OceanStor · Hyper-V / containers                     │
+│ Terminal · desktop worker (Windows service follows Winlogon)   │
+│ Fingerprint · Relay · multi-server fan-out                     │
+└───────┬────────────────────────────────────┬───────────────────┘
+        │ report / probe / terminal / desktop │ servers[] fan-out
+        ▼                                    ▼
+┌──────────────────── Server (single Go binary) ─────────────────┐
+│ Alerts → governance → incidents → playbook approval → SLO → tickets │
+│ AI + RAG (pgvector) · SQL toolkit · security center            │
+│ Desktop relay · topology/RCA · resource search · RBAC / MFA    │
+│  ┌──── Two mandatory stores (missing either = no boot) ────┐   │
+│  │ PostgreSQL · VictoriaMetrics                            │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└──────────────────────────┬────────────────────────────────────┘
+                           │ REST + WebSocket
+                           ▼
+              ┌──── Web / Android / HarmonyOS ────┐
+              │ overview · hosts · alerts · desk   │
+              │ SRE · AI · SQL · security · K8s    │
+              └────────────────────────────────────┘
 ```
 
-**Division of labor**: high-frequency, performance-sensitive collection is pure Go (single binary, zero deps); external collectors (Redfish / NetFlow / OceanStor) speak standard protocols, polled remotely by an agent that can reach the target — the inspected device needs no agent.
+**Division of labor**: high-frequency collection is pure Go; protocol collectors are polled remotely; Windows lock-screen desktop requires **LocalSystem service + in-session desktop worker**.
 
 ---
 
@@ -151,25 +169,16 @@ A companion **20+ screen enterprise-grade native Android console** (Kotlin + Jet
 
 ### Docker Compose (production / development)
 
-Two compose files ship in the repo:
-
 | File | Use case | Notes |
 |---|---|---|
-| `docker-compose.yml` | **Production (default)** | Pulls prebuilt Huawei SWR images; Agent optional via `--profile agent` |
-| `docker-compose.dev.yml` | **Development overlay** | Local build via `docker/Dockerfile.dev`; PG/VM from Docker Hub; Agent on by default |
+| `docker-compose.yml` | **Production (default)** | Prebuilt Huawei SWR images; Agent optional via `--profile agent` |
+| `docker-compose.dev.yml` | **Development overlay** | Local `docker/Dockerfile.dev`; PG/VM from Docker Hub; Agent on by default |
 
 **Production (recommended)**
 
 ```bash
-# One-shot: download compose + write strong random secrets to .env, then start
 bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh)
 docker compose up -d
-
-# Or manually:
-# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/docker-compose.yml
-# curl -O https://raw.githubusercontent.com/sreyun/aiops-monitor/master/.env.example
-# cp .env.example .env   # change POSTGRES_PASSWORD / AIOPS_SECRET_KEY
-# docker compose up -d
 ```
 
 **Development (from a source checkout)**
@@ -177,27 +186,32 @@ docker compose up -d
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-# Optional: set COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml in .env, then docker compose up -d --build
 ```
 
-Open `http://localhost:8529`. Default credentials `admin / admin` — **first login forces security initialization (must change username + password)**; enabling MFA afterward is recommended.
+Open `http://localhost:8529`. Default `admin / admin` — **first login forces security initialization**; enable MFA afterward.
 
-> `secure-compose.sh` writes a 20-char PG password and a 50-char `AIOPS_SECRET_KEY` into `.env` (do not commit it). If SWR pulls fail locally, point `POSTGRES_IMAGE` / `VM_IMAGE` at Docker Hub in `.env`, or use the development overlay.
+> If SWR pulls fail, point `POSTGRES_IMAGE` / `VM_IMAGE` at Docker Hub in `.env`, or use the development overlay.
 
-### Install the Agent (monitored host)
-
-Panel top-right "Install Agent" → pick OS → copy the command to the target host:
+### Install the Agent
 
 ```bash
 # Linux (root)
 curl -fsSL "http://<server>:8529/install.sh?token=<TOKEN>" | sudo sh
-# Windows (admin PowerShell)
+
+# Windows (admin PowerShell) — install as a service for lock-screen desktop
 irm "http://<server>:8529/install.ps1?token=<TOKEN>" | iex
+# After upgrades:
+# aiops-agent --install-service
 ```
 
-> The server **mandatorily depends** on both PostgreSQL and VictoriaMetrics; missing either refuses to start. More deployment options (binary run / self-build / autostart / cross-network Nginx reverse proxy / gateway relay) are in [INSTALL.md](INSTALL.md).
+> Server **requires** both PostgreSQL and VictoriaMetrics. See [INSTALL.md](INSTALL.md) and [`config.example.yaml`](config.example.yaml).
 
-> For capability boundaries, cross-platform packet-capture prerequisites, structured HTTPS/LLM ingestion, and production policy, see the [Content Audit, Agent Installation, and Runbook Expert Guide](CONTENT_AUDIT_AND_PLAYBOOK_EXPERT_GUIDE.md).
+### Windows remote desktop checklist
+
+1. Agent must be installed as a **Windows service** (LocalSystem).  
+2. Upgrade to **≥ v0.18.2** and run `aiops-agent --install-service` for SAS pipe + `SoftwareSASGeneration`.  
+3. In the Web desktop: **Ctrl+Alt+Del** → **Unlock** (credentials stay in memory; audits omit plaintext).  
+4. If Application Control blocks install, allowlist the binary first.
 
 ---
 
@@ -205,66 +219,79 @@ irm "http://<server>:8529/install.ps1?token=<TOKEN>" | iex
 
 | Scenario | How AIOps Monitor helps |
 |---|---|
-| **Unified small/mid-size DC monitoring** | One server governs hundreds of Linux/Windows/macOS/Kylin hosts; native CPU/mem/disk/GPU collection; three preset tiers out of the box |
-| **Alert storm governance** | Silence + inhibit + route to mute non-critical alerts at night, suppress derivatives of an offline host, and push criticals to phone while recoveries still fire |
-| **Business availability SLA** | API monitoring black-box probes core endpoints; P95 latency / availability / throughput feed multi-window burn-rate SLO evaluation |
-| **Failure self-healing** | Alerts trigger runbook fixes; high-risk actions stop at the human-approval gate; the whole process is audited |
-| **Smart root-cause** | With an LLM, incidents auto-diagnose; the RAG vector store accumulates similar historical cases; 👍/👎 feedback makes diagnosis sharper over time |
-| **On-call from outside** | Open the native Android console to view overview, triage alerts, open a VT terminal, and run the SRE incident loop |
-| **Hardware asset compliance** | Redfish inspection + OceanStor collection in one hardware-asset panel, with change drift detection and export |
-| **Cross-segment / weak-network collection** | Gateway relay single-point穿透; multi-server fan-out + circuit breaker + gzip degradation keep data flowing under weak networks |
+| Unified DC monitoring | Hundreds of hosts, native metrics, three threshold presets |
+| Alert storm governance | Silence + inhibit + route |
+| SLA / availability | API probes + multi-window burn-rate SLO |
+| Self-healing | Runbooks behind approval gates |
+| Lock-screen rescue | Windows service agent + Web desktop CAD / unlock |
+| Smart RCA | LLM + topology + RAG feedback learning |
+| Ticket evidence loop | Escalate → assign real users → attach proof |
+| Resource + change | Hyper-V / containers / K8s + SQL change gate |
+| Security inspection | Security center findings lifecycle |
+| On-call from outside | Native Android console |
+| Cross-segment / weak net | Relay + multi-server fan-out + circuit breaker |
 
 ---
 
 ## Enterprise Services
 
-The AIOps Monitor core is 100% open source (MIT) and freely self-hostable. For enterprise-grade needs, services built on top of the open-source edition include:
+The core is 100% MIT open source. Optional services on top of the OSS edition:
 
-- **Private deployment consulting**: large-scale (10k+ hosts) sharding, external VictoriaMetrics, retention tuning.
-- **Custom integrations**: deep WeCom / DingTalk / Feishu, CMDB, ticketing systems, internal LLM gateways.
-- **Security & compliance hardening**: SSO / LDAP, audit retention, baseline recommendations for graded protection.
-- **Android distribution channel**: private app distribution and signing hosting (see Honest Boundaries below).
+- Private deployment consulting (10k+ hosts, external VM, retention).
+- Custom integrations (WeCom / DingTalk / Feishu, CMDB, internal LLM gateways).
+- Security hardening (SSO / LDAP, audit retention, compliance baselines).
+- Private Android distribution / signing.
 
-> For enterprise collaboration, open an Issue on the GitHub repo or contact the maintainer.
+> Open an Issue on GitHub / Gitee or contact the maintainer.
 
 ---
 
 ## Honest Boundaries & Known Limitations
 
-We describe capabilities truthfully. Please note the following boundaries before use:
-
 **Backend / platform**
 
-- The server mandatorily depends on PostgreSQL and VictoriaMetrics, both open-source; a single instance is comfortable at roughly 3,000 hosts (go external VictoriaMetrics beyond that).
-- AI diagnosis is a pluggable value-add; without an LLM it falls back to heuristic diagnosis and does not guarantee LLM-level semantic depth.
+- Mandatory PostgreSQL + VictoriaMetrics; ~3,000 hosts per single instance before externalizing VM.
+- AI is pluggable; without an LLM, heuristic fallback is shallower.
+- Web speech depends on browser Web Speech API.
+- Ticket attachments are JSON snapshots — fine for evidence screenshots, not object-store scale.
+
+**Remote desktop**
+
+- Windows lock / logoff / UAC need the agent **service install**; a user-session process cannot reliably inject Ctrl+Alt+Del.
+- Secure-desktop worker uses GDI/JPEG (avoids ffmpeg black frames); FPS/bandwidth depend on the network.
+- macOS may hit Secure Input / Screen Recording limits; Linux needs a graphical session / greeter.
+- Unlock sends in-memory credentials only — use only in trusted ops contexts.
 
 **Android console**
 
-- **Self-hosted private distribution, not published on any app store**; delivered as an APK you sign and distribute yourself.
-- The repo ships historical build artifacts (e.g. `aiops-6193.apk`) proving the client **was successfully built before**; however the current source **has not been re-compiled/verified in the current sandbox**, so zero-compile-error is not guaranteed — rely on your local Android Studio build.
-- **Account self-service stays on the web**: MFA self-binding, forgot-password, and forced first-login password change UIs live on the web side; the Android app reuses the same RBAC account system.
-- Session cookies use **plain (unencrypted) DataStore** persistence.
-- It uses **fixed polling** with **full host / alert pulls** (not incremental); **no system-level background push (FCM)** — it relies on foreground auto-refresh.
-- None of the above undermines its practical value as an enterprise-grade native mobile console in self-hosted intranet scenarios.
+- Private APK distribution (not on app stores); build/sign yourself.
+- Account self-service (MFA bind, password reset, forced first-login change) remains on the Web.
+- Plain DataStore cookie persistence; fixed polling; no FCM.
 
 ---
 
 ## Open Source & Community
 
-AIOps Monitor is **100% open source under the MIT license** — no feature gating, no host limits, no telemetry uplink.
+MIT licensed — no feature gating, no host limits, no telemetry.
 
-- **Codebase**: server `cmd/server` ~126 Go files / 40k+ lines, agent `cmd/agent` ~69 files / 18k+ lines, with 64 tests — production-grade maturity.
-- **Fully self-hosted**: relational (PostgreSQL) + time-series (VictoriaMetrics) data stay in your environment.
-- **Contributions welcome**: issues, PRs, docs and plugins.
+- **Codebase (approx.)**: `cmd/server` 250+ Go files, `cmd/agent` 120+ files, **130+** automated tests.
+- Fully self-hosted data plane (PostgreSQL + VictoriaMetrics).
+- Dual remotes: GitHub and Gitee stay in sync for branches and tags.
+- Contributions welcome: issues, PRs, docs, plugins.
 
 ---
 
 ## Related Links
 
-- **GitHub repository**: <https://github.com/sreyun/aiops-monitor>
-- **Releases**: <https://github.com/sreyun/aiops-monitor/releases>
-- **Installation guide**: [INSTALL.md](INSTALL.md)
-- **Android client notes**: [android/README.md](android/README.md)
+| Resource | Link |
+|---|---|
+| GitHub | <https://github.com/sreyun/aiops-monitor> |
+| Gitee | <https://gitee.com/bigdatasafe/aiops-monitor> |
+| Releases | <https://github.com/sreyun/aiops-monitor/releases> |
+| Install guide | [INSTALL.md](INSTALL.md) |
+| Agent config sample | [config.example.yaml](config.example.yaml) |
+| Android | [android/README.md](android/README.md) |
+| HarmonyOS | [harmony/README.md](harmony/README.md) |
 
 ---
 
