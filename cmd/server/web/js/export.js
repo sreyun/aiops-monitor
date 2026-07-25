@@ -367,11 +367,13 @@ function expToDocx(model) {
 /* ============================ PDF（浏览器打印） ============================ */
 
 function expPrintHTML(model) {
-  // 按行内健康/状态文字给行着色，让导出接近网页的"红黄绿"观感（启发式，命中不到也无害）。
+  // 按行内健康/状态/安全严重度文字着色（启发式；命中不到也无害）。
   const rowClass = (row) => {
     const t = (row || []).join(" ");
-    if (/严重|critical|故障|预测故障|失败|failed|fault|不可用|offline|离线/i.test(t)) return ' class="sev-crit"';
-    if (/警告|warning|降级|degraded|注意|偏低|将坏/i.test(t)) return ' class="sev-warn"';
+    if (/危急|严重|critical|crit\b|故障|预测故障|失败|failed|fault|不可用|offline|离线/i.test(t)) return ' class="sev-crit"';
+    if (/高危|\bhigh\b|警告|warning|降级|degraded|注意|偏低|将坏/i.test(t)) return ' class="sev-high"';
+    if (/中危|\bmedium\b|\bwarn\b/i.test(t)) return ' class="sev-warn"';
+    if (/低危|\blow\b/i.test(t)) return ' class="sev-low"';
     return "";
   };
   const tbl = (columns, rows) =>
@@ -444,8 +446,10 @@ function expPrintHTML(model) {
   th { background:#eef2f7; font-weight:600; color:#334155; }
   tbody tr:nth-child(even) { background:#fafbfc; }
   tr.sev-warn { background:#fff8e6 !important; }
+  tr.sev-high { background:#fff1e6 !important; }
   tr.sev-crit { background:#fdecec !important; }
-  tr.sev-crit td:last-child, tr.sev-warn td:last-child { font-weight:600; }
+  tr.sev-low { background:#f4f7fb !important; }
+  tr.sev-crit td:first-child, tr.sev-high td:first-child, tr.sev-warn td:first-child { font-weight:600; }
   thead { display:table-header-group; }
   tr { break-inside:avoid; page-break-inside:avoid; }
   .rpt-footer { margin-top:14px; padding-top:8px; border-top:1px solid #d9dee5; color:#7a8491; font-size:9px; }
@@ -781,7 +785,42 @@ function expToDocxVisual(model) {
 
 /* ============================ 统一入口 ============================ */
 
-// fmt: markdown | excel | word | pdf | pdf-report | png
+// 独立 HTML 报告（可离线打开 / 浏览器另存为 PDF）
+function expToHTML(model) {
+  // 复用打印样式，并加屏幕阅读友好的外边距与操作提示。
+  const inner = expPrintHTML(model);
+  return inner.replace(
+    "</head>",
+    `<style>
+  @media screen {
+    body { max-width: 960px; margin: 24px auto; padding: 0 20px 40px; }
+    .rpt-screen-tip {
+      margin: 0 0 14px; padding: 8px 12px; border-radius: 6px;
+      background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; font-size: 12px;
+    }
+  }
+</style></head>`
+  ).replace(
+    "<body>",
+    `<body><div class="rpt-screen-tip">提示：可用浏览器「打印 → 另存为 PDF」生成正式 PDF 交付件。</div>`
+  );
+}
+
+function expToJSON(model) {
+  if (model && model.rawJSON != null) return JSON.stringify(model.rawJSON, null, 2);
+  return JSON.stringify({
+    title: model && model.title,
+    subtitle: model && model.subtitle,
+    generated_at: new Date().toISOString(),
+    meta: (model && model.meta) || [],
+    kpis: (model && model.kpis) || [],
+    narrative: model && model.narrative,
+    sections: (model && model.sections) || [],
+    footer: model && model.footer,
+  }, null, 2);
+}
+
+// fmt: markdown | excel | word | html | pdf | pdf-report | png | json
 // model.kind === "visual" 时：pdf/word/png 走看板成品路径；excel 仍按 sections 数据表。
 async function exportModel(model, fmt, baseName) {
   const name = expSafeName(baseName || model.title) + "_" + expStamp();
@@ -792,6 +831,12 @@ async function exportModel(model, fmt, baseName) {
       return true;
     case "excel":
       expDownload(expToXlsx(model), name + ".xlsx");
+      return true;
+    case "html":
+      expDownload(new Blob([expToHTML(model)], { type: "text/html;charset=utf-8" }), name + ".html");
+      return true;
+    case "json":
+      expDownload(new Blob([expToJSON(model)], { type: "application/json;charset=utf-8" }), name + ".json");
       return true;
     case "word":
       if (visual) {

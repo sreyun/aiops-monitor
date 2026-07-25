@@ -169,7 +169,13 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"launchctl load", "Restart=always", "@reboot",
 		"User=$AIOPS_USER", "NoNewPrivileges=true", `AIOPS_USER="${AIOPS_USER:-aiops}"`,
 		"aiops_has_systemd", "aiops_fetch", "unsupported architecture",
-		"AmbientCapabilities=CAP_NET_RAW", "/sbin/nologin")
+		"AmbientCapabilities=CAP_NET_RAW", "/sbin/nologin",
+		"aiops_is_installed", "aiops_stop_and_uninstall_existing",
+		"existing agent detected", "systemctl restart aiops-agent",
+		"kickstart -k")
+	must("install.ps1 (reinstall)", ps1In,
+		"Test-AiopsAlreadyInstalled", "Uninstall-AiopsExisting",
+		"existing agent detected", "Restart-Service")
 	// YAML is the default config format now: the script must write config.yaml,
 	// point the service at it, and migrate away any stale config.json.
 	must("install.sh (yaml)", shIn,

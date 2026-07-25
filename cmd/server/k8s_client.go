@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -10,6 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,6 +312,304 @@ func (c *k8sRESTClient) RestartDeployment(namespace, name string) error {
 	path := "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments/" + url.PathEscape(dep)
 	_, _, err := c.do(http.MethodPatch, path, nil, body, "application/strategic-merge-patch+json")
 	return err
+}
+
+func (c *k8sRESTClient) DeletePod(namespace, name string) error {
+	ns := strings.TrimSpace(namespace)
+	pod := strings.TrimSpace(name)
+	if ns == "" || pod == "" {
+		return fmt.Errorf("namespace and pod name required")
+	}
+	path := "/api/v1/namespaces/" + url.PathEscape(ns) + "/pods/" + url.PathEscape(pod)
+	_, code, err := c.do(http.MethodDelete, path, nil, nil, "")
+	if err != nil {
+		return err
+	}
+	if code >= 300 && code != http.StatusNotFound {
+		return fmt.Errorf("delete pod HTTP %d", code)
+	}
+	return nil
+}
+
+// UndoDeploymentRollout patches the deployment template back to the previous ReplicaSet revision.
+func (c *k8sRESTClient) UndoDeploymentRollout(namespace, name string) error {
+	ns := strings.TrimSpace(namespace)
+	dep := strings.TrimSpace(name)
+	if ns == "" || dep == "" {
+		return fmt.Errorf("namespace and deployment name required")
+	}
+	depPath := "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments/" + url.PathEscape(dep)
+	var deploy map[string]any
+	if err := c.getJSON(depPath, nil, &deploy); err != nil {
+		return err
+	}
+	meta, _ := deploy["metadata"].(map[string]any)
+	uid, _ := meta["uid"].(string)
+	raw, _, err := c.do(http.MethodGet, "/apis/apps/v1/namespaces/"+url.PathEscape(ns)+"/replicasets", nil, nil, "")
+	if err != nil {
+		return err
+	}
+	var list struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	type revRS struct {
+		rev  int
+		tmpl any
+	}
+	var owned []revRS
+	for _, rs := range list.Items {
+		rm, _ := rs["metadata"].(map[string]any)
+		owners, _ := rm["ownerReferences"].([]any)
+		match := false
+		for _, o := range owners {
+			om, _ := o.(map[string]any)
+			if om == nil {
+				continue
+			}
+			if strings.EqualFold(fmt.Sprint(om["kind"]), "Deployment") && fmt.Sprint(om["uid"]) == uid {
+				match = true
+				break
+			}
+			if strings.EqualFold(fmt.Sprint(om["kind"]), "Deployment") && strings.EqualFold(fmt.Sprint(om["name"]), dep) {
+				match = true
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		ann, _ := rm["annotations"].(map[string]any)
+		revStr, _ := ann["deployment.kubernetes.io/revision"].(string)
+		rev, _ := strconv.Atoi(revStr)
+		spec, _ := rs["spec"].(map[string]any)
+		owned = append(owned, revRS{rev: rev, tmpl: spec["template"]})
+	}
+	if len(owned) < 2 {
+		return fmt.Errorf("没有可回滚的历史版本（需要至少 2 个 ReplicaSet）")
+	}
+	// Sort by revision desc; pick second (previous).
+	for i := 0; i < len(owned); i++ {
+		for j := i + 1; j < len(owned); j++ {
+			if owned[j].rev > owned[i].rev {
+				owned[i], owned[j] = owned[j], owned[i]
+			}
+		}
+	}
+	prev := owned[1]
+	if prev.tmpl == nil {
+		return fmt.Errorf("上一版本模板为空")
+	}
+	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": prev.tmpl}})
+	_, _, err = c.do(http.MethodPatch, depPath, nil, body, "application/strategic-merge-patch+json")
+	return err
+}
+
+func writeTempKubeconfig(cfg K8sClusterConfig) (path string, cleanup func(), err error) {
+	tmp, err := os.CreateTemp("", "aiops-kubeconfig-*.yaml")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup = func() { _ = os.Remove(tmp.Name()) }
+	kc := strings.TrimSpace(cfg.KubeconfigYAML)
+	if kc != "" && kc != "****" {
+		if _, err := tmp.WriteString(kc); err != nil {
+			tmp.Close()
+			cleanup()
+			return "", nil, err
+		}
+		tmp.Close()
+		return tmp.Name(), cleanup, nil
+	}
+	ep, err := resolveK8sEndpoint(cfg)
+	if err != nil {
+		tmp.Close()
+		cleanup()
+		return "", nil, err
+	}
+	body := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: %s
+    insecure-skip-tls-verify: %v
+  name: aiops
+contexts:
+- context:
+    cluster: aiops
+    user: aiops
+  name: aiops
+current-context: aiops
+users:
+- name: aiops
+  user:
+    token: %s
+`, ep.Server, ep.Insecure || ep.CACert == "", ep.Token)
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		cleanup()
+		return "", nil, err
+	}
+	tmp.Close()
+	return tmp.Name(), cleanup, nil
+}
+
+func kubectlBin() (string, error) {
+	kubectl, err := exec.LookPath("kubectl")
+	if err != nil {
+		return "", fmt.Errorf("服务端未安装 kubectl（请安装 kubectl）")
+	}
+	return kubectl, nil
+}
+
+// PodExecShort runs a non-interactive command via kubectl if available on the server.
+// Native SPDY exec is not bundled; kubectl is the pragmatic path for short diagnostics.
+func (c *k8sRESTClient) PodExecShort(namespace, name, command string, timeoutSec int) (string, error) {
+	ns := strings.TrimSpace(namespace)
+	pod := strings.TrimSpace(name)
+	cmd := strings.TrimSpace(command)
+	if ns == "" || pod == "" || cmd == "" {
+		return "", fmt.Errorf("namespace, pod and command required")
+	}
+	if len(cmd) > 2000 {
+		return "", fmt.Errorf("command too long")
+	}
+	if timeoutSec < 5 {
+		timeoutSec = 15
+	}
+	if timeoutSec > 60 {
+		timeoutSec = 60
+	}
+	kubectl, err := kubectlBin()
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp("", "aiops-kubeconfig-*.yaml")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	kc := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: %s
+    insecure-skip-tls-verify: true
+  name: aiops
+contexts:
+- context:
+    cluster: aiops
+    user: aiops
+  name: aiops
+current-context: aiops
+users:
+- name: aiops
+  user:
+    token: %s
+`, c.base, c.token)
+	if _, err := tmp.WriteString(kc); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	tmp.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	args := []string{
+		"--kubeconfig", tmp.Name(),
+		"exec", "-n", ns, pod, "--",
+		"sh", "-c", cmd,
+	}
+	out, err := exec.CommandContext(ctx, kubectl, args...).CombinedOutput()
+	text := string(out)
+	if len(text) > 256*1024 {
+		text = text[:256*1024] + "\n…[truncated]"
+	}
+	if err != nil {
+		if text == "" {
+			return "", err
+		}
+		return text, fmt.Errorf("%w: %s", err, strings.TrimSpace(text))
+	}
+	return text, nil
+}
+
+// ApplyYAML runs kubectl apply -f - (multi-doc YAML). dryRun uses client/server dry-run when set.
+func ApplyYAML(cfg K8sClusterConfig, yamlDoc, namespace string, dryRun bool) (string, error) {
+	yamlDoc = strings.TrimSpace(yamlDoc)
+	if yamlDoc == "" {
+		return "", fmt.Errorf("yaml required")
+	}
+	if len(yamlDoc) > 2<<20 {
+		return "", fmt.Errorf("yaml too large (≤2MiB)")
+	}
+	kubectl, err := kubectlBin()
+	if err != nil {
+		return "", err
+	}
+	path, cleanup, err := writeTempKubeconfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	args := []string{"--kubeconfig", path, "apply", "-f", "-"}
+	if ns := strings.TrimSpace(namespace); ns != "" {
+		args = append(args, "-n", ns)
+	}
+	if dryRun {
+		args = append(args, "--dry-run=server")
+	}
+	cmd := exec.CommandContext(ctx, kubectl, args...)
+	cmd.Stdin = strings.NewReader(yamlDoc)
+	out, err := cmd.CombinedOutput()
+	text := string(out)
+	if len(text) > 512*1024 {
+		text = text[:512*1024] + "\n…[truncated]"
+	}
+	if err != nil {
+		if text == "" {
+			return "", err
+		}
+		return text, fmt.Errorf("%w: %s", err, strings.TrimSpace(text))
+	}
+	return text, nil
+}
+
+// CreateNamespace creates a namespace via kubectl.
+func CreateNamespace(cfg K8sClusterConfig, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 63 {
+		return "", fmt.Errorf("invalid namespace")
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return "", fmt.Errorf("namespace 仅允许小写字母/数字/短横线")
+	}
+	kubectl, err := kubectlBin()
+	if err != nil {
+		return "", err
+	}
+	path, cleanup, err := writeTempKubeconfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, kubectl, "--kubeconfig", path, "create", "namespace", name).CombinedOutput()
+	text := string(out)
+	if err != nil {
+		if text == "" {
+			return "", err
+		}
+		return text, fmt.Errorf("%w: %s", err, strings.TrimSpace(text))
+	}
+	return text, nil
 }
 
 // ---- kubeconfig (subset) ----

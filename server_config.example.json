@@ -93,5 +93,45 @@
       "default_namespace": "",
       "insecure_skip_tls": false
     }
-  ]
+  ],
+  "mysql_connections": [
+    {
+      "id": "ro-mysql",
+      "name": "只读从库",
+      "enabled": true,
+      "host": "mysql.example.com",
+      "port": 3306,
+      "user": "aiops_ro",
+      "password": "",
+      "database": "app",
+      "tls": "",
+      "params": "charset=utf8mb4",
+      "version_hint": "mysql80"
+    }
+  ],
+  "host_security": {
+    "enabled": false,
+    "enable_clamav": true,
+    "osv_url": "https://api.osv.dev/v1/querybatch",
+    "timeout_sec": 180,
+    "host_ids": [],
+    "schedule": {
+      "enabled": false,
+      "kind": "weekly",
+      "at": "03:30",
+      "weekday": 0
+    }
+  },
+  "web_security": {
+    "nuclei_path": "nuclei",
+    "templates_dir": "",
+    "severity": "critical,high,medium,low",
+    "rate_limit": 50,
+    "concurrency": 10,
+    "timeout_sec": 300,
+    "allow_private": false,
+    "update_templates": false,
+    "scan_concurrency": 1,
+    "targets": []
+  }
 }

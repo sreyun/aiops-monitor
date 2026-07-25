@@ -38,7 +38,8 @@ type hostInspectItem struct {
 type hostInspectBatch struct {
 	ID         string            `json:"id"`
 	Operator   string            `json:"operator"`
-	Status     string            `json:"status"` // running|done
+	Source     string            `json:"source,omitempty"` // e.g. playbook: nightly-inspect
+	Status     string            `json:"status"`           // running|done
 	StartedAt  int64             `json:"started_at"`
 	FinishedAt int64             `json:"finished_at,omitempty"`
 	HostCount  int               `json:"host_count"`
@@ -72,6 +73,31 @@ func (m *hostInspectManager) importBatches(list []*hostInspectBatch) {
 	defer m.mu.Unlock()
 	if len(list) == 0 {
 		return
+	}
+	// Batches persisted as "running" cannot resume after process restart — mark them
+	// failed so the UI does not show forever-stuck「巡检中」rows (same class of bug
+	// as orphaned security scans).
+	for _, b := range list {
+		if b == nil {
+			continue
+		}
+		if b.Status == "running" || b.Status == "pending" {
+			b.Status = "done"
+			for i := range b.Items {
+				st := b.Items[i].Status
+				if st == "running" || st == "pending" || st == "" {
+					b.Items[i].Status = "error"
+					if strings.TrimSpace(b.Items[i].Error) == "" {
+						b.Items[i].Error = "服务重启，巡检中断"
+					}
+					b.ErrCount++
+					b.DoneCount++
+				}
+			}
+			if b.FinishedAt == 0 {
+				b.FinishedAt = time.Now().Unix()
+			}
+		}
 	}
 	m.batches = list
 	if len(m.batches) > hostInspectCap {
@@ -184,6 +210,151 @@ func cloneInspectBatch(b *hostInspectBatch) *hostInspectBatch {
 	cp.Items = make([]hostInspectItem, len(b.Items))
 	copy(cp.Items, b.Items)
 	return &cp
+}
+
+func recalcInspectBatchCounts(b *hostInspectBatch) {
+	if b == nil {
+		return
+	}
+	b.OKCount, b.WarnCount, b.CritCount, b.ErrCount, b.DoneCount = 0, 0, 0, 0, 0
+	for _, it := range b.Items {
+		switch it.Status {
+		case "pending", "running", "":
+			continue
+		case "ok":
+			b.OKCount++
+		case "warn":
+			b.WarnCount++
+		case "crit":
+			b.CritCount++
+		default:
+			b.ErrCount++
+		}
+		b.DoneCount++
+	}
+}
+
+func parseHostInspectOutput(host *Host, output string, durationMs int64) hostInspectItem {
+	item := hostInspectItem{
+		HostID: host.ID, Hostname: host.Hostname, OS: host.OS, IP: host.IP,
+		DurationMs: durationMs, FinishedAt: time.Now().Unix(),
+	}
+	body := strings.TrimSpace(output)
+	if i := strings.Index(body, "{"); i >= 0 {
+		body = body[i:]
+	}
+	if j := strings.LastIndex(body, "}"); j >= 0 {
+		body = body[:j+1]
+	}
+	var rep struct {
+		Host struct {
+			OSFamily string `json:"os_family"`
+		} `json:"host"`
+		Result struct {
+			Warnings int `json:"warnings"`
+			Critical int `json:"critical"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		item.Status = "error"
+		item.Error = "巡检结果不是有效 JSON: " + truncateStr(body, 120)
+		if err != nil {
+			item.Error += " (" + err.Error() + ")"
+		}
+		return item
+	}
+	item.Report = json.RawMessage(body)
+	item.Warnings = rep.Result.Warnings
+	item.Critical = rep.Result.Critical
+	item.OSFamily = rep.Host.OSFamily
+	switch {
+	case rep.Result.Critical > 0:
+		item.Status = "crit"
+	case rep.Result.Warnings > 0:
+		item.Status = "warn"
+	default:
+		item.Status = "ok"
+	}
+	return item
+}
+
+func playbookInspectBatchID(execID int64) string {
+	return fmt.Sprintf("insp-pb-%d", execID)
+}
+
+// ingestPlaybookHostInspect stores a successful playbook host_inspect step into the
+// inspect batch store (one batch per playbook execution).
+func (s *Server) ingestPlaybookHostInspect(playbookName string, execID int64, host *Host, operator, output string, durationMs int64) {
+	if s.inspect == nil || host == nil {
+		return
+	}
+	source := "playbook: " + strings.TrimSpace(playbookName)
+	if source == "playbook:" {
+		source = "playbook"
+	}
+	item := parseHostInspectOutput(host, output, durationMs)
+	s.inspect.ingestPlaybookItem(playbookInspectBatchID(execID), source, operator, item)
+}
+
+func (m *hostInspectManager) ingestPlaybookItem(batchID, source, operator string, item hostInspectItem) {
+	m.mu.Lock()
+	var batch *hostInspectBatch
+	for _, b := range m.batches {
+		if b != nil && b.ID == batchID {
+			batch = b
+			break
+		}
+	}
+	if batch == nil {
+		batch = &hostInspectBatch{
+			ID: batchID, Operator: operator, Source: source,
+			Status: "running", StartedAt: time.Now().Unix(),
+			Items: make([]hostInspectItem, 0, 4),
+		}
+		m.batches = append([]*hostInspectBatch{batch}, m.batches...)
+		if len(m.batches) > hostInspectCap {
+			m.batches = m.batches[:hostInspectCap]
+		}
+	} else if strings.TrimSpace(batch.Source) == "" && source != "" {
+		batch.Source = source
+	}
+	found := false
+	for i, it := range batch.Items {
+		if it.HostID == item.HostID {
+			batch.Items[i] = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		batch.Items = append(batch.Items, item)
+	}
+	recalcInspectBatchCounts(batch)
+	batch.HostCount = len(batch.Items)
+	m.mu.Unlock()
+	m.persistAsync()
+}
+
+func (m *hostInspectManager) finishPlaybookBatch(batchID string) {
+	m.mu.Lock()
+	changed := false
+	for _, b := range m.batches {
+		if b == nil || b.ID != batchID {
+			continue
+		}
+		if b.Status != "done" {
+			b.Status = "done"
+			b.FinishedAt = time.Now().Unix()
+		}
+		b.HostCount = len(b.Items)
+		recalcInspectBatchCounts(b)
+		changed = true
+		break
+	}
+	m.mu.Unlock()
+	if changed {
+		m.persistAsync()
+	}
 }
 
 // ---- HTTP ----
@@ -329,54 +500,17 @@ func (s *Server) runHostInspectBatch(batchID string, hosts []*Host, timeoutSec i
 			start := time.Now()
 			out, kind, err := s.execCommandOnHostSized(host, cmd, timeoutSec, hostInspectOutCap)
 			item.DurationMs = time.Since(start).Milliseconds()
-			item.FinishedAt = time.Now().Unix()
 			if err != nil && kind != execExit {
 				item.Status = "error"
 				item.Error = err.Error()
 				if out != "" {
 					item.Error += " | " + truncateStr(out, 200)
 				}
+				item.FinishedAt = time.Now().Unix()
 				s.inspect.updateItem(batchID, idx, item, true)
 				return
 			}
-			body := strings.TrimSpace(out)
-			// strip possible trailing noise; find JSON object
-			if i := strings.Index(body, "{"); i >= 0 {
-				body = body[i:]
-			}
-			if j := strings.LastIndex(body, "}"); j >= 0 {
-				body = body[:j+1]
-			}
-			var rep struct {
-				Host struct {
-					OSFamily string `json:"os_family"`
-				} `json:"host"`
-				Result struct {
-					Warnings int `json:"warnings"`
-					Critical int `json:"critical"`
-				} `json:"result"`
-			}
-			if err := json.Unmarshal([]byte(body), &rep); err != nil {
-				item.Status = "error"
-				item.Error = "巡检结果不是有效 JSON: " + truncateStr(body, 120)
-				if err != nil {
-					item.Error += " (" + err.Error() + ")"
-				}
-				s.inspect.updateItem(batchID, idx, item, true)
-				return
-			}
-			item.Report = json.RawMessage(body)
-			item.Warnings = rep.Result.Warnings
-			item.Critical = rep.Result.Critical
-			item.OSFamily = rep.Host.OSFamily
-			switch {
-			case rep.Result.Critical > 0:
-				item.Status = "crit"
-			case rep.Result.Warnings > 0:
-				item.Status = "warn"
-			default:
-				item.Status = "ok"
-			}
+			item = parseHostInspectOutput(host, out, item.DurationMs)
 			s.inspect.updateItem(batchID, idx, item, true)
 		}(i, h)
 	}

@@ -47,9 +47,10 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 	"time_sync":    {Name: "time_sync", ReadOnly: true, Domain: "sre", Desc: "系统时间与时区"},
 
 	// —— 安全运维（只读）——
-	"users_logged":    {Name: "users_logged", ReadOnly: true, Domain: "security", Desc: "当前登录会话"},
-	"security_listen": {Name: "security_listen", ReadOnly: true, Domain: "security", Desc: "对外监听端口（安全视角）"},
-	"auth_failures":   {Name: "auth_failures", ReadOnly: true, Domain: "security", Desc: "近期认证失败摘要（若可得）"},
+	"users_logged":        {Name: "users_logged", ReadOnly: true, Domain: "security", Desc: "当前登录会话"},
+	"security_listen":     {Name: "security_listen", ReadOnly: true, Domain: "security", Desc: "对外监听端口（安全视角）"},
+	"host_security_scan":  {Name: "host_security_scan", ReadOnly: true, Domain: "security", Desc: "主机安全扫描（包清单/加固/IOC/ClamAV 可选）"},
+	"auth_failures":       {Name: "auth_failures", ReadOnly: true, Domain: "security", Desc: "近期认证失败摘要（若可得）"},
 
 	// —— 大数据运维（只读）——
 	"bigdata_jps":   {Name: "bigdata_jps", ReadOnly: true, Domain: "bigdata", Desc: "Java 进程列表（jps）"},
@@ -62,8 +63,10 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 
 	// —— 资源管控（虚拟机 / 容器）——
 	"hyperv_power":     {Name: "hyperv_power", ReadOnly: false, Domain: "change", Desc: "Hyper-V 虚拟机启停/重启（args.action + vm_id|name）"},
-	"hyperv_set":       {Name: "hyperv_set", ReadOnly: false, Domain: "change", Desc: "Hyper-V 调整 CPU/内存（processor_count / memory_mb）"},
-	"container_action": {Name: "container_action", ReadOnly: false, Domain: "change", Desc: "Docker/Podman 容器启停/重启"},
+	"hyperv_set":       {Name: "hyperv_set", ReadOnly: false, Domain: "change", Desc: "Hyper-V 调整 CPU/内存（processor_count / memory_mb / min/max / dynamic_memory）"},
+	"container_action":     {Name: "container_action", ReadOnly: false, Domain: "change", Desc: "Docker/Podman 容器启停/重启"},
+	"container_compose_ls": {Name: "container_compose_ls", ReadOnly: true, Domain: "inspect", Desc: "列出 Docker/Podman Compose 项目"},
+	"container_compose":    {Name: "container_compose", ReadOnly: false, Domain: "change", Desc: "Compose up/down/ps/logs/pull（需 project 或 file）"},
 	"container_logs":   {Name: "container_logs", ReadOnly: true, Domain: "sre", Desc: "Docker/Podman 容器日志"},
 }
 

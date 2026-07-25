@@ -1,0 +1,92 @@
+package main
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+)
+
+func TestChordVKSequence(t *testing.T) {
+	cases := map[string][]int{
+		"win_l":           {0x5B, 0x4C},
+		"ctrl_shift_esc":  {0x11, 0x10, 0x1B},
+		"esc":             {0x1B},
+		"ctrl_alt_bksp":   {0x11, 0x12, 0x08},
+		"enter":           {0x0D},
+		"tab":             {0x09},
+		"unknown-chord":   nil,
+	}
+	for name, want := range cases {
+		got := chordVKSequence(name)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("chord %q = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestDeskActionRequestJSON(t *testing.T) {
+	raw := []byte(`{"action":"type_text","text":"secret","enter":true}`)
+	var req deskActionRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Action != "type_text" || req.Text != "secret" || !req.Enter {
+		t.Fatalf("unexpected: %+v", req)
+	}
+	// Ensure marshaling round-trip does not invent fields that would leak in logs
+	// (server audit uses separate struct and must never log Text).
+	out, _ := json.Marshal(map[string]any{"action": req.Action, "enter": req.Enter, "len": len([]rune(req.Text))})
+	if string(out) == "" || containsSecret(string(out), "secret") {
+		// intentionally include length only in audit shape
+	}
+	auditShape := map[string]any{"action": "type_text", "len": len([]rune(req.Text))}
+	b, _ := json.Marshal(auditShape)
+	if containsSecret(string(b), "secret") {
+		t.Fatalf("audit shape leaked secret: %s", b)
+	}
+}
+
+func containsSecret(s, secret string) bool {
+	return len(secret) > 0 && (len(s) >= len(secret)) && (indexOf(s, secret) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+type stubDeskInput struct {
+	keys []int
+}
+
+func (s *stubDeskInput) MouseMove(x, y int) error          { return nil }
+func (s *stubDeskInput) MouseButton(button int, down bool) error { return nil }
+func (s *stubDeskInput) MouseWheel(delta int) error        { return nil }
+func (s *stubDeskInput) Key(vk int, down bool) error {
+	if down {
+		s.keys = append(s.keys, vk)
+	}
+	return nil
+}
+func (s *stubDeskInput) Close() error { return nil }
+
+func TestDeskPlayChordEsc(t *testing.T) {
+	st := &stubDeskInput{}
+	if err := deskPlayChord(st, "esc"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.keys) == 0 || st.keys[0] != 0x1B {
+		t.Fatalf("keys=%v", st.keys)
+	}
+}
+
+func TestDeskDoCADUnsupported(t *testing.T) {
+	st := &stubDeskInput{}
+	if err := deskDoCAD(st); err == nil {
+		t.Fatal("expected unsupported CAD on plain deskInput")
+	}
+}

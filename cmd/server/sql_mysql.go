@@ -1,0 +1,531 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"aiops-monitor/cmd/server/sqltoolkit"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
+)
+
+func mysqlDSN(c MySQLConnection) string {
+	user := c.User
+	if user == "" {
+		user = "root"
+	}
+	port := c.Port
+	if port <= 0 {
+		port = 3306
+	}
+	cfg := mysqldriver.NewConfig()
+	cfg.User = user
+	cfg.Passwd = c.Password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%d", c.Host, port)
+	cfg.DBName = c.Database
+	cfg.ParseTime = true
+	cfg.Timeout = 5 * time.Second
+	cfg.ReadTimeout = 10 * time.Second
+	cfg.WriteTimeout = 5 * time.Second
+	cfg.InterpolateParams = true
+	cfg.Params = map[string]string{}
+	if c.TLS != "" {
+		cfg.TLSConfig = c.TLS
+	}
+	if c.Params != "" {
+		if extra, err := url.ParseQuery(c.Params); err == nil {
+			for k, vs := range extra {
+				if len(vs) > 0 {
+					cfg.Params[k] = vs[0]
+				}
+			}
+		}
+	}
+	return cfg.FormatDSN()
+}
+
+func mysqlOpen(c MySQLConnection) (*sql.DB, error) {
+	db, err := sql.Open("mysql", mysqlDSN(c))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(2 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func mysqlTestConnection(c MySQLConnection) (string, error) {
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var ver string
+	if err := db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&ver); err != nil {
+		return "", err
+	}
+	return ver, nil
+}
+
+var reSafeIdent = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+func mysqlExplain(c MySQLConnection, query string) (map[string]any, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("sql required")
+	}
+	if sqltoolkit.ForbiddenWrite(query) {
+		return nil, fmt.Errorf("拒绝执行写操作或危险语句")
+	}
+	kw := sqltoolkit.FirstKeyword(query)
+	if kw != "select" && kw != "with" && kw != "explain" {
+		return nil, fmt.Errorf("EXPLAIN 仅允许 SELECT / WITH / EXPLAIN 语句")
+	}
+	if !sqltoolkit.IsReadOnlyQuery(query) {
+		return nil, fmt.Errorf("仅允许单条只读查询")
+	}
+	explainSQL := query
+	if kw != "explain" {
+		explainSQL = "EXPLAIN FORMAT=JSON " + strings.TrimSuffix(query, ";")
+	} else if !strings.Contains(strings.ToLower(query), "format") {
+		// EXPLAIN SELECT ... → EXPLAIN FORMAT=JSON SELECT ...
+		rest := strings.TrimSpace(query[len("explain"):])
+		explainSQL = "EXPLAIN FORMAT=JSON " + rest
+	}
+
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var raw string
+	if err := db.QueryRowContext(ctx, explainSQL).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("EXPLAIN 失败: %w", err)
+	}
+	var parsed any
+	_ = json.Unmarshal([]byte(raw), &parsed)
+	analysis := analyzeExplainJSON(raw)
+	return map[string]any{
+		"explain_json": parsed,
+		"raw":          raw,
+		"analysis":     analysis,
+	}, nil
+}
+
+// mysqlExecDDL runs a narrowly-whitelisted index DDL with a short timeout.
+func mysqlExecDDL(c MySQLConnection, ddl string, timeoutSec int) (map[string]any, error) {
+	ddl = strings.TrimSpace(ddl)
+	if ddl == "" {
+		return nil, fmt.Errorf("sql required")
+	}
+	if !sqltoolkit.IsAllowedIndexDDL(ddl) {
+		return nil, fmt.Errorf("仅允许 CREATE/ALTER 索引类 DDL（拒绝 DROP/DML/建表等）")
+	}
+	if timeoutSec < 5 {
+		timeoutSec = 30
+	}
+	if timeoutSec > 120 {
+		timeoutSec = 120
+	}
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	start := time.Now()
+	res, err := db.ExecContext(ctx, strings.TrimSuffix(ddl, ";"))
+	if err != nil {
+		return nil, fmt.Errorf("DDL 执行失败: %w", err)
+	}
+	aff, _ := res.RowsAffected()
+	return map[string]any{
+		"ok":            true,
+		"rows_affected": aff,
+		"elapsed_ms":    time.Since(start).Milliseconds(),
+	}, nil
+}
+
+func analyzeExplainJSON(raw string) *sqltoolkit.ExplainAnalysis {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		return &sqltoolkit.ExplainAnalysis{Summary: "无法解析 EXPLAIN JSON", TableAccess: []sqltoolkit.ExplainHit{}}
+	}
+	queryBlock, _ := root["query_block"].(map[string]any)
+	hits := []sqltoolkit.ExplainHit{}
+	walkExplain(queryBlock, &hits)
+	indexHits, fullScans, filesorts, temps := 0, 0, 0, 0
+	for _, h := range hits {
+		if h.FullScanRisk {
+			fullScans++
+		}
+		if h.UsingFilesort {
+			filesorts++
+		}
+		if h.UsingTemp {
+			temps++
+		}
+		if h.Key != "" && h.Key != "null" && h.Key != "<nil>" {
+			indexHits++
+		}
+	}
+	summary := fmt.Sprintf("表访问 %d 处；命中索引 %d；全表/索引扫描风险 %d", len(hits), indexHits, fullScans)
+	if filesorts > 0 {
+		summary += fmt.Sprintf("；filesort %d", filesorts)
+	}
+	if temps > 0 {
+		summary += fmt.Sprintf("；temporary %d", temps)
+	}
+	if fullScans > 0 {
+		summary += "。存在 ALL/index 全扫描，请结合 rows 与过滤条件优化。"
+	} else if indexHits > 0 {
+		summary += "。主要路径已使用索引（仍需关注回表与 rows 估计）。"
+	}
+	return &sqltoolkit.ExplainAnalysis{
+		Summary:     summary,
+		IndexHits:   indexHits,
+		FullScans:   fullScans,
+		Filesorts:   filesorts,
+		TempTables:  temps,
+		TableAccess: hits,
+	}
+}
+
+func walkExplain(node map[string]any, hits *[]sqltoolkit.ExplainHit) {
+	if node == nil {
+		return
+	}
+	if fs, ok := node["using_filesort"].(bool); ok && fs {
+		// attach to next table if present in same node
+	}
+	if t, ok := node["table"].(map[string]any); ok {
+		h := sqltoolkit.ExplainHit{
+			Table:        fmt.Sprint(t["table_name"]),
+			AccessType:   fmt.Sprint(t["access_type"]),
+			Key:          fmt.Sprint(t["key"]),
+			PossibleKeys: joinAny(t["possible_keys"]),
+		}
+		h.Rows, _ = toFloat(t["rows"])
+		h.Filtered, _ = toFloat(t["filtered"])
+		if ui, ok := t["using_index"].(bool); ok {
+			h.UsingIndex = ui
+		}
+		if fs, ok := t["using_filesort"].(bool); ok {
+			h.UsingFilesort = fs
+		}
+		if ut, ok := t["using_temporary_table"].(bool); ok {
+			h.UsingTemp = ut
+		}
+		// parent ordering/grouping may set filesort/temp
+		if fs, ok := node["using_filesort"].(bool); ok {
+			h.UsingFilesort = h.UsingFilesort || fs
+		}
+		if ut, ok := node["using_temporary_table"].(bool); ok {
+			h.UsingTemp = h.UsingTemp || ut
+		}
+		at := strings.ToLower(h.AccessType)
+		if at == "all" || (at == "index" && !h.UsingIndex) {
+			h.FullScanRisk = true
+			h.Message = "全表或全索引扫描风险"
+		} else if h.Key != "" && h.Key != "<nil>" && h.Key != "null" {
+			h.Message = "使用索引 " + h.Key
+		} else if at == "ref" || at == "eq_ref" || at == "const" || at == "range" {
+			h.Message = "访问类型 " + h.AccessType
+		}
+		*hits = append(*hits, h)
+	}
+	for _, k := range []string{"nested_loop", "grouping_operation", "ordering_operation", "duplicates_removal", "union_result", "optimized_away_selects"} {
+		if arr, ok := node[k].([]any); ok {
+			for _, it := range arr {
+				if m, ok := it.(map[string]any); ok {
+					walkExplain(m, hits)
+				}
+			}
+		} else if m, ok := node[k].(map[string]any); ok {
+			walkExplain(m, hits)
+		}
+	}
+}
+
+// mysqlFetchMetadata loads information_schema stats/columns/indexes for the given tables.
+func mysqlFetchMetadata(c MySQLConnection, tables []string) (sqltoolkit.SchemaMeta, error) {
+	meta := sqltoolkit.SchemaMeta{}
+	if len(tables) == 0 {
+		return meta, nil
+	}
+	clean := make([]string, 0, len(tables))
+	for _, t := range tables {
+		t = strings.TrimSpace(t)
+		if t == "" || !reSafeIdent.MatchString(t) {
+			continue
+		}
+		clean = append(clean, t)
+	}
+	if len(clean) == 0 {
+		return meta, nil
+	}
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dbName := c.Database
+	placeholders := make([]string, len(clean))
+	args := make([]any, 0, len(clean)+1)
+	if dbName != "" {
+		args = append(args, dbName)
+	}
+	for i, t := range clean {
+		placeholders[i] = "?"
+		args = append(args, t)
+		meta[strings.ToLower(t)] = &sqltoolkit.TableMeta{Name: t}
+	}
+	inList := strings.Join(placeholders, ",")
+
+	// TABLE_ROWS
+	qTables := "SELECT TABLE_NAME, TABLE_ROWS, AVG_ROW_LENGTH FROM information_schema.TABLES WHERE TABLE_NAME IN (" + inList + ")"
+	if dbName != "" {
+		qTables = "SELECT TABLE_NAME, TABLE_ROWS, AVG_ROW_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (" + inList + ")"
+	}
+	if rows, err := db.QueryContext(ctx, qTables, args...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			var tr, ar sql.NullInt64
+			if err := rows.Scan(&name, &tr, &ar); err != nil {
+				continue
+			}
+			tm := meta[strings.ToLower(name)]
+			if tm == nil {
+				continue
+			}
+			tm.TableRows = tr.Int64
+			tm.AvgRowLen = ar.Int64
+		}
+	}
+
+	// COLUMNS
+	qCols := "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_NAME IN (" + inList + ") ORDER BY ORDINAL_POSITION"
+	colArgs := args
+	if dbName != "" {
+		qCols = "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (" + inList + ") ORDER BY ORDINAL_POSITION"
+	}
+	if rows, err := db.QueryContext(ctx, qCols, colArgs...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var tname, cname, dtype, nullable string
+			if err := rows.Scan(&tname, &cname, &dtype, &nullable); err != nil {
+				continue
+			}
+			tm := meta[strings.ToLower(tname)]
+			if tm == nil {
+				continue
+			}
+			tm.Columns = append(tm.Columns, sqltoolkit.ColumnMeta{
+				Name: cname, DataType: dtype, Nullable: strings.EqualFold(nullable, "YES"),
+			})
+		}
+	}
+
+	// STATISTICS → indexes
+	qIdx := "SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME IN (" + inList + ") ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"
+	idxArgs := args
+	if dbName != "" {
+		qIdx = "SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (" + inList + ") ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"
+	}
+	type idxBuild struct {
+		name   string
+		unique bool
+		cols   []string
+	}
+	building := map[string]map[string]*idxBuild{} // table -> indexName -> build
+	if rows, err := db.QueryContext(ctx, qIdx, idxArgs...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var tname, iname, cname string
+			var nonUnique int
+			var seq int
+			if err := rows.Scan(&tname, &iname, &nonUnique, &seq, &cname); err != nil {
+				continue
+			}
+			tk := strings.ToLower(tname)
+			if building[tk] == nil {
+				building[tk] = map[string]*idxBuild{}
+			}
+			b := building[tk][iname]
+			if b == nil {
+				b = &idxBuild{name: iname, unique: nonUnique == 0}
+				building[tk][iname] = b
+			}
+			b.cols = append(b.cols, cname)
+		}
+	}
+	for tk, idxs := range building {
+		tm := meta[tk]
+		if tm == nil {
+			continue
+		}
+		for _, b := range idxs {
+			tm.Indexes = append(tm.Indexes, sqltoolkit.IndexMeta{Name: b.name, Unique: b.unique, Columns: b.cols})
+		}
+	}
+	return meta, nil
+}
+
+func joinAny(v any) string {
+	switch t := v.(type) {
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, x := range t {
+			parts = append(parts, fmt.Sprint(x))
+		}
+		return strings.Join(parts, ",")
+	case string:
+		return t
+	default:
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprint(v)
+	}
+}
+
+func toFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(t, 64)
+		return f, err == nil
+	case int:
+		return float64(t), true
+	default:
+		return 0, false
+	}
+}
+
+func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if table == "" {
+		rows, err := db.QueryContext(ctx, "SHOW TABLES")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		tables := []string{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				continue
+			}
+			tables = append(tables, name)
+		}
+		out := map[string]any{"tables": tables}
+		if c.Database != "" {
+			out["database"] = c.Database
+		}
+		return out, nil
+	}
+	if !reSafeIdent.MatchString(table) {
+		return nil, fmt.Errorf("非法表名")
+	}
+	colRows, err := db.QueryContext(ctx, "SHOW FULL COLUMNS FROM `"+table+"`")
+	if err != nil {
+		return nil, err
+	}
+	defer colRows.Close()
+	columns := []map[string]any{}
+	colNames, _ := colRows.Columns()
+	for colRows.Next() {
+		vals := make([]any, len(colNames))
+		ptrs := make([]any, len(colNames))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := colRows.Scan(ptrs...); err != nil {
+			continue
+		}
+		m := map[string]any{}
+		for i, col := range colNames {
+			m[col] = stringifySQLVal(vals[i])
+		}
+		columns = append(columns, m)
+	}
+	idxRows, err := db.QueryContext(ctx, "SHOW INDEX FROM `"+table+"`")
+	if err != nil {
+		return nil, err
+	}
+	defer idxRows.Close()
+	cols, _ := idxRows.Columns()
+	indexes := []map[string]any{}
+	for idxRows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := idxRows.Scan(ptrs...); err != nil {
+			continue
+		}
+		m := map[string]any{}
+		for i, col := range cols {
+			m[col] = stringifySQLVal(vals[i])
+		}
+		indexes = append(indexes, m)
+	}
+	var createSQL string
+	var tblName string
+	if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE `"+table+"`").Scan(&tblName, &createSQL); err != nil {
+		return map[string]any{"table": table, "columns": columns, "indexes": indexes}, nil
+	}
+	return map[string]any{
+		"table":        table,
+		"columns":      columns,
+		"indexes":      indexes,
+		"create_table": createSQL,
+	}, nil
+}
+
+func stringifySQLVal(v any) any {
+	switch t := v.(type) {
+	case []byte:
+		return string(t)
+	case time.Time:
+		return t.Format(time.RFC3339)
+	default:
+		return t
+	}
+}

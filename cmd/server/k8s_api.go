@@ -356,6 +356,125 @@ func (s *Server) handleK8sRestartDeployment(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleK8sUndoDeployment(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := s.k8sClusterOrErr(w, r)
+	if !ok {
+		return
+	}
+	cli, ok := s.k8sClientOrErr(w, cfg)
+	if !ok {
+		return
+	}
+	ns := r.PathValue("ns")
+	name := r.PathValue("name")
+	if err := cli.UndoDeploymentRollout(ns, name); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("K8s Undo：集群=%s ns=%s deploy=%s", cfg.Name, ns, name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleK8sDeletePod(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := s.k8sClusterOrErr(w, r)
+	if !ok {
+		return
+	}
+	cli, ok := s.k8sClientOrErr(w, cfg)
+	if !ok {
+		return
+	}
+	ns := r.PathValue("ns")
+	name := r.PathValue("name")
+	if err := cli.DeletePod(ns, name); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("K8s DeletePod：集群=%s ns=%s pod=%s", cfg.Name, ns, name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleK8sApply(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := s.k8sClusterOrErr(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		YAML      string `json:"yaml"`
+		Namespace string `json:"namespace"`
+		DryRun    bool   `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	out, err := ApplyYAML(cfg, req.YAML, req.Namespace, req.DryRun)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	level := "info"
+	if !req.DryRun {
+		level = "warning"
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: level, Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("K8s Apply%s：集群=%s ns=%s", map[bool]string{true: "(dry-run)", false: ""}[req.DryRun], cfg.Name, req.Namespace)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out, "dry_run": req.DryRun})
+}
+
+func (s *Server) handleK8sCreateNamespace(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := s.k8sClusterOrErr(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	out, err := CreateNamespace(cfg, req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("K8s CreateNamespace：集群=%s ns=%s", cfg.Name, req.Name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out})
+}
+
+func (s *Server) handleK8sPodExec(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := s.k8sClusterOrErr(w, r)
+	if !ok {
+		return
+	}
+	cli, ok := s.k8sClientOrErr(w, cfg)
+	if !ok {
+		return
+	}
+	var req struct {
+		Command    string `json:"command"`
+		TimeoutSec int    `json:"timeout_sec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	ns := r.PathValue("ns")
+	name := r.PathValue("name")
+	out, err := cli.PodExecShort(ns, name, req.Command, req.TimeoutSec)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("K8s Exec：集群=%s ns=%s pod=%s", cfg.Name, ns, name)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out})
+}
+
 func (s *Server) handleK8sOverview(w http.ResponseWriter, r *http.Request) {
 	cfg, ok := s.k8sClusterOrErr(w, r)
 	if !ok {

@@ -252,6 +252,15 @@ func moduleNetListen() ([]byte, int) {
 	switch runtime.GOOS {
 	case "windows":
 		return runModuleCmds([][]string{{"cmd", "/c", "netstat -ano"}})
+	case "darwin":
+		// macOS netstat has no Linux-style -p PID; prefer lsof for TCP listeners.
+		if have("lsof") {
+			out, code := runModuleCmds([][]string{{"lsof", "-nP", "-iTCP", "-sTCP:LISTEN"}})
+			if code == 0 && len(strings.TrimSpace(string(out))) > 0 {
+				return out, 0
+			}
+		}
+		return runModuleCmds([][]string{{"netstat", "-anv", "-p", "tcp"}, {"netstat", "-anv", "-p", "udp"}})
 	default:
 		if have("ss") {
 			return runModuleCmds([][]string{{"ss", "-lntup"}})
@@ -304,22 +313,25 @@ func moduleDNSResolve(args map[string]string) ([]byte, int) {
 }
 
 func moduleDockerPS() ([]byte, int) {
-	if !have("docker") {
-		return []byte("未安装 docker 或不在 PATH"), 1
+	cli := containerCLI()
+	if cli == "" {
+		// Soft-skip: no runtime is common on bare hosts; exit 0 so playbooks don't fail.
+		return []byte("skip: 未找到 docker/podman，跳过容器列表\n"), 0
 	}
-	return runModuleCmds([][]string{{"docker", "ps", "-a", "--format", "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"}})
+	return runModuleCmds([][]string{{cli, "ps", "-a", "--format", "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"}})
 }
 
 func moduleDockerStats() ([]byte, int) {
-	if !have("docker") {
-		return []byte("未安装 docker 或不在 PATH"), 1
+	cli := containerCLI()
+	if cli == "" {
+		return []byte("skip: 未找到 docker/podman，跳过容器资源\n"), 0
 	}
-	return runModuleCmds([][]string{{"docker", "stats", "--no-stream", "--format", "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"}})
+	return runModuleCmds([][]string{{cli, "stats", "--no-stream", "--format", "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"}})
 }
 
 func moduleKubeGet(args map[string]string) ([]byte, int) {
 	if !have("kubectl") {
-		return []byte("未安装 kubectl 或不在 PATH"), 1
+		return []byte("skip: 未找到 kubectl，跳过 K8s 查询\n"), 0
 	}
 	res := strings.TrimSpace(args["resource"])
 	if res == "" {

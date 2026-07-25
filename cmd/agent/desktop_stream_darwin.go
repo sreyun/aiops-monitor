@@ -14,29 +14,88 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // macOS: screencapture for frames; osascript / cliclick for input.
 // Requires Screen Recording (+ Accessibility for input) in System Settings.
+//
+// TCC note: each screencapture / ffmpeg -list_devices call can re-prompt
+// "Screen Recording". We therefore (1) build the monitor list from Quartz
+// without capturing, (2) probe permission once and cache deny/OK, (3) resolve
+// avfoundation screen index lazily and only once per process.
+
+const (
+	darwinMonCacheTTL  = 5 * time.Minute
+	darwinDenyCacheTTL = 45 * time.Second // allow recovery after user toggles TCC
+)
+
+var (
+	darwinCapCacheMu   sync.Mutex
+	darwinMonCache     []deskMonitorInfo
+	darwinMonCacheAt   time.Time
+	darwinDenyErr      error
+	darwinDenyAt       time.Time
+	darwinPermOK       bool
+	darwinScrIdxOnce   sync.Once
+	darwinScrIdx       = -1
+	darwinScrIdxProbed bool
+)
 
 type darwinCapture struct {
-	mu       sync.Mutex
-	monitor  int // 1-based display id for screencapture -D; 0 = main
-	w, h     int
+	mu         sync.Mutex
+	monitor    int // 1-based display id for screencapture -D; 0 = main
+	w, h       int
 	monX, monY int
-	monitors []deskMonitorInfo
+	monitors   []deskMonitorInfo
 }
 
 func openDeskCapture() (deskCapture, error) {
+	if err := darwinCachedDeny(); err != nil {
+		return nil, err
+	}
 	if _, err := exec.LookPath("screencapture"); err != nil {
-		return nil, fmt.Errorf("screencapture not found — grant Screen Recording to the Agent in System Settings → Privacy & Security")
+		err = fmt.Errorf("desk_perm_denied: screencapture not found — grant Screen Recording to the Agent in System Settings → Privacy & Security")
+		darwinRememberDeny(err)
+		return nil, err
 	}
 	c := &darwinCapture{monitor: 0}
-	c.refreshMonitors()
+	c.refreshMonitorsCached()
 	if err := c.CaptureProbe(); err != nil {
-		return nil, fmt.Errorf("%v — open System Settings → Privacy & Security → Screen Recording and allow the Agent (or Terminal if running interactively)", err)
+		err = fmt.Errorf("desk_perm_denied: %v — open System Settings → Privacy & Security → Screen Recording and allow aiops-agent, then fully quit and relaunch the Agent", err)
+		darwinRememberDeny(err)
+		return nil, err
 	}
+	darwinRememberPermOK()
 	return c, nil
+}
+
+func darwinCachedDeny() error {
+	darwinCapCacheMu.Lock()
+	defer darwinCapCacheMu.Unlock()
+	if darwinDenyErr == nil {
+		return nil
+	}
+	if time.Since(darwinDenyAt) > darwinDenyCacheTTL {
+		darwinDenyErr = nil
+		return nil
+	}
+	return darwinDenyErr
+}
+
+func darwinRememberDeny(err error) {
+	darwinCapCacheMu.Lock()
+	defer darwinCapCacheMu.Unlock()
+	darwinDenyErr = err
+	darwinDenyAt = time.Now()
+	darwinPermOK = false
+}
+
+func darwinRememberPermOK() {
+	darwinCapCacheMu.Lock()
+	defer darwinCapCacheMu.Unlock()
+	darwinDenyErr = nil
+	darwinPermOK = true
 }
 
 func (c *darwinCapture) CaptureProbe() error {
@@ -44,47 +103,61 @@ func (c *darwinCapture) CaptureProbe() error {
 	return err
 }
 
-func (c *darwinCapture) refreshMonitors() {
-	// Probe displays 1..8 with a tiny capture, keep those that work.
-	c.monitors = nil
-	origins := darwinDisplayOrigins()
-	for id := 1; id <= 8; id++ {
-		tmp := filepath.Join(os.TempDir(), fmt.Sprintf("aiops-desk-probe-%d.jpg", id))
-		cmd := exec.Command("screencapture", "-x", "-D", strconv.Itoa(id), "-t", "jpg", tmp)
-		if err := cmd.Run(); err != nil {
-			_ = os.Remove(tmp)
-			continue
-		}
-		f, err := os.Open(tmp)
-		_ = os.Remove(tmp)
-		if err != nil {
-			continue
-		}
-		img, err := jpeg.Decode(f)
-		f.Close()
-		if err != nil {
-			continue
-		}
-		b := img.Bounds()
-		ox, oy := 0, 0
-		// Match CGDisplay bounds by size (screencapture -D order ≈ active display list).
-		idx := len(c.monitors)
-		if idx < len(origins) {
-			ox, oy = origins[idx].x, origins[idx].y
-		}
-		c.monitors = append(c.monitors, deskMonitorInfo{
-			ID: id, Name: fmt.Sprintf("Display %d", id),
-			Width: b.Dx(), Height: b.Dy(), X: ox, Y: oy, Primary: id == 1,
-		})
+// refreshMonitorsCached fills monitors from Quartz geometry (no screencapture).
+// Avoids up to 8 capture probes that each can trigger a TCC dialog on reconnect.
+func (c *darwinCapture) refreshMonitorsCached() {
+	darwinCapCacheMu.Lock()
+	if len(darwinMonCache) > 0 && time.Since(darwinMonCacheAt) < darwinMonCacheTTL {
+		c.monitors = append([]deskMonitorInfo(nil), darwinMonCache...)
+		darwinCapCacheMu.Unlock()
+		c.applyFirstMonitor()
+		return
 	}
-	if len(c.monitors) == 0 {
-		c.monitors = []deskMonitorInfo{{ID: 1, Name: "Main display", Width: 1920, Height: 1080, Primary: true}}
+	darwinCapCacheMu.Unlock()
+
+	mons := darwinMonitorsFromQuartz()
+	if len(mons) == 0 {
+		mons = []deskMonitorInfo{{ID: 1, Name: "Main display", Width: 1920, Height: 1080, Primary: true}}
 	}
+	darwinCapCacheMu.Lock()
+	darwinMonCache = append([]deskMonitorInfo(nil), mons...)
+	darwinMonCacheAt = time.Now()
+	darwinCapCacheMu.Unlock()
+
+	c.monitors = mons
+	c.applyFirstMonitor()
+}
+
+func (c *darwinCapture) applyFirstMonitor() {
 	if c.monitor == 0 && len(c.monitors) > 0 {
 		c.monitor = c.monitors[0].ID
 		c.w, c.h = c.monitors[0].Width, c.monitors[0].Height
 		c.monX, c.monY = c.monitors[0].X, c.monitors[0].Y
 	}
+}
+
+// darwinMonitorsFromQuartz lists displays via CGDisplayBounds — no screen capture.
+func darwinMonitorsFromQuartz() []deskMonitorInfo {
+	origins := darwinDisplayOrigins()
+	if len(origins) == 0 {
+		return nil
+	}
+	out := make([]deskMonitorInfo, 0, len(origins))
+	for i, o := range origins {
+		id := i + 1 // screencapture -D is 1-based and roughly matches active display order
+		w, h := o.w, o.h
+		if w < 1 {
+			w = 1920
+		}
+		if h < 1 {
+			h = 1080
+		}
+		out = append(out, deskMonitorInfo{
+			ID: id, Name: fmt.Sprintf("Display %d", id),
+			Width: w, Height: h, X: o.x, Y: o.y, Primary: i == 0,
+		})
+	}
+	return out
 }
 
 type cgOrigin struct{ x, y, w, h int }
@@ -167,6 +240,9 @@ func (c *darwinCapture) Origin() (x, y int) {
 }
 
 func (c *darwinCapture) Capture() (image.Image, error) {
+	if err := darwinCachedDeny(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	mon := c.monitor
 	c.mu.Unlock()
@@ -183,7 +259,14 @@ func (c *darwinCapture) Capture() (image.Image, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nil, fmt.Errorf("screencapture failed: %s", msg)
+		capErr := fmt.Errorf("screencapture failed: %s", msg)
+		// Permission-class failures: remember so reconnects do not re-prompt TCC.
+		low := strings.ToLower(msg + " " + err.Error())
+		if strings.Contains(low, "not authorized") || strings.Contains(low, "permission") ||
+			strings.Contains(low, "could not create") || strings.Contains(low, "unable to capture") {
+			darwinRememberDeny(fmt.Errorf("desk_perm_denied: %v", capErr))
+		}
+		return nil, capErr
 	}
 	f, err := os.Open(tmp)
 	if err != nil {
@@ -419,20 +502,57 @@ func (i *darwinInput) Key(vk int, down bool) error {
 	return exec.Command("osascript", "-e", script).Run()
 }
 
+func (i *darwinInput) SendCAD() error {
+	return fmt.Errorf("macOS 无 Ctrl+Alt+Del；请点「唤醒」后使用解锁凭据（锁屏/登录窗可能仍被系统拦截）")
+}
+
+func (i *darwinInput) TypeText(text string) error {
+	// Chunk to avoid osascript argument limits; escape for AppleScript strings.
+	const chunk = 80
+	runes := []rune(text)
+	for len(runes) > 0 {
+		n := chunk
+		if n > len(runes) {
+			n = len(runes)
+		}
+		part := string(runes[:n])
+		runes = runes[n:]
+		esc := strings.ReplaceAll(part, "\\", "\\\\")
+		esc = strings.ReplaceAll(esc, "\"", "\\\"")
+		script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, esc)
+		if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+			return fmt.Errorf("osascript keystroke 失败（检查辅助功能权限；锁屏可能拦截）: %w", err)
+		}
+	}
+	return nil
+}
+
+func (i *darwinInput) DeskInputMeta() deskInputMeta {
+	return deskInputMeta{
+		Desktop:        "Aqua",
+		InputDesktopOK: true,
+		CAD:            false,
+		TypeText:       true,
+		LockHint:       deskDefaultLockHint(),
+	}
+}
+
 func deskGOOS() string { return "darwin" }
 
-var (
-	darwinScrIdxOnce sync.Once
-	darwinScrIdx     = -1
-)
-
 // darwinScreenCaptureIndex resolves the avfoundation device index of
-// "Capture screen 0". This MUST be detected — on most Macs device 0 is the
-// FaceTime camera, so a naive index would stream the webcam instead of the
-// screen. Returns -1 when ffmpeg is missing or no screen device is found.
+// "Capture screen 0". Lazy + once: ffmpeg -list_devices itself triggers the
+// Screen Recording TCC dialog, so we must not call it on every reconnect or
+// even on every session open — only when H.264 is actually needed / preferred
+// after JPEG permission is already OK.
 func darwinScreenCaptureIndex() int {
 	darwinScrIdxOnce.Do(func() {
+		darwinScrIdxProbed = true
 		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			return
+		}
+		// Skip list_devices while Screen Recording is known-denied — it only
+		// produces another system prompt and cannot succeed.
+		if err := darwinCachedDeny(); err != nil {
 			return
 		}
 		// list_devices prints to stderr; exits non-zero by design.
@@ -454,23 +574,25 @@ func darwinScreenCaptureIndex() int {
 			}
 			// e.g. "[AVFoundation ...] [1] Capture screen 0"
 			if strings.Contains(low, "capture screen 0") {
-				if l := strings.Index(ln, "["); l >= 0 {
-					// find the last "[N]" token before the name
-					rest := ln
-					for {
-						a := strings.Index(rest, "[")
-						b := strings.Index(rest, "]")
-						if a < 0 || b < a {
-							break
-						}
-						tok := strings.TrimSpace(rest[a+1 : b])
-						if n, err := strconv.Atoi(tok); err == nil {
-							darwinScrIdx = n
-						}
-						rest = rest[b+1:]
+				rest := ln
+				for {
+					a := strings.Index(rest, "[")
+					b := strings.Index(rest, "]")
+					if a < 0 || b < a {
+						break
 					}
+					tok := strings.TrimSpace(rest[a+1 : b])
+					if n, err := strconv.Atoi(tok); err == nil {
+						darwinScrIdx = n
+					}
+					rest = rest[b+1:]
 				}
 			}
+		}
+		if darwinScrIdx >= 0 {
+			slog.Info("avfoundation 屏幕设备已解析", "index", darwinScrIdx)
+		} else {
+			slog.Info("avfoundation 未找到 Capture screen 设备，将使用 JPEG screencapture")
 		}
 	})
 	return darwinScrIdx
@@ -478,10 +600,26 @@ func darwinScreenCaptureIndex() int {
 
 func deskAVFScreenIndex() int { return darwinScreenCaptureIndex() }
 
-func deskH264Usable() bool { return darwinScreenCaptureIndex() >= 0 }
+func deskH264Usable() bool {
+	// Do not trigger list_devices here — that was a major reconnect TCC spam
+	// source. Only report usable after an explicit probe (prefer path / startH264).
+	if !darwinScrIdxProbed {
+		return false
+	}
+	return darwinScreenCaptureIndex() >= 0
+}
 
 func deskPreferredCodec() string {
-	if deskH264Usable() {
+	// Prefer JPEG until Screen Recording is confirmed OK. After that, probe
+	// ffmpeg once (sync.Once) and advertise H.264 when available — never on
+	// every reconnect before permission is settled.
+	darwinCapCacheMu.Lock()
+	ok := darwinPermOK
+	darwinCapCacheMu.Unlock()
+	if !ok {
+		return ""
+	}
+	if darwinScreenCaptureIndex() >= 0 {
 		return "h264"
 	}
 	return ""

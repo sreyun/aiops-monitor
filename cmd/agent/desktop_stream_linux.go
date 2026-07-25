@@ -395,6 +395,34 @@ func (i *linuxInput) Key(vk int, down bool) error {
 	return nil
 }
 
+func (i *linuxInput) SendCAD() error {
+	// Closest X11 equivalent: Ctrl+Alt+Backspace (often disabled; still best effort).
+	return deskPlayChord(i, "ctrl_alt_bksp")
+}
+
+func (i *linuxInput) TypeText(text string) error {
+	switch i.keyTool {
+	case "xdotool":
+		return i.runXdo("type", "--clearmodifiers", "--", text)
+	case "wtype":
+		return exec.Command("wtype", "--", text).Run()
+	case "ydotool":
+		return exec.Command("ydotool", "type", text).Run()
+	default:
+		return deskTypeTextViaKeys(i, text)
+	}
+}
+
+func (i *linuxInput) DeskInputMeta() deskInputMeta {
+	return deskInputMeta{
+		Desktop:        i.display,
+		InputDesktopOK: i.keyTool != "",
+		CAD:            false,
+		TypeText:       i.keyTool != "",
+		LockHint:       deskDefaultLockHint(),
+	}
+}
+
 // linuxEVKey maps a subset of VKs to Linux input event keycodes for ydotool.
 func linuxEVKey(vk int) int {
 	switch vk {

@@ -127,9 +127,43 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	if strings.HasPrefix(p, "/api/v1/content-audit") || p == "/api/v1/ai/tool-audit" {
 		return rank >= roleRank(RoleOperator)
 	}
+	// Host / Web security scan: operator+; nuclei path & allow_private config → admin.
+	if p == "/api/v1/security/overview" || strings.HasPrefix(p, "/api/v1/security/host") || strings.HasPrefix(p, "/api/v1/security/web") ||
+		strings.HasPrefix(p, "/api/v1/security/findings/") {
+		if p == "/api/v1/security/web/config" || p == "/api/v1/security/host/config" ||
+			p == "/api/v1/security/web/engine/refresh" {
+			if r.Method != http.MethodGet {
+				return rank >= roleRank(RoleAdmin)
+			}
+		}
+		if strings.HasPrefix(p, "/api/v1/security/findings/") && r.Method == http.MethodGet {
+			return rank >= roleRank(RoleViewer)
+		}
+		return rank >= roleRank(RoleOperator)
+	}
 	if p == "/api/v1/audit-export" || strings.HasPrefix(p, "/api/v1/auth/oidc/config") ||
 		strings.HasPrefix(p, "/api/v1/auth/sso/config") ||
 		p == "/api/v1/install/revoke-token" || p == "/api/v1/install/token-policy" {
+		return rank >= roleRank(RoleAdmin)
+	}
+	// SQL toolkit: offline tools + EXPLAIN → viewer+; connection CRUD/test → admin.
+	if strings.HasPrefix(p, "/api/v1/sql/") {
+		if strings.HasPrefix(p, "/api/v1/sql/change-requests") {
+			if strings.HasSuffix(p, "/approve") || strings.HasSuffix(p, "/reject") {
+				return rank >= roleRank(RoleAdmin)
+			}
+			return rank >= roleRank(RoleOperator)
+		}
+		if r.Method == http.MethodGet {
+			return rank >= roleRank(RoleViewer)
+		}
+		if p == "/api/v1/sql/beautify" || p == "/api/v1/sql/audit" || p == "/api/v1/sql/optimize" ||
+			p == "/api/v1/sql/analyze" || strings.HasSuffix(p, "/explain") {
+			return rank >= roleRank(RoleViewer)
+		}
+		if strings.HasSuffix(p, "/exec-ddl") {
+			return rank >= roleRank(RoleOperator)
+		}
 		return rank >= roleRank(RoleAdmin)
 	}
 	// K8s: cluster config writes + connectivity test → admin; scale/restart → operator+; GET → viewer+.
@@ -137,7 +171,11 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		if r.Method == http.MethodGet {
 			return rank >= roleRank(RoleViewer)
 		}
-		if strings.HasSuffix(p, "/scale") || strings.HasSuffix(p, "/restart") {
+		if strings.HasSuffix(p, "/scale") || strings.HasSuffix(p, "/restart") ||
+			strings.HasSuffix(p, "/undo") || strings.HasSuffix(p, "/exec") ||
+			strings.HasSuffix(p, "/apply") ||
+			(r.Method == http.MethodPost && strings.HasSuffix(p, "/namespaces")) ||
+			(r.Method == http.MethodDelete && strings.Contains(p, "/pods/")) {
 			return rank >= roleRank(RoleOperator)
 		}
 		return rank >= roleRank(RoleAdmin)
@@ -147,7 +185,8 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		if strings.HasPrefix(p, "/api/v1/hyperv/") && (strings.HasSuffix(p, "/power") || strings.HasSuffix(p, "/config")) {
 			return rank >= roleRank(RoleOperator)
 		}
-		if strings.HasPrefix(p, "/api/v1/containers/") && strings.HasSuffix(p, "/action") {
+		if strings.HasPrefix(p, "/api/v1/containers/") && (strings.HasSuffix(p, "/action") || strings.HasSuffix(p, "/exec") ||
+			strings.Contains(p, "/compose/")) {
 			return rank >= roleRank(RoleOperator)
 		}
 	}

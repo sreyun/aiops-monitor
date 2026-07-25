@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -485,8 +486,77 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	op := operator
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.open_terminal", hostname)})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.close_terminal", hostname)})
+	s.serveTerminalWS(ws, sess, hostID, hostname, op, clientIP)
+}
 
-	// 终端审计：把会话里解析出的每条命令记为独立的「终端审计日志」(KindTerminal)，附主机 IP。
+// handleContainerTerminal upgrades to WebSocket and opens interactive docker/podman exec -it.
+func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request) {
+	hostID := strings.TrimSpace(r.PathValue("hostID"))
+	cid := strings.TrimSpace(r.PathValue("id"))
+	if hostID == "" || cid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host and container id required"})
+		return
+	}
+	if !s.cfg.TerminalEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal.disabled")})
+		return
+	}
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
+	verified, hasPassword := s.auth.isTerminalVerified(r)
+	if !verified {
+		code := "terminal_verify_required"
+		if !hasPassword {
+			code = "terminal_password_not_set"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": Tr(r, "terminal_auth."+code),
+			"code":  code,
+		})
+		return
+	}
+	shell := strings.TrimSpace(r.URL.Query().Get("shell"))
+	if shell == "" {
+		shell = "sh"
+	}
+	if len(shell) > 32 || strings.ContainsAny(shell, " \t\n|&;`$") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid shell"})
+		return
+	}
+	ws, err := wsAccept(w, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "terminal.ws_required")})
+		return
+	}
+	defer ws.Close()
+
+	hostname := shortID(hostID)
+	for _, h := range s.store.ListHosts() {
+		if h.ID == hostID {
+			hostname = h.Hostname
+			break
+		}
+	}
+	cname := strings.TrimSpace(r.URL.Query().Get("name"))
+	label := hostname + "/ctr:" + cid
+	if cname != "" {
+		label = hostname + "/" + cname
+	}
+	operator, clientIP := s.actorIP(r)
+	sess := s.term.createFull(hostID, label, operator, "container_exec", cid+"|"+shell)
+	sess.lang = langFromRequest(r)
+	sess.ip = clientIP
+	defer s.term.remove(sess.id)
+	op := operator
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname,
+		Message: fmt.Sprintf("打开容器终端：host=%s container=%s shell=%s", hostID, cid, shell)})
+	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname,
+		Message: fmt.Sprintf("关闭容器终端：host=%s container=%s", hostID, cid)})
+	s.serveTerminalWS(ws, sess, hostID, label, op, clientIP)
+}
+
+func (s *Server) serveTerminalWS(ws *wsConn, sess *termSession, hostID, hostname, op, clientIP string) {
 	hostIP := ""
 	if h := s.hostByID(hostID); h != nil {
 		hostIP = h.IP
@@ -496,10 +566,6 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.no_channel") + "\x1b[0m\r\n\r\n" + Tz("terminal.no_channel_hint_1") + "\r\n" + Tz("terminal.no_channel_hint_2") + "\r\n" + Tz("terminal.no_channel_hint_3") + "\r\n\r\n" + Tz("terminal.no_channel_hint_4") + "\r\n"))
 		return
 	}
-	// Watchdog: if the agent never attaches, don't hang the operator forever.
-	// Timeout raised from 10s to 35s because notifyAgent now queues the session
-	// when the agent is between polls — the agent picks it up on its next cycle
-	// (up to 25s long-poll timeout + a few seconds for HTTP round-trip).
 	go func() {
 		select {
 		case <-sess.agentUp:
@@ -510,11 +576,6 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// browser → agent. The browser tags each WS message: byte 0 'i' = input,
-	// 'r' = resize ("colsxrows"), 'u' = upload data chunk, 'e' = end upload.
-	// We re-encode it as a self-delimiting frame
-	// ([type:1][len:2 BE][payload]) so the agent can demultiplex input vs resize
-	// off the raw rx byte stream regardless of HTTP chunk boundaries.
 	go func() {
 		defer sess.close()
 		for {
@@ -532,37 +593,25 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			case 'i':
 				typ, payload = 'i', data[1:]
 			case 'u':
-				typ, payload = 'u', data[1:] // upload data chunk
+				typ, payload = 'u', data[1:]
 			case 'e':
-				typ, payload = 'e', nil // end of upload
+				typ, payload = 'e', nil
 			case 'f':
-				typ, payload = 'f', data[1:] // file upload metadata
+				typ, payload = 'f', data[1:]
 			case 'd':
-				typ, payload = 'd', data[1:] // download request
+				typ, payload = 'd', data[1:]
 			}
 			if len(payload) == 0 && typ != 'e' {
 				continue
 			}
-			// SECURITY: do NOT persist raw input keystrokes into the recording — they
-			// would capture non-echoed secrets (passwords typed at sudo/ssh/mysql
-			// prompts) verbatim on disk. Visual replay is reconstructed from the
-			// shell's echoed OUTPUT stream (recorded below), which already reflects
-			// everything shown on screen; the completed-command audit is the intended
-			// keystroke audit trail.
 			if typ == 'i' {
 				if cmd := sess.processCommandAudit(payload); cmd != "" {
 					s.store.AddLog(LogEntry{Kind: KindTerminal, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.terminal_cmd", hostname, hostIP, cmd)})
 				}
 			}
-			// Record resize frames so replay can restore the original terminal dimensions
 			if typ == 'r' {
 				sess.recordFrame("resize", payload)
 			}
-			// Chunk payloads larger than the 2-byte frame length limit into
-			// multiple same-type frames. termFrame would otherwise SILENTLY
-			// TRUNCATE at 65535 bytes — corrupting large pastes ('i') or upload
-			// chunks ('u'). The agent processes each frame independently, so
-			// splitting is fully transparent.
 			for {
 				chunk := payload
 				if len(chunk) > 0xffff {
@@ -574,21 +623,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if len(payload) <= 0xffff {
-					break // sent the only/last chunk (also covers the empty 'e' frame)
+					break
 				}
 				payload = payload[0xffff:]
 			}
 		}
 	}()
-	// agent → browser (shell output) + recording + observers
 	go func() {
 		defer sess.close()
 		for {
 			select {
 			case b := <-sess.toBrowser:
 				sess.recordFrame("output", b)
-				sess.notePasswordPrompt(b) // 检测密码提示，抑制下一条输入行的命令审计（防密码入库）
-				sess.fanOut(b)             // deliver to observers under lock (avoids the map race → panic)
+				sess.notePasswordPrompt(b)
+				sess.fanOut(b)
 				if err := ws.WriteBinary(b); err != nil {
 					return
 				}
@@ -597,11 +645,6 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	// Keepalive: ping the browser every 25s so an idle/minimized terminal WS isn't
-	// torn down by a proxy / NAT / browser-background idle timeout — which would
-	// surface as a spurious "已断开" and lose the shell. Server-originated pings keep
-	// both directions warm (the browser auto-pongs); this is NOT a reconnect, so the
-	// session survives. Stops when the session ends or the socket is already dead.
 	go func() {
 		t := time.NewTicker(25 * time.Second)
 		defer t.Stop()
@@ -662,8 +705,8 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 			s.term.mu.Unlock()
 			out := map[string]string{"session": sid}
 			if sess != nil {
-				if sess.mode == "exec" {
-					out["mode"] = "exec"
+				if sess.mode == "exec" || sess.mode == "container_exec" {
+					out["mode"] = sess.mode
 					out["command"] = sess.command
 				}
 				if sess.lang != "" {
@@ -683,8 +726,8 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 	case sid := <-ch:
 		out := map[string]string{"session": sid}
 		if sess := s.term.get(sid); sess != nil {
-			if sess.mode == "exec" {
-				out["mode"] = "exec"
+			if sess.mode == "exec" || sess.mode == "container_exec" {
+				out["mode"] = sess.mode
 				out["command"] = sess.command
 			}
 			if sess.lang != "" {

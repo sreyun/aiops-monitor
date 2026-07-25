@@ -1772,6 +1772,11 @@ func validAssistTaskName(task string) bool {
 	return true
 }
 
+// assistOpsActionSchema 统一「建议→确认→执行→回验」动作提案 JSON 约定（前端 applyOpsActionPlan 解析）。
+const assistOpsActionSchema = "严格输出一个 ```json 代码块，结构：" +
+	`{"summary":"一句话摘要","actions":[{"type":"动作类型","target":{"...ids..."},"params":{},"risk":"low|medium|high","verify":"refresh_inventory|rescans|re_explain|none"}]}。` +
+	"无动作时 actions 可为 []。禁止输出无法映射到平台 API 的虚构 type。"
+
 // buildAssistSystemPrompt 为各类「AI 辅助」任务构造专用系统提示词。ctxText 是调用方（前端）
 // 预先整理好的上下文文本（可用标签 / 数据摘要 / 结果正文 / 审计条目等），原样注入。
 func buildAssistSystemPrompt(task, ctxText string) string {
@@ -1871,6 +1876,49 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"④ 给出可执行处置建议（阻断/告警/教育/收敛敏感词规则/改用合规内网模型等）。" +
 			"用简洁中文分点作答，只依据给定记录、不臆造；未见敏感外泄时明确说明「未见明显敏感数据外泄」。" +
 			"注意：你分析的是审计数据本身，回答里【不要原样复述完整的密钥/密码等敏感值】，用脱敏描述。" + ctxBlock
+	case "host_security_diagnosis":
+		return "你是资深主机安全与漏洞管理专家。以下是主机安全扫描报告摘要（加固基线、可选 ClamAV、IOC 启发式、OSV 包 CVE、风险评分）。请：\n" +
+			"① 一句话研判主机整体风险（低/中/高/危急）；\n" +
+			"② 按严重度列出优先修复项（恶意软件/加固/CVE），每条给出可执行命令或配置改动；\n" +
+			"③ 说明 ClamAV 不可用时的降级含义与补救；\n" +
+			"④ 给出 7 日内处置清单。用简洁中文分点作答，只依据给定数据，不臆造。" + ctxBlock
+	case "host_security_remediation":
+		return "你是主机安全自动化专家。根据扫描报告产出【可确认执行】的动作计划。" +
+			assistOpsActionSchema +
+			"可用 type：host_playbook（params.steps[] 含 name/command）、container_action 不适用。" +
+			"高危（关防火墙/改 sshd/删文件）risk=high；修复后 verify=rescans。" +
+			"先给中文摘要，再给唯一 ```json。只依据报告。" + ctxBlock
+	case "web_vuln_diagnosis":
+		return "你是资深 Web 应用安全（AppSec）专家。以下是 Nuclei Web 漏洞扫描报告（执行摘要、按严重度 findings、模板 ID、修复建议）。请：\n" +
+			"① 一句话研判目标站点风险；\n" +
+			"② 按 critical→info 归类并解释业务影响；\n" +
+			"③ 给出可落地的修复优先级与验证步骤；\n" +
+			"④ 标明误报可能与需人工复核项。用简洁中文分点作答，只依据报告，不臆造漏洞。" + ctxBlock
+	case "web_vuln_remediation":
+		return "你是 AppSec 自动化专家。根据 Web 扫描报告产出【可确认执行】的动作计划（偏复扫与配置核查，勿直接对生产打破坏性补丁）。" +
+			assistOpsActionSchema +
+			"可用 type：host_playbook（在能访问该站点的跳板/主机上做只读验证）、或仅给出 summary 而无破坏动作。" +
+			"verify=rescans。先中文摘要，再唯一 ```json。" + ctxBlock
+	case "hyperv_ops_plan":
+		return "你是 Hyper-V 运维自动化专家。根据虚拟机/清单上下文产出可确认执行的动作计划。" +
+			assistOpsActionSchema +
+			"可用 type：hyperv_power（params.action=start|stop|restart|force_stop）、hyperv_config（params.processor_count/memory_mb/memory_min_mb/memory_max_mb/dynamic_memory）。" +
+			"target 需 host_id+vm_id+name。改 CPU/内存须提醒关机。verify=refresh_inventory。" + ctxBlock
+	case "container_ops_plan":
+		return "你是容器运维自动化专家。根据容器上下文产出可确认执行的动作计划。" +
+			assistOpsActionSchema +
+			"可用 type：container_action（params.action=start|stop|restart）、container_exec（params.command 短命令）。" +
+			"target 需 host_id+id+name。verify=refresh_inventory。" + ctxBlock
+	case "k8s_ops_plan":
+		return "你是 Kubernetes 运维自动化专家。根据集群/Pods/Deployments/事件产出可确认执行的动作计划。" +
+			assistOpsActionSchema +
+			"可用 type：k8s_scale（params.replicas）、k8s_restart、k8s_undo、k8s_delete_pod、k8s_exec（params.command）。" +
+			"target 需 cluster_id+namespace+name。verify=refresh_inventory。" + ctxBlock
+	case "sql_remediation":
+		return "你是 MySQL 性能自动化专家。根据 SQL/EXPLAIN/索引上下文产出动作计划。" +
+			assistOpsActionSchema +
+			"可用 type：sql_apply（params.sql 改写进编辑器）、sql_ddl（params.sql 仅 CREATE/ALTER INDEX 等白名单 DDL，risk=high）。" +
+			"verify=re_explain。先中文摘要，再唯一 ```json。禁止 DROP/TRUNCATE/DELETE。" + ctxBlock
 	case "hardware_diagnosis":
 		return "你是资深数据中心硬件运维专家。以下是一台设备（服务器 / 存储 / 磁盘柜等）的硬件快照（整机身份、健康、" +
 			"异常部件、BMC 事件、CPU/内存/存储/磁盘框/RAID/逻辑卷/电源/风扇/温度/固件等）。请：\n" +
@@ -1933,6 +1981,22 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"② 按紧急程度列出关键 findings，并说明业务影响；\n" +
 			"③ 给出可执行的排查与处置步骤（优先只读确认，再谨慎变更）；\n" +
 			"④ 指出是否建议开事件/工单或进入变更冻结期外再操作。用简洁中文分点作答，只依据给定报告，不臆造。" + ctxBlock
+	case "sql_beautify":
+		return "你是 MySQL SQL 格式化专家（目标方言见上下文：mysql57 或 mysql80）。请把给定 SQL 美化为可读形式：" +
+			"关键字大写、合理缩进与换行、保留字符串字面量与注释语义、不改变业务逻辑。" +
+			"要求：① 先用一个 ```sql 代码块只放美化后的完整语句；② 再用一两句中文说明主要排版选择。" +
+			"不要改写语义、不要擅自加 LIMIT/删条件。" + ctxBlock
+	case "sql_audit":
+		return "你是资深 MySQL DBA / SQL 审核专家（方言见上下文）。以下含原始 SQL 与规则引擎 findings。" +
+			"请：① 一句话总体风险（低/中/高）；② 补充规则未覆盖的隐患（锁、事务、字符集、统计信息、业务语义）；" +
+			"③ 按严重度列出问题与依据；④ 给出可落地的改写/索引/参数建议。" +
+			"用简洁中文分点作答；可附 ```sql 示例。只依据给定上下文，不臆造表结构；信息不足时说明还需要什么。" + ctxBlock
+	case "sql_optimize":
+		return "你是资深 MySQL 性能优化专家（方言见上下文：5.7/8.0）。以下含原始 SQL、静态审核 findings、可选 EXPLAIN 摘要与索引信息。" +
+			"请：① 先用一个 ```sql 代码块给出推荐改写（保持语义等价或明确标注语义差异）；" +
+			"② 说明为何能更好走索引（引用 type/key/rows/filtered 若有）；③ 给出索引 DDL 模板（CREATE INDEX …）；" +
+			"④ 标明 5.7 vs 8.0 能力差异（CTE/窗口/降序索引等）若相关。" +
+			"禁止建议执行 DDL/DML 破坏性操作到生产而不加风险提示；不要编造不存在的列/索引。" + ctxBlock
 	default: // generic
 		return "你是资深 SRE / 运维助手，用简洁中文帮助运维人员处理监控、告警、排障、性能、日志与自动化相关问题；无关问题礼貌拒答。" + ctxBlock
 	}

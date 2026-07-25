@@ -35,20 +35,72 @@ func substitutePlaybookVars(s string, vars map[string]string) string {
 	})
 }
 
-// evalPlaybookWhen 求值 when 条件：支持 a==b / a!=b；否则按真值（空/false/0/no/off = 假）。
+// evalPlaybookWhen 求值 when 条件。支持：
+//
+//	a == b / a != b（macos 与 darwin 视为同一 OS）
+//	a contains b（子串，大小写不敏感）
+//	a >= b / <= / > / <（两侧均可解析为数字时按数值比较）
+//	否则按真值（空 / false / 0 / no / off = 假）
 func evalPlaybookWhen(when string, vars map[string]string) bool {
 	when = strings.TrimSpace(substitutePlaybookVars(when, vars))
-	if i := strings.Index(when, "=="); i >= 0 {
-		return strings.TrimSpace(when[:i]) == strings.TrimSpace(when[i+2:])
+	if when == "" {
+		return false
 	}
-	if i := strings.Index(when, "!="); i >= 0 {
-		return strings.TrimSpace(when[:i]) != strings.TrimSpace(when[i+2:])
+	lower := strings.ToLower(when)
+	for _, op := range []string{"contains", ">=", "<=", "==", "!=", ">", "<"} {
+		if i := strings.Index(lower, op); i >= 0 {
+			// Re-slice on original to preserve values; op length from lower match.
+			left := strings.TrimSpace(when[:i])
+			right := strings.TrimSpace(when[i+len(op):])
+			switch op {
+			case "contains":
+				return strings.Contains(strings.ToLower(left), strings.ToLower(right))
+			case "==":
+				return whenValuesEqual(left, right)
+			case "!=":
+				return !whenValuesEqual(left, right)
+			case ">=", "<=", ">", "<":
+				lf, lerr := strconv.ParseFloat(left, 64)
+				rf, rerr := strconv.ParseFloat(right, 64)
+				if lerr != nil || rerr != nil {
+					return false
+				}
+				switch op {
+				case ">=":
+					return lf >= rf
+				case "<=":
+					return lf <= rf
+				case ">":
+					return lf > rf
+				case "<":
+					return lf < rf
+				}
+			}
+		}
 	}
 	switch strings.ToLower(when) {
 	case "", "false", "0", "no", "off":
 		return false
 	}
 	return true
+}
+
+func whenValuesEqual(a, b string) bool {
+	if strings.TrimSpace(a) == strings.TrimSpace(b) {
+		return true
+	}
+	return normalizeWhenToken(a) == normalizeWhenToken(b)
+}
+
+func normalizeWhenToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "macos", "osx", "mac":
+		return "darwin"
+	case "kylin", "uos", "neokylin":
+		return "linux"
+	}
+	return s
 }
 
 // resolvePlaybookCommand 决定某步在一台主机上实际执行的命令：
@@ -58,7 +110,7 @@ func resolvePlaybookCommand(step PlaybookStep, h *Host, vars map[string]string) 
 		return buildModuleCommand(step.Module, step.Args, vars)
 	}
 	cmd := step.Command
-	switch strings.ToLower(h.OS) {
+	switch normalizeWhenToken(h.OS) {
 	case "windows":
 		if strings.TrimSpace(step.CommandWin) != "" {
 			cmd = step.CommandWin
@@ -76,7 +128,7 @@ func resolvePlaybookCommand(step PlaybookStep, h *Host, vars map[string]string) 
 // for each step that is safe to compensate.
 func resolvePlaybookRollback(step PlaybookStep, h *Host, vars map[string]string) string {
 	cmd := step.Rollback
-	switch strings.ToLower(h.OS) {
+	switch normalizeWhenToken(h.OS) {
 	case "windows":
 		if strings.TrimSpace(step.RollbackWin) != "" {
 			cmd = step.RollbackWin
@@ -353,6 +405,10 @@ func (s *Server) runScheduler(interval time.Duration) {
 
 // fireScheduledPlaybook runs one scheduled execution, clearing the in-flight guard
 // when it finishes so the next occurrence can fire.
+//
+// High-risk / change-module playbooks never auto-execute: they enter
+// pending_approval (same bar as manual X-AIOps-Risk-Accepted) so schedule cannot
+// bypass the human gate that handleExecutePlaybook enforces.
 func (s *Server) fireScheduledPlaybook(pb Playbook) {
 	hosts := s.onlinePlaybookTargets(pb)
 	if len(hosts) == 0 {
@@ -376,7 +432,28 @@ func (s *Server) fireScheduledPlaybook(pb Playbook) {
 			}
 		}
 	}
-	exec := s.playbooks.StartExecution(pb, Tz("playbook.scheduler_actor"), hosts)
+	preflight := s.buildPlaybookPreflight(pb)
+	if !preflight.Valid {
+		s.playbooks.clearSchedBusy(pb.ID)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler",
+			Message: fmt.Sprintf("定时剧本「%s」预检未通过，已跳过", pb.Name)})
+		return
+	}
+	// Default: non-readonly / high-risk scheduled runs require approval (cannot silent-fire).
+	if preflight.RequiresApproval {
+		note := "高风险/变更类定时剧本需人工审批后方可执行"
+		if preflight.FreezeActive {
+			note = "变更冻结期内定时剧本需人工审批"
+		}
+		exec := s.playbooks.StartPendingExecution(pb, Tz("playbook.scheduler_actor"), hosts, note)
+		s.persistPlaybookExecution(exec.ID)
+		s.playbooks.clearSchedBusy(pb.ID) // allow next tick to enqueue again only after this is resolved? keep busy cleared so approve can run
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler",
+			Message: fmt.Sprintf("定时剧本「%s」待审批（execution=%d，目标 %d 台）", pb.Name, exec.ID, len(hosts))})
+		s.notifyPlaybookPendingApproval(pb, exec)
+		return
+	}
+	exec := s.playbooks.StartScheduledExecution(pb, Tz("playbook.scheduler_actor"), hosts)
 	s.persistPlaybookExecution(exec.ID)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: "scheduler", Message: Tz("log.sched_fire", pb.Name, len(hosts))})
 	go func() {
@@ -385,10 +462,91 @@ func (s *Server) fireScheduledPlaybook(pb Playbook) {
 	}()
 }
 
+func (s *Server) notifyPlaybookPendingApproval(pb Playbook, exec *PlaybookExecution) {
+	if s == nil || exec == nil {
+		return
+	}
+	msg := fmt.Sprintf("定时剧本「%s」等待审批（execution=%d）。请在编排执行历史中批准或拒绝。", pb.Name, exec.ID)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler", Message: msg})
+	s.store.AddAlertRecord(AlertRecord{
+		Key:     fmt.Sprintf("playbook_pending:%d", exec.ID),
+		Type:    "playbook_pending_approval",
+		Level:   "warning",
+		Message: msg,
+		FiredAt: time.Now().Unix(),
+	})
+}
+
+func (s *Server) handleApprovePlaybookExecution(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	exec, ok := s.playbooks.GetExecution(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "execution not found"})
+		return
+	}
+	if exec.Status != "pending_approval" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "仅待审批的执行可批准"})
+		return
+	}
+	pb, ok := s.playbooks.Get(exec.PlaybookID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.not_found")})
+		return
+	}
+	hosts := s.onlinePlaybookTargets(pb)
+	if len(hosts) == 0 {
+		s.playbooks.FinishExecution(id, "failed")
+		s.persistPlaybookExecution(id)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
+		return
+	}
+	actor := s.actorName(r)
+	s.playbooks.SetExecutionStatus(id, "running", false)
+	// Refresh host results for currently online targets.
+	for _, h := range hosts {
+		s.playbooks.UpdateHostResult(id, h.ID, HostExecResult{Hostname: h.Hostname, Status: "pending"})
+	}
+	s.persistPlaybookExecution(id)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: actor, IP: s.clientIP(r),
+		Message: fmt.Sprintf("批准定时剧本执行「%s」(execution=%d)", pb.Name, id)})
+	go func() {
+		fresh, _ := s.playbooks.GetExecution(id)
+		s.runPlaybookExecution(pb, &fresh, hosts)
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": id})
+}
+
+func (s *Server) handleRejectPlaybookExecution(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	exec, ok := s.playbooks.GetExecution(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "execution not found"})
+		return
+	}
+	if exec.Status != "pending_approval" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "仅待审批的执行可拒绝"})
+		return
+	}
+	s.playbooks.FinishExecution(id, "rejected")
+	s.persistPlaybookExecution(id)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
+		Message: fmt.Sprintf("拒绝定时剧本执行「%s」(execution=%d)", exec.PlaybookName, id)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 const (
 	// execPickupTimeout bounds how long a summoned agent has to attach before we
-	// declare a no-pickup. Covers the agent's ≤25s long-poll cycle plus network margin.
-	execPickupTimeout = 40 * time.Second
+	// declare a no-pickup. Covers a full long-poll cycle, busy-agent queueing, and
+	// WAN/VPN jitter — 40s was too aggressive and caused false no-pickup retries.
+	execPickupTimeout = 90 * time.Second
 	// playbookMaxAttempts is the total number of tries per step per host: 1 initial
 	// + retries. Only infrastructure-class failures (no-pickup/timeout/abnormal) are
 	// retried; a genuine non-zero command exit is never retried.
@@ -442,6 +600,9 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Status = "skipped"
 					sr.Output = "（when 条件不满足，已跳过）"
 					sr.Duration = time.Since(start).Milliseconds()
+					if result.Reason == "" {
+						result.Reason = "skipped_when"
+					}
 					result.Steps = append(result.Steps, sr)
 					continue
 				}
@@ -511,6 +672,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Status = "failed"
 					sr.Output = output + "\n[error] " + err.Error()
 					result.Status = "failed"
+					result.Reason = execKindReason(kind)
 					result.Output += sr.Output + "\n"
 					result.Steps = append(result.Steps, sr)
 					if !step.ContinueErr {
@@ -521,6 +683,9 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Output = output
 					result.Output += output + "\n"
 					result.Steps = append(result.Steps, sr)
+					if strings.TrimSpace(step.Module) == "host_inspect" {
+						s.ingestPlaybookHostInspect(pb.Name, exec.ID, h, exec.Operator, output, sr.Duration)
+					}
 					if rb := strings.TrimSpace(resolvePlaybookRollback(step, h, vars)); rb != "" {
 						rollbacks = append(rollbacks, rollbackAction{step: step, cmd: rb})
 					}
@@ -569,16 +734,23 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		}(h)
 	}
 	wg.Wait()
-	// Determine overall status
-	allSuccess := true
-	for _, r := range exec.HostResults {
-		if r.Status != "success" {
-			allSuccess = false
-			break
+	if s.inspect != nil {
+		s.inspect.finishPlaybookBatch(playbookInspectBatchID(exec.ID))
+	}
+	// Re-read host results (local exec snapshot is stale after UpdateHostResult).
+	fresh, _ := s.playbooks.GetExecution(exec.ID)
+	okN, failN := 0, 0
+	for _, r := range fresh.HostResults {
+		if r.Status == "success" {
+			okN++
+		} else {
+			failN++
 		}
 	}
 	status := "completed"
-	if !allSuccess {
+	if failN > 0 && okN > 0 {
+		status = "partial"
+	} else if failN > 0 {
 		status = "failed"
 	}
 	s.playbooks.FinishExecution(exec.ID, status)
@@ -586,7 +758,22 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, status)})
 	// 学习闭环 B：把执行结果沉淀为经验记忆，全成功则强化——让后续「AI 生成剧本 / 事件诊断」
 	// 复用被现实验证有效的自动化做法。异步、尽力而为。
-	s.rememberPlaybookOutcome(pb, exec, status)
+	s.rememberPlaybookOutcome(pb, &fresh, status)
+}
+
+func execKindReason(k execKind) string {
+	switch k {
+	case execNoPickup:
+		return "no_pickup"
+	case execTimeout:
+		return "timeout"
+	case execExit:
+		return "exit"
+	case execAbnormal:
+		return "error"
+	default:
+		return "error"
+	}
 }
 
 // execKind classifies a single command run so the batch runner can decide

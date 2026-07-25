@@ -56,12 +56,15 @@ func renderScriptWithAudit(tmpl, server, token, category, serversJSON, logPaths 
 	if audit.ContentAuditMaxEventsPerMin <= 0 {
 		audit.ContentAuditMaxEventsPerMin = 2000
 	}
+	windows := strings.Contains(tmpl, "$ErrorActionPreference")
+	cfgB64 := installConfigB64(server, token, category, serversJSON, logPaths, audit, windows)
 	return strings.NewReplacer(
 		"__SERVER__", server,
 		"__TOKEN__", token,
 		"__CATEGORY__", category,
 		"__SERVERS_JSON__", serversJSON,
 		"__LOG_PATHS__", logPaths,
+		"__CONFIG_B64__", cfgB64,
 		"__SNI_ENABLED__", strconv.FormatBool(audit.SNIEnabled || audit.ContentAudit),
 		"__SNI_INTERFACE__", audit.SNIInterface,
 		"__CAPTURE_BACKEND__", audit.CaptureBackend,
@@ -267,7 +270,10 @@ func sanitizeAuditPatternList(raw string, maxCount, maxLen int) string {
 	return string(b)
 }
 
-// installShTemplate installs the agent on Linux / macOS. It works without root:
+// installShTemplate installs the agent on Linux / macOS.
+// Flow: detect prior install → if present stop+uninstall → download → write config →
+// enable unit and systemctl/launchd restart (restart works for both fresh and reinstall).
+// It works without root:
 // as root it registers a systemd service, otherwise it installs under $HOME and
 // starts in the background.
 const installShTemplate = `#!/bin/sh
@@ -332,6 +338,87 @@ aiops_has_systemd() {
   return 1
 }
 
+# Detect a prior one-liner / --install-service agent so reinstall can stop+uninstall first.
+aiops_is_installed() {
+  for _d in "$DIR" /opt/aiops-agent "${HOME}/.aiops-agent"; do
+    [ -n "$_d" ] || continue
+    if [ -x "$_d/aiops-agent" ] || [ -f "$_d/config.yaml" ] || [ -f "$_d/config.json" ]; then
+      return 0
+    fi
+  done
+  if [ -f /etc/systemd/system/aiops-agent.service ] || [ -f /etc/systemd/system/aiops-monitor-agent.service ]; then
+    return 0
+  fi
+  for _pl in \
+    "$HOME/Library/LaunchAgents/com.aiops.agent.plist" \
+    "/Library/LaunchDaemons/com.aiops.agent.plist" \
+    "$HOME/Library/LaunchAgents/com.aiops.monitor.agent.plist" \
+    "/Library/LaunchDaemons/com.aiops.monitor.agent.plist"
+  do
+    [ -f "$_pl" ] && return 0
+  done
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f 'aiops-agent' >/dev/null 2>&1 && return 0
+  elif command -v ps >/dev/null 2>&1; then
+    ps -ax -o args= 2>/dev/null | grep -F 'aiops-agent' | grep -v grep >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+# Stop service(s) and remove a previous agent install before writing the new one.
+aiops_stop_and_uninstall_existing() {
+  if ! aiops_is_installed; then
+    echo "[AIOps] no existing agent found — fresh install"
+    return 0
+  fi
+  echo "[AIOps] existing agent detected — stopping service, uninstalling, then reinstalling"
+  if command -v systemctl >/dev/null 2>&1; then
+    for _u in aiops-agent aiops-monitor-agent; do
+      systemctl stop "$_u" 2>/dev/null || true
+      systemctl disable "$_u" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${_u}.service" "/lib/systemd/system/${_u}.service" "/usr/lib/systemd/system/${_u}.service"
+    done
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  for _pl in \
+    "$HOME/Library/LaunchAgents/com.aiops.agent.plist" \
+    "/Library/LaunchDaemons/com.aiops.agent.plist" \
+    "$HOME/Library/LaunchAgents/com.aiops.monitor.agent.plist" \
+    "/Library/LaunchDaemons/com.aiops.monitor.agent.plist"
+  do
+    [ -f "$_pl" ] || continue
+    launchctl unload "$_pl" 2>/dev/null || true
+    launchctl bootout system "$_pl" 2>/dev/null || true
+    if [ "$(id -u)" != "0" ]; then
+      launchctl bootout "gui/$(id -u)" "$_pl" 2>/dev/null || true
+    fi
+    rm -f "$_pl"
+  done
+  if command -v crontab >/dev/null 2>&1; then
+    crontab -l 2>/dev/null | grep -v 'aiops-agent --config' | crontab - 2>/dev/null || true
+  fi
+  if [ "$(id -u)" = "0" ] && [ -d /var/spool/cron/crontabs ]; then
+    for _cf in /var/spool/cron/crontabs/*; do
+      [ -f "$_cf" ] || continue
+      if grep -q 'aiops-agent --config' "$_cf" 2>/dev/null; then
+        grep -v 'aiops-agent --config' "$_cf" > "$_cf.aiops.tmp" 2>/dev/null && mv "$_cf.aiops.tmp" "$_cf" || rm -f "$_cf.aiops.tmp"
+      fi
+    done
+  fi
+  pkill -x aiops-agent 2>/dev/null || true
+  pkill -f 'aiops-agent --config' 2>/dev/null || true
+  sleep 1 2>/dev/null || true
+  for _d in "$DIR" /opt/aiops-agent "${HOME}/.aiops-agent"; do
+    [ -n "$_d" ] || continue
+    [ -d "$_d" ] || continue
+    # Keep custom AIOPS_DIR / default roots empty for a clean reinstall.
+    rm -rf "$_d"
+  done
+  echo "[AIOps] previous agent uninstalled"
+}
+
+aiops_stop_and_uninstall_existing
+
 echo "[AIOps] installing to $DIR (server $SERVER)"
 echo "[AIOps] platform $OS/$ARCH → $BIN"
 mkdir -p "$DIR"
@@ -375,58 +462,19 @@ if aiops_fetch "$SERVER/dl/plugins.zip" plugins.zip 2>/dev/null; then
   command -v unzip >/dev/null 2>&1 && unzip -oq plugins.zip
   rm -f plugins.zip
 fi
-# config.example.yaml is written locally by the agent on first start
-# (ensureConfigExample), so we don't fetch it here — that was a wasted 404.
-# YAML is now the default/recommended config format. The JSON arrays injected
-# below (servers / log_paths) are valid YAML flow syntax, so they drop straight in.
-SERVERS_JSON='__SERVERS_JSON__'
-if [ -n "$SERVERS_JSON" ]; then
-  cat > config.yaml <<EOF
-servers: $SERVERS_JSON
-category: "$CATEGORY"
-log_paths: __LOG_PATHS__
-report_interval: 30
-plugin_interval: 60
-plugins_dir: "$DIR/plugins"
-state_file: "$DIR/agent_state.json"
-sni_dns_capture:
-  enabled: __SNI_ENABLED__
-  interface: "__SNI_INTERFACE__"
-  capture_backend: "__CAPTURE_BACKEND__"
-  max_entries_per_min: 5000
-  tls_metadata_ports: [443,8443,9443]
-  content_audit: __CONTENT_AUDIT__
-  content_audit_ports: __CONTENT_AUDIT_PORTS__
-  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__
-  content_audit_body_mode: "__CONTENT_AUDIT_BODY_MODE__"
-  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__
-  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__
-  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__
-EOF
+# Annotated config.yaml: active settings + full commented option reference.
+# Generated server-side (base64) so every install ships complete docs.
+AIOPS_CONFIG_B64='__CONFIG_B64__'
+if command -v base64 >/dev/null 2>&1; then
+  if ! printf '%s' "$AIOPS_CONFIG_B64" | base64 -d > config.yaml 2>/dev/null; then
+    if ! printf '%s' "$AIOPS_CONFIG_B64" | base64 -D > config.yaml 2>/dev/null; then
+      echo "[AIOps] ERROR: failed to decode config.yaml (base64)"
+      exit 1
+    fi
+  fi
 else
-  cat > config.yaml <<EOF
-server: "$SERVER"
-token: "$TOKEN"
-category: "$CATEGORY"
-log_paths: __LOG_PATHS__
-report_interval: 30
-plugin_interval: 60
-plugins_dir: "$DIR/plugins"
-state_file: "$DIR/agent_state.json"
-sni_dns_capture:
-  enabled: __SNI_ENABLED__
-  interface: "__SNI_INTERFACE__"
-  capture_backend: "__CAPTURE_BACKEND__"
-  max_entries_per_min: 5000
-  tls_metadata_ports: [443,8443,9443]
-  content_audit: __CONTENT_AUDIT__
-  content_audit_ports: __CONTENT_AUDIT_PORTS__
-  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__
-  content_audit_body_mode: "__CONTENT_AUDIT_BODY_MODE__"
-  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__
-  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__
-  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__
-EOF
+  echo "[AIOps] ERROR: base64 not found; cannot write config.yaml"
+  exit 1
 fi
 # Verify config.yaml was written correctly — on some systems set -e causes the
 # script to exit partway (e.g. plugins download failure) BEFORE reaching here,
@@ -439,6 +487,7 @@ if [ ! -s config.yaml ]; then
 fi
 # Restrict config.yaml to owner-only (contains tokens/secrets).
 chmod 600 config.yaml 2>/dev/null || true
+echo "[AIOps] config.yaml written (active settings + full commented reference)"
 if [ "__SNI_ENABLED__" = "true" ] && { [ "__CAPTURE_BACKEND__" = "tshark" ] || [ "$OS" = "Darwin" ]; }; then
   if ! command -v tshark >/dev/null 2>&1 && [ ! -x /Applications/Wireshark.app/Contents/MacOS/tshark ]; then
     echo "[AIOps] WARNING: network content audit needs TShark on $OS."
@@ -521,15 +570,11 @@ UNIT
     done
   fi
   systemctl daemon-reload
-  systemctl stop aiops-agent 2>/dev/null || true
-  pkill -f "$DIR/aiops-agent --config" 2>/dev/null || pkill -x aiops-agent 2>/dev/null || true
   systemctl enable aiops-agent >/dev/null 2>&1 || true
-  # Use restart (not "enable --now"): on an UPGRADE the service is already running
-  # the OLD binary, and "enable --now" is a no-op for a running unit — the new
-  # binary wouldn't take effect until the next reboot. restart re-execs the freshly
-  # downloaded binary immediately (and still starts it if it was stopped).
+  # Always restart (not start / enable --now): works for both fresh install and
+  # reinstall, and guarantees the newly written binary is the one that runs.
   systemctl restart aiops-agent
-  echo "[AIOps] systemd service (re)started: aiops-agent (user=$AIOPS_USER, boot autostart + auto-restart)"
+  echo "[AIOps] systemd service restarted: aiops-agent (user=$AIOPS_USER, boot autostart + auto-restart)"
   # 麒麟/UOS 系统自动检测并配置 kysec 白名单
   if command -v kysec_adm &>/dev/null; then
     kysec_adm -a $DIR/aiops-agent 2>/dev/null && echo "[AIOps] kysec whitelist added: $DIR/aiops-agent" || true
@@ -574,38 +619,45 @@ PL
   launchctl unload "$PLIST" 2>/dev/null || true
   if [ "$UIDN" = "0" ]; then
     # System LaunchDaemon: starts at boot regardless of login. Prefer the modern
-    # bootstrap API, fall back to legacy load -w on older macOS.
+    # bootstrap API, fall back to legacy load -w on older macOS. kickstart -k =
+    # restart semantics (kill + start).
     launchctl bootout system "$PLIST" 2>/dev/null || true
     launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
-    echo "[AIOps] launchd LaunchDaemon installed: com.aiops.agent (starts at boot + keepalive)"
+    launchctl kickstart -k system/com.aiops.agent 2>/dev/null || true
+    echo "[AIOps] launchd LaunchDaemon restarted: com.aiops.agent (starts at boot + keepalive)"
   else
     # Per-user LaunchAgent: bootstrap + ENABLE so the enabled state survives a reboot
-    # (load -w alone can lose it on newer macOS); kickstart starts it right now.
+    # (load -w alone can lose it on newer macOS); kickstart -k restarts it right now.
     launchctl bootout "gui/$UIDN" "$PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$UIDN" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
     launchctl enable "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
-    launchctl kickstart "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
-    echo "[AIOps] launchd LaunchAgent installed: com.aiops.agent (starts at login + keepalive)"
+    launchctl kickstart -k "gui/$UIDN/com.aiops.agent" 2>/dev/null || launchctl kickstart "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
+    echo "[AIOps] launchd LaunchAgent restarted: com.aiops.agent (starts at login + keepalive)"
     echo "[AIOps] NOTE: a per-user agent starts only after LOGIN. For a headless Mac that"
     echo "[AIOps] must collect before anyone logs in, re-run the installer with sudo."
   fi
 else
-  # Fallback (non-root Linux without systemd): run now + a @reboot crontab entry
+  # Fallback (non-root Linux without systemd): restart now + a @reboot crontab entry
   # so it survives reboots. root+systemd is recommended for restart-on-crash too.
   pkill -f "$DIR/aiops-agent" 2>/dev/null || true
+  sleep 1 2>/dev/null || true
   nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/agent.log" 2>&1 &
   if command -v crontab >/dev/null 2>&1; then
     ( crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" ; \
       echo "@reboot $DIR/aiops-agent --config $DIR/config.yaml >> $DIR/agent.log 2>&1" ) | crontab - 2>/dev/null || true
-    echo "[AIOps] started in background + @reboot autostart added (log: $DIR/agent.log)"
+    echo "[AIOps] agent restarted in background + @reboot autostart added (log: $DIR/agent.log)"
   else
-    echo "[AIOps] started in background (log: $DIR/agent.log)"
+    echo "[AIOps] agent restarted in background (log: $DIR/agent.log)"
   fi
 fi
 echo "[AIOps] done. Check the dashboard for this host."
 `
 
-// installPs1Template installs the agent on Windows, privilege-adaptive:
+// installPs1Template installs the agent on Windows, privilege-adaptive.
+// Flow: detect prior install → if present stop+uninstall → download → write config →
+// register service/autostart and Restart-Service (restart for both fresh and reinstall).
+//
+// Privilege-adaptive:
 //   - Run ELEVATED (admin): installs under %ProgramFiles%\AIOps Agent and registers a
 //     scheduled task running as SYSTEM at Highest run level (boot + 5-min
 //     keepalive). SYSTEM has the privileges Get-VM needs, so Hyper-V guest
@@ -680,7 +732,6 @@ if ($IsAdmin) {
 }
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
-New-Item -ItemType Directory -Force $Dir | Out-Null
 
 # Never call cmd.exe — locked-down hosts often block it via GPO ("This program is
 # blocked by group policy") while still allowing PowerShell + schtasks.exe/sc.exe.
@@ -714,14 +765,69 @@ function Remove-AiopsServiceQuiet {
   try { & "$env:SystemRoot\System32\sc.exe" delete AiopsMonitorAgent 1>$null 2>$null | Out-Null } catch {}
   $ErrorActionPreference = $prev
 }
+function Test-AiopsAlreadyInstalled {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try {
+    if (Get-Service -Name 'AiopsMonitorAgent' -ErrorAction SilentlyContinue) { $ErrorActionPreference = $prev; return $true }
+    if (Get-Process -Name 'aiops-agent' -ErrorAction SilentlyContinue) { $ErrorActionPreference = $prev; return $true }
+    foreach ($name in @('AIOpsAgent','AIOps-Agent')) {
+      if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { $ErrorActionPreference = $prev; return $true }
+      }
+    }
+    $run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AIOpsAgent' -ErrorAction SilentlyContinue
+    if ($run) { $ErrorActionPreference = $prev; return $true }
+    foreach ($cand in @(
+      $Dir,
+      (Join-Path $env:LOCALAPPDATA 'aiops-agent'),
+      (Join-Path $env:ProgramFiles 'AIOps Agent'),
+      (Join-Path $env:ProgramData 'aiops-agent')
+    )) {
+      if (-not $cand) { continue }
+      if (Test-Path (Join-Path $cand 'aiops-agent.exe')) { $ErrorActionPreference = $prev; return $true }
+      if (Test-Path (Join-Path $cand 'config.yaml')) { $ErrorActionPreference = $prev; return $true }
+    }
+  } catch {}
+  $ErrorActionPreference = $prev
+  return $false
+}
+function Uninstall-AiopsExisting {
+  Write-Host "[AIOps] existing agent detected — stopping service, uninstalling, then reinstalling"
+  Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -ErrorAction SilentlyContinue
+  Remove-AiopsScheduledTask 'AIOpsAgent'
+  Remove-AiopsScheduledTask 'AIOps-Agent'
+  Remove-AiopsServiceQuiet
+  Start-Sleep -Milliseconds 1200
+  Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  foreach ($cand in @(
+    $Dir,
+    (Join-Path $env:LOCALAPPDATA 'aiops-agent'),
+    (Join-Path $env:ProgramFiles 'AIOps Agent'),
+    (Join-Path $env:ProgramData 'aiops-agent')
+  )) {
+    if (-not $cand) { continue }
+    if (Test-Path $cand) {
+      Remove-Item -Recurse -Force $cand -ErrorAction SilentlyContinue
+    }
+  }
+  Write-Host "[AIOps] previous agent uninstalled"
+}
 
 # Prefer Invoke-WebRequest for downloads (curl.exe is often GPO-blocked).
-# Stop leftovers quietly (no service → ignore; never use cmd.exe).
-Remove-AiopsScheduledTask 'AIOpsAgent'
-Stop-AiopsServiceQuiet
-Start-Sleep -Milliseconds 1500
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
+# If already installed: stop + uninstall first; otherwise fresh install.
+if (Test-AiopsAlreadyInstalled) {
+  Uninstall-AiopsExisting
+} else {
+  Write-Host "[AIOps] no existing agent found — fresh install"
+  Remove-AiopsScheduledTask 'AIOpsAgent'
+  Stop-AiopsServiceQuiet
+  Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force $Dir | Out-Null
+Start-Sleep -Milliseconds 400
 
 $AgentExe = Join-Path $Dir "aiops-agent.exe"
 $AgentNew = Join-Path $Dir ".aiops-agent.new.exe"
@@ -959,45 +1065,16 @@ try {
   } catch { Write-Host "[AIOps] plugins skipped: $_" }
 }
 
-$ServersJson = '__SERVERS_JSON__'
-# YAML is the default config format. PowerShell has no YAML serializer, so build it
-# by hand: scalar values are single-quoted (backslash-safe for Windows paths; any
-# embedded single-quote is doubled per YAML rules), while the injected JSON arrays
-# (servers / log_paths) are already valid YAML flow syntax and drop in as-is.
-function Yq($s) { "'" + (([string]$s) -replace "'", "''") + "'" }
-$LogPathsYaml = if ($LogPaths -and $LogPaths.Trim() -ne "") { $LogPaths } else { "[]" }
-$PluginsDir = Join-Path $Dir "plugins"
-$StateFile  = Join-Path $Dir "agent_state.json"
-$lines = New-Object System.Collections.Generic.List[string]
-if ($ServersJson -ne "") {
-  $lines.Add("servers: $ServersJson")
-} else {
-  $lines.Add("server: " + (Yq $Server))
-  $lines.Add("token: " + (Yq $Token))
+# Annotated config.yaml from server (active settings + full commented reference).
+$AiopsConfigB64 = '__CONFIG_B64__'
+try {
+  $cfgBytes = [Convert]::FromBase64String($AiopsConfigB64)
+  $cfgText = [Text.Encoding]::UTF8.GetString($cfgBytes)
+  [System.IO.File]::WriteAllText("$Dir\config.yaml", $cfgText, (New-Object System.Text.UTF8Encoding $false))
+  Write-Host "[AIOps] config.yaml written (active settings + full commented reference)"
+} catch {
+  throw "[AIOps] ERROR: failed to write config.yaml: $_"
 }
-$lines.Add("category: " + (Yq $Category))
-$lines.Add("log_paths: $LogPathsYaml")
-$lines.Add("report_interval: 30")
-$lines.Add("plugin_interval: 60")
-$lines.Add("plugins_dir: " + (Yq $PluginsDir))
-$lines.Add("state_file: " + (Yq $StateFile))
-$lines.Add("sni_dns_capture:")
-$lines.Add("  enabled: __SNI_ENABLED__")
-$lines.Add("  interface: " + (Yq "__SNI_INTERFACE__"))
-$lines.Add("  capture_backend: " + (Yq "__CAPTURE_BACKEND__"))
-$lines.Add("  max_entries_per_min: 5000")
-$lines.Add("  tls_metadata_ports: [443,8443,9443]")
-$lines.Add("  content_audit: __CONTENT_AUDIT__")
-$lines.Add("  content_audit_ports: __CONTENT_AUDIT_PORTS__")
-$lines.Add("  content_audit_max_body: __CONTENT_AUDIT_MAX_BODY__")
-$lines.Add("  content_audit_body_mode: " + (Yq "__CONTENT_AUDIT_BODY_MODE__"))
-# JSON arrays contain double quotes — MUST use single-quoted PowerShell strings here,
-# otherwise iex parses ["/health*"] as nested quotes and fails with ExpectedValueExpression.
-$lines.Add('  content_audit_include_hosts: __CONTENT_AUDIT_INCLUDE_HOSTS__')
-$lines.Add('  content_audit_exclude_paths: __CONTENT_AUDIT_EXCLUDE_PATHS__')
-$lines.Add("  content_audit_max_events_per_min: __CONTENT_AUDIT_MAX_EVENTS__")
-$cfg = ($lines -join ([char]10)) + ([char]10)
-[System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
 if ("__SNI_ENABLED__" -eq "true") {
   $TSharkCandidates = @(
     (Get-Command tshark.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
@@ -1075,17 +1152,21 @@ if ($IsAdmin) {
     Start-Sleep -Milliseconds 500
   }
   if ($svc) {
+    # Always restart (not only Start): covers fresh install and reinstall.
+    try { Restart-Service -Name "AiopsMonitorAgent" -Force -ErrorAction SilentlyContinue } catch {}
     for ($i = 0; $i -lt 20; $i++) {
       $svc.Refresh()
       if ($svc.Status -eq 'Running') { break }
       if ($svc.Status -eq 'Stopped') {
-        Start-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
+        try { Restart-Service -Name "AiopsMonitorAgent" -Force -ErrorAction SilentlyContinue } catch {
+          Start-Service -Name "AiopsMonitorAgent" -ErrorAction SilentlyContinue
+        }
       }
       Start-Sleep -Milliseconds 500
     }
     $svc.Refresh()
     if ($svc.Status -eq 'Running') {
-      Write-Host "[AIOps] installed as Windows service (LocalSystem, boot autostart + crash-restart + desktop worker)."
+      Write-Host "[AIOps] Windows service restarted: AiopsMonitorAgent (LocalSystem, boot autostart + crash-restart + desktop worker)."
     } else {
       Write-Host "[AIOps] Windows service registered (status=$($svc.Status)); SCM recovery / next boot will start it. Not falling back to Session-0 keepalive (that breaks remote desktop)."
     }
@@ -1264,23 +1345,39 @@ const uninstallShTemplate = `#!/bin/sh
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 echo "[AIOps] uninstalling from $DIR"
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now aiops-agent 2>/dev/null || true
-  rm -f /etc/systemd/system/aiops-agent.service
+  for _u in aiops-agent aiops-monitor-agent; do
+    systemctl disable --now "$_u" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${_u}.service" "/lib/systemd/system/${_u}.service" "/usr/lib/systemd/system/${_u}.service"
+  done
   systemctl daemon-reload 2>/dev/null || true
 fi
-# launchd (macOS): remove both the per-user LaunchAgent and the root LaunchDaemon.
-for PLIST in "$HOME/Library/LaunchAgents/com.aiops.agent.plist" "/Library/LaunchDaemons/com.aiops.agent.plist"; do
+# launchd (macOS): remove both the per-user LaunchAgent and the root LaunchDaemon
+# (one-liner label + legacy --install-service label).
+for PLIST in \
+  "$HOME/Library/LaunchAgents/com.aiops.agent.plist" \
+  "/Library/LaunchDaemons/com.aiops.agent.plist" \
+  "$HOME/Library/LaunchAgents/com.aiops.monitor.agent.plist" \
+  "/Library/LaunchDaemons/com.aiops.monitor.agent.plist"
+do
   if [ -f "$PLIST" ]; then
     launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl bootout system "$PLIST" 2>/dev/null || true
+    if [ "$(id -u)" != "0" ]; then
+      launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    fi
     rm -f "$PLIST"
   fi
 done
 # Remove the @reboot crontab entry added by the non-root fallback install.
 if command -v crontab >/dev/null 2>&1; then
-  crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" | crontab - 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -v 'aiops-agent --config' | crontab - 2>/dev/null || true
 fi
-pkill -f "$DIR/aiops-agent" 2>/dev/null || true
-rm -rf "$DIR"
+pkill -x aiops-agent 2>/dev/null || true
+pkill -f 'aiops-agent --config' 2>/dev/null || true
+# Also drop the other common install root so a root↔user switch leaves no orphan.
+for _d in "$DIR" /opt/aiops-agent "${HOME}/.aiops-agent"; do
+  [ -n "$_d" ] && [ -d "$_d" ] && rm -rf "$_d"
+done
 echo "[AIOps] uninstalled. You may delete the host card in the dashboard."
 `
 

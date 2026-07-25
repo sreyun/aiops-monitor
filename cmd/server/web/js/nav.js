@@ -23,10 +23,10 @@ async function refresh(force) {
     const rs = await fetch(`${API}/summary`);
     if (rs.status === 401) { $("loginView").classList.add("show"); return; }
     const s = await rs.json();
-    const [hosts, alerts, activity] = await Promise.all([
-      fetch(`${API}/hosts`).then(r => r.json()),
-      fetch(`${API}/alerts`).then(r => r.json()),
-      fetch(`${API}/activity`).then(r => r.json())
+    const [hostsRaw, alertsRaw, activityRaw] = await Promise.all([
+      fetch(`${API}/hosts`, { credentials: "same-origin" }).then(r => r.json()),
+      fetch(`${API}/alerts`, { credentials: "same-origin" }).then(r => r.json()),
+      fetch(`${API}/activity`, { credentials: "same-origin" }).then(r => r.json())
     ]);
     await loadHostFolders();
     // P0-#2: Connection state feedback
@@ -40,7 +40,11 @@ async function refresh(force) {
     // 抢占主线程，导致新建/查看/编辑时卡顿。汇总计数、图标、通知与主机元数据仍全局保持最新。
     const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
     const onOverview = activeView === "overview";
-    HOST_META = hosts.map(h => ({ id: h.id, hostname: h.hostname })); // 供进程监控/主机下拉等使用，与网格渲染解耦
+    // CRITICAL: always sync host cache — not only on the Hosts page. Automation /
+    // Inspect / Security historically saw empty pickers until「主机」was opened.
+    const hosts = typeof syncHostCache === "function" ? syncHostCache(hostsRaw) : normalizeHostsPayload(hostsRaw);
+    const alerts = Array.isArray(alertsRaw) ? alertsRaw : [];
+    const activity = Array.isArray(activityRaw) ? activityRaw : [];
     // 侧栏计数徽标需跨所有视图保持最新（其原本在被门控的 render* 里更新），用已取数据全局轻量刷新。
     const setTxt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
     setTxt("navHosts", hosts.length); setTxt("hostsCount", hosts.length);
@@ -346,16 +350,20 @@ const PAGE_META = {
   logs:     { title: "日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
+  "sql-toolkit": { title: I18N.t("nav.sql_toolkit") || "SQL 工具", sub: I18N.t("section.sql_toolkit_desc") || "MySQL 美化 / 审核 / 优化 + EXPLAIN" },
   hardware:  { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" },
   hyperv:    { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" },
   containers:{ title: I18N.t("nav.resources") || "资源", sub: I18N.t("containers.tag") || "主机 Docker / Podman 容器" },
   k8s:       { title: I18N.t("nav.resources") || "资源", sub: I18N.t("k8s.tag") || "Kubernetes 集群资源" },
   netflow:   { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
   snmp:      { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
-  "content-audit": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计" },
-  "ai-tool-audit": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_ai_tools") || "AI 工具审计" },
-  "audit-export": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_export") || "审计外发" },
-  oidc: { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_oidc") || "单点登录" },
+  "host-security": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.host_security_desc", "主机安全扫描") },
+  "security-overview": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_overview", "总览") },
+  "web-security": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.web_security_desc", "Web 漏洞扫描") },
+  "content-audit": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.content_audit_desc", "明文 HTTP 内容审计") },
+  "ai-tool-audit": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_ai_tools", "AI 工具审计") },
+  "audit-export": { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_export", "审计外发") },
+  oidc: { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_oidc", "单点登录") },
   dashboards: { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
@@ -375,16 +383,20 @@ function rebuildPageMeta() {
   PAGE_META.logs       = { title: "日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
+  PAGE_META["sql-toolkit"] = { title: I18N.t("nav.sql_toolkit") || "SQL 工具", sub: I18N.t("section.sql_toolkit_desc") || "MySQL 美化 / 审核 / 优化 + EXPLAIN" };
   PAGE_META.hardware   = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" };
   PAGE_META.hyperv     = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" };
   PAGE_META.containers = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("containers.tag") || "主机 Docker / Podman 容器" };
   PAGE_META.k8s        = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("k8s.tag") || "Kubernetes 集群资源" };
   PAGE_META.netflow    = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
   PAGE_META.snmp       = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
-  PAGE_META["content-audit"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计" };
-  PAGE_META["ai-tool-audit"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_ai_tools") || "AI 工具审计" };
-  PAGE_META["audit-export"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_export") || "审计外发" };
-  PAGE_META.oidc = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_oidc") || "单点登录" };
+  PAGE_META["host-security"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.host_security_desc", "主机安全扫描") };
+  PAGE_META["security-overview"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_overview", "总览") };
+  PAGE_META["web-security"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.web_security_desc", "Web 漏洞扫描") };
+  PAGE_META["content-audit"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("section.content_audit_desc", "明文 HTTP 内容审计") };
+  PAGE_META["ai-tool-audit"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_ai_tools", "AI 工具审计") };
+  PAGE_META["audit-export"] = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_export", "审计外发") };
+  PAGE_META.oidc = { title: I18N.t("nav.security", "安全中心"), sub: I18N.t("sec.tab_oidc", "单点登录") };
   PAGE_META.dashboards = { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
@@ -396,13 +408,41 @@ function NET_TABS() {
     ["snmp", I18N.t("net.tab_devices") || "网络设备"],
   ];
 }
-function SEC_TABS() {
-  return [
-    ["content-audit", I18N.t("sec.tab_content") || "内容审计"],
-    ["ai-tool-audit", I18N.t("sec.tab_ai_tools") || "AI 工具审计"],
-    ["audit-export", I18N.t("sec.tab_export") || "审计外发"],
-    ["oidc", I18N.t("sec.tab_oidc") || "单点登录"],
-  ];
+function SEC_TAB_GROUPS() {
+  return {
+    parent: "security-overview",
+    sections: [
+      { tabs: [["security-overview", I18N.t("sec.tab_overview", "总览")]] },
+      {
+        label: I18N.t("sec.section_vuln", "漏洞运营"),
+        tabs: [
+          ["host-security", I18N.t("sec.tab_host", "主机安全")],
+          ["web-security", I18N.t("sec.tab_web", "Web 扫描")],
+        ],
+      },
+      {
+        label: I18N.t("sec.section_audit", "数据审计"),
+        tabs: [["content-audit", I18N.t("sec.tab_content", "内容审计")]],
+      },
+      {
+        label: I18N.t("sec.section_trust", "平台信任"),
+        tabs: [
+          ["ai-tool-audit", I18N.t("sec.tab_ai_tools", "AI 工具审计")],
+          ["audit-export", I18N.t("sec.tab_export", "审计外发")],
+          ["oidc", I18N.t("sec.tab_oidc", "单点登录")],
+        ],
+      },
+    ],
+  };
+}
+function flattenViewTabs(g) {
+  if (!g) return [];
+  if (g.sections) {
+    const out = [];
+    g.sections.forEach(sec => { (sec.tabs || []).forEach(t => out.push(t)); });
+    return out;
+  }
+  return g.tabs || [];
 }
 const VIEW_TAB_GROUPS = {
   checks:     { parent: "checks", tabs: [["checks", "拨测监控"], ["apimon", "可靠性保障"], ["scrape", "指标抓取"]] },
@@ -413,11 +453,14 @@ const VIEW_TAB_GROUPS = {
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   netflow:         { parent: "netflow", tabs: NET_TABS() },
   snmp:            { parent: "netflow", tabs: NET_TABS() },
-  // 「安全中心」：内容审计 + AI 工具审计 + 审计外发 + 单点登录
-  "content-audit": { parent: "content-audit", tabs: SEC_TABS() },
-  "ai-tool-audit": { parent: "content-audit", tabs: SEC_TABS() },
-  "audit-export":  { parent: "content-audit", tabs: SEC_TABS() },
-  oidc:            { parent: "content-audit", tabs: SEC_TABS() },
+  // 「安全中心」：总览 + 漏洞运营 + 数据审计 + 平台信任
+  "security-overview": SEC_TAB_GROUPS(),
+  "host-security": SEC_TAB_GROUPS(),
+  "web-security":  SEC_TAB_GROUPS(),
+  "content-audit": SEC_TAB_GROUPS(),
+  "ai-tool-audit": SEC_TAB_GROUPS(),
+  "audit-export":  SEC_TAB_GROUPS(),
+  oidc:            SEC_TAB_GROUPS(),
   // 「资源」父导航：硬件 / 虚拟机 / 容器 / K8s。parent=hardware=第一个子标签。
   hardware:   { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
   hyperv:     { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
@@ -427,18 +470,158 @@ const VIEW_TAB_GROUPS = {
 function renderViewTabs(view) {
   const bar = $("viewTabs"); if (!bar) return;
   const g = VIEW_TAB_GROUPS[view];
+  const resourceBar = $("resourceSearchBar");
+  const resourceView = !!(g && g.parent === "hardware");
+  if (resourceBar) {
+    resourceBar.style.display = resourceView ? "" : "none";
+    if (!resourceView) {
+      const results = $("resourceSearchResults");
+      if (results) results.classList.remove("show");
+    }
+  }
   if (!g) { bar.style.display = "none"; bar.innerHTML = ""; return; }
-  const secViews = new Set(["content-audit", "ai-tool-audit", "audit-export", "oidc"]);
-  const tabs = (typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer")
-    ? g.tabs.filter(([v]) => !secViews.has(v))
-    : g.tabs;
-  if (!tabs.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
-  bar.style.display = "";
-  bar.innerHTML = tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
+  const secViews = new Set(["security-overview", "host-security", "web-security", "content-audit", "ai-tool-audit", "audit-export", "oidc"]);
+  const viewer = (typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer");
+  const tabVisible = ([v]) => !viewer || !secViews.has(v);
+  if (g.sections) {
+    const parts = [];
+    g.sections.forEach(sec => {
+      const visible = (sec.tabs || []).filter(tabVisible);
+      if (!visible.length) return;
+      if (sec.label) parts.push(`<span class="view-tab-section">${sec.label}</span>`);
+      visible.forEach(([v, label]) => {
+        parts.push(`<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`);
+      });
+    });
+    if (!parts.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+    bar.style.display = "";
+    bar.innerHTML = parts.join("");
+  } else {
+    const tabs = flattenViewTabs(g).filter(tabVisible);
+    if (!tabs.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+    bar.style.display = "";
+    bar.innerHTML = tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
+  }
   bar.querySelectorAll("[data-vtab]").forEach(b => b.addEventListener("click", () => switchView(b.dataset.vtab)));
 }
+
+let RESOURCE_SEARCH_RESULTS = [];
+let RESOURCE_SEARCH_TIMER = null;
+let RESOURCE_SEARCH_SEQ = 0;
+const RESOURCE_TYPE_LABELS = {
+  host: "主机", hyperv_vm: "VM", container: "容器", hardware: "硬件",
+  k8s_cluster: "K8s", pod: "Pod"
+};
+
+function renderResourceSearchResults(rows, query) {
+  const panel = $("resourceSearchResults");
+  if (!panel) return;
+  RESOURCE_SEARCH_RESULTS = Array.isArray(rows) ? rows : [];
+  if (!query) {
+    panel.innerHTML = "";
+    panel.classList.remove("show");
+    return;
+  }
+  if (!RESOURCE_SEARCH_RESULTS.length) {
+    panel.innerHTML = `<div class="resource-search-empty">未找到匹配资源</div>`;
+  } else {
+    panel.innerHTML = RESOURCE_SEARCH_RESULTS.map((row, i) => {
+      const sub = row.subtitle || row.ref || "";
+      return `<button type="button" class="resource-search-result" role="option" data-resource-result="${i}">
+        <span class="resource-search-type">${esc(RESOURCE_TYPE_LABELS[row.type] || row.type)}</span>
+        <span class="resource-search-main"><span class="resource-search-name">${esc(row.name || row.ref)}</span><span class="resource-search-sub">${esc(sub)}</span></span>
+        <span class="resource-search-host">${esc(row.host || "")}</span>
+      </button>`;
+    }).join("");
+  }
+  panel.classList.add("show");
+}
+
+async function runResourceSearch(query) {
+  const bar = $("resourceSearchBar");
+  const seq = ++RESOURCE_SEARCH_SEQ;
+  if (!query.trim()) {
+    renderResourceSearchResults([], "");
+    return;
+  }
+  if (bar) bar.classList.add("loading");
+  try {
+    const response = await fetch(`${API}/resources/search?q=${encodeURIComponent(query.trim())}&limit=20`);
+    const body = await response.json();
+    if (seq === RESOURCE_SEARCH_SEQ) renderResourceSearchResults(body.results || [], query);
+  } catch (_) {
+    if (seq === RESOURCE_SEARCH_SEQ) renderResourceSearchResults([], query);
+  } finally {
+    if (seq === RESOURCE_SEARCH_SEQ && bar) bar.classList.remove("loading");
+  }
+}
+
+function focusResourceViewResult(row) {
+  if (!row) return;
+  if (row.type === "hardware" && typeof HW_FILTER !== "undefined") HW_FILTER.q = row.name || "";
+  if (row.type === "hyperv_vm" && typeof HV_FILTER !== "undefined") {
+    HV_FILTER.q = row.name || "";
+    HV_FILTER.status = "all";
+  }
+  switchView(row.view || "hardware");
+  if (row.type === "host") {
+    setTimeout(() => openDetail(row.host_id, row.name), 0);
+    return;
+  }
+  const targetInput = row.type === "container" ? "ctSearch" : row.type === "pod" ? "k8sSearch" : "";
+  const applyDynamicSelection = (attempt) => {
+    if (row.type === "k8s_cluster") {
+      const select = $("k8sClusterSel");
+      const id = String(row.ref || "").replace(/^cluster:/, "");
+      if (select && [...select.options].some(o => o.value === id)) {
+        select.value = id;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+    } else if (targetInput) {
+      const input = $(targetInput);
+      if (input) {
+        input.value = row.name || "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+    } else {
+      return;
+    }
+    if (attempt < 12) setTimeout(() => applyDynamicSelection(attempt + 1), 100);
+  };
+  applyDynamicSelection(0);
+}
+
+(function initResourceSearch() {
+  const input = $("resourceSearchInput");
+  const panel = $("resourceSearchResults");
+  if (!input || !panel) return;
+  input.addEventListener("input", () => {
+    clearTimeout(RESOURCE_SEARCH_TIMER);
+    const query = input.value || "";
+    RESOURCE_SEARCH_TIMER = setTimeout(() => runResourceSearch(query), 180);
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown") {
+      const first = panel.querySelector(".resource-search-result");
+      if (first) { e.preventDefault(); first.focus(); }
+    }
+  });
+  panel.addEventListener("click", e => {
+    const item = e.target.closest("[data-resource-result]");
+    if (!item) return;
+    const row = RESOURCE_SEARCH_RESULTS[Number(item.dataset.resourceResult)];
+    panel.classList.remove("show");
+    focusResourceViewResult(row);
+  });
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#resourceSearchBar")) panel.classList.remove("show");
+  });
+})();
+
 function switchView(view) {
-  const secViews = new Set(["content-audit", "ai-tool-audit", "audit-export", "oidc"]);
+  const secViews = new Set(["security-overview", "host-security", "web-security", "content-audit", "ai-tool-audit", "audit-export", "oidc"]);
   if (secViews.has(view) && typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer") {
     view = "overview";
   }
@@ -468,12 +651,24 @@ function switchView(view) {
   if (view === "governance") loadGovernance();
   if (view === "thresholds") loadThresholds();
   if (view === "datasource") loadDataSources();
+  if (view === "sql-toolkit" && window._pageRenderers && window._pageRenderers["sql-toolkit"]) window._pageRenderers["sql-toolkit"]();
   if (view === "hardware" && window._pageRenderers && window._pageRenderers.hardware) window._pageRenderers.hardware();
   if (view === "hyperv" && window._pageRenderers && window._pageRenderers.hyperv) window._pageRenderers.hyperv();
   if (view === "containers" && window._pageRenderers && window._pageRenderers.containers) window._pageRenderers.containers();
+  else {
+    const ctLog = document.getElementById("ctLogMask");
+    if (ctLog && ctLog.classList.contains("show")) {
+      ctLog.classList.remove("show");
+      const body = document.getElementById("ctLogBody");
+      if (body) body.textContent = "";
+    }
+  }
   if (view === "k8s" && window._pageRenderers && window._pageRenderers.k8s) window._pageRenderers.k8s();
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   if (view === "snmp" && window._pageRenderers && window._pageRenderers.snmp) window._pageRenderers.snmp();
+  if (view === "security-overview" && window._pageRenderers && window._pageRenderers["security-overview"]) window._pageRenderers["security-overview"]();
+  if (view === "host-security" && window._pageRenderers && window._pageRenderers["host-security"]) window._pageRenderers["host-security"]();
+  if (view === "web-security" && window._pageRenderers && window._pageRenderers["web-security"]) window._pageRenderers["web-security"]();
   if (view === "content-audit" && window._pageRenderers && window._pageRenderers["content-audit"]) window._pageRenderers["content-audit"]();
   if (view === "ai-tool-audit" && window._pageRenderers && window._pageRenderers["ai-tool-audit"]) window._pageRenderers["ai-tool-audit"]();
   if (view === "audit-export" && window._pageRenderers && window._pageRenderers["audit-export"]) window._pageRenderers["audit-export"]();
@@ -598,19 +793,27 @@ function filterChecks(type) {
   renderChecks(LAST_CHECKS);
 }
 // 弹窗关闭：点遮罩空白处 或 右上角 ✕
-document.querySelectorAll(".mask").forEach(mk => mk.addEventListener("click", e => {
-  if (e.target === mk || e.target.closest("[data-close-btn]")) {
-    if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
-    mk.classList.remove("show"); hideChartTip();
-    if (mk.id === "termMask") { closeTerminalWS(); }
-    if (mk.id === "desktopMask") { closeDesktopWS(); }
-    if (mk.id === "termReplayMask") { closeReplay(); }
-    if (mk.id === "termObserveMask") { closeObserveWS(); }
-    if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
-    // v5.3.0: 终端认证弹窗关闭时清理状态
-    if (mk.id === "termProtocolMask" || mk.id === "termSetPwdMask" || mk.id === "termVerifyMask" || mk.id === "termLockedMask") { cancelTermAuth(); }
+// 用 document 委托，兼容后续动态插入的 .mask（如页面内二次渲染的弹层）。
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  const mk = t.closest(".mask");
+  if (!mk || !mk.classList.contains("show")) return;
+  if (t !== mk && !t.closest("[data-close-btn]")) return;
+  if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
+  mk.classList.remove("show"); hideChartTip();
+  if (mk.id === "termMask") { closeTerminalWS(); }
+  if (mk.id === "desktopMask") { closeDesktopWS(); }
+  if (mk.id === "termReplayMask") { closeReplay(); }
+  if (mk.id === "termObserveMask") { closeObserveWS(); }
+  if (mk.id === "termSessionsMask") { if (TERM_SESSIONS_TIMER) { clearInterval(TERM_SESSIONS_TIMER); TERM_SESSIONS_TIMER = null; } }
+  // v5.3.0: 终端认证弹窗关闭时清理状态
+  if (mk.id === "termProtocolMask" || mk.id === "termSetPwdMask" || mk.id === "termVerifyMask" || mk.id === "termLockedMask") { cancelTermAuth(); }
+  if (mk.id === "ctLogMask") {
+    const body = document.getElementById("ctLogBody");
+    if (body) body.textContent = "";
   }
-}));
+});
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     const hadTerm = $("termMask") && $("termMask").classList.contains("show");

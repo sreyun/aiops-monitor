@@ -27,37 +27,42 @@ type Server struct {
 	notifier  *Notifier
 	auth      *Auth
 	checks    *checkRunner
-	apimon    *apiRunner       // API 性能监控：按业务系统批量探测接口
-	scrapes   *scrapeManager   // 指标抓取（agentless exporter 摄入 Prometheus 生态）
-	promrules *promRuleManager // 指标告警规则（PromQL）
-	term      *termManager     // remote terminal relay
-	desk      *deskManager     // web remote desktop (agent screen stream)
-	forward   *forwardManager  // port forwarding relay (TCP + HTTP proxy)
-	emailMgr  *emailManager    // verification codes + reset tokens
-	playbooks *playbookManager // automation playbooks + execution history
+	apimon    *apiRunner          // API 性能监控：按业务系统批量探测接口
+	scrapes   *scrapeManager      // 指标抓取（agentless exporter 摄入 Prometheus 生态）
+	promrules *promRuleManager    // 指标告警规则（PromQL）
+	term      *termManager        // remote terminal relay
+	desk      *deskManager        // web remote desktop (agent screen stream)
+	forward   *forwardManager     // port forwarding relay (TCP + HTTP proxy)
+	emailMgr  *emailManager       // verification codes + reset tokens
+	playbooks *playbookManager    // automation playbooks + execution history
 	inspect   *hostInspectManager // deep host inspect batches (host_inspect)
-	push      *pushHub         // P3-1: WebSocket push hub for real-time updates
+	push      *pushHub            // P3-1: WebSocket push hub for real-time updates
 	// --- SRE workflow layer ---
-	incidents   *incidentManager    // incident hub (alert/SLO/manual)
-	remediation *remediationManager // closed-loop auto-remediation
-	slos        *sloManager         // SLO + error budgets
-	distProbes  *distProbeManager   // 分布式多点探测（迭代 D）
-	tickets     *ticketManager      // work orders
-	oncall      *onCallManager      // on-call escalation pages
-	changes     *changeManager      // change records
-	logs        *logStore           // aggregated agent logs
-	hw          *hardwareStore      // latest Redfish snapshots per host (feeds hardware alerts)
-	hv          *hypervStore        // latest Hyper-V guest inventory per host (feeds VM alerts)
-	snmp        *snmpStore          // latest SNMP device snapshots per host (feeds SNMP alerts)
-	nf          *nfStore            // per-host NetFlow window stats + baseline (feeds traffic-anomaly alerts)
-	ai          *aiManager          // AI inspection + diagnosis
-	vm          *vmWriter           // optional VictoriaMetrics remote-write
-	messages    *messageHub         // unified notification center (SRE/alert/AI feed)
-	distDir     string              // directory of downloadable agent binaries + plugins.zip
-	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
-	sreyun      *SreyunCore         // Sreyun Agent (autonomous SRE agent)
-	aiStats     *aiStatsHub         // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
-	aiGov       *aiGovHub           // AI 治理：配额 + 写工具审计
+	incidents   *incidentManager         // incident hub (alert/SLO/manual)
+	remediation *remediationManager      // closed-loop auto-remediation
+	slos        *sloManager              // SLO + error budgets
+	distProbes  *distProbeManager        // 分布式多点探测（迭代 D）
+	tickets     *ticketManager           // work orders
+	oncall      *onCallManager           // on-call escalation pages
+	changes     *changeManager           // change records
+	logs        *logStore                // aggregated agent logs
+	hw          *hardwareStore           // latest Redfish snapshots per host (feeds hardware alerts)
+	hv          *hypervStore             // latest Hyper-V guest inventory per host (feeds VM alerts)
+	snmp        *snmpStore               // latest SNMP device snapshots per host (feeds SNMP alerts)
+	nf          *nfStore                 // per-host NetFlow window stats + baseline (feeds traffic-anomaly alerts)
+	ai          *aiManager               // AI inspection + diagnosis
+	vm          *vmWriter                // optional VictoriaMetrics remote-write
+	messages    *messageHub              // unified notification center (SRE/alert/AI feed)
+	distDir     string                   // directory of downloadable agent binaries + plugins.zip
+	pg          *pgStore                 // PostgreSQL persistence (optional, for pgvector/RAG)
+	sreyun      *SreyunCore              // Sreyun Agent (autonomous SRE agent)
+	aiStats     *aiStatsHub              // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
+	aiGov       *aiGovHub                // AI 治理：配额 + 写工具审计
+	hostSec     *hostSecurityManager     // 主机安全扫描结果
+	webSec      *webScanManager          // Web Nuclei 扫描结果
+	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
+	sqlHistory  *sqlQueryHistoryManager  // per-user desensitized SQL history
+	secFindings *securityFindingManager  // security finding lifecycle states
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
 	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
@@ -93,6 +98,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		messages:    newMessageHub(),
 		aiStats:     newAIStatsHub(),
 		aiGov:       newAIGovHub(),
+		sqlChanges:  newSQLChangeRequestManager(),
 	}
 	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
@@ -106,6 +112,13 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	// 未启用时优雅返回提示而非 503。此前 gated on SreyunEnabled&&Enabled 且仅在启动时
 	// 判断，导致"配置完模型点 AI 对话仍 503"（s.sreyun 为 nil）。
 	s.sreyun = newSreyunCore(s)
+	secDir := cfg.securityDataDir()
+	s.hostSec = newHostSecurityManager(secDir)
+	s.webSec = newWebScanManager(secDir, cfg.WebSecurity().ScanConcurrency)
+	s.sqlHistory = newSQLQueryHistoryManager(secDir)
+	s.secFindings = newSecurityFindingManager(secDir)
+	s.startHostSecurityScheduler()
+	s.startWebSecurityScheduler()
 	// AI 记忆异步写入 worker pool：3 个 worker，并发上限 3
 	s.memoryCh = make(chan memoryJob, 100)
 	s.memorySem = make(chan struct{}, 3)
@@ -168,6 +181,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agent/terminal/rx", s.handleAgentTermRx)
 	mux.HandleFunc("POST /api/v1/agent/terminal/tx", s.handleAgentTermTx)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
+	mux.HandleFunc("GET /api/v1/resources/search", s.handleResourceSearch)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.handleHostMetrics)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
 	mux.HandleFunc("POST /api/v1/hosts/{id}/category", s.handleSetCategory)
@@ -296,6 +310,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks/executions", s.handleListExecutions)
 	// 使用 executions/by-id（多一段字面量），避免与 {id}/preflight 在 ServeMux 下交叉冲突
 	mux.HandleFunc("GET /api/v1/playbooks/executions/by-id/{id}", s.handleGetExecution)
+	mux.HandleFunc("POST /api/v1/playbooks/executions/by-id/{id}/approve", s.handleApprovePlaybookExecution)
+	mux.HandleFunc("POST /api/v1/playbooks/executions/by-id/{id}/reject", s.handleRejectPlaybookExecution)
 	// Host deep inspect (linux_inspect-style, agent module host_inspect)
 	mux.HandleFunc("GET /api/v1/host-inspect", s.handleListHostInspect)
 	mux.HandleFunc("GET /api/v1/host-inspect/compare", s.handleCompareHostInspect)
@@ -320,6 +336,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/topology/edges", s.handleListTopologyEdges)
 	mux.HandleFunc("POST /api/v1/topology/edges", s.handleUpsertTopologyEdge)
 	mux.HandleFunc("DELETE /api/v1/topology/edges/{id}", s.handleDeleteTopologyEdge)
+	mux.HandleFunc("GET /api/v1/topology/auto-discover", s.handleDiscoverAutoTopology)
+	mux.HandleFunc("POST /api/v1/topology/auto-discover", s.handleDiscoverAutoTopology)
 	mux.HandleFunc("GET /api/v1/topology/rca", s.handleTopologyRCA)
 	mux.HandleFunc("GET /api/v1/slos", s.handleListSLOs)
 	mux.HandleFunc("POST /api/v1/slos", s.handleUpsertSLO)
@@ -487,6 +505,32 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/pods/{ns}/{name}/log", s.handleK8sPodLog)
 	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/scale", s.handleK8sScaleDeployment)
 	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/restart", s.handleK8sRestartDeployment)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/undo", s.handleK8sUndoDeployment)
+	mux.HandleFunc("DELETE /api/v1/k8s/clusters/{id}/pods/{ns}/{name}", s.handleK8sDeletePod)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/pods/{ns}/{name}/exec", s.handleK8sPodExec)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/apply", s.handleK8sApply)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/namespaces", s.handleK8sCreateNamespace)
+	// SQL toolkit (MySQL beautify / audit / optimize + read-only connections)
+	mux.HandleFunc("POST /api/v1/sql/beautify", s.handleSQLBeautify)
+	mux.HandleFunc("POST /api/v1/sql/audit", s.handleSQLAudit)
+	mux.HandleFunc("POST /api/v1/sql/optimize", s.handleSQLOptimize)
+	mux.HandleFunc("POST /api/v1/sql/analyze", s.handleSQLAnalyze)
+	mux.HandleFunc("GET /api/v1/sql/connections", s.handleListMySQLConnections)
+	mux.HandleFunc("POST /api/v1/sql/connections", s.handleUpsertMySQLConnection)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}", s.handleGetMySQLConnection)
+	mux.HandleFunc("PUT /api/v1/sql/connections/{id}", s.handleUpsertMySQLConnection)
+	mux.HandleFunc("DELETE /api/v1/sql/connections/{id}", s.handleDeleteMySQLConnection)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/test", s.handleTestMySQLConnection)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/explain", s.handleMySQLExplain)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/exec-ddl", s.handleMySQLExecDDL)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/schema", s.handleMySQLSchema)
+	mux.HandleFunc("GET /api/v1/sql/history", s.handleSQLQueryHistory)
+	mux.HandleFunc("POST /api/v1/sql/history", s.handleAppendSQLQueryHistory)
+	mux.HandleFunc("POST /api/v1/sql/change-requests", s.handleCreateSQLChangeRequest)
+	mux.HandleFunc("GET /api/v1/sql/change-requests", s.handleListSQLChangeRequests)
+	mux.HandleFunc("POST /api/v1/sql/change-requests/{id}/approve", s.handleApproveSQLChangeRequest)
+	mux.HandleFunc("POST /api/v1/sql/change-requests/{id}/reject", s.handleRejectSQLChangeRequest)
+	mux.HandleFunc("POST /api/v1/sql/change-requests/{id}/execute", s.handleExecuteSQLChangeRequest)
 	// HTTP proxy auth token for window.open() scenarios
 	mux.HandleFunc("GET /api/v1/proxy-token", s.handleProxyToken)
 	// HTTP proxy: support all methods (GET/POST/PUT/DELETE/PATCH)
@@ -510,6 +554,30 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/integrations/content-audit", s.handleGatewayContentAudit)
 	mux.HandleFunc("GET /api/v1/content-audit/hosts", s.handleContentAuditHosts)
 	mux.HandleFunc("GET /api/v1/content-audit", s.handleContentAudit)
+	// Host security scan (Agent module + OSV)
+	mux.HandleFunc("GET /api/v1/security/overview", s.handleSecurityOverview)
+	mux.HandleFunc("POST /api/v1/security/host/scan", s.handleHostSecurityScan)
+	mux.HandleFunc("GET /api/v1/security/host/scans", s.handleHostSecurityScans)
+	mux.HandleFunc("GET /api/v1/security/host/scans/{id}", s.handleHostSecurityScanGet)
+	mux.HandleFunc("POST /api/v1/security/host/scans/{id}/cancel", s.handleHostSecurityScanCancel)
+	mux.HandleFunc("GET /api/v1/security/host/summary", s.handleHostSecuritySummary)
+	mux.HandleFunc("GET /api/v1/security/host/config", s.handleGetHostSecurityConfig)
+	mux.HandleFunc("POST /api/v1/security/host/config", s.handleSetHostSecurityConfig)
+	mux.HandleFunc("GET /api/v1/security/findings/status", s.handleListSecurityFindingStates)
+	mux.HandleFunc("POST /api/v1/security/findings/status", s.handleUpdateSecurityFindingState)
+	// Web vulnerability scan (Nuclei)
+	mux.HandleFunc("GET /api/v1/security/web/targets", s.handleListWebTargets)
+	mux.HandleFunc("POST /api/v1/security/web/targets", s.handleUpsertWebTarget)
+	mux.HandleFunc("PUT /api/v1/security/web/targets/{id}", s.handleUpsertWebTarget)
+	mux.HandleFunc("DELETE /api/v1/security/web/targets/{id}", s.handleDeleteWebTarget)
+	mux.HandleFunc("POST /api/v1/security/web/targets/{id}/scan", s.handleWebTargetScan)
+	mux.HandleFunc("GET /api/v1/security/web/scans", s.handleWebScans)
+	mux.HandleFunc("GET /api/v1/security/web/scans/{id}", s.handleWebScanGet)
+	mux.HandleFunc("POST /api/v1/security/web/scans/{id}/cancel", s.handleWebScanCancel)
+	mux.HandleFunc("GET /api/v1/security/web/config", s.handleGetWebSecurityConfig)
+	mux.HandleFunc("POST /api/v1/security/web/config", s.handleSetWebSecurityConfig)
+	mux.HandleFunc("GET /api/v1/security/web/engine", s.handleWebEngineStatus)
+	mux.HandleFunc("POST /api/v1/security/web/engine/refresh", s.handleWebEngineRefresh)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
@@ -527,6 +595,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/containers/list", s.handleContainerList)
 	mux.HandleFunc("POST /api/v1/containers/{hostID}/{id}/action", s.handleContainerAction)
 	mux.HandleFunc("GET /api/v1/containers/{hostID}/{id}/logs", s.handleContainerLogs)
+	mux.HandleFunc("POST /api/v1/containers/{hostID}/{id}/exec", s.handleContainerExec)
+	mux.HandleFunc("GET /api/v1/containers/{hostID}/{id}/terminal", s.handleContainerTerminal)
+	mux.HandleFunc("GET /api/v1/containers/compose", s.handleContainerComposeList)
+	mux.HandleFunc("POST /api/v1/containers/compose/{hostID}/action", s.handleContainerComposeAction)
 	mux.HandleFunc("GET /api/v1/netflow/hosts", s.handleNetFlowHosts)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/ip-history", s.handleNetFlowIPHistory)
@@ -583,7 +655,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-center", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "web-security", "security-center", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

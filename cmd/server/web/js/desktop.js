@@ -1,7 +1,11 @@
 /* ---------- 远程桌面：推流 · 多屏 · 剪贴板 · H264 · 拖拽 · 回放 ---------- */
 let DESK_WS = null;
 let DESK_HOST = null;
-let DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
+let DESK_META = {
+  w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false,
+  os: "", desktop: "", inputDesktopOk: true, lockHint: "",
+  features: { cad: false, type_text: false, chords: false, wake: false, input: true }
+};
 let DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
 let DESK_DOWNLOAD = null;
 let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video, gen }
@@ -10,6 +14,7 @@ let DESK_PHASE = "idle"; // idle|connecting|waiting_agent|streaming|error|closed
 let DESK_INTENTIONAL_CLOSE = false;
 let DESK_RETRY = 0;
 let DESK_MAX_RETRY = 30;
+let DESK_NO_RETRY = false; // permission / fatal agent errors — do not reconnect 30×
 let DESK_CLIP_AUTOSYNC = false; // auto-write remote clipboard into local OS clipboard
 let DESK_LAST_PTR = null; // last mapped remote coords for drag-off mouseup
 let _deskHeartbeatWorker = null;
@@ -31,7 +36,12 @@ async function doOpenDesktop(id, name) {
   DESK_PHASE = "connecting";
   DESK_INTENTIONAL_CLOSE = false;
   DESK_RETRY = 0;
-  DESK_META = { w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false };
+  DESK_NO_RETRY = false;
+  DESK_META = {
+    w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false,
+    os: "", desktop: "", inputDesktopOk: true, lockHint: "",
+    features: { cad: false, type_text: false, chords: false, wake: false, input: true }
+  };
   DESK_QUALITY = { scale: 1.0, quality: 88, fps: 8, codec: "jpeg", monitor: 0 };
   DESK_HOST = { id, name };
   renderDesktopShell(id, name);
@@ -88,10 +98,33 @@ function renderDesktopShell(id, name) {
                 <option value="h264">H.264</option>
               </select>
             </label>
+            <div class="desk-lock-tools" id="deskLockTools" title="${esc(I18N.t("desktop.lock_tools_hint", "锁屏快捷操作"))}">
+              <button type="button" class="btn sm" data-desk-act="cad" id="deskCadBtn">${esc(I18N.t("desktop.cad", "Ctrl+Alt+Del"))}</button>
+              <button type="button" class="btn sm" data-desk-act="wake">${esc(I18N.t("desktop.wake", "唤醒"))}</button>
+              <button type="button" class="btn sm" data-desk-act="unlock">${esc(I18N.t("desktop.unlock", "解锁"))}</button>
+              <button type="button" class="btn sm ghost" data-desk-act="chord" data-desk-chord="esc">Esc</button>
+              <button type="button" class="btn sm ghost" data-desk-act="chord" data-desk-chord="win_l">${esc(I18N.t("desktop.win_l", "Win+L"))}</button>
+              <button type="button" class="btn sm ghost" data-desk-act="chord" data-desk-chord="ctrl_shift_esc">${esc(I18N.t("desktop.taskmgr", "任务管理器"))}</button>
+            </div>
             <button type="button" class="btn sm" id="deskClipSend" title="${esc(I18N.t("desktop.clip_send"))}">📋</button>
             <button type="button" class="btn sm" id="deskFullscreen" title="${esc(I18N.t("desktop.fullscreen"))}">⛶</button>
             <button type="button" class="btn sm" id="deskSessions">${esc(I18N.t("desktop.sessions"))}</button>
             <button type="button" class="btn sm" id="deskDisconnect">${esc(I18N.t("desktop.disconnect"))}</button>
+          </div>
+        </div>
+        <div class="desk-lock-hint" id="deskLockHint" hidden></div>
+        <div class="desk-unlock-panel" id="deskUnlockPanel" hidden>
+          <div class="desk-unlock-title">${esc(I18N.t("desktop.unlock_title", "发送解锁凭据"))}</div>
+          <p class="hint desk-unlock-warn">${esc(I18N.t("desktop.unlock_warn", "仅本次内存发送，不落盘；操作会记入审计（不含明文）。"))}</p>
+          <label class="desk-field">${esc(I18N.t("desktop.unlock_user", "用户名（可选）"))}
+            <input type="text" id="deskUnlockUser" class="desk-input" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="desk-field">${esc(I18N.t("desktop.unlock_pass", "密码"))}
+            <input type="password" id="deskUnlockPass" class="desk-input" autocomplete="off">
+          </label>
+          <div class="desk-row" style="gap:8px;margin-top:8px">
+            <button type="button" class="btn primary sm" id="deskUnlockSend">${esc(I18N.t("desktop.unlock_send", "发送并回车"))}</button>
+            <button type="button" class="btn sm" id="deskUnlockCancel">${esc(I18N.t("ui.cancel", "取消"))}</button>
           </div>
         </div>
         <div class="desk-stage" id="deskStage">
@@ -276,6 +309,17 @@ function ensureDeskStageResizeObserver() {
   }
 }
 
+/** macOS Screen Recording / capture permission — reconnecting only re-prompts TCC. */
+function deskLooksPermissionError(msg) {
+  const s = String(msg || "").toLowerCase();
+  return s.includes("desk_perm_denied")
+    || s.includes("screen recording")
+    || s.includes("录屏")
+    || s.includes("screencapture failed")
+    || s.includes("privacy & security")
+    || s.includes("not authorized");
+}
+
 function setDesktopStatus(msg, isErr) {
   const el = $("deskStatus");
   if (!el) return;
@@ -417,7 +461,14 @@ function connectDesktopWS(id, name) {
       setDeskDot("error");
       return;
     }
-    // Auto-reconnect with backoff (commercial RD clients always do this).
+    // Auto-reconnect with backoff — but never spin on Screen Recording / fatal
+    // permission errors (each attempt can re-trigger macOS TCC dialogs).
+    if (DESK_NO_RETRY || (prev === "error" && deskLooksPermissionError(DESK_META && DESK_META.lastError))) {
+      DESK_NO_RETRY = true;
+      setDesktopStatus(I18N.t("desktop.disconnected"), true);
+      setDeskDot("error");
+      return;
+    }
     if (DESK_HOST && DESK_RETRY < DESK_MAX_RETRY) {
       DESK_RETRY++;
       const delay = Math.min(15000, 800 * Math.pow(1.35, DESK_RETRY));
@@ -425,7 +476,7 @@ function connectDesktopWS(id, name) {
       setDeskDot("waiting");
       setDeskPlaceholder(I18N.t("misc.reconnecting"), I18N.t("desktop.wait_hint"));
       setTimeout(() => {
-        if (DESK_INTENTIONAL_CLOSE || !DESK_HOST) return;
+        if (DESK_INTENTIONAL_CLOSE || DESK_NO_RETRY || !DESK_HOST) return;
         const mask = $("desktopMask");
         if (!mask || !mask.classList.contains("show")) return;
         connectDesktopWS(DESK_HOST.id, DESK_HOST.name);
@@ -491,6 +542,13 @@ function connectDesktopWS(id, name) {
           setDesktopStatus(I18N.t("desktop.connected") + " · " + detail, false);
         }
         if (meta.view_only != null) DESK_META.viewOnly = !!meta.view_only;
+        applyDeskInputMeta(meta);
+        if (meta.action_ack) {
+          if (meta.ok === false) toast(meta.error || I18N.t("desktop.action_fail", "远程动作失败"), "err");
+          else if (meta.action === "cad") toast(I18N.t("desktop.cad_sent", "已发送 Ctrl+Alt+Del"), "ok");
+          else if (meta.action === "type_text") toast(I18N.t("desktop.unlock_sent", "凭据已发送"), "ok");
+          else if (meta.action === "wake") toast(I18N.t("desktop.wake_sent", "已尝试唤醒输入框"), "ok");
+        }
         if (Array.isArray(meta.monitors)) {
           DESK_META.monitors = meta.monitors;
           fillMonitorSelect(meta.monitors);
@@ -523,8 +581,8 @@ function connectDesktopWS(id, name) {
           setDeskPlaceholder(I18N.t("desktop.error"), meta.error);
           setDeskDot("error");
         }
-        if (DESK_META.viewOnly && DESK_PHASE !== "error") {
-          setDesktopStatus(I18N.t("desktop.view_only"), false);
+        if (DESK_PHASE !== "error" && (DESK_META.viewOnly || meta.lock_hint || meta.desktop || meta.action_ack)) {
+          refreshDeskInputStatus();
         }
       } catch (e) {}
       return;
@@ -570,6 +628,7 @@ function connectDesktopWS(id, name) {
           const j = JSON.parse(new TextDecoder().decode(payload));
           if (j.error) {
             const isWarn = j.level === "warn";
+            DESK_META.lastError = j.error;
             setDesktopStatus(j.error, !isWarn);
             // Warn diagnostics (blank capture / no_frame watchdog) must still be
             // visible on the canvas — otherwise a black JPEG stream looks like a
@@ -580,6 +639,10 @@ function connectDesktopWS(id, name) {
             if (!isWarn) {
               setDeskDot("error");
               DESK_PHASE = "error";
+              if (deskLooksPermissionError(j.error)) {
+                DESK_NO_RETRY = true;
+                DESK_INTENTIONAL_CLOSE = true; // stop WS retry storm / TCC spam
+              }
             } else {
               setDeskDot("warn");
             }
@@ -587,9 +650,14 @@ function connectDesktopWS(id, name) {
           }
         } catch (e) {
           const msg = new TextDecoder().decode(payload);
+          DESK_META.lastError = msg;
           DESK_PHASE = "error";
           setDesktopStatus(msg, true);
           setDeskDot("error");
+          if (deskLooksPermissionError(msg)) {
+            DESK_NO_RETRY = true;
+            DESK_INTENTIONAL_CLOSE = true;
+          }
           if (!DESK_GOT_FRAME) setDeskPlaceholder(I18N.t("desktop.error"), msg);
           return;
         }
@@ -605,10 +673,7 @@ function markDeskStreaming() {
     DESK_PHASE = "streaming";
     hideDeskPlaceholder();
     setDeskDot("on");
-    const msg = DESK_META.viewOnly
-      ? I18N.t("desktop.view_only")
-      : I18N.t("desktop.connected");
-    setDesktopStatus(msg, false);
+    refreshDeskInputStatus();
   }
   const stage = $("deskStage");
   if (stage) bindDesktopInput(stage);
@@ -925,7 +990,7 @@ function deskNormXY(ev, el) {
 }
 function deskSendJSON(typ, obj) {
   if (!DESK_WS || DESK_WS.readyState !== 1) return;
-  if (DESK_META.viewOnly && (typ === "M" || typ === "W" || typ === "B")) return;
+  if (DESK_META.viewOnly && (typ === "M" || typ === "W" || typ === "B" || typ === "A")) return;
   const payload = new TextEncoder().encode(JSON.stringify(obj));
   const buf = new Uint8Array(1 + payload.length);
   buf[0] = typ.charCodeAt(0); buf.set(payload, 1); DESK_WS.send(buf);
@@ -968,8 +1033,124 @@ function onDeskWheel(ev) {
   deskSendJSON("W", { delta: ev.deltaY > 0 ? -1 : 1 });
 }
 
+function applyDeskInputMeta(meta) {
+  if (!meta || typeof meta !== "object") return;
+  if (meta.os) DESK_META.os = meta.os;
+  if (meta.desktop != null) DESK_META.desktop = meta.desktop || "";
+  if (meta.input_desktop_ok != null) DESK_META.inputDesktopOk = !!meta.input_desktop_ok;
+  if (meta.lock_hint) DESK_META.lockHint = meta.lock_hint;
+  if (meta.features && typeof meta.features === "object") {
+    DESK_META.features = { ...DESK_META.features, ...meta.features };
+  }
+  const hint = $("deskLockHint");
+  if (hint && DESK_META.lockHint) {
+    hint.hidden = false;
+    hint.textContent = DESK_META.lockHint;
+  }
+  const cadBtn = $("deskCadBtn");
+  if (cadBtn) {
+    const cadOK = !DESK_META.viewOnly && DESK_META.features && DESK_META.features.cad;
+    cadBtn.disabled = !cadOK;
+    cadBtn.title = cadOK
+      ? I18N.t("desktop.cad", "Ctrl+Alt+Del")
+      : I18N.t("desktop.cad_unsupported", "当前 Agent/平台不支持 SendSAS（Windows 服务模式可用）");
+  }
+  document.querySelectorAll("#deskLockTools [data-desk-act]").forEach((btn) => {
+    if (btn.id === "deskCadBtn") return;
+    btn.disabled = !!DESK_META.viewOnly;
+  });
+}
+
+function refreshDeskInputStatus() {
+  if (DESK_PHASE === "error" || DESK_PHASE === "closed") return;
+  if (DESK_META.viewOnly) {
+    setDesktopStatus(I18N.t("desktop.view_only"), false);
+    return;
+  }
+  if (DESK_META.inputDesktopOk === false) {
+    setDesktopStatus(I18N.t("desktop.input_detached", "已连接 · 仅画面（输入桌面未附着）"), false);
+    return;
+  }
+  let msg = I18N.t("desktop.connected");
+  if (DESK_META.desktop) {
+    msg += " · " + DESK_META.desktop;
+  }
+  if (DESK_META.os) {
+    msg += " · " + DESK_META.os;
+  }
+  setDesktopStatus(msg, false);
+}
+
+function deskSendAction(obj) {
+  if (!DESK_WS || DESK_WS.readyState !== 1) {
+    toast(I18N.t("desktop.not_connected"), "err");
+    return false;
+  }
+  if (DESK_META.viewOnly) {
+    toast(I18N.t("desktop.view_only"), "err");
+    return false;
+  }
+  const body = { ...obj, screen_w: DESK_META.w || 0, screen_h: DESK_META.h || 0 };
+  deskSendJSON("A", body);
+  return true;
+}
+
+function openDeskUnlockPanel(show) {
+  const p = $("deskUnlockPanel");
+  if (!p) return;
+  p.hidden = !show;
+  if (show) {
+    const u = $("deskUnlockUser");
+    const pw = $("deskUnlockPass");
+    if (u) u.value = "";
+    if (pw) pw.value = "";
+    if (pw) pw.focus();
+  }
+}
+
+async function deskSendUnlockCredentials() {
+  const userEl = $("deskUnlockUser");
+  const passEl = $("deskUnlockPass");
+  const user = (userEl && userEl.value) || "";
+  const pass = (passEl && passEl.value) || "";
+  if (!pass && !user) {
+    toast(I18N.t("desktop.unlock_empty", "请输入密码（或用户名）"), "err");
+    return;
+  }
+  if (!confirm(I18N.t("desktop.unlock_confirm", "确认向远程主机发送解锁凭据？内容不会写入日志。"))) return;
+  deskSendAction({ action: "wake" });
+  await new Promise((r) => setTimeout(r, 200));
+  if (user) {
+    deskSendAction({ action: "type_text", text: user, enter: false });
+    await new Promise((r) => setTimeout(r, 120));
+    deskSendAction({ action: "chord", chord: "tab" });
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  deskSendAction({ action: "type_text", text: pass, enter: true });
+  if (passEl) passEl.value = "";
+  if (userEl) userEl.value = "";
+  openDeskUnlockPanel(false);
+}
+
 function onDesktopUIClick(e) {
   const t = e.target;
+  const actBtn = t.closest("[data-desk-act]");
+  if (actBtn) {
+    const act = actBtn.getAttribute("data-desk-act");
+    if (act === "cad") deskSendAction({ action: "cad" });
+    else if (act === "wake") deskSendAction({ action: "wake" });
+    else if (act === "unlock") openDeskUnlockPanel(true);
+    else if (act === "chord") deskSendAction({ action: "chord", chord: actBtn.getAttribute("data-desk-chord") || "esc" });
+    return;
+  }
+  if (t.id === "deskUnlockSend" || t.closest("#deskUnlockSend")) {
+    deskSendUnlockCredentials();
+    return;
+  }
+  if (t.id === "deskUnlockCancel" || t.closest("#deskUnlockCancel")) {
+    openDeskUnlockPanel(false);
+    return;
+  }
   if (t.id === "deskSideToggle" || t.closest("#deskSideToggle")) {
     const side = $("deskSide");
     if (side) {

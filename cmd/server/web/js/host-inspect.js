@@ -1,8 +1,16 @@
-/* ===== 主机深度巡检（编排页 Tab · Web 报告） ===== */
+/* ===== 主机深度巡检（编排页 Tab · Web 报告 · 多机汇总 · 导出） ===== */
 let INSP_BATCHES = [];
 let INSP_ACTIVE_ID = "";
 let INSP_POLL = null;
-let INSP_VIEW_ITEM = null; // {batchId, hostId}
+let INSP_VIEW_ITEM = null; // {batchId, hostId} | null = fleet summary
+let INSP_VIEW_MODE = "fleet"; // fleet | host
+let INSP_HOST_Q = "";
+let INSP_HOSTS_LOADING = false;
+let INSP_HOSTS_ERR = "";
+let INSP_LOAD_SEQ = 0;
+let INSP_SELECTED = new Set(); // preserve checkbox selection across re-renders
+
+function inspT(k, fb) { return (window.I18N && I18N.t) ? I18N.t(k, fb) : fb; }
 
 function switchAutoTab(tab) {
   document.querySelectorAll("#autoTabs .chip-btn").forEach(b => b.classList.toggle("active", b.dataset.autotab === tab));
@@ -15,14 +23,71 @@ document.querySelectorAll("#autoTabs .chip-btn").forEach(b => {
   b.addEventListener("click", () => switchAutoTab(b.dataset.autotab));
 });
 
-async function loadHostInspect() {
-  renderInspHostPicker();
-  try {
-    INSP_BATCHES = await fetch(`${API}/host-inspect`).then(r => r.json()) || [];
-  } catch (e) {
-    INSP_BATCHES = [];
-    console.warn("load host-inspect:", e);
+function inspCaptureSelection() {
+  document.querySelectorAll(".insp-host-cb:checked").forEach(cb => INSP_SELECTED.add(cb.value));
+  document.querySelectorAll(".insp-host-cb:not(:checked)").forEach(cb => INSP_SELECTED.delete(cb.value));
+}
+
+function inspPanelActive() {
+  const panel = $("autoPanel-inspect");
+  const view = $("view-automation");
+  return !!(panel && panel.classList.contains("active") && view && view.classList.contains("active"));
+}
+
+async function loadHostInspect(opts) {
+  const forceHosts = !opts || opts.forceHosts !== false;
+  const seq = ++INSP_LOAD_SEQ;
+  const box = $("inspHostList");
+  const warm = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
+    ? LAST_HOSTS
+    : (window._cachedHosts && window._cachedHosts.length ? window._cachedHosts : []);
+
+  // Paint warm cache immediately so the picker never sits empty waiting on /hosts.
+  if (warm.length) {
+    if (typeof syncHostCache === "function" && (!LAST_HOSTS || !LAST_HOSTS.length)) syncHostCache(warm);
+    renderInspHostPicker();
+  } else if (box) {
+    INSP_HOSTS_LOADING = true;
+    INSP_HOSTS_ERR = "";
+    box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.hosts_loading", "正在加载主机列表…"))}</div>`;
   }
+
+  const hostsP = (typeof fetchHostsList === "function"
+    ? fetchHostsList({ force: forceHosts, maxAgeMs: forceHosts ? 0 : 20000 })
+    : fetch(`${API}/hosts`, { credentials: "same-origin" }).then(r => r.json()).then(j => {
+        const list = Array.isArray(j) ? j : (j && j.hosts) || [];
+        if (typeof syncHostCache === "function") return syncHostCache(list);
+        LAST_HOSTS = list; return list;
+      })
+  ).catch(err => {
+    INSP_HOSTS_ERR = String(err && err.message ? err.message : err);
+    console.warn("inspect hosts:", err);
+    return (LAST_HOSTS && LAST_HOSTS.length) ? LAST_HOSTS : [];
+  });
+
+  const batchesP = fetch(`${API}/host-inspect`, { credentials: "same-origin" })
+    .then(r => r.json())
+    .then(j => Array.isArray(j) ? j : [])
+    .catch(e => {
+      console.warn("load host-inspect:", e);
+      return INSP_BATCHES || [];
+    });
+
+  // Progressive: render hosts as soon as ready (don't wait for batch history).
+  hostsP.then(list => {
+    if (seq !== INSP_LOAD_SEQ) return;
+    INSP_HOSTS_LOADING = false;
+    if (!list.length && INSP_HOSTS_ERR) {
+      /* keep error for picker */
+    } else {
+      INSP_HOSTS_ERR = "";
+    }
+    renderInspHostPicker();
+  });
+
+  const [, batches] = await Promise.all([hostsP, batchesP]);
+  if (seq !== INSP_LOAD_SEQ) return;
+  INSP_BATCHES = batches;
   renderInspBatches();
   if (INSP_ACTIVE_ID) {
     const b = INSP_BATCHES.find(x => x.id === INSP_ACTIVE_ID);
@@ -33,32 +98,76 @@ async function loadHostInspect() {
 function renderInspHostPicker() {
   const box = $("inspHostList");
   if (!box) return;
-  const hosts = (typeof LAST_HOSTS !== "undefined" && LAST_HOSTS) ? LAST_HOSTS : [];
-  if (!hosts.length) {
-    box.innerHTML = `<div class="hint">${I18N.t("inspect.no_host_cache", "暂无主机列表，请先打开「主机」页加载数据")}</div>`;
+  inspCaptureSelection();
+  const hosts = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
+    ? LAST_HOSTS
+    : (window._cachedHosts && Array.isArray(window._cachedHosts) ? window._cachedHosts : []);
+  const q = (INSP_HOST_Q || "").trim().toLowerCase();
+  const filtered = q ? hosts.filter(h => {
+    const hay = [h.hostname, h.id, h.ip, h.os, h.category].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  }) : hosts;
+  if (INSP_HOSTS_LOADING && !hosts.length) {
+    box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.hosts_loading", "正在加载主机列表…"))}</div>`;
     return;
   }
-  box.innerHTML = hosts.map(h => {
+  if (!hosts.length) {
+    const err = INSP_HOSTS_ERR
+      ? `<div class="insp-empty-mini crit">${esc(inspT("inspect.hosts_fail", "主机列表加载失败"))}: ${esc(INSP_HOSTS_ERR)}</div>
+         <button type="button" class="btn sm" id="inspRetryHostsBtn">${esc(inspT("inspect.hosts_retry", "重试加载"))}</button>`
+      : `<div class="insp-empty-mini">${esc(inspT("inspect.no_host_cache", "暂无主机列表，正在尝试加载…"))}</div>
+         <button type="button" class="btn sm" id="inspRetryHostsBtn">${esc(inspT("inspect.hosts_retry", "重试加载"))}</button>`;
+    box.innerHTML = err;
+    const btn = box.querySelector("#inspRetryHostsBtn");
+    if (btn) btn.onclick = () => loadHostInspect({ forceHosts: true });
+    return;
+  }
+  if (!filtered.length) {
+    box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.no_host_match", "无匹配主机"))}</div>`;
+    return;
+  }
+  box.innerHTML = filtered.map(h => {
     const online = !!h.online;
+    const checked = INSP_SELECTED.has(h.id) ? "checked" : "";
     return `<label class="insp-host-row ${online ? "" : "off"}">
-      <input type="checkbox" class="insp-host-cb" value="${esc(h.id)}" ${online ? "" : "disabled"}>
+      <input type="checkbox" class="insp-host-cb" value="${esc(h.id)}" ${online ? "" : "disabled"} ${checked}>
       <span class="insp-host-name">${esc(h.hostname || h.id)}</span>
-      <span class="insp-host-meta">${esc(h.os || "")} · ${esc(h.ip || "—")} · ${online ? I18N.t("status.online", "在线") : I18N.t("status.offline", "离线")}</span>
+      <span class="insp-host-meta">${esc(h.os || "")} · ${esc(h.ip || "—")} · ${online ? inspT("status.online", "在线") : inspT("status.offline", "离线")}</span>
     </label>`;
   }).join("");
 }
 
-safeAddEventListener("inspSelectAll", "change", e => {
-  const on = !!e.target.checked;
-  document.querySelectorAll(".insp-host-cb:not(:disabled)").forEach(cb => { cb.checked = on; });
+// Global refresh / other pages update host cache → keep inspect picker live.
+document.addEventListener("aiops:hosts-updated", () => {
+  if (!inspPanelActive()) return;
+  INSP_HOSTS_LOADING = false;
+  INSP_HOSTS_ERR = "";
+  renderInspHostPicker();
 });
 
-safeAddEventListener("inspRefreshBtn", "click", () => loadHostInspect());
+safeAddEventListener("inspSelectAll", "change", e => {
+  const on = !!e.target.checked;
+  document.querySelectorAll(".insp-host-cb:not(:disabled)").forEach(cb => {
+    cb.checked = on;
+    if (on) INSP_SELECTED.add(cb.value); else INSP_SELECTED.delete(cb.value);
+  });
+});
+safeAddEventListener("inspHostSearch", "input", e => {
+  INSP_HOST_Q = e.target.value || "";
+  renderInspHostPicker();
+});
+safeAddEventListener("inspHostList", "change", e => {
+  if (e.target && e.target.classList && e.target.classList.contains("insp-host-cb")) {
+    if (e.target.checked) INSP_SELECTED.add(e.target.value);
+    else INSP_SELECTED.delete(e.target.value);
+  }
+});
+safeAddEventListener("inspRefreshBtn", "click", () => loadHostInspect({ forceHosts: true }));
 
 safeAddEventListener("inspRunBtn", "click", async () => {
   const ids = [...document.querySelectorAll(".insp-host-cb:checked")].map(cb => cb.value);
   if (!ids.length) {
-    toast(I18N.t("inspect.pick_hosts", "请先勾选要巡检的在线主机"), "warn");
+    toast(inspT("inspect.pick_hosts", "请先勾选要巡检的在线主机"), "warn");
     return;
   }
   try {
@@ -71,12 +180,13 @@ safeAddEventListener("inspRunBtn", "click", async () => {
     });
     const data = await r.json();
     if (!r.ok) {
-      toast(data.error || I18N.t("inspect.run_fail", "发起巡检失败"), "err");
+      toast(data.error || inspT("inspect.run_fail", "发起巡检失败"), "err");
       return;
     }
-    toast(I18N.t("inspect.run_ok", "巡检已开始"), "ok");
+    toast(inspT("inspect.run_ok", "巡检已开始"), "ok");
     INSP_ACTIVE_ID = data.id;
     INSP_VIEW_ITEM = null;
+    INSP_VIEW_MODE = "fleet";
     await loadHostInspect();
     startInspPoll(data.id);
   } catch (e) {
@@ -92,7 +202,9 @@ function startInspPoll(id) {
       const idx = INSP_BATCHES.findIndex(x => x.id === id);
       if (idx >= 0) INSP_BATCHES[idx] = b; else INSP_BATCHES.unshift(b);
       renderInspBatches();
-      if (INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === id) {
+      if (INSP_VIEW_MODE === "fleet" && INSP_ACTIVE_ID === id) {
+        showInspFleetSummary(b);
+      } else if (INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === id) {
         const it = (b.items || []).find(x => x.host_id === INSP_VIEW_ITEM.hostId);
         if (it && it.report) showInspReport(b, it);
       }
@@ -107,14 +219,93 @@ function stopInspPoll() {
 
 function inspStatusLabel(s) {
   return ({
-    pending: I18N.t("inspect.st_pending", "等待"),
-    running: I18N.t("inspect.st_running", "巡检中"),
-    ok: I18N.t("inspect.st_ok", "正常"),
-    warn: I18N.t("inspect.st_warn", "警告"),
-    crit: I18N.t("inspect.st_crit", "严重"),
-    error: I18N.t("inspect.st_error", "失败"),
-    done: I18N.t("inspect.st_done", "完成")
+    pending: inspT("inspect.st_pending", "等待"),
+    running: inspT("inspect.st_running", "巡检中"),
+    ok: inspT("inspect.st_ok", "正常"),
+    warn: inspT("inspect.st_warn", "警告"),
+    crit: inspT("inspect.st_crit", "严重"),
+    error: inspT("inspect.st_error", "失败"),
+    done: inspT("inspect.st_done", "完成")
   })[s] || s;
+}
+
+function inspParseReport(item) {
+  if (!item || !item.report) return null;
+  let rep = item.report;
+  if (typeof rep === "string") {
+    try { rep = JSON.parse(rep); } catch (e) { return null; }
+  }
+  return rep;
+}
+
+/** Aggregate findings & recommendations across all hosts in a batch. */
+function inspAggregateBatch(batch) {
+  const findingMap = new Map(); // key -> {level, message, section, hosts:[]}
+  const rec = { short: [], mid: [], long: [] };
+  const hostScores = [];
+  (batch.items || []).forEach(it => {
+    const rep = inspParseReport(it);
+    if (!rep) {
+      if (it.status === "error") {
+        const key = "error:" + (it.error || "fail");
+        if (!findingMap.has(key)) findingMap.set(key, { level: "crit", message: it.error || "巡检失败", section: "error", hosts: [] });
+        findingMap.get(key).hosts.push(it.hostname || it.host_id);
+      }
+      return;
+    }
+    const res = rep.result || {};
+    hostScores.push({
+      host: it.hostname || it.host_id,
+      host_id: it.host_id,
+      status: it.status,
+      warnings: res.warnings || it.warnings || 0,
+      critical: res.critical || it.critical || 0,
+      cpu: (rep.metrics || {}).cpu_usage_pct,
+      mem: (rep.metrics || {}).mem_usage_pct,
+    });
+    (rep.findings || []).forEach(f => {
+      const msg = String(f.message || f.title || "").trim();
+      if (!msg) return;
+      const level = String(f.level || "warn").toLowerCase();
+      const key = level + "|" + msg;
+      if (!findingMap.has(key)) findingMap.set(key, { level, message: msg, section: f.section || "", hosts: [] });
+      const row = findingMap.get(key);
+      const hn = it.hostname || it.host_id;
+      if (!row.hosts.includes(hn)) row.hosts.push(hn);
+    });
+    const recommend = (rep.sections || []).find(s => s.id === "recommend");
+    (recommend && recommend.items || []).forEach(item => {
+      const label = String(item.label || "").toLowerCase();
+      const val = String(item.value || "").trim();
+      if (!val) return;
+      const bucket = /短|short|立即|urgent/.test(label) ? "short"
+        : /中|mid|本周|week/.test(label) ? "mid" : "long";
+      const line = `【${it.hostname || it.host_id}】${val}`;
+      if (!rec[bucket].includes(line)) rec[bucket].push(line);
+    });
+  });
+  const rank = { crit: 0, critical: 0, error: 0, warn: 1, warning: 1, info: 2 };
+  const findings = [...findingMap.values()].sort((a, b) =>
+    (rank[a.level] ?? 9) - (rank[b.level] ?? 9) || b.hosts.length - a.hosts.length
+  );
+  // Deduplicate recommendation themes (same text without host prefix)
+  const synth = inspSynthesizeAdvice(findings, hostScores);
+  return { findings, recommend: rec, hostScores, synth };
+}
+
+function inspSynthesizeAdvice(findings, hostScores) {
+  const tips = [];
+  const critN = findings.filter(f => /crit|error/.test(f.level)).length;
+  const warnN = findings.filter(f => /warn/.test(f.level)).length;
+  const highCPU = hostScores.filter(h => Number(h.cpu) >= 85).length;
+  const highMem = hostScores.filter(h => Number(h.mem) >= 85).length;
+  if (critN) tips.push(`共 ${critN} 类严重问题跨主机出现，建议优先处置出现频次最高的项，并核对是否存在共性配置缺陷。`);
+  if (warnN) tips.push(`共 ${warnN} 类警告项；可按「影响主机数」排序批量修复（补丁、清理、扩容、加固）。`);
+  if (highCPU) tips.push(`${highCPU} 台主机 CPU ≥85%，建议排查热点进程、限流或扩容计算资源。`);
+  if (highMem) tips.push(`${highMem} 台主机内存 ≥85%，建议检查泄漏/缓存策略并提高水位告警阈值前先做根因分析。`);
+  if (!tips.length) tips.push("本批次整体健康度较好；建议保持标准/深度巡检节奏，并关注证书、磁盘与认证失败趋势。");
+  tips.push("统一改进：对齐时区与 NTP；限制高危端口对外暴露；容器/K8s 资源设 requests/limits；关键服务纳入剧本定期复检。");
+  return tips;
 }
 
 function renderInspBatches() {
@@ -126,37 +317,47 @@ function renderInspBatches() {
     list.innerHTML = "";
     if (empty) empty.style.display = "";
     if (stats) stats.innerHTML = "";
-    if ($("inspReportView")) $("inspReportView").style.display = "none";
+    const view = $("inspReportView");
+    if (view) { view.style.display = "none"; view.innerHTML = ""; }
     return;
   }
   if (empty) empty.style.display = "none";
 
-  const latest = INSP_BATCHES[0];
+  const latest = INSP_BATCHES.find(b => b.id === INSP_ACTIVE_ID) || INSP_BATCHES[0];
   if (stats && latest) {
-    stats.innerHTML = `<div class="insp-stat-card"><b>${latest.host_count || 0}</b><span>${I18N.t("inspect.stat_hosts", "目标主机")}</span></div>
-      <div class="insp-stat-card ok"><b>${latest.ok_count || 0}</b><span>${I18N.t("inspect.st_ok", "正常")}</span></div>
-      <div class="insp-stat-card warn"><b>${latest.warn_count || 0}</b><span>${I18N.t("inspect.st_warn", "警告")}</span></div>
-      <div class="insp-stat-card crit"><b>${latest.crit_count || 0}</b><span>${I18N.t("inspect.st_crit", "严重")}</span></div>
-      <div class="insp-stat-card err"><b>${latest.err_count || 0}</b><span>${I18N.t("inspect.st_error", "失败")}</span></div>`;
+    const agg = inspAggregateBatch(latest);
+    stats.innerHTML = `
+      <div class="insp-stat-card"><b>${latest.host_count || 0}</b><span>${esc(inspT("inspect.stat_hosts", "目标主机"))}</span></div>
+      <div class="insp-stat-card ok"><b>${latest.ok_count || 0}</b><span>${esc(inspT("inspect.st_ok", "正常"))}</span></div>
+      <div class="insp-stat-card warn"><b>${latest.warn_count || 0}</b><span>${esc(inspT("inspect.st_warn", "警告"))}</span></div>
+      <div class="insp-stat-card crit"><b>${latest.crit_count || 0}</b><span>${esc(inspT("inspect.st_crit", "严重"))}</span></div>
+      <div class="insp-stat-card err"><b>${latest.err_count || 0}</b><span>${esc(inspT("inspect.st_error", "失败"))}</span></div>
+      <div class="insp-stat-card"><b>${agg.findings.length}</b><span>${esc(inspT("inspect.stat_issue_types", "问题类型"))}</span></div>`;
   }
 
-  list.innerHTML = INSP_BATCHES.map(b => {
+  list.innerHTML = INSP_BATCHES.slice(0, 20).map(b => {
     const when = b.started_at ? new Date(b.started_at * 1000).toLocaleString() : "";
+    const fleetActive = INSP_VIEW_MODE === "fleet" && (INSP_ACTIVE_ID === b.id || (!INSP_ACTIVE_ID && INSP_BATCHES[0] && INSP_BATCHES[0].id === b.id));
     const items = (b.items || []).map(it => {
-      const active = INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === b.id && INSP_VIEW_ITEM.hostId === it.host_id ? "active" : "";
+      const active = INSP_VIEW_MODE === "host" && INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === b.id && INSP_VIEW_ITEM.hostId === it.host_id ? "active" : "";
       return `<button type="button" class="insp-item ${it.status} ${active}" data-batch="${esc(b.id)}" data-host="${esc(it.host_id)}">
         <span class="insp-item-name">${esc(it.hostname)}</span>
-        <span class="insp-item-meta">${esc(it.os_family || it.os || "")} · ${esc(it.ip || "")}</span>
         <span class="insp-badge ${it.status}">${inspStatusLabel(it.status)}</span>
-        ${it.critical ? `<span class="insp-badge crit">${it.critical} crit</span>` : ""}
-        ${it.warnings ? `<span class="insp-badge warn">${it.warnings} warn</span>` : ""}
+        ${it.critical ? `<span class="insp-badge crit">${it.critical}</span>` : ""}
+        ${it.warnings ? `<span class="insp-badge warn">${it.warnings}</span>` : ""}
       </button>`;
     }).join("");
-    return `<div class="insp-batch">
+    return `<div class="insp-batch ${fleetActive ? "active-batch" : ""}">
       <div class="insp-batch-head">
-        <strong>${esc(b.id)}</strong>
-        <span class="insp-badge ${b.status}">${inspStatusLabel(b.status)}</span>
-        <span class="hint">${esc(when)} · ${esc(b.operator || "")} · ${b.done_count || 0}/${b.host_count || 0}</span>
+        <button type="button" class="insp-fleet-btn ${fleetActive ? "active" : ""}" data-insp-fleet="${esc(b.id)}" title="${esc(inspT("inspect.view_fleet", "查看多机汇总"))}">
+          <strong>${esc(inspT("inspect.batch", "批次"))}</strong>
+          <span class="insp-badge ${b.status}">${inspStatusLabel(b.status)}</span>
+          <span class="hint">${esc(when)} · ${b.done_count || 0}/${b.host_count || 0}${b.source ? " · " + esc(b.source) : ""}${!b.source && b.operator ? " · " + esc(b.operator) : ""}</span>
+        </button>
+        <div class="insp-batch-actions">
+          <button type="button" class="btn sm" data-insp-export-batch="${esc(b.id)}">${esc(inspT("inspect.export_batch", "导出汇总"))}</button>
+          <button type="button" class="btn sm ai-assist-btn" data-insp-ai-fleet="${esc(b.id)}">🤖 ${esc(inspT("inspect.ai_fleet", "汇总分析"))}</button>
+        </div>
       </div>
       <div class="insp-items">${items}</div>
     </div>`;
@@ -168,11 +369,146 @@ function renderInspBatches() {
       const batch = INSP_BATCHES.find(x => x.id === bid);
       const item = batch && (batch.items || []).find(x => x.host_id === hid);
       if (!item) return;
+      INSP_ACTIVE_ID = bid;
       INSP_VIEW_ITEM = { batchId: bid, hostId: hid };
+      INSP_VIEW_MODE = "host";
       renderInspBatches();
       showInspReport(batch, item);
     });
   });
+  list.querySelectorAll("[data-insp-fleet]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const bid = btn.getAttribute("data-insp-fleet");
+      const batch = INSP_BATCHES.find(x => x.id === bid);
+      if (!batch) return;
+      INSP_ACTIVE_ID = bid;
+      INSP_VIEW_ITEM = null;
+      INSP_VIEW_MODE = "fleet";
+      renderInspBatches();
+      showInspFleetSummary(batch);
+    });
+  });
+  list.querySelectorAll("[data-insp-export-batch]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const batch = INSP_BATCHES.find(x => x.id === btn.getAttribute("data-insp-export-batch"));
+      if (batch) inspExportBatch(batch, "pdf");
+    });
+  });
+  list.querySelectorAll("[data-insp-ai-fleet]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const batch = INSP_BATCHES.find(x => x.id === btn.getAttribute("data-insp-ai-fleet"));
+      if (batch) openInspectFleetAI(batch);
+    });
+  });
+
+  // Auto-show fleet summary for active/latest batch when nothing selected
+  if (INSP_VIEW_MODE === "fleet" && latest) {
+    showInspFleetSummary(latest);
+  }
+}
+
+function showInspFleetSummary(batch) {
+  const view = $("inspReportView");
+  if (!view || !batch) return;
+  const agg = inspAggregateBatch(batch);
+  view.style.display = "";
+  const findingRows = agg.findings.slice(0, 80).map(f => {
+    const hosts = f.hosts.slice(0, 8).map(h => esc(h)).join("、") + (f.hosts.length > 8 ? ` +${f.hosts.length - 8}` : "");
+    return `<tr class="${esc(f.level)}">
+      <td><span class="insp-badge ${esc(f.level)}">${esc(f.level)}</span></td>
+      <td>${esc(f.message)}</td>
+      <td class="mono">${f.hosts.length}</td>
+      <td class="insp-host-chips">${hosts}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="4" class="hint">${esc(inspT("inspect.no_findings", "无告警项"))}</td></tr>`;
+
+  const hostRows = agg.hostScores.map(h =>
+    `<tr class="${esc(h.status)}">
+      <td><button type="button" class="linkish" data-jump-host="${esc(h.host_id)}">${esc(h.host)}</button></td>
+      <td><span class="insp-badge ${esc(h.status)}">${inspStatusLabel(h.status)}</span></td>
+      <td>${h.critical}</td><td>${h.warnings}</td>
+      <td>${h.cpu != null ? h.cpu + "%" : "—"}</td>
+      <td>${h.mem != null ? h.mem + "%" : "—"}</td>
+    </tr>`
+  ).join("");
+
+  const recBlock = (title, arr) => arr.length
+    ? `<div class="insp-rec-block"><h5>${esc(title)}</h5><ul>${arr.slice(0, 40).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`
+    : "";
+
+  view.innerHTML = `
+    <div class="insp-report-head insp-fleet-head">
+      <div>
+        <div class="insp-kicker">${esc(inspT("inspect.fleet_kicker", "多机汇总"))}</div>
+        <h3>${esc(inspT("inspect.fleet_title", "巡检问题汇总"))}</h3>
+        <div class="hint">${esc(batch.id)} · ${batch.done_count || 0}/${batch.host_count || 0} · ${inspStatusLabel(batch.status)}</div>
+      </div>
+      <div class="insp-report-result">
+        <div class="insp-export-wrap">
+          <button type="button" class="btn sm" id="inspExportFleetBtn">${esc(inspT("inspect.export", "导出报告"))}</button>
+          <select id="inspExportFleetFmt" aria-label="format">
+            <option value="pdf" selected>PDF</option>
+            <option value="excel">Excel</option>
+            <option value="markdown">Markdown</option>
+            <option value="word">Word</option>
+          </select>
+        </div>
+        <button type="button" class="btn sm ai-assist-btn" id="inspAIFleetBtn">🤖 ${esc(inspT("inspect.ai_fleet", "汇总分析"))}</button>
+      </div>
+    </div>
+    <div class="insp-advice">
+      <h4>${esc(inspT("inspect.advice_title", "优化改进建议"))}</h4>
+      <ul>${agg.synth.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+    </div>
+    <div class="insp-rec-grid">
+      ${recBlock(inspT("inspect.rec_short", "短期（立即）"), agg.recommend.short)}
+      ${recBlock(inspT("inspect.rec_mid", "中期"), agg.recommend.mid)}
+      ${recBlock(inspT("inspect.rec_long", "长期"), agg.recommend.long)}
+    </div>
+    <div class="insp-findings insp-fleet-findings">
+      <h4>${esc(inspT("inspect.findings_rollup", "跨主机问题归并"))}</h4>
+      <div class="nf-table-wrap"><table class="data-table insp-agg-table">
+        <thead><tr>
+          <th>${esc(inspT("inspect.col_level", "级别"))}</th>
+          <th>${esc(inspT("inspect.col_issue", "问题"))}</th>
+          <th>${esc(inspT("inspect.col_hosts_n", "主机数"))}</th>
+          <th>${esc(inspT("inspect.col_hosts", "涉及主机"))}</th>
+        </tr></thead>
+        <tbody>${findingRows}</tbody>
+      </table></div>
+    </div>
+    <div class="insp-findings">
+      <h4>${esc(inspT("inspect.host_matrix", "主机健康矩阵"))}</h4>
+      <div class="nf-table-wrap"><table class="data-table insp-agg-table">
+        <thead><tr>
+          <th>${esc(inspT("inspect.col_host", "主机"))}</th>
+          <th>${esc(inspT("inspect.col_status", "状态"))}</th>
+          <th>Crit</th><th>Warn</th><th>CPU</th><th>MEM</th>
+        </tr></thead>
+        <tbody>${hostRows || `<tr><td colspan="6" class="hint">—</td></tr>`}</tbody>
+      </table></div>
+    </div>`;
+
+  view.querySelectorAll("[data-jump-host]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const hid = btn.getAttribute("data-jump-host");
+      const item = (batch.items || []).find(x => x.host_id === hid);
+      if (!item) return;
+      INSP_VIEW_MODE = "host";
+      INSP_VIEW_ITEM = { batchId: batch.id, hostId: hid };
+      renderInspBatches();
+      showInspReport(batch, item);
+    });
+  });
+  const expBtn = view.querySelector("#inspExportFleetBtn");
+  if (expBtn) expBtn.onclick = () => {
+    const fmt = ($("inspExportFleetFmt") || {}).value || "pdf";
+    inspExportBatch(batch, fmt);
+  };
+  const aiBtn = view.querySelector("#inspAIFleetBtn");
+  if (aiBtn) aiBtn.onclick = () => openInspectFleetAI(batch);
 }
 
 function showInspReport(batch, item) {
@@ -182,42 +518,51 @@ function showInspReport(batch, item) {
     view.style.display = "";
     view.innerHTML = `<div class="insp-report-head"><h3>${esc(item.hostname)}</h3>
       <span class="insp-badge ${item.status}">${inspStatusLabel(item.status)}</span></div>
-      <div class="hint">${esc(item.error || I18N.t("inspect.waiting_report", "报告生成中…"))}</div>`;
+      <div class="hint">${esc(item.error || inspT("inspect.waiting_report", "报告生成中…"))}</div>`;
     return;
   }
-  let rep = item.report;
-  if (typeof rep === "string") {
-    try { rep = JSON.parse(rep); } catch (e) { rep = null; }
-  }
+  const rep = inspParseReport(item);
   if (!rep) {
     view.style.display = "";
-    view.innerHTML = `<div class="hint">${I18N.t("inspect.bad_report", "报告解析失败")}</div>`;
+    view.innerHTML = `<div class="hint">${inspT("inspect.bad_report", "报告解析失败")}</div>`;
     return;
   }
   view.style.display = "";
   const h = rep.host || {};
   const m = rep.metrics || {};
   const res = rep.result || {};
+  const recommend = (rep.sections || []).find(s => s.id === "recommend");
+  const otherSecs = (rep.sections || []).filter(s => s.id !== "recommend");
   const findings = (rep.findings || []).map(f =>
     `<li class="insp-finding ${f.level}"><b>${esc(f.level)}</b> ${esc(f.message)}</li>`
-  ).join("") || `<li class="hint">${I18N.t("inspect.no_findings", "无告警项")}</li>`;
+  ).join("") || `<li class="hint">${inspT("inspect.no_findings", "无告警项")}</li>`;
 
-  const toc = (rep.sections || []).map(sec =>
+  const toc = otherSecs.map(sec =>
     `<a href="#insp-sec-${esc(sec.id)}" class="insp-toc-a ${esc(sec.status || "ok")}">${esc(sec.title)}</a>`
   ).join("");
+
+  const recHTML = recommend ? `<div class="insp-advice insp-host-advice">
+    <h4>${esc(recommend.title || inspT("inspect.recommend", "改进建议"))}</h4>
+    <ul>${(recommend.items || []).map(it => `<li><strong>${esc(it.label || "")}</strong> ${esc(it.value || "")}</li>`).join("")}</ul>
+  </div>` : "";
 
   view.innerHTML = `
     <div class="insp-report-head">
       <div>
+        <button type="button" class="btn sm ghost" id="inspBackFleet">${esc(inspT("inspect.back_fleet", "← 返回汇总"))}</button>
         <h3>${esc(item.hostname || h.hostname || "")}</h3>
         <div class="hint">${esc(h.os || "")} · ${esc(h.os_family || "")} · ${esc(h.ip || item.ip || "")} · ${esc(h.kernel || "")}${h.fqdn ? " · " + esc(h.fqdn) : ""} · v${esc(rep.version || "")}</div>
       </div>
       <div class="insp-report-result">
         <span class="insp-badge ${item.status}">${inspStatusLabel(item.status)}</span>
-        <span>${I18N.t("inspect.warnings", "警告")} ${res.warnings || 0}</span>
-        <span>${I18N.t("inspect.critical", "严重")} ${res.critical || 0}</span>
+        <span>${inspT("inspect.warnings", "警告")} ${res.warnings || 0}</span>
+        <span>${inspT("inspect.critical", "严重")} ${res.critical || 0}</span>
         <span class="hint">${esc(rep.timestamp || "")}${rep.elapsed_seconds != null ? " · " + Number(rep.elapsed_seconds).toFixed(1) + "s" : ""}</span>
-        <button type="button" class="btn sm ai-assist-btn" id="inspAIAnalyzeBtn" title="${I18N.t("inspect.ai_analyze_title", "把体检发现喂给 AI Assist 做研判")}">🤖 ${I18N.t("inspect.ai_analyze", "AI 分析")}</button>
+        <div class="insp-export-wrap">
+          <button type="button" class="btn sm" id="inspExportHostBtn">${esc(inspT("inspect.export", "导出报告"))}</button>
+          <select id="inspExportHostFmt"><option value="excel">Excel</option><option value="markdown">Markdown</option><option value="pdf">PDF</option></select>
+        </div>
+        <button type="button" class="btn sm ai-assist-btn" id="inspAIAnalyzeBtn">🤖 ${inspT("inspect.ai_analyze", "AI 分析")}</button>
       </div>
     </div>
     <div class="insp-metrics">
@@ -230,38 +575,193 @@ function showInspReport(batch, item) {
       <div><b>${m.fd_usage_pct != null ? m.fd_usage_pct + "%" : "—"}</b><span>FD</span></div>
       <div><b>${m.process_count ?? "—"}</b><span>Procs</span></div>
       <div><b>${m.zombie_count ?? 0}</b><span>Zombie</span></div>
-      <div><b>${m.d_state_count ?? 0}</b><span>D-State</span></div>
       <div><b>${m.tcp_listen ?? "—"}</b><span>Listen</span></div>
-      <div><b>${m.tcp_close_wait ?? 0}</b><span>CloseWait</span></div>
       <div><b>${m.oom_count ?? 0}</b><span>OOM</span></div>
       <div><b>${m.container_count ?? 0}</b><span>Ctr</span></div>
       <div><b>${(m.ssl_expired || 0) + (m.ssl_expiring || 0)}</b><span>SSL⚠</span></div>
     </div>
+    ${recHTML}
     <div class="insp-toc">${toc}</div>
-    <div class="insp-findings"><h4>${I18N.t("inspect.findings", "发现问题")}</h4><ul>${findings}</ul></div>
-    <div class="insp-sections">${(rep.sections || []).map(sec => {
-      const rows = (sec.items || []).map(it =>
-        `<tr class="${esc(it.status || "")}"><td>${esc(it.label)}</td><td>${esc(it.value)}</td></tr>`
-      ).join("");
-      return `<div class="insp-sec ${esc(sec.status || "ok")}" id="insp-sec-${esc(sec.id)}">
-        <div class="insp-sec-head"><span class="insp-badge ${esc(sec.status || "ok")}">${esc(sec.status || "ok")}</span>
-          <h4>${esc(sec.title)}</h4>
-          ${sec.summary ? `<span class="hint">${esc(sec.summary)}</span>` : ""}
-        </div>
-        <table class="insp-table"><tbody>${rows}</tbody></table>
-      </div>`;
-    }).join("")}</div>
+    <div class="insp-findings"><h4>${inspT("inspect.findings", "发现问题")}</h4><ul>${findings}</ul></div>
+    <div class="insp-sections">${otherSecs.map(sec => inspRenderSection(sec)).join("")}</div>
   `;
+  const back = view.querySelector("#inspBackFleet");
+  if (back) back.onclick = () => {
+    INSP_VIEW_MODE = "fleet";
+    INSP_VIEW_ITEM = null;
+    renderInspBatches();
+    showInspFleetSummary(batch);
+  };
   const aiBtn = view.querySelector("#inspAIAnalyzeBtn");
-  if (aiBtn) {
-    aiBtn.onclick = () => openInspectAIAssist(batch, item, rep);
-  }
+  if (aiBtn) aiBtn.onclick = () => openInspectAIAssist(batch, item, rep);
+  const expBtn = view.querySelector("#inspExportHostBtn");
+  if (expBtn) expBtn.onclick = () => {
+    const fmt = ($("inspExportHostFmt") || {}).value || "excel";
+    inspExportHost(batch, item, fmt);
+  };
   view.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** Dense / long-key sections that overflow 2-col cards (kernel sysctl, paths, etc.). */
+function inspSectionIsWide(sec) {
+  const id = String(sec && sec.id || "").toLowerCase();
+  const wideIds = new Set([
+    "kernel", "process", "processes", "top_process", "listen", "net_listen",
+    "services", "service", "packages", "ssl", "certs", "certificate",
+    "large_files", "bigfiles", "cron", "journal", "logs", "dmesg", "auth"
+  ]);
+  if (wideIds.has(id)) return true;
+  const items = (sec && sec.items) || [];
+  if (items.length >= 8) return true;
+  return items.some(it => String(it.label || "").length > 28 || String(it.value || "").length > 48);
+}
+
+/** Prefer stacked key/value for sysctl-like keys (a.b.c) to avoid column clip. */
+function inspSectionUseKV(sec) {
+  const id = String(sec && sec.id || "").toLowerCase();
+  if (id === "kernel" || id === "sysctl") return true;
+  const items = (sec && sec.items) || [];
+  let dotted = 0;
+  for (const it of items) {
+    if (/\.[a-z0-9_.-]+/i.test(String(it.label || ""))) dotted++;
+  }
+  return items.length >= 3 && dotted >= Math.ceil(items.length * 0.5);
+}
+
+function inspRenderSection(sec) {
+  const items = sec.items || [];
+  const wide = inspSectionIsWide(sec);
+  const useKV = inspSectionUseKV(sec);
+  let body;
+  if (!items.length) {
+    body = sec.summary
+      ? `<div class="hint">${esc(sec.summary)}</div>`
+      : `<div class="hint">—</div>`;
+  } else if (useKV) {
+    body = `<div class="insp-kv">${items.map(it => {
+      const label = String(it.label || "");
+      const value = String(it.value || "");
+      return `<div class="insp-kv-row ${esc(it.status || "")}" title="${esc(label + (value ? " = " + value : ""))}">
+        <div class="insp-kv-k">${esc(label)}</div>
+        <div class="insp-kv-v">${esc(value)}</div>
+      </div>`;
+    }).join("")}</div>`;
+  } else {
+    body = `<table class="insp-table"><tbody>${items.map(it => {
+      const label = String(it.label || "");
+      const value = String(it.value || "");
+      return `<tr class="${esc(it.status || "")}" title="${esc(label + (value ? ": " + value : ""))}">
+        <td>${esc(label)}</td><td>${esc(value)}</td></tr>`;
+    }).join("")}</tbody></table>`;
+  }
+  return `<div class="insp-sec ${esc(sec.status || "ok")}${wide ? " insp-sec-wide" : ""}" id="insp-sec-${esc(sec.id)}">
+    <div class="insp-sec-head"><span class="insp-badge ${esc(sec.status || "ok")}">${esc(sec.status || "ok")}</span>
+      <h4>${esc(sec.title)}</h4>
+      ${sec.summary && items.length ? `<span class="hint">${esc(sec.summary)}</span>` : ""}
+    </div>
+    ${body}
+  </div>`;
+}
+
+function inspBuildHostModel(batch, item) {
+  const rep = inspParseReport(item) || {};
+  const h = rep.host || {};
+  const m = rep.metrics || {};
+  const res = rep.result || {};
+  const findings = (rep.findings || []).map(f => [f.level || "", f.section || "", f.message || ""]);
+  const sections = (rep.sections || []).map(sec => ({
+    title: sec.title || sec.id || "section",
+    columns: [inspT("inspect.col_item", "项"), inspT("inspect.col_value", "值")],
+    rows: (sec.items || []).map(it => [it.label || "", it.value || ""]),
+  }));
+  const recommend = (rep.sections || []).find(s => s.id === "recommend");
+  const narrative = [
+    `# ${inspT("inspect.recommend", "改进建议")}`,
+    ...((recommend && recommend.items) || []).map(it => `- **${it.label || ""}**：${it.value || ""}`),
+  ].join("\n");
+  return {
+    title: inspT("inspect.report_title", "主机巡检报告") + " — " + (item.hostname || h.hostname || item.host_id),
+    subtitle: (batch && batch.id ? batch.id + " · " : "") + new Date().toLocaleString(),
+    summaryTitle: inspT("inspect.report_meta", "报告摘要"),
+    narrativeTitle: inspT("inspect.recommend", "改进建议"),
+    meta: [
+      [inspT("inspect.col_host", "主机"), item.hostname || h.hostname || ""],
+      ["IP", h.ip || item.ip || ""],
+      [inspT("inspect.col_os", "系统"), [h.os, h.os_family, h.kernel].filter(Boolean).join(" · ")],
+      [inspT("inspect.col_status", "状态"), item.status || ""],
+      [inspT("inspect.warnings", "警告"), String(res.warnings || 0)],
+      [inspT("inspect.critical", "严重"), String(res.critical || 0)],
+    ],
+    kpis: [
+      ["CPU", (m.cpu_usage_pct != null ? m.cpu_usage_pct + "%" : "—")],
+      ["MEM", (m.mem_usage_pct != null ? m.mem_usage_pct + "%" : "—")],
+      ["Load1", String(m.load_1m ?? "—")],
+      ["Disk⚠", String(m.disk_alert_count ?? 0)],
+    ],
+    narrative,
+    sections: [
+      { title: inspT("inspect.findings", "发现问题"), columns: ["级别", "分区", "问题"], rows: findings },
+      ...sections,
+    ],
+    rawJSON: rep,
+  };
+}
+
+function inspBuildBatchModel(batch) {
+  const agg = inspAggregateBatch(batch);
+  return {
+    title: inspT("inspect.fleet_report_title", "多机巡检汇总报告"),
+    subtitle: (batch.id || "") + " · " + (batch.host_count || 0) + " 台 · " + new Date().toLocaleString(),
+    summaryTitle: inspT("inspect.report_meta", "报告摘要"),
+    narrativeTitle: inspT("inspect.advice_title", "优化改进建议"),
+    meta: [
+      [inspT("inspect.batch", "批次"), batch.id || ""],
+      [inspT("inspect.stat_hosts", "目标主机"), String(batch.host_count || 0)],
+      [inspT("inspect.st_ok", "正常"), String(batch.ok_count || 0)],
+      [inspT("inspect.st_warn", "警告"), String(batch.warn_count || 0)],
+      [inspT("inspect.st_crit", "严重"), String(batch.crit_count || 0)],
+      [inspT("inspect.st_error", "失败"), String(batch.err_count || 0)],
+    ],
+    narrative: agg.synth.map(t => `- ${t}`).join("\n") + "\n\n" +
+      ["### 短期", ...agg.recommend.short.map(x => `- ${x}`),
+        "### 中期", ...agg.recommend.mid.map(x => `- ${x}`),
+        "### 长期", ...agg.recommend.long.map(x => `- ${x}`)].join("\n"),
+    sections: [
+      {
+        title: inspT("inspect.findings_rollup", "跨主机问题归并"),
+        columns: ["级别", "问题", "主机数", "涉及主机"],
+        rows: agg.findings.map(f => [f.level, f.message, String(f.hosts.length), f.hosts.join(", ")]),
+      },
+      {
+        title: inspT("inspect.host_matrix", "主机健康矩阵"),
+        columns: ["主机", "状态", "Crit", "Warn", "CPU", "MEM"],
+        rows: agg.hostScores.map(h => [h.host, h.status, String(h.critical), String(h.warnings),
+          h.cpu != null ? h.cpu + "%" : "—", h.mem != null ? h.mem + "%" : "—"]),
+      },
+    ],
+    rawJSON: batch,
+  };
+}
+
+async function inspExportHost(batch, item, fmt) {
+  if (typeof exportModel !== "function") { toast("导出组件未就绪", "err"); return; }
+  try {
+    await exportModel(inspBuildHostModel(batch, item), fmt || "excel", "主机巡检_" + (item.hostname || item.host_id));
+    toast(inspT("toast.exported", "已导出"), "ok");
+  } catch (e) { toast(String(e.message || e), "err"); }
+}
+
+async function inspExportBatch(batch, fmt) {
+  if (typeof exportModel !== "function") { toast("导出组件未就绪", "err"); return; }
+  try {
+    await exportModel(inspBuildBatchModel(batch), fmt || "pdf", "巡检汇总_" + (batch.id || "batch"));
+    toast(inspT("toast.exported", "已导出"), "ok");
+  } catch (e) { toast(String(e.message || e), "err"); }
 }
 
 function openInspectAIAssist(batch, item, rep) {
   if (typeof openAIAssist !== "function") {
-    if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err");
+    if (typeof toast === "function") toast(inspT("assist.unavailable", "AI 面板未就绪"), "err");
     return;
   }
   const h = (rep && rep.host) || {};
@@ -289,9 +789,34 @@ function openInspectAIAssist(batch, item, rep) {
   if (ctx.length > 12000) ctx = ctx.slice(0, 12000) + "\n…（已截断）";
   openAIAssist({
     task: "host_inspect_analysis",
-    title: I18N.t("inspect.ai_title", "AI · 主机体检分析") + " · " + hostName,
+    title: inspT("inspect.ai_title", "AI · 主机体检分析") + " · " + hostName,
     mode: "analyze",
     context: ctx,
-    hint: I18N.t("inspect.ai_hint", "正在结合体检 findings 与指标生成研判…")
+    hint: inspT("inspect.ai_hint", "正在结合体检 findings 与指标生成研判…")
+  });
+}
+
+function openInspectFleetAI(batch) {
+  if (typeof openAIAssist !== "function") {
+    toast(inspT("assist.unavailable", "AI 面板未就绪"), "err");
+    return;
+  }
+  const agg = inspAggregateBatch(batch);
+  const lines = [
+    `批次：${batch.id} · 主机 ${batch.host_count} · 完成 ${batch.done_count}`,
+    `状态计数：ok=${batch.ok_count} warn=${batch.warn_count} crit=${batch.crit_count} err=${batch.err_count}`,
+    "",
+    "【优化建议要点】",
+    ...agg.synth.map(t => `- ${t}`),
+    "",
+    "【跨主机高频问题】",
+    ...agg.findings.slice(0, 40).map(f => `- [${f.level}] x${f.hosts.length} ${f.message} :: ${f.hosts.slice(0, 6).join(",")}`),
+  ];
+  openAIAssist({
+    task: "host_inspect_analysis",
+    title: inspT("inspect.ai_fleet_title", "AI · 多机巡检汇总"),
+    mode: "analyze",
+    context: lines.join("\n").slice(0, 14000),
+    hint: inspT("inspect.ai_fleet_hint", "正在汇总多机问题并生成改进建议…")
   });
 }

@@ -29,7 +29,9 @@ func isDeskCaptureFatal(err error) bool {
 	return strings.Contains(msg, "Session 0") ||
 		strings.Contains(msg, "GetDC/GetWindowDC failed") ||
 		strings.Contains(msg, "cannot read screen size") ||
-		strings.Contains(msg, "screen capture unavailable")
+		strings.Contains(msg, "screen capture unavailable") ||
+		strings.Contains(msg, "desk_perm_denied") ||
+		strings.Contains(msg, "Screen Recording")
 }
 
 // Agent-side web desktop channel (screen stream + input + file xfer).
@@ -273,24 +275,36 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 
 	sw, sh := cap.Size()
 	mons := cap.Monitors()
-	h264OK := deskH264Usable()
 	clipOK := deskClipboardSupported()
+	// Resolve preferred codec before h264OK: on macOS prefer may lazily probe
+	// avfoundation once (ffmpeg -list_devices). Calling deskH264Usable first
+	// used to return false forever when probe was deferred.
+	prefer := deskPreferredCodec()
+	h264OK := deskH264Usable()
 	codecs := []string{"jpeg"}
 	if h264OK {
 		codecs = append(codecs, "h264")
 	}
-	// prefer hints the browser to auto-select a codec. On macOS per-frame
-	// screencapture is very slow, so continuous H.264 (avfoundation) is strongly
-	// preferred when the screen-capture device is resolvable.
-	prefer := deskPreferredCodec()
-	meta, _ := json.Marshal(map[string]any{
+	metaMap := map[string]any{
 		"w": sw, "h": sh, "os": runtimeGOOS(),
 		"scale": q.Scale, "quality": q.Quality, "fps": q.FPS,
 		"codec": q.Codec, "codecs": codecs, "prefer": prefer,
 		"h264": h264OK, "clipboard": clipOK, "monitors": mons,
 		"view_only": viewOnly,
-		"features":  map[string]bool{"dnd": true, "clipboard": clipOK, "monitors": true, "h264": h264OK, "input": !viewOnly},
-	})
+	}
+	for k, v := range deskMetaExtras(inp, viewOnly) {
+		metaMap[k] = v
+	}
+	feats, _ := metaMap["features"].(map[string]bool)
+	if feats == nil {
+		feats = map[string]bool{}
+	}
+	feats["clipboard"] = clipOK
+	feats["h264"] = h264OK
+	feats["dnd"] = true
+	feats["monitors"] = true
+	metaMap["features"] = feats
+	meta, _ := json.Marshal(metaMap)
 	if err := writeTx(deskTxFrame('S', meta)); err != nil {
 		pw.Close()
 		<-reqDone
@@ -891,6 +905,15 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			if vk != 0 {
 				_ = inp.Key(vk, ev.Down)
 			}
+		case 'A':
+			sw0, sh0 := 0, 0
+			if screenW != nil {
+				sw0 = *screenW
+			}
+			if screenH != nil {
+				sh0 = *screenH
+			}
+			handleDeskAction(inp, payload, sw0, sh0, fileTxChan)
 		case 'f':
 			var meta struct {
 				Filename   string `json:"filename"`
