@@ -22,11 +22,12 @@ func (s *Server) handleListDashboards(w http.ResponseWriter, r *http.Request) {
 		Tags        []string `json:"tags,omitempty"`
 		Panels      int      `json:"panels"`
 		Source      string   `json:"source,omitempty"`
+		LogoURL     string   `json:"logo_url,omitempty"`
 		UpdatedAt   int64    `json:"updated_at"`
 	}
 	var out []meta
 	for _, d := range s.cfg.Dashboards() {
-		out = append(out, meta{d.ID, d.Name, d.Description, d.Tags, len(d.Panels), d.Source, d.UpdatedAt})
+		out = append(out, meta{d.ID, d.Name, d.Description, d.Tags, len(d.Panels), d.Source, d.Appearance.LogoURL, d.UpdatedAt})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"dashboards": out})
 }
@@ -74,8 +75,10 @@ func (s *Server) handleUpsertDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
-	_ = s.cfg.DeleteDashboard(r.PathValue("id"))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除仪表盘：" + r.PathValue("id")})
+	id := r.PathValue("id")
+	_ = s.cfg.DeleteDashboard(id)
+	s.removeDashboardAssets(id)
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除仪表盘：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -264,7 +267,7 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 		GrafanaID string `json:"grafana_id"`
 		JSON      string `json:"json"`
 		Name      string `json:"name"`
-		Format    string `json:"format"` // ""/auto | grafana | nightingale（留空则自动识别）
+		Format    string `json:"format"` // ""/auto | grafana | nightingale | aiops（留空则自动识别）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -308,12 +311,18 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 
 	var d Dashboard
 	var err error
-	if format == "nightingale" {
+	switch format {
+	case "nightingale":
 		if source == "import" {
 			source = "nightingale"
 		}
 		d, err = mapNightingaleDashboard(raw, req.Name, source)
-	} else {
+	case "aiops":
+		if source == "import" {
+			source = "aiops-template"
+		}
+		d, err = mapAIOpsDashboard(raw, req.Name, source)
+	default:
 		d, err = mapGrafanaDashboard(raw, req.Name, source)
 	}
 	if err != nil {
@@ -334,6 +343,8 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	kind := "Grafana"
 	if format == "nightingale" {
 		kind = "夜莺"
+	} else if format == "aiops" {
+		kind = "AIOps 模板"
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "导入 " + kind + " 看板：" + saved.Name + "（" + strconv.Itoa(len(saved.Panels)) + " 面板）"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID, "name": saved.Name, "panels": len(saved.Panels), "unsupported": unsupported, "format": format})

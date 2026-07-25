@@ -1730,7 +1730,15 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请提供需求描述或待分析内容"})
 		return
 	}
+	if ok, msg := s.aiGovAllowRequest(r); !ok {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
+		return
+	}
 	cfg := s.cfg.AIConfig()
+	if cfg.RedactSensitiveFields {
+		req.Input = redactAIText(req.Input, true)
+		req.Context = redactAIText(req.Context, true)
+	}
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		s.setupSSE(w)
 		fmt.Fprint(w, "data: {\"error\":\"AI 未配置或未启用，请先在「AI 设置」填写并保存\"}\n\n")
@@ -1784,33 +1792,29 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 	case "playbook":
 		return "你是自动化运维专家。根据运维人员的描述，生成一个可直接导入本平台的「运维剧本」JSON。" +
 			"严格输出一个 ```json 代码块，结构为：{\"name\":\"剧本名\",\"description\":\"用途\",\"steps\":[{" +
-			"\"name\":\"步骤名\",\"command\":\"Linux/通用命令\",\"command_win\":\"Windows 覆盖命令(可选)\",\"target\":\"all|category:分类|system:linux|host:ID\"," +
+			"\"name\":\"步骤名\",\"module\":\"内置模块名(可选,优先于command)\",\"args\":{},\"command\":\"Shell命令(module为空时)\"," +
+			"\"command_win\":\"Windows 覆盖(可选)\",\"target\":\"all|category:分类|system:linux|host:ID\"," +
 			"\"timeout_sec\":30,\"continue_on_error\":false,\"ignore_exit\":false,\"register\":\"变量名(可选)\",\"when\":\"条件(可选)\"}]}。" +
-			"要求：① 命令须安全、幂等、只读优先，破坏性操作需在 description 明确风险并默认 continue_on_error=false；" +
-			"② 跨平台差异用 command_win / command_mac 覆盖；③ 需要引用上一步输出时用 register + {{变量名}}；④ 代码块后用中文简述每步意图与注意事项。" + ctxBlock
+			"内置只读模块优先：gather_facts/host_inspect(args.profile=quick|standard|deep)/disk_usage/mem_info/cpu_load/process_top/" +
+			"net_ifaces/net_listen/journal_recent/docker_ps/users_logged 等；变更模块 service/package/copy 须在 description 标明风险。" +
+			"要求：① 只读优先，破坏性操作默认 continue_on_error=false；② host_inspect 建议 ignore_exit=true 与 timeout_sec≥180；" +
+			"③ 跨平台差异用 command_win / command_mac；④ 用 register + {{变量名}} 串联步骤；⑤ 代码块后用中文简述每步意图。" + ctxBlock
 	case "chart_analysis":
 		return "你是资深 SRE。以下是监控图表/指标的数据摘要。请：① 概述整体趋势与当前水位；② 指出异常点、突变、持续高位或逼近阈值的项；" +
 			"③ 推断可能原因；④ 给出可执行的排查方向或处置建议。用简洁中文、分点作答，只依据给定数据，不要编造。" + ctxBlock
 	case "dashboard_prompt_optimize":
-		return "你是可观测性与监控看板设计专家。把运维人员的简短需求改写成【简洁、可直接用于生成看板】的需求描述。" +
-			"禁止深度思考与长篇铺陈。要求（控制在 400 字以内）：\n" +
-			"① 一句话点明主题与对象；② 用短列表给出 6~10 个关键指标/黄金信号（优先本平台 aiops_*，不要写 node_*）；" +
-			"③ 各用一词标注建议图型（timeseries/stat/gauge/piechart/barchart/table）；" +
-			"④ 一句布局顺序（概览在上、明细在下）；⑤ 若需下钻，点名模板变量 instance（英文名）并用 =~。\n" +
-			"直接输出改写正文，不要 JSON、不要代码块、不要解释。若上下文有可用指标，优先用真实指标名。" + ctxBlock
+		return "你是专业 BI 产品经理。把简短需求改写成可直接生成看板的说明书（≤400 字）。" +
+			"思考从简，直接给正文：①主题/受众一句；② 8~12 个真实指标（优先 aiops_*，禁 node_*）并标注图型；" +
+			"③ 布局：KPI→趋势→对比→明细；④ 下钻用 instance=~。不要 JSON/代码块/过程解释。" + ctxBlock
 	case "dashboard_analysis":
-		return "你是资深 SRE。以下是一个监控仪表盘的实时数据摘要（各面板当前值）。请对该看板做健康研判：" +
-			"① 总体健康结论（正常/需关注/告急）；② 逐项指出异常、逼近阈值、异常趋势的面板与数值；③ 推断可能根因与关联；" +
-			"④ 给出可执行的处置建议与后续观察项；⑤ 若存在需要立即跟进的问题，明确点出并建议是否建工单。" +
-			"用简洁中文分点作答，只依据给定数据，不臆测。" + ctxBlock
+		return "你是资深 SRE。根据看板实时摘要做健康研判（简洁分点，勿长篇）：" +
+			"①总结论；②异常面板与数值；③可能根因；④处置建议；⑤是否建单。只依据给定数据。" + ctxBlock
 	case "dashboard_optimize":
-		return "你是可观测性专家，正在评审并优化一个监控仪表盘。禁止深度思考与思维链，直接作答。下面给出现有结构与实时近况。请：\n" +
-			"① 先用简洁中文分点说明优化要点（补哪些黄金信号、修正哪些查询/单位/图例、布局改进；PromQL 用行内反引号）；\n" +
-			"② 然后输出【优化后的完整看板】为唯一的一个 ```json 代码块（供一键应用）。\n" +
-			aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint + "\n" +
-			"额外：尽量保留原看板中【已有且正确】的 aiops_* 查询，只改布局/补面板/修错误表达式；" +
-			"不要把全网趋势改成强制 {instance=\"$instance\"}（会在选中单机时滤空）；排行/概览用 avg()/topk() 不要带实例过滤。" +
-			ctxBlock
+		return "你是可观测性架构师 + BI 设计师。目标：尽快产出可一键应用的完整看板 JSON。\n" +
+			"【硬性节奏】思考从简；中文优化要点最多 6 条、合计≤250 字；随后立刻给出唯一 ```json 代码块（完整看板，勿截断）。\n" +
+			"【优化重点】保留正确的 aiops_* 查询；修错误表达式/单位/图例；补黄金信号；布局 KPI(h=6)→趋势→对比/明细；≥5 种组件；24 栏铺满。\n" +
+			"【禁忌】不要把全网趋势改成 instance=\"$instance\"；排行/概览用 avg()/topk()；勿输出第二段解释。\n" +
+			aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint + ctxBlock
 	case "audit_diagnosis":
 		return "你是安全审计与运维合规专家。以下是平台审计日志片段。请：① 识别异常/高风险操作（越权、异常登录、批量删除、配置篡改、异地/异常时间访问等）；" +
 			"② 归纳可疑模式与关联行为；③ 评估风险等级；④ 给出处置与加固建议。用简洁中文分点作答，严格基于给定日志，不臆测。" + ctxBlock
@@ -1923,6 +1927,12 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"② 指出异常或可疑模式：单点大流量/带宽打满、疑似端口扫描（同源大量不同目的端口或目的 IP）、疑似 DDoS 或反射放大（海量小包、UDP 突增）、异常外联（可疑目的 IP/端口、非业务端口外发）、数据外泄迹象（大流量上行到陌生外部地址）；\n" +
 			"③ 分析可能原因与风险；\n" +
 			"④ 给出可执行的排查与处置建议（抓包定位、封禁/限速、核实对应进程与业务等）。用简洁中文分点作答，只依据给定快照，不臆造；未见异常时也要明确说明「未见异常」。" + ctxBlock
+	case "host_inspect_analysis":
+		return "你是资深系统运维与主机巡检专家。以下是某主机的「深度体检」结构化报告摘要（评分/严重发现/关键指标）。请：\n" +
+			"① 一句话总体研判（健康/需关注/有风险）；\n" +
+			"② 按紧急程度列出关键 findings，并说明业务影响；\n" +
+			"③ 给出可执行的排查与处置步骤（优先只读确认，再谨慎变更）；\n" +
+			"④ 指出是否建议开事件/工单或进入变更冻结期外再操作。用简洁中文分点作答，只依据给定报告，不臆造。" + ctxBlock
 	default: // generic
 		return "你是资深 SRE / 运维助手，用简洁中文帮助运维人员处理监控、告警、排障、性能、日志与自动化相关问题；无关问题礼貌拒答。" + ctxBlock
 	}
@@ -2208,7 +2218,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		s.recordAICallActor("diagnose", cfg.Model, s.actorName(r), time.Since(diagStart).Milliseconds(),
 			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
 		if diag != "" {
-			s.incidents.AddEvent(id, "ai_diagnosis", "AI", full)
+			s.incidents.AddEventWithCitations(id, "ai_diagnosis", "AI", full, cites)
 			s.store.MarkDirty()
 			go s.saveDiagnosisEmbedding(id, inc, full)
 			if s.shouldRememberUnverifiedAIOutput() {
@@ -2576,6 +2586,16 @@ func (s *Server) buildIncidentDiagnosisPrompt(inc Incident) string {
 		if strings.TrimSpace(rca.Summary) != "" {
 			b.WriteString("\n【🔗 拓扑 RCA / 变更关联】\n")
 			b.WriteString(rca.Summary)
+			b.WriteString("\n")
+		}
+		loc := s.locateResource("host:" + inc.HostID)
+		if strings.TrimSpace(loc.Summary) != "" {
+			b.WriteString("\n【🧭 资源定位链（硬件/虚拟机/容器）】\n")
+			b.WriteString(loc.Summary)
+			if len(loc.Chain) > 0 {
+				b.WriteString("\n链路：")
+				b.WriteString(strings.Join(loc.Chain, " → "))
+			}
 			b.WriteString("\n")
 		}
 	}
@@ -3009,7 +3029,10 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 				title = ts[0]
 			}
 		}
-		citations = append(citations, RAGCitation{Kind: h.Kind, Source: src, Title: label + "：" + title})
+		citations = append(citations, RAGCitation{
+			Kind: h.Kind, Source: src, Title: label + "：" + title,
+			Summary: trimLine(content, 120),
+		})
 		n++
 	}
 	return b.String(), n, "", citations
@@ -3201,6 +3224,13 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Message) == "" && len(req.Images) == 0 && len(req.Files) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
 		return
+	}
+	if ok, msg := s.aiGovAllowRequest(r); !ok {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
+		return
+	}
+	if s.cfg.AIConfig().RedactSensitiveFields {
+		req.Message = redactAIText(req.Message, true)
 	}
 	if len(req.Message) > 32<<10 || len(req.History) > 40 || len(req.Images) > 4 || len(req.Files) > 8 {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "AI 消息、历史或附件数量超过限制"})

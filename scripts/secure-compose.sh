@@ -7,7 +7,8 @@
 # 作用：
 #   1. 自动检测网络，优先 GitHub 下载 docker-compose.yml，失败则切 Gitee
 #   2. 同步下载 .env.example（若存在），生成/覆盖 .env
-#   3. 写入随机 POSTGRES_PASSWORD（20 位）与 AIOPS_SECRET_KEY（aiops- + 44 位）
+#   3. 写入随机 POSTGRES_PASSWORD（20 位）、AIOPS_SECRET_KEY（aiops- + 44 位）
+#      与 AIOPS_INSTALL_TOKEN（32 位 hex，供 compose agent 自动加入主机列表）
 #   4. 兼容旧版：若编排文件仍含明文密钥行，同步 patch（双保险）
 #
 # 用法：
@@ -42,6 +43,11 @@ gen_pg_password() {
 gen_secret_key() {
   printf 'aiops-'
   LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c44
+  printf '\n'
+}
+
+gen_install_token() {
+  LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c32
   printf '\n'
 }
 
@@ -82,25 +88,32 @@ fi
 
 SECRET_KEY=$(gen_secret_key)
 PG_PASSWORD=$(gen_pg_password)
+INSTALL_TOKEN=$(gen_install_token)
 
 echo "==> 写入随机密钥到 $ENV_FILE"
 if [ -f .env.example.tmp ]; then
-  awk -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" '
+  awk -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" -v tok="$INSTALL_TOKEN" '
     /^POSTGRES_PASSWORD=/ { print "POSTGRES_PASSWORD=" pg; next }
     /^AIOPS_SECRET_KEY=/ { print "AIOPS_SECRET_KEY=" secret; next }
+    /^AIOPS_INSTALL_TOKEN=/ { print "AIOPS_INSTALL_TOKEN=" tok; next }
     { print }
   ' .env.example.tmp > "$ENV_FILE"
+  # 若模板无 AIOPS_INSTALL_TOKEN 行，追加一行
+  grep -q '^AIOPS_INSTALL_TOKEN=' "$ENV_FILE" || printf 'AIOPS_INSTALL_TOKEN=%s\n' "$INSTALL_TOKEN" >> "$ENV_FILE"
   rm -f .env.example.tmp
 elif [ -f .env.example ]; then
-  awk -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" '
+  awk -v secret="$SECRET_KEY" -v pg="$PG_PASSWORD" -v tok="$INSTALL_TOKEN" '
     /^POSTGRES_PASSWORD=/ { print "POSTGRES_PASSWORD=" pg; next }
     /^AIOPS_SECRET_KEY=/ { print "AIOPS_SECRET_KEY=" secret; next }
+    /^AIOPS_INSTALL_TOKEN=/ { print "AIOPS_INSTALL_TOKEN=" tok; next }
     { print }
   ' .env.example > "$ENV_FILE"
+  grep -q '^AIOPS_INSTALL_TOKEN=' "$ENV_FILE" || printf 'AIOPS_INSTALL_TOKEN=%s\n' "$INSTALL_TOKEN" >> "$ENV_FILE"
 else
   cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=$PG_PASSWORD
 AIOPS_SECRET_KEY=$SECRET_KEY
+AIOPS_INSTALL_TOKEN=$INSTALL_TOKEN
 AIOPS_HTTP_PORT=8529
 AIOPS_FORWARD_PORT_RANGE=10100-10300
 TZ=Asia/Shanghai

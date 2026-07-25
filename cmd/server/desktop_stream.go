@@ -176,6 +176,10 @@ func (s *Server) handleOpenDesktop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "desktop.disabled")})
 		return
 	}
+	hostID := r.PathValue("id")
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	verified, hasPassword := s.auth.isTerminalVerified(r)
 	if !verified {
 		code := "terminal_verify_required"
@@ -188,7 +192,6 @@ func (s *Server) handleOpenDesktop(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	hostID := r.PathValue("id")
 	h := s.hostByID(hostID)
 	if h == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})

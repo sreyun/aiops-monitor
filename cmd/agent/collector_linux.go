@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -113,6 +114,15 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 			m.SwapUsed = sused
 			m.SwapPercent = round1(float64(sused) / float64(mi.swapTotal) * 100)
 		}
+		// Containers: prefer cgroup v2 memory limit so demos don't look like host RAM.
+		if lim, usage, ok := readCgroupMemory(); ok && lim > 0 {
+			m.MemTotal = lim
+			if usage > lim {
+				usage = lim
+			}
+			m.MemUsed = usage
+			m.MemPercent = round1(float64(usage) / float64(lim) * 100)
+		}
 	} else if isPermissionError(err) {
 		permErrors = append(permErrors, "/proc/meminfo")
 	}
@@ -121,8 +131,12 @@ func (c *linuxCollector) Collect() (shared.Metrics, error) {
 	if err := syscall.Statfs(c.diskPath, &st); err == nil && st.Blocks > 0 {
 		bsize := uint64(st.Bsize)
 		total := st.Blocks * bsize
-		free := st.Bfree * bsize
-		used := total - free
+		// Bavail = space available to non-root (matches df); Bfree includes reserved blocks.
+		avail := st.Bavail * bsize
+		used := total - avail
+		if used > total {
+			used = total - st.Bfree*bsize
+		}
 		m.DiskTotal = total
 		m.DiskUsed = used
 		m.DiskPercent = round1(float64(used) / float64(total) * 100)
@@ -285,7 +299,10 @@ func readCPUTimes() (cpuTimes, error) {
 	return cpuTimes{}, errParse
 }
 
-type memInfo struct{ memTotal, memAvail, swapTotal, swapFree uint64 }
+type memInfo struct {
+	memTotal, memAvail, swapTotal, swapFree uint64
+	memFree, buffers, cached                uint64
+}
 
 func readMemInfo() (memInfo, error) {
 	f, err := os.Open("/proc/meminfo")
@@ -293,8 +310,14 @@ func readMemInfo() (memInfo, error) {
 		return memInfo{}, err
 	}
 	defer f.Close()
+	return parseMemInfoScanner(bufio.NewScanner(f)), nil
+}
+
+// parseMemInfoScanner parses /proc/meminfo lines. When MemAvailable is missing
+// (older CentOS/RHEL kernels), fall back to MemFree+Buffers+Cached so usage
+// does not appear as ~100%.
+func parseMemInfoScanner(sc *bufio.Scanner) memInfo {
 	var mi memInfo
-	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
@@ -302,13 +325,63 @@ func readMemInfo() (memInfo, error) {
 			mi.memTotal = parseMeminfoKB(line)
 		case strings.HasPrefix(line, "MemAvailable:"):
 			mi.memAvail = parseMeminfoKB(line)
+		case strings.HasPrefix(line, "MemFree:"):
+			mi.memFree = parseMeminfoKB(line)
+		case strings.HasPrefix(line, "Buffers:"):
+			mi.buffers = parseMeminfoKB(line)
+		case strings.HasPrefix(line, "Cached:"):
+			mi.cached = parseMeminfoKB(line)
 		case strings.HasPrefix(line, "SwapTotal:"):
 			mi.swapTotal = parseMeminfoKB(line)
 		case strings.HasPrefix(line, "SwapFree:"):
 			mi.swapFree = parseMeminfoKB(line)
 		}
 	}
-	return mi, nil
+	if mi.memAvail == 0 && mi.memTotal > 0 {
+		mi.memAvail = mi.memFree + mi.buffers + mi.cached
+		if mi.memAvail > mi.memTotal {
+			mi.memAvail = mi.memTotal
+		}
+	}
+	return mi
+}
+
+// readCgroupMemory returns (limitBytes, usageBytes, ok) from cgroup v2 when the
+// process is constrained (Docker/K8s). "max" / missing limit → ok=false.
+func readCgroupMemory() (limit, usage uint64, ok bool) {
+	// cgroup v2 unified hierarchy
+	for _, base := range []string{"/sys/fs/cgroup", "/sys/fs/cgroup/memory"} {
+		limPath := base + "/memory.max"
+		if base == "/sys/fs/cgroup/memory" {
+			limPath = base + "/memory.limit_in_bytes"
+		}
+		b, err := os.ReadFile(limPath)
+		if err != nil {
+			continue
+		}
+		s := strings.TrimSpace(string(b))
+		if s == "" || s == "max" {
+			continue
+		}
+		lim, err := strconv.ParseUint(s, 10, 64)
+		if err != nil || lim == 0 || lim >= (1<<62) {
+			continue // unbound / nonsense
+		}
+		usagePath := base + "/memory.current"
+		if base == "/sys/fs/cgroup/memory" {
+			usagePath = base + "/memory.usage_in_bytes"
+		}
+		ub, err := os.ReadFile(usagePath)
+		if err != nil {
+			continue
+		}
+		u, err := strconv.ParseUint(strings.TrimSpace(string(ub)), 10, 64)
+		if err != nil {
+			continue
+		}
+		return lim, u, true
+	}
+	return 0, 0, false
 }
 
 func parseMeminfoKB(line string) uint64 {
@@ -514,46 +587,52 @@ func readProcNameDegraded(pid string) string {
 }
 
 // enumLinuxDisks returns usage for every real filesystem mount, de-duplicated
-// by backing device and skipping pseudo filesystems.
+// by backing device and skipping pseudo filesystems. Container overlay roots
+// and network mounts (NFS/ZFS/…) are included so demos are not empty.
 func enumLinuxDisks() []shared.DiskInfo {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+	return enumLinuxDisksFromMounts(f)
+}
+
+func enumLinuxDisksFromMounts(r io.Reader) []shared.DiskInfo {
 	seen := map[string]bool{}
 	var out []shared.DiskInfo
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) < 3 {
 			continue
 		}
 		dev, mount, fstype := fields[0], fields[1], fields[2]
-		if !strings.HasPrefix(dev, "/dev/") {
+		if !includeLinuxMount(dev, mount, fstype) {
 			continue
 		}
-		// Skip the /boot mount and its sub-mounts (kernel / EFI partitions).
-		// Exact directory match so a data disk like /bootstrap isn't excluded.
-		if mount == "/boot" || strings.HasPrefix(mount, "/boot/") {
+		key := dev + "|" + mount
+		if seen[key] {
 			continue
 		}
-		if seen[dev] {
-			continue
-		}
-		switch fstype {
-		case "proc", "sysfs", "tmpfs", "devtmpfs", "cgroup", "cgroup2",
-			"overlay", "squashfs", "autofs", "mqueue", "debugfs", "tracefs", "devpts":
+		if strings.HasPrefix(dev, "/dev/") && seen[dev] {
 			continue
 		}
 		var st syscall.Statfs_t
 		if err := syscall.Statfs(mount, &st); err != nil || st.Blocks == 0 {
 			continue
 		}
-		seen[dev] = true
+		seen[key] = true
+		if strings.HasPrefix(dev, "/dev/") {
+			seen[dev] = true
+		}
 		bsize := uint64(st.Bsize)
 		total := st.Blocks * bsize
-		used := total - st.Bfree*bsize
+		avail := st.Bavail * bsize
+		used := total - avail
+		if used > total {
+			used = total - st.Bfree*bsize
+		}
 		out = append(out, shared.DiskInfo{
 			Path:    unescapeMount(mount),
 			Total:   total,
@@ -564,6 +643,31 @@ func enumLinuxDisks() []shared.DiskInfo {
 	return out
 }
 
+// includeLinuxMount decides whether a /proc/mounts row should contribute disk usage.
+func includeLinuxMount(dev, mount, fstype string) bool {
+	if mount == "/boot" || strings.HasPrefix(mount, "/boot/") {
+		return false
+	}
+	switch fstype {
+	case "proc", "sysfs", "tmpfs", "devtmpfs", "cgroup", "cgroup2",
+		"squashfs", "autofs", "mqueue", "debugfs", "tracefs", "devpts",
+		"fusectl", "pstore", "bpf", "nsfs", "rpc_pipefs", "binfmt_misc":
+		return false
+	case "overlay":
+		// Container rootfs — keep "/" (and similar) so Disks is not empty in Docker.
+		return mount == "/" || mount == "/app" || mount == "/app/data"
+	}
+	if strings.HasPrefix(dev, "/dev/") {
+		return true
+	}
+	// Network / pooled FS without a /dev/ node (NFS, ZFS dataset, virtiofs, 9p…).
+	switch fstype {
+	case "nfs", "nfs4", "zfs", "fuse.sshfs", "fuse.rclone", "virtiofs", "9p", "cifs", "smb3":
+		return true
+	}
+	return false
+}
+
 // unescapeMount decodes the octal escapes procfs uses inside mount points
 // (space -> \040, tab -> \011, newline -> \012, backslash -> \134).
 func unescapeMount(s string) string {
@@ -571,6 +675,36 @@ func unescapeMount(s string) string {
 		return s
 	}
 	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(s)
+}
+
+// isLinuxDiskPartition reports partition-style names that already have a parent
+// whole-disk row in diskstats (sda1, vda2, nvme0n1p3, mmcblk0p1).
+func isLinuxDiskPartition(dev string) bool {
+	if strings.HasPrefix(dev, "nvme") || strings.HasPrefix(dev, "mmcblk") {
+		idx := strings.LastIndex(dev, "p")
+		if idx <= 0 || idx >= len(dev)-1 {
+			return false
+		}
+		for _, c := range dev[idx+1:] {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	i := len(dev)
+	for i > 0 && dev[i-1] >= '0' && dev[i-1] <= '9' {
+		i--
+	}
+	if i == 0 || i == len(dev) {
+		return false
+	}
+	base := dev[:i]
+	if len(base) == 3 {
+		p := base[:2]
+		return p == "sd" || p == "vd" || p == "hd"
+	}
+	return strings.HasPrefix(base, "xvd") && len(base) >= 4
 }
 
 func osVersion() string {
@@ -604,9 +738,12 @@ func readDiskIO() (diskIOTotals, error) {
 			continue
 		}
 		dev := fields[2]
-		// Skip loopback, ram, and dm (device-mapper) devices that are
-		// typically virtual or already counted under their parent disk.
+		// Skip loopback, ram, dm, and partitions (sda1/nvme0n1p2) so we do not
+		// double-count whole-disk + partition rows from /proc/diskstats.
 		if strings.HasPrefix(dev, "loop") || strings.HasPrefix(dev, "ram") || strings.HasPrefix(dev, "dm-") {
+			continue
+		}
+		if isLinuxDiskPartition(dev) {
 			continue
 		}
 		// Field indices (Linux kernel Documentation/iostats.txt):

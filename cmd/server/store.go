@@ -102,6 +102,7 @@ type Store struct {
 	alertSeq     int64             // monotonically increasing ID for AlertRecord
 	dirty        bool              // set on every mutation; consumed by the embedded DB's autosave
 	pg           *pgStore          // when set, audit log + events are also written to PostgreSQL
+	onAudit      func(LogEntry)    // optional SIEM/SOC export hook (set by Server)
 }
 
 // BindPG wires PostgreSQL as the durable store for host metadata, the audit log,
@@ -737,6 +738,9 @@ func (s *Store) appendLog(e LogEntry) {
 	s.dirty = true
 	if s.pg != nil { // PostgreSQL keeps the full, durable audit trail
 		go s.pg.appendAudit(e)
+	}
+	if s.onAudit != nil {
+		go s.onAudit(e)
 	}
 }
 

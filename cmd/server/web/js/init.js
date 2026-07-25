@@ -222,12 +222,13 @@ function collectForwardItems() {
   const items = [];
   (LAST_FORWARDS || []).forEach(f => {
     const jumpTag = f.remote_target ? ` · <span class="badge warn" title="跳板目标">⇢ ${esc(f.remote_target)}</span>` : "";
+    const wlTag = f.whitelist_enabled ? ` · <span class="badge" title="${esc((f.whitelist || []).join(", "))}">${I18N.t("forward.wl_badge") || "白名单"}</span>` : "";
     items.push({
       type: "tcp", id: f.id,
       enabled: f.enabled !== false,
       badge: f.protocol === "udp" ? "UDP" : "TCP", badgeClass: "op",
       title: `${esc(f.hostname)} → :${f.target_port}`,
-      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code>${jumpTag} · ${f.sessions} ${I18N.t("ui.active_sessions")} · ${f.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
+      sub: `${I18N.t("ui.listen_addr")} <code class="mono">${esc(f.listen_addr)}</code>${jumpTag}${wlTag} · ${f.sessions} ${I18N.t("ui.active_sessions")} · ${f.total_sessions || 0} ${I18N.t("ui.total_sessions")}`,
       listenAddr: f.listen_addr,
       groupID: f.group_id || "",           // 端口范围批量组（同组共享）
       targetPort: f.target_port,
@@ -246,7 +247,12 @@ function collectForwardItems() {
       proxyUrl,
     });
   });
-  if (FWD_SEARCH) { const q = FWD_SEARCH.toLowerCase(); return items.filter(it => ((it.title || "") + " " + (it.sub || "") + " " + (it.listenAddr || "") + " " + (it.proxyUrl || "")).toLowerCase().includes(q)); }
+  if (FWD_SEARCH) {
+    return items.filter(it => matchesSearchTokens(
+      [it.title, it.sub, it.listenAddr, it.proxyUrl, it.id].filter(Boolean).join(" "),
+      FWD_SEARCH
+    ));
+  }
   return items;
 }
 
@@ -397,12 +403,21 @@ function submitForward() {
   }
 }
 
+function parseWhitelistLines(id) {
+  return (($(id)?.value || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean));
+}
 async function createTcpForward(hostID, targetPort) {
   const localPort = parseInt($("fwdLocalPort")?.value || "0");
   const protocol = $("fwdProtocol")?.value || "tcp"; // tcp | udp
   const endPort = parseInt($("fwdTargetPortEnd")?.value || "0"); // > targetPort = 端口范围批量转发
   const remoteTarget = ($("fwdRemoteTarget")?.value || "").trim();
-  const body = { host_id: hostID, target_port: targetPort, local_port: localPort, protocol };
+  const wlEnabled = !!$("fwdWhitelistEnabled")?.checked;
+  const whitelist = parseWhitelistLines("fwdWhitelist");
+  if (wlEnabled && !whitelist.length) {
+    toast(I18N.t("forward.wl_need_entry") || "已启用白名单，请至少填写一条 IP/CIDR", "err");
+    return;
+  }
+  const body = { host_id: hostID, target_port: targetPort, local_port: localPort, protocol, whitelist_enabled: wlEnabled, whitelist };
   if (endPort > targetPort) body.target_port_end = endPort;
   if (remoteTarget) body.remote_target = remoteTarget;
   await withLoading("fwdSubmitBtn", async () => {
@@ -689,17 +704,25 @@ function editForward(type, id) {
   populateForwardHosts();
   $("fwdEditHost").value = item.host_id;
   $("fwdEditPort").value = item.target_port;
+  const wlDetails = $("fwdEditWhitelistDetails");
   if (type === "tcp") {
     $("fwdEditTcpField").style.display = "";
     $("fwdEditLocalPort").value = item.local_port || 0;
     $("fwdEditHttpNameField").style.display = "none";
     $("fwdEditHttpPathField").style.display = "none";
+    if (wlDetails) {
+      wlDetails.style.display = "";
+      wlDetails.open = !!item.whitelist_enabled;
+      if ($("fwdEditWhitelistEnabled")) $("fwdEditWhitelistEnabled").checked = !!item.whitelist_enabled;
+      if ($("fwdEditWhitelist")) $("fwdEditWhitelist").value = (item.whitelist || []).join("\n");
+    }
   } else {
     $("fwdEditTcpField").style.display = "none";
     $("fwdEditHttpNameField").style.display = "";
     $("fwdEditHttpPathField").style.display = "";
     $("fwdEditName").value = item.name || "";
     $("fwdEditPath").value = item.default_path || "";
+    if (wlDetails) wlDetails.style.display = "none";
   }
   const mask = $("fwdEditMask");
   const backdrop = $("backdrop");
@@ -745,12 +768,18 @@ async function saveForwardEdit() {
   }
   if (type === "tcp") {
     const localPort = parseInt($("fwdEditLocalPort").value || "0");
+    const wlEnabled = !!$("fwdEditWhitelistEnabled")?.checked;
+    const whitelist = parseWhitelistLines("fwdEditWhitelist");
+    if (wlEnabled && !whitelist.length) {
+      toast(I18N.t("forward.wl_need_entry") || "已启用白名单，请至少填写一条 IP/CIDR", "err");
+      return;
+    }
     try {
       const res = await fetch(`/api/v1/forward/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort })
+        body: JSON.stringify({ host_id: hostID, target_port: targetPort, local_port: localPort, whitelist_enabled: wlEnabled, whitelist })
       });
       if (!res.ok) { toast(I18N.t("toast.edit_failed"), "err"); return; }
       toast(I18N.t("toast.edited"), "ok");
@@ -794,6 +823,10 @@ safeAddEventListener("addForwardBtn", "click", () => {
   if (backdrop) backdrop.style.display = "";
   // 清空远程目标输入
   const remoteTarget = $("fwdRemoteTarget"); if (remoteTarget) remoteTarget.value = "";
+  const wlDet = $("fwdWhitelistDetails"); if (wlDet) wlDet.open = false;
+  if ($("fwdWhitelistEnabled")) $("fwdWhitelistEnabled").checked = false;
+  if ($("fwdWhitelist")) $("fwdWhitelist").value = "";
+  const endPort = $("fwdTargetPortEnd"); if (endPort) endPort.value = "";
 });
 safeAddEventListener("fwdSubmitBtn", "click", submitForward);
 // 「保存并打开」：合并了原「保存配置」+「打开链接」（保存配置按钮已移除）

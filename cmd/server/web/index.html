@@ -4,15 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AIOps Monitor · 主机监控运维平台</title>
-<meta name="theme-color" content="#0a0d13" media="(prefers-color-scheme:dark)">
-<meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme:light)">
+<meta name="theme-color" content="#f5f7fa" data-aiops-theme>
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="AIOps">
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=0.17.0">
 <script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -21,7 +20,7 @@
 </head>
 <body>
 <noscript>
-  <div style="position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;background:#0a0d13;color:#e7ebf2;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;text-align:center;line-height:1.7">
+  <div style="position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;background:#f5f7fa;color:#1a2332;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;text-align:center;line-height:1.7">
     <div style="max-width:460px">
       <div style="font-size:18px;font-weight:600;margin-bottom:10px">AIOps Monitor 需要启用 JavaScript</div>
       <div style="font-size:14px;color:#b3bccb">本监控面板为动态渲染页面，请在浏览器中启用 JavaScript 后刷新本页。<br>This dashboard requires JavaScript — please enable it and reload.</div>
@@ -88,9 +87,9 @@
             <span data-i18n="nav.alerts">告警</span><span class="nav-count" id="navAlerts">0</span>
           </a>
           <!-- 「治理」已并入「告警」的治理规则 Tab（IA 重构 方案B） -->
-          <a class="nav-item" data-view="sre" data-i18n-title="nav.sre" title="SRE 中枢：事件 / 自动修复 / SLO / 工单 / AI">
+          <a class="nav-item" data-view="sre" data-i18n-title="nav.sre" title="SRE 中枢：事件 / 自动修复 / SLO / 工单 / 平台健康巡检">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>
-            <span data-i18n="nav.sre">诊断</span><span class="nav-count" id="navSre">0</span>
+            <span data-i18n="nav.sre">SRE 中枢</span><span class="nav-count" id="navSre">0</span>
           </a>
         </div>
       </div>
@@ -109,6 +108,16 @@
           <a class="nav-item" data-view="datasource" data-i18n-title="nav.datasource" title="数据源接入（Loki / Prometheus）">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
             <span data-i18n="nav.datasource">数据源</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="security">
+        <button class="nav-group-label" type="button"><span data-i18n="navgroup.security">安全</span><svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-group-items">
+          <a class="nav-item" data-view="content-audit" data-i18n-title="nav.security" title="安全中心：内容审计 / AI 工具审计 / 审计外发">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/></svg>
+            <span data-i18n="nav.security">安全中心</span>
           </a>
         </div>
       </div>
@@ -186,10 +195,10 @@
                 <span class="user-dropdown-role" id="userRoleLg">—</span>
               </div>
             </div>
-            <button class="user-dropdown-item" id="ddThemeToggle">
-              <svg class="icon-theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-              <svg class="icon-theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
-              <span data-i18n="ui.theme_toggle">主题切换</span>
+            <button type="button" class="user-dropdown-item" id="ddThemeToggle" aria-label="切换到深色">
+              <svg class="icon-theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+              <svg class="icon-theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+              <span class="theme-toggle-label">切换到深色</span>
             </button>
             <div class="user-dropdown-sep"></div>
             <button class="user-dropdown-item admin-only" id="ddSettings">
@@ -214,10 +223,32 @@
       <div id="viewTabs" class="view-tabs" style="display:none"></div>
       <!-- 告警阈值（从「告警设置」独立出的 Tab，隶属「告警」模块；tab 由 nav.js VIEW_TAB_GROUPS 渲染） -->
       <section class="view" id="view-thresholds">
-        <div class="section-title"><span data-i18n="settings.thresholds">告警阈值</span><span class="tag">基础指标（CPU / 内存 / 磁盘 / 负载 …）触发 警告 / 严重 的判定阈值 —— 保存后即时生效</span>
-          <div style="margin-left:auto"><button class="btn primary admin-only" id="saveThresholdsBtn">保存阈值</button></div>
+        <div class="section-title"><span data-i18n="settings.thresholds">告警阈值</span><span class="tag" data-i18n="settings.thresholds_tag">基础指标（CPU / 内存 / 磁盘 / 负载 …）触发 警告 / 严重 的判定阈值 —— 保存后即时生效</span>
+          <div style="margin-left:auto"><button class="btn primary admin-only" id="saveThresholdsBtn" data-i18n="settings.save_thresholds">保存阈值</button></div>
         </div>
         <div class="gov-section">
+          <!-- 三档建议：一键填入并保存 -->
+          <div class="threshold-preset-bar admin-only" id="thresholdPresetBar">
+            <div class="threshold-preset-head">
+              <span class="th-label" data-i18n="settings.threshold_presets">快速建议档位</span>
+              <span class="hint" data-i18n="settings.threshold_presets_hint">选择一档即可填入全部阈值并立即生效，仍可再微调后保存</span>
+            </div>
+            <div class="threshold-preset-cards">
+              <button type="button" class="threshold-preset-card" data-preset="conservative" id="thrPresetConservative" aria-pressed="false">
+                <div class="tpc-title" data-i18n="settings.preset_conservative">严格敏感</div>
+                <div class="tpc-desc" data-i18n="settings.preset_conservative_desc">生产关键系统，偏早告警、少漏报</div>
+              </button>
+              <button type="button" class="threshold-preset-card recommended" data-preset="standard" id="thrPresetStandard" aria-pressed="false">
+                <div class="tpc-badge" data-i18n="settings.preset_recommended">推荐</div>
+                <div class="tpc-title" data-i18n="settings.preset_standard">标准均衡</div>
+                <div class="tpc-desc" data-i18n="settings.preset_standard_desc">大多数部署的默认推荐，灵敏度与噪音平衡</div>
+              </button>
+              <button type="button" class="threshold-preset-card" data-preset="relaxed" id="thrPresetRelaxed" aria-pressed="false">
+                <div class="tpc-title" data-i18n="settings.preset_relaxed">宽松低噪</div>
+                <div class="tpc-desc" data-i18n="settings.preset_relaxed_desc">开发/测试环境，降低告警疲劳</div>
+              </button>
+            </div>
+          </div>
           <!-- 系统监控 -->
           <div class="threshold-card">
             <div class="threshold-card-header tc-system"><span class="th-label" data-i18n="settings.group_system">系统监控</span></div>
@@ -377,7 +408,7 @@
         </div>
       </section>
 
-      <!-- 主机：左资产/类型树 + 右工具栏与卡片/列表 -->
+      <!-- 主机：左主机树/类型树 + 右工具栏与卡片/列表 -->
       <section class="view" id="view-hosts">
         <div id="hostDupBar"></div>
         <div class="htx-wrap tree-wrap htx-js" id="hostsLayout">
@@ -400,7 +431,7 @@
                 <span class="count-pill" id="hostsCount">0</span>
               </div>
               <div class="htx-tb-right">
-                <input type="text" id="hostSearch" class="search htx-search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / 系统 / 分类…">
+                <input type="search" id="hostSearch" class="search htx-search" data-i18n-placeholder="form.search_host" placeholder="搜索主机名 / IP / ID / 系统 / 分组…" autocomplete="off" spellcheck="false">
                 <div class="select-wrap">
                   <select id="hostFilter" data-act-change="filter-hosts" data-i18n-title="filter.by_status" title="按状态筛选">
                     <option value="all" data-i18n="filter.all_hosts">全部主机</option>
@@ -580,17 +611,23 @@
         <div id="promRules"></div>
       </section>
 
-      <!-- 仪表盘 -->
+      <!-- 仪表盘：左来源树 + 右卡片列表 / 详情 -->
       <section class="view" id="view-dashboards">
         <div id="dashHome">
-          <div class="section-title"><span>仪表盘</span><span class="tag">自定义面板 · 一键导入 Grafana 看板（PromQL → VictoriaMetrics）</span>
-            <div style="margin-left:auto; display:flex; gap:8px">
-              <button class="btn" id="dashAIBtn">✨ AI 生成</button>
-              <button class="btn" id="dashImportBtn">导入 Grafana</button>
-              <button class="btn primary" id="dashCreateBtn">+ 新建仪表盘</button>
+          <div class="rtx-wrap tree-wrap" id="dashLayout">
+            <div class="rtx-tree tree-pane" id="dashTree"></div>
+            <button class="tree-toggle-btn" data-tree-toggle="aiops_dash_tree" title="收起/展开来源树" aria-expanded="true">‹</button>
+            <div class="rtx-main">
+              <div class="rtx-toolbar">
+                <input type="search" id="dashSearch" class="search" data-i18n-placeholder="form.search_dash" placeholder="搜索仪表盘名称 / 描述 / 标签…" autocomplete="off" spellcheck="false">
+                <button class="btn" id="dashAIBtn">✨ AI 生成</button>
+                <button class="btn" id="dashImportBtn">导入模板</button>
+                <button class="btn primary" id="dashCreateBtn">+ 新建仪表盘</button>
+                <span class="rtx-count" id="dashCountSpan"></span>
+              </div>
+              <div class="rtx-main-scroll" id="dashList"></div>
             </div>
           </div>
-          <div id="dashList"></div>
         </div>
         <div id="dashDetail" style="display:none"></div>
       </section>
@@ -614,14 +651,14 @@
         </div>
       </section>
 
-      <!-- 自动化运维：剧本编排 + 主机巡检 -->
+      <!-- 自动化运维：剧本编排 + 主机深度体检 -->
       <section class="view" id="view-automation">
         <div class="section-title">
           <span data-i18n="section.automation">自动化运维</span>
-          <span class="tag" data-i18n="section.automation_desc">剧本编排 · 主机巡检</span>
+          <span class="tag" data-i18n="section.automation_desc">剧本编排 · 主机深度体检</span>
           <div class="sre-tabs" id="autoTabs" style="margin-left:auto; display:flex; gap:4px; flex-wrap:wrap">
             <button class="chip-btn active" data-autotab="playbooks" data-i18n="auto.tab_playbooks">剧本编排</button>
-            <button class="chip-btn" data-autotab="inspect" data-i18n="auto.tab_inspect">主机巡检</button>
+            <button class="chip-btn" data-autotab="inspect" data-i18n="auto.tab_inspect">主机深度体检</button>
           </div>
         </div>
 
@@ -645,8 +682,15 @@
 
         <div class="sre-panel" id="autoPanel-inspect">
           <div class="sre-toolbar" style="flex-wrap:wrap; gap:10px">
-            <span class="hint" data-i18n="inspect.hint">对 Windows / Linux / macOS / 麒麟主机执行深度巡检（CPU、内存、磁盘、网络、进程、安全等），结果以 Web 报告展示。</span>
+            <span class="hint" data-i18n="inspect.hint">对 Windows / Linux / macOS / 麒麟主机执行深度巡检；Linux 对齐专业巡检清单（资源/网络/进程/服务/容器/安全/内核/证书/日志/建议），结果以 Web 报告展示。</span>
             <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+              <div class="select-wrap sm" title="巡检档位">
+                <select id="inspProfile">
+                  <option value="quick">快速</option>
+                  <option value="standard" selected>标准</option>
+                  <option value="deep">深度</option>
+                </select>
+              </div>
               <button class="btn" id="inspRefreshBtn" data-i18n="inspect.refresh">刷新</button>
               <button class="btn primary" id="inspRunBtn" data-i18n="inspect.run">发起巡检</button>
             </div>
@@ -683,7 +727,7 @@
             <button class="chip-btn" data-sretab="tickets" data-i18n="sre.tab_tickets">工单</button>
             <button class="chip-btn" data-sretab="oncall" data-i18n="sre.tab_oncall">On-call</button>
             <button class="chip-btn" data-sretab="changes" data-i18n="sre.tab_changes">变更</button>
-            <button class="chip-btn" data-sretab="ai" data-i18n="sre.tab_ai">AI 巡检</button>
+            <button class="chip-btn" data-sretab="ai" data-i18n="sre.tab_ai">平台健康巡检</button>
           </div>
         </div>
 
@@ -851,6 +895,66 @@
         <div id="hypervPanel"></div>
       </section>
 
+      <section class="view" id="view-containers">
+        <div id="containersPanel"></div>
+      </section>
+
+      <!-- Kubernetes（服务端直连 API） -->
+      <section class="view" id="view-k8s">
+        <div class="section-title">
+          <span data-i18n="nav.k8s">Kubernetes</span>
+          <span class="tag" data-i18n="k8s.tag">服务端直连集群 · Nodes / Pods / Deployments · 受控 Scale / Restart</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <div class="select-wrap" style="min-width:160px">
+              <select id="k8sClusterSel"></select>
+            </div>
+            <div class="select-wrap" style="min-width:120px">
+              <select id="k8sNsSel"><option value="">全部命名空间</option></select>
+            </div>
+            <span id="k8sStatusChip" class="tag" aria-live="polite"></span>
+            <button class="btn sm" id="k8sRefreshBtn" type="button" data-i18n="k8s.refresh">刷新</button>
+          </div>
+        </div>
+        <div class="tabs" id="k8sInnerTabs" role="tablist">
+          <button type="button" class="tab active" data-k8s-tab="overview" data-i18n="k8s.tab_overview">概览</button>
+          <button type="button" class="tab" data-k8s-tab="nodes" data-i18n="k8s.tab_nodes">Nodes</button>
+          <button type="button" class="tab" data-k8s-tab="pods" data-i18n="k8s.tab_pods">Pods</button>
+          <button type="button" class="tab" data-k8s-tab="deployments" data-i18n="k8s.tab_deployments">Deployments</button>
+          <button type="button" class="tab" data-k8s-tab="events" data-i18n="k8s.tab_events">Events</button>
+          <button type="button" class="tab admin-only" data-k8s-tab="config" data-i18n="k8s.tab_config">集群配置</button>
+        </div>
+        <div id="k8sPanel" class="k8s-panel"></div>
+      </section>
+
+      <div class="mask" id="k8sLogMask" data-close>
+        <div class="modal wide">
+          <div class="modal-head">
+            <h3 id="k8sLogTitle" data-i18n="k8s.pod_log">Pod 日志</h3>
+            <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+          </div>
+          <div class="modal-body">
+            <pre id="k8sLogBody" class="mono k8s-log-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="mask" id="k8sScaleMask" data-close>
+        <div class="modal">
+          <div class="modal-head">
+            <h3 data-i18n="k8s.scale_title">调整副本数</h3>
+            <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+          </div>
+          <div class="modal-body">
+            <p id="k8sScaleHint" class="hint"></p>
+            <div class="field"><label data-i18n="k8s.replicas">副本数</label><input type="number" id="k8sScaleReplicas" min="0" max="1000" value="1"></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn" data-close-btn data-i18n="ui.cancel">取消</button>
+            <button class="btn primary" id="k8sScaleConfirm" type="button" data-i18n="k8s.scale_confirm">确认 Scale</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 网络：流量(NetFlow) + 网络设备(SNMP 接口 + Trap)。合并为单一「网络」入口，
            子标签由共享 #viewTabs 栏驱动（复用 VIEW_TAB_GROUPS 机制，同监控/告警）。 -->
       <section class="view" id="view-netflow">
@@ -862,8 +966,258 @@
         <div id="snmpPanel"></div>
       </section>
       <section class="view" id="view-content-audit">
-        <div class="section-title"><span data-i18n="section.content_audit">内容审计</span><span class="tag" data-i18n="section.content_audit_desc">明文 HTTP 内容审计（谁向哪个大模型端点发了什么）</span></div>
+        <div class="section-title"><span data-i18n="section.security">安全中心</span><span class="tag" data-i18n="section.content_audit_desc">明文 HTTP 内容审计（谁向哪个大模型端点发了什么）</span></div>
         <div id="contentAuditPanel"></div>
+      </section>
+      <section class="view" id="view-ai-tool-audit">
+        <div class="section-title"><span data-i18n="section.security">安全中心</span><span class="tag" data-i18n="sec.tab_ai_tools">AI 工具审计</span></div>
+        <div id="aiToolAuditPanel" class="cfg-panel">
+          <p class="cfg-panel-desc" data-i18n="sec.ai_tools_desc">记录 Sreyun / Assist 高危写工具调用（执行结果、审批状态）。HTTPS 终端镜像无法解密明文；此处审计的是平台侧工具调用证据链。</p>
+          <div id="aiToolAuditList"><div class="hint">加载中…</div></div>
+        </div>
+      </section>
+      <section class="view" id="view-audit-export">
+        <div class="section-title">
+          <span data-i18n="section.security">安全中心</span>
+          <span class="tag" data-i18n="sec.export_tag">将操作审计外发至 SOC / SIEM</span>
+        </div>
+        <div class="cfg-stack" id="auditExportPanel">
+          <div class="cfg-panel">
+            <div class="cfg-panel-head">
+              <div>
+                <div class="cfg-panel-title" data-i18n="sec.export_title">审计外发</div>
+                <p class="cfg-panel-desc" data-i18n="sec.export_desc">将操作审计以 JSON Webhook 或 Syslog（CEF）推送到 SOC / SIEM，满足等保与留存证据要求。Webhook 与 Syslog 可同时配置，至少填一项后启用即可。</p>
+              </div>
+              <label class="switch cfg-enable">
+                <input type="checkbox" id="auditExportEnabled">
+                <span data-i18n="sec.export_enable">启用审计外发</span>
+              </label>
+            </div>
+            <div class="cfg-form">
+              <div class="field">
+                <label for="auditExportWebhook" data-i18n="sec.export_webhook">Webhook URL（POST JSON）</label>
+                <input type="url" id="auditExportWebhook" class="mono" placeholder="https://siem.example.com/ingest" autocomplete="off" spellcheck="false">
+                <div class="field-hint" data-i18n="sec.export_webhook_hint">每次审计写入后 POST 一条 JSON；留空则不走 Webhook。</div>
+              </div>
+              <div class="cfg-form-row">
+                <div class="field">
+                  <label for="auditExportSyslog" data-i18n="sec.export_syslog">Syslog 地址（UDP）</label>
+                  <input type="text" id="auditExportSyslog" class="mono" placeholder="siem.example.com:514" autocomplete="off" spellcheck="false">
+                  <div class="field-hint" data-i18n="sec.export_syslog_hint">格式 host:port；留空则不走 Syslog。</div>
+                </div>
+                <div class="field">
+                  <label for="auditExportFormat" data-i18n="sec.export_format">报文格式</label>
+                  <div class="select-wrap">
+                    <select id="auditExportFormat">
+                      <option value="json">JSON</option>
+                      <option value="cef">CEF</option>
+                    </select>
+                  </div>
+                  <div class="field-hint" data-i18n="sec.export_format_hint">Syslog 建议用 CEF；Webhook 通常用 JSON。</div>
+                </div>
+              </div>
+              <div class="cfg-actions">
+                <button class="btn primary admin-only" id="auditExportSaveBtn" type="button" data-i18n="sec.export_save">保存外发配置</button>
+                <span id="auditExportMsg" class="cfg-status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="view" id="view-oidc">
+        <div class="section-title">
+          <span data-i18n="section.security">安全中心</span>
+          <span class="tag" data-i18n="sec.oidc_tag">多提供商单点登录</span>
+        </div>
+        <div class="cfg-stack" id="oidcPanel">
+          <div class="cfg-panel">
+            <div class="cfg-panel-head">
+              <div>
+                <div class="cfg-panel-title" data-i18n="sec.sso_hub_title">单点登录</div>
+                <p class="cfg-panel-desc" data-i18n="sec.sso_hub_desc">按提供商分别配置 OIDC / 飞书 / 钉钉 / 微信 / 企业微信。OAuth 凭证与告警 Webhook 独立；按 open_id / union_id / userid 绑定本地用户；SSO 跳过本地 MFA。</p>
+              </div>
+            </div>
+            <div class="cfg-form">
+              <ol class="sso-setup-checklist" data-i18n-skip>
+                <li data-i18n="sec.sso_check_1">确认系统 PublicURL 可被外网/办公网访问</li>
+                <li data-i18n="sec.sso_check_2">在各开放平台登记下方「建议回调 URL」</li>
+                <li data-i18n="sec.sso_check_3">设置默认角色（或部门映射），避免启用后无人可进</li>
+                <li data-i18n="sec.sso_check_4">保存后用无痕窗口打开登录页验证按钮与授权</li>
+              </ol>
+              <div id="ssoPreviewBar" class="sso-preview-bar hint" aria-live="polite"></div>
+              <div class="tabs" id="ssoProviderTabs" role="tablist">
+                <button type="button" class="tab active" role="tab" data-sso-tab="oidc" data-i18n="sec.sso_tab_oidc">OIDC</button>
+                <button type="button" class="tab" role="tab" data-sso-tab="feishu" data-i18n="sec.sso_feishu">飞书</button>
+                <button type="button" class="tab" role="tab" data-sso-tab="dingtalk" data-i18n="sec.sso_dingtalk">钉钉</button>
+                <button type="button" class="tab" role="tab" data-sso-tab="wechat" data-i18n="sec.sso_wechat">微信</button>
+                <button type="button" class="tab" role="tab" data-sso-tab="wecom" data-i18n="sec.sso_wecom">企业微信</button>
+              </div>
+
+              <div class="tab-panel active" id="ssoTab-oidc" role="tabpanel">
+                <div class="cfg-panel-head sso-tab-head">
+                  <p class="cfg-panel-desc" data-i18n="sec.oidc_desc">对接企业身份提供商（Keycloak / Azure AD / Okta 等）。回调校验 ID Token（JWKS / iss / aud / exp / nonce）。用组声明映射角色。</p>
+                  <label class="switch cfg-enable">
+                    <input type="checkbox" id="oidcEnabled">
+                    <span data-i18n="sec.oidc_enable">启用 OIDC</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="oidcIssuer">Issuer</label>
+                  <input type="url" id="oidcIssuer" class="mono" placeholder="https://login.example.com/realms/ops" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field">
+                    <label for="oidcClientID">Client ID</label>
+                    <input type="text" id="oidcClientID" class="mono" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <label for="oidcClientSecret">Client Secret <span class="secret-chip" id="oidcSecretChip" hidden data-i18n="sec.secret_configured">已配置</span></label>
+                    <input type="password" id="oidcClientSecret" class="mono" data-i18n-placeholder="sec.oidc_secret_ph" placeholder="留空保持原值" autocomplete="new-password">
+                  </div>
+                </div>
+                <div class="sso-callback-row"><span class="mono" id="ssoCbOidc"></span><button type="button" class="btn sm" data-copy-cb="oidc" data-i18n="sec.sso_copy_callback">复制回调</button></div>
+                <p class="field-hint" data-i18n="sec.oidc_callback_hint">将上方 URL 登记到 IdP 的合法 Redirect URI；下方覆盖项仅在特殊反向代理场景填写。</p>
+                <div class="cfg-form-row">
+                  <div class="field">
+                    <label for="oidcRedirect" data-i18n="sec.oidc_redirect">Redirect 覆盖（可选）</label>
+                    <input type="url" id="oidcRedirect" class="mono" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="field">
+                    <label for="oidcGroupClaim" data-i18n="sec.oidc_group_claim">组声明名</label>
+                    <input type="text" id="oidcGroupClaim" placeholder="groups" autocomplete="off" spellcheck="false">
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="oidcGroupMap" data-i18n="sec.oidc_group_map">组 → 角色映射（JSON）</label>
+                  <textarea id="oidcGroupMap" rows="5" class="mono" placeholder='{"aiops-admins":"admin","aiops-ops":"operator"}' spellcheck="false"></textarea>
+                  <div class="field-hint" data-i18n="sec.oidc_group_map_hint">键为 IdP 组名，值为 admin / operator / viewer。</div>
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field">
+                    <label for="oidcDefaultRole" data-i18n="sec.oidc_default_role">默认角色（无组匹配时）</label>
+                    <div class="select-wrap">
+                      <select id="oidcDefaultRole">
+                        <option value="" data-i18n="sec.oidc_deny">拒绝登录</option>
+                        <option value="viewer">viewer</option>
+                        <option value="operator">operator</option>
+                        <option value="admin">admin</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="field cfg-field-switch">
+                    <label class="switch">
+                      <input type="checkbox" id="oidcAutoCreate" checked>
+                      <span data-i18n="sec.oidc_auto_create">首次登录自动创建本地用户</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="cfg-actions">
+                  <button class="btn primary admin-only" id="oidcSaveBtn" type="button" data-i18n="sec.oidc_save">保存 OIDC 配置</button>
+                  <span id="oidcMsg" class="cfg-status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
+
+              <div class="tab-panel" id="ssoTab-feishu" role="tabpanel">
+                <div class="cfg-panel-head sso-tab-head">
+                  <p class="field-hint" data-i18n="sec.sso_feishu_hint">飞书开放平台创建企业自建应用 → 网页应用 → 安全设置填写重定向 URL。App ID / Secret 与告警机器人 Webhook 无关。</p>
+                  <label class="switch"><input type="checkbox" id="ssoFeishuEnabled"><span data-i18n="sec.sso_enable_feishu">启用飞书登录</span></label>
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field"><label>App ID</label><input type="text" id="ssoFeishuAppID" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label>App Secret <span class="secret-chip" id="ssoFeishuSecretChip" hidden data-i18n="sec.secret_configured">已配置</span></label><input type="password" id="ssoFeishuSecret" class="mono" data-i18n-placeholder="sec.oidc_secret_ph" placeholder="留空保持原值" autocomplete="new-password"></div>
+                </div>
+                <div class="sso-callback-row"><span class="mono" id="ssoCbFeishu"></span><button type="button" class="btn sm" data-copy-cb="feishu" data-i18n="sec.sso_copy_callback">复制回调</button></div>
+                <div class="cfg-form-row">
+                  <div class="field"><label data-i18n="sec.oidc_redirect">Redirect 覆盖（可选）</label><input type="url" id="ssoFeishuRedirect" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label data-i18n="sec.sso_default_role">默认角色</label>
+                    <div class="select-wrap"><select id="ssoFeishuRole"><option value="" data-i18n="sec.oidc_deny">拒绝登录</option><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select></div>
+                  </div>
+                </div>
+                <label class="switch mb"><input type="checkbox" id="ssoFeishuAuto" checked><span data-i18n="sec.oidc_auto_create">首次登录自动创建本地用户</span></label>
+                <div class="field"><label data-i18n="sec.sso_dept_map">部门 → 角色（JSON，可选）</label><textarea id="ssoFeishuDeptMap" rows="2" class="mono" placeholder='{"运维部":"operator"}' spellcheck="false"></textarea></div>
+                <p class="field-hint warn-deny" id="ssoFeishuDenyWarn" hidden data-i18n="sec.sso_deny_warn">已启用但默认角色为「拒绝」且无部门映射时，未匹配用户将无法登录。</p>
+                <div class="cfg-actions">
+                  <button class="btn primary admin-only sso-oauth-save" type="button" data-i18n="sec.sso_save">保存 OAuth SSO 配置</button>
+                  <span class="cfg-status sso-save-status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
+
+              <div class="tab-panel" id="ssoTab-dingtalk" role="tabpanel">
+                <div class="cfg-panel-head sso-tab-head">
+                  <p class="field-hint" data-i18n="sec.sso_dingtalk_hint">钉钉开放平台创建应用 → 登录与分享 → 配置回调域名。Client ID 即 AppKey，与告警加签 Secret 无关。</p>
+                  <label class="switch"><input type="checkbox" id="ssoDingEnabled"><span data-i18n="sec.sso_enable_ding">启用钉钉登录</span></label>
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field"><label>Client ID (AppKey)</label><input type="text" id="ssoDingAppID" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label>Client Secret <span class="secret-chip" id="ssoDingSecretChip" hidden data-i18n="sec.secret_configured">已配置</span></label><input type="password" id="ssoDingSecret" class="mono" data-i18n-placeholder="sec.oidc_secret_ph" placeholder="留空保持原值" autocomplete="new-password"></div>
+                </div>
+                <div class="sso-callback-row"><span class="mono" id="ssoCbDing"></span><button type="button" class="btn sm" data-copy-cb="dingtalk" data-i18n="sec.sso_copy_callback">复制回调</button></div>
+                <div class="cfg-form-row">
+                  <div class="field"><label data-i18n="sec.oidc_redirect">Redirect 覆盖（可选）</label><input type="url" id="ssoDingRedirect" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label data-i18n="sec.sso_default_role">默认角色</label>
+                    <div class="select-wrap"><select id="ssoDingRole"><option value="" data-i18n="sec.oidc_deny">拒绝登录</option><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select></div>
+                  </div>
+                </div>
+                <label class="switch mb"><input type="checkbox" id="ssoDingAuto" checked><span data-i18n="sec.oidc_auto_create">首次登录自动创建本地用户</span></label>
+                <div class="field"><label data-i18n="sec.sso_dept_map">部门 → 角色（JSON，可选）</label><textarea id="ssoDingDeptMap" rows="2" class="mono" placeholder='{}' spellcheck="false"></textarea></div>
+                <p class="field-hint warn-deny" id="ssoDingDenyWarn" hidden data-i18n="sec.sso_deny_warn">已启用但默认角色为「拒绝」且无部门映射时，未匹配用户将无法登录。</p>
+                <div class="cfg-actions">
+                  <button class="btn primary admin-only sso-oauth-save" type="button" data-i18n="sec.sso_save">保存 OAuth SSO 配置</button>
+                  <span class="cfg-status sso-save-status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
+
+              <div class="tab-panel" id="ssoTab-wechat" role="tabpanel">
+                <div class="cfg-panel-head sso-tab-head">
+                  <p class="field-hint" data-i18n="sec.sso_wechat_hint">需在微信开放平台创建「网站应用」，授权回调域与 PublicURL 主机名一致；优先绑定 unionid。</p>
+                  <label class="switch"><input type="checkbox" id="ssoWxEnabled"><span data-i18n="sec.sso_enable_wechat">启用微信扫码登录</span></label>
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field"><label>AppID</label><input type="text" id="ssoWxAppID" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label>AppSecret <span class="secret-chip" id="ssoWxSecretChip" hidden data-i18n="sec.secret_configured">已配置</span></label><input type="password" id="ssoWxSecret" class="mono" data-i18n-placeholder="sec.oidc_secret_ph" placeholder="留空保持原值" autocomplete="new-password"></div>
+                </div>
+                <div class="sso-callback-row"><span class="mono" id="ssoCbWx"></span><button type="button" class="btn sm" data-copy-cb="wechat" data-i18n="sec.sso_copy_callback">复制回调</button></div>
+                <div class="cfg-form-row">
+                  <div class="field"><label data-i18n="sec.oidc_redirect">Redirect 覆盖（可选）</label><input type="url" id="ssoWxRedirect" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label data-i18n="sec.sso_default_role">默认角色</label>
+                    <div class="select-wrap"><select id="ssoWxRole"><option value="" data-i18n="sec.oidc_deny">拒绝登录</option><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select></div>
+                  </div>
+                </div>
+                <label class="switch mb"><input type="checkbox" id="ssoWxAuto" checked><span data-i18n="sec.oidc_auto_create">首次登录自动创建本地用户</span></label>
+                <p class="field-hint warn-deny" id="ssoWxDenyWarn" hidden data-i18n="sec.sso_deny_warn">已启用但默认角色为「拒绝」且无部门映射时，未匹配用户将无法登录。</p>
+                <div class="cfg-actions">
+                  <button class="btn primary admin-only sso-oauth-save" type="button" data-i18n="sec.sso_save">保存 OAuth SSO 配置</button>
+                  <span class="cfg-status sso-save-status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
+
+              <div class="tab-panel" id="ssoTab-wecom" role="tabpanel">
+                <div class="cfg-panel-head sso-tab-head">
+                  <p class="field-hint" data-i18n="sec.sso_wecom_hint">企业微信管理后台 → 应用管理 → 自建应用，填写 CorpID / Secret / AgentId；授权回调域与 PublicURL 一致。与个人微信开放平台应用不同。</p>
+                  <label class="switch"><input type="checkbox" id="ssoWecomEnabled"><span data-i18n="sec.sso_enable_wecom">启用企业微信登录</span></label>
+                </div>
+                <div class="cfg-form-row">
+                  <div class="field"><label>CorpID</label><input type="text" id="ssoWecomAppID" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label>Secret <span class="secret-chip" id="ssoWecomSecretChip" hidden data-i18n="sec.secret_configured">已配置</span></label><input type="password" id="ssoWecomSecret" class="mono" data-i18n-placeholder="sec.oidc_secret_ph" placeholder="留空保持原值" autocomplete="new-password"></div>
+                </div>
+                <div class="field"><label>AgentId</label><input type="text" id="ssoWecomAgentID" class="mono" autocomplete="off" spellcheck="false"></div>
+                <div class="sso-callback-row"><span class="mono" id="ssoCbWecom"></span><button type="button" class="btn sm" data-copy-cb="wecom" data-i18n="sec.sso_copy_callback">复制回调</button></div>
+                <div class="cfg-form-row">
+                  <div class="field"><label data-i18n="sec.oidc_redirect">Redirect 覆盖（可选）</label><input type="url" id="ssoWecomRedirect" class="mono" autocomplete="off" spellcheck="false"></div>
+                  <div class="field"><label data-i18n="sec.sso_default_role">默认角色</label>
+                    <div class="select-wrap"><select id="ssoWecomRole"><option value="" data-i18n="sec.oidc_deny">拒绝登录</option><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select></div>
+                  </div>
+                </div>
+                <label class="switch mb"><input type="checkbox" id="ssoWecomAuto" checked><span data-i18n="sec.oidc_auto_create">首次登录自动创建本地用户</span></label>
+                <p class="field-hint warn-deny" id="ssoWecomDenyWarn" hidden data-i18n="sec.sso_deny_warn">已启用但默认角色为「拒绝」且无部门映射时，未匹配用户将无法登录。</p>
+                <div class="cfg-actions">
+                  <button class="btn primary admin-only sso-oauth-save" type="button" data-i18n="sec.sso_save">保存 OAuth SSO 配置</button>
+                  <span class="cfg-status sso-save-status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- 数据源接入（Loki / Prometheus） -->
@@ -958,6 +1312,15 @@
           </button>
         </div>
         <div class="hint" data-i18n="install.token_hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
+        <div class="hint" id="installTokenMeta" style="margin-top:6px"></div>
+        <div class="grid2" style="margin-top:8px">
+          <div class="field"><label>最大使用次数（0=不限）</label><input type="number" id="installTokenMaxUses" min="0" placeholder="0"></div>
+          <div class="field"><label>过期时间（Unix 秒，0=永不过期）</label><input type="number" id="installTokenExpiresAt" min="0" placeholder="0"></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn sm" type="button" id="installTokenPolicyBtn">保存 Token 策略</button>
+          <button class="btn sm warn" type="button" id="revokeTokenBtn">吊销当前 Token</button>
+        </div>
       </div>
       <div class="field">
         <label data-i18n="install.category_label">一级分组（可选，安装后自动归入该分组）</label>
@@ -1175,7 +1538,7 @@
         </div>
       </div>
 
-      <!-- 短信推送面板 -->
+      <!-- 短信推送面板：按供应商动态展示参数 -->
       <div class="tab-panel" id="tab-sms">
         <label class="switch mb"><input type="checkbox" id="smsEnabled" data-i18n-label="settings.enable_sms"> 启用短信推送</label>
         <div class="field">
@@ -1186,17 +1549,22 @@
             <option value="tencent" data-i18n="settings.provider_tencent">腾讯云</option>
           </select></div>
         </div>
+        <p class="field-hint" id="smsProviderHint" aria-live="polite"></p>
         <div class="grid2">
-          <div class="field"><label data-i18n="settings.sms_access_key">AccessKey</label><input type="text" id="smsAccessKey" placeholder="LTAI5t..."></div>
-          <div class="field"><label data-i18n="settings.sms_secret_key">SecretKey</label><input type="password" id="smsSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
+          <div class="field"><label id="smsAccessKeyLabel" data-i18n="settings.sms_access_key">AccessKey</label><input type="text" id="smsAccessKey" placeholder="LTAI5t..."></div>
+          <div class="field"><label id="smsSecretKeyLabel" data-i18n="settings.sms_secret_key">SecretKey</label><input type="password" id="smsSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
         </div>
-        <div class="field">
-          <label data-i18n="settings.sms_app_id">AppID（华为云 project_id / 腾讯云 SmsSdkAppId）</label>
-          <input type="text" id="smsAppId" placeholder="阿里云留空；华为云填 project_id；腾讯云填 SmsSdkAppId">
+        <div class="field" data-sms-providers="huawei,tencent">
+          <label id="smsAppIdLabel" data-i18n="settings.sms_app_id">AppID</label>
+          <input type="text" id="smsAppId" placeholder="">
         </div>
-        <div class="grid2">
-          <div class="field"><label>通道号 Sender（华为云必填）</label><input type="text" id="smsSender" placeholder="华为云短信通道号，如 1069…；阿里/腾讯留空"></div>
-          <div class="field"><label>地域 Region（腾讯云必填）</label><input type="text" id="smsRegion" placeholder="腾讯云地域，如 ap-guangzhou；阿里/华为留空"></div>
+        <div class="field" data-sms-providers="huawei">
+          <label data-i18n="settings.sms_sender">通道号 Sender</label>
+          <input type="text" id="smsSender" data-i18n-placeholder="settings.sms_sender_ph" placeholder="华为云短信通道号，如 1069…">
+        </div>
+        <div class="field" data-sms-providers="tencent">
+          <label data-i18n="settings.sms_region">地域 Region</label>
+          <input type="text" id="smsRegion" data-i18n-placeholder="settings.sms_region_ph" placeholder="如 ap-guangzhou">
         </div>
         <div class="grid2">
           <div class="field"><label data-i18n="settings.sms_sign_name">短信签名</label><input type="text" id="smsSignName" placeholder="AIOps"></div>
@@ -1204,7 +1572,7 @@
         </div>
         <div class="field">
           <label data-i18n="settings.sms_template_param">模板参数 JSON</label>
-          <input type="text" id="smsTemplateParam" data-i18n-placeholder="settings.sms_template_param_placeholder" placeholder='按阿里云短信模板的实际变量名填写，如 {"code":"${code}"} 或 {"message":"${alert_text}"}；留空则默认 {"message":"告警内容"}'>
+          <input type="text" id="smsTemplateParam" data-i18n-placeholder="settings.sms_template_param_placeholder" placeholder='{"message":"${alert_text}"}'>
         </div>
         <div class="field">
           <label data-i18n="settings.sms_phones">接收手机号</label>
@@ -1212,7 +1580,7 @@
         </div>
       </div>
 
-      <!-- 电话推送面板 -->
+      <!-- 电话推送面板：按供应商动态展示参数 -->
       <div class="tab-panel" id="tab-voicecall">
         <label class="switch mb"><input type="checkbox" id="voiceCallEnabled" data-i18n-label="settings.enable_voice_call"> 启用电话推送</label>
         <div class="field">
@@ -1223,17 +1591,22 @@
             <option value="tencent" data-i18n="settings.provider_tencent">腾讯云</option>
           </select></div>
         </div>
+        <p class="field-hint" id="voiceProviderHint" aria-live="polite"></p>
         <div class="grid2">
-          <div class="field"><label data-i18n="settings.voice_access_key">AccessKey</label><input type="text" id="voiceCallAccessKey" placeholder="LTAI5t..."></div>
-          <div class="field"><label data-i18n="settings.voice_secret_key">SecretKey</label><input type="password" id="voiceCallSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
+          <div class="field"><label id="voiceAccessKeyLabel" data-i18n="settings.voice_access_key">AccessKey</label><input type="text" id="voiceCallAccessKey" placeholder="LTAI5t..."></div>
+          <div class="field"><label id="voiceSecretKeyLabel" data-i18n="settings.voice_secret_key">SecretKey</label><input type="password" id="voiceCallSecretKey" data-i18n-placeholder="settings.secret_key_placeholder" placeholder="留空保持原值不变"></div>
         </div>
-        <div class="field">
-          <label data-i18n="settings.voice_app_id">AppID（华为云 project_id / 腾讯云 VoiceSdkAppId）</label>
-          <input type="text" id="voiceCallAppId" placeholder="阿里云留空；华为云填 project_id；腾讯云填 VoiceSdkAppId">
+        <div class="field" data-voice-providers="huawei,tencent">
+          <label id="voiceAppIdLabel" data-i18n="settings.voice_app_id">AppID</label>
+          <input type="text" id="voiceCallAppId" placeholder="">
         </div>
-        <div class="grid2">
-          <div class="field"><label>主叫号码 displayNbr（华为云必填）</label><input type="text" id="voiceCallDisplayNbr" placeholder="华为云购买的主叫号码；阿里/腾讯留空"></div>
-          <div class="field"><label>地域 Region（腾讯云必填）</label><input type="text" id="voiceCallRegion" placeholder="腾讯云地域，如 ap-guangzhou；阿里/华为留空"></div>
+        <div class="field" data-voice-providers="huawei">
+          <label data-i18n="settings.voice_display_nbr">主叫号码 displayNbr</label>
+          <input type="text" id="voiceCallDisplayNbr" data-i18n-placeholder="settings.voice_display_nbr_ph" placeholder="华为云购买的主叫号码">
+        </div>
+        <div class="field" data-voice-providers="tencent">
+          <label data-i18n="settings.voice_region">地域 Region</label>
+          <input type="text" id="voiceCallRegion" data-i18n-placeholder="settings.voice_region_ph" placeholder="如 ap-guangzhou">
         </div>
         <div class="field">
           <label data-i18n="settings.voice_called_numbers">被叫号码</label>
@@ -1453,6 +1826,7 @@
         <button class="tab active" role="tab" data-ptab="info" data-i18n="profile.tab_info">个人信息</button>
         <button class="tab" role="tab" data-ptab="password" data-i18n="profile.tab_password">密码修改</button>
         <button class="tab" role="tab" data-ptab="mfa" data-i18n="profile.tab_mfa">MFA 管理</button>
+        <button class="tab" role="tab" data-ptab="sso" data-i18n="profile.tab_sso">单点绑定</button>
         <button class="tab admin-only" role="tab" data-ptab="users" data-i18n="profile.tab_users">用户管理</button>
         <button class="tab admin-only" role="tab" data-ptab="ops" data-i18n="profile.tab_ops">数据与备份</button>
       </div>
@@ -1505,6 +1879,14 @@
             <span class="mfa-track"><span class="mfa-thumb"></span></span>
           </label>
         </div>
+      </div>
+
+      <!-- Tab：单点登录绑定已有账号 -->
+      <div class="tab-panel" id="tab-profile-sso" role="tabpanel">
+        <div class="subhead subhead-first" data-i18n="profile.sso_title">第三方账号绑定</div>
+        <p class="mfa-desc" data-i18n="profile.sso_desc">将企业微信 / 飞书 / OIDC 等身份绑定到当前本地账号。绑定后可用对应扫码入口登录，无需自动建号。</p>
+        <div id="pfSSOList" class="pf-sso-list"></div>
+        <div class="login-err" id="pfSSOErr" style="display:none"></div>
       </div>
 
       <!-- Tab 4：用户管理（仅管理员可见） -->
@@ -1835,38 +2217,54 @@
   </div>
 </div>
 
-<!-- ===== 看板与诊断报告导出 ===== -->
+<!-- ===== 看板导出（视觉成品 / 数据表 / 诊断报告） ===== -->
 <div class="mask" id="dashExportMask" data-close>
   <div class="modal">
-    <div class="modal-head"><h3>⇩ 导出诊断报告</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-head"><h3>⇩ 导出看板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <div class="field"><label>输出格式</label><div class="select-wrap"><select id="dashExportFormat"><option value="markdown">Markdown 报告</option><option value="excel">Excel 表格</option><option value="word">Word 文档</option><option value="pdf">PDF（浏览器打印）</option></select></div></div>
-      <label class="switch"><input type="checkbox" id="dashExportLive" checked> <span>包含当前时间范围的实时诊断快照</span></label>
-      <div class="hint">Word / PDF 使用统一报告封面、概览、组件配置、实时快照与风险声明；Excel 按摘要、结论、数据表分工作表输出。</div>
+      <div class="field"><label>输出格式</label><div class="select-wrap"><select id="dashExportFormat">
+        <optgroup label="看板视觉（所见即所得）">
+          <option value="png" selected>图片 PNG · 整板截图</option>
+          <option value="pdf">PDF · 看板视觉（打印）</option>
+          <option value="word">Word · 面板截图</option>
+        </optgroup>
+        <optgroup label="数据">
+          <option value="excel">Excel · 面板原始数据</option>
+        </optgroup>
+        <optgroup label="模板">
+          <option value="template">JSON 模板 · 可再导入</option>
+        </optgroup>
+        <optgroup label="诊断报告（文本/表格）">
+          <option value="markdown">Markdown 诊断报告</option>
+          <option value="pdf-report">PDF 诊断报告（表格）</option>
+        </optgroup>
+      </select></div></div>
+      <label class="switch" id="dashExportLiveWrap" hidden><input type="checkbox" id="dashExportLive" checked> <span>包含当前时间范围的实时诊断快照</span></label>
+      <div class="hint" id="dashExportHint">PNG / PDF / Word 导出当前看板的视觉成品（图表与布局）；Excel 导出各面板查询数据表；JSON 模板可跨环境导入。</div>
     </div>
-    <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashExportRun">生成报告</button></div>
+    <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashExportRun">开始导出</button></div>
   </div>
 </div>
 
-<!-- ===== 导入 Grafana 看板弹窗 ===== -->
+<!-- ===== 导入看板模板弹窗 ===== -->
 <div class="mask" id="dashImportMask" data-close>
   <div class="modal">
-    <div class="modal-head"><h3>导入看板模板（Grafana / 夜莺）</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+    <div class="modal-head"><h3>导入看板模板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <div class="field"><label>grafana.com 看板 ID <span class="tag">仅 Grafana 官方库</span></label><input type="text" id="dashImportId" class="mono" placeholder="如 1860（Node Exporter Full）"></div>
-      <div class="hint">在 grafana.com/grafana/dashboards 找到看板填其数字 ID；夜莺无公共 ID 库，请用下方粘贴 / 上传。</div>
-      <div class="field" style="margin-top:12px"><label>或 粘贴 / 上传看板 JSON <span class="tag">Grafana 或 夜莺 · 自动识别</span></label>
-        <textarea id="dashImportJson" rows="5" placeholder="从 Grafana（看板设置 → JSON Model → 复制）或 夜莺（大盘 → 导出）导出的 JSON。填了则忽略上面的 ID。" style="font-family:monospace; font-size:12px"></textarea>
+      <div class="hint">支持 AIOps 原生模板、Grafana、夜莺 JSON；也可填 grafana.com 数字 ID 在线拉取。</div>
+      <div class="field" style="margin-top:12px"><label>或 粘贴 / 上传看板 JSON <span class="tag">AIOps / Grafana / 夜莺 · 自动识别</span></label>
+        <textarea id="dashImportJson" rows="5" placeholder="粘贴本平台「导出 → JSON 模板」、Grafana JSON Model 或夜莺导出 JSON。填了则忽略上面的 ID。" style="font-family:monospace; font-size:12px"></textarea>
         <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap">
           <button class="btn sm" id="dashImportFileBtn" type="button">📁 选择文件…</button>
           <span class="hint" id="dashImportFileName" style="margin:0"></span>
           <input type="file" id="dashImportFile" accept=".json,application/json" hidden>
           <span style="flex:1"></span>
-          <div class="select-wrap sm"><select id="dashImportFormat"><option value="auto">自动识别格式</option><option value="grafana">Grafana</option><option value="nightingale">夜莺 Nightingale</option></select></div>
+          <div class="select-wrap sm"><select id="dashImportFormat"><option value="auto">自动识别格式</option><option value="aiops">AIOps 模板</option><option value="grafana">Grafana</option><option value="nightingale">夜莺 Nightingale</option></select></div>
         </div>
       </div>
       <div class="field"><label>名称（可选，覆盖看板标题）</label><input type="text" id="dashImportName"></div>
-      <div class="hint">务实子集：timeseries / stat / gauge / table / text + PromQL + 模板变量；无法映射的面板类型保留为占位（带原始查询）。导入后可继续编辑、切数据源。</div>
+      <div class="hint">AIOps 模板可完整回灌；Grafana/夜莺导入务实子集（timeseries/stat/gauge/table/text 等），无法映射的类型保留占位。</div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashImportSave">导入</button></div>
   </div>
@@ -1874,13 +2272,63 @@
 
 <!-- ===== 仪表盘信息编辑弹窗 ===== -->
 <div class="mask" id="dashMetaMask" data-close>
-  <div class="modal">
+  <div class="modal modal-lg">
     <div class="modal-head"><h3 id="dashMetaTitle">新建仪表盘</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <input type="hidden" id="dashMetaId">
       <div class="field"><label>名称</label><input type="text" id="dashMetaName" placeholder="如 主机总览 / MySQL 概览"></div>
       <div class="field"><label>描述（可选）</label><input type="text" id="dashMetaDesc"></div>
       <div class="field"><label>标签（可选，逗号分隔）</label><input type="text" id="dashMetaTags" placeholder="如 db,prod"></div>
+      <div class="editor-sec">外观</div>
+      <div class="dash-appear-preview" id="dashAppearPreview" aria-hidden="true">
+        <div class="dash-appear-preview-bar"><img id="dashAppearPrevLogo" alt="" hidden><span id="dashAppearPrevTitle">看板预览</span></div>
+        <div class="dash-appear-preview-canvas" id="dashAppearPrevCanvas"></div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label>Logo</label>
+          <div class="dash-appear-upload">
+            <div class="dash-appear-thumb" id="dashAppearLogoThumb"><span class="muted">未设置</span></div>
+            <div class="dash-appear-upload-actions">
+              <input type="file" id="dashAppearLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
+              <button type="button" class="btn sm" id="dashAppearLogoPick">上传</button>
+              <button type="button" class="btn sm" id="dashAppearLogoClear">清除</button>
+            </div>
+          </div>
+          <div class="hint" id="dashAppearUploadHint">新建看板请先保存后再上传图片。</div>
+        </div>
+        <div class="field">
+          <label>背景色</label>
+          <div class="dash-appear-color-row">
+            <input type="color" id="dashAppearBgColorPick" value="#1a1f2e" title="选择颜色">
+            <input type="text" id="dashAppearBgColor" placeholder="#1a1f2e 或 rgba(0,0,0,.4)" spellcheck="false">
+            <button type="button" class="btn sm" id="dashAppearBgColorClear">清除</button>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>背景图</label>
+        <div class="dash-appear-upload">
+          <div class="dash-appear-thumb wide" id="dashAppearBgThumb"><span class="muted">未设置</span></div>
+          <div class="dash-appear-upload-actions">
+            <input type="file" id="dashAppearBgFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
+            <button type="button" class="btn sm" id="dashAppearBgPick">上传</button>
+            <button type="button" class="btn sm" id="dashAppearBgClear">清除</button>
+            <div class="select-wrap sm" style="min-width:110px">
+              <select id="dashAppearBgFit" title="背景图适配">
+                <option value="cover">铺满 cover</option>
+                <option value="contain">适应 contain</option>
+                <option value="repeat">平铺 repeat</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="field" id="dashAppearOpacityField">
+        <label>面板不透明度 <span class="muted" id="dashAppearOpacityVal">0.92</span></label>
+        <input type="range" id="dashAppearOpacity" min="55" max="100" value="92" step="1">
+        <div class="hint">有自定义背景时生效，保证图表文字可读。</div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashMetaSave">保存</button></div>
   </div>
@@ -2520,16 +2968,23 @@
           </div>
         </section>
 
-        <!-- 06 安全 -->
+        <!-- 06 安全 / 治理 -->
         <section class="ai-panel" data-ai-panel="security">
           <header class="ai-panel-head">
             <div>
-              <h4>终端只读巡检授权</h4>
-              <p>高风险能力：仅允许只读诊断命令，禁止任何增删改。开启需校验终端连接密码。</p>
+              <h4>AI 治理</h4>
+              <p>配额、脱敏与写工具审批；终端只读巡检需二次密码。</p>
             </div>
             <b id="aiTermStateLabel" class="ai-term-state off">未开启</b>
           </header>
           <div class="ai-panel-body">
+            <div class="grid2" style="margin-bottom:14px">
+              <div class="field"><label>每用户每日调用配额（0=不限）</label><input type="number" id="aiDailyQuota" min="0" placeholder="0"></div>
+              <div class="field" style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+                <label class="switch"><input type="checkbox" id="aiWriteToolsApproval" checked> <span>写工具默认需审批</span></label>
+                <label class="switch"><input type="checkbox" id="aiRedactSensitive"> <span>敏感字段轻量脱敏</span></label>
+              </div>
+            </div>
             <div class="ai-term-access">
               <div class="ai-term-head">
                 <span>AI 终端只读巡检</span>
@@ -2632,6 +3087,17 @@
           <label data-i18n="form.local_port_optional">本地端口（可选）</label>
           <input type="number" id="fwdLocalPort" data-i18n-placeholder="form.auto_assign" placeholder="自动分配" min="0" max="65535" style="width:100%">
         </div>
+        <details class="fwd-wl-details" id="fwdWhitelistDetails">
+          <summary data-i18n="forward.wl_summary">来源 IP 白名单（可选）</summary>
+          <div class="fwd-wl-body">
+            <label class="switch" style="display:flex;margin:8px 0"><input type="checkbox" id="fwdWhitelistEnabled"> <span data-i18n="forward.wl_enable">启用白名单限制</span></label>
+            <div class="field">
+              <label data-i18n="forward.wl_list_label">允许的 IP / CIDR（每行一条）</label>
+              <textarea id="fwdWhitelist" rows="3" class="mono" style="width:100%" data-i18n-placeholder="forward.wl_placeholder" placeholder="203.0.113.10&#10;10.0.0.0/8&#10;192.168.1.0/24"></textarea>
+            </div>
+            <div class="hint" data-i18n="forward.wl_hint">开启后仅名单内地址可访问该转发监听端口；TCP / UDP 均生效。开启时至少填一条。</div>
+          </div>
+        </details>
         <div class="hint" data-i18n="forward.tcp_hint">创建转发后，通过 <code>监听地址:端口</code> 连接被监控主机上的 TCP / UDP 服务（如 MySQL、Redis、SSH、DNS）。填结束端口即按范围批量转发（本地端口镜像目标端口）。</div>
       </div>
       <!-- HTTP mode fields -->
@@ -2688,6 +3154,17 @@
         <label data-i18n="form.access_path_optional">访问路径（可选）</label>
         <input type="text" id="fwdEditPath" style="width:100%" placeholder="如 /api/users">
       </div>
+      <details class="fwd-wl-details" id="fwdEditWhitelistDetails" style="display:none">
+        <summary data-i18n="forward.wl_summary">来源 IP 白名单（可选）</summary>
+        <div class="fwd-wl-body">
+          <label class="switch" style="display:flex;margin:8px 0"><input type="checkbox" id="fwdEditWhitelistEnabled"> <span data-i18n="forward.wl_enable">启用白名单限制</span></label>
+          <div class="field">
+            <label data-i18n="forward.wl_list_label">允许的 IP / CIDR（每行一条）</label>
+            <textarea id="fwdEditWhitelist" rows="3" class="mono" style="width:100%" data-i18n-placeholder="forward.wl_placeholder" placeholder="203.0.113.10&#10;10.0.0.0/8&#10;192.168.1.0/24"></textarea>
+          </div>
+          <div class="hint" data-i18n="forward.wl_hint">开启后仅名单内地址可访问该转发监听端口；TCP / UDP 均生效。开启时至少填一条。</div>
+        </div>
+      </details>
     </div>
     <div class="modal-foot">
       <button class="btn primary" id="fwdEditSaveBtn" data-i18n="ui.save">保存</button>
@@ -2702,19 +3179,22 @@
       <div class="logo">AI</div>
       <div><h1>AIOps Monitor</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
     </div>
+    <div class="login-err" id="loginErr" role="alert" aria-live="assertive"></div>
     <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="管理员账号"></div>
-    <div class="field"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" placeholder="登录密码"></div>
-    <div class="field" id="loginCodeField" style="display:none"><label>动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="Authenticator 6 位口令"></div>
-    <div class="login-err" id="loginErr"></div>
+    <div class="field" id="loginPassField"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" data-i18n-placeholder="form.password" placeholder="登录密码"></div>
+    <p class="login-mode-hint" id="loginPhoneHint" style="display:none" data-i18n="login.phone_password_hint">使用已绑定手机号与登录密码（非短信验证码）。</p>
+    <div class="field" id="loginCodeField" style="display:none"><label data-i18n="login.totp_code">动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" data-i18n-placeholder="login.totp_placeholder" placeholder="Authenticator 6 位口令"></div>
     <button class="btn primary block" type="submit" data-i18n="ui.login">登 录</button>
+    <div class="login-divider" id="ssoLoginDivider" hidden><span data-i18n="login.or_continue">或使用以下方式继续</span></div>
+    <div id="ssoLoginBtns" class="sso-login-btns" hidden></div>
     <div class="login-links">
-      <a href="#" id="loginSwitchType">手机号登录</a>
+      <a href="#" id="loginSwitchType" data-i18n="login.switch_phone">手机号登录</a>
       <span class="sep">·</span>
-      <a href="#" id="forgotUserLink">忘记用户名</a>
+      <a href="#" id="forgotUserLink" data-i18n="login.forgot_user">忘记用户名</a>
       <span class="sep">·</span>
-      <a href="#" id="forgotPassLink">忘记密码</a>
+      <a href="#" id="forgotPassLink" data-i18n="login.forgot_pass">忘记密码</a>
     </div>
-    <div class="hint" id="loginHint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。</div>
+    <div class="hint" id="loginHint" data-i18n="login.hint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。</div>
   </form>
 </div>
 
@@ -2874,6 +3354,6 @@
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js" defer></script>
+<script src="/app.js?v=0.17.0" defer></script>
 </body>
 </html>

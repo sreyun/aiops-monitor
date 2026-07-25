@@ -455,7 +455,8 @@ function expPrintHTML(model) {
 function expPrintPDF(model) {
   const w = model && model._printWindow ? model._printWindow : window.open("", "_blank");
   if (!w) return false; // 被拦截 → 调用方给提示
-  w.document.write(expPrintHTML(model));
+  const html = model && model.kind === "visual" ? expVisualPrintHTML(model) : expPrintHTML(model);
+  w.document.write(html);
   w.document.close();
   w.focus();
   // document.write 出来的文档 onload 时机各浏览器不一，双保险触发一次即可
@@ -466,11 +467,325 @@ function expPrintPDF(model) {
   return true;
 }
 
+/* ============================ 看板视觉导出（PNG / 视觉 PDF） ============================ */
+
+function expLoadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("image load failed"));
+    img.src = src;
+  });
+}
+
+function expSvgToDataURL(svgEl) {
+  if (!svgEl) return "";
+  const clone = svgEl.cloneNode(true);
+  if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  // 把 CSS 变量解析成具体色值，否则离线 SVG / foreignObject 里 var(--*) 会失效
+  clone.querySelectorAll("*").forEach((node, i) => {
+    const live = svgEl.querySelectorAll("*")[i];
+    if (!live) return;
+    const cs = getComputedStyle(live);
+    ["fill", "stroke", "color"].forEach(prop => {
+      const v = cs.getPropertyValue(prop);
+      if (v && v !== "none") node.setAttribute(prop === "color" ? "fill" : prop, v);
+    });
+  });
+  const xml = new XMLSerializer().serializeToString(clone);
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+}
+
+// 把 live DOM 的关键计算样式内联到 clone，供 foreignObject 离线渲染（零依赖、CSP 友好）。
+function expInlineComputedStyles(src, dst) {
+  if (!src || !dst || src.nodeType !== 1 || dst.nodeType !== 1) return;
+  const cs = getComputedStyle(src);
+  const props = [
+    "box-sizing", "display", "position", "overflow", "overflow-x", "overflow-y",
+    "flex", "flex-direction", "flex-wrap", "align-items", "justify-content", "align-content",
+    "gap", "row-gap", "column-gap", "grid-template-columns", "grid-template-rows",
+    "width", "height", "min-width", "min-height", "max-width", "max-height",
+    "margin", "padding", "border", "border-radius", "background", "background-color",
+    "color", "opacity", "font", "font-size", "font-weight", "font-family", "line-height",
+    "letter-spacing", "text-align", "text-overflow", "white-space", "word-break",
+    "box-shadow", "outline", "vertical-align", "object-fit", "table-layout"
+  ];
+  let style = "box-sizing:border-box;";
+  props.forEach(p => {
+    const v = cs.getPropertyValue(p);
+    if (v && v !== "normal" && v !== "none" && v !== "auto" && v !== "visible" && v !== "static") {
+      style += p + ":" + v + ";";
+    }
+  });
+  // 始终带上颜色与背景，避免「normal」被跳过
+  style += "color:" + (cs.color || "#111") + ";";
+  if (cs.backgroundColor && cs.backgroundColor !== "rgba(0, 0, 0, 0)") {
+    style += "background-color:" + cs.backgroundColor + ";";
+  }
+  const prev = dst.getAttribute("style") || "";
+  dst.setAttribute("style", prev + ";" + style);
+  const sc = src.children, dc = dst.children;
+  for (let i = 0; i < sc.length && i < dc.length; i++) expInlineComputedStyles(sc[i], dc[i]);
+}
+
+// 将 DOM 节点栅格化为 PNG dataURL（画布优先替换为位图，保证图表所见即所得）。
+async function expCaptureElement(el, scale) {
+  if (!el) return "";
+  const s = Math.max(1, Math.min(3, scale || 2));
+  const rect = el.getBoundingClientRect();
+  const w = Math.max(1, Math.ceil(rect.width));
+  const h = Math.max(1, Math.ceil(rect.height));
+  const clone = el.cloneNode(true);
+  const srcCanvases = el.querySelectorAll("canvas");
+  const dstCanvases = clone.querySelectorAll("canvas");
+  srcCanvases.forEach((c, i) => {
+    const dst = dstCanvases[i];
+    if (!dst || !c.width) return;
+    try {
+      const img = document.createElement("img");
+      img.setAttribute("src", c.toDataURL("image/png"));
+      img.setAttribute("width", String(c.clientWidth || c.width));
+      img.setAttribute("height", String(c.clientHeight || c.height));
+      img.setAttribute("style", "display:block;width:100%;height:auto;max-height:100%;");
+      dst.replaceWith(img);
+    } catch (e) {}
+  });
+  // 单 SVG 面板：优先用序列化 SVG（比整卡 foreignObject 更稳）
+  const onlySvg = el.querySelector("svg") && !el.querySelector("canvas, table, .dash-logs, .dash-bars, .dash-bars-h, .dash-states, .dash-heatmap, .dash-alerts, .dash-pie-legend");
+  if (onlySvg && el.querySelectorAll("svg").length === 1 && (el.children.length <= 2)) {
+    try {
+      const svgURL = expSvgToDataURL(el.querySelector("svg"));
+      const img = await expLoadImage(svgURL);
+      const canvas = document.createElement("canvas");
+      canvas.width = w * s; canvas.height = h * s;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png");
+    } catch (e) {}
+  }
+  expInlineComputedStyles(el, clone);
+  clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+  clone.style.cssText += `;width:${w}px;height:${h}px;overflow:hidden;background:#fff;`;
+  // 去掉编辑态控件（若克隆里仍在）
+  clone.querySelectorAll(".panel-edit-actions, .dash-resize, .dash-panel-coord, .dash-drag-handle").forEach(n => n.remove());
+  let xhtml;
+  try { xhtml = new XMLSerializer().serializeToString(clone); }
+  catch (e) { return ""; }
+  if (!/^<\w+:/.test(xhtml) && !xhtml.includes("xmlns=")) {
+    xhtml = xhtml.replace(/^\s*<([a-zA-Z0-9-]+)/, '<$1 xmlns="http://www.w3.org/1999/xhtml"');
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${xhtml}</foreignObject></svg>`;
+  const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  try {
+    const img = await expLoadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = w * s; canvas.height = h * s;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch (e) {
+    // foreignObject 失败时：至少导出画布/SVG
+    const c = el.querySelector("canvas");
+    if (c && c.width) try { return c.toDataURL("image/png"); } catch (_) {}
+    const svgEl = el.querySelector("svg");
+    if (svgEl) return expSvgToDataURL(svgEl);
+    return "";
+  }
+}
+
+function expDataURLToUint8(dataUrl) {
+  const m = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return null;
+  const bin = atob(m[2]);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return { mime: m[1], data: u8, ext: /png/i.test(m[1]) ? "png" : (/jpeg|jpg/i.test(m[1]) ? "jpg" : "bin") };
+}
+
+// 视觉看板打印页：按 24 栏网格排布各面板截图，打印即「看板成品」而非数据表。
+function expVisualPrintHTML(model) {
+  const cols = model.cols || 24;
+  const panels = model.visualPanels || [];
+  const maxY = panels.reduce((m, p) => Math.max(m, (p.y || 0) + (p.h || 1)), 1);
+  const cells = panels.map(p => {
+    const x = (p.x || 0) + 1, y = (p.y || 0) + 1, w = p.w || 12, h = p.h || 8;
+    const img = p.dataUrl
+      ? `<img src="${p.dataUrl}" alt="${expEscXml(p.title || "")}"/>`
+      : `<div class="empty">${expEscXml(p.empty || "无内容")}</div>`;
+    return `<div class="cell" style="grid-column:${x} / span ${w};grid-row:${y} / span ${h}">${img}</div>`;
+  }).join("");
+  const meta = (model.meta || []).map(([k, v]) =>
+    `<span><b>${expEscXml(k)}</b>${expEscXml(v)}</span>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${expEscXml(model.title || "")}</title>
+<style>
+  @page { size: A4 landscape; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { font-family:"Microsoft YaHei","PingFang SC",-apple-system,sans-serif; color:#111; background:#fff; margin:0;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .head { display:flex; justify-content:space-between; align-items:flex-end; gap:12px; margin-bottom:8px;
+          border-bottom:2px solid #2563eb; padding-bottom:6px; }
+  h1 { font-size:16px; margin:0; }
+  .sub { font-size:10px; color:#666; margin:2px 0 0; }
+  .meta { display:flex; flex-wrap:wrap; gap:8px 14px; font-size:9px; color:#555; margin-bottom:8px; }
+  .meta b { color:#334155; margin-right:4px; }
+  .board { display:grid; grid-template-columns:repeat(${cols},1fr); grid-auto-rows:minmax(28px, auto);
+           gap:5px; width:100%; min-height:${Math.max(400, maxY * 32)}px; }
+  .cell { border:1px solid #d8dee6; border-radius:6px; overflow:hidden; background:#fff;
+          break-inside:avoid; page-break-inside:avoid; min-height:0; display:flex; }
+  .cell img { width:100%; height:100%; object-fit:fill; display:block; }
+  .cell .empty { padding:12px; font-size:11px; color:#888; }
+  .foot { margin-top:8px; font-size:9px; color:#8a94a0; border-top:1px solid #e5e7eb; padding-top:4px; }
+</style></head><body>
+  <div class="head"><div><h1>${expEscXml(model.title || "")}</h1>
+  ${model.subtitle ? `<p class="sub">${expEscXml(model.subtitle)}</p>` : ""}</div></div>
+  ${meta ? `<div class="meta">${meta}</div>` : ""}
+  <div class="board">${cells}</div>
+  ${model.footer ? `<div class="foot">${expEscXml(model.footer)}</div>` : ""}
+</body></html>`;
+}
+
+// 将 visualPanels 拼成一张整板 PNG Blob。
+async function expComposeBoardPNG(model) {
+  const panels = model.visualPanels || [];
+  const cols = model.cols || 24;
+  const gap = model.gap != null ? model.gap : 6;
+  const colW = model.colW || 48;
+  const rowH = model.rowH || 28;
+  const scale = model.scale || 2;
+  let maxY = 1;
+  panels.forEach(p => { maxY = Math.max(maxY, (p.y || 0) + (p.h || 1)); });
+  const boardW = cols * colW + (cols - 1) * gap;
+  const boardH = maxY * rowH + Math.max(0, maxY - 1) * gap;
+  const headH = 52;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(boardW * scale);
+  canvas.height = Math.ceil((boardH + headH + 16) * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#f1f5f9";
+  ctx.fillRect(0, 0, boardW, boardH + headH + 16);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, boardW, headH);
+  ctx.fillStyle = "#2563eb";
+  ctx.fillRect(0, headH - 2, boardW, 2);
+  ctx.fillStyle = "#111827";
+  ctx.font = "600 15px 'PingFang SC','Microsoft YaHei',sans-serif";
+  ctx.fillText(String(model.title || "Dashboard").slice(0, 80), 12, 22);
+  ctx.fillStyle = "#64748b";
+  ctx.font = "11px 'PingFang SC','Microsoft YaHei',sans-serif";
+  ctx.fillText(String(model.subtitle || "").slice(0, 120), 12, 40);
+
+  for (const p of panels) {
+    const x = (p.x || 0) * (colW + gap);
+    const y = headH + 8 + (p.y || 0) * (rowH + gap);
+    const w = (p.w || 1) * colW + ((p.w || 1) - 1) * gap;
+    const h = (p.h || 1) * rowH + ((p.h || 1) - 1) * gap;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#d8dee6";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, 6); else ctx.rect(x, y, w, h);
+    ctx.fill(); ctx.stroke();
+    if (p.dataUrl) {
+      try {
+        const img = await expLoadImage(p.dataUrl);
+        ctx.drawImage(img, x + 1, y + 1, Math.max(1, w - 2), Math.max(1, h - 2));
+      } catch (e) {
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "12px sans-serif";
+        ctx.fillText(p.title || "panel", x + 8, y + 20);
+      }
+    } else {
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "12px sans-serif";
+      ctx.fillText((p.title || "") + " · " + (p.empty || "无内容"), x + 8, y + 20);
+    }
+  }
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error("png encode failed")), "image/png");
+  });
+}
+
+// 视觉 Word：封面元信息 + 每面板一张截图（成品而非数据表）。
+function expToDocxVisual(model) {
+  const panels = (model.visualPanels || []).filter(p => p.dataUrl);
+  const media = [];
+  let body = "";
+  body += expWP(model.title || "", { bold: true, size: 32 });
+  if (model.subtitle) body += expWP(model.subtitle, { size: 18 });
+  if ((model.meta || []).length) {
+    body += expWP(model.summaryTitle || "看板信息", { bold: true, size: 24, spacing: 200 });
+    body += expDocxTable(["项", "值"], model.meta.map(([k, v]) => [k, v]));
+  }
+  const rels = [];
+  panels.forEach((p, i) => {
+    const bin = expDataURLToUint8(p.dataUrl);
+    if (!bin) return;
+    const name = `image${i + 1}.${bin.ext}`;
+    media.push({ name: "word/media/" + name, data: bin.data });
+    const rid = "rIdImg" + (i + 1);
+    rels.push({ id: rid, target: "media/" + name });
+    const cx = Math.round(Math.min(16.5, Math.max(6, (p.w || 12) / 24 * 16.5)) * 914400); // EMUs
+    const cy = Math.round(Math.min(10, Math.max(2.2, (p.h || 8) / 24 * 9)) * 914400);
+    body += expWP(p.title || ("面板 " + (i + 1)), { bold: true, size: 22, spacing: 200 });
+    body += `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"
+      xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+      xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+      xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${i + 1}" name="${expEscXml(name)}"/>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+      <pic:pic><pic:nvPicPr><pic:cNvPr id="${i + 1}" name="${expEscXml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>
+      <pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+      <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+      <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>
+      </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  });
+  if (model.footer) body += expWP(model.footer, { size: 16, spacing: 240 });
+  const page = `<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>`;
+  const files = [
+    expXmlFile("[Content_Types].xml",
+      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Default Extension="png" ContentType="image/png"/>` +
+      `<Default Extension="jpg" ContentType="image/jpeg"/>` +
+      `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+      `</Types>`),
+    expXmlFile("_rels/.rels",
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+      `</Relationships>`),
+    expXmlFile("word/_rels/document.xml.rels",
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      rels.map(r => `<Relationship Id="${r.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${r.target}"/>`).join("") +
+      `</Relationships>`),
+    expXmlFile("word/document.xml",
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+      `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ` +
+      `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ` +
+      `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ` +
+      `xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+      `<w:body>${body}<w:sectPr>${page}` +
+      `<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>`),
+    ...media,
+  ];
+  return new Blob([expZip(files)], {
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+}
+
 /* ============================ 统一入口 ============================ */
 
-// fmt: markdown | excel | word | pdf
-function exportModel(model, fmt, baseName) {
+// fmt: markdown | excel | word | pdf | pdf-report | png
+// model.kind === "visual" 时：pdf/word/png 走看板成品路径；excel 仍按 sections 数据表。
+async function exportModel(model, fmt, baseName) {
   const name = expSafeName(baseName || model.title) + "_" + expStamp();
+  const visual = model && model.kind === "visual";
   switch (fmt) {
     case "markdown":
       expDownload(new Blob([expToMarkdown(model)], { type: "text/markdown;charset=utf-8" }), name + ".md");
@@ -479,10 +794,31 @@ function exportModel(model, fmt, baseName) {
       expDownload(expToXlsx(model), name + ".xlsx");
       return true;
     case "word":
-      expDownload(expToDocx(model), name + ".docx");
+      if (visual) {
+        if (!(model.visualPanels || []).some(p => p.dataUrl)) {
+          throw new Error("未能截取到面板画面，请待图表加载完成后重试");
+        }
+        expDownload(expToDocxVisual(model), name + ".docx");
+      } else {
+        expDownload(expToDocx(model), name + ".docx");
+      }
       return true;
+    case "png": {
+      if (!visual) return false;
+      if (!(model.visualPanels || []).some(p => p.dataUrl)) {
+        throw new Error("未能截取到面板画面，请待图表加载完成后重试");
+      }
+      const blob = await expComposeBoardPNG(model);
+      expDownload(blob, name + ".png");
+      return true;
+    }
     case "pdf":
+      if (visual && !(model.visualPanels || []).some(p => p.dataUrl)) {
+        throw new Error("未能截取到面板画面，请待图表加载完成后重试");
+      }
       return expPrintPDF(model);
+    case "pdf-report":
+      return expPrintPDF(Object.assign({}, model, { kind: undefined, _printWindow: model._printWindow }));
     default:
       return false;
   }

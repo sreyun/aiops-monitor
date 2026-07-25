@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ============================================================================
@@ -99,6 +100,91 @@ func (cs *ConfigStore) UserByName(name string) (AccountConfig, bool) {
 	return AccountConfig{}, false
 }
 
+// UserByIdentity returns the user bound to (provider, subject).
+func (cs *ConfigStore) UserByIdentity(provider, subject string) (AccountConfig, bool) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	subject = strings.TrimSpace(subject)
+	if provider == "" || subject == "" {
+		return AccountConfig{}, false
+	}
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	for _, u := range cs.cfg.Users {
+		for _, id := range u.Identities {
+			if strings.EqualFold(id.Provider, provider) && id.Subject == subject {
+				return u, true
+			}
+		}
+	}
+	return AccountConfig{}, false
+}
+
+// BindUserIdentity attaches (provider, subject) to username if not already bound.
+// Fails if the subject is already linked to a different user.
+func (cs *ConfigStore) BindUserIdentity(username, provider, subject string) error {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	subject = strings.TrimSpace(subject)
+	if username == "" || provider == "" || subject == "" {
+		return fmt.Errorf("invalid identity")
+	}
+	cs.mu.Lock()
+	for _, u := range cs.cfg.Users {
+		for _, id := range u.Identities {
+			if strings.EqualFold(id.Provider, provider) && id.Subject == subject && u.Username != username {
+				cs.mu.Unlock()
+				return fmt.Errorf("identity already bound")
+			}
+		}
+	}
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return fmt.Errorf("%s", Tz("user.not_found"))
+	}
+	for _, id := range cs.cfg.Users[i].Identities {
+		if strings.EqualFold(id.Provider, provider) && id.Subject == subject {
+			cs.mu.Unlock()
+			return nil
+		}
+	}
+	cs.cfg.Users[i].Identities = append(cs.cfg.Users[i].Identities, ExternalIdentity{
+		Provider: provider, Subject: subject, BoundAt: time.Now().Unix(),
+	})
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// UnbindUserIdentity removes all identities for provider from username.
+func (cs *ConfigStore) UnbindUserIdentity(username, provider string) error {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if username == "" || provider == "" {
+		return fmt.Errorf("invalid identity")
+	}
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return fmt.Errorf("%s", Tz("user.not_found"))
+	}
+	ids := cs.cfg.Users[i].Identities
+	out := make([]ExternalIdentity, 0, len(ids))
+	found := false
+	for _, id := range ids {
+		if strings.EqualFold(id.Provider, provider) {
+			found = true
+			continue
+		}
+		out = append(out, id)
+	}
+	if !found {
+		cs.mu.Unlock()
+		return fmt.Errorf("identity not bound")
+	}
+	cs.cfg.Users[i].Identities = out
+	cs.mu.Unlock()
+	return cs.save()
+}
+
 // UserByEmail returns the first user whose email matches (case-insensitive).
 func (cs *ConfigStore) UserByEmail(email string) (AccountConfig, bool) {
 	cs.mu.RLock()
@@ -186,6 +272,21 @@ func (cs *ConfigStore) UpdateUserMeta(username, displayName, email, role string)
 	cs.cfg.Users[i].DisplayName = displayName
 	cs.cfg.Users[i].Email = email
 	cs.cfg.Users[i].Role = role
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// UpdateUserHostScope sets host-group / tag RBAC scope (empty = unrestricted).
+func (cs *ConfigStore) UpdateUserHostScope(username string, folders, hosts, tags []string) error {
+	cs.mu.Lock()
+	i := cs.findLocked(username)
+	if i < 0 {
+		cs.mu.Unlock()
+		return fmt.Errorf("%s", Tz("user.not_found"))
+	}
+	cs.cfg.Users[i].AllowedFolderIDs = folders
+	cs.cfg.Users[i].AllowedHostIDs = hosts
+	cs.cfg.Users[i].AllowedTags = tags
 	cs.mu.Unlock()
 	return cs.save()
 }

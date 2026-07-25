@@ -420,6 +420,15 @@ func (p *pgStore) migrate() error {
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS idx_hyperv_events_host_time ON hyperv_events(host_id, created_at DESC);
+		-- Docker/Podman 容器清单：每台主机一份（整份 containers 存 JSONB）。
+		CREATE TABLE IF NOT EXISTS container_inventory (
+			host_id         TEXT PRIMARY KEY,
+			host_name       TEXT,
+			runtime         TEXT,
+			container_count INT DEFAULT 0,
+			snapshot        JSONB NOT NULL,
+			updated_at      TIMESTAMPTZ DEFAULT NOW()
+		);
 		-- Flow 明细：按月分区、**永久保留**（归档靠 DROP/DETACH 分区，不再定时删除）。
 		-- 分区键必须进主键，故 PK 是 (id, created_at)。
 		CREATE TABLE IF NOT EXISTS flow_records (
@@ -2111,6 +2120,24 @@ func (s *Server) bindPG(ps *pgStore) {
 			s.ai.importReports(reps)
 		}
 	}
+	// Host deep-inspect batches survive restart (主机深度体检).
+	if s.inspect != nil {
+		s.inspect.setPersist(func(batches []*hostInspectBatch) {
+			raw, err := json.Marshal(batches)
+			if err != nil {
+				return
+			}
+			if err := ps.saveKV("host_inspect_batches", raw); err != nil {
+				slog.Warn("persist host inspect batches failed", "err", err)
+			}
+		})
+		if raw, _ := ps.loadKV("host_inspect_batches"); raw != nil {
+			var batches []*hostInspectBatch
+			if json.Unmarshal(raw, &batches) == nil {
+				s.inspect.importBatches(batches)
+			}
+		}
+	}
 	// Remediation run history survives restart (自动修复执行历史).
 	if raw, _ := ps.loadKV("remediation_runs"); raw != nil {
 		var runs []RemediationRun
@@ -2470,6 +2497,72 @@ func (p *pgStore) purgeOtherHardwareByURL(hostID, keepName, targetURL string) {
 // ============================================================================
 // Hyper-V 虚拟机清单 PG methods（结构与 hardware_* 同构）
 // ============================================================================
+
+func (p *pgStore) upsertContainerInventory(hostID, hostName, runtime string, containers []shared.ContainerInfo) {
+	if containers == nil {
+		containers = []shared.ContainerInfo{}
+	}
+	raw, _ := json.Marshal(containers)
+	_, err := p.db.Exec(`
+		INSERT INTO container_inventory(host_id, host_name, runtime, container_count, snapshot, updated_at)
+		VALUES($1, $2, $3, $4, $5, NOW())
+		ON CONFLICT (host_id) DO UPDATE
+		SET host_name=$2, runtime=$3, container_count=$4, snapshot=$5, updated_at=NOW()`,
+		hostID, hostName, runtime, len(containers), raw)
+	if err != nil {
+		slog.Warn("Upsert 容器清单失败", "host", hostID, "err", err)
+	}
+}
+
+func (p *pgStore) scanContainerRow(hostID, hostName, runtime string, snapshot json.RawMessage, count int, updatedAt time.Time) map[string]any {
+	var containers any
+	_ = json.Unmarshal(snapshot, &containers)
+	if containers == nil {
+		containers = []any{}
+	}
+	return map[string]any{
+		"host_id":          hostID,
+		"host_name":        hostName,
+		"runtime":          runtime,
+		"container_count":  count,
+		"containers":       containers,
+		"updated_at":       updatedAt,
+	}
+}
+
+func (p *pgStore) getContainerInventory(hostID string) (map[string]any, bool) {
+	var hostName, runtime string
+	var snapshot json.RawMessage
+	var count int
+	var updatedAt time.Time
+	err := p.db.QueryRow(`SELECT host_name, COALESCE(runtime,''), container_count, snapshot, updated_at
+		FROM container_inventory WHERE host_id=$1`, hostID).Scan(&hostName, &runtime, &count, &snapshot, &updatedAt)
+	if err != nil {
+		return nil, false
+	}
+	return p.scanContainerRow(hostID, hostName, runtime, snapshot, count, updatedAt), true
+}
+
+func (p *pgStore) getAllContainerInventories() ([]map[string]any, error) {
+	rows, err := p.db.Query(`SELECT host_id, host_name, COALESCE(runtime,''), container_count, snapshot, updated_at
+		FROM container_inventory ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var hostID, hostName, runtime string
+		var count int
+		var snapshot json.RawMessage
+		var updatedAt time.Time
+		if err := rows.Scan(&hostID, &hostName, &runtime, &count, &snapshot, &updatedAt); err != nil {
+			continue
+		}
+		out = append(out, p.scanContainerRow(hostID, hostName, runtime, snapshot, count, updatedAt))
+	}
+	return out, rows.Err()
+}
 
 // upsertHyperVInventory overwrites a host's guest inventory (whole list as JSONB).
 func (p *pgStore) upsertHyperVInventory(hostID, hostName string, guests []shared.HyperVGuest) {

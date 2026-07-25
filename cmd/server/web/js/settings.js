@@ -52,6 +52,8 @@ async function openSettings() {
     $("voiceCallAppId").value = vc.app_id || "";
     $("voiceCallDisplayNbr").value = vc.display_nbr || "";
     $("voiceCallRegion").value = vc.region || "";
+    updateSmsProviderFields();
+    updateVoiceProviderFields();
     // Threshold display: treat 0 / null / undefined as "unset" → show the standard
     // default. The backend also backfills these zeros, so display and storage stay
     // consistent, and every metric always shows a sane standard threshold.
@@ -102,116 +104,260 @@ async function openSettings() {
 // 阈值输入框（同 ID）现位于 #view-thresholds。加载：拉全量配置回填字段；
 // 保存：拉全量配置 → 仅覆盖 thresholds → 回存，从而不触碰 webhook/smtp 等其它设置
 // （脱敏密钥原样回传，由后端按「掩码=保持原值」逻辑保留）。
+let _thresholdPresetsCache = null;
+
+function fillThresholdForm(t) {
+  t = t || {};
+  const td = (v, def) => (v == null || v === 0 || isNaN(v)) ? def : v;
+  $("cpuWarn").value = td(t.cpu_warn, 80); $("cpuCrit").value = td(t.cpu_crit, 95);
+  $("memWarn").value = td(t.mem_warn, 85); $("memCrit").value = td(t.mem_crit, 95);
+  $("diskWarn").value = td(t.disk_warn, 80); $("diskCrit").value = td(t.disk_crit, 90);
+  $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
+  $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
+  $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
+  $("gpuTempWarn").value = td(t.gpu_temp_warn, 85); $("gpuTempCrit").value = td(t.gpu_temp_crit, 95);
+  $("gpuMemWarn").value = td(t.gpu_mem_warn, 90); $("gpuMemCrit").value = td(t.gpu_mem_crit, 97);
+  $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
+  $("procWarn").value = td(t.proc_warn, 0.5);
+  $("connWarn").value = td(t.conn_warn, 5000); $("connCrit").value = td(t.conn_crit, 10000);
+  $("offlineSec").value = td(t.offline_after_sec, 60);
+  $("checkPingLossWarn").value = td(t.check_ping_loss_warn, 10); $("checkPingLossCrit").value = td(t.check_ping_loss_crit, 30);
+  $("checkPingLatencyWarn").value = td(t.check_ping_latency_warn, 100); $("checkPingLatencyCrit").value = td(t.check_ping_latency_crit, 500);
+  $("checkTCPTimeoutWarn").value = td(t.check_tcp_timeout_warn, 1000); $("checkTCPTimeoutCrit").value = td(t.check_tcp_timeout_crit, 5000);
+  $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
+  $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
+  $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
+  $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
+  $("checkDNSTimeoutWarn").value = td(t.check_dns_timeout_warn, 500); $("checkDNSTimeoutCrit").value = td(t.check_dns_timeout_crit, 2000);
+  $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
+  $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
+  $("apiP95RespWarn").value = td(t.api_p95_resp_warn, 1000); $("apiP95RespCrit").value = td(t.api_p95_resp_crit, 5000);
+  $("apiThroughputWarn").value = td(t.api_throughput_warn, 100); $("apiThroughputCrit").value = td(t.api_throughput_crit, 10);
+  $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
+  $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
+  $("forwardConnWarn").value = td(t.forward_conn_warn, 200); $("forwardConnCrit").value = td(t.forward_conn_crit, 280);
+  $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
+  $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
+  $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
+  $("snmpIfUtilWarn").value = td(t.snmp_if_util_warn, 80); $("snmpIfUtilCrit").value = td(t.snmp_if_util_crit, 95);
+  $("snmpIfErrWarn").value = td(t.snmp_if_err_warn, 1); $("snmpIfErrCrit").value = td(t.snmp_if_err_crit, 10);
+  if ($("netflowSurgeRatio")) $("netflowSurgeRatio").value = td(t.netflow_surge_ratio, 3);
+  if ($("netflowSurgeMinMbps")) $("netflowSurgeMinMbps").value = td(t.netflow_surge_min_mbps, 1);
+  if ($("netflowDropWarn")) $("netflowDropWarn").value = td(t.netflow_drop_warn, 100);
+}
+
+function collectThresholdsFromForm() {
+  const num = id => parseFloat($(id).value) || 0;
+  return {
+    cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
+    mem_warn: num("memWarn"), mem_crit: num("memCrit"),
+    disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
+    diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
+    iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
+    gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
+    gpu_temp_warn: num("gpuTempWarn"), gpu_temp_crit: num("gpuTempCrit"),
+    gpu_mem_warn: num("gpuMemWarn"), gpu_mem_crit: num("gpuMemCrit"),
+    load_warn: num("loadWarn"), load_crit: num("loadCrit"),
+    proc_warn: num("procWarn"),
+    conn_warn: Math.round(num("connWarn")), conn_crit: Math.round(num("connCrit")),
+    offline_after_sec: Math.round(num("offlineSec")),
+    check_ping_loss_warn: num("checkPingLossWarn"), check_ping_loss_crit: num("checkPingLossCrit"),
+    check_ping_latency_warn: num("checkPingLatencyWarn"), check_ping_latency_crit: num("checkPingLatencyCrit"),
+    check_tcp_timeout_warn: num("checkTCPTimeoutWarn"), check_tcp_timeout_crit: num("checkTCPTimeoutCrit"),
+    check_http_resp_warn: num("checkHTTPRespWarn"), check_http_resp_crit: num("checkHTTPRespCrit"),
+    check_http_status_warn: Math.round(num("checkHTTPStatusWarn")), check_http_status_crit: Math.round(num("checkHTTPStatusCrit")),
+    check_proc_fail_warn: Math.round(num("checkProcFailWarn")), check_proc_fail_crit: Math.round(num("checkProcFailCrit")),
+    check_udp_timeout_warn: num("checkUDPTimeoutWarn"), check_udp_timeout_crit: num("checkUDPTimeoutCrit"),
+    check_dns_timeout_warn: num("checkDNSTimeoutWarn"), check_dns_timeout_crit: num("checkDNSTimeoutCrit"),
+    api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
+    api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
+    api_p95_resp_warn: num("apiP95RespWarn"), api_p95_resp_crit: num("apiP95RespCrit"),
+    api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
+    task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
+    task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit"),
+    forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
+    forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
+    forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
+    forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit"),
+    snmp_if_util_warn: num("snmpIfUtilWarn"), snmp_if_util_crit: num("snmpIfUtilCrit"),
+    snmp_if_err_warn: num("snmpIfErrWarn"), snmp_if_err_crit: num("snmpIfErrCrit"),
+    netflow_surge_ratio: num("netflowSurgeRatio"), netflow_surge_min_mbps: num("netflowSurgeMinMbps"),
+    netflow_drop_warn: Math.round(num("netflowDropWarn"))
+  };
+}
+
+function markThresholdPresetActive(key) {
+  document.querySelectorAll(".threshold-preset-card").forEach(el => {
+    const on = !!key && el.dataset.preset === key;
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function thresholdsRoughlyEqual(a, b) {
+  if (!a || !b) return false;
+  const keys = Object.keys(b);
+  for (const k of keys) {
+    const av = Number(a[k]), bv = Number(b[k]);
+    if (!Number.isFinite(av) || !Number.isFinite(bv)) return false;
+    if (Math.abs(av - bv) > 1e-6) return false;
+  }
+  return true;
+}
+
+async function loadThresholdPresets() {
+  if (_thresholdPresetsCache) return _thresholdPresetsCache;
+  const r = await fetch(`${API}/config/threshold-presets`);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  _thresholdPresetsCache = await r.json();
+  return _thresholdPresetsCache;
+}
+
+async function syncActiveThresholdPreset() {
+  try {
+    const presets = await loadThresholdPresets();
+    const cur = collectThresholdsFromForm();
+    let match = "";
+    for (const key of ["conservative", "standard", "relaxed"]) {
+      if (thresholdsRoughlyEqual(cur, presets[key])) { match = key; break; }
+    }
+    markThresholdPresetActive(match);
+  } catch (_) { /* ignore */ }
+}
+
+async function applyThresholdPreset(key) {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
+  const labels = {
+    conservative: I18N.t("settings.preset_conservative", "严格敏感"),
+    standard: I18N.t("settings.preset_standard", "标准均衡"),
+    relaxed: I18N.t("settings.preset_relaxed", "宽松低噪")
+  };
+  const name = labels[key] || key;
+  if (!confirm(I18N.t("settings.preset_apply_confirm", "将应用「{0}」档位到全部阈值并立即保存生效，是否继续？").replace("{0}", name))) {
+    return;
+  }
+  const card = document.querySelector(`.threshold-preset-card[data-preset="${key}"]`);
+  try {
+    if (card) card.classList.add("applying");
+    const presets = await loadThresholdPresets();
+    const t = presets[key];
+    if (!t) { toast(I18N.t("toast.read_config_failed", "读取配置失败"), "err"); return; }
+    fillThresholdForm(t);
+    markThresholdPresetActive(key);
+    const ok = await saveThresholds(true);
+    if (ok) toast(I18N.t("settings.preset_applied", "已应用「{0}」档位并保存").replace("{0}", name), "ok");
+    else await syncActiveThresholdPreset();
+  } catch (e) {
+    toast(I18N.t("toast.save_failed2") + e, "err");
+    await syncActiveThresholdPreset();
+  } finally {
+    if (card) card.classList.remove("applying");
+  }
+}
+
 async function loadThresholds() {
   try {
     const c = await fetch(`${API}/config`).then(r => r.json());
-    const t = c.thresholds || {};
-    const td = (v, def) => (v == null || v === 0 || isNaN(v)) ? def : v;
-    $("cpuWarn").value = td(t.cpu_warn, 80); $("cpuCrit").value = td(t.cpu_crit, 95);
-    $("memWarn").value = td(t.mem_warn, 85); $("memCrit").value = td(t.mem_crit, 95);
-    $("diskWarn").value = td(t.disk_warn, 80); $("diskCrit").value = td(t.disk_crit, 90);
-    $("diskioWarn").value = td(t.diskio_warn, 80); $("diskioCrit").value = td(t.diskio_crit, 95);
-    $("iopsWarn").value = td(t.iops_warn, 50000); $("iopsCrit").value = td(t.iops_crit, 100000);
-    $("gpuWarn").value = td(t.gpu_warn, 80); $("gpuCrit").value = td(t.gpu_crit, 95);
-    $("gpuTempWarn").value = td(t.gpu_temp_warn, 85); $("gpuTempCrit").value = td(t.gpu_temp_crit, 95);
-    $("gpuMemWarn").value = td(t.gpu_mem_warn, 90); $("gpuMemCrit").value = td(t.gpu_mem_crit, 97);
-    $("loadWarn").value = td(t.load_warn, 4.0); $("loadCrit").value = td(t.load_crit, 8.0);
-    $("procWarn").value = td(t.proc_warn, 0.5);
-    $("connWarn").value = td(t.conn_warn, 5000); $("connCrit").value = td(t.conn_crit, 10000);
-    $("offlineSec").value = td(t.offline_after_sec, 60);
-    // 拨测监控阈值
-    $("checkPingLossWarn").value = td(t.check_ping_loss_warn, 10); $("checkPingLossCrit").value = td(t.check_ping_loss_crit, 30);
-    $("checkPingLatencyWarn").value = td(t.check_ping_latency_warn, 100); $("checkPingLatencyCrit").value = td(t.check_ping_latency_crit, 500);
-    $("checkTCPTimeoutWarn").value = td(t.check_tcp_timeout_warn, 1000); $("checkTCPTimeoutCrit").value = td(t.check_tcp_timeout_crit, 5000);
-    $("checkHTTPRespWarn").value = td(t.check_http_resp_warn, 1000); $("checkHTTPRespCrit").value = td(t.check_http_resp_crit, 5000);
-    $("checkHTTPStatusWarn").value = td(t.check_http_status_warn, 1); $("checkHTTPStatusCrit").value = td(t.check_http_status_crit, 5);
-    $("checkProcFailWarn").value = td(t.check_proc_fail_warn, 1); $("checkProcFailCrit").value = td(t.check_proc_fail_crit, 3);
-    $("checkUDPTimeoutWarn").value = td(t.check_udp_timeout_warn, 1000); $("checkUDPTimeoutCrit").value = td(t.check_udp_timeout_crit, 5000);
-    $("checkDNSTimeoutWarn").value = td(t.check_dns_timeout_warn, 500); $("checkDNSTimeoutCrit").value = td(t.check_dns_timeout_crit, 2000);
-    // API 业务监控阈值
-    $("apiAvailWarn").value = td(t.api_avail_warn, 99); $("apiAvailCrit").value = td(t.api_avail_crit, 95);
-    $("apiAvgRespWarn").value = td(t.api_avg_resp_warn, 500); $("apiAvgRespCrit").value = td(t.api_avg_resp_crit, 2000);
-    $("apiP95RespWarn").value = td(t.api_p95_resp_warn, 1000); $("apiP95RespCrit").value = td(t.api_p95_resp_crit, 5000);
-    $("apiThroughputWarn").value = td(t.api_throughput_warn, 100); $("apiThroughputCrit").value = td(t.api_throughput_crit, 10);
-    // 编排定时任务阈值
-    $("taskFailWarn").value = td(t.task_fail_warn, 1); $("taskFailCrit").value = td(t.task_fail_crit, 5);
-    $("taskTimeoutWarn").value = td(t.task_timeout_warn, 60); $("taskTimeoutCrit").value = td(t.task_timeout_crit, 300);
-    // 端口转发监控阈值
-    $("forwardConnWarn").value = td(t.forward_conn_warn, 200); $("forwardConnCrit").value = td(t.forward_conn_crit, 280);
-    $("forwardBwWarn").value = td(t.forward_bw_warn, 80); $("forwardBwCrit").value = td(t.forward_bw_crit, 95);
-    $("forwardErrWarn").value = td(t.forward_err_warn, 5); $("forwardErrCrit").value = td(t.forward_err_crit, 15);
-    $("forwardLatWarn").value = td(t.forward_lat_warn, 1000); $("forwardLatCrit").value = td(t.forward_lat_crit, 5000);
-    // SNMP 网络设备
-    $("snmpIfUtilWarn").value = td(t.snmp_if_util_warn, 80); $("snmpIfUtilCrit").value = td(t.snmp_if_util_crit, 95);
-    $("snmpIfErrWarn").value = td(t.snmp_if_err_warn, 1); $("snmpIfErrCrit").value = td(t.snmp_if_err_crit, 10);
-    // NetFlow 流量异常
-    if ($("netflowSurgeRatio")) $("netflowSurgeRatio").value = td(t.netflow_surge_ratio, 3);
-    if ($("netflowSurgeMinMbps")) $("netflowSurgeMinMbps").value = td(t.netflow_surge_min_mbps, 1);
-    if ($("netflowDropWarn")) $("netflowDropWarn").value = td(t.netflow_drop_warn, 100);
+    fillThresholdForm(c.thresholds || {});
+    await syncActiveThresholdPreset();
   } catch (e) { toast(I18N.t("toast.read_config_failed") + e, "err"); }
-  // 非管理员只读：保存按钮已用 admin-only 隐藏，输入框一并禁用避免误操作
   const editable = isAdmin();
   document.querySelectorAll("#view-thresholds input").forEach(el => { el.disabled = !editable; });
+  document.querySelectorAll(".threshold-preset-card").forEach(el => { el.disabled = !editable; });
 }
-async function saveThresholds() {
-  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
+async function saveThresholds(quiet) {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return false; }
+  let ok = false;
   await withLoading("saveThresholdsBtn", async () => {
     try {
       const c = await fetch(`${API}/config`).then(r => r.json()); // 全量配置（密钥已脱敏，回存时后端按原值保留）
-      const num = id => parseFloat($(id).value) || 0;
-      c.thresholds = {
-        cpu_warn: num("cpuWarn"), cpu_crit: num("cpuCrit"),
-        mem_warn: num("memWarn"), mem_crit: num("memCrit"),
-        disk_warn: num("diskWarn"), disk_crit: num("diskCrit"),
-        diskio_warn: num("diskioWarn"), diskio_crit: num("diskioCrit"),
-        iops_warn: num("iopsWarn"), iops_crit: num("iopsCrit"),
-        gpu_warn: num("gpuWarn"), gpu_crit: num("gpuCrit"),
-        gpu_temp_warn: num("gpuTempWarn"), gpu_temp_crit: num("gpuTempCrit"),
-        gpu_mem_warn: num("gpuMemWarn"), gpu_mem_crit: num("gpuMemCrit"),
-        load_warn: num("loadWarn"), load_crit: num("loadCrit"),
-        proc_warn: num("procWarn"),
-        conn_warn: Math.round(num("connWarn")), conn_crit: Math.round(num("connCrit")),
-        offline_after_sec: Math.round(num("offlineSec")),
-        // 拨测监控
-        check_ping_loss_warn: num("checkPingLossWarn"), check_ping_loss_crit: num("checkPingLossCrit"),
-        check_ping_latency_warn: num("checkPingLatencyWarn"), check_ping_latency_crit: num("checkPingLatencyCrit"),
-        check_tcp_timeout_warn: num("checkTCPTimeoutWarn"), check_tcp_timeout_crit: num("checkTCPTimeoutCrit"),
-        check_http_resp_warn: num("checkHTTPRespWarn"), check_http_resp_crit: num("checkHTTPRespCrit"),
-        check_http_status_warn: Math.round(num("checkHTTPStatusWarn")), check_http_status_crit: Math.round(num("checkHTTPStatusCrit")),
-        check_proc_fail_warn: Math.round(num("checkProcFailWarn")), check_proc_fail_crit: Math.round(num("checkProcFailCrit")),
-        check_udp_timeout_warn: num("checkUDPTimeoutWarn"), check_udp_timeout_crit: num("checkUDPTimeoutCrit"),
-        check_dns_timeout_warn: num("checkDNSTimeoutWarn"), check_dns_timeout_crit: num("checkDNSTimeoutCrit"),
-        // API 业务监控
-        api_avail_warn: num("apiAvailWarn"), api_avail_crit: num("apiAvailCrit"),
-        api_avg_resp_warn: num("apiAvgRespWarn"), api_avg_resp_crit: num("apiAvgRespCrit"),
-        api_p95_resp_warn: num("apiP95RespWarn"), api_p95_resp_crit: num("apiP95RespCrit"),
-        api_throughput_warn: num("apiThroughputWarn"), api_throughput_crit: num("apiThroughputCrit"),
-        // 编排定时任务
-        task_fail_warn: Math.round(num("taskFailWarn")), task_fail_crit: Math.round(num("taskFailCrit")),
-        task_timeout_warn: num("taskTimeoutWarn"), task_timeout_crit: num("taskTimeoutCrit"),
-        // 端口转发监控
-        forward_conn_warn: Math.round(num("forwardConnWarn")), forward_conn_crit: Math.round(num("forwardConnCrit")),
-        forward_bw_warn: num("forwardBwWarn"), forward_bw_crit: num("forwardBwCrit"),
-        forward_err_warn: num("forwardErrWarn"), forward_err_crit: num("forwardErrCrit"),
-        forward_lat_warn: num("forwardLatWarn"), forward_lat_crit: num("forwardLatCrit"),
-        // SNMP 网络设备
-        snmp_if_util_warn: num("snmpIfUtilWarn"), snmp_if_util_crit: num("snmpIfUtilCrit"),
-        snmp_if_err_warn: num("snmpIfErrWarn"), snmp_if_err_crit: num("snmpIfErrCrit"),
-        // NetFlow 流量异常
-        netflow_surge_ratio: num("netflowSurgeRatio"), netflow_surge_min_mbps: num("netflowSurgeMinMbps"),
-        netflow_drop_warn: Math.round(num("netflowDropWarn"))
-      };
+      c.thresholds = collectThresholdsFromForm();
       const r = await fetch(`${API}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-      if (r.ok) toast("告警阈值已保存，即时生效", "ok");
-      else toast(I18N.t("toast.save_failed"), "err");
+      if (r.ok) {
+        ok = true;
+        if (!quiet) toast(I18N.t("settings.thresholds_saved", "告警阈值已保存，即时生效"), "ok");
+        syncActiveThresholdPreset();
+      } else toast(I18N.t("toast.save_failed"), "err");
     } catch (e) { toast(I18N.t("toast.save_failed2") + e, "err"); }
   });
+  return ok;
 }
 
 // Tab switching for notification channels
 function switchNotifyTab(tabId) {
   document.querySelectorAll("#notifyTabs .tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tabId));
   document.querySelectorAll("#settingsMask .tab-panel").forEach(p => p.classList.toggle("active", p.id === tabId));
+  if (tabId === "tab-sms") updateSmsProviderFields();
+  if (tabId === "tab-voicecall") updateVoiceProviderFields();
+}
+
+// Show only the fields required by the selected SMS / voice cloud provider.
+function updateSmsProviderFields() {
+  const p = ($("smsProvider")?.value || "aliyun").trim();
+  document.querySelectorAll("#tab-sms [data-sms-providers]").forEach(el => {
+    const list = (el.getAttribute("data-sms-providers") || "").split(",").map(s => s.trim()).filter(Boolean);
+    el.style.display = list.includes(p) ? "" : "none";
+  });
+  const hint = $("smsProviderHint");
+  const akL = $("smsAccessKeyLabel");
+  const skL = $("smsSecretKeyLabel");
+  const appL = $("smsAppIdLabel");
+  const ak = $("smsAccessKey");
+  const app = $("smsAppId");
+  if (p === "huawei") {
+    if (hint) hint.textContent = I18N.t("settings.sms_hint_huawei", "华为云短信：需填写 AppKey/AppSecret、project_id、通道号 Sender、签名与模板。");
+    if (akL) akL.textContent = I18N.t("settings.sms_ak_huawei", "AppKey");
+    if (skL) skL.textContent = I18N.t("settings.sms_sk_huawei", "AppSecret");
+    if (appL) appL.textContent = I18N.t("settings.sms_appid_huawei", "Project ID");
+    if (ak) ak.placeholder = "华为云 AppKey";
+    if (app) app.placeholder = "cn-north-4 项目 Project ID";
+  } else if (p === "tencent") {
+    if (hint) hint.textContent = I18N.t("settings.sms_hint_tencent", "腾讯云短信：需填写 SecretId/SecretKey、SmsSdkAppId、地域、签名与模板。");
+    if (akL) akL.textContent = I18N.t("settings.sms_ak_tencent", "SecretId");
+    if (skL) skL.textContent = I18N.t("settings.sms_sk_tencent", "SecretKey");
+    if (appL) appL.textContent = I18N.t("settings.sms_appid_tencent", "SmsSdkAppId");
+    if (ak) ak.placeholder = "AKIDxxxx";
+    if (app) app.placeholder = "SmsSdkAppId";
+  } else {
+    if (hint) hint.textContent = I18N.t("settings.sms_hint_aliyun", "阿里云短信：需填写 AccessKey、签名 SignName 与模板 TemplateCode。");
+    if (akL) akL.textContent = I18N.t("settings.sms_access_key", "AccessKey");
+    if (skL) skL.textContent = I18N.t("settings.sms_secret_key", "SecretKey");
+    if (ak) ak.placeholder = "LTAI5t...";
+  }
+}
+
+function updateVoiceProviderFields() {
+  const p = ($("voiceCallProvider")?.value || "aliyun").trim();
+  document.querySelectorAll("#tab-voicecall [data-voice-providers]").forEach(el => {
+    const list = (el.getAttribute("data-voice-providers") || "").split(",").map(s => s.trim()).filter(Boolean);
+    el.style.display = list.includes(p) ? "" : "none";
+  });
+  const hint = $("voiceProviderHint");
+  const akL = $("voiceAccessKeyLabel");
+  const skL = $("voiceSecretKeyLabel");
+  const appL = $("voiceAppIdLabel");
+  const ak = $("voiceCallAccessKey");
+  const app = $("voiceCallAppId");
+  if (p === "huawei") {
+    if (hint) hint.textContent = I18N.t("settings.voice_hint_huawei", "华为云语音：需填写 AppKey/AppSecret、project_id、主叫号码与 TTS 模板。");
+    if (akL) akL.textContent = I18N.t("settings.sms_ak_huawei", "AppKey");
+    if (skL) skL.textContent = I18N.t("settings.sms_sk_huawei", "AppSecret");
+    if (appL) appL.textContent = I18N.t("settings.sms_appid_huawei", "Project ID");
+    if (ak) ak.placeholder = "华为云 AppKey";
+    if (app) app.placeholder = "cn-north-4 项目 Project ID";
+  } else if (p === "tencent") {
+    if (hint) hint.textContent = I18N.t("settings.voice_hint_tencent", "腾讯云语音：需填写 SecretId/SecretKey、VoiceSdkAppId、地域与 TTS 模板。");
+    if (akL) akL.textContent = I18N.t("settings.sms_ak_tencent", "SecretId");
+    if (skL) skL.textContent = I18N.t("settings.sms_sk_tencent", "SecretKey");
+    if (appL) appL.textContent = I18N.t("settings.voice_appid_tencent", "VoiceSdkAppId");
+    if (ak) ak.placeholder = "AKIDxxxx";
+    if (app) app.placeholder = "VoiceSdkAppId";
+  } else {
+    if (hint) hint.textContent = I18N.t("settings.voice_hint_aliyun", "阿里云语音通知：需填写 AccessKey、被叫号码与 TTS 模板编码。");
+    if (akL) akL.textContent = I18N.t("settings.voice_access_key", "AccessKey");
+    if (skL) skL.textContent = I18N.t("settings.voice_secret_key", "SecretKey");
+    if (ak) ak.placeholder = "LTAI5t...";
+  }
 }
 
 function collectSettings() {
@@ -314,11 +460,25 @@ function updateTokenDisplay() {
   el.value = maskToken(INSTALL.token || "");
   el.dataset.revealed = TOKEN_REVEALED ? "1" : "0";
 }
+function renderInstallTokenMeta(info) {
+  const el = $("installTokenMeta");
+  if (!el || !info) return;
+  const parts = [];
+  if (info.revoked) parts.push("状态：已吊销");
+  else parts.push("状态：有效");
+  parts.push(`已用 ${info.use_count || 0}` + (info.max_uses > 0 ? ` / ${info.max_uses}` : " 次（不限）"));
+  if (info.expires_at > 0) parts.push("过期：" + new Date(info.expires_at * 1000).toLocaleString());
+  if (info.prev_valid_until > 0) parts.push("旧 Token 宽限至 " + new Date(info.prev_valid_until * 1000).toLocaleString());
+  el.textContent = parts.join(" · ");
+  if ($("installTokenMaxUses")) $("installTokenMaxUses").value = info.max_uses || 0;
+  if ($("installTokenExpiresAt")) $("installTokenExpiresAt").value = info.expires_at || 0;
+}
 async function openInstall() {
   try {
     INSTALL = await fetch(`${API}/install/info`).then(r => r.json());
     TOKEN_REVEALED = false;
     updateTokenDisplay();
+    renderInstallTokenMeta(INSTALL);
     RELAY_MODE = false;
     MULTI_SERVER_MODE = false;
     const normalRadio = document.querySelector('input[name="installMode"][value="normal"]');
@@ -406,7 +566,9 @@ function renderInstallCmd() {
     label = I18N.t("install.terminal_one_line");
     hint = I18N.t("install.linux_detail");
   } else {
-    cmd = `curl -fsSL "${server}/install.sh?${q}" | sudo sh`;
+    // Demo-safe default: non-root install under ~/.aiops-agent (no sudo).
+    // Optional: prepend sudo for systemd unit + dedicated aiops system user.
+    cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
     label = I18N.t("install.linux_cmd");
     hint = I18N.t("install.linux_desc");
   }
@@ -415,7 +577,7 @@ function renderInstallCmd() {
   $("cmdHint").textContent = hint;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
     ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
-    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+    : `curl -fsSL "${server}/uninstall.sh" | sh`;
 }
 function renderRelayCmd() {
   const server = INSTALL.server_url || location.origin;
@@ -432,22 +594,49 @@ function renderRelayCmd() {
     gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sh`;
     internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
   } else {
+    // Relay gateway still typically needs root for privileged listen ports;
+    // internal agents default to non-root for demo safety.
     gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sudo sh`;
-    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sudo sh`;
+    internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
   }
   $("relayGatewayCmd").textContent = gatewayCmd;
   $("relayInternalCmd").textContent = internalCmd;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
     ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
-    : `curl -fsSL "${server}/uninstall.sh" | ${CUR_OS === "macos" ? "sh" : "sudo sh"}`;
+    : `curl -fsSL "${server}/uninstall.sh" | sh`;
 }
 async function resetToken() {
   if (!confirm(I18N.t("install.reset_warning"))) return;
   try {
     const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
-    INSTALL.token = j.token; TOKEN_REVEALED = false; updateTokenDisplay(); renderInstallCmd();
+    INSTALL.token = j.token; INSTALL.revoked = false; INSTALL.use_count = 0;
+    TOKEN_REVEALED = false; updateTokenDisplay(); renderInstallTokenMeta(INSTALL); renderInstallCmd();
     toast(I18N.t("toast.token_reset"), "ok");
   } catch (e) { toast(I18N.t("toast.reset_failed2") + e, "err"); }
+}
+async function revokeInstallToken() {
+  if (!confirm("确定吊销当前安装 Token？新 Agent 将无法用该 Token 注册；已注册 Agent 不受影响。可再点重置生成新 Token。")) return;
+  try {
+    const r = await fetch(`${API}/install/revoke-token`, { method: "POST" });
+    if (!r.ok) { toast("吊销失败", "err"); return; }
+    INSTALL.revoked = true; renderInstallTokenMeta(INSTALL);
+    toast("安装 Token 已吊销", "ok");
+  } catch (e) { toast("吊销失败: " + e, "err"); }
+}
+async function saveInstallTokenPolicy() {
+  const body = {
+    max_uses: parseInt(($("installTokenMaxUses") || {}).value, 10) || 0,
+    expires_at: parseInt(($("installTokenExpiresAt") || {}).value, 10) || 0,
+  };
+  try {
+    const r = await fetch(`${API}/install/token-policy`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!r.ok) { toast("保存策略失败", "err"); return; }
+    INSTALL.max_uses = body.max_uses; INSTALL.expires_at = body.expires_at;
+    renderInstallTokenMeta(INSTALL);
+    toast("Token 策略已保存", "ok");
+  } catch (e) { toast("保存失败: " + e, "err"); }
 }
 
 /* ---------- 自定义监控 ---------- */
@@ -497,7 +686,12 @@ function renderChecks(checks) {
   // 应用类型筛选 + 关键字搜索
   let shown = checks;
   if (CHECK_TYPE && CHECK_TYPE !== "all") shown = shown.filter(c => c.type === CHECK_TYPE);
-  if (CHECK_SEARCH) { const q = CHECK_SEARCH.toLowerCase(); shown = shown.filter(c => ((c.name || "") + " " + (c.target || "")).toLowerCase().includes(q)); }
+  if (CHECK_SEARCH) {
+    shown = shown.filter(c => matchesSearchTokens(
+      [c.name, c.target, c.id, c.type].filter(Boolean).join(" "),
+      CHECK_SEARCH
+    ));
+  }
 
   grid.innerHTML = shown.map(c => {
     const st = !c.enabled ? "unknown" : (c.checked_at ? (c.ok ? "up" : "down") : "unknown");
@@ -834,6 +1028,9 @@ function setUser(me) {
   if (me.role) {
     CUR_ROLE = me.role;
     document.body.dataset.role = me.role;
+    document.querySelectorAll('.nav-group[data-group="security"]').forEach(g => {
+      g.style.display = me.role === "viewer" ? "none" : "";
+    });
   }
 }
 // fetchWithTimeout wraps fetch with an AbortController timeout so mobile
@@ -1054,6 +1251,9 @@ async function switchProfileTab(tab) {
   if (tab === "ops" && isAdmin()) {
     await loadOpsAdmin();
     PROFILE_OPS_LOADED = true;
+  }
+  if (tab === "sso" && typeof loadProfileSSOBindings === "function") {
+    await loadProfileSSOBindings();
   }
 }
 async function saveProfile() {
@@ -1351,17 +1551,24 @@ function openUserEdit(user) {
   const isNew = !user;
   $("userEditTitle").textContent = isNew ? I18N.t("ui.new_user") : I18N.t("ui.edit_user") + user.username;
   const roleOpts = ["admin", "operator", "viewer"].map(r => `<option value="${r}" ${user && user.role === r ? "selected" : ""}>${roleLabel(r)}</option>`).join("");
+  const folders = user ? (user.allowed_folder_ids || []).join(",") : "";
+  const hosts = user ? (user.allowed_host_ids || []).join(",") : "";
+  const tags = user ? (user.allowed_tags || []).join(",") : "";
   $("userEditBody").innerHTML = `
     ${isNew ? `<div class="field"><label>${I18N.t("form.username")}</label><input type="text" id="ueName" placeholder="${I18N.t('form.username_format')}"></div>
     <div class="field"><label>${I18N.t("form.initial_password")}</label><input type="password" id="uePass"></div>` : ""}
     <div class="field"><label>${I18N.t("form.display_name")}</label><input type="text" id="ueDisplay" value="${user ? esc(user.display_name || "") : ""}" placeholder="${I18N.t('form.hint_display_name')}"></div>
     <div class="field"><label>${I18N.t("form.email_optional")}</label><input type="text" id="ueEmail" value="${user ? esc(user.email || "") : ""}" placeholder="name@example.com"></div>
     <div class="field"><label>${I18N.t("form.role")}</label><div class="select-wrap"><select id="ueRole">${roleOpts}</select></div></div>
+    ${!isNew ? `<div class="field"><label>授权主机组文件夹 ID（逗号分隔，空=不限）</label><input type="text" id="ueFolders" class="mono" value="${esc(folders)}" placeholder="hf-xxxx"></div>
+    <div class="field"><label>授权主机 ID（逗号分隔，空=不限）</label><input type="text" id="ueHosts" class="mono" value="${esc(hosts)}"></div>
+    <div class="field"><label>授权标签/分类（逗号分隔）</label><input type="text" id="ueTags" value="${esc(tags)}" placeholder="生产,DB"></div>` : ""}
     <div class="login-err" id="ueErr"></div>
     <div class="mfa-foot"><button class="btn primary" id="ueSave" type="button">${isNew ? I18N.t("ui.create_user") : I18N.t("ui.save")}</button></div>`;
   $("userEditMask").classList.add("show");
   $("ueSave").onclick = async () => {
     const errEl = $("ueErr"); errEl.textContent = "";
+    const splitCSV = (id) => (($(id) || {}).value || "").split(",").map(s => s.trim()).filter(Boolean);
     const body = { display_name: $("ueDisplay").value.trim(), email: $("ueEmail").value.trim(), role: $("ueRole").value };
     let r;
     if (isNew) {
@@ -1369,6 +1576,10 @@ function openUserEdit(user) {
       body.password = $("uePass").value;
       r = await fetch(`${API}/users`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     } else {
+      body.scope_set = true;
+      body.allowed_folder_ids = splitCSV("ueFolders");
+      body.allowed_host_ids = splitCSV("ueHosts");
+      body.allowed_tags = splitCSV("ueTags");
       r = await fetch(`${API}/users/${encodeURIComponent(user.username)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     }
     const j = await r.json().catch(() => ({}));

@@ -75,6 +75,14 @@ func (a *Agent) runModule(payload string) ([]byte, int) {
 		return moduleDockerStats()
 	case "kube_get":
 		return moduleKubeGet(mc.Args)
+	case "hyperv_power":
+		return moduleHyperVPower(mc.Args)
+	case "hyperv_set":
+		return moduleHyperVSet(mc.Args)
+	case "container_action":
+		return moduleContainerAction(mc.Args)
+	case "container_logs":
+		return moduleContainerLogs(mc.Args)
 	case "time_sync":
 		return moduleTimeSync()
 	case "users_logged":

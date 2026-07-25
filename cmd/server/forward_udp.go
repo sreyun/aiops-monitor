@@ -35,6 +35,11 @@ func (s *Server) serveForwardUDP(rule *forwardRule) {
 		if err != nil {
 			return // packetConn 已关闭
 		}
+		enabled, _, nets := rule.whitelistSnapshot()
+		if !clientAllowed(enabled, nets, clientAddr) {
+			slog.Debug("转发 UDP 来源 IP 被白名单拒绝", "rule", rule.id, "remote", clientAddr.String(), "listen", rule.listenAddr)
+			continue
+		}
 		data := make([]byte, n)
 		copy(data, buf[:n])
 		key := clientAddr.String()

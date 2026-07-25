@@ -184,6 +184,11 @@ func encryptConfigSecrets(c *ServerConfig) {
 	c.AI.WeKnoraAPIKey = encryptSecret(c.AI.WeKnoraAPIKey)
 	c.RelaySecret = encryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = encryptSecret(c.Dingtalk.Secret)
+	c.OIDC.ClientSecret = encryptSecret(c.OIDC.ClientSecret)
+	c.SSO.Feishu.AppSecret = encryptSecret(c.SSO.Feishu.AppSecret)
+	c.SSO.Dingtalk.AppSecret = encryptSecret(c.SSO.Dingtalk.AppSecret)
+	c.SSO.Wechat.AppSecret = encryptSecret(c.SSO.Wechat.AppSecret)
+	c.SSO.Wecom.AppSecret = encryptSecret(c.SSO.Wecom.AppSecret)
 	c.CustomWebhook.Headers = encryptSecret(c.CustomWebhook.Headers)
 	c.Account.MFASecret = encryptSecret(c.Account.MFASecret)
 	for i := range c.Users {
@@ -210,6 +215,10 @@ func encryptConfigSecrets(c *ServerConfig) {
 		}
 	}
 	c.PromWriteToken = encryptSecret(c.PromWriteToken)
+	for i := range c.K8sClusters {
+		c.K8sClusters[i].Token = encryptSecret(c.K8sClusters[i].Token)
+		c.K8sClusters[i].KubeconfigYAML = encryptSecret(c.K8sClusters[i].KubeconfigYAML)
+	}
 }
 
 // decryptConfigSecrets reverses encryptConfigSecrets, restoring plaintext in the
@@ -223,6 +232,11 @@ func decryptConfigSecrets(c *ServerConfig) {
 	c.AI.WeKnoraAPIKey = decryptSecret(c.AI.WeKnoraAPIKey)
 	c.RelaySecret = decryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = decryptSecret(c.Dingtalk.Secret)
+	c.OIDC.ClientSecret = decryptSecret(c.OIDC.ClientSecret)
+	c.SSO.Feishu.AppSecret = decryptSecret(c.SSO.Feishu.AppSecret)
+	c.SSO.Dingtalk.AppSecret = decryptSecret(c.SSO.Dingtalk.AppSecret)
+	c.SSO.Wechat.AppSecret = decryptSecret(c.SSO.Wechat.AppSecret)
+	c.SSO.Wecom.AppSecret = decryptSecret(c.SSO.Wecom.AppSecret)
 	c.CustomWebhook.Headers = decryptSecret(c.CustomWebhook.Headers)
 	c.Account.MFASecret = decryptSecret(c.Account.MFASecret)
 	for i := range c.Users {
@@ -247,4 +261,8 @@ func decryptConfigSecrets(c *ServerConfig) {
 		}
 	}
 	c.PromWriteToken = decryptSecret(c.PromWriteToken)
+	for i := range c.K8sClusters {
+		c.K8sClusters[i].Token = decryptSecret(c.K8sClusters[i].Token)
+		c.K8sClusters[i].KubeconfigYAML = decryptSecret(c.K8sClusters[i].KubeconfigYAML)
+	}
 }

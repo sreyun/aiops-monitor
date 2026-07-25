@@ -193,11 +193,25 @@ func keepIfBlank(newv, oldv string) string {
 	return newv
 }
 
+// smsSafeVarMax 是阿里云短信模板变量单字段上限（字符）。此前用 45 会截断主机 IP 与异常详情。
+// 官方模板变量通常可到数百字；500 足以完整承载「主机+IP+类型+异常+时间」，仍远低于短信计费分段上限。
+const smsSafeVarMax = 500
+
+// voiceSafeVarMax 语音 TTS 模板变量更短一些，避免部分模板拒收过长变量。
+const voiceSafeVarMax = 300
+
 // smsSafeVar 清洗要塞进短信模板变量的文本，使其符合阿里云短信内容审核。
 // 阿里云对变量内容有严格限制：不支持 emoji、换行、【】（签名专用）及多数特殊符号，
 // 且单个变量长度有限——否则报 isv.UNSUPPORTED_SMS_CONTENT。这里：换行/制表→空格，
-// 只保留 中文/字母/数字/常用标点，丢弃 emoji 等其它符号，折叠空白并截断到 45 字。
+// 只保留 中文/字母/数字/常用标点，丢弃 emoji 等其它符号，折叠空白并截断到 smsSafeVarMax。
 func smsSafeVar(s string) string {
+	return smsSafeVarN(s, smsSafeVarMax)
+}
+
+func smsSafeVarN(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = smsSafeVarMax
+	}
 	s = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
 	var b strings.Builder
 	for _, r := range s {
@@ -206,15 +220,15 @@ func smsSafeVar(s string) string {
 			r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
 			unicode.Is(unicode.Han, r):
 			b.WriteRune(r)
-		case strings.ContainsRune("，。：；、！？（）().,:;-/_%", r):
+		case strings.ContainsRune("，。：；、！？（）().,:;-/_%+@", r):
 			b.WriteRune(r)
 		default:
 			// 丢弃 emoji / 其它特殊符号（如 ✅ ★ 【 】）
 		}
 	}
 	out := strings.Join(strings.Fields(b.String()), " ") // 折叠多余空白
-	if rs := []rune(out); len(rs) > 45 {                 // 单变量保守长度上限
-		out = string(rs[:45])
+	if rs := []rune(out); len(rs) > maxRunes {
+		out = string(rs[:maxRunes])
 	}
 	return out
 }

@@ -88,7 +88,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			"claimed", shortID(req.HostID), "canonical", shortID(canonical), "hostname", req.Hostname)
 		hostID = canonical
 	}
+	// Count install-token uses only for truly new hosts (not fingerprint rejoin).
+	isNew := false
+	if _, existed := s.store.GetHost(hostID); !existed {
+		isNew = true
+	}
 	s.store.RegisterHost(hostID, req.Hostname, req.Fingerprint)
+	if isNew && req.Token != "" {
+		s.cfg.ConsumeInstallTokenUse(req.Token)
+	}
 	resp := map[string]any{
 		"status": "ok",
 		// Agent 会改用这个 id：与请求里的不同即表示"你其实是这台老主机"。

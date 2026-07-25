@@ -16,7 +16,7 @@ import (
 const (
 	hostInspectCap       = 100
 	hostInspectOutCap    = 2 << 20 // 2 MiB JSON reports
-	hostInspectTimeout   = 120
+	hostInspectTimeout   = 180
 	hostInspectConcLimit = 8
 )
 
@@ -54,10 +54,49 @@ type hostInspectManager struct {
 	mu      sync.RWMutex
 	batches []*hostInspectBatch
 	seq     atomic.Uint64
+	persist func([]*hostInspectBatch) // optional PG persist hook
 }
 
 func newHostInspectManager() *hostInspectManager {
 	return &hostInspectManager{}
+}
+
+func (m *hostInspectManager) setPersist(fn func([]*hostInspectBatch)) {
+	m.mu.Lock()
+	m.persist = fn
+	m.mu.Unlock()
+}
+
+func (m *hostInspectManager) importBatches(list []*hostInspectBatch) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(list) == 0 {
+		return
+	}
+	m.batches = list
+	if len(m.batches) > hostInspectCap {
+		m.batches = m.batches[:hostInspectCap]
+	}
+}
+
+func (m *hostInspectManager) snapshot() []*hostInspectBatch {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*hostInspectBatch, len(m.batches))
+	for i, b := range m.batches {
+		out[i] = cloneInspectBatch(b)
+	}
+	return out
+}
+
+func (m *hostInspectManager) persistAsync() {
+	m.mu.RLock()
+	fn := m.persist
+	m.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	go fn(m.snapshot())
 }
 
 func (m *hostInspectManager) list() []*hostInspectBatch {
@@ -83,22 +122,23 @@ func (m *hostInspectManager) get(id string) (*hostInspectBatch, bool) {
 
 func (m *hostInspectManager) add(b *hostInspectBatch) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.batches = append([]*hostInspectBatch{b}, m.batches...)
 	if len(m.batches) > hostInspectCap {
 		m.batches = m.batches[:hostInspectCap]
 	}
+	m.mu.Unlock()
+	m.persistAsync()
 }
 
 func (m *hostInspectManager) updateItem(batchID string, idx int, item hostInspectItem, bumpCounts bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	changed := false
 	for _, b := range m.batches {
 		if b.ID != batchID {
 			continue
 		}
 		if idx < 0 || idx >= len(b.Items) {
-			return
+			break
 		}
 		b.Items[idx] = item
 		if bumpCounts {
@@ -114,20 +154,26 @@ func (m *hostInspectManager) updateItem(batchID string, idx int, item hostInspec
 				b.ErrCount++
 			}
 		}
-		return
+		changed = true
+		break
+	}
+	m.mu.Unlock()
+	if changed {
+		m.persistAsync()
 	}
 }
 
 func (m *hostInspectManager) finish(batchID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, b := range m.batches {
 		if b.ID == batchID {
 			b.Status = "done"
 			b.FinishedAt = time.Now().Unix()
-			return
+			break
 		}
 	}
+	m.mu.Unlock()
+	m.persistAsync()
 }
 
 func cloneInspectBatch(b *hostInspectBatch) *hostInspectBatch {
@@ -164,6 +210,7 @@ func (s *Server) handleRunHostInspect(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HostIDs    []string `json:"host_ids"`
 		TimeoutSec int      `json:"timeout_sec"`
+		Profile    string   `json:"profile"` // quick | standard | deep
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -173,8 +220,20 @@ func (s *Server) handleRunHostInspect(w http.ResponseWriter, r *http.Request) {
 	if timeout < 30 {
 		timeout = hostInspectTimeout
 	}
-	if timeout > 300 {
-		timeout = 300
+	if timeout > 600 {
+		timeout = 600
+	}
+	profile := strings.ToLower(strings.TrimSpace(req.Profile))
+	switch profile {
+	case "quick", "fast":
+		profile = "quick"
+	case "deep", "full":
+		profile = "deep"
+		if timeout < 240 {
+			timeout = 240
+		}
+	default:
+		profile = "standard"
 	}
 
 	offlineSec := int64(s.cfg.Thresholds().OfflineAfter.Seconds())
@@ -201,8 +260,17 @@ func (s *Server) handleRunHostInspect(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() {
+		filtered := make([]*Host, 0, len(targets))
+		for _, h := range targets {
+			if s.userCanAccessHost(u, h.ID) {
+				filtered = append(filtered, h)
+			}
+		}
+		targets = filtered
+	}
 	if len(targets) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可巡检的主机（请选择在线主机）"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可体检的主机（请选择在线且已授权的主机）"})
 		return
 	}
 
@@ -217,16 +285,37 @@ func (s *Server) handleRunHostInspect(w http.ResponseWriter, r *http.Request) {
 		ID: id, Operator: s.actorName(r), Status: "running",
 		StartedAt: time.Now().Unix(), HostCount: len(targets), Items: items,
 	}
+
 	s.inspect.add(batch)
 
-	go s.runHostInspectBatch(batch.ID, targets, timeout)
+	go s.runHostInspectBatch(batch.ID, targets, timeout, profile)
 	writeJSON(w, http.StatusAccepted, batch)
 }
 
-func (s *Server) runHostInspectBatch(batchID string, hosts []*Host, timeoutSec int) {
+// handleCompareHostInspect returns two finished batches for side-by-side history compare.
+func (s *Server) handleCompareHostInspect(w http.ResponseWriter, r *http.Request) {
+	aID := r.URL.Query().Get("a")
+	bID := r.URL.Query().Get("b")
+	if aID == "" || bID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要查询参数 a 与 b（两个批次 ID）"})
+		return
+	}
+	a, okA := s.inspect.get(aID)
+	b, okB := s.inspect.get(bID)
+	if !okA || !okB {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "体检批次不存在"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"a": a, "b": b})
+}
+
+func (s *Server) runHostInspectBatch(batchID string, hosts []*Host, timeoutSec int, profile string) {
 	sem := make(chan struct{}, hostInspectConcLimit)
 	var wg sync.WaitGroup
-	cmd := buildModuleCommand("host_inspect", nil, nil)
+	if profile == "" {
+		profile = "standard"
+	}
+	cmd := buildModuleCommand("host_inspect", map[string]string{"profile": profile}, nil)
 	for i, h := range hosts {
 		wg.Add(1)
 		sem <- struct{}{}

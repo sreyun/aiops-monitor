@@ -218,13 +218,14 @@ func detectKysec() *SecurityModule {
 }
 
 // detectSELinux checks for SELinux via /sys/fs/selinux/enforce.
+// enforce=0 means permissive (policy loaded but not blocking), not "disabled".
 func detectSELinux() *SecurityModule {
 	b, err := os.ReadFile("/sys/fs/selinux/enforce")
 	if err != nil {
 		return nil
 	}
 	val := strings.TrimSpace(string(b))
-	status := "disabled"
+	status := "permissive"
 	if val == "1" {
 		status = "enforcing"
 	}
@@ -435,8 +436,9 @@ func securityFixCommands(modules []SecurityModule) []string {
 			)
 		case "selinux":
 			cmds = append(cmds,
-				"sudo setenforce 0                      # 临时关闭 SELinux",
-				"sudo semodule -i aiops-agent.pp        # 加载 Agent SELinux 策略模块",
+				"sudo setenforce 0                      # 临时切换 SELinux 为 permissive",
+				"sudo ausearch -m avc -ts recent | grep aiops-agent   # 查看拒绝日志",
+				"# 长期方案：按 AVC 拒绝日志编写本地 SELinux 策略模块（本发行版不附带预置 .pp）",
 			)
 		case "apparmor":
 			cmds = append(cmds,
@@ -444,7 +446,8 @@ func securityFixCommands(modules []SecurityModule) []string {
 			)
 		case "firewalld":
 			cmds = append(cmds,
-				"sudo firewall-cmd --permanent --add-port=8529/tcp && sudo firewall-cmd --reload",
+				"# Agent 主动出站连服务端；若出站被限制，放行到监控中心的 TCP 端口（默认 8529）",
+				"sudo firewall-cmd --permanent --add-rich-rule='rule family=ipv4 destination address=<server-ip> port port=8529 protocol=tcp accept' && sudo firewall-cmd --reload",
 			)
 		}
 	}

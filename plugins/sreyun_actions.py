@@ -79,25 +79,37 @@ def clear_cache(host_id: str, args: dict) -> str:
 
 
 def scale_pods(host_id: str, args: dict) -> str:
-    """扩缩容 Kubernetes Pods"""
+    """扩缩容 Kubernetes Deployment（经服务端 API，不再调用本机 kubectl）。
+
+    推荐参数：cluster_id, deployment|name, namespace, replicas。
+    也可设环境变量 AIOPS_URL + AIOPS_TOKEN（或 Cookie 会话由外部注入）。
+    优先请 Sreyun 直接调用内置工具 k8s_scale。
+    """
     replicas = args.get("replicas", 1)
-    deployment = args.get("deployment", "")
+    deployment = args.get("deployment") or args.get("name") or ""
     namespace = args.get("namespace", "default")
+    cluster_id = args.get("cluster_id") or args.get("cluster") or ""
     if not deployment:
         return "错误：请指定 deployment 名称"
+    if not cluster_id:
+        return ("错误：请指定 cluster_id（面板「资源→K8s→集群配置」中的集群 ID）。"
+                "本动作已改为调用服务端 /api/v1/k8s/.../scale，不再使用本机 kubectl。"
+                "也可让助手直接调用工具 k8s_scale。")
+    base = (os.environ.get("AIOPS_URL") or os.environ.get("AIOPS_PUBLIC_URL") or "http://127.0.0.1:8529").rstrip("/")
+    token = os.environ.get("AIOPS_TOKEN") or os.environ.get("AIOPS_API_TOKEN") or ""
+    url = f"{base}/api/v1/k8s/clusters/{cluster_id}/deployments/{namespace}/{deployment}/scale"
     try:
-        result = subprocess.run(
-            ["kubectl", "scale", f"deployment/{deployment}",
-             f"--replicas={replicas}", f"-n", namespace],
-            capture_output=True, text=True, timeout=30
+        import urllib.request
+        req = urllib.request.Request(
+            url, data=json.dumps({"replicas": int(replicas)}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})},
+            method="POST",
         )
-        if result.returncode == 0:
-            return f"Deployment {deployment} 已扩容到 {replicas} 个副本"
-        return f"扩容失败：{result.stderr.strip()}"
-    except subprocess.TimeoutExpired:
-        return f"扩容 {deployment} 超时"
-    except FileNotFoundError:
-        return "kubectl 不可用，请确认已安装并配置"
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return f"Deployment {namespace}/{deployment} Scale 已提交（cluster={cluster_id}）：{body}"
+    except Exception as e:
+        return f"扩容失败：{e}（也可改用 Sreyun 工具 k8s_scale）"
 
 
 def check_service_status(host_id: str, args: dict) -> str:

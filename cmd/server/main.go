@@ -55,15 +55,17 @@ func resolveDist(flagVal string) string {
 	return "dist"
 }
 
+var expectedAgentDistNames = []string{
+	"aiops-agent.exe",
+	"aiops-agent-linux-amd64", "aiops-agent-linux-arm64",
+	"aiops-agent-darwin-arm64", "aiops-agent-darwin-amd64",
+}
+
 func hasAgentBinary(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	for _, n := range []string{
-		"aiops-agent.exe",
-		"aiops-agent-linux-amd64", "aiops-agent-linux-arm64",
-		"aiops-agent-darwin-arm64", "aiops-agent-darwin-amd64",
-	} {
+	for _, n := range expectedAgentDistNames {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
 			return true
 		}
@@ -71,10 +73,27 @@ func hasAgentBinary(dir string) bool {
 	return false
 }
 
+// listMissingAgentDist returns names from expectedAgentDistNames that are absent
+// under dir — used at startup so a slim/dev image without macOS/Windows agents
+// surfaces a clear warning instead of a cryptic install.sh 404.
+func listMissingAgentDist(dir string) []string {
+	if dir == "" {
+		return append([]string(nil), expectedAgentDistNames...)
+	}
+	var missing []string
+	for _, n := range expectedAgentDistNames {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
+
 // corsMiddleware allows the dashboard (or external tools) to call the API
 // cross-origin and short-circuits preflight OPTIONS requests.
-// When CORSOrigins is configured, only matching Origin headers are echoed;
-// otherwise the legacy wildcard "*" is used for backward compatibility.
+// When CORSOrigins is configured, only matching Origin headers are echoed.
+// When empty, no Access-Control-Allow-Origin is set (same-origin only) —
+// the previous wildcard "*" was removed for enterprise CSRF hardening.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origins := s.cfg.CORSOrigins()
@@ -85,16 +104,14 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 					if strings.TrimSpace(o) == origin {
 						w.Header().Set("Access-Control-Allow-Origin", origin)
 						w.Header().Set("Vary", "Origin")
+						w.Header().Set("Access-Control-Allow-Credentials", "true")
 						break
 					}
 				}
 			}
-			// Origin absent or not in whitelist → no CORS headers → browser blocks.
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -370,7 +387,9 @@ func main() {
 	go server.runDutyReportLoop()               // daily AI duty morning report → message center
 	go server.vm.run()                          // optional VictoriaMetrics remote-write pump
 
-	handler := securityHeadersMiddleware(server.corsMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))
+	logProductionSecurityBaseline(cfg)
+	store.onAudit = server.exportAuditEntry
+	handler := securityHeadersMiddleware(server.corsMiddleware(server.csrfOriginMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes()))))))
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,
@@ -408,6 +427,11 @@ func main() {
 	slog.Info("存储后端", "relational", "PostgreSQL", "timeseries", "VictoriaMetrics", "note", "内置 aiops.db 已停用")
 	if hasAgentBinary(dist) {
 		slog.Info(Tz("server.dist_dir"), "path", dist, "note", Tz("server.dist_ok"))
+		if miss := listMissingAgentDist(dist); len(miss) > 0 {
+			slog.Warn("dist 缺少部分平台 Agent，对应系统一键安装会 404",
+				"missing", strings.Join(miss, ","),
+				"hint", "请用生产 Dockerfile 或已含全平台交叉编译的 Dockerfile.dev 重建 aiops-server")
+		}
 	} else {
 		slog.Warn(Tz("server.dist_missing"))
 	}

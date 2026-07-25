@@ -57,6 +57,7 @@ type Server struct {
 	pg          *pgStore            // PostgreSQL persistence (optional, for pgvector/RAG)
 	sreyun      *SreyunCore         // Sreyun Agent (autonomous SRE agent)
 	aiStats     *aiStatsHub         // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
+	aiGov       *aiGovHub           // AI 治理：配额 + 写工具审计
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
 	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
@@ -91,6 +92,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
 		aiStats:     newAIStatsHub(),
+		aiGov:       newAIGovHub(),
 	}
 	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
@@ -200,6 +202,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config", s.handleSetConfig)
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
+	mux.HandleFunc("GET /api/v1/config/threshold-presets", s.handleThresholdPresets)
 	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
 	// NOTE: POST /api/v1/login/sms-code removed — SMS login is not yet implemented.
 	// Re-register when the SMS sending backend is wired.
@@ -265,8 +268,10 @@ func (s *Server) Routes() http.Handler {
 	// 仪表盘：自定义 + 导入 Grafana，面板查询走 VM
 	mux.HandleFunc("GET /api/v1/dashboards", s.handleListDashboards)
 	mux.HandleFunc("POST /api/v1/dashboards", s.handleUpsertDashboard)
+	mux.HandleFunc("GET /api/v1/dashboards/assets/{dashID}/{name}", s.handleGetDashboardAsset)
 	mux.HandleFunc("GET /api/v1/dashboards/{id}", s.handleGetDashboard)
 	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", s.handleDeleteDashboard)
+	mux.HandleFunc("POST /api/v1/dashboards/{id}/assets", s.handleUploadDashboardAsset)
 	mux.HandleFunc("POST /api/v1/dashboards/query", s.handleDashboardQuery)
 	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
 	mux.HandleFunc("POST /api/v1/dashboards/query-logs", s.handleDashboardQueryLogs)
@@ -293,6 +298,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks/executions/by-id/{id}", s.handleGetExecution)
 	// Host deep inspect (linux_inspect-style, agent module host_inspect)
 	mux.HandleFunc("GET /api/v1/host-inspect", s.handleListHostInspect)
+	mux.HandleFunc("GET /api/v1/host-inspect/compare", s.handleCompareHostInspect)
 	mux.HandleFunc("GET /api/v1/host-inspect/{id}", s.handleGetHostInspect)
 	mux.HandleFunc("POST /api/v1/host-inspect/run", s.handleRunHostInspect)
 	// SRE workflow: incidents / auto-remediation / SLOs / work orders
@@ -366,6 +372,27 @@ func (s *Server) Routes() http.Handler {
 	// AI: config + inspection + incident diagnosis
 	mux.HandleFunc("GET /api/v1/ai/config", s.handleGetAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/config", s.handleSetAIConfig)
+	mux.HandleFunc("GET /api/v1/ai/tool-audit", s.handleListAIToolAudit)
+	mux.HandleFunc("GET /api/v1/audit-export", s.handleGetAuditExport)
+	mux.HandleFunc("POST /api/v1/audit-export", s.handleSetAuditExport)
+	mux.HandleFunc("GET /api/v1/auth/oidc/config", s.handleGetOIDCConfig)
+	mux.HandleFunc("POST /api/v1/auth/oidc/config", s.handleSetOIDCConfig)
+	mux.HandleFunc("GET /api/v1/auth/oidc/info", s.handleOIDCLoginInfo)
+	mux.HandleFunc("GET /api/v1/auth/oidc/login", s.handleOIDCLogin)
+	mux.HandleFunc("GET /api/v1/auth/oidc/callback", s.handleOIDCCallback)
+	mux.HandleFunc("GET /api/v1/auth/sso/config", s.handleGetSSOConfig)
+	mux.HandleFunc("POST /api/v1/auth/sso/config", s.handleSetSSOConfig)
+	mux.HandleFunc("GET /api/v1/auth/sso/info", s.handleSSOLoginInfo)
+	mux.HandleFunc("GET /api/v1/auth/feishu/login", s.handleSSOLogin)
+	mux.HandleFunc("GET /api/v1/auth/feishu/callback", s.handleSSOCallback)
+	mux.HandleFunc("GET /api/v1/auth/dingtalk/login", s.handleSSOLogin)
+	mux.HandleFunc("GET /api/v1/auth/dingtalk/callback", s.handleSSOCallback)
+	mux.HandleFunc("GET /api/v1/auth/wechat/login", s.handleSSOLogin)
+	mux.HandleFunc("GET /api/v1/auth/wechat/callback", s.handleSSOCallback)
+	mux.HandleFunc("GET /api/v1/auth/wecom/login", s.handleSSOLogin)
+	mux.HandleFunc("GET /api/v1/auth/wecom/callback", s.handleSSOCallback)
+	mux.HandleFunc("GET /api/v1/auth/sso/identities", s.handleListSSOIdentities)
+	mux.HandleFunc("DELETE /api/v1/auth/sso/identities/{provider}", s.handleUnbindSSOIdentity)
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
@@ -445,6 +472,21 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/datasources/{id}", s.handleDataSourceDelete)
 	mux.HandleFunc("POST /api/v1/datasources/{id}/query", s.handleDataSourceQuery)
 	mux.HandleFunc("GET /api/v1/datasources/{id}/labels", s.handleDataSourceLabels)
+	mux.HandleFunc("GET /api/v1/k8s/clusters", s.handleListK8sClusters)
+	mux.HandleFunc("POST /api/v1/k8s/clusters", s.handleUpsertK8sCluster)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}", s.handleGetK8sCluster)
+	mux.HandleFunc("PUT /api/v1/k8s/clusters/{id}", s.handleUpsertK8sCluster)
+	mux.HandleFunc("DELETE /api/v1/k8s/clusters/{id}", s.handleDeleteK8sCluster)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/test", s.handleTestK8sCluster)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/overview", s.handleK8sOverview)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/namespaces", s.handleK8sNamespaces)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/nodes", s.handleK8sNodes)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/pods", s.handleK8sPods)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/deployments", s.handleK8sDeployments)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/events", s.handleK8sEvents)
+	mux.HandleFunc("GET /api/v1/k8s/clusters/{id}/pods/{ns}/{name}/log", s.handleK8sPodLog)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/scale", s.handleK8sScaleDeployment)
+	mux.HandleFunc("POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/restart", s.handleK8sRestartDeployment)
 	// HTTP proxy auth token for window.open() scenarios
 	mux.HandleFunc("GET /api/v1/proxy-token", s.handleProxyToken)
 	// HTTP proxy: support all methods (GET/POST/PUT/DELETE/PATCH)
@@ -479,6 +521,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hyperv/events", s.handleHyperVEvents)
 	mux.HandleFunc("POST /api/v1/hyperv/cleanup-duplicates", s.handleCleanupHyperVDuplicates)
 	mux.HandleFunc("DELETE /api/v1/hyperv/{hostID}", s.handleDeleteHyperV)
+	mux.HandleFunc("POST /api/v1/hyperv/{hostID}/guests/{vmID}/power", s.handleHyperVPower)
+	mux.HandleFunc("POST /api/v1/hyperv/{hostID}/guests/{vmID}/config", s.handleHyperVConfig)
+	mux.HandleFunc("POST /api/v1/agent/containers", s.handleAgentContainers)
+	mux.HandleFunc("GET /api/v1/containers/list", s.handleContainerList)
+	mux.HandleFunc("POST /api/v1/containers/{hostID}/{id}/action", s.handleContainerAction)
+	mux.HandleFunc("GET /api/v1/containers/{hostID}/{id}/logs", s.handleContainerLogs)
 	mux.HandleFunc("GET /api/v1/netflow/hosts", s.handleNetFlowHosts)
 	mux.HandleFunc("GET /api/v1/netflow/summary", s.handleNetFlowSummary)
 	mux.HandleFunc("GET /api/v1/netflow/ip-history", s.handleNetFlowIPHistory)
@@ -493,6 +541,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/meta", s.handleHostsMeta)
 	mux.HandleFunc("GET /api/v1/install/info", s.handleInstallInfo)
 	mux.HandleFunc("POST /api/v1/install/reset-token", s.handleResetToken)
+	mux.HandleFunc("POST /api/v1/install/revoke-token", s.handleRevokeInstallToken)
+	mux.HandleFunc("POST /api/v1/install/token-policy", s.handleSetInstallTokenPolicy)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript)
 	mux.HandleFunc("GET /install-relay.sh", s.handleRelayInstallScript)
@@ -533,7 +583,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "netflow", "snmp", "content-audit", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "apimon", "governance", "datasource", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-center", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

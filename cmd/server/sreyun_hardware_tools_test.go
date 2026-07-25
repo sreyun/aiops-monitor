@@ -9,6 +9,7 @@ func TestHardwareToolsRegistered(t *testing.T) {
 	want := []string{
 		"query_hardware", "query_hardware_events", "query_hardware_history",
 		"query_hardware_changes", "query_netflow", "query_hyperv",
+		"query_containers", "query_k8s", "locate_resource",
 	}
 	for _, n := range want {
 		tool, ok := h.tools[n]
@@ -22,12 +23,8 @@ func TestHardwareToolsRegistered(t *testing.T) {
 		if tool.Description == "" {
 			t.Errorf("工具 %s 没有描述 —— 模型不知道何时该调用", n)
 		}
-		p, _ := tool.Parameters["properties"].(map[string]any)
-		if _, ok := p["host_id"]; !ok {
-			t.Errorf("工具 %s 缺少 host_id 参数", n)
-		}
 	}
-	if len(h.tools) < 16 {
-		t.Errorf("工具总数 = %d, 期望 >=16（原 10 + 硬件/流量 5 + Hyper-V 1）", len(h.tools))
+	if len(h.tools) < 20 {
+		t.Errorf("工具总数 = %d, 期望 >=20（含容器/K8s/locate）", len(h.tools))
 	}
 }

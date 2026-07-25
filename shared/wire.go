@@ -434,6 +434,29 @@ type HyperVCheckpoint struct {
 	ParentName string `json:"parent,omitempty"`
 }
 
+// ContainerInfo is one Docker/Podman container on a managed host.
+type ContainerInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image,omitempty"`
+	Status  string `json:"status,omitempty"` // Up / Exited / created …
+	State   string `json:"state,omitempty"`  // running / exited / …
+	Ports   string `json:"ports,omitempty"`
+	Created string `json:"created,omitempty"`
+	Runtime string `json:"runtime,omitempty"` // docker | podman
+}
+
+// ContainerReport is the payload agents POST for host container inventory.
+type ContainerReport struct {
+	HostID      string          `json:"host_id"`
+	Fingerprint string          `json:"fingerprint,omitempty"`
+	Timestamp   int64           `json:"timestamp"`
+	HostName    string          `json:"host_name,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Runtime     string          `json:"runtime,omitempty"`
+	Containers  []ContainerInfo `json:"containers"`
+}
+
 // HyperVReport is the payload agents POST for the Hyper-V guest inventory of one
 // physical host. Error carries a collection failure (e.g. Get-VM unavailable) so
 // the server can surface it without overwriting the last good inventory.

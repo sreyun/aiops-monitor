@@ -73,6 +73,13 @@ type AIConfig struct {
 	InputPricePer1M  float64 `json:"input_price_per_1m,omitempty"`
 	OutputPricePer1M float64 `json:"output_price_per_1m,omitempty"`
 	CostCurrency     string  `json:"cost_currency,omitempty"` // CNY | USD …
+	// ---- AI 治理（商业级最小集）----
+	// DailyQuotaPerUser：每用户每日 Assist/对话调用上限；0=不限制。
+	DailyQuotaPerUser int `json:"daily_quota_per_user,omitempty"`
+	// WriteToolsRequireApproval：写工具默认需审批（与 hermes_auto_approve 互补；开启时强制阻断自动写）。
+	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
+	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
+	RedactSensitiveFields bool `json:"redact_sensitive_fields,omitempty"`
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be
@@ -84,9 +91,12 @@ const (
 	aiProvAnthropic                       // Anthropic Messages API（Claude，直连 api.anthropic.com 或百炼 /apps/anthropic）
 )
 
-// isBailianEndpoint reports whether the endpoint targets Alibaba Bailian (DashScope).
+// isBailianEndpoint reports whether the endpoint targets Alibaba Bailian / Model Studio / MaaS.
 func isBailianEndpoint(endpoint string) bool {
-	return strings.Contains(endpoint, "dashscope.aliyuncs.com")
+	ep := strings.ToLower(endpoint)
+	return strings.Contains(ep, "dashscope.aliyuncs.com") ||
+		strings.Contains(ep, "maas.aliyuncs.com") ||
+		strings.Contains(ep, "dashscope-intl.aliyuncs.com")
 }
 
 // normalizeEndpoint auto-corrects common endpoint mistakes and classifies the
@@ -213,10 +223,15 @@ func aiChat(cfg AIConfig, messages []map[string]string) (string, error) {
 	return text, err
 }
 
-// aiCallOpts 控制单次 LLM 调用的行为覆盖。看板 JSON 生成等结构化任务应关掉深度思考，
-// 否则 Qwen3/R1 等推理模型会先长时间「想」再输出，轻易超过 120s 超时。
+// aiCallOpts 控制单次 LLM 调用的行为覆盖。
+// AI-First：看板任务开启思考（EnableThinking），但必须用 ThinkingBudget 卡住思维链长度，
+// 否则模型会把超时/输出额度耗在「想」上，最终 JSON/正文出不来。
+// 切勿对要求 enable_thinking=true 的网关硬传 false（会直接 HTTP 400）。
 type aiCallOpts struct {
-	DisableThinking bool          // 关闭深度思考 / 思维链（API 开关 + 提示词约束）
+	DisableThinking bool          // 尽量关闭思考（仅提示词；API 不再传 enable_thinking=false）
+	EnableThinking  bool          // 显式开启思考（专业 BI 生成/优化）
+	ThinkingBudget  int           // 思考 token 上限（Qwen/DashScope thinking_budget）；0=不传
+	MaxTokens       int           // 本请求输出上限；0 则回退 cfg.MaxTokens / 默认策略
 	Timeout         time.Duration // 请求超时，0 = 默认 120s
 }
 
@@ -225,10 +240,11 @@ type aiCallOpts struct {
 func thinkingModelOrGateway(cfg AIConfig) bool {
 	m := strings.ToLower(cfg.Model)
 	ep := strings.ToLower(cfg.Endpoint)
-	if isBailianEndpoint(cfg.Endpoint) || strings.Contains(ep, "dashscope") || strings.Contains(ep, "siliconflow") {
+	if isBailianEndpoint(cfg.Endpoint) || strings.Contains(ep, "dashscope") ||
+		strings.Contains(ep, "siliconflow") || strings.Contains(ep, "maas.aliyuncs") {
 		return true
 	}
-	for _, k := range []string{"qwen3", "qwen-3", "qwq", "thinking", "deepseek-r1", "reasoner", "-r1", "o1-", "o3-"} {
+	for _, k := range []string{"qwen3", "qwen-3", "qwen3.", "qwq", "thinking", "deepseek-r1", "reasoner", "-r1", "o1-", "o3-"} {
 		if strings.Contains(m, k) {
 			return true
 		}
@@ -236,15 +252,59 @@ func thinkingModelOrGateway(cfg AIConfig) bool {
 	return false
 }
 
-// applyDisableThinking injects provider knobs that turn off extended thinking.
-// Only applied for gateways/models known to honor them — unknown fields can
-// make strict OpenAI endpoints return 400.
-func applyDisableThinking(reqBody map[string]any, cfg AIConfig, prov aiProviderType) {
+// applyThinkingKnobs 按任务偏好注入思考开关与预算。
+// 重要：部分百炼/Qwen 网关规定 enable_thinking 只能为 true；传 false 会 400。
+// EnableThinking 时显式 true，并尽量带 thinking_budget，避免思维链耗尽超时/输出额度。
+func applyThinkingKnobs(reqBody map[string]any, cfg AIConfig, prov aiProviderType, opts aiCallOpts) {
 	if prov == aiProvAnthropic || !thinkingModelOrGateway(cfg) {
 		return
 	}
-	reqBody["enable_thinking"] = false
-	reqBody["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	if opts.EnableThinking {
+		reqBody["enable_thinking"] = true
+		budget := opts.ThinkingBudget
+		if budget <= 0 {
+			// 看板等结构化任务的安全默认：够用且不会拖死生成
+			budget = 512
+		}
+		if budget > 0 {
+			reqBody["thinking_budget"] = budget
+		}
+		return
+	}
+	// DisableThinking 或默认：省略 enable_thinking 字段（兼容「仅允许 true」与「不识别该字段」两类网关）
+}
+
+// applyOutputTokenLimit 设置本请求 max_tokens：优先 opts，其次全局配置，再按 provider 默认。
+func applyOutputTokenLimit(reqBody map[string]any, cfg AIConfig, prov aiProviderType, opts aiCallOpts) {
+	if opts.MaxTokens > 0 {
+		reqBody["max_tokens"] = opts.MaxTokens
+		return
+	}
+	if cfg.MaxTokens > 0 {
+		reqBody["max_tokens"] = cfg.MaxTokens
+		return
+	}
+	if prov == aiProvAnthropic {
+		reqBody["max_tokens"] = 8192
+		return
+	}
+	// 看板结构化任务未显式设 MaxTokens 时，OpenAI 兼容不强制；其余保持不传。
+	delete(reqBody, "max_tokens")
+}
+
+// thinkingParamForcedTrueError 识别「enable_thinking 只能为 True」类 400，便于自动重试。
+func thinkingParamForcedTrueError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "enable_thinking") {
+		return false
+	}
+	return strings.Contains(s, "restricted to true") ||
+		strings.Contains(s, "must be true") ||
+		(strings.Contains(s, "only") && strings.Contains(s, "true")) ||
+		strings.Contains(s, "restricted to true")
 }
 
 // withNoThinkHint prepends a hard constraint so models that ignore API knobs
@@ -295,7 +355,8 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
-	if opts.DisableThinking {
+	// EnableThinking 优先：质量任务允许深度思考；仅在未启用时才注入「少思考」提示。
+	if opts.DisableThinking && !opts.EnableThinking {
 		messages = withNoThinkHint(messages, cfg)
 	}
 
@@ -344,20 +405,8 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 			reqBody["tool_choice"] = "auto"
 		}
 	}
-	if opts.DisableThinking {
-		applyDisableThinking(reqBody, cfg, prov)
-	}
-
-	// 输出长度默认按所选模型的最大值：OpenAI 兼容不指定 max_tokens（由服务商按模型上限输出，
-	// 现多为很大的上下文/输出窗口）；Anthropic 该字段必填，给一个安全的较大默认。
-	// cfg.MaxTokens>0 才作为显式上限覆盖——UI 不暴露此项，一般无需配置。
-	if cfg.MaxTokens > 0 {
-		reqBody["max_tokens"] = cfg.MaxTokens
-	} else if prov == aiProvAnthropic {
-		reqBody["max_tokens"] = 8192
-	} else {
-		delete(reqBody, "max_tokens")
-	}
+	applyThinkingKnobs(reqBody, cfg, prov, opts)
+	applyOutputTokenLimit(reqBody, cfg, prov, opts)
 
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -391,7 +440,7 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 			if sec <= 0 {
 				sec = 120
 			}
-			return "", nil, fmt.Errorf("AI 响应超时（>%d 秒）。若使用带深度思考的模型，看板生成已尝试关闭思考；也可重试、换更快模型，或检查 Endpoint / 网络。", sec)
+			return "", nil, fmt.Errorf("AI 响应超时（>%d 秒）。深度思考模型耗时更长，可重试、适当增大等待，或检查 Endpoint / 网络。", sec)
 		}
 		return "", nil, fmt.Errorf("网络请求失败：%v（请检查 Endpoint 与网络）", err)
 	}
@@ -631,12 +680,27 @@ func aiComplete(cfg AIConfig, system, user string) (string, error) {
 	return aiCompleteOpts(cfg, system, user, aiCallOpts{})
 }
 
-// aiCompleteOpts is aiComplete with per-call overrides (e.g. disable thinking for JSON tasks).
+// aiCompleteOpts is aiComplete with per-call overrides (thinking / timeout).
+// 若网关强制 enable_thinking=true，自动以 EnableThinking 重试一次（AI-First：优先成功）。
 func aiCompleteOpts(cfg AIConfig, system, user string, opts aiCallOpts) (string, error) {
-	text, _, err := aiChatVOpts(context.Background(), cfg, []map[string]string{
+	msgs := []map[string]string{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
-	}, nil, nil, opts)
+	}
+	text, _, err := aiChatVOpts(context.Background(), cfg, msgs, nil, nil, opts)
+	if err != nil && thinkingParamForcedTrueError(err) && !opts.EnableThinking {
+		retry := opts
+		retry.EnableThinking = true
+		retry.DisableThinking = false
+		if retry.ThinkingBudget <= 0 {
+			retry.ThinkingBudget = 512
+		}
+		if retry.Timeout < 180*time.Second {
+			retry.Timeout = 180 * time.Second
+		}
+		slog.Info("ai retry with enable_thinking=true", "model", cfg.Model, "budget", retry.ThinkingBudget, "err", err.Error())
+		text, _, err = aiChatVOpts(context.Background(), cfg, msgs, nil, nil, retry)
+	}
 	return text, err
 }
 
@@ -741,7 +805,7 @@ func streamChatInnerOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfi
 		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
 		return "", nil
 	}
-	if opts.DisableThinking {
+	if opts.DisableThinking && !opts.EnableThinking {
 		messages = withNoThinkHint(messages, cfg)
 	}
 
@@ -774,9 +838,8 @@ func streamChatInnerOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfi
 		"temperature": 0.2,
 		"stream":      true,
 	}
-	if opts.DisableThinking {
-		applyDisableThinking(reqBody, cfg, prov)
-	}
+	applyThinkingKnobs(reqBody, cfg, prov, opts)
+	applyOutputTokenLimit(reqBody, cfg, prov, opts)
 
 	b, _ := json.Marshal(reqBody)
 	if ctx == nil {

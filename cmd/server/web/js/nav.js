@@ -35,22 +35,7 @@ async function refresh(force) {
       if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
       CONN_STATE = "connected";
     }
-    // Filter hosts by selected folder for overview
-    const matchSet = typeof hostFolderMatchSet === "function" ? hostFolderMatchSet(CUR_FOLDER) : null;
-    const filteredHosts = matchSet
-      ? hosts.filter(h => hostInFolderFilter(h, matchSet))
-      : hosts;
-    // Compute overview stats from filtered hosts
-    if (matchSet) {
-      let online = 0;
-      filteredHosts.forEach(h => { if (h.online) online++; });
-      const filteredAlerts = alerts.filter(a => !a.host_id || filteredHosts.some(h => h.id === a.host_id));
-      s.total_hosts = filteredHosts.length;
-      s.online_hosts = online;
-      s.offline_hosts = filteredHosts.length - online;
-      s.critical_alerts = filteredAlerts.filter(a => a.level === "critical").length;
-      s.warning_alerts = filteredAlerts.filter(a => a.level !== "critical").length;
-    }
+    // 概览不沿用主机树 CUR_FOLDER（首页无树 UI，静默过滤会污染 KPI/TOP）
     // 性能优化：按当前活动视图只渲染其拥有的 DOM，避免每 5s 全量重建隐藏视图（主机网格/TOP/日志/告警列表）
     // 抢占主线程，导致新建/查看/编辑时卡顿。汇总计数、图标、通知与主机元数据仍全局保持最新。
     const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
@@ -61,7 +46,7 @@ async function refresh(force) {
     setTxt("navHosts", hosts.length); setTxt("hostsCount", hosts.length);
     setTxt("navAlerts", alerts.length); setTxt("alertsCount", alerts.length); setTxt("ovAlertsCount", alerts.length);
     setTxt("navLog", activity.length);
-    if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(matchSet ? filteredHosts : hosts); }
+    if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(hosts); }
     if (onOverview || activeView === "alerts") renderAlerts(alerts);
     if (onOverview || activeView === "log") renderLog(activity);
     if (activeView === "hosts") renderHosts(hosts);
@@ -237,7 +222,13 @@ function safeAddEventListener(id, event, handler) {
 // 注：settingsBtn / themeToggle / topbarThemeBtn 已移入右上角用户下拉菜单
 // 侧栏菜单
 safeAddEventListener("saveBtn", "click", saveSettings);
-safeAddEventListener("saveThresholdsBtn", "click", saveThresholds); // 告警阈值 Tab 独立保存
+safeAddEventListener("saveThresholdsBtn", "click", () => saveThresholds()); // 告警阈值 Tab 独立保存
+["thrPresetConservative", "thrPresetStandard", "thrPresetRelaxed"].forEach(id => {
+  safeAddEventListener(id, "click", (e) => {
+    const key = e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.preset : "";
+    if (key) applyThresholdPreset(key);
+  });
+});
 safeAddEventListener("aiExpandBtn", "click", function () { // AI 面板放大↔还原（铺满右侧交互区 / 默认宽度）
   const m = $("aiChatMask"); if (!m) return; // 几何在遮罩容器上，放大切遮罩宽度
   const on = m.classList.toggle("ai-expanded");
@@ -247,6 +238,8 @@ safeAddEventListener("aiExpandBtn", "click", function () { // AI 面板放大↔
 safeAddEventListener("testBtn", "click", testSettings);
 safeAddEventListener("installBtn", "click", openInstall);
 safeAddEventListener("resetTokenBtn", "click", resetToken);
+safeAddEventListener("revokeTokenBtn", "click", revokeInstallToken);
+safeAddEventListener("installTokenPolicyBtn", "click", saveInstallTokenPolicy);
 safeAddEventListener("tokenToggleBtn", "click", function() {
   TOKEN_REVEALED = !TOKEN_REVEALED;
   updateTokenDisplay();
@@ -349,15 +342,20 @@ const PAGE_META = {
   apimon:   { title: "监控", sub: _SUB_MON },
   automation: { title: "编排", sub: I18N.t("section.automation_desc") },
   forward:  { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") },
-  sre:      { title: "诊断", sub: I18N.t("section.sre_desc") },
+  sre:      { title: I18N.t("nav.sre") || "SRE 中枢", sub: I18N.t("section.sre_desc") },
   logs:     { title: "日志", sub: I18N.t("section.logs_desc") },
   log:      { title: "审计日志", sub: I18N.t("section.log_desc") },
   datasource: { title: "数据源", sub: I18N.t("section.datasource_desc") },
-  hardware:  { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
-  hyperv:    { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" },
+  hardware:  { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" },
+  hyperv:    { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" },
+  containers:{ title: I18N.t("nav.resources") || "资源", sub: I18N.t("containers.tag") || "主机 Docker / Podman 容器" },
+  k8s:       { title: I18N.t("nav.resources") || "资源", sub: I18N.t("k8s.tag") || "Kubernetes 集群资源" },
   netflow:   { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" },
-  "content-audit": { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" },
   snmp:      { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" },
+  "content-audit": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计" },
+  "ai-tool-audit": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_ai_tools") || "AI 工具审计" },
+  "audit-export": { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_export") || "审计外发" },
+  oidc: { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_oidc") || "单点登录" },
   dashboards: { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" },
 };
 // Rebuild the JS-baked page-meta strings in the current language (called on
@@ -373,25 +371,37 @@ function rebuildPageMeta() {
   PAGE_META.scrape     = { title: "监控", sub: _SUB_MON };
   PAGE_META.automation = { title: "编排", sub: I18N.t("section.automation_desc") };
   PAGE_META.forward    = { title: I18N.t("section.port_forward"), sub: I18N.t("section.forward_desc") };
-  PAGE_META.sre        = { title: "诊断", sub: I18N.t("section.sre_desc") };
+  PAGE_META.sre        = { title: I18N.t("nav.sre") || "SRE 中枢", sub: I18N.t("section.sre_desc") };
   PAGE_META.logs       = { title: "日志", sub: I18N.t("section.logs_desc") };
   PAGE_META.log        = { title: "审计日志", sub: I18N.t("section.log_desc") };
   PAGE_META.datasource = { title: "数据源", sub: I18N.t("section.datasource_desc") };
-  PAGE_META.hardware   = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
-  PAGE_META.hyperv     = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件(Redfish / OceanStor) 与 虚拟机(Hyper-V) 资源状态 · 异常优先" };
+  PAGE_META.hardware   = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" };
+  PAGE_META.hyperv     = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("section.resources_desc") || "物理硬件 / 虚拟机 / 容器 / Kubernetes" };
+  PAGE_META.containers = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("containers.tag") || "主机 Docker / Podman 容器" };
+  PAGE_META.k8s        = { title: I18N.t("nav.resources") || "资源", sub: I18N.t("k8s.tag") || "Kubernetes 集群资源" };
   PAGE_META.netflow    = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.netflow_desc") || "NetFlow 网络流量分析" };
-  PAGE_META["content-audit"] = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计（谁向哪个大模型端点发了什么）" };
   PAGE_META.snmp       = { title: I18N.t("nav.network") || "网络", sub: I18N.t("section.snmp_desc") || "SNMP 网络设备接口流量与 Trap 事件" };
+  PAGE_META["content-audit"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("section.content_audit_desc") || "明文 HTTP 内容审计" };
+  PAGE_META["ai-tool-audit"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_ai_tools") || "AI 工具审计" };
+  PAGE_META["audit-export"] = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_export") || "审计外发" };
+  PAGE_META.oidc = { title: I18N.t("nav.security") || "安全中心", sub: I18N.t("sec.tab_oidc") || "单点登录" };
   PAGE_META.dashboards = { title: I18N.t("nav.dashboards") || "仪表盘", sub: I18N.t("section.dashboards_desc") || "自定义仪表盘 · 一键导入 Grafana 看板 · 面板走 VictoriaMetrics" };
 }
 // IA 重构（方案B）：把「监控(拨测+性能)」「告警(当前+治理)」合并为父导航 + 视图内 Tab。
 // 不搬 DOM、不动各视图内部逻辑——仅减导航项 + 由 switchView 渲染共享 Tab 栏 #viewTabs。
-// NET_TABS 返回「网络」父导航的三个子标签（流量/网络设备/内容审计），随语言就地取标签。
+// NET_TABS：网络流量 + 网络设备（内容审计已升维至「安全中心」）。
 function NET_TABS() {
   return [
     ["netflow", I18N.t("net.tab_traffic") || "流量"],
     ["snmp", I18N.t("net.tab_devices") || "网络设备"],
-    ["content-audit", I18N.t("net.tab_content") || "内容审计"],
+  ];
+}
+function SEC_TABS() {
+  return [
+    ["content-audit", I18N.t("sec.tab_content") || "内容审计"],
+    ["ai-tool-audit", I18N.t("sec.tab_ai_tools") || "AI 工具审计"],
+    ["audit-export", I18N.t("sec.tab_export") || "审计外发"],
+    ["oidc", I18N.t("sec.tab_oidc") || "单点登录"],
   ];
 }
 const VIEW_TAB_GROUPS = {
@@ -401,30 +411,36 @@ const VIEW_TAB_GROUPS = {
   alerts:     { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   governance: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
   thresholds: { parent: "alerts", tabs: [["alerts", "当前告警"], ["governance", "治理规则"], ["thresholds", "告警阈值"]] },
-  // 「网络」父导航：合并 流量(NetFlow) / 网络设备(SNMP 接口 + Trap) / 内容审计(明文HTTP)。
-  // parent=netflow=第一个子标签。三个 view 共用同一组子标签。
   netflow:         { parent: "netflow", tabs: NET_TABS() },
   snmp:            { parent: "netflow", tabs: NET_TABS() },
-  "content-audit": { parent: "netflow", tabs: NET_TABS() },
-  // 「资源」父导航：合并 硬件(Redfish/OceanStor) 与 虚拟机(Hyper-V)。多数虚拟机来自硬件设备，
-  // 故归为同一入口。parent=hardware=第一个子标签，标签复用 nav.hardware / nav.hyperv 三语键。
-  hardware:   { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"]] },
-  hyperv:     { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"]] },
+  // 「安全中心」：内容审计 + AI 工具审计 + 审计外发 + 单点登录
+  "content-audit": { parent: "content-audit", tabs: SEC_TABS() },
+  "ai-tool-audit": { parent: "content-audit", tabs: SEC_TABS() },
+  "audit-export":  { parent: "content-audit", tabs: SEC_TABS() },
+  oidc:            { parent: "content-audit", tabs: SEC_TABS() },
+  // 「资源」父导航：硬件 / 虚拟机 / 容器 / K8s。parent=hardware=第一个子标签。
+  hardware:   { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
+  hyperv:     { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
+  containers: { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
+  k8s:        { parent: "hardware", tabs: [["hardware", I18N.t("nav.hardware") || "硬件"], ["hyperv", I18N.t("nav.hyperv") || "虚拟机"], ["containers", I18N.t("nav.containers") || "容器"], ["k8s", I18N.t("nav.k8s") || "K8s"]] },
 };
 function renderViewTabs(view) {
   const bar = $("viewTabs"); if (!bar) return;
   const g = VIEW_TAB_GROUPS[view];
   if (!g) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+  const secViews = new Set(["content-audit", "ai-tool-audit", "audit-export", "oidc"]);
   const tabs = (typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer")
-    ? g.tabs.filter(([v]) => v !== "content-audit")
+    ? g.tabs.filter(([v]) => !secViews.has(v))
     : g.tabs;
+  if (!tabs.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
   bar.style.display = "";
   bar.innerHTML = tabs.map(([v, label]) => `<button class="view-tab ${v === view ? "active" : ""}" data-vtab="${v}">${label}</button>`).join("");
   bar.querySelectorAll("[data-vtab]").forEach(b => b.addEventListener("click", () => switchView(b.dataset.vtab)));
 }
 function switchView(view) {
-  if (view === "content-audit" && typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer") {
-    view = "netflow";
+  const secViews = new Set(["content-audit", "ai-tool-audit", "audit-export", "oidc"]);
+  if (secViews.has(view) && typeof CUR_ROLE !== "undefined" && CUR_ROLE === "viewer") {
+    view = "overview";
   }
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   const g = VIEW_TAB_GROUPS[view];
@@ -454,9 +470,14 @@ function switchView(view) {
   if (view === "datasource") loadDataSources();
   if (view === "hardware" && window._pageRenderers && window._pageRenderers.hardware) window._pageRenderers.hardware();
   if (view === "hyperv" && window._pageRenderers && window._pageRenderers.hyperv) window._pageRenderers.hyperv();
+  if (view === "containers" && window._pageRenderers && window._pageRenderers.containers) window._pageRenderers.containers();
+  if (view === "k8s" && window._pageRenderers && window._pageRenderers.k8s) window._pageRenderers.k8s();
   if (view === "netflow" && window._pageRenderers && window._pageRenderers.netflow) window._pageRenderers.netflow();
   if (view === "snmp" && window._pageRenderers && window._pageRenderers.snmp) window._pageRenderers.snmp();
   if (view === "content-audit" && window._pageRenderers && window._pageRenderers["content-audit"]) window._pageRenderers["content-audit"]();
+  if (view === "ai-tool-audit" && window._pageRenderers && window._pageRenderers["ai-tool-audit"]) window._pageRenderers["ai-tool-audit"]();
+  if (view === "audit-export" && window._pageRenderers && window._pageRenderers["audit-export"]) window._pageRenderers["audit-export"]();
+  if (view === "oidc" && window._pageRenderers && window._pageRenderers.oidc) window._pageRenderers.oidc();
   // 这些视图的 DOM 由全局轮询按活动视图渲染；切换过来时立即刷新一次，避免等到下个轮询周期(最多5s)才更新。
   if (view === "overview" || view === "hosts" || view === "alerts" || view === "log") refresh(true);
   window.scrollTo(0, 0);
@@ -524,11 +545,19 @@ safeAddEventListener("logFilter", "click", e => {
   renderLog(LAST_LOG);
 });
 // 审计日志搜索框：按内容/操作者/主机关键字过滤
-safeAddEventListener("auditSearch", "input", e => { LOG_SEARCH = (e.target.value || "").trim().toLowerCase(); LOG_PAGE = 1; renderLog(LAST_LOG); });
+function onAuditSearchInput(e) { LOG_SEARCH = (e && e.target && e.target.value) || ""; LOG_PAGE = 1; renderLog(LAST_LOG); }
+safeAddEventListener("auditSearch", "input", onAuditSearchInput);
+safeAddEventListener("auditSearch", "search", onAuditSearchInput);
 // 监控 / 编排 / 转发 搜索框（复用标准 .search）
-safeAddEventListener("checkSearch", "input", e => { CHECK_SEARCH = (e.target.value || "").trim(); renderChecks(LAST_CHECKS); });
-safeAddEventListener("playbookSearch", "input", e => { PB_SEARCH = (e.target.value || "").trim(); renderPlaybooks(LAST_PLAYBOOKS); });
-safeAddEventListener("forwardSearch", "input", e => { FWD_SEARCH = (e.target.value || "").trim(); renderForwards(); });
+function onCheckSearchInput(e) { CHECK_SEARCH = (e && e.target && e.target.value) || ""; renderChecks(LAST_CHECKS); }
+safeAddEventListener("checkSearch", "input", onCheckSearchInput);
+safeAddEventListener("checkSearch", "search", onCheckSearchInput);
+function onPlaybookSearchInput(e) { PB_SEARCH = (e && e.target && e.target.value) || ""; renderPlaybooks(LAST_PLAYBOOKS); }
+safeAddEventListener("playbookSearch", "input", onPlaybookSearchInput);
+safeAddEventListener("playbookSearch", "search", onPlaybookSearchInput);
+function onForwardSearchInput(e) { FWD_SEARCH = (e && e.target && e.target.value) || ""; renderForwards(); }
+safeAddEventListener("forwardSearch", "input", onForwardSearchInput);
+safeAddEventListener("forwardSearch", "search", onForwardSearchInput);
 
 // 告警类型筛选
 safeAddEventListener("alertFilter", "click", e => {
@@ -536,7 +565,9 @@ safeAddEventListener("alertFilter", "click", e => {
   filterAlertsByType(b.dataset.atype);
 });
 // 告警搜索
-safeAddEventListener("alertSearch", "input", e => { ALERT_SEARCH = e.target.value; renderAlerts(LAST_ALERTS); });
+function onAlertSearchInput(e) { ALERT_SEARCH = (e && e.target && e.target.value) || ""; renderAlerts(LAST_ALERTS); }
+safeAddEventListener("alertSearch", "input", onAlertSearchInput);
+safeAddEventListener("alertSearch", "search", onAlertSearchInput);
 
 // 日志级别和时间范围筛选
 function filterLogsByLevel(level) {
@@ -604,8 +635,14 @@ safeAddEventListener("cards", "click", e => {
   if (view === "hosts") { HOST_FILTER = filter || "all"; HOST_PAGE = 1; renderHosts(LAST_HOSTS); }
   if (view) switchView(view);
 });
-// 主机搜索 + 分页
-safeAddEventListener("hostSearch", "input", e => { HOST_SEARCH = e.target.value; HOST_PAGE = 1; renderHosts(LAST_HOSTS); });
+// 主机搜索 + 分页（input + search：兼容 type=search 的清除按钮）
+function onHostSearchInput(e) {
+  HOST_SEARCH = (e && e.target && e.target.value) || "";
+  HOST_PAGE = 1;
+  renderHosts(LAST_HOSTS);
+}
+safeAddEventListener("hostSearch", "input", onHostSearchInput);
+safeAddEventListener("hostSearch", "search", onHostSearchInput);
 safeAddEventListener("pager", "click", e => {
   const b = e.target.closest("button[data-pg]"); if (!b) return;
   const pg = b.dataset.pg;
@@ -703,6 +740,13 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   });
   // 主题切换
   safeAddEventListener("ddThemeToggle", "click", function() { toggleTheme(); wrap.classList.remove("open"); });
+  // 语言切换后刷新主题菜单文案（标签不走 data-i18n，随当前主题动态生成）
+  document.addEventListener("i18n:changed", function() {
+    try {
+      const theme = document.documentElement.getAttribute("data-theme") || "light";
+      if (typeof syncThemeIcons === "function") syncThemeIcons(theme);
+    } catch (_) {}
+  });
   // 语言切换（持久化到 cookie，就地重渲染所有文案，不刷新页面）
   var userDropdown = $("userDropdown");
   if (userDropdown) {
@@ -728,6 +772,8 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
     const tab = e.target.closest(".tab");
     if (tab && tab.dataset.tab) switchNotifyTab(tab.dataset.tab);
   });
+  safeAddEventListener("smsProvider", "change", function() { if (typeof updateSmsProviderFields === "function") updateSmsProviderFields(); });
+  safeAddEventListener("voiceCallProvider", "change", function() { if (typeof updateVoiceProviderFields === "function") updateVoiceProviderFields(); });
   // 个人信息
   safeAddEventListener("ddProfile", "click", function() { openProfile(); wrap.classList.remove("open"); });
   // 退出登录
@@ -784,6 +830,7 @@ safeAddEventListener("forgotPassLink", "click", openRecoverPass);
 let LOGIN_TYPE = "username"; // "username" | "phone"
 safeAddEventListener("loginSwitchType", "click", (e) => {
   e.preventDefault();
+  const phoneHint = $("loginPhoneHint");
   if (LOGIN_TYPE === "username") {
     LOGIN_TYPE = "phone";
     $("loginUserLabel").textContent = I18N.t("profile.phone") || "手机号";
@@ -791,13 +838,15 @@ safeAddEventListener("loginSwitchType", "click", (e) => {
     $("loginUser").type = "tel";
     $("loginUser").maxLength = 11;
     $("loginSwitchType").textContent = I18N.t("login.switch_username") || "用户名登录";
+    if (phoneHint) phoneHint.style.display = "";
   } else {
     LOGIN_TYPE = "username";
     $("loginUserLabel").textContent = I18N.t("login.username") || "用户名";
-    $("loginUser").placeholder = "管理员账号";
+    $("loginUser").placeholder = I18N.t("form.login_account") || I18N.t("login.username_placeholder") || "管理员账号";
     $("loginUser").type = "text";
     $("loginUser").maxLength = 524288;
     $("loginSwitchType").textContent = I18N.t("login.switch_phone") || "手机号登录";
+    if (phoneHint) phoneHint.style.display = "none";
   }
   $("loginUser").value = "";
   $("loginPass").value = "";

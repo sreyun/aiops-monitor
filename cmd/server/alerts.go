@@ -100,6 +100,9 @@ func ConservativeThresholds() Thresholds {
 		ForwardBwWarn: 70, ForwardBwCrit: 90,
 		ForwardErrWarn: 3, ForwardErrCrit: 10,
 		ForwardLatWarn: 500, ForwardLatCrit: 3000,
+		SNMPIfUtilWarn: 70, SNMPIfUtilCrit: 85,
+		SNMPIfErrWarn: 0.5, SNMPIfErrCrit: 5,
+		NetFlowSurgeRatio: 2.0, NetFlowSurgeMinMbps: 0.5, NetFlowDropWarn: 50,
 	}
 }
 
@@ -137,6 +140,9 @@ func StandardThresholds() Thresholds {
 		ForwardBwWarn: 80, ForwardBwCrit: 95,
 		ForwardErrWarn: 5, ForwardErrCrit: 15,
 		ForwardLatWarn: 1000, ForwardLatCrit: 5000,
+		SNMPIfUtilWarn: 80, SNMPIfUtilCrit: 95,
+		SNMPIfErrWarn: 1, SNMPIfErrCrit: 10,
+		NetFlowSurgeRatio: 3.0, NetFlowSurgeMinMbps: 1.0, NetFlowDropWarn: 100,
 	}
 }
 
@@ -174,6 +180,9 @@ func RelaxedThresholds() Thresholds {
 		ForwardBwWarn: 90, ForwardBwCrit: 98,
 		ForwardErrWarn: 10, ForwardErrCrit: 25,
 		ForwardLatWarn: 3000, ForwardLatCrit: 10000,
+		SNMPIfUtilWarn: 90, SNMPIfUtilCrit: 98,
+		SNMPIfErrWarn: 5, SNMPIfErrCrit: 20,
+		NetFlowSurgeRatio: 5.0, NetFlowSurgeMinMbps: 2.0, NetFlowDropWarn: 200,
 	}
 }
 

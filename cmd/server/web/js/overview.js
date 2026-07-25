@@ -223,8 +223,8 @@ function renderAlerts(alerts) {
   let filtered = alerts;
   if (ALERT_TYPE) filtered = filtered.filter(a => a.type === ALERT_TYPE);
   if (ALERT_SEARCH) filtered = filtered.filter(a => {
-    const hay = ((a.hostname || "") + " " + (a.ip || "") + " " + (a.message || "")).toLowerCase();
-    return hay.includes(ALERT_SEARCH.toLowerCase());
+    const hay = [a.hostname, a.ip, a.message, a.host_id, a.type, a.scope, a.level].filter(Boolean).join(" ");
+    return matchesSearchTokens(hay, ALERT_SEARCH);
   });
   const empty = `<div class="empty-line">✅ ${I18N.t("empty.no_alerts")}</div>`;
   const filterEmpty = `<div class="empty-line">${I18N.t("empty.no_alerts_filtered")}</div>`;
@@ -385,8 +385,10 @@ function applyLogFilters(items) {
     filtered = filtered.filter(e => (now - e.timestamp) <= hours * 3600);
   }
   if (LOG_SEARCH) {
-    const q = LOG_SEARCH;
-    filtered = filtered.filter(e => ((e.message || "") + " " + (e.actor || "") + " " + (e.host || "")).toLowerCase().includes(q));
+    filtered = filtered.filter(e => matchesSearchTokens(
+      [e.message, e.actor, e.host, e.kind, e.level].filter(Boolean).join(" "),
+      LOG_SEARCH
+    ));
   }
   // Filter out internal alert engine logs (actor="告警引擎" from backend)
   return filtered.filter(e => e.actor !== I18N.t("notify.alert_engine"));

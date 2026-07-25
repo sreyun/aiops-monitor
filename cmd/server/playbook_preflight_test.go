@@ -69,3 +69,43 @@ func TestHighRiskExecutionRequiresServerSideAcknowledgement(t *testing.T) {
 		t.Fatalf("high-risk execution without acknowledgement = %d, want 409; body=%s", rw.Code, rw.Body.String())
 	}
 }
+
+func TestFreezeWindowForcesPlaybookApproval(t *testing.T) {
+	s, pm := newPreflightServer(t)
+	now := time.Now().Unix()
+	if _, err := s.cfg.UpsertChangeWindow(ChangeWindow{
+		Name: "maint-freeze", Start: now - 60, End: now + 3600, Freeze: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pb, err := pm.Upsert(Playbook{
+		Name: "readonly",
+		Steps: []PlaybookStep{{
+			Name: "uname", Module: "shell_info",
+			Args: map[string]string{"cmd": "uname -a"}, Target: "all", TimeoutSec: 15,
+		}},
+	})
+	if err != nil {
+		// shell_info may be unknown — fall back to a plain read-ish command step that stays low risk
+		pb, err = pm.Upsert(Playbook{
+			Name: "echo",
+			Steps: []PlaybookStep{{
+				Name: "echo", Command: "echo ok", Target: "all", TimeoutSec: 15,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	pf := s.buildPlaybookPreflight(pb)
+	if !pf.FreezeActive || !pf.RequiresApproval || pf.FreezeWindow == nil {
+		t.Fatalf("expected freeze to force approval, got %+v", pf)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/playbooks/"+pb.ID+"/execute", nil)
+	req.SetPathValue("id", pb.ID)
+	rw := httptest.NewRecorder()
+	s.handleExecutePlaybook(rw, req)
+	if rw.Code != http.StatusConflict {
+		t.Fatalf("freeze execution without ack = %d, want 409; body=%s", rw.Code, rw.Body.String())
+	}
+}

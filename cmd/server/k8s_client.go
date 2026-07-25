@@ -1,0 +1,481 @@
+package main
+
+import (
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+type k8sEndpoint struct {
+	Server   string
+	Token    string
+	CACert   string // PEM
+	Insecure bool
+	ClientCertPEM string
+	ClientKeyPEM  string
+}
+
+type k8sRESTClient struct {
+	base   string
+	token  string
+	client *http.Client
+}
+
+func resolveK8sEndpoint(cfg K8sClusterConfig) (k8sEndpoint, error) {
+	var ep k8sEndpoint
+	kc := strings.TrimSpace(cfg.KubeconfigYAML)
+	if kc != "" && kc != "****" {
+		parsed, err := parseKubeconfig(kc)
+		if err != nil {
+			return ep, err
+		}
+		return parsed, nil
+	}
+	server := strings.TrimRight(strings.TrimSpace(cfg.APIServer), "/")
+	token := strings.TrimSpace(cfg.Token)
+	if server == "" || token == "" {
+		return ep, fmt.Errorf("需要填写 API Server + Token，或粘贴 kubeconfig")
+	}
+	ep.Server = server
+	ep.Token = token
+	ep.CACert = strings.TrimSpace(cfg.CACert)
+	ep.Insecure = cfg.Insecure
+	if ep.CACert == "" && !ep.Insecure {
+		return ep, fmt.Errorf("未提供 CA 证书时请勾选跳过 TLS 校验（仅内网临时使用）")
+	}
+	return ep, nil
+}
+
+func newK8sRESTClient(cfg K8sClusterConfig) (*k8sRESTClient, error) {
+	ep, err := resolveK8sEndpoint(cfg)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if ep.Insecure {
+		tlsCfg.InsecureSkipVerify = true
+	}
+	if ep.CACert != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(ep.CACert)) {
+			return nil, fmt.Errorf("无效的 CA 证书 PEM")
+		}
+		tlsCfg.RootCAs = pool
+	}
+	if ep.ClientCertPEM != "" && ep.ClientKeyPEM != "" {
+		cert, err := tls.X509KeyPair([]byte(ep.ClientCertPEM), []byte(ep.ClientKeyPEM))
+		if err != nil {
+			return nil, fmt.Errorf("客户端证书无效: %w", err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+	return &k8sRESTClient{
+		base:  strings.TrimRight(ep.Server, "/"),
+		token: ep.Token,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig:       tlsCfg,
+				MaxIdleConnsPerHost:   4,
+				IdleConnTimeout:       60 * time.Second,
+				ResponseHeaderTimeout: 25 * time.Second,
+			},
+		},
+	}, nil
+}
+
+func (c *k8sRESTClient) do(method, path string, query url.Values, body []byte, contentType string) ([]byte, int, error) {
+	full := c.base + path
+	if len(query) > 0 {
+		full += "?" + query.Encode()
+	}
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, full, rdr)
+	if err != nil {
+		return nil, 0, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode >= 400 {
+		msg := strings.TrimSpace(string(raw))
+		if len(msg) > 400 {
+			msg = msg[:400]
+		}
+		return raw, resp.StatusCode, fmt.Errorf("k8s API %d: %s", resp.StatusCode, msg)
+	}
+	return raw, resp.StatusCode, nil
+}
+
+func (c *k8sRESTClient) getJSON(path string, query url.Values, out any) error {
+	raw, _, err := c.do(http.MethodGet, path, query, nil, "")
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
+func (c *k8sRESTClient) Version() (map[string]any, error) {
+	out := map[string]any{}
+	if err := c.getJSON("/version", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *k8sRESTClient) ListNamespaces() ([]map[string]any, error) {
+	var doc struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.getJSON("/api/v1/namespaces", nil, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Items, nil
+}
+
+func (c *k8sRESTClient) ListNodes() ([]map[string]any, error) {
+	var doc struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.getJSON("/api/v1/nodes", nil, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Items, nil
+}
+
+func (c *k8sRESTClient) ListPods(namespace string, limit int) ([]map[string]any, error) {
+	path := "/api/v1/pods"
+	if ns := strings.TrimSpace(namespace); ns != "" && ns != "*" && !strings.EqualFold(ns, "all") {
+		path = "/api/v1/namespaces/" + url.PathEscape(ns) + "/pods"
+	}
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var doc struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.getJSON(path, q, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Items, nil
+}
+
+func (c *k8sRESTClient) ListDeployments(namespace string, limit int) ([]map[string]any, error) {
+	path := "/apis/apps/v1/deployments"
+	if ns := strings.TrimSpace(namespace); ns != "" && ns != "*" && !strings.EqualFold(ns, "all") {
+		path = "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments"
+	}
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var doc struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.getJSON(path, q, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Items, nil
+}
+
+func (c *k8sRESTClient) ListEvents(namespace string, limit int) ([]map[string]any, error) {
+	path := "/api/v1/events"
+	if ns := strings.TrimSpace(namespace); ns != "" && ns != "*" && !strings.EqualFold(ns, "all") {
+		path = "/api/v1/namespaces/" + url.PathEscape(ns) + "/events"
+	}
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var doc struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.getJSON(path, q, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Items, nil
+}
+
+func (c *k8sRESTClient) PodLogs(namespace, name string, tailLines int) (string, error) {
+	ns := strings.TrimSpace(namespace)
+	pod := strings.TrimSpace(name)
+	if ns == "" || pod == "" {
+		return "", fmt.Errorf("namespace and pod name required")
+	}
+	if tailLines <= 0 {
+		tailLines = 200
+	}
+	q := url.Values{}
+	q.Set("tailLines", fmt.Sprintf("%d", tailLines))
+	q.Set("timestamps", "true")
+	path := "/api/v1/namespaces/" + url.PathEscape(ns) + "/pods/" + url.PathEscape(pod) + "/log"
+	raw, _, err := c.do(http.MethodGet, path, q, nil, "")
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func (c *k8sRESTClient) GetDeploymentScale(namespace, name string) (int32, error) {
+	ns := strings.TrimSpace(namespace)
+	dep := strings.TrimSpace(name)
+	if ns == "" || dep == "" {
+		return 0, fmt.Errorf("namespace and deployment name required")
+	}
+	path := "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments/" + url.PathEscape(dep) + "/scale"
+	raw, _, err := c.do(http.MethodGet, path, nil, nil, "")
+	if err != nil {
+		return 0, err
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return 0, err
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	if spec == nil {
+		return 0, nil
+	}
+	switch v := spec["replicas"].(type) {
+	case float64:
+		return int32(v), nil
+	case int:
+		return int32(v), nil
+	case json.Number:
+		n, _ := v.Int64()
+		return int32(n), nil
+	default:
+		return 0, nil
+	}
+}
+
+func (c *k8sRESTClient) ScaleDeployment(namespace, name string, replicas int32) error {
+	ns := strings.TrimSpace(namespace)
+	dep := strings.TrimSpace(name)
+	if ns == "" || dep == "" {
+		return fmt.Errorf("namespace and deployment name required")
+	}
+	if replicas < 0 {
+		return fmt.Errorf("replicas must be >= 0")
+	}
+	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"replicas": replicas}})
+	path := "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments/" + url.PathEscape(dep) + "/scale"
+	_, _, err := c.do(http.MethodPatch, path, nil, body, "application/merge-patch+json")
+	return err
+}
+
+func (c *k8sRESTClient) RestartDeployment(namespace, name string) error {
+	ns := strings.TrimSpace(namespace)
+	dep := strings.TrimSpace(name)
+	if ns == "" || dep == "" {
+		return fmt.Errorf("namespace and deployment name required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	body, _ := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]string{
+						"kubectl.kubernetes.io/restartedAt": now,
+					},
+				},
+			},
+		},
+	})
+	path := "/apis/apps/v1/namespaces/" + url.PathEscape(ns) + "/deployments/" + url.PathEscape(dep)
+	_, _, err := c.do(http.MethodPatch, path, nil, body, "application/strategic-merge-patch+json")
+	return err
+}
+
+// ---- kubeconfig (subset) ----
+
+type kubeconfigFile struct {
+	APIVersion     string `yaml:"apiVersion"`
+	CurrentContext string `yaml:"current-context"`
+	Clusters []struct {
+		Name    string `yaml:"name"`
+		Cluster struct {
+			Server                   string `yaml:"server"`
+			CertificateAuthorityData string `yaml:"certificate-authority-data"`
+			InsecureSkipTLSVerify    bool   `yaml:"insecure-skip-tls-verify"`
+		} `yaml:"cluster"`
+	} `yaml:"clusters"`
+	Contexts []struct {
+		Name    string `yaml:"name"`
+		Context struct {
+			Cluster   string `yaml:"cluster"`
+			User      string `yaml:"user"`
+			Namespace string `yaml:"namespace"`
+		} `yaml:"context"`
+	} `yaml:"contexts"`
+	Users []struct {
+		Name string `yaml:"name"`
+		User struct {
+			Token                 string `yaml:"token"`
+			ClientCertificateData string `yaml:"client-certificate-data"`
+			ClientKeyData         string `yaml:"client-key-data"`
+		} `yaml:"user"`
+	} `yaml:"users"`
+}
+
+func parseKubeconfig(raw string) (k8sEndpoint, error) {
+	var ep k8sEndpoint
+	var kc kubeconfigFile
+	if err := yaml.Unmarshal([]byte(raw), &kc); err != nil {
+		return ep, fmt.Errorf("kubeconfig 解析失败: %w", err)
+	}
+	ctxName := strings.TrimSpace(kc.CurrentContext)
+	if ctxName == "" && len(kc.Contexts) > 0 {
+		ctxName = kc.Contexts[0].Name
+	}
+	var clusterName, userName string
+	for _, ctx := range kc.Contexts {
+		if ctx.Name == ctxName {
+			clusterName = ctx.Context.Cluster
+			userName = ctx.Context.User
+			break
+		}
+	}
+	if clusterName == "" {
+		return ep, fmt.Errorf("kubeconfig 缺少 current-context")
+	}
+	for _, cl := range kc.Clusters {
+		if cl.Name != clusterName {
+			continue
+		}
+		ep.Server = strings.TrimRight(strings.TrimSpace(cl.Cluster.Server), "/")
+		ep.Insecure = cl.Cluster.InsecureSkipTLSVerify
+		if cl.Cluster.CertificateAuthorityData != "" {
+			pem, err := base64.StdEncoding.DecodeString(cl.Cluster.CertificateAuthorityData)
+			if err != nil {
+				return ep, fmt.Errorf("CA data 无效: %w", err)
+			}
+			ep.CACert = string(pem)
+		}
+		break
+	}
+	for _, u := range kc.Users {
+		if u.Name != userName {
+			continue
+		}
+		ep.Token = strings.TrimSpace(u.User.Token)
+		if u.User.ClientCertificateData != "" {
+			pem, err := base64.StdEncoding.DecodeString(u.User.ClientCertificateData)
+			if err != nil {
+				return ep, fmt.Errorf("client cert 无效: %w", err)
+			}
+			ep.ClientCertPEM = string(pem)
+		}
+		if u.User.ClientKeyData != "" {
+			pem, err := base64.StdEncoding.DecodeString(u.User.ClientKeyData)
+			if err != nil {
+				return ep, fmt.Errorf("client key 无效: %w", err)
+			}
+			ep.ClientKeyPEM = string(pem)
+		}
+		break
+	}
+	if ep.Server == "" {
+		return ep, fmt.Errorf("kubeconfig 未找到 server")
+	}
+	if ep.Token == "" && (ep.ClientCertPEM == "" || ep.ClientKeyPEM == "") {
+		return ep, fmt.Errorf("kubeconfig 用户缺少 token 或客户端证书")
+	}
+	if ep.CACert == "" && !ep.Insecure {
+		return ep, fmt.Errorf("kubeconfig 未含 CA 且未设置 insecure-skip-tls-verify")
+	}
+	return ep, nil
+}
+
+// summarize helpers for API responses (flat rows for UI tables).
+
+func k8sMetaName(obj map[string]any) (ns, name string) {
+	md, _ := obj["metadata"].(map[string]any)
+	if md == nil {
+		return "", ""
+	}
+	name, _ = md["name"].(string)
+	ns, _ = md["namespace"].(string)
+	return ns, name
+}
+
+func k8sPodPhase(obj map[string]any) string {
+	st, _ := obj["status"].(map[string]any)
+	if st == nil {
+		return ""
+	}
+	p, _ := st["phase"].(string)
+	return p
+}
+
+func k8sNodeReady(obj map[string]any) string {
+	st, _ := obj["status"].(map[string]any)
+	if st == nil {
+		return "Unknown"
+	}
+	conds, _ := st["conditions"].([]any)
+	for _, c := range conds {
+		m, _ := c.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if m["type"] == "Ready" {
+			if m["status"] == "True" {
+				return "Ready"
+			}
+			return "NotReady"
+		}
+	}
+	return "Unknown"
+}
+
+func k8sDeployReplicas(obj map[string]any) (desired, ready, available int) {
+	spec, _ := obj["spec"].(map[string]any)
+	st, _ := obj["status"].(map[string]any)
+	if spec != nil {
+		switch v := spec["replicas"].(type) {
+		case float64:
+			desired = int(v)
+		case int:
+			desired = v
+		}
+	}
+	if st != nil {
+		switch v := st["readyReplicas"].(type) {
+		case float64:
+			ready = int(v)
+		case int:
+			ready = v
+		}
+		switch v := st["availableReplicas"].(type) {
+		case float64:
+			available = int(v)
+		case int:
+			available = v
+		}
+	}
+	return
+}

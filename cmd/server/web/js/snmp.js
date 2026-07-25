@@ -51,22 +51,22 @@ function renderSNMPPanel() {
     return;
   }
 
-  const q = snHostQuery.trim().toLowerCase();
+  const q = normalizeSearchText(snHostQuery);
   // 优先用 API 返回的 hostname；_cachedHosts 仅作兜底。
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
   let html = `<div class="nf-toolbar">`;
   html += `<input type="search" id="snHostSearch" class="nf-input" value="${esc(snHostQuery)}"
-    placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}">`;
+    placeholder="${esc(I18N.t("netflow.search_ph") || "搜索主机")}" autocomplete="off">`;
   html += `<select id="snHostSelect" class="nf-select">`;
   let shown = 0;
   snSNMPHosts.forEach(sh => {
     const h = nameMap[sh.host_id] || {};
     const name = sh.hostname || h.hostname || sh.host_id;
     const ip = sh.ip || h.ip || "";
-    const hay = `${name} ${sh.host_id} ${ip}`.toLowerCase();
-    if (q && !q.split(/\s+/).every(w => hay.includes(w))) return;
+    const hay = `${name} ${sh.host_id} ${ip}`;
+    if (q && !matchesSearchTokens(hay, snHostQuery)) return;
     shown++;
     const sel = sh.host_id === snCurrentHost ? " selected" : "";
     const dev = Number(sh.devices) || 0;
@@ -111,7 +111,7 @@ function snBindToolbar() {
   sel && sel.addEventListener("change", function() { snCurrentHost = this.value; loadSNMPData(); });
   const search = $("snHostSearch");
   if (search) {
-    search.addEventListener("input", function() {
+    const onSnSearch = function() {
       clearTimeout(snSearchT);
       const v = this.value;
       snSearchT = setTimeout(() => {
@@ -120,7 +120,9 @@ function snBindToolbar() {
         const s = $("snHostSearch");
         if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
       }, 200);
-    });
+    };
+    search.addEventListener("input", onSnSearch);
+    search.addEventListener("search", onSnSearch);
   }
 }
 

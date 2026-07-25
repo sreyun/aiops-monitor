@@ -98,10 +98,26 @@ func TestDetectTemplateFormat(t *testing.T) {
 		`{"templating":{"list":[]},"panels":[]}`: "grafana",
 		`{"panels":[{"gridPos":{}}]}`:            "grafana",
 		`{"schemaVersion":39,"panels":[]}`:       "grafana",
+		`{"format":"aiops","dashboard":{"name":"x","panels":[]}}`: "aiops",
+		`{"name":"主机看板","panels":[{"title":"CPU","type":"stat","grid":{"x":0,"y":0,"w":6,"h":4},"targets":[{"expr":"aiops_cpu_percent"}]}]}`: "aiops",
 	}
 	for in, want := range cases {
 		if got := detectTemplateFormat([]byte(in)); got != want {
 			t.Fatalf("detectTemplateFormat(%s)=%s，应为 %s", in, got, want)
 		}
+	}
+}
+
+func TestMapAIOpsDashboard(t *testing.T) {
+	raw := []byte(`{"format":"aiops","dashboard":{"name":"模板A","description":"d","panels":[{"id":1,"title":"CPU","type":"stat","grid":{"x":0,"y":0,"w":6,"h":4},"targets":[{"expr":"aiops_cpu_percent"}]}]}}`)
+	d, err := mapAIOpsDashboard(raw, "", "aiops-template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ID != "" {
+		t.Fatalf("导入应清空 ID，got %q", d.ID)
+	}
+	if d.Name != "模板A" || len(d.Panels) != 1 || d.Panels[0].Targets[0].Expr != "aiops_cpu_percent" {
+		t.Fatalf("映射错误: %+v", d)
 	}
 }

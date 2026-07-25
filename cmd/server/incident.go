@@ -18,11 +18,12 @@ import (
 
 // IncidentEvent is one entry on an incident's timeline.
 type IncidentEvent struct {
-	Ts          int64        `json:"ts"`
-	Kind        string       `json:"kind"` // created|fired|recovered|acked|resolved|remediation|comment|escalated|note
-	Actor       string       `json:"actor,omitempty"`
-	Text        string       `json:"text"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	Ts          int64         `json:"ts"`
+	Kind        string        `json:"kind"` // created|fired|recovered|acked|resolved|remediation|comment|escalated|note|ai_diagnosis
+	Actor       string        `json:"actor,omitempty"`
+	Text        string        `json:"text"`
+	Attachments []Attachment  `json:"attachments,omitempty"`
+	Citations   []RAGCitation `json:"citations,omitempty"` // AI 诊断证据链（可选）
 }
 
 // Incident is a tracked problem with a lifecycle and timeline.
@@ -173,6 +174,25 @@ func (m *incidentManager) AddEvent(id int64, kind, actor, text string) {
 	defer m.mu.Unlock()
 	if inc := m.find(id); inc != nil {
 		addEventLocked(inc, kind, actor, text)
+	}
+}
+
+// AddEventWithCitations appends a timeline entry that carries RAG/evidence citations
+// (used by AI diagnosis so the UI can re-render evidence cards after reload).
+func (m *incidentManager) AddEventWithCitations(id int64, kind, actor, text string, cites []RAGCitation) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inc := m.find(id); inc != nil {
+		addEventLocked(inc, kind, actor, text)
+		if len(cites) > 0 && len(inc.Timeline) > 0 {
+			n := len(inc.Timeline) - 1
+			cp := make([]RAGCitation, len(cites))
+			copy(cp, cites)
+			if len(cp) > 20 {
+				cp = cp[:20]
+			}
+			inc.Timeline[n].Citations = cp
+		}
 	}
 }
 

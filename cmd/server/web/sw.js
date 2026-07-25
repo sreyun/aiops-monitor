@@ -2,8 +2,8 @@
 // Cache: app shell on install, stale-while-revalidate for static, network-only for API.
 // Offline: cached shell + navigation fallback to "/" so the UI shows even offline.
 
-const CACHE = "AIOps-v0.16.8";
-const SHELL = ["/", "/style.css", "/theme-init.js", "/app.js", "/manifest.json", "/icon.svg"];
+const CACHE = "AIOps-v0.17.0";
+const SHELL = ["/", "/theme-init.js", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", e => {
   e.waitUntil(
@@ -26,20 +26,11 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   if (url.pathname.startsWith("/api/")) return;
 
-  // Navigation + code assets (index / app.js / style.css / any .js/.css):
-  // NETWORK-FIRST so a new deploy applies on the very next load when online;
-  // fall back to cache only when offline. (The previous stale-while-revalidate
-  // strategy left users one reload behind after every frontend update.)
+  // 页面 / JS / CSS：始终走网络，避免 UI 微调被旧缓存卡住；离线时再回落缓存。
   const p = url.pathname;
   if (req.mode === "navigate" || p === "/" || p.endsWith(".js") || p.endsWith(".css")) {
     e.respondWith(
-      fetch(req).then(res => {
-        if (res && res.status === 200) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(req, clone));
-        }
-        return res;
-      }).catch(() => caches.match(req).then(c => c || caches.match("/")))
+      fetch(req).catch(() => caches.match(req).then(c => c || caches.match("/")))
     );
     return;
   }

@@ -28,6 +28,8 @@ curl -X POST http://localhost:8529/api/v1/forward \
 | `host_id` | string | 是 | 被监控主机 ID（在主机列表中查看） |
 | `target_port` | int | 是 | 目标主机上的端口号（1-65535） |
 | `local_port` | int | 否 | 服务端本地监听端口（0 = 自动分配） |
+| `whitelist_enabled` | bool | 否 | 是否启用来源 IP 白名单（默认 `false`） |
+| `whitelist` | string[] | 条件 | IP 或 CIDR 列表；启用白名单时至少一条 |
 
 **响应示例：**
 
@@ -45,6 +47,45 @@ curl -X POST http://localhost:8529/api/v1/forward \
   "sessions": 0
 }
 ```
+
+### 来源 IP 白名单（可选）
+
+对**服务端对外监听的转发端口**限制来源 IP（TCP / UDP 同一策略）。默认关闭；开启后仅白名单内地址可 `Accept` / 收包，未命中直接关闭连接或丢弃报文。
+
+```bash
+curl -X POST http://localhost:8529/api/v1/forward \
+  -H "Content-Type: application/json" \
+  -H "Cookie: aiops_session=<your-session>" \
+  -d '{
+    "host_id": "abc123",
+    "target_port": 3306,
+    "local_port": 13306,
+    "whitelist_enabled": true,
+    "whitelist": ["203.0.113.10", "10.0.0.0/8", "192.168.1.0/24"]
+  }'
+```
+
+编辑时同样可热更新（无需重绑端口）：
+
+```bash
+curl -X PUT http://localhost:8529/api/v1/forward/a1b2c3d4 \
+  -H "Content-Type: application/json" \
+  -H "Cookie: aiops_session=<your-session>" \
+  -d '{
+    "host_id": "abc123",
+    "target_port": 3306,
+    "local_port": 13306,
+    "whitelist_enabled": true,
+    "whitelist": ["10.0.0.0/8"]
+  }'
+```
+
+**规则：**
+
+- `whitelist_enabled=false`（默认）：不校验来源，行为与现网一致
+- 开启且名单为空：拒绝创建/更新（避免误配成「全拒」）
+- 支持单 IP 与 CIDR（IPv4 / IPv6）；最多 64 条
+- 控制台「新建/编辑转发」中白名单区块默认收起，按需展开
 
 ### 使用转发
 

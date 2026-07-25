@@ -12,6 +12,8 @@ const hvT = (k, fb) => I18N.t(k, fb);
 let HV_INVENTORIES = [];               // [{host_id, host_name, guest_count, guests:[...], updated_at}]
 let HV_STALE_TOTAL = 0;                // orphan host inventories (Agent reinstall twins)
 const HV_FILTER = { q: "", status: "running" }; // 默认「运行中」，与资产管理常用视角一致
+let HV_HOST_FILTER = "";               // ""=全部宿主机
+let HV_TREE_Q = "";                    // 左树内搜索
 const HV_COLLAPSED = new Set();        // host_ids collapsed in the tree (default expanded)
 let HV_SELECTED = null;                // { host, vm } currently shown in the detail panel
 
@@ -72,21 +74,31 @@ function hvStateBadge(g) {
 
 /* ---------- 过滤 ---------- */
 
-function hvMatches(g, q) {
+function hvMatches(g, q, inv) {
   if (!q) return true;
-  const hay = [g.name, g.state, (g.ip_addresses || []).join(" "), g.linked_host_name]
-    .filter(Boolean).join(" ").toLowerCase();
-  return q.toLowerCase().split(/\s+/).filter(Boolean).every(tok => hay.includes(tok));
+  const hay = [
+    g.name, g.state, g.id, (g.ip_addresses || []).join(" "),
+    g.linked_host_name, g.linked_host_id,
+    inv && inv.host_id, inv && inv.host_name,
+  ].filter(Boolean).join(" ");
+  return matchesSearchTokens(hay, q);
 }
 
-function hvGuestVisible(g) {
-  if (!hvMatches(g, HV_FILTER.q)) return false;
+function hvGuestVisible(g, inv) {
+  if (!hvMatches(g, HV_FILTER.q, inv)) return false;
+  // 有关键词时跨状态搜索，避免默认「运行中」筛掉已关机的目标机
+  if (normalizeSearchText(HV_FILTER.q)) return true;
   switch (HV_FILTER.status) {
     case "running": return g.state === "Running";
     case "notrunning": return g.state !== "Running";
     case "abnormal": return hvAbnormal(g);
     default: return true;
   }
+}
+
+function hvTreeCaret(id, hasKids, collapsed) {
+  if (!hasKids) return `<span class="rtx-caret rtx-caret-gap" aria-hidden="true"></span>`;
+  return `<button type="button" class="rtx-caret" data-hvhosttoggle="${esc(id)}" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "▸" : "▾"}</button>`;
 }
 
 /* ---------- 数据加载 ---------- */
@@ -143,10 +155,11 @@ function hvFindSelected() {
 function hvFirstSelectable() {
   let firstAny = null, firstVisible = null, firstAbnormalVisible = null;
   for (const inv of HV_INVENTORIES) {
+    if (HV_HOST_FILTER && !normalizeSearchText(HV_FILTER.q) && inv.host_id !== HV_HOST_FILTER) continue;
     for (const g of (inv.guests || [])) {
       const key = { host: inv.host_id, vm: hvVmKey(g) };
       if (!firstAny) firstAny = key;
-      if (!hvGuestVisible(g)) continue;
+      if (!hvGuestVisible(g, inv)) continue;
       if (!firstVisible) firstVisible = key;
       if (!firstAbnormalVisible && hvAbnormal(g)) firstAbnormalVisible = key;
     }
@@ -157,9 +170,15 @@ function hvFirstSelectable() {
 function hvSelect(host, vm) {
   HV_SELECTED = { host, vm };
   const tree = $("hvTree");
-  if (tree) tree.querySelectorAll(".hv-vm").forEach(el =>
+  if (tree) tree.querySelectorAll("[data-hvvm]").forEach(el =>
     el.classList.toggle("selected", el.dataset.hvhost === host && el.dataset.hvvm === vm));
   renderHyperVDetailOnly();
+}
+
+function hvSelectHost(hostId) {
+  HV_HOST_FILTER = hostId || "";
+  HV_SELECTED = hvFirstSelectable();
+  renderHyperVPanel();
 }
 
 /* ---------- 左侧树 ---------- */
@@ -169,55 +188,57 @@ function hvVmNode(inv, g) {
   const running = g.state === "Running";
   const mini = running
     ? `${Math.round(g.cpu_usage || 0)}% · ${Math.round(g.mem_assigned_mb || 0)}MB`
-    : esc(hvStateText(g));
-  return `<div class="hv-vm ${sel ? "selected" : ""} ${hvAbnormal(g) ? "bad" : ""}" data-hvhost="${esc(inv.host_id)}" data-hvvm="${esc(hvVmKey(g))}">
-    <span class="hv-dot ${hvDotClass(g)}"></span>
-    <span class="vname" title="${esc(g.name)}">${esc(g.name)}</span>
-    <span class="vmini">${mini}</span>
+    : hvStateText(g);
+  return `<div class="rtx-node is-leaf${sel ? " selected" : ""}${hvAbnormal(g) ? " bad" : ""}" data-hvhost="${esc(inv.host_id)}" data-hvvm="${esc(hvVmKey(g))}" role="treeitem" aria-selected="${sel ? "true" : "false"}" tabindex="0">
+    ${hvTreeCaret("", false, false)}
+    <span class="rtx-dot ${hvDotClass(g)}" aria-hidden="true"></span>
+    <span class="rtx-name" title="${esc(g.name)}">${esc(g.name)}</span>
+    <span class="rtx-sub">${esc(mini)}</span>
   </div>`;
 }
 
-function hvHostNode(inv) {
+function hvHostMatchesTreeQ(inv, q) {
+  if (!q) return true;
+  return matchesSearchTokens([inv.host_name, inv.host_id].filter(Boolean).join(" "), q);
+}
+
+function hvHostNode(inv, filtering) {
   const guests = (inv.guests || []).slice().sort((a, b) => {
     const aa = hvAbnormal(a), ab = hvAbnormal(b);
     if (aa !== ab) return aa ? -1 : 1;
     return String(a.name).localeCompare(String(b.name));
   });
-  const visible = guests.filter(hvGuestVisible);
-  const running = guests.filter(g => g.state === "Running").length;
+  const searchActive = !!normalizeSearchText(HV_FILTER.q);
+  const visible = guests.filter(g => hvGuestVisible(g, inv));
   const bad = guests.filter(hvAbnormal).length;
   const hostName = inv.host_name || inv.host_id;
-  const filtering = HV_FILTER.q || HV_FILTER.status;
   const collapsed = HV_COLLAPSED.has(inv.host_id) && !filtering;
-
-  const countTitle = `${guests.length} ${esc(hvT("hyperv.vm", "虚拟机"))} · ${running} ${esc(hvT("hyperv.st_running", "运行中"))}${bad ? ` · ${bad} ${esc(hvT("hyperv.attention", "需关注"))}` : ""}`;
-  // 宿主机自身内存：可用/总（GB）。着色随占用率——余量少时转警示色，一眼看出宿主吃紧。
+  const hostSel = !searchActive && HV_HOST_FILTER === inv.host_id;
   const tMem = +inv.host_total_mem_mb || 0, aMem = +inv.host_avail_mem_mb || 0;
-  let memTxt = "";
-  if (tMem > 0) {
-    const usedPct = Math.round((tMem - aMem) / tMem * 100);
-    const cls = usedPct >= 90 ? " crit" : (usedPct >= 80 ? " warn" : "");
-    const memTitle = `${esc(hvT("hyperv.host_mem", "宿主机内存 可用/总"))} · ${esc(hvT("hyperv.mem_used", "已用"))} ${usedPct}%`;
-    memTxt = `<span class="hv-hostmem${cls}" title="${memTitle}">${(aMem / 1024).toFixed(1)}/${(tMem / 1024).toFixed(1)} GB</span>`;
+  let memSub = "";
+  if (tMem > 0) memSub = `${(aMem / 1024).toFixed(1)}/${(tMem / 1024).toFixed(1)} GB`;
+  let body = "";
+  if (!collapsed) {
+    body = visible.length
+      ? `<div class="rtx-children" role="group">${visible.map(g => hvVmNode(inv, g)).join("")}</div>`
+      : `<div class="rtx-children"><div class="rtx-empty">${esc(hvT("hyperv.no_match", "无匹配虚拟机"))}</div></div>`;
   }
-  const head = `<div class="hv-hosthead" data-hvhosttoggle="${esc(inv.host_id)}">
-    <span class="hv-caret2">${collapsed ? "▸" : "▾"}</span>
-    <span class="name" title="${esc(hostName)}">🖥 ${esc(hostName)}</span>
-    ${memTxt}
-    <span class="hv-hostcount${bad ? " bad" : ""}" title="${countTitle}">${guests.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
+  return `<div class="rtx-folder">
+    <div class="rtx-node${hostSel ? " selected" : ""}${guests.length ? " has-kids" : " is-leaf"}" data-hvhostsel="${esc(inv.host_id)}" role="treeitem" aria-selected="${hostSel ? "true" : "false"}" tabindex="0">
+      ${hvTreeCaret(inv.host_id, guests.length > 0, collapsed)}
+      <span class="rtx-ico rtx-ico-host" aria-hidden="true"></span>
+      <span class="rtx-name" title="${esc(hostName)}">${esc(hostName)}</span>
+      ${memSub ? `<span class="rtx-sub" title="${esc(hvT("hyperv.host_mem", "宿主机内存 可用/总"))}">${esc(memSub)}</span>` : ""}
+      <span class="rtx-count${bad ? " bad" : ""}">${guests.length}${bad ? `<span class="hc-bad">${bad}</span>` : ""}</span>
+    </div>
+    ${body}
   </div>`;
-
-  if (collapsed) return `<div class="hv-hostnode">${head}</div>`;
-  const list = visible.length
-    ? visible.map(g => hvVmNode(inv, g)).join("")
-    : `<div class="hv-vm" style="cursor:default;color:var(--muted)"><span class="vname">${esc(hvT("hyperv.no_match", "无匹配虚拟机"))}</span></div>`;
-  return `<div class="hv-hostnode">${head}<div class="hv-vmlist">${list}</div></div>`;
 }
 
 function hvToolbar(totalHosts, totalVMs, totalBad) {
-  return `<div class="hw-toolbar" style="margin-bottom:10px">
-    <input id="hvSearch" class="hw-search" type="search" placeholder="${esc(hvT("hyperv.search", "搜索 VM 名称 / IP / 状态…"))}" value="${esc(HV_FILTER.q)}">
-    <select id="hvStatusFilter" class="hw-sel" style="max-width:150px">
+  return `<div class="rtx-toolbar">
+    <input id="hvSearch" class="hw-search" type="search" placeholder="${esc(hvT("hyperv.search", "搜索 VM 名称 / IP / 宿主机…"))}" value="${esc(HV_FILTER.q)}" autocomplete="off" spellcheck="false">
+    <select id="hvStatusFilter" class="hw-sel">
       <option value="">${esc(hvT("hyperv.f_all", "全部状态"))}</option>
       <option value="running"${HV_FILTER.status === "running" ? " selected" : ""}>${esc(hvT("hyperv.st_running", "运行中"))}</option>
       <option value="notrunning"${HV_FILTER.status === "notrunning" ? " selected" : ""}>${esc(hvT("hyperv.f_notrunning", "非运行"))}</option>
@@ -225,9 +246,43 @@ function hvToolbar(totalHosts, totalVMs, totalBad) {
     </select>
     <button data-hvrefresh="1" class="btn sm" title="${esc(hvT("hyperv.refresh", "刷新"))}">↻</button>
     <button type="button" class="btn sm ai-assist-btn" data-hvai-fleet="1" title="${esc(hvT("hyperv.ai_fleet_title", "AI 分析整体 Hyper-V 清单"))}"><span class="ai-assist-btn-ic">🤖</span>${esc(hvT("hyperv.ai_diag", "AI 诊断"))}</button>
+    <span class="rtx-count">${hvT("hyperv.summary", "宿主机")} ${totalHosts} · ${hvT("hyperv.vm", "虚拟机")} ${totalVMs}${totalBad ? ` · ${hvT("hyperv.attention", "需关注")} ${totalBad}` : ""}</span>
   </div>
-  ${hvDupBannerHTML()}
-  <div class="hv-summary muted">${hvT("hyperv.summary", "宿主机")} ${totalHosts} · ${hvT("hyperv.vm", "虚拟机")} ${totalVMs}${totalBad ? ` · <span style="color:var(--warn-txt)">${hvT("hyperv.attention", "需关注")} ${totalBad}</span>` : ""}</div>`;
+  ${hvDupBannerHTML()}`;
+}
+
+function hvTreeHTML(hosts) {
+  const treeQ = normalizeSearchText(HV_TREE_Q);
+  const searchActive = !!normalizeSearchText(HV_FILTER.q);
+  const filtering = searchActive || !!HV_FILTER.status || !!treeQ;
+  // 左树始终列出全部宿主机（树搜过滤）；选中态只高亮，不隐藏兄弟节点
+  const shown = hosts.filter(inv => hvHostMatchesTreeQ(inv, treeQ));
+  const rootId = "__all__";
+  const rootCollapsed = !filtering && HV_COLLAPSED.has(rootId);
+  const hasKids = shown.length > 0;
+  let totalVMs = 0;
+  HV_INVENTORIES.forEach(inv => { totalVMs += (inv.guests || []).length; });
+  let kids = "";
+  if (!rootCollapsed && hasKids) {
+    kids = `<div class="rtx-children" role="group">${shown.map(inv => hvHostNode(inv, filtering)).join("")}</div>`;
+  } else if (treeQ || searchActive) {
+    kids = `<div class="rtx-empty">${esc(hvT("hyperv.no_match", "无匹配虚拟机"))}</div>`;
+  }
+  return `<div class="rtx-tree-search">
+      <input type="search" id="hvTreeSearch" class="rtx-tree-q" value="${esc(HV_TREE_Q || "")}"
+        placeholder="${esc(hvT("hyperv.tree_search_ph", "搜索宿主机…"))}" autocomplete="off">
+    </div>
+    <div class="rtx-scroll">
+      <div class="rtx-folder" role="tree">
+        <div class="rtx-node rtx-root-node${!HV_HOST_FILTER || searchActive ? " selected" : ""}${hasKids ? " has-kids" : " is-leaf"}" data-hvhostsel="" role="treeitem" tabindex="0">
+          ${hvTreeCaret(rootId, hasKids, rootCollapsed)}
+          <span class="rtx-ico rtx-ico-all" aria-hidden="true"></span>
+          <span class="rtx-name">${esc(hvT("hyperv.all_vms", "全部虚拟机"))}</span>
+          <span class="rtx-count">${totalVMs}</span>
+        </div>
+        ${kids}
+      </div>
+    </div>`;
 }
 
 /* ---------- 右侧详情 ---------- */
@@ -344,18 +399,73 @@ function hvQuickStats(g) {
 }
 
 function hvDetailFor(inv, g) {
+  const allowWrite = typeof canWrite === "function" && canWrite();
+  const ops = allowWrite ? `<div class="hv-ops" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px">
+    <button type="button" class="btn sm" data-hvpower="start">${esc(hvT("hyperv.power_start", "启动"))}</button>
+    <button type="button" class="btn sm" data-hvpower="stop">${esc(hvT("hyperv.power_stop", "关机"))}</button>
+    <button type="button" class="btn sm" data-hvpower="restart">${esc(hvT("hyperv.power_restart", "重启"))}</button>
+    <button type="button" class="btn sm" data-hvpower="force_stop">${esc(hvT("hyperv.power_force", "强制关机"))}</button>
+    <button type="button" class="btn sm" data-hvconfig="1">${esc(hvT("hyperv.edit_config", "编辑配置"))}</button>
+  </div>` : "";
+  const termBtn = g.linked_host_id
+    ? `<button type="button" class="btn sm" data-hvterm="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}">${esc(hvT("hyperv.open_term", "打开终端"))}</button>`
+    : `<span class="hint" style="margin-left:8px">${esc(hvT("hyperv.no_linked_term", "未关联纳管主机，无法打开终端（请在 Guest 安装 Agent）"))}</span>`;
   const head = `<div class="hv-dhead">
     <span class="hv-dot ${hvDotClass(g)}"></span>
     <span class="title">${esc(g.name)}</span>
     ${hvStateBadge(g)}
     <button type="button" class="btn sm ai-assist-btn" data-hvai="1" title="${esc(hvT("hyperv.ai_vm_title", "AI 分析该虚拟机运行状态"))}" style="margin-left:8px"><span class="ai-assist-btn-ic">🤖</span>${esc(hvT("hyperv.ai_diag", "AI 诊断"))}</button>
+    ${termBtn}
     ${g.linked_host_id ? `<a class="hv-link" data-hvjump="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}" style="margin-left:auto">${esc(hvT("hyperv.open_host", "打开纳管主机"))} ↗</a>` : ""}
-  </div>`;
+  </div>${ops}`;
   const cards = [
     hvOverviewCard(inv, g), hvCpuCard(g), hvMemCard(g),
     hvDiskCard(g), hvNetCard(g), hvCheckpointCard(g),
   ].join("");
   return `<div class="hv-detailbox">${head}${hvQuickStats(g)}<div class="hv-cards">${cards}</div></div>`;
+}
+
+async function hvDoPower(action) {
+  const sel = hvFindSelected();
+  if (!sel) return;
+  const label = { start: "启动", stop: "关机", restart: "重启", force_stop: "强制关机" }[action] || action;
+  if (!confirm(hvT("hyperv.power_confirm", "确认对虚拟机「{name}」执行 {action}？").replace("{name}", sel.g.name || "").replace("{action}", label))) return;
+  try {
+    const r = await fetch(`${API}/hyperv/${encodeURIComponent(sel.inv.host_id)}/guests/${encodeURIComponent(sel.g.id || sel.g.name)}/power`, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, name: sel.g.name || "" }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    toast(hvT("hyperv.power_ok", "操作已提交"), "ok");
+    setTimeout(() => loadHyperVPanel(), 1500);
+  } catch (e) { toast(String(e.message || e), "err"); }
+}
+
+async function hvDoConfig() {
+  const sel = hvFindSelected();
+  if (!sel) return;
+  const cpu = prompt(hvT("hyperv.prompt_cpu", "vCPU 数量（留空不改）"), String(sel.g.processor_count || ""));
+  if (cpu === null) return;
+  const mem = prompt(hvT("hyperv.prompt_mem", "启动内存 MB（留空不改）"), String(sel.g.mem_startup_mb || sel.g.mem_assigned_mb || ""));
+  if (mem === null) return;
+  const body = { name: sel.g.name || "" };
+  if (String(cpu).trim()) body.processor_count = parseInt(cpu, 10);
+  if (String(mem).trim()) body.memory_mb = parseInt(mem, 10);
+  if (!body.processor_count && !body.memory_mb) { toast(hvT("hyperv.config_empty", "未填写变更项"), "err"); return; }
+  if (!confirm(hvT("hyperv.config_confirm", "确认修改虚拟机「{name}」配置？").replace("{name}", sel.g.name || ""))) return;
+  try {
+    const r = await fetch(`${API}/hyperv/${encodeURIComponent(sel.inv.host_id)}/guests/${encodeURIComponent(sel.g.id || sel.g.name)}/config`, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    toast(hvT("toast.saved", "已保存"), "ok");
+    setTimeout(() => loadHyperVPanel(), 1500);
+  } catch (e) { toast(String(e.message || e), "err"); }
 }
 
 function hvDetail() {
@@ -388,14 +498,23 @@ function renderHyperVPanel() {
   });
   const hosts = HV_INVENTORIES.slice().sort((a, b) =>
     (b.guests || []).filter(hvAbnormal).length - (a.guests || []).filter(hvAbnormal).length);
-  const tree = hvToolbar(HV_INVENTORIES.length, totalVMs, totalBad) +
-    `<div class="hv-treebox">${hosts.map(hvHostNode).join("")}</div>`;
+  const focusTree = document.activeElement && document.activeElement.id === "hvTreeSearch";
+  const focusMain = document.activeElement && document.activeElement.id === "hvSearch";
+  const focusId = focusTree ? "hvTreeSearch" : (focusMain ? "hvSearch" : "");
+  const focusPos = focusId && document.activeElement ? document.activeElement.selectionStart : -1;
   const hvCol = window.treeCollapsed && window.treeCollapsed("aiops_hv_tree");
-  container.innerHTML = `<div class="hv-wrap tree-wrap${hvCol ? " tree-collapsed" : ""}">` +
-      `<div class="hv-tree tree-pane" id="hvTree">${tree}</div>` +
+  container.innerHTML = `<div class="rtx-wrap tree-wrap${hvCol ? " tree-collapsed" : ""}">` +
+      `<div class="rtx-tree tree-pane" id="hvTree">${hvTreeHTML(hosts)}</div>` +
       `<button class="tree-toggle-btn" data-tree-toggle="aiops_hv_tree" title="收起/展开虚拟机列表，给右侧腾空间" aria-expanded="${hvCol ? "false" : "true"}">${hvCol ? "›" : "‹"}</button>` +
-      `<div class="hv-detail" id="hvDetail">${hvDetail()}</div>` +
+      `<div class="rtx-main">` +
+        hvToolbar(HV_INVENTORIES.length, totalVMs, totalBad) +
+        `<div class="rtx-main-scroll" id="hvDetail">${hvDetail()}</div>` +
+      `</div>` +
     `</div>`;
+  if (focusId) {
+    const el = $(focusId);
+    if (el) { el.focus(); if (focusPos >= 0) try { el.setSelectionRange(focusPos, focusPos); } catch (e) {} }
+  }
 }
 
 /* ---------- AI 诊断 ---------- */
@@ -630,7 +749,7 @@ function hvToggleExportMenu(show) {
   btn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-function hvDoExport(fmt) {
+async function hvDoExport(fmt) {
   hvToggleExportMenu(false);
   if (!HV_INVENTORIES.length) {
     toast(hvT("hyperv.export_empty", "暂无虚拟机数据可导出"), "err");
@@ -642,7 +761,7 @@ function hvDoExport(fmt) {
       toast(hvT("hyperv.export_empty", "暂无虚拟机数据可导出"), "err");
       return;
     }
-    const ok = exportModel(model, fmt, hvT("hyperv.export_prefix", "HyperV虚拟机资产"));
+    const ok = await exportModel(model, fmt, hvT("hyperv.export_prefix", "HyperV虚拟机资产"));
     if (!ok) {
       toast(hvT("hyperv.export_popup_blocked", "导出失败：请允许本站弹出窗口后重试"), "err");
       return;
@@ -664,6 +783,15 @@ safeAddEventListener("hypervPanel", "click", e => {
   if (fleetAI) { hvOpenFleetAI(); return; }
   const vmAI = e.target.closest("[data-hvai]");
   if (vmAI) { hvOpenSelectedAI(); return; }
+  const power = e.target.closest("[data-hvpower]");
+  if (power) { hvDoPower(power.dataset.hvpower); return; }
+  const cfgBtn = e.target.closest("[data-hvconfig]");
+  if (cfgBtn) { hvDoConfig(); return; }
+  const term = e.target.closest("[data-hvterm]");
+  if (term && typeof openTerminal === "function") {
+    openTerminal(term.dataset.hvterm, term.dataset.hvname || term.dataset.hvterm);
+    return;
+  }
   const jump = e.target.closest("[data-hvjump]");
   if (jump && typeof openDetail === "function") {
     openDetail(jump.dataset.hvjump, jump.dataset.hvname || jump.dataset.hvjump);
@@ -671,27 +799,41 @@ safeAddEventListener("hypervPanel", "click", e => {
   }
   const htoggle = e.target.closest("[data-hvhosttoggle]");
   if (htoggle) {
+    e.preventDefault();
+    e.stopPropagation();
     const id = htoggle.dataset.hvhosttoggle;
+    if (!id) return;
     if (HV_COLLAPSED.has(id)) HV_COLLAPSED.delete(id); else HV_COLLAPSED.add(id);
     renderHyperVPanel();
     return;
   }
-  const vm = e.target.closest(".hv-vm[data-hvvm]");
+  const hostSel = e.target.closest("[data-hvhostsel]");
+  if (hostSel && !e.target.closest("[data-hvvm]")) {
+    hvSelectHost(hostSel.dataset.hvhostsel || "");
+    return;
+  }
+  const vm = e.target.closest("[data-hvvm]");
   if (vm) { hvSelect(vm.dataset.hvhost, vm.dataset.hvvm); return; }
 });
 
 let HV_SEARCH_T = null;
-safeAddEventListener("hypervPanel", "input", e => {
+function onHvSearchInput(e) {
+  if (!e.target) return;
+  if (e.target.id === "hvTreeSearch") {
+    HV_TREE_Q = e.target.value || "";
+    renderHyperVPanel();
+    return;
+  }
   if (e.target.id !== "hvSearch") return;
   clearTimeout(HV_SEARCH_T);
   const v = e.target.value;
   HV_SEARCH_T = setTimeout(() => {
     HV_FILTER.q = v;
     renderHyperVPanel();
-    const s = $("hvSearch");
-    if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
   }, 200);
-});
+}
+safeAddEventListener("hypervPanel", "input", onHvSearchInput);
+safeAddEventListener("hypervPanel", "search", onHvSearchInput);
 safeAddEventListener("hypervPanel", "change", e => {
   if (e.target.id === "hvStatusFilter") { HV_FILTER.status = e.target.value; renderHyperVPanel(); }
 });
@@ -713,36 +855,7 @@ function hvInjectStyles() {
   const s = document.createElement("style");
   s.id = "hv-css";
   s.textContent = `
-  .hv-wrap{display:flex;gap:14px;align-items:flex-start}
-  .hv-tree{flex:0 0 340px;max-width:340px;min-width:250px}
-  .hv-detail{flex:1 1 auto;min-width:0}
-  @media(max-width:900px){.hv-wrap{flex-direction:column}.hv-tree{flex-basis:auto;max-width:none;width:100%}}
-  .hv-summary{font-size:12px;margin:-4px 2px 10px}
-  .hv-treebox{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .hv-hostnode{border-bottom:1px solid var(--line)}
-  .hv-hostnode:last-child{border-bottom:none}
-  .hv-hosthead{display:flex;align-items:center;gap:8px;padding:9px 10px;cursor:pointer;user-select:none}
-  .hv-hosthead:hover{background:var(--panel2)}
-  .hv-hosthead .name{font-weight:600;color:var(--txt);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hv-hostcount{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--txt2);background:var(--panel3);border:1px solid var(--line);border-radius:20px;padding:1px 8px;font-variant-numeric:tabular-nums;flex:0 0 auto}
-  .hv-hostcount .hc-bad{color:var(--warn-txt);font-weight:600}
-  .hv-hostcount .hc-bad::before{content:"⚠ "}
-  .hv-hostmem{font-size:11px;color:var(--txt2);font-variant-numeric:tabular-nums;flex:0 0 auto;white-space:nowrap;opacity:.9}
-  .hv-hostmem::before{content:"🧠 ";opacity:.7}
-  .hv-hostmem.warn{color:var(--warn-txt);opacity:1}
-  .hv-hostmem.crit{color:var(--crit-txt);font-weight:600;opacity:1}
-  .hv-caret2{color:var(--muted);font-size:11px;width:12px;text-align:center;flex:0 0 12px}
-  .hv-vmlist{padding:2px 0 6px}
-  .hv-vm{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 28px;cursor:pointer;border-left:2px solid transparent}
-  .hv-vm:hover{background:var(--panel2)}
-  .hv-vm.selected{background:var(--accent-soft);border-left-color:var(--accent)}
-  .hv-vm .vname{flex:1;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
-  .hv-vm.selected .vname{color:var(--txt);font-weight:600}
-  .hv-vm.bad .vname{color:var(--warn-txt)}
-  .hv-vm .vmini{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
-  .hv-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
-  .hv-dot.ok{background:var(--ok)}.hv-dot.warn{background:var(--warn)}.hv-dot.crit{background:var(--crit)}.hv-dot.off{background:var(--muted)}
-  .hv-detailbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-height:200px}
+  .hv-detailbox{min-height:160px}
   .hv-dhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--line)}
   .hv-dhead .title{font-size:16px;font-weight:600;color:var(--txt)}
   .hv-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"log/slog"
 )
@@ -33,6 +34,11 @@ func ensureConfigExample(cfgPath string) {
 		return // already exists — never overwrite user edits
 	}
 	if err := os.WriteFile(dst, configExampleYAML, 0644); err != nil {
+		// read-only rootfs (compose demo agent) is expected — don't scare operators.
+		msg := err.Error()
+		if strings.Contains(msg, "read-only") || strings.Contains(msg, "permission denied") {
+			return
+		}
 		slog.Warn("写入 config.example.yaml 失败", "path", dst, "err", err)
 	} else {
 		slog.Info("已生成配置示例文件", "path", dst)

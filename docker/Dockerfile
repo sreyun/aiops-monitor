@@ -75,14 +75,23 @@ ENTRYPOINT ["/app/aiops-server"]
 CMD ["-addr", ":8529", "-config", "/app/data/server_config.json", "-dist", "/app/dist"]
 
 # ---- Agent image ----
+# Demo-safe default: long-running process is unprivileged uid 10001 (aiops).
+# Entrypoint may start as root solely to fix volume ownership, then su-exec drops.
 FROM ${BASE_REGISTRY}/alpine:3.20 AS agent
-RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
+RUN apk add --no-cache ca-certificates tzdata python3 py3-pip su-exec \
+ && addgroup -S -g 10001 aiops \
+ && adduser -S -u 10001 -G aiops -H -s /sbin/nologin aiops
 WORKDIR /app
 
 COPY --from=builder /out/aiops-agent /app/aiops-agent
 COPY plugins/ /app/plugins/
+COPY docker/agent-entrypoint.sh /entrypoint.sh
 
-RUN pip3 install --no-cache-dir --break-system-packages psutil 2>/dev/null || true
+RUN pip3 install --no-cache-dir --break-system-packages psutil 2>/dev/null || true \
+ && mkdir -p /app/data \
+ && chown -R aiops:aiops /app \
+ && chmod 0755 /entrypoint.sh /app/aiops-agent
 
-ENTRYPOINT ["/app/aiops-agent"]
-CMD ["--server", "http://aiops-server:8529"]
+ENTRYPOINT ["/entrypoint.sh"]
+# Server/token 由 compose 注入 AIOPS_SERVER / AIOPS_TOKEN / AIOPS_TOKEN_FILE
+CMD []

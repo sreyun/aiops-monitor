@@ -88,9 +88,9 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	if byID[1].Grid.W != 12 || byID[3].Grid.W != 6 {
 		t.Fatalf("gridPos 宽度未保留")
 	}
-	// 短面板 h=2 应保留（勿在导入时抬高）
-	if byID[3].Grid.H != 2 {
-		t.Fatalf("stat 高度应保留为 2，实为 %d", byID[3].Grid.H)
+	// Grafana 过矮 KPI（h=2）导入后抬到 6，避免大数字+sparkline 被裁切
+	if byID[3].Grid.H < 6 {
+		t.Fatalf("stat 高度应抬到 ≥6，实为 %d", byID[3].Grid.H)
 	}
 }
 
@@ -109,6 +109,36 @@ func TestHealImportedDashboardOverlap(t *testing.T) {
 	}
 	if d.Panels[1].Grid.Y < d.Panels[0].Grid.Y+d.Panels[0].Grid.H {
 		t.Fatalf("B 应被下推到 A 下方: A=%+v B=%+v", d.Panels[0].Grid, d.Panels[1].Grid)
+	}
+}
+
+func TestHealImportedDashboardShortStat(t *testing.T) {
+	d := Dashboard{
+		Panels: []DashPanel{
+			{ID: 1, Title: "在线主机数", Type: "stat", Grid: DashGrid{X: 0, Y: 0, W: 6, H: 4}, Targets: []DashTarget{{Expr: "up"}}},
+			{ID: 2, Title: "CPU", Type: "stat", Grid: DashGrid{X: 6, Y: 0, W: 6, H: 4}, Targets: []DashTarget{{Expr: "cpu"}}},
+			{ID: 3, Title: "趋势", Type: "timeseries", Grid: DashGrid{X: 0, Y: 4, W: 12, H: 8}, Targets: []DashTarget{{Expr: "x"}}},
+		},
+	}
+	if !healImportedDashboard(&d) {
+		t.Fatal("过矮 KPI 应被抬高")
+	}
+	for _, p := range d.Panels {
+		if p.Type == "stat" && p.Grid.H < 6 {
+			t.Fatalf("stat「%s」高度应≥6，实为 %d", p.Title, p.Grid.H)
+		}
+	}
+	if panelsGridOverlap(d.Panels) {
+		t.Fatal("抬高 KPI 后不应重叠")
+	}
+	var trend DashPanel
+	for _, p := range d.Panels {
+		if p.Title == "趋势" {
+			trend = p
+		}
+	}
+	if trend.Grid.Y < 6 {
+		t.Fatalf("趋势面板应被下推到 KPI 下方，y=%d", trend.Grid.Y)
 	}
 }
 
@@ -184,12 +214,118 @@ func TestLayoutAIDashPanelsSections(t *testing.T) {
 	if panels[0].Grid.W+panels[1].Grid.W != 24 {
 		t.Fatalf("stat 行应铺满 24，实为 %d+%d", panels[0].Grid.W, panels[1].Grid.W)
 	}
-	// gauge 在第二行
-	if panels[2].Type != "gauge" || panels[2].Grid.Y != panels[0].Grid.H {
-		t.Fatalf("gauge 应在 stat 行下方: %+v", panels[2].Grid)
+	// 单个 gauge 独占整行，禁止被后续 timeseries 填半行
+	if panels[2].Type != "gauge" || panels[2].Grid.Y != panels[0].Grid.H || panels[2].Grid.W != 24 {
+		t.Fatalf("gauge 应独占整行铺满: %+v", panels[2].Grid)
 	}
-	if panelsGridOverlap(panels) {
-		t.Fatal("AI 布局不应重叠")
+	if panels[3].Type != "timeseries" || panels[3].Grid.Y != panels[2].Grid.Y+panels[2].Grid.H || panels[3].Grid.W != 24 {
+		t.Fatalf("timeseries 应在 gauge 下方整行: %+v", panels[3].Grid)
+	}
+	if panelsGridOverlap(panels) || aiDashLayoutNeedsTidy(panels) {
+		t.Fatal("AI 布局不应重叠或残留错位")
+	}
+}
+
+func TestLayoutAIDashPanelsNoCrossSectionPack(t *testing.T) {
+	// 模拟「应用优化」后常见结构：4 KPI + 奇数趋势 + 对比图 + 单 gauge + 表
+	panels := []DashPanel{
+		{ID: 1, Type: "stat", Title: "a", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 2, Type: "stat", Title: "b", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 3, Type: "stat", Title: "c", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 4, Type: "stat", Title: "d", Grid: DashGrid{W: 6, H: 4}},
+		{ID: 5, Type: "stat", Title: "e", Grid: DashGrid{W: 6, H: 4}}, // 5 KPI → 3+2，禁止 4+1 孤儿
+		{ID: 6, Type: "timeseries", Title: "t1", Grid: DashGrid{W: 12, H: 8}},
+		{ID: 7, Type: "timeseries", Title: "t2", Grid: DashGrid{W: 12, H: 8}},
+		{ID: 8, Type: "timeseries", Title: "t3", Grid: DashGrid{W: 12, H: 8}}, // 奇数 → 末行 w=24
+		{ID: 9, Type: "barchart", Title: "top", Grid: DashGrid{W: 12, H: 8}},
+		{ID: 10, Type: "gauge", Title: "io", Grid: DashGrid{W: 12, H: 6}},
+		{ID: 11, Type: "table", Title: "detail", Grid: DashGrid{W: 12, H: 7}},
+	}
+	layoutAIDashPanels(panels)
+
+	// 分区顺序
+	wantTypes := []string{"stat", "stat", "stat", "stat", "stat", "gauge", "timeseries", "timeseries", "timeseries", "barchart", "table"}
+	for i, typ := range wantTypes {
+		if panels[i].Type != typ {
+			t.Fatalf("panels[%d] type=%s want %s", i, panels[i].Type, typ)
+		}
+	}
+	// KPI：3+2 两行均铺满
+	if panels[0].Grid.Y != 0 || panels[2].Grid.Y != 0 || panels[0].Grid.W != 8 {
+		t.Fatalf("首行 3 KPI 应各 w=8: %+v", panels[0].Grid)
+	}
+	if panels[3].Grid.Y != 6 || panels[4].Grid.Y != 6 || panels[3].Grid.W+panels[4].Grid.W != 24 {
+		t.Fatalf("次行 2 KPI 应铺满: %+v %+v", panels[3].Grid, panels[4].Grid)
+	}
+	// gauge 不得与 timeseries 同行
+	if panels[5].Type != "gauge" || panels[5].Grid.W != 24 {
+		t.Fatalf("gauge 应整行: %+v", panels[5].Grid)
+	}
+	if panels[6].Grid.Y <= panels[5].Grid.Y {
+		t.Fatalf("timeseries 不得与 gauge 同 y")
+	}
+	// 3 条趋势：两行半对 + 末行整宽
+	if panels[6].Grid.W != 12 || panels[7].Grid.W != 12 || panels[6].Grid.Y != panels[7].Grid.Y {
+		t.Fatalf("前两条趋势应并排: %+v %+v", panels[6].Grid, panels[7].Grid)
+	}
+	if panels[8].Grid.W != 24 || panels[8].Grid.Y != panels[6].Grid.Y+panels[6].Grid.H {
+		t.Fatalf("奇数趋势末行应整宽: %+v", panels[8].Grid)
+	}
+	if aiDashLayoutNeedsTidy(panels) || panelsGridOverlap(panels) {
+		t.Fatal("重排后仍有布局缺陷")
+	}
+}
+
+func TestAISplitRowCountsAvoidOrphan(t *testing.T) {
+	got := aiSplitRowCounts(5, 4)
+	if len(got) != 2 || got[0] != 3 || got[1] != 2 {
+		t.Fatalf("5 KPI max4 应为 [3,2]，实为 %v", got)
+	}
+	got = aiSplitRowCounts(3, 2)
+	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
+		t.Fatalf("3 charts max2 应为 [2,1]，实为 %v", got)
+	}
+}
+
+func TestLayoutAIDashPanelsGoldenSignalBoard(t *testing.T) {
+	// 与「主机黄金信号总览」当前面板类型一致（应用优化后常见错位样本）
+	titles := []string{
+		"在线主机数", "集群 CPU 均值", "集群内存均值", "集群磁盘均值",
+		"CPU 利用率与单核负载趋势", "磁盘读写吞吐趋势", "内存与 Swap 使用率趋势",
+		"CPU 高水位主机 Top10", "网络收发吞吐趋势", "磁盘卷水位横向对比",
+		"内存高水位主机 Top10", "磁盘 IO 利用率水位", "磁盘卷容量明细",
+	}
+	types := []string{
+		"stat", "stat", "stat", "stat",
+		"timeseries", "timeseries", "timeseries",
+		"barchart", "timeseries", "bargauge",
+		"barchart", "gauge", "table",
+	}
+	panels := make([]DashPanel, len(types))
+	for i := range types {
+		panels[i] = DashPanel{ID: i + 1, Type: types[i], Title: titles[i], Grid: DashGrid{W: 12, H: 8}}
+	}
+	layoutAIDashPanels(panels)
+	if panels[0].Type != "stat" || panels[3].Grid.Y != 0 || panels[0].Grid.W != 6 {
+		t.Fatalf("4 KPI 应同行各 w=6: %+v", panels[0].Grid)
+	}
+	if panels[4].Type != "gauge" || panels[4].Grid.W != 24 || panels[4].Grid.Y != 6 {
+		t.Fatalf("gauge 应独占第二行: type=%s %+v", panels[4].Type, panels[4].Grid)
+	}
+	ts := 0
+	for _, p := range panels {
+		if p.Type == "timeseries" {
+			ts++
+			if p.Grid.Y < 12 {
+				t.Fatalf("timeseries 不得压到 gauge 行: %+v", p.Grid)
+			}
+		}
+	}
+	if ts != 4 {
+		t.Fatalf("timeseries count=%d", ts)
+	}
+	if aiDashLayoutNeedsTidy(panels) {
+		t.Fatal("黄金信号样本重排后仍有布局缺陷")
 	}
 }
 

@@ -62,7 +62,7 @@ type PlaybookStep struct {
 	RollbackWin   string `json:"rollback_win,omitempty"`    // Windows 回滚覆盖
 	RollbackMac   string `json:"rollback_mac,omitempty"`    // macOS 回滚覆盖
 	// 内置模块（非空则走模块、忽略上面的 Command）：
-	// 只读：gather_facts / disk_usage / mem_info / net_* / docker_* / ...
+	// 只读：gather_facts / host_inspect / disk_usage / mem_info / net_* / docker_* / ...
 	// 变更：service / package / copy
 	Module string            `json:"module,omitempty"`
 	Args   map[string]string `json:"args,omitempty"`
