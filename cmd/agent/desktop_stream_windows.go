@@ -1289,28 +1289,27 @@ var (
 	procSendSAS = modSas.NewProc("SendSAS")
 )
 
-// SendCAD triggers Ctrl+Alt+Del (Secure Attention Sequence) via sas.dll SendSAS.
-// Requires LocalSystem desktop worker (or SoftwareSASGeneration policy for services).
+// SendCAD triggers Ctrl+Alt+Del (Secure Attention Sequence).
+// Prefer the Session-0 service pipe — the in-session desktop worker is not an
+// SCM service, so a bare SendSAS call is often ignored by Winlogon.
 func (i *winInput) SendCAD() error {
 	if err := i.ensureInputDesktop(); err != nil {
-		slog.Warn("SendCAD: 附着输入桌面失败，仍尝试 SendSAS", "err", err)
+		slog.Warn("SendCAD: 附着输入桌面失败，仍尝试注入 SAS", "err", err)
 	}
-	if err := modSas.Load(); err != nil {
-		return fmt.Errorf("加载 sas.dll 失败（需 Windows 服务会话）: %w", err)
+	// Nudge the lock UI first (some builds need a focus event before SAS).
+	sw, _, _ := procGetSystemMetrics.Call(smCXScreen)
+	sh, _, _ := procGetSystemMetrics.Call(smCYScreen)
+	if int(sw) < 2 {
+		sw = 1920
 	}
-	// SendSAS(FALSE) — as system / service context
-	r, _, callErr := procSendSAS.Call(0)
-	if r == 0 {
-		errno := win32LastError()
-		if e, ok := callErr.(syscall.Errno); ok && e != 0 {
-			errno = uint32(e)
-		}
-		if errno != 0 {
-			return fmt.Errorf("SendSAS 失败 win32=%d（确认以服务安装 Agent，且策略允许 SoftwareSASGeneration）", errno)
-		}
+	if int(sh) < 2 {
+		sh = 1080
 	}
-	slog.Info("已发送 SAS (Ctrl+Alt+Del)", "desktop", i.curDeskName, "session", currentSessionID())
-	return nil
+	_ = i.MouseMove(int(sw)/2, int(sh)*2/3)
+	_ = i.MouseButton(1, true)
+	_ = i.MouseButton(1, false)
+	time.Sleep(40 * time.Millisecond)
+	return injectSecureAttentionSequence()
 }
 
 // TypeText injects Unicode text via KEYEVENTF_UNICODE (works on lock screen password boxes).

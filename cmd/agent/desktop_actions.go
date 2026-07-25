@@ -147,9 +147,11 @@ func handleDeskAction(inp deskInput, payload []byte, screenW, screenH int, fileT
 		ack[k] = v
 	}
 	js, _ := json.Marshal(ack)
+	frame := deskTxFrame('S', js)
 	select {
-	case fileTxChan <- deskTxFrame('S', js):
-	default:
+	case fileTxChan <- frame:
+	case <-time.After(3 * time.Second):
+		// Still log — operator must not see a silent no-op on CAD/unlock.
 	}
 }
 
