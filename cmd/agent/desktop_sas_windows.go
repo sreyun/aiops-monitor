@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -16,25 +17,29 @@ import (
 
 // Secure Attention Sequence (Ctrl+Alt+Del) for Windows — especially Server + RDP.
 //
-// Win10/11 often accept SendSAS after ImpersonateNamedPipeClient. Windows Server
-// frequently ignores SendSAS from a CreateProcessAsUser(SYSTEM) helper because it
-// is not the SCM service process. UltraVNC / Veyon solve this with:
-//  1) SoftwareSASGeneration forced on
-//  2) Duplicate the session's winlogon.exe token and CreateProcessAsUser into
-//     winsta0\Winlogon
-//  3) From that Winlogon desktop thread: SendSAS(FALSE) AND PostMessage
-//     HWND_BROADCAST WM_HOTKEY(Ctrl+Alt+Del) — the classic NT logon trap.
+// Root cause of "CAD click does nothing" on Windows Server with our remote
+// desktop: capture prefers the active RDP session, but SendSAS(FALSE) (LocalSystem)
+// targets the *physical console* session. Headless/Hyper-V hosts show the RDP
+// lock screen while CAD fires elsewhere — silent no-op for the operator.
 //
-// The Session-0 Agent service also impersonates the winlogon token and calls
-// SendSAS itself (true service context per MSDN).
+// Fix (MSDN + UltraVNC/MeshAgent patterns):
+//  1) Force SoftwareSASGeneration=3 (64-bit registry view)
+//  2) From the SCM service: impersonate the *target session* user/winlogon and
+//     call SendSAS(TRUE) so SAS is delivered to that session
+//  3) Also SendSAS(FALSE) for console-attached cases
+//  4) Spawn --send-sas under winlogon token on winsta0\Winlogon and PostMessage
+//     WM_HOTKEY (Ctrl+Alt+Del) to Winlogon windows
+//  5) Dual channel: named pipe (with session id) + Global event (UltraVNC-style)
 
 const (
-	deskSASPipeName = `\\.\pipe\aiops-monitor-sas-v1`
+	deskSASPipeName  = `\\.\pipe\aiops-monitor-sas-v1`
+	deskSASEventName = `Global\aiops-monitor-sas-cad`
 
 	regOptionNonVolatile = 0
 	keySetValue          = 0x0002
 	keyQueryValue        = 0x0001
 	keyCreateSubKey      = 0x0004
+	keyWOW64_64KEY       = 0x0100
 	regDWORD             = 4
 	errorPipeBusy        = 231
 	genericRead          = 0x80000000
@@ -49,13 +54,19 @@ const (
 	pipeUnlimitedInst    = 255
 	pipeConnectedErr     = 535
 
-	wmHotkey       = 0x0312
-	modAlt         = 0x0001
-	modControl     = 0x0002
-	vkDelete       = 0x2E
-	hwndBroadcast  = 0xFFFF
-	processQueryInfo = 0x0400
-	processQueryLimited = 0x1000
+	wmHotkey             = 0x0312
+	modAlt               = 0x0001
+	modControl           = 0x0002
+	vkDelete             = 0x2E
+	hwndBroadcast        = 0xFFFF
+	processQueryInfo     = 0x0400
+	processQueryLimited  = 0x1000
+	processAllAccessSAS  = 0x1F0FFF
+	loadLibrarySearchSys = 0x00000800
+	eventModifyState     = 0x0002
+	eventAllAccess       = 0x1F0003
+	infiniteWait         = 0xFFFFFFFF
+	waitObject0          = 0
 )
 
 var (
@@ -89,7 +100,15 @@ var (
 	procWTSQueryUserToken           = modWtsapi32SAS.NewProc("WTSQueryUserToken")
 	procWTSEnumerateProcessesW      = modWtsapi32SAS.NewProc("WTSEnumerateProcessesW")
 	procWTSFreeMemorySAS            = modWtsapi32SAS.NewProc("WTSFreeMemory")
-	procPostMessageW = modUser32SAS.NewProc("PostMessageW")
+	procPostMessageW                = modUser32SAS.NewProc("PostMessageW")
+	procLoadLibraryExW              = modKernel32SAS.NewProc("LoadLibraryExW")
+	procGetProcAddressSAS           = modKernel32SAS.NewProc("GetProcAddress")
+	procFreeLibrarySAS              = modKernel32SAS.NewProc("FreeLibrary")
+	procCreateEventW                = modKernel32SAS.NewProc("CreateEventW")
+	procOpenEventW                  = modKernel32SAS.NewProc("OpenEventW")
+	procSetEventSAS                 = modKernel32SAS.NewProc("SetEvent")
+	procWaitForSingleObjectSAS      = modKernel32SAS.NewProc("WaitForSingleObject")
+	procResetEventSAS               = modKernel32SAS.NewProc("ResetEvent")
 )
 
 const (
@@ -112,9 +131,12 @@ type wtsProcessInfoW struct {
 	UserSid     uintptr
 }
 
-// ensureSoftwareSASPolicy forces SoftwareSASGeneration=3 (Services + Ease of Access).
-// Domain GPOs on Server often leave this unset (default blocks service SAS).
-// RealVNC-style: rewrite immediately before every CAD attempt.
+// lastSASSession remembers the desktop worker's session for the Global event path.
+var lastSASSession atomic.Uint32
+
+// ensureSoftwareSASPolicy forces SoftwareSASGeneration=3 (Services + Ease of Access)
+// in the native 64-bit registry view (KEY_WOW64_64KEY). Domain GPOs often leave
+// this unset; RealVNC/MeshAgent rewrite it immediately before every CAD attempt.
 func ensureSoftwareSASPolicy() error {
 	if err := setPolicyDWORD(
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`,
@@ -122,7 +144,6 @@ func ensureSoftwareSASPolicy() error {
 	); err != nil {
 		return err
 	}
-	// Server 2016/2019: without this, CAD can flash a blank secure desktop.
 	_ = setPolicyDWORD(
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`,
 		"EnableSecureCredentialPrompting", 1,
@@ -137,11 +158,12 @@ func setPolicyDWORD(subKey, valueName string, want uint32) error {
 	}
 	var hKey uintptr
 	var disp uint32
+	access := uintptr(keySetValue | keyQueryValue | keyCreateSubKey | keyWOW64_64KEY)
 	r, _, e := procRegCreateKeyExW.Call(
 		uintptr(syscall.HKEY_LOCAL_MACHINE),
 		uintptr(unsafe.Pointer(path)),
 		0, 0, regOptionNonVolatile,
-		uintptr(keySetValue|keyQueryValue|keyCreateSubKey),
+		access,
 		0,
 		uintptr(unsafe.Pointer(&hKey)),
 		uintptr(unsafe.Pointer(&disp)),
@@ -174,31 +196,78 @@ func setPolicyDWORD(subKey, valueName string, want uint32) error {
 	return nil
 }
 
-func callSendSAS(asUser bool) {
-	if err := modSas.Load(); err != nil {
-		slog.Warn("加载 sas.dll 失败", "err", err)
-		return
+// callSendSAS loads sas.dll from System32 (MeshAgent/UltraVNC) and invokes SendSAS.
+// asUser=TRUE requires a matching impersonation token for the *target* session.
+func callSendSAS(asUser bool) error {
+	name, err := syscall.UTF16PtrFromString(`sas.dll`)
+	if err != nil {
+		return err
+	}
+	h, _, e := procLoadLibraryExW.Call(uintptr(unsafe.Pointer(name)), 0, loadLibrarySearchSys)
+	if h == 0 {
+		// Server 2008 R2 / Win7 without KB2533623 reject LOAD_LIBRARY_SEARCH_SYSTEM32.
+		h, _, e = procLoadLibraryExW.Call(uintptr(unsafe.Pointer(name)), 0, 0)
+	}
+	if h == 0 {
+		// Fall back to Go lazy loader (PATH / already-loaded).
+		if err := modSas.Load(); err != nil {
+			return fmt.Errorf("加载 sas.dll 失败: %v / %w", e, err)
+		}
+		flag := uintptr(0)
+		if asUser {
+			flag = 1
+		}
+		_, _, _ = procSendSAS.Call(flag)
+		return nil
+	}
+	defer procFreeLibrarySAS.Call(h)
+
+	procName, _ := syscall.BytePtrFromString("SendSAS")
+	addr, _, e2 := procGetProcAddressSAS.Call(h, uintptr(unsafe.Pointer(procName)))
+	if addr == 0 {
+		return fmt.Errorf("GetProcAddress(SendSAS): %v", e2)
 	}
 	flag := uintptr(0)
 	if asUser {
 		flag = 1
 	}
-	_, _, _ = procSendSAS.Call(flag)
+	syscall.SyscallN(addr, flag)
+	return nil
 }
 
-func fireSendSASService() {
-	// From a true SCM service (or while impersonating), AsUser=FALSE is correct.
-	callSendSAS(false)
-	time.Sleep(80 * time.Millisecond)
-	callSendSAS(false)
+func fireSendSAS(asUser bool) {
+	if err := callSendSAS(asUser); err != nil {
+		slog.Warn("SendSAS 调用失败", "asUser", asUser, "err", err)
+		return
+	}
+	time.Sleep(60 * time.Millisecond)
+	_ = callSendSAS(asUser)
+}
+
+func cadHotkeyLParam() uintptr {
+	return uintptr(modAlt|modControl) | (uintptr(vkDelete) << 16)
 }
 
 func postCADHotkey() {
-	// UltraVNC classic: Winlogon traps Ctrl+Alt+Del via WM_HOTKEY.
-	lparam := uintptr(modAlt|modControl) | (uintptr(vkDelete) << 16)
+	lparam := cadHotkeyLParam()
 	_, _, _ = procPostMessageW.Call(hwndBroadcast, wmHotkey, 0, lparam)
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 	_, _, _ = procPostMessageW.Call(hwndBroadcast, wmHotkey, 0, lparam)
+}
+
+// postCADHotkeyToDesktop posts WM_HOTKEY to every top-level window on the
+// current thread desktop (must already be attached to Winlogon), then broadcasts.
+func postCADHotkeyToDesktop() {
+	lparam := cadHotkeyLParam()
+	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		_, _, _ = procPostMessageW.Call(hwnd, wmHotkey, 0, lparam)
+		return 1
+	})
+	desk, _, _ := procGetThreadDesktop.Call(uintptr(currentThreadID()))
+	if desk != 0 {
+		_, _, _ = procEnumDesktopWindows.Call(desk, cb, 0)
+	}
+	postCADHotkey()
 }
 
 // injectSecureAttentionSequence is called from the desktop worker input thread.
@@ -206,34 +275,32 @@ func injectSecureAttentionSequence() error {
 	if err := ensureSoftwareSASPolicy(); err != nil {
 		slog.Warn("设置 SoftwareSASGeneration 失败（仍尝试注入）", "err", err)
 	}
-	if err := modSas.Load(); err != nil {
-		return fmt.Errorf("加载 sas.dll 失败: %w", err)
-	}
 
 	sid := currentSessionID()
+	lastSASSession.Store(sid)
+	signalSASEvent()
+
 	var pipeErr error
-	if err := requestSASFromService(sid, 6*time.Second); err == nil {
+	if err := requestSASFromService(sid, 8*time.Second); err == nil {
 		slog.Info("服务管道 SAS 已受理", "session", sid)
 	} else {
 		pipeErr = err
 		slog.Warn("服务管道 SAS 失败", "err", err, "session", sid)
 	}
 
-	// Always also run the in-session Winlogon hotkey path from this worker —
-	// Server often needs WM_HOTKEY even when the service reported OK.
-	if err := injectCADOnWinlogonDesktop(); err != nil {
-		slog.Warn("本机会话 Winlogon CAD 失败", "err", err)
+	// In-session Winlogon hotkey — Server RDP often needs this even after pipe OK.
+	// Do NOT call SendSAS from the worker: only the SCM service is trusted on Server.
+	if err := injectCADHotkeyOnWinlogonDesktop(); err != nil {
+		slog.Warn("本机会话 Winlogon CAD 热键失败", "err", err)
 		if pipeErr != nil {
 			return fmt.Errorf("CAD 注入失败: pipe=%v; local=%v", pipeErr, err)
 		}
 	}
-	slog.Info("已完成本地 Winlogon CAD 注入", "desktop", threadDesktopName(), "session", sid)
+	slog.Info("已完成本地 Winlogon CAD 热键", "desktop", threadDesktopName(), "session", sid)
 	return nil
 }
 
-// injectCADOnWinlogonDesktop switches this thread onto Winlogon and fires both
-// SendSAS and WM_HOTKEY (UltraVNC-compatible).
-func injectCADOnWinlogonDesktop() error {
+func injectCADHotkeyOnWinlogonDesktop() error {
 	runtime.LockOSThread()
 	var h uintptr
 	var err error
@@ -248,12 +315,9 @@ func injectCADOnWinlogonDesktop() error {
 	if r, _, e := procSetThreadDesktop.Call(h); r == 0 {
 		return fmt.Errorf("SetThreadDesktop(Winlogon) 失败: %v", e)
 	}
-	callSendSAS(false)
-	time.Sleep(50 * time.Millisecond)
-	postCADHotkey()
-	time.Sleep(50 * time.Millisecond)
-	callSendSAS(false)
-	postCADHotkey()
+	postCADHotkeyToDesktop()
+	time.Sleep(40 * time.Millisecond)
+	postCADHotkeyToDesktop()
 	return nil
 }
 
@@ -261,16 +325,28 @@ func injectCADOnWinlogonDesktop() error {
 func runSendSASOnce() error {
 	runtime.LockOSThread()
 	_ = ensureSoftwareSASPolicy()
-	if err := modSas.Load(); err != nil {
-		return err
-	}
-	if err := injectCADOnWinlogonDesktop(); err != nil {
-		slog.Warn("send-sas Winlogon 路径失败，尝试仅 SendSAS", "err", err)
-		fireSendSASService()
+	if err := injectCADHotkeyOnWinlogonDesktop(); err != nil {
+		slog.Warn("send-sas Winlogon 热键失败", "err", err)
 		postCADHotkey()
 	}
+	// Best-effort: if sas.dll accepts non-service callers on this build, try AsUser.
+	_ = callSendSAS(true)
+	_ = callSendSAS(false)
 	slog.Info("send-sas helper 完成", "session", currentSessionID(), "desktop", threadDesktopName())
 	return nil
+}
+
+func signalSASEvent() {
+	namePtr, err := syscall.UTF16PtrFromString(deskSASEventName)
+	if err != nil {
+		return
+	}
+	h, _, _ := procOpenEventW.Call(eventModifyState, 0, uintptr(unsafe.Pointer(namePtr)))
+	if h == 0 || h == uintptr(syscall.InvalidHandle) {
+		return
+	}
+	_, _, _ = procSetEventSAS.Call(h)
+	_, _, _ = procCloseHandleSAS.Call(h)
 }
 
 func requestSASFromService(session uint32, timeout time.Duration) error {
@@ -324,6 +400,8 @@ func serveSASPipe(stop <-chan struct{}) {
 	if err := ensureSoftwareSASPolicy(); err != nil {
 		slog.Warn("服务启动时启用 SoftwareSASGeneration 失败", "err", err)
 	}
+	go serveSASEvent(stop)
+
 	namePtr, err := syscall.UTF16PtrFromString(deskSASPipeName)
 	if err != nil {
 		return
@@ -383,6 +461,45 @@ func serveSASPipe(stop <-chan struct{}) {
 	}
 }
 
+// serveSASEvent is the UltraVNC Global\SessionEventUltraCad equivalent: the
+// session worker SetEvent's, and the SCM service thread calls SendSAS.
+func serveSASEvent(stop <-chan struct{}) {
+	namePtr, err := syscall.UTF16PtrFromString(deskSASEventName)
+	if err != nil {
+		return
+	}
+	h, _, e := procCreateEventW.Call(0, 0, 0, uintptr(unsafe.Pointer(namePtr))) // auto-reset
+	if h == 0 || h == uintptr(syscall.InvalidHandle) {
+		slog.Warn("CreateEvent(SAS) 失败", "err", e)
+		return
+	}
+	defer procCloseHandleSAS.Call(h)
+	slog.Info("SAS Global 事件已就绪", "name", deskSASEventName)
+
+	for {
+		// Wait in slices so we can observe stop.
+		r, _, _ := procWaitForSingleObjectSAS.Call(h, 500)
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		if r != waitObject0 {
+			continue
+		}
+		sess := lastSASSession.Load()
+		if sess == 0 || sess == invalidSession {
+			sess = activeUserSession()
+		}
+		if sess == 0 || sess == invalidSession {
+			slog.Warn("SAS 事件触发但无目标会话")
+			continue
+		}
+		slog.Info("SAS Global 事件触发", "session", sess)
+		injectSASFromService(sess)
+	}
+}
+
 func handleSASPipeClient(h uintptr) {
 	buf := make([]byte, 64)
 	var n uint32
@@ -403,7 +520,20 @@ func handleSASPipeClient(h uintptr) {
 		writePipeMsg(h, "ERR nosession\n")
 		return
 	}
+	lastSASSession.Store(sess)
 
+	paths := injectSASFromService(sess)
+	if len(paths) == 0 {
+		writePipeMsg(h, "ERR allpaths\n")
+		slog.Warn("所有 SAS 注入路径均失败", "session", sess)
+		return
+	}
+	slog.Info("服务已注入 SAS", "session", sess, "paths", strings.Join(paths, "+"))
+	writePipeMsg(h, "OK\n")
+}
+
+// injectSASFromService runs every session-targeted SAS path from the SCM process.
+func injectSASFromService(sess uint32) []string {
 	if err := ensureSoftwareSASPolicy(); err != nil {
 		slog.Warn("SAS 请求前策略设置失败", "err", err)
 	}
@@ -413,63 +543,54 @@ func handleSASPipeClient(h uintptr) {
 
 	var paths []string
 
-	// Path A (MSDN): true SCM LocalSystem Session-0 process calling SendSAS.
-	// Impersonation is NOT required for this; SoftwareSASGeneration must be on.
-	fireSendSASService()
-	paths = append(paths, "ServiceDirect")
-
-	// Path B (Server): impersonate winlogon.exe then SendSAS — some builds gate on token.
-	if revert, err := impersonateWinlogon(sess); err == nil {
-		fireSendSASService()
+	// Path A (RDP / lock screen primary): impersonate interactive user → SendSAS(TRUE).
+	// MSDN: AsUser=TRUE delivers SAS to the impersonated user's session.
+	if revert, err := impersonateSessionUser(sess); err == nil {
+		fireSendSAS(true)
 		revert()
-		paths = append(paths, "WinlogonImpersonate")
+		paths = append(paths, "UserAsUser")
+	} else {
+		slog.Warn("会话用户模拟失败（锁屏/未登录时常见）", "session", sess, "err", err)
+	}
+
+	// Path B: impersonate that session's winlogon → SendSAS(TRUE).
+	// Covers pre-logon and lock screens where WTSQueryUserToken fails or is stale.
+	if revert, err := impersonateWinlogon(sess); err == nil {
+		fireSendSAS(true)
+		time.Sleep(40 * time.Millisecond)
+		fireSendSAS(false) // some Server builds still want FALSE under winlogon token
+		revert()
+		paths = append(paths, "WinlogonAsUser")
 	} else {
 		slog.Warn("Winlogon 模拟失败", "session", sess, "err", err)
 	}
 
-	// Path C: logged-on user token (interactive RDP user present).
-	if revert, err := impersonateSessionUser(sess); err == nil {
-		fireSendSASService()
-		revert()
-		paths = append(paths, "WTSQueryUserToken")
-	}
-
-	// Path D: LocalSystem token retargeted into the interactive session.
+	// Path C: LocalSystem token retargeted into the interactive session → TRUE.
 	if revert, err := impersonateSystemInSession(sess); err == nil {
-		fireSendSASService()
+		fireSendSAS(true)
 		revert()
-		paths = append(paths, "SystemSessionToken")
+		paths = append(paths, "SystemSessionAsUser")
 	}
 
-	// Path E: pipe-client impersonation (often enough on Win10/11).
-	if imp, _, _ := procImpersonateNamedPipeClient.Call(h); imp != 0 {
-		fireSendSASService()
-		_, _, _ = procRevertToSelf.Call()
-		paths = append(paths, "PipeClient")
-	}
+	// Path D: classic console SAS (physical console / MeshAgent UltraVNC style).
+	fireSendSAS(false)
+	paths = append(paths, "ServiceFalse")
 
-	// Path F (Server belt-and-suspenders): --send-sas under winlogon token on
-	// winsta0\Winlogon, then SendSAS + WM_HOTKEY inside that desktop.
+	// Path E: winlogon-token helper on Winlogon desktop (WM_HOTKEY inside session).
 	if err := spawnSendSASWithWinlogonToken(sess); err == nil {
 		paths = append(paths, "WinlogonHelper")
-		time.Sleep(450 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	} else {
 		slog.Warn("winlogon-token send-sas 失败，回退 SYSTEM token", "err", err)
 		if err2 := spawnSendSASHelper(sess); err2 == nil {
 			paths = append(paths, "SystemHelper")
-			time.Sleep(450 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 		} else {
 			slog.Warn("SYSTEM send-sas 也失败", "err", err2)
 		}
 	}
 
-	if len(paths) == 0 {
-		writePipeMsg(h, "ERR allpaths\n")
-		slog.Warn("所有 SAS 注入路径均失败", "session", sess)
-		return
-	}
-	slog.Info("服务已注入 SAS", "session", sess, "paths", strings.Join(paths, "+"))
-	writePipeMsg(h, "OK\n")
+	return paths
 }
 
 func resolveSASSession(h uintptr, req string) uint32 {
@@ -482,6 +603,7 @@ func resolveSASSession(h uintptr, req string) uint32 {
 	}
 	var pipeSess uint32
 	if r, _, _ := procGetNamedPipeClientSessionId.Call(h, uintptr(unsafe.Pointer(&pipeSess))); r != 0 && pipeSess != 0 {
+		// Prefer worker-supplied session: pipe client session id is often 0 for SYSTEM.
 		if sess == 0 {
 			sess = pipeSess
 		}
@@ -680,7 +802,11 @@ func duplicateWinlogonToken(session uint32) (uintptr, error) {
 	if err != nil {
 		return 0, err
 	}
-	hProc, _, e := procOpenProcessSAS.Call(uintptr(processQueryInfo|processQueryLimited), 0, uintptr(pid))
+	// UltraVNC uses PROCESS_ALL_ACCESS after SeDebugPrivilege / SeTcbPrivilege.
+	hProc, _, e := procOpenProcessSAS.Call(uintptr(processAllAccessSAS), 0, uintptr(pid))
+	if hProc == 0 {
+		hProc, _, e = procOpenProcessSAS.Call(uintptr(processQueryInfo|processQueryLimited), 0, uintptr(pid))
+	}
 	if hProc == 0 {
 		hProc, _, e = procOpenProcessSAS.Call(uintptr(processQueryLimited), 0, uintptr(pid))
 	}
@@ -730,8 +856,6 @@ func spawnSendSASHelper(session uint32) error {
 	return spawnSessionProcess(exe, `--send-sas`, session)
 }
 
-// spawnSendSASWithWinlogonToken launches --send-sas using the session's winlogon
-// token on winsta0\Winlogon — the UltraVNC/Veyon pattern that works on Server.
 func spawnSendSASWithWinlogonToken(session uint32) error {
 	exe := svcExePath
 	if exe == "" {

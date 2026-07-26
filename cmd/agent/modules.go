@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,8 +124,8 @@ func moduleGatherFacts() ([]byte, int) {
 	var b strings.Builder
 	host, _ := os.Hostname()
 	ips := localIPv4s()
-	first := ""
-	if len(ips) > 0 {
+	first := primaryIP()
+	if first == "" && len(ips) > 0 {
 		first = ips[0]
 	}
 	fmt.Fprintf(&b, "hostname=%s\n", host)
@@ -150,35 +149,9 @@ func moduleGatherFacts() ([]byte, int) {
 	return []byte(b.String()), 0
 }
 
-// localIPv4s 返回所有已启用、非回环网卡的 IPv4 地址。
+// localIPv4s 返回已启用、非回环网卡的 IPv4，按可用性排序（真实局域网/公网优先，169.254 靠后）。
 func localIPv4s() []string {
-	var out []string
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return out
-	}
-	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, _ := ifc.Addrs()
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			if ip4 := ip.To4(); ip4 != nil {
-				out = append(out, ip4.String())
-			}
-		}
-	}
-	return out
+	return rankedLocalIPv4s()
 }
 
 // moduleService 管理系统服务。参数：name（必填）、state（started/stopped/restarted/reloaded，

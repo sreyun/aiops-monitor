@@ -1292,23 +1292,12 @@ var (
 // SendCAD triggers Ctrl+Alt+Del (Secure Attention Sequence).
 // Prefer the Session-0 service pipe — the in-session desktop worker is not an
 // SCM service, so a bare SendSAS call is often ignored by Winlogon.
+// Do not click the lock UI first: on "Press Ctrl+Alt+Del" a click can steal
+// focus without helping, and RDP sessions need session-targeted SendSAS(TRUE).
 func (i *winInput) SendCAD() error {
 	if err := i.ensureInputDesktop(); err != nil {
 		slog.Warn("SendCAD: 附着输入桌面失败，仍尝试注入 SAS", "err", err)
 	}
-	// Nudge the lock UI first (some builds need a focus event before SAS).
-	sw, _, _ := procGetSystemMetrics.Call(smCXScreen)
-	sh, _, _ := procGetSystemMetrics.Call(smCYScreen)
-	if int(sw) < 2 {
-		sw = 1920
-	}
-	if int(sh) < 2 {
-		sh = 1080
-	}
-	_ = i.MouseMove(int(sw)/2, int(sh)*2/3)
-	_ = i.MouseButton(1, true)
-	_ = i.MouseButton(1, false)
-	time.Sleep(40 * time.Millisecond)
 	return injectSecureAttentionSequence()
 }
 

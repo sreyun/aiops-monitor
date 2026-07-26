@@ -210,8 +210,8 @@ func (b *inspectBuilder) collectHost() {
 	hn, _ := os.Hostname()
 	fqdn := inspectResolveFQDN(hn)
 	ips := localIPv4s()
-	ip := ""
-	if len(ips) > 0 {
+	ip := primaryIP()
+	if ip == "" && len(ips) > 0 {
 		ip = ips[0]
 	}
 	family, pretty, kernel := detectOSFamily()

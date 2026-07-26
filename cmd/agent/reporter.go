@@ -778,6 +778,12 @@ func (a *Agent) reportOnce() {
 	a.pendingEvents = nil
 	a.mu.Unlock()
 
+	// Refresh primary IP each cycle — NICs/APIPA can change after start,
+	// and Windows Hyper-V hosts often expose 169.254 before a real LAN IP.
+	if ip := primaryIP(); ip != "" {
+		a.identity.IP = ip
+	}
+
 	// Build the base report (Token is set per-target inside send()).
 	rep := a.identity
 	rep.Metrics = base
