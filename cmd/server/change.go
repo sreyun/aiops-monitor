@@ -24,24 +24,130 @@ type ChangeWindow struct {
 	UpdatedAt  int64    `json:"updated_at,omitempty"`
 }
 
+// ChangeRecord statuses (new machine). Legacy "planned" maps to draft/approved on read.
+const (
+	ChangeDraft           = "draft"
+	ChangePendingApproval = "pending_approval"
+	ChangeApproved        = "approved"
+	ChangeScheduled       = "scheduled"
+	ChangeInProgress      = "in_progress"
+	ChangeCompleted       = "completed"
+	ChangeRolledBack      = "rolled_back"
+	ChangeRejected        = "rejected"
+	ChangeCancelled       = "cancelled"
+)
+
+var changeStatuses = map[string]bool{
+	ChangeDraft: true, ChangePendingApproval: true, ChangeApproved: true,
+	ChangeScheduled: true, ChangeInProgress: true, ChangeCompleted: true,
+	ChangeRolledBack: true, ChangeRejected: true, ChangeCancelled: true,
+	// legacy
+	"planned": true,
+}
+
 type ChangeRecord struct {
-	ID                int64    `json:"id"`
-	Title             string   `json:"title"`
-	Summary           string   `json:"summary,omitempty"`
-	Kind              string   `json:"kind"`   // deploy|config|infra|emergency|other
-	Status            string   `json:"status"` // planned|in_progress|completed|rolled_back|cancelled
-	Risk              string   `json:"risk"`   // low|medium|high
-	HostIDs           []string `json:"host_ids,omitempty"`
-	Services          []string `json:"services,omitempty"`
-	WindowID          string   `json:"window_id,omitempty"`
-	StartedAt         int64    `json:"started_at"`
-	EndedAt           int64    `json:"ended_at,omitempty"`
-	Author            string   `json:"author,omitempty"`
-	Approver          string   `json:"approver,omitempty"`
-	ExternalRef       string   `json:"external_ref,omitempty"`
-	LinkedIncidentIDs []int64  `json:"linked_incident_ids,omitempty"`
-	CreatedAt         int64    `json:"created_at"`
-	UpdatedAt         int64    `json:"updated_at"`
+	ID                int64     `json:"id"`
+	Title             string    `json:"title"`
+	Summary           string    `json:"summary,omitempty"`
+	Kind              string    `json:"kind"`   // deploy|config|infra|emergency|sql|other
+	Status            string    `json:"status"` // draft|pending_approval|approved|scheduled|in_progress|completed|rolled_back|rejected|cancelled
+	Risk              string    `json:"risk"`   // low|medium|high
+	Plan              string    `json:"plan,omitempty"`
+	RollbackPlan      string    `json:"rollback_plan,omitempty"`
+	TestPlan          string    `json:"test_plan,omitempty"`
+	HostIDs           []string  `json:"host_ids,omitempty"`
+	Services          []string  `json:"services,omitempty"`
+	WindowID          string    `json:"window_id,omitempty"`
+	TicketIDs         []int64   `json:"ticket_ids,omitempty"`
+	SQLChangeIDs      []string  `json:"sql_change_ids,omitempty"`
+	Links             []OpsLink `json:"links,omitempty"`
+	StartedAt         int64     `json:"started_at"`
+	EndedAt           int64     `json:"ended_at,omitempty"`
+	ApprovedAt        int64     `json:"approved_at,omitempty"`
+	ExecutedAt        int64     `json:"executed_at,omitempty"`
+	Author            string    `json:"author,omitempty"`
+	Approver          string    `json:"approver,omitempty"`
+	ExternalRef       string    `json:"external_ref,omitempty"`
+	LinkedIncidentIDs []int64   `json:"linked_incident_ids,omitempty"`
+	CreatedAt         int64     `json:"created_at"`
+	UpdatedAt         int64     `json:"updated_at"`
+}
+
+func normalizeChangeStatus(st string) string {
+	st = strings.ToLower(strings.TrimSpace(st))
+	switch st {
+	case "planned":
+		return ChangeDraft
+	case ChangeDraft, ChangePendingApproval, ChangeApproved, ChangeScheduled,
+		ChangeInProgress, ChangeCompleted, ChangeRolledBack, ChangeRejected, ChangeCancelled:
+		return st
+	default:
+		if st == "" {
+			return ChangeDraft
+		}
+		return st
+	}
+}
+
+func syncChangeLinkIndexes(r *ChangeRecord) {
+	for _, id := range r.LinkedIncidentIDs {
+		if id > 0 {
+			r.Links = mergeOpsLinks(r.Links, incidentOpsLink(id, "related"))
+		}
+	}
+	for _, id := range r.TicketIDs {
+		if id > 0 {
+			r.Links = mergeOpsLinks(r.Links, ticketOpsLink(id))
+		}
+	}
+	for _, id := range r.SQLChangeIDs {
+		if id != "" {
+			r.Links = mergeOpsLinks(r.Links, sqlChangeOpsLink(id))
+		}
+	}
+	for _, h := range r.HostIDs {
+		if h != "" {
+			r.Links = mergeOpsLinks(r.Links, OpsLink{Type: "host", ID: h, Role: "affects"})
+		}
+	}
+	for _, l := range r.Links {
+		switch l.Type {
+		case "incident":
+			if id := parseOpsLinkInt(l.ID); id > 0 {
+				r.LinkedIncidentIDs = appendUniqueInt64(r.LinkedIncidentIDs, id)
+			}
+		case "ticket":
+			if id := parseOpsLinkInt(l.ID); id > 0 {
+				r.TicketIDs = appendUniqueInt64(r.TicketIDs, id)
+			}
+		case "sql_change":
+			r.SQLChangeIDs = appendUniqueString(r.SQLChangeIDs, l.ID)
+		case "host":
+			r.HostIDs = appendUniqueString(r.HostIDs, l.ID)
+		}
+	}
+}
+
+func appendUniqueInt64(in []int64, v int64) []int64 {
+	for _, x := range in {
+		if x == v {
+			return in
+		}
+	}
+	return append(in, v)
+}
+
+func appendUniqueString(in []string, v string) []string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return in
+	}
+	for _, x := range in {
+		if x == v {
+			return in
+		}
+	}
+	return append(in, v)
 }
 
 type changeManager struct {
@@ -51,7 +157,7 @@ type changeManager struct {
 }
 
 func newChangeManager() *changeManager {
-	return &changeManager{nextID: 1}
+	return &changeManager{nextID: 0}
 }
 
 func (m *changeManager) Export() []ChangeRecord {
@@ -67,9 +173,11 @@ func (m *changeManager) Import(list []ChangeRecord) {
 	defer m.mu.Unlock()
 	m.records = append([]ChangeRecord(nil), list...)
 	var maxID int64
-	for _, r := range m.records {
-		if r.ID > maxID {
-			maxID = r.ID
+	for i := range m.records {
+		m.records[i].Status = normalizeChangeStatus(m.records[i].Status)
+		syncChangeLinkIndexes(&m.records[i])
+		if m.records[i].ID > maxID {
+			maxID = m.records[i].ID
 		}
 	}
 	if maxID >= m.nextID {
@@ -81,7 +189,10 @@ func (m *changeManager) List() []ChangeRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]ChangeRecord, len(m.records))
-	copy(out, m.records)
+	for i, r := range m.records {
+		r.Status = normalizeChangeStatus(r.Status)
+		out[i] = r
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
 	return out
 }
@@ -91,10 +202,20 @@ func (m *changeManager) Get(id int64) (ChangeRecord, bool) {
 	defer m.mu.Unlock()
 	for _, r := range m.records {
 		if r.ID == id {
+			r.Status = normalizeChangeStatus(r.Status)
 			return r, true
 		}
 	}
 	return ChangeRecord{}, false
+}
+
+func (m *changeManager) findLocked(id int64) *ChangeRecord {
+	for i := range m.records {
+		if m.records[i].ID == id {
+			return &m.records[i]
+		}
+	}
+	return nil
 }
 
 func (m *changeManager) Upsert(in ChangeRecord, actor string) (ChangeRecord, error) {
@@ -105,12 +226,16 @@ func (m *changeManager) Upsert(in ChangeRecord, actor string) (ChangeRecord, err
 	if in.Kind == "" {
 		in.Kind = "other"
 	}
-	if in.Status == "" {
-		in.Status = "planned"
+	in.Status = normalizeChangeStatus(in.Status)
+	if !changeStatuses[in.Status] && in.Status != "planned" {
+		in.Status = ChangeDraft
 	}
+	in.Status = normalizeChangeStatus(in.Status)
 	if in.Risk == "" {
 		in.Risk = "medium"
 	}
+	in.Links = mergeOpsLinks(nil, in.Links...)
+	syncChangeLinkIndexes(&in)
 	now := time.Now().Unix()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -124,16 +249,45 @@ func (m *changeManager) Upsert(in ChangeRecord, actor string) (ChangeRecord, err
 		if in.StartedAt == 0 {
 			in.StartedAt = now
 		}
+		if in.Status == "" {
+			in.Status = ChangeDraft
+		}
 		in.UpdatedAt = now
 		m.records = append(m.records, in)
 		return in, nil
 	}
 	for i := range m.records {
 		if m.records[i].ID == in.ID {
-			in.CreatedAt = m.records[i].CreatedAt
+			prev := m.records[i]
+			in.CreatedAt = prev.CreatedAt
 			if in.Author == "" {
-				in.Author = m.records[i].Author
+				in.Author = prev.Author
 			}
+			if in.ApprovedAt == 0 {
+				in.ApprovedAt = prev.ApprovedAt
+			}
+			if in.ExecutedAt == 0 {
+				in.ExecutedAt = prev.ExecutedAt
+			}
+			if in.Approver == "" {
+				in.Approver = prev.Approver
+			}
+			// UI/API partial updates often omit association slices; preserve unless explicitly provided.
+			if len(in.Links) == 0 {
+				in.Links = prev.Links
+			} else {
+				in.Links = mergeOpsLinks(prev.Links, in.Links...)
+			}
+			if len(in.SQLChangeIDs) == 0 {
+				in.SQLChangeIDs = prev.SQLChangeIDs
+			}
+			if len(in.TicketIDs) == 0 {
+				in.TicketIDs = prev.TicketIDs
+			}
+			if len(in.LinkedIncidentIDs) == 0 {
+				in.LinkedIncidentIDs = prev.LinkedIncidentIDs
+			}
+			syncChangeLinkIndexes(&in)
 			in.UpdatedAt = now
 			m.records[i] = in
 			return in, nil
@@ -142,23 +296,160 @@ func (m *changeManager) Upsert(in ChangeRecord, actor string) (ChangeRecord, err
 	return ChangeRecord{}, fmt.Errorf("变更不存在")
 }
 
-func (m *changeManager) LinkIncident(changeID, incidentID int64) (ChangeRecord, error) {
+// Transition applies a workflow action: submit|approve|reject|start|complete|rollback|cancel|schedule.
+func (m *changeManager) Transition(id int64, action, actor string, freezeActive bool) (ChangeRecord, error) {
+	action = strings.ToLower(strings.TrimSpace(action))
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i := range m.records {
-		if m.records[i].ID != changeID {
-			continue
+	r := m.findLocked(id)
+	if r == nil {
+		return ChangeRecord{}, fmt.Errorf("变更不存在")
+	}
+	cur := normalizeChangeStatus(r.Status)
+	now := time.Now().Unix()
+	next := ""
+	switch action {
+	case "submit":
+		if cur != ChangeDraft && cur != ChangeRejected {
+			return ChangeRecord{}, fmt.Errorf("仅 draft/rejected 可提交审批")
 		}
-		for _, id := range m.records[i].LinkedIncidentIDs {
-			if id == incidentID {
-				return m.records[i], nil
+		next = ChangePendingApproval
+	case "approve":
+		if cur != ChangePendingApproval && cur != ChangeDraft {
+			return ChangeRecord{}, fmt.Errorf("仅 pending_approval/draft 可批准")
+		}
+		next = ChangeApproved
+		r.Approver = actor
+		r.ApprovedAt = now
+	case "reject":
+		if cur != ChangePendingApproval && cur != ChangeDraft {
+			return ChangeRecord{}, fmt.Errorf("仅 pending_approval/draft 可驳回")
+		}
+		next = ChangeRejected
+		r.Approver = actor
+	case "schedule":
+		if cur != ChangeApproved {
+			return ChangeRecord{}, fmt.Errorf("仅 approved 可排期")
+		}
+		next = ChangeScheduled
+	case "start":
+		if cur != ChangeApproved && cur != ChangeScheduled && cur != ChangeDraft {
+			return ChangeRecord{}, fmt.Errorf("当前状态不可开始执行")
+		}
+		needsApproval := freezeActive && (r.Risk == "high" || r.Kind == "emergency")
+		if needsApproval && cur != ChangeApproved && cur != ChangeScheduled {
+			return ChangeRecord{}, fmt.Errorf("高风险/应急变更处于冻结窗内，须先审批再执行")
+		}
+		next = ChangeInProgress
+		r.ExecutedAt = now
+		if r.StartedAt == 0 {
+			r.StartedAt = now
+		}
+	case "complete":
+		if cur != ChangeInProgress {
+			return ChangeRecord{}, fmt.Errorf("仅 in_progress 可完成")
+		}
+		next = ChangeCompleted
+		r.EndedAt = now
+	case "rollback":
+		if cur != ChangeInProgress && cur != ChangeCompleted {
+			return ChangeRecord{}, fmt.Errorf("仅 in_progress/completed 可回滚")
+		}
+		next = ChangeRolledBack
+		r.EndedAt = now
+	case "cancel":
+		if cur == ChangeCompleted || cur == ChangeRolledBack {
+			return ChangeRecord{}, fmt.Errorf("终态不可取消")
+		}
+		next = ChangeCancelled
+		r.EndedAt = now
+	default:
+		return ChangeRecord{}, fmt.Errorf("未知动作: %s", action)
+	}
+	r.Status = next
+	r.UpdatedAt = now
+	return *r, nil
+}
+
+func (m *changeManager) Link(id int64, add []OpsLink, removeType, removeID, removeRole string) (ChangeRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.findLocked(id)
+	if r == nil {
+		return ChangeRecord{}, fmt.Errorf("变更不存在")
+	}
+	if removeType != "" && removeID != "" {
+		r.Links = removeOpsLink(r.Links, removeType, removeID, removeRole)
+	}
+	if len(add) > 0 {
+		r.Links = mergeOpsLinks(r.Links, add...)
+	}
+	syncChangeLinkIndexes(r)
+	r.UpdatedAt = time.Now().Unix()
+	return *r, nil
+}
+
+func (m *changeManager) LinkIncident(changeID, incidentID int64) (ChangeRecord, error) {
+	return m.Link(changeID, []OpsLink{incidentOpsLink(incidentID, "related")}, "", "", "")
+}
+
+// UpsertFromSQLChange creates or updates a ChangeRecord linked to a SQL change ticket.
+func (m *changeManager) UpsertFromSQLChange(sqlID, title, summary, kind, risk, author string, status string) (ChangeRecord, error) {
+	if kind == "" {
+		kind = "sql"
+	}
+	if risk == "" {
+		risk = "medium"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().Unix()
+	for i := range m.records {
+		r := &m.records[i]
+		for _, sid := range r.SQLChangeIDs {
+			if sid == sqlID {
+				if title != "" {
+					r.Title = title
+				}
+				if summary != "" {
+					r.Summary = summary
+				}
+				if status != "" {
+					r.Status = normalizeChangeStatus(status)
+				}
+				r.UpdatedAt = now
+				syncChangeLinkIndexes(r)
+				return *r, nil
 			}
 		}
-		m.records[i].LinkedIncidentIDs = append(m.records[i].LinkedIncidentIDs, incidentID)
-		m.records[i].UpdatedAt = time.Now().Unix()
-		return m.records[i], nil
+		for _, l := range r.Links {
+			if l.Type == "sql_change" && l.ID == sqlID {
+				if title != "" {
+					r.Title = title
+				}
+				if summary != "" {
+					r.Summary = summary
+				}
+				if status != "" {
+					r.Status = normalizeChangeStatus(status)
+				}
+				r.UpdatedAt = now
+				syncChangeLinkIndexes(r)
+				return *r, nil
+			}
+		}
 	}
-	return ChangeRecord{}, fmt.Errorf("变更不存在")
+	m.nextID++
+	rec := ChangeRecord{
+		ID: m.nextID, Title: title, Summary: summary, Kind: kind, Risk: risk,
+		Status: normalizeChangeStatus(firstNonEmpty(status, ChangePendingApproval)),
+		Author: author, SQLChangeIDs: []string{sqlID},
+		Links: []OpsLink{sqlChangeOpsLink(sqlID)},
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	syncChangeLinkIndexes(&rec)
+	m.records = append(m.records, rec)
+	return rec, nil
 }
 
 func (m *changeManager) RelatedToHosts(hostIDs []string, since int64) []ChangeRecord {
@@ -184,6 +475,14 @@ func (m *changeManager) RelatedToHosts(hostIDs []string, since int64) []ChangeRe
 			if want[h] {
 				hit = true
 				break
+			}
+		}
+		if !hit {
+			for _, l := range r.Links {
+				if l.Type == "host" && want[l.ID] {
+					hit = true
+					break
+				}
 			}
 		}
 		if hit {
@@ -271,6 +570,19 @@ func (cs *ConfigStore) activeFreezeWindow(hostID, category string, now int64) (C
 			if c != "" && c == category {
 				return w, true
 			}
+		}
+	}
+	return ChangeWindow{}, false
+}
+
+// activeFreezeForHosts is true if any freeze window covers the given hosts (or is global).
+func (cs *ConfigStore) activeFreezeForHosts(hostIDs []string, now int64) (ChangeWindow, bool) {
+	if len(hostIDs) == 0 {
+		return cs.activeFreezeWindow("", "", now)
+	}
+	for _, h := range hostIDs {
+		if w, ok := cs.activeFreezeWindow(h, "", now); ok {
+			return w, true
 		}
 	}
 	return ChangeWindow{}, false

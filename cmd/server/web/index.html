@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.18.40">
+<link rel="stylesheet" href="/style.css?v=0.18.41">
 <script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -795,7 +795,13 @@
 
         <div class="sre-panel" id="srePanel-tickets">
           <div class="sre-toolbar">
-            <span class="hint" data-i18n="sre.tickets_hint">轻量工单：优先级 / 状态流转 / 指派 / 评论，可从事件一键升级生成。</span>
+            <span class="hint" data-i18n="sre.tickets_hint">事件工单 / 服务请求 / 任务：关联主机·SLO·变更·SQL，可从事件一键升级。</span>
+            <div class="chip-row" id="ticketKindFilter" style="margin-right:8px">
+              <button type="button" class="chip-btn active" data-tkind="">全部</button>
+              <button type="button" class="chip-btn" data-tkind="incident">事件工单</button>
+              <button type="button" class="chip-btn" data-tkind="service_request">服务请求</button>
+              <button type="button" class="chip-btn" data-tkind="task">任务</button>
+            </div>
             <button class="btn primary sm" id="newTicketBtn" data-i18n="sre.new_ticket">+ 新建工单</button>
           </div>
           <div id="ticketList" class="sre-list"></div>
@@ -2982,6 +2988,10 @@
     <div class="modal-body">
       <input type="hidden" id="ticketId">
       <div id="tkIncidentInfo" style="display:none"></div>
+      <div class="grid2">
+        <div class="field"><label>类型</label><div class="select-wrap"><select id="tkKind"><option value="task">任务</option><option value="incident">事件工单</option><option value="service_request">服务请求</option></select></div></div>
+        <div class="field" id="tkCatalogField" style="display:none"><label>服务目录</label><div class="select-wrap"><select id="tkCatalog"><option value="">— 选择目录项 —</option></select></div></div>
+      </div>
       <div class="field"><label data-i18n="sre.title">标题</label><input type="text" id="tkTitle"></div>
       <div class="grid2">
         <div class="field"><label data-i18n="sre.priority">优先级</label><div class="select-wrap"><select id="tkPriority"><option value="p1">P1 · 紧急</option><option value="p2">P2 · 高</option><option value="p3" selected>P3 · 中</option><option value="p4">P4 · 低</option></select></div></div>
@@ -2989,6 +2999,19 @@
       </div>
       <div class="field"><label data-i18n="sre.assignee">指派给</label><div class="select-wrap"><select id="tkAssignee"><option value="">未指派</option></select></div></div>
       <div class="field"><label data-i18n="sre.description">描述</label><textarea id="tkDesc" rows="3" style="resize:vertical;min-height:60px"></textarea></div>
+      <div class="field" id="tkLinksField">
+        <label>关联（主机 ID / SLO ID / 变更 ID / SQL 变更单 ID）</label>
+        <div id="tkLinksChips" class="attach-chips" style="margin-bottom:6px"></div>
+        <div class="grid2">
+          <input type="text" id="tkLinkHost" placeholder="主机 ID">
+          <input type="text" id="tkLinkSLO" placeholder="SLO ID">
+        </div>
+        <div class="grid2" style="margin-top:6px">
+          <input type="text" id="tkLinkChange" placeholder="变更记录 ID">
+          <input type="text" id="tkLinkSQL" placeholder="SQL 变更单 ID">
+        </div>
+        <button type="button" class="btn sm" id="tkLinkAddBtn" style="margin-top:6px">添加关联</button>
+      </div>
       <div class="field" id="tkAttachField">
         <label>附件（图片 / 文档）</label>
         <div id="tkCreateAttach" class="attach-chips" style="display:none;margin-bottom:6px"></div>
@@ -3604,12 +3627,12 @@
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.18.40"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.18.40"></script>
-<script src="/i18n-dashboard.js?v=0.18.40"></script>
+<script src="/i18n-dashboard.en.js?v=0.18.41"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.18.41"></script>
+<script src="/i18n-dashboard.js?v=0.18.41"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.18.40" defer></script>
+<script src="/app.js?v=0.18.41" defer></script>
 </body>
 </html>

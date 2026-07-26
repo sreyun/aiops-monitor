@@ -26,6 +26,7 @@ type SQLChangeRequest struct {
 	Proposer     string         `json:"proposer"`
 	Approver     string         `json:"approver,omitempty"`
 	Executor     string         `json:"executor,omitempty"`
+	ChangeID     int64          `json:"change_id,omitempty"` // linked generic ChangeRecord
 	CreatedAt    int64          `json:"created_at"`
 	ApprovedAt   int64          `json:"approved_at,omitempty"`
 	ExpiresAt    int64          `json:"expires_at,omitempty"`
@@ -117,6 +118,25 @@ func (m *sqlChangeRequestManager) RenameActor(oldName, newName string) {
 			cr.Executor = newName
 		}
 	}
+}
+
+func (m *sqlChangeRequestManager) SetChangeID(id string, changeID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cr := m.items[id]; cr != nil {
+		cr.ChangeID = changeID
+	}
+}
+
+func (m *sqlChangeRequestManager) Get(id string) (SQLChangeRequest, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cr, ok := m.items[id]
+	if !ok || cr == nil {
+		return SQLChangeRequest{}, false
+	}
+	m.expireLocked(cr, time.Now())
+	return cloneSQLChangeRequest(cr), true
 }
 
 func (m *sqlChangeRequestManager) Approve(id, approver string, now time.Time) (SQLChangeRequest, error) {
@@ -256,8 +276,75 @@ func (s *Server) handleCreateSQLChangeRequest(w http.ResponseWriter, r *http.Req
 		return
 	}
 	cr := s.sqlChanges.Create(c, sqlText, req.Reason, s.actorName(r), kind, time.Now())
+	rec, err := s.bridgeSQLChangeToRecord(cr, ChangePendingApproval)
+	if err == nil && rec.ID > 0 {
+		s.sqlChanges.SetChangeID(cr.ID, rec.ID)
+		cr.ChangeID = rec.ID
+		s.store.MarkDirty()
+	}
 	s.auditSQLChange(r, "create", cr, "warning")
 	writeJSON(w, http.StatusCreated, cr)
+}
+
+// bridgeSQLChangeToRecord upserts a generic ChangeRecord for a SQL DDL/KILL ticket.
+func (s *Server) bridgeSQLChangeToRecord(cr SQLChangeRequest, status string) (ChangeRecord, error) {
+	if s.changes == nil {
+		return ChangeRecord{}, fmt.Errorf("changes unavailable")
+	}
+	title := "SQL " + strings.ToUpper(firstNonEmpty(cr.Kind, "ddl")) + " · " + firstNonEmpty(cr.Connection, cr.ConnectionID)
+	summary := firstNonEmpty(cr.Reason, truncateRunes(cr.SQL, 120))
+	risk := "medium"
+	if cr.Environment == "prod" || cr.Kind == "kill" {
+		risk = "high"
+	}
+	return s.changes.UpsertFromSQLChange(cr.ID, title, summary, "sql", risk, cr.Proposer, status)
+}
+
+func (s *Server) syncSQLChangeRecordStatus(cr SQLChangeRequest, actor string) {
+	if s.changes == nil || cr.ID == "" {
+		return
+	}
+	rec, err := s.bridgeSQLChangeToRecord(cr, "")
+	if err != nil || rec.ID == 0 {
+		return
+	}
+	s.sqlChanges.SetChangeID(cr.ID, rec.ID)
+	st := normalizeChangeStatus(rec.Status)
+	switch cr.Status {
+	case "approved":
+		if st == ChangePendingApproval || st == ChangeDraft {
+			if out, terr := s.changes.Transition(rec.ID, "approve", actor, false); terr == nil {
+				st = normalizeChangeStatus(out.Status)
+			}
+		}
+	case "rejected":
+		if st == ChangePendingApproval || st == ChangeDraft {
+			if out, terr := s.changes.Transition(rec.ID, "reject", actor, false); terr == nil {
+				st = normalizeChangeStatus(out.Status)
+			}
+		}
+	case "executed", "done", "completed":
+		if st == ChangePendingApproval || st == ChangeDraft {
+			if out, terr := s.changes.Transition(rec.ID, "approve", firstNonEmpty(cr.Approver, actor), false); terr == nil {
+				st = normalizeChangeStatus(out.Status)
+			} else if got, ok := s.changes.Get(rec.ID); ok {
+				st = normalizeChangeStatus(got.Status)
+			}
+		}
+		if st == ChangeApproved || st == ChangeScheduled {
+			if out, terr := s.changes.Transition(rec.ID, "start", actor, false); terr == nil {
+				st = normalizeChangeStatus(out.Status)
+			} else if got, ok := s.changes.Get(rec.ID); ok {
+				st = normalizeChangeStatus(got.Status)
+			}
+		}
+		if st == ChangeInProgress {
+			_, _ = s.changes.Transition(rec.ID, "complete", actor, false)
+		}
+	}
+	if s.store != nil {
+		s.store.MarkDirty()
+	}
 }
 
 func (s *Server) handleListSQLChangeRequests(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +366,10 @@ func (s *Server) handleApproveSQLChangeRequest(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
+	s.syncSQLChangeRecordStatus(cr, approver)
+	if cr2, ok := s.sqlChanges.Get(cr.ID); ok {
+		cr = cr2
+	}
 	s.auditSQLChange(r, "approve", cr, "warning")
 	writeJSON(w, http.StatusOK, cr)
 }
@@ -288,6 +379,10 @@ func (s *Server) handleRejectSQLChangeRequest(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
+	}
+	s.syncSQLChangeRecordStatus(cr, s.actorName(r))
+	if cr2, ok := s.sqlChanges.Get(cr.ID); ok {
+		cr = cr2
 	}
 	s.auditSQLChange(r, "reject", cr, "warning")
 	writeJSON(w, http.StatusOK, cr)
@@ -362,6 +457,12 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	cr = s.sqlChanges.FinishExecute(ticketID, result, execErr, time.Now())
+	if cr.Status == "executed" {
+		s.syncSQLChangeRecordStatus(cr, executor)
+		if cr2, ok := s.sqlChanges.Get(cr.ID); ok {
+			cr = cr2
+		}
+	}
 	if execErr != nil {
 		s.auditSQLChange(r, "execute_failed", cr, "error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": execErr.Error()})

@@ -250,6 +250,41 @@ func (s *Server) handleUpsertChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	in.Status = normalizeChangeStatus(in.Status)
+	// Prevent bypassing the approval gate by writing status=in_progress directly.
+	if in.Status == ChangeInProgress {
+		hosts := in.HostIDs
+		if in.ID > 0 {
+			if prev, ok := s.changes.Get(in.ID); ok {
+				if len(hosts) == 0 {
+					hosts = prev.HostIDs
+				}
+				if in.Risk == "" {
+					in.Risk = prev.Risk
+				}
+				if in.Kind == "" {
+					in.Kind = prev.Kind
+				}
+				prevSt := normalizeChangeStatus(prev.Status)
+				_, freeze := s.cfg.activeFreezeForHosts(hosts, time.Now().Unix())
+				needs := freeze && (in.Risk == "high" || in.Kind == "emergency")
+				if needs && prevSt != ChangeApproved && prevSt != ChangeScheduled && prevSt != ChangeInProgress {
+					writeJSON(w, http.StatusBadRequest, map[string]string{
+						"error": "高风险/应急变更处于冻结窗内，须先审批再执行（请用 /approve 再 /start）",
+					})
+					return
+				}
+			}
+		} else {
+			_, freeze := s.cfg.activeFreezeForHosts(hosts, time.Now().Unix())
+			if freeze && (in.Risk == "high" || in.Kind == "emergency") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "高风险/应急变更处于冻结窗内，不能直接创建为执行中，请先提交审批",
+				})
+				return
+			}
+		}
+	}
 	out, err := s.changes.Upsert(in, s.actorName(r))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -281,8 +316,73 @@ func (s *Server) handleLinkChangeIncident(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.incidents.AddLinks(in.IncidentID, []OpsLink{changeOpsLink(id)}, s.actorName(r), "")
 	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) handleChangeLink(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var in struct {
+		Add    []OpsLink `json:"add"`
+		Remove *OpsLink  `json:"remove"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	rmType, rmID, rmRole := "", "", ""
+	if in.Remove != nil {
+		rmType, rmID, rmRole = in.Remove.Type, in.Remove.ID, in.Remove.Role
+	}
+	rec, err := s.changes.Link(id, in.Add, rmType, rmID, rmRole)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.MarkDirty()
+	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) handleChangeAction(w http.ResponseWriter, r *http.Request, action string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	rec, ok := s.changes.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	_, freeze := s.cfg.activeFreezeForHosts(rec.HostIDs, time.Now().Unix())
+	out, err := s.changes.Transition(id, action, s.actorName(r), freeze)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.MarkDirty()
+	writeJSON(w, http.StatusOK, out)
+}
+func (s *Server) handleChangeSubmit(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "submit")
+}
+func (s *Server) handleChangeApprove(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "approve")
+}
+func (s *Server) handleChangeReject(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "reject")
+}
+func (s *Server) handleChangeStart(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "start")
+}
+func (s *Server) handleChangeComplete(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "complete")
+}
+func (s *Server) handleChangeRollback(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "rollback")
+}
+func (s *Server) handleChangeCancel(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "cancel")
+}
+func (s *Server) handleChangeSchedule(w http.ResponseWriter, r *http.Request) {
+	s.handleChangeAction(w, r, "schedule")
 }
 
 func (s *Server) handleIncidentRelatedChanges(w http.ResponseWriter, r *http.Request) {

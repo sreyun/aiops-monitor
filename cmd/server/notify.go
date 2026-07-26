@@ -204,8 +204,28 @@ func (n *Notifier) tick() {
 		// matching auto-remediation rule (scoped to the affected host).
 		if n.incidents != nil {
 			incID := n.incidents.OnAlertTransition(t.a, alertKey(t.a), t.firing)
-			if t.firing && incID != 0 && n.remediation != nil {
-				n.remediation.OnAlert(t.a, incID)
+			if t.firing && incID != 0 {
+				if n.cfg != nil {
+					if w, ok := n.cfg.activeFreezeWindow(t.a.HostID, t.a.Type, time.Now().Unix()); ok {
+						// Deduplicate freeze annotations on flapping re-fires of the same incident.
+						note := fmt.Sprintf("处于变更窗/冻结期「%s」", w.Name)
+						already := false
+						if inc, found := n.incidents.Get(incID); found {
+							for _, ev := range inc.Timeline {
+								if ev.Actor == "change-window" && ev.Text == note {
+									already = true
+									break
+								}
+							}
+						}
+						if !already {
+							n.incidents.AddEvent(incID, "note", "change-window", note)
+						}
+					}
+				}
+				if n.remediation != nil {
+					n.remediation.OnAlert(t.a, incID)
+				}
 			}
 		}
 	}

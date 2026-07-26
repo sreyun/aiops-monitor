@@ -962,7 +962,8 @@ async function openIncidentDetail(id){
       <span class="badge ${_sevCls(inc.severity)}">${esc(inc.severity)}</span>
       <span class="badge ${_incStatusCls(inc.status)}">${_incStatus(inc.status)}</span>
       <span class="mono" style="color:var(--muted)">${_srcLabel(inc.source)}${inc.hostname?" · "+esc(inc.hostname):""}</span>
-      ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 ${I18N.t("sre.ticket","工单")} #${inc.ticket_id}</span>`:""}</div>
+      ${inc.ticket_id?`<span class="mono" style="color:var(--muted)">🎫 ${I18N.t("sre.ticket","工单")} #${inc.ticket_id}</span>`:""}
+      ${(inc.links&&inc.links.length)?`<span class="mono" style="color:var(--muted)">🔗 ${(inc.links||[]).slice(0,6).map(l=>esc(l.type)+":"+esc(l.id)).join(" · ")}</span>`:""}</div>
       <div id="incLoopStrip" class="inc-loop-strip"><div class="empty-line">${I18N.t("sre.loop_loading","加载闭环状态…")}</div></div>
       <div class="subhead">${I18N.t("sre.timeline","时间线")}</div><div class="timeline">${tl||`<div class="empty-line">—</div>`}</div>
       <div class="subhead" style="margin-top:12px">📦 ${I18N.t("sre.related_changes","关联变更")}</div>
@@ -992,6 +993,8 @@ async function openIncidentDetail(id){
     if (inc.status!=="resolved"){ acts.push(`<button class="btn sm" data-iact="ack">${I18N.t("sre.inc_ack_btn","确认")}</button>`); acts.push(`<button class="btn sm" data-iact="resolve">${I18N.t("sre.inc_resolve_btn","解决")}</button>`); }
     if (!inc.ticket_id) acts.push(`<button class="btn sm" data-iact="escalate">${I18N.t("sre.inc_escalate_btn","升级工单")}</button>`);
     else acts.push(`<button class="btn sm" data-iact="open-ticket">🎫 ${I18N.t("sre.open_ticket","打开工单")} #${inc.ticket_id}</button>`);
+    acts.push(`<button class="btn sm" data-iact="emergency-change">应急变更</button>`);
+    acts.push(`<button class="btn sm" data-iact="link-sr">关联服务请求</button>`);
     acts.push(`<div class="inc-comment-bar"><div id="incCommentAttach" class="attach-chips" style="display:none"></div><button type="button" class="btn sm" data-iact="comment-attach" title="${I18N.t("sre.upload_img_file","上传图片或文件")}">📎</button><input type="file" id="incCommentFile" multiple hidden accept="${typeof ATTACH_FILE_ACCEPT!=="undefined"?ATTACH_FILE_ACCEPT:"image/*,.txt,.log,.pdf,.docx,.xlsx"}"><input type="text" id="incCommentInput" placeholder="${I18N.t("sre.add_comment_ph","添加评论…")}"><button class="btn primary sm" data-iact="comment">${I18N.t("sre.send","发送")}</button></div>`);
     const foot=$("incidentDetailFoot"); foot.innerHTML=acts.join("");
     window._INC_COMMENT_ATTACHMENTS = [];
@@ -1121,6 +1124,22 @@ async function incidentAction(id, act){
       if(!r.ok){ toast(j.error||I18N.t("toast.operation_failed","操作失败"),"err"); return; }
       toast(I18N.t("sre.ticket_closed_inc","工单已关闭，关联事件已标记解决"),"ok");
       openIncidentDetail(id); loadIncidents(); loadTickets(); loadSREBadge(); return;
+    }
+    else if (act==="emergency-change"){
+      const r=await fetch(`${API}/incidents/${id}/emergency-change`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ toast(j.error||"创建应急变更失败","err"); return; }
+      toast(`已创建应急变更 #${j.id||"?"}`,"ok");
+      openChangeRecModal(j); loadChanges(); return;
+    }
+    else if (act==="link-sr"){
+      const tid=prompt("输入要关联的服务请求/工单 ID");
+      if(!tid) return;
+      const r=await fetch(`${API}/incidents/${id}/link-ticket`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticket_id:parseInt(tid,10)||0})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ toast(j.error||"关联失败","err"); return; }
+      toast(`已关联工单 #${j.id||tid}`,"ok");
+      openIncidentDetail(id); loadTickets(); return;
     }
     else if (act==="diagnose"){
       // 流式写入诊断会话（与追问同源 UI），不再丢弃 SSE
@@ -1945,19 +1964,48 @@ safeAddEventListener("sloTrendBody","click",e=>{
 });
 
 /* ---- 工单 ---- */
+let TK_KIND_FILTER="";
+let SR_CATALOG=[];
 async function loadTickets(){
-  try { SRE_TICKETS=(await fetch(`${API}/tickets`).then(r=>r.json()))||[]; renderTickets(SRE_TICKETS); }
-  catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
+  try {
+    const q=TK_KIND_FILTER?`?kind=${encodeURIComponent(TK_KIND_FILTER)}`:"";
+    SRE_TICKETS=(await fetch(`${API}/tickets${q}`).then(r=>r.json()))||[];
+    renderTickets(SRE_TICKETS);
+  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 function renderTickets(list){
   const el=$("ticketList");
   if(!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_tickets","暂无工单")}</div>`; return; }
+  const kindLabel=k=>({incident:"事件",service_request:"服务请求",task:"任务"})[k]||k||"task";
   el.innerHTML=list.map(t=>`<div class="sre-row" data-ticket="${t.id}">
     <span class="badge ${_prioCls(t.priority)}">${esc((t.priority||"p3").toUpperCase())}</span>
     <div class="sre-row-main"><div class="sre-row-title">${esc(t.title)}</div>
-      <div class="sre-row-sub">#${t.id}${t.assignee?" · @"+esc(t.assignee):""}${t.incident_id?" · 🔗"+I18N.t("sre.event","事件")+"#"+t.incident_id:""} · ${fmtDateTime(t.updated_at)}</div></div>
+      <div class="sre-row-sub">#${t.id} · ${esc(kindLabel(t.kind))}${t.catalog_item?" · "+esc(t.catalog_item):""}${t.assignee?" · @"+esc(t.assignee):""}${t.incident_id?" · 🔗"+I18N.t("sre.event","事件")+"#"+t.incident_id:""}${(t.links&&t.links.length)?" · 🔗×"+t.links.length:""} · ${fmtDateTime(t.updated_at)}</div></div>
     <span class="badge ${_tkStatusCls(t.status)}">${esc(t.status)}</span></div>`).join("");
   el.querySelectorAll("[data-ticket]").forEach(row=>row.onclick=()=>openTicketModal(SRE_TICKETS.find(x=>x.id==row.dataset.ticket)));
+}
+function renderTkLinks(links){
+  const el=$("tkLinksChips");
+  if(!el) return;
+  const list=links||[];
+  if(!list.length){ el.innerHTML=""; el.style.display="none"; return; }
+  el.style.display="";
+  el.innerHTML=list.map(l=>`<span class="tag" title="${esc(l.role||"")}">${esc(l.type)}:${esc(l.id)}${l.name?" "+esc(l.name):""}</span>`).join(" ");
+}
+async function ensureSRCatalog(){
+  if(SR_CATALOG.length) return SR_CATALOG;
+  try{ SR_CATALOG=(await fetch(`${API}/service-request/catalog`).then(r=>r.json()))||[]; }catch(e){ SR_CATALOG=[]; }
+  return SR_CATALOG;
+}
+function fillTkCatalog(selected){
+  const sel=$("tkCatalog"); if(!sel) return;
+  sel.innerHTML=`<option value="">— 选择目录项 —</option>`+(SR_CATALOG||[]).map(it=>
+    `<option value="${esc(it.id)}"${selected===it.id?" selected":""}>${esc(it.category||"")} · ${esc(it.title||it.id)}</option>`).join("");
+}
+function syncTkKindUI(){
+  const kind=($("tkKind")&&$("tkKind").value)||"task";
+  const cf=$("tkCatalogField");
+  if(cf) cf.style.display = kind==="service_request" ? "" : "none";
 }
 let TK_CREATE_ATTACHMENTS=[];
 let TK_COMMENT_ATTACHMENTS=[];
@@ -1965,11 +2013,17 @@ function refreshTkCreateAtt(){ renderAttachBox($("tkCreateAttach"), TK_CREATE_AT
 function refreshTkCommentAtt(){ renderAttachBox($("tkCommentAttach"), TK_COMMENT_ATTACHMENTS, i=>{ TK_COMMENT_ATTACHMENTS.splice(i,1); refreshTkCommentAtt(); }); }
 
 async function openTicketModal(t){
+  await ensureSRCatalog();
+  fillTkCatalog(t&&t.catalog_item||"");
   $("ticketId").value=t?t.id:""; $("ticketModalTitle").textContent=t?`#${t.id} ${t.title}`:I18N.t("sre.new_ticket","新建工单");
+  if($("tkKind")) $("tkKind").value=t?(t.kind||(t.incident_id?"incident":"task")):"task";
+  syncTkKindUI();
   $("tkTitle").value=t?t.title:""; $("tkPriority").value=t?t.priority:"p3"; $("tkStatus").value=t?t.status:"open";
   $("tkDesc").value=t?(t.description||""):"";
   await fillUserSelect($("tkAssignee"), t?(t.assignee||""):"");
   TK_CREATE_ATTACHMENTS=[]; TK_COMMENT_ATTACHMENTS=[]; refreshTkCreateAtt(); refreshTkCommentAtt();
+  renderTkLinks(t&&t.links||[]);
+  ["tkLinkHost","tkLinkSLO","tkLinkChange","tkLinkSQL"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
   const attachField=$("tkAttachField");
   if (attachField) attachField.style.display = t ? "none" : "";
   // Show linked incident info if present
@@ -1992,12 +2046,27 @@ async function openTicketModal(t){
 }
 async function saveTicket(){
   const id=$("ticketId").value;
-  const body={title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,assignee:($("tkAssignee").value||"").trim(),description:$("tkDesc").value.trim()};
+  const body={
+    title:$("tkTitle").value.trim(),priority:$("tkPriority").value,status:$("tkStatus").value,
+    assignee:($("tkAssignee").value||"").trim(),description:$("tkDesc").value.trim(),
+    kind:($("tkKind")&&$("tkKind").value)||"task",
+    catalog_item:($("tkCatalog")&&$("tkCatalog").value)||""
+  };
   if(!id && TK_CREATE_ATTACHMENTS.length) body.attachments = attachmentsToAPI(TK_CREATE_ATTACHMENTS);
   if(!body.title){ toast(I18N.t("sre.fill_title","请填写标题"),"err"); return; }
   const r=await fetch(id?`${API}/tickets/${id}`:`${API}/tickets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
   if(r.ok){
+    const tid=j.id||id;
+    // Apply pending link fields after create/update
+    const add=[];
+    const h=($("tkLinkHost")&&$("tkLinkHost").value||"").trim(); if(h) add.push({type:"host",id:h,role:"affects"});
+    const slo=($("tkLinkSLO")&&$("tkLinkSLO").value||"").trim(); if(slo) add.push({type:"slo",id:slo,role:"caused_by"});
+    const chg=($("tkLinkChange")&&$("tkLinkChange").value||"").trim(); if(chg) add.push({type:"change",id:chg,role:"related"});
+    const sql=($("tkLinkSQL")&&$("tkLinkSQL").value||"").trim(); if(sql) add.push({type:"sql_change",id:sql,role:"implements"});
+    if(tid && add.length){
+      await fetch(`${API}/tickets/${tid}/link`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({add})});
+    }
     $("ticketMask").classList.remove("show"); TK_CREATE_ATTACHMENTS=[]; loadTickets(); loadSREBadge(); loadIncidents();
     const closed = body.status==="resolved" || body.status==="closed";
     const linked = (j&&j.incident_id) || (window._curIncident&&window._curIncident.ticket_id==id&&window._curIncident.id);
@@ -2007,6 +2076,20 @@ async function saveTicket(){
       openIncidentDetail(window._curIncident.id);
     }
   } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
+}
+async function addTicketLinksNow(){
+  const id=$("ticketId").value;
+  if(!id){ toast("请先保存工单后再添加关联，或填写后一并保存","err"); return; }
+  const add=[];
+  const h=($("tkLinkHost")&&$("tkLinkHost").value||"").trim(); if(h) add.push({type:"host",id:h,role:"affects"});
+  const slo=($("tkLinkSLO")&&$("tkLinkSLO").value||"").trim(); if(slo) add.push({type:"slo",id:slo,role:"caused_by"});
+  const chg=($("tkLinkChange")&&$("tkLinkChange").value||"").trim(); if(chg) add.push({type:"change",id:chg,role:"related"});
+  const sql=($("tkLinkSQL")&&$("tkLinkSQL").value||"").trim(); if(sql) add.push({type:"sql_change",id:sql,role:"implements"});
+  if(!add.length){ toast("请填写至少一个关联 ID","err"); return; }
+  const r=await fetch(`${API}/tickets/${id}/link`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({add})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ toast(j.error||"关联失败","err"); return; }
+  toast("关联已更新","ok"); openTicketModal(j); loadTickets();
 }
 async function addTicketComment(){
   const id=$("ticketId").value,t=$("tkCommentInput").value.trim();
@@ -2028,6 +2111,24 @@ safeAddEventListener("sloSource","change",sloSourceChange);
 safeAddEventListener("newTicketBtn","click",()=>openTicketModal(null));
 safeAddEventListener("tkSaveBtn","click",saveTicket);
 safeAddEventListener("tkCommentBtn","click",addTicketComment);
+safeAddEventListener("tkKind","change",syncTkKindUI);
+safeAddEventListener("tkCatalog","change",()=>{
+  const id=($("tkCatalog")&&$("tkCatalog").value)||"";
+  const it=(SR_CATALOG||[]).find(x=>x.id===id);
+  if(!it) return;
+  if($("tkKind")) $("tkKind").value="service_request";
+  syncTkKindUI();
+  if($("tkTitle") && !$("tkTitle").value.trim()) $("tkTitle").value=it.title||"";
+  if($("tkDesc") && !$("tkDesc").value.trim()) $("tkDesc").value=it.description||"";
+  if($("tkPriority") && it.priority) $("tkPriority").value=it.priority;
+});
+safeAddEventListener("tkLinkAddBtn","click",addTicketLinksNow);
+document.querySelectorAll("#ticketKindFilter .chip-btn").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#ticketKindFilter .chip-btn").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  TK_KIND_FILTER=b.dataset.tkind||"";
+  loadTickets();
+}));
 safeAddEventListener("tkAttachBtn","click",()=>{ const f=$("tkAttachFile"); if(f) f.click(); });
 safeAddEventListener("tkCommentAttachBtn","click",()=>{ const f=$("tkCommentFile"); if(f) f.click(); });
 const _tkAf=$("tkAttachFile"); if(_tkAf) _tkAf.onchange=async()=>{ await ingestFilesIntoAttachments(_tkAf.files, TK_CREATE_ATTACHMENTS, {onChange:refreshTkCreateAtt}); refreshTkCreateAtt(); _tkAf.value=""; };
@@ -2168,7 +2269,7 @@ async function loadChanges(){
     const rl=$("changeRecList");
     if(!recs||!recs.length) rl.innerHTML=`<div class="empty-line">暂无变更记录</div>`;
     else rl.innerHTML=recs.map(c=>`<div class="sre-row" data-ch="edit-rec" data-id="${c.id}"><div class="sre-row-main"><div class="sre-row-title">#${c.id} ${esc(c.title)}</div>
-      <div class="sre-row-sub">${esc(c.kind)} · ${esc(c.status)} · ${esc(c.risk)} · ${fmtDateTime(c.started_at)}${(c.host_ids||[]).length?" · "+esc((c.host_ids||[]).slice(0,3).join(",")):""}</div></div></div>`).join("");
+      <div class="sre-row-sub">${esc(c.kind)} · <span class="badge">${esc(c.status)}</span> · ${esc(c.risk)} · ${fmtDateTime(c.started_at)}${(c.sql_change_ids||[]).length?" · SQL×"+(c.sql_change_ids||[]).length:""}${(c.host_ids||[]).length?" · "+esc((c.host_ids||[]).slice(0,3).join(",")):""}</div></div></div>`).join("");
     rl.querySelectorAll("[data-ch]").forEach(b=>b.onclick=()=>changeAct(b.dataset.ch,b.dataset.id));
   }catch(e){ toast("加载变更失败: "+e,"err"); }
 }
@@ -2223,26 +2324,61 @@ function openChangeWinModal(w){
 function openChangeRecModal(c){
   $("changeEditTitle").textContent=c?"编辑变更记录":"新建变更记录";
   const now=Math.floor(Date.now()/1000);
+  const st=c&&c.status||"draft";
+  const statuses=["draft","pending_approval","approved","scheduled","in_progress","completed","rolled_back","rejected","cancelled"];
+  const linkChips=((c&&c.links)||[]).map(l=>`<span class="tag">${esc(l.type)}:${esc(l.id)}</span>`).join(" ");
+  const wf=c&&c.id?`
+    <div class="sre-toolbar" style="margin:8px 0;flex-wrap:wrap;gap:6px">
+      <button type="button" class="btn sm" data-cwf="submit">提交审批</button>
+      <button type="button" class="btn sm" data-cwf="approve">批准</button>
+      <button type="button" class="btn sm" data-cwf="reject">驳回</button>
+      <button type="button" class="btn sm" data-cwf="schedule">排期</button>
+      <button type="button" class="btn sm primary" data-cwf="start">开始执行</button>
+      <button type="button" class="btn sm" data-cwf="complete">完成</button>
+      <button type="button" class="btn sm" data-cwf="rollback">回滚</button>
+      <button type="button" class="btn danger sm" data-cwf="cancel">取消</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px">当前状态：<b>${esc(st)}</b>${(c.approver)?` · 审批人 ${esc(c.approver)}`:""}</div>
+    ${linkChips?`<div class="hint" style="margin-bottom:8px">关联：${linkChips}</div>`:""}`:"";
   $("changeEditBody").innerHTML=`
+    ${wf}
     <div class="field"><label>标题</label><input id="crTitle" value="${esc(c&&c.title||"")}"></div>
     <div class="field"><label>摘要</label><textarea id="crSum" rows="2">${esc(c&&c.summary||"")}</textarea></div>
     <div class="grid2">
-      <div class="field"><label>类型</label><div class="select-wrap"><select id="crKind">${["deploy","config","infra","emergency","other"].map(k=>`<option value="${k}"${(c&&c.kind||"other")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
+      <div class="field"><label>类型</label><div class="select-wrap"><select id="crKind">${["deploy","config","infra","emergency","sql","other"].map(k=>`<option value="${k}"${(c&&c.kind||"other")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
       <div class="field"><label>风险</label><div class="select-wrap"><select id="crRisk">${["low","medium","high"].map(k=>`<option value="${k}"${(c&&c.risk||"medium")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
     </div>
     <div class="grid2">
-      <div class="field"><label>状态</label><div class="select-wrap"><select id="crStatus">${["planned","in_progress","completed","rolled_back","cancelled"].map(k=>`<option value="${k}"${(c&&c.status||"planned")===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
+      <div class="field"><label>状态</label><div class="select-wrap"><select id="crStatus">${statuses.map(k=>`<option value="${k}"${st===k?" selected":""}>${k}</option>`).join("")}</select></div></div>
       <div class="field"><label>开始</label><input type="datetime-local" id="crStart" value="${_dtLocal(c&&c.started_at||now)}"></div>
     </div>
+    <div class="field"><label>实施计划</label><textarea id="crPlan" rows="2">${esc(c&&c.plan||"")}</textarea></div>
+    <div class="field"><label>回滚计划</label><textarea id="crRollback" rows="2">${esc(c&&c.rollback_plan||"")}</textarea></div>
+    <div class="field"><label>验证计划</label><textarea id="crTest" rows="2">${esc(c&&c.test_plan||"")}</textarea></div>
     <div class="field"><label>主机 ID（逗号）</label><input id="crHosts" value="${esc((c&&c.host_ids||[]).join(","))}"></div>
+    <div class="field"><label>关联事件 ID（逗号）</label><input id="crIncidents" value="${esc((c&&c.linked_incident_ids||[]).join(","))}"></div>
     <div class="field"><label>外链</label><input id="crRef" value="${esc(c&&c.external_ref||"")}"></div>
     <input type="hidden" id="crId" value="${c&&c.id||0}">`;
   $("changeEditMask").classList.add("show");
+  $("changeEditBody").querySelectorAll("[data-cwf]").forEach(b=>b.onclick=async()=>{
+    const action=b.dataset.cwf;
+    const cid=parseInt($("crId").value,10)||0;
+    if(!cid) return;
+    const r=await fetch(`${API}/changes/${cid}/${action}`,{method:"POST"});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||"流转失败","err"); return; }
+    toast(`已${action}`,"ok"); openChangeRecModal(j); loadChanges();
+  });
   $("changeEditSave").onclick=async()=>{
     const toUnix=v=>{ const t=Date.parse(v); return isNaN(t)?0:Math.floor(t/1000); };
     const body={id:parseInt($("crId").value,10)||0,title:$("crTitle").value.trim(),summary:$("crSum").value.trim(),
       kind:$("crKind").value,risk:$("crRisk").value,status:$("crStatus").value,started_at:toUnix($("crStart").value),
-      host_ids:($("crHosts").value||"").split(",").map(s=>s.trim()).filter(Boolean),external_ref:$("crRef").value.trim()};
+      plan:($("crPlan")&&$("crPlan").value||"").trim(),
+      rollback_plan:($("crRollback")&&$("crRollback").value||"").trim(),
+      test_plan:($("crTest")&&$("crTest").value||"").trim(),
+      host_ids:($("crHosts").value||"").split(",").map(s=>s.trim()).filter(Boolean),
+      linked_incident_ids:(($("crIncidents")&&$("crIncidents").value)||"").split(",").map(s=>parseInt(s.trim(),10)).filter(n=>n>0),
+      external_ref:$("crRef").value.trim()};
     const r=await fetch(`${API}/changes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
     if(r.ok){ $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok"); }
