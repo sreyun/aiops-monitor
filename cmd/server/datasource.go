@@ -12,18 +12,32 @@ import (
 	"time"
 )
 
-// DataSource is an external observability backend (Loki logs / Prometheus metrics)
-// that operators configure themselves. Supports HTTP Basic Auth. Used by AI chat,
-// log search, and alert queries to pull data directly for analysis / triage.
+// DataSource is an external backend operators configure for AI / dashboards /
+// exploration. Observability types use HTTP; SQL types use TCP via lib/pq or MySQL.
 type DataSource struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Type      string `json:"type"` // "prometheus" | "vm"(VictoriaMetrics,同 Prom API) | "loki"
-	URL       string `json:"url"`
+	Type      string `json:"type"` // prometheus | vm | loki | postgres | mysql
+	URL       string `json:"url"`  // HTTP base URL, or SQL host[/db]
 	AuthUser  string `json:"auth_user,omitempty"`
 	AuthPass  string `json:"auth_pass,omitempty"` // masked when read via the API
-	Enabled   bool   `json:"enabled"`
-	CreatedAt int64  `json:"created_at"`
+	Database  string `json:"database,omitempty"`  // SQL default database/schema
+	Port      int    `json:"port,omitempty"`      // SQL port (5432 / 3306)
+	TLS       string `json:"tls,omitempty"`       // SQL TLS / sslmode hint
+	Params    string `json:"params,omitempty"`    // extra DSN query params
+	// SQLConnectionID optionally reuses credentials from the SQL toolkit connection.
+	SQLConnectionID string `json:"sql_connection_id,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	CreatedAt       int64  `json:"created_at"`
+}
+
+func isSQLDataSourceType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "postgres", "postgresql", "mysql":
+		return true
+	default:
+		return false
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +114,10 @@ func (cs *ConfigStore) DeleteDataSource(id string) error {
 // query clients
 // ---------------------------------------------------------------------------
 
-// dsHTTPClient: data sources are trusted operator-configured endpoints (like the
-// VM / PG URLs), commonly INTERNAL (e.g. http://loki:3100) — so they are
-// deliberately NOT behind the SSRF guard, matching the monitoring/probe path.
-var dsHTTPClient = &http.Client{Timeout: 20 * time.Second}
+// dsHTTPClient: data sources are commonly INTERNAL (e.g. http://loki:3100).
+// Use the SSRF-guarded client so cloud metadata / link-local stay blocked while
+// private RFC1918 targets remain allowed unless AIOPS_SSRF_STRICT=true.
+var dsHTTPClient = newGuardedHTTPClient(20 * time.Second)
 
 func dataSourceGet(ds DataSource, path string, q url.Values) ([]byte, int, error) {
 	full := strings.TrimRight(ds.URL, "/") + path
@@ -140,9 +154,66 @@ func queryDataSource(ds DataSource, query string, limit, sinceMin int) (string, 
 		return queryPrometheus(ds, query)
 	case "loki":
 		return queryLoki(ds, query, limit, sinceMin)
+	case "postgres", "postgresql", "mysql":
+		return querySQLDataSource(ds, query, limit)
 	default:
 		return "", fmt.Errorf("unknown data source type: %s", ds.Type)
 	}
+}
+
+// resolveSQLConnFromDataSource builds a toolkit connection from a SQL datasource.
+// When SQLConnectionID is set, password/host are taken from that toolkit entry.
+func (s *Server) resolveSQLConnFromDataSource(ds DataSource) (MySQLConnection, error) {
+	if id := strings.TrimSpace(ds.SQLConnectionID); id != "" && s != nil && s.cfg != nil {
+		if c, ok := s.cfg.GetMySQLConnection(id); ok && c.Enabled {
+			return c, nil
+		}
+		return MySQLConnection{}, fmt.Errorf("关联的 SQL 连接 %s 不存在或未启用", id)
+	}
+	return dataSourceToSQLConn(ds)
+}
+
+// querySQLDataSource runs a read-only SQL query using credentials embedded on the
+// datasource. Callers that support SQLConnectionID should resolve via
+// Server.resolveSQLConnFromDataSource and call pg/mysqlQueryReadOnly directly.
+func querySQLDataSource(ds DataSource, query string, limit int) (string, error) {
+	c, err := dataSourceToSQLConn(ds)
+	if err != nil {
+		return "", err
+	}
+	var cols []string
+	var rows []map[string]any
+	if driverOf(c) == "postgres" {
+		cols, rows, err = pgQueryReadOnly(c, query, limit)
+	} else {
+		cols, rows, err = mysqlQueryReadOnly(c, query, limit)
+	}
+	if err != nil {
+		return "", err
+	}
+	return formatSQLQueryText(cols, rows), nil
+}
+
+func formatSQLQueryText(cols []string, rows []map[string]any) string {
+	if len(rows) == 0 {
+		return "（查询成功，无匹配行）"
+	}
+	var sb strings.Builder
+	sb.WriteString(strings.Join(cols, " | "))
+	sb.WriteByte('\n')
+	for i, row := range rows {
+		if i >= 200 {
+			fmt.Fprintf(&sb, "…（共 %d 行，已截断至 200）\n", len(rows))
+			break
+		}
+		parts := make([]string, len(cols))
+		for j, col := range cols {
+			parts[j] = fmt.Sprintf("%v", row[col])
+		}
+		sb.WriteString(strings.Join(parts, " | "))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }
 
 // queryPrometheus runs a PromQL instant query and returns a compact text result.
@@ -292,6 +363,20 @@ func testDataSource(ds DataSource) error {
 			return fmt.Errorf("Loki HTTP %d: %s", code, dsTruncate(string(body), 200))
 		}
 		return nil
+	case "postgres", "postgresql":
+		c, err := dataSourceToSQLConn(ds)
+		if err != nil {
+			return err
+		}
+		_, err = pgPing(c)
+		return err
+	case "mysql":
+		c, err := dataSourceToSQLConn(ds)
+		if err != nil {
+			return err
+		}
+		_, err = mysqlTestConnection(c)
+		return err
 	default:
 		return fmt.Errorf("unknown data source type: %s", ds.Type)
 	}

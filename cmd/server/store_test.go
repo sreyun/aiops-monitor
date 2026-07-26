@@ -48,12 +48,12 @@ func TestRegisterHost(t *testing.T) {
 			t.Errorf("expected 1 host, got %d", len(got))
 		}
 	})
-	t.Run("existing host updates fingerprint", func(t *testing.T) {
+	t.Run("existing host refuses fingerprint overwrite", func(t *testing.T) {
 		s := NewStore()
 		s.RegisterHost("h1", "node-1", "fp-aaa")
 		h := s.RegisterHost("h1", "node-1-renamed", "fp-bbb")
-		if h.Fingerprint != "fp-bbb" {
-			t.Errorf("fingerprint not updated: got %s", h.Fingerprint)
+		if h.Fingerprint != "fp-aaa" {
+			t.Errorf("fingerprint must not be overwritten: got %s", h.Fingerprint)
 		}
 		if h.Hostname != "node-1-renamed" {
 			t.Errorf("hostname not updated: got %s", h.Hostname)

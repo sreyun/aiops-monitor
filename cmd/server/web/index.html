@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.18.35">
+<link rel="stylesheet" href="/style.css?v=0.18.40">
 <script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -838,6 +838,7 @@
             <button type="button" class="btn sm ai-assist-btn" id="skillsBtn" title="查看 AI 从经验中自动提炼的可复用技能(SOP)"><span class="ai-assist-btn-ic">🧠</span>技能库</button>
             <button type="button" class="btn sm ai-assist-btn" id="memoryBtn" title="浏览 AI 沉淀的历史记忆（诊断/对话/经验）"><span class="ai-assist-btn-ic">📚</span>记忆库</button>
             <button type="button" class="btn sm ai-assist-btn" id="dutyReportBtn" title="汇总未决事件/SLO/待审批修复/巡检，AI 生成值班晨报"><span class="ai-assist-btn-ic">🌅</span>值班晨报</button>
+            <button type="button" class="btn sm ai-assist-btn" id="copilotBtn" title="On-call Copilot：未决事件、待审批、技能提示与建议"><span class="ai-assist-btn-ic">🧭</span>值班助手</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
           </div>
           <div id="aiReportList" class="sre-list"></div>
@@ -1273,11 +1274,11 @@
 
       <!-- 数据源接入（Loki / Prometheus） -->
       <section class="view" id="view-datasource">
-        <div class="section-title"><span data-i18n="section.datasource">数据源接入</span><span class="tag" data-i18n="section.datasource_desc">接入 Loki 日志 / Prometheus 指标，供 AI 对话、日志检索、告警直接查询分析</span>
+        <div class="section-title"><span data-i18n="section.datasource">数据源接入</span><span class="tag" data-i18n="section.datasource_desc">接入 Loki / Prometheus / PostgreSQL / MySQL，供仪表盘、AI 对话与排查查询</span>
           <div style="margin-left:auto"><button class="btn primary" id="addDataSourceBtn" data-i18n="ui.add_datasource">+ 添加数据源</button></div>
         </div>
         <div id="dataSourceList" class="fwd-list"></div>
-        <div class="ds-empty" id="dataSourceEmpty"><span class="ds-empty-icon">📡</span>还没有数据源。点「<b>添加数据源</b>」接入 Loki 或 Prometheus——填地址与可选的用户名/密码，即可让 AI 对话直接查询分析、排查问题。</div>
+        <div class="ds-empty" id="dataSourceEmpty"><span class="ds-empty-icon">📡</span>还没有数据源。点「<b>添加数据源</b>」接入 Loki / Prometheus / PostgreSQL / MySQL——即可在仪表盘、AI 对话中直接查询分析。</div>
 
         <!-- 即时查询面板 -->
         <div class="ds-query-panel" id="dsQueryPanel" style="display:none">
@@ -1305,8 +1306,8 @@
         <div class="tabs" id="sqlInnerTabs" role="tablist">
           <button type="button" class="tab active" data-sql-tab="workbench" data-i18n="sql.tab_workbench">工作台</button>
           <button type="button" class="tab" data-sql-tab="slowsql" data-i18n="sql.tab_slowsql">慢 SQL</button>
-          <button type="button" class="tab" data-sql-tab="process">进程 / 锁</button>
-          <button type="button" class="tab" data-sql-tab="changes">变更单</button>
+          <button type="button" class="tab" data-sql-tab="process" data-i18n="sql.tab_process">进程 / 锁</button>
+          <button type="button" class="tab" data-sql-tab="changes" data-i18n="sql.tab_changes">变更单</button>
           <button type="button" class="tab admin-only" data-sql-tab="connections" data-i18n="sql.tab_connections">连接管理</button>
         </div>
         <div id="sqlWorkbench" class="sql-workbench">
@@ -1316,10 +1317,11 @@
               <div class="select-wrap"><select id="sqlDialect">
                 <option value="mysql80">MySQL 8.0+</option>
                 <option value="mysql57">MySQL 5.7</option>
+                <option value="postgres">PostgreSQL</option>
               </select></div>
             </div>
             <div class="field" style="margin:0;min-width:200px;flex:1">
-              <label data-i18n="sql.connection">MySQL 连接</label>
+              <label data-i18n="sql.connection">数据库连接</label>
               <div class="select-wrap"><select id="sqlConnSel"></select></div>
             </div>
           </div>
@@ -1328,7 +1330,7 @@
               <div class="sql-schema-history">
                 <div class="sql-schema-panel">
                   <div class="section-title" style="margin:0 0 6px"><span data-i18n="sql.schema">Schema</span><span class="tag" id="sqlSchemaDb"></span></div>
-                  <div id="sqlSchemaTables" class="sql-schema-list hint">选择 MySQL 连接后浏览表</div>
+                  <div id="sqlSchemaTables" class="sql-schema-list hint">选择连接后浏览表 / Schema</div>
                   <div id="sqlSchemaColumns" class="sql-schema-cols"></div>
                 </div>
                 <div class="sql-history-panel">
@@ -1346,7 +1348,7 @@
                 <button type="button" class="btn" id="sqlAuditBtn" data-i18n="sql.audit">审核</button>
                 <button type="button" class="btn" id="sqlOptimizeBtn" data-i18n="sql.optimize">优化</button>
                 <button type="button" class="btn" id="sqlExplainBtn" data-i18n="sql.explain">EXPLAIN</button>
-                <button type="button" class="btn danger" id="sqlSubmitChangeBtn">提交 DDL 变更单</button>
+                <button type="button" class="btn danger" id="sqlSubmitChangeBtn" data-i18n="sql.submit_change">提交 DDL 变更单</button>
                 <button type="button" class="btn sm ai-assist-btn" id="sqlAIBeautifyBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_beautify_short">AI 美化</span></button>
                 <button type="button" class="btn sm ai-assist-btn" id="sqlAIAuditBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_audit_short">AI 审核</span></button>
                 <button type="button" class="btn sm ai-assist-btn" id="sqlAIOptimizeBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_optimize_short">AI 深度优化</span></button>
@@ -1376,15 +1378,15 @@
         <div id="sqlProcessManage" class="sql-conn-manage" style="display:none">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between;margin-bottom:12px">
             <div class="field" style="margin:0;min-width:220px;flex:1">
-              <label>连接</label>
+              <label data-i18n="sql.connection">连接</label>
               <div class="select-wrap"><select id="sqlProcessConnSel"></select></div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn" id="sqlSchemaHealthBtn" type="button">Schema 健康</button>
-              <button class="btn" id="sqlProcessRefreshBtn" type="button">刷新进程/锁</button>
+              <button class="btn" id="sqlSchemaHealthBtn" type="button" data-i18n="sql.schema_health">Schema 健康</button>
+              <button class="btn" id="sqlProcessRefreshBtn" type="button" data-i18n="sql.process_refresh">刷新进程/锁</button>
             </div>
           </div>
-          <p class="hint">只读查看 PROCESSLIST / 锁等待。终止会话请提交 KILL 变更单（需审批）；生产 DDL 在 SQL 冻结窗内会被拦截。</p>
+          <p class="hint" data-i18n="sql.process_hint">只读查看 PROCESSLIST / 锁等待。终止会话请提交 KILL 变更单（需审批）；生产 DDL 在 SQL 冻结窗内会被拦截。</p>
           <div id="sqlProcessPanel" class="sql-result-panel"></div>
         </div>
         <div id="sqlConnManage" class="sql-conn-manage" style="display:none">
@@ -1425,10 +1427,10 @@
         <div class="field"><label>驱动</label>
           <div class="select-wrap"><select id="sqlConnDriver">
             <option value="mysql">MySQL</option>
-            <option value="postgres">PostgreSQL（只读）</option>
+            <option value="postgres">PostgreSQL（只读 + 慢SQL/KILL）</option>
           </select></div>
         </div>
-        <div class="field"><label data-i18n="sql.version_hint">版本提示</label>
+        <div class="field" id="sqlConnVerField"><label data-i18n="sql.version_hint">版本提示</label>
           <div class="select-wrap"><select id="sqlConnVer">
             <option value="auto">auto</option>
             <option value="mysql57">mysql57</option>
@@ -1508,13 +1510,19 @@
       <input type="hidden" id="dsId">
       <div class="grid2">
         <div class="field"><label>名称</label><input type="text" id="dsName" placeholder="如 生产 Prometheus"></div>
-        <div class="field"><label>类型</label><div class="select-wrap"><select id="dsType"><option value="prometheus">Prometheus（指标）</option><option value="vm">VictoriaMetrics（指标）</option><option value="loki">Loki（日志）</option></select></div></div>
+        <div class="field"><label>类型</label><div class="select-wrap"><select id="dsType"><option value="prometheus">Prometheus（指标）</option><option value="vm">VictoriaMetrics（指标）</option><option value="loki">Loki（日志）</option><option value="postgres">PostgreSQL（SQL）</option><option value="mysql">MySQL（SQL）</option></select></div></div>
       </div>
-      <div class="field"><label>地址 URL</label><input type="text" id="dsUrl" placeholder="Prometheus http://prometheus:9090；VictoriaMetrics http://vm:8428；Loki http://loki:3100"></div>
+      <div class="field"><label id="dsUrlLabel">地址 URL</label><input type="text" id="dsUrl" placeholder="Prometheus http://prometheus:9090；VictoriaMetrics http://vm:8428；Loki http://loki:3100；SQL 主机如 db.internal"></div>
+      <div class="grid2" id="dsSQLExtraRow" style="display:none">
+        <div class="field"><label>端口</label><input type="number" id="dsPort" min="1" max="65535" placeholder="5432 / 3306"></div>
+        <div class="field"><label>Database</label><input type="text" id="dsDatabase" class="mono" placeholder="postgres / mydb"></div>
+      </div>
       <div class="grid2">
-        <div class="field"><label>用户名（可选）</label><input type="text" id="dsAuthUser" autocomplete="off" placeholder="Basic Auth 用户名，无认证则留空"></div>
+        <div class="field"><label id="dsUserLabel">用户名（可选）</label><input type="text" id="dsAuthUser" autocomplete="off" placeholder="Basic Auth / DB 用户"></div>
         <div class="field"><label>密码（可选）</label><input type="password" id="dsAuthPass" autocomplete="new-password" placeholder="留空保持原值不变"></div>
       </div>
+      <div class="field" id="dsSQLLinkRow" style="display:none"><label>关联 SQL 工具连接（可选）</label><div class="select-wrap"><select id="dsSQLConnId"><option value="">不关联（使用上方主机凭证）</option></select></div>
+        <div class="hint">关联后复用 SQL 工具里已配置的连接，适合仪表盘 / AI 查询同一库</div></div>
       <label class="switch" style="display:flex;margin:4px 0 2px"><input type="checkbox" id="dsEnabled" checked> 启用</label>
       <div class="ai-card-test" style="margin-top:8px"><span id="dsTestResult" class="ai-test-result"></span><button class="btn sm" id="dsTestBtn" type="button">测试连接</button></div>
     </div>
@@ -2821,10 +2829,25 @@
       <h3>🧠 AI 技能库</h3>
       <span class="hint" style="margin-left:8px">系统从诊断/剧本/解决事件的经验中每日自动提炼可复用技能，检索时注入 AI 提示词</span>
       <button type="button" class="btn sm ai-assist-btn" id="skillsDistillBtn" style="margin-left:auto"><span class="ai-assist-btn-ic">✨</span>立即提炼</button>
+      <button type="button" class="btn sm" id="skillsPackImportBtn" title="导入内置 MySQL/PG/K8s/网络知识包">导入知识包</button>
       <label class="switch" style="margin-left:8px;font-size:12px"><input type="checkbox" id="skillsShowArchived"> <span>含已归档</span></label>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="skillsBody"></div>
+  </div>
+</div>
+
+<!-- ===== On-call Copilot ===== -->
+<div class="mask" id="copilotMask" data-close>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>值班助手（On-call Copilot）</h3>
+      <span class="hint" style="margin-left:8px">聚合未决事件 / 待审批修复 / 技能提示，一键进入 AI 研判</span>
+      <button type="button" class="btn sm primary" id="copilotRefreshBtn" style="margin-left:auto">刷新</button>
+      <button type="button" class="btn sm ai-assist-btn" id="copilotBriefBtn"><span class="ai-assist-btn-ic">🌅</span>生成简报</button>
+      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="copilotBody"></div>
   </div>
 </div>
 
@@ -3581,12 +3604,12 @@
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.18.35"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.18.35"></script>
-<script src="/i18n-dashboard.js?v=0.18.35"></script>
+<script src="/i18n-dashboard.en.js?v=0.18.40"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.18.40"></script>
+<script src="/i18n-dashboard.js?v=0.18.40"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.18.35" defer></script>
+<script src="/app.js?v=0.18.40" defer></script>
 </body>
 </html>

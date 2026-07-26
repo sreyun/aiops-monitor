@@ -95,6 +95,9 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 	host := r.URL.Query().Get("host")
 	var rows []map[string]any
 	if host != "" {
+		if !s.requireHostAccess(w, r, host) {
+			return
+		}
 		if inv, ok := s.pg.getHyperVInventory(host); ok {
 			rows = []map[string]any{inv}
 		}
@@ -106,6 +109,7 @@ func (s *Server) handleHyperVList(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 			return
 		}
+		rows = s.filterInventoryRows(r, rows)
 	}
 	dedupHyperVRowGuests(rows) // heal legacy twins on read (GUID + name-only orphans)
 	// Agent 重装换 host_id 后，同机可能留下多份宿主机清单（同名、无内存标注的那条就是孤儿）。

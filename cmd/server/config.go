@@ -1595,6 +1595,9 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if strings.Contains(a.MCPToken, "****") {
 		a.MCPToken = cs.cfg.AI.MCPToken
 	}
+	if strings.Contains(a.MCPScopedTokensJSON, "****") {
+		a.MCPScopedTokensJSON = cs.cfg.AI.MCPScopedTokensJSON
+	}
 	// WeKnora API Key：空或脱敏占位时保留原值。
 	if a.WeKnoraAPIKey == "" || strings.Contains(a.WeKnoraAPIKey, "****") {
 		a.WeKnoraAPIKey = cs.cfg.AI.WeKnoraAPIKey

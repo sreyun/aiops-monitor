@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,34 +31,19 @@ func (s *Server) handleImportWebOpenAPIScope(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OpenAPI 解析失败：" + err.Error()})
 		return
 	}
-	urls := openAPIEndpointURLs(eps, 80)
-	if len(urls) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未解析出可用 URL"})
-		return
-	}
 	cfg := s.cfg.WebSecurity()
-	idx := -1
-	for i := range cfg.Targets {
-		if cfg.Targets[i].ID == targetID {
-			idx = i
-			break
+	allowPrivate := cfg.AllowPrivate
+	urls, rejected := filterAllowedScanURLs(openAPIEndpointURLs(eps, 120), allowPrivate, 80)
+	if len(urls) == 0 {
+		msg := "未解析出可用 URL"
+		if rejected > 0 {
+			msg = fmt.Sprintf("未解析出可用 URL（已拦截 %d 条私网/非法地址）", rejected)
 		}
-	}
-	if idx < 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "target not found"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
-	t := cfg.Targets[idx]
-	if req.Replace {
-		t.ScanURLs = urls
-	} else {
-		t.ScanURLs = mergeUniqueURLs(t.ScanURLs, urls, 80)
-	}
-	if strings.TrimSpace(t.BaseURL) == "" && len(t.ScanURLs) > 0 {
-		t.BaseURL = t.ScanURLs[0]
-	}
-	cfg.Targets[idx] = t
-	if err := s.cfg.SetWebSecurity(cfg); err != nil {
+	t, err := s.cfg.UpdateWebTargetScanURLs(targetID, urls, req.Replace)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -66,11 +52,39 @@ func (s *Server) handleImportWebOpenAPIScope(w http.ResponseWriter, r *http.Requ
 		Message: "web target OpenAPI scope imported: " + targetID,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"target":     maskWebTarget(t),
-		"url_count":  len(t.ScanURLs),
-		"imported":   len(urls),
+		"target":      maskWebTarget(t),
+		"url_count":   len(t.ScanURLs),
+		"imported":    len(urls),
+		"rejected":    rejected,
 		"sample_urls": urls[:min(5, len(urls))],
 	})
+}
+
+func filterAllowedScanURLs(in []string, allowPrivate bool, limit int) (ok []string, rejected int) {
+	if limit <= 0 {
+		limit = 80
+	}
+	seen := map[string]bool{}
+	for _, u := range in {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if err := assertURLAllowed(u, allowPrivate); err != nil {
+			rejected++
+			continue
+		}
+		k := strings.ToLower(u)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		ok = append(ok, u)
+		if len(ok) >= limit {
+			break
+		}
+	}
+	return ok, rejected
 }
 
 func openAPIEndpointURLs(eps []APIEndpoint, limit int) []string {

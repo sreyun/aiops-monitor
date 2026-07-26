@@ -67,16 +67,15 @@ type checkRunner struct {
 }
 
 func newCheckRunner(cfg *ConfigStore, store *Store, notifier *Notifier, selfAddr string) *checkRunner {
+	httpc := newGuardedHTTPClient(5 * time.Second) // SSRF: block cloud metadata; private nets OK by default
+	httpc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	httpcAPI := newGuardedHTTPClient(0)
+	httpcAPI.Timeout = 0 // per-check TimeoutSec via context (apimon slow APIs)
+	httpcAPI.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &checkRunner{
 		cfg: cfg, store: store, notifier: notifier, selfAddr: selfAddr,
-		httpc: &http.Client{
-			Timeout:       5 * time.Second, // reduced from 8s; retry logic provides resilience
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		httpcAPI: &http.Client{
-			// 不设 Timeout：由 probeHTTPAdvanced 依 per-check TimeoutSec 用 context 控制上限（apimon 慢接口需 >5s）
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+		httpc:     httpc,
+		httpcAPI:  httpcAPI,
 		status:    map[string]CheckStatus{},
 		down:      map[string]bool{},
 		downSince: map[string]int64{},

@@ -41,6 +41,10 @@ func (s *Server) handleHostSecurityScan(w http.ResponseWriter, r *http.Request) 
 			out = append(out, row{Error: "empty host_id"})
 			continue
 		}
+		if u, ok := s.currentUser(r); ok && !s.userCanAccessHost(u, id) {
+			out = append(out, row{HostID: id, Error: "无权访问该主机（主机组/标签授权）"})
+			continue
+		}
 		scan := s.beginHostSecurityScan(id, op, "manual")
 		out = append(out, row{HostID: id, Scan: scan})
 		if scan != nil && scan.Status == "running" {
@@ -68,7 +72,17 @@ func (s *Server) handleHostSecurityScans(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scans": s.hostSec.list(limit)})
+	list := s.hostSec.list(limit)
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := make([]*HostScanResult, 0, len(list))
+		for _, sc := range list {
+			if sc != nil && s.userCanAccessHost(u, sc.HostID) {
+				filtered = append(filtered, sc)
+			}
+		}
+		list = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scans": list})
 }
 
 func (s *Server) handleHostSecurityScanGet(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +90,9 @@ func (s *Server) handleHostSecurityScanGet(w http.ResponseWriter, r *http.Reques
 	scan := s.hostSec.get(id)
 	if scan == nil {
 		writeSecErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if scan.HostID != "" && !s.requireHostAccess(w, r, scan.HostID) {
 		return
 	}
 	if s.secFindings != nil && scan.HostID != "" && len(scan.Findings) > 0 {
@@ -88,7 +105,18 @@ func (s *Server) handleHostSecurityScanGet(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleHostSecuritySummary(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"hosts": s.hostSec.summary()})
+	hosts := s.hostSec.summary()
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := make([]map[string]any, 0, len(hosts))
+		for _, h := range hosts {
+			hid, _ := h["host_id"].(string)
+			if hid != "" && s.userCanAccessHost(u, hid) {
+				filtered = append(filtered, h)
+			}
+		}
+		hosts = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts})
 }
 
 func (s *Server) handleGetHostSecurityConfig(w http.ResponseWriter, r *http.Request) {

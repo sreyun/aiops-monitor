@@ -1,7 +1,8 @@
 package main
 
 import (
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -14,12 +15,9 @@ import (
 // 这是「不换引擎、用 MCP 桥接对接外部 Agent」的可逆试水通道：复用 Sreyun 引擎已注册的工具
 // 执行器，只导出一个只读白名单（排除会执行代码/变更的工具）。传输 = JSON-RPC over HTTP(POST)，
 // Bearer Token 鉴权。默认关闭。主干零绑定——随时关掉即完全撤除。
+// Wave 2：支持 scoped token（metrics/logs/sql/…）与限流审计。
 // ============================================================================
 
-// mcpReadonlyTools 是允许经 MCP 暴露的工具白名单。安全边界：「只读」= **只查平台自有数据、绝不
-// 触达被控主机**。故排除 run_python_action（执行代码）与 run_diagnostic（会登录主机执行 shell，
-// 且其命令过滤可被 dmesg -c / journalctl --vacuum / cat /etc//shadow / /proc/self/environ 等绕过）。
-// 若确需经 MCP 暴露主机诊断，应另加独立于 Web 面板的显式 opt-in，而非并入"只读"白名单。
 var mcpReadonlyTools = map[string]bool{
 	"query_metrics": true, "search_logs": true, "list_alerts": true,
 	"search_similar_cases": true, "search_knowledge": true, "list_datasources": true, "query_datasource": true,
@@ -33,7 +31,7 @@ var mcpReadonlyTools = map[string]bool{
 
 type jsonRPCReq struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"` // 通知无 id
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
@@ -53,16 +51,20 @@ func rawOrNull(id json.RawMessage) any {
 	return id
 }
 
-// handleMCP 是 MCP over HTTP(JSON-RPC) 入口。/api/v1/mcp（Bearer Token 鉴权）
+func mcpTokenFingerprint(tok string) string {
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:8])
+}
+
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.AIConfig()
-	if !cfg.MCPEnabled || strings.TrimSpace(cfg.MCPToken) == "" {
+	if !cfg.MCPEnabled || (strings.TrimSpace(cfg.MCPToken) == "" && strings.TrimSpace(cfg.MCPScopedTokensJSON) == "") {
 		http.Error(w, "MCP server disabled", http.StatusNotFound)
 		return
 	}
-	// Bearer Token 鉴权（常量时间比较，防时序侧信道）
 	tok := strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
-	if subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.MCPToken)) != 1 {
+	ok, scopes, tokName := resolveMCPAuth(cfg, tok)
+	if !ok {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -70,6 +72,18 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed (use POST JSON-RPC)", http.StatusMethodNotAllowed)
 		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	limit := cfg.MCPRateLimitPerMin
+	if limit <= 0 {
+		limit = 60
+	}
+	if s.aiGov != nil {
+		if ok, used, lim := s.aiGov.checkAndIncrMCPRate(mcpTokenFingerprint(tok)+":"+tokName, limit); !ok {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "MCP rate limit exceeded ("+itoa(used)+"/"+itoa(lim)+" per min)", http.StatusTooManyRequests)
+			return
+		}
 	}
 	var req jsonRPCReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -84,34 +98,33 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal(req.Params, &p)
 		if p.ProtocolVersion != "" {
-			protocol = p.ProtocolVersion // 回显客户端协议版本，最大化兼容
+			protocol = p.ProtocolVersion
 		}
 		writeRPCResult(w, req.ID, map[string]any{
 			"protocolVersion": protocol,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "aiops-monitor", "version": appVersion},
+			"serverInfo":      map[string]any{"name": "aiops-monitor", "version": appVersion, "token": tokName, "scopes": scopes},
 		})
 	case "notifications/initialized", "notifications/cancelled":
-		w.WriteHeader(http.StatusAccepted) // 通知无响应体
+		w.WriteHeader(http.StatusAccepted)
 	case "ping":
 		writeRPCResult(w, req.ID, map[string]any{})
 	case "tools/list":
-		writeRPCResult(w, req.ID, map[string]any{"tools": s.mcpToolList()})
+		writeRPCResult(w, req.ID, map[string]any{"tools": s.mcpToolList(scopes)})
 	case "tools/call":
-		s.mcpToolCall(w, req)
+		s.mcpToolCall(w, req, scopes, tokName)
 	default:
 		writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)
 	}
 }
 
-// mcpToolList 把 Sreyun 只读工具转成 MCP tool 定义（name/description/inputSchema）。
-func (s *Server) mcpToolList() []map[string]any {
+func (s *Server) mcpToolList(scopes []string) []map[string]any {
 	out := []map[string]any{}
 	if s.sreyun == nil {
 		return out
 	}
 	for name, t := range s.sreyun.tools {
-		if !mcpReadonlyTools[name] {
+		if !mcpToolAllowedByScopes(name, scopes) {
 			continue
 		}
 		schema := t.Parameters
@@ -123,8 +136,7 @@ func (s *Server) mcpToolList() []map[string]any {
 	return out
 }
 
-// mcpToolCall 执行一次只读工具调用并返回 MCP content。
-func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq) {
+func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq, scopes []string, tokName string) {
 	var p struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -133,14 +145,20 @@ func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq) {
 		writeRPCError(w, req.ID, -32602, "invalid params")
 		return
 	}
-	if !mcpReadonlyTools[p.Name] || s.sreyun == nil {
-		writeRPCError(w, req.ID, -32602, "unknown or not-exposed tool: "+p.Name)
+	if !mcpToolAllowedByScopes(p.Name, scopes) || s.sreyun == nil {
+		writeRPCError(w, req.ID, -32602, "unknown, not-exposed, or out-of-scope tool: "+p.Name)
 		return
 	}
 	tool, ok := s.sreyun.tools[p.Name]
 	if !ok {
 		writeRPCError(w, req.ID, -32602, "unknown tool: "+p.Name)
 		return
+	}
+	if s.aiGov != nil {
+		s.aiGov.recordTool(aiToolAuditEntry{
+			Actor: "mcp:" + tokName, Tool: p.Name, Action: "tools/call", Approved: true,
+			Detail: "scopes=" + strings.Join(scopes, ","),
+		})
 	}
 	result, err := tool.Execute(p.Arguments)
 	if err != nil {

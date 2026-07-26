@@ -224,17 +224,32 @@ func summarizeK8sPods(s *Server, items []map[string]any) []map[string]any {
 	return rows
 }
 
-func (h *SreyunCore) sreyunWriteBlocked(tool, detail string) (string, bool) {
-	aiCfg := h.s.cfg.AIConfig()
-	blocked := aiCfg.WriteToolsRequireApproval || !aiCfg.SreyunAutoApprove
-	if h.s.aiGov != nil {
-		h.s.aiGov.recordTool(aiToolAuditEntry{
-			Actor: "sreyun", Tool: tool, Action: tool, Approved: !blocked, Blocked: blocked, Detail: detail,
-		})
+func (h *SreyunCore) sreyunWriteBlocked(tool, detail string, args map[string]any) (string, bool) {
+	approvalID, _ := args["approval_id"].(string)
+	argsHash := argsHashForApproval(tool, args)
+	// Wave 2：写工具一律要求短时 approval_id（关闭裸 auto-approve）。
+	if strings.TrimSpace(approvalID) == "" {
+		if h.s.aiGov != nil {
+			h.s.aiGov.recordTool(aiToolAuditEntry{
+				Actor: "sreyun", Tool: tool, Action: tool, Approved: false, Blocked: true,
+				Detail: detail + " args_hash=" + argsHash + " reason=missing_approval_id",
+			})
+		}
+		return fmt.Sprintf("工具 %s 属于高风险写操作：请先 POST /api/v1/ai/write-approval 签发 approval_id（可附 args_hash=%s），再调用工具。", tool, argsHash), true
 	}
-	if blocked {
-		return fmt.Sprintf("工具 %s 属于高风险写操作，需人工确认。请操作员在面板执行，或在 AI 治理中允许写工具自动执行后重试。", tool), true
+	if h.s.aiGov == nil || !h.s.aiGov.consumeWriteApproval(approvalID, tool, argsHash) {
+		if h.s.aiGov != nil {
+			h.s.aiGov.recordTool(aiToolAuditEntry{
+				Actor: "sreyun", Tool: tool, Action: "bad_approval", Approved: false, Blocked: true,
+				Detail: detail + " approval_id=" + approvalID,
+			})
+		}
+		return "approval_id 无效、已过期或不匹配工具参数。", true
 	}
+	h.s.aiGov.recordTool(aiToolAuditEntry{
+		Actor: "sreyun", Tool: tool, Action: "approved_token", Approved: true,
+		Detail: detail + " approval_id=" + approvalID,
+	})
 	return "", false
 }
 
@@ -242,7 +257,7 @@ func (h *SreyunCore) execK8sScale(args map[string]any) (string, error) {
 	cid, _ := args["cluster_id"].(string)
 	ns, _ := args["namespace"].(string)
 	name, _ := args["name"].(string)
-	if msg, blocked := h.sreyunWriteBlocked("k8s_scale", cid+"/"+ns+"/"+name); blocked {
+	if msg, blocked := h.sreyunWriteBlocked("k8s_scale", cid+"/"+ns+"/"+name, args); blocked {
 		return msg, nil
 	}
 	var replicas int32
@@ -278,7 +293,7 @@ func (h *SreyunCore) execK8sRestart(args map[string]any) (string, error) {
 	cid, _ := args["cluster_id"].(string)
 	ns, _ := args["namespace"].(string)
 	name, _ := args["name"].(string)
-	if msg, blocked := h.sreyunWriteBlocked("k8s_restart", cid+"/"+ns+"/"+name); blocked {
+	if msg, blocked := h.sreyunWriteBlocked("k8s_restart", cid+"/"+ns+"/"+name, args); blocked {
 		return msg, nil
 	}
 	c, ok := h.s.cfg.GetK8sCluster(cid)

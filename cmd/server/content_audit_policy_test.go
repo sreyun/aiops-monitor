@@ -20,6 +20,14 @@ func TestEnforceContentAuditPolicy(t *testing.T) {
 	if !isContentPolicyBlocked(ev.PolicyDecision) {
 		t.Fatal("expected blocked")
 	}
+	for _, d := range []string{"denied", "forbidden", "reject", "quarantine"} {
+		if !isContentPolicyBlocked(d) {
+			t.Fatalf("expected blocked for %q", d)
+		}
+	}
+	if isContentPolicyBlocked("allow") || isContentPolicyBlocked("") {
+		t.Fatal("allow/empty must not block")
+	}
 }
 
 func TestOpenAPIEndpointURLs(t *testing.T) {

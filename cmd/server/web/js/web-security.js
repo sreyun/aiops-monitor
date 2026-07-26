@@ -23,12 +23,15 @@ const wsT = (k, fb) => I18N.t(k, fb);
 function wsEsc(s) { return typeof esc === "function" ? esc(String(s ?? "")) : String(s ?? ""); }
 
 const WS_TAG_OPTS = [
-  ["misconfig", "错误配置"], ["exposures", "信息暴露"], ["panel", "管理面板"],
-  ["cves", "CVE"], ["default-logins", "默认口令"], ["vulnerabilities", "通用漏洞"],
-  ["technologies", "技术指纹"], ["xss", "XSS"], ["sqli", "SQLi"], ["rce", "RCE"],
+  ["misconfig", "ws.tag_misconfig", "错误配置"], ["exposures", "ws.tag_exposures", "信息暴露"],
+  ["panel", "ws.tag_panel", "管理面板"], ["cves", "ws.tag_cves", "CVE"],
+  ["default-logins", "ws.tag_logins", "默认口令"], ["vulnerabilities", "ws.tag_vuln", "通用漏洞"],
+  ["technologies", "ws.tag_tech", "技术指纹"], ["xss", "ws.tag_xss", "XSS"],
+  ["sqli", "ws.tag_sqli", "SQLi"], ["rce", "ws.tag_rce", "RCE"],
 ];
 const WS_SEV_OPTS = [
-  ["critical", "危急"], ["high", "高危"], ["medium", "中危"], ["low", "低危"], ["info", "信息"],
+  ["critical", "ws.sev_critical", "危急"], ["high", "ws.sev_high", "高危"],
+  ["medium", "ws.sev_medium", "中危"], ["low", "ws.sev_low", "低危"], ["info", "ws.sev_info", "信息"],
 ];
 const WS_PROFILE = {
   quick: ["misconfig", "exposures"],
@@ -127,13 +130,13 @@ function wsStatusBadge(st) {
 }
 function wsTagLabel(tag) {
   const hit = WS_TAG_OPTS.find(x => x[0] === tag);
-  if (hit) return hit[1];
-  const m = {
-    cves: "CVE", misconfig: "错误配置", exposures: "信息暴露",
-    "default-logins": "默认口令", vulnerabilities: "通用漏洞",
-    technologies: "技术指纹", panel: "管理面板",
-  };
-  return m[tag] || tag;
+  if (hit) return wsT(hit[1], hit[2] || hit[0]);
+  return tag;
+}
+function wsSevLabel(sev) {
+  const hit = WS_SEV_OPTS.find(x => x[0] === sev);
+  if (hit) return wsT(hit[1], hit[2] || hit[0]);
+  return sev;
 }
 function wsFmtTime(ts) {
   if (!ts) return "—";
@@ -151,7 +154,9 @@ function wsScanIdShort(id) {
   return s.slice(0, 18) + "…";
 }
 function wsChipGroup(opts, selected, dataAttr) {
-  return opts.map(([id, label]) => {
+  return opts.map(row => {
+    const id = row[0];
+    const label = row.length >= 3 ? wsT(row[1], row[2]) : row[1];
     const on = selected.includes(id);
     return `<button type="button" class="ws-chip${on ? " on" : ""}" data-${dataAttr}="${wsEsc(id)}">${wsEsc(label)}</button>`;
   }).join("");
@@ -561,7 +566,7 @@ function wsHistoryRowsHTML() {
       <td><div class="sec-batch">${wsEsc(wsScanLabel(s))}</div>
         <div class="mono muted sec-batch-id">${wsEsc(wsScanIdShort(s.id))} · ${trig}</div></td>
       <td>${wsStatusBadge(s.status)}</td>
-      <td><strong>${n}</strong>${risk ? ` <span class="badge high">${risk} 高危+</span>` : ""}</td>
+      <td><strong>${n}</strong>${risk ? ` <span class="badge high">${risk} ${wsEsc(wsT("ws.high_plus", "高危+"))}</span>` : ""}</td>
       <td class="mono muted">${wsEsc(wsFmtTime(s.finished_at || s.started_at))}</td>
       <td>${cancelBtn}</td>
     </tr>`;
@@ -1162,7 +1167,7 @@ function wsPaintDetail(scan) {
   </div>`;
   const findings = scan.findings || [];
   if (!findings.length) {
-    html += `<div class="ws-empty-findings">
+    html += `<div class="sec-empty slim">
       <h4>${wsEsc(scan.status === "failed" ? wsT("ws.scan_failed_title", "扫描未成功") : wsT("ws.no_findings", "未命中当前模板集"))}</h4>
       <p>${wsEsc(wsT("ws.no_findings_help", "可尝试：扩大模板范围（标准/深度）、勾选「信息」级、确认目标可从服务端访问。0 命中不代表绝对无风险。"))}</p>
     </div>`;

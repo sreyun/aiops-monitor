@@ -84,24 +84,37 @@ func (s *Server) handleSQLAnalyze(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection not found or disabled"})
 			return
 		}
-		if c.VersionHint == "mysql57" {
-			d = sqltoolkit.DialectMySQL57
+		if driverOf(c) == "postgres" {
+			d = sqltoolkit.DialectPostgres
 			in.Dialect = d
-		} else if c.VersionHint == "mysql80" {
-			d = sqltoolkit.DialectMySQL80
-			in.Dialect = d
-		}
-		shape := sqltoolkit.ExtractQueryShape(req.SQL)
-		if shape != nil && shape.ParseOK {
-			if meta, err := mysqlFetchMetadata(c, shape.TableNames()); err == nil {
-				in.Meta = meta
+			kw := sqltoolkit.FirstKeyword(req.SQL)
+			if kw == "select" || kw == "with" || kw == "explain" || kw == "values" {
+				if expl, err := pgExplain(c, req.SQL); err == nil {
+					if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
+						in.Explain = a
+					}
+				}
 			}
-		}
-		kw := sqltoolkit.FirstKeyword(req.SQL)
-		if kw == "select" || kw == "with" || kw == "explain" {
-			if expl, err := mysqlExplain(c, req.SQL); err == nil {
-				if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
-					in.Explain = a
+		} else {
+			if c.VersionHint == "mysql57" {
+				d = sqltoolkit.DialectMySQL57
+				in.Dialect = d
+			} else if c.VersionHint == "mysql80" {
+				d = sqltoolkit.DialectMySQL80
+				in.Dialect = d
+			}
+			shape := sqltoolkit.ExtractQueryShape(req.SQL)
+			if shape != nil && shape.ParseOK {
+				if meta, err := mysqlFetchMetadata(c, shape.TableNames()); err == nil {
+					in.Meta = meta
+				}
+			}
+			kw := sqltoolkit.FirstKeyword(req.SQL)
+			if kw == "select" || kw == "with" || kw == "explain" {
+				if expl, err := mysqlExplain(c, req.SQL); err == nil {
+					if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
+						in.Explain = a
+					}
 				}
 			}
 		}
@@ -230,16 +243,20 @@ func (s *Server) handleMySQLSchema(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connection not found or disabled"})
 		return
 	}
+	database := strings.TrimSpace(r.URL.Query().Get("database"))
+	if database == "" {
+		database = strings.TrimSpace(r.URL.Query().Get("schema"))
+	}
+	table := strings.TrimSpace(r.URL.Query().Get("table"))
 	if driverOf(c) == "postgres" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"driver":  "postgres",
-			"message": "PostgreSQL 请使用 Schema 健康检查；表浏览器暂仅 MySQL",
-			"tables":  []any{},
-		})
+		res, err := pgSchema(c, database, table)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	database := strings.TrimSpace(r.URL.Query().Get("database"))
-	table := strings.TrimSpace(r.URL.Query().Get("table"))
 	res, err := mysqlSchema(c, database, table)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})

@@ -1,0 +1,25 @@
+{
+  "id": "kubernetes",
+  "name": "Kubernetes 运维知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "Pod CrashLoopBackOff 排查",
+      "trigger": "Pod 反复重启、CrashLoopBackOff、OOMKilled",
+      "steps": "1) kubectl describe pod 看 Events 与 Last State\n2) kubectl logs --previous 取崩溃日志\n3) 核对 probes、资源 limit、配置/密钥挂载\n4) OOM 则调内存或查泄漏；配置错误则回滚\n5) 观察 Ready 与重启次数收敛",
+      "tags": "k8s,pod,crashloop"
+    },
+    {
+      "name": "Deployment 发布回滚",
+      "trigger": "新版本错误率升高、需紧急回滚",
+      "steps": "1) 确认当前 revision：kubectl rollout history\n2) 评估是否可 rollout undo\n3) 写工具须 approval_id；记录变更单\n4) 回滚后验证 endpoints/就绪探针\n5) 保留失败镜像标签便于根因",
+      "tags": "k8s,deploy,rollback"
+    },
+    {
+      "name": "节点 NotReady / 资源压力",
+      "trigger": "Node NotReady、DiskPressure、MemoryPressure",
+      "steps": "1) kubectl describe node 看 Conditions\n2) 对照主机 CPU/内存/磁盘与 kubelet 日志\n3) 驱逐或扩容前确认 PDB\n4) 清理镜像/日志缓解磁盘压力\n5) 恢复后检查调度与告警静默",
+      "tags": "k8s,node,pressure"
+    }
+  ]
+}

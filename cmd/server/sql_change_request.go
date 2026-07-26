@@ -98,6 +98,27 @@ func (m *sqlChangeRequestManager) List(now time.Time) []SQLChangeRequest {
 	return out
 }
 
+// RenameActor rewrites proposer/approver/executor usernames so SoD checks stay
+// valid after an account rename (username is the only stable actor key today).
+func (m *sqlChangeRequestManager) RenameActor(oldName, newName string) {
+	if m == nil || oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, cr := range m.items {
+		if cr.Proposer == oldName {
+			cr.Proposer = newName
+		}
+		if cr.Approver == oldName {
+			cr.Approver = newName
+		}
+		if cr.Executor == oldName {
+			cr.Executor = newName
+		}
+	}
+}
+
 func (m *sqlChangeRequestManager) Approve(id, approver string, now time.Time) (SQLChangeRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -202,10 +223,6 @@ func (s *Server) handleCreateSQLChangeRequest(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection not found or disabled"})
 		return
 	}
-	if driverOf(c) == "postgres" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "PostgreSQL 连接不支持变更单执行"})
-		return
-	}
 	sqlText := strings.TrimSpace(req.SQL)
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	if kind == "" {
@@ -222,6 +239,10 @@ func (s *Server) handleCreateSQLChangeRequest(w http.ResponseWriter, r *http.Req
 			return
 		}
 	case "ddl":
+		if driverOf(c) == "postgres" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "PostgreSQL 只读：不支持 DDL 变更单（可用 KILL 终止会话）"})
+			return
+		}
 		if sqlText == "" || len(sqlText) > 16<<10 || !sqltoolkit.IsAllowedIndexDDL(sqlText) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "仅允许 16KB 内的 CREATE/ALTER 索引类 DDL"})
 			return
@@ -244,7 +265,16 @@ func (s *Server) handleListSQLChangeRequests(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleApproveSQLChangeRequest(w http.ResponseWriter, r *http.Request) {
-	cr, err := s.sqlChanges.Approve(strings.TrimSpace(r.PathValue("id")), s.actorName(r), time.Now())
+	id := strings.TrimSpace(r.PathValue("id"))
+	approver := s.actorName(r)
+	// Separation of duties: proposer cannot approve their own ticket.
+	for _, existing := range s.sqlChanges.List(time.Now()) {
+		if existing.ID == id && strings.EqualFold(strings.TrimSpace(existing.Proposer), strings.TrimSpace(approver)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "不能审批自己提交的变更单（职责分离）"})
+			return
+		}
+	}
+	cr, err := s.sqlChanges.Approve(id, approver, time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -277,6 +307,12 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "change request not found"})
 		return
 	}
+	executor := s.actorName(r)
+	// Separation of duties: proposer cannot execute their own ticket either.
+	if strings.EqualFold(strings.TrimSpace(ticket.Proposer), strings.TrimSpace(executor)) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "不能执行自己提交的变更单（职责分离）"})
+		return
+	}
 	if expectedConnectionID != "" && (ticket.ConnectionID != expectedConnectionID || ticket.SQL != strings.TrimSpace(expectedSQL)) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "ticket connection or SQL does not match"})
 		return
@@ -293,7 +329,7 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 		})
 		return
 	}
-	cr, err := s.sqlChanges.BeginExecute(ticketID, c.ID, ticket.SQL, s.actorName(r), now)
+	cr, err := s.sqlChanges.BeginExecute(ticketID, c.ID, ticket.SQL, executor, now)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -307,6 +343,11 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 		pid, ok := parseKillSQL(cr.SQL)
 		if !ok {
 			execErr = fmt.Errorf("invalid KILL statement")
+		} else if driverOf(c) == "postgres" {
+			execErr = pgKillSession(c, pid)
+			if execErr == nil {
+				result = map[string]any{"killed": pid, "via": "pg_terminate_backend"}
+			}
 		} else {
 			execErr = mysqlKillSession(c, pid)
 			if execErr == nil {
@@ -314,7 +355,11 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 			}
 		}
 	} else {
-		result, execErr = s.execDDLWithExplain(c, cr.SQL, verifySQL, timeoutSec)
+		if driverOf(c) == "postgres" {
+			execErr = fmt.Errorf("PostgreSQL 不支持 DDL 变更单")
+		} else {
+			result, execErr = s.execDDLWithExplain(c, cr.SQL, verifySQL, timeoutSec)
+		}
 	}
 	cr = s.sqlChanges.FinishExecute(ticketID, result, execErr, time.Now())
 	if execErr != nil {

@@ -2927,6 +2927,10 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .ai-assist-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:13px;line-height:1.6;min-height:120px}
 .ai-assist-hint{color:var(--muted);font-size:12.5px}
 .ai-assist-err{color:#ef4d5a;font-size:13px;white-space:pre-wrap;word-break:break-word}
+.ai-assist-verify{font-size:12px;margin:0 0 8px;padding:6px 10px;border-radius:6px;line-height:1.4}
+.ai-assist-verify.ok{color:#1a7f4b;background:rgba(26,127,75,.1)}
+.ai-assist-verify.err{color:#b42318;background:rgba(180,35,24,.1)}
+.ai-assist-verify.warn{color:#8a6d1b;background:rgba(138,109,27,.1)}
 .ai-rag-hint{font-size:11px;color:var(--muted2,#889);margin:0 0 8px;padding:6px 10px;border-radius:6px;background:rgba(127,127,127,.08);line-height:1.4}
 .ai-assist-actions{display:flex;gap:8px;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--line2)}
 .ai-assist-actions:empty{display:none}

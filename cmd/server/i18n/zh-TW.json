@@ -302,6 +302,7 @@
   "agent.invalid_token": "無效或缺失的接入 Token",
   "agent.fingerprint_failed": "指紋鑒權失敗：未註冊或指紋不匹配",
   "agent.fingerprint_required": "指紋資訊必填",
+  "agent.fingerprint_conflict": "主機指紋與已登記記錄衝突，拒絕覆蓋身分",
 
   "email.not_configured": "信箱服務未設定或未啟用",
   "email.invalid_header": "非法的收件人 / 主題 / 發件人名稱",

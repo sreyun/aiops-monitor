@@ -161,7 +161,7 @@ func IsReadOnlyQuery(sql string) bool {
 	}
 	kw := FirstKeyword(sql)
 	switch kw {
-	case "select", "with", "explain", "show", "desc", "describe":
+	case "select", "with", "explain", "show", "desc", "describe", "values", "table":
 		return true
 	default:
 		return false
@@ -214,12 +214,21 @@ func IsAllowedIndexDDL(sql string) bool {
 		" drop ", " truncate ", " delete ", " insert ", " update ", " grant ", " revoke ",
 		" create table", " create database", " create view", " create procedure", " create function",
 		" create trigger", " create event", " rename ", " into outfile", " load data", " call ",
+		" add column", " modify column", " change column", " partition ", " disable keys", " enable keys",
+		" add constraint", " add foreign", " add primary", " add fulltext", " add spatial",
 	} {
 		if strings.Contains(" "+s+" ", bad) || strings.HasPrefix(s, strings.TrimSpace(bad)) {
 			return false
 		}
 	}
-	reCreate := regexp.MustCompile(`^create\s+(unique\s+)?index\s+`)
-	reAlter := regexp.MustCompile(`^alter\s+table\s+.+\s+add\s+(unique\s+)?(index|key)\s+`)
+	// Reject multi-clause ALTER (e.g. ADD INDEX …, ADD COLUMN …).
+	if strings.HasPrefix(s, "alter ") && strings.Contains(s, ",") {
+		return false
+	}
+	// Full-statement match — prefix-only regex previously allowed trailing clauses.
+	// Identifiers: letters/digits/_/$/dot; optional MySQL-style `quoted` names.
+	ident := `[a-z0-9_$.]+|` + "`" + `[a-z0-9_$.]+` + "`"
+	reCreate := regexp.MustCompile(`^create\s+(unique\s+)?index\s+(?:` + ident + `)\s+on\s+(?:` + ident + `)\s*\([^)]+\)$`)
+	reAlter := regexp.MustCompile(`^alter\s+table\s+(?:` + ident + `)\s+add\s+(unique\s+)?(index|key)\s+(?:` + ident + `)\s*\([^)]+\)$`)
 	return reCreate.MatchString(s) || reAlter.MatchString(s)
 }

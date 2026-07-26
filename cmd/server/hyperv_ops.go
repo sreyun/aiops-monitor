@@ -11,6 +11,9 @@ import (
 func (s *Server) handleHyperVPower(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
 	vmID := strings.TrimSpace(r.PathValue("vmID"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	var req struct {
 		Action string `json:"action"`
 		Name   string `json:"name"`
@@ -40,6 +43,9 @@ func (s *Server) handleHyperVPower(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHyperVConfig(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
 	vmID := strings.TrimSpace(r.PathValue("vmID"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	var req struct {
 		Name            string `json:"name"`
 		ProcessorCount  int    `json:"processor_count"`

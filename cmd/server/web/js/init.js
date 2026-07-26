@@ -1,15 +1,5 @@
 /* ---------- PWA: SW registration + Install prompt + Hash routing ---------- */
-// P1-4: 全局 Escape 键关闭模态弹窗
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape") {
-    const masks = document.querySelectorAll(".mask.show:not([data-forced])");
-    if (masks.length > 0) {
-      // 只关闭最上层的弹窗
-      const top = masks[masks.length - 1];
-      closeMask(top);
-    }
-  }
-});
+// Escape-to-close is handled in nav.js (topmost mask + terminal/desktop cleanup).
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).then(reg => {

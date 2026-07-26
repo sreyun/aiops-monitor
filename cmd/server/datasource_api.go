@@ -29,14 +29,31 @@ func validateDataSource(ds *DataSource) string {
 	ds.Name = strings.TrimSpace(ds.Name)
 	ds.URL = strings.TrimSpace(ds.URL)
 	ds.Type = strings.TrimSpace(ds.Type)
-	if ds.Name == "" || ds.URL == "" {
-		return "名称和地址必填"
+	ds.Database = strings.TrimSpace(ds.Database)
+	ds.SQLConnectionID = strings.TrimSpace(ds.SQLConnectionID)
+	if ds.Type == "postgresql" {
+		ds.Type = "postgres"
 	}
-	if !strings.HasPrefix(ds.URL, "http://") && !strings.HasPrefix(ds.URL, "https://") {
-		return "地址需以 http:// 或 https:// 开头"
+	if ds.Name == "" {
+		return "名称必填"
 	}
-	if ds.Type != "loki" && ds.Type != "prometheus" && ds.Type != "vm" {
-		return "类型仅支持 prometheus / vm / loki"
+	switch ds.Type {
+	case "loki", "prometheus", "vm":
+		if ds.URL == "" {
+			return "名称和地址必填"
+		}
+		if !strings.HasPrefix(ds.URL, "http://") && !strings.HasPrefix(ds.URL, "https://") {
+			return "地址需以 http:// 或 https:// 开头"
+		}
+	case "postgres", "mysql":
+		if ds.SQLConnectionID == "" && ds.URL == "" {
+			return "SQL 数据源需填写主机地址，或关联 SQL 工具连接"
+		}
+		if ds.Port < 0 || ds.Port > 65535 {
+			return "端口无效"
+		}
+	default:
+		return "类型仅支持 prometheus / vm / loki / postgres / mysql"
 	}
 	return ""
 }
@@ -110,10 +127,33 @@ func (s *Server) handleDataSourceTest(w http.ResponseWriter, r *http.Request) {
 	if ds.ID != "" && (ds.AuthPass == "" || strings.Contains(ds.AuthPass, "****")) {
 		if saved, ok := s.cfg.GetDataSource(ds.ID); ok {
 			ds.AuthPass = saved.AuthPass
+			if ds.SQLConnectionID == "" {
+				ds.SQLConnectionID = saved.SQLConnectionID
+			}
 		}
 	}
 	if msg := validateDataSource(&ds); msg != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	if isSQLDataSourceType(ds.Type) {
+		c, err := s.resolveSQLConnFromDataSource(ds)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		var pingErr error
+		var ver string
+		if driverOf(c) == "postgres" {
+			ver, pingErr = pgPing(c)
+		} else {
+			ver, pingErr = mysqlTestConnection(c)
+		}
+		if pingErr != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": pingErr.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": ver})
 		return
 	}
 	if err := testDataSource(ds); err != nil {
@@ -139,6 +179,29 @@ func (s *Server) handleDataSourceQuery(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if strings.TrimSpace(req.Query) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "查询语句必填"})
+		return
+	}
+	if isSQLDataSourceType(ds.Type) {
+		c, err := s.resolveSQLConnFromDataSource(ds)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		var cols []string
+		var rows []map[string]any
+		if driverOf(c) == "postgres" {
+			cols, rows, err = pgQueryReadOnly(c, req.Query, req.Limit)
+		} else {
+			cols, rows, err = mysqlQueryReadOnly(c, req.Query, req.Limit)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "result": formatSQLQueryText(cols, rows),
+			"columns": cols, "rows": rows, "driver": driverOf(c),
+		})
 		return
 	}
 	result, err := queryDataSource(ds, req.Query, req.Limit, req.SinceMin)

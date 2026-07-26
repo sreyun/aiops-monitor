@@ -206,6 +206,63 @@ func (s *Server) handleDashboardQueryInstant(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"series": vec})
 }
 
+// handleDashboardQuerySQL runs a read-only SQL query for table/stat panels backed by
+// postgres/mysql datasources (or a linked SQL toolkit connection).
+func (s *Server) handleDashboardQuerySQL(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Expr       string            `json:"expr"`
+		SQL        string            `json:"sql"`
+		DataSource string            `json:"datasource"`
+		Limit      int               `json:"limit"`
+		Vars       map[string]string `json:"vars"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	rawSQL := strings.TrimSpace(req.Expr)
+	if rawSQL == "" {
+		rawSQL = strings.TrimSpace(req.SQL)
+	}
+	if len(req.DataSource) > 128 || len(rawSQL) > maxDashboardExpr {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "查询请求过大或字段无效"})
+		return
+	}
+	ds, ok := s.cfg.GetDataSource(req.DataSource)
+	if !ok || !ds.Enabled || !isSQLDataSourceType(ds.Type) {
+		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}, "rows": []any{}, "available": false})
+		return
+	}
+	c, err := s.resolveSQLConnFromDataSource(ds)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}, "rows": []any{}, "available": true, "error": err.Error()})
+		return
+	}
+	sqlText := substituteVars(rawSQL, req.Vars, 60, 3600)
+	if sqlText == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "SQL 表达式必填"})
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	var cols []string
+	var rows []map[string]any
+	if driverOf(c) == "postgres" {
+		cols, rows, err = pgQueryReadOnly(c, sqlText, limit)
+	} else {
+		cols, rows, err = mysqlQueryReadOnly(c, sqlText, limit)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}, "rows": []any{}, "available": true, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"columns": cols, "rows": rows, "available": true, "driver": driverOf(c),
+	})
+}
+
 // handleDashboardQueryLogs 日志面板查询（Loki 数据源，LogQL 区间）。
 func (s *Server) handleDashboardQueryLogs(w http.ResponseWriter, r *http.Request) {
 	var req panelQueryReq

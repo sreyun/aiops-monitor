@@ -242,6 +242,30 @@ func (p *pgStore) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS ai_feedback_events_ts ON ai_feedback_events(ts DESC);
 		CREATE INDEX IF NOT EXISTS ai_feedback_events_task_ts ON ai_feedback_events(task, ts DESC);
+		-- AI Run：Assist/Diagnose/Sreyun 统一运行对象（Wave 2），串联验证与反馈
+		CREATE TABLE IF NOT EXISTS ai_runs (
+			id             TEXT PRIMARY KEY,
+			kind           TEXT NOT NULL DEFAULT 'assist',
+			task           TEXT NOT NULL DEFAULT '',
+			actor          TEXT NOT NULL DEFAULT '',
+			model          TEXT NOT NULL DEFAULT '',
+			input          TEXT NOT NULL DEFAULT '',
+			answer         TEXT NOT NULL DEFAULT '',
+			content_hash   TEXT NOT NULL DEFAULT '',
+			verify_json    JSONB,
+			ok             BOOLEAN NOT NULL DEFAULT TRUE,
+			latency_ms     BIGINT NOT NULL DEFAULT 0,
+			memory_hits    INT DEFAULT 0,
+			skill_hits     INT DEFAULT 0,
+			feedback       TEXT NOT NULL DEFAULT '',
+			incident_id    BIGINT DEFAULT 0,
+			datasource_id  TEXT NOT NULL DEFAULT '',
+			created_at     BIGINT NOT NULL,
+			updated_at     BIGINT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS ai_runs_created ON ai_runs(created_at DESC);
+		CREATE INDEX IF NOT EXISTS ai_runs_kind_created ON ai_runs(kind, created_at DESC);
+		CREATE INDEX IF NOT EXISTS ai_runs_actor_created ON ai_runs(actor, created_at DESC);
 		-- 剧本执行历史（专用表，无环形上限丢失）
 		CREATE TABLE IF NOT EXISTS playbook_executions (
 			id          BIGINT PRIMARY KEY,
@@ -1433,11 +1457,39 @@ type Skill struct {
 func (p *pgStore) insertSkill(name, trigger, steps, tags, source string, emb []float64) (int64, error) {
 	now := time.Now().Unix()
 	var id int64
+	if len(emb) == 0 {
+		return p.insertSkillNoEmbed(name, trigger, steps, tags, source)
+	}
 	err := p.db.QueryRow(
 		`INSERT INTO ai_skills(name, trigger_desc, steps, tags, embedding, source, created_at, updated_at)
 		 VALUES($1,$2,$3,$4,$5::vector,$6,$7,$7) RETURNING id`,
 		name, trigger, steps, tags, vecStr(emb), source, now).Scan(&id)
 	return id, err
+}
+
+func (p *pgStore) insertSkillNoEmbed(name, trigger, steps, tags, source string) (int64, error) {
+	now := time.Now().Unix()
+	var id int64
+	err := p.db.QueryRow(
+		`INSERT INTO ai_skills(name, trigger_desc, steps, tags, embedding, source, created_at, updated_at)
+		 VALUES($1,$2,$3,$4,NULL,$5,$6,$6) RETURNING id`,
+		name, trigger, steps, tags, source, now).Scan(&id)
+	return id, err
+}
+
+func (p *pgStore) findSkillByNameSource(name, source string) (int64, bool) {
+	var id int64
+	err := p.db.QueryRow(
+		`SELECT id FROM ai_skills WHERE name=$1 AND source=$2 AND COALESCE(status,'active')='active' LIMIT 1`,
+		name, source).Scan(&id)
+	return id, err == nil && id > 0
+}
+
+func (p *pgStore) updateSkillText(id int64, name, trigger, steps string) error {
+	_, err := p.db.Exec(
+		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, updated_at=$5 WHERE id=$1`,
+		id, name, trigger, steps, time.Now().Unix())
+	return err
 }
 
 // findSimilarSkill 返回与 emb 语义最近的【活跃】技能 id（若距离 ≤ maxDist），用于提炼时去重/合并。
@@ -3492,9 +3544,16 @@ WHERE p.relname = 'flow_records' AND c.relkind = 'r'`)
 		if err := rows.Scan(&name); err != nil {
 			continue
 		}
-		// expect flow_records_YYYY_MM
-		var y, m int
-		if _, err := fmt.Sscanf(name, "flow_records_%d_%d", &y, &m); err != nil {
+		// Partitions are named flow_records_YYYYMM (see ensureFlowPartitions).
+		if !isSafeFlowPartitionName(name) {
+			continue
+		}
+		var ym int
+		if _, err := fmt.Sscanf(name, "flow_records_%d", &ym); err != nil || ym < 197001 {
+			continue
+		}
+		y, m := ym/100, ym%100
+		if m < 1 || m > 12 {
 			continue
 		}
 		partStart := time.Date(y, time.Month(m), 1, 0, 0, 0, 0, time.UTC)

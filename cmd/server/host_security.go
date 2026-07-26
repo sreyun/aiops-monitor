@@ -266,10 +266,9 @@ func (m *hostSecurityManager) load() {
 		if s == nil || s.HostID == "" {
 			continue
 		}
-		prev := m.lastByHost[s.HostID]
-		if prev == nil || s.FinishedAt >= prev.FinishedAt {
-			m.lastByHost[s.HostID] = s
-		}
+		// Same preference as rememberLastLocked: completed beats newer failed,
+		// so a flaky retry after restart cannot wipe the last good posture.
+		m.rememberLastLocked(s)
 		if s.FinishedAt > newestFinished && (s.Status == "completed" || s.Status == "failed") {
 			newestFinished = s.FinishedAt
 		}
@@ -529,7 +528,8 @@ func queryOSVBatch(ctx context.Context, url string, pkgs []hsAgentPkg, distro, p
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 45 * time.Second}
+	// SSRF: OSV URL is configurable — block cloud metadata / link-local.
+	client := newGuardedHTTPClient(45 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1100,9 +1100,20 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	var prevFindings []HostFinding
 	var prevID string
 	s.hostSec.mu.Lock()
+	// Prefer lastByHost when it is a prior completed scan; otherwise search history
+	// (covers restart edge cases where lastByHost briefly held a failed scan).
 	if prev := s.hostSec.lastByHost[hostID]; prev != nil && prev.Status == "completed" && prev.ID != scanID {
 		prevFindings = prev.Findings
 		prevID = prev.ID
+	} else {
+		for _, sc := range s.hostSec.scans {
+			if sc == nil || sc.HostID != hostID || sc.Status != "completed" || sc.ID == scanID {
+				continue
+			}
+			prevFindings = sc.Findings
+			prevID = sc.ID
+			break
+		}
 	}
 	s.hostSec.mu.Unlock()
 	baseDiff := diffHostFindings(prevFindings, findings, prevID)

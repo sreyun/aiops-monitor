@@ -13,9 +13,11 @@ let caPage = 1, caSize = 20; // 明细分页（客户端）
 // 无数据的主机不进下拉。null=未加载；刷新/进入视图时重拉。
 let caDataHosts = null;
 
-// 常驻合规提示（内容审计涉及用户明文请求，属隐私敏感）。
+function caT(k, fb) { return (typeof I18N !== "undefined" && I18N.t) ? I18N.t(k, fb) : fb; }
+
+// 常驻合规提示（与主机/Web 安全共用 sec-notice）。
 function caNoticeHTML() {
-  return `<div style="margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #e0a300;border-radius:8px;background:rgba(224,163,0,.08);font-size:12px;color:var(--muted)">${esc(I18N.t("ca.notice") || "⚠ 内容审计仅可在已授权网络启用。推荐使用端侧脱敏或仅元数据模式；完整正文可能包含 PII / prompt。HTTPS 正文仍需在 LLM Gateway/SDK 层审计；服务端记录按保留策略自动清理。")}</div>`;
+  return `<div class="sec-notice sec-notice-slim">${esc(caT("ca.notice", "内容审计仅可在已授权网络启用。推荐端侧脱敏或仅元数据模式；完整正文可能含 PII / prompt。Gateway deny/block 将强制脱敏并告警。"))}</div>`;
 }
 
 function renderContentAuditPanel() {
@@ -24,7 +26,7 @@ function renderContentAuditPanel() {
 
   // 先拉「有审计数据的主机」，再渲染面板——无数据主机不列进下拉。
   if (caDataHosts === null) {
-    container.innerHTML = `<div class="loading-dots">${I18N.t("common.loading") || "加载中..."}</div>`;
+    container.innerHTML = `<div class="sec-shell">${caNoticeHTML()}<div class="loading-dots">${esc(caT("common.loading", "加载中…"))}</div></div>`;
     fetch(`/api/v1/content-audit/hosts`, { credentials: "same-origin" })
       .then(async r => {
         const d = await r.json().catch(() => ({}));
@@ -34,7 +36,7 @@ function renderContentAuditPanel() {
       })
       .catch(e => {
         caDataHosts = [];
-        container.innerHTML = caNoticeHTML() + `<div class="empty-state">${esc(String(e.message || e))}</div>`;
+        container.innerHTML = `<div class="sec-shell">${caNoticeHTML()}<div class="sec-empty slim"><h4>${esc(caT("ca.load_fail", "加载失败"))}</h4><p>${esc(String(e.message || e))}</p></div></div>`;
       });
     return;
   }
@@ -43,35 +45,41 @@ function renderContentAuditPanel() {
   const nameMap = {};
   (window._cachedHosts || []).forEach(h => { nameMap[h.id] = h; });
 
-  let html = caNoticeHTML();
+  let html = `<div class="sec-shell">${caNoticeHTML()}`;
   if (caDataHosts.length === 0) {
-    container.innerHTML = html + `<div class="empty-state">${I18N.t("ca.no_hosts") || "暂无有内容审计数据的主机（需启用 Agent 内容审计并产生匹配白名单的 HTTP 流量）"}</div>`;
+    html += `<div class="sec-empty"><div class="sec-empty-ico" aria-hidden="true"></div>
+      <h4>${esc(caT("ca.no_hosts_title", "暂无内容审计数据"))}</h4>
+      <p>${esc(caT("ca.no_hosts", "需启用 Agent 内容审计并产生匹配白名单的 HTTP 流量后，主机才会出现在此。"))}</p>
+    </div></div>`;
+    container.innerHTML = html;
     return;
   }
-  html += `<div class="nf-toolbar">`;
-  html += `<select id="caHostSelect" class="nf-select">`;
+  html += `<div class="sec-toolbar">`;
+  html += `<div class="select-wrap"><select id="caHostSelect" class="nf-select">`;
   caDataHosts.forEach(dh => {
     const h = nameMap[dh.host_id] || {};
     const name = dh.hostname || h.hostname || dh.host_id;
     const sel = dh.host_id === caHost ? " selected" : "";
     html += `<option value="${esc(dh.host_id)}"${sel}>${esc(name)} · ${dh.events || 0}</option>`;
   });
-  html += `</select>`;
-  html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(I18N.t("ca.kw_ph") || "搜索关键字，或 provider:/model:/principal:/risk:")}">`;
-  html += `<label class="nf-chk" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="caSensOnly"${caSensOnly ? " checked" : ""}> ${esc(I18N.t("ca.sens_only") || "只看敏感")}</label>`;
-  html += `<button class="nf-btn" data-caact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
-  html += `<button class="nf-btn" data-caact="export">${esc(I18N.t("common.export") || "导出")}</button>`;
-  html += `<button class="nf-btn nf-ai-btn" data-caact="ai" title="${esc(I18N.t("ca.ai_hint") || "AI 研判：是否有敏感数据外泄到大模型")}">🤖 ${esc(I18N.t("ai.analyze") || "AI 分析")}</button>`;
+  html += `</select></div>`;
+  html += `<input type="search" id="caKw" class="nf-input" value="${esc(caKw)}" placeholder="${esc(caT("ca.kw_ph", "搜索关键字，或 provider:/model:/principal:/risk:"))}">`;
+  html += `<label class="nf-chk" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="caSensOnly"${caSensOnly ? " checked" : ""}> ${esc(caT("ca.sens_only", "只看敏感"))}</label>`;
+  html += `<div class="sec-toolbar-actions">`;
+  html += `<button type="button" class="btn" data-caact="refresh">${esc(caT("common.refresh", "刷新"))}</button>`;
+  html += `<button type="button" class="btn" data-caact="export">${esc(caT("common.export", "导出"))}</button>`;
+  html += `<button type="button" class="btn nf-ai-btn" data-caact="ai" title="${esc(caT("ca.ai_hint", "AI 研判：是否有敏感数据外泄到大模型"))}">${esc(caT("ca.ai_analyze", "AI 研判"))}</button>`;
   if (typeof isAdmin === "function" && isAdmin()) {
-    html += `<button class="nf-btn" data-caact="keywords">${esc(I18N.t("ca.keywords", "敏感词规则") || "敏感词规则")}</button>`;
+    html += `<button type="button" class="btn" data-caact="keywords">${esc(caT("ca.keywords", "敏感词规则"))}</button>`;
   }
-  html += `</div>`;
-  html += `<div id="caKeywordsBox" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:8px">
-    <div class="hint" style="margin-bottom:6px">自定义敏感关键词（每行一个；服务端 DLP 额外命中）。Gateway 上报 policy_decision=deny/block 时将强制脱敏正文并告警。</div>
-    <textarea id="caKeywords" rows="4" class="mono" style="width:100%" placeholder="内部代号&#10;项目密级"></textarea>
-    <div style="margin-top:8px"><button class="btn primary sm" data-caact="save-keywords">保存规则</button></div>
+  html += `</div></div>`;
+  html += `<div id="caKeywordsBox" class="cfg-panel sec-cfg-panel" style="display:none">
+    <div class="cfg-panel-head"><div class="cfg-panel-title">${esc(caT("ca.keywords", "敏感词规则"))}</div></div>
+    <p class="ws-help">${esc(caT("ca.keywords_help", "自定义敏感关键词（每行一个）。Gateway 上报 deny/block 时服务端强制脱敏正文并告警。"))}</p>
+    <textarea id="caKeywords" rows="4" class="mono" style="width:100%" placeholder="${esc(caT("ca.keywords_ph", "内部代号"))}"></textarea>
+    <div class="cfg-actions" style="margin-top:8px"><button type="button" class="btn primary sm" data-caact="save-keywords">${esc(caT("ca.save_keywords", "保存规则"))}</button></div>
   </div>`;
-  html += `<div id="caBody"></div>`;
+  html += `<div id="caBody"></div></div>`;
   container.innerHTML = html;
 
   const sel = $("caHostSelect");
@@ -136,22 +144,24 @@ function renderCA(container, events) {
   if (!container) return;
   if (caSensOnly) events = events.filter(e => e.sensitive); // 客户端"只看敏感"过滤
   if (events.length === 0) {
-    container.innerHTML = `<div class="empty-state">${caSensOnly ? (I18N.t("ca.no_sens") || "无命中敏感数据的记录") : (I18N.t("ca.empty") || "暂无内容审计记录（请检查采集后端、权限、端口及域名白名单）")}</div>`;
+    container.innerHTML = `<div class="sec-empty slim"><h4>${esc(caSensOnly ? caT("ca.no_sens", "无命中敏感数据的记录") : caT("ca.empty_title", "暂无记录"))}</h4>
+      <p>${esc(caSensOnly ? caT("ca.no_sens_help", "可取消「只看敏感」查看全部事件。") : caT("ca.empty", "请检查采集后端、权限、端口及域名白名单。"))}</p></div>`;
     return;
   }
   const total = events.length;
   const llmCount = events.filter(e => e.is_llm).length;
   const sensitiveCount = events.filter(e => e.sensitive).length;
-  const blockedCount = events.filter(e => /^(deny|block)$/i.test(e.policy_decision || "")).length;
+  const blockedCount = events.filter(e => /^(deny|denied|block|blocked|reject|rejected|forbid|forbidden)$/i.test(e.policy_decision || "")).length;
   const tokenTotal = events.reduce((n, e) => n + Number(e.llm_input_tokens || 0) + Number(e.llm_output_tokens || 0), 0);
   caPage = tblClampPage(caPage, total, caSize);
   const pageEvents = events.slice((caPage - 1) * caSize, caPage * caSize);
-  let html = `<div class="stats-grid" style="margin-bottom:12px">`;
-  html += `<div class="stat-card"><div class="sv">${esc(String(total))}</div><div class="sk">${esc(I18N.t("ca.audit_events") || "审计事件")}</div><div class="sh">${esc(I18N.t("ca.query_window") || "当前查询窗口")}</div></div>`;
-  html += `<div class="stat-card"><div class="sv ok">${esc(String(llmCount))}</div><div class="sk">${esc(I18N.t("ca.llm_calls") || "LLM 调用")}</div><div class="sh">${esc(I18N.t("ca.identified") || "结构化或端点识别")}</div></div>`;
-  html += `<div class="stat-card"><div class="sv ${sensitiveCount ? "crit" : "ok"}">${esc(String(sensitiveCount))}</div><div class="sk">${esc(I18N.t("ca.sensitive_hits") || "敏感命中")}</div><div class="sh">${esc(I18N.t("ca.blocked") || "策略阻断")} ${esc(String(blockedCount))}</div></div>`;
-  html += `<div class="stat-card"><div class="sv">${esc(tokenTotal.toLocaleString())}</div><div class="sk">${esc(I18N.t("ca.token_total") || "Token 总量")}</div><div class="sh">input + output</div></div>`;
-  html += `</div><div class="nf-table-wrap"><table class="nf-flow-table">`;
+  let html = `<div class="sec-metrics compact" style="margin-bottom:12px">`;
+  html += `<div class="sec-metric"><b>${esc(String(total))}</b><span>${esc(caT("ca.audit_events", "审计事件"))}</span></div>`;
+  html += `<div class="sec-metric"><b>${esc(String(llmCount))}</b><span>${esc(caT("ca.llm_calls", "LLM 调用"))}</span></div>`;
+  html += `<div class="sec-metric ${sensitiveCount ? "crit" : ""}"><b>${esc(String(sensitiveCount))}</b><span>${esc(caT("ca.sensitive_hits", "敏感命中"))}</span></div>`;
+  html += `<div class="sec-metric ${blockedCount ? "high" : ""}"><b>${esc(String(blockedCount))}</b><span>${esc(caT("ca.blocked", "策略阻断"))}</span></div>`;
+  html += `<div class="sec-metric"><b>${esc(tokenTotal.toLocaleString())}</b><span>${esc(caT("ca.token_total", "Token"))}</span></div>`;
+  html += `</div><div class="nf-table-wrap"><table class="data-table hs-table">`;
   html += `<thead><tr>`;
   html += `<th>${I18N.t("ca.time") || "时间"}</th>`;
   html += `<th>${I18N.t("ca.sensitive") || "敏感"}</th>`;
@@ -185,7 +195,7 @@ function renderCA(container, events) {
     const idx = baseIdx + i;
     html += `<tr class="ca-row"${e.sensitive ? ` style="background:rgba(224,77,90,.06)"` : ""} data-ca-idx="${idx}" title="${esc(I18N.t("ca.click_detail") || "点击查看详情")}">`;
     html += `<td style="white-space:nowrap">${esc(caTime(e.observed_at))}</td>`;
-    html += `<td>${e.sensitive ? `<span style="display:inline-block;padding:1px 6px;border-radius:6px;background:#e04d5a;color:#fff;font-size:11px;white-space:nowrap" title="${esc(e.sensitive)}">⚠ ${esc(e.sensitive)}</span>` : `<span style="color:var(--muted)">—</span>`}</td>`;
+    html += `<td>${e.sensitive ? `<span class="badge crit" title="${esc(e.sensitive)}">${esc(String(e.sensitive).slice(0, 48))}</span>` : `<span class="muted">—</span>`}</td>`;
     html += `<td class="nf-mono">${esc(e.src_ip || "")}</td>`;
     const decisionBadge = e.policy_decision ? ` · ${esc(e.policy_decision)}` : "";
     const llmBadge = e.is_llm ? `<div style="margin-top:3px"><span class="nf-proto nf-proto-tcp">LLM · ${esc(e.llm_provider || "compatible")}${e.llm_model ? " · " + esc(e.llm_model) : ""}${decisionBadge}</span></div>` : "";
@@ -247,7 +257,7 @@ function openCADetail(e) {
   meta += caKv("协议", esc(e.protocol || "unknown"));
   meta += caKv(I18N.t("ca.status") || "状态", e.status ? esc(String(e.status)) : "—");
   meta += caKv(I18N.t("ca.sensitive") || "敏感", e.sensitive
-    ? `<span class="ca-sens-pill">⚠ ${esc(e.sensitive)}</span>`
+    ? `<span class="badge crit">${esc(e.sensitive)}</span>`
     : `<span style="color:var(--muted)">—</span>`);
   meta += caKv(I18N.t("ca.ctype") || "类型", esc(e.ctype || "—"));
   meta += caKv(I18N.t("ca.resp_ctype") || "响应类型", esc(e.resp_ctype || "—"));

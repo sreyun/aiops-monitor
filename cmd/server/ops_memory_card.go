@@ -220,7 +220,7 @@ func stripListIndexPrefix(line string) string {
 // enrichResolutionCardWithAI 尝试用 LLM 把结案卡补全为更干净的结构；失败则返回原卡。
 func (s *Server) enrichResolutionCardWithAI(card ResolutionCard, diag string) ResolutionCard {
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return card
 	}
 	payload, _ := json.Marshal(map[string]any{

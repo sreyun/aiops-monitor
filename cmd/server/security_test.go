@@ -106,8 +106,21 @@ func TestHandleGetConfigMasksSecrets(t *testing.T) {
 	// fields from stored config, so they can't be set through the form).
 	cfg.mu.Lock()
 	cfg.cfg.InstallToken = "PLAINTOKEN0123456789"
+	cfg.cfg.PrevInstallToken = "PREVINSTALLTOKEN0123"
+	cfg.cfg.PromWriteToken = "PROMWRITETOKEN012345"
 	cfg.cfg.RelaySecret = "PLAINRELAYSECRET0123"
 	cfg.cfg.CustomWebhook.Headers = "X-Token: plaintextsecret"
+	cfg.cfg.AI.RerankAPIKey = "RERANKKEYSECRET01234"
+	cfg.cfg.AI.MCPToken = "MCPTOKENSECRET012345"
+	cfg.cfg.AI.WeKnoraAPIKey = "WEKNORAKEYSECRET0123"
+	cfg.cfg.OIDC.ClientSecret = "OIDCCLIENTSECRET0123"
+	cfg.cfg.SSO.Feishu.AppSecret = "FEISHUAPPSECRET01234"
+	cfg.cfg.MySQLConnections = []MySQLConnection{{
+		ID: "c1", Name: "db", Host: "127.0.0.1", Password: "MYSQLPASSSECRET0123", Enabled: true,
+	}}
+	cfg.cfg.K8sClusters = []K8sClusterConfig{{
+		ID: "k1", Name: "k8s", Token: "K8STOKENSECRET012345", KubeconfigYAML: "KUBECONFIGSECRETYAML",
+	}}
 	cfg.mu.Unlock()
 
 	srv := &Server{cfg: cfg}
@@ -119,7 +132,13 @@ func TestHandleGetConfigMasksSecrets(t *testing.T) {
 		t.Fatalf("handleGetConfig status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, secret := range []string{"PLAINTOKEN0123456789", "PLAINRELAYSECRET0123", "plaintextsecret"} {
+	for _, secret := range []string{
+		"PLAINTOKEN0123456789", "PREVINSTALLTOKEN0123", "PROMWRITETOKEN012345",
+		"PLAINRELAYSECRET0123", "plaintextsecret",
+		"RERANKKEYSECRET01234", "MCPTOKENSECRET012345", "WEKNORAKEYSECRET0123",
+		"OIDCCLIENTSECRET0123", "FEISHUAPPSECRET01234",
+		"MYSQLPASSSECRET0123", "K8STOKENSECRET012345", "KUBECONFIGSECRETYAML",
+	} {
 		if strings.Contains(body, secret) {
 			t.Errorf("secret %q leaked unmasked in /api/v1/config response", secret)
 		}

@@ -143,9 +143,12 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	}
 	if p == "/api/v1/audit-export" || strings.HasPrefix(p, "/api/v1/auth/oidc/config") ||
 		strings.HasPrefix(p, "/api/v1/auth/sso/config") ||
-		p == "/api/v1/install/revoke-token" || p == "/api/v1/install/token-policy" {
+		p == "/api/v1/install/revoke-token" || p == "/api/v1/install/token-policy" ||
+		p == "/api/v1/install/reset-token" {
 		return rank >= roleRank(RoleAdmin)
 	}
+	// Install info is readable by viewer+ (server_url / policy), but the handler
+	// masks the raw token for non-admins — keep route at viewer so the panel loads.
 	// SQL toolkit: offline tools + EXPLAIN → viewer+; connection CRUD/test → admin.
 	if strings.HasPrefix(p, "/api/v1/sql/") {
 		if strings.HasPrefix(p, "/api/v1/sql/change-requests") {
@@ -154,12 +157,16 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 			}
 			return rank >= roleRank(RoleOperator)
 		}
+		// Slow-SQL collect / processlist / locks / schema health: operator+ (heavier / ops).
+		if strings.HasSuffix(p, "/slow-sql/run") || strings.HasSuffix(p, "/processlist") ||
+			strings.HasSuffix(p, "/locks") || strings.HasSuffix(p, "/schema/health") {
+			return rank >= roleRank(RoleOperator)
+		}
 		if r.Method == http.MethodGet {
 			return rank >= roleRank(RoleViewer)
 		}
 		if p == "/api/v1/sql/beautify" || p == "/api/v1/sql/audit" || p == "/api/v1/sql/optimize" ||
-			p == "/api/v1/sql/analyze" || strings.HasSuffix(p, "/explain") ||
-			strings.HasSuffix(p, "/slow-sql/run") {
+			p == "/api/v1/sql/analyze" || strings.HasSuffix(p, "/explain") {
 			return rank >= roleRank(RoleViewer)
 		}
 		if strings.HasSuffix(p, "/exec-ddl") {
@@ -476,11 +483,15 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.invalid_username_format")})
 			return
 		}
-		if err := s.cfg.RenameUser(acc.Username, uname); err != nil {
+		oldName := acc.Username
+		if err := s.cfg.RenameUser(oldName, uname); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		s.auth.renameSessions(acc.Username, uname)
+		s.auth.renameSessions(oldName, uname)
+		if s.sqlChanges != nil {
+			s.sqlChanges.RenameActor(oldName, uname)
+		}
 		name = uname
 	}
 	_ = s.cfg.SetUserProfile(name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Email), strings.TrimSpace(req.Phone))
@@ -628,11 +639,15 @@ func (s *Server) handleAccountInit(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "auth.invalid_username_format")})
 			return
 		}
-		if err := s.cfg.RenameUser(acc.Username, uname); err != nil {
+		oldName := acc.Username
+		if err := s.cfg.RenameUser(oldName, uname); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		s.auth.renameSessions(acc.Username, uname)
+		s.auth.renameSessions(oldName, uname)
+		if s.sqlChanges != nil {
+			s.sqlChanges.RenameActor(oldName, uname)
+		}
 		name = uname
 	}
 	_ = s.cfg.SetUserPassword(name, req.Password)

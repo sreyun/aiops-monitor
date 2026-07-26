@@ -965,7 +965,48 @@ async function loadTimeseriesPanel(p, body, from, to) {
 // dashRowHeight：按 gridPos 行数反推面板正文可用高度（网格行高 24 + 行间距 8，扣面板头+内边距 ~52）。
 function dashRowHeight(h) { const n = Math.max(3, Math.min(48, h || 8)); return n * 24 + (n - 1) * 8 - 52; }
 // loadInstantPanel 处理 bargauge（横向条）与 table。
+async function loadSQLTablePanel(p, body) {
+  const t = (p.targets && p.targets[0]) || {};
+  let res;
+  try {
+    res = await fetch(`${API}/dashboards/query-sql`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expr: t.expr, datasource: resolveDS(p), vars: panelVars(), limit: 200 })
+    }).then(r => r.json());
+  } catch (e) {
+    body.innerHTML = `<div class="dash-empty">SQL 查询失败</div>`;
+    return;
+  }
+  if (res && res.available === false) {
+    body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`;
+    return;
+  }
+  if (res && res.error) {
+    body.innerHTML = `<div class="dash-empty">${esc(res.error)}</div>`;
+    return;
+  }
+  const cols = Array.isArray(res.columns) ? res.columns : [];
+  const rows = Array.isArray(res.rows) ? res.rows : [];
+  if (!cols.length || !rows.length) {
+    body.innerHTML = dashEmptyHint("无数据");
+    return;
+  }
+  body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>` +
+    cols.map(c => `<th>${esc(c)}</th>`).join("") + `</tr></thead><tbody>` +
+    rows.slice(0, 200).map(r => `<tr>` + cols.map(c => `<td>${esc(r[c] == null ? "" : String(r[c]))}</td>`).join("") + `</tr>`).join("") +
+    `</tbody></table></div>`;
+}
+
+function isSQLDashDS(id) {
+  const d = dsById(id);
+  return d && (d.type === "postgres" || d.type === "postgresql" || d.type === "mysql");
+}
+
 async function loadInstantPanel(p, body) {
+  if (p.type === "table" && isSQLDashDS(resolveDS(p))) {
+    await loadSQLTablePanel(p, body);
+    return;
+  }
   const series = await instantQuery(p, body);
   if (!series) return;
   if (p.type === "bargauge") {
@@ -1573,7 +1614,12 @@ function fillPanelDS(type, selected) {
   const sel = $("panelDS");
   if (!sel) return;
   if (type === "logs") sel.innerHTML = dsOptions(selected, ["loki"], false) || `<option value="">（请先在「数据源」配置 Loki）</option>`;
-  else sel.innerHTML = dsOptions(selected, ["prometheus", "vm"], true);
+  else if (type === "table") {
+    // Table panels can use PromQL instant OR SQL datasources.
+    const prom = dsOptions(selected, ["prometheus", "vm"], true);
+    const sql = dsOptions(selected, ["postgres", "mysql"], false);
+    sel.innerHTML = prom + sql;
+  } else sel.innerHTML = dsOptions(selected, ["prometheus", "vm"], true);
 }
 function renderPanelTargets() {
   const wrap = $("panelTargets");
@@ -1599,8 +1645,21 @@ async function aiGenPromQL(i) {
   const ty = $("panelType").value;
   const dsID = ty === "logs" ? $("panelDS").value : ($("panelDS").value || (CUR_DASH && CUR_DASH.datasource) || "");
   let ctx;
+  let task = "promql";
+  let title = "✨ AI 生成 PromQL";
+  let placeholder = "用大白话描述你要查什么，如：这台主机CPU使用率 / MySQL每秒查询数 / 磁盘剩余空间百分比 / HTTP 5xx 错误率";
   if (ty === "logs") {
+    task = "logql";
+    title = "✨ AI 生成 LogQL";
     ctx = "目标：为日志面板生成 LogQL（数据源为 Loki）。请用常见 Loki 标签选择器 + 过滤/解析。";
+    placeholder = "如：nginx 最近的 5xx 错误日志";
+  } else if (ty === "table" && isSQLDashDS(dsID)) {
+    const ds = dsById(dsID);
+    const dialect = ds && ds.type === "mysql" ? "MySQL" : "PostgreSQL";
+    task = "pgsql";
+    title = "✨ AI 生成 " + dialect + " SQL";
+    ctx = `目标：为表格面板生成只读 SQL。\n方言：${dialect}\n数据源 id=${dsID}\n数据源类型：${ds ? ds.type : "sql"}\n数据库：${ds && ds.database ? ds.database : "（未指定）"}\n仅 SELECT/WITH，默认 LIMIT。`;
+    placeholder = "如：列出当前活跃会话 / 统计各表行数估计 / 查询最近慢语句";
   } else {
     toast("读取可用指标…", "ok");
     const metrics = (await fetchMetricNames(dsID)).slice(0, 200);
@@ -1608,11 +1667,12 @@ async function aiGenPromQL(i) {
       + "\n\n目标面板类型：" + ty + "（据此选合适的聚合与时间窗口）。";
   }
   openAIAssist({
-    task: ty === "logs" ? "logql" : "promql",
-    title: "✨ AI 生成" + (ty === "logs" ? " LogQL" : " PromQL"),
+    task,
+    title,
     mode: "generate",
     context: ctx,
-    placeholder: "用大白话描述你要查什么，如：这台主机CPU使用率 / MySQL每秒查询数 / 磁盘剩余空间百分比 / HTTP 5xx 错误率",
+    datasource: dsID || "",
+    placeholder,
     applyLabel: "填入此查询",
     applyTo: (code) => {
       const expr = (code || "").trim();
@@ -1634,7 +1694,12 @@ function panelTypeToggle() {
   const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = noTargets ? "none" : "";
   fillPanelDS(ty, $("panelDS").value);
   const hint = $("panelQueryHint");
-  if (hint) hint.innerHTML = ty === "logs" ? "LogQL 查询（请选 Loki 数据源）" : ty === "alertlist" ? "告警列表读取平台当前告警，无需查询。" : "PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。";
+  if (hint) {
+    if (ty === "logs") hint.innerHTML = "LogQL 查询（请选 Loki 数据源）";
+    else if (ty === "alertlist") hint.innerHTML = "告警列表读取平台当前告警，无需查询。";
+    else if (ty === "table") hint.innerHTML = "表格：可选 PromQL 即时查询，或 PostgreSQL/MySQL 数据源的只读 SQL（SELECT）。";
+    else hint.innerHTML = "PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。";
+  }
 }
 safeAddEventListener("panelType", "change", panelTypeToggle);
 safeAddEventListener("panelAddTarget", "click", () => { PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); });
@@ -1657,12 +1722,17 @@ safeAddEventListener("panelTestQuery", "click", async () => {
   if (result) { result.textContent = "正在验证…"; result.className = "panel-query-test-result"; }
   try {
     const ds = $("panelDS").value || (CUR_DASH && CUR_DASH.datasource) || "";
+    const dsMeta = (DASH_DATASOURCES || []).find(d => d && d.id === ds);
+    const dsType = (dsMeta && dsMeta.type) || "";
     let endpoint = "query-instant";
     let payload = { expr: expr.expr.trim(), datasource: ds, vars: panelVars() };
     if (ty === "logs") {
       endpoint = "query-logs";
       const now = Math.floor(Date.now() / 1000);
       payload = Object.assign(payload, { from: now - 900, to: now, limit: 3 });
+    } else if (ty === "table" && (dsType === "postgres" || dsType === "postgresql" || dsType === "mysql")) {
+      endpoint = "query-sql";
+      payload = { expr: expr.expr.trim(), datasource: ds, limit: 20, vars: panelVars() };
     }
     const r = await fetch(`${API}/dashboards/${endpoint}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
@@ -1670,7 +1740,10 @@ safeAddEventListener("panelTestQuery", "click", async () => {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     if (j.available === false) throw new Error("所选数据源不可用或类型不匹配");
-    const count = ty === "logs" ? ((j.lines || []).length) : ((j.series || []).length);
+    let count = 0;
+    if (ty === "logs") count = ((j.lines || []).length);
+    else if (endpoint === "query-sql") count = ((j.rows || []).length);
+    else count = ((j.series || []).length);
     const ms = Math.round(performance.now() - started);
     if (result) {
       result.textContent = count ? `验证通过 · ${count} 组结果 · ${ms}ms` : `表达式有效，但当前无数据 · ${ms}ms`;
