@@ -1002,6 +1002,9 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
 		return
 	}
+	if !s.requireHostAccess(w, r, req.HostID) {
+		return
+	}
 	wl, wlErr := normalizeWhitelist(req.WhitelistEnabled, req.Whitelist)
 	if wlErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": wlErr.Error()})

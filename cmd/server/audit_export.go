@@ -63,7 +63,8 @@ func pushAuditWebhook(url string, e LogEntry) {
 	if err != nil {
 		return
 	}
-	ctxClient := &http.Client{Timeout: 5 * time.Second}
+	// SSRF: audit webhook URL is operator-configured — block cloud metadata / link-local.
+	ctxClient := newGuardedHTTPClient(5 * time.Second)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return

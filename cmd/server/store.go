@@ -197,9 +197,10 @@ func (s *Store) GetHost(id string) (*Host, bool) {
 }
 
 // RegisterHost binds a machine fingerprint to a host record at registration time.
-// It creates the host if absent, fills in a missing fingerprint, or updates the
-// fingerprint when the machine hardware changed but the agent state file (and thus
-// host_id) persisted. Token-based admission is checked by the caller beforehand.
+// It creates the host if absent, or fills in a missing fingerprint. A conflicting
+// fingerprint on an existing host is NOT overwritten (prevents token-holder
+// identity hijack); callers should reject the registration when Fingerprint
+// remains unequal to the request. Token-based admission is checked beforehand.
 func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
 	now := time.Now().Unix()
 	s.mu.Lock()
@@ -217,15 +218,15 @@ func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
 		s.dirty = true
 		return h
 	}
-	// Existing record: fill in or update the fingerprint.
-	if h.Fingerprint != fingerprint {
+	// Existing record: fill missing fingerprint only — never silent rebind.
+	if h.Fingerprint == "" && fingerprint != "" {
 		h.Fingerprint = fingerprint
 		s.dirty = true
 	}
-	if hostname != "" {
+	if hostname != "" && h.Hostname != hostname {
 		h.Hostname = hostname
+		s.dirty = true
 	}
-	s.dirty = true
 	return h
 }
 

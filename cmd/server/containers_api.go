@@ -54,6 +54,9 @@ func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
 	var rows []map[string]any
 	var err error
 	if host != "" {
+		if !s.requireHostAccess(w, r, host) {
+			return
+		}
 		if inv, ok := s.pg.getContainerInventory(host); ok {
 			rows = []map[string]any{inv}
 		}
@@ -63,6 +66,7 @@ func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 			return
 		}
+		rows = s.filterInventoryRows(r, rows)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"inventories": rows, "ts": time.Now().Unix()})
 }
@@ -70,6 +74,9 @@ func (s *Server) handleContainerList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
 	cid := strings.TrimSpace(r.PathValue("id"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	var req struct {
 		Action string `json:"action"`
 		Name   string `json:"name"`
@@ -99,6 +106,9 @@ func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
 	cid := strings.TrimSpace(r.PathValue("id"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	tail := r.URL.Query().Get("tail")
 	if tail == "" {
 		tail = "200"
@@ -117,6 +127,9 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerExec(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
 	cid := strings.TrimSpace(r.PathValue("id"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	var req struct {
 		Command    string `json:"command"`
 		Name       string `json:"name"`
@@ -158,6 +171,9 @@ func (s *Server) handleContainerComposeList(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
 		return
 	}
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	out, err := s.runAgentModule(hostID, "container_compose_ls", map[string]string{}, 60)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
@@ -173,6 +189,9 @@ func (s *Server) handleContainerComposeList(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleContainerComposeAction(w http.ResponseWriter, r *http.Request) {
 	hostID := strings.TrimSpace(r.PathValue("hostID"))
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	var req struct {
 		Action     string `json:"action"`
 		Project    string `json:"project"`

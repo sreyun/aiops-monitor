@@ -72,8 +72,12 @@ func AuditRegex(sql string, d Dialect) AuditResult {
 		add("like_leading_wildcard", "warn", "LIKE 前导通配", "LIKE '%xxx' 通常无法使用 BTree 索引", "改为后缀模糊、全文索引或搜索引擎")
 	}
 
-	if reOrderRand.MatchString(stripped) {
-		add("order_by_rand", "crit", "ORDER BY RAND()", "会对结果集做昂贵排序，大数据量下极慢", "用随机主键区间或应用层抽样")
+	if reOrderRand.MatchString(stripped) || (d == DialectPostgres && regexp.MustCompile(`(?i)\border\s+by\s+random\s*\(`).MatchString(stripped)) {
+		title := "ORDER BY RAND()"
+		if d == DialectPostgres {
+			title = "ORDER BY random()"
+		}
+		add("order_by_rand", "crit", title, "会对结果集做昂贵排序，大数据量下极慢", "用随机主键区间或应用层抽样")
 	}
 
 	if reDateFuncCol.MatchString(stripped) {

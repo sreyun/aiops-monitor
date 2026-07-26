@@ -46,7 +46,7 @@ func (s *Server) distillSkills(lookbackDays int) (int, error) {
 	}
 	defer distillInProgress.Store(false)
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return 0, fmt.Errorf("AI 未配置")
 	}
 	if lookbackDays <= 0 {
@@ -137,7 +137,7 @@ func (s *Server) retrieveSkillsDetailed(query string, topK int) (text string, na
 		return "", nil, 0, "no_pg"
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" || strings.TrimSpace(query) == "" {
+	if !embedReady(cfg) || strings.TrimSpace(query) == "" {
 		return "", nil, 0, "no_embed"
 	}
 	if topK <= 0 {
@@ -189,7 +189,7 @@ func (s *Server) reinforceSkill(text string, factor float64) {
 		return
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" || strings.TrimSpace(text) == "" {
+	if !embedReady(cfg) || strings.TrimSpace(text) == "" {
 		return
 	}
 	go func() {
@@ -228,7 +228,7 @@ func (s *Server) promoteTextToSkill(reason, sourceRef, corpus string) {
 // promoteTextToSkillSync 同步升格：LLM 抽 1 条 SOP → 去重合并 → 入库。
 func (s *Server) promoteTextToSkillSync(reason, sourceRef, corpus string) (created, updated bool, err error) {
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return false, false, fmt.Errorf("AI 未配置")
 	}
 	sys := "你是资深 SRE 知识工程师。请把下面这段【已验证】的运维经验，提炼成 1 条可复用技能(SOP)。" +

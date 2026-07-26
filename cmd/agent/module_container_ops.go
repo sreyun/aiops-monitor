@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -38,33 +39,21 @@ func moduleContainerAction(args map[string]string) ([]byte, int) {
 	default:
 		return []byte("未知 action: " + action + "（start|stop|restart）"), 1
 	}
-	ctxTimeout := 60 * time.Second
-	cmd := exec.Command(cli, action, id)
-	done := make(chan struct {
-		out []byte
-		err error
-	}, 1)
-	go func() {
-		out, err := cmd.CombinedOutput()
-		done <- struct {
-			out []byte
-			err error
-		}{out, err}
-	}()
-	select {
-	case r := <-done:
-		if r.err != nil {
-			msg := strings.TrimSpace(string(r.out))
-			if msg == "" {
-				msg = r.err.Error()
-			}
-			return []byte(msg), 1
-		}
-		return []byte(fmt.Sprintf("ok %s %s\n%s", action, id, strings.TrimSpace(string(r.out)))), 0
-	case <-time.After(ctxTimeout):
-		_ = cmd.Process.Kill()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cli, action, id)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
 		return []byte("container_action 超时"), 1
 	}
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return []byte(msg), 1
+	}
+	return []byte(fmt.Sprintf("ok %s %s\n%s", action, id, strings.TrimSpace(string(out)))), 0
 }
 
 // moduleContainerLogs returns recent container logs.
@@ -86,7 +75,12 @@ func moduleContainerLogs(args map[string]string) ([]byte, int) {
 			tail = n
 		}
 	}
-	out, err := exec.Command(cli, "logs", "--tail", strconv.Itoa(tail), id).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, cli, "logs", "--tail", strconv.Itoa(tail), id).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return []byte("container_logs 超时"), 1
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
@@ -124,35 +118,23 @@ func moduleContainerExec(args map[string]string) ([]byte, int) {
 			timeoutSec = n
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
 	// Non-interactive: docker exec -i is not needed; avoid -t (TTY).
-	cmd := exec.Command(cli, "exec", id, "sh", "-c", cmdStr)
-	done := make(chan struct {
-		out []byte
-		err error
-	}, 1)
-	go func() {
-		out, err := cmd.CombinedOutput()
-		done <- struct {
-			out []byte
-			err error
-		}{out, err}
-	}()
-	select {
-	case r := <-done:
-		out := r.out
-		if len(out) > 256*1024 {
-			out = append(out[:256*1024], []byte("\n…[truncated]")...)
-		}
-		if r.err != nil {
-			msg := strings.TrimSpace(string(out))
-			if msg == "" {
-				msg = r.err.Error()
-			}
-			return []byte(msg), 1
-		}
-		return out, 0
-	case <-time.After(time.Duration(timeoutSec) * time.Second):
-		_ = cmd.Process.Kill()
+	cmd := exec.CommandContext(ctx, cli, "exec", id, "sh", "-c", cmdStr)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
 		return []byte("container_exec 超时"), 1
 	}
+	if len(out) > 256*1024 {
+		out = append(out[:256*1024], []byte("\n…[truncated]")...)
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return []byte(msg), 1
+	}
+	return out, 0
 }

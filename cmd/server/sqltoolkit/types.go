@@ -1,18 +1,23 @@
-// Package sqltoolkit provides MySQL SQL beautify / audit / optimize helpers.
+// Package sqltoolkit provides SQL beautify / audit / optimize helpers (MySQL + PostgreSQL).
 package sqltoolkit
 
-// Dialect selects MySQL version-specific advice.
+import "strings"
+
+// Dialect selects engine-specific advice (MySQL versions or PostgreSQL).
 type Dialect string
 
 const (
-	DialectMySQL57 Dialect = "mysql57"
-	DialectMySQL80 Dialect = "mysql80"
+	DialectMySQL57  Dialect = "mysql57"
+	DialectMySQL80  Dialect = "mysql80"
+	DialectPostgres Dialect = "postgres"
 )
 
 func NormalizeDialect(d string) Dialect {
-	switch d {
+	switch strings.ToLower(strings.TrimSpace(d)) {
 	case "mysql80", "8", "8.0", "mysql8":
 		return DialectMySQL80
+	case "postgres", "postgresql", "pg", "pg14", "pg15", "pg16":
+		return DialectPostgres
 	default:
 		return DialectMySQL57
 	}

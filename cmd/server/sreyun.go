@@ -172,19 +172,20 @@ func (h *SreyunCore) registerTools() {
 	}
 	h.tools["list_datasources"] = SreyunTool{
 		Name:        "list_datasources",
-		Description: "列出已接入的外部数据源（Loki 日志 / Prometheus 指标）及其 id/名称/类型。查询前先用它确认有哪些数据源可用。",
+		Description: "列出已接入的外部数据源（Loki / Prometheus / VictoriaMetrics / PostgreSQL / MySQL）及其 id/名称/类型。查询前先用它确认有哪些数据源可用。",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Execute:     h.execListDataSources,
 	}
 	h.tools["query_datasource"] = SreyunTool{
-		Name:        "query_datasource",
-		Description: "直接查询外部数据源做分析排查：Prometheus 传 PromQL（如 up、node_load1、rate(http_requests_total[5m])）；Loki 传 LogQL（如 {job=\"nginx\"} |= \"error\"）。先用 list_datasources 拿到数据源 id 或名称。",
+		Name: "query_datasource",
+		Description: "直接查询外部数据源做分析排查：Prometheus/VM 传 PromQL；Loki 传 LogQL；" +
+			"PostgreSQL/MySQL 传只读 SQL（SELECT/WITH，如 SELECT now()、SELECT * FROM pg_stat_activity LIMIT 20）。先用 list_datasources 拿到数据源 id 或名称。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"datasource": map[string]string{"type": "string", "description": "数据源 id 或名称"},
-				"query":      map[string]string{"type": "string", "description": "PromQL（Prometheus）或 LogQL（Loki）查询语句"},
-				"limit":      map[string]any{"type": "integer", "description": "Loki 返回日志行数上限（默认 100）"},
+				"query":      map[string]string{"type": "string", "description": "PromQL / LogQL / 只读 SQL"},
+				"limit":      map[string]any{"type": "integer", "description": "Loki/SQL 返回行数上限（默认 100）"},
 				"since_min":  map[string]any{"type": "integer", "description": "Loki 查询最近 N 分钟（默认 60）"},
 			},
 			"required": []string{"datasource", "query"},
@@ -398,7 +399,7 @@ func (h *SreyunCore) resolveDataSource(ref string) (DataSource, bool) {
 func (h *SreyunCore) execListDataSources(args map[string]any) (string, error) {
 	list := h.s.cfg.ListDataSources()
 	if len(list) == 0 {
-		return "（未接入任何数据源，请先在「数据源」页添加 Loki / Prometheus）", nil
+		return "（未接入任何数据源，请先在「数据源」页添加 Loki / Prometheus / PostgreSQL / MySQL）", nil
 	}
 	var sb strings.Builder
 	for _, d := range list {
@@ -430,6 +431,26 @@ func (h *SreyunCore) execQueryDataSource(args map[string]any) (string, error) {
 	}
 	if v, ok := args["since_min"].(float64); ok {
 		sinceMin = int(v)
+	}
+	if isSQLDataSourceType(ds.Type) {
+		c, err := h.s.resolveSQLConnFromDataSource(ds)
+		if err != nil {
+			return "", err
+		}
+		if limit <= 0 {
+			limit = 100
+		}
+		var cols []string
+		var rows []map[string]any
+		if driverOf(c) == "postgres" {
+			cols, rows, err = pgQueryReadOnly(c, query, limit)
+		} else {
+			cols, rows, err = mysqlQueryReadOnly(c, query, limit)
+		}
+		if err != nil {
+			return "", err
+		}
+		return formatSQLQueryText(cols, rows), nil
 	}
 	return queryDataSource(ds, query, limit, sinceMin)
 }
@@ -585,8 +606,8 @@ func (h *SreyunCore) execSearchCases(args map[string]any) (string, error) {
 		return "RAG 向量存储不可用（需要 PostgreSQL + pgvector）", nil
 	}
 	cfg := h.s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
-		return "AI 未启用，无法进行向量检索", nil
+	if !embedReady(cfg) {
+		return "嵌入未就绪（需配置 Embed 或主 API Key/Endpoint），无法进行向量检索", nil
 	}
 	emb := embedText(cfg, query)
 	if len(emb) == 0 {
@@ -733,18 +754,9 @@ func (h *SreyunCore) execPythonAction(args map[string]any) (string, error) {
 	if actionName == "" {
 		return "请指定动作名称", nil
 	}
-	// run_python_action 属于「写操作」（重启服务 / 清理缓存 / 扩缩容等）。仅在显式开启
-	// SreyunAutoApprove 且未强制「写工具需审批」时才真正执行，否则挂起并返回需人工确认。
-	aiCfg := h.s.cfg.AIConfig()
-	blocked := aiCfg.WriteToolsRequireApproval || !aiCfg.SreyunAutoApprove
-	if h.s.aiGov != nil {
-		h.s.aiGov.recordTool(aiToolAuditEntry{
-			Actor: "sreyun", Tool: "run_python_action", Action: actionName, HostID: hostID,
-			Approved: !blocked, Blocked: blocked, Detail: argStr,
-		})
-	}
-	if blocked {
-		return fmt.Sprintf("动作 %q 属于高风险写操作，需人工确认。当前写工具审批策略已阻止自动执行；请操作员手动处置，或在 AI 治理中关闭「写工具需审批」并开启自动执行后重试。", actionName), nil
+	detail := hostID + "|" + actionName + "|" + argStr
+	if msg, blocked := h.sreyunWriteBlocked("run_python_action", detail, args); blocked {
+		return fmt.Sprintf("动作 %q：%s", actionName, msg), nil
 	}
 	// 加 30s 超时，避免插件脚本卡死导致请求 goroutine 永久阻塞
 	parentCtx := h.ctx
@@ -1133,12 +1145,13 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		var err error
 		streamedContent := false
 		if stream && w != nil && prov != aiProvAnthropic && len(h.tools) > 0 {
-			reply, nativeCalls, err = aiChatVStream(ctx, cfg, callMsgs, images, nativeTools,
+			reply, nativeCalls, err = aiChatVStreamOpts(ctx, cfg, callMsgs, images, nativeTools,
 				func(delta string) {
 					streamedContent = true
 					sendDelta(delta)
 				},
 				sendReasoning, // 思维链增量 → 独立通道
+				aiCallOpts{EnableThinking: thinkingModelOrGateway(cfg), ThinkingBudget: 512},
 			)
 		} else {
 			reply, nativeCalls, err = aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）

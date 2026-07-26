@@ -83,6 +83,22 @@ func (s *Server) requireHostAccess(w http.ResponseWriter, r *http.Request, hostI
 	return false
 }
 
+// filterInventoryRows keeps only inventory maps whose host_id the caller may access.
+func (s *Server) filterInventoryRows(r *http.Request, rows []map[string]any) []map[string]any {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return rows
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		hid, _ := row["host_id"].(string)
+		if hid != "" && s.userCanAccessHost(u, hid) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
 func containsStr(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

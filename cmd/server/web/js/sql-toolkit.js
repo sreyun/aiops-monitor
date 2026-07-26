@@ -1,4 +1,4 @@
-/* ---------- SQL 工具（MySQL 美化 / 审核 / 优化 + 只读 EXPLAIN）---------- */
+/* ---------- SQL 工具（MySQL / PostgreSQL 美化·审核·优化·EXPLAIN·慢SQL）---------- */
 let SQL_CONNS = [];
 let SQL_CHANGES = [];
 let SQL_HISTORY = [];
@@ -37,15 +37,44 @@ function renderSQLConnSelect() {
   const prev = sel.value;
   const enabled = SQL_CONNS.filter(c => c.enabled !== false);
   sel.innerHTML = `<option value="">${esc(sqlT("sql.no_conn", "不连库（仅离线）"))}</option>` +
-    enabled.map(c => `<option value="${esc(c.id)}">[${esc(c.env || "prod")}] ${esc(c.name)} (${esc(c.host)}:${c.port || 3306})</option>`).join("");
+    enabled.map(c => {
+      const drv = c.driver === "postgres" ? "pg" : "mysql";
+      const port = c.port || (c.driver === "postgres" ? 5432 : 3306);
+      return `<option value="${esc(c.id)}">[${esc(c.env || "prod")}/${drv}] ${esc(c.name)} (${esc(c.host)}:${port})</option>`;
+    }).join("");
   if (prev && enabled.some(c => c.id === prev)) sel.value = prev;
   if (!sel.dataset.sqlConnBound) {
     sel.dataset.sqlConnBound = "1";
     sel.addEventListener("change", () => {
       const id = sel.value;
+      syncSQLDialectFromConn(id);
+      syncSQLWorkbenchForDriver(id);
       if (id) loadSQLSchema(id);
       else renderSQLSchemaEmpty();
     });
+  }
+  syncSQLDialectFromConn(sel.value);
+  syncSQLWorkbenchForDriver(sel.value);
+}
+
+function sqlConnById(id) { return SQL_CONNS.find(c => c.id === id); }
+
+function syncSQLDialectFromConn(id) {
+  const c = sqlConnById(id);
+  const el = $("sqlDialect");
+  if (!el || !c) return;
+  if (c.driver === "postgres") el.value = "postgres";
+  else if (c.version_hint === "mysql57") el.value = "mysql57";
+  else el.value = "mysql80";
+}
+
+function syncSQLWorkbenchForDriver(id) {
+  const c = sqlConnById(id);
+  const isPG = c && c.driver === "postgres";
+  const ddlBtn = $("sqlSubmitChangeBtn");
+  if (ddlBtn) {
+    ddlBtn.style.display = isPG ? "none" : "";
+    ddlBtn.title = isPG ? "PostgreSQL 不支持 DDL 变更单" : "";
   }
 }
 
@@ -393,7 +422,7 @@ function renderSQLSlowReport(rep) {
   });
   const trendBadge = (tr) => {
     if (tr === "new") return `<span class="badge warn">NEW</span>`;
-    if (tr === "worse") return `<span class="badge danger">WORSE</span>`;
+    if (tr === "worse") return `<span class="badge crit">WORSE</span>`;
     if (tr === "better") return `<span class="badge ok">BETTER</span>`;
     return "";
   };
@@ -842,13 +871,18 @@ function renderSQLExplain(j) {
     <td>${esc(String(h.filtered != null ? h.filtered : ""))}</td>
     <td>${h.full_scan_risk ? "⚠" : (h.key ? "✓" : "")}</td>
   </tr>`).join("");
+  const planBlock = j.plan
+    ? `<details class="sql-raw" open><summary>PostgreSQL TEXT Plan</summary><pre class="mono">${esc(j.plan)}</pre></details>`
+    : "";
+  const jsonRaw = typeof j.raw === "string" ? j.raw : JSON.stringify(j.explain_json, null, 2);
   box.innerHTML = `
-    <div class="sql-explain-summary">${esc(a.summary || "")}</div>
+    <div class="sql-explain-summary">${esc(a.summary || (j.driver === "postgres" ? "PostgreSQL EXPLAIN" : ""))}</div>
     <div class="table-wrap"><table class="data sql-explain-table">
       <thead><tr><th>table</th><th>type</th><th>key</th><th>possible_keys</th><th>rows</th><th>filtered</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="7">${esc(sqlT("sql.no_explain_rows", "无表访问节点"))}</td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="7">${esc(j.plan ? "见下方 TEXT Plan" : sqlT("sql.no_explain_rows", "无表访问节点"))}</td></tr>`}</tbody>
     </table></div>
-    <details class="sql-raw"><summary>EXPLAIN JSON</summary><pre class="mono">${esc(typeof j.raw === "string" ? j.raw : JSON.stringify(j.explain_json, null, 2))}</pre></details>`;
+    ${planBlock}
+    <details class="sql-raw"><summary>EXPLAIN JSON</summary><pre class="mono">${esc(jsonRaw || "")}</pre></details>`;
 }
 
 function sqlAssistContext() {
@@ -876,8 +910,12 @@ function sqlAssistContext() {
         index_hints: SQL_LAST.optimize.index_hints
       }).slice(0, 4000)}`);
     }
-    if (SQL_LAST.explain && SQL_LAST.explain.analysis) {
-      parts.push(`EXPLAIN: ${JSON.stringify(SQL_LAST.explain.analysis).slice(0, 4000)}`);
+      if (SQL_LAST.explain) {
+      parts.push(`EXPLAIN: ${JSON.stringify({
+        analysis: SQL_LAST.explain.analysis,
+        plan: SQL_LAST.explain.plan,
+        driver: SQL_LAST.explain.driver
+      }).slice(0, 4000)}`);
     }
   }
   return parts.join("\n\n");
@@ -960,7 +998,8 @@ function openSQLConnModal(c) {
   if (drv) drv.value = c ? (c.driver || "mysql") : "mysql";
   $("sqlConnHost").value = c ? (c.host || "") : "";
   const defaultPort = (c && c.driver === "postgres") || (drv && drv.value === "postgres") ? 5432 : 3306;
-  $("sqlConnPort").value = c ? (c.port || defaultPort) : 3306;
+  $("sqlConnPort").value = c ? (c.port || defaultPort) : defaultPort;
+  syncSQLConnDriverUI();
   $("sqlConnUser").value = c ? (c.user || "") : "";
   $("sqlConnPass").value = c ? (c.password || "") : "";
   $("sqlConnDB").value = c ? (c.database || "") : "";
@@ -971,9 +1010,10 @@ function openSQLConnModal(c) {
   const slow = (c && c.slow_sql) || {};
   const sched = slow.schedule || {};
   const slowEnabled = $("sqlConnSlowEnabled");
-  if (slowEnabled) slowEnabled.checked = c ? slow.enabled !== false : true;
+  // Default Slow SQL off for new/missing config; only auto-check when explicitly enabled.
+  if (slowEnabled) slowEnabled.checked = !!(c && c.slow_sql && slow.enabled);
   const slowAlert = $("sqlConnSlowAlert");
-  if (slowAlert) slowAlert.checked = c ? !slow.alert_disabled : true;
+  if (slowAlert) slowAlert.checked = c && c.slow_sql ? !slow.alert_disabled : false;
   const kind = $("sqlConnSlowKind"); if (kind) kind.value = sched.kind || "daily";
   const at = $("sqlConnSlowAt"); if (at) at.value = sched.at || "03:00";
   const iv = $("sqlConnSlowInterval"); if (iv) iv.value = sched.interval_min || 1440;
@@ -982,6 +1022,21 @@ function openSQLConnModal(c) {
   const minAvg = $("sqlConnSlowMinAvg"); if (minAvg) minAvg.value = slow.min_avg_latency_ms != null ? slow.min_avg_latency_ms : 100;
   const tr = $("sqlConnTestResult"); if (tr) { tr.textContent = ""; tr.className = "ai-test-result"; }
   $("sqlConnMask").classList.add("show");
+}
+
+function syncSQLConnDriverUI() {
+  const drv = ($("sqlConnDriver") && $("sqlConnDriver").value) || "mysql";
+  const isPG = drv === "postgres";
+  const port = $("sqlConnPort");
+  if (port && (!port.value || port.value === "3306" || port.value === "5432")) {
+    port.value = isPG ? 5432 : 3306;
+  }
+  const verField = $("sqlConnVerField");
+  if (verField) verField.style.display = isPG ? "none" : "";
+  const params = $("sqlConnParams");
+  if (params && !params.value) params.placeholder = isPG ? "sslmode=require&search_path=public" : "charset=utf8mb4";
+  const tls = $("sqlConnTLS");
+  if (tls && !tls.value) tls.placeholder = isPG ? "disable / prefer / require / verify-full" : "true / skip-verify / 空";
 }
 
 function collectSQLConn() {
@@ -1080,6 +1135,7 @@ safeAddEventListener("sqlAIBeautifyBtn", "click", () => openSQLAI("sql_beautify"
 safeAddEventListener("sqlAIAuditBtn", "click", () => openSQLAI("sql_audit"));
 safeAddEventListener("sqlAIOptimizeBtn", "click", () => openSQLAI("sql_remediation"));
 safeAddEventListener("addSQLConnBtn", "click", () => openSQLConnModal(null));
+safeAddEventListener("sqlConnDriver", "change", syncSQLConnDriverUI);
 safeAddEventListener("sqlConnSaveBtn", "click", saveSQLConn);
 safeAddEventListener("sqlSlowRunBtn", "click", runSQLSlowCheck);
 safeAddEventListener("sqlProcessRefreshBtn", "click", loadSQLProcessLocks);

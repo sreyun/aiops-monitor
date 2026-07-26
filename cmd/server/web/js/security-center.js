@@ -170,6 +170,7 @@ async function loadOIDCForm() {
     if ($("oidcGroupMap")) $("oidcGroupMap").value = c.group_role_map ? JSON.stringify(c.group_role_map, null, 2) : "";
     if ($("oidcDefaultRole")) $("oidcDefaultRole").value = c.default_role || "";
     if ($("oidcAutoCreate")) $("oidcAutoCreate").checked = c.auto_create !== false;
+    window._oidcScopes = (c.scopes || "").trim() || "openid profile email groups";
     setCfgStatus(msg, "", null);
   } catch (_) {
     setCfgStatus(msg, I18N.t("sec.oidc_load_failed", "加载失败（需管理员）"), "err");
@@ -232,7 +233,7 @@ async function saveOIDCConfig() {
     group_role_map: groupMap,
     default_role: ($("oidcDefaultRole")?.value || "").trim(),
     auto_create: !!$("oidcAutoCreate")?.checked,
-    scopes: "openid profile email groups",
+    scopes: (window._oidcScopes || "openid profile email groups").trim(),
   };
   const run = async () => {
     try {

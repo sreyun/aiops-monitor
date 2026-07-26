@@ -90,8 +90,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// Count install-token uses only for truly new hosts (not fingerprint rejoin).
 	isNew := false
-	if _, existed := s.store.GetHost(hostID); !existed {
+	if existing, existed := s.store.GetHost(hostID); !existed {
 		isNew = true
+	} else if existing.Fingerprint != "" && existing.Fingerprint != req.Fingerprint {
+		// Refuse host_id takeover: a valid install token must not rebind another
+		// machine's identity by overwriting the stored fingerprint.
+		writeJSON(w, http.StatusConflict, map[string]string{"error": Tr(r, "agent.fingerprint_conflict")})
+		return
 	}
 	s.store.RegisterHost(hostID, req.Hostname, req.Fingerprint)
 	if isNew && req.Token != "" {

@@ -14,7 +14,8 @@
 let _aiAssistState = {
   task: "", mode: "analyze", context: "", applyTo: null, lastAnswer: "", lastInput: "",
   busy: false, abort: null, history: [], followup: false, runId: 0, timer: null,
-  ragCitations: [], title: "", feedbackOpen: false
+  ragCitations: [], title: "", feedbackOpen: false,
+  assistId: "", verify: null, datasource: ""
 };
 
 // i18n 小助手：有 I18N 取译文，否则回退中文默认（面板在多语言下就地翻译）
@@ -148,6 +149,9 @@ function openAIAssist(opts) {
   _aiAssistState.followup = false;
   _aiAssistState.ragCitations = [];
   _aiAssistState.feedbackOpen = false;
+  _aiAssistState.assistId = "";
+  _aiAssistState.verify = null;
+  _aiAssistState.datasource = opts.datasource || "";
   _aiAssistState.mode = opts.mode || (_aiAssistState.applyTo ? "generate" : "analyze");
   _aiAssistState.title = opts.title || tA("assist.title", "AI 辅助");
   document.getElementById("aiAssistTitle").textContent = _aiAssistState.title;
@@ -190,6 +194,8 @@ async function runAIAssist() {
   _aiAssistState.busy = true;
   _aiAssistState.lastAnswer = "";
   _aiAssistState.ragCitations = [];
+  _aiAssistState.assistId = "";
+  _aiAssistState.verify = null;
   document.getElementById("aiAssistCopy").style.display = "none";
   document.getElementById("aiAssistApply").style.display = "none";
   document.getElementById("aiAssistRegen").style.display = "none";
@@ -221,7 +227,10 @@ async function runAIAssist() {
     const r = await fetch(`${API}/ai/assist`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       signal: _aiAssistState.abort ? _aiAssistState.abort.signal : undefined,
-      body: JSON.stringify({ task: _aiAssistState.task, input: userInput, context: _aiAssistState.context })
+      body: JSON.stringify({
+        task: _aiAssistState.task, input: userInput, context: _aiAssistState.context,
+        datasource: _aiAssistState.datasource || undefined
+      })
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
     setAssistStatus(tA("assist.streaming", "正在流式生成，可随时停止…"));
@@ -245,6 +254,8 @@ async function runAIAssist() {
       (meta) => {
         if (runId !== _aiAssistState.runId) return;
         if (!meta) return;
+        if (meta.assist_id) _aiAssistState.assistId = meta.assist_id;
+        if (meta.verify) _aiAssistState.verify = meta.verify;
         if (Array.isArray(meta.citations)) _aiAssistState.ragCitations = meta.citations.slice(0, 20);
         const parts = [];
         if (meta.degraded_tip) parts.push(meta.degraded_tip);
@@ -257,6 +268,11 @@ async function runAIAssist() {
             }
             parts.push(sk);
           }
+        }
+        if (meta.verify) {
+          if (meta.verify.skipped) parts.push("验证已跳过");
+          else if (meta.verify.ok) parts.push("验证通过");
+          else parts.push("验证失败：" + (meta.verify.error || "未知错误"));
         }
         if (parts.length) { ragHint = parts.join(" · "); schedule(); }
       },
@@ -309,6 +325,18 @@ function onAIAssistDone() {
     const code = b.closest(".ai-code-wrap") ? b.closest(".ai-code-wrap").querySelector("code").textContent : "";
     if (typeof copyText === "function") copyText(code);
   });
+  const v = _aiAssistState.verify;
+  if (v && !body.querySelector(".ai-assist-verify")) {
+    let cls = "warn", text = "验证已跳过";
+    if (!v.skipped) {
+      if (v.ok) { cls = "ok"; text = "只读验证通过" + (v.summary ? " · " + v.summary : ""); }
+      else { cls = "err"; text = "只读验证失败" + (v.error ? " · " + v.error : ""); }
+    }
+    const banner = document.createElement("div");
+    banner.className = "ai-assist-verify " + cls;
+    banner.textContent = text;
+    body.insertBefore(banner, body.firstChild);
+  }
   // analyze 模式（诊断/分析类面板）出结果后开启多轮追问，形成「基于同一份数据的会话交流」
   if (has && _aiAssistState.mode === "analyze" && !_aiAssistState.followup) enableFollowupComposer(_aiAssistState.lastAnswer);
 }
@@ -410,9 +438,10 @@ async function runAIFollowup() {
       },
       null,
       (meta) => {
-        if (runId === _aiAssistState.runId && meta && Array.isArray(meta.citations)) {
-          _aiAssistState.ragCitations = meta.citations.slice(0, 20);
-        }
+        if (runId !== _aiAssistState.runId || !meta) return;
+        if (meta.assist_id) _aiAssistState.assistId = meta.assist_id;
+        if (meta.verify) _aiAssistState.verify = meta.verify;
+        if (Array.isArray(meta.citations)) _aiAssistState.ragCitations = meta.citations.slice(0, 20);
       },
       null,
       (rd, fullR) => { if (runId !== _aiAssistState.runId) return; reasoning = fullR; schedule(); }
@@ -666,10 +695,14 @@ async function submitAssistUnhelpful() {
 async function sendAssistFeedback(action, reason) {
   const st = _aiAssistState;
   if (!st.lastAnswer) return false;
+  if (!st.assistId) {
+    if (typeof toast === "function") toast(tA("assist.feedback_no_id", "缺少 assist_id，无法安全写入记忆；请重新生成后再反馈"), "err");
+    return false;
+  }
   try {
     const r = await fetch(`${API}/ai/assist/feedback`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task: st.task, input: st.lastInput || "", answer: st.lastAnswer || "", action, reason: reason || "" })
+      body: JSON.stringify({ assist_id: st.assistId, action, reason: reason || "" })
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {

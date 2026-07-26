@@ -33,7 +33,7 @@ func (s *Server) reinforceMemory(kind, text string, factor float64) {
 		return
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" || strings.TrimSpace(text) == "" {
+	if !embedReady(cfg) || strings.TrimSpace(text) == "" {
 		return
 	}
 	go func() {
@@ -169,7 +169,7 @@ func (s *Server) correlateIncident(inc Incident) {
 		return
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return
 	}
 	query := strings.TrimSpace(inc.Title + " " + inc.Type + " " + inc.Hostname)

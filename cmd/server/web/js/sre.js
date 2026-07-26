@@ -2609,7 +2609,7 @@ async function loadSkills(){
       const archived=s.status==="archived";
       return `<div class="skill-card${archived?" skill-archived":""}">
         <div class="skill-head"><b>${esc(s.name)}</b>
-          <span class="skill-meta">${archived?"已归档 · ":""}${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):""}</span>
+          <span class="skill-meta">${archived?"已归档 · ":""}${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):(String(s.source||"").startsWith("pack:")?" · 知识包":"")}</span>
           ${archived
             ?`<button class="btn sm" data-skill-restore="${s.id}">恢复</button>`
             :`<button class="btn sm" data-skill-archive="${s.id}">归档</button>`}
@@ -2641,6 +2641,80 @@ async function distillSkillsNow(){
     if(j.ok) toast(`${I18N.t("sre.distill_done","提炼完成，新增")} ${j.created||0} ${I18N.t("sre.skills_unit","条技能")}`,"ok"); else toast(I18N.t("sre.distill_failed","提炼失败")+"："+(j.error||I18N.t("sre.unknown","未知")),"err");
     loadSkills();
   }catch(e){ toast(I18N.t("sre.distill_failed","提炼失败")+"："+e,"err"); }
+}
+async function importSkillPacksNow(){
+  toast("正在导入行业知识包…","ok");
+  try{
+    const j=await fetch(`${API}/ai/skill-packs/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).then(r=>r.json());
+    if(j.imported_total!=null) toast(`知识包导入完成：更新/新增 ${j.imported_total} 条技能`,"ok");
+    else toast(j.error||"导入失败","err");
+    loadSkills();
+  }catch(e){ toast("导入失败："+e,"err"); }
+}
+
+async function openCopilot(){
+  const m=$("copilotMask"); if(m) m.classList.add("show");
+  await loadCopilot();
+}
+async function loadCopilot(){
+  const body=$("copilotBody"); if(!body) return;
+  body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.loading","加载中…")}</div>`;
+  try{
+    const j=await fetch(`${API}/ai/copilot/context`).then(r=>r.json());
+    const incs=j.open_incidents||[];
+    const rem=j.pending_remediation||[];
+    const packs=j.skill_packs||[];
+    const sug=j.suggestions||[];
+    const hints=j.skill_hints||[];
+    body.innerHTML=`
+      <div class="grid2" style="gap:12px">
+        <div>
+          <h4 style="margin:0 0 8px">未决事件（${incs.length}）</h4>
+          ${incs.length?`<div class="skill-list">${incs.map(i=>`<div class="skill-card">
+            <div class="skill-head"><b>#${i.id} [${esc(i.severity)}]</b>
+              <button class="btn sm ai-assist-btn" data-copilot-diag="${i.id}">AI 诊断</button></div>
+            <div class="skill-trigger">${esc(i.title||"")} · ${esc(i.host||"-")} · ${esc(i.status||"")}</div>
+          </div>`).join("")}</div>`:`<div class="empty-line">暂无未决事件</div>`}
+          <h4 style="margin:16px 0 8px">待审批修复（${rem.length}）</h4>
+          ${rem.length?`<ul style="margin:0;padding-left:18px;font-size:13px">${rem.map(r=>`<li>${esc(r.rule||"")} → ${esc(r.playbook||"")}（${esc(r.host||"")}）</li>`).join("")}</ul>`:`<div class="empty-line">无待审批项</div>`}
+        </div>
+        <div>
+          <h4 style="margin:0 0 8px">建议动作</h4>
+          <ul style="margin:0;padding-left:18px;font-size:13px">${sug.map(s=>`<li>${esc(s)}</li>`).join("")}</ul>
+          <h4 style="margin:16px 0 8px">相关技能提示</h4>
+          ${hints.length?`<div class="skill-tags">${hints.map(h=>esc(h.name||"")).join(" · ")}</div>`:`<div class="empty-line">暂无命中技能</div>`}
+          <h4 style="margin:16px 0 8px">行业知识包</h4>
+          <div class="skill-list">${packs.map(p=>`<div class="skill-card"><div class="skill-head"><b>${esc(p.name||p.id)}</b>
+            <button class="btn sm" data-pack-import="${esc(p.id)}">导入</button></div>
+            <div class="skill-trigger">v${esc(p.version||"")} · ${p.skill_count||0} 条</div></div>`).join("")}</div>
+        </div>
+      </div>
+      <details style="margin-top:12px"><summary>态势原文</summary><pre class="skill-steps">${esc(j.duty_context||"")}</pre></details>`;
+    body.querySelectorAll("[data-copilot-diag]").forEach(b=>b.onclick=()=>{
+      const id=b.dataset.copilotDiag;
+      if(typeof openIncidentDiagnose==="function") openIncidentDiagnose(+id);
+      else if(typeof diagnoseIncident==="function") diagnoseIncident(+id);
+      else toast("请到事件页打开 #"+id+" 诊断","warn");
+    });
+    body.querySelectorAll("[data-pack-import]").forEach(b=>b.onclick=async()=>{
+      const id=b.dataset.packImport;
+      const r=await fetch(`${API}/ai/skill-packs/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+      const jj=await r.json().catch(()=>({}));
+      toast(jj.imported_total!=null?`已导入 ${id}（${jj.imported_total}）`:(jj.error||"失败"), jj.imported_total!=null?"ok":"err");
+    });
+  }catch(e){ body.innerHTML=`<div class="empty-line">加载失败：${esc(String(e))}</div>`; }
+}
+async function genCopilotBrief(){
+  let j={};
+  try{ j=await fetch(`${API}/ai/copilot/context`).then(r=>r.json()); }
+  catch(e){ toast("拉取态势失败："+e,"err"); return; }
+  openAIAssist({
+    task:"generic",
+    title:"值班助手简报",
+    mode:"analyze",
+    context: (j.duty_context||"") + "\n\n建议：" + (j.suggestions||[]).join("；"),
+    hint:"基于当前未决事件与待审批项生成可执行值班简报"
+  });
 }
 
 // AI 记忆浏览器：只读列表 + 按 kind 过滤 + 删除
@@ -3642,6 +3716,10 @@ safeAddEventListener("logSource","change",()=>{ onLogSourceChange(); if(!$("logS
 safeAddEventListener("logJob","change",()=>{ onLogJobChange(); });
 safeAddEventListener("aiInspectBtn","click",runInspect);
 safeAddEventListener("dutyReportBtn","click",genDutyReport);
+safeAddEventListener("copilotBtn","click",openCopilot);
+safeAddEventListener("copilotRefreshBtn","click",loadCopilot);
+safeAddEventListener("copilotBriefBtn","click",genCopilotBrief);
+safeAddEventListener("skillsPackImportBtn","click",importSkillPacksNow);
 safeAddEventListener("skillsBtn","click",openSkills);
 safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
 safeAddEventListener("skillsShowArchived","change",loadSkills);

@@ -23,11 +23,21 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.VoiceCall.AccessKey = maskSecret(c.VoiceCall.AccessKey)
 	c.AI.APIKey = maskSecret(c.AI.APIKey)                         // AI provider credential
 	c.AI.EmbedAPIKey = maskSecret(c.AI.EmbedAPIKey)               // 嵌入服务凭证（独立于对话）
+	c.AI.RerankAPIKey = maskSecret(c.AI.RerankAPIKey)
+	c.AI.MCPToken = maskSecret(c.AI.MCPToken)
+	c.AI.WeKnoraAPIKey = maskSecret(c.AI.WeKnoraAPIKey)
 	c.PostgresDSN = maskSecret(c.PostgresDSN)                     // DSN carries the PostgreSQL password
 	c.InstallToken = maskSecret(c.InstallToken)                   // agent enrollment token — not for viewers
+	c.PrevInstallToken = maskSecret(c.PrevInstallToken)           // grace-period token must not leak via config GET
+	c.PromWriteToken = maskSecret(c.PromWriteToken)
 	c.RelaySecret = maskSecret(c.RelaySecret)                     // gateway relay shared secret
 	c.CustomWebhook.Headers = maskSecret(c.CustomWebhook.Headers) // may carry auth tokens (e.g. X-Token)
-	if len(c.DataSources) > 0 {                                   // 数据源 Basic Auth 密码脱敏
+	c.OIDC.ClientSecret = maskSecret(c.OIDC.ClientSecret)
+	c.SSO.Feishu.AppSecret = maskSecret(c.SSO.Feishu.AppSecret)
+	c.SSO.Dingtalk.AppSecret = maskSecret(c.SSO.Dingtalk.AppSecret)
+	c.SSO.Wechat.AppSecret = maskSecret(c.SSO.Wechat.AppSecret)
+	c.SSO.Wecom.AppSecret = maskSecret(c.SSO.Wecom.AppSecret)
+	if len(c.DataSources) > 0 { // 数据源 Basic Auth 密码脱敏
 		// 复制切片再脱敏——切片底层数组与已存配置共享，就地改会污染真实密码。
 		ds := make([]DataSource, len(c.DataSources))
 		copy(ds, c.DataSources)
@@ -35,6 +45,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			ds[i].AuthPass = maskSecret(ds[i].AuthPass)
 		}
 		c.DataSources = ds
+	}
+	if len(c.MySQLConnections) > 0 {
+		conns := make([]MySQLConnection, len(c.MySQLConnections))
+		for i, mc := range c.MySQLConnections {
+			conns[i] = maskMySQLConnection(mc)
+		}
+		c.MySQLConnections = conns
+	}
+	if len(c.K8sClusters) > 0 {
+		clusters := make([]K8sClusterConfig, len(c.K8sClusters))
+		for i, kc := range c.K8sClusters {
+			clusters[i] = maskK8sCluster(kc)
+		}
+		c.K8sClusters = clusters
 	}
 	// Never expose the password hash/salt or the MFA secret to the browser.
 	c.Account.Salt, c.Account.Hash, c.Account.MFASecret = "", "", ""
@@ -87,6 +111,8 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleInstallInfo returns the data the panel needs to render one-line install
 // commands: the reachable server URL and the current install token.
+// The raw install token is admin-only; other roles get a masked placeholder so a
+// Viewer session cannot enroll new agents.
 func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 	cs := s.cfg
 	cs.mu.RLock()
@@ -95,9 +121,14 @@ func (s *Server) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
 	expiresAt := cs.cfg.InstallTokenExpiresAt
 	revoked := cs.cfg.InstallTokenRevoked
 	cs.mu.RUnlock()
+	tok := s.cfg.InstallToken()
+	u, ok := s.currentUser(r)
+	if !ok || roleRank(u.Role) < roleRank(RoleAdmin) {
+		tok = maskSecret(tok)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"server_url":       s.serverURL(r),
-		"token":            s.cfg.InstallToken(),
+		"token":            tok,
 		"require_token":    s.cfg.AgentTokenRequired(),
 		"max_uses":         maxUses,
 		"use_count":        useCount,

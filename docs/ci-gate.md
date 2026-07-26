@@ -27,7 +27,31 @@
 | `KILL <pid>` | **必须** 变更单（kind=`kill`），审批后执行 |
 | 冻结窗 | Change Window 勾选 category=`sql` 且 `freeze=true` 时，禁止 DDL（KILL 仍可用于解堵） |
 
-PostgreSQL 连接（`driver=postgres`）仅支持测试连通、EXPLAIN、进程/锁与 Schema 健康抽检，**不提供** DDL/KILL。
+PostgreSQL 连接（`driver=postgres`）支持测试连通、只读查询、EXPLAIN（禁止 ANALYZE）、慢 SQL（`pg_stat_statements`）、进程/锁、Schema 浏览与健康抽检、以及经变更单的 `pg_terminate_backend`（KILL）。**不提供** DDL 变更执行；数据源类型 `postgres`/`mysql` 可关联 SQL 工具连接，供仪表盘表格面板与 AI `query_datasource` 闭环查询。
+
+## AI 安全与闭环门禁（Wave 1）
+
+| 面 | 要求 |
+|------|------|
+| 出站 | AI / Embed / Models / WeKnora 一律走 `newGuardedHTTPClient`（拦 metadata/link-local；云上建议 `AIOPS_SSRF_STRICT=true`） |
+| 反馈 | `/ai/assist/feedback` **必须**带服务端 `assist_id`，只用服务端原文入库，禁止客户端伪造 answer 投毒 RAG |
+| 附件 | Hermes 上传文件默认不进公共记忆；仅显式开启未验证学习时脱敏后写入 |
+| 写工具 | 推荐 `POST /api/v1/ai/write-approval` 签发短时 `approval_id`；全局 `hermes_auto_approve` 仍可用但会审计 |
+| 配额 | `daily_quota_per_user` 覆盖 Assist / Chat / Sreyun / Diagnose；`quota_exempt_tasks` 可豁免；MCP 另有每分钟限流 |
+| 验证 | Assist 的 promql / logql / pgsql 生成后做只读探针，结果经 SSE `meta.verify` 回传 |
+| MCP | Bearer + 只读白名单 + Body ≤1MiB + 默认 60 次/分钟；调用记入写工具审计 |
+
+Wave 2/3（已落地骨架）：
+
+| 能力 | 说明 |
+|------|------|
+| `ai_runs` | PG 表 + `GET /api/v1/ai/runs`；Assist/Diagnose/Sreyun 回传 `run_id`；反馈绑定 run |
+| 写工具 | **强制** `approval_id`（`POST /api/v1/ai/write-approval`），关闭裸 auto-approve |
+| MCP scoped | `mcp_scoped_tokens_json`：`metrics/logs/sql/hardware/infra/knowledge` |
+| 行业知识包 | 内置 mysql/postgres/kubernetes/network；`POST /api/v1/ai/skill-packs/import` |
+| On-call Copilot | `GET /api/v1/ai/copilot/context` + 前端「值班助手」 |
+| Fallback | `fallback_models` 主模型失败时切换 |
+| Eval | `go test` 内 `TestEval*` 黄金用例（离线） |
 
 ## 示例流水线钩子
 

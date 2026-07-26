@@ -628,3 +628,63 @@ func stringifySQLVal(v any) any {
 		return t
 	}
 }
+
+// mysqlQueryReadOnly runs a single SELECT/WITH for datasource / dashboard panels.
+func mysqlQueryReadOnly(c MySQLConnection, sqlText string, limit int) ([]string, []map[string]any, error) {
+	sqlText = strings.TrimSpace(sqlText)
+	if sqlText == "" {
+		return nil, nil, fmt.Errorf("sql required")
+	}
+	if !sqltoolkit.IsReadOnlyQuery(sqlText) || sqltoolkit.ForbiddenWrite(sqlText) {
+		return nil, nil, fmt.Errorf("仅允许单条只读 SELECT/WITH")
+	}
+	kw := sqltoolkit.FirstKeyword(sqlText)
+	if kw != "select" && kw != "with" && kw != "show" && kw != "desc" && kw != "describe" {
+		return nil, nil, fmt.Errorf("仅允许 SELECT/WITH/SHOW")
+	}
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+	execSQL := strings.TrimSuffix(sqlText, ";")
+	if kw == "select" || kw == "with" {
+		if !strings.Contains(strings.ToLower(sqltoolkit.StripCommentsAndStrings(execSQL)), "limit") {
+			execSQL = fmt.Sprintf("SELECT * FROM (%s) AS _aiops_q LIMIT %d", execSQL, limit)
+		}
+	}
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	rs, err := db.QueryContext(ctx, execSQL)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rs.Close()
+	cols, err := rs.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+	var rows []map[string]any
+	for rs.Next() {
+		if len(rows) >= limit {
+			break
+		}
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rs.Scan(ptrs...); err != nil {
+			continue
+		}
+		m := make(map[string]any, len(cols))
+		for i, col := range cols {
+			m[col] = stringifySQLVal(vals[i])
+		}
+		rows = append(rows, m)
+	}
+	return cols, rows, rs.Err()
+}

@@ -510,6 +510,9 @@ func mysqlCollectSlowDigests(c MySQLConnection, cfg *SlowSQLMonitorConfig) ([]sl
 }
 
 func dialectForConn(c MySQLConnection) sqltoolkit.Dialect {
+	if driverOf(c) == "postgres" {
+		return sqltoolkit.DialectPostgres
+	}
 	switch c.VersionHint {
 	case "mysql57":
 		return sqltoolkit.DialectMySQL57
@@ -539,19 +542,25 @@ func analyzeSlowDigest(c MySQLConnection, row slowDigestRow) SlowSQLItem {
 	kw := sqltoolkit.FirstKeyword(row.SQL)
 	canExplain := kw == "select" || kw == "with"
 	if canExplain && !sqltoolkit.ForbiddenWrite(row.SQL) {
-		shape := sqltoolkit.ExtractQueryShape(row.SQL)
-		if shape != nil && shape.ParseOK {
-			if meta, err := mysqlFetchMetadataInSchema(c, row.Schema, shape.TableNames()); err == nil {
-				in.Meta = meta
+		if driverOf(c) == "postgres" {
+			// pg_stat_statements digests may contain $1 placeholders — EXPLAIN may fail.
+			if expl, err := pgExplain(c, row.SQL); err == nil {
+				if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
+					in.Explain = a
+				}
 			}
-		}
-		if expl, err := mysqlExplainInSchema(c, row.Schema, row.SQL); err == nil {
-			if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
-				in.Explain = a
+		} else {
+			shape := sqltoolkit.ExtractQueryShape(row.SQL)
+			if shape != nil && shape.ParseOK {
+				if meta, err := mysqlFetchMetadataInSchema(c, row.Schema, shape.TableNames()); err == nil {
+					in.Meta = meta
+				}
 			}
-		} else if item.AnalyzeError == "" {
-			// Digest text often contains ? placeholders — EXPLAIN failure is expected.
-			item.AnalyzeError = ""
+			if expl, err := mysqlExplainInSchema(c, row.Schema, row.SQL); err == nil {
+				if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
+					in.Explain = a
+				}
+			}
 		}
 	}
 
@@ -571,9 +580,6 @@ func (s *Server) runSlowSQLCollect(connID, trigger string) (*SlowSQLReport, erro
 	if !ok || !c.Enabled {
 		return nil, fmt.Errorf("connection not found or disabled")
 	}
-	if driverOf(c) == "postgres" {
-		return nil, fmt.Errorf("慢 SQL 检查仅支持 MySQL")
-	}
 	if s.sqlSlow == nil {
 		return nil, fmt.Errorf("slow sql manager not ready")
 	}
@@ -583,19 +589,29 @@ func (s *Server) runSlowSQLCollect(connID, trigger string) (*SlowSQLReport, erro
 	defer s.sqlSlow.end(connID)
 
 	cfg := c.SlowSQL.withDefaults()
+	source := "performance_schema"
+	if driverOf(c) == "postgres" {
+		source = "pg_stat_statements"
+	}
 	rep := &SlowSQLReport{
 		ID:             "ss-" + randomHex(6),
 		ConnectionID:   c.ID,
 		ConnectionName: c.Name,
 		Trigger:        trigger,
-		Source:         "performance_schema",
+		Source:         source,
 		Status:         "running",
 		StartedAt:      time.Now().Unix(),
 		Items:          []SlowSQLItem{},
 	}
 	s.sqlSlow.store(rep)
 
-	rows, err := mysqlCollectSlowDigests(c, cfg)
+	var rows []slowDigestRow
+	var err error
+	if driverOf(c) == "postgres" {
+		rows, err = pgCollectSlowDigests(c, cfg)
+	} else {
+		rows, err = mysqlCollectSlowDigests(c, cfg)
+	}
 	if err != nil {
 		rep.Status = "failed"
 		rep.Error = err.Error()

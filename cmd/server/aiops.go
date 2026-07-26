@@ -50,10 +50,15 @@ type AIConfig struct {
 	// Mixture-of-Agents：额外参与「集成研判」的模型名（逗号分隔）。配置后【诊断】走多模型并行
 	// 提案 → 聚合模型综合成一份更稳的结论。默认空=关闭（成本可控）。这些模型复用主 Endpoint / Key。
 	MoAModels string `json:"moa_models,omitempty"`
+	// FallbackModels：主模型失败时按序切换的备用模型（逗号分隔，复用主 Endpoint/Key）。
+	FallbackModels string `json:"fallback_models,omitempty"`
 	// MCP Server：把本平台的只读运维工具（指标/日志/告警/硬件/流量等）暴露为标准 MCP，供外部
 	// Agent（如 Nous Sreyun Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
 	MCPEnabled bool   `json:"mcp_enabled,omitempty"`
 	MCPToken   string `json:"mcp_token,omitempty"`
+	// MCPScopedTokensJSON：多 Token 作用域，例 [{"name":"metrics","token":"xxx","scopes":["metrics","alerts"]}]
+	// scopes: metrics|logs|sql|hardware|infra|knowledge|all
+	MCPScopedTokensJSON string `json:"mcp_scoped_tokens_json,omitempty"`
 	// WeKnora：外部文档知识库（腾讯开源 RAG）。本平台不建文档入库，仅通过 API URL + API Key
 	// 调用 knowledge-search，供 search_knowledge 工具在诊断/对话时检索手册类知识。
 	WeKnoraEnabled          bool   `json:"weknora_enabled,omitempty"`
@@ -74,12 +79,46 @@ type AIConfig struct {
 	OutputPricePer1M float64 `json:"output_price_per_1m,omitempty"`
 	CostCurrency     string  `json:"cost_currency,omitempty"` // CNY | USD …
 	// ---- AI 治理（商业级最小集）----
-	// DailyQuotaPerUser：每用户每日 Assist/对话调用上限；0=不限制。
+	// DailyQuotaPerUser：每用户每日 AI 调用上限（Assist/Chat/Sreyun/Diagnose 等）；0=不限制。
 	DailyQuotaPerUser int `json:"daily_quota_per_user,omitempty"`
+	// QuotaExemptTasks：逗号分隔任务名（如 distill,embed_test），这些入口不计入日配额；默认空=全部计入。
+	QuotaExemptTasks string `json:"quota_exempt_tasks,omitempty"`
+	// MCPRateLimitPerMin：MCP Bearer 每分钟调用上限；0=默认 60。
+	MCPRateLimitPerMin int `json:"mcp_rate_limit_per_min,omitempty"`
 	// WriteToolsRequireApproval：写工具默认需审批（与 hermes_auto_approve 互补；开启时强制阻断自动写）。
 	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
 	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
 	RedactSensitiveFields bool `json:"redact_sensitive_fields,omitempty"`
+}
+
+// embedReady reports whether embedding (RAG write/retrieve) can run.
+// Uses dedicated embed credentials when set; otherwise falls back to chat endpoint/key.
+func embedReady(cfg AIConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	key := strings.TrimSpace(cfg.EmbedAPIKey)
+	if key == "" {
+		key = strings.TrimSpace(cfg.APIKey)
+	}
+	ep := strings.TrimSpace(cfg.EmbedEndpoint)
+	if ep == "" {
+		ep = strings.TrimSpace(cfg.Endpoint)
+	}
+	return key != "" && ep != ""
+}
+
+func quotaTaskExempt(cfg AIConfig, task string) bool {
+	task = strings.ToLower(strings.TrimSpace(task))
+	if task == "" || strings.TrimSpace(cfg.QuotaExemptTasks) == "" {
+		return false
+	}
+	for _, p := range strings.Split(cfg.QuotaExemptTasks, ",") {
+		if strings.ToLower(strings.TrimSpace(p)) == task {
+			return true
+		}
+	}
+	return false
 }
 
 // aiProviderType classifies the AI endpoint so the request/response format can be
@@ -548,6 +587,10 @@ type streamToolChunk struct {
 // 仅支持 OpenAI 兼容端点；Anthropic 走非流式 aiChatV（其流式 tool-use 帧格式不同，成本高）。
 // ctx 用于客户端断开/超时时中止在途请求。
 func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, onDelta, onReasoning func(string)) (string, []nativeToolCall, error) {
+	return aiChatVStreamOpts(ctx, cfg, messages, images, tools, onDelta, onReasoning, aiCallOpts{})
+}
+
+func aiChatVStreamOpts(ctx context.Context, cfg AIConfig, messages []map[string]string, images []chatImage, tools []map[string]any, onDelta, onReasoning func(string), opts aiCallOpts) (string, []nativeToolCall, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -556,7 +599,10 @@ func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]stri
 	}
 	ep, prov := normalizeEndpoint(cfg.Endpoint)
 	if prov == aiProvAnthropic { // 兜底：不应走到这里，直接回退非流式
-		return aiChatV(ctx, cfg, messages, images, tools)
+		return aiChatVOpts(ctx, cfg, messages, images, tools, opts)
+	}
+	if opts.DisableThinking && !opts.EnableThinking {
+		messages = withNoThinkHint(messages, cfg)
 	}
 
 	reqBody := map[string]any{
@@ -569,9 +615,8 @@ func aiChatVStream(ctx context.Context, cfg AIConfig, messages []map[string]stri
 		reqBody["tools"] = tools
 		reqBody["tool_choice"] = "auto"
 	}
-	if cfg.MaxTokens > 0 {
-		reqBody["max_tokens"] = cfg.MaxTokens
-	}
+	applyThinkingKnobs(reqBody, cfg, prov, opts)
+	applyOutputTokenLimit(reqBody, cfg, prov, opts)
 
 	b, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))

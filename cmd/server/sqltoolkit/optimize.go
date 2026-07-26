@@ -63,7 +63,11 @@ func OptimizeWithMeta(sql string, d Dialect, shape *QueryShape, meta SchemaMeta)
 		out.IndexHints = AdviseIndexes(shape, meta)
 	}
 	if len(out.IndexHints) == 0 {
-		out.IndexHints = regexIndexHints(stripped)
+		out.IndexHints = regexIndexHints(stripped, d)
+	} else if d == DialectPostgres {
+		for i := range out.IndexHints {
+			out.IndexHints[i].DDL = IndexDDLForDialect(d, out.IndexHints[i].Table, out.IndexHints[i].Columns)
+		}
 	}
 	for _, h := range out.IndexHints {
 		out.Suggestions = append(out.Suggestions, Finding{
@@ -89,13 +93,20 @@ func OptimizeWithMeta(sql string, d Dialect, shape *QueryShape, meta SchemaMeta)
 		})
 	}
 
-	if d == DialectMySQL80 {
+	switch d {
+	case DialectPostgres:
+		out.Suggestions = append(out.Suggestions, Finding{
+			ID: "postgres_features", Level: "info", Title: "PostgreSQL 优化提示",
+			Detail:  "关注 Seq Scan、膨胀、统计信息（ANALYZE）与合适的部分索引/覆盖 INCLUDE",
+			Suggest: "EXPLAIN (ANALYZE, BUFFERS) 仅在只读副本或变更窗外谨慎使用；生产工具侧禁用 ANALYZE",
+		})
+	case DialectMySQL80:
 		out.Suggestions = append(out.Suggestions, Finding{
 			ID: "mysql80_features", Level: "info", Title: "MySQL 8.0 可用能力",
 			Detail:  "可考虑 CTE、窗口函数、降序索引、不可见索引做灰度验证",
 			Suggest: "CREATE INDEX ... (col DESC); / ALTER TABLE ... ALTER INDEX ... INVISIBLE",
 		})
-	} else {
+	default:
 		out.Suggestions = append(out.Suggestions, Finding{
 			ID: "mysql57_compat", Level: "info", Title: "MySQL 5.7 兼容提示",
 			Detail: "避免 CTE/窗口函数；派生表别名必填；注意 ONLY_FULL_GROUP_BY",
@@ -126,10 +137,10 @@ func OptimizeWithMeta(sql string, d Dialect, shape *QueryShape, meta SchemaMeta)
 	return out
 }
 
-func regexIndexHints(stripped string) []IndexHint {
+func regexIndexHints(stripped string, d Dialect) []IndexHint {
 	table := ""
 	if m := reFromTable.FindStringSubmatch(stripped); len(m) > 1 {
-		table = strings.Trim(m[1], "`")
+		table = strings.Trim(m[1], "`\"")
 		if i := strings.LastIndex(table, "."); i >= 0 {
 			table = table[i+1:]
 		}
@@ -159,13 +170,34 @@ func regexIndexHints(stripped string) []IndexHint {
 	if len(idxCols) > 4 {
 		idxCols = idxCols[:4]
 	}
-	ddl := fmt.Sprintf("ALTER TABLE `%s` ADD INDEX idx_%s (%s);",
-		table, strings.Join(idxCols, "_"), quoteCols(idxCols))
 	return []IndexHint{{
 		Table: table, Columns: idxCols,
 		Reason: "等值条件优先、范围条件靠后的联合索引模板（需结合基数与区分度验证）",
-		DDL:    ddl,
+		DDL:    IndexDDLForDialect(d, table, idxCols),
 	}}
+}
+
+// IndexDDLForDialect renders a CREATE INDEX template for the target engine.
+func IndexDDLForDialect(d Dialect, table string, cols []string) string {
+	if table == "" || len(cols) == 0 {
+		return ""
+	}
+	if len(cols) > 4 {
+		cols = cols[:4]
+	}
+	name := "idx_" + strings.Join(cols, "_")
+	if d == DialectPostgres {
+		quoted := make([]string, len(cols))
+		for i, c := range cols {
+			quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
+		}
+		tbl := table
+		if !strings.Contains(tbl, ".") {
+			tbl = `"` + strings.ReplaceAll(tbl, `"`, `""`) + `"`
+		}
+		return fmt.Sprintf(`CREATE INDEX CONCURRENTLY IF NOT EXISTS %s ON %s (%s);`, name, tbl, strings.Join(quoted, ", "))
+	}
+	return fmt.Sprintf("ALTER TABLE `%s` ADD INDEX %s (%s);", table, name, quoteCols(cols))
 }
 
 func stripTablePrefix(col string) string {

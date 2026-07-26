@@ -1,0 +1,25 @@
+{
+  "id": "mysql",
+  "name": "MySQL 运维知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "MySQL 连接耗尽排查",
+      "trigger": "Threads_connected 接近 max_connections、Too many connections、连接池打满",
+      "steps": "1) SHOW GLOBAL STATUS LIKE 'Threads_%'; Threads_connected/max_connections\n2) SHOW PROCESSLIST 找 Sleep 堆积与长事务\n3) 核对应用连接池 idle timeout 与 wait_timeout\n4) 必要时 KILL 空闲会话（走变更单）\n5) 评估调高 max_connections 前先找泄漏根因",
+      "tags": "mysql,connections,processlist"
+    },
+    {
+      "name": "MySQL 慢查询与索引",
+      "trigger": "慢查询增多、CPU 高、同一 digest 重复出现",
+      "steps": "1) 从 performance_schema / 慢日志取 Top digest\n2) EXPLAIN 看 type/key/rows/Extra\n3) 避免函数包裹索引列、前导 %LIKE、隐式转换\n4) 建议 ALTER TABLE … ADD INDEX（prod 走变更单）\n5) 回验：慢日志与 QPS/延迟对比",
+      "tags": "mysql,slowsql,index"
+    },
+    {
+      "name": "MySQL 主从延迟",
+      "trigger": "Seconds_Behind_Master 升高、只读副本数据滞后",
+      "steps": "1) SHOW SLAVE STATUS\\G 看 IO/SQL 线程与 Last_Error\n2) 检查大事务/DDL 是否阻塞 SQL 线程\n3) 核对并行复制配置与磁盘 IO\n4) 业务侧避免读到过期数据（一致性读）\n5) 恢复后观察延迟收敛曲线",
+      "tags": "mysql,replication,lag"
+    }
+  ]
+}

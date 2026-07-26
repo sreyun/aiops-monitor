@@ -816,12 +816,17 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    const hadTerm = $("termMask") && $("termMask").classList.contains("show");
-    const hadDesktop = $("desktopMask") && $("desktopMask").classList.contains("show");
-    const hadReplay = $("termReplayMask") && $("termReplayMask").classList.contains("show");
-    const hadObserve = $("termObserveMask") && $("termObserveMask").classList.contains("show");
-    const hadSessions = $("termSessionsMask") && $("termSessionsMask").classList.contains("show");
-    document.querySelectorAll(".mask.show:not([data-forced])").forEach(mk => mk.classList.remove("show"));
+    // Only close the topmost mask so stacked modals unwind one layer at a time.
+    const masks = document.querySelectorAll(".mask.show:not([data-forced])");
+    if (!masks.length) return;
+    const top = masks[masks.length - 1];
+    const hadTerm = top.id === "termMask";
+    const hadDesktop = top.id === "desktopMask";
+    const hadReplay = top.id === "termReplayMask";
+    const hadObserve = top.id === "termObserveMask";
+    const hadSessions = top.id === "termSessionsMask";
+    if (typeof closeMask === "function") closeMask(top);
+    else top.classList.remove("show");
     hideChartTip();
     if (hadTerm) closeTerminalWS();
     if (hadDesktop) closeDesktopWS();

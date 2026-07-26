@@ -254,6 +254,42 @@ func (cs *ConfigStore) GetWebTarget(id string) (WebScanTarget, bool) {
 	return WebScanTarget{}, false
 }
 
+// UpdateWebTargetScanURLs merges or replaces ScanURLs under the config lock
+// so concurrent target edits cannot drop unrelated fields.
+func (cs *ConfigStore) UpdateWebTargetScanURLs(id string, urls []string, replace bool) (WebScanTarget, error) {
+	cs.mu.Lock()
+	cfg := cs.cfg.WebSecurity.withDefaults()
+	idx := -1
+	for i := range cfg.Targets {
+		if cfg.Targets[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		cs.mu.Unlock()
+		return WebScanTarget{}, fmt.Errorf("target not found")
+	}
+	t := cfg.Targets[idx]
+	if replace {
+		t.ScanURLs = append([]string{}, urls...)
+	} else {
+		t.ScanURLs = mergeUniqueURLs(t.ScanURLs, urls, 80)
+	}
+	if err := sanitizeWebTarget(&t, cfg.AllowPrivate); err != nil {
+		cs.mu.Unlock()
+		return WebScanTarget{}, err
+	}
+	t.UpdatedAt = time.Now().Unix()
+	cfg.Targets[idx] = t
+	cs.cfg.WebSecurity = cfg
+	cs.mu.Unlock()
+	if err := cs.save(); err != nil {
+		return WebScanTarget{}, err
+	}
+	return t, nil
+}
+
 func (cs *ConfigStore) touchWebTargetScan(id string, at int64) {
 	cs.mu.Lock()
 	found := false
@@ -295,6 +331,27 @@ func sanitizeWebTarget(t *WebScanTarget, globalAllowPrivate bool) error {
 	if err := assertURLAllowed(t.BaseURL, globalAllowPrivate); err != nil {
 		return err
 	}
+	cleanURLs := make([]string, 0, len(t.ScanURLs))
+	seenU := map[string]bool{}
+	for _, raw := range t.ScanURLs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if err := assertURLAllowed(raw, globalAllowPrivate); err != nil {
+			return fmt.Errorf("scan_urls: %w", err)
+		}
+		k := strings.ToLower(raw)
+		if seenU[k] {
+			continue
+		}
+		seenU[k] = true
+		cleanURLs = append(cleanURLs, raw)
+		if len(cleanURLs) >= 80 {
+			break
+		}
+	}
+	t.ScanURLs = cleanURLs
 	t.AuthType = strings.ToLower(strings.TrimSpace(t.AuthType))
 	if t.AuthType == "" {
 		t.AuthType = "none"
@@ -1054,6 +1111,16 @@ func (s *Server) completeWebScan(scanID string) {
 			live.FinishedAt = time.Now().Unix()
 		})
 		return
+	}
+	for _, u := range t.ScanURLs {
+		if err := assertURLAllowed(u, cfg.AllowPrivate); err != nil {
+			_ = s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
+				live.Status = "failed"
+				live.Error = zhWebSecErr("scan_urls: " + err.Error())
+				live.FinishedAt = time.Now().Unix()
+			})
+			return
+		}
 	}
 
 	findings, err := s.execNuclei(cfg, t)

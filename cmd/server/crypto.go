@@ -181,6 +181,7 @@ func encryptConfigSecrets(c *ServerConfig) {
 	c.AI.EmbedAPIKey = encryptSecret(c.AI.EmbedAPIKey)
 	c.AI.RerankAPIKey = encryptSecret(c.AI.RerankAPIKey)
 	c.AI.MCPToken = encryptSecret(c.AI.MCPToken) // MCP 访问令牌是密钥，静态加密
+	c.AI.MCPScopedTokensJSON = encryptSecret(c.AI.MCPScopedTokensJSON)
 	c.AI.WeKnoraAPIKey = encryptSecret(c.AI.WeKnoraAPIKey)
 	c.RelaySecret = encryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = encryptSecret(c.Dingtalk.Secret)
@@ -232,6 +233,7 @@ func decryptConfigSecrets(c *ServerConfig) {
 	c.AI.EmbedAPIKey = decryptSecret(c.AI.EmbedAPIKey)
 	c.AI.RerankAPIKey = decryptSecret(c.AI.RerankAPIKey)
 	c.AI.MCPToken = decryptSecret(c.AI.MCPToken)
+	c.AI.MCPScopedTokensJSON = decryptSecret(c.AI.MCPScopedTokensJSON)
 	c.AI.WeKnoraAPIKey = decryptSecret(c.AI.WeKnoraAPIKey)
 	c.RelaySecret = decryptSecret(c.RelaySecret)
 	c.Dingtalk.Secret = decryptSecret(c.Dingtalk.Secret)

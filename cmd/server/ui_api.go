@@ -155,6 +155,9 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireHostAccess(w, r, id) {
+		return
+	}
 	ok := s.store.DeleteHost(id)
 	_ = s.cfg.SetCategory(id, "") // drop override + folder assign for the removed host
 	if !ok {

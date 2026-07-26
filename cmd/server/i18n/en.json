@@ -304,6 +304,7 @@
   "agent.invalid_token": "Invalid or missing access token",
   "agent.fingerprint_failed": "Fingerprint authentication failed: not registered or fingerprint mismatch",
   "agent.fingerprint_required": "Fingerprint required",
+  "agent.fingerprint_conflict": "Host fingerprint conflicts with an existing record; identity rebind refused",
 
   "email.not_configured": "Email service is not configured or enabled",
   "email.invalid_header": "Invalid recipient / subject / sender name",

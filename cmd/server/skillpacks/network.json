@@ -1,0 +1,25 @@
+{
+  "id": "network",
+  "name": "网络与流量运维知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "接口流量突增 / 丢包",
+      "trigger": "接口利用率飙升、丢包/错包、NetFlow 异常 Top talker",
+      "steps": "1) 查 SNMP/接口计数：in/out errors、discards\n2) NetFlow 定位 Top 源目的与端口\n3) 区分攻击、备份窗口、发布流量\n4) 必要时限速/封禁走变更审批\n5) 回验流量曲线与业务延迟",
+      "tags": "network,netflow,snmp"
+    },
+    {
+      "name": "拨测失败与链路排查",
+      "trigger": "HTTP/TCP 拨测失败、跨机房超时",
+      "steps": "1) 区分 DNS/TCP/TLS/HTTP 阶段失败\n2) 多点拨测对比是否局部故障\n3) 查目标主机负载与安全组/防火墙\n4) traceroute / mtr 定位跳点\n5) 恢复后保留时间线供事件复盘",
+      "tags": "network,probe,latency"
+    },
+    {
+      "name": "DNS 解析异常",
+      "trigger": "解析失败、解析变慢、错误 IP",
+      "steps": "1) dig/nslookup 对比权威与本地缓存\n2) 检查 TTL、记录变更与双栈\n3) 应用侧连接超时是否伴随 NXDOMAIN\n4) 回滚错误解析或刷新缓存\n5) 监控解析成功率",
+      "tags": "network,dns"
+    }
+  ]
+}

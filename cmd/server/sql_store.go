@@ -138,9 +138,6 @@ func (cs *ConfigStore) UpsertMySQLConnection(in MySQLConnection) (MySQLConnectio
 	if in.VersionHint == "" {
 		in.VersionHint = "auto"
 	}
-	if in.Driver == "postgres" {
-		in.SlowSQL = nil // slow digests are MySQL performance_schema only
-	}
 	keepSecret := func(v, prev string) string {
 		if v == "" || strings.Contains(v, "****") {
 			return prev
@@ -148,9 +145,6 @@ func (cs *ConfigStore) UpsertMySQLConnection(in MySQLConnection) (MySQLConnectio
 		return v
 	}
 	normalizeSlow := func(cur, prev *SlowSQLMonitorConfig) (*SlowSQLMonitorConfig, error) {
-		if in.Driver == "postgres" {
-			return nil, nil
-		}
 		if cur == nil {
 			if prev != nil {
 				return prev, nil
@@ -214,6 +208,13 @@ func (cs *ConfigStore) migrateMySQLSlowSQLDefaultsOnce() bool {
 	changed := false
 	for i := range cs.cfg.MySQLConnections {
 		c := &cs.cfg.MySQLConnections[i]
+		if driverOf(*c) == "postgres" {
+			if c.SlowSQL != nil {
+				c.SlowSQL = nil
+				changed = true
+			}
+			continue
+		}
 		if c.SlowSQL != nil {
 			continue
 		}

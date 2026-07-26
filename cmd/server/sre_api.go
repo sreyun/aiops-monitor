@@ -343,12 +343,16 @@ func (s *Server) checkSlowDegradation(hostID string) {
 	analysis := fmt.Sprintf("检测到以下资源呈持续上升趋势，可能在数小时内达到告警阈值：\n- %s\n建议：检查相关服务是否有内存泄漏、日志膨胀或异常负载增长。",
 		strings.Join(issues, "\n- "))
 
-	inc := s.incidents.CreateManual(title, "warning", hostID, host.Hostname, "AI趋势检测")
-	if inc.ID > 0 {
-		s.incidents.AddEvent(inc.ID, "ai_analysis", "AI", analysis)
+	// Deduplicate open trend incidents per host so each report tick does not spam.
+	key := "trend_degrade:" + hostID
+	id, created := s.incidents.raise(key, title, "warning", "AI趋势检测", hostID, host.Hostname, "trend")
+	if id > 0 {
+		s.incidents.AddEvent(id, "ai_analysis", "AI", analysis)
 		s.store.MarkDirty()
-		go s.rememberAI("alert", fmt.Sprintf("degradation:%s", hostID),
-			fmt.Sprintf("【趋势预警】%s\n%s", title, analysis))
+		if created {
+			go s.rememberAI("alert", fmt.Sprintf("degradation:%s", hostID),
+				fmt.Sprintf("【趋势预警】%s\n%s", title, analysis))
+		}
 	}
 }
 
@@ -1171,6 +1175,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if c.MCPToken != "" {
 		c.MCPToken = "****" // MCP 令牌是密钥，同样不回显
 	}
+	if strings.TrimSpace(c.MCPScopedTokensJSON) != "" {
+		c.MCPScopedTokensJSON = "****" // 作用域令牌 JSON 含密钥
+	}
 	if c.WeKnoraAPIKey != "" {
 		c.WeKnoraAPIKey = "****"
 	}
@@ -1484,7 +1491,7 @@ func fetchProviderModels(endpoint, apiKey string) []string {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newGuardedHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil
@@ -1602,6 +1609,10 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "AI 会话历史总量过大"})
 		return
 	}
+	if ok, msg := s.aiGovAllowRequestTask(r, "chat"); !ok {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
+		return
+	}
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		s.setupSSE(w)
@@ -1690,10 +1701,12 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Task    string `json:"task"`
-		Input   string `json:"input"`
-		Context string `json:"context,omitempty"`
-		History []struct {
+		Task       string `json:"task"`
+		Input      string `json:"input"`
+		Context    string `json:"context,omitempty"`
+		DataSource string `json:"datasource,omitempty"` // optional: for post-generate verify
+		Verify     *bool  `json:"verify,omitempty"`     // default true for query tasks
+		History    []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"history,omitempty"` // 多轮追问：前几轮 Q&A（基于同一份 context 的会话）
@@ -1730,7 +1743,7 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请提供需求描述或待分析内容"})
 		return
 	}
-	if ok, msg := s.aiGovAllowRequest(r); !ok {
+	if ok, msg := s.aiGovAllowRequestTask(r, req.Task); !ok {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
 		return
 	}
@@ -1756,7 +1769,11 @@ func (s *Server) handleAIAssist(w http.ResponseWriter, r *http.Request) {
 			hist = append(hist, map[string]string{"role": h.Role, "content": h.Content})
 		}
 	}
-	_ = s.streamOrchestratedAssist(r.Context(), w, cfg, req.Task, req.Input, req.Context, hist, s.actorName(r))
+	doVerify := true
+	if req.Verify != nil {
+		doVerify = *req.Verify
+	}
+	_ = s.streamOrchestratedAssist(r.Context(), w, cfg, req.Task, req.Input, req.Context, hist, s.actorName(r), strings.TrimSpace(req.DataSource), doVerify)
 }
 
 func validAssistTaskName(task string) bool {
@@ -1997,48 +2014,68 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"③ 给出可执行的排查与处置步骤（优先只读确认，再谨慎变更）；\n" +
 			"④ 指出是否建议开事件/工单或进入变更冻结期外再操作。用简洁中文分点作答，只依据给定报告，不臆造。" + ctxBlock
 	case "sql_beautify":
-		return "你是 MySQL SQL 格式化专家（目标方言见上下文：mysql57 或 mysql80）。请把给定 SQL 美化为可读形式：" +
+		return "你是 SQL 格式化专家（目标方言见上下文：mysql57 / mysql80 / postgres）。请把给定 SQL 美化为可读形式：" +
 			"关键字大写、合理缩进与换行、保留字符串字面量与注释语义、不改变业务逻辑。" +
+			"PostgreSQL 请保留双引号标识符、:: 类型转换与 ILIKE 等方言写法。" +
 			"要求：① 先用一个 ```sql 代码块只放美化后的完整语句；② 再用一两句中文说明主要排版选择。" +
 			"不要改写语义、不要擅自加 LIMIT/删条件。" + ctxBlock
 	case "sql_audit":
-		return "你是资深 MySQL DBA / SQL 审核专家（方言见上下文）。以下含原始 SQL 与规则引擎 findings。" +
-			"请：① 一句话总体风险（低/中/高）；② 补充规则未覆盖的隐患（锁、事务、字符集、统计信息、业务语义）；" +
-			"③ 按严重度列出问题与依据；④ 给出可落地的改写/索引/参数建议。" +
+		return "你是资深 DBA / SQL 审核专家（方言见上下文：MySQL 或 PostgreSQL）。以下含原始 SQL 与规则引擎 findings。" +
+			"请：① 一句话总体风险（低/中/高）；② 补充规则未覆盖的隐患（锁、事务、统计信息、膨胀、业务语义）；" +
+			"③ 按严重度列出问题与依据；④ 给出可落地的改写/索引建议（PG 用 CREATE INDEX，MySQL 用 ALTER/ADD INDEX）。" +
 			"用简洁中文分点作答；可附 ```sql 示例。只依据给定上下文，不臆造表结构；信息不足时说明还需要什么。" + ctxBlock
 	case "sql_optimize":
-		return "你是资深 MySQL 性能优化专家（方言见上下文：5.7/8.0）。以下含原始 SQL、静态审核 findings、可选 EXPLAIN 摘要与索引信息。" +
+		return "你是资深数据库性能优化专家（方言见上下文：mysql57/mysql80/postgres）。以下含原始 SQL、静态审核 findings、可选 EXPLAIN 摘要与索引信息。" +
 			"请：① 先用一个 ```sql 代码块给出推荐改写（保持语义等价或明确标注语义差异）；" +
-			"② 说明为何能更好走索引（引用 type/key/rows/filtered 若有）；③ 给出索引 DDL 模板（CREATE INDEX …）；" +
-			"④ 标明 5.7 vs 8.0 能力差异（CTE/窗口/降序索引等）若相关。" +
-			"禁止建议执行 DDL/DML 破坏性操作到生产而不加风险提示；不要编造不存在的列/索引。" + ctxBlock
+			"② 说明为何能更好走索引（MySQL 引用 type/key/rows；PostgreSQL 引用 Node Type/Seq Scan/Index Scan/Plan Rows）；" +
+			"③ 给出索引 DDL 模板（MySQL: ALTER TABLE … ADD INDEX；PostgreSQL: CREATE INDEX CONCURRENTLY …）；" +
+			"④ 标明引擎差异（CTE/窗口/部分索引/INCLUDE 等）若相关。" +
+			"禁止建议在生产直接执行破坏性 DDL/DML 而不加风险提示；不要编造不存在的列/索引。" + ctxBlock
+	case "sqlql", "pgsql":
+		return "你是 SQL 查询专家（方言见上下文：PostgreSQL 或 MySQL）。根据自然语言生成安全的只读 SQL（SELECT/WITH）。" +
+			"要求：① 只用一个 ```sql 代码块给出完整语句；② 默认加合理 LIMIT；③ 禁止 INSERT/UPDATE/DELETE/DDL 与危险函数；" +
+			"④ PostgreSQL 可用 information_schema / pg_catalog / pg_stat_*；MySQL 可用 information_schema / performance_schema。" +
+			"不要编造不存在的表；信息不足时先给出可验证的探测 SQL。" + ctxBlock
 	default: // generic
 		return "你是资深 SRE / 运维助手，用简洁中文帮助运维人员处理监控、告警、排障、性能、日志与自动化相关问题；无关问题礼貌拒答。" + ctxBlock
 	}
 }
 
 // handleAIAssistFeedback 闭环 A：运维人员对某次 AI 辅助结果的处置（采纳/👍/👎）回流为记忆强化
-// 信号——「用了才算数」。语义定位该次 assist 记忆并强化或惩罚，使被反复采纳的生成/建议在后续
-// RAG 检索中上浮、被否定的下沉，实现自我进化。
-// POST /api/v1/ai/assist/feedback  {task, input, answer, action: applied|helpful|unhelpful, reason?}
+// 信号——「用了才算数」。必须携带服务端签发的 assist_id，仅使用服务端原文，防止客户端投毒 RAG。
+// POST /api/v1/ai/assist/feedback  {assist_id, action: applied|helpful|unhelpful, reason?}
 func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 	var req struct {
-		Task   string `json:"task"`
-		Input  string `json:"input"`
-		Answer string `json:"answer"`
-		Action string `json:"action"`
-		Reason string `json:"reason"`
+		AssistID string `json:"assist_id"`
+		Task     string `json:"task"`   // ignored when assist_id present (compat)
+		Input    string `json:"input"`  // ignored — server copy wins
+		Answer   string `json:"answer"` // ignored — server copy wins
+		Action   string `json:"action"`
+		Reason   string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	req.Task = strings.TrimSpace(req.Task)
-	req.Input = strings.TrimSpace(req.Input)
-	req.Answer = strings.TrimSpace(req.Answer)
+	req.AssistID = strings.TrimSpace(req.AssistID)
 	req.Reason = strings.TrimSpace(req.Reason)
-	if !validAssistTaskName(req.Task) || len(req.Input) > 32<<10 || len(req.Answer) > 128<<10 || len(req.Reason) > 2000 {
+	if req.AssistID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 assist_id / run_id：请对刚刚生成的结果反馈，勿伪造内容"})
+		return
+	}
+	run, ok := s.lookupAIRun(req.AssistID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "assist_id / run_id 无效或已过期"})
+		return
+	}
+	req.Task = run.Task
+	if req.Task == "" {
+		req.Task = run.Kind
+	}
+	req.Input = run.Input
+	req.Answer = run.Answer
+	if len(req.Input) > 32<<10 || len(req.Answer) > 128<<10 || len(req.Reason) > 2000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "反馈字段无效或过长"})
 		return
 	}
@@ -2064,7 +2101,11 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 			s.reinforceSkill(text, factor)
 		}
 	}
-	src := "assist:" + req.Task + ":" + memoryContentHash(req.Input+"\n"+req.Answer)
+	hash := run.ContentHash
+	if hash == "" {
+		hash = memoryContentHash(req.Input + "\n" + req.Answer)
+	}
+	src := "run:" + req.Task + ":" + req.AssistID + ":" + hash
 	learningQueued := false
 	switch req.Action {
 	case "helpful", "applied":
@@ -2077,10 +2118,12 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 	feedbackPersisted := false
 	if s.pg != nil {
 		feedbackPersisted = s.pg.insertAIFeedbackEvent(req.Task, s.actorName(r), req.Action, src)
+		s.pg.markAIRunFeedback(req.AssistID, req.Action)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "feedback_recorded": true, "learning_queued": learningQueued,
 		"feedback_persisted": feedbackPersisted, "learned": learningQueued, "source": src,
+		"assist_id": req.AssistID, "run_id": req.AssistID,
 	})
 }
 
@@ -2216,6 +2259,11 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	if ok, msg := s.aiGovAllowRequestTask(r, "diagnose"); !ok {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
+		return
+	}
+
 	cfg := s.cfg.AIConfig()
 	if cfg.Enabled && cfg.Endpoint != "" && cfg.Model != "" {
 		// 尽早建立 SSE 连接并 Flush，让前端立即显示「思考中」动画；
@@ -2285,17 +2333,27 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if cfg.SelfVerify && strings.TrimSpace(diag) != "" {
 			verify = streamSelfVerify(r.Context(), w, cfg, sys, diag)
 		}
+		full := diag
+		if strings.TrimSpace(verify) != "" {
+			full += "\n\n🔎 自我校验：\n" + verify
+		}
+		diagLat := time.Since(diagStart).Milliseconds()
+		s.recordAICallActor("diagnose", cfg.Model, s.actorName(r), diagLat,
+			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
+		if diag != "" {
+			runID := newOpaqueID("run_")
+			s.persistAIRun(AIRun{
+				ID: runID, Kind: "diagnose", Task: "diagnose", Actor: s.actorName(r), Model: cfg.Model,
+				Input: userMsg, Answer: full, OK: true, LatencyMs: diagLat,
+				MemHits: memHits, SkillHits: skillHits, IncidentID: id,
+			})
+			fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s}}\n\n", jsonString(runID), jsonString(runID))
+		}
 		// 统一收尾：发送一次 [DONE]
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		full := diag
-		if strings.TrimSpace(verify) != "" {
-			full += "\n\n🔎 自我校验：\n" + verify
-		}
-		s.recordAICallActor("diagnose", cfg.Model, s.actorName(r), time.Since(diagStart).Milliseconds(),
-			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
 		if diag != "" {
 			s.incidents.AddEventWithCitations(id, "ai_diagnosis", "AI", full, cites)
 			s.store.MarkDirty()
@@ -2889,7 +2947,7 @@ func (s *Server) saveDiagnosisEmbedding(incidentID int64, inc Incident, reply st
 		return
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return
 	}
 	// Build a concise summary from the incident + diagnosis for embedding
@@ -2923,7 +2981,7 @@ func (s *Server) rememberAI(kind, source, content string) bool {
 		return false
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return false
 	}
 	// 非阻塞入队：队列满时丢弃，避免突发流量打爆内存
@@ -2972,7 +3030,7 @@ func (s *Server) processMemoryJob(job memoryJob) {
 		content = string([]rune(content)[:8000]) + "…"
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return
 	}
 	emb := embedText(cfg, content)
@@ -3037,7 +3095,7 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 		return "", 0, "no_pg", nil
 	}
 	cfg := s.cfg.AIConfig()
-	if !cfg.Enabled || cfg.APIKey == "" {
+	if !embedReady(cfg) {
 		return "", 0, "no_embed", nil
 	}
 	if topK <= 0 {
@@ -3304,7 +3362,7 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "消息不能为空"})
 		return
 	}
-	if ok, msg := s.aiGovAllowRequest(r); !ok {
+	if ok, msg := s.aiGovAllowRequestTask(r, "sreyun"); !ok {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
 		return
 	}
@@ -3390,13 +3448,33 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	_, _ = s.sreyun.Chat(r.Context(), session, msg, images, true, w)
-	// 对话正文已由 SreyunCore.Chat 写入记忆（含 WeKnora 引用）；此处仅补存上传文件正文便于精确召回。
-	if s.shouldRememberPublicChat() {
+	start := time.Now()
+	reply, chatErr := s.sreyun.Chat(r.Context(), session, msg, images, true, w)
+	errStr := ""
+	if chatErr != nil {
+		errStr = chatErr.Error()
+	}
+	lat := time.Since(start).Milliseconds()
+	s.recordAICallActor("sreyun", cfg.Model, s.actorName(r), lat,
+		chatErr == nil && strings.TrimSpace(reply) != "", errStr, 0, 0, reply)
+	runID := newOpaqueID("run_")
+	s.persistAIRun(AIRun{
+		ID: runID, Kind: "sreyun", Task: "sreyun", Actor: s.actorName(r), Model: cfg.Model,
+		Input: msg, Answer: reply, OK: chatErr == nil && strings.TrimSpace(reply) != "",
+		LatencyMs: lat, IncidentID: req.IncidentID,
+	})
+	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s}}\n\n", jsonString(runID))
+	// 上传文件默认不自动入库，避免凭据/配置明文进入公共 RAG；仅在显式开启未验证学习时脱敏后写入。
+	if s.shouldRememberUnverifiedAIOutput() {
 		for _, f := range req.Files {
-			if strings.TrimSpace(f.Text) != "" {
-				go s.rememberAI("file", f.Name, f.Text)
+			txt := strings.TrimSpace(f.Text)
+			if txt == "" {
+				continue
 			}
+			if cfg.RedactSensitiveFields {
+				txt = redactAIText(txt, true)
+			}
+			go s.rememberAI("file", f.Name, txt)
 		}
 	}
 	// 回传（可能新建的）会话 id，供前端延续多轮对话 & 刷新后恢复；随后统一发送 [DONE]

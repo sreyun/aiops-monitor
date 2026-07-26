@@ -58,6 +58,7 @@ type Server struct {
 	sreyun      *SreyunCore              // Sreyun Agent (autonomous SRE agent)
 	aiStats     *aiStatsHub              // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
 	aiGov       *aiGovHub                // AI 治理：配额 + 写工具审计
+	assistStore *assistStore             // Assist 服务端原文（反馈防投毒）
 	hostSec     *hostSecurityManager     // 主机安全扫描结果
 	webSec      *webScanManager          // Web Nuclei 扫描结果
 	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
@@ -98,6 +99,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		vm:          newVMWriter(cfg),
 		messages:    newMessageHub(),
 		aiStats:     newAIStatsHub(),
+		assistStore: newAssistStore(),
 		aiGov:       newAIGovHub(),
 		sqlChanges:  newSQLChangeRequestManager(),
 	}
@@ -300,6 +302,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/dashboards/query", s.handleDashboardQuery)
 	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
 	mux.HandleFunc("POST /api/v1/dashboards/query-logs", s.handleDashboardQueryLogs)
+	mux.HandleFunc("POST /api/v1/dashboards/query-sql", s.handleDashboardQuerySQL)
 	mux.HandleFunc("POST /api/v1/dashboards/var-values", s.handleDashboardVarValues)
 	mux.HandleFunc("POST /api/v1/dashboards/import-grafana", s.handleImportGrafana)
 	// 仪表盘 AI 闭环：自然语言生成 / 按事件生成分析看板 / 实时摘要 / 研判转工单
@@ -431,8 +434,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）
 	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback) // 采纳/评价 AI 辅助结果 → 学习闭环强化
-	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)          // 值班晨报态势汇总（供前端流式生成）
-	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills)                 // AI 技能库（自进化提炼产物）
+	mux.HandleFunc("POST /api/v1/ai/write-approval", s.handleIssueAIWriteApproval) // 写工具 per-action 审批令牌
+	mux.HandleFunc("GET /api/v1/ai/runs", s.handleListAIRuns)                     // Wave2 AI Run 列表
+	mux.HandleFunc("GET /api/v1/ai/runs/{id}", s.handleGetAIRun)                  // Wave2 AI Run 详情
+	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)            // 值班晨报态势汇总（供前端流式生成）
+	mux.HandleFunc("GET /api/v1/ai/copilot/context", s.handleAICopilotContext)    // On-call Copilot 工作台上下文
+	mux.HandleFunc("GET /api/v1/ai/skill-packs", s.handleListSkillPacks)          // 行业知识包清单
+	mux.HandleFunc("POST /api/v1/ai/skill-packs/import", s.handleImportSkillPacks)
+	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills) // AI 技能库（自进化提炼产物）
 	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
 	mux.HandleFunc("POST /api/v1/ai/skills/{id}/archive", s.handleArchiveSkill)
 	mux.HandleFunc("POST /api/v1/ai/skills/merge", s.handleMergeSkills)

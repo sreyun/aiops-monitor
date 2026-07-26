@@ -447,7 +447,8 @@ func (s *Server) fireScheduledPlaybook(pb Playbook) {
 		}
 		exec := s.playbooks.StartPendingExecution(pb, Tz("playbook.scheduler_actor"), hosts, note)
 		s.persistPlaybookExecution(exec.ID)
-		s.playbooks.clearSchedBusy(pb.ID) // allow next tick to enqueue again only after this is resolved? keep busy cleared so approve can run
+		// Keep schedBusy until approve/reject so the next tick cannot pile up
+		// duplicate pending_approval executions for the same playbook.
 		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: "scheduler",
 			Message: fmt.Sprintf("定时剧本「%s」待审批（execution=%d，目标 %d 台）", pb.Name, exec.ID, len(hosts))})
 		s.notifyPlaybookPendingApproval(pb, exec)
@@ -475,6 +476,9 @@ func (s *Server) notifyPlaybookPendingApproval(pb Playbook, exec *PlaybookExecut
 		Message: msg,
 		FiredAt: time.Now().Unix(),
 	})
+	if s.notifier != nil {
+		s.notifier.PushAdhoc("warning", "剧本待审批", msg, nil)
+	}
 }
 
 func (s *Server) handleApprovePlaybookExecution(w http.ResponseWriter, r *http.Request) {
@@ -501,6 +505,7 @@ func (s *Server) handleApprovePlaybookExecution(w http.ResponseWriter, r *http.R
 	if len(hosts) == 0 {
 		s.playbooks.FinishExecution(id, "failed")
 		s.persistPlaybookExecution(id)
+		s.playbooks.clearSchedBusy(pb.ID)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
 		return
 	}
@@ -516,6 +521,7 @@ func (s *Server) handleApprovePlaybookExecution(w http.ResponseWriter, r *http.R
 	go func() {
 		fresh, _ := s.playbooks.GetExecution(id)
 		s.runPlaybookExecution(pb, &fresh, hosts)
+		s.playbooks.clearSchedBusy(pb.ID)
 	}()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "execution_id": id})
 }
@@ -537,6 +543,7 @@ func (s *Server) handleRejectPlaybookExecution(w http.ResponseWriter, r *http.Re
 	}
 	s.playbooks.FinishExecution(id, "rejected")
 	s.persistPlaybookExecution(id)
+	s.playbooks.clearSchedBusy(exec.PlaybookID)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
 		Message: fmt.Sprintf("拒绝定时剧本执行「%s」(execution=%d)", exec.PlaybookName, id)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

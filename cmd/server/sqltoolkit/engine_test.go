@@ -65,6 +65,12 @@ func TestIsReadOnlyAndForbidden(t *testing.T) {
 	if IsAllowedIndexDDL("DROP INDEX idx_a ON t") || IsAllowedIndexDDL("CREATE TABLE t(a int)") {
 		t.Fatal("destructive DDL must be rejected")
 	}
+	if IsAllowedIndexDDL("ALTER TABLE t ADD INDEX idx_b (b), ADD COLUMN secret TEXT") {
+		t.Fatal("multi-clause alter must be rejected")
+	}
+	if IsAllowedIndexDDL("ALTER TABLE t ADD COLUMN secret TEXT, ADD INDEX idx_b (b)") {
+		t.Fatal("add column must be rejected")
+	}
 }
 
 func TestCTEOn57(t *testing.T) {

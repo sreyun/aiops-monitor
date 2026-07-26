@@ -599,6 +599,8 @@ function renderK8sConfigForm() {
 }
 
 function wireK8sConfigForm() {
+  const panel = $("k8sPanel");
+  if (!panel) return;
   const fill = (c) => {
     c = c || {};
     if ($("k8sCfgId")) $("k8sCfgId").value = c.id || "";
@@ -611,8 +613,11 @@ function wireK8sConfigForm() {
     if ($("k8sCfgKube")) $("k8sCfgKube").value = "";
     if ($("k8sCfgNS")) $("k8sCfgNS").value = c.default_namespace || "";
   };
-  $("k8sCfgReset")?.addEventListener("click", () => fill(null));
-  $("k8sCfgSave")?.addEventListener("click", async () => {
+  // Property handlers replace prior bindings when the form is re-rendered.
+  const resetBtn = $("k8sCfgReset");
+  if (resetBtn) resetBtn.onclick = () => fill(null);
+  const saveBtn = $("k8sCfgSave");
+  if (saveBtn) saveBtn.onclick = async () => {
     const body = {
       id: ($("k8sCfgId")?.value || "").trim(),
       name: ($("k8sCfgName")?.value || "").trim(),
@@ -631,31 +636,31 @@ function wireK8sConfigForm() {
       toast(k8sT("toast.saved", "已保存"), "ok");
       await loadK8sPage();
     } catch (e) { toast(String(e.message || e), "err"); }
-  });
-  document.querySelectorAll("[data-k8s-edit]").forEach(b => {
-    b.addEventListener("click", () => {
+  };
+  panel.querySelectorAll("[data-k8s-edit]").forEach(b => {
+    b.onclick = () => {
       const c = K8S_CLUSTERS.find(x => x.id === b.getAttribute("data-k8s-edit"));
       fill(c);
-    });
+    };
   });
-  document.querySelectorAll("[data-k8s-test]").forEach(b => {
-    b.addEventListener("click", async () => {
+  panel.querySelectorAll("[data-k8s-test]").forEach(b => {
+    b.onclick = async () => {
       try {
         const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(b.getAttribute("data-k8s-test"))}/test`, { method: "POST", body: "{}" });
         const ver = j.version?.gitVersion || "ok";
         toast(k8sT("k8s.test_ok", "连通成功") + " · " + ver, "ok");
       } catch (e) { toast(String(e.message || e), "err"); }
-    });
+    };
   });
-  document.querySelectorAll("[data-k8s-del]").forEach(b => {
-    b.addEventListener("click", async () => {
+  panel.querySelectorAll("[data-k8s-del]").forEach(b => {
+    b.onclick = async () => {
       if (!confirm(k8sT("k8s.del_confirm", "确定删除该集群配置？"))) return;
       try {
         await k8sFetch(`/k8s/clusters/${encodeURIComponent(b.getAttribute("data-k8s-del"))}`, { method: "DELETE" });
         toast(k8sT("toast.deleted", "已删除"), "ok");
         await loadK8sPage();
       } catch (e) { toast(String(e.message || e), "err"); }
-    });
+    };
   });
 }
 

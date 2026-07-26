@@ -1,0 +1,25 @@
+{
+  "id": "postgres",
+  "name": "PostgreSQL 运维知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "PostgreSQL 活跃会话与锁等待",
+      "trigger": "请求超时、锁等待、pg_stat_activity 中 active/idle in transaction 堆积",
+      "steps": "1) SELECT * FROM pg_stat_activity WHERE state <> 'idle' ORDER BY xact_start\n2) 查 pg_locks / pg_blocking_pids 定位阻塞链\n3) 识别长事务与未提交 idle in transaction\n4) 经变更单 pg_terminate_backend 解堵\n5) 回验锁队列与应用错误率",
+      "tags": "postgres,locks,sessions"
+    },
+    {
+      "name": "PostgreSQL 慢 SQL 与 Seq Scan",
+      "trigger": "pg_stat_statements 高耗时、EXPLAIN 出现 Seq Scan、CPU IO 升高",
+      "steps": "1) 从 pg_stat_statements 取 total_exec_time Top\n2) EXPLAIN (FORMAT JSON) 分析 Node Type/Plan Rows\n3) 对高频等值/范围条件建议 CREATE INDEX CONCURRENTLY\n4) 检查统计信息是否过期（ANALYZE）\n5) 禁止生产直接 EXPLAIN ANALYZE 无审批执行写路径",
+      "tags": "postgres,slowsql,explain"
+    },
+    {
+      "name": "PostgreSQL 膨胀与 vacuum",
+      "trigger": "表膨胀、autovacuum 滞后、磁盘增长异常",
+      "steps": "1) 查 n_dead_tup / last_autovacuum\n2) 评估长事务是否阻止 vacuum\n3) 必要时手动 VACUUM (VERBOSE) 低峰执行\n4) 调整 autovacuum_vacuum_scale_factor\n5) 监控 bloat 与事务年龄",
+      "tags": "postgres,vacuum,bloat"
+    }
+  ]
+}

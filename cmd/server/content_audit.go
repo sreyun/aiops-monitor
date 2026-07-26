@@ -201,7 +201,8 @@ func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 
 func isContentPolicyBlocked(decision string) bool {
 	switch strings.ToLower(strings.TrimSpace(decision)) {
-	case "deny", "block", "blocked", "rejected":
+	case "deny", "denied", "block", "blocked", "reject", "rejected",
+		"forbid", "forbidden", "drop", "quarantine":
 		return true
 	default:
 		return false
@@ -408,6 +409,16 @@ func (s *Server) handleContentAuditHosts(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
 	}
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := make([]map[string]any, 0, len(hosts))
+		for _, h := range hosts {
+			hid, _ := h["host_id"].(string)
+			if hid != "" && s.userCanAccessHost(u, hid) {
+				filtered = append(filtered, h)
+			}
+		}
+		hosts = filtered
+	}
 	s.annotateHostNames(hosts)
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": hosts})
 }
@@ -418,6 +429,9 @@ func (s *Server) handleContentAudit(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host")
 	if hostID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
+		return
+	}
+	if !s.requireHostAccess(w, r, hostID) {
 		return
 	}
 	if s.pg == nil {
@@ -436,6 +450,23 @@ func (s *Server) handleContentAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, ev := range evs {
 		annotateLLMAuditEvent(ev)
+	}
+	// Bodies may contain prompts/PII — only admins receive raw body fields.
+	if u, ok := s.currentUser(r); !ok || roleRank(u.Role) < roleRank(RoleAdmin) {
+		for _, ev := range evs {
+			if ev == nil {
+				continue
+			}
+			if body, _ := ev["body"].(string); body != "" {
+				ev["body"] = "[redacted]"
+			}
+			if body, _ := ev["resp_body"].(string); body != "" {
+				ev["resp_body"] = "[redacted]"
+			}
+			if mode, _ := ev["body_mode"].(string); mode == "full" || mode == "legacy" {
+				ev["body_mode"] = "redacted"
+			}
+		}
 	}
 	s.store.AddLog(LogEntry{
 		Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Host: hostID,
