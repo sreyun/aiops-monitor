@@ -34,6 +34,17 @@ function hvMac(m) {
   return h.length === 12 ? h.match(/.{2}/g).join(":").toUpperCase() : String(m);
 }
 
+/** Drop GBK→UTF-8 mojibake (U+FFFD diamonds) left by older Agents. */
+function hvCleanText(s) {
+  if (s == null || s === "") return "";
+  const t = String(s).trim();
+  if (!t) return "";
+  if (/^[\uFFFD\s?◆]+$/.test(t)) return "";
+  const bad = (t.match(/\uFFFD/g) || []).length;
+  if (bad > 0 && bad * 2 >= [...t].length) return "";
+  return t;
+}
+
 function hvAbnormal(g) {
   if (g.health === "Critical") return true;
   if (g.state !== "Running") return true;
@@ -302,7 +313,9 @@ function hvOverviewCard(inv, g) {
   kv.push(hvKv(hvT("hyperv.ov_host", "宿主机"), `<a class="hv-link" data-hvjump="${esc(inv.host_id)}" data-hvname="${esc(inv.host_name || inv.host_id)}">${esc(inv.host_name || inv.host_id)} ↗</a>`));
   if (g.linked_host_id) kv.push(hvKv(hvT("hyperv.ov_linked", "关联纳管主机"), `<a class="hv-link" data-hvjump="${esc(g.linked_host_id)}" data-hvname="${esc(g.linked_host_name || g.name)}">${esc(g.linked_host_name || g.name)} ↗</a>`));
   kv.push(hvKv(hvT("hyperv.ov_gen", "代/版本"), `${g.generation ? ("Gen" + g.generation) : "—"}${g.version ? (" · " + esc(g.version)) : ""}`));
-  if (g.integration_state) kv.push(hvKv(hvT("hyperv.ov_integration", "集成服务"), esc(g.integration_state)));
+  if (g.integration_state && !/^[\uFFFD\s?]+$/.test(g.integration_state)) {
+    kv.push(hvKv(hvT("hyperv.ov_integration", "集成服务"), esc(g.integration_state)));
+  }
   if (g.repl_state && g.repl_state !== "Disabled") kv.push(hvKv(hvT("hyperv.ov_repl", "复制"), esc(g.repl_state + " / " + (g.repl_health || ""))));
   return `<div class="hv-card"><h4>${hvT("hyperv.overview", "概览")}</h4>${kv.join("")}</div>`;
 }
@@ -362,10 +375,10 @@ function hvNetCard(g) {
   } else body = hvMiniTable(
     [hvT("hyperv.nic_name", "网卡"), "MAC", hvT("hyperv.nic_switch", "虚拟交换机"), hvT("hyperv.nic_status", "状态"), "IP"],
     nics.map(n => [
-      esc(n.name || "—"),
+      esc(hvCleanText(n.name) || "—"),
       esc(hvMac(n.mac)),
-      esc(n.switch || "—"),
-      esc(n.status || (n.connected ? "Connected" : "—")),
+      esc(hvCleanText(n.switch) || "—"),
+      esc(hvCleanText(n.status) || (n.connected ? "Connected" : "—")),
       esc((n.ip_addresses || []).join(", ") || "—"),
     ]));
   const count = nics.length || ((g.ip_addresses || []).length ? 1 : 0);

@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -267,18 +268,40 @@ func (p *deskWorkerProc) kill() {
 // follow the input desktop (including the secure desktop). Must be called from
 // the SYSTEM service.
 func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerProc, error) {
+	cmdline := `--desktop-worker`
+	if cfgPath != "" {
+		cmdline += fmt.Sprintf(` --config "%s"`, cfgPath)
+	}
+	pi, err := spawnSessionProcessInfo(exePath, cmdline, session)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("已在活动会话派生远程桌面 worker",
+		"session", session, "pid", pi.DwProcessID)
+	return &deskWorkerProc{handle: pi.HProcess, pid: pi.DwProcessID, session: session}, nil
+}
+
+// spawnSessionProcess launches exe with args inside the target session (fire-and-forget).
+func spawnSessionProcess(exePath, args string, session uint32) error {
+	pi, err := spawnSessionProcessInfo(exePath, args, session)
+	if err != nil {
+		return err
+	}
+	// Detach — helper exits on its own; don't keep the process handle open forever.
+	_, _, _ = procCloseHandleSvc.Call(pi.HProcess)
+	return nil
+}
+
+func spawnSessionProcessInfo(exePath, args string, session uint32) (*processInformationW, error) {
 	if session == invalidSession {
 		return nil, fmt.Errorf("无活动控制台会话")
 	}
-
-	// Ensure the privileges CreateProcessAsUser needs are enabled (best-effort).
 	for _, p := range []string{"SeAssignPrimaryTokenPrivilege", "SeIncreaseQuotaPrivilege", "SeTcbPrivilege"} {
 		if err := enableProcessPrivilege(p); err != nil {
 			slog.Debug("启用特权失败(可能已足够)", "priv", p, "err", err)
 		}
 	}
 
-	// 1) Open our own (SYSTEM) process token.
 	curProc, _, _ := procGetCurrentProcessSvc.Call()
 	var selfTok uintptr
 	r, _, e := procOpenProcessTokenSvc.Call(
@@ -291,7 +314,6 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 	}
 	defer procCloseHandleSvc.Call(selfTok)
 
-	// 2) Duplicate it into a primary token we can retarget.
 	var dupTok uintptr
 	r, _, e = procDuplicateTokenExSvc.Call(
 		selfTok,
@@ -306,7 +328,6 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 	}
 	defer procCloseHandleSvc.Call(dupTok)
 
-	// 3) Retarget the token to the active console session.
 	sess := session
 	r, _, e = procSetTokenInformationSvc.Call(
 		dupTok,
@@ -318,11 +339,7 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 		return nil, fmt.Errorf("SetTokenInformation(SessionId=%d) 失败: %v", session, e)
 	}
 
-	// 4) Build command line: "exe" --desktop-worker --config "cfg"
-	cmdline := fmt.Sprintf(`"%s" --desktop-worker`, exePath)
-	if cfgPath != "" {
-		cmdline += fmt.Sprintf(` --config "%s"`, cfgPath)
-	}
+	cmdline := fmt.Sprintf(`"%s" %s`, exePath, strings.TrimSpace(args))
 	appW, err := syscall.UTF16PtrFromString(exePath)
 	if err != nil {
 		return nil, err
@@ -331,9 +348,6 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 	if err != nil {
 		return nil, err
 	}
-	// At the logon UI (user logged off) winsta0\default often does not exist —
-	// CreateProcessAsUser then fails. Fall back to winsta0\Winlogon so the
-	// worker can still attach and follow OpenInputDesktop.
 	var lastCreateErr error
 	for _, deskName := range []string{`winsta0\default`, `winsta0\Winlogon`} {
 		deskW, err := syscall.UTF16PtrFromString(deskName)
@@ -357,9 +371,10 @@ func spawnDesktopWorker(exePath, cfgPath string, session uint32) (*deskWorkerPro
 		)
 		if r != 0 {
 			_, _, _ = procCloseHandleSvc.Call(pi.HThread)
-			slog.Info("已在活动会话派生远程桌面 worker",
-				"session", session, "pid", pi.DwProcessID, "desktop", deskName)
-			return &deskWorkerProc{handle: pi.HProcess, pid: pi.DwProcessID, session: session}, nil
+			slog.Info("已在会话派生进程",
+				"session", session, "pid", pi.DwProcessID, "desktop", deskName, "args", args)
+			out := pi
+			return &out, nil
 		}
 		lastCreateErr = e
 		slog.Warn("CreateProcessAsUser 失败，尝试下一桌面",

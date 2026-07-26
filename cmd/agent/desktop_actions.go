@@ -89,7 +89,7 @@ func deskIsSecureName(name string) bool {
 
 func deskLockHintForDesktop(name string) string {
 	if deskIsSecureName(name) {
-		return "当前输入桌面: " + name + "。锁屏/注销请先点「Ctrl+Alt+Del」，再点「解锁」输入密码（或点「唤醒」后直接键入）。"
+		return "当前输入桌面: " + name + "。锁屏/注销请先点「Ctrl+Alt+Del」，再点「解锁」输入密码（或点「唤醒」后直接键入）。Windows Server 需 Agent≥服务版并已 --install-service。"
 	}
 	if name != "" {
 		return "当前输入桌面: " + name

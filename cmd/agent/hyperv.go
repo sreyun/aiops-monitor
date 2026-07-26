@@ -121,7 +121,7 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 			MemStartupMB: r.MemStartupMB, MemMinMB: r.MemMinMB, MemMaxMB: r.MemMaxMB,
 			DynamicMemEnabled: r.DynamicMemoryEnabled,
 			UptimeSec:         r.UptimeSec, Generation: r.Generation, Version: r.Version,
-			IntegrationState: r.IntegrationState,
+			IntegrationState: sanitizeHyperVText(r.IntegrationState),
 			IPAddresses:      splitComma(r.IP), Switches: splitComma(r.Switches),
 			VHDCount: r.VHDCount, CheckpointCount: r.CheckpointCount,
 			ReplState: r.ReplState, ReplHealth: r.ReplHealth,
@@ -138,7 +138,8 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 		unwrapArray(r.Nics, &rawNics)
 		for _, rn := range rawNics {
 			g.Nics = append(g.Nics, shared.HyperVNic{
-				Name: rn.Name, MAC: rn.MAC, Switch: rn.Switch, Status: rn.Status,
+				Name: sanitizeHyperVText(rn.Name), MAC: rn.MAC,
+				Switch: sanitizeHyperVText(rn.Switch), Status: sanitizeHyperVText(rn.Status),
 				Connected: rn.Connected, IPAddresses: splitComma(rn.IP),
 			})
 		}
@@ -165,6 +166,26 @@ func parseHyperV(out string) ([]shared.HyperVGuest, error) {
 		guests = append(guests, g)
 	}
 	return guests, nil
+}
+
+// sanitizeHyperVText trims BOM/noise and drops fields that are pure U+FFFD
+// mojibake from a prior GBK→UTF-8 mishandle (so the UI shows empty instead of
+// diamonds). Fresh collects after the UTF-8 PowerShell path should never hit this.
+func sanitizeHyperVText(s string) string {
+	s = strings.TrimSpace(strings.TrimPrefix(s, "\ufeff"))
+	if s == "" {
+		return ""
+	}
+	bad := 0
+	for _, r := range s {
+		if r == '\uFFFD' {
+			bad++
+		}
+	}
+	if bad > 0 && bad*2 >= len([]rune(s)) {
+		return ""
+	}
+	return s
 }
 
 // splitComma turns a comma-joined field into a trimmed, empty-free slice.
