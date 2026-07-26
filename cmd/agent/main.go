@@ -153,12 +153,20 @@ func main() {
 	flag.StringVar(&securityMode, "security-mode", "auto", "安全模块模式: auto(自动诊断输出修复命令)/permissive(自动切换宽容模式,2h后恢复)/enforcing(恢复强制模式)")
 	// Privileged root-daemon / session desktop-worker controls (Windows SCM,
 	// Linux systemd, macOS LaunchDaemon).
-	var svcInstall, svcUninstall, svcRun, desktopWorker bool
+	var svcInstall, svcUninstall, svcRun, desktopWorker, sendSASOnce bool
 	flag.BoolVar(&svcInstall, "install-service", false, "以 root/SYSTEM 权限安装并启动 Agent 守护进程（Windows 服务 / Linux systemd / macOS LaunchDaemon；远程桌面支持锁屏/登录及开机自启所需）")
 	flag.BoolVar(&svcUninstall, "uninstall-service", false, "停止并卸载 Agent 守护进程")
 	flag.BoolVar(&svcRun, "service", false, "内部使用：由服务管理器（SCM/systemd/launchd）以守护进程方式启动")
 	flag.BoolVar(&desktopWorker, "desktop-worker", false, "内部使用：由守护进程派生、运行于活动图形会话的远程桌面 worker")
+	flag.BoolVar(&sendSASOnce, "send-sas", false, "内部使用：在目标会话内注入一次 Ctrl+Alt+Del（Windows Server 锁屏兼容）")
 	flag.Parse()
+
+	if sendSASOnce {
+		if err := runSendSASOnce(); err != nil {
+			log.Fatalf("send-sas 失败: %v", err)
+		}
+		return
+	}
 
 	// Service install/uninstall are one-shot admin actions handled before the
 	// (config-heavy) agent bootstrap. Install embeds the resolved absolute config

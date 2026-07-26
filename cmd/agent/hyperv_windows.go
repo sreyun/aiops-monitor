@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"os/exec"
 	"strings"
 	"time"
 	"unsafe"
@@ -26,14 +28,27 @@ const hypervProbeScript = `if (Get-Service -Name vmms -ErrorAction SilentlyConti
 // then network adapters and checkpoints each fetched with one pipeline and
 // grouped by VMName (no per-VM N+1). IP / switch lists are emitted comma-joined
 // as strings so the Go side never hits PS 5.1's "a single-element array property
-// serializes as a scalar" JSON quirk. All health-relevant fields (State,
-// ReplicationState/Health) are non-localized enums, so parsing is locale-safe.
+// serializes as a scalar" JSON quirk.
+//
+// Localized strings (IntegrationServicesState / NIC Name on zh-CN Server) must
+// leave PowerShell as UTF-8: the console ACP is GBK and would otherwise produce
+// U+FFFD mojibake after Go's json.Unmarshal. We force UTF-8 OutputEncoding and
+// write the JSON bytes directly to stdout (bypassing the legacy console CP).
 const hypervScript = `$ErrorActionPreference='SilentlyContinue'
 $ProgressPreference='SilentlyContinue'
+try {
+  [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+  $OutputEncoding = [Console]::OutputEncoding
+} catch {}
+function Write-Utf8Json([string]$j) {
+  $enc = New-Object System.Text.UTF8Encoding $false
+  $bytes = $enc.GetBytes([string]$j)
+  [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+}
 try { $vms=@(Get-VM -ErrorAction Stop) } catch {
   $adm=$false
   try { $adm=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator) } catch {}
-  ConvertTo-Json -InputObject @{'__hyperv_error__'=$true;'elevated'=$adm;'message'=[string]$_.Exception.Message} -Compress
+  Write-Utf8Json (ConvertTo-Json -InputObject @{'__hyperv_error__'=$true;'elevated'=$adm;'message'=[string]$_.Exception.Message} -Compress)
   exit 0
 }
 # Per-VM CPU via locale-safe WMI perf counters. Get-VM.CPUUsage is frequently 0/stale
@@ -118,7 +133,8 @@ $out=foreach($vm in $vms){
     Checkpoints=@($cpMap[$n] | Where-Object {$_})
   }
 }
-if($out){ ConvertTo-Json -InputObject @($out) -Depth 6 -Compress } else { '[]' }`
+$json = if($out){ ConvertTo-Json -InputObject @($out) -Depth 6 -Compress } else { '[]' }
+Write-Utf8Json $json`
 
 // hypervAvailable reports whether Hyper-V guest collection can run here. The probe
 // (a vmms service lookup) is instant, but keep a modest timeout so a momentarily
@@ -133,16 +149,28 @@ func hypervAvailable() bool {
 // physical host's own memory (for the "宿主机名 · 可用/总内存" display).
 func hypervCollect() ([]shared.HyperVGuest, hypervHostStats, error) {
 	var hs hypervHostStats
-	out, err := runCmdTimeout(hypervCollectTimeout, "powershell", "-NoProfile", "-NonInteractive", "-Command", hypervScript)
-	if err != nil {
+	raw, err := runHyperVPowerShell(hypervCollectTimeout, hypervScript)
+	if err != nil && len(raw) == 0 {
 		return nil, hs, err
 	}
+	// Belt-and-suspenders: if an older PS path still emitted ACP/GBK, convert
+	// before json.Unmarshal (which otherwise replaces invalid UTF-8 with U+FFFD).
+	out := string(ensureUTF8(raw))
 	guests, perr := parseHyperV(out)
 	if perr != nil {
 		return nil, hs, perr
 	}
 	hs.TotalMemMB, hs.AvailMemMB = hostPhysMemMB()
 	return guests, hs, nil
+}
+
+// runHyperVPowerShell runs a Hyper-V collection script and returns raw stdout
+// bytes (preferred over runCmdTimeout's string cast, which loses encoding info).
+func runHyperVPowerShell(d time.Duration, script string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	return cmd.Output()
 }
 
 // hostPhysMemMB returns the physical host's total and available RAM in MB via
