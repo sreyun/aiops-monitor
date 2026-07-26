@@ -44,6 +44,8 @@ type WebScanTarget struct {
 	Exclude         []string          `json:"exclude,omitempty"`
 	Tags            []string          `json:"tags,omitempty"`
 	Templates       []string          `json:"templates,omitempty"`
+	// ScanURLs are additional absolute URLs (e.g. from OpenAPI import) passed as Nuclei -u.
+	ScanURLs        []string          `json:"scan_urls,omitempty"`
 	Schedule        *PlaybookSchedule `json:"schedule,omitempty"`
 	AllowPrivate    bool              `json:"allow_private,omitempty"` // per-target; still needs global allow
 	LastScanAt      int64             `json:"last_scan_at,omitempty"`
@@ -63,6 +65,7 @@ type WebSecurityConfig struct {
 	UpdateTemplates bool            `json:"update_templates"`
 	ScanConcurrency int             `json:"scan_concurrency,omitempty"`
 	DefaultsGen     int             `json:"defaults_gen,omitempty"` // bumps one-time shipped-default migrations
+	AutoAISummary   bool            `json:"auto_ai_summary,omitempty"`
 	Targets         []WebScanTarget `json:"targets,omitempty"`
 }
 
@@ -433,11 +436,14 @@ type WebScanResult struct {
 	FinishedAt int64          `json:"finished_at,omitempty"`
 	Status     string         `json:"status"`
 	Error      string         `json:"error,omitempty"`
-	Findings   []WebFinding   `json:"findings"`
-	Summary    map[string]int `json:"summary"`
-	Operator   string         `json:"operator,omitempty"`
-	Trigger    string         `json:"trigger,omitempty"`
-	Report     *ScanReport    `json:"report,omitempty"`
+	Findings     []WebFinding      `json:"findings"`
+	Summary      map[string]int    `json:"summary"`
+	Operator     string            `json:"operator,omitempty"`
+	Trigger      string            `json:"trigger,omitempty"`
+	Report       *ScanReport       `json:"report,omitempty"`
+	BaselineDiff *ScanBaselineDiff `json:"baseline_diff,omitempty"`
+	AISummary    string            `json:"ai_summary,omitempty"`
+	AISummaryAt  int64             `json:"ai_summary_at,omitempty"`
 }
 
 // ScanReport is a structured professional report for export / AI.
@@ -1052,6 +1058,21 @@ func (s *Server) completeWebScan(scanID string) {
 
 	findings, err := s.execNuclei(cfg, t)
 	finished := time.Now().Unix()
+
+	var prevFindings []WebFinding
+	var prevID string
+	s.webSec.mu.Lock()
+	for _, sc := range s.webSec.scans { // newest-first
+		if sc == nil || sc.TargetID != t.ID || sc.Status != "completed" || sc.ID == scanID {
+			continue
+		}
+		prevFindings = sc.Findings
+		prevID = sc.ID
+		break
+	}
+	s.webSec.mu.Unlock()
+	baseDiff := diffWebFindings(prevFindings, findings, prevID)
+
 	applied := s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
 		live.FinishedAt = finished
 		live.Summary = map[string]int{}
@@ -1062,6 +1083,7 @@ func (s *Server) completeWebScan(scanID string) {
 			}
 			live.Report = buildWebScanReport(t, findings)
 		}
+		live.BaselineDiff = baseDiff
 		if err != nil {
 			live.Status = "failed"
 			live.Error = zhWebSecErr(err.Error())
@@ -1072,6 +1094,10 @@ func (s *Server) completeWebScan(scanID string) {
 	})
 	if applied && err == nil {
 		s.cfg.touchWebTargetScan(t.ID, finished)
+		if done := s.webSec.get(scanID); done != nil {
+			s.notifyWebSecurityScanCompleted(done)
+			s.maybeWebSecurityAISummary(done)
+		}
 	}
 }
 
@@ -1597,7 +1623,6 @@ func buildNucleiRunArgs(cfg WebSecurityConfig, t WebScanTarget, tplDir string, a
 		severity = "critical,high,medium,low,info"
 	}
 	args := []string{
-		"-u", t.BaseURL,
 		"-jsonl",
 		"-silent",
 		"-severity", severity,
@@ -1610,6 +1635,29 @@ func buildNucleiRunArgs(cfg WebSecurityConfig, t WebScanTarget, tplDir string, a
 		"-disable-update-check",
 		"-nh",       // skip httpx probing — target URL is already known
 		"-omit-raw", // shrink JSONL IO on the hot path
+	}
+	seenU := map[string]bool{}
+	addU := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			return
+		}
+		k := strings.ToLower(u)
+		if seenU[k] {
+			return
+		}
+		seenU[k] = true
+		args = append(args, "-u", u)
+	}
+	addU(t.BaseURL)
+	for _, u := range t.ScanURLs {
+		addU(u)
+		if len(seenU) >= 80 {
+			break
+		}
+	}
+	if len(seenU) == 0 {
+		args = append(args, "-u", t.BaseURL)
 	}
 	args = append(args, buildNucleiTemplateArgs(tplDir, t)...)
 	for _, p := range t.Include {

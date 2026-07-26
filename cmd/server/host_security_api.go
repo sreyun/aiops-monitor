@@ -121,6 +121,9 @@ func (s *Server) handleSetHostSecurityConfig(w http.ResponseWriter, r *http.Requ
 		c.DisableClamAV = cur.DisableClamAV
 	}
 	c.EnableClamAV = !c.DisableClamAV
+	if _, ok := raw["auto_ai_summary"]; !ok {
+		c.AutoAISummary = cur.AutoAISummary
+	}
 	if err := s.cfg.SetHostSecurity(c); err != nil {
 		writeSecErr(w, http.StatusBadRequest, err.Error())
 		return

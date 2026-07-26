@@ -17,6 +17,7 @@ let wsSevPick = ["critical", "high", "medium", "low", "info"];
 let wsAuthType = "none";
 let wsProfilePick = "standard"; // quick | standard | deep | custom
 let wsShowPacks = false;
+let wsPendingFilter = null; // { level } from security overview
 
 const wsT = (k, fb) => I18N.t(k, fb);
 function wsEsc(s) { return typeof esc === "function" ? esc(String(s ?? "")) : String(s ?? ""); }
@@ -255,6 +256,8 @@ function wsCfgPanelHTML() {
           <span>${wsEsc(wsT("ws.allow_private", "允许扫描私网地址（有 SSRF 风险）"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="wsCfgUpdate"${wsCfg.update_templates ? " checked" : ""}>
           <span>${wsEsc(wsT("ws.update_templates", "启动时增量更新模板"))}</span></label>
+        <label class="switch cfg-enable"><input type="checkbox" id="wsCfgAISummary"${wsCfg.auto_ai_summary ? " checked" : ""}>
+          <span>${wsEsc(wsT("ws.cfg_ai_summary", "扫描完成后自动 AI 摘要"))}</span></label>
       </div>
     </div>
     <div class="cfg-actions">
@@ -393,6 +396,11 @@ function wsFormPanelHTML() {
         </div>
         ${wsAuthFieldsHTML()}
         ${wsScheduleFieldsHTML(t)}
+        ${editing ? `<div class="field"><label>${wsEsc(wsT("ws.openapi_scope", "OpenAPI 扩大扫描范围"))}</label>
+          <textarea id="wsFormOpenAPI" rows="4" class="mono" placeholder='粘贴 OpenAPI 3 / Swagger 2 JSON'></textarea>
+          <p class="ws-help">解析 paths 为额外 URL（最多 80），写入本目标 scan_urls，Nuclei 多 -u 扫描。当前已有 ${(t.scan_urls || []).length} 条。</p>
+          <button type="button" class="btn sm" data-ws="import-openapi">${wsEsc(wsT("ws.import_openapi", "导入 OpenAPI 范围"))}</button>
+        </div>` : ""}
         <div class="cfg-actions ws-form-actions">
           <button type="button" class="btn primary" data-ws="save-target">${wsEsc(editing ? wsT("common.save", "保存修改") : wsT("ws.save_enable", "保存并启用"))}</button>
           <button type="button" class="btn" data-ws="cancel-form">${wsEsc(wsT("common.cancel", "取消"))}</button>
@@ -588,9 +596,34 @@ function wsLatestSummary() {
   return { crit, high, hits, running: wsScans.filter(s => s.status === "running").length };
 }
 
+function wsFindingMatchesFilter(f, level) {
+  if (!f) return false;
+  const st = String(f.status || "open").toLowerCase();
+  if (st === "resolved" || st === "false_positive" || st === "ack" || st === "accepted") return false;
+  const sev = String(f.severity || "").toLowerCase();
+  if (level === "critical") return sev === "critical" || sev === "crit";
+  if (level === "high") return sev === "high";
+  return sev === "critical" || sev === "crit" || sev === "high";
+}
+
+function wsPendingBannerHTML() {
+  if (!wsPendingFilter || !wsPendingFilter.level) return "";
+  const label = wsPendingFilter.level === "critical"
+    ? wsT("ws.filter_crit", "仅显示开放危急项")
+    : wsPendingFilter.level === "high"
+      ? wsT("ws.filter_high", "仅显示开放高危项")
+      : wsT("ws.filter_open", "仅显示开放危急/高危项");
+  return `<div class="sec-notice sec-notice-slim">${wsEsc(label)}
+    <button type="button" class="btn sm ghost" data-ws="clear-filter">${wsEsc(wsT("ws.clear_filter", "清除筛选"))}</button></div>`;
+}
+
 async function renderWebSecurity() {
   const el = $("webSecurityPanel");
   if (!el) return;
+  if (typeof window.secConsumePendingFilter === "function") {
+    const f = window.secConsumePendingFilter("web-security");
+    if (f) wsPendingFilter = f;
+  }
   el.innerHTML = `<div class="loading-dots">${wsT("common.loading", "加载中...")}</div>`;
   try {
     const [t, s, cfg, eng] = await Promise.all([
@@ -606,6 +639,10 @@ async function renderWebSecurity() {
     if (wsCfg && wsCfg.severity) {
       wsSevPick = String(wsCfg.severity).split(",").map(x => x.trim()).filter(Boolean);
     }
+    if (wsPendingFilter && wsPendingFilter.level && !wsSelected) {
+      const hit = (wsScans || []).find(s => s.status === "completed" && (s.findings || []).some(f => wsFindingMatchesFilter(f, wsPendingFilter.level)));
+      if (hit) wsSelected = hit;
+    }
     paintWebSecurity();
     wsMaybePoll();
   } catch (err) {
@@ -619,6 +656,7 @@ function paintWebSecurity() {
   const sum = wsLatestSummary();
   let html = `<div class="ws-shell sec-shell">`;
   html += `<div class="sec-notice sec-notice-slim">${wsEsc(wsT("ws.notice", "Nuclei 仅扫 http(s)；支持定时（≥15 分钟）。默认禁私网；0 命中≠绝对安全。"))}</div>`;
+  html += wsPendingBannerHTML();
   html += wsEngineBarHTML();
   html += `<div class="sec-metrics">
     <div class="sec-metric"><b>${wsTargets.length}</b><span>${wsEsc(wsT("ws.stat_targets", "目标"))}</span></div>
@@ -630,7 +668,8 @@ function paintWebSecurity() {
   html += `<div class="sec-toolbar"><div class="sec-toolbar-actions">
     <button class="btn primary" data-ws="add">${wsEsc(wsT("ws.add_target", "添加目标"))}</button>
     <button class="btn" data-ws="refresh">${wsEsc(wsT("common.refresh", "刷新"))}</button>
-    <button class="btn nf-ai-btn" data-ws="ai">${wsEsc(wsT("ai.analyze", "AI 分析"))}</button>
+    <button class="btn nf-ai-btn" data-ws="ai-diag" title="${wsEsc(wsT("ws.ai_diag_tip", "研判风险、优先级与疑似误报"))}">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}</button>
+    <button class="btn nf-ai-btn" data-ws="ai-rem" title="${wsEsc(wsT("ws.ai_rem_tip", "生成可确认执行的修复/复扫计划"))}">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}</button>
     ${wsExportMenuHTML(false)}
   </div></div>`;
   html += wsCfgPanelHTML();
@@ -837,11 +876,14 @@ function wsAction(act) {
     return paintWebSecurity();
   }
   if (act === "save-target") return wsSaveTarget();
+  if (act === "import-openapi") return wsImportOpenAPI();
   if (act === "cfg") { wsShowCfg = !wsShowCfg; wsShowForm = false; return paintWebSecurity(); }
   if (act === "toggle-packs") { wsShowPacks = !wsShowPacks; return paintWebSecurity(); }
   if (act === "save-cfg") return wsSaveCfg();
   if (act === "refresh-tpl") return wsRefreshTemplates();
-  if (act === "ai") return wsAI();
+  if (act === "ai" || act === "ai-diag") return wsAI("diagnosis");
+  if (act === "ai-rem") return wsAI("remediation");
+  if (act === "clear-filter") { wsPendingFilter = null; return paintWebSecurity(); }
   if (act === "export-toggle") {
     const menu = $("wsExportMenu");
     if (menu) menu.classList.toggle("show");
@@ -946,6 +988,37 @@ async function wsSaveTarget() {
   }
 }
 
+async function wsImportOpenAPI() {
+  const id = wsEditTarget && wsEditTarget.id;
+  if (!id) {
+    if (typeof toast === "function") toast(wsT("ws.openapi_need_save", "请先保存目标后再导入 OpenAPI"), "err");
+    return;
+  }
+  const spec = ($("wsFormOpenAPI") && $("wsFormOpenAPI").value) || "";
+  if (!String(spec).trim()) {
+    if (typeof toast === "function") toast("请粘贴 OpenAPI JSON", "err");
+    return;
+  }
+  try {
+    const j = await wsFetchJSON(`${API}/security/web/targets/import-openapi`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_id: id,
+        base_url: ($("wsFormURL") && $("wsFormURL").value) || wsEditTarget.base_url || "",
+        spec,
+        replace: false,
+      }),
+    });
+    if (typeof toast === "function") toast(`已导入 ${j.imported || 0} 条 URL（合计 ${j.url_count || 0}）`, "ok");
+    wsEditTarget = j.target || wsEditTarget;
+    renderWebSecurity();
+    // reopen edit with updated scan_urls
+    if (wsEditTarget && wsEditTarget.id) wsStartEdit(wsEditTarget.id);
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  }
+}
+
 async function wsSaveCfg() {
   const status = $("wsCfgStatus");
   const sev = (wsSevPick.length ? wsSevPick : ["critical", "high", "medium", "low", "info"]).join(",");
@@ -959,6 +1032,7 @@ async function wsSaveCfg() {
     templates_dir: (wsCfg && wsCfg.templates_dir) || "",
     concurrency: parseInt(($("wsCfgConc") && $("wsCfgConc").value) || ((wsCfg && wsCfg.concurrency) || 25), 10),
     scan_concurrency: parseInt(($("wsCfgScanConc") && $("wsCfgScanConc").value) || ((wsCfg && wsCfg.scan_concurrency) || 3), 10),
+    auto_ai_summary: !!($("wsCfgAISummary") && $("wsCfgAISummary").checked),
   };
   try {
     wsCfg = await wsFetchJSON(`${API}/security/web/config`, {
@@ -1065,9 +1139,19 @@ function wsPaintDetail(scan) {
     </div>
     <div class="ws-detail-actions">
       ${wsStatusBadge(scan.status)}
-      ${canExport ? `<button class="btn sm primary" data-ws="export-toggle">${wsEsc(wsT("ws.export", "导出报告"))}</button>` : ""}
+      ${canExport ? `<button class="btn sm nf-ai-btn" data-ws="ai-diag">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}</button>
+      <button class="btn sm nf-ai-btn" data-ws="ai-rem">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}</button>
+      <button class="btn sm primary" data-ws="export-toggle">${wsEsc(wsT("ws.export", "导出报告"))}</button>` : ""}
     </div></div>`;
   if (scan.error) html += `<div class="sec-error-box">${wsEsc(scan.error)}</div>`;
+  if (scan.baseline_diff) {
+    const d = scan.baseline_diff;
+    html += `<div class="hint" style="margin:8px 0">较上次：新增 <b>${d.added || 0}</b> · 消失 <b>${d.removed || 0}</b> · 恶化 <b>${d.worsened || 0}</b> · 缓解 <b>${d.improved || 0}</b></div>`;
+  }
+  if (scan.ai_summary) {
+    html += `<div class="sec-remediation" style="margin:8px 0"><div class="cfg-panel-title">${wsEsc(wsT("ws.ai_summary", "AI 摘要"))}</div>
+      <pre class="mono" style="white-space:pre-wrap;margin:0;font-size:12px">${wsEsc(scan.ai_summary)}</pre></div>`;
+  }
   if (rep.executive) html += `<p class="ws-exec">${wsEsc(rep.executive)}</p>`;
   html += `<div class="sec-metrics compact">
     <div class="sec-metric crit"><b>${counts.critical || 0}</b><span>${wsEsc(wsT("ws.sev_critical", "危急"))}</span></div>
@@ -1083,17 +1167,28 @@ function wsPaintDetail(scan) {
       <p>${wsEsc(wsT("ws.no_findings_help", "可尝试：扩大模板范围（标准/深度）、勾选「信息」级、确认目标可从服务端访问。0 命中不代表绝对无风险。"))}</p>
     </div>`;
   } else {
-    html += `<div class="ws-findings">`;
-    findings.forEach(f => {
-      html += `<article class="ws-finding">
-        <header>${wsSevBadge(f.severity)}<strong>${wsEsc(f.name || f.template_id)}</strong>
-          <code class="mono muted">${wsEsc(f.template_id || "")}</code>${wsFindingStatusSelect(f)}</header>
-        <div class="mono sec-url" title="${wsEsc(f.url || f.matched_at || "")}">${wsEsc(f.url || f.matched_at || "")}</div>
-        ${f.description ? `<p>${wsEsc(f.description)}</p>` : ""}
-        ${f.remediation ? `<div class="ws-fix"><span>${wsEsc(wsT("ws.remediation", "修复建议"))}</span>${wsEsc(f.remediation)}</div>` : ""}
-      </article>`;
+    const filterLevel = wsPendingFilter && wsPendingFilter.level;
+    const shown = [];
+    findings.forEach((f, idx) => {
+      if (filterLevel && !wsFindingMatchesFilter(f, filterLevel)) return;
+      shown.push({ f, idx });
     });
-    html += `</div>`;
+    if (filterLevel && !shown.length) {
+      html += `<div class="ws-empty-findings"><h4>${wsEsc(wsT("ws.no_filtered", "当前筛选下无待处置项"))}</h4></div>`;
+    } else {
+      html += `<div class="ws-findings">`;
+      shown.forEach(({ f, idx }) => {
+        html += `<article class="ws-finding">
+          <header>${wsSevBadge(f.severity)}<strong>${wsEsc(f.name || f.template_id)}</strong>
+            <code class="mono muted">${wsEsc(f.template_id || "")}</code>${wsFindingStatusSelect(f)}
+            <button type="button" class="btn sm nf-ai-btn" data-ws-finding="${idx}" title="${wsEsc(wsT("ws.ai_finding_tip", "针对本条给出研判与修复建议"))}">${wsEsc(wsT("ws.ai_finding", "AI 建议"))}</button></header>
+          <div class="mono sec-url" title="${wsEsc(f.url || f.matched_at || "")}">${wsEsc(f.url || f.matched_at || "")}</div>
+          ${f.description ? `<p>${wsEsc(f.description)}</p>` : ""}
+          ${f.remediation ? `<div class="ws-fix"><span>${wsEsc(wsT("ws.remediation", "修复建议"))}</span>${wsEsc(f.remediation)}</div>` : ""}
+        </article>`;
+      });
+      html += `</div>`;
+    }
   }
   if ((rep.remediation || []).length) {
     html += `<div class="sec-remediation"><div class="cfg-panel-title">${wsEsc(wsT("ws.remediation", "汇总建议"))}</div><ul>`;
@@ -1114,6 +1209,11 @@ function wsPaintDetail(scan) {
       if (finding) wsUpdateFindingStatus(finding, sel.value);
     });
   });
+  box.querySelectorAll("[data-ws-finding]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const idx = parseInt(b.dataset.wsFinding, 10);
+    wsAIFinding(scan, idx);
+  }));
   box.querySelectorAll("[data-ws]").forEach(b => b.addEventListener("click", ev => {
     ev.stopPropagation();
     wsAction(b.dataset.ws);
@@ -1238,33 +1338,91 @@ async function wsDoExport(fmt) {
   }
 }
 
-function wsAI() {
-  if (!wsSelected || wsSelected.status !== "completed") {
+function wsAIContext(scan, maxFindings) {
+  const model = wsBuildReportModel(scan);
+  const targetId = scan.target_id || "";
+  return {
+    targetId,
+    text: (model.narrative + "\n\n" + JSON.stringify({
+      target_id: targetId,
+      target_name: scan.target_name,
+      base_url: scan.base_url,
+      meta: model.meta,
+      findings: (scan.findings || []).slice(0, maxFindings || 40),
+    }, null, 2)).slice(0, 14000),
+  };
+}
+
+function wsAI(kind) {
+  if (!wsSelected || (wsSelected.status !== "completed" && wsSelected.status !== "failed")) {
     if (typeof toast === "function") toast(wsT("ws.pick_scan_done", "请先选择一条已完成的扫描"), "err");
     return;
   }
-  const model = wsBuildReportModel(wsSelected);
-  const targetId = wsSelected.target_id || "";
-  if (typeof openAIAssist === "function") {
+  const mode = kind === "remediation" ? "remediation" : "diagnosis";
+  const { targetId, text } = wsAIContext(wsSelected, 40);
+  if (typeof openAIAssist !== "function") return;
+  if (mode === "remediation") {
     openAIAssist({
       task: "web_vuln_remediation", mode: "analyze",
-      title: wsT("ws.ai_title", "AI · Web 漏洞修复"),
-      context: (model.narrative + "\n\n" + JSON.stringify({
-        target_id: targetId,
-        meta: model.meta,
-        findings: (wsSelected.findings || []).slice(0, 40),
-      }, null, 2)).slice(0, 14000),
+      title: wsT("ws.ai_rem_title", "AI · Web 漏洞修复计划"),
+      context: text,
       applyLabel: wsT("ai.apply_actions", "应用建议动作"),
-      applyTo: async (text) => {
+      applyTo: async (code) => {
         if (typeof window.applyOpsActionPlan !== "function") return false;
-        return window.applyOpsActionPlan(text, {
+        return window.applyOpsActionPlan(code, {
           source: "web-security",
           targetId,
           refresh: () => renderWebSecurity(),
         });
       },
     });
+    return;
   }
+  openAIAssist({
+    task: "web_vuln_diagnosis", mode: "analyze",
+    title: wsT("ws.ai_diag_title", "AI · Web 漏洞研判"),
+    context: text,
+    hint: wsT("ws.ai_diag_hint", "正在研判站点风险、优先级与疑似误报…"),
+  });
+}
+
+function wsAIFinding(scan, idx) {
+  if (!scan || typeof openAIAssist !== "function") return;
+  const findings = scan.findings || [];
+  const f = findings[idx];
+  if (!f) {
+    if (typeof toast === "function") toast(wsT("ws.finding_missing", "未找到该命中项"), "err");
+    return;
+  }
+  const ctx = {
+    target_id: scan.target_id,
+    target_name: scan.target_name,
+    base_url: scan.base_url,
+    finding: f,
+    peers_same_template: findings.filter(x => x !== f && x.template_id === f.template_id).slice(0, 5).map(x => ({
+      severity: x.severity, matcher_name: x.matcher_name, url: x.url || x.matched_at,
+    })),
+  };
+  openAIAssist({
+    task: "web_vuln_finding", mode: "analyze",
+    title: wsT("ws.ai_finding_title", "AI · 单条漏洞建议") + " · " + (f.name || f.template_id || "").slice(0, 40),
+    context: JSON.stringify(ctx, null, 2).slice(0, 12000),
+    hint: wsT("ws.ai_finding_hint", "正在分析本条 finding 的真伪、影响与修复步骤…"),
+    applyLabel: wsT("ws.ai_apply_status", "按建议更新状态"),
+    applyTo: async (text) => {
+      const low = String(text || "").toLowerCase();
+      let status = "";
+      if (/\bfalse[_\s-]?positive\b/.test(low) || low.includes("误报")) status = "false_positive";
+      else if (/\bresolved\b/.test(low) || low.includes("已修复") || low.includes("可关闭")) status = "resolved";
+      else if (/\back\b/.test(low) || low.includes("已知接受") || low.includes("暂时接受")) status = "ack";
+      if (!status) {
+        if (typeof toast === "function") toast(wsT("ws.ai_status_unclear", "未从回复中识别到明确状态建议，请手动选择"), "warn");
+        return false;
+      }
+      await wsUpdateFindingStatus(f, status);
+      return true;
+    },
+  });
 }
 
 window._pageRenderers = window._pageRenderers || {};

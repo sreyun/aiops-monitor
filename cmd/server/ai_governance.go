@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,14 +31,51 @@ type aiToolAuditEntry struct {
 }
 
 type aiGovHub struct {
-	mu      sync.Mutex
-	quota   map[string]aiQuotaDay // username → day count
-	tools   []aiToolAuditEntry
-	toolCap int
+	mu       sync.Mutex
+	quota    map[string]aiQuotaDay // username → day count
+	tools    []aiToolAuditEntry
+	toolCap  int
+	path     string
+	onRecord func(aiToolAuditEntry) // optional SIEM/export hook
 }
 
 func newAIGovHub() *aiGovHub {
 	return &aiGovHub{quota: map[string]aiQuotaDay{}, toolCap: 500}
+}
+
+func (h *aiGovHub) load(path string) {
+	if h == nil || path == "" {
+		return
+	}
+	h.mu.Lock()
+	h.path = path
+	h.mu.Unlock()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var entries []aiToolAuditEntry
+	if json.Unmarshal(b, &entries) != nil {
+		return
+	}
+	h.mu.Lock()
+	h.tools = entries
+	if len(h.tools) > h.toolCap {
+		h.tools = h.tools[:h.toolCap]
+	}
+	h.mu.Unlock()
+}
+
+func (h *aiGovHub) saveLocked() {
+	if h.path == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(h.path), 0o750)
+	b, err := json.MarshalIndent(h.tools, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(h.path, b, 0o640)
 }
 
 func (h *aiGovHub) checkAndIncrQuota(user string, limit int) (ok bool, used, lim int) {
@@ -70,7 +110,12 @@ func (h *aiGovHub) recordTool(e aiToolAuditEntry) {
 	if len(h.tools) > h.toolCap {
 		h.tools = h.tools[:h.toolCap]
 	}
+	h.saveLocked()
+	hook := h.onRecord
 	h.mu.Unlock()
+	if hook != nil {
+		hook(e)
+	}
 }
 
 func (h *aiGovHub) listTools(limit int) []aiToolAuditEntry {
@@ -136,4 +181,37 @@ func (s *Server) aiGovAllowRequest(r *http.Request) (bool, string) {
 		return false, "AI 日配额已用尽（" + itoa(used) + "/" + itoa(lim) + "），请明日再试或联系管理员提高配额"
 	}
 	return true, ""
+}
+
+// exportAIToolAuditEntry forwards AI write-tool actions to the audit-export pipeline.
+func (s *Server) exportAIToolAuditEntry(e aiToolAuditEntry) {
+	if s == nil {
+		return
+	}
+	level := "info"
+	if e.Blocked {
+		level = "warning"
+	}
+	action := e.Action
+	if action == "" {
+		action = e.Tool
+	}
+	msg := "AI工具审计 " + e.Tool + " " + action
+	if e.Blocked {
+		msg += " [blocked]"
+	} else if e.Approved {
+		msg += " [approved]"
+	}
+	if e.Detail != "" {
+		msg += ": " + truncateRun(e.Detail, 200)
+	}
+	entry := LogEntry{
+		Timestamp: e.Timestamp,
+		Kind:      KindOperation,
+		Level:     level,
+		Actor:     e.Actor,
+		Host:      e.HostID,
+		Message:   msg,
+	}
+	s.exportAuditEntry(entry)
 }

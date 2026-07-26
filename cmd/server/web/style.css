@@ -4623,6 +4623,11 @@ body.dash-fullscreen #dashFullscreenBtn { display: inline-flex !important; }
 .sec-metric.high b{ color:#d96a28 }
 .sec-metric.med b{ color:var(--warn-txt) }
 .sec-metric.ok b{ color:var(--ok-txt, var(--ok)) }
+button.sec-metric.sec-kpi-btn{
+  appearance:none; -webkit-appearance:none; font:inherit; text-align:left; cursor:pointer;
+  color:inherit; width:auto;
+}
+button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--accent, #3b82f6) 45%, var(--line)); }
 .sec-toolbar{
   display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin:0;
 }

@@ -31,6 +31,8 @@ type HostSecurityConfig struct {
 	EnableClamAV  bool              `json:"enable_clamav"` // kept for API/UI; see clamAVEnabled()
 	DisableClamAV bool              `json:"disable_clamav,omitempty"`
 	TimeoutSec    int               `json:"timeout_sec,omitempty"`
+	// AutoAISummary runs host_security_diagnosis after completed scans (non-blocking).
+	AutoAISummary bool `json:"auto_ai_summary,omitempty"`
 }
 
 func (c HostSecurityConfig) withDefaults() HostSecurityConfig {
@@ -181,6 +183,9 @@ type HostScanResult struct {
 	Remediation    []string       `json:"remediation,omitempty"`
 	Operator       string         `json:"operator,omitempty"`
 	Trigger        string         `json:"trigger,omitempty"` // manual|schedule
+	BaselineDiff   *ScanBaselineDiff `json:"baseline_diff,omitempty"`
+	AISummary      string            `json:"ai_summary,omitempty"`
+	AISummaryAt    int64             `json:"ai_summary_at,omitempty"`
 }
 
 type hostSecurityManager struct {
@@ -1092,7 +1097,17 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	score, risk, summary := scoreHostFindings(findings)
 	tips := buildRemediation(rep, findings)
 
-	_ = s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
+	var prevFindings []HostFinding
+	var prevID string
+	s.hostSec.mu.Lock()
+	if prev := s.hostSec.lastByHost[hostID]; prev != nil && prev.Status == "completed" && prev.ID != scanID {
+		prevFindings = prev.Findings
+		prevID = prev.ID
+	}
+	s.hostSec.mu.Unlock()
+	baseDiff := diffHostFindings(prevFindings, findings, prevID)
+
+	applied := s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
 		live.FinishedAt = finished
 		if rep.Hostname != "" {
 			live.Hostname = rep.Hostname
@@ -1117,9 +1132,16 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 		live.Risk = risk
 		live.Summary = summary
 		live.Remediation = tips
+		live.BaselineDiff = baseDiff
 		live.Status = "completed"
 		live.Error = ""
 	})
+	if applied {
+		if done := s.hostSec.get(scanID); done != nil {
+			s.notifyHostSecurityScanCompleted(done)
+			s.maybeHostSecurityAISummary(done)
+		}
+	}
 }
 
 // runHostSecurityScan is used by the scheduler (synchronous worker path).

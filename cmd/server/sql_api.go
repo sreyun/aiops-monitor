@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"aiops-monitor/cmd/server/sqltoolkit"
 )
@@ -175,12 +176,20 @@ func (s *Server) handleTestMySQLConnection(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	ver, err := mysqlTestConnection(c)
+	var (
+		ver string
+		err error
+	)
+	if driverOf(c) == "postgres" {
+		ver, err = pgPing(c)
+	} else {
+		ver, err = mysqlTestConnection(c)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": ver})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": ver, "driver": driverOf(c)})
 }
 
 func (s *Server) handleMySQLExplain(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +204,15 @@ func (s *Server) handleMySQLExplain(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if driverOf(c) == "postgres" {
+		res, err := pgExplain(c, req.SQL)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 	res, err := mysqlExplain(c, req.SQL)
@@ -212,13 +230,69 @@ func (s *Server) handleMySQLSchema(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connection not found or disabled"})
 		return
 	}
+	if driverOf(c) == "postgres" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"driver":  "postgres",
+			"message": "PostgreSQL 请使用 Schema 健康检查；表浏览器暂仅 MySQL",
+			"tables":  []any{},
+		})
+		return
+	}
+	database := strings.TrimSpace(r.URL.Query().Get("database"))
 	table := strings.TrimSpace(r.URL.Query().Get("table"))
-	res, err := mysqlSchema(c, table)
+	res, err := mysqlSchema(c, database, table)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleSlowSQLRun(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection id required"})
+		return
+	}
+	rep, err := s.runSlowSQLCollect(id, "manual")
+	if err != nil {
+		if strings.Contains(err.Error(), "正在进行中") {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		if rep == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		// Collection failed but report persisted — return body for UI.
+	}
+	if rep != nil {
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r),
+			Message: fmt.Sprintf("慢 SQL 检查 conn=%s status=%s items=%d", rep.ConnectionName, rep.Status, rep.ItemCount)})
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
+func (s *Server) handleSlowSQLLatest(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if s.sqlSlow == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"report": nil})
+		return
+	}
+	rep := s.sqlSlow.getLatest(id)
+	if rep == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"report": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"report": rep})
+}
+
+func (s *Server) handleSlowSQLReports(w http.ResponseWriter, r *http.Request) {
+	if s.sqlSlow == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"reports": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reports": s.sqlSlow.listLatest()})
 }
 
 // handleMySQLExecDDL executes a narrowly allowed index DDL. Production (and
@@ -241,6 +315,10 @@ func (s *Server) handleMySQLExecDDL(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	if driverOf(c) == "postgres" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "PostgreSQL 连接仅支持只读操作"})
+		return
+	}
 	sqlText := strings.TrimSpace(req.SQL)
 	if sqlText == "" || len(sqlText) > 16<<10 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sql 无效或过长"})
@@ -248,6 +326,12 @@ func (s *Server) handleMySQLExecDDL(w http.ResponseWriter, r *http.Request) {
 	}
 	if !sqltoolkit.IsAllowedIndexDDL(sqlText) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "仅允许 CREATE/ALTER 索引类 DDL"})
+		return
+	}
+	if win, frozen := s.cfg.activeFreezeWindow("", "sql", time.Now().Unix()); frozen {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": fmt.Sprintf("当前处于 SQL 变更冻结窗「%s」，禁止直接执行 DDL", win.Name),
+		})
 		return
 	}
 	if ticketID := strings.TrimSpace(req.TicketID); ticketID != "" {

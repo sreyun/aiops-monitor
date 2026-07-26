@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -400,6 +401,70 @@ func collectHardeningFindings() []hostSecFinding {
 		fs = append(fs, hostSecFinding{
 			Level: "high", ID: "ssh_bruteforce", Title: "近期 SSH 认证失败偏多",
 			Detail: fmt.Sprintf("关键词计数≈%d", failed), Suggest: "启用 fail2ban / 限制来源 IP / 改密钥登录",
+		})
+	}
+	fs = append(fs, collectCISLiteFindings()...)
+	return fs
+}
+
+// collectCISLiteFindings covers a minimal CIS-inspired baseline (SSH/sysctl/accounts).
+func collectCISLiteFindings() []hostSecFinding {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	var fs []hostSecFinding
+	sshCfg := "/etc/ssh/sshd_config"
+	if fileExists(sshCfg) {
+		if v := sshCfgValue(sshCfg, "PermitEmptyPasswords", "no"); strings.EqualFold(v, "yes") {
+			fs = append(fs, hostSecFinding{
+				Level: "critical", ID: "cis_ssh_empty_passwords", Title: "SSH 允许空密码",
+				Detail: "PermitEmptyPasswords=yes", Suggest: "设为 no（CIS）",
+			})
+		}
+		if v := sshCfgValue(sshCfg, "X11Forwarding", "no"); strings.EqualFold(v, "yes") {
+			fs = append(fs, hostSecFinding{
+				Level: "low", ID: "cis_ssh_x11", Title: "SSH X11 转发已开启",
+				Detail: "X11Forwarding=yes", Suggest: "无桌面跳板需求时关闭",
+			})
+		}
+		if v := sshCfgValue(sshCfg, "MaxAuthTries", "6"); v != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 4 {
+				fs = append(fs, hostSecFinding{
+					Level: "medium", ID: "cis_ssh_max_auth", Title: "SSH MaxAuthTries 过高",
+					Detail: "MaxAuthTries=" + v, Suggest: "建议 ≤4",
+				})
+			}
+		}
+		if v := sshCfgValue(sshCfg, "ClientAliveInterval", "0"); v == "0" || v == "" {
+			fs = append(fs, hostSecFinding{
+				Level: "info", ID: "cis_ssh_alive", Title: "SSH 未配置空闲会话超时",
+				Detail: "ClientAliveInterval 未设置或为 0", Suggest: "设置 ClientAliveInterval/CountMax",
+			})
+		}
+	}
+	// IP forwarding (router-like hosts may intentionally enable)
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward"); err == nil {
+		if strings.TrimSpace(string(b)) == "1" {
+			fs = append(fs, hostSecFinding{
+				Level: "medium", ID: "cis_ip_forward", Title: "IPv4 转发已开启",
+				Detail: "net.ipv4.ip_forward=1", Suggest: "非路由/网关主机应关闭",
+			})
+		}
+	}
+	if b, err := os.ReadFile("/proc/sys/kernel/randomize_va_space"); err == nil {
+		if strings.TrimSpace(string(b)) != "2" {
+			fs = append(fs, hostSecFinding{
+				Level: "medium", ID: "cis_aslr", Title: "ASLR 未完全启用",
+				Detail: "kernel.randomize_va_space=" + strings.TrimSpace(string(b)),
+				Suggest: "设为 2",
+			})
+		}
+	}
+	// World-writable files in /etc (best-effort, capped)
+	if out := cmdOut(6, "bash", "-lc", `find /etc -xdev -type f -perm -0002 2>/dev/null | head -n 5`); strings.TrimSpace(out) != "" {
+		fs = append(fs, hostSecFinding{
+			Level: "high", ID: "cis_etc_world_writable", Title: "/etc 存在世界可写文件",
+			Detail: truncateStr(out, 240), Suggest: "收紧权限（chmod o-w）并核查来源",
 		})
 	}
 	return fs

@@ -1878,27 +1878,42 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"注意：你分析的是审计数据本身，回答里【不要原样复述完整的密钥/密码等敏感值】，用脱敏描述。" + ctxBlock
 	case "host_security_diagnosis":
 		return "你是资深主机安全与漏洞管理专家。以下是主机安全扫描报告摘要（加固基线、可选 ClamAV、IOC 启发式、OSV 包 CVE、风险评分）。请：\n" +
-			"① 一句话研判主机整体风险（低/中/高/危急）；\n" +
-			"② 按严重度列出优先修复项（恶意软件/加固/CVE），每条给出可执行命令或配置改动；\n" +
-			"③ 说明 ClamAV 不可用时的降级含义与补救；\n" +
-			"④ 给出 7 日内处置清单。用简洁中文分点作答，只依据给定数据，不臆造。" + ctxBlock
+			"① 一句话研判主机整体风险（低/中/高/危急）并说明依据；\n" +
+			"② 按严重度给出优先修复 Top 清单（恶意软件/加固/CVE/端口），每条含：影响、建议动作、预计耗时；\n" +
+			"③ 标出「疑似误报 / 需人工复核」项（说明理由，勿擅自当作已确认误报）；\n" +
+			"④ 说明 ClamAV 不可用时的降级含义与补救；\n" +
+			"⑤ 给出 7 日内分日处置清单。用简洁中文分点作答，只依据给定数据，不臆造 CVE/漏洞。" + ctxBlock
 	case "host_security_remediation":
 		return "你是主机安全自动化专家。根据扫描报告产出【可确认执行】的动作计划。" +
 			assistOpsActionSchema +
 			"可用 type：host_playbook（params.steps[] 含 name/command）、container_action 不适用。" +
 			"高危（关防火墙/改 sshd/删文件）risk=high；修复后 verify=rescans。" +
-			"先给中文摘要，再给唯一 ```json。只依据报告。" + ctxBlock
+			"先给中文摘要（含优先级与风险提示），再给唯一 ```json。只依据报告，不臆造。" + ctxBlock
+	case "host_security_finding":
+		return "你是主机安全分析师。以下是扫描中的【单条 finding】及所属主机摘要。请只围绕这一条分析：\n" +
+			"① 真伪与误报可能性（高/中/低）及理由；\n" +
+			"② 业务影响与利用前提；\n" +
+			"③ 可执行修复步骤（命令/配置，注明适用 OS）；\n" +
+			"④ 建议处置状态：保持 open / ack（已知接受）/ false_positive / resolved，并说明为何；\n" +
+			"⑤ 修复后如何验证。用简洁中文分点作答，不臆造包名/CVE/版本。" + ctxBlock
 	case "web_vuln_diagnosis":
 		return "你是资深 Web 应用安全（AppSec）专家。以下是 Nuclei Web 漏洞扫描报告（执行摘要、按严重度 findings、模板 ID、修复建议）。请：\n" +
-			"① 一句话研判目标站点风险；\n" +
-			"② 按 critical→info 归类并解释业务影响；\n" +
-			"③ 给出可落地的修复优先级与验证步骤；\n" +
-			"④ 标明误报可能与需人工复核项。用简洁中文分点作答，只依据报告，不臆造漏洞。" + ctxBlock
+			"① 一句话研判目标站点风险并说明依据；\n" +
+			"② 按 critical→info 归类，解释业务影响与利用难度；\n" +
+			"③ 给出可落地的修复优先级与验证步骤（复扫/手工确认）；\n" +
+			"④ 标明误报可能与需人工复核项（模板特性、环境特征）。用简洁中文分点作答，只依据报告，不臆造漏洞。" + ctxBlock
 	case "web_vuln_remediation":
 		return "你是 AppSec 自动化专家。根据 Web 扫描报告产出【可确认执行】的动作计划（偏复扫与配置核查，勿直接对生产打破坏性补丁）。" +
 			assistOpsActionSchema +
 			"可用 type：host_playbook（在能访问该站点的跳板/主机上做只读验证）、或仅给出 summary 而无破坏动作。" +
-			"verify=rescans。先中文摘要，再唯一 ```json。" + ctxBlock
+			"verify=rescans。先中文摘要（含优先级），再唯一 ```json。不臆造。" + ctxBlock
+	case "web_vuln_finding":
+		return "你是 AppSec 分析师。以下是 Nuclei 扫描中的【单条 finding】及目标摘要。请只围绕这一条分析：\n" +
+			"① 真伪与误报可能性（高/中/低）及理由（结合 template_id / matcher / URL）；\n" +
+			"② 业务影响与利用前提；\n" +
+			"③ 可落地修复建议（配置/代码/中间件，含验证方式）；\n" +
+			"④ 建议处置状态：open / ack / false_positive / resolved；\n" +
+			"⑤ 是否需要扩大扫描范围。用简洁中文分点作答，不臆造漏洞。" + ctxBlock
 	case "hyperv_ops_plan":
 		return "你是 Hyper-V 运维自动化专家。根据虚拟机/清单上下文产出可确认执行的动作计划。" +
 			assistOpsActionSchema +

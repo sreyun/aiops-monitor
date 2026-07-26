@@ -62,6 +62,7 @@ type Server struct {
 	webSec      *webScanManager          // Web Nuclei 扫描结果
 	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
 	sqlHistory  *sqlQueryHistoryManager  // per-user desensitized SQL history
+	sqlSlow     *slowSQLManager          // multi-DB slow SQL digests + advice
 	secFindings *securityFindingManager  // security finding lifecycle states
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
@@ -115,11 +116,20 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	secDir := cfg.securityDataDir()
 	s.hostSec = newHostSecurityManager(secDir)
 	cfg.migrateWebSecurityDefaultsOnce()
+	cfg.migrateMySQLSlowSQLDefaultsOnce()
 	s.webSec = newWebScanManager(secDir, cfg.WebSecurity().ScanConcurrency)
 	s.sqlHistory = newSQLQueryHistoryManager(secDir)
+	s.sqlSlow = newSlowSQLManager(filepath.Join(secDir, "sql_slow"))
 	s.secFindings = newSecurityFindingManager(secDir)
+	if s.aiGov != nil {
+		s.aiGov.load(filepath.Join(secDir, "ai_tool_audit.json"))
+		s.aiGov.onRecord = func(e aiToolAuditEntry) {
+			s.exportAIToolAuditEntry(e)
+		}
+	}
 	s.startHostSecurityScheduler()
 	s.startWebSecurityScheduler()
+	s.startSlowSQLScheduler()
 	// AI 记忆异步写入 worker pool：3 个 worker，并发上限 3
 	s.memoryCh = make(chan memoryJob, 100)
 	s.memorySem = make(chan struct{}, 3)
@@ -525,6 +535,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/explain", s.handleMySQLExplain)
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/exec-ddl", s.handleMySQLExecDDL)
 	mux.HandleFunc("GET /api/v1/sql/connections/{id}/schema", s.handleMySQLSchema)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/schema/health", s.handleMySQLSchemaHealth)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/processlist", s.handleMySQLProcesslist)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/locks", s.handleMySQLLocks)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/slow-sql/run", s.handleSlowSQLRun)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/slow-sql/latest", s.handleSlowSQLLatest)
+	mux.HandleFunc("GET /api/v1/sql/slow-sql/reports", s.handleSlowSQLReports)
 	mux.HandleFunc("GET /api/v1/sql/history", s.handleSQLQueryHistory)
 	mux.HandleFunc("POST /api/v1/sql/history", s.handleAppendSQLQueryHistory)
 	mux.HandleFunc("POST /api/v1/sql/change-requests", s.handleCreateSQLChangeRequest)
@@ -572,6 +588,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/v1/security/web/targets/{id}", s.handleUpsertWebTarget)
 	mux.HandleFunc("DELETE /api/v1/security/web/targets/{id}", s.handleDeleteWebTarget)
 	mux.HandleFunc("POST /api/v1/security/web/targets/{id}/scan", s.handleWebTargetScan)
+	mux.HandleFunc("POST /api/v1/security/web/targets/import-openapi", s.handleImportWebOpenAPIScope)
 	mux.HandleFunc("GET /api/v1/security/web/scans", s.handleWebScans)
 	mux.HandleFunc("GET /api/v1/security/web/scans/{id}", s.handleWebScanGet)
 	mux.HandleFunc("POST /api/v1/security/web/scans/{id}/cancel", s.handleWebScanCancel)

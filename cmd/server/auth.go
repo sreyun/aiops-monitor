@@ -158,7 +158,8 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 			return rank >= roleRank(RoleViewer)
 		}
 		if p == "/api/v1/sql/beautify" || p == "/api/v1/sql/audit" || p == "/api/v1/sql/optimize" ||
-			p == "/api/v1/sql/analyze" || strings.HasSuffix(p, "/explain") {
+			p == "/api/v1/sql/analyze" || strings.HasSuffix(p, "/explain") ||
+			strings.HasSuffix(p, "/slow-sql/run") {
 			return rank >= roleRank(RoleViewer)
 		}
 		if strings.HasSuffix(p, "/exec-ddl") {

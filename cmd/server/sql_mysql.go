@@ -87,7 +87,13 @@ func mysqlTestConnection(c MySQLConnection) (string, error) {
 var reSafeIdent = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 func mysqlExplain(c MySQLConnection, query string) (map[string]any, error) {
+	return mysqlExplainInSchema(c, "", query)
+}
+
+// mysqlExplainInSchema runs EXPLAIN after optionally selecting a schema (for multi-DB connections).
+func mysqlExplainInSchema(c MySQLConnection, schema, query string) (map[string]any, error) {
 	query = strings.TrimSpace(query)
+	schema = strings.TrimSpace(schema)
 	if query == "" {
 		return nil, fmt.Errorf("sql required")
 	}
@@ -110,6 +116,12 @@ func mysqlExplain(c MySQLConnection, query string) (map[string]any, error) {
 		explainSQL = "EXPLAIN FORMAT=JSON " + rest
 	}
 
+	if schema != "" {
+		if !reSafeIdent.MatchString(schema) {
+			return nil, fmt.Errorf("非法库名")
+		}
+		c.Database = schema
+	}
 	db, err := mysqlOpen(c)
 	if err != nil {
 		return nil, err
@@ -269,17 +281,43 @@ func walkExplain(node map[string]any, hits *[]sqltoolkit.ExplainHit) {
 
 // mysqlFetchMetadata loads information_schema stats/columns/indexes for the given tables.
 func mysqlFetchMetadata(c MySQLConnection, tables []string) (sqltoolkit.SchemaMeta, error) {
+	return mysqlFetchMetadataInSchema(c, c.Database, tables)
+}
+
+// mysqlFetchMetadataInSchema is like mysqlFetchMetadata but forces TABLE_SCHEMA when schema is set.
+// Table names may be schema-qualified (db.tbl); unqualified names use schema or connection default.
+func mysqlFetchMetadataInSchema(c MySQLConnection, schema string, tables []string) (sqltoolkit.SchemaMeta, error) {
 	meta := sqltoolkit.SchemaMeta{}
 	if len(tables) == 0 {
 		return meta, nil
 	}
-	clean := make([]string, 0, len(tables))
+	type named struct{ schema, table, key string }
+	var clean []named
 	for _, t := range tables {
 		t = strings.TrimSpace(t)
-		if t == "" || !reSafeIdent.MatchString(t) {
+		if t == "" {
 			continue
 		}
-		clean = append(clean, t)
+		sch, tbl := "", t
+		if i := strings.LastIndexByte(t, '.'); i > 0 {
+			sch = t[:i]
+			tbl = t[i+1:]
+		}
+		if sch == "" {
+			sch = strings.TrimSpace(schema)
+		}
+		if sch == "" {
+			sch = c.Database
+		}
+		if tbl == "" || !reSafeIdent.MatchString(tbl) {
+			continue
+		}
+		if sch != "" && !reSafeIdent.MatchString(sch) {
+			continue
+		}
+		key := strings.ToLower(tbl)
+		clean = append(clean, named{schema: sch, table: tbl, key: key})
+		meta[key] = &sqltoolkit.TableMeta{Name: tbl}
 	}
 	if len(clean) == 0 {
 		return meta, nil
@@ -292,20 +330,31 @@ func mysqlFetchMetadata(c MySQLConnection, tables []string) (sqltoolkit.SchemaMe
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dbName := c.Database
+	// Prefer a single schema when all tables share one (or connection default).
+	dbName := strings.TrimSpace(schema)
+	if dbName == "" {
+		dbName = c.Database
+	}
+	if dbName == "" {
+		for _, n := range clean {
+			if n.schema != "" {
+				dbName = n.schema
+				break
+			}
+		}
+	}
 	placeholders := make([]string, len(clean))
 	args := make([]any, 0, len(clean)+1)
 	if dbName != "" {
 		args = append(args, dbName)
 	}
-	for i, t := range clean {
+	for i, n := range clean {
 		placeholders[i] = "?"
-		args = append(args, t)
-		meta[strings.ToLower(t)] = &sqltoolkit.TableMeta{Name: t}
+		args = append(args, n.table)
 	}
 	inList := strings.Join(placeholders, ",")
 
-	// TABLE_ROWS
+	// TABLE_ROWS — require schema when known to avoid cross-DB name collisions.
 	qTables := "SELECT TABLE_NAME, TABLE_ROWS, AVG_ROW_LENGTH FROM information_schema.TABLES WHERE TABLE_NAME IN (" + inList + ")"
 	if dbName != "" {
 		qTables = "SELECT TABLE_NAME, TABLE_ROWS, AVG_ROW_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (" + inList + ")"
@@ -430,7 +479,21 @@ func toFloat(v any) (float64, bool) {
 	}
 }
 
-func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
+func mysqlSystemSchema(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "mysql", "information_schema", "performance_schema", "sys":
+		return true
+	default:
+		return false
+	}
+}
+
+// mysqlSchema lists databases / tables / columns.
+// When connection has no default database:
+//   - database="" table="" → list business databases
+//   - database=foo table="" → list tables in foo
+//   - database=foo table=bar → columns/indexes for foo.bar
+func mysqlSchema(c MySQLConnection, database, table string) (map[string]any, error) {
 	db, err := mysqlOpen(c)
 	if err != nil {
 		return nil, err
@@ -439,8 +502,39 @@ func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	dbName := strings.TrimSpace(database)
+	if dbName == "" {
+		dbName = strings.TrimSpace(c.Database)
+	}
+	table = strings.TrimSpace(table)
+
+	if table == "" && dbName == "" {
+		rows, err := db.QueryContext(ctx, "SHOW DATABASES")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		dbs := []string{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				continue
+			}
+			if mysqlSystemSchema(name) {
+				continue
+			}
+			dbs = append(dbs, name)
+		}
+		return map[string]any{"databases": dbs}, nil
+	}
+
 	if table == "" {
-		rows, err := db.QueryContext(ctx, "SHOW TABLES")
+		if !reSafeIdent.MatchString(dbName) {
+			return nil, fmt.Errorf("非法库名")
+		}
+		rows, err := db.QueryContext(ctx,
+			"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
+			dbName)
 		if err != nil {
 			return nil, err
 		}
@@ -453,16 +547,20 @@ func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
 			}
 			tables = append(tables, name)
 		}
-		out := map[string]any{"tables": tables}
-		if c.Database != "" {
-			out["database"] = c.Database
-		}
-		return out, nil
+		return map[string]any{"database": dbName, "tables": tables}, nil
 	}
+
 	if !reSafeIdent.MatchString(table) {
 		return nil, fmt.Errorf("非法表名")
 	}
-	colRows, err := db.QueryContext(ctx, "SHOW FULL COLUMNS FROM `"+table+"`")
+	if dbName == "" {
+		return nil, fmt.Errorf("查看表结构需要指定 database（连接未配置默认库时请先选择库）")
+	}
+	if !reSafeIdent.MatchString(dbName) {
+		return nil, fmt.Errorf("非法库名")
+	}
+	qualified := "`" + dbName + "`.`" + table + "`"
+	colRows, err := db.QueryContext(ctx, "SHOW FULL COLUMNS FROM "+qualified)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +582,7 @@ func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
 		}
 		columns = append(columns, m)
 	}
-	idxRows, err := db.QueryContext(ctx, "SHOW INDEX FROM `"+table+"`")
+	idxRows, err := db.QueryContext(ctx, "SHOW INDEX FROM "+qualified)
 	if err != nil {
 		return nil, err
 	}
@@ -508,10 +606,11 @@ func mysqlSchema(c MySQLConnection, table string) (map[string]any, error) {
 	}
 	var createSQL string
 	var tblName string
-	if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE `"+table+"`").Scan(&tblName, &createSQL); err != nil {
-		return map[string]any{"table": table, "columns": columns, "indexes": indexes}, nil
+	if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+qualified).Scan(&tblName, &createSQL); err != nil {
+		return map[string]any{"database": dbName, "table": table, "columns": columns, "indexes": indexes}, nil
 	}
 	return map[string]any{
+		"database":     dbName,
 		"table":        table,
 		"columns":      columns,
 		"indexes":      indexes,
