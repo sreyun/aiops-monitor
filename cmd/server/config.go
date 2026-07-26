@@ -531,8 +531,9 @@ type ServerConfig struct {
 	// Enterprise ops
 	OnCallSchedules    []OnCallSchedule    `json:"oncall_schedules,omitempty"`
 	EscalationPolicies []EscalationPolicy  `json:"escalation_policies,omitempty"`
-	ChangeWindows      []ChangeWindow      `json:"change_windows,omitempty"`
-	Retention          RetentionConfig     `json:"retention,omitempty"`
+	ChangeWindows          []ChangeWindow              `json:"change_windows,omitempty"`
+	ServiceRequestCatalog  []ServiceRequestCatalogItem `json:"service_request_catalog,omitempty"`
+	Retention              RetentionConfig             `json:"retention,omitempty"`
 	Backup             BackupConfig        `json:"backup,omitempty"`
 	CmdPolicy          CmdPolicyConfig     `json:"cmd_policy,omitempty"`
 	AI                 AIConfig            `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
@@ -1236,6 +1237,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.OnCallSchedules = cs.cfg.OnCallSchedules
 	c.EscalationPolicies = cs.cfg.EscalationPolicies
 	c.ChangeWindows = cs.cfg.ChangeWindows
+	c.ServiceRequestCatalog = cs.cfg.ServiceRequestCatalog
 	c.Retention = cs.cfg.Retention
 	c.Backup = cs.cfg.Backup
 	c.CmdPolicy = cs.cfg.CmdPolicy

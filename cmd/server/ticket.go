@@ -12,8 +12,9 @@ import (
 // Ticket (work order) — a lightweight issue tracker for follow-up work.
 //
 // A ticket is an assignable, prioritized work item with a status flow and a
-// comment thread. It can be spun off from an incident (for the fix / postmortem)
-// or created standalone. Persisted via the DB snapshot so it survives restarts.
+// comment thread. It can be spun off from an incident (for the fix / postmortem),
+// created as a service request from the catalog, or created standalone.
+// Persisted via the DB snapshot so it survives restarts.
 // ============================================================================
 
 // TicketComment is one note on a ticket's thread.
@@ -26,22 +27,84 @@ type TicketComment struct {
 
 // Ticket is a tracked unit of work.
 type Ticket struct {
-	ID          int64           `json:"id"`
-	Title       string          `json:"title"`
-	Description string          `json:"description,omitempty"`
-	Priority    string          `json:"priority"` // p1|p2|p3|p4
-	Status      string          `json:"status"`   // open|in_progress|resolved|closed
-	Assignee    string          `json:"assignee,omitempty"`
-	Reporter    string          `json:"reporter,omitempty"`
-	IncidentID  int64           `json:"incident_id,omitempty"`
-	Attachments []Attachment    `json:"attachments,omitempty"` // 创建时附带的证据
-	Comments    []TicketComment `json:"comments,omitempty"`
-	CreatedAt   int64           `json:"created_at"`
-	UpdatedAt   int64           `json:"updated_at"`
+	ID           int64           `json:"id"`
+	Title        string          `json:"title"`
+	Description  string          `json:"description,omitempty"`
+	Kind         string          `json:"kind,omitempty"`          // incident|service_request|task
+	Category     string          `json:"category,omitempty"`      // service request category
+	CatalogItem  string          `json:"catalog_item,omitempty"`  // service request catalog id
+	Priority     string          `json:"priority"`                // p1|p2|p3|p4
+	Status       string          `json:"status"`                  // open|in_progress|resolved|closed
+	Assignee     string          `json:"assignee,omitempty"`
+	Reporter     string          `json:"reporter,omitempty"`
+	IncidentID   int64           `json:"incident_id,omitempty"`
+	SLOID        string          `json:"slo_id,omitempty"`
+	ChangeID     int64           `json:"change_id,omitempty"`
+	SQLChangeID  string          `json:"sql_change_id,omitempty"`
+	Source       string          `json:"source,omitempty"` // manual|incident|alert|dashboard|sql|api
+	DueAt        int64           `json:"due_at,omitempty"`
+	Links        []OpsLink       `json:"links,omitempty"`
+	Attachments  []Attachment    `json:"attachments,omitempty"`
+	Comments     []TicketComment `json:"comments,omitempty"`
+	CreatedAt    int64           `json:"created_at"`
+	UpdatedAt    int64           `json:"updated_at"`
 }
 
 var ticketPriorities = map[string]bool{"p1": true, "p2": true, "p3": true, "p4": true}
 var ticketStatuses = map[string]bool{"open": true, "in_progress": true, "resolved": true, "closed": true}
+var ticketKinds = map[string]bool{"incident": true, "service_request": true, "task": true}
+
+func normalizeTicketKind(t *Ticket) {
+	k := strings.ToLower(strings.TrimSpace(t.Kind))
+	if ticketKinds[k] {
+		t.Kind = k
+		return
+	}
+	if t.IncidentID > 0 {
+		t.Kind = "incident"
+		return
+	}
+	if strings.TrimSpace(t.CatalogItem) != "" || strings.EqualFold(t.Source, "service_request") {
+		t.Kind = "service_request"
+		return
+	}
+	t.Kind = "task"
+}
+
+func syncTicketLinkIndexes(t *Ticket) {
+	if t.IncidentID > 0 {
+		t.Links = mergeOpsLinks(t.Links, incidentOpsLink(t.IncidentID, "caused_by"))
+	}
+	if t.SLOID != "" {
+		t.Links = mergeOpsLinks(t.Links, sloOpsLink(t.SLOID))
+	}
+	if t.ChangeID > 0 {
+		t.Links = mergeOpsLinks(t.Links, changeOpsLink(t.ChangeID))
+	}
+	if t.SQLChangeID != "" {
+		t.Links = mergeOpsLinks(t.Links, sqlChangeOpsLink(t.SQLChangeID))
+	}
+	for _, l := range t.Links {
+		switch l.Type {
+		case "incident":
+			if id := parseOpsLinkInt(l.ID); id > 0 && t.IncidentID == 0 {
+				t.IncidentID = id
+			}
+		case "slo":
+			if t.SLOID == "" {
+				t.SLOID = l.ID
+			}
+		case "change":
+			if id := parseOpsLinkInt(l.ID); id > 0 && t.ChangeID == 0 {
+				t.ChangeID = id
+			}
+		case "sql_change":
+			if t.SQLChangeID == "" {
+				t.SQLChangeID = l.ID
+			}
+		}
+	}
+}
 
 // ticketManager stores tickets in memory (persisted via the DB snapshot).
 type ticketManager struct {
@@ -51,7 +114,7 @@ type ticketManager struct {
 }
 
 func newTicketManager() *ticketManager {
-	return &ticketManager{nextID: 1}
+	return &ticketManager{nextID: 0}
 }
 
 func (m *ticketManager) find(id int64) *Ticket {
@@ -72,6 +135,16 @@ func (m *ticketManager) Create(t Ticket, reporter string) (Ticket, error) {
 	if !ticketPriorities[t.Priority] {
 		t.Priority = "p3"
 	}
+	normalizeTicketKind(&t)
+	if t.Source == "" {
+		if t.Kind == "incident" && t.IncidentID > 0 {
+			t.Source = "incident"
+		} else {
+			t.Source = "manual"
+		}
+	}
+	t.Links = mergeOpsLinks(nil, t.Links...)
+	syncTicketLinkIndexes(&t)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextID++
@@ -82,7 +155,6 @@ func (m *ticketManager) Create(t Ticket, reporter string) (Ticket, error) {
 	t.Comments = nil
 	now := time.Now().Unix()
 	t.CreatedAt, t.UpdatedAt = now, now
-	// 创建时附件同时落到首条系统评论，便于时间线统一展示
 	if len(t.Attachments) > 0 {
 		t.Comments = append(t.Comments, TicketComment{
 			Ts: now, Author: reporter, Text: Tz("ticket.evt_attach", len(t.Attachments)),
@@ -93,8 +165,7 @@ func (m *ticketManager) Create(t Ticket, reporter string) (Ticket, error) {
 	return t, nil
 }
 
-// Update mutates editable fields (title/description/priority/status/assignee).
-// A status transition and an assignment are journaled as system comments.
+// Update mutates editable fields (title/description/priority/status/assignee/...).
 func (m *ticketManager) Update(id int64, in Ticket, actor string) (Ticket, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -123,6 +194,32 @@ func (m *ticketManager) Update(id int64, in Ticket, actor string) (Ticket, error
 		t.Comments = append(t.Comments, TicketComment{Ts: time.Now().Unix(), Author: actor,
 			Text: Tz("ticket.evt_assign", who)})
 	}
+	if k := strings.ToLower(strings.TrimSpace(in.Kind)); ticketKinds[k] {
+		t.Kind = k
+	}
+	if in.Category != "" {
+		t.Category = strings.TrimSpace(in.Category)
+	}
+	if in.CatalogItem != "" {
+		t.CatalogItem = strings.TrimSpace(in.CatalogItem)
+	}
+	if in.DueAt > 0 {
+		t.DueAt = in.DueAt
+	}
+	if in.SLOID != "" {
+		t.SLOID = strings.TrimSpace(in.SLOID)
+	}
+	if in.ChangeID > 0 {
+		t.ChangeID = in.ChangeID
+	}
+	if in.SQLChangeID != "" {
+		t.SQLChangeID = strings.TrimSpace(in.SQLChangeID)
+	}
+	if len(in.Links) > 0 {
+		t.Links = mergeOpsLinks(t.Links, in.Links...)
+	}
+	normalizeTicketKind(t)
+	syncTicketLinkIndexes(t)
 	t.UpdatedAt = time.Now().Unix()
 	return *t, nil
 }
@@ -148,6 +245,32 @@ func (m *ticketManager) Comment(id int64, author, text string, atts []Attachment
 	return *t, nil
 }
 
+// Link adds or removes OpsLinks on a ticket.
+func (m *ticketManager) Link(id int64, add []OpsLink, removeType, removeID, removeRole, actor string) (Ticket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t := m.find(id)
+	if t == nil {
+		return Ticket{}, fmt.Errorf("%s", Tz("ticket.not_found"))
+	}
+	if removeType != "" && removeID != "" {
+		t.Links = removeOpsLink(t.Links, removeType, removeID, removeRole)
+	}
+	if len(add) > 0 {
+		before := len(t.Links)
+		t.Links = mergeOpsLinks(t.Links, add...)
+		if len(t.Links) > before {
+			t.Comments = append(t.Comments, TicketComment{
+				Ts: time.Now().Unix(), Author: actor,
+				Text: "关联更新：" + formatOpsLinksHint(add),
+			})
+		}
+	}
+	syncTicketLinkIndexes(t)
+	t.UpdatedAt = time.Now().Unix()
+	return *t, nil
+}
+
 // Delete removes a ticket.
 func (m *ticketManager) Delete(id int64) {
 	m.mu.Lock()
@@ -164,17 +287,26 @@ func (m *ticketManager) Get(id int64) (Ticket, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if t := m.find(id); t != nil {
-		return *t, true
+		out := *t
+		normalizeTicketKind(&out)
+		return out, true
 	}
 	return Ticket{}, false
 }
 
-// List returns tickets newest-first.
-func (m *ticketManager) List() []Ticket {
+// List returns tickets newest-first. kindFilter empty = all.
+func (m *ticketManager) List(kindFilter string) []Ticket {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Ticket, len(m.tickets))
-	copy(out, m.tickets)
+	kindFilter = strings.ToLower(strings.TrimSpace(kindFilter))
+	out := make([]Ticket, 0, len(m.tickets))
+	for _, t := range m.tickets {
+		normalizeTicketKind(&t)
+		if kindFilter != "" && t.Kind != kindFilter {
+			continue
+		}
+		out = append(out, t)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out
 }
@@ -207,9 +339,11 @@ func (m *ticketManager) Import(list []Ticket) {
 	m.tickets = make([]Ticket, len(list))
 	copy(m.tickets, list)
 	var maxID int64
-	for _, t := range m.tickets {
-		if t.ID > maxID {
-			maxID = t.ID
+	for i := range m.tickets {
+		normalizeTicketKind(&m.tickets[i])
+		syncTicketLinkIndexes(&m.tickets[i])
+		if m.tickets[i].ID > maxID {
+			maxID = m.tickets[i].ID
 		}
 	}
 	m.nextID = maxID

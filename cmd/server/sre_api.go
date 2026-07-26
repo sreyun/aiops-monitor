@@ -525,9 +525,16 @@ func (s *Server) handleEscalateIncident(w http.ResponseWriter, r *http.Request) 
 	if inc.Severity == "critical" {
 		prio = "p1"
 	}
+	links := append([]OpsLink{}, inc.Links...)
+	links = mergeOpsLinks(links, incidentOpsLink(inc.ID, "caused_by"))
+	if inc.HostID != "" {
+		links = mergeOpsLinks(links, hostOpsLink(inc.HostID, inc.Hostname))
+	}
 	tk, err := s.tickets.Create(Ticket{
 		Title: inc.Title, Priority: prio, IncidentID: inc.ID,
+		Kind: "incident", Source: "incident",
 		Description: Tz("ticket.from_incident", inc.ID),
+		Links:       links,
 	}, s.actorName(r))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -543,6 +550,82 @@ func (s *Server) handleEscalateIncident(w http.ResponseWriter, r *http.Request) 
 		fmt.Sprintf("事件 #%d 已升级为工单 #%d", inc.ID, tk.ID),
 		fmt.Sprintf("事件：%s | 优先级：%s | 操作人：%s", inc.Title, strings.ToUpper(prio), s.actorName(r)),
 		"sre", strconv.FormatInt(tk.ID, 10))
+	writeJSON(w, http.StatusOK, tk)
+}
+
+// handleIncidentEmergencyChange creates an emergency ChangeRecord linked to the incident.
+func (s *Server) handleIncidentEmergencyChange(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	inc, found := s.incidents.Get(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
+		return
+	}
+	var in struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = "应急变更 · 事件 #" + strconv.FormatInt(inc.ID, 10)
+	}
+	hosts := []string{}
+	if inc.HostID != "" {
+		hosts = []string{inc.HostID}
+	}
+	rec, err := s.changes.Upsert(ChangeRecord{
+		Title: title, Summary: firstNonEmpty(in.Summary, inc.Title),
+		Kind: "emergency", Risk: "high", Status: ChangePendingApproval,
+		HostIDs: hosts, LinkedIncidentIDs: []int64{inc.ID},
+		Links: mergeOpsLinks(inc.Links, incidentOpsLink(inc.ID, "caused_by")),
+	}, s.actorName(r))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.incidents.AddLinks(inc.ID, []OpsLink{changeOpsLink(rec.ID)}, s.actorName(r),
+		fmt.Sprintf("已开应急变更 #%d", rec.ID))
+	s.store.MarkDirty()
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// handleIncidentLinkTicket associates an existing service-request/ticket with an incident.
+func (s *Server) handleIncidentLinkTicket(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var in struct {
+		TicketID int64 `json:"ticket_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.TicketID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ticket_id required"})
+		return
+	}
+	inc, found := s.incidents.Get(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
+		return
+	}
+	tk, found := s.tickets.Get(in.TicketID)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "ticket.not_found")})
+		return
+	}
+	_, _ = s.tickets.Link(tk.ID, []OpsLink{incidentOpsLink(inc.ID, "related")}, "", "", "", s.actorName(r))
+	s.incidents.AddLinks(inc.ID, []OpsLink{ticketOpsLink(tk.ID)}, s.actorName(r),
+		fmt.Sprintf("关联工单 #%d", tk.ID))
+	if inc.TicketID == 0 {
+		s.incidents.SetTicket(inc.ID, tk.ID, s.actorName(r))
+	}
+	s.store.MarkDirty()
+	tk, _ = s.tickets.Get(in.TicketID)
 	writeJSON(w, http.StatusOK, tk)
 }
 
@@ -814,7 +897,11 @@ func (s *Server) handleSLOTrend(w http.ResponseWriter, r *http.Request) {
 // ----------------------------------------------------------------------------
 
 func (s *Server) handleListTickets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.tickets.List())
+	writeJSON(w, http.StatusOK, s.tickets.List(r.URL.Query().Get("kind")))
+}
+
+func (s *Server) handleServiceRequestCatalog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.cfg.ServiceRequestCatalog())
 }
 
 func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
@@ -830,17 +917,27 @@ func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enrich with linked incident info for traceability
 	result := map[string]any{
-		"id":          tk.ID,
-		"title":       tk.Title,
-		"description": tk.Description,
-		"priority":    tk.Priority,
-		"status":      tk.Status,
-		"assignee":    tk.Assignee,
-		"reporter":    tk.Reporter,
-		"incident_id": tk.IncidentID,
-		"comments":    tk.Comments,
-		"created_at":  tk.CreatedAt,
-		"updated_at":  tk.UpdatedAt,
+		"id":            tk.ID,
+		"title":         tk.Title,
+		"description":   tk.Description,
+		"kind":          tk.Kind,
+		"category":      tk.Category,
+		"catalog_item":  tk.CatalogItem,
+		"priority":      tk.Priority,
+		"status":        tk.Status,
+		"assignee":      tk.Assignee,
+		"reporter":      tk.Reporter,
+		"incident_id":   tk.IncidentID,
+		"slo_id":        tk.SLOID,
+		"change_id":     tk.ChangeID,
+		"sql_change_id": tk.SQLChangeID,
+		"source":        tk.Source,
+		"due_at":        tk.DueAt,
+		"links":         tk.Links,
+		"attachments":   tk.Attachments,
+		"comments":      tk.Comments,
+		"created_at":    tk.CreatedAt,
+		"updated_at":    tk.UpdatedAt,
 	}
 	if tk.IncidentID > 0 {
 		if inc, found := s.incidents.Get(tk.IncidentID); found {
@@ -851,6 +948,7 @@ func (s *Server) handleGetTicket(w http.ResponseWriter, r *http.Request) {
 				"status":     inc.Status,
 				"hostname":   inc.Hostname,
 				"created_at": inc.CreatedAt,
+				"links":      inc.Links,
 			}
 		}
 	}
@@ -863,6 +961,24 @@ func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	if itemID := strings.TrimSpace(in.CatalogItem); itemID != "" {
+		if item, ok := s.cfg.FindServiceRequestCatalogItem(itemID); ok {
+			in.Kind = "service_request"
+			if in.Category == "" {
+				in.Category = item.Category
+			}
+			if in.Title == "" {
+				in.Title = item.Title
+			}
+			if in.Priority == "" && item.Priority != "" {
+				in.Priority = item.Priority
+			}
+			if in.Description == "" {
+				in.Description = item.Description
+			}
+			in.Source = firstNonEmpty(in.Source, "manual")
+		}
+	}
 	tk, err := s.tickets.Create(in, s.actorName(r))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -870,7 +986,34 @@ func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.MarkDirty()
 	s.messages.push("ticket", "info", "新工单："+tk.Title,
-		fmt.Sprintf("优先级 %s · 状态 %s", tk.Priority, tk.Status), "sre", strconv.FormatInt(tk.ID, 10))
+		fmt.Sprintf("类型 %s · 优先级 %s · 状态 %s", tk.Kind, tk.Priority, tk.Status), "sre", strconv.FormatInt(tk.ID, 10))
+	writeJSON(w, http.StatusOK, tk)
+}
+
+func (s *Server) handleTicketLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := sreParseID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	var in struct {
+		Add    []OpsLink `json:"add"`
+		Remove *OpsLink  `json:"remove"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	rmType, rmID, rmRole := "", "", ""
+	if in.Remove != nil {
+		rmType, rmID, rmRole = in.Remove.Type, in.Remove.ID, in.Remove.Role
+	}
+	tk, err := s.tickets.Link(id, in.Add, rmType, rmID, rmRole, s.actorName(r))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, tk)
 }
 

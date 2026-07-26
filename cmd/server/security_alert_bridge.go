@@ -238,6 +238,12 @@ func (s *Server) notifySlowSQLReport(c MySQLConnection, rep *SlowSQLReport) {
 	s.store.AddLog(LogEntry{Kind: KindSystem, Level: level, Actor: "慢SQL", Host: c.Name, Message: msg})
 	s.notifier.pushChannels(serverCfg, a, true)
 	if level == "critical" && s.incidents != nil {
-		s.incidents.OnAlertTransition(a, alertKey(a), true)
+		incID := s.incidents.OnAlertTransition(a, alertKey(a), true)
+		if incID > 0 {
+			s.incidents.AddLinks(incID, []OpsLink{
+				{Type: "datasource", ID: c.ID, Role: "affects", Name: c.Name},
+				{Type: "alert", ID: alertKey(a), Role: "caused_by", Name: "slow_sql"},
+			}, "慢SQL", "慢 SQL 报告关联数据源 "+c.Name)
+		}
 	}
 }

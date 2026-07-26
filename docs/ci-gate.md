@@ -26,8 +26,19 @@
 | 索引 DDL（prod） | **必须** propose → approve → 一次性 execute |
 | `KILL <pid>` | **必须** 变更单（kind=`kill`），审批后执行 |
 | 冻结窗 | Change Window 勾选 category=`sql` 且 `freeze=true` 时，禁止 DDL（KILL 仍可用于解堵） |
+| 通用变更挂接 | SQL 变更单创建/审批/执行时自动 upsert `ChangeRecord`（`kind=sql`），双向 `change_id` / `sql_change_ids` |
 
 PostgreSQL 连接（`driver=postgres`）支持测试连通、只读查询、EXPLAIN（禁止 ANALYZE）、慢 SQL（`pg_stat_statements`）、进程/锁、Schema 浏览与健康抽检、以及经变更单的 `pg_terminate_backend`（KILL）。**不提供** DDL 变更执行；数据源类型 `postgres`/`mysql` 可关联 SQL 工具连接，供仪表盘表格面板与 AI `query_datasource` 闭环查询。
+
+## ITSM 轻量闭环（工单 / 变更 / 服务请求）
+
+| 对象 | 说明 |
+|------|------|
+| OpsLink | 工单/变更/事件上的结构化关联：`host` / `slo` / `sql_change` / `incident` / `ticket` / `change` 等 |
+| Ticket.kind | `incident`（事件升级）· `service_request`（目录项）· `task`；`GET /tickets?kind=` 过滤 |
+| 服务目录 | `GET /api/v1/service-request/catalog`（默认账号开通/权限/扩容等） |
+| ChangeRecord | 状态机 `draft→pending_approval→approved→scheduled→in_progress→completed/rolled_back`；高风险+冻结窗须先审批 |
+| 事件联动 | 告警/SLO/慢 SQL 开事件时写 Links；可一键升级工单、开应急变更、关联服务请求 |
 
 ## AI 安全与闭环门禁（Wave 1）
 

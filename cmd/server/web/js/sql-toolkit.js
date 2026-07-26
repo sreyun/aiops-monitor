@@ -556,7 +556,7 @@ function renderSQLChangeList() {
       <div class="ds-type-icon">DDL</div>
       <div class="ds-info">
         <div class="ds-name">[${esc(cr.environment || "prod")}] ${esc(cr.connection_name || cr.connection_id)}
-          <span class="tag">${esc(cr.status)}</span></div>
+          <span class="tag">${esc(cr.status)}</span>${cr.change_id?` <span class="tag" title="通用变更记录">CHG #${esc(String(cr.change_id))}</span>`:""}</div>
         <div class="ds-url"><span>${esc(cr.proposer || "")} · ${new Date(cr.created_at * 1000).toLocaleString()}</span>
           <span class="ds-auth">有效期 ${esc(expires)}</span></div>
         <pre class="mono sql-snippet">${esc(cr.sql || "")}</pre>

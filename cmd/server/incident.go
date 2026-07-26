@@ -43,6 +43,7 @@ type Incident struct {
 	AckedAt    int64           `json:"acked_at,omitempty"`
 	ResolvedAt int64           `json:"resolved_at,omitempty"`
 	TicketID   int64           `json:"ticket_id,omitempty"` // linked work order, if escalated
+	Links      []OpsLink       `json:"links,omitempty"`     // host / slo / alert / change / ticket
 }
 
 const incidentHistoryCap = 500 // resolved incidents beyond this are trimmed
@@ -96,6 +97,18 @@ func (m *incidentManager) raise(key, title, severity, source, hostID, hostname, 
 		ID: m.nextID, Key: key, Title: title, Severity: severity, Status: "open",
 		Source: source, HostID: hostID, Hostname: hostname, Type: typ,
 		CreatedAt: time.Now().Unix(),
+	}
+	if hostID != "" {
+		inc.Links = mergeOpsLinks(inc.Links, hostOpsLink(hostID, hostname))
+	}
+	if strings.HasPrefix(key, "slo/") || strings.HasPrefix(key, "slo-burn/") {
+		sloID := strings.TrimPrefix(strings.TrimPrefix(key, "slo-burn/"), "slo/")
+		if sloID != "" {
+			inc.Links = mergeOpsLinks(inc.Links, sloOpsLink(sloID))
+		}
+	}
+	if key != "" && source == "alert" {
+		inc.Links = mergeOpsLinks(inc.Links, OpsLink{Type: "alert", ID: key, Role: "caused_by"})
 	}
 	addEventLocked(&inc, "created", source, title)
 	m.incidents = append(m.incidents, inc)
@@ -271,8 +284,29 @@ func (m *incidentManager) SetTicket(id, ticketID int64, actor string) {
 	defer m.mu.Unlock()
 	if inc := m.find(id); inc != nil {
 		inc.TicketID = ticketID
+		inc.Links = mergeOpsLinks(inc.Links, ticketOpsLink(ticketID))
 		addEventLocked(inc, "escalated", actor, "")
 	}
+}
+
+// AddLinks merges OpsLinks onto an incident and optionally notes the timeline.
+func (m *incidentManager) AddLinks(id int64, links []OpsLink, actor, note string) (Incident, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inc := m.find(id)
+	if inc == nil {
+		return Incident{}, false
+	}
+	before := len(inc.Links)
+	inc.Links = mergeOpsLinks(inc.Links, links...)
+	if len(inc.Links) > before {
+		text := note
+		if text == "" {
+			text = "关联：" + formatOpsLinksHint(links)
+		}
+		addEventLocked(inc, "note", actor, text)
+	}
+	return *inc, true
 }
 
 // CreateManual opens an operator-declared incident.
