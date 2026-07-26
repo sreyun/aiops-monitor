@@ -386,7 +386,7 @@ func collectHardeningFindings() []hostSecFinding {
 	for _, p := range []string{"/tmp", "/var/tmp"} {
 		if fi, err := os.Stat(p); err == nil && fi.Mode()&0o002 != 0 {
 			fs = append(fs, hostSecFinding{
-				Level: "info", ID: "world_writable", Title: "世界可写目录",
+				Level: "info", ID: "world_writable." + filepath.Base(p), Title: "世界可写目录 — " + p,
 				Detail: p + " mode=" + fi.Mode().String(), Suggest: "确认 sticky bit 与定期清理策略",
 			})
 		}
@@ -503,7 +503,7 @@ func collectIOCFindings(procs, listens []string, hashes []hostSecHash) []hostSec
 	for _, s := range suspicious {
 		if strings.Contains(blob, s) {
 			fs = append(fs, hostSecFinding{
-				Level: "crit", ID: "ioc_process", Title: "可疑进程/路径 IOC",
+				Level: "crit", ID: "ioc_process." + sanitizeFindingID(s), Title: "可疑进程/路径 IOC — " + s,
 				Detail: "匹配: " + s, Suggest: "立即隔离主机并取证排查",
 			})
 		}
@@ -511,7 +511,8 @@ func collectIOCFindings(procs, listens []string, hashes []hostSecHash) []hostSec
 	for _, h := range hashes {
 		if strings.HasPrefix(h.Path, "/tmp/") && strings.Contains(h.Mode, "x") {
 			fs = append(fs, hostSecFinding{
-				Level: "medium", ID: "tmp_executable", Title: "/tmp 下存在可执行文件",
+				Level: "medium", ID: "tmp_executable." + sanitizeFindingID(filepath.Base(h.Path)),
+				Title: "/tmp 下存在可执行文件 — " + filepath.Base(h.Path),
 				Detail: h.Path, Suggest: "核查来源；清理非预期可执行文件",
 			})
 			break
@@ -613,7 +614,8 @@ func runClamAVScan(enable bool, paths []string) hostSecMalware {
 		if strings.Contains(ln, "FOUND") {
 			m.Infected = append(m.Infected, ln)
 			m.Findings = append(m.Findings, hostSecFinding{
-				Level: "crit", ID: "clamav_hit", Title: "ClamAV 检出恶意软件",
+				Level: "crit", ID: "clamav_hit." + sanitizeFindingID(ln),
+				Title: "ClamAV 检出恶意软件 — " + truncateStr(ln, 64),
 				Detail: ln, Suggest: "隔离文件、全盘复查、轮换凭据",
 			})
 		}
@@ -634,6 +636,34 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// sanitizeFindingID turns free-form text into a stable finding-id fragment.
+func sanitizeFindingID(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return "x"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.' || r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 48 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		sum := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(sum[:4])
+	}
+	return out
 }
 
 func min(a, b int) int {

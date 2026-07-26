@@ -62,8 +62,13 @@ type WebSecurityConfig struct {
 	AllowPrivate    bool            `json:"allow_private"`
 	UpdateTemplates bool            `json:"update_templates"`
 	ScanConcurrency int             `json:"scan_concurrency,omitempty"`
+	DefaultsGen     int             `json:"defaults_gen,omitempty"` // bumps one-time shipped-default migrations
 	Targets         []WebScanTarget `json:"targets,omitempty"`
 }
+
+// webSecDefaultsGen is bumped when shipped defaults change and existing installs
+// should be soft-migrated once (exact old values only).
+const webSecDefaultsGen = 2
 
 func (c WebSecurityConfig) withDefaults() WebSecurityConfig {
 	if c.NucleiPath == "" {
@@ -72,17 +77,35 @@ func (c WebSecurityConfig) withDefaults() WebSecurityConfig {
 	if c.Severity == "" {
 		c.Severity = "critical,high,medium,low,info"
 	}
+	// Defaults tuned for real Nuclei workloads (CVE/misconfig packs are large).
+	// Previously timeout=300s / nuclei -c=10 / scan_concurrency=1 caused frequent
+	// "超时" and serial queues that felt like hangs.
 	if c.RateLimit <= 0 {
-		c.RateLimit = 50
+		c.RateLimit = 120
+	}
+	if c.RateLimit > 500 {
+		c.RateLimit = 500
 	}
 	if c.Concurrency <= 0 {
-		c.Concurrency = 10
+		c.Concurrency = 25
+	}
+	if c.Concurrency > 100 {
+		c.Concurrency = 100
 	}
 	if c.TimeoutSec <= 0 {
-		c.TimeoutSec = 300
+		c.TimeoutSec = 900
+	}
+	if c.TimeoutSec < 60 {
+		c.TimeoutSec = 60
+	}
+	if c.TimeoutSec > 7200 {
+		c.TimeoutSec = 7200
 	}
 	if c.ScanConcurrency <= 0 {
-		c.ScanConcurrency = 1
+		c.ScanConcurrency = 3
+	}
+	if c.ScanConcurrency > 8 {
+		c.ScanConcurrency = 8
 	}
 	return c
 }
@@ -93,9 +116,52 @@ func (cs *ConfigStore) WebSecurity() WebSecurityConfig {
 	return cs.cfg.WebSecurity.withDefaults()
 }
 
+// migrateWebSecurityDefaultsOnce rewrites previously shipped defaults that caused
+// widespread timeouts / serial queues. Runs at most once per install (DefaultsGen).
+func (cs *ConfigStore) migrateWebSecurityDefaultsOnce() bool {
+	cs.mu.Lock()
+	c := cs.cfg.WebSecurity
+	if c.DefaultsGen >= webSecDefaultsGen {
+		cs.mu.Unlock()
+		return false
+	}
+	changed := false
+	if c.TimeoutSec == 0 || c.TimeoutSec == 300 {
+		c.TimeoutSec = 900
+		changed = true
+	}
+	if c.Concurrency == 0 || c.Concurrency == 10 {
+		c.Concurrency = 25
+		changed = true
+	}
+	if c.RateLimit == 0 || c.RateLimit == 50 {
+		c.RateLimit = 120
+		changed = true
+	}
+	if c.ScanConcurrency == 0 || c.ScanConcurrency == 1 {
+		c.ScanConcurrency = 3
+		changed = true
+	}
+	c.DefaultsGen = webSecDefaultsGen
+	cs.cfg.WebSecurity = c
+	cs.mu.Unlock()
+	if changed {
+		_ = cs.save()
+		slog.Info("web security defaults migrated",
+			"timeout_sec", c.TimeoutSec, "concurrency", c.Concurrency,
+			"rate_limit", c.RateLimit, "scan_concurrency", c.ScanConcurrency)
+	} else {
+		_ = cs.save() // persist DefaultsGen even when values already customized
+	}
+	return changed
+}
+
 func (cs *ConfigStore) SetWebSecurity(c WebSecurityConfig) error {
 	cs.mu.Lock()
 	c = c.withDefaults()
+	if c.DefaultsGen < webSecDefaultsGen {
+		c.DefaultsGen = webSecDefaultsGen
+	}
 	for i := range c.Targets {
 		if err := sanitizeWebTarget(&c.Targets[i], c.AllowPrivate); err != nil {
 			cs.mu.Unlock()
@@ -339,17 +405,20 @@ func randomHex(n int) string {
 
 // WebFinding is one Nuclei match.
 type WebFinding struct {
-	TemplateID  string `json:"template_id"`
-	Name        string `json:"name"`
-	Severity    string `json:"severity"`
-	URL         string `json:"url"`
-	MatchedAt   string `json:"matched_at,omitempty"`
-	Description string `json:"description,omitempty"`
-	Remediation string `json:"remediation,omitempty"`
-	CurlCommand string `json:"curl_command,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Status      string `json:"status,omitempty"`      // open|ack|false_positive|resolved
-	StatusNote  string `json:"status_note,omitempty"`
+	TemplateID       string   `json:"template_id"`
+	Name             string   `json:"name"`
+	MatcherName      string   `json:"matcher_name,omitempty"` // e.g. x-frame-options for missing-headers
+	Severity         string   `json:"severity"`
+	URL              string   `json:"url"`
+	MatchedAt        string   `json:"matched_at,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	Remediation      string   `json:"remediation,omitempty"`
+	CurlCommand      string   `json:"curl_command,omitempty"`
+	Type             string   `json:"type,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	ExtractedResults []string `json:"extracted_results,omitempty"`
+	Status           string   `json:"status,omitempty"` // open|ack|false_positive|resolved
+	StatusNote       string   `json:"status_note,omitempty"`
 }
 
 // WebScanResult is one Nuclei run.
@@ -386,24 +455,25 @@ type webScanManager struct {
 	mu      sync.Mutex
 	scans   []*WebScanResult
 	lastRun map[string]int64
-	sem     chan struct{}
 	dir     string
 	seq     int
+
+	// Dynamic scan slots: config ScanConcurrency can change at runtime.
+	// A fixed buffered channel created at startup used to ignore later config saves.
+	concMu   sync.Mutex
+	concCond *sync.Cond
+	maxConc  int
+	active   int
 }
 
 func newWebScanManager(dir string, concurrency int) *webScanManager {
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	if concurrency > 4 {
-		concurrency = 4
-	}
 	m := &webScanManager{
 		scans:   make([]*WebScanResult, 0, 32),
 		lastRun: map[string]int64{},
-		sem:     make(chan struct{}, concurrency),
 		dir:     dir,
+		maxConc: clampScanConcurrency(concurrency),
 	}
+	m.concCond = sync.NewCond(&m.concMu)
 	m.load()
 	for _, sc := range m.scans {
 		if sc != nil && sc.Seq > m.seq {
@@ -414,6 +484,41 @@ func newWebScanManager(dir string, concurrency int) *webScanManager {
 		m.seq = len(m.scans)
 	}
 	return m
+}
+
+func clampScanConcurrency(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > 8 {
+		return 8
+	}
+	return n
+}
+
+func (m *webScanManager) setScanConcurrency(n int) {
+	m.concMu.Lock()
+	m.maxConc = clampScanConcurrency(n)
+	m.concCond.Broadcast()
+	m.concMu.Unlock()
+}
+
+func (m *webScanManager) acquireScanSlot() {
+	m.concMu.Lock()
+	for m.active >= m.maxConc {
+		m.concCond.Wait()
+	}
+	m.active++
+	m.concMu.Unlock()
+}
+
+func (m *webScanManager) releaseScanSlot() {
+	m.concMu.Lock()
+	if m.active > 0 {
+		m.active--
+	}
+	m.concCond.Signal()
+	m.concMu.Unlock()
 }
 
 // allocScanMeta builds a short readable id + label, e.g.
@@ -484,9 +589,7 @@ func (m *webScanManager) add(scan *WebScanResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.scans = append([]*WebScanResult{scan}, m.scans...)
-	if len(m.scans) > webSecMaxScans {
-		m.scans = m.scans[:webSecMaxScans]
-	}
+	m.trimLocked()
 	m.saveLocked()
 }
 
@@ -500,6 +603,48 @@ func (m *webScanManager) update(scan *WebScanResult) {
 		}
 	}
 	m.saveLocked()
+}
+
+// finishIfRunning applies a completion under lock only when the scan is still
+// running — cancels/timeouts win over a stale worker finishing later.
+func (m *webScanManager) finishIfRunning(id string, apply func(live *WebScanResult)) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.scans {
+		if s == nil || s.ID != id {
+			continue
+		}
+		if s.Status != "running" {
+			return false
+		}
+		apply(s)
+		m.saveLocked()
+		return true
+	}
+	return false
+}
+
+// trimLocked keeps running scans and the newest history within webSecMaxScans.
+func (m *webScanManager) trimLocked() {
+	if len(m.scans) <= webSecMaxScans {
+		return
+	}
+	var running, rest []*WebScanResult
+	for _, sc := range m.scans {
+		if sc != nil && sc.Status == "running" {
+			running = append(running, sc)
+		} else if sc != nil {
+			rest = append(rest, sc)
+		}
+	}
+	budget := webSecMaxScans - len(running)
+	if budget < 0 {
+		budget = 0
+	}
+	if len(rest) > budget {
+		rest = rest[:budget]
+	}
+	m.scans = append(running, rest...)
 }
 
 func (m *webScanManager) list(limit int) []*WebScanResult {
@@ -609,21 +754,25 @@ func (m *webScanManager) runningCount() int {
 type nucleiJSONL struct {
 	TemplateID string `json:"template-id"`
 	Info       struct {
-		Name        string `json:"name"`
-		Severity    string `json:"severity"`
-		Description string `json:"description"`
-		Remediation string `json:"remediation"`
+		Name        string   `json:"name"`
+		Severity    string   `json:"severity"`
+		Description string   `json:"description"`
+		Remediation string   `json:"remediation"`
+		Tags        []string `json:"tags"`
 	} `json:"info"`
-	Type        string `json:"type"`
-	Host        string `json:"host"`
-	MatchedAt   string `json:"matched-at"`
-	CurlCommand string `json:"curl-command"`
+	Type             string   `json:"type"`
+	Host             string   `json:"host"`
+	MatchedAt        string   `json:"matched-at"`
+	MatcherName      string   `json:"matcher-name"`
+	ExtractedResults []string `json:"extracted-results"`
+	CurlCommand      string   `json:"curl-command"`
 }
 
 func parseNucleiJSONL(r io.Reader) []WebFinding {
 	var out []WebFinding
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 2<<20)
+	skipped := 0
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -631,6 +780,7 @@ func parseNucleiJSONL(r io.Reader) []WebFinding {
 		}
 		var n nucleiJSONL
 		if json.Unmarshal([]byte(line), &n) != nil {
+			skipped++
 			continue
 		}
 		sev := strings.ToLower(n.Info.Severity)
@@ -641,19 +791,42 @@ func parseNucleiJSONL(r io.Reader) []WebFinding {
 		if url == "" {
 			url = n.Host
 		}
+		matcher := strings.TrimSpace(n.MatcherName)
 		out = append(out, WebFinding{
-			TemplateID:  n.TemplateID,
-			Name:        n.Info.Name,
-			Severity:    sev,
-			URL:         url,
-			MatchedAt:   n.MatchedAt,
-			Description: n.Info.Description,
-			Remediation: coalesceRemediation(n.Info.Remediation, n.Info.Name, sev),
-			CurlCommand: redactCurlCommand(n.CurlCommand),
-			Type:        n.Type,
+			TemplateID:       n.TemplateID,
+			Name:             findingDisplayName(n.Info.Name, matcher),
+			MatcherName:      matcher,
+			Severity:         sev,
+			URL:              url,
+			MatchedAt:        n.MatchedAt,
+			Description:      n.Info.Description,
+			Remediation:      coalesceRemediation(n.Info.Remediation, n.Info.Name, sev, matcher, n.TemplateID),
+			CurlCommand:      redactCurlCommand(n.CurlCommand),
+			Type:             n.Type,
+			Tags:             append([]string(nil), n.Info.Tags...),
+			ExtractedResults: append([]string(nil), n.ExtractedResults...),
 		})
 	}
+	if err := sc.Err(); err != nil {
+		slog.Warn("nuclei jsonl scanner error", "err", err, "parsed", len(out), "skipped", skipped)
+	} else if skipped > 0 {
+		slog.Warn("nuclei jsonl skipped invalid lines", "skipped", skipped, "parsed", len(out))
+	}
 	return out
+}
+
+// findingDisplayName keeps multi-matcher templates distinguishable in the UI
+// (e.g. http-missing-security-headers emits one event per missing header).
+func findingDisplayName(infoName, matcher string) string {
+	infoName = strings.TrimSpace(infoName)
+	matcher = strings.TrimSpace(matcher)
+	if matcher == "" {
+		return infoName
+	}
+	if infoName == "" {
+		return matcher
+	}
+	return infoName + " [" + matcher + "]"
 }
 
 func redactCurlCommand(s string) string {
@@ -678,9 +851,23 @@ func redactCurlCommand(s string) string {
 	return out
 }
 
-func coalesceRemediation(nuclei, name, sev string) string {
-	if strings.TrimSpace(nuclei) != "" {
+func coalesceRemediation(nuclei, name, sev, matcher, templateID string) string {
+	matcher = strings.TrimSpace(matcher)
+	templateID = strings.TrimSpace(templateID)
+	nuclei = strings.TrimSpace(nuclei)
+	if nuclei != "" {
+		// Prefix matcher so multi-matcher templates with a shared Nuclei tip stay distinct.
+		if matcher != "" && !strings.Contains(strings.ToLower(nuclei), strings.ToLower(matcher)) {
+			return fmt.Sprintf("[%s] %s", matcher, nuclei)
+		}
 		return nuclei
+	}
+	// Nuclei's missing-headers template has empty remediation; generate per-header tips.
+	if (templateID == "http-missing-security-headers" || strings.Contains(strings.ToLower(name), "missing security header")) && matcher != "" {
+		return fmt.Sprintf("在 HTTP 响应中配置安全头「%s」（网关/反向代理或应用统一下发），并验证非跳转响应中生效。", matcher)
+	}
+	if matcher != "" {
+		return fmt.Sprintf("按模板「%s」匹配项「%s」(%s) 加固：升级组件、关闭暴露面或加强访问控制。", name, matcher, sev)
 	}
 	return fmt.Sprintf("按模板「%s」(%s) 的官方修复建议加固：升级组件、关闭暴露面或加强访问控制。", name, sev)
 }
@@ -704,12 +891,7 @@ func buildWebScanReport(target WebScanTarget, findings []WebFinding) *ScanReport
 	default:
 		exec += "请按严重度分批修复，并保留本报告作为审计留存。"
 	}
-	var tips []string
-	for _, f := range findings {
-		if f.Remediation != "" && len(tips) < 15 {
-			tips = append(tips, f.Name+": "+f.Remediation)
-		}
-	}
+	tips := uniqueRemediationTips(findings, 15)
 	sort.Slice(findings, func(i, j int) bool {
 		return sevRank(findings[i].Severity) > sevRank(findings[j].Severity)
 	})
@@ -722,6 +904,40 @@ func buildWebScanReport(target WebScanTarget, findings []WebFinding) *ScanReport
 		Findings:    findings,
 		Remediation: tips,
 	}
+}
+
+// uniqueRemediationTips collapses identical advice from multi-matcher templates
+// (e.g. 10× generic "HTTP Missing Security Headers" tips → distinct / once).
+func uniqueRemediationTips(findings []WebFinding, limit int) []string {
+	if limit <= 0 {
+		limit = 15
+	}
+	seenLine := map[string]bool{}
+	seenBody := map[string]bool{}
+	var tips []string
+	for _, f := range findings {
+		tip := strings.TrimSpace(f.Remediation)
+		if tip == "" {
+			continue
+		}
+		label := strings.TrimSpace(f.Name)
+		line := tip
+		if label != "" {
+			line = label + ": " + tip
+		}
+		lineKey := strings.ToLower(line)
+		bodyKey := strings.ToLower(tip)
+		if seenLine[lineKey] || seenBody[bodyKey] {
+			continue
+		}
+		seenLine[lineKey] = true
+		seenBody[bodyKey] = true
+		tips = append(tips, line)
+		if len(tips) >= limit {
+			break
+		}
+	}
+	return tips
 }
 
 func sevRank(s string) int {
@@ -795,9 +1011,7 @@ func (s *Server) beginWebScan(targetID, operator, trigger string) *WebScanResult
 		Summary:    map[string]int{},
 	}
 	s.webSec.scans = append([]*WebScanResult{scan}, s.webSec.scans...)
-	if len(s.webSec.scans) > webSecMaxScans {
-		s.webSec.scans = s.webSec.scans[:webSecMaxScans]
-	}
+	s.webSec.trimLocked()
 	s.webSec.saveLocked()
 	s.webSec.mu.Unlock()
 	return scan
@@ -811,40 +1025,54 @@ func (s *Server) completeWebScan(scanID string) {
 	cfg := s.cfg.WebSecurity()
 	t, ok := s.cfg.GetWebTarget(scan.TargetID)
 	if !ok {
-		scan.Status = "failed"
-		scan.Error = "target not found"
-		scan.FinishedAt = time.Now().Unix()
-		s.webSec.update(scan)
+		_ = s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
+			live.Status = "failed"
+			live.Error = "target not found"
+			live.FinishedAt = time.Now().Unix()
+		})
 		return
 	}
 
-	s.webSec.sem <- struct{}{}
-	defer func() { <-s.webSec.sem }()
+	s.webSec.acquireScanSlot()
+	defer s.webSec.releaseScanSlot()
+
+	// Re-check after waiting for a slot — cancel/reap may have won.
+	if cur := s.webSec.get(scanID); cur == nil || cur.Status != "running" {
+		return
+	}
 
 	if err := assertURLAllowed(t.BaseURL, cfg.AllowPrivate); err != nil {
-		scan.Status = "failed"
-		scan.Error = zhWebSecErr(err.Error())
-		scan.FinishedAt = time.Now().Unix()
-		s.webSec.update(scan)
+		_ = s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
+			live.Status = "failed"
+			live.Error = zhWebSecErr(err.Error())
+			live.FinishedAt = time.Now().Unix()
+		})
 		return
 	}
 
 	findings, err := s.execNuclei(cfg, t)
-	scan.FinishedAt = time.Now().Unix()
-	if err != nil {
-		scan.Status = "failed"
-		scan.Error = zhWebSecErr(err.Error())
-		s.webSec.update(scan)
-		return
+	finished := time.Now().Unix()
+	applied := s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
+		live.FinishedAt = finished
+		live.Summary = map[string]int{}
+		if len(findings) > 0 {
+			live.Findings = findings
+			for _, f := range findings {
+				live.Summary[f.Severity]++
+			}
+			live.Report = buildWebScanReport(t, findings)
+		}
+		if err != nil {
+			live.Status = "failed"
+			live.Error = zhWebSecErr(err.Error())
+			return
+		}
+		live.Status = "completed"
+		live.Error = ""
+	})
+	if applied && err == nil {
+		s.cfg.touchWebTargetScan(t.ID, finished)
 	}
-	scan.Findings = findings
-	for _, f := range findings {
-		scan.Summary[f.Severity]++
-	}
-	scan.Report = buildWebScanReport(t, findings)
-	scan.Status = "completed"
-	s.webSec.update(scan)
-	s.cfg.touchWebTargetScan(t.ID, scan.FinishedAt)
 }
 
 // runWebScan synchronous path for scheduler.
@@ -870,15 +1098,25 @@ var webTagTemplateDirs = map[string][]string{
 	"vulnerabilities": {"http/vulnerabilities"},
 	"technologies":    {"http/technologies"},
 	"panel":           {"http/exposed-panels"},
-	"xss":             {"http/vulnerabilities"},
-	"sqli":            {"http/vulnerabilities"},
-	"lfi":             {"http/vulnerabilities"},
-	"rce":             {"http/vulnerabilities"},
-	"iot":             {"http/iot"},
-	"network":         {"network"},
-	"dns":             {"dns"},
-	"osint":           {"http/osint"},
-	"misc":            {"http/miscellaneous"},
+	// Specialty tags share http/vulnerabilities; when used alone we still scan that
+	// dir, but buildNucleiTemplateArgs adds -tags to narrow the set.
+	"xss":     {"http/vulnerabilities"},
+	"sqli":    {"http/vulnerabilities"},
+	"lfi":     {"http/vulnerabilities"},
+	"rce":     {"http/vulnerabilities"},
+	"iot":     {"http/iot"},
+	"network": {"network"},
+	"dns":     {"dns"},
+	"osint":   {"http/osint"},
+	"misc":    {"http/miscellaneous"},
+}
+
+// webSpecialtyTags are Nuclei tags that should filter http/vulnerabilities when
+// the broad "vulnerabilities" pack is NOT also selected (avoids scanning the
+// whole vuln tree three times under deep profile — dirs are deduped, but without
+// -tags the specialty picks were uselessly identical to the full pack).
+var webSpecialtyTags = map[string]bool{
+	"xss": true, "sqli": true, "lfi": true, "rce": true,
 }
 
 // webTemplatePackMeta is the commercial UI catalog of template packs.
@@ -903,18 +1141,20 @@ type WebTemplatePack struct {
 }
 
 type WebEngineStatus struct {
-	Ready         bool              `json:"ready"`
-	NucleiPath    string            `json:"nuclei_path"`
-	NucleiVersion string            `json:"nuclei_version,omitempty"`
-	TemplatesDir  string            `json:"templates_dir"`
-	TemplateCount int               `json:"template_count"`
-	UpdatedAt     int64             `json:"updated_at,omitempty"`
-	Packs         []WebTemplatePack `json:"packs"`
-	Severity      string            `json:"severity"`
-	AllowPrivate  bool              `json:"allow_private"`
-	RateLimit     int               `json:"rate_limit"`
-	TimeoutSec    int               `json:"timeout_sec"`
-	Message       string            `json:"message,omitempty"`
+	Ready           bool              `json:"ready"`
+	NucleiPath      string            `json:"nuclei_path"`
+	NucleiVersion   string            `json:"nuclei_version,omitempty"`
+	TemplatesDir    string            `json:"templates_dir"`
+	TemplateCount   int               `json:"template_count"`
+	UpdatedAt       int64             `json:"updated_at,omitempty"`
+	Packs           []WebTemplatePack `json:"packs"`
+	Severity        string            `json:"severity"`
+	AllowPrivate    bool              `json:"allow_private"`
+	RateLimit       int               `json:"rate_limit"`
+	TimeoutSec      int               `json:"timeout_sec"`
+	Concurrency     int               `json:"concurrency"`
+	ScanConcurrency int               `json:"scan_concurrency"`
+	Message         string            `json:"message,omitempty"`
 }
 
 var (
@@ -970,13 +1210,15 @@ func (s *Server) collectWebEngineStatus(force bool) WebEngineStatus {
 	cfg := s.cfg.WebSecurity()
 	dir := s.resolveNucleiTemplatesDir(cfg)
 	st := WebEngineStatus{
-		NucleiPath:   cfg.NucleiPath,
-		TemplatesDir: dir,
-		Severity:     cfg.Severity,
-		AllowPrivate: cfg.AllowPrivate,
-		RateLimit:    cfg.RateLimit,
-		TimeoutSec:   cfg.TimeoutSec,
-		Packs:        make([]WebTemplatePack, 0, len(webTemplatePackMeta)),
+		NucleiPath:      cfg.NucleiPath,
+		TemplatesDir:    dir,
+		Severity:        cfg.Severity,
+		AllowPrivate:    cfg.AllowPrivate,
+		RateLimit:       cfg.RateLimit,
+		TimeoutSec:      cfg.TimeoutSec,
+		Concurrency:     cfg.Concurrency,
+		ScanConcurrency: cfg.ScanConcurrency,
+		Packs:           make([]WebTemplatePack, 0, len(webTemplatePackMeta)),
 	}
 	st.NucleiVersion = nucleiVersionString(cfg.NucleiPath)
 	st.Ready = nucleiTemplatesReady(dir)
@@ -1238,10 +1480,23 @@ func buildNucleiTemplateArgs(tplRoot string, t WebScanTarget) []string {
 		return args
 	}
 	if len(t.Tags) > 0 {
+		hasVulnPack := false
+		var specialty []string
 		for _, tag := range t.Tags {
+			if tag == "vulnerabilities" {
+				hasVulnPack = true
+			}
+			if webSpecialtyTags[tag] {
+				specialty = append(specialty, tag)
+			}
 			for _, sub := range webTagTemplateDirs[tag] {
 				addDir(sub)
 			}
+		}
+		// When only xss/sqli/rce (no full vulnerabilities pack), narrow with -tags
+		// so Nuclei does not execute every template under http/vulnerabilities.
+		if !hasVulnPack && len(specialty) > 0 {
+			args = append(args, "-tags", strings.Join(specialty, ","))
 		}
 		if len(args) > 0 {
 			return args
@@ -1278,33 +1533,11 @@ func (s *Server) execNuclei(cfg WebSecurityConfig, t WebScanTarget) ([]WebFindin
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSec)*time.Second)
 	defer cancel()
 
-	args := []string{
-		"-u", t.BaseURL,
-		"-jsonl",
-		"-silent",
-		"-severity", cfg.Severity,
-		"-rate-limit", fmt.Sprintf("%d", cfg.RateLimit),
-		"-c", fmt.Sprintf("%d", cfg.Concurrency),
-		"-disable-update-check",
-	}
-	args = append(args, buildNucleiTemplateArgs(tplDir, t)...)
-	for _, p := range t.Include {
-		if full, ok := constrainPathUnderRoot(p, tplDir); ok {
-			args = append(args, "-include-path", full)
-		}
-	}
-	for _, p := range t.Exclude {
-		if full, ok := constrainPathUnderRoot(p, tplDir); ok {
-			args = append(args, "-exclude-path", full)
-		}
-	}
 	authHeaders, authErr := resolveWebAuthHeaders(t, cfg.AllowPrivate)
 	if authErr != nil {
 		return nil, fmt.Errorf("鉴权准备失败：%w", authErr)
 	}
-	for _, h := range authHeaders {
-		args = append(args, "-H", h)
-	}
+	args := buildNucleiRunArgs(cfg, t, tplDir, authHeaders)
 
 	findings, errMsg, waitErr := runNucleiOnce(ctx, bin, args)
 	if ctx.Err() == context.DeadlineExceeded {
@@ -1333,33 +1566,66 @@ func (s *Server) execNuclei(cfg WebSecurityConfig, t WebScanTarget) ([]WebFindin
 		_ = os.RemoveAll(tplDir + ".bak")
 		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSec)*time.Second)
 		defer cancel2()
-		args = []string{
-			"-u", t.BaseURL, "-jsonl", "-silent",
-			"-severity", cfg.Severity,
-			"-rate-limit", fmt.Sprintf("%d", cfg.RateLimit),
-			"-c", fmt.Sprintf("%d", cfg.Concurrency),
-			"-disable-update-check",
-		}
-		args = append(args, buildNucleiTemplateArgs(tplDir, t)...)
-		for _, p := range t.Include {
-			if full, ok := constrainPathUnderRoot(p, tplDir); ok {
-				args = append(args, "-include-path", full)
-			}
-		}
-		for _, p := range t.Exclude {
-			if full, ok := constrainPathUnderRoot(p, tplDir); ok {
-				args = append(args, "-exclude-path", full)
-			}
-		}
-		for _, h := range authHeaders {
-			args = append(args, "-H", h)
-		}
+		args = buildNucleiRunArgs(cfg, t, tplDir, authHeaders)
 		findings, errMsg, waitErr = runNucleiOnce(ctx2, bin, args)
 	}
 	if waitErr != nil && len(findings) == 0 {
 		return nil, fmt.Errorf("%s", humanizeNucleiErr(errMsg, waitErr))
 	}
 	return findings, nil
+}
+
+// buildNucleiRunArgs assembles Nuclei CLI flags for a single-target scan.
+func buildNucleiRunArgs(cfg WebSecurityConfig, t WebScanTarget, tplDir string, authHeaders []string) []string {
+	concurrency := cfg.Concurrency
+	if concurrency <= 0 {
+		concurrency = 25
+	}
+	rateLimit := cfg.RateLimit
+	if rateLimit <= 0 {
+		rateLimit = 120
+	}
+	bulk := concurrency
+	if bulk < 25 {
+		bulk = 25
+	}
+	if bulk > 50 {
+		bulk = 50
+	}
+	severity := cfg.Severity
+	if severity == "" {
+		severity = "critical,high,medium,low,info"
+	}
+	args := []string{
+		"-u", t.BaseURL,
+		"-jsonl",
+		"-silent",
+		"-severity", severity,
+		"-rate-limit", fmt.Sprintf("%d", rateLimit),
+		"-c", fmt.Sprintf("%d", concurrency),
+		"-bulk-size", fmt.Sprintf("%d", bulk),
+		"-timeout", "10",
+		"-retries", "1",
+		"-max-host-error", "40",
+		"-disable-update-check",
+		"-nh",       // skip httpx probing — target URL is already known
+		"-omit-raw", // shrink JSONL IO on the hot path
+	}
+	args = append(args, buildNucleiTemplateArgs(tplDir, t)...)
+	for _, p := range t.Include {
+		if full, ok := constrainPathUnderRoot(p, tplDir); ok {
+			args = append(args, "-include-path", full)
+		}
+	}
+	for _, p := range t.Exclude {
+		if full, ok := constrainPathUnderRoot(p, tplDir); ok {
+			args = append(args, "-exclude-path", full)
+		}
+	}
+	for _, h := range authHeaders {
+		args = append(args, "-H", h)
+	}
+	return args
 }
 
 func runNucleiOnce(ctx context.Context, bin string, args []string) ([]WebFinding, string, error) {

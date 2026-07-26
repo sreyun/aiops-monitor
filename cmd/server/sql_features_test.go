@@ -57,17 +57,28 @@ func TestSQLQueryHistoryPerUser(t *testing.T) {
 }
 
 func TestHostFindingKeyStable(t *testing.T) {
-	k1 := hostFindingKey("h1", HostFinding{Category: "cve", CVE: "CVE-2024-1", Title: "x"})
-	k2 := hostFindingKey("h1", HostFinding{Category: "cve", CVE: "CVE-2024-1", Title: "y"})
+	// Same CVE on the same package must share a status key.
+	k1 := hostFindingKey("h1", HostFinding{Category: "cve", CVE: "CVE-2024-1", ID: "CVE-2024-1", Package: "openssl", Title: "x"})
+	k2 := hostFindingKey("h1", HostFinding{Category: "cve", CVE: "CVE-2024-1", ID: "CVE-2024-1", Package: "openssl", Title: "y"})
 	if k1 != k2 {
-		t.Fatalf("keys differ: %q vs %q", k1, k2)
+		t.Fatalf("same package keys differ: %q vs %q", k1, k2)
+	}
+	// Same CVE on different packages must NOT collapse.
+	k3 := hostFindingKey("h1", HostFinding{Category: "cve", CVE: "CVE-2024-1", ID: "CVE-2024-1", Package: "libssl", Title: "x"})
+	if k1 == k3 {
+		t.Fatalf("different packages collapsed: %q", k1)
 	}
 }
 
 func TestWebFindingKey(t *testing.T) {
-	k := webFindingKey("t1", "tpl-x", "https://a.example/x")
+	k := webFindingKey("t1", "tpl-x", "https://a.example/x", "")
 	if !strings.HasPrefix(k, "web:t1:tpl-x:") {
 		t.Fatalf("bad key %q", k)
+	}
+	kA := webFindingKey("t1", "http-missing-security-headers", "https://a.example/", "x-frame-options")
+	kB := webFindingKey("t1", "http-missing-security-headers", "https://a.example/", "content-security-policy")
+	if kA == kB {
+		t.Fatalf("matcher names collapsed: %q", kA)
 	}
 }
 
