@@ -158,11 +158,15 @@ func (s *Server) handleSetWebSecurityConfig(w http.ResponseWriter, r *http.Reque
 		writeSecErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Apply scan-slot concurrency immediately (was previously stuck at process start value).
+	out := s.cfg.WebSecurity()
+	if s.webSec != nil {
+		s.webSec.setScanConcurrency(out.ScanConcurrency)
+	}
 	s.store.AddLog(LogEntry{
 		Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
 		Message: "updated web security config",
 	})
-	out := s.cfg.WebSecurity()
 	out.Targets = nil
 	writeJSON(w, http.StatusOK, out)
 }

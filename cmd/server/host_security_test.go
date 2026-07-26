@@ -85,16 +85,17 @@ func TestQueryOSVBatchMock(t *testing.T) {
 
 func TestHostSecScheduleInterval(t *testing.T) {
 	m := newHostSecurityManager(t.TempDir())
+	// Runtime floors interval to ≥15m to avoid hammering agents.
 	sc := &PlaybookSchedule{Enabled: true, Kind: "interval", IntervalMin: 5}
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	if !hostSecScheduleDue(sc, m, now) {
 		t.Fatal("first fire expected")
 	}
-	if hostSecScheduleDue(sc, m, now.Add(2*time.Minute)) {
-		t.Fatal("should not fire within interval")
+	if hostSecScheduleDue(sc, m, now.Add(5*time.Minute)) {
+		t.Fatal("should not fire within floored 15m interval")
 	}
-	if !hostSecScheduleDue(sc, m, now.Add(5*time.Minute)) {
-		t.Fatal("should fire after interval")
+	if !hostSecScheduleDue(sc, m, now.Add(15*time.Minute)) {
+		t.Fatal("should fire after floored interval")
 	}
 }
 

@@ -114,6 +114,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	s.sreyun = newSreyunCore(s)
 	secDir := cfg.securityDataDir()
 	s.hostSec = newHostSecurityManager(secDir)
+	cfg.migrateWebSecurityDefaultsOnce()
 	s.webSec = newWebScanManager(secDir, cfg.WebSecurity().ScanConcurrency)
 	s.sqlHistory = newSQLQueryHistoryManager(secDir)
 	s.secFindings = newSecurityFindingManager(secDir)

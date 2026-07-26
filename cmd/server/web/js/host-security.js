@@ -98,20 +98,23 @@ async function hsUpdateFindingStatus(finding, status) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         scope: "host", host_id: hsSelected.host_id, status,
-        finding: { id: finding.id, category: finding.category, cve: finding.cve, title: finding.title },
+        finding: {
+          id: finding.id, category: finding.category, cve: finding.cve, title: finding.title,
+          detail: finding.detail || "", package: finding.package || "",
+        },
       }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || "更新失败");
     finding.status = status;
-    paintHostSecurityDetail(hsSelected);
+    hsPaintDetail(hsSelected);
     toast(hsT("hs.finding_updated", "状态已更新"), "ok");
   } catch (e) { toast(e.message || String(e), "err"); }
 }
 function hsFindingStatusControls(f) {
   const st = f.status || "open";
   const opts = ["open", "ack", "false_positive", "resolved"];
-  return `<select class="hs-finding-status" data-hsfid="${hsEsc(f.id || "")}" data-hscat="${hsEsc(f.category || "")}" style="font-size:11px;height:26px">
+  return `<select class="hs-finding-status" data-hsfid="${hsEsc(f.id || "")}" data-hscat="${hsEsc(f.category || "")}" data-hsdetail="${hsEsc(f.detail || "")}" data-hspkg="${hsEsc(f.package || "")}" style="font-size:11px;height:26px">
     ${opts.map(o => `<option value="${o}"${o === st ? " selected" : ""}>${o}</option>`).join("")}
   </select>`;
 }
@@ -619,7 +622,13 @@ function hsPaintDetail(scan, opts) {
   }
   if ((scan.remediation || []).length) {
     html += `<div class="sec-remediation"><div class="cfg-panel-title">${hsEsc(hsT("hs.remediation", "修复建议"))}</div><ul>`;
-    scan.remediation.forEach(t => { html += `<li>${hsEsc(t)}</li>`; });
+    const seenTips = new Set();
+    scan.remediation.forEach(t => {
+      const key = String(t || "").trim().toLowerCase();
+      if (!key || seenTips.has(key)) return;
+      seenTips.add(key);
+      html += `<li>${hsEsc(t)}</li>`;
+    });
     html += `</ul></div>`;
   }
   html += `<div class="cfg-panel-title">${hsEsc(hsT("hs.findings", "风险明细"))} <span class="tag">${(scan.findings || []).length}</span></div>`;
@@ -645,10 +654,16 @@ function hsPaintDetail(scan, opts) {
   box.innerHTML = html;
   box.querySelectorAll(".hs-finding-status").forEach(sel => {
     sel.addEventListener("change", () => {
-      const fid = sel.dataset.hsfid;
-      const cat = sel.dataset.hscat;
-      const finding = (scan.findings || []).find(x => (x.id || "") === fid && (x.category || "") === cat)
-        || (scan.findings || []).find(x => (x.id || x.cve || "") === fid);
+      const fid = sel.dataset.hsfid || "";
+      const cat = sel.dataset.hscat || "";
+      const detail = sel.dataset.hsdetail || "";
+      const pkg = sel.dataset.hspkg || "";
+      const finding = (scan.findings || []).find(x =>
+        (x.id || "") === fid &&
+        (x.category || "") === cat &&
+        (x.detail || "") === detail &&
+        (x.package || "") === pkg
+      ) || (scan.findings || []).find(x => (x.id || "") === fid && (x.category || "") === cat);
       if (finding) hsUpdateFindingStatus(finding, sel.value);
     });
   });

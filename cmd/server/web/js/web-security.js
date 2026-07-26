@@ -86,20 +86,24 @@ async function wsUpdateFindingStatus(finding, status) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         scope: "web", target_id: wsSelected.target_id, status,
-        finding: { template_id: finding.template_id, url: finding.url || finding.matched_at },
+        finding: {
+          template_id: finding.template_id,
+          url: finding.url || finding.matched_at,
+          matcher_name: finding.matcher_name || "",
+        },
       }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || "更新失败");
     finding.status = status;
-    paintWebScanDetail(wsSelected);
+    wsPaintDetail(wsSelected);
     toast(wsT("ws.finding_updated", "状态已更新"), "ok");
   } catch (e) { toast(e.message || String(e), "err"); }
 }
 function wsFindingStatusSelect(f) {
   const st = f.status || "open";
   const opts = ["open", "ack", "false_positive", "resolved"];
-  return `<select class="ws-finding-status" data-wstpl="${wsEsc(f.template_id || "")}" style="font-size:11px;height:26px;margin-left:6px">
+  return `<select class="ws-finding-status" data-wstpl="${wsEsc(f.template_id || "")}" data-wsmatcher="${wsEsc(f.matcher_name || "")}" data-wsurl="${wsEsc(f.url || f.matched_at || "")}" style="font-size:11px;height:26px;margin-left:6px">
     ${opts.map(o => `<option value="${o}"${o === st ? " selected" : ""}>${o}</option>`).join("")}
   </select>`;
 }
@@ -196,8 +200,10 @@ function wsEngineBarHTML() {
       <div class="ws-engine-kpis">
         <div><strong>${e.template_count || 0}</strong><span>${wsEsc(wsT("ws.tpl_total", "模板"))}</span></div>
         <div><strong>${activePacks.length}</strong><span>${wsEsc(wsT("ws.tpl_packs", "模板包"))}</span></div>
-        <div><strong>${e.timeout_sec || 300}s</strong><span>${wsEsc(wsT("ws.cfg_timeout_short", "超时"))}</span></div>
-        <div><strong>${e.rate_limit || 50}/s</strong><span>${wsEsc(wsT("ws.cfg_rate_short", "速率"))}</span></div>
+        <div><strong>${e.timeout_sec || 900}s</strong><span>${wsEsc(wsT("ws.cfg_timeout_short", "超时"))}</span></div>
+        <div><strong>${e.rate_limit || 120}/s</strong><span>${wsEsc(wsT("ws.cfg_rate_short", "速率"))}</span></div>
+        <div><strong>${e.concurrency || 25}</strong><span>${wsEsc(wsT("ws.cfg_conc_short", "模板并发"))}</span></div>
+        <div><strong>${e.scan_concurrency || 3}</strong><span>${wsEsc(wsT("ws.cfg_scan_conc_short", "任务并发"))}</span></div>
       </div>
       <div class="ws-engine-actions">
         <button class="btn sm ghost" data-ws="toggle-packs">${wsEsc(wsShowPacks ? wsT("ws.hide_packs", "收起模板包") : wsT("ws.show_packs", "模板包"))}</button>
@@ -226,12 +232,18 @@ function wsCfgPanelHTML() {
       </div>
       <div class="ws-cfg-card">
         <h4>${wsEsc(wsT("ws.cfg_limit_title", "速度与时限"))}</h4>
-        <p class="ws-help">${wsEsc(wsT("ws.cfg_limit_help", "超时：单次扫描最长等待；速率：每秒最大请求数，过大可能影响业务站点。"))}</p>
+        <p class="ws-help">${wsEsc(wsT("ws.cfg_limit_help", "超时：单次扫描最长等待；速率：每秒最大请求数；模板并发：Nuclei 内部并行；任务并发：同时扫描几个目标。标准/深度含 CVE 包时建议超时≥900s。"))}</p>
         <div class="cfg-form-row">
           <div class="field"><label>${wsEsc(wsT("ws.cfg_timeout", "超时（秒）"))}</label>
-            <input id="wsCfgTimeout" type="number" min="60" max="3600" value="${wsEsc(wsCfg.timeout_sec || 300)}"></div>
+            <input id="wsCfgTimeout" type="number" min="60" max="7200" value="${wsEsc(wsCfg.timeout_sec || 900)}"></div>
           <div class="field"><label>${wsEsc(wsT("ws.cfg_rate", "速率限制（请求/秒）"))}</label>
-            <input id="wsCfgRate" type="number" min="5" max="500" value="${wsEsc(wsCfg.rate_limit || 50)}"></div>
+            <input id="wsCfgRate" type="number" min="5" max="500" value="${wsEsc(wsCfg.rate_limit || 120)}"></div>
+        </div>
+        <div class="cfg-form-row">
+          <div class="field"><label>${wsEsc(wsT("ws.cfg_concurrency", "模板并发（-c）"))}</label>
+            <input id="wsCfgConc" type="number" min="5" max="100" value="${wsEsc(wsCfg.concurrency || 25)}"></div>
+          <div class="field"><label>${wsEsc(wsT("ws.cfg_scan_concurrency", "任务并发"))}</label>
+            <input id="wsCfgScanConc" type="number" min="1" max="8" value="${wsEsc(wsCfg.scan_concurrency || 3)}"></div>
         </div>
       </div>
       <div class="ws-cfg-card">
@@ -549,12 +561,29 @@ function wsHistoryRowsHTML() {
 }
 
 function wsLatestSummary() {
-  const done = wsScans.filter(s => s.status === "completed");
+  // Latest completed scan per target — avoid summing the same target N times.
+  const latest = new Map();
+  wsScans.filter(s => s.status === "completed").forEach(s => {
+    const prev = latest.get(s.target_id);
+    if (!prev || (s.finished_at || 0) > (prev.finished_at || 0)) latest.set(s.target_id, s);
+  });
   let crit = 0, high = 0, hits = 0;
-  done.slice(0, 10).forEach(s => {
-    crit += (s.summary && s.summary.critical) || 0;
-    high += (s.summary && s.summary.high) || 0;
-    hits += (s.findings || []).length;
+  latest.forEach(s => {
+    const open = (s.findings || []).filter(f => {
+      const st = String(f.status || "open").toLowerCase();
+      return st !== "resolved" && st !== "false_positive" && st !== "ack";
+    });
+    const list = open.length ? open : (s.findings || []);
+    hits += list.length;
+    list.forEach(f => {
+      const sev = String(f.severity || "").toLowerCase();
+      if (sev === "critical") crit++;
+      else if (sev === "high") high++;
+    });
+    if (!list.length) {
+      crit += (s.summary && s.summary.critical) || 0;
+      high += (s.summary && s.summary.high) || 0;
+    }
   });
   return { crit, high, hits, running: wsScans.filter(s => s.status === "running").length };
 }
@@ -923,13 +952,13 @@ async function wsSaveCfg() {
   const body = {
     nuclei_path: ($("wsCfgPath") && $("wsCfgPath").value) || "nuclei",
     severity: sev,
-    timeout_sec: parseInt(($("wsCfgTimeout") && $("wsCfgTimeout").value) || "300", 10),
-    rate_limit: parseInt(($("wsCfgRate") && $("wsCfgRate").value) || "50", 10),
+    timeout_sec: parseInt(($("wsCfgTimeout") && $("wsCfgTimeout").value) || "900", 10),
+    rate_limit: parseInt(($("wsCfgRate") && $("wsCfgRate").value) || "120", 10),
     allow_private: !!($("wsCfgPrivate") && $("wsCfgPrivate").checked),
     update_templates: !!($("wsCfgUpdate") && $("wsCfgUpdate").checked),
     templates_dir: (wsCfg && wsCfg.templates_dir) || "",
-    concurrency: (wsCfg && wsCfg.concurrency) || 10,
-    scan_concurrency: (wsCfg && wsCfg.scan_concurrency) || 1,
+    concurrency: parseInt(($("wsCfgConc") && $("wsCfgConc").value) || ((wsCfg && wsCfg.concurrency) || 25), 10),
+    scan_concurrency: parseInt(($("wsCfgScanConc") && $("wsCfgScanConc").value) || ((wsCfg && wsCfg.scan_concurrency) || 3), 10),
   };
   try {
     wsCfg = await wsFetchJSON(`${API}/security/web/config`, {
@@ -1074,8 +1103,14 @@ function wsPaintDetail(scan) {
   box.innerHTML = html;
   box.querySelectorAll(".ws-finding-status").forEach(sel => {
     sel.addEventListener("change", () => {
-      const tpl = sel.dataset.wstpl;
-      const finding = (scan.findings || []).find(x => (x.template_id || "") === tpl);
+      const tpl = sel.dataset.wstpl || "";
+      const matcher = sel.dataset.wsmatcher || "";
+      const url = sel.dataset.wsurl || "";
+      const finding = (scan.findings || []).find(x =>
+        (x.template_id || "") === tpl &&
+        (x.matcher_name || "") === matcher &&
+        ((x.url || x.matched_at || "") === url)
+      ) || (scan.findings || []).find(x => (x.template_id || "") === tpl && (x.matcher_name || "") === matcher);
       if (finding) wsUpdateFindingStatus(finding, sel.value);
     });
   });

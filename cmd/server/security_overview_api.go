@@ -83,12 +83,11 @@ func (s *Server) countOpenSecurityFindings() (critical, high int) {
 		if scan == nil || scan.Status != "completed" {
 			continue
 		}
-		if scan.Summary != nil {
-			critical += scan.Summary["critical"]
-			high += scan.Summary["high"]
-			continue
-		}
-		for _, f := range scan.Findings {
+		findings := mergeHostFindingStatus(s.secFindings, scan.HostID, scan.Findings)
+		for _, f := range findings {
+			if !findingOpen(f.Status) {
+				continue
+			}
 			switch strings.ToLower(f.Level) {
 			case "critical", "crit":
 				critical++
@@ -111,12 +110,8 @@ func (s *Server) countOpenSecurityFindings() (critical, high int) {
 		}
 	}
 	for _, sc := range latestWeb {
-		if sc.Summary != nil {
-			critical += sc.Summary["critical"]
-			high += sc.Summary["high"]
-			continue
-		}
-		for _, f := range sc.Findings {
+		findings := mergeWebFindingStatus(s.secFindings, sc.TargetID, sc.Findings)
+		for _, f := range findings {
 			if !findingOpen(f.Status) {
 				continue
 			}

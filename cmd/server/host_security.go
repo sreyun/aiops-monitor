@@ -301,9 +301,7 @@ func (m *hostSecurityManager) add(scan *HostScanResult) {
 	if len(m.scans) > hostSecMaxScans {
 		m.scans = m.scans[:hostSecMaxScans]
 	}
-	if scan.Status == "completed" || scan.Status == "failed" {
-		m.lastByHost[scan.HostID] = scan
-	}
+	m.rememberLastLocked(scan)
 	m.saveLocked()
 }
 
@@ -316,10 +314,44 @@ func (m *hostSecurityManager) update(scan *HostScanResult) {
 			break
 		}
 	}
-	if scan.Status == "completed" || scan.Status == "failed" {
-		m.lastByHost[scan.HostID] = scan
-	}
+	m.rememberLastLocked(scan)
 	m.saveLocked()
+}
+
+// finishIfRunning applies completion only while the scan is still running.
+func (m *hostSecurityManager) finishIfRunning(id string, apply func(live *HostScanResult)) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.scans {
+		if s == nil || s.ID != id {
+			continue
+		}
+		if s.Status != "running" {
+			return false
+		}
+		apply(s)
+		m.rememberLastLocked(s)
+		m.saveLocked()
+		return true
+	}
+	return false
+}
+
+// rememberLastLocked prefers the latest completed scan over a newer failed one
+// so a flaky retry does not wipe the last good posture from the host summary.
+func (m *hostSecurityManager) rememberLastLocked(scan *HostScanResult) {
+	if scan == nil || scan.HostID == "" {
+		return
+	}
+	switch scan.Status {
+	case "completed":
+		m.lastByHost[scan.HostID] = scan
+	case "failed":
+		prev := m.lastByHost[scan.HostID]
+		if prev == nil || prev.Status != "completed" {
+			m.lastByHost[scan.HostID] = scan
+		}
+	}
 }
 
 func (m *hostSecurityManager) list(limit int) []*HostScanResult {
@@ -529,7 +561,7 @@ func queryOSVBatch(ctx context.Context, url string, pkgs []hsAgentPkg, distro, p
 			findings = append(findings, HostFinding{
 				Level:    level,
 				Category: "cve",
-				ID:       v.ID,
+				ID:       v.ID + "@" + p.Name, // package-scoped so same CVE on different pkgs is distinct
 				Title:    title,
 				Detail:   fmt.Sprintf("%s %s — %s", p.Name, p.Version, cve),
 				Suggest:  pkgUpgradeSuggest(pkgMgr, p.Name),
@@ -668,45 +700,65 @@ func scoreHostFindings(findings []HostFinding) (score int, risk string, summary 
 }
 
 func buildRemediation(rep hsAgentReport, findings []HostFinding) []string {
+	seen := map[string]bool{}
 	var tips []string
+	add := func(tip string) {
+		tip = strings.TrimSpace(tip)
+		if tip == "" {
+			return
+		}
+		key := strings.ToLower(tip)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		tips = append(tips, tip)
+	}
 	switch rep.Malware.ClamAV {
 	case "unavailable":
 		switch strings.ToLower(rep.OS) {
 		case "darwin":
-			tips = append(tips, "macOS：brew install clamav && sudo freshclam，然后重启 Agent 再扫描")
+			add("macOS：brew install clamav && sudo freshclam，然后重启 Agent 再扫描")
 		case "windows":
-			tips = append(tips, "Windows：安装 ClamAV 并确保 clamscan 在 PATH 中，然后重启 Agent")
+			add("Windows：安装 ClamAV 并确保 clamscan 在 PATH 中，然后重启 Agent")
 		default:
-			tips = append(tips, "Linux：安装 ClamAV（apt/yum/apk install clamav）并执行 freshclam 更新病毒库")
+			add("Linux：安装 ClamAV（apt/yum/apk install clamav）并执行 freshclam 更新病毒库")
 		}
 	case "error":
-		tips = append(tips, "ClamAV 已安装但病毒库异常：请在目标主机执行 sudo freshclam 后重试")
+		add("ClamAV 已安装但病毒库异常：请在目标主机执行 sudo freshclam 后重试")
 	}
 	if len(rep.Malware.Infected) > 0 {
-		tips = append(tips, "立即隔离并处置 ClamAV 命中文件，复核启动项与 crontab")
+		add("立即隔离并处置 ClamAV 命中文件，复核启动项与 crontab")
 	}
 	switch strings.ToLower(rep.Firewall.Status) {
 	case "off":
-		tips = append(tips, "启用系统防火墙并按业务最小化放行入站端口")
+		add("启用系统防火墙并按业务最小化放行入站端口")
 	case "partial":
-		tips = append(tips, "系统防火墙部分配置文件未开启，请统一开启域/专用/公用配置")
+		add("系统防火墙部分配置文件未开启，请统一开启域/专用/公用配置")
 	}
 	cveSeen := 0
 	for _, f := range findings {
 		if f.Category == "cve" && f.Suggest != "" && cveSeen < 8 {
-			tips = append(tips, f.Suggest+"  # "+f.CVE)
+			line := f.Suggest
+			if f.CVE != "" {
+				line += "  # " + f.CVE
+			}
+			if f.Package != "" {
+				line += " (" + f.Package + ")"
+			}
+			add(line)
 			cveSeen++
 		}
 	}
 	for _, f := range findings {
 		if f.Category == "hardening" && f.Suggest != "" && len(tips) < 20 {
-			tips = append(tips, f.Suggest)
+			add(f.Suggest)
 		}
 	}
 	portTips := 0
 	for _, f := range findings {
 		if f.Category == "port" && f.Suggest != "" && portTips < 6 && len(tips) < 24 {
-			tips = append(tips, f.Suggest+"  # "+f.Title)
+			add(f.Suggest + "  # " + f.Title)
 			portTips++
 		}
 	}
@@ -716,21 +768,44 @@ func buildRemediation(rep hsAgentReport, findings []HostFinding) []string {
 func normalizeAgentFindings(rep hsAgentReport, cves []HostFinding) []HostFinding {
 	var out []HostFinding
 	for _, f := range rep.Hardening {
+		id := strings.TrimSpace(f.ID)
+		if id != "" && f.Detail != "" && (id == "world_writable" || strings.HasSuffix(id, "_writable")) {
+			id = id + "." + shortDiscHash(f.Detail)
+		}
 		out = append(out, HostFinding{
-			Level: f.Level, Category: "hardening", ID: f.ID, Title: f.Title,
+			Level: f.Level, Category: "hardening", ID: id, Title: f.Title,
 			Detail: f.Detail, Suggest: f.Suggest,
 		})
 	}
 	for _, f := range rep.IOC {
+		id := strings.TrimSpace(f.ID)
+		if id != "" && f.Detail != "" {
+			id = id + "." + shortDiscHash(f.Detail)
+		}
+		title := f.Title
+		if f.Detail != "" && !strings.Contains(title, f.Detail) {
+			title = title + " — " + truncateRun(f.Detail, 80)
+		}
 		out = append(out, HostFinding{
-			Level: f.Level, Category: "ioc", ID: f.ID, Title: f.Title,
+			Level: f.Level, Category: "ioc", ID: id, Title: title,
 			Detail: f.Detail, Suggest: f.Suggest,
 		})
 	}
 	seenInfected := map[string]bool{}
 	for _, f := range rep.Malware.Findings {
+		id := strings.TrimSpace(f.ID)
+		if id == "" {
+			id = "malware"
+		}
+		if f.Detail != "" {
+			id = id + "." + shortDiscHash(f.Detail)
+		}
+		title := f.Title
+		if f.Detail != "" && strings.EqualFold(title, "ClamAV 命中") {
+			title = "ClamAV 命中 — " + truncateRun(f.Detail, 80)
+		}
 		out = append(out, HostFinding{
-			Level: f.Level, Category: "malware", ID: f.ID, Title: f.Title,
+			Level: f.Level, Category: "malware", ID: id, Title: title,
 			Detail: f.Detail, Suggest: f.Suggest,
 		})
 		if f.Detail != "" {
@@ -742,17 +817,44 @@ func normalizeAgentFindings(rep hsAgentReport, cves []HostFinding) []HostFinding
 			continue
 		}
 		out = append(out, HostFinding{
-			Level: "crit", Category: "malware", ID: "clamav.infected",
-			Title: "ClamAV 命中", Detail: path,
+			Level: "crit", Category: "malware", ID: "clamav.infected." + shortDiscHash(path),
+			Title: "ClamAV 命中 — " + truncateRun(path, 80), Detail: path,
 			Suggest: "隔离并删除/检疫该文件，排查横向移动痕迹",
 		})
 	}
 	out = append(out, cves...)
-	// Cap findings for UI/storage
-	if len(out) > 400 {
-		out = out[:400]
-	}
 	return out
+}
+
+// mergeAndCapFindings keeps high-severity and port findings when capping for UI/storage.
+func mergeAndCapFindings(base, ports []HostFinding, limit int) []HostFinding {
+	if limit <= 0 {
+		limit = 400
+	}
+	all := append([]HostFinding(nil), base...)
+	all = append(all, ports...)
+	if len(all) <= limit {
+		return all
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		return sevRank(hostLevelToSev(all[i].Level)) > sevRank(hostLevelToSev(all[j].Level))
+	})
+	return all[:limit]
+}
+
+func hostLevelToSev(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "crit", "critical":
+		return "critical"
+	case "high":
+		return "high"
+	case "medium", "med", "warn", "warning":
+		return "medium"
+	case "low":
+		return "low"
+	default:
+		return "info"
+	}
 }
 
 func (m *hostSecurityManager) hasRunning(hostID string) bool {
@@ -794,8 +896,8 @@ func (m *hostSecurityManager) reapStuckLocked(timeoutSec int) int {
 			n++
 		}
 	}
-	if n > 0 && m.persist != nil {
-		go m.persist()
+	if n > 0 {
+		m.saveLocked()
 	}
 	return n
 }
@@ -814,9 +916,7 @@ func (m *hostSecurityManager) cancelScan(id string) bool {
 		sc.Status = "failed"
 		sc.Error = "已取消"
 		sc.FinishedAt = time.Now().Unix()
-		if m.persist != nil {
-			go m.persist()
-		}
+		m.saveLocked()
 		return true
 	}
 	return false
@@ -858,27 +958,44 @@ func (s *Server) beginHostSecurityScan(hostID, operator, trigger string) *HostSc
 			Status: "failed", Error: "主机离线，无法启动扫描", Findings: []HostFinding{}, Summary: map[string]int{},
 		}
 	}
-	if s.hostSec.hasRunning(hostID) {
-		return &HostScanResult{
-			ID: "hs-busy", Label: hostname + " · 进行中", HostID: hostID, Hostname: hostname,
-			Status: "failed", Error: "该主机已有扫描进行中，请稍后再试", Findings: []HostFinding{}, Summary: map[string]int{},
+	// Atomic check+insert under one lock to avoid duplicate in-flight scans.
+	s.hostSec.mu.Lock()
+	s.hostSec.reapStuckLocked(0)
+	for _, sc := range s.hostSec.scans {
+		if sc != nil && sc.HostID == hostID && sc.Status == "running" {
+			s.hostSec.mu.Unlock()
+			return &HostScanResult{
+				ID: "hs-busy", Label: hostname + " · 进行中", HostID: hostID, Hostname: hostname,
+				Status: "failed", Error: "该主机已有扫描进行中，请稍后再试", Findings: []HostFinding{}, Summary: map[string]int{},
+			}
 		}
 	}
-	if s.hostSec.runningCount() >= 12 {
+	running := 0
+	for _, sc := range s.hostSec.scans {
+		if sc != nil && sc.Status == "running" {
+			running++
+		}
+	}
+	if running >= 12 {
+		s.hostSec.mu.Unlock()
 		return &HostScanResult{
 			ID: "hs-queue", Label: "队列已满", HostID: hostID, Hostname: hostname,
 			Status: "failed", Error: "扫描队列已满（最多 12 个进行中），请稍后再试",
 			Findings: []HostFinding{}, Summary: map[string]int{},
 		}
 	}
-	id, label, seq := s.hostSec.allocScanMeta(hostname)
+	s.hostSec.seq++
+	seq := s.hostSec.seq
+	now := time.Now()
+	id := fmt.Sprintf("hs-%03d-%s-%s", seq, now.Format("0102-1504"), randomHex(2))
+	label := fmt.Sprintf("%s · #%03d · %s", hostname, seq, now.Format("01-02 15:04"))
 	scan := &HostScanResult{
 		ID:        id,
 		Label:     label,
 		Seq:       seq,
 		HostID:    hostID,
 		Hostname:  hostname,
-		StartedAt: time.Now().Unix(),
+		StartedAt: now.Unix(),
 		Status:    "running",
 		Operator:  operator,
 		Trigger:   trigger,
@@ -887,7 +1004,12 @@ func (s *Server) beginHostSecurityScan(hostID, operator, trigger string) *HostSc
 		Score:     100,
 		Risk:      "info",
 	}
-	s.hostSec.add(scan)
+	s.hostSec.scans = append([]*HostScanResult{scan}, s.hostSec.scans...)
+	if len(s.hostSec.scans) > hostSecMaxScans {
+		s.hostSec.scans = s.hostSec.scans[:hostSecMaxScans]
+	}
+	s.hostSec.saveLocked()
+	s.hostSec.mu.Unlock()
 	return scan
 }
 
@@ -912,67 +1034,92 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	if scan == nil || scan.Status != "running" {
 		return
 	}
+	hostID := scan.HostID
 	cfg := s.cfg.HostSecurity()
 	args := map[string]string{}
 	if !cfg.clamAVEnabled() {
 		args["clamav"] = "0"
 	}
-	out, err := s.runAgentModule(scan.HostID, "host_security_scan", args, cfg.TimeoutSec)
-	scan.FinishedAt = time.Now().Unix()
+	out, err := s.runAgentModule(hostID, "host_security_scan", args, cfg.TimeoutSec)
+	finished := time.Now().Unix()
 	if err != nil {
-		scan.Status = "failed"
-		scan.Error = err.Error()
+		errMsg := err.Error()
 		if strings.TrimSpace(out) != "" {
-			scan.Error += ": " + truncateRun(out, 300)
+			errMsg += ": " + truncateRun(out, 300)
 		}
-		s.hostSec.update(scan)
+		_ = s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
+			live.FinishedAt = finished
+			live.Status = "failed"
+			live.Error = errMsg
+		})
 		return
 	}
 	var rep hsAgentReport
 	if err := json.Unmarshal([]byte(out), &rep); err != nil {
-		scan.Status = "failed"
-		scan.Error = "invalid agent report: " + err.Error()
-		s.hostSec.update(scan)
+		_ = s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
+			live.FinishedAt = finished
+			live.Status = "failed"
+			live.Error = "invalid agent report: " + err.Error()
+		})
 		return
 	}
-	if rep.Hostname != "" {
-		scan.Hostname = rep.Hostname
-	}
-	scan.OS = rep.OS
-	scan.Distro = rep.Distro
-	scan.ClamAV = rep.Malware.ClamAV
-	scan.Firewall = strings.ToLower(strings.TrimSpace(rep.Firewall.Status))
-	if scan.Firewall == "" {
-		scan.Firewall = "unknown"
-	}
-	scan.FirewallEngine = rep.Firewall.Engine
-	scan.FirewallDetail = truncateRun(rep.Firewall.Detail, 240)
-	scan.PkgCount = len(rep.Packages)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
 	cves, osvErr := queryOSVBatch(ctx, cfg.OSVURL, rep.Packages, rep.Distro, rep.PkgMgr)
+	var osvFinding *HostFinding
 	if osvErr != nil {
-		slog.Warn("host security OSV query failed", "host", scan.HostID, "err", osvErr)
-		scan.Findings = append(scan.Findings, HostFinding{
+		slog.Warn("host security OSV query failed", "host", hostID, "err", osvErr)
+		osvFinding = &HostFinding{
 			Level: "low", Category: "cve", ID: "osv.unavailable",
 			Title: "OSV CVE 匹配失败", Detail: osvErr.Error(),
 			Suggest: "检查服务端出网或配置 osv_url / 代理",
-		})
+		}
 	}
-	scan.CVECount = len(cves)
 	ports := parseListenPorts(rep.Listeners)
-	scan.OpenPorts = ports
-	scan.PortCount, scan.RiskyPortCount, scan.PortSample = summarizePorts(ports)
-	scan.Findings = normalizeAgentFindings(rep, cves)
-	scan.Findings = append(scan.Findings, portRiskFindings(ports)...)
-	if len(scan.Findings) > 400 {
-		scan.Findings = scan.Findings[:400]
+	base := normalizeAgentFindings(rep, cves)
+	if osvFinding != nil {
+		base = append([]HostFinding{*osvFinding}, base...)
 	}
-	scan.Score, scan.Risk, scan.Summary = scoreHostFindings(scan.Findings)
-	scan.Remediation = buildRemediation(rep, scan.Findings)
-	scan.Status = "completed"
-	s.hostSec.update(scan)
+	findings := mergeAndCapFindings(base, portRiskFindings(ports), 400)
+	cveCount := 0
+	for _, f := range findings {
+		if f.Category == "cve" && f.ID != "osv.unavailable" {
+			cveCount++
+		}
+	}
+	portCount, riskyCount, portSample := summarizePorts(ports)
+	score, risk, summary := scoreHostFindings(findings)
+	tips := buildRemediation(rep, findings)
+
+	_ = s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
+		live.FinishedAt = finished
+		if rep.Hostname != "" {
+			live.Hostname = rep.Hostname
+		}
+		live.OS = rep.OS
+		live.Distro = rep.Distro
+		live.ClamAV = rep.Malware.ClamAV
+		live.Firewall = strings.ToLower(strings.TrimSpace(rep.Firewall.Status))
+		if live.Firewall == "" {
+			live.Firewall = "unknown"
+		}
+		live.FirewallEngine = rep.Firewall.Engine
+		live.FirewallDetail = truncateRun(rep.Firewall.Detail, 240)
+		live.PkgCount = len(rep.Packages)
+		live.CVECount = cveCount
+		live.OpenPorts = ports
+		live.PortCount = portCount
+		live.RiskyPortCount = riskyCount
+		live.PortSample = portSample
+		live.Findings = findings
+		live.Score = score
+		live.Risk = risk
+		live.Summary = summary
+		live.Remediation = tips
+		live.Status = "completed"
+		live.Error = ""
+	})
 }
 
 // runHostSecurityScan is used by the scheduler (synchronous worker path).
