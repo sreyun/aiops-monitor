@@ -8,7 +8,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-v0.18.2-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v0.18.9-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#开源与社区)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -20,7 +20,7 @@
 
 > **单二进制服务端 + 零依赖 Agent**：一行命令拉起「可观测 · 告警治理 · 自动化自愈 · AI 巡检诊断 · SRE 闭环 · 远程桌面 · SQL 工具 · 安全中心 · 安卓移动控制台」全套能力。100% 开源、私有化自托管、数据完全自持，不依赖任何 SaaS、不上送任何遥测。
 
-**当前版本 [v0.18.2](https://github.com/sreyun/aiops-monitor/releases/tag/v0.18.2)** · 镜像同步：GitHub / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+**当前版本 [v0.18.9](https://github.com/sreyun/aiops-monitor/releases/tag/v0.18.9)** · 镜像同步：GitHub / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -34,16 +34,17 @@ AIOps Monitor 的思路不同——**把监控、告警、自动化、AI 诊断�
 - **一条命令部署**：`docker compose up -d` 即可起全栈；Agent 一键安装、跨平台原生采集。
 - **数据自持**：关系数据落 PostgreSQL，时序数据落 VictoriaMetrics，**两个都是你自己掌控的开源数据库**，可随时导出、可审计、可合规。
 - **AI 不绑架**：AI 巡检诊断是**可插拔**的增值层，接入任意 OpenAI 兼容大模型即「智能模式」，不接则自动回退「启发式兜底」——零外部依赖也能跑。
-- **移动优先**：配套企业级原生安卓控制台，以及鸿蒙 NEXT 原生客户端（`harmony/`），手机上即可看指标、批告警、开终端、走 SRE 闭环。
+- **移动端**：企业级安卓 / 鸿蒙控制台为**外部分发包**（本仓库不包含移动端源码）；Web 面板已支持 PWA / 手机浏览器完成看指标、批告警、终端与 SRE 闭环。
 
 ---
 
-## 版本亮点（v0.17 → v0.18）
+## 版本亮点（v0.18 → Year-1 MVP）
 
 | 版本 | 重点 |
 |---|---|
+| **v0.18.9+ Year-1** | 事件一键闭环；效果运营 KPI（MTTR/MTTA、告警噪声、变更失败率、AI 采纳/验证、闭环率）；Hermes 多轮工具+Fallback+学习沉淀；业务服务树与变更影响面；验收见 [docs/year1-acceptance.md](docs/year1-acceptance.md) |
+| **v0.18.9** | ITSM 轻量工单/变更状态机、OpsLink、SQL↔ChangeRecord 双向挂接 |
 | **v0.18.2** | Windows 锁屏 **Ctrl+Alt+Del**：Session-0 服务经命名管道注入 SAS，自动启用 `SoftwareSASGeneration` |
-| **v0.18.1** | Winlogon/注销态远程画面修复（PrintWindow + 会话附着）；「清晰」模式默认 **15fps** |
 | **v0.18.0** | 安全可控闭环（编排审批 / SQL 变更闸门 / 安全总览）；资源搜索；主机深度巡检；远程桌面锁屏工具条 |
 | **v0.17.x** | Hyper-V / 容器 / Kubernetes 资源层与跨层 AI 定位 |
 

@@ -20,6 +20,7 @@ type AIRun struct {
 	Answer       string          `json:"answer,omitempty"`
 	ContentHash  string          `json:"content_hash,omitempty"`
 	VerifyJSON   json.RawMessage `json:"verify,omitempty"`
+	MetaJSON     json.RawMessage `json:"meta,omitempty"` // tool_turns / fallback_model / citations…
 	OK           bool            `json:"ok"`
 	LatencyMs    int64           `json:"latency_ms,omitempty"`
 	MemHits      int             `json:"memory_hits,omitempty"`
@@ -114,7 +115,27 @@ func (p *pgStore) upsertAIRun(run AIRun) {
 	if len(verify) == 0 {
 		verify = []byte("null")
 	}
+	meta := []byte(run.MetaJSON)
+	if len(meta) == 0 {
+		meta = []byte("null")
+	}
 	_, err := p.db.Exec(`
+INSERT INTO ai_runs(id, kind, task, actor, model, input, answer, content_hash, verify_json, meta_json, ok,
+	latency_ms, memory_hits, skill_hits, feedback, incident_id, datasource_id, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+ON CONFLICT (id) DO UPDATE SET
+	answer=EXCLUDED.answer, verify_json=EXCLUDED.verify_json, meta_json=COALESCE(EXCLUDED.meta_json, ai_runs.meta_json), ok=EXCLUDED.ok,
+	latency_ms=EXCLUDED.latency_ms, memory_hits=EXCLUDED.memory_hits, skill_hits=EXCLUDED.skill_hits,
+	feedback=COALESCE(NULLIF(EXCLUDED.feedback,''), ai_runs.feedback),
+	model=COALESCE(NULLIF(EXCLUDED.model,''), ai_runs.model),
+	updated_at=EXCLUDED.updated_at`,
+		run.ID, run.Kind, run.Task, run.Actor, run.Model,
+		truncateRun(run.Input, 16000), truncateRun(run.Answer, 64000), run.ContentHash,
+		string(verify), string(meta), run.OK, run.LatencyMs, run.MemHits, run.SkillHits, run.Feedback,
+		run.IncidentID, run.DataSourceID, run.CreatedAt, run.UpdatedAt)
+	if err != nil {
+		// best-effort (meta_json column may be missing on very old DBs until migrate)
+		_, _ = p.db.Exec(`
 INSERT INTO ai_runs(id, kind, task, actor, model, input, answer, content_hash, verify_json, ok,
 	latency_ms, memory_hits, skill_hits, feedback, incident_id, datasource_id, created_at, updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18)
@@ -123,40 +144,51 @@ ON CONFLICT (id) DO UPDATE SET
 	latency_ms=EXCLUDED.latency_ms, memory_hits=EXCLUDED.memory_hits, skill_hits=EXCLUDED.skill_hits,
 	feedback=COALESCE(NULLIF(EXCLUDED.feedback,''), ai_runs.feedback),
 	updated_at=EXCLUDED.updated_at`,
-		run.ID, run.Kind, run.Task, run.Actor, run.Model,
-		truncateRun(run.Input, 16000), truncateRun(run.Answer, 64000), run.ContentHash,
-		string(verify), run.OK, run.LatencyMs, run.MemHits, run.SkillHits, run.Feedback,
-		run.IncidentID, run.DataSourceID, run.CreatedAt, run.UpdatedAt)
-	if err != nil {
-		// best-effort
-		_ = err
+			run.ID, run.Kind, run.Task, run.Actor, run.Model,
+			truncateRun(run.Input, 16000), truncateRun(run.Answer, 64000), run.ContentHash,
+			string(verify), run.OK, run.LatencyMs, run.MemHits, run.SkillHits, run.Feedback,
+			run.IncidentID, run.DataSourceID, run.CreatedAt, run.UpdatedAt)
 	}
 }
 
 func (p *pgStore) getAIRun(id string) (AIRun, bool) {
 	var run AIRun
-	var verify []byte
+	var verify, meta []byte
 	err := p.db.QueryRow(`
-SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, ok,
+SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, COALESCE(meta_json,'null'), ok,
        latency_ms, memory_hits, skill_hits, COALESCE(feedback,''), COALESCE(incident_id,0),
        COALESCE(datasource_id,''), created_at, updated_at
 FROM ai_runs WHERE id=$1`, id).Scan(
 		&run.ID, &run.Kind, &run.Task, &run.Actor, &run.Model, &run.Input, &run.Answer,
-		&run.ContentHash, &verify, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
+		&run.ContentHash, &verify, &meta, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
 		&run.Feedback, &run.IncidentID, &run.DataSourceID, &run.CreatedAt, &run.UpdatedAt)
 	if err != nil {
-		return AIRun{}, false
+		// legacy schema without meta_json
+		err = p.db.QueryRow(`
+SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, ok,
+       latency_ms, memory_hits, skill_hits, COALESCE(feedback,''), COALESCE(incident_id,0),
+       COALESCE(datasource_id,''), created_at, updated_at
+FROM ai_runs WHERE id=$1`, id).Scan(
+			&run.ID, &run.Kind, &run.Task, &run.Actor, &run.Model, &run.Input, &run.Answer,
+			&run.ContentHash, &verify, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
+			&run.Feedback, &run.IncidentID, &run.DataSourceID, &run.CreatedAt, &run.UpdatedAt)
+		if err != nil {
+			return AIRun{}, false
+		}
+		run.VerifyJSON = verify
+		return run, true
 	}
 	run.VerifyJSON = verify
+	run.MetaJSON = meta
 	return run, true
 }
 
 func (p *pgStore) listAIRuns(kind string, limit int) ([]AIRun, error) {
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
 	q := `
-SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, ok,
+SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, COALESCE(meta_json,'null'), ok,
        latency_ms, memory_hits, skill_hits, COALESCE(feedback,''), COALESCE(incident_id,0),
        COALESCE(datasource_id,''), created_at, updated_at
 FROM ai_runs`
@@ -166,6 +198,41 @@ FROM ai_runs`
 		args = append(args, kind)
 		q += ` ORDER BY created_at DESC LIMIT $2`
 		args = append(args, limit)
+	} else {
+		q += ` ORDER BY created_at DESC LIMIT $1`
+		args = append(args, limit)
+	}
+	rows, err := p.db.Query(q, args...)
+	if err != nil {
+		return p.listAIRunsLegacy(kind, limit)
+	}
+	defer rows.Close()
+	var out []AIRun
+	for rows.Next() {
+		var run AIRun
+		var verify, meta []byte
+		if err := rows.Scan(
+			&run.ID, &run.Kind, &run.Task, &run.Actor, &run.Model, &run.Input, &run.Answer,
+			&run.ContentHash, &verify, &meta, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
+			&run.Feedback, &run.IncidentID, &run.DataSourceID, &run.CreatedAt, &run.UpdatedAt); err == nil {
+			run.VerifyJSON = verify
+			run.MetaJSON = meta
+			out = append(out, run)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) listAIRunsLegacy(kind string, limit int) ([]AIRun, error) {
+	q := `
+SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, ok,
+       latency_ms, memory_hits, skill_hits, COALESCE(feedback,''), COALESCE(incident_id,0),
+       COALESCE(datasource_id,''), created_at, updated_at
+FROM ai_runs`
+	args := []any{}
+	if kind != "" {
+		q += ` WHERE kind=$1 ORDER BY created_at DESC LIMIT $2`
+		args = append(args, kind, limit)
 	} else {
 		q += ` ORDER BY created_at DESC LIMIT $1`
 		args = append(args, limit)
@@ -184,6 +251,46 @@ FROM ai_runs`
 			&run.ContentHash, &verify, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
 			&run.Feedback, &run.IncidentID, &run.DataSourceID, &run.CreatedAt, &run.UpdatedAt); err == nil {
 			run.VerifyJSON = verify
+			out = append(out, run)
+		}
+	}
+	return out, rows.Err()
+}
+
+// listAIRunsSince returns runs created at/after since (unix), newest first.
+func (p *pgStore) listAIRunsSince(since int64, limit int) ([]AIRun, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	rows, err := p.db.Query(`
+SELECT id, kind, task, actor, model, input, answer, content_hash, verify_json, COALESCE(meta_json,'null'), ok,
+       latency_ms, memory_hits, skill_hits, COALESCE(feedback,''), COALESCE(incident_id,0),
+       COALESCE(datasource_id,''), created_at, updated_at
+FROM ai_runs WHERE created_at >= $1 ORDER BY created_at DESC LIMIT $2`, since, limit)
+	if err != nil {
+		list, err2 := p.listAIRuns("", limit)
+		if err2 != nil {
+			return nil, err
+		}
+		var out []AIRun
+		for _, r := range list {
+			if r.CreatedAt >= since {
+				out = append(out, r)
+			}
+		}
+		return out, nil
+	}
+	defer rows.Close()
+	var out []AIRun
+	for rows.Next() {
+		var run AIRun
+		var verify, meta []byte
+		if err := rows.Scan(
+			&run.ID, &run.Kind, &run.Task, &run.Actor, &run.Model, &run.Input, &run.Answer,
+			&run.ContentHash, &verify, &meta, &run.OK, &run.LatencyMs, &run.MemHits, &run.SkillHits,
+			&run.Feedback, &run.IncidentID, &run.DataSourceID, &run.CreatedAt, &run.UpdatedAt); err == nil {
+			run.VerifyJSON = verify
+			run.MetaJSON = meta
 			out = append(out, run)
 		}
 	}

@@ -15,6 +15,7 @@ let DESK_INTENTIONAL_CLOSE = false;
 let DESK_RETRY = 0;
 let DESK_MAX_RETRY = 30;
 let DESK_NO_RETRY = false; // permission / fatal agent errors — do not reconnect 30×
+let DESK_BREAK_GLASS = false; // admin remote-gate override
 let DESK_CLIP_AUTOSYNC = false; // auto-write remote clipboard into local OS clipboard
 let DESK_LAST_PTR = null; // last mapped remote coords for drag-off mouseup
 let _deskHeartbeatWorker = null;
@@ -28,6 +29,8 @@ function openDesktop(id, name) {
 }
 
 async function doOpenDesktop(id, name) {
+  const gate = await confirmRemoteGate(id);
+  if (!gate.ok) return;
   const mask = $("desktopMask");
   const title = $("desktopTitle");
   if (title) title.textContent = (name || id) + " · " + I18N.t("desktop.title");
@@ -37,6 +40,7 @@ async function doOpenDesktop(id, name) {
   DESK_INTENTIONAL_CLOSE = false;
   DESK_RETRY = 0;
   DESK_NO_RETRY = false;
+  DESK_BREAK_GLASS = !!gate.breakGlass;
   DESK_META = {
     w: 1920, h: 1080, monitors: [], h264: false, viewOnly: false,
     os: "", desktop: "", secureDesktop: false, inputDesktopOk: true, lockHint: "",
@@ -45,8 +49,13 @@ async function doOpenDesktop(id, name) {
   DESK_QUALITY = { scale: 1.0, quality: 88, fps: 15, codec: "jpeg", monitor: 0 };
   DESK_HOST = { id, name };
   renderDesktopShell(id, name);
+  const chip = $("deskGateChip");
+  if (chip && gate.pf) {
+    chip.innerHTML = freezeBadgeHTML(gate.pf) + remoteGateBadgeHTML(gate.pf);
+  }
   try {
-    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop`, {
+    const q = DESK_BREAK_GLASS ? "?break_glass=1" : "";
+    const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop${q}`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" }, body: "{}"
     });
@@ -56,6 +65,27 @@ async function doOpenDesktop(id, name) {
       TERM_AUTH_PENDING = { id, name, action: "desktop" };
       TERM_AUTH_VERIFIED = false;
       showTermVerify();
+      return;
+    }
+    if (r.status === 403 && data.code === "remote_gate_required") {
+      const retry = await confirmRemoteGate(id);
+      if (retry.ok && retry.breakGlass) {
+        DESK_BREAK_GLASS = true;
+        const r2 = await fetch(`${API}/hosts/${encodeURIComponent(id)}/desktop?break_glass=1`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" }, body: "{}"
+        });
+        const d2 = await r2.json().catch(() => ({}));
+        if (!r2.ok) {
+          setDesktopStatus(esc(d2.error || data.error || ""), true);
+          setDeskPlaceholder(I18N.t("desktop.error"), d2.error || data.error || "");
+          return;
+        }
+        connectDesktopWS(id, name);
+        return;
+      }
+      setDesktopStatus(esc(data.error || ""), true);
+      setDeskPlaceholder(I18N.t("desktop.error"), data.error || "");
       return;
     }
     if (!r.ok) {
@@ -80,6 +110,7 @@ function renderDesktopShell(id, name) {
           <div class="desk-status-wrap">
             <span class="desk-dot" id="deskDot"></span>
             <span class="desk-status" id="deskStatus">${esc(I18N.t("desktop.connecting"))}</span>
+            <span id="deskGateChip" class="desk-gate-chip"></span>
           </div>
           <div class="desk-tools">
             <label class="desk-q-label"><span>${esc(I18N.t("desktop.monitor"))}</span>
@@ -366,7 +397,8 @@ function connectDesktopWS(id, name) {
   setDeskPlaceholder(I18N.t("desktop.waiting_agent"), I18N.t("desktop.wait_hint"));
   setDeskDot("waiting");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/desktop/ws`);
+  const bg = DESK_BREAK_GLASS ? "?break_glass=1" : "";
+  const ws = new WebSocket(`${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(id)}/desktop/ws${bg}`);
   ws.binaryType = "arraybuffer";
   DESK_WS = ws;
   const canvas = $("deskCanvas");

@@ -1,0 +1,25 @@
+{
+  "id": "change-freeze",
+  "name": "变更冻结与 SQL 闸门知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "高风险变更冻结窗审批",
+      "trigger": "risk=high 或 kind=emergency 且冻结窗生效",
+      "steps": "1) 禁止直接写 status=in_progress\n2) submit → approve → start\n3) 关联 host/incident/sql_change\n4) 完成后写回验与 EndedAt\n5) 失败走 rollback",
+      "tags": "change,freeze,approval"
+    },
+    {
+      "name": "SQL DDL/KILL 变更挂接",
+      "trigger": "创建 SQL 变更单或审批/执行",
+      "steps": "1) 创建即 upsert ChangeRecord(kind=sql)\n2) 审批同步 Change 状态\n3) 执行成功 complete 通用变更\n4) UI 展示 change_id\n5) 冻结窗 category=sql 时拦 DDL",
+      "tags": "sql,change,ddl,kill"
+    },
+    {
+      "name": "变更影响面评估",
+      "trigger": "发布前要知道影响哪些业务服务",
+      "steps": "1) 维护 BusinessService.host_ids\n2) GET /changes/{id}/impact\n3) 核对 open_incidents\n4) 必要时先静默/开变更窗\n5) 回验后关闭关联事件",
+      "tags": "cmdb,impact,service"
+    }
+  ]
+}

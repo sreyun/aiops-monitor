@@ -85,7 +85,9 @@ type AIConfig struct {
 	QuotaExemptTasks string `json:"quota_exempt_tasks,omitempty"`
 	// MCPRateLimitPerMin：MCP Bearer 每分钟调用上限；0=默认 60。
 	MCPRateLimitPerMin int `json:"mcp_rate_limit_per_min,omitempty"`
-	// WriteToolsRequireApproval：写工具默认需审批（与 hermes_auto_approve 互补；开启时强制阻断自动写）。
+	// WriteToolsRequireApproval：写工具是否强制 approval_id。
+	// 与 hermes_auto_approve 组合：仅当 auto_approve=true 且本开关=false 时可跳过审批（实验室模式）；
+	// 默认/生产请保持本开关为 true（前端默认勾选）。
 	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
 	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
 	RedactSensitiveFields bool `json:"redact_sensitive_fields,omitempty"`

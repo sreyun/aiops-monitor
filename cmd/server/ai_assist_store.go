@@ -30,6 +30,7 @@ type writeApproval struct {
 	CreatedAt int64
 	ExpiresAt int64
 	Used      bool
+	UsedAt    int64
 }
 
 type assistStore struct {
@@ -137,7 +138,11 @@ func (h *aiGovHub) issueWriteApproval(actor, tool, argsHash string, ttlSec int) 
 			delete(h.approvals, id)
 		}
 	}
+	pg := h.pg
 	h.mu.Unlock()
+	if pg != nil {
+		pg.upsertWriteApproval(a)
+	}
 	return a
 }
 
@@ -148,25 +153,37 @@ func (h *aiGovHub) consumeWriteApproval(id, tool, argsHash string) bool {
 	}
 	now := time.Now().Unix()
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	a, ok := h.approvals[id]
-	if !ok || a.Used {
-		return false
-	}
-	if a.ExpiresAt > 0 && now > a.ExpiresAt {
+	pg := h.pg
+	if ok && !a.Used {
+		if a.ExpiresAt > 0 && now > a.ExpiresAt {
+			delete(h.approvals, id)
+			h.mu.Unlock()
+			return false
+		}
+		if a.Tool != "" && !strings.EqualFold(a.Tool, tool) {
+			h.mu.Unlock()
+			return false
+		}
+		if a.ArgsHash != "" && argsHash != "" && a.ArgsHash != argsHash {
+			h.mu.Unlock()
+			return false
+		}
+		a.Used = true
+		a.UsedAt = now
 		delete(h.approvals, id)
-		return false
+		h.mu.Unlock()
+		if pg != nil {
+			pg.upsertWriteApproval(a)
+		}
+		return true
 	}
-	if a.Tool != "" && !strings.EqualFold(a.Tool, tool) {
-		return false
+	h.mu.Unlock()
+	// Memory miss (e.g. after restart): try durable PG token.
+	if pg != nil {
+		return pg.consumeWriteApprovalPG(id, tool, argsHash)
 	}
-	if a.ArgsHash != "" && argsHash != "" && a.ArgsHash != argsHash {
-		return false
-	}
-	a.Used = true
-	h.approvals[id] = a
-	delete(h.approvals, id)
-	return true
+	return false
 }
 
 // checkAndIncrMCPRate limits MCP calls per token fingerprint (per minute).

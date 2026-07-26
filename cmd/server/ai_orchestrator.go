@@ -335,7 +335,7 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	start := time.Now()
 	// 不发 [DONE]，以便在流末追加 assist_id / verify meta，再由本函数统一收尾。
 	// 主模型失败时按 FallbackModels 切换（Wave 3）。
-	reply, err := s.streamChatWithFallback(ctx, w, cfg, msgs, nil, false, opts)
+	reply, usedModel, err := s.streamChatWithFallback(ctx, w, cfg, msgs, nil, false, opts)
 	if err != nil && thinkingParamForcedTrueError(err) && !opts.EnableThinking {
 		retry := opts
 		retry.EnableThinking = true
@@ -348,14 +348,17 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 		}
 		slog.Info("assist retry with enable_thinking=true", "task", task, "model", cfg.Model, "budget", retry.ThinkingBudget)
 		start = time.Now()
-		reply, err = s.streamChatWithFallback(ctx, w, cfg, msgs, nil, false, retry)
+		reply, usedModel, err = s.streamChatWithFallback(ctx, w, cfg, msgs, nil, false, retry)
 	}
 	latency := time.Since(start).Milliseconds()
 	errStr := ""
 	if err != nil {
 		errStr = err.Error()
 	}
-	s.recordAICallActor(task, cfg.Model, actor, latency, err == nil, errStr, memHits, skillHits, reply)
+	if usedModel == "" {
+		usedModel = cfg.Model
+	}
+	s.recordAICallActor(task, usedModel, actor, latency, err == nil, errStr, memHits, skillHits, reply)
 
 	assistID := ""
 	var verify *assistVerifyResult
@@ -370,11 +373,20 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	}
 	if strings.TrimSpace(reply) != "" {
 		assistID = newOpaqueID("run_")
+		fb := ""
+		if usedModel != cfg.Model {
+			fb = usedModel
+		}
 		s.persistAIRun(AIRun{
-			ID: assistID, Kind: "assist", Task: task, Actor: actor, Model: cfg.Model,
+			ID: assistID, Kind: "assist", Task: task, Actor: actor, Model: usedModel,
 			Input: userMsg, Answer: reply, OK: err == nil, LatencyMs: latency,
 			MemHits: memHits, SkillHits: skillHits, DataSourceID: datasourceID,
 			VerifyJSON: verifyJSONBytes(verify),
+			MetaJSON: agentMetaJSON(AgentLoopMeta{
+				FallbackModel: fb,
+				Citations:     len(cites),
+				SelfVerify:    verify != nil,
+			}),
 		})
 	}
 	if assistID != "" || verify != nil {
@@ -385,6 +397,12 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 		}
 		if verify != nil {
 			payload["verify"] = verify
+		}
+		payload["memory_hits"] = memHits
+		payload["skill_hits"] = skillHits
+		payload["citations"] = len(cites)
+		if len(skillNames) > 0 {
+			payload["skills"] = skillNames
 		}
 		if b, mErr := json.Marshal(map[string]any{"meta": payload}); mErr == nil {
 			fmt.Fprintf(w, "data: %s\n\n", b)

@@ -227,7 +227,25 @@ func summarizeK8sPods(s *Server, items []map[string]any) []map[string]any {
 func (h *SreyunCore) sreyunWriteBlocked(tool, detail string, args map[string]any) (string, bool) {
 	approvalID, _ := args["approval_id"].(string)
 	argsHash := argsHashForApproval(tool, args)
-	// Wave 2：写工具一律要求短时 approval_id（关闭裸 auto-approve）。
+	cfg := AIConfig{}
+	if h.s != nil && h.s.cfg != nil {
+		cfg = h.s.cfg.AIConfig()
+	}
+	// Default: require short-lived approval_id.
+	// Escape hatch only when hermes_auto_approve=true AND write_tools_require_approval=false.
+	requireApproval := true
+	if cfg.SreyunAutoApprove && !cfg.WriteToolsRequireApproval {
+		requireApproval = false
+	}
+	if !requireApproval {
+		if h.s.aiGov != nil {
+			h.s.aiGov.recordTool(aiToolAuditEntry{
+				Actor: "sreyun", Tool: tool, Action: "auto_approve", Approved: true,
+				Detail: detail + " args_hash=" + argsHash + " reason=hermes_auto_approve",
+			})
+		}
+		return "", false
+	}
 	if strings.TrimSpace(approvalID) == "" {
 		if h.s.aiGov != nil {
 			h.s.aiGov.recordTool(aiToolAuditEntry{

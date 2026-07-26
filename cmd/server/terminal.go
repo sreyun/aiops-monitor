@@ -52,6 +52,8 @@ type termSession struct {
 	createdAt      int64                      // session start time
 	recMu          sync.Mutex                 // protects recording + cmdBuffer + observers
 	lang           string                     // operator's preferred UI language (for agent-side messages)
+	changeID       int64                      // linked approved change (audit glue)
+	incidentID     int64                      // linked incident loop (audit glue)
 }
 
 func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
@@ -324,6 +326,7 @@ func (m *termManager) remove(id string) {
 					ID: s.id, HostID: s.hostID, Hostname: s.hostname,
 					Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 					Active: false, Frames: len(rec),
+					ChangeID: s.changeID, IncidentID: s.incidentID,
 				},
 				recording: rec,
 			}
@@ -447,6 +450,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	if !s.requireHostAccess(w, r, hostID) {
 		return
 	}
+	// Remote ⊆ change gate: freeze window or critical-incident host.
+	if !s.enforceRemoteGate(w, r, hostID, false) {
+		return
+	}
 	// v5.3.0: terminal secondary verification — check before WebSocket upgrade
 	// so the frontend can show the password dialog before trying to open a WS.
 	verified, hasPassword := s.auth.isTerminalVerified(r)
@@ -482,9 +489,14 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	sess := s.term.create(hostID, hostname, operator)
 	sess.lang = langFromRequest(r)
 	sess.ip = clientIP
+	sess.changeID, sess.incidentID = s.remoteSessionLinks(hostID)
 	defer s.term.remove(sess.id)
 	op := operator
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.open_terminal", hostname)})
+	msg := Tz("log.open_terminal", hostname)
+	if sess.changeID > 0 || sess.incidentID > 0 {
+		msg += fmt.Sprintf(" [change_id=%d incident_id=%d]", sess.changeID, sess.incidentID)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: msg})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.close_terminal", hostname)})
 	s.serveTerminalWS(ws, sess, hostID, hostname, op, clientIP)
 }
@@ -502,6 +514,10 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
+	// Same freeze/critical-incident gate as host terminal (container exec is still remote control).
+	if !s.enforceRemoteGate(w, r, hostID, false) {
 		return
 	}
 	verified, hasPassword := s.auth.isTerminalVerified(r)
@@ -547,10 +563,14 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	sess := s.term.createFull(hostID, label, operator, "container_exec", cid+"|"+shell)
 	sess.lang = langFromRequest(r)
 	sess.ip = clientIP
+	sess.changeID, sess.incidentID = s.remoteSessionLinks(hostID)
 	defer s.term.remove(sess.id)
 	op := operator
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname,
-		Message: fmt.Sprintf("打开容器终端：host=%s container=%s shell=%s", hostID, cid, shell)})
+	msg := fmt.Sprintf("打开容器终端：host=%s container=%s shell=%s", hostID, cid, shell)
+	if sess.changeID > 0 || sess.incidentID > 0 {
+		msg += fmt.Sprintf(" [change_id=%d incident_id=%d]", sess.changeID, sess.incidentID)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: msg})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname,
 		Message: fmt.Sprintf("关闭容器终端：host=%s container=%s", hostID, cid)})
 	s.serveTerminalWS(ws, sess, hostID, label, op, clientIP)
@@ -899,15 +919,17 @@ func buildZmBrowserFrame(typ byte, payload []byte) []byte {
 
 // termSessionInfo is the JSON view of an active or recently-ended session.
 type termSessionInfo struct {
-	ID        string `json:"id"`
-	HostID    string `json:"host_id"`
-	Hostname  string `json:"hostname"`
-	Operator  string `json:"operator"`
-	IP        string `json:"ip"`
-	CreatedAt int64  `json:"created_at"`
-	Active    bool   `json:"active"`
-	Observers int    `json:"observers"`
-	Frames    int    `json:"frames"`
+	ID         string `json:"id"`
+	HostID     string `json:"host_id"`
+	Hostname   string `json:"hostname"`
+	Operator   string `json:"operator"`
+	IP         string `json:"ip"`
+	CreatedAt  int64  `json:"created_at"`
+	Active     bool   `json:"active"`
+	Observers  int    `json:"observers"`
+	Frames     int    `json:"frames"`
+	ChangeID   int64  `json:"change_id,omitempty"`
+	IncidentID int64  `json:"incident_id,omitempty"`
 }
 
 // listSessions returns active sessions + ended sessions. Ended sessions come from
@@ -925,7 +947,7 @@ func (m *termManager) listSessions() []termSessionInfo {
 			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
 			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 			Active: true, Observers: len(s.observers),
-			Frames: len(s.recording),
+			Frames: len(s.recording), ChangeID: s.changeID, IncidentID: s.incidentID,
 		})
 		s.recMu.Unlock()
 		seen[s.id] = true

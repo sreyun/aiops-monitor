@@ -22,6 +22,13 @@ type ChangeWindow struct {
 	Freeze     bool     `json:"freeze"` // block unapproved auto-remediation
 	Note       string   `json:"note,omitempty"`
 	UpdatedAt  int64    `json:"updated_at,omitempty"`
+	// Recurrence: when Recur is set, absolute Start/End are optional anchors;
+	// active window is computed from clock time each day/week.
+	// Recur: "" | "daily" | "weekly"
+	Recur         string `json:"recur,omitempty"`
+	RecurStartHM  string `json:"recur_start_hm,omitempty"` // "22:00"
+	RecurEndHM    string `json:"recur_end_hm,omitempty"`   // "06:00" (may cross midnight)
+	RecurWeekdays []int  `json:"recur_weekdays,omitempty"` // 0=Sun … 6=Sat; empty weekly = all days
 }
 
 // ChangeRecord statuses (new machine). Legacy "planned" maps to draft/approved on read.
@@ -297,13 +304,21 @@ func (m *changeManager) Upsert(in ChangeRecord, actor string) (ChangeRecord, err
 }
 
 // Transition applies a workflow action: submit|approve|reject|start|complete|rollback|cancel|schedule.
+// breakGlass skips author≠approver SoD (admin only; enforced by HTTP layer).
 func (m *changeManager) Transition(id int64, action, actor string, freezeActive bool) (ChangeRecord, error) {
+	return m.TransitionSoD(id, action, actor, freezeActive, false)
+}
+
+func (m *changeManager) TransitionSoD(id int64, action, actor string, freezeActive, breakGlass bool) (ChangeRecord, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := m.findLocked(id)
 	if r == nil {
 		return ChangeRecord{}, fmt.Errorf("变更不存在")
+	}
+	if err := changeSoDAllows(*r, action, actor, breakGlass); err != nil {
+		return ChangeRecord{}, err
 	}
 	cur := normalizeChangeStatus(r.Status)
 	now := time.Now().Unix()
@@ -509,7 +524,15 @@ func (cs *ConfigStore) UpsertChangeWindow(w ChangeWindow) (ChangeWindow, error) 
 	if w.Name == "" {
 		return ChangeWindow{}, fmt.Errorf("变更窗名称不能为空")
 	}
-	if w.End > 0 && w.End < w.Start {
+	w.Recur = strings.ToLower(strings.TrimSpace(w.Recur))
+	if w.Recur != "" && w.Recur != "daily" && w.Recur != "weekly" {
+		return ChangeWindow{}, fmt.Errorf("recur 仅支持 daily/weekly")
+	}
+	if w.Recur != "" {
+		if parseHM(w.RecurStartHM) < 0 || parseHM(w.RecurEndHM) < 0 {
+			return ChangeWindow{}, fmt.Errorf("循环变更窗需填写 recur_start_hm / recur_end_hm（HH:MM）")
+		}
+	} else if w.End > 0 && w.End < w.Start {
 		return ChangeWindow{}, fmt.Errorf("结束时间必须晚于开始时间")
 	}
 	w.UpdatedAt = time.Now().Unix()
@@ -555,7 +578,7 @@ func (cs *ConfigStore) activeFreezeWindow(hostID, category string, now int64) (C
 		if !w.Freeze {
 			continue
 		}
-		if now < w.Start || (w.End > 0 && now > w.End) {
+		if !changeWindowActiveAt(w, now) {
 			continue
 		}
 		if len(w.HostIDs) == 0 && len(w.Categories) == 0 {
@@ -573,6 +596,84 @@ func (cs *ConfigStore) activeFreezeWindow(hostID, category string, now int64) (C
 		}
 	}
 	return ChangeWindow{}, false
+}
+
+func parseHM(s string) int {
+	s = strings.TrimSpace(s)
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return -1
+	}
+	h, m := 0, 0
+	for _, ch := range parts[0] {
+		if ch < '0' || ch > '9' {
+			return -1
+		}
+		h = h*10 + int(ch-'0')
+	}
+	for _, ch := range parts[1] {
+		if ch < '0' || ch > '9' {
+			return -1
+		}
+		m = m*10 + int(ch-'0')
+	}
+	if h > 23 || m > 59 {
+		return -1
+	}
+	return h*60 + m
+}
+
+func changeWindowActiveAt(w ChangeWindow, now int64) bool {
+	if strings.TrimSpace(w.Recur) == "" {
+		if now < w.Start {
+			return false
+		}
+		if w.End > 0 && now > w.End {
+			return false
+		}
+		return true
+	}
+	t := time.Unix(now, 0).In(time.Local)
+	startMin := parseHM(w.RecurStartHM)
+	endMin := parseHM(w.RecurEndHM)
+	if startMin < 0 || endMin < 0 {
+		return false
+	}
+	if strings.EqualFold(w.Recur, "weekly") && len(w.RecurWeekdays) > 0 {
+		wd := int(t.Weekday())
+		hit := false
+		for _, d := range w.RecurWeekdays {
+			if d == wd {
+				hit = true
+				break
+			}
+		}
+		// Overnight weekly windows: also allow previous weekday when before end.
+		if !hit && endMin <= startMin {
+			prev := (wd + 6) % 7
+			for _, d := range w.RecurWeekdays {
+				if d == prev {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				return false
+			}
+			// Only the overnight tail of previous day's window.
+			cur := t.Hour()*60 + t.Minute()
+			return cur < endMin
+		}
+		if !hit {
+			return false
+		}
+	}
+	cur := t.Hour()*60 + t.Minute()
+	if endMin > startMin {
+		return cur >= startMin && cur < endMin
+	}
+	// Cross midnight: active if >= start OR < end.
+	return cur >= startMin || cur < endMin
 }
 
 // activeFreezeForHosts is true if any freeze window covers the given hosts (or is global).

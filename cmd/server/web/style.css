@@ -2549,6 +2549,10 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
 .sre-row-main{flex:1; min-width:0}
 .sre-row-title{font-size:13px; font-weight:600; color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .sre-row-sub{font-size:11px; color:var(--muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sre-kpi-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; margin:8px 0 12px}
+.sre-kpi{padding:12px 14px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--panel2)}
+.sre-kpi-v{font-size:15px; font-weight:700; color:var(--txt); line-height:1.3}
+.sre-kpi-t{font-size:11px; color:var(--muted); margin-top:4px}
 .sre-meta{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px}
 #srePanel-remediation .subhead:first-of-type{margin-top:4px}
 /* 事件时间线 */
@@ -4445,6 +4449,10 @@ body.dash-layout-dragging .dash-panel-body { pointer-events: none; }
 .inc-loop-row b { color: var(--txt); font-weight: 600; }
 .inc-loop-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .badge.freeze { background: rgba(220, 120, 40, .15); color: #c46a12; border: 1px solid rgba(220, 120, 40, .35); }
+.skill-draft { border-left: 3px solid var(--warn, #c46a12); }
+.desk-gate-chip { display: inline-flex; gap: 6px; margin-left: 8px; align-items: center; }
+.ai-write-approval-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel2); }
+.ai-composer-tools .btn.sm.ghost { min-height: 28px; }
 .ai-assist-feedback { padding: 10px 16px; border-top: 1px solid var(--line); background: var(--crit-soft); }
 .ai-assist-feedback label { display: block; margin-bottom: 5px; color: var(--crit-txt, var(--crit)); font-size: 11px; font-weight: 600; }
 .ai-assist-feedback textarea { width: 100%; resize: vertical; min-height: 54px; padding: 8px 9px; color: var(--txt); background: var(--panel); border: 1px solid var(--line2); border-radius: 7px; font-family: inherit; font-size: 12px; }

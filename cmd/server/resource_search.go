@@ -191,6 +191,18 @@ func (s *Server) searchResources(query string, limit int) []ResourceSearchResult
 				View: "k8s", Subtitle: cluster.APIServer,
 			}, cluster.Name, cluster.ID, cluster.APIServer, cluster.DefaultNS)
 		}
+		for _, svc := range s.cfg.BusinessServices() {
+			add(ResourceSearchResult{
+				Type: "service", Name: svc.Name, Ref: "service:" + svc.ID,
+				View: "sre", Subtitle: firstNonEmpty(svc.Env, svc.Owner),
+			}, svc.Name, svc.ID, svc.Owner, svc.Env, strings.Join(svc.HostIDs, " "))
+		}
+		for _, ds := range s.cfg.ListDataSources() {
+			add(ResourceSearchResult{
+				Type: "datasource", Name: ds.Name, Ref: "datasource:" + ds.ID,
+				View: "datasources", Subtitle: ds.Type,
+			}, ds.Name, ds.ID, ds.Type, ds.URL)
+		}
 	}
 
 	sort.SliceStable(matches, func(i, j int) bool {

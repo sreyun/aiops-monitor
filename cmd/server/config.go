@@ -533,9 +533,16 @@ type ServerConfig struct {
 	EscalationPolicies []EscalationPolicy  `json:"escalation_policies,omitempty"`
 	ChangeWindows          []ChangeWindow              `json:"change_windows,omitempty"`
 	ServiceRequestCatalog  []ServiceRequestCatalogItem `json:"service_request_catalog,omitempty"`
+	BusinessServices       []BusinessService           `json:"business_services,omitempty"`
 	Retention              RetentionConfig             `json:"retention,omitempty"`
 	Backup             BackupConfig        `json:"backup,omitempty"`
 	CmdPolicy          CmdPolicyConfig     `json:"cmd_policy,omitempty"`
+	// LoopForceAllowNonAdmin：默认 false，闭环 force=true 仅管理员可用。
+	LoopForceAllowNonAdmin bool `json:"loop_force_allow_non_admin,omitempty"`
+	// RemoteGateDisabled：默认 false，开启冻结窗/高危远程闸门。
+	RemoteGateDisabled bool `json:"remote_gate_disabled,omitempty"`
+	// RemoteGateMode：空=freeze_or_highrisk。
+	RemoteGateMode string `json:"remote_gate_mode,omitempty"`
 	AI                 AIConfig            `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
 	VM                 VMConfig            `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
 	PostgresDSN        string              `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
@@ -1238,6 +1245,7 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.EscalationPolicies = cs.cfg.EscalationPolicies
 	c.ChangeWindows = cs.cfg.ChangeWindows
 	c.ServiceRequestCatalog = cs.cfg.ServiceRequestCatalog
+	c.BusinessServices = cs.cfg.BusinessServices
 	c.Retention = cs.cfg.Retention
 	c.Backup = cs.cfg.Backup
 	c.CmdPolicy = cs.cfg.CmdPolicy

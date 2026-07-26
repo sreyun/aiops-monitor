@@ -42,8 +42,27 @@ type Incident struct {
 	CreatedAt  int64           `json:"created_at"`
 	AckedAt    int64           `json:"acked_at,omitempty"`
 	ResolvedAt int64           `json:"resolved_at,omitempty"`
-	TicketID   int64           `json:"ticket_id,omitempty"` // linked work order, if escalated
-	Links      []OpsLink       `json:"links,omitempty"`     // host / slo / alert / change / ticket
+	TicketID   int64              `json:"ticket_id,omitempty"` // linked work order, if escalated
+	Links      []OpsLink          `json:"links,omitempty"`     // host / slo / alert / change / ticket
+	Loop       *IncidentLoopState `json:"loop,omitempty"`      // diagnose→verify→promote closed-loop state
+}
+
+// IncidentLoopState tracks the diagnose → dry-run → propose → approve → verify → skill path.
+type IncidentLoopState struct {
+	Stage            string   `json:"stage"` // idle|diagnosed|dry_run_ok|proposed|approved|verified|promoted
+	DiagnosedAt      int64    `json:"diagnosed_at,omitempty"`
+	DryRunOK         bool     `json:"dry_run_ok,omitempty"`
+	DryRunAt         int64    `json:"dry_run_at,omitempty"`
+	DryRunNotes      []string `json:"dry_run_notes,omitempty"`
+	RemediationRunID int64    `json:"remediation_run_id,omitempty"`
+	ChangeID         int64    `json:"change_id,omitempty"`
+	VerifyOK         *bool    `json:"verify_ok,omitempty"`
+	VerifyAt         int64    `json:"verify_at,omitempty"`
+	VerifyNotes      []string `json:"verify_notes,omitempty"`
+	SkillPromoted    bool     `json:"skill_promoted,omitempty"`
+	RunID            string   `json:"run_id,omitempty"`
+	Force            bool     `json:"force,omitempty"` // bypass citation gate when true
+	UpdatedAt        int64    `json:"updated_at,omitempty"`
 }
 
 const incidentHistoryCap = 500 // resolved incidents beyond this are trimmed
@@ -335,6 +354,20 @@ func (m *incidentManager) Get(id int64) (Incident, bool) {
 		return *inc, true
 	}
 	return Incident{}, false
+}
+
+// SetLoop replaces the closed-loop orchestration state on an incident.
+func (m *incidentManager) SetLoop(id int64, loop IncidentLoopState) (Incident, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inc := m.find(id)
+	if inc == nil {
+		return Incident{}, false
+	}
+	loop.UpdatedAt = time.Now().Unix()
+	cp := loop
+	inc.Loop = &cp
+	return *inc, true
 }
 
 // List returns incidents newest-first.

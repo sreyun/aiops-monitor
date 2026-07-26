@@ -266,6 +266,32 @@ func (p *pgStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS ai_runs_created ON ai_runs(created_at DESC);
 		CREATE INDEX IF NOT EXISTS ai_runs_kind_created ON ai_runs(kind, created_at DESC);
 		CREATE INDEX IF NOT EXISTS ai_runs_actor_created ON ai_runs(actor, created_at DESC);
+		ALTER TABLE ai_runs ADD COLUMN IF NOT EXISTS meta_json JSONB;
+		-- AI 写审批 / 工具审计（持久化，重启不丢）
+		CREATE TABLE IF NOT EXISTS ai_write_approvals (
+			id          TEXT PRIMARY KEY,
+			tool        TEXT NOT NULL DEFAULT '',
+			args_hash   TEXT NOT NULL DEFAULT '',
+			actor       TEXT NOT NULL DEFAULT '',
+			created_at  BIGINT NOT NULL,
+			expires_at  BIGINT NOT NULL DEFAULT 0,
+			used        BOOLEAN NOT NULL DEFAULT FALSE,
+			used_at     BIGINT NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS ai_write_approvals_actor ON ai_write_approvals(actor, created_at DESC);
+		CREATE TABLE IF NOT EXISTS ai_tool_audit (
+			id          BIGSERIAL PRIMARY KEY,
+			ts          BIGINT NOT NULL,
+			actor       TEXT NOT NULL DEFAULT '',
+			tool        TEXT NOT NULL DEFAULT '',
+			action      TEXT NOT NULL DEFAULT '',
+			host_id     TEXT NOT NULL DEFAULT '',
+			approved    BOOLEAN NOT NULL DEFAULT FALSE,
+			blocked     BOOLEAN NOT NULL DEFAULT FALSE,
+			detail      TEXT NOT NULL DEFAULT '',
+			incident_id BIGINT NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS ai_tool_audit_ts ON ai_tool_audit(ts DESC);
 		-- 剧本执行历史（专用表，无环形上限丢失）
 		CREATE TABLE IF NOT EXISTS playbook_executions (
 			id          BIGINT PRIMARY KEY,
@@ -332,7 +358,14 @@ func (p *pgStore) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS ai_skills_priority ON ai_skills(priority DESC);
 		ALTER TABLE ai_skills ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+		ALTER TABLE ai_skills ADD COLUMN IF NOT EXISTS version INT DEFAULT 1;
+		ALTER TABLE ai_skills ADD COLUMN IF NOT EXISTS service_ids TEXT DEFAULT '';
+		ALTER TABLE ai_skills ADD COLUMN IF NOT EXISTS categories TEXT DEFAULT '';
 		CREATE INDEX IF NOT EXISTS ai_skills_status ON ai_skills(status);
+		ALTER TABLE ai_memory_embeddings ADD COLUMN IF NOT EXISTS service_id TEXT DEFAULT '';
+		ALTER TABLE ai_memory_embeddings ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';
+		ALTER TABLE ai_memory_embeddings ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
+		CREATE INDEX IF NOT EXISTS ai_mem_verified ON ai_memory_embeddings(verified) WHERE verified = true;
 		-- 经验规则库（高频问题 best practice）
 		CREATE TABLE IF NOT EXISTS experience_rules (
 			id          BIGSERIAL PRIMARY KEY,
@@ -1175,19 +1208,32 @@ type similarCase struct {
 
 // insertMemoryEmbedding 存一条 AI 记忆向量。kind: chat|file|url|history|diagnosis。
 func (p *pgStore) insertMemoryEmbedding(kind, source, content string, emb []float64, ts int64) error {
+	return p.insertMemoryEmbeddingScoped(kind, source, content, emb, ts, "", "", false)
+}
+
+func (p *pgStore) insertMemoryEmbeddingScoped(kind, source, content string, emb []float64, ts int64, serviceID, category string, verified bool) error {
+	pri := 1.0
+	if verified {
+		pri = 1.4
+	} else if kind == "alert" || kind == "chat" {
+		pri = 0.85 // demote noisy ungated writers at insert time
+	}
 	_, err := p.db.Exec(
-		`INSERT INTO ai_memory_embeddings(kind, source, content, embedding, created_at)
-		 VALUES($1, $2, $3, $4::vector, $5)`,
-		kind, source, content, vecStr(emb), ts)
+		`INSERT INTO ai_memory_embeddings(kind, source, content, embedding, created_at, service_id, category, verified, priority)
+		 VALUES($1, $2, $3, $4::vector, $5, $6, $7, $8, $9)`,
+		kind, source, content, vecStr(emb), ts, serviceID, category, verified, pri)
 	return err
 }
 
 type memoryHit struct {
-	ID       int64   `json:"id"`
-	Kind     string  `json:"kind"`
-	Source   string  `json:"source"`
-	Content  string  `json:"content"`
-	Distance float64 `json:"distance"`
+	ID         int64   `json:"id"`
+	Kind       string  `json:"kind"`
+	Source     string  `json:"source"`
+	Content    string  `json:"content"`
+	Distance   float64 `json:"distance"`
+	ServiceID  string  `json:"service_id,omitempty"`
+	Category   string  `json:"category,omitempty"`
+	Verified   bool    `json:"verified,omitempty"`
 }
 
 // searchMemory 按余弦距离取最相近的 N 条 AI 记忆（RAG 检索，跨对话/文件/URL/历史）。
@@ -1196,9 +1242,10 @@ func (p *pgStore) searchMemory(emb []float64, limit int) ([]memoryHit, error) {
 		limit = 3
 	}
 	rows, err := p.db.Query(
-		`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
+		`SELECT id, kind, source, content, COALESCE(service_id,''), COALESCE(category,''), COALESCE(verified,false),
+		        embedding <=> $1::vector AS distance
 		 FROM ai_memory_embeddings
-		 ORDER BY (embedding <=> $1::vector) / GREATEST(priority, 0.1) LIMIT $2`,
+		 ORDER BY (embedding <=> $1::vector) / (GREATEST(priority, 0.1) * CASE WHEN COALESCE(verified,false) THEN 1.35 ELSE 1.0 END) LIMIT $2`,
 		vecStr(emb), limit)
 	if err != nil {
 		return nil, err
@@ -1207,7 +1254,7 @@ func (p *pgStore) searchMemory(emb []float64, limit int) ([]memoryHit, error) {
 	var out []memoryHit
 	for rows.Next() {
 		var m memoryHit
-		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.ServiceID, &m.Category, &m.Verified, &m.Distance); err != nil {
 			continue
 		}
 		out = append(out, m)
@@ -1232,11 +1279,13 @@ func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int
 		preferred = 1
 	}
 	rows, err := p.db.Query(
-		`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
+		`SELECT id, kind, source, content, COALESCE(service_id,''), COALESCE(category,''), COALESCE(verified,false),
+		        embedding <=> $1::vector AS distance
 		 FROM ai_memory_embeddings WHERE kind = $4
 		 ORDER BY (embedding <=> $1::vector) / (GREATEST(priority, 0.1) *
 		   GREATEST(0.5, 1.0 - (EXTRACT(EPOCH FROM NOW()) - created_at) / 31536000.0) *
-		   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END)
+		   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END *
+		   CASE WHEN COALESCE(verified,false) THEN 1.35 ELSE 1.0 END)
 		 LIMIT $2`,
 		vecStr(emb), preferred, sevenDaysAgo, preferKind)
 	if err != nil {
@@ -1247,7 +1296,7 @@ func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int
 	seen := make(map[string]bool)
 	for rows.Next() {
 		var m memoryHit
-		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.ServiceID, &m.Category, &m.Verified, &m.Distance); err != nil {
 			continue
 		}
 		key := m.Kind + ":" + m.Source
@@ -1259,18 +1308,20 @@ func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int
 	// 不足 limit 时，补充其他 kind
 	if len(out) < limit {
 		rows2, err2 := p.db.Query(
-			`SELECT id, kind, source, content, embedding <=> $1::vector AS distance
+			`SELECT id, kind, source, content, COALESCE(service_id,''), COALESCE(category,''), COALESCE(verified,false),
+			        embedding <=> $1::vector AS distance
 			 FROM ai_memory_embeddings WHERE kind != $4
 			 ORDER BY (embedding <=> $1::vector) / (GREATEST(priority, 0.1) *
 			   GREATEST(0.5, 1.0 - (EXTRACT(EPOCH FROM NOW()) - created_at) / 31536000.0) *
-			   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END)
+			   CASE WHEN created_at > $3 THEN 1.5 ELSE 1.0 END *
+			   CASE WHEN COALESCE(verified,false) THEN 1.35 ELSE 1.0 END)
 			 LIMIT $2`,
 			vecStr(emb), limit-len(out), sevenDaysAgo, preferKind)
 		if err2 == nil {
 			defer rows2.Close()
 			for rows2.Next() {
 				var m memoryHit
-				if err := rows2.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.Distance); err != nil {
+				if err := rows2.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.ServiceID, &m.Category, &m.Verified, &m.Distance); err != nil {
 					continue
 				}
 				key := m.Kind + ":" + m.Source
@@ -1284,6 +1335,27 @@ func (p *pgStore) searchMemoryByKind(emb []float64, preferKind string, limit int
 	return out, rows.Err()
 }
 
+// filterMemoriesByScope keeps global memories + those matching service/category context.
+func filterMemoriesByScope(hits []memoryHit, serviceID, category string, limit int) []memoryHit {
+	if serviceID == "" && category == "" {
+		if limit > 0 && len(hits) > limit {
+			return hits[:limit]
+		}
+		return hits
+	}
+	var out []memoryHit
+	for _, h := range hits {
+		global := strings.TrimSpace(h.ServiceID) == "" && strings.TrimSpace(h.Category) == ""
+		if global || memoryMatchesScope(h.ServiceID, h.Category, serviceID, category) {
+			out = append(out, h)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
 // searchMemoryByKinds 在指定 kind 集合内检索并按距离粗排，诊断场景优先 resolution > diagnosis > experience。
 func (p *pgStore) searchMemoryByKinds(emb []float64, kinds []string, limit int) ([]memoryHit, error) {
 	if limit <= 0 {
@@ -1293,11 +1365,13 @@ func (p *pgStore) searchMemoryByKinds(emb []float64, kinds []string, limit int) 
 		return p.searchMemory(emb, limit)
 	}
 	kindBoost := map[string]float64{
-		"resolution": 0.85, // 乘到 distance 上：更小 → 更靠前
-		"knowledge":  0.88, // 已验证文档引用
+		"resolution": 0.82, // 乘到 distance 上：更小 → 更靠前
+		"knowledge":  0.86, // 已验证文档引用
+		"pitfall":    0.88,
 		"diagnosis":  0.92,
-		"experience": 0.96,
-		"pitfall":    0.90, // 避坑需可见，略优先于普通经验
+		"experience": 0.94,
+		"alert":      1.15, // demote noisy auto alert cards
+		"chat":       1.12,
 	}
 	var out []memoryHit
 	seen := make(map[string]bool)
@@ -1321,6 +1395,9 @@ func (p *pgStore) searchMemoryByKinds(emb []float64, kinds []string, limit int) 
 			}
 			seen[key] = true
 			h.Distance = h.Distance * boost
+			if h.Verified {
+				h.Distance *= 0.85 // verified memories rank ahead within the same kind band
+			}
 			out = append(out, h)
 		}
 	}
@@ -1357,14 +1434,46 @@ func (p *pgStore) hasDuplicateMemory(emb []float64, kind string) (bool, int64, e
 // Used when a near-duplicate is detected: instead of creating a new entry, the new
 // knowledge is appended to preserve both the original and supplementary information.
 func (p *pgStore) mergeDuplicateMemory(id int64, appendContent string, newEmb []float64) error {
+	return p.mergeDuplicateMemoryEx(id, appendContent, newEmb, false, "", "")
+}
+
+func (p *pgStore) mergeDuplicateMemoryEx(id int64, appendContent string, newEmb []float64, verified bool, serviceID, category string) error {
 	_, err := p.db.Exec(
 		`UPDATE ai_memory_embeddings
 		 SET content = content || E'\n' || $2,
 		     embedding = $3::vector,
-		     created_at = $4
+		     created_at = $4,
+		     priority = LEAST(GREATEST(priority, 0.1) * 1.15, $8),
+		     verified = COALESCE(verified,false) OR $5,
+		     service_id = CASE WHEN COALESCE(service_id,'')='' AND $6<>'' THEN $6 ELSE service_id END,
+		     category = CASE WHEN COALESCE(category,'')='' AND $7<>'' THEN $7 ELSE category END,
+		     last_hit_at = $4
 		 WHERE id = $1`,
-		id, appendContent, vecStr(newEmb), time.Now().Unix())
+		id, appendContent, vecStr(newEmb), time.Now().Unix(), verified, serviceID, category, memoryPriorityCap)
 	return err
+}
+
+func (p *pgStore) countVerifiedMemories() int {
+	if p == nil || p.db == nil {
+		return 0
+	}
+	var n int
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM ai_memory_embeddings WHERE COALESCE(verified,false)=true`).Scan(&n)
+	return n
+}
+
+// markMemoryVerifiedBySource flips verified=true and gently boosts priority for kind+source.
+func (p *pgStore) markMemoryVerifiedBySource(kind, source string) {
+	if p == nil || p.db == nil || strings.TrimSpace(kind) == "" || strings.TrimSpace(source) == "" {
+		return
+	}
+	_, _ = p.db.Exec(
+		`UPDATE ai_memory_embeddings
+		 SET verified = true,
+		     priority = LEAST(GREATEST(priority, 0.1) * 1.2, $3),
+		     last_hit_at = $4
+		 WHERE kind = $1 AND source = $2`,
+		kind, source, memoryPriorityCap, time.Now().Unix())
 }
 
 // touchMemoryHits 批量更新被检索命中的记忆的 last_hit_at 字段，
@@ -1448,7 +1557,10 @@ type Skill struct {
 	SuccessCount int     `json:"success_count"`
 	Priority     float64 `json:"priority"`
 	Source       string  `json:"source"`
-	Status       string  `json:"status"` // active | archived
+	Status       string  `json:"status"` // active | draft | archived
+	Version      int     `json:"version"`
+	ServiceIDs   string  `json:"service_ids,omitempty"` // comma-separated BusinessService ids; empty=global
+	Categories   string  `json:"categories,omitempty"`  // comma-separated host categories; empty=global
 	CreatedAt    int64   `json:"created_at"`
 	UpdatedAt    int64   `json:"updated_at"`
 	Distance     float64 `json:"distance,omitempty"`
@@ -1480,14 +1592,14 @@ func (p *pgStore) insertSkillNoEmbed(name, trigger, steps, tags, source string) 
 func (p *pgStore) findSkillByNameSource(name, source string) (int64, bool) {
 	var id int64
 	err := p.db.QueryRow(
-		`SELECT id FROM ai_skills WHERE name=$1 AND source=$2 AND COALESCE(status,'active')='active' LIMIT 1`,
+		`SELECT id FROM ai_skills WHERE name=$1 AND source=$2 ORDER BY updated_at DESC LIMIT 1`,
 		name, source).Scan(&id)
 	return id, err == nil && id > 0
 }
 
 func (p *pgStore) updateSkillText(id int64, name, trigger, steps string) error {
 	_, err := p.db.Exec(
-		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, updated_at=$5 WHERE id=$1`,
+		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, version=COALESCE(version,1)+1, updated_at=$5 WHERE id=$1`,
 		id, name, trigger, steps, time.Now().Unix())
 	return err
 }
@@ -1506,10 +1618,11 @@ func (p *pgStore) findSimilarSkill(emb []float64, maxDist float64) (int64, bool)
 	return id, true
 }
 
-// updateSkill 覆盖一条技能（用于「用中自改进」——把更好的步骤写回）。
+// updateSkill 覆盖一条技能（用于「用中自改进」——把更好的步骤写回），并递增 version。
 func (p *pgStore) updateSkill(id int64, name, trigger, steps string, emb []float64) error {
 	_, err := p.db.Exec(
-		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, embedding=$5::vector, updated_at=$6 WHERE id=$1`,
+		`UPDATE ai_skills SET name=$2, trigger_desc=$3, steps=$4, embedding=$5::vector,
+		 version=COALESCE(version,1)+1, updated_at=$6 WHERE id=$1`,
 		id, name, trigger, steps, vecStr(emb), time.Now().Unix())
 	return err
 }
@@ -1527,6 +1640,7 @@ func (p *pgStore) searchSkills(emb []float64, limit int, maxDist float64) ([]Ski
 	}
 	rows, err := p.db.Query(
 		`SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
+		        COALESCE(version,1), COALESCE(service_ids,''), COALESCE(categories,''),
 		        embedding <=> $1::vector AS distance
 		 FROM ai_skills
 		 WHERE COALESCE(status,'active')='active' AND embedding <=> $1::vector <= $3
@@ -1539,26 +1653,87 @@ func (p *pgStore) searchSkills(emb []float64, limit int, maxDist float64) ([]Ski
 	var out []Skill
 	for rows.Next() {
 		var s Skill
-		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.Distance); err == nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source,
+			&s.Version, &s.ServiceIDs, &s.Categories, &s.Distance); err == nil {
 			out = append(out, s)
 		}
 	}
 	return out, rows.Err()
 }
 
+// searchSkillsScoped filters active skills by optional BusinessService / host category.
+// Empty scope on a skill = global. When context provides service/category, scoped skills
+// that do not match are excluded; when context is empty, all active skills are eligible.
+func (p *pgStore) searchSkillsScoped(emb []float64, limit int, maxDist float64, serviceID, category string) ([]Skill, error) {
+	oversample := limit
+	if serviceID != "" || category != "" {
+		oversample = limit * 3
+	}
+	skills, err := p.searchSkills(emb, oversample, maxDist)
+	if err != nil {
+		return nil, err
+	}
+	if serviceID == "" && category == "" {
+		if len(skills) > limit {
+			skills = skills[:limit]
+		}
+		return skills, nil
+	}
+	var out []Skill
+	for _, sk := range skills {
+		if skillMatchesScope(sk, serviceID, category) {
+			out = append(out, sk)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func skillMatchesScope(sk Skill, serviceID, category string) bool {
+	if svc := strings.TrimSpace(sk.ServiceIDs); svc != "" && serviceID != "" {
+		hit := false
+		for _, id := range strings.Split(svc, ",") {
+			if strings.TrimSpace(id) == serviceID {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	if cats := strings.TrimSpace(sk.Categories); cats != "" && category != "" {
+		hit := false
+		for _, c := range strings.Split(cats, ",") {
+			if strings.EqualFold(strings.TrimSpace(c), category) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *pgStore) listSkills() ([]Skill, error) {
 	return p.listSkillsFiltered(false)
 }
 
-// listSkillsFiltered includeArchived=true 时含已归档技能（管理审阅用）。
+// listSkillsFiltered includeArchived=true 时含已归档；默认含 active+draft（draft 需人工激活）。
 func (p *pgStore) listSkillsFiltered(includeArchived bool) ([]Skill, error) {
 	q := `SELECT id, name, trigger_desc, steps, tags, use_count, success_count, priority, source,
-	             COALESCE(status,'active'), created_at, updated_at
+	             COALESCE(status,'active'), COALESCE(version,1), COALESCE(service_ids,''), COALESCE(categories,''),
+	             created_at, updated_at
 	      FROM ai_skills`
 	if !includeArchived {
-		q += ` WHERE COALESCE(status,'active')='active'`
+		q += ` WHERE COALESCE(status,'active') IN ('active','draft')`
 	}
-	q += ` ORDER BY CASE WHEN COALESCE(status,'active')='active' THEN 0 ELSE 1 END, priority DESC, updated_at DESC LIMIT 500`
+	q += ` ORDER BY CASE COALESCE(status,'active') WHEN 'draft' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+	             priority DESC, updated_at DESC LIMIT 500`
 	rows, err := p.db.Query(q)
 	if err != nil {
 		return nil, err
@@ -1567,7 +1742,8 @@ func (p *pgStore) listSkillsFiltered(includeArchived bool) ([]Skill, error) {
 	var out []Skill
 	for rows.Next() {
 		var s Skill
-		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source, &s.Status, &s.CreatedAt, &s.UpdatedAt); err == nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Trigger, &s.Steps, &s.Tags, &s.UseCount, &s.SuccessCount, &s.Priority, &s.Source,
+			&s.Status, &s.Version, &s.ServiceIDs, &s.Categories, &s.CreatedAt, &s.UpdatedAt); err == nil {
 			out = append(out, s)
 		}
 	}
@@ -1576,11 +1752,27 @@ func (p *pgStore) listSkillsFiltered(includeArchived bool) ([]Skill, error) {
 
 func (p *pgStore) setSkillStatus(id int64, status string) error {
 	status = strings.TrimSpace(status)
-	if status != "active" && status != "archived" {
+	if status != "active" && status != "archived" && status != "draft" {
 		return fmt.Errorf("invalid status")
 	}
 	_, err := p.db.Exec(`UPDATE ai_skills SET status=$2, updated_at=$3 WHERE id=$1`, id, status, time.Now().Unix())
 	return err
+}
+
+func (p *pgStore) setSkillScope(id int64, serviceIDs, categories string) error {
+	_, err := p.db.Exec(
+		`UPDATE ai_skills SET service_ids=$2, categories=$3, updated_at=$4 WHERE id=$1`,
+		id, strings.TrimSpace(serviceIDs), strings.TrimSpace(categories), time.Now().Unix())
+	return err
+}
+
+func (p *pgStore) countSkillsByStatus(status string) int {
+	if p == nil || p.db == nil {
+		return 0
+	}
+	var n int
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM ai_skills WHERE COALESCE(status,'active')=$1`, status).Scan(&n)
+	return n
 }
 
 // mergeSkills 将 dropID 合并进 keepID：累加使用计数后删除 drop；保留 keep 的步骤（已验证优先）。
@@ -1690,17 +1882,24 @@ func (p *pgStore) skillCount() int {
 
 // memoryBrowseItem 记忆浏览器列表项（不含 embedding）。
 type memoryBrowseItem struct {
-	ID        int64   `json:"id"`
-	Kind      string  `json:"kind"`
-	Source    string  `json:"source"`
-	Content   string  `json:"content"`
-	CreatedAt int64   `json:"created_at"`
-	LastHitAt int64   `json:"last_hit_at"`
-	Priority  float64 `json:"priority"`
+	ID         int64   `json:"id"`
+	Kind       string  `json:"kind"`
+	Source     string  `json:"source"`
+	Content    string  `json:"content"`
+	CreatedAt  int64   `json:"created_at"`
+	LastHitAt  int64   `json:"last_hit_at"`
+	Priority   float64 `json:"priority"`
+	ServiceID  string  `json:"service_id,omitempty"`
+	Category   string  `json:"category,omitempty"`
+	Verified   bool    `json:"verified"`
 }
 
-// listMemories 按时间倒序列出记忆，可选 kind 过滤。limit 默认 50、上限 200。
+// listMemories 按时间倒序列出记忆，可选 kind / verified 过滤。limit 默认 50、上限 200。
 func (p *pgStore) listMemories(kind string, limit, offset int) ([]memoryBrowseItem, int, error) {
+	return p.listMemoriesFiltered(kind, "", limit, offset)
+}
+
+func (p *pgStore) listMemoriesFiltered(kind, verifiedFilter string, limit, offset int) ([]memoryBrowseItem, int, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -1710,28 +1909,32 @@ func (p *pgStore) listMemories(kind string, limit, offset int) ([]memoryBrowseIt
 	if offset < 0 {
 		offset = 0
 	}
-	var total int
-	var err error
+	where := []string{"1=1"}
+	args := []any{}
+	argN := 1
 	if kind != "" {
-		err = p.db.QueryRow(`SELECT COUNT(*) FROM ai_memory_embeddings WHERE kind = $1`, kind).Scan(&total)
-	} else {
-		err = p.db.QueryRow(`SELECT COUNT(*) FROM ai_memory_embeddings`).Scan(&total)
+		where = append(where, fmt.Sprintf("kind = $%d", argN))
+		args = append(args, kind)
+		argN++
 	}
-	if err != nil {
+	switch strings.ToLower(strings.TrimSpace(verifiedFilter)) {
+	case "1", "true", "yes":
+		where = append(where, "COALESCE(verified,false)=true")
+	case "0", "false", "no":
+		where = append(where, "COALESCE(verified,false)=false")
+	}
+	whereSQL := strings.Join(where, " AND ")
+	var total int
+	countQ := "SELECT COUNT(*) FROM ai_memory_embeddings WHERE " + whereSQL
+	if err := p.db.QueryRow(countQ, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	var rows *sql.Rows
-	if kind != "" {
-		rows, err = p.db.Query(
-			`SELECT id, kind, source, content, created_at, COALESCE(last_hit_at,0), COALESCE(priority,1)
-			 FROM ai_memory_embeddings WHERE kind = $1
-			 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, kind, limit, offset)
-	} else {
-		rows, err = p.db.Query(
-			`SELECT id, kind, source, content, created_at, COALESCE(last_hit_at,0), COALESCE(priority,1)
-			 FROM ai_memory_embeddings
-			 ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
-	}
+	q := fmt.Sprintf(`SELECT id, kind, source, content, created_at, COALESCE(last_hit_at,0), COALESCE(priority,1),
+		COALESCE(service_id,''), COALESCE(category,''), COALESCE(verified,false)
+		FROM ai_memory_embeddings WHERE %s
+		ORDER BY verified DESC, priority DESC, created_at DESC LIMIT $%d OFFSET $%d`, whereSQL, argN, argN+1)
+	args = append(args, limit, offset)
+	rows, err := p.db.Query(q, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1739,7 +1942,8 @@ func (p *pgStore) listMemories(kind string, limit, offset int) ([]memoryBrowseIt
 	var out []memoryBrowseItem
 	for rows.Next() {
 		var m memoryBrowseItem
-		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.CreatedAt, &m.LastHitAt, &m.Priority); err == nil {
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Source, &m.Content, &m.CreatedAt, &m.LastHitAt, &m.Priority,
+			&m.ServiceID, &m.Category, &m.Verified); err == nil {
 			if len([]rune(m.Content)) > 800 {
 				m.Content = string([]rune(m.Content)[:800]) + "…"
 			}
@@ -2139,6 +2343,7 @@ func (s *Server) bindPG(ps *pgStore) {
 		return
 	}
 	s.pg = ps
+	s.wireAIGovPG()
 	if incs, err := ps.loadIncidents(); err == nil && len(incs) > 0 {
 		s.incidents.Import(incs)
 	}

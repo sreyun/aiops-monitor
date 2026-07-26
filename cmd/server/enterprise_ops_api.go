@@ -352,10 +352,18 @@ func (s *Server) handleChangeAction(w http.ResponseWriter, r *http.Request, acti
 		return
 	}
 	_, freeze := s.cfg.activeFreezeForHosts(rec.HostIDs, time.Now().Unix())
-	out, err := s.changes.Transition(id, action, s.actorName(r), freeze)
+	actor := s.actorName(r)
+	breakGlass := s.actorIsAdmin(r) && (r.URL.Query().Get("break_glass") == "1" || r.Header.Get("X-Break-Glass") == "1")
+	out, err := s.changes.TransitionSoD(id, action, actor, freeze, breakGlass)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if breakGlass && (action == "approve" || action == "start") && s.store != nil {
+		s.store.AddLog(LogEntry{
+			Kind: KindOperation, Level: "warning", Actor: actor,
+			Message: "变更 SoD break-glass #" + strconv.FormatInt(id, 10) + " " + action,
+		})
 	}
 	s.store.MarkDirty()
 	writeJSON(w, http.StatusOK, out)

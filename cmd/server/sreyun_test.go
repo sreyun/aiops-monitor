@@ -70,7 +70,7 @@ func TestSreyunHostContextAndToolLoop(t *testing.T) {
 
 	// (2) 工具调用闭环
 	sess := &SreyunSession{}
-	reply, err := h.Chat(context.Background(), sess, "查询主机 web-01 的 CPU 使用率", nil, false, nil)
+	reply, _, err := h.Chat(context.Background(), sess, "查询主机 web-01 的 CPU 使用率", nil, false, nil)
 	if err != nil {
 		t.Fatalf("Chat 出错: %v", err)
 	}

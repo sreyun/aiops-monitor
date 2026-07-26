@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -28,6 +29,9 @@ type deskSession struct {
 	operator string
 	ip       string
 	lang     string
+
+	changeID   int64 // linked approved change (audit glue)
+	incidentID int64 // linked incident loop (audit glue)
 
 	toAgent   chan []byte
 	toBrowser chan []byte
@@ -181,6 +185,9 @@ func (s *Server) handleOpenDesktop(w http.ResponseWriter, r *http.Request) {
 	if !s.requireHostAccess(w, r, hostID) {
 		return
 	}
+	if !s.enforceRemoteGate(w, r, hostID, false) {
+		return
+	}
 	verified, hasPassword := s.auth.isTerminalVerified(r)
 	if !verified {
 		code := "terminal_verify_required"
@@ -229,6 +236,14 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "desktop.disabled")})
 		return
 	}
+	hostID := r.PathValue("id")
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
+	// Re-check gate on WS upgrade so a stale POST open cannot bypass later.
+	if !s.enforceRemoteGate(w, r, hostID, false) {
+		return
+	}
 	verified, hasPassword := s.auth.isTerminalVerified(r)
 	if !verified {
 		code := "terminal_verify_required"
@@ -241,7 +256,6 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	hostID := r.PathValue("id")
 	h := s.hostByID(hostID)
 	if h == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
@@ -256,8 +270,13 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 
 	operator, clientIP := s.actorIP(r)
 	sess := s.desk.create(hostID, h.Hostname, operator, clientIP, langFromRequest(r))
+	sess.changeID, sess.incidentID = s.remoteSessionLinks(hostID)
 	defer s.desk.remove(sess.id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: h.Hostname, Message: Tz("log.open_desktop", h.Hostname)})
+	msg := Tz("log.open_desktop", h.Hostname)
+	if sess.changeID > 0 || sess.incidentID > 0 {
+		msg += fmt.Sprintf(" [change_id=%d incident_id=%d]", sess.changeID, sess.incidentID)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: h.Hostname, Message: msg})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: h.Hostname, Message: Tz("log.close_desktop", h.Hostname)})
 
 	if !s.desk.notifyAgent(hostID, sess.id) {
