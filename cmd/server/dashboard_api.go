@@ -38,12 +38,9 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "仪表盘不存在"})
 		return
 	}
-	// 惰性修复历史导入：=~ 与布局重叠，回写一次后下次不再变。
-	if healImportedDashboard(&d) {
-		if saved, err := s.cfg.UpsertDashboard(d); err == nil {
-			d = saved
-		}
-	}
+	// 惰性修复历史导入（=~ / 布局）：仅内存 heal 后返回，不在 GET 时落盘抬升 revision，
+	// 避免并发编辑/AI 应用被无谓 409；用户下次显式保存时会持久化已修复内容。
+	_ = healImportedDashboard(&d)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -53,18 +50,24 @@ func (s *Server) handleUpsertDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	if d.ID != "" && d.Revision > 0 {
-		if current, ok := s.cfg.DashboardByID(d.ID); ok && current.Revision > 0 && current.Revision != d.Revision {
+	expected := int64(-1)
+	if d.ID != "" {
+		// 客户端带了 revision（含 0）则启用写锁内乐观锁；未带字段时 json 零值也为 0，
+		// 仅当显式更新已有看板时校验——用「请求体是否含 revision」无法区分，故：
+		// 有 ID 且客户端传了非负 revision 字段时一律校验（前端保存总会带上）。
+		expected = d.Revision
+	}
+	saved, err := s.cfg.UpsertDashboardIfRevision(d, expected)
+	if err != nil {
+		if errDashboardRevisionConflict(err) {
+			cur, _ := s.cfg.DashboardByID(d.ID)
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":            "该仪表盘已被其他操作更新，请刷新后合并修改",
-				"current_revision": current.Revision,
-				"updated_at":       current.UpdatedAt,
+				"current_revision": cur.Revision,
+				"updated_at":       cur.UpdatedAt,
 			})
 			return
 		}
-	}
-	saved, err := s.cfg.UpsertDashboard(d)
-	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -140,6 +143,15 @@ func validatePanelQueryReq(req *panelQueryReq, withRange, logs bool) error {
 	}
 	if req.Step < 0 {
 		return fmt.Errorf("查询步长不能为负数")
+	}
+	if !logs && req.Step > 0 {
+		const maxPoints = 5000
+		if span := req.To - req.From; span > 0 && span/req.Step > maxPoints {
+			req.Step = span / maxPoints
+			if req.Step < 1 {
+				req.Step = 1
+			}
+		}
 	}
 	if logs {
 		if req.Limit <= 0 {
@@ -228,6 +240,16 @@ func (s *Server) handleDashboardQuerySQL(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "查询请求过大或字段无效"})
 		return
 	}
+	if len(req.Vars) > maxDashboardVars {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("模板变量不能超过 %d 个", maxDashboardVars)})
+		return
+	}
+	for k, v := range req.Vars {
+		if !dashVarNameValid.MatchString(k) || len(v) > 4096 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("模板变量 %q 无效或值过长", k)})
+			return
+		}
+	}
 	ds, ok := s.cfg.GetDataSource(req.DataSource)
 	if !ok || !ds.Enabled || !isSQLDataSourceType(ds.Type) {
 		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}, "rows": []any{}, "available": false})
@@ -246,6 +268,9 @@ func (s *Server) handleDashboardQuerySQL(w http.ResponseWriter, r *http.Request)
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
 	}
 	var cols []string
 	var rows []map[string]any
@@ -305,6 +330,11 @@ func (s *Server) handleDashboardVarValues(w http.ResponseWriter, r *http.Request
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name != "" && !dashVarNameValid.MatchString(req.Name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "模板变量名无效"})
 		return
 	}
 	if len(req.DataSource) > 128 || len(req.Query) > maxDashboardExpr || len(req.Options) > 500 {
@@ -388,7 +418,8 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	}
 	saved, err := s.cfg.UpsertDashboard(d)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		// 把「面板超限」等校验错误以 400 返回，便于前端直接展示可读原因。
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	unsupported := 0

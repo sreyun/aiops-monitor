@@ -74,10 +74,10 @@ func TestAssistTaskPolicy_Golden(t *testing.T) {
 				if p.ThinkingBudget <= 0 || p.ThinkingBudget > 1024 {
 					t.Errorf("dashboard_optimize ThinkingBudget 应在 1~1024，got %d", p.ThinkingBudget)
 				}
-				if p.MaxTokens < 4096 {
+				if p.MaxTokens < 8192 {
 					t.Errorf("dashboard_optimize MaxTokens 应足够容纳完整 JSON，got %d", p.MaxTokens)
 				}
-				if p.Timeout < 120*time.Second {
+				if p.Timeout < 180*time.Second {
 					t.Errorf("dashboard_optimize timeout too short: %v", p.Timeout)
 				}
 			}

@@ -34,6 +34,75 @@ const sampleGrafanaJSON = `{
   ]
 }`
 
+func TestNormalizeDashboardAllowsLargeGrafanaTemplates(t *testing.T) {
+	// Node Exporter Full (1860) expands to ~120–140 panels; previously capped at 120.
+	d := Dashboard{Name: "large"}
+	for i := 0; i < 140; i++ {
+		d.Panels = append(d.Panels, DashPanel{
+			ID: i + 1, Title: "p", Type: "stat",
+			Grid:    DashGrid{X: 0, Y: i * 4, W: 6, H: 4},
+			Targets: []DashTarget{{Expr: "up"}},
+		})
+	}
+	if err := normalizeDashboard(&d); err != nil {
+		t.Fatalf("140 面板应通过校验（兼容 Grafana 1860）：%v", err)
+	}
+}
+
+func TestMapGrafanaEmptyTargetsBecomeUnsupported(t *testing.T) {
+	raw := `{
+	  "title":"mixed",
+	  "panels":[
+	    {"id":1,"type":"timeseries","title":"OK","gridPos":{"x":0,"y":0,"w":12,"h":8},
+	     "targets":[{"expr":"up"}]},
+	    {"id":2,"type":"timeseries","title":"NoExpr","gridPos":{"x":12,"y":0,"w":12,"h":8},
+	     "targets":[{"expr":""}]},
+	    {"id":3,"type":"text","title":"Note","gridPos":{"x":0,"y":8,"w":24,"h":3},
+	     "content":"hi"}
+	  ]
+	}`
+	d, err := mapGrafanaDashboard([]byte(raw), "", "grafana:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := normalizeDashboard(&d); err != nil {
+		t.Fatalf("含无 PromQL 面板的看板仍应可导入：%v", err)
+	}
+	by := map[string]DashPanel{}
+	for _, p := range d.Panels {
+		by[p.Title] = p
+	}
+	if by["NoExpr"].Type != "unsupported" {
+		t.Fatalf("无 expr 的 timeseries 应降级 unsupported，实为 %q", by["NoExpr"].Type)
+	}
+	if by["OK"].Type != "timeseries" || by["Note"].Type != "text" {
+		t.Fatalf("正常面板被误伤: %+v", by)
+	}
+}
+
+func TestUpsertDashboardRevisionConflict(t *testing.T) {
+	dir := t.TempDir()
+	cs := &ConfigStore{path: dir + "/cfg.json", cfg: ServerConfig{}}
+	saved, err := cs.UpsertDashboard(Dashboard{Name: "r", Panels: []DashPanel{
+		{Title: "a", Type: "stat", Grid: DashGrid{W: 6, H: 4}, Targets: []DashTarget{{Expr: "up"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Revision != 1 {
+		t.Fatalf("revision=%d", saved.Revision)
+	}
+	next := saved
+	next.Name = "r2"
+	if _, err := cs.UpsertDashboardIfRevision(next, saved.Revision); err != nil {
+		t.Fatal(err)
+	}
+	next.Name = "r3"
+	if _, err := cs.UpsertDashboardIfRevision(next, saved.Revision); !errDashboardRevisionConflict(err) {
+		t.Fatalf("期望 revision conflict，实为 %v", err)
+	}
+}
+
 func TestMapGrafanaDashboard(t *testing.T) {
 	d, err := mapGrafanaDashboard([]byte(sampleGrafanaJSON), "", "grafana:1860")
 	if err != nil {

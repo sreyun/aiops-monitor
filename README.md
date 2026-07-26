@@ -4,7 +4,7 @@
 
 **一个二进制，收敛监控 · 告警 · 自愈 · AI 诊断 · SRE 闭环 · 远程操控的开源平台。**
 
-[![Version](https://img.shields.io/badge/Version-v0.19.0-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.0)
+[![Version](https://img.shields.io/badge/Version-v0.19.1-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.1)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#开源与社区)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -16,7 +16,7 @@
 
 > **单二进制服务端 + 零依赖 Agent**：一条命令拉起可观测、告警治理、自动化自愈、AI 巡检诊断、SRE 闭环、远程桌面/终端、SQL 工具与安全中心。100% 开源、私有化自托管、数据完全自持——不依赖 SaaS、不上送遥测。
 
-**当前版本 [v0.19.0](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.0)** · 镜像同步：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+**当前版本 [v0.19.1](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.1)** · 镜像同步：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 

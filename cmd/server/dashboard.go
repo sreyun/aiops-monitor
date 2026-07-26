@@ -108,6 +108,12 @@ func (cs *ConfigStore) DashboardByID(id string) (Dashboard, bool) {
 }
 
 func (cs *ConfigStore) UpsertDashboard(d Dashboard) (Dashboard, error) {
+	return cs.UpsertDashboardIfRevision(d, -1)
+}
+
+// UpsertDashboardIfRevision 在写锁内做乐观锁：expected>=0 时要求当前 revision 匹配，
+// expected<0 表示不校验（兼容旧调用）。revision==0 的历史看板也参与比较（视为 0）。
+func (cs *ConfigStore) UpsertDashboardIfRevision(d Dashboard, expected int64) (Dashboard, error) {
 	if err := normalizeDashboard(&d); err != nil {
 		return Dashboard{}, err
 	}
@@ -122,16 +128,22 @@ func (cs *ConfigStore) UpsertDashboard(d Dashboard) (Dashboard, error) {
 	} else {
 		found := false
 		for i := range cs.cfg.Dashboards {
-			if cs.cfg.Dashboards[i].ID == d.ID {
-				d.CreatedAt = cs.cfg.Dashboards[i].CreatedAt
-				d.Revision = cs.cfg.Dashboards[i].Revision + 1
-				if d.Revision < 1 {
-					d.Revision = 1
-				}
-				cs.cfg.Dashboards[i] = d
-				found = true
-				break
+			if cs.cfg.Dashboards[i].ID != d.ID {
+				continue
 			}
+			curRev := cs.cfg.Dashboards[i].Revision
+			if expected >= 0 && curRev != expected {
+				cs.mu.Unlock()
+				return Dashboard{}, fmt.Errorf("revision conflict: current=%d expected=%d", curRev, expected)
+			}
+			d.CreatedAt = cs.cfg.Dashboards[i].CreatedAt
+			d.Revision = curRev + 1
+			if d.Revision < 1 {
+				d.Revision = 1
+			}
+			cs.cfg.Dashboards[i] = d
+			found = true
+			break
 		}
 		if !found {
 			d.Revision = 1
@@ -143,10 +155,16 @@ func (cs *ConfigStore) UpsertDashboard(d Dashboard) (Dashboard, error) {
 	return d, cs.save()
 }
 
+// errDashboardRevisionConflict reports optimistic-lock failures from UpsertDashboardIfRevision.
+func errDashboardRevisionConflict(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "revision conflict:")
+}
+
 const (
-	maxDashboardPanels  = 120
-	maxDashboardTargets = 12
-	maxDashboardVars    = 30
+	// Grafana「Node Exporter Full」(id=1860) 展开后约 120–140 面板；留足余量容纳大型社区模板。
+	maxDashboardPanels  = 500
+	maxDashboardTargets = 16
+	maxDashboardVars    = 64
 	maxDashboardText    = 64 << 10
 	maxDashboardExpr    = 16 << 10
 )
@@ -272,7 +290,8 @@ func normalizeDashboard(d *Dashboard) error {
 		d.Panels = []DashPanel{}
 	}
 	if len(d.Panels) > maxDashboardPanels {
-		return fmt.Errorf("面板不能超过 %d 个", maxDashboardPanels)
+		return fmt.Errorf("面板数量为 %d，超过上限 %d（大型 Grafana 模板请拆分导入，或联系管理员调高上限）",
+			len(d.Panels), maxDashboardPanels)
 	}
 	allowedTypes := map[string]bool{
 		"timeseries": true, "stat": true, "gauge": true, "bargauge": true,

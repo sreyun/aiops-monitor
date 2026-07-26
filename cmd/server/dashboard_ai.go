@@ -112,7 +112,13 @@ func decodeAIDashSpec(raw string) (aiDashSpec, bool) {
 	}
 	js = unwrapDashboardJSON(js)
 	var spec aiDashSpec
-	if json.Unmarshal([]byte(js), &spec) != nil {
+	if err := json.Unmarshal([]byte(js), &spec); err != nil {
+		js2 := repairTruncatedDashJSON(js)
+		if js2 == js || json.Unmarshal([]byte(js2), &spec) != nil {
+			return aiDashSpec{}, false
+		}
+	}
+	if len(spec.Panels) == 0 && spec.specName() == "" {
 		return aiDashSpec{}, false
 	}
 	return spec, true
@@ -160,14 +166,28 @@ func extractJSONObject(s string) string {
 		if j := strings.Index(rest, "```"); j >= 0 {
 			return strings.TrimSpace(rest[:j])
 		}
+		// 流式截断时常缺收尾 ```：仍取代码块剩余部分，交由下游尽力解析/修复。
+		if trimmed := strings.TrimSpace(rest); strings.HasPrefix(trimmed, "{") {
+			return trimmed
+		}
 	}
 	if i := strings.Index(s, "```"); i >= 0 { // 无语言标记的代码块
 		rest := s[i+3:]
+		// 跳过可选 language 行
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 && nl < 24 {
+			lang := strings.TrimSpace(rest[:nl])
+			if lang != "" && !strings.HasPrefix(lang, "{") {
+				rest = rest[nl+1:]
+			}
+		}
 		if j := strings.Index(rest, "```"); j >= 0 {
 			inner := strings.TrimSpace(rest[:j])
 			if strings.HasPrefix(inner, "{") {
 				return inner
 			}
+		}
+		if trimmed := strings.TrimSpace(rest); strings.HasPrefix(trimmed, "{") {
+			return trimmed
 		}
 	}
 	start := strings.IndexByte(s, '{')
@@ -176,6 +196,80 @@ func extractJSONObject(s string) string {
 		return s[start : end+1]
 	}
 	return ""
+}
+
+// repairTruncatedDashJSON 尝试把被截断的看板 JSON 裁到最后一个完整 panel 对象，便于 AI 优化仍可部分应用。
+func repairTruncatedDashJSON(js string) string {
+	js = strings.TrimSpace(js)
+	if js == "" || json.Valid([]byte(js)) {
+		return js
+	}
+	// 定位 "panels": [ ... ] 内最后一个完整的 {...}
+	key := `"panels"`
+	ki := strings.Index(js, key)
+	if ki < 0 {
+		return js
+	}
+	rest := js[ki+len(key):]
+	bi := strings.IndexByte(rest, '[')
+	if bi < 0 {
+		return js
+	}
+	arrStart := ki + len(key) + bi
+	depth := 0
+	inStr := false
+	esc := false
+	lastComplete := -1
+	for i := arrStart + 1; i < len(js); i++ {
+		c := js[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					lastComplete = i
+				}
+			}
+		case ']':
+			if depth == 0 {
+				return js // 数组已闭合，但仍 invalid：交给上层报错
+			}
+		}
+	}
+	if lastComplete < 0 {
+		return js
+	}
+	// 拼回：panels 数组截到 lastComplete，补 ] }，并尽量保留 vars 等前缀字段。
+	head := js[:arrStart+1] // include '['
+	body := js[arrStart+1 : lastComplete+1]
+	repaired := head + body + "]}"
+	// 若 head 本身未闭合外层对象以外的结构，再包一层最小可用结构
+	if !json.Valid([]byte(repaired)) {
+		// 回退：只保留 panels 数组
+		repaired = `{"panels":[` + body + `]}`
+	}
+	if json.Valid([]byte(repaired)) {
+		return repaired
+	}
+	return js
 }
 
 // sanitizeAIDash 把 AI 产出的宽松结构校验/规整为内部 Dashboard（类型白名单、栏宽钳制、网格布局、丢空查询）。
@@ -754,9 +848,9 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	// 开启思考但限制 thinking_budget，避免思维链耗尽超时导致「想完没内容」。
 	out, err := aiCompleteOpts(cfg, sys, user, aiCallOpts{
 		EnableThinking: true,
-		ThinkingBudget: 768,
-		MaxTokens:      8192,
-		Timeout:        180 * time.Second,
+		ThinkingBudget: 512,
+		MaxTokens:      16384,
+		Timeout:        240 * time.Second,
 	})
 	if err != nil {
 		return Dashboard{}, nil, fmt.Errorf("AI 生成失败：%v", err)
@@ -1096,23 +1190,24 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 	}
 	d, warns := sanitizeAIDash(spec, cur.Name, cur.Source)
 	if len(d.Panels) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用。请重新生成（确保回复含完整 ```json 看板结构）"})
 		return
 	}
-	// AI 输出永远不直接继承或选择新的高权限数据源；沿用当前看板数据源。
+	// AI 输出永远不直接继承或选择新的高权限数据源；沿用当前看板元信息与外观。
 	d.ID = cur.ID
 	d.DataSource = cur.DataSource
 	d.Description = cur.Description
 	d.Tags = cur.Tags
+	d.Appearance = cur.Appearance
 	if spec.specName() == "" {
 		d.Name = cur.Name
 	}
-	// 干跑：对各指标面板做一次即时查询；若全部无数据则拒绝应用，部分无数据则写入 warnings。
+	// 干跑：即时查询仅作提示，不再硬阻断——否则缺数据/变量未选时「应用」永远失败。
 	vars := dashVarMap(d.Vars)
 	var emptyTitles []string
 	metricN := 0
 	for _, p := range d.Panels {
-		if p.Type == "text" || p.Type == "logs" || p.Type == "alertlist" || len(p.Targets) == 0 {
+		if p.Type == "text" || p.Type == "logs" || p.Type == "alertlist" || p.Type == "unsupported" || len(p.Targets) == 0 {
 			continue
 		}
 		metricN++
@@ -1128,21 +1223,14 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 		if !ok || len(vec) == 0 {
 			title := p.Title
 			if title == "" {
-				title = p.Targets[0].Expr
+				title = trimLine(p.Targets[0].Expr, 80)
 			}
 			emptyTitles = append(emptyTitles, title)
 		}
 	}
 	if metricN > 0 && len(emptyTitles) == metricN {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":            false,
-			"error":         "干跑校验失败：所有指标面板即时查询均无数据，未应用。请检查 PromQL / 数据源后重试。",
-			"dry_run_empty": emptyTitles,
-			"warnings":      warns,
-		})
-		return
-	}
-	if len(emptyTitles) > 0 {
+		warns = append(warns, "干跑：全部指标面板即时无数据（仍可应用；请检查数据源/变量/PromQL）")
+	} else if len(emptyTitles) > 0 {
 		preview := emptyTitles
 		if len(preview) > 5 {
 			preview = preview[:5]
@@ -1158,16 +1246,21 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	if req.ExpectedRevision > 0 && cur.Revision > 0 && req.ExpectedRevision != cur.Revision {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"ok": false, "error": "看板在预览后已被更新，请重新生成预览再应用",
-			"current_revision": cur.Revision,
-		})
+	if err := normalizeDashboard(&d); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "看板校验失败：" + err.Error(), "warnings": warns})
 		return
 	}
-	saved, err := s.cfg.UpsertDashboard(d)
+	// 写锁内乐观锁：expected_revision 与预览时一致；0 也参与比较（兼容未升过 revision 的旧看板）。
+	saved, err := s.cfg.UpsertDashboardIfRevision(d, req.ExpectedRevision)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if errDashboardRevisionConflict(err) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"ok": false, "error": "看板在预览后已被更新，请重新点「应用优化」生成预览后再确认",
+				"current_revision": cur.Revision,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存失败：" + err.Error(), "warnings": warns})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "应用 AI 看板优化：" + saved.Name})

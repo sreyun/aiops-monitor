@@ -179,17 +179,23 @@ func mapGrafanaPanel(gp grafanaPanel) DashPanel {
 	if p.Unit == "" {
 		p.Unit = gp.Format
 	}
-	// 目标（仅保留含 PromQL expr 的）
+	// 目标（仅保留含 PromQL expr 的）；超过上限截断，避免整板导入失败。
 	for _, t := range gp.Targets {
 		if strings.TrimSpace(t.Expr) == "" {
 			continue
 		}
+		if len(p.Targets) >= maxDashboardTargets {
+			break
+		}
 		p.Targets = append(p.Targets, DashTarget{Expr: t.Expr, Legend: t.LegendFormat, RefID: t.RefID})
 	}
 	p.Type = mapGrafanaPanelType(gp.Type)
-	// 已知类型但没有任何 PromQL 目标（如纯 text 之外的空面板）→ 若非 text 也无 expr，仍按其类型渲染空态。
 	if p.Type == "unsupported" {
 		p.RawType = gp.Type
+	} else if p.Type != "text" && p.Type != "alertlist" && len(p.Targets) == 0 {
+		// 混合数据源 / 无 PromQL 的面板：降级为 unsupported 占位，避免 normalize 整板失败。
+		p.RawType = gp.Type
+		p.Type = "unsupported"
 	}
 	return p
 }

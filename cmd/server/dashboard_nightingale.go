@@ -154,11 +154,17 @@ func mapN9ePanel(gp n9ePanel) DashPanel {
 		if strings.TrimSpace(t.Expr) == "" {
 			continue
 		}
+		if len(p.Targets) >= maxDashboardTargets {
+			break
+		}
 		p.Targets = append(p.Targets, DashTarget{Expr: t.Expr, Legend: t.Legend})
 	}
 	p.Type = mapN9ePanelType(gp.Type)
 	if p.Type == "unsupported" {
 		p.RawType = gp.Type
+	} else if p.Type != "text" && p.Type != "alertlist" && len(p.Targets) == 0 {
+		p.RawType = gp.Type
+		p.Type = "unsupported"
 	}
 	return p
 }
