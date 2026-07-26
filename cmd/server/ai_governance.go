@@ -39,6 +39,7 @@ type aiGovHub struct {
 	toolCap   int
 	path      string
 	onRecord  func(aiToolAuditEntry) // optional SIEM/export hook
+	pg        *pgStore               // durable dual-write when set
 }
 
 func newAIGovHub() *aiGovHub {
@@ -169,6 +170,12 @@ func redactAIText(s string, enabled bool) string {
 }
 
 func (s *Server) handleListAIToolAudit(w http.ResponseWriter, r *http.Request) {
+	if s.pg != nil {
+		if list := s.pg.listAIToolAudit(100); len(list) > 0 {
+			writeJSON(w, http.StatusOK, list)
+			return
+		}
+	}
 	if s.aiGov == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return

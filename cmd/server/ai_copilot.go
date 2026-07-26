@@ -78,8 +78,10 @@ func (s *Server) handleAICopilotContext(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// streamChatWithFallback retries stream once with FallbackModels on hard failure.
-func (s *Server) streamChatWithFallback(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool, opts aiCallOpts) (string, error) {
+// streamChatWithFallback retries stream with FallbackModels on hard failure.
+// Returns the model that produced the reply (primary or fallback).
+func (s *Server) streamChatWithFallback(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool, opts aiCallOpts) (string, string, error) {
+	used := cfg.Model
 	reply, err := streamChatInnerOpts(ctx, w, cfg, messages, images, false, opts)
 	if err == nil && strings.TrimSpace(reply) != "" {
 		if sendDone {
@@ -88,13 +90,9 @@ func (s *Server) streamChatWithFallback(ctx context.Context, w http.ResponseWrit
 				f.Flush()
 			}
 		}
-		return reply, nil
+		return reply, used, nil
 	}
-	for _, model := range strings.Split(cfg.FallbackModels, ",") {
-		model = strings.TrimSpace(model)
-		if model == "" || model == cfg.Model {
-			continue
-		}
+	for _, model := range fallbackModelList(cfg) {
 		retry := cfg
 		retry.Model = model
 		fmt.Fprintf(w, "data: {\"meta\":{\"fallback_model\":%s}}\n\n", jsonString(model))
@@ -109,7 +107,7 @@ func (s *Server) streamChatWithFallback(ctx context.Context, w http.ResponseWrit
 					f.Flush()
 				}
 			}
-			return reply2, nil
+			return reply2, model, nil
 		}
 		err = err2
 	}
@@ -122,5 +120,5 @@ func (s *Server) streamChatWithFallback(ctx context.Context, w http.ResponseWrit
 			f.Flush()
 		}
 	}
-	return reply, err
+	return reply, used, err
 }

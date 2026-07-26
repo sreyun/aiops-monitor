@@ -18,14 +18,16 @@ type deskRecordFrame struct {
 }
 
 type deskSessionInfo struct {
-	ID        string `json:"id"`
-	HostID    string `json:"host_id"`
-	Hostname  string `json:"hostname"`
-	Operator  string `json:"operator"`
-	IP        string `json:"ip"`
-	CreatedAt int64  `json:"created_at"`
-	Frames    int    `json:"frames"`
-	Active    bool   `json:"active"`
+	ID         string `json:"id"`
+	HostID     string `json:"host_id"`
+	Hostname   string `json:"hostname"`
+	Operator   string `json:"operator"`
+	IP         string `json:"ip"`
+	CreatedAt  int64  `json:"created_at"`
+	Frames     int    `json:"frames"`
+	Active     bool   `json:"active"`
+	ChangeID   int64  `json:"change_id,omitempty"`
+	IncidentID int64  `json:"incident_id,omitempty"`
 }
 
 type deskArchive struct {
@@ -89,6 +91,7 @@ func (m *deskManager) archiveSession(s *deskSession) {
 			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
 			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 			Frames: len(rec), Active: false,
+			ChangeID: s.changeID, IncidentID: s.incidentID,
 		},
 		Recording: rec,
 	}
@@ -113,6 +116,7 @@ func (m *deskManager) listSessions() []deskSessionInfo {
 			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
 			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
 			Frames: n, Active: true,
+			ChangeID: s.changeID, IncidentID: s.incidentID,
 		})
 	}
 	for i := len(m.archived) - 1; i >= 0; i-- {

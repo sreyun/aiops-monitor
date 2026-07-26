@@ -190,6 +190,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/user/terminal-password/verify", s.handleTerminalPasswordVerify)
 	// remote terminal: browser WebSocket (auth) + agent reverse streams (token)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/terminal", s.handleTerminal)
+	mux.HandleFunc("GET /api/v1/hosts/{id}/remote-preflight", s.handleRemotePreflight)
 	mux.HandleFunc("GET /api/v1/agent/terminal/wait", s.handleAgentTermWait)
 	mux.HandleFunc("GET /api/v1/agent/terminal/rx", s.handleAgentTermRx)
 	mux.HandleFunc("POST /api/v1/agent/terminal/tx", s.handleAgentTermTx)
@@ -347,6 +348,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/approve", s.handleApproveRemediation)
 	mux.HandleFunc("POST /api/v1/remediation/runs/{id}/reject", s.handleRejectRemediation)
 	mux.HandleFunc("POST /api/v1/incidents/{id}/remediation-propose", s.handleProposeRemediation) // L4：事件剧本草稿→待审批
+	mux.HandleFunc("GET /api/v1/incidents/{id}/loop", s.handleGetIncidentLoop)
+	mux.HandleFunc("POST /api/v1/incidents/{id}/loop/{action}", s.handleIncidentLoopAction)
+	mux.HandleFunc("GET /api/v1/incidents/{id}/case-export", s.handleIncidentCaseExport)
+	mux.HandleFunc("GET /api/v1/sre/effect", s.handleSREEffect)
+	mux.HandleFunc("GET /api/v1/services", s.handleListBusinessServices)
+	mux.HandleFunc("POST /api/v1/services", s.handleUpsertBusinessService)
+	mux.HandleFunc("DELETE /api/v1/services/{id}", s.handleDeleteBusinessService)
+	mux.HandleFunc("GET /api/v1/services/{id}/impact", s.handleBusinessServiceImpact)
+	mux.HandleFunc("GET /api/v1/changes/{id}/impact", s.handleChangeImpact)
 	mux.HandleFunc("GET /api/v1/topology/edges", s.handleListTopologyEdges)
 	mux.HandleFunc("POST /api/v1/topology/edges", s.handleUpsertTopologyEdge)
 	mux.HandleFunc("DELETE /api/v1/topology/edges/{id}", s.handleDeleteTopologyEdge)
@@ -454,9 +464,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/copilot/context", s.handleAICopilotContext)    // On-call Copilot 工作台上下文
 	mux.HandleFunc("GET /api/v1/ai/skill-packs", s.handleListSkillPacks)          // 行业知识包清单
 	mux.HandleFunc("POST /api/v1/ai/skill-packs/import", s.handleImportSkillPacks)
+	mux.HandleFunc("GET /api/v1/ai/skills/export", s.handleExportCustomerSkillPack)
+	mux.HandleFunc("POST /api/v1/ai/skills/import", s.handleImportCustomerSkillPack)
 	mux.HandleFunc("GET /api/v1/ai/skills", s.handleListSkills) // AI 技能库（自进化提炼产物）
 	mux.HandleFunc("DELETE /api/v1/ai/skills/{id}", s.handleDeleteSkill)
 	mux.HandleFunc("POST /api/v1/ai/skills/{id}/archive", s.handleArchiveSkill)
+	mux.HandleFunc("POST /api/v1/ai/skills/{id}/scope", s.handleSetSkillScope)
 	mux.HandleFunc("POST /api/v1/ai/skills/merge", s.handleMergeSkills)
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
 	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）

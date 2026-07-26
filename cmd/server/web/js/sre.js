@@ -541,7 +541,7 @@ async function executePlaybook(id) {
       const freezeName = pf.freeze_window && pf.freeze_window.name ? pf.freeze_window.name : "";
       const detail = [
         `确定性预检：风险 ${risk}；在线 ${pf.online_targets} 台；离线跳过 ${pf.offline_targets} 台；最大并发 ${pf.max_parallel}。`,
-        pf.freeze_active ? (`❄ 变更冻结中${freezeName ? "：「"+freezeName+"」" : ""}——禁止未确认直跑，继续即视为人工确认。`) : "",
+        pf.freeze_active ? (`变更冻结中${freezeName ? "：「"+freezeName+"」" : ""}——禁止未确认直跑，继续即视为人工确认。`) : "",
         pf.auto_rollback ? "失败自动回滚：已启用（仅执行显式回滚命令）。" : "失败自动回滚：未启用。",
         ...(pf.warnings || [])
       ].filter(Boolean).join("\n");
@@ -925,12 +925,12 @@ function switchSRETab(tab){
 function loadSRETab(tab){
   if (tab==="incidents") loadIncidents();
   else if (tab==="remediation") loadRemediation();
-  else if (tab==="topology") loadTopology();
+  else if (tab==="topology"){ loadTopology(); loadBusinessServices(); }
   else if (tab==="slo") loadSLOs();
   else if (tab==="tickets") loadTickets();
   else if (tab==="oncall") loadOnCall();
   else if (tab==="changes") loadChanges();
-  else if (tab==="ai") loadInspections();
+  else if (tab==="ai"){ loadInspections(); loadSREEffect(); loadAIRuns(); }
 }
 
 /* ---- 事件 ---- */
@@ -1026,14 +1026,38 @@ async function openIncidentDetail(id){
 async function loadIncidentLoopStrip(inc){
   const el=$("incLoopStrip"); if(!el||!inc) return;
   try{
-    const [pages, runs, tk]=await Promise.all([
+    const [pages, runs, tk, loopJ]=await Promise.all([
       fetch(`${API}/oncall/pages?open=1`).then(r=>r.json()).catch(()=>[]),
       fetch(`${API}/remediation/runs`).then(r=>r.json()).catch(()=>[]),
-      inc.ticket_id ? fetch(`${API}/tickets/${inc.ticket_id}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null)
+      inc.ticket_id ? fetch(`${API}/tickets/${inc.ticket_id}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null),
+      fetch(`${API}/incidents/${inc.id}/loop`).then(r=>r.ok?r.json():null).catch(()=>null)
     ]);
     const page=(pages||[]).find(p=>Number(p.incident_id)===Number(inc.id));
     const pending=(runs||[]).filter(r=>Number(r.incident_id)===Number(inc.id)&&r.status==="pending_approval");
     const rows=[];
+    const loop=(loopJ&&loopJ.loop)||inc.loop||{};
+    const gate=(loopJ&&loopJ.gate)||{};
+    const stages=["diagnosed","dry_run_ok","proposed","approved","verified","promoted"];
+    const stageLabel={diagnosed:"诊断",dry_run_ok:"Dry-run",proposed:"提案",approved:"批准",verified:"回验",promoted:"Skill"};
+    const cur=loop.stage||"idle";
+    const stepHtml=stages.map(st=>{
+      const done=stages.indexOf(st)<=stages.indexOf(cur)&&cur!=="idle";
+      const active=st===cur;
+      return `<span class="badge ${active?"info":(done?"ok":"")}">${esc(stageLabel[st]||st)}</span>`;
+    }).join(" → ");
+    rows.push(`<div class="inc-loop-row"><b>事件闭环</b>
+      <span>${stepHtml||'<span class="hint">idle</span>'}</span>
+      ${gate.ok===false?`<span class="badge warn" title="${esc(gate.reason||"")}">闸门</span>`:""}
+      <div class="inc-loop-acts">
+        <button class="btn sm" data-iloop="dry-run">Dry-run</button>
+        <button class="btn sm" data-iloop="propose">提案</button>
+        <button class="btn sm primary" data-iloop="approve">批准</button>
+        <button class="btn sm" data-iloop="verify">回验</button>
+        <button class="btn sm" data-iloop="promote">沉淀 Skill</button>
+      </div></div>
+      <div class="inc-loop-row"><b>案例导出</b>
+        <span class="hint">时间线 · 回验 · 变更/会话关联</span>
+        <div class="inc-loop-acts"><button class="btn sm" data-iloop="case-export">下载案例包</button></div></div>`);
     if(page){
       const next=page.next_escalate_at?fmtDateTime(page.next_escalate_at):"—";
       const notified=(page.notified||[]).slice(0,6).join(", ")||"—";
@@ -1068,6 +1092,7 @@ async function loadIncidentLoopStrip(inc){
     }
     el.innerHTML=rows.join("");
     el.querySelectorAll("[data-loop]").forEach(b=>b.onclick=()=>incidentAction(inc.id,b.dataset.loop));
+    el.querySelectorAll("[data-iloop]").forEach(b=>b.onclick=()=>incidentLoopAct(inc.id,b.dataset.iloop,gate));
     el.querySelectorAll("[data-loop-approve]").forEach(b=>b.onclick=async()=>{
       await fetch(`${API}/remediation/runs/${b.dataset.loopApprove}/approve`,{method:"POST"});
       toast(I18N.t("sre.approved_ok","已批准执行"),"ok");
@@ -1081,6 +1106,37 @@ async function loadIncidentLoopStrip(inc){
   }catch(e){
     el.innerHTML=`<div class="empty-line">${I18N.t("sre.loop_load_failed","闭环状态加载失败")}</div>`;
   }
+}
+async function incidentLoopAct(id, action, gate){
+  try{
+    if(action==="case-export"){
+      const r=await fetch(`${API}/incidents/${id}/case-export`);
+      if(!r.ok){ const j=await r.json().catch(()=>({})); toast(j.error||"导出失败","err"); return; }
+      const blob=await r.blob();
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download=`incident-${id}-case.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("案例已导出","ok");
+      return;
+    }
+    let body={};
+    if(action==="propose" && gate && gate.ok===false){
+      if(!confirm((gate.reason||"诊断闸门未通过")+"\n仍要强制提案？（需管理员）")) return;
+      body.force=true;
+    }
+    if(action==="promote"){
+      if(!confirm("将回验通过的诊断沉淀为 Skill？")) return;
+    }
+    const r=await fetch(`${API}/incidents/${id}/loop/${action}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||"闭环动作失败","err"); return; }
+    if(j.checks){
+      toast(`回验 ${j.ok?"通过":"未通过"} · rem=${j.checks.remediation_ok} alert=${j.checks.alert_quiet}`,"ok");
+    } else toast(action+" 完成","ok");
+    openIncidentDetail(id); loadRemediation(); loadSREBadge();
+  }catch(e){ toast(String(e),"err"); }
 }
 async function loadIncidentRelatedChanges(id){
   const el=$("incRelatedChanges"); if(!el) return;
@@ -1810,6 +1866,112 @@ async function applyAutoTopology(){
 safeAddEventListener("topoAddBtn","click",addTopologyEdge);
 safeAddEventListener("topoAutoBtn","click",applyAutoTopology);
 safeAddEventListener("topoRcaBtn","click",runTopologyRcaDemo);
+safeAddEventListener("bizSvcAddBtn","click",()=>editBusinessService(null));
+safeAddEventListener("bizSvcRefreshBtn","click",loadBusinessServices);
+safeAddEventListener("sreEffectRefreshBtn","click",()=>{ loadSREEffect(); loadAIRuns(); });
+
+async function loadBusinessServices(){
+  const el=$("bizSvcList"); if(!el) return;
+  try{
+    const list=await fetch(`${API}/services`).then(r=>r.json());
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无业务服务，点击「+ 业务服务」创建</div>`; return; }
+    el.innerHTML=list.map(s=>`<div class="fwd-card">
+      <div class="fwd-card-title">${esc(s.name||s.id)} ${s.env?`<span class="badge">${esc(s.env)}</span>`:""}</div>
+      <div class="fwd-card-sub">${esc(s.owner||"—")} · hosts ${(s.host_ids||[]).length} · ds ${(s.datasource_ids||[]).length}</div>
+      <div class="fwd-card-acts">
+        <button class="btn sm" data-bs="impact" data-id="${esc(s.id)}">影响面</button>
+        <button class="btn sm" data-bs="edit" data-id="${esc(s.id)}">编辑</button>
+        <button class="btn danger sm" data-bs="del" data-id="${esc(s.id)}">删除</button>
+      </div></div>`).join("");
+    el.querySelectorAll("[data-bs]").forEach(b=>b.onclick=()=>bizSvcAct(b.dataset.bs,b.dataset.id,list));
+  }catch(e){ el.innerHTML=`<div class="empty-line">加载失败：${esc(String(e))}</div>`; }
+}
+async function bizSvcAct(act,id,list){
+  if(act==="del"){
+    if(!confirm("删除业务服务？")) return;
+    await fetch(`${API}/services/${encodeURIComponent(id)}`,{method:"DELETE"});
+    loadBusinessServices(); return;
+  }
+  if(act==="edit"){
+    editBusinessService((list||[]).find(x=>x.id===id)||null); return;
+  }
+  if(act==="impact"){
+    const j=await fetch(`${API}/services/${encodeURIComponent(id)}/impact`).then(r=>r.json());
+    const lines=[
+      `服务：${j.service&&j.service.name||id}`,
+      `主机：${(j.hosts||[]).join(", ")||"—"}`,
+      `未决事件：${(j.open_incidents||[]).length}`,
+      ...(j.open_incidents||[]).slice(0,8).map(i=>`  #${i.id} ${i.title} (${i.severity})`),
+      `近14天变更：${(j.recent_changes||[]).length}`,
+      ...(j.recent_changes||[]).slice(0,5).map(c=>`  CHG#${c.id} ${c.title} [${c.status}]`),
+    ];
+    alert(lines.join("\n"));
+  }
+}
+function editBusinessService(svc){
+  const name=prompt("服务名称", svc&&svc.name||"");
+  if(!name) return;
+  const owner=prompt("负责人", svc&&svc.owner||"")||"";
+  const env=prompt("环境 prod/staging/dev", svc&&svc.env||"prod")||"prod";
+  const hosts=(prompt("主机 ID（逗号分隔）", (svc&&svc.host_ids||[]).join(","))||"").split(",").map(s=>s.trim()).filter(Boolean);
+  const body={id:svc&&svc.id||undefined,name,owner,env,host_ids:hosts};
+  fetch(`${API}/services`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(j=>{ if(j.error) toast(j.error,"err"); else { toast("已保存","ok"); loadBusinessServices(); }})
+    .catch(e=>toast(String(e),"err"));
+}
+
+function _fmtDur(sec){
+  sec=Number(sec)||0;
+  if(sec<60) return sec+"s";
+  if(sec<3600) return Math.round(sec/60)+"m";
+  return (sec/3600).toFixed(1)+"h";
+}
+async function loadSREEffect(){
+  const el=$("sreEffectBody"); if(!el) return;
+  try{
+    const j=await fetch(`${API}/sre/effect?days=14`).then(r=>r.json());
+    const card=(title,val,sub)=>`<div class="sre-kpi"><div class="sre-kpi-v">${val}</div><div class="sre-kpi-t">${title}</div>${sub?`<div class="hint">${sub}</div>`:""}</div>`;
+    el.innerHTML=`
+      <div class="sre-kpi-grid">
+        ${card("MTTR P50/P75/P90", `${_fmtDur(j.mttr_p50_sec)} / ${_fmtDur(j.mttr_p75_sec)} / ${_fmtDur(j.mttr_p90_sec)}`, `MTTA P50 ${_fmtDur(j.mtta_p50_sec)}`)}
+        ${card("告警噪声比", (j.alert_noise_ratio||0).toFixed(2), `复开 ${j.alert_reopen_keys||0} · 抖动 ${j.alert_flap_keys||0}`)}
+        ${card("变更失败率", `${(100*(j.change_failure_rate||0)).toFixed(0)}%`, `${j.change_failed_count||0}/${j.change_count||0} · Lead P75 ${_fmtDur(j.change_lead_time_p75_sec)}`)}
+        ${card("AI 采纳 / 验证", `${(100*(j.ai_adoption_rate||0)).toFixed(0)}% / ${(100*(j.verify_pass_rate||0)).toFixed(0)}%`, `反馈 ${j.ai_helpful_count||0}/${j.ai_feedback_count||0} · verify n=${j.verify_sample_size||0}`)}
+        ${card("闭环完成率", `${(100*(j.closed_loop_rate||0)).toFixed(0)}%`, `回验通过 ${j.closed_loop_count||0} / 事件 ${j.incident_count||0}`)}
+        ${card("Agent 可观测", `工具轮 ${j.ai_tool_turn_runs||0}`, `Fallback ${j.ai_fallback_count||0} · Runs ${j.ai_run_count||0}`)}
+        ${card("学习资产", `Skill 命中 ${j.skill_hit_runs||0}`, `记忆命中 ${j.memory_hit_runs||0} · 已验证记忆 ${j.memory_verified_count||0}/${j.memory_total_count||0} · draft/active ${(100*(j.skill_draft_active_ratio||0)).toFixed(0)}% (${j.skill_draft_count||0}/${j.skill_active_count||0})`)}
+      </div>
+      ${(j.notes||[]).map(n=>`<div class="hint">${esc(n)}</div>`).join("")}`;
+  }catch(e){ el.innerHTML=`<div class="empty-line">效果加载失败：${esc(String(e))}</div>`; }
+}
+async function loadAIRuns(){
+  const el=$("aiRunsList"); if(!el) return;
+  try{
+    const list=await fetch(`${API}/ai/runs?limit=30`).then(r=>r.json());
+    if(!list||!list.length){ el.innerHTML=`<div class="empty-line">暂无 AI Runs（需 PostgreSQL）</div>`; return; }
+    el.innerHTML=list.map(r=>{
+      const meta=r.meta||{};
+      const toolNames=Array.isArray(meta.tools)?meta.tools.filter(Boolean):[];
+      const badges=[
+        meta.tool_turns?`<span class="badge info">tools×${meta.tool_turns}${toolNames.length?" · "+esc(toolNames.slice(0,4).join(",")):""}</span>`:"",
+        meta.fallback_model?`<span class="badge warn">fb:${esc(meta.fallback_model)}</span>`:"",
+        meta.live_evidence?`<span class="badge ok">证据${meta.live_evidence}</span>`:"",
+        meta.citations?`<span class="badge">cite ${meta.citations}</span>`:"",
+      ].join(" ");
+      return `<div class="sre-row" data-run="${esc(r.id)}">
+      <span class="badge ${r.ok?"ok":"warn"}">${esc(r.kind||"?")}</span>
+      <div class="sre-row-main"><div class="sre-row-title">${esc(r.task||r.id)} ${badges}</div>
+        <div class="sre-row-sub">${esc(r.actor||"")} · ${esc(r.model||"")} · ${fmtDateTime(r.created_at)} · ${r.latency_ms||0}ms
+          ${r.incident_id?` · 事件#${r.incident_id}`:""} ${r.feedback?` · fb=${esc(r.feedback)}`:""}</div>
+      </div></div>`;
+    }).join("");
+    el.querySelectorAll("[data-run]").forEach(row=>row.onclick=async()=>{
+      const j=await fetch(`${API}/ai/runs/${encodeURIComponent(row.dataset.run)}`).then(r=>r.json());
+      const meta=j.meta?JSON.stringify(j.meta,null,2):"";
+      alert(`Run ${j.id}\nkind=${j.kind}\nmodel=${j.model||""}\nok=${j.ok}\nmeta=${meta}\n\n${(j.answer||"").slice(0,1200)}`);
+    });
+  }catch(e){ el.innerHTML=`<div class="empty-line">Runs 加载失败</div>`; }
+}
 
 function openRuleModal(r){
   $("rrId").value=r?r.id:""; $("rrTitle").textContent=r?I18N.t("sre.edit_rule","编辑规则"):I18N.t("sre.new_rule","新建规则");
@@ -2258,9 +2420,27 @@ async function loadChanges(){
     else {
       const now=Math.floor(Date.now()/1000);
       wl.innerHTML=wins.map(w=>{
-        const active=w.freeze && now>=(w.start||0) && (!w.end || now<=w.end);
-        return `<div class="fwd-card"><div class="fwd-card-title">${esc(w.name||w.id)} ${w.freeze?'<span class="badge warn">freeze</span>':""}${active?` <span class="badge freeze">${I18N.t("sre.freeze_active","冻结中")}</span>`:""}</div>
-      <div class="fwd-card-sub">${fmtDateTime(w.start)} → ${fmtDateTime(w.end)}${(w.host_ids||[]).length?" · hosts "+(w.host_ids||[]).length:""}</div>
+        const recur=String(w.recur||"").trim();
+        let active=false;
+        if(w.freeze){
+          if(recur){
+            const d=new Date(); const cur=d.getHours()*60+d.getMinutes();
+            const parseHM=s=>{ const p=String(s||"").split(":"); if(p.length!==2) return -1; const h=+p[0],m=+p[1]; return (h>=0&&h<=23&&m>=0&&m<=59)?h*60+m:-1; };
+            const a=parseHM(w.recur_start_hm), b=parseHM(w.recur_end_hm);
+            if(a>=0&&b>=0) active=b>a?(cur>=a&&cur<b):(cur>=a||cur<b);
+            if(active&&recur==="weekly"&&(w.recur_weekdays||[]).length){
+              const wd=d.getDay();
+              active=(w.recur_weekdays||[]).map(Number).includes(wd);
+            }
+          } else {
+            active=now>=(w.start||0) && (!w.end || now<=w.end);
+          }
+        }
+        const sched=recur
+          ? `循环 ${esc(recur)} ${esc(w.recur_start_hm||"")}–${esc(w.recur_end_hm||"")}${(w.recur_weekdays||[]).length?" · 周"+(w.recur_weekdays||[]).join(","):""}`
+          : `${fmtDateTime(w.start)} → ${fmtDateTime(w.end)}`;
+        return `<div class="fwd-card"><div class="fwd-card-title">${esc(w.name||w.id)} ${w.freeze?'<span class="badge warn">freeze</span>':""}${recur?` <span class="badge info">${esc(recur)}</span>`:""}${active&&w.freeze?` <span class="badge freeze">${I18N.t("sre.freeze_active","冻结中")}</span>`:""}</div>
+      <div class="fwd-card-sub">${sched}${(w.host_ids||[]).length?" · hosts "+(w.host_ids||[]).length:""}${(w.categories||[]).length?" · cat "+esc((w.categories||[]).join(",")):""}</div>
       <div class="fwd-card-acts"><button class="btn sm" data-ch="edit-win" data-id="${esc(w.id)}">编辑</button>
       <button class="btn danger sm" data-ch="del-win" data-id="${esc(w.id)}">删除</button></div></div>`;
       }).join("");
@@ -2297,24 +2477,50 @@ function _dtLocal(ts){
 function openChangeWinModal(w){
   $("changeEditTitle").textContent=w?"编辑变更窗":"新建变更窗";
   const now=Math.floor(Date.now()/1000);
+  const recur=w&&w.recur||"";
   $("changeEditBody").innerHTML=`
     <div class="field"><label>名称</label><input id="cwName" value="${esc(w&&w.name||"")}"></div>
-    <div class="grid2">
+    <div class="field"><label>循环模式</label><div class="select-wrap"><select id="cwRecur">
+      <option value=""${!recur?" selected":""}>绝对时间窗</option>
+      <option value="daily"${recur==="daily"?" selected":""}>每日循环</option>
+      <option value="weekly"${recur==="weekly"?" selected":""}>每周循环</option>
+    </select></div></div>
+    <div class="grid2" id="cwAbsRow">
       <div class="field"><label>开始</label><input type="datetime-local" id="cwStart" value="${_dtLocal(w&&w.start||now)}"></div>
       <div class="field"><label>结束</label><input type="datetime-local" id="cwEnd" value="${_dtLocal(w&&w.end||now+3600)}"></div>
     </div>
+    <div class="grid2" id="cwRecurRow" style="display:none">
+      <div class="field"><label>每日开始 HH:MM</label><input id="cwRecurStart" value="${esc(w&&w.recur_start_hm||"22:00")}" placeholder="22:00"></div>
+      <div class="field"><label>每日结束 HH:MM</label><input id="cwRecurEnd" value="${esc(w&&w.recur_end_hm||"06:00")}" placeholder="06:00"></div>
+    </div>
+    <div class="field" id="cwWeekRow" style="display:none"><label>星期（0=周日…6=周六，逗号，空=每天）</label>
+      <input id="cwWeekdays" value="${esc((w&&w.recur_weekdays||[]).join(","))}" placeholder="1,2,3,4,5"></div>
     <div class="field"><label>主机 ID（逗号，空=全局）</label><input id="cwHosts" value="${esc((w&&w.host_ids||[]).join(","))}"></div>
     <div class="field"><label>分类（逗号）</label><input id="cwCats" value="${esc((w&&w.categories||[]).join(","))}"></div>
-    <label class="switch mb"><input type="checkbox" id="cwFreeze" ${!w||w.freeze?"checked":""}> 冻结期（禁止未审批自愈）</label>
+    <label class="switch mb"><input type="checkbox" id="cwFreeze" ${!w||w.freeze?"checked":""}> 冻结期（禁止未审批自愈 / 触发远程闸门）</label>
     <div class="field"><label>备注</label><input id="cwNote" value="${esc(w&&w.note||"")}"></div>
     <input type="hidden" id="cwId" value="${esc(w&&w.id||"")}">`;
+  const syncRecurUI=()=>{
+    const m=$("cwRecur").value;
+    $("cwAbsRow").style.display=m? "none":"";
+    $("cwRecurRow").style.display=m? "":"none";
+    $("cwWeekRow").style.display=m==="weekly"? "":"none";
+  };
+  $("cwRecur").onchange=syncRecurUI; syncRecurUI();
   $("changeEditMask").classList.add("show");
   $("changeEditSave").onclick=async()=>{
     const toUnix=v=>{ const t=Date.parse(v); return isNaN(t)?0:Math.floor(t/1000); };
-    const body={id:$("cwId").value||undefined,name:$("cwName").value.trim(),start:toUnix($("cwStart").value),end:toUnix($("cwEnd").value),
+    const recurMode=$("cwRecur").value;
+    const body={id:$("cwId").value||undefined,name:$("cwName").value.trim(),
       host_ids:($("cwHosts").value||"").split(",").map(s=>s.trim()).filter(Boolean),
       categories:($("cwCats").value||"").split(",").map(s=>s.trim()).filter(Boolean),
-      freeze:$("cwFreeze").checked,note:$("cwNote").value.trim()};
+      freeze:$("cwFreeze").checked,note:$("cwNote").value.trim(),
+      recur:recurMode||undefined,
+      recur_start_hm:recurMode?($("cwRecurStart").value||"").trim():undefined,
+      recur_end_hm:recurMode?($("cwRecurEnd").value||"").trim():undefined,
+      recur_weekdays:recurMode==="weekly"?($("cwWeekdays").value||"").split(",").map(s=>parseInt(s.trim(),10)).filter(n=>n>=0&&n<=6):undefined,
+      start:recurMode?0:toUnix($("cwStart").value),
+      end:recurMode?0:toUnix($("cwEnd").value)};
     const r=await fetch(`${API}/changes/windows`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
     if(r.ok){ $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok"); }
@@ -2364,8 +2570,15 @@ function openChangeRecModal(c){
     const action=b.dataset.cwf;
     const cid=parseInt($("crId").value,10)||0;
     if(!cid) return;
-    const r=await fetch(`${API}/changes/${cid}/${action}`,{method:"POST"});
-    const j=await r.json().catch(()=>({}));
+    let url=`${API}/changes/${cid}/${action}`;
+    let r=await fetch(url,{method:"POST"});
+    let j=await r.json().catch(()=>({}));
+    if(!r.ok && action==="approve" && /职责分离|自批|作者/.test(String(j.error||""))){
+      if(confirm((j.error||"职责分离拦截")+"\n\n管理员可 break-glass 强制批准（记入审计）。是否继续？")){
+        r=await fetch(url+(url.includes("?")?"&":"?")+"break_glass=1",{method:"POST"});
+        j=await r.json().catch(()=>({}));
+      } else return;
+    }
     if(!r.ok){ toast(j.error||"流转失败","err"); return; }
     toast(`已${action}`,"ok"); openChangeRecModal(j); loadChanges();
   });
@@ -2381,7 +2594,12 @@ function openChangeRecModal(c){
       external_ref:$("crRef").value.trim()};
     const r=await fetch(`${API}/changes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok"); }
+    if(r.ok){
+      $("changeEditMask").classList.remove("show"); loadChanges(); toast("已保存","ok");
+      if(j.id){ fetch(`${API}/changes/${j.id}/impact`).then(r=>r.json()).then(imp=>{
+        if(imp&&(imp.services||[]).length) toast(`影响服务：${imp.services.map(s=>s.name).join(", ")}`,"ok");
+      }).catch(()=>{}); }
+    }
     else toast(j.error||"保存失败","err");
   };
 }
@@ -2742,17 +2960,24 @@ async function loadSkills(){
     }
     body.innerHTML=`<div class="skill-list">`+skills.map(s=>{
       const succ=s.use_count>0?Math.min(100,Math.round((s.success_count/s.use_count)*100)):0;
-      const archived=s.status==="archived";
-      return `<div class="skill-card${archived?" skill-archived":""}">
-        <div class="skill-head"><b>${esc(s.name)}</b>
-          <span class="skill-meta">${archived?"已归档 · ":""}${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):(String(s.source||"").startsWith("pack:")?" · 知识包":"")}</span>
+      const st=s.status||"active";
+      const archived=st==="archived";
+      const draft=st==="draft";
+      const stBadge=draft?`<span class="badge warn">draft</span>`:(archived?`<span class="badge">archived</span>`:`<span class="badge ok">active</span>`);
+      const scope=[s.service_ids?`svc:${s.service_ids}`:"",s.categories?`cat:${s.categories}`:""].filter(Boolean).join(" · ")||"全局";
+      return `<div class="skill-card${archived?" skill-archived":""}${draft?" skill-draft":""}">
+        <div class="skill-head"><b>${esc(s.name)}</b> ${stBadge}
+          <span class="skill-meta">v${s.version||1} · ${I18N.t("sre.skill_used","用")} ${s.use_count} · ${I18N.t("sre.skill_success","成功")} ${succ}% · ${I18N.t("sre.skill_weight","权重")} ${(s.priority||1).toFixed(1)}${s.source==="manual"?" · "+I18N.t("sre.skill_manual","手工"):(String(s.source||"").startsWith("pack:")?" · 知识包":(String(s.source||"").startsWith("customer:")?" · 客户包":""))}</span>
+          ${draft?`<button class="btn sm primary" data-skill-activate="${s.id}">激活</button>`:""}
           ${archived
             ?`<button class="btn sm" data-skill-restore="${s.id}">恢复</button>`
             :`<button class="btn sm" data-skill-archive="${s.id}">归档</button>`}
+          <button class="btn sm" data-skill-scope="${s.id}" data-svc="${esc(s.service_ids||"")}" data-cat="${esc(s.categories||"")}">作用域</button>
           <button class="btn danger sm" data-skill-del="${s.id}">${I18N.t("ui.delete","删除")}</button></div>
         <div class="skill-trigger">${I18N.t("sre.skill_applies","适用：")}${esc(s.trigger||"")}</div>
+        <div class="hint">作用域：${esc(scope)}</div>
         <pre class="skill-steps">${esc(s.steps||"")}</pre>
-        ${s.tags?`<div class="skill-tags">🏷️ ${esc(s.tags)}</div>`:""}
+        ${s.tags?`<div class="skill-tags">${esc(s.tags)}</div>`:""}
       </div>`;
     }).join("")+`</div>`;
     body.querySelectorAll("[data-skill-del]").forEach(b=>b.onclick=async()=>{
@@ -2768,7 +2993,46 @@ async function loadSkills(){
       await fetch(`${API}/ai/skills/${b.dataset.skillRestore}/archive`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"active"})});
       loadSkills();
     });
+    body.querySelectorAll("[data-skill-activate]").forEach(b=>b.onclick=async()=>{
+      await fetch(`${API}/ai/skills/${b.dataset.skillActivate}/archive`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"active"})});
+      toast("已激活，将参与检索","ok");
+      loadSkills();
+    });
+    body.querySelectorAll("[data-skill-scope]").forEach(b=>b.onclick=async()=>{
+      const svc=prompt("业务服务 ID（逗号，空=全局）", b.dataset.svc||"");
+      if(svc===null) return;
+      const cat=prompt("主机分类（逗号，空=全局）", b.dataset.cat||"");
+      if(cat===null) return;
+      await fetch(`${API}/ai/skills/${b.dataset.skillScope}/scope`,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service_ids:svc.trim(),categories:cat.trim()})});
+      toast("作用域已更新","ok");
+      loadSkills();
+    });
   }catch(e){ body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
+}
+async function exportCustomerSkills(){
+  try{
+    const r=await fetch(`${API}/ai/skills/export?status=active`);
+    if(!r.ok){ const j=await r.json().catch(()=>({})); toast(j.error||"导出失败","err"); return; }
+    const blob=await r.blob();
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="customer-skills.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("客户技能包已导出","ok");
+  }catch(e){ toast(String(e),"err"); }
+}
+async function importCustomerSkillsFile(file){
+  if(!file) return;
+  try{
+    const text=await file.text();
+    const r=await fetch(`${API}/ai/skills/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:text});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||"导入失败","err"); return; }
+    toast(`导入完成：${j.imported||0} 条（默认 draft，需激活）`,"ok");
+    loadSkills();
+  }catch(e){ toast(String(e),"err"); }
 }
 async function distillSkillsNow(){
   toast(I18N.t("sre.distilling","提炼中，请稍候…"),"ok");
@@ -2863,15 +3127,18 @@ async function loadMemories(){
   if(!body) return;
   body.innerHTML=`<div class="empty-line" style="padding:16px">${I18N.t("sre.loading","加载中…")}</div>`;
   const kind=($("memoryKindFilter")&&$("memoryKindFilter").value)||"";
+  const verified=($("memoryVerifiedFilter")&&$("memoryVerifiedFilter").value)||"";
   try{
     const q=new URLSearchParams({limit:"50"});
     if(kind) q.set("kind",kind);
+    if(verified) q.set("verified",verified);
     const j=await fetch(`${API}/ai/memories?${q}`).then(r=>r.json());
     const items=j.items||[];
     const stats=j.stats||{};
     if(statsEl){
       const parts=Object.keys(stats).sort().map(k=>`${k} ${stats[k]}`);
-      statsEl.textContent=parts.length?`共 ${j.total||0} 条 · ${parts.join(" · ")}`:`共 ${j.total||0} 条（需 PostgreSQL）`;
+      const verN=typeof j.verified_count==="number"?` · 已验证 ${j.verified_count}`:"";
+      statsEl.textContent=parts.length?`共 ${j.total||0} 条${verN} · ${parts.join(" · ")}`:`共 ${j.total||0} 条（需 PostgreSQL）`;
     }
     if(!items.length){
       body.innerHTML=`<div class="empty-line" style="padding:20px">${I18N.t("sre.memory_empty","还没有记忆。启用 AI 并完成若干诊断/对话后，经验会沉淀到此；未配置 PostgreSQL 时不可用。")}</div>`;
@@ -2879,9 +3146,13 @@ async function loadMemories(){
     }
     body.innerHTML=`<div class="skill-list">`+items.map(m=>{
       const when=m.created_at?fmtDateTime(m.created_at):"";
-      return `<div class="skill-card">
-        <div class="skill-head"><b>${esc(m.kind||"?")}</b>
-          <span class="skill-meta">${esc(m.source||"")} · 权重 ${(m.priority||1).toFixed(1)}${when?" · "+when:""}</span>
+      const hit=m.last_hit_at?` · 命中 ${fmtDateTime(m.last_hit_at)}`:"";
+      const scope=[m.service_id,m.category].filter(Boolean).join("/")||"";
+      const badges=(m.verified?`<span class="badge ok">已验证</span>`:`<span class="badge">未验证</span>`)+
+        (scope?` <span class="badge">${esc(scope)}</span>`:"");
+      return `<div class="skill-card${m.verified?" skill-verified":""}">
+        <div class="skill-head"><b>${esc(m.kind||"?")}</b> ${badges}
+          <span class="skill-meta">${esc(m.source||"")} · 权重 ${(m.priority||1).toFixed(1)}${when?" · "+when:""}${hit}</span>
           <button class="btn danger sm" data-mem-del="${m.id}">${I18N.t("ui.delete","删除")}</button></div>
         <pre class="skill-steps">${esc(m.content||"")}</pre>
       </div>`;
@@ -3561,7 +3832,13 @@ function renderQueueHint(){
 }
 async function sendAIChat(){
   const inp=$("aiChatInput"); if(!inp) return;
-  const msg=inp.value.trim();
+  let msg=inp.value.trim();
+  if(window._AI_WRITE_APPROVAL && window._AI_WRITE_APPROVAL.id){
+    const ap=window._AI_WRITE_APPROVAL;
+    msg=(msg?msg+"\n\n":"")+`【写工具审批】调用写工具 ${ap.tool} 时请使用 approval_id=${ap.id}`+(ap.args_hash?`（建议 args_hash=${ap.args_hash}）`:"");
+    window._AI_WRITE_APPROVAL=null;
+    const hint=$("aiWriteApprovalHint"); if(hint) hint.style.display="none";
+  }
   const atts=AI_ATTACHMENTS.slice();
   if(!msg && !atts.length) return; // 无文本且无附件则不发
   { const _sg=$("aiChatSuggest"); if(_sg) _sg.style.display="none"; } // 发起对话后隐藏推荐问题
@@ -3861,6 +4138,7 @@ safeAddEventListener("skillsDistillBtn","click",distillSkillsNow);
 safeAddEventListener("skillsShowArchived","change",loadSkills);
 safeAddEventListener("memoryBtn","click",openMemories);
 safeAddEventListener("memoryKindFilter","change",loadMemories);
+safeAddEventListener("memoryVerifiedFilter","change",loadMemories);
 safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
 safeAddEventListener("aiStatsRange","change",loadAIStats);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
@@ -3910,6 +4188,30 @@ safeAddEventListener("aiChatUrlBtn","click",attachURL);
 safeAddEventListener("aiChatFile","change",onAIChatFiles);
 safeAddEventListener("aiChatMicBtn","click",toggleAIVoiceInput);
 safeAddEventListener("aiChatStopBtn","click",stopAIChat);
+safeAddEventListener("aiWriteApprovalBtn","click",async()=>{
+  const tool=prompt("签发写工具审批：工具名（如 k8s_scale）","k8s_scale");
+  if(!tool) return;
+  try{
+    const r=await fetch(`${API}/ai/write-approval`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({tool:tool.trim(),ttl_sec:600})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||"签发失败","err"); return; }
+    window._AI_WRITE_APPROVAL={id:j.approval_id,tool:j.tool,expires_at:j.expires_at,args_hash:j.args_hash||""};
+    const hint=$("aiWriteApprovalHint");
+    if(hint){
+      hint.style.display="";
+      hint.innerHTML=`<span class="badge ok">写审批</span> <span class="mono">${esc(j.tool)}</span> · <code>${esc(j.approval_id)}</code> · ${j.ttl_sec||600}s 内下一则消息自动附带`;
+    }
+    toast("写审批已签发","ok");
+  }catch(e){ toast(String(e),"err"); }
+});
+safeAddEventListener("skillsExportBtn","click",exportCustomerSkills);
+safeAddEventListener("skillsImportBtn","click",()=>{ const f=$("skillsImportFile"); if(f) f.click(); });
+safeAddEventListener("skillsImportFile","change",e=>{
+  const f=e.target&&e.target.files&&e.target.files[0];
+  if(f) importCustomerSkillsFile(f);
+  if(e.target) e.target.value="";
+});
 safeAddEventListener("aiUndoBtn","click",undoAIChat);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
 safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));

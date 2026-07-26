@@ -983,14 +983,15 @@ func (h *SreyunCore) execCheckHostHealth(args map[string]any) (string, error) {
 
 // Chat runs a Sreyun conversation turn with Function Calling support.
 // If stream is true, it writes SSE events to w; otherwise returns the reply.
-func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
+// Meta carries Hermes-style loop stats (tool turns / fallback) for ai_runs.
+func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg string, images []chatImage, stream bool, w http.ResponseWriter) (string, AgentLoopMeta, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	h.ctx = ctx
 	cfg := h.s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
-		return "", fmt.Errorf("AI 未配置或未启用")
+		return "", AgentLoopMeta{}, fmt.Errorf("AI 未配置或未启用")
 	}
 
 	// Build system prompt from cached templates + rules
@@ -1039,10 +1040,11 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop
-	fullReply, err := h.runLoop(ctx, cfg, msgs, images, stream, w)
+	fullReply, meta, err := h.runLoop(ctx, cfg, msgs, images, stream, w)
 	if err != nil {
-		return "", err
+		return "", meta, err
 	}
+	meta.Citations = len(cites) + len(h.turnCites.snapshot())
 	// Update session
 	session.Messages = append(session.Messages,
 		map[string]string{"role": "user", "content": userMsg},
@@ -1068,15 +1070,24 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 		}
 		go h.s.rememberAI("chat", fmt.Sprintf("sreyun:%d", session.ID), mem)
 	}
-	return fullReply, nil
+	// Learning nudge: quality gate — multi-tool, ≥2 distinct tools, substantive reply → draft skill.
+	// Drafts stay out of retrieval until human activation after verify/accept.
+	if meta.ToolTurns >= 3 && len(meta.Tools) >= 2 && len([]rune(strings.TrimSpace(fullReply))) > 160 {
+		corpus := userMsg + "\n" + fullReply
+		go func() {
+			_, _, _ = h.s.promoteTextToSkillSyncStatus("hermes_loop", fmt.Sprintf("sreyun:%d", session.ID), corpus, "draft")
+		}()
+	}
+	return fullReply, meta, nil
 }
 
 // runLoop implements the core observe→reason→act loop with Function Calling.
 // 每轮都以【非流式】方式调用 LLM，以便可靠解析 tool_calls：流式模式难以在 token 中途
 // 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
 // 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
-// 工具调用的原始 JSON 绝不下发到前端。max 5 turns to prevent infinite loops.
-func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, error) {
+// 工具调用的原始 JSON 绝不下发到前端。max 8 turns（对齐 Hermes 多步工具深度，仍有硬顶）。
+func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, AgentLoopMeta, error) {
+	meta := AgentLoopMeta{}
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
 		if !stream || w == nil || text == "" {
@@ -1114,10 +1125,16 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			flusher.Flush()
 		}
 	}
+	onFallback := func(model string) {
+		meta.FallbackModel = model
+		emitFallbackSSE(w, model)
+	}
+	const maxTurns = 8
+	toolSeen := map[string]bool{}
 
-	for turn := 0; turn < 5; turn++ {
+	for turn := 0; turn < maxTurns; turn++ {
 		if err := ctx.Err(); err != nil { // 客户端已断开：停止后续 LLM 调用与工具执行，避免用户离开后仍在主机上跑命令
-			return "", err
+			return "", meta, err
 		}
 
 		// P3-1: 检测 Provider 类型，决定使用原生 Function Calling 还是文本注入
@@ -1139,22 +1156,27 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 
 		// 真流式：仅 OpenAI 兼容 + 已开启 stream 时启用——content 逐字回调下发（实现主会话
 		// 逐字输出），tool_calls 结构化累积；原生 FC 下二者分离，不会把工具 JSON 泄漏给用户。
-		// Anthropic / 文本注入 / 非流式请求仍走可靠的非流式 aiChatV。
+		// Anthropic / 文本注入 / 非流式请求仍走可靠的非流式 aiChatV（含 FallbackModels）。
 		var reply string
 		var nativeCalls []nativeToolCall
 		var err error
+		var usedModel string
 		streamedContent := false
 		if stream && w != nil && prov != aiProvAnthropic && len(h.tools) > 0 {
-			reply, nativeCalls, err = aiChatVStreamOpts(ctx, cfg, callMsgs, images, nativeTools,
+			reply, nativeCalls, usedModel, err = aiChatVStreamWithFallback(ctx, cfg, callMsgs, images, nativeTools,
 				func(delta string) {
 					streamedContent = true
 					sendDelta(delta)
 				},
 				sendReasoning, // 思维链增量 → 独立通道
 				aiCallOpts{EnableThinking: thinkingModelOrGateway(cfg), ThinkingBudget: 512},
+				onFallback,
 			)
 		} else {
-			reply, nativeCalls, err = aiChatV(ctx, cfg, callMsgs, images, nativeTools) // 带 ctx（可中止）+ 图片（多模态）
+			reply, nativeCalls, usedModel, err = aiChatVWithFallback(ctx, cfg, callMsgs, images, nativeTools, onFallback)
+		}
+		if usedModel != "" && usedModel != cfg.Model {
+			meta.FallbackModel = usedModel
 		}
 		if err != nil {
 			if stream && w != nil {
@@ -1163,7 +1185,7 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 					flusher.Flush()
 				}
 			}
-			return "", err
+			return "", meta, err
 		}
 
 		// P3-1: 优先使用原生 tool_calls，无则回退到文本解析
@@ -1185,9 +1207,10 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			if !streamedContent {
 				sendDelta(final)
 			}
-			return final, nil
+			return final, meta, nil
 		}
 
+		meta.ToolTurns++
 		// P3-3: 将模型的「思考文字」作为思维链下发。
 		// 流式模式下推理旁白已随 content 逐字送达，此处跳过 blockquote 以免重复。
 		if think := stripToolCallJSON(reply); think != "" && !streamedContent {
@@ -1197,6 +1220,10 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 		var toolResults strings.Builder
 		for _, tc := range toolCalls {
 			slog.Info("sreyun tool call", "tool", tc.Name, "args", fmt.Sprintf("%v", tc.Args))
+			if !toolSeen[tc.Name] {
+				toolSeen[tc.Name] = true
+				meta.Tools = append(meta.Tools, tc.Name)
+			}
 			tool, ok := h.tools[tc.Name]
 			if !ok {
 				sendTool(tc.Name, "err", nil)
@@ -1238,20 +1265,24 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			map[string]string{"role": "user", "content": fmt.Sprintf("工具执行结果：\n%s\n请根据以上真实结果继续分析；若信息足够，请直接用简洁中文给出最终结论，不要再输出 JSON。", toolResults.String())},
 		)
 	}
+	meta.MaxTurnsHit = true
 	// 达到最大轮次仍未收敛：强制「不再调用工具」再问一次，逼出最终结论并正常落库，
 	// 避免既跑满工具又丢弃已获取信息、还不给用户任何结论。
 	msgs = append(msgs, map[string]string{"role": "user", "content": "已达到工具调用次数上限。请不要再调用任何工具，直接基于以上已获取的真实信息，用简洁中文给出你的最终结论与处置建议。"})
-	final, _, err := aiChatV(ctx, cfg, msgs, images, nil) // 不注入工具定义，强制收敛为自然语言结论
+	final, _, usedModel, err := aiChatVWithFallback(ctx, cfg, msgs, images, nil, onFallback)
+	if usedModel != "" && usedModel != cfg.Model {
+		meta.FallbackModel = usedModel
+	}
 	if err != nil {
 		sendDelta("分析未能在限定轮次内收敛，请缩小问题范围后重试。")
-		return "", err
+		return "", meta, err
 	}
 	final = stripToolCallJSON(final)
 	if final == "" {
 		final = "分析未能得出明确结论，请补充信息后重试。"
 	}
 	sendDelta(final)
-	return final, nil
+	return final, meta, nil
 }
 
 // toolCall represents a parsed tool call from the LLM response.

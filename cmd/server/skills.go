@@ -147,7 +147,8 @@ func (s *Server) retrieveSkillsDetailed(query string, topK int) (text string, na
 	if len(emb) == 0 {
 		return "", nil, 0, "no_embed"
 	}
-	skills, err := s.pg.searchSkills(emb, topK, skillRelevantDist)
+	serviceID, category := s.skillRetrievalScope(query)
+	skills, err := s.pg.searchSkillsScoped(emb, topK, skillRelevantDist, serviceID, category)
 	if err != nil || len(skills) == 0 {
 		return "", nil, 0, ""
 	}
@@ -181,6 +182,40 @@ func (s *Server) retrieveSkillsDetailed(query string, topK int) (text string, na
 func (s *Server) retrieveSkillsForPrompt(query string, topK int) string {
 	t, _, _, _ := s.retrieveSkillsDetailed(query, topK)
 	return t
+}
+
+// skillRetrievalScope best-effort resolves BusinessService / host category from query text
+// (hostname / host id / service name) for scoped skill retrieval.
+func (s *Server) skillRetrievalScope(query string) (serviceID, category string) {
+	if s == nil || strings.TrimSpace(query) == "" {
+		return "", ""
+	}
+	q := strings.ToLower(query)
+	if s.store != nil {
+		for _, h := range s.store.ListHosts() {
+			if h == nil {
+				continue
+			}
+			if (h.Hostname != "" && strings.Contains(q, strings.ToLower(h.Hostname))) ||
+				(h.ID != "" && strings.Contains(q, strings.ToLower(h.ID))) {
+				category = h.Category
+				break
+			}
+		}
+	}
+	if s.cfg != nil {
+		for _, svc := range s.cfg.BusinessServices() {
+			if svc.Name != "" && strings.Contains(q, strings.ToLower(svc.Name)) {
+				serviceID = svc.ID
+				break
+			}
+			if svc.ID != "" && strings.Contains(q, strings.ToLower(svc.ID)) {
+				serviceID = svc.ID
+				break
+			}
+		}
+	}
+	return serviceID, category
 }
 
 // reinforceSkill 在事件解决 / 建议被采纳时，语义定位并强化最相关技能——技能层的学习闭环。异步。
@@ -225,8 +260,20 @@ func (s *Server) promoteTextToSkill(reason, sourceRef, corpus string) {
 	}()
 }
 
-// promoteTextToSkillSync 同步升格：LLM 抽 1 条 SOP → 去重合并 → 入库。
+// promoteTextToSkillSync 同步升格为 active Skill（已验证路径）。
 func (s *Server) promoteTextToSkillSync(reason, sourceRef, corpus string) (created, updated bool, err error) {
+	return s.promoteTextToSkillSyncStatus(reason, sourceRef, corpus, "active")
+}
+
+// promoteTextToSkillSyncStatus 同步升格；status 为 active|draft（draft 不参与检索）。
+func (s *Server) promoteTextToSkillSyncStatus(reason, sourceRef, corpus, status string) (created, updated bool, err error) {
+	if s.pg == nil {
+		return false, false, fmt.Errorf("需要 PostgreSQL")
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status != "draft" && status != "active" {
+		status = "active"
+	}
 	cfg := s.cfg.AIConfig()
 	if !embedReady(cfg) {
 		return false, false, fmt.Errorf("AI 未配置")
@@ -256,18 +303,24 @@ func (s *Server) promoteTextToSkillSync(reason, sourceRef, corpus string) (creat
 	if sourceRef != "" {
 		src = src + ":" + sourceRef
 	}
-	if id, dup := s.pg.findSimilarSkill(emb, skillDistillDupDist); dup {
-		if !s.pg.skillProven(id) {
-			if err := s.pg.updateSkill(id, name, trigger, steps, emb); err != nil {
-				return false, false, err
+	if status == "active" {
+		if id, dup := s.pg.findSimilarSkill(emb, skillDistillDupDist); dup {
+			if !s.pg.skillProven(id) {
+				if err := s.pg.updateSkill(id, name, trigger, steps, emb); err != nil {
+					return false, false, err
+				}
+				updated = true
 			}
-			updated = true
+			s.pg.recordSkillUse(id, true)
+			return false, updated, nil
 		}
-		s.pg.recordSkillUse(id, true)
-		return false, updated, nil
 	}
-	if _, err := s.pg.insertSkill(name, trigger, steps, sk.Tags, src, emb); err != nil {
+	id, err := s.pg.insertSkill(name, trigger, steps, sk.Tags, src, emb)
+	if err != nil {
 		return false, false, err
+	}
+	if status != "active" {
+		_ = s.pg.setSkillStatus(id, status)
 	}
 	return true, false, nil
 }

@@ -55,10 +55,10 @@ func (s *Server) wireSRE() {
 			go s.startOnCallForIncident(inc)
 			// 变更关联：写入时间线
 			go s.appendChangeCorrelation(inc)
-			// 新事件存入 AI 记忆库，供跨会话 RAG 检索复用
-			go s.rememberAI("alert", fmt.Sprintf("incident:%d", inc.ID),
+			// 新事件存入 AI 记忆库（带服务/主机作用域；未回验 → verified=false）
+			go s.rememberFromIncident(inc, "alert",
 				fmt.Sprintf("【新告警事件】%s\n严重程度：%s | 类型：%s | 主机：%s | 来源：%s",
-					inc.Title, inc.Severity, inc.Type, inc.Hostname, inc.Source))
+					inc.Title, inc.Severity, inc.Type, inc.Hostname, inc.Source), false)
 		} else {
 			s.messages.push("incident", "success", "事件已恢复："+inc.Title, "", "sre", ref)
 			// 学习闭环 C：人工解决 / 告警恢复 / 工单联动解决均走此路径，沉淀结构化结案卡
@@ -146,9 +146,16 @@ func (s *Server) wireSRE() {
 	// Terminal session end → extract output summary and save to AI memory for RAG.
 	if s.term != nil {
 		s.term.onArchive = func(info termSessionInfo, text string) {
-			go s.rememberAI("terminal", info.HostID,
+			cat := ""
+			if s.store != nil {
+				if h, ok := s.store.GetHost(info.HostID); ok && h != nil {
+					cat = h.Category
+				}
+			}
+			go s.rememberAIScoped("terminal", info.HostID,
 				fmt.Sprintf("【终端会话摘要】主机：%s | 操作者：%s\n%s",
-					info.Hostname, info.Operator, text))
+					info.Hostname, info.Operator, text),
+				memoryWriteOpts{Category: cat})
 		}
 	}
 
@@ -285,7 +292,7 @@ func (s *Server) autoDiagnose(inc Incident) {
 	// 事件自动诊断结果同样向量化入库，供后续 RAG 相似案例检索（此前仅手动诊断/诊断对话会向量化）。
 	go s.saveDiagnosisEmbedding(inc.ID, inc, labeled)
 	if s.shouldRememberUnverifiedAIOutput() {
-		go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【快速诊断】"+out)
+		go s.rememberFromIncident(inc, "diagnosis", "【事件】"+inc.Title+"\n【快速诊断】"+out, false)
 	}
 }
 
@@ -719,9 +726,14 @@ func (s *Server) handleProposeRemediation(w http.ResponseWriter, r *http.Request
 		Title              string   `json:"title"`
 		ExistingPlaybookID string   `json:"existing_playbook_id"`
 		Playbook           Playbook `json:"playbook"`
+		Force              bool     `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if gate, gerr := s.diagnosisGateAllowsPropose(inc, req.Force); gerr != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": gerr.Error(), "gate": gate, "hint": "设置 force=true 可强制继续"})
 		return
 	}
 	actor := s.actorName(r)
@@ -2292,7 +2304,7 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleArchiveSkill 归档/恢复技能。POST /api/v1/ai/skills/{id}/archive  {status:active|archived}
+// handleArchiveSkill 归档/激活/草稿。POST /api/v1/ai/skills/{id}/archive  {status:active|draft|archived}
 func (s *Server) handleArchiveSkill(w http.ResponseWriter, r *http.Request) {
 	id, ok := sreParseID(r)
 	if !ok || s.pg == nil {
@@ -2344,23 +2356,27 @@ func (s *Server) handleDistillSkills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "created": n})
 }
 
-// handleListMemories 浏览 AI 记忆库（只读列表，可按 kind 过滤）。GET /api/v1/ai/memories?kind=&limit=&offset=
+// handleListMemories 浏览 AI 记忆库（只读列表，可按 kind / verified 过滤）。
+// GET /api/v1/ai/memories?kind=&verified=true|false&limit=&offset=
 func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	if s.pg == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"items": []memoryBrowseItem{}, "total": 0, "stats": map[string]int{}})
 		return
 	}
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	verified := strings.TrimSpace(r.URL.Query().Get("verified"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	items, total, err := s.pg.listMemories(kind, limit, offset)
+	items, total, err := s.pg.listMemoriesFiltered(kind, verified, limit, offset)
 	if err != nil || items == nil {
 		items = []memoryBrowseItem{}
 	}
+	stats := s.pg.memoryKindStats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
-		"total": total,
-		"stats": s.pg.memoryKindStats(),
+		"items":            items,
+		"total":            total,
+		"stats":            stats,
+		"verified_count":   s.pg.countVerifiedMemories(),
 	})
 }
 
@@ -2417,6 +2433,8 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		}
 		// AI mode: use rich context (metrics + alerts + logs + RAG + rules)
 		sys := s.buildIncidentDiagnosisPrompt(inc)
+		liveExtra, liveCites := s.gatherLiveDiagnoseEvidence(inc)
+		sys += liveExtra
 		for _, e := range inc.Timeline {
 			if e.Kind == "ai_diagnosis" && e.Text != "" {
 				sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
@@ -2454,6 +2472,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		}
 		cites := append([]RAGCitation{}, memCites...)
 		cites = append(cites, wkCites...)
+		cites = append(cites, liveCites...)
 		for _, n := range skillNames {
 			cites = append(cites, RAGCitation{Kind: "skill", Title: n})
 		}
@@ -2463,13 +2482,22 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			{"role": "system", "content": sys},
 			{"role": "user", "content": userMsg},
 		}
-		// 诊断生成：配置了 MoA 则多模型集成研判，否则单模型；两者都流式且不发 [DONE]（末尾统一发）。
+		// 诊断生成：配置了 MoA 则多模型集成研判，否则单模型 + FallbackModels；两者都流式且不发 [DONE]。
 		var diag string
+		usedModel := cfg.Model
 		diagStart := time.Now()
 		if len(moaModelList(cfg)) > 1 {
 			diag = aiChatMoAStream(r.Context(), w, cfg, diagMsgs)
 		} else {
-			diag, _ = streamChatNoDone(r.Context(), w, cfg, diagMsgs, nil)
+			var err error
+			diag, usedModel, err = s.streamChatWithFallback(r.Context(), w, cfg, diagMsgs, nil, false, aiCallOpts{})
+			if err != nil && strings.TrimSpace(diag) == "" {
+				diag, _ = streamChatNoDone(r.Context(), w, cfg, diagMsgs, nil)
+				usedModel = cfg.Model
+			}
+			if usedModel == "" {
+				usedModel = cfg.Model
+			}
 		}
 		// 自我校验（可选）：独立第二遍对照证据复核结论，流式续写到同一响应。
 		verify := ""
@@ -2481,16 +2509,45 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			full += "\n\n🔎 自我校验：\n" + verify
 		}
 		diagLat := time.Since(diagStart).Milliseconds()
-		s.recordAICallActor("diagnose", cfg.Model, s.actorName(r), diagLat,
+		s.recordAICallActor("diagnose", usedModel, s.actorName(r), diagLat,
 			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
 		if diag != "" {
 			runID := newOpaqueID("run_")
-			s.persistAIRun(AIRun{
-				ID: runID, Kind: "diagnose", Task: "diagnose", Actor: s.actorName(r), Model: cfg.Model,
-				Input: userMsg, Answer: full, OK: true, LatencyMs: diagLat,
-				MemHits: memHits, SkillHits: skillHits, IncidentID: id,
+			okVerify := diagnosisEvidenceOK(cites)
+			if cfg.SelfVerify && strings.TrimSpace(verify) != "" && strings.Contains(verify, "不一致") {
+				okVerify = false
+			}
+			verifyMeta, _ := json.Marshal(map[string]any{
+				"citations_present": len(cites) > 0,
+				"citation_count":    len(cites),
+				"evidence_ok":       diagnosisEvidenceOK(cites),
+				"self_verify":       strings.TrimSpace(verify) != "",
+				"live_evidence":     len(liveCites),
+				"ok":                okVerify,
 			})
-			fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s}}\n\n", jsonString(runID), jsonString(runID))
+			fbModel := ""
+			if usedModel != cfg.Model {
+				fbModel = usedModel
+			}
+			loopMeta := AgentLoopMeta{
+				Citations: len(cites), SelfVerify: strings.TrimSpace(verify) != "",
+				LiveEvidence: len(liveCites), FallbackModel: fbModel,
+			}
+			s.persistAIRun(AIRun{
+				ID: runID, Kind: "diagnose", Task: "diagnose", Actor: s.actorName(r), Model: usedModel,
+				Input: userMsg, Answer: full, OK: okVerify, LatencyMs: diagLat,
+				MemHits: memHits, SkillHits: skillHits, IncidentID: id, VerifyJSON: verifyMeta,
+				MetaJSON: agentMetaJSON(loopMeta),
+			})
+			fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s,\"live_evidence\":%d,\"evidence_ok\":%v}}\n\n",
+				jsonString(runID), jsonString(runID), len(liveCites), okVerify)
+			loop := IncidentLoopState{Stage: "diagnosed", DiagnosedAt: time.Now().Unix(), RunID: runID}
+			if prev, ok := s.incidents.Get(id); ok && prev.Loop != nil {
+				loop.DryRunOK = prev.Loop.DryRunOK
+				loop.RemediationRunID = prev.Loop.RemediationRunID
+				loop.ChangeID = prev.Loop.ChangeID
+			}
+			s.incidents.SetLoop(id, loop)
 		}
 		// 统一收尾：发送一次 [DONE]
 		fmt.Fprint(w, "data: [DONE]\n\n")
@@ -2501,10 +2558,12 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			s.incidents.AddEventWithCitations(id, "ai_diagnosis", "AI", full, cites)
 			s.store.MarkDirty()
 			go s.saveDiagnosisEmbedding(id, inc, full)
-			if s.shouldRememberUnverifiedAIOutput() {
-				go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID),
+			// Evidence-backed diagnoses enter scoped memory; unverified noise only when explicitly allowed.
+			if diagnosisEvidenceOK(cites) || s.shouldRememberUnverifiedAIOutput() {
+				go s.rememberFromIncident(inc, "diagnosis",
 					fmt.Sprintf("【诊断】事件#%d %s\n标签：类型:%s · 级别:%s · 主机:%s\n%s",
-						inc.ID, inc.Title, inc.Type, inc.Severity, firstNonEmpty(inc.Hostname, inc.HostID), full))
+						inc.ID, inc.Title, inc.Type, inc.Severity, firstNonEmpty(inc.Hostname, inc.HostID), full),
+					diagnosisEvidenceOK(cites))
 			}
 		}
 		return
@@ -2697,7 +2756,8 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 		s.saveDiagnosisChatTurn(id, req.Message, reply)
 		go s.saveDiagnosisEmbedding(id, inc, reply)
 		if s.shouldRememberUnverifiedAIOutput() {
-			go s.rememberAI("diagnosis", fmt.Sprintf("incident:%d", inc.ID), "【事件】"+inc.Title+"\n【诊断对话】"+req.Message+"\n【AI回复】"+reply)
+			go s.rememberFromIncident(inc, "diagnosis",
+				"【事件】"+inc.Title+"\n【诊断对话】"+req.Message+"\n【AI回复】"+reply, false)
 		}
 	}
 }
@@ -3107,34 +3167,19 @@ func (s *Server) saveDiagnosisEmbedding(incidentID int64, inc Incident, reply st
 
 // memoryJob 是一个待向量化并入库的 AI 记忆任务。
 type memoryJob struct {
-	kind    string
-	source  string
-	content string
+	kind      string
+	source    string
+	content   string
+	serviceID string
+	category  string
+	verified  bool
 }
 
 // rememberAI 把一段 AI 相关文本（对话 / 文件 / URL / 多轮历史）推入异步写入队列，
 // 由后台 worker pool 完成向量化 + 去重 + 入库。非阻塞，队列满时静默丢弃。
 // 无 pgvector 或未配置嵌入时静默跳过。
 func (s *Server) rememberAI(kind, source, content string) bool {
-	if s.pg == nil || s.memoryCh == nil {
-		return false
-	}
-	content = strings.TrimSpace(content)
-	if len([]rune(content)) < 12 { // 太短，无检索价值
-		return false
-	}
-	cfg := s.cfg.AIConfig()
-	if !embedReady(cfg) {
-		return false
-	}
-	// 非阻塞入队：队列满时丢弃，避免突发流量打爆内存
-	select {
-	case s.memoryCh <- memoryJob{kind: kind, source: source, content: content}:
-		return true
-	default:
-		slog.Warn("AI 记忆队列已满，丢弃本次写入", "kind", kind)
-		return false
-	}
+	return s.rememberAIScoped(kind, source, content, memoryWriteOpts{})
 }
 
 // startMemoryWorkers 启动 3 个后台 worker，从 memoryCh 批量拉取记忆任务，
@@ -3180,21 +3225,22 @@ func (s *Server) processMemoryJob(job memoryJob) {
 	if len(emb) == 0 {
 		return
 	}
-	// 去重检查：余弦距离 < 0.12（相似度 > 88%）视为重复，合并而非丢弃
+	// 去重检查：同 kind 内余弦距离 < 0.12 视为重复，合并并继承/提升 verified 与作用域
 	if dup, dupID, _ := s.pg.hasDuplicateMemory(emb, job.kind); dup {
-		// 合并逻辑：将新内容追加到已有记忆
 		appendContent := content
-		if len([]rune(appendContent)) > 500 { // 合并时只取摘要部分
+		if len([]rune(appendContent)) > 500 {
 			appendContent = string([]rune(appendContent)[:500]) + "…"
 		}
-		if err := s.pg.mergeDuplicateMemory(dupID, appendContent, emb); err != nil {
+		if err := s.pg.mergeDuplicateMemoryEx(dupID, appendContent, emb, job.verified, job.serviceID, job.category); err != nil {
 			slog.Debug("AI 记忆合并失败，回退为跳过", "kind", job.kind, "err", err)
 		} else {
-			slog.Debug("AI 记忆重复，已合并到已有记录", "kind", job.kind, "source", job.source, "dup_id", dupID)
+			slog.Debug("AI 记忆重复，已合并到已有记录", "kind", job.kind, "source", job.source, "dup_id", dupID,
+				"verified", job.verified)
 		}
 		return
 	}
-	if err := s.pg.insertMemoryEmbedding(job.kind, job.source, content, emb, time.Now().Unix()); err != nil {
+	if err := s.pg.insertMemoryEmbeddingScoped(job.kind, job.source, content, emb, time.Now().Unix(),
+		job.serviceID, job.category, job.verified); err != nil {
 		slog.Warn("保存 AI 记忆向量失败", "kind", job.kind, "err", err)
 	}
 }
@@ -3233,6 +3279,7 @@ func (s *Server) retrieveMemoryDetailed(preferKind, userMsg string, topK int) (t
 }
 
 // retrieveMemoryWithCitations 同 retrieveMemoryDetailed，额外返回可溯源引用列表供 SSE/UI。
+// 按查询解析出的服务/主机类别做作用域过滤；verified 记忆在排序与标签上优先。
 func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK int) (text string, hits int, degraded string, citations []RAGCitation) {
 	if s.pg == nil {
 		return "", 0, "no_pg", nil
@@ -3252,9 +3299,10 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 	if len(emb) == 0 {
 		return "", 0, "no_embed", nil
 	}
-	fetch := topK
+	svcID, cat := s.memoryScopeFromQuery(query)
+	fetch := topK * 3 // over-fetch before scope filter + optional rerank
 	if _, _, _, ok := rerankConfig(cfg); ok {
-		fetch = topK * 3
+		fetch = topK * 5
 	}
 	var found []memoryHit
 	var err error
@@ -3264,6 +3312,10 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 		found, err = s.pg.searchMemoryByKind(emb, preferKind, fetch)
 	}
 	if err != nil || len(found) == 0 {
+		return "", 0, "", nil
+	}
+	found = filterMemoriesByScope(found, svcID, cat, 0)
+	if len(found) == 0 {
 		return "", 0, "", nil
 	}
 	if len(found) > topK {
@@ -3277,6 +3329,8 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 				reordered = append(reordered, found[i])
 			}
 			found = reordered
+		} else {
+			found = found[:topK]
 		}
 	}
 	go func() {
@@ -3302,15 +3356,26 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 			src = "-"
 		}
 		label := memoryKindLabel(h.Kind)
-		fmt.Fprintf(&b, "[%d] (%s · %s) %s\n", i+1, label, src, content)
+		scopeTag := ""
+		if h.Verified {
+			scopeTag = " · 已验证"
+		}
+		if h.ServiceID != "" || h.Category != "" {
+			scopeTag += " · 作用域:" + firstNonEmpty(h.ServiceID, h.Category)
+		}
+		fmt.Fprintf(&b, "[%d] (%s · %s%s) %s\n", i+1, label, src, scopeTag, content)
 		title := trimLine(content, 60)
 		if h.Kind == "knowledge" || h.Kind == "pitfall" {
 			if ts := extractDocTitlesFromText(content); len(ts) > 0 {
 				title = ts[0]
 			}
 		}
+		citeTitle := label + "：" + title
+		if h.Verified {
+			citeTitle = "✓ " + citeTitle
+		}
 		citations = append(citations, RAGCitation{
-			Kind: h.Kind, Source: src, Title: label + "：" + title,
+			Kind: h.Kind, Source: src, Title: citeTitle,
 			Summary: trimLine(content, 120),
 		})
 		n++
@@ -3592,21 +3657,30 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	start := time.Now()
-	reply, chatErr := s.sreyun.Chat(r.Context(), session, msg, images, true, w)
+	reply, loopMeta, chatErr := s.sreyun.Chat(r.Context(), session, msg, images, true, w)
 	errStr := ""
 	if chatErr != nil {
 		errStr = chatErr.Error()
 	}
 	lat := time.Since(start).Milliseconds()
-	s.recordAICallActor("sreyun", cfg.Model, s.actorName(r), lat,
+	usedModel := cfg.Model
+	if loopMeta.FallbackModel != "" {
+		usedModel = loopMeta.FallbackModel
+	}
+	s.recordAICallActor("sreyun", usedModel, s.actorName(r), lat,
 		chatErr == nil && strings.TrimSpace(reply) != "", errStr, 0, 0, reply)
 	runID := newOpaqueID("run_")
 	s.persistAIRun(AIRun{
-		ID: runID, Kind: "sreyun", Task: "sreyun", Actor: s.actorName(r), Model: cfg.Model,
+		ID: runID, Kind: "sreyun", Task: "sreyun", Actor: s.actorName(r), Model: usedModel,
 		Input: msg, Answer: reply, OK: chatErr == nil && strings.TrimSpace(reply) != "",
-		LatencyMs: lat, IncidentID: req.IncidentID,
+		LatencyMs: lat, IncidentID: req.IncidentID, MetaJSON: agentMetaJSON(loopMeta),
 	})
-	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s}}\n\n", jsonString(runID))
+	toolsJSON, _ := json.Marshal(loopMeta.Tools)
+	if len(toolsJSON) == 0 {
+		toolsJSON = []byte("[]")
+	}
+	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"tool_turns\":%d,\"fallback_model\":%s,\"tools\":%s}}\n\n",
+		jsonString(runID), loopMeta.ToolTurns, jsonString(loopMeta.FallbackModel), toolsJSON)
 	// 上传文件默认不自动入库，避免凭据/配置明文进入公共 RAG；仅在显式开启未验证学习时脱敏后写入。
 	if s.shouldRememberUnverifiedAIOutput() {
 		for _, f := range req.Files {

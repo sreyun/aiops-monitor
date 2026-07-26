@@ -64,12 +64,34 @@ Wave 2/3（已落地骨架）：
 | Fallback | `fallback_models` 主模型失败时切换 |
 | Eval | `go test` 内 `TestEval*` 黄金用例（离线） |
 
+## Year-1 闭环 / 效果 / 服务树（MVP）
+
+| 能力 | 门禁要点 |
+|------|----------|
+| 事件闭环 | `POST /api/v1/incidents/{id}/loop/{dry-run\|propose\|approve\|verify\|promote}`；无 citations / 低置信度时拦截提案；`force=true` 默认仅管理员 |
+| 证据回验 | `verify` 检查 host/告警/修复运行/服务危急面，结构化写入 `verify_json.checks`；POC 只认 `closed_loop_count` |
+| Change SoD | 作者不可自批（`break_glass=1` + 管理员可绕过） |
+| 远程闸门 | 冻结窗或主机危急未决时，终端/桌面需已批准 Change 或 loop≥approved |
+| 写审批审计 | `POST /api/v1/ai/write-approval`；审批与工具审计双写 PostgreSQL |
+| 效果看板 | `GET /api/v1/sre/effect`：MTTR/MTTA、噪声、变更失败率、闭环率、AI 采纳/验证、Skill/记忆命中 |
+| 学习资产 | draft Skill 不进检索；verify 后 promote 为 active；案例导出 `GET /incidents/{id}/case-export` |
+| 业务服务树 | `GET/POST/DELETE /api/v1/services`；impact API |
+| 技能包 | 内置 `incident-loop` / `change-freeze` 等；`POST /api/v1/ai/skill-packs/import` |
+| 客户技能包 | `GET /api/v1/ai/skills/export` · `POST /api/v1/ai/skills/import`（默认 draft，需激活） |
+| 远程预检 | `GET /api/v1/hosts/{id}/remote-preflight`；终端/桌面/容器共用冻结·闸门徽章；管理员 `break_glass=1` |
+| 循环冻结窗 | ChangeWindow `recur=daily\|weekly` + `recur_start_hm`/`recur_end_hm` |
+| Skill 作用域 | `service_ids` / `categories`；`POST /api/v1/ai/skills/{id}/scope`；检索按主机/服务上下文过滤 |
+
 ## 示例流水线钩子
 
 ```bash
 # 伪代码：发布前检查最近 Web 扫描是否仍有 open critical
 curl -fsS -H "Cookie: ..." \
   "$AIOPS/api/v1/security/overview" | jq -e '.web.open_critical == 0'
+
+# Year-1：效果窗口内至少有可统计的闭环样本（试点阈值按验收文档调整）
+curl -fsS -H "Cookie: ..." \
+  "$AIOPS/api/v1/sre/effect?days=14" | jq -e '.closed_loop_count >= 0'
 ```
 
 将上述检查接入 GitHub Actions / GitLab CI；失败则阻断合并或部署。

@@ -146,10 +146,12 @@ func (s *Server) learnFromResolution(inc Incident, note string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	s.rememberAI("resolution", fmt.Sprintf("incident:%d", inc.ID), text)
-	// 真实结案是比单次点赞更强的现实验证信号：提升该事件最新诊断案例。
+	s.rememberFromIncident(inc, "resolution", text, true)
+	// 真实结案是比单次点赞更强的现实验证信号：提升该事件最新诊断案例并标记 verified。
 	if s.pg != nil {
 		_ = s.pg.updateDiagnosisFeedback(inc.ID, "helpful")
+		s.pg.markMemoryVerifiedBySource("diagnosis", fmt.Sprintf("incident:%d", inc.ID))
+		s.pg.markMemoryVerifiedBySource("resolution", fmt.Sprintf("incident:%d", inc.ID))
 	}
 	s.reinforceMemoryBySource("diagnosis", fmt.Sprintf("incident:%d", inc.ID), reinforceResolved)
 	s.reinforceSkill(inc.Title+" "+inc.Type+" "+note, reinforceResolved)

@@ -257,9 +257,52 @@ function showTermContextMenu(tab, e) {
 /* ---------- v5.3.0: 终端二次认证流程 ---------- */
 const TERM_PROTOCOL_KEY = "aiops_term_protocol_agreed";
 
+// 远程闸门预检（统一文案徽章，终端/桌面/剧本共用）
+function freezeBadgeHTML(pf){
+  if(!pf||!pf.freeze_active) return "";
+  const name=pf.freeze_window||"";
+  return `<span class="badge freeze" title="${esc(pf.freeze_note||pf.gate_reason||"")}">冻结${name?" · "+esc(name):""}</span>`;
+}
+function remoteGateBadgeHTML(pf){
+  if(!pf) return "";
+  if(pf.gate_required) return `<span class="badge warn" title="${esc(pf.gate_reason||"")}">远程闸门</span>`;
+  if(pf.freeze_active||pf.high_risk) return `<span class="badge ok" title="${esc(pf.gate_reason||"已放行")}">闸门已放行</span>`;
+  return "";
+}
+async function fetchRemotePreflight(hostId){
+  try{
+    const r=await fetch(`${API}/hosts/${encodeURIComponent(hostId)}/remote-preflight`,{credentials:"include"});
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ return null; }
+}
+/** 闸门拦截时提示；管理员可 break-glass。返回 true=继续打开。 */
+async function confirmRemoteGate(hostId, opts){
+  opts=opts||{};
+  const pf=await fetchRemotePreflight(hostId);
+  if(!pf||!pf.gate_required){
+    if(pf&&(pf.freeze_active||pf.high_risk)){
+      // soft chip only — already allowed
+    }
+    return {ok:true, breakGlass:false, pf};
+  }
+  const tip=pf.gate_reason||"当前主机处于冻结/高危状态，需已批准变更或事件闭环批准后方可远程操控。";
+  if(pf.break_glass_ok){
+    if(confirm(tip+"\n\n你是管理员：是否 break-glass 强制打开？（将记入审计）")){
+      return {ok:true, breakGlass:true, pf};
+    }
+    return {ok:false, breakGlass:false, pf};
+  }
+  toast(tip,"err");
+  return {ok:false, breakGlass:false, pf};
+}
+
 // 实际执行终端打开（原 openTerminal 后半部分逻辑）
-function doOpenTerminal(id, name, opts) {
+async function doOpenTerminal(id, name, opts) {
   opts = opts || {};
+  const gate=await confirmRemoteGate(id,{container:!!opts.containerId});
+  if(!gate.ok) return;
+  opts.breakGlass=!!gate.breakGlass;
   const sameHostTabs = TERM_TABS.filter(t => t.hostId === id && !!t.containerId === !!opts.containerId);
   let tabName = name;
   if (opts.containerId) {
@@ -502,6 +545,7 @@ function createTermTab(id, name, tabName, opts) {
     containerId: opts.containerId || "",
     containerName: opts.containerName || "",
     shell: opts.shell || "sh",
+    breakGlass: !!opts.breakGlass,
   };
   TERM_TABS.push(tabObj);
   const idx = TERM_TABS.length - 1;
@@ -633,11 +677,14 @@ function connectTermWS(tab) {
   const screen = tab.screenEl, vt = tab.vt;
   setTermStatus(tab.retry > 0 ? `${I18N.t("misc.reconnecting")}(${tab.retry})` : I18N.t("ui.connecting"), "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const bgQ = tab.breakGlass ? "break_glass=1" : "";
   let url = `${proto}//${location.host}/api/v1/hosts/${encodeURIComponent(tab.hostId || tab.id)}/terminal`;
+  if (bgQ) url += (url.includes("?")?"&":"?")+bgQ;
   if (tab.containerId) {
     const q = new URLSearchParams();
     if (tab.shell) q.set("shell", tab.shell);
     if (tab.containerName) q.set("name", tab.containerName);
+    if (tab.breakGlass) q.set("break_glass", "1");
     url = `${proto}//${location.host}/api/v1/containers/${encodeURIComponent(tab.hostId || tab.id)}/${encodeURIComponent(tab.containerId)}/terminal?${q}`;
   }
   const ws = new WebSocket(url);

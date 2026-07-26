@@ -8,7 +8,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-v0.18.2-blue)](https://github.com/sreyun/aiops-monitor/releases)
+[![Version](https://img.shields.io/badge/Version-v0.18.9-blue)](https://github.com/sreyun/aiops-monitor/releases)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#open-source--community)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -20,7 +20,7 @@
 
 > **Single-binary server + zero-dependency agent**: one command stands up *observability · alert governance · automated remediation · AI diagnosis · SRE closed-loop · remote desktop · SQL toolkit · security center · Android console*. 100% open source, self-hosted, data fully owned — no SaaS dependency, no telemetry uplink.
 
-**Current release [v0.18.2](https://github.com/sreyun/aiops-monitor/releases/tag/v0.18.2)** · Mirrors: GitHub / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+**Current release [v0.18.9](https://github.com/sreyun/aiops-monitor/releases/tag/v0.18.9)** · Mirrors: GitHub / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -34,16 +34,17 @@ AIOps Monitor takes a different path — **consolidating monitoring, alerting, a
 - **Deploy in one command**: `docker compose up -d` brings up the full stack; agent installs in one click with native cross-platform collection.
 - **Data ownership**: relational data lands in PostgreSQL, time-series in VictoriaMetrics — **both open-source databases you control**.
 - **AI without lock-in**: AI diagnosis is a *pluggable* value-add — wire in any OpenAI-compatible model for "smart mode", or fall back to built-in heuristic diagnosis with **zero external dependency**.
-- **Mobile first**: a companion enterprise-grade native Android console (plus HarmonyOS NEXT under `harmony/`).
+- **Mobile**: Android / HarmonyOS consoles are **externally distributed packages** (mobile source is not in this repo). The Web UI ships as a PWA for phone browsers covering metrics, alerts, terminal, and SRE loops.
 
 ---
 
-## What's New (v0.17 → v0.18)
+## What's New (v0.18 → Year-1 MVP)
 
 | Release | Highlights |
 |---|---|
+| **v0.18.9+ Year-1** | Incident closed-loop; ops effect KPIs (MTTR/MTTA, alert noise, change failure rate, AI adoption/verify, closed-loop rate); Hermes multi-turn tools + fallback + skill distill; business-service tree; see [docs/year1-acceptance.md](docs/year1-acceptance.md) |
+| **v0.18.9** | Lightweight ITSM tickets/changes, OpsLink, SQL↔ChangeRecord linking |
 | **v0.18.2** | Windows lock-screen **Ctrl+Alt+Del**: Session-0 service injects SAS via named pipe; auto-enables `SoftwareSASGeneration` |
-| **v0.18.1** | Winlogon / logoff capture fixes (PrintWindow + session attach); **Clear** quality preset defaults to **15fps** |
 | **v0.18.0** | Controllable security loop (playbook approval / SQL change gate / security overview); resource search; host inspect; lock-screen desktop toolbar |
 | **v0.17.x** | Hyper-V / containers / Kubernetes resource layer and cross-layer AI localization |
 

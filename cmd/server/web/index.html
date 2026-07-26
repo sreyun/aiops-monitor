@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.18.41">
+<link rel="stylesheet" href="/style.css?v=0.18.45">
 <script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -777,7 +777,13 @@
             <button class="btn primary sm" id="topoAddBtn">+ 添加依赖边</button>
           </div>
           <div id="topoEdgeList" class="fwd-list fwd-grid"></div>
-          <div class="subhead" style="margin-top:14px">试算 RCA</div>
+          <div class="subhead" style="margin-top:14px">业务服务树</div>
+          <div class="sre-toolbar" style="margin-bottom:8px">
+            <button class="btn primary sm" id="bizSvcAddBtn">+ 业务服务</button>
+            <button class="btn sm" id="bizSvcRefreshBtn">刷新</button>
+          </div>
+          <div id="bizSvcList" class="fwd-list fwd-grid"></div>
+          <div class="subhead" style="margin-top:14px">根因分析</div>
           <div class="sre-toolbar" style="margin-bottom:8px">
             <div class="select-wrap" style="min-width:220px"><select id="topoRcaHost"><option value="">选择主机…</option></select></div>
             <button class="btn sm" id="topoRcaBtn">计算 RCA</button>
@@ -846,7 +852,12 @@
             <button type="button" class="btn sm ai-assist-btn" id="dutyReportBtn" title="汇总未决事件/SLO/待审批修复/巡检，AI 生成值班晨报"><span class="ai-assist-btn-ic">🌅</span>值班晨报</button>
             <button type="button" class="btn sm ai-assist-btn" id="copilotBtn" title="On-call Copilot：未决事件、待审批、技能提示与建议"><span class="ai-assist-btn-ic">🧭</span>值班助手</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
+            <button class="btn sm" id="sreEffectRefreshBtn">效果看板</button>
           </div>
+          <div class="subhead">效果 KPI</div>
+          <div id="sreEffectBody" class="sre-list"><div class="hint">打开本页或点击「效果看板」加载…</div></div>
+          <div class="subhead" style="margin-top:12px">AI Runs</div>
+          <div id="aiRunsList" class="sre-list"></div>
           <div id="aiReportList" class="sre-list"></div>
         </div>
       </section>
@@ -2836,6 +2847,9 @@
       <span class="hint" style="margin-left:8px">系统从诊断/剧本/解决事件的经验中每日自动提炼可复用技能，检索时注入 AI 提示词</span>
       <button type="button" class="btn sm ai-assist-btn" id="skillsDistillBtn" style="margin-left:auto"><span class="ai-assist-btn-ic">✨</span>立即提炼</button>
       <button type="button" class="btn sm" id="skillsPackImportBtn" title="导入内置 MySQL/PG/K8s/网络知识包">导入知识包</button>
+      <button type="button" class="btn sm" id="skillsExportBtn" title="导出客户私有技能包 JSON">导出</button>
+      <button type="button" class="btn sm" id="skillsImportBtn" title="导入客户技能包（默认 draft）">导入</button>
+      <input type="file" id="skillsImportFile" accept="application/json,.json" style="display:none">
       <label class="switch" style="margin-left:8px;font-size:12px"><input type="checkbox" id="skillsShowArchived"> <span>含已归档</span></label>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
@@ -2862,16 +2876,24 @@
     <div class="modal-head">
       <h3>📚 AI 记忆库</h3>
       <span class="hint" style="margin-left:8px">诊断 / 对话 / 经验沉淀；检索命中时注入提示词。只读浏览，可删除无效条目</span>
-      <div class="select-wrap" style="margin-left:auto;min-width:140px">
+      <div class="select-wrap" style="margin-left:auto;min-width:120px">
         <select id="memoryKindFilter">
           <option value="">全部 kind</option>
           <option value="diagnosis">diagnosis</option>
+          <option value="alert">alert</option>
           <option value="chat">chat</option>
           <option value="assist">assist</option>
           <option value="experience">experience</option>
           <option value="resolution">resolution</option>
-          <option value="knowledge">knowledge（已验证文档引用）</option>
-          <option value="pitfall">pitfall（避坑）</option>
+          <option value="knowledge">knowledge</option>
+          <option value="pitfall">pitfall</option>
+        </select>
+      </div>
+      <div class="select-wrap" style="min-width:110px;margin-left:6px">
+        <select id="memoryVerifiedFilter" title="按验证状态过滤">
+          <option value="">全部状态</option>
+          <option value="true">已验证</option>
+          <option value="false">未验证</option>
         </select>
       </div>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
@@ -3289,7 +3311,7 @@
   </div>
 </div>
 
-<!-- ===== AI 对话弹窗（与已配置 Provider 直接对话，确认可用） ===== -->
+<!-- ===== AI 对话 ===== -->
 <div class="mask" id="aiChatMask" data-close>
   <div class="modal ai-chat-modal" id="aiChatModal">
     <div class="modal-head">
@@ -3306,7 +3328,7 @@
     </div>
     <div class="modal-body">
       <div id="aiChatQueue" class="ai-queue-hint"></div>
-      <div class="hint" style="margin-bottom:10px">统一 AI 对话：既能闲聊自检确认 Provider 可用，也能作为自主运维 Agent 帮你排障——描述问题即可，它会自动调用工具（查指标 / 日志 / 告警 / 诊断 / 修复），并能识别当前纳管主机。</div>
+      <div class="hint" style="margin-bottom:10px">描述问题即可排障：可自动查询指标、日志、告警并协助诊断与修复。</div>
       <div id="aiChatLog" class="ai-chat-log"></div>
       <button id="aiChatScrollBtn" class="ai-scroll-btn" type="button" title="回到底部" style="display:none">↓</button>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
@@ -3315,7 +3337,9 @@
           <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档" aria-label="上传附件">📎</button>
           <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页" aria-label="抓取网页">🔗</button>
           <button class="ai-attach-btn" id="aiChatMicBtn" type="button" title="语音输入" aria-label="语音输入">🎤</button>
+          <button class="btn sm ghost" id="aiWriteApprovalBtn" type="button" title="签发写工具审批">写审批</button>
         </div>
+        <div id="aiWriteApprovalHint" class="ai-write-approval-hint hint" style="display:none;margin:6px 0 0;width:100%"></div>
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
         <textarea id="aiChatInput" rows="1" placeholder="输入消息或描述问题… Enter 发送 · Shift+Enter 换行"></textarea>
         <button class="btn primary ai-send-btn" id="aiChatSendBtn" title="发送 (Enter)" aria-label="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
@@ -3627,12 +3651,12 @@
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.18.41"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.18.41"></script>
-<script src="/i18n-dashboard.js?v=0.18.41"></script>
+<script src="/i18n-dashboard.en.js?v=0.18.45"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.18.45"></script>
+<script src="/i18n-dashboard.js?v=0.18.45"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.18.41" defer></script>
+<script src="/app.js?v=0.18.45" defer></script>
 </body>
 </html>

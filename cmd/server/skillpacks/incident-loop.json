@@ -1,0 +1,25 @@
+{
+  "id": "incident-loop",
+  "name": "事件闭环运维知识包",
+  "version": "1.0",
+  "skills": [
+    {
+      "name": "诊断引用闸门",
+      "trigger": "AI 诊断无 metrics/log/SQL 引用或置信度低时仍要提案",
+      "steps": "1) 先补齐证据（指标/日志/SQL EXPLAIN）\n2) 重新诊断，确认 citations 非空\n3) dry-run 检查主机心跳与冻结窗\n4) 仍需强制时设 force=true 并记审计\n5) 执行后必须 verify 回验",
+      "tags": "incident,loop,gate,citations"
+    },
+    {
+      "name": "变更窗内应急处置",
+      "trigger": "冻结窗内 critical 事件需要变更或修复",
+      "steps": "1) 事件时间线确认冻结窗标注\n2) 开应急变更 pending_approval，禁止直接 in_progress\n3) 审批通过后再 start/complete\n4) 回验拨测/告警 key\n5) 结案沉淀 Skill",
+      "tags": "change,freeze,emergency"
+    },
+    {
+      "name": "回验与 Skill 沉淀",
+      "trigger": "修复已执行但未闭环",
+      "steps": "1) POST /incidents/{id}/loop/verify\n2) 确认主机在线且告警已恢复\n3) verify_ok 后 promote Skill\n4) 在效果看板核对 closed_loop_count\n5) 同类告警优先命中新 Skill",
+      "tags": "verify,skill,effect"
+    }
+  ]
+}

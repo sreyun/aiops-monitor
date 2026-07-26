@@ -67,7 +67,7 @@ AIOps Monitor 用**一个服务端 + 每台主机一个 Agent**的极简架构�
 
 **核心定位**
 
-- **服务端**：1 个 Go 单二进制（约 15MB），内置面板 + 采集聚合 + 告警推送，默认监听 `:8529`。内存即存储、gzip+JSON 快照落盘，**无需 MySQL / Redis / Kafka / 时序库**。
+- **服务端**：1 个 Go 单二进制（约 15MB），内置面板 + 采集聚合 + 告警推送，默认监听 `:8529`。生产安装基线为 **PostgreSQL（关系数据）+ VictoriaMetrics（时序）**（见 `docker-compose.yml`）；不再依赖内置 `aiops.db`，也**无需 MySQL / Redis / Kafka**。
 - **客户端 Agent**：装在每台被监控主机上，零第三方依赖，支持 **Windows / Linux / macOS**（含 amd64 / arm64）。
 - **插件层（可选）**：需要服务探活、CPU 异常检测、进程监控等增强能力时，可启用 Python 插件（依赖 `psutil`）。
 
@@ -575,8 +575,8 @@ subjects:
 
 对应官网分组 **06 部署与架构**。
 
-- **单二进制零依赖**：服务端约 15MB，内存即存储，gzip+JSON 快照持久化，一台 1 核 1G 小机器即可运行。
-- **内嵌持久化**：无外部数据库；支持配置迁移与一键回滚（Revert），重启不丢历史/日志/会话。
+- **单二进制服务端**：约 15MB；配套自托管 **PostgreSQL + VictoriaMetrics**（Compose 一键拉起），一台小机器即可跑通全栈。
+- **持久化**：配置/用户/审计/事件/工单等进 PostgreSQL；指标进 VictoriaMetrics；支持配置迁移与一键回滚（Revert）。
 - **实时数据推送**：WebSocket 实时推送，网络异常自动降级为轮询，恢复后无缝重连；gzip 8-10 倍压缩降低带宽。
 - **PWA 离线访问**：可安装到桌面（含手机），独立窗口运行；App Shell 离线缓存，断网仍看最后已知状态。
 - **多服务端推送**：单 Agent 同时向多个服务端推送，**采集一次广播所有**；各端独立鉴权/重试。配置见 [五、配置参考](#五配置参考) 的 `servers` 数组，或面板「安装 Agent」弹窗勾选「多服务端推送」。
@@ -785,7 +785,7 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 - 不需要。服务端单二进制内嵌持久化，零外部依赖。
 
 **数据存在哪、安全吗？**
-- 全部落在你自己的服务端（内嵌 gzip+JSON 快照），数据主权完全自持，不经任何第三方。
+- 全部落在你自己掌控的 PostgreSQL / VictoriaMetrics，数据主权完全自持，不经任何第三方。
 
 **主机分类不对 / 想改？**
 - Agent 端用 `--category` 设定；也可在面板点卡片上的分类标签**手动覆盖**（覆盖优先于 Agent 上报）。
@@ -811,7 +811,7 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 | 维度 | 传统方案（Prometheus + Grafana + Alertmanager + …） | AIOps Monitor |
 |---|---|---|
 | 组件数量 | 5~6 个独立组件拼装 | 1 个服务端二进制 |
-| 外部依赖 | 时序库 / 消息队列 / 数据库 | 无（内嵌持久化） |
+| 外部依赖 | 时序库 / 消息队列 / 多数据库 | 仅 PostgreSQL + VictoriaMetrics（自托管，Compose 附带） |
 | 部署时间 | 数小时~数天 | 约 3 分钟 |
 | Agent 依赖 | 需 exporter，常需额外运行时 | 单二进制，零第三方依赖 |
 | 远程终端 | 需自建 VPN + SSH 堡垒机 | 内置，Agent 反向连接免开端口 |
