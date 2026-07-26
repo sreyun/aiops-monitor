@@ -13,7 +13,7 @@ func TestSQLChangeRequestApprovalTTLAndOneTimeExecution(t *testing.T) {
 	conn := MySQLConnection{ID: "prod-db", Name: "Production", Env: "", Enabled: true}
 	sqlText := "CREATE INDEX idx_users_email ON users(email)"
 
-	cr := m.Create(conn, sqlText, "speed up lookup", "operator", now)
+	cr := m.Create(conn, sqlText, "speed up lookup", "operator", "ddl", now)
 	if cr.Status != "pending" || cr.Environment != "prod" {
 		t.Fatalf("created request = status %q env %q", cr.Status, cr.Environment)
 	}
@@ -32,7 +32,7 @@ func TestSQLChangeRequestApprovalTTLAndOneTimeExecution(t *testing.T) {
 		t.Fatal("approved ticket was reusable")
 	}
 
-	expired := m.Create(conn, sqlText, "", "operator", now)
+	expired := m.Create(conn, sqlText, "", "operator", "ddl", now)
 	if _, err := m.Approve(expired.ID, "admin", now); err != nil {
 		t.Fatal(err)
 	}

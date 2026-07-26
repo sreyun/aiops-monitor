@@ -10,7 +10,7 @@ func (s *Server) handleSecurityOverview(w http.ResponseWriter, r *http.Request) 
 	hostCfg := s.cfg.HostSecurity()
 	webCfg := s.cfg.WebSecurity()
 
-	openCritical, openHigh := s.countOpenSecurityFindings()
+	counts := s.countOpenSecurityFindingsDetail()
 	hostRunning, hostStuck := s.hostSec.scanActivity(hostCfg.TimeoutSec)
 	webRunning, webStuck := s.webSec.scanActivity(webCfg.TimeoutSec)
 
@@ -22,16 +22,20 @@ func (s *Server) handleSecurityOverview(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	webSched := map[string]any{
-		"enabled":          webScheduled > 0,
+		"enabled":           webScheduled > 0,
 		"scheduled_targets": webScheduled,
-		"total_targets":    len(webCfg.Targets),
+		"total_targets":     len(webCfg.Targets),
 	}
 	healthy := (!hostSched["enabled"].(bool) || hostSched["healthy"].(bool)) &&
 		(webScheduled == 0 || webSched["enabled"].(bool))
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"open_critical": openCritical,
-		"open_high":     openHigh,
+		"open_critical":      counts.Critical,
+		"open_high":          counts.High,
+		"host_open_critical": counts.HostCritical,
+		"host_open_high":     counts.HostHigh,
+		"web_open_critical":  counts.WebCritical,
+		"web_open_high":      counts.WebHigh,
 		"schedule": map[string]any{
 			"healthy": healthy,
 			"host":    hostSched,
@@ -46,6 +50,67 @@ func (s *Server) handleSecurityOverview(w http.ResponseWriter, r *http.Request) 
 			"total_stuck":   hostStuck + webStuck,
 		},
 	})
+}
+
+type openSecurityCounts struct {
+	Critical, High         int
+	HostCritical, HostHigh int
+	WebCritical, WebHigh   int
+}
+
+func (s *Server) countOpenSecurityFindingsDetail() openSecurityCounts {
+	var out openSecurityCounts
+	s.hostSec.mu.Lock()
+	for _, scan := range s.hostSec.lastByHost {
+		if scan == nil || scan.Status != "completed" {
+			continue
+		}
+		findings := mergeHostFindingStatus(s.secFindings, scan.HostID, scan.Findings)
+		for _, f := range findings {
+			if !findingOpen(f.Status) {
+				continue
+			}
+			switch strings.ToLower(f.Level) {
+			case "critical", "crit":
+				out.Critical++
+				out.HostCritical++
+			case "high":
+				out.High++
+				out.HostHigh++
+			}
+		}
+	}
+	s.hostSec.mu.Unlock()
+
+	latestWeb := map[string]*WebScanResult{}
+	s.webSec.mu.Lock()
+	for _, sc := range s.webSec.scans {
+		if sc == nil || sc.Status != "completed" {
+			continue
+		}
+		prev := latestWeb[sc.TargetID]
+		if prev == nil || sc.FinishedAt > prev.FinishedAt {
+			latestWeb[sc.TargetID] = sc
+		}
+	}
+	for _, sc := range latestWeb {
+		findings := mergeWebFindingStatus(s.secFindings, sc.TargetID, sc.Findings)
+		for _, f := range findings {
+			if !findingOpen(f.Status) {
+				continue
+			}
+			switch strings.ToLower(f.Severity) {
+			case "critical", "crit":
+				out.Critical++
+				out.WebCritical++
+			case "high":
+				out.High++
+				out.WebHigh++
+			}
+		}
+	}
+	s.webSec.mu.Unlock()
+	return out
 }
 
 func scheduleHealthFromPlaybook(enabled bool, sc *PlaybookSchedule) map[string]any {
@@ -78,53 +143,8 @@ func scheduleHealthFromPlaybook(enabled bool, sc *PlaybookSchedule) map[string]a
 }
 
 func (s *Server) countOpenSecurityFindings() (critical, high int) {
-	s.hostSec.mu.Lock()
-	for _, scan := range s.hostSec.lastByHost {
-		if scan == nil || scan.Status != "completed" {
-			continue
-		}
-		findings := mergeHostFindingStatus(s.secFindings, scan.HostID, scan.Findings)
-		for _, f := range findings {
-			if !findingOpen(f.Status) {
-				continue
-			}
-			switch strings.ToLower(f.Level) {
-			case "critical", "crit":
-				critical++
-			case "high":
-				high++
-			}
-		}
-	}
-	s.hostSec.mu.Unlock()
-
-	latestWeb := map[string]*WebScanResult{}
-	s.webSec.mu.Lock()
-	for _, sc := range s.webSec.scans {
-		if sc == nil || sc.Status != "completed" {
-			continue
-		}
-		prev := latestWeb[sc.TargetID]
-		if prev == nil || sc.FinishedAt > prev.FinishedAt {
-			latestWeb[sc.TargetID] = sc
-		}
-	}
-	for _, sc := range latestWeb {
-		findings := mergeWebFindingStatus(s.secFindings, sc.TargetID, sc.Findings)
-		for _, f := range findings {
-			if !findingOpen(f.Status) {
-				continue
-			}
-			switch strings.ToLower(f.Severity) {
-			case "critical", "crit":
-				critical++
-			case "high":
-				high++
-			}
-		}
-	}
-	s.webSec.mu.Unlock()
-	return critical, high
+	c := s.countOpenSecurityFindingsDetail()
+	return c.Critical, c.High
 }
 
 func findingOpen(status string) bool {

@@ -7,6 +7,36 @@ function secOvT(k, fb) {
   return (window.I18N && I18N.t) ? I18N.t(k, fb) : fb;
 }
 
+/** Persist drill-down filter for host/web security pages. */
+function secGotoPending(view, level) {
+  try {
+    sessionStorage.setItem("secPendingFilter", JSON.stringify({
+      view: view || "",
+      level: level || "open", // open | critical | high
+      at: Date.now(),
+    }));
+  } catch (_) {}
+  if (typeof switchView === "function") switchView(view);
+}
+
+function secConsumePendingFilter(expectedView) {
+  try {
+    const raw = sessionStorage.getItem("secPendingFilter");
+    if (!raw) return null;
+    const f = JSON.parse(raw);
+    if (!f || (expectedView && f.view && f.view !== expectedView)) return null;
+    if (f.at && Date.now() - f.at > 5 * 60 * 1000) {
+      sessionStorage.removeItem("secPendingFilter");
+      return null;
+    }
+    sessionStorage.removeItem("secPendingFilter");
+    return f;
+  } catch (_) {
+    return null;
+  }
+}
+window.secConsumePendingFilter = secConsumePendingFilter;
+
 async function loadSecurityOverview() {
   const el = $("securityOverviewPanel");
   if (!el) return;
@@ -35,12 +65,20 @@ function paintSecurityOverview() {
   const schedLabel = schedOk
     ? secOvT("sec.ov_sched_ok", "定时任务配置正常")
     : secOvT("sec.ov_sched_warn", "定时任务需检查");
+  const hostCrit = d.host_open_critical || 0;
+  const hostHigh = d.host_open_high || 0;
+  const webCrit = d.web_open_critical || 0;
+  const webHigh = d.web_open_high || 0;
 
   el.innerHTML = `<div class="sec-shell sec-overview-shell">
-    <p class="cfg-panel-desc">${esc(secOvT("sec.ov_desc", "跨主机安全与 Web 扫描的开放风险、调度健康与进行中任务一览。"))}</p>
+    <p class="cfg-panel-desc">${esc(secOvT("sec.ov_desc", "跨主机安全与 Web 扫描的开放风险、调度健康与进行中任务一览。点击 KPI 可下钻待处置项。"))}</p>
     <div class="sec-metrics sec-overview-kpis">
-      <div class="sec-metric crit"><b>${d.open_critical || 0}</b><span>${esc(secOvT("sec.ov_open_crit", "开放危急发现"))}</span></div>
-      <div class="sec-metric high"><b>${d.open_high || 0}</b><span>${esc(secOvT("sec.ov_open_high", "开放高危发现"))}</span></div>
+      <button type="button" class="sec-metric crit sec-kpi-btn" data-sec-pending="critical" title="${esc(secOvT("sec.ov_drill_crit", "查看危急待处置"))}">
+        <b>${d.open_critical || 0}</b><span>${esc(secOvT("sec.ov_open_crit", "开放危急发现"))}</span>
+      </button>
+      <button type="button" class="sec-metric high sec-kpi-btn" data-sec-pending="high" title="${esc(secOvT("sec.ov_drill_high", "查看高危待处置"))}">
+        <b>${d.open_high || 0}</b><span>${esc(secOvT("sec.ov_open_high", "开放高危发现"))}</span>
+      </button>
       <div class="sec-metric ${schedOk ? "ok" : "warn"}"><b>${schedOk ? "✓" : "!"}</b><span>${esc(schedLabel)}</span></div>
       <div class="sec-metric"><b>${scans.total_running || 0}</b><span>${esc(secOvT("sec.ov_running", "进行中扫描"))}</span></div>
       <div class="sec-metric ${(scans.total_stuck || 0) > 0 ? "crit" : ""}"><b>${scans.total_stuck || 0}</b><span>${esc(secOvT("sec.ov_stuck", "疑似卡住"))}</span></div>
@@ -49,12 +87,18 @@ function paintSecurityOverview() {
       <div class="cfg-panel sec-overview-card">
         <div class="cfg-panel-title">${esc(secOvT("sec.section_vuln", "漏洞运营"))}</div>
         <ul class="sec-overview-list">
-          <li><span>${esc(secOvT("sec.tab_host", "主机安全"))}</span><strong>${d.open_critical || 0}</strong> ${esc(secOvT("sec.ov_crit_short", "危急"))} · <strong>${scans.host_running || 0}</strong> ${esc(secOvT("sec.ov_running_short", "进行中"))}</li>
-          <li><span>${esc(secOvT("sec.tab_web", "Web 扫描"))}</span><strong>${d.open_high || 0}</strong> ${esc(secOvT("sec.ov_high_short", "高危+"))} · <strong>${scans.web_running || 0}</strong> ${esc(secOvT("sec.ov_running_short", "进行中"))}</li>
+          <li><span>${esc(secOvT("sec.tab_host", "主机安全"))}</span>
+            <strong>${hostCrit}</strong> ${esc(secOvT("sec.ov_crit_short", "危急"))} ·
+            <strong>${hostHigh}</strong> ${esc(secOvT("sec.ov_high_short", "高危"))} ·
+            <strong>${scans.host_running || 0}</strong> ${esc(secOvT("sec.ov_running_short", "进行中"))}</li>
+          <li><span>${esc(secOvT("sec.tab_web", "Web 扫描"))}</span>
+            <strong>${webCrit}</strong> ${esc(secOvT("sec.ov_crit_short", "危急"))} ·
+            <strong>${webHigh}</strong> ${esc(secOvT("sec.ov_high_short", "高危"))} ·
+            <strong>${scans.web_running || 0}</strong> ${esc(secOvT("sec.ov_running_short", "进行中"))}</li>
         </ul>
         <div class="sec-overview-actions">
-          <button type="button" class="btn sm" data-sec-goto="host-security">${esc(secOvT("sec.tab_host", "主机安全"))}</button>
-          <button type="button" class="btn sm" data-sec-goto="web-security">${esc(secOvT("sec.tab_web", "Web 扫描"))}</button>
+          <button type="button" class="btn sm" data-sec-goto="host-security" data-sec-level="open">${esc(secOvT("sec.ov_host_pending", "主机待处置"))}</button>
+          <button type="button" class="btn sm" data-sec-goto="web-security" data-sec-level="open">${esc(secOvT("sec.ov_web_pending", "Web 待处置"))}</button>
         </div>
       </div>
       <div class="cfg-panel sec-overview-card">
@@ -74,7 +118,21 @@ function paintSecurityOverview() {
   el.querySelectorAll("[data-sec-goto]").forEach(btn => {
     btn.addEventListener("click", () => {
       const v = btn.getAttribute("data-sec-goto");
-      if (v && typeof switchView === "function") switchView(v);
+      const level = btn.getAttribute("data-sec-level") || "open";
+      if (v) secGotoPending(v, level);
+    });
+  });
+  el.querySelectorAll("[data-sec-pending]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const level = btn.getAttribute("data-sec-pending") || "critical";
+      // Prefer the domain that still has open items at that level.
+      let view = "host-security";
+      if (level === "critical") {
+        if ((d.host_open_critical || 0) === 0 && (d.web_open_critical || 0) > 0) view = "web-security";
+      } else if (level === "high") {
+        if ((d.host_open_high || 0) === 0 && (d.web_open_high || 0) > 0) view = "web-security";
+      }
+      secGotoPending(view, level);
     });
   });
   const refBtn = el.querySelector("#secOverviewRefresh");

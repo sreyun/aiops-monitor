@@ -2,7 +2,8 @@
 let SQL_CONNS = [];
 let SQL_CHANGES = [];
 let SQL_HISTORY = [];
-let SQL_SCHEMA = { tables: [], table: "", columns: [] };
+let SQL_SCHEMA = { databases: [], database: "", tables: [], table: "", columns: [] };
+let SQL_SLOW_REPORT = null;
 let SQL_VERIFY_SQL = "";
 let SQL_LAST = { audit: null, optimize: null, explain: null, beautified: "" };
 
@@ -52,19 +53,33 @@ function renderSQLSchemaEmpty() {
   const db = $("sqlSchemaDb"); if (db) db.textContent = "";
   const tb = $("sqlSchemaTables"); if (tb) tb.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_pick_conn", "选择连接后浏览表"))}</span>`;
   const col = $("sqlSchemaColumns"); if (col) col.innerHTML = "";
+  SQL_SCHEMA = { databases: [], database: "", tables: [], table: "", columns: [] };
 }
 
-async function loadSQLSchema(connId, table) {
+async function loadSQLSchema(connId, table, database) {
   if (!connId) { renderSQLSchemaEmpty(); return; }
   try {
-    const q = table ? `?table=${encodeURIComponent(table)}` : "";
+    const params = new URLSearchParams();
+    const dbName = database != null ? database : (SQL_SCHEMA.database || "");
+    if (dbName) params.set("database", dbName);
+    if (table) params.set("table", table);
+    const q = params.toString() ? `?${params}` : "";
     const j = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/schema${q}`).then(r => r.json());
     if (table) {
       SQL_SCHEMA.table = table;
+      SQL_SCHEMA.database = j.database || dbName || "";
       SQL_SCHEMA.columns = Array.isArray(j.columns) ? j.columns : [];
       renderSQLSchemaColumns(j);
+    } else if (Array.isArray(j.databases)) {
+      SQL_SCHEMA.databases = j.databases;
+      SQL_SCHEMA.database = "";
+      SQL_SCHEMA.tables = [];
+      SQL_SCHEMA.table = "";
+      SQL_SCHEMA.columns = [];
+      renderSQLSchemaDatabases(connId, j.databases);
     } else {
       SQL_SCHEMA.tables = Array.isArray(j.tables) ? j.tables : [];
+      SQL_SCHEMA.database = j.database || dbName || "";
       SQL_SCHEMA.table = "";
       SQL_SCHEMA.columns = [];
       renderSQLSchemaTables(connId, j);
@@ -74,9 +89,40 @@ async function loadSQLSchema(connId, table) {
   }
 }
 
+function renderSQLSchemaDatabases(connId, databases) {
+  const db = $("sqlSchemaDb");
+  if (db) db.textContent = sqlT("sql.schema_all_dbs", "全部库");
+  const box = $("sqlSchemaTables");
+  if (!box) return;
+  const dbs = Array.isArray(databases) ? databases : [];
+  if (!dbs.length) {
+    box.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_empty_db", "无业务库或无权查看"))}</span>`;
+    const col = $("sqlSchemaColumns"); if (col) col.innerHTML = "";
+    return;
+  }
+  box.innerHTML = dbs.map(name =>
+    `<button type="button" class="${SQL_SCHEMA.database === name ? "active" : ""}" data-sqlschema-db="${esc(name)}">${esc(name)}</button>`
+  ).join("");
+  box.querySelectorAll("[data-sqlschema-db]").forEach(btn => {
+    btn.onclick = () => {
+      SQL_SCHEMA.database = btn.dataset.sqlschemaDb;
+      loadSQLSchema(connId, "", SQL_SCHEMA.database);
+    };
+  });
+  const col = $("sqlSchemaColumns"); if (col) col.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_pick_db", "选择数据库后浏览表"))}</span>`;
+}
+
 function renderSQLSchemaTables(connId, j) {
   const db = $("sqlSchemaDb");
-  if (db) db.textContent = j.database || "";
+  if (db) {
+    const name = j.database || SQL_SCHEMA.database || "";
+    db.textContent = name || "";
+    if (name && SQL_SCHEMA.databases && SQL_SCHEMA.databases.length) {
+      db.innerHTML = `<button type="button" class="btn ghost sm" id="sqlSchemaBackDb" title="返回库列表">← ${esc(name)}</button>`;
+      const back = $("sqlSchemaBackDb");
+      if (back) back.onclick = () => loadSQLSchema(connId, "", "");
+    }
+  }
   const box = $("sqlSchemaTables");
   if (!box) return;
   const tables = Array.isArray(j.tables) ? j.tables : [];
@@ -89,7 +135,7 @@ function renderSQLSchemaTables(connId, j) {
     `<button type="button" class="${SQL_SCHEMA.table === t ? "active" : ""}" data-sqlschema-table="${esc(t)}">${esc(t)}</button>`
   ).join("");
   box.querySelectorAll("[data-sqlschema-table]").forEach(btn => {
-    btn.onclick = () => loadSQLSchema(connId, btn.dataset.sqlschemaTable);
+    btn.onclick = () => loadSQLSchema(connId, btn.dataset.sqlschemaTable, SQL_SCHEMA.database || j.database || "");
   });
 }
 
@@ -154,11 +200,268 @@ function showSQLTab(name) {
   const wb = $("sqlWorkbench");
   const cm = $("sqlConnManage");
   const ch = $("sqlChangeManage");
+  const ss = $("sqlSlowManage");
+  const pr = $("sqlProcessManage");
   if (wb) wb.style.display = name === "workbench" ? "" : "none";
   if (cm) cm.style.display = name === "connections" ? "" : "none";
   if (ch) ch.style.display = name === "changes" ? "" : "none";
+  if (ss) ss.style.display = name === "slowsql" ? "" : "none";
+  if (pr) pr.style.display = name === "process" ? "" : "none";
   if (name === "connections") renderSQLConnList();
   if (name === "changes") loadSQLChangeRequests().then(renderSQLChangeList);
+  if (name === "slowsql") {
+    renderSQLSlowConnSelect();
+    loadSQLSlowLatest();
+  }
+  if (name === "process") {
+    renderSQLProcessConnSelect();
+    loadSQLProcessLocks();
+  }
+}
+
+function renderSQLProcessConnSelect() {
+  const sel = $("sqlProcessConnSel");
+  if (!sel) return;
+  const prev = sel.value || ($("sqlConnSel") && $("sqlConnSel").value) || "";
+  const enabled = SQL_CONNS.filter(c => c.enabled !== false);
+  sel.innerHTML = enabled.map(c =>
+    `<option value="${esc(c.id)}">[${esc(c.driver || "mysql")}/${esc(c.env || "prod")}] ${esc(c.name)}</option>`
+  ).join("") || `<option value="">${esc(sqlT("sql.no_conn_enabled", "无可用连接"))}</option>`;
+  if (prev && enabled.some(c => c.id === prev)) sel.value = prev;
+  if (!sel.dataset.bound) {
+    sel.dataset.bound = "1";
+    sel.addEventListener("change", () => loadSQLProcessLocks());
+  }
+}
+
+async function loadSQLProcessLocks() {
+  const sel = $("sqlProcessConnSel");
+  const id = sel && sel.value;
+  const panel = $("sqlProcessPanel");
+  if (!panel) return;
+  if (!id) {
+    panel.innerHTML = `<div class="hint">请先选择连接</div>`;
+    return;
+  }
+  panel.innerHTML = `<div class="hint">${esc(sqlT("ui.loading", "加载中…"))}</div>`;
+  try {
+    const [pRes, lRes] = await Promise.all([
+      fetch(`${API}/sql/connections/${encodeURIComponent(id)}/processlist`).then(async r => ({ ok: r.ok, j: await r.json().catch(() => ({})) })),
+      fetch(`${API}/sql/connections/${encodeURIComponent(id)}/locks`).then(async r => ({ ok: r.ok, j: await r.json().catch(() => ({})) })),
+    ]);
+    if (!pRes.ok) throw new Error(pRes.j.error || "processlist failed");
+    const procs = pRes.j.processes || [];
+    const locks = (lRes.ok && lRes.j.locks) || [];
+    let html = `<div class="section-title"><span>PROCESSLIST</span><span class="tag">${procs.length}</span></div>`;
+    if (!procs.length) html += `<div class="hint">无会话</div>`;
+    else {
+      html += `<div class="nf-table-wrap"><table class="data-table"><thead><tr>
+        <th>ID</th><th>User</th><th>Host</th><th>DB</th><th>Cmd</th><th>Time</th><th>Info</th><th></th>
+      </tr></thead><tbody>`;
+      procs.slice(0, 100).forEach(p => {
+        html += `<tr>
+          <td class="mono">${p.id}</td><td>${esc(p.user || "")}</td><td class="mono">${esc(p.host || "")}</td>
+          <td>${esc(p.db || "")}</td><td>${esc(p.command || "")}</td><td>${p.time_sec || 0}</td>
+          <td class="mono" style="max-width:280px;word-break:break-all">${esc((p.info || "").slice(0, 160))}</td>
+          <td><button type="button" class="btn sm danger" data-sqlkill="${p.id}">KILL 单</button></td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+    }
+    html += `<div class="section-title" style="margin-top:16px"><span>锁等待</span><span class="tag">${locks.length}</span></div>`;
+    if (!locks.length) html += `<div class="hint">当前无锁等待</div>`;
+    else {
+      html += locks.map(l => `<div class="ds-card" style="margin-bottom:8px"><div class="ds-info">
+        <div class="ds-name">waiting ${l.waiting_pid || "?"} ← blocking ${l.blocking_pid || "?"}</div>
+        <div class="hint mono">${esc((l.waiting_query || "").slice(0, 180))}</div>
+        <div class="hint mono">${esc((l.blocking_query || "").slice(0, 180))}</div>
+      </div></div>`).join("");
+    }
+    panel.innerHTML = html;
+    panel.querySelectorAll("[data-sqlkill]").forEach(btn => {
+      btn.onclick = async () => {
+        const pid = btn.getAttribute("data-sqlkill");
+        if (!confirm(`提交 KILL ${pid} 变更单？审批后才会执行`)) return;
+        try {
+          const cr = await submitSQLChangeRequest(id, `KILL ${pid}`, "terminate session", "kill");
+          toast(`KILL 变更单 ${cr.id.slice(0, 8)} 已提交`, "ok");
+          showSQLTab("changes");
+        } catch (e) { toast(e.message || String(e), "err"); }
+      };
+    });
+  } catch (e) {
+    panel.innerHTML = `<div class="hint" style="color:var(--danger,#c00)">${esc(String(e.message || e))}</div>`;
+  }
+}
+
+async function loadSQLSchemaHealth() {
+  const sel = $("sqlProcessConnSel");
+  const id = sel && sel.value;
+  const panel = $("sqlProcessPanel");
+  if (!id || !panel) { toast("请先选择连接", "err"); return; }
+  panel.innerHTML = `<div class="hint">Schema 健康检查中…</div>`;
+  try {
+    const r = await fetch(`${API}/sql/connections/${encodeURIComponent(id)}/schema/health`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "failed");
+    const findings = j.findings || [];
+    if (!findings.length) {
+      panel.innerHTML = `<div class="hint">未发现明显 Schema 健康问题（抽检项）</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="section-title"><span>Schema 健康</span><span class="tag">${findings.length}</span></div>` +
+      findings.map(f => `<div class="ds-card" style="margin-bottom:8px"><div class="ds-info">
+        <div class="ds-name">[${esc(f.level)}] ${esc(f.title)} · ${esc(f.schema || "")}.${esc(f.table || "")}</div>
+        <div class="hint">${esc(f.detail || "")}</div>
+        <div class="hint">${esc(f.suggest || "")}</div>
+      </div></div>`).join("");
+  } catch (e) {
+    panel.innerHTML = `<div class="hint" style="color:var(--danger,#c00)">${esc(String(e.message || e))}</div>`;
+  }
+}
+
+function renderSQLSlowConnSelect() {
+  const sel = $("sqlSlowConnSel");
+  if (!sel) return;
+  const prev = sel.value || ($("sqlConnSel") && $("sqlConnSel").value) || "";
+  const enabled = SQL_CONNS.filter(c => c.enabled !== false);
+  sel.innerHTML = enabled.map(c =>
+    `<option value="${esc(c.id)}">[${esc(c.env || "prod")}] ${esc(c.name)}</option>`
+  ).join("") || `<option value="">${esc(sqlT("sql.no_conn_enabled", "无可用连接"))}</option>`;
+  if (prev && enabled.some(c => c.id === prev)) sel.value = prev;
+  if (!sel.dataset.bound) {
+    sel.dataset.bound = "1";
+    sel.addEventListener("change", () => loadSQLSlowLatest());
+  }
+}
+
+async function loadSQLSlowLatest() {
+  const sel = $("sqlSlowConnSel");
+  const id = sel && sel.value;
+  const panel = $("sqlSlowPanel");
+  const meta = $("sqlSlowMeta");
+  if (!id) {
+    if (panel) panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_need_conn", "请先添加并选择 MySQL 连接"))}</div>`;
+    if (meta) meta.textContent = "";
+    return;
+  }
+  if (panel) panel.innerHTML = `<div class="hint">${esc(sqlT("ui.loading", "加载中…"))}</div>`;
+  try {
+    const j = await fetch(`${API}/sql/connections/${encodeURIComponent(id)}/slow-sql/latest`).then(r => r.json());
+    SQL_SLOW_REPORT = j.report || null;
+    renderSQLSlowReport(SQL_SLOW_REPORT);
+  } catch (e) {
+    if (panel) panel.innerHTML = `<div class="hint">${esc(String(e))}</div>`;
+  }
+}
+
+function renderSQLSlowReport(rep) {
+  const panel = $("sqlSlowPanel");
+  const meta = $("sqlSlowMeta");
+  if (!panel) return;
+  if (!rep) {
+    if (meta) meta.textContent = "";
+    panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_empty", "尚无报告。点击「立即检查」从 performance_schema 拉取全库慢 SQL。"))}</div>`;
+    return;
+  }
+  const when = rep.finished_at ? new Date(rep.finished_at * 1000).toLocaleString() : (rep.started_at ? new Date(rep.started_at * 1000).toLocaleString() : "—");
+  if (meta) {
+    let t = `${rep.connection_name || rep.connection_id} · ${rep.status} · ${rep.trigger || "—"} · ${when} · ${rep.item_count || 0} 条`;
+    if (rep.trend) {
+      t += ` · 趋势 +${rep.trend.new_digests || 0}/-${rep.trend.gone_digests || 0} 恶化${rep.trend.worsened || 0}`;
+    }
+    meta.textContent = t;
+  }
+  if (rep.status === "failed") {
+    panel.innerHTML = `<div class="hint" style="color:var(--danger,#c00)">${esc(rep.error || "采集失败")}</div>`;
+    return;
+  }
+  if (rep.status === "running") {
+    panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_running", "正在检查…"))}</div>`;
+    return;
+  }
+  const items = Array.isArray(rep.items) ? rep.items : [];
+  if (!items.length) {
+    panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_none", "未发现达到阈值的慢语句摘要"))}</div>`;
+    return;
+  }
+  const bySchema = {};
+  items.forEach((it, idx) => {
+    const k = it.schema || "(unknown)";
+    if (!bySchema[k]) bySchema[k] = [];
+    bySchema[k].push({ it, idx });
+  });
+  const trendBadge = (tr) => {
+    if (tr === "new") return `<span class="badge warn">NEW</span>`;
+    if (tr === "worse") return `<span class="badge danger">WORSE</span>`;
+    if (tr === "better") return `<span class="badge ok">BETTER</span>`;
+    return "";
+  };
+  let html = "";
+  if (rep.trend) {
+    html += `<div class="hint" style="margin-bottom:8px">较上次报告：新增 ${rep.trend.new_digests || 0} · 消失 ${rep.trend.gone_digests || 0} · 恶化 ${rep.trend.worsened || 0} · 改善 ${rep.trend.improved || 0}</div>`;
+  }
+  Object.keys(bySchema).sort().forEach(schema => {
+    html += `<div class="section-title" style="margin:14px 0 6px"><span>${esc(schema)}</span><span class="tag">${bySchema[schema].length}</span></div>`;
+    html += bySchema[schema].map(({ it, idx }) => {
+      const tip = (it.index_hints && it.index_hints[0] && (it.index_hints[0].ddl || it.index_hints[0].reason || it.index_hints[0].message)) ||
+        (it.suggestions && it.suggestions[0] && (it.suggestions[0].title || it.suggestions[0].detail)) ||
+        (it.findings && it.findings[0] && (it.findings[0].title || it.findings[0].detail)) ||
+        sqlT("sql.slow_no_tip", "暂无规则建议");
+      return `<div class="ds-card" style="margin-bottom:8px">
+        <div class="ds-info" style="flex:1;min-width:0">
+          <div class="ds-name mono" style="white-space:pre-wrap;word-break:break-all">${trendBadge(it.trend)} ${esc((it.sql || "").slice(0, 280))}</div>
+          <div class="ds-url"><span>avg ${Number(it.avg_latency_ms || 0).toFixed(1)} ms · sum ${Number(it.sum_latency_ms || 0).toFixed(0)} ms · ×${it.count_star || 0} · score ${it.score ?? "—"}</span></div>
+          <div class="hint" style="margin-top:4px">${esc(String(tip).slice(0, 180))}</div>
+        </div>
+        <div class="ds-actions">
+          <button type="button" class="btn sm" data-sqlslow="use" data-idx="${idx}">${esc(sqlT("sql.slow_use", "填入工作台"))}</button>
+          <button type="button" class="btn sm ai-assist-btn" data-sqlslow="ai" data-idx="${idx}"><span class="ai-assist-btn-ic">🤖</span>${esc(sqlT("sql.ai_optimize_short", "AI 深度优化"))}</button>
+        </div>
+      </div>`;
+    }).join("");
+  });
+  panel.innerHTML = html;
+  panel.querySelectorAll("[data-sqlslow]").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const it = items[idx];
+      if (!it) return;
+      if (btn.dataset.sqlslow === "use") {
+        showSQLTab("workbench");
+        const connSel = $("sqlConnSel");
+        const slowSel = $("sqlSlowConnSel");
+        if (connSel && slowSel && slowSel.value) connSel.value = slowSel.value;
+        setSQLText(it.sql || "");
+        toast(sqlT("sql.applied", "已应用"), "ok");
+      } else if (btn.dataset.sqlslow === "ai") {
+        showSQLTab("workbench");
+        const connSel = $("sqlConnSel");
+        const slowSel = $("sqlSlowConnSel");
+        if (connSel && slowSel && slowSel.value) connSel.value = slowSel.value;
+        setSQLText(it.sql || "");
+        openSQLAI("sql_remediation");
+      }
+    };
+  });
+}
+
+async function runSQLSlowCheck() {
+  const sel = $("sqlSlowConnSel");
+  const id = sel && sel.value;
+  if (!id) { toast(sqlT("sql.slow_need_conn", "请先选择连接"), "err"); return; }
+  await withLoading("sqlSlowRunBtn", async () => {
+    try {
+      const r = await fetch(`${API}/sql/connections/${encodeURIComponent(id)}/slow-sql/run`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 409) { toast(j.error || "检查进行中", "err"); return; }
+      if (!r.ok && !j.status) { toast(j.error || "检查失败", "err"); return; }
+      SQL_SLOW_REPORT = j;
+      renderSQLSlowReport(j);
+      if (j.status === "failed") toast(j.error || "采集失败", "err");
+      else toast(sqlT("sql.slow_done", "慢 SQL 检查完成"), "ok");
+    } catch (e) { toast(String(e), "err"); }
+  });
 }
 
 async function loadSQLChangeRequests() {
@@ -177,10 +480,10 @@ function sqlConnectionEnvironment(id) {
 }
 window.sqlConnectionEnvironment = sqlConnectionEnvironment;
 
-async function submitSQLChangeRequest(connectionId, sql, reason) {
+async function submitSQLChangeRequest(connectionId, sql, reason, kind) {
   const r = await fetch(`${API}/sql/change-requests`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connection_id: connectionId, sql, reason: reason || "" })
+    body: JSON.stringify({ connection_id: connectionId, sql, reason: reason || "", kind: kind || "" })
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || "提交变更单失败");
@@ -635,8 +938,8 @@ function renderSQLConnList() {
       <div class="ds-type-icon prom">SQL</div>
       <div class="ds-info">
         <div class="ds-name">${esc(c.name)}</div>
-        <div class="ds-url"><span>${esc(c.user || "")}@${esc(c.host)}:${c.port || 3306}/${esc(c.database || "")}</span>
-          <span class="ds-auth">${esc(c.env || "prod")} · ${esc(c.version_hint || "auto")}</span></div>
+        <div class="ds-url"><span>${esc(c.user || "")}@${esc(c.host)}:${c.port || ((c.driver === "postgres") ? 5432 : 3306)}${c.database ? "/" + esc(c.database) : ""}</span>
+          <span class="ds-auth">${esc(c.driver || "mysql")} · ${esc(c.env || "prod")} · ${esc(c.version_hint || "auto")}${c.slow_sql && c.slow_sql.enabled ? " · 慢SQL" : ""}</span></div>
       </div>
       ${status}
       <div class="ds-actions admin-only">
@@ -653,8 +956,11 @@ function openSQLConnModal(c) {
   $("sqlConnId").value = c ? c.id : "";
   $("sqlConnName").value = c ? (c.name || "") : "";
   $("sqlConnEnv").value = c ? (c.env || "prod") : "prod";
+  const drv = $("sqlConnDriver");
+  if (drv) drv.value = c ? (c.driver || "mysql") : "mysql";
   $("sqlConnHost").value = c ? (c.host || "") : "";
-  $("sqlConnPort").value = c ? (c.port || 3306) : 3306;
+  const defaultPort = (c && c.driver === "postgres") || (drv && drv.value === "postgres") ? 5432 : 3306;
+  $("sqlConnPort").value = c ? (c.port || defaultPort) : 3306;
   $("sqlConnUser").value = c ? (c.user || "") : "";
   $("sqlConnPass").value = c ? (c.password || "") : "";
   $("sqlConnDB").value = c ? (c.database || "") : "";
@@ -662,24 +968,53 @@ function openSQLConnModal(c) {
   $("sqlConnParams").value = c ? (c.params || "") : "";
   $("sqlConnVer").value = c ? (c.version_hint || "auto") : "auto";
   $("sqlConnEnabled").checked = c ? c.enabled !== false : true;
+  const slow = (c && c.slow_sql) || {};
+  const sched = slow.schedule || {};
+  const slowEnabled = $("sqlConnSlowEnabled");
+  if (slowEnabled) slowEnabled.checked = c ? slow.enabled !== false : true;
+  const slowAlert = $("sqlConnSlowAlert");
+  if (slowAlert) slowAlert.checked = c ? !slow.alert_disabled : true;
+  const kind = $("sqlConnSlowKind"); if (kind) kind.value = sched.kind || "daily";
+  const at = $("sqlConnSlowAt"); if (at) at.value = sched.at || "03:00";
+  const iv = $("sqlConnSlowInterval"); if (iv) iv.value = sched.interval_min || 1440;
+  const wd = $("sqlConnSlowWeekday"); if (wd) wd.value = sched.weekday != null ? sched.weekday : 1;
+  const topn = $("sqlConnSlowTopN"); if (topn) topn.value = slow.top_n || 30;
+  const minAvg = $("sqlConnSlowMinAvg"); if (minAvg) minAvg.value = slow.min_avg_latency_ms != null ? slow.min_avg_latency_ms : 100;
   const tr = $("sqlConnTestResult"); if (tr) { tr.textContent = ""; tr.className = "ai-test-result"; }
   $("sqlConnMask").classList.add("show");
 }
 
 function collectSQLConn() {
+  const kind = ($("sqlConnSlowKind") && $("sqlConnSlowKind").value) || "daily";
+  const schedule = {
+    enabled: !!($("sqlConnSlowEnabled") && $("sqlConnSlowEnabled").checked),
+    kind,
+    at: ($("sqlConnSlowAt") && $("sqlConnSlowAt").value.trim()) || "03:00",
+    interval_min: parseInt(($("sqlConnSlowInterval") && $("sqlConnSlowInterval").value) || "1440", 10) || 1440,
+    weekday: parseInt(($("sqlConnSlowWeekday") && $("sqlConnSlowWeekday").value) || "1", 10) || 0,
+  };
+  const driver = ($("sqlConnDriver") && $("sqlConnDriver").value) || "mysql";
   return {
     id: $("sqlConnId").value,
     name: $("sqlConnName").value.trim(),
     env: $("sqlConnEnv").value,
+    driver,
     host: $("sqlConnHost").value.trim(),
-    port: parseInt($("sqlConnPort").value, 10) || 3306,
+    port: parseInt($("sqlConnPort").value, 10) || (driver === "postgres" ? 5432 : 3306),
     user: $("sqlConnUser").value.trim(),
     password: $("sqlConnPass").value,
     database: $("sqlConnDB").value.trim(),
     tls: $("sqlConnTLS").value.trim(),
     params: $("sqlConnParams").value.trim(),
     version_hint: $("sqlConnVer").value,
-    enabled: $("sqlConnEnabled").checked
+    enabled: $("sqlConnEnabled").checked,
+    slow_sql: {
+      enabled: !!($("sqlConnSlowEnabled") && $("sqlConnSlowEnabled").checked),
+      alert_disabled: !($("sqlConnSlowAlert") && $("sqlConnSlowAlert").checked),
+      schedule,
+      top_n: parseInt(($("sqlConnSlowTopN") && $("sqlConnSlowTopN").value) || "30", 10) || 30,
+      min_avg_latency_ms: parseFloat(($("sqlConnSlowMinAvg") && $("sqlConnSlowMinAvg").value) || "100") || 100,
+    },
   };
 }
 
@@ -746,6 +1081,10 @@ safeAddEventListener("sqlAIAuditBtn", "click", () => openSQLAI("sql_audit"));
 safeAddEventListener("sqlAIOptimizeBtn", "click", () => openSQLAI("sql_remediation"));
 safeAddEventListener("addSQLConnBtn", "click", () => openSQLConnModal(null));
 safeAddEventListener("sqlConnSaveBtn", "click", saveSQLConn);
+safeAddEventListener("sqlSlowRunBtn", "click", runSQLSlowCheck);
+safeAddEventListener("sqlProcessRefreshBtn", "click", loadSQLProcessLocks);
+safeAddEventListener("sqlSchemaHealthBtn", "click", loadSQLSchemaHealth);
+safeAddEventListener("sqlSlowRefreshBtn", "click", loadSQLSlowLatest);
 safeAddEventListener("sqlConnList", "click", e => {
   const b = e.target.closest("[data-sqlconn]"); if (!b) return;
   const id = b.dataset.id;

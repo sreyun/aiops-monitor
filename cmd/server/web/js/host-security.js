@@ -10,6 +10,7 @@ let hsBusy = false;
 let hsPollTimer = null;
 let hsCfg = null;
 let hsShowCfg = false;
+let hsPendingFilter = null; // { level: open|critical|high } from security overview
 
 const hsT = (k, fb) => I18N.t(k, fb);
 function hsEsc(s) { return typeof esc === "function" ? esc(String(s ?? "")) : String(s ?? ""); }
@@ -214,9 +215,34 @@ async function hsFetchJSON(url, opts) {
   return d;
 }
 
+function hsFindingMatchesFilter(f, level) {
+  if (!f) return false;
+  const st = String(f.status || "open").toLowerCase();
+  if (st === "resolved" || st === "false_positive" || st === "ack" || st === "accepted") return false;
+  const lv = String(f.level || "").toLowerCase();
+  if (level === "critical") return lv === "critical" || lv === "crit";
+  if (level === "high") return lv === "high";
+  return lv === "critical" || lv === "crit" || lv === "high"; // open = crit+high pending
+}
+
+function hsPendingBannerHTML() {
+  if (!hsPendingFilter || !hsPendingFilter.level) return "";
+  const label = hsPendingFilter.level === "critical"
+    ? hsT("hs.filter_crit", "仅显示开放危急项")
+    : hsPendingFilter.level === "high"
+      ? hsT("hs.filter_high", "仅显示开放高危项")
+      : hsT("hs.filter_open", "仅显示开放危急/高危项");
+  return `<div class="sec-notice sec-notice-slim" id="hsPendingBanner">${hsEsc(label)}
+    <button type="button" class="btn sm ghost" data-hs="clear-filter">${hsEsc(hsT("hs.clear_filter", "清除筛选"))}</button></div>`;
+}
+
 async function renderHostSecurity() {
   const el = $("hostSecurityPanel");
   if (!el) return;
+  if (typeof window.secConsumePendingFilter === "function") {
+    const f = window.secConsumePendingFilter("host-security");
+    if (f) hsPendingFilter = f;
+  }
   el.innerHTML = `<div class="loading-dots">${hsT("common.loading", "加载中...")}</div>`;
   try {
     let hosts = [];
@@ -236,6 +262,10 @@ async function renderHostSecurity() {
     hsSummary = sum.hosts || [];
     hsScans = scans.scans || [];
     hsCfg = cfg;
+    if (hsPendingFilter && hsPendingFilter.level && !hsSelected) {
+      const hit = (hsScans || []).find(s => s.status === "completed" && (s.findings || []).some(f => hsFindingMatchesFilter(f, hsPendingFilter.level)));
+      if (hit) hsSelected = hit;
+    }
     paintHostSecurity();
     hsMaybePoll();
   } catch (err) {
@@ -253,6 +283,7 @@ function paintHostSecurity() {
 
   let html = `<div class="sec-shell hs-shell">`;
   html += hsNoticeHTML();
+  html += hsPendingBannerHTML();
   html += `<div class="sec-metrics">
     <div class="sec-metric"><b>${hsSummary.length}</b><span>${hsEsc(hsT("hs.stat_scanned", "已扫描"))}</span></div>
     <div class="sec-metric crit"><b>${crit}</b><span>${hsEsc(hsT("hs.stat_crit", "危急"))}</span></div>
@@ -277,7 +308,8 @@ function paintHostSecurity() {
       <button class="btn primary" data-hs="scan" ${hsBusy ? "disabled" : ""}>${hsEsc(hsT("hs.scan", "扫描选中"))}</button>
       <button class="btn" data-hs="refresh">${hsEsc(hsT("common.refresh", "刷新"))}</button>
       ${typeof isAdmin === "function" && isAdmin() ? `<button class="btn" data-hs="cfg">${hsEsc(hsT("hs.config", "定时"))}</button>` : ""}
-      <button class="btn nf-ai-btn" data-hs="ai">${hsEsc(hsT("ai.analyze", "AI 分析"))}</button>
+      <button class="btn nf-ai-btn" data-hs="ai-diag" title="${hsEsc(hsT("hs.ai_diag_tip", "研判风险、优先级与疑似误报"))}">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}</button>
+      <button class="btn nf-ai-btn" data-hs="ai-rem" title="${hsEsc(hsT("hs.ai_rem_tip", "生成可确认执行的修复动作计划"))}">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}</button>
       ${hsExportMenuHTML(false)}
     </div>
   </div>`;
@@ -299,6 +331,7 @@ function paintHostSecurity() {
         <p class="ws-help">${hsEsc(hsT("hs.cfg_edit_help", "可随时修改并再次保存：定时开关、ClamAV、周期与纳入调度的主机列表。"))}</p>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgEnabled"${hsCfg.enabled ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_enabled", "启用定时扫描"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgClam"${hsCfg.enable_clamav !== false ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_clam", "尝试使用 ClamAV"))}</span></label>
+        <label class="switch cfg-enable"><input type="checkbox" id="hsCfgAISummary"${hsCfg.auto_ai_summary ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_ai_summary", "扫描完成后自动 AI 摘要"))}</span></label>
         <div class="cfg-form-row">
           <div class="field"><label>${hsEsc(hsT("hs.cfg_kind", "周期"))}</label>
             <div class="select-wrap"><select id="hsCfgKind">
@@ -444,7 +477,9 @@ function paintHostSecurity() {
 function hsAction(act) {
   if (act === "refresh") return renderHostSecurity();
   if (act === "scan") return hsRunScan();
-  if (act === "ai") return hsAI();
+  if (act === "ai" || act === "ai-diag") return hsAI("diagnosis");
+  if (act === "ai-rem") return hsAI("remediation");
+  if (act === "clear-filter") { hsPendingFilter = null; return paintHostSecurity(); }
   if (act === "export-toggle") {
     const menu = $("hsExportMenu");
     if (menu) menu.classList.toggle("show");
@@ -473,6 +508,7 @@ async function hsSaveCfg() {
   const body = {
     enabled: schedule.enabled,
     enable_clamav: !!($("hsCfgClam") && $("hsCfgClam").checked),
+    auto_ai_summary: !!($("hsCfgAISummary") && $("hsCfgAISummary").checked),
     osv_url: (hsCfg && hsCfg.osv_url) || "",
     timeout_sec: (hsCfg && hsCfg.timeout_sec) || 180,
     host_ids: hostIds,
@@ -583,9 +619,19 @@ function hsPaintDetail(scan, opts) {
     </div>
     <div class="hs-detail-actions">
       ${hsStatusBadge(scan.status)}
-      ${canExport ? `<button class="btn sm primary" data-hs="export-toggle">${hsEsc(hsT("hs.export", "导出报告"))}</button>` : ""}
+      ${canExport ? `<button class="btn sm nf-ai-btn" data-hs="ai-diag">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}</button>
+      <button class="btn sm nf-ai-btn" data-hs="ai-rem">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}</button>
+      <button class="btn sm primary" data-hs="export-toggle">${hsEsc(hsT("hs.export", "导出报告"))}</button>` : ""}
     </div></div>`;
   if (scan.error) html += `<div class="sec-error-box">${hsEsc(scan.error)}</div>`;
+  if (scan.baseline_diff) {
+    const d = scan.baseline_diff;
+    html += `<div class="hint" style="margin:8px 0">较上次：新增 <b>${d.added || 0}</b> · 消失 <b>${d.removed || 0}</b> · 恶化 <b>${d.worsened || 0}</b> · 缓解 <b>${d.improved || 0}</b></div>`;
+  }
+  if (scan.ai_summary) {
+    html += `<div class="sec-remediation" style="margin:8px 0"><div class="cfg-panel-title">${hsEsc(hsT("hs.ai_summary", "AI 摘要"))}</div>
+      <pre class="mono" style="white-space:pre-wrap;margin:0;font-size:12px">${hsEsc(scan.ai_summary)}</pre></div>`;
+  }
   html += `<div class="sec-metrics compact hs-detail-kpis">
     <div class="sec-metric"><b>${scan.score ?? "—"}</b><span>${hsEsc(hsT("hs.score", "安全分"))}</span></div>
     <div class="sec-metric"><b>${portTotal}</b><span>${hsEsc(hsT("hs.ports_open", "开放端口"))}</span></div>
@@ -631,13 +677,22 @@ function hsPaintDetail(scan, opts) {
     });
     html += `</ul></div>`;
   }
-  html += `<div class="cfg-panel-title">${hsEsc(hsT("hs.findings", "风险明细"))} <span class="tag">${(scan.findings || []).length}</span></div>`;
+  const allFindings = scan.findings || [];
+  const filterLevel = hsPendingFilter && hsPendingFilter.level;
+  const shownIdx = [];
+  allFindings.forEach((f, idx) => {
+    if (filterLevel && !hsFindingMatchesFilter(f, filterLevel)) return;
+    shownIdx.push(idx);
+  });
+  html += `<div class="cfg-panel-title">${hsEsc(hsT("hs.findings", "风险明细"))} <span class="tag">${filterLevel ? shownIdx.length + "/" + allFindings.length : allFindings.length}</span></div>`;
   html += `<div class="nf-table-wrap hs-table-wrap"><table class="data-table hs-table"><thead><tr>
     <th>${hsEsc(hsT("hs.level", "级别"))}</th><th>${hsEsc(hsT("hs.category", "类别"))}</th>
     <th>${hsEsc(hsT("hs.title", "标题"))}</th><th>CVE</th><th>${hsEsc(hsT("hs.suggest", "建议"))}</th>
     <th>${hsEsc(hsT("hs.finding_status", "状态"))}</th>
+    <th>${hsEsc(hsT("hs.finding_ai", "AI"))}</th>
   </tr></thead><tbody>`;
-  (scan.findings || []).slice(0, 200).forEach(f => {
+  shownIdx.slice(0, 200).forEach(idx => {
+    const f = allFindings[idx];
     html += `<tr>
       <td>${hsLevelBadge(f.level)}</td>
       <td><span class="tag">${hsEsc(hsCatLabel(f.category))}</span></td>
@@ -645,10 +700,11 @@ function hsPaintDetail(scan, opts) {
       <td class="mono">${hsEsc(f.cve || f.id || "")}</td>
       <td>${hsEsc(f.suggest || "")}</td>
       <td>${hsFindingStatusControls(f)}</td>
+      <td><button type="button" class="btn sm nf-ai-btn" data-hs-finding="${idx}" title="${hsEsc(hsT("hs.ai_finding_tip", "针对本条给出研判与修复建议"))}">${hsEsc(hsT("hs.ai_finding", "建议"))}</button></td>
     </tr>`;
   });
-  if (!(scan.findings || []).length) {
-    html += `<tr><td colspan="6" class="empty-line">${hsEsc(hsT("hs.no_findings", "未发现风险项"))}</td></tr>`;
+  if (!shownIdx.length) {
+    html += `<tr><td colspan="7" class="empty-line">${hsEsc(filterLevel ? hsT("hs.no_filtered", "当前筛选下无待处置项") : hsT("hs.no_findings", "未发现风险项"))}</td></tr>`;
   }
   html += `</tbody></table></div>`;
   box.innerHTML = html;
@@ -667,6 +723,11 @@ function hsPaintDetail(scan, opts) {
       if (finding) hsUpdateFindingStatus(finding, sel.value);
     });
   });
+  box.querySelectorAll("[data-hs-finding]").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation();
+    const idx = parseInt(b.dataset.hsFinding, 10);
+    hsAIFinding(scan, idx);
+  }));
   box.querySelectorAll("[data-hs]").forEach(b => b.addEventListener("click", e => {
     e.stopPropagation();
     hsAction(b.dataset.hs);
@@ -838,33 +899,103 @@ async function hsDoExport(fmt) {
   }
 }
 
-function hsAI() {
+function hsAIContext(scan, maxFindings) {
+  const model = hsBuildReportModel(scan);
+  const hostId = scan.host_id || "";
+  return {
+    hostId,
+    text: (model.narrative + "\n\n" + JSON.stringify({
+      host_id: hostId,
+      hostname: scan.hostname,
+      os: scan.os,
+      distro: scan.distro,
+      score: scan.score,
+      risk: scan.risk,
+      clamav: scan.clamav,
+      firewall: scan.firewall,
+      meta: model.meta,
+      findings: (scan.findings || []).slice(0, maxFindings || 40),
+    }, null, 2)).slice(0, 14000),
+  };
+}
+
+function hsAI(kind) {
   if (!hsSelected || hsSelected.status === "running") {
     if (typeof toast === "function") toast(hsT("hs.pick_scan", "请先选择一条已完成的扫描结果"), "err");
     return;
   }
-  const model = hsBuildReportModel(hsSelected);
-  const hostId = hsSelected.host_id || "";
-  if (typeof openAIAssist === "function") {
+  if (hsSelected.status !== "completed" && hsSelected.status !== "failed") {
+    if (typeof toast === "function") toast(hsT("hs.pick_scan", "请先选择一条已完成的扫描结果"), "err");
+    return;
+  }
+  const mode = kind === "remediation" ? "remediation" : "diagnosis";
+  const { hostId, text } = hsAIContext(hsSelected, 40);
+  if (typeof openAIAssist !== "function") return;
+  if (mode === "remediation") {
     openAIAssist({
       task: "host_security_remediation", mode: "analyze",
-      title: hsT("hs.ai_title", "AI · 主机安全修复"),
-      context: (model.narrative + "\n\n" + JSON.stringify({
-        host_id: hostId,
-        meta: model.meta,
-        findings: (hsSelected.findings || []).slice(0, 40),
-      }, null, 2)).slice(0, 14000),
+      title: hsT("hs.ai_rem_title", "AI · 主机安全修复计划"),
+      context: text,
       applyLabel: hsT("ai.apply_actions", "应用建议动作"),
-      applyTo: async (text) => {
+      applyTo: async (code) => {
         if (typeof window.applyOpsActionPlan !== "function") return false;
-        return window.applyOpsActionPlan(text, {
+        return window.applyOpsActionPlan(code, {
           source: "host-security",
           hostId,
           refresh: () => renderHostSecurity(),
         });
       },
     });
+    return;
   }
+  openAIAssist({
+    task: "host_security_diagnosis", mode: "analyze",
+    title: hsT("hs.ai_diag_title", "AI · 主机安全研判"),
+    context: text,
+    hint: hsT("hs.ai_diag_hint", "正在研判整体风险、优先级与疑似误报…"),
+  });
+}
+
+function hsAIFinding(scan, idx) {
+  if (!scan || typeof openAIAssist !== "function") return;
+  const findings = scan.findings || [];
+  const f = findings[idx];
+  if (!f) {
+    if (typeof toast === "function") toast(hsT("hs.finding_missing", "未找到该风险项"), "err");
+    return;
+  }
+  const ctx = {
+    host_id: scan.host_id,
+    hostname: scan.hostname,
+    os: scan.os,
+    distro: scan.distro,
+    score: scan.score,
+    risk: scan.risk,
+    finding: f,
+    peers_same_category: findings.filter(x => x !== f && x.category === f.category).slice(0, 5).map(x => ({
+      level: x.level, id: x.id, title: x.title, cve: x.cve,
+    })),
+  };
+  openAIAssist({
+    task: "host_security_finding", mode: "analyze",
+    title: hsT("hs.ai_finding_title", "AI · 单条风险建议") + " · " + (f.title || f.id || "").slice(0, 40),
+    context: JSON.stringify(ctx, null, 2).slice(0, 12000),
+    hint: hsT("hs.ai_finding_hint", "正在分析本条 finding 的真伪、影响与修复步骤…"),
+    applyLabel: hsT("hs.ai_apply_status", "按建议更新状态"),
+    applyTo: async (text) => {
+      const low = String(text || "").toLowerCase();
+      let status = "";
+      if (/\bfalse[_\s-]?positive\b/.test(low) || low.includes("误报")) status = "false_positive";
+      else if (/\bresolved\b/.test(low) || low.includes("已修复") || low.includes("可关闭")) status = "resolved";
+      else if (/\back\b/.test(low) || low.includes("已知接受") || low.includes("暂时接受")) status = "ack";
+      if (!status) {
+        if (typeof toast === "function") toast(hsT("hs.ai_status_unclear", "未从回复中识别到明确状态建议，请手动选择"), "warn");
+        return false;
+      }
+      await hsUpdateFindingStatus(f, status);
+      return true;
+    },
+  });
 }
 
 window._pageRenderers = window._pageRenderers || {};

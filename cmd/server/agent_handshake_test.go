@@ -176,10 +176,11 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("install.ps1 (reinstall)", ps1In,
 		"Test-AiopsAlreadyInstalled", "Uninstall-AiopsExisting",
 		"existing agent detected", "Restart-Service")
-	// YAML is the default config format now: the script must write config.yaml,
-	// point the service at it, and migrate away any stale config.json.
+	// YAML is the default config format now: the script must write config.yaml
+	// (base64-decoded payload), point the service at it, and migrate away any
+	// stale config.json.
 	must("install.sh (yaml)", shIn,
-		"cat > config.yaml", "--config $DIR/config.yaml",
+		"AIOPS_CONFIG_B64", "config.yaml", "--config $DIR/config.yaml",
 		"rm -f config.json")
 	// Windows: supervisor VBS (no duplicates) + logon autostart + 5-min keepalive task.
 	must("install.ps1", ps1In,

@@ -145,14 +145,25 @@ func (s *Server) handleWebEngineRefresh(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleSetWebSecurityConfig(w http.ResponseWriter, r *http.Request) {
-	var in WebSecurityConfig
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeSecErr(w, http.StatusBadRequest, "bad json")
 		return
 	}
 	cur := s.cfg.WebSecurity()
-	if len(in.Targets) == 0 {
+	in := cur
+	b, _ := json.Marshal(raw)
+	if err := json.Unmarshal(b, &in); err != nil {
+		writeSecErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	// Preserve targets unless the client explicitly sent the field.
+	if _, ok := raw["targets"]; !ok || len(in.Targets) == 0 {
 		in.Targets = cur.Targets
+	}
+	// Preserve AutoAISummary when omitted (bool zero value would otherwise clear it).
+	if _, ok := raw["auto_ai_summary"]; !ok {
+		in.AutoAISummary = cur.AutoAISummary
 	}
 	if err := s.cfg.SetWebSecurity(in); err != nil {
 		writeSecErr(w, http.StatusBadRequest, err.Error())

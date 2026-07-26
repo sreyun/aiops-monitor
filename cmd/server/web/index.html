@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.18.31">
+<link rel="stylesheet" href="/style.css?v=0.18.35">
 <script src="/theme-init.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -1304,7 +1304,9 @@
         </div>
         <div class="tabs" id="sqlInnerTabs" role="tablist">
           <button type="button" class="tab active" data-sql-tab="workbench" data-i18n="sql.tab_workbench">工作台</button>
-          <button type="button" class="tab" data-sql-tab="changes">DDL 变更单</button>
+          <button type="button" class="tab" data-sql-tab="slowsql" data-i18n="sql.tab_slowsql">慢 SQL</button>
+          <button type="button" class="tab" data-sql-tab="process">进程 / 锁</button>
+          <button type="button" class="tab" data-sql-tab="changes">变更单</button>
           <button type="button" class="tab admin-only" data-sql-tab="connections" data-i18n="sql.tab_connections">连接管理</button>
         </div>
         <div id="sqlWorkbench" class="sql-workbench">
@@ -1356,6 +1358,35 @@
             </div>
           </div>
         </div>
+        <div id="sqlSlowManage" class="sql-conn-manage" style="display:none">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between;margin-bottom:12px">
+            <div class="field" style="margin:0;min-width:220px;flex:1">
+              <label data-i18n="sql.slow_conn">检查连接</label>
+              <div class="select-wrap"><select id="sqlSlowConnSel"></select></div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="sqlSlowRefreshBtn" type="button" data-i18n="ui.refresh">刷新</button>
+              <button class="btn primary" id="sqlSlowRunBtn" type="button" data-i18n="sql.slow_run">立即检查</button>
+            </div>
+          </div>
+          <p class="hint" data-i18n="sql.slow_hint">从 performance_schema 拉取全库慢语句摘要，并自动给出规则引擎优化建议（索引/改写/EXPLAIN）。默认定时每天一次，可在连接配置中调整。</p>
+          <div id="sqlSlowMeta" class="hint" style="margin:8px 0"></div>
+          <div id="sqlSlowPanel" class="sql-result-panel"></div>
+        </div>
+        <div id="sqlProcessManage" class="sql-conn-manage" style="display:none">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between;margin-bottom:12px">
+            <div class="field" style="margin:0;min-width:220px;flex:1">
+              <label>连接</label>
+              <div class="select-wrap"><select id="sqlProcessConnSel"></select></div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="sqlSchemaHealthBtn" type="button">Schema 健康</button>
+              <button class="btn" id="sqlProcessRefreshBtn" type="button">刷新进程/锁</button>
+            </div>
+          </div>
+          <p class="hint">只读查看 PROCESSLIST / 锁等待。终止会话请提交 KILL 变更单（需审批）；生产 DDL 在 SQL 冻结窗内会被拦截。</p>
+          <div id="sqlProcessPanel" class="sql-result-panel"></div>
+        </div>
         <div id="sqlConnManage" class="sql-conn-manage" style="display:none">
           <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
             <button class="btn primary admin-only" id="addSQLConnBtn" type="button" data-i18n="sql.add_conn">+ 添加连接</button>
@@ -1391,6 +1422,12 @@
         </div>
       </div>
       <div class="grid2">
+        <div class="field"><label>驱动</label>
+          <div class="select-wrap"><select id="sqlConnDriver">
+            <option value="mysql">MySQL</option>
+            <option value="postgres">PostgreSQL（只读）</option>
+          </select></div>
+        </div>
         <div class="field"><label data-i18n="sql.version_hint">版本提示</label>
           <div class="select-wrap"><select id="sqlConnVer">
             <option value="auto">auto</option>
@@ -1398,7 +1435,6 @@
             <option value="mysql80">mysql80</option>
           </select></div>
         </div>
-        <div></div>
       </div>
       <div class="grid2">
         <div class="field"><label>Host</label><input type="text" id="sqlConnHost" class="mono" placeholder="127.0.0.1"></div>
@@ -1408,14 +1444,35 @@
         <div class="field"><label data-i18n="sql.user">用户</label><input type="text" id="sqlConnUser" autocomplete="off"></div>
         <div class="field"><label data-i18n="sql.password">密码</label><input type="password" id="sqlConnPass" autocomplete="new-password" placeholder="留空保持原值"></div>
       </div>
-      <div class="field"><label data-i18n="sql.database">Database</label><input type="text" id="sqlConnDB" class="mono" placeholder="可选默认库"></div>
+      <div class="field"><label data-i18n="sql.database">Database（可选）</label><input type="text" id="sqlConnDB" class="mono" placeholder="可不填；慢 SQL 将扫描实例上全部业务库"></div>
       <div class="grid2">
         <div class="field"><label>TLS</label><input type="text" id="sqlConnTLS" class="mono" placeholder="true / skip-verify / 空"></div>
         <div class="field"><label data-i18n="sql.params">额外参数</label><input type="text" id="sqlConnParams" class="mono" placeholder="charset=utf8mb4"></div>
       </div>
       <label class="switch" style="display:flex;margin:4px 0 2px"><input type="checkbox" id="sqlConnEnabled" checked> <span data-i18n="sql.enabled">启用</span></label>
+      <hr style="border:none;border-top:1px solid var(--border, #ddd);margin:12px 0">
+      <label class="switch" style="display:flex;margin:4px 0 8px"><input type="checkbox" id="sqlConnSlowEnabled" checked> <span data-i18n="sql.slow_enabled">慢 SQL 自动检查</span></label>
+      <label class="switch" style="display:flex;margin:4px 0 8px"><input type="checkbox" id="sqlConnSlowAlert" checked> <span data-i18n="sql.slow_alert">超阈值时告警/Incident</span></label>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sql.slow_sched_kind">调度方式</label>
+          <div class="select-wrap"><select id="sqlConnSlowKind">
+            <option value="daily">每天</option>
+            <option value="interval">按间隔</option>
+            <option value="weekly">每周</option>
+          </select></div>
+        </div>
+        <div class="field"><label data-i18n="sql.slow_sched_at">每日/每周时刻</label><input type="text" id="sqlConnSlowAt" class="mono" placeholder="03:00" value="03:00"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sql.slow_interval">间隔（分钟）</label><input type="number" id="sqlConnSlowInterval" min="15" max="10080" value="1440"></div>
+        <div class="field"><label data-i18n="sql.slow_weekday">周几（0=周日）</label><input type="number" id="sqlConnSlowWeekday" min="0" max="6" value="1"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="sql.slow_topn">Top N</label><input type="number" id="sqlConnSlowTopN" min="1" max="100" value="30"></div>
+        <div class="field"><label data-i18n="sql.slow_min_avg">最小平均耗时（ms）</label><input type="number" id="sqlConnSlowMinAvg" min="0" max="600000" value="100"></div>
+      </div>
       <div class="ai-card-test" style="margin-top:8px"><span id="sqlConnTestResult" class="ai-test-result"></span></div>
-      <p class="hint" data-i18n="sql.readonly_hint">建议使用仅 SELECT / EXPLAIN / SHOW 权限的只读账号；工具拒绝 DDL/DML。</p>
+      <p class="hint" data-i18n="sql.readonly_hint">建议使用只读账号（SELECT / EXPLAIN / SHOW + performance_schema）；工具拒绝 DDL/DML。Database 可选，便于同时关注多个库的慢 SQL。</p>
     </div>
     <div class="modal-foot"><button class="btn primary" id="sqlConnSaveBtn" data-i18n="ui.save">保存</button></div>
   </div>
@@ -3524,12 +3581,12 @@
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.18.31"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.18.31"></script>
-<script src="/i18n-dashboard.js?v=0.18.31"></script>
+<script src="/i18n-dashboard.en.js?v=0.18.35"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.18.35"></script>
+<script src="/i18n-dashboard.js?v=0.18.35"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.18.31" defer></script>
+<script src="/app.js?v=0.18.35" defer></script>
 </body>
 </html>

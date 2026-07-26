@@ -19,6 +19,7 @@ type SQLChangeRequest struct {
 	ConnectionID string         `json:"connection_id"`
 	Connection   string         `json:"connection_name,omitempty"`
 	Environment  string         `json:"environment"`
+	Kind         string         `json:"kind,omitempty"` // ddl|kill
 	SQL          string         `json:"sql"`
 	Reason       string         `json:"reason,omitempty"`
 	Status       string         `json:"status"`
@@ -62,14 +63,19 @@ func cloneSQLChangeRequest(in *SQLChangeRequest) SQLChangeRequest {
 	return out
 }
 
-func (m *sqlChangeRequestManager) Create(c MySQLConnection, sqlText, reason, proposer string, now time.Time) SQLChangeRequest {
+func (m *sqlChangeRequestManager) Create(c MySQLConnection, sqlText, reason, proposer, kind string, now time.Time) SQLChangeRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		kind = "ddl"
+	}
 	cr := &SQLChangeRequest{
 		ID:           termID(),
 		ConnectionID: c.ID,
 		Connection:   c.Name,
 		Environment:  sqlConnectionEnv(c),
+		Kind:         kind,
 		SQL:          strings.TrimSpace(sqlText),
 		Reason:       strings.TrimSpace(reason),
 		Status:       "pending",
@@ -185,6 +191,7 @@ func (s *Server) handleCreateSQLChangeRequest(w http.ResponseWriter, r *http.Req
 		ConnectionID string `json:"connection_id"`
 		SQL          string `json:"sql"`
 		Reason       string `json:"reason"`
+		Kind         string `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -195,16 +202,39 @@ func (s *Server) handleCreateSQLChangeRequest(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection not found or disabled"})
 		return
 	}
+	if driverOf(c) == "postgres" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "PostgreSQL 连接不支持变更单执行"})
+		return
+	}
 	sqlText := strings.TrimSpace(req.SQL)
-	if sqlText == "" || len(sqlText) > 16<<10 || !sqltoolkit.IsAllowedIndexDDL(sqlText) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "仅允许 16KB 内的 CREATE/ALTER 索引类 DDL"})
+	kind := strings.ToLower(strings.TrimSpace(req.Kind))
+	if kind == "" {
+		if _, ok := parseKillSQL(sqlText); ok {
+			kind = "kill"
+		} else {
+			kind = "ddl"
+		}
+	}
+	switch kind {
+	case "kill":
+		if _, ok := parseKillSQL(sqlText); !ok || len(sqlText) > 128 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "KILL 变更单格式：KILL <process_id>"})
+			return
+		}
+	case "ddl":
+		if sqlText == "" || len(sqlText) > 16<<10 || !sqltoolkit.IsAllowedIndexDDL(sqlText) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "仅允许 16KB 内的 CREATE/ALTER 索引类 DDL"})
+			return
+		}
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "kind 仅支持 ddl 或 kill"})
 		return
 	}
 	if len(req.Reason) > 2000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reason 过长"})
 		return
 	}
-	cr := s.sqlChanges.Create(c, sqlText, req.Reason, s.actorName(r), time.Now())
+	cr := s.sqlChanges.Create(c, sqlText, req.Reason, s.actorName(r), kind, time.Now())
 	s.auditSQLChange(r, "create", cr, "warning")
 	writeJSON(w, http.StatusCreated, cr)
 }
@@ -256,13 +286,36 @@ func (s *Server) executeSQLChangeRequest(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection not found or disabled"})
 		return
 	}
+	if win, frozen := s.cfg.activeFreezeWindow("", "sql", now.Unix()); frozen && ticket.Kind != "kill" {
+		// Kill may still be needed during freeze to unblock production; DDL stays frozen.
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": fmt.Sprintf("当前处于 SQL 变更冻结窗「%s」，禁止执行 DDL 变更单", win.Name),
+		})
+		return
+	}
 	cr, err := s.sqlChanges.BeginExecute(ticketID, c.ID, ticket.SQL, s.actorName(r), now)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	s.auditSQLChange(r, "execute_start", cr, "warning")
-	result, execErr := s.execDDLWithExplain(c, cr.SQL, verifySQL, timeoutSec)
+	var (
+		result  map[string]any
+		execErr error
+	)
+	if cr.Kind == "kill" {
+		pid, ok := parseKillSQL(cr.SQL)
+		if !ok {
+			execErr = fmt.Errorf("invalid KILL statement")
+		} else {
+			execErr = mysqlKillSession(c, pid)
+			if execErr == nil {
+				result = map[string]any{"killed": pid}
+			}
+		}
+	} else {
+		result, execErr = s.execDDLWithExplain(c, cr.SQL, verifySQL, timeoutSec)
+	}
 	cr = s.sqlChanges.FinishExecute(ticketID, result, execErr, time.Now())
 	if execErr != nil {
 		s.auditSQLChange(r, "execute_failed", cr, "error")

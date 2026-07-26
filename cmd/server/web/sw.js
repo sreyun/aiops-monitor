@@ -2,7 +2,7 @@
 // Cache: app shell on install, stale-while-revalidate for static, network-only for API.
 // Offline: cached shell + navigation fallback to "/" so the UI shows even offline.
 
-const CACHE = "AIOps-v0.18.31";
+const CACHE = "AIOps-v0.18.35";
 const SHELL = ["/", "/theme-init.js", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", e => {

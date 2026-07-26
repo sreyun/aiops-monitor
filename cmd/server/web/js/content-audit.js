@@ -62,7 +62,15 @@ function renderContentAuditPanel() {
   html += `<button class="nf-btn" data-caact="refresh">${I18N.t("common.refresh") || "刷新"}</button>`;
   html += `<button class="nf-btn" data-caact="export">${esc(I18N.t("common.export") || "导出")}</button>`;
   html += `<button class="nf-btn nf-ai-btn" data-caact="ai" title="${esc(I18N.t("ca.ai_hint") || "AI 研判：是否有敏感数据外泄到大模型")}">🤖 ${esc(I18N.t("ai.analyze") || "AI 分析")}</button>`;
+  if (typeof isAdmin === "function" && isAdmin()) {
+    html += `<button class="nf-btn" data-caact="keywords">${esc(I18N.t("ca.keywords", "敏感词规则") || "敏感词规则")}</button>`;
+  }
   html += `</div>`;
+  html += `<div id="caKeywordsBox" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:8px">
+    <div class="hint" style="margin-bottom:6px">自定义敏感关键词（每行一个；服务端 DLP 额外命中）。Gateway 上报 policy_decision=deny/block 时将强制脱敏正文并告警。</div>
+    <textarea id="caKeywords" rows="4" class="mono" style="width:100%" placeholder="内部代号&#10;项目密级"></textarea>
+    <div style="margin-top:8px"><button class="btn primary sm" data-caact="save-keywords">保存规则</button></div>
+  </div>`;
   html += `<div id="caBody"></div>`;
   container.innerHTML = html;
 
@@ -346,6 +354,40 @@ function caOpenAI() {
   openAIAssist({ task: "content_audit_diagnosis", mode: "analyze", title: I18N.t("ca.ai_title", "AI · 内容审计研判"), context: caToText() });
 }
 
+async function caToggleKeywords() {
+  const box = $("caKeywordsBox");
+  const ta = $("caKeywords");
+  if (!box || !ta) return;
+  const show = box.style.display === "none" || !box.style.display;
+  box.style.display = show ? "" : "none";
+  if (!show) return;
+  try {
+    const c = await fetch(`${API}/config`).then(r => r.json());
+    const kws = c.content_audit_sensitive_keywords || [];
+    ta.value = Array.isArray(kws) ? kws.join("\n") : "";
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  }
+}
+
+async function caSaveKeywords() {
+  const ta = $("caKeywords");
+  if (!ta) return;
+  const kws = ta.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 200);
+  try {
+    const full = await fetch(`${API}/config`).then(r => r.json());
+    full.content_audit_sensitive_keywords = kws;
+    const r = await fetch(`${API}/config`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(full),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "保存失败");
+    if (typeof toast === "function") toast(I18N.t("toast.saved", "已保存"), "ok");
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  }
+}
+
 // 事件委托（CSP script-src 'self'，禁内联 onclick）。
 safeAddEventListener("contentAuditPanel", "click", e => {
   const b = e.target.closest("[data-caact]");
@@ -354,6 +396,8 @@ safeAddEventListener("contentAuditPanel", "click", e => {
     if (b.dataset.caact === "refresh") { caDataHosts = null; renderContentAuditPanel(); }
     else if (b.dataset.caact === "ai") caOpenAI();
     else if (b.dataset.caact === "export") caExport();
+    else if (b.dataset.caact === "keywords") caToggleKeywords();
+    else if (b.dataset.caact === "save-keywords") caSaveKeywords();
     return;
   }
   // 分页控件不打开详情

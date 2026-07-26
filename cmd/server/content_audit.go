@@ -140,6 +140,7 @@ func validGatewayAuditHostID(v string) bool {
 
 func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 	// DLP 扫描：逐条查敏感数据(内置密钥/身份证/凭据 + 用户关键词)，命中即打标签 + 告警(去重防风暴)。
+	// policy_decision=deny|block：服务端强制抬升严重度、剥离正文、并创建 Incident（去重）。
 	hostname := rep.HostID
 	if h := s.hostByID(rep.HostID); h != nil {
 		hostname = h.Hostname
@@ -148,13 +149,20 @@ func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 	labels := make([]string, len(rep.Events))
 	for i := range rep.Events {
 		enrichLLMAuditEvent(&rep.Events[i])
-		ev := rep.Events[i]
+		ev := &rep.Events[i]
+		enforceContentAuditPolicy(ev)
 		hits := scanSensitive(ev.Body+"\n"+ev.RespBody, cfg.ContentAuditSensitiveKeywords)
 		for _, label := range ev.RedactionLabels {
 			hits = append(hits, "端侧脱敏:"+label)
 		}
+		for _, label := range ev.RiskLabels {
+			hits = append(hits, label)
+		}
+		if isContentPolicyBlocked(ev.PolicyDecision) {
+			hits = append(hits, "策略拦截:"+ev.PolicyDecision)
+		}
 		hits = uniqueAuditLabels(hits)
-		if len(hits) == 0 {
+		if len(hits) == 0 && !isContentPolicyBlocked(ev.PolicyDecision) {
 			continue
 		}
 		labels[i] = strings.Join(hits, ", ")
@@ -164,6 +172,9 @@ func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 		}
 		dest += ev.Path
 		lvl := sensitiveSeverity(hits)
+		if isContentPolicyBlocked(ev.PolicyDecision) {
+			lvl = "critical"
+		}
 		a := Alert{
 			HostID: rep.HostID, Hostname: hostname, IP: ev.SrcIP,
 			Level: lvl, Type: "content_audit",
@@ -171,11 +182,14 @@ func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 			Message:   Tz("alert.content_sensitive", ev.SrcIP, dest, labels[i]),
 			Timestamp: ev.Ts,
 		}
+		if isContentPolicyBlocked(ev.PolicyDecision) {
+			a.Message = fmt.Sprintf("内容策略%s：%s → %s（%s）", strings.ToUpper(ev.PolicyDecision), ev.SrcIP, dest, labels[i])
+		}
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: lvl, Actor: "内容审计DLP", Host: hostname, Message: a.Message})
-		if cfg.AlertsEnabled && shouldAlertContent(a.HostID+"|"+a.Scope+"|"+labels[i], ev.Ts) {
+		if cfg.AlertsEnabled && shouldAlertContent(a.HostID+"|"+a.Scope+"|"+labels[i]+"|"+ev.PolicyDecision, ev.Ts) {
 			s.notifier.pushChannels(cfg, a, true)
 			if lvl == "critical" && s.incidents != nil {
-				s.incidents.OnAlertTransition(a, alertKey(a), true) // 密钥外泄转 Incident，走学习回路
+				s.incidents.OnAlertTransition(a, alertKey(a), true) // 密钥外泄 / 策略拦截转 Incident
 			}
 		}
 	}
@@ -183,6 +197,34 @@ func (s *Server) persistContentAuditReport(rep shared.ContentAuditReport) {
 		s.pg.insertContentAudit(rep.HostID, rep.Events, labels)
 		slog.Info("内容审计已存储", "host_id", rep.HostID, "events", len(rep.Events))
 	}
+}
+
+func isContentPolicyBlocked(decision string) bool {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "deny", "block", "blocked", "rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+// enforceContentAuditPolicy strips retained bodies for deny/block decisions so
+// persisted audit rows cannot re-expose blocked prompt/completion content.
+func enforceContentAuditPolicy(ev *shared.ContentAuditEvent) {
+	if ev == nil || !isContentPolicyBlocked(ev.PolicyDecision) {
+		return
+	}
+	ev.PolicyDecision = strings.ToLower(strings.TrimSpace(ev.PolicyDecision))
+	if ev.PolicyDecision == "blocked" || ev.PolicyDecision == "rejected" {
+		ev.PolicyDecision = "block"
+	}
+	if ev.Body != "" || ev.RespBody != "" {
+		ev.BodyMode = "redacted"
+		ev.Body = "[blocked by policy]"
+		ev.RespBody = "[blocked by policy]"
+	}
+	ev.RiskLabels = append(ev.RiskLabels, "policy:"+ev.PolicyDecision)
+	ev.RiskLabels = normalizeAuditLabels(ev.RiskLabels)
 }
 
 func normalizeContentAuditEvent(ev *shared.ContentAuditEvent, reportTs int64) {

@@ -37,6 +37,7 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 		"forward_diagnosis", "apimon_diagnosis", "content_audit_diagnosis",
 		"host_security_diagnosis", "web_vuln_diagnosis",
 		"host_security_remediation", "web_vuln_remediation",
+		"host_security_finding", "web_vuln_finding",
 		"hyperv_ops_plan", "container_ops_plan", "k8s_ops_plan", "sql_remediation",
 		"dashboard_analysis", "dashboard_optimize",
 		"sql_audit", "sql_optimize":
@@ -45,7 +46,8 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 	switch task {
 	case "sql_beautify", "sql_audit", "sql_optimize", "sql_remediation",
 		"hyperv_ops_plan", "container_ops_plan", "k8s_ops_plan",
-		"host_security_remediation", "web_vuln_remediation":
+		"host_security_remediation", "web_vuln_remediation",
+		"host_security_finding", "web_vuln_finding":
 		p.Timeout = 90 * time.Second
 	case "dashboard_optimize":
 		// 开启思考但严格限预算：过长思维链会占满超时，最终 JSON 出不来。
