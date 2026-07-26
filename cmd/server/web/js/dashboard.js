@@ -2014,27 +2014,44 @@ safeAddEventListener("dashMetaSave", "click", async () => {
     if (DASH_EDIT) renderDashDetail(); else saveCurDash();
     return;
   }
-  // 从列表编辑信息：合并进已存的完整对象后保存
-  let base = { id, name, description: desc, tags, panels: [], appearance };
-  if (id) {
-    try {
-      base = await fetch(`${API}/dashboards/${encodeURIComponent(id)}`).then(r => r.json());
-      base.name = name; base.description = desc; base.tags = tags; base.appearance = appearance;
-    } catch (e) {}
-  }
-  const r = await fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(base) }).then(r => r.json());
-  closeMask($("dashMetaMask"));
-  if (r && r.ok) {
-    toast("已保存", "ok");
-    if (!id) { openDashboard(r.id).then(() => { DASH_EDIT = true; renderDashDetail(); }); }
-    else {
-      if (CUR_DASH && CUR_DASH.id === id) {
-        CUR_DASH.name = name; CUR_DASH.description = desc; CUR_DASH.tags = tags; CUR_DASH.appearance = appearance;
-        renderDashDetail();
+  // 从列表编辑信息：必须先拉到完整对象（含 panels），失败则中止——绝不能用 panels:[] 覆盖。
+  await withLoading("dashMetaSave", async () => {
+    let base;
+    if (id) {
+      try {
+        const gr = await fetch(`${API}/dashboards/${encodeURIComponent(id)}`);
+        const gj = await gr.json().catch(() => ({}));
+        if (!gr.ok || !gj || !gj.id || !Array.isArray(gj.panels)) {
+          toast("保存失败：无法加载原仪表盘（已中止，避免清空面板）", "err");
+          return;
+        }
+        base = gj;
+      } catch (e) {
+        toast("保存失败：加载原仪表盘出错（已中止）—" + e, "err");
+        return;
       }
-      loadDashboards();
+      base.name = name; base.description = desc; base.tags = tags; base.appearance = appearance;
+    } else {
+      base = { name, description: desc, tags, panels: [], appearance };
     }
-  } else toast("保存失败：" + ((r && r.error) || ""), "err");
+    try {
+      const r = await fetch(`${API}/dashboards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(base) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j && j.ok) {
+        closeMask($("dashMetaMask"));
+        toast("已保存", "ok");
+        if (!id) { openDashboard(j.id).then(() => { DASH_EDIT = true; renderDashDetail(); }); }
+        else {
+          if (CUR_DASH && CUR_DASH.id === id) {
+            CUR_DASH.name = name; CUR_DASH.description = desc; CUR_DASH.tags = tags; CUR_DASH.appearance = appearance;
+            if (j.revision) CUR_DASH.revision = j.revision;
+            renderDashDetail();
+          }
+          loadDashboards();
+        }
+      } else toast("保存失败：" + ((j && j.error) || ("HTTP " + r.status)), "err");
+    } catch (e) { toast("保存失败：" + e, "err"); }
+  });
 });
 async function saveCurDash() {
   if (!CUR_DASH) return;
@@ -2222,7 +2239,11 @@ async function aiOptimizeDash() {
       // 用完整回复（而非仅首个代码块）：AI 可能在 json 前先给了 PromQL 代码块，只取首块会拿错内容；
       // 服务端 extractJSONObject 会优先定位 ```json 块，更稳。
       const answer = (typeof _aiAssistState !== "undefined" && _aiAssistState.lastAnswer) || code || "";
-      if (!answer.trim()) { toast("请先等 AI 给出优化建议再应用", "err"); return; }
+      if (!answer.trim()) { toast("请先等 AI 给出优化建议再应用", "err"); return false; }
+      if (!/\{[\s\S]*"panels"\s*:/.test(answer) && !/```json/i.test(answer)) {
+        toast("应用失败：回复里没有可识别的看板 JSON（需含 panels）。请点「重新生成」后再试。", "err");
+        return false;
+      }
       toast("正在校验查询并生成差异预览…", "ok");
       try {
         const r = await fetch(`${API}/dashboards/${encodeURIComponent(dashId)}/ai-apply`, {
@@ -2231,7 +2252,7 @@ async function aiOptimizeDash() {
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.ok) {
-          toast("预览失败：" + (j.error || "AI 未给出可应用的看板结构，请重新生成"), "err");
+          toast("预览失败：" + (j.error || ("HTTP " + r.status) || "AI 未给出可应用的看板结构，请重新生成"), "err");
           return false;
         }
         return await reviewAndApplyDashAI({
@@ -2286,11 +2307,16 @@ safeAddEventListener("dashAIReviewApply", "click", async () => {
     try {
       const r = await fetch(`${API}/dashboards/${encodeURIComponent(review.dashId)}/ai-apply`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ json: review.answer, expected_revision: review.expectedRevision })
+        body: JSON.stringify({ json: review.answer, expected_revision: review.expectedRevision || 0 })
       });
       const j = await r.json().catch(() => ({}));
+      if (r.status === 409 || (j && j.error && /已被更新|重新/.test(j.error))) {
+        toast("应用失败：" + (j.error || "看板已变更，请关闭后重新预览"), "err");
+        finishDashAIReview(false);
+        return;
+      }
       if (!r.ok || !j.ok) {
-        toast("应用失败：" + (j.error || r.status), "err");
+        toast("应用失败：" + (j.error || ("HTTP " + r.status)), "err");
         return;
       }
       const w = (j.warnings && j.warnings.length) ? "（" + j.warnings.slice(0, 2).join("；") + "）" : "";

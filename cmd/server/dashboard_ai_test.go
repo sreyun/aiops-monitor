@@ -13,11 +13,37 @@ func TestExtractJSONObject(t *testing.T) {
 		{"直接 {\"b\":2} 结束", `{"b":2}`},
 		{"```\n{\"c\":3}\n```", `{"c":3}`},
 		{"没有任何 JSON", ""},
+		// 流式截断：缺收尾 ```
+		{"要点\n```json\n{\"panels\":[{\"title\":\"A\"}]}", `{"panels":[{"title":"A"}]}`},
 	}
 	for _, c := range cases {
 		if got := extractJSONObject(c.in); got != c.want {
 			t.Fatalf("extractJSONObject(%q)=%q，应为 %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestRepairTruncatedDashJSON(t *testing.T) {
+	// 第二个 panel 被截断
+	js := `{"name":"t","panels":[{"title":"A","type":"stat","targets":[{"expr":"up"}]},{"title":"B","type":"stat","targets":[{"expr":"mem`
+	got := repairTruncatedDashJSON(js)
+	var spec aiDashSpec
+	if err := json.Unmarshal([]byte(got), &spec); err != nil {
+		t.Fatalf("修复后应可解析: %v\n%s", err, got)
+	}
+	if len(spec.Panels) != 1 || spec.Panels[0].Title != "A" {
+		t.Fatalf("应保留完整面板 A，实为 %+v", spec.Panels)
+	}
+}
+
+func TestDecodeAIDashSpecTruncatedFence(t *testing.T) {
+	raw := "优化建议：\n```json\n{\"name\":\"x\",\"panels\":[{\"title\":\"CPU\",\"type\":\"stat\",\"targets\":[{\"expr\":\"up\"}]},{\"title\":\"Bad\",\"type\":\"stat\",\"targets\":[{\"expr\":\"mem"
+	spec, ok := decodeAIDashSpec(raw)
+	if !ok {
+		t.Fatal("截断 JSON 应能部分解码")
+	}
+	if len(spec.Panels) < 1 {
+		t.Fatalf("至少应有 1 个完整面板，实为 %d", len(spec.Panels))
 	}
 }
 

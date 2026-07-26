@@ -52,11 +52,12 @@ func assistTaskPolicy(task string) aiTaskPolicy {
 		p.Timeout = 90 * time.Second
 	case "dashboard_optimize":
 		// 开启思考但严格限预算：过长思维链会占满超时，最终 JSON 出不来。
+		// MaxTokens 提高到 16k，避免大型看板优化 JSON 被截断导致「应用失败」。
 		p.EnableThink = true
 		p.DisableThink = false
-		p.ThinkingBudget = 512
-		p.MaxTokens = 8192
-		p.Timeout = 180 * time.Second
+		p.ThinkingBudget = 384
+		p.MaxTokens = 16384
+		p.Timeout = 240 * time.Second
 	case "dashboard_prompt_optimize":
 		p.EnableThink = true
 		p.DisableThink = false
