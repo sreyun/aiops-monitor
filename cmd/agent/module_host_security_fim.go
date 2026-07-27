@@ -234,24 +234,6 @@ func fileExecutable(p string) bool {
 	return fi.Mode()&0o111 != 0
 }
 
-func fimAllowContentDiff(p string) bool {
-	base := strings.ToLower(filepath.Base(p))
-	// Never content-diff secrets / private keys.
-	if base == "shadow" || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") ||
-		strings.Contains(base, "id_rsa") || strings.Contains(base, "id_ed25519") ||
-		strings.Contains(base, "private") {
-		return false
-	}
-	switch base {
-	case "sshd_config", "hosts", "crontab", "sudoers", "resolv.conf", "nsswitch.conf", "rc.local":
-		return true
-	}
-	if strings.Contains(p, string(filepath.Separator)+"cron.d"+string(filepath.Separator)) {
-		return true
-	}
-	return false
-}
-
 func fimTextCacheDir() string {
 	var candidates []string
 	if fimStateDirHint != "" {
@@ -307,6 +289,28 @@ func fimIsTextual(raw []byte) bool {
 		return false
 	}
 	return ctrl*10 <= len(raw) // ≤10% control bytes
+}
+
+// fimSeedTextCache snapshots a content-audit file the first time it is seen, so
+// the NEXT modification can be diffed. Existing snapshots are left alone —
+// overwriting them here would erase the "before" side of the current change.
+func fimSeedTextCache(cacheDir, path, sha string) {
+	if cacheDir == "" || sha == "" {
+		return
+	}
+	metaPath := filepath.Join(cacheDir, fimCacheKey(path)+".sha")
+	if _, err := os.Stat(metaPath); err == nil {
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || int64(len(raw)) > fimMaxTextBytes || !fimIsTextual(raw) {
+		return
+	}
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		return
+	}
+	_ = os.WriteFile(metaPath, []byte(sha+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(cacheDir, fimCacheKey(path)+".txt"), raw, 0o600)
 }
 
 func fimMaybeTextDiff(cacheDir, path, newSHA string) (hostSecTextDiff, bool) {

@@ -1,6 +1,7 @@
 ﻿# Compiled binaries
 bin/
 /agent
+/server
 *.exe
 
 # Distribution directory (agent binaries + plugins.zip for one-line install)

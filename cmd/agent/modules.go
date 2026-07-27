@@ -102,6 +102,8 @@ func (a *Agent) runModule(payload string) (out []byte, code int) {
 		return moduleSecurityListen()
 	case "host_security_scan":
 		return moduleHostSecurityScan(mc.Args)
+	case "clamav_update":
+		return moduleClamavUpdate(mc.Args)
 	case "auth_failures":
 		return moduleAuthFailures()
 	case "bigdata_jps":

@@ -129,9 +129,11 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	}
 	// Host / Web security scan: operator+; nuclei path & allow_private config → admin.
 	if p == "/api/v1/security/overview" || strings.HasPrefix(p, "/api/v1/security/host") || strings.HasPrefix(p, "/api/v1/security/web") ||
-		strings.HasPrefix(p, "/api/v1/security/findings/") {
+		strings.HasPrefix(p, "/api/v1/security/feeds") || strings.HasPrefix(p, "/api/v1/security/findings/") {
+		// Feed settings carry an outbound proxy URL and can start large
+		// downloads, so writes there are admin-only like the engine config.
 		if p == "/api/v1/security/web/config" || p == "/api/v1/security/host/config" ||
-			p == "/api/v1/security/web/engine/refresh" {
+			p == "/api/v1/security/web/engine/refresh" || strings.HasPrefix(p, "/api/v1/security/feeds/") {
 			if r.Method != http.MethodGet {
 				return rank >= roleRank(RoleAdmin)
 			}

@@ -20,6 +20,10 @@ const (
 	hostSecMaxScans   = 200
 	hostSecMaxPkgsOSV = 120
 	defaultOSVURL     = "https://api.osv.dev/v1/querybatch"
+
+	defaultFIMMaxFiles   = 150000
+	defaultFIMMaxChanges = 500
+	defaultFIMBudgetSec  = 90
 )
 
 // HostSecurityConfig controls scheduled host scans and OSV matching.
@@ -35,7 +39,16 @@ type HostSecurityConfig struct {
 	FIMContentDiff        bool `json:"fim_content_diff"`
 	DisableFIM            bool `json:"disable_fim,omitempty"`
 	DisableFIMContentDiff bool `json:"disable_fim_content_diff,omitempty"`
-	TimeoutSec            int  `json:"timeout_sec,omitempty"`
+	// FIMScope selects "full" (walk every directory, metadata-only add/modify/delete)
+	// or "sensitive" (legacy allowlist with server-side inventory diff).
+	FIMScope        string   `json:"fim_scope,omitempty"`
+	FIMRoots        []string `json:"fim_roots,omitempty"`
+	FIMExcludes     []string `json:"fim_excludes,omitempty"`
+	FIMContentPaths []string `json:"fim_content_paths,omitempty"` // content-audit whitelist (globs)
+	FIMMaxFiles     int      `json:"fim_max_files,omitempty"`
+	FIMMaxChanges   int      `json:"fim_max_changes,omitempty"`
+	FIMBudgetSec    int      `json:"fim_budget_sec,omitempty"`
+	TimeoutSec      int      `json:"timeout_sec,omitempty"`
 	// AutoAISummary runs host_security_diagnosis after completed scans (non-blocking).
 	AutoAISummary bool `json:"auto_ai_summary,omitempty"`
 }
@@ -47,7 +60,25 @@ func (c HostSecurityConfig) withDefaults() HostSecurityConfig {
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 180
 	}
+	c.FIMScope = normalizeFIMScope(c.FIMScope)
+	if c.FIMMaxFiles <= 0 {
+		c.FIMMaxFiles = defaultFIMMaxFiles
+	}
+	if c.FIMMaxChanges <= 0 {
+		c.FIMMaxChanges = defaultFIMMaxChanges
+	}
+	if c.FIMBudgetSec <= 0 {
+		c.FIMBudgetSec = defaultFIMBudgetSec
+	}
 	return c
+}
+
+// normalizeFIMScope defaults to full-filesystem monitoring.
+func normalizeFIMScope(s string) string {
+	if strings.EqualFold(strings.TrimSpace(s), "sensitive") {
+		return "sensitive"
+	}
+	return "full"
 }
 
 // clamAVEnabled defaults ON. Opt out with disable_clamav=true (preferred) or
@@ -89,6 +120,13 @@ func (cs *ConfigStore) SetHostSecurity(c HostSecurityConfig) error {
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 180
 	}
+	c.FIMScope = normalizeFIMScope(c.FIMScope)
+	c.FIMRoots = sanitizeFIMPathList(c.FIMRoots, 32)
+	c.FIMExcludes = sanitizeFIMPathList(c.FIMExcludes, 200)
+	c.FIMContentPaths = sanitizeFIMPathList(c.FIMContentPaths, 200)
+	c.FIMMaxFiles = clampInt(c.FIMMaxFiles, defaultFIMMaxFiles, 1000, 2000000)
+	c.FIMMaxChanges = clampInt(c.FIMMaxChanges, defaultFIMMaxChanges, 10, 5000)
+	c.FIMBudgetSec = clampInt(c.FIMBudgetSec, defaultFIMBudgetSec, 5, 900)
 	cs.cfg.HostSecurity = c
 	cs.mu.Unlock()
 	return cs.save()
@@ -120,11 +158,13 @@ type hsAgentFinding struct {
 }
 
 type hsAgentMalware struct {
-	ClamAV   string           `json:"clamav"`
-	Version  string           `json:"version,omitempty"`
-	Scanned  int              `json:"scanned"`
-	Infected []string         `json:"infected,omitempty"`
-	Findings []hsAgentFinding `json:"findings,omitempty"`
+	ClamAV    string           `json:"clamav"`
+	Version   string           `json:"version,omitempty"`
+	Scanned   int              `json:"scanned"`
+	Infected  []string         `json:"infected,omitempty"`
+	Findings  []hsAgentFinding `json:"findings,omitempty"`
+	DBAgeDays int              `json:"db_age_days,omitempty"`
+	DBUpdated int64            `json:"db_updated,omitempty"`
 }
 
 type hsAgentFirewall struct {
@@ -150,6 +190,44 @@ type hsAgentTextDiff struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+// hsAgentFileChange is a delta computed by a full-scope FIM agent.
+type hsAgentFileChange struct {
+	Path      string `json:"path"`
+	Change    string `json:"change"`
+	Reason    string `json:"reason,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	OldSHA    string `json:"old_sha,omitempty"`
+	NewSHA    string `json:"new_sha,omitempty"`
+	OldSize   int64  `json:"old_size,omitempty"`
+	NewSize   int64  `json:"new_size,omitempty"`
+	OldMtime  int64  `json:"old_mtime,omitempty"`
+	NewMtime  int64  `json:"new_mtime,omitempty"`
+	OldMode   string `json:"old_mode,omitempty"`
+	NewMode   string `json:"new_mode,omitempty"`
+	Diff      string `json:"diff,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+type hsAgentFIMStats struct {
+	Mode         string   `json:"mode"`
+	Baseline     bool     `json:"baseline,omitempty"`
+	Roots        []string `json:"roots,omitempty"`
+	Files        int      `json:"files"`
+	Dirs         int      `json:"dirs"`
+	Added        int      `json:"added"`
+	Removed      int      `json:"removed"`
+	Modified     int      `json:"modified"`
+	Reported     int      `json:"reported"`
+	Hashed       int      `json:"hashed,omitempty"`
+	Skipped      int      `json:"skipped,omitempty"`
+	LimitHit     bool     `json:"limit_hit,omitempty"`
+	BudgetHit    bool     `json:"budget_hit,omitempty"`
+	Truncated    bool     `json:"truncated,omitempty"`
+	DurationMS   int64    `json:"duration_ms"`
+	ContentPaths int      `json:"content_paths,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
 type hsAgentReport struct {
 	CollectedAt   int64             `json:"collected_at"`
 	Hostname      string            `json:"hostname"`
@@ -165,9 +243,11 @@ type hsAgentReport struct {
 	IOC           []hsAgentFinding  `json:"ioc"`
 	Malware       hsAgentMalware    `json:"malware"`
 	Firewall      hsAgentFirewall   `json:"firewall"`
-	FileInventory []hsAgentFileInv  `json:"file_inventory,omitempty"`
-	FileTextDiffs []hsAgentTextDiff `json:"file_text_diffs,omitempty"`
-	Meta          map[string]any    `json:"meta,omitempty"`
+	FileInventory []hsAgentFileInv    `json:"file_inventory,omitempty"`
+	FileTextDiffs []hsAgentTextDiff   `json:"file_text_diffs,omitempty"`
+	FileChanges   []hsAgentFileChange `json:"file_changes,omitempty"`
+	FIMStats      *hsAgentFIMStats    `json:"fim_stats,omitempty"`
+	Meta          map[string]any      `json:"meta,omitempty"`
 }
 
 // HostFileHash is a trimmed inventory entry stored with a scan.
@@ -179,16 +259,44 @@ type HostFileHash struct {
 	Kind   string `json:"kind,omitempty"`
 }
 
-// HostFileChange is a FIM delta vs the previous completed scan baseline.
+// HostFileChange is a FIM delta: either agent-computed (full scope) or derived
+// server-side from the inventory of a sensitive-scope agent.
 type HostFileChange struct {
 	Path      string `json:"path"`
-	Change    string `json:"change"` // added|removed|modified
+	Change    string `json:"change"`           // added|removed|modified
+	Reason    string `json:"reason,omitempty"` // content|size|mtime|mode
+	Kind      string `json:"kind,omitempty"`
 	OldSHA    string `json:"old_sha,omitempty"`
 	NewSHA    string `json:"new_sha,omitempty"`
+	OldSize   int64  `json:"old_size,omitempty"`
+	NewSize   int64  `json:"new_size,omitempty"`
 	OldMtime  int64  `json:"old_mtime,omitempty"`
 	NewMtime  int64  `json:"new_mtime,omitempty"`
+	OldMode   string `json:"old_mode,omitempty"`
+	NewMode   string `json:"new_mode,omitempty"`
 	Diff      string `json:"diff,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// HostFIMStats records what the agent actually walked, so the UI can state the
+// real coverage instead of implying a full filesystem was inspected.
+type HostFIMStats struct {
+	Mode         string   `json:"mode"` // full|sensitive
+	Baseline     bool     `json:"baseline,omitempty"`
+	Roots        []string `json:"roots,omitempty"`
+	Files        int      `json:"files"`
+	Dirs         int      `json:"dirs"`
+	Added        int      `json:"added"`
+	Removed      int      `json:"removed"`
+	Modified     int      `json:"modified"`
+	Reported     int      `json:"reported"`
+	Skipped      int      `json:"skipped,omitempty"`
+	LimitHit     bool     `json:"limit_hit,omitempty"`
+	BudgetHit    bool     `json:"budget_hit,omitempty"`
+	Truncated    bool     `json:"truncated,omitempty"`
+	DurationMS   int64    `json:"duration_ms,omitempty"`
+	ContentPaths int      `json:"content_paths,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // HostFinding is a normalized finding after server-side enrichment.
@@ -206,6 +314,9 @@ type HostFinding struct {
 	Severity   string `json:"severity,omitempty"`
 	Status     string `json:"status,omitempty"` // open|ack|false_positive|resolved
 	StatusNote string `json:"status_note,omitempty"`
+	// Compliance maps the finding to the controls it violates (CIS / 等保2.0 /
+	// PCI-DSS / ISO27001) so scan output is usable as audit evidence.
+	Compliance []ComplianceRef `json:"compliance,omitempty"`
 }
 
 // HostScanResult is one completed (or failed) host security scan.
@@ -222,6 +333,7 @@ type HostScanResult struct {
 	Score          int               `json:"score"` // 0–100
 	Risk           string            `json:"risk"`  // critical|high|medium|low|info
 	ClamAV         string            `json:"clamav,omitempty"`
+	ClamAVDBAge    int               `json:"clamav_db_age_days,omitempty"`
 	Firewall       string            `json:"firewall,omitempty"`        // on|off|partial|unknown
 	FirewallEngine string            `json:"firewall_engine,omitempty"` // ufw|firewalld|macos|windows|...
 	FirewallDetail string            `json:"firewall_detail,omitempty"`
@@ -242,6 +354,8 @@ type HostScanResult struct {
 	FileInventory  []HostFileHash    `json:"file_inventory,omitempty"`
 	FileChanges    []HostFileChange  `json:"file_changes,omitempty"`
 	FIMBaseline    bool              `json:"fim_baseline_established,omitempty"`
+	FIMStats       *HostFIMStats     `json:"fim_stats,omitempty"`
+	Compliance     map[string]int    `json:"compliance,omitempty"` // framework → failing controls
 	AISummary      string            `json:"ai_summary,omitempty"`
 	AISummaryAt    int64             `json:"ai_summary_at,omitempty"`
 }
@@ -1131,6 +1245,8 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	}
 	if !cfg.fimEnabled() {
 		args["fim"] = "0"
+	} else {
+		applyFIMScanArgs(args, cfg)
 	}
 	if !cfg.fimContentDiffEnabled() {
 		args["fim_diff"] = "0"
@@ -1203,18 +1319,29 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 
 	var fileChanges []HostFileChange
 	fimBaseline := false
+	fimStats := convertAgentFIMStats(rep.FIMStats)
+	// A full-scope agent owns its baseline and ships deltas; only legacy
+	// sensitive-scope agents need the server to diff an inventory.
+	agentOwnsFIM := fimStats != nil && fimStats.Mode == "full"
 	if cfg.fimEnabled() {
-		textDiffs := rep.FileTextDiffs
-		if !cfg.fimContentDiffEnabled() {
-			textDiffs = nil
+		if agentOwnsFIM {
+			fileChanges = convertAgentFileChanges(rep.FileChanges, cfg.fimContentDiffEnabled())
+			fimBaseline = fimStats.Baseline
+			curInv = nil
+		} else {
+			textDiffs := rep.FileTextDiffs
+			if !cfg.fimContentDiffEnabled() {
+				textDiffs = nil
+			}
+			fileChanges, fimBaseline = diffHostFileInventory(prevInv, curInv, textDiffs)
 		}
-		fileChanges, fimBaseline = diffHostFileInventory(prevInv, curInv, textDiffs)
 		if len(fileChanges) > 0 {
 			base = append(base, fimFindingsFromChanges(fileChanges)...)
 		}
 	}
 
-	findings := mergeAndCapFindings(base, portRiskFindings(ports), 400)
+	findings := annotateCompliance(mergeAndCapFindings(base, portRiskFindings(ports), 400))
+	compliance := summarizeCompliance(findings)
 	cveCount := 0
 	for _, f := range findings {
 		if f.Category == "cve" && f.ID != "osv.unavailable" {
@@ -1234,6 +1361,7 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 		live.OS = rep.OS
 		live.Distro = rep.Distro
 		live.ClamAV = rep.Malware.ClamAV
+		live.ClamAVDBAge = rep.Malware.DBAgeDays
 		live.Firewall = strings.ToLower(strings.TrimSpace(rep.Firewall.Status))
 		if live.Firewall == "" {
 			live.Firewall = "unknown"
@@ -1247,14 +1375,21 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 		live.RiskyPortCount = riskyCount
 		live.PortSample = portSample
 		live.Findings = findings
+		live.Compliance = compliance
 		live.Score = score
 		live.Risk = risk
 		live.Summary = summary
 		live.Remediation = tips
 		live.BaselineDiff = baseDiff
-		live.FileInventory = pickFIMInventoryToStore(curInv, live.FileInventory, prevInv, cfg.fimEnabled())
+		if agentOwnsFIM {
+			// Nothing to keep: the filesystem-wide baseline lives on the agent.
+			live.FileInventory = nil
+		} else {
+			live.FileInventory = pickFIMInventoryToStore(curInv, live.FileInventory, prevInv, cfg.fimEnabled())
+		}
 		live.FileChanges = fileChanges
 		live.FIMBaseline = fimBaseline
+		live.FIMStats = fimStats
 		live.Status = "completed"
 		live.Error = ""
 	})

@@ -86,6 +86,25 @@ function hostCard(h) {
   </div>`;
 }
 
+/* ---------- 渲染：主机列表表头（列表视图） ---------- */
+// Column labels turn the dense row into a scannable table. The header reuses the
+// row's column classes so both react to the same container queries and stay
+// aligned when a column drops out on narrow layouts.
+function hostListHeader() {
+  const sel = (typeof agentSelectSpacerHTML === "function") ? agentSelectSpacerHTML() : "";
+  return `<div class="hrow-head" role="row">
+    ${sel}<span class="hrow-dot" aria-hidden="true"></span>
+    <div class="hrow-id">${esc(I18N.t("ui.col_host", "主机"))}</div>
+    <span class="hh-os">${esc(I18N.t("ui.col_os", "系统"))}</span>
+    <span class="hh-cat">${esc(I18N.t("ui.col_group", "分组"))}</span>
+    <div class="hrow-metrics">${esc(I18N.t("ui.col_usage", "资源使用"))}</div>
+    <span class="hrow-net">${esc(I18N.t("ui.col_net", "网络"))}</span>
+    <span class="hrow-load">${esc(I18N.t("ui.col_load", "负载"))}</span>
+    <span class="hrow-last">${esc(I18N.t("ui.col_status", "状态"))}</span>
+    <span class="hrow-actions">${esc(I18N.t("ui.col_actions", "操作"))}</span>
+  </div>`;
+}
+
 /* ---------- 渲染：主机列表行（列表视图） ---------- */
 function hostRow(h) {
   const m = h.latest || {};
@@ -116,7 +135,9 @@ function hostRow(h) {
   const deskBtn = (h.online && DESKTOP_ENABLED)
     ? `<button class="term-btn desktop-btn" data-act="desktop" title="${I18N.t('desktop.btn_title')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>`
     : "";
-  const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
+  // Rendered even when the platform reports no load average: an omitted cell
+  // would pull every following column left and break alignment with the header.
+  const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "—";
   const ipTitle = h.ip ? esc(h.ip) : "";
   const agentVer = (typeof agentVersionBadgeHTML === "function") ? agentVersionBadgeHTML(h) : "";
   const agentSel = (typeof agentSelectCheckboxHTML === "function") ? agentSelectCheckboxHTML(h) : "";
@@ -133,7 +154,7 @@ function hostRow(h) {
       ${miniBar("CPU", m.cpu_percent)}${miniBar(I18N.t("ui.memory"), m.mem_percent)}${miniBar(I18N.t("ui.disk"), diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
     <span class="hrow-net g">↑<span class="mono">${fmtRate(m.net_sent_rate || 0)}</span> ↓<span class="mono">${fmtRate(m.net_recv_rate || 0)}</span></span>
-    ${loadStr ? `<span class="hrow-load mono">${loadStr}</span>` : ""}
+    <span class="hrow-load mono">${loadStr}</span>
     <span class="hrow-last">${last}</span>
     <span class="ch-actions hrow-actions">${termBtn}${deskBtn}<button class="mini-btn del" data-act="del" title="${I18N.t("ui.delete")}">✕</button></span>
   </div>`;
@@ -833,7 +854,8 @@ function renderHosts(hosts) {
   LAST_RENDER_KEY = newKey;
 
   // 选中节点下扁平展示（卡片/列表），不再按路径二次分组
-  groupsEl.innerHTML = `<div class="group htx-flat"><div class="${wrapCls}">${pageHosts.map(render).join("")}</div></div>`;
+  const head = isList ? hostListHeader() : "";
+  groupsEl.innerHTML = `<div class="group htx-flat"><div class="${wrapCls}">${head}${pageHosts.map(render).join("")}</div></div>`;
   buildHostCache();
   renderPager(pages, shown.length);
 }
