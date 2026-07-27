@@ -8,9 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 )
@@ -195,38 +193,7 @@ func machineID() string {
 	if v := strings.TrimSpace(os.Getenv("AIOPS_MACHINE_ID")); v != "" {
 		return v
 	}
-	switch runtime.GOOS {
-	case "linux":
-		for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-			if b, err := os.ReadFile(p); err == nil {
-				if s := strings.TrimSpace(string(b)); s != "" {
-					return s
-				}
-			}
-		}
-	case "windows":
-		out, _ := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid").Output()
-		for _, ln := range strings.Split(string(out), "\n") {
-			if strings.Contains(ln, "MachineGuid") {
-				if f := strings.Fields(ln); len(f) >= 3 {
-					return f[len(f)-1]
-				}
-			}
-		}
-	case "darwin":
-		out, _ := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
-		for _, ln := range strings.Split(string(out), "\n") {
-			if strings.Contains(ln, "IOPlatformUUID") {
-				if i := strings.Index(ln, `= "`); i >= 0 {
-					rest := ln[i+3:]
-					if j := strings.IndexByte(rest, '"'); j >= 0 {
-						return rest[:j]
-					}
-				}
-			}
-		}
-	}
-	return ""
+	return machineIDFromOS()
 }
 
 // primaryMAC returns the hardware address of the first up, non-loopback

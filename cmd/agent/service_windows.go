@@ -27,6 +27,7 @@ var (
 	procCloseServiceHandle            = modAdvapi32Ctl.NewProc("CloseServiceHandle")
 	procStartServiceW                 = modAdvapi32Ctl.NewProc("StartServiceW")
 	procControlServiceCtl             = modAdvapi32Ctl.NewProc("ControlService")
+	procQueryServiceStatus            = modAdvapi32Ctl.NewProc("QueryServiceStatus")
 	procChangeServiceConfigW          = modAdvapi32Ctl.NewProc("ChangeServiceConfigW")
 	procChangeServiceConfig2W         = modAdvapi32Ctl.NewProc("ChangeServiceConfig2W")
 	procStartServiceCtrlDispatcherW   = modAdvapi32Ctl.NewProc("StartServiceCtrlDispatcherW")
@@ -148,14 +149,39 @@ func installAgentService(exePath, cfgPath string) error {
 		slog.Warn("启用 SoftwareSASGeneration 失败（锁屏 Ctrl+Alt+Del 可能无效）", "err", err)
 	}
 
-	// Start it now.
+	// Start it now and wait until SCM reports Running. Returning success while
+	// the service is still StartPending / immediately Stopped is how Win10/11
+	// and locked-down Server installs looked "green" with an empty dashboard.
 	if r, _, e3 := procStartServiceW.Call(svc, 0, 0); r == 0 {
 		// ERROR_SERVICE_ALREADY_RUNNING = 1056 is fine.
 		if en, ok := e3.(syscall.Errno); !ok || en != 1056 {
-			slog.Warn("服务已安装但启动失败，可稍后手动启动", "err", e3)
+			return fmt.Errorf("StartService 失败: %v", e3)
 		}
 	}
+	if err := waitServiceRunning(svc, 45*time.Second); err != nil {
+		return fmt.Errorf("服务未能进入 Running：%w（查看安装目录 agent.log）", err)
+	}
 	return nil
+}
+
+// waitServiceRunning polls SCM until the service is Running, or fails.
+func waitServiceRunning(svc uintptr, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var st serviceStatus
+	for time.Now().Before(deadline) {
+		r, _, e := procQueryServiceStatus.Call(svc, uintptr(unsafe.Pointer(&st)))
+		if r == 0 {
+			return fmt.Errorf("QueryServiceStatus: %v", e)
+		}
+		switch st.CurrentState {
+		case serviceRunning:
+			return nil
+		case serviceStopped:
+			return fmt.Errorf("服务启动后立即停止 (Win32ExitCode=%d ServiceSpecific=%d)", st.Win32ExitCode, st.ServiceSpecificExitCode)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("等待 Running 超时 (最后状态=%d)", st.CurrentState)
 }
 
 // reopenAndUpdate reopens an existing service and rewrites its binary path so an

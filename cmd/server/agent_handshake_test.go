@@ -220,11 +220,14 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	must("install.ps1 (zip)", ps1In,
 		"System.IO.Compression.ZipFile", "ZipFileExtensions", "capability summary")
 	// Prefer elevated Program Files install for Hyper-V / Smart App Control /
-	// AppLocker — AppData per-user installs are the common Win10/11 deny target.
+	// AppLocker / Windows 10-11 workstations — AppData per-user installs are the
+	// common deny target, and disabled WScript leaves a silent "installed" state.
 	must("install.ps1 (uac)", ps1In,
 		"Get-Service -Name vmms", "-Verb RunAs", "-EncodedCommand",
 		"SecurityProtocol", "Request-AiopsElevatedInstall",
-		"Test-AiopsSmartAppControlOn", "Test-AiopsAppLockerPresent", "PreferElevated")
+		"Test-AiopsSmartAppControlOn", "Test-AiopsAppLockerPresent", "PreferElevated",
+		"IsWorkstation", "ProductType", "Test-AiopsWindowsSupported",
+		"Test-AiopsWScriptEnabled", "Start-Process -FilePath $exe")
 	// Elevated installs must register the real Windows service (boot autostart +
 	// crash-recovery + interactive desktop worker), which is what makes Hyper-V
 	// collection, reboot persistence, and lock-screen remote desktop all work.

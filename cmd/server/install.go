@@ -770,9 +770,21 @@ function Request-AiopsElevatedInstall([string]$Reason) {
 $SacOnEarly = Test-AiopsSmartAppControlOn
 $AppLockerEarly = Test-AiopsAppLockerPresent
 $HyperVHost = [bool](Get-Service -Name vmms -ErrorAction SilentlyContinue)
-# Prefer Program Files + Windows service whenever Soft policies / Hyper-V make
-# per-user AppData installs fragile. AppData is the #1 AppLocker deny target.
-$PreferElevated = $HyperVHost -or $SacOnEarly -or $AppLockerEarly
+# Win10/11 workstations: AppData + non-elevated installs fail often (Smart App
+# Control, AppLocker, UAC, disabled WScript). Prefer Program Files + service.
+$IsWorkstation = $false
+try {
+  $pt = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).ProductType
+  if ($pt -eq 1) { $IsWorkstation = $true }
+} catch {
+  try {
+    $pt = (Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop).ProductType
+    if ($pt -eq 1) { $IsWorkstation = $true }
+  } catch {}
+}
+# Prefer Program Files + Windows service whenever Soft policies / Hyper-V / Win10-11
+# make per-user AppData installs fragile. AppData is the #1 AppLocker deny target.
+$PreferElevated = $HyperVHost -or $SacOnEarly -or $AppLockerEarly -or $IsWorkstation
 if (-not $IsAdmin -and $PreferElevated) {
   if ($HyperVHost) {
     Write-Host "[AIOps] Hyper-V host detected but PowerShell is not elevated."
@@ -780,6 +792,9 @@ if (-not $IsAdmin -and $PreferElevated) {
   } elseif ($SacOnEarly) {
     Write-Host '[AIOps] Smart App Control is ON - preferring elevated Program Files install.'
     Write-Host '[AIOps] 智能应用控制已开启：优先请求管理员安装到 Program Files（若仍拦截需临时关闭 SAC）。'
+  } elseif ($IsWorkstation) {
+    Write-Host '[AIOps] Windows 10/11 detected - preferring elevated Program Files + Windows service install.'
+    Write-Host '[AIOps] 检测到 Windows 10/11：优先请求管理员安装到 Program Files 并注册系统服务（避免用户态 Run/WScript 被策略拦截）。'
   } else {
     Write-Host '[AIOps] AppLocker/policy detected - preferring elevated Program Files install.'
     Write-Host '[AIOps] 检测到应用程序控制策略：优先请求管理员安装到 Program Files（受信任路径）。'
@@ -806,6 +821,28 @@ if ($IsAdmin) {
 }
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
+
+# Agent builds target modern Windows (Server 2016+ / Windows 10+). Server 2012/R2
+# and Windows 7/8 fail silently or crash under current Go runtimes — fail loud.
+function Test-AiopsWindowsSupported {
+  try {
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+  } catch {
+    try { $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop } catch { return $true }
+  }
+  $ver = [version]$os.Version
+  # Windows 10/11 and Server 2016+ all report major=10. Older kernels (6.x) are
+  # Windows 7/8/8.1 and Server 2008R2/2012/2012R2 — unsupported by this Agent.
+  if ($ver.Major -lt 10) {
+    Write-Host ""
+    Write-Host ("[AIOps] FATAL: " + $os.Caption + " (" + $os.Version + ") is not supported by this Agent build.") -ForegroundColor Red
+    Write-Host "[AIOps] Supported: Windows 10/11, Windows Server 2016 / 2019 / 2022 / 2025." -ForegroundColor Yellow
+    Write-Host "[AIOps] 当前 Agent 不支持 Windows 7/8 与 Windows Server 2012/2012 R2；请升级 OS 或使用兼容旧系统的历史版本。" -ForegroundColor Yellow
+    return $false
+  }
+  return $true
+}
+if (-not (Test-AiopsWindowsSupported)) { throw "Unsupported Windows version for AIOps Agent" }
 
 # Never call cmd.exe — locked-down hosts often block it via GPO ("This program is
 # blocked by group policy") while still allowing PowerShell + schtasks.exe/sc.exe.
@@ -1468,16 +1505,45 @@ if ($IsAdmin) {
   }
   $ErrorActionPreference = $eap
 } else {
-  # Non-elevated: classic per-user autostart (unchanged). Works without admin but
-  # CANNOT collect Hyper-V guests -- Get-VM needs elevation.
-  New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
-  $trTask = 'wscript.exe \"' + $vbs + '\"'
+  # Non-elevated: classic per-user autostart. Prefer launching the exe directly —
+  # many Win10/11 / enterprise images disable Windows Script Host, which made the
+  # old VBS+Run-key path look installed while nothing ever started.
+  function Test-AiopsWScriptEnabled {
+    try {
+      $hkcu = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows Script Host\Settings' -ErrorAction SilentlyContinue
+      if ($hkcu -and $hkcu.Enabled -eq 0) { return $false }
+    } catch {}
+    try {
+      $hklm = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows Script Host\Settings' -ErrorAction SilentlyContinue
+      if ($hklm -and $hklm.Enabled -eq 0) { return $false }
+    } catch {}
+    return $true
+  }
+  $WshOk = Test-AiopsWScriptEnabled
+  $AgentCmd = '"' + $exe + '" --config "' + $conf + '"'
+  New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -Value $AgentCmd -PropertyType String -Force | Out-Null
+  if ($WshOk) {
+    $trTask = 'wscript.exe \"' + $vbs + '\"'
+  } else {
+    Write-Host "[AIOps] Windows Script Host is disabled; using direct agent autostart (no VBS)." -ForegroundColor Yellow
+    $trTask = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Process -FilePath ''' + $exe + ''' -ArgumentList ''--config'',''' + $conf + ''' -WindowStyle Hidden"'
+  }
   $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   & "$env:SystemRoot\System32\schtasks.exe" /Create /TN "AIOpsAgent" /TR $trTask /SC MINUTE /MO 5 /F 1>$null 2>$null | Out-Null
   $ErrorActionPreference = $eap
-  Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
+  # Start immediately (do not rely solely on Run key / schtasks / WScript).
+  try {
+    Start-Process -FilePath $exe -ArgumentList @('--config', $conf) -WindowStyle Hidden -ErrorAction Stop
+    Write-Host "[AIOps] agent process started (user-level)."
+  } catch {
+    Write-Host ("[AIOps] WARN: failed to start agent process: " + $_.Exception.Message) -ForegroundColor Yellow
+    if ($WshOk) {
+      Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"') -ErrorAction SilentlyContinue
+    }
+  }
   Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
   Write-Host "[AIOps] NOTE: Hyper-V VM collection needs admin. On a Hyper-V host, re-run this install command in an ELEVATED PowerShell."
+  Write-Host "[AIOps] TIP: For reliable boot-time monitoring on Windows 10/11, re-run in an elevated PowerShell (registers AiopsMonitorAgent service)."
 }
 # Prove the host can actually reach the panel before claiming success.
 # "Service is Running" says nothing about DNS, firewalls or token validity: a

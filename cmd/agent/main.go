@@ -276,8 +276,9 @@ func main() {
 	resolveConfigRelativePaths(&cfg, cfgPath)
 	// Service / desktop-worker stderr goes nowhere on Windows. Without a log file
 	// a failing service is completely silent: no host in the dashboard and no
-	// evidence anywhere on the machine.
-	if svcRun || desktopWorker {
+	// evidence anywhere on the machine. Interactive / per-user Win10/11 installs
+	// also hide the console (VBS/Run key), so always mirror logs on Windows.
+	if svcRun || desktopWorker || runtime.GOOS == "windows" {
 		name := "agent.log"
 		if desktopWorker {
 			name = "agent-desktop.log"
@@ -403,7 +404,7 @@ func main() {
 		slog.Info("Agent 上报目标", "server", sc.Server, "config_path", cfgPath)
 	}
 	if selfTest {
-		os.Exit(runSelfTest(os.Stdout, servers, hostID, cfgPath))
+		os.Exit(runSelfTest(os.Stdout, servers, hostID, cfgPath, cfg.StateFile))
 	}
 	agent := NewAgent(
 		servers,

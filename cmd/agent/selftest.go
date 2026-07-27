@@ -32,7 +32,7 @@ import (
 // the host card exists. It is also idempotent — the service registering with the
 // same host_id and fingerprint a second later changes nothing and consumes no
 // extra install-token use.
-func runSelfTest(out io.Writer, servers []ServerConfig, hostID, cfgPath string) int {
+func runSelfTest(out io.Writer, servers []ServerConfig, hostID, cfgPath, stateFile string) int {
 	id := identityForSelfTest(hostID)
 	fmt.Fprintf(out, "[selftest] 配置文件 config : %s\n", cfgPath)
 	fmt.Fprintf(out, "[selftest] 主机 host_id    : %s\n", id.HostID)
@@ -49,8 +49,18 @@ func runSelfTest(out io.Writer, servers []ServerConfig, hostID, cfgPath string) 
 
 	failed := 0
 	for _, sc := range servers {
-		if err := selfTestTarget(out, sc, id); err != nil {
+		canonical, err := selfTestTarget(out, sc, id)
+		if err != nil {
 			failed++
+			continue
+		}
+		// Server may return the previously-known host_id (reinstall). Persist it so
+		// the service and selftest share one identity — otherwise the dashboard
+		// briefly shows a ghost host that the service never reports under.
+		if canonical != "" && canonical != id.HostID && stateFile != "" {
+			fmt.Fprintf(out, "[selftest] 同步身份文件 host_id %s → %s\n", id.HostID, canonical)
+			persistHostID(stateFile, canonical, id.Fingerprint)
+			id.HostID = canonical
 		}
 	}
 	if failed > 0 {
@@ -78,14 +88,14 @@ func identityForSelfTest(hostID string) selfTestIdentity {
 	}
 }
 
-func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) error {
+func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) (canonical string, err error) {
 	server := strings.TrimRight(strings.TrimSpace(sc.Server), "/")
 	fmt.Fprintf(out, "[selftest] --- 目标服务端 %s ---\n", server)
 
 	u, err := url.Parse(server)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		fmt.Fprintf(out, "[selftest] FAIL 服务端地址非法: %q（应形如 https://panel.example.com）\n", server)
-		return errors.New("bad url")
+		return "", errors.New("bad url")
 	}
 	if strings.Contains(u.Hostname(), "localhost") || u.Hostname() == "127.0.0.1" {
 		fmt.Fprintln(out, "[selftest] WARN 上报地址是本机回环地址，远程主机永远连不上；请在面板重新生成安装命令。")
@@ -106,7 +116,7 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) error {
 		if err != nil {
 			fmt.Fprintf(out, "[selftest] FAIL DNS 解析 %s 失败: %v\n", host, err)
 			fmt.Fprintln(out, "[selftest]      请检查本机 DNS 设置，或在 config.yaml 里把 server 改成 IP 地址。")
-			return err
+			return "", err
 		}
 		fmt.Fprintf(out, "[selftest] OK   DNS 解析 %s → %s\n", host, strings.Join(addrs, ", "))
 	}
@@ -121,7 +131,7 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) error {
 		} else {
 			fmt.Fprintln(out, "[selftest]      连接被拒绝 = 服务端未监听该端口，或地址/端口填错。")
 		}
-		return err
+		return "", err
 	}
 	_ = conn.Close()
 	fmt.Fprintf(out, "[selftest] OK   TCP 连接 %s:%s (%dms)\n", host, port, time.Since(start).Milliseconds())
@@ -145,7 +155,7 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) error {
 		case isTimeout(err):
 			fmt.Fprintln(out, "[selftest]      TCP 通了但 HTTP 无响应，通常是中间代理/WAF 拦截，或服务端过载。")
 		}
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -157,21 +167,21 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) error {
 		_ = json.NewDecoder(resp.Body).Decode(&r)
 		if r.HostID != "" && r.HostID != id.HostID {
 			fmt.Fprintf(out, "[selftest] OK   注册成功，服务端沿用既有身份 host_id=%s（重装保留历史数据）\n", r.HostID)
-		} else {
-			fmt.Fprintf(out, "[selftest] OK   注册成功 host_id=%s\n", id.HostID)
+			return r.HostID, nil
 		}
-		return nil
+		fmt.Fprintf(out, "[selftest] OK   注册成功 host_id=%s\n", id.HostID)
+		return id.HostID, nil
 	case resp.StatusCode == http.StatusForbidden:
 		fmt.Fprintln(out, "[selftest] FAIL 注册被拒绝 (403)：安装 Token 无效、已过期，或使用次数已用完。")
 		fmt.Fprintln(out, "[selftest]      请在面板「安装客户端」页面重新生成安装命令后重装。")
-		return errors.New("token rejected")
+		return "", errors.New("token rejected")
 	case resp.StatusCode == http.StatusConflict:
 		fmt.Fprintln(out, "[selftest] FAIL 注册冲突 (409)：该 host_id 已被另一台机器占用。")
 		fmt.Fprintln(out, "[selftest]      多半是克隆虚拟机时带上了 agent_state.json。删除该文件后重启 Agent 即可重新分配身份。")
-		return errors.New("host id conflict")
+		return "", errors.New("host id conflict")
 	default:
 		fmt.Fprintf(out, "[selftest] FAIL 注册返回 HTTP %d，服务端拒绝了本次握手。\n", resp.StatusCode)
-		return fmt.Errorf("http %d", resp.StatusCode)
+		return "", fmt.Errorf("http %d", resp.StatusCode)
 	}
 }
 
