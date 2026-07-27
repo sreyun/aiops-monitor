@@ -3367,6 +3367,8 @@ async function openAIConfig(){
     if($("weknoraKBIDs")) $("weknoraKBIDs").value=c.weknora_knowledge_base_ids||"";
     if($("disablePublicChatMemory")) $("disablePublicChatMemory").checked=!!c.disable_public_chat_memory;
     if($("allowUnverifiedAIOutputLearning")) $("allowUnverifiedAIOutputLearning").checked=!!c.allow_unverified_ai_output_learning;
+    if($("autoDefendEnabled")) $("autoDefendEnabled").checked=!!c.auto_defend_enabled;
+    if($("selfEvolveEnabled")) $("selfEvolveEnabled").checked=!!c.self_evolve_enabled;
     if($("aiDailyQuota")) $("aiDailyQuota").value=c.daily_quota_per_user||0;
     if($("aiWriteToolsApproval")) $("aiWriteToolsApproval").checked=c.write_tools_require_approval!==false;
     if($("aiRedactSensitive")) $("aiRedactSensitive").checked=!!c.redact_sensitive_fields;
@@ -3496,6 +3498,8 @@ async function saveAIConfig(){
     weknora_knowledge_base_ids:($("weknoraKBIDs")?.value||"").trim(),
     disable_public_chat_memory:$("disablePublicChatMemory")?.checked||false,
     allow_unverified_ai_output_learning:$("allowUnverifiedAIOutputLearning")?.checked||false,
+    auto_defend_enabled:$("autoDefendEnabled")?.checked||false,
+    self_evolve_enabled:$("selfEvolveEnabled")?.checked||false,
     daily_quota_per_user:$("aiDailyQuota")? (parseInt($("aiDailyQuota").value,10)||0) : 0,
     write_tools_require_approval:$("aiWriteToolsApproval")? !!$("aiWriteToolsApproval").checked : false,
     redact_sensitive_fields:$("aiRedactSensitive")? !!$("aiRedactSensitive").checked : false,
@@ -3834,7 +3838,7 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板制作/优化、趋势图表与指标下钻、诊断与安全加固、指标日志告警排查、RAG 知识库、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">趋势图表</span><span class="ai-cap-chip">指标下钻</span><span class="ai-cap-chip">看板制作</span><span class="ai-cap-chip">AI 诊断</span><span class="ai-cap-chip">安全加固</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板组件调用、任意界面调度、趋势图表与指标下钻、安全自动防御、自我进化与记忆优化、诊断加固、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">看板组件</span><span class="ai-cap-chip">界面调度</span><span class="ai-cap-chip">安全防御</span><span class="ai-cap-chip">自我进化</span><span class="ai-cap-chip">趋势图表</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 
 function aiChatActionKey(a){
   return (a.type||"")+"|"+(a.id||"")+"|"+(a.title||"")+"|"+(a.label||"");
@@ -3870,6 +3874,32 @@ function renderAIChatWidgets(actions){
         <div class="ai-stat-value">${Number.isFinite(val)?val.toFixed(unit==="%"||unit===""?1:2):"—"}<span class="ai-stat-unit">${esc(unit)}</span></div>
         ${spark?`<div class="ai-stat-spark">${spark}</div>`:""}
       </div>`;
+    } else if(a.type==="show_table"){
+      const cols=Array.isArray(a.columns)?a.columns:[];
+      const rows=Array.isArray(a.rows)?a.rows.slice(0,30):[];
+      const head=cols.map(c=>`<th>${esc(String(c))}</th>`).join("");
+      const body=rows.map(r=>{
+        const cells=cols.map(c=>{
+          const v=r&&Object.prototype.hasOwnProperty.call(r,c)?r[c]:"";
+          return `<td>${esc(v==null?"":String(v))}</td>`;
+        }).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
+      html+=`<div class="ai-table-card">
+        <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"表格")}</span></div>
+        <div class="ai-table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="${Math.max(cols.length,1)}">暂无数据</td></tr>`}</tbody></table></div>
+      </div>`;
+    } else if(a.type==="show_logs"){
+      const lines=Array.isArray(a.lines)?a.lines.slice(0,40):[];
+      const body=lines.map(ln=>{
+        const ts=ln&&ln.ts?esc(String(ln.ts)):"";
+        const text=ln&&ln.line!=null?esc(String(ln.line)):(ln?esc(String(ln)):"");
+        return `<div class="ai-log-line">${ts?`<span class="ai-log-ts">${ts}</span>`:""}<span class="ai-log-text">${text}</span></div>`;
+      }).join("");
+      html+=`<div class="ai-logs-card">
+        <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"日志")}</span></div>
+        <div class="ai-logs-wrap">${body||`<div class="ai-log-line"><span class="ai-log-text">暂无日志</span></div>`}</div>
+      </div>`;
     }
   }
   return html;
@@ -3880,8 +3910,8 @@ function renderAIChatActions(actions){
   const items=[];
   for(const a of actions){
     if(!a||!a.type) continue;
-    // 图表/指标卡已在 widgets 区渲染，按钮区只留可点击动作
-    if(a.type==="show_chart"||a.type==="show_stat") continue;
+    // 图表/指标卡/表格/日志已在 widgets 区渲染，按钮区只留可点击动作
+    if(a.type==="show_chart"||a.type==="show_stat"||a.type==="show_table"||a.type==="show_logs") continue;
     const key=aiChatActionKey(a);
     if(seen.has(key)) continue;
     seen.add(key);
@@ -3926,6 +3956,15 @@ async function handleAIChatAction(a){
     }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
     return;
   }
+  if(a.type==="navigate_view"&&a.view){
+    try{
+      const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
+      if(typeof switchView==="function") switchView(String(a.view));
+      const title=a.title||a.label||a.view;
+      if(typeof toast==="function") toast(I18N.t("sre.opened_view","已打开界面")+" · "+title,"ok");
+    }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+    return;
+  }
   if(a.type==="export_report"){
     await exportAIChatReport(a.title||"AI 分析报告", a.body||"");
     return;
@@ -3944,6 +3983,9 @@ async function handleAIChatAction(a){
     if(target==="dashboard"&&(a.dashboard_id||a.id)){
       return handleAIChatAction({type:"open_dashboard",id:a.dashboard_id||a.id,label:a.label});
     }
+    if(target==="view"&&a.view){
+      return handleAIChatAction({type:"navigate_view",view:a.view,label:a.label,title:a.title});
+    }
     if(target==="prompt"&&a.prompt){
       const inp=$("aiChatInput"); if(inp){ inp.value=String(a.prompt); autoGrowAIInput({target:inp}); }
       sendAIChat();
@@ -3957,7 +3999,7 @@ async function handleAIChatAction(a){
 }
 function bindAIChatActions(root,actions){
   if(!root) return;
-  const clickable=(actions||[]).filter(a=>a&&a.type&&a.type!=="show_chart"&&a.type!=="show_stat");
+  const clickable=(actions||[]).filter(a=>a&&a.type&&a.type!=="show_chart"&&a.type!=="show_stat"&&a.type!=="show_table"&&a.type!=="show_logs");
   root.querySelectorAll("[data-ai-act]").forEach(btn=>{
     btn.onclick=async()=>{
       const a=clickable[Number(btn.dataset.aiAct)];
@@ -4183,10 +4225,10 @@ async function sendAIChat(){
     let streamRAF=null;
     const paintStream=()=>{
       if(!pending) return;
-      const chartPending=(uiActions||[]).some(a=>a&&(a.type==="show_chart"||a.type==="show_stat"));
+      const chartPending=(uiActions||[]).some(a=>a&&(a.type==="show_chart"||a.type==="show_stat"||a.type==="show_table"||a.type==="show_logs"));
       pending.innerHTML=renderReasoningBlock(reasoning,true)+toolTraceHTML()
         +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>"
-        +(chartPending?'<div class="ai-chart-pending">📊 图表/指标卡生成中…</div>':"")
+        +(chartPending?'<div class="ai-chart-pending">📊 图表/组件生成中…</div>':"")
         +renderAIChatActions(uiActions);
       bindAIChatActions(pending,uiActions);
     };

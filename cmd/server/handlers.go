@@ -177,9 +177,12 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 				s.pg.cleanupAlertHistory(ret.AlertHistoryDays)
 				s.pg.cleanupOldFlowPartitions(ret.NetFlowMonths)
 				s.pg.cleanupAICallEvents(ret.AICallDays)
-				// 自进化：把近期高价值经验提炼成可复用技能(SOP)。放在维护循环里而非启动时，
-				// 避免每次启动都触发 AI 调用；提炼失败/无新经验时静默跳过（distillSkills 内部已记日志）。
-				_, _ = s.distillSkills(14)
+				// 自进化：默认仍提炼技能；开启 SelfEvolveEnabled 时额外写成长日记并做完整维护。
+				if s.cfg.AIConfig().SelfEvolveEnabled {
+					s.maybeRunScheduledSelfEvolve()
+				} else {
+					_, _ = s.distillSkills(14)
+				}
 			}
 		}()
 	}

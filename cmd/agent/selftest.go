@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -49,7 +50,7 @@ func runSelfTest(out io.Writer, servers []ServerConfig, hostID, cfgPath, stateFi
 
 	failed := 0
 	for _, sc := range servers {
-		canonical, err := selfTestTarget(out, sc, id)
+		canonical, err := selfTestTarget(out, sc, id, cfgPath)
 		if err != nil {
 			failed++
 			continue
@@ -88,7 +89,7 @@ func identityForSelfTest(hostID string) selfTestIdentity {
 	}
 }
 
-func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) (canonical string, err error) {
+func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity, cfgPath string) (canonical string, err error) {
 	server := strings.TrimRight(strings.TrimSpace(sc.Server), "/")
 	fmt.Fprintf(out, "[selftest] --- 目标服务端 %s ---\n", server)
 
@@ -143,7 +144,7 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) (canoni
 		"token":       sc.Token,
 		"fingerprint": id.Fingerprint,
 	})
-	client := &http.Client{Timeout: 20 * time.Second, Transport: reportTransport}
+	client := newAgentHTTPClient(20 * time.Second)
 	resp, err := client.Post(server+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(out, "[selftest] FAIL 注册请求失败: %v\n", err)
@@ -158,6 +159,15 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) (canoni
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	finalURL := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = strings.TrimRight(resp.Request.URL.Scheme+"://"+resp.Request.URL.Host, "/")
+	}
+	if finalURL != "" && finalURL != server {
+		fmt.Fprintf(out, "[selftest] INFO 注册经重定向：%s → %s（已保留 POST 握手）\n", server, finalURL)
+		upgradeConfigServerURL(cfgPath, server, finalURL, out)
+	}
 
 	switch {
 	case resp.StatusCode < 300:
@@ -179,10 +189,57 @@ func selfTestTarget(out io.Writer, sc ServerConfig, id selfTestIdentity) (canoni
 		fmt.Fprintln(out, "[selftest] FAIL 注册冲突 (409)：该 host_id 已被另一台机器占用。")
 		fmt.Fprintln(out, "[selftest]      多半是克隆虚拟机时带上了 agent_state.json。删除该文件后重启 Agent 即可重新分配身份。")
 		return "", errors.New("host id conflict")
+	case resp.StatusCode == http.StatusNotFound:
+		fmt.Fprintln(out, "[selftest] FAIL 注册返回 HTTP 404。")
+		fmt.Fprintln(out, "[selftest]      常见原因：config.yaml 里 server 仍是 http://，反代 301 到 https 后旧版 Agent 会把 POST 改成 GET，")
+		fmt.Fprintln(out, "[selftest]      服务端只有 POST /api/v1/agent/register，于是变成 404。请把 server 改成 https:// 后重试，或升级 Agent。")
+		snip := readHTTPBodySnip(resp.Body, 180)
+		if snip != "" {
+			fmt.Fprintf(out, "[selftest]      响应摘要: %s\n", snip)
+		}
+		return "", fmt.Errorf("http 404")
 	default:
 		fmt.Fprintf(out, "[selftest] FAIL 注册返回 HTTP %d，服务端拒绝了本次握手。\n", resp.StatusCode)
+		snip := readHTTPBodySnip(resp.Body, 180)
+		if snip != "" {
+			fmt.Fprintf(out, "[selftest]      响应摘要: %s\n", snip)
+		}
 		return "", fmt.Errorf("http %d", resp.StatusCode)
 	}
+}
+
+func readHTTPBodySnip(r io.Reader, n int) string {
+	if n <= 0 {
+		n = 120
+	}
+	b, _ := io.ReadAll(io.LimitReader(r, int64(n)))
+	s := strings.TrimSpace(string(b))
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
+// upgradeConfigServerURL rewrites http://… → https://… in config after a successful
+// redirect so subsequent service reports skip the extra hop.
+func upgradeConfigServerURL(cfgPath, from, to string, out io.Writer) {
+	cfgPath = strings.TrimSpace(cfgPath)
+	from = strings.TrimRight(strings.TrimSpace(from), "/")
+	to = strings.TrimRight(strings.TrimSpace(to), "/")
+	if cfgPath == "" || from == "" || to == "" || from == to {
+		return
+	}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil || !bytes.Contains(b, []byte(from)) {
+		return
+	}
+	nb := bytes.ReplaceAll(b, []byte(from), []byte(to))
+	if bytes.Equal(b, nb) {
+		return
+	}
+	if err := os.WriteFile(cfgPath, nb, 0o644); err != nil {
+		fmt.Fprintf(out, "[selftest] WARN 未能自动把 config 中的 server 改成 %s: %v\n", to, err)
+		return
+	}
+	fmt.Fprintf(out, "[selftest] INFO 已将 config 中的 server 更新为 %s（避免每次 http→https 跳转）\n", to)
 }
 
 func isTimeout(err error) bool {

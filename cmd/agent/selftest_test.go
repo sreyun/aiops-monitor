@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -121,5 +122,37 @@ func TestSelfTestPersistsCanonicalHostID(t *testing.T) {
 	got := readHostIDFromState(state)
 	if got != "canonical-host" {
 		t.Fatalf("state host_id=%q, want canonical-host\n%s", got, out.String())
+	}
+}
+
+func TestSelfTestFollowsHTTPToHTTPSStyleRedirect(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	var gotMethod string
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		var req map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "host_id": req["host_id"]})
+	}))
+	defer final.Close()
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+r.URL.RequestURI(), http.StatusMovedPermanently)
+	}))
+	defer redir.Close()
+
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("server: \""+redir.URL+"\"\ntoken: tok\n"), 0o644)
+
+	var out bytes.Buffer
+	code := runSelfTest(&out, []ServerConfig{{Server: redir.URL, Token: "tok"}}, "host-1", cfg, "")
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out.String())
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("method=%s want POST", gotMethod)
+	}
+	if !strings.Contains(out.String(), "重定向") {
+		t.Fatalf("expected redirect info:\n%s", out.String())
 	}
 }

@@ -100,6 +100,10 @@ type AIConfig struct {
 	SpeechTTSVoice string `json:"speech_tts_voice,omitempty"` // alloy / nova / shimmer …
 	// SpeechPreferCloud：开启后 Web/移动端优先走云端语音（需配置 STT 或 TTS 模型）。
 	SpeechPreferCloud bool `json:"speech_prefer_cloud,omitempty"`
+	// AutoDefendEnabled：登录撞库 / MCP 滥用等安全事件自动留痕、沉淀记忆并可选创建事件单。
+	AutoDefendEnabled bool `json:"auto_defend_enabled,omitempty"`
+	// SelfEvolveEnabled：每日维护循环额外执行技能提炼后的成长日记与自我优化总结。
+	SelfEvolveEnabled bool `json:"self_evolve_enabled,omitempty"`
 }
 
 // embedReady reports whether embedding (RAG write/retrieve) can run.

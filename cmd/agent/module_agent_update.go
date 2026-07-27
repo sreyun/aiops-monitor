@@ -314,21 +314,9 @@ func validateUpdateServerURL(server string, allowedBases []string) error {
 
 func newUpdateHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: reportTransport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			if len(via) == 0 {
-				return nil
-			}
-			orig := via[0].URL
-			if !strings.EqualFold(req.URL.Scheme, orig.Scheme) || !strings.EqualFold(req.URL.Host, orig.Host) {
-				return fmt.Errorf("redirect to different host blocked")
-			}
-			return nil
-		},
+		Timeout:       timeout,
+		Transport:     reportTransport,
+		CheckRedirect: preserveAgentRedirect,
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 )
@@ -112,26 +113,52 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 // at the wrong address". Browsing the panel via a real address, or setting public_url,
 // is both correct and predictable.
 func (s *Server) serverURL(r *http.Request) string {
+	var raw string
 	if u := s.cfg.PublicURL(); u != "" {
-		return u
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	host := r.Host
-	// Honor X-Forwarded-* only when trust_proxy is on — same gate as client IP /
-	// Secure cookie — so a directly-exposed server cannot be tricked into minting
-	// install commands that point at an attacker-controlled host.
-	if s.cfg.TrustProxy() {
-		if p := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); p != "" {
-			scheme = p
+		raw = u
+	} else {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
 		}
-		if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
-			host = h
+		host := r.Host
+		// Honor X-Forwarded-* only when trust_proxy is on — same gate as client IP /
+		// Secure cookie — so a directly-exposed server cannot be tricked into minting
+		// install commands that point at an attacker-controlled host.
+		if s.cfg.TrustProxy() {
+			if p := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); p != "" {
+				scheme = p
+			}
+			if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
+				host = h
+			}
 		}
+		raw = scheme + "://" + host
 	}
-	return scheme + "://" + host
+	// If the admin reached the panel over HTTPS, never mint an http:// install URL
+	// for default ports. Reverse proxies that 301 http→https cause Go's default
+	// HTTP client to convert POST /api/v1/agent/register into GET → 404.
+	if s.isHTTPS(r) {
+		raw = preferHTTPSPublicBase(raw)
+	}
+	return strings.TrimRight(raw, "/")
+}
+
+// preferHTTPSPublicBase upgrades http://host[/] (implicit :80) to https://host.
+// Explicit non-80 ports (lab :8529 etc.) are left alone.
+func preferHTTPSPublicBase(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil || !strings.EqualFold(u.Scheme, "http") {
+		return raw
+	}
+	if p := u.Port(); p != "" && p != "80" {
+		return raw
+	}
+	u.Scheme = "https"
+	u.Host = u.Hostname()
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
 }
 
 // firstForwardedValue returns the first comma-separated token of an X-Forwarded-*

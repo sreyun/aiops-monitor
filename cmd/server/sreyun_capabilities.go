@@ -217,6 +217,44 @@ func drillDownAction(label, target string, extra map[string]any) map[string]any 
 	return act
 }
 
+func navigateViewAction(view, label, title string) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "打开界面"
+	}
+	act := map[string]any{"type": "navigate_view", "view": view, "label": label}
+	if strings.TrimSpace(title) != "" {
+		act["title"] = title
+	}
+	return act
+}
+
+func showTableAction(id, label, title string, columns []string, rows []map[string]any) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "查看表格"
+	}
+	return map[string]any{
+		"type":    "show_table",
+		"id":      id,
+		"label":   label,
+		"title":   title,
+		"columns": columns,
+		"rows":    rows,
+	}
+}
+
+func showLogsAction(id, label, title string, lines []map[string]any) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "查看日志"
+	}
+	return map[string]any{
+		"type":  "show_logs",
+		"id":    id,
+		"label": label,
+		"title": title,
+		"lines": lines,
+	}
+}
+
 func (h *SreyunCore) execListDashboards(args map[string]any) (string, error) {
 	if h.s == nil || h.s.cfg == nil {
 		return capabilityJSON(capabilityResult{OK: false, Error: "配置不可用"}), nil
@@ -290,6 +328,7 @@ func (h *SreyunCore) execGetDashboard(args map[string]any) (string, error) {
 		return capabilityJSON(capabilityResult{OK: false, Error: "看板不存在"}), nil
 	}
 	type panel struct {
+		ID    int    `json:"panel_id"`
 		Title string `json:"title"`
 		Type  string `json:"type"`
 		Query string `json:"query,omitempty"`
@@ -301,7 +340,11 @@ func (h *SreyunCore) execGetDashboard(args map[string]any) (string, error) {
 		if len(p.Targets) > 0 {
 			q = p.Targets[0].Expr
 		}
-		panels = append(panels, panel{Title: p.Title, Type: p.Type, Query: q, DS: p.DataSource})
+		ds := p.DataSource
+		if ds == "" {
+			ds = d.DataSource
+		}
+		panels = append(panels, panel{ID: p.ID, Title: p.Title, Type: p.Type, Query: q, DS: ds})
 	}
 	return capabilityJSON(capabilityResult{
 		OK:      true,

@@ -337,6 +337,9 @@ func (s *Server) authenticateUsernameLogin(w http.ResponseWriter, r *http.Reques
 		s.auth.loginFailed(ip)
 		s.auth.loginAccountFailed(username)
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", username)})
+		if !s.auth.loginAllowed(ip) {
+			s.autoDefendOnLoginLockout(ip, username)
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return acc, false
 	}
@@ -353,6 +356,9 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 		s.auth.loginFailed(ip)
 		s.auth.loginAccountFailed(phone)
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", "phone:"+phone)})
+		if !s.auth.loginAllowed(ip) {
+			s.autoDefendOnLoginLockout(ip, "phone:"+phone)
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return acc, false
 	}
@@ -360,6 +366,9 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 		s.auth.loginFailed(ip)
 		s.auth.loginAccountFailed(acc.Username)
 		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", acc.Username)})
+		if !s.auth.loginAllowed(ip) {
+			s.autoDefendOnLoginLockout(ip, acc.Username)
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return acc, false
 	}

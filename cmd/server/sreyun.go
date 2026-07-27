@@ -381,6 +381,10 @@ func (h *SreyunCore) registerTools() {
 	h.registerResourceTools()
 	h.registerCapabilityTools()
 	h.registerChartTools()
+	h.registerNavTools()
+	h.registerPanelTools()
+	h.registerSecurityTools()
+	h.registerEvolveTools()
 	h.cachedNativeToolDefs = nil // force rebuild after capability tools register
 }
 
@@ -1551,13 +1555,17 @@ func (h *SreyunCore) buildSystemPrompt() string {
 	b.WriteString("\n看板与图表编排：\n")
 	b.WriteString("- 制作看板：create_dashboard（可先 list_dashboards / list_datasources）；\n")
 	b.WriteString("- 分析/优化看板：get_dashboard → analyze_dashboard / optimize_dashboard；确认后用 apply_dashboard_optimize（需审批）；\n")
+	b.WriteString("- 调用已有看板组件：list_dashboard_panels / query_dashboard_panel（按 panel_id 或标题渲染图/指标/表/日志）；\n")
 	b.WriteString("- 用户要看趋势/曲线/对比时，优先 render_chart / query_metric_range / query_promql_range / analyze_metric_trend；\n")
 	b.WriteString("- 瞬时大数字用 show_instant_stat；需要下钻时依赖工具下发的 drill_down 按钮（主机详情 / 拓宽时间 / 换指标）；\n")
 	b.WriteString("- 图表由前端 UI 动作展示，回复只写结论与建议，不要粘贴大段采样 JSON；\n")
 	b.WriteString("- 提及具体看板时，在正文用 Markdown 链接 `[看板名](aiops://dashboard/{id})`，便于客户端一键打开；\n")
+	b.WriteString("- 打开任意界面：navigate_ui（可先 list_ui_views）；安全中心/主机/告警/SRE/网络等均可调度；\n")
+	b.WriteString("- 安全态势与自动防御：query_security_posture / defend_security_event；发现撞库、漏扫、攻击迹象时主动调用；\n")
+	b.WriteString("- 自我进化：run_self_maintenance / summarize_growth（记忆优化、技能提炼、成长日记）；\n")
 	b.WriteString("- 安全诊断/加固、硬件/SNMP/NetFlow/SQL/剧本等：run_assist_task（指定 task + context）；\n")
 	b.WriteString("- 事件根因：diagnose_incident；值班开场/巡检：get_duty_context。\n")
-	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据 / 看板或任务结果 / 图表趋势。\n")
+	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据 / 看板或任务结果 / 图表趋势 / 安全防御记录。\n")
 
 	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，
 	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。
