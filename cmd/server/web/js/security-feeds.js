@@ -2,6 +2,9 @@
  *
  * 更新是异步作业：点击更新后立即返回，前端轮询进度。之前同步下载会在浏览器或
  * 反向代理侧超时，用户看到「更新失败」但服务端其实还在下载。
+ *
+ * 注意：web-security.js 运行在 IIFE 内，本模块通过 window.__wsFeedsHost 桥接
+ * paint / fetch，否则「情报源」按钮点击会因 ReferenceError 完全无反应。
  */
 
 let SF_STATE = null;      // 最近一次 /security/feeds 响应
@@ -9,6 +12,7 @@ let SF_OPEN = false;      // 面板是否展开
 let SF_POLL = null;       // 轮询定时器
 let SF_TESTING = false;   // 连通性测试中
 let SF_TEST_RESULT = null;
+let SF_LOAD_ERROR = "";   // 最近一次加载失败原因
 
 // 常用加速镜像：国内直连 GitHub 经常超时，给出可直接选用的预设而不是让用户去查。
 const SF_MIRRORS = [
@@ -19,7 +23,30 @@ const SF_MIRRORS = [
 ];
 
 function sfT(k, d) { return (typeof I18N !== "undefined" && I18N.t) ? I18N.t(k, d) : d; }
-function sfEsc(s) { return (typeof wsEsc === "function") ? wsEsc(s) : String(s == null ? "" : s); }
+function sfEsc(s) { return (typeof esc === "function") ? esc(String(s == null ? "" : s)) : String(s == null ? "" : s); }
+
+function sfHost() {
+  return (typeof window !== "undefined" && window.__wsFeedsHost) ? window.__wsFeedsHost : null;
+}
+function sfPaint() {
+  const h = sfHost();
+  if (h && typeof h.paint === "function") {
+    h.paint();
+    return true;
+  }
+  if (typeof toast === "function") {
+    toast(sfT("sf.host_missing", "情报源面板未能挂载到 Web 扫描页，请刷新后重试"), "err");
+  }
+  return false;
+}
+async function sfAPI(url, opts) {
+  const h = sfHost();
+  if (h && typeof h.fetchJSON === "function") return h.fetchJSON(url, opts);
+  const r = await fetch(url, opts || {});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
 
 function sfKindLabel(kind) {
   if (kind === "nuclei") return sfT("sf.kind_nuclei", "可执行模板");
@@ -42,24 +69,49 @@ function sfAgo(ts) {
 }
 
 async function sfLoad() {
+  SF_LOAD_ERROR = "";
   try {
-    SF_STATE = await wsFetchJSON(`${API}/security/feeds`);
+    SF_STATE = await sfAPI(`${API}/security/feeds`);
   } catch (e) {
     SF_STATE = null;
+    SF_LOAD_ERROR = String((e && e.message) || e || sfT("sf.load_failed", "加载失败"));
   }
   return SF_STATE;
+}
+
+function sfScrollIntoView() {
+  try {
+    const panel = document.querySelector("#webSecurityPanel .sf-panel");
+    if (panel && typeof panel.scrollIntoView === "function") {
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  } catch (_) {}
 }
 
 /* ---------- 渲染 ---------- */
 
 function sfPanelHTML() {
   if (!SF_OPEN) return "";
-  if (!SF_STATE) return `<div class="cfg-panel sec-cfg-panel sf-panel"><div class="loading-dots">${sfEsc(sfT("common.loading", "加载中..."))}</div></div>`;
+  if (!SF_STATE) {
+    if (SF_LOAD_ERROR) {
+      return `<div class="cfg-panel sec-cfg-panel sf-panel" id="sfPanel">
+        <div class="cfg-panel-head"><div>
+          <div class="cfg-panel-title">${sfEsc(sfT("sf.title", "威胁情报源 / 模板库"))}</div>
+          <p class="cfg-panel-desc sf-load-err">${sfEsc(SF_LOAD_ERROR)}</p>
+        </div></div>
+        <div class="cfg-actions">
+          <button class="btn primary" data-sf="retry">${sfEsc(sfT("common.retry", "重试"))}</button>
+          <button class="btn ghost" data-sf="close">${sfEsc(sfT("common.cancel", "收起"))}</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="cfg-panel sec-cfg-panel sf-panel" id="sfPanel"><div class="loading-dots">${sfEsc(sfT("common.loading", "加载中..."))}</div></div>`;
+  }
   const cfg = SF_STATE.config || {};
   const job = SF_STATE.job;
   const admin = typeof isAdmin === "function" ? isAdmin() : false;
 
-  return `<div class="cfg-panel sec-cfg-panel sf-panel">
+  return `<div class="cfg-panel sec-cfg-panel sf-panel" id="sfPanel">
     <div class="cfg-panel-head"><div>
       <div class="cfg-panel-title">${sfEsc(sfT("sf.title", "威胁情报源 / 模板库"))}</div>
       <p class="cfg-panel-desc">${sfEsc(sfT("sf.desc", "统一管理扫描所依赖的模板与特征库。Web 与主机安全共用同一套下载通道（代理 / 加速镜像），更新在后台执行，可随时关闭页面。"))}</p>
@@ -74,7 +126,7 @@ function sfPanelHTML() {
         <h4>${sfEsc(sfT("sf.sources", "情报源"))}</h4>
         <span class="ws-help">${sfEsc(sfT("sf.sources_help", "「可执行模板」直接参与扫描；「检测特征库」被内置引擎解析（如 sqlmap 报错指纹用于报错型注入检测）；「知识库」仅作为研判与复现参考，不产生告警。"))}</span>
       </div>
-      <div class="sf-list">${(SF_STATE.sources || []).map(s => sfSourceRowHTML(s, admin)).join("")}</div>
+      <div class="sf-list">${(SF_STATE.sources || []).map(s => sfSourceRowHTML(s, admin)).join("") || `<div class="muted">${sfEsc(sfT("sf.no_sources", "暂无可用情报源"))}</div>`}</div>
     </div>
     <div class="cfg-actions">
       ${admin ? `<button class="btn primary" data-sf="save">${sfEsc(sfT("common.save", "保存"))}</button>
@@ -205,13 +257,14 @@ async function sfSave() {
   const st = $("sfStatus");
   if (st) st.textContent = sfT("common.saving", "保存中…");
   try {
-    SF_STATE = await wsFetchJSON(`${API}/security/feeds/config`, {
+    SF_STATE = await sfAPI(`${API}/security/feeds/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sfCollectConfig()),
     });
+    SF_LOAD_ERROR = "";
     if (typeof toast === "function") toast(sfT("sf.saved", "情报源配置已保存"), "ok");
-    paintWebSecurity();
+    sfPaint();
   } catch (e) {
     if (st) st.textContent = "";
     if (typeof toast === "function") toast(String(e.message || e), "err");
@@ -222,9 +275,9 @@ async function sfSave() {
 // validate a proxy before committing it.
 async function sfTest() {
   SF_TESTING = true; SF_TEST_RESULT = null;
-  paintWebSecurity();
+  sfPaint();
   try {
-    SF_TEST_RESULT = await wsFetchJSON(`${API}/security/feeds/test`, {
+    SF_TEST_RESULT = await sfAPI(`${API}/security/feeds/test`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sfCollectConfig()),
@@ -233,13 +286,13 @@ async function sfTest() {
     SF_TEST_RESULT = { ok: false, error: String(e.message || e) };
   }
   SF_TESTING = false;
-  paintWebSecurity();
+  sfPaint();
 }
 
 async function sfUpdate(ids) {
   try {
     const body = ids && ids.length ? JSON.stringify({ sources: ids }) : "{}";
-    await wsFetchJSON(`${API}/security/feeds/update`, {
+    await sfAPI(`${API}/security/feeds/update`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body,
     });
     if (typeof toast === "function") toast(sfT("sf.job_started", "更新任务已启动，进度在面板中实时显示"), "ok");
@@ -251,7 +304,7 @@ async function sfUpdate(ids) {
 
 async function sfCancel() {
   try {
-    await wsFetchJSON(`${API}/security/feeds/cancel`, { method: "POST" });
+    await sfAPI(`${API}/security/feeds/cancel`, { method: "POST" });
     if (typeof toast === "function") toast(sfT("sf.cancelled", "已取消更新"), "ok");
   } catch (e) {
     if (typeof toast === "function") toast(String(e.message || e), "err");
@@ -266,12 +319,16 @@ function sfStartPoll() {
   const tick = async () => {
     await sfLoad();
     const running = SF_STATE && SF_STATE.job && SF_STATE.job.running;
-    if (SF_OPEN && document.querySelector("#view-web-security.active")) paintWebSecurity();
+    if (SF_OPEN && document.querySelector("#view-web-security.active")) sfPaint();
     if (!running) {
       sfStopPoll();
       // The template count in the engine bar only changes once a run finishes.
-      try { wsEngine = await wsFetchJSON(`${API}/security/web/engine?refresh=1`); } catch (_) {}
-      if (SF_OPEN) paintWebSecurity();
+      try {
+        const eng = await sfAPI(`${API}/security/web/engine?refresh=1`);
+        const h = sfHost();
+        if (h && typeof h.setEngine === "function") h.setEngine(eng);
+      } catch (_) {}
+      if (SF_OPEN) sfPaint();
     }
   };
   tick();
@@ -285,18 +342,33 @@ function sfStopPoll() {
 async function sfToggle() {
   SF_OPEN = !SF_OPEN;
   if (SF_OPEN) {
-    if (typeof wsShowCfg !== "undefined") wsShowCfg = false;
-    paintWebSecurity();
+    const h = sfHost();
+    if (h && typeof h.setShowCfg === "function") h.setShowCfg(false);
+    SF_LOAD_ERROR = "";
+    if (!sfPaint()) {
+      SF_OPEN = false;
+      return;
+    }
+    sfScrollIntoView();
     await sfLoad();
     if (SF_STATE && SF_STATE.job && SF_STATE.job.running) sfStartPoll();
   } else {
     sfStopPoll();
   }
-  paintWebSecurity();
+  sfPaint();
+  if (SF_OPEN) sfScrollIntoView();
 }
 
 function sfAction(act, el) {
-  if (act === "close") { SF_OPEN = false; sfStopPoll(); return paintWebSecurity(); }
+  if (act === "close") { SF_OPEN = false; sfStopPoll(); return sfPaint(); }
+  if (act === "retry") {
+    return (async () => {
+      await sfLoad();
+      if (SF_STATE && SF_STATE.job && SF_STATE.job.running) sfStartPoll();
+      sfPaint();
+      sfScrollIntoView();
+    })();
+  }
   if (act === "save") return sfSave();
   if (act === "test") return sfTest();
   if (act === "cancel") return sfCancel();

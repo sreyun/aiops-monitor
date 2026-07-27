@@ -213,7 +213,7 @@ function wsEngineBarHTML() {
       </div>
       <div class="ws-engine-actions">
         <button class="btn sm ghost" data-ws="toggle-packs">${wsEsc(wsShowPacks ? wsT("ws.hide_packs", "收起模板包") : wsT("ws.show_packs", "模板包"))}</button>
-        <button class="btn sm ghost" data-ws="feeds">${wsEsc(wsT("ws.feeds", "情报源"))}</button>
+        <button class="btn sm ghost${typeof SF_OPEN !== "undefined" && SF_OPEN ? " on primary" : ""}" data-ws="feeds" aria-pressed="${typeof SF_OPEN !== "undefined" && SF_OPEN ? "true" : "false"}">${wsEsc(wsT("ws.feeds", "情报源"))}</button>
         ${typeof isAdmin === "function" && isAdmin() ? `<button class="btn sm" data-ws="cfg">${wsEsc(wsT("ws.config", "引擎配置"))}</button>
         <button class="btn sm" data-ws="refresh-tpl">${wsEsc(wsT("ws.refresh_tpl", "更新模板"))}</button>` : ""}
       </div>
@@ -900,7 +900,13 @@ function wsAction(act) {
     if (typeof SF_OPEN !== "undefined" && wsShowCfg) { SF_OPEN = false; sfStopPoll(); }
     return paintWebSecurity();
   }
-  if (act === "feeds") return sfToggle();
+  if (act === "feeds") {
+    if (typeof sfToggle !== "function") {
+      if (typeof toast === "function") toast(wsT("ws.feeds_unavailable", "情报源模块未加载，请刷新页面"), "err");
+      return;
+    }
+    return sfToggle();
+  }
   if (act === "toggle-packs") { wsShowPacks = !wsShowPacks; return paintWebSecurity(); }
   if (act === "save-cfg") return wsSaveCfg();
   if (act === "refresh-tpl") return wsRefreshTemplates();
@@ -938,9 +944,17 @@ async function wsRefreshTemplates() {
     if (typeof SF_OPEN !== "undefined") {
       SF_OPEN = true;
       wsShowCfg = false;
-      sfStartPoll();
+      paintWebSecurity();
+      if (typeof sfLoad === "function") await sfLoad();
+      if (typeof sfStartPoll === "function") sfStartPoll();
+      paintWebSecurity();
+      try {
+        const panel = document.querySelector("#webSecurityPanel .sf-panel");
+        if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (_) {}
+    } else {
+      paintWebSecurity();
     }
-    paintWebSecurity();
   } catch (e) {
     if (typeof toast === "function") toast(String(e.message || e), "err");
   }
@@ -1502,4 +1516,16 @@ function wsAIFinding(scan, idx) {
 
 window._pageRenderers = window._pageRenderers || {};
 window._pageRenderers["web-security"] = renderWebSecurity;
+
+// Bridge for security-feeds.js (loaded as a sibling module outside this IIFE).
+// Without it, 「情报源」clicks throw ReferenceError on paintWebSecurity/wsFetchJSON
+// and look like a dead button.
+window.__wsFeedsHost = {
+  paint() { paintWebSecurity(); },
+  fetchJSON: wsFetchJSON,
+  setShowCfg(v) { wsShowCfg = !!v; },
+  getShowCfg() { return !!wsShowCfg; },
+  setEngine(e) { if (e) wsEngine = e; },
+  isOpen() { return typeof SF_OPEN !== "undefined" && !!SF_OPEN; },
+};
 })();
