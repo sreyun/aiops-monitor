@@ -170,6 +170,7 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"User=$AIOPS_USER", "NoNewPrivileges=true", `AIOPS_USER="${AIOPS_USER:-aiops}"`,
 		"aiops_has_systemd", "aiops_fetch", "unsupported architecture",
 		"AmbientCapabilities=CAP_NET_RAW", "/sbin/nologin",
+		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL",
 		"aiops_is_installed", "aiops_stop_and_uninstall_existing",
 		"existing agent detected", "systemctl restart aiops-agent",
 		"kickstart -k")

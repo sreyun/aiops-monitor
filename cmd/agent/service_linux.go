@@ -32,6 +32,10 @@ func installAgentService(exePath, cfgPath string) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("?? root ?????? sudo ?? --install-service")
 	}
+	termShell := "/bin/bash"
+	if _, err := os.Stat(termShell); err != nil {
+		termShell = "/bin/sh"
+	}
 	unit := fmt.Sprintf(`[Unit]
 Description=AIOps Monitor Agent (metrics + remote desktop)
 After=network-online.target
@@ -43,12 +47,13 @@ ExecStart=%s --service --config %s
 Restart=always
 RestartSec=5
 User=root
+Environment=SHELL=%s
 KillMode=mixed
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-`, exePath, cfgPath)
+`, exePath, cfgPath, termShell)
 
 	if err := os.WriteFile(systemdUnitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("?? systemd ????: %w", err)
