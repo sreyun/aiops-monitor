@@ -555,33 +555,42 @@ function createTermTab(id, name, tabName, opts) {
   };
   // 键盘事件绑定到隐藏 textarea（桌面+移动端统一入口）
   input.onkeydown = ev => { ev.stopPropagation(); termKeyDown(ev, tabObj); };
+  // Normalize clipboard newlines to CR (PTY/readline expects \r, not bare \n).
+  const termPasteText = (raw) => {
+    if (!raw || !tabObj.ws) return;
+    const t = String(raw).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\r");
+    if (t) termSend(tabObj.ws, t);
+  };
   // 粘贴
   input.onpaste = ev => {
     ev.preventDefault();
-    const t = (ev.clipboardData || window.clipboardData).getData("text");
-    if (t && tabObj.ws) termSend(tabObj.ws, t);
+    termPasteText((ev.clipboardData || window.clipboardData).getData("text"));
   };
   // screen 级粘贴兜底：textarea 未聚焦时也能接收粘贴
   screen.addEventListener("paste", ev => {
     if (document.activeElement === input) return;
     ev.preventDefault();
     input.focus({ preventScroll: true });
-    const t = (ev.clipboardData || window.clipboardData).getData("text");
-    if (t && tabObj.ws) termSend(tabObj.ws, t);
+    termPasteText((ev.clipboardData || window.clipboardData).getData("text"));
   });
   // input 事件：移动端虚拟键盘字符输入 + 桌面端可打印字符（termKeyDown 不再处理可打印字符）
+  // Single commit path for IME: compositionend only clears composing; send via input.
   input.addEventListener("input", ev => {
-    if (tabObj.composing || ev.isComposing) return; // IME 组合中，等 compositionend
+    if (tabObj.composing || ev.isComposing) return;
     const text = input.value;
     if (text && tabObj.ws) termSend(tabObj.ws, text);
     input.value = "";
   });
-  // IME 组合输入（中文/日文等输入法）
+  // IME 组合输入（中文/日文等输入法）— do NOT send on compositionend (avoids double-commit).
   input.addEventListener("compositionstart", () => { tabObj.composing = true; });
-  input.addEventListener("compositionend", ev => {
+  input.addEventListener("compositionend", () => {
     tabObj.composing = false;
-    if (ev.data && tabObj.ws) termSend(tabObj.ws, ev.data);
-    input.value = "";
+    // Committed text lands in input.value; a following input event (or flush) sends it.
+    const text = input.value;
+    if (text && tabObj.ws) {
+      termSend(tabObj.ws, text);
+      input.value = "";
+    }
   });
   // beforeinput 兜底：部分移动浏览器 keydown 不触发 Backspace，用 beforeinput 捕获
   input.addEventListener("beforeinput", ev => {
@@ -614,23 +623,18 @@ function createTermTab(id, name, tabName, opts) {
       if (document.activeElement !== input) input.focus({ preventScroll: true });
     }, 0);
   });
-  // 键盘事件委托：当 screen(pre) 被聚焦但 textarea 未聚焦时（例如用户
-  // 点击终端后未选中文本），将 keydown 重定向到 textarea，确保 termKeyDown
-  // 能够正确处理所有键盘输入。
+  // Redirect focus to textarea; never synthesize untrusted keydown for printables
+  // (preventDefault + fake KeyboardEvent drops characters on some browsers).
   screen.addEventListener("keydown", function(ev) {
-    if (document.activeElement !== input) {
-      input.focus({ preventScroll: true });
-      // 重新构造并分发事件到 textarea，让 input.onkeydown 处理
-      const newEv = new KeyboardEvent("keydown", {
-        key: ev.key, code: ev.code, keyCode: ev.keyCode, which: ev.which,
-        ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey,
-        altKey: ev.altKey, metaKey: ev.metaKey,
-        repeat: ev.repeat, bubbles: true, cancelable: true
-      });
-      ev.preventDefault();
-      ev.stopPropagation();
-      input.dispatchEvent(newEv);
+    if (document.activeElement === input) return;
+    input.focus({ preventScroll: true });
+    const printable = ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
+    if (printable) {
+      // Let the browser deliver the character into the focused textarea → input event.
+      return;
     }
+    // Special keys: forward via termKeyDown on the real event after focus.
+    termKeyDown(ev, tabObj);
   });
   // <pre> 被直接聚焦时（Tab 键导航），重定向到 textarea
   screen.addEventListener("focus", function() {
@@ -771,6 +775,8 @@ function switchTermTab(idx) {
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
   TERM_RESIZE = () => termRefit();
   window.addEventListener("resize", TERM_RESIZE);
+  // display:none tabs were never measured — refit after layout so PTY cols/rows match.
+  requestAnimationFrame(() => requestAnimationFrame(() => termRefit()));
 }
 
 function closeTermTab(idx) {
@@ -1686,6 +1692,8 @@ function getSelectedTermText(tab) {
 
 function termKeyDown(e, tab) {
   e.stopPropagation(); // 阻止全局 Esc 关弹窗，让 Esc 等按键传给 shell
+  // IME composition: never inject Enter/Backspace/arrows into the PTY.
+  if (tab && (tab.composing || e.isComposing)) return;
   const ws = tab ? tab.ws : null;
   const k = e.key;
   const mod = e.ctrlKey || e.metaKey;
@@ -1752,14 +1760,14 @@ function termKeyDown(e, tab) {
   let seq = null;
   if (k === "Enter") seq = "\r";
   else if (k === "Backspace") seq = "\x7f";
-  else if (k === "Tab") seq = "\t";
+  else if (k === "Tab") seq = e.shiftKey ? "\x1b[Z" : "\t";
   else if (k === "Escape") seq = "\x1b";
   else if (k === "ArrowUp") seq = ac + "A";
   else if (k === "ArrowDown") seq = ac + "B";
   else if (k === "ArrowRight") seq = ac + "C";
   else if (k === "ArrowLeft") seq = ac + "D";
-  else if (k === "Home") seq = "\x1b[H";
-  else if (k === "End") seq = "\x1b[F";
+  else if (k === "Home") seq = ac + "H";
+  else if (k === "End") seq = ac + "F";
   else if (k === "Delete") seq = "\x1b[3~";
   else if (k === "PageUp") seq = "\x1b[5~";
   else if (k === "PageDown") seq = "\x1b[6~";
@@ -1800,6 +1808,7 @@ function makeVT(screen) {
     altActive: false, savedGrid: null, savedPos: null,
     st: 0, parm: "", coll: "",             // 解析状态 0 ground 1 esc 2 csi 3 osc 4 charset 5 osc-st
     cursorVis: true, appCursor: false, raf: 0, _rowCache: null,
+    _cellW: 0, _cellH: 0, // monospace cell metrics for cursor overlay
   };
   const clampX = x => Math.max(0, Math.min(vt.cols - 1, x));
   const clampY = y => Math.max(0, Math.min(vt.rows - 1, y));
@@ -1830,11 +1839,37 @@ function makeVT(screen) {
   function scrollDown(n) { for (let i = 0; i < n; i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.top, 0, newRow()); } }
   function lineFeed() { if (vt.cy === vt.bot) scrollUp(1); else if (vt.cy < vt.rows - 1) vt.cy++; }
   function revIndex() { if (vt.cy === vt.top) scrollDown(1); else if (vt.cy > 0) vt.cy--; }
+  // East-Asian / emoji cell width (0 = skip combining, 2 = wide, else 1).
+  function vtCharWidth(cp) {
+    if (cp === 0) return 0;
+    if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0;
+    // Combining marks
+    if ((cp >= 0x0300 && cp <= 0x036f) || (cp >= 0x1ab0 && cp <= 0x1aff) ||
+        (cp >= 0x1dc0 && cp <= 0x1dff) || (cp >= 0x20d0 && cp <= 0x20ff) ||
+        (cp >= 0xfe20 && cp <= 0xfe2f)) return 0;
+    // Wide: CJK, fullwidth forms, emoji blocks (simplified wcwidth)
+    if ((cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2329 && cp <= 0x232a) ||
+        (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) ||
+        (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe10 && cp <= 0xfe19) ||
+        (cp >= 0xfe30 && cp <= 0xfe6f) || (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) ||
+        (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
+    return 1;
+  }
   function putChar(ch) {
+    const cp = ch.codePointAt(0) || 0;
+    const w = vtCharWidth(cp);
+    if (w <= 0) return;
     if (vt.wrapNext) { vt.cx = 0; lineFeed(); vt.wrapNext = false; }
+    if (vt.cx + w > vt.cols) { vt.cx = 0; lineFeed(); vt.wrapNext = false; }
     const cell = vt.grid[vt.cy][vt.cx];
     cell.c = ch; cell.f = vt.fg; cell.b = vt.bg; cell.a = vt.flags;
-    if (vt.cx + 1 >= vt.cols) vt.wrapNext = true; else vt.cx++;
+    if (w === 2 && vt.cx + 1 < vt.cols) {
+      const pad = vt.grid[vt.cy][vt.cx + 1];
+      pad.c = ""; pad.f = vt.fg; pad.b = vt.bg; pad.a = vt.flags; // wide-char spacer
+    }
+    vt.cx += w;
+    if (vt.cx >= vt.cols) { vt.cx = vt.cols - 1; vt.wrapNext = true; }
   }
   function eraseInLine(m) {
     const row = vt.grid[vt.cy];
@@ -1918,28 +1953,39 @@ function makeVT(screen) {
     }
   }
   vt.feed = function (text) {
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i], code = text.charCodeAt(i);
+    for (let i = 0; i < text.length; ) {
+      const code = text.charCodeAt(i);
+      const cp = text.codePointAt(i);
+      const ch = (cp > 0xffff) ? String.fromCodePoint(cp) : text[i];
+      const adv = (cp > 0xffff) ? 2 : 1;
       if (vt.st === 0) {
-        if (code === 0x1b) { vt.st = 1; vt.parm = ""; vt.coll = ""; }
-        else if (ch === "\r") { vt.cx = 0; vt.wrapNext = false; }
-        else if (code === 10 || code === 11 || code === 12) lineFeed();
-        else if (code === 8) { vt.cx = Math.max(0, vt.cx - 1); vt.wrapNext = false; }
-        else if (code === 9) vt.cx = Math.min(vt.cols - 1, vt.cx - (vt.cx % 8) + 8);
-        else if (code === 7) { /* BEL */ }
-        else if (code >= 32) putChar(ch);
-      } else if (vt.st === 1) {
+        if (code === 0x1b) { vt.st = 1; vt.parm = ""; vt.coll = ""; i += 1; continue; }
+        if (ch === "\r") { vt.cx = 0; vt.wrapNext = false; i += 1; continue; }
+        if (code === 10 || code === 11 || code === 12) { lineFeed(); i += 1; continue; }
+        if (code === 8) { vt.cx = Math.max(0, vt.cx - 1); vt.wrapNext = false; i += 1; continue; }
+        if (code === 9) { vt.cx = Math.min(vt.cols - 1, vt.cx - (vt.cx % 8) + 8); i += 1; continue; }
+        if (code === 7) { i += 1; continue; }
+        if (cp >= 32) putChar(ch);
+        i += adv;
+        continue;
+      }
+      if (vt.st === 1) {
         if (ch === "[") { vt.st = 2; vt.parm = ""; vt.coll = ""; }
         else if (ch === "]") { vt.st = 3; }
         else if (ch === "(" || ch === ")" || ch === "*" || ch === "+") vt.st = 4;
         else { if (ch === "M") revIndex(); else if (ch === "D") lineFeed(); else if (ch === "E") { vt.cx = 0; lineFeed(); } else if (ch === "7") saveCursor(); else if (ch === "8") restoreCursor(); else if (ch === "c") fullReset(); vt.st = 0; }
-      } else if (vt.st === 2) {
+        i += 1; continue;
+      }
+      if (vt.st === 2) {
         if (code >= 0x40 && code <= 0x7e) { csi(ch); vt.st = 0; }
         else if (ch === "?" || ch === ">" || ch === "=" || ch === "!") vt.coll += ch;
         else vt.parm += ch;
-      } else if (vt.st === 3) { if (code === 7) vt.st = 0; else if (code === 0x1b) vt.st = 5; }
-      else if (vt.st === 4) vt.st = 0;
-      else if (vt.st === 5) vt.st = 0;
+        i += 1; continue;
+      }
+      if (vt.st === 3) { if (code === 7) vt.st = 0; else if (code === 0x1b) vt.st = 5; i += 1; continue; }
+      if (vt.st === 4) { vt.st = 0; i += 1; continue; }
+      if (vt.st === 5) { vt.st = 0; i += 1; continue; }
+      i += 1;
     }
     scheduleRender();
   };
@@ -1971,15 +2017,61 @@ function makeVT(screen) {
     flush();
     return html;
   }
+  // Monospace cell size from a full-width probe — NEVER derive from a content
+  // row's getBoundingClientRect()/cols (trimmed rows are shorter → left drifts)
+  // or cy*firstRowHeight (bold/CJK rows vary → 忽高忽低).
+  function refreshCellMetrics() {
+    const probe = document.createElement("div");
+    probe.className = "term-row";
+    probe.textContent = "XXXXXXXXXX";
+    probe.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:0;pointer-events:none";
+    lv.appendChild(probe);
+    const rect = probe.getBoundingClientRect();
+    const w = rect.width;
+    const h = probe.offsetHeight || rect.height;
+    lv.removeChild(probe);
+    if (w > 0) vt._cellW = w / 10;
+    if (h > 0) vt._cellH = h;
+    return vt._cellW > 0 && vt._cellH > 0;
+  }
+  function ensureCellMetrics() {
+    if (vt._cellW > 0 && vt._cellH > 0) return true;
+    return refreshCellMetrics();
+  }
+  function placeCursorOverlay(show) {
+    if (!show) {
+      cursorOverlay.style.display = "none";
+      return false;
+    }
+    if (!ensureCellMetrics()) return false;
+    let row = lv.children[vt.cy];
+    if (!row || row === cursorOverlay) return false;
+    // Prefer the live row box — exact Y even if subpixel line heights differ.
+    const top = row.offsetTop;
+    const height = row.offsetHeight || vt._cellH;
+    const curCell = vt.grid[vt.cy] && vt.grid[vt.cy][vt.cx];
+    let cells = 1;
+    if (curCell && curCell.c) {
+      const cp = curCell.c.codePointAt(0);
+      if (cp && vtCharWidth(cp) === 2) cells = 2;
+    }
+    const left = Math.round(vt.cx * vt._cellW);
+    const width = Math.max(1, Math.round(vt._cellW * cells));
+    cursorOverlay.style.display = "";
+    cursorOverlay.style.top = top + "px";
+    cursorOverlay.style.left = left + "px";
+    cursorOverlay.style.width = width + "px";
+    cursorOverlay.style.height = height + "px";
+    cursorOverlay.style.lineHeight = height + "px";
+    cursorOverlay.textContent = (curCell && curCell.c && curCell.c !== " ") ? curCell.c : " ";
+    return true;
+  }
+
   function render() {
     // screen.contains 涵盖两种焦点来源：<pre> 自身聚焦（桌面直接 Tab）
     // 和隐藏 <textarea> 子元素聚焦（移动端虚拟键盘 / 桌面端统一输入入口）
     const focused = screen.contains(document.activeElement);
     const showCursor = vt.cursorVis && focused;
-    const firstRowEl = lv.querySelector(".term-row");
-    const lineH = firstRowEl ? firstRowEl.offsetHeight : 0;
-    const charW = firstRowEl ? firstRowEl.getBoundingClientRect().width / vt.cols
-      : screen.getBoundingClientRect().width / vt.cols;
 
     // 行级缓存：仅更新内容变化的行 DOM，避免全量 innerHTML 替换
     // 先把 cursorOverlay 移到末尾，保证 lv.children[0..rows-1] 都是行元素
@@ -2005,28 +2097,21 @@ function makeVT(screen) {
     }
     cache.length = vt.rows;
 
-    // 光标叠层：独立于行的绝对定位元素，不触发行重建
-    if (showCursor && lineH > 0) {
-      cursorOverlay.style.display = "";
-      cursorOverlay.style.top = vt.cy * lineH + "px";
-      cursorOverlay.style.left = vt.cx * charW + "px";
-      cursorOverlay.style.width = charW + "px";
-      cursorOverlay.style.height = lineH + "px";
-      const curCell = vt.grid[vt.cy] && vt.grid[vt.cy][vt.cx];
-      cursorOverlay.textContent = (curCell && curCell.c !== " ") ? curCell.c : " ";
-    } else if (showCursor) {
-      // lineH 尚未就绪（首帧），降级为 inline 光标
+    // 光标叠层：贴齐目标行 offsetTop + 等宽列宽，严格跟随输入格
+    if (!placeCursorOverlay(showCursor) && showCursor) {
+      // 度量未就绪时降级为行内光标（仅首帧）
       cursorOverlay.style.display = "none";
       const curRow = lv.children[vt.cy];
       if (curRow && curRow !== cursorOverlay) {
         curRow.innerHTML = renderRow(vt.grid[vt.cy], vt.cx);
         cache[vt.cy] = null;
       }
-    } else {
-      cursorOverlay.style.display = "none";
     }
 
-    screen.scrollTop = screen.scrollHeight;
+    // Sticky autoscroll: only pin to bottom when already near it — otherwise
+    // each keystroke yanking scrollTop makes scrollback unusable.
+    const dist = screen.scrollHeight - screen.scrollTop - screen.clientHeight;
+    if (dist < 48) screen.scrollTop = screen.scrollHeight;
   }
   function scheduleRender() {
     if (vt.pending) return;
@@ -2036,29 +2121,30 @@ function makeVT(screen) {
     setTimeout(run, 120);             // 兜底：后台标签页 rAF 被暂停时仍能渲染
   }
 
-  // resizeTo — 重新分配网格到指定 cols/rows，保留已有内容
+  function reshapeGrid(old, cols, rows) {
+    const g = [];
+    for (let y = 0; y < rows; y++) {
+      const r = newRow();
+      if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x];
+      g.push(r);
+    }
+    return g;
+  }
+  // resizeTo — 重新分配网格到指定 cols/rows，保留已有内容（含 alt 屏下的主缓冲）
   vt.resizeTo = function(cols, rows) {
     cols = Math.max(20, cols); rows = Math.max(6, rows);
     if (cols === vt.cols && rows === vt.rows) return;
     const old = vt.grid;
-    vt.cols = cols; vt.rows = rows; vt.grid = [];
-    for (let y = 0; y < rows; y++) {
-      const r = newRow();
-      if (old && old[y]) for (let x = 0; x < Math.min(cols, old[y].length); x++) r[x] = old[y][x];
-      vt.grid.push(r);
-    }
+    vt.cols = cols; vt.rows = rows;
+    vt.grid = reshapeGrid(old, cols, rows);
+    if (vt.savedGrid) vt.savedGrid = reshapeGrid(vt.savedGrid, cols, rows);
     vt.top = 0; vt.bot = rows - 1; vt.cx = clampX(vt.cx); vt.cy = clampY(vt.cy); vt.wrapNext = false; vt._rowCache = [];
     scheduleRender();
   };
 
   vt.fit = function () {
-    const probe = document.createElement("span");
-    probe.textContent = "MMMMMMMMMMMMMMMMMMMM";
-    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;left:-9999px";
-    lv.appendChild(probe);
-    const rect = probe.getBoundingClientRect();
-    const cw = rect.width / 20, chh = rect.height;
-    lv.removeChild(probe);
+    refreshCellMetrics();
+    const cw = vt._cellW, chh = vt._cellH;
     if (!cw || !chh) return null;
     const cs = getComputedStyle(screen);
     const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
@@ -2066,6 +2152,8 @@ function makeVT(screen) {
     const cols = Math.max(20, Math.floor((screen.clientWidth - padX) / cw));
     const rows = Math.max(6, Math.floor((screen.clientHeight - padY) / chh));
     vt.resizeTo(cols, rows);
+    // Re-measure after resize (font metrics stable; keep cache fresh for DPI/zoom).
+    refreshCellMetrics();
     return { cols: vt.cols, rows: vt.rows };
   };
   vt.fullReset = fullReset;

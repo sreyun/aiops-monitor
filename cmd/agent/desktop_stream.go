@@ -966,28 +966,36 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			}
 		case 'B':
 			var ev struct {
-				Down bool   `json:"down"`
-				VK   int    `json:"vk"`
-				Key  string `json:"key"`
-				Code string `json:"code"`
+				Down  bool   `json:"down"`
+				VK    int    `json:"vk"`
+				Key   string `json:"key"`
+				Code  string `json:"code"`
+				Shift bool   `json:"shift"`
+				Ctrl  bool   `json:"ctrl"`
+				Alt   bool   `json:"alt"`
+				Meta  bool   `json:"meta"`
 			}
 			if json.Unmarshal(payload, &ev) != nil {
 				continue
 			}
+			// Printable chars (letters, digits, punctuation, CJK): UNICODE inject.
+			// Fixes Shift+number / CapsLock / layout mismatch and the old bug that
+			// mapped '$'→VK_HOME, '#'→VK_END. Skip when Ctrl/Alt/Meta (shortcuts).
+			if !ev.Ctrl && !ev.Alt && !ev.Meta {
+				if r, ok := deskPrintableRune(ev.Key); ok {
+					if !ev.Down {
+						continue // UNICODE path already sent down+up on keydown
+					}
+					if adv, ok := inp.(deskAdvancedInput); ok {
+						_ = adv.TypeText(string(r))
+						continue
+					}
+					// Platforms without TypeText: fall through to VK for A–Z/0–9 only.
+				}
+			}
 			vk := ev.VK
 			if vk == 0 {
 				vk = deskKeyToVK(ev.Key, ev.Code)
-			}
-			if vk == 0 && len(ev.Key) == 1 {
-				// Last-chance: printable Unicode BMP as latin1 byte for A–Z/0–9 already
-				// covered; punctuation without a KeyboardEvent.code still maps via rune.
-				r := []rune(ev.Key)[0]
-				if r > 0 && r < 0x7f {
-					vk = int(r)
-					if vk >= 'a' && vk <= 'z' {
-						vk -= 32
-					}
-				}
 			}
 			if vk != 0 {
 				_ = inp.Key(vk, ev.Down)

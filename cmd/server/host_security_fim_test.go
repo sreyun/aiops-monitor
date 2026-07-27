@@ -67,6 +67,22 @@ func TestDiffHostFileInventoryOldAgentNoInventory(t *testing.T) {
 	}
 }
 
+func TestPickFIMInventoryToStoreKeepsBaseline(t *testing.T) {
+	prev := []HostFileHash{{Path: "/etc/hosts", SHA256: "aaa"}}
+	cur := []HostFileHash{{Path: "/etc/hosts", SHA256: "bbb"}}
+	if got := pickFIMInventoryToStore(cur, nil, prev, true); len(got) != 1 || got[0].SHA256 != "bbb" {
+		t.Fatalf("nonzero cur should win: %+v", got)
+	}
+	kept := pickFIMInventoryToStore(nil, nil, prev, true)
+	if len(kept) != 1 || kept[0].SHA256 != "aaa" {
+		t.Fatalf("empty cur must keep host prev baseline: %+v", kept)
+	}
+	kept2 := pickFIMInventoryToStore(nil, prev, nil, false)
+	if len(kept2) != 1 || kept2[0].SHA256 != "aaa" {
+		t.Fatalf("FIM-off empty must keep live prev: %+v", kept2)
+	}
+}
+
 func TestFimFindingsSeverity(t *testing.T) {
 	fs := fimFindingsFromChanges([]HostFileChange{
 		{Path: "/etc/shadow", Change: "modified", OldSHA: "a", NewSHA: "b"},

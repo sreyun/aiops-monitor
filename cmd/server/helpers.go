@@ -119,12 +119,17 @@ func (s *Server) serverURL(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); p != "" {
-		scheme = p
-	}
 	host := r.Host
-	if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
-		host = h
+	// Honor X-Forwarded-* only when trust_proxy is on — same gate as client IP /
+	// Secure cookie — so a directly-exposed server cannot be tricked into minting
+	// install commands that point at an attacker-controlled host.
+	if s.cfg.TrustProxy() {
+		if p := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); p != "" {
+			scheme = p
+		}
+		if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
+			host = h
+		}
 	}
 	return scheme + "://" + host
 }

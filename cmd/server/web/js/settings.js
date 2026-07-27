@@ -489,10 +489,24 @@ async function openInstall() {
   } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
 }
 
+function syncAgentAutoUpdateBadge() {
+  const badge = $("agentAutoUpdateBadge");
+  const on = !!($("agentAutoUpdate") && $("agentAutoUpdate").checked);
+  if (!badge) return;
+  badge.textContent = on
+    ? I18N.t("agent_update.badge_on", "已开启")
+    : I18N.t("agent_update.badge_off", "已关闭");
+  badge.classList.toggle("off", !on);
+}
 async function loadAgentAutoUpdatePolicy() {
   try {
     const p = await fetch(`${API}/agents/auto-update-policy`, { credentials: "same-origin" }).then(r => r.json());
-    if ($("agentAutoUpdate")) $("agentAutoUpdate").checked = !!p.agent_auto_update;
+    // Default-on: if the API omits the field, keep the checkbox checked.
+    if ($("agentAutoUpdate")) {
+      $("agentAutoUpdate").checked = (typeof p.agent_auto_update === "boolean")
+        ? !!p.agent_auto_update
+        : true;
+    }
     if ($("agentAutoUpdateWindow")) $("agentAutoUpdateWindow").value = p.agent_auto_update_window || "";
     if ($("agentAutoUpdateExemptCat")) {
       $("agentAutoUpdateExemptCat").value = Array.isArray(p.agent_auto_update_exempt_categories)
@@ -502,7 +516,17 @@ async function loadAgentAutoUpdatePolicy() {
       $("agentAutoUpdateExemptHosts").value = Array.isArray(p.agent_auto_update_exempt_hosts)
         ? p.agent_auto_update_exempt_hosts.join(",") : "";
     }
-  } catch (e) { /* ignore */ }
+    // Keep the advanced policy panel collapsed by default on each open.
+    const body = $("agentAutoUpdateBody"), caret = $("agentAutoUpdateCaret");
+    const head = $("agentAutoUpdateToggle");
+    if (body) body.style.display = "none";
+    if (caret) caret.textContent = "▸";
+    if (head) head.setAttribute("aria-expanded", "false");
+    syncAgentAutoUpdateBadge();
+  } catch (e) {
+    if ($("agentAutoUpdate")) $("agentAutoUpdate").checked = true;
+    syncAgentAutoUpdateBadge();
+  }
 }
 
 async function saveAgentAutoUpdatePolicy() {
@@ -527,11 +551,15 @@ async function saveAgentAutoUpdatePolicy() {
       return;
     }
     toast(I18N.t("agent_update.policy_saved", "自动更新策略已保存"), "ok");
+    syncAgentAutoUpdateBadge();
   } catch (e) {
     toast(I18N.t("toast.save_failed2", "保存失败:") + e, "err");
   }
 }
-function parseMultiServerList() {
+function normalizeInstallServerURL(u) {
+  return String(u || "").trim().replace(/\/+$/, "").toLowerCase();
+}
+function parseMultiServerExtras() {
   const text = ($("multiServerList") || {}).value || "";
   const lines = text.split("\n").map(l => l.trim()).filter(l => l);
   const servers = [];
@@ -541,7 +569,42 @@ function parseMultiServerList() {
     const token = parts.slice(1).join(" ") || "";
     if (server) servers.push({ server, token });
   }
-  return servers.length > 0 ? JSON.stringify(servers) : "";
+  return servers;
+}
+/** Current panel + extras; current panel is always first. */
+function buildMultiServerTargets() {
+  const primary = INSTALL.server_url || location.origin;
+  const token = INSTALL.token || "";
+  const out = [{ server: primary, token }];
+  const seen = new Set([normalizeInstallServerURL(primary)]);
+  for (const e of parseMultiServerExtras()) {
+    const key = normalizeInstallServerURL(e.server);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ server: e.server, token: e.token || "" });
+  }
+  return out;
+}
+function formatRelayBase(ip, port) {
+  const host = String(ip || "").trim() || I18N.t("install.gateway_ip");
+  let p = parseInt(port, 10);
+  if (!p || p < 1 || p > 65535) p = 8529;
+  // Bracket IPv6 literals (contain ':') so http://[addr]:port is valid.
+  if (host.includes(":") && !host.startsWith("[")) {
+    return `http://[${host}]:${p}`;
+  }
+  return `http://${host}:${p}`;
+}
+function updateInstallModeHint() {
+  const el = $("installModeHint");
+  if (!el) return;
+  if (RELAY_MODE) {
+    el.textContent = I18N.t("install.relay_hint", "仅一台机器能联网时使用");
+  } else if (MULTI_SERVER_MODE) {
+    el.textContent = I18N.t("install.multi_server_hint", "单 Agent 同时向多个服务端推送");
+  } else {
+    el.textContent = I18N.t("install.mode_normal_desc", "直连本面板安装");
+  }
 }
 function renderInstallCmd() {
   // Multi-server section visibility
@@ -549,6 +612,7 @@ function renderInstallCmd() {
   if (msSection) msSection.style.display = (MULTI_SERVER_MODE && !RELAY_MODE) ? "" : "none";
   const auditSection = $("networkAuditInstallSection");
   if (auditSection) auditSection.style.display = !RELAY_MODE ? "" : "none";
+  updateInstallModeHint();
   // Relay mode: show gateway + internal commands, hide normal install
   if (RELAY_MODE) {
     $("normalInstallSection").style.display = "none";
@@ -592,14 +656,21 @@ function renderInstallCmd() {
       if (excluded) q += "&content_audit_exclude_paths=" + encodeURIComponent(excluded);
     }
   }
-  // Multi-server: append servers_json so the generated config.json uses a
-  // servers array instead of a single server+token.
+  // Multi-server: always include current panel + extras as servers_json.
   let cmd, label, hint;
-  const multiHint = MULTI_SERVER_MODE ? I18N.t("install.multi_desc") : "";
+  const multiWarn = $("multiServerWarn");
+  let multiReady = true;
   if (MULTI_SERVER_MODE) {
-    const sj = parseMultiServerList();
-    if (sj) q += "&servers_json=" + encodeURIComponent(sj);
+    const targets = buildMultiServerTargets();
+    multiReady = targets.length >= 2;
+    if (multiWarn) multiWarn.style.display = multiReady ? "none" : "";
+    q += "&servers_json=" + encodeURIComponent(JSON.stringify(targets));
+  } else if (multiWarn) {
+    multiWarn.style.display = "none";
   }
+  const multiHint = MULTI_SERVER_MODE
+    ? (multiReady ? I18N.t("install.multi_desc", "一台 Agent 同时向多个服务端推送") : I18N.t("install.multi_need_two"))
+    : "";
   if (CUR_OS === "windows") {
     cmd = `${PS_TLS12}irm "${server}/install.ps1?${q}" | iex`;
     label = MULTI_SERVER_MODE
@@ -623,6 +694,8 @@ function renderInstallCmd() {
   $("installCmd").textContent = cmd;
   $("cmdLabel").textContent = label;
   $("cmdHint").textContent = hint;
+  const copyBtn = $("copyCmdBtn");
+  if (copyBtn) copyBtn.disabled = MULTI_SERVER_MODE && !multiReady;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
     ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
     : `curl -fsSL "${server}/uninstall.sh" | sh`;
@@ -635,23 +708,26 @@ function renderRelayCmd() {
   // Internal agents (via relay) still accept log_paths / optional audit query params.
   const lp = (($("installLogPaths") && $("installLogPaths").value) || "").trim();
   if (lp) q += "&log_paths=" + encodeURIComponent(lp);
-  const gwIP = $("relayGatewayIP").value.trim() || I18N.t("install.gateway_ip");
-  const relay = `http://${gwIP}:8529`;
+  const gwIP = (($("relayGatewayIP") || {}).value || "").trim() || I18N.t("install.gateway_ip");
+  const port = (($("relayListenPort") || {}).value || "8529").trim() || "8529";
+  const relay = formatRelayBase(gwIP, port);
+  const listenEnv = `RELAY_LISTEN=:${port}`;
   let gatewayCmd, internalCmd;
   if (CUR_OS === "windows") {
-    gatewayCmd = `${PS_TLS12}irm "${server}/install-relay.ps1?${q}" | iex`;
+    gatewayCmd = `${PS_TLS12}$env:RELAY_LISTEN=':${port}'; irm "${server}/install-relay.ps1" | iex`;
     internalCmd = `${PS_TLS12}irm "${relay}/install.ps1?${q}" | iex`;
   } else if (CUR_OS === "macos") {
-    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sh`;
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh" | env ${listenEnv} sh`;
     internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
   } else {
-    // Relay gateway still typically needs root for privileged listen ports;
-    // internal agents default to non-root for demo safety.
-    gatewayCmd = `curl -fsSL "${server}/install-relay.sh?${q}" | sudo sh`;
+    // sudo -E keeps AIOPS_RELAY_SECRET; env sets listen port for the install script.
+    gatewayCmd = `curl -fsSL "${server}/install-relay.sh" | sudo -E env ${listenEnv} sh`;
     internalCmd = `curl -fsSL "${relay}/install.sh?${q}" | sh`;
   }
   $("relayGatewayCmd").textContent = gatewayCmd;
   $("relayInternalCmd").textContent = internalCmd;
+  const copyBtn = $("copyCmdBtn");
+  if (copyBtn) copyBtn.disabled = false;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
     ? `${PS_TLS12}irm "${relay}/uninstall.ps1" | iex`
     : `curl -fsSL "${relay}/uninstall.sh" | sh`;

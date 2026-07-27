@@ -28,24 +28,43 @@ func normalizeAndValidateConfig(cfg *config) error {
 		cfg.StateFile = "agent_state.json"
 	}
 
-	targets := cfg.Servers
-	if len(targets) == 0 && strings.TrimSpace(cfg.Server) != "" {
-		targets = []ServerConfig{{Server: cfg.Server, Token: cfg.Token}}
-	}
-	if len(targets) == 0 {
-		return fmt.Errorf("至少配置一个 server 或 servers")
-	}
-	for i := range targets {
-		targets[i].Server = strings.TrimRight(strings.TrimSpace(targets[i].Server), "/")
-		u, err := url.Parse(targets[i].Server)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
-			return fmt.Errorf("servers[%d].server 必须是无内嵌凭据的 http/https URL", i)
+	// Gateway relay: single upstream only — servers[] would leave cfg.Server empty
+	// and break the reverse-proxy target.
+	if cfg.Relay {
+		if len(cfg.Servers) > 0 {
+			return fmt.Errorf("relay 模式不支持 servers 多服务端配置，请使用单一 server")
 		}
-	}
-	if len(cfg.Servers) > 0 {
-		cfg.Servers = targets
+		cfg.Server = strings.TrimRight(strings.TrimSpace(cfg.Server), "/")
+		if cfg.Server == "" {
+			return fmt.Errorf("relay 模式必须配置 server（上游云监控地址）")
+		}
+		u, err := url.Parse(cfg.Server)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			return fmt.Errorf("relay server 必须是无内嵌凭据的 http/https URL")
+		}
+		if strings.TrimSpace(cfg.Listen) == "" {
+			cfg.Listen = ":8529"
+		}
 	} else {
-		cfg.Server = targets[0].Server
+		targets := cfg.Servers
+		if len(targets) == 0 && strings.TrimSpace(cfg.Server) != "" {
+			targets = []ServerConfig{{Server: cfg.Server, Token: cfg.Token}}
+		}
+		if len(targets) == 0 {
+			return fmt.Errorf("至少配置一个 server 或 servers")
+		}
+		for i := range targets {
+			targets[i].Server = strings.TrimRight(strings.TrimSpace(targets[i].Server), "/")
+			u, err := url.Parse(targets[i].Server)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+				return fmt.Errorf("servers[%d].server 必须是无内嵌凭据的 http/https URL", i)
+			}
+		}
+		if len(cfg.Servers) > 0 {
+			cfg.Servers = targets
+		} else {
+			cfg.Server = targets[0].Server
+		}
 	}
 
 	if cfg.SNI != nil {

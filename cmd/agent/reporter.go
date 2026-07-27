@@ -415,6 +415,11 @@ func (a *Agent) reconcileIdentity() {
 	if a.identity.Fingerprint == "" {
 		return // 拿不到机器指纹（无 machine-id 且无 MAC）时无从判定，保持原样
 	}
+	// Multi-server: never adopt one panel's host_id for all targets — that poisons
+	// the other panels' history. Each server binds via fingerprint on register.
+	if len(a.targets) > 1 {
+		return
+	}
 	for _, t := range a.targets {
 		if !t.register(a.identity) {
 			continue // 该服务端不可达/拒绝，换下一个

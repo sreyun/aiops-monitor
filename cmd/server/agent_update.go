@@ -234,12 +234,20 @@ func (s *Server) handleAgentUpdateStart(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Prefer each host's reported agent base (relay URL). Fallback for legacy
-	// script path when a host has not reported server_url yet.
+	// script path when a host has not reported server_url yet. Module updates may
+	// proceed with an empty job base (agent uses its configured report URL).
 	fallback := strings.TrimRight(s.serverURL(r), "/")
 	if fallback == "" {
 		fallback = s.agentPublicBaseURL()
 	}
-	if fallback == "" {
+	needConcreteBase := false
+	for _, h := range allowed {
+		if agentReportedDownloadBase(h) == "" && !hostSupportsAgentUpdateModule(h) {
+			needConcreteBase = true
+			break
+		}
+	}
+	if needConcreteBase && fallback == "" {
 		for _, h := range allowed {
 			s.agentUpdates.clearInFlight(h.ID)
 		}
@@ -466,14 +474,17 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 	var out string
 	method := ""
 	for attempt := 0; attempt <= agentUpdateMaxRetries; attempt++ {
-		dlBase := agentDownloadBase(h, job.ServerURL)
+		// Module path: only pass the agent-reported base (relay LAN URL). Never inject
+		// cloud PublicURL — agents behind a gateway cannot reach it, and validateUpdateServerURL
+		// would reject it against allowedBases. Empty server → agent uses configured report base.
+		moduleBase := agentReportedDownloadBase(h)
+		scriptBase := agentDownloadBase(h, job.ServerURL)
 		if hostSupportsAgentUpdateModule(h) {
 			args := map[string]string{
-				// Prefer empty server: agent uses its configured report base (relay-safe).
 				"force": bool01(job.Force || job.Rollback),
 			}
-			if dlBase != "" {
-				args["server"] = dlBase
+			if moduleBase != "" {
+				args["server"] = moduleBase
 			}
 			if job.TargetVer != "" {
 				args["version"] = job.TargetVer
@@ -490,18 +501,27 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 			s.agentUpdates.setHostResult(hr, "running", method, "")
 			out, lastKind, lastErr = s.runAgentModuleKind(h.ID, "agent_update", args, agentUpdateTimeoutSec)
 			if lastErr != nil && !job.Rollback && shouldLegacyAgentUpdateFallback(out, lastErr) {
-				method = "script"
-				s.agentUpdates.setHostResult(hr, "running", method, "")
-				out, lastKind, lastErr = s.runLegacyAgentUpdateScriptKind(h, dlBase, job.Force)
+				if scriptBase == "" {
+					lastErr = fmt.Errorf("legacy update needs a download base (host server_url or public_url)")
+					lastKind = execExit
+				} else {
+					method = "script"
+					s.agentUpdates.setHostResult(hr, "running", method, "")
+					out, lastKind, lastErr = s.runLegacyAgentUpdateScriptKind(h, scriptBase, job.Force)
+				}
 			}
 		} else {
 			if job.Rollback {
 				s.agentUpdates.setHostResult(hr, "skipped", "", "rollback requires agent_update module")
 				return
 			}
+			if scriptBase == "" {
+				s.agentUpdates.setHostResult(hr, "skipped", "", "no download base (host server_url or public_url)")
+				return
+			}
 			method = "script"
 			s.agentUpdates.setHostResult(hr, "running", method, "")
-			out, lastKind, lastErr = s.runLegacyAgentUpdateScriptKind(h, dlBase, job.Force)
+			out, lastKind, lastErr = s.runLegacyAgentUpdateScriptKind(h, scriptBase, job.Force)
 		}
 		if lastErr == nil {
 			s.agentUpdates.setHostResult(hr, "success", method, truncateRun(out, 500))
@@ -551,13 +571,20 @@ func bool01(v bool) string {
 	return "0"
 }
 
-// agentDownloadBase prefers the URL the agent itself uses to reach the server
-// (relay or direct). Falls back to job/dashboard URL for legacy hosts.
+// agentReportedDownloadBase is the URL the agent itself uses (relay or direct).
+// Empty means the agent_update module should use its configured report base.
+func agentReportedDownloadBase(h *Host) string {
+	if h == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(h.ServerURL), "/")
+}
+
+// agentDownloadBase prefers the agent-reported base; falls back to job/dashboard
+// URL for legacy script updates that must embed a concrete /dl URL.
 func agentDownloadBase(h *Host, fallback string) string {
-	if h != nil {
-		if u := strings.TrimRight(strings.TrimSpace(h.ServerURL), "/"); u != "" {
-			return u
-		}
+	if u := agentReportedDownloadBase(h); u != "" {
+		return u
 	}
 	return strings.TrimRight(strings.TrimSpace(fallback), "/")
 }
@@ -628,10 +655,14 @@ func (s *Server) maybeAutoUpdateHost(h *Host) {
 	if !s.agentDistHas(goos, goarch) {
 		return
 	}
-	base := agentDownloadBase(h, s.agentPublicBaseURL())
-	if base == "" {
-		// Need PublicURL or agent-reported server_url to build /dl download base.
-		return
+	// Module-capable hosts can update with an empty job base (agent uses report URL).
+	// Legacy script hosts still need a concrete download base.
+	base := agentReportedDownloadBase(h)
+	if base == "" && !hostSupportsAgentUpdateModule(h) {
+		base = s.agentPublicBaseURL()
+		if base == "" {
+			return
+		}
 	}
 	// Freeze-only for auto path: highRisk=false so default remote gate does not
 	// require an approved change outside freeze windows (manual push stays high-risk).

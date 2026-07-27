@@ -21,14 +21,15 @@ func TestDeskIsSecureName(t *testing.T) {
 
 func TestChordVKSequence(t *testing.T) {
 	cases := map[string][]int{
-		"win_l":           {0x5B, 0x4C},
-		"ctrl_shift_esc":  {0x11, 0x10, 0x1B},
-		"esc":             {0x1B},
-		"ctrl_alt_bksp":   {0x11, 0x12, 0x08},
-		"enter":           {0x0D},
-		"tab":             {0x09},
-		"ctrl_v":          {0x11, 0x56},
-		"unknown-chord":   nil,
+		"win_l":          {0x5B, 0x4C},
+		"ctrl_shift_esc": {0x11, 0x10, 0x1B},
+		"esc":            {0x1B},
+		"ctrl_alt_bksp":  {0x11, 0x12, 0x08},
+		"enter":          {0x0D},
+		"tab":            {0x09},
+		"ctrl_v":         {0x11, 0x56},
+		"ctrl_a":         {0x11, 0x41},
+		"unknown-chord":  nil,
 	}
 	for name, want := range cases {
 		got := chordVKSequence(name)
@@ -77,9 +78,9 @@ type stubDeskInput struct {
 	keys []int
 }
 
-func (s *stubDeskInput) MouseMove(x, y int) error          { return nil }
+func (s *stubDeskInput) MouseMove(x, y int) error                { return nil }
 func (s *stubDeskInput) MouseButton(button int, down bool) error { return nil }
-func (s *stubDeskInput) MouseWheel(delta int) error        { return nil }
+func (s *stubDeskInput) MouseWheel(delta int) error              { return nil }
 func (s *stubDeskInput) Key(vk int, down bool) error {
 	if down {
 		s.keys = append(s.keys, vk)

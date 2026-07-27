@@ -249,12 +249,33 @@ safeAddEventListener("resetTokenBtn", "click", resetToken);
 safeAddEventListener("revokeTokenBtn", "click", revokeInstallToken);
 safeAddEventListener("installTokenPolicyBtn", "click", saveInstallTokenPolicy);
 safeAddEventListener("agentAutoUpdateSaveBtn", "click", saveAgentAutoUpdatePolicy);
+safeAddEventListener("agentAutoUpdate", "change", syncAgentAutoUpdateBadge);
+safeAddEventListener("agentAutoUpdateToggle", "click", () => {
+  const b = document.getElementById("agentAutoUpdateBody");
+  const c = document.getElementById("agentAutoUpdateCaret");
+  const h = document.getElementById("agentAutoUpdateToggle");
+  if (!b) return;
+  const hidden = b.style.display === "none";
+  b.style.display = hidden ? "" : "none";
+  if (c) c.textContent = hidden ? "▾" : "▸";
+  if (h) h.setAttribute("aria-expanded", hidden ? "true" : "false");
+});
+safeAddEventListener("agentAutoUpdateToggle", "keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    document.getElementById("agentAutoUpdateToggle")?.click();
+  }
+});
 safeAddEventListener("tokenToggleBtn", "click", function() {
   TOKEN_REVEALED = !TOKEN_REVEALED;
   updateTokenDisplay();
   this.title = TOKEN_REVEALED ? I18N.t("ui.hide_token") : I18N.t("ui.show_token");
 });
 safeAddEventListener("copyCmdBtn", "click", function() {
+  if (MULTI_SERVER_MODE && buildMultiServerTargets().length < 2) {
+    toast(I18N.t("install.multi_need_two"), "err");
+    return;
+  }
   copyWithFeedback(this, $("installCmd").textContent, I18N.t("toast.copy_install"));
 });
 // 点击命令区域本身也可复制
@@ -303,6 +324,7 @@ document.querySelectorAll('input[name="installMode"]').forEach(r => {
 // 多服务端推送列表变更
 safeAddEventListener("multiServerList", "input", renderInstallCmd);
 safeAddEventListener("relayGatewayIP", "input", renderInstallCmd);
+safeAddEventListener("relayListenPort", "input", renderInstallCmd);
 safeAddEventListener("copyRelayGatewayBtn", "click", function() {
   copyWithFeedback(this, $("relayGatewayCmd").textContent, I18N.t("toast.copy_relay_install"));
 });

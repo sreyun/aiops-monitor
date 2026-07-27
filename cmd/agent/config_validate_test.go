@@ -32,6 +32,35 @@ func TestNormalizeAndValidateConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndValidateRelayConfig(t *testing.T) {
+	c := defaultConfig()
+	c.Relay = true
+	c.Server = "https://cloud.example:8529"
+	c.Servers = nil
+	if err := normalizeAndValidateConfig(&c); err != nil {
+		t.Fatalf("relay config rejected: %v", err)
+	}
+	if c.Listen != ":8529" {
+		t.Fatalf("relay listen default = %q, want :8529", c.Listen)
+	}
+
+	bad := defaultConfig()
+	bad.Relay = true
+	bad.Server = ""
+	bad.Servers = []ServerConfig{{Server: "https://a", Token: "t"}}
+	if err := normalizeAndValidateConfig(&bad); err == nil {
+		t.Fatal("relay+servers must be rejected")
+	}
+
+	empty := defaultConfig()
+	empty.Relay = true
+	empty.Server = ""
+	empty.Servers = nil
+	if err := normalizeAndValidateConfig(&empty); err == nil {
+		t.Fatal("relay without server must be rejected")
+	}
+}
+
 func TestNormalizeContentAuditLeastPrivilege(t *testing.T) {
 	c := validAgentConfig()
 	c.SNI = &SNIConfig{ContentAudit: true}

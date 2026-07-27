@@ -6,10 +6,26 @@ package main
 // Keeping one table avoids the previous drift where Linux/macOS/Windows each
 // dropped different keys (punctuation, F-keys, Meta, numpad).
 
+// deskPrintableRune reports whether KeyboardEvent.key should be injected as
+// UNICODE (layout / CapsLock independent) rather than a virtual-key. Punctuation
+// MUST NOT use ASCII-as-VK — '$'(0x24) is VK_HOME, '#'(0x23) is VK_END, etc.
+func deskPrintableRune(key string) (rune, bool) {
+	rs := []rune(key)
+	if len(rs) != 1 {
+		return 0, false
+	}
+	r := rs[0]
+	if r < 32 || r == 127 {
+		return 0, false
+	}
+	return r, true
+}
+
 func deskKeyToVK(key, code string) int {
 	if vk := deskCodeToVK(code); vk != 0 {
 		return vk
 	}
+	// Letters / digits only — never map punctuation bytes to VK.
 	if len(key) == 1 {
 		r := key[0]
 		if r >= 'a' && r <= 'z' {

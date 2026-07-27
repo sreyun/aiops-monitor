@@ -56,19 +56,19 @@ var (
 	procCloseDesktop              = modUser32.NewProc("CloseDesktop")
 	procGetUserObjectInformationW = modUser32.NewProc("GetUserObjectInformationW")
 	procSetProcessDPIAware        = modUser32.NewProc("SetProcessDPIAware")
-	procEnumWindows              = modUser32.NewProc("EnumWindows")
-	procEnumDesktopWindows       = modUser32.NewProc("EnumDesktopWindows")
-	procIsWindowVisible          = modUser32.NewProc("IsWindowVisible")
-	procGetWindowRect            = modUser32.NewProc("GetWindowRect")
-	procGetWindowTextW           = modUser32.NewProc("GetWindowTextW")
-	procGetClassNameW            = modUser32.NewProc("GetClassNameW")
-	procPrintWindow              = modUser32.NewProc("PrintWindow")
-	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
+	procEnumWindows               = modUser32.NewProc("EnumWindows")
+	procEnumDesktopWindows        = modUser32.NewProc("EnumDesktopWindows")
+	procIsWindowVisible           = modUser32.NewProc("IsWindowVisible")
+	procGetWindowRect             = modUser32.NewProc("GetWindowRect")
+	procGetWindowTextW            = modUser32.NewProc("GetWindowTextW")
+	procGetClassNameW             = modUser32.NewProc("GetClassNameW")
+	procPrintWindow               = modUser32.NewProc("PrintWindow")
+	procGetWindowThreadProcessId  = modUser32.NewProc("GetWindowThreadProcessId")
 
-	modKernel32Desk          = syscall.NewLazyDLL("kernel32.dll")
-	procGetCurrentProcessId  = modKernel32Desk.NewProc("GetCurrentProcessId")
-	procProcessIdToSessionId = modKernel32Desk.NewProc("ProcessIdToSessionId")
-	procGetLastError         = modKernel32Desk.NewProc("GetLastError")
+	modKernel32Desk                = syscall.NewLazyDLL("kernel32.dll")
+	procGetCurrentProcessId        = modKernel32Desk.NewProc("GetCurrentProcessId")
+	procProcessIdToSessionId       = modKernel32Desk.NewProc("ProcessIdToSessionId")
+	procGetLastError               = modKernel32Desk.NewProc("GetLastError")
 	procOpenProcess                = modKernel32Desk.NewProc("OpenProcess")
 	procQueryFullProcessImageNameW = modKernel32Desk.NewProc("QueryFullProcessImageNameW")
 	procCloseHandleDesk            = modKernel32Desk.NewProc("CloseHandle")
@@ -231,26 +231,26 @@ func runDesktopWorker(agent *Agent) error {
 }
 
 const (
-	smCXScreen            = 0
-	smCYScreen            = 1
-	smCXVirtualScreen     = 78
-	smCYVirtualScreen     = 79
-	smXVVirtualScreen     = 76
-	smYVVirtualScreen     = 77
-	srcCopy               = 0x00CC0020
-	captureBLT            = 0x40000000 // include layered windows
-	biRGB                 = 0
-	dibRGBColors          = 0
-	inputMouse            = 0
-	inputKeyboard         = 1
-	mouseeventfMove       = 0x0001
-	mouseeventfLeftDown   = 0x0002
-	mouseeventfLeftUp     = 0x0004
-	mouseeventfRightDown  = 0x0008
-	mouseeventfRightUp    = 0x0010
-	mouseeventfMiddleDown = 0x0020
-	mouseeventfMiddleUp   = 0x0040
-	mouseeventfWheel      = 0x0800
+	smCXScreen             = 0
+	smCYScreen             = 1
+	smCXVirtualScreen      = 78
+	smCYVirtualScreen      = 79
+	smXVVirtualScreen      = 76
+	smYVVirtualScreen      = 77
+	srcCopy                = 0x00CC0020
+	captureBLT             = 0x40000000 // include layered windows
+	biRGB                  = 0
+	dibRGBColors           = 0
+	inputMouse             = 0
+	inputKeyboard          = 1
+	mouseeventfMove        = 0x0001
+	mouseeventfLeftDown    = 0x0002
+	mouseeventfLeftUp      = 0x0004
+	mouseeventfRightDown   = 0x0008
+	mouseeventfRightUp     = 0x0010
+	mouseeventfMiddleDown  = 0x0020
+	mouseeventfMiddleUp    = 0x0040
+	mouseeventfWheel       = 0x0800
 	mouseeventfAbsolute    = 0x8000
 	mouseeventfVirtualDesk = 0x4000
 	keyeventfKeyUp         = 0x0002
@@ -651,12 +651,12 @@ const (
 )
 
 type enumWinCandidate struct {
-	hwnd   uintptr
-	score  int
-	w, h   int
-	title  string
-	class  string
-	exe    string
+	hwnd  uintptr
+	score int
+	w, h  int
+	title string
+	class string
+	exe   string
 }
 
 var (
@@ -1034,7 +1034,9 @@ func (i *winInput) ensureInputDesktop() error {
 		i.locked = true
 	}
 	now := time.Now()
-	if i.curDesk != 0 && i.curDeskName != "" && now.Sub(i.lastDeskChk) < 120*time.Millisecond {
+	// Trust a recent attach longer — OpenInputDesktop on every key made lock-screen
+	// typing feel like ~1 char / 200–500ms even when SendInput itself was fine.
+	if i.curDesk != 0 && i.curDeskName != "" && now.Sub(i.lastDeskChk) < 500*time.Millisecond {
 		if threadDesktopName() == i.curDeskName {
 			return nil
 		}
@@ -1314,8 +1316,8 @@ func (i *winInput) SendCAD() error {
 }
 
 // TypeText injects Unicode text via KEYEVENTF_UNICODE (works on lock screen
-// password boxes). Events are batched into few SendInput calls — the previous
-// per-rune SendInput + 8ms sleep made lock-screen passwords feel unusable.
+// password boxes; layout/CapsLock independent). Live typing and unlock both use
+// this path for printable characters.
 func (i *winInput) TypeText(text string) error {
 	if err := i.ensureInputDesktop(); err != nil {
 		return err
@@ -1325,14 +1327,41 @@ func (i *winInput) TypeText(text string) error {
 		if len(batch) == 0 {
 			return nil
 		}
-		n, _, _ := procSendInput.Call(uintptr(len(batch)), uintptr(unsafe.Pointer(&batch[0])), cb)
+		n, _, callErr := procSendInput.Call(uintptr(len(batch)), uintptr(unsafe.Pointer(&batch[0])), cb)
 		if n == 0 {
-			i.logSendFail("type_text", win32LastError(), "count", len(batch))
+			errno := win32LastError()
+			if e, ok := callErr.(syscall.Errno); ok && e != 0 {
+				errno = uint32(e)
+			}
+			i.logSendFail("type_text", errno, "count", len(batch))
+			// Fallback: one rune at a time (some Winlogon builds reject large batches).
+			if len(batch) > 2 {
+				for off := 0; off+1 < len(batch); off += 2 {
+					pair := batch[off : off+2]
+					n2, _, _ := procSendInput.Call(2, uintptr(unsafe.Pointer(&pair[0])), cb)
+					if n2 == 0 {
+						return fmt.Errorf("UNICODE 注入失败（desktop=%s win32=%d）", i.curDeskName, win32LastError())
+					}
+					time.Sleep(time.Millisecond)
+				}
+				return nil
+			}
 			return fmt.Errorf("UNICODE 注入失败（desktop=%s）", i.curDeskName)
+		}
+		if n != uintptr(len(batch)) {
+			// Partial accept — finish remaining events individually.
+			rest := batch[n:]
+			for off := 0; off+1 < len(rest); off += 2 {
+				pair := rest[off : off+2]
+				n2, _, _ := procSendInput.Call(2, uintptr(unsafe.Pointer(&pair[0])), cb)
+				if n2 == 0 {
+					return fmt.Errorf("UNICODE 注入不完整（desktop=%s）", i.curDeskName)
+				}
+			}
 		}
 		return nil
 	}
-	const chunk = 48 // runes per SendInput batch
+	const chunk = 16 // smaller batches — Winlogon password edits drop large floods
 	batch := make([]winKeyInput, 0, chunk*2)
 	for _, r := range text {
 		if r == '\n' || r == '\r' || r == '\t' {
@@ -1348,16 +1377,20 @@ func (i *winInput) TypeText(text string) error {
 			_ = i.Key(vk, false)
 			continue
 		}
+		// BMP only in one INPUT; skip/split non-BMP (passwords are BMP).
+		if r > 0xFFFF {
+			continue
+		}
 		batch = append(batch,
-			winKeyInput{Type: inputKeyboard, Scan: uint16(r), Flags: keyeventfUnicode},
-			winKeyInput{Type: inputKeyboard, Scan: uint16(r), Flags: keyeventfUnicode | keyeventfKeyUp},
+			winKeyInput{Type: inputKeyboard, Vk: 0, Scan: uint16(r), Flags: keyeventfUnicode},
+			winKeyInput{Type: inputKeyboard, Vk: 0, Scan: uint16(r), Flags: keyeventfUnicode | keyeventfKeyUp},
 		)
 		if len(batch) >= chunk*2 {
 			if err := flush(batch); err != nil {
 				return err
 			}
 			batch = batch[:0]
-			// Brief yield so Winlogon password edit can drain the queue.
+			// Yield so LogonUI can process — keep tiny to avoid "one char / half second".
 			time.Sleep(time.Millisecond)
 		}
 	}

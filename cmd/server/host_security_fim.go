@@ -102,6 +102,27 @@ func indexAgentTextDiffs(diffs []hsAgentTextDiff) map[string]hsAgentTextDiff {
 	return m
 }
 
+// pickFIMInventoryToStore chooses which inventory to persist on a completed scan.
+// Never replace a nonempty baseline with an empty cur (would force perpetual re-baseline).
+func pickFIMInventoryToStore(cur, livePrev, hostPrev []HostFileHash, fimOn bool) []HostFileHash {
+	if len(cur) > 0 {
+		return cur
+	}
+	if !fimOn {
+		if len(livePrev) > 0 {
+			return livePrev
+		}
+		return hostPrev
+	}
+	if len(livePrev) > 0 {
+		return livePrev
+	}
+	if len(hostPrev) > 0 {
+		return hostPrev
+	}
+	return cur
+}
+
 // diffHostFileInventory compares current inventory to previous baseline.
 // When prev is empty/nil, returns nil changes and baselineEstablished=true (first scan).
 func diffHostFileInventory(prev, cur []HostFileHash, textDiffs []hsAgentTextDiff) (changes []HostFileChange, baselineEstablished bool) {

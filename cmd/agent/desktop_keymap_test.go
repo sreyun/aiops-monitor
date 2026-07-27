@@ -50,10 +50,21 @@ func TestDeskKeyToVKBasics(t *testing.T) {
 	if got := deskKeyToVK("a", ""); got != 'A' {
 		t.Fatalf("key a: got 0x%X", got)
 	}
+	// Punctuation must NOT map to VK (0x24='$'' is VK_HOME — historic bug).
 	if got := deskKeyToVK("$", "Unknown"); got != 0 {
-		// single-char non-ASCII-letter fallback may return the byte; Unknown code with
-		// multi-byte key should still be 0 when len(key)!=1 handled — "$" is len 1.
-		_ = got
+		t.Fatalf("punctuation $ must not become VK, got 0x%X", got)
+	}
+	if got := deskKeyToVK("#", ""); got != 0 {
+		t.Fatalf("punctuation # must not become VK, got 0x%X", got)
+	}
+	if r, ok := deskPrintableRune("@"); !ok || r != '@' {
+		t.Fatalf("printable @: %v %v", r, ok)
+	}
+	if _, ok := deskPrintableRune("Backspace"); ok {
+		t.Fatal("Backspace must not be printable")
+	}
+	if _, ok := deskPrintableRune("Delete"); ok {
+		t.Fatal("Delete must not be printable")
 	}
 }
 

@@ -699,11 +699,32 @@ svg.sparkline{width:100%; height:46px; display:block}
 .relay-toggle span{font-size:13px; color:var(--txt)}
 
 /* Install mode radio-button row */
-.install-mode-row{display:flex; gap:16px; flex-wrap:wrap}
-.install-mode-opt{display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; color:var(--txt); padding:5px 0}
-.install-mode-opt input[type=radio]{width:auto; accent-color:var(--accent); margin:0}
+.install-mode-row{display:flex; gap:8px; flex-wrap:wrap}
+.install-mode-opt{
+  display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:var(--txt);
+  flex:1; min-width:148px; padding:10px 12px; border:1px solid var(--line2); border-radius:var(--r-sm);
+  background:var(--panel2); transition:border-color .15s ease, background .15s ease, box-shadow .15s ease}
+.install-mode-opt:hover{border-color:var(--hover-border); background:var(--panel)}
+.install-mode-opt:has(input:checked){
+  border-color:var(--accent-border); background:var(--accent-soft);
+  box-shadow:inset 0 0 0 1px var(--accent-border)}
+.install-mode-opt input[type=radio]{width:auto; accent-color:var(--accent); margin:2px 0 0; flex:none}
+.install-mode-opt .imo-text{display:flex; flex-direction:column; gap:2px; min-width:0}
+.install-mode-opt .imo-title{font-weight:600; line-height:1.3}
+.install-mode-opt .imo-desc{font-size:11.5px; color:var(--muted); font-weight:400; line-height:1.35}
 .relay-info{font-size:12px; color:var(--muted); background:var(--panel2); border:1px solid var(--line);
   border-radius:var(--r-sm); padding:12px 14px; margin-bottom:14px; line-height:1.65}
+#installMask .modal{max-width:760px}
+#installMask .modal-body{display:flex; flex-direction:column; gap:2px}
+#installMask .log-collect{margin-top:4px}
+#installMask .lc-meta{display:inline-flex; align-items:center; gap:8px}
+#installMask .lc-badge{
+  font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px;
+  background:var(--ok-soft); color:var(--ok-txt); border:1px solid rgba(49,196,107,.35)}
+#installMask .lc-badge.off{background:var(--panel3); color:var(--muted); border-color:var(--line2)}
+#installMask .warn-hint{color:var(--warn-txt); margin-top:6px}
+#installMask .cmd-row{margin-top:4px}
+#installMask #osTabs{margin:10px 0 4px}
 
 /* ---------- Toast ---------- */
 .toast{position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(8px); z-index:500;
@@ -1623,7 +1644,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-status.off::before{background:var(--crit)}
 .term-modal .modal-head{gap:12px}
 .term-body{padding:0 !important}
-.term-screen{margin:0; background:var(--term-bg); color:var(--term-text); border:none; border-radius:0 0 var(--r-lg) var(--r-lg);
+.term-screen{position:relative; margin:0; background:var(--term-bg); color:var(--term-text); border:none; border-radius:0 0 var(--r-lg) var(--r-lg);
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace; font-size:12.5px; line-height:1.25;
   padding:12px 14px; height:62vh; overflow:auto; white-space:normal; outline:none; cursor:text;
   font-variant-ligatures:none; font-feature-settings:"liga" 0;
@@ -1633,9 +1654,21 @@ svg.sparkline{width:100%; height:46px; display:block}
 .term-screen:focus, .term-screen:focus-within, .term-screen.term-focused{
   box-shadow:inset 0 0 0 1px var(--accent-soft), inset 0 0 20px rgba(76,141,255,.04);
 }
-.term-row{white-space:pre; min-height:1em; user-select:text; -webkit-user-select:text}
+/* Fixed line box so overlay cursor Y = row.offsetTop stays stable (no 忽高忽低). */
+.term-row,.term-sb .term-row{
+  white-space:pre; margin:0; padding:0; border:0;
+  height:1.25em; line-height:1.25; min-height:0; max-height:1.25em;
+  overflow:hidden; box-sizing:border-box;
+  user-select:text; -webkit-user-select:text;
+}
 .term-lv{position:relative; contain:layout paint style; will-change:contents}
-.term-cursor{position:absolute; display:flex; align-items:center; justify-content:center; background:var(--term-text); color:var(--term-bg); border-radius:1px; min-width:.6em; pointer-events:none; z-index:1}
+.term-cursor{
+  position:absolute; display:block; box-sizing:border-box;
+  background:var(--term-text); color:var(--term-bg); border-radius:1px;
+  padding:0; margin:0; line-height:inherit; overflow:hidden;
+  text-align:center; white-space:pre;
+  pointer-events:none; z-index:2;
+}
 /* focus-within 规则已移至 .term-input 定义之后统一处理 */
 @keyframes termCursorBlink{0%,59%{opacity:1}60%,100%{opacity:.35}}
 /* 隐藏 textarea：移动端虚拟键盘捕获器（不可见但可聚焦） */
