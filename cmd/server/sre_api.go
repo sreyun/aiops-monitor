@@ -3679,8 +3679,8 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if len(toolsJSON) == 0 {
 		toolsJSON = []byte("[]")
 	}
-	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"tool_turns\":%d,\"fallback_model\":%s,\"tools\":%s}}\n\n",
-		jsonString(runID), loopMeta.ToolTurns, jsonString(loopMeta.FallbackModel), toolsJSON)
+	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s,\"tool_turns\":%d,\"fallback_model\":%s,\"tools\":%s}}\n\n",
+		jsonString(runID), jsonString(runID), loopMeta.ToolTurns, jsonString(loopMeta.FallbackModel), toolsJSON)
 	// 上传文件默认不自动入库，避免凭据/配置明文进入公共 RAG；仅在显式开启未验证学习时脱敏后写入。
 	if s.shouldRememberUnverifiedAIOutput() {
 		for _, f := range req.Files {
