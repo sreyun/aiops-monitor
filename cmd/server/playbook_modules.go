@@ -51,6 +51,7 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 	"security_listen":     {Name: "security_listen", ReadOnly: true, Domain: "security", Desc: "对外监听端口（安全视角）"},
 	"host_security_scan":  {Name: "host_security_scan", ReadOnly: true, Domain: "security", Desc: "主机安全扫描（包清单/加固/IOC/ClamAV 可选）"},
 	"auth_failures":       {Name: "auth_failures", ReadOnly: true, Domain: "security", Desc: "近期认证失败摘要（若可得）"},
+	"clamav_update":       {Name: "clamav_update", ReadOnly: false, Domain: "security", Desc: "更新 ClamAV 病毒库（freshclam；args.proxy=host:port 走代理，timeout_sec 可调）"},
 
 	// —— 大数据运维（只读）——
 	"bigdata_jps":   {Name: "bigdata_jps", ReadOnly: true, Domain: "bigdata", Desc: "Java 进程列表（jps）"},

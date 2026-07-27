@@ -31,10 +31,15 @@ type hostSecurityReport struct {
 	FileHashes    []hostSecHash     `json:"file_hashes"`
 	FileInventory []hostSecFileInv  `json:"file_inventory,omitempty"`
 	FileTextDiffs []hostSecTextDiff `json:"file_text_diffs,omitempty"`
-	Malware       hostSecMalware    `json:"malware"`
-	Firewall      hostSecFirewall   `json:"firewall"`
-	IOC           []hostSecFinding  `json:"ioc"`
-	Meta          map[string]any    `json:"meta,omitempty"`
+	// FileChanges/FIMStats are the full-scope FIM wire format: the agent owns the
+	// baseline and reports deltas, because a whole-filesystem inventory cannot be
+	// round-tripped through a scan report.
+	FileChanges []hostSecFileChange `json:"file_changes,omitempty"`
+	FIMStats    *hostSecFIMStats    `json:"fim_stats,omitempty"`
+	Malware     hostSecMalware      `json:"malware"`
+	Firewall    hostSecFirewall     `json:"firewall"`
+	IOC         []hostSecFinding    `json:"ioc"`
+	Meta        map[string]any      `json:"meta,omitempty"`
 }
 
 type hostSecPkg struct {
@@ -64,6 +69,92 @@ type hostSecMalware struct {
 	Scanned  int              `json:"scanned"`
 	Infected []string         `json:"infected,omitempty"`
 	Findings []hostSecFinding `json:"findings,omitempty"`
+	// DBAgeDays is the age of the newest signature database file. A clean scan
+	// against a months-old database is a false sense of safety, so the age is
+	// reported alongside the result rather than being implied by it.
+	DBAgeDays int   `json:"db_age_days,omitempty"`
+	DBUpdated int64 `json:"db_updated,omitempty"`
+}
+
+// clamavDBDirs lists where distributions keep the signature databases.
+func clamavDBDirs() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"/usr/local/var/lib/clamav", "/opt/homebrew/var/lib/clamav", "/usr/local/share/clamav"}
+	case "windows":
+		return []string{`C:\Program Files\ClamAV\database`, `C:\ClamAV\database`}
+	default:
+		return []string{"/var/lib/clamav", "/usr/local/share/clamav", "/var/clamav"}
+	}
+}
+
+// newestSignatureIn returns the mtime of the most recently written signature
+// file in dir. main.cvd changes rarely while daily.cld changes constantly, so
+// the freshness of the set is the newest member, not the oldest.
+func newestSignatureIn(dir string) time.Time {
+	var newest time.Time
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return newest
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".cvd") && !strings.HasSuffix(name, ".cld") && !strings.HasSuffix(name, ".cud") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+	}
+	return newest
+}
+
+// clamavDBFreshness returns the mtime of the newest signature file across all
+// known database locations, or zero when no database could be located.
+func clamavDBFreshness() time.Time {
+	var newest time.Time
+	for _, dir := range clamavDBDirs() {
+		if t := newestSignatureIn(dir); t.After(newest) {
+			newest = t
+		}
+	}
+	return newest
+}
+
+// clamavFreshnessFinding grades the signature database age. ClamAV publishes
+// updates several times a day, so a week without one means freshclam is broken
+// or blocked — the scan result below is only as good as this number.
+func clamavFreshnessFinding(age int, updated time.Time) (hostSecFinding, bool) {
+	if updated.IsZero() {
+		return hostSecFinding{
+			Level: "medium", ID: "clamav_db_age_unknown", Title: "无法确认 ClamAV 病毒库时效",
+			Detail:  "未在常见路径下找到 .cvd/.cld 病毒库文件",
+			Suggest: "确认 ClamAV 数据库目录位置，并配置 freshclam 定时更新",
+		}, true
+	}
+	stamp := updated.Format("2006-01-02 15:04")
+	switch {
+	case age >= 30:
+		return hostSecFinding{
+			Level: "high", ID: "clamav_db_stale", Title: fmt.Sprintf("ClamAV 病毒库已过期 %d 天", age),
+			Detail:  "最近更新时间：" + stamp + "，扫描结果不能代表当前威胁形势",
+			Suggest: "检查 freshclam 服务与出网策略（可配置 freshclam.conf 中的 HTTPProxyServer），立即执行 freshclam",
+		}, true
+	case age >= 7:
+		return hostSecFinding{
+			Level: "medium", ID: "clamav_db_stale", Title: fmt.Sprintf("ClamAV 病毒库已 %d 天未更新", age),
+			Detail:  "最近更新时间：" + stamp,
+			Suggest: "启用 clamav-freshclam 服务或加入定时任务，确保每日更新",
+		}, true
+	}
+	return hostSecFinding{}, false
 }
 
 func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
@@ -97,14 +188,29 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 	rep.Firewall = collectFirewallStatus()
 	rep.Hardening = collectHardeningFindings()
 	rep.Hardening = append(rep.Hardening, firewallFindings(rep.Firewall)...)
+	if v := strings.ToLower(strings.TrimSpace(args["deep"])); v != "0" && v != "false" && v != "off" {
+		rep.Hardening = append(rep.Hardening, collectDeepHardeningFindings()...)
+		rep.Meta["deep"] = true
+	}
 	rep.FileHashes = collectSampleHashes(30)
 	if enableFIM {
-		inv, diffs := collectFIMInventory(enableFIMDiff)
-		rep.FileInventory = inv
-		rep.FileTextDiffs = diffs
+		opts := fimParseOptions(args)
+		opts.ContentDiff = enableFIMDiff
 		rep.Meta["fim"] = true
 		rep.Meta["fim_diff"] = enableFIMDiff
-		rep.Meta["fim_inventory_count"] = len(inv)
+		rep.Meta["fim_scope"] = opts.Scope
+		if opts.Scope == "sensitive" {
+			inv, diffs := collectFIMInventory(enableFIMDiff)
+			rep.FileInventory = inv
+			rep.FileTextDiffs = diffs
+			rep.Meta["fim_inventory_count"] = len(inv)
+		} else {
+			changes, stats := collectFIMChanges(opts)
+			rep.FileChanges = changes
+			rep.FIMStats = &stats
+			rep.Meta["fim_files"] = stats.Files
+			rep.Meta["fim_changes"] = len(changes)
+		}
 	}
 	rep.IOC = collectIOCFindings(rep.Processes, rep.Listeners, rep.FileHashes)
 	rep.Malware = runClamAVScan(enableClam, samplePathsForClam())
@@ -113,7 +219,9 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 	if err != nil {
 		return []byte(`{"error":"marshal failed"}`), 1
 	}
-	// Cap output size (~1.5 MiB)
+	// Cap output size (~1.5 MiB). Shed content diffs first (bulky, optional),
+	// then trim change/inventory tails — the list is severity-sorted, so the
+	// entries that survive are the security-relevant ones.
 	if len(raw) > 1500<<10 {
 		rep.Packages = rep.Packages[:min(200, len(rep.Packages))]
 		if len(rep.FileTextDiffs) > 0 {
@@ -123,6 +231,20 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 		if len(rep.FileInventory) > 40 {
 			rep.FileInventory = rep.FileInventory[:40]
 			rep.Meta["fim_inventory_truncated"] = true
+		}
+		if len(rep.FileChanges) > 0 {
+			for i := range rep.FileChanges {
+				rep.FileChanges[i].Diff = ""
+				rep.FileChanges[i].Truncated = true
+			}
+			if len(rep.FileChanges) > 200 {
+				rep.FileChanges = rep.FileChanges[:200]
+			}
+			if rep.FIMStats != nil {
+				rep.FIMStats.Truncated = true
+				rep.FIMStats.Reported = len(rep.FileChanges)
+			}
+			rep.Meta["fim_changes_truncated"] = true
 		}
 		rep.Meta["truncated"] = true
 		raw, _ = json.Marshal(rep)
@@ -694,6 +816,14 @@ func runClamAVScan(enable bool, paths []string) hostSecMalware {
 		return m
 	}
 	m.ClamAV = "available"
+	dbUpdated := clamavDBFreshness()
+	if !dbUpdated.IsZero() {
+		m.DBUpdated = dbUpdated.Unix()
+		m.DBAgeDays = int(time.Since(dbUpdated).Hours() / 24)
+	}
+	if f, ok := clamavFreshnessFinding(m.DBAgeDays, dbUpdated); ok {
+		m.Findings = append(m.Findings, f)
+	}
 	args := []string{"--infected", "--no-summary", "--max-filesize=5M", "--max-scansize=20M"}
 	exist := []string{}
 	for _, p := range paths {

@@ -56,8 +56,16 @@ function agentVersionBadgeHTML(h) {
   return `<span class="${cls}" title="${esc(tip)}">Agent ${esc(ver)}</span>`;
 }
 
+// A spacer keeps the list columns lined up while select mode is on: offline
+// hosts get no checkbox, and without it every offline row shifts left of the
+// header and its neighbours.
+function agentSelectSpacerHTML() {
+  return AGENT_UPDATE_MODE ? `<span class="agent-sel spacer" aria-hidden="true"></span>` : "";
+}
+
 function agentSelectCheckboxHTML(h) {
-  if (!AGENT_UPDATE_MODE || !h || !h.online) return "";
+  if (!AGENT_UPDATE_MODE) return "";
+  if (!h || !h.online) return agentSelectSpacerHTML();
   const checked = AGENT_UPDATE_SELECTED.has(h.id) ? "checked" : "";
   const label = I18N.t("agent_update.select", "选择以批量更新");
   return `<label class="agent-sel" title="${esc(label)}" data-act="agent-sel-wrap">

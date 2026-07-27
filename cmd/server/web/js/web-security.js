@@ -213,6 +213,7 @@ function wsEngineBarHTML() {
       </div>
       <div class="ws-engine-actions">
         <button class="btn sm ghost" data-ws="toggle-packs">${wsEsc(wsShowPacks ? wsT("ws.hide_packs", "收起模板包") : wsT("ws.show_packs", "模板包"))}</button>
+        <button class="btn sm ghost" data-ws="feeds">${wsEsc(wsT("ws.feeds", "情报源"))}</button>
         ${typeof isAdmin === "function" && isAdmin() ? `<button class="btn sm" data-ws="cfg">${wsEsc(wsT("ws.config", "引擎配置"))}</button>
         <button class="btn sm" data-ws="refresh-tpl">${wsEsc(wsT("ws.refresh_tpl", "更新模板"))}</button>` : ""}
       </div>
@@ -261,6 +262,9 @@ function wsCfgPanelHTML() {
           <span>${wsEsc(wsT("ws.allow_private", "允许扫描私网地址（有 SSRF 风险）"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="wsCfgUpdate"${wsCfg.update_templates ? " checked" : ""}>
           <span>${wsEsc(wsT("ws.update_templates", "启动时增量更新模板"))}</span></label>
+        <label class="switch cfg-enable"><input type="checkbox" id="wsCfgBuiltin"${wsCfg.disable_builtin_checks ? "" : " checked"}>
+          <span>${wsEsc(wsT("ws.cfg_builtin", "启用内置检测（TLS/证书/安全头/Cookie/CORS/敏感路径）"))}</span></label>
+        <p class="ws-help">${wsEsc(wsT("ws.cfg_builtin_help", "内置检测不依赖 Nuclei；即使模板未就绪也能给出传输层与配置层结论。"))}</p>
         <label class="switch cfg-enable"><input type="checkbox" id="wsCfgAISummary"${wsCfg.auto_ai_summary ? " checked" : ""}>
           <span>${wsEsc(wsT("ws.cfg_ai_summary", "扫描完成后自动 AI 摘要"))}</span></label>
       </div>
@@ -678,6 +682,7 @@ function paintWebSecurity() {
     ${wsExportMenuHTML(false)}
   </div></div>`;
   html += wsCfgPanelHTML();
+  if (typeof sfPanelHTML === "function") html += sfPanelHTML();
   html += `<div class="ws-layout">
     <div class="ws-col-main">${wsTargetsHTML()}${wsHistoryHTML()}</div>
     <div class="ws-col-side"><div id="wsDetail" class="cfg-panel ws-card ws-detail sec-panel"></div></div>
@@ -802,6 +807,14 @@ function wsOnShellClick(ev) {
     return;
   }
 
+  const feedBtn = t.closest("[data-sf]");
+  if (feedBtn && el.contains(feedBtn)) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    sfAction(feedBtn.dataset.sf, feedBtn);
+    return;
+  }
+
   const actEl = t.closest("[data-ws]");
   if (actEl && el.contains(actEl)) {
     const act = actEl.dataset.ws;
@@ -882,7 +895,12 @@ function wsAction(act) {
   }
   if (act === "save-target") return wsSaveTarget();
   if (act === "import-openapi") return wsImportOpenAPI();
-  if (act === "cfg") { wsShowCfg = !wsShowCfg; wsShowForm = false; return paintWebSecurity(); }
+  if (act === "cfg") {
+    wsShowCfg = !wsShowCfg; wsShowForm = false;
+    if (typeof SF_OPEN !== "undefined" && wsShowCfg) { SF_OPEN = false; sfStopPoll(); }
+    return paintWebSecurity();
+  }
+  if (act === "feeds") return sfToggle();
   if (act === "toggle-packs") { wsShowPacks = !wsShowPacks; return paintWebSecurity(); }
   if (act === "save-cfg") return wsSaveCfg();
   if (act === "refresh-tpl") return wsRefreshTemplates();
@@ -910,11 +928,18 @@ function wsStartEdit(id) {
   paintWebSecurity();
 }
 
+// The refresh endpoint now returns as soon as the background job starts, so open
+// the feed panel and let it show live progress instead of leaving the operator
+// staring at a toast for ten minutes.
 async function wsRefreshTemplates() {
-  if (typeof toast === "function") toast(wsT("ws.tpl_updating", "正在更新模板库，可能需要数分钟…"), "info");
   try {
-    wsEngine = await wsFetchJSON(`${API}/security/web/engine/refresh`, { method: "POST" });
-    if (typeof toast === "function") toast(wsT("ws.tpl_updated", "模板库已更新"), "ok");
+    await wsFetchJSON(`${API}/security/web/engine/refresh`, { method: "POST" });
+    if (typeof toast === "function") toast(wsT("ws.tpl_updating", "模板库更新已在后台启动，进度见「情报源」面板"), "ok");
+    if (typeof SF_OPEN !== "undefined") {
+      SF_OPEN = true;
+      wsShowCfg = false;
+      sfStartPoll();
+    }
     paintWebSecurity();
   } catch (e) {
     if (typeof toast === "function") toast(String(e.message || e), "err");
@@ -1034,6 +1059,7 @@ async function wsSaveCfg() {
     rate_limit: parseInt(($("wsCfgRate") && $("wsCfgRate").value) || "120", 10),
     allow_private: !!($("wsCfgPrivate") && $("wsCfgPrivate").checked),
     update_templates: !!($("wsCfgUpdate") && $("wsCfgUpdate").checked),
+    disable_builtin_checks: $("wsCfgBuiltin") ? !$("wsCfgBuiltin").checked : !!(wsCfg && wsCfg.disable_builtin_checks),
     templates_dir: (wsCfg && wsCfg.templates_dir) || "",
     concurrency: parseInt(($("wsCfgConc") && $("wsCfgConc").value) || ((wsCfg && wsCfg.concurrency) || 25), 10),
     scan_concurrency: parseInt(($("wsCfgScanConc") && $("wsCfgScanConc").value) || ((wsCfg && wsCfg.scan_concurrency) || 3), 10),
@@ -1120,6 +1146,45 @@ async function wsLoadScan(id) {
   }
 }
 
+// wsOwaspPanel summarizes findings by OWASP Top 10 and by audit framework, so
+// the result reads as a posture report rather than a raw template dump.
+function wsOwaspPanel(scan) {
+  const owasp = scan.owasp || {};
+  const comp = scan.compliance || {};
+  const cats = Object.keys(owasp).sort();
+  const fws = Object.keys(comp).sort();
+  if (!cats.length && !fws.length) return "";
+  let html = `<div class="ws-owasp-panel">`;
+  if (cats.length) {
+    html += `<div class="cfg-panel-title">${wsEsc(wsT("ws.owasp", "OWASP Top 10 分布"))}</div>
+      <div class="ws-owasp-chips">` +
+      cats.map(c => `<span class="ws-owasp-chip"><b>${owasp[c]}</b> ${wsEsc(c)}</span>`).join("") +
+      `</div>`;
+  }
+  if (fws.length) {
+    html += `<div class="cfg-panel-title" style="margin-top:10px">${wsEsc(wsT("ws.compliance", "合规映射"))}</div>
+      <div class="ws-owasp-chips">` +
+      fws.map(f => `<span class="ws-owasp-chip"><b>${comp[f]}</b> ${wsEsc(f)}</span>`).join("") +
+      `</div>`;
+  }
+  const engines = scan.engines || [];
+  if (engines.length) {
+    html += `<p class="ws-help" style="margin:8px 0 0">${wsEsc(wsT("ws.engines_used", "本次使用的检测引擎"))}: ${wsEsc(engines.join(" + "))}</p>`;
+  }
+  return html + `</div>`;
+}
+
+function wsFindingTags(f) {
+  const parts = [];
+  if (f.owasp) parts.push(`<span class="tag">${wsEsc(f.owasp)}</span>`);
+  (f.compliance || []).slice(0, 3).forEach(c => {
+    if (c.framework === "OWASP") return;
+    parts.push(`<span class="tag" title="${wsEsc(c.title || "")}">${wsEsc(c.framework)} ${wsEsc(c.control)}</span>`);
+  });
+  if (!parts.length) return "";
+  return `<div class="ws-finding-tags">${parts.join("")}</div>`;
+}
+
 function wsPaintDetail(scan) {
   const box = $("wsDetail");
   if (!box || !scan) return;
@@ -1157,6 +1222,9 @@ function wsPaintDetail(scan) {
     html += `<div class="sec-remediation" style="margin:8px 0"><div class="cfg-panel-title">${wsEsc(wsT("ws.ai_summary", "AI 摘要"))}</div>
       <pre class="mono" style="white-space:pre-wrap;margin:0;font-size:12px">${wsEsc(scan.ai_summary)}</pre></div>`;
   }
+  if (scan.engine_note) {
+    html += `<div class="hint" style="margin:8px 0">${wsEsc(scan.engine_note)}</div>`;
+  }
   if (rep.executive) html += `<p class="ws-exec">${wsEsc(rep.executive)}</p>`;
   html += `<div class="sec-metrics compact">
     <div class="sec-metric crit"><b>${counts.critical || 0}</b><span>${wsEsc(wsT("ws.sev_critical", "危急"))}</span></div>
@@ -1165,6 +1233,7 @@ function wsPaintDetail(scan) {
     <div class="sec-metric"><b>${counts.low || 0}</b><span>${wsEsc(wsT("ws.sev_low", "低危"))}</span></div>
     <div class="sec-metric"><b>${counts.info || 0}</b><span>${wsEsc(wsT("ws.sev_info", "信息"))}</span></div>
   </div>`;
+  html += wsOwaspPanel(scan);
   const findings = scan.findings || [];
   if (!findings.length) {
     html += `<div class="sec-empty slim">
@@ -1188,6 +1257,7 @@ function wsPaintDetail(scan) {
             <code class="mono muted">${wsEsc(f.template_id || "")}</code>${wsFindingStatusSelect(f)}
             <button type="button" class="btn sm nf-ai-btn" data-ws-finding="${idx}" title="${wsEsc(wsT("ws.ai_finding_tip", "针对本条给出研判与修复建议"))}">${wsEsc(wsT("ws.ai_finding", "AI 建议"))}</button></header>
           <div class="mono sec-url" title="${wsEsc(f.url || f.matched_at || "")}">${wsEsc(f.url || f.matched_at || "")}</div>
+          ${wsFindingTags(f)}
           ${f.description ? `<p>${wsEsc(f.description)}</p>` : ""}
           ${f.remediation ? `<div class="ws-fix"><span>${wsEsc(wsT("ws.remediation", "修复建议"))}</span>${wsEsc(f.remediation)}</div>` : ""}
         </article>`;

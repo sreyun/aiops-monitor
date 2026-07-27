@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -114,34 +112,36 @@ func (s *Server) handleWebEngineStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.collectWebEngineStatus(force))
 }
 
+// handleWebEngineRefresh starts a template refresh and returns straight away.
+//
+// It used to download the full template tree inside this request. On any link
+// slower than a datacenter that outlives the browser and reverse-proxy read
+// timeouts, so the operator saw "更新超时" while the download was in fact still
+// running — and a second click then raced the first. The work now runs as a
+// tracked feed job that the UI polls.
 func (s *Server) handleWebEngineRefresh(w http.ResponseWriter, r *http.Request) {
-	cfg := s.cfg.WebSecurity()
-	bin := cfg.NucleiPath
-	if bin == "" {
-		bin = "nuclei"
-	}
-	dir := s.resolveNucleiTemplatesDir(cfg)
-	home, _ := os.UserHomeDir()
-	homeTpl := filepath.Join(home, "nuclei-templates")
-	// Force reinstall: clear home cache then publish into persisted data dir.
-	_ = os.RemoveAll(homeTpl)
-	if err := downloadNucleiTemplatesHome(bin, homeTpl, 15*time.Minute); err != nil {
-		writeSecErr(w, http.StatusBadGateway, err.Error())
+	if s.feeds == nil {
+		writeSecErr(w, http.StatusServiceUnavailable, "情报源模块未就绪")
 		return
 	}
-	if err := publishNucleiTemplates(homeTpl, dir); err != nil {
-		writeSecErr(w, http.StatusBadGateway, err.Error())
+	src, ok := feedSourceByID("nuclei-templates")
+	if !ok {
+		writeSecErr(w, http.StatusInternalServerError, "模板源未定义")
+		return
+	}
+	job, err := s.feeds.runUpdate(s.cfg.SecurityFeeds(), []FeedSource{src}, s.actorName(r))
+	if err != nil {
+		writeSecErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	webEngineCacheMu.Lock()
 	webEngineCacheAt = time.Time{}
 	webEngineCacheMu.Unlock()
-	st := s.collectWebEngineStatus(true)
 	s.store.AddLog(LogEntry{
 		Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
 		Message: "refresh nuclei templates",
 	})
-	writeJSON(w, http.StatusOK, st)
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (s *Server) handleSetWebSecurityConfig(w http.ResponseWriter, r *http.Request) {

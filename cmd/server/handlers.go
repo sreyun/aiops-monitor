@@ -61,6 +61,7 @@ type Server struct {
 	assistStore *assistStore             // Assist 服务端原文（反馈防投毒）
 	hostSec     *hostSecurityManager     // 主机安全扫描结果
 	webSec      *webScanManager          // Web Nuclei 扫描结果
+	feeds       *feedManager             // 威胁情报/模板库更新（Nuclei 模板、sqlmap 特征等）
 	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
 	sqlHistory  *sqlQueryHistoryManager  // per-user desensitized SQL history
 	sqlSlow     *slowSQLManager          // multi-DB slow SQL digests + advice
@@ -122,6 +123,9 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	cfg.migrateWebSecurityDefaultsOnce()
 	cfg.migrateMySQLSlowSQLDefaultsOnce()
 	s.webSec = newWebScanManager(secDir, cfg.WebSecurity().ScanConcurrency)
+	s.feeds = newFeedManager(filepath.Join(secDir, "feeds"))
+	s.feeds.onUpdated = s.reloadSQLErrorSignatures
+	s.reloadSQLErrorSignatures()
 	s.sqlHistory = newSQLQueryHistoryManager(secDir)
 	s.sqlSlow = newSlowSQLManager(filepath.Join(secDir, "sql_slow"))
 	s.secFindings = newSecurityFindingManager(secDir)
@@ -133,6 +137,7 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	}
 	s.startHostSecurityScheduler()
 	s.startWebSecurityScheduler()
+	s.startSecurityFeedScheduler()
 	s.startSlowSQLScheduler()
 	// AI 记忆异步写入 worker pool：3 个 worker，并发上限 3
 	s.memoryCh = make(chan memoryJob, 100)
@@ -639,6 +644,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/security/web/config", s.handleSetWebSecurityConfig)
 	mux.HandleFunc("GET /api/v1/security/web/engine", s.handleWebEngineStatus)
 	mux.HandleFunc("POST /api/v1/security/web/engine/refresh", s.handleWebEngineRefresh)
+	// Detection libraries (Nuclei templates, sqlmap signatures, payload/POC corpora)
+	mux.HandleFunc("GET /api/v1/security/feeds", s.handleSecurityFeedStatus)
+	mux.HandleFunc("POST /api/v1/security/feeds/config", s.handleSetSecurityFeedConfig)
+	mux.HandleFunc("POST /api/v1/security/feeds/update", s.handleSecurityFeedUpdate)
+	mux.HandleFunc("POST /api/v1/security/feeds/cancel", s.handleSecurityFeedCancel)
+	mux.HandleFunc("POST /api/v1/security/feeds/test", s.handleSecurityFeedTest)
 	// Hardware + NetFlow: frontend query
 	mux.HandleFunc("GET /api/v1/hardware/health", s.handleHardwareHealth)
 	mux.HandleFunc("GET /api/v1/hardware/history", s.handleHardwareHistory)
@@ -716,7 +727,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "web-security", "security-center", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "security-feeds", "web-security", "security-center", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -28,45 +30,47 @@ const webSecMaxScans = 200
 
 // WebScanTarget is a Nuclei scan target with optional schedule and auth.
 type WebScanTarget struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	BaseURL         string            `json:"base_url"`
-	Enabled         bool              `json:"enabled"`
-	AuthType        string            `json:"auth_type,omitempty"` // none|basic|bearer|cookie|header|form|header_body
-	AuthUser        string            `json:"auth_user,omitempty"`
-	AuthPass        string            `json:"auth_pass,omitempty"`
-	AuthHeader      string            `json:"auth_header,omitempty"` // multi-line "Name: Value"
-	AuthBody        string            `json:"auth_body,omitempty"`   // login / warmup request body
-	AuthLoginURL    string            `json:"auth_login_url,omitempty"`
-	AuthMethod      string            `json:"auth_method,omitempty"` // GET|POST|PUT
-	AuthContentType string            `json:"auth_content_type,omitempty"`
-	Include         []string          `json:"include,omitempty"`
-	Exclude         []string          `json:"exclude,omitempty"`
-	Tags            []string          `json:"tags,omitempty"`
-	Templates       []string          `json:"templates,omitempty"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	BaseURL         string   `json:"base_url"`
+	Enabled         bool     `json:"enabled"`
+	AuthType        string   `json:"auth_type,omitempty"` // none|basic|bearer|cookie|header|form|header_body
+	AuthUser        string   `json:"auth_user,omitempty"`
+	AuthPass        string   `json:"auth_pass,omitempty"`
+	AuthHeader      string   `json:"auth_header,omitempty"` // multi-line "Name: Value"
+	AuthBody        string   `json:"auth_body,omitempty"`   // login / warmup request body
+	AuthLoginURL    string   `json:"auth_login_url,omitempty"`
+	AuthMethod      string   `json:"auth_method,omitempty"` // GET|POST|PUT
+	AuthContentType string   `json:"auth_content_type,omitempty"`
+	Include         []string `json:"include,omitempty"`
+	Exclude         []string `json:"exclude,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Templates       []string `json:"templates,omitempty"`
 	// ScanURLs are additional absolute URLs (e.g. from OpenAPI import) passed as Nuclei -u.
-	ScanURLs        []string          `json:"scan_urls,omitempty"`
-	Schedule        *PlaybookSchedule `json:"schedule,omitempty"`
-	AllowPrivate    bool              `json:"allow_private,omitempty"` // per-target; still needs global allow
-	LastScanAt      int64             `json:"last_scan_at,omitempty"`
-	CreatedAt       int64             `json:"created_at,omitempty"`
-	UpdatedAt       int64             `json:"updated_at,omitempty"`
+	ScanURLs     []string          `json:"scan_urls,omitempty"`
+	Schedule     *PlaybookSchedule `json:"schedule,omitempty"`
+	AllowPrivate bool              `json:"allow_private,omitempty"` // per-target; still needs global allow
+	LastScanAt   int64             `json:"last_scan_at,omitempty"`
+	CreatedAt    int64             `json:"created_at,omitempty"`
+	UpdatedAt    int64             `json:"updated_at,omitempty"`
 }
 
 // WebSecurityConfig controls Nuclei path, limits, and persisted targets.
 type WebSecurityConfig struct {
-	NucleiPath      string          `json:"nuclei_path,omitempty"`
-	TemplatesDir    string          `json:"templates_dir,omitempty"`
-	Severity        string          `json:"severity,omitempty"` // critical,high,medium,low,info
-	RateLimit       int             `json:"rate_limit,omitempty"`
-	Concurrency     int             `json:"concurrency,omitempty"`
-	TimeoutSec      int             `json:"timeout_sec,omitempty"`
-	AllowPrivate    bool            `json:"allow_private"`
-	UpdateTemplates bool            `json:"update_templates"`
-	ScanConcurrency int             `json:"scan_concurrency,omitempty"`
-	DefaultsGen     int             `json:"defaults_gen,omitempty"` // bumps one-time shipped-default migrations
-	AutoAISummary   bool            `json:"auto_ai_summary,omitempty"`
-	Targets         []WebScanTarget `json:"targets,omitempty"`
+	NucleiPath      string `json:"nuclei_path,omitempty"`
+	TemplatesDir    string `json:"templates_dir,omitempty"`
+	Severity        string `json:"severity,omitempty"` // critical,high,medium,low,info
+	RateLimit       int    `json:"rate_limit,omitempty"`
+	Concurrency     int    `json:"concurrency,omitempty"`
+	TimeoutSec      int    `json:"timeout_sec,omitempty"`
+	AllowPrivate    bool   `json:"allow_private"`
+	UpdateTemplates bool   `json:"update_templates"`
+	ScanConcurrency int    `json:"scan_concurrency,omitempty"`
+	// Built-in checks default ON; opt out with disable_builtin_checks.
+	DisableBuiltin bool            `json:"disable_builtin_checks,omitempty"`
+	DefaultsGen    int             `json:"defaults_gen,omitempty"` // bumps one-time shipped-default migrations
+	AutoAISummary  bool            `json:"auto_ai_summary,omitempty"`
+	Targets        []WebScanTarget `json:"targets,omitempty"`
 }
 
 // webSecDefaultsGen is bumped when shipped defaults change and existing installs
@@ -117,6 +121,46 @@ func (cs *ConfigStore) WebSecurity() WebSecurityConfig {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg.WebSecurity.withDefaults()
+}
+
+func (cs *ConfigStore) SecurityFeeds() SecurityFeedConfig {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cfg.SecurityFeeds.withDefaults()
+}
+
+func (cs *ConfigStore) SetSecurityFeeds(c SecurityFeedConfig) error {
+	c = c.withDefaults()
+	if c.ProxyURL != "" {
+		if _, err := feedHTTPClient(c); err != nil {
+			return err
+		}
+	}
+	if c.MirrorPrefix != "" {
+		u, err := url.Parse(c.MirrorPrefix)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("加速镜像地址无效，需形如 https://ghfast.top/")
+		}
+	}
+	// Unknown IDs would silently disable a source after a catalog rename.
+	for _, id := range c.Sources {
+		if _, ok := feedSourceByID(id); !ok {
+			return fmt.Errorf("未知情报源：%s", truncateRun(id, 60))
+		}
+	}
+	cs.mu.Lock()
+	cs.cfg.SecurityFeeds = c
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// markFeedAutoRun records the scheduler's last pass so a restart loop cannot
+// re-trigger a multi-hundred-megabyte download on every boot.
+func (cs *ConfigStore) markFeedAutoRun(ts int64) {
+	cs.mu.Lock()
+	cs.cfg.SecurityFeeds.LastAutoRunSec = ts
+	cs.mu.Unlock()
+	_ = cs.save()
 }
 
 // migrateWebSecurityDefaultsOnce rewrites previously shipped defaults that caused
@@ -479,20 +523,23 @@ type WebFinding struct {
 	ExtractedResults []string `json:"extracted_results,omitempty"`
 	Status           string   `json:"status,omitempty"` // open|ack|false_positive|resolved
 	StatusNote       string   `json:"status_note,omitempty"`
+	// OWASP / Compliance make a finding audit-ready without manual mapping.
+	OWASP      string          `json:"owasp,omitempty"`
+	Compliance []ComplianceRef `json:"compliance,omitempty"`
 }
 
 // WebScanResult is one Nuclei run.
 type WebScanResult struct {
-	ID         string         `json:"id"`
-	Label      string         `json:"label,omitempty"` // human-readable batch title
-	Seq        int            `json:"seq,omitempty"`
-	TargetID   string         `json:"target_id"`
-	TargetName string         `json:"target_name,omitempty"`
-	BaseURL    string         `json:"base_url"`
-	StartedAt  int64          `json:"started_at"`
-	FinishedAt int64          `json:"finished_at,omitempty"`
-	Status     string         `json:"status"`
-	Error      string         `json:"error,omitempty"`
+	ID           string            `json:"id"`
+	Label        string            `json:"label,omitempty"` // human-readable batch title
+	Seq          int               `json:"seq,omitempty"`
+	TargetID     string            `json:"target_id"`
+	TargetName   string            `json:"target_name,omitempty"`
+	BaseURL      string            `json:"base_url"`
+	StartedAt    int64             `json:"started_at"`
+	FinishedAt   int64             `json:"finished_at,omitempty"`
+	Status       string            `json:"status"`
+	Error        string            `json:"error,omitempty"`
 	Findings     []WebFinding      `json:"findings"`
 	Summary      map[string]int    `json:"summary"`
 	Operator     string            `json:"operator,omitempty"`
@@ -501,6 +548,10 @@ type WebScanResult struct {
 	BaselineDiff *ScanBaselineDiff `json:"baseline_diff,omitempty"`
 	AISummary    string            `json:"ai_summary,omitempty"`
 	AISummaryAt  int64             `json:"ai_summary_at,omitempty"`
+	OWASP        map[string]int    `json:"owasp,omitempty"`      // OWASP Top 10 category → count
+	Compliance   map[string]int    `json:"compliance,omitempty"` // framework → failing controls
+	Engines      []string          `json:"engines,omitempty"`    // builtin|nuclei
+	EngineNote   string            `json:"engine_note,omitempty"`
 }
 
 // ScanReport is a structured professional report for export / AI.
@@ -898,7 +949,10 @@ func redactCurlCommand(s string) string {
 		return s
 	}
 	// Strip common secret-bearing header / form fragments from Nuclei curl PoC.
-	type pair struct{ re *regexp.Regexp; repl string }
+	type pair struct {
+		re   *regexp.Regexp
+		repl string
+	}
 	rules := []pair{
 		{regexp.MustCompile(`(?i)(Authorization:\s*)([^'"]+)`), "${1}********"},
 		{regexp.MustCompile(`(?i)(Cookie:\s*)([^'"]+)`), "${1}********"},
@@ -1123,7 +1177,7 @@ func (s *Server) completeWebScan(scanID string) {
 		}
 	}
 
-	findings, err := s.execNuclei(cfg, t)
+	findings, engines, engineNote, err := s.runWebEngines(cfg, t)
 	finished := time.Now().Unix()
 
 	var prevFindings []WebFinding
@@ -1143,12 +1197,16 @@ func (s *Server) completeWebScan(scanID string) {
 	applied := s.webSec.finishIfRunning(scanID, func(live *WebScanResult) {
 		live.FinishedAt = finished
 		live.Summary = map[string]int{}
+		live.Engines = engines
+		live.EngineNote = engineNote
 		if len(findings) > 0 {
 			live.Findings = findings
 			for _, f := range findings {
 				live.Summary[f.Severity]++
 			}
 			live.Report = buildWebScanReport(t, findings)
+			live.OWASP = summarizeWebOWASP(findings)
+			live.Compliance = summarizeWebCompliance(findings)
 		}
 		live.BaselineDiff = baseDiff
 		if err != nil {
@@ -1341,7 +1399,53 @@ func (s *Server) resolveNucleiTemplatesDir(cfg WebSecurityConfig) string {
 	if d := strings.TrimSpace(cfg.TemplatesDir); d != "" {
 		return d
 	}
+	// A tree installed by the feed updater wins: it is the one the operator can
+	// see, refresh and version from the UI. The legacy path stays as fallback so
+	// existing installs keep scanning until their first feed update.
+	if d := s.nucleiFeedTemplatesDir(); d != "" {
+		return d
+	}
 	return filepath.Join(s.cfg.securityDataDir(), "nuclei-templates")
+}
+
+// ensureNucleiTemplatesVia prepares templates using the feed pipeline (proxy +
+// mirror aware, pure Go) and falls back to the nuclei CLI only if that fails.
+// Returns the directory that ended up usable.
+func (s *Server) ensureNucleiTemplatesVia(bin string, timeout time.Duration) (string, error) {
+	cfg := s.cfg.WebSecurity()
+	dir := s.resolveNucleiTemplatesDir(cfg)
+	if nucleiTemplatesReady(dir) {
+		return dir, nil
+	}
+	if s.feeds != nil && strings.TrimSpace(cfg.TemplatesDir) == "" {
+		src, ok := feedSourceByID("nuclei-templates")
+		if ok {
+			feedCfg := s.cfg.SecurityFeeds()
+			if feedCfg.TimeoutSec <= 0 {
+				feedCfg.TimeoutSec = int(timeout / time.Second)
+			}
+			client, err := feedHTTPClient(feedCfg)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				st := s.feeds.updateSource(ctx, client, feedCfg, src)
+				cancel()
+				s.feeds.mu.Lock()
+				s.feeds.states[src.ID] = st
+				s.feeds.saveStatesLocked()
+				s.feeds.mu.Unlock()
+				if st.Error == "" {
+					if d := s.nucleiFeedTemplatesDir(); d != "" {
+						return d, nil
+					}
+				}
+				slog.Warn("feed template install failed, falling back to nuclei CLI", "err", st.Error)
+			}
+		}
+	}
+	if err := ensureNucleiTemplates(s.cfg.SecurityFeeds(), bin, dir, timeout); err != nil {
+		return dir, err
+	}
+	return dir, nil
 }
 
 func nucleiTemplatesReady(dir string) bool {
@@ -1369,7 +1473,7 @@ func nucleiTemplatesReady(dir string) bool {
 	return false
 }
 
-func ensureNucleiTemplates(bin, dir string, timeout time.Duration) error {
+func ensureNucleiTemplates(feedCfg SecurityFeedConfig, bin, dir string, timeout time.Duration) error {
 	if bin == "" {
 		bin = "nuclei"
 	}
@@ -1384,7 +1488,7 @@ func ensureNucleiTemplates(bin, dir string, timeout time.Duration) error {
 	// Nuclei v3.3.x often ignores -update-template-dir; install to $HOME then publish
 	// into the persisted data dir used by scans.
 	if !nucleiTemplatesReady(homeTpl) {
-		if err := downloadNucleiTemplatesHome(bin, homeTpl, timeout); err != nil {
+		if err := downloadNucleiTemplatesHome(feedCfg, bin, homeTpl, timeout); err != nil {
 			return err
 		}
 	}
@@ -1408,7 +1512,7 @@ func nucleiTemplatesConfigPath(home string) string {
 	return filepath.Join(home, ".config", "nuclei", ".templates-config.json")
 }
 
-func downloadNucleiTemplatesHome(bin, homeTpl string, timeout time.Duration) error {
+func downloadNucleiTemplatesHome(feedCfg SecurityFeedConfig, bin, homeTpl string, timeout time.Duration) error {
 	home, _ := os.UserHomeDir()
 	if homeTpl == "" {
 		homeTpl = filepath.Join(home, "nuclei-templates")
@@ -1442,64 +1546,95 @@ func downloadNucleiTemplatesHome(bin, homeTpl string, timeout time.Duration) err
 	if nucleiTemplatesReady(homeTpl) {
 		return nil
 	}
-	if err := installNucleiTemplatesFromGitHub(homeTpl, timeout); err != nil {
+	if err := installNucleiTemplatesFromGitHub(feedCfg, homeTpl, timeout); err != nil {
 		return fmt.Errorf("下载 Nuclei 模板失败：%s", err.Error())
 	}
 	return nil
 }
 
-// installNucleiTemplatesFromGitHub fetches a pinned nuclei-templates release tarball.
-// Used when `nuclei -update-templates` exits successfully but leaves an empty tree.
-func installNucleiTemplatesFromGitHub(dir string, timeout time.Duration) error {
-	const tag = "v10.4.6"
-	url := "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/" + tag + ".tar.gz"
-	tmpParent := dir + ".download"
-	_ = os.RemoveAll(tmpParent)
-	if err := os.MkdirAll(tmpParent, 0o750); err != nil {
+// installNucleiTemplatesFromGitHub fetches the newest nuclei-templates release
+// straight over HTTP. Used when `nuclei -update-templates` exits successfully
+// but leaves an empty tree.
+//
+// This is pure Go on purpose: the previous curl+tar version failed on any host
+// without those binaries (every Windows install) and ignored the configured
+// proxy, which is exactly the combination that produced "update timed out" with
+// an empty template library.
+func installNucleiTemplatesFromGitHub(feedCfg SecurityFeedConfig, dir string, timeout time.Duration) error {
+	src, ok := feedSourceByID("nuclei-templates")
+	if !ok {
+		return fmt.Errorf("模板源未在目录中定义")
+	}
+	feedCfg = feedCfg.withDefaults()
+	feedCfg.TimeoutSec = int(timeout / time.Second)
+	client, err := feedHTTPClient(feedCfg)
+	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpParent)
-	archive := filepath.Join(tmpParent, "nuclei-templates.tgz")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	curl := exec.CommandContext(ctx, "curl", "-fsSL", "--retry", "3", "-o", archive, url)
-	if out, err := curl.CombinedOutput(); err != nil {
-		return fmt.Errorf("curl %s：%s", tag, truncateRun(string(out)+" "+err.Error(), 200))
+
+	resolved := resolveLatestRef(ctx, client, feedCfg, src.Repo, src.RefFallback)
+	staging := dir + ".staging"
+	_ = os.RemoveAll(staging)
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		return err
 	}
-	untar := exec.CommandContext(ctx, "tar", "-xzf", archive, "-C", tmpParent)
-	if out, err := untar.CombinedOutput(); err != nil {
-		return fmt.Errorf("解压模板包失败：%s", truncateRun(string(out)+" "+err.Error(), 200))
+	defer os.RemoveAll(staging)
+
+	tag := ""
+	var lastErr error
+	for _, ref := range src.refCandidates(resolved) {
+		tag = ref
+		_, _, lastErr = fetchFeedArchive(ctx, client, feedCfg, src, ref, staging, nopFeedProgress{})
+		if lastErr == nil {
+			break
+		}
+		if !errors.Is(lastErr, errFeedRefMissing) {
+			break
+		}
+		_ = os.RemoveAll(staging)
+		if err := os.MkdirAll(staging, 0o750); err != nil {
+			return err
+		}
 	}
-	extracted := filepath.Join(tmpParent, "nuclei-templates-"+strings.TrimPrefix(tag, "v"))
-	if st, err := os.Stat(extracted); err != nil || !st.IsDir() {
-		// fallback: first directory under tmpParent
-		entries, _ := os.ReadDir(tmpParent)
-		extracted = ""
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), "nuclei-templates") {
-				extracted = filepath.Join(tmpParent, e.Name())
-				break
-			}
+	if lastErr != nil {
+		if errors.Is(lastErr, errFeedRefMissing) {
+			return fmt.Errorf("未找到可用的模板包版本（已尝试 %s）", strings.Join(src.refCandidates(resolved), "/"))
 		}
-		if extracted == "" {
-			return fmt.Errorf("模板包中未找到 nuclei-templates 目录")
-		}
+		return fmt.Errorf("下载 Nuclei 模板失败：%s", lastErr.Error())
+	}
+	if !nucleiTemplatesReady(staging) {
+		return fmt.Errorf("模板包校验失败：解压结果中没有可用的 http/ 模板")
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 		return err
 	}
-	_ = os.RemoveAll(dir)
-	if err := os.Rename(extracted, dir); err != nil {
-		// cross-device: copy
-		if err2 := publishNucleiTemplates(extracted, dir); err2 != nil {
-			return err2
-		}
+	old := dir + ".old"
+	_ = os.RemoveAll(old)
+	if _, err := os.Stat(dir); err == nil {
+		_ = os.Rename(dir, old)
 	}
-	if !nucleiTemplatesReady(dir) {
-		return fmt.Errorf("GitHub 模板包校验失败")
+	if err := os.Rename(staging, dir); err != nil {
+		_ = os.Rename(old, dir)
+		return fmt.Errorf("发布模板目录失败：%w", err)
 	}
+	_ = os.RemoveAll(old)
 	slog.Info("nuclei templates installed from GitHub", "tag", tag, "dir", dir)
 	return nil
+}
+
+// nucleiBinaryPresent reports whether the configured engine is actually
+// runnable — either resolvable on PATH or an existing executable file.
+func nucleiBinaryPresent(bin string) bool {
+	if bin == "" {
+		bin = "nuclei"
+	}
+	if _, err := exec.LookPath(bin); err == nil {
+		return true
+	}
+	st, err := os.Stat(bin)
+	return err == nil && !st.IsDir()
 }
 
 func publishNucleiTemplates(src, dst string) error {
@@ -1508,14 +1643,24 @@ func publishNucleiTemplates(src, dst string) error {
 	}
 	staging := dst + ".staging"
 	_ = os.RemoveAll(staging)
-	cmd := exec.Command("cp", "-a", src, staging)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		_ = os.RemoveAll(staging)
-		if err2 := os.Symlink(src, dst); err2 != nil {
-			return fmt.Errorf("复制模板失败：%s", truncateRun(string(out)+" "+err.Error()+" "+err2.Error(), 240))
+	// `cp -a` is the fast path on Unix; Windows has no cp, and symlinks there
+	// need privileges the service usually lacks, so fall back to a Go copy.
+	copyErr := ""
+	if runtime.GOOS != "windows" {
+		if out, err := exec.Command("cp", "-a", src, staging).CombinedOutput(); err != nil {
+			_ = os.RemoveAll(staging)
+			copyErr = string(out) + " " + err.Error()
 		}
-		slog.Info("nuclei templates linked", "from", src, "to", dst)
-		return nil
+	}
+	if _, err := os.Stat(staging); err != nil {
+		if err := copyTreeInto(src, staging); err != nil {
+			_ = os.RemoveAll(staging)
+			if err2 := os.Symlink(src, dst); err2 != nil {
+				return fmt.Errorf("复制模板失败：%s", truncateRun(copyErr+" "+err.Error()+" "+err2.Error(), 240))
+			}
+			slog.Info("nuclei templates linked", "from", src, "to", dst)
+			return nil
+		}
 	}
 	_ = os.RemoveAll(dst)
 	if err := os.Rename(staging, dst); err != nil {
@@ -1523,6 +1668,41 @@ func publishNucleiTemplates(src, dst string) error {
 		return fmt.Errorf("切换模板目录失败：%w", err)
 	}
 	return nil
+}
+
+// copyTreeInto copies a directory tree with plain Go I/O. Symlinks are skipped
+// rather than followed, so a hostile template archive cannot write outside dst.
+func copyTreeInto(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, 0o750)
+		case !d.Type().IsRegular():
+			return nil
+		}
+		in, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			out.Close()
+			return err
+		}
+		return out.Close()
+	})
 }
 
 // constrainPathUnderRoot resolves p under root and rejects path escape / abs paths outside.
@@ -1616,18 +1796,60 @@ func buildNucleiTemplateArgs(tplRoot string, t WebScanTarget) []string {
 	return args
 }
 
+// runWebEngines runs the built-in checks and Nuclei, merging both result sets.
+// A Nuclei failure degrades the scan instead of voiding it: the built-in engine
+// still covers TLS / headers / cookies / CORS / exposure, and returning those
+// beats reporting nothing because a template download failed.
+func (s *Server) runWebEngines(cfg WebSecurityConfig, t WebScanTarget) (findings []WebFinding, engines []string, note string, err error) {
+	if cfg.builtinEnabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		authHeaders, authErr := resolveWebAuthHeaders(t, cfg.AllowPrivate)
+		if authErr != nil {
+			note = "内置检测未鉴权运行：" + authErr.Error()
+		}
+		findings = append(findings, runBuiltinWebChecks(ctx, t, cfg.AllowPrivate, authHeaders)...)
+		cancel()
+		engines = append(engines, "builtin")
+	}
+
+	nucFindings, nucErr := s.execNuclei(cfg, t)
+	if nucErr == nil {
+		findings = append(findings, nucFindings...)
+		engines = append(engines, "nuclei")
+	} else {
+		findings = append(findings, nucFindings...)
+		if !cfg.builtinEnabled() {
+			return nil, engines, note, nucErr
+		}
+		findings = append(findings, WebFinding{
+			TemplateID:  "builtin/engine-degraded",
+			Name:        "Nuclei 引擎不可用，本次仅执行内置检测",
+			Severity:    "info",
+			URL:         t.BaseURL,
+			Type:        "http",
+			Tags:        []string{"builtin", "engine"},
+			Description: zhWebSecErr(nucErr.Error()),
+			Remediation: "修复 Nuclei 引擎/模板后重新扫描，以覆盖 CVE、默认口令与注入类模板检测",
+		})
+		if note != "" {
+			note += "；"
+		}
+		note += "Nuclei 未执行：" + zhWebSecErr(nucErr.Error())
+	}
+	findings = annotateWebFindings(dedupeWebFindings(findings))
+	return findings, engines, note, nil
+}
+
 func (s *Server) execNuclei(cfg WebSecurityConfig, t WebScanTarget) ([]WebFinding, error) {
 	bin := cfg.NucleiPath
 	if bin == "" {
 		bin = "nuclei"
 	}
-	if _, err := exec.LookPath(bin); err != nil {
-		if st, e2 := os.Stat(bin); e2 != nil || st.IsDir() {
-			return nil, fmt.Errorf("未找到 Nuclei 引擎（%s）。请确认镜像已内置 nuclei，或在引擎配置中设置正确路径", bin)
-		}
+	if !nucleiBinaryPresent(bin) {
+		return nil, fmt.Errorf("未找到 Nuclei 引擎（%s）。请确认镜像已内置 nuclei，或在引擎配置中设置正确路径", bin)
 	}
-	tplDir := s.resolveNucleiTemplatesDir(cfg)
-	if err := ensureNucleiTemplates(bin, tplDir, 12*time.Minute); err != nil {
+	tplDir, err := s.ensureNucleiTemplatesVia(bin, 12*time.Minute)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1656,7 +1878,7 @@ func (s *Server) execNuclei(cfg WebSecurityConfig, t WebScanTarget) ([]WebFindin
 		if nucleiTemplatesReady(tplDir) {
 			_ = os.Rename(tplDir, tplDir+".bak")
 		}
-		if upErr := ensureNucleiTemplates(bin, tplDir, 12*time.Minute); upErr != nil {
+		if upErr := ensureNucleiTemplates(s.cfg.SecurityFeeds(), bin, tplDir, 12*time.Minute); upErr != nil {
 			if !nucleiTemplatesReady(tplDir) {
 				_ = os.Rename(tplDir+".bak", tplDir)
 			} else {
@@ -1842,13 +2064,20 @@ func (s *Server) maybeUpdateNucleiTemplates() {
 	if bin == "" {
 		bin = "nuclei"
 	}
+	// Without the engine the templates are dead weight: skip the boot-time
+	// download so deployments (and tests) that never install nuclei don't pay
+	// for it. execNuclei still prepares templates lazily on the first scan.
+	if !nucleiBinaryPresent(bin) {
+		return
+	}
 	tplDir := s.resolveNucleiTemplatesDir(cfg)
 	if !nucleiTemplatesReady(tplDir) {
-		if err := ensureNucleiTemplates(bin, tplDir, 12*time.Minute); err != nil {
+		got, err := s.ensureNucleiTemplatesVia(bin, 12*time.Minute)
+		if err != nil {
 			slog.Warn("nuclei templates prepare failed", "dir", tplDir, "err", err)
 			return
 		}
-		slog.Info("nuclei templates ready", "dir", tplDir)
+		slog.Info("nuclei templates ready", "dir", got)
 		return
 	}
 	// Already have a usable tree. Optional startup refresh is incremental only —

@@ -49,6 +49,21 @@ function hsClamLabel(v) {
   };
   return m[v] || v || "—";
 }
+// A clean ClamAV result means nothing if the signature database is months old,
+// so the age travels with the status everywhere it is shown.
+function hsClamText(scan) {
+  const base = hsClamLabel(scan.clamav);
+  const age = Number(scan.clamav_db_age_days || 0);
+  if (scan.clamav !== "available" || age <= 0) return base;
+  return `${base} · ${hsT("hs.clam_db_age", "病毒库")} ${age}${hsT("hs.clam_db_age_unit", " 天前更新")}`;
+}
+function hsClamBadgeClass(scan) {
+  const age = Number(scan.clamav_db_age_days || 0);
+  if (scan.clamav === "error") return "crit";
+  if (scan.clamav === "available" && age >= 30) return "crit";
+  if (scan.clamav === "available" && age >= 7) return "warn";
+  return "";
+}
 function hsFwLabel(v) {
   const m = {
     on: hsT("hs.fw_on", "已开启"),
@@ -93,6 +108,25 @@ function hsCatLabel(cat) {
   };
   return m[cat] || cat || "—";
 }
+// The advanced FIM fields live in a <details> that is absent unless the config
+// panel is open, so every reader falls back to the last saved value.
+function hsCfgVal(id, fallback) {
+  const el = $(id);
+  return el && el.value ? el.value : fallback;
+}
+
+function hsCfgNum(id, fallback) {
+  const el = $(id);
+  const n = el ? parseInt(el.value, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function hsCfgLines(id, fallback) {
+  const el = $(id);
+  if (!el) return fallback;
+  return el.value.split("\n").map(s => s.trim()).filter(Boolean);
+}
+
 function hsFimChangeLabel(ch) {
   const m = {
     added: hsT("hs.fim_added", "新增"),
@@ -101,6 +135,71 @@ function hsFimChangeLabel(ch) {
   };
   return m[ch] || ch || "—";
 }
+function hsComplianceText(f) {
+  return (f.compliance || []).map(c => `${c.framework} ${c.control}`).join("; ");
+}
+
+function hsComplianceTags(f) {
+  const refs = (f.compliance || []).slice(0, 4);
+  if (!refs.length) return "";
+  return `<div class="hs-compliance">` + refs.map(c =>
+    `<span class="tag hs-comp-tag" title="${hsEsc(c.title || "")}">${hsEsc(c.framework)} ${hsEsc(c.control)}</span>`
+  ).join("") + `</div>`;
+}
+
+// hsCompliancePanel shows how many distinct controls are failing per framework.
+function hsCompliancePanel(scan) {
+  const sum = scan.compliance || {};
+  const frameworks = Object.keys(sum).sort();
+  if (!frameworks.length) return "";
+  const chips = frameworks.map(fw =>
+    `<span class="hs-comp-chip"><b>${sum[fw]}</b> ${hsEsc(fw)}</span>`
+  ).join("");
+  return `<div class="hs-compliance-panel">
+    <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.compliance", "合规映射"))}</span></div>
+    <p class="ws-help">${hsEsc(hsT("hs.compliance_help", "按框架统计当前未处置项命中的不同控制项数量，可直接作为整改依据。"))}</p>
+    <div class="hs-comp-chips">${chips}</div></div>`;
+}
+
+function hsFimReasonLabel(c) {
+  const map = {
+    content: hsT("hs.fim_reason_content", "内容"),
+    size: hsT("hs.fim_reason_size", "大小"),
+    mtime: hsT("hs.fim_reason_mtime", "时间戳"),
+    mode: hsT("hs.fim_reason_mode", "权限"),
+    added: hsT("hs.fim_added", "新增"),
+    removed: hsT("hs.fim_removed", "删除"),
+  };
+  const base = map[c.reason] || (c.old_sha || c.new_sha ? map.content : "—");
+  if (c.old_mode && c.new_mode && c.old_mode !== c.new_mode) {
+    return `${base} · ${c.old_mode}→${c.new_mode}`;
+  }
+  return base;
+}
+
+// hsFimScopeLine states what the agent actually walked, so an empty result is
+// never mistaken for "the whole disk is clean".
+function hsFimScopeLine(scan) {
+  const st = scan.fim_stats;
+  if (!st) {
+    return hsT("hs.fim_scope_legacy", "该 Agent 为旧版：仅监控内置敏感路径白名单。升级 Agent 后可监控所有目录的文件增删改。");
+  }
+  if (st.mode === "sensitive") {
+    return hsT("hs.fim_scope_sensitive", "监控范围：仅敏感路径白名单（可在配置中切换为全盘）。");
+  }
+  const roots = (st.roots || []).join(" ") || "/";
+  let line = hsT("hs.fim_scope_full", "监控范围：{roots}（共 {files} 个文件 / {dirs} 个目录，耗时 {ms} ms，仅记录路径与元数据）")
+    .replace("{roots}", roots)
+    .replace("{files}", String(st.files || 0))
+    .replace("{dirs}", String(st.dirs || 0))
+    .replace("{ms}", String(st.duration_ms || 0));
+  if (st.limit_hit || st.budget_hit) {
+    line += " " + hsT("hs.fim_scope_partial", "本次遍历因文件数/时间上限提前结束，未覆盖全部目录（不会误报删除）。");
+  }
+  if (st.error) line += " " + st.error;
+  return line;
+}
+
 function hsFimChangeBadge(ch) {
   const cls = { added: "ok", removed: "crit", modified: "warn" }[ch] || "info";
   return `<span class="badge ${cls}">${hsEsc(hsFimChangeLabel(ch))}</span>`;
@@ -355,6 +454,30 @@ function paintHostSecurity() {
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgClam"${hsCfg.enable_clamav !== false ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_clam", "尝试使用 ClamAV"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgFIM"${hsCfg.fim_enabled !== false ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_fim", "文件完整性监控 (FIM)"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgFIMDiff"${hsCfg.fim_content_diff !== false ? " checked" : ""}${hsCfg.fim_enabled === false ? " disabled" : ""}><span>${hsEsc(hsT("hs.cfg_fim_diff", "白名单配置内容差异"))}</span></label>
+        <details class="hs-fim-cfg"${hsCfg.fim_scope === "sensitive" || (hsCfg.fim_content_paths || []).length || (hsCfg.fim_excludes || []).length ? " open" : ""}>
+          <summary>${hsEsc(hsT("hs.cfg_fim_adv", "FIM 监控范围与内容审计白名单"))}</summary>
+          <p class="ws-help">${hsEsc(hsT("hs.cfg_fim_adv_help", "全盘模式记录任意目录下文件的新增/修改/删除（仅路径与元数据，不采集文件内容）；只有内容审计白名单内的文件才会计算哈希并生成脱敏差异。"))}</p>
+          <div class="cfg-form-row">
+            <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_scope", "监控范围"))}</label>
+              <div class="select-wrap"><select id="hsCfgFIMScope">
+                <option value="full"${hsCfg.fim_scope !== "sensitive" ? " selected" : ""}>${hsEsc(hsT("hs.cfg_fim_scope_full", "全盘（所有目录，元数据级）"))}</option>
+                <option value="sensitive"${hsCfg.fim_scope === "sensitive" ? " selected" : ""}>${hsEsc(hsT("hs.cfg_fim_scope_sensitive", "仅敏感路径（兼容旧版）"))}</option>
+              </select></div></div>
+            <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_max_files", "单次最多遍历文件数"))}</label>
+              <input id="hsCfgFIMMaxFiles" type="number" min="1000" max="2000000" value="${hsEsc(String(hsCfg.fim_max_files || 150000))}"></div>
+            <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_max_changes", "单次最多上报变更数"))}</label>
+              <input id="hsCfgFIMMaxChanges" type="number" min="10" max="5000" value="${hsEsc(String(hsCfg.fim_max_changes || 500))}"></div>
+            <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_budget", "遍历时间预算（秒）"))}</label>
+              <input id="hsCfgFIMBudget" type="number" min="5" max="900" value="${hsEsc(String(hsCfg.fim_budget_sec || 90))}"></div>
+          </div>
+          <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_roots", "监控根目录（每行一个，留空=全部本地磁盘）"))}</label>
+            <textarea id="hsCfgFIMRoots" rows="2" placeholder="/">${hsEsc((hsCfg.fim_roots || []).join("\n"))}</textarea></div>
+          <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_excludes", "排除路径/目录名（每行一个，内置已排除 /proc /sys 缓存等）"))}</label>
+            <textarea id="hsCfgFIMExcludes" rows="3" placeholder="/data/backup&#10;node_modules">${hsEsc((hsCfg.fim_excludes || []).join("\n"))}</textarea></div>
+          <div class="field"><label>${hsEsc(hsT("hs.cfg_fim_content", "内容审计白名单（每行一个路径或通配，仅这些文件记录内容差异）"))}</label>
+            <textarea id="hsCfgFIMContent" rows="3" placeholder="/etc/nginx/*.conf&#10;/opt/app/config.yaml">${hsEsc((hsCfg.fim_content_paths || []).join("\n"))}</textarea>
+            <p class="ws-help">${hsEsc(hsT("hs.cfg_fim_content_help", "内置已含 /etc 下常见配置；口令与私钥类文件（shadow、*.pem、id_rsa、.env 等）永不做内容审计。"))}</p></div>
+        </details>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgAISummary"${hsCfg.auto_ai_summary ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_ai_summary", "扫描完成后自动 AI 摘要"))}</span></label>
         <div class="cfg-form-row">
           <div class="field"><label>${hsEsc(hsT("hs.cfg_kind", "周期"))}</label>
@@ -541,6 +664,13 @@ async function hsSaveCfg() {
     enable_clamav: !!($("hsCfgClam") && $("hsCfgClam").checked),
     fim_enabled: !!($("hsCfgFIM") && $("hsCfgFIM").checked),
     fim_content_diff: !!($("hsCfgFIMDiff") && $("hsCfgFIMDiff").checked),
+    fim_scope: hsCfgVal("hsCfgFIMScope", (hsCfg && hsCfg.fim_scope) || "full"),
+    fim_roots: hsCfgLines("hsCfgFIMRoots", (hsCfg && hsCfg.fim_roots) || []),
+    fim_excludes: hsCfgLines("hsCfgFIMExcludes", (hsCfg && hsCfg.fim_excludes) || []),
+    fim_content_paths: hsCfgLines("hsCfgFIMContent", (hsCfg && hsCfg.fim_content_paths) || []),
+    fim_max_files: hsCfgNum("hsCfgFIMMaxFiles", (hsCfg && hsCfg.fim_max_files) || 150000),
+    fim_max_changes: hsCfgNum("hsCfgFIMMaxChanges", (hsCfg && hsCfg.fim_max_changes) || 500),
+    fim_budget_sec: hsCfgNum("hsCfgFIMBudget", (hsCfg && hsCfg.fim_budget_sec) || 90),
     auto_ai_summary: !!($("hsCfgAISummary") && $("hsCfgAISummary").checked),
     osv_url: (hsCfg && hsCfg.osv_url) || "",
     timeout_sec: (hsCfg && hsCfg.timeout_sec) || 180,
@@ -676,7 +806,7 @@ function hsPaintDetail(scan, opts) {
   </div>`;
   html += `<div class="hs-fw-panel">
     <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.firewall", "防火墙"))}</span> ${hsFwBadge(scan, { engine: true })}
-      <span class="tag">${hsEsc(hsClamLabel(scan.clamav))}</span> ${hsLevelBadge(scan.risk)}</div>
+      <span class="tag ${hsClamBadgeClass(scan)}" title="${hsEsc(hsT("hs.clam_db_help", "ClamAV 病毒库需每日更新；超过 7 天未更新会降低检出率"))}">${hsEsc(hsClamText(scan))}</span> ${hsLevelBadge(scan.risk)}</div>
     <p class="ws-help">${hsEsc(scan.firewall_detail || hsT("hs.fw_no_detail", "暂无防火墙引擎原始输出；可重新扫描以刷新状态。"))}</p>
   </div>`;
   if (ports.length) {
@@ -704,25 +834,31 @@ function hsPaintDetail(scan, opts) {
   // File integrity changes (FIM) — panel chrome aligned with firewall / ports.
   const fileChanges = scan.file_changes || [];
   const fimCount = sum.fim || fileChanges.length || 0;
+  const fimStats = scan.fim_stats || null;
+  const scopeLine = hsFimScopeLine(scan);
+  const scopeHTML = scopeLine ? `<p class="ws-help">${hsEsc(scopeLine)}</p>` : "";
   if (scan.fim_baseline_established) {
     html += `<div class="hs-fim-panel" id="hsFimPanel">
       <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
         <span class="badge info">${hsEsc(hsT("hs.fim_baseline_tag", "基线"))}</span></div>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更"))}</p></div>`;
+      <p class="ws-help">${hsEsc(hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更"))}</p>${scopeHTML}</div>`;
   } else if (fileChanges.length) {
     html += `<div class="hs-fim-panel" id="hsFimPanel">
       <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
         <span class="tag">${fileChanges.length}</span>
-        ${fimCount ? `<span class="badge warn">${fimCount} ${hsEsc(hsT("hs.cat_fim", "文件变更"))}</span>` : ""}</div>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_help", "相对上次完成扫描的哈希基线；白名单小文本可展开查看脱敏差异。"))}</p>
+        ${fimCount ? `<span class="badge warn">${fimCount} ${hsEsc(hsT("hs.cat_fim", "文件变更"))}</span>` : ""}
+        ${fimStats && fimStats.truncated ? `<span class="badge">${hsEsc(hsT("hs.fim_truncated", "已截断"))}</span>` : ""}</div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_help", "相对上次基线的增删改；仅内容审计白名单内的文本可展开查看脱敏差异，其余仅记录路径与元数据。"))}</p>
+      ${scopeHTML}
       <div class="nf-table-wrap hs-table-wrap"><table class="data-table hs-table"><thead><tr>
         <th>${hsEsc(hsT("hs.fim_path", "路径"))}</th>
         <th>${hsEsc(hsT("hs.fim_change", "变更类型"))}</th>
+        <th>${hsEsc(hsT("hs.fim_reason", "依据"))}</th>
         <th>${hsEsc(hsT("hs.fim_mtime", "时间"))}</th>
         <th>${hsEsc(hsT("hs.fim_sha", "SHA 摘要"))}</th>
         <th></th>
       </tr></thead><tbody>`;
-    fileChanges.slice(0, 120).forEach((c, i) => {
+    fileChanges.slice(0, 300).forEach((c, i) => {
       const mtStr = hsFmtUnix(c.new_mtime || c.old_mtime || 0);
       const sha = c.change === "removed"
         ? hsShortSHA(c.old_sha)
@@ -731,29 +867,30 @@ function hsPaintDetail(scan, opts) {
       html += `<tr class="hs-fim-row">
         <td class="mono">${hsEsc(c.path || "")}</td>
         <td>${hsFimChangeBadge(c.change)}</td>
+        <td class="muted">${hsEsc(hsFimReasonLabel(c))}</td>
         <td class="muted">${hsEsc(mtStr)}</td>
-        <td class="mono muted">${hsEsc(sha)}</td>
+        <td class="mono muted">${hsEsc(sha || "—")}</td>
         <td>${hasDiff ? `<button type="button" class="btn sm" data-fim-toggle="${i}">${hsEsc(hsT("hs.fim_show_diff", "差异"))}</button>` : ""}</td>
       </tr>`;
       if (hasDiff) {
-        html += `<tr class="hs-fim-diff-row" id="hsFimDiff${i}" hidden><td colspan="5"><pre class="mono hs-fim-diff">${hsEsc(c.diff)}${c.truncated ? "\n…(" + hsEsc(hsT("hs.fim_truncated", "已截断")) + ")" : ""}</pre></td></tr>`;
+        html += `<tr class="hs-fim-diff-row" id="hsFimDiff${i}" hidden><td colspan="6"><pre class="mono hs-fim-diff">${hsEsc(c.diff)}${c.truncated ? "\n…(" + hsEsc(hsT("hs.fim_truncated", "已截断")) + ")" : ""}</pre></td></tr>`;
       }
     });
     html += `</tbody></table></div></div>`;
-  } else if ((scan.file_inventory || []).length && scan.status === "completed") {
+  } else if ((fimStats || (scan.file_inventory || []).length) && scan.status === "completed") {
     const invN = (scan.file_inventory || []).length;
     html += `<div class="hs-fim-panel" id="hsFimPanel">
       <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
         <span class="badge ok">${hsEsc(hsT("hs.fim_none_tag", "无变更"))}</span>
-        <span class="muted" style="font-size:11px">${invN} ${hsEsc(hsT("hs.fim_inv_count", "个受监控文件"))}</span></div>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_none", "相对上次基线无文件变更"))}</p>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_scope_hint", "仅监控白名单路径（Linux: /etc/hosts、sshd_config、crontab、authorized_keys 等；Windows: System32\\drivers\\etc\\hosts 与 Startup）。在其它目录增删改不会出现在此列表；需先建立基线再改文件后重新扫描。"))}</p></div>`;
+        ${invN ? `<span class="muted" style="font-size:11px">${invN} ${hsEsc(hsT("hs.fim_inv_count", "个受监控文件"))}</span>` : ""}</div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_none", "相对上次基线无文件变更"))}</p>${scopeHTML}</div>`;
   } else if (scan.status === "completed") {
     html += `<div class="hs-fim-panel" id="hsFimPanel">
       <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
         <span class="badge">${hsEsc(hsT("hs.fim_empty_tag", "无清单"))}</span></div>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_empty_help", "本次未采集到受监控文件哈希（权限不足、FIM 关闭或 Agent 过旧）。请确认已开启文件完整性监控，并以有权限的账户运行 Agent 后重新扫描。"))}</p></div>`;
+      <p class="ws-help">${hsEsc(hsT("hs.fim_empty_help", "本次未采集到文件基线数据（权限不足、FIM 关闭或 Agent 过旧）。请确认已开启文件完整性监控，并以有权限的账户运行 Agent 后重新扫描。"))}</p></div>`;
   }
+  html += hsCompliancePanel(scan);
   if ((scan.remediation || []).length) {
     html += `<div class="sec-remediation"><div class="cfg-panel-title">${hsEsc(hsT("hs.remediation", "修复建议"))}</div><ul>`;
     const seenTips = new Set();
@@ -784,7 +921,7 @@ function hsPaintDetail(scan, opts) {
     html += `<tr>
       <td>${hsLevelBadge(f.level)}</td>
       <td><span class="tag">${hsEsc(hsCatLabel(f.category))}</span></td>
-      <td>${hsEsc(f.title)}<div class="field-hint">${hsEsc(f.detail || "")}</div></td>
+      <td>${hsEsc(f.title)}<div class="field-hint">${hsEsc(f.detail || "")}</div>${hsComplianceTags(f)}</td>
       <td class="mono">${hsEsc(f.cve || f.id || "")}</td>
       <td>${hsEsc(f.suggest || "")}</td>
       <td>${hsFindingStatusControls(f)}</td>
@@ -856,7 +993,7 @@ function hsBuildReportModel(scan) {
       .replace("{score}", String(scan.score ?? "—"))
       .replace("{risk}", hsLevelLabel(scan.risk))
       .replace("{fw}", fwText)
-      .replace("{clam}", hsClamLabel(scan.clamav))
+      .replace("{clam}", hsClamText(scan))
       .replace("{pkgs}", String(scan.pkg_count || 0))
       .replace("{cves}", String(scan.cve_count || 0))
       .replace("{ports}", String(portCount))
@@ -868,6 +1005,7 @@ function hsBuildReportModel(scan) {
   const findingRows = (scan.findings || []).map(f => [
     hsLevelLabel(f.level), hsCatLabel(f.category),
     f.title || "", f.cve || f.id || "", f.detail || "", f.suggest || "",
+    hsComplianceText(f) || "—",
   ]);
   const fwDetail = String(scan.firewall_detail || "").trim();
   const fwRows = [
@@ -887,6 +1025,7 @@ function hsBuildReportModel(scan) {
   const fimRows = (scan.file_changes || []).map(c => [
     c.path || "",
     hsFimChangeLabel(c.change),
+    hsFimReasonLabel(c),
     hsFmtUnix(c.new_mtime || c.old_mtime || 0),
     c.change === "removed" ? hsShortSHA(c.old_sha)
       : (c.change === "modified" ? `${hsShortSHA(c.old_sha)} → ${hsShortSHA(c.new_sha)}` : hsShortSHA(c.new_sha)),
@@ -910,7 +1049,7 @@ function hsBuildReportModel(scan) {
       [hsT("hs.score", "安全分"), String(scan.score ?? "—")],
       [hsT("hs.risk", "风险等级"), hsLevelLabel(scan.risk)],
       [hsT("hs.firewall", "防火墙"), fwText],
-      ["ClamAV", hsClamLabel(scan.clamav)],
+      ["ClamAV", hsClamText(scan)],
       ["CVE", String(scan.cve_count || 0)],
       [hsT("hs.pkgs", "软件包"), String(scan.pkg_count || 0)],
       [hsT("hs.ports_open", "开放端口"), String(portCount)],
@@ -950,6 +1089,7 @@ function hsBuildReportModel(scan) {
         title: hsT("hs.fim_title", "文件变更"),
         columns: [
           hsT("hs.fim_path", "路径"), hsT("hs.fim_change", "变更类型"),
+          hsT("hs.fim_reason", "依据"),
           hsT("hs.fim_mtime", "时间"), hsT("hs.fim_sha", "SHA 摘要"),
           hsT("hs.fim_diff_col", "内容差异"),
         ],
@@ -957,15 +1097,16 @@ function hsBuildReportModel(scan) {
           ? fimRows
           : [[scan.fim_baseline_established
             ? hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更")
-            : hsT("hs.fim_none", "相对上次基线无文件变更"), "", "", "", ""]],
+            : hsT("hs.fim_none", "相对上次基线无文件变更"), "", "", "", "", ""]],
       },
       {
         title: hsT("hs.findings", "风险明细"),
         columns: [
           hsT("hs.level", "级别"), hsT("hs.category", "类别"), hsT("hs.title", "标题"),
           "CVE", hsT("hs.detail_col", "详情"), hsT("hs.suggest", "建议"),
+          hsT("hs.compliance", "合规映射"),
         ],
-        rows: findingRows.length ? findingRows : [[hsT("hs.no_findings", "未发现风险项"), "", "", "", "", ""]],
+        rows: findingRows.length ? findingRows : [[hsT("hs.no_findings", "未发现风险项"), "", "", "", "", "", ""]],
       },
     ],
     footer: hsT("hs.report_footer", "本报告由 AIOps Monitor 安全中心自动生成，仅供运维处置参考，不替代专业渗透测试。"),
@@ -994,6 +1135,7 @@ function hsBuildReportModel(scan) {
       file_changes: scan.file_changes || [],
       file_inventory: scan.file_inventory || [],
       fim_baseline_established: !!scan.fim_baseline_established,
+      fim_stats: scan.fim_stats || null,
       remediation: scan.remediation || [],
       findings: scan.findings || [],
       summary: sum,

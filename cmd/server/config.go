@@ -624,6 +624,9 @@ type ServerConfig struct {
 	HostSecurity HostSecurityConfig `json:"host_security,omitempty"`
 	// WebSecurity: server-side Nuclei web vulnerability scanning.
 	WebSecurity WebSecurityConfig `json:"web_security,omitempty"`
+	// SecurityFeeds: transport settings and enabled sources for the detection
+	// libraries (Nuclei templates, sqlmap signatures, payload/POC corpora).
+	SecurityFeeds SecurityFeedConfig `json:"security_feeds,omitempty"`
 	// OIDC enables enterprise SSO (authorization code + userinfo + group→role).
 	OIDC OIDCConfig `json:"oidc,omitempty"`
 	// SSO holds OAuth login apps for Feishu / DingTalk / WeChat / WeCom
