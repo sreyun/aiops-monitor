@@ -287,6 +287,7 @@ func main() {
 	}
 
 	hostID := loadOrCreateHostID(cfg.StateFile)
+	setFIMStateDir(cfg.StateFile)
 	collector := newCollector(cfg.DiskPath)
 	runner := NewPluginRunner(cfg.PluginsDir, cfg.Python, 15*time.Second)
 

@@ -89,8 +89,30 @@ function hsCatLabel(cat) {
     ioc: hsT("hs.cat_ioc", "威胁迹象"),
     cve: "CVE",
     port: hsT("hs.cat_port", "端口"),
+    fim: hsT("hs.cat_fim", "文件变更"),
   };
   return m[cat] || cat || "—";
+}
+function hsFimChangeLabel(ch) {
+  const m = {
+    added: hsT("hs.fim_added", "新增"),
+    removed: hsT("hs.fim_removed", "删除"),
+    modified: hsT("hs.fim_modified", "修改"),
+  };
+  return m[ch] || ch || "—";
+}
+function hsFimChangeBadge(ch) {
+  const cls = { added: "ok", removed: "crit", modified: "warn" }[ch] || "info";
+  return `<span class="badge ${cls}">${hsEsc(hsFimChangeLabel(ch))}</span>`;
+}
+function hsShortSHA(s) {
+  const t = String(s || "");
+  return t.length > 12 ? t.slice(0, 12) : (t || "—");
+}
+function hsFmtUnix(ts) {
+  const n = Number(ts) || 0;
+  if (!n) return "—";
+  try { return new Date(n * 1000).toLocaleString(); } catch (_) { return "—"; }
 }
 async function hsUpdateFindingStatus(finding, status) {
   if (!hsSelected || !finding) return;
@@ -331,6 +353,8 @@ function paintHostSecurity() {
         <p class="ws-help">${hsEsc(hsT("hs.cfg_edit_help", "可随时修改并再次保存：定时开关、ClamAV、周期与纳入调度的主机列表。"))}</p>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgEnabled"${hsCfg.enabled ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_enabled", "启用定时扫描"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgClam"${hsCfg.enable_clamav !== false ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_clam", "尝试使用 ClamAV"))}</span></label>
+        <label class="switch cfg-enable"><input type="checkbox" id="hsCfgFIM"${hsCfg.fim_enabled !== false ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_fim", "文件完整性监控 (FIM)"))}</span></label>
+        <label class="switch cfg-enable"><input type="checkbox" id="hsCfgFIMDiff"${hsCfg.fim_content_diff !== false ? " checked" : ""}${hsCfg.fim_enabled === false ? " disabled" : ""}><span>${hsEsc(hsT("hs.cfg_fim_diff", "白名单配置内容差异"))}</span></label>
         <label class="switch cfg-enable"><input type="checkbox" id="hsCfgAISummary"${hsCfg.auto_ai_summary ? " checked" : ""}><span>${hsEsc(hsT("hs.cfg_ai_summary", "扫描完成后自动 AI 摘要"))}</span></label>
         <div class="cfg-form-row">
           <div class="field"><label>${hsEsc(hsT("hs.cfg_kind", "周期"))}</label>
@@ -461,6 +485,13 @@ function paintHostSecurity() {
     e.stopPropagation();
     hsLoadDetail(btn.dataset.hsPorts, { focus: "ports" });
   }));
+  const fimBox = $("hsCfgFIM");
+  const fimDiffBox = $("hsCfgFIMDiff");
+  if (fimBox && fimDiffBox) {
+    const syncFIMDiff = () => { fimDiffBox.disabled = !fimBox.checked; };
+    fimBox.addEventListener("change", syncFIMDiff);
+    syncFIMDiff();
+  }
   if (hsSelected) hsPaintDetail(hsSelected);
   else {
     const box = $("hsDetail");
@@ -508,6 +539,8 @@ async function hsSaveCfg() {
   const body = {
     enabled: schedule.enabled,
     enable_clamav: !!($("hsCfgClam") && $("hsCfgClam").checked),
+    fim_enabled: !!($("hsCfgFIM") && $("hsCfgFIM").checked),
+    fim_content_diff: !!($("hsCfgFIMDiff") && $("hsCfgFIMDiff").checked),
     auto_ai_summary: !!($("hsCfgAISummary") && $("hsCfgAISummary").checked),
     osv_url: (hsCfg && hsCfg.osv_url) || "",
     timeout_sec: (hsCfg && hsCfg.timeout_sec) || 180,
@@ -632,11 +665,13 @@ function hsPaintDetail(scan, opts) {
     html += `<div class="sec-remediation" style="margin:8px 0"><div class="cfg-panel-title">${hsEsc(hsT("hs.ai_summary", "AI 摘要"))}</div>
       <pre class="mono" style="white-space:pre-wrap;margin:0;font-size:12px">${hsEsc(scan.ai_summary)}</pre></div>`;
   }
+  const fimKPI = sum.fim || (scan.file_changes || []).length || 0;
   html += `<div class="sec-metrics compact hs-detail-kpis">
     <div class="sec-metric"><b>${scan.score ?? "—"}</b><span>${hsEsc(hsT("hs.score", "安全分"))}</span></div>
     <div class="sec-metric"><b>${portTotal}</b><span>${hsEsc(hsT("hs.ports_open", "开放端口"))}</span></div>
     <div class="sec-metric ${riskyN ? "high" : ""}"><b>${riskyN}</b><span>${hsEsc(hsT("hs.risky_ports", "高危端口"))}</span></div>
     <div class="sec-metric"><b>${scan.cve_count || 0}</b><span>CVE</span></div>
+    <div class="sec-metric ${fimKPI ? "high" : ""}"><b>${fimKPI}</b><span>${hsEsc(hsT("hs.cat_fim", "文件变更"))}</span></div>
     <div class="sec-metric crit"><b>${sum.crit || 0}</b><span>${hsEsc(hsT("hs.level_crit", "危急"))}</span></div>
   </div>`;
   html += `<div class="hs-fw-panel">
@@ -665,6 +700,51 @@ function hsPaintDetail(scan, opts) {
     html += `</tbody></table></div></div>`;
   } else if (opts && opts.focus === "ports") {
     html += `<div class="hs-port-panel" id="hsPortPanel"><div class="empty-line">${hsEsc(hsT("hs.ports_unknown", "需重新扫描后可查看端口明细"))}</div></div>`;
+  }
+  // File integrity changes (FIM) — panel chrome aligned with firewall / ports.
+  const fileChanges = scan.file_changes || [];
+  const fimCount = sum.fim || fileChanges.length || 0;
+  if (scan.fim_baseline_established) {
+    html += `<div class="hs-fim-panel" id="hsFimPanel">
+      <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
+        <span class="badge info">${hsEsc(hsT("hs.fim_baseline_tag", "基线"))}</span></div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更"))}</p></div>`;
+  } else if (fileChanges.length) {
+    html += `<div class="hs-fim-panel" id="hsFimPanel">
+      <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
+        <span class="tag">${fileChanges.length}</span>
+        ${fimCount ? `<span class="badge warn">${fimCount} ${hsEsc(hsT("hs.cat_fim", "文件变更"))}</span>` : ""}</div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_help", "相对上次完成扫描的哈希基线；白名单小文本可展开查看脱敏差异。"))}</p>
+      <div class="nf-table-wrap hs-table-wrap"><table class="data-table hs-table"><thead><tr>
+        <th>${hsEsc(hsT("hs.fim_path", "路径"))}</th>
+        <th>${hsEsc(hsT("hs.fim_change", "变更类型"))}</th>
+        <th>${hsEsc(hsT("hs.fim_mtime", "时间"))}</th>
+        <th>${hsEsc(hsT("hs.fim_sha", "SHA 摘要"))}</th>
+        <th></th>
+      </tr></thead><tbody>`;
+    fileChanges.slice(0, 120).forEach((c, i) => {
+      const mtStr = hsFmtUnix(c.new_mtime || c.old_mtime || 0);
+      const sha = c.change === "removed"
+        ? hsShortSHA(c.old_sha)
+        : (c.change === "modified" ? `${hsShortSHA(c.old_sha)} → ${hsShortSHA(c.new_sha)}` : hsShortSHA(c.new_sha));
+      const hasDiff = c.change === "modified" && !!c.diff;
+      html += `<tr class="hs-fim-row">
+        <td class="mono">${hsEsc(c.path || "")}</td>
+        <td>${hsFimChangeBadge(c.change)}</td>
+        <td class="muted">${hsEsc(mtStr)}</td>
+        <td class="mono muted">${hsEsc(sha)}</td>
+        <td>${hasDiff ? `<button type="button" class="btn sm" data-fim-toggle="${i}">${hsEsc(hsT("hs.fim_show_diff", "差异"))}</button>` : ""}</td>
+      </tr>`;
+      if (hasDiff) {
+        html += `<tr class="hs-fim-diff-row" id="hsFimDiff${i}" hidden><td colspan="5"><pre class="mono hs-fim-diff">${hsEsc(c.diff)}${c.truncated ? "\n…(" + hsEsc(hsT("hs.fim_truncated", "已截断")) + ")" : ""}</pre></td></tr>`;
+      }
+    });
+    html += `</tbody></table></div></div>`;
+  } else if ((scan.file_inventory || []).length && scan.status === "completed") {
+    html += `<div class="hs-fim-panel" id="hsFimPanel">
+      <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
+        <span class="badge ok">${hsEsc(hsT("hs.fim_none_tag", "无变更"))}</span></div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_none", "相对上次基线无文件变更"))}</p></div>`;
   }
   if ((scan.remediation || []).length) {
     html += `<div class="sec-remediation"><div class="cfg-panel-title">${hsEsc(hsT("hs.remediation", "修复建议"))}</div><ul>`;
@@ -728,6 +808,16 @@ function hsPaintDetail(scan, opts) {
     const idx = parseInt(b.dataset.hsFinding, 10);
     hsAIFinding(scan, idx);
   }));
+  box.querySelectorAll("[data-fim-toggle]").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation();
+    const idx = b.dataset.fimToggle;
+    const row = $("hsFimDiff" + idx);
+    if (!row) return;
+    const open = row.hasAttribute("hidden");
+    if (open) row.removeAttribute("hidden");
+    else row.setAttribute("hidden", "");
+    b.textContent = open ? hsT("hs.fim_hide_diff", "收起") : hsT("hs.fim_show_diff", "差异");
+  }));
   box.querySelectorAll("[data-hs]").forEach(b => b.addEventListener("click", e => {
     e.stopPropagation();
     hsAction(b.dataset.hs);
@@ -786,6 +876,20 @@ function hsBuildReportModel(scan) {
     p.process || "—",
     p.risk ? hsLevelLabel(p.risk) : hsT("hs.level_info", "信息"),
   ]);
+  const fimRows = (scan.file_changes || []).map(c => [
+    c.path || "",
+    hsFimChangeLabel(c.change),
+    hsFmtUnix(c.new_mtime || c.old_mtime || 0),
+    c.change === "removed" ? hsShortSHA(c.old_sha)
+      : (c.change === "modified" ? `${hsShortSHA(c.old_sha)} → ${hsShortSHA(c.new_sha)}` : hsShortSHA(c.new_sha)),
+    c.diff ? (c.truncated ? hsT("hs.fim_truncated", "已截断") : hsT("hs.fim_has_diff", "有差异")) : "—",
+  ]);
+  let fimNarrative = "";
+  if (scan.fim_baseline_established) {
+    fimNarrative = hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更");
+  } else if (fimRows.length) {
+    fimNarrative = hsT("hs.fim_report_summary", "相对上次基线检测到 {n} 处文件变更。").replace("{n}", String(fimRows.length));
+  }
   return {
     title: hsT("hs.report_title", "主机安全扫描报告") + " — " + (scan.hostname || scan.host_id),
     subtitle: hsT("hs.report_sub", "生成时间") + " " + new Date().toLocaleString() + " · " + hsScanLabel(scan),
@@ -803,6 +907,7 @@ function hsBuildReportModel(scan) {
       [hsT("hs.pkgs", "软件包"), String(scan.pkg_count || 0)],
       [hsT("hs.ports_open", "开放端口"), String(portCount)],
       [hsT("hs.risky_ports", "高危端口"), String(riskyN)],
+      [hsT("hs.cat_fim", "文件变更"), String(sum.fim || fimRows.length || 0)],
       [hsT("hs.status", "状态"), hsStatusLabel(scan.status)],
       [hsT("hs.time", "完成时间"), hsFmtTime(scan.finished_at)],
     ],
@@ -810,11 +915,12 @@ function hsBuildReportModel(scan) {
       [hsT("hs.score", "安全分"), String(scan.score ?? "—")],
       [hsT("hs.ports_open", "开放端口"), String(portCount)],
       [hsT("hs.risky_ports", "高危端口"), String(riskyN)],
+      [hsT("hs.cat_fim", "文件变更"), String(sum.fim || fimRows.length || 0)],
       [hsT("hs.level_crit", "危急"), String(sum.crit || 0)],
       [hsT("hs.level_high", "高危"), String(sum.high || 0)],
       ["CVE", String(scan.cve_count || 0)],
     ],
-    narrative,
+    narrative: fimNarrative ? (narrative + "\n\n# " + hsT("hs.fim_title", "文件变更") + "\n\n" + fimNarrative) : narrative,
     sections: [
       {
         title: hsT("hs.report_fw_sec", "防火墙状态"),
@@ -831,6 +937,19 @@ function hsBuildReportModel(scan) {
         rows: portRows.length
           ? portRows
           : [[hsT("hs.ports_unknown", "需重新扫描后可查看端口明细"), "", "", "", "", "", ""]],
+      },
+      {
+        title: hsT("hs.fim_title", "文件变更"),
+        columns: [
+          hsT("hs.fim_path", "路径"), hsT("hs.fim_change", "变更类型"),
+          hsT("hs.fim_mtime", "时间"), hsT("hs.fim_sha", "SHA 摘要"),
+          hsT("hs.fim_diff_col", "内容差异"),
+        ],
+        rows: fimRows.length
+          ? fimRows
+          : [[scan.fim_baseline_established
+            ? hsT("hs.fim_baseline", "已建立文件基线，下次扫描起显示变更")
+            : hsT("hs.fim_none", "相对上次基线无文件变更"), "", "", "", ""]],
       },
       {
         title: hsT("hs.findings", "风险明细"),
@@ -864,6 +983,9 @@ function hsBuildReportModel(scan) {
       port_count: portCount,
       risky_port_count: riskyN,
       open_ports: ports,
+      file_changes: scan.file_changes || [],
+      file_inventory: scan.file_inventory || [],
+      fim_baseline_established: !!scan.fim_baseline_established,
       remediation: scan.remediation || [],
       findings: scan.findings || [],
       summary: sum,
