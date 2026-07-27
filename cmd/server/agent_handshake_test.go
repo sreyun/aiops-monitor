@@ -219,25 +219,25 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	// Server 2012 / PS<5: ZipFile extract, not Expand-Archive-only.
 	must("install.ps1 (zip)", ps1In,
 		"System.IO.Compression.ZipFile", "ZipFileExtensions", "capability summary")
-	// Hyper-V auto-elevation: a non-elevated install on a Hyper-V host must relaunch
-	// itself via UAC (RunAs + EncodedCommand) so Get-VM (VM collection) works. Host
-	// detection uses the vmms service (instant, no slow module autoload race) rather
-	// than Get-Command Get-VM.
+	// Prefer elevated Program Files install for Hyper-V / Smart App Control /
+	// AppLocker — AppData per-user installs are the common Win10/11 deny target.
 	must("install.ps1 (uac)", ps1In,
 		"Get-Service -Name vmms", "-Verb RunAs", "-EncodedCommand",
-		"SecurityProtocol")
+		"SecurityProtocol", "Request-AiopsElevatedInstall",
+		"Test-AiopsSmartAppControlOn", "Test-AiopsAppLockerPresent", "PreferElevated")
 	// Elevated installs must register the real Windows service (boot autostart +
 	// crash-recovery + interactive desktop worker), which is what makes Hyper-V
 	// collection, reboot persistence, and lock-screen remote desktop all work.
 	must("install.ps1 (service)", ps1In,
 		"--install-service", "AiopsMonitorAgent")
-	// Downloaded binaries carry MOTW; Application Control (WDAC/AppLocker) must
-	// be detected early — Session-0 keepalive fallback cannot run a blocked exe.
+	// Downloads should avoid MOTW; Application Control must be detected early and
+	// AppData blocks must auto-retry elevated Program Files (no Session-0 fallback).
 	must("install.ps1 (app-control)", ps1In,
-		"Unblock-File", "Test-AiopsAgentRunnable",
-		"Application Control", "Zone.Identifier",
-		"allow-aiops-agent.ps1", "New-CIPolicy",
-		"group policy", `Join-Path $env:ProgramFiles "AIOps Agent"`)
+		"Unblock-File", "Clear-AiopsMotw", "WriteAllBytes",
+		"Test-AiopsAgentRunnable", "Application Control", "Zone.Identifier",
+		"allow-aiops-agent.ps1", "New-CIPolicy", "appcontrol-appdata",
+		"group policy", `Join-Path $env:ProgramFiles "AIOps Agent"`,
+		"windowsdefender://appbrowser")
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")

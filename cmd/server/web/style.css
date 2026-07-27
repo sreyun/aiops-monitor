@@ -548,8 +548,8 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 }
 .hn{font-weight:650; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
 .hn:hover{color:var(--accent)}
-.host-tags{display:flex; align-items:center; gap:5px; flex:none}
-.os-badge{font-size:9.5px; padding:2px 6px; border-radius:4px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em}
+.host-tags{display:flex; align-items:center; gap:5px; flex:1 1 auto; min-width:0; justify-content:flex-end; overflow:hidden}
+.os-badge{font-size:9.5px; padding:2px 6px; border-radius:4px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em; flex:none; white-space:nowrap}
 .agent-ver{font-size:9.5px; padding:2px 6px; border-radius:4px; font-weight:600; letter-spacing:.02em; font-variant-numeric:tabular-nums; background:var(--panel3); color:var(--muted)}
 .agent-ver.ok{background:var(--ok-soft, var(--accent-soft)); color:var(--ok-txt, var(--accent-txt))}
 .agent-ver.outdated{background:var(--warn-soft); color:var(--warn-txt)}
@@ -563,9 +563,13 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .agent-job{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding-top:8px; border-top:1px solid var(--line2); color:var(--txt2)}
 .agent-job .mono{font-size:11px}
 .host.outdated-agent, .host.hrow.outdated-agent{box-shadow:inset 0 0 0 1px var(--warn-border)}
+/* Category/folder paths are often long — ellipsis keeps OS/Agent/actions visible. */
 .cat-badge{font-size:9.5px; padding:2px 7px; border-radius:4px; background:var(--accent-soft); color:var(--accent-txt);
-  font-weight:600; cursor:pointer; border:1px solid transparent}
+  font-weight:600; cursor:pointer; border:1px solid transparent;
+  max-width:7.5em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  flex:0 1 auto; min-width:0; display:inline-block; vertical-align:middle; line-height:1.35}
 .cat-badge:hover{border-color:var(--accent-border)}
+.agent-ver,.term-btn,.desktop-btn,.x-btn{flex:none}
 .x-btn{width:22px; height:22px; border-radius:5px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center;
   padding:0; flex:none; opacity:0; transition:opacity var(--transition-fast), background var(--transition-fast); font-size:11px}
@@ -1985,7 +1989,7 @@ svg.sparkline{width:100%; height:46px; display:block}
 .hrow-sep{color:var(--muted2); margin:0 2px}
 
 .host.hrow .os-badge{flex:none; width:44px; text-align:center; justify-content:center; display:inline-flex}
-.host.hrow .cat-badge{flex:none; min-width:60px; text-align:center; justify-content:center; display:inline-flex}
+.host.hrow .cat-badge{flex:0 1 7.5em; min-width:3.5em; max-width:7.5em; text-align:center; justify-content:center; display:inline-block}
 
 /* Mini metric bars: fixed width container so 3-bar and 4-bar rows align */
 .hrow-metrics{display:flex; gap:12px; flex:none; width:300px; align-items:center; overflow:hidden}
