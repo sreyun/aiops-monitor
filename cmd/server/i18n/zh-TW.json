@@ -232,7 +232,9 @@
   "terminal.no_channel_hint_2": "  2) Agent 啟動時未採集到機器指紋（指紋用於終端通道鑑於終端通道鑑權，檢查 machine-id / MAC 是否可讀）；",
   "terminal.no_channel_hint_3": "  3) 主機剛離線或 Agent 未運行。",
   "terminal.no_channel_hint_4": "升級後重新開啟終端即可。",
+  "terminal.no_channel_hint_https": "  5) 若面板走 HTTPS，請確認 Agent config.yaml 的 server 為 https://（http 會被反代跳轉，串流終端/桌面會卡住）。",
   "terminal.timeout": "Agent 未在預期時間內接入終端通道，已斷開。",
+  "terminal.timeout_hint_https": "排查：1) 服務是否在跑 2) config.server 是否為 https:// 3) 查看 agent.log 是否有「終端通道已就緒」或指紋 403。",
   "terminal.session_not_found": "會話不存在或已結束",
 
   "playbook.not_found": "劇本不存在",
@@ -380,6 +382,7 @@
   "desktop.no_channel": "無法建立桌面會話——Agent 桌面通道未就緒",
   "desktop.no_frame": "Agent 已接入但未推送畫面：目標可能處於鎖屏/登入介面、Session 0 或無互動式桌面。鎖屏/登入場景請在目標上以服務方式安裝 Agent（Windows: --install-service；Linux/macOS: sudo 安裝守護行程）",
   "desktop.timeout": "等待 Agent 接入桌面通道逾時",
+  "desktop.timeout_hint_https": "排查：服務是否安裝為 Windows 服務、是否有登入工作階段、config.server 是否 https://、agent-desktop.log 是否有「桌面 worker」。",
   "log.terminal_cmd": "終端命令 [%s %s]: %s",
   "log.alert_fired": "告警觸發：%s",
   "log.alert_recovered": "告警恢復：%s",

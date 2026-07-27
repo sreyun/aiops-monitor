@@ -18,8 +18,12 @@ func TestDeskFrameRoundTrip(t *testing.T) {
 func TestDeskManagerNotifyPending(t *testing.T) {
 	m := newDeskManager()
 	s := m.create("h1", "host1", "op", "1.1.1.1", "zh")
-	if !m.notifyAgent("h1", s.id) {
+	ok, alive := m.notifyAgent("h1", s.id)
+	if !ok {
 		t.Fatal("notify failed")
+	}
+	if alive {
+		t.Fatal("without recent waiter, channel should look dead")
 	}
 	// no waiter → pending
 	m.mu.Lock()

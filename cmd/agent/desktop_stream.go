@@ -171,10 +171,17 @@ func deskStreamClient() *http.Client {
 		if base, ok := termHTTP.Transport.(*http.Transport); ok && base != nil {
 			tr = base.Clone() // inherit TLS/CA/proxy config applied at startup
 		} else {
-			tr = &http.Transport{}
+			tr = &http.Transport{
+				Proxy:             http.ProxyFromEnvironment,
+				ForceAttemptHTTP2: false,
+			}
 		}
 		tr.WriteBufferSize = 1
-		streamTxHTTP = &http.Client{Transport: tr}
+		tr.ForceAttemptHTTP2 = false
+		streamTxHTTP = &http.Client{
+			Transport:     tr,
+			CheckRedirect: preserveAgentRedirect,
+		}
 	})
 	return streamTxHTTP
 }

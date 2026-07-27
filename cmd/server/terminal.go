@@ -125,6 +125,10 @@ type termManager struct {
 	// pendingSessions, the session ID persists until the agent's next poll picks
 	// it up immediately (no long-poll wait needed).
 	pendingSessions map[string][]string // hostID -> queued session IDs
+	// lastWaitAt records when the agent last entered terminal/wait for a host.
+	// Used so the UI can fail fast when the reverse channel is clearly dead
+	// instead of spinning 35s on "waiting for agent".
+	lastWaitAt map[string]time.Time
 	// onArchive is called when a session ends and is archived. Used to save
 	// terminal output summary to AI memory for cross-session RAG retrieval.
 	onArchive func(info termSessionInfo, text string)
@@ -239,6 +243,7 @@ func newTermManager() *termManager {
 		sessions:        map[string]*termSession{},
 		waiters:         map[string]chan string{},
 		pendingSessions: map[string][]string{},
+		lastWaitAt:      map[string]time.Time{},
 	}
 }
 
@@ -373,40 +378,36 @@ func (m *termManager) remove(id string) {
 }
 
 // notifyAgent hands a new sessionID to the agent currently long-polling for
-// hostID; returns false if none is waiting.
-// If no waiter is active, the sessionID is queued in pendingSessions so the
-// agent picks it up on its NEXT poll cycle — this prevents batch-execution
-// race conditions where agents between polls miss the notification window.
-func (m *termManager) notifyAgent(hostID, sessionID string) bool {
+// hostID. Returns (deliveredOrQueued, channelAlive):
+//   - channelAlive=true when a waiter is live OR the agent polled within ~90s
+//   - channelAlive=false means the reverse channel looks dead; UI should fail fast
+func (m *termManager) notifyAgent(hostID, sessionID string) (ok bool, alive bool) {
 	m.mu.Lock()
 	w := m.waiters[hostID]
 	delete(m.waiters, hostID)
+	last := m.lastWaitAt[hostID]
+	alive = w != nil || (!last.IsZero() && time.Since(last) < 90*time.Second)
 	if w == nil {
-		// No active waiter — queue for the agent's next poll.
-		// This is the key fix for batch execution instability: agents on
-		// external networks may have gaps between long-poll cycles, and
-		// the old code would silently lose the session in that gap.
 		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
 		m.mu.Unlock()
-		return true // queued successfully
+		return true, alive
 	}
 	m.mu.Unlock()
 	select {
 	case w <- sessionID:
-		return true
+		return true, true
 	default:
-		// Channel full (shouldn't happen with buffer=1, but be safe) —
-		// queue it instead of losing it.
 		m.mu.Lock()
 		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
 		m.mu.Unlock()
-		return true
+		return true, alive
 	}
 }
 func (m *termManager) registerWaiter(hostID string) chan string {
 	ch := make(chan string, 1)
 	m.mu.Lock()
 	m.waiters[hostID] = ch
+	m.lastWaitAt[hostID] = time.Now()
 	m.mu.Unlock()
 	return ch
 }
@@ -582,15 +583,15 @@ func (s *Server) serveTerminalWS(ws *wsConn, sess *termSession, hostID, hostname
 		hostIP = h.IP
 	}
 
-	if !s.term.notifyAgent(hostID, sess.id) {
-		_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.no_channel") + "\x1b[0m\r\n\r\n" + Tz("terminal.no_channel_hint_1") + "\r\n" + Tz("terminal.no_channel_hint_2") + "\r\n" + Tz("terminal.no_channel_hint_3") + "\r\n\r\n" + Tz("terminal.no_channel_hint_4") + "\r\n"))
+	if _, alive := s.term.notifyAgent(hostID, sess.id); !alive {
+		_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.no_channel") + "\x1b[0m\r\n\r\n" + Tz("terminal.no_channel_hint_1") + "\r\n" + Tz("terminal.no_channel_hint_2") + "\r\n" + Tz("terminal.no_channel_hint_3") + "\r\n\r\n" + Tz("terminal.no_channel_hint_4") + "\r\n" + Tz("terminal.no_channel_hint_https") + "\r\n"))
 		return
 	}
 	go func() {
 		select {
 		case <-sess.agentUp:
 		case <-time.After(35 * time.Second):
-			_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.timeout") + "\x1b[0m\r\n"))
+			_ = ws.WriteBinary([]byte("\r\n\x1b[31m" + Tz("terminal.timeout") + "\x1b[0m\r\n" + Tz("terminal.timeout_hint_https") + "\r\n"))
 			sess.close()
 		case <-sess.done:
 		}

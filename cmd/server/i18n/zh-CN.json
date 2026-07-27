@@ -234,7 +234,9 @@
   "terminal.no_channel_hint_2": "  2) Agent 启动时未采集到机器指纹（指纹用于终端通道鉴权，检查 machine-id / MAC 是否可读）；",
   "terminal.no_channel_hint_3": "  3) 主机刚离线或 Agent 未运行。",
   "terminal.no_channel_hint_4": "升级后重新打开终端即可。",
+  "terminal.no_channel_hint_https": "  5) 若面板走 HTTPS，请确认 Agent config.yaml 的 server 为 https://（http 会被反代跳转，流式终端/桌面会卡住）。",
   "terminal.timeout": "Agent 未在预期时间内接入终端通道，已断开。",
+  "terminal.timeout_hint_https": "排查：1) 服务是否在跑 2) config.server 是否为 https:// 3) 查看 agent.log 是否有「终端通道已就绪」或指纹 403。",
   "terminal.session_not_found": "会话不存在或已结束",
 
   "playbook.not_found": "剧本不存在",
@@ -382,6 +384,7 @@
   "desktop.no_channel": "无法建立桌面会话——Agent 桌面通道未就绪",
   "desktop.no_frame": "Agent 已接入但未推送画面：目标可能处于锁屏/登录界面、Session 0 或无交互式桌面。锁屏/登录场景请在目标上以服务方式安装 Agent（Windows: --install-service；Linux/macOS: sudo 安装守护进程）",
   "desktop.timeout": "等待 Agent 接入桌面通道超时",
+  "desktop.timeout_hint_https": "排查：服务是否安装为 Windows 服务、是否有登录会话、config.server 是否 https://、agent-desktop.log 是否有「桌面 worker」。",
   "log.terminal_cmd": "终端命令 [%s %s]: %s",
   "log.alert_fired": "告警触发：%s",
   "log.alert_recovered": "告警恢复：%s",

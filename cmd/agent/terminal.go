@@ -57,13 +57,14 @@ var (
 			}).DialContext,
 			MaxIdleConns:      10,
 			IdleConnTimeout:   90 * time.Second,
-			ForceAttemptHTTP2: true,
+			ForceAttemptHTTP2: false, // match reportTransport: H2 single-conn death kills all streams
 		},
+		CheckRedirect: preserveAgentRedirect,
 	} // rx/tx streams are long-lived — no client-level timeout
 	// termWaitHTTP bounds the long-poll wait so a half-open network can't wedge
 	// the poller forever (which would silently kill the terminal channel while
 	// metrics keep reporting). Slightly above the server's 25s poll timeout.
-	termWaitHTTP = &http.Client{Timeout: 35 * time.Second}
+	termWaitHTTP = &http.Client{Timeout: 35 * time.Second, CheckRedirect: preserveAgentRedirect}
 	// termSessionTimeout is the maximum duration of a single terminal session.
 	// After this duration, the shell is killed and resources released —
 	// prevents forgotten sessions from leaking PTY descriptors and memory.
@@ -214,6 +215,14 @@ func (a *Agent) runTerminalChannelFor(t *serverTarget) {
 	slog.Info("远程终端通道已就绪，等待服务端呼叫…", "server", t.server)
 	backoff := newBackoffTimer(1*time.Second, 60*time.Second)
 	for {
+		// Keep HostID in sync with the service (desktop worker pattern): after
+		// fingerprint rejoin the canonical id may change while this loop runs.
+		if a.stateFile != "" {
+			if id := readHostIDFromState(a.stateFile); id != "" && id != a.identity.HostID {
+				slog.Info("终端通道刷新 HostID", "old", short(a.identity.HostID), "new", short(id))
+				a.identity.HostID = id
+			}
+		}
 		sid, mode, command, lang, ok := a.termWait(t.server)
 		if !ok {
 			d := backoff.next()
@@ -240,10 +249,17 @@ func (a *Agent) termWait(server string) (sessionID, mode, command, lang string, 
 	q := url.Values{"host": {a.identity.HostID}}
 	resp, err := agentGet(termWaitHTTP, server+"/api/v1/agent/terminal/wait?"+q.Encode(), a.identity.Fingerprint)
 	if err != nil {
+		slog.Debug("终端 wait 请求失败", "err", err, "server", server)
 		return "", "", "", "", false
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		slog.Warn("终端 wait 被拒绝(403)：指纹与服务端主机记录不匹配，请确认 Agent 已成功注册",
+			"server", server, "host_id", short(a.identity.HostID))
+		return "", "", "", "", false
+	}
 	if resp.StatusCode != http.StatusOK {
+		slog.Debug("终端 wait 非 200", "status", resp.StatusCode, "server", server)
 		return "", "", "", "", false
 	}
 	var out struct {

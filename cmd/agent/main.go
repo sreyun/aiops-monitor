@@ -384,6 +384,13 @@ func main() {
 	if len(servers) == 0 {
 		log.Fatal("未配置任何服务端地址（--server 或 servers 字段）")
 	}
+	// Behind reverse proxies that 301 http→https, streaming terminal/desktop TX
+	// cannot replay Pipe bodies across redirects. Upgrade http://host → https://host
+	// up-front when the server advertises that redirect (and persist into config).
+	servers = normalizeServersPreferHTTPS(servers, cfgPath)
+	if len(servers) > 0 && strings.TrimSpace(servers[0].Server) != "" {
+		cfg.Server = servers[0].Server
+	}
 	// Guard: detect localhost target — a freshly-installed remote agent
 	// connecting to its OWN localhost is the most common misconfiguration.
 	// This typically means the config file was never written (install script failed

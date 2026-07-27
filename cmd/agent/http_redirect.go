@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -76,4 +78,91 @@ func applyAgentRedirectPolicy(c *http.Client) {
 		return
 	}
 	c.CheckRedirect = preserveAgentRedirect
+}
+
+// normalizeServersPreferHTTPS rewrites http://host (implicit :80) to https://host
+// when the server issues a same-host HTTPS redirect. Streaming terminal/desktop
+// TX uses io.Pipe bodies without GetBody, so POST-preserving redirects cannot
+// replay them — the durable fix is to talk HTTPS from the first hop.
+func normalizeServersPreferHTTPS(servers []ServerConfig, cfgPath string) []ServerConfig {
+	if len(servers) == 0 {
+		return servers
+	}
+	out := make([]ServerConfig, len(servers))
+	copy(out, servers)
+	changed := false
+	for i := range out {
+		raw := strings.TrimRight(strings.TrimSpace(out[i].Server), "/")
+		up := probeUpgradeHTTPToHTTPS(raw)
+		if up == "" || up == raw {
+			continue
+		}
+		slog.Info("服务端强制 HTTPS，已改写上报地址", "from", raw, "to", up)
+		out[i].Server = up
+		changed = true
+		if cfgPath != "" {
+			upgradeConfigServerURL(cfgPath, raw, up, io.Discard)
+		}
+	}
+	if changed {
+		return out
+	}
+	return servers
+}
+
+// probeUpgradeHTTPToHTTPS returns https://host when http://host (port 80/empty)
+// redirects to the same hostname over TLS. Non-80 ports (lab :8529) are left alone.
+func probeUpgradeHTTPToHTTPS(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil || !strings.EqualFold(u.Scheme, "http") {
+		return raw
+	}
+	if p := u.Port(); p != "" && p != "80" {
+		return raw
+	}
+	httpsBase := "https://" + u.Hostname()
+	noFollow := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for _, path := range []string{"/healthz", "/api/v1/agent/register", "/"} {
+		req, err := http.NewRequest(http.MethodHead, strings.TrimRight(raw, "/")+path, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			continue
+		}
+		loc := resp.Header.Get("Location")
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 && loc != "" {
+			lu, err := url.Parse(loc)
+			if err != nil {
+				continue
+			}
+			if !lu.IsAbs() {
+				base, _ := url.Parse(raw)
+				lu = base.ResolveReference(lu)
+			}
+			if strings.EqualFold(lu.Scheme, "https") && strings.EqualFold(lu.Hostname(), u.Hostname()) {
+				return httpsBase
+			}
+		}
+	}
+	req, err := http.NewRequest(http.MethodGet, httpsBase+"/healthz", nil)
+	if err != nil {
+		return raw
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return raw
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode > 0 && resp.StatusCode < 500 {
+		return httpsBase
+	}
+	return raw
 }

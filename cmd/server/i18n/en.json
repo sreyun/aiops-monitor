@@ -234,7 +234,9 @@
   "terminal.no_channel_hint_2": "  2) Agent failed to collect machine fingerprint at startup (fingerprint is used for terminal channel authentication, check if machine-id / MAC is readable);",
   "terminal.no_channel_hint_3": "  3) Host just went offline or Agent is not running.",
   "terminal.no_channel_hint_4": "Reopen the terminal after upgrading.",
+  "terminal.no_channel_hint_https": "  5) If the panel is HTTPS, set Agent config.yaml server to https:// (http→https redirects break streaming terminal/desktop).",
   "terminal.timeout": "Agent did not connect to the terminal channel within the expected time, disconnected.",
+  "terminal.timeout_hint_https": "Check: 1) Agent service running 2) config.server is https:// 3) agent.log shows terminal channel ready or fingerprint 403.",
   "terminal.session_not_found": "Session does not exist or has ended",
 
   "playbook.not_found": "Playbook not found",
@@ -382,6 +384,7 @@
   "desktop.no_channel": "Cannot open desktop — agent desktop channel not ready",
   "desktop.no_frame": "Agent connected but sent no frames: the target may be at a lock/login screen, in Session 0, or has no interactive desktop. For lock/login screens install the Agent as a service (Windows: --install-service; Linux/macOS: install the root daemon with sudo)",
   "desktop.timeout": "Timed out waiting for agent desktop channel",
+  "desktop.timeout_hint_https": "Check: Windows service installed, interactive session logged on, config.server is https://, agent-desktop.log shows desktop worker.",
   "log.terminal_cmd": "Terminal command [%s %s]: %s",
   "log.alert_fired": "Alert fired: %s",
   "log.alert_recovered": "Alert recovered: %s",
