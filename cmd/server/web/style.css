@@ -321,6 +321,8 @@ body{
 
 .btn.danger{ background:var(--crit-soft); border-color:var(--crit-border); color:var(--crit-txt); font-weight:600 }
 .btn.danger:hover{ background:rgba(239,77,90,.2); border-color:var(--crit); color:var(--crit-txt) }
+.btn.warn{ background:var(--warn-soft); border-color:var(--warn-border); color:var(--warn-txt); font-weight:600 }
+.btn.warn:hover{ filter:brightness(1.05); border-color:var(--warn-txt) }
 .btn:disabled, .btn.disabled{opacity:.4; cursor:not-allowed; pointer-events:none}
 
 .btn.ghost{ background:transparent; border-color:transparent; color:var(--muted); font-size:15px; padding:6px 9px }
@@ -548,6 +550,19 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .hn:hover{color:var(--accent)}
 .host-tags{display:flex; align-items:center; gap:5px; flex:none}
 .os-badge{font-size:9.5px; padding:2px 6px; border-radius:4px; background:var(--panel3); color:var(--muted); font-weight:600; letter-spacing:.02em}
+.agent-ver{font-size:9.5px; padding:2px 6px; border-radius:4px; font-weight:600; letter-spacing:.02em; font-variant-numeric:tabular-nums; background:var(--panel3); color:var(--muted)}
+.agent-ver.ok{background:var(--ok-soft, var(--accent-soft)); color:var(--ok-txt, var(--accent-txt))}
+.agent-ver.outdated{background:var(--warn-soft); color:var(--warn-txt)}
+.agent-ver.unknown{background:var(--panel3); color:var(--muted)}
+.agent-sel{display:inline-flex; align-items:center; margin-right:4px; cursor:pointer; flex:none}
+.agent-sel input{margin:0; cursor:pointer; width:14px; height:14px}
+.agent-update-bar{display:flex; flex-direction:column; gap:8px; background:var(--accent-soft); border:1px solid var(--accent-border); color:var(--txt);
+  border-radius:var(--r-sm); padding:8px 12px; margin:0 0 var(--sp-3); font-size:12px}
+.agent-update-inner{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px}
+.agent-update-actions{display:flex; flex-wrap:wrap; gap:6px; margin-left:auto}
+.agent-job{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding-top:8px; border-top:1px solid var(--line2); color:var(--txt2)}
+.agent-job .mono{font-size:11px}
+.host.outdated-agent, .host.hrow.outdated-agent{box-shadow:inset 0 0 0 1px var(--warn-border)}
 .cat-badge{font-size:9.5px; padding:2px 7px; border-radius:4px; background:var(--accent-soft); color:var(--accent-txt);
   font-weight:600; cursor:pointer; border:1px solid transparent}
 .cat-badge:hover{border-color:var(--accent-border)}

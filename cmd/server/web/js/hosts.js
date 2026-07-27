@@ -35,14 +35,18 @@ function hostCard(h) {
     : h.stale
       ? `<span class="g stale-tag" title="${I18N.t("section.data_stale")}，${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.data")} ${ago(h.last_seen)}</span>`
       : `<span class="g">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
-  return `<div class="host ${h.online ? "online" : "offline"}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
+  const agentVer = (typeof agentVersionBadgeHTML === "function") ? agentVersionBadgeHTML(h) : "";
+  const agentSel = (typeof agentSelectCheckboxHTML === "function") ? agentSelectCheckboxHTML(h) : "";
+  const outdatedCls = (typeof agentHostCardClass === "function") ? agentHostCardClass(h) : "";
+  return `<div class="host ${h.online ? "online" : "offline"}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
     <div class="host-head">
-      <div class="host-name"><span class="dot ${h.online ? "on" : "off"}"></span>
+      <div class="host-name">${agentSel}<span class="dot ${h.online ? "on" : "off"}"></span>
         <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
       </div>
       <div class="host-tags">
         <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
+        ${agentVer}
         ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="${I18N.t('section.terminal_desc')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
         ${(h.online && DESKTOP_ENABLED) ? `<button class="term-btn desktop-btn" data-act="desktop" title="${I18N.t('desktop.btn_title')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>` : ""}
         <button class="x-btn" data-act="del" title="${I18N.t("ui.delete")}">✕</button>
@@ -110,11 +114,14 @@ function hostRow(h) {
     : "";
   const loadStr = m.load1 !== undefined ? `${I18N.t("ui.load")} ${(m.load1||0).toFixed(2)} / ${(m.load5||0).toFixed(2)}` : "";
   const ipTitle = h.ip ? esc(h.ip) : "";
-  return `<div class="host hrow ${statusCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
-    <span class="hrow-dot ${h.online ? "on" : "off"}"></span>
+  const agentVer = (typeof agentVersionBadgeHTML === "function") ? agentVersionBadgeHTML(h) : "";
+  const agentSel = (typeof agentSelectCheckboxHTML === "function") ? agentSelectCheckboxHTML(h) : "";
+  const outdatedCls = (typeof agentHostCardClass === "function") ? agentHostCardClass(h) : "";
+  return `<div class="host hrow ${statusCls}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
+    ${agentSel}<span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
       <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
-      <div class="hrow-sub" title="${ipTitle}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}</div>
+      <div class="hrow-sub" title="${ipTitle}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}${agentVer ? `<span class="hrow-sep">·</span>${agentVer}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
     <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
@@ -225,7 +232,7 @@ function currentHostsCrumb() {
 function hostSearchHaystack(h) {
   if (!h) return "";
   const parts = [
-    h.id, h.hostname, h.ip, h.os, h.platform, h.arch, h.kernel,
+    h.id, h.hostname, h.ip, h.os, h.platform, h.arch, h.kernel, h.agent_version,
     h.category, h.folder_path, h.folder_id,
   ];
   return parts.filter(Boolean).join(" ");
@@ -759,6 +766,7 @@ function renderHosts(hosts) {
     }
     if (HOST_FILTER === "online" && !h.online) return false;
     if (HOST_FILTER === "offline" && h.online) return false;
+    if (HOST_FILTER === "outdated" && !(typeof hostAgentOutdated === "function" && hostAgentOutdated(h))) return false;
     if (!hostMatchesSearch(h, searchQ)) return false;
     return true;
   });

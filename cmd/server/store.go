@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,16 +33,18 @@ type Host struct {
 	Hostname    string             `json:"hostname"`
 	OS          string             `json:"os"`
 	Platform    string             `json:"platform"`
-	Arch        string             `json:"arch"`
-	IP          string             `json:"ip"`
-	Kernel      string             `json:"kernel"`
-	Category    string             `json:"category"`
-	Fingerprint string             `json:"fingerprint,omitempty"` // machine fingerprint (machine-id+MAC), bound at registration
-	FirstSeen   int64              `json:"first_seen"`
-	LastSeen    int64              `json:"last_seen"`
-	Latest      *shared.Sample     `json:"latest"`
-	Custom      map[string]float64 `json:"custom,omitempty"` // latest custom gauges from plugins
-	Desktop     *shared.DesktopInfo `json:"desktop,omitempty"`
+	Arch         string              `json:"arch"`
+	IP           string              `json:"ip"`
+	Kernel       string              `json:"kernel"`
+	Category     string              `json:"category"`
+	AgentVersion string              `json:"agent_version,omitempty"` // running agent binary version
+	ServerURL    string              `json:"server_url,omitempty"`    // agent-configured report base (relay-aware)
+	Fingerprint  string              `json:"fingerprint,omitempty"`   // machine fingerprint (machine-id+MAC), bound at registration
+	FirstSeen    int64               `json:"first_seen"`
+	LastSeen     int64               `json:"last_seen"`
+	Latest       *shared.Sample      `json:"latest"`
+	Custom       map[string]float64  `json:"custom,omitempty"` // latest custom gauges from plugins
+	Desktop      *shared.DesktopInfo `json:"desktop,omitempty"`
 
 	// Time-series history (multi-tier downsampling; persisted via the embedded DB)
 	histRaw  []shared.Sample // raw samples (5s interval, ~1.5h)
@@ -302,6 +305,12 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 	h.IP = r.IP
 	h.Kernel = r.Kernel
 	h.Category = r.Category
+	if v := strings.TrimSpace(r.AgentVersion); v != "" {
+		h.AgentVersion = v
+	}
+	if v := strings.TrimSpace(r.ServerURL); v != "" {
+		h.ServerURL = strings.TrimRight(v, "/")
+	}
 	h.LastSeen = now
 	if r.Desktop != nil {
 		cp := *r.Desktop

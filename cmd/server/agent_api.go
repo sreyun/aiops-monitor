@@ -154,6 +154,8 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "agent.fingerprint_failed")})
 		return
 	}
+	// Optional fleet auto-update (default off). Runs async; never blocks report ACK.
+	go s.maybeAutoUpdateHost(h)
 	// Mirror the sample to VictoriaMetrics when enabled (non-blocking, best-effort).
 	s.vm.enqueue(rep.HostID, rep.Hostname, s.effectiveCategory(rep.HostID), time.Now().Unix(), rep.Metrics)
 	// Slow degradation detection: check if resources are trending upward near thresholds.

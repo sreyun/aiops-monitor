@@ -144,7 +144,8 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	if p == "/api/v1/audit-export" || strings.HasPrefix(p, "/api/v1/auth/oidc/config") ||
 		strings.HasPrefix(p, "/api/v1/auth/sso/config") ||
 		p == "/api/v1/install/revoke-token" || p == "/api/v1/install/token-policy" ||
-		p == "/api/v1/install/reset-token" {
+		p == "/api/v1/install/reset-token" ||
+		(p == "/api/v1/agents/auto-update-policy" && r.Method != http.MethodGet) {
 		return rank >= roleRank(RoleAdmin)
 	}
 	// Install info is readable by viewer+ (server_url / policy), but the handler

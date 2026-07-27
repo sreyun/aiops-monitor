@@ -80,6 +80,10 @@ if (groupsEl) {
       else if (act.dataset.act === "del") delHost(id, name);
       else if (act.dataset.act === "term") openTerminal(id, name);
       else if (act.dataset.act === "desktop") openDesktop(id, name);
+      else if (act.dataset.act === "agent-sel" || act.dataset.act === "agent-sel-wrap") {
+        e.stopPropagation();
+        return;
+      }
     } else {
       // 点击主机卡片/行内任意非操作按钮区域（进度条、负载、底部等）→ 打开详情
       openDetail(id, name);
@@ -244,6 +248,7 @@ safeAddEventListener("installBtn", "click", openInstall);
 safeAddEventListener("resetTokenBtn", "click", resetToken);
 safeAddEventListener("revokeTokenBtn", "click", revokeInstallToken);
 safeAddEventListener("installTokenPolicyBtn", "click", saveInstallTokenPolicy);
+safeAddEventListener("agentAutoUpdateSaveBtn", "click", saveAgentAutoUpdatePolicy);
 safeAddEventListener("tokenToggleBtn", "click", function() {
   TOKEN_REVEALED = !TOKEN_REVEALED;
   updateTokenDisplay();

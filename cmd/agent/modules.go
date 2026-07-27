@@ -114,6 +114,8 @@ func (a *Agent) runModule(payload string) (out []byte, code int) {
 		return modulePackage(mc.Args)
 	case "copy":
 		return moduleCopy(mc.Args)
+	case "agent_update":
+		return moduleAgentUpdate(mc.Args, a.allowedUpdateBases())
 	default:
 		return []byte("未知模块: " + mc.Module), 1
 	}

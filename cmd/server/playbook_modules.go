@@ -57,9 +57,10 @@ var knownPlaybookModules = map[string]playbookModuleMeta{
 	"bigdata_ports": {Name: "bigdata_ports", ReadOnly: true, Domain: "bigdata", Desc: "常见大数据端口监听检查"},
 
 	// —— 变更类（会修改系统，保留兼容）——
-	"service": {Name: "service", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "启停/重启服务"},
-	"package": {Name: "package", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "安装/卸载软件包"},
-	"copy":    {Name: "copy", ReadOnly: false, Domain: "change", RequiredArg: "dest", Desc: "写入文件"},
+	"service":      {Name: "service", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "启停/重启服务"},
+	"package":      {Name: "package", ReadOnly: false, Domain: "change", RequiredArg: "name", Desc: "安装/卸载软件包"},
+	"copy":         {Name: "copy", ReadOnly: false, Domain: "change", RequiredArg: "dest", Desc: "写入文件"},
+	"agent_update": {Name: "agent_update", ReadOnly: false, Domain: "change", Desc: "从服务端 /dl 下载并热更新 Agent（SHA-256 校验；args.server 必填；rollback=1 回滚 .bak）"},
 
 	// —— 资源管控（虚拟机 / 容器）——
 	"hyperv_power":     {Name: "hyperv_power", ReadOnly: false, Domain: "change", Desc: "Hyper-V 虚拟机启停/重启（args.action + vm_id|name）"},

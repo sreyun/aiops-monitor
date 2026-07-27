@@ -449,6 +449,7 @@
                     <option value="all" data-i18n="filter.all_hosts">全部主机</option>
                     <option value="online" data-i18n="ui.online">在线</option>
                     <option value="offline" data-i18n="ui.offline">离线</option>
+                    <option value="outdated" data-i18n="agent_update.filter_outdated">Agent 落后</option>
                   </select>
                 </div>
                 <div class="select-wrap">
@@ -467,12 +468,16 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
                   </button>
                 </div>
+                <button type="button" class="htx-tool-btn" id="agentUpdateBtn" data-i18n-title="agent_update.btn_title" title="批量更新 Agent">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
                 <button type="button" class="htx-tool-btn" id="hostRefreshBtn" data-i18n-title="section.host_refresh" title="刷新">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 </button>
               </div>
             </div>
             <div class="htx-content">
+              <div id="agentUpdateBar" class="agent-update-bar" style="display:none"></div>
               <div id="groups"></div>
               <div class="pager" id="pager"></div>
               <div class="empty" id="empty">
@@ -1548,6 +1553,17 @@
 </div>
 
 <!-- ===== 安装 Agent 弹窗 ===== -->
+<div class="mask" id="agentUpdateDetailMask" data-close>
+  <div class="modal" style="max-width:720px">
+    <div class="modal-head">
+      <h3 data-i18n="agent_update.detail_title">Agent 更新任务详情</h3>
+      <button type="button" class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre id="agentUpdateDetailPre" class="mono" style="max-height:50vh;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;line-height:1.45"></pre>
+    </div>
+  </div>
+</div>
 <div class="mask" id="installMask" data-close>
   <div class="modal">
     <div class="modal-head">
@@ -1575,6 +1591,20 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
           <button class="btn sm" type="button" id="installTokenPolicyBtn">保存 Token 策略</button>
           <button class="btn sm warn" type="button" id="revokeTokenBtn">吊销当前 Token</button>
+        </div>
+        <div class="field" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+          <label data-i18n="agent_update.policy_title">Agent 自动更新策略</label>
+          <label class="switch" style="display:flex;margin:6px 0;gap:8px;align-items:center">
+            <input type="checkbox" id="agentAutoUpdate">
+            <span data-i18n="agent_update.auto_enable">落后目标版本时自动推送更新（默认关闭）</span>
+          </label>
+          <div class="grid2">
+            <div class="field"><label data-i18n="agent_update.window">维护窗口 HH:MM-HH:MM（空=全天）</label><input type="text" id="agentAutoUpdateWindow" class="mono" placeholder="02:00-05:00"></div>
+            <div class="field"><label data-i18n="agent_update.exempt_cat">豁免分类（逗号分隔）</label><input type="text" id="agentAutoUpdateExemptCat" placeholder="prod,db"></div>
+          </div>
+          <div class="field"><label data-i18n="agent_update.exempt_hosts">豁免主机 ID（逗号分隔）</label><input type="text" id="agentAutoUpdateExemptHosts" class="mono" placeholder="host-id-1,host-id-2"></div>
+          <button class="btn sm" type="button" id="agentAutoUpdateSaveBtn" data-i18n="agent_update.save_policy">保存自动更新策略</button>
+          <div class="hint" data-i18n="agent_update.policy_hint">开启后，在线且版本落后的主机在上报周期内会被服务端入队更新；需配置 public_url；仍受远程门禁与维护窗口约束。</div>
         </div>
       </div>
       <div class="field">

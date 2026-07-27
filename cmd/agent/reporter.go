@@ -351,6 +351,10 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 		}
 		targets[i].refreshToken()
 	}
+	serverURL := ""
+	if len(targets) > 0 {
+		serverURL = strings.TrimRight(strings.TrimSpace(targets[0].server), "/")
+	}
 	return &Agent{
 		targets:        targets,
 		reportInterval: reportInterval,
@@ -360,15 +364,17 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 		httpc:          &http.Client{Timeout: 30 * time.Second, Transport: reportTransport},
 		latestCustom:   map[string]float64{},
 		identity: shared.Report{
-			HostID:      hostID,
-			Hostname:    hostname(),
-			OS:          runtime.GOOS,
-			Platform:    osVersion(),
-			Arch:        runtime.GOARCH,
-			IP:          primaryIP(),
-			Kernel:      kernelVersion(),
-			Category:    category,
-			Fingerprint: machineFingerprint(),
+			HostID:       hostID,
+			Hostname:     hostname(),
+			OS:           runtime.GOOS,
+			Platform:     osVersion(),
+			Arch:         runtime.GOARCH,
+			IP:           primaryIP(),
+			Kernel:       kernelVersion(),
+			Category:     category,
+			AgentVersion: agentVersion(),
+			ServerURL:    serverURL,
+			Fingerprint:  machineFingerprint(),
 		},
 	}
 }
@@ -386,6 +392,25 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 //
 // 尽力而为：服务端不可达时保持本地 id 继续跑（监控不能因为对不上身份就停摆），
 // 下次启动会再试一次；届时服务端仍会按指纹把它认回同一条记录。
+// allowedUpdateBases returns configured report server URLs that agent_update
+// may download from (prevents playbook-supplied SSRF / cross-host redirects).
+func (a *Agent) allowedUpdateBases() []string {
+	if a == nil {
+		return nil
+	}
+	out := make([]string, 0, len(a.targets))
+	for _, t := range a.targets {
+		if t == nil {
+			continue
+		}
+		s := strings.TrimRight(strings.TrimSpace(t.server), "/")
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func (a *Agent) reconcileIdentity() {
 	if a.identity.Fingerprint == "" {
 		return // 拿不到机器指纹（无 machine-id 且无 MAC）时无从判定，保持原样

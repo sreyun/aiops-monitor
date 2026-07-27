@@ -64,7 +64,8 @@ type Server struct {
 	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
 	sqlHistory  *sqlQueryHistoryManager  // per-user desensitized SQL history
 	sqlSlow     *slowSQLManager          // multi-DB slow SQL digests + advice
-	secFindings *securityFindingManager  // security finding lifecycle states
+	secFindings  *securityFindingManager // security finding lifecycle states
+	agentUpdates *agentUpdateManager     // fleet agent binary update jobs
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
 	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
@@ -80,9 +81,10 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 		desk:        newDeskManager(),
 		forward:     newForwardManager(cfg),
 		emailMgr:    newEmailManager(),
-		playbooks:   newPlaybookManager(cfg),
-		inspect:     newHostInspectManager(),
-		push:        newPushHub(),
+		playbooks:    newPlaybookManager(cfg),
+		inspect:      newHostInspectManager(),
+		push:         newPushHub(),
+		agentUpdates: newAgentUpdateManager(),
 		incidents:   newIncidentManager(),
 		remediation: newRemediationManager(cfg),
 		slos:        newSLOManager(cfg),
@@ -195,6 +197,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agent/terminal/rx", s.handleAgentTermRx)
 	mux.HandleFunc("POST /api/v1/agent/terminal/tx", s.handleAgentTermTx)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
+	mux.HandleFunc("GET /api/v1/agent-dist/manifest", s.handleAgentDistManifest)
+	mux.HandleFunc("POST /api/v1/agents/update", s.handleAgentUpdateStart)
+	mux.HandleFunc("GET /api/v1/agents/update/jobs", s.handleAgentUpdateJobs)
+	mux.HandleFunc("GET /api/v1/agents/update/jobs/{id}", s.handleAgentUpdateJob)
+	mux.HandleFunc("GET /api/v1/agents/auto-update-policy", s.handleAgentAutoUpdatePolicyGet)
+	mux.HandleFunc("POST /api/v1/agents/auto-update-policy", s.handleAgentAutoUpdatePolicySet)
 	mux.HandleFunc("GET /api/v1/resources/search", s.handleResourceSearch)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.handleHostMetrics)
 	mux.HandleFunc("GET /api/v1/hosts/{id}/history", s.handleHostHistory)
@@ -708,7 +716,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "web-security", "security-center", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "web-security", "security-center", "scrape", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)
