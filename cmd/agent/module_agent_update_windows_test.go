@@ -1,0 +1,32 @@
+//go:build windows
+
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
+	script := buildWindowsUpdateHelperScript(
+		`C:\Program Files\AIOps Agent\aiops-agent.exe`,
+		`C:\Program Files\AIOps Agent\.aiops-agent.new.exe`,
+		`C:\Program Files\AIOps Agent\config.yaml`,
+		`C:\Program Files\AIOps Agent\aiops-agent-update.log`,
+	)
+	for _, want := range []string{
+		"--install-service",
+		"--config",
+		"AiopsMonitorAgent",
+		"WorkingDirectory",
+		"agent failed to restart after binary replace",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("helper script missing %q", want)
+		}
+	}
+	// Legacy bug: bare Start-Process $exe without config broke terminal/desktop.
+	if strings.Contains(script, "Start-Process $exe -WindowStyle Hidden") {
+		t.Fatal("helper still has bare Start-Process without --config")
+	}
+}

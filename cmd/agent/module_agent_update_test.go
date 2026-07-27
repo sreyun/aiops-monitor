@@ -1,6 +1,26 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestResolveAgentConfigBesideExe(t *testing.T) {
+	dir := t.TempDir()
+	if got := resolveAgentConfigBesideExe(dir); got != "" {
+		t.Fatalf("empty dir → %q", got)
+	}
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("server: http://x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveAgentConfigBesideExe(dir)
+	want, _ := filepath.Abs(cfg)
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
 
 func TestAgentDistBinaryName(t *testing.T) {
 	cases := []struct{ goos, goarch, want string }{
