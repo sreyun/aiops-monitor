@@ -238,6 +238,29 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"allow-aiops-agent.ps1", "New-CIPolicy", "appcontrol-appdata",
 		"group policy", `Join-Path $env:ProgramFiles "AIOps Agent"`,
 		"windowsdefender://appbrowser")
+	// A per-user install belongs to the profile that ran it, and elevating swaps
+	// HKCU/LOCALAPPDATA to the approving admin — so both scripts must sweep every
+	// profile, or the old agent keeps auto-starting and reporting after an
+	// "uninstall" while the new install looks like it did nothing.
+	for name, body := range map[string]string{"install.ps1": ps1In, "uninstall.ps1": ps1Un} {
+		must(name+" (all-user cleanup)", body,
+			"Remove-AiopsAllUserInstalls",
+			`HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`,
+			"ProfileImagePath", "NTUSER.DAT", "reg.exe",
+			`Registry::HKEY_USERS\`, "AppData\\Local\\aiops-agent",
+			`System32\agent_state.json`)
+	}
+	// Reinstalls must not orphan the host record: everything on the server is
+	// keyed by host_id, which lives in agent_state.json inside the deleted dir.
+	must("install.ps1 (identity)", ps1In,
+		"Save-AiopsIdentity", "Restore-AiopsIdentity", "aiops-agent-state.json")
+	// "Service is Running" proves nothing about DNS, firewalls or token validity.
+	// The installer must verify the handshake and fail loudly instead of printing
+	// a green "done" for a host that will never appear.
+	must("install.ps1 (selftest)", ps1In,
+		"--selftest", "$SelfTestExit", "connectivity: OK", "connectivity: FAILED",
+		"agent.log")
+
 	// Uninstall must tear down every autostart mechanism it created.
 	must("uninstall.sh", shUn,
 		"LaunchDaemons/com.aiops.agent.plist", "launchctl unload", "crontab")

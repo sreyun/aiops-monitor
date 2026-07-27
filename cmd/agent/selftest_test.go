@@ -1,0 +1,104 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestSelfTestPassesOnSuccessfulRegistration(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	var gotToken, gotFP string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent/register" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		var req map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotToken, gotFP = req["token"], req["fingerprint"]
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "host_id": req["host_id"]})
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "tok-1"}}, "host-1", "C:\\x\\config.yaml")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out.String())
+	}
+	if gotToken != "tok-1" {
+		t.Errorf("token not forwarded, got %q", gotToken)
+	}
+	if gotFP == "" {
+		t.Error("fingerprint must be sent; the server rejects registrations without one")
+	}
+	if !strings.Contains(out.String(), "PASS") {
+		t.Errorf("missing PASS verdict:\n%s", out.String())
+	}
+}
+
+// A rejected token is the single most likely reason an install looks perfect and
+// no host appears, so it must be named explicitly rather than reported as a
+// generic HTTP error.
+func TestSelfTestExplainsRejectedToken(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "stale"}}, "host-1", "cfg")
+	if code == 0 {
+		t.Fatalf("a 403 must fail the self-test\n%s", out.String())
+	}
+	s := out.String()
+	for _, want := range []string{"403", "Token", "重新生成安装命令"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("diagnosis missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestSelfTestExplainsHostIDConflict(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if code := runSelfTest(&out, []ServerConfig{{Server: srv.URL}}, "host-1", "cfg"); code == 0 {
+		t.Fatal("a 409 must fail the self-test")
+	}
+	if !strings.Contains(out.String(), "agent_state.json") {
+		t.Errorf("conflict diagnosis should point at the cloned state file:\n%s", out.String())
+	}
+}
+
+// Dropped packets (firewall / security group) and a closed port need different
+// fixes, and neither looks like "the service is running" from the installer.
+func TestSelfTestReportsUnreachableServer(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close() // nothing is listening on that port any more
+
+	var out bytes.Buffer
+	if code := runSelfTest(&out, []ServerConfig{{Server: url}}, "host-1", "cfg"); code == 0 {
+		t.Fatal("an unreachable server must fail the self-test")
+	}
+	if !strings.Contains(out.String(), "TCP 连接") {
+		t.Errorf("missing TCP stage diagnosis:\n%s", out.String())
+	}
+}
+
+func TestSelfTestRejectsBadServerURL(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	var out bytes.Buffer
+	if code := runSelfTest(&out, []ServerConfig{{Server: "not-a-url"}}, "h", "cfg"); code == 0 {
+		t.Fatal("a malformed server URL must fail")
+	}
+}

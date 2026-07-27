@@ -3,10 +3,70 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+// resolveConfigRelativePaths anchors relative file/directory settings to the
+// directory that holds config.yaml.
+//
+// A service manager decides the working directory, and on Windows the SCM picks
+// C:\Windows\System32. The installer ships `state_file: "agent_state.json"`, so
+// the LocalSystem service wrote the host identity to System32 while the per-user
+// wscript supervisor and any manual run wrote it next to the binary. Every launch
+// context therefore minted its OWN host_id and the same machine showed up as
+// several hosts (or kept flapping between them). `plugins_dir: "plugins"` had the
+// same problem and simply never resolved, so a service install silently ran with
+// zero plugins even though the installer had just extracted them.
+//
+// Anchoring to the config directory is a no-op for setups that already ran with
+// the working directory set to the install dir, so upgrades keep their paths.
+func resolveConfigRelativePaths(cfg *config, cfgPath string) {
+	if cfg == nil {
+		return
+	}
+	base := configBaseDir(cfgPath)
+	if base == "" {
+		return
+	}
+	cfg.StateFile = anchorPath(base, cfg.StateFile)
+	cfg.PluginsDir = anchorPath(base, cfg.PluginsDir)
+}
+
+// configBaseDir returns the absolute directory holding the config file, falling
+// back to the directory of the running executable when the path cannot be made
+// absolute (the executable dir is where the installer puts config.yaml anyway).
+func configBaseDir(cfgPath string) string {
+	if p := strings.TrimSpace(cfgPath); p != "" {
+		if abs, err := filepath.Abs(p); err == nil {
+			return filepath.Dir(abs)
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe)
+}
+
+func anchorPath(base, p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	// A Windows path like `C:foo` or `\foo` is not reported absolute by
+	// filepath.IsAbs but is still drive/root relative — joining it would produce
+	// nonsense, so leave it to the OS.
+	if runtime.GOOS == "windows" && (filepath.VolumeName(p) != "" || strings.HasPrefix(p, `\`) || strings.HasPrefix(p, "/")) {
+		return p
+	}
+	return filepath.Join(base, p)
+}
 
 // normalizeAndValidateConfig fails closed on dangerous/broken agent
 // configuration. In particular, an explicitly configured agent must never

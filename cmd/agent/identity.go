@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -31,6 +32,7 @@ import (
 // recoverable by simply regenerating the ID.
 func loadOrCreateHostID(path string) string {
 	fp := machineFingerprint()
+	migrateLegacyStateFile(path)
 	if b, err := os.ReadFile(path); err == nil {
 		var s struct {
 			HostID string `json:"host_id"`
@@ -47,6 +49,78 @@ func loadOrCreateHostID(path string) string {
 	id := randomID()
 	persistHostID(path, id, fp)
 	return id
+}
+
+// migrateLegacyStateFile moves an identity file that a previous version wrote
+// relative to the working directory into the anchored location.
+//
+// Windows services run with CWD=C:\Windows\System32, so agents installed before
+// paths were anchored to the install dir left their agent_state.json there. A
+// straight cutover would have generated a brand new host_id and split every
+// host's history in two, so adopt the old file when the new one is absent.
+func migrateLegacyStateFile(path string) {
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		return // already anchored
+	}
+	for _, legacy := range legacyStatePaths(path) {
+		b, err := os.ReadFile(legacy)
+		if err != nil || len(b) == 0 {
+			continue
+		}
+		var s struct {
+			HostID string `json:"host_id"`
+		}
+		if json.Unmarshal(b, &s) != nil || s.HostID == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			continue
+		}
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			continue
+		}
+		slog.Info("已迁移旧身份文件到安装目录", "from", legacy, "to", path, "host_id", s.HostID)
+		// Leave nothing behind that a downgraded binary could pick up and start
+		// reporting under in parallel with the migrated identity. Deleting inside
+		// System32 needs SYSTEM/admin, which the service has and a manual run may
+		// not — the copy is already made either way, so only warn.
+		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+			slog.Warn("旧身份文件删除失败（不影响运行，建议以管理员身份清理）", "path", legacy, "err", err)
+		}
+		return
+	}
+}
+
+// legacyStatePaths lists working-directory-relative locations where older agents
+// may have written the identity file.
+func legacyStatePaths(path string) []string {
+	base := filepath.Base(path)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	dirs := []string{cwd}
+	if root := os.Getenv("SystemRoot"); root != "" {
+		dirs = append(dirs, filepath.Join(root, "System32"))
+	}
+	var out []string
+	for _, dir := range dirs {
+		if dir == "" || dir == string(filepath.Separator) {
+			continue
+		}
+		cand := filepath.Join(dir, base)
+		if cand == path {
+			continue
+		}
+		out = append(out, cand)
+	}
+	return out
 }
 
 // readHostIDFromState returns the host_id stored in the state file, or "" when
@@ -77,6 +151,14 @@ func persistHostID(path, id, fp string) {
 	if err != nil {
 		slog.Error("身份文件序列化失败", "path", path, "err", err)
 		return
+	}
+	// Anchored paths can point at a directory the installer has not created yet
+	// (or that an uninstall removed); without this the write fails and the agent
+	// silently mints a new host_id on every single start.
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if e := os.MkdirAll(dir, 0o755); e != nil {
+			slog.Error("身份文件目录创建失败", "dir", dir, "err", e)
+		}
 	}
 	tmp := path + ".tmp"
 	if e := os.WriteFile(tmp, b, 0o600); e == nil {
