@@ -244,6 +244,12 @@ func TestRouteAllowed(t *testing.T) {
 		{"admin can ai test", "POST", "/api/v1/ai/test", RoleAdmin, true},
 		{"admin can list backups", "GET", "/api/v1/admin/backups", RoleAdmin, true},
 		{"operator cannot list backups", "GET", "/api/v1/admin/backups", RoleOperator, false},
+		// agent fleet update: operator+; auto-update policy write: admin
+		{"viewer cannot start agent update", "POST", "/api/v1/agents/update", RoleViewer, false},
+		{"operator can start agent update", "POST", "/api/v1/agents/update", RoleOperator, true},
+		{"operator can get auto-update policy", "GET", "/api/v1/agents/auto-update-policy", RoleOperator, true},
+		{"operator cannot set auto-update policy", "POST", "/api/v1/agents/auto-update-policy", RoleOperator, false},
+		{"admin can set auto-update policy", "POST", "/api/v1/agents/auto-update-policy", RoleAdmin, true},
 		// unknown role
 		{"unknown role denied", "GET", "/api/v1/hosts", "weird", false},
 	}

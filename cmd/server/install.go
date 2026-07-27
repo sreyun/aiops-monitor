@@ -1285,12 +1285,32 @@ if ! curl -fSL --retry 3 --retry-delay 2 -C - "$SERVER/dl/$BIN" -o aiops-agent; 
     exit 1
   fi
 fi
+# SHA-256 verify (parity with normal install; refuse replace on mismatch).
+if curl -fsSL "$SERVER/dl/$BIN.sha256" -o ".aiops-agent.sha256" 2>/dev/null; then
+  EXPECTED=$(awk '{print $1}' .aiops-agent.sha256 | tr 'A-F' 'a-f')
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum aiops-agent | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL=$(shasum -a 256 aiops-agent | awk '{print $1}')
+  else
+    ACTUAL=""
+  fi
+  if [ -n "$EXPECTED" ] && [ -n "$ACTUAL" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "[AIOps] ERROR: SHA-256 mismatch for $BIN"; rm -f aiops-agent; exit 1
+  fi
+  rm -f .aiops-agent.sha256
+fi
 chmod +x aiops-agent
 
+RELAY_SECRET_LINE=""
+if [ -n "${AIOPS_RELAY_SECRET:-}" ]; then
+  RELAY_SECRET_LINE="relay_secret: \"${AIOPS_RELAY_SECRET}\""
+fi
 cat > config.yaml <<EOF
 relay: true
 listen: "$LISTEN"
 server: "$SERVER"
+$RELAY_SECRET_LINE
 EOF
 if [ ! -s config.yaml ]; then
   echo "[AIOps] ERROR: config.yaml was not created! Installation incomplete."
@@ -1361,10 +1381,26 @@ try {
 
 # YAML is the default config format (single-quoted scalars are backslash-safe; any
 # embedded single-quote is doubled per YAML rules). No YAML serializer in PowerShell.
+# SHA-256 verify when checksum is available.
+try {
+  $sumBody = (Invoke-WebRequest "$Server/dl/$AgentRemote.sha256" -UseBasicParsing).Content
+  $Expected = (($sumBody -split '\s+')[0]).Trim().ToLowerInvariant()
+  $Sha = [Security.Cryptography.SHA256]::Create()
+  $Stream = [IO.File]::OpenRead("$Dir\aiops-agent.exe")
+  try { $Actual = ([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() }
+  finally { $Stream.Dispose(); $Sha.Dispose() }
+  if ($Expected -and $Actual -and ($Expected -ne $Actual)) { throw "SHA-256 mismatch for $AgentRemote" }
+} catch {
+  if ($_.Exception.Message -match 'SHA-256') { throw }
+  Write-Host "[AIOps] WARN: checksum unavailable; continuing" -ForegroundColor Yellow
+}
 $RelayLines = New-Object System.Collections.Generic.List[string]
 $RelayLines.Add("relay: true")
 $RelayLines.Add("listen: '" + (([string]$Listen) -replace "'", "''") + "'")
 $RelayLines.Add("server: '" + (([string]$Server) -replace "'", "''") + "'")
+if ($env:AIOPS_RELAY_SECRET) {
+  $RelayLines.Add("relay_secret: '" + (([string]$env:AIOPS_RELAY_SECRET) -replace "'", "''") + "'")
+}
 $cfg = ($RelayLines -join ([char]10)) + ([char]10)
 [System.IO.File]::WriteAllText("$Dir\config.yaml", $cfg, (New-Object System.Text.UTF8Encoding $false))
 # Migrate: remove a stale config.json from a pre-YAML install (agent now prefers YAML).
@@ -1389,7 +1425,7 @@ const uninstallShTemplate = `#!/bin/sh
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 echo "[AIOps] uninstalling from $DIR"
 if command -v systemctl >/dev/null 2>&1; then
-  for _u in aiops-agent aiops-monitor-agent; do
+  for _u in aiops-agent aiops-monitor-agent aiops-relay; do
     systemctl disable --now "$_u" 2>/dev/null || true
     rm -f "/etc/systemd/system/${_u}.service" "/lib/systemd/system/${_u}.service" "/usr/lib/systemd/system/${_u}.service"
   done

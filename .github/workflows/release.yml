@@ -63,23 +63,34 @@ jobs:
           mkdir -p dist
 
           # linux/amd64
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-linux-amd64 ./cmd/server
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-linux-amd64 ./cmd/agent
+          LDFLAGS="-s -w -X main.appVersion=$VERSION"
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-server-linux-amd64 ./cmd/server
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-linux-amd64 ./cmd/agent
 
           # linux/arm64
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-linux-arm64 ./cmd/server
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-linux-arm64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-server-linux-arm64 ./cmd/server
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-linux-arm64 ./cmd/agent
 
           # windows/amd64 + windows/arm64
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-server-windows-amd64.exe ./cmd/server
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-windows-amd64.exe ./cmd/agent
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-server-windows-amd64.exe ./cmd/server
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-windows-amd64.exe ./cmd/agent
           # Legacy one-click install name (install.ps1 downloads /dl/aiops-agent.exe).
           cp dist/aiops-agent-windows-amd64.exe dist/aiops-agent.exe
-          GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-windows-arm64.exe ./cmd/agent
+          GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-windows-arm64.exe ./cmd/agent
 
           # darwin/amd64 + darwin/arm64 (agent only — macOS one-click install)
-          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-darwin-amd64 ./cmd/agent
-          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$VERSION" -o dist/aiops-agent-darwin-arm64 ./cmd/agent
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-darwin-amd64 ./cmd/agent
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o dist/aiops-agent-darwin-arm64 ./cmd/agent
+
+          # GitHub Release assets: package Unix binaries as .tar.gz so assets have
+          # clear suffixes (Windows keeps .exe). Bare names remain for /dl/ install.
+          for f in \
+            aiops-server-linux-amd64 aiops-server-linux-arm64 \
+            aiops-agent-linux-amd64 aiops-agent-linux-arm64 \
+            aiops-agent-darwin-amd64 aiops-agent-darwin-arm64
+          do
+            tar -czf "dist/${f}.tar.gz" -C dist "$f"
+          done
 
           echo "构建完成:"
           ls -lh dist/
@@ -91,16 +102,16 @@ jobs:
           name: ${{ steps.meta.outputs.version }}
           generate_release_notes: true
           files: |
-            dist/aiops-server-linux-amd64
-            dist/aiops-agent-linux-amd64
-            dist/aiops-server-linux-arm64
-            dist/aiops-agent-linux-arm64
+            dist/aiops-server-linux-amd64.tar.gz
+            dist/aiops-agent-linux-amd64.tar.gz
+            dist/aiops-server-linux-arm64.tar.gz
+            dist/aiops-agent-linux-arm64.tar.gz
             dist/aiops-server-windows-amd64.exe
             dist/aiops-agent-windows-amd64.exe
             dist/aiops-agent.exe
             dist/aiops-agent-windows-arm64.exe
-            dist/aiops-agent-darwin-amd64
-            dist/aiops-agent-darwin-arm64
+            dist/aiops-agent-darwin-amd64.tar.gz
+            dist/aiops-agent-darwin-arm64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

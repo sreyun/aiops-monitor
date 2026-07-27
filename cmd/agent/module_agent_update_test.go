@@ -1,0 +1,40 @@
+package main
+
+import "testing"
+
+func TestAgentDistBinaryName(t *testing.T) {
+	cases := []struct{ goos, goarch, want string }{
+		{"linux", "amd64", "aiops-agent-linux-amd64"},
+		{"linux", "arm64", "aiops-agent-linux-arm64"},
+		{"darwin", "arm64", "aiops-agent-darwin-arm64"},
+		{"windows", "amd64", "aiops-agent.exe"},
+		{"windows", "arm64", "aiops-agent-windows-arm64.exe"},
+	}
+	for _, c := range cases {
+		got, err := agentDistBinaryName(c.goos, c.goarch)
+		if err != nil || got != c.want {
+			t.Fatalf("%s/%s → %q (%v), want %q", c.goos, c.goarch, got, err, c.want)
+		}
+	}
+	if _, err := agentDistBinaryName("linux", "386"); err == nil {
+		t.Fatal("expected error for linux/386")
+	}
+}
+
+func TestNormalizeAgentVer(t *testing.T) {
+	if normalizeAgentVer("v0.19.3") != "0.19.3" {
+		t.Fatal(normalizeAgentVer("v0.19.3"))
+	}
+}
+
+func TestValidateUpdateServerURL(t *testing.T) {
+	if err := validateUpdateServerURL("http://mon.example:8529", []string{"http://mon.example:8529"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUpdateServerURL("http://evil.example", []string{"http://mon.example:8529"}); err == nil {
+		t.Fatal("expected reject")
+	}
+	if err := validateUpdateServerURL("ftp://mon.example", nil); err == nil {
+		t.Fatal("expected scheme reject")
+	}
+}

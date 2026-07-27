@@ -485,7 +485,51 @@ async function openInstall() {
     if (normalRadio) normalRadio.checked = true;
     renderInstallCmd();
     $("installMask").classList.add("show");
+    loadAgentAutoUpdatePolicy();
   } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
+}
+
+async function loadAgentAutoUpdatePolicy() {
+  try {
+    const p = await fetch(`${API}/agents/auto-update-policy`, { credentials: "same-origin" }).then(r => r.json());
+    if ($("agentAutoUpdate")) $("agentAutoUpdate").checked = !!p.agent_auto_update;
+    if ($("agentAutoUpdateWindow")) $("agentAutoUpdateWindow").value = p.agent_auto_update_window || "";
+    if ($("agentAutoUpdateExemptCat")) {
+      $("agentAutoUpdateExemptCat").value = Array.isArray(p.agent_auto_update_exempt_categories)
+        ? p.agent_auto_update_exempt_categories.join(",") : "";
+    }
+    if ($("agentAutoUpdateExemptHosts")) {
+      $("agentAutoUpdateExemptHosts").value = Array.isArray(p.agent_auto_update_exempt_hosts)
+        ? p.agent_auto_update_exempt_hosts.join(",") : "";
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function saveAgentAutoUpdatePolicy() {
+  if (!isAdmin()) { toast(I18N.t("toast.admin_only", "仅管理员可操作"), "err"); return; }
+  const splitCSV = (s) => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
+  const body = {
+    agent_auto_update: !!($("agentAutoUpdate") && $("agentAutoUpdate").checked),
+    agent_auto_update_window: (($("agentAutoUpdateWindow") || {}).value || "").trim(),
+    agent_auto_update_exempt_categories: splitCSV(($("agentAutoUpdateExemptCat") || {}).value),
+    agent_auto_update_exempt_hosts: splitCSV(($("agentAutoUpdateExemptHosts") || {}).value)
+  };
+  try {
+    const r = await fetch(`${API}/agents/auto-update-policy`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      toast((j && j.error) || I18N.t("toast.save_failed", "保存失败"), "err");
+      return;
+    }
+    toast(I18N.t("agent_update.policy_saved", "自动更新策略已保存"), "ok");
+  } catch (e) {
+    toast(I18N.t("toast.save_failed2", "保存失败:") + e, "err");
+  }
 }
 function parseMultiServerList() {
   const text = ($("multiServerList") || {}).value || "";
@@ -551,26 +595,30 @@ function renderInstallCmd() {
   // Multi-server: append servers_json so the generated config.json uses a
   // servers array instead of a single server+token.
   let cmd, label, hint;
+  const multiHint = MULTI_SERVER_MODE ? I18N.t("install.multi_desc") : "";
   if (MULTI_SERVER_MODE) {
     const sj = parseMultiServerList();
     if (sj) q += "&servers_json=" + encodeURIComponent(sj);
-    label = I18N.t("install.multi_server");
-    hint = I18N.t("install.multi_desc");
   }
   if (CUR_OS === "windows") {
     cmd = `${PS_TLS12}irm "${server}/install.ps1?${q}" | iex`;
-    label = I18N.t("install.powershell_cmd");
-    hint = I18N.t("install.windows_desc");
+    label = MULTI_SERVER_MODE
+      ? (I18N.t("install.multi_server") + " · " + I18N.t("install.powershell_cmd"))
+      : I18N.t("install.powershell_cmd");
+    hint = multiHint || I18N.t("install.windows_desc");
   } else if (CUR_OS === "macos") {
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
-    label = I18N.t("install.terminal_one_line");
-    hint = I18N.t("install.linux_detail");
+    label = MULTI_SERVER_MODE
+      ? (I18N.t("install.multi_server") + " · " + I18N.t("install.terminal_one_line"))
+      : I18N.t("install.terminal_one_line");
+    hint = multiHint || I18N.t("install.linux_detail");
   } else {
     // Demo-safe default: non-root install under ~/.aiops-agent (no sudo).
-    // Optional: prepend sudo for systemd unit + dedicated aiops system user.
     cmd = `curl -fsSL "${server}/install.sh?${q}" | sh`;
-    label = I18N.t("install.linux_cmd");
-    hint = I18N.t("install.linux_desc");
+    label = MULTI_SERVER_MODE
+      ? (I18N.t("install.multi_server") + " · " + I18N.t("install.linux_cmd"))
+      : I18N.t("install.linux_cmd");
+    hint = multiHint || I18N.t("install.linux_desc");
   }
   $("installCmd").textContent = cmd;
   $("cmdLabel").textContent = label;
@@ -584,6 +632,9 @@ function renderRelayCmd() {
   const token = INSTALL.token || "";
   const cat = $("installCategory").value.trim();
   let q = "token=" + encodeURIComponent(token) + (cat ? "&category=" + encodeURIComponent(cat) : "");
+  // Internal agents (via relay) still accept log_paths / optional audit query params.
+  const lp = (($("installLogPaths") && $("installLogPaths").value) || "").trim();
+  if (lp) q += "&log_paths=" + encodeURIComponent(lp);
   const gwIP = $("relayGatewayIP").value.trim() || I18N.t("install.gateway_ip");
   const relay = `http://${gwIP}:8529`;
   let gatewayCmd, internalCmd;
@@ -602,8 +653,8 @@ function renderRelayCmd() {
   $("relayGatewayCmd").textContent = gatewayCmd;
   $("relayInternalCmd").textContent = internalCmd;
   $("uninstallCmd").textContent = (CUR_OS === "windows")
-    ? `${PS_TLS12}irm "${server}/uninstall.ps1" | iex`
-    : `curl -fsSL "${server}/uninstall.sh" | sh`;
+    ? `${PS_TLS12}irm "${relay}/uninstall.ps1" | iex`
+    : `curl -fsSL "${relay}/uninstall.sh" | sh`;
 }
 async function resetToken() {
   if (!confirm(I18N.t("install.reset_warning"))) return;

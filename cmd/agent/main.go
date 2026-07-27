@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -159,7 +160,14 @@ func main() {
 	flag.BoolVar(&svcRun, "service", false, "内部使用：由服务管理器（SCM/systemd/launchd）以守护进程方式启动")
 	flag.BoolVar(&desktopWorker, "desktop-worker", false, "内部使用：由守护进程派生、运行于活动图形会话的远程桌面 worker")
 	flag.BoolVar(&sendSASOnce, "send-sas", false, "内部使用：在目标会话内注入一次 Ctrl+Alt+Del（Windows Server 锁屏兼容）")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "打印 Agent 版本并退出")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println(agentVersion())
+		return
+	}
 
 	if sendSASOnce {
 		if err := runSendSASOnce(); err != nil {

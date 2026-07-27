@@ -579,6 +579,15 @@ type ServerConfig struct {
 	// every agent MUST present a valid install token to register/report. Set true
 	// only to permit token-less agents (not recommended).
 	AllowAnonymousAgents bool `json:"allow_anonymous_agents"`
+	// AgentAutoUpdate: when true, online hosts whose agent_version lags the
+	// server dist version are queued for a push update (default false).
+	AgentAutoUpdate bool `json:"agent_auto_update,omitempty"`
+	// AgentAutoUpdateExemptCategories / Hosts skip auto-update when matched.
+	AgentAutoUpdateExemptCategories []string `json:"agent_auto_update_exempt_categories,omitempty"`
+	AgentAutoUpdateExemptHosts      []string `json:"agent_auto_update_exempt_hosts,omitempty"`
+	// AgentAutoUpdateWindow is optional "HH:MM-HH:MM" local-time maintenance window.
+	// Empty means any time.
+	AgentAutoUpdateWindow string `json:"agent_auto_update_window,omitempty"`
 	// RelaySecret is the shared secret for gateway relay authentication (v5.4.1).
 	// When set, all agent-facing requests (register, report, terminal, forward)
 	// that arrive via a relay must carry the matching X-Relay-Secret header.
@@ -870,6 +879,17 @@ func (cs *ConfigStore) Get() ServerConfig {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.cfg
+}
+
+// SetAgentAutoUpdatePolicy updates only the fleet auto-update knobs and persists.
+func (cs *ConfigStore) SetAgentAutoUpdatePolicy(enabled bool, window string, exemptCats, exemptHosts []string) error {
+	cs.mu.Lock()
+	cs.cfg.AgentAutoUpdate = enabled
+	cs.cfg.AgentAutoUpdateWindow = strings.TrimSpace(window)
+	cs.cfg.AgentAutoUpdateExemptCategories = append([]string(nil), exemptCats...)
+	cs.cfg.AgentAutoUpdateExemptHosts = append([]string(nil), exemptHosts...)
+	cs.mu.Unlock()
+	return cs.save()
 }
 
 func (cs *ConfigStore) Thresholds() Thresholds {
@@ -1279,6 +1299,12 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.ForwardListen = cs.cfg.ForwardListen
 	c.ForwardPortRange = cs.cfg.ForwardPortRange
 	c.AllowAnonymousAgents = cs.cfg.AllowAnonymousAgents
+	// Agent auto-update policy is managed via POST /api/v1/agents/auto-update-policy
+	// (not the alert settings form) — preserve so a settings save can't flip it.
+	c.AgentAutoUpdate = cs.cfg.AgentAutoUpdate
+	c.AgentAutoUpdateExemptCategories = append([]string(nil), cs.cfg.AgentAutoUpdateExemptCategories...)
+	c.AgentAutoUpdateExemptHosts = append([]string(nil), cs.cfg.AgentAutoUpdateExemptHosts...)
+	c.AgentAutoUpdateWindow = cs.cfg.AgentAutoUpdateWindow
 	c.TrustProxy = cs.cfg.TrustProxy
 	c.MFARequired = cs.cfg.MFARequired
 	c.CORSOrigins = cs.cfg.CORSOrigins // CORS 白名单：前端表单不含此字段，必须保留现有值
