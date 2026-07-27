@@ -19,16 +19,24 @@ type K8sClusterConfig struct {
 	DefaultNS      string `json:"default_namespace,omitempty"` // empty = all namespaces
 	Insecure       bool   `json:"insecure_skip_tls,omitempty"`
 	CreatedAt      int64  `json:"created_at,omitempty"`
+	// Response-only flags so the UI can show "已配置" without revealing secrets.
+	HasToken      bool `json:"has_token,omitempty"`
+	HasKubeconfig bool `json:"has_kubeconfig,omitempty"`
+	HasCA         bool `json:"has_ca,omitempty"`
 }
 
 func maskK8sCluster(c K8sClusterConfig) K8sClusterConfig {
-	if c.Token != "" {
-		c.Token = "****"
+	out := c
+	out.HasToken = strings.TrimSpace(c.Token) != ""
+	out.HasKubeconfig = strings.TrimSpace(c.KubeconfigYAML) != ""
+	out.HasCA = strings.TrimSpace(c.CACert) != ""
+	if out.HasToken {
+		out.Token = "****"
 	}
-	if c.KubeconfigYAML != "" {
-		c.KubeconfigYAML = "****"
+	if out.HasKubeconfig {
+		out.KubeconfigYAML = "****"
 	}
-	return c
+	return out
 }
 
 func (cs *ConfigStore) ListK8sClusters() []K8sClusterConfig {
@@ -57,6 +65,14 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 	if in.Name == "" {
 		return K8sClusterConfig{}, fmt.Errorf("cluster name required")
 	}
+	in.APIServer = strings.TrimSpace(in.APIServer)
+	in.Token = strings.TrimSpace(in.Token)
+	in.CACert = strings.TrimSpace(in.CACert)
+	in.KubeconfigYAML = strings.TrimSpace(in.KubeconfigYAML)
+	in.DefaultNS = strings.TrimSpace(in.DefaultNS)
+	// Never persist response-only flags.
+	in.HasToken, in.HasKubeconfig, in.HasCA = false, false, false
+
 	keepSecret := func(v, prev string) string {
 		if v == "" || strings.Contains(v, "****") {
 			return prev
@@ -67,6 +83,10 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 	if in.ID == "" {
 		in.ID = termID()[:8]
 		in.CreatedAt = time.Now().Unix()
+		if err := validateK8sClusterAuth(in); err != nil {
+			cs.mu.Unlock()
+			return K8sClusterConfig{}, err
+		}
 		cs.cfg.K8sClusters = append(cs.cfg.K8sClusters, in)
 		cs.mu.Unlock()
 		return in, cs.save()
@@ -76,6 +96,10 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 			in.CreatedAt = c.CreatedAt
 			in.Token = keepSecret(in.Token, c.Token)
 			in.KubeconfigYAML = keepSecret(in.KubeconfigYAML, c.KubeconfigYAML)
+			if err := validateK8sClusterAuth(in); err != nil {
+				cs.mu.Unlock()
+				return K8sClusterConfig{}, err
+			}
 			cs.cfg.K8sClusters[i] = in
 			cs.mu.Unlock()
 			return in, cs.save()
@@ -84,9 +108,24 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 	if in.CreatedAt == 0 {
 		in.CreatedAt = time.Now().Unix()
 	}
+	if err := validateK8sClusterAuth(in); err != nil {
+		cs.mu.Unlock()
+		return K8sClusterConfig{}, err
+	}
 	cs.cfg.K8sClusters = append(cs.cfg.K8sClusters, in)
 	cs.mu.Unlock()
 	return in, cs.save()
+}
+
+func validateK8sClusterAuth(c K8sClusterConfig) error {
+	kc := strings.TrimSpace(c.KubeconfigYAML)
+	if kc != "" && kc != "****" {
+		return nil
+	}
+	if strings.TrimSpace(c.APIServer) == "" || strings.TrimSpace(c.Token) == "" {
+		return fmt.Errorf("请填写 API Server + Token，或粘贴完整 kubeconfig")
+	}
+	return nil
 }
 
 func (cs *ConfigStore) DeleteK8sCluster(id string) error {

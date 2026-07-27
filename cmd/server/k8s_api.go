@@ -25,10 +25,14 @@ func (s *Server) k8sClusterOrErr(w http.ResponseWriter, r *http.Request) (K8sClu
 func (s *Server) k8sClientOrErr(w http.ResponseWriter, cfg K8sClusterConfig) (*k8sRESTClient, bool) {
 	cli, err := newK8sRESTClient(cfg)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": friendlyK8sErr(err)})
 		return nil, false
 	}
 	return cli, true
+}
+
+func writeK8sGatewayErr(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": friendlyK8sErr(err)})
 }
 
 func (s *Server) handleListK8sClusters(w http.ResponseWriter, r *http.Request) {
@@ -94,15 +98,15 @@ func (s *Server) handleTestK8sCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	cli, err := newK8sRESTClient(c)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": friendlyK8sErr(err)})
 		return
 	}
-	ver, err := cli.Version()
+	ver, err := cli.VersionProbe()
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": ver})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reachable": true, "version": ver})
 }
 
 func (s *Server) handleK8sNamespaces(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +120,7 @@ func (s *Server) handleK8sNamespaces(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := cli.ListNamespaces()
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(items))
@@ -142,7 +146,7 @@ func (s *Server) handleK8sNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := cli.ListNodes()
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(items))
@@ -176,7 +180,7 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := cli.ListPods(ns, limit)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(items))
@@ -224,7 +228,7 @@ func (s *Server) handleK8sDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := cli.ListDeployments(ns, limit)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(items))
@@ -258,7 +262,7 @@ func (s *Server) handleK8sEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := cli.ListEvents(ns, limit)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(items))
@@ -302,7 +306,7 @@ func (s *Server) handleK8sPodLog(w http.ResponseWriter, r *http.Request) {
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 	text, err := cli.PodLogs(ns, name, tail)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"log": text})
@@ -328,7 +332,7 @@ func (s *Server) handleK8sScaleDeployment(w http.ResponseWriter, r *http.Request
 	name := r.PathValue("name")
 	oldReplicas, _ := cli.GetDeploymentScale(ns, name)
 	if err := cli.ScaleDeployment(ns, name, req.Replicas); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -348,7 +352,7 @@ func (s *Server) handleK8sRestartDeployment(w http.ResponseWriter, r *http.Reque
 	ns := r.PathValue("ns")
 	name := r.PathValue("name")
 	if err := cli.RestartDeployment(ns, name); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -368,7 +372,7 @@ func (s *Server) handleK8sUndoDeployment(w http.ResponseWriter, r *http.Request)
 	ns := r.PathValue("ns")
 	name := r.PathValue("name")
 	if err := cli.UndoDeploymentRollout(ns, name); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -388,7 +392,7 @@ func (s *Server) handleK8sDeletePod(w http.ResponseWriter, r *http.Request) {
 	ns := r.PathValue("ns")
 	name := r.PathValue("name")
 	if err := cli.DeletePod(ns, name); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeK8sGatewayErr(w, err)
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -412,7 +416,7 @@ func (s *Server) handleK8sApply(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := ApplyYAML(cfg, req.YAML, req.Namespace, req.DryRun)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": friendlyK8sErr(err), "output": out})
 		return
 	}
 	level := "info"
@@ -438,7 +442,7 @@ func (s *Server) handleK8sCreateNamespace(w http.ResponseWriter, r *http.Request
 	}
 	out, err := CreateNamespace(cfg, req.Name)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": friendlyK8sErr(err), "output": out})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -467,7 +471,7 @@ func (s *Server) handleK8sPodExec(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	out, err := cli.PodExecShort(ns, name, req.Command, req.TimeoutSec)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "output": out})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": friendlyK8sErr(err), "output": out})
 		return
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r),
@@ -484,9 +488,18 @@ func (s *Server) handleK8sOverview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ver, err := cli.Version()
+	ver, err := cli.VersionProbe()
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		// Soft-fail: keep HTTP 200 so the UI can paint an unreachable state
+		// without treating the whole page as a hard load failure.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reachable":   false,
+			"error":       friendlyK8sErr(err),
+			"version":     nil,
+			"nodes":       map[string]any{"total": 0, "ready": 0},
+			"pods":        map[string]any{"total": 0, "running": 0},
+			"deployments": map[string]any{"total": 0},
+		})
 		return
 	}
 	nodes, _ := cli.ListNodes()
@@ -505,9 +518,10 @@ func (s *Server) handleK8sOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": ver,
-		"nodes":   map[string]any{"total": len(nodes), "ready": readyNodes},
-		"pods":    map[string]any{"total": len(pods), "running": runningPods},
+		"reachable":   true,
+		"version":     ver,
+		"nodes":       map[string]any{"total": len(nodes), "ready": readyNodes},
+		"pods":        map[string]any{"total": len(pods), "running": runningPods},
 		"deployments": map[string]any{"total": len(deploys)},
 	})
 }

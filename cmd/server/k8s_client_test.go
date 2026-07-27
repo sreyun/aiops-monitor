@@ -107,8 +107,16 @@ users:
 }
 
 func TestMaskK8sCluster(t *testing.T) {
-	m := maskK8sCluster(K8sClusterConfig{Token: "secret", KubeconfigYAML: "apiVersion: v1"})
+	m := maskK8sCluster(K8sClusterConfig{
+		Token: "secret", KubeconfigYAML: "apiVersion: v1", CACert: "-----BEGIN CERTIFICATE-----\nX\n",
+	})
 	if m.Token != "****" || m.KubeconfigYAML != "****" {
 		t.Fatalf("%+v", m)
+	}
+	if !m.HasToken || !m.HasKubeconfig || !m.HasCA {
+		t.Fatalf("flags=%+v", m)
+	}
+	if m.CACert == "" {
+		t.Fatal("CA should remain visible for edit form")
 	}
 }

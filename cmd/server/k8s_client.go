@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,14 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	k8sProbeTimeout  = 8 * time.Second
+	k8sDialTimeout   = 5 * time.Second
+	k8sTLSHandshake  = 5 * time.Second
+	k8sHeaderTimeout = 15 * time.Second
+	k8sClientTimeout = 20 * time.Second
 )
 
 type k8sEndpoint struct {
@@ -87,18 +96,29 @@ func newK8sRESTClient(cfg K8sClusterConfig) (*k8sRESTClient, error) {
 		base:  strings.TrimRight(ep.Server, "/"),
 		token: ep.Token,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: k8sClientTimeout,
 			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   k8sDialTimeout,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
 				TLSClientConfig:       tlsCfg,
+				TLSHandshakeTimeout:   k8sTLSHandshake,
 				MaxIdleConnsPerHost:   4,
 				IdleConnTimeout:       60 * time.Second,
-				ResponseHeaderTimeout: 25 * time.Second,
+				ResponseHeaderTimeout: k8sHeaderTimeout,
+				ExpectContinueTimeout: 1 * time.Second,
 			},
 		},
 	}, nil
 }
 
 func (c *k8sRESTClient) do(method, path string, query url.Values, body []byte, contentType string) ([]byte, int, error) {
+	return c.doCtx(context.Background(), method, path, query, body, contentType)
+}
+
+func (c *k8sRESTClient) doCtx(ctx context.Context, method, path string, query url.Values, body []byte, contentType string) ([]byte, int, error) {
 	full := c.base + path
 	if len(query) > 0 {
 		full += "?" + query.Encode()
@@ -107,7 +127,7 @@ func (c *k8sRESTClient) do(method, path string, query url.Values, body []byte, c
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, full, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, full, rdr)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -142,12 +162,69 @@ func (c *k8sRESTClient) getJSON(path string, query url.Values, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
+func (c *k8sRESTClient) getJSONCtx(ctx context.Context, path string, query url.Values, out any) error {
+	raw, _, err := c.doCtx(ctx, http.MethodGet, path, query, nil, "")
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
 func (c *k8sRESTClient) Version() (map[string]any, error) {
+	return c.versionWithTimeout(k8sClientTimeout)
+}
+
+// VersionProbe is a short connectivity check used by test/overview so a dead
+// API server fails fast instead of blocking the UI for ~30s.
+func (c *k8sRESTClient) VersionProbe() (map[string]any, error) {
+	return c.versionWithTimeout(k8sProbeTimeout)
+}
+
+func (c *k8sRESTClient) versionWithTimeout(d time.Duration) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
 	out := map[string]any{}
-	if err := c.getJSON("/version", nil, &out); err != nil {
+	if err := c.getJSONCtx(ctx, "/version", nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// friendlyK8sErr turns raw net/http errors into actionable Chinese messages for the UI.
+func friendlyK8sErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	low := strings.ToLower(s)
+	switch {
+	case strings.Contains(low, "context deadline exceeded"),
+		strings.Contains(low, "client.timeout"),
+		strings.Contains(low, "i/o timeout"),
+		strings.Contains(low, "timeout exceeded"):
+		return "连接 Kubernetes API 超时：请确认本平台服务端能访问该 API（网络/防火墙/VPN/路由），并核对地址与端口（通常 6443）"
+	case strings.Contains(low, "connection refused"):
+		return "连接被拒绝：API Server 未监听，或地址/端口不正确"
+	case strings.Contains(low, "no such host"), strings.Contains(low, "server misbehaving"):
+		return "无法解析 API Server 主机名，请检查地址拼写与 DNS"
+	case strings.Contains(low, "network is unreachable"), strings.Contains(low, "no route to host"):
+		return "网络不可达：服务端到该内网地址没有路由（常见于平台与集群不在同一网段）"
+	case strings.Contains(low, "x509"), strings.Contains(low, "certificate"), strings.Contains(low, "tls:"):
+		msg := "TLS 证书校验失败：请粘贴正确 CA，或仅在可信内网勾选「跳过 TLS 校验」"
+		if len(s) > 160 {
+			return msg + "（" + s[:160] + "…）"
+		}
+		return msg + "（" + s + "）"
+	case strings.Contains(s, "401"), strings.Contains(low, "unauthorized"):
+		return "认证失败：Token 无效、过期或与集群不匹配"
+	case strings.Contains(s, "403"), strings.Contains(low, "forbidden"):
+		return "权限不足：ServiceAccount 缺少 list/get 等访问权限"
+	default:
+		if len(s) > 280 {
+			return s[:280] + "…"
+		}
+		return s
+	}
 }
 
 func (c *k8sRESTClient) ListNamespaces() ([]map[string]any, error) {

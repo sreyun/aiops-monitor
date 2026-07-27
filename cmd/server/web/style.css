@@ -1873,7 +1873,32 @@ svg.sparkline{width:100%; height:46px; display:block}
 .k8s-table th, .k8s-table td{ padding:10px 12px; vertical-align:top; text-align:left }
 .k8s-actions{ display:flex; flex-wrap:wrap; gap:6px }
 .k8s-msg{ max-width:420px; font-size:12px; line-height:1.45; color:var(--muted); word-break:break-word }
-.k8s-empty{ padding:28px 16px }
+.k8s-empty{ padding:28px 16px; text-align:center }
+.k8s-cfg .cfg-panel-desc{ margin:4px 0 0; font-size:12px; color:var(--muted); line-height:1.45; max-width:720px }
+.k8s-cfg-form-head{ margin:0 0 12px; padding-bottom:10px; border-bottom:1px solid var(--line) }
+.k8s-cfg-meta{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center }
+.k8s-cfg-editing{
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius:12px; padding:14px 16px;
+  background:color-mix(in srgb, var(--accent-soft, var(--panel2)) 40%, var(--panel));
+  scroll-margin-top:16px;
+}
+#k8sPanel tr[data-k8s-row].active-row{ background:var(--accent-soft, var(--panel2)) }
+.k8s-unreachable{
+  margin:8px 0 0; padding:28px 20px; border:1px solid color-mix(in srgb, var(--crit-border, #e8a0a0) 55%, var(--line));
+  border-radius:12px; background:color-mix(in srgb, var(--crit-soft, #fff2f2) 55%, var(--panel));
+}
+.k8s-unreachable h4{ margin:0 0 8px; color:var(--txt) }
+.k8s-err-msg{
+  margin:0 auto 14px; max-width:640px; font-size:13px; line-height:1.55; color:var(--crit-txt, #b42318);
+  word-break:break-word;
+}
+.k8s-tip-list{
+  list-style:disc; text-align:left; margin:0 auto 16px; padding-left:20px; max-width:560px;
+  font-size:12.5px; line-height:1.55; color:var(--muted);
+}
+.k8s-tip-list li{ margin:4px 0 }
+.k8s-unreachable-actions{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center }
 
 /* 容器资源台账 */
 #containersPanel .ct-shell{ display:flex; flex-direction:column; gap:12px }
