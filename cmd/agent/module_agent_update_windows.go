@@ -16,17 +16,29 @@ import (
 // and brings the agent back via --install-service (or Start-Service), never as a
 // bare Start-Process without --config (that breaks terminal + desktop worker).
 func agentReplaceAndRestart(exe, staging, cfgPath string) error {
-	helper := filepath.Join(filepath.Dir(exe), "aiops-agent-update-helper.ps1")
-	logPath := filepath.Join(filepath.Dir(exe), "aiops-agent-update.log")
+	dir := filepath.Dir(exe)
+	helper := filepath.Join(dir, "aiops-agent-update-helper.ps1")
+	logPath := filepath.Join(dir, "aiops-agent-update.log")
 	if strings.TrimSpace(cfgPath) == "" {
-		cfgPath = resolveAgentConfigBesideExe(filepath.Dir(exe))
+		cfgPath = resolveAgentConfigBesideExe(dir)
 	}
 	script := buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath)
 	if err := os.WriteFile(helper, []byte(script), 0o644); err != nil {
-		return fmt.Errorf("write helper: %w", err)
+		// Program Files can be momentarily locked; fall back to %TEMP%.
+		helper = filepath.Join(os.TempDir(), "aiops-agent-update-helper.ps1")
+		logPath = filepath.Join(os.TempDir(), "aiops-agent-update.log")
+		script = buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath)
+		if err2 := os.WriteFile(helper, []byte(script), 0o644); err2 != nil {
+			return fmt.Errorf("write helper: %v / %v", err, err2)
+		}
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000008} // DETACHED_PROCESS
+	cmd.Dir = dir
+	// DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP so the helper survives service stop.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x00000008 | 0x00000200,
+		HideWindow:    true,
+	}
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
@@ -50,7 +62,7 @@ function Wait-ServiceState([string]$Name, [string]$Want, [int]$Seconds) {
   return $false
 }
 function Stop-AgentProcesses {
-  Get-Process -Name 'aiops-agent' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 function Restart-AgentService {
   param([string]$Exe,[string]$Cfg,[string]$Dir)
@@ -95,7 +107,7 @@ function Restart-AgentService {
     }
   }
   Start-Sleep -Seconds 2
-  return [bool](Get-Process -Name 'aiops-agent' -ErrorAction SilentlyContinue)
+  return [bool](Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue)
 }
 try {
   Start-Sleep -Seconds 3

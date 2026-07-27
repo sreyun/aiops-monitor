@@ -450,10 +450,12 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 		return
 	}
 	goos, goarch := hostGOOSArch(h)
-	if !job.Rollback && !s.agentDistHas(goos, goarch) {
-		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s", goos, goarch))
+	distName, distOK := s.agentDistResolve(goos, goarch)
+	if !job.Rollback && !distOK {
+		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s (need aiops-agent.exe or aiops-agent-windows-amd64.exe under dist/)", goos, goarch))
 		return
 	}
+	_ = distName
 	if !job.Force && !job.Rollback && !agentVersionBehind(h.AgentVersion, job.TargetVer) {
 		s.agentUpdates.setHostResult(hr, "skipped", "", "already up to date")
 		return
@@ -475,6 +477,10 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 			}
 			if job.TargetVer != "" {
 				args["version"] = job.TargetVer
+			}
+			// Tell agent which /dl name exists on this server (Windows has two aliases).
+			if distOK && distName != "" {
+				args["bin"] = distName
 			}
 			method = "module"
 			if job.Rollback {
@@ -569,9 +575,13 @@ func (s *Server) runLegacyAgentUpdateScript(h *Host, serverURL string, force boo
 
 func (s *Server) runLegacyAgentUpdateScriptKind(h *Host, serverURL string, force bool) (string, execKind, error) {
 	goos, goarch := hostGOOSArch(h)
-	bin, err := agentDistBinaryName(goos, goarch)
-	if err != nil {
-		return "", execExit, err
+	bin, ok := s.agentDistResolve(goos, goarch)
+	if !ok {
+		if name, err := agentDistBinaryName(goos, goarch); err == nil {
+			bin = name
+		} else {
+			return "", execExit, err
+		}
 	}
 	cmd := buildLegacyAgentUpdateCommand(goos, serverURL, bin, force)
 	if cmd == "" {
@@ -620,6 +630,7 @@ func (s *Server) maybeAutoUpdateHost(h *Host) {
 	}
 	base := agentDownloadBase(h, s.agentPublicBaseURL())
 	if base == "" {
+		// Need PublicURL or agent-reported server_url to build /dl download base.
 		return
 	}
 	// Freeze-only for auto path: highRisk=false so default remote gate does not

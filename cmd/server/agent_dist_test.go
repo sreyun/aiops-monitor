@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,6 +15,39 @@ func TestAgentDistBinaryNameServer(t *testing.T) {
 	name, err = agentDistBinaryName("linux", "x86_64")
 	if err != nil || name != "aiops-agent-linux-amd64" {
 		t.Fatalf("arch alias: got %q %v", name, err)
+	}
+}
+
+func TestNormalizeGOOSArchWindowsAliases(t *testing.T) {
+	goos, goarch := normalizeGOOSArch("Windows", "")
+	if goos != "windows" || goarch != "amd64" {
+		t.Fatalf("got %s/%s", goos, goarch)
+	}
+	goos, goarch = normalizeGOOSArch("Microsoft Windows Server 2022", "x64")
+	if goos != "windows" || goarch != "amd64" {
+		t.Fatalf("pretty OS: got %s/%s", goos, goarch)
+	}
+	h := &Host{OS: "windows", Arch: ""}
+	goos, goarch = hostGOOSArch(h)
+	if goos != "windows" || goarch != "amd64" {
+		t.Fatalf("hostGOOSArch: %s/%s", goos, goarch)
+	}
+}
+
+func TestAgentDistResolveWindowsAliasFile(t *testing.T) {
+	dir := t.TempDir()
+	// Only the descriptive Windows name is present (common partial dist sync).
+	path := filepath.Join(dir, "aiops-agent-windows-amd64.exe")
+	if err := os.WriteFile(path, []byte("mz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{distDir: dir}
+	name, ok := s.agentDistResolve("windows", "amd64")
+	if !ok || name != "aiops-agent-windows-amd64.exe" {
+		t.Fatalf("resolve=%q ok=%v", name, ok)
+	}
+	if !s.agentDistHas("windows", "") {
+		t.Fatal("empty arch should still resolve via default amd64")
 	}
 }
 

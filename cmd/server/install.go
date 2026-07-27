@@ -502,27 +502,23 @@ rm -f config.json 2>/dev/null || true
 echo "[AIOps] config written: $DIR/config.yaml (server: $SERVER)"
 
 if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
-  # Linux + root + real systemd → unit file, but the agent PROCESS runs as
-  # unprivileged system user "aiops" (never root). Containers that only ship
-  # a systemctl binary fall through to the nohup path below.
-  AIOPS_USER="${AIOPS_USER:-aiops}"
-  NOLOGIN="/usr/sbin/nologin"
-  [ -x /sbin/nologin ] && NOLOGIN="/sbin/nologin"
-  [ -x /usr/sbin/nologin ] && NOLOGIN="/usr/sbin/nologin"
-  if ! id "$AIOPS_USER" >/dev/null 2>&1; then
-    if command -v useradd >/dev/null 2>&1; then
-      useradd --system --home-dir "$DIR" --shell "$NOLOGIN" --comment "AIOps Monitor Agent" "$AIOPS_USER" 2>/dev/null \
-        || useradd -r -d "$DIR" -s "$NOLOGIN" "$AIOPS_USER" 2>/dev/null || true
-    elif command -v adduser >/dev/null 2>&1; then
-      adduser --system --home "$DIR" --shell "$NOLOGIN" --disabled-password --gecos "AIOps Monitor Agent" "$AIOPS_USER" 2>/dev/null || true
+  # Linux + root + real systemd → unit file. Run as the installing operator:
+  #   AIOPS_USER (explicit) > SUDO_USER (curl|sudo bash) > root.
+  # Never create a dedicated "aiops" system account.
+  if [ -z "${AIOPS_USER:-}" ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+      AIOPS_USER="$SUDO_USER"
+    else
+      AIOPS_USER="root"
     fi
   fi
   if ! id "$AIOPS_USER" >/dev/null 2>&1; then
-    echo "[AIOps] ERROR: could not create system user '$AIOPS_USER'; aborting root install."
-    echo "[AIOps] Re-run without sudo for a per-user (~/.aiops-agent) install, or create the user manually."
+    echo "[AIOps] ERROR: run-as user '$AIOPS_USER' does not exist."
+    echo "[AIOps] Set AIOPS_USER to an existing account, or re-run via sudo as that user."
     exit 1
   fi
-  chown -R "$AIOPS_USER:$AIOPS_USER" "$DIR"
+  AIOPS_GROUP="$(id -gn "$AIOPS_USER" 2>/dev/null || echo "$AIOPS_USER")"
+  chown -R "$AIOPS_USER:$AIOPS_GROUP" "$DIR"
   # SNI / content audit needs packet capture as non-root → ambient capabilities.
   UNIT_CAPS=""
   UNIT_NNP="NoNewPrivileges=true"
@@ -532,12 +528,24 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 "
     UNIT_NNP="NoNewPrivileges=false"
   fi
-  # Service account uses /sbin/nologin in passwd; systemd would inject that as
-  # SHELL= and break the web terminal ("This account is currently not available").
-  # Prefer bash when present; fall back to sh on Alpine/busybox images.
-  TERM_SHELL="/bin/bash"
+  # Prefer the account's login shell when interactive; never leave SHELL=nologin
+  # (breaks web terminal). Fall back to bash/sh on Alpine/busybox.
+  TERM_SHELL=""
+  if command -v getent >/dev/null 2>&1; then
+    TERM_SHELL=$(getent passwd "$AIOPS_USER" 2>/dev/null | cut -d: -f7)
+  fi
+  case "$TERM_SHELL" in
+    ""|*nologin*|*false*|*true*|*sync*) TERM_SHELL="" ;;
+  esac
+  [ -n "$TERM_SHELL" ] && [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/usr/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
+  # Real login users need /home for interactive shells; dedicated /opt installs
+  # under root can keep ProtectHome.
+  PROTECT_HOME="ProtectHome=true"
+  if [ "$AIOPS_USER" != "root" ]; then
+    PROTECT_HOME="ProtectHome=false"
+  fi
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
 Description=AIOps Monitor Agent
@@ -546,7 +554,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$AIOPS_USER
-Group=$AIOPS_USER
+Group=$AIOPS_GROUP
 WorkingDirectory=$DIR
 Environment=SHELL=$TERM_SHELL
 ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
@@ -555,7 +563,7 @@ RestartSec=5
 $UNIT_NNP
 $UNIT_CAPS
 ProtectSystem=strict
-ProtectHome=true
+$PROTECT_HOME
 PrivateTmp=true
 ReadWritePaths=$DIR
 [Install]
@@ -593,11 +601,34 @@ UNIT
     echo "  sudo setenforce 0  (temporary) then inspect AVC denials with ausearch."
   fi
 elif [ "$OS" = "Darwin" ]; then
-  # macOS → launchd. RunAtLoad starts it on boot/login; KeepAlive relaunches it
-  # automatically if it ever exits or is killed. This fixes the previous macOS
-  # behaviour (a one-off background process that never came back after a reboot).
-  if [ "$(id -u)" = "0" ]; then PLIST_DIR="/Library/LaunchDaemons"; else PLIST_DIR="$HOME/Library/LaunchAgents"; fi
-  mkdir -p "$PLIST_DIR"
+  # macOS → launchd. Prefer the installing operator (SUDO_USER / AIOPS_USER);
+  # never create a dedicated service account. Root-only (no SUDO_USER) keeps a
+  # system LaunchDaemon for headless boot collection.
+  if [ -z "${AIOPS_USER:-}" ]; then
+    if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+      AIOPS_USER="$SUDO_USER"
+    elif [ "$(id -u)" = "0" ]; then
+      AIOPS_USER="root"
+    else
+      AIOPS_USER="$(id -un)"
+    fi
+  fi
+  if ! id "$AIOPS_USER" >/dev/null 2>&1; then
+    echo "[AIOps] ERROR: run-as user '$AIOPS_USER' does not exist."
+    exit 1
+  fi
+  AIOPS_UID="$(id -u "$AIOPS_USER")"
+  if [ "$AIOPS_USER" != "root" ]; then
+    AIOPS_HOME=$(eval echo "~$AIOPS_USER" 2>/dev/null || true)
+    [ -n "$AIOPS_HOME" ] && [ -d "$AIOPS_HOME" ] || AIOPS_HOME="/Users/$AIOPS_USER"
+    chown -R "$AIOPS_USER" "$DIR" 2>/dev/null || true
+    PLIST_DIR="$AIOPS_HOME/Library/LaunchAgents"
+    mkdir -p "$PLIST_DIR"
+    chown "$AIOPS_USER" "$PLIST_DIR" 2>/dev/null || true
+  else
+    PLIST_DIR="/Library/LaunchDaemons"
+    mkdir -p "$PLIST_DIR"
+  fi
   PLIST="$PLIST_DIR/com.aiops.agent.plist"
   cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -619,30 +650,26 @@ elif [ "$OS" = "Darwin" ]; then
 </dict>
 </plist>
 PL
+  [ "$AIOPS_USER" != "root" ] && chown "$AIOPS_USER" "$PLIST" 2>/dev/null || true
   # Strip the quarantine xattr: a curl-downloaded binary can carry
   # com.apple.quarantine, and after a reboot Gatekeeper blocks launchd from starting
   # a quarantined/unsigned binary — a prime cause of "monitoring dead after restart".
   xattr -dr com.apple.quarantine "$DIR/aiops-agent" 2>/dev/null || true
-  UIDN=$(id -u)
   launchctl unload "$PLIST" 2>/dev/null || true
-  if [ "$UIDN" = "0" ]; then
-    # System LaunchDaemon: starts at boot regardless of login. Prefer the modern
-    # bootstrap API, fall back to legacy load -w on older macOS. kickstart -k =
-    # restart semantics (kill + start).
+  if [ "$AIOPS_USER" = "root" ]; then
     launchctl bootout system "$PLIST" 2>/dev/null || true
     launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
     launchctl kickstart -k system/com.aiops.agent 2>/dev/null || true
-    echo "[AIOps] launchd LaunchDaemon restarted: com.aiops.agent (starts at boot + keepalive)"
+    echo "[AIOps] launchd LaunchDaemon restarted: com.aiops.agent (user=root, starts at boot + keepalive)"
   else
-    # Per-user LaunchAgent: bootstrap + ENABLE so the enabled state survives a reboot
-    # (load -w alone can lose it on newer macOS); kickstart -k restarts it right now.
-    launchctl bootout "gui/$UIDN" "$PLIST" 2>/dev/null || true
-    launchctl bootstrap "gui/$UIDN" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
-    launchctl enable "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
-    launchctl kickstart -k "gui/$UIDN/com.aiops.agent" 2>/dev/null || launchctl kickstart "gui/$UIDN/com.aiops.agent" 2>/dev/null || true
-    echo "[AIOps] launchd LaunchAgent restarted: com.aiops.agent (starts at login + keepalive)"
-    echo "[AIOps] NOTE: a per-user agent starts only after LOGIN. For a headless Mac that"
-    echo "[AIOps] must collect before anyone logs in, re-run the installer with sudo."
+    # Per-user LaunchAgent under the installing operator (gui/\$AIOPS_UID).
+    launchctl bootout "gui/$AIOPS_UID" "$PLIST" 2>/dev/null || true
+    launchctl bootstrap "gui/$AIOPS_UID" "$PLIST" 2>/dev/null || launchctl asuser "$AIOPS_UID" launchctl load -w "$PLIST" 2>/dev/null || true
+    launchctl enable "gui/$AIOPS_UID/com.aiops.agent" 2>/dev/null || true
+    launchctl kickstart -k "gui/$AIOPS_UID/com.aiops.agent" 2>/dev/null || launchctl asuser "$AIOPS_UID" launchctl kickstart "gui/$AIOPS_UID/com.aiops.agent" 2>/dev/null || true
+    echo "[AIOps] launchd LaunchAgent restarted: com.aiops.agent (user=$AIOPS_USER, starts at login + keepalive)"
+    echo "[AIOps] NOTE: per-user agent starts after LOGIN. For headless boot collection as root,"
+    echo "[AIOps] re-run as root without sudo (or AIOPS_USER=root)."
   fi
 else
   # Fallback (non-root Linux without systemd): restart now + a @reboot crontab entry

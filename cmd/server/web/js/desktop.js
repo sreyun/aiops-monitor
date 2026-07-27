@@ -223,8 +223,9 @@ function renderDesktopShell(id, name) {
     stage.ondrop = onDeskDrop;
     // Click empty stage chrome to focus the stream surface for immediate typing.
     stage.addEventListener("pointerdown", (ev) => {
-      // Ignore toolbar / side-panel targets that bubble incorrectly.
-      if (ev.target && ev.target.closest && ev.target.closest(".desk-tools, .desk-side, select, button, input, textarea")) return;
+      // Ignore toolbar / unlock / side-panel — do not steal focus from credential
+      // or clipboard inputs (otherwise local typing appears "dead").
+      if (ev.target && ev.target.closest && ev.target.closest(".desk-tools, .desk-side, .desk-unlock-panel, #deskUnlockPanel, select, button, input, textarea, label")) return;
       const canvas = $("deskCanvas");
       const video = $("deskVideo");
       const target = (video && video.style.display !== "none") ? video : canvas;
@@ -584,7 +585,8 @@ function connectDesktopWS(id, name) {
         if (meta.action_ack) {
           if (meta.ok === false) toast(meta.error || I18N.t("desktop.action_fail", "远程动作失败"), "err");
           else if (meta.action === "cad") toast(I18N.t("desktop.cad_sent", "已发送 Ctrl+Alt+Del"), "ok");
-          else if (meta.action === "type_text") toast(I18N.t("desktop.unlock_sent", "凭据已发送"), "ok");
+          else if (meta.action === "type_text" || meta.action === "unlock") toast(I18N.t("desktop.unlock_sent", "凭据已发送"), "ok");
+          else if (meta.action === "paste") toast(I18N.t("desktop.paste_sent", "已粘贴到远程"), "ok");
           else if (meta.action === "wake") toast(I18N.t("desktop.wake_sent", "已尝试唤醒输入框"), "ok");
         }
         if (Array.isArray(meta.monitors)) {
@@ -892,10 +894,18 @@ let _deskKeysBound = false;
 let _deskPressed = new Set(); // codes currently down — released on blur to avoid stuck remote keys
 
 function deskIsEditableTarget(t) {
-  if (!t || !t.tagName) return false;
-  const tag = t.tagName;
+  if (!t) return false;
+  // Unlock panel + side clipboard/path fields must keep local typing — never
+  // forward those keystrokes to the remote session (capture-phase listener).
+  if (t.closest && t.closest("#deskUnlockPanel, #deskSide, .desk-unlock-panel, .desk-side")) {
+    return true;
+  }
+  const el = t.nodeType === 3 ? t.parentElement : t; // text node → element
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (t.isContentEditable) return true;
+  if (el.isContentEditable) return true;
+  if (el.closest && el.closest("input, textarea, select, [contenteditable='true']")) return true;
   return false;
 }
 
@@ -1159,6 +1169,8 @@ function deskSendAction(obj) {
   if (act === "cad") toast(I18N.t("desktop.cad_sending", "正在发送 Ctrl+Alt+Del…"), "ok");
   else if (act === "wake") toast(I18N.t("desktop.wake_sending", "正在唤醒…"), "ok");
   else if (act === "chord") toast(I18N.t("desktop.chord_sending", "正在发送快捷键…"), "ok");
+  else if (act === "unlock") toast(I18N.t("desktop.unlock_sending", "正在发送解锁凭据…"), "ok");
+  else if (act === "paste") toast(I18N.t("desktop.paste_sending", "正在粘贴到远程…"), "ok");
   deskSendJSON("A", body);
   return true;
 }
@@ -1186,15 +1198,29 @@ async function deskSendUnlockCredentials() {
     return;
   }
   if (!confirm(I18N.t("desktop.unlock_confirm", "确认向远程主机发送解锁凭据？内容不会写入日志。"))) return;
-  deskSendAction({ action: "wake" });
-  await new Promise((r) => setTimeout(r, 200));
-  if (user) {
-    deskSendAction({ action: "type_text", text: user, enter: false });
-    await new Promise((r) => setTimeout(r, 120));
-    deskSendAction({ action: "chord", chord: "tab" });
+  // One agent-side unlock sequence (wake + type) — avoids multi-RTT pacing that
+  // made lock-screen passwords appear one character at a time.
+  if (DESK_META.features && DESK_META.features.unlock) {
+    deskSendAction({
+      action: "unlock",
+      user,
+      text: pass,
+      enter: true,
+      screen_w: DESK_META.w || 0,
+      screen_h: DESK_META.h || 0
+    });
+  } else {
+    // Older agents without unlock action: short paced type_text fallback.
+    deskSendAction({ action: "wake" });
     await new Promise((r) => setTimeout(r, 80));
+    if (user) {
+      deskSendAction({ action: "type_text", text: user, enter: false });
+      await new Promise((r) => setTimeout(r, 40));
+      deskSendAction({ action: "chord", chord: "tab" });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    deskSendAction({ action: "type_text", text: pass, enter: true });
   }
-  deskSendAction({ action: "type_text", text: pass, enter: true });
   if (passEl) passEl.value = "";
   if (userEl) userEl.value = "";
   openDeskUnlockPanel(false);
@@ -1345,7 +1371,12 @@ function deskPushClipboard() {
   const send = (text) => {
     if (!text) return;
     if (box) box.value = text;
-    deskSendJSON("C", { text });
+    // Prefer paste action: set remote clipboard + Ctrl+V into focused control.
+    if (DESK_META.features && DESK_META.features.paste) {
+      deskSendAction({ action: "paste", text });
+    } else {
+      deskSendJSON("C", { text, paste: true });
+    }
     toast(I18N.t("desktop.clip_sent"), "ok");
   };
   if (box && box.value) { send(box.value); return; }

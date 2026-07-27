@@ -628,8 +628,11 @@ function openK8sScale(ns, name, current) {
 
 function k8sClusterEndpointLabel(c) {
   if (!c) return "—";
-  if (c.api_server) return c.api_server;
-  if (c.has_kubeconfig || c.kubeconfig_yaml) return "kubeconfig";
+  const api = (c.api_server || c.endpoint || "").trim();
+  if (api) return api;
+  if (c.has_kubeconfig || c.kubeconfig_yaml) {
+    return k8sT("k8s.endpoint_kubeconfig_only", "kubeconfig（未解析到 API Server）");
+  }
   return "—";
 }
 

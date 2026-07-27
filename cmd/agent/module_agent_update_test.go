@@ -41,6 +41,37 @@ func TestAgentDistBinaryName(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateBinCandidatesWindowsAliases(t *testing.T) {
+	cands := agentUpdateBinCandidates("windows", "amd64", "aiops-agent-windows-amd64.exe")
+	if len(cands) < 2 {
+		t.Fatalf("cands=%v", cands)
+	}
+	if cands[0] != "aiops-agent-windows-amd64.exe" {
+		t.Fatalf("preferred first: %v", cands)
+	}
+	foundExe := false
+	for _, c := range cands {
+		if c == "aiops-agent.exe" {
+			foundExe = true
+		}
+	}
+	if !foundExe {
+		t.Fatalf("missing aiops-agent.exe alias: %v", cands)
+	}
+}
+
+func TestAgentUpdateBinCandidatesEmptyPreferred(t *testing.T) {
+	cands := agentUpdateBinCandidates("linux", "amd64", "")
+	if len(cands) != 1 || cands[0] != "aiops-agent-linux-amd64" {
+		t.Fatalf("empty preferred: %v", cands)
+	}
+	// filepath.Base("") is "."; must not become a download candidate.
+	cands = agentUpdateBinCandidates("linux", "amd64", "   ")
+	if len(cands) != 1 || cands[0] != "aiops-agent-linux-amd64" {
+		t.Fatalf("whitespace preferred: %v", cands)
+	}
+}
+
 func TestNormalizeAgentVer(t *testing.T) {
 	if normalizeAgentVer("v0.19.3") != "0.19.3" {
 		t.Fatal(normalizeAgentVer("v0.19.3"))

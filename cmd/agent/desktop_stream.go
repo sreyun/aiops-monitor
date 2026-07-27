@@ -882,14 +882,19 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 			}
 		case 'C':
 			var ev struct {
-				Text string `json:"text"`
+				Text  string `json:"text"`
+				Paste bool   `json:"paste"` // also inject Ctrl+V into focused control
 			}
 			if json.Unmarshal(payload, &ev) == nil && ev.Text != "" {
 				txt := ev.Text
 				if len(txt) > 512<<10 {
 					txt = txt[:512<<10]
 				}
-				_ = deskClipboardSet(txt)
+				if ev.Paste {
+					_ = deskDoPaste(inp, txt)
+				} else {
+					_ = deskClipboardSet(txt)
+				}
 			}
 		case 'M':
 			var ev struct {

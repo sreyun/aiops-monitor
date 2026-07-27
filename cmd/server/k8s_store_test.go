@@ -72,6 +72,64 @@ func TestUpsertK8sClusterKubeconfigOnly(t *testing.T) {
 	}
 }
 
+func TestMaskK8sClusterShowsAPIServerFromKubeconfig(t *testing.T) {
+	kc := `apiVersion: v1
+kind: Config
+current-context: c1
+contexts:
+- name: c1
+  context: {cluster: cl, user: u}
+clusters:
+- name: cl
+  cluster:
+    server: https://192.168.10.81:6443
+    insecure-skip-tls-verify: true
+users:
+- name: u
+  user: {token: t0ken}
+`
+	masked := maskK8sCluster(K8sClusterConfig{
+		Name: "k8s-81", Enabled: true, KubeconfigYAML: kc,
+	})
+	if masked.APIServer != "https://192.168.10.81:6443" {
+		t.Fatalf("api_server=%q", masked.APIServer)
+	}
+	if !masked.HasKubeconfig || masked.KubeconfigYAML != "****" {
+		t.Fatalf("mask secrets: %+v", masked)
+	}
+}
+
+func TestBackfillK8sAPIServerFromKubeconfigOnUpsert(t *testing.T) {
+	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kc := `apiVersion: v1
+kind: Config
+current-context: c1
+contexts:
+- name: c1
+  context: {cluster: cl, user: u}
+clusters:
+- name: cl
+  cluster:
+    server: https://10.0.0.9:6443
+    insecure-skip-tls-verify: true
+users:
+- name: u
+  user: {token: t0ken}
+`
+	saved, err := cs.UpsertK8sCluster(K8sClusterConfig{
+		Name: "from-kc", Enabled: true, KubeconfigYAML: kc,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.APIServer != "https://10.0.0.9:6443" {
+		t.Fatalf("backfill api_server=%q", saved.APIServer)
+	}
+}
+
 func TestUpsertK8sClusterRejectsEmptyAuth(t *testing.T) {
 	cs, err := NewConfigStore(filepath.Join(t.TempDir(), "cfg.json"), nil)
 	if err != nil {

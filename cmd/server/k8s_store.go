@@ -30,6 +30,12 @@ func maskK8sCluster(c K8sClusterConfig) K8sClusterConfig {
 	out.HasToken = strings.TrimSpace(c.Token) != ""
 	out.HasKubeconfig = strings.TrimSpace(c.KubeconfigYAML) != ""
 	out.HasCA = strings.TrimSpace(c.CACert) != ""
+	// List/UI should show the real API address even for kubeconfig-only clusters.
+	if strings.TrimSpace(out.APIServer) == "" && out.HasKubeconfig {
+		if ep, err := parseKubeconfig(c.KubeconfigYAML); err == nil && strings.TrimSpace(ep.Server) != "" {
+			out.APIServer = strings.TrimRight(strings.TrimSpace(ep.Server), "/")
+		}
+	}
 	if out.HasToken {
 		out.Token = "****"
 	}
@@ -87,6 +93,7 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 			cs.mu.Unlock()
 			return K8sClusterConfig{}, err
 		}
+		backfillK8sAPIServerFromKubeconfig(&in)
 		cs.cfg.K8sClusters = append(cs.cfg.K8sClusters, in)
 		cs.mu.Unlock()
 		return in, cs.save()
@@ -100,6 +107,7 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 				cs.mu.Unlock()
 				return K8sClusterConfig{}, err
 			}
+			backfillK8sAPIServerFromKubeconfig(&in)
 			cs.cfg.K8sClusters[i] = in
 			cs.mu.Unlock()
 			return in, cs.save()
@@ -112,9 +120,27 @@ func (cs *ConfigStore) UpsertK8sCluster(in K8sClusterConfig) (K8sClusterConfig, 
 		cs.mu.Unlock()
 		return K8sClusterConfig{}, err
 	}
+	backfillK8sAPIServerFromKubeconfig(&in)
 	cs.cfg.K8sClusters = append(cs.cfg.K8sClusters, in)
 	cs.mu.Unlock()
 	return in, cs.save()
+}
+
+// backfillK8sAPIServerFromKubeconfig fills api_server from kubeconfig when empty
+// so the cluster list Endpoint column shows a real URL instead of "kubeconfig".
+func backfillK8sAPIServerFromKubeconfig(c *K8sClusterConfig) {
+	if c == nil || strings.TrimSpace(c.APIServer) != "" {
+		return
+	}
+	kc := strings.TrimSpace(c.KubeconfigYAML)
+	if kc == "" || kc == "****" {
+		return
+	}
+	ep, err := parseKubeconfig(kc)
+	if err != nil || strings.TrimSpace(ep.Server) == "" {
+		return
+	}
+	c.APIServer = strings.TrimRight(strings.TrimSpace(ep.Server), "/")
 }
 
 func validateK8sClusterAuth(c K8sClusterConfig) error {

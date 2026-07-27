@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -26,10 +27,11 @@ type deskInputMeta struct {
 
 // deskActionRequest is the JSON body of frame type 'A'.
 type deskActionRequest struct {
-	Action  string `json:"action"`            // cad | chord | type_text | wake
+	Action  string `json:"action"`            // cad | chord | type_text | wake | unlock | paste
 	Chord   string `json:"chord,omitempty"`   // win_l | ctrl_shift_esc | esc | ctrl_alt_bksp | enter | tab
-	Text    string `json:"text,omitempty"`    // for type_text
-	Enter   bool   `json:"enter,omitempty"`   // append Enter after type_text
+	Text    string `json:"text,omitempty"`    // for type_text / unlock password / paste
+	User    string `json:"user,omitempty"`    // unlock username (optional)
+	Enter   bool   `json:"enter,omitempty"`   // append Enter after type_text / unlock
 	ScreenW int    `json:"screen_w,omitempty"`
 	ScreenH int    `json:"screen_h,omitempty"`
 }
@@ -41,6 +43,8 @@ func deskFeaturesFromInput(inp deskInput, viewOnly bool) map[string]bool {
 		"input":     !viewOnly,
 		"cad":       meta.CAD && !viewOnly,
 		"type_text": meta.TypeText && !viewOnly,
+		"unlock":    meta.TypeText && !viewOnly,
+		"paste":     !viewOnly,
 		"chords":    !viewOnly,
 		"wake":      !viewOnly,
 	}
@@ -132,6 +136,10 @@ func handleDeskAction(inp deskInput, payload []byte, screenW, screenH int, fileT
 		err = deskDoTypeText(inp, req.Text, req.Enter)
 	case "wake":
 		err = deskDoWake(inp, req.ScreenW, req.ScreenH)
+	case "unlock":
+		err = deskDoUnlock(inp, req.User, req.Text, req.Enter || req.Text != "", req.ScreenW, req.ScreenH)
+	case "paste":
+		err = deskDoPaste(inp, req.Text)
 	default:
 		err = fmt.Errorf("unknown action %q", req.Action)
 	}
@@ -197,14 +205,67 @@ func deskDoWake(inp deskInput, w, h int) error {
 	_ = inp.MouseMove(cx, cy)
 	_ = inp.MouseButton(1, true)
 	_ = inp.MouseButton(1, false)
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	_ = inp.Key(0x1B, true) // Esc wake
 	_ = inp.Key(0x1B, false)
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	_ = inp.MouseMove(cx, cy)
 	_ = inp.MouseButton(1, true)
 	_ = inp.MouseButton(1, false)
 	return nil
+}
+
+// deskDoUnlock wakes the lock UI and types credentials in one agent-side sequence
+// (avoids multi-round-trip UI pacing that made passwords appear "one char / half second").
+func deskDoUnlock(inp deskInput, user, pass string, enter bool, w, h int) error {
+	user = strings.TrimSpace(user)
+	if user == "" && pass == "" && !enter {
+		return fmt.Errorf("empty credentials")
+	}
+	_ = deskDoWake(inp, w, h)
+	time.Sleep(40 * time.Millisecond)
+	if user != "" {
+		if err := deskDoTypeText(inp, user, false); err != nil {
+			return err
+		}
+		_ = deskPlayChord(inp, "tab")
+		time.Sleep(15 * time.Millisecond)
+	}
+	if pass != "" {
+		if err := deskDoTypeText(inp, pass, false); err != nil {
+			return err
+		}
+	}
+	if enter {
+		_ = inp.Key(0x0D, true)
+		_ = inp.Key(0x0D, false)
+	}
+	return nil
+}
+
+// deskDoPaste sets the OS clipboard (when supported) then injects Ctrl+V so the
+// focused remote control actually receives the text — clipboard-only sync is
+// invisible on many lock screens and apps.
+func deskDoPaste(inp deskInput, text string) error {
+	text = strings.ReplaceAll(text, "\x00", "")
+	if text == "" {
+		return fmt.Errorf("empty paste")
+	}
+	const maxLen = 512 << 10
+	if len(text) > maxLen {
+		text = text[:maxLen]
+	}
+	if deskClipboardSupported() {
+		if err := deskClipboardSet(text); err != nil {
+			slog.Debug("clipboard set failed; typing paste fallback", "err", err)
+			return deskDoTypeText(inp, text, false)
+		}
+		time.Sleep(12 * time.Millisecond)
+		if err := deskPlayChord(inp, "ctrl_v"); err == nil {
+			return nil
+		}
+	}
+	return deskDoTypeText(inp, text, false)
 }
 
 func deskPlayChord(inp deskInput, name string) error {
@@ -225,6 +286,8 @@ func deskPlayChord(inp deskInput, name string) error {
 		keys = []int{0x09}
 	case "win":
 		keys = []int{0x5B}
+	case "ctrl_v", "paste":
+		keys = []int{0x11, 0x56} // Ctrl+V
 	default:
 		return fmt.Errorf("unknown chord %q", name)
 	}
@@ -236,11 +299,11 @@ func deskTapKeys(inp deskInput, keys []int) error {
 		if err := inp.Key(vk, true); err != nil {
 			return err
 		}
-		time.Sleep(15 * time.Millisecond)
+		time.Sleep(6 * time.Millisecond)
 	}
 	for i := len(keys) - 1; i >= 0; i-- {
 		_ = inp.Key(keys[i], false)
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(4 * time.Millisecond)
 	}
 	return nil
 }
@@ -275,7 +338,6 @@ func deskTypeTextViaKeys(inp deskInput, text string) error {
 			if needShift {
 				_ = inp.Key(0x10, false)
 			}
-			time.Sleep(8 * time.Millisecond)
 			continue
 		}
 		// Non-ASCII: try as unicode via platform if available — already handled by TypeText.
@@ -301,6 +363,8 @@ func chordVKSequence(name string) []int {
 		return []int{0x09}
 	case "win":
 		return []int{0x5B}
+	case "ctrl_v", "paste":
+		return []int{0x11, 0x56}
 	default:
 		return nil
 	}

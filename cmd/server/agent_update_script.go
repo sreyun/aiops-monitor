@@ -36,7 +36,7 @@ for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; 
   [ -f "$c" ] && CFG="$c" && break
 done
 RESTARTED=0
-# Prefer existing unit restart (preserve User=aiops); do not overwrite with --install-service.
+# Prefer existing unit restart (preserve installed User=); do not overwrite with --install-service.
 if command -v systemctl >/dev/null 2>&1; then
   if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
     RESTARTED=1
@@ -167,7 +167,7 @@ $Sha=[Security.Cryptography.SHA256]::Create(); $Stream=[IO.File]::OpenRead($New)
 try{ $Actual=([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() } finally { $Stream.Dispose(); $Sha.Dispose() }
 if(-not $Expected -or $Expected -ne $Actual){ Remove-Item $New -Force; throw 'SHA-256 mismatch' }
 foreach($name in @('AiopsMonitorAgent','AIOps-Agent')){ Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue }
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 if(Test-Path $Exe){ Copy-Item $Exe ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }
 Move-Item $New $Exe -Force
@@ -188,7 +188,7 @@ if(-not $ok){
   else { throw 'restart failed: no service and no config.yaml beside agent' }
 }
 Start-Sleep -Seconds 2
-if(-not (Get-Process aiops-agent -ErrorAction SilentlyContinue) -and -not (Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue | Where-Object Status -eq Running)){ throw 'agent not running after update' }
+if(-not (Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue) -and -not (Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue | Where-Object Status -eq Running)){ throw 'agent not running after update' }
 Write-Output ('legacy agent update ok sha='+$Actual)
 `,
 		strings.ReplaceAll(server, "'", "''"),

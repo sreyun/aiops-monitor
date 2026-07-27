@@ -45,9 +45,9 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 		return []byte(fmt.Sprintf("agent_update: already at %s (skip)", agentVersion())), 0
 	}
 
-	binName, err := agentDistBinaryName(runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		return []byte("agent_update: " + err.Error()), 1
+	binCandidates := agentUpdateBinCandidates(runtime.GOOS, runtime.GOARCH, args["bin"])
+	if len(binCandidates) == 0 {
+		return []byte("agent_update: unsupported platform"), 1
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -60,17 +60,33 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 	staging := filepath.Join(dir, ".aiops-agent.new"+exeSuffix())
 	bak := exe + ".bak"
 
-	dlURL := server + "/dl/" + binName
-	sumURL := dlURL + ".sha256"
 	client := newUpdateHTTPClient(10 * time.Minute)
-	if err := downloadFileHTTP(client, dlURL, staging); err != nil {
-		_ = os.Remove(staging)
-		return []byte("agent_update: download failed: " + err.Error()), 1
+	var binName string
+	var expected string
+	var lastDL error
+	for _, cand := range binCandidates {
+		dlURL := server + "/dl/" + cand
+		sumURL := dlURL + ".sha256"
+		if err := downloadFileHTTP(client, dlURL, staging); err != nil {
+			lastDL = err
+			_ = os.Remove(staging)
+			continue
+		}
+		sum, err := fetchRemoteSHA256(client, sumURL)
+		if err != nil {
+			lastDL = err
+			_ = os.Remove(staging)
+			continue
+		}
+		binName, expected = cand, sum
+		break
 	}
-	expected, err := fetchRemoteSHA256(client, sumURL)
-	if err != nil {
+	if binName == "" {
 		_ = os.Remove(staging)
-		return []byte("agent_update: checksum fetch failed: " + err.Error()), 1
+		if lastDL == nil {
+			lastDL = fmt.Errorf("no candidate binary")
+		}
+		return []byte("agent_update: download failed: " + lastDL.Error()), 1
 	}
 	actual, err := fileSHA256Hex(staging)
 	if err != nil {
@@ -182,38 +198,76 @@ func exeSuffix() string {
 
 // agentDistBinaryName maps GOOS/GOARCH to the /dl/ artifact name served by the server.
 func agentDistBinaryName(goos, goarch string) (string, error) {
+	cands := agentUpdateBinCandidates(goos, goarch, "")
+	if len(cands) == 0 {
+		return "", fmt.Errorf("unsupported platform %s/%s", goos, goarch)
+	}
+	return cands[0], nil
+}
+
+// agentUpdateBinCandidates lists /dl names to try (server may ship either Windows alias).
+func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	goos = strings.ToLower(strings.TrimSpace(goos))
 	goarch = strings.ToLower(strings.TrimSpace(goarch))
 	switch goarch {
-	case "x86_64", "x64":
+	case "x86_64", "x64", "":
 		goarch = "amd64"
 	case "aarch64":
 		goarch = "arm64"
 	}
+	var primary string
 	switch goos {
 	case "linux":
 		switch goarch {
 		case "amd64":
-			return "aiops-agent-linux-amd64", nil
+			primary = "aiops-agent-linux-amd64"
 		case "arm64":
-			return "aiops-agent-linux-arm64", nil
+			primary = "aiops-agent-linux-arm64"
 		}
 	case "darwin":
 		switch goarch {
 		case "amd64":
-			return "aiops-agent-darwin-amd64", nil
+			primary = "aiops-agent-darwin-amd64"
 		case "arm64":
-			return "aiops-agent-darwin-arm64", nil
+			primary = "aiops-agent-darwin-arm64"
 		}
 	case "windows":
 		switch goarch {
 		case "amd64":
-			return "aiops-agent.exe", nil
+			primary = "aiops-agent.exe"
 		case "arm64":
-			return "aiops-agent-windows-arm64.exe", nil
+			primary = "aiops-agent-windows-arm64.exe"
 		}
 	}
-	return "", fmt.Errorf("unsupported platform %s/%s", goos, goarch)
+	if primary == "" {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	pref := strings.TrimSpace(preferred)
+	if pref != "" {
+		pref = filepath.Base(pref)
+	}
+	if pref != "" && pref != "." && !strings.Contains(pref, "..") && !strings.ContainsAny(pref, `/\`) {
+		out = append(out, pref)
+	}
+	if pref != primary {
+		out = append(out, primary)
+	}
+	if goos == "windows" && goarch == "amd64" {
+		for _, alt := range []string{"aiops-agent.exe", "aiops-agent-windows-amd64.exe"} {
+			dup := false
+			for _, e := range out {
+				if e == alt {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				out = append(out, alt)
+			}
+		}
+	}
+	return out
 }
 
 func validateUpdateServerURL(server string, allowedBases []string) error {
