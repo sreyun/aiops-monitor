@@ -57,20 +57,33 @@ func newPTY(cols, rows int) termShell {
 
 	// Build a proper shell environment — systemd/minimal contexts often lack
 	// HOME/USER/SHELL, which causes "cd: HOME not set" and broken ~ expansion.
-	cmd := exec.Command(shellPath(), "-l", "-i") // -l: login shell (sources /etc/profile)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
-	cmd.Env = buildShellEnv()
-	// Set working directory to user home — but ONLY if the path actually exists.
-	// An invalid cmd.Dir causes cmd.Start() to fail, which kills the whole PTY
-	// and falls back to pipeShell (which would fail with the same dir → no terminal).
-	if dir := userHomeDir(); dir != "" {
-		if _, err := os.Stat(dir); err == nil {
-			cmd.Dir = dir
+	// shellPath() never returns nologin (service accounts); -l sources profile.
+	sh := shellPath()
+	env := buildShellEnv()
+	var dir string
+	if h := userHomeDir(); h != "" {
+		if _, err := os.Stat(h); err == nil {
+			dir = h
 		}
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true} // new session, slave becomes the controlling tty
-	if err := cmd.Start(); err != nil {
-		slog.Warn("PTY shell 启动失败", "err", err, "dir", cmd.Dir)
+	// Prefer login+interactive; fall back to interactive-only when -l is rejected
+	// (some busybox ash builds) so the remote terminal still comes up.
+	var cmd *exec.Cmd
+	for _, args := range [][]string{{"-l", "-i"}, {"-i"}, {}} {
+		c := exec.Command(sh, args...)
+		c.Stdin, c.Stdout, c.Stderr = slave, slave, slave
+		c.Env = env
+		c.Dir = dir
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+		if err := c.Start(); err != nil {
+			slog.Warn("PTY shell 启动失败，尝试降级参数", "err", err, "shell", sh, "args", args, "dir", dir)
+			continue
+		}
+		cmd = c
+		slog.Info("PTY shell 已启动", "shell", sh, "args", args, "pid", c.Process.Pid, "dir", dir)
+		break
+	}
+	if cmd == nil {
 		master.Close()
 		slave.Close()
 		return nil

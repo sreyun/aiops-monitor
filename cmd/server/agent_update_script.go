@@ -36,14 +36,17 @@ for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; 
   [ -f "$c" ] && CFG="$c" && break
 done
 RESTARTED=0
-if [ -n "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
-  if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
+# Prefer existing unit restart (preserve User=aiops); do not overwrite with --install-service.
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
     RESTARTED=1
   fi
 fi
-if [ "$RESTARTED" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
-  if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
-    RESTARTED=1
+if [ "$RESTARTED" -eq 0 ] && [ -n "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
+  if [ ! -f /etc/systemd/system/aiops-agent.service ] && [ ! -f /etc/systemd/system/aiops-monitor-agent.service ]; then
+    if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
+      RESTARTED=1
+    fi
   fi
 fi
 if [ "$RESTARTED" -eq 0 ]; then

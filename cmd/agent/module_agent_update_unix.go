@@ -48,16 +48,16 @@ DIR=%s
 CFG=%s
 UNIT=%s
 RESTARTED=0
-# Prefer rewriting the unit via --install-service so ExecStart keeps --service
-# and an absolute --config (desktop worker + terminal both require service mode).
-if [ -n "$CFG" ] && [ -f "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
-  if "$EXE" --install-service --config "$CFG" >/dev/null 2>&1; then
-    RESTARTED=1
-  fi
+# Prefer restarting an existing unit (keeps User=aiops hardened install).
+# Only call --install-service when no unit is present — it rewrites to User=root.
+if systemctl restart "$UNIT" 2>/dev/null || systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
+  RESTARTED=1
 fi
-if [ "$RESTARTED" -eq 0 ]; then
-  if systemctl restart "$UNIT" 2>/dev/null || systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
-    RESTARTED=1
+if [ "$RESTARTED" -eq 0 ] && [ -n "$CFG" ] && [ -f "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
+  if [ ! -f /etc/systemd/system/aiops-agent.service ] && [ ! -f /etc/systemd/system/aiops-monitor-agent.service ]; then
+    if "$EXE" --install-service --config "$CFG" >/dev/null 2>&1; then
+      RESTARTED=1
+    fi
   fi
 fi
 if [ "$RESTARTED" -eq 0 ]; then

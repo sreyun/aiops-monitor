@@ -532,6 +532,12 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 "
     UNIT_NNP="NoNewPrivileges=false"
   fi
+  # Service account uses /sbin/nologin in passwd; systemd would inject that as
+  # SHELL= and break the web terminal ("This account is currently not available").
+  # Prefer bash when present; fall back to sh on Alpine/busybox images.
+  TERM_SHELL="/bin/bash"
+  [ -x "$TERM_SHELL" ] || TERM_SHELL="/usr/bin/bash"
+  [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
 Description=AIOps Monitor Agent
@@ -542,6 +548,7 @@ Type=simple
 User=$AIOPS_USER
 Group=$AIOPS_USER
 WorkingDirectory=$DIR
+Environment=SHELL=$TERM_SHELL
 ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5

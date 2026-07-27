@@ -400,11 +400,14 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 			slog.Warn("终端会话异常已恢复（不影响 Agent 运行）", "session", sid, "panic", r)
 		}
 	}()
+	shell := shellPath()
 	sh := startShell(120, 30)
 	if sh == nil {
+		slog.Warn("远程终端 shell 启动失败", "session", sid, "shell", shell)
+		a.termSendPlain(server, sid, "\r\n\x1b[31m无法启动交互 Shell（"+shell+"）。请确认主机已安装 bash/sh。\x1b[0m\r\n")
 		return
 	}
-	slog.Info("远程终端会话开始", "session", sid)
+	slog.Info("远程终端会话开始", "session", sid, "shell", shell)
 	a.streamInteractiveShell(server, sid, sh, lang)
 }
 
@@ -807,17 +810,115 @@ func userHomeDir() string {
 	return ""
 }
 
-// shellPath returns the user's preferred shell, falling back to /bin/bash then /bin/sh.
-func shellPath() string {
-	if sh := os.Getenv("SHELL"); sh != "" {
-		return sh
+// isNonInteractiveShell reports shells that refuse an interactive session.
+// Linux install creates system user "aiops" with /sbin/nologin; systemd then
+// injects SHELL=/sbin/nologin into the agent. Spawning that "shell" prints
+// "This account is currently not available." and exits immediately.
+func isNonInteractiveShell(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
 	}
-	for _, s := range []string{"/bin/bash", "/bin/zsh", "/bin/sh"} {
-		if _, err := os.Stat(s); err == nil {
-			return s
+	base := strings.ToLower(filepath.Base(path))
+	switch base {
+	case "nologin", "false", "true", "sync":
+		return true
+	}
+	low := strings.ToLower(filepath.ToSlash(path))
+	return strings.Contains(low, "/nologin")
+}
+
+// shellExists reports that path is a regular file (executable preferred).
+func shellExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+// passwdShellForUID returns the login shell from /etc/passwd for uid, if any.
+func passwdShellForUID(uid int) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	b, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	want := strconv.Itoa(uid)
+	for _, ln := range strings.Split(string(b), "\n") {
+		f := strings.Split(ln, ":")
+		if len(f) < 7 {
+			continue
+		}
+		if f[2] == want {
+			return strings.TrimSpace(f[6])
 		}
 	}
+	return ""
+}
+
+// shellsFromEtcShells returns paths listed in /etc/shells (interactive candidates).
+func shellsFromEtcShells() []string {
+	b, err := os.ReadFile("/etc/shells")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return out
+}
+
+// shellPath returns a usable interactive shell for the remote terminal.
+// Never returns nologin/false — those are valid passwd shells for service
+// accounts but must not back an operator PTY.
+func shellPath() string {
+	if runtime.GOOS == "windows" {
+		if c := os.Getenv("COMSPEC"); c != "" {
+			return c
+		}
+		return "cmd.exe"
+	}
+	var candidates []string
+	if sh := strings.TrimSpace(os.Getenv("SHELL")); sh != "" {
+		candidates = append(candidates, sh)
+	}
+	if sh := passwdShellForUID(os.Getuid()); sh != "" {
+		candidates = append(candidates, sh)
+	}
+	candidates = append(candidates, shellsFromEtcShells()...)
+	candidates = append(candidates,
+		"/bin/bash", "/usr/bin/bash",
+		"/bin/zsh", "/usr/bin/zsh",
+		"/bin/sh", "/usr/bin/sh",
+		"/bin/ash", "/bin/ksh", "/usr/bin/ksh",
+	)
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] || isNonInteractiveShell(c) || !shellExists(c) {
+			continue
+		}
+		seen[c] = true
+		return c
+	}
 	return "/bin/sh"
+}
+
+// setEnvKey replaces or appends KEY=value in env.
+func setEnvKey(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 // buildShellEnv returns a full environment for the spawned shell, filling in
@@ -826,8 +927,9 @@ func shellPath() string {
 func buildShellEnv() []string {
 	env := os.Environ()
 	has := func(key string) bool {
+		prefix := key + "="
 		for _, e := range env {
-			if len(e) > len(key)+1 && e[:len(key)+1] == key+"=" {
+			if strings.HasPrefix(e, prefix) {
 				return true
 			}
 		}
@@ -838,41 +940,20 @@ func buildShellEnv() []string {
 	// the agent's inherited HOME (from systemd, sudo, etc.) is often wrong
 	// (e.g. /opt/AIOps-agent). Login shell "cd $HOME" depends on this value.
 	if runtime.GOOS != "windows" {
-		homeSet := false
 		if h := userHomeDir(); h != "" {
-			// Replace or append HOME=
-			for i, e := range env {
-				if len(e) > 5 && e[:5] == "HOME=" {
-					env[i] = "HOME=" + h
-					homeSet = true
-					break
-				}
-			}
-			if !homeSet {
-				env = append(env, "HOME="+h)
-			}
+			env = setEnvKey(env, "HOME", h)
 		}
 		// Also force USER / LOGNAME to match.
 		if u, err := user.Current(); err == nil && u.Username != "" {
-			for i, e := range env {
-				if strings.HasPrefix(e, "USER=") {
-					env[i] = "USER=" + u.Username
-				} else if strings.HasPrefix(e, "LOGNAME=") {
-					env[i] = "LOGNAME=" + u.Username
-				}
-			}
+			env = setEnvKey(env, "USER", u.Username)
+			env = setEnvKey(env, "LOGNAME", u.Username)
 		} else if os.Getuid() == 0 {
-			for i, e := range env {
-				if strings.HasPrefix(e, "USER=") {
-					env[i] = "USER=root"
-				} else if strings.HasPrefix(e, "LOGNAME=") {
-					env[i] = "LOGNAME=root"
-				}
-			}
+			env = setEnvKey(env, "USER", "root")
+			env = setEnvKey(env, "LOGNAME", "root")
 		}
-	}
-	if !has("SHELL") {
-		env = append(env, "SHELL="+shellPath())
+		// Always overwrite SHELL: systemd injects the passwd shell for User=,
+		// which is /sbin/nologin for the hardened "aiops" service account.
+		env = setEnvKey(env, "SHELL", shellPath())
 	}
 	if !has("PATH") {
 		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
