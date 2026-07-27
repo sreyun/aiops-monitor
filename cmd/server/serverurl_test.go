@@ -64,6 +64,33 @@ func TestServerURLPublicURLOverride(t *testing.T) {
 	}
 }
 
+func TestServerURLUpgradesHTTPPublicURLWhenPanelIsHTTPS(t *testing.T) {
+	t.Setenv("AIOPS_PUBLIC_URL", "http://aiops.example.com")
+	srv, _ := newTestServer(t)
+	srv.cfg.mu.Lock()
+	srv.cfg.cfg.TrustProxy = true
+	srv.cfg.mu.Unlock()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/install/info", nil)
+	req.Host = "172.18.0.4:8529"
+	req.Header.Set("X-Forwarded-Host", "aiops.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	if got := srv.serverURL(req); got != "https://aiops.example.com" {
+		t.Fatalf("expected https install URL, got %q", got)
+	}
+}
+
+func TestPreferHTTPSPublicBase(t *testing.T) {
+	if got := preferHTTPSPublicBase("http://aiops.example.com"); got != "https://aiops.example.com" {
+		t.Fatalf("got %q", got)
+	}
+	if got := preferHTTPSPublicBase("http://192.168.1.10:8529"); got != "http://192.168.1.10:8529" {
+		t.Fatalf("lab port must stay http: %q", got)
+	}
+	if got := preferHTTPSPublicBase("https://aiops.example.com"); got != "https://aiops.example.com" {
+		t.Fatalf("already https: %q", got)
+	}
+}
+
 func TestFirstForwardedValue(t *testing.T) {
 	cases := map[string]string{
 		"":                       "",

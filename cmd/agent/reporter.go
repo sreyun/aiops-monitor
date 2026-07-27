@@ -342,12 +342,9 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 			server:    s.Server,
 			token:     s.Token,
 			tokenFile: tokenFile,
-			httpc: &http.Client{
-				Timeout:   30 * time.Second, // raised from 8s: gzip + multi-disk reports need more headroom
-				Transport: reportTransport,
-			},
-			bo: newBackoff(1*time.Second, 60*time.Second),
-			cb: newCircuitBreaker(8, 15*time.Second), // open after 8 consecutive failures, cooldown 15s — tuned for external networks where transient errors are common
+			httpc:     newAgentHTTPClient(30 * time.Second),
+			bo:        newBackoff(1*time.Second, 60*time.Second),
+			cb:        newCircuitBreaker(8, 15*time.Second), // open after 8 consecutive failures, cooldown 15s — tuned for external networks where transient errors are common
 		}
 		targets[i].refreshToken()
 	}
@@ -361,7 +358,7 @@ func NewAgent(servers []ServerConfig, reportInterval, pluginInterval time.Durati
 		pluginInterval: pluginInterval,
 		collector:      collector,
 		plugins:        plugins,
-		httpc:          &http.Client{Timeout: 30 * time.Second, Transport: reportTransport},
+		httpc:          newAgentHTTPClient(30 * time.Second),
 		latestCustom:   map[string]float64{},
 		identity: shared.Report{
 			HostID:       hostID,

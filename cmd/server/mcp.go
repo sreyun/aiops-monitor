@@ -30,6 +30,9 @@ var mcpReadonlyTools = map[string]bool{
 	"render_chart": true, "query_metric_range": true, "query_promql_range": true,
 	"show_instant_stat": true, "analyze_metric_trend": true,
 	"list_dashboards": true, "get_dashboard": true,
+	"list_dashboard_panels": true, "query_dashboard_panel": true,
+	"list_ui_views": true, "navigate_ui": true,
+	"query_security_posture": true,
 }
 
 type jsonRPCReq struct {
@@ -84,6 +87,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if s.aiGov != nil {
 		if ok, used, lim := s.aiGov.checkAndIncrMCPRate(mcpTokenFingerprint(tok)+":"+tokName, limit); !ok {
 			w.Header().Set("Retry-After", "60")
+			s.autoDefendOnMCPAbuse(tokName)
 			http.Error(w, "MCP rate limit exceeded ("+itoa(used)+"/"+itoa(lim)+" per min)", http.StatusTooManyRequests)
 			return
 		}

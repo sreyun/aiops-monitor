@@ -45,6 +45,15 @@ func buildServerTLS(skipVerify bool, caCertPath string) *tls.Config {
 // race-free. A no-op unless a CA cert or skip-verify is configured (default:
 // standard verification against the system trust store).
 func configureServerTLS(skipVerify bool, caCertPath string) {
+	// Always attach POST-preserving redirects — independent of TLS options.
+	applyAgentRedirectPolicy(logCollectHTTP)
+	applyAgentRedirectPolicy(termWaitHTTP)
+	applyAgentRedirectPolicy(forwardWaitHTTP)
+	applyAgentRedirectPolicy(relayClient)
+	if termHTTP != nil {
+		applyAgentRedirectPolicy(termHTTP)
+	}
+
 	if !skipVerify && caCertPath == "" {
 		return
 	}
