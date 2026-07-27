@@ -3171,6 +3171,19 @@
               <button class="btn sm" id="aiChatTestBtn" type="button" data-i18n="sre.ai_test_chat">测试对话模型</button>
             </div>
             <p class="ai-footnote">未启用时使用内置启发式引擎。填好 Endpoint + Key 后可拉取可用模型，也可手动输入。</p>
+
+            <div class="ai-section-block" style="margin-top:18px">
+              <div class="ai-section-label">语音输入 / 播报（可选）</div>
+              <p class="ai-footnote" style="margin-top:0">默认使用浏览器/系统语音。配置 OpenAI 兼容 STT/TTS 后，可优先走云端模型（手机端也可经同一代理）。Endpoint / Key 留空则复用上方 Provider。</p>
+              <div class="field"><label class="switch"><input type="checkbox" id="speechPreferCloud"> <span>优先使用云端语音模型</span></label></div>
+              <div class="field"><label>语音 Endpoint</label><input type="text" id="speechEndpoint" placeholder="留空=复用 Provider（自动取 /v1 根）"></div>
+              <div class="field"><label>语音 API Key</label><input type="password" id="speechKey" autocomplete="off" placeholder="留空=复用 Provider API Key"></div>
+              <div class="grid2" style="align-items:end">
+                <div class="field"><label>STT 识别模型</label><input type="text" id="speechSTTModel" placeholder="whisper-1 / gpt-4o-mini-transcribe"></div>
+                <div class="field"><label>TTS 播报模型</label><input type="text" id="speechTTSModel" placeholder="tts-1 / gpt-4o-mini-tts"></div>
+              </div>
+              <div class="field"><label>TTS 音色</label><input type="text" id="speechTTSVoice" placeholder="alloy / nova / shimmer / sage"></div>
+            </div>
           </div>
         </section>
 
@@ -3387,6 +3400,12 @@
       <div id="aiChatLog" class="ai-chat-log"></div>
       <button id="aiChatScrollBtn" class="ai-scroll-btn" type="button" title="回到底部" style="display:none">↓</button>
       <div id="aiChatAttach" class="ai-chat-attach" style="display:none"></div>
+      <div class="mask" id="aiAttachPreviewMask" data-close style="z-index:12000">
+        <div class="modal ai-attach-preview-modal" style="max-width:860px;width:92vw">
+          <div class="modal-head"><h3 id="aiAttachPreviewTitle">附件预览</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
+          <div class="modal-body" id="aiAttachPreviewBody" style="max-height:70vh;overflow:auto"></div>
+        </div>
+      </div>
       <div class="ai-chat-input">
         <div class="ai-composer-tools">
           <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档" aria-label="上传附件">📎</button>

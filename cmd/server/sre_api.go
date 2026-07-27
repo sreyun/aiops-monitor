@@ -1336,6 +1336,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if c.WeKnoraAPIKey != "" {
 		c.WeKnoraAPIKey = "****"
 	}
+	if c.SpeechAPIKey != "" {
+		c.SpeechAPIKey = "****"
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 
