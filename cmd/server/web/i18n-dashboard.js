@@ -1800,6 +1800,7 @@
   "form.search_host": "搜索主机名 / IP / ID / 系统 / 分组\u2026",
   "filter.by_status": "按状态筛选",
   "filter.all_hosts": "全部主机",
+  "sort.by_ip": "按 IP",
   "sort.by_name": "按名称",
   "sort.by_cpu": "按 CPU",
   "sort.by_mem": "按内存",

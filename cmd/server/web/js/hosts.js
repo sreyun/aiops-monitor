@@ -738,6 +738,30 @@ function bindHostsToolbarOnce() {
   });
 }
 
+/** Sort key for host IP: IPv4 numeric → IPv6 → other → empty. */
+function hostIPSortKey(ip) {
+  const s = String(ip || "").trim();
+  if (!s) return { family: 9, key: "" };
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (m) {
+    const parts = [+m[1], +m[2], +m[3], +m[4]];
+    if (parts.every(n => n >= 0 && n <= 255)) {
+      return { family: 4, key: parts.map(n => String(n).padStart(3, "0")).join(".") };
+    }
+  }
+  if (s.includes(":")) return { family: 6, key: s.toLowerCase() };
+  return { family: 8, key: s.toLowerCase() };
+}
+
+function compareHostsByIP(a, b) {
+  const ka = hostIPSortKey(a && a.ip);
+  const kb = hostIPSortKey(b && b.ip);
+  if (ka.family !== kb.family) return ka.family - kb.family;
+  if (ka.key < kb.key) return -1;
+  if (ka.key > kb.key) return 1;
+  return String((a && (a.hostname || a.id)) || "").localeCompare(String((b && (b.hostname || b.id)) || ""));
+}
+
 function renderHosts(hosts) {
   // Keep LAST_HOSTS / _cachedHosts / HOST_META coherent for Automation & other pages.
   if (typeof syncHostCache === "function") syncHostCache(hosts);
@@ -802,8 +826,11 @@ function renderHosts(hosts) {
     shown.sort((a, b) => (b.latest?.mem_percent || 0) - (a.latest?.mem_percent || 0));
   } else if (HOST_SORT === "recent") {
     shown.sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
-  } else {
+  } else if (HOST_SORT === "name") {
     shown.sort((a, b) => (a.hostname || a.id).localeCompare(b.hostname || b.id));
+  } else {
+    // Default: IP ascending (card + list). Numeric IPv4; IPv6 after; empty last.
+    shown.sort(compareHostsByIP);
   }
 
   if (countEl) countEl.textContent = shown.length;
