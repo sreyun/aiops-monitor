@@ -3370,6 +3370,13 @@ async function openAIConfig(){
     if($("aiDailyQuota")) $("aiDailyQuota").value=c.daily_quota_per_user||0;
     if($("aiWriteToolsApproval")) $("aiWriteToolsApproval").checked=c.write_tools_require_approval!==false;
     if($("aiRedactSensitive")) $("aiRedactSensitive").checked=!!c.redact_sensitive_fields;
+    if($("speechPreferCloud")) $("speechPreferCloud").checked=!!c.speech_prefer_cloud;
+    if($("speechEndpoint")) $("speechEndpoint").value=c.speech_endpoint||"";
+    if($("speechKey")) $("speechKey").value=c.speech_api_key||"";
+    if($("speechSTTModel")) $("speechSTTModel").value=c.speech_stt_model||"";
+    if($("speechTTSModel")) $("speechTTSModel").value=c.speech_tts_model||"";
+    if($("speechTTSVoice")) $("speechTTSVoice").value=c.speech_tts_voice||"";
+    AI_SPEECH_STATUS={prefer:!!c.speech_prefer_cloud,stt:!!(c.speech_stt_model||"").trim(),tts:!!(c.speech_tts_model||"").trim()};
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
     updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary(); updateWeKnoraCardSummary();
     // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
@@ -3491,9 +3498,18 @@ async function saveAIConfig(){
     allow_unverified_ai_output_learning:$("allowUnverifiedAIOutputLearning")?.checked||false,
     daily_quota_per_user:$("aiDailyQuota")? (parseInt($("aiDailyQuota").value,10)||0) : 0,
     write_tools_require_approval:$("aiWriteToolsApproval")? !!$("aiWriteToolsApproval").checked : false,
-    redact_sensitive_fields:$("aiRedactSensitive")? !!$("aiRedactSensitive").checked : false};
+    redact_sensitive_fields:$("aiRedactSensitive")? !!$("aiRedactSensitive").checked : false,
+    speech_prefer_cloud:$("speechPreferCloud")? !!$("speechPreferCloud").checked : false,
+    speech_endpoint:($("speechEndpoint")?.value||"").trim(),
+    speech_api_key:$("speechKey")?.value||"",
+    speech_stt_model:($("speechSTTModel")?.value||"").trim(),
+    speech_tts_model:($("speechTTSModel")?.value||"").trim(),
+    speech_tts_voice:($("speechTTSVoice")?.value||"").trim()};
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(r.ok){ $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(I18N.t("toast.save_failed","保存失败"),"err");
+  if(r.ok){
+    AI_SPEECH_STATUS={prefer:!!body.speech_prefer_cloud,stt:!!body.speech_stt_model,tts:!!body.speech_tts_model};
+    $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok");
+  } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
 // AI 对话模型连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
 let _aiTestBusy=false;
@@ -3768,7 +3784,18 @@ function renderAIMarkdown(raw){
     return "SNTLCB"+(blocks.length-1)+"SNTL";
   });
   t=esc(t); // 2) 转义 HTML，杜绝注入
-  t=t.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g,"$1"); // 3) 链接 → 仅保留文字（聊天气泡不放裸链接）
+  // 3) Markdown 链接：看板协议 / http(s) 可点；其它仅保留文字
+  t=t.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g,(m,label,url)=>{
+    const u=String(url||"").trim();
+    const dash=u.match(/^aiops:\/\/dashboard\/([^/?#\s]+)$/i) || u.match(/^#\/?(?:dashboards?|board)\/([^/?#\s]+)$/i);
+    if(dash){
+      return `<a href="#" class="ai-dash-link" data-dash="${esc(decodeURIComponent(dash[1]))}" title="${I18N.t("sre.open_dashboard","打开看板")}">${label}</a>`;
+    }
+    if(/^https?:\/\//i.test(u)){
+      return `<a href="${esc(u)}" class="ai-ext-link" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    }
+    return label;
+  });
   t=t.replace(/`([^`\n]+)`/g,"<code>$1</code>"); // 行内代码（内容已转义）
   t=t.replace(/\*\*([^*\n]+)\*\*/g,"<strong>$1</strong>"); // 4) 加粗 / 斜体
   t=t.replace(/__([^_\n]+)__/g,"<strong>$1</strong>");
@@ -3807,15 +3834,55 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板制作/优化、诊断与安全加固、指标日志告警排查、RAG 知识库、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">看板制作</span><span class="ai-cap-chip">看板优化</span><span class="ai-cap-chip">AI 诊断</span><span class="ai-cap-chip">安全加固</span><span class="ai-cap-chip">RAG</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板制作/优化、趋势图表与指标下钻、诊断与安全加固、指标日志告警排查、RAG 知识库、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">趋势图表</span><span class="ai-cap-chip">指标下钻</span><span class="ai-cap-chip">看板制作</span><span class="ai-cap-chip">AI 诊断</span><span class="ai-cap-chip">安全加固</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 
+function aiChatActionKey(a){
+  return (a.type||"")+"|"+(a.id||"")+"|"+(a.title||"")+"|"+(a.label||"");
+}
+function renderAIChatWidgets(actions){
+  if(!actions||!actions.length) return "";
+  const seen=new Set();
+  let html="";
+  for(const a of actions){
+    if(!a||!a.type) continue;
+    const key=aiChatActionKey(a);
+    if(seen.has(key)) continue;
+    seen.add(key);
+    if(a.type==="show_chart"&&a.chart){
+      const cid="aiChart_"+(a.id||key.replace(/\|/g,"_"));
+      html+=`<div class="ai-chart-card" data-ai-chart="${esc(a.id||"")}">
+        <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"趋势图")}</span></div>
+        <div class="ai-chart-wrap"><canvas id="${cid}" height="210"></canvas></div>
+      </div>`;
+    } else if(a.type==="show_stat"){
+      const unit=a.unit||"";
+      const val=Number(a.value);
+      const thr=a.thresholds||{};
+      let tone="ok";
+      if(Number.isFinite(val)){
+        if(thr.crit!=null && val>=Number(thr.crit)) tone="crit";
+        else if(thr.warn!=null && val>=Number(thr.warn)) tone="warn";
+      }
+      const sparkVals=Array.isArray(a.sparkline)?a.sparkline.map(p=>Array.isArray(p)?Number(p[1]):Number(p)).filter(n=>Number.isFinite(n)):[];
+      const spark=typeof svgSparkline==="function"&&sparkVals.length>1?svgSparkline(sparkVals, tone==="crit"?"#ef4d5a":(tone==="warn"?"#f59e0b":"#4c8dff")):"";
+      html+=`<div class="ai-stat-card ${tone}">
+        <div class="ai-stat-label">${esc(a.title||a.label||"指标")}</div>
+        <div class="ai-stat-value">${Number.isFinite(val)?val.toFixed(unit==="%"||unit===""?1:2):"—"}<span class="ai-stat-unit">${esc(unit)}</span></div>
+        ${spark?`<div class="ai-stat-spark">${spark}</div>`:""}
+      </div>`;
+    }
+  }
+  return html;
+}
 function renderAIChatActions(actions){
   if(!actions||!actions.length) return "";
   const seen=new Set();
   const items=[];
   for(const a of actions){
     if(!a||!a.type) continue;
-    const key=a.type+"|"+(a.id||a.title||a.label||"");
+    // 图表/指标卡已在 widgets 区渲染，按钮区只留可点击动作
+    if(a.type==="show_chart"||a.type==="show_stat") continue;
+    const key=aiChatActionKey(a);
     if(seen.has(key)) continue;
     seen.add(key);
     items.push(a);
@@ -3826,42 +3893,137 @@ function renderAIChatActions(actions){
     return `<button type="button" class="ai-action-card" data-ai-act="${i}">${label}</button>`;
   }).join("")+`</div>`;
 }
+function bindAIChatWidgets(root,actions){
+  if(!root||!actions||!actions.length||typeof createChart!=="function") return;
+  for(const a of actions){
+    if(!a||a.type!=="show_chart"||!a.chart) continue;
+    const cid="aiChart_"+(a.id||aiChatActionKey(a).replace(/\|/g,"_"));
+    const canvas=$(cid) || root.querySelector("#"+CSS.escape(cid));
+    if(!canvas||canvas.dataset.chartBound==="1") continue;
+    const samples=Array.isArray(a.chart.samples)?a.chart.samples:[];
+    const series=(Array.isArray(a.chart.series)?a.chart.series:[]).map(s=>({
+      key:s.key, label:s.label||s.key, color:s.color||"#4c8dff",
+      fmt: v=> Number.isFinite(v)?(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)): "-"
+    }));
+    if(!samples.length||!series.length) continue;
+    try{
+      createChart(cid, samples, series,
+        a.chart.y_min!=null?Number(a.chart.y_min):null,
+        a.chart.y_max!=null?Number(a.chart.y_max):null,
+        { title:"", cssH:200, legendMode:"dash", noEntrance:true });
+      canvas.dataset.chartBound="1";
+    }catch(e){ /* ignore chart paint errors */ }
+  }
+}
+async function handleAIChatAction(a){
+  if(!a||!a.type) return;
+  if(a.type==="open_dashboard"&&a.id){
+    try{
+      if(typeof switchView==="function") switchView("dashboards");
+      if(typeof openDashboard==="function") await openDashboard(a.id);
+      const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
+      if(typeof toast==="function") toast(I18N.t("sre.opened_dashboard","已打开看板"),"ok");
+    }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+    return;
+  }
+  if(a.type==="export_report"){
+    await exportAIChatReport(a.title||"AI 分析报告", a.body||"");
+    return;
+  }
+  if(a.type==="drill_down"){
+    const target=a.target||"";
+    if(target==="host_detail"&&a.host_id){
+      try{
+        const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
+        if(typeof switchView==="function") switchView("hosts");
+        if(typeof openDetail==="function") await openDetail(a.host_id, a.host_name||a.host_id);
+        if(typeof toast==="function") toast(I18N.t("sre.opened_host","已打开主机详情"),"ok");
+      }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+      return;
+    }
+    if(target==="dashboard"&&(a.dashboard_id||a.id)){
+      return handleAIChatAction({type:"open_dashboard",id:a.dashboard_id||a.id,label:a.label});
+    }
+    if(target==="prompt"&&a.prompt){
+      const inp=$("aiChatInput"); if(inp){ inp.value=String(a.prompt); autoGrowAIInput({target:inp}); }
+      sendAIChat();
+      return;
+    }
+    if(a.prompt){
+      const inp=$("aiChatInput"); if(inp){ inp.value=String(a.prompt); autoGrowAIInput({target:inp}); }
+      sendAIChat();
+    }
+  }
+}
 function bindAIChatActions(root,actions){
-  if(!root||!actions||!actions.length) return;
+  if(!root) return;
+  const clickable=(actions||[]).filter(a=>a&&a.type&&a.type!=="show_chart"&&a.type!=="show_stat");
   root.querySelectorAll("[data-ai-act]").forEach(btn=>{
     btn.onclick=async()=>{
-      const a=actions[Number(btn.dataset.aiAct)];
+      const a=clickable[Number(btn.dataset.aiAct)];
       if(!a) return;
-      if(a.type==="open_dashboard"&&a.id){
-        try{
-          if(typeof switchView==="function") switchView("dashboards");
-          if(typeof openDashboard==="function") await openDashboard(a.id);
-          const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
-          if(typeof toast==="function") toast(I18N.t("sre.opened_dashboard","已打开看板"),"ok");
-        }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
-        return;
-      }
-      if(a.type==="export_report"){
-        if(typeof exportModel!=="function"){ if(typeof toast==="function") toast("导出组件不可用","err"); return; }
-        const title=a.title||"AI 分析报告";
-        const body=a.body||"";
-        const model={
-          title,
-          subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
-          summaryTitle:"报告信息",
-          meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()]],
-          narrativeTitle:"AI 分析与建议",
-          narrative:body,
-          sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(body):[],
-          footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
-        };
-        try{
-          const ok=await exportModel(model,"markdown",title);
-          if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
-          else if(typeof toast==="function") toast(I18N.t("sre.exported","已导出"),"ok");
-        }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
-      }
+      await handleAIChatAction(a);
     };
+  });
+  bindAIDashLinks(root);
+  bindAIChatWidgets(root, actions||[]);
+}
+function bindAIDashLinks(root){
+  if(!root) return;
+  root.querySelectorAll("a.ai-dash-link[data-dash]").forEach(a=>{
+    if(a.dataset.bound) return;
+    a.dataset.bound="1";
+    a.addEventListener("click",async(ev)=>{
+      ev.preventDefault();
+      const id=a.getAttribute("data-dash");
+      if(!id) return;
+      try{
+        if(typeof switchView==="function") switchView("dashboards");
+        if(typeof openDashboard==="function") await openDashboard(id);
+        const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
+        if(typeof toast==="function") toast(I18N.t("sre.opened_dashboard","已打开看板"),"ok");
+      }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+    });
+  });
+}
+async function exportAIChatReport(title, body, fmt){
+  if(typeof exportModel!=="function"){ if(typeof toast==="function") toast("导出组件不可用","err"); return; }
+  const format=fmt||await pickAIExportFormat();
+  if(!format) return;
+  const model={
+    title: title||I18N.t("sre.chat_export_title","AI 对话报告"),
+    subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
+    summaryTitle:"报告信息",
+    meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()],["格式",format]],
+    narrativeTitle:"AI 分析与建议",
+    narrative:body||"",
+    sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(body||""):[],
+    footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
+  };
+  try{
+    const ok=await exportModel(model,format,title||"AI对话报告");
+    if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
+    else if(typeof toast==="function") toast(I18N.t("sre.exported","已导出"),"ok");
+  }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+}
+function pickAIExportFormat(){
+  return new Promise(resolve=>{
+    const formats=[
+      {id:"markdown",label:"Markdown (.md)"},
+      {id:"html",label:"HTML"},
+      {id:"word",label:"Word (.docx)"},
+      {id:"pdf",label:"PDF"},
+      {id:"excel",label:"Excel (.xlsx)"}
+    ];
+    const wrap=document.createElement("div");
+    wrap.className="mask show";
+    wrap.style.zIndex="13000";
+    wrap.innerHTML=`<div class="modal" style="max-width:420px;width:90vw"><div class="modal-head"><h3>${I18N.t("sre.export_format","选择导出格式")}</h3><button class="btn ghost close" type="button">✕</button></div><div class="modal-body" style="display:flex;flex-direction:column;gap:8px">${formats.map(f=>`<button type="button" class="btn" data-fmt="${f.id}" style="justify-content:flex-start">${f.label}</button>`).join("")}</div></div>`;
+    const done=(v)=>{ try{wrap.remove();}catch(e){} resolve(v); };
+    wrap.querySelector(".close").onclick=()=>done(null);
+    wrap.addEventListener("click",e=>{ if(e.target===wrap) done(null); });
+    wrap.querySelectorAll("[data-fmt]").forEach(b=>b.onclick=()=>done(b.getAttribute("data-fmt")));
+    document.body.appendChild(wrap);
   });
 }
 function openAIChat(){
@@ -3936,7 +4098,7 @@ async function switchAISession(id){
             : `<div class="ai-chat-msg ai">${renderAIMarkdown(filterDisplayContent(m.content||""))}</div>`
           ).join("")
         : `<div class="ai-chat-msg sys">${I18N.t("sre.empty_session","（空会话）")}</div>`;
-      log.querySelectorAll(".ai-chat-msg.ai").forEach(d=>addCopyTool(d,d.textContent));
+      log.querySelectorAll(".ai-chat-msg.ai").forEach(d=>{ addCopyTool(d,d.textContent); bindAIDashLinks(d); });
       log.scrollTop=log.scrollHeight;
     }
   }catch(e){ if(typeof toast==="function") toast(I18N.t("sre.load_session_failed","加载会话失败")+"："+e,"err"); }
@@ -4021,8 +4183,10 @@ async function sendAIChat(){
     let streamRAF=null;
     const paintStream=()=>{
       if(!pending) return;
+      const chartPending=(uiActions||[]).some(a=>a&&(a.type==="show_chart"||a.type==="show_stat"));
       pending.innerHTML=renderReasoningBlock(reasoning,true)+toolTraceHTML()
         +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>"
+        +(chartPending?'<div class="ai-chart-pending">📊 图表/指标卡生成中…</div>':"")
         +renderAIChatActions(uiActions);
       bindAIChatActions(pending,uiActions);
     };
@@ -4033,8 +4197,13 @@ async function sendAIChat(){
     const paintFinal=()=>{
       if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; }
       if(pending){
-        pending.innerHTML=renderReasoningBlock(reasoning,false)+toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"))+renderAIChatActions(uiActions);
+        pending.innerHTML=renderReasoningBlock(reasoning,false)+toolTraceHTML()
+          +(renderAIMarkdown(answer)||(toolStates.length?"":"…"))
+          +renderAIChatWidgets(uiActions)
+          +renderAIChatActions(uiActions);
         bindAIChatActions(pending,uiActions);
+        bindAIDashLinks(pending);
+        requestAnimationFrame(()=>bindAIChatWidgets(pending,uiActions));
       }
     };
     await readSSEStream(r,
@@ -4154,23 +4323,7 @@ function addCopyTool(div,rawText,opts){
   bar.appendChild(btn);
   if(opts.export!==false && rawText && typeof exportModel==="function"){
     const exp=document.createElement("button"); exp.textContent=I18N.t("sre.export","导出"); exp.title=I18N.t("sre.export_reply","导出本条回复");
-    exp.onclick=async()=>{
-      const model={
-        title:I18N.t("sre.chat_export_title","AI 对话报告"),
-        subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
-        summaryTitle:"报告信息",
-        meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()]],
-        narrativeTitle:"AI 分析与建议",
-        narrative:rawText,
-        sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(rawText):[],
-        footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
-      };
-      try{
-        const ok=await exportModel(model,"markdown","AI对话报告");
-        if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
-        else if(typeof toast==="function") toast(I18N.t("sre.exported","已导出"),"ok");
-      }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
-    };
+    exp.onclick=()=>exportAIChatReport(I18N.t("sre.chat_export_title","AI 对话报告"), rawText);
     bar.appendChild(exp);
   }
   if(opts.regenerate!==false){
@@ -4230,13 +4383,61 @@ function regenerateAIChat(){
   const inp=$("aiChatInput"); if(inp){ inp.value=q; if(typeof autoGrowAIInput==="function") autoGrowAIInput(); }
   sendAIChat();
 }
-// 附件预览渲染（图片/文件 chip，可删除）
+// 附件预览渲染（图片缩略图 / 文档 chip，可预览与删除）
 function renderAttachments(){
   const box=$("aiChatAttach"); if(!box) return;
   if(!AI_ATTACHMENTS.length){ box.innerHTML=""; box.style.display="none"; return; }
   box.style.display="flex";
-  box.innerHTML=AI_ATTACHMENTS.map((a,i)=>`<span class="ai-attach-chip">${a.kind==="image"?"🖼️":"📄"} ${esc(a.name)}<button data-att="${i}" title="${I18N.t("sre.remove","移除")}">✕</button></span>`).join("");
-  box.querySelectorAll("[data-att]").forEach(b=>b.onclick=()=>{ AI_ATTACHMENTS.splice(parseInt(b.dataset.att),1); renderAttachments(); });
+  box.innerHTML=AI_ATTACHMENTS.map((a,i)=>{
+    if(a.kind==="image"&&a.data){
+      const src=`data:${a.mime||"image/png"};base64,${a.data}`;
+      return `<span class="ai-attach-chip ai-attach-image" title="${esc(a.name)}"><img src="${src}" alt="${esc(a.name)}" data-att-preview="${i}"><span class="ai-attach-name" data-att-preview="${i}">${esc(a.name)}</span><button data-att="${i}" title="${I18N.t("sre.remove","移除")}">✕</button></span>`;
+    }
+    const icon=/\.pdf$/i.test(a.name)?"📕":(/\.(docx?|xlsx?)$/i.test(a.name)?"📘":"📄");
+    const status=a.text===I18N.t("sre.parsing","（解析中…）")||a.text===I18N.t("sre.fetching_web","（抓取中…）")?" parsing":"";
+    return `<span class="ai-attach-chip${status}" title="${esc(a.name)}"><button type="button" class="ai-attach-open" data-att-preview="${i}">${icon} ${esc(a.name)}</button><button data-att="${i}" title="${I18N.t("sre.remove","移除")}">✕</button></span>`;
+  }).join("");
+  box.querySelectorAll("[data-att]").forEach(b=>b.onclick=(ev)=>{ ev.stopPropagation(); AI_ATTACHMENTS.splice(parseInt(b.dataset.att),1); renderAttachments(); });
+  box.querySelectorAll("[data-att-preview]").forEach(el=>{
+    el.onclick=(ev)=>{
+      ev.preventDefault();
+      const idx=parseInt(el.getAttribute("data-att-preview"),10);
+      previewAIAttachment(AI_ATTACHMENTS[idx]);
+    };
+  });
+}
+function previewAIAttachment(a){
+  if(!a) return;
+  const mask=$("aiAttachPreviewMask"), title=$("aiAttachPreviewTitle"), body=$("aiAttachPreviewBody");
+  if(!mask||!body){
+    // 兜底：无预览弹层时用新窗口
+    if(a.kind==="image"&&a.data){
+      const w=window.open(); if(w) w.document.write(`<img src="data:${a.mime||"image/png"};base64,${a.data}" style="max-width:100%">`);
+    } else if(a.data && /\.pdf$/i.test(a.name||"")){
+      const bin=atob(a.data); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+      const url=URL.createObjectURL(new Blob([u8],{type:"application/pdf"}));
+      window.open(url,"_blank");
+    } else if(a.text){
+      const w=window.open(); if(w){ w.document.title=a.name||"preview"; w.document.body.innerHTML=`<pre style="white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace;padding:16px">${esc(a.text)}</pre>`; }
+    }
+    return;
+  }
+  if(title) title.textContent=a.name||I18N.t("sre.attachment_preview","附件预览");
+  if(a.kind==="image"&&a.data){
+    body.innerHTML=`<img class="ai-attach-lightbox" src="data:${a.mime||"image/png"};base64,${a.data}" alt="${esc(a.name||"")}">`;
+  } else if(a.data && /\.pdf$/i.test(a.name||"")){
+    try{
+      const bin=atob(a.data); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+      const url=URL.createObjectURL(new Blob([u8],{type:"application/pdf"}));
+      body.innerHTML=`<iframe class="ai-attach-pdf" src="${url}" title="${esc(a.name||"pdf")}"></iframe><div class="hint" style="margin-top:8px">下方为解析文本预览：</div><pre class="ai-attach-text">${esc((a.text||"").slice(0,12000))}</pre>`;
+    }catch(e){
+      body.innerHTML=`<pre class="ai-attach-text">${esc(a.text||String(e))}</pre>`;
+    }
+  } else {
+    const note=a.text?"":`<div class="hint">${I18N.t("sre.no_preview_text","暂无可预览文本（文件可能仍在解析）")}</div>`;
+    body.innerHTML=note+`<pre class="ai-attach-text">${esc(a.text||"")}</pre>`;
+  }
+  mask.classList.add("show");
 }
 // 需服务端解析的二进制文档（其余文本文件前端直接读文本）
 const _AI_PARSE_EXT=["docx","xlsx","pdf"];
@@ -4268,13 +4469,13 @@ function parseFileAttachment(f){
   const rd=new FileReader();
   rd.onload=async()=>{
     const s=String(rd.result||""); const c=s.indexOf(","); const b64=c>=0?s.slice(c+1):s;
-    const ph={kind:"file",name:f.name,text:I18N.t("sre.parsing","（解析中…）")};
+    const ph={kind:"file",name:f.name,text:I18N.t("sre.parsing","（解析中…）"),mime:f.type||"",data:b64};
     AI_ATTACHMENTS.push(ph); renderAttachments();
     try{
       const r=await fetch(`${API}/hermes/parse`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:f.name,mime:f.type||"",data:b64})});
       const j=await r.json().catch(()=>({}));
       if(!r.ok||j.error){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}：${(j&&j.error)||r.status}`,"err"); renderAttachments(); return; }
-      ph.text=j.text||""; renderAttachments();
+      ph.text=j.text||""; ph.data=b64; ph.mime=f.type||ph.mime; renderAttachments();
       if(typeof toast==="function") toast(`${I18N.t("sre.parsed_v","已解析")} ${f.name}（${j.chars||0} ${I18N.t("sre.chars_unit","字")}${j.truncated?I18N.t("sre.truncated","，已截断"):""}）`,"ok");
     }catch(e){ AI_ATTACHMENTS=AI_ATTACHMENTS.filter(a=>a!==ph); if(typeof toast==="function") toast(`${I18N.t("sre.parse_v","解析")} ${f.name} ${I18N.t("sre.failed_v","失败")}`,"err"); renderAttachments(); }
   };
@@ -4402,14 +4603,31 @@ safeAddEventListener("aiUndoBtn","click",undoAIChat);
 safeAddEventListener("aiNewChatBtn","click",newAIChat);
 safeAddEventListener("aiSessionSelect","change",e=>switchAISession(e.target.value));
 
-/* ---- Web Speech：语音输入 / 朗读回复 ---- */
-let _aiVoiceRec=null, _aiVoiceOn=false;
-let _aiSpeakBtn=null;
-function toggleAIVoiceInput(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+/* ---- Web Speech：语音输入 / 朗读回复（系统语音 + 可选云端模型） ---- */
+let _aiVoiceRec=null, _aiVoiceOn=false, _aiMediaRec=null, _aiMediaChunks=[], _aiMediaStream=null;
+let _aiSpeakBtn=null, _aiCloudAudio=null;
+let AI_SPEECH_STATUS={prefer:false,stt:false,tts:false};
+async function refreshAISpeechStatus(){
+  try{
+    const r=await fetch(`${API}/ai/speech/status`);
+    if(!r.ok) return;
+    const j=await r.json();
+    AI_SPEECH_STATUS={prefer:!!j.prefer_cloud,stt:!!j.stt_ready,tts:!!j.tts_ready};
+  }catch(e){}
+}
+function useCloudSTT(){ return !!(AI_SPEECH_STATUS.prefer && AI_SPEECH_STATUS.stt); }
+function useCloudTTS(){ return !!(AI_SPEECH_STATUS.prefer && AI_SPEECH_STATUS.tts); }
+
+async function toggleAIVoiceInput(){
   const btn=$("aiChatMicBtn");
-  if(!SR){ toast(I18N.t("sre.voice_unsupported","当前浏览器不支持语音输入（建议 Chrome / Edge）"),"err"); return; }
-  if(_aiVoiceOn && _aiVoiceRec){ try{_aiVoiceRec.stop();}catch(e){} _aiVoiceOn=false; if(btn) btn.classList.remove("active"); return; }
+  if(_aiVoiceOn){ stopAIVoiceInput(); return; }
+  await refreshAISpeechStatus();
+  if(useCloudSTT()){
+    try{ await startCloudVoiceInput(btn); return; }
+    catch(e){ if(typeof toast==="function") toast(I18N.t("sre.cloud_stt_fallback","云端语音不可用，尝试浏览器识别…"),"warn"); }
+  }
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ toast(I18N.t("sre.voice_unsupported","当前浏览器不支持语音输入（建议 Chrome / Edge，或在 AI 设置配置 STT 模型）"),"err"); return; }
   try{
     _aiVoiceRec=new SR();
     _aiVoiceRec.lang="zh-CN";
@@ -4423,12 +4641,48 @@ function toggleAIVoiceInput(){
       }
       const inp=$("aiChatInput"); if(!inp) return;
       if(final){ inp.value=(inp.value?inp.value+" ":"")+final.trim(); autoGrowAIInput({target:inp}); }
-      else if(interim){ /* 预览不写入，避免抖动 */ }
     };
     _aiVoiceRec.onerror=()=>{ _aiVoiceOn=false; if(btn) btn.classList.remove("active"); };
     _aiVoiceRec.onend=()=>{ _aiVoiceOn=false; if(btn) btn.classList.remove("active"); };
     _aiVoiceRec.start(); _aiVoiceOn=true; if(btn) btn.classList.add("active");
   }catch(e){ toast(I18N.t("sre.voice_start_failed","无法启动语音输入"),"err"); }
+}
+function stopAIVoiceInput(){
+  const btn=$("aiChatMicBtn");
+  if(_aiVoiceRec){ try{_aiVoiceRec.stop();}catch(e){} _aiVoiceRec=null; }
+  if(_aiMediaRec && _aiMediaRec.state!=="inactive"){
+    try{ _aiMediaRec.stop(); }catch(e){}
+  } else {
+    _aiVoiceOn=false; if(btn) btn.classList.remove("active");
+    if(_aiMediaStream){ try{_aiMediaStream.getTracks().forEach(t=>t.stop());}catch(e){} _aiMediaStream=null; }
+  }
+}
+async function startCloudVoiceInput(btn){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error("no media");
+  _aiMediaChunks=[];
+  _aiMediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+  const mime=MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"";
+  _aiMediaRec=mime?new MediaRecorder(_aiMediaStream,{mimeType:mime}):new MediaRecorder(_aiMediaStream);
+  _aiMediaRec.ondataavailable=e=>{ if(e.data&&e.data.size) _aiMediaChunks.push(e.data); };
+  _aiMediaRec.onstop=async()=>{
+    _aiVoiceOn=false; if(btn) btn.classList.remove("active");
+    if(_aiMediaStream){ try{_aiMediaStream.getTracks().forEach(t=>t.stop());}catch(e){} _aiMediaStream=null; }
+    const blob=new Blob(_aiMediaChunks,{type:_aiMediaRec.mimeType||"audio/webm"});
+    _aiMediaRec=null; _aiMediaChunks=[];
+    if(!blob.size){ if(typeof toast==="function") toast(I18N.t("sre.voice_empty","未采集到有效音频"),"err"); return; }
+    if(typeof toast==="function") toast(I18N.t("sre.voice_recognizing","正在识别…"),"ok");
+    try{
+      const fd=new FormData();
+      fd.append("file", blob, "speech.webm");
+      const r=await fetch(`${API}/ai/speech/stt`,{method:"POST",body:fd});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||!j.text){ throw new Error(j.error||("HTTP "+r.status)); }
+      const inp=$("aiChatInput"); if(inp){ inp.value=(inp.value?inp.value+" ":"")+String(j.text).trim(); autoGrowAIInput({target:inp}); }
+    }catch(e){ if(typeof toast==="function") toast(I18N.t("sre.voice_stt_failed","语音识别失败")+"："+e,"err"); }
+  };
+  _aiMediaRec.start();
+  _aiVoiceOn=true; if(btn) btn.classList.add("active");
+  if(typeof toast==="function") toast(I18N.t("sre.voice_cloud_listening","云端聆听中，再次点击结束"),"ok");
 }
 
 // 挑选「成熟稳重」的中文女声，明确排除男声；语速/音调在 speakAIText 中配合下调。
@@ -4467,13 +4721,32 @@ function normalizeSpeakText(raw){
     .replace(/\s+/g," ")
     .trim();
 }
-function speakAIText(rawText, btn){
-  if(!window.speechSynthesis){ toast(I18N.t("sre.tts_unsupported","当前浏览器不支持语音朗读"),"err"); return; }
+async function speakAITextCloud(text, btn){
+  if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
+  if(btn){ btn.classList.add("speaking"); btn.textContent=I18N.t("sre.speaking","朗读中…"); _aiSpeakBtn=btn; }
+  const r=await fetch(`${API}/ai/speech/tts`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
+  if(!r.ok){
+    const j=await r.json().catch(()=>({}));
+    throw new Error(j.error||("HTTP "+r.status));
+  }
+  const blob=await r.blob();
+  const url=URL.createObjectURL(blob);
+  const audio=new Audio(url);
+  _aiCloudAudio=audio;
+  const cleanup=()=>{
+    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn.textContent=I18N.t("sre.speak","朗读"); _aiSpeakBtn=null; }
+    try{URL.revokeObjectURL(url);}catch(e){}
+    if(_aiCloudAudio===audio) _aiCloudAudio=null;
+  };
+  audio.onended=audio.onerror=cleanup;
+  await audio.play();
+}
+async function speakAIText(rawText, btn){
   const text=normalizeSpeakText(rawText).slice(0,1600);
   if(!text){ toast(I18N.t("sre.no_ai_reply","暂无可朗读的 AI 回复"),"err"); return; }
-  // 再次点击同一按钮 → 停止
   if(btn && btn.classList.contains("speaking")){
     try{ speechSynthesis.cancel(); }catch(e){}
+    if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
     btn.classList.remove("speaking");
     btn.textContent=I18N.t("sre.speak","朗读");
     _aiSpeakBtn=null;
@@ -4483,9 +4756,16 @@ function speakAIText(rawText, btn){
     b.classList.remove("speaking"); b.textContent=I18N.t("sre.speak","朗读");
   });
   try{ speechSynthesis.cancel(); }catch(e){}
+  if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
+
+  await refreshAISpeechStatus();
+  if(useCloudTTS()){
+    try{ await speakAITextCloud(text, btn); return; }
+    catch(e){ if(typeof toast==="function") toast(I18N.t("sre.cloud_tts_fallback","云端播报失败，改用浏览器朗读"),"warn"); }
+  }
+  if(!window.speechSynthesis){ toast(I18N.t("sre.tts_unsupported","当前浏览器不支持语音朗读"),"err"); return; }
   const u=new SpeechSynthesisUtterance(text);
   u.lang="zh-CN";
-  // 成熟稳重女声：略慢、音调略低（偏高易显幼声）
   u.rate=0.88;
   u.pitch=0.96;
   u.volume=1;
@@ -4499,7 +4779,6 @@ function speakAIText(rawText, btn){
   u.onend=u.onerror=()=>{
     if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn.textContent=I18N.t("sre.speak","朗读"); _aiSpeakBtn=null; }
   };
-  // 部分浏览器 voices 异步加载，稍后再试一次绑定
   const speakNow=()=>speechSynthesis.speak(u);
   if(!voice && speechSynthesis.getVoices().length===0){
     speechSynthesis.onvoiceschanged=()=>{
@@ -4529,6 +4808,7 @@ function speakLastAIReply(){
 if(typeof window!=="undefined" && window.speechSynthesis){
   try{ speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged=()=>{ speechSynthesis.getVoices(); }; }catch(e){}
 }
+refreshAISpeechStatus();
 
 // （原独立的 Sreyun 对话已并入上方统一的「AI 对话」——单窗口即走 Sreyun Agent。）
 

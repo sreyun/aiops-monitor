@@ -164,6 +164,59 @@ func exportReportAction(title, body string) map[string]any {
 	}
 }
 
+func showChartAction(id, label, title string, chart map[string]any, source map[string]any) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "查看图表"
+	}
+	act := map[string]any{
+		"type":  "show_chart",
+		"id":    id,
+		"label": label,
+		"title": title,
+		"chart": chart,
+	}
+	if source != nil {
+		act["source"] = source
+	}
+	return act
+}
+
+func showStatAction(id, label, title string, value float64, unit string, sparkline [][2]float64, thresholds map[string]float64) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "查看指标"
+	}
+	act := map[string]any{
+		"type":  "show_stat",
+		"id":    id,
+		"label": label,
+		"title": title,
+		"value": value,
+		"unit":  unit,
+	}
+	if len(sparkline) > 0 {
+		pts := make([][]float64, 0, len(sparkline))
+		for _, p := range sparkline {
+			pts = append(pts, []float64{p[0], p[1]})
+		}
+		act["sparkline"] = pts
+	}
+	if thresholds != nil {
+		act["thresholds"] = thresholds
+	}
+	return act
+}
+
+func drillDownAction(label, target string, extra map[string]any) map[string]any {
+	if strings.TrimSpace(label) == "" {
+		label = "下钻查看"
+	}
+	act := map[string]any{"type": "drill_down", "label": label, "target": target}
+	for k, v := range extra {
+		act[k] = v
+	}
+	return act
+}
+
 func (h *SreyunCore) execListDashboards(args map[string]any) (string, error) {
 	if h.s == nil || h.s.cfg == nil {
 		return capabilityJSON(capabilityResult{OK: false, Error: "配置不可用"}), nil
@@ -175,13 +228,22 @@ func (h *SreyunCore) execListDashboards(args map[string]any) (string, error) {
 		Panels  int    `json:"panels"`
 		Source  string `json:"data_source,omitempty"`
 		Updated int64  `json:"updated_at,omitempty"`
+		Link    string `json:"link,omitempty"`
 	}
 	out := make([]row, 0, len(list))
+	actions := make([]map[string]any, 0, 12)
 	for _, d := range list {
-		out = append(out, row{ID: d.ID, Name: d.Name, Panels: len(d.Panels), Source: d.DataSource, Updated: d.UpdatedAt})
+		link := "aiops://dashboard/" + d.ID
+		out = append(out, row{ID: d.ID, Name: d.Name, Panels: len(d.Panels), Source: d.DataSource, Updated: d.UpdatedAt, Link: link})
+		if len(actions) < 12 {
+			actions = append(actions, openDashboardAction(d.ID, d.Name))
+		}
 	}
 	sum := fmt.Sprintf("共 %d 张看板", len(out))
-	return capabilityJSON(capabilityResult{OK: true, Summary: sum, Data: out}), nil
+	if len(out) > 0 {
+		sum += "。回复中可用 Markdown 链接 [看板名](aiops://dashboard/{id}) 方便用户一键打开。"
+	}
+	return capabilityJSON(capabilityResult{OK: true, Summary: sum, Data: out, UIActions: actions}), nil
 }
 
 func (h *SreyunCore) execCreateDashboard(args map[string]any) (string, error) {

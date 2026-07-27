@@ -1652,6 +1652,10 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if a.WeKnoraAPIKey == "" || strings.Contains(a.WeKnoraAPIKey, "****") {
 		a.WeKnoraAPIKey = cs.cfg.AI.WeKnoraAPIKey
 	}
+	// 语音 Key：空或脱敏占位时保留原值。
+	if a.SpeechAPIKey == "" || strings.Contains(a.SpeechAPIKey, "****") {
+		a.SpeechAPIKey = cs.cfg.AI.SpeechAPIKey
+	}
 	// AI 配置表单不含这些 Sreyun 开关（由专门流程管理），保存表单时保留其现值，避免被表单清零。
 	a.SreyunEnabled = cs.cfg.AI.SreyunEnabled
 	a.SreyunAutoApprove = cs.cfg.AI.SreyunAutoApprove

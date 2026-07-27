@@ -91,6 +91,15 @@ type AIConfig struct {
 	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
 	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
 	RedactSensitiveFields bool `json:"redact_sensitive_fields,omitempty"`
+	// ---- AI 语音（可选云端 STT/TTS；留空则客户端继续用系统/浏览器语音）----
+	// SpeechEndpoint：OpenAI 兼容音频根路径（如 https://api.openai.com/v1）；留空=复用主 Endpoint 的 /v1 根。
+	SpeechEndpoint string `json:"speech_endpoint,omitempty"`
+	SpeechAPIKey   string `json:"speech_api_key,omitempty"` // 留空=复用主 API Key
+	SpeechSTTModel string `json:"speech_stt_model,omitempty"` // 如 whisper-1 / gpt-4o-mini-transcribe
+	SpeechTTSModel string `json:"speech_tts_model,omitempty"` // 如 tts-1 / gpt-4o-mini-tts
+	SpeechTTSVoice string `json:"speech_tts_voice,omitempty"` // alloy / nova / shimmer …
+	// SpeechPreferCloud：开启后 Web/移动端优先走云端语音（需配置 STT 或 TTS 模型）。
+	SpeechPreferCloud bool `json:"speech_prefer_cloud,omitempty"`
 }
 
 // embedReady reports whether embedding (RAG write/retrieve) can run.
