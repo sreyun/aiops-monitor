@@ -5,6 +5,9 @@ let K8S_TAB = "overview";
 let K8S_SCALE_CTX = null;
 const K8S_FILTER = { q: "", phase: "all" }; // phase: all|running|pending|failed|other
 let K8S_CACHE = { nodes: [], pods: [], deployments: [], events: [] };
+let K8S_RENDER_SEQ = 0;
+let K8S_ABORT = null;
+let K8S_EDIT_ID = ""; // currently editing cluster id ("" = create)
 
 const k8sT = (k, fb) => I18N.t(k, fb);
 
@@ -99,15 +102,66 @@ function k8sWireToolbar(refilter) {
   }
 }
 
+function k8sBeginFetch() {
+  if (K8S_ABORT) {
+    try { K8S_ABORT.abort(); } catch (_) {}
+  }
+  K8S_ABORT = typeof AbortController !== "undefined" ? new AbortController() : null;
+  return ++K8S_RENDER_SEQ;
+}
+
+function k8sIsStale(seq) {
+  return seq !== K8S_RENDER_SEQ;
+}
+
+function k8sIsAbort(err) {
+  return err && (err.name === "AbortError" || /abort/i.test(String(err.message || err)));
+}
+
 async function k8sFetch(path, opts) {
-  const r = await fetch(`${API}${path}`, Object.assign({ credentials: "same-origin" }, opts || {}));
+  opts = Object.assign({}, opts || {});
+  const noAbort = !!opts.noAbort;
+  delete opts.noAbort;
+  const init = Object.assign({ credentials: "same-origin" }, opts);
+  if (!noAbort && !init.signal && K8S_ABORT) init.signal = K8S_ABORT.signal;
+  const r = await fetch(`${API}${path}`, init);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || (`HTTP ${r.status}`));
   return j;
 }
 
+function k8sUnreachableHTML(errMsg) {
+  const tips = [
+    k8sT("k8s.tip_route", "确认本平台所在主机能访问该 API（同一网段 / VPN / 防火墙放行 6443）"),
+    k8sT("k8s.tip_addr", "核对 API Server 地址与端口（例如 https://x.x.x.x:6443）"),
+    k8sT("k8s.tip_tls", "TLS 失败时粘贴正确 CA，或仅在可信内网勾选跳过校验"),
+    k8sT("k8s.tip_token", "Token / kubeconfig 权限需能访问 /version 与命名空间列表"),
+  ];
+  return `<div class="empty-state k8s-empty k8s-unreachable">
+    <div class="sec-empty-ico" aria-hidden="true"></div>
+    <h4>${esc(k8sT("k8s.status_err", "连接失败"))}</h4>
+    <p class="k8s-err-msg">${esc(errMsg || k8sT("k8s.unreachable_generic", "无法连接 Kubernetes API"))}</p>
+    <ul class="k8s-tip-list">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+    <div class="k8s-unreachable-actions">
+      <button type="button" class="btn sm" data-k8s-goto="config">${esc(k8sT("k8s.tab_config", "集群配置"))}</button>
+      <button type="button" class="btn sm primary" data-k8s-goto="retry">${esc(k8sT("common.refresh", "刷新"))}</button>
+    </div>
+  </div>`;
+}
+
+function k8sWireUnreachableActions(panel) {
+  if (!panel) return;
+  panel.querySelectorAll("[data-k8s-goto]").forEach(b => {
+    b.addEventListener("click", () => {
+      const act = b.getAttribute("data-k8s-goto");
+      if (act === "config") switchK8sTab("config");
+      else loadK8sPage();
+    });
+  });
+}
+
 async function loadK8sClusters() {
-  const j = await k8sFetch("/k8s/clusters");
+  const j = await k8sFetch("/k8s/clusters", { noAbort: true });
   K8S_CLUSTERS = j.clusters || [];
   const sel = $("k8sClusterSel");
   if (!sel) return;
@@ -130,7 +184,7 @@ async function loadK8sNamespaces() {
   sel.innerHTML = `<option value="">${esc(k8sT("k8s.all_ns", "全部命名空间"))}</option>`;
   if (!id) return;
   try {
-    const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/namespaces`);
+    const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/namespaces`, { noAbort: true });
     (j.items || []).forEach(ns => {
       const o = document.createElement("option");
       o.value = ns.name || "";
@@ -392,9 +446,10 @@ function paintK8sEvents() {
 async function renderK8sPanel() {
   const panel = $("k8sPanel");
   if (!panel) return;
+  const seq = k8sBeginFetch();
   const id = k8sClusterId();
   if (!id) {
-    panel.innerHTML = `<div class="empty-state"><h4>${esc(k8sT("k8s.no_cluster", "尚未配置集群"))}</h4>
+    panel.innerHTML = `<div class="empty-state k8s-empty"><h4>${esc(k8sT("k8s.no_cluster", "尚未配置集群"))}</h4>
       <p>${esc(k8sT("k8s.hint_add", "请管理员在「集群配置」中添加 Kubernetes 集群（API Server + Token 或 kubeconfig）。"))}</p></div>`;
     k8sSetStatus(k8sT("k8s.status_none", "未选择集群"), "warn");
     if (K8S_TAB === "config" && typeof isAdmin === "function" && isAdmin()) {
@@ -404,15 +459,30 @@ async function renderK8sPanel() {
     return;
   }
   if (K8S_TAB === "config") {
+    k8sSetStatus(k8sT("k8s.status_cfg", "配置模式"), "warn");
     panel.innerHTML = renderK8sConfigForm();
     wireK8sConfigForm();
     return;
   }
+  if (K8S_TAB === "apply") {
+    // Apply is a local form; don't claim "connected" without a probe.
+    k8sSetStatus(k8sT("k8s.status_ready", "可操作"), "warn");
+    paintK8sApply();
+    return;
+  }
   panel.innerHTML = `<div class="loading-dots">${esc(k8sT("sec.loading", "加载中…"))}</div>`;
+  k8sSetStatus(k8sT("k8s.status_loading", "连接中…"), "warn");
   const nsQ = k8sNamespace() ? `?namespace=${encodeURIComponent(k8sNamespace())}` : "";
   try {
     if (K8S_TAB === "overview") {
       const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/overview`);
+      if (k8sIsStale(seq)) return;
+      if (j.reachable === false) {
+        k8sSetStatus(k8sT("k8s.status_err", "连接失败"), "err");
+        panel.innerHTML = k8sUnreachableHTML(j.error);
+        k8sWireUnreachableActions(panel);
+        return;
+      }
       const ver = (j.version && (j.version.gitVersion || j.version.major)) || "—";
       k8sSetStatus(k8sT("k8s.status_ok", "已连接") + " · " + ver, "ok");
       const nodes = j.nodes || {}, pods = j.pods || {}, deps = j.deployments || {};
@@ -427,6 +497,7 @@ async function renderK8sPanel() {
     }
     if (K8S_TAB === "nodes") {
       const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/nodes`);
+      if (k8sIsStale(seq)) return;
       K8S_CACHE.nodes = j.items || [];
       k8sSetStatus(k8sT("k8s.status_ok", "已连接"), "ok");
       paintK8sNodes();
@@ -434,6 +505,7 @@ async function renderK8sPanel() {
     }
     if (K8S_TAB === "pods") {
       const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/pods${nsQ}`);
+      if (k8sIsStale(seq)) return;
       K8S_CACHE.pods = j.items || [];
       k8sSetStatus(k8sT("k8s.status_ok", "已连接"), "ok");
       paintK8sPods();
@@ -441,6 +513,7 @@ async function renderK8sPanel() {
     }
     if (K8S_TAB === "deployments") {
       const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/deployments${nsQ}`);
+      if (k8sIsStale(seq)) return;
       K8S_CACHE.deployments = j.items || [];
       k8sSetStatus(k8sT("k8s.status_ok", "已连接"), "ok");
       paintK8sDeployments();
@@ -448,19 +521,17 @@ async function renderK8sPanel() {
     }
     if (K8S_TAB === "events") {
       const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}/events${nsQ}`);
+      if (k8sIsStale(seq)) return;
       K8S_CACHE.events = j.items || [];
       k8sSetStatus(k8sT("k8s.status_ok", "已连接"), "ok");
       paintK8sEvents();
       return;
     }
-    if (K8S_TAB === "apply") {
-      k8sSetStatus(k8sT("k8s.status_ok", "已连接"), "ok");
-      paintK8sApply();
-      return;
-    }
   } catch (e) {
+    if (k8sIsAbort(e) || k8sIsStale(seq)) return;
     k8sSetStatus(k8sT("k8s.status_err", "连接失败"), "err");
-    panel.innerHTML = `<div class="empty-state"><h4>${esc(k8sT("k8s.status_err", "连接失败"))}</h4><p>${esc(String(e.message || e))}</p></div>`;
+    panel.innerHTML = k8sUnreachableHTML(String(e.message || e));
+    k8sWireUnreachableActions(panel);
   }
 }
 
@@ -555,124 +626,324 @@ function openK8sScale(ns, name, current) {
   $("k8sScaleMask")?.classList.add("show");
 }
 
+function k8sClusterEndpointLabel(c) {
+  if (!c) return "—";
+  if (c.api_server) return c.api_server;
+  if (c.has_kubeconfig || c.kubeconfig_yaml) return "kubeconfig";
+  return "—";
+}
+
+function k8sSecretBadge(configured, label) {
+  if (configured) return `<span class="badge ok">${esc(label)}</span>`;
+  return `<span class="badge">${esc(k8sT("k8s.secret_none", "未配置"))}</span>`;
+}
+
+function k8sFillConfigForm(c) {
+  c = c || {};
+  K8S_EDIT_ID = c.id || "";
+  const idEl = $("k8sCfgId");
+  const nameEl = $("k8sCfgName");
+  const enEl = $("k8sCfgEnabled");
+  const apiEl = $("k8sCfgAPI");
+  const tokEl = $("k8sCfgToken");
+  const caEl = $("k8sCfgCA");
+  const insecureEl = $("k8sCfgInsecure");
+  const kubeEl = $("k8sCfgKube");
+  const nsEl = $("k8sCfgNS");
+  const titleEl = $("k8sCfgFormTitle");
+  const metaEl = $("k8sCfgFormMeta");
+  const form = $("k8sCfgForm");
+  if (!idEl || !nameEl || !form) return false;
+
+  idEl.value = c.id || "";
+  nameEl.value = c.name || "";
+  if (enEl) enEl.checked = c.enabled !== false;
+  if (apiEl) apiEl.value = c.api_server || "";
+  const hasTok = !!(c.has_token || c.token === "****");
+  const hasKube = !!(c.has_kubeconfig || c.kubeconfig_yaml === "****");
+  const hasCA = !!(c.has_ca || (c.ca_cert && c.ca_cert !== "****"));
+  if (tokEl) tokEl.value = hasTok ? "****" : "";
+  if (caEl) caEl.value = c.ca_cert && c.ca_cert !== "****" ? c.ca_cert : "";
+  if (insecureEl) insecureEl.checked = !!c.insecure_skip_tls;
+  if (kubeEl) kubeEl.value = hasKube ? "****" : "";
+  if (nsEl) nsEl.value = c.default_namespace || "";
+
+  if (titleEl) {
+    titleEl.textContent = c.id
+      ? k8sT("k8s.cfg_edit_title", "编辑集群") + " · " + (c.name || c.id)
+      : k8sT("k8s.cfg_create_title", "新建集群");
+  }
+  if (metaEl) {
+    metaEl.innerHTML = c.id
+      ? `${k8sSecretBadge(hasTok, k8sT("k8s.secret_token", "Token 已配置"))}
+         ${k8sSecretBadge(hasKube, k8sT("k8s.secret_kube", "Kubeconfig 已配置"))}
+         ${k8sSecretBadge(hasCA, k8sT("k8s.secret_ca", "CA 已配置"))}
+         ${c.insecure_skip_tls ? `<span class="badge warn">${esc(k8sT("k8s.insecure_on", "已跳过 TLS"))}</span>` : ""}`
+      : `<span class="muted">${esc(k8sT("k8s.cfg_create_hint", "填写 API Server + Token，或粘贴 kubeconfig"))}</span>`;
+  }
+  form.classList.toggle("k8s-cfg-editing", !!c.id);
+  document.querySelectorAll("#k8sPanel tr[data-k8s-row]").forEach(tr => {
+    tr.classList.toggle("active-row", !!c.id && tr.getAttribute("data-k8s-row") === c.id);
+  });
+  try {
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    nameEl.focus({ preventScroll: true });
+  } catch (_) {
+    try { form.scrollIntoView(); nameEl.focus(); } catch (__) {}
+  }
+  return true;
+}
+
+function k8sWireSecretPlaceholders() {
+  ["k8sCfgToken", "k8sCfgKube"].forEach(id => {
+    const el = $(id);
+    if (!el || el.dataset.k8sSecretWired === "1") return;
+    el.dataset.k8sSecretWired = "1";
+    el.addEventListener("focus", () => {
+      if (el.value === "****") el.value = "";
+    });
+  });
+}
+
 function renderK8sConfigForm() {
   if (typeof isAdmin === "function" && !isAdmin()) {
-    return `<div class="hint">${esc(k8sT("toast.admin_only", "仅管理员可操作"))}</div>`;
+    return `<div class="empty-state k8s-empty"><h4>${esc(k8sT("toast.admin_only", "仅管理员可操作"))}</h4>
+      <p>${esc(k8sT("k8s.cfg_admin_hint", "集群配置仅管理员可查看与修改。"))}</p></div>`;
   }
-  const list = K8S_CLUSTERS.map(c => `<tr>
-    <td>${esc(c.name)}</td>
-    <td class="mono">${esc(c.api_server || (c.kubeconfig_yaml ? "kubeconfig" : "—"))}</td>
-    <td>${c.enabled ? `<span class="badge ok">${esc(k8sT("k8s.col_enabled", "启用"))}</span>` : `<span class="badge">${esc(k8sT("k8s.off", "停用"))}</span>`}</td>
-    <td>
-      <div class="k8s-actions">
-        <button type="button" class="btn sm" data-k8s-edit="${esc(c.id)}">${esc(k8sT("ui.edit", "编辑"))}</button>
-        <button type="button" class="btn sm" data-k8s-test="${esc(c.id)}">${esc(k8sT("k8s.test", "连通测试"))}</button>
-        <button type="button" class="btn sm danger" data-k8s-del="${esc(c.id)}">${esc(k8sT("ui.delete", "删除"))}</button>
-      </div>
-    </td>
-  </tr>`).join("");
+  const list = K8S_CLUSTERS.map(c => {
+    const active = K8S_EDIT_ID && K8S_EDIT_ID === c.id ? " active-row" : "";
+    const auth = [];
+    if (c.has_token || c.token === "****") auth.push("Token");
+    if (c.has_kubeconfig || c.kubeconfig_yaml === "****") auth.push("Kubeconfig");
+    if (c.has_ca || c.ca_cert) auth.push("CA");
+    if (c.insecure_skip_tls) auth.push("Insecure");
+    return `<tr class="sec-row${active}" data-k8s-row="${esc(c.id)}">
+      <td><div class="hs-host-name">${esc(c.name || c.id)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">${esc(auth.join(" · ") || "—")}</div></td>
+      <td class="mono">${esc(k8sClusterEndpointLabel(c))}</td>
+      <td>${c.enabled !== false ? `<span class="badge ok">${esc(k8sT("k8s.col_enabled", "启用"))}</span>` : `<span class="badge">${esc(k8sT("k8s.off", "停用"))}</span>`}</td>
+      <td>
+        <div class="k8s-actions">
+          <button type="button" class="btn sm primary" data-k8s-edit="${esc(c.id)}">${esc(k8sT("ui.edit", "编辑"))}</button>
+          <button type="button" class="btn sm" data-k8s-test="${esc(c.id)}">${esc(k8sT("k8s.test", "连通测试"))}</button>
+          <button type="button" class="btn sm danger" data-k8s-del="${esc(c.id)}">${esc(k8sT("ui.delete", "删除"))}</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+  const editing = !!(K8S_EDIT_ID && K8S_CLUSTERS.some(c => c.id === K8S_EDIT_ID));
   return `<div class="cfg-panel k8s-cfg">
-    <div class="cfg-panel-title">${esc(k8sT("k8s.tab_config", "集群配置"))}</div>
-    <p class="field-hint">${esc(k8sT("k8s.config_hint", "推荐使用只读 ServiceAccount Token；Scale/Restart 需额外 patch 权限。密钥留空表示保持原值。"))}</p>
+    <div class="cfg-panel-head" style="align-items:center;gap:10px;flex-wrap:wrap">
+      <div>
+        <div class="cfg-panel-title">${esc(k8sT("k8s.tab_config", "集群配置"))}</div>
+        <p class="cfg-panel-desc">${esc(k8sT("k8s.config_hint", "推荐使用只读 ServiceAccount Token；Scale/Restart 需额外 patch 权限。密钥显示 **** 表示已配置，聚焦后可粘贴新值覆盖。"))}</p>
+      </div>
+      <button type="button" class="btn sm primary" id="k8sCfgNewBtn">${esc(k8sT("k8s.cfg_new", "新建集群"))}</button>
+    </div>
     <div class="nf-table-wrap k8s-table-wrap" style="margin-bottom:14px"><table class="data-table k8s-table">
-      <thead><tr><th>${esc(k8sT("k8s.col_name", "名称"))}</th><th>${esc(k8sT("k8s.col_endpoint", "Endpoint"))}</th><th>${esc(k8sT("k8s.col_enabled", "启用"))}</th><th></th></tr></thead>
-      <tbody>${list || `<tr><td colspan="4">${esc(k8sT("k8s.empty", "暂无数据"))}</td></tr>`}</tbody>
+      <thead><tr>
+        <th>${esc(k8sT("k8s.col_name", "名称"))}</th>
+        <th>${esc(k8sT("k8s.col_endpoint", "Endpoint"))}</th>
+        <th>${esc(k8sT("k8s.col_enabled", "启用"))}</th>
+        <th>${esc(k8sT("k8s.col_actions", "操作"))}</th>
+      </tr></thead>
+      <tbody>${list || `<tr><td colspan="4" class="empty-line">${esc(k8sT("k8s.empty", "暂无数据"))}</td></tr>`}</tbody>
     </table></div>
-    <div class="cfg-form" id="k8sCfgForm">
+    <div class="cfg-form ${editing ? "k8s-cfg-editing" : ""}" id="k8sCfgForm">
+      <div class="k8s-cfg-form-head">
+        <div class="cfg-panel-title" id="k8sCfgFormTitle">${esc(editing ? k8sT("k8s.cfg_edit_title", "编辑集群") : k8sT("k8s.cfg_create_title", "新建集群"))}</div>
+        <div class="k8s-cfg-meta" id="k8sCfgFormMeta"></div>
+      </div>
       <input type="hidden" id="k8sCfgId" value="">
       <div class="cfg-form-row">
-        <div class="field"><label>${esc(k8sT("k8s.col_name", "名称"))}</label><input id="k8sCfgName" type="text" autocomplete="off"></div>
+        <div class="field"><label>${esc(k8sT("k8s.col_name", "名称"))}</label><input id="k8sCfgName" type="text" autocomplete="off" placeholder="prod-k8s"></div>
         <div class="field cfg-field-switch"><label class="switch"><input type="checkbox" id="k8sCfgEnabled" checked><span>${esc(k8sT("k8s.col_enabled", "启用"))}</span></label></div>
       </div>
-      <div class="field"><label>API Server</label><input id="k8sCfgAPI" class="mono" type="url" placeholder="https://kubernetes.default.svc:443" autocomplete="off"></div>
-      <div class="field"><label>Token</label><input id="k8sCfgToken" class="mono" type="password" placeholder="${esc(k8sT("sec.oidc_secret_ph", "留空保持原值"))}" autocomplete="new-password"></div>
-      <div class="field"><label>CA Cert (PEM)</label><textarea id="k8sCfgCA" class="mono" rows="3" spellcheck="false"></textarea></div>
+      <div class="field"><label>API Server</label>
+        <input id="k8sCfgAPI" class="mono" type="text" inputmode="url" placeholder="https://192.168.x.x:6443" autocomplete="off">
+        <p class="field-hint">${esc(k8sT("k8s.cfg_api_hint", "使用 Kubeconfig 时可留空；否则必填，需本平台服务端网络可达。"))}</p>
+      </div>
+      <div class="field"><label>Token</label>
+        <input id="k8sCfgToken" class="mono" type="password" placeholder="**** / ${esc(k8sT("k8s.secret_keep", "留空或 **** 表示保持原值"))}" autocomplete="new-password">
+      </div>
+      <div class="field"><label>CA Cert (PEM)</label>
+        <textarea id="k8sCfgCA" class="mono" rows="4" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+      </div>
       <label class="switch mb"><input type="checkbox" id="k8sCfgInsecure"><span>${esc(k8sT("k8s.insecure", "跳过 TLS 校验（仅内网临时）"))}</span></label>
-      <div class="field"><label>Kubeconfig YAML（可选，优先于上方字段）</label><textarea id="k8sCfgKube" class="mono" rows="5" spellcheck="false" placeholder="粘贴 kubeconfig；已配置时显示 ****"></textarea></div>
-      <div class="field"><label>${esc(k8sT("k8s.default_ns", "默认命名空间（空=全部）"))}</label><input id="k8sCfgNS" class="mono" type="text" placeholder="default"></div>
+      <div class="field"><label>Kubeconfig YAML</label>
+        <textarea id="k8sCfgKube" class="mono" rows="6" spellcheck="false" placeholder="${esc(k8sT("k8s.cfg_kube_ph", "粘贴完整 kubeconfig；已配置时显示 ****，聚焦后可覆盖"))}"></textarea>
+        <p class="field-hint">${esc(k8sT("k8s.cfg_kube_hint", "若填写 kubeconfig，将优先于上方 API Server / Token / CA。"))}</p>
+      </div>
+      <div class="field"><label>${esc(k8sT("k8s.default_ns", "默认命名空间（空=全部）"))}</label>
+        <input id="k8sCfgNS" class="mono" type="text" placeholder="default" autocomplete="off">
+      </div>
       <div class="cfg-actions">
-        <button type="button" class="btn" id="k8sCfgReset">${esc(k8sT("ui.reset", "重置"))}</button>
+        <button type="button" class="btn" id="k8sCfgReset">${esc(k8sT("ui.reset", "重置为空"))}</button>
         <button type="button" class="btn primary" id="k8sCfgSave">${esc(k8sT("settings.save", "保存"))}</button>
       </div>
     </div>
   </div>`;
 }
 
+async function k8sLoadClusterForEdit(id) {
+  id = String(id || "").trim();
+  if (!id) {
+    k8sFillConfigForm(null);
+    return;
+  }
+  let c = K8S_CLUSTERS.find(x => x.id === id) || { id };
+  try {
+    const fresh = await k8sFetch(`/k8s/clusters/${encodeURIComponent(id)}`, { noAbort: true });
+    if (fresh && fresh.id) {
+      c = fresh;
+      const idx = K8S_CLUSTERS.findIndex(x => x.id === id);
+      if (idx >= 0) K8S_CLUSTERS[idx] = fresh;
+      else K8S_CLUSTERS.push(fresh);
+    }
+  } catch (e) {
+    toast(k8sT("k8s.cfg_load_fail", "加载集群详情失败") + "：" + (e.message || e), "err");
+  }
+  if (!k8sFillConfigForm(c)) {
+    toast(k8sT("k8s.cfg_form_missing", "编辑表单未就绪，请刷新页面后重试"), "err");
+    return;
+  }
+  toast(k8sT("k8s.cfg_loaded", "已载入集群配置，可修改后保存"), "ok");
+}
+
 function wireK8sConfigForm() {
   const panel = $("k8sPanel");
   if (!panel) return;
-  const fill = (c) => {
-    c = c || {};
-    if ($("k8sCfgId")) $("k8sCfgId").value = c.id || "";
-    if ($("k8sCfgName")) $("k8sCfgName").value = c.name || "";
-    if ($("k8sCfgEnabled")) $("k8sCfgEnabled").checked = c.enabled !== false;
-    if ($("k8sCfgAPI")) $("k8sCfgAPI").value = c.api_server || "";
-    if ($("k8sCfgToken")) $("k8sCfgToken").value = "";
-    if ($("k8sCfgCA")) $("k8sCfgCA").value = c.ca_cert || "";
-    if ($("k8sCfgInsecure")) $("k8sCfgInsecure").checked = !!c.insecure_skip_tls;
-    if ($("k8sCfgKube")) $("k8sCfgKube").value = "";
-    if ($("k8sCfgNS")) $("k8sCfgNS").value = c.default_namespace || "";
-  };
-  // Property handlers replace prior bindings when the form is re-rendered.
+  k8sWireSecretPlaceholders();
+
   const resetBtn = $("k8sCfgReset");
-  if (resetBtn) resetBtn.onclick = () => fill(null);
+  if (resetBtn) resetBtn.onclick = () => {
+    K8S_EDIT_ID = "";
+    k8sFillConfigForm(null);
+  };
+  const newBtn = $("k8sCfgNewBtn");
+  if (newBtn) newBtn.onclick = () => {
+    K8S_EDIT_ID = "";
+    k8sFillConfigForm(null);
+    toast(k8sT("k8s.cfg_new_ready", "已切换到新建集群"), "ok");
+  };
   const saveBtn = $("k8sCfgSave");
   if (saveBtn) saveBtn.onclick = async () => {
+    const tokenVal = ($("k8sCfgToken")?.value || "").trim();
+    const kubeVal = ($("k8sCfgKube")?.value || "").trim();
     const body = {
       id: ($("k8sCfgId")?.value || "").trim(),
       name: ($("k8sCfgName")?.value || "").trim(),
       enabled: !!$("k8sCfgEnabled")?.checked,
       api_server: ($("k8sCfgAPI")?.value || "").trim(),
-      token: ($("k8sCfgToken")?.value || "").trim(),
+      token: tokenVal,
       ca_cert: ($("k8sCfgCA")?.value || "").trim(),
       insecure_skip_tls: !!$("k8sCfgInsecure")?.checked,
-      kubeconfig_yaml: ($("k8sCfgKube")?.value || "").trim(),
+      kubeconfig_yaml: kubeVal,
       default_namespace: ($("k8sCfgNS")?.value || "").trim(),
     };
+    if (!body.name) {
+      toast(k8sT("k8s.cfg_name_required", "请填写集群名称"), "err");
+      $("k8sCfgName")?.focus();
+      return;
+    }
+    const hasNewKube = !!(kubeVal && !kubeVal.includes("****"));
+    const hasNewTok = !!(tokenVal && !tokenVal.includes("****"));
+    if (!body.id && !hasNewKube && !(body.api_server && hasNewTok)) {
+      toast(k8sT("k8s.cfg_auth_required", "请填写 API Server + Token，或粘贴 kubeconfig"), "err");
+      return;
+    }
     try {
       const path = body.id ? `/k8s/clusters/${encodeURIComponent(body.id)}` : "/k8s/clusters";
       const method = body.id ? "PUT" : "POST";
-      await k8sFetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const saved = await k8sFetch(path, {
+        method, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), noAbort: true,
+      });
       toast(k8sT("toast.saved", "已保存"), "ok");
-      await loadK8sPage();
+      K8S_TAB = "config";
+      K8S_EDIT_ID = (saved && saved.id) || body.id || "";
+      document.querySelectorAll("#k8sInnerTabs .tab").forEach(b => b.classList.toggle("active", b.dataset.k8sTab === "config"));
+      await loadK8sClusters();
+      await renderK8sPanel();
+      if (K8S_EDIT_ID) {
+        const c = K8S_CLUSTERS.find(x => x.id === K8S_EDIT_ID);
+        if (c) k8sFillConfigForm(c);
+      }
+      loadK8sNamespaces().catch(() => {});
     } catch (e) { toast(String(e.message || e), "err"); }
   };
-  panel.querySelectorAll("[data-k8s-edit]").forEach(b => {
-    b.onclick = () => {
-      const c = K8S_CLUSTERS.find(x => x.id === b.getAttribute("data-k8s-edit"));
-      fill(c);
-    };
-  });
-  panel.querySelectorAll("[data-k8s-test]").forEach(b => {
-    b.onclick = async () => {
+
+  // Event delegation: survives partial DOM quirks better than per-button onclick alone.
+  panel.onclick = async (e) => {
+    const t = e.target && e.target.closest ? e.target.closest("[data-k8s-edit],[data-k8s-test],[data-k8s-del]") : null;
+    if (!t || !panel.contains(t)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (t.hasAttribute("data-k8s-edit")) {
+      await k8sLoadClusterForEdit(t.getAttribute("data-k8s-edit"));
+      return;
+    }
+    if (t.hasAttribute("data-k8s-test")) {
       try {
-        const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(b.getAttribute("data-k8s-test"))}/test`, { method: "POST", body: "{}" });
+        const j = await k8sFetch(`/k8s/clusters/${encodeURIComponent(t.getAttribute("data-k8s-test"))}/test`, {
+          method: "POST", body: "{}", noAbort: true,
+        });
         const ver = j.version?.gitVersion || "ok";
         toast(k8sT("k8s.test_ok", "连通成功") + " · " + ver, "ok");
-      } catch (e) { toast(String(e.message || e), "err"); }
-    };
-  });
-  panel.querySelectorAll("[data-k8s-del]").forEach(b => {
-    b.onclick = async () => {
+      } catch (err) { toast(String(err.message || err), "err"); }
+      return;
+    }
+    if (t.hasAttribute("data-k8s-del")) {
       if (!confirm(k8sT("k8s.del_confirm", "确定删除该集群配置？"))) return;
       try {
-        await k8sFetch(`/k8s/clusters/${encodeURIComponent(b.getAttribute("data-k8s-del"))}`, { method: "DELETE" });
+        await k8sFetch(`/k8s/clusters/${encodeURIComponent(t.getAttribute("data-k8s-del"))}`, { method: "DELETE", noAbort: true });
         toast(k8sT("toast.deleted", "已删除"), "ok");
-        await loadK8sPage();
-      } catch (e) { toast(String(e.message || e), "err"); }
-    };
-  });
+        if (K8S_EDIT_ID === t.getAttribute("data-k8s-del")) K8S_EDIT_ID = "";
+        K8S_TAB = "config";
+        await loadK8sClusters();
+        await renderK8sPanel();
+      } catch (err) { toast(String(err.message || err), "err"); }
+    }
+  };
+
+  // Restore editing selection after re-render.
+  if (K8S_EDIT_ID) {
+    const c = K8S_CLUSTERS.find(x => x.id === K8S_EDIT_ID);
+    if (c) k8sFillConfigForm(c);
+    else {
+      K8S_EDIT_ID = "";
+      k8sFillConfigForm(null);
+    }
+  } else {
+    k8sFillConfigForm(null);
+  }
 }
 
 async function loadK8sPage() {
+  const panel = $("k8sPanel");
   try {
+    k8sSetStatus(k8sT("k8s.status_loading", "连接中…"), "warn");
+    if (panel && K8S_TAB !== "config") {
+      panel.innerHTML = `<div class="loading-dots">${esc(k8sT("sec.loading", "加载中…"))}</div>`;
+    }
     await loadK8sClusters();
-    await loadK8sNamespaces();
+    // Config tab is local — paint immediately; namespaces refresh in background.
+    if (K8S_TAB === "config") {
+      await renderK8sPanel();
+      loadK8sNamespaces().catch(() => {});
+      return;
+    }
+    // Don't block overview/resource tabs on namespaces (can hang ~dial timeout).
+    const nsPromise = loadK8sNamespaces().catch(() => {});
     await renderK8sPanel();
+    await nsPromise;
   } catch (e) {
+    if (k8sIsAbort(e)) return;
     k8sSetStatus(k8sT("k8s.status_err", "连接失败"), "err");
-    const panel = $("k8sPanel");
-    if (panel) panel.innerHTML = `<div class="empty-state"><h4>${esc(k8sT("k8s.status_err", "连接失败"))}</h4><p>${esc(String(e.message || e))}</p></div>`;
+    if (panel) {
+      panel.innerHTML = k8sUnreachableHTML(String(e.message || e));
+      k8sWireUnreachableActions(panel);
+    }
   }
 }
 
@@ -685,8 +956,14 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("k8sRefreshBtn")?.addEventListener("click", () => loadK8sPage());
   $("k8sClusterSel")?.addEventListener("change", async () => {
-    await loadK8sNamespaces();
+    const panel = $("k8sPanel");
+    if (panel && K8S_TAB !== "config" && K8S_TAB !== "apply") {
+      panel.innerHTML = `<div class="loading-dots">${esc(k8sT("sec.loading", "加载中…"))}</div>`;
+      k8sSetStatus(k8sT("k8s.status_loading", "连接中…"), "warn");
+    }
+    const nsPromise = loadK8sNamespaces().catch(() => {});
     await renderK8sPanel();
+    await nsPromise;
   });
   $("k8sNsSel")?.addEventListener("change", () => renderK8sPanel());
   $("k8sScaleConfirm")?.addEventListener("click", async () => {
