@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -635,9 +636,10 @@ type ServerConfig struct {
 
 func defaultServerConfig() ServerConfig {
 	return ServerConfig{
-		AlertsEnabled: true,
-		Thresholds:    defaultThresholdConfig(),
-		Categories:    map[string]string{},
+		AlertsEnabled:    true,
+		AgentAutoUpdate:  true, // fleet default: push updates when agents lag
+		Thresholds:       defaultThresholdConfig(),
+		Categories:       map[string]string{},
 		SMTP: SMTPConfig{
 			FromName: "AIOps Monitor",
 		},
@@ -693,6 +695,7 @@ type ConfigStore struct {
 func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 	cs := &ConfigStore{path: path, cfg: defaultServerConfig(), pg: pg}
 	loaded := false
+	var rawBlob []byte
 	if pg != nil { // PostgreSQL is the source of truth in dual-DB mode
 		if raw, ok, err := pg.loadConfigBlob(); err == nil && ok {
 			var c ServerConfig
@@ -701,6 +704,7 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 					c.Categories = map[string]string{}
 				}
 				cs.cfg = c
+				rawBlob = raw
 				loaded = true
 			}
 		}
@@ -714,6 +718,7 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 					c.Categories = map[string]string{}
 				}
 				cs.cfg = c
+				rawBlob = b
 			}
 		}
 	}
@@ -721,6 +726,12 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 	// (no-op for plaintext / legacy values, or when no master key is set).
 	decryptConfigSecrets(&cs.cfg)
 	dirty := false
+	// Legacy configs omit agent_auto_update (JSON false zero-value). Treat absent
+	// key as the new fleet default (enabled); keep explicit false intact.
+	if len(rawBlob) > 0 && !bytes.Contains(rawBlob, []byte("agent_auto_update")) {
+		cs.cfg.AgentAutoUpdate = true
+		dirty = true
+	}
 	if cs.cfg.InstallToken == "" {
 		cs.cfg.InstallToken = genToken()
 		dirty = true

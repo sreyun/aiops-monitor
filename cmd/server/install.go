@@ -1374,6 +1374,19 @@ SERVER="__SERVER__"
 LISTEN="${RELAY_LISTEN:-:8529}"
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 
+# True only when systemd is the real init (not a container that merely has systemctl).
+aiops_has_systemd() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  if [ -r /proc/1/comm ] && [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
+    return 0
+  fi
+  _st=$(systemctl is-system-running 2>/dev/null || true)
+  case "$_st" in
+    running|degraded|maintenance|starting) return 0 ;;
+  esac
+  return 1
+}
+
 OS=$(uname -s)
 ARCH=$(uname -m)
 case "$OS" in
@@ -1431,16 +1444,16 @@ if curl -fsSL "$SERVER/dl/$BIN.sha256" -o ".aiops-agent.sha256" 2>/dev/null; the
 fi
 chmod +x aiops-agent
 
-RELAY_SECRET_LINE=""
-if [ -n "${AIOPS_RELAY_SECRET:-}" ]; then
-  RELAY_SECRET_LINE="relay_secret: \"${AIOPS_RELAY_SECRET}\""
-fi
-cat > config.yaml <<EOF
-relay: true
-listen: "$LISTEN"
-server: "$SERVER"
-$RELAY_SECRET_LINE
-EOF
+# Write YAML without expanding metacharacters inside AIOPS_RELAY_SECRET.
+{
+  printf 'relay: true\n'
+  printf 'listen: "%s"\n' "$LISTEN"
+  printf 'server: "%s"\n' "$SERVER"
+  if [ -n "${AIOPS_RELAY_SECRET:-}" ]; then
+    _esc=$(printf '%s' "$AIOPS_RELAY_SECRET" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf 'relay_secret: "%s"\n' "$_esc"
+  fi
+} > config.yaml
 if [ ! -s config.yaml ]; then
   echo "[AIOps] ERROR: config.yaml was not created! Installation incomplete."
   exit 1
@@ -1448,7 +1461,16 @@ fi
 rm -f config.json 2>/dev/null || true
 echo "[AIOps] config written: $DIR/config.yaml (upstream: $SERVER, listen: $LISTEN)"
 
-if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+aiops_start_relay_fallback() {
+  # Match by config path — argv has no "relay" flag, so pkill ...*relay never worked.
+  pkill -f "$DIR/aiops-agent --config $DIR/config.yaml" 2>/dev/null || true
+  pkill -f "$DIR/aiops-agent" 2>/dev/null || true
+  sleep 1 2>/dev/null || true
+  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/relay.log" 2>&1 &
+  echo "[AIOps] relay started in background (log: $DIR/relay.log)"
+}
+
+if aiops_has_systemd && [ "$(id -u)" = "0" ]; then
   cat > /etc/systemd/system/aiops-relay.service <<UNIT
 [Unit]
 Description=AIOps Monitor Relay
@@ -1465,14 +1487,74 @@ WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
   systemctl enable aiops-relay >/dev/null 2>&1 || true
-  # restart (not "enable --now") so an upgrade re-execs the new binary instead of
-  # leaving the already-running old one until reboot.
-  systemctl restart aiops-relay
-  echo "[AIOps] relay systemd service (re)started: aiops-relay (listen $LISTEN)"
+  # restart must not abort install under set -e when systemd is half-broken
+  if ! systemctl restart aiops-relay; then
+    echo "[AIOps] WARN: systemctl restart aiops-relay failed; falling back to nohup"
+    aiops_start_relay_fallback
+  else
+    echo "[AIOps] relay systemd service (re)started: aiops-relay (listen $LISTEN)"
+  fi
+elif [ "$OS" = "Darwin" ]; then
+  # macOS launchd — mirror normal agent install so relay survives reboot.
+  if [ -z "${AIOPS_USER:-}" ]; then
+    if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+      AIOPS_USER="$SUDO_USER"
+    elif [ "$(id -u)" = "0" ]; then
+      AIOPS_USER="root"
+    else
+      AIOPS_USER="$(id -un)"
+    fi
+  fi
+  AIOPS_UID="$(id -u "$AIOPS_USER" 2>/dev/null || id -u)"
+  if [ "$AIOPS_USER" != "root" ]; then
+    AIOPS_HOME=$(eval echo "~$AIOPS_USER" 2>/dev/null || true)
+    [ -n "$AIOPS_HOME" ] && [ -d "$AIOPS_HOME" ] || AIOPS_HOME="/Users/$AIOPS_USER"
+    chown -R "$AIOPS_USER" "$DIR" 2>/dev/null || true
+    PLIST_DIR="$AIOPS_HOME/Library/LaunchAgents"
+    mkdir -p "$PLIST_DIR"
+    chown "$AIOPS_USER" "$PLIST_DIR" 2>/dev/null || true
+  else
+    PLIST_DIR="/Library/LaunchDaemons"
+    mkdir -p "$PLIST_DIR"
+  fi
+  PLIST="$PLIST_DIR/com.aiops.relay.plist"
+  cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aiops.relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$DIR/aiops-agent</string>
+    <string>--config</string>
+    <string>$DIR/config.yaml</string>
+  </array>
+  <key>WorkingDirectory</key><string>$DIR</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$DIR/relay.log</string>
+  <key>StandardErrorPath</key><string>$DIR/relay.log</string>
+</dict>
+</plist>
+PL
+  [ "$AIOPS_USER" != "root" ] && chown "$AIOPS_USER" "$PLIST" 2>/dev/null || true
+  xattr -dr com.apple.quarantine "$DIR/aiops-agent" 2>/dev/null || true
+  launchctl unload "$PLIST" 2>/dev/null || true
+  if [ "$AIOPS_USER" = "root" ]; then
+    launchctl bootout system "$PLIST" 2>/dev/null || true
+    launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || true
+    launchctl kickstart -k system/com.aiops.relay 2>/dev/null || true
+    echo "[AIOps] launchd LaunchDaemon restarted: com.aiops.relay (listen $LISTEN)"
+  else
+    launchctl bootout "gui/$AIOPS_UID" "$PLIST" 2>/dev/null || true
+    launchctl bootstrap "gui/$AIOPS_UID" "$PLIST" 2>/dev/null || launchctl asuser "$AIOPS_UID" launchctl load -w "$PLIST" 2>/dev/null || true
+    launchctl enable "gui/$AIOPS_UID/com.aiops.relay" 2>/dev/null || true
+    launchctl kickstart -k "gui/$AIOPS_UID/com.aiops.relay" 2>/dev/null || true
+    echo "[AIOps] launchd LaunchAgent restarted: com.aiops.relay (user=$AIOPS_USER, listen $LISTEN)"
+  fi
 else
-  pkill -f "$DIR/aiops-agent.*relay" 2>/dev/null || true
-  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/relay.log" 2>&1 &
-  echo "[AIOps] relay started in background (log: $DIR/relay.log)"
+  aiops_start_relay_fallback
 fi
 RELAY_PORT="${LISTEN##*:}"
 echo ""
@@ -1490,9 +1572,13 @@ $Dir    = Join-Path $env:LOCALAPPDATA "aiops-agent"
 
 Write-Host "[AIOps] installing relay to $Dir (upstream $Server)"
 New-Item -ItemType Directory -Force $Dir | Out-Null
-# Stop a prior relay/agent before downloading so the running exe doesn't hold the
-# file locked (which would make Invoke-WebRequest throw and abort the install).
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Stop only relay/agent processes from THIS install dir (do not kill unrelated agents).
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Where-Object {
+  try {
+    $p = $_.Path
+    $p -and $p.StartsWith($Dir, [System.StringComparison]::OrdinalIgnoreCase)
+  } catch { $false }
+} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 $ProcArch = [string]$env:PROCESSOR_ARCHITECTURE
 if ($env:PROCESSOR_ARCHITEW6432) { $ProcArch = [string]$env:PROCESSOR_ARCHITEW6432 }
@@ -1542,7 +1628,13 @@ $line = 'CreateObject("WScript.Shell").Run """' + $exe + '"" --config ""' + $con
 [System.IO.File]::WriteAllText($vbs, $line, (New-Object System.Text.ASCIIEncoding))
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -Value ('wscript.exe "' + $vbs + '"') -PropertyType String -Force | Out-Null
 
-Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Where-Object {
+  try {
+    $p = $_.Path
+    $p -and $p.StartsWith($Dir, [System.StringComparison]::OrdinalIgnoreCase)
+  } catch { $false }
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 400
 Start-Process "wscript.exe" -ArgumentList ('"' + $vbs + '"')
 $Port = $Listen -replace '.*:', ''
 Write-Host "[AIOps] relay installed and started (listen $Listen)"
@@ -1566,7 +1658,9 @@ for PLIST in \
   "$HOME/Library/LaunchAgents/com.aiops.agent.plist" \
   "/Library/LaunchDaemons/com.aiops.agent.plist" \
   "$HOME/Library/LaunchAgents/com.aiops.monitor.agent.plist" \
-  "/Library/LaunchDaemons/com.aiops.monitor.agent.plist"
+  "/Library/LaunchDaemons/com.aiops.monitor.agent.plist" \
+  "$HOME/Library/LaunchAgents/com.aiops.relay.plist" \
+  "/Library/LaunchDaemons/com.aiops.relay.plist"
 do
   if [ -f "$PLIST" ]; then
     launchctl unload "$PLIST" 2>/dev/null || true

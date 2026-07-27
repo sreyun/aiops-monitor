@@ -27,11 +27,11 @@ type deskInputMeta struct {
 
 // deskActionRequest is the JSON body of frame type 'A'.
 type deskActionRequest struct {
-	Action  string `json:"action"`            // cad | chord | type_text | wake | unlock | paste
-	Chord   string `json:"chord,omitempty"`   // win_l | ctrl_shift_esc | esc | ctrl_alt_bksp | enter | tab
-	Text    string `json:"text,omitempty"`    // for type_text / unlock password / paste
-	User    string `json:"user,omitempty"`    // unlock username (optional)
-	Enter   bool   `json:"enter,omitempty"`   // append Enter after type_text / unlock
+	Action  string `json:"action"`          // cad | chord | type_text | wake | unlock | paste
+	Chord   string `json:"chord,omitempty"` // win_l | ctrl_shift_esc | esc | ctrl_alt_bksp | enter | tab
+	Text    string `json:"text,omitempty"`  // for type_text / unlock password / paste
+	User    string `json:"user,omitempty"`  // unlock username (optional)
+	Enter   bool   `json:"enter,omitempty"` // append Enter after type_text / unlock
 	ScreenW int    `json:"screen_w,omitempty"`
 	ScreenH int    `json:"screen_h,omitempty"`
 }
@@ -201,18 +201,32 @@ func deskDoWake(inp deskInput, w, h int) error {
 	if h < 2 {
 		h = 1080
 	}
-	cx, cy := w/2, h*2/3 // password field is usually lower-center on lock screens
-	_ = inp.MouseMove(cx, cy)
-	_ = inp.MouseButton(1, true)
-	_ = inp.MouseButton(1, false)
-	time.Sleep(20 * time.Millisecond)
-	_ = inp.Key(0x1B, true) // Esc wake
+	// Winlogon password box is typically lower-center; try a few spots plus Esc.
+	spots := [][2]int{
+		{w / 2, h * 2 / 3},
+		{w / 2, h * 3 / 4},
+		{w / 2, h / 2},
+	}
+	_ = inp.Key(0x1B, true) // Esc dismisses "press any key" / wakes LogonUI
 	_ = inp.Key(0x1B, false)
-	time.Sleep(20 * time.Millisecond)
-	_ = inp.MouseMove(cx, cy)
-	_ = inp.MouseButton(1, true)
-	_ = inp.MouseButton(1, false)
+	time.Sleep(30 * time.Millisecond)
+	for _, sp := range spots {
+		_ = inp.MouseMove(sp[0], sp[1])
+		_ = inp.MouseButton(1, true)
+		_ = inp.MouseButton(1, false)
+		time.Sleep(15 * time.Millisecond)
+	}
 	return nil
+}
+
+func deskClearFocusedField(inp deskInput) {
+	_ = deskPlayChord(inp, "ctrl_a")
+	time.Sleep(8 * time.Millisecond)
+	_ = inp.Key(0x2E, true) // Delete
+	_ = inp.Key(0x2E, false)
+	time.Sleep(8 * time.Millisecond)
+	_ = inp.Key(0x08, true) // Backspace (covers selectionless fields)
+	_ = inp.Key(0x08, false)
 }
 
 // deskDoUnlock wakes the lock UI and types credentials in one agent-side sequence
@@ -222,14 +236,23 @@ func deskDoUnlock(inp deskInput, user, pass string, enter bool, w, h int) error 
 	if user == "" && pass == "" && !enter {
 		return fmt.Errorf("empty credentials")
 	}
+	secure := deskInputMetaFrom(inp).SecureDesktop
 	_ = deskDoWake(inp, w, h)
-	time.Sleep(40 * time.Millisecond)
+	if secure {
+		time.Sleep(80 * time.Millisecond) // LogonUI focus settle
+	} else {
+		time.Sleep(35 * time.Millisecond)
+	}
+	deskClearFocusedField(inp)
+	time.Sleep(12 * time.Millisecond)
 	if user != "" {
 		if err := deskDoTypeText(inp, user, false); err != nil {
 			return err
 		}
 		_ = deskPlayChord(inp, "tab")
-		time.Sleep(15 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
+		deskClearFocusedField(inp)
+		time.Sleep(8 * time.Millisecond)
 	}
 	if pass != "" {
 		if err := deskDoTypeText(inp, pass, false); err != nil {
@@ -237,6 +260,7 @@ func deskDoUnlock(inp deskInput, user, pass string, enter bool, w, h int) error 
 		}
 	}
 	if enter {
+		time.Sleep(15 * time.Millisecond)
 		_ = inp.Key(0x0D, true)
 		_ = inp.Key(0x0D, false)
 	}
@@ -255,15 +279,20 @@ func deskDoPaste(inp deskInput, text string) error {
 	if len(text) > maxLen {
 		text = text[:maxLen]
 	}
+	// Winlogon / UAC password boxes reject Ctrl+V — UNICODE type is the only path.
+	if deskInputMetaFrom(inp).SecureDesktop {
+		return deskDoTypeText(inp, text, false)
+	}
 	if deskClipboardSupported() {
 		if err := deskClipboardSet(text); err != nil {
 			slog.Debug("clipboard set failed; typing paste fallback", "err", err)
 			return deskDoTypeText(inp, text, false)
 		}
-		time.Sleep(12 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 		if err := deskPlayChord(inp, "ctrl_v"); err == nil {
 			return nil
 		}
+		slog.Debug("Ctrl+V paste failed; typing fallback")
 	}
 	return deskDoTypeText(inp, text, false)
 }
@@ -288,6 +317,8 @@ func deskPlayChord(inp deskInput, name string) error {
 		keys = []int{0x5B}
 	case "ctrl_v", "paste":
 		keys = []int{0x11, 0x56} // Ctrl+V
+	case "ctrl_a", "select_all":
+		keys = []int{0x11, 0x41} // Ctrl+A
 	default:
 		return fmt.Errorf("unknown chord %q", name)
 	}
@@ -299,11 +330,11 @@ func deskTapKeys(inp deskInput, keys []int) error {
 		if err := inp.Key(vk, true); err != nil {
 			return err
 		}
-		time.Sleep(6 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 	for i := len(keys) - 1; i >= 0; i-- {
 		_ = inp.Key(keys[i], false)
-		time.Sleep(4 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
 	}
 	return nil
 }
@@ -365,6 +396,8 @@ func chordVKSequence(name string) []int {
 		return []int{0x5B}
 	case "ctrl_v", "paste":
 		return []int{0x11, 0x56}
+	case "ctrl_a", "select_all":
+		return []int{0x11, 0x41}
 	default:
 		return nil
 	}

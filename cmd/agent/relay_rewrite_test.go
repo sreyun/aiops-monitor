@@ -32,6 +32,10 @@ category: "x"
 	if !strings.Contains(out, `server: "http://gw:8529"`) {
 		t.Fatalf("missing server:\n%s", out)
 	}
+	// Preserve first token so relay-rewritten installs can still register.
+	if !strings.Contains(out, `token: "x"`) {
+		t.Fatalf("first servers[].token should be preserved:\n%s", out)
+	}
 }
 
 func TestRewriteInstallScriptForRelayConfigB64(t *testing.T) {

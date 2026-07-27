@@ -105,7 +105,18 @@ func fimMonitorPaths() []string {
 		paths = append(paths,
 			`C:\Windows\System32\drivers\etc\hosts`,
 			`C:\Windows\System32\drivers\etc\hosts.ics`,
+			`C:\Windows\System32\drivers\etc\lmhosts.sam`,
+			`C:\Windows\System32\drivers\etc\networks`,
+			`C:\Windows\System32\drivers\etc\protocol`,
+			`C:\Windows\System32\drivers\etc\services`,
 		)
+		// Common autorun / profile hooks (best-effort; missing paths are skipped).
+		if windir := os.Getenv("WINDIR"); windir != "" {
+			paths = append(paths,
+				filepath.Join(windir, "System32", "GroupPolicy", "Machine", "Scripts", "Startup"),
+				filepath.Join(windir, "System32", "GroupPolicy", "Machine", "Scripts", "Shutdown"),
+			)
+		}
 		// Startup / scheduled-task readable snippets (best-effort, capped later).
 		if appdata := os.Getenv("APPDATA"); appdata != "" {
 			paths = append(paths, filepath.Join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"))

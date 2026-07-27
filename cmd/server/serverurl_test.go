@@ -14,7 +14,7 @@ import (
 // interfaces and substitute the first non-loopback IP when the admin browsed
 // from localhost — inside a container that is the container's own docker-network
 // address (e.g. 172.18.0.4), reachable by nobody. The command must instead
-// reflect the request host (or X-Forwarded-Host behind a proxy).
+// reflect the request host (or X-Forwarded-Host behind a trusted proxy).
 func TestServerURLFollowsBrowser(t *testing.T) {
 	srv, _ := newTestServer(t)
 
@@ -40,8 +40,14 @@ func TestServerURLFollowsBrowser(t *testing.T) {
 	// localhost (predictable) — the admin uses a real address or sets public_url.
 	check("localhost stays localhost", "localhost:8529", "", "", "http://localhost:8529")
 	check("loopback stays loopback (no container IP)", "127.0.0.1:8529", "", "", "http://127.0.0.1:8529")
-	// Behind a reverse proxy the forwarded headers describe the client-facing host.
-	check("x-forwarded-host wins", "172.18.0.4:8529", "aiops.example.com", "https", "https://aiops.example.com")
+	// Without trust_proxy, forged X-Forwarded-* must be ignored.
+	check("xf ignored without trust_proxy", "172.18.0.4:8529", "aiops.example.com", "https", "http://172.18.0.4:8529")
+
+	srv.cfg.mu.Lock()
+	srv.cfg.cfg.TrustProxy = true
+	srv.cfg.mu.Unlock()
+	// Behind a trusted reverse proxy the forwarded headers describe the client-facing host.
+	check("x-forwarded-host wins with trust_proxy", "172.18.0.4:8529", "aiops.example.com", "https", "https://aiops.example.com")
 	// Proxies may append a list; the first token is the client-facing hop.
 	check("x-forwarded list takes first", "172.18.0.4:8529", "aiops.example.com, internal:8529", "https, http", "https://aiops.example.com")
 }

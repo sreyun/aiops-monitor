@@ -741,10 +741,18 @@ function hsPaintDetail(scan, opts) {
     });
     html += `</tbody></table></div></div>`;
   } else if ((scan.file_inventory || []).length && scan.status === "completed") {
+    const invN = (scan.file_inventory || []).length;
     html += `<div class="hs-fim-panel" id="hsFimPanel">
       <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
-        <span class="badge ok">${hsEsc(hsT("hs.fim_none_tag", "无变更"))}</span></div>
-      <p class="ws-help">${hsEsc(hsT("hs.fim_none", "相对上次基线无文件变更"))}</p></div>`;
+        <span class="badge ok">${hsEsc(hsT("hs.fim_none_tag", "无变更"))}</span>
+        <span class="muted" style="font-size:11px">${invN} ${hsEsc(hsT("hs.fim_inv_count", "个受监控文件"))}</span></div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_none", "相对上次基线无文件变更"))}</p>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_scope_hint", "仅监控白名单路径（Linux: /etc/hosts、sshd_config、crontab、authorized_keys 等；Windows: System32\\drivers\\etc\\hosts 与 Startup）。在其它目录增删改不会出现在此列表；需先建立基线再改文件后重新扫描。"))}</p></div>`;
+  } else if (scan.status === "completed") {
+    html += `<div class="hs-fim-panel" id="hsFimPanel">
+      <div class="hs-fw-head"><span class="cfg-panel-title">${hsEsc(hsT("hs.fim_title", "文件变更"))}</span>
+        <span class="badge">${hsEsc(hsT("hs.fim_empty_tag", "无清单"))}</span></div>
+      <p class="ws-help">${hsEsc(hsT("hs.fim_empty_help", "本次未采集到受监控文件哈希（权限不足、FIM 关闭或 Agent 过旧）。请确认已开启文件完整性监控，并以有权限的账户运行 Agent 后重新扫描。"))}</p></div>`;
   }
   if ((scan.remediation || []).length) {
     html += `<div class="sec-remediation"><div class="cfg-panel-title">${hsEsc(hsT("hs.remediation", "修复建议"))}</div><ul>`;

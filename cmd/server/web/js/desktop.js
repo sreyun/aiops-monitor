@@ -995,7 +995,11 @@ function onDeskGlobalKeyDown(ev) {
     // Still forward repeats — remote apps expect key repeat for arrows/backspace.
   }
   _deskPressed.add(ev.code);
-  deskSendJSON("B", { down: true, key: ev.key, code: ev.code, vk: 0 });
+  // Include modifier flags so the agent can choose UNICODE vs VK (shortcuts).
+  deskSendJSON("B", {
+    down: true, key: ev.key, code: ev.code, vk: 0,
+    shift: !!ev.shiftKey, ctrl: !!ev.ctrlKey, alt: !!ev.altKey, meta: !!ev.metaKey
+  });
 }
 
 function onDeskGlobalKeyUp(ev) {
@@ -1004,7 +1008,10 @@ function onDeskGlobalKeyUp(ev) {
   ev.preventDefault();
   ev.stopPropagation();
   _deskPressed.delete(ev.code);
-  deskSendJSON("B", { down: false, key: ev.key, code: ev.code, vk: 0 });
+  deskSendJSON("B", {
+    down: false, key: ev.key, code: ev.code, vk: 0,
+    shift: !!ev.shiftKey, ctrl: !!ev.ctrlKey, alt: !!ev.altKey, meta: !!ev.metaKey
+  });
 }
 
 function deskReleaseAllKeys() {

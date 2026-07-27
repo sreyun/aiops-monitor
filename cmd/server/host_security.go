@@ -1252,7 +1252,7 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 		live.Summary = summary
 		live.Remediation = tips
 		live.BaselineDiff = baseDiff
-		live.FileInventory = curInv
+		live.FileInventory = pickFIMInventoryToStore(curInv, live.FileInventory, prevInv, cfg.fimEnabled())
 		live.FileChanges = fileChanges
 		live.FIMBaseline = fimBaseline
 		live.Status = "completed"

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -34,15 +35,22 @@ func rewriteInstallScriptForRelay(body, relayURL string) string {
 }
 
 // rewriteAgentConfigYAMLForRelay forces server to relayURL and drops servers[]
-// (multi-server is incompatible with gateway relay mode).
+// (multi-server is incompatible with gateway relay mode). When dropping a
+// single-line JSON servers array, the first entry's token is preserved so the
+// agent can still register.
 func rewriteAgentConfigYAMLForRelay(yamlText, relayURL string) string {
 	relayURL = strings.TrimRight(strings.TrimSpace(relayURL), "/")
 	lines := strings.Split(yamlText, "\n")
 	out := make([]string, 0, len(lines)+2)
 	skipServers := false
 	wroteServer := false
+	hasToken := false
+	pendingToken := ""
 	for _, line := range lines {
 		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "token:") {
+			hasToken = true
+		}
 		if skipServers {
 			if trim == "" || strings.HasPrefix(trim, "#") || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") || strings.HasPrefix(trim, "-") {
 				continue
@@ -56,6 +64,9 @@ func rewriteAgentConfigYAMLForRelay(yamlText, relayURL string) string {
 			}
 			// Single-line JSON servers: drop entirely. Multi-line block: skip indented.
 			rest := strings.TrimSpace(strings.TrimPrefix(trim, "servers:"))
+			if tok := extractFirstServersToken(rest); tok != "" && pendingToken == "" {
+				pendingToken = tok
+			}
 			if rest == "" || rest == "|" || rest == ">" {
 				skipServers = true
 			}
@@ -86,7 +97,25 @@ func rewriteAgentConfigYAMLForRelay(yamlText, relayURL string) string {
 		if !inserted {
 			final = append([]string{fmt.Sprintf("server: %q", relayURL)}, out...)
 		}
-		return strings.Join(final, "\n")
+		out = final
+	}
+	if pendingToken != "" && !hasToken {
+		out = append(out, fmt.Sprintf("token: %q", pendingToken))
 	}
 	return strings.Join(out, "\n")
+}
+
+// extractFirstServersToken pulls token from a single-line JSON servers: value.
+func extractFirstServersToken(rest string) string {
+	rest = strings.TrimSpace(rest)
+	if rest == "" || rest == "|" || rest == ">" {
+		return ""
+	}
+	var entries []struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(rest), &entries); err != nil || len(entries) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(entries[0].Token)
 }

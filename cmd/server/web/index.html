@@ -1592,11 +1592,19 @@
           <button class="btn sm" type="button" id="installTokenPolicyBtn">保存 Token 策略</button>
           <button class="btn sm warn" type="button" id="revokeTokenBtn">吊销当前 Token</button>
         </div>
-        <div class="field" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-          <label data-i18n="agent_update.policy_title">Agent 自动更新策略</label>
-          <label class="switch" style="display:flex;margin:6px 0;gap:8px;align-items:center">
-            <input type="checkbox" id="agentAutoUpdate">
-            <span data-i18n="agent_update.auto_enable">落后目标版本时自动推送更新（默认关闭）</span>
+      </div>
+      <div class="field log-collect" id="agentAutoUpdateSection">
+        <div class="log-collect-head" id="agentAutoUpdateToggle" role="button" tabindex="0" aria-expanded="false">
+          <span data-i18n="agent_update.policy_title">Agent 自动更新策略</span>
+          <span class="lc-meta">
+            <span class="lc-badge" id="agentAutoUpdateBadge" data-i18n="agent_update.badge_on">已开启</span>
+            <span class="lc-caret" id="agentAutoUpdateCaret">▸</span>
+          </span>
+        </div>
+        <div id="agentAutoUpdateBody" style="display:none">
+          <label class="switch" style="display:flex;margin:8px 0 10px;gap:8px;align-items:center">
+            <input type="checkbox" id="agentAutoUpdate" checked>
+            <span data-i18n="agent_update.auto_enable">落后目标版本时自动推送更新（默认开启）</span>
           </label>
           <div class="grid2">
             <div class="field"><label data-i18n="agent_update.window">维护窗口 HH:MM-HH:MM（空=全天）</label><input type="text" id="agentAutoUpdateWindow" class="mono" placeholder="02:00-05:00"></div>
@@ -1604,7 +1612,7 @@
           </div>
           <div class="field"><label data-i18n="agent_update.exempt_hosts">豁免主机 ID（逗号分隔）</label><input type="text" id="agentAutoUpdateExemptHosts" class="mono" placeholder="host-id-1,host-id-2"></div>
           <button class="btn sm" type="button" id="agentAutoUpdateSaveBtn" data-i18n="agent_update.save_policy">保存自动更新策略</button>
-          <div class="hint" data-i18n="agent_update.policy_hint">开启后，在线且版本落后的主机在上报周期内会被服务端入队更新；需配置 public_url；仍受远程门禁与维护窗口约束。</div>
+          <div class="hint" data-i18n="agent_update.policy_hint">默认开启：在线且版本落后的主机在上报周期内会被服务端入队更新；Agent 经中继上报时从中继下载；仍受远程门禁与维护窗口约束。</div>
         </div>
       </div>
       <div class="field">
@@ -1656,29 +1664,40 @@
       </div>
       <div class="field">
         <label data-i18n="install.mode_label">安装模式</label>
-        <div class="install-mode-row">
+        <div class="install-mode-row" role="radiogroup" aria-label="安装模式">
           <label class="install-mode-opt">
             <input type="radio" name="installMode" value="normal" checked>
-            <span data-i18n="install.mode_normal">标准模式</span>
+            <span class="imo-text">
+              <span class="imo-title" data-i18n="install.mode_normal">标准模式</span>
+              <span class="imo-desc" data-i18n="install.mode_normal_desc">直连本面板安装</span>
+            </span>
           </label>
           <label class="install-mode-opt">
             <input type="radio" name="installMode" value="relay">
-            <span data-i18n="install.relay_mode">网关中继模式</span>
+            <span class="imo-text">
+              <span class="imo-title" data-i18n="install.relay_mode">网关中继模式</span>
+              <span class="imo-desc" data-i18n="install.relay_hint">仅一台机器能联网时使用</span>
+            </span>
           </label>
           <label class="install-mode-opt">
             <input type="radio" name="installMode" value="multi">
-            <span data-i18n="install.multi_server">多服务端推送</span>
+            <span class="imo-text">
+              <span class="imo-title" data-i18n="install.multi_server">多服务端推送</span>
+              <span class="imo-desc" data-i18n="install.multi_server_hint">单 Agent 同时向多个服务端推送</span>
+            </span>
           </label>
         </div>
+        <div class="hint" id="installModeHint" style="margin-top:8px"></div>
       </div>
       <div id="multiServerSection" style="display:none">
-        <div class="relay-info">
-          一台 Agent 同时向多个监控服务端推送：采集只跑一次、结果广播，各服务端独立鉴权与重试、互不影响。
+        <div class="relay-info" data-i18n="install.multi_info">
+          当前面板会自动作为第一个服务端写入命令；下方只需填写额外服务端。采集只跑一次、结果广播，各服务端独立鉴权与重试。
         </div>
         <div class="field">
-          <label data-i18n="install.server_list_label">服务端列表（每行一个，格式：URL [Token]）</label>
-          <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-a:8529 token-a&#10;https://server-b:8529 token-b"></textarea>
-          <div class="hint" data-i18n="install.server_list_hint">每行一个服务端地址，Token 可选（空格分隔）。Agent 将同时向所有服务端推送数据和建立终端通道。</div>
+          <label data-i18n="install.server_list_label">额外服务端（每行一个，格式：URL [Token]）</label>
+          <textarea id="multiServerList" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder="https://server-b:8529 token-b&#10;https://server-c:8529 token-c"></textarea>
+          <div class="hint" data-i18n="install.server_list_hint">当前面板已自动包含。请至少再填一个额外服务端（URL [Token]，Token 可选）。</div>
+          <div class="hint warn-hint" id="multiServerWarn" style="display:none" data-i18n="install.multi_need_two">请至少再填写一个额外服务端，否则仍是单服务端安装。</div>
         </div>
       </div>
       <div id="normalInstallSection" class="field">
@@ -1690,7 +1709,7 @@
         <div class="hint" id="cmdHint"></div>
       </div>
       <div id="relaySection" style="display:none">
-        <div class="relay-info">
+        <div class="relay-info" data-i18n="install.relay_info">
           内网仅一台机器能访问公网时用：该机器执行 <strong>①</strong> 启动中继，其余机器执行 <strong>②</strong> 经网关上报。
           中继把内网 Agent 的下载 / 上报 / 终端请求反代到云端，内网机器无需额外配置。
         </div>
@@ -1700,11 +1719,17 @@
             <pre id="relayGatewayCmd" class="cmd"></pre>
             <button class="btn" id="copyRelayGatewayBtn" data-i18n="install.copy">复制</button>
           </div>
-          <div class="hint" data-i18n="install.gateway_cmd_hint">安装后自动启动中继服务，监听 8529 端口，转发所有请求到云监控中心。</div>
+          <div class="hint" data-i18n="install.gateway_cmd_hint">安装后自动启动中继服务，监听下方端口，转发所有请求到云监控中心。Linux 使用 sudo -E 以保留 AIOPS_RELAY_SECRET。</div>
         </div>
-        <div class="field">
-          <label data-i18n="install.gateway_ip_label">网关内网 IP（供内网机器连接）</label>
-          <input type="text" id="relayGatewayIP" data-i18n-placeholder="install.gateway_ip_placeholder" placeholder="如 192.168.1.10">
+        <div class="grid2">
+          <div class="field">
+            <label data-i18n="install.gateway_ip_label">网关内网 IP（供内网机器连接）</label>
+            <input type="text" id="relayGatewayIP" data-i18n-placeholder="install.gateway_ip_placeholder" placeholder="如 192.168.1.10">
+          </div>
+          <div class="field">
+            <label data-i18n="install.relay_port_label">中继监听端口</label>
+            <input type="number" id="relayListenPort" class="mono" min="1" max="65535" value="8529" placeholder="8529">
+          </div>
         </div>
         <div class="field">
           <label data-i18n="install.internal_cmd_label">② 内网机器安装命令（在无法联网的机器上执行）</label>
@@ -1712,7 +1737,7 @@
             <pre id="relayInternalCmd" class="cmd"></pre>
             <button class="btn" id="copyRelayInternalBtn" data-i18n="install.copy">复制</button>
           </div>
-          <div class="hint" data-i18n="install.internal_cmd_hint">内网机器通过网关中继连接云监控中心，无需直连公网。</div>
+          <div class="hint" data-i18n="install.internal_cmd_hint">内网机器通过网关中继连接云监控中心，无需直连公网。填写网关 IP 后命令会自动更新。</div>
         </div>
       </div>
       <div class="field">
