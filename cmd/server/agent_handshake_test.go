@@ -161,16 +161,17 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		}
 	}
 	// macOS now gets a real launchd job (autostart on boot + keepalive), and Linux
-	// root install uses systemd with Restart=always — but the agent process runs
-	// as unprivileged system user "aiops" (demo-safe, not root).
+	// root install uses systemd with Restart=always. Run-as user is the installer
+	// (SUDO_USER / AIOPS_USER / root) — never auto-create a dedicated aiops account.
 	must("install.sh", shIn,
 		`elif [ "$OS" = "Darwin" ]`, "com.aiops.agent.plist",
 		"<key>RunAtLoad</key><true/>", "<key>KeepAlive</key><true/>",
 		"launchctl load", "Restart=always", "@reboot",
-		"User=$AIOPS_USER", "NoNewPrivileges=true", `AIOPS_USER="${AIOPS_USER:-aiops}"`,
-		"aiops_has_systemd", "aiops_fetch", "unsupported architecture",
-		"AmbientCapabilities=CAP_NET_RAW", "/sbin/nologin",
-		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL",
+		"User=$AIOPS_USER", "NoNewPrivileges=true", "SUDO_USER",
+		"AIOPS_USER=\"$SUDO_USER\"", "Never create a dedicated",
+		"gui/$AIOPS_UID", "aiops_has_systemd", "aiops_fetch", "unsupported architecture",
+		"AmbientCapabilities=CAP_NET_RAW",
+		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "ProtectHome=false",
 		"aiops_is_installed", "aiops_stop_and_uninstall_existing",
 		"existing agent detected", "systemctl restart aiops-agent",
 		"kickstart -k")

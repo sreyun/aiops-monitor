@@ -37,14 +37,9 @@ var agentDistCatalog = []struct {
 }
 
 func agentDistBinaryName(goos, goarch string) (string, error) {
-	goos = strings.ToLower(strings.TrimSpace(goos))
-	goarch = strings.ToLower(strings.TrimSpace(goarch))
-	// Normalize common agent/report arch aliases.
-	switch goarch {
-	case "x86_64", "x64":
-		goarch = "amd64"
-	case "aarch64":
-		goarch = "arm64"
+	goos, goarch = normalizeGOOSArch(goos, goarch)
+	if goos == "" {
+		return "", fmt.Errorf("unsupported platform %s/%s", goos, goarch)
 	}
 	for _, a := range agentDistCatalog {
 		if a.GOOS == goos && a.GOARCH == goarch {
@@ -52,6 +47,54 @@ func agentDistBinaryName(goos, goarch string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unsupported platform %s/%s", goos, goarch)
+}
+
+// normalizeGOOSArch maps host-reported OS/arch strings to Go GOOS/GOARCH.
+func normalizeGOOSArch(goos, goarch string) (string, string) {
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	goarch = strings.ToLower(strings.TrimSpace(goarch))
+	switch {
+	case goos == "macos" || goos == "osx" || goos == "mac" || strings.Contains(goos, "darwin"):
+		goos = "darwin"
+	case goos == "windows" || strings.Contains(goos, "windows"):
+		goos = "windows"
+	case goos == "linux" || strings.Contains(goos, "linux"):
+		goos = "linux"
+	}
+	switch goarch {
+	case "x86_64", "x64", "amd64":
+		goarch = "amd64"
+	case "aarch64", "arm64":
+		goarch = "arm64"
+	case "i386", "i686", "x86":
+		goarch = "386"
+	case "":
+		// Empty arch is common on older Windows reports — default to amd64.
+		if goos == "windows" || goos == "linux" || goos == "darwin" {
+			goarch = "amd64"
+		}
+	}
+	return goos, goarch
+}
+
+// agentDistCandidates returns preferred download names for a platform (first existing wins).
+func agentDistCandidates(goos, goarch string) []string {
+	goos, goarch = normalizeGOOSArch(goos, goarch)
+	primary, err := agentDistBinaryName(goos, goarch)
+	if err != nil {
+		return nil
+	}
+	out := []string{primary}
+	// Release CI also publishes the descriptive Windows name; some deployments
+	// only copy one of the two into dist/.
+	if goos == "windows" && goarch == "amd64" {
+		for _, alt := range []string{"aiops-agent.exe", "aiops-agent-windows-amd64.exe"} {
+			if alt != primary {
+				out = append(out, alt)
+			}
+		}
+	}
+	return out
 }
 
 func (s *Server) listAgentDistManifest() []agentDistArtifact {
@@ -79,12 +122,21 @@ func (s *Server) listAgentDistManifest() []agentDistArtifact {
 }
 
 func (s *Server) agentDistHas(goos, goarch string) bool {
-	name, err := agentDistBinaryName(goos, goarch)
-	if err != nil || s.distDir == "" {
-		return false
+	_, ok := s.agentDistResolve(goos, goarch)
+	return ok
+}
+
+// agentDistResolve returns the on-disk /dl filename for goos/goarch.
+func (s *Server) agentDistResolve(goos, goarch string) (string, bool) {
+	if s == nil || s.distDir == "" {
+		return "", false
 	}
-	_, err = os.Stat(filepath.Join(s.distDir, name))
-	return err == nil
+	for _, name := range agentDistCandidates(goos, goarch) {
+		if _, err := os.Stat(filepath.Join(s.distDir, name)); err == nil {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func fileSHA256HexServer(path string) (string, error) {
@@ -187,16 +239,14 @@ func (s *Server) agentPublicBaseURL() string {
 }
 
 func hostGOOSArch(h *Host) (goos, goarch string) {
-	goos = strings.ToLower(strings.TrimSpace(h.OS))
-	if goos == "macos" || goos == "osx" || goos == "mac" {
-		goos = "darwin"
+	if h == nil {
+		return "", ""
 	}
-	goarch = strings.ToLower(strings.TrimSpace(h.Arch))
-	switch goarch {
-	case "x86_64", "x64":
-		goarch = "amd64"
-	case "aarch64":
-		goarch = "arm64"
+	goos = strings.TrimSpace(h.OS)
+	goarch = strings.TrimSpace(h.Arch)
+	// Some agents put a pretty OS string in OS and leave Arch empty — also try Platform.
+	if goos == "" {
+		goos = strings.TrimSpace(h.Platform)
 	}
-	return goos, goarch
+	return normalizeGOOSArch(goos, goarch)
 }

@@ -986,6 +986,7 @@ type winInput struct {
 	lastAY      int
 	failLogAt   time.Time // rate-limit SendInput failure logs
 	probed      bool
+	lastDeskChk time.Time // throttle OpenInputDesktop during fast typing
 }
 
 func (i *winInput) SetOrigin(x, y int) { i.monX, i.monY = x, y }
@@ -1020,6 +1021,10 @@ func (i *winInput) logSendFail(kind string, errno uint32, extra ...any) {
 
 // ensureInputDesktop attaches the calling (input) thread to the current input
 // desktop so SendInput/SetCursorPos reach the lock/logon/secure desktop.
+//
+// Fast typing on the lock screen used to call OpenInputDesktop on every key —
+// that dwarfed the SendInput cost. We trust a recent attach briefly and only
+// re-open when the input desktop name changes (lock ↔ logon ↔ user).
 func (i *winInput) ensureInputDesktop() error {
 	if !deskFollowSecureDesktop {
 		return nil
@@ -1027,6 +1032,12 @@ func (i *winInput) ensureInputDesktop() error {
 	if !i.locked {
 		runtime.LockOSThread()
 		i.locked = true
+	}
+	now := time.Now()
+	if i.curDesk != 0 && i.curDeskName != "" && now.Sub(i.lastDeskChk) < 120*time.Millisecond {
+		if threadDesktopName() == i.curDeskName {
+			return nil
+		}
 	}
 	h, err := openInputDesktop()
 	if err != nil {
@@ -1036,9 +1047,9 @@ func (i *winInput) ensureInputDesktop() error {
 		return err
 	}
 	name := desktopNameOf(h)
+	i.lastDeskChk = now
 	if i.curDesk != 0 && name == i.curDeskName && threadDesktopName() == name {
 		_, _, _ = procCloseDesktop.Call(h)
-		i.probeSendInputOnce()
 		return nil
 	}
 	if r, _, _ := procSetThreadDesktop.Call(h); r == 0 {
@@ -1052,6 +1063,7 @@ func (i *winInput) ensureInputDesktop() error {
 	old := i.curDesk
 	i.curDesk = h
 	i.curDeskName = name
+	i.probed = false // re-probe after desktop switch
 	if old != 0 {
 		_, _, _ = procCloseDesktop.Call(old)
 	}
@@ -1301,41 +1313,55 @@ func (i *winInput) SendCAD() error {
 	return injectSecureAttentionSequence()
 }
 
-// TypeText injects Unicode text via KEYEVENTF_UNICODE (works on lock screen password boxes).
+// TypeText injects Unicode text via KEYEVENTF_UNICODE (works on lock screen
+// password boxes). Events are batched into few SendInput calls — the previous
+// per-rune SendInput + 8ms sleep made lock-screen passwords feel unusable.
 func (i *winInput) TypeText(text string) error {
 	if err := i.ensureInputDesktop(); err != nil {
 		return err
 	}
 	cb := unsafe.Sizeof(winMouseInput{})
-	for _, r := range text {
-		if r == '\n' || r == '\r' {
-			_ = i.Key(0x0D, true)
-			_ = i.Key(0x0D, false)
-			continue
+	flush := func(batch []winKeyInput) error {
+		if len(batch) == 0 {
+			return nil
 		}
-		if r == '\t' {
-			_ = i.Key(0x09, true)
-			_ = i.Key(0x09, false)
-			continue
-		}
-		send := func(flags uint32) bool {
-			inp := winKeyInput{
-				Type:  inputKeyboard,
-				Vk:    0,
-				Scan:  uint16(r),
-				Flags: flags | keyeventfUnicode,
-			}
-			n, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inp)), cb)
-			return n != 0
-		}
-		if !send(0) {
-			i.logSendFail("type_text", win32LastError(), "rune", r)
+		n, _, _ := procSendInput.Call(uintptr(len(batch)), uintptr(unsafe.Pointer(&batch[0])), cb)
+		if n == 0 {
+			i.logSendFail("type_text", win32LastError(), "count", len(batch))
 			return fmt.Errorf("UNICODE 注入失败（desktop=%s）", i.curDeskName)
 		}
-		_ = send(keyeventfKeyUp)
-		time.Sleep(8 * time.Millisecond)
+		return nil
 	}
-	return nil
+	const chunk = 48 // runes per SendInput batch
+	batch := make([]winKeyInput, 0, chunk*2)
+	for _, r := range text {
+		if r == '\n' || r == '\r' || r == '\t' {
+			if err := flush(batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+			vk := 0x0D
+			if r == '\t' {
+				vk = 0x09
+			}
+			_ = i.Key(vk, true)
+			_ = i.Key(vk, false)
+			continue
+		}
+		batch = append(batch,
+			winKeyInput{Type: inputKeyboard, Scan: uint16(r), Flags: keyeventfUnicode},
+			winKeyInput{Type: inputKeyboard, Scan: uint16(r), Flags: keyeventfUnicode | keyeventfKeyUp},
+		)
+		if len(batch) >= chunk*2 {
+			if err := flush(batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+			// Brief yield so Winlogon password edit can drain the queue.
+			time.Sleep(time.Millisecond)
+		}
+	}
+	return flush(batch)
 }
 
 func (i *winInput) DeskInputMeta() deskInputMeta {

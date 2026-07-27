@@ -27,6 +27,7 @@ func TestChordVKSequence(t *testing.T) {
 		"ctrl_alt_bksp":   {0x11, 0x12, 0x08},
 		"enter":           {0x0D},
 		"tab":             {0x09},
+		"ctrl_v":          {0x11, 0x56},
 		"unknown-chord":   nil,
 	}
 	for name, want := range cases {
@@ -101,5 +102,27 @@ func TestDeskDoCADUnsupported(t *testing.T) {
 	st := &stubDeskInput{}
 	if err := deskDoCAD(st); err == nil {
 		t.Fatal("expected unsupported CAD on plain deskInput")
+	}
+}
+
+func TestDeskActionUnlockJSON(t *testing.T) {
+	raw := []byte(`{"action":"unlock","user":"alice","text":"s3cret","enter":true}`)
+	var req deskActionRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Action != "unlock" || req.User != "alice" || req.Text != "s3cret" || !req.Enter {
+		t.Fatalf("unexpected: %+v", req)
+	}
+}
+
+func TestDeskDoUnlockTypesViaKeys(t *testing.T) {
+	st := &stubDeskInput{}
+	if err := deskDoUnlock(st, "", "ab", true, 800, 600); err != nil {
+		t.Fatal(err)
+	}
+	// wake clicks + Esc + password 'a','b' + Enter — at least some keys recorded
+	if len(st.keys) < 3 {
+		t.Fatalf("expected typed keys, got %v", st.keys)
 	}
 }

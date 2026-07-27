@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // agentReplaceAndRestart replaces the running binary with staging (Linux allows
@@ -48,7 +49,7 @@ DIR=%s
 CFG=%s
 UNIT=%s
 RESTARTED=0
-# Prefer restarting an existing unit (keeps User=aiops hardened install).
+# Prefer restarting an existing unit (keeps the installed User= from install.sh).
 # Only call --install-service when no unit is present — it rewrites to User=root.
 if systemctl restart "$UNIT" 2>/dev/null || systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
   RESTARTED=1
@@ -84,8 +85,7 @@ if [ "$RESTARTED" -eq 0 ]; then
   exit 1
 fi
 `, shellQuote(exe), shellQuote(dir), shellQuote(cfgPath), shellQuote(unit))
-		cmd := exec.Command("sh", "-c", script)
-		return cmd.Start()
+		return startDetachedShell(script)
 	case "darwin":
 		script := fmt.Sprintf(`
 sleep 2
@@ -126,11 +126,24 @@ if [ "$RESTARTED" -eq 0 ]; then
   exit 1
 fi
 `, shellQuote(exe), shellQuote(dir), shellQuote(cfgPath))
-		cmd := exec.Command("sh", "-c", script)
-		return cmd.Start()
+		return startDetachedShell(script)
 	default:
 		return fmt.Errorf("restart not supported on %s", runtime.GOOS)
 	}
+}
+
+// startDetachedShell runs the restart helper in a new session so systemd/launchd
+// stopping the agent does not also kill the helper (Windows uses DETACHED_PROCESS).
+func startDetachedShell(script string) error {
+	cmd := exec.Command("sh", "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start restart helper: %w", err)
+	}
+	return nil
 }
 
 func detectLinuxAgentUnit() string {
