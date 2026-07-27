@@ -36,6 +36,9 @@ func formatWindowsOSName(maj, min, build uint32, productType byte) string {
 		}
 	case maj == 10 && server:
 		switch {
+		case build >= 26100:
+			// Server 2025 LTSC shares the 26100 kernel line with Windows 11 24H2.
+			name = "Windows Server 2025"
 		case build >= 20348:
 			name = "Windows Server 2022"
 		case build >= 17763:

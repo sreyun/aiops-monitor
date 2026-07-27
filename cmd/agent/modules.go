@@ -139,6 +139,12 @@ func moduleGatherFacts() ([]byte, int) {
 	runtime.ReadMemStats(&ms)
 	fmt.Fprintf(&b, "go_alloc_mb=%.1f\n", float64(ms.Alloc)/1024/1024)
 	if runtime.GOOS == "linux" {
+		d := detectLinuxDistro()
+		fmt.Fprintf(&b, "platform=%s\n", d.Pretty)
+		fmt.Fprintf(&b, "os_family=%s\n", d.Family)
+		fmt.Fprintf(&b, "distro=%s\n", d.ID)
+		fmt.Fprintf(&b, "distro_version=%s\n", d.Version)
+		fmt.Fprintf(&b, "pkg_family=%s\n", d.Pkg)
 		if raw, err := os.ReadFile("/proc/loadavg"); err == nil {
 			fmt.Fprintf(&b, "loadavg=%s", string(raw))
 		}
@@ -237,39 +243,41 @@ func modulePackage(args map[string]string) ([]byte, int) {
 func packageArgv(install bool, name string) ([]string, error) {
 	switch runtime.GOOS {
 	case "linux":
-		switch {
-		case have("apt-get"):
+		// Rocky 9/10、麒麟 V10/V11 等按发行版包族选择，避免错误命中 apt-get 桩。
+		mgr := linuxPkgManagerCmd()
+		switch mgr {
+		case "apt-get", "apt":
 			if install {
 				return []string{"apt-get", "install", "-y", name}, nil
 			}
 			return []string{"apt-get", "remove", "-y", name}, nil
-		case have("dnf"):
+		case "dnf":
 			if install {
 				return []string{"dnf", "install", "-y", name}, nil
 			}
 			return []string{"dnf", "remove", "-y", name}, nil
-		case have("yum"):
+		case "yum":
 			if install {
 				return []string{"yum", "install", "-y", name}, nil
 			}
 			return []string{"yum", "remove", "-y", name}, nil
-		case have("apk"):
+		case "apk":
 			if install {
 				return []string{"apk", "add", name}, nil
 			}
 			return []string{"apk", "del", name}, nil
-		case have("zypper"):
+		case "zypper":
 			if install {
 				return []string{"zypper", "--non-interactive", "install", name}, nil
 			}
 			return []string{"zypper", "--non-interactive", "remove", name}, nil
-		case have("pacman"):
+		case "pacman":
 			if install {
 				return []string{"pacman", "-S", "--noconfirm", name}, nil
 			}
 			return []string{"pacman", "-R", "--noconfirm", name}, nil
 		}
-		return nil, fmt.Errorf("未找到受支持的包管理器 (apt/dnf/yum/apk/zypper/pacman)")
+		return nil, fmt.Errorf("未找到受支持的包管理器 (apt/dnf/yum/apk/zypper/pacman)；当前发行版可能未正确识别")
 	case "darwin":
 		if !have("brew") {
 			return nil, fmt.Errorf("未找到 brew，请先安装 Homebrew")

@@ -31,7 +31,9 @@ func inspectWindowsOSIdentity() (pretty, kernel string) {
 	script := `
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
-$o = Get-CimInstance Win32_OperatingSystem
+$o = $null
+try { $o = Get-CimInstance Win32_OperatingSystem } catch {}
+if (-not $o) { try { $o = Get-WmiObject Win32_OperatingSystem } catch {} }
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 Write-Output ("CAPTION=" + [string]$o.Caption)
 Write-Output ("DISPLAY=" + [string]$cv.DisplayVersion)
@@ -39,6 +41,7 @@ Write-Output ("BUILD=" + [string]$cv.CurrentBuild)
 Write-Output ("MAJOR=" + [string]$cv.CurrentMajorVersionNumber)
 Write-Output ("MINOR=" + [string]$cv.CurrentMinorVersionNumber)
 Write-Output ("UBR=" + [string]$cv.UBR)
+Write-Output ("VERSION=" + [string]$o.Version)
 `
 	raw := string(cmdOutRaw(8, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script))
 	vals := map[string]string{}
@@ -56,6 +59,7 @@ Write-Output ("UBR=" + [string]$cv.UBR)
 	major := sanitizeInspectField(vals["MAJOR"])
 	minor := sanitizeInspectField(vals["MINOR"])
 	ubr := sanitizeInspectField(vals["UBR"])
+	version := sanitizeInspectField(vals["VERSION"])
 
 	if caption != "" {
 		pretty = caption
@@ -69,8 +73,22 @@ Write-Output ("UBR=" + [string]$cv.UBR)
 		pretty = ver
 	}
 
+	// WS2012/R2 lack CurrentMajorVersionNumber — never default to 10.x.
+	if major == "" || minor == "" {
+		if parts := strings.Split(version, "."); len(parts) >= 2 {
+			if major == "" {
+				major = sanitizeInspectField(parts[0])
+			}
+			if minor == "" {
+				minor = sanitizeInspectField(parts[1])
+			}
+			if build == "" && len(parts) >= 3 {
+				build = sanitizeInspectField(parts[2])
+			}
+		}
+	}
 	if major == "" {
-		major = "10"
+		major = "0"
 	}
 	if minor == "" {
 		minor = "0"
@@ -80,6 +98,8 @@ Write-Output ("UBR=" + [string]$cv.UBR)
 		if ubr != "" {
 			kernel += "." + ubr
 		}
+	} else if version != "" {
+		kernel = version
 	} else {
 		kernel = major + "." + minor
 	}

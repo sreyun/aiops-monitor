@@ -12,7 +12,8 @@ import (
 	"aiops-monitor/shared"
 )
 
-const hypervCollectTimeout = 30 * time.Second
+// 90s: WS2012 cold-load of Hyper-V module + large guest inventories often exceed 30s.
+const hypervCollectTimeout = 90 * time.Second
 
 // hypervProbeScript reports whether this host is a Hyper-V HOST. It checks for
 // the vmms (Hyper-V Virtual Machine Management) service rather than the Get-VM
@@ -59,6 +60,7 @@ try { $vms=@(Get-VM -ErrorAction Stop) } catch {
 # $vm.CPUUsage per-VM when the perf class yields nothing, so it is never worse than before.
 $hostLP=0
 try { $hostLP=[int](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).NumberOfLogicalProcessors } catch {}
+if($hostLP -le 0){ try { $hostLP=[int](Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).NumberOfLogicalProcessors } catch {} }
 if($hostLP -le 0){ try { $hostLP=[int]$env:NUMBER_OF_PROCESSORS } catch {} }
 if($hostLP -le 0){ $hostLP=1 }
 $vpSum=@{}
@@ -140,6 +142,10 @@ Write-Utf8Json $json`
 // (a vmms service lookup) is instant, but keep a modest timeout so a momentarily
 // wedged PowerShell at boot just fails this attempt; the caller re-probes with
 // backoff so a transient failure never permanently disables collection.
+//
+// Covers Windows Server 2012–2025 and Windows 10/11 Pro/Enterprise with the
+// Hyper-V role. On Windows ARM64, Hyper-V is only present when the OEM ships
+// vmms; if the service is absent we correctly report unavailable (no false start).
 func hypervAvailable() bool {
 	out, _ := runCmdTimeout(15*time.Second, "powershell", "-NoProfile", "-NonInteractive", "-Command", hypervProbeScript)
 	return strings.Contains(out, "yes")

@@ -1526,6 +1526,9 @@ func publishNucleiTemplates(src, dst string) error {
 }
 
 // constrainPathUnderRoot resolves p under root and rejects path escape / abs paths outside.
+// On Windows, filepath.IsAbs("/etc/passwd") is false, so a leading "/" must still be
+// treated as absolute — otherwise Join(root, "/etc/passwd") lands under root and
+// falsely allows a path traversal.
 func constrainPathUnderRoot(p, root string) (string, bool) {
 	p = strings.TrimSpace(p)
 	root = strings.TrimSpace(root)
@@ -1536,8 +1539,13 @@ func constrainPathUnderRoot(p, root string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	full := p
-	if !filepath.IsAbs(p) {
+	slashP := filepath.ToSlash(p)
+	absLike := filepath.IsAbs(p) || strings.HasPrefix(slashP, "/") ||
+		(len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')))
+	var full string
+	if absLike {
+		full = filepath.Clean(filepath.FromSlash(slashP))
+	} else {
 		full = filepath.Join(rootAbs, filepath.FromSlash(p))
 	}
 	fullAbs, err := filepath.Abs(full)

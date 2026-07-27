@@ -16,13 +16,25 @@ import (
 const modulePrefix = "__AIOPS_MODULE__"
 
 // playbookHostVars 预置一台主机的内置变量（供 {{名}} 引用与 when 条件求值）。
+// 除 GOOS 外还暴露 Platform / 发行版 ID / 主版本，便于 Rocky 9/10、麒麟 V10/V11 条件分支。
 func playbookHostVars(h *Host) map[string]string {
+	d := hostDistro(h)
+	os := strings.ToLower(h.OS)
+	if os == "macos" || os == "osx" || os == "mac" {
+		os = "darwin"
+	}
 	return map[string]string{
-		"host_id":  h.ID,
-		"hostname": h.Hostname,
-		"ip":       h.IP,
-		"os":       strings.ToLower(h.OS),
-		"category": h.Category,
+		"host_id":        h.ID,
+		"hostname":       h.Hostname,
+		"ip":             h.IP,
+		"os":             os,
+		"arch":           strings.ToLower(strings.TrimSpace(h.Arch)),
+		"platform":       h.Platform,
+		"os_family":      d.Family,
+		"distro":         d.ID,
+		"distro_id":      d.ID,
+		"distro_version": d.Version,
+		"category":       h.Category,
 	}
 }
 
@@ -97,8 +109,20 @@ func normalizeWhenToken(s string) string {
 	switch s {
 	case "macos", "osx", "mac":
 		return "darwin"
-	case "kylin", "uos", "neokylin":
-		return "linux"
+	case "rockylinux":
+		return "rocky"
+	case "kylinos", "neokylin":
+		return "kylin"
+	case "redhat":
+		return "rhel"
+	case "almalinux":
+		return "alma"
+	case "euler":
+		return "euleros"
+	case "alibaba", "alibabacloudlinux":
+		return "alinux"
+	case "amazon", "amazonlinux":
+		return "amzn"
 	}
 	return s
 }

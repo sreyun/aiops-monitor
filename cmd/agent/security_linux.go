@@ -120,8 +120,8 @@ func isDomesticOS() bool {
 	d := getOSDist()
 	domesticIDs := map[string]bool{
 		"kylin": true, "neokylin": true, "uos": true, "deepin": true,
-		"openeuler": true, "openEuler": true, "nfs": true, "anolis": true,
-		"alinux": true, "tencentos": true,
+		"openeuler": true, "openEuler": true, "euleros": true, "nfs": true,
+		"anolis": true, "alinux": true, "tencentos": true,
 	}
 	if domesticIDs[d.ID] {
 		return true
@@ -132,7 +132,7 @@ func isDomesticOS() bool {
 		}
 	}
 	lower := strings.ToLower(d.Name + " " + d.PrettyName)
-	for _, kw := range []string{"kylin", "uos", "deepin", "openeuler", "neokylin", "方德", "中标"} {
+	for _, kw := range []string{"kylin", "uos", "deepin", "openeuler", "euleros", "euler os", "neokylin", "方德", "中标"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}

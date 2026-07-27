@@ -14,7 +14,7 @@ import (
 // always have a complete, commented reference file next to their config.yaml.
 // YAML is now the default/recommended config format (see ResolveConfigPath).
 //
-//go:generate cp ../../config.example.yaml config_example.yaml
+//go:generate go run copy_example.go
 //go:embed config_example.yaml
 var configExampleYAML []byte
 

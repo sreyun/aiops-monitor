@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,11 @@ func TestConstrainPathUnderRoot(t *testing.T) {
 	}
 	if _, ok := constrainPathUnderRoot("/etc/passwd", root); ok {
 		t.Fatal("abs outside must fail")
+	}
+	if runtime.GOOS == "windows" {
+		if _, ok := constrainPathUnderRoot(`C:\Windows\System32\config`, root); ok {
+			t.Fatal("windows abs outside must fail")
+		}
 	}
 	_ = filepath.Join(root, "x")
 }
