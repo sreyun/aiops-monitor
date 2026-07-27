@@ -73,3 +73,12 @@ func TestDefaultClientLosesPOSTOn301(t *testing.T) {
 		t.Fatalf("expected default client to convert POST→GET, got %s", gotMethod)
 	}
 }
+
+func TestProbeUpgradeSkipsNonDefaultHTTPPort(t *testing.T) {
+	if got := probeUpgradeHTTPToHTTPS("http://192.168.1.10:8529"); got != "http://192.168.1.10:8529" {
+		t.Fatalf("lab port must stay http: %q", got)
+	}
+	if got := probeUpgradeHTTPToHTTPS("https://aiops.example.com"); got != "https://aiops.example.com" {
+		t.Fatalf("https must stay: %q", got)
+	}
+}

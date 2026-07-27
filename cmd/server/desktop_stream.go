@@ -57,6 +57,7 @@ type deskManager struct {
 	sessions        map[string]*deskSession
 	waiters         map[string]chan string
 	pendingSessions map[string][]string
+	lastWaitAt      map[string]time.Time
 	archived        []deskArchive
 	recDir          string
 }
@@ -66,6 +67,7 @@ func newDeskManager() *deskManager {
 		sessions:        map[string]*deskSession{},
 		waiters:         map[string]chan string{},
 		pendingSessions: map[string][]string{},
+		lastWaitAt:      map[string]time.Time{},
 	}
 }
 
@@ -137,24 +139,26 @@ func (m *deskManager) remove(id string) {
 	}
 }
 
-func (m *deskManager) notifyAgent(hostID, sessionID string) bool {
+func (m *deskManager) notifyAgent(hostID, sessionID string) (ok bool, alive bool) {
 	m.mu.Lock()
 	w := m.waiters[hostID]
 	delete(m.waiters, hostID)
+	last := m.lastWaitAt[hostID]
+	alive = w != nil || (!last.IsZero() && time.Since(last) < 90*time.Second)
 	if w == nil {
 		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
 		m.mu.Unlock()
-		return true
+		return true, alive
 	}
 	m.mu.Unlock()
 	select {
 	case w <- sessionID:
-		return true
+		return true, true
 	default:
 		m.mu.Lock()
 		m.pendingSessions[hostID] = append(m.pendingSessions[hostID], sessionID)
 		m.mu.Unlock()
-		return true
+		return true, alive
 	}
 }
 
@@ -162,6 +166,7 @@ func (m *deskManager) registerWaiter(hostID string) chan string {
 	ch := make(chan string, 1)
 	m.mu.Lock()
 	m.waiters[hostID] = ch
+	m.lastWaitAt[hostID] = time.Now()
 	m.mu.Unlock()
 	return ch
 }
@@ -279,7 +284,7 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: h.Hostname, Message: msg})
 	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: operator, IP: clientIP, Host: h.Hostname, Message: Tz("log.close_desktop", h.Hostname)})
 
-	if !s.desk.notifyAgent(hostID, sess.id) {
+	if _, alive := s.desk.notifyAgent(hostID, sess.id); !alive {
 		_ = ws.WriteBinary(append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.no_channel")})...))
 		return
 	}
@@ -315,7 +320,9 @@ func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-time.After(35 * time.Second):
 			select {
-			case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{"error": Tz("desktop.timeout")})...):
+			case sess.toBrowser <- append([]byte{'E'}, mustJSON(map[string]string{
+				"error": Tz("desktop.timeout") + "\n" + Tz("desktop.timeout_hint_https"),
+			})...):
 			case <-sess.done:
 			}
 			// Let the writer flush the error frame before tearing the socket down.
