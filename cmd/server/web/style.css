@@ -4858,6 +4858,17 @@ button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--acce
 }
 #hostSecurityPanel .hs-fw-eng{ font-size:11px; margin-top:3px }
 #hostSecurityPanel .hs-port-panel{ margin:0 0 14px }
+#hostSecurityPanel .hs-fim-panel{
+  margin:0 0 14px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel2);
+}
+#hostSecurityPanel .hs-fim-panel .hs-fw-head{ margin-bottom:8px }
+#hostSecurityPanel .hs-fim-panel .ws-help{ margin:0 0 10px }
+#hostSecurityPanel .hs-fim-diff{
+  margin:0; padding:10px 12px; max-height:280px; overflow:auto;
+  font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-all;
+  background:var(--panel); border:1px solid var(--line); border-radius:8px;
+}
+#hostSecurityPanel .hs-fim-diff-row td{ padding-top:0; border-top:none }
 #hostSecurityPanel .sec-remediation{ margin:0 0 14px }
 #hostSecurityPanel .sec-remediation ul{ margin:6px 0 0; padding-left:18px; font-size:13px; line-height:1.55 }
 

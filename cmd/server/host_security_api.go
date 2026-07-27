@@ -122,6 +122,8 @@ func (s *Server) handleHostSecuritySummary(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleGetHostSecurityConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.HostSecurity()
 	cfg.EnableClamAV = cfg.clamAVEnabled()
+	cfg.FIMEnabled = cfg.fimEnabled()
+	cfg.FIMContentDiff = cfg.fimContentDiffEnabled()
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -149,6 +151,26 @@ func (s *Server) handleSetHostSecurityConfig(w http.ResponseWriter, r *http.Requ
 		c.DisableClamAV = cur.DisableClamAV
 	}
 	c.EnableClamAV = !c.DisableClamAV
+	if _, ok := raw["disable_fim"]; ok {
+		// decoded into c.DisableFIM
+	} else if v, ok := raw["fim_enabled"]; ok {
+		var on bool
+		_ = json.Unmarshal(v, &on)
+		c.DisableFIM = !on
+	} else {
+		c.DisableFIM = cur.DisableFIM
+	}
+	c.FIMEnabled = !c.DisableFIM
+	if _, ok := raw["disable_fim_content_diff"]; ok {
+		// decoded
+	} else if v, ok := raw["fim_content_diff"]; ok {
+		var on bool
+		_ = json.Unmarshal(v, &on)
+		c.DisableFIMContentDiff = !on
+	} else {
+		c.DisableFIMContentDiff = cur.DisableFIMContentDiff
+	}
+	c.FIMContentDiff = !c.DisableFIMContentDiff
 	if _, ok := raw["auto_ai_summary"]; !ok {
 		c.AutoAISummary = cur.AutoAISummary
 	}
@@ -162,5 +184,7 @@ func (s *Server) handleSetHostSecurityConfig(w http.ResponseWriter, r *http.Requ
 	})
 	out := s.cfg.HostSecurity()
 	out.EnableClamAV = out.clamAVEnabled()
+	out.FIMEnabled = out.fimEnabled()
+	out.FIMContentDiff = out.fimContentDiffEnabled()
 	writeJSON(w, http.StatusOK, out)
 }

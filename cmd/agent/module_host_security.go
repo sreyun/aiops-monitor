@@ -27,12 +27,14 @@ type hostSecurityReport struct {
 	Packages    []hostSecPkg     `json:"packages"`
 	Listeners   []string         `json:"listeners"`
 	Processes   []string         `json:"processes"`
-	Hardening   []hostSecFinding `json:"hardening"`
-	FileHashes  []hostSecHash    `json:"file_hashes"`
-	Malware     hostSecMalware   `json:"malware"`
-	Firewall    hostSecFirewall  `json:"firewall"`
-	IOC         []hostSecFinding `json:"ioc"`
-	Meta        map[string]any   `json:"meta,omitempty"`
+	Hardening     []hostSecFinding  `json:"hardening"`
+	FileHashes    []hostSecHash     `json:"file_hashes"`
+	FileInventory []hostSecFileInv  `json:"file_inventory,omitempty"`
+	FileTextDiffs []hostSecTextDiff `json:"file_text_diffs,omitempty"`
+	Malware       hostSecMalware    `json:"malware"`
+	Firewall      hostSecFirewall   `json:"firewall"`
+	IOC           []hostSecFinding  `json:"ioc"`
+	Meta          map[string]any    `json:"meta,omitempty"`
 }
 
 type hostSecPkg struct {
@@ -80,6 +82,14 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 	if v := strings.ToLower(strings.TrimSpace(args["clamav"])); v == "0" || v == "false" || v == "off" {
 		enableClam = false
 	}
+	enableFIM := true
+	if v := strings.ToLower(strings.TrimSpace(args["fim"])); v == "0" || v == "false" || v == "off" {
+		enableFIM = false
+	}
+	enableFIMDiff := true
+	if v := strings.ToLower(strings.TrimSpace(args["fim_diff"])); v == "0" || v == "false" || v == "off" {
+		enableFIMDiff = false
+	}
 
 	rep.Packages = collectHostPackages(rep.PkgMgr, rep.Distro, 800)
 	rep.Listeners = collectListenLines(120)
@@ -88,6 +98,14 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 	rep.Hardening = collectHardeningFindings()
 	rep.Hardening = append(rep.Hardening, firewallFindings(rep.Firewall)...)
 	rep.FileHashes = collectSampleHashes(30)
+	if enableFIM {
+		inv, diffs := collectFIMInventory(enableFIMDiff)
+		rep.FileInventory = inv
+		rep.FileTextDiffs = diffs
+		rep.Meta["fim"] = true
+		rep.Meta["fim_diff"] = enableFIMDiff
+		rep.Meta["fim_inventory_count"] = len(inv)
+	}
 	rep.IOC = collectIOCFindings(rep.Processes, rep.Listeners, rep.FileHashes)
 	rep.Malware = runClamAVScan(enableClam, samplePathsForClam())
 
@@ -98,6 +116,14 @@ func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
 	// Cap output size (~1.5 MiB)
 	if len(raw) > 1500<<10 {
 		rep.Packages = rep.Packages[:min(200, len(rep.Packages))]
+		if len(rep.FileTextDiffs) > 0 {
+			rep.FileTextDiffs = nil
+			rep.Meta["fim_diff_dropped"] = true
+		}
+		if len(rep.FileInventory) > 40 {
+			rep.FileInventory = rep.FileInventory[:40]
+			rep.Meta["fim_inventory_truncated"] = true
+		}
 		rep.Meta["truncated"] = true
 		raw, _ = json.Marshal(rep)
 	}

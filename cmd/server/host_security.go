@@ -30,7 +30,12 @@ type HostSecurityConfig struct {
 	OSVURL        string            `json:"osv_url,omitempty"`
 	EnableClamAV  bool              `json:"enable_clamav"` // kept for API/UI; see clamAVEnabled()
 	DisableClamAV bool              `json:"disable_clamav,omitempty"`
-	TimeoutSec    int               `json:"timeout_sec,omitempty"`
+	// FIMEnabled / FIMContentDiff are API mirrors; defaults ON via Disable* opt-out.
+	FIMEnabled            bool `json:"fim_enabled"`
+	FIMContentDiff        bool `json:"fim_content_diff"`
+	DisableFIM            bool `json:"disable_fim,omitempty"`
+	DisableFIMContentDiff bool `json:"disable_fim_content_diff,omitempty"`
+	TimeoutSec            int  `json:"timeout_sec,omitempty"`
 	// AutoAISummary runs host_security_diagnosis after completed scans (non-blocking).
 	AutoAISummary bool `json:"auto_ai_summary,omitempty"`
 }
@@ -52,6 +57,16 @@ func (c HostSecurityConfig) clamAVEnabled() bool {
 		return false
 	}
 	return true
+}
+
+// fimEnabled defaults ON. Opt out with disable_fim=true.
+func (c HostSecurityConfig) fimEnabled() bool {
+	return !c.DisableFIM
+}
+
+// fimContentDiffEnabled defaults ON. Opt out with disable_fim_content_diff=true.
+func (c HostSecurityConfig) fimContentDiffEnabled() bool {
+	return !c.DisableFIMContentDiff
 }
 
 func (cs *ConfigStore) HostSecurity() HostSecurityConfig {
@@ -118,28 +133,68 @@ type hsAgentFirewall struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type hsAgentFileInv struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size,omitempty"`
+	Mtime  int64  `json:"mtime,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+type hsAgentTextDiff struct {
+	Path      string `json:"path"`
+	OldSHA    string `json:"old_sha,omitempty"`
+	NewSHA    string `json:"new_sha,omitempty"`
+	Diff      string `json:"diff,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 type hsAgentReport struct {
-	CollectedAt int64            `json:"collected_at"`
-	Hostname    string           `json:"hostname"`
-	OS          string           `json:"os"`
-	Arch        string           `json:"arch"`
-	Kernel      string           `json:"kernel,omitempty"`
-	Distro      string           `json:"distro,omitempty"`
-	PkgMgr      string           `json:"pkg_mgr,omitempty"`
-	Packages    []hsAgentPkg     `json:"packages"`
-	Listeners   []string         `json:"listeners"`
-	Processes   []string         `json:"processes"`
-	Hardening   []hsAgentFinding `json:"hardening"`
-	IOC         []hsAgentFinding `json:"ioc"`
-	Malware     hsAgentMalware   `json:"malware"`
-	Firewall    hsAgentFirewall  `json:"firewall"`
-	Meta        map[string]any   `json:"meta,omitempty"`
+	CollectedAt   int64             `json:"collected_at"`
+	Hostname      string            `json:"hostname"`
+	OS            string            `json:"os"`
+	Arch          string            `json:"arch"`
+	Kernel        string            `json:"kernel,omitempty"`
+	Distro        string            `json:"distro,omitempty"`
+	PkgMgr        string            `json:"pkg_mgr,omitempty"`
+	Packages      []hsAgentPkg      `json:"packages"`
+	Listeners     []string          `json:"listeners"`
+	Processes     []string          `json:"processes"`
+	Hardening     []hsAgentFinding  `json:"hardening"`
+	IOC           []hsAgentFinding  `json:"ioc"`
+	Malware       hsAgentMalware    `json:"malware"`
+	Firewall      hsAgentFirewall   `json:"firewall"`
+	FileInventory []hsAgentFileInv  `json:"file_inventory,omitempty"`
+	FileTextDiffs []hsAgentTextDiff `json:"file_text_diffs,omitempty"`
+	Meta          map[string]any    `json:"meta,omitempty"`
+}
+
+// HostFileHash is a trimmed inventory entry stored with a scan.
+type HostFileHash struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size,omitempty"`
+	Mtime  int64  `json:"mtime,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+// HostFileChange is a FIM delta vs the previous completed scan baseline.
+type HostFileChange struct {
+	Path      string `json:"path"`
+	Change    string `json:"change"` // added|removed|modified
+	OldSHA    string `json:"old_sha,omitempty"`
+	NewSHA    string `json:"new_sha,omitempty"`
+	OldMtime  int64  `json:"old_mtime,omitempty"`
+	NewMtime  int64  `json:"new_mtime,omitempty"`
+	Diff      string `json:"diff,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // HostFinding is a normalized finding after server-side enrichment.
 type HostFinding struct {
 	Level      string `json:"level"`
-	Category   string `json:"category"` // hardening|malware|ioc|cve|port
+	Category   string `json:"category"` // hardening|malware|ioc|cve|port|fim
 	ID         string `json:"id"`
 	Title      string `json:"title"`
 	Detail     string `json:"detail,omitempty"`
@@ -184,6 +239,9 @@ type HostScanResult struct {
 	Operator       string            `json:"operator,omitempty"`
 	Trigger        string            `json:"trigger,omitempty"` // manual|schedule
 	BaselineDiff   *ScanBaselineDiff `json:"baseline_diff,omitempty"`
+	FileInventory  []HostFileHash    `json:"file_inventory,omitempty"`
+	FileChanges    []HostFileChange  `json:"file_changes,omitempty"`
+	FIMBaseline    bool              `json:"fim_baseline_established,omitempty"`
 	AISummary      string            `json:"ai_summary,omitempty"`
 	AISummaryAt    int64             `json:"ai_summary_at,omitempty"`
 }
@@ -690,6 +748,9 @@ func scoreHostFindings(findings []HostFinding) (score int, risk string, summary 
 	deduct := 0
 	for _, f := range findings {
 		summary[f.Level]++
+		if f.Category == "fim" {
+			summary["fim"]++
+		}
 		switch f.Level {
 		case "crit":
 			deduct += 25
@@ -781,6 +842,13 @@ func buildRemediation(rep hsAgentReport, findings []HostFinding) []string {
 		if f.Category == "port" && f.Suggest != "" && portTips < 6 && len(tips) < 24 {
 			add(f.Suggest + "  # " + f.Title)
 			portTips++
+		}
+	}
+	fimTips := 0
+	for _, f := range findings {
+		if f.Category == "fim" && f.Suggest != "" && fimTips < 6 && len(tips) < 28 {
+			add(f.Suggest + "  # " + f.Title)
+			fimTips++
 		}
 	}
 	return tips
@@ -1061,6 +1129,12 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	if !cfg.clamAVEnabled() {
 		args["clamav"] = "0"
 	}
+	if !cfg.fimEnabled() {
+		args["fim"] = "0"
+	}
+	if !cfg.fimContentDiffEnabled() {
+		args["fim_diff"] = "0"
+	}
 	out, err := s.runAgentModule(hostID, "host_security_scan", args, cfg.TimeoutSec)
 	finished := time.Now().Unix()
 	if err != nil {
@@ -1102,6 +1176,44 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	if osvFinding != nil {
 		base = append([]HostFinding{*osvFinding}, base...)
 	}
+
+	curInv := trimHostFileInventory(rep.FileInventory)
+	var prevFindings []HostFinding
+	var prevID string
+	var prevInv []HostFileHash
+	s.hostSec.mu.Lock()
+	// Prefer lastByHost when it is a prior completed scan; otherwise search history
+	// (covers restart edge cases where lastByHost briefly held a failed scan).
+	if prev := s.hostSec.lastByHost[hostID]; prev != nil && prev.Status == "completed" && prev.ID != scanID {
+		prevFindings = append([]HostFinding(nil), prev.Findings...)
+		prevID = prev.ID
+		prevInv = append([]HostFileHash(nil), prev.FileInventory...)
+	} else {
+		for _, sc := range s.hostSec.scans {
+			if sc == nil || sc.HostID != hostID || sc.Status != "completed" || sc.ID == scanID {
+				continue
+			}
+			prevFindings = append([]HostFinding(nil), sc.Findings...)
+			prevID = sc.ID
+			prevInv = append([]HostFileHash(nil), sc.FileInventory...)
+			break
+		}
+	}
+	s.hostSec.mu.Unlock()
+
+	var fileChanges []HostFileChange
+	fimBaseline := false
+	if cfg.fimEnabled() {
+		textDiffs := rep.FileTextDiffs
+		if !cfg.fimContentDiffEnabled() {
+			textDiffs = nil
+		}
+		fileChanges, fimBaseline = diffHostFileInventory(prevInv, curInv, textDiffs)
+		if len(fileChanges) > 0 {
+			base = append(base, fimFindingsFromChanges(fileChanges)...)
+		}
+	}
+
 	findings := mergeAndCapFindings(base, portRiskFindings(ports), 400)
 	cveCount := 0
 	for _, f := range findings {
@@ -1112,26 +1224,6 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 	portCount, riskyCount, portSample := summarizePorts(ports)
 	score, risk, summary := scoreHostFindings(findings)
 	tips := buildRemediation(rep, findings)
-
-	var prevFindings []HostFinding
-	var prevID string
-	s.hostSec.mu.Lock()
-	// Prefer lastByHost when it is a prior completed scan; otherwise search history
-	// (covers restart edge cases where lastByHost briefly held a failed scan).
-	if prev := s.hostSec.lastByHost[hostID]; prev != nil && prev.Status == "completed" && prev.ID != scanID {
-		prevFindings = prev.Findings
-		prevID = prev.ID
-	} else {
-		for _, sc := range s.hostSec.scans {
-			if sc == nil || sc.HostID != hostID || sc.Status != "completed" || sc.ID == scanID {
-				continue
-			}
-			prevFindings = sc.Findings
-			prevID = sc.ID
-			break
-		}
-	}
-	s.hostSec.mu.Unlock()
 	baseDiff := diffHostFindings(prevFindings, findings, prevID)
 
 	applied := s.hostSec.finishIfRunning(scanID, func(live *HostScanResult) {
@@ -1160,6 +1252,9 @@ func (s *Server) completeHostSecurityScan(scanID string) {
 		live.Summary = summary
 		live.Remediation = tips
 		live.BaselineDiff = baseDiff
+		live.FileInventory = curInv
+		live.FileChanges = fileChanges
+		live.FIMBaseline = fimBaseline
 		live.Status = "completed"
 		live.Error = ""
 	})
