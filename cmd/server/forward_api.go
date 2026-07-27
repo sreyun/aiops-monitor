@@ -235,6 +235,9 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 	// 可选：整组改到新主机。
 	newHost, newHostname := "", ""
 	if req.HostID != "" {
+		if !s.requireHostAccess(w, r, req.HostID) {
+			return
+		}
 		newHost = req.HostID
 		newHostname = shortID(req.HostID)
 		for _, h := range s.store.ListHosts() {
@@ -316,6 +319,15 @@ func (s *Server) handleHTTPProxyList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, httpProxyInfo{HTTPProxyConfig: p, Sessions: active, TotalSessions: total})
 	}
 	m.mu.Unlock()
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := out[:0]
+		for _, p := range out {
+			if s.userCanAccessHost(u, p.HostID) {
+				filtered = append(filtered, p)
+			}
+		}
+		out = filtered
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -329,6 +341,9 @@ func (s *Server) handleHTTPProxyCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.HostID == "" || req.TargetPort < 1 || req.TargetPort > 65535 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "forward.host_port_required")})
+		return
+	}
+	if !s.requireHostAccess(w, r, req.HostID) {
 		return
 	}
 	// Lookup hostname

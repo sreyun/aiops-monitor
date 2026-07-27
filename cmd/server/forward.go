@@ -603,6 +603,13 @@ func (m *forwardManager) createRule(hostID, hostname string, targetPort, localPo
 	if protocol != "udp" {
 		protocol = "tcp"
 	}
+	// Non-loopback bind exposes a raw TCP/UDP tunnel with no session auth on accept.
+	// Require an explicit source-IP whitelist so operators cannot accidentally open 0.0.0.0.
+	if listenHost != "" && listenHost != "127.0.0.1" && listenHost != "localhost" && listenHost != "::1" {
+		if !wlEnabled || len(wl) == 0 {
+			return nil, fmt.Errorf("非本机监听地址 %s 必须启用源 IP 白名单（whitelist_enabled + whitelist）", listenHost)
+		}
+	}
 	// If localPort is 0 or requested port is unavailable, try ports in the configured range
 	minPort, maxPort := m.cfg.ForwardPortRangeBounds()
 	var ln net.Listener
@@ -1271,6 +1278,9 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hostID := r.PathValue("hostID")
+	if !s.requireHostAccess(w, r, hostID) {
+		return
+	}
 	portStr := r.PathValue("port")
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {

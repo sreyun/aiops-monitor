@@ -163,6 +163,35 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requestIDMiddleware assigns/propagates X-Request-ID for log correlation across
+// auth, SRE/AI calls, and audit trails.
+type ctxKeyRequestID struct{}
+
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if id == "" || len(id) > 128 {
+			id = genToken()
+			if len(id) > 32 {
+				id = id[:32]
+			}
+		}
+		w.Header().Set("X-Request-ID", id)
+		r = r.WithContext(context.WithValue(r.Context(), ctxKeyRequestID{}, id))
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requestIDFrom(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if v, ok := r.Context().Value(ctxKeyRequestID{}).(string); ok {
+		return v
+	}
+	return r.Header.Get("X-Request-ID")
+}
+
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
@@ -390,7 +419,7 @@ func main() {
 
 	logProductionSecurityBaseline(cfg)
 	store.onAudit = server.exportAuditEntry
-	handler := securityHeadersMiddleware(server.corsMiddleware(server.csrfOriginMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes()))))))
+	handler := requestIDMiddleware(securityHeadersMiddleware(server.corsMiddleware(server.csrfOriginMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))))
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,

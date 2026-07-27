@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -69,9 +70,19 @@ func isPublicPath(r *http.Request) bool {
 	return strings.HasPrefix(p, "/dl/")
 }
 
-// currentUser resolves the logged-in user's account from the session cookie.
+// ctxKeyProxyUser carries the username authenticated via a one-shot proxy_token
+// when the session cookie is absent (window.open /proxy/ flow).
+type ctxKeyProxyUser struct{}
+
+// currentUser resolves the logged-in user's account from the session cookie,
+// falling back to a proxy-token identity stored on the request context.
 func (s *Server) currentUser(r *http.Request) (AccountConfig, bool) {
 	name := s.auth.userForRequest(r)
+	if name == "" {
+		if v, ok := r.Context().Value(ctxKeyProxyUser{}).(string); ok {
+			name = v
+		}
+	}
 	if name == "" {
 		return AccountConfig{}, false
 	}
@@ -265,6 +276,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					// 纵深防御：代理令牌本就仅 operator+ 可签发，这里仍按令牌所属用户的
 					// 当前角色复核 RBAC，防止签发后被降权的用户在令牌有效窗口内经 /proxy/ 越权。
 					if s.routeAllowed(r, s.cfg.RoleOf(user)) {
+						r = r.WithContext(context.WithValue(r.Context(), ctxKeyProxyUser{}, user))
 						next.ServeHTTP(w, r)
 						return
 					}
@@ -550,10 +562,14 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	}
 	// Rate limit: 60s between sends
 	smsLastMu.Lock()
+	pruneExpiredTimeMap(smsLast, time.Now(), maxSMSLast, func(t time.Time) time.Time {
+		// Keep rate-limit entries for 1h after last send.
+		return t.Add(time.Hour)
+	})
 	last, exists := smsLast[phone]
 	if exists && time.Since(last) < 60*time.Second {
 		smsLastMu.Unlock()
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "recovery.rate_limited")})
+		writeAPIError(w, r, http.StatusTooManyRequests, "rate_limited", Tr(r, "recovery.rate_limited"))
 		return
 	}
 	smsLast[phone] = time.Now()
@@ -561,11 +577,12 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	// Generate 6-digit code using crypto/rand
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate code"})
+		writeAPIError(w, r, http.StatusInternalServerError, "sms_gen_failed", "failed to generate code")
 		return
 	}
 	code := fmt.Sprintf("%06d", n.Int64())
 	smsCodeMu.Lock()
+	pruneExpiredTimeMap(smsCodes, time.Now(), maxSMSCodes, func(e smsCodeEntry) time.Time { return e.ExpireAt })
 	smsCodes[phone] = smsCodeEntry{Code: code, ExpireAt: time.Now().Add(5 * time.Minute)}
 	smsCodeMu.Unlock()
 	// TODO: Call actual SMS sending service here

@@ -403,11 +403,12 @@ type AccountConfig struct {
 func defaultAccount() AccountConfig {
 	salt := genToken()[:16]
 	return AccountConfig{
-		Username:    "admin",
-		DisplayName: Tz("user.default_display"),
-		Salt:        salt,
-		Hash:        hashPassword("admin", salt),
-		Role:        RoleAdmin,
+		Username:           "admin",
+		DisplayName:        Tz("user.default_display"),
+		Salt:               salt,
+		Hash:               hashPassword("admin", salt),
+		Role:               RoleAdmin,
+		MustChangePassword: true, // force password change on first login
 	}
 }
 

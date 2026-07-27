@@ -388,7 +388,9 @@ func (s *Store) UpsertAuthenticated(r shared.Report, fingerprint string) (*Host,
 		s.events = s.events[len(s.events)-maxEvents:]
 	}
 	s.dirty = true
-	return h, true
+	// Return a shallow snapshot — never the live map pointer — so callers (e.g.
+	// async auto-update) cannot race with subsequent UpsertAuthenticated writers.
+	return hostMeta(h), true
 }
 
 // hostMeta returns a shallow copy suitable for list APIs: the Latest sample is

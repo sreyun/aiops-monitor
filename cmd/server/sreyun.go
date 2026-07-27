@@ -41,6 +41,9 @@ type SreyunSession struct {
 	IncidentID int64
 	Messages   []map[string]string
 	CreatedAt  int64
+	// ActorUsername is the dashboard user driving this turn — used to enforce
+	// host-scope RBAC on tool calls and the injected host inventory.
+	ActorUsername string
 	// 上下文压缩缓存：Summary 为早期对话的滚动摘要，SummarizedCount 为已被摘要覆盖的消息数，
 	// 用于增量压缩（只摘「新变旧」的段落）。为内存缓存，重启后丢失会自动重建，不影响正确性。
 	Summary         string
@@ -464,6 +467,63 @@ func (h *SreyunCore) execQueryDataSource(args map[string]any) (string, error) {
 
 // --- Tool implementations ---
 
+// forbidToolHostAccess returns a denial message when the actor may not touch the
+// host referenced by args["host_id"]. Empty string means allowed.
+func (h *SreyunCore) forbidToolHostAccess(actor, toolName string, args map[string]any) string {
+	if actor == "" || h.s == nil || h.s.cfg == nil {
+		return ""
+	}
+	u, ok := h.s.cfg.UserByName(actor)
+	if !ok || roleRank(u.Role) >= roleRank(RoleAdmin) || !u.hostScopeRestricted() {
+		return ""
+	}
+	hostID, _ := args["host_id"].(string)
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		// Tools that self-filter or don't take host_id stay allowed; host-bound
+		// tools must pass an explicit host when the caller is scope-restricted.
+		switch toolName {
+		case "query_metrics", "search_logs", "run_diagnostic", "run_python_action",
+			"check_host_health", "query_hardware", "query_hardware_events",
+			"query_hardware_history", "query_hardware_changes", "query_netflow",
+			"query_hyperv", "query_snmp", "query_interface_traffic", "query_traps",
+			"query_netflow_flows", "query_metric_range", "analyze_metric_trend",
+			"list_recent_changes":
+			return fmt.Sprintf("受限账号调用 %s 必须指定可访问的 host_id", toolName)
+		default:
+			return ""
+		}
+	}
+	if hst := h.resolveHostRef(hostID); hst != nil {
+		hostID = hst.ID
+	}
+	if !h.s.userCanAccessHost(u, hostID) {
+		return fmt.Sprintf("无权访问主机 %s（主机组/标签授权），工具 %s 已拒绝", hostID, toolName)
+	}
+	return ""
+}
+
+// scopeActorFromArgs extracts the dashboard user stamped by the tool loop.
+func scopeActorFromArgs(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	a, _ := args["_scope_actor"].(string)
+	return strings.TrimSpace(a)
+}
+
+// actorCanAccessHost is a convenience for tools that resolve hosts themselves.
+func (h *SreyunCore) actorCanAccessHost(actor, hostID string) bool {
+	if actor == "" || hostID == "" || h.s == nil || h.s.cfg == nil {
+		return true
+	}
+	u, ok := h.s.cfg.UserByName(actor)
+	if !ok || roleRank(u.Role) >= roleRank(RoleAdmin) || !u.hostScopeRestricted() {
+		return true
+	}
+	return h.s.userCanAccessHost(u, hostID)
+}
+
 // resolveHostRef 按 host_id 精确匹配主机；失败则回退到主机名 / IP（忽略大小写，再退化到
 // 主机名包含匹配），让 AI 即便把主机名或 IP 当作 host_id 传入也能命中正确主机。
 func (h *SreyunCore) resolveHostRef(ref string) *Host {
@@ -581,12 +641,23 @@ func (h *SreyunCore) execListAlerts(args map[string]any) (string, error) {
 			hostID = hst.ID
 		}
 	}
+	actor, _ := args["_scope_actor"].(string)
+	var scopeUser AccountConfig
+	scoped := false
+	if actor != "" {
+		if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+			scopeUser, scoped = u, true
+		}
+	}
 	var matched []string
 	for _, a := range h.s.notifier.ActiveAlerts() {
 		if a.Status != "" {
 			continue
 		}
 		if hostID != "" && a.HostID != hostID {
+			continue
+		}
+		if scoped && a.HostID != "" && !h.s.userCanAccessHost(scopeUser, a.HostID) {
 			continue
 		}
 		hn := a.Hostname
@@ -1001,8 +1072,8 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 		return "", AgentLoopMeta{}, fmt.Errorf("AI 未配置或未启用")
 	}
 
-	// Build system prompt from cached templates + rules
-	sys := h.buildSystemPrompt()
+	// Build system prompt from cached templates + rules (scoped to actor)
+	sys := h.buildSystemPrompt(session.ActorUsername)
 
 	h.turnCites.reset()
 
@@ -1047,7 +1118,7 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
 
 	// Execute the observe→reason→act loop
-	fullReply, meta, err := h.runLoop(ctx, cfg, msgs, images, stream, w)
+	fullReply, meta, err := h.runLoop(ctx, cfg, msgs, images, stream, w, session.ActorUsername)
 	if err != nil {
 		return "", meta, err
 	}
@@ -1093,7 +1164,7 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 // 判定是否为工具调用，且 streamChat 每次调用都会发送 [DONE]，会使前端在多轮工具调用中途
 // 提前结束、看不到最终结论。面向用户只推送「思考文字 + 工具执行状态 + 最终结论」，
 // 工具调用的原始 JSON 绝不下发到前端。max 8 turns（对齐 Hermes 多步工具深度，仍有硬顶）。
-func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter) (string, AgentLoopMeta, error) {
+func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter, actor string) (string, AgentLoopMeta, error) {
 	meta := AgentLoopMeta{}
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
@@ -1272,7 +1343,38 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 				argsInfo["detail"] = prompt
 			}
 			sendTool(tc.Name, "run", argsInfo)
-			result, err := tool.Execute(tc.Args)
+			// Host-scope RBAC: deny tools targeting hosts outside the operator's folders/tags.
+			if deny := h.forbidToolHostAccess(actor, tc.Name, tc.Args); deny != "" {
+				sendTool(tc.Name, "err", map[string]string{"summary": deny})
+				toolResults.WriteString(fmt.Sprintf("[工具 %s 拒绝：%s]\n", tc.Name, deny))
+				continue
+			}
+			if actor != "" {
+				tc.Args["_scope_actor"] = actor
+			}
+			type toolOut struct {
+				result string
+				err    error
+			}
+			outCh := make(chan toolOut, 1)
+			go func(t SreyunTool, a map[string]any) {
+				res, e := t.Execute(a)
+				outCh <- toolOut{res, e}
+			}(tool, tc.Args)
+			var result string
+			var err error
+			select {
+			case <-ctx.Done():
+				sendTool(tc.Name, "err", map[string]string{"summary": "已取消"})
+				toolResults.WriteString(fmt.Sprintf("[工具 %s 已取消]\n", tc.Name))
+				continue
+			case <-time.After(45 * time.Second):
+				sendTool(tc.Name, "err", map[string]string{"summary": "执行超时"})
+				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行超时（45s）]\n", tc.Name))
+				continue
+			case o := <-outCh:
+				result, err = o.result, o.err
+			}
 			if err != nil {
 				sendTool(tc.Name, "err", nil)
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行失败：%v]\n", tc.Name, err))
@@ -1527,7 +1629,7 @@ func (h *SreyunCore) reloadConfig() {
 
 // buildSystemPrompt constructs the Sreyun system prompt from cached templates + rules.
 // 安全限制为硬编码，每次对话强制生效，前端无需额外传递角色。
-func (h *SreyunCore) buildSystemPrompt() string {
+func (h *SreyunCore) buildSystemPrompt(actor string) string {
 	h.reloadConfig()
 	h.configMu.RLock()
 	defer h.configMu.RUnlock()
@@ -1569,7 +1671,8 @@ func (h *SreyunCore) buildSystemPrompt() string {
 
 	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，
 	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。
-	b.WriteString(h.buildHostContext())
+	b.WriteString(h.buildHostContext(actor))
+	b.WriteString(h.buildAlertContext(actor))
 
 	// Append active templates
 	for _, t := range h.cachedTemplates {
@@ -1589,11 +1692,22 @@ func (h *SreyunCore) buildSystemPrompt() string {
 
 // buildHostContext 生成「当前纳管主机」清单文本，作为系统提示词的一部分注入。
 // 让 AI 知道可查询哪些主机，并能将用户提到的主机名 / IP 映射到工具所需的 host_id。
-func (h *SreyunCore) buildHostContext() string {
+func (h *SreyunCore) buildHostContext(actor string) string {
 	if h.s == nil || h.s.store == nil {
 		return ""
 	}
 	hosts := h.s.store.ListHosts()
+	if actor != "" {
+		if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+			filtered := make([]*Host, 0, len(hosts))
+			for _, hst := range hosts {
+				if hst != nil && h.s.userCanAccessHost(u, hst.ID) {
+					filtered = append(filtered, hst)
+				}
+			}
+			hosts = filtered
+		}
+	}
 	if len(hosts) == 0 {
 		return "\n\n【当前纳管主机】暂无已纳管主机。若用户询问主机相关问题，请如实说明当前没有可查询的主机。\n"
 	}
@@ -1637,6 +1751,46 @@ func (h *SreyunCore) buildHostContext() string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// buildAlertContext injects a compact live-alert snapshot so the model grounds
+// answers in current incidents without an extra list_alerts round-trip.
+func (h *SreyunCore) buildAlertContext(actor string) string {
+	if h.s == nil || h.s.notifier == nil {
+		return ""
+	}
+	alerts := h.s.notifier.ActiveAlerts()
+	if len(alerts) == 0 {
+		return "\n\n【当前活跃告警】无。\n"
+	}
+	var scopeUser AccountConfig
+	scoped := false
+	if actor != "" {
+		if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+			scopeUser, scoped = u, true
+		}
+	}
+	var lines []string
+	for _, a := range alerts {
+		if a.Status != "" {
+			continue
+		}
+		if scoped && a.HostID != "" && !h.s.userCanAccessHost(scopeUser, a.HostID) {
+			continue
+		}
+		hn := a.Hostname
+		if hn == "" {
+			hn = a.HostID
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s host=%s value=%.1f — %s", a.Level, a.Type, hn, a.Value, trimLine(a.Message, 120)))
+		if len(lines) >= 12 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return "\n\n【当前活跃告警】无（在您的授权范围内）。\n"
+	}
+	return "\n\n【当前活跃告警】共展示 " + fmt.Sprintf("%d", len(lines)) + " 条（已按授权裁剪）：\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // sreyunHostOnline 判断主机是否在线（最近上报 ≤120s，与 forward.go 的离线判定一致）。

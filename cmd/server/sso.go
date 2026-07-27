@@ -203,6 +203,7 @@ func (s *Server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 	state := randomOIDCToken(24)
 	nonce := randomOIDCToken(16)
 	ssoStatesMu.Lock()
+	pruneExpiredUnixMap(ssoStates, time.Now().Unix(), maxSSOStates, func(e ssoStateEntry) int64 { return e.ExpiresAt })
 	ssoStates[state] = ssoStateEntry{Provider: provider, Nonce: nonce, BindUser: bindUser, ExpiresAt: time.Now().Add(10 * time.Minute).Unix()}
 	ssoStatesMu.Unlock()
 	redirect := s.ssoRedirectURL(r, provider, cfg)

@@ -158,7 +158,26 @@ type proxyToken struct {
 func (a *Auth) generateProxyToken(user string) string {
 	tok := newSessionToken()
 	a.proxyTokenMu.Lock()
-	a.proxyTokens[tok] = proxyToken{user: user, expires: time.Now().Add(proxyTokenTTL)}
+	// Bound map growth: drop expired entries; if still huge, purge oldest half.
+	now := time.Now()
+	if len(a.proxyTokens) > 2048 {
+		for k, pt := range a.proxyTokens {
+			if now.After(pt.expires) {
+				delete(a.proxyTokens, k)
+			}
+		}
+	if len(a.proxyTokens) > 2048 {
+			n, target := 0, len(a.proxyTokens)/2
+			for k := range a.proxyTokens {
+				delete(a.proxyTokens, k)
+				n++
+				if n >= target {
+					break
+				}
+			}
+		}
+	}
+	a.proxyTokens[tok] = proxyToken{user: user, expires: now.Add(proxyTokenTTL)}
 	a.proxyTokenMu.Unlock()
 	return tok
 }
@@ -287,6 +306,7 @@ func (a *Auth) verifyAndConsumeTOTP(user, secret, code string) totpResult {
 			delete(a.totpUsed, k)
 		}
 	}
+	capStringMap(a.totpUsed, maxTOTPUsed)
 	if _, used := a.totpUsed[key]; used {
 		return totpReplay
 	}
@@ -624,12 +644,21 @@ func (a *Auth) markTerminalVerified(r *http.Request) {
 func (a *Auth) terminalAttemptAllowed(user string) (bool, int) {
 	a.termAttemptMu.Lock()
 	defer a.termAttemptMu.Unlock()
-	if lockedUntil, ok := a.termLocked[user]; ok && time.Now().Before(lockedUntil) {
+	now := time.Now()
+	for u, until := range a.termLocked {
+		if now.After(until) {
+			delete(a.termLocked, u)
+			delete(a.termAttempts, u)
+		}
+	}
+	capStringMap(a.termAttempts, maxTermAttempts)
+	capStringMap(a.termLocked, maxTermAttempts)
+	if lockedUntil, ok := a.termLocked[user]; ok && now.Before(lockedUntil) {
 		return false, 0
 	}
 	attempts := a.termAttempts[user]
 	if attempts >= termMaxAttempts {
-		a.termLocked[user] = time.Now().Add(termLockoutSec * time.Second)
+		a.termLocked[user] = now.Add(termLockoutSec * time.Second)
 		delete(a.termAttempts, user)
 		return false, 0
 	}

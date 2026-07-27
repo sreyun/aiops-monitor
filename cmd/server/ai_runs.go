@@ -93,6 +93,15 @@ func (s *Server) handleListAIRuns(w http.ResponseWriter, r *http.Request) {
 		list[i].Answer = truncateRun(list[i].Answer, 400)
 		list[i].Input = truncateRun(list[i].Input, 200)
 	}
+	if u, ok := s.currentUser(r); ok && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := list[:0]
+		for _, run := range list {
+			if run.Actor == "" || strings.EqualFold(run.Actor, u.Username) {
+				filtered = append(filtered, run)
+			}
+		}
+		list = filtered
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -101,8 +110,14 @@ func (s *Server) handleGetAIRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	run, ok := s.lookupAIRun(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run 不存在或已过期"})
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "run 不存在或已过期")
 		return
+	}
+	if u, ok := s.currentUser(r); ok && roleRank(u.Role) < roleRank(RoleAdmin) {
+		if run.Actor != "" && !strings.EqualFold(run.Actor, u.Username) {
+			writeAPIError(w, r, http.StatusForbidden, "forbidden", "无权查看该 AI 运行记录")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, run)
 }

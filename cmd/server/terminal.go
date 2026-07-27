@@ -1013,6 +1013,12 @@ func (m *termManager) addObserver(sessionID string) (*termObserver, bool) {
 	}
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
+	// Session may have closed between lookup and lock; refuse rather than hang the WS.
+	select {
+	case <-s.done:
+		return nil, false
+	default:
+	}
 	obs := &termObserver{
 		ch:   make(chan []byte, 128),
 		done: make(chan struct{}),

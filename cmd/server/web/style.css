@@ -100,7 +100,7 @@
   --ov-card-lift:-3px;
   --ov-section-gap:24px;
 
-  /* ---- 语义化别名（v5.5.0 新增，增量美化） ---- */
+  /* 语义化别名（v5.5.0 新增，增量美化） ---- */
   --surface:var(--panel);
   --surface-hover:var(--panel2);
   --border-subtle:var(--line);
@@ -112,6 +112,55 @@
   --elevation-2:var(--shadow);
   --elevation-3:var(--shadow-lg);
   --elevation-4:var(--shadow-xl);
+
+  /* ============================================================
+     v6.35 设计系统增强 Token（夜莺式专业运维视觉 · 纯增量，不覆盖上方既有值）
+     ============================================================ */
+  /* —— 字体 —— 展示/正文/等宽三分离，数字统一等宽对齐 —— */
+  --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --fs-2xs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px;
+  --fs-lg:16px; --fs-xl:20px; --fs-2xl:24px; --fs-3xl:30px;
+  --lh-tight:1.25; --lh-base:1.55; --lh-relaxed:1.72;
+  /* 数字/指标专用：等宽数字避免跳动 */
+  --num:tabular-nums;
+
+  /* —— 焦点环（键盘可达性 · 统一 3px 软光环） —— */
+  --ring-w:3px;
+  --ring-color:var(--accent-soft);
+  --ring:0 0 0 var(--ring-w) var(--ring-color);
+  --ring-strong:0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  /* —— 层级（z-index 统一语义，避免魔法数字） —— */
+  --z-base:1; --z-sticky:20; --z-topbar:40; --z-sidebar:60;
+  --z-dropdown:200; --z-modal:400; --z-toast:500; --z-ai-panel:1100; --z-ai-mask:1200;
+
+  /* —— 滚动条（细窄、低干扰、悬停提亮） —— */
+  --sb-w:8px; --sb-h:8px;
+  --sb-thumb:var(--panel3); --sb-thumb-hover:var(--gray-off);
+  --sb-track:transparent; --sb-radius:99px;
+
+  /* —— 发丝线 / 分隔（1px 物理像素线，克制分隔） —— */
+  --hairline:1px solid var(--line);
+  --hairline-strong:1px solid var(--line2);
+
+  /* —— 状态色·调和（夜莺/antd 暗色哲学：色相稳定、饱和度收敛、明度对齐）
+        仅在既有四元组基础上微调，保证 ok/warn/crit/info 视觉权重一致 —— */
+  --ok:#33c46f; --ok-soft:rgba(51,196,111,.12);
+  --warn:#e8a13c; --warn-soft:rgba(232,161,60,.12);
+  --crit:#ef5560; --crit-soft:rgba(239,85,96,.12);
+  --info:#41b6ef; --info-soft:rgba(65,182,239,.12);
+
+  /* —— 状态色·悬停加深（供按钮/徽章 hover 统一取用） —— */
+  --ok-strong:#3ed47c; --warn-strong:#f0b055; --crit-strong:#f46b74; --info-strong:#5cc3f4;
+
+  /* —— 表面抬升（悬停时轻微提亮的叠加层，替代各处散乱 rgba(255,255,255,.0x)） —— */
+  --lift:rgba(255,255,255,.035);
+  --lift-strong:rgba(255,255,255,.06);
+  --press:rgba(0,0,0,.18);
+
+  /* —— 顶栏/侧栏之外的全局内容底色微渐变（营造纵深，极克制） —— */
+  --bg-grad:radial-gradient(1200px 500px at 78% -8%, rgba(76,141,255,.05), transparent 60%),
+            radial-gradient(900px 420px at -6% 108%, rgba(124,107,255,.04), transparent 55%);
 }
 
 /* ---------- 浅色主题 ---------- */
@@ -172,6 +221,24 @@
   --elevation-2:var(--shadow);
   --elevation-3:var(--shadow-lg);
   --elevation-4:var(--shadow-xl);
+
+  /* ---- v6.35 设计系统增强 Token（浅色覆盖） ---- */
+  --ring-color:rgba(22,119,255,.14);
+  --ring:0 0 0 var(--ring-w) var(--ring-color);
+  --ring-strong:0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --sb-thumb:#c6cdd8; --sb-thumb-hover:#a8b1bf;
+  /* 状态色·浅色主题（antd 浅色标准，白底上均达 AA） */
+  --ok:#18a058; --ok-soft:rgba(24,160,88,.10);
+  --warn:#d98206; --warn-soft:rgba(217,130,6,.10);
+  --crit:#dc3545; --crit-soft:rgba(220,53,69,.10);
+  --info:#0b8fd9; --info-soft:rgba(11,143,217,.10);
+  --ok-strong:#12814a; --warn-strong:#b56b04; --crit-strong:#b52a37; --info-strong:#0873b0;
+  /* 表面抬升（浅色下用加深叠加） */
+  --lift:rgba(15,30,60,.03);
+  --lift-strong:rgba(15,30,60,.055);
+  --press:rgba(15,30,60,.08);
+  --bg-grad:radial-gradient(1200px 500px at 78% -8%, rgba(22,119,255,.045), transparent 60%),
+            radial-gradient(900px 420px at -6% 108%, rgba(124,58,237,.035), transparent 55%);
 }
 *{box-sizing:border-box}
 /* 全局表单元素重置：移除 iOS Safari / Android Chrome 默认的橙色/红色 outline、
@@ -229,10 +296,13 @@ body{
 }
 .mono{font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
 
-::-webkit-scrollbar{width:8px;height:8px}
-::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid transparent;background-clip:padding-box}
-::-webkit-scrollbar-thumb:hover{background:var(--hover-border)}
-::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar{width:var(--sb-w);height:var(--sb-h)}
+::-webkit-scrollbar-thumb{background:var(--sb-thumb);border-radius:var(--sb-radius);border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--sb-thumb-hover)}
+::-webkit-scrollbar-track{background:var(--sb-track)}
+*{scrollbar-width:thin;scrollbar-color:var(--sb-thumb) transparent}
+/* 选中文本：品牌色软光晕，深浅底均可读 */
+::selection{background:color-mix(in srgb, var(--accent) 32%, transparent);color:var(--txt)}
 
 /* ---------- 应用骨架 ---------- */
 .app{display:grid; grid-template-columns:var(--sidew) 1fr; min-height:100vh}
@@ -5345,4 +5415,196 @@ button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--acce
 #webSecurityPanel .ws-empty-findings p{ margin:0; font-size:12px; color:var(--muted); line-height:1.55 }
 #hostSecurityPanel .data-table td.muted,
 #webSecurityPanel .data-table td.muted{ color:var(--muted2); font-size:12px }
+
+/* ============================================================
+   v6.35 设计系统增强层 · 夜莺式专业运维视觉（Nightingale-inspired）
+   ------------------------------------------------------------
+   本层位于文件末尾，依赖 CSS 级联以同/更高特异性收敛前文默认值，
+   达成全局一致的配色/间距/动效/组件观感。仅纯 CSS，不触 HTML 结构与 JS 逻辑。
+   设计原则：信息密度高但不杂乱 · 状态色一眼可辨 · 动效克制服务于效率。
+   ============================================================ */
+
+/* ---------- 01 · 全局基底：纵深背景 + 数字等宽 ---------- */
+/* 主内容区微渐变：极克制的品牌色晕染，让底层“活”起来而非死板纯色 */
+.main{ background:var(--bg-grad), var(--bg); }
+/* 指标/数值一律等宽数字，避免刷新时宽度拖动 */
+.card .v, .sre-kpi-v, .ai-stat-value, .dash-panel .stat-v, .kpi-num{ font-variant-numeric:var(--num); }
+
+/* ---------- 02 · 侧边导航：层级与选中态 ---------- */
+/* 导航项：更细腻的 hover/active 过渡，图标随状态变色 */
+.nav-item{ transition:background var(--transition-fast), color var(--transition-fast), padding-left var(--transition-fast); }
+.nav-item svg{ color:inherit; opacity:.75; transition:opacity var(--transition-fast), transform var(--transition-fast); }
+.nav-item:hover svg{ opacity:1; }
+.nav-item.active{ background:linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, transparent)); }
+.nav-item.active svg{ opacity:1; }
+/* 选中左侧指示条：加高亮发光，成为视觉锚点 */
+.nav-item.active::before{ box-shadow:0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); width:3px; height:20px; }
+/* 分组标签：更清晰的分区感 */
+.nav-group-label{ font-size:var(--fs-2xs); letter-spacing:.1em; }
+/* 计数徐章：选中态与未选中态对比更分明 */
+.nav-count{ transition:background var(--transition-fast), color var(--transition-fast); font-variant-numeric:var(--num); }
+
+/* ---------- 03 · 仪表盘面板：标题栏/内容区/操作区三层 ---------- */
+.dash-panel{ border-radius:var(--r); transition:box-shadow var(--transition), border-color var(--transition), transform var(--transition); }
+.dash-panel:hover{ border-color:var(--line2); box-shadow:var(--elevation-2); }
+.dash-panel-head{ padding:10px 14px; background:color-mix(in srgb, var(--panel) 55%, transparent); }
+.dash-panel-title{ font-size:var(--fs-base); font-weight:600; letter-spacing:.01em; }
+.dash-panel-ds{ font-size:var(--fs-2xs); border:1px solid var(--line); padding:1px 7px; }
+
+/* ---------- 04 · 统一动效曲线：hover / focus / active ---------- */
+/* 交互件统一过渡时长与缓动（运维工具以效率为先，均≤1 2 0ms） */
+.chip-btn, .pager button, .search, select, .tb-icon, .icon-btn, .alert-action,
+.ai-suggest-chip, .ai-cap-chip, .ai-nav-item, .user-dropdown-item{
+  transition-duration:140ms; transition-timing-function:cubic-bezier(.4,0,.2,1);
+}
+/* 按钮按压微反馈：上浮-1px，回落 0，避免夸张位移 */
+.btn:active:not(:disabled){ transform:translateY(0) scale(.985); }
+/* 开关/复选 hover 亮度反馈收敛，避免刺眼 */
+input[type="checkbox"]:hover, input[type="radio"]:hover{ filter:brightness(1.1); }
+
+/* ---------- 05 · AI 对话弹窗：消息气泡/间距/字体排版（Claude/ChatGPT 级体验） ---------- */
+/* 消息列：拉开呼吸感，阅读节奏更从容 */
+.ai-chat-modal .ai-chat-log{ gap:6px; padding:10px 4px 6px; scroll-behavior:smooth; }
+.ai-chat-modal .ai-chat-msg{ font-size:var(--fs-md); line-height:var(--lh-relaxed); letter-spacing:.005em; }
+/* 头像：品牌渐变底 + 柔和投影，成为对话错落的错错锚点 */
+.ai-chat-modal .ai-chat-msg.ai::before{
+  background:linear-gradient(135deg, var(--accent), var(--accent2));
+  box-shadow:0 2px 8px -2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.ai-chat-modal .ai-chat-msg.me::before{ background:var(--panel3); border:1px solid var(--line2); }
+/* 用户消息：淡底容器圆角更圆润，右下角保留对话指向 */
+.ai-chat-modal .ai-chat-msg.me{ border-radius:14px 14px 4px 14px; background:var(--bg3); }
+/* AI 消息：正文段落间距更舒展 */
+.ai-chat-modal .ai-chat-msg.ai>div{ margin:3px 0; }
+.ai-chat-modal .ai-chat-msg.ai ul, .ai-chat-modal .ai-chat-msg.ai ol{ margin:6px 0; }
+/* 错误消息：左侧警示色强调条 + 柔和错底，一眼定位失败轮次 */
+.ai-chat-modal .ai-chat-msg.err{
+  background:var(--crit-soft); border:1px solid var(--crit-border);
+  border-left:3px solid var(--crit); color:var(--crit-txt); border-radius:8px;
+}
+/* 系统提示：更弱化的居中引导 */
+.ai-chat-modal .ai-chat-msg.sys{ font-size:var(--fs-sm); color:var(--muted2); }
+
+/* 代码块：头部工具栏 + 语言标签，向 Claude 看齐 */
+.ai-chat-modal .ai-code-wrap{ border-radius:10px; background:var(--cmd-bg); }
+.ai-chat-modal .ai-code-head{ padding:6px 12px; }
+.ai-chat-modal .ai-code-lang{ font-size:var(--fs-2xs); }
+.ai-chat-modal .ai-code pre.ai-code{ padding:12px 14px; }
+
+/* 工具调用 chip：运行中/成功/失败 三态语义色一眼可辨 */
+.ai-tool-chip{ font-size:var(--fs-sm); padding:4px 10px; transition:all var(--transition-fast); }
+.ai-tool-chip.run{ background:var(--accent-soft); border-color:var(--accent-border); }
+.ai-tool-chip.ok{ color:var(--ok-txt); border-color:var(--ok-border); background:var(--ok-soft); }
+.ai-tool-chip.err{ color:var(--crit-txt); border-color:var(--crit-border); background:var(--crit-soft); }
+
+/* 流式打字光标：品牌色闪烁，节奏更从容 */
+.ai-stream-cursor{ color:var(--accent); }
+
+/* 欢迎屏：标题/副标/能力芯片 三级层次 */
+.ai-chat-modal .ai-welcome{ padding:32px 16px 12px; }
+.ai-chat-modal .ai-welcome-icon{ font-size:38px; margin-bottom:12px; filter:drop-shadow(0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent)); }
+.ai-chat-modal .ai-welcome-title{ font-size:var(--fs-lg); font-weight:700; letter-spacing:.01em; }
+.ai-chat-modal .ai-welcome-sub{ font-size:var(--fs-base); line-height:var(--lh-relaxed); }
+.ai-cap-chip{ transition:all var(--transition-fast); cursor:default; }
+.ai-cap-chip:hover{ border-color:var(--accent-border); color:var(--accent-txt); background:var(--accent-soft); transform:translateY(-1px); }
+
+/* ---------- 06 · AI 快捷问题推荐：芯片样式与交互反馈 ---------- */
+.ai-suggest-chips{ gap:8px; }
+.ai-suggest-chip{
+  font-size:var(--fs-base); border-radius:var(--r); padding:10px 14px;
+  background:var(--panel); position:relative; overflow:hidden;
+}
+/* 左侧品牌色微条：提示“可点击”，悬停时展开 */
+.ai-suggest-chip::before{
+  content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:var(--accent); opacity:0; transition:opacity var(--transition-fast);
+}
+.ai-suggest-chip:hover{ transform:translateX(3px); box-shadow:var(--elevation-1); }
+.ai-suggest-chip:hover::before{ opacity:1; }
+.ai-suggest-chip:active{ transform:translateX(3px) scale(.99); }
+.ai-suggest-refresh{ border-radius:var(--r-xs); }
+.ai-suggest-refresh:hover{ background:var(--accent-soft); }
+
+/* ---------- 07 · AI 诊断内联对话：用户/AI/工具 三层视觉分离 ---------- */
+.ai-diagnosis-chat{
+  background:color-mix(in srgb, var(--bg2) 80%, var(--bg));
+  border-radius:var(--r); padding:10px; gap:8px;
+}
+.ai-diagnosis-chat .ai-chat-msg{ font-size:var(--fs-base); line-height:var(--lh-base); border-radius:10px; }
+.ai-diagnosis-chat .ai-chat-msg.me{ background:var(--accent-soft); border:1px solid var(--accent-border); color:var(--txt); align-self:flex-end; }
+.ai-diagnosis-chat .ai-chat-msg.ai{ background:var(--panel); border:1px solid var(--line); }
+.ai-diagnosis-chat .ai-chat-msg.err{ background:var(--crit-soft); border:1px solid var(--crit-border); color:var(--crit-txt); }
+
+/* ---------- 08 · AI 设置面板：卡片分组 + 导航交互 + 表单控件 ---------- */
+.ai-settings-modal{ border-radius:var(--r-xl); }
+.ai-nav-item{ border-radius:var(--r-sm); transition:all var(--transition-fast); }
+.ai-nav-item.active{ box-shadow:inset 3px 0 0 var(--accent), var(--elevation-1); border-color:var(--accent-border); background:var(--accent-soft); }
+.ai-nav-item.active .ai-nav-t{ color:var(--accent-txt); }
+.ai-card{ border-radius:var(--r); transition:border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.ai-card:hover{ box-shadow:var(--elevation-1); }
+.ai-card-header{ padding:11px 14px; }
+.ai-card-icon{ background:var(--accent-soft); border-radius:var(--r-sm); }
+.ai-section-block{ border-radius:var(--r); }
+.ai-section-label{ font-size:var(--fs-2xs); letter-spacing:.08em; }
+/* 预设行：芯片组更紧凑 */
+.ai-preset-row{ border-radius:var(--r-sm); }
+
+/* ---------- 09 · 表格：行高/斑马纹/表头/排序 统一 ---------- */
+/* 表头：夜莺式浅底 + 小号字 + 字距，与数据行拉开层次 */
+table thead th{
+  font-size:var(--fs-sm); font-weight:600; color:var(--muted); letter-spacing:.03em;
+  padding:9px 12px; border-bottom:var(--hairline-strong); white-space:nowrap;
+}
+/* 数据行：统一行高与内边距，数字列等宽（行分隔线沿用各表格既有 td/tr 边框，避免双重描边） */
+table tbody td{ padding:9px 12px; font-size:var(--fs-base); color:var(--txt2); vertical-align:middle; }
+/* 斑马纹：极淡的奇偶行差异，高密度下仍可扫读 */
+table tbody tr:nth-child(even){ background:color-mix(in srgb, var(--panel2) 40%, transparent); }
+table tbody tr:hover{ background:var(--surface-hover); }
+/* 排序图标占位：可排序表头悬停提示 */
+th[data-sort], th.sortable{ cursor:pointer; user-select:none; transition:color var(--transition-fast); }
+th[data-sort]:hover, th.sortable:hover{ color:var(--txt); }
+
+/* ---------- 10 · 标签/徽章：形状/大小/配色 统一 ---------- */
+.badge{
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:var(--fs-xs); line-height:1.4; padding:2px 9px;
+  border-radius:var(--r-xs); font-weight:600; letter-spacing:.01em;
+  font-variant-numeric:var(--num); white-space:nowrap;
+}
+/* 状态点徽章：前置圆点强化语义（供带 .dot 子元的徽章使用） */
+.badge .dot{ width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+
+/* ---------- 11 · 搜索/筛选/分页 公共控件 ---------- */
+.search{ border-radius:var(--r-sm); transition:border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast); }
+.search:hover{ border-color:var(--hover-border); }
+.pager button{ border-radius:var(--r-sm); font-variant-numeric:var(--num); }
+.pager button.active{ box-shadow:0 2px 8px -2px color-mix(in srgb, var(--accent) 50%, transparent); }
+.chip-btn{ border-radius:var(--r-sm); }
+.chip-btn.active{ font-weight:600; }
+
+/* ---------- 12 · 空状态 / 加载骨架 / 错误态 统一 ---------- */
+.empty-line, .empty-box{
+  border-radius:var(--r); color:var(--muted);
+  background:color-mix(in srgb, var(--bg2) 60%, transparent);
+}
+.empty-state{ padding:36px 20px; }
+.empty-state .empty-icon{ opacity:.55; margin-bottom:4px; }
+.empty-state h4{ letter-spacing:.01em; }
+/* 骨架屏：更柔和的呼吸波光，避免生硬闪烁 */
+.skeleton, .skeleton *{ border-radius:var(--r-xs); }
+@keyframes shimmer{ 0%{ background-position:-400px 0 } 100%{ background-position:400px 0 } }
+.skeleton-card, .skeleton-host{
+  background:linear-gradient(90deg, var(--panel) 25%, var(--panel2) 50%, var(--panel) 75%);
+  background-size:800px 100%; animation:shimmer 1.4s ease-in-out infinite;
+}
+
+/* ---------- 13 · Toast / 页面切换 / 列表加载 动效 ---------- */
+/* Toast：上滑入场 + 软投影，状态色左侧强调条 */
+.toast{ border-radius:var(--r); box-shadow:var(--elevation-3); border-left-width:3px; }
+.toast.ok{ border-left-color:var(--ok); }
+.toast.err{ border-left-color:var(--crit); }
+/* 视图切换：淡入 + 轻微上移，感知更顺滑（尊重 reduced-motion） */
+.view.active{ animation:viewIn .22s cubic-bezier(.4,0,.2,1); }
+@keyframes viewIn{ from{ opacity:0; transform:translateY(4px) } to{ opacity:1; transform:none } }
+@media (prefers-reduced-motion: reduce){ .view.active{ animation:none } }
 

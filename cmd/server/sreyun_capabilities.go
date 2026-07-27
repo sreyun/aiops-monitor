@@ -515,6 +515,9 @@ func (h *SreyunCore) execDiagnoseIncident(args map[string]any) (string, error) {
 	if !found {
 		return capabilityJSON(capabilityResult{OK: false, Error: "事件不存在"}), nil
 	}
+	if actor := scopeActorFromArgs(args); actor != "" && inc.HostID != "" && !h.actorCanAccessHost(actor, inc.HostID) {
+		return capabilityJSON(capabilityResult{OK: false, Error: "无权访问该事件所属主机"}), nil
+	}
 	cfg := h.s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
 		return capabilityJSON(capabilityResult{OK: false, Error: "AI 未配置或未启用"}), nil
@@ -550,8 +553,20 @@ func (h *SreyunCore) execDiagnoseIncident(args map[string]any) (string, error) {
 }
 
 func (h *SreyunCore) execGetDutyContext(args map[string]any) (string, error) {
-	// Reuse the same payload the Copilot/duty UI consumes.
+	// Reuse the same payload the Copilot/duty UI consumes — scoped to actor.
 	hosts := h.s.store.ListHosts()
+	actor := scopeActorFromArgs(args)
+	if actor != "" {
+		if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+			filtered := make([]*Host, 0, len(hosts))
+			for _, ht := range hosts {
+				if ht != nil && h.s.userCanAccessHost(u, ht.ID) {
+					filtered = append(filtered, ht)
+				}
+			}
+			hosts = filtered
+		}
+	}
 	now := time.Now().Unix()
 	online := 0
 	for _, ht := range hosts {
@@ -561,17 +576,29 @@ func (h *SreyunCore) execGetDutyContext(args map[string]any) (string, error) {
 	}
 	alertN := 0
 	if h.s.notifier != nil {
-		alertN += len(h.s.notifier.ActiveAlerts())
+		for _, a := range h.s.notifier.ActiveAlerts() {
+			if a.HostID == "" || h.actorCanAccessHost(actor, a.HostID) {
+				alertN++
+			}
+		}
 	}
 	if h.s.checks != nil {
-		alertN += len(h.s.checks.DownAlerts())
+		for _, a := range h.s.checks.DownAlerts() {
+			if a.HostID == "" || h.actorCanAccessHost(actor, a.HostID) {
+				alertN++
+			}
+		}
 	}
 	incOpen := 0
 	if h.s.incidents != nil {
 		for _, inc := range h.s.incidents.List() {
-			if inc.Status == "open" || inc.Status == "investigating" {
-				incOpen++
+			if inc.Status != "open" && inc.Status != "investigating" {
+				continue
 			}
+			if inc.HostID != "" && !h.actorCanAccessHost(actor, inc.HostID) {
+				continue
+			}
+			incOpen++
 		}
 	}
 	sum := fmt.Sprintf("主机 %d（在线 %d）· 活跃告警 %d · 未关闭事件 %d", len(hosts), online, alertN, incOpen)

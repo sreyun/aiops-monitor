@@ -58,7 +58,7 @@ func TestSreyunHostContextAndToolLoop(t *testing.T) {
 	h := newSreyunCore(s)
 
 	// (1) 主机上下文注入 + JSON 禁令已移除
-	sys := h.buildSystemPrompt()
+	sys := h.buildSystemPrompt("")
 	for _, want := range []string{"h-web01", "web-01", "10.0.0.11", "在线", "tool_calls", "当前纳管主机"} {
 		if !strings.Contains(sys, want) {
 			t.Fatalf("系统提示词缺少 %q：\n%s", want, sys)

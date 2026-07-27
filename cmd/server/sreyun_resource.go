@@ -85,8 +85,15 @@ func (h *SreyunCore) execQueryContainers(args map[string]any) (string, error) {
 		return "无 PostgreSQL，无法查询容器清单", nil
 	}
 	hostID, _ := args["host_id"].(string)
+	actor := scopeActorFromArgs(args)
 	var rows []map[string]any
 	if strings.TrimSpace(hostID) != "" {
+		if hst := h.resolveHostRef(hostID); hst != nil {
+			hostID = hst.ID
+		}
+		if !h.actorCanAccessHost(actor, hostID) {
+			return "无权访问该主机的容器清单", nil
+		}
 		if inv, ok := h.s.pg.getContainerInventory(hostID); ok {
 			rows = []map[string]any{inv}
 		}
@@ -95,6 +102,18 @@ func (h *SreyunCore) execQueryContainers(args map[string]any) (string, error) {
 		rows, err = h.s.pg.getAllContainerInventories()
 		if err != nil {
 			return "", err
+		}
+		if actor != "" {
+			if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+				filtered := rows[:0]
+				for _, row := range rows {
+					hid, _ := row["host_id"].(string)
+					if hid != "" && h.s.userCanAccessHost(u, hid) {
+						filtered = append(filtered, row)
+					}
+				}
+				rows = filtered
+			}
 		}
 	}
 	b, _ := json.MarshalIndent(rows, "", "  ")
@@ -338,6 +357,14 @@ func (h *SreyunCore) execLocateResource(args map[string]any) (string, error) {
 		return "", fmt.Errorf("ref required")
 	}
 	res := h.s.locateResource(ref)
+	actor := scopeActorFromArgs(args)
+	hid := res.HostID
+	if hid == "" {
+		hid = res.HyperVHostID
+	}
+	if hid != "" && !h.actorCanAccessHost(actor, hid) {
+		return "无权访问该资源所属主机", nil
+	}
 	b, _ := json.MarshalIndent(res, "", "  ")
 	return string(b), nil
 }
