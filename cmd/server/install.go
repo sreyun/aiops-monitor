@@ -693,14 +693,13 @@ echo "[AIOps] done. Check the dashboard for this host."
 // register service/autostart and Restart-Service (restart for both fresh and reinstall).
 //
 // Privilege-adaptive:
-//   - Run ELEVATED (admin): installs under %ProgramFiles%\AIOps Agent and registers a
-//     scheduled task running as SYSTEM at Highest run level (boot + 5-min
-//     keepalive). SYSTEM has the privileges Get-VM needs, so Hyper-V guest
-//     collection works. This is the mode Hyper-V hosts must use.
-//   - Run NON-elevated: the classic per-user install under %LOCALAPPDATA%
-//     (HKCU Run + 5-min keepalive), unchanged. No admin required, but it
-//     cannot collect Hyper-V guests — the script says so and points at the
-//     elevated re-run.
+//   - Prefer ELEVATED when Hyper-V / Smart App Control / AppLocker is present:
+//     installs under %ProgramFiles%\AIOps Agent as a LocalSystem service (boot
+//     autostart, desktop worker, Get-VM). AppData is the common AppLocker deny
+//     path; after an App Control block the script auto-retries elevated once.
+//   - Run NON-elevated (no policy pressure): classic per-user install under
+//     %LOCALAPPDATA% (HKCU Run + 5-min keepalive). No admin required, but it
+//     cannot collect Hyper-V guests and is often blocked by Application Control.
 //
 // config.yaml is UTF-8 (no BOM); the agent is launched via a hidden VBS
 // supervisor that only starts it when not already running (no duplicates).
@@ -729,33 +728,69 @@ $Token    = "__TOKEN__"
 $Category = "__CATEGORY__"
 $LogPaths = '__LOG_PATHS__'
 $ServersJson = '__SERVERS_JSON__'
+$CaptureBackend = "__CAPTURE_BACKEND__"
+$ContentAudit = "__CONTENT_AUDIT__"
 # Elevated installs run the agent as SYSTEM (needed for Hyper-V Get-VM) and live
 # machine-wide under ProgramData; non-elevated installs stay per-user as before.
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 
-# Hyper-V auto-elevation: Get-VM needs admin/SYSTEM, so a per-user install on a
-# Hyper-V host silently collects ZERO VMs. When NOT elevated AND this is a Hyper-V
-# host, relaunch the SAME install elevated via UAC — the elevated run installs as
-# SYSTEM and collects Hyper-V. Non-Hyper-V hosts keep the no-admin per-user install
-# untouched. The command is passed as -EncodedCommand (base64 UTF-16LE) to dodge all
-# quoting pitfalls. If UAC is declined or unavailable (headless), we fall through to
-# the per-user install below, so this can only help, never block.
-if (-not $IsAdmin -and (Get-Service -Name vmms -ErrorAction SilentlyContinue)) {
-  Write-Host "[AIOps] Hyper-V host detected but PowerShell is not elevated."
-  Write-Host "[AIOps] Requesting administrator rights (UAC) so Hyper-V VM collection works..."
+function Test-AiopsSmartAppControlOn {
   try {
-    $q = "token=" + [Uri]::EscapeDataString([string]$Token)
-    if ($Category) { $q += "&category=" + [Uri]::EscapeDataString([string]$Category) }
-    if ($LogPaths -and $LogPaths -ne "[]") { $q += "&log_paths=" + [Uri]::EscapeDataString([string]$LogPaths) }
-    if ($ServersJson) { $q += "&servers_json=" + [Uri]::EscapeDataString([string]$ServersJson) }
-    $reinvoke = '[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072; irm "' + $Server + '/install.ps1?' + $q + '" | iex'
-    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($reinvoke))
-    Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$enc -ErrorAction Stop
-    Write-Host "[AIOps] Elevated installer launched in a new window (approve the UAC prompt). This non-admin window is done."
+    $ci = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue
+    if ($ci -and ($ci.VerifiedAndReputablePolicyEnforced -eq 1 -or $ci.SkciEnabled -eq 1)) { return $true }
+  } catch {}
+  return $false
+}
+function Test-AiopsAppLockerPresent {
+  try {
+    $alp = Get-AppLockerPolicy -Effective -ErrorAction SilentlyContinue
+    if ($alp -and $alp.RuleCollections -and $alp.RuleCollections.Count -gt 0) { return $true }
+  } catch {}
+  return $false
+}
+# Relaunch the same one-liner elevated. Used for Hyper-V, AppLocker-friendly
+# Program Files install, and App Control recovery (AppData is often denied).
+function Request-AiopsElevatedInstall([string]$Reason) {
+  $q = "token=" + [Uri]::EscapeDataString([string]$Token)
+  if ($Category) { $q += "&category=" + [Uri]::EscapeDataString([string]$Category) }
+  if ($LogPaths -and $LogPaths -ne "[]") { $q += "&log_paths=" + [Uri]::EscapeDataString([string]$LogPaths) }
+  if ($ServersJson) { $q += "&servers_json=" + [Uri]::EscapeDataString([string]$ServersJson) }
+  if ($CaptureBackend) { $q += "&capture_backend=" + [Uri]::EscapeDataString([string]$CaptureBackend) }
+  if ($ContentAudit -eq 'true') { $q += "&content_audit=1" }
+  $reinvoke = '[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072; irm "' + $Server + '/install.ps1?' + $q + '" | iex'
+  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($reinvoke))
+  Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$enc -ErrorAction Stop
+  Write-Host ("[AIOps] Elevated installer launched (reason=" + $Reason + "). Approve the UAC prompt; this non-admin window is done.")
+}
+
+$SacOnEarly = Test-AiopsSmartAppControlOn
+$AppLockerEarly = Test-AiopsAppLockerPresent
+$HyperVHost = [bool](Get-Service -Name vmms -ErrorAction SilentlyContinue)
+# Prefer Program Files + Windows service whenever Soft policies / Hyper-V make
+# per-user AppData installs fragile. AppData is the #1 AppLocker deny target.
+$PreferElevated = $HyperVHost -or $SacOnEarly -or $AppLockerEarly
+if (-not $IsAdmin -and $PreferElevated) {
+  if ($HyperVHost) {
+    Write-Host "[AIOps] Hyper-V host detected but PowerShell is not elevated."
+    Write-Host "[AIOps] Requesting administrator rights (UAC) so Hyper-V + service install work..."
+  } elseif ($SacOnEarly) {
+    Write-Host '[AIOps] Smart App Control is ON - preferring elevated Program Files install.'
+    Write-Host '[AIOps] 智能应用控制已开启：优先请求管理员安装到 Program Files（若仍拦截需临时关闭 SAC）。'
+  } else {
+    Write-Host '[AIOps] AppLocker/policy detected - preferring elevated Program Files install.'
+    Write-Host '[AIOps] 检测到应用程序控制策略：优先请求管理员安装到 Program Files（受信任路径）。'
+  }
+  try {
+    Request-AiopsElevatedInstall 'prefer-elevated'
     return
   } catch {
     Write-Host "[AIOps] Elevation declined or unavailable; continuing with a per-user install."
-    Write-Host "[AIOps] NOTE: Hyper-V VM collection stays OFF until you re-run this command in an ELEVATED PowerShell."
+    if ($HyperVHost) {
+      Write-Host "[AIOps] NOTE: Hyper-V VM collection stays OFF until you re-run elevated."
+    }
+    if ($SacOnEarly -or $AppLockerEarly) {
+      Write-Host "[AIOps] WARNING: AppData installs are often blocked by Application Control. If the next step fails, re-run in an elevated PowerShell (管理员)." -ForegroundColor Yellow
+    }
   }
 }
 if ($IsAdmin) {
@@ -870,11 +905,30 @@ $AgentBak = Join-Path $Dir "aiops-agent.exe.bak"
 # Download helper: NEVER call curl.exe/cmd.exe — hardened GPO hosts block them
 # ("This program is blocked by group policy") and with $ErrorActionPreference=Stop
 # that aborts the whole install. Invoke-WebRequest / WebClient are enough.
+function Clear-AiopsMotw([string]$Path) {
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+  try { Unblock-File -LiteralPath $Path -ErrorAction SilentlyContinue } catch {}
+  try { Remove-Item -LiteralPath ($Path + ':Zone.Identifier') -Force -ErrorAction SilentlyContinue } catch {}
+}
 function Get-AiopsRemoteFile([string]$Url, [string]$OutFile) {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Stop'
   Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+  # Prefer byte-array write: avoids Mark-of-the-Web that OutFile/DownloadFile attach.
+  try {
+    $wc = New-Object System.Net.WebClient
+    $bytes = $wc.DownloadData($Url)
+    if ($bytes -and $bytes.Length -gt 0) {
+      [System.IO.File]::WriteAllBytes($OutFile, $bytes)
+      Clear-AiopsMotw $OutFile
+      if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
+        $ErrorActionPreference = $prev
+        return
+      }
+    }
+  } catch {}
   try {
     Invoke-WebRequest $Url -OutFile $OutFile -UseBasicParsing
+    Clear-AiopsMotw $OutFile
     if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
       $ErrorActionPreference = $prev
       return
@@ -882,6 +936,7 @@ function Get-AiopsRemoteFile([string]$Url, [string]$OutFile) {
   } catch {}
   try {
     (New-Object System.Net.WebClient).DownloadFile($Url, $OutFile)
+    Clear-AiopsMotw $OutFile
     if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
       $ErrorActionPreference = $prev
       return
@@ -933,9 +988,10 @@ catch {
   throw
 }
 # Clear Mark-of-the-Web / Zone.Identifier from HTTP downloads. This helps
-# SmartScreen; WDAC/AppLocker still needs an explicit allow rule (see below).
-try { Unblock-File -Path $AgentExe -ErrorAction SilentlyContinue } catch {}
-try { Remove-Item -LiteralPath ($AgentExe + ':Zone.Identifier') -Force -ErrorAction SilentlyContinue } catch {}
+# SmartScreen; WDAC/AppLocker/SAC still need path trust, allow rules, or Off.
+Clear-AiopsMotw $AgentExe
+Clear-AiopsMotw $AgentNew
+Clear-AiopsMotw $AgentBak
 
 # Preflight: confirm Windows will let us execute the binary BEFORE we claim
 # service install succeeded. "Application Control policy has blocked this file"
@@ -1037,21 +1093,31 @@ if (-not $Probe.Ok) {
     Write-Host "[AIOps] Windows Application Control / Group Policy blocked aiops-agent.exe." -ForegroundColor Yellow
     Write-Host "[AIOps] 本机应用程序控制或组策略拦截了 Agent。" -ForegroundColor Yellow
 
-    $SacOn = $false
-    try {
-      $ci = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue
-      if ($ci -and ($ci.VerifiedAndReputablePolicyEnforced -eq 1 -or $ci.SkciEnabled -eq 1)) { $SacOn = $true }
-    } catch {}
-    $AppLockerOn = $false
-    try {
-      $alp = Get-AppLockerPolicy -Effective -ErrorAction SilentlyContinue
-      if ($alp -and $alp.RuleCollections -and $alp.RuleCollections.Count -gt 0) { $AppLockerOn = $true }
-    } catch {}
+    $SacOn = Test-AiopsSmartAppControlOn
+    $AppLockerOn = Test-AiopsAppLockerPresent
     if ($SacOn) {
-      Write-Host "[AIOps] Detected: Smart App Control ON（智能应用控制开启；开关灰掉时需企业放行或已签名 Agent）。" -ForegroundColor Yellow
+      Write-Host '[AIOps] Detected: Smart App Control ON（智能应用控制开启；无签名 Agent 会被拦截，需临时关闭 SAC 或使用已签名构建）。' -ForegroundColor Yellow
     }
     if ($AppLockerOn) {
-      Write-Host "[AIOps] Detected: AppLocker policy present（存在 AppLocker 策略）。" -ForegroundColor Yellow
+      Write-Host '[AIOps] Detected: AppLocker policy present（存在 AppLocker 策略；Program Files 通常比 AppData 更易放行）。' -ForegroundColor Yellow
+    }
+
+    # Non-admin + AppData: one automatic UAC retry into Program Files. This is
+    # the common Win10/11 failure mode after declining the first Hyper-V prompt.
+    $ElevateMarker = Join-Path $env:TEMP 'aiops-install-elevate-appcontrol.flag'
+    if (-not $IsAdmin -and ($Dir -like '*\AppData\Local\*' -or $Dir -like '*\AppData\Roaming\*')) {
+      $AlreadyTried = Test-Path -LiteralPath $ElevateMarker
+      if (-not $AlreadyTried) {
+        try {
+          Set-Content -LiteralPath $ElevateMarker -Value (Get-Date -Format o) -Encoding ASCII -Force
+          Write-Host '[AIOps] AppData binary blocked - requesting administrator install to Program Files...' -ForegroundColor Yellow
+          Write-Host '[AIOps] AppData 被拦截，正在请求管理员权限安装到 Program Files（请在 UAC 点 是）...' -ForegroundColor Yellow
+          Request-AiopsElevatedInstall 'appcontrol-appdata'
+          return
+        } catch {
+          Write-Host "[AIOps] Elevation declined; showing manual recovery steps." -ForegroundColor Yellow
+        }
+      }
     }
 
     $AllowPs1 = Join-Path $Dir "allow-aiops-agent.ps1"
@@ -1068,37 +1134,66 @@ if (-not $Probe.Ok) {
     # operator does not need a second manual step when AppLocker is the blocker.
     $Recovered = $false
     if ($IsAdmin) {
-      Write-Host "[AIOps] Trying AppLocker hash allow (admin)…"
+      Write-Host '[AIOps] Trying AppLocker hash allow (admin)...'
       if (Try-AiopsAppLockerAllow $AgentExe) {
         Start-Sleep -Seconds 2
         $Probe2 = Test-AiopsAgentRunnable $AgentExe
         if ($Probe2.Ok) {
-          Write-Host "[AIOps] AppLocker allow succeeded — continuing install." -ForegroundColor Green
+          Write-Host '[AIOps] AppLocker allow succeeded - continuing install.' -ForegroundColor Green
           $Recovered = $true
           $Probe = $Probe2
         } else {
           Write-Host ("[AIOps] Still blocked after AppLocker allow: " + $Probe2.Detail) -ForegroundColor Yellow
         }
       }
+      # Offer one-click allow helper when AppLocker merge alone failed.
+      if (-not $Recovered -and $AllowPs1 -and (Test-Path $AllowPs1)) {
+        Write-Host '[AIOps] Launching allow-aiops-agent.ps1 (admin)...'
+        try {
+          $p = Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AllowPs1) -Wait -PassThru -WindowStyle Normal
+          Start-Sleep -Seconds 2
+          $Probe3 = Test-AiopsAgentRunnable $AgentExe
+          if ($Probe3.Ok) {
+            Write-Host '[AIOps] Allow helper succeeded - continuing install.' -ForegroundColor Green
+            $Recovered = $true
+            $Probe = $Probe3
+          } else {
+            Write-Host ("[AIOps] Still blocked after allow helper (exit=" + $p.ExitCode + ")") -ForegroundColor Yellow
+          }
+        } catch {
+          Write-Host ("[AIOps] allow helper launch failed: " + $_.Exception.Message) -ForegroundColor Yellow
+        }
+      }
     }
 
     if (-not $Recovered) {
       Write-Host ""
-      Write-Host "[AIOps] Fix / 处理办法:" -ForegroundColor Yellow
+      Write-Host '[AIOps] Fix / 处理办法:' -ForegroundColor Yellow
+      Write-Host '[AIOps]  1) 右键开始菜单 PowerShell/终端 -> 以管理员身份运行，再执行原安装命令（装到 Program Files）'
+      Write-Host ('[AIOps]     irm "' + $Server + '/install.ps1?token=' + $Token + '" | iex')
       if ($AllowPs1 -and (Test-Path $AllowPs1)) {
-        Write-Host "  1) 管理员运行放行脚本后重装:"
-        Write-Host ('     powershell -ExecutionPolicy Bypass -File "' + $AllowPs1 + '"')
+        Write-Host '[AIOps]  2) 管理员运行放行脚本后重装:'
+        Write-Host ('[AIOps]     powershell -ExecutionPolicy Bypass -File "' + $AllowPs1 + '"')
+      } else {
+        Write-Host '[AIOps]  2) 让 IT 在 AppLocker / SRP / WDAC 中按路径、哈希或发布者放行'
       }
-      Write-Host "  2) 让 IT 在 AppLocker / SRP / WDAC 中按路径、哈希或发布者放行（域策略无法由本机覆盖）"
-      Write-Host "     Path: $AgentExe"
-      Write-Host "  3) 个人设备可关闭 Smart App Control 后重装；企业设备请勿尝试绕过域策略"
-      Write-Host ("     SHA-256 = " + $Actual)
-      throw "Agent binary blocked by OS policy; install aborted (no Session-0 fallback)."
+      Write-Host ('[AIOps]     Path: ' + $AgentExe)
+      Write-Host ('[AIOps]     SHA-256 = ' + $Actual)
+      Write-Host '[AIOps]  3) Windows 11 个人设备: 设置 -> 隐私和安全性 -> Windows 安全中心 -> 应用和浏览器控制 -> 智能应用控制 -> 关闭，然后重装'
+      Write-Host '[AIOps]     (Smart App Control has no per-app exception; unsigned agents need SAC Off or a signed build)'
+      try {
+        if ($SacOn) {
+          Write-Host '[AIOps] Opening Windows Security App and browser control...'
+          Start-Process 'windowsdefender://appbrowser' -ErrorAction SilentlyContinue
+        }
+      } catch {}
+      throw 'Agent binary blocked by OS policy; install aborted (no Session-0 fallback).'
     }
   } else {
     throw ("Agent binary not runnable: " + $Probe.Detail)
   }
 }
+try { Remove-Item -LiteralPath (Join-Path $env:TEMP 'aiops-install-elevate-appcontrol.flag') -Force -ErrorAction SilentlyContinue } catch {}
 try {
   Get-AiopsRemoteFile "$Server/dl/plugins.zip" "$Dir\plugins.zip"
   # Expand-Archive needs PowerShell 5+; Server 2012 often ships PS 3/4 — use .NET ZipFile.

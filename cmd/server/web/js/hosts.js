@@ -1,3 +1,13 @@
+/* Category/folder badge: CSS ellipsis + full path in title (names are often long). */
+function hostCategoryBadgeHTML(h) {
+  const raw = String((h && (h.folder_path || h.category)) || "").trim();
+  const label = raw ? esc(raw) : I18N.t("section.uncategorized");
+  const tip = raw
+    ? (raw + " · " + I18N.t("section.click_set_folder"))
+    : I18N.t("section.click_set_folder");
+  return `<span class="cat-badge" data-act="cat" title="${esc(tip)}">${label}</span>`;
+}
+
 /* ---------- 渲染：主机卡片 ---------- */
 function hostCard(h) {
   const m = h.latest || {};
@@ -26,9 +36,6 @@ function hostCard(h) {
       return `<span class="chip ${isDown ? "crit" : ""}">${esc(k)} <b>${num}</b></span>`;
     }).join("") + `<span class="chip-label">${I18N.t("section.custom_metrics")}</span></div>`;
   }
-  const catLabel = (h.folder_path || h.category)
-    ? esc(h.folder_path || h.category)
-    : I18N.t("section.uncategorized");
   const loadTitle = I18N.t("section.load_avg") + (h.os === "windows" ? I18N.t("misc.windows_approx") : "");
   const lastCell = !h.online
     ? `<span class="g offline-tag" title="${I18N.t("section.last_seen")} ${fmtDateTime(h.last_seen)}">⚠ ${I18N.t("ui.offline_status")} ${ago(h.last_seen)}</span>`
@@ -44,7 +51,7 @@ function hostCard(h) {
         <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
       </div>
       <div class="host-tags">
-        <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
+        ${hostCategoryBadgeHTML(h)}
         <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
         ${agentVer}
         ${(h.online && TERMINAL_ENABLED) ? `<button class="term-btn" data-act="term" title="${I18N.t('section.terminal_desc')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ""}
@@ -103,9 +110,6 @@ function hostRow(h) {
     : isStale
       ? `<span class="hrow-status stale" title="${I18N.t('section.data_stale')}">⚠ ${ago(h.last_seen)}</span>`
       : `<span class="hrow-status online">${I18N.t("ui.running")} ${fmtUptime(m.uptime || 0)}</span>`;
-  const catLabel = (h.folder_path || h.category)
-    ? esc(h.folder_path || h.category)
-    : I18N.t("section.uncategorized");
   const termBtn = (h.online && TERMINAL_ENABLED)
     ? `<button class="term-btn" data-act="term" title="${I18N.t('ui.remote_terminal')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>`
     : "";
@@ -124,7 +128,7 @@ function hostRow(h) {
       <div class="hrow-sub" title="${ipTitle}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}${agentVer ? `<span class="hrow-sep">·</span>${agentVer}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
-    <span class="cat-badge" data-act="cat" title="${I18N.t('section.click_set_folder')}">${catLabel}</span>
+    ${hostCategoryBadgeHTML(h)}
     <div class="hrow-metrics">
       ${miniBar("CPU", m.cpu_percent)}${miniBar(I18N.t("ui.memory"), m.mem_percent)}${miniBar(I18N.t("ui.disk"), diskMax)}${gpuMax !== null ? miniBar("GPU", gpuMax) : ""}
     </div>
