@@ -28,20 +28,25 @@ func buildLegacyAgentUpdateCommand(goos, serverURL, bin string, force bool) stri
 }
 
 func legacyUnixAgentUpdateScript(server, bin string, darwin bool) string {
-	// Restart: prefer service managers; fall back to pkill+nohup for crontab installs.
-	// Never mask total failure with a bare `|| true` that still exits 0.
+	// Restart: prefer --install-service / service managers so desktop worker stays
+	// supervised; fall back to pkill+nohup with --config for crontab installs.
 	restart := `
+CFG=""
+for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do
+  [ -f "$c" ] && CFG="$c" && break
+done
 RESTARTED=0
-if command -v systemctl >/dev/null 2>&1; then
-  if systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
+if [ -n "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
+  if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
+    RESTARTED=1
+  fi
+fi
+if [ "$RESTARTED" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
+  if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
     RESTARTED=1
   fi
 fi
 if [ "$RESTARTED" -eq 0 ]; then
-  CFG=""
-  for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do
-    [ -f "$c" ] && CFG="$c" && break
-  done
   pkill -x aiops-agent 2>/dev/null || pkill -f '/aiops-agent( |$)' 2>/dev/null || true
   sleep 1
   if [ -n "$CFG" ]; then
@@ -60,17 +65,24 @@ fi
 `
 	if darwin {
 		restart = `
-RESTARTED=0
+CFG=""
+for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do
+  [ -f "$c" ] && CFG="$c" && break
+done
 UIDN=$(id -u)
 xattr -dr com.apple.quarantine aiops-agent 2>/dev/null || true
-for label in "gui/$UIDN/com.aiops.agent" "system/com.aiops.agent" "system/com.aiops.monitor.agent"; do
-  if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
-done
+RESTARTED=0
+if [ -n "$CFG" ]; then
+  if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
+    RESTARTED=1
+  fi
+fi
 if [ "$RESTARTED" -eq 0 ]; then
-  CFG=""
-  for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do
-    [ -f "$c" ] && CFG="$c" && break
+  for label in "gui/$UIDN/com.aiops.agent" "system/com.aiops.agent" "system/com.aiops.monitor.agent"; do
+    if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
   done
+fi
+if [ "$RESTARTED" -eq 0 ]; then
   pkill -x aiops-agent 2>/dev/null || true
   sleep 1
   if [ -n "$CFG" ]; then
@@ -132,7 +144,50 @@ echo "legacy agent update ok sha=$ACTUAL"
 }
 
 func legacyWindowsAgentUpdateScript(server, bin string) string {
-	ps := fmt.Sprintf(`$ErrorActionPreference='Stop'; try{[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072}catch{}; $Server='%s'; $Bin='%s'; $cands=@((Join-Path $env:ProgramFiles 'AIOps Agent'),(Join-Path $env:LOCALAPPDATA 'aiops-agent'),(Join-Path $env:ProgramData 'aiops-agent'),(Join-Path $env:ProgramData 'AIOps Agent')); $Dir=$null; foreach($d in $cands){ if(Test-Path (Join-Path $d 'aiops-agent.exe')){ $Dir=$d; break } }; if(-not $Dir){ throw 'agent exe not found' }; $Exe=Join-Path $Dir 'aiops-agent.exe'; $New=Join-Path $Dir '.aiops-agent.new.exe'; Invoke-WebRequest "$Server/dl/$Bin" -OutFile $New -UseBasicParsing; $Expected=((Invoke-WebRequest "$Server/dl/$Bin.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant(); $Sha=[Security.Cryptography.SHA256]::Create(); $Stream=[IO.File]::OpenRead($New); try{ $Actual=([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() } finally { $Stream.Dispose(); $Sha.Dispose() }; if(-not $Expected -or $Expected -ne $Actual){ Remove-Item $New -Force; throw 'SHA-256 mismatch' }; Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue; Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; if(Test-Path $Exe){ Copy-Item $Exe ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }; Move-Item $New $Exe -Force; try{ Unblock-File $Exe -ErrorAction SilentlyContinue }catch{}; $svc=Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue; if($svc){ Start-Service AiopsMonitorAgent } else { $vbs=Join-Path $Dir 'start-agent.vbs'; if(Test-Path $vbs){ Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WindowStyle Hidden } else { Start-Process $Exe -WindowStyle Hidden } }; Write-Output ('legacy agent update ok sha='+$Actual)`,
+	// Keep as one encoded command; restart must use --install-service / --config.
+	// Bare Start-Process $Exe (no args) was breaking terminal + remote desktop
+	// after auto-update on hosts without a healthy SCM restart.
+	ps := fmt.Sprintf(`$ErrorActionPreference='Stop'
+try{[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072}catch{}
+$Server='%s'; $Bin='%s'
+$cands=@((Join-Path $env:ProgramFiles 'AIOps Agent'),(Join-Path $env:LOCALAPPDATA 'aiops-agent'),(Join-Path $env:ProgramData 'aiops-agent'),(Join-Path $env:ProgramData 'AIOps Agent'))
+$Dir=$null
+foreach($d in $cands){ if(Test-Path (Join-Path $d 'aiops-agent.exe')){ $Dir=$d; break } }
+if(-not $Dir){ throw 'agent exe not found' }
+$Exe=Join-Path $Dir 'aiops-agent.exe'
+$New=Join-Path $Dir '.aiops-agent.new.exe'
+$Cfg=$null
+foreach($n in @('config.yaml','config.yml','config.json')){ $c=Join-Path $Dir $n; if(Test-Path $c){ $Cfg=$c; break } }
+Invoke-WebRequest "$Server/dl/$Bin" -OutFile $New -UseBasicParsing
+$Expected=((Invoke-WebRequest "$Server/dl/$Bin.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
+$Sha=[Security.Cryptography.SHA256]::Create(); $Stream=[IO.File]::OpenRead($New)
+try{ $Actual=([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() } finally { $Stream.Dispose(); $Sha.Dispose() }
+if(-not $Expected -or $Expected -ne $Actual){ Remove-Item $New -Force; throw 'SHA-256 mismatch' }
+foreach($name in @('AiopsMonitorAgent','AIOps-Agent')){ Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue }
+Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
+if(Test-Path $Exe){ Copy-Item $Exe ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }
+Move-Item $New $Exe -Force
+try{ Unblock-File $Exe -ErrorAction SilentlyContinue }catch{}
+$ok=$false
+if($Cfg){
+  $p=Start-Process -FilePath $Exe -ArgumentList @('--install-service','--config',$Cfg) -WorkingDirectory $Dir -Wait -PassThru -WindowStyle Hidden
+  if($p.ExitCode -eq 0){ $ok=$true }
+}
+if(-not $ok){
+  $svc=Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue
+  if($svc){ Start-Service AiopsMonitorAgent; $ok=$true }
+}
+if(-not $ok){
+  $vbs=Join-Path $Dir 'start-agent.vbs'
+  if(Test-Path $vbs){ Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WorkingDirectory $Dir -WindowStyle Hidden }
+  elseif($Cfg){ Start-Process -FilePath $Exe -ArgumentList @('--config',$Cfg) -WorkingDirectory $Dir -WindowStyle Hidden }
+  else { throw 'restart failed: no service and no config.yaml beside agent' }
+}
+Start-Sleep -Seconds 2
+if(-not (Get-Process aiops-agent -ErrorAction SilentlyContinue) -and -not (Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue | Where-Object Status -eq Running)){ throw 'agent not running after update' }
+Write-Output ('legacy agent update ok sha='+$Actual)
+`,
 		strings.ReplaceAll(server, "'", "''"),
 		strings.ReplaceAll(bin, "'", "''"),
 	)

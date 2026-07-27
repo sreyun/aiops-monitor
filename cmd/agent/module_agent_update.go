@@ -100,7 +100,8 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 		}
 	}
 
-	if err := agentReplaceAndRestart(exe, staging); err != nil {
+	cfgPath := resolveAgentConfigBesideExe(dir)
+	if err := agentReplaceAndRestart(exe, staging, cfgPath); err != nil {
 		return []byte("agent_update: " + err.Error()), 1
 	}
 	msg := fmt.Sprintf("agent_update: staged %s sha256=%s from=%s → restart scheduled (was %s",
@@ -129,11 +130,35 @@ func moduleAgentRollback() ([]byte, int) {
 		return []byte("agent_update rollback: " + err.Error()), 1
 	}
 	_ = os.Chmod(staging, 0o755)
-	if err := agentReplaceAndRestart(exe, staging); err != nil {
+	cfgPath := resolveAgentConfigBesideExe(filepath.Dir(exe))
+	if err := agentReplaceAndRestart(exe, staging, cfgPath); err != nil {
 		_ = os.Remove(staging)
 		return []byte("agent_update rollback: " + err.Error()), 1
 	}
 	return []byte("agent_update: rollback to .bak scheduled"), 0
+}
+
+// resolveAgentConfigBesideExe returns an absolute config path next to the agent
+// binary when present. Update restart helpers must pass this explicitly —
+// Windows services start with CWD=System32, and a bare relaunch without
+// --config falls back to localhost and breaks terminal/desktop.
+func resolveAgentConfigBesideExe(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	for _, name := range []string{"config.yaml", "config.yml", "config.json"} {
+		p := filepath.Join(dir, name)
+		st, err := os.Stat(p)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
+	return ""
 }
 
 func truthyArg(v string) bool {
