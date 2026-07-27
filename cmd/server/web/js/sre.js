@@ -1580,6 +1580,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,
             if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.tool){ if(onTool) onTool(j.tool); continue; } // 工具执行状态帧（run/ok/err）
+            if(j.action){ if(options&&typeof options.onAction==="function") options.onAction(j.action); continue; } // 能力工具 UI 动作卡
             if(j.reasoning!==undefined){ fullReasoning+=j.reasoning; if(onReasoning) onReasoning(j.reasoning,fullReasoning); continue; } // 推理模型思维链增量
             if(j.delta){ fullText+=j.delta; if(onDelta) onDelta(j.delta,fullText); }
           } catch(e){ /* skip malformed chunks */ }
@@ -3806,7 +3807,63 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
 let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
-const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。")}</div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板制作/优化、诊断与安全加固、指标日志告警排查、RAG 知识库、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">看板制作</span><span class="ai-cap-chip">看板优化</span><span class="ai-cap-chip">AI 诊断</span><span class="ai-cap-chip">安全加固</span><span class="ai-cap-chip">RAG</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
+
+function renderAIChatActions(actions){
+  if(!actions||!actions.length) return "";
+  const seen=new Set();
+  const items=[];
+  for(const a of actions){
+    if(!a||!a.type) continue;
+    const key=a.type+"|"+(a.id||a.title||a.label||"");
+    if(seen.has(key)) continue;
+    seen.add(key);
+    items.push(a);
+  }
+  if(!items.length) return "";
+  return `<div class="ai-action-cards">`+items.map((a,i)=>{
+    const label=esc(a.label||a.type);
+    return `<button type="button" class="ai-action-card" data-ai-act="${i}">${label}</button>`;
+  }).join("")+`</div>`;
+}
+function bindAIChatActions(root,actions){
+  if(!root||!actions||!actions.length) return;
+  root.querySelectorAll("[data-ai-act]").forEach(btn=>{
+    btn.onclick=async()=>{
+      const a=actions[Number(btn.dataset.aiAct)];
+      if(!a) return;
+      if(a.type==="open_dashboard"&&a.id){
+        try{
+          if(typeof switchView==="function") switchView("dashboards");
+          if(typeof openDashboard==="function") await openDashboard(a.id);
+          const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
+          if(typeof toast==="function") toast(I18N.t("sre.opened_dashboard","已打开看板"),"ok");
+        }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+        return;
+      }
+      if(a.type==="export_report"){
+        if(typeof exportModel!=="function"){ if(typeof toast==="function") toast("导出组件不可用","err"); return; }
+        const title=a.title||"AI 分析报告";
+        const body=a.body||"";
+        const model={
+          title,
+          subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
+          summaryTitle:"报告信息",
+          meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()]],
+          narrativeTitle:"AI 分析与建议",
+          narrative:body,
+          sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(body):[],
+          footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
+        };
+        try{
+          const ok=await exportModel(model,"markdown",title);
+          if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
+          else if(typeof toast==="function") toast(I18N.t("sre.exported","已导出"),"ok");
+        }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+      }
+    };
+  });
+}
 function openAIChat(){
   newAIChat();
   $("aiChatMask").classList.add("show");
@@ -3941,6 +3998,8 @@ async function sendAIChat(){
   const pending=appendChatMsg("assistant","");
   if(pending) pending.innerHTML='<div class="ai-thinking"><span class="ai-thinking-dots"><span></span><span></span><span></span></span> <span class="ai-thinking-text">'+I18N.t("sre.thinking","正在思考…")+'</span></div>';
   let answer="";
+  let lastRunId="";
+  const uiActions=[];
   try{
     const images=atts.filter(a=>a.kind==="image").map(a=>({mime:a.mime,data:a.data}));
     const files=atts.filter(a=>a.kind==="file").map(a=>({name:a.name,text:a.text}));
@@ -3963,7 +4022,9 @@ async function sendAIChat(){
     const paintStream=()=>{
       if(!pending) return;
       pending.innerHTML=renderReasoningBlock(reasoning,true)+toolTraceHTML()
-        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>";
+        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>"
+        +renderAIChatActions(uiActions);
+      bindAIChatActions(pending,uiActions);
     };
     const schedulePaint=()=>{
       if(streamRAF) return;
@@ -3971,7 +4032,10 @@ async function sendAIChat(){
     };
     const paintFinal=()=>{
       if(streamRAF){ cancelAnimationFrame(streamRAF); streamRAF=null; }
-      if(pending) pending.innerHTML=renderReasoningBlock(reasoning,false)+toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"));
+      if(pending){
+        pending.innerHTML=renderReasoningBlock(reasoning,false)+toolTraceHTML()+(renderAIMarkdown(answer)||(toolStates.length?"":"…"))+renderAIChatActions(uiActions);
+        bindAIChatActions(pending,uiActions);
+      }
     };
     await readSSEStream(r,
       (delta,fullText)=>{
@@ -3992,6 +4056,7 @@ async function sendAIChat(){
       null,
       (meta)=>{
         if(meta&&meta.session_id){ AI_CHAT_SESSION=Number(meta.session_id); }
+        if(meta&&(meta.run_id||meta.assist_id)){ lastRunId=String(meta.run_id||meta.assist_id); }
         applyRAGMetaHint(meta, "aiChatLog");
       },
       (t)=>{ // 工具状态帧：run 追加 chip，ok/err 更新最近的同名 run chip
@@ -4007,9 +4072,22 @@ async function sendAIChat(){
         reasoning=fullReasoning;
         schedulePaint();
         if(aiChatStick()) aiChatToBottom();
+      },
+      {
+        onAction:(act)=>{
+          if(!act||!act.type) return;
+          uiActions.push(act);
+          if(pending && !streamed){ streamed=true; }
+          schedulePaint();
+          if(aiChatStick()) aiChatToBottom();
+        }
       }
     );
-    if(answer){ AI_CHAT_HISTORY.push({role:"assistant",content:answer}); addCopyTool(pending,answer); }
+    if(answer){
+      AI_CHAT_HISTORY.push({role:"assistant",content:answer});
+      if(pending&&lastRunId) pending.dataset.runId=lastRunId;
+      addCopyTool(pending,answer,{runId:lastRunId});
+    }
     refreshAISessionsSoon();
   }catch(e){
     if(_aiChatAborted || (e&&e.name==="AbortError")){ if(pending){ pending.textContent="⏹ "+I18N.t("sre.aborted","已终止"); pending.className="ai-chat-msg sys"; } }
@@ -4074,16 +4152,42 @@ function addCopyTool(div,rawText,opts){
   const btn=document.createElement("button"); btn.textContent=I18N.t("sre.copy","复制"); btn.title=I18N.t("sre.copy_reply","复制回复");
   btn.onclick=()=>{ copyText(rawText); btn.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>{ btn.textContent=I18N.t("sre.copy","复制"); },1200); };
   bar.appendChild(btn);
+  if(opts.export!==false && rawText && typeof exportModel==="function"){
+    const exp=document.createElement("button"); exp.textContent=I18N.t("sre.export","导出"); exp.title=I18N.t("sre.export_reply","导出本条回复");
+    exp.onclick=async()=>{
+      const model={
+        title:I18N.t("sre.chat_export_title","AI 对话报告"),
+        subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
+        summaryTitle:"报告信息",
+        meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()]],
+        narrativeTitle:"AI 分析与建议",
+        narrative:rawText,
+        sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(rawText):[],
+        footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
+      };
+      try{
+        const ok=await exportModel(model,"markdown","AI对话报告");
+        if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
+        else if(typeof toast==="function") toast(I18N.t("sre.exported","已导出"),"ok");
+      }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
+    };
+    bar.appendChild(exp);
+  }
   if(opts.regenerate!==false){
     const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
     rebtn.onclick=regenerateAIChat;
     bar.appendChild(rebtn);
   }
   if(opts.feedback===false){ div.appendChild(bar); return; }
+  // 无 run_id 时仍展示按钮，但提交时提示（避免假反馈污染）
   const up=document.createElement("button"); up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
   const down=document.createElement("button"); down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
   const sendFb=async (action)=>{
-    let q=""; for(let i=AI_CHAT_HISTORY.length-1;i>=0;i--){ if(AI_CHAT_HISTORY[i].role==="user"){ q=AI_CHAT_HISTORY[i].content; break; } }
+    const runId=opts.runId||div.dataset.runId||"";
+    if(!runId){
+      if(typeof toast==="function") toast(I18N.t("sre.feedback_need_run","本次回复缺少 run_id，无法闭环反馈"),"err");
+      return;
+    }
     let reason="";
     if(action==="unhelpful"){
       reason=await requestAIFeedbackReason({
@@ -4097,7 +4201,7 @@ function addCopyTool(div,rawText,opts){
     let feedbackResult=null;
     try{
       const r=await fetch(`${API}/ai/assist/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"chat",input:q,answer:rawText,action,reason})});
+        body:JSON.stringify({assist_id:runId,run_id:runId,action,reason})});
       const j=await r.json().catch(()=>({}));
       if(!r.ok){ if(typeof toast==="function") toast(j.error||I18N.t("sre.feedback_failed","反馈失败"),"err"); return; }
       feedbackResult=j;

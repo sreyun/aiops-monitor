@@ -2625,7 +2625,7 @@ window.DICT_TW = {
   "sre.copy_code": "複製程式碼",
   "sre.copy": "複製",
   "sre.chat_intro_title": "AI 維運助手已就緒",
-  "sre.chat_intro_sub": "描述問題即可自動排查——查指標 / 日誌 / 告警 / 診斷 / 修復，並識別當前納管主機；也可上傳 📄 文件 / 🔗 網頁輔助分析。",
+  "sre.chat_intro_sub": "全域 AI 入口：看板製作/優化、診斷與安全加固、指標日誌告警排查、RAG 知識庫、報告匯出——一句話即可調度。也可上傳 📄 文件 / 🔗 網頁輔助分析。",
   "sre.try_questions": "試試這些問題",
   "sre.refresh_suggest_title": "換一批推薦",
   "sre.refresh_batch": "換一批",

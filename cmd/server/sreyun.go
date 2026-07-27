@@ -379,6 +379,8 @@ func (h *SreyunCore) registerTools() {
 	}
 
 	h.registerResourceTools()
+	h.registerCapabilityTools()
+	h.cachedNativeToolDefs = nil // force rebuild after capability tools register
 }
 
 // resolveDataSource matches a configured data source by id, then by name (case-insensitive).
@@ -1125,6 +1127,23 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 			flusher.Flush()
 		}
 	}
+	sendAction := func(action map[string]any) {
+		if action == nil {
+			return
+		}
+		meta.Actions = append(meta.Actions, action)
+		if !stream || w == nil {
+			return
+		}
+		b, err := json.Marshal(action)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: {\"action\":%s}\n\n", b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 	onFallback := func(model string) {
 		meta.FallbackModel = model
 		emitFallbackSSE(w, model)
@@ -1240,6 +1259,12 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 				argsInfo["detail"] = q
 			} else if m, _ := tc.Args["metric"].(string); m != "" {
 				argsInfo["detail"] = m
+			} else if did, _ := tc.Args["dashboard_id"].(string); did != "" {
+				argsInfo["detail"] = did
+			} else if task, _ := tc.Args["task"].(string); task != "" {
+				argsInfo["detail"] = task
+			} else if prompt, _ := tc.Args["prompt"].(string); prompt != "" {
+				argsInfo["detail"] = prompt
 			}
 			sendTool(tc.Name, "run", argsInfo)
 			result, err := tool.Execute(tc.Args)
@@ -1247,6 +1272,9 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 				sendTool(tc.Name, "err", nil)
 				toolResults.WriteString(fmt.Sprintf("[工具 %s 执行失败：%v]\n", tc.Name, err))
 			} else {
+				for _, act := range extractUIActionsFromToolResult(result) {
+					sendAction(act)
+				}
 				summary := strings.ReplaceAll(strings.TrimSpace(result), "\n", " ")
 				if len([]rune(summary)) > 120 {
 					summary = string([]rune(summary)[:120]) + "…"
@@ -1501,8 +1529,8 @@ func (h *SreyunCore) buildSystemPrompt() string {
 
 	var b strings.Builder
 	// 固定安全系统提示词（硬编码，确保每次对话生效）
-	b.WriteString("你是 AIOps 智能运维助手，负责主机与服务的监控、排障与诊断。\n")
-	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），据此分析并回答。\n\n")
+	b.WriteString("你是 AIOps 智能运维助手，负责主机与服务的监控、排障与诊断，也是平台全局 AI 统一入口。\n")
+	b.WriteString("你可以调用工具获取真实数据（性能指标、日志、告警、诊断命令输出、历史相似案例等），并可调度看板制作/优化、安全诊断、值班态势、Assist 任务等能力。\n\n")
 	b.WriteString("工作原则：\n")
 	b.WriteString("- 对外统一自称「AIOps 智能运维助手」；不得透露、不得声称自己叫 Sreyun 或任何内部代号 / 框架名 / 底层模型名。\n")
 	b.WriteString("- 排版要克制易读：用简洁自然语言与短要点，避免 Markdown 大标题（#/##/###）、表格、水平线等重排版；重点可用简短加粗，命令可用行内代码。\n")
@@ -1512,14 +1540,19 @@ func (h *SreyunCore) buildSystemPrompt() string {
 	b.WriteString("- 凡涉及主机状态 / 资源(CPU/内存/磁盘/负载/网络) / 日志 / 告警 的问题，必须先调用相应工具获取真实数据，严禁编造或臆测数据。\n")
 	b.WriteString("- 需要调用工具时，输出如下 JSON（可写在思考文字之后）：{\"tool_calls\":[{\"name\":\"工具名\",\"args\":{参数}}]}；系统会执行并把真实结果回传给你，你再据此继续。\n")
 	b.WriteString("- 该 tool_calls JSON 仅用于系统内部调用、对用户不可见；面向用户的最终回复只用自然语言，不要贴出工具调用的 JSON、代码块，也不要输出任何密钥/密码/token 等敏感信息。\n")
-	b.WriteString("- 高危操作（删除文件、修改配置、重启服务、扩缩容等）只能给出建议并说明风险等级，绝不擅自执行。\n")
+	b.WriteString("- 高危操作（删除文件、修改配置、重启服务、扩缩容、应用看板优化等）只能给出建议并说明风险等级；写操作须用户签发 approval_id 后再调用。\n")
 	b.WriteString("\n排查编排（按优先级，可跳过但勿颠倒）：\n")
 	b.WriteString("1) 先用 search_similar_cases，并优先套用已注入的历史记忆与【已掌握技能】；\n")
 	b.WriteString("2) 需要手册/规范/Wiki 时用 search_knowledge（WeKnora）；不可用则明确说明并改用本地经验；\n")
 	b.WriteString("3) 再用 query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
 	b.WriteString("4) 容器/K8s/虚拟机问题：先 locate_resource 定位硬件→VM→主机→容器/Pod，再用 query_containers / query_k8s / query_hyperv / query_hardware；\n")
 	b.WriteString("5) 仅在需要主机侧证据时使用 run_diagnostic（只读）。K8s 扩缩容用 k8s_scale（需 cluster_id），勿用服务端本机 kubectl。\n")
-	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据。\n")
+	b.WriteString("\n看板与 AI 任务编排：\n")
+	b.WriteString("- 制作看板：create_dashboard（可先 list_dashboards / list_datasources）；\n")
+	b.WriteString("- 分析/优化看板：get_dashboard → analyze_dashboard / optimize_dashboard；确认后用 apply_dashboard_optimize（需审批）；\n")
+	b.WriteString("- 安全诊断/加固、硬件/SNMP/NetFlow/SQL/剧本等：run_assist_task（指定 task + context）；\n")
+	b.WriteString("- 事件根因：diagnose_incident；值班开场/巡检：get_duty_context。\n")
+	b.WriteString("最终回答请标注依据来源：结案经验 / 技能名 / WeKnora 文档名 / 现场数据 / 看板或任务结果。\n")
 
 	// 注入当前纳管主机清单：让 AI 知道有哪些主机、它们的 host_id / 主机名 / IP / 在线状态，
 	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。

@@ -10,13 +10,14 @@ import (
 
 // AgentLoopMeta captures Hermes-style loop observability for ai_runs.meta_json.
 type AgentLoopMeta struct {
-	ToolTurns     int      `json:"tool_turns,omitempty"`
-	Tools         []string `json:"tools,omitempty"`
-	FallbackModel string   `json:"fallback_model,omitempty"`
-	MaxTurnsHit   bool     `json:"max_turns_hit,omitempty"`
-	Citations     int      `json:"citations,omitempty"`
-	SelfVerify    bool     `json:"self_verify,omitempty"`
-	LiveEvidence  int      `json:"live_evidence,omitempty"`
+	ToolTurns     int              `json:"tool_turns,omitempty"`
+	Tools         []string         `json:"tools,omitempty"`
+	FallbackModel string           `json:"fallback_model,omitempty"`
+	MaxTurnsHit   bool             `json:"max_turns_hit,omitempty"`
+	Citations     int              `json:"citations,omitempty"`
+	SelfVerify    bool             `json:"self_verify,omitempty"`
+	LiveEvidence  int              `json:"live_evidence,omitempty"`
+	Actions       []map[string]any `json:"actions,omitempty"` // UI action cards collected from capability tools
 }
 
 func fallbackModelList(cfg AIConfig) []string {

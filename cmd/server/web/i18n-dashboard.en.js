@@ -2706,7 +2706,7 @@ window.DICT_EN = {
   "sre.copy_code": "Copy code",
   "sre.copy": "Copy",
   "sre.chat_intro_title": "AI Ops Assistant is ready",
-  "sre.chat_intro_sub": "Describe a problem and it investigates automatically — checking metrics / logs / alerts / diagnosis / remediation, and recognizing your managed hosts; you can also upload 📄 docs / 🔗 web pages for analysis.",
+  "sre.chat_intro_sub": "Unified AI hub: dashboard create/optimize, diagnosis & hardening, metrics/logs/alerts, RAG, and report export — all from one chat. You can also upload 📄 docs / 🔗 pages.",
   "sre.try_questions": "Try these questions",
   "sre.refresh_suggest_title": "Show another batch",
   "sre.refresh_batch": "Refresh",

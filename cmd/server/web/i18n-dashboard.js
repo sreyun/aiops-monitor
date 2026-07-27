@@ -2761,7 +2761,7 @@
   "sre.copy_code": "复制代码",
   "sre.copy": "复制",
   "sre.chat_intro_title": "AI 运维助手已就绪",
-  "sre.chat_intro_sub": "描述问题即可自动排查——查指标 / 日志 / 告警 / 诊断 / 修复，并识别当前纳管主机；也可上传 📄 文档 / 🔗 网页辅助分析。",
+  "sre.chat_intro_sub": "全局 AI 入口：看板制作/优化、诊断与安全加固、指标日志告警排查、RAG 知识库、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。",
   "sre.try_questions": "试试这些问题",
   "sre.refresh_suggest_title": "换一批推荐",
   "sre.refresh_batch": "换一批",
