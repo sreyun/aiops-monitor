@@ -622,6 +622,9 @@ func (s *Server) handleDeleteHostFolder(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleSetHostFolder(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireHostAccess(w, r, id) {
+		return
+	}
 	var req struct {
 		FolderID string `json:"folder_id"`
 	}

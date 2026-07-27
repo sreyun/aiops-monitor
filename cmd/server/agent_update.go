@@ -625,8 +625,12 @@ func (s *Server) runLegacyAgentUpdateScriptKind(h *Host, serverURL string, force
 }
 
 // maybeAutoUpdateHost enqueues a single-host update when policy is enabled.
-func (s *Server) maybeAutoUpdateHost(h *Host) {
-	if s == nil || s.cfg == nil || s.agentUpdates == nil || h == nil {
+func (s *Server) maybeAutoUpdateHost(hostID string) {
+	if s == nil || s.cfg == nil || s.agentUpdates == nil || hostID == "" {
+		return
+	}
+	h, ok := s.store.GetHost(hostID)
+	if !ok || h == nil {
 		return
 	}
 	cfg := s.cfg.Get()

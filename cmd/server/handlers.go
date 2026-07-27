@@ -512,6 +512,7 @@ func (s *Server) Routes() http.Handler {
 	// Sreyun Agent — 自主运维 Agent
 	mux.HandleFunc("POST /api/v1/hermes/chat", s.handleSreyunChat)
 	mux.HandleFunc("GET /api/v1/hermes/suggestions", s.handleSreyunSuggestions)
+	mux.HandleFunc("GET /api/v1/hermes/status", s.handleSreyunStatus)
 	mux.HandleFunc("POST /api/v1/hermes/parse", s.handleSreyunParse)
 	mux.HandleFunc("GET /api/v1/hermes/sessions", s.handleSreyunSessions)
 	mux.HandleFunc("GET /api/v1/hermes/sessions/{id}", s.handleSreyunSession)

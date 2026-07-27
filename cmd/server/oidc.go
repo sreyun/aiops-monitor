@@ -109,6 +109,7 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	state := randomOIDCToken(24)
 	nonce := randomOIDCToken(16)
 	oidcStatesMu.Lock()
+	pruneExpiredUnixMap(oidcStates, time.Now().Unix(), maxOIDCStates, func(e oidcStateEntry) int64 { return e.ExpiresAt })
 	oidcStates[state] = oidcStateEntry{Nonce: nonce, BindUser: bindUser, ExpiresAt: time.Now().Add(10 * time.Minute).Unix()}
 	oidcStatesMu.Unlock()
 

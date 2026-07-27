@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -13,8 +15,8 @@ func (s *Server) handleSreyunSuggestions(w http.ResponseWriter, r *http.Request)
 	var dyn []string // 依据当前状态的动态建议（前端优先展示）
 	now := time.Now().Unix()
 
-	// 纳管主机：总数 / 在线数 / 取一个样例主机名
-	hosts := s.store.ListHosts()
+	// 纳管主机：总数 / 在线数 / 取一个样例主机名（按调用方授权裁剪）
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
 	online := 0
 	var sampleHost string
 	for _, h := range hosts {
@@ -29,10 +31,10 @@ func (s *Server) handleSreyunSuggestions(w http.ResponseWriter, r *http.Request)
 	// 活跃告警（阈值告警 + 失败拨测）
 	alertCount := 0
 	if s.notifier != nil {
-		alertCount += len(s.notifier.ActiveAlerts())
+		alertCount += len(s.filterAlertsForUser(r, s.notifier.ActiveAlerts()))
 	}
 	if s.checks != nil {
-		alertCount += len(s.checks.DownAlerts())
+		alertCount += len(s.filterAlertsForUser(r, s.checks.DownAlerts()))
 	}
 	if alertCount > 0 {
 		dyn = append(dyn, fmt.Sprintf("分析当前 %d 条告警的根因，并给出处置建议", alertCount))
@@ -71,5 +73,36 @@ func (s *Server) handleSreyunSuggestions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"dynamic": dyn,
 		"curated": curated,
+	})
+}
+
+// handleSreyunStatus reports SRE/AI readiness for operators and health probes.
+// GET /api/v1/hermes/status
+func (s *Server) handleSreyunStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.AIConfig()
+	aiReady := cfg.Enabled && strings.TrimSpace(cfg.Endpoint) != "" && strings.TrimSpace(cfg.Model) != ""
+	toolCount := 0
+	if s.sreyun != nil {
+		toolCount = len(s.sreyun.tools)
+	}
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
+	alertN := 0
+	if s.notifier != nil {
+		alertN = len(s.filterAlertsForUser(r, s.notifier.ActiveAlerts()))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            s.sreyun != nil && aiReady,
+		"engine":        s.sreyun != nil,
+		"ai_enabled":    cfg.Enabled,
+		"ai_ready":      aiReady,
+		"model":         cfg.Model,
+		"tools":         toolCount,
+		"hosts_visible": len(hosts),
+		"active_alerts": alertN,
+		"request_id":    requestIDFrom(r),
+		"pg":            s.pg != nil,
+		"strict_security": strings.EqualFold(os.Getenv("AIOPS_STRICT_SECURITY"), "1") ||
+			strings.EqualFold(os.Getenv("AIOPS_STRICT_SECURITY"), "true"),
+		"secret_key": secretEncryptionEnabled(),
 	})
 }

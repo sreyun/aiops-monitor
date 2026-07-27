@@ -1205,6 +1205,9 @@ func (s *Server) handleLogDiagnose(w http.ResponseWriter, r *http.Request) {
 			SingleLog string   `json:"single_log"`
 		}{}
 	}
+	if req.HostID != "" && !s.requireHostAccess(w, r, req.HostID) {
+		return
+	}
 
 	since := int64(0)
 	if req.SinceMin > 0 {
@@ -2411,7 +2414,10 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 	}
 	inc, found := s.incidents.Get(id)
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
+		writeAPIError(w, r, http.StatusNotFound, "not_found", Tr(r, "incident.not_found"))
+		return
+	}
+	if inc.HostID != "" && !s.requireHostAccess(w, r, inc.HostID) {
 		return
 	}
 
@@ -2422,7 +2428,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 	json.NewDecoder(r.Body).Decode(&req)
 
 	if ok, msg := s.aiGovAllowRequestTask(r, "diagnose"); !ok {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": msg})
+		writeAPIError(w, r, http.StatusTooManyRequests, "quota", msg)
 		return
 	}
 
@@ -3652,6 +3658,9 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	// 按 session_id 解析会话（多轮记忆 / 刷新恢复），前端 history 作为兜底
 	session := s.sreyun.resolveSession(req.SessionID, req.History)
 	session.IncidentID = req.IncidentID
+	if u, ok := s.currentUser(r); ok {
+		session.ActorUsername = u.Username
+	}
 	// 统一 AI 对话默认走 SSE 流式；传入请求 ctx，客户端断开时可及时中止工具循环
 	s.setupSSE(w)
 	// 立即 Flush，确保 SSE 响应头到达客户端，前端开始显示「思考中」动画；
@@ -3673,6 +3682,7 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	s.recordAICallActor("sreyun", usedModel, s.actorName(r), lat,
 		chatErr == nil && strings.TrimSpace(reply) != "", errStr, 0, 0, reply)
 	runID := newOpaqueID("run_")
+	reqID := requestIDFrom(r)
 	s.persistAIRun(AIRun{
 		ID: runID, Kind: "sreyun", Task: "sreyun", Actor: s.actorName(r), Model: usedModel,
 		Input: msg, Answer: reply, OK: chatErr == nil && strings.TrimSpace(reply) != "",
@@ -3682,8 +3692,8 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if len(toolsJSON) == 0 {
 		toolsJSON = []byte("[]")
 	}
-	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s,\"tool_turns\":%d,\"fallback_model\":%s,\"tools\":%s}}\n\n",
-		jsonString(runID), jsonString(runID), loopMeta.ToolTurns, jsonString(loopMeta.FallbackModel), toolsJSON)
+	fmt.Fprintf(w, "data: {\"meta\":{\"run_id\":%s,\"assist_id\":%s,\"tool_turns\":%d,\"fallback_model\":%s,\"tools\":%s,\"request_id\":%s}}\n\n",
+		jsonString(runID), jsonString(runID), loopMeta.ToolTurns, jsonString(loopMeta.FallbackModel), toolsJSON, jsonString(reqID))
 	// 上传文件默认不自动入库，避免凭据/配置明文进入公共 RAG；仅在显式开启未验证学习时脱敏后写入。
 	if s.shouldRememberUnverifiedAIOutput() {
 		for _, f := range req.Files {

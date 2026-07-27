@@ -68,6 +68,9 @@ func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireHostAccess(w, r, id) {
+		return
+	}
 	samples, ok := s.store.GetSamples(id)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "common.host_not_found")})
@@ -81,6 +84,9 @@ func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 // Defaults: from = now - 24h, to = now.
 func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireHostAccess(w, r, id) {
+		return
+	}
 	now := time.Now().Unix()
 
 	// Parse query parameters
@@ -136,6 +142,9 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 // handleSetCategory sets (or clears, when empty) a manual category override.
 func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.requireHostAccess(w, r, id) {
+		return
+	}
 	var req struct {
 		Category string `json:"category"`
 	}
@@ -172,7 +181,8 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	// Active alerts from real-time evaluation (snapshot of current metric state)
-	alerts := Evaluate(s.store.ListHosts(), s.cfg.Thresholds())
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
+	alerts := Evaluate(hosts, s.cfg.Thresholds())
 	// Hyper-V 虚拟机告警并入实时列表（与 CPU/磁盘等一致地带上 Since/Status）
 	alerts = append(alerts, EvaluateHyperV(s.hv)...)
 	// SNMP 网络设备 + NetFlow 流量异常并入实时列表
@@ -201,7 +211,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	// both currently-firing and recently-recovered records.
 	showHistory := r.URL.Query().Get("history") == "true"
 	sevenDaysAgo := time.Now().Unix() - 7*86400
-	history := s.store.AlertHistory(200, false)
+	history := s.filterAlertRecordsForUser(r, s.store.AlertHistory(200, false))
 	for _, rec := range history {
 		// Skip records that are still active (already covered by Evaluate result)
 		if rec.ResolvedAt == 0 {
@@ -225,6 +235,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 			Status:    "resolved",
 		})
 	}
+	alerts = s.filterAlertsForUser(r, alerts)
 	writeJSON(w, http.StatusOK, alerts)
 }
 
@@ -252,6 +263,7 @@ func (s *Server) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 	if records == nil {
 		records = []AlertRecord{}
 	}
+	records = s.filterAlertRecordsForUser(r, records)
 	writeJSON(w, http.StatusOK, records)
 }
 
@@ -275,7 +287,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 
 // handleHostsMeta returns minimal host info (id + hostname) for the process-check UI.
 func (s *Server) handleHostsMeta(w http.ResponseWriter, r *http.Request) {
-	hosts := s.store.ListHosts()
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
 	type hostMeta struct {
 		ID       string `json:"id"`
 		Hostname string `json:"hostname"`
@@ -288,7 +300,7 @@ func (s *Server) handleHostsMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	hosts := s.store.ListHosts()
+	hosts := s.filterHostsForUser(r, s.store.ListHosts())
 	now := time.Now().Unix()
 	th := s.cfg.Thresholds()
 	offline := int64(th.OfflineAfter.Seconds())
@@ -304,6 +316,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	summ = append(summ, EvaluateHyperV(s.hv)...)
 	summ = append(summ, EvaluateSNMP(s.snmp, th)...)
 	summ = append(summ, EvaluateNetFlow(s.nf, th)...)
+	summ = s.filterAlertsForUser(r, summ)
 	for _, a := range summ {
 		if a.Level == "critical" {
 			crit++

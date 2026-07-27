@@ -83,6 +83,38 @@ func (s *Server) requireHostAccess(w http.ResponseWriter, r *http.Request, hostI
 	return false
 }
 
+// filterAlertsForUser drops alerts whose HostID is outside the caller's scope.
+// Alerts without a host_id (global checks) are kept for scoped users only when
+// they are not host-bound; host-bound entries are always filtered.
+func (s *Server) filterAlertsForUser(r *http.Request, alerts []Alert) []Alert {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return alerts
+	}
+	out := make([]Alert, 0, len(alerts))
+	for _, a := range alerts {
+		if a.HostID == "" || s.userCanAccessHost(u, a.HostID) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// filterAlertRecordsForUser mirrors filterAlertsForUser for persistent history.
+func (s *Server) filterAlertRecordsForUser(r *http.Request, records []AlertRecord) []AlertRecord {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return records
+	}
+	out := make([]AlertRecord, 0, len(records))
+	for _, rec := range records {
+		if rec.HostID == "" || s.userCanAccessHost(u, rec.HostID) {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // filterInventoryRows keeps only inventory maps whose host_id the caller may access.
 func (s *Server) filterInventoryRows(r *http.Request, rows []map[string]any) []map[string]any {
 	u, ok := s.currentUser(r)
