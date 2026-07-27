@@ -563,7 +563,10 @@ function createTermTab(id, name, tabName, opts) {
   const termPasteText = (raw) => {
     if (!raw || !tabObj.ws) return;
     const t = String(raw).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\r");
-    if (t) termSend(tabObj.ws, t);
+    if (t) {
+      termFollowOutput(tabObj);
+      termSend(tabObj.ws, t);
+    }
   };
   // 粘贴
   input.onpaste = ev => {
@@ -582,7 +585,10 @@ function createTermTab(id, name, tabName, opts) {
   input.addEventListener("input", ev => {
     if (tabObj.composing || ev.isComposing) return;
     const text = input.value;
-    if (text && tabObj.ws) termSend(tabObj.ws, text);
+    if (text && tabObj.ws) {
+      termFollowOutput(tabObj);
+      termSend(tabObj.ws, text);
+    }
     input.value = "";
   });
   // IME 组合输入（中文/日文等输入法）— do NOT send on compositionend (avoids double-commit).
@@ -592,6 +598,7 @@ function createTermTab(id, name, tabName, opts) {
     // Committed text lands in input.value; a following input event (or flush) sends it.
     const text = input.value;
     if (text && tabObj.ws) {
+      termFollowOutput(tabObj);
       termSend(tabObj.ws, text);
       input.value = "";
     }
@@ -601,7 +608,10 @@ function createTermTab(id, name, tabName, opts) {
     if (tabObj.composing) return;
     if (ev.inputType === "deleteContentBackward") {
       ev.preventDefault();
-      if (tabObj.ws) termSend(tabObj.ws, "\x7f");
+      if (tabObj.ws) {
+        termFollowOutput(tabObj);
+        termSend(tabObj.ws, "\x7f");
+      }
     }
   });
   // mouseup 聚焦隐藏 textarea：在鼠标松开后聚焦，不干扰用户拖拽选区。
@@ -1534,6 +1544,10 @@ function termSend(ws, str) {
   framed.set(body, 1);
   ws.send(framed);
 }
+// Typing / paste must jump back to the live prompt — same as a real TTY.
+function termFollowOutput(tab) {
+  if (tab && tab.vt && typeof tab.vt.followOutput === "function") tab.vt.followOutput();
+}
 // 发送上传数据块（帧首字节 'u'）
 function termSendUpload(ws, chunk) {
   if (!ws || ws.readyState !== 1) return;
@@ -1831,7 +1845,11 @@ function termKeyDown(e, tab) {
   //       input 事件在所有平台都能正确获取实际输入文本。
   // 桌面端：keydown 不 preventDefault → 字符进入 textarea → input 事件发送 → 清空 textarea
   // 移动端：keydown 可能不识别 → 同样由 input 事件兜底发送
-  if (seq !== null) { e.preventDefault(); termSend(ws, seq); }
+  if (seq !== null) {
+    e.preventDefault();
+    termFollowOutput(tab);
+    termSend(ws, seq);
+  }
 }
 /* ---------- 阶段2：VT100 / xterm 子集终端仿真器 ----------
    支持屏幕缓冲 + 光标寻址(CUP/CUU…)、擦除(ED/EL)、SGR 颜色(16/256/RGB、粗体/下划线/反显)、
@@ -1860,6 +1878,11 @@ function makeVT(screen) {
     st: 0, parm: "", coll: "",             // 解析状态 0 ground 1 esc 2 csi 3 osc 4 charset 5 osc-st
     cursorVis: true, appCursor: false, raf: 0, _rowCache: null,
     _cellW: 0, _cellH: 0, // monospace cell metrics for cursor overlay
+    // Follow the live prompt unless the user deliberately scrolls into scrollback.
+    // Checking distance AFTER a burst of output is wrong: one chunk can grow the
+    // scrollback by hundreds of px, so a post-hoc "dist < 48" check loses the pin
+    // and leaves the cursor / prompt below the fold.
+    _pinBottom: true,
   };
   const clampX = x => Math.max(0, Math.min(vt.cols - 1, x));
   const clampY = y => Math.max(0, Math.min(vt.rows - 1, y));
@@ -1875,6 +1898,27 @@ function makeVT(screen) {
   vt._rowCache = [];
   alloc();
 
+  function pinThreshold() {
+    return Math.max(64, (vt._cellH || 16) * 3);
+  }
+  function distFromBottom() {
+    return screen.scrollHeight - screen.scrollTop - screen.clientHeight;
+  }
+  function stickScroll() {
+    if (!vt._pinBottom) return;
+    // Assign twice: some engines clamp against a stale scrollHeight mid-layout.
+    screen.scrollTop = screen.scrollHeight;
+    screen.scrollTop = screen.scrollHeight;
+  }
+  vt.followOutput = function () {
+    vt._pinBottom = true;
+    stickScroll();
+  };
+  // User scroll updates the pin; programmatic stickScroll keeps dist ≈ 0 so pin stays on.
+  screen.addEventListener("scroll", () => {
+    vt._pinBottom = distFromBottom() <= pinThreshold();
+  }, { passive: true });
+
   function clearCell(cell) { cell.c = " "; cell.f = null; cell.b = vt.bg; cell.a = 0; }
   function scrollUp(n) {
     for (let i = 0; i < n; i++) {
@@ -1886,6 +1930,9 @@ function makeVT(screen) {
       }
       vt.grid.splice(vt.bot, 0, newRow());
     }
+    // scrollback DOM grows immediately (before paint). Stick now so a large
+    // write chunk cannot leave the live area below the fold until rAF render.
+    stickScroll();
   }
   function scrollDown(n) { for (let i = 0; i < n; i++) { vt.grid.splice(vt.bot, 1); vt.grid.splice(vt.top, 0, newRow()); } }
   function lineFeed() { if (vt.cy === vt.bot) scrollUp(1); else if (vt.cy < vt.rows - 1) vt.cy++; }
@@ -2159,10 +2206,10 @@ function makeVT(screen) {
       }
     }
 
-    // Sticky autoscroll: only pin to bottom when already near it — otherwise
-    // each keystroke yanking scrollTop makes scrollback unusable.
-    const dist = screen.scrollHeight - screen.scrollTop - screen.clientHeight;
-    if (dist < 48) screen.scrollTop = screen.scrollHeight;
+    // Pin to the live prompt when following; never re-evaluate distance after a
+    // burst grew scrollback (that was how the input row vanished with long output).
+    // When the user is reading scrollback (_pinBottom=false), leave scrollTop alone.
+    if (vt._pinBottom) stickScroll();
   }
   function scheduleRender() {
     if (vt.pending) return;
@@ -2200,11 +2247,13 @@ function makeVT(screen) {
     const cs = getComputedStyle(screen);
     const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
     const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    // 1px slack avoids a subpixel-tall last row sitting under the fold / scrollbar.
     const cols = Math.max(20, Math.floor((screen.clientWidth - padX) / cw));
-    const rows = Math.max(6, Math.floor((screen.clientHeight - padY) / chh));
+    const rows = Math.max(6, Math.floor((screen.clientHeight - padY - 1) / chh));
     vt.resizeTo(cols, rows);
     // Re-measure after resize (font metrics stable; keep cache fresh for DPI/zoom).
     refreshCellMetrics();
+    if (vt._pinBottom) stickScroll();
     return { cols: vt.cols, rows: vt.rows };
   };
   vt.fullReset = fullReset;

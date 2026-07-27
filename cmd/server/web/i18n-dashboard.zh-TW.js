@@ -1709,6 +1709,7 @@ window.DICT_TW = {
   "form.search_forward": "搜尋主機 / 埠 / 監聽位址…",
   "filter.by_status": "按狀態篩選",
   "filter.all_hosts": "全部主機",
+  "sort.by_ip": "按 IP",
   "sort.by_name": "按名稱",
   "sort.by_cpu": "按 CPU",
   "sort.by_mem": "按記憶體",

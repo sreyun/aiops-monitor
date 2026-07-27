@@ -1789,6 +1789,7 @@ window.DICT_EN = {
   "form.search_forward": "Search host / port / listen address…",
   "filter.by_status": "Filter by status",
   "filter.all_hosts": "All hosts",
+  "sort.by_ip": "By IP",
   "sort.by_name": "By name",
   "sort.by_cpu": "By CPU",
   "sort.by_mem": "By memory",
