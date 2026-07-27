@@ -56,7 +56,8 @@ func resolveDist(flagVal string) string {
 }
 
 var expectedAgentDistNames = []string{
-	"aiops-agent.exe",
+	"aiops-agent.exe", // windows/amd64 (legacy name kept for install.ps1 back-compat)
+	"aiops-agent-windows-arm64.exe",
 	"aiops-agent-linux-amd64", "aiops-agent-linux-arm64",
 	"aiops-agent-darwin-arm64", "aiops-agent-darwin-amd64",
 }

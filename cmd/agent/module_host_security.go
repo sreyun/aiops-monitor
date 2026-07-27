@@ -17,22 +17,22 @@ import (
 
 // hostSecurityReport is the structured payload returned by host_security_scan.
 type hostSecurityReport struct {
-	CollectedAt int64                  `json:"collected_at"`
-	Hostname    string                 `json:"hostname"`
-	OS          string                 `json:"os"`
-	Arch        string                 `json:"arch"`
-	Kernel      string                 `json:"kernel,omitempty"`
-	Distro      string                 `json:"distro,omitempty"`
-	PkgMgr      string                 `json:"pkg_mgr,omitempty"`
-	Packages    []hostSecPkg           `json:"packages"`
-	Listeners   []string               `json:"listeners"`
-	Processes   []string               `json:"processes"`
-	Hardening   []hostSecFinding       `json:"hardening"`
-	FileHashes  []hostSecHash          `json:"file_hashes"`
-	Malware     hostSecMalware         `json:"malware"`
-	Firewall    hostSecFirewall        `json:"firewall"`
-	IOC         []hostSecFinding       `json:"ioc"`
-	Meta        map[string]any         `json:"meta,omitempty"`
+	CollectedAt int64            `json:"collected_at"`
+	Hostname    string           `json:"hostname"`
+	OS          string           `json:"os"`
+	Arch        string           `json:"arch"`
+	Kernel      string           `json:"kernel,omitempty"`
+	Distro      string           `json:"distro,omitempty"`
+	PkgMgr      string           `json:"pkg_mgr,omitempty"`
+	Packages    []hostSecPkg     `json:"packages"`
+	Listeners   []string         `json:"listeners"`
+	Processes   []string         `json:"processes"`
+	Hardening   []hostSecFinding `json:"hardening"`
+	FileHashes  []hostSecHash    `json:"file_hashes"`
+	Malware     hostSecMalware   `json:"malware"`
+	Firewall    hostSecFirewall  `json:"firewall"`
+	IOC         []hostSecFinding `json:"ioc"`
+	Meta        map[string]any   `json:"meta,omitempty"`
 }
 
 type hostSecPkg struct {
@@ -50,18 +50,18 @@ type hostSecFinding struct {
 }
 
 type hostSecHash struct {
-	Path string `json:"path"`
+	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
-	Mode string `json:"mode,omitempty"`
-	Size int64  `json:"size,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+	Size   int64  `json:"size,omitempty"`
 }
 
 type hostSecMalware struct {
-	ClamAV    string           `json:"clamav"` // available|unavailable|error
-	Version   string           `json:"version,omitempty"`
-	Scanned   int              `json:"scanned"`
-	Infected  []string         `json:"infected,omitempty"`
-	Findings  []hostSecFinding `json:"findings,omitempty"`
+	ClamAV   string           `json:"clamav"` // available|unavailable|error
+	Version  string           `json:"version,omitempty"`
+	Scanned  int              `json:"scanned"`
+	Infected []string         `json:"infected,omitempty"`
+	Findings []hostSecFinding `json:"findings,omitempty"`
 }
 
 func moduleHostSecurityScan(args map[string]string) ([]byte, int) {
@@ -117,27 +117,35 @@ func detectDistroPkgMgr() (distro, mgr string) {
 		}
 		return "windows", "wmic"
 	}
-	if b, err := os.ReadFile("/etc/os-release"); err == nil {
-		for _, ln := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(ln, "ID=") {
-				distro = strings.Trim(strings.TrimPrefix(ln, "ID="), `"`)
-			}
+	d := detectLinuxDistro()
+	distro = d.ID
+	if distro == "" {
+		distro = d.Family
+	}
+	switch d.Pkg {
+	case "deb":
+		mgr = "dpkg"
+	case "rpm":
+		mgr = "rpm"
+	case "apk":
+		mgr = "apk"
+	default:
+		switch {
+		case have("dpkg"):
+			mgr = "dpkg"
+		case have("rpm"):
+			mgr = "rpm"
+		case have("apk"):
+			mgr = "apk"
 		}
 	}
-	switch {
-	case have("dpkg"):
-		mgr = "dpkg"
-		if distro == "" {
+	if distro == "" {
+		switch mgr {
+		case "dpkg":
 			distro = "debian"
-		}
-	case have("rpm"):
-		mgr = "rpm"
-		if distro == "" {
+		case "rpm":
 			distro = "rhel"
-		}
-	case have("apk"):
-		mgr = "apk"
-		if distro == "" {
+		case "apk":
 			distro = "alpine"
 		}
 	}
@@ -225,6 +233,21 @@ func ecosystemFor(mgr, distro string) string {
 		}
 		if strings.Contains(d, "rocky") {
 			return "Rocky Linux"
+		}
+		if strings.Contains(d, "alma") {
+			return "AlmaLinux"
+		}
+		if strings.Contains(d, "kylin") || strings.Contains(d, "neokylin") {
+			return "Kylin"
+		}
+		if strings.Contains(d, "openeuler") {
+			return "openEuler"
+		}
+		if strings.Contains(d, "euleros") || strings.Contains(d, "euler os") {
+			return "openEuler"
+		}
+		if strings.Contains(d, "alinux") || strings.Contains(d, "alibaba") {
+			return "Red Hat"
 		}
 		return "Red Hat"
 	case "brew":
@@ -455,7 +478,7 @@ func collectCISLiteFindings() []hostSecFinding {
 		if strings.TrimSpace(string(b)) != "2" {
 			fs = append(fs, hostSecFinding{
 				Level: "medium", ID: "cis_aslr", Title: "ASLR 未完全启用",
-				Detail: "kernel.randomize_va_space=" + strings.TrimSpace(string(b)),
+				Detail:  "kernel.randomize_va_space=" + strings.TrimSpace(string(b)),
 				Suggest: "设为 2",
 			})
 		}
@@ -577,7 +600,7 @@ func collectIOCFindings(procs, listens []string, hashes []hostSecHash) []hostSec
 		if strings.HasPrefix(h.Path, "/tmp/") && strings.Contains(h.Mode, "x") {
 			fs = append(fs, hostSecFinding{
 				Level: "medium", ID: "tmp_executable." + sanitizeFindingID(filepath.Base(h.Path)),
-				Title: "/tmp 下存在可执行文件 — " + filepath.Base(h.Path),
+				Title:  "/tmp 下存在可执行文件 — " + filepath.Base(h.Path),
 				Detail: h.Path, Suggest: "核查来源；清理非预期可执行文件",
 			})
 			break
@@ -680,7 +703,7 @@ func runClamAVScan(enable bool, paths []string) hostSecMalware {
 			m.Infected = append(m.Infected, ln)
 			m.Findings = append(m.Findings, hostSecFinding{
 				Level: "crit", ID: "clamav_hit." + sanitizeFindingID(ln),
-				Title: "ClamAV 检出恶意软件 — " + truncateStr(ln, 64),
+				Title:  "ClamAV 检出恶意软件 — " + truncateStr(ln, 64),
 				Detail: ln, Suggest: "隔离文件、全盘复查、轮换凭据",
 			})
 		}
@@ -688,7 +711,7 @@ func runClamAVScan(enable bool, paths []string) hostSecMalware {
 	if len(m.Infected) == 0 {
 		m.Findings = append(m.Findings, hostSecFinding{
 			Level: "info", ID: "clamav_clean", Title: "ClamAV 抽样扫描完成",
-			Detail: fmt.Sprintf("引擎 %s；已扫描 %d 个路径，未发现感染", bin, m.Scanned),
+			Detail:  fmt.Sprintf("引擎 %s；已扫描 %d 个路径，未发现感染", bin, m.Scanned),
 			Suggest: "定期执行 freshclam 更新病毒库；高敏主机可扩大扫描目录",
 		})
 	}

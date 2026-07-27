@@ -13,7 +13,7 @@
 | VictoriaMetrics | 最新稳定版 | **必选**。承载所有指标时序数据。 |
 | Docker | 20.10+（推荐） | 一键编排服务端 + 双存储。 |
 | Go | 1.22+（仅源码构建时需要） | 服务端/采集端为零框架、零 CGO 的纯 Go 二进制。 |
-| 采集端操作系统 | Linux / Windows / macOS | 原生采集器；其他平台（含麒麟）走插件扩展。 |
+| 采集端操作系统 | Linux / Windows / macOS（amd64 + arm64） | 原生采集器；深度适配 openEuler / EulerOS / 麒麟 V10–V11 / Aliyun Linux / Rocky / CentOS / Debian，以及 Windows 10/11、Server 2012–2025（含 Hyper-V）、macOS 12–15。 |
 
 > ⚠️ **双存储强制依赖**：PostgreSQL 与 VictoriaMetrics **两者都必须可用**。服务启动时会校验，缺少任一将直接失败（fail-fast），不会降级运行。
 

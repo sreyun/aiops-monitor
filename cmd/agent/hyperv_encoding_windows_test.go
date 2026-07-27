@@ -19,6 +19,6 @@ func TestEnsureUTF8HyperVGBKFields(t *testing.T) {
 		t.Fatalf("IntegrationState=%q want 正常 (decoded=%q)", g[0].IntegrationState, decoded)
 	}
 	if len(g[0].Nics) != 1 || g[0].Nics[0].Name != "网络适配器" {
-		t.Fatalf("Nic.Name=%q want 网络适配器", g[0].Nics)
+		t.Fatalf("Nic.Name=%q want 网络适配器", g[0].Nics[0].Name)
 	}
 }

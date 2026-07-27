@@ -32,18 +32,21 @@ type inspectReport struct {
 }
 
 type inspectHost struct {
-	Hostname   string `json:"hostname"`
-	FQDN       string `json:"fqdn,omitempty"`
-	IP         string `json:"ip"`
-	OS         string `json:"os"`
-	OSFamily   string `json:"os_family"`
-	GOOS       string `json:"goos"`
-	Kernel     string `json:"kernel"`
-	Arch       string `json:"arch"`
-	UptimeDays int    `json:"uptime_days"`
-	VirtType   string `json:"virt_type,omitempty"`
-	Firewall   string `json:"firewall,omitempty"`
-	Timezone   string `json:"timezone,omitempty"`
+	Hostname      string `json:"hostname"`
+	FQDN          string `json:"fqdn,omitempty"`
+	IP            string `json:"ip"`
+	OS            string `json:"os"`
+	OSFamily      string `json:"os_family"`
+	DistroID      string `json:"distro_id,omitempty"`      // rocky / kylin / ubuntu …
+	DistroVersion string `json:"distro_version,omitempty"` // major: 9 / 10 / 11
+	PkgFamily     string `json:"pkg_family,omitempty"`     // rpm / deb / apk …
+	GOOS          string `json:"goos"`
+	Kernel        string `json:"kernel"`
+	Arch          string `json:"arch"`
+	UptimeDays    int    `json:"uptime_days"`
+	VirtType      string `json:"virt_type,omitempty"`
+	Firewall      string `json:"firewall,omitempty"`
+	Timezone      string `json:"timezone,omitempty"`
 }
 
 type inspectMetrics struct {
@@ -101,9 +104,9 @@ type inspectFinding struct {
 }
 
 type inspectResult struct {
-	Warnings  int `json:"warnings"`
-	Critical  int `json:"critical"`
-	ExitCode  int `json:"exit_code"`
+	Warnings int `json:"warnings"`
+	Critical int `json:"critical"`
+	ExitCode int `json:"exit_code"`
 }
 
 type inspectBuilder struct {
@@ -215,13 +218,25 @@ func (b *inspectBuilder) collectHost() {
 		ip = ips[0]
 	}
 	family, pretty, kernel := detectOSFamily()
+	distroID, distroVer, pkgFam := "", "", ""
+	if runtime.GOOS == "linux" {
+		d := detectLinuxDistro()
+		distroID, distroVer, pkgFam = d.ID, d.Version, d.Pkg
+		if d.Family != "" {
+			family = d.Family
+		}
+		if d.Pretty != "" {
+			pretty = d.Pretty
+		}
+	}
 	uptimeDays := uptimeDays()
 	tz := detectTimezone()
 	virt := detectVirt()
 	fw := detectFirewall()
 	b.rep.Host = inspectHost{
-		Hostname: hn, FQDN: fqdn, IP: ip, OS: pretty, OSFamily: family, GOOS: runtime.GOOS,
-		Kernel: kernel, Arch: runtime.GOARCH, UptimeDays: uptimeDays,
+		Hostname: hn, FQDN: fqdn, IP: ip, OS: pretty, OSFamily: family,
+		DistroID: distroID, DistroVersion: distroVer, PkgFamily: pkgFam,
+		GOOS: runtime.GOOS, Kernel: kernel, Arch: runtime.GOARCH, UptimeDays: uptimeDays,
 		VirtType: virt, Firewall: fw, Timezone: tz,
 	}
 	items := []inspectItem{
@@ -230,14 +245,25 @@ func (b *inspectBuilder) collectHost() {
 		{Label: "IP", Value: strings.Join(ips, " ")},
 		{Label: "系统", Value: pretty},
 		{Label: "系统族", Value: family},
-		{Label: "内核", Value: kernel},
-		{Label: "架构", Value: runtime.GOARCH},
-		{Label: "运行天数", Value: fmt.Sprintf("%d", uptimeDays)},
-		{Label: "虚拟化", Value: virt},
-		{Label: "防火墙", Value: fw},
-		{Label: "时区", Value: tz},
-		{Label: "巡检档位", Value: b.profile},
 	}
+	if distroID != "" {
+		items = append(items, inspectItem{Label: "发行版", Value: distroID})
+	}
+	if distroVer != "" {
+		items = append(items, inspectItem{Label: "主版本", Value: distroVer})
+	}
+	if pkgFam != "" {
+		items = append(items, inspectItem{Label: "包管理族", Value: pkgFam})
+	}
+	items = append(items,
+		inspectItem{Label: "内核", Value: kernel},
+		inspectItem{Label: "架构", Value: runtime.GOARCH},
+		inspectItem{Label: "运行天数", Value: fmt.Sprintf("%d", uptimeDays)},
+		inspectItem{Label: "虚拟化", Value: virt},
+		inspectItem{Label: "防火墙", Value: fw},
+		inspectItem{Label: "时区", Value: tz},
+		inspectItem{Label: "巡检档位", Value: b.profile},
+	)
 	if runtime.GOOS == "linux" {
 		if v := strings.TrimSpace(readFileTrim("/sys/class/dmi/id/sys_vendor")); v != "" {
 			items = append(items, inspectItem{Label: "厂商", Value: v})
@@ -277,38 +303,16 @@ func detectOSFamily() (family, pretty, kernel string) {
 		}
 		return
 	default:
-		family = "linux"
-		pretty = "Linux"
 		if out := cmdOut(3, "uname", "-r"); out != "" {
 			kernel = strings.TrimSpace(out)
 		}
-		id, idLike, ver, p := readOSRelease()
-		if p != "" {
-			pretty = p
-		} else if id != "" {
-			pretty = id + " " + ver
+		d := detectLinuxDistro()
+		family, pretty = d.Family, d.Pretty
+		if family == "" {
+			family = "linux"
 		}
-		blob := strings.ToLower(id + " " + idLike + " " + p)
-		switch {
-		case strings.Contains(blob, "kylin") || strings.Contains(blob, "neokylin") || fileExists("/etc/kylin-release"):
-			family = "kylin"
-			if raw, err := os.ReadFile("/etc/kylin-release"); err == nil && pretty == "Linux" {
-				pretty = strings.TrimSpace(string(raw))
-			}
-		case strings.Contains(blob, "uos") || strings.Contains(blob, "deepin"):
-			family = "uos"
-		case strings.Contains(blob, "rhel") || strings.Contains(blob, "centos") || strings.Contains(blob, "rocky") ||
-			strings.Contains(blob, "alma") || strings.Contains(blob, "fedora") || strings.Contains(blob, "openeuler") ||
-			strings.Contains(blob, "anolis") || strings.Contains(blob, "amzn"):
-			family = "rhel"
-		case strings.Contains(blob, "debian") || strings.Contains(blob, "ubuntu"):
-			family = "debian"
-		case strings.Contains(blob, "suse"):
-			family = "suse"
-		case strings.Contains(blob, "arch"):
-			family = "arch"
-		case strings.Contains(blob, "alpine"):
-			family = "alpine"
+		if pretty == "" {
+			pretty = "Linux"
 		}
 		return
 	}
@@ -369,7 +373,16 @@ func uptimeDays() int {
 			}
 		}
 	case "windows":
-		out := cmdOut(5, "cmd", "/c", "wmic os get lastbootuptime /value")
+		// Prefer CIM (Win11/Server 2025 drop wmic). Fall back to wmic for older hosts.
+		ps := `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='SilentlyContinue'; $t=$null; try { $t=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime } catch {}; if (-not $t) { try { $t=(Get-WmiObject Win32_OperatingSystem).LastBootUpTime } catch {} }; if ($t) { if ($t -is [datetime]) { $t.ToString('yyyyMMddHHmmss') } else { [string]$t } }`
+		out := string(cmdOutRaw(8, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps))
+		out = strings.TrimSpace(strings.ReplaceAll(out, "\r", ""))
+		if len(out) >= 14 {
+			if t, err := time.Parse("20060102150405", out[:14]); err == nil {
+				return int(time.Since(t).Hours() / 24)
+			}
+		}
+		out = cmdOut(5, "cmd", "/c", "wmic os get lastbootuptime /value")
 		for _, ln := range strings.Split(out, "\n") {
 			ln = strings.TrimSpace(ln)
 			if strings.HasPrefix(ln, "LastBootUpTime=") {

@@ -582,64 +582,64 @@ func (b *inspectBuilder) collectUpdatesInner(network bool) {
 	st := "info"
 	items := []inspectItem{}
 	family := b.rep.Host.OSFamily
+	pkgFam := b.rep.Host.PkgFamily
+	if pkgFam == "" {
+		switch family {
+		case "debian", "uos":
+			pkgFam = "deb"
+		case "rhel":
+			pkgFam = "rpm"
+		case "kylin":
+			// Kylin Desktop=deb, Server=rpm — never assume RPM-only.
+			pkgFam = classifyLinuxPkg(strings.ToLower(b.rep.Host.OS+" "+b.rep.Host.DistroID), "kylin")
+		case "suse":
+			pkgFam = "zypper"
+		case "alpine":
+			pkgFam = "apk"
+		case "arch":
+			pkgFam = "pacman"
+		}
+	}
 	info := "N/A"
 	count := 0
-	switch family {
-	case "debian", "uos":
+	// Use cmdOutRaw: cmdOut → sanitizeInspectField collapses newlines to spaces,
+	// which makes per-line apt/dnf/yum/zypper/pacman counts always 0/1.
+	switch {
+	case pkgFam == "deb" || family == "debian" || family == "uos" || (family == "kylin" && pkgFam == "deb"):
 		if network {
 			_ = cmdOut(30, "apt-get", "-qq", "update")
 		}
-		out := cmdOut(20, "apt", "list", "--upgradable")
-		for _, ln := range strings.Split(out, "\n") {
-			if strings.Contains(ln, "upgradable") {
-				count++
-			}
-		}
+		count = countAptUpgradable(string(cmdOutRaw(20, "apt", "list", "--upgradable")))
 		info = fmt.Sprintf("apt: %d 个可升级", count)
-	case "rhel", "kylin":
+	case pkgFam == "rpm" || family == "rhel" || (family == "kylin" && pkgFam != "deb"):
+		// Rocky 9/10、RHEL clones、麒麟 V10/V11 Server（RPM）走 dnf/yum。
 		if network {
-			out := cmdOut(40, "dnf", "check-update", "--quiet")
-			if out == "" {
-				out = cmdOut(40, "yum", "check-update", "--quiet")
+			out := string(cmdOutRaw(40, "dnf", "check-update", "--quiet"))
+			if strings.TrimSpace(out) == "" {
+				out = string(cmdOutRaw(40, "yum", "check-update", "--quiet"))
 			}
-			for _, ln := range strings.Split(out, "\n") {
-				ln = strings.TrimSpace(ln)
-				if ln == "" || strings.HasPrefix(ln, "Last") {
-					continue
-				}
-				if ln[0] >= 'A' && ln[0] <= 'z' {
-					count++
-				}
-			}
+			count = countDnfCheckUpdate(out)
 			info = fmt.Sprintf("dnf/yum: %d 个可用更新", count)
 		} else {
 			info = "已跳过联网检查（standard）；使用 deep 档位可执行完整检查"
 		}
-	case "suse":
+	case family == "suse" || pkgFam == "zypper":
 		if network {
-			out := cmdOut(40, "zypper", "list-updates")
-			count = strings.Count(out, "\nv ")
+			count = countZypperUpdates(string(cmdOutRaw(40, "zypper", "list-updates")))
 			info = fmt.Sprintf("zypper: %d 个可用更新", count)
 		} else {
 			info = "已跳过联网检查（standard）"
 		}
-	case "alpine":
+	case family == "alpine" || pkgFam == "apk":
 		if network {
 			_ = cmdOut(20, "apk", "update")
-			out := cmdOut(20, "apk", "version", "-l", "<")
-			count = maxInt(0, strings.Count(strings.TrimSpace(out), "\n"))
-			if strings.TrimSpace(out) != "" {
-				count++
-			}
+			count = countNonEmptyLines(string(cmdOutRaw(20, "apk", "version", "-l", "<")))
 			info = fmt.Sprintf("apk: %d 个可用更新", count)
 		} else {
 			info = "已跳过联网检查（standard）"
 		}
-	case "arch":
-		out := cmdOut(20, "pacman", "-Qu")
-		if strings.TrimSpace(out) != "" {
-			count = strings.Count(strings.TrimSpace(out), "\n") + 1
-		}
+	case family == "arch" || pkgFam == "pacman":
+		count = countNonEmptyLines(string(cmdOutRaw(20, "pacman", "-Qu")))
 		info = fmt.Sprintf("pacman: %d 个可用更新", count)
 	default:
 		info = "未知包管理器，请人工检查更新"
@@ -707,4 +707,75 @@ func (b *inspectBuilder) collectRecommend() {
 		Summary: fmt.Sprintf("警告 %d · 严重 %d · 档位 %s", warn, crit, b.profile),
 		Items:   items,
 	})
+}
+
+// countAptUpgradable counts package rows from `apt list --upgradable`.
+// Ignores the "Listing..." header and warning banners.
+func countAptUpgradable(out string) int {
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "Listing") || strings.HasPrefix(ln, "WARNING") {
+			continue
+		}
+		if strings.Contains(ln, "[upgradable") || strings.Contains(ln, "upgradable from") {
+			n++
+		}
+	}
+	return n
+}
+
+// countDnfCheckUpdate counts package rows from `dnf/yum check-update`.
+// Skips metadata headers and section titles like "Obsoleting Packages".
+func countDnfCheckUpdate(out string) int {
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		lower := strings.ToLower(ln)
+		if strings.HasPrefix(lower, "last ") || strings.HasPrefix(lower, "security:") ||
+			strings.HasSuffix(ln, ":") || strings.HasPrefix(lower, "obsoleting") ||
+			strings.HasPrefix(lower, "available") {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 2 {
+			continue
+		}
+		pkg := fields[0]
+		// Real rows look like "kernel.x86_64" / "bash.aarch64".
+		if !strings.Contains(pkg, ".") {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func countZypperUpdates(out string) int {
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		lower := strings.ToLower(ln)
+		// Header row: "v | S | Name | Type | ..."
+		if strings.Contains(lower, "| name |") || strings.Contains(lower, "|name|") {
+			continue
+		}
+		if strings.HasPrefix(ln, "v ") || strings.HasPrefix(ln, "v|") || strings.HasPrefix(ln, "v |") {
+			n++
+		}
+	}
+	return n
+}
+
+func countNonEmptyLines(out string) int {
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) != "" {
+			n++
+		}
+	}
+	return n
 }

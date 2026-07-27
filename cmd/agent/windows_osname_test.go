@@ -13,8 +13,10 @@ func TestFormatWindowsOSName(t *testing.T) {
 		{10, 0, 14393, verNTServer, "Windows Server 2016 (Build 14393)"},
 		{10, 0, 17763, verNTServer, "Windows Server 2019 (Build 17763)"},
 		{10, 0, 20348, verNTServer, "Windows Server 2022 (Build 20348)"},
+		{10, 0, 26100, verNTServer, "Windows Server 2025 (Build 26100)"},
 		{10, 0, 19045, verNTWorkstation, "Windows 10 (Build 19045)"},
 		{10, 0, 22631, verNTWorkstation, "Windows 11 (Build 22631)"},
+		{10, 0, 26100, verNTWorkstation, "Windows 11 (Build 26100)"},
 		{6, 2, 9200, verNTWorkstation, "Windows 8 (Build 9200)"},
 	}
 	for _, c := range cases {

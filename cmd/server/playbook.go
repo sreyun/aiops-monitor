@@ -85,7 +85,7 @@ type PlaybookExecution struct {
 // HostExecResult tracks one host's execution outcome.
 type HostExecResult struct {
 	Hostname string       `json:"hostname"`
-	Status   string       `json:"status"` // pending | running | success | failed | timeout | skipped
+	Status   string       `json:"status"`           // pending | running | success | failed | timeout | skipped
 	Reason   string       `json:"reason,omitempty"` // no_pickup | timeout | exit | skipped_when | cancelled | error
 	Output   string       `json:"output"`
 	Steps    []StepResult `json:"steps"`
@@ -308,12 +308,11 @@ func validPlaybookTarget(target string) bool {
 				return false
 			}
 			if prefix == "system:" {
-				switch strings.ToLower(value) {
-				case "linux", "windows", "macos", "darwin":
-					return true
-				default:
-					return false
+				base := value
+				if i := strings.Index(value, ":"); i >= 0 {
+					base = value[:i]
 				}
+				return knownPlaybookSystemBase(base)
 			}
 			return true
 		}
@@ -328,8 +327,8 @@ func (pm *playbookManager) Delete(id string) error {
 
 // ResolveTargets expands a target selector into a list of host IDs.
 // Supported prefixes: "all" = every host; "category:xxx" = hosts in category xxx;
-// "system:xxx" = hosts whose OS matches xxx (linux/macos/windows — macOS hosts
-// have h.OS="darwin", mapped via the macos→darwin check below);
+// "system:xxx" = GOOS (linux/macos/windows) or distro alias (rocky/kylin/rhel/…),
+// matching Host.OS + Host.Platform (e.g. "Rocky Linux 9.4", "Kylin … V10");
 // "host:ID" = a single host by ID.
 func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host {
 	target = strings.TrimSpace(target)
@@ -359,10 +358,7 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	case strings.HasPrefix(target, "system:"):
 		sys := strings.ToLower(target[len("system:"):])
 		for _, h := range hosts {
-			// Match by h.OS (runtime.GOOS: "linux"/"windows"/"darwin"), NOT
-			// h.Platform (which is a version string like "Ubuntu 22.04").
-			if strings.ToLower(h.OS) == sys ||
-				(sys == "macos" && strings.ToLower(h.OS) == "darwin") {
+			if matchHostSystemSelector(h, sys) {
 				result = append(result, h)
 			}
 		}

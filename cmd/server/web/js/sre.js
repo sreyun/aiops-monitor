@@ -316,7 +316,7 @@ function renderPbSteps(steps) {
 
       <details class="pb-adv"${(s.when||s.register)?" open":""}><summary style="cursor:pointer;font-size:12px;color:var(--muted2);margin:2px 0 6px">${I18N.t("sre.pb_cond_vars","条件与变量（选填）")}</summary>
         <div class="grid2">
-          <div class="field"><label>${I18N.t("sre.label_when","when 条件")}</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="${I18N.t("sre.pb_when_ph","{{os}} == linux | {{os}} == macos | {{category}} contains db | {{n}} >= 1")}"></div>
+          <div class="field"><label>${I18N.t("sre.label_when","when 条件")}</label><input type="text" class="pb-step-when" value="${esc(s.when||"")}" placeholder="${I18N.t("sre.pb_when_ph","{{os}} == linux | {{distro}} == rocky | {{distro}} == kylin | {{distro_version}} >= 10 | {{platform}} contains V11")}"></div>
           <div class="field"><label>${I18N.t("sre.label_register","保存输出到变量")}</label><input type="text" class="pb-step-register" value="${esc(s.register||"")}" placeholder="${I18N.t("sre.pb_register_ph","变量名 → 后续步骤用 {{变量名}} 引用")}"></div>
         </div>
       </details>
@@ -422,10 +422,21 @@ function buildTargetOptions(selectedTarget) {
     });
     opts.push('</optgroup>');
   }
-  // By system type — hardcoded to Linux/macOS/Windows (not dynamic from host
-  // data, because h.platform is a version string, not an OS type).
+  // By system / distro — GOOS plus Rocky / 麒麟 / RHEL 族（按 Platform 匹配）。
   opts.push(`<optgroup label="${I18N.t("section.by_system")}">`);
-  [{val:"linux",label:"Linux"},{val:"macos",label:"macOS"},{val:"windows",label:"Windows"}].forEach(s => {
+  [
+    {val:"linux",label:"Linux"},
+    {val:"rocky",label:"Rocky Linux"},
+    {val:"centos",label:"CentOS"},
+    {val:"openeuler",label:"openEuler"},
+    {val:"euleros",label:"EulerOS"},
+    {val:"alinux",label:"Alibaba Cloud Linux"},
+    {val:"kylin",label:"麒麟 Kylin"},
+    {val:"debian",label:"Debian / Ubuntu"},
+    {val:"rhel",label:"RHEL 族"},
+    {val:"macos",label:"macOS"},
+    {val:"windows",label:"Windows"}
+  ].forEach(s => {
     opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
   });
   opts.push('</optgroup>');
@@ -439,6 +450,81 @@ function buildTargetOptions(selectedTarget) {
     opts.push('</optgroup>');
   }
   return opts.join("");
+}
+
+// Match playbook system: selectors against host.os (GOOS) + host.platform (pretty).
+// Supports optional version suffix: rocky:9, openeuler:22, windows:2022, macos:15.
+function pbHostMatchesSystem(h, sys) {
+  const raw = (sys || "").toLowerCase();
+  const colon = raw.indexOf(":");
+  const base = colon >= 0 ? raw.slice(0, colon) : raw;
+  const wantVer = colon >= 0 ? raw.slice(colon + 1) : "";
+  const os = (h.os || "").toLowerCase();
+  const platform = (h.platform || "").toLowerCase();
+  const blob = platform + " " + os;
+  let ok = false;
+  switch (base) {
+    case "linux":
+      ok = os === "linux"; break;
+    case "windows":
+      ok = os === "windows"; break;
+    case "macos":
+    case "darwin":
+      ok = os === "darwin" || os === "macos"; break;
+    case "rocky":
+    case "rockylinux":
+      ok = blob.includes("rocky"); break;
+    case "kylin":
+    case "neokylin":
+    case "kylinos":
+      ok = blob.includes("kylin") || blob.includes("neokylin"); break;
+    case "rhel":
+    case "redhat":
+      ok = /rhel|red hat|rocky|alma|centos|openeuler|euleros|euler os|anolis|alinux|alibaba cloud|amzn|amazon linux|fedora/.test(blob); break;
+    case "centos":
+      ok = blob.includes("centos"); break;
+    case "alma":
+    case "almalinux":
+      ok = blob.includes("alma"); break;
+    case "ubuntu":
+      ok = blob.includes("ubuntu"); break;
+    case "debian":
+      ok = blob.includes("debian") || blob.includes("ubuntu"); break;
+    case "uos":
+      ok = blob.includes("uos") || blob.includes("deepin"); break;
+    case "openeuler":
+      ok = blob.includes("openeuler"); break;
+    case "euleros":
+    case "euler":
+      ok = blob.includes("euleros") || blob.includes("euler os"); break;
+    case "alinux":
+    case "alibaba":
+    case "alibabacloudlinux":
+      ok = blob.includes("alinux") || blob.includes("alibaba cloud") || blob.includes("alibabacloudlinux"); break;
+    case "anolis":
+      ok = blob.includes("anolis"); break;
+    case "amzn":
+    case "amazon":
+    case "amazonlinux":
+      ok = blob.includes("amazon linux") || blob.includes("amzn"); break;
+    case "fedora":
+      ok = blob.includes("fedora"); break;
+    default:
+      ok = os === base || (base === "macos" && os === "darwin") || blob.includes(base);
+  }
+  if (!ok) return false;
+  if (!wantVer) return true;
+  // Prefer whole-version tokens (avoid system:rocky:1 matching "9.1" / "10").
+  const tokens = blob.split(/[^0-9.]+/).filter(Boolean);
+  for (const tok of tokens) {
+    if (tok === wantVer || tok.startsWith(wantVer + ".")) return true;
+    const maj = tok.match(/^(\d+)/);
+    if (maj && maj[1] === wantVer) return true;
+  }
+  // Windows Server year / explicit substrings like "v11".
+  if (/^\d{4}$/.test(wantVer) && blob.includes(wantVer)) return true;
+  if (blob.includes("v" + wantVer)) return true;
+  return false;
 }
 
 // Preview matched host count when target changes
@@ -455,13 +541,9 @@ function pbTargetPreview(sel) {
     const cat = target.slice("category:".length);
     count = PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
   } else if (target.startsWith("system:")) {
-    const sys = target.slice("system:".length);
-    // Match by h.os (runtime.GOOS: "linux"/"windows"/"darwin"), not h.platform
-    // (which is a version string). macOS hosts have h.os="darwin".
-    count = PB_HOSTS.filter(h => {
-      const os = (h.os || "").toLowerCase();
-      return os === sys || (sys === "macos" && os === "darwin");
-    }).length;
+    const sys = target.slice("system:".length).toLowerCase();
+    // Match GOOS plus Platform/distro aliases (Rocky / 麒麟 / RHEL 族).
+    count = PB_HOSTS.filter(h => pbHostMatchesSystem(h, sys)).length;
   } else if (target.startsWith("host:")) {
     count = 1;
   }
@@ -670,7 +752,7 @@ safeAddEventListener("pbAddStep", "click", () => {
 const PB_READONLY_TEMPLATES = {
   deep: {
     name: "深度主机巡检（只读）",
-    description: "一键 host_inspect：跨 Windows/Linux/macOS/麒麟生成结构化巡检报告（standard 档；告警发现不阻断剧本）",
+    description: "一键 host_inspect：跨 Windows/Linux/macOS（含 Rocky 9/10、麒麟 V10/V11）生成结构化巡检报告（standard 档；告警发现不阻断剧本）",
     steps: [
       {
         name: "深度主机巡检", module: "host_inspect", target: "all",

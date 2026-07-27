@@ -138,51 +138,51 @@ type hsAgentReport struct {
 
 // HostFinding is a normalized finding after server-side enrichment.
 type HostFinding struct {
-	Level    string `json:"level"`
-	Category string `json:"category"` // hardening|malware|ioc|cve|port
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Detail   string `json:"detail,omitempty"`
-	Suggest  string `json:"suggest,omitempty"`
-	Package  string `json:"package,omitempty"`
-	Version  string `json:"version,omitempty"`
-	FixedIn  string `json:"fixed_in,omitempty"`
-	CVE      string `json:"cve,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Status   string `json:"status,omitempty"`      // open|ack|false_positive|resolved
+	Level      string `json:"level"`
+	Category   string `json:"category"` // hardening|malware|ioc|cve|port
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Detail     string `json:"detail,omitempty"`
+	Suggest    string `json:"suggest,omitempty"`
+	Package    string `json:"package,omitempty"`
+	Version    string `json:"version,omitempty"`
+	FixedIn    string `json:"fixed_in,omitempty"`
+	CVE        string `json:"cve,omitempty"`
+	Severity   string `json:"severity,omitempty"`
+	Status     string `json:"status,omitempty"` // open|ack|false_positive|resolved
 	StatusNote string `json:"status_note,omitempty"`
 }
 
 // HostScanResult is one completed (or failed) host security scan.
 type HostScanResult struct {
-	ID          string         `json:"id"`
-	Label       string         `json:"label,omitempty"`
-	Seq         int            `json:"seq,omitempty"`
-	HostID      string         `json:"host_id"`
-	Hostname    string         `json:"hostname,omitempty"`
-	StartedAt   int64          `json:"started_at"`
-	FinishedAt  int64          `json:"finished_at,omitempty"`
-	Status      string         `json:"status"` // running|completed|failed
-	Error       string         `json:"error,omitempty"`
-	Score       int            `json:"score"` // 0–100
-	Risk        string         `json:"risk"`  // critical|high|medium|low|info
-	ClamAV         string         `json:"clamav,omitempty"`
-	Firewall       string         `json:"firewall,omitempty"`        // on|off|partial|unknown
-	FirewallEngine string         `json:"firewall_engine,omitempty"` // ufw|firewalld|macos|windows|...
-	FirewallDetail string         `json:"firewall_detail,omitempty"`
-	OS             string         `json:"os,omitempty"`
-	Distro         string         `json:"distro,omitempty"`
-	PkgCount       int            `json:"pkg_count"`
-	CVECount       int            `json:"cve_count"`
-	PortCount      int            `json:"port_count"`
-	RiskyPortCount int            `json:"risky_port_count"`
-	OpenPorts      []HostOpenPort `json:"open_ports,omitempty"`
-	PortSample     []int          `json:"port_sample,omitempty"` // compact list for tables
-	Findings       []HostFinding  `json:"findings"`
-	Summary        map[string]int `json:"summary"` // level → count
-	Remediation    []string       `json:"remediation,omitempty"`
-	Operator       string         `json:"operator,omitempty"`
-	Trigger        string         `json:"trigger,omitempty"` // manual|schedule
+	ID             string            `json:"id"`
+	Label          string            `json:"label,omitempty"`
+	Seq            int               `json:"seq,omitempty"`
+	HostID         string            `json:"host_id"`
+	Hostname       string            `json:"hostname,omitempty"`
+	StartedAt      int64             `json:"started_at"`
+	FinishedAt     int64             `json:"finished_at,omitempty"`
+	Status         string            `json:"status"` // running|completed|failed
+	Error          string            `json:"error,omitempty"`
+	Score          int               `json:"score"` // 0–100
+	Risk           string            `json:"risk"`  // critical|high|medium|low|info
+	ClamAV         string            `json:"clamav,omitempty"`
+	Firewall       string            `json:"firewall,omitempty"`        // on|off|partial|unknown
+	FirewallEngine string            `json:"firewall_engine,omitempty"` // ufw|firewalld|macos|windows|...
+	FirewallDetail string            `json:"firewall_detail,omitempty"`
+	OS             string            `json:"os,omitempty"`
+	Distro         string            `json:"distro,omitempty"`
+	PkgCount       int               `json:"pkg_count"`
+	CVECount       int               `json:"cve_count"`
+	PortCount      int               `json:"port_count"`
+	RiskyPortCount int               `json:"risky_port_count"`
+	OpenPorts      []HostOpenPort    `json:"open_ports,omitempty"`
+	PortSample     []int             `json:"port_sample,omitempty"` // compact list for tables
+	Findings       []HostFinding     `json:"findings"`
+	Summary        map[string]int    `json:"summary"` // level → count
+	Remediation    []string          `json:"remediation,omitempty"`
+	Operator       string            `json:"operator,omitempty"`
+	Trigger        string            `json:"trigger,omitempty"` // manual|schedule
 	BaselineDiff   *ScanBaselineDiff `json:"baseline_diff,omitempty"`
 	AISummary      string            `json:"ai_summary,omitempty"`
 	AISummaryAt    int64             `json:"ai_summary_at,omitempty"`
@@ -483,10 +483,26 @@ func mapPkgEcosystem(pkg hsAgentPkg, distro, pkgMgr string) (eco, name string) {
 		return "Alpine", name
 	case "rpm":
 		d := strings.ToLower(distro)
-		if strings.Contains(d, "fedora") {
+		switch {
+		case strings.Contains(d, "fedora"):
 			return "Fedora", name
+		case strings.Contains(d, "rocky"):
+			return "Rocky Linux", name
+		case strings.Contains(d, "alma"):
+			return "AlmaLinux", name
+		case strings.Contains(d, "kylin") || strings.Contains(d, "neokylin"):
+			return "Kylin", name
+		case strings.Contains(d, "openeuler"):
+			return "openEuler", name
+		case strings.Contains(d, "euleros") || strings.Contains(d, "euler os"):
+			return "openEuler", name // EulerOS shares openEuler/RHEL OSV lineage
+		case strings.Contains(d, "alinux") || strings.Contains(d, "alibaba"):
+			return "Red Hat", name
+		case strings.Contains(d, "centos"):
+			return "Red Hat", name // CentOS stream maps closest to RHEL OSV
+		default:
+			return "Red Hat", name
 		}
-		return "Red Hat", name
 	case "brew":
 		return "Homebrew", name
 	case "winget", "choco":

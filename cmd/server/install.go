@@ -576,11 +576,12 @@ UNIT
   systemctl restart aiops-agent
   echo "[AIOps] systemd service restarted: aiops-agent (user=$AIOPS_USER, boot autostart + auto-restart)"
   # 麒麟/UOS 系统自动检测并配置 kysec 白名单
-  if command -v kysec_adm &>/dev/null; then
+  # POSIX redirects only — Debian/dash rejects bashism &>/dev/null.
+  if command -v kysec_adm >/dev/null 2>&1; then
     kysec_adm -a $DIR/aiops-agent 2>/dev/null && echo "[AIOps] kysec whitelist added: $DIR/aiops-agent" || true
   fi
   # SELinux: check and warn if enforcing
-  if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
     echo "[AIOps] WARNING: SELinux is enforcing. If agent data collection is blocked, run:"
     echo "  sudo setenforce 0  (temporary) then inspect AVC denials with ausearch."
   fi
@@ -855,8 +856,33 @@ function Get-AiopsRemoteFile([string]$Url, [string]$OutFile) {
   $ErrorActionPreference = $prev
   throw ("download failed: " + $Url)
 }
-Get-AiopsRemoteFile "$Server/dl/aiops-agent.exe" $AgentNew
-$Expected = ((Invoke-WebRequest "$Server/dl/aiops-agent.exe.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
+# Native arch binary: amd64 keeps legacy /dl/aiops-agent.exe; ARM64 uses a
+# dedicated name so WOW64/x64 emulation never downloads the wrong PE.
+$ProcArch = [string]$env:PROCESSOR_ARCHITECTURE
+if ($env:PROCESSOR_ARCHITEW6432) { $ProcArch = [string]$env:PROCESSOR_ARCHITEW6432 }
+$AgentRemote = 'aiops-agent.exe'
+switch ($ProcArch.ToUpperInvariant()) {
+  'ARM64' { $AgentRemote = 'aiops-agent-windows-arm64.exe' }
+  'AMD64' { $AgentRemote = 'aiops-agent.exe' }
+  'X86' {
+    Write-Host '[AIOps] FATAL: 32-bit Windows (x86) is not supported.' -ForegroundColor Red
+    exit 1
+  }
+  default {
+    Write-Host ("[AIOps] WARN: unknown PROCESSOR_ARCHITECTURE=" + $ProcArch + "; trying aiops-agent.exe") -ForegroundColor Yellow
+  }
+}
+Write-Host ("[AIOps] platform windows/" + $ProcArch + " → " + $AgentRemote)
+try {
+  Get-AiopsRemoteFile "$Server/dl/$AgentRemote" $AgentNew
+} catch {
+  if ($AgentRemote -ne 'aiops-agent.exe') {
+    Write-Host ("[AIOps] WARN: " + $AgentRemote + " missing on server; falling back to aiops-agent.exe (will fail on ARM64)") -ForegroundColor Yellow
+    $AgentRemote = 'aiops-agent.exe'
+    Get-AiopsRemoteFile "$Server/dl/$AgentRemote" $AgentNew
+  } else { throw }
+}
+$Expected = ((Invoke-WebRequest "$Server/dl/$AgentRemote.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
 $Sha = [Security.Cryptography.SHA256]::Create()
 $Stream = [IO.File]::OpenRead($AgentNew)
 try { $Actual = ([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace("-","").ToLowerInvariant() }
@@ -1226,14 +1252,20 @@ case "$OS" in
     case "$ARCH" in
       x86_64|amd64)   BIN="aiops-agent-linux-amd64" ;;
       aarch64|arm64)   BIN="aiops-agent-linux-arm64" ;;
-      *)               BIN="aiops-agent-linux-amd64" ;;
+      *)
+        echo "[AIOps] ERROR: unsupported architecture: $ARCH (supported: x86_64/amd64, aarch64/arm64)"
+        exit 1
+        ;;
     esac
     ;;
   Darwin)
     case "$ARCH" in
       arm64)           BIN="aiops-agent-darwin-arm64" ;;
       x86_64)          BIN="aiops-agent-darwin-amd64" ;;
-      *)               BIN="aiops-agent-darwin-amd64" ;;
+      *)
+        echo "[AIOps] ERROR: unsupported architecture: $ARCH (supported: arm64, x86_64)"
+        exit 1
+        ;;
     esac
     ;;
   *) echo "unsupported OS: $OS"; exit 1 ;;
@@ -1313,7 +1345,19 @@ New-Item -ItemType Directory -Force $Dir | Out-Null
 # file locked (which would make Invoke-WebRequest throw and abort the install).
 Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
-Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
+$ProcArch = [string]$env:PROCESSOR_ARCHITECTURE
+if ($env:PROCESSOR_ARCHITEW6432) { $ProcArch = [string]$env:PROCESSOR_ARCHITEW6432 }
+$AgentRemote = 'aiops-agent.exe'
+if ($ProcArch.ToUpperInvariant() -eq 'ARM64') { $AgentRemote = 'aiops-agent-windows-arm64.exe' }
+Write-Host ("[AIOps] platform windows/" + $ProcArch + " → " + $AgentRemote)
+try {
+  Invoke-WebRequest "$Server/dl/$AgentRemote" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
+} catch {
+  if ($AgentRemote -ne 'aiops-agent.exe') {
+    Write-Host ("[AIOps] WARN: " + $AgentRemote + " missing; falling back to aiops-agent.exe") -ForegroundColor Yellow
+    Invoke-WebRequest "$Server/dl/aiops-agent.exe" -OutFile "$Dir\aiops-agent.exe" -UseBasicParsing
+  } else { throw }
+}
 
 # YAML is the default config format (single-quoted scalars are backslash-safe; any
 # embedded single-quote is doubled per YAML rules). No YAML serializer in PowerShell.
