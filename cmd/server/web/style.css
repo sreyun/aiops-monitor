@@ -5098,6 +5098,13 @@ button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--acce
   font-weight:600;
 }
 /* ---------- 安全情报源 / 模板库面板 ---------- */
+#webSecurityPanel .sf-panel{ margin-bottom:14px; scroll-margin-top:12px }
+#webSecurityPanel .sf-load-err{ color:var(--crit-txt) }
+#webSecurityPanel .ws-engine-actions .btn.on,
+#webSecurityPanel .ws-engine-actions .btn.primary{
+  border-color:color-mix(in srgb, var(--accent) 55%, var(--line));
+  background:var(--accent-soft); color:var(--accent); font-weight:600;
+}
 #webSecurityPanel .sf-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; margin-bottom:14px }
 #webSecurityPanel .sf-env code{ font-size:11px; background:var(--panel3); padding:1px 5px; border-radius:4px }
 #webSecurityPanel .sf-test-row{ display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap }
