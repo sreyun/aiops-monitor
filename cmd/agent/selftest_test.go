@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestSelfTestPassesOnSuccessfulRegistration(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "tok-1"}}, "host-1", "C:\\x\\config.yaml")
+	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "tok-1"}}, "host-1", "C:\\x\\config.yaml", "")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0\n%s", code, out.String())
 	}
@@ -50,7 +51,7 @@ func TestSelfTestExplainsRejectedToken(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "stale"}}, "host-1", "cfg")
+	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "stale"}}, "host-1", "cfg", "")
 	if code == 0 {
 		t.Fatalf("a 403 must fail the self-test\n%s", out.String())
 	}
@@ -70,7 +71,7 @@ func TestSelfTestExplainsHostIDConflict(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	if code := runSelfTest(&out, []ServerConfig{{Server: srv.URL}}, "host-1", "cfg"); code == 0 {
+	if code := runSelfTest(&out, []ServerConfig{{Server: srv.URL}}, "host-1", "cfg", ""); code == 0 {
 		t.Fatal("a 409 must fail the self-test")
 	}
 	if !strings.Contains(out.String(), "agent_state.json") {
@@ -87,7 +88,7 @@ func TestSelfTestReportsUnreachableServer(t *testing.T) {
 	srv.Close() // nothing is listening on that port any more
 
 	var out bytes.Buffer
-	if code := runSelfTest(&out, []ServerConfig{{Server: url}}, "host-1", "cfg"); code == 0 {
+	if code := runSelfTest(&out, []ServerConfig{{Server: url}}, "host-1", "cfg", ""); code == 0 {
 		t.Fatal("an unreachable server must fail the self-test")
 	}
 	if !strings.Contains(out.String(), "TCP 连接") {
@@ -98,7 +99,27 @@ func TestSelfTestReportsUnreachableServer(t *testing.T) {
 func TestSelfTestRejectsBadServerURL(t *testing.T) {
 	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
 	var out bytes.Buffer
-	if code := runSelfTest(&out, []ServerConfig{{Server: "not-a-url"}}, "h", "cfg"); code == 0 {
+	if code := runSelfTest(&out, []ServerConfig{{Server: "not-a-url"}}, "h", "cfg", ""); code == 0 {
 		t.Fatal("a malformed server URL must fail")
+	}
+}
+
+func TestSelfTestPersistsCanonicalHostID(t *testing.T) {
+	t.Setenv("AIOPS_MACHINE_ID", "selftest-machine")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "host_id": "canonical-host"})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "agent_state.json")
+	var out bytes.Buffer
+	code := runSelfTest(&out, []ServerConfig{{Server: srv.URL, Token: "tok"}}, "local-host", filepath.Join(dir, "config.yaml"), state)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out.String())
+	}
+	got := readHostIDFromState(state)
+	if got != "canonical-host" {
+		t.Fatalf("state host_id=%q, want canonical-host\n%s", got, out.String())
 	}
 }
