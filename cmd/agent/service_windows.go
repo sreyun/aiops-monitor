@@ -286,12 +286,28 @@ func serviceMain(argc uintptr, argv uintptr) uintptr {
 
 	// Delegate the desktop channel to a per-session worker; run everything else.
 	svcAgent.desktopDisabled = true
-	// Reconcile the canonical host id BEFORE spawning the desktop worker.
-	// Otherwise the supervisor can race ahead of Run's reconcileIdentity and the
-	// worker permanently deskWaits on a stale id (UI rings the new host → timeout).
-	svcAgent.reconcileIdentity()
-	go svcAgent.Run(ctx)
-	go svcRunSupervisor(ctx.Done())
+
+	// Reconcile the canonical host id BEFORE spawning the desktop worker,
+	// otherwise the supervisor races ahead and the worker permanently deskWaits
+	// on a stale id (UI rings the new host → timeout).
+	//
+	// It must NOT run on the SCM start path though: it POSTs to the server with a
+	// 30s client timeout, and a firewall that drops the SYN makes that block for
+	// the full 30s. The SCM gives a service 30s to report SERVICE_RUNNING, so on
+	// exactly the hosts that cannot reach the server the start timed out with
+	// error 1053, crash-recovery restarted the service, and it looped forever —
+	// no host in the dashboard and no console to see it happen. Report RUNNING
+	// first and let the supervisor wait for the reconcile instead.
+	reconciled := make(chan struct{})
+	go func() {
+		defer close(reconciled)
+		svcAgent.reconcileIdentity()
+	}()
+	go func() {
+		<-reconciled
+		svcAgent.Run(ctx)
+	}()
+	go svcRunSupervisor(ctx.Done(), reconciled)
 	go serveSASPipe(ctx.Done())
 
 	setSvcStatus(serviceRunning, serviceAcceptStop|serviceAcceptShutdown|serviceAcceptSessionChange, 0)
@@ -343,13 +359,23 @@ func setSvcStatus(state, accepted, waitHintMs uint32) {
 // switch / reconnect) or when the worker dies. Locking the screen does NOT
 // change the console session — the worker stays up and follows the secure
 // desktop from inside the session.
-func svcRunSupervisor(stop <-chan struct{}) {
+func svcRunSupervisor(stop <-chan struct{}, reconciled <-chan struct{}) {
 	var worker *deskWorkerProc
 	defer func() {
 		if worker != nil {
 			worker.kill()
 		}
 	}()
+	// Spawning a worker before the canonical host id is known leaves it waiting on
+	// an id the UI will never ring. Cap the wait so an unreachable server degrades
+	// to "desktop starts late" instead of "desktop never starts".
+	select {
+	case <-reconciled:
+	case <-stop:
+		return
+	case <-time.After(45 * time.Second):
+		slog.Warn("规范身份同步超时，桌面 worker 先行启动")
+	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 

@@ -160,6 +160,8 @@ func main() {
 	flag.BoolVar(&svcRun, "service", false, "内部使用：由服务管理器（SCM/systemd/launchd）以守护进程方式启动")
 	flag.BoolVar(&desktopWorker, "desktop-worker", false, "内部使用：由守护进程派生、运行于活动图形会话的远程桌面 worker")
 	flag.BoolVar(&sendSASOnce, "send-sas", false, "内部使用：在目标会话内注入一次 Ctrl+Alt+Del（Windows Server 锁屏兼容）")
+	var selfTest bool
+	flag.BoolVar(&selfTest, "selftest", false, "安装自检：验证 DNS/TCP/TLS 与服务端注册握手，失败时给出具体原因并返回非 0")
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "打印 Agent 版本并退出")
 	flag.Parse()
@@ -268,6 +270,19 @@ func main() {
 	}
 	if err := normalizeAndValidateConfig(&cfg); err != nil {
 		log.Fatalf("Agent 配置校验失败: path=%s err=%v", cfgPath, err)
+	}
+	// The working directory belongs to whoever started us (the Windows SCM uses
+	// System32), so relative paths must be anchored to the install dir instead.
+	resolveConfigRelativePaths(&cfg, cfgPath)
+	// Service / desktop-worker stderr goes nowhere on Windows. Without a log file
+	// a failing service is completely silent: no host in the dashboard and no
+	// evidence anywhere on the machine.
+	if svcRun || desktopWorker {
+		name := "agent.log"
+		if desktopWorker {
+			name = "agent-desktop.log"
+		}
+		startServiceFileLog(configBaseDir(cfgPath), name)
 	}
 
 	// Apply server TLS trust (self-signed CA / skip-verify) to every agent→server
@@ -386,6 +401,9 @@ func main() {
 	// Log effective server(s) at startup for quick diagnosis
 	for _, sc := range servers {
 		slog.Info("Agent 上报目标", "server", sc.Server, "config_path", cfgPath)
+	}
+	if selfTest {
+		os.Exit(runSelfTest(os.Stdout, servers, hostID, cfgPath))
 	}
 	agent := NewAgent(
 		servers,

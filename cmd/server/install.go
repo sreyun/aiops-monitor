@@ -759,8 +759,12 @@ function Request-AiopsElevatedInstall([string]$Reason) {
   if ($ContentAudit -eq 'true') { $q += "&content_audit=1" }
   $reinvoke = '[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072; irm "' + $Server + '/install.ps1?' + $q + '" | iex'
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($reinvoke))
-  Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$enc -ErrorAction Stop
-  Write-Host ("[AIOps] Elevated installer launched (reason=" + $Reason + "). Approve the UAC prompt; this non-admin window is done.")
+  # -NoExit keeps the elevated window open. The real install (and every error it
+  # can report) happens over there, and without this the window vanished the
+  # instant it finished — leaving the operator with a machine that never showed
+  # up in the dashboard and no output to explain why.
+  Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-EncodedCommand',$enc -ErrorAction Stop
+  Write-Host ("[AIOps] Elevated installer launched (reason=" + $Reason + "). Approve the UAC prompt; the install continues in the NEW admin window (close it when done).")
 }
 
 $SacOnEarly = Test-AiopsSmartAppControlOn
@@ -861,6 +865,123 @@ function Test-AiopsAlreadyInstalled {
   $ErrorActionPreference = $prev
   return $false
 }
+# Sweep EVERY user profile for a pre-Program-Files install.
+#
+# Before the agent moved into Program Files it installed under the *installing
+# user's* profile: %LOCALAPPDATA%\aiops-agent plus that user's HKCU Run entry.
+# Both the installer and the uninstaller only ever looked at the CURRENT user's
+# HKCU and LOCALAPPDATA — and elevating through UAC switches both to whichever
+# admin approved the prompt. So on Windows 10/11 the old per-user agent survived
+# every "uninstall": it kept auto-starting at logon, kept reporting under the
+# same machine fingerprint (therefore the same host card), and the dashboard kept
+# showing the OLD agent version while the freshly installed service looked like
+# it had done nothing at all.
+function Remove-AiopsAllUserInstalls {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $found = $false
+  $profiles = @()
+  try {
+    $profiles = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue |
+      ForEach-Object {
+        $sid = Split-Path -Leaf $_.Name
+        # Machine/service accounts never carry a per-user install, and probing
+        # their profile paths only raises access-denied noise mid-install.
+        if ($sid -eq 'S-1-5-18' -or $sid -eq 'S-1-5-19' -or $sid -eq 'S-1-5-20' -or $sid -like 'S-1-5-80-*') { return }
+        $p = $null
+        try { $p = (Get-ItemProperty -Path $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath } catch {}
+        if ($p -and (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) { New-Object PSObject -Property @{ Sid = $sid; Path = $p } }
+      }
+  } catch {}
+  foreach ($u in $profiles) {
+    # Autostart entry: use the hive if the user is logged on, otherwise mount
+    # their NTUSER.DAT just long enough to delete the value.
+    $hive = "Registry::HKEY_USERS\" + $u.Sid
+    $mounted = $false
+    if (-not (Test-Path $hive)) {
+      $hive = $null
+      $dat = Join-Path $u.Path 'NTUSER.DAT'
+      if (Test-Path -LiteralPath $dat) {
+        & "$env:SystemRoot\System32\reg.exe" load 'HKU\AIOpsTmp' $dat 1>$null 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $hive = 'Registry::HKEY_USERS\AIOpsTmp'; $mounted = $true }
+      }
+    }
+    if ($hive) {
+      $runKey = $hive + '\Software\Microsoft\Windows\CurrentVersion\Run'
+      foreach ($n in @('AIOpsAgent','AIOpsRelay')) {
+        $existing = $null
+        try { $existing = Get-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue } catch {}
+        if ($existing) {
+          $found = $true
+          Write-Host ("[AIOps] removing stale autostart: " + $u.Path + " -> " + $n)
+          Remove-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    if ($mounted) {
+      # PowerShell keeps registry handles open; without this reg unload fails and
+      # the profile stays mounted until reboot.
+      [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+      & "$env:SystemRoot\System32\reg.exe" unload 'HKU\AIOpsTmp' 1>$null 2>$null | Out-Null
+    }
+    foreach ($sub in @('AppData\Local\aiops-agent','AppData\Roaming\aiops-agent')) {
+      $d = Join-Path $u.Path $sub
+      if (Test-Path -LiteralPath $d) {
+        $found = $true
+        Write-Host ("[AIOps] removing legacy per-user install: " + $d)
+        Remove-Item -Recurse -Force -LiteralPath $d -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $d) {
+          Write-Host ("[AIOps] WARNING: could not delete " + $d + " (locked or access denied); re-run elevated.") -ForegroundColor Yellow
+        }
+      }
+    }
+  }
+  if ($found -and -not $IsAdmin) {
+    Write-Host '[AIOps] WARNING: found other users'' agents but this window is not elevated; some may survive. Re-run as Administrator.' -ForegroundColor Yellow
+  }
+  $ErrorActionPreference = $prev
+}
+
+# Carry the host identity across a reinstall.
+#
+# Everything in the platform is keyed by host_id, so losing agent_state.json
+# splits a host's metrics, logs, alerts and hardware history in two. The
+# uninstall step below deletes whole directories, so stash the identity first.
+# System32 is in the candidate list because a service installed before paths were
+# anchored wrote its state there (the SCM's working directory).
+function Save-AiopsIdentity {
+  $stash = Join-Path $env:TEMP 'aiops-agent-state.json'
+  Remove-Item -LiteralPath $stash -Force -ErrorAction SilentlyContinue
+  foreach ($cand in @(
+    (Join-Path $Dir 'agent_state.json'),
+    (Join-Path $env:ProgramFiles 'AIOps Agent\agent_state.json'),
+    (Join-Path $env:ProgramData 'aiops-agent\agent_state.json'),
+    (Join-Path $env:LOCALAPPDATA 'aiops-agent\agent_state.json'),
+    (Join-Path $env:SystemRoot 'System32\agent_state.json')
+  )) {
+    if (-not $cand) { continue }
+    if (Test-Path -LiteralPath $cand) {
+      try {
+        Copy-Item -LiteralPath $cand -Destination $stash -Force -ErrorAction Stop
+        return $stash
+      } catch {}
+    }
+  }
+  return $null
+}
+function Restore-AiopsIdentity([string]$Stash) {
+  if (-not $Stash -or -not (Test-Path -LiteralPath $Stash)) { return }
+  $target = Join-Path $Dir 'agent_state.json'
+  if (-not (Test-Path -LiteralPath $target)) {
+    Copy-Item -LiteralPath $Stash -Destination $target -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $target) {
+      Write-Host "[AIOps] preserved existing host identity (dashboard history and host card are kept)"
+    }
+  }
+  Remove-Item -LiteralPath $Stash -Force -ErrorAction SilentlyContinue
+  # Drop the copy the old SCM working directory left behind so a downgraded
+  # binary can never resurrect a second identity for this machine.
+  Remove-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\agent_state.json') -Force -ErrorAction SilentlyContinue
+}
 function Uninstall-AiopsExisting {
   Write-Host "[AIOps] existing agent detected — stopping service, uninstalling, then reinstalling"
   Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
@@ -888,6 +1009,7 @@ function Uninstall-AiopsExisting {
 
 # Prefer Invoke-WebRequest for downloads (curl.exe is often GPO-blocked).
 # If already installed: stop + uninstall first; otherwise fresh install.
+$SavedIdentity = Save-AiopsIdentity
 if (Test-AiopsAlreadyInstalled) {
   Uninstall-AiopsExisting
 } else {
@@ -896,7 +1018,12 @@ if (Test-AiopsAlreadyInstalled) {
   Stop-AiopsServiceQuiet
   Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
+# Unconditional: Test-AiopsAlreadyInstalled only inspects the current user, so an
+# install owned by a different profile reports "no existing agent" and would then
+# keep running alongside the new one.
+Remove-AiopsAllUserInstalls
 New-Item -ItemType Directory -Force $Dir | Out-Null
+Restore-AiopsIdentity $SavedIdentity
 Start-Sleep -Milliseconds 400
 
 $AgentExe = Join-Path $Dir "aiops-agent.exe"
@@ -1352,6 +1479,21 @@ if ($IsAdmin) {
   Write-Host "[AIOps] installed (user-level, no admin). Check the dashboard."
   Write-Host "[AIOps] NOTE: Hyper-V VM collection needs admin. On a Hyper-V host, re-run this install command in an ELEVATED PowerShell."
 }
+# Prove the host can actually reach the panel before claiming success.
+# "Service is Running" says nothing about DNS, firewalls or token validity: a
+# service that cannot register reaches Running and then reports into the void,
+# which is how a fully green install produced an empty dashboard with nothing to
+# look at (a Windows service has no console and its stderr is discarded).
+$SelfTestExit = -1
+$eap2 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+try {
+  & $AgentExe --selftest --config $conf
+  $SelfTestExit = $LASTEXITCODE
+} catch {
+  Write-Host ("[AIOps] self-test could not run: " + $_.Exception.Message) -ForegroundColor Yellow
+}
+$ErrorActionPreference = $eap2
+
 Write-Host "[AIOps] --- capability summary ---"
 Write-Host ("[AIOps] elevated   : " + $IsAdmin)
 Write-Host ("[AIOps] install dir: " + $Dir)
@@ -1361,7 +1503,21 @@ Write-Host ("[AIOps] win service: " + $svcOk + " (SYSTEM service => disk IO + Hy
 $hv = $false
 try { $hv = [bool](Get-Service -Name 'vmms' -ErrorAction SilentlyContinue) } catch {}
 Write-Host ("[AIOps] Hyper-V role: " + $hv + $(if ($hv -and -not $IsAdmin) { " (needs elevated reinstall)" } else { "" }))
-Write-Host "[AIOps] done. Check the dashboard for this host."
+Write-Host ("[AIOps] agent log   : " + (Join-Path $Dir 'agent.log'))
+if ($SelfTestExit -eq 0) {
+  Write-Host "[AIOps] connectivity: OK — 主机已注册，面板上应能看到这台机器。" -ForegroundColor Green
+  Write-Host "[AIOps] done. Check the dashboard for this host."
+} elseif ($SelfTestExit -lt 0) {
+  Write-Host "[AIOps] connectivity: UNKNOWN (self-test did not run)" -ForegroundColor Yellow
+  Write-Host "[AIOps] done, but connectivity was not verified. Check the dashboard for this host."
+} else {
+  Write-Host "[AIOps] connectivity: FAILED — 主机不会出现在面板，原因见上方 [selftest] 输出。" -ForegroundColor Red
+  Write-Host ("[AIOps] 重新自检: & '" + $AgentExe + "' --selftest --config '" + $conf + "'") -ForegroundColor Yellow
+  Write-Host ("[AIOps] 运行日志: " + (Join-Path $Dir 'agent.log')) -ForegroundColor Yellow
+  # Deliberately no "exit": this script is consumed via irm ... | iex, so exiting
+  # tears down the operator's console — taking the diagnosis above with it.
+  $global:LASTEXITCODE = 1
+}
 `
 
 // relayInstallShTemplate installs the agent in GATEWAY RELAY mode on Linux /
@@ -1717,9 +1873,69 @@ if (-not $IsAdmin -and $SystemInstall) {
     Write-Host "[AIOps] (Run as Administrator) to fully remove it."
 }
 
-# Step 1: Remove ALL autostart entries (normal + relay modes)
+# Step 1: Remove ALL autostart entries (normal + relay modes).
+# HKCU alone is not enough: a per-user install belongs to whoever ran it, and an
+# elevated uninstall sees the ADMIN's hive and profile. That is why uninstalling
+# "had no effect" and an old agent kept reporting — it lived in another profile.
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsAgent" -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AIOpsRelay" -ErrorAction SilentlyContinue
+function Remove-AiopsAllUserInstalls {
+  $found = $false
+  $profiles = @()
+  try {
+    $profiles = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue |
+      ForEach-Object {
+        $sid = Split-Path -Leaf $_.Name
+        # Machine/service accounts never carry a per-user install, and probing
+        # their profile paths only raises access-denied noise mid-install.
+        if ($sid -eq 'S-1-5-18' -or $sid -eq 'S-1-5-19' -or $sid -eq 'S-1-5-20' -or $sid -like 'S-1-5-80-*') { return }
+        $p = $null
+        try { $p = (Get-ItemProperty -Path $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath } catch {}
+        if ($p -and (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) { New-Object PSObject -Property @{ Sid = $sid; Path = $p } }
+      }
+  } catch {}
+  foreach ($u in $profiles) {
+    $hive = "Registry::HKEY_USERS\" + $u.Sid
+    $mounted = $false
+    if (-not (Test-Path $hive)) {
+      $hive = $null
+      $dat = Join-Path $u.Path 'NTUSER.DAT'
+      if (Test-Path -LiteralPath $dat) {
+        & "$env:SystemRoot\System32\reg.exe" load 'HKU\AIOpsTmp' $dat 1>$null 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $hive = 'Registry::HKEY_USERS\AIOpsTmp'; $mounted = $true }
+      }
+    }
+    if ($hive) {
+      $runKey = $hive + '\Software\Microsoft\Windows\CurrentVersion\Run'
+      foreach ($n in @('AIOpsAgent','AIOpsRelay')) {
+        $existing = $null
+        try { $existing = Get-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue } catch {}
+        if ($existing) {
+          $found = $true
+          Write-Host ("[AIOps] removing stale autostart: " + $u.Path + " -> " + $n)
+          Remove-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    if ($mounted) {
+      [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+      & "$env:SystemRoot\System32\reg.exe" unload 'HKU\AIOpsTmp' 1>$null 2>$null | Out-Null
+    }
+    foreach ($sub in @('AppData\Local\aiops-agent','AppData\Roaming\aiops-agent')) {
+      $d = Join-Path $u.Path $sub
+      if (Test-Path -LiteralPath $d) {
+        $found = $true
+        Write-Host ("[AIOps] removing legacy per-user install: " + $d)
+        Remove-Item -Recurse -Force -LiteralPath $d -ErrorAction SilentlyContinue
+      }
+    }
+  }
+  if ($found -and -not $IsAdmin) {
+    Write-Host '[AIOps] WARNING: found other users'' agents but this window is not elevated; some may survive. Re-run as Administrator.' -ForegroundColor Yellow
+  }
+}
+# Called after the processes are killed below — the directories are locked until
+# then. The Run-key sweep it also does is safe at any point.
 
 # Step 2: Remove the keepalive scheduled task FIRST — otherwise it relaunches the
 # agent within 5 minutes and the file deletion below fails ("can't uninstall").
@@ -1761,10 +1977,15 @@ Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAc
 # Step 4: Wait for process handles to release (increased to 3s)
 Start-Sleep -Seconds 3
 
+# Step 4b: Sweep every other user profile (see Remove-AiopsAllUserInstalls).
+Remove-AiopsAllUserInstalls
+# The pre-anchoring SYSTEM service wrote its identity into the SCM working dir.
+Remove-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\agent_state.json') -Force -ErrorAction SilentlyContinue
+
 # Step 5: Delete files with retry logic (handles stubborn file locks), for BOTH
 # install locations. Delete VBS files FIRST -- removing them prevents wscript.exe
 # from being relaunched by the Run registry.
-$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.yaml", "config.json", "agent_state.json", "agent.log", "plugins.zip")
+$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.yaml", "config.json", "agent_state.json", "agent.log", "agent.log.1", "agent-desktop.log", "agent-desktop.log.1", "plugins.zip")
 foreach ($Dir in $Dirs) {
     foreach ($f in $files) {
         $path = Join-Path $Dir $f
