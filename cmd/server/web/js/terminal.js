@@ -2,6 +2,10 @@
 let TERM_TABS = [];      // [{id, name, ws, vt, screenEl, tabEl, retry}]
 let TERM_ACTIVE = -1;    // active tab index
 let TERM_RESIZE = null;  // window resize listener
+let TERM_SCREEN_RO = null;   // ResizeObserver on the active screen box
+let TERM_RO_TARGET = null;   // element TERM_SCREEN_RO is currently watching
+let TERM_RO_PENDING = 0;     // rAF handle coalescing observer callbacks
+let TERM_VP_BOUND = false;   // visualViewport listeners attached once, not per tab
 
 /* ---------- v5.4.0: Web Worker 心跳（绕过浏览器后台 Tab 节流）---------- */
 // 现代浏览器对后台 Tab 的 setTimeout/setInterval 节流到最低 1 分钟，
@@ -653,21 +657,7 @@ function createTermTab(id, name, tabName, opts) {
   input.addEventListener("blur", function() {
     screen.classList.remove("term-focused");
   });
-  // Mobile keyboard viewport adaptation: when virtual keyboard appears,
-  // adjust terminal height to keep cursor visible
-  if (window.visualViewport) {
-    const vpHandler = function() {
-      const mask = $("termMask");
-      if (mask && mask.classList.contains("show")) {
-        const modal = mask.querySelector(".term-modal");
-        if (modal) {
-          modal.style.height = window.visualViewport.height + "px";
-        }
-      }
-    };
-    window.visualViewport.addEventListener("resize", vpHandler);
-    window.visualViewport.addEventListener("scroll", vpHandler);
-  }
+  bindTermVisualViewport();
   switchTermTab(idx);
   $("termMask").classList.remove("maximized");
   const mb = $("termMaxBtn"); if (mb) mb.title = I18N.t("ui.maximize_window");
@@ -694,7 +684,12 @@ function connectTermWS(tab) {
   const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
   tab.ws = ws;
-  const doResize = () => { const s = vt.fit(); if (s && ws.readyState === 1) termResizeSend(ws, s.cols, s.rows); };
+  const doResize = () => {
+    const s = vt.fit();
+    if (!s || ws.readyState !== 1) return;
+    tab._ptyCols = s.cols; tab._ptyRows = s.rows;
+    termResizeSend(ws, s.cols, s.rows);
+  };
   ws.onopen = () => { tab.retry = 0; tab._manualReconnect = false; setTermStatus(I18N.t("ui.connected"), "on");
     // 更新 dock 卡片状态
     const dockItem = $("termDock") && $("termDock").querySelector(`[data-tab-id="${CSS.escape(tab.id)}"]`);
@@ -775,8 +770,55 @@ function switchTermTab(idx) {
   if (TERM_RESIZE) window.removeEventListener("resize", TERM_RESIZE);
   TERM_RESIZE = () => termRefit();
   window.addEventListener("resize", TERM_RESIZE);
+  observeTermScreen(TERM_TABS[idx].screenEl);
   // display:none tabs were never measured — refit after layout so PTY cols/rows match.
   requestAnimationFrame(() => requestAnimationFrame(() => termRefit()));
+}
+
+// window.resize misses everything that resizes the screen box without resizing
+// the window: maximise, tab bar wrapping, the mobile keyboard shrinking dvh, a
+// browser zoom change. Whenever the PTY thinks it is wider or taller than the
+// box, the extra columns land under the scrollbar and the extra rows land below
+// the fold — which is how the prompt used to disappear. Watch the box itself.
+function observeTermScreen(el) {
+  if (!el || typeof ResizeObserver === "undefined") return;
+  if (!TERM_SCREEN_RO) {
+    TERM_SCREEN_RO = new ResizeObserver(() => {
+      if (TERM_RO_PENDING) return;
+      TERM_RO_PENDING = requestAnimationFrame(() => { TERM_RO_PENDING = 0; termRefit(); });
+    });
+  }
+  if (TERM_RO_TARGET === el) return;
+  if (TERM_RO_TARGET) TERM_SCREEN_RO.unobserve(TERM_RO_TARGET);
+  TERM_RO_TARGET = el;
+  TERM_SCREEN_RO.observe(el);
+}
+
+// The mobile keyboard shrinks the visual viewport without firing window.resize,
+// so on phones the full-screen modal has to track it or the prompt ends up
+// behind the keyboard. Desktop must be left alone: pinning the modal to the full
+// viewport height ignores the mask's 44px gutter, which made the mask overflow
+// and hid the hint bar and the newest output rows below the fold.
+function bindTermVisualViewport() {
+  if (!window.visualViewport || TERM_VP_BOUND) return;
+  TERM_VP_BOUND = true;
+  const phone = window.matchMedia("(max-width:480px)");
+  const apply = () => {
+    const mask = $("termMask");
+    if (!mask || !mask.classList.contains("show")) return;
+    const modal = mask.querySelector(".term-modal");
+    if (!modal) return;
+    modal.style.height = phone.matches ? window.visualViewport.height + "px" : "";
+  };
+  window.visualViewport.addEventListener("resize", apply);
+  window.visualViewport.addEventListener("scroll", apply);
+  if (phone.addEventListener) phone.addEventListener("change", apply);
+}
+
+function unobserveTermScreen() {
+  if (TERM_SCREEN_RO && TERM_RO_TARGET) TERM_SCREEN_RO.unobserve(TERM_RO_TARGET);
+  TERM_RO_TARGET = null;
+  if (TERM_RO_PENDING) { cancelAnimationFrame(TERM_RO_PENDING); TERM_RO_PENDING = 0; }
 }
 
 function closeTermTab(idx) {
@@ -792,7 +834,7 @@ function closeTermTab(idx) {
   TERM_TABS.splice(idx, 1);
   if (TERM_ACTIVE >= TERM_TABS.length) TERM_ACTIVE = TERM_TABS.length - 1;
   if (TERM_ACTIVE >= 0) switchTermTab(TERM_ACTIVE);
-  else { $("termMask").classList.remove("show"); if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; } }
+  else { $("termMask").classList.remove("show"); if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; } unobserveTermScreen(); }
   updateTermDock();
 }
 
@@ -802,6 +844,7 @@ function closeAllTermTabs() {
   const sc = $("termScreens"); if (sc) sc.innerHTML = "";
   const tb = $("termTabbar"); if (tb) tb.innerHTML = "";
   if (TERM_RESIZE) { window.removeEventListener("resize", TERM_RESIZE); TERM_RESIZE = null; }
+  unobserveTermScreen();
   clearTermDock();
 }
 
@@ -1371,7 +1414,15 @@ function termResizeSend(ws, cols, rows) {
 function termRefit() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
-  if (tab.vt && tab.ws) { const s = tab.vt.fit(); if (s && tab.ws.readyState === 1) termResizeSend(tab.ws, s.cols, s.rows); }
+  if (tab.vt && tab.ws) {
+    const s = tab.vt.fit();
+    // The ResizeObserver fires for sub-pixel reflows too; only tell the PTY when
+    // the grid actually changed, or a burst of SIGWINCH will make apps redraw.
+    if (s && tab.ws.readyState === 1 && (s.cols !== tab._ptyCols || s.rows !== tab._ptyRows)) {
+      tab._ptyCols = s.cols; tab._ptyRows = s.rows;
+      termResizeSend(tab.ws, s.cols, s.rows);
+    }
+  }
   // v6.1.5: 确保 resize 后焦点回到输入框
   _refocusActiveTermInput();
 }
