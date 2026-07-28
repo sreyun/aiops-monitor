@@ -3402,8 +3402,26 @@ async function genDutyReport(){
     hint:(j&&j.notable===false)?I18N.t("sre.duty_calm","当前态势平静，无未决事件/SLO超标/待审批修复。"):I18N.t("sre.duty_summarizing","正在汇总今日运维态势…")
   });
 }
+function applyAIConfigEditMode(editable){
+  const root=$("aiConfigMask"); if(!root) return;
+  root.querySelectorAll("input, textarea, select").forEach(el=>{ el.disabled=!editable; });
+  root.querySelectorAll("button").forEach(el=>{
+    if(el.hasAttribute("data-close-btn") || el.classList.contains("close") || el.classList.contains("ai-nav-item")) return;
+    const id=el.id||"";
+    const isWrite=el.getAttribute("data-act")==="ai-preset"
+      || /^(aiConfigSaveBtn|aiChatTestBtn|aiEmbedTestBtn|aiRerankTestBtn|aiWeKnoraTestBtn|aiWeKnoraListBtn|aiModelRefreshBtn|aiModelCaretBtn|mcpGenTokenBtn|aiTermToggleBtn|aiTermConfirmBtn|aiTermCancelBtn|aiStatsRefreshBtn)$/.test(id)
+      || id.indexOf("Test")>=0 || id.indexOf("Gen")>=0;
+    if(isWrite) el.disabled=!editable;
+  });
+  const save=$("aiConfigSaveBtn"); if(save){ save.disabled=!editable; save.style.display=editable?"":"none"; }
+  const foot=root.querySelector(".ai-settings-foot-hint");
+  if(foot) foot.textContent=editable
+    ? "修改后点击保存写入配置；观测与终端授权即时生效。"
+    : "当前为只读查看；修改 Provider / 密钥需管理员。";
+}
+
 async function openAIConfig(){
-  if(typeof isAdmin==="function" && !isAdmin()){ toast(I18N.t("toast.admin_only","仅管理员可操作"),"err"); return; }
+  const editable=!(typeof isAdmin==="function") || isAdmin();
   const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
   const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
   const wr=$("aiWeKnoraTestResult"); if(wr){ wr.textContent=""; wr.className="ai-test-result"; }
@@ -3446,8 +3464,12 @@ async function openAIConfig(){
     switchAISettingsTab("provider");
     loadAIStats();
   } catch(e){}
-  loadAIModels();
+  if(editable) loadAIModels();
+  applyAIConfigEditMode(editable);
   $("aiConfigMask").classList.add("show");
+  if(!editable && typeof toast==="function"){
+    toast(I18N.t("sre.ai_settings_readonly","当前为只读查看；修改 Provider / 密钥需管理员。"),"ok");
+  }
 }
 
 function switchAISettingsTab(tab){
@@ -4767,6 +4789,11 @@ safeAddEventListener("memoryVerifiedFilter","change",loadMemories);
 safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
 safeAddEventListener("aiStatsRange","change",loadAIStats);
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
+safeAddEventListener("aiChatSettingsBtn","click",openAIConfig);
+safeAddEventListener("settingsAiConfigBtn","click",()=>{
+  const sm=$("settingsMask"); if(sm) sm.classList.remove("show");
+  if(typeof openAIConfig==="function") openAIConfig();
+});
 safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
 document.querySelectorAll(".ai-nav-item").forEach(btn=>{
   btn.addEventListener("click",()=>switchAISettingsTab(btn.getAttribute("data-ai-tab")));

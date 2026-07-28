@@ -2854,7 +2854,8 @@ func (p *pgStore) scanContainerRow(hostID, hostName, runtime string, snapshot js
 		"runtime":          runtime,
 		"container_count":  count,
 		"containers":       containers,
-		"updated_at":       updatedAt,
+		// Unix 秒：与主机指标等 API 一致；避免 time.Time 默认 RFC3339 字符串导致客户端 Long 解析失败。
+		"updated_at": updatedAt.Unix(),
 	}
 }
 

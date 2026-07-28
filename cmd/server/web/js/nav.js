@@ -1002,6 +1002,10 @@ safeAddEventListener("purgeOfflineBtn", "click", purgeOffline);
   if (I18N.syncLangButtons) I18N.syncLangButtons();
   // 告警设置
   safeAddEventListener("ddSettings", "click", function() { openSettings(); wrap.classList.remove("open"); });
+  safeAddEventListener("ddAiSettings", "click", function() {
+    wrap.classList.remove("open");
+    if (typeof openAIConfig === "function") openAIConfig();
+  });
   // 告警设置弹窗内 Tab 切换
   safeAddEventListener("notifyTabs", "click", function(e) {
     const tab = e.target.closest(".tab");

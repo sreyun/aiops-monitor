@@ -210,6 +210,10 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               <span data-i18n="config.title">告警设置</span>
             </button>
+            <button class="user-dropdown-item" id="ddAiSettings" title="AI Provider / RAG / 成本 / 治理">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 0 6h-1v1a4 4 0 1 1-8 0v-1H7a3 3 0 0 1 0-6h1V6a4 4 0 0 1 4-4z"/><circle cx="12" cy="12" r="2"/></svg>
+              <span data-i18n="sre.ai_settings">AI 设置</span>
+            </button>
             <button class="user-dropdown-item" id="ddProfile">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span data-i18n="profile.title">个人信息</span>
@@ -1759,7 +1763,10 @@
   <div class="modal">
     <div class="modal-head">
       <h3 data-i18n="settings.title">告警设置</h3>
-      <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <button class="btn sm" id="settingsAiConfigBtn" type="button" data-i18n="sre.ai_settings" title="打开 AI 设置">AI 设置</button>
+        <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
+      </div>
     </div>
     <div class="modal-body">
       <label class="switch"><input type="checkbox" id="alertsEnabled" data-i18n-label="settings.enable_push"> 启用告警推送</label>
@@ -3478,6 +3485,7 @@
         <select id="aiSessionSelect" class="ai-sess-select" title="切换历史会话">
           <option value="">＋ 新会话</option>
         </select>
+        <button class="btn ghost" id="aiChatSettingsBtn" title="AI 设置" aria-label="AI 设置">⚙</button>
         <button class="btn ghost" id="aiNewChatBtn" title="新建会话" aria-label="新建会话">＋</button>
         <button class="btn ghost" id="aiUndoBtn" title="撤销上一轮问答，可修改后重问" aria-label="撤销">↶</button>
         <button class="btn ghost" id="aiExpandBtn" title="放大 / 还原窗口" aria-label="放大或还原窗口">⤢</button>
