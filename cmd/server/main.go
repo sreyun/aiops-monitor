@@ -416,10 +416,11 @@ func main() {
 	go server.ai.runInspectionLoop()            // scheduled AI/heuristic health inspection
 	go server.runDutyReportLoop()               // daily AI duty morning report → message center
 	go server.vm.run()                          // optional VictoriaMetrics remote-write pump
+	server.initForecastLearn()                  // 预测台账对比实测 → 校准因子 + AI 自学习记忆
 
 	logProductionSecurityBaseline(cfg)
 	store.onAudit = server.exportAuditEntry
-	handler := requestIDMiddleware(securityHeadersMiddleware(server.corsMiddleware(server.csrfOriginMiddleware(gzipMiddleware(bodyLimitMiddleware(server.authMiddleware(server.Routes())))))))
+	handler := requestIDMiddleware(securityHeadersMiddleware(server.corsMiddleware(server.csrfOriginMiddleware(gzipMiddleware(bodyLimitMiddleware(server.apiRateLimitMiddleware(server.authMiddleware(server.Routes()))))))))
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: handler,
