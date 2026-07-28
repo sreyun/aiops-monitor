@@ -95,7 +95,7 @@ func defaultDiskPath() string {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(newAgentTextHandler(os.Stderr)))
 
 	cfg := defaultConfig()
 

@@ -28,7 +28,7 @@ func startServiceFileLog(dir, name string) {
 	if w == nil {
 		return
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, w), &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(newAgentTextHandler(io.MultiWriter(os.Stderr, w))))
 }
 
 // rotatingFile is a minimal size-capped writer. Log volume here is a handful of
