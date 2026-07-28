@@ -336,10 +336,17 @@ async function loadAPIHistory() {
       <input type="datetime-local" id="ahistCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
       <button class="chip-btn primary" data-ahist-custom-apply>${I18N.t("time.custom_apply", "应用")}</button>
     </span>`;
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad("apimon:" + id)
+    : { signal: undefined, isCurrent: () => true };
   try {
     const sinceMin = custom ? Math.max(1, Math.ceil((now - from) / 60)) : (range > 0 ? range * 60 : 43200); // 43200min=30d
-    const all = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}`).then(r => r.json());
-    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && (custom ? p.timestamp <= to : true));
+    const r = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}`,
+      load.signal ? { signal: load.signal } : undefined);
+    if (!load.isCurrent()) return;
+    const all = await r.json().catch(() => []);
+    if (!load.isCurrent()) return;
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && p.timestamp <= to);
     if (!pts.length) {
       body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（接口探测运行一段时间后自动积累，数据入 VM）。</div>`;
       return;

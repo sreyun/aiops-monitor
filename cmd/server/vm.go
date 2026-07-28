@@ -1011,9 +1011,47 @@ func setSampleDisk(s *shared.Sample, path, name string, val float64) {
 	}
 }
 
+// adaptiveHistoryStep picks a PromQL step so each host-history window yields a
+// stable ~400–600 point density. Without this, raw /export floods long ranges
+// (timeouts / empty charts) while short ranges look fine — the classic
+// "switching 1h→6h→24h returns different empty/wrong curves" symptom.
+func adaptiveHistoryStep(from, to int64) int64 {
+	span := to - from
+	if span < 1 {
+		span = 1
+	}
+	step := span / 480
+	switch {
+	case step < 5:
+		return 5
+	case step > 300:
+		return 300
+	default:
+		return step
+	}
+}
+
 // queryHistory reads a host's series back from VM (the authoritative time-series
 // store) over [from,to] and reassembles []shared.Sample keyed by timestamp.
+// Prefer stepped query_range (consistent density); fall back to raw export for
+// short windows when MetricsQL selector is unavailable.
 func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample, bool) {
+	if !v.enabled() || strings.TrimSpace(hostID) == "" {
+		return nil, false
+	}
+	step := adaptiveHistoryStep(from, to)
+	if out, ok := v.queryHistoryRange(hostID, from, to, step); ok && len(out) > 0 {
+		return out, true
+	}
+	// Short windows: raw export preserves labeled GPU/disk/conn detail when
+	// query_range selector isn't supported by older VM builds.
+	if to-from <= 3*3600 {
+		return v.queryHistoryExport(hostID, from, to)
+	}
+	return nil, false
+}
+
+func (v *vmWriter) queryHistoryExport(hostID string, from, to int64) ([]shared.Sample, bool) {
 	c := v.cfg.VMConfig()
 	if !c.Enabled || c.URL == "" {
 		return nil, false
@@ -1039,7 +1077,63 @@ func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample,
 	if len(out) == 0 {
 		return nil, false
 	}
-	return out, true
+	return downsampleSamples(out, 600), true // shared helper in sreyun_charts.go
+}
+
+// queryHistoryRange uses MetricsQL series selector + query_range so long windows
+// stay bounded. Reassembles the same Sample shape as parseVMExport.
+func (v *vmWriter) queryHistoryRange(hostID string, from, to, step int64) ([]shared.Sample, bool) {
+	expr := fmt.Sprintf(`{__name__=~"aiops_.*",host=%q}`, hostID)
+	series, ok := v.vmQueryRangeSeries(expr, from, to, step)
+	if !ok || len(series) == 0 {
+		return nil, false
+	}
+	byTs := map[int64]*shared.Sample{}
+	for _, ser := range series {
+		name := ser.Labels["__name__"]
+		if name == "" {
+			continue
+		}
+		gpuName := ser.Labels["gpu"]
+		diskPath := ser.Labels["path"]
+		connProto := ser.Labels["proto"]
+		connState := ser.Labels["state"]
+		for _, pt := range ser.Points {
+			ts := int64(pt[0])
+			val := pt[1]
+			s := byTs[ts]
+			if s == nil {
+				s = &shared.Sample{Timestamp: ts}
+				byTs[ts] = s
+			}
+			if strings.HasPrefix(name, "aiops_gpu_") {
+				setSampleGPU(s, gpuName, name, val)
+			} else if strings.HasPrefix(name, "aiops_disk_vol_") {
+				setSampleDisk(s, diskPath, name, val)
+			} else if name == "aiops_net_conn_count" {
+				setSampleConn(s, connProto, connState, val)
+			} else {
+				setSampleMetric(s, name, val)
+			}
+		}
+	}
+	out := make([]shared.Sample, 0, len(byTs))
+	for _, s := range byTs {
+		if len(s.Disks) > 1 {
+			sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
+		}
+		if len(s.Conns) > 1 {
+			sort.Slice(s.Conns, func(a, b int) bool {
+				if s.Conns[a].Proto != s.Conns[b].Proto {
+					return s.Conns[a].Proto < s.Conns[b].Proto
+				}
+				return s.Conns[a].State < s.Conns[b].State
+			})
+		}
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
+	return out, len(out) > 0
 }
 
 // parseVMExport reassembles VM's /api/v1/export NDJSON (one line per series) into
@@ -1143,13 +1237,16 @@ func (v *vmWriter) pushRawLine(line string) {
 }
 
 // queryRawRange executes a range query against VM and returns raw results.
+// Step adapts to the window so SNMP/hardware/netflow charts stay dense on 1h
+// and bounded on 7d/14d (fixed step=60 used to under/oversample by range).
 func (v *vmWriter) queryRawRange(promql string, from, to int64) []any {
 	c := v.cfg.VMConfig()
 	if !c.Enabled || c.URL == "" {
 		return nil
 	}
-	u := fmt.Sprintf("%s/api/v1/query_range?query=%s&start=%d&end=%d&step=60",
-		c.URL, url.QueryEscape(promql), from, to)
+	step := adaptiveHistoryStep(from, to)
+	u := fmt.Sprintf("%s/api/v1/query_range?query=%s&start=%d&end=%d&step=%d",
+		c.URL, url.QueryEscape(promql), from, to, step)
 	resp, err := v.httpc.Get(u)
 	if err != nil {
 		return nil

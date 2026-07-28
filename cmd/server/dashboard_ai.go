@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,22 +39,24 @@ type aiDashVar struct {
 }
 
 type aiDashPanel struct {
-	Title   string   `json:"title"`
-	Type    string   `json:"type"`
-	Unit    string   `json:"unit"`
-	W       int      `json:"w"`
-	H       int      `json:"h"`
+	Title   string `json:"title"`
+	Type    string `json:"type"`
+	Unit    string `json:"unit"`
+	W       int    `json:"w"`
+	H       int    `json:"h"`
 	GridPos struct { // Grafana 原生布局
 		W int `json:"w"`
 		H int `json:"h"`
 	} `json:"gridPos"`
-	Text       string           `json:"text"`
-	Min        *float64         `json:"min"`
-	Max        *float64         `json:"max"`
-	Decimals   *int             `json:"decimals"`
-	Options    DashPanelOptions `json:"options"`
-	FieldConfig json.RawMessage `json:"fieldConfig"` // optional Grafana-style blob from LLM
-	Targets    []aiDashTarget   `json:"targets"`
+	Text        string           `json:"text"`
+	Min         *float64         `json:"min"`
+	Max         *float64         `json:"max"`
+	Decimals    *int             `json:"decimals"`
+	OptionsRaw  json.RawMessage  `json:"options"`     // lenient: Grafana objects / bad types
+	Options     DashPanelOptions `json:"-"`           // filled after coerceAIDashOptions
+	FieldConfig json.RawMessage  `json:"fieldConfig"` // optional Grafana-style blob from LLM
+	Targets     []aiDashTarget   `json:"targets"`
+	Panels      []aiDashPanel    `json:"panels"` // Grafana row nesting
 }
 
 type aiDashTarget struct {
@@ -123,14 +126,150 @@ func decodeAIDashSpec(raw string) (aiDashSpec, bool) {
 		if json.Unmarshal([]byte(js2), &spec) != nil {
 			js3 := repairLLMDashJSON(js2)
 			if json.Unmarshal([]byte(js3), &spec) != nil {
+				slog.Warn("AI 看板 JSON 反序列化失败", "err", err, "snippet", trimLine(js, 400))
 				return aiDashSpec{}, false
 			}
 		}
+	}
+	spec.Panels = flattenAIDashPanels(spec.Panels)
+	for i := range spec.Panels {
+		spec.Panels[i].Options = coerceAIDashOptions(spec.Panels[i].OptionsRaw)
 	}
 	if len(spec.Panels) == 0 && spec.specName() == "" {
 		return aiDashSpec{}, false
 	}
 	return spec, true
+}
+
+// flattenAIDashPanels expands Grafana-style type=row nested panels (same idea as flattenPanels).
+func flattenAIDashPanels(panels []aiDashPanel) []aiDashPanel {
+	var out []aiDashPanel
+	for _, p := range panels {
+		typ := strings.ToLower(strings.TrimSpace(p.Type))
+		if typ == "row" {
+			if len(p.Panels) > 0 {
+				out = append(out, flattenAIDashPanels(p.Panels)...)
+			}
+			continue
+		}
+		if len(p.Panels) > 0 {
+			// Nested children without row wrapper — keep parent if it has targets/text, then children.
+			if p.Type != "" || len(p.Targets) > 0 || strings.TrimSpace(p.Text) != "" {
+				cp := p
+				cp.Panels = nil
+				out = append(out, cp)
+			}
+			out = append(out, flattenAIDashPanels(p.Panels)...)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// coerceAIDashOptions maps LLM/Grafana option blobs into DashPanelOptions without failing the whole decode.
+func coerceAIDashOptions(raw json.RawMessage) DashPanelOptions {
+	var o DashPanelOptions
+	if len(raw) == 0 || string(raw) == "null" {
+		return o
+	}
+	// Fast path: already platform-shaped.
+	if json.Unmarshal(raw, &o) == nil {
+		// Still normalize legend if it arrived as a JSON string we accept.
+		return o
+	}
+	// Grafana / messy LLM shape.
+	var loose map[string]json.RawMessage
+	if json.Unmarshal(raw, &loose) != nil {
+		return o
+	}
+	if v, ok := loose["palette"]; ok {
+		_ = json.Unmarshal(v, &o.Palette)
+	}
+	if v, ok := loose["chart_style"]; ok {
+		_ = json.Unmarshal(v, &o.ChartStyle)
+	}
+	if v, ok := loose["sort"]; ok {
+		_ = json.Unmarshal(v, &o.Sort)
+	}
+	if v, ok := loose["threshold_mode"]; ok {
+		_ = json.Unmarshal(v, &o.ThresholdMode)
+	}
+	if v, ok := loose["stacked"]; ok {
+		_ = json.Unmarshal(v, &o.Stacked)
+	}
+	if v, ok := loose["smooth"]; ok {
+		_ = json.Unmarshal(v, &o.Smooth)
+	}
+	if v, ok := loose["show_points"]; ok {
+		_ = json.Unmarshal(v, &o.ShowPoints)
+	}
+	if v, ok := loose["limit"]; ok {
+		var lim any
+		if json.Unmarshal(v, &lim) == nil {
+			switch t := lim.(type) {
+			case float64:
+				o.Limit = int(t)
+			case string:
+				if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+					o.Limit = n
+				}
+			}
+		}
+	}
+	if v, ok := loose["legend"]; ok {
+		var legStr string
+		if json.Unmarshal(v, &legStr) == nil {
+			o.Legend = legStr
+		} else {
+			var legObj struct {
+				DisplayMode string `json:"displayMode"`
+				Placement   string `json:"placement"`
+				ShowLegend  *bool  `json:"showLegend"`
+			}
+			if json.Unmarshal(v, &legObj) == nil {
+				if legObj.ShowLegend != nil && !*legObj.ShowLegend {
+					o.Legend = "hidden"
+				} else if legObj.DisplayMode == "hidden" {
+					o.Legend = "hidden"
+				} else if legObj.Placement != "" {
+					o.Legend = legObj.Placement
+				} else {
+					o.Legend = "bottom"
+				}
+			}
+		}
+	}
+	if v, ok := loose["thresholds"]; ok {
+		var arr []DashThreshold
+		if json.Unmarshal(v, &arr) == nil {
+			o.Thresholds = arr
+		} else {
+			var wrap struct {
+				Mode  string `json:"mode"`
+				Steps []struct {
+					Value *float64 `json:"value"`
+					Color string   `json:"color"`
+				} `json:"steps"`
+			}
+			if json.Unmarshal(v, &wrap) == nil {
+				if wrap.Mode != "" {
+					o.ThresholdMode = wrap.Mode
+				}
+				for _, s := range wrap.Steps {
+					val := 0.0
+					if s.Value != nil {
+						val = *s.Value
+					}
+					o.Thresholds = append(o.Thresholds, DashThreshold{Value: val, Color: s.Color})
+				}
+			}
+		}
+	}
+	if v, ok := loose["mappings"]; ok {
+		_ = json.Unmarshal(v, &o.Mappings)
+	}
+	return o
 }
 
 const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 代码块里），结构如下：\n" +
@@ -1817,16 +1956,18 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 		warns = append(warns, fmt.Sprintf("干跑：%d 个面板即时无数据（%s）", len(emptyTitles), strings.Join(preview, "、")))
 	}
 	diff := diffDashboards(cur, d)
+	// Preview and confirm share the same normalize path so invalid options fail early
+	// (and soft-cleared enums don't surprise users only at confirm time).
+	if err := normalizeDashboard(&d); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "看板校验失败：" + err.Error(), "warnings": warns})
+		return
+	}
 	if req.PreviewOnly {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": true, "preview": true, "id": cur.ID, "panels": len(d.Panels),
 			"warnings": warns, "dry_run_empty": emptyTitles, "diff": diff,
 			"current_revision": cur.Revision,
 		})
-		return
-	}
-	if err := normalizeDashboard(&d); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "看板校验失败：" + err.Error(), "warnings": warns})
 		return
 	}
 	// 写锁内乐观锁：expected_revision 与预览时一致；0 也参与比较（兼容未升过 revision 的旧看板）。

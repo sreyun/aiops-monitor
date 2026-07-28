@@ -372,11 +372,17 @@ async function snLoadInterfaceHistory() {
     host: snHist.host, device: snHist.device, device_ip: snHist.deviceIP,
     ifindex: snHist.ifindex, ifname: snHist.ifname, from: String(from), to: String(to),
   });
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad("snmp:" + (snHist.host || "") + ":" + (snHist.ifindex || ""))
+    : { signal: undefined, isCurrent: () => true };
   try {
-    const data = await fetch(`${API}/snmp/interface-history?${q}`, { credentials: "same-origin" }).then(r => {
+    const opts = { credentials: "same-origin" };
+    if (load.signal) opts.signal = load.signal;
+    const data = await fetch(`${API}/snmp/interface-history?${q}`, opts).then(r => {
       if (!r.ok) throw new Error(r.statusText);
       return r.json();
     });
+    if (!load.isCurrent()) return;
     const samples = snMatrixSamples(data.series || {});
     const controls = snHistoryControls(from, to);
     if (!samples.length) {

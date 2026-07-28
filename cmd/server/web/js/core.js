@@ -99,6 +99,35 @@ if (typeof window.I18N === "undefined" || typeof window.I18N.t !== "function") {
 
 const API = "/api/v1";
 
+/**
+ * beginRangeLoad — cancel prior in-flight range fetch and bump a generation token.
+ * Fixes "click 1h→6h→24h and the chart keeps flipping / empties" races across
+ * host detail, dashboard panels, checks, etc.
+ * Usage:
+ *   const load = beginRangeLoad("host-detail");
+ *   const r = await fetch(url, { signal: load.signal });
+ *   if (!load.isCurrent()) return;
+ */
+function beginRangeLoad(key) {
+  if (!window.__rangeLoads) window.__rangeLoads = {};
+  const prev = window.__rangeLoads[key];
+  if (prev && prev.ctrl) {
+    try { prev.ctrl.abort(); } catch (_) {}
+  }
+  const seq = (prev && prev.seq ? prev.seq : 0) + 1;
+  const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+  const state = { seq, ctrl };
+  window.__rangeLoads[key] = state;
+  return {
+    seq,
+    signal: ctrl ? ctrl.signal : undefined,
+    isCurrent: () => {
+      const cur = window.__rangeLoads[key];
+      return !!(cur && cur.seq === seq);
+    }
+  };
+}
+
 // Account password policy (mirrors the server): >=8 chars incl. upper/lower/digit/special.
 function pwPolicyOK(pw){
   return typeof pw==="string" && pw.length>=8 && /[A-Z]/.test(pw) && /[a-z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);

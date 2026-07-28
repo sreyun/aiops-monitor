@@ -680,10 +680,13 @@ func (s *Store) GetProcessNames(id string) ([]string, bool) {
 }
 
 // GetHistory returns time-series data for a host within [from, to] range.
-// It automatically selects the appropriate tier based on the time span:
-// - < 2h: raw samples (~3s interval)
+// Preferred tier by span:
+// - < 2h: raw samples (~3–5s)
 // - < 48h: 1-min aggregates
 // - >= 48h: 5-min aggregates
+// If the preferred tier is empty in-window (common for new hosts / thin
+// aggregation), fall through to denser/coarser tiers so switching 1h→3h/6h
+// does not suddenly return an empty chart.
 func (s *Store) GetHistory(id string, from, to int64) ([]shared.Sample, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -693,25 +696,31 @@ func (s *Store) GetHistory(id string, from, to int64) ([]shared.Sample, bool) {
 	}
 
 	span := to - from
-	var src []shared.Sample
-
-	// Select tier based on time span
-	if span < 7200 { // < 2h: use raw
-		src = h.histRaw
-	} else if span < 172800 { // < 48h: use 1-min
-		src = h.hist1m
-	} else { // >= 48h: use 5-min
-		src = h.hist5m
+	var tiers [][]shared.Sample
+	switch {
+	case span < 7200:
+		tiers = [][]shared.Sample{h.histRaw, h.hist1m, h.hist5m}
+	case span < 172800:
+		tiers = [][]shared.Sample{h.hist1m, h.histRaw, h.hist5m}
+	default:
+		tiers = [][]shared.Sample{h.hist5m, h.hist1m, h.histRaw}
 	}
 
-	// Filter by time range
-	result := make([]shared.Sample, 0, len(src))
-	for _, sample := range src {
-		if sample.Timestamp >= from && sample.Timestamp <= to {
-			result = append(result, sample)
+	filter := func(src []shared.Sample) []shared.Sample {
+		result := make([]shared.Sample, 0, len(src))
+		for _, sample := range src {
+			if sample.Timestamp >= from && sample.Timestamp <= to {
+				result = append(result, sample)
+			}
+		}
+		return result
+	}
+	for _, src := range tiers {
+		if result := filter(src); len(result) > 0 {
+			return result, true
 		}
 	}
-	return result, true
+	return []shared.Sample{}, true
 }
 
 // RecentEvents returns the most recent plugin events, newest first.
