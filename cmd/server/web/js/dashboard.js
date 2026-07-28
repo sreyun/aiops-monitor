@@ -10,6 +10,7 @@ let DASH_LIST = [];
 let CUR_DASH = null;               // 当前打开的完整仪表盘
 let DASH_EDIT = false;             // 编辑模式
 let DASH_RANGE = { hours: 1, custom: null };
+let DASH_LOAD_SEQ = 0;
 let DASH_VARVALS = {};             // 变量名 → 选中值
 let DASH_VAR_OPTIONS = {};         // 变量名 → 候选值列表
 let DASH_CHART_ARGS = {};          // panelId → createChart 参数（供 resize 重绘）
@@ -407,6 +408,12 @@ function applyDashAppearanceStyles(wrap, d) {
 function renderDashDetail() {
   const d = CUR_DASH, wrap = $("dashDetail");
   if (!wrap) return;
+  // Bump generation so in-flight panel fetches from a previous range are ignored.
+  if (typeof beginRangeLoad === "function") {
+    DASH_LOAD_SEQ = beginRangeLoad("dashboard:" + (d && d.id || "x")).seq;
+  } else {
+    DASH_LOAD_SEQ++;
+  }
   DASH_CHART_ARGS = {};
   Object.keys(DASH_ECHART_ELS).forEach(id => { try { const el = DASH_ECHART_ELS[id]; if (el && typeof DashCharts !== "undefined") DashCharts.dispose(el); } catch (e) {} });
   DASH_ECHART_ELS = {};
@@ -979,12 +986,13 @@ function renderDashComingSoon(body, p) {
 async function loadPanel(p) {
   const body = document.getElementById("panelBody_" + p.id);
   if (!body) return;
-  await loadPanelContent(p, body, p.id);
+  await loadPanelContent(p, body, p.id, DASH_LOAD_SEQ);
 }
 
 /** Render panel content into an arbitrary body (inline panel or zoom modal). chartKey isolates echart registry. */
-async function loadPanelContent(p, body, chartKey) {
+async function loadPanelContent(p, body, chartKey, loadSeq) {
   if (!body || !p) return;
+  const seq = loadSeq != null ? loadSeq : DASH_LOAD_SEQ;
   const key = chartKey != null ? chartKey : p.id;
   const pView = key === p.id ? p : Object.assign({}, p, { id: key });
   dashDisposePanelChart(key);
@@ -1008,19 +1016,25 @@ async function loadPanelContent(p, body, chartKey) {
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
   body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
   const { from, to } = dashRange();
-  if (p.type === "logs") await loadLogsPanel(pView, body, from, to);
-  else if (p.type === "timeseries" || p.type === "graph") await loadTimeseriesPanel(pView, body, from, to);
-  else if (p.type === "stat") await loadStatPanel(pView, body, from, to);
-  else if (p.type === "gauge") await loadGaugePanel(pView, body);
-  else if (p.type === "piechart" || p.type === "pie") await loadPiePanel(pView, body);
-  else if (p.type === "barchart" || p.type === "bar") await loadBarPanel(pView, body, from, to);
-  else if (p.type === "histogram") await loadHistogramPanel(pView, body);
-  else if (p.type === "state-timeline" || p.type === "statetimeline") await loadStateTimelinePanel(pView, body, from, to);
-  else if (p.type === "heatmap") await loadHeatmapPanel(pView, body, from, to);
-  else if (p.type === "candlestick") await loadCandlestickPanel(pView, body, from, to);
-  else if (p.type === "radar") await loadRadarPanel(pView, body);
-  else if (p.type === "sankey") await loadSankeyPanel(pView, body);
-  else await loadInstantPanel(pView, body);
+  const stillCurrent = () => seq === DASH_LOAD_SEQ || key === "zoom";
+  const run = async (fn) => { await fn; if (!stillCurrent()) return; };
+  if (p.type === "logs") await run(loadLogsPanel(pView, body, from, to));
+  else if (p.type === "timeseries" || p.type === "graph") await run(loadTimeseriesPanel(pView, body, from, to));
+  else if (p.type === "stat") await run(loadStatPanel(pView, body, from, to));
+  else if (p.type === "gauge") await run(loadGaugePanel(pView, body));
+  else if (p.type === "piechart" || p.type === "pie") await run(loadPiePanel(pView, body));
+  else if (p.type === "barchart" || p.type === "bar") await run(loadBarPanel(pView, body, from, to));
+  else if (p.type === "histogram") await run(loadHistogramPanel(pView, body));
+  else if (p.type === "state-timeline" || p.type === "statetimeline") await run(loadStateTimelinePanel(pView, body, from, to));
+  else if (p.type === "heatmap") await run(loadHeatmapPanel(pView, body, from, to));
+  else if (p.type === "candlestick") await run(loadCandlestickPanel(pView, body, from, to));
+  else if (p.type === "radar") await run(loadRadarPanel(pView, body));
+  else if (p.type === "sankey") await run(loadSankeyPanel(pView, body));
+  else await run(loadInstantPanel(pView, body));
+  // Stale range: clear skeleton that a superseded load may have left behind.
+  if (!stillCurrent() && body.querySelector(".dash-panel-skeleton")) {
+    /* superseded — leave the newer render alone */
+  }
 }
 
 let DASH_ZOOM_PID = 0;
@@ -3020,7 +3034,7 @@ async function aiOptimizeDash() {
       // 服务端 extractJSONObject 会优先定位 ```json 块，更稳。
       const answer = (typeof _aiAssistState !== "undefined" && _aiAssistState.lastAnswer) || code || "";
       if (!answer.trim()) { toast("请先等 AI 给出优化建议再应用", "err"); return false; }
-      if (!/\{[\s\S]*"panels"\s*:/.test(answer) && !/```json/i.test(answer)) {
+      if (!/\{[\s\S]*["']panels["']\s*:/i.test(answer) && !/```json/i.test(answer) && !/"dashboard"\s*:\s*\{/.test(answer)) {
         toast("应用失败：回复里没有可识别的看板 JSON（需含 panels）。请点「重新生成」后再试。", "err");
         return false;
       }
@@ -3097,13 +3111,17 @@ safeAddEventListener("dashAIReviewApply", "click", async () => {
       }
       if (!r.ok || !j.ok) {
         toast("应用失败：" + (j.error || ("HTTP " + r.status)), "err");
+        finishDashAIReview(false);
         return;
       }
       const w = (j.warnings && j.warnings.length) ? "（" + j.warnings.slice(0, 2).join("；") + "）" : "";
       toast(`已应用优化：${j.panels} 个组件${w}`, "ok");
       finishDashAIReview(true);
       if (CUR_DASH && CUR_DASH.id === review.dashId) await openDashboard(review.dashId);
-    } catch (e) { toast("应用失败：" + e, "err"); }
+    } catch (e) {
+      toast("应用失败：" + e, "err");
+      finishDashAIReview(false);
+    }
   });
 });
 async function aiTicketDash() {

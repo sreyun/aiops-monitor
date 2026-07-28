@@ -94,18 +94,38 @@ func (s *Server) handleCheckHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// 优先从 VM 读取（持久化，服务重启后历史仍在）；VM 无数据时回落到本次会话的内存环。
 	var pts []CheckPoint
-	if s.vm != nil && s.vm.enabled() {
-		to := time.Now().Unix()
-		from := to - 24*3600 // 默认最近 24h
-		if m := r.URL.Query().Get("since_min"); m != "" {
-			if v, _ := strconv.Atoi(m); v > 0 {
-				from = to - int64(v)*60
-			}
+	to := time.Now().Unix()
+	from := to - 24*3600 // 默认最近 24h
+	if m := r.URL.Query().Get("since_min"); m != "" {
+		if v, _ := strconv.Atoi(m); v > 0 {
+			from = to - int64(v)*60
 		}
+	}
+	if fs := r.URL.Query().Get("from"); fs != "" {
+		if v, err := strconv.ParseInt(fs, 10, 64); err == nil && v > 0 {
+			from = v
+		}
+	}
+	if ts := r.URL.Query().Get("to"); ts != "" {
+		if v, err := strconv.ParseInt(ts, 10, 64); err == nil && v > 0 {
+			to = v
+		}
+	}
+	if s.vm != nil && s.vm.enabled() {
 		pts = s.vm.queryCheckHistory(id, from, to)
 	}
 	if len(pts) == 0 {
 		pts = s.checks.HistoryOf(id)
+	}
+	// Client-side filter for in-memory fallback so custom ranges still clip.
+	if len(pts) > 0 && (r.URL.Query().Get("from") != "" || r.URL.Query().Get("since_min") != "") {
+		clipped := pts[:0]
+		for _, p := range pts {
+			if p.Ts >= from && p.Ts <= to {
+				clipped = append(clipped, p)
+			}
+		}
+		pts = clipped
 	}
 	if pts == nil {
 		pts = []CheckPoint{}

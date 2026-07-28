@@ -51,8 +51,11 @@ func TestNormalizeDashPanelOptionsRejectsBadEnum(t *testing.T) {
 		t.Fatal("bad sort should fail")
 	}
 	o = DashPanelOptions{Palette: "neon"}
-	if err := normalizeDashPanelOptions(&o, "x"); err == nil {
-		t.Fatal("bad palette should fail")
+	if err := normalizeDashPanelOptions(&o, "x"); err != nil {
+		t.Fatalf("bad palette should soft-clear, not fail: %v", err)
+	}
+	if o.Palette != "" {
+		t.Fatalf("bad palette should clear, got %q", o.Palette)
 	}
 }
 
@@ -65,8 +68,11 @@ func TestNormalizeDashPanelOptionsLegendTop(t *testing.T) {
 		t.Fatalf("legend normalized: %q", o.Legend)
 	}
 	o = DashPanelOptions{Legend: "middle"}
-	if err := normalizeDashPanelOptions(&o, "cpu"); err == nil {
-		t.Fatal("invalid legend should fail")
+	if err := normalizeDashPanelOptions(&o, "cpu"); err != nil {
+		t.Fatalf("invalid legend should soft-clear, not fail: %v", err)
+	}
+	if o.Legend != "" {
+		t.Fatalf("invalid legend should clear, got %q", o.Legend)
 	}
 }
 

@@ -951,6 +951,9 @@ async function loadCheckHistory() {
   const now = Math.floor(Date.now() / 1000);
   const from = custom ? custom.from : (range > 0 ? now - range * 3600 : 0);
   const to = custom ? custom.to : now;
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad("checks:" + id)
+    : { signal: undefined, isCurrent: () => true };
   // 快捷跨度按钮 + 自定义绝对区间（与主机趋势图一致）
   const ctrl = `${renderChartControls(custom ? -1 : range, "crange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-chk-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
@@ -962,8 +965,14 @@ async function loadCheckHistory() {
       <button class="chip-btn primary" data-chk-custom-apply>${I18N.t("time.custom_apply") || "应用"}</button>
     </span>`;
   try {
-    const all = await fetch(`${API}/${CHK_HIST.base || "checks"}/${encodeURIComponent(id)}/history`).then(r => r.json());
-    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && (custom ? p.timestamp <= to : true));
+    const sinceMin = Math.max(1, Math.ceil((to - from) / 60));
+    const qs = new URLSearchParams({ since_min: String(sinceMin), from: String(from), to: String(to) });
+    const r = await fetch(`${API}/${CHK_HIST.base || "checks"}/${encodeURIComponent(id)}/history?${qs}`,
+      load.signal ? { signal: load.signal } : undefined);
+    if (!load.isCurrent()) return;
+    const all = await r.json().catch(() => []);
+    if (!load.isCurrent()) return;
+    const pts = (Array.isArray(all) ? all : []).filter(p => p.timestamp >= from && p.timestamp <= to);
     if (!pts.length) {
       body.innerHTML = `<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（检查运行一段时间后自动积累，重启后重新计）</div>`;
       return;
@@ -990,10 +999,13 @@ async function loadCheckHistory() {
         { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
       ], yMin: 0, yMax: 100, opts: { title: "", legendMode: "dash", cssH: 220 } });
     }
+    if (!load.isCurrent()) return;
     CHK_CHARTS = typeof mountChartsWithForecast === "function"
       ? await mountChartsWithForecast("checks", specs)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+    if (!load.isCurrent()) return;
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }

@@ -200,6 +200,45 @@ func TestDecodeAIDashSpecGrafanaAliases(t *testing.T) {
 	}
 }
 
+func TestDecodeAIDashSpecLenientOptionsAndRows(t *testing.T) {
+	raw := "```json\n" + `{
+      "name": "宽松 options",
+      "panels": [
+        {"type":"row","title":"组","panels":[
+          {"title":"CPU","type":"timeseries","w":12,"h":8,
+           "options":{"legend":{"placement":"bottom","showLegend":true},"limit":"10",
+             "thresholds":{"mode":"absolute","steps":[{"value":null,"color":"green"},{"value":90,"color":"red"}]},
+             "palette":"neon-dream"},
+           "targets":[{"expr":"aiops_cpu_percent","legend":"{{instance}}"}]}
+        ]}
+      ]
+    }` + "\n```"
+	spec, ok := decodeAIDashSpec(raw)
+	if !ok {
+		t.Fatal("decode should succeed with Grafana legend object + nested row")
+	}
+	if len(spec.Panels) != 1 {
+		t.Fatalf("row should flatten to 1 panel, got %d", len(spec.Panels))
+	}
+	o := spec.Panels[0].Options
+	if o.Legend != "bottom" {
+		t.Fatalf("legend placement → %q", o.Legend)
+	}
+	if o.Limit != 10 {
+		t.Fatalf("string limit → %d", o.Limit)
+	}
+	if len(o.Thresholds) < 1 {
+		t.Fatalf("thresholds.steps should map, got %+v", o.Thresholds)
+	}
+	d, _ := sanitizeAIDash(spec, "", "ai")
+	if err := normalizeDashboard(&d); err != nil {
+		t.Fatalf("normalize after soft palette clear should pass: %v", err)
+	}
+	if d.Panels[0].Options.Palette != "" {
+		t.Fatalf("unknown palette should soft-clear, got %q", d.Panels[0].Options.Palette)
+	}
+}
+
 func TestTokenize(t *testing.T) {
 	got := tokenize("MySQL 连接数 qps_total rate() a")
 	// 期望：mysql, qps_total, rate（"a" 单字符被丢，CJK 被分隔）

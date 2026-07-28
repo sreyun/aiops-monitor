@@ -998,6 +998,7 @@ let DETAIL_HOST_NAME = '';
 let DETAIL_TIME_RANGE = 1; // hours: 1/3/6/12/24/72/168/336（默认 1 小时）
 let DETAIL_CUSTOM = null;   // {from,to} unix seconds — set when a custom range is active
 let DETAIL_SAMPLES = [];
+let DETAIL_LOAD_SEQ = 0;
 
 // 把 unix 秒格式化为 <input type="datetime-local"> 需要的本地时间字符串 YYYY-MM-DDTHH:mm
 function toLocalDatetimeValue(unixSec) {
@@ -1037,13 +1038,21 @@ async function loadAndRenderCharts() {
   const to = DETAIL_CUSTOM ? DETAIL_CUSTOM.to : now;
   const from = DETAIL_CUSTOM ? DETAIL_CUSTOM.from : now - DETAIL_TIME_RANGE * 3600;
   const spanH = Math.max(0, (to - from) / 3600); // effective window in hours
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad("host-detail:" + DETAIL_HOST_ID)
+    : { signal: undefined, isCurrent: () => true, seq: 0 };
+  DETAIL_LOAD_SEQ = load.seq;
 
   // 取消上一轮懒加载观察，避免切时间范围后旧回调继续触发。
   if (DETAIL_CHART_IO) { try { DETAIL_CHART_IO.disconnect(); } catch (_) {} DETAIL_CHART_IO = null; }
   DETAIL_CHART_PENDING = {};
 
   try {
-    const samples = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`).then(r => r.json());
+    const r = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`,
+      load.signal ? { signal: load.signal } : undefined);
+    if (!load.isCurrent()) return;
+    const samples = await r.json().catch(() => []);
+    if (!load.isCurrent()) return;
     if (!Array.isArray(samples) || !samples.length) {
       DETAIL_SAMPLES = [];
       body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
@@ -1179,8 +1188,12 @@ async function loadAndRenderCharts() {
       { key: 'proc_count', label: '进程数', color: '#8b5cf6', fmt: v => v.toFixed(0) },
     ], null, null, '进程数趋势');
 
-    mountDetailLazyCharts(body);
+    if (!load.isCurrent()) return;
+    DETAIL_CHARTS = {};
+    mountDetailLazyCharts(body, load.seq);
   } catch (e) {
+    if (e && (e.name === "AbortError" || e.message === "The user aborted a request.")) return;
+    if (!load.isCurrent()) return;
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
@@ -1189,17 +1202,21 @@ let DETAIL_CHART_IO = null;
 let DETAIL_CHART_PENDING = {};
 
 /** 视口进入时才 createChart；首屏可见的图表立即绘制（无入场动画）。 */
-function mountDetailLazyCharts(root) {
+function mountDetailLazyCharts(root, loadSeq) {
+  const seq = loadSeq != null ? loadSeq : DETAIL_LOAD_SEQ;
   const mountOne = async (id) => {
+    if (seq !== DETAIL_LOAD_SEQ) return;
     const spec = DETAIL_CHART_PENDING[id];
     if (!spec || DETAIL_CHARTS[id]) return;
     delete DETAIL_CHART_PENDING[id];
     const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
     const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: "dash" };
     if (fcOn && typeof createChartWithForecast === "function") {
-      DETAIL_CHARTS[id] = await createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
+      const ch = await createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
         forecast: true, forecastScope: "host-detail"
       }));
+      if (seq !== DETAIL_LOAD_SEQ) return;
+      DETAIL_CHARTS[id] = ch;
     } else {
       DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts);
     }

@@ -499,7 +499,8 @@ func normalizeDashPanelOptions(o *DashPanelOptions, title string) error {
 	case "", "classic", "warm", "cool", "traffic", "mono", "custom":
 		o.Palette = strings.ToLower(strings.TrimSpace(o.Palette))
 	default:
-		return fmt.Errorf("面板 %q 的配色板无效", title)
+		// Soft-clear unknown LLM/Grafana palette names so AI apply isn't blocked.
+		o.Palette = ""
 	}
 	if len(o.Colors) > 32 {
 		o.Colors = o.Colors[:32]
@@ -515,14 +516,16 @@ func normalizeDashPanelOptions(o *DashPanelOptions, title string) error {
 	switch strings.ToLower(strings.TrimSpace(o.Legend)) {
 	case "", "top", "bottom", "right", "hidden":
 		o.Legend = strings.ToLower(strings.TrimSpace(o.Legend))
+	case "list", "table", "show": // Grafana displayMode leftovers
+		o.Legend = "bottom"
 	default:
-		return fmt.Errorf("面板 %q 的图例位置无效（top|bottom|right|hidden）", title)
+		o.Legend = ""
 	}
 	switch strings.ToLower(strings.TrimSpace(o.ChartStyle)) {
 	case "", "line", "area", "bar":
 		o.ChartStyle = strings.ToLower(strings.TrimSpace(o.ChartStyle))
 	default:
-		return fmt.Errorf("面板 %q 的图表形态无效（line|area|bar）", title)
+		o.ChartStyle = ""
 	}
 	switch strings.ToLower(strings.TrimSpace(o.ThresholdMode)) {
 	case "", "absolute", "percentage":
