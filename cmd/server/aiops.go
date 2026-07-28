@@ -52,6 +52,12 @@ type AIConfig struct {
 	MoAModels string `json:"moa_models,omitempty"`
 	// FallbackModels：主模型失败时按序切换的备用模型（逗号分隔，复用主 Endpoint/Key）。
 	FallbackModels string `json:"fallback_models,omitempty"`
+	// CheapModel：摘要/轻量任务优先模型；空=用 Model。
+	CheapModel string `json:"cheap_model,omitempty"`
+	// TaskModelsJSON：任务→模型映射，例 {"chart_analysis":"qwen-plus","promql":"qwen-turbo"}。
+	TaskModelsJSON string `json:"task_models_json,omitempty"`
+	// ActiveExperimentID：可选 A/B 实验 id（配合 ai_experiments 表）。
+	ActiveExperimentID string `json:"active_experiment_id,omitempty"`
 	// MCP Server：把本平台的只读运维工具（指标/日志/告警/硬件/流量等）暴露为标准 MCP，供外部
 	// Agent（如 Nous Sreyun Agent）连接调用。默认关闭；开启需设置 Bearer Token（客户端用它鉴权）。
 	MCPEnabled bool   `json:"mcp_enabled,omitempty"`
@@ -547,9 +553,16 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 					} `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			return "", nil, fmt.Errorf("解析 AI 响应失败：%v", err)
+		}
+		if out.Usage != nil {
+			captureAIUsage(out.Usage.PromptTokens, out.Usage.CompletionTokens)
 		}
 		if len(out.Choices) == 0 {
 			return "", nil, fmt.Errorf("AI 服务返回空结果")
@@ -591,6 +604,11 @@ type streamToolChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // aiChatVStream 是面向 OpenAI 兼容 Provider 的「流式 + 原生 Function Calling」调用：
@@ -680,7 +698,13 @@ func aiChatVStreamOpts(ctx context.Context, cfg AIConfig, messages []map[string]
 			break
 		}
 		var chunk streamToolChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			captureAIUsage(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
+		}
+		if len(chunk.Choices) == 0 {
 			continue
 		}
 		d := chunk.Choices[0].Delta

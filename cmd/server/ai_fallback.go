@@ -18,6 +18,9 @@ type AgentLoopMeta struct {
 	SelfVerify    bool             `json:"self_verify,omitempty"`
 	LiveEvidence  int              `json:"live_evidence,omitempty"`
 	Actions       []map[string]any `json:"actions,omitempty"` // UI action cards collected from capability tools
+	RoutedModel   string           `json:"routed_model,omitempty"`
+	ExperimentID  string           `json:"experiment_id,omitempty"`
+	Variant       string           `json:"variant,omitempty"`
 }
 
 func fallbackModelList(cfg AIConfig) []string {
