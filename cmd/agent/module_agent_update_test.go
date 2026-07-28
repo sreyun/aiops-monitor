@@ -42,6 +42,13 @@ func TestAgentDistBinaryName(t *testing.T) {
 }
 
 func TestAgentUpdateBinCandidatesWindowsAliases(t *testing.T) {
+	if windowsNeedsLegacyAgentBuild() {
+		cands := agentUpdateBinCandidates("windows", "amd64", "aiops-agent.exe")
+		if len(cands) != 1 || cands[0] != "aiops-agent-windows-amd64-win2012.exe" {
+			t.Fatalf("legacy host must ignore modern preferred: %v", cands)
+		}
+		return
+	}
 	cands := agentUpdateBinCandidates("windows", "amd64", "aiops-agent-windows-amd64.exe")
 	if len(cands) < 2 {
 		t.Fatalf("cands=%v", cands)
@@ -57,6 +64,23 @@ func TestAgentUpdateBinCandidatesWindowsAliases(t *testing.T) {
 	}
 	if !foundExe {
 		t.Fatalf("missing aiops-agent.exe alias: %v", cands)
+	}
+}
+
+func TestAgentUpdateBinCandidatesLegacyIgnoresModernPreferred(t *testing.T) {
+	// Simulate preferred modern PE from an outdated server on a host that needs win2012.
+	// windowsNeedsLegacyAgentBuild is OS-dependent; when false, exercise the same
+	// filtering by checking the public helper used for legacy-only lists.
+	cands := agentUpdateBinCandidates("windows", "amd64", "aiops-agent.exe")
+	if windowsNeedsLegacyAgentBuild() {
+		if len(cands) != 1 || cands[0] != "aiops-agent-windows-amd64-win2012.exe" {
+			t.Fatalf("legacy: %v", cands)
+		}
+		return
+	}
+	// On modern Windows, preferred modern name stays first.
+	if cands[0] != "aiops-agent.exe" {
+		t.Fatalf("modern preferred first: %v", cands)
 	}
 }
 

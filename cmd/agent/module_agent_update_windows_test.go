@@ -32,4 +32,10 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 	if !strings.Contains(script, "refusing bare Start-Process") {
 		t.Fatal("helper must refuse config-less restart")
 	}
+	if !strings.Contains(script, "staging --version") {
+		t.Fatal("helper must probe staging binary before swap")
+	}
+	if !strings.Contains(script, "Move-Item attempt") {
+		t.Fatal("helper must retry Move-Item under AV locks")
+	}
 }

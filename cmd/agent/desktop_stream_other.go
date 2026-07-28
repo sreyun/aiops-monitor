@@ -20,6 +20,8 @@ func deskGOOS() string { return runtime.GOOS }
 
 func deskH264Usable() bool       { return false }
 func deskPreferredCodec() string { return "" }
+
+func deskLegacyCaptureHost() bool { return false }
 func deskAVFScreenIndex() int    { return -1 }
 
 func deskClipboardSupported() bool { return false }

@@ -487,6 +487,8 @@ func deskH264Usable() bool {
 	return true
 }
 func deskPreferredCodec() string { return "" } // x11grab JPEG is acceptable
+
+func deskLegacyCaptureHost() bool { return false }
 func deskAVFScreenIndex() int    { return -1 }
 
 func linuxVKName(vk int) string {

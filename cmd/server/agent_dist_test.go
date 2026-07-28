@@ -133,6 +133,9 @@ func TestShouldLegacyAgentUpdateFallback(t *testing.T) {
 	if shouldLegacyAgentUpdateFallback("agent_update: SHA-256 mismatch", nil) {
 		t.Fatal("checksum failure must not fallback")
 	}
+	if !shouldLegacyAgentUpdateFallback("agent_update: start helper (C:\\Windows\\...\\powershell.exe): executable file not found in %PATH%", nil) {
+		t.Fatal("helper spawn failure should fallback to legacy script")
+	}
 }
 
 func minInt(a, b int) int {

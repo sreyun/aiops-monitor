@@ -9,11 +9,15 @@ import (
 
 func TestLegacyWindowsAgentUpdateScriptUsesInstallService(t *testing.T) {
 	cmd := legacyWindowsAgentUpdateScript("http://mon.example:8529", "aiops-agent.exe")
-	const prefix = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "
-	if !strings.HasPrefix(cmd, prefix) {
-		t.Fatalf("unexpected prefix: %s", cmd[:min(80, len(cmd))])
+	const marker = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "
+	idx := strings.Index(cmd, marker)
+	if idx < 0 {
+		t.Fatalf("expected absolute powershell.exe EncodedCommand, got: %s", cmd[:min(120, len(cmd))])
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(cmd, prefix))
+	if !strings.Contains(cmd, `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`) {
+		t.Fatal("legacy windows update must use absolute powershell path")
+	}
+	raw, err := base64.StdEncoding.DecodeString(cmd[idx+len(marker):])
 	if err != nil {
 		t.Fatal(err)
 	}

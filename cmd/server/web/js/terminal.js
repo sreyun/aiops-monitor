@@ -1936,24 +1936,68 @@ function makeVT(screen) {
   alloc();
 
   function pinThreshold() {
-    return Math.max(64, (vt._cellH || 16) * 3);
+    // Generous slack: scrollbar thumb/layout jitter + one–two line heights must
+    // not drop the pin while the user is still "at the live prompt".
+    return Math.max(120, (vt._cellH || 16) * 5);
   }
   function distFromBottom() {
     return screen.scrollHeight - screen.scrollTop - screen.clientHeight;
   }
+  // Programmatic stickScroll fires "scroll" events and browser overflow
+  // anchoring can nudge scrollTop when scrollback rows are appended above the
+  // live grid. Those must NEVER clear _pinBottom — only real user gestures do.
+  let _stickLock = 0;
+  let _stickGen = 0;
+  let _gestureUntil = 0;
   function stickScroll() {
     if (!vt._pinBottom) return;
-    // Assign twice: some engines clamp against a stale scrollHeight mid-layout.
-    screen.scrollTop = screen.scrollHeight;
-    screen.scrollTop = screen.scrollHeight;
+    const gen = ++_stickGen;
+    _stickLock++;
+    const apply = () => {
+      if (gen !== _stickGen || !vt._pinBottom) return;
+      // Assign twice: some engines clamp against a stale scrollHeight mid-layout.
+      screen.scrollTop = screen.scrollHeight;
+      screen.scrollTop = screen.scrollHeight;
+    };
+    apply();
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(() => {
+        apply();
+        _stickLock = Math.max(0, _stickLock - 1);
+      });
+    });
   }
   vt.followOutput = function () {
     vt._pinBottom = true;
     stickScroll();
   };
-  // User scroll updates the pin; programmatic stickScroll keeps dist ≈ 0 so pin stays on.
+  function markUserScrollGesture() {
+    // Keep the window open across wheel/trackpad momentum so we don't restick
+    // mid-gesture (that was yanking the prompt back into view while reading).
+    _gestureUntil = performance.now() + 450;
+  }
+  screen.addEventListener("wheel", markUserScrollGesture, { passive: true });
+  screen.addEventListener("touchstart", markUserScrollGesture, { passive: true });
+  screen.addEventListener("touchmove", markUserScrollGesture, { passive: true });
+  // Scrollbar thumb / track drag (no wheel events on most engines).
+  screen.addEventListener("pointerdown", (ev) => {
+    const rect = screen.getBoundingClientRect();
+    if (ev.clientX >= rect.right - 20) markUserScrollGesture();
+  }, { passive: true });
   screen.addEventListener("scroll", () => {
-    vt._pinBottom = distFromBottom() <= pinThreshold();
+    if (_stickLock > 0) return;
+    if (performance.now() < _gestureUntil) {
+      vt._pinBottom = distFromBottom() <= pinThreshold();
+      return;
+    }
+    if (vt._pinBottom) {
+      // Layout / overflow-anchor drift while following — pull back, do not unpin.
+      if (distFromBottom() > pinThreshold()) stickScroll();
+      return;
+    }
+    // User was reading scrollback; re-pin if they scrolled back to the live end.
+    if (distFromBottom() <= pinThreshold()) vt._pinBottom = true;
   }, { passive: true });
 
   function clearCell(cell) { cell.c = " "; cell.f = null; cell.b = vt.bg; cell.a = 0; }

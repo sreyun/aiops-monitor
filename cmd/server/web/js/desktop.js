@@ -11,6 +11,8 @@ let DESK_DOWNLOAD = null;
 let DESK_MSE = null; // { mediaSource, sourceBuffer, queue, video, gen }
 let DESK_GOT_FRAME = false;
 let DESK_PHASE = "idle"; // idle|connecting|waiting_agent|streaming|error|closed
+let DESK_UNIFORM_STREAK = 0;
+let DESK_SURFACE_MODE = ""; // "canvas" | "video" | ""
 let DESK_INTENTIONAL_CLOSE = false;
 let DESK_RETRY = 0;
 let DESK_MAX_RETRY = 30;
@@ -37,6 +39,8 @@ async function doOpenDesktop(id, name) {
   if (mask) mask.classList.add("show");
   DESK_GOT_FRAME = false;
   DESK_PHASE = "connecting";
+  DESK_UNIFORM_STREAK = 0;
+  DESK_SURFACE_MODE = "";
   DESK_INTENTIONAL_CLOSE = false;
   DESK_RETRY = 0;
   DESK_NO_RETRY = false;
@@ -393,6 +397,8 @@ function fillMonitorSelect(mons) {
 function connectDesktopWS(id, name) {
   closeDesktopWS();
   DESK_GOT_FRAME = false;
+  DESK_UNIFORM_STREAK = 0;
+  DESK_SURFACE_MODE = "";
   DESK_PHASE = "waiting_agent";
   setDesktopStatus(I18N.t("desktop.waiting_agent"), false);
   setDeskPlaceholder(I18N.t("desktop.waiting_agent"), I18N.t("desktop.wait_hint"));
@@ -437,29 +443,39 @@ function connectDesktopWS(id, name) {
     const paint = (src, w, h) => {
       const ctx = canvas && canvas.getContext("2d");
       if (ctx && w > 0 && h > 0 && DESK_WS === ws) {
-        if (canvas.width !== w || canvas.height !== h) {
+        // Ignore 1–2px encoder jitter — resetting canvas.width clears pixels and
+        // flashes black between frames (especially visible on Win2012 GDI JPEG).
+        if (Math.abs(canvas.width - w) > 2 || Math.abs(canvas.height - h) > 2) {
           canvas.width = w;
           canvas.height = h;
         }
-        ctx.drawImage(src, 0, 0);
+        ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
         if (typeof src.close === "function") {
           try { src.close(); } catch (e) {}
         }
         jpegDecodeFailures = 0;
+        const firstFrame = !DESK_GOT_FRAME;
         markDeskStreaming();
-        showDeskCanvas(true);
-        fitDeskSurface(canvas);
-        // Client-side solid-frame guard: if paint succeeded but pixels are a
-        // flat fill, keep/re-show the diagnostic placeholder instead of a
-        // silent dark-blue "connected" viewport. Winlogon/lock UI is often
-        // near-dark — never cover real frames with the solid-color overlay.
+        if (firstFrame) {
+          showDeskCanvas(true);
+          fitDeskSurface(canvas);
+        } else if (canvas.style.display === "none") {
+          showDeskCanvas(true);
+        }
+        // Solid-frame guard with hysteresis — toggling the placeholder every
+        // borderline JPEG frame looked like continuous screen flicker.
         if (deskOnSecureDesktop()) {
+          DESK_UNIFORM_STREAK = 0;
           hideDeskPlaceholder();
           setDeskDot("on");
-        } else if (deskCanvasLooksUniform(ctx, w, h)) {
-          setDeskPlaceholder(I18N.t("desktop.warn"), I18N.t("desktop.solid_frame_hint"));
-          setDeskDot("warn");
+        } else if (deskCanvasLooksUniform(ctx, canvas.width, canvas.height)) {
+          DESK_UNIFORM_STREAK = (DESK_UNIFORM_STREAK || 0) + 1;
+          if (DESK_UNIFORM_STREAK >= 8) {
+            setDeskPlaceholder(I18N.t("desktop.warn"), I18N.t("desktop.solid_frame_hint"));
+            setDeskDot("warn");
+          }
         } else {
+          DESK_UNIFORM_STREAK = 0;
           hideDeskPlaceholder();
           setDeskDot("on");
         }
@@ -642,8 +658,9 @@ function connectDesktopWS(id, name) {
       return;
     }
     if (typ === "H") {
+      const first = !DESK_GOT_FRAME;
       markDeskStreaming();
-      showDeskCanvas(false);
+      if (first || DESK_SURFACE_MODE !== "video") showDeskCanvas(false);
       appendDeskH264(payload);
       return;
     }
@@ -708,15 +725,23 @@ function connectDesktopWS(id, name) {
 }
 
 function markDeskStreaming() {
-  if (!DESK_GOT_FRAME) {
+  const first = !DESK_GOT_FRAME;
+  if (first) {
     DESK_GOT_FRAME = true;
     DESK_PHASE = "streaming";
+    DESK_UNIFORM_STREAK = 0;
     hideDeskPlaceholder();
     setDeskDot("on");
     refreshDeskInputStatus();
   }
   const stage = $("deskStage");
   if (stage) bindDesktopInput(stage);
+  // Focus / session-key bind only on the first frame. Re-focusing 10–15×/s made
+  // the viewport flash (Win2012 JPEG path) and stole focus from toolbar inputs.
+  if (!first) {
+    bindDeskSessionKeys();
+    return;
+  }
   const canvas = $("deskCanvas");
   const video = $("deskVideo");
   const useVideo = video && video.style.display !== "none";
@@ -731,14 +756,19 @@ function markDeskStreaming() {
 function showDeskCanvas(useCanvas) {
   const canvas = $("deskCanvas");
   const video = $("deskVideo");
+  const prev = DESK_SURFACE_MODE; // "canvas" | "video" | ""
+  const next = useCanvas ? "canvas" : "video";
   if (canvas) canvas.style.display = useCanvas ? "block" : "none";
   if (video) video.style.display = useCanvas ? "none" : "block";
+  DESK_SURFACE_MODE = next;
   ensureDeskStageResizeObserver();
   fitDeskSurface(useCanvas ? canvas : video);
   // Bind to the stage so the full viewport receives pointer events (letterbox
   // areas of object-fit:contain still map via deskNormXY).
   const stage = $("deskStage");
   if (stage) bindDesktopInput(stage);
+  // Only steal focus when the visible surface actually switches.
+  if (prev === next) return;
   const surf = useCanvas ? canvas : video;
   if (surf) {
     if (!surf.hasAttribute("tabindex")) surf.setAttribute("tabindex", "0");

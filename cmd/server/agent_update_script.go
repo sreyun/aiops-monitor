@@ -194,7 +194,9 @@ Write-Output ('legacy agent update ok sha='+$Actual)
 		strings.ReplaceAll(server, "'", "''"),
 		strings.ReplaceAll(bin, "'", "''"),
 	)
-	return "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + psEncodedCommand(ps)
+	// Prefer absolute powershell so LocalSystem / thin PATH still works when this
+	// string is executed via cmd /c (agent runShellCommand expands %SystemRoot%).
+	return `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ` + psEncodedCommand(ps)
 }
 
 func psEncodedCommand(script string) string {

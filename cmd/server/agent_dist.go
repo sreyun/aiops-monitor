@@ -133,8 +133,19 @@ func (s *Server) agentDistResolve(goos, goarch string) (string, bool) {
 }
 
 // agentDistResolveForHost prefers the Server 2012/R2 (Go 1.20) artifact when the
-// host identity indicates a pre–Windows 10 kernel.
+// host identity indicates a pre–Windows 10 kernel. Legacy hosts NEVER fall back
+// to modern aiops-agent.exe (Go ≥1.21 exits immediately on NT 6.2/6.3).
 func (s *Server) agentDistResolveForHost(h *Host) (string, bool) {
+	if hostNeedsWin2012Agent(h) {
+		const win2012 = "aiops-agent-windows-amd64-win2012.exe"
+		if s == nil || s.distDir == "" {
+			return "", false
+		}
+		if _, err := os.Stat(filepath.Join(s.distDir, win2012)); err != nil {
+			return "", false
+		}
+		return win2012, true
+	}
 	return s.agentDistResolveNames(agentDistCandidatesForHost(h))
 }
 
@@ -169,8 +180,8 @@ func hostNeedsWin2012Agent(h *Host) bool {
 	return false
 }
 
-// agentDistCandidatesForHost returns download candidates, putting the win2012
-// artifact first for legacy Windows hosts.
+// agentDistCandidatesForHost returns download candidates. For legacy Windows
+// hosts the list is ONLY the win2012 artifact (no modern PE fallback).
 func agentDistCandidatesForHost(h *Host) []string {
 	goos, goarch := hostGOOSArch(h)
 	cands := agentDistCandidates(goos, goarch)
@@ -178,13 +189,7 @@ func agentDistCandidatesForHost(h *Host) []string {
 		return cands
 	}
 	const win2012 = "aiops-agent-windows-amd64-win2012.exe"
-	out := []string{win2012}
-	for _, c := range cands {
-		if c != win2012 {
-			out = append(out, c)
-		}
-	}
-	return out
+	return []string{win2012}
 }
 
 func fileSHA256HexServer(path string) (string, error) {

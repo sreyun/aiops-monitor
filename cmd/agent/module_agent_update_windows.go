@@ -16,6 +16,7 @@ import (
 // and brings the agent back via --install-service (or Start-Service), never as a
 // bare Start-Process without --config (that breaks terminal + desktop worker).
 func agentReplaceAndRestart(exe, staging, cfgPath string) error {
+	ensureWindowsProcessPath()
 	dir := filepath.Dir(exe)
 	helper := filepath.Join(dir, "aiops-agent-update-helper.ps1")
 	logPath := filepath.Join(dir, "aiops-agent-update.log")
@@ -32,8 +33,10 @@ func agentReplaceAndRestart(exe, staging, cfgPath string) error {
 			return fmt.Errorf("write helper: %v / %v", err, err2)
 		}
 	}
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper)
+	ps := windowsPowerShellPath()
+	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper)
 	cmd.Dir = dir
+	cmd.Env = enrichWindowsShellEnv(os.Environ())
 	// DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP so the helper survives service stop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: 0x00000008 | 0x00000200,
@@ -43,9 +46,32 @@ func agentReplaceAndRestart(exe, staging, cfgPath string) error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start helper: %w", err)
+		return fmt.Errorf("start helper (%s): %w", ps, err)
 	}
 	return nil
+}
+
+// windowsPowerShellPath returns an absolute powershell.exe path. LocalSystem
+// services often lack System32\WindowsPowerShell on PATH, so bare "powershell"
+// fails with "executable file not found in %PATH%".
+func windowsPowerShellPath() string {
+	root := windowsSystemRoot()
+	candidates := []string{
+		filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+		filepath.Join(root, "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe"),
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	if p, err := exec.LookPath("powershell.exe"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("powershell"); err == nil {
+		return p
+	}
+	return candidates[0]
 }
 
 // buildWindowsUpdateHelperScript is split out for unit tests.
@@ -62,7 +88,7 @@ function Wait-ServiceState([string]$Name, [string]$Want, [int]$Seconds) {
   return $false
 }
 function Stop-AgentProcesses {
-  Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64','aiops-agent-windows-amd64-win2012' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 function Restart-AgentService {
   param([string]$Exe,[string]$Cfg,[string]$Dir)
@@ -73,7 +99,14 @@ function Restart-AgentService {
     $p = Start-Process -FilePath $Exe -ArgumentList @('--install-service','--config', $Cfg) -WorkingDirectory $Dir -Wait -PassThru -WindowStyle Hidden
     if ($p.ExitCode -eq 0) {
       foreach ($name in @('AiopsMonitorAgent','AIOps-Agent')) {
-        if (Wait-ServiceState $name 'Running' 20) { Write-Log ("service running: " + $name); return $true }
+        if (Wait-ServiceState $name 'Running' 25) {
+          Write-Log ("service running: " + $name)
+          try {
+            $ver = & $Exe --version 2>$null
+            Write-Log ("post-restart version: " + $ver)
+          } catch {}
+          return $true
+        }
       }
     } else {
       Write-Log ("install-service exit=" + $p.ExitCode)
@@ -88,7 +121,7 @@ function Restart-AgentService {
       Write-Log ("Start-Service $name failed: " + $_.Exception.Message)
       continue
     }
-    if (Wait-ServiceState $name 'Running' 20) { Write-Log ("Start-Service ok: " + $name); return $true }
+    if (Wait-ServiceState $name 'Running' 25) { Write-Log ("Start-Service ok: " + $name); return $true }
   }
   # Last resort for non-service installs: REQUIRE --config.
   # Bare Start-Process defaults server to localhost and permanently breaks
@@ -106,8 +139,8 @@ function Restart-AgentService {
     Write-Log ('fallback Start-Process args=' + ($args -join ' '))
     Start-Process -FilePath $Exe -ArgumentList $args -WorkingDirectory $Dir -WindowStyle Hidden
   }
-  Start-Sleep -Seconds 2
-  return [bool](Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue)
+  Start-Sleep -Seconds 3
+  return [bool](Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64','aiops-agent-windows-amd64-win2012' -ErrorAction SilentlyContinue)
 }
 try {
   Start-Sleep -Seconds 3
@@ -124,11 +157,17 @@ try {
     }
   }
   Write-Log ("update begin exe=$exe cfg=$cfg")
+  try {
+    $probe = & $new --version 2>&1 | Out-String
+    Write-Log ("staging --version: " + $probe.Trim())
+  } catch {
+    throw ("staging binary not runnable before swap: " + $_.Exception.Message)
+  }
   foreach ($name in @('AiopsMonitorAgent','AIOps-Agent')) {
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
     if ($svc) {
       try { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue } catch {}
-      [void](Wait-ServiceState $name 'Stopped' 15)
+      [void](Wait-ServiceState $name 'Stopped' 20)
     }
   }
   Stop-AgentProcesses
@@ -136,7 +175,19 @@ try {
   if (Test-Path -LiteralPath $exe) {
     Copy-Item -Force -LiteralPath $exe -Destination $bak
   }
-  Move-Item -Force -LiteralPath $new -Destination $exe
+  # Retry Move-Item — AV / indexer can briefly lock the PE.
+  $moved = $false
+  for ($i=0; $i -lt 8; $i++) {
+    try {
+      Move-Item -Force -LiteralPath $new -Destination $exe
+      $moved = $true
+      break
+    } catch {
+      Write-Log ("Move-Item attempt $($i+1) failed: " + $_.Exception.Message)
+      Start-Sleep -Seconds 1
+    }
+  }
+  if (-not $moved) { throw "Move-Item failed after retries" }
   try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch {}
   if (-not (Restart-AgentService -Exe $exe -Cfg $cfg -Dir $dir)) {
     throw 'agent failed to restart after binary replace'
@@ -150,6 +201,9 @@ try {
     $dir = Split-Path -Parent $exe
     $bak = $exe + '.bak'
     if ((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $exe)) {
+      Copy-Item -Force -LiteralPath $bak -Destination $exe
+    } elseif ((Test-Path -LiteralPath $bak)) {
+      # New PE may be present but broken — restore backup.
       Copy-Item -Force -LiteralPath $bak -Destination $exe
     }
     [void](Restart-AgentService -Exe $exe -Cfg $cfg -Dir $dir)
