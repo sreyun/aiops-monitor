@@ -43,6 +43,7 @@ const (
 	procThreadAttrPseudoConsole = 0x00020016
 	extendedStartupInfoPresent  = 0x00080000
 	startfUseStdHandles         = 0x00000100
+	createUnicodeEnvironment    = 0x00000400
 	infinite                    = 0xFFFFFFFF
 )
 
@@ -148,15 +149,18 @@ func newPTY(cols, rows int) termShell {
 		closeConPTY(hpc, inW, outR)
 		return nil
 	}
-	// Start the shell in the user's home directory (not the agent's CWD).
-	// Validate the path exists — an invalid lpCurrentDirectory makes
-	// CreateProcessW fail silently (r == 0), leaving no terminal at all.
+	// Start the shell in a usable directory (not LocalSystem systemprofile).
 	var cwdPtr uintptr
-	if dir := userHomeDir(); dir != "" {
-		if _, err := os.Stat(dir); err == nil {
-			cwd, _ := syscall.UTF16PtrFromString(dir)
-			cwdPtr = uintptr(unsafe.Pointer(cwd))
-		}
+	if dir := interactiveShellDir(); dir != "" {
+		cwd, _ := syscall.UTF16PtrFromString(dir)
+		cwdPtr = uintptr(unsafe.Pointer(cwd))
+	}
+	envBlock := envToUTF16Block(buildShellEnv())
+	var envPtr uintptr
+	creationFlags := uintptr(extendedStartupInfoPresent)
+	if len(envBlock) > 0 {
+		envPtr = uintptr(unsafe.Pointer(&envBlock[0]))
+		creationFlags |= createUnicodeEnvironment
 	}
 	var pi syscall.ProcessInformation
 	r, _, _ := procCreateProcessW2.Call(
@@ -164,8 +168,8 @@ func newPTY(cols, rows int) termShell {
 		uintptr(unsafe.Pointer(&cmdline[0])), // command line (mutable buffer)
 		0, 0,                                 // process / thread security
 		0,                                    // bInheritHandles = FALSE (ConPTY passes stdio via the attribute)
-		extendedStartupInfoPresent,           // creation flags
-		0, cwdPtr,                            // environment / current dir
+		creationFlags,                        // creation flags
+		envPtr, cwdPtr,                       // environment / current dir
 		uintptr(unsafe.Pointer(&si)),         // lpStartupInfo (STARTUPINFOEX)
 		uintptr(unsafe.Pointer(&pi)),         // lpProcessInformation
 	)
@@ -191,18 +195,31 @@ func closeConPTY(hpc uintptr, inW, outR syscall.Handle) {
 	procCloseHandleT.Call(uintptr(outR))
 }
 
-// shellExe returns the shell to launch (COMSPEC or cmd.exe) with UTF-8 code page.
-// The /K flag runs chcp 65001 before entering interactive mode, ensuring all
-// output is UTF-8 on Chinese Windows (where the default OEM code page is GBK).
-// Additionally, "cd /d %USERPROFILE%" explicitly navigates to the user's home
-// directory — cmd.exe is NOT a login shell and does not auto-cd to HOME like
-// bash -l does, so lpCurrentDirectory alone is insufficient as a safety net.
+// shellExe returns the shell to launch (absolute cmd.exe) with PATH repair +
+// best-effort UTF-8 code page before the interactive prompt.
 func shellExe() string {
-	initCmd := "chcp 65001 >nul & set PYTHONIOENCODING=utf-8 & cd /d %USERPROFILE% 2>nul"
-	if c := os.Getenv("COMSPEC"); c != "" {
-		return c + " /K " + initCmd
+	return windowsCmdPath() + " /K " + windowsShellInitCmd()
+}
+
+// envToUTF16Block builds a Windows CreateProcess environment block
+// (UTF-16LE, KEY=VAL\0 … \0).
+func envToUTF16Block(env []string) []uint16 {
+	if len(env) == 0 {
+		return nil
 	}
-	return "cmd.exe /K " + initCmd
+	var buf []uint16
+	for _, e := range env {
+		u, err := syscall.UTF16FromString(e)
+		if err != nil {
+			continue
+		}
+		buf = append(buf, u...)
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	buf = append(buf, 0) // extra NUL terminator
+	return buf
 }
 
 // ensureUTF8 converts possible non-UTF-8 bytes (GBK on Chinese Windows) to
