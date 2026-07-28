@@ -91,6 +91,74 @@ func TestSetEnvKey(t *testing.T) {
 	}
 }
 
+func TestIsUnixStylePathEnv(t *testing.T) {
+	if !isUnixStylePathEnv("/usr/local/sbin:/usr/bin:/bin") {
+		t.Fatal("expected unix PATH detection")
+	}
+	if isUnixStylePathEnv(`C:\Windows\System32;C:\Windows`) {
+		t.Fatal("windows PATH misclassified")
+	}
+	if isUnixStylePathEnv("") {
+		t.Fatal("empty should be false")
+	}
+}
+
+func TestMergeWindowsPath(t *testing.T) {
+	got := mergeWindowsPath(`C:\Windows`, "/usr/bin:/bin")
+	if !strings.Contains(strings.ToLower(got), `c:\windows\system32`) {
+		t.Fatalf("System32 missing: %q", got)
+	}
+	if strings.Contains(got, "/usr") {
+		t.Fatalf("unix PATH leaked: %q", got)
+	}
+	got2 := mergeWindowsPath(`C:\Windows`, `D:\tools;C:\Windows\System32`)
+	if !strings.HasPrefix(strings.ToLower(got2), `c:\windows\system32`) {
+		t.Fatalf("essential dirs should lead: %q", got2)
+	}
+	if !strings.Contains(strings.ToLower(got2), `d:\tools`) {
+		t.Fatalf("existing entry dropped: %q", got2)
+	}
+}
+
+func TestPipeLocalEcho(t *testing.T) {
+	got := string(pipeLocalEcho([]byte("ipconfig\r")))
+	if got != "ipconfig\r\n" {
+		t.Fatalf("got %q", got)
+	}
+	got = string(pipeLocalEcho([]byte{0x08}))
+	if got != "\b \b" {
+		t.Fatalf("backspace echo %q", got)
+	}
+}
+
+func TestEnrichWindowsShellEnv(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows env enrichment")
+	}
+	env := enrichWindowsShellEnv([]string{"PATH=/usr/bin:/bin"})
+	path := getEnvKey(env, "PATH")
+	if isUnixStylePathEnv(path) || !strings.Contains(strings.ToLower(path), "system32") {
+		t.Fatalf("PATH not repaired: %q", path)
+	}
+	if getEnvKey(env, "SystemRoot") == "" {
+		t.Fatal("SystemRoot missing")
+	}
+	if getEnvKey(env, "ComSpec") == "" {
+		t.Fatal("ComSpec missing")
+	}
+}
+
+func TestBuildShellEnvWindowsHasSystem32(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows")
+	}
+	env := buildShellEnv()
+	path := getEnvKey(env, "PATH")
+	if !strings.Contains(strings.ToLower(path), "system32") {
+		t.Fatalf("buildShellEnv PATH missing System32: %q", path)
+	}
+}
+
 func TestPasswdShellForUIDSelf(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no /etc/passwd")

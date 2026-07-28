@@ -60,12 +60,7 @@ func newPTY(cols, rows int) termShell {
 	// shellPath() never returns nologin (service accounts); -l sources profile.
 	sh := shellPath()
 	env := buildShellEnv()
-	var dir string
-	if h := userHomeDir(); h != "" {
-		if _, err := os.Stat(h); err == nil {
-			dir = h
-		}
-	}
+	dir := interactiveShellDir()
 	// Prefer login+interactive; fall back to interactive-only when -l is rejected
 	// (some busybox ash builds) so the remote terminal still comes up.
 	var cmd *exec.Cmd

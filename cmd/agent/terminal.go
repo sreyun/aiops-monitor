@@ -336,7 +336,11 @@ func runShellCommand(command string) ([]byte, int) {
 		// chcp 会失败——必须用「&」而非「&&」串接：否则 chcp 一失败就短路，真正的命令根本不执行，
 		// cmd 直接返回 chcp 的非零退出码 → 表现为「命令退出码 1」。用「&」则无论 chcp 成败都执行
 		// 命令，退出码取命令自身；chcp 的输出/报错全部丢弃，非 UTF-8 字节仍由上层 ensureUTF8 兜底。
-		cmd = exec.CommandContext(ctx, "cmd", "/c", "chcp 65001 >nul 2>nul & "+command)
+		// Use absolute cmd + PATH repair so LocalSystem playbooks find ipconfig 等.
+		chcp := filepath.Join(windowsSystemRoot(), "System32", "chcp.com")
+		cmd = exec.CommandContext(ctx, windowsCmdPath(), "/c",
+			fmt.Sprintf(`set "PATH=%s;%%PATH%%" & "%s" 65001 >nul 2>nul & %s`,
+				strings.Join(windowsEssentialPathDirs(windowsSystemRoot()), ";"), chcp, command))
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	}
@@ -937,25 +941,188 @@ func setEnvKey(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
+// getEnvKey returns the value for KEY in env (KEY=value), or "".
+func getEnvKey(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return e[len(prefix):]
+		}
+	}
+	return ""
+}
+
+// isUnixStylePathEnv detects a Unix PATH wrongly applied on Windows
+// (historically buildShellEnv filled /usr/... when PATH was missing).
+func isUnixStylePathEnv(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return false
+	}
+	if strings.Contains(p, `\`) || strings.Contains(p, ";") {
+		return false
+	}
+	if strings.HasPrefix(p, "/usr") || strings.HasPrefix(p, "/bin") || strings.HasPrefix(p, "/sbin") {
+		return true
+	}
+	return strings.Contains(p, ":/bin") || strings.Contains(p, ":/usr") || strings.Contains(p, ":/sbin")
+}
+
+// windowsSystemRoot returns %SystemRoot% / %windir%, defaulting to C:\Windows.
+func windowsSystemRoot() string {
+	if r := strings.TrimSpace(os.Getenv("SystemRoot")); r != "" {
+		return r
+	}
+	if r := strings.TrimSpace(os.Getenv("windir")); r != "" {
+		return r
+	}
+	return `C:\Windows`
+}
+
+// windowsEssentialPathDirs are directories that must be on PATH for interactive
+// cmd.exe (ipconfig, chcp, ping, …). LocalSystem services often inherit an
+// empty or truncated PATH.
+func windowsEssentialPathDirs(root string) []string {
+	sys32 := filepath.Join(root, "System32")
+	return []string{
+		sys32,
+		root,
+		filepath.Join(sys32, "Wbem"),
+		filepath.Join(sys32, "WindowsPowerShell", "v1.0"),
+	}
+}
+
+// mergeWindowsPath prepends essential System32 dirs; drops a Unix-style PATH.
+func mergeWindowsPath(root, existing string) string {
+	if isUnixStylePathEnv(existing) {
+		existing = ""
+	}
+	essential := windowsEssentialPathDirs(root)
+	seen := map[string]bool{}
+	var parts []string
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		key := strings.ToLower(dir)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		parts = append(parts, dir)
+	}
+	for _, d := range essential {
+		add(d)
+	}
+	for _, d := range strings.Split(existing, ";") {
+		add(d)
+	}
+	return strings.Join(parts, ";")
+}
+
+// enrichWindowsShellEnv forces SystemRoot/ComSpec/PATH so remote cmd can find
+// standard tools when the agent runs as a LocalSystem Windows service.
+func enrichWindowsShellEnv(env []string) []string {
+	root := windowsSystemRoot()
+	sys32 := filepath.Join(root, "System32")
+	env = setEnvKey(env, "SystemRoot", root)
+	env = setEnvKey(env, "windir", root)
+	if getEnvKey(env, "SystemDrive") == "" {
+		drive := filepath.VolumeName(root)
+		if drive == "" {
+			drive = "C:"
+		}
+		env = setEnvKey(env, "SystemDrive", drive)
+	}
+	comspec := filepath.Join(sys32, "cmd.exe")
+	if c := getEnvKey(env, "ComSpec"); c == "" {
+		if c = strings.TrimSpace(os.Getenv("ComSpec")); c == "" {
+			c = comspec
+		}
+		env = setEnvKey(env, "ComSpec", c)
+	}
+	env = setEnvKey(env, "PATH", mergeWindowsPath(root, getEnvKey(env, "PATH")))
+	if getEnvKey(env, "PATHEXT") == "" {
+		env = setEnvKey(env, "PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")
+	}
+	return env
+}
+
+// windowsCmdPath returns an absolute path to cmd.exe.
+func windowsCmdPath() string {
+	if c := strings.TrimSpace(os.Getenv("ComSpec")); c != "" {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	p := filepath.Join(windowsSystemRoot(), "System32", "cmd.exe")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return "cmd.exe"
+}
+
+// windowsShellInitCmd runs before the interactive prompt: repair PATH, best-effort
+// UTF-8 code page, then cd to a usable directory (not SYSTEM's profile).
+func windowsShellInitCmd() string {
+	root := windowsSystemRoot()
+	sys32 := filepath.Join(root, "System32")
+	pathPre := strings.Join(windowsEssentialPathDirs(root), ";")
+	chcp := filepath.Join(sys32, "chcp.com")
+	drive := strings.TrimSpace(os.Getenv("SystemDrive"))
+	if drive == "" {
+		drive = filepath.VolumeName(root)
+	}
+	if drive == "" {
+		drive = "C:"
+	}
+	// Absolute chcp path works even if PATH was still broken at process create.
+	return fmt.Sprintf(
+		`set "PATH=%s;%%PATH%%" & "%s" 65001 >nul 2>nul & set PYTHONIOENCODING=utf-8 & cd /d %s\ 2>nul`,
+		pathPre, chcp, drive,
+	)
+}
+
+// interactiveShellDir is the cwd for a remote interactive shell. Avoid starting
+// in LocalSystem's systemprofile (confusing and often PATH-poor context).
+func interactiveShellDir() string {
+	if dir := userHomeDir(); dir != "" {
+		low := strings.ToLower(filepath.Clean(dir))
+		if !strings.Contains(low, "systemprofile") {
+			if _, err := os.Stat(dir); err == nil {
+				return dir
+			}
+		}
+	}
+	if runtime.GOOS == "windows" {
+		drive := strings.TrimSpace(os.Getenv("SystemDrive"))
+		if drive == "" {
+			drive = "C:"
+		}
+		root := drive + `\`
+		if _, err := os.Stat(root); err == nil {
+			return root
+		}
+	}
+	return ""
+}
+
 // buildShellEnv returns a full environment for the spawned shell, filling in
 // HOME/USER/PATH/SHELL when the parent process (e.g. systemd) lacks them.
 // Without HOME, bash prints "cd: HOME not set" and can't resolve ~ paths.
 func buildShellEnv() []string {
 	env := os.Environ()
 	has := func(key string) bool {
-		prefix := key + "="
-		for _, e := range env {
-			if strings.HasPrefix(e, prefix) {
-				return true
-			}
-		}
-		return false
+		return getEnvKey(env, key) != ""
 	}
 	// On Unix, ALWAYS force HOME to the correct user home directory.
 	// The interactive shell is a separate session for the remote operator —
 	// the agent's inherited HOME (from systemd, sudo, etc.) is often wrong
 	// (e.g. /opt/AIOps-agent). Login shell "cd $HOME" depends on this value.
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS == "windows" {
+		env = enrichWindowsShellEnv(env)
+	} else {
 		if h := userHomeDir(); h != "" {
 			env = setEnvKey(env, "HOME", h)
 		}
@@ -970,15 +1137,17 @@ func buildShellEnv() []string {
 		// Always overwrite SHELL: systemd injects the passwd shell for User=,
 		// which is /sbin/nologin for the hardened "aiops" service account.
 		env = setEnvKey(env, "SHELL", shellPath())
-	}
-	if !has("PATH") {
-		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		if !has("PATH") {
+			env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
 	}
 	env = append(env, "TERM=xterm-256color")
 	// Ensure UTF-8 locale on Linux/macOS so command output (including Chinese)
 	// is encoded as UTF-8 rather than the legacy C locale.
 	if runtime.GOOS != "windows" {
 		env = append(env, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	} else {
+		env = setEnvKey(env, "PYTHONIOENCODING", "utf-8")
 	}
 	return env
 }
@@ -993,9 +1162,9 @@ func execEnv() []string {
 		// the C locale which mangles non-ASCII output.
 		env = append(env, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
 	} else {
-		// Windows: chcp 65001 sets the console code page, but Python and other
-		// runtimes also check these env vars for UTF-8 I/O.
-		env = append(env, "PYTHONIOENCODING=utf-8")
+		// LocalSystem services often lack System32 on PATH — same fix as interactive.
+		env = enrichWindowsShellEnv(env)
+		env = setEnvKey(env, "PYTHONIOENCODING", "utf-8")
 	}
 	return env
 }
@@ -1013,6 +1182,12 @@ func startShell(cols, rows int) termShell {
 // Used on Windows Server 2012 / Win8 (no ConPTY) and as a last-resort elsewhere.
 // Piped cmd.exe ignores chcp for redirected stdout and emits ACP (GBK) + often
 // bare LF — without conversion the browser shows � and staircase prompts.
+// Redirected stdin also disables console echo, so we locally echo keystrokes.
+
+type pipeChunk struct {
+	data []byte
+	err  error
+}
 
 type pipeShell struct {
 	cmd       *exec.Cmd
@@ -1021,19 +1196,20 @@ type pipeShell struct {
 	convBuf   []byte // leftover UTF-8 after a short Read buffer
 	rawPend   []byte // incomplete ACP/MBCS bytes waiting for the next Read
 	lastWasCR bool   // CRLF normalizer state across Read calls
+
+	echoOn   bool
+	echoMu   sync.Mutex
+	echoBuf  []byte
+	echoWake chan struct{}
+	readCh   chan pipeChunk
 }
 
 func newPipeShell() termShell {
 	name, args := shellCommand()
 	cmd := exec.Command(name, args...)
 	cmd.Env = buildShellEnv()
-	// Set working directory to user home — validate the path exists to
-	// avoid cmd.Start() failing on non-existent directories (e.g. unmounted
-	// network homes). Gracefully degrade: skip cmd.Dir if invalid.
-	if dir := userHomeDir(); dir != "" {
-		if _, err := os.Stat(dir); err == nil {
-			cmd.Dir = dir
-		}
+	if dir := interactiveShellDir(); dir != "" {
+		cmd.Dir = dir
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1054,33 +1230,130 @@ func newPipeShell() termShell {
 		return nil
 	}
 	_ = pw.Close() // parent drops its write end so pr EOFs when the shell exits
-	return &pipeShell{cmd: cmd, stdin: stdin, out: pr}
+	p := &pipeShell{
+		cmd:      cmd,
+		stdin:    stdin,
+		out:      pr,
+		echoOn:   true, // no TTY echo with redirected stdin
+		echoWake: make(chan struct{}, 1),
+		readCh:   make(chan pipeChunk, 32),
+	}
+	go p.pumpStdout()
+	return p
+}
+
+func (p *pipeShell) pumpStdout() {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := p.out.Read(buf)
+		if n > 0 {
+			chunk := append(append([]byte{}, p.rawPend...), buf[:n]...)
+			converted, hold := ensureUTF8Hold(chunk)
+			p.rawPend = hold
+			normalized := normalizeOutputNewlines(converted, &p.lastWasCR)
+			if len(normalized) > 0 {
+				p.readCh <- pipeChunk{data: normalized}
+			}
+		}
+		if err != nil {
+			p.readCh <- pipeChunk{err: err}
+			close(p.readCh)
+			return
+		}
+	}
+}
+
+func (p *pipeShell) takeEcho(b []byte) int {
+	p.echoMu.Lock()
+	defer p.echoMu.Unlock()
+	if len(p.echoBuf) == 0 {
+		return 0
+	}
+	n := copy(b, p.echoBuf)
+	p.echoBuf = p.echoBuf[n:]
+	return n
+}
+
+func (p *pipeShell) pushEcho(data []byte) {
+	if !p.echoOn || len(data) == 0 {
+		return
+	}
+	echo := pipeLocalEcho(data)
+	if len(echo) == 0 {
+		return
+	}
+	p.echoMu.Lock()
+	p.echoBuf = append(p.echoBuf, echo...)
+	p.echoMu.Unlock()
+	select {
+	case p.echoWake <- struct{}{}:
+	default:
+	}
+}
+
+// pipeLocalEcho turns keystrokes into display bytes for pipe-mode shells
+// (redirected cmd has no console echo).
+func pipeLocalEcho(in []byte) []byte {
+	out := make([]byte, 0, len(in)+2)
+	for _, c := range in {
+		switch c {
+		case '\r', '\n':
+			out = append(out, '\r', '\n')
+		case 0x08, 0x7f: // BS / DEL
+			out = append(out, '\b', ' ', '\b')
+		case 0x03: // Ctrl+C
+			out = append(out, '^', 'C')
+		default:
+			if c >= 32 || c == '\t' {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 func (p *pipeShell) Read(b []byte) (int, error) {
-	if len(p.convBuf) > 0 {
-		n := copy(b, p.convBuf)
-		p.convBuf = p.convBuf[n:]
-		return n, nil
+	for {
+		if len(p.convBuf) > 0 {
+			n := copy(b, p.convBuf)
+			p.convBuf = p.convBuf[n:]
+			return n, nil
+		}
+		if n := p.takeEcho(b); n > 0 {
+			return n, nil
+		}
+		select {
+		case <-p.echoWake:
+			continue
+		case chunk, ok := <-p.readCh:
+			if !ok {
+				if n := p.takeEcho(b); n > 0 {
+					return n, nil
+				}
+				return 0, io.EOF
+			}
+			if len(chunk.data) > 0 {
+				if len(chunk.data) <= len(b) {
+					return copy(b, chunk.data), chunk.err
+				}
+				n := copy(b, chunk.data)
+				p.convBuf = append(p.convBuf[:0], chunk.data[n:]...)
+				return n, nil
+			}
+			if chunk.err != nil {
+				if n := p.takeEcho(b); n > 0 {
+					return n, nil
+				}
+				return 0, chunk.err
+			}
+		}
 	}
-	tmp := make([]byte, len(b))
-	n, err := p.out.Read(tmp)
-	if n <= 0 {
-		return 0, err
-	}
-	chunk := append(append([]byte{}, p.rawPend...), tmp[:n]...)
-	converted, hold := ensureUTF8Hold(chunk)
-	p.rawPend = hold
-	normalized := normalizeOutputNewlines(converted, &p.lastWasCR)
-	if len(normalized) <= len(b) {
-		return copy(b, normalized), err
-	}
-	copied := copy(b, normalized)
-	p.convBuf = append(p.convBuf[:0], normalized[copied:]...)
-	return copied, err
 }
 
 func (p *pipeShell) Write(b []byte) (int, error) {
+	// Local echo first so keystrokes appear immediately (Read may be blocked
+	// on shell output otherwise).
+	p.pushEcho(b)
 	// No PTY → no kernel CR→LF translation, so map Enter (CR) to LF here.
 	data := make([]byte, len(b))
 	copy(data, b)
@@ -1146,18 +1419,11 @@ func normalizeOutputNewlines(in []byte, lastWasCR *bool) []byte {
 }
 
 // shellCommand picks the interactive shell per OS (used by the piped fallback).
-// On Windows, /K chcp 65001 is best-effort for console hosts; redirected pipes
-// still emit ACP and rely on pipeShell.Read → ensureUTF8Hold.
-// "cd /d %USERPROFILE%" explicitly navigates to the user's home directory.
+// On Windows, /K init repairs PATH + best-effort chcp; redirected pipes still
+// emit ACP and rely on pipeShell.Read → ensureUTF8Hold.
 func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
-		// Force UTF-8 code page + disable echo of the chcp line; then go home.
-		// PROMPT is left default so operators still see drive:\path>.
-		initCmd := "chcp 65001 >nul & set PYTHONIOENCODING=utf-8 & cd /d %USERPROFILE% 2>nul"
-		if c := os.Getenv("COMSPEC"); c != "" {
-			return c, []string{"/K", initCmd}
-		}
-		return "cmd.exe", []string{"/K", initCmd}
+		return windowsCmdPath(), []string{"/K", windowsShellInitCmd()}
 	}
 	return shellPath(), []string{"-l", "-i"} // -l: login shell
 }
