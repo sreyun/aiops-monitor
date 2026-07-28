@@ -1010,11 +1010,17 @@ func startShell(cols, rows int) termShell {
 }
 
 // ---- piped fallback (no PTY) ----
+// Used on Windows Server 2012 / Win8 (no ConPTY) and as a last-resort elsewhere.
+// Piped cmd.exe ignores chcp for redirected stdout and emits ACP (GBK) + often
+// bare LF — without conversion the browser shows � and staircase prompts.
 
 type pipeShell struct {
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	out   *os.File
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	out       *os.File
+	convBuf   []byte // leftover UTF-8 after a short Read buffer
+	rawPend   []byte // incomplete ACP/MBCS bytes waiting for the next Read
+	lastWasCR bool   // CRLF normalizer state across Read calls
 }
 
 func newPipeShell() termShell {
@@ -1051,7 +1057,29 @@ func newPipeShell() termShell {
 	return &pipeShell{cmd: cmd, stdin: stdin, out: pr}
 }
 
-func (p *pipeShell) Read(b []byte) (int, error) { return p.out.Read(b) }
+func (p *pipeShell) Read(b []byte) (int, error) {
+	if len(p.convBuf) > 0 {
+		n := copy(b, p.convBuf)
+		p.convBuf = p.convBuf[n:]
+		return n, nil
+	}
+	tmp := make([]byte, len(b))
+	n, err := p.out.Read(tmp)
+	if n <= 0 {
+		return 0, err
+	}
+	chunk := append(append([]byte{}, p.rawPend...), tmp[:n]...)
+	converted, hold := ensureUTF8Hold(chunk)
+	p.rawPend = hold
+	normalized := normalizeOutputNewlines(converted, &p.lastWasCR)
+	if len(normalized) <= len(b) {
+		return copy(b, normalized), err
+	}
+	copied := copy(b, normalized)
+	p.convBuf = append(p.convBuf[:0], normalized[copied:]...)
+	return copied, err
+}
+
 func (p *pipeShell) Write(b []byte) (int, error) {
 	// No PTY → no kernel CR→LF translation, so map Enter (CR) to LF here.
 	data := make([]byte, len(b))
@@ -1073,12 +1101,59 @@ func (p *pipeShell) Close() error {
 	return nil
 }
 
+// normalizeOutputNewlines turns bare LF into CRLF so the web VT (which treats
+// LF as "row++" without resetting column) does not draw staircase prompts.
+// Already-correct CRLF sequences are left alone.
+func normalizeOutputNewlines(in []byte, lastWasCR *bool) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	need := false
+	prevCR := false
+	if lastWasCR != nil {
+		prevCR = *lastWasCR
+	}
+	for _, c := range in {
+		if c == '\n' && !prevCR {
+			need = true
+			break
+		}
+		prevCR = c == '\r'
+	}
+	if !need {
+		if lastWasCR != nil {
+			*lastWasCR = in[len(in)-1] == '\r'
+		}
+		return in
+	}
+	out := make([]byte, 0, len(in)+8)
+	prevCR = false
+	if lastWasCR != nil {
+		prevCR = *lastWasCR
+	}
+	for _, c := range in {
+		if c == '\n' && !prevCR {
+			out = append(out, '\r', '\n')
+		} else {
+			out = append(out, c)
+		}
+		prevCR = c == '\r'
+	}
+	if lastWasCR != nil {
+		*lastWasCR = prevCR
+	}
+	return out
+}
+
 // shellCommand picks the interactive shell per OS (used by the piped fallback).
-// On Windows, /K chcp 65001 forces UTF-8 output so Chinese text is not garbled.
+// On Windows, /K chcp 65001 is best-effort for console hosts; redirected pipes
+// still emit ACP and rely on pipeShell.Read → ensureUTF8Hold.
 // "cd /d %USERPROFILE%" explicitly navigates to the user's home directory.
 func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
-		initCmd := "chcp 65001 >nul & cd /d %USERPROFILE% 2>nul"
+		// Force UTF-8 code page + disable echo of the chcp line; then go home.
+		// PROMPT is left default so operators still see drive:\path>.
+		initCmd := "chcp 65001 >nul & set PYTHONIOENCODING=utf-8 & cd /d %USERPROFILE% 2>nul"
 		if c := os.Getenv("COMSPEC"); c != "" {
 			return c, []string{"/K", initCmd}
 		}
