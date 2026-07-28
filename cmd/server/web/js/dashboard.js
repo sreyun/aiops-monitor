@@ -867,17 +867,21 @@ function endDashLayoutDrag(commit) {
 }
 
 // dashEmptyHint：无数据时给可操作提示；仅当面板表达式仍残留 label="$var"（等值）时才强调 =~。
-function dashEmptyHint(extra) {
+function dashEmptyHint(extra, panel) {
   const hasAll = Object.values(DASH_VARVALS || {}).some(v => v === "$__all" || v === "All" || v === "" || v === ".*");
   let hint = "";
-  if (hasAll) {
+  const exprs = (panel && Array.isArray(panel.targets) ? panel.targets : [])
+    .map(t => String((t && t.expr) || "")).join(" ");
+  if (/\bnode_[a-zA-Z0-9_]+/.test(exprs)) {
+    hint = `<div class="dash-empty-hint">该面板仍在查询 Grafana node_* 指标；本平台 Agent 写入的是 aiops_*（如 aiops_cpu_percent）。请重新「AI 优化」或手动改查询。</div>`;
+  } else if (hasAll) {
     const eqVar = /\b[a-zA-Z_][\w]*\s*=\s*"\$/;
     const stillEq = !!(CUR_DASH && Array.isArray(CUR_DASH.panels) && CUR_DASH.panels.some(p =>
       (p.targets || []).some(t => eqVar.test(String(t.expr || "")))));
     if (stillEq) {
       hint = `<div class="dash-empty-hint">模板变量为「全部」时，查询需用 instance=~"$instance"（勿用 =）</div>`;
     } else {
-      hint = `<div class="dash-empty-hint">当前为「全部」；若持续无数据请检查数据源是否含该指标（Grafana 社区看板多为 node_*）</div>`;
+      hint = `<div class="dash-empty-hint">当前为「全部」；若持续无数据请检查查询是否为 aiops_* 指标（勿用 Grafana 社区的 node_*）</div>`;
     }
   }
   return `<div class="dash-empty">${extra || "该范围无数据"}${hint}</div>`;
@@ -1245,7 +1249,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
     if (useForecastAPI && collected.length >= 32) break;
   }
   if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
-  if (!collected.length) { body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据"); return; }
+  if (!collected.length) { body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据", p); return; }
   const histOnly = collected.filter(c => !c.kind || c.kind === "history");
   const labels = dashLegends(histOnly.length ? histOnly : collected);
   let li = 0;

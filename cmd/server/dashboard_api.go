@@ -164,6 +164,18 @@ func validatePanelQueryReq(req *panelQueryReq, withRange, logs bool) error {
 	return nil
 }
 
+// healPanelQueryExpr 对内置 VictoriaMetrics 上的 Grafana node_* 公式做运行时纠偏，
+// 让存量 AI 看板在未重新保存时也能出图。外部数据源可能真有 node_exporter，不改写。
+func healPanelQueryExpr(dsID, expr string) string {
+	if strings.TrimSpace(dsID) != "" {
+		return expr
+	}
+	if !dashExprHasNodeMetric(expr) {
+		return expr
+	}
+	return healAIDashExpr(expr)
+}
+
 func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
 	var req panelQueryReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -185,7 +197,7 @@ func (s *Server) handleDashboardQuery(w http.ResponseWriter, r *http.Request) {
 			req.Step = 15
 		}
 	}
-	expr := substituteVars(req.Expr, req.Vars, req.Step, rangeSec)
+	expr := substituteVars(healPanelQueryExpr(req.DataSource, req.Expr), req.Vars, req.Step, rangeSec)
 	series, ok := s.dashRangeSeries(req.DataSource, expr, req.From, req.To, req.Step)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": true, "error": "查询失败（表达式或数据源）"})
@@ -209,7 +221,7 @@ func (s *Server) handleDashboardQueryInstant(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": false})
 		return
 	}
-	expr := substituteVars(req.Expr, req.Vars, 60, 3600)
+	expr := substituteVars(healPanelQueryExpr(req.DataSource, req.Expr), req.Vars, 60, 3600)
 	vec, ok := s.dashVector(req.DataSource, expr)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"series": []any{}, "available": true, "error": "查询失败（表达式或数据源）"})
