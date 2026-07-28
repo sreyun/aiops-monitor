@@ -10,7 +10,7 @@
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Arch](https://img.shields.io/badge/Arch-AMD64%20%7C%20ARM64-orange)]()
 
-**[中文](README.md) · [English](README_EN.md)**
+**[中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)**
 
 </div>
 

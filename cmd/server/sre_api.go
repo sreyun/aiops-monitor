@@ -3811,7 +3811,21 @@ func (s *Server) handleSreyunSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": msgs})
+	// 将 assistant.actions JSON 字符串解码为数组，便于前端直接渲染图表/组件。
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		item := map[string]any{"role": m["role"], "content": m["content"]}
+		if acts := strings.TrimSpace(m["actions"]); acts != "" && acts != "null" && acts != "[]" {
+			var parsed any
+			if json.Unmarshal([]byte(acts), &parsed) == nil {
+				item["actions"] = parsed
+			} else {
+				item["actions"] = acts
+			}
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": out})
 }
 
 // handleSreyunSessionUndo 撤销会话最后一轮问答（删除末尾 assistant + user 各一条），

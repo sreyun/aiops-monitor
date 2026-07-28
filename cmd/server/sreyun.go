@@ -1108,11 +1108,11 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 		writeRAGMetaFull(w, memHits, skillHits, deg, skillNames, cites)
 	}
 
-	// Build messages
+	// Build messages（喂给 LLM 时剥离 actions 等会话元数据，避免污染上下文 / 触发 Provider 校验失败）
 	msgs := []map[string]string{{"role": "system", "content": sys}}
 	// 上下文压缩：历史超预算时，把较旧轮次用 AI 摘成要点、保留最近若干轮原文——替代此前的朴素
 	// 字符串截断，避免丢失早期关键上下文。摘要增量缓存在 session 上，只对「新变旧」的段落重算。
-	compressed, newSummary, newCount := compressHistory(cfg, session.Messages, 12, session.Summary, session.SummarizedCount)
+	compressed, newSummary, newCount := compressHistory(cfg, llmHistoryMessages(session.Messages), 12, session.Summary, session.SummarizedCount)
 	session.Summary, session.SummarizedCount = newSummary, newCount
 	msgs = append(msgs, compressed...)
 	msgs = append(msgs, map[string]string{"role": "user", "content": userMsg})
@@ -1123,10 +1123,16 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 		return "", meta, err
 	}
 	meta.Citations = len(cites) + len(h.turnCites.snapshot())
-	// Update session
+	// Update session — assistant 消息永久附带 UI actions（图表/指标卡等），供历史会话还原与导出。
+	asstMsg := map[string]string{"role": "assistant", "content": fullReply}
+	if len(meta.Actions) > 0 {
+		if rawActs, err := json.Marshal(meta.Actions); err == nil && len(rawActs) > 0 {
+			asstMsg["actions"] = string(rawActs)
+		}
+	}
 	session.Messages = append(session.Messages,
 		map[string]string{"role": "user", "content": userMsg},
-		map[string]string{"role": "assistant", "content": fullReply},
+		asstMsg,
 	)
 	// Persist to PG
 	if h.s.pg != nil {
@@ -1836,16 +1842,36 @@ func (h *SreyunCore) resolveSession(sessionID int64, history []map[string]string
 }
 
 // sanitizeHistory 清洗前端传入的会话历史：仅保留合法的 user/assistant 非空消息，并限制最近 40 条。
+// 保留 assistant.actions（JSON 字符串）以便无 PG 兜底时图表/组件不丢。
 func sanitizeHistory(history []map[string]string) []map[string]string {
 	out := make([]map[string]string, 0, len(history))
 	for _, m := range history {
 		role, content := m["role"], m["content"]
 		if (role == "user" || role == "assistant") && strings.TrimSpace(content) != "" {
-			out = append(out, map[string]string{"role": role, "content": content})
+			item := map[string]string{"role": role, "content": content}
+			if role == "assistant" {
+				if acts := strings.TrimSpace(m["actions"]); acts != "" && acts != "null" && acts != "[]" {
+					item["actions"] = acts
+				}
+			}
+			out = append(out, item)
 		}
 	}
 	if len(out) > 40 {
 		out = out[len(out)-40:]
+	}
+	return out
+}
+
+// llmHistoryMessages 仅保留 role/content，供压缩与 Provider 调用使用。
+func llmHistoryMessages(history []map[string]string) []map[string]string {
+	out := make([]map[string]string, 0, len(history))
+	for _, m := range history {
+		role, content := m["role"], m["content"]
+		if role == "" {
+			continue
+		}
+		out = append(out, map[string]string{"role": role, "content": content})
 	}
 	return out
 }

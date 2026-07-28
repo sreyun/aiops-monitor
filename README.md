@@ -6,7 +6,7 @@
 >
 > **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
 
-**语言 / Languages：** [简体中文](README.md) · [English](README.md) · [日本語](README.ja.md)
+**语言 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 ---
 
@@ -122,7 +122,7 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 
 ### 部署与体验
 
-- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。（营销站点 `website/` 已支持 简中 / 繁中 / English / 日本語 四语）
+- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。（营销站点 `website/` 已支持 简中 / 繁中 / English / 日本語 / 한국어 五语）
 - **多服务端广播**：一次采集，并发上报到多个服务端（跨机房容灾）。
 - **网关中继**：内网仅一台联网机器代理所有上报到云端。
 
@@ -292,7 +292,7 @@ graph TB
    - Go 代码使用 `gofmt` / `go vet`；新增逻辑请附测试。
    - 服务端零框架、零 CGO；保持单二进制、零第三方依赖的 Agent 原则。
    - 提交信息清晰表达「为什么」。
-4. **国际化**：营销网站支持 简中 / 繁中 / English / 日本語 四语，管理面板支持 简中 / 繁中 / English 三语。新增文案请在对应语言字典中同步（营销网站：`website/js/i18n.js` 与 `website/js/i18n-extra.js`；管理面板：`cmd/server/web/` 下 `i18n-dashboard*.js`。面板流程：改权威字典 → 补英文 → 跑 `build_en` / `build_tw` → 校验 parity → `go build` 重嵌）。
+4. **国际化**：营销网站支持 简中 / 繁中 / English / 日本語 / 한국어 五语，管理面板支持 简中 / 繁中 / English 三语。新增文案请在对应语言字典中同步（营销网站：`website/js/i18n.js` 与 `website/js/i18n-extra.js`；管理面板：`cmd/server/web/` 下 `i18n-dashboard*.js`。面板流程：改权威字典 → 补英文 → 跑 `build_en` / `build_tw` → 校验 parity → `go build` 重嵌）。
 5. **提交 PR**：Fork → 分支开发 → 描述变更与测试 → 等待 CI 与评审。
 6. **安全漏洞**：请勿公开 Issue，通过私信 / 安全渠道报告，我们将优先处理。
 7. **开发者详细规范**见 [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南)。
