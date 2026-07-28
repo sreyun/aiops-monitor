@@ -38,4 +38,14 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 	if !strings.Contains(script, "Move-Item attempt") {
 		t.Fatal("helper must retry Move-Item under AV locks")
 	}
+	// Pre-swap failures must not restore a leftover .bak over a still-good PE.
+	if !strings.Contains(script, "$swapped = $false") || !strings.Contains(script, "$swapped = $true") {
+		t.Fatal("helper must track $swapped around Move-Item")
+	}
+	if !strings.Contains(script, "$swapped -or -not (Test-Path -LiteralPath $exe)") {
+		t.Fatal("helper must restore .bak only after swap or when exe is missing")
+	}
+	if strings.Contains(script, "elseif ((Test-Path -LiteralPath $bak))") {
+		t.Fatal("helper must not unconditionally restore .bak whenever it exists")
+	}
 }

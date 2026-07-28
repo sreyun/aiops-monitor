@@ -149,6 +149,10 @@ try {
   $cfg = '%s'
   $dir = Split-Path -Parent $exe
   $bak = $exe + '.bak'
+  # Only restore .bak after a successful swap. Restoring on any pre-swap
+  # failure (stale leftover .bak, Copy-Item refresh fail, Move-Item fail)
+  # would silently downgrade a still-good current PE.
+  $swapped = $false
   if (-not (Test-Path -LiteralPath $new)) { throw "staging missing: $new" }
   if (-not $cfg) {
     foreach ($n in @('config.yaml','config.yml','config.json')) {
@@ -188,6 +192,7 @@ try {
     }
   }
   if (-not $moved) { throw "Move-Item failed after retries" }
+  $swapped = $true
   try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch {}
   if (-not (Restart-AgentService -Exe $exe -Cfg $cfg -Dir $dir)) {
     throw 'agent failed to restart after binary replace'
@@ -200,11 +205,12 @@ try {
     $cfg = '%s'
     $dir = Split-Path -Parent $exe
     $bak = $exe + '.bak'
-    if ((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $exe)) {
+    # Restore only when this run swapped (new PE may be broken) or exe is gone.
+    if ((Test-Path -LiteralPath $bak) -and ($swapped -or -not (Test-Path -LiteralPath $exe))) {
+      Write-Log ("restoring backup (swapped=$swapped)")
       Copy-Item -Force -LiteralPath $bak -Destination $exe
-    } elseif ((Test-Path -LiteralPath $bak)) {
-      # New PE may be present but broken — restore backup.
-      Copy-Item -Force -LiteralPath $bak -Destination $exe
+    } else {
+      Write-Log ("skip backup restore (swapped=$swapped exe_exists=$((Test-Path -LiteralPath $exe)))")
     }
     [void](Restart-AgentService -Exe $exe -Cfg $cfg -Dir $dir)
   } catch {}
