@@ -33,7 +33,7 @@ type SMTPConfig struct {
 	Port     int    `json:"smtp_port"`     // 465 (implicit TLS) or 587 (STARTTLS)
 	Username string `json:"smtp_username"` // sender email account
 	Password string `json:"smtp_password,omitempty"`
-	FromName string `json:"smtp_from_name"` // display name, default "AIOps Monitor"
+	FromName string `json:"smtp_from_name"` // display name, default "AIOps"
 	UseTLS   bool   `json:"smtp_use_tls"`   // true = implicit TLS (465), false = STARTTLS/plain
 }
 
@@ -545,6 +545,8 @@ type ServerConfig struct {
 	RemoteGateDisabled bool `json:"remote_gate_disabled,omitempty"`
 	// RemoteGateMode：空=freeze_or_highrisk。
 	RemoteGateMode string `json:"remote_gate_mode,omitempty"`
+	// RequireTerminalPassword：为 true 时，未设置终端二次密码的账号禁止打开终端（默认 true）。
+	RequireTerminalPassword *bool `json:"require_terminal_password,omitempty"`
 	AI                 AIConfig            `json:"ai,omitempty"`           // optional AI provider for inspection/diagnosis
 	VM                 VMConfig            `json:"vm,omitempty"`           // optional VictoriaMetrics writer (usually set via AIOPS_VM_URL)
 	PostgresDSN        string              `json:"postgres_dsn,omitempty"` // optional PostgreSQL DSN (usually via AIOPS_POSTGRES_DSN)
@@ -645,7 +647,7 @@ func defaultServerConfig() ServerConfig {
 		Thresholds:       defaultThresholdConfig(),
 		Categories:       map[string]string{},
 		SMTP: SMTPConfig{
-			FromName: "AIOps Monitor",
+			FromName: "AIOps",
 		},
 		HostSecurity: HostSecurityConfig{
 			EnableClamAV: true,
@@ -936,6 +938,17 @@ func (cs *ConfigStore) AgentTokenRequired() bool {
 
 // TerminalEnabled reports whether the remote terminal feature is available
 // (default true; disabled only when terminal_disabled is set in config).
+// RequireTerminalPassword reports whether terminal secondary password is mandatory.
+// Default true when unset (pointer nil).
+func (cs *ConfigStore) RequireTerminalPassword() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.cfg.RequireTerminalPassword == nil {
+		return true
+	}
+	return *cs.cfg.RequireTerminalPassword
+}
+
 func (cs *ConfigStore) TerminalEnabled() bool {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()

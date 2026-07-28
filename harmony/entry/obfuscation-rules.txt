@@ -1,0 +1,3 @@
+# Keep symbols used by reflection / ArkUI
+-keep-global-name
+EntryAbility

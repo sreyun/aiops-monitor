@@ -95,6 +95,13 @@ jobs:
           echo "构建完成:"
           ls -lh dist/
 
+      - name: Build Windows Server 2012 Agent (Go 1.20)
+        run: |
+          VERSION=${{ steps.meta.outputs.version }}
+          chmod +x scripts/build-agent-win2012.sh
+          VERSION="$VERSION" OUT="$PWD/dist/aiops-agent-windows-amd64-win2012.exe" ./scripts/build-agent-win2012.sh
+          ls -lh dist/aiops-agent-windows-amd64-win2012.exe*
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -109,6 +116,7 @@ jobs:
             dist/aiops-server-windows-amd64.exe
             dist/aiops-agent-windows-amd64.exe
             dist/aiops-agent.exe
+            dist/aiops-agent-windows-amd64-win2012.exe
             dist/aiops-agent-windows-arm64.exe
             dist/aiops-agent-darwin-amd64.tar.gz
             dist/aiops-agent-darwin-arm64.tar.gz

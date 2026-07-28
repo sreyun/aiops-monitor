@@ -1,0 +1,28 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/LoginPage",
+    "pages/DashboardPage",
+    "pages/AlertsPage",
+    "pages/InfraHubPage",
+    "pages/OperationsPage",
+    "pages/AiCopilotPage",
+    "pages/HostDetailPage",
+    "pages/SettingsPage",
+    "pages/TerminalPage",
+    "pages/TerminalPasswordPage",
+    "pages/TerminalSessionsPage",
+    "pages/TerminalReplayPage",
+    "pages/MessagesPage",
+    "pages/DuplicatesPage",
+    "pages/InstallAgentPage",
+    "pages/CostManagementPage",
+    "pages/UsersAdminPage",
+    "pages/ActivityAuditPage",
+    "pages/KnowledgePage",
+    "pages/AlertExtrasPage",
+    "pages/DashboardsPage",
+    "pages/DashboardViewPage",
+    "pages/ExecutionDetailPage"
+  ]
+}

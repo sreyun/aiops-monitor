@@ -62,6 +62,14 @@ func TestRegisterHost(t *testing.T) {
 			t.Errorf("expected still 1 host, got %d", len(got))
 		}
 	})
+	t.Run("explicit rebind updates fingerprint", func(t *testing.T) {
+		s := NewStore()
+		s.RegisterHost("h1", "node-1", "fp-aaa")
+		h := s.RegisterHostRebindFP("h1", "node-1", "fp-new")
+		if h.Fingerprint != "fp-new" {
+			t.Errorf("rebind fingerprint: got %s", h.Fingerprint)
+		}
+	})
 	t.Run("recently deleted host is suppressed", func(t *testing.T) {
 		s := NewStore()
 		s.RegisterHost("h1", "node-1", "fp-aaa")

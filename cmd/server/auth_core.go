@@ -97,6 +97,11 @@ type session struct {
 	user       string
 	expires    time.Time
 	restricted bool // true = only MFA setup/enable/logout endpoints allowed (global MFA enforcement)
+	// pwChangeOnly: session issued after login while MustChangePassword is set.
+	// Blocks all APIs except password/account-init/me/logout — without this,
+	// default admin/admin (or admin-reset) yielded a full-privilege session and
+	// only the SPA honored must_change_password (API bypass).
+	pwChangeOnly bool
 	// v5.3.0: terminal secondary verification — true once verified in this session.
 	terminalVerified bool
 	// v5.5.0: last activity time — drives the sliding idle timeout (absolute cap
@@ -488,6 +493,18 @@ func (a *Auth) issueRestrictedSession(user string) string {
 	return tok
 }
 
+// issuePasswordChangeSession creates a session that can only finish the forced
+// password change (/api/v1/account/init, /api/v1/password), /api/v1/me, logout.
+func (a *Auth) issuePasswordChangeSession(user string) string {
+	tok := newSessionToken()
+	now := time.Now()
+	a.mu.Lock()
+	a.sessions[sessionKey(tok)] = session{user: user, expires: now.Add(sessionTTL), pwChangeOnly: true, lastSeen: now}
+	a.dirty = true
+	a.mu.Unlock()
+	return tok
+}
+
 // isRestricted reports whether the current session is a restricted (MFA-enrollment-only) session.
 func (a *Auth) isRestricted(r *http.Request) bool {
 	c, err := r.Cookie(sessionCookie)
@@ -501,6 +518,22 @@ func (a *Auth) isRestricted(r *http.Request) bool {
 		return false
 	}
 	return s.restricted
+}
+
+// isPasswordChangeOnly reports whether the session may only complete a forced
+// password change (default credentials / admin reset).
+func (a *Auth) isPasswordChangeOnly(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[sessionKey(c.Value)]
+	if !ok || time.Now().After(s.expires) {
+		return false
+	}
+	return s.pwChangeOnly
 }
 
 // upgradeSession lifts a restricted session to a full session (called after MFA enrollment).
@@ -570,7 +603,11 @@ func (a *Auth) exportSessions() map[string]dbSession {
 	now := time.Now()
 	for tok, s := range a.sessions {
 		if s.expires.After(now) {
-			out[tok] = dbSession{User: s.user, Expires: s.expires.Unix(), TerminalVerified: s.terminalVerified, Restricted: s.restricted}
+			out[tok] = dbSession{
+				User: s.user, Expires: s.expires.Unix(),
+				TerminalVerified: s.terminalVerified, Restricted: s.restricted,
+				PwChangeOnly: s.pwChangeOnly,
+			}
 		}
 	}
 	return out
@@ -586,7 +623,10 @@ func (a *Auth) importSessions(in map[string]dbSession) {
 	for tok, s := range in {
 		exp := time.Unix(s.Expires, 0)
 		if exp.After(now) {
-			a.sessions[tok] = session{user: s.User, expires: exp, terminalVerified: s.TerminalVerified, restricted: s.Restricted, lastSeen: now}
+			a.sessions[tok] = session{
+				user: s.User, expires: exp, terminalVerified: s.TerminalVerified,
+				restricted: s.Restricted, pwChangeOnly: s.PwChangeOnly, lastSeen: now,
+			}
 		}
 	}
 }
@@ -613,6 +653,9 @@ func (a *Auth) isTerminalVerified(r *http.Request) (verified bool, hasPassword b
 	}
 	hasPassword = a.cfg.HasTerminalPassword(name)
 	if !hasPassword {
+		if a.cfg.RequireTerminalPassword() {
+			return false, false // policy requires password; treat as unverified
+		}
 		return true, false // no password set → no verification needed
 	}
 	a.mu.Lock()

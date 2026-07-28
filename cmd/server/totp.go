@@ -20,7 +20,7 @@ import (
 const (
 	totpDigits = 6
 	totpPeriod = 30 // seconds per time step
-	totpIssuer = "AIOps Monitor"
+	totpIssuer = "AIOps"
 )
 
 // base32 without padding — the encoding authenticator apps expect for the secret.

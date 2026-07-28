@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "AIOps entry module",
+  "main": "",
+  "author": "aiops",
+  "license": "UNLICENSED",
+  "dependencies": {}
+}

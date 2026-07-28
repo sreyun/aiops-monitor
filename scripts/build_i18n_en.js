@@ -99,7 +99,7 @@ body = body.replace(/,\n$/, "\n");
 
 const header =
 `/**
- * AIOps Monitor Dashboard — English dictionary (window.DICT_EN)
+ * AIOps Dashboard — English dictionary (window.DICT_EN)
  * Auto-generated mirror of i18n-dashboard.js (zh-CN DICT).
  * Key-parity with zh-CN is enforced by scripts/check_i18n_parity.js.
  */

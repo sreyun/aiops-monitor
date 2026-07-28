@@ -70,10 +70,14 @@ type vmWriter struct {
 	checkCh chan vmCheckSample
 	apiCh   chan vmAPISample
 	httpc   *http.Client
+	breaker *vmCircuitBreaker
 }
 
 func newVMWriter(cfg *ConfigStore) *vmWriter {
-	return &vmWriter{cfg: cfg, ch: make(chan vmSample, 8192), checkCh: make(chan vmCheckSample, 4096), apiCh: make(chan vmAPISample, 4096), httpc: &http.Client{Timeout: 15 * time.Second}}
+	return &vmWriter{
+		cfg: cfg, ch: make(chan vmSample, 8192), checkCh: make(chan vmCheckSample, 4096), apiCh: make(chan vmAPISample, 4096),
+		httpc: &http.Client{Timeout: vmQueryTimeout()}, breaker: newVMCircuitBreaker(),
+	}
 }
 
 // enqueueAPI 排队一次 API 探测结果到 VM（VM 未启用或缓冲满时非阻塞丢弃）。
@@ -214,7 +218,7 @@ func (v *vmWriter) pushChecks(url string, samples []vmCheckSample) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		slog.Warn("VictoriaMetrics 写入拨测数据失败", "err", err)
 		return
@@ -260,7 +264,7 @@ func (v *vmWriter) writeLabeled(samples []shared.LabeledSample) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		slog.Warn("VictoriaMetrics 写入抓取指标失败", "err", err)
 		return
@@ -283,7 +287,7 @@ func (v *vmWriter) queryCheckHistory(checkID string, from, to int64) []CheckPoin
 	if err != nil {
 		return nil
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil
 	}
@@ -380,7 +384,7 @@ func (v *vmWriter) pushAPI(url string, samples []vmAPISample) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		slog.Warn("VictoriaMetrics 写入 API 监控数据失败", "err", err)
 		return
@@ -403,7 +407,7 @@ func (v *vmWriter) queryAPIHistory(apiID string, from, to int64) []APIHistPoint 
 	if err != nil {
 		return nil
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil
 	}
@@ -498,7 +502,7 @@ func (v *vmWriter) vmQueryVector(promql string) ([]promSeries, bool) {
 	if err != nil {
 		return nil, false
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil, false
 	}
@@ -573,7 +577,7 @@ func (v *vmWriter) vmQueryRange(promql string, startTs, endTs, stepSec int64) ([
 	if err != nil {
 		return nil, false
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil, false
 	}
@@ -640,7 +644,7 @@ func (v *vmWriter) vmQueryRangeSeries(promql string, startTs, endTs, stepSec int
 	if err != nil {
 		return nil, false
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil, false
 	}
@@ -698,7 +702,7 @@ func (v *vmWriter) vmLabelValues(label, match string) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil, false
 	}
@@ -727,7 +731,7 @@ func (v *vmWriter) vmInstantByAPI(promql string) map[string]float64 {
 	if err != nil {
 		return nil
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil
 	}
@@ -859,7 +863,7 @@ func (v *vmWriter) push(url string, samples []vmSample) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		slog.Warn("VictoriaMetrics 写入失败", "err", err)
 		return
@@ -1023,7 +1027,7 @@ func (v *vmWriter) queryHistory(hostID string, from, to int64) ([]shared.Sample,
 	if err != nil {
 		return nil, false
 	}
-	resp, err := v.httpc.Do(req)
+	resp, err := v.doVMRequest(req)
 	if err != nil {
 		return nil, false
 	}
@@ -1130,7 +1134,7 @@ func (v *vmWriter) pushRawLine(line string) {
 			return
 		}
 		req.Header.Set("Content-Type", "text/plain")
-		resp, err := v.httpc.Do(req)
+		resp, err := v.doVMRequest(req)
 		if err != nil {
 			return
 		}

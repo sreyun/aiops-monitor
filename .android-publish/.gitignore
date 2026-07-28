@@ -1,0 +1,44 @@
+# ── Build outputs ──
+build/
+app/build/
+*.apk
+*.aab
+
+# ── Gradle ──
+.gradle/
+gradle/wrapper/gradle-wrapper.jar
+
+# ── IDE (Android Studio / IntelliJ) ──
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# ── Local configuration ──
+local.properties
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs & temp ──
+*.log
+*.tmp
+*.bak
+
+# ── Test artifacts ──
+test_arr.txt
+test_brace.txt
+
+# ── Signing keys (never commit secrets) ──
+*.jks
+*.keystore
+*.idsig
+keystore.properties
+
+# ── Debug / dump files ──
+ui_dump*.xml
+ui2.xml
+screenshot*.png

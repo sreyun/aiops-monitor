@@ -1,0 +1,10 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "AIOps entry module" },
+    { "name": "EntryAbility_desc", "value": "AIOps" },
+    { "name": "EntryAbility_label", "value": "AIOps" },
+    { "name": "perm_network_reason", "value": "用于检测服务器连通性" },
+    { "name": "perm_bg_reason", "value": "用于保持告警推送长连接" },
+    { "name": "perm_mic_reason", "value": "用于 AI 语音输入" }
+  ]
+}

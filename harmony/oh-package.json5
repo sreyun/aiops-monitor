@@ -1,0 +1,26 @@
+{
+
+  "name": "aiops-monitor",
+
+  "version": "1.0.0",
+
+  "description": "AIOps HarmonyOS NEXT native client",
+
+  "main": "",
+
+  "author": "aiops",
+
+  "license": "UNLICENSED",
+
+  "modelVersion": "6.0.0",
+
+  "dependencies": {},
+
+  "devDependencies": {
+
+    "@ohos/hypium": "1.0.19"
+
+  }
+
+}
+

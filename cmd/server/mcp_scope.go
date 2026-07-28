@@ -14,7 +14,7 @@ type MCPScopedToken struct {
 }
 
 var mcpScopeTools = map[string][]string{
-	"metrics":   {"query_metrics", "list_alerts", "list_recent_changes", "check_host_health", "render_chart", "query_metric_range", "query_promql_range", "show_instant_stat", "analyze_metric_trend", "list_dashboards", "get_dashboard", "list_dashboard_panels", "query_dashboard_panel"},
+	"metrics":   {"query_metrics", "list_alerts", "list_recent_changes", "check_host_health", "render_chart", "query_metric_range", "query_promql_range", "show_instant_stat", "analyze_metric_trend", "forecast_metric", "list_dashboards", "get_dashboard", "list_dashboard_panels", "query_dashboard_panel"},
 	"logs":      {"search_logs"},
 	"sql":       {"list_datasources", "query_datasource"},
 	"hardware":  {"query_hardware", "query_hardware_events", "query_hardware_history", "query_hardware_changes", "query_snmp", "query_interface_traffic", "query_traps"},

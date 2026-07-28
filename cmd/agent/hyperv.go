@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"aiops-monitor/shared"
@@ -238,7 +239,16 @@ func (a *Agent) runHyperVCollector(ctx context.Context) {
 	}
 	slog.Info("Hyper-V 采集器启动", "interval", interval)
 
+	// WS2012 cold Get-VM can exceed 60s; skip overlapping ticks so we never pile
+	// up concurrent powershell.exe collectors (CPU/memory spikes on the host).
+	var inFlight sync.Mutex
+
 	collectAndPost := func() {
+		if !inFlight.TryLock() {
+			slog.Warn("Hyper-V 上一轮采集仍在进行，跳过本轮")
+			return
+		}
+		defer inFlight.Unlock()
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("Hyper-V 采集 panic 已恢复", "panic", r)

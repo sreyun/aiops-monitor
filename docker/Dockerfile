@@ -56,6 +56,32 @@ RUN if [ "$UPX" = "1" ]; then \
       echo "[build] UPX applied to linux-amd64 + windows-amd64"; \
     else echo "[build] UPX skipped (opt-in via --build-arg UPX=1)"; fi
 
+# Legacy Windows Server 2012 / 2012 R2 Agent (Go 1.20). Modern Go ≥1.21 binaries
+# refuse to start on those kernels; install.ps1 selects this artifact automatically.
+# Pin docker.io — SWR golang mirrors often lack the 1.20 tag.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.20-bullseye AS win2012-builder
+WORKDIR /src
+ARG VERSION=dev
+COPY shared/ shared/
+COPY cmd/agent/ cmd/agent/
+COPY config.example.yaml cmd/agent/config_example.yaml
+RUN set -e; \
+    find cmd/agent -type f -name '*.go' -print0 | xargs -0 sed -i 's|"log/slog"|"golang.org/x/exp/slog"|g'; \
+    printf '%s\n' \
+      'module aiops-monitor' \
+      '' \
+      'go 1.20' \
+      '' \
+      'require (' \
+      '	golang.org/x/exp v0.0.0-20231108232855-2478ac86d95e' \
+      '	gopkg.in/yaml.v3 v3.0.1' \
+      ')' \
+      > go.mod; \
+    go mod tidy; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+      go build -trimpath -ldflags="-s -w -X main.appVersion=${VERSION}" \
+      -o /out/aiops-agent-windows-amd64-win2012.exe ./cmd/agent
+
 # ---- Server image ----
 FROM ${BASE_REGISTRY}/alpine:3.20 AS server
 ARG TARGETARCH
@@ -70,9 +96,12 @@ WORKDIR /app
 
 COPY --from=builder /out/aiops-server /app/aiops-server
 COPY --from=builder /out/dist/ /app/dist/
+COPY --from=win2012-builder /out/aiops-agent-windows-amd64-win2012.exe /app/dist/aiops-agent-windows-amd64-win2012.exe
 COPY config.example.yaml /app/dist/config.example.yaml
 COPY plugins/ /tmp/plugins/
-RUN cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins
+RUN cd /tmp && zip -r /app/dist/plugins.zip plugins/ && rm -rf /tmp/plugins \
+ && sha256sum /app/dist/aiops-agent-windows-amd64-win2012.exe | awk '{print $1"  aiops-agent-windows-amd64-win2012.exe"}' \
+      > /app/dist/aiops-agent-windows-amd64-win2012.exe.sha256
 
 EXPOSE 8529
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:8529/healthz || exit 1

@@ -44,6 +44,7 @@ type dbSession struct {
 	// to full access on restart).
 	TerminalVerified bool `json:"terminal_verified,omitempty"`
 	Restricted       bool `json:"restricted,omitempty"`
+	PwChangeOnly     bool `json:"pw_change_only,omitempty"`
 }
 
 type dbSnapshot struct {

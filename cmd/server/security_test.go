@@ -161,7 +161,7 @@ func TestSecretEncryptionRoundTrip(t *testing.T) {
 	t.Setenv("AIOPS_SECRET_KEY", "test-master-key-123")
 	plain := "s3cr3t-value!"
 	enc := encryptSecret(plain)
-	if enc == plain || !strings.HasPrefix(enc, secretEncPrefix) {
+	if enc == plain || !isEncryptedSecret(enc) {
 		t.Fatalf("expected encrypted output with prefix, got %q", enc)
 	}
 	if got := decryptSecret(enc); got != plain {
@@ -201,7 +201,7 @@ func TestConfigSecretsEncryptRoundTrip(t *testing.T) {
 	c.Users = []AccountConfig{{Username: "u1", MFASecret: "USER1SEED"}}
 
 	encryptConfigSecrets(&c)
-	if !strings.HasPrefix(c.SMTP.Password, secretEncPrefix) || !strings.HasPrefix(c.Users[0].MFASecret, secretEncPrefix) {
+	if !isEncryptedSecret(c.SMTP.Password) || !isEncryptedSecret(c.Users[0].MFASecret) {
 		t.Fatalf("secrets not encrypted: %q / %q", c.SMTP.Password, c.Users[0].MFASecret)
 	}
 	decryptConfigSecrets(&c)

@@ -234,7 +234,11 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	case "windows":
 		switch goarch {
 		case "amd64":
-			primary = "aiops-agent.exe"
+			if windowsNeedsLegacyAgentBuild() {
+				primary = "aiops-agent-windows-amd64-win2012.exe"
+			} else {
+				primary = "aiops-agent.exe"
+			}
 		case "arm64":
 			primary = "aiops-agent-windows-arm64.exe"
 		}
@@ -242,7 +246,7 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	if primary == "" {
 		return nil
 	}
-	out := make([]string, 0, 3)
+	out := make([]string, 0, 4)
 	pref := strings.TrimSpace(preferred)
 	if pref != "" {
 		pref = filepath.Base(pref)
@@ -254,7 +258,11 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 		out = append(out, primary)
 	}
 	if goos == "windows" && goarch == "amd64" {
-		for _, alt := range []string{"aiops-agent.exe", "aiops-agent-windows-amd64.exe"} {
+		for _, alt := range []string{
+			"aiops-agent-windows-amd64-win2012.exe",
+			"aiops-agent.exe",
+			"aiops-agent-windows-amd64.exe",
+		} {
 			dup := false
 			for _, e := range out {
 				if e == alt {

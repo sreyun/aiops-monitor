@@ -1,6 +1,6 @@
 <div align="center">
 
-# AIOps Monitor
+# AIOps
 
 **One binary for observability · alerting · self-healing · AI diagnosis · SRE closed-loop · remote control.**
 
@@ -22,7 +22,7 @@
 
 ## Contents
 
-- [Why AIOps Monitor](#why-aiops-monitor)
+- [Why AIOps](#why-aiops-monitor)
 - [Highlights in v0.19.0](#highlights-in-v0190)
 - [Capability Map](#capability-map)
 - [Core Capabilities](#core-capabilities)
@@ -37,11 +37,11 @@
 
 ---
 
-## Why AIOps Monitor
+## Why AIOps
 
 Ops stacks keep growing while incidents get harder: metrics, logs, alerts, and changes live in different systems. Commercial products often meter by host or module — and keep your data in their cloud.
 
-AIOps Monitor consolidates the common path into **one self-hosted platform**:
+AIOps consolidates the common path into **one self-hosted platform**:
 
 | Principle | How |
 |---|---|
@@ -249,7 +249,7 @@ The server **requires** both PostgreSQL and VictoriaMetrics. See [INSTALL.md](IN
 
 ## Typical Scenarios
 
-| Scenario | How AIOps Monitor helps |
+| Scenario | How AIOps helps |
 |---|---|
 | Unified DC monitoring | Hundreds of cross-platform hosts, three threshold presets |
 | Alert storm governance | Silence + inhibit + route |

@@ -1,5 +1,5 @@
 /* ============================================================
-   AIOps Monitor · 前端逻辑
+   AIOps · 前端逻辑
    数据源：/api/v1/{summary,hosts,alerts,events,config}
    3 秒轮询（P1-2: 已改为差异化轮询频率）；事件委托绑定，避免内联 onclick 的转义隐患。
 
@@ -400,9 +400,13 @@ function toggleTheme() {
   try { localStorage.setItem("aiops_theme", next); } catch (_) {}
   applyThemeChrome(next);
   syncThemeIcons(next);
-  // 重绘所有已存在的 Canvas 图表，使其使用新的 CSS 变量颜色
-  for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
-  for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
+  // 重绘全部 Canvas + ECharts（含 HW/API/SNMP/AI/看板），跟随 CSS 变量
+  if (typeof resizeAllCharts === "function") {
+    try { resizeAllCharts(); } catch (e) {}
+  } else {
+    for (const key in DETAIL_CHARTS) { if (DETAIL_CHARTS[key] && key !== "__zoom") drawChart(DETAIL_CHARTS[key]); }
+    for (const key in CHK_CHARTS) { if (CHK_CHARTS[key]) drawChart(CHK_CHARTS[key]); }
+  }
 }
 /* 菜单展示「即将切换到」的图标与文案（浅色时显示月亮=切深色，深色时显示太阳=切浅色） */
 function syncThemeIcons(theme) {

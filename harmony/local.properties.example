@@ -1,0 +1,6 @@
+# 命令行构建时必须设置（HarmonyOS 工程读取环境变量，不只 local.properties）:
+#   set DEVECO_SDK_HOME=D:\Program Files\deveco\DevEco Studio\sdk
+#
+# DevEco Studio GUI 打开工程时由 IDE 注入，可不设。
+# 工程路径不能含中文；可用 junction/拷贝到例如 D:\build\aiops-harmony 再构建。
+sdk.dir=D:\\Program Files\\deveco\\DevEco Studio\\sdk

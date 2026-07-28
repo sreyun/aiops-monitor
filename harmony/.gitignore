@@ -1,0 +1,29 @@
+# HarmonyOS / DevEco
+/node_modules
+/oh_modules
+**/oh_modules
+**/build
+**/Build
+**/dist
+**/.cxx
+**/.preview
+**/local.properties
+**/.idea
+**/.hvigor
+**/.hvigor-home
+**/hvigor/hvigor-cache
+**/*.hap
+**/*.app
+**/material
+.DS_Store
+*.iml
+.clangd
+.clang-format
+.clang-tidy
+
+# Local scratch / one-off helpers (not part of the app)
+_snap_*.ets
+_fix_*.py
+_inject_*.py
+*.log
+*.tmp

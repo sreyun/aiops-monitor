@@ -302,7 +302,19 @@ func main() {
 		return
 	}
 
-	hostID := loadOrCreateHostID(cfg.StateFile)
+	// Desktop workers must NEVER mint a new host_id. The service owns identity
+	// reconciliation; a worker that races loadOrCreateHostID during a brief
+	// state-file gap can persist a competing id and leave deskWait on a host
+	// the UI never rings (Win11 "remote desktop connected / black / timeout").
+	var hostID string
+	if desktopWorker {
+		hostID = waitHostIDFromState(cfg.StateFile, 20*time.Second)
+		if hostID == "" {
+			log.Fatalf("桌面 worker 无法读取 agent_state.json 中的 host_id（path=%s）；请确认 AiopsMonitorAgent 服务已启动并完成身份同步", cfg.StateFile)
+		}
+	} else {
+		hostID = loadOrCreateHostID(cfg.StateFile)
+	}
 	setFIMStateDir(cfg.StateFile)
 	collector := newCollector(cfg.DiskPath)
 	runner := NewPluginRunner(cfg.PluginsDir, cfg.Python, 15*time.Second)

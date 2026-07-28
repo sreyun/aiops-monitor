@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"aiops-monitor/shared"
@@ -46,8 +47,11 @@ func pgFromEnv() *pgStore {
 // ============================================================================
 
 type pgStore struct {
-	db       *sql.DB
-	flowJobs chan flowJob // NetFlow 明细异步入库队列（解耦 agent POST 与 PG 写入，防连接池饿死）
+	db        *sql.DB
+	flowJobs  chan flowJob // NetFlow 明细异步入库队列（解耦 agent POST 与 PG 写入，防连接池饿死）
+	flowSpill chan flowJob // 二级有界重试缓冲
+	flowDrop  atomic.Int64
+	flowSpillN atomic.Int64
 }
 
 // flowJob 是一批待入库的 Flow 明细。
@@ -61,12 +65,16 @@ type flowJob struct {
 //   - lock_timeout：单条语句等待锁不超过 15s，避免锁等待堆积拖垮连接池；
 //   - idle_in_transaction_session_timeout：事务内空闲超 60s 即断开，回收泄漏/挂起的连接。
 //
-// 刻意不设全局 statement_timeout —— 迁移、分区重建、大聚合等合法长查询不应被硬杀；上面两项
-// 已能防止"长时间阻塞耗尽连接池"这一核心风险。若用户已在 DSN 里显式配置同名参数则尊重之。
+// statement_timeout 可选：AIOPS_PG_STATEMENT_TIMEOUT_MS（默认 60000；0=不设置）。
 func applyPGSafetyTimeouts(dsn string) string {
 	params := map[string]string{
 		"lock_timeout":                        "15000",
 		"idle_in_transaction_session_timeout": "60000",
+	}
+	if ms := strings.TrimSpace(os.Getenv("AIOPS_PG_STATEMENT_TIMEOUT_MS")); ms != "" && ms != "0" {
+		params["statement_timeout"] = ms
+	} else if strings.TrimSpace(os.Getenv("AIOPS_PG_STATEMENT_TIMEOUT_MS")) == "" {
+		params["statement_timeout"] = "60000"
 	}
 	lower := strings.ToLower(dsn)
 	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
@@ -100,13 +108,8 @@ func openPGStore(dsn string) (*pgStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 面向 500+ 并发用户/多机上报的连接池：放大到 200 上限，空闲保留 50 以摊薄高峰突发的建连开销。
-	// 注意：PostgreSQL 的 max_connections 需 ≥ 200（外加 superuser 预留），否则会出现 "too many clients"；
-	// 若 PG 端上限较低，请相应下调此值或在 PG 前置 PgBouncer 做连接复用。
-	db.SetMaxOpenConns(200)
-	db.SetMaxIdleConns(50)
-	db.SetConnMaxLifetime(30 * time.Minute)
-	db.SetConnMaxIdleTime(5 * time.Minute) // 回收长期空闲连接，避免占满 PG 侧会话
+	// 连接池可通过 AIOPS_PG_MAX_OPEN / AIOPS_PG_MAX_IDLE / AIOPS_PG_CONN_LIFE_MIN / AIOPS_PG_CONN_IDLE_MIN 覆盖。
+	applyPGPoolSettings(db)
 	ctxPing := make(chan error, 1)
 	go func() { ctxPing <- db.Ping() }()
 	select {
@@ -119,15 +122,19 @@ func openPGStore(dsn string) (*pgStore, error) {
 		db.Close()
 		return nil, sql.ErrConnDone
 	}
-	ps := &pgStore{db: db, flowJobs: make(chan flowJob, 512)}
+	ps := &pgStore{db: db, flowJobs: make(chan flowJob, 512), flowSpill: make(chan flowJob, 256)}
 	if err := ps.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
+	ps.migrateDualTrackPartitions()
+	ps.hydrateAuditChainTip()
+	ps.ensureAIExperimentsTable()
 	// 2 个后台工作协程串行化 Flow 明细写入：HTTP 摄入只入队即返回，写库不再占住请求连接。
 	for i := 0; i < 2; i++ {
 		go ps.flowIngestWorker()
 	}
+	go ps.flowSpillWorker()
 	return ps, nil
 }
 
@@ -138,15 +145,70 @@ func (p *pgStore) flowIngestWorker() {
 	}
 }
 
-// insertFlowRecordsAsync 非阻塞入队；队列满时丢弃本批并告警（背压优于把服务拖垮）。
+// flowSpillWorker drains secondary buffer back into the primary queue when capacity frees.
+func (p *pgStore) flowSpillWorker() {
+	if p == nil || p.flowSpill == nil {
+		return
+	}
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		for {
+			select {
+			case j := <-p.flowSpill:
+				select {
+				case p.flowJobs <- j:
+				default:
+					// put back and wait
+					select {
+					case p.flowSpill <- j:
+					default:
+						p.flowDrop.Add(1)
+						slog.Warn("Flow spill 回灌失败，丢弃", "host", j.hostID, "rows", len(j.flows))
+					}
+					goto nextTick
+				}
+			default:
+				goto nextTick
+			}
+		}
+	nextTick:
+	}
+}
+
+// insertFlowRecordsAsync 非阻塞入队；主队列满时进 spill；spill 满则 drop 并计数。
 func (p *pgStore) insertFlowRecordsAsync(hostID, source string, flows []shared.FlowRecord) {
 	if p == nil || len(flows) == 0 {
 		return
 	}
+	job := flowJob{hostID: hostID, source: source, flows: flows}
 	select {
-	case p.flowJobs <- flowJob{hostID: hostID, source: source, flows: flows}:
+	case p.flowJobs <- job:
+		return
 	default:
-		slog.Warn("Flow 入库队列已满，丢弃本批明细（写入跟不上摄入速率）", "host", hostID, "rows", len(flows))
+	}
+	if p.flowSpill != nil {
+		select {
+		case p.flowSpill <- job:
+			p.flowSpillN.Add(1)
+			return
+		default:
+		}
+	}
+	p.flowDrop.Add(1)
+	slog.Warn("Flow 入库队列已满，丢弃本批明细（写入跟不上摄入速率）",
+		"host", hostID, "rows", len(flows), "dropped_total", p.flowDrop.Load())
+}
+
+func (p *pgStore) netflowQueueStats() map[string]any {
+	if p == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"dropped_total": p.flowDrop.Load(),
+		"spill_total":   p.flowSpillN.Load(),
+		"queue_cap":     cap(p.flowJobs),
+		"spill_cap":     cap(p.flowSpill),
 	}
 }
 
@@ -841,13 +903,7 @@ func (p *pgStore) saveConfigBlob(raw []byte) error {
 // --- audit log (append-only, unbounded in PG; the store keeps a recent cache) ---
 
 func (p *pgStore) appendAudit(e LogEntry) {
-	raw, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
-	if _, err := p.db.Exec(`INSERT INTO audit_log(ts,data) VALUES($1,$2)`, e.Timestamp, raw); err != nil {
-		slog.Warn("PG 写审计日志失败", "err", err)
-	}
+	p.appendAuditChained(e)
 }
 
 func (p *pgStore) loadRecentAudit(limit int) ([]LogEntry, error) {
@@ -922,8 +978,17 @@ func (p *pgStore) appendEvent(e storedEvent) {
 	if err != nil {
 		return
 	}
-	if _, err := p.db.Exec(`INSERT INTO events(ts,data) VALUES($1,$2)`, e.Timestamp, raw); err != nil {
+	ts := e.Timestamp
+	if ts <= 0 {
+		ts = time.Now().Unix()
+	}
+	start := time.Now()
+	if _, err := p.db.Exec(`INSERT INTO events(ts,data) VALUES($1,$2)`, ts, raw); err != nil {
 		slog.Warn("PG 写事件失败", "err", err)
+	}
+	observePGSlow("INSERT events", start)
+	if _, err := p.db.Exec(`INSERT INTO events_p(ts,data) VALUES($1,$2)`, ts, raw); err != nil {
+		slog.Debug("PG 写事件分区表失败", "err", err)
 	}
 }
 
@@ -2575,11 +2640,14 @@ func (p *pgStore) getHardwareChanges(hostID, target string, limit int) ([]map[st
 	q := `SELECT target_name, kind, component, action, COALESCE(old_value,''), COALESCE(new_value,''), created_at
 	      FROM hardware_changes WHERE host_id=$1`
 	args := []any{hostID}
+	argN := 2
 	if target != "" {
-		q += ` AND target_name=$2`
+		q += fmt.Sprintf(` AND target_name=$%d`, argN)
 		args = append(args, target)
+		argN++
 	}
-	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT %d`, limit)
+	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, argN)
+	args = append(args, limit)
 
 	rows, err := p.db.Query(q, args...)
 	if err != nil {
@@ -2621,11 +2689,14 @@ func (p *pgStore) getHardwareEvents(hostID, target string, limit int) ([]map[str
 	q := `SELECT target_name, event_type, severity, message, created_at
 	      FROM hardware_events WHERE host_id=$1`
 	args := []any{hostID}
+	argN := 2
 	if target != "" {
-		q += ` AND target_name=$2`
+		q += fmt.Sprintf(` AND target_name=$%d`, argN)
 		args = append(args, target)
+		argN++
 	}
-	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT %d`, limit)
+	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, argN)
+	args = append(args, limit)
 
 	rows, err := p.db.Query(q, args...)
 	if err != nil {
@@ -2928,8 +2999,8 @@ func (p *pgStore) getHyperVEvents(hostID string, limit int) ([]map[string]any, e
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := p.db.Query(fmt.Sprintf(`SELECT vm_name, vm_id, kind, severity, message, created_at
-		FROM hyperv_events WHERE host_id=$1 ORDER BY created_at DESC LIMIT %d`, limit), hostID)
+	rows, err := p.db.Query(`SELECT vm_name, vm_id, kind, severity, message, created_at
+		FROM hyperv_events WHERE host_id=$1 ORDER BY created_at DESC LIMIT $2`, hostID, limit)
 	if err != nil {
 		return nil, err
 	}

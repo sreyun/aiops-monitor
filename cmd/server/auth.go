@@ -290,6 +290,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.unauthorized")})
 			return
 		}
+		// Forced password-change sessions (default admin/admin or admin reset)
+		// must not unlock the rest of the API — only init/password/me/logout.
+		if s.auth.isPasswordChangeOnly(r) {
+			switch r.URL.Path {
+			case "/api/v1/me", "/api/v1/password", "/api/v1/account/init", "/api/v1/logout":
+				// allowed
+			default:
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.must_change_password")})
+				return
+			}
+		}
 		// Restricted sessions (global MFA enforcement) can only touch MFA endpoints.
 		if s.auth.isRestricted(r) {
 			p := r.URL.Path
@@ -394,13 +405,14 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 // completeLogin handles the post-authentication phase: default-credential
 // detection, MFA second factor, session issuance and the response.
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc AccountConfig, password, code, ip string) {
-	// v5.4.0: detect default admin/admin credentials and force a password
-	// change on first login. Do not override an existing MustChangePassword
-	// flag (it may already be set by the admin reset tool).
-	if !acc.MustChangePassword && acc.Username == "admin" && password == "admin" {
-		s.cfg.SetMustChangePassword(acc.Username)
-		acc.MustChangePassword = true
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.default_credentials", acc.Username)})
+	// Detect default admin/admin even if an older config cleared MustChangePassword
+	// (pre-v5.4 installs). This does NOT authorize login by itself — CheckPassword
+	// already verified the hash; we only force the change gate.
+	if acc.Username == "admin" && password == "admin" {
+		if !acc.MustChangePassword {
+			s.cfg.SetMustChangePassword(acc.Username)
+			acc.MustChangePassword = true
+		}
 	}
 	// Password OK. If MFA is on, require a valid TOTP code as the second factor.
 	// The requirement is revealed only AFTER the password checks out, so an
@@ -429,6 +441,27 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 	}
 	// Credentials fully verified — clear the per-account failed-attempt counter.
 	s.auth.loginAccountReset(acc.Username)
+	// Forced password change BEFORE full access or MFA enrollment. A full
+	// session here would let API clients skip the SPA gate with admin/admin.
+	if acc.MustChangePassword {
+		tok := s.auth.issuePasswordChangeSession(acc.Username)
+		http.SetCookie(w, &http.Cookie{
+			Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true,
+			Secure:   s.isHTTPS(r),
+			SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
+		})
+		msg := Tz("log.login_success", acc.Username)
+		if acc.Username == "admin" && password == "admin" {
+			msg = Tz("log.default_credentials", acc.Username)
+		}
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, IP: ip, Message: msg})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":                   true,
+			"must_change_password": true,
+			"message":              Tr(r, "auth.must_change_password"),
+		})
+		return
+	}
 	// Global MFA policy: if admin has enabled MFARequired and this user hasn't
 	// set up MFA yet, issue a restricted session and direct them to enroll.
 	if s.cfg.MFARequired() && !acc.MFAEnabled {
@@ -451,12 +484,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, IP: ip, Message: Tz("log.login_success", acc.Username)})
-	resp := map[string]any{"ok": true}
-	// v5.4.0: force password change if admin reset was used
-	if acc.MustChangePassword {
-		resp["must_change_password"] = true
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

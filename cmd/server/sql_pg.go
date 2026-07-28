@@ -392,10 +392,9 @@ func pgQueryReadOnly(c MySQLConnection, sqlText string, limit int) (cols []strin
 	if kw != "select" && kw != "with" && kw != "values" && kw != "show" && kw != "table" {
 		return nil, nil, fmt.Errorf("PostgreSQL 数据源仅允许 SELECT/WITH/VALUES")
 	}
-	if limit <= 0 || limit > 2000 {
-		limit = 200
-	}
+	limit = clampSQLReadLimit(limit)
 	// Cap result size without rewriting user LIMIT when present.
+	// limit is a bounded int (not user text) — safe to embed as a literal.
 	execSQL := strings.TrimSuffix(sqlText, ";")
 	if !strings.Contains(strings.ToLower(sqltoolkit.StripCommentsAndStrings(execSQL)), "limit") {
 		execSQL = fmt.Sprintf("SELECT * FROM (%s) AS _aiops_q LIMIT %d", execSQL, limit)

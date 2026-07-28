@@ -1,6 +1,6 @@
-# AIOps Monitor — Installation Guide
+# AIOps — Installation Guide
 
-> This document is for **Ops / SRE** readers who need to install and first-boot AIOps Monitor in a real environment.
+> This document is for **Ops / SRE** readers who need to install and first-boot AIOps in a real environment.
 > The server is a single Go binary (zero framework, zero CGO) with an embedded Web UI and API and no runtime
 > external dependencies (other than storage). The collection Agent is a multi-platform native collector
 > (Linux / Windows / macOS; other platforms go through plugins).
@@ -9,7 +9,7 @@
 
 ## 0. Architecture & Storage Notes (read first)
 
-AIOps Monitor uses a **mandatory dual-storage architecture** — **neither can be omitted**:
+AIOps uses a **mandatory dual-storage architecture** — **neither can be omitted**:
 
 | Storage | Purpose | Env Var | Minimum Requirement |
 |---|---|---|---|

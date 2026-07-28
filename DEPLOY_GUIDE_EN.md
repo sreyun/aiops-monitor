@@ -1,4 +1,4 @@
-# AIOps Monitor — Deployment Guide (Production)
+# AIOps — Deployment Guide (Production)
 
 > This document is for **Ops / SRE responsible for production deployment**. On top of the install steps in
 > [INSTALL_EN.md](INSTALL_EN.md), it covers **production architecture, reverse proxy, gateway relay,

@@ -108,9 +108,11 @@ func (s *Server) notifyHostSecurityScanCompleted(scan *HostScanResult) {
 	}
 	s.store.AddLog(LogEntry{Kind: KindSystem, Level: level, Actor: "主机安全", Host: hostLabel, Message: msg})
 	s.notifier.pushChannels(cfg, a, true)
+	var incidentID int64
 	if level == "critical" && s.incidents != nil {
-		s.incidents.OnAlertTransition(a, alertKey(a), true)
+		incidentID = s.incidents.OnAlertTransition(a, alertKey(a), true)
 	}
+	s.triggerSecurityRemediation(a, incidentID)
 }
 
 func (s *Server) notifyWebSecurityScanCompleted(scan *WebScanResult) {
@@ -173,9 +175,24 @@ func (s *Server) notifyWebSecurityScanCompleted(scan *WebScanResult) {
 	}
 	s.store.AddLog(LogEntry{Kind: KindSystem, Level: level, Actor: "Web安全", Host: name, Message: msg})
 	s.notifier.pushChannels(cfg, a, true)
+	var incidentID int64
 	if level == "critical" && s.incidents != nil {
-		s.incidents.OnAlertTransition(a, alertKey(a), true)
+		incidentID = s.incidents.OnAlertTransition(a, alertKey(a), true)
 	}
+	// Match rules on both web_security (alert type) and web_vuln (plan alias).
+	s.triggerSecurityRemediation(a, incidentID)
+	a2 := a
+	a2.Type = "web_vuln"
+	s.triggerSecurityRemediation(a2, incidentID)
+}
+
+// triggerSecurityRemediation matches RemediationRules (host_security / web_vuln / …).
+// Matching rules default to require_approval unless explicitly auto-enabled.
+func (s *Server) triggerSecurityRemediation(a Alert, incidentID int64) {
+	if s == nil || s.remediation == nil {
+		return
+	}
+	s.remediation.OnAlert(a, incidentID)
 }
 
 func (s *Server) notifySlowSQLReport(c MySQLConnection, rep *SlowSQLReport) {

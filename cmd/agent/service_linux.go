@@ -37,7 +37,7 @@ func installAgentService(exePath, cfgPath string) error {
 		termShell = "/bin/sh"
 	}
 	unit := fmt.Sprintf(`[Unit]
-Description=AIOps Monitor Agent (metrics + remote desktop)
+Description=AIOps Agent (metrics + remote desktop)
 After=network-online.target
 Wants=network-online.target
 

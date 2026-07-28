@@ -140,6 +140,27 @@ func TestAgentHandshakeEndToEnd(t *testing.T) {
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("known host wrong-fingerprint token-less re-register: got %d, want 403", rr.Code)
 	}
+
+	// 7. Install token may rebind fingerprint (Win11 NIC-order / Agent upgrade).
+	const fp2 = "fp-after-stable-mac"
+	rr = postJSON(t, srv.handleRegister, "/api/v1/agent/register", map[string]string{
+		"host_id": hostID, "hostname": "node-1", "token": token, "fingerprint": fp2,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("token fingerprint rebind: got %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	rr = postJSON(t, srv.handleReport, "/api/v1/agent/report", shared.Report{
+		HostID: hostID, Hostname: "node-1", Fingerprint: fp2,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("report after fingerprint rebind: got %d, want 200", rr.Code)
+	}
+	rr = postJSON(t, srv.handleReport, "/api/v1/agent/report", shared.Report{
+		HostID: hostID, Hostname: "node-1", Fingerprint: fp,
+	})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("old fingerprint after rebind must 403: got %d", rr.Code)
+	}
 }
 
 // TestInstallScriptsRobustness renders the install/uninstall templates and
@@ -227,6 +248,7 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"SecurityProtocol", "Request-AiopsElevatedInstall",
 		"Test-AiopsSmartAppControlOn", "Test-AiopsAppLockerPresent", "PreferElevated",
 		"IsWorkstation", "ProductType", "Test-AiopsWindowsSupported",
+		"Test-AiopsNeedsWin2012Agent", "aiops-agent-windows-amd64-win2012.exe",
 		"Test-AiopsWScriptEnabled", "Start-Process -FilePath $exe")
 	// Elevated installs must register the real Windows service (boot autostart +
 	// crash-recovery + interactive desktop worker), which is what makes Hyper-V
@@ -240,7 +262,9 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"Test-AiopsAgentRunnable", "Application Control", "Zone.Identifier",
 		"allow-aiops-agent.ps1", "New-CIPolicy", "appcontrol-appdata",
 		"group policy", `Join-Path $env:ProgramFiles "AIOps Agent"`,
-		"windowsdefender://appbrowser")
+		"windowsdefender://appbrowser", "Path,Hash",
+		"stashed host identity", "service failed to reach Running state",
+		"aiops|start-agent\\.vbs")
 	// A per-user install belongs to the profile that ran it, and elevating swaps
 	// HKCU/LOCALAPPDATA to the approving admin — so both scripts must sweep every
 	// profile, or the old agent keeps auto-starting and reporting after an

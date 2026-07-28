@@ -205,6 +205,17 @@ func (s *Store) GetHost(id string) (*Host, bool) {
 // identity hijack); callers should reject the registration when Fingerprint
 // remains unequal to the request. Token-based admission is checked beforehand.
 func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
+	return s.registerHost(hostID, hostname, fingerprint, false)
+}
+
+// RegisterHostRebindFP is used when an install token authorizes updating the
+// machine fingerprint bound to an existing host (Agent upgrades that stabilize
+// the fingerprint algorithm, or NIC-enumeration changes on Windows 11).
+func (s *Store) RegisterHostRebindFP(hostID, hostname, fingerprint string) *Host {
+	return s.registerHost(hostID, hostname, fingerprint, true)
+}
+
+func (s *Store) registerHost(hostID, hostname, fingerprint string, allowFPRebind bool) *Host {
 	now := time.Now().Unix()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,10 +232,12 @@ func (s *Store) RegisterHost(hostID, hostname, fingerprint string) *Host {
 		s.dirty = true
 		return h
 	}
-	// Existing record: fill missing fingerprint only — never silent rebind.
-	if h.Fingerprint == "" && fingerprint != "" {
-		h.Fingerprint = fingerprint
-		s.dirty = true
+	// Existing record: fill missing fingerprint, or rebind when explicitly allowed.
+	if fingerprint != "" && h.Fingerprint != fingerprint {
+		if h.Fingerprint == "" || allowFPRebind {
+			h.Fingerprint = fingerprint
+			s.dirty = true
+		}
 	}
 	if hostname != "" && h.Hostname != hostname {
 		h.Hostname = hostname
