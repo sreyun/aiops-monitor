@@ -92,7 +92,15 @@ type deskQuality struct {
 }
 
 func defaultDeskQuality() deskQuality {
-	return deskQuality{Scale: 1.0, Quality: 88, FPS: 15, Codec: "jpeg"}
+	q := deskQuality{Scale: 1.0, Quality: 88, FPS: 15, Codec: "jpeg"}
+	// Server 2012 / Win8 GDI + slower JPEG path: keep frames small so the
+	// reverse channel doesn't stall → browser "重连中" + black flashes.
+	if deskLegacyCaptureHost() {
+		q.Scale = 0.7
+		q.Quality = 72
+		q.FPS = 8
+	}
+	return q
 }
 
 func (a *Agent) runDesktopChannelFor(t *serverTarget) {
@@ -531,7 +539,46 @@ func (a *Agent) runDesktopSession(server, sid, lang string) {
 				continue
 			}
 			jpegBytes := jbuf.Bytes()
-			if len(jpegBytes) > 4<<20 {
+			// Oversized frames were silently dropped (black flash / "stuck" UI).
+			// Adaptively re-encode instead of skipping — critical on high-res
+			// Server 2012 desktops where q88@1.0 often exceeds 4 MiB.
+			const softMax = 1500 << 10 // 1.5 MiB soft target
+			const hardMax = 4 << 20    // absolute wire cap
+			if len(jpegBytes) > softMax {
+				for _, attempt := range []struct {
+					scale float64
+					qual  int
+				}{
+					{cq.Scale * 0.85, qual},
+					{cq.Scale * 0.7, 55},
+					{0.55, 45},
+					{0.4, 40},
+				} {
+					aq := attempt.qual
+					if aq > 65 {
+						aq = 65
+					}
+					if aq < 30 {
+						aq = 30
+					}
+					sc := attempt.scale
+					if sc < 0.25 {
+						sc = 0.25
+					}
+					alt := scaleImage(img, sc)
+					var altBuf bytes.Buffer
+					if err := jpeg.Encode(&altBuf, alt, &jpeg.Options{Quality: aq}); err != nil {
+						continue
+					}
+					if altBuf.Len() > 0 && altBuf.Len() < len(jpegBytes) {
+						jpegBytes = altBuf.Bytes()
+					}
+					if len(jpegBytes) <= softMax {
+						break
+					}
+				}
+			}
+			if len(jpegBytes) > hardMax {
 				time.Sleep(interval)
 				continue
 			}
@@ -856,6 +903,17 @@ func readDeskFrames(r io.Reader, inp deskInput, lang string, q *deskQuality, qMu
 				}
 				if nq.FPS > 0 {
 					q.FPS = nq.FPS
+				}
+				if deskLegacyCaptureHost() {
+					if q.FPS > 10 {
+						q.FPS = 10
+					}
+					if q.Scale > 0.85 {
+						q.Scale = 0.85
+					}
+					if q.Quality > 80 {
+						q.Quality = 80
+					}
 				}
 				if nq.Codec != "" {
 					q.Codec = nq.Codec

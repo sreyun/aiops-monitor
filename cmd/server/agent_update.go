@@ -15,7 +15,8 @@ const (
 	agentUpdateTimeoutSec  = 180
 	agentUpdateMaxRetries  = 1
 	// Cooldown after enqueue so success-before-version-ack cannot storm.
-	agentUpdateInFlightSec = 1800
+	agentUpdateInFlightSec   = 1800 // hard cooldown after enqueue
+	agentUpdateSoftRetrySec  = 180  // if still behind, allow re-queue after this
 )
 
 type agentUpdateHostResult struct {
@@ -146,6 +147,30 @@ func (m *agentUpdateManager) tryMarkInFlight(hostID string) bool {
 	now := time.Now().Unix()
 	if ts, ok := m.inFlight[hostID]; ok && now-ts < agentUpdateInFlightSec {
 		return false
+	}
+	m.inFlight[hostID] = now
+	return true
+}
+
+// tryMarkInFlightOrSoftRetry allows a second enqueue when the host is still
+// version-behind after a soft window (previous "restart scheduled" often failed
+// silently on Windows). Within softRetrySec it still blocks duplicates.
+func (m *agentUpdateManager) tryMarkInFlightOrSoftRetry(hostID string, stillBehind bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().Unix()
+	if ts, ok := m.inFlight[hostID]; ok {
+		age := now - ts
+		if age < agentUpdateSoftRetrySec {
+			return false
+		}
+		if stillBehind {
+			m.inFlight[hostID] = now
+			return true
+		}
+		if age < agentUpdateInFlightSec {
+			return false
+		}
 	}
 	m.inFlight[hostID] = now
 	return true
@@ -460,7 +485,7 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 	goos, goarch := hostGOOSArch(h)
 	distName, distOK := s.agentDistResolveForHost(h)
 	if !job.Rollback && !distOK {
-		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s (need aiops-agent.exe or aiops-agent-windows-amd64-win2012.exe under dist/)", goos, goarch))
+		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s (need aiops-agent.exe; Server 2012/R2 requires aiops-agent-windows-amd64-win2012.exe under dist/)", goos, goarch))
 		return
 	}
 	_ = distName
@@ -554,10 +579,14 @@ func shouldLegacyAgentUpdateFallback(out string, err error) bool {
 	if strings.Contains(combined, "未知模块") {
 		return true
 	}
+	low := strings.ToLower(combined)
+	// Windows: helper failed to spawn (PATH / powershell missing) — try install-style script.
+	if strings.Contains(low, "start helper") || strings.Contains(low, "executable file not found") {
+		return true
+	}
 	if strings.Contains(out, "agent_update:") {
 		return false
 	}
-	low := strings.ToLower(combined)
 	return strings.Contains(low, "not found") ||
 		strings.Contains(low, "不是内部或外部命令") ||
 		strings.Contains(low, "command not found") ||
@@ -675,7 +704,9 @@ func (s *Server) maybeAutoUpdateHost(hostID string) {
 	if ok, _ := s.remoteGateCheck(h.ID, "auto-update", false, false); !ok {
 		return
 	}
-	if !s.agentUpdates.tryMarkInFlight(h.ID) {
+	// Soft-retry: if still behind after ~3 minutes, re-queue (Windows helper often
+	// reported "success" while powershell/PATH/wrong-PE left the host on the old build).
+	if !s.agentUpdates.tryMarkInFlightOrSoftRetry(h.ID, true) {
 		return
 	}
 	job := s.createAgentUpdateJob([]*Host{h}, "auto-update", base, false, false)

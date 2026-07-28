@@ -21,7 +21,7 @@ func TestHostNeedsWin2012Agent(t *testing.T) {
 		}
 	}
 	cands := agentDistCandidatesForHost(&Host{OS: "windows", Platform: "Windows Server 2012 R2 (Build 9600)", Arch: "amd64"})
-	if len(cands) == 0 || cands[0] != "aiops-agent-windows-amd64-win2012.exe" {
-		t.Fatalf("win2012 candidates first=%v", cands)
+	if len(cands) != 1 || cands[0] != "aiops-agent-windows-amd64-win2012.exe" {
+		t.Fatalf("win2012 candidates must be ONLY win2012 artifact, got %v", cands)
 	}
 }

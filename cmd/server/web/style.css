@@ -1741,6 +1741,9 @@ svg.sparkline{width:100%; height:46px; display:block}
      steal a column; overflow-x:hidden stops a horizontal bar from ever claiming
      the bottom strip where the prompt and newest output live. */
   overflow-x:hidden; overflow-y:scroll; scrollbar-gutter:stable; overscroll-behavior:contain;
+  /* Terminal scrollback inserts rows above the live grid; browser scroll
+     anchoring would yank the viewport upward and hide the prompt. */
+  overflow-anchor:none;
   scroll-padding-bottom:6px;
   font-variant-ligatures:none; font-feature-settings:"liga" 0;
   /* 允许文本选中（复制到剪贴板），移动端长按选中也依赖此属性 */
@@ -1756,6 +1759,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   overflow:hidden; box-sizing:border-box;
   user-select:text; -webkit-user-select:text;
 }
+.term-sb,.term-lv{overflow-anchor:none}
 .term-lv{position:relative; contain:layout paint style; will-change:contents}
 .term-cursor{
   position:absolute; display:block; box-sizing:border-box;

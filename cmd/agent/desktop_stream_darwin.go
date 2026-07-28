@@ -625,6 +625,8 @@ func deskPreferredCodec() string {
 	return ""
 }
 
+func deskLegacyCaptureHost() bool { return false }
+
 // darwinVKName returns either a single character or a macOS key code number string.
 func darwinVKName(vk int) string {
 	switch vk {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -78,7 +80,29 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 			_ = os.Remove(staging)
 			continue
 		}
-		binName, expected = cand, sum
+		actual, err := fileSHA256Hex(staging)
+		if err != nil {
+			lastDL = err
+			_ = os.Remove(staging)
+			continue
+		}
+		if !strings.EqualFold(sum, actual) {
+			lastDL = fmt.Errorf("SHA-256 mismatch for %s (want %s got %s)", cand, sum, actual)
+			_ = os.Remove(staging)
+			continue
+		}
+		_ = os.Chmod(staging, 0o755)
+		if err := peCompatibleWithHost(staging); err != nil {
+			lastDL = err
+			_ = os.Remove(staging)
+			continue
+		}
+		if err := agentBinaryVersionProbe(staging); err != nil {
+			lastDL = fmt.Errorf("%s not runnable: %w", cand, err)
+			_ = os.Remove(staging)
+			continue
+		}
+		binName, expected = cand, actual
 		break
 	}
 	if binName == "" {
@@ -88,16 +112,6 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 		}
 		return []byte("agent_update: download failed: " + lastDL.Error()), 1
 	}
-	actual, err := fileSHA256Hex(staging)
-	if err != nil {
-		_ = os.Remove(staging)
-		return []byte("agent_update: checksum compute failed: " + err.Error()), 1
-	}
-	if !strings.EqualFold(expected, actual) {
-		_ = os.Remove(staging)
-		return []byte(fmt.Sprintf("agent_update: SHA-256 mismatch (want %s got %s); refusing replace", expected, actual)), 1
-	}
-	_ = os.Chmod(staging, 0o755)
 
 	// Backup current binary. On Windows the running PE is often locked for
 	// reading — leave .bak to the restart helper and do not delete an existing
@@ -118,10 +132,11 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 
 	cfgPath := resolveAgentConfigBesideExe(dir)
 	if err := agentReplaceAndRestart(exe, staging, cfgPath); err != nil {
+		_ = os.Remove(staging)
 		return []byte("agent_update: " + err.Error()), 1
 	}
 	msg := fmt.Sprintf("agent_update: staged %s sha256=%s from=%s → restart scheduled (was %s",
-		binName, actual[:12], server, agentVersion())
+		binName, expected[:12], server, agentVersion())
 	if wantVer != "" {
 		msg += fmt.Sprintf(", target %s", wantVer)
 	}
@@ -206,6 +221,8 @@ func agentDistBinaryName(goos, goarch string) (string, error) {
 }
 
 // agentUpdateBinCandidates lists /dl names to try (server may ship either Windows alias).
+// On Server 2012 / Win8 kernels ONLY the Go 1.20 win2012 artifact is offered —
+// never fall back to modern aiops-agent.exe (it exits immediately on NT 6.2/6.3).
 func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	goos = strings.ToLower(strings.TrimSpace(goos))
 	goarch = strings.ToLower(strings.TrimSpace(goarch))
@@ -215,6 +232,9 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	case "aarch64":
 		goarch = "arm64"
 	}
+	const win2012 = "aiops-agent-windows-amd64-win2012.exe"
+	legacyWin := goos == "windows" && goarch == "amd64" && windowsNeedsLegacyAgentBuild()
+
 	var primary string
 	switch goos {
 	case "linux":
@@ -234,8 +254,8 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	case "windows":
 		switch goarch {
 		case "amd64":
-			if windowsNeedsLegacyAgentBuild() {
-				primary = "aiops-agent-windows-amd64-win2012.exe"
+			if legacyWin {
+				primary = win2012
 			} else {
 				primary = "aiops-agent.exe"
 			}
@@ -246,12 +266,25 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	if primary == "" {
 		return nil
 	}
-	out := make([]string, 0, 4)
+
 	pref := strings.TrimSpace(preferred)
 	if pref != "" {
 		pref = filepath.Base(pref)
 	}
-	if pref != "" && pref != "." && !strings.Contains(pref, "..") && !strings.ContainsAny(pref, `/\`) {
+	if pref == "." || strings.Contains(pref, "..") || strings.ContainsAny(pref, `/\`) {
+		pref = ""
+	}
+
+	// Legacy Windows: ignore preferred modern PE names — they cannot run here.
+	if legacyWin {
+		if pref != "" && pref != win2012 {
+			pref = ""
+		}
+		return []string{win2012}
+	}
+
+	out := make([]string, 0, 4)
+	if pref != "" {
 		out = append(out, pref)
 	}
 	if pref != primary {
@@ -259,9 +292,9 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 	}
 	if goos == "windows" && goarch == "amd64" {
 		for _, alt := range []string{
-			"aiops-agent-windows-amd64-win2012.exe",
 			"aiops-agent.exe",
 			"aiops-agent-windows-amd64.exe",
+			win2012, // last resort on modern Windows (runs, but prefer current build)
 		} {
 			dup := false
 			for _, e := range out {
@@ -276,6 +309,27 @@ func agentUpdateBinCandidates(goos, goarch, preferred string) []string {
 		}
 	}
 	return out
+}
+
+// agentBinaryVersionProbe runs `<bin> --version` to ensure the staged PE actually
+// starts on this kernel (catches Go≥1.21 binaries on Server 2012 before replace).
+func agentBinaryVersionProbe(path string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd.Env = append(os.Environ(), "AIOPS_UPDATE_PROBE=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
 func validateUpdateServerURL(server string, allowedBases []string) error {

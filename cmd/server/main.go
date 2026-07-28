@@ -57,6 +57,7 @@ func resolveDist(flagVal string) string {
 
 var expectedAgentDistNames = []string{
 	"aiops-agent.exe", // windows/amd64 (legacy name kept for install.ps1 back-compat)
+	"aiops-agent-windows-amd64-win2012.exe", // Server 2012/R2 + Win8 (Go 1.20)
 	"aiops-agent-windows-arm64.exe",
 	"aiops-agent-linux-amd64", "aiops-agent-linux-arm64",
 	"aiops-agent-darwin-arm64", "aiops-agent-darwin-amd64",
