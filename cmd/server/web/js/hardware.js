@@ -553,7 +553,8 @@ function hwDetailHTML(it, sd, m) {
     <button class="chart-enlarge" data-hwchart="${id}" title="${esc(hwT("ui.zoom_preview", "放大预览"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
   html += `<div class="hw-sec"><div class="hw-sec-head"><h4>${esc(hwT("hardware.history", "历史曲线"))}</h4></div>
     <div class="chart-controls">${["1h", "6h", "24h", "7d"].map(r =>
-      `<button class="chip-btn ${HW_HIST_RANGE === r ? "active" : ""}" data-hwrange="${r}">${r}</button>`).join("")}</div>
+      `<button class="chip-btn ${HW_HIST_RANGE === r ? "active" : ""}" data-hwrange="${r}">${r}</button>`).join("")}
+      ${typeof forecastChipHTML === "function" ? forecastChipHTML("hardware") : ""}</div>
     <div class="chart-container">${wrap("hwChartTemp")}${wrap("hwChartFan")}${wrap("hwChartPower")}${wrap("hwChartHealth")}</div></div>`;
 
   html += hwDetailPartsHTML(sd);
@@ -979,10 +980,18 @@ async function loadHwHistory() {
       const defs = series.slice(0, 8).map((s, i) => ({
         key: "v" + i, label: s.name, color: palette[i % palette.length], fmt,
       }));
-      HW_CHARTS[cid] = createChart(cid, samples, defs, null, null, { title });
+      const opts = { title, legendMode: defs.length >= 4 ? "dash" : "full", cssH: 210, forecastScope: "hardware" };
+      if (typeof createChartWithForecast === "function" && typeof isChartForecastOn === "function" && isChartForecastOn("hardware")) {
+        HW_CHARTS[cid] = await createChartWithForecast(cid, samples, defs, null, null, Object.assign({}, opts, { forecast: true }));
+      } else {
+        HW_CHARTS[cid] = createChart(cid, samples, defs, null, null, opts);
+      }
     } catch (e) { /* 单图失败不影响其它图 */ }
   }));
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "hardware" && typeof loadHwHistory === "function") loadHwHistory();
+});
 
 // 把 Prometheus data.result 解析成 [{name, pts:[[tsSec, val]]}]
 function hwParseSeries(points) {

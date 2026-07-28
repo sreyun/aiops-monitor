@@ -52,19 +52,78 @@ type grafanaPanel struct {
 		RefID        string `json:"refId"`
 	} `json:"targets"`
 	FieldConfig struct {
-		Defaults struct {
-			Unit     string   `json:"unit"`
-			Min      *float64 `json:"min"`
-			Max      *float64 `json:"max"`
-			Decimals int      `json:"decimals"`
-		} `json:"defaults"`
+		Defaults  grafanaFieldDefaults   `json:"defaults"`
+		Overrides []grafanaFieldOverride `json:"overrides"`
 	} `json:"fieldConfig"`
+	Options json.RawMessage `json:"options"` // Grafana panel options (legend etc.)
 	Yaxes []struct {
 		Format string `json:"format"`
 	} `json:"yaxes"`
 	Format  string         `json:"format"`
 	Content string         `json:"content"`
 	Panels  []grafanaPanel `json:"panels"` // 折叠 row 内嵌面板
+}
+
+type grafanaFieldDefaults struct {
+	Unit     string   `json:"unit"`
+	Min      *float64 `json:"min"`
+	Max      *float64 `json:"max"`
+	Decimals int      `json:"decimals"`
+	NoValue  string   `json:"noValue"`
+	Color    struct {
+		Mode       string `json:"mode"`
+		FixedColor string `json:"fixedColor"`
+	} `json:"color"`
+	Thresholds struct {
+		Mode  string `json:"mode"`
+		Steps []struct {
+			Value *float64 `json:"value"`
+			Color string   `json:"color"`
+		} `json:"steps"`
+	} `json:"thresholds"`
+	Mappings []grafanaValueMapping `json:"mappings"`
+	Custom   grafanaFieldCustom    `json:"custom"`
+}
+
+type grafanaFieldCustom struct {
+	DrawStyle         string      `json:"drawStyle"`
+	LineInterpolation string      `json:"lineInterpolation"`
+	LineWidth         json.Number `json:"lineWidth"`
+	FillOpacity       json.Number `json:"fillOpacity"`
+	GradientMode      string      `json:"gradientMode"`
+	ShowPoints        string      `json:"showPoints"` // auto|always|never
+	PointSize         json.Number `json:"pointSize"`
+	SpanNulls         interface{} `json:"spanNulls"` // bool or number
+	Stacking          struct {
+		Mode  string `json:"mode"` // none|normal|percent
+		Group string `json:"group"`
+	} `json:"stacking"`
+	AxisPlacement string `json:"axisPlacement"`
+	AxisLabel     string `json:"axisLabel"`
+	AxisSoftMin   *float64 `json:"axisSoftMin"`
+	AxisSoftMax   *float64 `json:"axisSoftMax"`
+}
+
+type grafanaValueMapping struct {
+	Type    string `json:"type"` // value|range|regex|special
+	Options json.RawMessage `json:"options"`
+	// Legacy Grafana 7 flat form
+	Value   interface{} `json:"value"`
+	Text    string      `json:"text"`
+	From    *float64    `json:"from"`
+	To      *float64    `json:"to"`
+	Pattern string      `json:"pattern"`
+}
+
+type grafanaFieldOverride struct {
+	Matcher struct {
+		ID      string          `json:"id"`
+		Options json.RawMessage `json:"options"`
+	} `json:"matcher"`
+	Properties []struct {
+		ID    string          `json:"id"`
+		Value json.RawMessage `json:"value"`
+	} `json:"properties"`
 }
 
 // mapGrafanaDashboard 把 Grafana 看板 JSON 映射为内部 Dashboard。
@@ -192,16 +251,446 @@ func mapGrafanaPanel(gp grafanaPanel) DashPanel {
 	p.Type = mapGrafanaPanelType(gp.Type)
 	if p.Type == "unsupported" {
 		p.RawType = gp.Type
-	} else if p.Type != "text" && p.Type != "alertlist" && len(p.Targets) == 0 {
+	} else if !dashNoTargetTypes[p.Type] && !dashComingSoonTypes[p.Type] && len(p.Targets) == 0 {
 		// 混合数据源 / 无 PromQL 的面板：降级为 unsupported 占位，避免 normalize 整板失败。
 		p.RawType = gp.Type
 		p.Type = "unsupported"
 	}
+	p.Options = mapGrafanaPanelOptions(gp)
 	return p
 }
 
+// mapGrafanaPanelOptions maps Grafana fieldConfig.defaults/overrides + panel options into DashPanelOptions.
+func mapGrafanaPanelOptions(gp grafanaPanel) DashPanelOptions {
+	o := mapGrafanaFieldDefaults(gp.FieldConfig.Defaults)
+	for _, ov := range gp.FieldConfig.Overrides {
+		mapped := mapGrafanaOverride(ov)
+		if mapped.MatcherID != "" || mapped.Unit != "" || mapped.Options.Palette != "" ||
+			len(mapped.Options.Thresholds) > 0 || len(mapped.Options.Mappings) > 0 {
+			o.Overrides = append(o.Overrides, mapped)
+		}
+	}
+	// Legend placement from Grafana options JSON when present.
+	if len(gp.Options) > 0 {
+		var opt struct {
+			Legend struct {
+				DisplayMode string `json:"displayMode"`
+				Placement   string `json:"placement"`
+				ShowLegend  *bool  `json:"showLegend"`
+			} `json:"legend"`
+		}
+		if json.Unmarshal(gp.Options, &opt) == nil {
+			if opt.Legend.ShowLegend != nil && !*opt.Legend.ShowLegend {
+				o.Legend = "hidden"
+			} else if opt.Legend.DisplayMode == "hidden" {
+				o.Legend = "hidden"
+			} else if opt.Legend.Placement == "right" {
+				o.Legend = "right"
+			} else if opt.Legend.Placement == "top" {
+				o.Legend = "top"
+			} else if opt.Legend.Placement == "bottom" {
+				o.Legend = "bottom"
+			}
+		}
+	}
+	return o
+}
+
+func mapGrafanaFieldDefaults(def grafanaFieldDefaults) DashPanelOptions {
+	var o DashPanelOptions
+	if def.Decimals > 0 {
+		d := def.Decimals
+		if d > 10 {
+			d = 10
+		}
+		o.Decimals = &d
+	}
+	o.NoValue = strings.TrimSpace(def.NoValue)
+	o.ColorMode = strings.TrimSpace(def.Color.Mode)
+	o.Palette = mapGrafanaColorMode(def.Color.Mode)
+	if strings.EqualFold(def.Color.Mode, "fixed") {
+		if c := mapGrafanaColor(def.Color.FixedColor); c != "" {
+			o.Colors = []string{c}
+		}
+	}
+	mode := strings.ToLower(strings.TrimSpace(def.Thresholds.Mode))
+	if mode == "percentage" {
+		o.ThresholdMode = "percentage"
+	} else if mode != "" {
+		o.ThresholdMode = "absolute"
+	}
+	for _, s := range def.Thresholds.Steps {
+		if s.Value == nil {
+			// Grafana base step (null): keep as 0 when color present so ladder is complete.
+			c := mapGrafanaColor(s.Color)
+			if c == "" {
+				continue
+			}
+			o.Thresholds = append(o.Thresholds, DashThreshold{Value: 0, Color: c})
+			continue
+		}
+		c := mapGrafanaColor(s.Color)
+		if c == "" {
+			continue
+		}
+		o.Thresholds = append(o.Thresholds, DashThreshold{Value: *s.Value, Color: c})
+	}
+	o.Mappings = mapGrafanaMappings(def.Mappings)
+	applyGrafanaCustom(&o, def.Custom)
+	return o
+}
+
+func mapGrafanaColorMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "palette-classic", "palette-classic-by-name":
+		return "classic"
+	case "fixed":
+		return "custom"
+	case "continuous-GrYlRd", "continuous-RdYlGr", "thresholds":
+		return "traffic"
+	case "continuous-BlYlRd", "continuous-BlPu", "continuous-blues":
+		return "cool"
+	case "continuous-YlRd", "continuous-OrRd", "continuous-reds":
+		return "warm"
+	case "continuous-Grays", "continuous-greys":
+		return "mono"
+	default:
+		return ""
+	}
+}
+
+func applyGrafanaCustom(o *DashPanelOptions, c grafanaFieldCustom) {
+	if o == nil {
+		return
+	}
+	ds := strings.ToLower(strings.TrimSpace(c.DrawStyle))
+	o.DrawStyle = ds
+	switch ds {
+	case "bars":
+		o.ChartStyle = "bar"
+	case "line":
+		o.ChartStyle = "line"
+	case "points":
+		o.ChartStyle = "line"
+		o.ShowPoints = true
+	}
+	if strings.EqualFold(c.LineInterpolation, "smooth") {
+		o.Smooth = true
+	}
+	switch strings.ToLower(strings.TrimSpace(c.ShowPoints)) {
+	case "always":
+		o.ShowPoints = true
+	case "never":
+		o.ShowPoints = false
+	}
+	if v, err := c.LineWidth.Float64(); err == nil {
+		o.LineWidth = &v
+	}
+	if v, err := c.FillOpacity.Float64(); err == nil {
+		o.FillOpacity = &v
+		if v > 0 && o.ChartStyle == "line" {
+			o.ChartStyle = "area"
+		}
+	}
+	if v, err := c.PointSize.Float64(); err == nil {
+		o.PointSize = &v
+	}
+	o.GradientMode = strings.ToLower(strings.TrimSpace(c.GradientMode))
+	o.AxisPlacement = strings.ToLower(strings.TrimSpace(c.AxisPlacement))
+	if strings.EqualFold(c.Stacking.Mode, "normal") || strings.EqualFold(c.Stacking.Mode, "percent") {
+		o.Stacked = true
+	}
+	switch sp := c.SpanNulls.(type) {
+	case bool:
+		o.SpanNulls = sp
+	case float64:
+		o.SpanNulls = sp != 0
+	case json.Number:
+		if f, err := sp.Float64(); err == nil {
+			o.SpanNulls = f != 0
+		}
+	}
+}
+
+func mapGrafanaMappings(in []grafanaValueMapping) []DashValueMapping {
+	var out []DashValueMapping
+	for _, m := range in {
+		typ := strings.ToLower(strings.TrimSpace(m.Type))
+		switch typ {
+		case "value", "range", "regex", "special":
+		case "valuemap", "valueMap":
+			typ = "value"
+		default:
+			// Legacy without type: infer
+			if m.Pattern != "" {
+				typ = "regex"
+			} else if m.From != nil || m.To != nil {
+				typ = "range"
+			} else if m.Value != nil || len(m.Options) > 0 {
+				typ = "value"
+			} else {
+				continue
+			}
+		}
+		dm := DashValueMapping{Type: typ}
+		// Modern options blob
+		if len(m.Options) > 0 {
+			switch typ {
+			case "value":
+				var opt map[string]struct {
+					Text  string `json:"text"`
+					Color string `json:"color"`
+					Index int    `json:"index"`
+				}
+				if json.Unmarshal(m.Options, &opt) == nil {
+					for k, v := range opt {
+						out = append(out, DashValueMapping{
+							Type: "value", Value: k, Text: v.Text,
+							Color: mapGrafanaColor(v.Color), Index: v.Index,
+						})
+					}
+					continue
+				}
+			case "range":
+				var opt struct {
+					From  *float64 `json:"from"`
+					To    *float64 `json:"to"`
+					Result struct {
+						Text  string `json:"text"`
+						Color string `json:"color"`
+						Index int    `json:"index"`
+					} `json:"result"`
+				}
+				if json.Unmarshal(m.Options, &opt) == nil {
+					dm.From, dm.To = opt.From, opt.To
+					dm.Text = opt.Result.Text
+					dm.Color = mapGrafanaColor(opt.Result.Color)
+					dm.Index = opt.Result.Index
+					out = append(out, dm)
+					continue
+				}
+			case "regex":
+				var opt struct {
+					Pattern string `json:"pattern"`
+					Result  struct {
+						Text  string `json:"text"`
+						Color string `json:"color"`
+						Index int    `json:"index"`
+					} `json:"result"`
+				}
+				if json.Unmarshal(m.Options, &opt) == nil {
+					dm.Pattern = opt.Pattern
+					dm.Text = opt.Result.Text
+					dm.Color = mapGrafanaColor(opt.Result.Color)
+					dm.Index = opt.Result.Index
+					out = append(out, dm)
+					continue
+				}
+			case "special":
+				var opt struct {
+					Match  string `json:"match"`
+					Result struct {
+						Text  string `json:"text"`
+						Color string `json:"color"`
+						Index int    `json:"index"`
+					} `json:"result"`
+				}
+				if json.Unmarshal(m.Options, &opt) == nil {
+					dm.Special = opt.Match
+					dm.Text = opt.Result.Text
+					dm.Color = mapGrafanaColor(opt.Result.Color)
+					dm.Index = opt.Result.Index
+					out = append(out, dm)
+					continue
+				}
+			}
+		}
+		// Legacy flat
+		dm.Text = m.Text
+		dm.From, dm.To = m.From, m.To
+		dm.Pattern = m.Pattern
+		if m.Value != nil {
+			dm.Value = fmt.Sprint(m.Value)
+		}
+		out = append(out, dm)
+	}
+	return out
+}
+
+func mapGrafanaOverride(ov grafanaFieldOverride) DashFieldOverride {
+	out := DashFieldOverride{MatcherID: strings.TrimSpace(ov.Matcher.ID)}
+	if len(ov.Matcher.Options) > 0 {
+		var s string
+		if json.Unmarshal(ov.Matcher.Options, &s) == nil {
+			out.MatcherOptions = s
+		} else {
+			out.MatcherOptions = strings.TrimSpace(string(ov.Matcher.Options))
+		}
+	}
+	for _, prop := range ov.Properties {
+		id := strings.TrimSpace(prop.ID)
+		val := prop.Value
+		switch id {
+		case "unit":
+			var u string
+			if json.Unmarshal(val, &u) == nil {
+				out.Unit = u
+			}
+		case "decimals":
+			var d int
+			if json.Unmarshal(val, &d) == nil {
+				out.Decimals = &d
+			}
+		case "min":
+			var f float64
+			if json.Unmarshal(val, &f) == nil {
+				out.Min = &f
+			}
+		case "max":
+			var f float64
+			if json.Unmarshal(val, &f) == nil {
+				out.Max = &f
+			}
+		case "noValue":
+			var s string
+			if json.Unmarshal(val, &s) == nil {
+				out.NoValue = s
+			}
+		case "color":
+			var c struct {
+				Mode       string `json:"mode"`
+				FixedColor string `json:"fixedColor"`
+			}
+			if json.Unmarshal(val, &c) == nil {
+				out.Options.ColorMode = c.Mode
+				out.Options.Palette = mapGrafanaColorMode(c.Mode)
+				if fc := mapGrafanaColor(c.FixedColor); fc != "" {
+					out.Options.Colors = []string{fc}
+				}
+			}
+		case "thresholds":
+			var th struct {
+				Mode  string `json:"mode"`
+				Steps []struct {
+					Value *float64 `json:"value"`
+					Color string   `json:"color"`
+				} `json:"steps"`
+			}
+			if json.Unmarshal(val, &th) == nil {
+				if strings.EqualFold(th.Mode, "percentage") {
+					out.Options.ThresholdMode = "percentage"
+				} else if th.Mode != "" {
+					out.Options.ThresholdMode = "absolute"
+				}
+				for _, s := range th.Steps {
+					if s.Value == nil {
+						continue
+					}
+					if c := mapGrafanaColor(s.Color); c != "" {
+						out.Options.Thresholds = append(out.Options.Thresholds, DashThreshold{Value: *s.Value, Color: c})
+					}
+				}
+			}
+		case "mappings":
+			var maps []grafanaValueMapping
+			if json.Unmarshal(val, &maps) == nil {
+				out.Options.Mappings = mapGrafanaMappings(maps)
+			}
+		case "custom.drawStyle", "custom.lineWidth", "custom.fillOpacity",
+			"custom.gradientMode", "custom.showPoints", "custom.pointSize",
+			"custom.spanNulls", "custom.stacking", "custom.axisPlacement",
+			"custom.lineInterpolation":
+			applyGrafanaOverrideCustom(&out.Options, id, val)
+		}
+	}
+	return out
+}
+
+func applyGrafanaOverrideCustom(o *DashPanelOptions, id string, val json.RawMessage) {
+	if o == nil {
+		return
+	}
+	switch id {
+	case "custom.drawStyle":
+		var s string
+		if json.Unmarshal(val, &s) == nil {
+			applyGrafanaCustom(o, grafanaFieldCustom{DrawStyle: s})
+		}
+	case "custom.lineWidth":
+		var f float64
+		if json.Unmarshal(val, &f) == nil {
+			o.LineWidth = &f
+		}
+	case "custom.fillOpacity":
+		var f float64
+		if json.Unmarshal(val, &f) == nil {
+			o.FillOpacity = &f
+			if f > 0 && (o.ChartStyle == "" || o.ChartStyle == "line") {
+				o.ChartStyle = "area"
+			}
+		}
+	case "custom.gradientMode":
+		var s string
+		if json.Unmarshal(val, &s) == nil {
+			o.GradientMode = strings.ToLower(s)
+		}
+	case "custom.showPoints":
+		var s string
+		if json.Unmarshal(val, &s) == nil && strings.EqualFold(s, "always") {
+			o.ShowPoints = true
+		}
+	case "custom.pointSize":
+		var f float64
+		if json.Unmarshal(val, &f) == nil {
+			o.PointSize = &f
+		}
+	case "custom.spanNulls":
+		var b bool
+		if json.Unmarshal(val, &b) == nil {
+			o.SpanNulls = b
+		}
+	case "custom.stacking":
+		var st struct {
+			Mode string `json:"mode"`
+		}
+		if json.Unmarshal(val, &st) == nil && (st.Mode == "normal" || st.Mode == "percent") {
+			o.Stacked = true
+		}
+	case "custom.axisPlacement":
+		var s string
+		if json.Unmarshal(val, &s) == nil {
+			o.AxisPlacement = strings.ToLower(s)
+		}
+	case "custom.lineInterpolation":
+		var s string
+		if json.Unmarshal(val, &s) == nil && strings.EqualFold(s, "smooth") {
+			o.Smooth = true
+		}
+	}
+}
+
+func mapGrafanaColor(c string) string {
+	c = strings.TrimSpace(c)
+	switch strings.ToLower(c) {
+	case "green", "semi-dark-green", "dark-green", "super-light-green":
+		return "var(--ok)"
+	case "yellow", "orange", "semi-dark-orange", "dark-orange":
+		return "var(--warn)"
+	case "red", "dark-red", "semi-dark-red", "super-light-red":
+		return "var(--crit)"
+	case "blue", "semi-dark-blue", "dark-blue", "super-light-blue", "purple":
+		return "var(--accent)"
+	case "text", "transparent":
+		return "var(--muted)"
+	}
+	if strings.HasPrefix(c, "#") {
+		return c
+	}
+	return ""
+}
+
 func mapGrafanaPanelType(t string) string {
-	switch t {
+	switch strings.ToLower(strings.TrimSpace(t)) {
 	case "timeseries", "graph", "graph-old":
 		return "timeseries"
 	case "stat", "singlestat":
@@ -220,13 +709,31 @@ func mapGrafanaPanelType(t string) string {
 		return "state-timeline"
 	case "heatmap":
 		return "heatmap"
+	case "candlestick":
+		return "candlestick"
+	case "radar", "grafana-radar-panel":
+		return "radar"
+	case "nodegraph":
+		return "nodegraph"
+	case "xychart":
+		return "unsupported"
+	case "sankey", "grafana-sankey-panel":
+		return "sankey"
+	case "geomap":
+		return "geomap"
+	case "flamegraph", "grafana-flamegraph-panel":
+		return "flamegraph"
+	case "clock", "grafana-clock-panel":
+		return "clock"
+	case "news", "grafana-news-panel":
+		return "news"
 	case "alertlist":
 		return "alertlist"
 	case "logs":
 		return "logs"
 	case "table", "table-old":
 		return "table"
-	case "text":
+	case "text", "markdown":
 		return "text"
 	default:
 		return "unsupported"

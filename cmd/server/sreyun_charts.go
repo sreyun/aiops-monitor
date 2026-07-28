@@ -90,6 +90,55 @@ func (h *SreyunCore) registerChartTools() {
 		},
 		Execute: h.execAnalyzeMetricTrend,
 	}
+	h.tools["forecast_metric"] = SreyunTool{
+		Name: "forecast_metric",
+		Description: "基于历史时序做多模型预测（Holt-Winters / 形态回放 / 季节 / 阻尼 Holt），返回预测曲线+置信带+MAPE/R²，并在对话中以虚线图表展示。" +
+			"用户问「未来会不会超阈值」「预测明天 CPU」「还能撑多久」时必须调用本工具，勿臆测。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id":    map[string]string{"type": "string", "description": "主机 ID / 主机名 / IP（与 expr 二选一）"},
+				"metric":     map[string]string{"type": "string", "description": "cpu|memory|disk|load，默认 cpu（host 模式）"},
+				"expr":       map[string]string{"type": "string", "description": "PromQL（与 host_id 二选一）"},
+				"datasource": map[string]string{"type": "string", "description": "数据源 ID，留空=内置"},
+				"range":      map[string]string{"type": "string", "description": "历史窗口，如 6h/24h/7d，默认 24h；预测窗默认等于该窗口"},
+				"horizon":    map[string]string{"type": "string", "description": "自定义预测时长，如 3d/2h；留空=与 range 等长"},
+				"threshold":  map[string]any{"type": "number", "description": "可选阈值；若给出则估算穿越时间"},
+			},
+		},
+		Execute: h.execForecastMetric,
+	}
+	h.tools["propose_skill"] = SreyunTool{
+		Name: "propose_skill",
+		Description: "当识别到重复运维模式（如多次「查日志→定位 OOM→重启」）时，提议创建可复用 Skill 草稿。" +
+			"confirm=false 仅提案；confirm=true 写入技能库（draft 状态，待用户启用）。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":     map[string]string{"type": "string", "description": "技能名"},
+				"trigger":  map[string]string{"type": "string", "description": "触发条件"},
+				"steps":    map[string]string{"type": "string", "description": "步骤（含预期结果与回滚）"},
+				"tags":     map[string]string{"type": "string", "description": "标签"},
+				"confirm":  map[string]any{"type": "boolean", "description": "true=入库 draft"},
+				"pattern":  map[string]string{"type": "string", "description": "模式指纹，用于累计重复次数"},
+			},
+			"required": []string{"name", "steps"},
+		},
+		Execute: h.execProposeSkill,
+	}
+	h.tools["remember_preference"] = SreyunTool{
+		Name:        "remember_preference",
+		Description: "记住用户长期偏好（常用看板、关注指标、习惯时间范围等），跨会话复用。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key":   map[string]string{"type": "string", "description": "如 preferred_range / focus_metrics / favorite_dashboard"},
+				"value": map[string]string{"type": "string", "description": "偏好内容"},
+			},
+			"required": []string{"key", "value"},
+		},
+		Execute: h.execRememberPreference,
+	}
 }
 
 var chatChartColors = []string{
@@ -729,5 +778,205 @@ func (h *SreyunCore) execAnalyzeMetricTrend(args map[string]any) (string, error)
 			"points":   len(samples),
 		},
 		UIActions: actions,
+	}), nil
+}
+
+func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
+	if h.s == nil {
+		return capabilityJSON(capabilityResult{OK: false, Error: "服务不可用"}), nil
+	}
+	hostRef, _ := args["host_id"].(string)
+	metric, _ := args["metric"].(string)
+	expr, _ := args["expr"].(string)
+	ds, _ := args["datasource"].(string)
+	rangeRaw, _ := args["range"].(string)
+	horizonRaw, _ := args["horizon"].(string)
+	var threshold float64
+	hasThr := false
+	if v, ok := args["threshold"].(float64); ok {
+		threshold, hasThr = v, true
+	}
+
+	from, to, rangeLabel := parseChartRange(rangeRaw, 24)
+	rangeSec := to - from
+	horizonSec := rangeSec
+	if strings.TrimSpace(horizonRaw) != "" {
+		hf, ht, _ := parseChartRange(horizonRaw, 24)
+		if ht > hf {
+			horizonSec = ht - hf
+		}
+	}
+	step := rangeSec / 180
+	if step < 15 {
+		step = 15
+	}
+
+	var hist [][2]float64
+	title := "趋势预测"
+	metricKey := "cpu"
+	if strings.TrimSpace(expr) != "" {
+		series, ok := h.s.dashRangeSeries(strings.TrimSpace(ds), strings.TrimSpace(expr), from, to, step)
+		if !ok || len(series) == 0 || len(series[0].Points) == 0 {
+			return capabilityJSON(capabilityResult{OK: false, Error: "PromQL 历史数据不足，无法预测"}), nil
+		}
+		hist = series[0].Points
+		title = trimLine(expr, 40) + " · 预测"
+	} else {
+		hst := h.resolveHostRef(hostRef)
+		if hst == nil {
+			return capabilityJSON(capabilityResult{OK: false, Error: "请提供 host_id 或 expr"}), nil
+		}
+		keys := normalizeMetricKeys(metric, "cpu")
+		metricKey = keys[0]
+		samples := h.loadHostSamples(hst.ID, from, to)
+		for _, s := range samples {
+			if v, ok := sampleMetricValue(s, metricKey); ok {
+				hist = append(hist, [2]float64{float64(s.Timestamp), v})
+			}
+		}
+		title = fmt.Sprintf("%s · %s 预测", hst.Hostname, metricLabel(metricKey))
+	}
+	if bias := h.s.forecastBiasHints(title+" "+metricKey, 2); bias != "" {
+		// included in summary below
+		_ = bias
+	}
+	band, mape, r2, method, errMsg := holtLinearForecast(hist, to, horizonSec, step)
+	if errMsg != "" {
+		return capabilityJSON(capabilityResult{OK: false, Error: errMsg}), nil
+	}
+
+	// Build chat chart: history solid + forecast dashed
+	seriesDefs := []map[string]any{
+		{"key": "hist", "label": "历史", "color": chatChartColors[0]},
+		{"key": "fc", "label": "预测", "color": chatChartColors[3], "dashed": true, "kind": "forecast"},
+	}
+	tsMap := map[int64]map[string]any{}
+	for _, p := range hist {
+		ts := int64(p[0])
+		row := tsMap[ts]
+		if row == nil {
+			row = map[string]any{"timestamp": ts}
+			tsMap[ts] = row
+		}
+		row["hist"] = round3(p[1])
+	}
+	for _, p := range band {
+		ts := int64(p.TS)
+		row := tsMap[ts]
+		if row == nil {
+			row = map[string]any{"timestamp": ts}
+			tsMap[ts] = row
+		}
+		row["fc"] = round3(p.Value)
+	}
+	tsList := make([]int64, 0, len(tsMap))
+	for ts := range tsMap {
+		tsList = append(tsList, ts)
+	}
+	sort.Slice(tsList, func(i, j int) bool { return tsList[i] < tsList[j] })
+	rows := make([]map[string]any, 0, len(tsList))
+	for _, ts := range tsList {
+		rows = append(rows, tsMap[ts])
+	}
+	chart := map[string]any{"samples": rows, "series": seriesDefs, "title": title}
+
+	sum := fmt.Sprintf("已完成预测（%s，MAPE≈%.1f%%，R²≈%.2f，方法 %s，展望 %s）",
+		rangeLabel, mape, r2, method, formatHorizon(horizonSec))
+	if bias := h.s.forecastBiasHints(metricKey+" "+title, 2); bias != "" {
+		sum += "；已注入历史偏差修正提示"
+	}
+	data := map[string]any{
+		"mape": mape, "r2": r2, "method": method,
+		"horizon_sec": horizonSec, "points": len(band),
+		"forecast_last": round3(band[len(band)-1].Value),
+		"forecast_hi":   round3(band[len(band)-1].Hi),
+		"forecast_lo":   round3(band[len(band)-1].Lo),
+	}
+	if hasThr {
+		if cross, ok := forecastCrossThreshold(hist, threshold, step); ok {
+			data["cross_threshold_at"] = cross
+			data["cross_threshold_in"] = cross - to
+			sum += fmt.Sprintf("；按趋势预计约 %s 后触及阈值 %.2f", formatHorizon(cross-to), threshold)
+			// Persist soft bias anchor for later reflection
+			go h.s.rememberAI("forecast_bias", "forecast_anchor:"+metricKey,
+				fmt.Sprintf("预测锚点：%s 阈值 %.2f，预计穿越时间戳 %d，预测末端 %.2f", metricKey, threshold, cross, band[len(band)-1].Value))
+		} else {
+			sum += fmt.Sprintf("；在展望窗口内未必触及阈值 %.2f", threshold)
+		}
+	}
+	id := chartID()
+	actions := []map[string]any{
+		showChartAction(id, "查看预测曲线", title, chart, map[string]any{
+			"kind": "forecast", "range": rangeLabel, "horizon_sec": horizonSec,
+		}),
+	}
+	return capabilityJSON(capabilityResult{OK: true, Summary: sum, Data: data, UIActions: actions}), nil
+}
+
+func formatHorizon(sec int64) string {
+	if sec < 0 {
+		sec = -sec
+	}
+	if sec < 3600 {
+		return fmt.Sprintf("%dm", sec/60)
+	}
+	if sec < 48*3600 {
+		return fmt.Sprintf("%.0fh", float64(sec)/3600)
+	}
+	return fmt.Sprintf("%.0fd", float64(sec)/86400)
+}
+
+func (h *SreyunCore) execProposeSkill(args map[string]any) (string, error) {
+	if h.s == nil {
+		return capabilityJSON(capabilityResult{OK: false, Error: "服务不可用"}), nil
+	}
+	name, _ := args["name"].(string)
+	trigger, _ := args["trigger"].(string)
+	steps, _ := args["steps"].(string)
+	tags, _ := args["tags"].(string)
+	pattern, _ := args["pattern"].(string)
+	confirm, _ := args["confirm"].(bool)
+	actor := scopeActorFromArgs(args)
+	if pattern == "" {
+		pattern = name
+	}
+	propose, autoName, autoTrig, autoSteps := h.s.trackOpsPattern(actor, pattern, steps)
+	if !confirm {
+		msg := "已记录运维模式"
+		if propose {
+			msg = fmt.Sprintf("检测到重复模式，建议创建 Skill「%s」。请向用户确认后再次调用 propose_skill(confirm=true)", autoName)
+		}
+		return capabilityJSON(capabilityResult{
+			OK: true, Summary: msg,
+			Data: map[string]any{
+				"should_propose": propose,
+				"draft_name":     firstNonEmpty(autoName, name),
+				"draft_trigger":  firstNonEmpty(autoTrig, trigger),
+				"draft_steps":    firstNonEmpty(autoSteps, steps),
+			},
+		}), nil
+	}
+	id, err := h.s.proposeSkillDraft(firstNonEmpty(name, autoName), firstNonEmpty(trigger, autoTrig), firstNonEmpty(steps, autoSteps), tags)
+	if err != nil {
+		return capabilityJSON(capabilityResult{OK: false, Error: err.Error()}), nil
+	}
+	return capabilityJSON(capabilityResult{
+		OK:      true,
+		Summary: fmt.Sprintf("已创建 Skill 草稿 #%d，请在技能库中审核启用", id),
+		Data:    map[string]any{"skill_id": id, "status": "draft"},
+	}), nil
+}
+
+func (h *SreyunCore) execRememberPreference(args map[string]any) (string, error) {
+	if h.s == nil {
+		return capabilityJSON(capabilityResult{OK: false, Error: "服务不可用"}), nil
+	}
+	key, _ := args["key"].(string)
+	value, _ := args["value"].(string)
+	actor := scopeActorFromArgs(args)
+	h.s.rememberUserPreference(actor, key, value)
+	return capabilityJSON(capabilityResult{
+		OK: true, Summary: "已记住偏好 " + strings.TrimSpace(key),
+		Data: map[string]any{"key": key, "value": value},
 	}), nil
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AIOps Monitor · 主机监控运维平台</title>
+<title>AIOps · 主机监控运维平台</title>
 <meta name="theme-color" content="#f5f7fa" data-aiops-theme>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -13,6 +13,7 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/style.css?v=0.18.45">
 <script src="/theme-init.js"></script>
+<script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
 <link rel="alternate" hreflang="en" href="/?lang=en">
@@ -22,7 +23,7 @@
 <noscript>
   <div style="position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;background:#f5f7fa;color:#1a2332;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;text-align:center;line-height:1.7">
     <div style="max-width:460px">
-      <div style="font-size:18px;font-weight:600;margin-bottom:10px">AIOps Monitor 需要启用 JavaScript</div>
+      <div style="font-size:18px;font-weight:600;margin-bottom:10px">AIOps 需要启用 JavaScript</div>
       <div style="font-size:14px;color:#b3bccb">本监控面板为动态渲染页面，请在浏览器中启用 JavaScript 后刷新本页。<br>This dashboard requires JavaScript — please enable it and reload.</div>
     </div>
   </div>
@@ -34,7 +35,7 @@
     <div class="brand">
       <div class="logo">AI</div>
       <div class="brand-txt">
-        <h1>AIOps Monitor</h1>
+        <h1>AIOps</h1>
         <div class="sub" data-i18n="brand.sub">主机监控运维平台</div>
       </div>
     </div>
@@ -380,7 +381,7 @@
       <section class="view active" id="view-overview">
         <!-- 空态引导：还没有任何主机时展示三步上手 -->
         <div class="onboard" id="onboarding" style="display:none">
-          <div class="ob-title" data-i18n="onboard.welcome">👋 欢迎使用 AIOps Monitor，三步开始监控</div>
+          <div class="ob-title" data-i18n="onboard.welcome">👋 欢迎使用 AIOps，三步开始监控</div>
           <div class="ob-steps">
             <div class="ob-step"><span class="ob-num">1</span><div><b data-i18n="onboard.step1_title">安装 Agent</b><div class="hint" data-i18n="onboard.step1_hint">点下方按钮，复制一条命令到被监控主机执行</div></div></div>
             <div class="ob-step"><span class="ob-num">2</span><div><b data-i18n="onboard.step2_title">查看主机</b><div class="hint" data-i18n="onboard.step2_hint">几秒后主机卡片自动出现在「主机」页</div></div></div>
@@ -1845,7 +1846,7 @@
         </div>
         <div class="field">
           <label data-i18n="settings.smtp_from_name">发件人显示名称</label>
-          <input type="text" id="smtpFromName" placeholder="AIOps Monitor">
+          <input type="text" id="smtpFromName" placeholder="AIOps">
         </div>
       </div>
 
@@ -2120,6 +2121,20 @@
     <div class="modal-body">
       <div class="zoom-hint">拖动框选可放大区间 · 双击还原 · 悬停查看数值</div>
       <div class="chart-wrap"><canvas id="chartZoomCanvas" width="1040" height="360"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 看板组件放大预览 ===== -->
+<div class="mask" id="dashPanelZoomMask" data-close>
+  <div class="modal modal-xl dash-panel-zoom-modal">
+    <div class="modal-head">
+      <h3 id="dashPanelZoomTitle">组件放大</h3>
+      <button class="btn ghost close" data-close-btn data-dash-zoom-close aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body dash-panel-zoom-body">
+      <div class="zoom-hint">左=历史实时 · 右=预测（虚线）；可滚轮/滑块缩放时间轴 · Esc 关闭</div>
+      <div class="dash-panel-zoom-stage" id="dashPanelZoomBody"></div>
     </div>
   </div>
 </div>
@@ -2645,56 +2660,118 @@
   </div>
 </div>
 
-<!-- ===== 面板编辑弹窗 ===== -->
+<!-- ===== 面板编辑弹窗（商业 BI：数据 / 显示 / 阈值） ===== -->
 <div class="mask" id="panelEditMask" data-close>
-  <div class="modal modal-lg">
+  <div class="modal modal-lg modal-panel-edit">
     <div class="modal-head"><h3 id="panelEditTitle">编辑面板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <input type="hidden" id="panelId">
-      <div class="editor-sec">组件模板</div>
-      <div class="panel-template-palette" id="panelTemplatePalette">
-        <button type="button" data-panel-template="trend"><b>⌁ 趋势</b><span>时序与变化</span></button>
-        <button type="button" data-panel-template="kpi"><b>123 KPI</b><span>关键单值</span></button>
-        <button type="button" data-panel-template="gauge"><b>◔ 仪表</b><span>阈值水位</span></button>
-        <button type="button" data-panel-template="ranking"><b>☷ 排行</b><span>Top-N 对比</span></button>
-        <button type="button" data-panel-template="table"><b>▤ 表格</b><span>结构化明细</span></button>
-        <button type="button" data-panel-template="logs"><b>≡ 日志</b><span>Loki 日志流</span></button>
-        <button type="button" data-panel-template="alerts"><b>⚠ 告警</b><span>当前告警</span></button>
-        <button type="button" data-panel-template="text"><b>¶ 说明</b><span>安全 Markdown</span></button>
+      <div class="panel-edit-tabs" role="tablist">
+        <button type="button" class="panel-edit-tab active" data-panel-tab="data" data-i18n="dash.panel_tab_data">数据</button>
+        <button type="button" class="panel-edit-tab" data-panel-tab="display" data-i18n="dash.panel_tab_display">显示</button>
+        <button type="button" class="panel-edit-tab" data-panel-tab="threshold" data-i18n="dash.panel_tab_threshold">阈值</button>
       </div>
-      <div class="editor-sec">基本</div>
-      <div class="grid2">
-        <div class="field"><label>标题</label><input type="text" id="panelTitle" placeholder="如 CPU 使用率"></div>
-        <div class="field"><label>类型</label><div class="select-wrap"><select id="panelType">
-          <optgroup label="趋势"><option value="timeseries">时序曲线</option><option value="state-timeline">状态时间线</option><option value="heatmap">热力图</option></optgroup>
-          <optgroup label="单值 / 分布"><option value="stat">数值 Stat</option><option value="gauge">仪表盘 Gauge</option><option value="histogram">直方图</option></optgroup>
-          <optgroup label="构成 / 排行"><option value="piechart">饼图 Pie</option><option value="barchart">柱状图 Bar</option><option value="bargauge">条形 BarGauge</option></optgroup>
-          <optgroup label="明细 / 平台"><option value="table">表格 Table</option><option value="logs">日志 Logs</option><option value="alertlist">告警列表</option><option value="text">文本 Text</option></optgroup>
-        </select></div></div>
-      </div>
-      <div class="field" id="panelDSRow"><label>数据源 <span class="tag">留空=继承看板默认</span></label><div class="select-wrap"><select id="panelDS"></select></div></div>
 
-      <div class="editor-sec" id="panelQuerySec">查询</div>
-      <div id="panelTargetsWrap">
-        <div id="panelTargets"></div>
-        <div class="panel-query-tools"><button class="btn sm" id="panelAddTarget" type="button">+ 添加查询</button><button class="btn sm" id="panelTestQuery" type="button">▶ 测试查询</button><span class="panel-query-test-result" id="panelQueryTestResult" role="status" aria-live="polite"></span></div>
-        <div class="hint" id="panelQueryHint" style="margin-top:6px">PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。</div>
+      <div class="panel-edit-pane active" data-panel-pane="data">
+        <div class="editor-sec" data-i18n="dash.panel_templates">组件模板</div>
+        <div class="panel-template-palette" id="panelTemplatePalette">
+          <button type="button" data-panel-template="trend"><b>⌁ 趋势</b><span>时序与变化</span></button>
+          <button type="button" data-panel-template="kpi"><b>123 KPI</b><span>关键单值</span></button>
+          <button type="button" data-panel-template="gauge"><b>◔ 仪表</b><span>阈值水位</span></button>
+          <button type="button" data-panel-template="ranking"><b>☷ 排行</b><span>Top-N 对比</span></button>
+          <button type="button" data-panel-template="table"><b>▤ 表格</b><span>结构化明细</span></button>
+          <button type="button" data-panel-template="logs"><b>≡ 日志</b><span>Loki 日志流</span></button>
+          <button type="button" data-panel-template="alerts"><b>⚠ 告警</b><span>当前告警</span></button>
+          <button type="button" data-panel-template="text"><b>¶ 说明</b><span>安全 Markdown</span></button>
+        </div>
+        <div class="editor-sec" data-i18n="dash.panel_basic">基本</div>
+        <div class="grid2">
+          <div class="field"><label data-i18n="dash.panel_title">标题</label><input type="text" id="panelTitle" placeholder="如 CPU 使用率"></div>
+          <div class="field"><label data-i18n="dash.panel_type">类型</label><div class="select-wrap"><select id="panelType">
+            <optgroup label="趋势"><option value="timeseries">时序曲线</option><option value="state-timeline">状态时间线</option><option value="heatmap">热力图</option><option value="candlestick">K 线</option><option value="histogram">直方图</option></optgroup>
+            <optgroup label="单值 / 分布"><option value="stat">数值 Stat</option><option value="gauge">仪表盘 Gauge</option><option value="radar">雷达图</option></optgroup>
+            <optgroup label="构成 / 排行"><option value="piechart">饼图 Pie</option><option value="barchart">柱状图 Bar</option><option value="bargauge">条形 BarGauge</option><option value="sankey">桑基图</option></optgroup>
+            <optgroup label="拓扑 / 观测"><option value="nodegraph">网络拓扑</option><option value="geomap">地理热力</option><option value="flamegraph">火焰图</option></optgroup>
+            <optgroup label="明细 / 辅助"><option value="table">表格 Table</option><option value="logs">日志 Logs</option><option value="alertlist">告警列表</option><option value="text">文本 Text</option><option value="clock">时钟</option><option value="news">资讯</option></optgroup>
+          </select></div></div>
+        </div>
+        <div class="field" id="panelDSRow"><label>数据源 <span class="tag">留空=继承看板默认</span></label><div class="select-wrap"><select id="panelDS"></select></div></div>
+        <div class="editor-sec" id="panelQuerySec">查询</div>
+        <div id="panelTargetsWrap">
+          <div id="panelTargets"></div>
+          <div class="panel-query-tools"><button class="btn sm" id="panelAddTarget" type="button">+ 添加查询</button><button class="btn sm" id="panelTestQuery" type="button">▶ 测试查询</button><span class="panel-query-test-result" id="panelQueryTestResult" role="status" aria-live="polite"></span></div>
+          <div class="hint" id="panelQueryHint" style="margin-top:6px">PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。</div>
+        </div>
+        <div class="field" id="panelTextRow" style="display:none"><label>文本内容（安全 Markdown，不执行 HTML / 外链）</label><textarea id="panelText" rows="6" placeholder="支持标题、列表、加粗、行内代码和代码块；原始 HTML 会按文本显示。"></textarea></div>
+        <div class="grid2">
+          <div class="field"><label>宽度（栏 1–24）</label><input type="text" id="panelW" class="mono" value="12"></div>
+          <div class="field"><label>高度（行）</label><input type="text" id="panelH" class="mono" value="8"></div>
+        </div>
       </div>
-      <div class="field" id="panelTextRow" style="display:none"><label>文本内容（安全 Markdown，不执行 HTML / 外链）</label><textarea id="panelText" rows="6" placeholder="支持标题、列表、加粗、行内代码和代码块；原始 HTML 会按文本显示。"></textarea></div>
 
-      <div class="editor-sec">显示</div>
-      <div class="grid2" id="panelUnitRow">
-        <div class="field"><label>单位</label><div class="select-wrap"><select id="panelUnit">
-          <option value="">无</option><option value="short">短数 K/M/G</option><option value="percent">百分比 0-100</option><option value="percentunit">百分比 0-1</option><option value="bytes">字节</option><option value="Bps">字节/秒</option><option value="s">秒/时长</option><option value="ms">毫秒</option><option value="reqps">req/s</option>
-        </select></div></div>
-        <div class="field" id="panelRangeRow"><label>量程 min / max（gauge/bargauge，可空）</label><div style="display:flex; gap:6px"><input type="text" id="panelMin" class="mono" placeholder="min"><input type="text" id="panelMax" class="mono" placeholder="max"></div></div>
+      <div class="panel-edit-pane" data-panel-pane="display">
+        <div class="editor-sec" data-i18n="dash.panel_display">显示</div>
+        <div class="grid2" id="panelUnitRow">
+          <div class="field"><label data-i18n="dash.panel_unit">单位</label><div class="select-wrap"><select id="panelUnit">
+            <option value="none">无</option><option value="">自动/短数</option><option value="short">短数 K/M/G</option>
+            <option value="percent">百分比 0-100</option><option value="percentunit">百分比 0-1</option>
+            <option value="bytes">字节</option><option value="binBps">二进制字节/秒</option><option value="Bps">字节/秒</option>
+            <option value="s">秒/时长</option><option value="ms">毫秒</option><option value="reqps">req/s</option>
+            <option value="cores">CPU 核</option>
+          </select></div></div>
+          <div class="field"><label data-i18n="dash.panel_decimals">小数位</label><input type="number" id="panelDecimals" class="mono" min="0" max="10" placeholder="自动"></div>
+        </div>
+        <div class="grid2" id="panelRangeRow">
+          <div class="field"><label data-i18n="dash.panel_axis_min">Y / 量程 min</label><input type="text" id="panelMin" class="mono" placeholder="自动"></div>
+          <div class="field"><label data-i18n="dash.panel_axis_max">Y / 量程 max</label><input type="text" id="panelMax" class="mono" placeholder="自动"></div>
+        </div>
+        <div class="grid2" id="panelSortRow">
+          <div class="field"><label data-i18n="dash.panel_sort">排序</label><div class="select-wrap"><select id="panelSort">
+            <option value="desc">降序（大→小）</option><option value="asc">升序（小→大）</option><option value="none">不排序</option>
+          </select></div></div>
+          <div class="field"><label data-i18n="dash.panel_limit">Top-N</label><input type="number" id="panelLimit" class="mono" min="0" max="200" placeholder="默认"></div>
+        </div>
+        <div class="grid2" id="panelPaletteRow">
+          <div class="field"><label data-i18n="dash.panel_palette">配色板</label><div class="select-wrap"><select id="panelPalette">
+            <option value="classic">经典</option><option value="warm">暖色</option><option value="cool">冷色</option>
+            <option value="traffic">红绿灯</option><option value="mono">单色</option><option value="custom">自定义</option>
+          </select></div></div>
+          <div class="field"><label data-i18n="dash.panel_legend">图例</label><div class="select-wrap"><select id="panelLegend" title="图例相对绘图区的位置">
+            <option value="top" data-i18n="dash.legend_top">顶部</option>
+            <option value="bottom" data-i18n="dash.legend_bottom" selected>底部</option>
+            <option value="right" data-i18n="dash.legend_right">右侧</option>
+            <option value="hidden" data-i18n="dash.legend_hidden">隐藏</option>
+          </select></div></div>
+        </div>
+        <div class="field" id="panelColorsRow" style="display:none">
+          <label data-i18n="dash.panel_colors">自定义颜色（逗号分隔 HEX）</label>
+          <input type="text" id="panelColors" class="mono" placeholder="#4c8dff,#22c55e,#f59e0b">
+          <div class="panel-swatch-row" id="panelSwatchPreview"></div>
+        </div>
+        <div class="grid2" id="panelStyleRow">
+          <div class="field"><label data-i18n="dash.panel_chart_style">时序形态</label><div class="select-wrap"><select id="panelChartStyle">
+            <option value="line">折线</option><option value="area">面积</option><option value="bar">柱状</option>
+          </select></div></div>
+          <div class="field panel-check-col">
+            <label class="switch"><input type="checkbox" id="panelStacked"> <span data-i18n="dash.panel_stacked">堆叠</span></label>
+            <label class="switch"><input type="checkbox" id="panelSmooth"> <span data-i18n="dash.panel_smooth">平滑</span></label>
+            <label class="switch"><input type="checkbox" id="panelShowPoints"> <span data-i18n="dash.panel_points">数据点</span></label>
+          </div>
+        </div>
       </div>
-      <div class="grid2">
-        <div class="field"><label>宽度（栏 1–24）</label><input type="text" id="panelW" class="mono" value="12"></div>
-        <div class="field"><label>高度（行）</label><input type="text" id="panelH" class="mono" value="8"></div>
+
+      <div class="panel-edit-pane" data-panel-pane="threshold">
+        <div class="editor-sec" data-i18n="dash.panel_thresholds">阈值阶梯</div>
+        <div class="hint" data-i18n="dash.panel_thresholds_hint">按数值从低到高着色（Stat / Gauge / BarGauge）。百分比面板默认 0 / 75 / 90。</div>
+        <div id="panelThresholdList" class="panel-threshold-list"></div>
+        <div class="panel-query-tools">
+          <button class="btn sm" id="panelAddThreshold" type="button" data-i18n="dash.panel_add_threshold">+ 添加阈值</button>
+          <button class="btn sm ghost" id="panelResetThresholds" type="button" data-i18n="dash.panel_reset_thresholds">恢复默认</button>
+        </div>
+        <div class="panel-threshold-preview" id="panelThresholdPreview" aria-hidden="true"></div>
       </div>
     </div>
-    <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="panelSave">保存面板</button></div>
+    <div class="modal-foot"><button class="btn" data-close-btn data-i18n="common.cancel">取消</button><button class="btn primary" id="panelSave" data-i18n="dash.panel_save">保存面板</button></div>
   </div>
 </div>
 
@@ -3003,6 +3080,8 @@
       <div class="field"><label data-i18n="sre.playbook">执行剧本（在告警主机上）</label><div class="select-wrap"><select id="rrPlaybook"></select></div></div>
       <div class="subhead" data-i18n="sre.guards">安全护栏</div>
       <label class="switch" style="margin-bottom:8px"><input type="checkbox" id="rrApproval"> <span data-i18n="sre.require_approval">需人工审批后才执行（否则自动执行）</span></label>
+      <label class="switch" style="margin-bottom:8px"><input type="checkbox" id="rrDryRun"> <span>仅演练（dry-run：匹配并记录，不执行剧本）</span></label>
+      <div class="field"><label>失败回滚剧本（可选）</label><div class="select-wrap"><select id="rrRollbackPlaybook"><option value="">（无）</option></select></div></div>
       <div class="grid2">
         <div class="field"><label data-i18n="sre.cooldown">冷却（秒 / 每主机）</label><input type="text" id="rrCooldown" class="mono" value="300"></div>
         <div class="field"><label data-i18n="sre.max_per_hour">每小时上限（0=不限）</label><input type="text" id="rrMaxPerHour" class="mono" value="6"></div>
@@ -3293,6 +3372,13 @@
                 <div class="field"><label>币种</label><input type="text" id="aiCostCurrency" placeholder="CNY" value="CNY"></div>
               </div>
             </div>
+            <div class="ai-section-block">
+              <div class="ai-section-label">任务模型路由</div>
+              <p class="ai-footnote" style="margin-top:0">轻量任务可用廉价模型；也可按任务覆盖。JSON 例：{"promql":"qwen-turbo","chart_analysis":"qwen-plus"}</p>
+              <div class="field"><label>廉价模型（摘要/查询类）</label><input type="text" id="aiCheapModel" placeholder="留空=主模型"></div>
+              <div class="field"><label>任务→模型映射（JSON）</label><textarea id="aiTaskModels" rows="3" class="mono" placeholder='{"promql":"qwen-turbo"}'></textarea></div>
+              <div class="field"><label>活跃 A/B 实验 ID</label><input type="text" id="aiActiveExperiment" placeholder="可选"></div>
+            </div>
           </div>
         </section>
 
@@ -3558,7 +3644,7 @@
   <form class="login-card" id="loginForm">
     <div class="login-brand">
       <div class="logo">AI</div>
-      <div><h1>AIOps Monitor</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
+      <div><h1>AIOps</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
     </div>
     <div class="login-err" id="loginErr" role="alert" aria-live="assertive"></div>
     <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="管理员账号"></div>

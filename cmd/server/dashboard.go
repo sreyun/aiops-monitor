@@ -55,20 +55,104 @@ type DashVar struct {
 	IncludeAll bool     `json:"include_all,omitempty"`
 }
 
+// DashThreshold is one step in a panel color threshold ladder (Grafana-style).
+type DashThreshold struct {
+	Value float64 `json:"value"`
+	Color string  `json:"color"`
+}
+
+// DashValueMapping maps raw values to display text/color (Grafana fieldConfig.mappings).
+type DashValueMapping struct {
+	Type        string   `json:"type"`                   // value|range|regex|special
+	Value       string   `json:"value,omitempty"`        // value mapping key
+	From        *float64 `json:"from,omitempty"`         // range start
+	To          *float64 `json:"to,omitempty"`           // range end
+	Pattern     string   `json:"pattern,omitempty"`      // regex
+	Special     string   `json:"special,omitempty"`      // null|nan|null+nan|true|false|empty
+	Text        string   `json:"text,omitempty"`         // display text
+	Color       string   `json:"color,omitempty"`        // display color
+	Index       int      `json:"index,omitempty"`        // Grafana options.index
+}
+
+// DashFieldOverride is a simplified Grafana fieldConfig.overrides entry.
+type DashFieldOverride struct {
+	MatcherID      string           `json:"matcher_id,omitempty"`      // byName|byRegexp|byType|byFrameRefID
+	MatcherOptions string           `json:"matcher_options,omitempty"` // name / pattern / type
+	Unit           string           `json:"unit,omitempty"`
+	Decimals       *int             `json:"decimals,omitempty"`
+	Min            *float64         `json:"min,omitempty"`
+	Max            *float64         `json:"max,omitempty"`
+	NoValue        string           `json:"no_value,omitempty"`
+	Options        DashPanelOptions `json:"options,omitempty"` // palette/thresholds/custom chart opts
+}
+
+// DashPanelOptions holds commercial BI display settings (sort, palette, legend…).
+// Omitted fields keep legacy defaults so existing dashboard JSON stays valid.
+type DashPanelOptions struct {
+	Sort          string              `json:"sort,omitempty"`           // desc|asc|none
+	Limit         int                 `json:"limit,omitempty"`          // Top-N; 0 = type default
+	Decimals      *int                `json:"decimals,omitempty"`       // overrides panel.Decimals when set
+	Palette       string              `json:"palette,omitempty"`        // classic|warm|cool|traffic|mono|custom
+	Colors        []string            `json:"colors,omitempty"`         // used when Palette=custom
+	Legend        string              `json:"legend,omitempty"`         // top|bottom|right|hidden
+	Stacked       bool                `json:"stacked,omitempty"`
+	ChartStyle    string              `json:"chart_style,omitempty"`    // line|area|bar (timeseries)
+	ShowPoints    bool                `json:"show_points,omitempty"`
+	Smooth        bool                `json:"smooth,omitempty"`
+	Thresholds    []DashThreshold     `json:"thresholds,omitempty"`
+	ThresholdMode string              `json:"threshold_mode,omitempty"` // absolute|percentage
+	ColorMode     string              `json:"color_mode,omitempty"`     // Grafana color.mode (for fidelity)
+	NoValue       string              `json:"no_value,omitempty"`       // empty-value display
+	Mappings      []DashValueMapping  `json:"mappings,omitempty"`
+	Overrides     []DashFieldOverride `json:"overrides,omitempty"`
+	// Grafana custom.* timeseries display knobs
+	LineWidth     *float64 `json:"line_width,omitempty"`
+	FillOpacity   *float64 `json:"fill_opacity,omitempty"` // 0–100
+	PointSize     *float64 `json:"point_size,omitempty"`
+	GradientMode  string   `json:"gradient_mode,omitempty"`  // none|opacity|hue|scheme
+	AxisPlacement string   `json:"axis_placement,omitempty"` // auto|left|right|hidden
+	SpanNulls     bool     `json:"span_nulls,omitempty"`
+	DrawStyle     string   `json:"draw_style,omitempty"` // line|bars|points
+}
+
 // DashPanel 是一个面板。
 type DashPanel struct {
-	ID         int          `json:"id"`
-	Title      string       `json:"title"`
-	Type       string       `json:"type"`                 // timeseries | stat | gauge | bargauge | table | text | logs | unsupported
-	DataSource string       `json:"datasource,omitempty"` // 面板级数据源 id（覆盖看板默认；""=继承看板默认）
-	Targets    []DashTarget `json:"targets,omitempty"`
-	Grid       DashGrid     `json:"grid"`
-	Unit       string       `json:"unit,omitempty"` // percent|percentunit|bytes|Bps|s|ms|short|...（Grafana 单位串）
-	Min        *float64     `json:"min,omitempty"`  // gauge/bargauge 量程
-	Max        *float64     `json:"max,omitempty"`
-	Decimals   int          `json:"decimals,omitempty"`
-	Text       string       `json:"text,omitempty"`     // type=text 的正文
-	RawType    string       `json:"raw_type,omitempty"` // type=unsupported 时保留原 Grafana 类型
+	ID         int              `json:"id"`
+	Title      string           `json:"title"`
+	Type       string           `json:"type"`                 // timeseries|stat|gauge|…|candlestick|radar|sankey|…
+	DataSource string           `json:"datasource,omitempty"` // 面板级数据源 id（覆盖看板默认；""=继承看板默认）
+	Targets    []DashTarget     `json:"targets,omitempty"`
+	Grid       DashGrid         `json:"grid"`
+	Unit       string           `json:"unit,omitempty"` // percent|percentunit|bytes|Bps|s|ms|short|...（Grafana 单位串）
+	Min        *float64         `json:"min,omitempty"`  // gauge/bargauge/timeseries Y 量程
+	Max        *float64         `json:"max,omitempty"`
+	Decimals   int              `json:"decimals,omitempty"`
+	Text       string           `json:"text,omitempty"`     // type=text/markdown/news 的正文
+	RawType    string           `json:"raw_type,omitempty"` // type=unsupported 时保留原 Grafana 类型
+	Options    DashPanelOptions `json:"options,omitempty"`
+}
+
+// dashPanelTypes is the canonical allow-list for normalize / AI / editor.
+var dashPanelTypes = map[string]bool{
+	"timeseries": true, "stat": true, "gauge": true, "bargauge": true,
+	"table": true, "text": true, "markdown": true, "logs": true, "unsupported": true,
+	"piechart": true, "pie": true, "barchart": true, "bar": true,
+	"histogram": true, "state-timeline": true, "statetimeline": true,
+	"heatmap": true, "alertlist": true,
+	"candlestick": true, "radar": true,
+	"sankey": true, "nodegraph": true, "geomap": true, "flamegraph": true,
+	"clock": true, "news": true,
+}
+
+// dashNoTargetTypes may omit PromQL/SQL targets.
+var dashNoTargetTypes = map[string]bool{
+	"text": true, "markdown": true, "alertlist": true, "unsupported": true,
+	"clock": true, "news": true,
+}
+
+// dashComingSoonTypes render a friendly placeholder card (query preserved for future).
+var dashComingSoonTypes = map[string]bool{
+	"nodegraph": true, "geomap": true, "flamegraph": true, "news": true,
 }
 
 // DashTarget 是面板的一条查询目标。
@@ -293,13 +377,6 @@ func normalizeDashboard(d *Dashboard) error {
 		return fmt.Errorf("面板数量为 %d，超过上限 %d（大型 Grafana 模板请拆分导入，或联系管理员调高上限）",
 			len(d.Panels), maxDashboardPanels)
 	}
-	allowedTypes := map[string]bool{
-		"timeseries": true, "stat": true, "gauge": true, "bargauge": true,
-		"table": true, "text": true, "logs": true, "unsupported": true,
-		"piechart": true, "pie": true, "barchart": true, "bar": true,
-		"histogram": true, "state-timeline": true, "statetimeline": true,
-		"heatmap": true, "alertlist": true,
-	}
 	panelIDs := map[int]bool{}
 	nextID := 1
 	for _, p := range d.Panels {
@@ -309,8 +386,24 @@ func normalizeDashboard(d *Dashboard) error {
 	}
 	for i := range d.Panels {
 		p := &d.Panels[i]
-		if !allowedTypes[p.Type] {
-			return fmt.Errorf("面板 %q 的类型 %q 不受支持", p.Title, p.Type)
+		if p.Type == "markdown" {
+			p.Type = "text" // markdown is an alias of text
+		}
+		if p.Type == "statetimeline" {
+			p.Type = "state-timeline"
+		}
+		if p.Type == "pie" {
+			p.Type = "piechart"
+		}
+		if p.Type == "bar" {
+			p.Type = "barchart"
+		}
+		if !dashPanelTypes[p.Type] {
+			// Preserve unknown types as unsupported placeholders (Grafana / AI edge cases).
+			if p.RawType == "" {
+				p.RawType = p.Type
+			}
+			p.Type = "unsupported"
 		}
 		if p.ID <= 0 || panelIDs[p.ID] {
 			for panelIDs[nextID] {
@@ -344,7 +437,7 @@ func normalizeDashboard(d *Dashboard) error {
 				return fmt.Errorf("面板 %q 的图例或引用 ID 过长", p.Title)
 			}
 		}
-		if p.Type != "text" && p.Type != "alertlist" && p.Type != "unsupported" && len(p.Targets) == 0 {
+		if !dashNoTargetTypes[p.Type] && !dashComingSoonTypes[p.Type] && len(p.Targets) == 0 {
 			return fmt.Errorf("面板 %q 至少需要一条查询", p.Title)
 		}
 		p.Grid.X = max(0, min(23, p.Grid.X))
@@ -363,8 +456,256 @@ func normalizeDashboard(d *Dashboard) error {
 		if p.Min != nil && p.Max != nil && *p.Min >= *p.Max {
 			return fmt.Errorf("面板 %q 的最小值必须小于最大值", p.Title)
 		}
+		if p.Decimals < 0 {
+			p.Decimals = 0
+		}
+		if p.Decimals > 10 {
+			p.Decimals = 10
+		}
+		if err := normalizeDashPanelOptions(&p.Options, p.Title); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func normalizeDashPanelOptions(o *DashPanelOptions, title string) error {
+	if o == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(o.Sort)) {
+	case "", "desc", "asc", "none":
+		o.Sort = strings.ToLower(strings.TrimSpace(o.Sort))
+	default:
+		return fmt.Errorf("面板 %q 的排序选项无效（desc|asc|none）", title)
+	}
+	if o.Limit < 0 {
+		o.Limit = 0
+	}
+	if o.Limit > 200 {
+		o.Limit = 200
+	}
+	if o.Decimals != nil {
+		if *o.Decimals < 0 {
+			z := 0
+			o.Decimals = &z
+		}
+		if *o.Decimals > 10 {
+			t := 10
+			o.Decimals = &t
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(o.Palette)) {
+	case "", "classic", "warm", "cool", "traffic", "mono", "custom":
+		o.Palette = strings.ToLower(strings.TrimSpace(o.Palette))
+	default:
+		return fmt.Errorf("面板 %q 的配色板无效", title)
+	}
+	if len(o.Colors) > 32 {
+		o.Colors = o.Colors[:32]
+	}
+	clean := o.Colors[:0]
+	for _, c := range o.Colors {
+		c = strings.TrimSpace(c)
+		if isDashHexColor(c) {
+			clean = append(clean, c)
+		}
+	}
+	o.Colors = clean
+	switch strings.ToLower(strings.TrimSpace(o.Legend)) {
+	case "", "top", "bottom", "right", "hidden":
+		o.Legend = strings.ToLower(strings.TrimSpace(o.Legend))
+	default:
+		return fmt.Errorf("面板 %q 的图例位置无效（top|bottom|right|hidden）", title)
+	}
+	switch strings.ToLower(strings.TrimSpace(o.ChartStyle)) {
+	case "", "line", "area", "bar":
+		o.ChartStyle = strings.ToLower(strings.TrimSpace(o.ChartStyle))
+	default:
+		return fmt.Errorf("面板 %q 的图表形态无效（line|area|bar）", title)
+	}
+	switch strings.ToLower(strings.TrimSpace(o.ThresholdMode)) {
+	case "", "absolute", "percentage":
+		o.ThresholdMode = strings.ToLower(strings.TrimSpace(o.ThresholdMode))
+	default:
+		o.ThresholdMode = "absolute"
+	}
+	switch strings.ToLower(strings.TrimSpace(o.GradientMode)) {
+	case "", "none", "opacity", "hue", "scheme":
+		o.GradientMode = strings.ToLower(strings.TrimSpace(o.GradientMode))
+	default:
+		o.GradientMode = ""
+	}
+	switch strings.ToLower(strings.TrimSpace(o.AxisPlacement)) {
+	case "", "auto", "left", "right", "hidden":
+		o.AxisPlacement = strings.ToLower(strings.TrimSpace(o.AxisPlacement))
+	default:
+		o.AxisPlacement = ""
+	}
+	switch strings.ToLower(strings.TrimSpace(o.DrawStyle)) {
+	case "", "line", "bars", "points":
+		o.DrawStyle = strings.ToLower(strings.TrimSpace(o.DrawStyle))
+	default:
+		o.DrawStyle = ""
+	}
+	// Derive chart_style from Grafana drawStyle when unset.
+	if o.ChartStyle == "" {
+		switch o.DrawStyle {
+		case "bars":
+			o.ChartStyle = "bar"
+		case "line":
+			if o.FillOpacity != nil && *o.FillOpacity > 0 {
+				o.ChartStyle = "area"
+			} else {
+				o.ChartStyle = "line"
+			}
+		}
+	}
+	if o.LineWidth != nil {
+		if *o.LineWidth < 0 {
+			z := 0.0
+			o.LineWidth = &z
+		}
+		if *o.LineWidth > 10 {
+			z := 10.0
+			o.LineWidth = &z
+		}
+	}
+	if o.FillOpacity != nil {
+		if *o.FillOpacity < 0 {
+			z := 0.0
+			o.FillOpacity = &z
+		}
+		if *o.FillOpacity > 100 {
+			z := 100.0
+			o.FillOpacity = &z
+		}
+	}
+	if o.PointSize != nil {
+		if *o.PointSize < 0 {
+			z := 0.0
+			o.PointSize = &z
+		}
+		if *o.PointSize > 40 {
+			z := 40.0
+			o.PointSize = &z
+		}
+	}
+	if len(o.NoValue) > 64 {
+		o.NoValue = o.NoValue[:64]
+	}
+	if len(o.ColorMode) > 64 {
+		o.ColorMode = o.ColorMode[:64]
+	}
+	o.Mappings = normalizeDashMappings(o.Mappings)
+	if len(o.Overrides) > 32 {
+		o.Overrides = o.Overrides[:32]
+	}
+	for i := range o.Overrides {
+		ov := &o.Overrides[i]
+		ov.MatcherID = strings.TrimSpace(ov.MatcherID)
+		if len(ov.MatcherID) > 64 {
+			ov.MatcherID = ov.MatcherID[:64]
+		}
+		ov.MatcherOptions = strings.TrimSpace(ov.MatcherOptions)
+		if len(ov.MatcherOptions) > 256 {
+			ov.MatcherOptions = ov.MatcherOptions[:256]
+		}
+		ov.Unit = strings.TrimSpace(ov.Unit)
+		if len(ov.Unit) > 64 {
+			ov.Unit = ov.Unit[:64]
+		}
+		if len(ov.NoValue) > 64 {
+			ov.NoValue = ov.NoValue[:64]
+		}
+		// Nested overrides are not supported; strip to avoid recursive normalize.
+		ov.Options.Overrides = nil
+		if err := normalizeDashPanelOptions(&ov.Options, title+" override"); err != nil {
+			return err
+		}
+	}
+	if len(o.Thresholds) > 16 {
+		o.Thresholds = o.Thresholds[:16]
+	}
+	th := o.Thresholds[:0]
+	for _, t := range o.Thresholds {
+		if math.IsNaN(t.Value) || math.IsInf(t.Value, 0) {
+			continue
+		}
+		c := strings.TrimSpace(t.Color)
+		if !isDashHexColor(c) && !isDashCSSColorToken(c) {
+			continue
+		}
+		th = append(th, DashThreshold{Value: t.Value, Color: c})
+	}
+	sort.SliceStable(th, func(i, j int) bool { return th[i].Value < th[j].Value })
+	o.Thresholds = th
+	return nil
+}
+
+func normalizeDashMappings(in []DashValueMapping) []DashValueMapping {
+	if len(in) > 64 {
+		in = in[:64]
+	}
+	out := in[:0]
+	for _, m := range in {
+		typ := strings.ToLower(strings.TrimSpace(m.Type))
+		switch typ {
+		case "value", "range", "regex", "special", "valuetext":
+			if typ == "valuetext" {
+				typ = "value"
+			}
+		default:
+			continue
+		}
+		m.Type = typ
+		m.Value = strings.TrimSpace(m.Value)
+		m.Pattern = strings.TrimSpace(m.Pattern)
+		m.Special = strings.TrimSpace(m.Special)
+		m.Text = strings.TrimSpace(m.Text)
+		if len(m.Text) > 128 {
+			m.Text = m.Text[:128]
+		}
+		c := strings.TrimSpace(m.Color)
+		if c != "" && !isDashHexColor(c) && !isDashCSSColorToken(c) {
+			c = ""
+		}
+		m.Color = c
+		if typ == "range" {
+			if m.From != nil && (math.IsNaN(*m.From) || math.IsInf(*m.From, 0)) {
+				m.From = nil
+			}
+			if m.To != nil && (math.IsNaN(*m.To) || math.IsInf(*m.To, 0)) {
+				m.To = nil
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func isDashHexColor(c string) bool {
+	if len(c) != 4 && len(c) != 7 && len(c) != 9 {
+		return false
+	}
+	if c[0] != '#' {
+		return false
+	}
+	for i := 1; i < len(c); i++ {
+		ch := c[i]
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func isDashCSSColorToken(c string) bool {
+	switch strings.ToLower(c) {
+	case "var(--ok)", "var(--warn)", "var(--crit)", "var(--accent)", "var(--txt)", "var(--muted)":
+		return true
+	}
+	return false
 }
 
 func (cs *ConfigStore) DeleteDashboard(id string) error {
@@ -690,10 +1031,24 @@ func healImportedDashboard(d *Dashboard) bool {
 			p.Grid.H = 3
 			changed = true
 		}
-		// KPI/stat：h≤5 装不下「大数字+说明+sparkline」，会被 overflow 裁切；抬到 6 后由下方重叠消解下推。
-		if p.Type == "stat" && p.Grid.H > 0 && p.Grid.H < 6 {
-			p.Grid.H = 6
-			changed = true
+		// KPI/stat：紧凑高度（3~5）。过矮抬到 3；旧 AI/导入的过高 KPI（≥6）压到 4，避免大块空白。
+		if p.Type == "stat" && p.Grid.H > 0 {
+			if p.Grid.H < 3 {
+				p.Grid.H = 3
+				changed = true
+			} else if p.Grid.H > 5 {
+				p.Grid.H = 4
+				changed = true
+			}
+		}
+		if p.Type == "gauge" && p.Grid.H > 0 {
+			if p.Grid.H < 4 {
+				p.Grid.H = 4
+				changed = true
+			} else if p.Grid.H > 6 {
+				p.Grid.H = 5
+				changed = true
+			}
 		}
 		for j := range p.Targets {
 			expr := p.Targets[j].Expr

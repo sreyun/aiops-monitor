@@ -1022,6 +1022,8 @@ async function openDetail(id, name) {
   DETAIL_HOST_NAME = name || id;
   DETAIL_TIME_RANGE = 1;
   DETAIL_CUSTOM = null;
+  // 每次打开主机趋势默认关闭预测（需手动点「预测」开启）
+  if (typeof setChartForecastOn === "function") setChartForecastOn("host-detail", false);
   $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
   const body = $("detailBody");
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading")}</div>`;
@@ -1061,6 +1063,7 @@ async function loadAndRenderCharts() {
       <div class="chart-controls">
         ${renderChartControls(DETAIL_CUSTOM ? -1 : DETAIL_TIME_RANGE, "range")}
         <button class="chip-btn ${DETAIL_CUSTOM ? "active" : ""}" data-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
+        ${typeof forecastChipHTML === "function" ? forecastChipHTML("host-detail") : ""}
         <button class="chip-btn ai-assist-btn" id="detailAIBtn" title="${I18N.t("hosts.ai_analyze_title","用 AI 解读该主机近期指标趋势")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("hosts.ai_analyze","AI 分析")}</button>
         <span class="chart-custom-range" id="detailCustomPanel"${DETAIL_CUSTOM ? "" : " hidden"}>
           <input type="datetime-local" id="detailCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
@@ -1070,7 +1073,7 @@ async function loadAndRenderCharts() {
         </span>
       </div>
       <div class="chart-container">
-        ${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') + wrap('chartGPUTemp') + wrap('chartGPUMemPct') + wrap('chartGPUMem') : ''}${wrap('chartNet')}${hasConns ? wrap('chartConns') + wrap('chartConnStates') : ''}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
+        ${wrap('chartCombo')}${wrap('chartCPU')}${wrap('chartMem')}${wrap('chartLoad')}${wrap('chartDisk')}${hasGPU ? wrap('chartGPU') + wrap('chartGPUTemp') + wrap('chartGPUMemPct') + wrap('chartGPUMem') : ''}${wrap('chartNet')}${hasConns ? wrap('chartConns') + wrap('chartConnStates') : ''}${wrap('chartDiskIO')}${wrap('chartIOPS')}${wrap('chartProc')}
       </div>
       <div class="hint">${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran}</div>
     `;
@@ -1079,6 +1082,12 @@ async function loadAndRenderCharts() {
     const lazy = (id, series, yMin, yMax, title) => {
       DETAIL_CHART_PENDING[id] = { samples, series, yMin, yMax, title };
     };
+    // 资源组合曲线：CPU / 内存 / 磁盘% 同轴，便于多序列预测对照
+    lazy('chartCombo', [
+      { key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct },
+      { key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct },
+      { key: 'disk_percent', label: I18N.t("section.disk_usage"), color: '#f7b23b', fmt: pct },
+    ], 0, 100, I18N.t("section.resource_combo", "资源组合 · CPU / 内存 / 磁盘"));
     lazy('chartCPU',
       [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, I18N.t("section.cpu_usage"));
     lazy('chartMem',
@@ -1181,13 +1190,19 @@ let DETAIL_CHART_PENDING = {};
 
 /** 视口进入时才 createChart；首屏可见的图表立即绘制（无入场动画）。 */
 function mountDetailLazyCharts(root) {
-  const mountOne = (id) => {
+  const mountOne = async (id) => {
     const spec = DETAIL_CHART_PENDING[id];
     if (!spec || DETAIL_CHARTS[id]) return;
-    DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, {
-      title: spec.title, noEntrance: true
-    });
     delete DETAIL_CHART_PENDING[id];
+    const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
+    const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: "dash" };
+    if (fcOn && typeof createChartWithForecast === "function") {
+      DETAIL_CHARTS[id] = await createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
+        forecast: true, forecastScope: "host-detail"
+      }));
+    } else {
+      DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts);
+    }
   };
   const wraps = root.querySelectorAll("[data-lazy-chart]");
   if (!("IntersectionObserver" in window)) {
@@ -1220,6 +1235,10 @@ loadDuplicates(() => {
   if (bar) bar.innerHTML = dupBannerHTML();
 });
 
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "host-detail" && DETAIL_HOST_ID) loadAndRenderCharts();
+});
+
 safeAddEventListener("detailBody", "click", e => {
   const en = e.target.closest(".chart-enlarge");
   if (en) {
@@ -1227,8 +1246,18 @@ safeAddEventListener("detailBody", "click", e => {
     // 懒加载尚未触发时，放大前先强制挂载该图。
     if (!DETAIL_CHARTS[id] && DETAIL_CHART_PENDING[id]) {
       const spec = DETAIL_CHART_PENDING[id];
-      DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, { title: spec.title, noEntrance: true });
       delete DETAIL_CHART_PENDING[id];
+      const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
+      const finish = (ch) => { DETAIL_CHARTS[id] = ch; if (ch) openChartZoom(ch); };
+      const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: "dash" };
+      if (fcOn && typeof createChartWithForecast === "function") {
+        createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
+          forecast: true, forecastScope: "host-detail"
+        })).then(finish);
+        return;
+      }
+      finish(createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts));
+      return;
     }
     const ch = DETAIL_CHARTS[id];
     if (ch) openChartZoom(ch);
@@ -1373,18 +1402,25 @@ function sizeChartCanvas(canvas, cssH) {
   return { W: cssW, H: cssH, dpr };
 }
 
-// resizeAllCharts re-fits every live chart to its current column width (buffers
-// are pinned at creation for HiDPI crispness, so a viewport resize needs a refit).
+// resizeAllCharts re-fits every live chart to its current column width.
+// Walks all canvases with `_chart` so HW/API/SNMP/NetFlow/SLO/AI charts are included
+// (not only DETAIL_CHARTS / CHK_CHARTS registries).
 function resizeAllCharts() {
-  const states = [];
-  for (const k in DETAIL_CHARTS) if (DETAIL_CHARTS[k]) states.push(DETAIL_CHARTS[k]);
-  for (const k in (typeof CHK_CHARTS !== "undefined" ? CHK_CHARTS : {})) if (CHK_CHARTS[k]) states.push(CHK_CHARTS[k]);
-  states.forEach(st => {
-    if (!st.canvas || !st.canvas.isConnected) return;
-    const d = sizeChartCanvas(st.canvas, st.cssH || 210);
+  const seen = new Set();
+  document.querySelectorAll("canvas").forEach(canvas => {
+    const st = canvas._chart;
+    if (!st || !canvas.isConnected || seen.has(st)) return;
+    seen.add(st);
+    // Only grow with container; never shrink to CSS aspect-ratio collapse (~110px).
+    const boxH = Math.round(canvas.getBoundingClientRect().height) || 0;
+    if (boxH > (st.cssH || 210) && Math.abs(boxH - (st.cssH || 0)) > 8) st.cssH = boxH;
+    const d = sizeChartCanvas(canvas, st.cssH || 220);
     st.W = d.W; st.H = d.H; st.dpr = d.dpr;
     drawChart(st);
   });
+  if (typeof DashCharts !== "undefined") {
+    try { DashCharts.resizeAll(document); } catch (e) {}
+  }
 }
 let _chartResizeTimer = null;
 window.addEventListener("resize", () => {
@@ -1395,18 +1431,30 @@ window.addEventListener("resize", () => {
 function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opts = {}) {
   const canvas = $(canvasId);
   if (!canvas) return null;
-  const cssH = opts.cssH || (opts.isZoom ? 440 : 210);
+  // Prefer explicit cssH. Bare <canvas width=1000 height=240> + CSS width:100% shrinks
+  // by aspect ratio (~110px) — never treat that as intentional panel height.
+  const measured = Math.round(canvas.getBoundingClientRect().height) || 0;
+  const defaultH = opts.isZoom ? 440 : 220;
+  let cssH = opts.cssH > 0 ? opts.cssH : defaultH;
+  if (!opts.cssH) {
+    if (opts.useMeasuredH && measured > 40) cssH = measured;
+    else if (measured >= defaultH) cssH = measured; // already sized by parent/style
+  }
   const dim = sizeChartCanvas(canvas, cssH);
   if (!allSamples || !allSamples.length) {
     drawChartEmpty(canvas.getContext("2d"), dim.W, dim.H, I18N.t("empty.no_trend_data") || "暂无趋势数据");
     return null;
   }
+  const nSeries = (series || []).length;
+  // Auto compact legend: many series or short canvas → never use full "当前/峰值" rows.
+  const legendMode = opts.legendMode || ((nSeries >= 4 || cssH < 220) ? "dash" : "full");
   const state = {
     canvas, ctx: canvas.getContext("2d"),
     W: dim.W, H: dim.H, dpr: dim.dpr, cssH,
     all: allSamples, series, yMin, yMax,
     title: opts.title || "", isZoom: !!opts.isZoom,
-    legendMode: opts.legendMode || "full", // full=主机详情；dash=看板精简图例
+    legendMode, // full=主机详情；dash=精简图例（短面板/多序列强制）
+    nowTs: opts.nowTs || 0, // realtime|forecast boundary (unix sec)
     i0: 0, i1: allSamples.length - 1,
     hover: -1, drag: false, downX: null, curX: null, moved: false,
     pad: { top: 22, right: 18, bottom: 28, left: 56 },
@@ -1438,12 +1486,18 @@ function drawChart(state) {
   const n = vis.length;
   ctx.clearRect(0, 0, w, h);
 
-  // 使用 CSS 变量适配深色/浅色主题
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const gridColor = cssVar("--line2") || "rgba(43,53,71,.5)";
   const labelColor = cssVar("--muted") || "#8a95a8";
   const txtColor = cssVar("--txt") || "#e8eef6";
-  const bgColor = cssVar("--bg") || "#0a0d13";
+  const panelBg = cssVar("--panel") || cssVar("--bg2") || "#111621";
+  const legendBg = (() => {
+    // Prefer a readable translucent panel color; avoid "#xxx"+"99" when var empty.
+    if (panelBg.startsWith("#") && (panelBg.length === 7 || panelBg.length === 4)) {
+      return panelBg.length === 7 ? panelBg + "e6" : panelBg;
+    }
+    return "rgba(17,22,33,.88)";
+  })();
 
   // Y range (fixed when yMin/yMax given, else padded auto-range)
   let dMin = state.yMin !== null ? state.yMin : Infinity;
@@ -1454,192 +1508,292 @@ function drawChart(state) {
   }));
   if (dMin === Infinity) dMin = 0;
   if (dMax === -Infinity) dMax = state.yMax !== null ? state.yMax : 100;
-  // 自动范围：对 auto-range 做 8% padding（比原来的 10% 更紧凑）
-  if (state.yMin === null) dMin = Math.max(0, dMin * 0.92);
-  if (state.yMax === null) dMax = dMax * 1.08 || 1;
+  // Headroom so peaks sit clearly inside the plot (not glued to the top edge).
+  if (state.yMin === null) dMin = Math.max(0, dMin - (dMax - dMin) * 0.04);
+  if (state.yMax === null) {
+    const span = Math.max(dMax - dMin, Math.abs(dMax) * 0.01, 1);
+    dMax = dMax + span * 0.12;
+  }
   if (dMax <= dMin) dMax = dMin + 1;
   const yRange = dMax - dMin;
-  // Dynamic left padding: widen it to fit the Y-axis labels so long values
-  // (network rates like "1.45 MB/s", disk IO/GB) are never clipped off the canvas
-  // edge — the fixed 56px was too narrow for rate charts.
+
   ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
   let maxLabelW = 0;
   for (let i = 0; i <= 4; i++) {
     const val = dMax - (yRange / 4) * i;
-    const lab = series[0].fmt ? series[0].fmt(val) : val.toFixed(1);
+    const lab = series[0] && series[0].fmt ? series[0].fmt(val) : val.toFixed(1);
     maxLabelW = Math.max(maxLabelW, ctx.measureText(lab).width);
   }
-  pad.left = Math.max(56, Math.ceil(maxLabelW) + 14);
-  const cw = w - pad.left - pad.right, ch = h - pad.top - pad.bottom;
-  state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
+  pad.right = 14;
+  pad.bottom = 26;
+  pad.left = Math.max(48, Math.ceil(maxLabelW) + 12);
 
-  const xAt = i => pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
-  const yAt = v => pad.top + ch - ((v - dMin) / yRange) * ch;
+  // —— Layout: title + legend reserved ABOVE the plot (never overlay series) ——
+  const dashLegend = state.legendMode === "dash";
+  const titleH = state.title ? 16 : 0;
+  const legFont = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
+  const truncLeg = (s, maxN) => {
+    s = String(s || "");
+    if (s.length <= maxN) return s;
+    return s.slice(0, Math.max(1, maxN - 1)) + "…";
+  };
+  const buildLegend = (compact) => {
+    const lines = [];
+    let line = { items: [], x: 0 };
+    const maxW = Math.max(80, w - pad.left - pad.right - 8);
+    const maxItems = compact ? Math.min(8, series.length) : series.length;
+    ctx.font = legFont;
+    for (let sIdx = 0; sIdx < maxItems; sIdx++) {
+      const s = series[sIdx];
+      const vals = [];
+      vis.forEach(sm => { const v = seriesVal(s, sm); if (v !== null) vals.push(v); });
+      const cur = vals.length ? vals[vals.length - 1] : 0;
+      const peak = vals.length ? Math.max(...vals) : 0;
+      const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
+      let labelText = compact
+        ? truncLeg(s.label || ("#" + (sIdx + 1)), 14)
+        : `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
+      const itemW = ctx.measureText(labelText).width + 26;
+      if (line.items.length && line.x + itemW > maxW) {
+        lines.push(line);
+        line = { items: [], x: 0 };
+        if (compact) break; // dash: single row only
+      }
+      if (compact && line.items.length && line.x + itemW > maxW) break;
+      line.items.push({ color: s.color, labelText, w: itemW });
+      line.x += itemW;
+    }
+    if (compact && series.length > line.items.length + lines.reduce((a, l) => a + l.items.length, 0)) {
+      const shown = lines.reduce((a, l) => a + l.items.length, 0) + line.items.length;
+      const more = `+${series.length - shown}`;
+      const mw = ctx.measureText(more).width + 20;
+      if (line.x + mw <= maxW || !line.items.length) {
+        line.items.push({ color: labelColor, labelText: more, w: mw });
+        line.x += mw;
+      }
+    }
+    if (line.items.length) lines.push(line);
+    return lines;
+  };
 
-  // 网格 + Y 轴标签（5 条水平线，虚线样式）
-  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5; ctx.setLineDash([2, 4]);
-  ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"; ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.top + (ch / 4) * i;
-    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
-    const val = dMax - (yRange / 4) * i;
-    ctx.fillStyle = labelColor;
-    // 使用第一个 series 的 fmt 格式化 Y 轴标签，确保网络图正确显示速率单位
-    const fmt = series[0].fmt;
-    const label = fmt ? fmt(val) : val.toFixed(1);
-    ctx.fillText(label, pad.left - 8, y + 4);
+  let useCompact = dashLegend;
+  let legendLines = buildLegend(useCompact);
+  const minPlotH = state.isZoom ? 120 : 72;
+  let legendBand = legendLines.length ? legendLines.length * (useCompact ? 15 : 17) + 6 : 0;
+  // Prefer compact over overlapping; then drop legend entirely rather than paint over series.
+  if (!useCompact && titleH + legendBand + pad.bottom + minPlotH > h) {
+    useCompact = true;
+    legendLines = buildLegend(true);
+    legendBand = legendLines.length ? legendLines.length * 15 + 6 : 0;
   }
-  ctx.setLineDash([]);
+  while (legendLines.length && titleH + legendBand + pad.bottom + minPlotH > h) {
+    if (legendLines.length > 1) {
+      legendLines.pop();
+    } else {
+      legendLines = []; // hard rule: never overlay legend on the plot
+    }
+    legendBand = legendLines.length ? legendLines.length * (useCompact ? 15 : 17) + 6 : 0;
+  }
 
-  // 图表标题（左上角）：各图无独立标题元素，靠此标明本图指标——尤其 GPU 算力/温度/显存、
-  // TCP/UDP 连接等同为「一堆同色系折线」的图，没有标题就分不清是什么指标。
+  pad.top = titleH + legendBand + (state.title || legendLines.length ? 4 : 8);
+  // Final safety: keep min plot height without pulling pad.top under the legend band.
+  if (h - pad.top - pad.bottom < minPlotH && legendLines.length) {
+    legendLines = [];
+    legendBand = 0;
+    pad.top = titleH + 8;
+  }
+  if (h - pad.top - pad.bottom < 40) {
+    pad.top = Math.max(titleH + 4, 8);
+  }
+
+  const cw = Math.max(40, w - pad.left - pad.right);
+  const ch = Math.max(32, h - pad.top - pad.bottom);
+  state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
+  state._plot = { x: pad.left, y: pad.top, w: cw, h: ch };
+
+  // 有预测时按时间轴居中拆分（中轴=现在）；否则仍按采样点均匀排布
+  let axisT0 = n ? vis[0].timestamp : 0, axisT1 = n ? vis[n - 1].timestamp : 1;
+  if (state.nowTs && n >= 2) {
+    const nowTs = +state.nowTs;
+    const t0 = vis[0].timestamp, t1 = vis[n - 1].timestamp;
+    if (nowTs >= t0 && nowTs <= t1) {
+      const half = Math.max(nowTs - t0, t1 - nowTs, 1);
+      axisT0 = nowTs - half;
+      axisT1 = nowTs + half;
+    }
+  }
+  state._axisT0 = axisT0; state._axisT1 = axisT1;
+  const xAt = i => {
+    if (state.nowTs && axisT1 > axisT0) {
+      return pad.left + ((vis[i].timestamp - axisT0) / (axisT1 - axisT0)) * cw;
+    }
+    return pad.left + (n <= 1 ? 0 : (i / (n - 1)) * cw);
+  };
+  const yAt = v => {
+    const y = pad.top + ch - ((v - dMin) / yRange) * ch;
+    return Math.max(pad.top, Math.min(pad.top + ch, y));
+  };
+
+  // Title band
   if (state.title) {
     ctx.textAlign = "left";
     ctx.fillStyle = txtColor;
     ctx.font = "600 11.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
-    ctx.fillText(state.title, pad.left, 14);
+    ctx.fillText(state.title, pad.left, 12);
   }
 
-  // X 轴时间标签
+  // Legend band (between title and plot)
+  if (legendLines.length) {
+    const legendY0 = titleH + 2;
+    let legendBgW = 0;
+    legendLines.forEach(line => { legendBgW = Math.max(legendBgW, line.x); });
+    ctx.fillStyle = legendBg;
+    const bgH = legendLines.length * (useCompact ? 15 : 17) + 4;
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(pad.left, legendY0 - 1, Math.min(legendBgW + 8, cw), bgH, 5);
+      ctx.fill();
+    } else {
+      ctx.fillRect(pad.left, legendY0 - 1, Math.min(legendBgW + 8, cw), bgH);
+    }
+    let ly = legendY0 + 2;
+    ctx.font = legFont;
+    legendLines.forEach(line => {
+      let lx = pad.left + 4;
+      line.items.forEach(item => {
+        ctx.fillStyle = item.color;
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath(); ctx.roundRect(lx, ly, 9, 9, 2); ctx.fill();
+        } else {
+          ctx.fillRect(lx, ly, 9, 9);
+        }
+        ctx.fillStyle = txtColor;
+        ctx.textAlign = "left";
+        ctx.fillText(item.labelText, lx + 13, ly + 8);
+        lx += item.w;
+      });
+      ly += useCompact ? 15 : 17;
+    });
+  }
+
+  // Grid + Y labels
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5; ctx.setLineDash([2, 4]);
+  ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
+  ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+    const val = dMax - (yRange / 4) * i;
+    ctx.fillStyle = labelColor;
+    const fmt = series[0] && series[0].fmt;
+    ctx.fillText(fmt ? fmt(val) : val.toFixed(1), pad.left - 6, y + 3.5);
+  }
+  ctx.setLineDash([]);
+
+  // X axis labels (edge ticks inset so they are not clipped by overflow:hidden)
   if (n >= 1) {
-    const firstTs = vis[0].timestamp, span = vis[n - 1].timestamp - firstTs;
-    ctx.textAlign = "center"; ctx.fillStyle = labelColor; ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
+    const firstTs = axisT0, span = axisT1 - axisT0;
+    ctx.fillStyle = labelColor;
+    ctx.font = "10.5px 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace";
     for (let i = 0; i <= 4; i++) {
       const x = pad.left + (cw / 4) * i;
       const d = new Date((firstTs + (span / 4) * i) * 1000);
       const lab = span > 172800
         ? `${d.getMonth() + 1}/${d.getDate()}`
         : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      ctx.fillText(lab, x, h - 8);
+      ctx.textAlign = i === 0 ? "left" : (i === 4 ? "right" : "center");
+      ctx.fillText(lab, x, h - 6);
     }
   }
 
-  // 系列折线 + 渐变填充区域
+  // Series clipped strictly to the plot rect — peaks cannot paint into legend/title.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(pad.left, pad.top, cw, ch);
+  ctx.clip();
   series.forEach((s, sIdx) => {
     const pts = [];
-    vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
-    if (pts.length >= 2) {
-      // 折线路径（数据点 > 12 时使用平滑贝塞尔曲线）
-      ctx.save();
-      ctx.strokeStyle = s.color; ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
-      if (pts.length > 12) { smoothPath(ctx, pts); } else { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); }
-      ctx.stroke();
-      ctx.restore();
-
-      // 半透明渐变填充区域（4 层渐变停止点，层次更丰富）
-      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-      grad.addColorStop(0, s.color + "35");
-      grad.addColorStop(0.4, s.color + "15");
-      grad.addColorStop(0.7, s.color + "06");
-      grad.addColorStop(1, s.color + "01");
-      ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.moveTo(pts[0].x, pad.top + ch);
-      pts.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.lineTo(pts[pts.length - 1].x, pad.top + ch); ctx.closePath(); ctx.fill();
+    vis.forEach((sm, i) => {
+      const v = seriesVal(s, sm);
+      if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v });
+    });
+    if (pts.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8;
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    if (s.dashed || s.kind === "forecast") ctx.setLineDash([6, 4]);
+    else if (s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) ctx.setLineDash([2, 3]);
+    else ctx.setLineDash([]);
+    if (pts.length > 12 && !s.dashed && s.kind !== "forecast") { smoothPath(ctx, pts); } else {
+      ctx.beginPath();
+      pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
     }
-  });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
 
-  // 图例：主机详情用「名称 + 当前/峰值」；看板用短名单行，避免多序列把曲线区挤没。
-  const dashLegend = state.legendMode === "dash";
-  const maxLegendItems = dashLegend ? 8 : series.length;
-  const legendY = pad.top + 2;
-  let legendX = pad.left + 8;
-  const legendItemWidth = dashLegend ? 96 : 160;
-
-  let legendBgW = 0, legendBgX0 = legendX;
-  const legendLines = [];
-  let curLine = { x: legendX, items: [] };
-  const truncLeg = (s, n) => {
-    s = String(s || "");
-    if (s.length <= n) return s;
-    return s.slice(0, Math.max(1, n - 1)) + "…";
-  };
-  series.forEach((s, sIdx) => {
-    if (sIdx >= maxLegendItems) return;
-    const pts = [];
-    vis.forEach((sm, i) => { const v = seriesVal(s, sm); if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v }); });
-    const vals = pts.map(p => p.val);
-    const cur = vals.length ? vals[vals.length - 1] : 0, peak = vals.length ? Math.max(...vals) : 0;
-    const fmtV = v => s.fmt ? s.fmt(v) : v.toFixed(1);
-    let labelText;
-    if (dashLegend) {
-      labelText = truncLeg(s.label || ("#" + (sIdx + 1)), 18);
-    } else {
-      labelText = `${s.label}  当前 ${fmtV(cur)} · 峰值 ${fmtV(peak)}`;
-    }
-
-    // 看板：只排一行，放不下就停（后面用 +N）
-    if (dashLegend && curLine.x + legendItemWidth > w - pad.right && curLine.items.length) {
+    if (s.dashed || s.kind === "forecast" || s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) {
+      // Forecast / compare: dashed stroke only — keep solid fill for realtime history (left).
       return;
     }
-    if (!dashLegend && curLine.x + legendItemWidth > w - pad.right && sIdx > 0) {
-      legendLines.push(curLine);
-      curLine = { x: pad.left + 8, items: [] };
+    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+    grad.addColorStop(0, s.color + "35");
+    grad.addColorStop(0.4, s.color + "15");
+    grad.addColorStop(0.7, s.color + "06");
+    grad.addColorStop(1, s.color + "01");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pad.top + ch);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(pts[pts.length - 1].x, pad.top + ch);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  // Realtime | forecast boundary (left=历史, right=预测)，中轴居中
+  if (state.nowTs && n >= 2 && axisT1 > axisT0) {
+    const nowTs = +state.nowTs;
+    if (nowTs >= axisT0 && nowTs <= axisT1) {
+      const nx = pad.left + ((nowTs - axisT0) / (axisT1 - axisT0)) * cw;
+      ctx.fillStyle = "rgba(34,197,94,0.04)";
+      ctx.fillRect(pad.left, pad.top, Math.max(0, nx - pad.left), ch);
+      ctx.fillStyle = "rgba(99,102,241,0.07)";
+      ctx.fillRect(nx, pad.top, Math.max(0, pad.left + cw - nx), ch);
+      ctx.strokeStyle = "rgba(239,68,68,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(nx, pad.top); ctx.lineTo(nx, pad.top + ch); ctx.stroke();
+      ctx.fillStyle = txtColor;
+      ctx.font = "600 10px -apple-system, 'Segoe UI', sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("现在", nx + 4, pad.top + 12);
     }
-    curLine.items.push({ color: s.color, labelText, x: curLine.x });
-    ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
-    curLine.x += ctx.measureText(labelText).width + 28;
-    if (!dashLegend && curLine.x + legendItemWidth > w - pad.right) {
-      legendLines.push(curLine);
-      curLine = { x: pad.left + 8, items: [] };
-    }
-  });
-  if (dashLegend && series.length > curLine.items.length) {
-    const more = `+${series.length - curLine.items.length}`;
-    curLine.items.push({ color: labelColor, labelText: more, x: curLine.x });
-    curLine.x += ctx.measureText(more).width + 20;
-  }
-  if (curLine.items.length) legendLines.push(curLine);
-
-  legendLines.forEach(line => {
-    legendBgW = Math.max(legendBgW, line.x - legendBgX0);
-  });
-
-  if (legendLines.length) {
-    const bgH = legendLines.length * (dashLegend ? 15 : 18) + (dashLegend ? 2 : 8);
-    ctx.fillStyle = cssVar("--panel") + "99" || "rgba(17,22,33,.6)";
-    const bgR = 6;
-    ctx.beginPath(); ctx.roundRect(legendBgX0 - 4, legendY - 2, Math.min(legendBgW + 20, cw + 8), bgH, bgR); ctx.fill();
   }
 
-  let ly = legendY;
-  legendLines.forEach(line => {
-    let lx = line.items.length ? line.items[0].x : legendBgX0;
-    line.items.forEach(item => {
-      lx = item.x;
-      ctx.fillStyle = item.color;
-      ctx.beginPath(); ctx.roundRect(lx, ly, 10, 10, 3); ctx.fill();
-      ctx.fillStyle = txtColor; ctx.font = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif"; ctx.textAlign = "left";
-      ctx.fillText(item.labelText, lx + 14, ly + 9);
-    });
-    ly += dashLegend ? 15 : 18;
-  });
-
-  // 框选矩形
+  // Box-select + crosshair inside clip
   if (state.drag && state.moved && state.downX !== null && state.curX !== null) {
     const x0 = Math.min(state.downX, state.curX), x1 = Math.max(state.downX, state.curX);
     ctx.fillStyle = "rgba(76,141,255,.12)"; ctx.fillRect(x0, pad.top, x1 - x0, ch);
-    ctx.strokeStyle = "rgba(76,141,255,.5)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.strokeRect(x0, pad.top, x1 - x0, ch); ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(76,141,255,.5)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.strokeRect(x0, pad.top, x1 - x0, ch); ctx.setLineDash([]);
   }
-
-  // 十字线（更细、更淡，不干扰数据观察）
   if (state.hover >= state.i0 && state.hover <= state.i1 && !state.drag) {
     const li = state.hover - state.i0, x = xAt(li);
     ctx.strokeStyle = "rgba(200,210,230,.22)"; ctx.lineWidth = 0.8;
-    ctx.setLineDash([3, 5]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke(); ctx.setLineDash([]);
-    // 悬停数据点（双层光晕 + 白色高光边缘）
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + ch); ctx.stroke();
+    ctx.setLineDash([]);
     series.forEach(s => {
       const v = seriesVal(s, vis[li]); if (v === null) return;
       const py = yAt(v);
-      // 外层光晕（增大半径至 8px）
       ctx.fillStyle = s.color + "25"; ctx.beginPath(); ctx.arc(x, py, 8, 0, Math.PI * 2); ctx.fill();
-      // 内层光点
       ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(x, py, 3.5, 0, Math.PI * 2); ctx.fill();
-      // 白色高光边缘
       ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(x, py, 3.5, 0, Math.PI * 2); ctx.stroke();
     });
   }
+  ctx.restore();
 }
 
 // attachChartEvents wires pointer interaction once per canvas element; handlers
@@ -1661,6 +1815,17 @@ function attachChartEvents(canvas) {
   };
   const localIdx = (st, x) => {
     const n = st._n; if (n <= 1) return 0;
+    // 预测居中模式下按时间轴命中最近点
+    if (st.nowTs && st._axisT1 > st._axisT0 && st._cw > 0) {
+      const ts = st._axisT0 + ((x - st.pad.left) / st._cw) * (st._axisT1 - st._axisT0);
+      const vis = st.all.slice(st.i0, st.i1 + 1);
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < vis.length; i++) {
+        const d = Math.abs((vis[i].timestamp || 0) - ts);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    }
     return Math.max(0, Math.min(n - 1, Math.round((x - st.pad.left) / st._cw * (n - 1))));
   };
   canvas.addEventListener("mousemove", e => {
@@ -1698,9 +1863,12 @@ function showChartTip(state, e, li) {
   const t = chartTipEl();
   t.innerHTML = `<div class="tip-t">${time}</div>${rows}`;
   t.style.display = "block";
+  const tipW = t.offsetWidth || 180, tipH = t.offsetHeight || 80;
   let px = e.clientX + 14, py = e.clientY + 14;
-  if (px + t.offsetWidth > window.innerWidth - 8) px = e.clientX - t.offsetWidth - 14;
-  if (py + t.offsetHeight > window.innerHeight - 8) py = e.clientY - t.offsetHeight - 14;
+  if (px + tipW > window.innerWidth - 8) px = e.clientX - tipW - 14;
+  if (py + tipH > window.innerHeight - 8) py = e.clientY - tipH - 14;
+  if (px < 8) px = 8;
+  if (py < 8) py = 8;
   t.style.left = px + "px"; t.style.top = py + "px";
 }
 
@@ -1711,7 +1879,9 @@ function openChartZoom(src) {
   hideChartTip();
   $("chartZoomTitle").textContent = (src.title || I18N.t("ui.trend")) + " · " + I18N.t("ui.zoom_preview");
   $("chartZoomMask").classList.add("show");
-  const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, { title: src.title, isZoom: true });
+  const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, {
+    title: src.title, isZoom: true, nowTs: src.nowTs || 0
+  });
   if (z) { z.i0 = src.i0; z.i1 = src.i1; drawChart(z); }
   DETAIL_CHARTS.__zoom = z;
 }

@@ -329,6 +329,7 @@ async function loadAPIHistory() {
   const to = custom ? custom.to : now;
   const ctrl = `${renderChartControls(custom ? -1 : range, "arange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-ahist-custom-toggle title="${I18N.t("time.custom_range", "自定义时间范围")}">${I18N.t("time.custom", "自定义")}</button>
+    ${typeof forecastChipHTML === "function" ? forecastChipHTML("apimon") : ""}
     <span class="chart-custom-range" id="ahistCustomPanel"${custom ? "" : " hidden"}>
       <input type="datetime-local" id="ahistCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from > 0 ? from : now - 3600)}">
       <span class="dt-sep">→</span>
@@ -370,24 +371,31 @@ async function loadAPIHistory() {
       </div>
       ${apiHistHistogram(pts)}
       <div class="hint">数据从 VictoriaMetrics 回读，重启不丢；曲线可悬停查看数值、拖动框选放大、双击还原。延迟分布直方图按样本总延时分桶，尾部偏暖色，便于识别长尾与双峰。</div>`;
-    API_HIST_CHARTS = {};
-    API_HIST_CHARTS.apiHLat = createChart("apiHLat", samples, [
-      { key: "latency_ms", label: "总延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
-      { key: "dns_ms", label: "DNS", color: "#22c55e", fmt: v => v.toFixed(1) + " ms" },
-      { key: "tcp_ms", label: "TCP", color: "#eab308", fmt: v => v.toFixed(1) + " ms" },
-      { key: "tls_ms", label: "TLS", color: "#a855f7", fmt: v => v.toFixed(1) + " ms" },
-      { key: "ttfb_ms", label: "TTFB", color: "#f97316", fmt: v => v.toFixed(1) + " ms" },
-    ], 0, null, { title: name + " · 响应时间分解(ms)" });
-    API_HIST_CHARTS.apiHAvail = createChart("apiHAvail", samples, [
-      { key: "online", label: "在线", color: "#22c55e", fmt: v => (v >= 50 ? "在线" : "离线") },
-    ], 0, 100, { title: name + " · 可用性" });
-    API_HIST_CHARTS.apiHBytes = createChart("apiHBytes", samples, [
-      { key: "resp_kb", label: "响应体", color: "#06b6d4", fmt: v => v.toFixed(1) + " KB" },
-    ], 0, null, { title: name + " · 响应体大小(KB)" });
+    const specs = [
+      { id: "apiHLat", samples, series: [
+        { key: "latency_ms", label: "总延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
+        { key: "dns_ms", label: "DNS", color: "#22c55e", fmt: v => v.toFixed(1) + " ms" },
+        { key: "tcp_ms", label: "TCP", color: "#eab308", fmt: v => v.toFixed(1) + " ms" },
+        { key: "tls_ms", label: "TLS", color: "#a855f7", fmt: v => v.toFixed(1) + " ms" },
+        { key: "ttfb_ms", label: "TTFB", color: "#f97316", fmt: v => v.toFixed(1) + " ms" },
+      ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
+      { id: "apiHAvail", samples, series: [
+        { key: "online", label: "在线", color: "#22c55e", fmt: v => (v >= 50 ? "在线" : "离线") },
+      ], yMin: 0, yMax: 100, opts: { title: "", legendMode: "dash", cssH: 220 } },
+      { id: "apiHBytes", samples, series: [
+        { key: "resp_kb", label: "响应体", color: "#06b6d4", fmt: v => v.toFixed(1) + " KB" },
+      ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
+    ];
+    API_HIST_CHARTS = typeof mountChartsWithForecast === "function"
+      ? await mountChartsWithForecast("apimon", specs)
+      : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "apimon" && API_HIST && API_HIST.id) loadAPIHistory();
+});
 
 /* ---------- 事件绑定 ---------- */
 safeAddEventListener("apimonAddBtn", "click", () => openAPISystemModal(null));

@@ -954,6 +954,7 @@ async function loadCheckHistory() {
   // 快捷跨度按钮 + 自定义绝对区间（与主机趋势图一致）
   const ctrl = `${renderChartControls(custom ? -1 : range, "crange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-chk-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
+    ${typeof forecastChipHTML === "function" ? forecastChipHTML("checks") : ""}
     <span class="chart-custom-range" id="chkCustomPanel"${custom ? "" : " hidden"}>
       <input type="datetime-local" id="chkCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from > 0 ? from : now - 3600)}">
       <span class="dt-sep">→</span>
@@ -972,24 +973,33 @@ async function loadCheckHistory() {
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
     const span = pts.length > 1 ? fmtDur(pts[pts.length - 1].timestamp - pts[0].timestamp) : I18N.t("time.just_now");
-    const wrap = cid => `<div class="chart-wrap"><canvas id="${cid}" width="1000" height="240"></canvas>` +
+    // 标题已在弹窗头；画布内只用指标副标题，避免「名称 · 延时」重复
+    const wrap = (cid, sub) => `<div class="chart-wrap"><div class="chart-sub-title">${esc(sub)}</div><canvas id="${cid}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
+    const latSub = (isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency")) + "(" + I18N.t("unit.ms") + ")";
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
-      <div class="chart-container">${wrap("chkLat")}${isPing ? wrap("chkLoss") : ""}</div>
+      <div class="chart-container">${wrap("chkLat", latSub)}${isPing ? wrap("chkLoss", I18N.t("form.loss_rate") + "(%)") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ${I18N.t("unit.ms")} · 悬停查看数值，拖动框选放大，双击还原。</div>`;
-    CHK_CHARTS = {};
-    CHK_CHARTS.chkLat = createChart("chkLat", samples, [
-      { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
-    ], 0, null, { title: name + " · " + I18N.t("form.latency") + "(" + I18N.t("unit.ms") + ")" });
+    const specs = [
+      { id: "chkLat", samples, series: [
+        { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
+      ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
+    ];
     if (isPing) {
-      CHK_CHARTS.chkLoss = createChart("chkLoss", samples, [
+      specs.push({ id: "chkLoss", samples, series: [
         { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
-      ], 0, 100, { title: name + " · 丢包率(%)" });
+      ], yMin: 0, yMax: 100, opts: { title: "", legendMode: "dash", cssH: 220 } });
     }
+    CHK_CHARTS = typeof mountChartsWithForecast === "function"
+      ? await mountChartsWithForecast("checks", specs)
+      : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "checks" && CHK_HIST && CHK_HIST.id) loadCheckHistory();
+});
 // 历史弹窗：时间范围切换（快捷/自定义）+ 图表放大委托
 safeAddEventListener("checkHistBody", "click", e => {
   const tog = e.target.closest("[data-chk-custom-toggle]");

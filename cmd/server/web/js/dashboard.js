@@ -2,7 +2,10 @@
  * 列表 / 详情渲染 / 面板查询与绘制（时序/数值/仪表/条形/表格/文本/占位）/ 时间范围 /
  * 模板变量 / 尺寸编辑 / Grafana 导入。网格按 24 栏 gridPos 忠实还原，编辑用宽度栏数+高度+排序。
  */
-const DASH_COLORS = ["#4c8dff", "#22c55e", "#f59e0b", "#ef4d5a", "#a855f7", "#06b6d4", "#eab308", "#ec4899", "#14b8a6", "#f97316"];
+const DASH_COLORS = (typeof DashCharts !== "undefined" && DashCharts.PALETTES && DashCharts.PALETTES.classic)
+  ? DashCharts.PALETTES.classic
+  : ["#4c8dff", "#22c55e", "#f59e0b", "#ef4d5a", "#a855f7", "#06b6d4", "#eab308", "#ec4899", "#14b8a6", "#f97316"];
+let DASH_ECHART_ELS = {}; // panelId → .dash-echart element
 let DASH_LIST = [];
 let CUR_DASH = null;               // 当前打开的完整仪表盘
 let DASH_EDIT = false;             // 编辑模式
@@ -31,6 +34,8 @@ try { DASH_TREE_SEL = localStorage.getItem("aiops_dash_tree_sel") || ""; } catch
 let DASH_SEARCH = "";
 let DASH_TREE_Q = "";
 let DASH_TREE_BOUND = false;
+// Per-panel forecast / PoP / YoY overlays: { forecast, pop, yoy, horizonSec }
+let DASH_PANEL_TREND = {};
 
 function cloneDashboard(d) { return d ? JSON.parse(JSON.stringify(d)) : null; }
 function resetDashEditHistory() { DASH_UNDO = []; DASH_REDO = []; DASH_DIRTY = false; }
@@ -242,6 +247,8 @@ function showDashHome() {
   if (h) h.style.display = "";
   if (d) { d.style.display = "none"; d.innerHTML = ""; }
   CUR_DASH = null; DASH_EDIT = false; DASH_CHART_ARGS = {};
+  Object.keys(DASH_ECHART_ELS).forEach(id => { try { const el = DASH_ECHART_ELS[id]; if (el && typeof DashCharts !== "undefined") DashCharts.dispose(el); } catch (e) {} });
+  DASH_ECHART_ELS = {};
   resetDashEditHistory();
 }
 
@@ -264,6 +271,9 @@ function setDashFullscreen(on) {
   requestAnimationFrame(() => {
     for (const id in DASH_CHART_ARGS) {
       try { createChart.apply(null, DASH_CHART_ARGS[id]); } catch (e) {}
+    }
+    if (typeof DashCharts !== "undefined") {
+      try { DashCharts.resizeAll(document.getElementById("dashDetail")); } catch (e) {}
     }
   });
 }
@@ -330,6 +340,8 @@ async function openDashboard(id) {
   if (!CUR_DASH || !CUR_DASH.id) { toast("仪表盘不存在", "err"); return; }
   DASH_EDIT = false;
   resetDashEditHistory();
+  // 打开看板时默认关闭各面板「预测/环比/同比」，需手动开启
+  DASH_PANEL_TREND = {};
   $("dashHome").style.display = "none";
   $("dashDetail").style.display = "";
   // 直接打开（AI 生成 / 消息中心 / 事件跳转）时也要确保数据源已加载，否则「数据源」下拉只有内置 VM，无法选择外部源。
@@ -396,6 +408,8 @@ function renderDashDetail() {
   const d = CUR_DASH, wrap = $("dashDetail");
   if (!wrap) return;
   DASH_CHART_ARGS = {};
+  Object.keys(DASH_ECHART_ELS).forEach(id => { try { const el = DASH_ECHART_ELS[id]; if (el && typeof DashCharts !== "undefined") DashCharts.dispose(el); } catch (e) {} });
+  DASH_ECHART_ELS = {};
   const ranges = [[1, "1h"], [6, "6h"], [24, "24h"], [72, "3d"], [168, "7d"]];
   const rangeChips = ranges.map(([h, l]) => `<button class="chip-btn ${!DASH_RANGE.custom && DASH_RANGE.hours === h ? "active" : ""}" data-drange="${h}">${l}</button>`).join("");
   const rng = dashRange();
@@ -472,14 +486,31 @@ function renderPanels() {
   grid.innerHTML = canvasHTML + panels.map(p => {
     const style = dashPanelGridStyle(p);
     const dsTag = p.datasource ? `<span class="dash-panel-ds" title="面板数据源">${esc(dsLabel(p.datasource))}</span>` : "";
+    const zoomBtn = (p.type !== "text" && p.type !== "unsupported")
+      ? `<button type="button" class="mini-btn" data-pact="zoom" data-id="${p.id}" title="放大查看组件">⛶</button>` : "";
     const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
+    const trendTypes = { timeseries: 1, stat: 1, barchart: 1, graph: 1 };
+    const tr = DASH_PANEL_TREND[p.id] || {};
+    const trendBtns = trendTypes[p.type] ? `<div class="dash-trend-tools" data-trend-tools="${p.id}">
+        <button type="button" class="mini-btn dash-trend-btn${tr.forecast ? " active" : ""}" data-pact="forecast" data-id="${p.id}" title="趋势预测：左=历史 · 右=预测（默认窗=当前时间窗，居中对等）">预测</button>
+        <button type="button" class="mini-btn dash-trend-btn${tr.pop ? " active" : ""}" data-pact="pop" data-id="${p.id}" title="环比：与前一等长时间段对比">环比</button>
+        <button type="button" class="mini-btn dash-trend-btn${tr.yoy ? " active" : ""}" data-pact="yoy" data-id="${p.id}" title="同比：与去年同期对比">同比</button>
+        ${tr.forecast ? `<select class="dash-horizon-sel" data-horizon="${p.id}" title="自定义预测时长">
+          <option value="0"${!tr.horizonSec ? " selected" : ""}>默认窗</option>
+          <option value="3600"${tr.horizonSec === 3600 ? " selected" : ""}>未来 1h</option>
+          <option value="7200"${tr.horizonSec === 7200 ? " selected" : ""}>未来 2h</option>
+          <option value="86400"${tr.horizonSec === 86400 ? " selected" : ""}>未来 1天</option>
+          <option value="259200"${tr.horizonSec === 259200 ? " selected" : ""}>未来 3天</option>
+          <option value="604800"${tr.horizonSec === 604800 ? " selected" : ""}>未来 1周</option>
+        </select>` : ""}
+      </div>` : "";
     const editBtns = DASH_EDIT ? `<button type="button" class="mini-btn dash-drag-handle" data-drag-handle data-id="${p.id}" title="拖动到任意格点（幕布吸附）" aria-label="拖动面板">⠿</button>
         <button type="button" class="mini-btn" data-pact="up" data-id="${p.id}" title="上移">↑</button>
         <button type="button" class="mini-btn" data-pact="down" data-id="${p.id}" title="下移">↓</button>
         <button type="button" class="mini-btn" data-pact="dup" data-id="${p.id}" title="复制组件">⧉</button>
         <button type="button" class="mini-btn" data-pact="edit" data-id="${p.id}" title="编辑">✎</button>
         <button type="button" class="mini-btn del" data-pact="del" data-id="${p.id}" title="删除">✕</button>` : "";
-    const actions = (aiBtn || editBtns) ? `<div class="panel-edit-actions">${aiBtn}${editBtns}</div>` : "";
+    const actions = (trendBtns || zoomBtn || aiBtn || editBtns) ? `<div class="panel-edit-actions">${trendBtns}${zoomBtn}${aiBtn}${editBtns}</div>` : "";
     const resizeHandles = DASH_EDIT && dashBreakpoint() === "d"
       ? `<span class="dash-resize dash-resize-e" data-resize="e" data-id="${p.id}" title="调整宽度"></span>
          <span class="dash-resize dash-resize-s" data-resize="s" data-id="${p.id}" title="调整高度"></span>
@@ -853,32 +884,270 @@ function panelBodyH(el) {
   const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
   return Math.max(0, el.clientHeight - pad);
 }
+function dashDisposePanelChart(panelId) {
+  const el = DASH_ECHART_ELS[panelId];
+  if (el && typeof DashCharts !== "undefined") {
+    try { DashCharts.dispose(el); } catch (e) {}
+  }
+  delete DASH_ECHART_ELS[panelId];
+  delete DASH_CHART_ARGS[panelId];
+}
+function dashMountEchart(body, panelId) {
+  dashDisposePanelChart(panelId);
+  body.innerHTML = `<div class="dash-echart" id="dashEchart_${panelId}"></div>`;
+  const el = document.getElementById("dashEchart_" + panelId);
+  if (el) DASH_ECHART_ELS[panelId] = el;
+  return el;
+}
+function dashPanelOpt(p) { return (p && p.options) || {}; }
+function dashColorAt(p, i) {
+  if (typeof DashCharts !== "undefined") return DashCharts.colorAt(dashPanelOpt(p), i);
+  return DASH_COLORS[i % DASH_COLORS.length];
+}
+function dashDec(p) {
+  if (typeof DashCharts !== "undefined") return DashCharts.effectiveDecimals(p);
+  const o = dashPanelOpt(p);
+  if (o.decimals != null) return +o.decimals;
+  return p && p.decimals ? +p.decimals : null;
+}
+function dashApplyMapping(p, v) {
+  const maps = dashPanelOpt(p).mappings || [];
+  if (!maps.length) return null;
+  const s = v == null || (typeof v === "number" && isNaN(v)) ? null : String(v);
+  for (const m of maps) {
+    if (!m) continue;
+    if (m.type === "value" && s != null && String(m.value) === s) return m;
+    if (m.type === "range" && typeof v === "number" && !isNaN(v)) {
+      const from = m.from != null ? +m.from : -Infinity;
+      const to = m.to != null ? +m.to : Infinity;
+      if (v >= from && v <= to) return m;
+    }
+    if (m.type === "regex" && s != null && m.pattern) {
+      try { if (new RegExp(m.pattern).test(s)) return m; } catch (e) {}
+    }
+    if (m.type === "special") {
+      const sp = (m.special || "").toLowerCase();
+      if ((sp === "null" || sp === "null+nan") && (v == null || s === "null")) return m;
+      if ((sp === "nan" || sp === "null+nan") && typeof v === "number" && isNaN(v)) return m;
+      if (sp === "empty" && (s === "" || v == null)) return m;
+    }
+  }
+  return null;
+}
+function dashFmt(p, v) {
+  const mapped = dashApplyMapping(p, v);
+  if (mapped && mapped.text) return mapped.text;
+  const o = dashPanelOpt(p);
+  if ((v == null || v === "" || (typeof v === "number" && isNaN(v))) && o.no_value) return o.no_value;
+  return fmtUnit(v, p.unit, dashDec(p));
+}
+function dashThresholdColor(p, v, min, max) {
+  if (typeof DashCharts !== "undefined") {
+    const o = dashPanelOpt(p);
+    return DashCharts.thresholdColor(v, o.thresholds, p.unit, min != null ? min : p.min, max != null ? max : p.max, dashColorAt(p, 0), o.threshold_mode);
+  }
+  return statColor(v, p.unit, min != null ? min : p.min, max != null ? max : p.max);
+}
+function dashSortLimit(items, p, fallback) {
+  const o = dashPanelOpt(p);
+  if (typeof DashCharts !== "undefined") {
+    return DashCharts.applyLimit(DashCharts.sortItems(items, o.sort || "desc"), o.limit, fallback);
+  }
+  return items.slice().sort((a, b) => b.val - a.val).slice(0, fallback || 16);
+}
+
+const DASH_COMING_SOON = {
+  nodegraph: { icon: "🕸", title: "网络拓扑", desc: "节点关系 / 依赖拓扑可视化即将支持" },
+  geomap: { icon: "🗺", title: "地理热力", desc: "地理分布与区域热力即将支持" },
+  flamegraph: { icon: "🔥", title: "火焰图", desc: "CPU / 函数耗时剖析即将支持" },
+  news: { icon: "📰", title: "资讯", desc: "RSS / 新闻面板即将支持" }
+};
+
+function renderDashComingSoon(body, p) {
+  const meta = DASH_COMING_SOON[p.type] || { icon: "⬚", title: p.raw_type || p.type || "未知", desc: "该面板类型即将支持" };
+  const typ = p.raw_type || p.type || "";
+  body.innerHTML = `<div class="dash-coming-soon">
+    <div class="dash-coming-icon">${meta.icon}</div>
+    <div class="dash-coming-title">${esc(meta.title)}</div>
+    <div class="dash-coming-type">${esc(typ)}</div>
+    <div class="dash-coming-desc">${esc(meta.desc)}</div>
+    ${(p.targets || []).length ? `<div class="dash-unsupported-q">${(p.targets || []).map(t => esc(t.expr)).join("<br>")}</div>` : ""}
+  </div>`;
+}
+
 async function loadPanel(p) {
   const body = document.getElementById("panelBody_" + p.id);
   if (!body) return;
-  if (p.type === "text") {
-    // 文本来自用户、导入或模型，必须先转义再渲染；renderAIMarkdown 内部不允许原始 HTML/外链。
+  await loadPanelContent(p, body, p.id);
+}
+
+/** Render panel content into an arbitrary body (inline panel or zoom modal). chartKey isolates echart registry. */
+async function loadPanelContent(p, body, chartKey) {
+  if (!body || !p) return;
+  const key = chartKey != null ? chartKey : p.id;
+  const pView = key === p.id ? p : Object.assign({}, p, { id: key });
+  dashDisposePanelChart(key);
+  if (p.type === "text" || p.type === "markdown") {
     body.innerHTML = `<div class="dash-text">${renderAIMarkdown(p.text || "")}</div>`;
     return;
   }
+  if (p.type === "clock") { renderDashClock(body, pView); return; }
+  if (DASH_COMING_SOON[p.type]) { renderDashComingSoon(body, pView); return; }
   if (p.type === "unsupported") {
-    body.innerHTML = `<div class="dash-unsupported">⚠ 暂不支持的面板类型${p.raw_type ? "：" + esc(p.raw_type) : ""}<div class="dash-unsupported-q">${(p.targets || []).map(t => esc(t.expr)).join("<br>") || "（无查询）"}</div></div>`;
+    renderDashComingSoon(body, Object.assign({}, pView, { type: "unsupported" }));
+    const wrap = body.querySelector(".dash-coming-soon");
+    if (wrap) {
+      wrap.querySelector(".dash-coming-title").textContent = "暂不支持的面板类型";
+      wrap.querySelector(".dash-coming-desc").textContent = "已保留原始类型与查询，导入不丢数据";
+      wrap.querySelector(".dash-coming-icon").textContent = "⚠";
+    }
     return;
   }
-  if (p.type === "alertlist") { await loadAlertListPanel(p, body); return; } // 无需查询：读平台告警
+  if (p.type === "alertlist") { await loadAlertListPanel(pView, body); return; }
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
-  body.innerHTML = `<div class="dash-empty">加载中…</div>`;
+  body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
   const { from, to } = dashRange();
-  if (p.type === "logs") await loadLogsPanel(p, body, from, to);
-  else if (p.type === "timeseries") await loadTimeseriesPanel(p, body, from, to);
-  else if (p.type === "stat") await loadStatPanel(p, body, from, to);
-  else if (p.type === "gauge") await loadGaugePanel(p, body);
-  else if (p.type === "piechart" || p.type === "pie") await loadPiePanel(p, body);
-  else if (p.type === "barchart" || p.type === "bar") await loadBarPanel(p, body);
-  else if (p.type === "histogram") await loadHistogramPanel(p, body);
-  else if (p.type === "state-timeline" || p.type === "statetimeline") await loadStateTimelinePanel(p, body, from, to);
-  else if (p.type === "heatmap") await loadHeatmapPanel(p, body, from, to);
-  else await loadInstantPanel(p, body); // bargauge / table
+  if (p.type === "logs") await loadLogsPanel(pView, body, from, to);
+  else if (p.type === "timeseries" || p.type === "graph") await loadTimeseriesPanel(pView, body, from, to);
+  else if (p.type === "stat") await loadStatPanel(pView, body, from, to);
+  else if (p.type === "gauge") await loadGaugePanel(pView, body);
+  else if (p.type === "piechart" || p.type === "pie") await loadPiePanel(pView, body);
+  else if (p.type === "barchart" || p.type === "bar") await loadBarPanel(pView, body, from, to);
+  else if (p.type === "histogram") await loadHistogramPanel(pView, body);
+  else if (p.type === "state-timeline" || p.type === "statetimeline") await loadStateTimelinePanel(pView, body, from, to);
+  else if (p.type === "heatmap") await loadHeatmapPanel(pView, body, from, to);
+  else if (p.type === "candlestick") await loadCandlestickPanel(pView, body, from, to);
+  else if (p.type === "radar") await loadRadarPanel(pView, body);
+  else if (p.type === "sankey") await loadSankeyPanel(pView, body);
+  else await loadInstantPanel(pView, body);
+}
+
+let DASH_ZOOM_PID = 0;
+async function openDashPanelZoom(pid) {
+  if (!CUR_DASH) return;
+  const p = (CUR_DASH.panels || []).find(x => x.id === pid);
+  if (!p) return;
+  DASH_ZOOM_PID = pid;
+  const mask = $("dashPanelZoomMask");
+  const title = $("dashPanelZoomTitle");
+  const body = $("dashPanelZoomBody");
+  if (!mask || !body) return;
+  if (title) title.textContent = (p.title || "组件") + " · 放大预览";
+  mask.classList.add("show");
+  body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
+  // 同步预测/环比状态到 zoom key，并独立挂载，避免销毁看板内原图
+  if (DASH_PANEL_TREND[pid]) {
+    DASH_PANEL_TREND.zoom = Object.assign({}, DASH_PANEL_TREND[pid]);
+  } else {
+    delete DASH_PANEL_TREND.zoom;
+  }
+  await loadPanelContent(p, body, "zoom");
+  requestAnimationFrame(() => {
+    if (typeof DashCharts !== "undefined") {
+      try { DashCharts.resizeAll(body); } catch (e) {}
+    }
+  });
+}
+function closeDashPanelZoom() {
+  const mask = $("dashPanelZoomMask");
+  if (mask) mask.classList.remove("show");
+  dashDisposePanelChart("zoom");
+  delete DASH_PANEL_TREND.zoom;
+  DASH_ZOOM_PID = 0;
+}
+safeAddEventListener("dashPanelZoomMask", "click", e => {
+  if (e.target && (e.target.id === "dashPanelZoomMask" || e.target.closest("[data-dash-zoom-close]"))) {
+    closeDashPanelZoom();
+  }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("dashPanelZoomMask") && $("dashPanelZoomMask").classList.contains("show")) {
+    closeDashPanelZoom();
+  }
+});
+
+function renderDashClock(body, p) {
+  const id = "dashClock_" + p.id;
+  const tick = () => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const now = new Date();
+    const p2 = n => String(n).padStart(2, "0");
+    el.querySelector(".dash-clock-time").textContent =
+      `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
+    el.querySelector(".dash-clock-date").textContent =
+      `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
+  };
+  body.innerHTML = `<div class="dash-clock" id="${id}"><div class="dash-clock-time">--:--:--</div><div class="dash-clock-date"></div>${p.title ? "" : ""}</div>`;
+  tick();
+  if (body._clockTimer) clearInterval(body._clockTimer);
+  body._clockTimer = setInterval(tick, 1000);
+}
+
+async function loadCandlestickPanel(p, body, from, to) {
+  const series = await rangeSeries(p, body, from, to);
+  if (!series) return;
+  const pts = downsample((series[0] && series[0].points) || [], 80);
+  if (pts.length < 2) { body.innerHTML = dashEmptyHint("数据不足以绘制 K 线"); return; }
+  // Approximate OHLC from single series buckets.
+  const ohlc = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1][1], b = pts[i][1];
+    ohlc.push([pts[i][0] * 1000, a, Math.max(a, b), Math.min(a, b), b]);
+  }
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "candlestick", panel: p, ohlc, fmtUnit });
+    return;
+  }
+  body.innerHTML = dashEmptyHint("需要 ECharts 以渲染 K 线");
+}
+
+async function loadRadarPanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  let items = series.map(s => ({
+    name: legendFor(p.targets[0].legend, seriesLabels(s)),
+    val: seriesVal2(s)
+  }));
+  items = dashSortLimit(items.map(it => ({ lbl: it.name, val: it.val, name: it.name })), p, 8)
+    .map(it => ({ name: it.lbl || it.name, val: it.val }));
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "radar", panel: p, items, fmtUnit });
+    return;
+  }
+  body.innerHTML = `<div class="dash-bars-h">` + items.map(it =>
+    `<div class="dash-bar-item"><div class="dash-bar-lbl">${esc(it.name)}</div><div class="dash-bar-val">${dashFmt(p, it.val)}</div></div>`
+  ).join("") + `</div>`;
+}
+
+async function loadSankeyPanel(p, body) {
+  const series = await instantQuery(p, body);
+  if (!series) return;
+  const items = dashSortLimit(series.map(s => ({
+    lbl: legendFor(p.targets[0].legend, seriesLabels(s)),
+    val: Math.max(0, seriesVal2(s)),
+    labels: seriesLabels(s)
+  })), p, 16);
+  // Build a simple source→target flow: "source" hub → each series (or src/dst labels).
+  const nodes = [], links = [], nodeIdx = new Map();
+  const ensure = (name) => {
+    if (!nodeIdx.has(name)) { nodeIdx.set(name, nodes.length); nodes.push({ name }); }
+    return nodeIdx.get(name);
+  };
+  items.forEach(it => {
+    const src = it.labels.src || it.labels.source || it.labels.from || "来源";
+    const dst = it.labels.dst || it.labels.destination || it.labels.to || it.lbl || "目标";
+    ensure(src); ensure(dst);
+    links.push({ source: src, target: dst, value: it.val || 0.001 });
+  });
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "sankey", panel: p, sankey: { nodes, links }, fmtUnit });
+    return;
+  }
+  body.innerHTML = dashEmptyHint("需要 ECharts 以渲染桑基图");
 }
 // 即时查询公共入口：返回序列数组，出错/无数据时写占位并返回 null。
 async function instantQuery(p, body) {
@@ -902,14 +1171,26 @@ function statColor(v, unit, min, max) {
   return pct >= 90 ? "var(--crit)" : pct >= 75 ? "var(--warn)" : "var(--ok)";
 }
 async function loadLogsPanel(p, body, from, to) {
+  const lim = dashPanelOpt(p).limit > 0 ? dashPanelOpt(p).limit : 200;
   let res;
   try {
-    res = await fetch(`${API}/dashboards/query-logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, from, to, limit: 200, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
+    res = await fetch(`${API}/dashboards/query-logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: p.targets[0].expr, from, to, limit: lim, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
   } catch (e) { body.innerHTML = `<div class="dash-empty">日志查询失败</div>`; return; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">该面板需选择一个 <b>Loki</b> 数据源</div>`; return; }
   const lines = (res && res.lines) || [];
   if (!lines.length) { body.innerHTML = `<div class="dash-empty">该范围无日志</div>`; return; }
-  body.innerHTML = `<div class="dash-logs">${lines.map(l => `<div class="dash-log-row"><span class="dash-log-ts">${fmtLogTs(l.ts_ms)}</span><span class="dash-log-line">${esc(l.line || "")}</span></div>`).join("")}</div>`;
+  body.innerHTML = `<div class="dash-logs">${lines.map(l => {
+    const lv = detectLogLevel(l.line || "");
+    return `<div class="dash-log-row ${lv}"><span class="dash-log-lvl" aria-hidden="true"></span><span class="dash-log-ts">${fmtLogTs(l.ts_ms)}</span><span class="dash-log-line">${esc(l.line || "")}</span></div>`;
+  }).join("")}</div>`;
+}
+function detectLogLevel(line) {
+  const s = String(line);
+  if (/\b(ERROR|FATAL|CRIT(ICAL)?|ERR)\b/i.test(s) || /level[=:]?\s*error/i.test(s)) return "crit";
+  if (/\b(WARN(ING)?)\b/i.test(s) || /level[=:]?\s*warn/i.test(s)) return "warn";
+  if (/\b(DEBUG|TRACE)\b/i.test(s)) return "debug";
+  if (/\b(INFO)\b/i.test(s) || /level[=:]?\s*info/i.test(s)) return "info";
+  return "";
 }
 function fmtLogTs(ms) {
   if (!ms) return "";
@@ -918,49 +1199,93 @@ function fmtLogTs(ms) {
   return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }
 async function loadTimeseriesPanel(p, body, from, to) {
-  const collected = []; // { labels, legendFmt, points }
+  const collected = []; // { labels, legendFmt, points, name, kind, band }
   let naOff = false;
+  let metaMsg = "";
+  const st = panelTrendState(p.id);
+  const mode = panelTrendMode(st);
+  const useForecastAPI = !!mode;
   for (const t of p.targets) {
     let res;
     try {
-      res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json());
+      const payload = { expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() };
+      if (useForecastAPI) {
+        payload.mode = mode;
+        if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
+      }
+      const url = useForecastAPI ? `${API}/dashboards/query-forecast` : `${API}/dashboards/query`;
+      res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(r => r.json());
     } catch (e) { continue; }
     if (res && res.available === false) { naOff = true; break; }
+    if (res && res.meta && res.meta.message) metaMsg = res.meta.message;
     for (const s of (res && res.series || [])) {
-      if (collected.length >= 24) break; // 上限，避免图例爆炸
-      collected.push({ labels: s.labels || {}, legendFmt: t.legend, points: s.points || [] });
+      if (collected.length >= 32) break;
+      collected.push({
+        labels: s.labels || {}, legendFmt: t.legend, points: s.points || [],
+        kind: s.kind || "history", band: s.band || null,
+        name: s.name || ""
+      });
     }
+    // Multi-target panels (CPU/mem/net combo): forecast each expr; cap total series.
+    if (useForecastAPI && collected.length >= 32) break;
   }
   if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
-  if (!collected.length) { body.innerHTML = dashEmptyHint("该范围无数据"); return; }
-  const labels = dashLegends(collected);
-  const defs = [], tsMap = new Map();
-  collected.forEach((c, i) => {
-    const key = "s" + i;
-    defs.push({ key, label: labels[i], color: DASH_COLORS[i % DASH_COLORS.length], fmt: v => fmtUnit(v, p.unit) });
-    for (const pt of c.points) {
-      const ts = Math.round(pt[0]);
-      let row = tsMap.get(ts); if (!row) { row = { timestamp: ts }; tsMap.set(ts, row); }
-      row[key] = pt[1];
+  if (!collected.length) { body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据"); return; }
+  const histOnly = collected.filter(c => !c.kind || c.kind === "history");
+  const labels = dashLegends(histOnly.length ? histOnly : collected);
+  let li = 0;
+  collected.forEach((c) => {
+    if (!c.name) {
+      if (!c.kind || c.kind === "history") c.name = labels[li++] || "系列";
+      else c.name = c.kind === "forecast" ? "预测" : (c.kind === "compare_yoy" ? "同比" : "环比");
     }
   });
-  const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
-  const cid = "dashCanvas_" + p.id;
-  body.innerHTML = `<div class="chart-wrap"><canvas id="${cid}"></canvas></div>`;
-  // Y 轴自适应数据范围（不再强制 percent 面板 0~100），否则像 CPU 常年 3~7% 会贴底、曲线只占底部一条。
-  // 高度：面板已按 gridPos.h 占满网格行高，图表填满正文。在 rAF 里测量——刚插入 DOM 时正文尚未完成
-  // 布局(clientHeight≈0)会导致高度落到 90px 下限、曲线只占容器一半，故等一帧布局稳定后再测；
-  // 测不到时按 gridPos.h 反推(行高24+间距8-头/内边距~52)兜底。不再传 title(面板头已有标题)。
-  const drawTs = () => {
-    if (!document.getElementById(cid)) return;
-    let chartH = panelBodyH(body);
-    if (chartH < 120) chartH = dashRowHeight(p.grid.h || 8);
-    chartH = Math.max(90, chartH);
-    const args = [cid, samples, defs, null, null, { cssH: chartH, legendMode: "dash" }];
-    DASH_CHART_ARGS[p.id] = args;
-    createChart.apply(null, args);
-  };
-  requestAnimationFrame(drawTs);
+  const hasFC = collected.some(c => c.kind === "forecast");
+  const metaBadge = (metaMsg || (st.forecast && hasFC))
+    ? `<div class="dash-fc-meta">${metaMsg ? esc(metaMsg) : "左=历史 · 中轴=现在 · 右=预测（虚线）"}</div>` : "";
+  let nowTs = to;
+  collected.forEach(c => {
+    if ((!c.kind || c.kind === "history") && (c.points || []).length) {
+      const last = +c.points[c.points.length - 1][0];
+      if (last > nowTs) nowTs = last;
+    }
+  });
+  if (typeof DashCharts === "undefined" || typeof echarts === "undefined") {
+    // Fallback to Canvas if ECharts failed to load
+    const defs = [], tsMap = new Map();
+    collected.forEach((c, i) => {
+      const key = "s" + i;
+      const col = c.kind === "forecast" ? dashColorAt(p, 0)
+        : (c.kind === "compare_yoy" ? "#a78bfa" : (c.kind === "compare_pop" ? "#94a3b8" : dashColorAt(p, i)));
+      defs.push({
+        key, label: c.name || labels[i], color: col, fmt: v => dashFmt(p, v),
+        dashed: c.kind === "forecast", kind: c.kind || "history"
+      });
+      for (const pt of c.points) {
+        const ts = Math.round(pt[0]);
+        let row = tsMap.get(ts); if (!row) { row = { timestamp: ts }; tsMap.set(ts, row); }
+        row[key] = pt[1];
+      }
+    });
+    const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
+    const cid = "dashCanvas_" + p.id;
+    body.innerHTML = `${metaBadge}<div class="chart-wrap"><canvas id="${cid}"></canvas></div>`;
+    const drawTs = () => {
+      if (!document.getElementById(cid)) return;
+      let chartH = panelBodyH(body);
+      if (chartH < 120) chartH = dashRowHeight(p.grid.h || 8);
+      const bodyH = Math.max(80, panelBodyH(body) || chartH);
+      const args = [cid, samples, defs, p.min != null ? +p.min : null, p.max != null ? +p.max : null, { cssH: bodyH, legendMode: "dash", title: "", nowTs }];
+      DASH_CHART_ARGS[p.id] = args;
+      createChart.apply(null, args);
+    };
+    requestAnimationFrame(drawTs);
+    return;
+  }
+  const el = dashMountEchart(body, p.id);
+  if (!el) return;
+  if (metaBadge) el.insertAdjacentHTML("beforebegin", metaBadge);
+  DashCharts.render(el, { type: "timeseries", panel: p, series: collected, fmtUnit, nowTs });
 }
 // dashRowHeight：按 gridPos 行数反推面板正文可用高度（网格行高 24 + 行间距 8，扣面板头+内边距 ~52）。
 function dashRowHeight(h) { const n = Math.max(3, Math.min(48, h || 8)); return n * 24 + (n - 1) * 8 - 52; }
@@ -991,10 +1316,49 @@ async function loadSQLTablePanel(p, body) {
     body.innerHTML = dashEmptyHint("无数据");
     return;
   }
-  body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>` +
-    cols.map(c => `<th>${esc(c)}</th>`).join("") + `</tr></thead><tbody>` +
-    rows.slice(0, 200).map(r => `<tr>` + cols.map(c => `<td>${esc(r[c] == null ? "" : String(r[c]))}</td>`).join("") + `</tr>`).join("") +
-    `</tbody></table></div>`;
+  const lim = (dashPanelOpt(p).limit > 0 ? dashPanelOpt(p).limit : 200);
+  renderDashDataTable(body, cols, rows.slice(0, lim), p);
+}
+function renderDashDataTable(body, cols, rows, p) {
+  const sortState = { col: null, dir: "desc" };
+  const paint = () => {
+    let data = rows.slice();
+    if (sortState.col != null) {
+      const c = cols[sortState.col];
+      data.sort((a, b) => {
+        const av = a[c], bv = b[c];
+        const an = parseFloat(av), bn = parseFloat(bv);
+        let cmp = 0;
+        if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
+        else cmp = String(av == null ? "" : av).localeCompare(String(bv == null ? "" : bv), undefined, { numeric: true });
+        return sortState.dir === "asc" ? cmp : -cmp;
+      });
+    }
+    body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>` +
+      cols.map((c, i) => `<th data-col="${i}" class="dash-th-sort${sortState.col === i ? " active" : ""}">${esc(c)}${sortState.col === i ? (sortState.dir === "asc" ? " ↑" : " ↓") : ""}</th>`).join("") +
+      `</tr></thead><tbody>` +
+      data.map(r => {
+        const cells = cols.map(c => {
+          const raw = r[c];
+          const n = parseFloat(raw);
+          if (raw !== "" && raw != null && !isNaN(n) && String(raw).trim() !== "" && /^-?\d/.test(String(raw).trim())) {
+            const col = dashThresholdColor(p, n);
+            return `<td class="num" style="color:${col}">${esc(dashFmt(p, n))}</td>`;
+          }
+          return `<td>${esc(raw == null ? "" : String(raw))}</td>`;
+        }).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("") + `</tbody></table></div>`;
+    body.querySelectorAll(".dash-th-sort").forEach(th => {
+      th.addEventListener("click", () => {
+        const i = +th.dataset.col;
+        if (sortState.col === i) sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+        else { sortState.col = i; sortState.dir = "desc"; }
+        paint();
+      });
+    });
+  };
+  paint();
 }
 
 function isSQLDashDS(id) {
@@ -1010,92 +1374,184 @@ async function loadInstantPanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
   if (p.type === "bargauge") {
+    const items = dashSortLimit(series.map(s => ({
+      lbl: legendFor(p.targets[0].legend, seriesLabels(s)),
+      val: seriesVal2(s)
+    })), p, 16);
+    if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+      const el = dashMountEchart(body, p.id);
+      if (el) DashCharts.render(el, { type: "bargauge", panel: p, items, fmtUnit });
+      return;
+    }
     const min = p.min != null ? p.min : 0;
     const max = p.max != null ? p.max : (p.unit === "percent" ? 100 : (p.unit === "percentunit" ? 1 : autoMax(series)));
-    body.innerHTML = `<div class="dash-bars-h">` + series.slice(0, 16).map(s => {
-      const v = seriesVal2(s);
-      const pct = max > min ? Math.max(0, Math.min(100, (v - min) / (max - min) * 100)) : 0;
-      const col = statColor(v, p.unit, min, max);
-      const lbl = legendFor(p.targets[0].legend, seriesLabels(s));
-      return `<div class="dash-bar-item"><div class="dash-bar-lbl" title="${esc(lbl)}">${esc(lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${fmtUnit(v, p.unit)}</div></div>`;
+    body.innerHTML = `<div class="dash-bars-h">` + items.map(it => {
+      const pct = max > min ? Math.max(0, Math.min(100, (it.val - min) / (max - min) * 100)) : 0;
+      const col = dashThresholdColor(p, it.val, min, max);
+      return `<div class="dash-bar-item"><div class="dash-bar-lbl" title="${esc(it.lbl)}">${esc(it.lbl)}</div><div class="dash-bar-track"><div class="dash-bar-fill" style="width:${pct}%; background:${col}"></div></div><div class="dash-bar-val">${dashFmt(p, it.val)}</div></div>`;
     }).join("") + `</div>`;
-  } else { // table
-    const rows = series.map(s => ({ lbl: legendFor(p.targets[0].legend, seriesLabels(s)), v: seriesVal2(s) }))
-      .sort((a, b) => b.v - a.v).slice(0, 200);
-    body.innerHTML = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr><th>序列</th><th class="num">值</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td title="${esc(r.lbl)}">${esc(r.lbl)}</td><td class="num">${fmtUnit(r.v, p.unit)}</td></tr>`).join("") +
-      `</tbody></table></div>`;
+  } else { // table (PromQL instant)
+    const items = dashSortLimit(series.map(s => ({
+      lbl: legendFor(p.targets[0].legend, seriesLabels(s)),
+      val: seriesVal2(s)
+    })), p, 200);
+    const cols = ["序列", "值"];
+    const rows = items.map(it => ({ "序列": it.lbl, "值": it.val }));
+    renderDashDataTable(body, cols, rows, p);
   }
 }
 // loadStatPanel：大数值（取区间最后一点）+ 阈值配色 + 迷你趋势 sparkline + 说明。
 async function loadStatPanel(p, body, from, to) {
   const t = p.targets[0];
+  const st = panelTrendState(p.id);
+  const mode = panelTrendMode(st);
   let res;
-  try { res = await fetch(`${API}/dashboards/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() }) }).then(r => r.json()); }
-  catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
+  try {
+    const payload = { expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() };
+    let url = `${API}/dashboards/query`;
+    if (mode) {
+      url = `${API}/dashboards/query-forecast`;
+      payload.mode = mode;
+      if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
+    }
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(r => r.json());
+  } catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return; }
   const series = (res && res.series) || [];
-  if (!series.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
-  const s0 = series[0], pts = s0.points || [];
+  if (!series.length) { body.innerHTML = dashEmptyHint((res && res.meta && res.meta.message) || "无数据"); return; }
+  const s0 = series.find(s => !s.kind || s.kind === "history") || series[0];
+  const pts = s0.points || [];
   const val = pts.length ? pts[pts.length - 1][1] : 0;
-  const col = statColor(val, p.unit, p.min, p.max);
-  const lbl = legendFor(t.legend, s0.labels || {});
-  const spark = pts.length > 1 ? svgSparkline(pts.map(pt => pt[1]), col) : "";
-  body.innerHTML = `<div class="dash-stat2">
-      <div class="dash-stat-num" style="color:${col}">${fmtUnit(+val, p.unit)}</div>
+  const col = dashThresholdColor(p, val);
+  let lbl = legendFor(t.legend, s0.labels || {});
+  if (!lbl || /^value$/i.test(lbl) || /^aiops_/i.test(lbl)) lbl = "";
+  const fc = series.find(s => s.kind === "forecast");
+  const cmp = series.find(s => s.kind === "compare_pop" || s.kind === "compare_yoy");
+  let deltaHTML = "";
+  if (cmp && (cmp.points || []).length && pts.length) {
+    const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const curAvg = avg(pts.map(x => +x[1]));
+    const prevAvg = avg(cmp.points.map(x => +x[1]));
+    if (Math.abs(prevAvg) > 1e-12) {
+      const pct = (curAvg - prevAvg) / Math.abs(prevAvg) * 100;
+      const up = pct >= 0;
+      const tag = cmp.kind === "compare_yoy" ? "同比" : "环比";
+      deltaHTML = `<div class="dash-stat-delta ${up ? "up" : "down"}">${tag} ${up ? "↑" : "↓"} ${Math.abs(pct).toFixed(1)}%</div>`;
+    }
+  }
+  const metaMsg = res && res.meta && !res.meta.ok && res.meta.message ? `<div class="dash-fc-meta">${esc(res.meta.message)}</div>` : "";
+  body.innerHTML = `${metaMsg}<div class="dash-stat2">
+      <div class="dash-stat-num" style="color:${col}">${dashFmt(p, +val)}</div>
+      ${deltaHTML}
       ${lbl ? `<div class="dash-stat-cap">${esc(lbl)}</div>` : ""}
-      ${spark ? `<div class="dash-stat-spark">${spark}</div>` : ""}
+      <div class="dash-stat-spark" id="dashStatSpark_${p.id}"></div>
     </div>`;
+  if (pts.length > 1 && typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const sparkEl = document.getElementById("dashStatSpark_" + p.id);
+    if (sparkEl) {
+      DASH_ECHART_ELS[p.id] = sparkEl;
+      sparkEl.classList.add("dash-echart", "dash-echart-spark");
+      DashCharts.render(sparkEl, {
+        type: "stat", panel: p, points: pts, fmtUnit,
+        forecastPoints: fc ? (fc.points || []) : []
+      });
+    }
+  } else if (pts.length > 1) {
+    const spark = svgSparkline(pts.map(pt => pt[1]), col);
+    const el = document.getElementById("dashStatSpark_" + p.id);
+    if (el) el.innerHTML = spark;
+  }
 }
-// loadGaugePanel：每个序列一个圆环仪表（径向进度），阈值配色，flex 自适应铺满。
+// loadGaugePanel：ECharts 仪表；多序列时网格分格。
 async function loadGaugePanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
+  let items = series.map(s => {
+    let lbl = legendFor(p.targets[0].legend, seriesLabels(s));
+    // 聚合指标无 instance 时常见 "value"，仪表标题区不展示
+    if (!lbl || /^value$/i.test(lbl) || /^aiops_/i.test(lbl)) lbl = "";
+    return { val: seriesVal2(s), lbl };
+  });
+  items = dashSortLimit(items, p, 9);
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    if (items.length <= 1) {
+      const el = dashMountEchart(body, p.id);
+      if (el) DashCharts.render(el, { type: "gauge", panel: p, items, fmtUnit });
+      return;
+    }
+    body.innerHTML = `<div class="dash-gauges dash-gauges-echart">` + items.map((it, i) =>
+      `<div class="dash-gauge-item"><div class="dash-echart dash-echart-gauge" id="dashGauge_${p.id}_${i}"></div></div>`
+    ).join("") + `</div>`;
+    items.forEach((it, i) => {
+      const el = document.getElementById(`dashGauge_${p.id}_${i}`);
+      if (!el) return;
+      if (i === 0) DASH_ECHART_ELS[p.id] = el;
+      DashCharts.render(el, { type: "gauge", panel: p, items: [it], fmtUnit });
+    });
+    return;
+  }
   const min = p.min != null ? p.min : 0;
   const max = p.max != null ? p.max : (p.unit === "percent" ? 100 : (p.unit === "percentunit" ? 1 : autoMax(series)));
-  body.innerHTML = `<div class="dash-gauges">` + series.slice(0, 9).map(s => {
-    const v = seriesVal2(s);
-    const pct = max > min ? (v - min) / (max - min) * 100 : 0;
-    const col = statColor(v, p.unit, min, max);
-    const lbl = legendFor(p.targets[0].legend, seriesLabels(s));
-    return `<div class="dash-gauge-item">${svgGauge(pct, fmtUnit(v, p.unit), col)}<div class="dash-gauge-lbl" title="${esc(lbl)}">${esc(lbl)}</div></div>`;
+  body.innerHTML = `<div class="dash-gauges">` + items.map(it => {
+    const pct = max > min ? (it.val - min) / (max - min) * 100 : 0;
+    const col = dashThresholdColor(p, it.val, min, max);
+    return `<div class="dash-gauge-item">${svgGauge(pct, dashFmt(p, it.val), col)}<div class="dash-gauge-lbl" title="${esc(it.lbl)}">${esc(it.lbl)}</div></div>`;
   }).join("") + `</div>`;
 }
-// loadPiePanel：环形图（每序列一片）+ 侧栏图例。只保留正值切片，图例与切片一致，
-// 图例含占比，环心显示总计，充分利用空间避免留白。
 async function loadPiePanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
-  const items = series
-    .map((s, i) => ({ val: Math.max(0, seriesVal2(s)), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }))
-    .filter(it => it.val > 0)
-    .sort((a, b) => b.val - a.val)
-    .slice(0, 12);
+  let items = series
+    .map((s, i) => ({ val: Math.max(0, seriesVal2(s)), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: dashColorAt(p, i) }))
+    .filter(it => it.val > 0);
+  items = dashSortLimit(items, p, 12);
   if (!items.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "piechart", panel: p, items, fmtUnit });
+    return;
+  }
   const total = items.reduce((a, b) => a + b.val, 0) || 1;
-  const centerVal = fmtUnit(total, p.unit);
+  const centerVal = dashFmt(p, total);
   const legend = items.map(it => {
     const pct = (it.val / total * 100);
     const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
     return `<div class="dash-pie-li"><span class="dash-pie-dot" style="background:${it.col}"></span>` +
       `<span class="dash-pie-name" title="${esc(it.lbl)}">${esc(it.lbl)}</span>` +
-      `<span class="dash-pie-val">${fmtUnit(it.val, p.unit)}</span>` +
+      `<span class="dash-pie-val">${dashFmt(p, it.val)}</span>` +
       `<span class="dash-pie-pct">${pctStr}%</span></div>`;
   }).join("");
   body.innerHTML = `<div class="dash-pie"><div class="dash-pie-chart">${svgDonut(items, total, centerVal)}</div>` +
     `<div class="dash-pie-legend">${legend}</div></div>`;
 }
-// loadBarPanel：纵向柱状图（每序列一柱），适合 top-N。
-async function loadBarPanel(p, body) {
+async function loadBarPanel(p, body, from, to) {
+  // 预测/环比/同比开启时：走区间时序柱状（左历史右预测），与曲线面板同一套 query-forecast
+  const st = panelTrendState(p.id);
+  if (panelTrendMode(st)) {
+    const range = (typeof from === "number" && typeof to === "number")
+      ? { from, to }
+      : dashRange();
+    const p2 = Object.assign({}, p, {
+      type: "timeseries",
+      options: Object.assign({}, p.options || {}, { chart_style: "bar" }),
+    });
+    await loadTimeseriesPanel(p2, body, range.from, range.to);
+    return;
+  }
   const series = await instantQuery(p, body);
   if (!series) return;
-  const items = series.map((s, i) => ({ val: seriesVal2(s), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: DASH_COLORS[i % DASH_COLORS.length] }))
-    .sort((a, b) => b.val - a.val).slice(0, 16);
+  let items = series.map((s, i) => ({ val: seriesVal2(s), lbl: legendFor(p.targets[0].legend, seriesLabels(s)), col: dashColorAt(p, i) }));
+  items = dashSortLimit(items, p, 16);
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "barchart", panel: p, items, fmtUnit });
+    return;
+  }
   const mx = Math.max(...items.map(it => it.val), 0) || 1;
   body.innerHTML = `<div class="dash-bars">` + items.map(it => {
     const h = Math.max(2, it.val / mx * 100);
-    return `<div class="dash-barcol" title="${esc(it.lbl)}：${fmtUnit(it.val, p.unit)}">
-        <div class="dash-barcol-v">${fmtUnit(it.val, p.unit)}</div>
+    return `<div class="dash-barcol" title="${esc(it.lbl)}：${dashFmt(p, it.val)}">
+        <div class="dash-barcol-v">${dashFmt(p, it.val)}</div>
         <div class="dash-barcol-track"><div class="dash-barcol-bar" style="height:${h}%; background:${it.col}"></div></div>
         <div class="dash-barcol-lbl">${esc(it.lbl)}</div></div>`;
   }).join("") + `</div>`;
@@ -1143,53 +1599,84 @@ async function rangeSeries(p, body, from, to) {
   if (!series.length) { body.innerHTML = dashEmptyHint("该范围无数据"); return null; }
   return series;
 }
-// loadHistogramPanel：把各序列当前值分箱统计，画分布直方图（纵向柱）。
 async function loadHistogramPanel(p, body) {
   const series = await instantQuery(p, body);
   if (!series) return;
   const vals = series.map(seriesVal2).filter(v => isFinite(v));
   if (!vals.length) { body.innerHTML = dashEmptyHint("无数据"); return; }
   const mn = Math.min(...vals), mx = Math.max(...vals);
-  const bins = Math.min(16, Math.max(4, Math.round(Math.sqrt(vals.length)) + 2));
-  const w = (mx - mn) / bins || 1;
-  const counts = new Array(bins).fill(0);
-  vals.forEach(v => { let i = Math.floor((v - mn) / w); if (i >= bins) i = bins - 1; if (i < 0) i = 0; counts[i]++; });
+  const binsN = Math.min(16, Math.max(4, Math.round(Math.sqrt(vals.length)) + 2));
+  const w = (mx - mn) / binsN || 1;
+  const counts = new Array(binsN).fill(0);
+  vals.forEach(v => { let i = Math.floor((v - mn) / w); if (i >= binsN) i = binsN - 1; if (i < 0) i = 0; counts[i]++; });
+  const bins = counts.map((c, i) => ({ lbl: fmtShort(mn + i * w), count: c }));
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "histogram", panel: p, bins, fmtUnit });
+    return;
+  }
   const mxc = Math.max(...counts, 1);
   body.innerHTML = `<div class="dash-bars">` + counts.map((c, i) => {
     const lo = mn + i * w;
-    return `<div class="dash-barcol" title="${fmtUnit(lo, p.unit)} ~ ${fmtUnit(lo + w, p.unit)}：${c}">
+    return `<div class="dash-barcol" title="${dashFmt(p, lo)} ~ ${dashFmt(p, lo + w)}：${c}">
         <div class="dash-barcol-v">${c}</div>
-        <div class="dash-barcol-track"><div class="dash-barcol-bar" style="height:${Math.max(1, c / mxc * 100)}%; background:var(--accent)"></div></div>
+        <div class="dash-barcol-track"><div class="dash-barcol-bar" style="height:${Math.max(1, c / mxc * 100)}%; background:${dashColorAt(p, i)}"></div></div>
         <div class="dash-barcol-lbl">${fmtShort(lo)}</div></div>`;
   }).join("") + `</div>`;
 }
-// loadStateTimelinePanel：每序列一条状态色带，按值/阈值上色（可用/故障、达标/超标），适合可用性。
 async function loadStateTimelinePanel(p, body, from, to) {
   const series = await rangeSeries(p, body, from, to);
   if (!series) return;
   const labels = dashLegends(series.map(s => ({ labels: s.labels || {}, legendFmt: p.targets[0].legend })));
-  body.innerHTML = `<div class="dash-states">` + series.slice(0, 16).map((s, idx) => {
+  const lim = dashPanelOpt(p).limit > 0 ? dashPanelOpt(p).limit : 16;
+  body.innerHTML = `<div class="dash-states">` + series.slice(0, lim).map((s, idx) => {
     const pts = s.points || [];
-    const segs = pts.map(pt => `<span class="dash-state-seg" style="background:${stateColor(pt[1], p.unit)}" title="${fmtLogTs(pt[0] * 1000)} · ${fmtUnit(pt[1], p.unit)}"></span>`).join("");
+    const segs = pts.map(pt => `<span class="dash-state-seg" style="background:${stateColor(pt[1], p)}" title="${fmtLogTs(pt[0] * 1000)} · ${dashFmt(p, pt[1])}"></span>`).join("");
     return `<div class="dash-state-row"><div class="dash-state-lbl" title="${esc(labels[idx])}">${esc(labels[idx])}</div><div class="dash-state-track">${segs}</div></div>`;
   }).join("") + `</div>`;
 }
-function stateColor(v, unit) {
+function stateColor(v, pOrUnit) {
+  if (pOrUnit && typeof pOrUnit === "object") return dashThresholdColor(pOrUnit, v);
+  const unit = pOrUnit;
   if (unit === "percent" || unit === "percentunit") return statColor(v, unit);
   return v <= 0 ? "var(--crit)" : "var(--ok)";
 }
-// loadHeatmapPanel：时间×序列 的密度色块（蓝→黄→红映射数值高低），适合看多实例分布。
 async function loadHeatmapPanel(p, body, from, to) {
   const series = await rangeSeries(p, body, from, to);
   if (!series) return;
-  const rows = series.slice(0, 24);
+  const lim = dashPanelOpt(p).limit > 0 ? dashPanelOpt(p).limit : 24;
+  const rows = series.slice(0, lim);
   const labels = dashLegends(rows.map(s => ({ labels: s.labels || {}, legendFmt: p.targets[0].legend })));
+  if (typeof DashCharts !== "undefined" && typeof echarts !== "undefined") {
+    // Build shared time buckets from first series downsample
+    const nBuckets = 40;
+    const allTs = new Set();
+    rows.forEach(s => downsample(s.points || [], nBuckets).forEach(pt => allTs.add(Math.round(pt[0]))));
+    const xTs = [...allTs].sort((a, b) => a - b);
+    const xLabels = xTs.map(ts => fmtLogTs(ts * 1000));
+    const data = [];
+    rows.forEach((s, yi) => {
+      const map = new Map((s.points || []).map(pt => [Math.round(pt[0]), pt[1]]));
+      xTs.forEach((ts, xi) => {
+        // nearest sample
+        let best = null, bestD = Infinity;
+        for (const [k, v] of map) {
+          const d = Math.abs(k - ts);
+          if (d < bestD) { bestD = d; best = v; }
+        }
+        if (best != null) data.push([xi, yi, best]);
+      });
+    });
+    const el = dashMountEchart(body, p.id);
+    if (el) DashCharts.render(el, { type: "heatmap", panel: p, matrix: { xLabels, yLabels: labels, data }, fmtUnit });
+    return;
+  }
   let mn = Infinity, mx = -Infinity;
   rows.forEach(s => (s.points || []).forEach(pt => { if (pt[1] < mn) mn = pt[1]; if (pt[1] > mx) mx = pt[1]; }));
   const rng = (mx - mn) || 1;
   body.innerHTML = `<div class="dash-heatmap">` + rows.map((s, idx) => {
     const pts = downsample(s.points || [], 80);
-    const cells = pts.map(pt => `<span class="dash-heat-cell" style="background:${heatColor((pt[1] - mn) / rng)}" title="${fmtLogTs(pt[0] * 1000)} · ${fmtUnit(pt[1], p.unit)}"></span>`).join("");
+    const cells = pts.map(pt => `<span class="dash-heat-cell" style="background:${heatColor((pt[1] - mn) / rng)}" title="${fmtLogTs(pt[0] * 1000)} · ${dashFmt(p, pt[1])}"></span>`).join("");
     return `<div class="dash-heat-row"><div class="dash-heat-lbl" title="${esc(labels[idx])}">${esc(labels[idx])}</div><div class="dash-heat-cells">${cells}</div></div>`;
   }).join("") + `</div>`;
 }
@@ -1204,8 +1691,13 @@ async function loadAlertListPanel(p, body) {
   if (kw) alerts = alerts.filter(a => JSON.stringify(a).toLowerCase().includes(kw));
   if (!alerts.length) { body.innerHTML = `<div class="dash-alerts-ok">✓ 当前无告警</div>`; return; }
   const rank = { critical: 0, warning: 1, info: 2 };
-  alerts.sort((a, b) => (rank[a.level] ?? 3) - (rank[b.level] ?? 3));
-  body.innerHTML = `<div class="dash-alerts">` + alerts.slice(0, 200).map(a => {
+  const sort = (dashPanelOpt(p).sort || "desc").toLowerCase();
+  alerts.sort((a, b) => {
+    const cmp = (rank[a.level] ?? 3) - (rank[b.level] ?? 3);
+    return sort === "asc" ? -cmp : cmp;
+  });
+  const lim = dashPanelOpt(p).limit > 0 ? dashPanelOpt(p).limit : 200;
+  body.innerHTML = `<div class="dash-alerts">` + alerts.slice(0, lim).map(a => {
     const lv = a.level === "critical" ? "crit" : a.level === "warning" ? "warn" : "info";
     return `<div class="dash-alert-row ${lv}"><span class="dash-alert-dot"></span><span class="dash-alert-msg" title="${esc(a.message || "")}">${esc(a.message || a.type || "告警")}</span>${a.hostname ? `<span class="dash-alert-host">${esc(a.hostname)}</span>` : ""}</div>`;
   }).join("") + `</div>`;
@@ -1307,17 +1799,22 @@ function fmtDuration(v) {
   if (a < 86400) { const h = Math.floor(a / 3600), m = Math.round((a % 3600) / 60); return neg + h + "h" + (m ? " " + m + "m" : ""); }
   const d = Math.floor(a / 86400), h = Math.round((a % 86400) / 3600); return neg + d + "天" + (h ? " " + h + "h" : "");
 }
-function fmtUnit(v, unit) {
+function fmtUnit(v, unit, decimals) {
   if (v === undefined || v === null || isNaN(v)) return "-";
+  const d = (decimals != null && decimals !== "" && !isNaN(+decimals)) ? Math.max(0, Math.min(10, +decimals)) : null;
+  const fixed = (n, def) => (d != null ? (+n).toFixed(d) : (def != null ? (+n).toFixed(def) : fmtShort(n)));
   switch (unit) {
-    case "percent": return v.toFixed(1) + "%";
-    case "percentunit": return (v * 100).toFixed(1) + "%";
+    case "none": return d != null ? (+v).toFixed(d) : String(v);
+    case "percent": return fixed(v, 1) + "%";
+    case "percentunit": return fixed(v * 100, 1) + "%";
     case "bytes": return fmtBytes(v);
-    case "Bps": return fmtBytes(v) + "/s";
+    case "binBps": case "Bps": return fmtBytes(v) + "/s";
     case "s": case "seconds": case "duration": return fmtDuration(v);
-    case "ms": return v >= 1000 ? fmtDuration(v / 1000) : v.toFixed(0) + "ms";
-    case "reqps": return fmtShort(v) + "/s";
-    default: return fmtShort(v);
+    case "ms": return v >= 1000 ? fmtDuration(v / 1000) : fixed(v, 0) + "ms";
+    case "reqps": return (d != null ? (+v).toFixed(d) : fmtShort(v)) + "/s";
+    case "cores": return fixed(v, 2) + " cores";
+    case "short": return d != null ? (+v).toFixed(d) : fmtShort(v);
+    default: return d != null ? (+v).toFixed(d) : fmtShort(v);
   }
 }
 
@@ -1337,6 +1834,9 @@ window.addEventListener("resize", () => {
       return;
     }
     for (const id in DASH_CHART_ARGS) { try { createChart.apply(null, DASH_CHART_ARGS[id]); } catch (e) {} }
+    if (typeof DashCharts !== "undefined") {
+      try { DashCharts.resizeAll(document.getElementById("dashDetail")); } catch (e) {}
+    }
   }, 250);
 });
 
@@ -1401,6 +1901,16 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (pa) { handlePanelAction(pa.dataset.pact, +pa.dataset.id); return; }
 });
 safeAddEventListener("dashDetail", "change", e => {
+  const hz = e.target.closest("[data-horizon]");
+  if (hz) {
+    const pid = +hz.dataset.horizon;
+    if (!DASH_PANEL_TREND[pid]) DASH_PANEL_TREND[pid] = {};
+    DASH_PANEL_TREND[pid].horizonSec = +hz.value || 0;
+    const p = CUR_DASH && CUR_DASH.panels && CUR_DASH.panels.find(x => x.id === pid);
+    const body = $("panelBody_" + pid);
+    if (p && body) loadPanel(p);
+    return;
+  }
   if (e.target.id === "dashDSSelect") {
     if (DASH_EDIT) rememberDashMutation();
     CUR_DASH.datasource = e.target.value;
@@ -1535,10 +2045,28 @@ function applyDashCustom() {
   if (!(to > from)) { toast("结束时间必须晚于开始时间", "warn"); return; }
   DASH_RANGE = { hours: 0, custom: { from, to } }; renderDashDetail();
 }
+function panelTrendState(pid) {
+  if (!DASH_PANEL_TREND[pid]) DASH_PANEL_TREND[pid] = { forecast: false, pop: false, yoy: false, horizonSec: 0 };
+  return DASH_PANEL_TREND[pid];
+}
+function panelTrendMode(st) {
+  const parts = [];
+  if (st.forecast) parts.push("forecast");
+  if (st.pop) parts.push("pop");
+  if (st.yoy) parts.push("yoy");
+  return parts.join("+");
+}
 function handlePanelAction(act, pid) {
   const panels = CUR_DASH.panels;
   const idx = panels.findIndex(p => p.id === pid);
   if (idx < 0) return;
+  if (act === "forecast" || act === "pop" || act === "yoy") {
+    const st = panelTrendState(pid);
+    st[act] = !st[act];
+    renderPanels();
+    return;
+  }
+  if (act === "zoom") { openDashPanelZoom(pid); return; }
   if (act === "ai") { aiAnalyzePanel(panels[idx]); return; }
   if (act === "edit") { openPanelEditor(panels[idx]); return; }
   if (act === "dup") {
@@ -1567,6 +2095,97 @@ function handlePanelAction(act, pid) {
 }
 
 /* ---------- 面板编辑器 ---------- */
+let PANEL_THRESHOLDS_DRAFT = [];
+
+function defaultPanelThresholds(unit) {
+  if (unit === "percent" || unit === "percentunit") {
+    const scale = unit === "percentunit" ? 0.01 : 1;
+    return [
+      { value: 0, color: "var(--ok)" },
+      { value: 75 * scale, color: "var(--warn)" },
+      { value: 90 * scale, color: "var(--crit)" }
+    ];
+  }
+  return [
+    { value: 0, color: "var(--ok)" },
+    { value: 75, color: "var(--warn)" },
+    { value: 90, color: "var(--crit)" }
+  ];
+}
+
+function switchPanelEditTab(name) {
+  const tab = name || "data";
+  document.querySelectorAll("#panelEditMask [data-panel-tab]").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-panel-tab") === tab);
+  });
+  document.querySelectorAll("#panelEditMask [data-panel-pane]").forEach(pane => {
+    pane.classList.toggle("active", pane.getAttribute("data-panel-pane") === tab);
+  });
+}
+
+function renderPanelThresholdList() {
+  const wrap = $("panelThresholdList");
+  if (!wrap) return;
+  if (!PANEL_THRESHOLDS_DRAFT.length) {
+    wrap.innerHTML = `<div class="dash-empty">尚未配置阈值（将使用类型默认色）</div>`;
+  } else {
+    wrap.innerHTML = PANEL_THRESHOLDS_DRAFT.map((t, i) => `
+      <div class="panel-threshold-row">
+        <input type="color" data-th-color-pick="${i}" value="${thresholdToColorInput(t.color)}" title="颜色">
+        <input type="text" class="mono" data-th-color="${i}" value="${esc(t.color || "")}" placeholder="#22c55e 或 var(--ok)" style="flex:1.2">
+        <input type="number" class="mono" data-th-value="${i}" value="${t.value != null ? t.value : ""}" step="any" placeholder="值" style="width:110px">
+        <button type="button" class="mini-btn del" data-th-del="${i}" title="删除">✕</button>
+      </div>`).join("");
+  }
+  renderPanelThresholdPreview();
+}
+
+function thresholdToColorInput(c) {
+  const t = themeThresholdHex(c);
+  return /^#[0-9a-fA-F]{6}$/.test(t) ? t : "#22c55e";
+}
+function themeThresholdHex(c) {
+  if (!c) return "#22c55e";
+  if (c === "var(--ok)") return "#22c55e";
+  if (c === "var(--warn)") return "#f59e0b";
+  if (c === "var(--crit)") return "#ef4444";
+  if (c === "var(--accent)") return "#4c8dff";
+  if (/^#[0-9a-fA-F]{3}$/.test(c)) {
+    return "#" + c[1] + c[1] + c[2] + c[2] + c[3] + c[3];
+  }
+  return c;
+}
+function renderPanelThresholdPreview() {
+  const el = $("panelThresholdPreview");
+  if (!el) return;
+  const sorted = PANEL_THRESHOLDS_DRAFT.slice().sort((a, b) => (+a.value || 0) - (+b.value || 0));
+  if (!sorted.length) { el.innerHTML = ""; return; }
+  el.innerHTML = sorted.map(t => `<span style="background:${esc(t.color || "var(--accent)")}" title="${esc(String(t.value))}">${esc(String(t.value))}</span>`).join("");
+}
+function syncPanelThresholds() {
+  document.querySelectorAll("[data-th-value]").forEach(el => {
+    const i = +el.dataset.thValue;
+    if (PANEL_THRESHOLDS_DRAFT[i]) PANEL_THRESHOLDS_DRAFT[i].value = el.value === "" ? 0 : parseFloat(el.value);
+  });
+  document.querySelectorAll("[data-th-color]").forEach(el => {
+    const i = +el.dataset.thColor;
+    if (PANEL_THRESHOLDS_DRAFT[i]) PANEL_THRESHOLDS_DRAFT[i].color = el.value.trim();
+  });
+}
+function renderPanelSwatchPreview() {
+  const el = $("panelSwatchPreview");
+  const colorsEl = $("panelColors");
+  if (!el || !colorsEl) return;
+  const cols = colorsEl.value.split(",").map(s => s.trim()).filter(Boolean);
+  el.innerHTML = cols.map(c => `<span class="panel-swatch" style="background:${esc(c)}" title="${esc(c)}"></span>`).join("");
+}
+function panelPaletteToggle() {
+  const pal = $("panelPalette") ? $("panelPalette").value : "classic";
+  const row = $("panelColorsRow");
+  if (row) row.style.display = pal === "custom" ? "" : "none";
+  if (pal === "custom") renderPanelSwatchPreview();
+}
+
 function openPanelEditor(p) {
   $("panelId").value = p ? p.id : "";
   $("panelTitle").value = p ? (p.title || "") : "";
@@ -1577,23 +2196,85 @@ function openPanelEditor(p) {
   $("panelMin").value = p && p.min != null ? p.min : "";
   $("panelMax").value = p && p.max != null ? p.max : "";
   $("panelText").value = p ? (p.text || "") : "";
+  const o = (p && p.options) || {};
+  const decEl = $("panelDecimals");
+  if (decEl) {
+    if (o.decimals != null) decEl.value = o.decimals;
+    else if (p && p.decimals) decEl.value = p.decimals;
+    else decEl.value = "";
+  }
+  if ($("panelSort")) $("panelSort").value = o.sort || "desc";
+  if ($("panelLimit")) $("panelLimit").value = o.limit > 0 ? o.limit : "";
+  if ($("panelPalette")) $("panelPalette").value = o.palette || "classic";
+  if ($("panelLegend")) $("panelLegend").value = o.legend || "bottom";
+  if ($("panelColors")) $("panelColors").value = (o.colors || []).join(",");
+  if ($("panelChartStyle")) $("panelChartStyle").value = o.chart_style || "line";
+  if ($("panelStacked")) $("panelStacked").checked = !!o.stacked;
+  if ($("panelSmooth")) $("panelSmooth").checked = !!o.smooth;
+  if ($("panelShowPoints")) $("panelShowPoints").checked = !!o.show_points;
+  PANEL_THRESHOLDS_DRAFT = (o.thresholds && o.thresholds.length)
+    ? o.thresholds.map(t => ({ value: t.value, color: t.color || "var(--ok)" }))
+    : defaultPanelThresholds(p ? p.unit : "");
   PANEL_TARGETS_DRAFT = p && p.targets ? p.targets.map(t => ({ expr: t.expr, legend: t.legend || "" })) : [{ expr: "", legend: "" }];
   renderPanelTargets();
+  renderPanelThresholdList();
   fillPanelDS(p ? p.type : "timeseries", p ? (p.datasource || "") : "");
   panelTypeToggle();
+  panelPaletteToggle();
+  switchPanelEditTab("data");
   $("panelEditTitle").textContent = p ? "编辑面板" : "添加面板";
   const status = $("panelQueryTestResult"); if (status) { status.textContent = ""; status.className = "panel-query-test-result"; }
   openMask("panelEditMask");
 }
+safeAddEventListener("panelEditMask", "click", e => {
+  const tab = e.target.closest("[data-panel-tab]");
+  if (tab) { switchPanelEditTab(tab.getAttribute("data-panel-tab")); return; }
+  const del = e.target.closest("[data-th-del]");
+  if (del) {
+    syncPanelThresholds();
+    PANEL_THRESHOLDS_DRAFT.splice(+del.dataset.thDel, 1);
+    renderPanelThresholdList();
+  }
+});
+safeAddEventListener("panelAddThreshold", "click", () => {
+  syncPanelThresholds();
+  const last = PANEL_THRESHOLDS_DRAFT[PANEL_THRESHOLDS_DRAFT.length - 1];
+  PANEL_THRESHOLDS_DRAFT.push({ value: last ? (+last.value || 0) + 10 : 0, color: "var(--accent)" });
+  renderPanelThresholdList();
+});
+safeAddEventListener("panelResetThresholds", "click", () => {
+  PANEL_THRESHOLDS_DRAFT = defaultPanelThresholds($("panelUnit") ? $("panelUnit").value : "");
+  renderPanelThresholdList();
+});
+safeAddEventListener("panelThresholdList", "input", e => {
+  const pick = e.target.closest("[data-th-color-pick]");
+  if (pick) {
+    const i = +pick.dataset.thColorPick;
+    if (PANEL_THRESHOLDS_DRAFT[i]) {
+      PANEL_THRESHOLDS_DRAFT[i].color = pick.value;
+      const txt = document.querySelector(`[data-th-color="${i}"]`);
+      if (txt) txt.value = pick.value;
+      renderPanelThresholdPreview();
+    }
+    return;
+  }
+  syncPanelThresholds();
+  renderPanelThresholdPreview();
+});
+safeAddEventListener("panelPalette", "change", panelPaletteToggle);
+safeAddEventListener("panelColors", "input", renderPanelSwatchPreview);
+safeAddEventListener("panelUnit", "change", () => {
+  // Keep thresholds; user can reset via button for percent defaults.
+});
 const PANEL_TEMPLATES = {
   trend: { type: "timeseries", title: "趋势", unit: "", w: 12, h: 7 },
-  kpi: { type: "stat", title: "关键指标", unit: "short", w: 6, h: 6 },
-  gauge: { type: "gauge", title: "利用率", unit: "percent", w: 8, h: 6, min: 0, max: 100 },
+  kpi: { type: "stat", title: "关键指标", unit: "short", w: 6, h: 4 },
+  gauge: { type: "gauge", title: "利用率", unit: "percent", w: 8, h: 5, min: 0, max: 100 },
   ranking: { type: "bargauge", title: "Top 排行", unit: "short", w: 12, h: 6 },
   table: { type: "table", title: "明细", unit: "", w: 12, h: 7 },
   logs: { type: "logs", title: "实时日志", unit: "", w: 24, h: 8 },
   alerts: { type: "alertlist", title: "当前告警", unit: "", w: 12, h: 7 },
-  text: { type: "text", title: "说明", unit: "", w: 24, h: 4 }
+  text: { type: "text", title: "说明", unit: "", w: 24, h: 3 }
 };
 safeAddEventListener("panelTemplatePalette", "click", e => {
   const btn = e.target.closest("[data-panel-template]");
@@ -1686,20 +2367,39 @@ async function aiGenPromQL(i) {
 }
 function panelTypeToggle() {
   const ty = $("panelType").value;
-  const noTargets = ty === "text" || ty === "alertlist";
-  $("panelTextRow").style.display = ty === "text" ? "" : "none";
-  $("panelTargetsWrap").style.display = noTargets ? "none" : "";
-  const qsec = $("panelQuerySec"); if (qsec) qsec.style.display = (ty === "text") ? "none" : "";
-  $("panelUnitRow").style.display = (ty === "text" || ty === "logs" || ty === "alertlist") ? "none" : "";
-  const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = noTargets ? "none" : "";
+  const noTargets = ty === "text" || ty === "markdown" || ty === "alertlist" || ty === "clock" || ty === "news";
+  const comingSoon = !!(DASH_COMING_SOON && DASH_COMING_SOON[ty]);
+  $("panelTextRow").style.display = (ty === "text" || ty === "markdown" || ty === "news") ? "" : "none";
+  $("panelTargetsWrap").style.display = (noTargets || comingSoon) ? "none" : "";
+  const qsec = $("panelQuerySec"); if (qsec) qsec.style.display = (ty === "text" || ty === "markdown" || ty === "clock") ? "none" : "";
+  $("panelUnitRow").style.display = (ty === "text" || ty === "markdown" || ty === "logs" || ty === "alertlist" || ty === "clock" || ty === "news") ? "none" : "";
+  const dsRow = $("panelDSRow"); if (dsRow) dsRow.style.display = (noTargets || comingSoon) ? "none" : "";
+  const isTs = ty === "timeseries" || ty === "candlestick";
+  const isRank = ty === "piechart" || ty === "pie" || ty === "barchart" || ty === "bar" || ty === "bargauge" || ty === "table" || ty === "alertlist" || ty === "histogram" || ty === "radar" || ty === "sankey";
+  const showAxis = isTs || ty === "gauge" || ty === "bargauge" || ty === "stat" || ty === "heatmap" || ty === "radar";
+  const showLegend = isTs || ty === "piechart" || ty === "pie" || ty === "barchart" || ty === "bar" || ty === "radar" || ty === "sankey";
+  const showThresh = ty === "stat" || ty === "gauge" || ty === "bargauge" || ty === "table" || ty === "state-timeline" || ty === "statetimeline" || isTs || ty === "radar";
+  const styleRow = $("panelStyleRow"); if (styleRow) styleRow.style.display = ty === "timeseries" ? "" : "none";
+  const sortRow = $("panelSortRow"); if (sortRow) sortRow.style.display = isRank || ty === "heatmap" || ty === "state-timeline" || ty === "statetimeline" ? "" : "none";
+  const rangeRow = $("panelRangeRow"); if (rangeRow) rangeRow.style.display = showAxis ? "" : "none";
+  const legendField = $("panelLegend") ? $("panelLegend").closest(".field") : null;
+  if (legendField) legendField.style.display = showLegend ? "" : "none";
+  const threshTab = document.querySelector('#panelEditMask [data-panel-tab="threshold"]');
+  if (threshTab) threshTab.style.display = showThresh ? "" : "none";
   fillPanelDS(ty, $("panelDS").value);
   const hint = $("panelQueryHint");
   if (hint) {
-    if (ty === "logs") hint.innerHTML = "LogQL 查询（请选 Loki 数据源）";
+    if (comingSoon) hint.innerHTML = "该类型即将支持完整渲染；可先保存面板与查询，后续版本自动启用。";
+    else if (ty === "logs") hint.innerHTML = "LogQL 查询（请选 Loki 数据源）";
     else if (ty === "alertlist") hint.innerHTML = "告警列表读取平台当前告警，无需查询。";
+    else if (ty === "clock") hint.innerHTML = "本地时钟面板，无需查询。";
+    else if (ty === "radar") hint.innerHTML = "雷达图：即时查询多序列作为维度（建议 3–8 维）。";
+    else if (ty === "sankey") hint.innerHTML = "桑基图：可用 src/dst 标签表示流量路径；否则以「来源→序列名」构图。";
+    else if (ty === "candlestick") hint.innerHTML = "K 线：由时序采样近似 OHLC，适合观察波动区间。";
     else if (ty === "table") hint.innerHTML = "表格：可选 PromQL 即时查询，或 PostgreSQL/MySQL 数据源的只读 SQL（SELECT）。";
     else hint.innerHTML = "PromQL，可多条；支持 <code>$变量</code> 与 <code>{{标签}}</code> 图例。";
   }
+  panelPaletteToggle();
 }
 safeAddEventListener("panelType", "change", panelTypeToggle);
 safeAddEventListener("panelAddTarget", "click", () => { PANEL_TARGETS_DRAFT.push({ expr: "", legend: "" }); renderPanelTargets(); });
@@ -1759,30 +2459,61 @@ function syncPanelTargets() {
 }
 safeAddEventListener("panelSave", "click", () => {
   syncPanelTargets();
+  syncPanelThresholds();
   const ty = $("panelType").value;
   const title = $("panelTitle").value.trim();
-  const noTargets = ty === "text" || ty === "alertlist";
-  const targets = noTargets ? [] : PANEL_TARGETS_DRAFT.filter(t => t.expr.trim()).map(t => ({ expr: t.expr.trim(), legend: t.legend.trim() }));
+  const noTargets = ty === "text" || ty === "markdown" || ty === "alertlist" || ty === "clock" || ty === "news" || !!(DASH_COMING_SOON && DASH_COMING_SOON[ty]);
+  const targets = PANEL_TARGETS_DRAFT.filter(t => t.expr.trim()).map(t => ({ expr: t.expr.trim(), legend: t.legend.trim() }));
   if (!noTargets && !targets.length) { toast(ty === "logs" ? "请填写 LogQL 查询" : "请至少填写一条 PromQL 查询", "err"); return; }
   if (ty === "logs" && !$("panelDS").value) { toast("日志面板需选择一个 Loki 数据源", "err"); return; }
   const min = $("panelMin").value.trim(), max = $("panelMax").value.trim();
   if (min !== "" && max !== "" && parseFloat(min) >= parseFloat(max)) { toast("量程最小值必须小于最大值", "err"); return; }
+  const decRaw = $("panelDecimals") ? $("panelDecimals").value.trim() : "";
+  const limitRaw = $("panelLimit") ? $("panelLimit").value.trim() : "";
+  const colorsRaw = $("panelColors") ? $("panelColors").value : "";
+  const options = {
+    sort: ($("panelSort") && $("panelSort").value) || "desc",
+    limit: limitRaw !== "" ? Math.max(0, Math.min(200, parseInt(limitRaw, 10) || 0)) : 0,
+    palette: ($("panelPalette") && $("panelPalette").value) || "classic",
+    legend: ($("panelLegend") && $("panelLegend").value) || "bottom",
+    chart_style: ($("panelChartStyle") && $("panelChartStyle").value) || "line",
+    stacked: !!( $("panelStacked") && $("panelStacked").checked ),
+    smooth: !!( $("panelSmooth") && $("panelSmooth").checked ),
+    show_points: !!( $("panelShowPoints") && $("panelShowPoints").checked ),
+    colors: colorsRaw.split(",").map(s => s.trim()).filter(Boolean).slice(0, 32),
+    thresholds: PANEL_THRESHOLDS_DRAFT
+      .filter(t => t && t.color)
+      .map(t => ({ value: +t.value || 0, color: String(t.color).trim() }))
+      .sort((a, b) => a.value - b.value)
+      .slice(0, 16)
+  };
+  if (decRaw !== "" && !isNaN(+decRaw)) {
+    options.decimals = Math.max(0, Math.min(10, parseInt(decRaw, 10)));
+  }
   const panel = {
     id: $("panelId").value ? +$("panelId").value : nextPanelId(),
     title, type: ty, datasource: $("panelDS").value,
     grid: { x: 0, y: 9999, w: Math.max(1, Math.min(24, parseInt($("panelW").value) || 12)), h: Math.max(2, parseInt($("panelH").value) || 8) },
     unit: $("panelUnit").value,
     targets, text: $("panelText").value,
+    options
   };
+  if (options.decimals != null) panel.decimals = options.decimals;
   if (min !== "") panel.min = parseFloat(min);
   if (max !== "") panel.max = parseFloat(max);
   const panels = CUR_DASH.panels;
   rememberDashMutation();
   const existing = panels.findIndex(p => p.id === panel.id);
-  if (existing >= 0) { panel.grid = panels[existing].grid; panel.grid.w = Math.max(1, Math.min(24, parseInt($("panelW").value) || 12)); panel.grid.h = Math.max(2, parseInt($("panelH").value) || 8); panels[existing] = panel; }
-  else { placeNewPanel(panel, panels); panels.push(panel); }
+  if (existing >= 0) {
+    panel.grid = panels[existing].grid;
+    panel.grid.w = Math.max(1, Math.min(24, parseInt($("panelW").value) || 12));
+    panel.grid.h = Math.max(2, parseInt($("panelH").value) || 8);
+    panels[existing] = panel;
+  } else { placeNewPanel(panel, panels); panels.push(panel); }
   closeMask($("panelEditMask"));
   renderDashDetail();
+  // Immediate refresh of the saved panel without waiting for full re-query cycle
+  try { loadPanel(panel); } catch (e) {}
 });
 function nextPanelId() { let m = 0; (CUR_DASH.panels || []).forEach(p => { if (p.id > m) m = p.id; }); return m + 1; }
 function placeNewPanel(panel, panels) {
@@ -2129,8 +2860,10 @@ async function panelDigest(p) {
     } catch (e) { s += "（日志统计读取失败）"; }
     return s;
   }
-  const temporal = ["timeseries", "state-timeline", "statetimeline", "heatmap", "histogram"].includes(p.type);
+  const temporal = ["timeseries", "state-timeline", "statetimeline", "heatmap", "histogram", "stat", "graph"].includes(p.type);
   const targets = (p.targets || []).slice(0, 3);
+  const thr = (dashPanelOpt(p).thresholds || []).map(x => +x.value).filter(n => !isNaN(n));
+  if (thr.length) s += `阈值：${thr.join(" / ")}\n`;
   for (let ti = 0; ti < targets.length; ti++) {
     const target = targets[ti];
     try {
@@ -2151,7 +2884,16 @@ async function panelDigest(p) {
           const minV = Math.min(...pts), maxV = Math.max(...pts), avg = pts.reduce((a, b) => a + b, 0) / pts.length;
           const delta = last - first;
           const trend = Math.abs(first) > 1e-9 ? `${delta >= 0 ? "+" : ""}${(delta / Math.abs(first) * 100).toFixed(1)}%` : `${delta >= 0 ? "+" : ""}${fmtUnit(delta, p.unit)}`;
-          return `- ${lbl}：当前 ${fmtUnit(last, p.unit)}；均值 ${fmtUnit(avg, p.unit)}；范围 ${fmtUnit(minV, p.unit)} ~ ${fmtUnit(maxV, p.unit)}；区间变化 ${trend}；样本 ${pts.length}`;
+          let base = `- ${lbl}：当前 ${fmtUnit(last, p.unit)}；均值 ${fmtUnit(avg, p.unit)}；范围 ${fmtUnit(minV, p.unit)} ~ ${fmtUnit(maxV, p.unit)}；区间变化 ${trend}；样本 ${pts.length}`;
+          if (thr.length) {
+            const hit = thr.filter(tv => last >= tv);
+            if (hit.length) base += `；已达/超过阈值 ${hit[hit.length - 1]}`;
+            else {
+              const next = thr.find(tv => tv > last);
+              if (next != null) base += `；距最近阈值 ${fmtUnit(next - last, p.unit)}`;
+            }
+          }
+          return base;
         }).join("\n") + "\n";
       } else {
         const r = await fetch(`${API}/dashboards/query-instant`, {
@@ -2161,10 +2903,31 @@ async function panelDigest(p) {
         if (r && r.available === false) return s + "（数据源不可用）";
         const vec = (r && r.series) || [];
         if (!vec.length) { s += `- 查询 ${ti + 1}：当前无数据\n`; continue; }
-        s += vec.slice(0, 20).map(x => {
-          const lbl = legendFor(target.legend, seriesLabels(x));
-          return `- ${lbl || "value"}：${fmtUnit(seriesVal2(x), p.unit)}`;
-        }).join("\n") + "\n";
+        const rows = vec.map(x => ({
+          lbl: legendFor(target.legend, seriesLabels(x)) || "value",
+          val: seriesVal2(x)
+        })).filter(x => Number.isFinite(+x.val));
+        rows.sort((a, b) => b.val - a.val);
+        if (p.type === "table" || p.type === "bargauge" || p.type === "barchart") {
+          s += `Top-N（前 ${Math.min(10, rows.length)}）：\n`;
+          s += rows.slice(0, 10).map((x, i) => `- #${i + 1} ${x.lbl}：${fmtUnit(x.val, p.unit)}`).join("\n") + "\n";
+          if (rows.length >= 3) {
+            const vals = rows.map(x => +x.val);
+            const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+            const maxV = vals[0], minV = vals[vals.length - 1];
+            s += `分布：最大 ${fmtUnit(maxV, p.unit)}，最小 ${fmtUnit(minV, p.unit)}，均值 ${fmtUnit(avg, p.unit)}；异常偏高行：` +
+              rows.filter(x => x.val > avg * 1.5 || (thr.length && x.val >= thr[thr.length - 1])).slice(0, 5).map(x => x.lbl).join("、") + "\n";
+          }
+        } else {
+          s += rows.slice(0, 20).map(x => {
+            let line = `- ${x.lbl}：${fmtUnit(x.val, p.unit)}`;
+            if ((p.type === "stat" || p.type === "gauge") && thr.length) {
+              const breached = thr.filter(tv => x.val >= tv);
+              line += breached.length ? `（超过阈值 ${breached[breached.length - 1]}）` : "（未越阈）";
+            }
+            return line;
+          }).join("\n") + "\n";
+        }
       }
     } catch (e) { s += `- 查询 ${ti + 1}：读取失败\n`; }
   }
@@ -2388,7 +3151,7 @@ function dashboardReportModel(liveRows) {
   }
   return {
     title: "可观测性诊断报告 · " + d.name,
-    subtitle: "AIOps Monitor · " + new Date().toLocaleString(),
+    subtitle: "AIOps · " + new Date().toLocaleString(),
     summaryTitle: "报告概览",
     meta: [
       ["看板", d.name], ["数据源", dsLabel(d.datasource || "")],
@@ -2848,7 +3611,10 @@ async function pollDashboardAIJob(jobID, seq) {
       $("dashAICreate").textContent = "生成";
       DASH_AI_LAST_JOB_ID = "";
       closeMask($("dashAIMask"));
-      toast(`AI 看板「${job.name}」已生成：${job.panels} 个组件`, "ok");
+      let msg = `AI 看板「${job.name}」已生成：${job.panels} 个组件`;
+      const warns = Array.isArray(job.warnings) ? job.warnings : [];
+      if (warns.length) msg += "（" + warns[0] + (warns.length > 1 ? ` 等 ${warns.length} 条提示` : "") + "）";
+      toast(msg, warns.length ? "warn" : "ok");
       if (job.dashboard_id) await openDashboard(job.dashboard_id);
       return;
     }

@@ -151,15 +151,15 @@ func TestMapGrafanaDashboard(t *testing.T) {
 	if byID[4].Type != "gauge" || byID[4].Unit != "percentunit" || byID[4].Max == nil || *byID[4].Max != 1 {
 		t.Fatalf("嵌套 gauge 映射错误: %+v", byID[4])
 	}
-	if byID[5].Type != "unsupported" || byID[5].RawType != "nodeGraph" {
-		t.Fatalf("nodeGraph 应为 unsupported 占位: %+v", byID[5])
+	if byID[5].Type != "nodegraph" {
+		t.Fatalf("nodeGraph 应映射为 nodegraph（前端即将支持占位）: %+v", byID[5])
 	}
 	if byID[1].Grid.W != 12 || byID[3].Grid.W != 6 {
 		t.Fatalf("gridPos 宽度未保留")
 	}
-	// Grafana 过矮 KPI（h=2）导入后抬到 6，避免大数字+sparkline 被裁切
-	if byID[3].Grid.H < 6 {
-		t.Fatalf("stat 高度应抬到 ≥6，实为 %d", byID[3].Grid.H)
+	// Grafana 过矮 KPI（h=2）导入后抬到 ≥3；过高则压到紧凑高度
+	if byID[3].Grid.H < 3 || byID[3].Grid.H > 5 {
+		t.Fatalf("stat 高度应在 3~5，实为 %d", byID[3].Grid.H)
 	}
 }
 
@@ -184,8 +184,8 @@ func TestHealImportedDashboardOverlap(t *testing.T) {
 func TestHealImportedDashboardShortStat(t *testing.T) {
 	d := Dashboard{
 		Panels: []DashPanel{
-			{ID: 1, Title: "在线主机数", Type: "stat", Grid: DashGrid{X: 0, Y: 0, W: 6, H: 4}, Targets: []DashTarget{{Expr: "up"}}},
-			{ID: 2, Title: "CPU", Type: "stat", Grid: DashGrid{X: 6, Y: 0, W: 6, H: 4}, Targets: []DashTarget{{Expr: "cpu"}}},
+			{ID: 1, Title: "在线主机数", Type: "stat", Grid: DashGrid{X: 0, Y: 0, W: 6, H: 2}, Targets: []DashTarget{{Expr: "up"}}},
+			{ID: 2, Title: "CPU", Type: "stat", Grid: DashGrid{X: 6, Y: 0, W: 6, H: 2}, Targets: []DashTarget{{Expr: "cpu"}}},
 			{ID: 3, Title: "趋势", Type: "timeseries", Grid: DashGrid{X: 0, Y: 4, W: 12, H: 8}, Targets: []DashTarget{{Expr: "x"}}},
 		},
 	}
@@ -193,8 +193,8 @@ func TestHealImportedDashboardShortStat(t *testing.T) {
 		t.Fatal("过矮 KPI 应被抬高")
 	}
 	for _, p := range d.Panels {
-		if p.Type == "stat" && p.Grid.H < 6 {
-			t.Fatalf("stat「%s」高度应≥6，实为 %d", p.Title, p.Grid.H)
+		if p.Type == "stat" && (p.Grid.H < 3 || p.Grid.H > 5) {
+			t.Fatalf("stat「%s」高度应在 3~5，实为 %d", p.Title, p.Grid.H)
 		}
 	}
 	if panelsGridOverlap(d.Panels) {
@@ -206,7 +206,7 @@ func TestHealImportedDashboardShortStat(t *testing.T) {
 			trend = p
 		}
 	}
-	if trend.Grid.Y < 6 {
+	if trend.Grid.Y < 3 {
 		t.Fatalf("趋势面板应被下推到 KPI 下方，y=%d", trend.Grid.Y)
 	}
 }
@@ -319,11 +319,11 @@ func TestLayoutAIDashPanelsNoCrossSectionPack(t *testing.T) {
 			t.Fatalf("panels[%d] type=%s want %s", i, panels[i].Type, typ)
 		}
 	}
-	// KPI：3+2 两行均铺满
-	if panels[0].Grid.Y != 0 || panels[2].Grid.Y != 0 || panels[0].Grid.W != 8 {
-		t.Fatalf("首行 3 KPI 应各 w=8: %+v", panels[0].Grid)
+	// KPI：3+2 两行均铺满（紧凑行高 h=4）
+	if panels[0].Grid.Y != 0 || panels[2].Grid.Y != 0 || panels[0].Grid.W != 8 || panels[0].Grid.H != 4 {
+		t.Fatalf("首行 3 KPI 应各 w=8 h=4: %+v", panels[0].Grid)
 	}
-	if panels[3].Grid.Y != 6 || panels[4].Grid.Y != 6 || panels[3].Grid.W+panels[4].Grid.W != 24 {
+	if panels[3].Grid.Y != 4 || panels[4].Grid.Y != 4 || panels[3].Grid.W+panels[4].Grid.W != 24 {
 		t.Fatalf("次行 2 KPI 应铺满: %+v %+v", panels[3].Grid, panels[4].Grid)
 	}
 	// gauge 不得与 timeseries 同行
@@ -378,14 +378,14 @@ func TestLayoutAIDashPanelsGoldenSignalBoard(t *testing.T) {
 	if panels[0].Type != "stat" || panels[3].Grid.Y != 0 || panels[0].Grid.W != 6 {
 		t.Fatalf("4 KPI 应同行各 w=6: %+v", panels[0].Grid)
 	}
-	if panels[4].Type != "gauge" || panels[4].Grid.W != 24 || panels[4].Grid.Y != 6 {
+	if panels[4].Type != "gauge" || panels[4].Grid.W != 24 || panels[4].Grid.Y != 4 {
 		t.Fatalf("gauge 应独占第二行: type=%s %+v", panels[4].Type, panels[4].Grid)
 	}
 	ts := 0
 	for _, p := range panels {
 		if p.Type == "timeseries" {
 			ts++
-			if p.Grid.Y < 12 {
+			if p.Grid.Y < 9 {
 				t.Fatalf("timeseries 不得压到 gauge 行: %+v", p.Grid)
 			}
 		}
@@ -481,8 +481,11 @@ func TestNormalizeDashboardTrustBoundary(t *testing.T) {
 
 func TestNormalizeDashboardRejectsInvalidShape(t *testing.T) {
 	d := Dashboard{Name: "x", Panels: []DashPanel{{ID: 1, Type: "shell", Grid: DashGrid{W: 12, H: 6}}}}
-	if err := normalizeDashboard(&d); err == nil {
-		t.Fatal("未知面板类型必须拒绝")
+	if err := normalizeDashboard(&d); err != nil {
+		t.Fatalf("未知面板类型应降级 unsupported，不应整板失败: %v", err)
+	}
+	if d.Panels[0].Type != "unsupported" || d.Panels[0].RawType != "shell" {
+		t.Fatalf("未知类型应保留 raw_type: %+v", d.Panels[0])
 	}
 	d = Dashboard{Name: "x", Vars: []DashVar{{Name: "实例", Type: "query"}}, Panels: []DashPanel{}}
 	if err := normalizeDashboard(&d); err == nil {
