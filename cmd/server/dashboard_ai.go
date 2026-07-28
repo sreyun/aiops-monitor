@@ -311,14 +311,18 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"panels 必须是数组；最终答案只输出一个 ```json 代码块，不要在 JSON 前后写长文或第二段解释。"
 
 // aiopsBuiltinMetricsHint 给「优化看板」等未注入 VM 全量指标的路径用：避免 LLM 臆造 node_*。
-const aiopsBuiltinMetricsHint = "【本平台内置主机指标（优先使用）】\n" +
-	"aiops_cpu_percent, aiops_cpu_cores, aiops_mem_percent, aiops_mem_used_bytes, aiops_mem_total_bytes, " +
-	"aiops_disk_percent, aiops_disk_used_bytes, aiops_disk_total_bytes, aiops_disk_vol_percent, " +
-	"aiops_load1, aiops_load5, aiops_load15, aiops_net_sent_rate, aiops_net_recv_rate, aiops_net_conns, " +
-	"aiops_uptime_seconds, aiops_proc_count, aiops_disk_io_util_percent。\n" +
-	"标签：instance=主机名（图例用这个），host=主机ID（仅过滤，禁止进图例），可选 category。" +
-	"示例：avg(aiops_cpu_percent)、topk(10, aiops_mem_percent)、" +
-	"aiops_cpu_percent{instance=~\"$instance\"}（仅下钻面板，务必 =~）、legend 写 \"{{instance}}\" 或 \"{{category}} · {{instance}}\"。"
+const aiopsBuiltinMetricsHint = "【本平台内置主机指标（只能用这些，严禁 node_* / node_exporter 公式）】\n" +
+	"水位：aiops_cpu_percent, aiops_mem_percent, aiops_swap_percent, aiops_disk_percent, aiops_disk_vol_percent, aiops_disk_io_util_percent。\n" +
+	"负载：aiops_load1, aiops_load5, aiops_load15。\n" +
+	"吞吐（已是速率，禁止再套 rate/irate）：aiops_net_sent_rate, aiops_net_recv_rate, aiops_disk_read_rate, aiops_disk_write_rate, " +
+	"aiops_disk_read_iops, aiops_disk_write_iops。\n" +
+	"容量：aiops_mem_used_bytes, aiops_mem_total_bytes, aiops_swap_used_bytes, aiops_swap_total_bytes, " +
+	"aiops_disk_used_bytes, aiops_disk_total_bytes, aiops_cpu_cores。\n" +
+	"其它：aiops_net_conns, aiops_net_conn_count, aiops_uptime_seconds, aiops_proc_count, aiops_gpu_util_percent。\n" +
+	"标签：instance=主机名（图例用），host=主机ID（仅过滤，禁止进图例），可选 category、path、gpu。\n" +
+	"正确示例：aiops_cpu_percent{instance=~\"$instance\"}；avg(aiops_mem_percent)；" +
+	"aiops_net_sent_rate{instance=~\"$instance\"}（不要写 rate(node_network_transmit_bytes_total[5m])）。\n" +
+	"错误示例（禁止）：100-avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))*100、node_memory_MemAvailable_bytes、node_filesystem_*、node_disk_*、node_network_*。"
 
 // extractJSONObject 从 AI 回复里抽出最可能的看板 JSON：优先含 "panels" 的 ```json 块，
 // 再找含 panels 的括号平衡对象（避免散文里的 {示例} 干扰 first{…last}）。
@@ -767,7 +771,7 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 				continue
 			}
 			expr = rewriteDashVarRefs(expr, varRename)
-			expr = healAIDashExpr(expr)
+			expr = healAIDashExprWithTitle(panel.Title, expr)
 			if strings.Contains(expr, "$instance") || strings.Contains(expr, "${instance}") {
 				needInstance = true
 			}
@@ -876,13 +880,24 @@ func rewriteDashVarRefs(expr string, rename map[string]string) string {
 	return out
 }
 
-// healAIDashExpr 纠正常见「优化后无数据」写法：臆造的 node_*、对水位指标误套 rate()、
-// 下钻过滤写成 instance="$instance"（「全部」时 =".*" 匹配不到，需 =~）。
+// healAIDashExpr 纠正常见「优化后无数据」写法：臆造的 node_* / Grafana 公式、
+// 对水位指标误套 rate()、下钻过滤写成 instance="$instance"（「全部」时 =".*" 匹配不到，需 =~）。
 func healAIDashExpr(expr string) string {
+	return healAIDashExprWithTitle("", expr)
+}
+
+// healAIDashExprWithTitle 在 healAIDashExpr 基础上，用面板标题兜底纠偏仍残留的 node_*。
+func healAIDashExprWithTitle(title, expr string) string {
 	if expr == "" {
 		return expr
 	}
-	out := expr
+	out := strings.TrimSpace(expr)
+	orig := out
+
+	// 1) 先把 rate(node_network_*/node_disk_*_bytes) 就地改成平台已算好的速率指标（保留 {} 选择器）。
+	out = rewriteNodeExporterRates(out)
+
+	// 2) 简单指标名替换（含 Telegraf / 别名）
 	replacements := []struct{ old, neu string }{
 		{"node_load1", "aiops_load1"},
 		{"node_load5", "aiops_load5"},
@@ -890,16 +905,138 @@ func healAIDashExpr(expr string) string {
 		{"cpu_usage_active", "aiops_cpu_percent"},
 		{"mem_used_percent", "aiops_mem_percent"},
 		{"disk_used_percent", "aiops_disk_percent"},
+		{"system_load1", "aiops_load1"},
+		{"system_load5", "aiops_load5"},
+		{"system_load15", "aiops_load15"},
+		{"node_network_receive_bytes_total", "aiops_net_recv_rate"},
+		{"node_network_transmit_bytes_total", "aiops_net_sent_rate"},
+		{"node_disk_read_bytes_total", "aiops_disk_read_rate"},
+		{"node_disk_written_bytes_total", "aiops_disk_write_rate"},
+		{"node_disk_reads_completed_total", "aiops_disk_read_iops"},
+		{"node_disk_writes_completed_total", "aiops_disk_write_iops"},
 	}
 	for _, r := range replacements {
 		out = strings.ReplaceAll(out, r.old, r.neu)
 	}
-	// rate(aiops_xxx_percent{…}[…]) / irate(...) → 直接取水位指标（允许中间带标签选择器）
-	gaugeRate := regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*(aiops_(?:cpu|mem|disk|swap)(?:_vol)?_percent|aiops_load(?:1|5|15)|aiops_disk_io_util_percent|aiops_uptime_seconds)(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`)
+
+	// 3) 整式替换：CPU idle / 内存 Available / 文件系统 / 磁盘繁忙 —— LLM 最爱抄这些 Grafana 公式
+	low := strings.ToLower(out)
+	switch {
+	case strings.Contains(low, "node_cpu_seconds_total") || strings.Contains(low, "node_cpu_guest_seconds"):
+		out = aiopsMetricWithInstance("aiops_cpu_percent", orig)
+	case strings.Contains(low, "node_memory_swap") && (strings.Contains(low, "total") || strings.Contains(low, "free") || strings.Contains(low, "cached")):
+		out = aiopsMetricWithInstance("aiops_swap_percent", orig)
+	case strings.Contains(low, "node_memory_memavailable") || strings.Contains(low, "node_memory_memtotal") ||
+		strings.Contains(low, "node_memory_memfree") ||
+		(strings.Contains(low, "node_memory_") && strings.Contains(low, "memtotal")):
+		out = aiopsMetricWithInstance("aiops_mem_percent", orig)
+	case strings.Contains(low, "node_filesystem_") &&
+		(strings.Contains(low, "avail") || strings.Contains(low, "size") || strings.Contains(low, "free") || strings.Contains(low, "files")):
+		out = aiopsMetricWithInstance("aiops_disk_percent", orig)
+	case strings.Contains(low, "node_disk_io_time_seconds") || strings.Contains(low, "node_disk_read_time_seconds") ||
+		strings.Contains(low, "node_disk_write_time_seconds"):
+		out = aiopsMetricWithInstance("aiops_disk_io_util_percent", orig)
+	case strings.Contains(low, "node_uname_info"):
+		out = aiopsMetricWithInstance("aiops_cpu_percent", orig)
+	}
+
+	// 4) 标题兜底：表达式仍含 node_* 或明显不可用时，按中文/英文标题映射到真实指标
+	if dashExprHasNodeMetric(out) {
+		if fb := aiopsFallbackFromTitle(title, orig); fb != "" {
+			out = fb
+		}
+	}
+
+	// 5) rate(aiops_水位/负载/…) → 直接取水位（允许中间带标签选择器）
+	gaugeRate := regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*(aiops_(?:cpu|mem|disk|swap)(?:_vol)?_percent|aiops_load(?:1|5|15)|aiops_disk_io_util_percent|aiops_uptime_seconds|aiops_net_(?:sent|recv)_rate|aiops_disk_(?:read|write)_(?:rate|iops)|aiops_net_conns)(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`)
 	out = gaugeRate.ReplaceAllString(out, "$1$2")
-	// instance="$instance" 等 → =~ ，兼容「全部」变成 .*
+
+	// 6) instance="$instance" 等 → =~ ，兼容「全部」变成 .*
 	out = promoteTemplateVarEq(out, nil)
 	return out
+}
+
+// rewriteNodeExporterRates 把 rate/irate(node_*_bytes_total[…]) 改成平台速率指标，保留 {labels}。
+func rewriteNodeExporterRates(expr string) string {
+	rules := []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_network_receive_bytes_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_net_recv_rate$1"},
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_network_transmit_bytes_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_net_sent_rate$1"},
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_disk_read_bytes_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_disk_read_rate$1"},
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_disk_written_bytes_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_disk_write_rate$1"},
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_disk_reads_completed_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_disk_read_iops$1"},
+		{regexp.MustCompile(`(?i)\b(?:rate|irate)\s*\(\s*node_disk_writes_completed_total(\s*\{[^}]*\})?\s*\[[^\]]+\]\s*\)`), "aiops_disk_write_iops$1"},
+	}
+	out := expr
+	for _, r := range rules {
+		out = r.re.ReplaceAllString(out, r.repl)
+	}
+	return out
+}
+
+func dashExprHasInstanceVar(expr string) bool {
+	return strings.Contains(expr, "$instance") || strings.Contains(expr, "${instance}")
+}
+
+func dashExprHasNodeMetric(expr string) bool {
+	return regexp.MustCompile(`(?i)\bnode_[a-z0-9_]+`).MatchString(expr)
+}
+
+func aiopsMetricWithInstance(metric, original string) string {
+	if dashExprHasInstanceVar(original) {
+		return metric + `{instance=~"$instance"}`
+	}
+	return metric
+}
+
+// aiopsFallbackFromTitle 按面板标题猜测应使用的 aiops_* 指标（纠偏失败时的最后手段）。
+func aiopsFallbackFromTitle(title, original string) string {
+	t := strings.ToLower(strings.TrimSpace(title))
+	if t == "" {
+		return ""
+	}
+	hasSwap := strings.Contains(t, "swap") || strings.Contains(title, "交换")
+	hasMem := strings.Contains(t, "mem") || strings.Contains(title, "内存")
+	hasCPU := strings.Contains(t, "cpu") || strings.Contains(title, "CPU") || strings.Contains(title, "cpu")
+	hasDisk := strings.Contains(t, "disk") || strings.Contains(title, "磁盘")
+	hasIO := strings.Contains(t, "io") || strings.Contains(title, "IO") || strings.Contains(title, "iops") || strings.Contains(title, "繁忙")
+	hasNet := strings.Contains(t, "net") || strings.Contains(title, "网络") || strings.Contains(title, "吞吐") || strings.Contains(title, "流量")
+	hasLoad := strings.Contains(t, "load") || strings.Contains(title, "负载")
+	hasRecv := strings.Contains(t, "recv") || strings.Contains(t, "rx") || strings.Contains(title, "接收") || strings.Contains(title, "下行")
+	hasSent := strings.Contains(t, "sent") || strings.Contains(t, "tx") || strings.Contains(t, "transmit") || strings.Contains(title, "发送") || strings.Contains(title, "上行")
+
+	switch {
+	case hasCPU && !hasNet:
+		return aiopsMetricWithInstance("aiops_cpu_percent", original)
+	case hasMem && hasSwap:
+		// 双指标面板无法用单 expr 表达时优先内存水位；交换由另一 target 承担
+		return aiopsMetricWithInstance("aiops_mem_percent", original)
+	case hasSwap && !hasMem:
+		return aiopsMetricWithInstance("aiops_swap_percent", original)
+	case hasMem:
+		return aiopsMetricWithInstance("aiops_mem_percent", original)
+	case hasDisk && hasIO:
+		return aiopsMetricWithInstance("aiops_disk_io_util_percent", original)
+	case hasDisk && (strings.Contains(title, "读") || strings.Contains(t, "read")):
+		return aiopsMetricWithInstance("aiops_disk_read_rate", original)
+	case hasDisk && (strings.Contains(title, "写") || strings.Contains(t, "write")):
+		return aiopsMetricWithInstance("aiops_disk_write_rate", original)
+	case hasDisk:
+		return aiopsMetricWithInstance("aiops_disk_percent", original)
+	case hasNet && hasRecv && !hasSent:
+		return aiopsMetricWithInstance("aiops_net_recv_rate", original)
+	case hasNet && hasSent && !hasRecv:
+		return aiopsMetricWithInstance("aiops_net_sent_rate", original)
+	case hasNet:
+		// 「网络吞吐(收/发)」单 target 时用接收；多 target 会分别走到上面的分支
+		return aiopsMetricWithInstance("aiops_net_recv_rate", original)
+	case hasLoad:
+		return aiopsMetricWithInstance("aiops_load1", original)
+	default:
+		return ""
+	}
 }
 
 // healAIDashLegend 去掉图例里的 {{host}}（主机 ID），优先保留主机名/分类，避免图例刷屏。
@@ -1528,17 +1665,14 @@ const builtinHostGoldenDashJSON = `{
     {"title":"系统负载趋势","type":"timeseries","unit":"short","w":12,"h":7,
       "targets":[{"expr":"aiops_load1{instance=~\"$instance\"}","legend":"load1 {{instance}}"},{"expr":"aiops_load5{instance=~\"$instance\"}","legend":"load5 {{instance}}"}],
       "options":{"legend":"bottom","chart_style":"line"}},
-    {"title":"内存使用率趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
-      "targets":[{"expr":"aiops_mem_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
+    {"title":"内存 & 交换使用率","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
+      "targets":[{"expr":"aiops_mem_percent{instance=~\"$instance\"}","legend":"内存 {{instance}}"},{"expr":"aiops_swap_percent{instance=~\"$instance\"}","legend":"交换 {{instance}}"}],
       "options":{"legend":"bottom","chart_style":"area"}},
     {"title":"磁盘 IO 利用率","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
       "targets":[{"expr":"aiops_disk_io_util_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
       "options":{"legend":"bottom","chart_style":"line"}},
-    {"title":"网络发送速率","type":"timeseries","unit":"Bps","w":12,"h":7,
-      "targets":[{"expr":"aiops_net_sent_rate{instance=~\"$instance\"}","legend":"sent {{instance}}"}],
-      "options":{"legend":"bottom","chart_style":"area"}},
-    {"title":"网络接收速率","type":"timeseries","unit":"Bps","w":12,"h":7,
-      "targets":[{"expr":"aiops_net_recv_rate{instance=~\"$instance\"}","legend":"recv {{instance}}"}],
+    {"title":"网络吞吐 (收/发)","type":"timeseries","unit":"Bps","w":12,"h":7,
+      "targets":[{"expr":"aiops_net_recv_rate{instance=~\"$instance\"}","legend":"接收 {{instance}}"},{"expr":"aiops_net_sent_rate{instance=~\"$instance\"}","legend":"发送 {{instance}}"}],
       "options":{"legend":"bottom","chart_style":"area"}},
     {"title":"CPU Top10","type":"barchart","unit":"percent","w":8,"h":7,"targets":[{"expr":"topk(10, aiops_cpu_percent)","legend":"{{instance}}"}],
       "options":{"legend":"hidden","sort":"desc","limit":10}},

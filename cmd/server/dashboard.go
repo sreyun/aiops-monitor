@@ -1056,6 +1056,10 @@ func healImportedDashboard(d *Dashboard) bool {
 		for j := range p.Targets {
 			expr := p.Targets[j].Expr
 			neu := promoteTemplateVarEq(expandGrafanaClassicVars(expr), varNames)
+			// AI 看板：惰性把 Grafana node_* 公式纠成平台 aiops_*，修复「大面积空白」存量板。
+			if isAIDashboardSource(d.Source) {
+				neu = healAIDashExprWithTitle(p.Title, neu)
+			}
 			if neu != expr {
 				p.Targets[j].Expr = neu
 				changed = true

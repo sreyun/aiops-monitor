@@ -343,6 +343,43 @@ func TestAIPanelHeightStatFitsContent(t *testing.T) {
 	}
 }
 
+func TestHealImportedAIDashboardNodeMetrics(t *testing.T) {
+	d := Dashboard{
+		Source: "ai",
+		Panels: []DashPanel{
+			{ID: 1, Title: "CPU 使用率趋势", Type: "timeseries", Grid: DashGrid{X: 0, Y: 0, W: 12, H: 7},
+				Targets: []DashTarget{{Expr: `100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100`}}},
+			{ID: 2, Title: "网络吞吐 (收/发)", Type: "timeseries", Grid: DashGrid{X: 12, Y: 0, W: 12, H: 7},
+				Targets: []DashTarget{
+					{Expr: `rate(node_network_receive_bytes_total{instance=~"$instance"}[5m])`},
+					{Expr: `rate(node_network_transmit_bytes_total{instance=~"$instance"}[5m])`},
+				}},
+		},
+	}
+	if !healImportedDashboard(&d) {
+		t.Fatal("AI 看板 node_* 应被纠偏")
+	}
+	if got := d.Panels[0].Targets[0].Expr; got != "aiops_cpu_percent" {
+		t.Fatalf("CPU 面板: %q", got)
+	}
+	if got := d.Panels[1].Targets[0].Expr; got != `aiops_net_recv_rate{instance=~"$instance"}` {
+		t.Fatalf("网络接收: %q", got)
+	}
+	if got := d.Panels[1].Targets[1].Expr; got != `aiops_net_sent_rate{instance=~"$instance"}` {
+		t.Fatalf("网络发送: %q", got)
+	}
+}
+
+func TestHealPanelQueryExprBuiltinOnly(t *testing.T) {
+	in := `rate(node_network_receive_bytes_total[5m])`
+	if got := healPanelQueryExpr("", in); got != "aiops_net_recv_rate" {
+		t.Fatalf("内置 DS 应纠偏: %q", got)
+	}
+	if got := healPanelQueryExpr("prom-1", in); got != in {
+		t.Fatalf("外部 DS 不应改写: %q", got)
+	}
+}
+
 func TestHealAIDashExpr(t *testing.T) {
 	if got := healAIDashExpr(`rate(aiops_cpu_percent[5m])`); got != "aiops_cpu_percent" {
 		t.Fatalf("gauge rate 应剥离: %q", got)
@@ -352,6 +389,29 @@ func TestHealAIDashExpr(t *testing.T) {
 	}
 	if got := healAIDashExpr(`aiops_cpu_percent{instance="$instance"}`); got != `aiops_cpu_percent{instance=~"$instance"}` {
 		t.Fatalf("等值变量过滤应提升为 =~: %q", got)
+	}
+
+	cpu := `100 - (avg(rate(node_cpu_seconds_total{mode="idle",instance=~"$instance"}[5m])) * 100)`
+	if got := healAIDashExpr(cpu); got != `aiops_cpu_percent{instance=~"$instance"}` {
+		t.Fatalf("CPU idle 公式应纠成 aiops_cpu_percent: %q", got)
+	}
+	mem := `(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100`
+	if got := healAIDashExpr(mem); got != "aiops_mem_percent" {
+		t.Fatalf("内存 Available 公式应纠成 aiops_mem_percent: %q", got)
+	}
+	net := `rate(node_network_receive_bytes_total{instance=~"$instance"}[5m])`
+	if got := healAIDashExpr(net); got != `aiops_net_recv_rate{instance=~"$instance"}` {
+		t.Fatalf("网络 receive rate 应纠成 aiops_net_recv_rate: %q", got)
+	}
+	diskIO := `rate(node_disk_io_time_seconds_total{instance=~"$instance"}[5m])`
+	if got := healAIDashExprWithTitle("磁盘 IO 利用率", diskIO); got != `aiops_disk_io_util_percent{instance=~"$instance"}` {
+		t.Fatalf("磁盘 IO 应纠成 aiops_disk_io_util_percent: %q", got)
+	}
+	if got := healAIDashExprWithTitle("网络吞吐 (收/发)", `rate(node_network_transmit_bytes_total[5m])`); got != "aiops_net_sent_rate" {
+		t.Fatalf("标题+发送应纠成 aiops_net_sent_rate: %q", got)
+	}
+	if got := healAIDashExpr(`node_load1{instance="$instance"}`); got != `aiops_load1{instance=~"$instance"}` {
+		t.Fatalf("node_load1 应纠成 aiops_load1: %q", got)
 	}
 }
 
