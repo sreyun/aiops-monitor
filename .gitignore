@@ -96,6 +96,8 @@ fresh-test-prev-backup.sql
 
 # Android 项目目录（独立管理，不纳入主项目源码）
 android/
+.android/
+.android-publish/
 
 # 临时截图
 datasource-view-screenshot.png
