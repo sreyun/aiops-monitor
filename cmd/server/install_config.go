@@ -29,7 +29,7 @@ func buildInstallConfigYAML(server, token, category, serversJSON, logPaths strin
 	}
 	var b strings.Builder
 	b.WriteString("# ============================================================================\n")
-	b.WriteString("# AIOps Monitor · Agent 配置（安装脚本生成）\n")
+	b.WriteString("# AIOps · Agent 配置（安装脚本生成）\n")
 	b.WriteString("# ----------------------------------------------------------------------------\n")
 	b.WriteString("# 上方为当前生效项；下方「完整配置参考」默认全部注释，取消注释即可启用可选采集器。\n")
 	b.WriteString("# 修改后请重启 Agent（systemctl restart aiops-agent / 重开 start-agent）。\n")

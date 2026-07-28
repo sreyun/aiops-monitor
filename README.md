@@ -1,10 +1,12 @@
-# AIOps Monitor
+# AIOps
 
 > **企业级主机监控与 SRE 运维平台 · 100% 开源 · 私有化自托管 · 数据永久自持**
 >
 > 一个 Go 二进制 + 零依赖 Agent，覆盖从指标采集、智能告警、远程终端、自动化自愈，到 SRE 闭环、AI 巡检诊断与安卓/HarmonyOS 移动控制台的运维全链路。PostgreSQL + VictoriaMetrics 双存储，一条命令部署，3 分钟上线。
 >
-> **English:** AIOps Monitor is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
+> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
+
+**语言 / Languages：** [简体中文](README.md) · [English](README.md) · [日本語](README.ja.md)
 
 ---
 
@@ -23,7 +25,7 @@
 
 ## 项目简介
 
-AIOps Monitor 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原生采集 + Python 插件层 + 实时面板」的混合架构，提供跨平台（Linux / Windows / macOS / 麒麟等国产系统）指标采集、GPU 监控、自定义拨测、远程终端、自动化剧本、SRE 中枢（事件 / 自动修复 / SLO / 工单）、日志采集检索、AI 巡检诊断等能力。
+AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原生采集 + Python 插件层 + 实时面板」的混合架构，提供跨平台（Linux / Windows / macOS / 麒麟等国产系统）指标采集、GPU 监控、自定义拨测、远程终端、自动化剧本、SRE 中枢（事件 / 自动修复 / SLO / 工单）、日志采集检索、AI 巡检诊断等能力。
 
 自 v5.5.0 起统一存储为 **PostgreSQL（全部关系数据）+ VictoriaMetrics（全部时序数据）**，内置的 `aiops.db` 已停用；新增配置密钥 AES-256-GCM 静态加密、可选 TLS 传输加密、首次登录强制安全初始化、跨平台开机自启与保活。
 
@@ -41,7 +43,7 @@ AIOps Monitor 是一款**企业级主机监控与 SRE 运维平台**，采用「
 - 内置 AI 巡检与 RAG 记忆库，结合 pgvector 实现相似案例检索。
 - 告警治理（静默 / 抑制 / 路由）与统一消息中心，降低噪音、提升可操作度。
 
-> 定位上，AIOps Monitor 力图用一个你完全掌控的平台，收敛可观测、告警、自动化、AI 诊断、SRE 闭环与移动端 —— 少维护多套分散工具。
+> 定位上，AIOps 力图用一个你完全掌控的平台，收敛可观测、告警、自动化、AI 诊断、SRE 闭环与移动端 —— 少维护多套分散工具。
 
 ---
 
@@ -120,7 +122,7 @@ AIOps Monitor 是一款**企业级主机监控与 SRE 运维平台**，采用「
 
 ### 部署与体验
 
-- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。
+- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。（营销站点 `website/` 已支持 简中 / 繁中 / English / 日本語 四语）
 - **多服务端广播**：一次采集，并发上报到多个服务端（跨机房容灾）。
 - **网关中继**：内网仅一台联网机器代理所有上报到云端。
 
@@ -230,7 +232,7 @@ make build          # Linux/macOS
 
 ## 技术架构概述
 
-AIOps Monitor 采用 **Server-Agent 分离**架构，结合 **Go + Python 混合设计原则**：高频、性能敏感的基础指标采集用 Go（单二进制、零依赖），可变或 AI 依赖的自定义逻辑用 Python 插件。
+AIOps 采用 **Server-Agent 分离**架构，结合 **Go + Python 混合设计原则**：高频、性能敏感的基础指标采集用 Go（单二进制、零依赖），可变或 AI 依赖的自定义逻辑用 Python 插件。
 
 ```mermaid
 graph TB
@@ -290,7 +292,7 @@ graph TB
    - Go 代码使用 `gofmt` / `go vet`；新增逻辑请附测试。
    - 服务端零框架、零 CGO；保持单二进制、零第三方依赖的 Agent 原则。
    - 提交信息清晰表达「为什么」。
-4. **国际化**：网站与面板均支持简中 / 繁中 / English。新增文案请在三语字典中同步（网站 `website/js/i18n.js`；面板 `cmd/server/web/` 下 `i18n-dashboard*.js`，流程：改权威字典 → 补英文 → 跑 `build_en` / `build_tw` → 校验 parity → `go build` 重嵌）。
+4. **国际化**：营销网站支持 简中 / 繁中 / English / 日本語 四语，管理面板支持 简中 / 繁中 / English 三语。新增文案请在对应语言字典中同步（营销网站：`website/js/i18n.js` 与 `website/js/i18n-extra.js`；管理面板：`cmd/server/web/` 下 `i18n-dashboard*.js`。面板流程：改权威字典 → 补英文 → 跑 `build_en` / `build_tw` → 校验 parity → `go build` 重嵌）。
 5. **提交 PR**：Fork → 分支开发 → 描述变更与测试 → 等待 CI 与评审。
 6. **安全漏洞**：请勿公开 Issue，通过私信 / 安全渠道报告，我们将优先处理。
 7. **开发者详细规范**见 [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南)。
@@ -307,5 +309,5 @@ graph TB
 ---
 
 <p align="center">
-  <b>AIOps Monitor · 把运维的复杂度，收敛进一个你完全掌控的平台。</b>
+  <b>AIOps · 把运维的复杂度，收敛进一个你完全掌控的平台。</b>
 </p>

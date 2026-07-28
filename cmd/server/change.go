@@ -22,6 +22,11 @@ type ChangeWindow struct {
 	Freeze     bool     `json:"freeze"` // block unapproved auto-remediation
 	Note       string   `json:"note,omitempty"`
 	UpdatedAt  int64    `json:"updated_at,omitempty"`
+	// Metadata for SLO / release linkage
+	SLOIDs     []string `json:"slo_ids,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	ServiceIDs []string `json:"service_ids,omitempty"`
+	DependsOn  []string `json:"depends_on,omitempty"`
 	// Recurrence: when Recur is set, absolute Start/End are optional anchors;
 	// active window is computed from clock time each day/week.
 	// Recur: "" | "daily" | "weekly"

@@ -90,15 +90,29 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// Count install-token uses only for truly new hosts (not fingerprint rejoin).
 	isNew := false
+	allowFPRebind := false
 	if existing, existed := s.store.GetHost(hostID); !existed {
 		isNew = true
 	} else if existing.Fingerprint != "" && existing.Fingerprint != req.Fingerprint {
-		// Refuse host_id takeover: a valid install token must not rebind another
-		// machine's identity by overwriting the stored fingerprint.
-		writeJSON(w, http.StatusConflict, map[string]string{"error": Tr(r, "agent.fingerprint_conflict")})
-		return
+		// Fingerprint formula upgrades (e.g. drop flapping NIC MAC on Win11) keep
+		// the same host_id but present a new fp. A valid install token authorizes
+		// rebinding — without this, register returns 409 and every subsequent
+		// report/terminal/desktop channel 403s ("remote maintenance dead").
+		// Refuse silent rebind without a token (host_id takeover protection).
+		if req.Token != "" && s.cfg.ValidInstallToken(req.Token) {
+			allowFPRebind = true
+			slog.Warn("安装令牌重新绑定主机指纹",
+				"host_id", shortID(hostID), "hostname", req.Hostname)
+		} else {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": Tr(r, "agent.fingerprint_conflict")})
+			return
+		}
 	}
-	s.store.RegisterHost(hostID, req.Hostname, req.Fingerprint)
+	if allowFPRebind {
+		s.store.RegisterHostRebindFP(hostID, req.Hostname, req.Fingerprint)
+	} else {
+		s.store.RegisterHost(hostID, req.Hostname, req.Fingerprint)
+	}
 	if isNew && req.Token != "" {
 		s.cfg.ConsumeInstallTokenUse(req.Token)
 	}

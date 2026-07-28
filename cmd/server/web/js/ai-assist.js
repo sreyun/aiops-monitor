@@ -753,7 +753,7 @@ async function exportCurrentAIAssist() {
   }
   const model = {
     title: _aiAssistState.title || "AI 诊断报告",
-    subtitle: "AIOps Monitor · " + new Date().toLocaleString(),
+    subtitle: "AIOps · " + new Date().toLocaleString(),
     summaryTitle: "报告信息",
     meta: [
       ["AI 任务", _aiAssistState.task || "generic"],

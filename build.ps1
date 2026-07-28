@@ -1,4 +1,4 @@
-# build.ps1 — 构建 AIOps Monitor 服务端和 Agent，自动注入 Git tag 版本号
+# build.ps1 — 构建 AIOps 服务端和 Agent，自动注入 Git tag 版本号
 # 用法:  powershell -File build.ps1
 #       powershell -File build.ps1 -CrossCompile  (交叉编译 Linux/macOS)
 
@@ -27,7 +27,7 @@ Write-Host "构建 aiops-server ..." -ForegroundColor Yellow
 & go build -trimpath -ldflags $ldflags -o "$root/bin/aiops-server.exe" "$root/cmd/server"
 if ($LASTEXITCODE -ne 0) { Write-Host "服务端构建失败" -ForegroundColor Red; exit 1 }
 
-# 4. 构建 Agent
+# 4. 构建 Agent（当前平台）
 Write-Host "构建 aiops-agent ..." -ForegroundColor Yellow
 & go build -trimpath -ldflags $ldflags -o "$root/bin/aiops-agent.exe" "$root/cmd/agent"
 if ($LASTEXITCODE -ne 0) { Write-Host "Agent 构建失败" -ForegroundColor Red; exit 1 }
@@ -35,6 +35,8 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Agent 构建失败" -ForegroundColor Red;
 Write-Host "构建完成: v$tag" -ForegroundColor Green
 Write-Host "  bin/aiops-server.exe"
 Write-Host "  bin/aiops-agent.exe"
+Write-Host "提示: Server 2012/R2 需额外构建 legacy Agent：" -ForegroundColor DarkGray
+Write-Host "  powershell -File scripts/build-agent-win2012.ps1" -ForegroundColor DarkGray
 
 # 5. 可选：交叉编译 Linux/macOS
 if ($CrossCompile) {

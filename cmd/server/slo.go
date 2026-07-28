@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -428,6 +429,7 @@ func (m *sloManager) EvaluateAndAlert() {
 		st := m.computeStatus(s, now)
 		key := "slo/" + s.ID
 		exhausted := st.TotalEvents > 0 && st.ErrorBudget <= 0
+		breaching := st.Breaching || exhausted
 		m.mu.Lock()
 		wasBurning := m.burning[s.ID]
 		if exhausted && !wasBurning {
@@ -435,12 +437,16 @@ func (m *sloManager) EvaluateAndAlert() {
 			m.mu.Unlock()
 			m.incidents.raise(key, Tz("slo.incident_title", s.Name, st.SLI, s.Target),
 				"critical", "slo", "", "", "slo")
+			m.ensureSLOFreezeWindow(s, st)
 		} else if !exhausted && wasBurning {
 			delete(m.burning, s.ID)
 			m.mu.Unlock()
 			m.incidents.resolveByKey(key, Tz("slo.incident_recovered", s.Name))
 		} else {
 			m.mu.Unlock()
+			if breaching {
+				m.ensureSLOFreezeWindow(s, st)
+			}
 		}
 		// 多窗口多燃烧率告警：早于「预算耗尽」的提前量（快烧=紧急 / 慢烧=警告）。
 		// raise / resolveByKey 按 key 幂等，故无需额外状态跟踪。
@@ -454,6 +460,28 @@ func (m *sloManager) EvaluateAndAlert() {
 			m.incidents.resolveByKey(burnKey, Tz("slo.burn_recovered", s.Name))
 		}
 	}
+}
+
+// ensureSLOFreezeWindow upserts a temporary freeze ChangeWindow tied to the SLO.
+func (m *sloManager) ensureSLOFreezeWindow(s SLO, st SLOStatus) {
+	if m == nil || m.cfg == nil {
+		return
+	}
+	ttlSec := int64(6 * 3600)
+	if v := strings.TrimSpace(os.Getenv("AIOPS_SLO_FREEZE_TTL_SEC")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			ttlSec = n
+		}
+	}
+	now := time.Now().Unix()
+	id := "slo-freeze-" + s.ID
+	w := ChangeWindow{
+		ID: id, Name: "SLO 错误预算冻结：" + s.Name,
+		Start: now, End: now + ttlSec, Freeze: true,
+		Note: fmt.Sprintf("自动创建：SLI=%.3f target=%.3f budget=%.2f%%", st.SLI, s.Target, st.ErrorBudget),
+		SLOIDs: []string{s.ID}, UpdatedAt: now,
+	}
+	_, _ = m.cfg.UpsertChangeWindow(w)
 }
 
 // exportBurning / importBurning bridge the SLO burning state to PostgreSQL.

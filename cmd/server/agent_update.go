@@ -458,9 +458,9 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 		return
 	}
 	goos, goarch := hostGOOSArch(h)
-	distName, distOK := s.agentDistResolve(goos, goarch)
+	distName, distOK := s.agentDistResolveForHost(h)
 	if !job.Rollback && !distOK {
-		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s (need aiops-agent.exe or aiops-agent-windows-amd64.exe under dist/)", goos, goarch))
+		s.agentUpdates.setHostResult(hr, "skipped", "", fmt.Sprintf("server dist missing binary for %s/%s (need aiops-agent.exe or aiops-agent-windows-amd64-win2012.exe under dist/)", goos, goarch))
 		return
 	}
 	_ = distName
@@ -602,7 +602,7 @@ func (s *Server) runLegacyAgentUpdateScript(h *Host, serverURL string, force boo
 
 func (s *Server) runLegacyAgentUpdateScriptKind(h *Host, serverURL string, force bool) (string, execKind, error) {
 	goos, goarch := hostGOOSArch(h)
-	bin, ok := s.agentDistResolve(goos, goarch)
+	bin, ok := s.agentDistResolveForHost(h)
 	if !ok {
 		if name, err := agentDistBinaryName(goos, goarch); err == nil {
 			bin = name
@@ -656,9 +656,11 @@ func (s *Server) maybeAutoUpdateHost(hostID string) {
 		return
 	}
 	goos, goarch := hostGOOSArch(h)
-	if !s.agentDistHas(goos, goarch) {
+	if _, ok := s.agentDistResolveForHost(h); !ok {
 		return
 	}
+	_ = goos
+	_ = goarch
 	// Module-capable hosts can update with an empty job base (agent uses report URL).
 	// Legacy script hosts still need a concrete download base.
 	base := agentReportedDownloadBase(h)

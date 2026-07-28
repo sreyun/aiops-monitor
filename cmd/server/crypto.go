@@ -41,41 +41,43 @@ func loadSecretKey() []byte {
 // secretEncryptionEnabled reports whether a master key is configured.
 func secretEncryptionEnabled() bool { return loadSecretKey() != nil }
 
-// encryptSecret seals a plaintext secret as "enc:v1:<base64(nonce|ciphertext)>"
-// when a master key is set. Empty or already-encrypted input passes through; with
-// no key it returns the plaintext (encryption disabled).
-func encryptSecret(plain string) string {
-	if plain == "" || strings.HasPrefix(plain, secretEncPrefix) {
-		return plain
-	}
-	key := loadSecretKey()
-	if key == nil {
-		return plain
-	}
-	gcm, err := newGCM(key)
-	if err != nil {
-		slog.Error("配置密钥加密初始化失败", "err", err)
-		return plain
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		slog.Error("配置密钥加密随机数失败", "err", err)
-		return plain
-	}
-	sealed := gcm.Seal(nonce, nonce, []byte(plain), nil)
-	return secretEncPrefix + base64.StdEncoding.EncodeToString(sealed)
+// isEncryptedSecret reports whether v looks like sealed enc:v1 or enc:v2 ciphertext.
+func isEncryptedSecret(v string) bool {
+	return strings.HasPrefix(v, secretEncPrefix) || strings.HasPrefix(v, secretEncPrefixV2)
 }
 
-// decryptSecret reverses encryptSecret. Plaintext (no prefix) passes through for
-// backward-compat/migration. An encrypted value that can't be opened (missing or
-// wrong key, corrupt data) returns "" and logs — fail-safe, so ciphertext is never
-// mistaken for a usable secret.
+// encryptSecret seals a plaintext secret. Prefers enc:v2:<kid>:<payload> when a
+// master key is set; empty or already-encrypted input passes through.
+func encryptSecret(plain string) string {
+	if plain == "" || strings.HasPrefix(plain, secretEncPrefix) || strings.HasPrefix(plain, secretEncPrefixV2) {
+		return plain
+	}
+	if len(loadAllSecretKeys()) > 0 {
+		return encryptSecretV2(plain)
+	}
+	return plain
+}
+
+// decryptSecret reverses encryptSecret. Supports enc:v2 (multi-key) and legacy enc:v1.
 func decryptSecret(v string) string {
+	if pt, handled := decryptSecretV2(v); handled {
+		return pt
+	}
 	if !strings.HasPrefix(v, secretEncPrefix) {
 		return v
 	}
 	key := loadSecretKey()
 	if key == nil {
+		// try previous keys for v1 blobs
+		for _, e := range loadAllSecretKeys() {
+			data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(v, secretEncPrefix))
+			if err != nil {
+				continue
+			}
+			if pt := tryOpenGCM(e.Key, data); pt != "" {
+				return pt
+			}
+		}
 		slog.Error("配置中存在加密字段，但未设置 AIOPS_SECRET_KEY，无法解密（相关凭据将不可用）")
 		return ""
 	}
@@ -84,22 +86,16 @@ func decryptSecret(v string) string {
 		slog.Error("配置密钥解密失败：base64 解码", "err", err)
 		return ""
 	}
-	gcm, err := newGCM(key)
-	if err != nil {
-		slog.Error("配置密钥解密初始化失败", "err", err)
-		return ""
+	if pt := tryOpenGCM(key, data); pt != "" {
+		return pt
 	}
-	if len(data) < gcm.NonceSize() {
-		slog.Error("配置密钥解密失败：密文过短")
-		return ""
+	for _, e := range loadAllSecretKeys() {
+		if pt := tryOpenGCM(e.Key, data); pt != "" {
+			return pt
+		}
 	}
-	nonce, ct := data[:gcm.NonceSize()], data[gcm.NonceSize():]
-	pt, err := gcm.Open(nil, nonce, ct, nil)
-	if err != nil {
-		slog.Error("配置密钥解密失败：密钥不匹配或数据损坏", "err", err)
-		return ""
-	}
-	return string(pt)
+	slog.Error("配置密钥解密失败：密钥不匹配或数据损坏")
+	return ""
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {

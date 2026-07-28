@@ -1,4 +1,4 @@
-"""HC-AIOps Monitor 插件 SDK —— 让写一个插件变成几行代码。
+"""HC-AIOps 插件 SDK —— 让写一个插件变成几行代码。
 
 一个插件 = 一个可执行脚本，向 stdout 打印一个 JSON 对象：
 

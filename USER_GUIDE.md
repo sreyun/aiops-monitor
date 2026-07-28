@@ -1,4 +1,4 @@
-# AIOps Monitor 安装使用说明书
+# AIOps 安装使用说明书
 
 > 轻量级主机监控运维平台 —— Go 原生采集 + Python 插件层 + 实时面板 + 阈值告警 + 远程终端 + 自动化剧本。单二进制服务端、零依赖 Agent、三平台原生采集（含 GPU）、一条命令安装、开箱即用。
 
@@ -63,7 +63,7 @@
 
 ## 一、产品概览
 
-AIOps Monitor 用**一个服务端 + 每台主机一个 Agent**的极简架构，替代「Prometheus + Grafana + Alertmanager + 工单系统」的多组件拼装。
+AIOps 用**一个服务端 + 每台主机一个 Agent**的极简架构，替代「Prometheus + Grafana + Alertmanager + 工单系统」的多组件拼装。
 
 **核心定位**
 
@@ -184,7 +184,7 @@ ufw allow 8529/tcp
 
 ```powershell
 # Windows 防火墙
-New-NetFirewallRule -DisplayName "AIOps Monitor" -Direction Inbound -Protocol TCP -LocalPort 8529 -Action Allow
+New-NetFirewallRule -DisplayName "AIOps" -Direction Inbound -Protocol TCP -LocalPort 8529 -Action Allow
 ```
 
 服务端配置（告警 Webhook / 阈值 / 分类覆盖）持久化在其工作目录的 `server_config.json`。
@@ -808,7 +808,7 @@ launchctl unload ~/Library/LaunchAgents/com.aiops.agent.plist
 
 > 对应官网「产品对比」页。
 
-| 维度 | 传统方案（Prometheus + Grafana + Alertmanager + …） | AIOps Monitor |
+| 维度 | 传统方案（Prometheus + Grafana + Alertmanager + …） | AIOps |
 |---|---|---|
 | 组件数量 | 5~6 个独立组件拼装 | 1 个服务端二进制 |
 | 外部依赖 | 时序库 / 消息队列 / 多数据库 | 仅 PostgreSQL + VictoriaMetrics（自托管，Compose 附带） |

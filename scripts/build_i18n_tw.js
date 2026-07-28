@@ -64,7 +64,7 @@ body = body.replace(/,\n$/, "\n");
 
 const header =
 `/**
- * AIOps Monitor Dashboard — Traditional Chinese (Taiwan) dictionary (window.DICT_TW)
+ * AIOps Dashboard — Traditional Chinese (Taiwan) dictionary (window.DICT_TW)
  * Auto-generated from i18n-dashboard.js (zh-CN DICT) via OpenCC (cn -> twp).
  * Regenerate with scripts/build_i18n_tw.js. Key-parity enforced by check_i18n_parity.js.
  */

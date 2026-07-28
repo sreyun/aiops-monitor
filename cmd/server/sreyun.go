@@ -488,7 +488,7 @@ func (h *SreyunCore) forbidToolHostAccess(actor, toolName string, args map[strin
 			"query_hardware_history", "query_hardware_changes", "query_netflow",
 			"query_hyperv", "query_snmp", "query_interface_traffic", "query_traps",
 			"query_netflow_flows", "query_metric_range", "analyze_metric_trend",
-			"list_recent_changes":
+			"forecast_metric", "list_recent_changes":
 			return fmt.Sprintf("受限账号调用 %s 必须指定可访问的 host_id", toolName)
 		default:
 			return ""
@@ -1659,8 +1659,11 @@ func (h *SreyunCore) buildSystemPrompt(actor string) string {
 	b.WriteString("- 分析/优化看板：get_dashboard → analyze_dashboard / optimize_dashboard；确认后用 apply_dashboard_optimize（需审批）；\n")
 	b.WriteString("- 调用已有看板组件：list_dashboard_panels / query_dashboard_panel（按 panel_id 或标题渲染图/指标/表/日志）；\n")
 	b.WriteString("- 用户要看趋势/曲线/对比时，优先 render_chart / query_metric_range / query_promql_range / analyze_metric_trend；\n")
+	b.WriteString("- 用户问未来趋势/会否超阈值/还能撑多久：必须调用 forecast_metric，用返回的 MAPE/R² 与穿越时间作答，图表虚线为预测；\n")
+	b.WriteString("- 发现重复运维路径时用 propose_skill 提议自动化 Skill；用户确认偏好时用 remember_preference 持久化；\n")
 	b.WriteString("- 瞬时大数字用 show_instant_stat；需要下钻时依赖工具下发的 drill_down 按钮（主机详情 / 拓宽时间 / 换指标）；\n")
 	b.WriteString("- 图表由前端 UI 动作展示，回复只写结论与建议，不要粘贴大段采样 JSON；\n")
+	b.WriteString("- 诊断报告中若预测显示即将越阈，主动标注「基于趋势预测，预计 XX 时间后将触发告警」；\n")
 	b.WriteString("- 提及具体看板时，在正文用 Markdown 链接 `[看板名](aiops://dashboard/{id})`，便于客户端一键打开；\n")
 	b.WriteString("- 打开任意界面：navigate_ui（可先 list_ui_views）；安全中心/主机/告警/SRE/网络等均可调度；\n")
 	b.WriteString("- 安全态势与自动防御：query_security_posture / defend_security_event；发现撞库、漏扫、攻击迹象时主动调用；\n")
@@ -1673,6 +1676,12 @@ func (h *SreyunCore) buildSystemPrompt(actor string) string {
 	// 从而能把用户口中的机器名或 IP 映射到工具所需的 host_id 参数。
 	b.WriteString(h.buildHostContext(actor))
 	b.WriteString(h.buildAlertContext(actor))
+	if h.s != nil {
+		if pref := h.s.loadPreferenceHints(actor, 4); pref != "" {
+			b.WriteString("\n\n")
+			b.WriteString(pref)
+		}
+	}
 
 	// Append active templates
 	for _, t := range h.cachedTemplates {

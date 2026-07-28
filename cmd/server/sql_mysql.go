@@ -642,12 +642,11 @@ func mysqlQueryReadOnly(c MySQLConnection, sqlText string, limit int) ([]string,
 	if kw != "select" && kw != "with" && kw != "show" && kw != "desc" && kw != "describe" {
 		return nil, nil, fmt.Errorf("仅允许 SELECT/WITH/SHOW")
 	}
-	if limit <= 0 || limit > 2000 {
-		limit = 200
-	}
+	limit = clampSQLReadLimit(limit)
 	execSQL := strings.TrimSuffix(sqlText, ";")
 	if kw == "select" || kw == "with" {
 		if !strings.Contains(strings.ToLower(sqltoolkit.StripCommentsAndStrings(execSQL)), "limit") {
+			// limit is a bounded int (not user text) — safe to embed as a literal.
 			execSQL = fmt.Sprintf("SELECT * FROM (%s) AS _aiops_q LIMIT %d", execSQL, limit)
 		}
 	}

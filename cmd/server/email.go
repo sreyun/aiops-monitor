@@ -37,7 +37,7 @@ func sendEmail(cfg SMTPConfig, to, subject, htmlBody string) error {
 	}
 	fromName := cfg.FromName
 	if fromName == "" {
-		fromName = "AIOps Monitor"
+		fromName = "AIOps"
 	}
 	from := cfg.Username
 	headers := fmt.Sprintf("From: %s <%s>\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n",

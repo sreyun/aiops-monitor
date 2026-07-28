@@ -145,11 +145,11 @@ func TestAPISystemsSecretEncryption(t *testing.T) {
 		systems[0].CommonBody != `{"appId":"1001"}` || systems[0].Endpoints[0].Body != `{"sku":"A"}` {
 		t.Fatal("深拷贝失败：加密污染了内存中的明文实时配置")
 	}
-	// ② 副本敏感字段已加密
-	if !strings.HasPrefix(c.APISystems[0].CommonHeaders["Authorization"], secretEncPrefix) ||
-		!strings.HasPrefix(c.APISystems[0].CommonBody, secretEncPrefix) ||
-		!strings.HasPrefix(c.APISystems[0].Endpoints[0].Headers["X-Api-Key"], secretEncPrefix) ||
-		!strings.HasPrefix(c.APISystems[0].Endpoints[0].Body, secretEncPrefix) {
+	// ② 副本敏感字段已加密（enc:v1 或 enc:v2）
+	if !isEncryptedSecret(c.APISystems[0].CommonHeaders["Authorization"]) ||
+		!isEncryptedSecret(c.APISystems[0].CommonBody) ||
+		!isEncryptedSecret(c.APISystems[0].Endpoints[0].Headers["X-Api-Key"]) ||
+		!isEncryptedSecret(c.APISystems[0].Endpoints[0].Body) {
 		t.Fatal("apimon 敏感字段未被加密")
 	}
 	// ③ 解密还原明文（load 路径）

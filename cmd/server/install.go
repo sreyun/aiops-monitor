@@ -548,7 +548,7 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
   fi
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
-Description=AIOps Monitor Agent
+Description=AIOps Agent
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -822,25 +822,37 @@ if ($IsAdmin) {
 
 Write-Host "[AIOps] installing to $Dir (server $Server, admin=$IsAdmin)"
 
-# Agent builds target modern Windows (Server 2016+ / Windows 10+). Server 2012/R2
-# and Windows 7/8 fail silently or crash under current Go runtimes — fail loud.
-function Test-AiopsWindowsSupported {
+# Modern Agent builds (Go ≥1.21) require Windows 10 / Server 2016+.
+# Server 2012 / 2012 R2 (and Win8 / 8.1) use a dedicated Go 1.20 binary:
+#   aiops-agent-windows-amd64-win2012.exe
+# Windows 7 / Server 2008 R2 and older remain unsupported.
+function Get-AiopsWindowsOSVersion {
   try {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
   } catch {
-    try { $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop } catch { return $true }
+    try { $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop } catch { return $null }
   }
+  return $os
+}
+function Test-AiopsWindowsSupported {
+  $os = Get-AiopsWindowsOSVersion
+  if (-not $os) { return $true }
   $ver = [version]$os.Version
-  # Windows 10/11 and Server 2016+ all report major=10. Older kernels (6.x) are
-  # Windows 7/8/8.1 and Server 2008R2/2012/2012R2 — unsupported by this Agent.
-  if ($ver.Major -lt 10) {
-    Write-Host ""
-    Write-Host ("[AIOps] FATAL: " + $os.Caption + " (" + $os.Version + ") is not supported by this Agent build.") -ForegroundColor Red
-    Write-Host "[AIOps] Supported: Windows 10/11, Windows Server 2016 / 2019 / 2022 / 2025." -ForegroundColor Yellow
-    Write-Host "[AIOps] 当前 Agent 不支持 Windows 7/8 与 Windows Server 2012/2012 R2；请升级 OS 或使用兼容旧系统的历史版本。" -ForegroundColor Yellow
-    return $false
-  }
-  return $true
+  # major≥10 → Win10/11 + Server 2016+
+  # 6.2 / 6.3 → Server 2012 / 2012 R2 (+ Win8 / 8.1) via legacy Agent build
+  if ($ver.Major -ge 10) { return $true }
+  if ($ver.Major -eq 6 -and $ver.Minor -ge 2) { return $true }
+  Write-Host ""
+  Write-Host ("[AIOps] FATAL: " + $os.Caption + " (" + $os.Version + ") is not supported by this Agent build.") -ForegroundColor Red
+  Write-Host "[AIOps] Supported: Windows 8/8.1, Windows 10/11, Windows Server 2012 / 2012 R2 / 2016 / 2019 / 2022 / 2025." -ForegroundColor Yellow
+  Write-Host "[AIOps] 当前 Agent 不支持 Windows 7 与 Windows Server 2008/2008 R2；请升级 OS。" -ForegroundColor Yellow
+  return $false
+}
+function Test-AiopsNeedsWin2012Agent {
+  $os = Get-AiopsWindowsOSVersion
+  if (-not $os) { return $false }
+  $ver = [version]$os.Version
+  return ($ver.Major -eq 6 -and $ver.Minor -ge 2 -and $ver.Minor -le 3)
 }
 if (-not (Test-AiopsWindowsSupported)) { throw "Unsupported Windows version for AIOps Agent" }
 
@@ -988,6 +1000,7 @@ function Remove-AiopsAllUserInstalls {
 function Save-AiopsIdentity {
   $stash = Join-Path $env:TEMP 'aiops-agent-state.json'
   Remove-Item -LiteralPath $stash -Force -ErrorAction SilentlyContinue
+  $candidates = New-Object System.Collections.Generic.List[string]
   foreach ($cand in @(
     (Join-Path $Dir 'agent_state.json'),
     (Join-Path $env:ProgramFiles 'AIOps Agent\agent_state.json'),
@@ -995,10 +1008,31 @@ function Save-AiopsIdentity {
     (Join-Path $env:LOCALAPPDATA 'aiops-agent\agent_state.json'),
     (Join-Path $env:SystemRoot 'System32\agent_state.json')
   )) {
+    if ($cand) { [void]$candidates.Add($cand) }
+  }
+  # Walk every user profile the same way Remove-AiopsAllUserInstalls does.
+  # Elevating through UAC switches LOCALAPPDATA to the approving admin — without
+  # this scan, the only good agent_state.json (under the original user's AppData)
+  # is deleted first and the host card splits / remote maintenance opens a ghost.
+  try {
+    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue |
+      ForEach-Object {
+        $sid = Split-Path -Leaf $_.Name
+        if ($sid -eq 'S-1-5-18' -or $sid -eq 'S-1-5-19' -or $sid -eq 'S-1-5-20' -or $sid -like 'S-1-5-80-*') { return }
+        $p = $null
+        try { $p = (Get-ItemProperty -Path $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath } catch {}
+        if (-not $p -or -not (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) { return }
+        foreach ($sub in @('AppData\Local\aiops-agent\agent_state.json','AppData\Roaming\aiops-agent\agent_state.json')) {
+          [void]$candidates.Add((Join-Path $p $sub))
+        }
+      }
+  } catch {}
+  foreach ($cand in $candidates) {
     if (-not $cand) { continue }
     if (Test-Path -LiteralPath $cand) {
       try {
         Copy-Item -LiteralPath $cand -Destination $stash -Force -ErrorAction Stop
+        Write-Host ("[AIOps] stashed host identity from " + $cand)
         return $stash
       } catch {}
     }
@@ -1028,7 +1062,18 @@ function Uninstall-AiopsExisting {
   Remove-AiopsServiceQuiet
   Start-Sleep -Milliseconds 1200
   Get-Process aiops-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Only stop AIOps supervisor scripts — never kill unrelated wscript.exe hosts.
+  try {
+    Get-CimInstance Win32_Process -Filter "Name = 'wscript.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and ($_.CommandLine -match 'aiops|start-agent\.vbs') } |
+      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  } catch {
+    try {
+      Get-WmiObject Win32_Process -Filter "Name = 'wscript.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -match 'aiops|start-agent\.vbs') } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    } catch {}
+  }
   Start-Sleep -Seconds 2
   foreach ($cand in @(
     $Dir,
@@ -1111,12 +1156,24 @@ function Get-AiopsRemoteFile([string]$Url, [string]$OutFile) {
 }
 # Native arch binary: amd64 keeps legacy /dl/aiops-agent.exe; ARM64 uses a
 # dedicated name so WOW64/x64 emulation never downloads the wrong PE.
+# Server 2012 / 2012 R2 must use the Go 1.20 win2012 build — modern Go ≥1.21
+# binaries exit immediately on those kernels.
 $ProcArch = [string]$env:PROCESSOR_ARCHITECTURE
 if ($env:PROCESSOR_ARCHITEW6432) { $ProcArch = [string]$env:PROCESSOR_ARCHITEW6432 }
 $AgentRemote = 'aiops-agent.exe'
+$NeedsWin2012 = Test-AiopsNeedsWin2012Agent
 switch ($ProcArch.ToUpperInvariant()) {
-  'ARM64' { $AgentRemote = 'aiops-agent-windows-arm64.exe' }
-  'AMD64' { $AgentRemote = 'aiops-agent.exe' }
+  'ARM64' {
+    if ($NeedsWin2012) {
+      Write-Host '[AIOps] FATAL: Windows Server 2012/R2 on ARM64 is not supported.' -ForegroundColor Red
+      exit 1
+    }
+    $AgentRemote = 'aiops-agent-windows-arm64.exe'
+  }
+  'AMD64' {
+    if ($NeedsWin2012) { $AgentRemote = 'aiops-agent-windows-amd64-win2012.exe' }
+    else { $AgentRemote = 'aiops-agent.exe' }
+  }
   'X86' {
     Write-Host '[AIOps] FATAL: 32-bit Windows (x86) is not supported.' -ForegroundColor Red
     exit 1
@@ -1125,10 +1182,19 @@ switch ($ProcArch.ToUpperInvariant()) {
     Write-Host ("[AIOps] WARN: unknown PROCESSOR_ARCHITECTURE=" + $ProcArch + "; trying aiops-agent.exe") -ForegroundColor Yellow
   }
 }
+if ($NeedsWin2012) {
+  Write-Host "[AIOps] Detected Windows Server 2012/2012 R2 (or Win8/8.1) — using Go 1.20 legacy Agent build." -ForegroundColor Cyan
+}
 Write-Host ("[AIOps] platform windows/" + $ProcArch + " → " + $AgentRemote)
 try {
   Get-AiopsRemoteFile "$Server/dl/$AgentRemote" $AgentNew
 } catch {
+  if ($NeedsWin2012) {
+    Write-Host ""
+    Write-Host ("[AIOps] FATAL: 服务端缺少兼容 Server 2012 的 Agent：" + $AgentRemote) -ForegroundColor Red
+    Write-Host "[AIOps] 请升级服务端到含 win2012 产物的版本，或在构建时执行 scripts/build-agent-win2012.sh 并将二进制放入 dist/。" -ForegroundColor Yellow
+    throw
+  }
   if ($AgentRemote -ne 'aiops-agent.exe') {
     Write-Host ("[AIOps] WARN: " + $AgentRemote + " missing on server; falling back to aiops-agent.exe (will fail on ARM64)") -ForegroundColor Yellow
     $AgentRemote = 'aiops-agent.exe'
@@ -1234,10 +1300,13 @@ function Try-AiopsAppLockerAllow([string]$Exe) {
   try {
     if (-not (Get-Command Get-AppLockerFileInformation -ErrorAction SilentlyContinue)) { return $false }
     $fi = Get-AppLockerFileInformation -Path $Exe -ErrorAction Stop
-    $ar = New-AppLockerPolicy -RuleType Hash -FileInformation $fi -User Everyone -RuleNamePrefix 'AIOpsAgent' -ErrorAction Stop
+    # Path+Hash: hash alone breaks on every Agent binary replace/update (Win11
+    # managed fleets then look "installed" while terminal/desktop never start).
+    $ar = New-AppLockerPolicy -RuleType Path,Hash -FileInformation $fi -User Everyone -RuleNamePrefix 'AIOpsAgent' -ErrorAction Stop
     Set-AppLockerPolicy -PolicyObject $ar -Merge -ErrorAction Stop
     Set-Service AppIDSvc -StartupType Automatic -ErrorAction SilentlyContinue
     Start-Service AppIDSvc -ErrorAction SilentlyContinue
+    Write-Host '[AIOps] AppLocker Path+Hash allow merged for Agent binary.' -ForegroundColor Green
     return $true
   } catch {
     Write-Host ("[AIOps] AppLocker auto-allow skipped: " + $_.Exception.Message)
@@ -1487,7 +1556,12 @@ if ($IsAdmin) {
     if ($svc.Status -eq 'Running') {
       Write-Host "[AIOps] Windows service restarted: AiopsMonitorAgent (LocalSystem, boot autostart + crash-restart + desktop worker)."
     } else {
-      Write-Host "[AIOps] Windows service registered (status=$($svc.Status)); SCM recovery / next boot will start it. Not falling back to Session-0 keepalive (that breaks remote desktop)."
+      Write-Host ""
+      Write-Host ("[AIOps] FATAL: AiopsMonitorAgent service is registered but not Running (status=$($svc.Status)).") -ForegroundColor Red
+      Write-Host "[AIOps] Remote terminal/desktop will NOT work until the service is Running (desktop worker is spawned by the service)." -ForegroundColor Yellow
+      Write-Host ("[AIOps] Check agent.log under: " + $Dir) -ForegroundColor Yellow
+      Write-Host "[AIOps] Not falling back to Session-0 keepalive (that breaks remote desktop)." -ForegroundColor Yellow
+      throw "AiopsMonitorAgent service failed to reach Running state"
     }
   } else {
     $PolicyBlocked = ($InstallErr -and ($InstallErr -match 'Application Control|AppLocker|Smart App Control|Software Restriction|group policy|blocked by policy|被策略|组策略|无法运行'))
@@ -1695,7 +1769,7 @@ aiops_start_relay_fallback() {
 if aiops_has_systemd && [ "$(id -u)" = "0" ]; then
   cat > /etc/systemd/system/aiops-relay.service <<UNIT
 [Unit]
-Description=AIOps Monitor Relay
+Description=AIOps Relay
 After=network-online.target
 Wants=network-online.target
 [Service]

@@ -986,7 +986,7 @@ func (n *Notifier) sendHuaweiSMS(cfg SMSConfig, text string) error {
 	endpoint := "https://smsapi.cn-north-4.myhuaweicloud.com:443"
 	url := fmt.Sprintf("%s/v2/%s/sms/batch-send-sms", endpoint, projectID)
 
-	// X-WSSE 鉴权
+	// X-WSSE 鉴权 — request header only; never log xWsse / AccessKey / digest.
 	nonceBytes := make([]byte, 16)
 	_, _ = rand.Read(nonceBytes)
 	nonce := hex.EncodeToString(nonceBytes)
@@ -1158,7 +1158,7 @@ func (n *Notifier) sendHuaweiVoiceCall(cfg VoiceCallConfig, text string) error {
 	endpoint := "https://rtc-api.myhuaweicloud.com:443"
 	url := fmt.Sprintf("%s/v2/%s/voice/tts", endpoint, projectID)
 
-	// X-WSSE 鉴权（同短信）
+	// X-WSSE 鉴权（同短信）— request header only; never log credentials.
 	nonceBytes := make([]byte, 16)
 	_, _ = rand.Read(nonceBytes)
 	nonce := hex.EncodeToString(nonceBytes)

@@ -29,4 +29,7 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 	if strings.Contains(script, "Start-Process $exe -WindowStyle Hidden") {
 		t.Fatal("helper still has bare Start-Process without --config")
 	}
+	if !strings.Contains(script, "refusing bare Start-Process") {
+		t.Fatal("helper must refuse config-less restart")
+	}
 }

@@ -14,8 +14,8 @@ import (
 )
 
 const agentServiceName = "AiopsMonitorAgent"
-const agentServiceDisplay = "AIOps Monitor Agent"
-const agentServiceDesc = "AIOps Monitor 采集端（含远程桌面，支持锁屏/登录界面）。以 LocalSystem 运行。"
+const agentServiceDisplay = "AIOps Agent"
+const agentServiceDesc = "AIOps 采集端（含远程桌面，支持锁屏/登录界面）。以 LocalSystem 运行。"
 
 var (
 	modAdvapi32Ctl = syscall.NewLazyDLL("advapi32.dll")

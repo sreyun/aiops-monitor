@@ -90,21 +90,21 @@ function Restart-AgentService {
     }
     if (Wait-ServiceState $name 'Running' 20) { Write-Log ("Start-Service ok: " + $name); return $true }
   }
-  # Last resort for non-service installs: keep --config + WorkingDirectory.
-  # Do NOT start without config (defaults to localhost and breaks remote UI).
-  $args = @()
-  if ($Cfg -and (Test-Path -LiteralPath $Cfg)) { $args = @('--config', $Cfg) }
+  # Last resort for non-service installs: REQUIRE --config.
+  # Bare Start-Process defaults server to localhost and permanently breaks
+  # remote terminal + desktop (the classic post-update Win10/11 failure).
+  if (-not $Cfg -or -not (Test-Path -LiteralPath $Cfg)) {
+    Write-Log 'FATAL: no config.yaml beside exe; refusing bare Start-Process'
+    return $false
+  }
+  $args = @('--config', $Cfg)
   $vbs = Join-Path $Dir 'start-agent.vbs'
   if (Test-Path -LiteralPath $vbs) {
     Write-Log 'fallback start-agent.vbs'
     Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WorkingDirectory $Dir -WindowStyle Hidden
   } else {
     Write-Log ('fallback Start-Process args=' + ($args -join ' '))
-    if ($args.Count -gt 0) {
-      Start-Process -FilePath $Exe -ArgumentList $args -WorkingDirectory $Dir -WindowStyle Hidden
-    } else {
-      Start-Process -FilePath $Exe -WorkingDirectory $Dir -WindowStyle Hidden
-    }
+    Start-Process -FilePath $Exe -ArgumentList $args -WorkingDirectory $Dir -WindowStyle Hidden
   }
   Start-Sleep -Seconds 2
   return [bool](Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue)

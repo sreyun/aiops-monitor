@@ -27,6 +27,10 @@ type RemediationRule struct {
 	MinLevel      string   `json:"min_level,omitempty"`      // "" any | warning | critical
 	MatchCategory string   `json:"match_category,omitempty"` // host category filter; empty = any
 	PlaybookID    string   `json:"playbook_id"`
+	// DryRun: match + log only, never execute playbook.
+	DryRun bool `json:"dry_run,omitempty"`
+	// RollbackPlaybookID: on failed auto-run, optionally trigger this playbook.
+	RollbackPlaybookID string `json:"rollback_playbook_id,omitempty"`
 	// Guards
 	RequireApproval bool `json:"require_approval"` // queue for operator approval instead of auto-running
 	CooldownSec     int  `json:"cooldown_sec"`     // min seconds between runs for the same host
@@ -46,14 +50,16 @@ type RemediationRun struct {
 	Hostname     string `json:"hostname"`
 	PlaybookID   string `json:"playbook_id"`
 	PlaybookName string `json:"playbook_name"`
-	// pending_approval | running | success | failed | skipped_cooldown | skipped_ratelimit | rejected | no_playbook
-	Status      string `json:"status"`
-	Reason      string `json:"reason,omitempty"`
-	ExecutionID int64  `json:"execution_id,omitempty"`
-	IncidentID  int64  `json:"incident_id,omitempty"`
-	CreatedAt   int64  `json:"created_at"`
-	DecidedAt   int64  `json:"decided_at,omitempty"`
-	DecidedBy   string `json:"decided_by,omitempty"`
+	// pending_approval | running | success | failed | dry_run | skipped_cooldown | skipped_ratelimit | rejected | no_playbook | rolling_back
+	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
+	ExecutionID        int64  `json:"execution_id,omitempty"`
+	IncidentID         int64  `json:"incident_id,omitempty"`
+	RollbackPlaybookID string `json:"rollback_playbook_id,omitempty"`
+	RollbackExecID     int64  `json:"rollback_execution_id,omitempty"`
+	CreatedAt          int64  `json:"created_at"`
+	DecidedAt          int64  `json:"decided_at,omitempty"`
+	DecidedBy          string `json:"decided_by,omitempty"`
 }
 
 const remediationRunCap = 300
@@ -208,6 +214,18 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 		m.mu.Unlock()
 		return
 	}
+	if r.DryRun {
+		run := m.recordLocked(r, a, incidentID, "dry_run", "演练模式：已匹配规则，未执行剧本")
+		run.PlaybookName = pbName
+		run.RollbackPlaybookID = r.RollbackPlaybookID
+		m.setPlaybookNameLocked(run.ID, pbName)
+		m.mu.Unlock()
+		if m.onNotify != nil {
+			m.onNotify("info", "自动修复演练："+r.Name,
+				"主机 "+a.Hostname+" 匹配剧本「"+pbName+"」，dry_run 未实际执行。", incidentID)
+		}
+		return
+	}
 	if r.RequireApproval {
 		reason := freezeReason
 		run := m.recordLocked(r, a, incidentID, "pending_approval", reason)
@@ -234,28 +252,31 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 	m.lastRun[ck] = now
 	m.hourly[r.ID] = append(m.hourly[r.ID], now)
 	run := m.recordLocked(r, a, incidentID, "running", "")
+	run.RollbackPlaybookID = r.RollbackPlaybookID
 	m.setPlaybookNameLocked(run.ID, pbName)
 	runID := run.ID
+	rollbackID := r.RollbackPlaybookID
 	m.mu.Unlock()
-	m.launch(runID, pb, a.HostID, incidentID, r.Name)
+	m.launch(runID, pb, a.HostID, incidentID, r.Name, rollbackID)
 }
 
 // launch executes the playbook for a run (outside the lock).
-func (m *remediationManager) launch(runID int64, pb Playbook, hostID string, incidentID int64, ruleName string) {
+func (m *remediationManager) launch(runID int64, pb Playbook, hostID string, incidentID int64, ruleName, rollbackPlaybookID string) {
 	host := (*Host)(nil)
 	if m.resolveHost != nil {
 		host = m.resolveHost(hostID)
 	}
 	if host == nil || m.trigger == nil {
-		m.finish(runID, false, Tz("remediation.reason_host_gone"))
+		m.finish(runID, false, Tz("remediation.reason_host_gone"), rollbackPlaybookID)
 		return
 	}
 	execID := m.trigger(pb, host, Tz("remediation.actor"), func(ok bool) {
-		m.finish(runID, ok, "")
+		m.finish(runID, ok, "", rollbackPlaybookID)
 	})
 	m.mu.Lock()
 	if run := m.findRun(runID); run != nil {
 		run.ExecutionID = execID
+		run.RollbackPlaybookID = rollbackPlaybookID
 	}
 	m.mu.Unlock()
 	if m.onIncident != nil && incidentID > 0 {
@@ -265,7 +286,7 @@ func (m *remediationManager) launch(runID int64, pb Playbook, hostID string, inc
 }
 
 // finish updates a run's terminal status once its playbook execution completes.
-func (m *remediationManager) finish(runID int64, ok bool, reason string) {
+func (m *remediationManager) finish(runID int64, ok bool, reason, rollbackPlaybookID string) {
 	m.mu.Lock()
 	run := m.findRun(runID)
 	if run == nil {
@@ -280,7 +301,10 @@ func (m *remediationManager) finish(runID int64, ok bool, reason string) {
 	}
 	cp := *run
 	incID := run.IncidentID
-	name, host := run.PlaybookName, run.Hostname
+	name, hostID, hostname := run.PlaybookName, run.HostID, run.Hostname
+	if rollbackPlaybookID == "" {
+		rollbackPlaybookID = run.RollbackPlaybookID
+	}
 	m.mu.Unlock()
 	m.persistRun(cp)
 	if m.onIncident != nil && incID > 0 {
@@ -288,13 +312,43 @@ func (m *remediationManager) finish(runID int64, ok bool, reason string) {
 		if !ok {
 			key = "remediation.evt_failed"
 		}
-		m.onIncident(incID, "remediation", "auto", Tz(key, name, host))
+		m.onIncident(incID, "remediation", "auto", Tz(key, name, hostname))
 	}
 	if m.onNotify != nil {
 		if ok {
-			m.onNotify("success", "自动修复成功："+name, "主机 "+host+" 已成功执行修复剧本。", incID)
+			m.onNotify("success", "自动修复成功："+name, "主机 "+hostname+" 已成功执行修复剧本。", incID)
 		} else {
-			m.onNotify("critical", "自动修复失败："+name, "主机 "+host+"："+trimLine(reason, 160), incID)
+			m.onNotify("critical", "自动修复失败："+name, "主机 "+hostname+"："+trimLine(reason, 160), incID)
+		}
+	}
+	if !ok && rollbackPlaybookID != "" && m.getPlaybook != nil && m.trigger != nil {
+		if rpb, okPB := m.getPlaybook(rollbackPlaybookID); okPB {
+			host := (*Host)(nil)
+			if m.resolveHost != nil {
+				host = m.resolveHost(hostID)
+			}
+			if host != nil {
+				m.mu.Lock()
+				if run := m.findRun(runID); run != nil {
+					run.Status = "rolling_back"
+				}
+				m.mu.Unlock()
+				rid := m.trigger(rpb, host, "remediation-rollback", nil)
+				m.mu.Lock()
+				if run := m.findRun(runID); run != nil {
+					run.RollbackExecID = rid
+					run.Status = "failed"
+					run.Reason = strings.TrimSpace(run.Reason + "；已触发回滚剧本 " + rpb.Name)
+					cp2 := *run
+					m.mu.Unlock()
+					m.persistRun(cp2)
+				} else {
+					m.mu.Unlock()
+				}
+				if m.onNotify != nil {
+					m.onNotify("warning", "自动修复回滚："+name, "已触发回滚剧本「"+rpb.Name+"」", incID)
+				}
+			}
 		}
 	}
 }
@@ -371,7 +425,13 @@ func (m *remediationManager) Approve(runID int64, actor string) error {
 	runID, hostID, incID, ruleName := run.ID, run.HostID, run.IncidentID, run.RuleName
 	m.mu.Unlock()
 	m.persistRun(cp)
-	m.launch(runID, pb, hostID, incID, ruleName)
+	rb := ""
+	m.mu.Lock()
+	if run := m.findRun(runID); run != nil {
+		rb = run.RollbackPlaybookID
+	}
+	m.mu.Unlock()
+	m.launch(runID, pb, hostID, incID, ruleName, rb)
 	return nil
 }
 

@@ -176,6 +176,9 @@ func ForbiddenWrite(sql string) bool {
 		" truncate ", " replace ", " grant ", " revoke ", " rename ",
 		" into outfile", " into dumpfile", " load data", " call ",
 		" lock tables", " unlock tables", " set global", " set @@",
+		" copy ", " \\copy ", " execute ", " prepare ", " deallocate ",
+		" do ", " listen ", " notify ", " vacuum ", " reindex ",
+		" pg_sleep(", " sleep(", " benchmark(", " get_lock(",
 	}
 	padded := " " + s + " "
 	for _, b := range bad {
@@ -185,7 +188,8 @@ func ForbiddenWrite(sql string) bool {
 	}
 	kw := FirstKeyword(sql)
 	switch kw {
-	case "insert", "update", "delete", "drop", "alter", "create", "truncate", "replace", "grant", "revoke", "call", "load":
+	case "insert", "update", "delete", "drop", "alter", "create", "truncate", "replace", "grant", "revoke", "call", "load",
+		"copy", "execute", "prepare", "do", "vacuum", "reindex":
 		return true
 	}
 	return false

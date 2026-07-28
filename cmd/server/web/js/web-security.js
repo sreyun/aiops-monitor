@@ -1380,7 +1380,7 @@ function wsBuildReportModel(scan) {
         rows: rows.length ? rows : [[wsT("ws.no_findings", "未命中当前模板集（不代表绝对无风险）"), "", "", "", "", "", ""]],
       },
     ],
-    footer: wsT("ws.report_footer", "本报告由 AIOps Monitor 安全中心（Nuclei）自动生成，仅供运维与安全处置参考，不替代专业渗透测试。"),
+    footer: wsT("ws.report_footer", "本报告由 AIOps 安全中心（Nuclei）自动生成，仅供运维与安全处置参考，不替代专业渗透测试。"),
     orientation: "landscape",
     rawJSON: {
       report_type: "web_security",

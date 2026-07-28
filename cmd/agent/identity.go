@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // loadOrCreateHostID returns a stable per-machine id, persisting a freshly
@@ -30,16 +31,40 @@ import (
 // recoverable by simply regenerating the ID.
 func loadOrCreateHostID(path string) string {
 	fp := machineFingerprint()
+	mid := strings.TrimSpace(machineID())
 	migrateLegacyStateFile(path)
 	if b, err := os.ReadFile(path); err == nil {
 		var s struct {
 			HostID string `json:"host_id"`
 			FP     string `json:"fp"`
+			MID    string `json:"mid"`
 		}
 		if json.Unmarshal(b, &s) == nil && s.HostID != "" {
-			// Keep the id unless we can prove the file was cloned onto a different
-			// machine (both fingerprints known and different).
+			// Strongest same-machine signal: OS machine id (Windows MachineGuid).
+			// Survives NIC/VPN/Hyper-V/WSL adapter-order changes that used to flip
+			// `fp` and mint a new host_id — orphaning the dashboard card and making
+			// remote terminal/desktop look "dead" on the host operators still open.
+			if mid != "" && s.MID != "" && s.MID == mid {
+				if s.FP != fp {
+					slog.Warn("机器指纹算法或网卡枚举变化，保留 host_id 并刷新 fp",
+						"host_id", short(s.HostID))
+					persistHostID(path, s.HostID, fp)
+				}
+				return s.HostID
+			}
+			// Legacy state without mid: keep id unless we can prove a clone via fp.
 			if fp == "" || s.FP == "" || s.FP == fp {
+				if mid != "" && s.MID == "" {
+					persistHostID(path, s.HostID, fp) // backfill mid
+				}
+				return s.HostID
+			}
+			// Upgrade path: legacy file, fp flapped (unstable MAC), but MachineGuid
+			// is readable — prefer continuity over minting a ghost host.
+			if mid != "" && s.MID == "" {
+				slog.Warn("身份指纹变化但 MachineGuid 可读，保留 host_id（回写 mid/fp）",
+					"host_id", short(s.HostID))
+				persistHostID(path, s.HostID, fp)
 				return s.HostID
 			}
 		}
@@ -139,13 +164,32 @@ func readHostIDFromState(path string) string {
 	return s.HostID
 }
 
+// waitHostIDFromState polls for a persisted host_id without minting one.
+func waitHostIDFromState(path string, timeout time.Duration) string {
+	if id := readHostIDFromState(path); id != "" {
+		return id
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
+		if id := readHostIDFromState(path); id != "" {
+			return id
+		}
+	}
+	return readHostIDFromState(path)
+}
+
 // persistHostID atomically writes the identity state file.
 //
 // Atomic write: temp file + rename to prevent partial writes on crash.
 // On Windows, Rename is not atomic for existing targets, so we fall back to a
 // direct write — the file is tiny and a corrupted one just regenerates the id.
 func persistHostID(path, id, fp string) {
-	b, err := json.Marshal(map[string]string{"host_id": id, "fp": fp})
+	payload := map[string]string{"host_id": id, "fp": fp}
+	if mid := strings.TrimSpace(machineID()); mid != "" {
+		payload["mid"] = mid
+	}
+	b, err := json.Marshal(payload)
 	if err != nil {
 		slog.Error("身份文件序列化失败", "path", path, "err", err)
 		return
@@ -168,9 +212,15 @@ func persistHostID(path, id, fp string) {
 }
 
 // machineFingerprint returns a stable, machine-unique fingerprint derived from
-// the OS machine id and the primary MAC address, hashed. Returns "" when nothing
+// the OS machine id and a stable primary MAC, hashed. Returns "" when nothing
 // machine-unique can be read (then clone detection is skipped, never a false
-// positive). Zero third-party dependency.
+// positive).
+//
+// Older builds used the first UP NIC's MAC; on Windows 11 that order flaps when
+// VPN/Hyper-V/WSL adapters appear, changing the fingerprint and (previously)
+// minting a new host_id — which orphaned the dashboard card and broke remote
+// terminal/desktop auth. primaryMAC now prefers a sorted physical NIC; host_id
+// continuity is additionally guarded by the persisted `mid` field.
 //
 // Containers: set AIOPS_MACHINE_ID to a stable string (compose/K8s) so the
 // fingerprint does not change when the container MAC is reassigned on recreate.
@@ -196,23 +246,62 @@ func machineID() string {
 	return machineIDFromOS()
 }
 
-// primaryMAC returns the hardware address of the first up, non-loopback
-// interface — differs across machines (and most VM clones) even when hostname/IP
-// coincide.
+// primaryMAC returns a stable hardware address for fingerprint fallback.
+// Prefer the lexicographically smallest MAC among non-virtual adapters so
+// VPN/Hyper-V/WSL interface order cannot change the result across reboots.
 func primaryMAC() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
+	var physical, anyUp []string
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if mac := ifc.HardwareAddr.String(); mac != "" {
-			return mac
+		mac := ifc.HardwareAddr.String()
+		if mac == "" {
+			continue
+		}
+		anyUp = append(anyUp, mac)
+		if !isVirtualNetInterface(ifc.Name) {
+			physical = append(physical, mac)
 		}
 	}
+	sort.Strings(physical)
+	if len(physical) > 0 {
+		return physical[0]
+	}
+	sort.Strings(anyUp)
+	if len(anyUp) > 0 {
+		return anyUp[0]
+	}
 	return ""
+}
+
+// isVirtualNetInterface reports adapter names that must not drive identity.
+func isVirtualNetInterface(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	switch {
+	case strings.Contains(n, "docker"), strings.Contains(n, "br-"),
+		strings.Contains(n, "veth"), strings.Contains(n, "virbr"),
+		strings.Contains(n, "cni"), strings.Contains(n, "flannel"),
+		strings.Contains(n, "calico"), strings.Contains(n, "kube"),
+		strings.Contains(n, "vethernet"), strings.Contains(n, "hyper-v"),
+		strings.Contains(n, "virtualbox"), strings.Contains(n, "vmware"),
+		strings.Contains(n, "vbox"), strings.Contains(n, "virian"),
+		strings.HasPrefix(n, "veth"), strings.Contains(n, "tap"),
+		strings.Contains(n, "tun"), strings.Contains(n, "isatap"),
+		strings.Contains(n, "teredo"), strings.Contains(n, "bluetooth"),
+		strings.Contains(n, "vpn"), strings.Contains(n, "ppp"),
+		strings.Contains(n, "wsl"), strings.Contains(n, "loopback"),
+		strings.Contains(n, "pseudo"):
+		return true
+	}
+	return false
 }
 
 func randomID() string {

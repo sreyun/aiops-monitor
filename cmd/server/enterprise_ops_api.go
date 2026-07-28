@@ -52,10 +52,16 @@ func (s *Server) startOnCallForIncident(inc Incident) {
 		s.incidents.SetAssignee(inc.ID, users[0], "oncall")
 	}
 	page := s.oncall.Start(inc, pol, schedID, users)
-	// Immediate step-0 notify via message center (channels fan-out uses governance paths later).
+	// Immediate step-0 notify via message center + configured channels.
 	s.messages.push("oncall", inc.Severity, "On-call 通知："+inc.Title,
 		fmt.Sprintf("值班：%s · 策略：%s · page #%d", strings.Join(users, ","), pol.Name, page.ID),
 		"sre", strconv.FormatInt(inc.ID, 10))
+	if s.notifier != nil && len(pol.Steps) > 0 && len(pol.Steps[0].Channels) > 0 {
+		body := fmt.Sprintf("事件 #%d · %s\n值班：%s\n策略：%s",
+			inc.ID, inc.Title, strings.Join(users, ", "), pol.Name)
+		// Prefer on-call contact overrides from account profiles when present.
+		s.notifier.PushAdhoc(inc.Severity, "On-call："+inc.Title, body, pol.Steps[0].Channels)
+	}
 	s.store.MarkDirty()
 }
 

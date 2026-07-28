@@ -1109,7 +1109,7 @@ function hsBuildReportModel(scan) {
         rows: findingRows.length ? findingRows : [[hsT("hs.no_findings", "未发现风险项"), "", "", "", "", "", ""]],
       },
     ],
-    footer: hsT("hs.report_footer", "本报告由 AIOps Monitor 安全中心自动生成，仅供运维处置参考，不替代专业渗透测试。"),
+    footer: hsT("hs.report_footer", "本报告由 AIOps 安全中心自动生成，仅供运维处置参考，不替代专业渗透测试。"),
     orientation: "landscape",
     rawJSON: {
       report_type: "host_security",

@@ -33,6 +33,7 @@ var agentDistCatalog = []struct {
 	{"aiops-agent-darwin-amd64", "darwin", "amd64"},
 	{"aiops-agent-darwin-arm64", "darwin", "arm64"},
 	{"aiops-agent.exe", "windows", "amd64"},
+	{"aiops-agent-windows-amd64-win2012.exe", "windows", "amd64"}, // Go 1.20 build for Server 2012/R2
 	{"aiops-agent-windows-arm64.exe", "windows", "arm64"},
 }
 
@@ -88,7 +89,7 @@ func agentDistCandidates(goos, goarch string) []string {
 	// Release CI also publishes the descriptive Windows name; some deployments
 	// only copy one of the two into dist/.
 	if goos == "windows" && goarch == "amd64" {
-		for _, alt := range []string{"aiops-agent.exe", "aiops-agent-windows-amd64.exe"} {
+		for _, alt := range []string{"aiops-agent.exe", "aiops-agent-windows-amd64.exe", "aiops-agent-windows-amd64-win2012.exe"} {
 			if alt != primary {
 				out = append(out, alt)
 			}
@@ -128,15 +129,62 @@ func (s *Server) agentDistHas(goos, goarch string) bool {
 
 // agentDistResolve returns the on-disk /dl filename for goos/goarch.
 func (s *Server) agentDistResolve(goos, goarch string) (string, bool) {
+	return s.agentDistResolveNames(agentDistCandidates(goos, goarch))
+}
+
+// agentDistResolveForHost prefers the Server 2012/R2 (Go 1.20) artifact when the
+// host identity indicates a pre–Windows 10 kernel.
+func (s *Server) agentDistResolveForHost(h *Host) (string, bool) {
+	return s.agentDistResolveNames(agentDistCandidatesForHost(h))
+}
+
+func (s *Server) agentDistResolveNames(names []string) (string, bool) {
 	if s == nil || s.distDir == "" {
 		return "", false
 	}
-	for _, name := range agentDistCandidates(goos, goarch) {
+	for _, name := range names {
 		if _, err := os.Stat(filepath.Join(s.distDir, name)); err == nil {
 			return name, true
 		}
 	}
 	return "", false
+}
+
+// hostNeedsWin2012Agent reports whether fleet updates must ship the Go 1.20
+// win2012 binary (modern Go ≥1.21 exits on Server 2012/R2 and Win8/8.1).
+func hostNeedsWin2012Agent(h *Host) bool {
+	if h == nil {
+		return false
+	}
+	blob := strings.ToLower(h.OS + " " + h.Platform)
+	if strings.Contains(blob, "2012") {
+		return true
+	}
+	if strings.Contains(blob, "windows 8") {
+		return true
+	}
+	if strings.Contains(blob, "build 9200") || strings.Contains(blob, "build 9600") {
+		return true
+	}
+	return false
+}
+
+// agentDistCandidatesForHost returns download candidates, putting the win2012
+// artifact first for legacy Windows hosts.
+func agentDistCandidatesForHost(h *Host) []string {
+	goos, goarch := hostGOOSArch(h)
+	cands := agentDistCandidates(goos, goarch)
+	if !hostNeedsWin2012Agent(h) || goos != "windows" || goarch != "amd64" {
+		return cands
+	}
+	const win2012 = "aiops-agent-windows-amd64-win2012.exe"
+	out := []string{win2012}
+	for _, c := range cands {
+		if c != win2012 {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func fileSHA256HexServer(path string) (string, error) {
