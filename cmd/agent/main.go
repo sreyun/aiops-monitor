@@ -96,6 +96,9 @@ func defaultDiskPath() string {
 
 func main() {
 	slog.SetDefault(slog.New(newAgentTextHandler(os.Stderr)))
+	// LocalSystem services often inherit a truncated/empty Path; repair once so
+	// every child (remote terminal, playbooks) can resolve ipconfig/chcp/…
+	ensureWindowsProcessPath()
 
 	cfg := defaultConfig()
 

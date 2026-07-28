@@ -929,24 +929,49 @@ func shellPath() string {
 	return "/bin/sh"
 }
 
-// setEnvKey replaces or appends KEY=value in env.
-func setEnvKey(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + value
-			return env
-		}
+// envEntryKey reports whether entry is KEY=... (case-insensitive on Windows:
+// CreateProcess / cmd resolve Path and PATH as the same variable, but a naïve
+// prefix match on "PATH=" leaves a stale "Path=" entry that still wins).
+func envEntryKey(entry, key string) bool {
+	i := strings.IndexByte(entry, '=')
+	if i <= 0 {
+		return false
 	}
-	return append(env, prefix+value)
+	name := entry[:i]
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(name, key)
+	}
+	return name == key
+}
+
+// setEnvKey replaces or appends KEY=value in env. On Windows it also drops
+// duplicate spellings of the same key (Path/PATH/path).
+func setEnvKey(env []string, key, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	set := false
+	for _, e := range env {
+		if envEntryKey(e, key) {
+			if !set {
+				out = append(out, key+"="+value)
+				set = true
+			}
+			continue
+		}
+		out = append(out, e)
+	}
+	if !set {
+		out = append(out, key+"="+value)
+	}
+	return out
 }
 
 // getEnvKey returns the value for KEY in env (KEY=value), or "".
 func getEnvKey(env []string, key string) string {
-	prefix := key + "="
 	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			return e[len(prefix):]
+		if envEntryKey(e, key) {
+			if i := strings.IndexByte(e, '='); i >= 0 {
+				return e[i+1:]
+			}
 		}
 	}
 	return ""
@@ -1021,8 +1046,10 @@ func mergeWindowsPath(root, existing string) string {
 	return strings.Join(parts, ";")
 }
 
-// enrichWindowsShellEnv forces SystemRoot/ComSpec/PATH so remote cmd can find
+// enrichWindowsShellEnv forces SystemRoot/ComSpec/Path so remote cmd can find
 // standard tools when the agent runs as a LocalSystem Windows service.
+// Canonical key is "Path" (Windows os.Environ spelling) so we replace — not
+// duplicate alongside — any existing Path/PATH entry.
 func enrichWindowsShellEnv(env []string) []string {
 	root := windowsSystemRoot()
 	sys32 := filepath.Join(root, "System32")
@@ -1042,11 +1069,40 @@ func enrichWindowsShellEnv(env []string) []string {
 		}
 		env = setEnvKey(env, "ComSpec", c)
 	}
-	env = setEnvKey(env, "PATH", mergeWindowsPath(root, getEnvKey(env, "PATH")))
+	// os.Getenv is case-insensitive on Windows; merge process Path too.
+	existing := getEnvKey(env, "Path")
+	if existing == "" {
+		existing = os.Getenv("Path")
+	}
+	env = setEnvKey(env, "Path", mergeWindowsPath(root, existing))
 	if getEnvKey(env, "PATHEXT") == "" {
 		env = setEnvKey(env, "PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")
 	}
 	return env
+}
+
+// ensureWindowsProcessPath repairs the agent process Path in-place so every
+// child (terminal, playbook, update helper) inherits System32 even if a caller
+// forgets enrichWindowsShellEnv. Safe no-op on non-Windows.
+func ensureWindowsProcessPath() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	root := windowsSystemRoot()
+	merged := mergeWindowsPath(root, os.Getenv("Path"))
+	_ = os.Setenv("Path", merged)
+	if strings.TrimSpace(os.Getenv("SystemRoot")) == "" {
+		_ = os.Setenv("SystemRoot", root)
+	}
+	if strings.TrimSpace(os.Getenv("windir")) == "" {
+		_ = os.Setenv("windir", root)
+	}
+	if strings.TrimSpace(os.Getenv("ComSpec")) == "" {
+		_ = os.Setenv("ComSpec", filepath.Join(root, "System32", "cmd.exe"))
+	}
+	if strings.TrimSpace(os.Getenv("PATHEXT")) == "" {
+		_ = os.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC")
+	}
 }
 
 // windowsCmdPath returns an absolute path to cmd.exe.
@@ -1063,8 +1119,9 @@ func windowsCmdPath() string {
 	return "cmd.exe"
 }
 
-// windowsShellInitCmd runs before the interactive prompt: repair PATH, best-effort
-// UTF-8 code page, then cd to a usable directory (not SYSTEM's profile).
+// windowsShellInitCmd is the /K fallback string when a bootstrap .cmd cannot be
+// written. Avoid nested quotes — Go's EscapeArg + cmd's /K parser mangle them
+// and the set PATH / chcp lines never run (symptoms: ipconfig/chcp not found).
 func windowsShellInitCmd() string {
 	root := windowsSystemRoot()
 	sys32 := filepath.Join(root, "System32")
@@ -1077,11 +1134,44 @@ func windowsShellInitCmd() string {
 	if drive == "" {
 		drive = "C:"
 	}
-	// Absolute chcp path works even if PATH was still broken at process create.
 	return fmt.Sprintf(
-		`set "PATH=%s;%%PATH%%" & "%s" 65001 >nul 2>nul & set PYTHONIOENCODING=utf-8 & cd /d %s\ 2>nul`,
+		`set Path=%s;%%Path%%&%s 65001 >nul 2>nul&set PYTHONIOENCODING=utf-8&cd /d %s\`,
 		pathPre, chcp, drive,
 	)
+}
+
+// writeWindowsShellBootstrap writes a .cmd that repairs Path then returns to an
+// interactive prompt (cmd /K script.cmd). Using a file avoids CreateProcess
+// quote-eating of complex /K strings on older Windows.
+func writeWindowsShellBootstrap() string {
+	root := windowsSystemRoot()
+	sys32 := filepath.Join(root, "System32")
+	pathPre := strings.Join(windowsEssentialPathDirs(root), ";")
+	chcp := filepath.Join(sys32, "chcp.com")
+	drive := strings.TrimSpace(os.Getenv("SystemDrive"))
+	if drive == "" {
+		drive = filepath.VolumeName(root)
+	}
+	if drive == "" {
+		drive = "C:"
+	}
+	body := fmt.Sprintf("@echo off\r\n"+
+		"set Path=%s;%%Path%%\r\n"+
+		"set PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC\r\n"+
+		"set PYTHONIOENCODING=utf-8\r\n"+
+		"cd /d %s\\\r\n"+
+		"if exist \"%s\" \"%s\" 65001 >nul 2>nul\r\n",
+		pathPre, drive, chcp, chcp)
+	dir := os.TempDir()
+	if dir == "" {
+		dir = drive + `\`
+	}
+	path := filepath.Join(dir, "aiops-term-init.cmd")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		slog.Warn("写入终端 PATH 引导脚本失败，回退 /K 内联", "err", err)
+		return ""
+	}
+	return path
 }
 
 // interactiveShellDir is the cwd for a remote interactive shell. Avoid starting
@@ -1230,13 +1320,30 @@ func newPipeShell() termShell {
 		return nil
 	}
 	_ = pw.Close() // parent drops its write end so pr EOFs when the shell exits
+	// Prefer browser local echo on Windows (OSC 666 + platform heuristic) for
+	// zero-RTT typing. Keep a lightweight agent echo as fallback when the UI
+	// has not enabled localEcho yet (older server JS): echo only after Enter
+	// would be useless, so echo every keystroke until FE takes over — FE sets
+	// localEcho and we cannot know that here, so Windows uses FE-only echo.
+	echoOn := runtime.GOOS != "windows"
 	p := &pipeShell{
 		cmd:      cmd,
 		stdin:    stdin,
 		out:      pr,
-		echoOn:   true, // no TTY echo with redirected stdin
+		echoOn:   echoOn,
 		echoWake: make(chan struct{}, 1),
 		readCh:   make(chan pipeChunk, 32),
+		// Ask the web VT to enable instant local echo (OSC body otherwise ignored).
+		convBuf: []byte("\x1b]666;local_echo=1\a"),
+	}
+	if path := getEnvKey(cmd.Env, "Path"); path != "" {
+		prefix := path
+		if len(prefix) > 160 {
+			prefix = prefix[:160] + "…"
+		}
+		slog.Info("pipe shell 已启动", "dir", cmd.Dir, "cmd", name, "path_prefix", prefix)
+	} else {
+		slog.Warn("pipe shell 启动时 Path 仍为空", "dir", cmd.Dir, "cmd", name)
 	}
 	go p.pumpStdout()
 	return p
@@ -1419,10 +1526,13 @@ func normalizeOutputNewlines(in []byte, lastWasCR *bool) []byte {
 }
 
 // shellCommand picks the interactive shell per OS (used by the piped fallback).
-// On Windows, /K init repairs PATH + best-effort chcp; redirected pipes still
-// emit ACP and rely on pipeShell.Read → ensureUTF8Hold.
+// On Windows, prefer a bootstrap .cmd that repairs Path (quote-safe), else /K
+// inline init; redirected pipes still emit ACP and rely on ensureUTF8Hold.
 func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
+		if boot := writeWindowsShellBootstrap(); boot != "" {
+			return windowsCmdPath(), []string{"/K", boot}
+		}
 		return windowsCmdPath(), []string{"/K", windowsShellInitCmd()}
 	}
 	return shellPath(), []string{"-l", "-i"} // -l: login shell

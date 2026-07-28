@@ -91,6 +91,49 @@ func TestSetEnvKey(t *testing.T) {
 	}
 }
 
+func TestSetEnvKeyWindowsPathCase(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows env key folding")
+	}
+	// Simulate LocalSystem: Environ returns Path=…, old code appended PATH=…
+	env := []string{`Path=C:\Weird`, "SystemRoot=C:\\Windows"}
+	env = setEnvKey(env, "Path", mergeWindowsPath(`C:\Windows`, getEnvKey(env, "Path")))
+	var pathCount int
+	var pathVal string
+	for _, e := range env {
+		if envEntryKey(e, "Path") {
+			pathCount++
+			pathVal = e[strings.IndexByte(e, '=')+1:]
+		}
+	}
+	if pathCount != 1 {
+		t.Fatalf("expected 1 Path entry, got %d in %v", pathCount, env)
+	}
+	if !strings.Contains(strings.ToLower(pathVal), `c:\windows\system32`) {
+		t.Fatalf("System32 missing: %q", pathVal)
+	}
+	if strings.EqualFold(pathVal, `C:\Weird`) {
+		t.Fatalf("stale Path kept: %q", pathVal)
+	}
+}
+
+func TestEnrichWindowsShellEnvReplacesPathNotDuplicates(t *testing.T) {
+	env := enrichWindowsShellEnv([]string{`Path=`, `PATH=/usr/bin:/bin`})
+	var n int
+	for _, e := range env {
+		if envEntryKey(e, "Path") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("duplicate Path/PATH entries: %d in %v", n, env)
+	}
+	path := getEnvKey(env, "Path")
+	if isUnixStylePathEnv(path) || !strings.Contains(strings.ToLower(path), "system32") {
+		t.Fatalf("PATH not repaired: %q", path)
+	}
+}
+
 func TestIsUnixStylePathEnv(t *testing.T) {
 	if !isUnixStylePathEnv("/usr/local/sbin:/usr/bin:/bin") {
 		t.Fatal("expected unix PATH detection")
@@ -136,7 +179,7 @@ func TestEnrichWindowsShellEnv(t *testing.T) {
 		t.Skip("windows env enrichment")
 	}
 	env := enrichWindowsShellEnv([]string{"PATH=/usr/bin:/bin"})
-	path := getEnvKey(env, "PATH")
+	path := getEnvKey(env, "Path")
 	if isUnixStylePathEnv(path) || !strings.Contains(strings.ToLower(path), "system32") {
 		t.Fatalf("PATH not repaired: %q", path)
 	}
@@ -153,9 +196,22 @@ func TestBuildShellEnvWindowsHasSystem32(t *testing.T) {
 		t.Skip("windows")
 	}
 	env := buildShellEnv()
-	path := getEnvKey(env, "PATH")
+	path := getEnvKey(env, "Path")
 	if !strings.Contains(strings.ToLower(path), "system32") {
 		t.Fatalf("buildShellEnv PATH missing System32: %q", path)
+	}
+}
+
+func TestWindowsShellInitCmdNoNestedQuotes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows")
+	}
+	s := windowsShellInitCmd()
+	if strings.Contains(s, `set "Path=`) || strings.Contains(s, `set "PATH=`) {
+		t.Fatalf("nested quotes break cmd /K: %q", s)
+	}
+	if !strings.Contains(strings.ToLower(s), "system32") {
+		t.Fatalf("missing System32: %q", s)
 	}
 }
 
