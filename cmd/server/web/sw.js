@@ -1,8 +1,8 @@
-// AIOps Monitor Service Worker
+// AIOps Service Worker
 // Cache: app shell on install, stale-while-revalidate for static, network-only for API.
 // Offline: cached shell + navigation fallback to "/" so the UI shows even offline.
 
-const CACHE = "AIOps-v0.19.1";
+const CACHE = "AIOps-v0.19.22";
 const SHELL = ["/", "/theme-init.js", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", e => {

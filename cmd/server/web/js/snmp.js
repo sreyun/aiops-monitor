@@ -342,6 +342,7 @@ function snHistoryControls(from, to) {
   const custom = snHist.custom;
   return `${renderChartControls(custom ? -1 : snHist.range, "snhrange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-snh-custom-toggle>${I18N.t("time.custom") || "自定义"}</button>
+    ${typeof forecastChipHTML === "function" ? forecastChipHTML("snmp") : ""}
     <span class="chart-custom-range" id="snhCustomPanel"${custom ? "" : " hidden"}>
       <input type="datetime-local" id="snhCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
       <span class="dt-sep">→</span>
@@ -386,31 +387,39 @@ async function snLoadInterfaceHistory() {
     body.innerHTML = `<div class="chart-controls">${controls}</div><div class="chart-container">
       ${wrap("snhThroughput")}${wrap("snhUtil")}${wrap("snhErrors")}${wrap("snhState")}${wrap("snhSpeed")}
     </div><div class="hint">${I18N.t("snmp.history_hint") || "包含收发速率、利用率、错误/丢包、链路状态和接口速率；悬停查看数值，拖动框选放大，双击还原。"}</div>`;
-    snHistCharts = {};
-    snHistCharts.snhThroughput = createChart("snhThroughput", samples, [
-      { key: "in_bps", label: I18N.t("snmp.if_in", "入向"), color: "#2fd07a", fmt: fmtRate },
-      { key: "out_bps", label: I18N.t("snmp.if_out", "出向"), color: "#43b6f0", fmt: fmtRate },
-    ], 0, null, { title: I18N.t("snmp.throughput_history", "接口吞吐速率") });
-    snHistCharts.snhUtil = createChart("snhUtil", samples, [
-      { key: "in_util", label: I18N.t("snmp.in_util", "入向利用率"), color: "#8b5cf6", fmt: v => v.toFixed(1) + "%" },
-      { key: "out_util", label: I18N.t("snmp.out_util", "出向利用率"), color: "#f7b23b", fmt: v => v.toFixed(1) + "%" },
-    ], 0, 100, { title: I18N.t("snmp.util_history", "接口利用率") });
-    snHistCharts.snhErrors = createChart("snhErrors", samples, [
-      { key: "in_err_pps", label: I18N.t("snmp.in_errors", "入向错误"), color: "#f2545b", fmt: v => v.toFixed(1) + " pps" },
-      { key: "out_err_pps", label: I18N.t("snmp.out_errors", "出向错误"), color: "#e06c9a", fmt: v => v.toFixed(1) + " pps" },
-      { key: "in_disc_pps", label: I18N.t("snmp.in_discards", "入向丢包"), color: "#f7b23b", fmt: v => v.toFixed(1) + " pps" },
-      { key: "out_disc_pps", label: I18N.t("snmp.out_discards", "出向丢包"), color: "#ff8f5a", fmt: v => v.toFixed(1) + " pps" },
-    ], 0, null, { title: I18N.t("snmp.error_history", "接口错误与丢包") });
-    snHistCharts.snhState = createChart("snhState", samples, [
-      { key: "oper_up", label: I18N.t("snmp.if_status", "链路状态"), color: "#2fd07a", fmt: v => v >= .5 ? "UP" : "DOWN" },
-    ], 0, 1, { title: I18N.t("snmp.state_history", "链路状态（UP / DOWN）") });
-    snHistCharts.snhSpeed = createChart("snhSpeed", samples, [
-      { key: "speed_bps", label: I18N.t("snmp.if_speed", "接口速率"), color: "#4c8dff", fmt: fmtRate },
-    ], 0, null, { title: I18N.t("snmp.speed_history", "接口协商速率") });
+    const snOpts = (title, extra) => Object.assign({ title, cssH: 220, legendMode: "dash" }, extra || {});
+    const specs = [
+      { id: "snhThroughput", samples, series: [
+        { key: "in_bps", label: I18N.t("snmp.if_in", "入向"), color: "#2fd07a", fmt: fmtRate },
+        { key: "out_bps", label: I18N.t("snmp.if_out", "出向"), color: "#43b6f0", fmt: fmtRate },
+      ], yMin: 0, yMax: null, opts: snOpts(I18N.t("snmp.throughput_history", "接口吞吐速率")) },
+      { id: "snhUtil", samples, series: [
+        { key: "in_util", label: I18N.t("snmp.in_util", "入向利用率"), color: "#8b5cf6", fmt: v => v.toFixed(1) + "%" },
+        { key: "out_util", label: I18N.t("snmp.out_util", "出向利用率"), color: "#f7b23b", fmt: v => v.toFixed(1) + "%" },
+      ], yMin: 0, yMax: 100, opts: snOpts(I18N.t("snmp.util_history", "接口利用率")) },
+      { id: "snhErrors", samples, series: [
+        { key: "in_err_pps", label: I18N.t("snmp.in_errors", "入向错误"), color: "#f2545b", fmt: v => v.toFixed(1) + " pps" },
+        { key: "out_err_pps", label: I18N.t("snmp.out_errors", "出向错误"), color: "#e06c9a", fmt: v => v.toFixed(1) + " pps" },
+        { key: "in_disc_pps", label: I18N.t("snmp.in_discards", "入向丢包"), color: "#f7b23b", fmt: v => v.toFixed(1) + " pps" },
+        { key: "out_disc_pps", label: I18N.t("snmp.out_discards", "出向丢包"), color: "#ff8f5a", fmt: v => v.toFixed(1) + " pps" },
+      ], yMin: 0, yMax: null, opts: snOpts(I18N.t("snmp.error_history", "接口错误与丢包")) },
+      { id: "snhState", samples, series: [
+        { key: "oper_up", label: I18N.t("snmp.if_status", "链路状态"), color: "#2fd07a", fmt: v => v >= .5 ? "UP" : "DOWN" },
+      ], yMin: 0, yMax: 1, opts: snOpts(I18N.t("snmp.state_history", "链路状态（UP / DOWN）")) },
+      { id: "snhSpeed", samples, series: [
+        { key: "speed_bps", label: I18N.t("snmp.if_speed", "接口速率"), color: "#4c8dff", fmt: fmtRate },
+      ], yMin: 0, yMax: null, opts: snOpts(I18N.t("snmp.speed_history", "接口协商速率")) },
+    ];
+    snHistCharts = typeof mountChartsWithForecast === "function"
+      ? await mountChartsWithForecast("snmp", specs)
+      : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "snmp" && snHist && snHist.host) snLoadInterfaceHistory();
+});
 
 function snApplyCustomRange() {
   const f = $("snhCustomFrom"), t = $("snhCustomTo");

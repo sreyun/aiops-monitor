@@ -362,6 +362,7 @@ function nfHistoryControls(from, to) {
   const custom = nfIPHist.custom;
   return `${renderChartControls(custom ? -1 : nfIPHist.range, "nfhrange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-nfh-custom-toggle>${I18N.t("time.custom") || "自定义"}</button>
+    ${typeof forecastChipHTML === "function" ? forecastChipHTML("netflow") : ""}
     <span class="chart-custom-range" id="nfhCustomPanel"${custom ? "" : " hidden"}>
       <input type="datetime-local" id="nfhCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from)}">
       <span class="dt-sep">→</span>
@@ -428,24 +429,32 @@ async function nfLoadIPHistory() {
         ${nfDrillList(I18N.t("netflow.dst_port_breakdown") || "目的端口", data.dst_ports, "port")}
         ${nfDrillList(I18N.t("netflow.src_port_breakdown") || "源端口", data.src_ports, "port")}
       </div><div class="hint">${I18N.t("netflow.drill_hint") || "点击通信对端可继续下钻；曲线按时间桶聚合，包含流量、包数、Flow 数、对端数和平均包长。"}</div>`;
-    nfIPCharts = {};
-    nfIPCharts.nfhTraffic = createChart("nfhTraffic", samples, [
-      { key: "bytes", label: I18N.t("netflow.bytes", "字节"), color: "#4c8dff", fmt: formatBytes },
-    ], 0, null, { title: I18N.t("netflow.traffic_history", "分桶流量") });
-    nfIPCharts.nfhPackets = createChart("nfhPackets", samples, [
-      { key: "packets", label: I18N.t("netflow.packets", "包"), color: "#2fd07a", fmt: v => v.toFixed(0) },
-    ], 0, null, { title: I18N.t("netflow.packet_history", "分桶包数") });
-    nfIPCharts.nfhActivity = createChart("nfhActivity", samples, [
-      { key: "flows", label: "Flow", color: "#8b5cf6", fmt: v => v.toFixed(0) },
-      { key: "peers", label: I18N.t("netflow.peers", "通信对端"), color: "#f7b23b", fmt: v => v.toFixed(0) },
-    ], 0, null, { title: I18N.t("netflow.activity_history", "连接活跃度") });
-    nfIPCharts.nfhPacketSize = createChart("nfhPacketSize", samples, [
-      { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt", "平均包长"), color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
-    ], 0, null, { title: I18N.t("netflow.packet_size_history", "平均包长") });
+    const nfOpts = (title) => ({ title, cssH: 220, legendMode: "dash" });
+    const specs = [
+      { id: "nfhTraffic", samples, series: [
+        { key: "bytes", label: I18N.t("netflow.bytes", "字节"), color: "#4c8dff", fmt: formatBytes },
+      ], yMin: 0, yMax: null, opts: nfOpts(I18N.t("netflow.traffic_history", "分桶流量")) },
+      { id: "nfhPackets", samples, series: [
+        { key: "packets", label: I18N.t("netflow.packets", "包"), color: "#2fd07a", fmt: v => v.toFixed(0) },
+      ], yMin: 0, yMax: null, opts: nfOpts(I18N.t("netflow.packet_history", "分桶包数")) },
+      { id: "nfhActivity", samples, series: [
+        { key: "flows", label: "Flow", color: "#8b5cf6", fmt: v => v.toFixed(0) },
+        { key: "peers", label: I18N.t("netflow.peers", "通信对端"), color: "#f7b23b", fmt: v => v.toFixed(0) },
+      ], yMin: 0, yMax: null, opts: nfOpts(I18N.t("netflow.activity_history", "连接活跃度")) },
+      { id: "nfhPacketSize", samples, series: [
+        { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt", "平均包长"), color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
+      ], yMin: 0, yMax: null, opts: nfOpts(I18N.t("netflow.packet_size_history", "平均包长")) },
+    ];
+    nfIPCharts = typeof mountChartsWithForecast === "function"
+      ? await mountChartsWithForecast("netflow", specs)
+      : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (ev.detail && ev.detail.scope === "netflow" && nfIPHist && nfIPHist.ip) nfLoadIPHistory();
+});
 
 function nfApplyIPCustomRange() {
   const f = $("nfhCustomFrom"), t = $("nfhCustomTo");

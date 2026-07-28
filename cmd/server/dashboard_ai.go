@@ -47,8 +47,13 @@ type aiDashPanel struct {
 		W int `json:"w"`
 		H int `json:"h"`
 	} `json:"gridPos"`
-	Text    string         `json:"text"`
-	Targets []aiDashTarget `json:"targets"`
+	Text       string           `json:"text"`
+	Min        *float64         `json:"min"`
+	Max        *float64         `json:"max"`
+	Decimals   *int             `json:"decimals"`
+	Options    DashPanelOptions `json:"options"`
+	FieldConfig json.RawMessage `json:"fieldConfig"` // optional Grafana-style blob from LLM
+	Targets    []aiDashTarget   `json:"targets"`
 }
 
 type aiDashTarget struct {
@@ -104,18 +109,22 @@ func unwrapDashboardJSON(js string) string {
 	return js
 }
 
-// decodeAIDashSpec 从 AI 回复原文解析看板规格：抽 JSON → 解外层 dashboard → 反序列化。
+// decodeAIDashSpec 从 AI 回复原文解析看板规格：抽 JSON → 解外层 dashboard → LLM 脏数据修复 → 反序列化。
 func decodeAIDashSpec(raw string) (aiDashSpec, bool) {
 	js := extractJSONObject(raw)
 	if js == "" {
 		return aiDashSpec{}, false
 	}
 	js = unwrapDashboardJSON(js)
+	js = repairLLMDashJSON(js)
 	var spec aiDashSpec
 	if err := json.Unmarshal([]byte(js), &spec); err != nil {
 		js2 := repairTruncatedDashJSON(js)
-		if js2 == js || json.Unmarshal([]byte(js2), &spec) != nil {
-			return aiDashSpec{}, false
+		if json.Unmarshal([]byte(js2), &spec) != nil {
+			js3 := repairLLMDashJSON(js2)
+			if json.Unmarshal([]byte(js3), &spec) != nil {
+				return aiDashSpec{}, false
+			}
 		}
 	}
 	if len(spec.Panels) == 0 && spec.specName() == "" {
@@ -128,26 +137,39 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"{\n" +
 	`  "name": "看板名称",` + "\n" +
 	`  "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_cpu_percent, instance)"}],` + "\n" +
-	`  "panels": [{"title":"面板标题","type":"timeseries|stat|gauge|piechart|barchart|bargauge|histogram|state-timeline|heatmap|table|alertlist|text","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|","w":12,"h":8,` + "\n" +
+	`  "panels": [{"title":"面板标题","type":"<见选型矩阵>","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|cores|none","w":12,"h":8,"min":0,"max":100,` + "\n" +
+	`     "options":{"palette":"classic|warm|cool|traffic|mono","legend":"top|bottom|right|hidden","sort":"desc|asc|none","limit":10,` + "\n" +
+	`       "chart_style":"line|area|bar","smooth":false,"stacked":false,"show_points":false,"threshold_mode":"absolute",` + "\n" +
+	`       "thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}],` + "\n" +
+	`       "mappings":[{"type":"value","value":"0","text":"正常","color":"var(--ok)"}]},` + "\n" +
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
 	"【角色】按专业 BI 产品经理 + BI 设计师 + SRE 可观测性专家水准设计看板，信息架构清晰、视觉节奏稳定、查询可落地。\n" +
 	"要求：① 只用【可用指标】/【本平台内置指标】里真实存在的指标名，不要臆造 node_* / node_exporter 指标；" +
 	"② 计数器类指标配合 rate()/irate()；本平台 aiops_*_percent、aiops_load1/5/15 已是水位/瞬时值，【禁止】再套 rate()/irate()；" +
 	"③ 用量用 percent/bytes 等合适单位（运行时间/时长用 s，字节用 bytes，速率用 Bps，请求率用 reqps，比率用 percentunit）；④ 每个面板给贴切、可行动的标题（避免「面板1」「CPU」这类过泛命名，宜「集群 CPU 均值」「主机内存 Top10」）；" +
-	"⑤ 【组件选型·叙事节奏】先回答「是否健康」再回答「哪里差、为何差」：顶部 KPI(stat) → 趋势(timeseries) → 对比/构成(gauge/pie/bar/bargauge) → 明细(table/heatmap/state-timeline) → 告警(alertlist)。" +
-	"随时间变化用 timeseries；关键当前值用 stat；利用率水位用 gauge；构成占比用 piechart；Top-N 用 barchart；多实例横向对比用 bargauge；" +
-	"分布用 histogram；可用性时段用 state-timeline；密度对比用 heatmap；清单用 table；当前告警用 alertlist。" +
-	"高质量看板须混用至少 5 种不同 type，且至少包含 1 个 text 说明区（简述看板用途与解读方式，Markdown 安全文本）。切忌全是 timeseries。" +
-	"⑥ 【专业布局·24 栏栅格】黄金信号分区、自上而下、同行等高、每行合计 w=24 铺满：" +
-	"首行 3~4 个 stat（w=6 或 8，h=6，须完整容纳大数字+说明+迷你趋势）→ 次区 timeseries（w=12、h=7~8，两列）→ " +
-	"再区 piechart/barchart/gauge/bargauge（pie/bar/table w=12 h=7；gauge w=8 h=6；bargauge w=12 h=6）→ 底部 table/alertlist；" +
-	"禁止单 panel 独占整板或过大空白；pie 切片 3~8（过多改 barchart）；同类 KPI 连续成组。" +
-	"⑦ 模板变量名必须英文 ASCII（如 instance），中文只写 label；表达式用 $instance；instance=主机名、host=主机ID；" +
+	"⑤ 【组件选型矩阵】按用户语义自动选 type（勿全用 timeseries）：\n" +
+	"· 时序/变化→timeseries；可用性时段→state-timeline；分布→histogram；密度矩阵→heatmap；OHLC/波动→candlestick；\n" +
+	"· 关键当前值→stat；利用率水位→gauge（比纯数字更直观）；构成占比→piechart；Top-N→barchart；多实例横比→bargauge；多维评分→radar；\n" +
+	"· 流量/请求路径走向→sankey；网络拓扑/依赖→nodegraph；地理分布→geomap；CPU/函数耗时剖析→flamegraph；\n" +
+	"· 清单明细/SQL→table；当前告警→alertlist；说明文案→text；实时时钟→clock；资讯/RSS→news。\n" +
+	"叙事节奏：顶部 KPI(stat/gauge) → 趋势(timeseries) → 对比/构成(pie/bar/bargauge/radar/sankey) → 明细(table/heatmap) → 告警(alertlist)。" +
+	"高质量看板须混用至少 5 种不同 type，且至少包含 1 个 text 说明区。切忌全是 timeseries。" +
+	"未知/不会画的类型不要硬造——可输出该 type（平台会占位），或回退 timeseries。" +
+	"⑥ 【fieldConfig/options】利用率类务必带 thresholds（0/75/90 + var(--ok/warn/crit)）；需要文案替换时写 mappings；" +
+	"时序可设 chart_style/smooth/stacked/show_points；配色用 palette。不要只给默认空 options。" +
+	"⑦ 【专业布局·24 栏栅格·紧凑密度】黄金信号分区、自上而下、同行等高、每行合计 w=24 铺满；禁止 KPI/水位占过高空白：" +
+	"首行 3~4 个紧凑 stat（w=6 或 8，h=3~4）→ 次区 timeseries（w=12、h=6~8）→ " +
+	"再区对比组件（pie/bar/table w=12 h=6~7；gauge w=8 h=5；radar 8×8；sankey 12×10；nodegraph 16×12；clock 6×4）→ 底部 table/alertlist。" +
+	"⑧ 【组件选型精修】当前态 KPI（在线数、可用率瞬时值、计数）必须用 compact stat + options.mappings，" +
+	"严禁用满宽高大 timeseries 只画一条水平线；利用率环才用 gauge；Top-N 用 barchart/bargauge；" +
+	"聚合面板 legend 留空或写固定中文标题，勿空 legend 依赖 {{instance}} 导致显示 value。" +
+	"⑨ 模板变量名必须英文 ASCII（如 instance），中文只写 label；表达式用 $instance；instance=主机名、host=主机ID；" +
 	"全局概览/排行不要强制实例过滤；下钻面板用 instance=~\"$instance\"（必须 =~，兼容「全部」）；" +
-	"⑧ 【图例】优先 \"{{instance}}\" 或 \"{{category}} · {{instance}}\"；严禁 \"{{host}}\"；" +
-	"⑨ 面板 8~14 个，覆盖 Latency/Traffic/Errors/Saturation（或主机黄金信号）且类型丰富；" +
-	"⑩ 最终只输出 JSON（可 ```json），思考过程不要写入最终答案正文。"
+	"⑩ 【图例】多序列时序优先 \"{{instance}}\" 或 \"{{category}} · {{instance}}\"；严禁 \"{{host}}\"；stat/gauge 聚合可留空；" +
+	"⑪ 面板 8~14 个，覆盖 Latency/Traffic/Errors/Saturation（或主机黄金信号）且类型丰富；" +
+	"⑫ 【JSON 合法性】必须是可 json.Unmarshal 的合法对象：双引号键名、禁止尾逗号、禁止注释、禁止单引号；" +
+	"panels 必须是数组；最终答案只输出一个 ```json 代码块，不要在 JSON 前后写长文或第二段解释。"
 
 // aiopsBuiltinMetricsHint 给「优化看板」等未注入 VM 全量指标的路径用：避免 LLM 臆造 node_*。
 const aiopsBuiltinMetricsHint = "【本平台内置主机指标（优先使用）】\n" +
@@ -159,36 +181,46 @@ const aiopsBuiltinMetricsHint = "【本平台内置主机指标（优先使用�
 	"示例：avg(aiops_cpu_percent)、topk(10, aiops_mem_percent)、" +
 	"aiops_cpu_percent{instance=~\"$instance\"}（仅下钻面板，务必 =~）、legend 写 \"{{instance}}\" 或 \"{{category}} · {{instance}}\"。"
 
-// extractJSONObject 从 AI 回复里抽出第一个 JSON 对象（优先 ```json 代码块，否则首个 { 到末个 }）。
+// extractJSONObject 从 AI 回复里抽出最可能的看板 JSON：优先含 "panels" 的 ```json 块，
+// 再找含 panels 的括号平衡对象（避免散文里的 {示例} 干扰 first{…last}）。
 func extractJSONObject(s string) string {
-	if i := strings.Index(s, "```json"); i >= 0 {
-		rest := s[i+7:]
-		if j := strings.Index(rest, "```"); j >= 0 {
-			return strings.TrimSpace(rest[:j])
+	if s == "" {
+		return ""
+	}
+	best := ""
+	pick := func(cand string) {
+		cand = strings.TrimSpace(cand)
+		if cand == "" || !strings.HasPrefix(cand, "{") {
+			return
 		}
-		// 流式截断时常缺收尾 ```：仍取代码块剩余部分，交由下游尽力解析/修复。
-		if trimmed := strings.TrimSpace(rest); strings.HasPrefix(trimmed, "{") {
-			return trimmed
+		if strings.Contains(cand, `"panels"`) {
+			if best == "" || !strings.Contains(best, `"panels"`) || len(cand) > len(best) {
+				best = cand
+			}
+			return
+		}
+		if best == "" {
+			best = cand
 		}
 	}
-	if i := strings.Index(s, "```"); i >= 0 { // 无语言标记的代码块
-		rest := s[i+3:]
-		// 跳过可选 language 行
-		if nl := strings.IndexByte(rest, '\n'); nl >= 0 && nl < 24 {
-			lang := strings.TrimSpace(rest[:nl])
-			if lang != "" && !strings.HasPrefix(lang, "{") {
-				rest = rest[nl+1:]
-			}
+	for _, block := range extractMarkdownJSONBlocks(s) {
+		if obj := braceBalancedObject(block, 0); obj != "" {
+			pick(obj)
+		} else {
+			pick(block)
 		}
-		if j := strings.Index(rest, "```"); j >= 0 {
-			inner := strings.TrimSpace(rest[:j])
-			if strings.HasPrefix(inner, "{") {
-				return inner
-			}
-		}
-		if trimmed := strings.TrimSpace(rest); strings.HasPrefix(trimmed, "{") {
-			return trimmed
-		}
+	}
+	if best != "" && strings.Contains(best, `"panels"`) {
+		return best
+	}
+	if obj := extractObjectContainingKey(s, `"panels"`); obj != "" {
+		return obj
+	}
+	if best != "" {
+		return best
+	}
+	if obj := braceBalancedObject(s, strings.IndexByte(s, '{')); obj != "" {
+		return obj
 	}
 	start := strings.IndexByte(s, '{')
 	end := strings.LastIndexByte(s, '}')
@@ -196,6 +228,243 @@ func extractJSONObject(s string) string {
 		return s[start : end+1]
 	}
 	return ""
+}
+
+// extractMarkdownJSONBlocks 收集 ```json / ``` 代码块内容（含未闭合截断）。
+func extractMarkdownJSONBlocks(s string) []string {
+	var out []string
+	rest := s
+	for {
+		i := strings.Index(rest, "```")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+3:]
+		lang := ""
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 && nl < 24 {
+			lang = strings.TrimSpace(rest[:nl])
+			if lang != "" && !strings.HasPrefix(lang, "{") {
+				rest = rest[nl+1:]
+			}
+		}
+		_ = lang
+		inner := rest
+		if j := strings.Index(rest, "```"); j >= 0 {
+			inner = rest[:j]
+			rest = rest[j+3:]
+		} else {
+			rest = ""
+		}
+		inner = strings.TrimSpace(inner)
+		if strings.HasPrefix(inner, "{") {
+			out = append(out, inner)
+		}
+	}
+	return out
+}
+
+// extractObjectContainingKey 定位含指定键的最外层 JSON 对象（括号平衡）。
+func extractObjectContainingKey(s, key string) string {
+	idx := strings.Index(s, key)
+	for idx >= 0 {
+		start := -1
+		depth := 0
+		inStr := false
+		esc := false
+		for i := idx; i >= 0; i-- {
+			c := s[i]
+			if inStr {
+				if esc {
+					esc = false
+					continue
+				}
+				if c == '\\' {
+					esc = true
+					continue
+				}
+				if c == '"' {
+					inStr = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr = true
+			case '}':
+				depth++
+			case '{':
+				if depth == 0 {
+					start = i
+				} else {
+					depth--
+				}
+			}
+			if start >= 0 {
+				break
+			}
+		}
+		if start >= 0 {
+			if obj := braceBalancedObject(s, start); obj != "" {
+				return obj
+			}
+		}
+		next := strings.Index(s[idx+len(key):], key)
+		if next < 0 {
+			break
+		}
+		idx = idx + len(key) + next
+	}
+	return ""
+}
+
+// braceBalancedObject 从 start（须为 '{'）起取一个括号平衡的 JSON 对象；截断时返回空。
+func braceBalancedObject(s string, start int) string {
+	if start < 0 || start >= len(s) || s[start] != '{' {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
+// repairLLMDashJSON 修复 LLM 常见脏 JSON：BOM/弯引号/尾逗号/简单行注释。
+func repairLLMDashJSON(js string) string {
+	js = strings.TrimSpace(js)
+	if js == "" {
+		return js
+	}
+	js = strings.TrimPrefix(js, "\ufeff")
+	js = strings.NewReplacer(
+		"\u201c", `"`, "\u201d", `"`,
+		"\u2018", `"`, "\u2019", `"`,
+		"\u00ab", `"`, "\u00bb", `"`,
+	).Replace(js)
+	js = stripJSONLineComments(js)
+	js = stripJSONTrailingCommas(js)
+	return js
+}
+
+func stripJSONLineComments(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inStr := false
+	esc := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			b.WriteByte(c)
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if c == '"' {
+			inStr = true
+			b.WriteByte(c)
+			continue
+		}
+		// // 行注释
+		if c == '/' && i+1 < len(s) && s[i+1] == '/' {
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+			if i < len(s) {
+				b.WriteByte('\n')
+			}
+			continue
+		}
+		// /* 块注释 */
+		if c == '/' && i+1 < len(s) && s[i+1] == '*' {
+			i += 2
+			for i+1 < len(s) && !(s[i] == '*' && s[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(s) {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func stripJSONTrailingCommas(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inStr := false
+	esc := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			b.WriteByte(c)
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if c == '"' {
+			inStr = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == ',' {
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				j++
+			}
+			if j < len(s) && (s[j] == '}' || s[j] == ']') {
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // repairTruncatedDashJSON 尝试把被截断的看板 JSON 裁到最后一个完整 panel 对象，便于 AI 优化仍可部分应用。
@@ -315,20 +584,36 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 	needInstance := false
 	id := 1
 	for _, p := range spec.Panels {
-		typ := p.Type
-		switch typ {
-		case "timeseries", "stat", "gauge", "bargauge", "table", "text", "piechart", "barchart",
-			"histogram", "state-timeline", "heatmap", "alertlist", "logs":
-		case "pie":
-			typ = "piechart"
-		case "bar":
-			typ = "barchart"
-		case "statetimeline":
-			typ = "state-timeline"
-		default:
-			typ = "timeseries"
+		typ := normalizeAIPanelType(p.Type)
+		panel := DashPanel{
+			ID: id, Title: strings.TrimSpace(p.Title), Type: typ,
+			Unit: healAIDashUnit(p.Unit), Text: p.Text,
+			Min: p.Min, Max: p.Max, Options: p.Options,
 		}
-		panel := DashPanel{ID: id, Title: strings.TrimSpace(p.Title), Type: typ, Unit: healAIDashUnit(p.Unit), Text: p.Text}
+		if p.Decimals != nil {
+			panel.Decimals = *p.Decimals
+			dcopy := *p.Decimals
+			panel.Options.Decimals = &dcopy
+		}
+		// Optional Grafana-style fieldConfig from LLM → merge into Options.
+		if len(p.FieldConfig) > 0 {
+			var fc struct {
+				Defaults grafanaFieldDefaults `json:"defaults"`
+			}
+			if json.Unmarshal(p.FieldConfig, &fc) == nil {
+				mapped := mapGrafanaFieldDefaults(fc.Defaults)
+				panel.Options = mergeAIDashOptions(panel.Options, mapped)
+				if panel.Unit == "" && fc.Defaults.Unit != "" {
+					panel.Unit = healAIDashUnit(fc.Defaults.Unit)
+				}
+				if panel.Min == nil {
+					panel.Min = fc.Defaults.Min
+				}
+				if panel.Max == nil {
+					panel.Max = fc.Defaults.Max
+				}
+			}
+		}
 		w, h := p.W, p.H
 		if w == 0 {
 			w = p.GridPos.W
@@ -348,14 +633,13 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 				needInstance = true
 			}
 			legend := rewriteDashVarRefs(t.targetLegend(), varRename)
-			// 图例里的 {{实例}} 等中文占位也改成 {{instance}}
 			for old, neu := range varRename {
 				legend = strings.ReplaceAll(legend, "{{"+old+"}}", "{{"+neu+"}}")
 			}
-			legend = healAIDashLegend(legend)
+			legend = healAIDashLegendFor(typ, legend)
 			panel.Targets = append(panel.Targets, DashTarget{Expr: expr, Legend: legend})
 		}
-		if typ != "text" && typ != "alertlist" && len(panel.Targets) == 0 {
+		if !dashNoTargetTypes[typ] && !dashComingSoonTypes[typ] && len(panel.Targets) == 0 {
 			warns = append(warns, "面板「"+panel.Title+"」无有效查询，已跳过")
 			continue
 		}
@@ -481,9 +765,19 @@ func healAIDashExpr(expr string) string {
 
 // healAIDashLegend 去掉图例里的 {{host}}（主机 ID），优先保留主机名/分类，避免图例刷屏。
 func healAIDashLegend(legend string) string {
+	return healAIDashLegendFor("timeseries", legend)
+}
+
+// healAIDashLegendFor 按面板类型补全图例：stat/gauge 聚合留空，避免展开成 "value"。
+func healAIDashLegendFor(typ, legend string) string {
 	leg := strings.TrimSpace(legend)
 	if leg == "" {
-		return "{{instance}}"
+		switch typ {
+		case "stat", "gauge", "bargauge", "piechart", "clock":
+			return ""
+		default:
+			return "{{instance}}"
+		}
 	}
 	hasHost := regexp.MustCompile(`\{\{\s*host\s*\}\}`).MatchString(leg)
 	if !hasHost {
@@ -532,32 +826,131 @@ func healAIDashUnit(u string) string {
 	}
 }
 
-// aiPanelHeight 按面板类型给出合理的行高（网格行数）。
-// stat 含标题栏 + 大数字 + 说明 + sparkline，h=4（约 120px）会裁切内容；专业 KPI 行用 h=6。
-// timeseries/table 需要更高。同时钳制 AI 乱给的极端值。
+// normalizeAIPanelType maps LLM type aliases; unknown → timeseries (safe fallback).
+func normalizeAIPanelType(typ string) string {
+	t := strings.ToLower(strings.TrimSpace(typ))
+	switch t {
+	case "pie":
+		return "piechart"
+	case "bar":
+		return "barchart"
+	case "statetimeline", "status-history":
+		return "state-timeline"
+	case "markdown":
+		return "text"
+	case "nodegraph", "node_graph":
+		return "nodegraph"
+	case "flame_graph":
+		return "flamegraph"
+	}
+	if dashPanelTypes[t] && t != "unsupported" {
+		return t
+	}
+	return "timeseries"
+}
+
+// mergeAIDashOptions fills empty fields on dst from src (AI explicit options win).
+func mergeAIDashOptions(dst, src DashPanelOptions) DashPanelOptions {
+	if dst.Palette == "" {
+		dst.Palette = src.Palette
+	}
+	if len(dst.Colors) == 0 {
+		dst.Colors = src.Colors
+	}
+	if dst.Legend == "" {
+		dst.Legend = src.Legend
+	}
+	if dst.ChartStyle == "" {
+		dst.ChartStyle = src.ChartStyle
+	}
+	if dst.ThresholdMode == "" {
+		dst.ThresholdMode = src.ThresholdMode
+	}
+	if dst.ColorMode == "" {
+		dst.ColorMode = src.ColorMode
+	}
+	if dst.NoValue == "" {
+		dst.NoValue = src.NoValue
+	}
+	if dst.Decimals == nil {
+		dst.Decimals = src.Decimals
+	}
+	if len(dst.Thresholds) == 0 {
+		dst.Thresholds = src.Thresholds
+	}
+	if len(dst.Mappings) == 0 {
+		dst.Mappings = src.Mappings
+	}
+	if !dst.Stacked {
+		dst.Stacked = src.Stacked
+	}
+	if !dst.Smooth {
+		dst.Smooth = src.Smooth
+	}
+	if !dst.ShowPoints {
+		dst.ShowPoints = src.ShowPoints
+	}
+	if dst.LineWidth == nil {
+		dst.LineWidth = src.LineWidth
+	}
+	if dst.FillOpacity == nil {
+		dst.FillOpacity = src.FillOpacity
+	}
+	if dst.DrawStyle == "" {
+		dst.DrawStyle = src.DrawStyle
+	}
+	if dst.GradientMode == "" {
+		dst.GradientMode = src.GradientMode
+	}
+	if dst.AxisPlacement == "" {
+		dst.AxisPlacement = src.AxisPlacement
+	}
+	return dst
+}
+
+// aiPanelHeight 按面板类型给出合理的行高（网格行数）。KPI/水位偏紧凑，避免大块空白。
 func aiPanelHeight(typ string, h int) int {
 	switch typ {
 	case "stat":
-		if h < 6 || h > 8 {
-			return 6
-		}
-	case "bargauge":
-		if h < 4 || h > 8 {
-			return 6
+		if h < 3 || h > 5 {
+			return 4
 		}
 	case "gauge":
-		if h < 5 || h > 8 {
+		if h < 4 || h > 6 {
+			return 5
+		}
+	case "bargauge", "clock":
+		if h < 4 || h > 8 {
+			if typ == "clock" {
+				return 4
+			}
 			return 6
 		}
-	case "text":
+	case "radar":
+		if h < 6 || h > 12 {
+			return 8
+		}
+	case "sankey":
+		if h < 8 || h > 14 {
+			return 10
+		}
+	case "nodegraph", "geomap", "flamegraph":
+		if h < 8 || h > 16 {
+			return 12
+		}
+	case "text", "news":
 		if h < 2 || h > 6 {
 			return 3
 		}
-	case "state-timeline", "histogram":
+	case "state-timeline", "histogram", "candlestick":
 		if h < 3 || h > 10 {
 			return 6
 		}
-	default: // timeseries / table / piechart / barchart / heatmap / alertlist / logs
+	case "table":
+		if h < 5 || h > 12 {
+			return 8
+		}
+	default:
 		if h < 5 || h > 10 {
 			return 7
 		}
@@ -565,27 +958,44 @@ func aiPanelHeight(typ string, h int) int {
 	return h
 }
 
-// aiPanelWidth 按面板类型给出合理的栅格宽度（1-24），避免 piechart/barchart/table 等被 AI 给成
-// 过窄导致图例/切片被挤压：单值 stat 允许窄（并排铺一行），可视化类保证足够宽度。
+// aiPanelWidth 按面板类型给出合理的栅格宽度（1-24）。
 func aiPanelWidth(typ string, w int) int {
 	if w < 1 || w > 24 {
 		switch typ {
-		case "stat", "gauge":
+		case "stat", "gauge", "clock":
 			return 6
-		case "bargauge", "text":
+		case "radar":
+			return 8
+		case "nodegraph", "geomap", "flamegraph":
+			return 16
+		case "bargauge", "text", "sankey", "table":
 			return 12
 		default:
 			return 12
 		}
 	}
 	switch typ {
-	case "stat":
-		// 单个 stat 占满整行会大片留白；概览行通常 2~4 个并排
+	case "stat", "clock":
 		if w > 12 {
 			return 6
 		}
-	case "piechart", "barchart", "table", "heatmap", "timeseries", "state-timeline", "histogram":
-		if w < 8 { // 可视化面板过窄会挤压图例/坐标轴，最低给到 8 栏（1/3 行）
+	case "radar":
+		if w < 6 {
+			return 8
+		}
+		if w > 12 {
+			return 8
+		}
+	case "sankey":
+		if w < 10 {
+			return 12
+		}
+	case "nodegraph", "geomap", "flamegraph":
+		if w < 12 {
+			return 16
+		}
+	case "piechart", "barchart", "table", "heatmap", "timeseries", "state-timeline", "histogram", "candlestick":
+		if w < 8 {
 			return 8
 		}
 	case "gauge":
@@ -600,18 +1010,17 @@ func aiPanelWidth(typ string, w int) int {
 }
 
 // aiDashSectionRank 看板分区顺序：KPI → 水位仪 → 趋势 → 对比/排行 → 明细/其它。
-// 分区边界必须整行断开，禁止跨区塞进同一行（否则半行空白被下一区组件填满，观感错乱）。
 func aiDashSectionRank(t string) int {
 	switch t {
-	case "stat":
+	case "stat", "clock":
 		return 0
 	case "gauge":
 		return 1
-	case "timeseries", "state-timeline", "histogram", "heatmap":
+	case "timeseries", "state-timeline", "histogram", "heatmap", "candlestick":
 		return 2
-	case "piechart", "barchart", "bargauge":
+	case "piechart", "barchart", "bargauge", "radar", "sankey":
 		return 3
-	default: // table / text / alertlist / logs / unsupported
+	default: // table / text / alertlist / logs / nodegraph / geomap / …
 		return 4
 	}
 }
@@ -631,17 +1040,24 @@ func aiDashSectionMaxPerRow(t string) int {
 func aiDashSectionRowHeight(t string) int {
 	switch t {
 	case "stat":
-		return 6
+		return 4
 	case "gauge":
-		return 6
+		return 5
 	case "text":
 		return 3
 	case "alertlist", "logs":
 		return 8
 	case "bargauge":
+		return 6
+	case "radar":
+		return 8
+	case "sankey", "nodegraph", "geomap", "flamegraph":
+		return 10
+	case "timeseries", "state-timeline", "histogram", "heatmap",
+		"piechart", "barchart", "table":
 		return 7
 	default:
-		return 8
+		return 7
 	}
 }
 
@@ -763,10 +1179,22 @@ func packAIDashSection(panels []DashPanel, startY int) int {
 	return y
 }
 
-// aiDashLayoutNeedsTidy 检测明显的布局缺陷：同行未铺满、跨区混行、垂直断层。
+// aiDashLayoutNeedsTidy 检测明显的布局缺陷：同行未铺满、跨区混行、垂直断层、KPI/水位过高。
 func aiDashLayoutNeedsTidy(panels []DashPanel) bool {
 	if len(panels) == 0 {
 		return false
+	}
+	for _, p := range panels {
+		switch p.Type {
+		case "stat":
+			if p.Grid.H > 5 || p.Grid.H < 3 {
+				return true
+			}
+		case "gauge":
+			if p.Grid.H > 6 || p.Grid.H < 4 {
+				return true
+			}
+		}
 	}
 	rows := map[int][]DashPanel{}
 	for _, p := range panels {
@@ -827,6 +1255,7 @@ func normalizeAISectionWidths(panels []DashPanel) {
 
 // generateDashboardViaAI 是生成主流程：汇集可用指标上下文 → aiComplete → 抽 JSON → 校验落盘。
 // preferredName 非空时作为看板名称（避免先落盘再二次改名失败导致「假失败」）。
+// 解析失败时：① 严格重试一次（禁思考、只吐 JSON）；② 命中常见预设则用内置模板兜底。
 func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName string) (Dashboard, []string, error) {
 	cfg := s.cfg.AIConfig()
 	if !cfg.Enabled || cfg.Endpoint == "" || cfg.Model == "" {
@@ -835,7 +1264,7 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	metricsCtx := s.metricContextFor(userNeed + " " + seedCtx)
 	sys := "你是资深可观测性架构师、专业 BI 产品经理与看板设计师，为运维平台生成可落地的监控仪表盘。" +
 		"平台指标存于 VictoriaMetrics（Prometheus 兼容），面板用 PromQL。" +
-		"请充分规划信息架构、组件选型与 24 栏布局；最终回复只输出一个合法看板 JSON（可放在 ```json 代码块），不要输出解释性长文。\n" +
+		"思考从简；最终回复【只】输出一个合法看板 JSON（放在 ```json 代码块），禁止解释性长文、禁止尾逗号与注释。\n" +
 		aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint
 	if metricsCtx != "" {
 		sys += "\n\n【可用指标（节选）】\n" + metricsCtx
@@ -844,11 +1273,11 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	if seedCtx != "" {
 		user += "\n\n【补充上下文】\n" + seedCtx
 	}
-	user += "\n\n请按专业 BI 水准生成完整看板 JSON。思考从简，尽快输出最终 JSON。"
-	// 开启思考但限制 thinking_budget，避免思维链耗尽超时导致「想完没内容」。
+	user += "\n\n请直接输出完整 ```json 看板。思考从简，尽快给出合法 JSON。"
+	// 开启思考但严格限预算，避免思维链占满超时/输出额度导致「想完没 JSON」。
 	out, err := aiCompleteOpts(cfg, sys, user, aiCallOpts{
 		EnableThinking: true,
-		ThinkingBudget: 512,
+		ThinkingBudget: 256,
 		MaxTokens:      16384,
 		Timeout:        240 * time.Second,
 	})
@@ -857,9 +1286,45 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	}
 	spec, ok := decodeAIDashSpec(out)
 	if !ok {
-		return Dashboard{}, nil, fmt.Errorf("AI 未返回可解析的看板 JSON")
+		slog.Warn("AI 看板 JSON 首次解析失败，将严格重试", "preview", trimLine(out, 360), "chars", len(out))
+		retryUser := "上一轮输出无法解析为合法看板 JSON。请【只】输出一个完整 ```json 代码块，" +
+			"含 name、vars、panels（至少 8 个面板），合法双引号 JSON，禁止尾逗号/注释/解释文字。\n\n【原需求】\n" +
+			strings.TrimSpace(userNeed)
+		if seedCtx != "" {
+			retryUser += "\n\n【补充上下文】\n" + seedCtx
+		}
+		out2, err2 := aiCompleteOpts(cfg, sys, retryUser, aiCallOpts{
+			DisableThinking: true,
+			MaxTokens:       16384,
+			Timeout:         180 * time.Second,
+		})
+		if err2 != nil {
+			slog.Warn("AI 看板严格重试调用失败", "err", err2)
+		} else if spec2, ok2 := decodeAIDashSpec(out2); ok2 {
+			spec, ok = spec2, true
+			out = out2
+		} else {
+			slog.Warn("AI 看板严格重试仍无法解析", "preview", trimLine(out2, 360), "chars", len(out2))
+		}
 	}
-	d, warns := sanitizeAIDash(spec, preferredName, source)
+	var warns []string
+	if !ok {
+		if fb, fbOK := builtinAIDashFallback(userNeed); fbOK {
+			slog.Info("AI 看板改用内置模板兜底", "name", fb.specName())
+			spec = fb
+			ok = true
+			warns = append(warns, "AI 回复无法解析，已使用内置「"+fb.specName()+"」模板生成，可再点「AI 优化」微调")
+		}
+	}
+	if !ok {
+		hint := "请点「优化提示词」后重试，或缩短需求描述"
+		if strings.TrimSpace(out) == "" {
+			hint = "模型返回为空，请检查 AI 模型/配额后重试"
+		}
+		return Dashboard{}, nil, fmt.Errorf("AI 未返回可解析的看板 JSON（%s）", hint)
+	}
+	d, sw := sanitizeAIDash(spec, preferredName, source)
+	warns = append(warns, sw...)
 	if len(d.Panels) == 0 {
 		return Dashboard{}, warns, fmt.Errorf("AI 未生成任何有效面板")
 	}
@@ -869,6 +1334,117 @@ func (s *Server) generateDashboardViaAI(userNeed, seedCtx, source, preferredName
 	}
 	return saved, warns, nil
 }
+
+// builtinAIDashFallback 在 AI 输出不可解析时，按需求关键词给出可落地的内置看板规格。
+// 仅匹配明确主题，避免任意「看板」文案都误落到主机黄金信号。
+func builtinAIDashFallback(need string) (aiDashSpec, bool) {
+	n := strings.ToLower(need)
+	switch {
+	case strings.Contains(need, "黄金信号") || strings.Contains(n, "golden") ||
+		(strings.Contains(need, "主机") && (strings.Contains(n, "cpu") || strings.Contains(need, "内存") || strings.Contains(need, "负载"))):
+		return decodeBuiltinHostGoldenDash()
+	case strings.Contains(need, "网络") || strings.Contains(n, "netflow") ||
+		(strings.Contains(need, "流量") && !strings.Contains(need, "数据库")):
+		return decodeBuiltinNetworkDash()
+	case strings.Contains(need, "容量") || strings.Contains(n, "capacity") ||
+		(strings.Contains(need, "磁盘") && (strings.Contains(need, "水位") || strings.Contains(need, "成本") || strings.Contains(need, "利用率"))):
+		return decodeBuiltinCapacityDash()
+	default:
+		return aiDashSpec{}, false
+	}
+}
+
+func decodeBuiltinHostGoldenDash() (aiDashSpec, bool) {
+	return mustDecodeAIDashSpec(builtinHostGoldenDashJSON)
+}
+
+func decodeBuiltinNetworkDash() (aiDashSpec, bool) {
+	return mustDecodeAIDashSpec(builtinNetworkDashJSON)
+}
+
+func decodeBuiltinCapacityDash() (aiDashSpec, bool) {
+	return mustDecodeAIDashSpec(builtinCapacityDashJSON)
+}
+
+func mustDecodeAIDashSpec(raw string) (aiDashSpec, bool) {
+	spec, ok := decodeAIDashSpec(raw)
+	return spec, ok && len(spec.Panels) > 0
+}
+
+// 内置「主机黄金信号」——与前端预设文案对齐，保证 AI 解析失败时仍能出板。
+const builtinHostGoldenDashJSON = `{
+  "name": "主机黄金信号",
+  "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_cpu_percent, instance)"}],
+  "panels": [
+    {"title":"在线主机数","type":"stat","unit":"short","w":6,"h":4,"targets":[{"expr":"count(aiops_cpu_percent)"}],"options":{"legend":"hidden"}},
+    {"title":"集群 CPU 均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_cpu_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"集群内存均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_mem_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"集群磁盘均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_disk_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"CPU 使用率趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
+      "targets":[{"expr":"aiops_cpu_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"area","smooth":true}},
+    {"title":"系统负载趋势","type":"timeseries","unit":"short","w":12,"h":7,
+      "targets":[{"expr":"aiops_load1{instance=~\"$instance\"}","legend":"load1 {{instance}}"},{"expr":"aiops_load5{instance=~\"$instance\"}","legend":"load5 {{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"line"}},
+    {"title":"内存使用率趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
+      "targets":[{"expr":"aiops_mem_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"磁盘 IO 利用率","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
+      "targets":[{"expr":"aiops_disk_io_util_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"line"}},
+    {"title":"网络发送速率","type":"timeseries","unit":"Bps","w":12,"h":7,
+      "targets":[{"expr":"aiops_net_sent_rate{instance=~\"$instance\"}","legend":"sent {{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"网络接收速率","type":"timeseries","unit":"Bps","w":12,"h":7,
+      "targets":[{"expr":"aiops_net_recv_rate{instance=~\"$instance\"}","legend":"recv {{instance}}"}],
+      "options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"CPU Top10","type":"barchart","unit":"percent","w":8,"h":7,"targets":[{"expr":"topk(10, aiops_cpu_percent)","legend":"{{instance}}"}],
+      "options":{"legend":"hidden","sort":"desc","limit":10}},
+    {"title":"内存 Top10","type":"bargauge","unit":"percent","w":8,"h":7,"min":0,"max":100,"targets":[{"expr":"topk(10, aiops_mem_percent)","legend":"{{instance}}"}],
+      "options":{"legend":"hidden","sort":"desc","limit":10,"thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"磁盘卷水位","type":"table","unit":"percent","w":8,"h":7,"targets":[{"expr":"aiops_disk_vol_percent","legend":"{{instance}}"}],
+      "options":{"legend":"hidden"}},
+    {"title":"当前告警","type":"alertlist","w":12,"h":6,"targets":[],"options":{"legend":"hidden"}},
+    {"title":"使用说明","type":"text","w":12,"h":6,"text":"顶部为集群水位 KPI；中部为趋势；底部为排行与告警。可用顶部 instance 变量下钻单机（「全部」= 全集群）。"}
+  ]
+}`
+
+const builtinNetworkDashJSON = `{
+  "name": "网络与流量",
+  "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_net_sent_rate, instance)"}],
+  "panels": [
+    {"title":"活跃连接数","type":"stat","unit":"short","w":8,"h":4,"targets":[{"expr":"sum(aiops_net_conns)"}],"options":{"legend":"hidden"}},
+    {"title":"发送总速率","type":"stat","unit":"Bps","w":8,"h":4,"targets":[{"expr":"sum(aiops_net_sent_rate)"}],"options":{"legend":"hidden"}},
+    {"title":"接收总速率","type":"stat","unit":"Bps","w":8,"h":4,"targets":[{"expr":"sum(aiops_net_recv_rate)"}],"options":{"legend":"hidden"}},
+    {"title":"发送速率趋势","type":"timeseries","unit":"Bps","w":12,"h":7,"targets":[{"expr":"aiops_net_sent_rate{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"接收速率趋势","type":"timeseries","unit":"Bps","w":12,"h":7,"targets":[{"expr":"aiops_net_recv_rate{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"连接数趋势","type":"timeseries","unit":"short","w":12,"h":7,"targets":[{"expr":"aiops_net_conns{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom"}},
+    {"title":"发送 Top10","type":"barchart","unit":"Bps","w":12,"h":7,"targets":[{"expr":"topk(10, aiops_net_sent_rate)","legend":"{{instance}}"}],"options":{"legend":"hidden","sort":"desc"}},
+    {"title":"当前告警","type":"alertlist","w":12,"h":6,"targets":[]},
+    {"title":"说明","type":"text","w":12,"h":6,"text":"关注吞吐与连接数；用 instance 下钻单机网卡侧流量。"}
+  ]
+}`
+
+const builtinCapacityDashJSON = `{
+  "name": "容量与成本",
+  "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_disk_percent, instance)"}],
+  "panels": [
+    {"title":"磁盘均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_disk_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"内存均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_mem_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"CPU 均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_cpu_percent)"}],
+      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+    {"title":"磁盘使用趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"aiops_disk_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"内存使用趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"aiops_mem_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
+    {"title":"磁盘 Top10","type":"bargauge","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"topk(10, aiops_disk_percent)","legend":"{{instance}}"}],"options":{"legend":"hidden","sort":"desc"}},
+    {"title":"磁盘卷明细","type":"table","unit":"percent","w":12,"h":7,"targets":[{"expr":"aiops_disk_vol_percent","legend":"{{instance}}"}]},
+    {"title":"说明","type":"text","w":24,"h":4,"text":"关注磁盘/内存水位与排行，便于容量规划与扩容决策。"}
+  ]
+}`
 
 // metricContextFor 取 VM 全部指标名，按与需求的词重合度打分挑选（上限 ~200），作为生成上下文。
 func (s *Server) metricContextFor(need string) string {
@@ -1185,12 +1761,15 @@ func (s *Server) handleApplyDashOptimize(w http.ResponseWriter, r *http.Request)
 	}
 	spec, ok := decodeAIDashSpec(req.JSON)
 	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未在 AI 回复中找到可解析的看板 JSON"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false,
+			"error": "未在 AI 回复中找到可解析的看板 JSON。请点「重新生成」，确保先输出完整 ```json（含 panels 数组，勿截断/尾逗号/注释）",
+		})
 		return
 	}
 	d, warns := sanitizeAIDash(spec, cur.Name, cur.Source)
 	if len(d.Panels) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用。请重新生成（确保回复含完整 ```json 看板结构）"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "AI 未给出有效面板，未应用。请重新生成（确保 ```json 内 panels 非空且查询为真实 aiops_* 指标）"})
 		return
 	}
 	// AI 输出永远不直接继承或选择新的高权限数据源；沿用当前看板元信息与外观。

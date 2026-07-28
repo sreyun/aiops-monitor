@@ -969,13 +969,13 @@ safeAddEventListener("playbookList", "click", e => {
 // ============ SRE 中枢：事件 / 自动修复 / SLO / 工单 ============
 let SRE_TAB = "incidents";
 let SRE_HOSTS = [], SRE_PLAYBOOKS = [], SRE_CHECKS = [], SRE_RULES = [], SRE_SLOS = [], SRE_TICKETS = [], SRE_API_ENDPOINTS = [];
-const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","conn","hardware","offline","check"];
+const SRE_ALERT_TYPES = ["cpu","memory","disk","diskio","iops","gpu","load","proc","conn","hardware","offline","check","host_security","web_security","web_vuln","slow_sql"];
 const _sevCls = s => s==="critical"?"crit":s==="warning"?"warn":"info";
 const _srcLabel = s => ({alert:I18N.t("sre.src_alert","告警"),slo:"SLO",manual:I18N.t("sre.src_manual","手动")})[s]||esc(s);
 const _incStatus = s => ({open:I18N.t("sre.inc_open","进行中"),acknowledged:I18N.t("sre.inc_acked","已确认"),resolved:I18N.t("sre.inc_resolved","已解决")})[s]||esc(s);
 const _incStatusCls = s => s==="resolved"?"ok":s==="acknowledged"?"warn":"crit";
 const _tlKind = k => ({created:I18N.t("sre.tl_created","创建"),fired:I18N.t("sre.tl_fired","触发"),recovered:I18N.t("sre.tl_recovered","恢复"),acked:I18N.t("sre.tl_acked","确认"),resolved:I18N.t("sre.tl_resolved","解决"),remediation:I18N.t("sre.tl_remediation","自动修复"),comment:I18N.t("sre.tl_comment","评论"),escalated:I18N.t("sre.tl_escalated","升级工单"),note:I18N.t("sre.tl_note","备注"),ai_diagnosis:I18N.t("sre.tl_ai_diagnosis","🤖 AI 诊断"),correlation:I18N.t("sre.tl_correlation","🔗 关联分析"),change_correlation:I18N.t("sre.tl_change_corr","📦 关联变更"),topology_rca:I18N.t("sre.tl_topology_rca","🧭 拓扑 RCA"),ai_analysis:I18N.t("sre.tl_ai_analysis","🤖 AI 分析")})[k]||k;
-const _runStatus = s => ({running:I18N.t("sre.run_running","执行中"),success:I18N.t("sre.run_success","成功"),failed:I18N.t("sre.run_failed","失败"),pending_approval:I18N.t("sre.run_pending","待审批"),skipped_cooldown:I18N.t("sre.run_skip_cooldown","冷却跳过"),skipped_ratelimit:I18N.t("sre.run_skip_ratelimit","限频跳过"),rejected:I18N.t("sre.run_rejected","已拒绝"),no_playbook:I18N.t("sre.run_no_playbook","无剧本")})[s]||s;
+const _runStatus = s => ({running:I18N.t("sre.run_running","执行中"),success:I18N.t("sre.run_success","成功"),failed:I18N.t("sre.run_failed","失败"),pending_approval:I18N.t("sre.run_pending","待审批"),skipped_cooldown:I18N.t("sre.run_skip_cooldown","冷却跳过"),skipped_ratelimit:I18N.t("sre.run_skip_ratelimit","限频跳过"),rejected:I18N.t("sre.run_rejected","已拒绝"),no_playbook:I18N.t("sre.run_no_playbook","无剧本"),dry_run:I18N.t("sre.run_dry_run","演练"),rolling_back:I18N.t("sre.run_rolling_back","回滚中")})[s]||s;
 const _runCls = s => s==="success"?"ok":(s==="failed"||s==="no_playbook")?"crit":s==="pending_approval"?"warn":s.indexOf("skipped")===0||s==="rejected"?"warn":"info";
 const _prioCls = p => p==="p1"?"crit":p==="p2"?"warn":"info";
 const _tkStatusCls = s => (s==="resolved"||s==="closed")?"ok":s==="in_progress"?"warn":"info";
@@ -1307,11 +1307,12 @@ async function streamIncidentDiagnose(id){
   const aiMsg={role:"assistant",content:"",_streaming:true,_loading:true};
   window._incDiagHistory.push(aiMsg);
   renderDiagnosisChat();
+  const stageLabel={context:"🔍 整理上下文",rag:"📊 检索案例",moa:"🧠 多模型研判",generate:"🤖 生成结论",verify:"🔎 自我校验",done:"✅ 完成"};
   const loadingPhrases=["🔍 "+I18N.t("sre.diag_phase_ctx","正在分析事件上下文…"),"📊 "+I18N.t("sre.diag_phase_similar","检索历史相似案例…"),"🤖 "+I18N.t("sre.diag_phase_think","AI 正在思考…")];
   let loadingIdx=0;
   const loadingTimer=setInterval(()=>{
     loadingIdx=(loadingIdx+1)%loadingPhrases.length;
-    if(aiMsg._loading){ aiMsg.content=loadingPhrases[loadingIdx]; renderDiagnosisChat(); }
+    if(aiMsg._loading && !aiMsg._stage){ aiMsg.content=loadingPhrases[loadingIdx]; renderDiagnosisChat(); }
   },2000);
   let renderThrottle=null;
   const throttledRender=()=>{
@@ -1354,7 +1355,16 @@ async function streamIncidentDiagnose(id){
         renderDiagnosisChat();
       },
       null,
-      (meta)=>{ applyRAGMetaHint(meta, "incDiagnosisChat"); },
+      (meta)=>{
+        applyRAGMetaHint(meta, "incDiagnosisChat");
+        if(meta&&meta.stage){
+          aiMsg._stage=meta.stage;
+          if(aiMsg._loading){
+            aiMsg.content=(stageLabel[meta.stage]||meta.label||meta.stage)+"…";
+            throttledRender();
+          }
+        }
+      },
       null,
       (rd,fullReasoning)=>{
         if(aiMsg._loading){ clearInterval(loadingTimer); aiMsg._loading=false; }
@@ -1578,6 +1588,7 @@ async function readSSEStream(resp,onDelta,onError,onDone,onResult,onMeta,onTool,
             if(j.error){ if(onError) onError(j.error); return fullText; }
             if(j.meta!==undefined){ if(onMeta) onMeta(Object.assign({}, j.meta, j.session_id!==undefined?{session_id:j.session_id}:{})); continue; }
             if(j.session_id!==undefined){ if(onMeta) onMeta(j); continue; }
+            if(j.stage!==undefined){ if(onMeta) onMeta({stage:j.stage,label:j.label||j.stage}); if(options&&typeof options.onStage==="function") options.onStage(j.stage,j.label||j.stage); continue; }
             if(j.result){ if(onResult) onResult(j.result); continue; }
             if(j.tool){ if(onTool) onTool(j.tool); continue; } // 工具执行状态帧（run/ok/err）
             if(j.action){ if(options&&typeof options.onAction==="function") options.onAction(j.action); continue; } // 能力工具 UI 动作卡
@@ -1825,7 +1836,7 @@ function renderRules(rules){
   if(!rules.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_rules","暂无修复规则")}</div>`; return; }
   el.innerHTML = rules.map(r=>{
     const pb=SRE_PLAYBOOKS.find(p=>p.id===r.playbook_id);
-    const g=[]; if(r.require_approval)g.push(I18N.t("sre.badge_need_approval","需审批")); if(r.cooldown_sec)g.push(`${I18N.t("sre.badge_cooldown","冷却")}${r.cooldown_sec}s`); if(r.max_per_hour)g.push(`≤${r.max_per_hour}/h`);
+    const g=[]; if(r.dry_run)g.push(I18N.t("sre.badge_dry_run","仅演练")); if(r.require_approval)g.push(I18N.t("sre.badge_need_approval","需审批")); if(r.cooldown_sec)g.push(`${I18N.t("sre.badge_cooldown","冷却")}${r.cooldown_sec}s`); if(r.max_per_hour)g.push(`≤${r.max_per_hour}/h`); if(r.rollback_playbook_id)g.push(I18N.t("sre.badge_rollback","含回滚"));
     const match=(r.match_types&&r.match_types.length?r.match_types.join("/"):I18N.t("sre.any_type","任意类型"))+(r.min_level?` ≥${r.min_level}`:"");
     return `<div class="pb-card fwd-card ${r.enabled?"":"pb-off"}" data-rule="${esc(r.id)}">
       <div class="pb-card-top"><div class="pb-card-title"><strong>${esc(r.name)}</strong><span class="pb-desc">${esc(match)} → ${esc(pb?pb.name:r.playbook_id)}</span></div>
@@ -2070,14 +2081,18 @@ function openRuleModal(r){
     $("rrCategory").value=cur;
   }
   $("rrCooldown").value=r?r.cooldown_sec:300; $("rrMaxPerHour").value=r?r.max_per_hour:6; $("rrApproval").checked=r?r.require_approval:false;
+  if($("rrDryRun")) $("rrDryRun").checked=r?!!r.dry_run:false;
   $("rrPlaybook").innerHTML=SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_pb_first","（请先创建剧本）")}</option>`;
+  if($("rrRollbackPlaybook")){
+    $("rrRollbackPlaybook").innerHTML=`<option value="">（无）</option>`+SRE_PLAYBOOKS.map(p=>`<option value="${esc(p.id)}" ${r&&r.rollback_playbook_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("");
+  }
   const sel=new Set(r?(r.match_types||[]):[]);
   $("rrTypes").innerHTML=SRE_ALERT_TYPES.map(t=>`<label class="chip-check"><input type="checkbox" value="${esc(t)}" ${sel.has(t)?"checked":""}> ${esc(t)}</label>`).join("");
   $("remediationRuleMask").classList.add("show");
 }
 async function saveRule(){
   const types=[...document.querySelectorAll("#rrTypes input:checked")].map(c=>c.value);
-  const body={id:$("rrId").value,name:$("rrName").value.trim(),enabled:$("rrEnabled").checked,match_types:types,min_level:$("rrLevel").value,match_category:$("rrCategory").value.trim(),playbook_id:$("rrPlaybook").value,require_approval:$("rrApproval").checked,cooldown_sec:parseInt($("rrCooldown").value)||0,max_per_hour:parseInt($("rrMaxPerHour").value)||0};
+  const body={id:$("rrId").value,name:$("rrName").value.trim(),enabled:$("rrEnabled").checked,match_types:types,min_level:$("rrLevel").value,match_category:$("rrCategory").value.trim(),playbook_id:$("rrPlaybook").value,require_approval:$("rrApproval").checked,dry_run:$("rrDryRun")?!!$("rrDryRun").checked:false,rollback_playbook_id:($("rrRollbackPlaybook")&&$("rrRollbackPlaybook").value)||"",cooldown_sec:parseInt($("rrCooldown").value)||0,max_per_hour:parseInt($("rrMaxPerHour").value)||0};
   const r=await fetch(`${API}/remediation/rules`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
   if(r.ok){ $("remediationRuleMask").classList.remove("show"); loadRemediation(); toast(I18N.t("toast.saved","已保存"),"ok"); } else toast(j.error||I18N.t("toast.save_failed","保存失败"),"err");
@@ -2163,6 +2178,7 @@ async function loadSloTrend(){
   const to = custom ? custom.to : now;
   const ctrl = `${renderChartControls(custom?-1:range,"slorange")}
     <button class="chip-btn ${custom?"active":""}" data-slo-custom-toggle title="${I18N.t("time.custom_range","自定义时间范围")}">${I18N.t("time.custom","自定义")}</button>
+    ${typeof forecastChipHTML==="function"?forecastChipHTML("slo-trend"):""}
     <span class="chart-custom-range" id="sloCustomPanel"${custom?"":" hidden"}>
       <input type="datetime-local" id="sloCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from>0?from:now-86400)}">
       <span class="dt-sep">→</span>
@@ -2187,9 +2203,14 @@ async function loadSloTrend(){
       </div>
       <div class="chart-container"><div class="chart-wrap"><div class="chart-sub-title">SLI 趋势（每桶可用率 %）</div><canvas id="sloTrendCanvas" width="1000" height="240"></canvas></div></div>
       <div class="hint">按所选时间范围分桶现算每段可用率；可切换快捷跨度或自定义绝对区间（与主机趋势图一致）。y 轴自适应放大以显现波动。</div>`;
-    SLO_TREND_CHART = createChart("sloTrendCanvas", samples, [
-      { key:"sli", label:I18N.t("sre.slo_sli","SLI"), color:"#4c8dff", fmt:v=>v.toFixed(3)+"%" },
-    ], null, 100, { title: name+" · SLI(%)" });
+    const ser=[{ key:"sli", label:I18N.t("sre.slo_sli","SLI"), color:"#4c8dff", fmt:v=>v.toFixed(3)+"%" }];
+    if(typeof createChartWithForecast==="function" && isChartForecastOn("slo-trend")){
+      SLO_TREND_CHART = await createChartWithForecast("sloTrendCanvas", samples, ser, null, 100, {
+        title:"", legendMode:"dash", cssH:220, forecast:true, forecastScope:"slo-trend"
+      });
+    } else {
+      SLO_TREND_CHART = createChart("sloTrendCanvas", samples, ser, null, 100, { title: "", legendMode: "dash", cssH: 220 });
+    }
   }catch(e){ body.innerHTML=`<div class="empty-line">加载失败：${esc(e)}</div>`; }
 }
 function applySloCustomRange(){
@@ -3276,10 +3297,20 @@ async function loadAIStats(){
       const t=by[k];
       return `<tr><td class="mono">${esc(k)}</td><td>${t.count||0}</td><td>${t.fail||0}</td><td>${t.avg_ms||0} ms</td></tr>`;
     }).join("");
+    const byModel=j.by_model||{};
+    const modelKeys=Object.keys(byModel).sort((a,b)=>(byModel[b].count||0)-(byModel[a].count||0));
+    const modelMax=modelKeys.length?(byModel[modelKeys[0]].count||1):1;
+    const modelBars=modelKeys.slice(0,8).map(k=>{
+      const t=byModel[k]||{};
+      const pct=Math.max(4, Math.round(((t.count||0)/modelMax)*100));
+      return `<div style="margin:4px 0"><div class="mono" style="font-size:11px;display:flex;justify-content:space-between"><span>${esc(k)}</span><span>${t.count||0} · ${(t.cost||0).toFixed?Number(t.cost||0).toFixed(4):(t.cost||0)} ${esc(cur)}</span></div>
+        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--accent,#4c8dff)"></div></div></div>`;
+    }).join("");
     const recent=(j.recent||[]).slice(0,8).map(r=>{
       const st=r.ok?"ok":"err";
       const who=r.actor?` · ${esc(r.actor)}`:"";
-      return `<div class="mono" style="font-size:11px;color:var(--muted);margin:2px 0"><span class="badge ${st}">${r.ok?"OK":"FAIL"}</span> ${esc(r.task||"")} · ${r.latency_ms||0}ms · ≈${r.approx_tokens||0} tok${who}${r.error?" · "+esc(r.error):""}</div>`;
+      const tokN=(r.prompt_tokens||0)+(r.completion_tokens||0)||(r.approx_tokens||0);
+      return `<div class="mono" style="font-size:11px;color:var(--muted);margin:2px 0"><span class="badge ${st}">${r.ok?"OK":"FAIL"}</span> ${esc(r.task||"")} · ${esc(r.model||"")} · ${r.latency_ms||0}ms · ${tokN} tok${who}${r.error?" · "+esc(r.error):""}</div>`;
     }).join("");
     const users=(byUser.users||[]).map(u=>
       `<tr><td>${esc(u.actor||"")}</td><td>${u.calls||0}</td><td>${u.tokens||0}</td><td>${(u.cost||0).toFixed(4)} ${esc(cur)}</td></tr>`
@@ -3291,6 +3322,16 @@ async function loadAIStats(){
         const pos=n?(((Number(f.applied)||0)+(Number(f.helpful)||0))*100/n).toFixed(1):"0.0";
         return `<tr><td class="mono">${esc(task)}</td><td>${n}</td><td>${f.applied||0}</td><td>${f.helpful||0}</td><td>${f.unhelpful||0}</td><td>${pos}%</td></tr>`;
       }).join("");
+    let expTable="";
+    try{
+      const exp=await fetch(`${API}/ai/experiments/stats?days=${days}`).then(r=>r.json()).catch(()=>null);
+      if(exp&&exp.variants&&exp.variants.length){
+        expTable=`<div class="hint" style="margin-top:10px">A/B 实验 ${esc(exp.experiment_id||"")} · helpful 率</div>
+          <table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>变体</th><th>样本</th><th>有用</th><th>需改进</th><th>采纳</th><th>helpful率</th></tr></thead><tbody>
+          ${exp.variants.map(v=>`<tr><td class="mono">${esc(v.variant)}</td><td>${v.total||0}</td><td>${v.helpful||0}</td><td>${v.unhelpful||0}</td><td>${v.applied||0}</td><td>${((v.helpful_rate||0)*100).toFixed(1)}%</td></tr>`).join("")}
+          </tbody></table>`;
+      }
+    }catch(_e){}
     el.innerHTML=`<div class="ai-metric-grid">
       <div class="ai-metric"><div class="hint">调用次数</div><b>${total}</b></div>
       <div class="ai-metric"><div class="hint">失败率</div><b>${rate}%</b></div>
@@ -3303,13 +3344,18 @@ async function loadAIStats(){
       <div class="ai-metric" title="真正应用到配置或输入框的结果"><div class="hint">实际采纳</div><b>${fbApplied}</b></div>
       <div class="ai-metric" title="将形成避坑经验，不直接污染已验证知识"><div class="hint">需改进</div><b>${fbUnhelpful}</b></div>
     </div>
-    <div class="chart-container" style="margin:4px 0 12px">
-      <div class="hint" style="margin-bottom:6px">历史组合曲线 · 调用 / Token / 费用</div>
-      <canvas id="aiUsageComboChart" height="210"></canvas>
+    <div class="chart-container ai-usage-chart" style="margin:4px 0 12px">
+      <div class="hint" style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>历史组合曲线 · 调用 / Token / 费用</span>
+        ${typeof forecastChipHTML==="function"?forecastChipHTML("ai-usage"):""}
+      </div>
+      <canvas id="aiUsageComboChart" height="240"></canvas>
     </div>
+    ${modelBars?`<div class="hint">模型分布</div><div style="margin-bottom:10px">${modelBars}</div>`:""}
     ${users?`<div class="hint">用户成本排行</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>用户</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${users}</tbody></table>`:""}
     ${taskRows?`<table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>次数</th><th>失败</th><th>均延迟</th></tr></thead><tbody>${taskRows}</tbody></table>`:`<div class="hint">尚无按任务统计（完成若干 AI 调用后出现）</div>`}
     ${feedbackRows?`<div class="hint" style="margin-top:10px">人工反馈闭环 · 正向率 = 实际采纳 + 有用</div><table class="hv-mini-table" style="width:100%;margin-bottom:8px"><thead><tr><th>任务</th><th>反馈</th><th>采纳</th><th>有用</th><th>需改进</th><th>正向率</th></tr></thead><tbody>${feedbackRows}</tbody></table>`:`<div class="hint" style="margin-top:8px">尚无人工反馈；采纳/点赞/差评后将展示学习质量。</div>`}
+    ${expTable}
     ${recent?`<div class="hint" style="margin-top:8px">最近调用</div>${recent}`:""}`;
     // 组合曲线：把多指标归一到同一时间轴（calls / tokens / cost）
     const pts=hist.points||[];
@@ -3320,17 +3366,28 @@ async function loadAIStats(){
       cost: p.cost||0,
       avg_latency_ms: p.avg_latency_ms||0,
     }));
-    if(typeof createChart==="function"){
-      createChart("aiUsageComboChart", samples, [
-        { key:"calls", label:"调用次数", color:"#4c8dff", fmt:v=>v.toFixed(0) },
-        { key:"tokens", label:"Token", color:"#22c55e", fmt:v=>v.toFixed(0) },
-        { key:"cost", label:`费用(${cur})`, color:"#f97316", fmt:v=>v.toFixed(4) },
-      ], 0, null, { title:`AI 用量 · 近 ${days} 天`, noEntrance:true, cssH:200 });
+    const aiSer=[
+      { key:"calls", label:"调用次数", color:"#4c8dff", fmt:v=>v.toFixed(0) },
+      { key:"tokens", label:"Token", color:"#22c55e", fmt:v=>v.toFixed(0) },
+      { key:"cost", label:`费用(${cur})`, color:"#f97316", fmt:v=>v.toFixed(4) },
+    ];
+    // 外层 hint 已标明「历史组合曲线」，画布不再重复标题
+    if(typeof createChartWithForecast==="function" && typeof isChartForecastOn==="function" && isChartForecastOn("ai-usage")){
+      await createChartWithForecast("aiUsageComboChart", samples, aiSer, 0, null, {
+        title:"", noEntrance:true, cssH:240, legendMode:"dash", forecast:true, forecastScope:"ai-usage"
+      });
+    } else if(typeof createChart==="function"){
+      createChart("aiUsageComboChart", samples, aiSer, 0, null, { title:"", noEntrance:true, cssH:240, legendMode:"dash" });
     }
   }catch(e){
     el.innerHTML=`<div class="hint">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`;
   }
 }
+document.addEventListener("chart-forecast-toggle",(ev)=>{
+  if(!ev.detail) return;
+  if(ev.detail.scope==="ai-usage") loadAIStats();
+  if(ev.detail.scope==="slo-trend") loadSloTrend();
+});
 
 // 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
 async function genDutyReport(){
@@ -3359,6 +3416,9 @@ async function openAIConfig(){
     if($("aiInputPrice")) $("aiInputPrice").value=c.input_price_per_1m||"";
     if($("aiOutputPrice")) $("aiOutputPrice").value=c.output_price_per_1m||"";
     if($("aiCostCurrency")) $("aiCostCurrency").value=c.cost_currency||"CNY";
+    if($("aiCheapModel")) $("aiCheapModel").value=c.cheap_model||"";
+    if($("aiTaskModels")) $("aiTaskModels").value=c.task_models_json||"";
+    if($("aiActiveExperiment")) $("aiActiveExperiment").value=c.active_experiment_id||"";
     if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     if($("weknoraEnabled")) $("weknoraEnabled").checked=!!c.weknora_enabled;
@@ -3491,6 +3551,9 @@ async function saveAIConfig(){
     input_price_per_1m:parseFloat($("aiInputPrice")?.value)||0,
     output_price_per_1m:parseFloat($("aiOutputPrice")?.value)||0,
     cost_currency:($("aiCostCurrency")?.value||"CNY").trim()||"CNY",
+    cheap_model:($("aiCheapModel")?.value||"").trim(),
+    task_models_json:($("aiTaskModels")?.value||"").trim(),
+    active_experiment_id:($("aiActiveExperiment")?.value||"").trim(),
     mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim(),
     weknora_enabled:$("weknoraEnabled")?.checked||false,
     weknora_url:($("weknoraURL")?.value||"").trim(),
@@ -3923,7 +3986,7 @@ function renderAIChatActions(actions){
     return `<button type="button" class="ai-action-card" data-ai-act="${i}">${label}</button>`;
   }).join("")+`</div>`;
 }
-function bindAIChatWidgets(root,actions){
+async function bindAIChatWidgets(root,actions){
   if(!root||!actions||!actions.length||typeof createChart!=="function") return;
   for(const a of actions){
     if(!a||a.type!=="show_chart"||!a.chart) continue;
@@ -3933,14 +3996,21 @@ function bindAIChatWidgets(root,actions){
     const samples=Array.isArray(a.chart.samples)?a.chart.samples:[];
     const series=(Array.isArray(a.chart.series)?a.chart.series:[]).map(s=>({
       key:s.key, label:s.label||s.key, color:s.color||"#4c8dff",
+      dashed:!!s.dashed || s.kind==="forecast",
+      kind:s.kind||(s.dashed?"forecast":"history"),
       fmt: v=> Number.isFinite(v)?(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)): "-"
     }));
     if(!samples.length||!series.length) continue;
     try{
-      createChart(cid, samples, series,
-        a.chart.y_min!=null?Number(a.chart.y_min):null,
-        a.chart.y_max!=null?Number(a.chart.y_max):null,
-        { title:"", cssH:200, legendMode:"dash", noEntrance:true });
+      const yMin=a.chart.y_min!=null?Number(a.chart.y_min):null;
+      const yMax=a.chart.y_max!=null?Number(a.chart.y_max):null;
+      const opts={ title:"", cssH:200, legendMode:"dash", noEntrance:true, nowTs:a.chart.now_ts||0 };
+      const hasFC=series.some(s=>s.kind==="forecast"||s.dashed);
+      if(!hasFC && samples.length>=8 && typeof createChartWithForecast==="function"){
+        await createChartWithForecast(cid, samples, series, yMin, yMax, Object.assign({}, opts, { forecast:true, forecastScope:"ai-chat" }));
+      } else {
+        createChart(cid, samples, series, yMin, yMax, opts);
+      }
       canvas.dataset.chartBound="1";
     }catch(e){ /* ignore chart paint errors */ }
   }
@@ -4034,7 +4104,7 @@ async function exportAIChatReport(title, body, fmt){
   if(!format) return;
   const model={
     title: title||I18N.t("sre.chat_export_title","AI 对话报告"),
-    subtitle:"AIOps Monitor · "+new Date().toLocaleString(),
+    subtitle:"AIOps · "+new Date().toLocaleString(),
     summaryTitle:"报告信息",
     meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()],["格式",format]],
     narrativeTitle:"AI 分析与建议",

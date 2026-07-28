@@ -317,6 +317,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/dashboards/{id}", s.handleDeleteDashboard)
 	mux.HandleFunc("POST /api/v1/dashboards/{id}/assets", s.handleUploadDashboardAsset)
 	mux.HandleFunc("POST /api/v1/dashboards/query", s.handleDashboardQuery)
+	mux.HandleFunc("POST /api/v1/dashboards/query-forecast", s.handleDashboardQueryForecast)
+	mux.HandleFunc("POST /api/v1/metrics/forecast", s.handleMetricsForecast)
 	mux.HandleFunc("POST /api/v1/dashboards/query-instant", s.handleDashboardQueryInstant)
 	mux.HandleFunc("POST /api/v1/dashboards/query-logs", s.handleDashboardQueryLogs)
 	mux.HandleFunc("POST /api/v1/dashboards/query-sql", s.handleDashboardQuerySQL)
@@ -496,6 +498,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                   // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
 	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory)    // 成本/Token 历史组合曲线
 	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)     // 按用户成本分析
+	mux.HandleFunc("GET /api/v1/ai/experiments/stats", s.handleAIExperimentStats)
+	mux.HandleFunc("GET /api/v1/audit/verify-chain", s.handleAuditVerifyChain)
+	mux.HandleFunc("POST /api/v1/security/rewrap-secrets", s.handleSecurityRewrap)
+	mux.HandleFunc("GET /api/v1/security/key-status", s.handleSecurityKeyStatus)
+	mux.HandleFunc("GET /api/v1/admin/pg/slow-queries", s.handlePGSlowQueries)
+	mux.HandleFunc("GET /api/v1/admin/netflow/queue", s.handleNetflowQueueStats)
 	mux.HandleFunc("GET /api/v1/terminal/commands", s.handleTerminalCommands) // 终端命令永久历史（audit_log）
 	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                           // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
@@ -734,7 +742,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "security-feeds", "web-security", "security-center", "scrape", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "forecast", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "security-feeds", "web-security", "security-center", "scrape", "dash_charts", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)

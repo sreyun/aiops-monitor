@@ -1960,7 +1960,7 @@ const assistOpsActionSchema = "严格输出一个 ```json 代码块，结构："
 func buildAssistSystemPrompt(task, ctxText string) string {
 	ctxBlock := ""
 	if strings.TrimSpace(ctxText) != "" {
-		ctxBlock = "\n\n【上下文】\n" + ctxText
+		ctxBlock = "\n\n【上下文】\n" + sanitizeAssistContext(ctxText)
 	}
 	switch task {
 	case "logql":
@@ -1983,20 +1983,33 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"要求：① 只读优先，破坏性操作默认 continue_on_error=false；② host_inspect 建议 ignore_exit=true 与 timeout_sec≥180；" +
 			"③ 跨平台差异用 command_win / command_mac；④ 用 register + {{变量名}} 串联步骤；⑤ 代码块后用中文简述每步意图。" + ctxBlock
 	case "chart_analysis":
-		return "你是资深 SRE。以下是监控图表/指标的数据摘要。请：① 概述整体趋势与当前水位；② 指出异常点、突变、持续高位或逼近阈值的项；" +
-			"③ 推断可能原因；④ 给出可执行的排查方向或处置建议。用简洁中文、分点作答，只依据给定数据，不要编造。" + ctxBlock
+		return "你是资深 SRE，具备看图/看表反向解读能力。以下是监控面板的数据摘要（可能含时序/表格/stat/gauge）。请结构化输出：\n" +
+			"①【趋势判断】整体走势、斜率、周期性；②【异常点】突变、尖刺、持续高位或逼近阈值的项（表格则标 Top-N 与异常行、分布特征）；\n" +
+			"③【基线对比】stat/gauge 结合阈值与历史区间判断是否异常；④【根因推测】可能原因（标注置信度：高/中/低）；\n" +
+			"⑤【运维建议】可执行排查/处置步骤。若摘要含预测/环比/同比，一并解读可信度。用简洁中文分点，只依据给定数据，不要编造。" + ctxBlock
+	case "forecast_analysis":
+		return "你是时序预测分析专家。结合给定的预测结果（MAPE/R²、置信带、穿越阈值时间）回答用户关于未来趋势的问题。" +
+			"要求：① 明确预测窗口与方法；② 给出是否会超阈值的结论与时间；③ 说明不确定度；④ 给出运维建议。" +
+			"勿编造数值；数据不足时如实说明。" + ctxBlock
 	case "dashboard_prompt_optimize":
-		return "你是专业 BI 产品经理。把简短需求改写成可直接生成看板的说明书（≤400 字）。" +
-			"思考从简，直接给正文：①主题/受众一句；② 8~12 个真实指标（优先 aiops_*，禁 node_*）并标注图型；" +
-			"③ 布局：KPI→趋势→对比→明细；④ 下钻用 instance=~。不要 JSON/代码块/过程解释。" + ctxBlock
+		return "你是专业 BI 产品经理。把用户需求改写成可直接生成看板的说明书（180~360 字，纯中文正文）。\n" +
+			"思考从简，直接给正文，禁止 JSON/代码块/过程解释。须覆盖：\n" +
+			"① 主题与受众一句；② 8~12 个真实指标名（优先上下文里的可用指标与 aiops_*，严禁臆造 node_*），并逐个标注组件类型（stat/gauge/timeseries/barchart/table/alertlist 等）；\n" +
+			"③ 布局节奏：顶部 KPI → 中部趋势 → 对比/排行 → 明细/告警；④ 下钻统一 instance=~\"$instance\"，概览/排行用 avg()/topk() 且勿强制实例过滤；\n" +
+			"⑤ 单位与阈值提示（percent 水位、Bps 吞吐等）。写完即止。" + ctxBlock
 	case "dashboard_analysis":
 		return "你是资深 SRE。根据看板实时摘要做健康研判（简洁分点，勿长篇）：" +
 			"①总结论；②异常面板与数值；③可能根因；④处置建议；⑤是否建单。只依据给定数据。" + ctxBlock
 	case "dashboard_optimize":
-		return "你是可观测性架构师 + BI 设计师。目标：尽快产出可一键应用的完整看板 JSON。\n" +
-			"【硬性节奏】思考从简；中文优化要点最多 6 条、合计≤250 字；随后立刻给出唯一 ```json 代码块（完整看板，勿截断）。\n" +
-			"【优化重点】保留正确的 aiops_* 查询；修错误表达式/单位/图例；补黄金信号；布局 KPI(h=6)→趋势→对比/明细；≥5 种组件；24 栏铺满。\n" +
-			"【禁忌】不要把全网趋势改成 instance=\"$instance\"；排行/概览用 avg()/topk()；勿输出第二段解释。\n" +
+		return "你是可观测性架构师 + BI 设计师。目标：产出可一键应用的完整合法看板 JSON。\n" +
+			"【输出顺序·硬性】① 先输出唯一完整 ```json 代码块（含 name/vars/panels，至少 8 个面板，勿截断）；" +
+			"② 代码块后再附最多 5 条中文要点（每条≤40 字）。禁止先写长文再给 JSON；禁止第二段解释。\n" +
+			"【JSON 合法性】双引号键名；禁止尾逗号、注释、单引号；panels 必须为数组；须可被标准 JSON 解析。\n" +
+			"【优化重点】保留正确的 aiops_*；修错表达式/单位/图例；补黄金信号缺口；" +
+			"布局紧凑 KPI(stat h=3~4)→水位(gauge h=5)→趋势(timeseries h=6~8)→对比/明细；24 栏铺满；≥5 种 type。\n" +
+			"【图表升级】在 JSON 落地：水位数字 stat→gauge；Top-N→barchart/bargauge；流量路径→sankey；密度→heatmap；要点里点名「X 改为 Y」。\n" +
+			"【精细配置】利用率写 options.thresholds；文案映射写 mappings；时序写 chart_style/smooth/palette/legend。\n" +
+			"【禁忌】概览/排行勿改成 instance=\"$instance\"；下钻用 instance=~\"$instance\"；聚合 legend 勿落成 value；勿臆造 node_*。\n" +
 			aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint + ctxBlock
 	case "audit_diagnosis":
 		return "你是安全审计与运维合规专家。以下是平台审计日志片段。请：① 识别异常/高风险操作（越权、异常登录、批量删除、配置篡改、异地/异常时间访问等）；" +
@@ -2272,13 +2285,30 @@ func (s *Server) handleAIAssistFeedback(w http.ResponseWriter, r *http.Request) 
 	case "helpful", "applied":
 		titles := extractDocTitlesFromText(req.Answer)
 		learningQueued = s.persistAdoptedKnowledge(req.Input, req.Answer, src, titles)
+		// Prompt 迭代线索：高频任务的好评沉淀为可检索知识，同类问题优先命中。
+		if req.Task != "" {
+			go s.rememberAI("prompt_hint", "prompt:"+req.Task,
+				fmt.Sprintf("高评分回答范式（task=%s）：用户问「%s」时，优质答法要点：%s",
+					req.Task, trimLine(req.Input, 120), trimLine(req.Answer, 400)))
+		}
 	case "unhelpful":
 		learningQueued = s.rememberPitfall(req.Input, req.Answer, req.Reason, src)
 	}
 	s.aiStats.recordFeedback(req.Task, req.Action)
 	feedbackPersisted := false
 	if s.pg != nil {
-		feedbackPersisted = s.pg.insertAIFeedbackEvent(req.Task, s.actorName(r), req.Action, src)
+		expID, variant := "", ""
+		if len(run.MetaJSON) > 0 {
+			var meta AgentLoopMeta
+			if json.Unmarshal(run.MetaJSON, &meta) == nil {
+				expID, variant = meta.ExperimentID, meta.Variant
+			}
+		}
+		if expID != "" {
+			feedbackPersisted = s.pg.insertAIFeedbackEventAB(req.Task, s.actorName(r), req.Action, src, expID, variant)
+		} else {
+			feedbackPersisted = s.pg.insertAIFeedbackEvent(req.Task, s.actorName(r), req.Action, src)
+		}
 		s.pg.markAIRunFeedback(req.AssistID, req.Action)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -2440,13 +2470,14 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+		writeDiagnoseStage(w, "context", "正在整理事件上下文…")
 		// AI mode: use rich context (metrics + alerts + logs + RAG + rules)
 		sys := s.buildIncidentDiagnosisPrompt(inc)
 		liveExtra, liveCites := s.gatherLiveDiagnoseEvidence(inc)
 		sys += liveExtra
 		for _, e := range inc.Timeline {
 			if e.Kind == "ai_diagnosis" && e.Text != "" {
-				sys += "\n\n【已有 AI 诊断结论】\n" + e.Text
+				sys += "\n\n【已有 AI 诊断结论】\n" + sanitizeAssistContext(e.Text)
 				break
 			}
 		}
@@ -2471,6 +2502,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		if ragQuery == "" {
 			ragQuery = userMsg
 		}
+		writeDiagnoseStage(w, "rag", "检索历史案例与技能…")
 		memText, memHits, degM, memCites := s.retrieveMemoryWithCitations("diagnosis", ragQuery, 8)
 		skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQuery, 4)
 		wkText, wkCites := s.prefetchWeKnoraForDiagnosis(ragQuery)
@@ -2496,8 +2528,10 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		usedModel := cfg.Model
 		diagStart := time.Now()
 		if len(moaModelList(cfg)) > 1 {
+			writeDiagnoseStage(w, "moa", "多模型集成研判中…")
 			diag = aiChatMoAStream(r.Context(), w, cfg, diagMsgs)
 		} else {
+			writeDiagnoseStage(w, "generate", "AI 生成诊断结论…")
 			var err error
 			diag, usedModel, err = s.streamChatWithFallback(r.Context(), w, cfg, diagMsgs, nil, false, aiCallOpts{})
 			if err != nil && strings.TrimSpace(diag) == "" {
@@ -2511,8 +2545,10 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		// 自我校验（可选）：独立第二遍对照证据复核结论，流式续写到同一响应。
 		verify := ""
 		if cfg.SelfVerify && strings.TrimSpace(diag) != "" {
+			writeDiagnoseStage(w, "verify", "自我校验中…")
 			verify = streamSelfVerify(r.Context(), w, cfg, sys, diag)
 		}
+		writeDiagnoseStage(w, "done", "诊断完成")
 		full := diag
 		if strings.TrimSpace(verify) != "" {
 			full += "\n\n🔎 自我校验：\n" + verify
@@ -2594,6 +2630,25 @@ func (s *Server) setupSSE(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+}
+
+// writeDiagnoseStage emits a lightweight stage progress event for diagnose SSE.
+func writeDiagnoseStage(w http.ResponseWriter, stage, label string) {
+	if w == nil || stage == "" {
+		return
+	}
+	payload := map[string]any{"stage": stage}
+	if label != "" {
+		payload["label"] = label
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // handleDiagnoseChatIncident provides multi-turn AI diagnosis chat for an
@@ -3316,7 +3371,7 @@ func (s *Server) retrieveMemoryWithCitations(preferKind, userMsg string, topK in
 	var found []memoryHit
 	var err error
 	if preferKind == "diagnosis" {
-		found, err = s.pg.searchMemoryByKinds(emb, []string{"resolution", "diagnosis", "experience", "knowledge", "pitfall"}, fetch)
+		found, err = s.pg.searchMemoryByKinds(emb, []string{"resolution", "diagnosis", "experience", "knowledge", "pitfall", "prompt_hint", "forecast_bias", "preference"}, fetch)
 	} else {
 		found, err = s.pg.searchMemoryByKind(emb, preferKind, fetch)
 	}

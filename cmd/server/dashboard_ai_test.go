@@ -21,6 +21,53 @@ func TestExtractJSONObject(t *testing.T) {
 			t.Fatalf("extractJSONObject(%q)=%q，应为 %q", c.in, got, c.want)
 		}
 	}
+	// 散文里的花括号不应抢走含 panels 的对象
+	noisy := `可用写法 {expr} 示例。\n` + "```json\n" + `{"name":"n","panels":[{"title":"A","type":"stat","targets":[{"expr":"up"}]}]}` + "\n```"
+	got := extractJSONObject(noisy)
+	if !strings.Contains(got, `"panels"`) || !strings.Contains(got, `"name"`) {
+		t.Fatalf("应优先抽取含 panels 的对象，实为 %q", got)
+	}
+}
+
+func TestDecodeAIDashSpecRepairsLLMJunk(t *testing.T) {
+	// 尾逗号（对象内 + 数组后）
+	raw := "```json\n{\n" +
+		`  "name": "脏JSON",` + "\n" +
+		`  "panels": [` + "\n" +
+		`    {"title": "CPU", "type": "stat", "targets": [{"expr": "aiops_cpu_percent"}],},` + "\n" +
+		`  ],` + "\n" +
+		`}` + "\n```"
+	spec, ok := decodeAIDashSpec(raw)
+	if !ok {
+		t.Fatal("尾逗号脏 JSON 应能解码")
+	}
+	if len(spec.Panels) != 1 || spec.Panels[0].Title != "CPU" {
+		t.Fatalf("panels 异常: %+v", spec.Panels)
+	}
+	// 弯引号键/值：repair 会把弯引号统一成 "
+	curly := "```json\n{\n  \u201cname\u201d: \u201cy\u201d,\n  \u201cpanels\u201d: [{\u201ctitle\u201d:\u201cT\u201d,\u201ctype\u201d:\u201cstat\u201d,\u201ctargets\u201d:[{\u201cexpr\u201d:\u201cup\u201d}]}]\n}\n```"
+	spec2, ok2 := decodeAIDashSpec(curly)
+	if !ok2 || spec2.specName() != "y" || len(spec2.Panels) != 1 {
+		t.Fatalf("弯引号 JSON 应能解码: ok=%v spec=%+v", ok2, spec2)
+	}
+}
+
+func TestBuiltinAIDashFallback(t *testing.T) {
+	spec, ok := builtinAIDashFallback("构建主机黄金信号看板：顶部展示在线数、CPU、内存")
+	if !ok || len(spec.Panels) < 8 {
+		t.Fatalf("黄金信号兜底应有足够面板: ok=%v n=%d", ok, len(spec.Panels))
+	}
+	d, warns := sanitizeAIDash(spec, "", "ai")
+	if len(d.Panels) < 8 {
+		t.Fatalf("sanitize 后面板过少: %d warns=%v", len(d.Panels), warns)
+	}
+	if panelsGridOverlap(d.Panels) {
+		t.Fatal("内置模板布局不应重叠")
+	}
+	// 非明确主题不得误兜底，避免「随便描述」生成错误主机看板
+	if _, ok := builtinAIDashFallback("给我一个好看的运维看板"); ok {
+		t.Fatal("笼统需求不应命中内置兜底")
+	}
 }
 
 func TestRepairTruncatedDashJSON(t *testing.T) {
@@ -53,7 +100,7 @@ func TestSanitizeAIDash(t *testing.T) {
       "vars": [{"name":"instance","type":"weird"}],
       "panels": [
         {"title":"A","type":"timeseries","w":12,"h":8,"targets":[{"expr":"up"}]},
-        {"title":"B","type":"nodegraph","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
+        {"title":"B","type":"foobar","w":12,"h":8,"targets":[{"expr":"rate(x[5m])","legend":"{{job}}"}]},
         {"title":"C","type":"stat","w":6,"h":4,"targets":[{"expr":"  "}]},
         {"title":"D","type":"text","w":24,"h":3,"text":"hi"},
         {"title":"E","type":"timeseries","w":18,"h":8,"targets":[{"expr":"y"}]}
@@ -78,7 +125,7 @@ func TestSanitizeAIDash(t *testing.T) {
 		by[p.Title] = p
 	}
 	if by["B"].Type != "timeseries" {
-		t.Fatalf("未知类型(heatmap)应回退 timeseries，实为 %q", by["B"].Type)
+		t.Fatalf("未知类型(foobar)应回退 timeseries，实为 %q", by["B"].Type)
 	}
 	if by["D"].Type != "text" {
 		t.Fatalf("text 面板应保留，实为 %q", by["D"].Type)
@@ -215,18 +262,30 @@ func TestSanitizeAIDashNormalizesChineseVarAndHealsExpr(t *testing.T) {
 }
 
 func TestAIPanelHeightStatFitsContent(t *testing.T) {
-	// h=4 会被面板头+大数字+sparkline 裁切；生成路径必须抬到 ≥6
-	if got := aiPanelHeight("stat", 0); got != 6 {
-		t.Fatalf("缺省 stat 高度应为 6，实为 %d", got)
+	// 紧凑 KPI：缺省/过矮/过高均钳到 4；合法 3~5 保留
+	if got := aiPanelHeight("stat", 0); got != 4 {
+		t.Fatalf("缺省 stat 高度应为 4，实为 %d", got)
 	}
-	if got := aiPanelHeight("stat", 4); got != 6 {
-		t.Fatalf("过矮 stat 应抬到 6，实为 %d", got)
+	if got := aiPanelHeight("stat", 2); got != 4 {
+		t.Fatalf("过矮 stat 应抬到 4，实为 %d", got)
 	}
-	if got := aiPanelHeight("stat", 6); got != 6 {
-		t.Fatalf("合法 h=6 应保留，实为 %d", got)
+	if got := aiPanelHeight("stat", 4); got != 4 {
+		t.Fatalf("合法 h=4 应保留，实为 %d", got)
 	}
-	if got := aiPanelHeight("stat", 10); got != 6 {
-		t.Fatalf("过高 stat 应钳回 6，实为 %d", got)
+	if got := aiPanelHeight("stat", 3); got != 3 {
+		t.Fatalf("合法 h=3 应保留，实为 %d", got)
+	}
+	if got := aiPanelHeight("stat", 10); got != 4 {
+		t.Fatalf("过高 stat 应钳回 4，实为 %d", got)
+	}
+	if got := aiPanelHeight("gauge", 0); got != 5 {
+		t.Fatalf("缺省 gauge 高度应为 5，实为 %d", got)
+	}
+	if got := aiDashSectionRowHeight("stat"); got != 4 {
+		t.Fatalf("KPI 行高应为 4，实为 %d", got)
+	}
+	if got := aiDashSectionRowHeight("gauge"); got != 5 {
+		t.Fatalf("gauge 行高应为 5，实为 %d", got)
 	}
 	spec := aiDashSpec{Name: "kpi", Panels: []aiDashPanel{
 		{Title: "A", Type: "stat", W: 6, H: 4, Targets: []aiDashTarget{{Expr: "aiops_cpu_percent"}}},
@@ -239,8 +298,8 @@ func TestAIPanelHeightStatFitsContent(t *testing.T) {
 		t.Fatalf("panels=%d", len(d.Panels))
 	}
 	for _, p := range d.Panels {
-		if p.Grid.H != 6 {
-			t.Fatalf("KPI「%s」高度应为 6（完整显示），实为 %d", p.Title, p.Grid.H)
+		if p.Grid.H != 4 {
+			t.Fatalf("KPI「%s」高度应为 4（紧凑），实为 %d", p.Title, p.Grid.H)
 		}
 	}
 }
@@ -269,6 +328,15 @@ func TestHealAIDashLegend(t *testing.T) {
 		if got := healAIDashLegend(in); got != want {
 			t.Fatalf("healAIDashLegend(%q)=%q，want %q", in, got, want)
 		}
+	}
+	if got := healAIDashLegendFor("gauge", ""); got != "" {
+		t.Fatalf("gauge 空图例应保持空，实为 %q", got)
+	}
+	if got := healAIDashLegendFor("stat", ""); got != "" {
+		t.Fatalf("stat 空图例应保持空，实为 %q", got)
+	}
+	if got := healAIDashLegendFor("timeseries", ""); got != "{{instance}}" {
+		t.Fatalf("timeseries 空图例应补 {{instance}}，实为 %q", got)
 	}
 }
 
