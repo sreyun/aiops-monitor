@@ -2059,7 +2059,10 @@ function makeVT(screen) {
       if (vt.st === 0) {
         if (code === 0x1b) { vt.st = 1; vt.parm = ""; vt.coll = ""; i += 1; continue; }
         if (ch === "\r") { vt.cx = 0; vt.wrapNext = false; i += 1; continue; }
-        if (code === 10 || code === 11 || code === 12) { lineFeed(); i += 1; continue; }
+        // convertEol: bare LF → CR+LF so pipe-mode shells (Win2012 cmd) don't
+        // draw staircase prompts. CRLF already sent as \r then \n is unaffected
+        // because \r resets cx first.
+        if (code === 10 || code === 11 || code === 12) { vt.cx = 0; lineFeed(); vt.wrapNext = false; i += 1; continue; }
         if (code === 8) { vt.cx = Math.max(0, vt.cx - 1); vt.wrapNext = false; i += 1; continue; }
         if (code === 9) { vt.cx = Math.min(vt.cols - 1, vt.cx - (vt.cx % 8) + 8); i += 1; continue; }
         if (code === 7) { i += 1; continue; }

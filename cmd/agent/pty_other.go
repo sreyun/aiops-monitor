@@ -9,3 +9,6 @@ func newPTY(cols, rows int) termShell { return nil }
 
 // ensureUTF8 is a no-op on unsupported platforms.
 func ensureUTF8(b []byte) []byte { return b }
+
+// ensureUTF8Hold is a no-op on unsupported platforms.
+func ensureUTF8Hold(data []byte) (out, hold []byte) { return data, nil }

@@ -67,6 +67,7 @@ type conptyShell struct {
 	outFile *os.File // read shell output here ← ConPTY output
 	attrBuf []byte   // keeps the attribute list memory alive
 	convBuf []byte   // leftover bytes from UTF-8 conversion (may exceed read buffer)
+	rawPend []byte   // incomplete ACP/MBCS bytes waiting for the next Read
 
 	termOnce sync.Once // guards shell termination (Close)
 	reapOnce sync.Once // guards process/thread handle close — only after Wait sees the exit
@@ -197,7 +198,7 @@ func closeConPTY(hpc uintptr, inW, outR syscall.Handle) {
 // directory — cmd.exe is NOT a login shell and does not auto-cd to HOME like
 // bash -l does, so lpCurrentDirectory alone is insufficient as a safety net.
 func shellExe() string {
-	initCmd := "chcp 65001 >nul & cd /d %USERPROFILE% 2>nul"
+	initCmd := "chcp 65001 >nul & set PYTHONIOENCODING=utf-8 & cd /d %USERPROFILE% 2>nul"
 	if c := os.Getenv("COMSPEC"); c != "" {
 		return c + " /K " + initCmd
 	}
@@ -208,7 +209,37 @@ func shellExe() string {
 // UTF-8. Used by the playbook exec session to fix output from programs that
 // don't respect chcp 65001. Delegates to convertToUTF8 (Windows API).
 func ensureUTF8(b []byte) []byte {
-	return convertToUTF8(b)
+	out, _ := ensureUTF8Hold(b)
+	return out
+}
+
+// ensureUTF8Hold is a streaming-safe ACP→UTF-8 converter: incomplete trailing
+// multi-byte sequences are returned in hold for the next Read (pipe/ConPTY
+// chunk boundaries often split GBK characters).
+func ensureUTF8Hold(data []byte) (out, hold []byte) {
+	if len(data) == 0 {
+		return data, nil
+	}
+	if utf8.Valid(data) {
+		return data, nil
+	}
+	// Peel 0..3 trailing bytes that may be an incomplete ACP sequence.
+	const mbErrInvalidChars = 8
+	for peel := 0; peel <= 3 && peel < len(data); peel++ {
+		chunk := data[:len(data)-peel]
+		if len(chunk) == 0 {
+			break
+		}
+		converted, ok := convertACPToUTF8(chunk, mbErrInvalidChars)
+		if ok {
+			if peel == 0 {
+				return converted, nil
+			}
+			return converted, append([]byte{}, data[len(data)-peel:]...)
+		}
+	}
+	// Last resort: convert without strict validation (may drop bad bytes).
+	return convertToUTF8(data), nil
 }
 
 func (c *conptyShell) Read(b []byte) (int, error) {
@@ -220,13 +251,15 @@ func (c *conptyShell) Read(b []byte) (int, error) {
 	}
 	n, err := c.outFile.Read(b)
 	if n > 0 {
-		converted := convertToUTF8(b[:n])
+		chunk := append(append([]byte{}, c.rawPend...), b[:n]...)
+		converted, hold := ensureUTF8Hold(chunk)
+		c.rawPend = hold
 		if len(converted) <= len(b) {
 			n = copy(b, converted)
 		} else {
 			// UTF-8 output can be larger than GBK input; buffer the excess.
 			n = copy(b, converted)
-			c.convBuf = append(c.convBuf, converted[n:]...)
+			c.convBuf = append(c.convBuf[:0], converted[n:]...)
 		}
 	}
 	return n, err
@@ -281,36 +314,47 @@ func convertToUTF8(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
-	// Fast path: already valid UTF-8 (common after chcp 65001).
 	if utf8.Valid(data) {
 		return data
 	}
-	// Step 1: MultiByte (system ACP) → UTF-16
+	out, ok := convertACPToUTF8(data, 0)
+	if !ok {
+		return data
+	}
+	return out
+}
+
+// convertACPToUTF8 runs MultiByteToWideChar(CP_ACP) → WideCharToMultiByte(CP_UTF8).
+// When flags includes MB_ERR_INVALID_CHARS (8), incomplete/invalid sequences fail
+// so the caller can peel trailing bytes for a streaming hold buffer.
+func convertACPToUTF8(data []byte, flags uintptr) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
 	n, _, _ := procMultiByteToWideChar.Call(
-		cpACP, 0,
+		cpACP, flags,
 		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)),
-		0, 0, // pass nil to get required length
+		0, 0,
 	)
 	if n == 0 {
-		return data // conversion failed; return raw bytes
+		return nil, false
 	}
 	utf16Buf := make([]byte, int(n)*2)
 	n, _, _ = procMultiByteToWideChar.Call(
-		cpACP, 0,
+		cpACP, flags,
 		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)),
 		uintptr(unsafe.Pointer(&utf16Buf[0])), n,
 	)
 	if n == 0 {
-		return data
+		return nil, false
 	}
-	// Step 2: UTF-16 → UTF-8
 	m, _, _ := procWideCharToMultiByte.Call(
 		cpUTF8, 0,
 		uintptr(unsafe.Pointer(&utf16Buf[0])), n,
-		0, 0, 0, 0, // pass nil to get required length
+		0, 0, 0, 0,
 	)
 	if m == 0 {
-		return data
+		return nil, false
 	}
 	utf8Buf := make([]byte, int(m))
 	m, _, _ = procWideCharToMultiByte.Call(
@@ -320,7 +364,7 @@ func convertToUTF8(data []byte) []byte {
 		0, 0,
 	)
 	if m == 0 {
-		return data
+		return nil, false
 	}
-	return utf8Buf[:m]
+	return utf8Buf[:m], true
 }
