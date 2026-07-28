@@ -1611,15 +1611,17 @@ function drawChart(state) {
   state.dataMin = dMin; state.dataMax = dMax; state._cw = cw; state._ch = ch; state._n = n;
   state._plot = { x: pad.left, y: pad.top, w: cw, h: ch };
 
-  // 有预测时按时间轴居中拆分（中轴=现在）；否则仍按采样点均匀排布
+  // 仅当存在「现在」之后的预测采样点时才居中拆分；否则不预留未来空白
   let axisT0 = n ? vis[0].timestamp : 0, axisT1 = n ? vis[n - 1].timestamp : 1;
   if (state.nowTs && n >= 2) {
     const nowTs = +state.nowTs;
     const t0 = vis[0].timestamp, t1 = vis[n - 1].timestamp;
-    if (nowTs >= t0 && nowTs <= t1) {
+    if (nowTs >= t0 && t1 > nowTs + 1) {
       const half = Math.max(nowTs - t0, t1 - nowTs, 1);
       axisT0 = nowTs - half;
       axisT1 = nowTs + half;
+    } else {
+      state.nowTs = 0; // 无未来预测点时清除中轴，避免右侧空白
     }
   }
   state._axisT0 = axisT0; state._axisT1 = axisT1;

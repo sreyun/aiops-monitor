@@ -81,10 +81,13 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		if fromTS > nowTS {
 			nowTS = fromTS
 		}
-		fc, mape, r2, method, errMsg := robustForecast(pts, fromTS, horizon, step)
+		learnKey := forecastMetricKey("metrics", name)
+		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, horizon, step, learnKey)
 		if errMsg != "" || len(fc) == 0 {
 			continue
 		}
+		last := pts[len(pts)-1]
+		fc, method, _ = s.finalizeForecastWithLearning(learnKey, method, "", fc, fromTS, horizon, step, last[1])
 		anyOK = true
 		if mape < bestMAPE {
 			bestMAPE, bestMethod = mape, method
@@ -93,7 +96,6 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		fcPts := make([][2]float64, 0, len(fc)+1)
 		band := make([]forecastPoint, 0, len(fc)+1)
 		// Bridge last history point
-		last := pts[len(pts)-1]
 		fcPts = append(fcPts, last)
 		band = append(band, forecastPoint{TS: last[0], Value: last[1], Lo: last[1], Hi: last[1]})
 		for _, p := range fc {

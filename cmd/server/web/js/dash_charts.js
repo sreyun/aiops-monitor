@@ -307,12 +307,13 @@
         (c.band || []).forEach(pt => { const x = +(pt.ts || pt[0] || 0); if (x > fcMaxTsSec) fcMaxTsSec = x; });
       }
     });
-    if (cfg.nowTs) nowTsSec = Math.max(nowTsSec, +cfg.nowTs);
-    // 居中拆分：以「现在」为中轴，左右等宽（取历史跨度与预测跨度的较大者）
+    // 仅在确有「现在之后」的预测点时启用中轴拆分；预测关闭时绝不预留未来空白轴
+    const hasForecast = fcMaxTsSec > nowTsSec + 1;
+    if (hasForecast && cfg.nowTs) nowTsSec = Math.max(nowTsSec, +cfg.nowTs);
     let xMinMs = null, xMaxMs = null;
-    if (nowTsSec > 0 && (fcMaxTsSec > nowTsSec || histMinTs > 0)) {
+    if (hasForecast && nowTsSec > 0) {
       const histSpan = histMinTs > 0 ? Math.max(60, nowTsSec - histMinTs) : Math.max(60, fcMaxTsSec - nowTsSec);
-      const fcSpan = fcMaxTsSec > nowTsSec ? (fcMaxTsSec - nowTsSec) : histSpan;
+      const fcSpan = Math.max(60, fcMaxTsSec - nowTsSec);
       const half = Math.max(histSpan, fcSpan);
       xMinMs = (nowTsSec - half) * 1000;
       xMaxMs = (nowTsSec + half) * 1000;
@@ -411,7 +412,7 @@
           const ml = markLines(o.thresholds, t);
           if (ml && ml.data) marks.push(...ml.data);
         }
-        if (nowTsSec > 0 && (fcMaxTsSec > nowTsSec || xMaxMs)) {
+        if (hasForecast && nowTsSec > 0) {
           const rightEdge = xMaxMs ? xMaxMs / 1000 : fcMaxTsSec;
           const leftEdge = xMinMs ? xMinMs / 1000 : histMinTs;
           marks.push({
@@ -470,7 +471,7 @@
           if (!Array.isArray(params) || !params.length) return "";
           const head = params[0].axisValueLabel || "";
           const axisMs = Array.isArray(params[0].value) ? +params[0].value[0] : +params[0].axisValue;
-          const isFuture = nowTsSec > 0 && axisMs > nowTsSec * 1000;
+          const isFuture = hasForecast && nowTsSec > 0 && axisMs > nowTsSec * 1000;
           let html = head + (isFuture ? ' <span class="dash-tip-fc">预测</span>' : ' <span class="dash-tip-cmp">历史</span>') + "<br/>";
           params.forEach(pr => {
             if (!pr || (pr.seriesName && String(pr.seriesName).indexOf("_fcband_") >= 0)) return;

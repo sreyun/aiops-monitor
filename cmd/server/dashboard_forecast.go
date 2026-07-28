@@ -173,7 +173,8 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				if len(src.Points) < 8 {
 					continue
 				}
-				fc, mape, r2, method, errMsg := robustForecast(src.Points, req.To, horizon, req.Step)
+				learnKey := forecastMetricKey(expr, legendNameFromLabels(hist[hi].Labels, hi))
+				fc, mape, r2, method, errMsg := robustForecastWithKey(src.Points, req.To, horizon, req.Step, learnKey)
 				if errMsg != "" || len(fc) == 0 {
 					if hi == 0 {
 						meta.OK = false
@@ -181,6 +182,13 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 					}
 					continue
 				}
+				anchor := 0.0
+				if last, okLast := lastValidPoint(hist[hi].Points); okLast {
+					anchor = last[1]
+				} else if len(src.Points) > 0 {
+					anchor = src.Points[len(src.Points)-1][1]
+				}
+				fc, method, _ = s.finalizeForecastWithLearning(learnKey, method, expr, fc, req.To, horizon, req.Step, anchor)
 				anyOK = true
 				if bestMethod == "" || mape < bestMAPE {
 					bestMAPE, bestR2, bestMethod = mape, r2, method
@@ -206,7 +214,11 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				meta.Method = bestMethod
 				meta.MAPE = bestMAPE
 				meta.R2 = bestR2
-				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）", bestMethod, bestMAPE)
+				biasHint := ""
+				if h := s.forecastBiasHints(expr, 1); h != "" {
+					biasHint = " · 已注入自学习记忆"
+				}
+				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）%s", bestMethod, bestMAPE, biasHint)
 			} else if meta.Message == "" {
 				meta.OK = false
 				meta.Message = "数据不足，暂无法预测（至少需要约 8 个采样点）"
@@ -294,6 +306,11 @@ func shiftPoints(pts [][2]float64, deltaSec int64) [][2]float64 {
 // holtLinearForecast keeps the historical name; implementation is robustForecast.
 func holtLinearForecast(hist [][2]float64, fromTS, horizon, step int64) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
 	return robustForecast(hist, fromTS, horizon, step)
+}
+
+// robustForecast 兼容入口（无自学习 key）。
+func robustForecast(hist [][2]float64, fromTS, horizon, step int64) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
+	return robustForecastWithKey(hist, fromTS, horizon, step, "")
 }
 
 // seriesProfile 刻画时序形态，驱动模型候选与选型偏置。
@@ -419,9 +436,8 @@ func movingAverage(vals []float64, win int) []float64 {
 	return out
 }
 
-// robustForecast 多模型 holdout 选型：flat / damped-Holt / drift / seasonal /
-// Holt-Winters / shape-replay（形态回放，适合突发 IO）。按序列特征偏置，不再强制压成直线。
-func robustForecast(hist [][2]float64, fromTS, horizon, step int64) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
+// robustForecastWithKey 多模型 holdout 选型；learnKey 非空时用历史自学习得分微调选型。
+func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learnKey string) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
 	if step < 1 {
 		step = 15
 	}
@@ -541,6 +557,9 @@ func robustForecast(hist [][2]float64, fromTS, horizon, step int64) (band []fore
 		score := normalizedMAE(holdTruth, holdPred, scale)
 		// 额外惩罚预测段的高频抖动（防止再选出锯齿模型）
 		score *= 1 + 0.55*forecastJitterPenalty(holdPred)
+		if learnKey != "" {
+			score = learnAdjustCandidateScore(learnKey, name, score)
+		}
 		switch {
 		case name == "flat" && prof.bursty:
 			score *= 1.25

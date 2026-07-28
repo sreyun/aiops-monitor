@@ -489,7 +489,8 @@ function renderPanels() {
     const zoomBtn = (p.type !== "text" && p.type !== "unsupported")
       ? `<button type="button" class="mini-btn" data-pact="zoom" data-id="${p.id}" title="放大查看组件">⛶</button>` : "";
     const aiBtn = (p.type !== "text" && p.type !== "unsupported") ? `<button class="mini-btn" data-pact="ai" data-id="${p.id}" title="AI 解读此面板">🔍</button>` : "";
-    const trendTypes = { timeseries: 1, stat: 1, barchart: 1, graph: 1 };
+    // 仅时序类面板提供预测/环比/同比；Top-N 柱图等瞬时面板不展示，避免误开未来轴
+    const trendTypes = { timeseries: 1, graph: 1 };
     const tr = DASH_PANEL_TREND[p.id] || {};
     const trendBtns = trendTypes[p.type] ? `<div class="dash-trend-tools" data-trend-tools="${p.id}">
         <button type="button" class="mini-btn dash-trend-btn${tr.forecast ? " active" : ""}" data-pact="forecast" data-id="${p.id}" title="趋势预测：左=历史 · 右=预测（默认窗=当前时间窗，居中对等）">预测</button>
@@ -1241,15 +1242,20 @@ async function loadTimeseriesPanel(p, body, from, to) {
     }
   });
   const hasFC = collected.some(c => c.kind === "forecast");
-  const metaBadge = (metaMsg || (st.forecast && hasFC))
+  const forecastOn = !!(st.forecast && hasFC);
+  const metaBadge = (forecastOn && (metaMsg || hasFC))
     ? `<div class="dash-fc-meta">${metaMsg ? esc(metaMsg) : "左=历史 · 中轴=现在 · 右=预测（虚线）"}</div>` : "";
-  let nowTs = to;
-  collected.forEach(c => {
-    if ((!c.kind || c.kind === "history") && (c.points || []).length) {
-      const last = +c.points[c.points.length - 1][0];
-      if (last > nowTs) nowTs = last;
-    }
-  });
+  // 预测关闭时不传 nowTs，避免图表预留未来空白轴
+  let nowTs = 0;
+  if (forecastOn) {
+    nowTs = to;
+    collected.forEach(c => {
+      if ((!c.kind || c.kind === "history") && (c.points || []).length) {
+        const last = +c.points[c.points.length - 1][0];
+        if (last > nowTs) nowTs = last;
+      }
+    });
+  }
   if (typeof DashCharts === "undefined" || typeof echarts === "undefined") {
     // Fallback to Canvas if ECharts failed to load
     const defs = [], tsMap = new Map();
@@ -1275,7 +1281,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
       let chartH = panelBodyH(body);
       if (chartH < 120) chartH = dashRowHeight(p.grid.h || 8);
       const bodyH = Math.max(80, panelBodyH(body) || chartH);
-      const args = [cid, samples, defs, p.min != null ? +p.min : null, p.max != null ? +p.max : null, { cssH: bodyH, legendMode: "dash", title: "", nowTs }];
+      const args = [cid, samples, defs, p.min != null ? +p.min : null, p.max != null ? +p.max : null, { cssH: bodyH, legendMode: "dash", title: "", nowTs: nowTs || 0 }];
       DASH_CHART_ARGS[p.id] = args;
       createChart.apply(null, args);
     };
@@ -1285,7 +1291,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
   const el = dashMountEchart(body, p.id);
   if (!el) return;
   if (metaBadge) el.insertAdjacentHTML("beforebegin", metaBadge);
-  DashCharts.render(el, { type: "timeseries", panel: p, series: collected, fmtUnit, nowTs });
+  DashCharts.render(el, { type: "timeseries", panel: p, series: collected, fmtUnit, nowTs: nowTs || 0 });
 }
 // dashRowHeight：按 gridPos 行数反推面板正文可用高度（网格行高 24 + 行间距 8，扣面板头+内边距 ~52）。
 function dashRowHeight(h) { const n = Math.max(3, Math.min(48, h || 8)); return n * 24 + (n - 1) * 8 - 52; }
@@ -2063,6 +2069,17 @@ function handlePanelAction(act, pid) {
   if (act === "forecast" || act === "pop" || act === "yoy") {
     const st = panelTrendState(pid);
     st[act] = !st[act];
+    if (act === "forecast" && !st.forecast) {
+      st.horizonSec = 0; // 关闭预测时清展望窗，避免残留状态
+    }
+    // 销毁该面板旧图实例，确保关闭预测后不再沿用带未来轴的 option
+    try {
+      const body = document.querySelector(`.dash-panel[data-id="${pid}"] .dash-panel-body`);
+      if (body && typeof DashCharts !== "undefined" && DashCharts.dispose) {
+        const el = body.querySelector(".dash-echart");
+        if (el) DashCharts.dispose(el);
+      }
+    } catch (e) { /* ignore */ }
     renderPanels();
     return;
   }
