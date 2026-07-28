@@ -59,25 +59,19 @@ RUN if [ "$UPX" = "1" ]; then \
 # Legacy Windows Server 2012 / 2012 R2 Agent (Go 1.20). Modern Go ≥1.21 binaries
 # refuse to start on those kernels; install.ps1 selects this artifact automatically.
 # Pin docker.io — SWR golang mirrors often lack the 1.20 tag.
+# Module pins live in scripts/win2012/ (must keep a pre-graduation x/exp that still
+# ships golang.org/x/exp/slog — later revisions 404 or drop the package).
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.20-bullseye AS win2012-builder
 WORKDIR /src
 ARG VERSION=dev
+ENV GOPROXY=https://proxy.golang.org,https://goproxy.cn,direct
 COPY shared/ shared/
 COPY cmd/agent/ cmd/agent/
 COPY config.example.yaml cmd/agent/config_example.yaml
+COPY scripts/win2012/go.mod scripts/win2012/go.sum scripts/win2012/rewrite_slog.sh ./
 RUN set -e; \
-    find cmd/agent -type f -name '*.go' -print0 | xargs -0 sed -i 's|"log/slog"|"golang.org/x/exp/slog"|g'; \
-    printf '%s\n' \
-      'module aiops-monitor' \
-      '' \
-      'go 1.20' \
-      '' \
-      'require (' \
-      '	golang.org/x/exp v0.0.0-20231108232855-2478ac86d95e' \
-      '	gopkg.in/yaml.v3 v3.0.1' \
-      ')' \
-      > go.mod; \
-    go mod tidy; \
+    bash ./rewrite_slog.sh ./cmd/agent; \
+    go mod download; \
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
       go build -trimpath -ldflags="-s -w -X main.appVersion=${VERSION}" \
       -o /out/aiops-agent-windows-amd64-win2012.exe ./cmd/agent
