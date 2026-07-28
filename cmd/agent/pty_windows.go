@@ -195,9 +195,12 @@ func closeConPTY(hpc uintptr, inW, outR syscall.Handle) {
 	procCloseHandleT.Call(uintptr(outR))
 }
 
-// shellExe returns the shell to launch (absolute cmd.exe) with PATH repair +
-// best-effort UTF-8 code page before the interactive prompt.
+// shellExe returns the shell to launch (absolute cmd.exe) with Path repair via
+// bootstrap .cmd when possible (avoids /K quote mangling on older Windows).
 func shellExe() string {
+	if boot := writeWindowsShellBootstrap(); boot != "" {
+		return windowsCmdPath() + " /K " + boot
+	}
 	return windowsCmdPath() + " /K " + windowsShellInitCmd()
 }
 

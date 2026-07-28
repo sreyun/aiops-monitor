@@ -149,6 +149,35 @@ function openTerminal(id, name, opts) {
   checkTerminalAccess();
 }
 
+// Win2012 / Win8 pipe shells have no ConPTY echo — paint keystrokes locally.
+function hostNeedsTermLocalEcho(hostId) {
+  try {
+    const list = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) ? LAST_HOSTS
+      : (Array.isArray(window._cachedHosts) ? window._cachedHosts : []);
+    const h = list.find(x => x && (x.id === hostId || x.host_id === hostId));
+    if (!h) return false;
+    const os = String(h.os || "").toLowerCase();
+    if (os && os !== "windows") return false;
+    const p = String(h.platform || "").toLowerCase();
+    return /server 2012|server 2008|windows 8|windows 8\.1|build 9200|build 9600|build 7601|build 600/.test(p);
+  } catch (e) {
+    return false;
+  }
+}
+
+function termLocalEcho(tab, str) {
+  if (!tab || !tab.localEcho || !tab.vt || !str) return;
+  let out = "";
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c === 13 || c === 10) out += "\r\n";
+    else if (c === 8 || c === 127) out += "\b \b";
+    else if (c === 3) out += "^C";
+    else if (c >= 32 || c === 9) out += str.charAt(i);
+  }
+  if (out) tab.vt.feed(out);
+}
+
 window.openContainerTerminal = function (hostId, hostName, containerId, containerName, shell) {
   openTerminal(hostId, hostName || hostId, {
     containerId, containerName: containerName || containerId, shell: shell || "sh",
@@ -550,6 +579,12 @@ function createTermTab(id, name, tabName, opts) {
     containerName: opts.containerName || "",
     shell: opts.shell || "sh",
     breakGlass: !!opts.breakGlass,
+    localEcho: !opts.containerId && hostNeedsTermLocalEcho(id),
+  };
+  vt.onOSC = function (parm) {
+    if (parm && String(parm).indexOf("666;local_echo=1") === 0) {
+      tabObj.localEcho = true;
+    }
   };
   TERM_TABS.push(tabObj);
   const idx = TERM_TABS.length - 1;
@@ -1538,6 +1573,8 @@ function closeTerminalWS() { closeAllTermTabs(); }
 // 发送输入（帧首字节 'i' 标识 input）
 function termSend(ws, str) {
   if (!ws || ws.readyState !== 1) return;
+  const tab = TERM_TABS.find(t => t && t.ws === ws);
+  if (tab) termLocalEcho(tab, str);
   const body = new TextEncoder().encode(str);
   const framed = new Uint8Array(body.length + 1);
   framed[0] = 0x69; // 'i'
@@ -2072,7 +2109,7 @@ function makeVT(screen) {
       }
       if (vt.st === 1) {
         if (ch === "[") { vt.st = 2; vt.parm = ""; vt.coll = ""; }
-        else if (ch === "]") { vt.st = 3; }
+        else if (ch === "]") { vt.st = 3; vt.parm = ""; }
         else if (ch === "(" || ch === ")" || ch === "*" || ch === "+") vt.st = 4;
         else { if (ch === "M") revIndex(); else if (ch === "D") lineFeed(); else if (ch === "E") { vt.cx = 0; lineFeed(); } else if (ch === "7") saveCursor(); else if (ch === "8") restoreCursor(); else if (ch === "c") fullReset(); vt.st = 0; }
         i += 1; continue;
@@ -2083,7 +2120,15 @@ function makeVT(screen) {
         else vt.parm += ch;
         i += 1; continue;
       }
-      if (vt.st === 3) { if (code === 7) vt.st = 0; else if (code === 0x1b) vt.st = 5; i += 1; continue; }
+      if (vt.st === 3) {
+        if (code === 7) {
+          if (typeof vt.onOSC === "function" && vt.parm) vt.onOSC(vt.parm);
+          vt.parm = "";
+          vt.st = 0;
+        } else if (code === 0x1b) vt.st = 5;
+        else vt.parm += ch;
+        i += 1; continue;
+      }
       if (vt.st === 4) { vt.st = 0; i += 1; continue; }
       if (vt.st === 5) { vt.st = 0; i += 1; continue; }
       i += 1;
