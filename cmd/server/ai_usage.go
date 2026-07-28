@@ -28,6 +28,17 @@ INSERT INTO ai_call_events(
 	if err != nil {
 		slog.Warn("PG 写 AI 调用观测失败", "err", err)
 	}
+	// Dual-track partitioned table (best-effort).
+	_, _ = p.db.Exec(`
+INSERT INTO ai_call_events_p(
+  ts, task, model, actor, latency_ms, ok, error,
+  memory_hits, skill_hits, reply_chars, approx_tokens,
+  prompt_tokens, completion_tokens, cost_estimate
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		st.Ts, nullStr(st.Task), nullStr(st.Model), nullStr(st.Actor),
+		st.LatencyMs, st.OK, nullStr(st.Error),
+		st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
+		st.PromptTokens, st.CompletionTokens, st.CostEstimate)
 }
 
 // insertAIFeedbackEvent persists a privacy-minimized quality signal. sourceHash
@@ -339,6 +350,7 @@ func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
 			out[k] = v
 		}
 		out["days"] = days
+		out["by_model"] = s.pg.aiCallByModelFromPG(since)
 		cfg := s.cfg.AIConfig()
 		out["cost_currency"] = cfg.CostCurrency
 		if out["cost_currency"] == "" {
