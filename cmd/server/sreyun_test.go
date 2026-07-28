@@ -123,6 +123,18 @@ func TestSanitizeHistory(t *testing.T) {
 	if len(out) != 2 || out[0]["content"] != "hi" || out[1]["content"] != "ok" {
 		t.Fatalf("sanitizeHistory 结果异常: %+v", out)
 	}
+	withActs := []map[string]string{
+		{"role": "user", "content": "画图"},
+		{"role": "assistant", "content": "好的", "actions": `[{"type":"show_chart","id":"c1"}]`},
+	}
+	kept := sanitizeHistory(withActs)
+	if len(kept) != 2 || kept[1]["actions"] == "" {
+		t.Fatalf("sanitizeHistory 应保留 actions: %+v", kept)
+	}
+	llm := llmHistoryMessages(kept)
+	if _, ok := llm[1]["actions"]; ok {
+		t.Fatalf("llmHistoryMessages 不应保留 actions: %+v", llm)
+	}
 }
 
 // TestHandleAIModelsLiveOnlyNoCurated 验证 /ai/models 只返回自动获取的实时模型（去重、provider=live），

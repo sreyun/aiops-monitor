@@ -6,6 +6,8 @@
 >
 > **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
 
+**言語 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
 ---
 
 ## 目次
@@ -120,7 +122,7 @@ v5.5.0 以降、統一ストレージは **PostgreSQL（すべてのリレーシ
 
 ### デプロイと体験
 
-- **Web パネル**：サーバー内蔵ダッシュボード。2 テーマ（ダーク / ライト）。3 言語切替（簡体中文 / 繁体中文 / English）。※ マーケティングサイト（website/）は 簡中 / 繁中 / English / 日本語 の 4 言語に対応。
+- **Web パネル**：サーバー内蔵ダッシュボード。2 テーマ（ダーク / ライト）。3 言語切替（簡体中文 / 繁体中文 / English）。※ マーケティングサイト（website/）は 簡中 / 繁中 / English / 日本語 / 한국어 の 5 言語に対応。
 - **マルチサーバーブロードキャスト**：1 回の収集を複数のサーバーへ並行上報（マルチDC 災害復旧）。
 - **ゲートウェイ中継**：社内でインターネットに接続した 1 台のマシンがすべての上報をクラウドへ代理。
 
@@ -290,7 +292,7 @@ graph TB
    - Go コードは `gofmt` / `go vet` を使用。新規ロジックにはテストを添付。
    - サーバーはゼロフレームワーク、ゼロ CGO。単一バイナリ、第三者依存ゼロの Agent 原則を維持。
    - コミットメッセージは「なぜ」を明確に表現。
-4. **国際化**：マーケティングサイトは 簡中 / 繁中 / English / 日本語 の 4 言語、管理パネルは 簡中 / 繁中 / English の 3 言語に対応。新規文案は各言語辞書に同期してください（マーケティングサイトは `website/js/i18n.js` と `website/js/i18n-extra.js`；管理パネルは `cmd/server/web/` 配下の `i18n-dashboard*.js`。フロー：権威辞書を変更 → 英語を補完 → `build_en` / `build_tw` を実行 → parity を検証 → `go build` で再埋め込み）。
+4. **国際化**：マーケティングサイトは 簡中 / 繁中 / English / 日本語 / 한국어 の 5 言語、管理パネルは 簡中 / 繁中 / English の 3 言語に対応。新規文案は各言語辞書に同期してください（マーケティングサイトは `website/js/i18n.js` と `website/js/i18n-extra.js`；管理パネルは `cmd/server/web/` 配下の `i18n-dashboard*.js`。フロー：権威辞書を変更 → 英語を補完 → `build_en` / `build_tw` を実行 → parity を検証 → `go build` で再埋め込み）。
 5. **PR の提出**：Fork → ブランチ開発 → 変更とテストを記述 → CI とレビューを待機。
 6. **セキュリティ脆弱性**：公開 Issue は行わず、プライベートメッセージ / セキュリティチャネルから報告してください。優先的に対応します。
 7. **開発者向け詳細規約**は [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南) を参照。

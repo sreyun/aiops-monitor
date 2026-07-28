@@ -3900,11 +3900,27 @@ function aiChatToBottom(){ const log=$("aiChatLog"); if(log) log.scrollTop=log.s
 // 统一「AI 对话」——单窗口,后端走 Sreyun 自主运维 Agent（能对话 + 自动调用工具,
 // 不需要工具时自动退化成纯对话）。模型与 AI 设置共用同一套配置。
 let AI_CHAT_SESSION=0;   // Sreyun 服务端会话 id（0=新会话）
-let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content}：兜底传后端 + 本地记忆
+let AI_CHAT_HISTORY=[];  // 前端侧会话历史 {role,content,actions?}：兜底传后端 + 本地记忆
 const AI_CHAT_INTRO=`<div class="ai-welcome"><div class="ai-welcome-icon">🤖</div><div class="ai-welcome-title">${I18N.t("sre.chat_intro_title","AI 运维助手已就绪")}</div><div class="ai-welcome-sub">${I18N.t("sre.chat_intro_sub","全局 AI 入口：看板组件调用、任意界面调度、趋势图表与指标下钻、安全自动防御、自我进化与记忆优化、诊断加固、报告导出——一句话即可调度。也可上传 📄 文档 / 🔗 网页辅助分析。")}</div><div class="ai-cap-chips"><span class="ai-cap-chip">看板组件</span><span class="ai-cap-chip">界面调度</span><span class="ai-cap-chip">安全防御</span><span class="ai-cap-chip">自我进化</span><span class="ai-cap-chip">趋势图表</span><span class="ai-cap-chip">导出报告</span></div></div><div id="aiChatSuggest" class="ai-suggest"></div>`;
 
 function aiChatActionKey(a){
   return (a.type||"")+"|"+(a.id||"")+"|"+(a.title||"")+"|"+(a.label||"");
+}
+function parseAIChatActions(raw){
+  if(!raw) return [];
+  if(Array.isArray(raw)) return raw.filter(a=>a&&a.type);
+  if(typeof raw==="string"){
+    try{ const j=JSON.parse(raw); return Array.isArray(j)?j.filter(a=>a&&a.type):[]; }catch(e){ return []; }
+  }
+  return [];
+}
+function historyForAIChatAPI(hist){
+  return (hist||[]).map(m=>{
+    const item={role:m.role,content:m.content||""};
+    const acts=parseAIChatActions(m.actions);
+    if(acts.length) item.actions=JSON.stringify(acts);
+    return item;
+  });
 }
 function renderAIChatWidgets(actions){
   if(!actions||!actions.length) return "";
@@ -3915,11 +3931,16 @@ function renderAIChatWidgets(actions){
     const key=aiChatActionKey(a);
     if(seen.has(key)) continue;
     seen.add(key);
-    if(a.type==="show_chart"&&a.chart){
+    if(a.type==="show_chart"){
       const cid="aiChart_"+(a.id||key.replace(/\|/g,"_"));
+      const samples=a.chart&&Array.isArray(a.chart.samples)?a.chart.samples:[];
+      const series=a.chart&&Array.isArray(a.chart.series)?a.chart.series:[];
+      const empty=!a.chart||!samples.length||!series.length;
       html+=`<div class="ai-chart-card" data-ai-chart="${esc(a.id||"")}">
         <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"趋势图")}</span></div>
-        <div class="ai-chart-wrap"><canvas id="${cid}" height="210"></canvas></div>
+        ${empty
+          ?`<div class="ai-chart-empty">${esc(I18N.t("sre.chart_empty","图表数据不可用或已过期，请重试生成"))}</div>`
+          :`<div class="ai-chart-wrap"><canvas id="${cid}" height="210"></canvas></div>`}
       </div>`;
     } else if(a.type==="show_stat"){
       const unit=a.unit||"";
@@ -4000,7 +4021,14 @@ async function bindAIChatWidgets(root,actions){
       kind:s.kind||(s.dashed?"forecast":"history"),
       fmt: v=> Number.isFinite(v)?(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)): "-"
     }));
-    if(!samples.length||!series.length) continue;
+    if(!samples.length||!series.length){
+      const card=canvas.closest(".ai-chart-card");
+      if(card&&!card.querySelector(".ai-chart-empty")){
+        const wrap=card.querySelector(".ai-chart-wrap");
+        if(wrap) wrap.innerHTML=`<div class="ai-chart-empty">${esc(I18N.t("sre.chart_empty","图表数据不可用或已过期，请重试生成"))}</div>`;
+      }
+      continue;
+    }
     try{
       const yMin=a.chart.y_min!=null?Number(a.chart.y_min):null;
       const yMax=a.chart.y_max!=null?Number(a.chart.y_max):null;
@@ -4012,7 +4040,16 @@ async function bindAIChatWidgets(root,actions){
         createChart(cid, samples, series, yMin, yMax, opts);
       }
       canvas.dataset.chartBound="1";
-    }catch(e){ /* ignore chart paint errors */ }
+    }catch(e){
+      const card=canvas.closest(".ai-chart-card");
+      if(card){
+        const wrap=card.querySelector(".ai-chart-wrap")||card;
+        const err=document.createElement("div");
+        err.className="ai-chart-empty";
+        err.textContent=I18N.t("sre.chart_paint_fail","图表渲染失败，请重试");
+        wrap.appendChild(err);
+      }
+    }
   }
 }
 async function handleAIChatAction(a){
@@ -4098,20 +4135,82 @@ function bindAIDashLinks(root){
     });
   });
 }
-async function exportAIChatReport(title, body, fmt){
+async function exportAIChatReport(title, body, fmt, opts){
   if(typeof exportModel!=="function"){ if(typeof toast==="function") toast("导出组件不可用","err"); return; }
   const format=fmt||await pickAIExportFormat();
   if(!format) return;
+  opts=opts||{};
+  const actions=parseAIChatActions(opts.actions);
+  const root=opts.root||null;
+  const sections=typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(body||""):[];
+  const figures=[];
+  if(root){
+    root.querySelectorAll(".ai-chart-card").forEach(card=>{
+      const t=(card.querySelector(".ai-chart-title")||{}).textContent||"趋势图";
+      const canvas=card.querySelector("canvas");
+      if(!canvas) return;
+      try{
+        const dataUrl=canvas.toDataURL("image/png");
+        if(dataUrl&&dataUrl.length>64) figures.push({title:t,dataUrl});
+      }catch(e){ /* canvas tainted / empty */ }
+    });
+  }
+  // 无画布时，用 actions 里的表格/日志/采样点兜底，保证导出不丢结构化结果
+  for(const a of actions){
+    if(!a||!a.type) continue;
+    if(a.type==="show_table"&&Array.isArray(a.columns)&&Array.isArray(a.rows)){
+      sections.push({
+        title:a.title||a.label||"表格",
+        columns:a.columns.map(String),
+        rows:a.rows.map(r=>a.columns.map(c=>r&&r[c]!=null?String(r[c]):""))
+      });
+    } else if(a.type==="show_logs"&&Array.isArray(a.lines)&&a.lines.length){
+      sections.push({
+        title:a.title||a.label||"日志",
+        columns:["时间","内容"],
+        rows:a.lines.slice(0,200).map(ln=>{
+          if(ln&&typeof ln==="object") return [String(ln.ts||""),String(ln.line!=null?ln.line:ln)];
+          return ["",String(ln)];
+        })
+      });
+    } else if(a.type==="show_stat"){
+      sections.push({
+        title:a.title||a.label||"指标",
+        columns:["指标","值","单位"],
+        rows:[[a.title||a.label||"指标", a.value!=null?String(a.value):"—", a.unit||""]]
+      });
+    } else if(a.type==="show_chart"&&a.chart&&Array.isArray(a.chart.samples)&&a.chart.samples.length){
+      const series=Array.isArray(a.chart.series)?a.chart.series:[];
+      const cols=["时间"].concat(series.map(s=>s.label||s.key||"系列"));
+      const rows=a.chart.samples.slice(0,500).map(row=>{
+        const ts=row&&(row.timestamp!=null?row.timestamp:row.ts);
+        const tstr=ts!=null?new Date(Number(ts)* (Number(ts)>1e12?1:1000)).toLocaleString():"";
+        return [tstr].concat(series.map(s=>{
+          const v=row?row[s.key]:null;
+          return v==null||v===""?"":String(v);
+        }));
+      });
+      sections.push({title:a.title||a.label||"趋势数据",columns:cols,rows});
+    }
+  }
+  const visualPanels=figures.map((f,i)=>({title:f.title,dataUrl:f.dataUrl,x:0,y:i*9,w:24,h:8}));
   const model={
     title: title||I18N.t("sre.chat_export_title","AI 对话报告"),
     subtitle:"AIOps · "+new Date().toLocaleString(),
     summaryTitle:"报告信息",
-    meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()],["格式",format]],
+    meta:[["来源","AI 对话"],["生成时间",new Date().toLocaleString()],["格式",format],["图表数",String(figures.length)]],
     narrativeTitle:"AI 分析与建议",
     narrative:body||"",
-    sections: typeof parseAssistMarkdownTables==="function"?parseAssistMarkdownTables(body||""):[],
+    sections,
+    figures,
+    visualPanels,
     footer:"AI 结果仅作为运维决策辅助；高风险操作须经人工验证与审批。"
   };
+  // PDF/Word：有图表截图时走视觉成品路径，正文写入副标题区；其它格式保留叙事 + 数据表
+  if((format==="pdf"||format==="word")&&visualPanels.length){
+    model.kind="visual";
+    model.subtitle=(body||"").slice(0,280)+(body&&body.length>280?"…":"");
+  }
   try{
     const ok=await exportModel(model,format,title||"AI对话报告");
     if(ok===false&&typeof toast==="function") toast(I18N.t("assist.popup_blocked","浏览器拦截了导出窗口，请允许弹窗后重试"),"warn");
@@ -4192,7 +4291,7 @@ async function loadAISessions(){
     sel.value=AI_CHAT_SESSION?String(AI_CHAT_SESSION):"";
   }catch(e){ /* 无 PG / 接口不可用时静默 */ }
 }
-// 切换到某历史会话并恢复其消息
+// 切换到某历史会话并恢复其消息（含图表/组件 actions，永久可回看）
 async function switchAISession(id){
   if(!id){ newAIChat(); return; }
   try{
@@ -4201,17 +4300,34 @@ async function switchAISession(id){
     const j=await r.json();
     const msgs=(j.messages||[]).filter(m=>m&&(m.role==="user"||m.role==="assistant"));
     AI_CHAT_SESSION=Number(id);
-    AI_CHAT_HISTORY=msgs.map(m=>({role:m.role,content:m.content}));
+    AI_CHAT_HISTORY=msgs.map(m=>({role:m.role,content:m.content,actions:parseAIChatActions(m.actions)}));
     const log=$("aiChatLog");
     if(log){
       log.innerHTML=msgs.length
-        ? msgs.map(m=> m.role==="user"
-            ? `<div class="ai-chat-msg me">${esc(m.content||"")}</div>`
-            : `<div class="ai-chat-msg ai">${renderAIMarkdown(filterDisplayContent(m.content||""))}</div>`
-          ).join("")
+        ? msgs.map(m=>{
+            if(m.role==="user") return `<div class="ai-chat-msg me">${esc(m.content||"")}</div>`;
+            const acts=parseAIChatActions(m.actions);
+            return `<div class="ai-chat-msg ai">${renderAIMarkdown(filterDisplayContent(m.content||""))}${renderAIChatWidgets(acts)}${renderAIChatActions(acts)}</div>`;
+          }).join("")
         : `<div class="ai-chat-msg sys">${I18N.t("sre.empty_session","（空会话）")}</div>`;
-      log.querySelectorAll(".ai-chat-msg.ai").forEach(d=>{ addCopyTool(d,d.textContent); bindAIDashLinks(d); });
+      const aiNodes=log.querySelectorAll(".ai-chat-msg.ai");
+      let aiIdx=0;
+      msgs.forEach(m=>{
+        if(m.role!=="assistant") return;
+        const d=aiNodes[aiIdx++]; if(!d) return;
+        const acts=parseAIChatActions(m.actions);
+        d._aiActions=acts;
+        addCopyTool(d,d.innerText||m.content||"",{actions:acts});
+        bindAIChatActions(d,acts);
+      });
       log.scrollTop=log.scrollHeight;
+      requestAnimationFrame(()=>{
+        aiNodes.forEach((d,i)=>{
+          // re-bind charts after layout
+          const m=msgs.filter(x=>x.role==="assistant")[i];
+          if(m) bindAIChatWidgets(d, parseAIChatActions(m.actions));
+        });
+      });
     }
   }catch(e){ if(typeof toast==="function") toast(I18N.t("sre.load_session_failed","加载会话失败")+"："+e,"err"); }
 }
@@ -4279,7 +4395,7 @@ async function sendAIChat(){
     const files=atts.filter(a=>a.kind==="file").map(a=>({name:a.name,text:a.text}));
     const r=await fetch(`${API}/hermes/chat`,{method:"POST",headers:{"Content-Type":"application/json"},
       signal:_aiChatAbort?_aiChatAbort.signal:undefined,
-      body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:AI_CHAT_HISTORY.slice(0,-1),images,files,stream:true})});
+      body:JSON.stringify({message:msg,session_id:AI_CHAT_SESSION,history:historyForAIChatAPI(AI_CHAT_HISTORY.slice(0,-1)),images,files,stream:true})});
     if(!r.ok){ throw new Error("HTTP "+r.status); }
     let streamed=false;
     let reasoning=""; // 推理模型思维链（独立于 answer，渲染到「思考过程」折叠区）
@@ -4295,12 +4411,13 @@ async function sendAIChat(){
     let streamRAF=null;
     const paintStream=()=>{
       if(!pending) return;
-      const chartPending=(uiActions||[]).some(a=>a&&(a.type==="show_chart"||a.type==="show_stat"||a.type==="show_table"||a.type==="show_logs"));
+      const hasWidgets=(uiActions||[]).some(a=>a&&(a.type==="show_chart"||a.type==="show_stat"||a.type==="show_table"||a.type==="show_logs"));
       pending.innerHTML=renderReasoningBlock(reasoning,true)+toolTraceHTML()
-        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">▍</span></div>"
-        +(chartPending?'<div class="ai-chart-pending">📊 图表/组件生成中…</div>':"")
+        +'<div class="ai-stream-body"><span class="ai-stream-text">'+esc(answer||"")+"</span><span class=\"ai-stream-cursor\">0</span></div>"
+        +(hasWidgets?renderAIChatWidgets(uiActions):"")
         +renderAIChatActions(uiActions);
       bindAIChatActions(pending,uiActions);
+      if(hasWidgets) requestAnimationFrame(()=>bindAIChatWidgets(pending,uiActions));
     };
     const schedulePaint=()=>{
       if(streamRAF) return;
@@ -4313,6 +4430,7 @@ async function sendAIChat(){
           +(renderAIMarkdown(answer)||(toolStates.length?"":"…"))
           +renderAIChatWidgets(uiActions)
           +renderAIChatActions(uiActions);
+        pending._aiActions=uiActions.slice();
         bindAIChatActions(pending,uiActions);
         bindAIDashLinks(pending);
         requestAnimationFrame(()=>bindAIChatWidgets(pending,uiActions));
@@ -4365,9 +4483,10 @@ async function sendAIChat(){
       }
     );
     if(answer){
-      AI_CHAT_HISTORY.push({role:"assistant",content:answer});
+      AI_CHAT_HISTORY.push({role:"assistant",content:answer,actions:uiActions.slice()});
       if(pending&&lastRunId) pending.dataset.runId=lastRunId;
-      addCopyTool(pending,answer,{runId:lastRunId});
+      if(pending) pending._aiActions=uiActions.slice();
+      addCopyTool(pending,answer,{runId:lastRunId,actions:uiActions.slice()});
     }
     refreshAISessionsSoon();
   }catch(e){
@@ -4415,38 +4534,45 @@ function copyText(t){
   _fallbackCopy(t);
 }
 function _fallbackCopy(t){ const ta=document.createElement("textarea"); ta.value=t; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(e){} ta.remove(); }
-// 给一条 AI 回复挂上「朗读 / 复制 / 重答 / 👍👎」操作栏（朗读紧贴本条消息下方）
+// 给一条 AI 回复挂上图标化操作栏（朗读 / 复制 / 导出 / 重答 / 👍👎），低频文案全部收进 title
 function addCopyTool(div,rawText,opts){
   if(!div) return;
   opts=opts||{};
+  const actions=parseAIChatActions(opts.actions!=null?opts.actions:div._aiActions);
+  div._aiActions=actions;
   // 代码块独立复制（复制对应 <pre> 内容）
   div.querySelectorAll(".ai-code-copy").forEach(b=>{
     b.onclick=()=>{ const w=b.closest(".ai-code-wrap"); const c=w&&w.querySelector("pre code"); if(c){ copyText(c.textContent); b.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>b.textContent=I18N.t("sre.copy","复制"),1200); } };
   });
+  const existing=div.querySelector(".ai-msg-tools"); if(existing) existing.remove();
   const bar=document.createElement("div"); bar.className="ai-msg-tools";
-  const speakBtn=document.createElement("button");
-  speakBtn.className="ai-speak-btn";
-  speakBtn.textContent=I18N.t("sre.speak","朗读");
-  speakBtn.title=I18N.t("sre.speak_title","朗读本条回复");
-  speakBtn.onclick=()=>speakAIText(rawText, speakBtn);
-  bar.appendChild(speakBtn);
-  const btn=document.createElement("button"); btn.textContent=I18N.t("sre.copy","复制"); btn.title=I18N.t("sre.copy_reply","复制回复");
-  btn.onclick=()=>{ copyText(rawText); btn.textContent=I18N.t("sre.copied","已复制"); setTimeout(()=>{ btn.textContent=I18N.t("sre.copy","复制"); },1200); };
-  bar.appendChild(btn);
-  if(opts.export!==false && rawText && typeof exportModel==="function"){
-    const exp=document.createElement("button"); exp.textContent=I18N.t("sre.export","导出"); exp.title=I18N.t("sre.export_reply","导出本条回复");
-    exp.onclick=()=>exportAIChatReport(I18N.t("sre.chat_export_title","AI 对话报告"), rawText);
-    bar.appendChild(exp);
+  const iconBtn=(cls,title,svg,onClick)=>{
+    const b=document.createElement("button");
+    b.type="button"; b.className=cls||""; b.title=title; b.setAttribute("aria-label",title);
+    b.innerHTML=svg; b.onclick=onClick; return b;
+  };
+  const ico={
+    speak:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+    copy:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    export:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    regen:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>'
+  };
+  bar.appendChild(iconBtn("ai-speak-btn",I18N.t("sre.speak_title","朗读本条回复"),ico.speak,()=>speakAIText(rawText, bar.querySelector(".ai-speak-btn"))));
+  bar.appendChild(iconBtn("",I18N.t("sre.copy_reply","复制回复"),ico.copy,e=>{
+    copyText(rawText);
+    const b=e.currentTarget; b.classList.add("ok"); setTimeout(()=>b.classList.remove("ok"),900);
+  }));
+  if(opts.export!==false && (rawText || actions.length) && typeof exportModel==="function"){
+    bar.appendChild(iconBtn("",I18N.t("sre.export_reply","导出本条回复（含图表）"),ico.export,
+      ()=>exportAIChatReport(I18N.t("sre.chat_export_title","AI 对话报告"), rawText||"", null, {actions,root:div})));
   }
   if(opts.regenerate!==false){
-    const rebtn=document.createElement("button"); rebtn.textContent=I18N.t("sre.regen_answer","重答"); rebtn.title=I18N.t("sre.regen_title","用上一条问题重新回答");
-    rebtn.onclick=regenerateAIChat;
-    bar.appendChild(rebtn);
+    bar.appendChild(iconBtn("",I18N.t("sre.regen_title","用上一条问题重新回答"),ico.regen,regenerateAIChat));
   }
   if(opts.feedback===false){ div.appendChild(bar); return; }
   // 无 run_id 时仍展示按钮，但提交时提示（避免假反馈污染）
-  const up=document.createElement("button"); up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
-  const down=document.createElement("button"); down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
+  const up=document.createElement("button"); up.type="button"; up.textContent="👍"; up.title=I18N.t("sre.helpful","有用");
+  const down=document.createElement("button"); down.type="button"; down.textContent="👎"; down.title=I18N.t("sre.unhelpful","无用");
   const sendFb=async (action)=>{
     const runId=opts.runId||div.dataset.runId||"";
     if(!runId){
@@ -4683,11 +4809,30 @@ safeAddEventListener("aiChatInput","input",autoGrowAIInput);
 safeAddEventListener("aiChatLog","scroll",()=>{ const b=$("aiChatScrollBtn"); if(b) b.style.display=aiChatStick()?"none":"flex"; });
 safeAddEventListener("aiChatScrollBtn","click",()=>{ aiChatToBottom(); const b=$("aiChatScrollBtn"); if(b) b.style.display="none"; });
 safeAddEventListener("aiChatAttachBtn","click",()=>{ const f=$("aiChatFile"); if(f) f.click(); });
-safeAddEventListener("aiChatUrlBtn","click",attachURL);
+safeAddEventListener("aiChatUrlBtn","click",()=>{ closeAIComposerMenu(); attachURL(); });
 safeAddEventListener("aiChatFile","change",onAIChatFiles);
 safeAddEventListener("aiChatMicBtn","click",toggleAIVoiceInput);
 safeAddEventListener("aiChatStopBtn","click",stopAIChat);
+function closeAIComposerMenu(){
+  const menu=$("aiComposerMenu"), btn=$("aiComposerMoreBtn");
+  if(menu) menu.hidden=true;
+  if(btn) btn.setAttribute("aria-expanded","false");
+}
+function toggleAIComposerMenu(ev){
+  if(ev) ev.stopPropagation();
+  const menu=$("aiComposerMenu"), btn=$("aiComposerMoreBtn");
+  if(!menu||!btn) return;
+  const open=menu.hidden;
+  menu.hidden=!open;
+  btn.setAttribute("aria-expanded", open?"true":"false");
+}
+safeAddEventListener("aiComposerMoreBtn","click",toggleAIComposerMenu);
+document.addEventListener("click",e=>{
+  const wrap=document.querySelector(".ai-composer-more");
+  if(wrap&&!wrap.contains(e.target)) closeAIComposerMenu();
+});
 safeAddEventListener("aiWriteApprovalBtn","click",async()=>{
+  closeAIComposerMenu();
   const tool=prompt("签发写工具审批：工具名（如 k8s_scale）","k8s_scale");
   if(!tool) return;
   try{
@@ -4835,7 +4980,7 @@ function normalizeSpeakText(raw){
 }
 async function speakAITextCloud(text, btn){
   if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
-  if(btn){ btn.classList.add("speaking"); btn.textContent=I18N.t("sre.speaking","朗读中…"); _aiSpeakBtn=btn; }
+  if(btn){ btn.classList.add("speaking"); _aiSpeakBtn=btn; }
   const r=await fetch(`${API}/ai/speech/tts`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
   if(!r.ok){
     const j=await r.json().catch(()=>({}));
@@ -4846,7 +4991,7 @@ async function speakAITextCloud(text, btn){
   const audio=new Audio(url);
   _aiCloudAudio=audio;
   const cleanup=()=>{
-    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn.textContent=I18N.t("sre.speak","朗读"); _aiSpeakBtn=null; }
+    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn=null; }
     try{URL.revokeObjectURL(url);}catch(e){}
     if(_aiCloudAudio===audio) _aiCloudAudio=null;
   };
@@ -4860,12 +5005,11 @@ async function speakAIText(rawText, btn){
     try{ speechSynthesis.cancel(); }catch(e){}
     if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
     btn.classList.remove("speaking");
-    btn.textContent=I18N.t("sre.speak","朗读");
     _aiSpeakBtn=null;
     return;
   }
   document.querySelectorAll(".ai-speak-btn.speaking").forEach(b=>{
-    b.classList.remove("speaking"); b.textContent=I18N.t("sre.speak","朗读");
+    b.classList.remove("speaking");
   });
   try{ speechSynthesis.cancel(); }catch(e){}
   if(_aiCloudAudio){ try{_aiCloudAudio.pause();}catch(e){} _aiCloudAudio=null; }
@@ -4885,11 +5029,10 @@ async function speakAIText(rawText, btn){
   if(voice){ u.voice=voice; if(voice.lang) u.lang=voice.lang; }
   if(btn){
     btn.classList.add("speaking");
-    btn.textContent=I18N.t("sre.speaking","朗读中…");
     _aiSpeakBtn=btn;
   }
   u.onend=u.onerror=()=>{
-    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn.textContent=I18N.t("sre.speak","朗读"); _aiSpeakBtn=null; }
+    if(_aiSpeakBtn){ _aiSpeakBtn.classList.remove("speaking"); _aiSpeakBtn=null; }
   };
   const speakNow=()=>speechSynthesis.speak(u);
   if(!voice && speechSynthesis.getVoices().length===0){

@@ -154,6 +154,15 @@ function expToMarkdown(model) {
   if (model.narrative) {
     L.push("## " + (model.narrativeTitle || "分析结论"), "", expClean(model.narrative), "");
   }
+  if ((model.figures || []).length) {
+    L.push("## 图表", "");
+    model.figures.forEach(f => {
+      if (!f) return;
+      L.push("### " + expClean(f.title || "图表"), "");
+      if (f.dataUrl) L.push("![chart](" + f.dataUrl + ")", "");
+      else L.push("_（图表截图不可用，请使用 HTML/PDF/Word 导出）_", "");
+    });
+  }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
     L.push("## " + sec.title, "");
@@ -411,6 +420,14 @@ function expPrintHTML(model) {
   if (model.narrative) {
     h += `<h2>${expEscXml(model.narrativeTitle || "分析结论")}</h2><div class="narrative">${narrativeHTML(model.narrative)}</div>`;
   }
+  if ((model.figures || []).length) {
+    h += `<h2>图表</h2><div class="figures">`;
+    model.figures.forEach(f => {
+      if (!f || !f.dataUrl) return;
+      h += `<figure class="fig"><figcaption>${expEscXml(f.title || "图表")}</figcaption><img src="${f.dataUrl}" alt="${expEscXml(f.title || "")}"/></figure>`;
+    });
+    h += `</div>`;
+  }
   (model.sections || []).forEach(sec => {
     if (!sec.rows || !sec.rows.length) return;
     h += `<h2>${expEscXml(sec.title)} <span class="cnt">${sec.rows.length}</span></h2>` + tbl(sec.columns, sec.rows);
@@ -440,6 +457,10 @@ function expPrintHTML(model) {
   .narrative p { margin:0 0 5px; white-space:pre-wrap; }
   .narrative h3 { font-size:11.5px; margin:9px 0 4px; color:#1e3a5f; }
   .narrative pre { margin:0; padding:2px 6px; background:#f1f5f9; white-space:pre-wrap; font-family:ui-monospace,monospace; }
+  .figures { display:flex; flex-direction:column; gap:12px; margin:0 0 12px; }
+  .fig { margin:0; border:1px solid #e2e8f0; border-radius:6px; padding:8px; background:#fafbfc; break-inside:avoid; }
+  .fig figcaption { font-size:11px; font-weight:600; color:#1e3a5f; margin:0 0 6px; }
+  .fig img { max-width:100%; height:auto; display:block; }
   .n-li { margin:2px 0 2px 8px; }
   table { width:100%; border-collapse:collapse; font-size:10px; margin-bottom:8px; }
   th, td { border:1px solid #d0d5db; padding:4px 6px; text-align:left; word-break:break-word; }

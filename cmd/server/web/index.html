@@ -3499,9 +3499,14 @@
       <div class="ai-chat-input">
         <div class="ai-composer-tools">
           <button class="ai-attach-btn" id="aiChatAttachBtn" type="button" title="上传图片 / 文档" aria-label="上传附件">📎</button>
-          <button class="ai-attach-btn" id="aiChatUrlBtn" type="button" title="抓取网页" aria-label="抓取网页">🔗</button>
           <button class="ai-attach-btn" id="aiChatMicBtn" type="button" title="语音输入" aria-label="语音输入">🎤</button>
-          <button class="btn sm ghost" id="aiWriteApprovalBtn" type="button" title="签发写工具审批">写审批</button>
+          <div class="ai-composer-more">
+            <button class="ai-attach-btn" id="aiComposerMoreBtn" type="button" title="更多工具" aria-label="更多工具" aria-expanded="false" aria-haspopup="true">⋯</button>
+            <div class="ai-composer-menu" id="aiComposerMenu" hidden role="menu">
+              <button type="button" role="menuitem" id="aiChatUrlBtn" title="抓取网页">🔗 <span>抓取网页</span></button>
+              <button type="button" role="menuitem" id="aiWriteApprovalBtn" title="签发写工具审批">✍️ <span>写审批</span></button>
+            </div>
+          </div>
         </div>
         <div id="aiWriteApprovalHint" class="ai-write-approval-hint hint" style="display:none;margin:6px 0 0;width:100%"></div>
         <input type="file" id="aiChatFile" multiple accept="image/*,.txt,.log,.conf,.cfg,.ini,.yaml,.yml,.json,.md,.sh,.py,.go,.js,.ts,.sql,.xml,.csv,.toml,.properties,.env,.docx,.xlsx,.pdf" style="display:none">
