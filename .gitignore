@@ -115,3 +115,10 @@ _rename.js
 
 # Qoder 自动生成目录（不纳入版本控制）
 .qoder/
+
+# 运行时产物（密钥/录制/安装令牌/安全扫描结果）
+.install_token
+secret_keys.json
+desktop-recordings/
+recordings/
+security/
