@@ -5,6 +5,15 @@
 
 ---
 
+## [v0.19.38] — 2026-07-29
+
+### 变更
+
+- **Linux Agent / 远程终端**：安装与重装时完整清理残留 systemd 单元及 `*.service.d` drop-in，避免旧 `ProtectHome` / `CapabilityBoundingSet` 覆盖导致 `fork/exec bash: permission denied`。
+- **systemd 硬化**：默认 `ProtectHome=false`，SNI/内容审计仅提升 ambient 能力、不再收窄 CapabilityBoundingSet；交互 shell 增强 cwd 可用性检测并回退到可写目录。
+
+---
+
 ## [v0.19.37] — 2026-07-29
 
 ### 变更
