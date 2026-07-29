@@ -1,21 +1,25 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ============================================================================
 // MCP Server —— 把本平台的【只读】运维工具暴露为标准 Model Context Protocol，供外部 Agent
-// （如 Nous Hermes Agent、Claude Desktop、Cursor 等 MCP 客户端）连接调用。
+// （Claude Desktop、Cursor 等）连接调用。
 //
-// 这是「不换引擎、用 MCP 桥接对接外部 Agent」的可逆试水通道：复用 Sreyun 引擎已注册的工具
-// 执行器，只导出一个只读白名单（排除会执行代码/变更的工具）。传输 = JSON-RPC over HTTP(POST)，
-// Bearer Token 鉴权。默认关闭。主干零绑定——随时关掉即完全撤除。
-// Wave 2：支持 scoped token（metrics/logs/sql/…）与限流审计。
+// 传输：
+//   - POST /api/v1/mcp  JSON-RPC（application/json 或 text/event-stream，Streamable HTTP）
+//   - GET  /api/v1/mcp  SSE 长连接（兼容探测 / 服务端推送保活）
+//
+// 鉴权：Bearer Token；支持主令牌与 scoped token。默认关闭。
 // ============================================================================
 
 var mcpReadonlyTools = map[string]bool{
@@ -29,11 +33,13 @@ var mcpReadonlyTools = map[string]bool{
 	"query_containers": true, "query_k8s": true, "locate_resource": true,
 	"render_chart": true, "query_metric_range": true, "query_promql_range": true,
 	"show_instant_stat": true, "analyze_metric_trend": true, "forecast_metric": true,
-	"propose_skill": true, "remember_preference": true,
 	"list_dashboards": true, "get_dashboard": true,
 	"list_dashboard_panels": true, "query_dashboard_panel": true,
 	"list_ui_views": true, "navigate_ui": true,
 	"query_security_posture": true,
+	// SRE / AI 只读研判（无写操作）
+	"get_duty_context": true, "diagnose_incident": true, "run_assist_task": true,
+	"run_diagnostic": true, "analyze_dashboard": true,
 }
 
 type jsonRPCReq struct {
@@ -43,14 +49,6 @@ type jsonRPCReq struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": rawOrNull(id), "result": result})
-}
-func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": rawOrNull(id), "error": map[string]any{"code": code, "message": msg}})
-}
 func rawOrNull(id json.RawMessage) any {
 	if len(id) == 0 {
 		return nil
@@ -61,6 +59,28 @@ func rawOrNull(id json.RawMessage) any {
 func mcpTokenFingerprint(tok string) string {
 	sum := sha256.Sum256([]byte(tok))
 	return hex.EncodeToString(sum[:8])
+}
+
+func mcpNewSessionID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func mcpWantsSSE(r *http.Request) bool {
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(accept, "text/event-stream")
+}
+
+func writeMCPSSEData(w http.ResponseWriter, flusher http.Flusher, payload any) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: message\ndata: %s\n\n", raw)
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +96,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed (use POST JSON-RPC)", http.StatusMethodNotAllowed)
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleMCPGetSSE(w, r, scopes, tokName)
+		return
+	case http.MethodDelete:
+		// Streamable HTTP：客户端结束会话；本服务无服务端会话态，直接 200。
+		w.WriteHeader(http.StatusOK)
+		return
+	case http.MethodPost:
+		// continue
+	default:
+		http.Error(w, "method not allowed (use GET/POST/DELETE)", http.StatusMethodNotAllowed)
 		return
 	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	limit := cfg.MCPRateLimitPerMin
 	if limit <= 0 {
@@ -95,9 +127,17 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	var req jsonRPCReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeRPCError(w, nil, -32700, "parse error")
+		s.writeMCPError(w, r, nil, -32700, "parse error")
 		return
 	}
+	sessionID := strings.TrimSpace(r.Header.Get("Mcp-Session-Id"))
+	if sessionID == "" && req.Method == "initialize" {
+		sessionID = mcpNewSessionID()
+	}
+	if sessionID != "" {
+		w.Header().Set("Mcp-Session-Id", sessionID)
+	}
+
 	switch req.Method {
 	case "initialize":
 		protocol := "2025-06-18"
@@ -108,22 +148,102 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		if p.ProtocolVersion != "" {
 			protocol = p.ProtocolVersion
 		}
-		writeRPCResult(w, req.ID, map[string]any{
+		s.writeMCPResult(w, r, req.ID, map[string]any{
 			"protocolVersion": protocol,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "aiops-monitor", "version": appVersion, "token": tokName, "scopes": scopes},
+			"capabilities": map[string]any{
+				"tools":     map[string]any{"listChanged": false},
+				"resources": map[string]any{"subscribe": false, "listChanged": false},
+				"prompts":   map[string]any{"listChanged": false},
+			},
+			"serverInfo": map[string]any{
+				"name": "aiops-monitor", "version": appVersion,
+				"token": tokName, "scopes": scopes,
+			},
+			"instructions": "AIOps 只读运维 MCP：指标/日志/告警/硬件/流量/K8s/看板/值班与诊断研判。禁止写操作。",
 		})
 	case "notifications/initialized", "notifications/cancelled":
 		w.WriteHeader(http.StatusAccepted)
 	case "ping":
-		writeRPCResult(w, req.ID, map[string]any{})
+		s.writeMCPResult(w, r, req.ID, map[string]any{})
 	case "tools/list":
-		writeRPCResult(w, req.ID, map[string]any{"tools": s.mcpToolList(scopes)})
+		s.writeMCPResult(w, r, req.ID, map[string]any{"tools": s.mcpToolList(scopes)})
 	case "tools/call":
-		s.mcpToolCall(w, req, scopes, tokName)
+		s.mcpToolCall(w, r, req, scopes, tokName)
+	case "resources/list":
+		s.writeMCPResult(w, r, req.ID, map[string]any{"resources": s.mcpResourceList()})
+	case "resources/templates/list":
+		s.writeMCPResult(w, r, req.ID, map[string]any{"resourceTemplates": []any{}})
+	case "resources/read":
+		s.mcpResourceRead(w, r, req)
+	case "prompts/list":
+		s.writeMCPResult(w, r, req.ID, map[string]any{"prompts": mcpPromptList()})
+	case "prompts/get":
+		s.mcpPromptGet(w, r, req)
 	default:
-		writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)
+		s.writeMCPError(w, r, req.ID, -32601, "method not found: "+req.Method)
 	}
+}
+
+func (s *Server) handleMCPGetSSE(w http.ResponseWriter, r *http.Request, scopes []string, tokName string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	sessionID := strings.TrimSpace(r.Header.Get("Mcp-Session-Id"))
+	if sessionID == "" {
+		sessionID = mcpNewSessionID()
+	}
+	w.Header().Set("Mcp-Session-Id", sessionID)
+	w.WriteHeader(http.StatusOK)
+
+	// 兼容部分客户端：声明本端点即消息通道（Streamable HTTP 同源）。
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", r.URL.Path)
+	flusher.Flush()
+	_ = scopes
+	_ = tokName
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fmt.Fprintf(w, ": ping %d\n\n", time.Now().Unix())
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) writeMCPResult(w http.ResponseWriter, r *http.Request, id json.RawMessage, result any) {
+	payload := map[string]any{"jsonrpc": "2.0", "id": rawOrNull(id), "result": result}
+	if mcpWantsSSE(r) {
+		flusher, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		writeMCPSSEData(w, flusher, payload)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) writeMCPError(w http.ResponseWriter, r *http.Request, id json.RawMessage, code int, msg string) {
+	payload := map[string]any{"jsonrpc": "2.0", "id": rawOrNull(id), "error": map[string]any{"code": code, "message": msg}}
+	if mcpWantsSSE(r) {
+		flusher, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		writeMCPSSEData(w, flusher, payload)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (s *Server) mcpToolList(scopes []string) []map[string]any {
@@ -144,22 +264,22 @@ func (s *Server) mcpToolList(scopes []string) []map[string]any {
 	return out
 }
 
-func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq, scopes []string, tokName string) {
+func (s *Server) mcpToolCall(w http.ResponseWriter, r *http.Request, req jsonRPCReq, scopes []string, tokName string) {
 	var p struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
-		writeRPCError(w, req.ID, -32602, "invalid params")
+		s.writeMCPError(w, r, req.ID, -32602, "invalid params")
 		return
 	}
 	if !mcpToolAllowedByScopes(p.Name, scopes) || s.sreyun == nil {
-		writeRPCError(w, req.ID, -32602, "unknown, not-exposed, or out-of-scope tool: "+p.Name)
+		s.writeMCPError(w, r, req.ID, -32602, "unknown, not-exposed, or out-of-scope tool: "+p.Name)
 		return
 	}
 	tool, ok := s.sreyun.tools[p.Name]
 	if !ok {
-		writeRPCError(w, req.ID, -32602, "unknown tool: "+p.Name)
+		s.writeMCPError(w, r, req.ID, -32602, "unknown tool: "+p.Name)
 		return
 	}
 	if s.aiGov != nil {
@@ -170,13 +290,112 @@ func (s *Server) mcpToolCall(w http.ResponseWriter, req jsonRPCReq, scopes []str
 	}
 	result, err := tool.Execute(p.Arguments)
 	if err != nil {
-		writeRPCResult(w, req.ID, map[string]any{
+		s.writeMCPResult(w, r, req.ID, map[string]any{
 			"content": []map[string]any{{"type": "text", "text": "工具执行失败：" + err.Error()}},
 			"isError": true,
 		})
 		return
 	}
-	writeRPCResult(w, req.ID, map[string]any{
+	// 尽量附带 structuredContent，便于 Agent 解析 JSON 结果
+	out := map[string]any{
 		"content": []map[string]any{{"type": "text", "text": result}},
+	}
+	var asJSON any
+	if json.Unmarshal([]byte(result), &asJSON) == nil {
+		out["structuredContent"] = asJSON
+	}
+	s.writeMCPResult(w, r, req.ID, out)
+}
+
+func (s *Server) mcpResourceList() []map[string]any {
+	return []map[string]any{
+		{"uri": "aiops://overview", "name": "平台总览", "description": "在线主机/告警/事件摘要", "mimeType": "application/json"},
+		{"uri": "aiops://duty", "name": "值班态势", "description": "值班晨报上下文", "mimeType": "application/json"},
+	}
+}
+
+func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jsonRPCReq) {
+	var p struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil || strings.TrimSpace(p.URI) == "" {
+		s.writeMCPError(w, r, req.ID, -32602, "invalid params: uri required")
+		return
+	}
+	text := ""
+	switch strings.TrimSpace(p.URI) {
+	case "aiops://overview":
+		if s.sreyun != nil {
+			if t, ok := s.sreyun.tools["check_host_health"]; ok {
+				text, _ = t.Execute(map[string]any{})
+			}
+		}
+		if text == "" {
+			text = `{"hint":"call check_host_health / list_alerts via tools"}`
+		}
+	case "aiops://duty":
+		if s.sreyun != nil {
+			if t, ok := s.sreyun.tools["get_duty_context"]; ok {
+				text, _ = t.Execute(map[string]any{})
+			}
+		}
+		if text == "" {
+			text = `{"hint":"get_duty_context unavailable"}`
+		}
+	default:
+		s.writeMCPError(w, r, req.ID, -32002, "resource not found: "+p.URI)
+		return
+	}
+	s.writeMCPResult(w, r, req.ID, map[string]any{
+		"contents": []map[string]any{{
+			"uri": p.URI, "mimeType": "application/json", "text": text,
+		}},
+	})
+}
+
+func mcpPromptList() []map[string]any {
+	return []map[string]any{
+		{"name": "duty_brief", "description": "生成值班晨报：风险优先级、待办与建议处置", "arguments": []map[string]any{}},
+		{"name": "alert_triage", "description": "告警分诊：按主机/级别汇总并给出处置顺序", "arguments": []map[string]any{
+			{"name": "host_id", "description": "可选主机 ID", "required": false},
+		}},
+		{"name": "k8s_investigate", "description": "K8s 排查：定位异常 Pod/资源并给出只读诊断步骤", "arguments": []map[string]any{
+			{"name": "cluster_id", "description": "集群 ID", "required": false},
+		}},
+	}
+}
+
+func (s *Server) mcpPromptGet(w http.ResponseWriter, r *http.Request, req jsonRPCReq) {
+	var p struct {
+		Name      string            `json:"name"`
+		Arguments map[string]string `json:"arguments"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil || strings.TrimSpace(p.Name) == "" {
+		s.writeMCPError(w, r, req.ID, -32602, "invalid params: name required")
+		return
+	}
+	var text string
+	switch p.Name {
+	case "duty_brief":
+		text = "请调用 get_duty_context 拉取值班态势，再输出简洁晨报：风险优先级、待办、建议处置。"
+	case "alert_triage":
+		text = "请调用 list_alerts（必要时 check_host_health / query_metrics），按严重级别与主机汇总，给出处置顺序。"
+		if hid := strings.TrimSpace(p.Arguments["host_id"]); hid != "" {
+			text += " 重点主机 host_id=" + hid + "。"
+		}
+	case "k8s_investigate":
+		text = "请用 query_k8s / locate_resource 只读排查集群异常，给出根因假设与下一步只读检查；禁止扩缩容或重启。"
+		if cid := strings.TrimSpace(p.Arguments["cluster_id"]); cid != "" {
+			text += " 集群 cluster_id=" + cid + "。"
+		}
+	default:
+		s.writeMCPError(w, r, req.ID, -32602, "unknown prompt: "+p.Name)
+		return
+	}
+	s.writeMCPResult(w, r, req.ID, map[string]any{
+		"description": p.Name,
+		"messages": []map[string]any{
+			{"role": "user", "content": map[string]any{"type": "text", "text": text}},
+		},
 	})
 }

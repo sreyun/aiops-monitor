@@ -14,13 +14,15 @@ type MCPScopedToken struct {
 }
 
 var mcpScopeTools = map[string][]string{
-	"metrics":   {"query_metrics", "list_alerts", "list_recent_changes", "check_host_health", "render_chart", "query_metric_range", "query_promql_range", "show_instant_stat", "analyze_metric_trend", "forecast_metric", "list_dashboards", "get_dashboard", "list_dashboard_panels", "query_dashboard_panel"},
+	"metrics":   {"query_metrics", "list_alerts", "list_recent_changes", "check_host_health", "render_chart", "query_metric_range", "query_promql_range", "show_instant_stat", "analyze_metric_trend", "forecast_metric", "list_dashboards", "get_dashboard", "list_dashboard_panels", "query_dashboard_panel", "analyze_dashboard"},
 	"logs":      {"search_logs"},
 	"sql":       {"list_datasources", "query_datasource"},
 	"hardware":  {"query_hardware", "query_hardware_events", "query_hardware_history", "query_hardware_changes", "query_snmp", "query_interface_traffic", "query_traps"},
 	"infra":     {"query_containers", "query_k8s", "locate_resource", "query_hyperv", "query_netflow", "query_netflow_flows"},
 	"knowledge": {"search_similar_cases", "search_knowledge", "list_ui_views", "navigate_ui", "query_security_posture"},
 	"alerts":    {"list_alerts"},
+	"sre":       {"get_duty_context", "diagnose_incident", "run_diagnostic", "check_host_health", "list_alerts", "list_recent_changes"},
+	"ai":        {"run_assist_task", "analyze_dashboard", "diagnose_incident", "get_duty_context"},
 }
 
 func parseMCPScopedTokens(raw string) []MCPScopedToken {

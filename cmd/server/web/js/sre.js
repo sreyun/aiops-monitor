@@ -3408,6 +3408,7 @@ function applyAIConfigEditMode(editable){
   root.querySelectorAll("button").forEach(el=>{
     if(el.hasAttribute("data-close-btn") || el.classList.contains("close") || el.classList.contains("ai-nav-item")) return;
     const id=el.id||"";
+    if(/^(mcpCopyClientCfgBtn|mcpRefreshClientCfgBtn)$/.test(id)){ el.disabled=false; return; }
     const isWrite=el.getAttribute("data-act")==="ai-preset"
       || /^(aiConfigSaveBtn|aiChatTestBtn|aiEmbedTestBtn|aiRerankTestBtn|aiWeKnoraTestBtn|aiWeKnoraListBtn|aiModelRefreshBtn|aiModelCaretBtn|mcpGenTokenBtn|aiTermToggleBtn|aiTermConfirmBtn|aiTermCancelBtn|aiStatsRefreshBtn)$/.test(id)
       || id.indexOf("Test")>=0 || id.indexOf("Gen")>=0;
@@ -3439,6 +3440,9 @@ async function openAIConfig(){
     if($("aiActiveExperiment")) $("aiActiveExperiment").value=c.active_experiment_id||"";
     if($("mcpEnabled")) $("mcpEnabled").checked=!!c.mcp_enabled;
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
+    if($("mcpRateLimit")) $("mcpRateLimit").value=c.mcp_rate_limit_per_min||"";
+    if($("mcpScopedTokens")) $("mcpScopedTokens").value=c.mcp_scoped_tokens_json||"";
+    refreshMcpClientConfig();
     if($("weknoraEnabled")) $("weknoraEnabled").checked=!!c.weknora_enabled;
     if($("weknoraURL")) $("weknoraURL").value=c.weknora_url||"";
     if($("weknoraKey")) $("weknoraKey").value=c.weknora_api_key||"";
@@ -3577,6 +3581,8 @@ async function saveAIConfig(){
     task_models_json:($("aiTaskModels")?.value||"").trim(),
     active_experiment_id:($("aiActiveExperiment")?.value||"").trim(),
     mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim(),
+    mcp_rate_limit_per_min:parseInt($("mcpRateLimit")?.value,10)||0,
+    mcp_scoped_tokens_json:($("mcpScopedTokens")?.value||"").trim(),
     weknora_enabled:$("weknoraEnabled")?.checked||false,
     weknora_url:($("weknoraURL")?.value||"").trim(),
     weknora_api_key:$("weknoraKey")?.value||"",
@@ -3681,6 +3687,35 @@ function updateMcpCardSummary(){
   const on=$("mcpEnabled") && $("mcpEnabled").checked;
   el.textContent = on ? "已启用" : "未启用";
   el.className = "ai-card-summary" + (on ? " on" : "");
+  refreshMcpClientConfig();
+}
+function mcpEndpointURL(){
+  try{ return new URL("/api/v1/mcp", location.origin).href; }catch(_){ return (location.origin||"")+"/api/v1/mcp"; }
+}
+function refreshMcpClientConfig(){
+  const el=$("mcpClientConfig"); if(!el) return;
+  const tok=($("mcpToken")?.value||"").trim();
+  const showTok = tok && !tok.includes("****") ? tok : "<你的 MCP Token>";
+  const url=mcpEndpointURL();
+  el.value=JSON.stringify({
+    mcpServers:{
+      "aiops-monitor":{
+        url,
+        headers:{ Authorization:"Bearer "+showTok }
+      }
+    }
+  },null,2);
+}
+async function copyMcpClientConfig(){
+  refreshMcpClientConfig();
+  const el=$("mcpClientConfig"); if(!el) return;
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(el.value); }
+    else{ el.focus(); el.select(); document.execCommand("copy"); }
+    if(typeof toast==="function") toast(I18N.t("sre.mcp_cfg_copied","已复制 MCP 客户端配置"),"ok");
+  }catch(e){
+    if(typeof toast==="function") toast(I18N.t("sre.copy_failed","复制失败")+"："+e,"err");
+  }
 }
 function updateWeKnoraCardSummary(){
   const el=$("weknoraCardSummary"); if(!el) return;
@@ -4807,6 +4842,9 @@ safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
 safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
 safeAddEventListener("mcpCardHeader","click",toggleMcpCard);
 safeAddEventListener("mcpEnabled","change",updateMcpCardSummary);
+safeAddEventListener("mcpToken","input",refreshMcpClientConfig);
+safeAddEventListener("mcpCopyClientCfgBtn","click",copyMcpClientConfig);
+safeAddEventListener("mcpRefreshClientCfgBtn","click",refreshMcpClientConfig);
 safeAddEventListener("weknoraEnabled","change",updateWeKnoraCardSummary);
 safeAddEventListener("weknoraURL","change",updateWeKnoraCardSummary);
 safeAddEventListener("mcpGenTokenBtn","click",()=>{

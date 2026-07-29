@@ -5,6 +5,17 @@
 
 ---
 
+## [v0.19.36] — 2026-07-29
+
+### 变更
+
+- **MCP**：`GET/POST/DELETE /api/v1/mcp` 升级为 Streamable HTTP（JSON-RPC + SSE），兼容 Cursor / Claude 等客户端。
+- **MCP 工具**：暴露值班/诊断等只读研判工具（`get_duty_context`、`diagnose_incident`、`run_assist_task`、`run_diagnostic`、`analyze_dashboard`）；新增 scope `sre` / `ai`；补充 prompts/resources；不再暴露 `propose_skill` / `remember_preference`。
+- **AI 设置 · 集成**：支持作用域令牌、每分钟限流配置，以及一键复制客户端 MCP 配置。
+- **质量**：新增 `handleMCP` HTTP 集成测试，更新 `docs/ci-gate.md`。
+
+---
+
 ## [v0.19.35] — 2026-07-29
 
 相对 **v0.19.0** 的累计发布（含原 v0.19.1–v0.19.34 全部内容）。

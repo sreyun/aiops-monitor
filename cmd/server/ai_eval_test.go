@@ -65,6 +65,21 @@ func TestEvalMCPScopes(t *testing.T) {
 	if ok, _, _ := resolveMCPAuth(cfg, "bad"); ok {
 		t.Fatal("bad token must fail")
 	}
+	// 写偏好类工具不得进入 MCP 白名单；SRE/AI scope 仅暴露只读研判工具
+	if mcpReadonlyTools["propose_skill"] || mcpReadonlyTools["remember_preference"] {
+		t.Fatal("write/preference tools must not be MCP-exposed")
+	}
+	sreScopes := []string{"sre"}
+	if !mcpToolAllowedByScopes("get_duty_context", sreScopes) || !mcpToolAllowedByScopes("diagnose_incident", sreScopes) {
+		t.Fatal("sre scope should allow duty/diagnose")
+	}
+	if mcpToolAllowedByScopes("query_datasource", sreScopes) {
+		t.Fatal("sre scope must not allow sql tools")
+	}
+	aiScopes := []string{"ai"}
+	if !mcpToolAllowedByScopes("run_assist_task", aiScopes) || !mcpToolAllowedByScopes("analyze_dashboard", aiScopes) {
+		t.Fatal("ai scope should allow assist/analyze")
+	}
 }
 
 func TestEvalWriteApprovalForced(t *testing.T) {

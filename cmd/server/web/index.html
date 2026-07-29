@@ -3402,11 +3402,25 @@
             <div class="ai-card" id="mcpCard">
               <div class="ai-card-header" id="mcpCardHeader" style="display:none"></div>
               <div class="ai-card-body" id="mcpCardBody">
-                <div class="field"><label class="switch"><input type="checkbox" id="mcpEnabled"> <span>启用 MCP：暴露指标 / 日志 / 告警 / 硬件 / 流量等只读工具</span></label></div>
-                <div class="field"><label>访问令牌（Bearer Token）</label>
+                <div class="field"><label class="switch"><input type="checkbox" id="mcpEnabled"> <span>启用 MCP：暴露指标 / 日志 / 告警 / 硬件 / 流量 / 值班诊断等只读工具</span></label></div>
+                <div class="field"><label>主访问令牌（Bearer Token，全量 scope）</label>
                   <div class="token-gen-row"><input type="password" id="mcpToken" autocomplete="off" placeholder="至少 16 位强随机令牌"><button class="btn sm" id="mcpGenTokenBtn" type="button" title="生成高强度随机令牌并自动填入">生成</button></div>
                 </div>
-                <p class="ai-footnote">端点 <code>POST /api/v1/mcp</code>（JSON-RPC）。客户端携带 <code>Authorization: Bearer &lt;令牌&gt;</code>。</p>
+                <div class="field"><label>每分钟限流（0=默认 60）</label>
+                  <input type="number" id="mcpRateLimit" min="0" max="6000" step="1" placeholder="60">
+                </div>
+                <div class="field"><label>作用域令牌 JSON（可选）</label>
+                  <textarea id="mcpScopedTokens" rows="4" spellcheck="false" placeholder='[{"name":"sre-ro","token":"...","scopes":["sre","alerts"]},{"name":"metrics","token":"...","scopes":["metrics"]}]'></textarea>
+                  <p class="ai-footnote">scopes：<code>metrics</code> <code>logs</code> <code>sql</code> <code>hardware</code> <code>infra</code> <code>knowledge</code> <code>alerts</code> <code>sre</code> <code>ai</code> <code>all</code>。已配置时回显为 <code>****</code>，原样保存可保留。</p>
+                </div>
+                <div class="field"><label>客户端配置（Cursor / Claude）</label>
+                  <textarea id="mcpClientConfig" rows="8" readonly spellcheck="false"></textarea>
+                  <div class="token-gen-row" style="margin-top:6px">
+                    <button class="btn sm" id="mcpCopyClientCfgBtn" type="button">复制配置</button>
+                    <button class="btn sm ghost" id="mcpRefreshClientCfgBtn" type="button">刷新预览</button>
+                  </div>
+                </div>
+                <p class="ai-footnote">端点 <code>GET/POST /api/v1/mcp</code>（Streamable HTTP：JSON-RPC + SSE）。客户端携带 <code>Authorization: Bearer &lt;令牌&gt;</code>。</p>
               </div>
             </div>
           </div>

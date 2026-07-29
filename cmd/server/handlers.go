@@ -505,7 +505,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/pg/slow-queries", s.handlePGSlowQueries)
 	mux.HandleFunc("GET /api/v1/admin/netflow/queue", s.handleNetflowQueueStats)
 	mux.HandleFunc("GET /api/v1/terminal/commands", s.handleTerminalCommands) // 终端命令永久历史（audit_log）
-	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                           // MCP server：外部 Agent 连接本平台只读运维工具（Bearer 鉴权，默认关，POST JSON-RPC）
+	mux.HandleFunc("GET /api/v1/mcp", s.handleMCP)                            // MCP Streamable HTTP：SSE 长连接 / 探测
+	mux.HandleFunc("POST /api/v1/mcp", s.handleMCP)                           // MCP Streamable HTTP：JSON-RPC（JSON 或 SSE 响应）
+	mux.HandleFunc("DELETE /api/v1/mcp", s.handleMCP)                         // MCP 会话结束（无服务端态，200）
 	mux.HandleFunc("POST /api/v1/ai/models", s.handleAIModels)
 	mux.HandleFunc("GET /api/v1/ai/inspections", s.handleListInspections)
 	mux.HandleFunc("POST /api/v1/ai/inspect", s.handleRunInspection)
