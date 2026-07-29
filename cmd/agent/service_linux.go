@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,10 +29,20 @@ const agentServiceName = "aiops-monitor-agent"
 
 const systemdUnitPath = "/etc/systemd/system/aiops-monitor-agent.service"
 
+// legacyAgentServiceNames are older one-liner / alternate unit names that may
+// still be present after partial uninstalls.
+var legacyAgentServiceNames = []string{
+	"aiops-monitor-agent",
+	"aiops-agent",
+	"aiops-relay",
+}
+
 func installAgentService(exePath, cfgPath string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("?? root ?????? sudo ?? --install-service")
+		return fmt.Errorf("需要 root 权限，请用 sudo 运行 --install-service")
 	}
+	// Clear any leftover units/drop-ins so a prior hardened install cannot stick.
+	purgeAgentSystemdUnits()
 	termShell := "/bin/bash"
 	if _, err := os.Stat(termShell); err != nil {
 		termShell = "/bin/sh"
@@ -50,35 +61,54 @@ User=root
 Environment=SHELL=%s
 KillMode=mixed
 LimitNOFILE=65536
+ProtectHome=false
 
 [Install]
 WantedBy=multi-user.target
 `, exePath, cfgPath, termShell)
 
 	if err := os.WriteFile(systemdUnitPath, []byte(unit), 0o644); err != nil {
-		return fmt.Errorf("?? systemd ????: %w", err)
+		return fmt.Errorf("写入 systemd 单元失败: %w", err)
 	}
 	if err := runSvcCmd("systemctl", "daemon-reload"); err != nil {
-		return fmt.Errorf("systemctl daemon-reload ??: %w", err)
+		return fmt.Errorf("systemctl daemon-reload 失败: %w", err)
 	}
 	if err := runSvcCmd("systemctl", "enable", agentServiceName); err != nil {
-		return fmt.Errorf("systemctl enable ??: %w", err)
+		return fmt.Errorf("systemctl enable 失败: %w", err)
 	}
 	if err := runSvcCmd("systemctl", "restart", agentServiceName); err != nil {
-		return fmt.Errorf("systemctl restart ??: %w", err)
+		return fmt.Errorf("systemctl restart 失败: %w", err)
 	}
 	return nil
 }
 
 func uninstallAgentService() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("?? root ?????? sudo ?? --uninstall-service")
+		return fmt.Errorf("需要 root 权限，请用 sudo 运行 --uninstall-service")
 	}
-	_ = runSvcCmd("systemctl", "stop", agentServiceName)
-	_ = runSvcCmd("systemctl", "disable", agentServiceName)
-	_ = os.Remove(systemdUnitPath)
+	purgeAgentSystemdUnits()
 	_ = runSvcCmd("systemctl", "daemon-reload")
 	return nil
+}
+
+// purgeAgentSystemdUnits stops/disables every known agent unit and removes both
+// the unit file and *.service.d drop-in directories (systemctl edit leftovers).
+func purgeAgentSystemdUnits() {
+	for _, name := range legacyAgentServiceNames {
+		_ = runSvcCmd("systemctl", "stop", name)
+		_ = runSvcCmd("systemctl", "disable", name)
+		_ = runSvcCmd("systemctl", "reset-failed", name)
+		for _, base := range []string{
+			"/etc/systemd/system",
+			"/lib/systemd/system",
+			"/usr/lib/systemd/system",
+			"/run/systemd/system",
+		} {
+			_ = os.Remove(filepath.Join(base, name+".service"))
+			_ = os.RemoveAll(filepath.Join(base, name+".service.d"))
+		}
+		_ = os.Remove(filepath.Join("/etc/systemd/system/multi-user.target.wants", name+".service"))
+	}
 }
 
 // runAgentAsService is the entry point invoked by systemd (--service). Metrics
@@ -91,11 +121,11 @@ func runAgentAsService(agent *Agent, cfgPath string) error {
 
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("???????????: %w", err)
+		return fmt.Errorf("无法定位可执行文件: %w", err)
 	}
 
 	go agent.Run(ctx)
-	slog.Info("Agent systemd ?????(root)", "config", cfgPath)
+	slog.Info("Agent systemd 守护进程已启动(root)", "config", cfgPath)
 	superviseLinuxDesktopWorker(ctx, exe, cfgPath)
 	return nil
 }
@@ -149,11 +179,11 @@ func superviseLinuxDesktopWorker(ctx context.Context, exe, cfgPath string) {
 				stopWorker()
 				w, err := spawnLinuxDesktopWorker(exe, cfgPath, sess)
 				if err != nil {
-					slog.Warn("?? Linux ?? worker ??", "err", err, "user", sess.user, "display", sess.display)
+					slog.Warn("启动 Linux 桌面 worker 失败", "err", err, "user", sess.user, "display", sess.display)
 				} else {
 					worker = w
 					curKey = sess.key()
-					slog.Info("??????????? worker",
+					slog.Info("已启动图形会话桌面 worker",
 						"user", sess.user, "display", sess.display,
 						"wayland", sess.waylandDisplay != "")
 				}
@@ -199,8 +229,8 @@ func spawnLinuxDesktopWorker(exe, cfgPath string, s *linuxDesktopSession) (*bgPr
 }
 
 // detectLinuxDesktopSession finds the active local graphical session and lifts
-// its graphical environment (DISPLAY/XAUTHORITY/?) directly from a live process
-// owned by that user ? the most reliable cross-distro method.
+// its graphical environment (DISPLAY/XAUTHORITY/…) directly from a live process
+// owned by that user — the most reliable cross-distro method.
 func detectLinuxDesktopSession() (*linuxDesktopSession, bool) {
 	uid, uname, display := activeGraphicalUser()
 	if uid < 0 {

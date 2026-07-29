@@ -338,6 +338,29 @@ aiops_has_systemd() {
   return 1
 }
 
+# Purge a systemd unit completely: stop/disable, remove unit file AND drop-in
+# dirs (systemctl edit leftovers), clear failed state. Incomplete uninstall used
+# to leave *.service.d overrides that re-applied ProtectHome / CapabilityBoundingSet
+# on the next install and broke the remote terminal (fork/exec bash: permission denied).
+aiops_purge_systemd_unit() {
+  _u="$1"
+  [ -n "$_u" ] || return 0
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop "$_u" 2>/dev/null || true
+    systemctl disable "$_u" 2>/dev/null || true
+    systemctl reset-failed "$_u" 2>/dev/null || true
+  fi
+  rm -f "/etc/systemd/system/${_u}.service" \
+        "/lib/systemd/system/${_u}.service" \
+        "/usr/lib/systemd/system/${_u}.service" \
+        "/etc/systemd/system/${_u}.service.wants" \
+        "/etc/systemd/system/multi-user.target.wants/${_u}.service"
+  rm -rf "/etc/systemd/system/${_u}.service.d" \
+         "/lib/systemd/system/${_u}.service.d" \
+         "/usr/lib/systemd/system/${_u}.service.d" \
+         "/run/systemd/system/${_u}.service.d"
+}
+
 # Detect a prior one-liner / --install-service agent so reinstall can stop+uninstall first.
 aiops_is_installed() {
   for _d in "$DIR" /opt/aiops-agent "${HOME}/.aiops-agent"; do
@@ -346,9 +369,12 @@ aiops_is_installed() {
       return 0
     fi
   done
-  if [ -f /etc/systemd/system/aiops-agent.service ] || [ -f /etc/systemd/system/aiops-monitor-agent.service ]; then
-    return 0
-  fi
+  for _u in aiops-agent aiops-monitor-agent aiops-relay; do
+    if [ -f "/etc/systemd/system/${_u}.service" ] || [ -d "/etc/systemd/system/${_u}.service.d" ] || \
+       [ -f "/lib/systemd/system/${_u}.service" ] || [ -f "/usr/lib/systemd/system/${_u}.service" ]; then
+      return 0
+    fi
+  done
   for _pl in \
     "$HOME/Library/LaunchAgents/com.aiops.agent.plist" \
     "/Library/LaunchDaemons/com.aiops.agent.plist" \
@@ -373,10 +399,8 @@ aiops_stop_and_uninstall_existing() {
   fi
   echo "[AIOps] existing agent detected — stopping service, uninstalling, then reinstalling"
   if command -v systemctl >/dev/null 2>&1; then
-    for _u in aiops-agent aiops-monitor-agent; do
-      systemctl stop "$_u" 2>/dev/null || true
-      systemctl disable "$_u" 2>/dev/null || true
-      rm -f "/etc/systemd/system/${_u}.service" "/lib/systemd/system/${_u}.service" "/usr/lib/systemd/system/${_u}.service"
+    for _u in aiops-agent aiops-monitor-agent aiops-relay; do
+      aiops_purge_systemd_unit "$_u"
     done
     systemctl daemon-reload 2>/dev/null || true
   fi
@@ -519,12 +543,14 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   fi
   AIOPS_GROUP="$(id -gn "$AIOPS_USER" 2>/dev/null || echo "$AIOPS_USER")"
   chown -R "$AIOPS_USER:$AIOPS_GROUP" "$DIR"
-  # SNI / content audit needs packet capture as non-root → ambient capabilities.
+  # SNI / content audit needs packet capture → raise NET_RAW/NET_ADMIN via ambient
+  # capabilities. Do NOT set CapabilityBoundingSet to only those two: that drops
+  # the rest of root's capabilities and breaks interactive shell / file ops
+  # (Go reports fork/exec /bin/bash: permission denied).
   UNIT_CAPS=""
   UNIT_NNP="NoNewPrivileges=true"
   if [ "__SNI_ENABLED__" = "true" ] || [ "__CONTENT_AUDIT__" = "true" ]; then
     UNIT_CAPS="AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 "
     UNIT_NNP="NoNewPrivileges=false"
   fi
@@ -540,12 +566,11 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
   [ -n "$TERM_SHELL" ] && [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/usr/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
-  # Real login users need /home for interactive shells; dedicated /opt installs
-  # under root can keep ProtectHome.
-  PROTECT_HOME="ProtectHome=true"
-  if [ "$AIOPS_USER" != "root" ]; then
-    PROTECT_HOME="ProtectHome=false"
-  fi
+  # Always leave home accessible: remote terminal cwd is $HOME (/root or /home/…);
+  # locking home (ProtectHome) makes chdir fail and Go misreports it as bash permission denied.
+  # Wipe any leftover drop-ins before writing the unit so old overrides cannot stick.
+  aiops_purge_systemd_unit aiops-agent
+  aiops_purge_systemd_unit aiops-monitor-agent
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
 [Unit]
 Description=AIOps Agent
@@ -563,7 +588,7 @@ RestartSec=5
 $UNIT_NNP
 $UNIT_CAPS
 ProtectSystem=strict
-$PROTECT_HOME
+ProtectHome=false
 PrivateTmp=true
 ReadWritePaths=$DIR
 [Install]
@@ -1941,10 +1966,29 @@ Write-Host "[AIOps] internal machines use: http://<this-host-ip>:$Port"
 const uninstallShTemplate = `#!/bin/sh
 if [ "$(id -u)" = "0" ]; then DIR="${AIOPS_DIR:-/opt/aiops-agent}"; else DIR="${AIOPS_DIR:-$HOME/.aiops-agent}"; fi
 echo "[AIOps] uninstalling from $DIR"
+# Full unit purge: stop/disable + remove unit file AND *.service.d drop-ins
+# (systemctl edit leftovers). Leaving drop-ins behind re-applies old hardening
+# on reinstall and breaks remote terminal.
+aiops_purge_systemd_unit() {
+  _u="$1"
+  [ -n "$_u" ] || return 0
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now "$_u" 2>/dev/null || true
+    systemctl stop "$_u" 2>/dev/null || true
+    systemctl reset-failed "$_u" 2>/dev/null || true
+  fi
+  rm -f "/etc/systemd/system/${_u}.service" \
+        "/lib/systemd/system/${_u}.service" \
+        "/usr/lib/systemd/system/${_u}.service" \
+        "/etc/systemd/system/multi-user.target.wants/${_u}.service"
+  rm -rf "/etc/systemd/system/${_u}.service.d" \
+         "/lib/systemd/system/${_u}.service.d" \
+         "/usr/lib/systemd/system/${_u}.service.d" \
+         "/run/systemd/system/${_u}.service.d"
+}
 if command -v systemctl >/dev/null 2>&1; then
   for _u in aiops-agent aiops-monitor-agent aiops-relay; do
-    systemctl disable --now "$_u" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${_u}.service" "/lib/systemd/system/${_u}.service" "/usr/lib/systemd/system/${_u}.service"
+    aiops_purge_systemd_unit "$_u"
   done
   systemctl daemon-reload 2>/dev/null || true
 fi

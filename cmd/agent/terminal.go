@@ -1174,15 +1174,43 @@ func writeWindowsShellBootstrap() string {
 	return path
 }
 
+// dirUsableForShell reports whether dir can be used as an interactive shell cwd.
+// systemd ProtectHome=true often still lets Stat succeed on /root while Open/chdir
+// fails — Go then reports fork/exec bash: permission denied.
+func dirUsableForShell(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false
+	}
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return false
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
 // interactiveShellDir is the cwd for a remote interactive shell. Avoid starting
 // in LocalSystem's systemprofile (confusing and often PATH-poor context).
+// When $HOME is blocked (ProtectHome), fall back to the process cwd, agent
+// install dir, or a writable temp directory so the terminal still starts.
 func interactiveShellDir() string {
 	if dir := userHomeDir(); dir != "" {
 		low := strings.ToLower(filepath.Clean(dir))
-		if !strings.Contains(low, "systemprofile") {
-			if _, err := os.Stat(dir); err == nil {
-				return dir
-			}
+		if !strings.Contains(low, "systemprofile") && dirUsableForShell(dir) {
+			return dir
+		}
+	}
+	if wd, err := os.Getwd(); err == nil && dirUsableForShell(wd) {
+		return wd
+	}
+	if exe, err := os.Executable(); err == nil {
+		if dir := filepath.Dir(exe); dirUsableForShell(dir) {
+			return dir
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -1191,9 +1219,12 @@ func interactiveShellDir() string {
 			drive = "C:"
 		}
 		root := drive + `\`
-		if _, err := os.Stat(root); err == nil {
+		if dirUsableForShell(root) {
 			return root
 		}
+	}
+	if dirUsableForShell(os.TempDir()) {
+		return os.TempDir()
 	}
 	return ""
 }

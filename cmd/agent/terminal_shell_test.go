@@ -215,6 +215,39 @@ func TestWindowsShellInitCmdNoNestedQuotes(t *testing.T) {
 	}
 }
 
+func TestDirUsableForShell(t *testing.T) {
+	if !dirUsableForShell(t.TempDir()) {
+		t.Fatal("temp dir should be usable")
+	}
+	if dirUsableForShell("") || dirUsableForShell("/no/such/dir/aiops-xyz") {
+		t.Fatal("missing dirs must be unusable")
+	}
+	blocked := filepath.Join(t.TempDir(), "nope")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if dirUsableForShell(blocked) {
+		t.Fatal("file must not count as shell cwd")
+	}
+}
+
+func TestInteractiveShellDirFallsBack(t *testing.T) {
+	// With a normal home this returns home; with HOME pointing at a file, must not.
+	f := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", f)
+	t.Setenv("USERPROFILE", f)
+	got := interactiveShellDir()
+	if got == f {
+		t.Fatalf("interactiveShellDir returned blocked home %q", got)
+	}
+	if got != "" && !dirUsableForShell(got) {
+		t.Fatalf("fallback cwd not usable: %q", got)
+	}
+}
+
 func TestPasswdShellForUIDSelf(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no /etc/passwd")

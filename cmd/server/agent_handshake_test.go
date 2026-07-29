@@ -193,9 +193,20 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"gui/$AIOPS_UID", "aiops_has_systemd", "aiops_fetch", "unsupported architecture",
 		"AmbientCapabilities=CAP_NET_RAW",
 		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "ProtectHome=false",
-		"aiops_is_installed", "aiops_stop_and_uninstall_existing",
+		"aiops_is_installed", "aiops_stop_and_uninstall_existing", "aiops_purge_systemd_unit",
+		".service.d",
 		"existing agent detected", "systemctl restart aiops-agent",
 		"kickstart -k")
+	if strings.Contains(shIn, "CapabilityBoundingSet=") {
+		t.Error("install.sh must not set CapabilityBoundingSet= (drops other root caps; breaks terminal)")
+	}
+	if strings.Contains(shIn, "ProtectHome=true") {
+		t.Error("install.sh must not enable ProtectHome=true (blocks /root|/home cwd for remote shell)")
+	}
+	must("uninstall.sh", shUn,
+		"aiops_purge_systemd_unit", ".service.d",
+		"aiops-agent", "aiops-monitor-agent", "aiops-relay",
+		"daemon-reload")
 	must("install.ps1 (reinstall)", ps1In,
 		"Test-AiopsAlreadyInstalled", "Uninstall-AiopsExisting",
 		"existing agent detected", "Restart-Service")
