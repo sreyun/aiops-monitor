@@ -439,7 +439,8 @@ func (s *Server) handleListHostInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Always compact list: full reports can be tens of MB across batches.
-	writeJSON(w, http.StatusOK, compactInspectBatches(s.inspect.list()))
+	list := compactInspectBatches(s.inspect.list())
+	writeJSON(w, http.StatusOK, s.filterInspectBatchesForUser(r, list))
 }
 
 func (s *Server) handleGetHostInspect(w http.ResponseWriter, r *http.Request) {
@@ -453,23 +454,67 @@ func (s *Server) handleGetHostInspect(w http.ResponseWriter, r *http.Request) {
 	compact := r.URL.Query().Get("compact") == "1" || view == "compact" || view == "summary"
 	hostID := strings.TrimSpace(r.URL.Query().Get("host_id"))
 	if hostID != "" {
+		if !s.requireHostAccess(w, r, hostID) {
+			return
+		}
 		// One host full report + compact siblings — avoids pulling N×2MiB for a single view.
 		out := compactInspectBatch(b)
-		for i, it := range b.Items {
-			if it.HostID == hostID && len(it.Report) > 0 {
-				out.Items[i].Report = append(json.RawMessage(nil), it.Report...)
-				out.Items[i].HasReport = true
+		out = s.filterInspectBatchForUser(r, out)
+		for i, it := range out.Items {
+			if it.HostID == hostID {
+				// Re-attach full report for the requested host from original batch.
+				for _, src := range b.Items {
+					if src.HostID == hostID && len(src.Report) > 0 {
+						out.Items[i].Report = append(json.RawMessage(nil), src.Report...)
+						out.Items[i].HasReport = true
+						break
+					}
+				}
 				break
 			}
 		}
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	var out *hostInspectBatch
 	if compact {
-		writeJSON(w, http.StatusOK, compactInspectBatch(b))
-		return
+		out = compactInspectBatch(b)
+	} else {
+		out = b
 	}
-	writeJSON(w, http.StatusOK, b)
+	writeJSON(w, http.StatusOK, s.filterInspectBatchForUser(r, out))
+}
+
+// filterInspectBatchForUser drops host items outside the caller's host scope.
+func (s *Server) filterInspectBatchForUser(r *http.Request, b *hostInspectBatch) *hostInspectBatch {
+	if b == nil {
+		return nil
+	}
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return b
+	}
+	cp := *b
+	cp.Items = make([]hostInspectItem, 0, len(b.Items))
+	for _, it := range b.Items {
+		if s.userCanAccessHost(u, it.HostID) {
+			cp.Items = append(cp.Items, it)
+		}
+	}
+	cp.HostCount = len(cp.Items)
+	return &cp
+}
+
+func (s *Server) filterInspectBatchesForUser(r *http.Request, list []*hostInspectBatch) []*hostInspectBatch {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return list
+	}
+	out := make([]*hostInspectBatch, len(list))
+	for i, b := range list {
+		out[i] = s.filterInspectBatchForUser(r, b)
+	}
+	return out
 }
 
 func (s *Server) handleRunHostInspect(w http.ResponseWriter, r *http.Request) {
@@ -572,7 +617,10 @@ func (s *Server) handleCompareHostInspect(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "体检批次不存在"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"a": a, "b": b})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"a": s.filterInspectBatchForUser(r, a),
+		"b": s.filterInspectBatchForUser(r, b),
+	})
 }
 
 func (s *Server) runHostInspectBatch(batchID string, hosts []*Host, timeoutSec int, profile string) {

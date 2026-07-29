@@ -351,6 +351,9 @@ func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	if req.HostID != "" && !s.requireHostAccess(w, r, req.HostID) {
+		return
+	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope
 	s.store.SetAlertState(key, "acknowledged")
 	msg := Tz("log.alert_ack", shortID(req.HostID), req.Type)
@@ -365,6 +368,9 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 	var req alertAckSilenceReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.HostID != "" && !s.requireHostAccess(w, r, req.HostID) {
 		return
 	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope

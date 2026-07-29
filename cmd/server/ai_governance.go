@@ -226,7 +226,12 @@ func (s *Server) handleIssueAIWriteApproval(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tool 必填"})
 		return
 	}
-	a := s.aiGov.issueWriteApproval(s.actorName(r), req.Tool, strings.TrimSpace(req.ArgsHash), req.TTLSec)
+	req.ArgsHash = strings.TrimSpace(req.ArgsHash)
+	if req.ArgsHash == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "args_hash 必填（写操作审批须绑定参数摘要，禁止空哈希万能令牌）"})
+		return
+	}
+	a := s.aiGov.issueWriteApproval(s.actorName(r), req.Tool, req.ArgsHash, req.TTLSec)
 	if s.aiGov != nil {
 		s.aiGov.recordTool(aiToolAuditEntry{
 			Actor: s.actorName(r), Tool: req.Tool, Action: "issue_approval",

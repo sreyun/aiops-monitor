@@ -73,7 +73,9 @@ const MANUAL_EN = {
   "profile.tab_info": "Profile",
   "profile.tab_password": "Password",
   "profile.tab_mfa": "MFA",
-  "profile.tab_users": "Users"
+  "profile.tab_users": "Users",
+  "sql.db_none": "No databases (loaded after you pick a connection)",
+  "playbook.target_items": " items",
 };
 
 // Normalize: drop invented, rename ui.by_category -> filter.by_category

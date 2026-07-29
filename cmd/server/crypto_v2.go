@@ -86,12 +86,12 @@ func encryptSecretV2(plain string) string {
 	gcm, err := newGCM(primary.Key)
 	if err != nil {
 		slog.Error("配置密钥 v2 加密初始化失败", "err", err)
-		return plain
+		return "" // fail closed — never persist plaintext when keys exist
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		slog.Error("配置密钥 v2 随机数失败", "err", err)
-		return plain
+		return ""
 	}
 	sealed := gcm.Seal(nonce, nonce, []byte(plain), nil)
 	return secretEncPrefixV2 + primary.ID + ":" + base64.StdEncoding.EncodeToString(sealed)

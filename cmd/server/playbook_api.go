@@ -241,7 +241,7 @@ func (s *Server) handleExecutePlaybook(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	targetList := s.onlinePlaybookTargets(pb)
+	targetList := s.filterHostsForUser(r, s.onlinePlaybookTargets(pb))
 	if len(targetList) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "playbook.no_target")})
 		return

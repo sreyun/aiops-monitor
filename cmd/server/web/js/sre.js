@@ -537,7 +537,7 @@ function paintPbTargetPicker(step) {
       if (st.collapsed.has(id)) st.collapsed.delete(id); else st.collapsed.add(id);
       paintPbTargetPicker(step);
     },
-    onSearch: (q) => { st.q = q; paintPbTargetPicker(step); },
+    onSearch: (q) => { st.q = q; st._focusSearch = true; paintPbTargetPicker(step); },
     onQuick: (act) => {
       if (act === "clear") {
         st.tokens = new Set();
@@ -579,6 +579,10 @@ function paintPbTargetPicker(step) {
       paintPbTargetPicker(step);
     },
   });
+  if (st._focusSearch) {
+    st._focusSearch = false;
+    HostPicker.focusSearch(wrap);
+  }
   syncHidden();
 }
 
@@ -681,8 +685,9 @@ function pbHostMatchesSystem(h, sys) {
 }
 
 function pbCountForTarget(target) {
-  const parts = String(target || "all").split(",").map(s => s.trim()).filter(Boolean);
-  if (!parts.length || parts.includes("all")) return PB_HOSTS.length;
+  const parts = String(target || "").split(",").map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return 0;
+  if (parts.includes("all")) return PB_HOSTS.length;
   const ids = new Set();
   parts.forEach(p => {
     if (p.startsWith("folder:")) {
@@ -712,11 +717,11 @@ function pbTargetPreviewFromStep(step) {
   const preview = step.querySelector(".pb-target-preview");
   const hidden = step.querySelector(".pb-step-target");
   if (!preview || !hidden) return;
-  const target = hidden.value || "all";
+  const target = hidden.value || "";
   const count = pbCountForTarget(target);
   const label = (window.HostPicker && HostPicker.labelForTarget)
     ? HostPicker.labelForTarget(target, PB_HOSTS)
-    : target;
+    : (target || I18N.t("empty.no_host_match2"));
   preview.textContent = count > 0
     ? `${I18N.t("ui.matched")} ${count} ${I18N.t("ui.hosts_matched")} · ${label}`
     : I18N.t("empty.no_host_match2");
@@ -780,12 +785,13 @@ function sreMountHostMultiPick(containerId, hiddenId, selectedIds) {
       },
       onSearch: (q) => {
         selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
-        st.q = q || ""; paint();
+        st.q = q || ""; st._focusSearch = true; paint();
       },
       onQuick: (act) => {
         selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
         if (act === "clear") selected.clear();
-        else hosts.forEach(h => selected.add(h.id));
+        else if (act === "all-online") hosts.filter(h => h.online).forEach(h => selected.add(h.id));
+        else hosts.filter(h => HostPicker.filterHost(h, (st.q || "").trim().toLowerCase())).forEach(h => selected.add(h.id));
         paint();
       },
       onFolderToggle: (fid, checked) => {
@@ -818,6 +824,10 @@ function sreMountHostMultiPick(containerId, hiddenId, selectedIds) {
         syncHidden();
       },
     });
+    if (st._focusSearch) {
+      st._focusSearch = false;
+      HostPicker.focusSearch(box);
+    }
     syncHidden();
   };
   paint();

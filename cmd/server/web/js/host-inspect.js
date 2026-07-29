@@ -5,6 +5,7 @@ let INSP_POLL = null;
 let INSP_VIEW_ITEM = null; // {batchId, hostId} | null = fleet summary
 let INSP_VIEW_MODE = "fleet"; // fleet | host
 let INSP_HOST_Q = "";
+let INSP_FOCUS_SEARCH = false;
 let INSP_HOSTS_LOADING = false;
 let INSP_HOSTS_ERR = "";
 let INSP_LOAD_SEQ = 0;
@@ -153,6 +154,7 @@ function renderInspHostPicker() {
     onSearch: (q) => {
       inspCaptureSelection();
       INSP_HOST_Q = q || "";
+      INSP_FOCUS_SEARCH = true;
       renderInspHostPicker();
     },
     onQuick: (act) => {
@@ -194,6 +196,10 @@ function renderInspHostPicker() {
       if (checked) INSP_SELECTED.add(id); else INSP_SELECTED.delete(id);
     },
   });
+  if (INSP_FOCUS_SEARCH) {
+    INSP_FOCUS_SEARCH = false;
+    HostPicker.focusSearch(box);
+  }
 }
 
 // Global refresh / other pages update host cache → keep inspect picker live.

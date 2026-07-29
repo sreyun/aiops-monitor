@@ -820,8 +820,10 @@ func (h *SreyunCore) execDiagnostic(args map[string]any) (string, error) {
 		}
 		return "诊断命令执行失败", nil
 	case <-time.After(20 * time.Second):
+		h.s.abortPlaybookExec(execID)
 		return "诊断命令执行超时", nil
 	case <-dctx.Done():
+		h.s.abortPlaybookExec(execID)
 		return "诊断命令已被客户端取消", nil
 	}
 }

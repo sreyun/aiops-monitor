@@ -227,6 +227,10 @@ func (m *remediationManager) evaluateRule(r RemediationRule, a Alert, incidentID
 		return
 	}
 	if r.RequireApproval {
+		// Reserve cooldown/rate-limit even while waiting for approval, otherwise
+		// flapping alerts enqueue unbounded pending_approval runs.
+		m.lastRun[ck] = now
+		m.hourly[r.ID] = append(m.hourly[r.ID], now)
 		reason := freezeReason
 		run := m.recordLocked(r, a, incidentID, "pending_approval", reason)
 		run.PlaybookName = pbName

@@ -618,28 +618,56 @@ func (pm *playbookManager) SetExecutionStatus(execID int64, status string, finis
 	return false
 }
 
+// playbookTerminalStatus reports whether an execution status is finished.
+func playbookTerminalStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "completed", "failed", "partial", "cancelled", "rejected":
+		return true
+	default:
+		return false
+	}
+}
+
 // UpdateHostResult updates one host's result in an execution.
+// No-ops when the execution is already terminal or the host was cancelled
+// (cancel must win over late in-flight step writers).
 func (pm *playbookManager) UpdateHostResult(execID int64, hostID string, result HostExecResult) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	for i := range pm.executions {
-		if pm.executions[i].ID == execID {
-			pm.executions[i].HostResults[hostID] = result
+		if pm.executions[i].ID != execID {
+			continue
+		}
+		if playbookTerminalStatus(pm.executions[i].Status) {
 			return
 		}
+		if prev, ok := pm.executions[i].HostResults[hostID]; ok && prev.Status == "cancelled" && result.Status != "cancelled" {
+			return
+		}
+		pm.executions[i].HostResults[hostID] = result
+		return
 	}
 }
 
-// FinishExecution marks an execution as done.
+// FinishExecution marks an execution as done. Terminal statuses are sticky —
+// cancelled/rejected/completed/failed/partial cannot be overwritten (cancel-wins).
 func (pm *playbookManager) FinishExecution(execID int64, status string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	for i := range pm.executions {
-		if pm.executions[i].ID == execID {
-			pm.executions[i].EndTime = time.Now().Unix()
-			pm.executions[i].Status = status
+		if pm.executions[i].ID != execID {
+			continue
+		}
+		cur := pm.executions[i].Status
+		if playbookTerminalStatus(cur) && cur != status {
+			if pm.executions[i].EndTime == 0 {
+				pm.executions[i].EndTime = time.Now().Unix()
+			}
 			return
 		}
+		pm.executions[i].EndTime = time.Now().Unix()
+		pm.executions[i].Status = status
+		return
 	}
 }
 

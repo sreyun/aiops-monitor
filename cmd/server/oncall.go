@@ -184,6 +184,11 @@ func (m *onCallManager) Advance(id int64, nextStep int, users []string, nextAt i
 		if m.pages[i].ID != id {
 			continue
 		}
+		// Acked/cancelled pages must not escalate further (race with DuePages).
+		st := m.pages[i].Status
+		if st == "acked" || st == "cancelled" {
+			return
+		}
 		if exhausted {
 			m.pages[i].Status = "exhausted"
 			m.pages[i].NextEscalateAt = 0

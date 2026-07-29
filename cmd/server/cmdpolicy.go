@@ -33,7 +33,6 @@ var (
 		regexp.MustCompile(`(?i)\bcurl\b.*\|\s*(ba)?sh\b`),
 		regexp.MustCompile(`(?i)\bwget\b.*\|\s*(ba)?sh\b`),
 	}
-	metaCharRe = regexp.MustCompile("[&$;<>\n\r\\\\(){}`]")
 )
 
 // diagCommandAllowed 校验诊断命令是否为「只读命令 + 只读管道过滤」。
@@ -115,12 +114,6 @@ func evaluatePlaybookCommand(command string, pol CmdPolicyConfig) (ok bool, forc
 			return false, true, "命令匹配自定义拒绝规则"
 		}
 	}
-	if metaCharRe.MatchString(cmd) && !strings.Contains(cmd, "|") {
-		// Allow pipes for filters; still reject classic injection meta in non-pipe use when strict.
-		if pol.Mode == "strict" && strings.ContainsAny(cmd, ";$<>`") {
-			return false, true, "命令含注入风险元字符"
-		}
-	}
 
 	allow := append([]string{}, pol.AllowPrefixes...)
 	if !pol.DisableBuiltins {
@@ -128,33 +121,50 @@ func evaluatePlaybookCommand(command string, pol CmdPolicyConfig) (ok bool, forc
 			"systemctl", "service", "docker", "kubectl", "nginx", "apachectl",
 			"supervisorctl", "pm2", "kill", "pkill", "nice", "renice",
 			"ip", "iptables", "nft", "sysctl", "echo", "printf", "true", ":",
-			"sleep", "logger", "date", "hostname", "uname", "cat", "tee",
+			"sleep", "logger", "date", "hostname", "uname", "cat",
 			"sed", "awk", "grep", "head", "tail", "ls", "df", "free", "ps",
-			"ss", "netstat", "curl", "wget", "python", "python3", "bash", "sh",
+			"ss", "netstat",
 		)
 	}
 	if len(allow) == 0 {
-		return true, false, ""
+		// Fail closed: empty allowlist after builtins disabled must deny.
+		if pol.Mode == "advisory" {
+			return true, true, "允许前缀列表为空，建议人工审批后执行"
+		}
+		return false, true, "允许前缀列表为空（strict 模式拒绝）"
 	}
-	first := firstShellWord(cmd)
-	hit := false
-	for _, p := range allow {
-		p = strings.ToLower(strings.TrimSpace(p))
-		if p == "" {
+	// Validate every pipe segment's first word (not only the left-most command).
+	segments := strings.Split(cmd, "|")
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
 			continue
 		}
-		if first == p || strings.HasPrefix(strings.ToLower(cmd), p+" ") || strings.HasPrefix(strings.ToLower(cmd), p+"\t") {
-			hit = true
-			break
+		first := firstShellWord(seg)
+		hit := false
+		for _, p := range allow {
+			p = strings.ToLower(strings.TrimSpace(p))
+			if p == "" {
+				continue
+			}
+			low := strings.ToLower(seg)
+			if first == p || strings.HasPrefix(low, p+" ") || strings.HasPrefix(low, p+"\t") {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			if pol.Mode == "advisory" {
+				return true, true, "管道段命令不在允许前缀列表，建议人工审批后执行"
+			}
+			return false, true, fmt.Sprintf("命令 %q 不在允许前缀列表（strict 模式）", first)
 		}
 	}
-	if hit {
-		return true, false, ""
+	// Always scan full command for classic injection meta (even when pipes are used).
+	if pol.Mode == "strict" && strings.ContainsAny(cmd, ";$<>`") {
+		return false, true, "命令含注入风险元字符"
 	}
-	if pol.Mode == "advisory" {
-		return true, true, "命令不在允许前缀列表，建议人工审批后执行"
-	}
-	return false, true, fmt.Sprintf("命令 %q 不在允许前缀列表（strict 模式）", first)
+	return true, false, ""
 }
 
 func firstShellWord(cmd string) string {

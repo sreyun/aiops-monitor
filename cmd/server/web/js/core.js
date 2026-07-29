@@ -261,8 +261,8 @@ let ALERT_SEARCH = ""; // 告警主机搜索
 
 /* ---------- 工具函数 ---------- */
 const $ = id => document.getElementById(id);
-const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /** Normalize /hosts API payload (array or {hosts:[]}) into a host array. */
 function normalizeHostsPayload(j) {

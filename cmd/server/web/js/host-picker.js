@@ -19,7 +19,7 @@
   function hostOnline(h) {
     if (!h) return false;
     if (typeof h.online === "boolean") return h.online;
-    return true;
+    return false;
   }
 
   function hostsByFolder(hosts) {
@@ -397,6 +397,18 @@
     });
   }
 
+  /** After re-paint, restore caret in the search box (full DOM replace drops focus). */
+  function focusSearch(wrap, preferEnd) {
+    const scope = wrap && (wrap.classList && wrap.classList.contains("host-picker") ? wrap : wrap.querySelector(".host-picker"));
+    const inp = scope && scope.querySelector(".hs-pick-search");
+    if (!inp) return;
+    try {
+      inp.focus();
+      const n = inp.value.length;
+      if (preferEnd !== false) inp.setSelectionRange(n, n);
+    } catch (_) {}
+  }
+
   /** Apply folder checkbox to selected set using current DOM host rows under folder. */
   function applyFolderCheck(root, folderId, checked) {
     if (!root) return;
@@ -469,6 +481,7 @@
   global.HostPicker = {
     renderHTML,
     bind,
+    focusSearch,
     readMulti,
     readTarget,
     syncIndeterminate,

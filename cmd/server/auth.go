@@ -232,7 +232,9 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		"/api/v1/ai/test-weknora",
 		"/api/v1/ai/list-weknora-kbs",
 		"/api/v1/ai/models",
-		"/api/v1/ai/terminal-access":
+		"/api/v1/ai/terminal-access",
+		"/api/v1/ai/mcp-clients/test",
+		"/api/v1/ai/mcp-clients/sync":
 		if r.Method != http.MethodGet {
 			return rank >= roleRank(RoleAdmin)
 		}

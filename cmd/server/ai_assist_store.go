@@ -165,7 +165,8 @@ func (h *aiGovHub) consumeWriteApproval(id, tool, argsHash string) bool {
 			h.mu.Unlock()
 			return false
 		}
-		if a.ArgsHash != "" && argsHash != "" && a.ArgsHash != argsHash {
+		// Fail closed: empty ArgsHash must never authorize arbitrary args.
+		if strings.TrimSpace(a.ArgsHash) == "" || strings.TrimSpace(argsHash) == "" || a.ArgsHash != argsHash {
 			h.mu.Unlock()
 			return false
 		}

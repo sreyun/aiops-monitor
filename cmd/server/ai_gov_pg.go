@@ -56,7 +56,7 @@ SELECT id, tool, args_hash, actor, created_at, expires_at, used FROM ai_write_ap
 	if a.Tool != "" && tool != "" && !strings.EqualFold(a.Tool, tool) {
 		return false
 	}
-	if a.ArgsHash != "" && argsHash != "" && a.ArgsHash != argsHash {
+	if strings.TrimSpace(a.ArgsHash) == "" || strings.TrimSpace(argsHash) == "" || a.ArgsHash != argsHash {
 		return false
 	}
 	if _, err := tx.Exec(`UPDATE ai_write_approvals SET used=TRUE, used_at=$2 WHERE id=$1`, id, now); err != nil {

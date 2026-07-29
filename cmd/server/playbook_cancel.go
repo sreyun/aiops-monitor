@@ -51,6 +51,18 @@ func (s *Server) signalPlaybookCancel(execID int64) (signalled bool, sessions in
 	return signalled, sessions
 }
 
+// abortPlaybookExec stops a live run (context + sessions) and marks the execution cancelled.
+// Used by AI diagnostic timeouts so work does not continue after the tool returns.
+func (s *Server) abortPlaybookExec(execID int64) {
+	if execID <= 0 || s == nil || s.playbooks == nil {
+		return
+	}
+	s.signalPlaybookCancel(execID)
+	s.playbooks.CancelUnfinishedHosts(execID)
+	s.playbooks.FinishExecution(execID, "cancelled")
+	s.persistPlaybookExecution(execID)
+}
+
 // handleCancelPlaybookExecution thoroughly stops a running (or pending) execution.
 // POST /api/v1/playbooks/executions/by-id/{id}/cancel
 func (s *Server) handleCancelPlaybookExecution(w http.ResponseWriter, r *http.Request) {
