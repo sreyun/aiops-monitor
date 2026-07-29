@@ -1677,8 +1677,8 @@ func (h *SreyunCore) buildSystemPrompt(actor string) string {
 	b.WriteString("1) 先用 search_similar_cases，并优先套用已注入的历史记忆与【已掌握技能】；\n")
 	b.WriteString("2) 需要手册/规范/Wiki 时用 search_knowledge（WeKnora）；不可用则明确说明并改用本地经验；\n")
 	b.WriteString("2b) 若已配置外部 MCP Client：先 list_external_mcp_tools，再用 ext_* 或 call_external_mcp 拉取外部系统事实（工单/CMDB/业务库等），再与本平台指标/日志交叉验证；\n")
-	b.WriteString("3) 再用 query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
-	b.WriteString("4) 容器/K8s/虚拟机问题：先 locate_resource 定位硬件→VM→主机→容器/Pod，再用 query_containers / query_k8s / query_hyperv / query_hardware；\n")
+	b.WriteString("3) 再用 list_hosts / query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
+	b.WriteString("4) 容器/K8s/虚拟机问题：先 list_hosts 或 locate_resource 定位，再用 query_containers(host_id) / query_k8s / query_hyperv / query_hardware；\n")
 	b.WriteString("5) 仅在需要主机侧证据时使用 run_diagnostic（只读）。K8s 扩缩容用 k8s_scale（需 cluster_id），勿用服务端本机 kubectl。\n")
 	b.WriteString("\n看板与图表编排：\n")
 	b.WriteString("- 制作看板：create_dashboard（可先 list_dashboards / list_datasources；若外部 MCP 能提供业务指标/表结构，先用 ext_* 探查再建模）；\n")
@@ -1762,7 +1762,7 @@ func (h *SreyunCore) buildHostContext(actor string) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n\n【当前纳管主机】共 %d 台，在线 %d 台。调用工具（query_metrics / search_logs / list_alerts / run_diagnostic）时，请使用下表的 id 作为 host_id 参数；用户可能用主机名或 IP 指代主机，你需自行映射到对应 id：\n", len(hosts), online)
+	fmt.Fprintf(&b, "\n\n【当前纳管主机】共 %d 台，在线 %d 台。完整清单请调用 list_hosts；单机健康 check_host_health(host_id)；容器用 query_containers(host_id)。下表为节选 id（用户可能用主机名/IP 指代，请映射到 id）：\n", len(hosts), online)
 	const limit = 50
 	for i, hst := range hosts {
 		if i >= limit {

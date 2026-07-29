@@ -9,7 +9,7 @@ func TestHardwareToolsRegistered(t *testing.T) {
 	want := []string{
 		"query_hardware", "query_hardware_events", "query_hardware_history",
 		"query_hardware_changes", "query_netflow", "query_hyperv",
-		"query_containers", "query_k8s", "locate_resource",
+		"query_containers", "query_k8s", "locate_resource", "list_hosts",
 	}
 	for _, n := range want {
 		tool, ok := h.tools[n]

@@ -5,17 +5,40 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (h *SreyunCore) registerResourceTools() {
-	h.tools["query_containers"] = SreyunTool{
-		Name: "query_containers",
-		Description: "查询纳管主机上的 Docker/Podman 容器清单（名称/镜像/状态/端口）。" +
-			"排查「某主机上跑了哪些容器、哪些已退出」时使用。",
+	h.tools["list_hosts"] = SreyunTool{
+		Name: "list_hosts",
+		Description: "列出纳管主机（轻量：id/主机名/IP/在线状态/系统/CPU·内存摘要）。" +
+			"需要「全部主机清单」或查找 host_id 时优先用本工具；不要用 query_containers 代替列主机。" +
+			"支持 status=all|online|offline、q 搜索、limit/offset 分页。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]string{"type": "string", "description": "主机 ID；空则返回全部主机摘要"},
+				"status": map[string]string{"type": "string", "description": "all|online|offline，默认 all"},
+				"q":      map[string]string{"type": "string", "description": "按主机名/IP/id/分类模糊匹配"},
+				"limit":  map[string]string{"type": "integer", "description": "每页条数，默认 50，最大 200"},
+				"offset": map[string]string{"type": "integer", "description": "分页偏移，默认 0"},
+			},
+		},
+		Execute: h.execListHosts,
+	}
+	h.tools["query_containers"] = SreyunTool{
+		Name: "query_containers",
+		Description: "查询 Docker/Podman 容器。" +
+			"不传 host_id：返回各主机摘要（数量/运行中/退出，不含完整容器列表）；" +
+			"传 host_id：返回该主机容器明细（可用 limit/offset/status 分页过滤）。" +
+			"列全部主机请用 list_hosts，勿对本工具做全量明细拉取。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"host_id": map[string]string{"type": "string", "description": "主机 ID；空=全平台摘要"},
+				"status":  map[string]string{"type": "string", "description": "明细过滤：all|running|exited|paused，默认 all"},
+				"limit":   map[string]string{"type": "integer", "description": "明细每页容器数，默认 50，最大 200"},
+				"offset":  map[string]string{"type": "integer", "description": "明细分页偏移"},
+				"detail":  map[string]string{"type": "boolean", "description": "无 host_id 时若 true 仍禁止全量展开；请指定 host_id"},
 			},
 		},
 		Execute: h.execQueryContainers,
@@ -27,11 +50,11 @@ func (h *SreyunCore) registerResourceTools() {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"kind":        map[string]string{"type": "string", "description": "clusters|nodes|pods|deployments|events|log"},
-				"cluster_id":  map[string]string{"type": "string", "description": "集群 ID"},
-				"namespace":   map[string]string{"type": "string", "description": "命名空间，空=全部/默认"},
-				"pod":         map[string]string{"type": "string", "description": "kind=log 时的 Pod 名"},
-				"limit":       map[string]string{"type": "integer", "description": "列表上限"},
+				"kind":       map[string]string{"type": "string", "description": "clusters|nodes|pods|deployments|events|log"},
+				"cluster_id": map[string]string{"type": "string", "description": "集群 ID"},
+				"namespace":  map[string]string{"type": "string", "description": "命名空间，空=全部/默认"},
+				"pod":        map[string]string{"type": "string", "description": "kind=log 时的 Pod 名"},
+				"limit":      map[string]string{"type": "integer", "description": "列表上限"},
 			},
 		},
 		Execute: h.execQueryK8s,
@@ -80,26 +103,271 @@ func (h *SreyunCore) registerResourceTools() {
 	}
 }
 
+func (h *SreyunCore) execListHosts(args map[string]any) (string, error) {
+	if h.s == nil || h.s.store == nil {
+		return toolResultJSON(map[string]any{"ok": false, "error": "store unavailable"}), nil
+	}
+	status := strings.ToLower(strings.TrimSpace(argString(args, "status")))
+	if status == "" {
+		status = "all"
+	}
+	q := strings.ToLower(strings.TrimSpace(argString(args, "q")))
+	limit := argInt(args, "limit", 50)
+	if limit > 200 {
+		limit = 200
+	}
+	offset := argInt(args, "offset", 0)
+	if offset < 0 {
+		offset = 0
+	}
+	actor := scopeActorFromArgs(args)
+	hosts := h.s.store.ListHosts()
+	if actor != "" {
+		if u, ok := h.s.cfg.UserByName(actor); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+			filtered := make([]*Host, 0, len(hosts))
+			for _, ht := range hosts {
+				if ht != nil && h.s.userCanAccessHost(u, ht.ID) {
+					filtered = append(filtered, ht)
+				}
+			}
+			hosts = filtered
+		}
+	}
+	now := time.Now().Unix()
+	offlineSec := int64(120)
+	if h.s.cfg != nil {
+		if sec := int64(h.s.cfg.Thresholds().OfflineAfter.Seconds()); sec > 0 {
+			offlineSec = sec
+		}
+	}
+	type row struct {
+		ID           string  `json:"id"`
+		Hostname     string  `json:"hostname"`
+		IP           string  `json:"ip,omitempty"`
+		OS           string  `json:"os,omitempty"`
+		Platform     string  `json:"platform,omitempty"`
+		Category     string  `json:"category,omitempty"`
+		Status       string  `json:"status"`
+		LastSeenAgoS int64   `json:"last_seen_ago_s,omitempty"`
+		CPUPercent   float64 `json:"cpu_percent,omitempty"`
+		MemPercent   float64 `json:"mem_percent,omitempty"`
+		AgentVersion string  `json:"agent_version,omitempty"`
+	}
+	matched := make([]row, 0, len(hosts))
+	onlineN, offlineN := 0, 0
+	for _, ht := range hosts {
+		if ht == nil {
+			continue
+		}
+		online := ht.LastSeen > 0 && now-ht.LastSeen <= offlineSec
+		st := "offline"
+		if online {
+			st = "online"
+			onlineN++
+		} else {
+			offlineN++
+		}
+		if status == "online" && !online {
+			continue
+		}
+		if status == "offline" && online {
+			continue
+		}
+		if q != "" {
+			blob := strings.ToLower(strings.Join([]string{ht.ID, ht.Hostname, ht.IP, ht.OS, ht.Category, ht.Platform}, " "))
+			if !strings.Contains(blob, q) {
+				continue
+			}
+		}
+		r := row{
+			ID: ht.ID, Hostname: ht.Hostname, IP: ht.IP, OS: ht.OS, Platform: ht.Platform,
+			Category: ht.Category, Status: st, AgentVersion: ht.AgentVersion,
+		}
+		if ht.LastSeen > 0 {
+			r.LastSeenAgoS = now - ht.LastSeen
+		}
+		if ht.Latest != nil {
+			r.CPUPercent = ht.Latest.CPUPercent
+			r.MemPercent = ht.Latest.MemPercent
+		}
+		matched = append(matched, r)
+	}
+	totalMatched := len(matched)
+	if offset > totalMatched {
+		offset = totalMatched
+	}
+	end := offset + limit
+	if end > totalMatched {
+		end = totalMatched
+	}
+	page := matched[offset:end]
+	next := -1
+	if end < totalMatched {
+		next = end
+	}
+	return toolResultJSON(map[string]any{
+		"ok":           true,
+		"total_hosts":  len(hosts),
+		"online":       onlineN,
+		"offline":      offlineN,
+		"matched":      totalMatched,
+		"limit":        limit,
+		"offset":       offset,
+		"next_offset":  next,
+		"hosts":        page,
+		"hint":         "单机健康用 check_host_health(host_id)；容器明细用 query_containers(host_id=...)",
+	}), nil
+}
+
+func containerInventorySummary(row map[string]any) map[string]any {
+	running, exited, other, samples := countContainerStates(row["containers"])
+	total := running + exited + other
+	if n, ok := row["container_count"].(int); ok && n > total {
+		total = n
+	}
+	out := map[string]any{
+		"host_id":         row["host_id"],
+		"host_name":       row["host_name"],
+		"runtime":         row["runtime"],
+		"container_count": total,
+		"running":         running,
+		"exited":          exited,
+		"other":           other,
+		"updated_at":      row["updated_at"],
+	}
+	if len(samples) > 0 {
+		out["sample_names"] = samples
+	}
+	return out
+}
+
+func countContainerStates(containers any) (running, exited, other int, samples []string) {
+	arr, ok := containers.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range arr {
+		m, ok := it.(map[string]any)
+		if !ok {
+			other++
+			continue
+		}
+		state := strings.ToLower(firstNonEmpty(fmt.Sprint(m["state"]), fmt.Sprint(m["Status"]), fmt.Sprint(m["status"])))
+		name := strings.TrimSpace(firstNonEmpty(fmt.Sprint(m["name"]), fmt.Sprint(m["Names"]), fmt.Sprint(m["id"]), fmt.Sprint(m["Id"])))
+		if name != "" && name != "<nil>" && len(samples) < 5 {
+			samples = append(samples, name)
+		}
+		switch {
+		case strings.Contains(state, "run"):
+			running++
+		case strings.Contains(state, "exit") || strings.Contains(state, "dead") || strings.Contains(state, "stop"):
+			exited++
+		default:
+			other++
+		}
+	}
+	return
+}
+
+func filterContainersPage(containers any, status string, limit, offset int) (page []any, total int, next int) {
+	arr, _ := containers.([]any)
+	if arr == nil {
+		arr = []any{}
+	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	filtered := make([]any, 0, len(arr))
+	for _, it := range arr {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		st := strings.ToLower(firstNonEmpty(fmt.Sprint(m["state"]), fmt.Sprint(m["Status"]), fmt.Sprint(m["status"])))
+		switch status {
+		case "", "all":
+			filtered = append(filtered, compactContainerRow(m))
+		case "running":
+			if strings.Contains(st, "run") {
+				filtered = append(filtered, compactContainerRow(m))
+			}
+		case "exited", "stopped":
+			if strings.Contains(st, "exit") || strings.Contains(st, "dead") || strings.Contains(st, "stop") {
+				filtered = append(filtered, compactContainerRow(m))
+			}
+		case "paused":
+			if strings.Contains(st, "pause") {
+				filtered = append(filtered, compactContainerRow(m))
+			}
+		default:
+			filtered = append(filtered, compactContainerRow(m))
+		}
+	}
+	total = len(filtered)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	page = filtered[offset:end]
+	next = -1
+	if end < total {
+		next = end
+	}
+	return page, total, next
+}
+
+func compactContainerRow(m map[string]any) map[string]any {
+	name := firstNonEmpty(fmt.Sprint(m["name"]), fmt.Sprint(m["Names"]))
+	id := firstNonEmpty(fmt.Sprint(m["id"]), fmt.Sprint(m["Id"]), fmt.Sprint(m["ID"]))
+	state := firstNonEmpty(fmt.Sprint(m["state"]), fmt.Sprint(m["Status"]), fmt.Sprint(m["status"]))
+	image := firstNonEmpty(fmt.Sprint(m["image"]), fmt.Sprint(m["Image"]))
+	out := map[string]any{}
+	if name != "" && name != "<nil>" {
+		out["name"] = name
+	}
+	if id != "" && id != "<nil>" {
+		if len(id) > 12 {
+			out["id"] = id[:12]
+		} else {
+			out["id"] = id
+		}
+	}
+	if state != "" && state != "<nil>" {
+		out["state"] = state
+	}
+	if image != "" && image != "<nil>" {
+		out["image"] = image
+	}
+	if p := m["ports"]; p != nil {
+		out["ports"] = p
+	} else if p := m["Ports"]; p != nil {
+		out["ports"] = p
+	}
+	return out
+}
+
 func (h *SreyunCore) execQueryContainers(args map[string]any) (string, error) {
 	if h.s == nil || h.s.pg == nil {
-		return "无 PostgreSQL，无法查询容器清单", nil
+		return toolResultJSON(map[string]any{"ok": false, "error": "无 PostgreSQL，无法查询容器清单"}), nil
 	}
-	hostID, _ := args["host_id"].(string)
+	hostID := strings.TrimSpace(argString(args, "host_id"))
 	actor := scopeActorFromArgs(args)
-	var rows []map[string]any
-	if strings.TrimSpace(hostID) != "" {
-		if hst := h.resolveHostRef(hostID); hst != nil {
-			hostID = hst.ID
-		}
-		if !h.actorCanAccessHost(actor, hostID) {
-			return "无权访问该主机的容器清单", nil
-		}
-		if inv, ok := h.s.pg.getContainerInventory(hostID); ok {
-			rows = []map[string]any{inv}
-		}
-	} else {
-		var err error
-		rows, err = h.s.pg.getAllContainerInventories()
+	status := argString(args, "status")
+	limit := argInt(args, "limit", 50)
+	offset := argInt(args, "offset", 0)
+
+	if hostID == "" {
+		rows, err := h.s.pg.getAllContainerInventories()
 		if err != nil {
 			return "", err
 		}
@@ -115,12 +383,64 @@ func (h *SreyunCore) execQueryContainers(args map[string]any) (string, error) {
 				rows = filtered
 			}
 		}
+		summaries := make([]map[string]any, 0, len(rows))
+		totalCtr, runningSum := 0, 0
+		for _, row := range rows {
+			sum := containerInventorySummary(row)
+			summaries = append(summaries, sum)
+			if n, ok := sum["container_count"].(int); ok {
+				totalCtr += n
+			}
+			if n, ok := sum["running"].(int); ok {
+				runningSum += n
+			}
+		}
+		return toolResultJSON(map[string]any{
+			"ok":              true,
+			"mode":            "summary",
+			"hosts":           len(summaries),
+			"containers":      totalCtr,
+			"running":         runningSum,
+			"items":           summaries,
+			"hint":            "查看某主机容器明细：query_containers(host_id=...)。列全部主机：list_hosts。",
+			"detail_rejected": argBool(args, "detail", false),
+		}), nil
 	}
-	b, _ := json.MarshalIndent(rows, "", "  ")
-	if len(b) > 12000 {
-		b = b[:12000]
+
+	if hst := h.resolveHostRef(hostID); hst != nil {
+		hostID = hst.ID
 	}
-	return string(b), nil
+	if !h.actorCanAccessHost(actor, hostID) {
+		return toolResultJSON(map[string]any{"ok": false, "error": "无权访问该主机的容器清单"}), nil
+	}
+	inv, ok := h.s.pg.getContainerInventory(hostID)
+	if !ok {
+		return toolResultJSON(map[string]any{
+			"ok": true, "mode": "detail", "host_id": hostID,
+			"containers": []any{}, "total": 0,
+			"hint": "该主机暂无容器清单（Agent 未上报或无 Docker/Podman）",
+		}), nil
+	}
+	page, total, next := filterContainersPage(inv["containers"], status, limit, offset)
+	out := map[string]any{
+		"ok":              true,
+		"mode":            "detail",
+		"host_id":         inv["host_id"],
+		"host_name":       inv["host_name"],
+		"runtime":         inv["runtime"],
+		"container_count": inv["container_count"],
+		"updated_at":      inv["updated_at"],
+		"status_filter":   firstNonEmpty(strings.ToLower(strings.TrimSpace(status)), "all"),
+		"limit":           limit,
+		"offset":          offset,
+		"total_matched":   total,
+		"next_offset":     next,
+		"containers":      page,
+	}
+	if next >= 0 {
+		out["hint"] = fmt.Sprintf("还有更多：query_containers(host_id=%s, offset=%d, limit=%d)", hostID, next, limit)
+	}
+	return toolResultJSONBounded(out, toolJSONSoftLimit), nil
 }
 
 func (h *SreyunCore) execQueryK8s(args map[string]any) (string, error) {
@@ -200,11 +520,9 @@ func (h *SreyunCore) execQueryK8s(args map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b, _ := json.MarshalIndent(items, "", "  ")
-		if len(b) > 12000 {
-			b = b[:12000]
-		}
-		return string(b), nil
+		return toolResultJSONBounded(map[string]any{
+			"ok": true, "kind": "events", "namespace": ns, "count": len(items), "items": items,
+		}, toolJSONSoftLimit), nil
 	case "log":
 		pod, _ := args["pod"].(string)
 		if pod == "" || ns == "" {
@@ -214,10 +532,15 @@ func (h *SreyunCore) execQueryK8s(args map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if len(text) > 12000 {
-			text = text[:12000]
+		truncated := false
+		if len(text) > toolJSONSoftLimit {
+			text = text[:toolJSONSoftLimit]
+			truncated = true
 		}
-		return text, nil
+		return toolResultJSON(map[string]any{
+			"ok": true, "kind": "log", "namespace": ns, "pod": pod,
+			"truncated": truncated, "text": text,
+		}), nil
 	default:
 		return "", fmt.Errorf("unknown kind %q", kind)
 	}

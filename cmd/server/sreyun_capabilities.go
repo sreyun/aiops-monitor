@@ -607,6 +607,7 @@ func (h *SreyunCore) execGetDutyContext(args map[string]any) (string, error) {
 		Data: map[string]any{
 			"hosts_total": len(hosts), "hosts_online": online,
 			"alerts_active": alertN, "incidents_open": incOpen,
+			"hint": "列出全部主机请调用 list_hosts；单机容器明细用 query_containers(host_id=...)，勿对 query_containers 做无 host_id 的全量明细拉取。",
 		},
 	}), nil
 }

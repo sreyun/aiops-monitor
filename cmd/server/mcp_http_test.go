@@ -78,7 +78,7 @@ func TestHandleMCPInitializeAndToolsList(t *testing.T) {
 			names[n] = true
 		}
 	}
-	for _, need := range []string{"query_metrics", "get_duty_context", "diagnose_incident", "run_assist_task", "analyze_dashboard"} {
+	for _, need := range []string{"query_metrics", "get_duty_context", "diagnose_incident", "run_assist_task", "analyze_dashboard", "list_hosts", "query_containers"} {
 		if !names[need] {
 			t.Fatalf("tools/list missing %s (got %d tools)", need, len(names))
 		}

@@ -25,7 +25,7 @@ import (
 var mcpReadonlyTools = map[string]bool{
 	"query_metrics": true, "search_logs": true, "list_alerts": true,
 	"search_similar_cases": true, "search_knowledge": true, "list_datasources": true, "query_datasource": true,
-	"list_recent_changes": true, "check_host_health": true,
+	"list_recent_changes": true, "check_host_health": true, "list_hosts": true,
 	"query_hardware": true, "query_hardware_events": true, "query_hardware_history": true,
 	"query_hardware_changes": true, "query_netflow": true, "query_hyperv": true,
 	"query_snmp": true, "query_interface_traffic": true, "query_traps": true,
@@ -326,12 +326,12 @@ func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jso
 	switch strings.TrimSpace(p.URI) {
 	case "aiops://overview":
 		if s.sreyun != nil {
-			if t, ok := s.sreyun.tools["check_host_health"]; ok {
-				text, _ = t.Execute(map[string]any{})
+			if t, ok := s.sreyun.tools["list_hosts"]; ok {
+				text, _ = t.Execute(map[string]any{"limit": 50})
 			}
 		}
 		if text == "" {
-			text = `{"hint":"call check_host_health / list_alerts via tools"}`
+			text = `{"hint":"call list_hosts / list_alerts via tools"}`
 		}
 	case "aiops://duty":
 		if s.sreyun != nil {
