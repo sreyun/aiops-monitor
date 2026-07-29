@@ -168,7 +168,8 @@ func IsReadOnlyQuery(sql string) bool {
 	}
 }
 
-// ForbiddenWrite reports DDL/DML/file ops that must never hit the connection.
+// ForbiddenWrite reports DDL/DML/file ops and SELECT-callable side effects
+// that must never hit the workbench /query connection (viewer+ can run it).
 func ForbiddenWrite(sql string) bool {
 	s := strings.ToLower(compactSpaces(StripCommentsAndStrings(sql)))
 	bad := []string{
@@ -179,6 +180,17 @@ func ForbiddenWrite(sql string) bool {
 		" copy ", " \\copy ", " execute ", " prepare ", " deallocate ",
 		" do ", " listen ", " notify ", " vacuum ", " reindex ",
 		" pg_sleep(", " sleep(", " benchmark(", " get_lock(",
+		// SELECT-shaped but mutating / availability-impacting (PG + MySQL).
+		" pg_terminate_backend(", " pg_cancel_backend(",
+		" pg_reload_conf(", " pg_rotate_logfile(",
+		" pg_advisory_lock(", " pg_advisory_xact_lock(",
+		" pg_try_advisory_lock(", " pg_try_advisory_xact_lock(",
+		" pg_advisory_unlock(", " pg_advisory_unlock_all(",
+		" lo_import(", " lo_export(", " lo_unlink(",
+		" dblink(", " dblink_exec(", " dblink_connect(",
+		" release_lock(",
+		" for update", " for share", " lock in share mode",
+		" into @",
 	}
 	padded := " " + s + " "
 	for _, b := range bad {
