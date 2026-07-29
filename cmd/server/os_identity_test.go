@@ -220,3 +220,40 @@ func TestResolveTargetsDistro(t *testing.T) {
 		t.Fatal("validPlaybookTarget should accept versioned / new distro selectors")
 	}
 }
+
+func TestResolveTargetsFolder(t *testing.T) {
+	cs := testConfigStore(t)
+	cs.cfg.HostFolders = []HostFolderNode{{
+		ID: "p", Name: "Prod", Children: []HostFolderNode{{ID: "db", Name: "DB"}},
+	}}
+	cs.cfg.HostFolderAssign = map[string]string{
+		"1": "db",
+		"2": "p",
+	}
+	pm := &playbookManager{cfg: cs}
+	hosts := []*Host{{ID: "1"}, {ID: "2"}, {ID: "3"}}
+
+	if !validPlaybookTarget("folder:db") || !validPlaybookTarget("folder:__ungrouped__") {
+		t.Fatal("validPlaybookTarget should accept folder: selectors")
+	}
+	got := pm.ResolveTargets("folder:db", hosts)
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("folder:db = %#v", idsOf(got))
+	}
+	got = pm.ResolveTargets("folder:p", hosts)
+	if len(got) != 2 {
+		t.Fatalf("folder:p (subtree) count=%d want 2 ids=%v", len(got), idsOf(got))
+	}
+	got = pm.ResolveTargets("folder:__ungrouped__", hosts)
+	if len(got) != 1 || got[0].ID != "3" {
+		t.Fatalf("folder:__ungrouped__ = %#v", idsOf(got))
+	}
+}
+
+func idsOf(hosts []*Host) []string {
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, h.ID)
+	}
+	return out
+}

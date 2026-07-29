@@ -42,14 +42,15 @@ type PlaybookSchedule struct {
 }
 
 // PlaybookStep is one command in a playbook. Target selectors:
-// "all" = every online host; "category:xxx" = hosts in category xxx;
+// "all" = every online host; "folder:ID" = hosts in folder (incl. subtree);
+// "category:xxx" = hosts in category xxx; "system:os" = OS/distro match;
 // "host:ID" = a single host by ID.
 type PlaybookStep struct {
 	Name          string `json:"name"`
 	Command       string `json:"command"`
 	CommandWin    string `json:"command_win,omitempty"` // Windows 覆盖命令（留空=用 Command）
 	CommandMac    string `json:"command_mac,omitempty"` // macOS 覆盖命令（留空=用 Command）
-	Target        string `json:"target"`                // "all" | "category:xxx" | "system:os" | "host:ID"
+	Target        string `json:"target"`                // "all" | "folder:ID" | "category:xxx" | "system:os" | "host:ID"
 	TimeoutSec    int    `json:"timeout_sec"`
 	ContinueErr   bool   `json:"continue_on_error"`
 	IgnoreExit    bool   `json:"ignore_exit,omitempty"`     // 非零退出码也算成功（grep/diff 等过滤命令）
@@ -301,7 +302,7 @@ func validPlaybookTarget(target string) bool {
 	if target == "" || target == "all" {
 		return true
 	}
-	for _, prefix := range []string{"category:", "system:", "host:"} {
+	for _, prefix := range []string{"folder:", "category:", "system:", "host:"} {
 		if strings.HasPrefix(target, prefix) {
 			value := strings.TrimSpace(strings.TrimPrefix(target, prefix))
 			if value == "" {
@@ -326,7 +327,9 @@ func (pm *playbookManager) Delete(id string) error {
 }
 
 // ResolveTargets expands a target selector into a list of host IDs.
-// Supported prefixes: "all" = every host; "category:xxx" = hosts in category xxx;
+// Supported prefixes: "all" = every host; "folder:ID" = hosts assigned to that
+// folder or any descendant (incl. virtual "__ungrouped__");
+// "category:xxx" = hosts in category xxx;
 // "system:xxx" = GOOS (linux/macos/windows) or distro alias (rocky/kylin/rhel/…),
 // matching Host.OS + Host.Platform (e.g. "Rocky Linux 9.4", "Kylin … V10");
 // "host:ID" = a single host by ID.
@@ -337,6 +340,23 @@ func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host 
 	case target == "" || target == "all":
 		for _, h := range hosts {
 			result = append(result, h)
+		}
+	case strings.HasPrefix(target, "folder:"):
+		fid := strings.TrimSpace(target[len("folder:"):])
+		if fid == "" || pm.cfg == nil {
+			break
+		}
+		allow := map[string]struct{}{fid: {}}
+		if fid != HostFolderUngroupedID {
+			for _, id := range pm.cfg.FolderDescendantIDs(fid) {
+				allow[id] = struct{}{}
+			}
+		}
+		for _, h := range hosts {
+			hf := pm.cfg.hostFolderOf(h.ID)
+			if _, ok := allow[hf]; ok {
+				result = append(result, h)
+			}
 		}
 	case strings.HasPrefix(target, "category:"):
 		cat := target[len("category:"):]

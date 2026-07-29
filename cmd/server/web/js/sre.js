@@ -4,6 +4,9 @@ let PB_CATS = []; // cached unique categories
 
 async function loadPlaybooks() {
   try {
+    if (typeof loadHostFolders === "function") {
+      try { await loadHostFolders(); } catch (_) {}
+    }
     const [pbs, hosts] = await Promise.all([
       fetch(`${API}/playbooks`, { credentials: "same-origin" }).then(r => r.json()),
       typeof fetchHostsList === "function"
@@ -12,7 +15,7 @@ async function loadPlaybooks() {
             typeof syncHostCache === "function" ? syncHostCache(j) : (Array.isArray(j) ? j : []))
     ]);
     PB_HOSTS = Array.isArray(hosts) ? hosts : [];
-    // Extract unique categories for target dropdown
+    // Extract unique categories for legacy category: targets / fallback UI
     PB_CATS = [...new Set(PB_HOSTS.map(h => h.category || I18N.t("section.uncategorized")))].sort();
     // System types are hardcoded (linux/macos/windows) — do NOT extract from
     // h.platform (which is a version string like "Ubuntu 22.04"), use h.os
@@ -144,7 +147,6 @@ function pbSchedLabel(sc) {
 function renderPbSteps(steps) {
   const c = $("pbSteps");
   c.innerHTML = steps.map((s, i) => {
-    const tgtOpts = buildTargetOptions(s.target);
     const a = s.args || {};
     const mod = s.module || "";
     const av = (k) => esc(a[k] || "");
@@ -152,7 +154,10 @@ function renderPbSteps(steps) {
     return `<div class="pb-step" data-idx="${i}">
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.step_name")}</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="${I18N.t('form.hint_step_name')}"></div>
-        <div class="field"><label>${I18N.t("form.target")}</label><div class="select-wrap"><select class="pb-step-target" data-act-change="pb-target-preview">${tgtOpts}</select></div></div>
+        <div class="field pb-target-field"><label>${I18N.t("form.target")}</label>
+          <input type="hidden" class="pb-step-target" value="${esc(s.target || "all")}">
+          <div class="pb-step-target-picker"></div>
+        </div>
       </div>
       <div class="pb-target-preview" style="font-size:12px;color:var(--muted2);margin:-4px 0 4px"></div>
       <div class="field"><label>${I18N.t("sre.label_type","类型")}</label><div class="select-wrap"><select class="pb-step-module" data-act-change="pb-module-change">
@@ -372,8 +377,8 @@ function renderPbSteps(steps) {
   c.querySelectorAll(".pb-step-del").forEach(btn => {
     btn.onclick = () => { btn.closest(".pb-step").remove(); };
   });
-  // Initialize previews + module visibility
-  c.querySelectorAll(".pb-step-target").forEach(sel => pbTargetPreview(sel));
+  // Initialize target tree pickers + module visibility
+  c.querySelectorAll(".pb-step").forEach(step => paintPbTargetPicker(step));
   c.querySelectorAll(".pb-step-module").forEach(sel => pbModuleChange(sel));
 }
 
@@ -437,44 +442,110 @@ function collectModuleArgs(el, mod) {
   return args;
 }
 
-// Build <option> list for target select: all / by category / by system / per host
+// Playbook step target: folder tree (hostname + IP) via shared HostPicker.
+const PB_STEP_PICK = new WeakMap();
+let _pbPickUid = 0;
+
+function pbSystemOptions() {
+  return [
+    { val: "linux", label: "Linux" },
+    { val: "rocky", label: "Rocky Linux" },
+    { val: "centos", label: "CentOS" },
+    { val: "openeuler", label: "openEuler" },
+    { val: "euleros", label: "EulerOS" },
+    { val: "alinux", label: "Alibaba Cloud Linux" },
+    { val: "kylin", label: "麒麟 Kylin" },
+    { val: "debian", label: "Debian / Ubuntu" },
+    { val: "rhel", label: "RHEL 族" },
+    { val: "macos", label: "macOS" },
+    { val: "windows", label: "Windows" }
+  ];
+}
+
+function pbFolderSubtreeIds(fid) {
+  const ids = new Set([fid]);
+  if (fid === "__ungrouped__") return ids;
+  const folders = (typeof HOST_FOLDERS !== "undefined" && HOST_FOLDERS && HOST_FOLDERS.folders) ? HOST_FOLDERS.folders : [];
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.id === fid) {
+        const collect = (x) => { ids.add(x.id); (x.children || []).forEach(collect); };
+        collect(n);
+        return true;
+      }
+      if (walk(n.children || [])) return true;
+    }
+    return false;
+  };
+  walk(folders);
+  return ids;
+}
+
+function paintPbTargetPicker(step) {
+  const wrap = step.querySelector(".pb-step-target-picker");
+  const hidden = step.querySelector(".pb-step-target");
+  if (!wrap || !hidden) return;
+  if (!window.HostPicker) {
+    wrap.innerHTML = `<div class="hint">${esc(I18N.t("playbook.target_fallback", "主机选择器未加载"))}</div>`;
+    return;
+  }
+  let st = PB_STEP_PICK.get(step);
+  if (!st) {
+    st = { collapsed: new Set(), q: "", uid: "pb" + (++_pbPickUid) };
+    PB_STEP_PICK.set(step, st);
+  }
+  const target = hidden.value || "all";
+  wrap.innerHTML = HostPicker.renderHTML({
+    id: "pbTgt_" + st.uid,
+    name: "pb_tgt_" + st.uid,
+    mode: "target",
+    hosts: PB_HOSTS,
+    targetValue: target,
+    collapsed: st.collapsed,
+    q: st.q,
+    systemOptions: pbSystemOptions(),
+    compact: true,
+  });
+  const root = wrap.querySelector(".host-picker");
+  if (root) root._hpBound = false;
+  HostPicker.bind(root, {
+    onToggleFold: (id) => {
+      if (st.collapsed.has(id)) st.collapsed.delete(id); else st.collapsed.add(id);
+      paintPbTargetPicker(step);
+    },
+    onSearch: (q) => { st.q = q; paintPbTargetPicker(step); },
+    onTargetChange: (val) => {
+      hidden.value = val || "all";
+      pbTargetPreviewFromStep(step);
+    },
+  });
+  pbTargetPreviewFromStep(step);
+}
+
+// Legacy flat <option> builder kept for any leftover callers / AI helpers.
 function buildTargetOptions(selectedTarget) {
   const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>${I18N.t("ui.all_hosts")}</option>`];
-  // By category
   if (PB_CATS.length > 0) {
     opts.push(`<optgroup label="${I18N.t("section.by_category")}">`);
     PB_CATS.forEach(cat => {
       const val = `category:${cat}`;
       opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(cat)}</option>`);
     });
-    opts.push('</optgroup>');
+    opts.push("</optgroup>");
   }
-  // By system / distro — GOOS plus Rocky / 麒麟 / RHEL 族（按 Platform 匹配）。
   opts.push(`<optgroup label="${I18N.t("section.by_system")}">`);
-  [
-    {val:"linux",label:"Linux"},
-    {val:"rocky",label:"Rocky Linux"},
-    {val:"centos",label:"CentOS"},
-    {val:"openeuler",label:"openEuler"},
-    {val:"euleros",label:"EulerOS"},
-    {val:"alinux",label:"Alibaba Cloud Linux"},
-    {val:"kylin",label:"麒麟 Kylin"},
-    {val:"debian",label:"Debian / Ubuntu"},
-    {val:"rhel",label:"RHEL 族"},
-    {val:"macos",label:"macOS"},
-    {val:"windows",label:"Windows"}
-  ].forEach(s => {
+  pbSystemOptions().forEach(s => {
     opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
   });
-  opts.push('</optgroup>');
-  // Per host
+  opts.push("</optgroup>");
   if (PB_HOSTS.length > 0) {
     opts.push(`<optgroup label="${I18N.t("section.target_host")}">`);
     PB_HOSTS.forEach(h => {
       const val = `host:${h.id}`;
-      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(h.hostname)}</option>`);
+      const lab = (window.HostPicker && HostPicker.optionLabel) ? HostPicker.optionLabel(h) : (h.hostname || h.id);
+      opts.push(`<option value="${esc(val)}" ${selectedTarget===val?"selected":""}>${esc(lab)}</option>`);
     });
-    opts.push('</optgroup>');
+    opts.push("</optgroup>");
   }
   return opts.join("");
 }
@@ -554,28 +625,142 @@ function pbHostMatchesSystem(h, sys) {
   return false;
 }
 
-// Preview matched host count when target changes
-function pbTargetPreview(sel) {
-  const step = sel.closest(".pb-step");
+function pbCountForTarget(target) {
+  if (target === "all" || target === "") return PB_HOSTS.length;
+  if (target.startsWith("folder:")) {
+    const fid = target.slice("folder:".length);
+    const ids = pbFolderSubtreeIds(fid);
+    return PB_HOSTS.filter(h => {
+      const hf = h.folder_id || "__ungrouped__";
+      return ids.has(hf);
+    }).length;
+  }
+  if (target.startsWith("category:")) {
+    const cat = target.slice("category:".length);
+    return PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
+  }
+  if (target.startsWith("system:")) {
+    const sys = target.slice("system:".length).toLowerCase();
+    return PB_HOSTS.filter(h => pbHostMatchesSystem(h, sys)).length;
+  }
+  if (target.startsWith("host:")) return 1;
+  return 0;
+}
+
+function pbTargetPreviewFromStep(step) {
   if (!step) return;
   const preview = step.querySelector(".pb-target-preview");
-  if (!preview) return;
-  const target = sel.value;
-  let count = 0;
-  if (target === "all" || target === "") {
-    count = PB_HOSTS.length;
-  } else if (target.startsWith("category:")) {
-    const cat = target.slice("category:".length);
-    count = PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
-  } else if (target.startsWith("system:")) {
-    const sys = target.slice("system:".length).toLowerCase();
-    // Match GOOS plus Platform/distro aliases (Rocky / 麒麟 / RHEL 族).
-    count = PB_HOSTS.filter(h => pbHostMatchesSystem(h, sys)).length;
-  } else if (target.startsWith("host:")) {
-    count = 1;
-  }
-  preview.textContent = count > 0 ? `${I18N.t("ui.matched")} ${count} ${I18N.t("ui.hosts_matched")}` : I18N.t("empty.no_host_match2");
+  const hidden = step.querySelector(".pb-step-target");
+  if (!preview || !hidden) return;
+  const target = hidden.value || "all";
+  const count = pbCountForTarget(target);
+  const label = (window.HostPicker && HostPicker.labelForTarget)
+    ? HostPicker.labelForTarget(target, PB_HOSTS)
+    : target;
+  preview.textContent = count > 0
+    ? `${I18N.t("ui.matched")} ${count} ${I18N.t("ui.hosts_matched")} · ${label}`
+    : I18N.t("empty.no_host_match2");
   preview.style.color = count > 0 ? "var(--ok, #31c46b)" : "var(--crit, #ff5b6e)";
+}
+
+// Preview matched host count when target changes (legacy select handler)
+function pbTargetPreview(sel) {
+  const step = sel && sel.closest ? sel.closest(".pb-step") : null;
+  if (step) { pbTargetPreviewFromStep(step); return; }
+}
+
+function sreHostLabel(h) {
+  return (window.HostPicker && HostPicker.optionLabel)
+    ? HostPicker.optionLabel(h)
+    : ((h.hostname || h.id) + (h.ip ? ` (${h.ip})` : ""));
+}
+
+/** Mount multi-select host tree; keep CSV of IDs in hidden input. */
+function sreMountHostMultiPick(containerId, hiddenId, selectedIds) {
+  const box = $(containerId);
+  const hidden = $(hiddenId);
+  if (!box) return;
+  const hosts = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
+    ? LAST_HOSTS
+    : ((typeof SRE_HOSTS !== "undefined" && SRE_HOSTS) || (typeof PB_HOSTS !== "undefined" && PB_HOSTS) || []);
+  const selected = new Set((selectedIds || []).filter(Boolean));
+  const st = box._srePick || { collapsed: new Set(), q: "" };
+  box._srePick = st;
+  const syncHidden = () => { if (hidden) hidden.value = [...selected].join(","); };
+  syncHidden();
+  if (!window.HostPicker) {
+    box.innerHTML = hosts.map(h =>
+      `<label class="host-chk"><input type="checkbox" value="${esc(h.id)}" ${selected.has(h.id) ? "checked" : ""}> ${esc(sreHostLabel(h))}</label>`
+    ).join("") || `<span class="muted">暂无主机</span>`;
+    box.onchange = () => {
+      selected.clear();
+      box.querySelectorAll("input:checked").forEach(cb => selected.add(cb.value));
+      syncHidden();
+    };
+    return;
+  }
+  const paint = () => {
+    box.innerHTML = HostPicker.renderHTML({
+      id: containerId + "_tree",
+      mode: "multi",
+      hosts,
+      selected,
+      collapsed: st.collapsed,
+      q: st.q,
+      onlineOnly: false,
+      compact: true,
+    });
+    const root = box.querySelector(".host-picker") || box;
+    root._hpBound = false;
+    HostPicker.bind(root, {
+      onToggleFold: (id) => {
+        selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
+        if (st.collapsed.has(id)) st.collapsed.delete(id); else st.collapsed.add(id);
+        paint();
+      },
+      onSearch: (q) => {
+        selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
+        st.q = q || ""; paint();
+      },
+      onQuick: (act) => {
+        selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
+        if (act === "clear") selected.clear();
+        else hosts.forEach(h => selected.add(h.id));
+        paint();
+      },
+      onFolderToggle: (fid, checked) => {
+        selected.clear(); HostPicker.readMulti(root).forEach(x => selected.add(x));
+        const q = (st.q || "").trim().toLowerCase();
+        const byFolder = HostPicker.hostsByFolder(hosts);
+        let ids = [];
+        if (String(fid).startsWith("cat:")) {
+          const cat = String(fid).slice(4);
+          ids = hosts.filter(h => ((h.category || "").trim() || "未分组") === cat && HostPicker.filterHost(h, q)).map(h => h.id);
+        } else if (fid === "__ungrouped__") {
+          ids = (byFolder.get("__ungrouped__") || []).filter(h => HostPicker.filterHost(h, q)).map(h => h.id);
+        } else {
+          const find = (nodes) => {
+            for (const n of nodes || []) {
+              if (n.id === fid) return n;
+              const c = find(n.children || []);
+              if (c) return c;
+            }
+            return null;
+          };
+          const node = find(HostPicker.folderTree());
+          if (node) ids = HostPicker.collectFolderHostIds(node, byFolder, q, false);
+        }
+        ids.forEach(id => { if (checked) selected.add(id); else selected.delete(id); });
+        paint();
+      },
+      onHostToggle: (id, checked) => {
+        if (checked) selected.add(id); else selected.delete(id);
+        syncHidden();
+      },
+    });
+    syncHidden();
+  };
+  paint();
 }
 
 function collectPlaybook() {
@@ -1841,7 +2026,7 @@ function parseDiagFileAttachment(f){
 }
 function openNewIncident(){
   $("niTitle").value=""; $("niSeverity").value="warning";
-  $("niHost").innerHTML=`<option value="">—</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  $("niHost").innerHTML=`<option value="">—</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc((window.HostPicker&&HostPicker.optionLabel)?HostPicker.optionLabel(h):(h.hostname||h.id))}</option>`).join("");
   $("newIncidentMask").classList.add("show");
 }
 async function saveNewIncident(){
@@ -1922,7 +2107,7 @@ async function loadTopology(){
     if(sel){
       const hosts=SRE_HOSTS||[];
       const cur=sel.value;
-      sel.innerHTML=`<option value="">选择主机…</option>`+hosts.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname||h.id)}</option>`).join("");
+      sel.innerHTML=`<option value="">选择主机…</option>`+hosts.map(h=>`<option value="${esc(h.id)}">${esc((window.HostPicker&&HostPicker.optionLabel)?HostPicker.optionLabel(h):(h.hostname||h.id))}</option>`).join("");
       if(cur) sel.value=cur;
     }
   }catch(e){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`; }
@@ -2167,7 +2352,7 @@ function openSloModal(s){
   $("sloName").value=s?s.name:""; $("sloEnabled").checked=s?s.enabled:true; $("sloSource").value=s?s.source_type:"check";
   $("sloCheck").innerHTML=SRE_CHECKS.map(c=>`<option value="${esc(c.id)}" ${s&&s.check_id===c.id?"selected":""}>${esc(c.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_check_first","（请先创建拨测）")}</option>`;
   $("sloApi").innerHTML=SRE_API_ENDPOINTS.map(e=>`<option value="${esc(e.id)}" ${s&&s.api_id===e.id?"selected":""}>${esc(e.name)}</option>`).join("")||`<option value="">${I18N.t("sre.create_api_first","（请先创建 API 监控）")}</option>`;
-  $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc(h.hostname)}</option>`).join("");
+  $("sloHost").innerHTML=SRE_HOSTS.map(h=>`<option value="${esc(h.id)}" ${s&&s.host_id===h.id?"selected":""}>${esc((window.HostPicker&&HostPicker.optionLabel)?HostPicker.optionLabel(h):(h.hostname||h.id))}</option>`).join("");
   if(s){ $("sloMetric").value=s.metric||"cpu_percent"; $("sloComparator").value=s.comparator||"<"; $("sloThreshold").value=s.threshold||90; } else { $("sloComparator").value="<"; $("sloThreshold").value=90; }
   $("sloTotalQuery").value=s&&s.total_query?s.total_query:""; $("sloGoodQuery").value=s&&s.good_query?s.good_query:"";
   $("sloTarget").value=s?s.target:99.9; $("sloWindow").value=s?s.window_days:30;
@@ -2646,7 +2831,10 @@ function openChangeWinModal(w){
     </div>
     <div class="field" id="cwWeekRow" style="display:none"><label>星期（0=周日…6=周六，逗号，空=每天）</label>
       <input id="cwWeekdays" value="${esc((w&&w.recur_weekdays||[]).join(","))}" placeholder="1,2,3,4,5"></div>
-    <div class="field"><label>主机 ID（逗号，空=全局）</label><input id="cwHosts" value="${esc((w&&w.host_ids||[]).join(","))}"></div>
+    <div class="field"><label>作用主机（空=全局）</label>
+      <input type="hidden" id="cwHosts" value="${esc((w&&w.host_ids||[]).join(","))}">
+      <div id="cwHostPick"></div>
+    </div>
     <div class="field"><label>分类（逗号）</label><input id="cwCats" value="${esc((w&&w.categories||[]).join(","))}"></div>
     <label class="switch mb"><input type="checkbox" id="cwFreeze" ${!w||w.freeze?"checked":""}> 冻结期（禁止未审批自愈 / 触发远程闸门）</label>
     <div class="field"><label>备注</label><input id="cwNote" value="${esc(w&&w.note||"")}"></div>
@@ -2659,6 +2847,13 @@ function openChangeWinModal(w){
   };
   $("cwRecur").onchange=syncRecurUI; syncRecurUI();
   $("changeEditMask").classList.add("show");
+  (async () => {
+    if (typeof loadHostFolders === "function") { try { await loadHostFolders(); } catch (_) {} }
+    if ((!LAST_HOSTS || !LAST_HOSTS.length) && typeof fetchHostsList === "function") {
+      try { await fetchHostsList({ force: false }); } catch (_) {}
+    }
+    sreMountHostMultiPick("cwHostPick", "cwHosts", (w && w.host_ids) || []);
+  })();
   $("changeEditSave").onclick=async()=>{
     const toUnix=v=>{ const t=Date.parse(v); return isNaN(t)?0:Math.floor(t/1000); };
     const recurMode=$("cwRecur").value;
@@ -2712,11 +2907,21 @@ function openChangeRecModal(c){
     <div class="field"><label>实施计划</label><textarea id="crPlan" rows="2">${esc(c&&c.plan||"")}</textarea></div>
     <div class="field"><label>回滚计划</label><textarea id="crRollback" rows="2">${esc(c&&c.rollback_plan||"")}</textarea></div>
     <div class="field"><label>验证计划</label><textarea id="crTest" rows="2">${esc(c&&c.test_plan||"")}</textarea></div>
-    <div class="field"><label>主机 ID（逗号）</label><input id="crHosts" value="${esc((c&&c.host_ids||[]).join(","))}"></div>
+    <div class="field"><label>作用主机</label>
+      <input type="hidden" id="crHosts" value="${esc((c&&c.host_ids||[]).join(","))}">
+      <div id="crHostPick"></div>
+    </div>
     <div class="field"><label>关联事件 ID（逗号）</label><input id="crIncidents" value="${esc((c&&c.linked_incident_ids||[]).join(","))}"></div>
     <div class="field"><label>外链</label><input id="crRef" value="${esc(c&&c.external_ref||"")}"></div>
     <input type="hidden" id="crId" value="${c&&c.id||0}">`;
   $("changeEditMask").classList.add("show");
+  (async () => {
+    if (typeof loadHostFolders === "function") { try { await loadHostFolders(); } catch (_) {} }
+    if ((!LAST_HOSTS || !LAST_HOSTS.length) && typeof fetchHostsList === "function") {
+      try { await fetchHostsList({ force: false }); } catch (_) {}
+    }
+    sreMountHostMultiPick("crHostPick", "crHosts", (c && c.host_ids) || []);
+  })();
   $("changeEditBody").querySelectorAll("[data-cwf]").forEach(b=>b.onclick=async()=>{
     const action=b.dataset.cwf;
     const cid=parseInt($("crId").value,10)||0;
@@ -2765,7 +2970,7 @@ let LAST_LOG_STATS = null; // 缓存上次搜索的统计数据
 async function loadLogs(){
   try { if (!SRE_HOSTS.length) SRE_HOSTS=(await fetch(`${API}/hosts`).then(r=>r.json()))||[]; } catch(e){}
   const hs=$("logHost");
-  if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">${I18N.t("ui.all_hosts","全部主机")}</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("");
+  if (hs && hs.options.length<=1) hs.innerHTML=`<option value="">${I18N.t("ui.all_hosts","全部主机")}</option>`+SRE_HOSTS.map(h=>`<option value="${esc(h.id)}">${esc((window.HostPicker&&HostPicker.optionLabel)?HostPicker.optionLabel(h):(h.hostname||h.id))}</option>`).join("");
   // 日志来源下拉：本地聚合 + 已接入且启用的 Loki 数据源
   const srcSel=$("logSource");
   if (srcSel) {

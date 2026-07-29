@@ -9,6 +9,7 @@ let INSP_HOSTS_LOADING = false;
 let INSP_HOSTS_ERR = "";
 let INSP_LOAD_SEQ = 0;
 let INSP_SELECTED = new Set(); // preserve checkbox selection across re-renders
+let INSP_PICK_COLLAPSED = new Set();
 
 function inspT(k, fb) { return (window.I18N && I18N.t) ? I18N.t(k, fb) : fb; }
 
@@ -24,8 +25,11 @@ document.querySelectorAll("#autoTabs .chip-btn").forEach(b => {
 });
 
 function inspCaptureSelection() {
-  document.querySelectorAll(".insp-host-cb:checked").forEach(cb => INSP_SELECTED.add(cb.value));
-  document.querySelectorAll(".insp-host-cb:not(:checked)").forEach(cb => INSP_SELECTED.delete(cb.value));
+  const root = $("inspHostList");
+  if (!root || !window.HostPicker) return;
+  const set = HostPicker.readMulti(root);
+  INSP_SELECTED.clear();
+  set.forEach(id => INSP_SELECTED.add(id));
 }
 
 function inspPanelActive() {
@@ -41,6 +45,10 @@ async function loadHostInspect(opts) {
   const warm = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
     ? LAST_HOSTS
     : (window._cachedHosts && window._cachedHosts.length ? window._cachedHosts : []);
+
+  if (typeof loadHostFolders === "function") {
+    try { await loadHostFolders(); } catch (_) {}
+  }
 
   // Paint warm cache immediately so the picker never sits empty waiting on /hosts.
   if (warm.length) {
@@ -95,18 +103,17 @@ async function loadHostInspect(opts) {
   }
 }
 
+function inspHostsPool() {
+  return (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
+    ? LAST_HOSTS
+    : (window._cachedHosts && Array.isArray(window._cachedHosts) ? window._cachedHosts : []);
+}
+
 function renderInspHostPicker() {
   const box = $("inspHostList");
   if (!box) return;
   inspCaptureSelection();
-  const hosts = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length)
-    ? LAST_HOSTS
-    : (window._cachedHosts && Array.isArray(window._cachedHosts) ? window._cachedHosts : []);
-  const q = (INSP_HOST_Q || "").trim().toLowerCase();
-  const filtered = q ? hosts.filter(h => {
-    const hay = [h.hostname, h.id, h.ip, h.os, h.category].filter(Boolean).join(" ").toLowerCase();
-    return hay.includes(q);
-  }) : hosts;
+  const hosts = inspHostsPool();
   if (INSP_HOSTS_LOADING && !hosts.length) {
     box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.hosts_loading", "正在加载主机列表…"))}</div>`;
     return;
@@ -122,19 +129,71 @@ function renderInspHostPicker() {
     if (btn) btn.onclick = () => loadHostInspect({ forceHosts: true });
     return;
   }
-  if (!filtered.length) {
-    box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.no_host_match", "无匹配主机"))}</div>`;
+  if (!window.HostPicker) {
+    box.innerHTML = `<div class="insp-empty-mini">${esc(inspT("inspect.picker_missing", "主机选择器未加载"))}</div>`;
     return;
   }
-  box.innerHTML = filtered.map(h => {
-    const online = !!h.online;
-    const checked = INSP_SELECTED.has(h.id) ? "checked" : "";
-    return `<label class="insp-host-row ${online ? "" : "off"}">
-      <input type="checkbox" class="insp-host-cb" value="${esc(h.id)}" ${online ? "" : "disabled"} ${checked}>
-      <span class="insp-host-name">${esc(h.hostname || h.id)}</span>
-      <span class="insp-host-meta">${esc(h.os || "")} · ${esc(h.ip || "—")} · ${online ? inspT("status.online", "在线") : inspT("status.offline", "离线")}</span>
-    </label>`;
-  }).join("");
+  box.innerHTML = HostPicker.renderHTML({
+    id: "inspHostTree",
+    mode: "multi",
+    hosts,
+    selected: INSP_SELECTED,
+    collapsed: INSP_PICK_COLLAPSED,
+    q: INSP_HOST_Q,
+    onlineOnly: true,
+  });
+  const root = box.querySelector(".host-picker") || box;
+  root._hpBound = false;
+  HostPicker.bind(root, {
+    onToggleFold: (id) => {
+      inspCaptureSelection();
+      if (INSP_PICK_COLLAPSED.has(id)) INSP_PICK_COLLAPSED.delete(id); else INSP_PICK_COLLAPSED.add(id);
+      renderInspHostPicker();
+    },
+    onSearch: (q) => {
+      inspCaptureSelection();
+      INSP_HOST_Q = q || "";
+      renderInspHostPicker();
+    },
+    onQuick: (act) => {
+      inspCaptureSelection();
+      if (act === "clear") INSP_SELECTED.clear();
+      else hosts.filter(h => h.online).forEach(h => INSP_SELECTED.add(h.id));
+      renderInspHostPicker();
+    },
+    onFolderToggle: (fid, checked) => {
+      inspCaptureSelection();
+      const q = (INSP_HOST_Q || "").trim().toLowerCase();
+      const byFolder = HostPicker.hostsByFolder(hosts);
+      let ids = [];
+      if (String(fid).startsWith("cat:")) {
+        const cat = String(fid).slice(4);
+        ids = hosts.filter(h => {
+          const c = (h.category || "").trim() || inspT("hs.ungrouped", "未分组");
+          return c === cat && HostPicker.filterHost(h, q) && h.online;
+        }).map(h => h.id);
+      } else if (fid === "__ungrouped__") {
+        ids = (byFolder.get("__ungrouped__") || []).filter(h => HostPicker.filterHost(h, q) && h.online).map(h => h.id);
+      } else {
+        const folders = HostPicker.folderTree();
+        const find = (nodes) => {
+          for (const n of nodes || []) {
+            if (n.id === fid) return n;
+            const c = find(n.children || []);
+            if (c) return c;
+          }
+          return null;
+        };
+        const node = find(folders);
+        if (node) ids = HostPicker.collectFolderHostIds(node, byFolder, q, true);
+      }
+      ids.forEach(id => { if (checked) INSP_SELECTED.add(id); else INSP_SELECTED.delete(id); });
+      renderInspHostPicker();
+    },
+    onHostToggle: (id, checked) => {
+      if (checked) INSP_SELECTED.add(id); else INSP_SELECTED.delete(id);
+    },
+  });
 }
 
 // Global refresh / other pages update host cache → keep inspect picker live.
@@ -145,27 +204,14 @@ document.addEventListener("aiops:hosts-updated", () => {
   renderInspHostPicker();
 });
 
-safeAddEventListener("inspSelectAll", "change", e => {
-  const on = !!e.target.checked;
-  document.querySelectorAll(".insp-host-cb:not(:disabled)").forEach(cb => {
-    cb.checked = on;
-    if (on) INSP_SELECTED.add(cb.value); else INSP_SELECTED.delete(cb.value);
-  });
-});
-safeAddEventListener("inspHostSearch", "input", e => {
-  INSP_HOST_Q = e.target.value || "";
-  renderInspHostPicker();
-});
-safeAddEventListener("inspHostList", "change", e => {
-  if (e.target && e.target.classList && e.target.classList.contains("insp-host-cb")) {
-    if (e.target.checked) INSP_SELECTED.add(e.target.value);
-    else INSP_SELECTED.delete(e.target.value);
-  }
-});
 safeAddEventListener("inspRefreshBtn", "click", () => loadHostInspect({ forceHosts: true }));
 
 safeAddEventListener("inspRunBtn", "click", async () => {
-  const ids = [...document.querySelectorAll(".insp-host-cb:checked")].map(cb => cb.value);
+  inspCaptureSelection();
+  const ids = [...INSP_SELECTED].filter(id => {
+    const h = inspHostsPool().find(x => x.id === id);
+    return h && h.online;
+  });
   if (!ids.length) {
     toast(inspT("inspect.pick_hosts", "请先勾选要巡检的在线主机"), "warn");
     return;

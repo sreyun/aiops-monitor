@@ -5393,111 +5393,108 @@ button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--acce
 #webSecurityPanel .hs-host-pick > label{
   font-size:11px; color:var(--muted2); font-weight:600;
 }
-#hostSecurityPanel .hs-pick-tree-wrap,
-#webSecurityPanel .hs-pick-tree-wrap{
+/* Shared host tree picker (playbook / inspect / API / security …) */
+.hs-pick-tree-wrap{
   border:1px solid var(--line); border-radius:12px; background:var(--panel2);
   overflow:hidden;
   transition:border-color .15s ease, box-shadow .15s ease;
 }
-#hostSecurityPanel .hs-pick-tree-wrap:focus-within,
-#webSecurityPanel .hs-pick-tree-wrap:focus-within{
+.hs-pick-tree-wrap:focus-within{
   border-color:color-mix(in srgb, var(--accent) 45%, var(--line));
   box-shadow:0 0 0 3px var(--accent-soft);
 }
-#hostSecurityPanel .hs-pick-tools,
-#webSecurityPanel .hs-pick-tools{
+.hs-pick-tools{
   display:flex; flex-direction:column; gap:8px; padding:10px 12px;
   border-bottom:1px solid var(--line);
   background:color-mix(in srgb, var(--panel) 88%, var(--panel2));
 }
-#hostSecurityPanel .hs-pick-search,
-#webSecurityPanel .hs-pick-search{
+.hs-pick-search{
   width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:9px;
   background:var(--panel); color:var(--txt); font-size:12.5px;
   transition:border-color .15s ease, box-shadow .15s ease;
 }
-#hostSecurityPanel .hs-pick-search:focus,
-#webSecurityPanel .hs-pick-search:focus{
+.hs-pick-search:focus{
   outline:none;
   border-color:color-mix(in srgb, var(--accent) 50%, var(--line));
   box-shadow:0 0 0 3px var(--accent-soft);
 }
-#hostSecurityPanel .hs-pick-quick,
-#webSecurityPanel .hs-pick-quick{
+.hs-pick-quick{
   display:flex; flex-wrap:wrap; gap:6px; align-items:center;
 }
-#hostSecurityPanel .hs-pick-quick .btn,
-#webSecurityPanel .hs-pick-quick .btn{
+.hs-pick-quick .btn{
   height:26px; padding:0 10px; font-size:11px; border-radius:7px;
 }
-#hostSecurityPanel .hs-pick-meta,
-#webSecurityPanel .hs-pick-meta{
+.hs-pick-meta{
   margin-left:auto; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums;
   padding:2px 8px; border-radius:999px; background:var(--panel3);
 }
-#hostSecurityPanel .hs-pick-tree,
-#webSecurityPanel .hs-pick-tree{
+.hs-pick-tree{
   max-height:240px; overflow:auto; padding:4px 0 8px;
   scrollbar-width:thin;
 }
+.host-picker.is-compact .hs-pick-tree{ max-height:200px }
 #hostSecurityPanel .sec-cfg-panel .hs-pick-tree{ max-height:260px }
-#hostSecurityPanel .hs-pick-folder,
-#webSecurityPanel .hs-pick-folder{
+.insp-hosts-pane .hs-pick-tree{ max-height:min(420px, 55vh) }
+.pb-target-field{ grid-column:1 / -1 }
+.pb-step-target-picker{ margin-top:4px }
+.hs-pick-folder{
   display:flex; align-items:center; gap:4px; padding:5px 12px 5px 8px;
 }
-#hostSecurityPanel .hs-pick-caret,
-#webSecurityPanel .hs-pick-caret{
+.hs-pick-caret{
   width:24px; height:24px; border:none; background:transparent; color:var(--muted);
   cursor:pointer; border-radius:7px; font-size:12px; line-height:1; padding:0;
   transition:background .12s ease, color .12s ease;
 }
-#hostSecurityPanel .hs-pick-caret:hover,
-#webSecurityPanel .hs-pick-caret:hover{ background:var(--panel3); color:var(--txt) }
-#hostSecurityPanel .hs-pick-folder-lab,
-#webSecurityPanel .hs-pick-folder-lab{
+.hs-pick-caret:hover{ background:var(--panel3); color:var(--txt) }
+.hs-pick-folder-lab{
   display:flex; align-items:center; gap:8px; flex:1; min-width:0; cursor:pointer; font-size:12.5px;
 }
-#hostSecurityPanel .hs-pick-folder-name,
-#webSecurityPanel .hs-pick-folder-name{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-#hostSecurityPanel .hs-pick-count,
-#webSecurityPanel .hs-pick-count{
+.hs-pick-folder-lab.is-on,
+.hs-pick-folder-target.is-on{
+  color:var(--accent);
+}
+.hs-pick-folder-name{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.hs-pick-count{
   margin-left:auto; font-size:10px; color:var(--muted); background:var(--panel3);
   border-radius:999px; padding:2px 8px; font-variant-numeric:tabular-nums;
 }
-#hostSecurityPanel .hs-pick-row,
-#webSecurityPanel .hs-pick-row{
+.hs-pick-row{
   display:grid; grid-template-columns:18px minmax(0,1.15fr) minmax(0,1fr) auto;
   gap:6px 10px; align-items:center; padding:7px 14px; cursor:pointer; font-size:12.5px;
   border-left:3px solid transparent;
   transition:background .12s ease, border-color .12s ease;
 }
-#hostSecurityPanel .hs-pick-row:hover,
-#webSecurityPanel .hs-pick-row:hover{ background:color-mix(in srgb, var(--accent) 6%, var(--panel)) }
-#hostSecurityPanel .hs-pick-row.is-on,
-#webSecurityPanel .hs-pick-row.is-on{
+.hs-pick-row:hover{ background:color-mix(in srgb, var(--accent) 6%, var(--panel)) }
+.hs-pick-row.is-on{
   background:color-mix(in srgb, var(--accent) 10%, transparent);
   border-left-color:var(--accent);
 }
-#hostSecurityPanel .hs-pick-row.off,
-#webSecurityPanel .hs-pick-row.off{ opacity:.5; cursor:not-allowed }
-#hostSecurityPanel .hs-pick-name,
-#webSecurityPanel .hs-pick-name{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-#hostSecurityPanel .hs-pick-ip,
-#webSecurityPanel .hs-pick-ip{ color:var(--muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-#hostSecurityPanel .hs-pick-st,
-#webSecurityPanel .hs-pick-st{
+.hs-pick-row.off{ opacity:.5; cursor:not-allowed }
+.hs-pick-name{ font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.hs-pick-ip{ color:var(--muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.hs-pick-st{
   display:inline-flex; align-items:center; gap:5px;
   font-size:10.5px; color:var(--muted2); white-space:nowrap; font-weight:500;
 }
-#hostSecurityPanel .hs-pick-st.ok,
-#webSecurityPanel .hs-pick-st.ok{ color:var(--ok-txt, var(--ok)) }
-#hostSecurityPanel .hs-pick-dot,
-#webSecurityPanel .hs-pick-dot{
+.hs-pick-st.ok{ color:var(--ok-txt, var(--ok)) }
+.hs-pick-dot{
   width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.75;
   box-shadow:0 0 0 2px color-mix(in srgb, currentColor 22%, transparent);
 }
-#hostSecurityPanel .hs-pick-empty,
-#webSecurityPanel .hs-pick-empty{ padding:20px 16px; color:var(--muted); font-size:12px; text-align:center }
+.hs-pick-empty{ padding:20px 16px; color:var(--muted); font-size:12px; text-align:center }
+.hs-pick-chip{
+  display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+  font-size:11px; padding:3px 10px; border-radius:999px;
+  border:1px solid var(--line); background:var(--panel); color:var(--muted2);
+}
+.hs-pick-chip input{ position:absolute; opacity:0; pointer-events:none; width:0; height:0 }
+.hs-pick-chip.is-on{
+  border-color:color-mix(in srgb, var(--accent) 55%, var(--line));
+  background:color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color:var(--accent); font-weight:600;
+}
+.hs-pick-target-quick .hs-pick-meta{ margin-left:0; flex:1 1 100% }
+#apiSysHosts.host-multi .hs-pick-tree{ max-height:220px }
 #hostSecurityPanel .sec-toolbar-actions,
 #webSecurityPanel .sec-toolbar-actions{
   display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding-top:18px;

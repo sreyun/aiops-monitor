@@ -4,6 +4,9 @@
  * GET /apimon/systems（实时状态由内存、聚合由 VM 现算），写入 VM 后重启不丢。
  */
 let LAST_APIMON = { systems: [] };
+let APIMON_PICK_COLLAPSED = new Set();
+let APIMON_PICK_Q = "";
+let APIMON_PICK_SELECTED = new Set();
 
 async function loadAPIMon() {
   try {
@@ -23,6 +26,93 @@ function apimonAvailClass(v) {
 function apiFmtPct(v) { return v < 0 ? "—" : v.toFixed(2) + "%"; }
 function apiFmtMs(v) { return (!v || v <= 0) ? "—" : v.toFixed(0) + " ms"; }
 function envLabel(env) { return { prod: "生产 prod", staging: "预发 staging", dev: "测试 dev" }[env] || env || "无"; }
+
+function paintApiSysHostPicker(selected) {
+  const hc = $("apiSysHosts");
+  if (!hc) return;
+  APIMON_PICK_SELECTED = selected instanceof Set ? selected : new Set(selected || []);
+  const hosts = window._apimonHosts || [];
+  if (!hosts.length) {
+    hc.innerHTML = `<span class="muted">暂无已纳管主机</span>`;
+    return;
+  }
+  if (!window.HostPicker) {
+    hc.innerHTML = hosts.map(h => {
+      const lab = `${h.hostname || h.id}${h.ip ? " (" + h.ip + ")" : ""}`;
+      return `<label class="host-chk"><input type="checkbox" class="ep-host" value="${esc(h.id)}" ${APIMON_PICK_SELECTED.has(h.id) ? "checked" : ""}> ${esc(lab)}</label>`;
+    }).join("");
+    return;
+  }
+  hc.innerHTML = HostPicker.renderHTML({
+    id: "apiSysHostTree",
+    mode: "multi",
+    hosts,
+    selected: APIMON_PICK_SELECTED,
+    collapsed: APIMON_PICK_COLLAPSED,
+    q: APIMON_PICK_Q,
+    onlineOnly: false,
+    compact: true,
+  });
+  const root = hc.querySelector(".host-picker") || hc;
+  root._hpBound = false;
+  HostPicker.bind(root, {
+    onToggleFold: (id) => {
+      apiCaptureHostPick();
+      if (APIMON_PICK_COLLAPSED.has(id)) APIMON_PICK_COLLAPSED.delete(id); else APIMON_PICK_COLLAPSED.add(id);
+      paintApiSysHostPicker(APIMON_PICK_SELECTED);
+    },
+    onSearch: (q) => {
+      apiCaptureHostPick();
+      APIMON_PICK_Q = q || "";
+      paintApiSysHostPicker(APIMON_PICK_SELECTED);
+    },
+    onQuick: (act) => {
+      apiCaptureHostPick();
+      if (act === "clear") APIMON_PICK_SELECTED.clear();
+      else hosts.forEach(h => APIMON_PICK_SELECTED.add(h.id));
+      paintApiSysHostPicker(APIMON_PICK_SELECTED);
+    },
+    onFolderToggle: (fid, checked) => {
+      apiCaptureHostPick();
+      const q = (APIMON_PICK_Q || "").trim().toLowerCase();
+      const byFolder = HostPicker.hostsByFolder(hosts);
+      let ids = [];
+      if (String(fid).startsWith("cat:")) {
+        const cat = String(fid).slice(4);
+        ids = hosts.filter(h => {
+          const c = (h.category || "").trim() || "未分组";
+          return c === cat && HostPicker.filterHost(h, q);
+        }).map(h => h.id);
+      } else if (fid === "__ungrouped__") {
+        ids = (byFolder.get("__ungrouped__") || []).filter(h => HostPicker.filterHost(h, q)).map(h => h.id);
+      } else {
+        const find = (nodes) => {
+          for (const n of nodes || []) {
+            if (n.id === fid) return n;
+            const c = find(n.children || []);
+            if (c) return c;
+          }
+          return null;
+        };
+        const node = find(HostPicker.folderTree());
+        if (node) ids = HostPicker.collectFolderHostIds(node, byFolder, q, false);
+      }
+      ids.forEach(id => { if (checked) APIMON_PICK_SELECTED.add(id); else APIMON_PICK_SELECTED.delete(id); });
+      paintApiSysHostPicker(APIMON_PICK_SELECTED);
+    },
+    onHostToggle: (id, checked) => {
+      if (checked) APIMON_PICK_SELECTED.add(id); else APIMON_PICK_SELECTED.delete(id);
+    },
+  });
+}
+
+function apiCaptureHostPick() {
+  const hc = $("apiSysHosts");
+  if (!hc || !window.HostPicker) return;
+  const set = HostPicker.readMulti(hc);
+  APIMON_PICK_SELECTED.clear();
+  set.forEach(id => APIMON_PICK_SELECTED.add(id));
+}
 
 function renderAPIMon(data) {
   const wrap = $("apimonSystems");
@@ -100,11 +190,15 @@ async function openAPISystemModal(sys) {
   $("apiSysCommonHeaders").value = commonHeadersText;
   // 回填公共请求体（必须回显，否则编辑保存会把公共体清零）
   $("apiSysCommonBody").value = (sys && sys.common_body) || "";
-  // 承载主机多选（异常下钻用）：从已纳管主机列表渲染勾选框，回填已关联主机
-  try { if (!window._apimonHosts) window._apimonHosts = (await fetch(`${API}/hosts`).then(r => r.json())) || []; } catch (_) { window._apimonHosts = window._apimonHosts || []; }
+  // 承载主机：分组树多选（主机名 + IP）
+  try {
+    if (typeof loadHostFolders === "function") { try { await loadHostFolders(); } catch (_) {} }
+    if (!window._apimonHosts || !window._apimonHosts.length) {
+      window._apimonHosts = (await fetch(`${API}/hosts`).then(r => r.json())) || [];
+    }
+  } catch (_) { window._apimonHosts = window._apimonHosts || []; }
   const selHosts = new Set((sys && sys.host_ids) || []);
-  const hc = $("apiSysHosts");
-  if (hc) hc.innerHTML = (window._apimonHosts || []).map(h => `<label class="host-chk"><input type="checkbox" class="ep-host" value="${esc(h.id)}" ${selHosts.has(h.id) ? "checked" : ""}> ${esc(h.hostname || h.id)}</label>`).join("") || `<span class="muted">暂无已纳管主机</span>`;
+  paintApiSysHostPicker(selHosts);
   const rows = $("apiEndpointRows");
   rows.innerHTML = "";
   const eps = (sys && sys.endpoints) || [];
@@ -193,7 +287,11 @@ async function saveAPISystem() {
     enabled: $("apiSysEnabled").checked,
     common_headers: commonHeaders,
     common_body: ($("apiSysCommonBody").value || "").trim(),
-    host_ids: [...document.querySelectorAll("#apiSysHosts .ep-host:checked")].map(c => c.value),
+    host_ids: (function () {
+      apiCaptureHostPick();
+      if (APIMON_PICK_SELECTED.size) return [...APIMON_PICK_SELECTED];
+      return [...document.querySelectorAll("#apiSysHosts .ep-host:checked")].map(c => c.value);
+    })(),
     endpoints: endpoints
   };
   if (!body.name) { toast("请填写业务系统名称", "err"); return; }

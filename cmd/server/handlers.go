@@ -776,7 +776,7 @@ func (s *Server) Routes() http.Handler {
 		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "forecast", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "security-feeds", "web-security", "security-center", "scrape", "dash_charts", "dashboard", "init"} {
+			for _, m := range []string{"core", "export", "duplicates", "overview", "hosts", "host-picker", "forecast", "agent-update", "terminal", "desktop", "settings", "nav", "attachments", "sre", "host-inspect", "ai-assist", "ops-actions", "apimon", "governance", "datasource", "sql-toolkit", "hardware", "hyperv", "containers", "k8s", "netflow", "snmp", "content-audit", "security-overview", "host-security", "security-feeds", "web-security", "security-center", "scrape", "dash_charts", "dashboard", "init"} {
 				b, err := webFS.ReadFile("web/js/" + m + ".js")
 				if err != nil {
 					http.Error(w, "js module missing: "+m, http.StatusInternalServerError)
